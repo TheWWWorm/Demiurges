@@ -1,0 +1,26 @@
+config_version=5
+
+[application]
+config/name="Etherlords Duel"
+config/icon="res://icon.svg"
+run/main_scene="res://scenes/duel.tscn"
+run/max_fps=60
+config/quit_on_go_back=false
+
+[display]
+window/size/viewport_width=1440
+window/size/viewport_height=900
+window/stretch/mode="canvas_items"
+window/stretch/aspect="expand"
+window/handheld/orientation=6
+window/size/min_width=800
+window/size/min_height=600
+
+[rendering]
+renderer/rendering_method="gl_compatibility"
+textures/default_filters/use_nearest_mipmap_filter=false
+anti_aliasing/quality/msaa_3d=2
+textures/vram_compression/import_etc2_astc=true
+
+[environment]
+defaults/default_clear_color=Color(0.035, 0.04, 0.055, 1)

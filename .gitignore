@@ -1,0 +1,24 @@
+.godot/
+*.import
+game/.godot/
+game/.local_profiles.json
+build/
+builds/
+release/
+*.tmp
+*.log
+*.zip
+*.tar.gz
+*.x86_64
+*.exe
+*.apk
+*.pck
+*.dmg
+*.app/
+*.elpack
+__pycache__/
+# Local Cloudflare deployment settings.
+.wrangler/
+# The exported Web build is committed for static hosting.
+!public/**
+source-manifest.json

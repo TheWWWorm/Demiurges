@@ -1,0 +1,3049 @@
+extends Node3D
+## Runtime composition: profile-owned content -> rules -> scene and controls.
+
+const ACCENT := Color("e0af68")
+const INK := Color("e5e3da")
+const MUTED := Color("a8b4b1")
+var profiles: Dictionary = {}
+var profile: ELProfile
+## Heading of the X dialog: ether for most spells, health for Channel.
+var power_heading: Label
+var duel: ELDuel
+var stage: Node3D
+var camera: Camera3D
+var models: Dictionary = {}
+var labels: Dictionary = {}
+var homes: Dictionary = {}
+var ui: Control
+var header: HBoxContainer
+var hand: HBoxContainer
+var status: Label
+var phase_label: Label
+var hero_buttons: Array[Button] = []
+var end_button: Button
+var attack_button: Button
+## Auto combat: the computer plays the human side until stopped (CombatMenu3
+## starts it, AutoCombatOff or CombatMenu3 again stops it).
+var auto_combat := false
+## Hot seat: the side whose player confirmed the hand-over box (-1 none yet)
+## and whether a hand-over box is waiting.
+var hot_side := -1
+var hot_pending := false
+var auto_button: ELCutPartButton
+var auto_off_button: ELCutPartButton
+var profile_select: OptionButton
+var mode_select: OptionButton
+var log_text: RichTextLabel
+var logs: Array[String] = []
+var notice: Label
+var selection := -1
+var selection_power := 0
+## The original X choice in the combat panel (ManaOk / ManaCancel /
+## IncreaseMana / DecreaseMana); `power_amount` is its value.
+var power_dialog: ELCombatManaPanel
+var power_amount: Range
+var power_preview: Label
+var pending_power: Dictionary = {}
+var exchange_target := -1
+var selected_creature := -1
+var ai_clock := 0.0
+var demo := false
+var updating := false
+var launch_profile := "el1"
+var capture_path := ""
+var capture_after := 3.0
+var elapsed := 0.0
+var folder_dialog: FileDialog
+var import_edition := "el1"
+var content_setup: ELContentSetup
+var arena: ELArena
+var hud: ELHudFrame
+## Original Hand / Artifacts radio pair and the side counters (ELCombatRail).
+var rail: ELCombatRail
+var hud_root: Control
+var hero_values: Array[Label] = []
+var hero_names: Array[Label] = []
+var portraits: Array[TextureRect] = []
+var menu: PanelContainer
+var card_scroll: ScrollContainer
+var camera_yaw := -0.38
+var camera_pitch := 0.7
+var camera_distance := 24.0
+var orbiting := false
+## Options AutoCamera: authored close-ups of casts, fights and the winner.
+var auto_camera: ELAutoCamera
+## The current fight already had its chance of a close-up.
+var fight_shot := false
+var setup_panel: ELDuelSetup
+var match_options: Dictionary = {}
+var ability_selection: Dictionary = {}
+var inspector: PanelContainer
+var inspector_rows: VBoxContainer
+var inspect_graveyard := false
+var selection_ring: MeshInstance3D
+var battle_audio: ELBattleAudio
+var settings := ELSettings.new()
+var settings_dialog: AcceptDialog
+## The original Options screen over a battle (its own hosted front-end canvas).
+var options_host: ELFrontMenu
+var options_layer: CanvasLayer
+var blood: ELCombatBlood
+## Spell and summon particle effects (Effects.xml) of the running battle.
+var effects: ELCombatEffects
+## The cast whose effects start once its action has resolved:
+## {card, side, target, affected: figure ids the action touched}.
+var _effect_cast: Dictionary = {}
+## Live floating captions per figure, stacked so they never overlap.
+var _floating: Dictionary = {}
+var campaign_setup: ELCampaignSetup
+var campaign_view: ELAdventureView
+var front_layer: CanvasLayer
+var front_menu: ELFrontMenu
+## Start-up movies while they play (null afterwards).
+var movie_layer: CanvasLayer
+var movie_player: ELMoviePlayer
+## Original Duel mode match in progress (ELDuelMatch); null outside it.
+var duel_match: ELDuelMatch
+var match_round_recorded := false
+var match_clock := 0.0
+var _match_starting := false
+## Second-game combat tutorial (ELCombatTutorial) while its battle is shown.
+var combat_tutorial: ELCombatTutorial
+var tutorial_panel: ELCombatTutorialPanel
+var tutorial_quit: ConfirmationDialog
+## First game: the contextual tutorial panel over battles.
+var first_tutorial: ELFirstTutorialPanel
+## Second game: the original Esc menu in battle (Esc key).
+var esc_menu: ELCombatEscMenu
+## Second game: the Duel mode match's recording (Save duel replay) and the
+## replay being played back (Duel -> Replay) with its TutPlayer panel.
+var match_recording: ELDuelRecording
+var replay_player: ELDuelReplayPlayer
+var replay_panel: ELCombatTutorialPanel
+var replay_quit: ConfirmationDialog
+## Seconds the finished round stays on screen before its result panel.
+const ROUND_RESULT_DELAY := 1.6
+## Original cursors (ELCursors): the character under the pointer when the
+## pointer reached the battlefield rather than a panel, and the cursor asked for.
+var combat_hover := -1
+## Original combat readouts: figure numbers, icons and order marks; phase
+## banners and cast messages.
+var symbols: ELCombatSymbols
+var notices: ELCombatNotices
+## The opponent-turn banner shows once per opponent turn.
+var _enemy_banner_shown := false
+var _control_tips: Dictionary = {}
+var cursor_name := ""
+
+func _ready() -> void:
+	# The public name; the project name keeps the existing user-data folder.
+	if get_tree().current_scene == self: get_window().title = "Demiurges"
+	settings.load_file()
+	# Options gamma over every screen (front end, map, battle, movies).
+	var gamma := ELGammaLayer.new()
+	gamma.settings = settings
+	add_child(gamma)
+	for arg in OS.get_cmdline_user_args():
+		if arg.begins_with("--profile="):
+			launch_profile = arg.get_slice("=", 1)
+		elif arg.begins_with("--capture="):
+			capture_path = arg.trim_prefix("--capture=")
+		elif arg.begins_with("--capture-after="):
+			capture_after = float(arg.get_slice("=", 1))
+		elif arg == "--demo":
+			demo = true
+	_load_profiles()
+	_build_ui()
+	if profiles.is_empty():
+		status.text = "Choose a game folder to begin. Original content is required."
+		if get_tree().current_scene == self and not demo and capture_path.is_empty(): _content_menu.call_deferred()
+		return
+	_start(launch_profile if profiles.has(launch_profile) else String(profiles.keys()[0]))
+	# The original front end opens when the game itself is launched, after the
+	# edition's start-up movies; scripted checks that instantiate this scene
+	# keep the direct duel setup.
+	if demo or not capture_path.is_empty(): return
+	var launched := get_tree().current_scene == self
+	if launched and _play_startup_movies(): return
+	if not (launched and _show_front_menu()): _open_setup()
+
+## Start-up logos and intro of the launched edition (both originals play them
+## before their first main menu, in silence otherwise); the menu follows when
+## the last one ends or is skipped. False when there is nothing to show.
+func _play_startup_movies() -> bool:
+	if not ELMoviePlayer.enabled or ELMoviePlayer.mode == 0 or profile == null or not ELFrontMenu.supports(profile): return false
+	var items := ELMoviePlayer.startup_items(profile)
+	if items.is_empty(): return false
+	movie_layer = CanvasLayer.new()
+	movie_layer.layer = 20
+	add_child(movie_layer)
+	movie_player = ELMoviePlayer.new()
+	movie_layer.add_child(movie_player)
+	_pause_battle_audio(true)
+	movie_player.finished.connect(func():
+		movie_layer.queue_free()
+		movie_layer = null
+		movie_player = null
+		if not _show_front_menu():
+			_pause_battle_audio(false)
+			_open_setup(), CONNECT_ONE_SHOT)
+	movie_player.play_list(items)
+	return true
+
+func _exit_tree() -> void:
+	ELMoviePlayer.shutdown()
+
+## Android Back acts as Esc (close a window, cancel, open the game menu);
+## the project does not quit on it.
+func _notification(what: int) -> void:
+	if what != NOTIFICATION_WM_GO_BACK_REQUEST: return
+	for pressed: bool in [true, false]:
+		var key := InputEventKey.new()
+		key.keycode = KEY_ESCAPE
+		key.physical_keycode = KEY_ESCAPE
+		key.pressed = pressed
+		Input.parse_input_event(key)
+
+func _load_profiles() -> void:
+	var config := {}
+	for path in ["res://.local_profiles.json", "user://profiles.json"]:
+		if FileAccess.file_exists(path):
+			var data: Variant = JSON.parse_string(FileAccess.get_file_as_string(path))
+			if data is Dictionary:
+				config.merge(data, true)
+	for arg in OS.get_cmdline_user_args():
+		for edition in ["el1", "el2"]:
+			if arg.begins_with("--" + edition + "-path="):
+				config[edition] = arg.trim_prefix("--" + edition + "-path=")
+	for edition: String in config:
+		var root: String = config[edition]
+		if not root.is_absolute_path():
+			root = ProjectSettings.globalize_path("res://").path_join(root)
+		var data := ELProfile.new()
+		if edition in ["el1", "el2"] and data.mount(edition, root):
+			profiles[edition] = data
+		else:
+			push_warning(data.error)
+	# Browser and Android: editions the player imported on this device.
+	var imported := ELContentLibrary.managed_roots()
+	for edition: String in imported:
+		if profiles.has(edition): continue
+		var data := ELProfile.new()
+		if data.mount(edition, imported[edition]):
+			profiles[edition] = data
+		else:
+			push_warning(data.error)
+
+func _start(edition: String, options: Dictionary = {}, restored: ELDuel = null, battle_seed := 212) -> void:
+	if _campaign_battle() != null and restored != _campaign_battle():
+		_notice("Finish or surrender the campaign battle first.")
+		return
+	# Any battle not started by the Duel mode match ends that match.
+	if not _match_starting: duel_match = null
+	if combat_tutorial != null and (restored == null or restored != combat_tutorial.duel): _close_combat_tutorial()
+	if replay_player != null and (restored == null or restored != replay_player.duel): _close_replay()
+	if esc_menu != null: esc_menu.hide()
+	var next_duel := restored if restored != null else ELDuel.new()
+	if restored == null and not next_duel.start(profiles[edition], battle_seed, options):
+		_notice(next_duel.error)
+		return
+	if setup_panel != null: setup_panel.hide()
+	if stage != null:
+		remove_child(stage)
+		stage.queue_free()
+	models.clear()
+	labels.clear()
+	homes.clear()
+	logs.clear()
+	selection = -1
+	selection_power = 0
+	pending_power.clear()
+	if power_dialog != null: _hide_power_panel()
+	exchange_target = -1
+	selected_creature = -1
+	ability_selection.clear()
+	ai_clock = 0
+	auto_combat = false
+	profile = profiles[edition]
+	duel = next_duel
+	match_options = duel.setup.duplicate(true)
+	stage = Node3D.new()
+	add_child(stage)
+	arena = ELArena.new()
+	stage.add_child(arena)
+	_use_edition(edition)
+	if not arena.build(profile, String(match_options.get("arena", "Green.001"))):
+		status.text = "Arena failed: " + "; ".join(arena.errors)
+		return
+	arena.light.shadow_enabled = settings.values.shadows
+	blood = ELCombatBlood.new()
+	stage.add_child(blood)
+	blood.build(profile, arena, battle_seed, edition)
+	blood.set_enabled(bool(settings.values.blood))
+	effects = ELCombatEffects.new()
+	stage.add_child(effects)
+	effects.build(profile)
+	_effect_cast = {}
+	battle_audio = ELBattleAudio.new()
+	stage.add_child(battle_audio)
+	battle_audio.build(profile, arena.definition, settings.values)
+	if front_menu != null and front_menu.music_owned(): _pause_battle_audio(true)
+	camera = Camera3D.new()
+	stage.add_child(camera)
+	camera.fov = ELAutoCamera.VIEW_FOV
+	camera.current = true
+	auto_camera = null
+	_update_camera()
+	auto_camera = ELAutoCamera.new(profile, battle_seed)
+	fight_shot = false
+	for side in 2:
+		var model := ELModel.new()
+		stage.add_child(model)
+		var combatant: Dictionary = duel.heroes[side]
+		var hero: Dictionary = profile.table("Shapes")[combatant.shape] if not String(combatant.get("shape", "")).is_empty() else profile.table("HeroTemplates")[combatant.template]
+		if combatant.has("monster_name"): hero = ELFirstMonsters.appearance(profile, combatant.monster_name, combatant.monster_difficulty)
+		var directory := "Creatures/" if combatant.get("kind", "hero") == "monster" else "Heroes/"
+		if not model.build(profile, hero.Model, directory + hero.Texture, directory + hero.Texture2 if hero.has("Texture2") else ""):
+			push_error(model.error)
+		model.position = Vector3(-6.5 if side == 0 else 6.5, 0, -1.4)
+		model.set_meta("sound_directory", hero.get("SndDir", ""))
+		model.set_meta("skin_sound", hero.get("SkinSndType", ""))
+		# Hero figures (he* models) speak their hits and casts from voice/.
+		model.set_meta("voice", combatant.get("kind", "hero") != "monster" and String(hero.get("Model", "")).to_lower().begins_with("he"))
+		model.set_meta("blood", hero.get("Blood", ""))
+		model.position.y = arena.ground_height(model.position.x, model.position.z)
+		model.rotation.y = _facing(side)
+		models[side] = model
+		homes[side] = model.position
+		model.animation_finished.connect(_animation_done.bind(side))
+		effects.attach(model)
+		if duel.phase == ELDuel.Phase.FINISHED:
+			model.play("uvictory" if duel.winner == side else "udeath")
+		_add_label(side)
+		portraits[side].texture = profile.card_icon(ELFirstMonsters.definition(profile, combatant.monster_name, combatant.monster_difficulty).Creature) if combatant.has("monster_name") else profile.portrait(int(hero.Face))
+	hud.build(profile)
+	symbols.build(profile)
+	symbols.camera = camera
+	notices.build(profile)
+	_enemy_banner_shown = false
+	auto_button.build(profile, "CombatMenu3", Rect2(619, 542, 47, 49))
+	auto_off_button.build(profile, "AutoCombatOff", Rect2(735, 10, 45, 44), "Type1")
+	auto_off_button.visible = false
+	rail.build(profile)
+	if power_dialog != null: power_dialog.build(profile)
+	_layout_hud()
+	for c: Dictionary in duel.creatures.values(): _spawn_creature(c)
+	selection_ring = MeshInstance3D.new()
+	var ring := TorusMesh.new()
+	ring.inner_radius = 0.65
+	ring.outer_radius = 0.72
+	ring.rings = 32
+	ring.ring_segments = 8
+	selection_ring.mesh = ring
+	var ring_material := StandardMaterial3D.new()
+	ring_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	ring_material.albedo_color = ACCENT
+	selection_ring.material_override = ring_material
+	selection_ring.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	stage.add_child(selection_ring)
+	selection_ring.hide()
+	duel.changed.connect(_refresh)
+	duel.event.connect(_event)
+	profile_select.select(0 if edition == "el1" else 1)
+	_notice("Select a spell or a ready creature. Right-drag to orbit · Wheel to zoom · R resets the camera." if helper_overlay() else "")
+	_refresh()
+
+func _process(delta: float) -> void:
+	elapsed += delta
+	_update_cursor()
+	if _campaign_battle() != null and not campaign_view.director.watch_encounter().is_empty():
+		# A chapter outcome reached during the duel ends the battle at once.
+		_return_from_encounter()
+		return
+	if duel != null:
+		ai_clock += delta
+		if duel_match != null and duel.phase == ELDuel.Phase.FINISHED: _watch_match_round(delta)
+		if replay_player != null:
+			# A duel replay plays its recorded actions at the battle's pace.
+			if replay_player.playing and duel == replay_player.duel and not _overlay_open() and ai_clock >= 0.85:
+				ai_clock = 0.0
+				replay_player.step()
+		elif combat_tutorial != null:
+			# The computer side replays its recorded commands.
+			if duel.phase != ELDuel.Phase.FINISHED and not _overlay_open() and ai_clock >= 0.85 and combat_tutorial.opponent_due():
+				ai_clock = 0.0
+				combat_tutorial.step_opponent()
+		elif duel.phase != ELDuel.Phase.FINISHED and not _overlay_open() and ai_clock >= 0.85 and (demo or (mode_select.selected == 0 and duel.active_side() == 1 and not _hot_seat()) or (auto_combat and _human_side())):
+			ai_clock = 0.0
+			# Without "use spells", auto combat spends no hero abilities or spell charges.
+			var auto := auto_combat and _human_side() and not demo
+			ELPracticeAI.step(duel, auto and not bool(settings.values.get("use_spells", true)))
+		_step_auto_camera(delta)
+		var figures: Array = []
+		# NumbersOnCamera off hides the figure marks while a close-up plays.
+		var numbers := bool(settings.values.get("creature_numbers", true)) and not (auto_camera != null and auto_camera.active() and not bool(settings.values.get("numbers_on_camera", true)))
+		for id: int in labels:
+			if not models.has(id) or not is_instance_valid(models[id]):
+				continue
+			var label: Label3D = labels[id]
+			var model: ELModel = models[id]
+			var top := model.position + Vector3(0, _figure_height(model), 0)
+			if id < 2:
+				# The hero panels show health; the floating readout is helper-only.
+				label.text = "%d HP" % duel.heroes[id].health if helper_overlay() else ""
+				var hero: Dictionary = duel.heroes[id]
+				if numbers and duel.phase != ELDuel.Phase.FINISHED:
+					figures.append({"id": id, "top": top, "numbers": ELCombatSymbols.number_row(0, int(hero.health), int(hero.health) < int(hero.get("maximum", hero.health)), true), "icons": [], "order": []})
+			elif duel.creatures.has(id):
+				var c: Dictionary = duel.creatures[id]
+				# Remake-only state words (helper overlay); the original marks are glyphs.
+				var parts: Array[String] = []
+				if helper_overlay():
+					if c.sick: parts.append("SUMMONED")
+					elif c.resting: parts.append("RESTING")
+				label.text = "  •  ".join(parts)
+				label.modulate = ACCENT if not c.enchantments.is_empty() else INK
+				# Pale aspect: the figure's opacity pulses 0.2-0.6 (1.8 s triangle wave).
+				if duel.in_plane(id):
+					if helper_overlay(): label.text += ("  •  " if not label.text.is_empty() else "") + "PALE"
+					model.set_opacity(0.2 + 0.4 * (1.0 - absf(fmod(elapsed, 1.8) / 0.9 - 1.0)))
+					model.set_meta("pale", true)
+				elif model.get_meta("pale", false):
+					model.set_opacity(1.0)
+					model.set_meta("pale", false)
+				# Options ShowCreatureNumbers (all rows), ShowIcons, ShowOrder.
+				if numbers:
+					var blocked := int(duel.blocks.get(id, -1))
+					figures.append({"id": id, "top": top,
+						"numbers": ELCombatSymbols.number_row(int(c.power), int(c.toughness) - int(c.damage), int(c.damage) > 0, false),
+						"icons": creature_icons(id) if bool(settings.values.get("ability_icons", true)) else [],
+						"order": ELCombatSymbols.order_row(duel.attacks.find(id) + 1, duel.attacks.find(blocked) + 1 if blocked >= 0 else 0) if bool(settings.values.get("attack_order", true)) else []})
+			label.position = top + Vector3(0, 0.35, 0)
+		if is_instance_valid(symbols): symbols.figures = figures
+		if is_instance_valid(selection_ring):
+			selection_ring.visible = models.has(selected_creature) and not duel.entity(selected_creature).is_empty()
+			if selection_ring.visible: selection_ring.position = models[selected_creature].position + Vector3(0, 0.08, 0)
+	if not capture_path.is_empty() and elapsed >= capture_after:
+		var output := capture_path
+		capture_path = ""
+		await RenderingServer.frame_post_draw
+		get_viewport().get_texture().get_image().save_png(output)
+		if duel != null:
+			var report := FileAccess.open(output.get_basename() + ".json", FileAccess.WRITE)
+			report.store_string(JSON.stringify({"state": duel.snapshot(), "events": duel.history,
+				"models": models.size(), "profile_assets_read": profile.asset_reads}, "\t"))
+		get_tree().quit()
+
+func _input(event: InputEvent) -> void:
+	# A move that a panel takes never reaches _unhandled_input: no character.
+	if event is InputEventMouseMotion: combat_hover = -1
+
+func _unhandled_input(event: InputEvent) -> void:
+	if duel == null:
+		return
+	# The tutorial panel takes every key and click while it is open.
+	if first_tutorial != null and first_tutorial.handle_input(event): return
+	if event is InputEventMouseMotion: combat_hover = _character_at(event.position)
+	if power_dialog != null and power_dialog.visible:
+		# The X choice holds the battle: Enter takes the value, Esc cancels.
+		if event is InputEventKey and event.pressed and not event.echo:
+			if event.keycode in [KEY_ENTER, KEY_KP_ENTER]: _confirm_power()
+			elif event.keycode == KEY_ESCAPE: _cancel_power()
+		return
+	if event is InputEventKey and event.pressed:
+		if event.keycode == KEY_ESCAPE and esc_menu != null and esc_menu.visible:
+			_close_esc_menu()
+			return
+		if event.keycode == KEY_ESCAPE and _wants_esc_menu():
+			_open_esc_menu()
+			return
+		if event.keycode == KEY_ESCAPE:
+			selection = -1
+			selection_power = 0
+			exchange_target = -1
+			selected_creature = -1
+			ability_selection.clear()
+			_hint("Selection cancelled.")
+			if setup_panel != null and setup_panel.visible: setup_panel.hide()
+			_refresh()
+		elif event.keycode == KEY_F5: _save_duel()
+		elif event.keycode == KEY_F9: _load_duel()
+		elif event.keycode == KEY_SPACE and (_human_turn() or ((_campaign_battle() != null or duel_match != null or combat_tutorial != null) and duel.phase == ELDuel.Phase.FINISHED and not _overlay_open())):
+			_end_phase()
+		elif event.keycode == KEY_R:
+			camera_yaw = -0.38
+			camera_pitch = 0.7
+			camera_distance = 24
+			_update_camera()
+		elif event.keycode == KEY_L:
+			log_text.visible = not log_text.visible
+		# The second game's radio tooltips name A and H as their keys.
+		elif event.keycode in [KEY_A, KEY_H] and profile != null and profile.id == "el2" and rail != null and not _overlay_open():
+			rail._select(event.keycode == KEY_A)
+		# E and G choose the upper strip's list in the second game.
+		elif event.keycode in [KEY_E, KEY_G] and profile != null and profile.id == "el2" and rail != null and not _overlay_open():
+			rail.select_strip(event.keycode == KEY_G)
+		# First game: H opens the tutorial.
+		elif event.keycode == KEY_H and profile != null and profile.id == "el1" and not demo and not _overlay_open(): _first_tutorial_panel().open_history()
+	if _overlay_open(): return
+	if event is InputEventMouseButton:
+		if event.button_index == MOUSE_BUTTON_RIGHT:
+			orbiting = event.pressed
+		elif event.pressed and event.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN]:
+			camera_distance = clampf(camera_distance + (-1.3 if event.button_index == MOUSE_BUTTON_WHEEL_UP else 1.3), 15, 33)
+			_update_camera()
+	if event is InputEventMouseMotion and orbiting:
+		camera_yaw -= event.relative.x * 0.006
+		camera_pitch = clampf(camera_pitch + event.relative.y * 0.005, 0.42, 1.05)
+		_update_camera()
+	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT and _human_turn():
+		var nearest := _character_at(event.position)
+		if nearest >= 0:
+			_target(nearest)
+			if event.double_click and nearest >= 2 and duel.phase == ELDuel.Phase.ATTACK and selection < 0 and ability_selection.is_empty():
+				if not duel.toggle_attack(nearest): _hint(duel.error)
+
+## The hero or creature drawn nearest a screen point (within 65 px), or -1.
+func _character_at(at: Vector2) -> int:
+	var nearest := -1
+	var distance := 65.0
+	if duel == null or camera == null: return nearest
+	for id: int in models:
+		if id >= 2 and not duel.creatures.has(id):
+			continue
+		var point := camera.unproject_position(models[id].position + Vector3(0, 0.7, 0))
+		var d := point.distance_to(at)
+		if d < distance:
+			distance = d
+			nearest = id
+	return nearest
+
+## Requests the original cursor for the battle or menu on screen. The
+## adventure map, while shown, picks its own.
+func _update_cursor() -> void:
+	if profile == null or (campaign_view != null and campaign_view.visible): return
+	var wanted := "default"
+	if duel != null and profile.id == "el1" and not _overlay_open() and _human_turn():
+		var pending := {}
+		if selection >= 0 and selection < duel.heroes[duel.active_side()].hand.size(): pending = {"card": duel.heroes[duel.active_side()].hand[selection]}
+		elif not ability_selection.is_empty():
+			var definition: Dictionary = {"target": ability_selection.get("target", "")}
+			for item: Dictionary in duel.abilities(int(ability_selection.source)):
+				if item.key == ability_selection.key: definition = item
+			pending = {"ability": definition, "source": int(ability_selection.source)}
+		wanted = ELCursors.first_combat(duel, combat_hover, pending, selected_creature)
+	cursor_name = wanted
+	ELCursorDriver.request(profile, wanted)
+
+## The player's own view; any manual camera change ends an automatic close-up.
+func _update_camera() -> void:
+	if auto_camera != null: auto_camera.stop()
+	camera.fov = ELAutoCamera.VIEW_FOV
+	_place_orbit()
+
+func _place_orbit() -> void:
+	var target := Vector3(0, 0.6, -0.5)
+	camera.position = target + Vector3(sin(camera_yaw) * cos(camera_pitch), sin(camera_pitch), cos(camera_yaw) * cos(camera_pitch)) * camera_distance
+	camera.look_at(target)
+	arena.clear_camera_view(camera.position, target)
+
+func _facing(side: int) -> float:
+	# The imported characters face local +Z, toward the opposing side after rotation.
+	return PI / 2 if side == 0 else -PI / 2
+
+func _target(id: int) -> void:
+	if not _human_turn():
+		return
+	if not ability_selection.is_empty():
+		if ability_selection.target == "enchantment":
+			selected_creature = id
+			inspect_graveyard = false
+			_hint("Choose the enchantment to remove on the upper strip.")
+		elif (ability_selection.get("key", "").begins_with("combine") or not str(ability_selection.get("second", "")).is_empty()) and not ability_selection.has("first"):
+			var recycling: bool = str(ability_selection.get("key", "")).begins_with("recycle")
+			if recycling and not duel.in_plane(id): _hint("Choose a creature in the Colourless Plane.")
+			elif not recycling and (not duel.creatures.has(id) or duel.creatures[id].owner != duel.active_side()): _hint("Choose one of your creatures to sacrifice.")
+			else:
+				ability_selection.first = id
+				_hint("Now choose a creature in the Ether to send away. Esc cancels." if recycling else ("Now choose a creature or hero to burn. Esc cancels." if ability_selection.get("second") == "any" else "Now choose the creature that receives its strength. Esc cancels."))
+		elif ability_selection.has("first"):
+			if duel.use_ability(ability_selection.source, ability_selection.key, ability_selection.first, id): ability_selection.clear()
+			else: _hint(duel.error)
+		elif ability_selection.target == "grave":
+			if id < 2:
+				selected_creature = id
+				inspect_graveyard = true
+				_hint("Choose a creature in this graveyard. Esc cancels.")
+			else: _hint("Click a hero portrait to open that graveyard.")
+		elif duel.use_ability(ability_selection.source, ability_selection.key, id, -1, int(ability_selection.get("amount", -1))):
+			ability_selection.clear()
+		else: _hint(duel.error)
+	elif selection >= 0:
+		var card: String = duel.heroes[duel.active_side()].hand[selection]
+		var effect: String = ELCatalog.rule(profile, card).get("effect", "")
+		if effect == "dispel":
+			var invalid := duel._target_error(card, id)
+			if not invalid.is_empty(): _hint(invalid)
+			else:
+				selected_creature = id
+				inspect_graveyard = false
+				_hint("Choose the enchantment to remove on the upper strip. Esc cancels.")
+		elif effect == "trade" and exchange_target < 2:
+			var invalid := duel._target_error(card, id)
+			if not invalid.is_empty(): _hint(invalid)
+			else:
+				exchange_target = id
+				_hint("Choose a character, then the enchantment to remove. Esc cancels.")
+		elif effect == "trade":
+			selected_creature = id
+			inspect_graveyard = false
+			_hint("Choose the enchantment to remove on the upper strip. Esc cancels.")
+		elif effect == "swap" and exchange_target < 2:
+			var invalid := duel._target_error(card, id)
+			if not invalid.is_empty(): _hint(invalid)
+			else:
+				exchange_target = id
+				_hint("Now choose the creature to destroy. Esc cancels.")
+		elif effect == "swap":
+			if duel.cast(selection, exchange_target, id):
+				selection = -1
+				exchange_target = -1
+				_hint("Spell cast.")
+			else: _hint(duel.error)
+		elif effect == "pale_revival" and exchange_target < 2:
+			# Pale revival: a creature in the plane, then a creature in either graveyard.
+			var invalid := duel._target_error(card, id)
+			if not invalid.is_empty(): _hint(invalid)
+			elif duel.valid_grave_targets(card).is_empty(): _hint("No graveyard holds a creature to return.")
+			else:
+				exchange_target = id
+				_hint("Now click a hero portrait and choose a creature in that graveyard. Esc cancels.")
+		elif effect in ["reanimate", "repair", "pale_revival"]:
+			if id >= 2: _hint("Click a hero portrait to open that graveyard.")
+			else:
+				selected_creature = id
+				inspect_graveyard = true
+				_hint("Choose a creature in this graveyard. Esc cancels.")
+		elif effect == "exchange":
+			var invalid := duel._target_error(card, id)
+			if not invalid.is_empty(): _hint(invalid)
+			elif duel.valid_grave_targets(card).is_empty(): _hint("Your graveyard contains no creature to return.")
+			else:
+				exchange_target = id
+				selected_creature = duel.active_side()
+				inspect_graveyard = true
+				_hint("Choose the creature to return from your graveyard. Esc cancels.")
+		elif duel.cast(selection, id, -1, selection_power):
+			selection = -1
+			selection_power = 0
+			_hint("Spell cast.")
+		else:
+			_hint(duel.error)
+	elif duel.phase == ELDuel.Phase.DEFENCE and selected_creature >= 2 and duel.creatures.has(selected_creature) and duel.creatures[selected_creature].owner == duel.active_side() and duel.attacks.has(id):
+		if not duel.assign_block(selected_creature, id): _hint(duel.error)
+	elif duel.phase == ELDuel.Phase.ATTACK and id == 1 - duel.attacker and selected_creature >= 2:
+		if not duel.toggle_attack(selected_creature): _hint(duel.error)
+	else:
+		selected_creature = id
+		inspect_graveyard = false
+	_refresh()
+
+func _cast_card(index: int) -> void:
+	if not _human_turn():
+		return
+	var card: String = duel.heroes[duel.active_side()].hand[index]
+	ability_selection.clear()
+	exchange_target = -1
+	selection_power = 0
+	if duel.variable_power(card):
+		selection = -1
+		_open_power(index)
+		_refresh()
+		return
+	if duel.target_kind(card) != "none":
+		selection = -1 if selection == index else index
+		var wanted := "hero portrait to open its graveyard" if duel.target_kind(card) == "grave" else duel.target_kind(card)
+		_hint("Select a %s for %s. Esc cancels." % [wanted, duel.card_name(card)])
+	else:
+		if not duel.cast(index):
+			_hint(duel.error)
+		selection = -1
+	_refresh()
+
+func _open_power(index: int) -> void:
+	var card: String = duel.heroes[duel.active_side()].hand[index]
+	pending_power = {"duel": duel, "side": duel.active_side(), "turn": duel.turn_serial, "index": index, "card": card}
+	power_heading.text = duel.card_name(card) + (" · health to pay (X)" if ELCatalog.rule(profile, card).get("x_source") == "health" else " · extra ether (X)")
+	# Both games open the choice at the most the hero can pay (ether after
+	# the card's cost); Channel, paid in health, opens at 1.
+	var health: bool = ELCatalog.rule(profile, card).get("x_source") == "health"
+	power_dialog.open(0, duel.maximum_power(card), 1 if health else duel.maximum_power(card))
+	_preview_power()
+	_show_power_panel()
+
+func _preview_power(_value := 0.0) -> void:
+	if pending_power.is_empty(): return
+	if pending_power.has("ability"):
+		power_preview.text = "Pay %d ether · %d left after use" % [int(power_amount.value), duel.available_mana(duel.active_side()) - int(power_amount.value)]
+		return
+	var card: String = pending_power.card
+	var amount := int(power_amount.value)
+	var channel_loss := duel.channel_cost(card) if amount > 0 else 0
+	var rule := ELCatalog.rule(profile, card)
+	var target_text: String = {"enemy": "Enemy creatures", "all": "All creatures", "ground": "All creatures without flying", "flying": "All flying creatures", "heroes": "Both heroes"}.get(rule.get("scope", "enemy"), "")
+	if rule.effect == "damage": target_text = "A creature or hero of your choice"
+	var result := "%d damage" % amount
+	if rule.effect == "draw":
+		target_text = "The chosen hero"
+		result = "draws %d cards" % amount
+	elif rule.effect == "enchant":
+		target_text = "The chosen creature"
+		result = ("+%d health" if rule.get("stat") == "toughness" else "+%d power") % amount
+	if rule.get("x_source") == "health":
+		# Channel pays X in health: X damage to the caster, X (+4 in the first game) ether, the opponent heals X.
+		var side := duel.active_side()
+		var gain := amount + (4 if profile.id == "el1" else 0)
+		power_preview.text = "You take %d damage · opponent heals %d\n+%d ether · %d ether total\nAfter casting: %d health · %d ether" % [amount, amount, gain, duel.cost(card), duel.heroes[side].health - amount, duel.heroes[side].mana - duel.cost(card) + gain]
+		return
+	power_preview.text = "%s\n%s · %d ether total\nAfter casting: %d ether · %d channels" % [target_text, result, duel.cost(card) + amount, duel.heroes[duel.active_side()].mana - duel.cost(card) - amount, duel.heroes[duel.active_side()].channels - channel_loss]
+	if duel.channel_cost(card) > 0: power_preview.text += "\nRequires %d channels; sacrifices them when X is greater than zero." % duel.channel_cost(card)
+
+## Pay-X creature abilities reuse the spell power dialog.
+func _open_ability_power(source: int, ability: Dictionary) -> void:
+	pending_power = {"duel": duel, "side": duel.active_side(), "turn": duel.turn_serial, "source": source, "ability": ability}
+	power_heading.text = str(ability.name) + " · ether to pay (X)"
+	var available := duel.available_mana(duel.active_side())
+	power_dialog.open(int(ability.get("minimum", 0)), available, available)
+	_preview_power()
+	_show_power_panel()
+
+func _power_tooltip() -> void:
+	if power_dialog.readout != null: power_dialog.readout.tooltip_text = power_heading.text + "\n" + power_preview.text
+
+func _show_power_panel() -> void:
+	_power_tooltip()
+	phase_label.hide()
+	power_dialog.show()
+	power_dialog.layout()
+
+func _hide_power_panel() -> void:
+	power_dialog.close()
+	phase_label.show()
+
+func _confirm_power() -> void:
+	var choice := pending_power.duplicate()
+	pending_power.clear()
+	_hide_power_panel()
+	if choice.has("ability"):
+		if choice.duel != duel or choice.side != duel.active_side() or choice.turn != duel.turn_serial or not _human_turn(): return
+		var amount := int(power_amount.value)
+		if choice.ability.target == "none":
+			if not duel.use_ability(choice.source, choice.ability.key, -1, -1, amount): _hint(duel.error)
+		else:
+			ability_selection = {"source": choice.source, "key": choice.ability.key, "target": choice.ability.target, "amount": amount}
+			_hint("%s · %d ether: choose a %s. Esc cancels." % [choice.ability.name, amount, "hero" if choice.ability.target == "hero" else str(choice.ability.target)])
+		_refresh()
+		return
+	if choice.is_empty() or choice.duel != duel or choice.side != duel.active_side() or choice.turn != duel.turn_serial or not _human_turn(): return
+	var cards: Array = duel.heroes[duel.active_side()].hand
+	if choice.index >= cards.size() or cards[choice.index] != choice.card:
+		_hint("The selected spell changed. Select it again.")
+		_refresh()
+		return
+	selection_power = int(power_amount.value)
+	if duel.target_kind(choice.card) == "none":
+		if not duel.cast(choice.index, -1, -1, selection_power): _hint(duel.error)
+		selection_power = 0
+	else:
+		selection = choice.index
+		_hint("%s · %d damage. Select a creature or hero. Esc cancels." % [duel.card_name(choice.card), selection_power])
+	_refresh()
+
+func _cancel_power() -> void:
+	pending_power.clear()
+	selection = -1
+	selection_power = 0
+	_hide_power_panel()
+	_hint("Spell selection cancelled.")
+	_refresh()
+
+func _human_turn() -> bool:
+	return duel != null and replay_player == null and not demo and not auto_combat and not _overlay_open() and duel.phase != ELDuel.Phase.FINISHED and _human_side() and not hot_pending
+
+# --- Hot seat (MultiplayerStart -> HotSeat) -----------------------------------
+
+## Both sides are local human players taking the screen in turn.
+func _hot_seat() -> bool:
+	return duel_match != null and duel_match.hot_seat and duel != null and replay_player == null and combat_tutorial == null and not demo
+
+## Hand-over (EL1, EL2): whenever the
+## side that must act changes, the hand, rail and selection are hidden and a
+## modal box with OK names the next player; that player's hand and controls
+## appear only after OK. No box while the same side continues. The remake
+## also shows it at each round start and after loading a save.
+func _check_handover() -> void:
+	if not _hot_seat() or hot_pending or duel.phase == ELDuel.Phase.FINISHED: return
+	if duel.active_side() == hot_side: return
+	hot_pending = true
+	selection = -1
+	selection_power = 0
+	exchange_target = -1
+	selected_creature = -1
+	ability_selection.clear()
+	call_deferred("_show_handover")
+
+## T_MB_HOT_SEAT_DUEL_WAIT ("player %d") while the side's name is the default
+## hero caption, else T_MB_HOT_SEAT_DUEL_WAIT_COMBAT with the name.
+func _handover_text(side: int) -> String:
+	var name := String(duel_match.names[side]) if duel_match != null else ""
+	var plain := profile.text("CtrlDUMyHero" if side == 0 else "CtrlDUEnemyHero")
+	if name.is_empty() or name == plain: return profile.text("T_MB_HOT_SEAT_DUEL_WAIT").replace("%d", str(side + 1))
+	return profile.text("T_MB_HOT_SEAT_DUEL_WAIT_COMBAT").replace("%s", name)
+
+func _show_handover() -> void:
+	if not hot_pending or duel == null: return
+	var host := _battle_host()
+	if host == null:
+		_confirm_handover()
+		return
+	host.inform_hosted(_handover_text(duel.active_side()), _confirm_handover)
+	options_layer.show()
+	host.show()
+
+func _confirm_handover() -> void:
+	if not hot_pending: return
+	hot_pending = false
+	hot_side = duel.active_side() if duel != null else -1
+	_refresh()
+
+## The acting side is played from this screen (not by the practice opponent).
+func _human_side() -> bool:
+	return (mode_select.selected == 1 and combat_tutorial == null) or duel.active_side() == 0 or _hot_seat()
+
+## Starts auto combat on the player's turn, or stops it at any time; starting
+## cancels any half-made selection. Not offered in the recorded tutorial.
+func _toggle_auto() -> void:
+	if auto_combat:
+		_set_auto(false)
+	elif _human_turn() and combat_tutorial == null and not _hot_seat():
+		selection = -1
+		selection_power = 0
+		exchange_target = -1
+		selected_creature = -1
+		ability_selection.clear()
+		_set_auto(true)
+
+func _set_auto(on: bool) -> void:
+	auto_combat = on
+	auto_off_button.visible = on
+	_refresh()
+
+func _end_phase() -> void:
+	if _campaign_battle() != null and duel.phase == ELDuel.Phase.FINISHED:
+		_return_from_encounter()
+		return
+	if duel_match != null and duel.phase == ELDuel.Phase.FINISHED:
+		_continue_match()
+		return
+	if combat_tutorial != null and duel.phase == ELDuel.Phase.FINISHED:
+		_leave_combat_tutorial()
+		return
+	selection = -1
+	selection_power = 0
+	exchange_target = -1
+	selected_creature = -1
+	ai_clock = 0.0
+	ability_selection.clear()
+	if not duel.end_phase(): _hint(duel.error)
+
+func _spawn_creature(c: Dictionary) -> void:
+	var original: Dictionary = profile.table("CombatCreatures")[c.card]
+	var model := ELModel.new()
+	stage.add_child(model)
+	if not model.build(profile, original.Model, "Creatures/" + original.Texture, "Creatures/" + original.SecTexture if original.has("SecTexture") else ""):
+		push_error(model.error)
+	model.scale = Vector3.ONE * float(original.get("Scale", 1.0))
+	model.set_meta("sound_directory", original.get("SndDir", ""))
+	model.set_meta("attack_sound", original.get("AttackSndType", ""))
+	model.set_meta("skin_sound", original.get("SkinSndType", ""))
+	model.set_meta("blood", original.get("Blood", ""))
+	model.rotation.y = _facing(c.owner)
+	var occupied: Array[int] = []
+	for other: int in models:
+		if other >= 2 and duel.creatures.has(other) and duel.creatures[other].owner == c.owner:
+			occupied.append(int(models[other].get_meta("slot", 0)))
+	var slot := 0
+	while occupied.has(slot): slot += 1
+	model.set_meta("slot", slot)
+	# The presentation has two ranks; combat ordering lives only in ELDuel.
+	model.position = Vector3((-3.2 if c.owner == 0 else 3.2) + (slot / 5) * (1.9 if c.owner == 0 else -1.9), 0, -4.6 + (slot % 5) * 2.1)
+	model.position.y = arena.ground_height(model.position.x, model.position.z)
+	models[c.id] = model
+	homes[c.id] = model.position
+	model.animation_finished.connect(_animation_done.bind(c.id))
+	if is_instance_valid(effects): effects.attach(model)
+	_add_label(c.id)
+
+func _event(data: Dictionary) -> void:
+	if not _effect_cast.is_empty():
+		var touched := int(data.creature.id) if data.kind == "summon" else int(data.get("target", -1))
+		if data.kind in ["summon", "damage", "heal", "enchant", "disenchant", "death", "plane"] and touched >= 0 and not _effect_cast.affected.has(touched):
+			_effect_cast.affected.append(touched)
+	match data.kind:
+		"summon":
+			var c: Dictionary = data.creature
+			_spawn_creature(c)
+			_log("%s summons %s." % [_side_name(c.owner), duel.card_name(c.card)])
+		"cast":
+			var animation := "usummon" if duel.is_summon(data.card) else ("uenchantment" if ELCatalog.rule(profile, data.card).get("effect") == "enchant" else "uinstant")
+			# Options "Hide casting animations" skips the hero's gesture only.
+			if not bool(settings.values.get("hide_cast", false)): models[data.side].play(animation)
+			# The caster's own sound follows its cast animation; the card's effects start with it.
+			battle_audio.unit(models[data.side], animation.trim_prefix("u"))
+			battle_audio.spell(data.card)
+			# Particles start after the action resolves, when the figures it
+			# touched (a summoned creature, the damaged ones) are known.
+			if _effect_cast.is_empty(): call_deferred("_start_cast_effects")
+			else: _start_cast_effects()
+			_effect_cast = {"card": data.card, "side": data.side, "target": int(data.get("target", -1)), "affected": []}
+			if not data.get("script", false): _cast_notice(int(data.side), String(data.card))
+			# First game: the local player's cast by spell class.
+			if profile.id == "el1" and not demo and (data.side == 0 or mode_select.selected == 1 or _hot_seat()):
+				var spell_class := str(profile.table("CombatSpells").get(data.card, {}).get("Class", ""))
+				if ELFirstTutorial.CAST_EVENTS.has(spell_class): _first_tutorial_panel().fire(ELFirstTutorial.CAST_EVENTS[spell_class])
+		"damage":
+			if models.has(data.target):
+				battle_audio.unit(models[data.target], "hit")
+				models[data.target].play("uhit")
+				_float_number(data.target, int(data.amount))
+		"heal":
+			_float_number(data.target, -int(data.amount))
+			if data.get("skill") == "REGN": _log("%s regenerates 1 health." % _side_name(data.target))
+		"disturbance":
+			_log("Ether disturbance deals %d damage to %s." % [data.amount, _side_name(data.side)])
+		"script_cast":
+			# Battle scripts cast silently and for free; name the spell so the effect reads.
+			_float_text(data.side, duel.card_name(data.card), Color("c9a6ff"), true)
+			_log("A battlefield power casts %s for %s." % [duel.card_name(data.card), _side_name(data.side)])
+		"script_card":
+			_log("A battlefield power gives %s to %s." % [duel.card_name(data.card), _side_name(data.side)])
+		"script_unsupported":
+			_log("Scripted spell %s is not supported yet and has no effect." % duel.card_name(data.card))
+		"channels":
+			_log("%s %s %d ether channels." % [_side_name(data.side), "gains" if data.amount > 0 else "loses", absi(data.amount)])
+		"ether":
+			_log("%s %s %d ether." % [_side_name(data.side), "gains" if data.amount > 0 else "loses", absi(data.amount)])
+		"upkeep":
+			_log("%s pays %d ether for %s." % [_side_name(data.side), data.amount, duel.card_name(data.card)])
+		"trigger":
+			battle_audio.trigger(data.card)
+			if is_instance_valid(effects) and models.has(data.target):
+				var owner := int(data.target) if int(data.target) < 2 else int(duel.entity(data.target).get("owner", 0))
+				effects.trigger(data.card, {"Target": [models[data.target]], "Start": [models.get(1 - owner)]})
+			var target_name := _side_name(data.target) if data.target < 2 else duel.card_name(duel.entity(data.target).get("card", ""))
+			_log("%s deals %d damage to %s." % [duel.card_name(data.card), data.amount, target_name])
+		"skill":
+			var skill := ELHeroSkills.definition(profile, data.skill, int(duel.heroes[data.side].skills[data.skill]))
+			_log("%s draws an extra spell with %s." % [_side_name(data.side), profile.text(str(skill.get("Name", data.skill)))])
+		"enchant":
+			_float_text(data.target, "%+d / %+d" % [data.power, data.toughness] if data.power != 0 or data.toughness != 0 else duel.card_name(data.card), Color("91dcc2"), true)
+		"death":
+			if models.has(data.target):
+				_bleed(data.target)
+				battle_audio.unit(models[data.target], "death")
+				labels[data.target].hide()
+				if not models[data.target].play("udeath"): _remove_model(data.target)
+		"unsummon":
+			_remove_model(data.target)
+		"plane":
+			battle_audio.effect("OutPlaneEntry" if data.enter else "OutPlaneExit")
+			_figure_effect("OutPlaneEntry" if data.enter else "OutPlaneExit", data.target)
+			_float_text(data.target, "Pale aspect" if data.enter else "Manifests", Color("c9d4dd"), true)
+			_log("%s %s the Colourless Plane." % [duel.card_name(duel.entity(data.target).get("card", "")), "enters" if data.enter else "leaves"])
+		"spec":
+			_float_text(data.side, _spec_name(data.spec), Color("e8c66a"), true)
+			_announce("T_SPEC_WORKED", [_spec_name(data.spec), _hero_name(data.side)], int(data.side))
+		"global_spell":
+			var spell := profile.text(str(profile.table("GlobalSpells").get(data.spell, {}).get("Name", data.spell)))
+			_float_text(data.side, spell, Color("9fc4ff"), true)
+			_log("Global spell %s of %s takes effect." % [spell, _side_name(data.side)])
+		"dissipate":
+			_log("%s dissipates instead of dying." % duel.card_name(duel.entity(data.target).get("card", "")))
+		"lifeguard":
+			battle_audio.effect("LifeguardAbility")
+			_figure_effect("LifeguardAbility", data.target)
+			_float_text(data.target, "Protected", Color("91dcc2"), true)
+		"regenerate":
+			battle_audio.effect("RegenEffect")
+			_figure_effect("RegenEffect", data.target)
+			_float_text(data.target, "Regeneration", Color("91dcc2"), true)
+		"disenchant":
+			_float_text(data.target, "Disenchanted", Color("91dcc2"), true)
+			_log("%s is removed." % duel.card_name(data.card))
+		"artifact":
+			_announce("T_USE_ARTIFACT", [_hero_name(data.side), str(data.get("title", duel.card_name(data.card)))], int(data.side))
+		"ability":
+			# A hero's ability comes from an enchantment on it (T_USE_ENCHANTMENT);
+			# a creature's is its own (T_USE_ABILITY).
+			var source := int(data.get("source", data.side))
+			if source < 2: _announce("T_USE_ENCHANTMENT", [_hero_name(source), String(data.get("name", String(data.ability).capitalize()))], int(data.side))
+			else: _announce("T_USE_ABILITY", [duel.card_name(duel.entity(source).get("card", ""))], int(data.side))
+		"strike":
+			if not fight_shot and models.has(data.from) and models.has(data.to): _auto_fight(int(data.from), int(data.to))
+			if models.has(data.from) and models.has(data.to):
+				var model: ELModel = models[data.from]
+				battle_audio.unit(model, "attack")
+				battle_audio.hit(model, models[data.to])
+				model.play("uattack")
+				var start: Vector3 = homes[data.from]
+				var destination: Vector3 = models[data.to].position
+				var tween := model.create_tween()
+				tween.tween_property(model, "position", start.lerp(destination, 0.6), 0.26)
+				tween.tween_property(model, "position", start, 0.36)
+		"phase":
+			fight_shot = false
+			selection = -1
+			selection_power = 0
+			exchange_target = -1
+			selected_creature = -1
+			_phase_notice(int(data.side), String(data.phase) == "attack", int(data.round))
+		"victory":
+			battle_audio.unit(models[data.side], "victory")
+			models[data.side].play("uvictory")
+			_bleed(1 - data.side)
+			models[1 - data.side].play("udeath")
+			if _auto_camera_on(): auto_camera.victory(int(data.side), models[data.side].position)
+			if combat_tutorial != null: _tutorial_result()
+			else: _hint("%s wins. Start a new duel or change game profile." % _side_name(data.side))
+			_log("%s wins the duel." % _side_name(data.side))
+		"duel_draw":
+			for side in 2:
+				_bleed(side)
+				models[side].play("udeath")
+			selection = -1
+			selection_power = 0
+			_hint("Both heroes have fallen. The duel is a draw.")
+			_log("The duel ends in a draw.")
+
+## The original phase notices (EL1, EL2): the local side's
+## attack shows the attack banner and announces the turn number; its defence
+## shows the defence banner; the opponent's phases show «ХОД ПРОТИВНИКА» once
+## until the local side attacks again. Option CombatPhases gates the banners.
+func _phase_notice(side: int, attack: bool, round_number: int) -> void:
+	var local := _local_side(side)
+	var band := -1
+	if local:
+		band = 0 if attack else 1
+		if attack:
+			_enemy_banner_shown = false
+			_announce("T_TURN_NUMBER", [round_number], -1)
+	elif not _enemy_banner_shown:
+		band = 2
+		_enemy_banner_shown = true
+		# Second game: the opponent's cast icons clear when its turn begins.
+		if attack and is_instance_valid(notices): notices.clear_icons()
+	if band >= 0 and bool(settings.values.get("combat_phases", true)) and is_instance_valid(notices): notices.show_banner(band)
+
+## Whether `side` is played at this screen (both sides in a local two-player battle).
+func _local_side(side: int) -> bool:
+	return side == 0 or _hot_seat() or (mode_select != null and mode_select.selected == 1 and combat_tutorial == null)
+
+## A hero's cast: T_CASTING in the log; the first game also lists it on screen,
+## the second shows the opponent's spell icon at the top left.
+func _cast_notice(side: int, card: String) -> void:
+	if profile.id == "el2":
+		_log(_format_text("T_CASTING", [_hero_name(side), duel.card_name(card)]))
+		if not _local_side(side) and is_instance_valid(notices): notices.add_icon(profile.card_icon(card))
+		return
+	_announce("T_CASTING", [_hero_name(side), duel.card_name(card)], side)
+
+## The hero's name in the original messages: its own title, the hot-seat
+## player's name, else the first game's duel captions «Ваш герой» /
+## «Герой противника».
+func _hero_name(side: int) -> String:
+	if duel != null and duel.heroes[side].has("title"): return str(duel.heroes[side].title)
+	if _hot_seat() and not String(duel_match.names[side]).is_empty(): return String(duel_match.names[side])
+	var caption := _original_text("CtrlDUMyHero" if side == 0 else "CtrlDUEnemyHero", "")
+	return caption if not caption.is_empty() else _side_name(side)
+
+## An original message text with its %s / %d fields filled in order.
+func _format_text(key: String, args: Array) -> String:
+	var text := _original_text(key, key)
+	for value: Variant in args:
+		var at := text.find("%")
+		while at >= 0 and at + 1 < text.length() and not text[at + 1] in ["s", "d"]: at = text.find("%", at + 1)
+		if at < 0 or at + 1 >= text.length(): break
+		text = text.substr(0, at) + str(value) + text.substr(at + 2)
+	return text.strip_edges()
+
+## The first game's message list (options CastMessages and ShowChat): own side
+## teal, opponent red, the turn number gold; every message also goes to the log.
+func _announce(key: String, args: Array, side: int) -> void:
+	var text := _format_text(key, args)
+	_log(text)
+	if profile.id != "el1" or not is_instance_valid(notices): return
+	if not bool(settings.values.get("heroes_casting", true)) or not bool(settings.values.get("show_chat", true)): return
+	var colour := Color8(0xff, 0xda, 0x45) if side < 0 else (Color8(0x00, 0xde, 0xc6) if _local_side(side) else Color8(0xff, 0x00, 0x00))
+	notices.add_line(text, colour)
+
+## Starts the pending cast's particles. Start = the casting hero; the target
+## point = the chosen target, else the figures the cast touched, else the
+## caster; effects without points sit at the arena origin.
+func _start_cast_effects() -> void:
+	var pending := _effect_cast
+	_effect_cast = {}
+	_auto_cast(pending)
+	if pending.is_empty() or not is_instance_valid(effects): return
+	var targets: Array = []
+	for id: int in ([pending.target] if int(pending.target) >= 0 else pending.affected):
+		if models.has(id): targets.append(models[id])
+	if targets.is_empty() and models.has(pending.side): targets.append(models[pending.side])
+	effects.cast(String(pending.card), {"Start": [models.get(pending.side)], "Target": targets})
+
+func _auto_camera_on() -> bool:
+	return auto_camera != null and camera != null and bool(settings.values.get("auto_camera", true))
+
+## Close-ups for a resolved spell: the caster, then the creature(s) it touched.
+func _auto_cast(pending: Dictionary) -> void:
+	if pending.is_empty() or not _auto_camera_on() or not models.has(pending.side): return
+	var card := String(pending.card)
+	var kind := "summon" if duel.is_summon(card) else ("enchantment" if ELCatalog.rule(profile, card).get("effect") == "enchant" else "sorcery")
+	var targets: Array = []
+	for id: int in ([pending.target] if int(pending.target) >= 2 else pending.affected):
+		if id >= 2 and models.has(id): targets.append({"at": models[id].position, "side": int(duel.entity(id).get("owner", pending.side))})
+	auto_camera.cast(kind, int(pending.side), models[pending.side].position, targets, _local_side(int(pending.side)), int(settings.values.get("auto_camera_dynamics", 50)))
+
+## The first blow of a fight: a close-up beside the fighting creatures.
+func _auto_fight(from: int, to: int) -> void:
+	fight_shot = true
+	if not _auto_camera_on() or from < 2: return
+	var middle := Vector3.ZERO
+	var count := 0
+	for id: int in (duel.attacks if not duel.attacks.is_empty() else [from, to]):
+		if models.has(id):
+			middle += models[id].position
+			count += 1
+	if count == 0: return
+	auto_camera.combat(int(duel.entity(from).get("owner", 0)), middle / count, int(settings.values.get("auto_camera_dynamics", 50)))
+
+func _step_auto_camera(delta: float) -> void:
+	if auto_camera == null or camera == null or not auto_camera.active(): return
+	var pose := auto_camera.step(delta)
+	if pose.is_empty():
+		_update_camera()
+	elif pose.get("orbit", false):
+		camera.fov = pose.fov
+		_place_orbit()
+	else:
+		camera.global_transform = Transform3D(Basis(pose.rotation), pose.position)
+		camera.fov = pose.fov
+		arena.clear_camera_view(pose.position, pose.focus)
+
+func _figure_effect(effect: String, id: int) -> void:
+	if is_instance_valid(effects) and models.has(id): effects.play(effect, {"Target": [models[id]]})
+
+func _animation_done(_clip: String, id: int) -> void:
+	if not models.has(id):
+		return
+	if id >= 2 and not duel.creatures.has(id):
+		_remove_model(id)
+		return
+	if duel.phase == ELDuel.Phase.FINISHED:
+		return
+	var resting: bool = id >= 2 and (duel.creatures[id].resting or duel.creatures[id].sick)
+	if not models[id].play("ctapidle" if resting else "cidle"):
+		models[id].play("cidle")
+
+## Blood at a dying figure, when the preference allows it; the second game
+## colours it by the figure's material.
+func _bleed(id: int) -> void:
+	if is_instance_valid(blood) and models.has(id) and bool(settings.values.blood):
+		blood.burst(ELCombatBlood.body_point(models[id]), String(models[id].get_meta("blood", "")))
+
+func _remove_model(id: int) -> void:
+	if not models.has(id): return
+	models[id].queue_free()
+	models.erase(id)
+	labels[id].queue_free()
+	labels.erase(id)
+	homes.erase(id)
+
+func _add_label(id: int) -> void:
+	var label := Label3D.new()
+	label.font_size = 28
+	label.outline_size = 9
+	label.pixel_size = 0.008
+	label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	label.no_depth_test = true
+	stage.add_child(label)
+	labels[id] = label
+
+## The overlay rows drawn over a figure this frame, or {} (for checks).
+func figure_rows(id: int) -> Dictionary:
+	if not is_instance_valid(symbols): return {}
+	for figure: Dictionary in symbols.figures:
+		if int(figure.get("id", -1)) == id: return figure
+	return {}
+
+## Height of a figure's top above its feet: its posed parts' bounds, as the
+## original measures the figure each frame.
+func _figure_height(model: ELModel) -> float:
+	if not is_instance_valid(model) or not model.is_inside_tree(): return 1.7
+	var top := model.global_position.y
+	for part: Variant in model.parts.values():
+		if part is MeshInstance3D and part.mesh != null and part.is_visible_in_tree(): top = maxf(top, (part.global_transform * part.mesh.get_aabb()).end.y)
+	var height := top - model.global_position.y
+	return height if height > 0.1 else 1.7
+
+## The creature's state and ability icons in the original order (icon bits
+## T_CREATURE_ICON_01..21); the second game adds the last three.
+func creature_icons(id: int) -> Array:
+	var c: Dictionary = duel.creatures.get(id, {})
+	if c.is_empty(): return []
+	var owned: Array = []
+	owned.append_array(c.get("flags", []))
+	owned.append_array(c.get("granted", []))
+	var marks: Array = [c.get("resting", false), c.get("sick", false), owned.has("NoAttack"), owned.has("Fly"), owned.has("FS"),
+		owned.has("Trample"), owned.has("Restless"), owned.has("Lifetap"), duel.regeneration_cost(id) > 0,
+		owned.any(func(flag: Variant) -> bool: return String(flag).begins_with("Discard(")), owned.has("Disenchant"), owned.has("Destroy"),
+		owned.has("NoUntap"), owned.has("UB"), owned.has("NSS"), owned.has("Berserk"), owned.has("TeamAttack"), owned.has("Elusive")]
+	if profile.id == "el2": marks.append_array([duel.pale(id), duel.in_plane(id), duel.race(id) == "OutSpellJammer"])
+	var result: Array = []
+	for bit in marks.size():
+		if marks[bit]: result.append(ELCombatSymbols.ICON_CODES[bit])
+	return result
+
+## The original flying number over a figure: damage red, healing (negative) green.
+func _float_number(id: int, amount: int) -> void:
+	if not models.has(id) or not is_instance_valid(symbols) or not is_instance_valid(models[id]): return
+	symbols.add_number(models[id].position + Vector3(0, _figure_height(models[id]), 0), amount, id)
+
+## A rising caption over a figure. Captions that name a spell, ability or
+## state have no original counterpart and show only with the helper overlay;
+## numbers always show. Captions over one figure stack upward, never overlapping.
+func _float_text(id: int, text: String, color: Color, remake_only := false) -> void:
+	if not models.has(id) or (remake_only and not helper_overlay()):
+		return
+	var live: Array = _floating.get(id, []).filter(func(node) -> bool: return is_instance_valid(node) and not node.is_queued_for_deletion())
+	var label := Label3D.new()
+	label.text = text
+	label.font_size = 52
+	label.pixel_size = 0.01
+	label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	label.modulate = color
+	label.no_depth_test = true
+	stage.add_child(label)
+	label.position = models[id].position + Vector3(0, 2 + 0.7 * live.size(), 0)
+	live.append(label)
+	_floating[id] = live
+	var tween := label.create_tween()
+	tween.tween_property(label, "position:y", label.position.y + 1.5, 0.9)
+	tween.tween_callback(label.queue_free)
+
+func _refresh() -> void:
+	if duel == null or updating:
+		return
+	_check_handover()
+	updating = true
+	for child in hand.get_children():
+		hand.remove_child(child)
+		child.queue_free()
+	var active := duel.active_side()
+	var displayed := 0 if mode_select.selected == 0 and not demo else active
+	# Hot seat: the confirmed player's side; nothing while a hand-over waits.
+	var concealed := _hot_seat() and hot_pending
+	if _hot_seat() and hot_side >= 0: displayed = hot_side
+	var hero: Dictionary = duel.heroes[displayed]
+	var shown: Array[String] = []
+	var groups := {}
+	for i in hero.hand.size():
+		var group := "%s:%d" % [hero.hand[i], duel.hand_uses(displayed, i)]
+		groups[group] = int(groups.get(group, 0)) + 1
+	var showing_artifacts := rail != null and rail.artifacts_shown
+	for i in (0 if showing_artifacts or concealed else hero.hand.size()):
+		var card: String = hero.hand[i]
+		var uses := duel.hand_uses(displayed, i)
+		var group := "%s:%d" % [card, uses]
+		if shown.has(group):
+			continue
+		shown.append(group)
+		var button := TextureButton.new()
+		button.custom_minimum_size = Vector2(50, 50)
+		button.texture_normal = profile.card_icon(card)
+		button.ignore_texture_size = true
+		button.stretch_mode = TextureButton.STRETCH_KEEP_ASPECT_CENTERED
+		var price := "%d + X" % duel.cost(card) if duel.variable_power(card) and ELCatalog.rule(profile, card).get("x_source") != "health" else str(duel.cost(card))
+		button.tooltip_text = card_tooltip(card)
+		if helper_overlay():
+			button.tooltip_text += "\n%s ether" % price
+			if uses >= 0:
+				var unit := "rune" if profile.id == "el1" else "charge"
+				button.tooltip_text += "\n%d %s%s left in this spellbook copy." % [uses, unit, "" if uses == 1 else "s"]
+			else:
+				button.tooltip_text += "\nUnlimited cantrip." if profile.id == "el1" and profile.table("CombatSpells")[card].get("Rarity") == "Cantrip" else "\nReturned or created spell: no spellbook charge required."
+		button.set_meta("card", card)
+		button.set_meta("hand_index", i)
+		button.set_meta("charges", uses)
+		button.disabled = not _human_turn() or duel.available_mana(displayed) < duel.cost(card) or hero.channels < duel.channel_cost(card) or uses == 0
+		button.modulate = Color(0.45, 0.45, 0.45) if button.disabled else Color.WHITE
+		var outline := ReferenceRect.new()
+		outline.border_color = ACCENT if i == selection else Color(0.8, 0.65, 0.4, 0.35)
+		outline.border_width = 2 if i == selection else 1
+		outline.editor_only = false
+		outline.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		button.add_child(outline)
+		outline.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		var count := _label("×%d" % int(groups[group]), 12)
+		count.position = Vector2(27, 1)
+		count.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		button.add_child(count)
+		var mana := _label(price.replace(" ", ""), 13, ACCENT)
+		mana.position = Vector2(24 if duel.variable_power(card) else 36, 31)
+		mana.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		button.add_child(mana)
+		if uses >= 0:
+			var charges := _label(str(uses), 12, Color("9de2d8"))
+			charges.position = Vector2(3, 31)
+			charges.add_theme_color_override("font_outline_color", Color.BLACK)
+			charges.add_theme_constant_override("outline_size", 3)
+			charges.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			charges.set_meta("charge_label", true)
+			button.add_child(charges)
+		button.pressed.connect(_cast_card.bind(i))
+		button.mouse_entered.connect(_hint.bind(button.tooltip_text.replace("\n", " — ")))
+		hand.add_child(button)
+	if showing_artifacts and not concealed: _fill_artifact_rail(displayed)
+	if rail != null:
+		var tallies: Array = []
+		for side in 2:
+			var h: Dictionary = duel.heroes[side]
+			tallies.append([h.grave.size(), h.enchantments.size(), h.hand.size(), h.get("artifacts", []).size()])
+		rail.set_counts(tallies[0], tallies[1])
+	for side in 2:
+		var h: Dictionary = duel.heroes[side]
+		hero_values[side].text = "%d   %d   %d" % [h.health, h.mana, h.channels]
+		hero_names[side].text = _side_name(side)
+		# The original prints no name over the portraits (a right click names the hero).
+		hero_names[side].visible = helper_overlay()
+		hero_names[side].modulate = ACCENT if side == active else INK
+		# Original value tooltips: CombatTt1/3/5 for the displayed hero, 2/4/6 for the opponent.
+		var tips: Array[String] = []
+		for index: int in ([1, 3, 5] if side == displayed else [2, 4, 6]): tips.append(_control_tip("CombatTt%d" % index))
+		hero_buttons[side].tooltip_text = "\n".join(tips)
+		if helper_overlay(): hero_buttons[side].tooltip_text += "\n%s\n%d / %d health · %d ether · %d channels\n%d cards in hand · %d creatures in the graveyard\nClick this portrait to target the hero." % [_side_name(side), h.health, h.maximum, h.mana, h.channels, h.hand.size(), h.grave.size()]
+		for code: String in h.get("skills", {}):
+			var rank := int(h.skills[code])
+			var skill := ELHeroSkills.definition(profile, code, rank)
+			hero_buttons[side].tooltip_text += "\n%s %s" % [profile.text(str(skill.get("Name", code))), ["I", "II", "III"][rank]]
+		if str(h.get("spec", "NONE")) != "NONE" and helper_overlay(): hero_buttons[side].tooltip_text += "\n%s" % _spec_name(h.spec)
+	# The battle title line is a remake readout (helper overlay only).
+	status.text = "%s · %s vs %s" % [profile.title, ELCatalog.faction_name(duel.heroes[0].faction), ELCatalog.faction_name(duel.heroes[1].faction)] if helper_overlay() else ""
+	phase_label.text = phase_caption()
+	phase_label.tooltip_text = "%s's phase" % _side_name(active) if helper_overlay() else ""
+	# The phase control is the original panel's end-phase socket; its icon is
+	# part of the panel art. Only the post-battle return control carries text.
+	end_button.text = "Continue to map" if _campaign_battle() != null and duel.phase == ELDuel.Phase.FINISHED else ("Continue" if (duel_match != null or combat_tutorial != null) and duel.phase == ELDuel.Phase.FINISHED else "")
+	_place_end_button()
+	end_button.disabled = not _human_turn() and not ((_campaign_battle() != null or duel_match != null or combat_tutorial != null) and duel.phase == ELDuel.Phase.FINISHED)
+	# The original control tooltips (CombatMenu2 end of phase, CombatMenu1 attack with all).
+	end_button.tooltip_text = _control_tip("CombatMenu2")
+	attack_button.tooltip_text = _control_tip("CombatMenu1")
+	if helper_overlay():
+		end_button.tooltip_text += "\n" + ("End attack [Space]" if duel.phase == ELDuel.Phase.ATTACK else "Resolve battle [Space]")
+		attack_button.tooltip_text += "\nAttack with all ready creatures"
+	attack_button.disabled = not _human_turn() or duel.phase != ELDuel.Phase.ATTACK
+	if auto_combat and duel.phase == ELDuel.Phase.FINISHED:
+		auto_combat = false
+		auto_off_button.visible = false
+	# Hot seat has no auto combat (unavailable in HotSeat in the original).
+	auto_button.disabled = not auto_combat and (not _human_turn() or combat_tutorial != null or _hot_seat())
+	for id: int in models:
+		if id >= 2 and duel.creatures.has(id) and models[id].clip.begins_with("c"):
+			var resting: bool = duel.creatures[id].resting or duel.creatures[id].sick
+			var desired := "ctapidle" if resting else "cidle"
+			if models[id].base_clip() != desired:
+				models[id].play(desired)
+	_refresh_inspector()
+	updating = false
+
+## The original Artifacts rail: the displayed hero's artifacts in the card
+## slots with their icon and charges, greyed while the use gate refuses them;
+## a click starts the use exactly like the hero's artifact command.
+func _fill_artifact_rail(displayed: int) -> void:
+	var commands := {}
+	for ability: Dictionary in duel.abilities(displayed):
+		if ability.get("effect") == "artifact": commands[int(ability.artifact)] = ability
+	var items: Array = duel.heroes[displayed].get("artifacts", [])
+	for index in items.size():
+		var item: Dictionary = items[index]
+		var button := TextureButton.new()
+		button.custom_minimum_size = Vector2(50, 50)
+		var icon := int(item.custom.get("icon", -1)) if item.has("custom") else -1
+		button.texture_normal = profile.icon_at(icon) if icon >= 0 else profile.card_icon(item.spell)
+		button.ignore_texture_size = true
+		button.stretch_mode = TextureButton.STRETCH_KEEP_ASPECT_CENTERED
+		var key := "artifact:%d" % index
+		var reason := duel.artifact_error(displayed, index)
+		button.tooltip_text = ELCombatRail.artifact_tooltip(profile, item, duel.artifact_title(item)) + ("\n" + reason if not reason.is_empty() else "")
+		button.set_meta("artifact_index", index)
+		button.set_meta("charges", int(item.charges))
+		button.disabled = not _human_turn() or not commands.has(index) or not duel.can_use_ability(displayed, key)
+		button.modulate = Color(0.45, 0.45, 0.45) if button.disabled else Color.WHITE
+		var outline := ReferenceRect.new()
+		outline.border_color = ACCENT if ability_selection.get("key") == key else Color(0.8, 0.65, 0.4, 0.35)
+		outline.border_width = 2 if ability_selection.get("key") == key else 1
+		outline.editor_only = false
+		outline.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		button.add_child(outline)
+		outline.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		# The original prints the charges at the icon's lower right.
+		var charges := _label(str(int(item.charges)), 13, INK)
+		charges.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		charges.position = Vector2(0, 31)
+		charges.size = Vector2(47, 18)
+		charges.add_theme_color_override("font_outline_color", Color.BLACK)
+		charges.add_theme_constant_override("outline_size", 3)
+		charges.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		charges.set_meta("charge_label", true)
+		button.add_child(charges)
+		if commands.has(index): button.pressed.connect(_select_ability.bind(displayed, commands[index]))
+		button.mouse_entered.connect(_hint.bind(button.tooltip_text.replace("\n", " — ")))
+		hand.add_child(button)
+
+func _side_name(side: int) -> String:
+	if duel != null and duel.heroes[side].has("title"): return str(duel.heroes[side].title)
+	if _hot_seat() and not String(duel_match.names[side]).is_empty(): return String(duel_match.names[side])
+	return "Player 1" if side == 0 else ("Practice AI" if mode_select.selected == 0 else "Player 2")
+
+## Remake setting "helper_overlay" (default off): remake-only English readouts
+## and hints over the original combat screen.
+func helper_overlay() -> bool:
+	return settings != null and bool(settings.values.get("helper_overlay", false))
+
+## The phase box in the original texts (EL1, EL2): while a
+## spell or ability waits for its target, the two-line T_SPELL_PARAM prompt
+## for the kind of target; else T_ATTACK_CAST_PHASE in the local side's attack,
+## T_BLOCK_PHASE in its defence, T_ENEMY_TURN in the opponent's phases and
+## T_WAIT during a hot-seat hand-over. After the battle: T_WINNER with the
+## winner's name, or the edition's draw text.
+func phase_caption() -> String:
+	if duel.phase == ELDuel.Phase.FINISHED:
+		if duel.winner >= 0: return _original_text("T_WINNER", "%s wins").replace("%s", _side_name(duel.winner))
+		return _original_text("T_RR_DUEL_DRAW" if profile.id == "el2" else "T_VL_MATCH_DRAW", "Draw")
+	if hot_pending: return _original_text("T_WAIT", "Wait")
+	var kind := target_prompt_kind()
+	if kind >= 0:
+		var first := _original_text("T_SPELL_PARAM" if kind == 0 else "T_SPELL_PARAM%02d" % (2 * kind + 1), "")
+		var second := _original_text("T_SPELL_PARAM%02d" % (2 * kind + 2), "")
+		return first if second.is_empty() else first + "\n" + second
+	if not _local_side(duel.active_side()): return _original_text("T_ENEMY_TURN", "Enemy turn")
+	return _original_text("T_ATTACK_CAST_PHASE" if duel.phase == ELDuel.Phase.ATTACK else "T_BLOCK_PHASE", "Attack" if duel.phase == ELDuel.Phase.ATTACK else "Defence")
+
+## The original target parameter kind of the pending spell or ability, or -1:
+## 0 hero, 1 creature, 2 own creature, 3 enemy creature, 4 creature or hero,
+## 7 any graveyard, 8 own graveyard, 10 enchantment.
+func target_prompt_kind() -> int:
+	if not _human_turn(): return -1
+	var target := ""
+	var rule := {}
+	if not ability_selection.is_empty():
+		target = String(ability_selection.get("target", "none"))
+	elif selection >= 0 and selection < duel.heroes[duel.active_side()].hand.size():
+		var card: String = duel.heroes[duel.active_side()].hand[selection]
+		rule = ELCatalog.rule(profile, card)
+		target = String(rule.get("target", "none"))
+		if card == "CHCM": return 3
+	match target:
+		"hero": return 0
+		"any": return 4
+		"enchantment": return 10
+		"grave": return 8 if rule.get("effect") in ["repair", "exchange"] else 7
+		"creature":
+			if rule.get("own", false) or rule.get("effect") in ["trade", "exchange"]: return 2
+			return 1
+	return -1
+
+func _original_text(key: String, fallback: String) -> String:
+	var value := profile.text(key) if profile != null else key
+	return fallback if value.is_empty() or value == key else value
+
+## The original hand card tooltip: the spell's name, its type
+## (T_SPELL_TYPE creature, _TYPE2 sorcery, _TYPE3 enchantment), T_COST with the
+## cost in T_MANA, then the description.
+func card_tooltip(card: String) -> String:
+	var spell_class := str(profile.table("CombatSpells").get(card, {}).get("Class", ""))
+	var lines: Array[String] = [duel.card_name(card)]
+	var kind: String = {"Creature": "T_SPELL_TYPE", "Sorcery": "T_SPELL_TYPE2", "Enchantment": "T_SPELL_TYPE3"}.get(spell_class, "")
+	if not kind.is_empty(): lines.append(_original_text(kind, spell_class))
+	lines.append("%s %d %s" % [_original_text("T_COST", "Cost:"), duel.cost(card), _original_text("T_MANA", "ether")])
+	var description := profile.card_description(card)
+	if not description.is_empty() and description != card: lines.append(description)
+	return "\n".join(lines)
+
+## An original control's tooltip text from the Controls table, else "".
+func _control_tip(control: String) -> String:
+	if profile == null: return ""
+	var key := profile.id + ":" + control
+	if not _control_tips.has(key):
+		_control_tips[key] = ""
+		for row: Dictionary in profile.table("Controls").values():
+			if str(row.get("Name", "")) == control and not str(row.get("ToolTip", "")).is_empty(): _control_tips[key] = profile.text(str(row.ToolTip))
+	return String(_control_tips[key])
+
+## A battle, save or setup message: always shown.
+func _notice(text: String) -> void:
+	notice.text = text
+	notice.visible = true
+
+## A remake prompt, refusal or hover readout in combat. The original has none
+## (only the cursor and the phase box prompt), so it shows with the helper
+## overlay only.
+func _hint(text: String) -> void:
+	notice.text = text
+	notice.visible = helper_overlay()
+
+func _spec_name(code: String) -> String:
+	return profile.text(str(profile.table("HeroesSpecs").get(code, {}).get("Name", code)))
+
+func _log(text: String) -> void:
+	logs.append(text)
+	if logs.size() > 6:
+		logs.pop_front()
+	log_text.text = "\n".join(logs)
+
+func _style(fill: Color, border := Color("344441")) -> StyleBoxFlat:
+	var style := StyleBoxFlat.new()
+	style.bg_color = fill
+	style.border_color = border
+	style.set_border_width_all(1)
+	style.set_corner_radius_all(5)
+	style.content_margin_left = 14
+	style.content_margin_right = 14
+	style.content_margin_top = 10
+	style.content_margin_bottom = 10
+	return style
+
+func _label(text: String, size := 18, color := INK) -> Label:
+	var label := Label.new()
+	label.text = text
+	label.add_theme_font_size_override("font_size", size)
+	label.add_theme_color_override("font_color", color)
+	return label
+
+func _button(text: String, action: Callable) -> Button:
+	var button := Button.new()
+	button.text = text
+	button.pressed.connect(action)
+	return button
+
+func _build_ui() -> void:
+	var layer := CanvasLayer.new()
+	add_child(layer)
+	ui = Control.new()
+	layer.add_child(ui)
+	ui.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	ui.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var theme := Theme.new()
+	theme.default_font_size = 16
+	for kind in ["Button", "OptionButton"]:
+		theme.set_stylebox("normal", kind, _style(Color("161913e8"), Color("66523a")))
+		theme.set_stylebox("hover", kind, _style(Color("353329"), ACCENT))
+		theme.set_stylebox("pressed", kind, _style(Color("483b2e"), ACCENT))
+		theme.set_stylebox("disabled", kind, _style(Color("17171188")))
+		theme.set_color("font_color", kind, INK)
+		theme.set_color("font_disabled_color", kind, Color("81918b"))
+	ui.theme = theme
+	symbols = ELCombatSymbols.new()
+	ui.add_child(symbols)
+	notices = ELCombatNotices.new()
+	ui.add_child(notices)
+	status = _label("Choose your original game content from Menu.", 14, Color("e9e4d4"))
+	status.position = Vector2(20, 16)
+	status.add_theme_color_override("font_shadow_color", Color.BLACK)
+	status.add_theme_constant_override("shadow_offset_y", 1)
+	status.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	ui.add_child(status)
+	var menu_button := _button("Menu", func(): menu.visible = not menu.visible)
+	ui.add_child(menu_button)
+	menu_button.set_anchors_and_offsets_preset(Control.PRESET_TOP_RIGHT)
+	menu_button.offset_left = -112
+	menu_button.offset_right = -16
+	menu_button.offset_top = 12
+	menu_button.offset_bottom = 46
+	menu = PanelContainer.new()
+	ui.add_child(menu)
+	menu.set_anchors_and_offsets_preset(Control.PRESET_TOP_RIGHT)
+	menu.offset_left = -310
+	menu.offset_right = -16
+	menu.offset_top = 56
+	menu.add_theme_stylebox_override("panel", _style(Color("111710f5")))
+	menu.visible = false
+	var menu_rows := VBoxContainer.new()
+	menu_rows.add_theme_constant_override("separation", 8)
+	menu.add_child(menu_rows)
+	menu_rows.add_child(_label("DUEL", 20, ACCENT))
+	profile_select = OptionButton.new()
+	profile_select.add_item("Etherlords I", 0)
+	profile_select.add_item("Etherlords II", 1)
+	for i in 2:
+		profile_select.set_item_disabled(i, not profiles.has("el1" if i == 0 else "el2"))
+	profile_select.item_selected.connect(func(i: int):
+		demo = false
+		_start("el1" if i == 0 else "el2")
+		menu.hide())
+	menu_rows.add_child(profile_select)
+	# Internal two-local-sides switch for prepared checks. Not shown: local
+	# two-player play goes through the original HotSeat duel and its hand-over.
+	mode_select = OptionButton.new()
+	mode_select.add_item("Practice AI")
+	mode_select.add_item("Two local sides")
+	mode_select.item_selected.connect(func(_i: int): _refresh())
+	mode_select.visible = false
+	menu_rows.add_child(mode_select)
+	menu_rows.add_child(_button("Main menu", _show_front_menu))
+	menu_rows.add_child(_button("Duel screen…", _open_duel_screen))
+	menu_rows.add_child(_button("Practice setup / Spellbooks…", _open_setup))
+	menu_rows.add_child(_button("Campaigns…", _open_campaigns))
+	menu_rows.add_child(_button("Save duel [F5]", _save_duel))
+	menu_rows.add_child(_button("Load duel [F9]", _load_duel))
+	menu_rows.add_child(_button("Surrender campaign battle", _surrender_encounter))
+	menu_rows.add_child(_button("Surrender duel round", _surrender_round))
+	menu_rows.add_child(_button("Watch / stop demo", func():
+		if _campaign_battle() != null:
+			_notice("Finish or surrender the campaign battle first.")
+			return
+		demo = not demo
+		if demo and profile != null: _start(profile.id, match_options)
+		menu.hide()
+		_refresh()))
+	menu_rows.add_child(_button("Original game content…", _content_menu))
+	menu_rows.add_child(_button("Options…", _open_battle_options))
+	menu_rows.add_child(_button("Remake settings…", _open_settings))
+	menu_rows.add_child(_button("Show / hide battle log [L]", func():
+		log_text.visible = not log_text.visible
+		menu.hide()))
+	menu_rows.add_child(_label("Right-drag: orbit   Wheel: zoom\nR: reset camera   Space: end phase", 13, MUTED))
+	log_text = RichTextLabel.new()
+	ui.add_child(log_text)
+	log_text.position = Vector2(20, 56)
+	log_text.size = Vector2(470, 145)
+	log_text.add_theme_font_size_override("normal_font_size", 14)
+	log_text.add_theme_color_override("default_color", Color("e5e7d9"))
+	log_text.add_theme_color_override("font_shadow_color", Color.BLACK)
+	log_text.add_theme_constant_override("shadow_offset_x", 1)
+	log_text.add_theme_constant_override("shadow_offset_y", 1)
+	log_text.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	log_text.visible = false
+	hud_root = Control.new()
+	hud_root.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	ui.add_child(hud_root)
+	hud = ELHudFrame.new()
+	hud_root.add_child(hud)
+	rail = ELCombatRail.new()
+	hud_root.add_child(rail)
+	rail.tab_selected.connect(func(_artifacts: bool): _refresh())
+	rail.strip_selected.connect(func(graveyard: bool):
+		inspect_graveyard = graveyard
+		_refresh())
+	rail.strip_item.connect(_strip_pressed)
+	for side in 2:
+		var portrait := TextureRect.new()
+		portrait.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		portrait.stretch_mode = TextureRect.STRETCH_SCALE
+		portrait.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		hud_root.add_child(portrait)
+		portraits.append(portrait)
+		var button := _button("", _target.bind(side))
+		button.add_theme_stylebox_override("normal", StyleBoxEmpty.new())
+		button.add_theme_stylebox_override("hover", _style(Color(0.8, 0.65, 0.3, 0.12), ACCENT))
+		button.add_theme_stylebox_override("pressed", _style(Color(0.8, 0.65, 0.3, 0.24), ACCENT))
+		hud_root.add_child(button)
+		hero_buttons.append(button)
+		var values := _label("", 13)
+		values.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		values.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		hud_root.add_child(values)
+		hero_values.append(values)
+		var name_label := _label("", 12)
+		name_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		name_label.add_theme_color_override("font_shadow_color", Color.BLACK)
+		name_label.add_theme_constant_override("shadow_offset_y", 1)
+		name_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		hud_root.add_child(name_label)
+		hero_names.append(name_label)
+	phase_label = _label("DUEL", 13, ACCENT)
+	phase_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	phase_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	phase_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	hud_root.add_child(phase_label)
+	attack_button = _button("", func():
+		for c: Dictionary in duel.army(duel.active_side()):
+			if duel.can_attack(c.id) and not duel.attacks.has(c.id): duel.toggle_attack(c.id))
+	attack_button.tooltip_text = "Attack with all ready creatures"
+	end_button = _button("", _end_phase)
+	auto_button = ELCutPartButton.new()
+	auto_button.pressed.connect(_toggle_auto)
+	auto_button.disabled = true
+	hud_root.add_child(auto_button)
+	auto_off_button = ELCutPartButton.new()
+	auto_off_button.pressed.connect(func(): _set_auto(false))
+	auto_off_button.visible = false
+	hud_root.add_child(auto_off_button)
+	attack_button.disabled = true
+	end_button.disabled = true
+	for button in [attack_button, end_button]:
+		button.add_theme_stylebox_override("normal", StyleBoxEmpty.new())
+		button.add_theme_stylebox_override("hover", _style(Color(0.9, 0.7, 0.3, 0.13), ACCENT))
+		button.add_theme_stylebox_override("pressed", _style(Color(0.9, 0.7, 0.3, 0.3), ACCENT))
+		button.add_theme_stylebox_override("disabled", _style(Color(0, 0, 0, 0.3), Color.TRANSPARENT))
+		hud_root.add_child(button)
+	notice = _label("", 12, INK)
+	notice.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	notice.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	notice.add_theme_color_override("font_shadow_color", Color.BLACK)
+	notice.add_theme_constant_override("shadow_offset_y", 1)
+	notice.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	hud_root.add_child(notice)
+	card_scroll = ScrollContainer.new()
+	card_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	hud_root.add_child(card_scroll)
+	hand = HBoxContainer.new()
+	# Cards sit on the panel's 53 px slots.
+	hand.add_theme_constant_override("separation", 3)
+	card_scroll.add_child(hand)
+	card_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_SHOW_NEVER
+	rail.hand_scroll = card_scroll
+	folder_dialog = FileDialog.new()
+	folder_dialog.file_mode = FileDialog.FILE_MODE_OPEN_DIR
+	folder_dialog.access = FileDialog.ACCESS_FILESYSTEM
+	folder_dialog.use_native_dialog = true
+	folder_dialog.dir_selected.connect(_import_folder)
+	ui.add_child(folder_dialog)
+	ui.resized.connect(_layout_hud)
+	inspector = PanelContainer.new()
+	ui.add_child(inspector)
+	inspector.add_theme_stylebox_override("panel", _style(Color("111710ed")))
+	inspector.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_LEFT)
+	inspector.offset_left = 20
+	inspector.offset_right = 350
+	inspector.offset_top = -430
+	inspector.offset_bottom = -180
+	var inspector_scroll := ScrollContainer.new()
+	inspector_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	inspector.add_child(inspector_scroll)
+	inspector_rows = VBoxContainer.new()
+	inspector_rows.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	inspector_scroll.add_child(inspector_rows)
+	inspector.hide()
+	power_dialog = ELCombatManaPanel.new()
+	power_dialog.name = "ManaPanel"
+	hud_root.add_child(power_dialog)
+	power_amount = power_dialog.amount
+	# The spell and value the choice is for, and what it will do, are remake
+	# readouts on the X/limit tooltip.
+	power_heading = _label("", 15)
+	power_heading.hide()
+	power_preview = _label("", 15)
+	power_preview.hide()
+	hud_root.add_child(power_heading)
+	hud_root.add_child(power_preview)
+	power_dialog.changed.connect(func(_value: int):
+		_preview_power()
+		_power_tooltip())
+	power_dialog.confirmed.connect(_confirm_power)
+	power_dialog.cancelled.connect(_cancel_power)
+	_layout_hud()
+
+func _overlay_open() -> bool:
+	return (first_tutorial != null and first_tutorial.visible) or (options_host != null and options_host.is_visible_in_tree()) or movie_player != null or (front_menu != null and front_menu.is_visible_in_tree()) or (setup_panel != null and setup_panel.visible) or (menu != null and menu.visible) or (settings_dialog != null and settings_dialog.visible) or (campaign_setup != null and campaign_setup.visible) or (power_dialog != null and power_dialog.visible) or (tutorial_quit != null and tutorial_quit.visible) or (esc_menu != null and esc_menu.visible) or (replay_quit != null and replay_quit.visible)
+
+## First game: the tutorial panel of battles (one per view, sharing the
+## settings' tutorial with the map).
+func _first_tutorial_panel() -> ELFirstTutorialPanel:
+	if first_tutorial == null or first_tutorial.profile != profile:
+		if first_tutorial != null: first_tutorial.queue_free()
+		first_tutorial = ELFirstTutorialPanel.new()
+		ui.add_child(first_tutorial)
+		first_tutorial.build(profile, ELFirstTutorial.for_settings(settings), ELFirstTutorial.COMBAT)
+	first_tutorial.set_volume(float(settings.values.get("effects", 1.0)))
+	return first_tutorial
+
+## A battle opened for a player (campaign, Duel mode, practice): the first
+## game's combat screen event.
+func _first_tutorial_battle() -> void:
+	if first_tutorial != null: first_tutorial.close()
+	if duel == null or profile == null or profile.id != "el1" or demo: return
+	_first_tutorial_panel().fire("COMBAT_SCREEN")
+
+func _open_settings() -> void:
+	menu.hide()
+	if settings_dialog != null: settings_dialog.queue_free()
+	settings_dialog = AcceptDialog.new()
+	settings_dialog.title = "Remake settings"
+	settings_dialog.exclusive = true
+	ui.add_child(settings_dialog)
+	var rows := VBoxContainer.new()
+	rows.add_theme_constant_override("separation", 14)
+	settings_dialog.add_child(rows)
+	for key: String in ["music", "ambience", "effects"]:
+		var row := HBoxContainer.new()
+		rows.add_child(row)
+		var label := _label(key.capitalize(), 16)
+		label.custom_minimum_size.x = 120
+		row.add_child(label)
+		var slider := HSlider.new()
+		slider.custom_minimum_size.x = 240
+		slider.min_value = 0
+		slider.max_value = 100
+		slider.value = float(settings.values[key]) * 100
+		row.add_child(slider)
+		var number := _label("%d%%" % slider.value, 16)
+		number.custom_minimum_size.x = 50
+		row.add_child(number)
+		slider.value_changed.connect(func(value: float):
+			settings.values[key] = value / 100.0
+			number.text = "%d%%" % value
+			if is_instance_valid(battle_audio): battle_audio.apply_volumes(settings.values)
+			if front_menu != null: front_menu.apply_volumes(settings.values))
+	var shadows := CheckButton.new()
+	shadows.text = "Creature shadows"
+	shadows.button_pressed = settings.values.shadows
+	shadows.toggled.connect(func(enabled: bool):
+		settings.values.shadows = enabled
+		if is_instance_valid(arena): arena.light.shadow_enabled = enabled)
+	rows.add_child(shadows)
+	var weather := CheckButton.new()
+	weather.text = "Adventure weather effects"
+	weather.button_pressed = settings.values.weather
+	weather.toggled.connect(func(enabled: bool): settings.values.weather = enabled)
+	rows.add_child(weather)
+	var blood_toggle := CheckButton.new()
+	blood_toggle.text = "Combat blood"
+	blood_toggle.button_pressed = settings.values.blood
+	blood_toggle.toggled.connect(func(enabled: bool):
+		settings.values.blood = enabled
+		if is_instance_valid(blood): blood.set_enabled(enabled))
+	rows.add_child(blood_toggle)
+	var tooltip_toggle := CheckButton.new()
+	tooltip_toggle.text = "Map tooltips on hover"
+	tooltip_toggle.tooltip_text = "Second game: show an object's tooltip when the cursor rests on it. The right mouse button shows it either way."
+	tooltip_toggle.button_pressed = settings.values.map_tooltips
+	tooltip_toggle.toggled.connect(func(enabled: bool): settings.values.map_tooltips = enabled)
+	rows.add_child(tooltip_toggle)
+	# The originals' Video key: no movies, own size, or fitted (shipped).
+	var movie_row := HBoxContainer.new()
+	rows.add_child(movie_row)
+	var movie_label := _label("Movies", 16)
+	movie_label.custom_minimum_size.x = 120
+	movie_row.add_child(movie_label)
+	var movie_mode := OptionButton.new()
+	movie_mode.name = "MovieMode"
+	for caption: String in ["Off", "Original size", "Fit to screen"]: movie_mode.add_item(caption)
+	movie_mode.select(int(settings.values.movies))
+	movie_mode.item_selected.connect(func(index: int):
+		settings.values.movies = index
+		ELMoviePlayer.mode = index)
+	movie_row.add_child(movie_mode)
+	var helper_toggle := CheckButton.new()
+	helper_toggle.name = "HelperOverlay"
+	helper_toggle.text = "Show remake helper overlay"
+	helper_toggle.tooltip_text = "Remake-only readouts, hints and shortcut buttons over the original screens."
+	helper_toggle.button_pressed = helper_overlay()
+	helper_toggle.toggled.connect(func(enabled: bool):
+		settings.values.helper_overlay = enabled
+		_apply_settings())
+	rows.add_child(helper_toggle)
+	settings_dialog.visibility_changed.connect(func():
+		if not settings_dialog.visible:
+			if not settings.save_file(): _notice("Could not save preferences.")
+		_refresh())
+	settings_dialog.popup_centered(Vector2i(500, 450))
+	_refresh()
+
+## The active game's preferences (each original keeps its own settings).
+func _use_edition(edition: String) -> void:
+	settings.use_edition(edition)
+	ELMoviePlayer.mode = int(settings.values.movies)
+
+## Options (or the remake dialog) changed the preferences: every running part
+## takes the new values.
+func _apply_settings() -> void:
+	ELMoviePlayer.mode = int(settings.values.movies)
+	if is_instance_valid(arena) and arena.light != null: arena.light.shadow_enabled = settings.values.shadows
+	if is_instance_valid(blood): blood.set_enabled(bool(settings.values.blood))
+	_preview_volumes(settings.values)
+	if campaign_view != null: campaign_view.apply_settings()
+	_refresh()
+
+func _preview_volumes(values: Dictionary) -> void:
+	if is_instance_valid(battle_audio): battle_audio.apply_volumes(values)
+	if front_menu != null: front_menu.apply_volumes(values)
+	if campaign_view != null: campaign_view.preview_volumes(values)
+
+## The original Options screen over the battle, on its combat page; its
+## Surrender concedes the campaign battle or the Duel mode round.
+func _open_battle_options() -> void:
+	menu.hide()
+	var host := _battle_host()
+	if host == null: return
+	host.open_hosted("options", true, "combat")
+	options_layer.show()
+	host.show()
+
+## The original screens hosted over the battle (Options, and in the second
+## game the Esc menu's Load, Encyclopaedia and questions).
+func _battle_host() -> ELFrontMenu:
+	if profile == null or not ELFrontMenu.supports(profile):
+		_notice("The original Options art is unavailable.")
+		return null
+	if options_host != null and options_host.edition != profile.id:
+		options_layer.queue_free()
+		options_host = null
+	if options_host == null:
+		options_layer = CanvasLayer.new()
+		options_layer.layer = 6
+		add_child(options_layer)
+		options_host = ELFrontMenu.new()
+		options_host.settings = settings
+		options_layer.add_child(options_host)
+		if not options_host.build({profile.id: profile}, profile.id):
+			options_layer.queue_free()
+			options_host = null
+			return
+		options_host.settings_previewed.connect(_preview_volumes)
+		options_host.hosted_closed.connect(func():
+			options_host.hide()
+			options_layer.hide()
+			_apply_settings()
+			var command := options_host.options_ui.last_command
+			options_host.options_ui.last_command = ""
+			if command == "Surrender": _surrender_battle()
+			# Another box replaced a waiting hand-over: show it again.
+			if hot_pending: call_deferred("_show_handover"))
+		options_host.slot_chosen.connect(_load_slot)
+	options_host.options_ui.last_command = ""
+	return options_host
+
+func _surrender_battle() -> void:
+	if _campaign_battle() != null: _surrender_encounter()
+	elif duel_match != null: _surrender_round()
+	else: _notice("Surrender ends campaign battles and Duel mode rounds.")
+
+func _open_setup() -> void:
+	if _campaign_battle() != null:
+		_notice("Finish or surrender the campaign battle first.")
+		return
+	if profiles.is_empty():
+		_content_menu()
+		return
+	menu.hide()
+	if setup_panel != null:
+		ui.remove_child(setup_panel)
+		setup_panel.queue_free()
+	setup_panel = ELDuelSetup.new()
+	ui.add_child(setup_panel)
+	setup_panel.add_theme_stylebox_override("panel", _style(Color("111710fc"), ACCENT))
+	setup_panel.build(profiles, profile.id if profile != null else launch_profile, match_options)
+	setup_panel.set_anchors_and_offsets_preset(Control.PRESET_CENTER)
+	setup_panel.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	setup_panel.grow_vertical = Control.GROW_DIRECTION_BOTH
+	setup_panel.begin.connect(func(edition: String, options: Dictionary, mode: int):
+		demo = false
+		mode_select.select(0)
+		_start(edition, options)
+		_first_tutorial_battle())
+	setup_panel.resume_requested.connect(_load_duel)
+	setup_panel.campaign_requested.connect(_open_campaigns)
+	setup_panel.visibility_changed.connect(_refresh)
+	_refresh()
+
+func _open_campaigns() -> void:
+	if _campaign_battle() != null:
+		_notice("Finish or surrender the campaign battle first.")
+		return
+	if profiles.is_empty(): return
+	menu.hide()
+	if setup_panel != null: setup_panel.hide()
+	if campaign_setup != null: campaign_setup.queue_free()
+	campaign_setup = ELCampaignSetup.new()
+	ui.add_child(campaign_setup)
+	campaign_setup.build(profiles, profile.id if profile != null else launch_profile)
+	campaign_setup.set_anchors_and_offsets_preset(Control.PRESET_CENTER)
+	campaign_setup.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	campaign_setup.grow_vertical = Control.GROW_DIRECTION_BOTH
+	campaign_setup.begin.connect(_begin_campaign)
+	campaign_setup.resume_requested.connect(func(): _resume_campaign(false, ELSingleScenario.campaign_file(campaign_setup.chosen_edition())))
+	campaign_setup.closed.connect(func(): campaign_setup.hide())
+
+func _begin_campaign(edition: String, scenario: Dictionary, difficulty: int, restored: Dictionary = {}) -> void:
+	if campaign_setup != null: campaign_setup.hide()
+	_notice("Loading chapter…")
+	set_process(false)
+	set_process_unhandled_input(false)
+	# A second-game chapter chosen from the chapter list joins the campaign
+	# order at its row (no carried data); menu chapters bring their progress.
+	if edition == "el2" and restored.is_empty() and not scenario.has(ELSecondCampaign.KEY) and scenario.has("campaign") and profiles.has(edition):
+		var progress := ELSecondCampaign.for_chapter(profiles[edition], str(scenario.campaign), scenario, difficulty)
+		if not progress.is_empty():
+			scenario = scenario.duplicate()
+			scenario[ELSecondCampaign.KEY] = progress
+	var previous := campaign_view
+	if previous != null: previous.paused = true
+	await get_tree().process_frame
+	await get_tree().process_frame
+	campaign_view = ELAdventureView.new()
+	add_child(campaign_view)
+	_use_edition(edition)
+	if not campaign_view.build(profiles[edition], scenario, settings, difficulty, restored):
+		_notice(campaign_view.error)
+		campaign_view.queue_free()
+		campaign_view = previous
+		if previous != null: previous.paused = false
+		else:
+			set_process(true)
+			set_process_unhandled_input(true)
+		return
+	if previous != null:
+		remove_child(previous)
+		previous.queue_free()
+	stage.hide()
+	stage.process_mode = Node.PROCESS_MODE_DISABLED
+	for player: Node in battle_audio.get_children():
+		if player is AudioStreamPlayer or player is AudioStreamPlayer3D: player.stream_paused = true
+	ui.hide()
+	campaign_view.leave_requested.connect(_leave_campaign)
+	campaign_view.resume_requested.connect(func(): _resume_campaign(false, ELSaveSlots.quick_load_path(campaign_view.state), edition))
+	campaign_view.slot_requested.connect(_load_slot)
+	campaign_view.encounter_requested.connect(_begin_encounter)
+	campaign_view.chapter_requested.connect(func(next: Dictionary):
+		if edition == "el1": _show_chapter_info(next, campaign_view.state.difficulty)
+		else: _begin_campaign(edition, next, campaign_view.state.difficulty))
+	campaign_view.campaign_map_requested.connect(_show_campaign_map)
+	if campaign_view.director.encounter != null:
+		var encounter := campaign_view.director.encounter
+		_begin_encounter(encounter.hero_id, encounter.opponent_id)
+		var combat_view: Dictionary = restored.camera.get("battle", {})
+		var session := ELMatchSave.session(combat_view)
+		camera_yaw = session.camera[0]
+		camera_pitch = session.camera[1]
+		camera_distance = session.camera[2]
+		_update_camera()
+
+func _campaign_battle() -> ELDuel:
+	return campaign_view.director.encounter.battle if campaign_view != null and campaign_view.director != null and campaign_view.director.encounter != null else null
+
+func _begin_encounter(_hero: int, _opponent: int) -> void:
+	var battle := _campaign_battle()
+	if battle == null: return
+	campaign_view.set_suspended(true)
+	demo = false
+	menu.hide()
+	mode_select.select(0)
+	mode_select.disabled = true
+	profile_select.disabled = true
+	_start(battle.profile.id, battle.setup, battle)
+	ui.show()
+	_first_tutorial_battle()
+	set_process(true)
+	set_process_unhandled_input(true)
+	_notice("Defeat %s to continue. F5 saves both the battle and campaign." % _side_name(1) if helper_overlay() else "")
+	if not battle.load_note.is_empty(): _notice(battle.load_note)
+
+func _return_from_encounter() -> void:
+	if _campaign_battle() == null or (duel.phase != ELDuel.Phase.FINISHED and campaign_view.state.outcome.is_empty()): return
+	if not campaign_view.director.finish_encounter():
+		_notice(campaign_view.director.error)
+		return
+	menu.hide()
+	stage.hide()
+	stage.process_mode = Node.PROCESS_MODE_DISABLED
+	for player: Node in battle_audio.get_children():
+		if player is AudioStreamPlayer or player is AudioStreamPlayer3D: player.stream_paused = true
+	ui.hide()
+	mode_select.disabled = false
+	profile_select.disabled = false
+	set_process(false)
+	set_process_unhandled_input(false)
+	campaign_view.set_suspended(false)
+
+func _surrender_encounter() -> void:
+	if _campaign_battle() == null:
+		_notice("There is no active campaign battle.")
+		return
+	if duel.phase != ELDuel.Phase.FINISHED:
+		duel.heroes[0].health = 0
+		duel._check_winner()
+	_return_from_encounter()
+
+## `newest` (the front menu's Load) also considers the second game's
+## between-chapter autosave and opens whichever save is more recent.
+## `manual` is a campaign or single-mission save; empty means the campaign
+## save of `edition` (each edition keeps its own).
+func _resume_campaign(newest := false, manual := "", edition := "") -> void:
+	if edition.is_empty(): edition = front_menu.edition if front_menu != null and not front_menu.edition.is_empty() else (profile.id if profile != null else "el1")
+	if manual.is_empty(): manual = ELSingleScenario.campaign_file(edition)
+	var automatic := ELSecondCampaign.AUTOSAVE
+	if newest and edition == "el2" and profiles.has("el2") and FileAccess.file_exists(automatic) and (not FileAccess.file_exists(manual) or FileAccess.get_modified_time(automatic) >= FileAccess.get_modified_time(manual)):
+		var progress := ELSecondCampaign.read(automatic)
+		if not progress.is_empty():
+			_show_campaign_map(progress)
+			return
+	var codec := ELAdventureSave.new()
+	var restored := codec.read(manual, profiles)
+	if restored.is_empty():
+		if campaign_view != null: campaign_view.notice.text = codec.error
+		else: _notice(codec.error)
+		return
+	_begin_campaign(restored.state.map.profile.id, {"file_name": restored.state.map.id, "script": restored.state.script_name}, restored.state.difficulty, restored)
+
+## A row of a save list (ELSaveSlots): an adventure save, or the second game's
+## between-chapter campaign autosave, which opens the next chapter's map.
+func _load_slot(row: Dictionary) -> void:
+	if row.get("type") == ELSaveSlots.PROGRESS:
+		var progress := ELSecondCampaign.read(str(row.path))
+		if not progress.is_empty():
+			_show_campaign_map(progress)
+			return
+		if campaign_view != null: campaign_view.notice.text = "The campaign autosave could not be read."
+		else: _notice("The campaign autosave could not be read.")
+		return
+	_resume_campaign(false, str(row.path), str(row.get("edition", "")))
+
+## Second game: leave the finished chapter for the next chapter's global map.
+## Without the original front end, the chapter starts directly.
+func _show_campaign_map(progress: Dictionary) -> void:
+	if campaign_view != null: _leave_campaign()
+	if (front_menu != null or _show_front_menu()) and front_menu.show_campaign_map(progress):
+		_show_front_menu_layer()
+		return
+	var row := ELSecondCampaign.chapter(profiles["el2"], progress) if profiles.has("el2") else {}
+	if not row.is_empty(): _begin_campaign("el2", row, int(progress.difficulty))
+
+## First game: the next chapter goes through the campaign info screen (its
+## description, movie and voiced briefing) as after every chapter result in
+## the original. Without the front end, the chapter starts directly.
+func _show_chapter_info(next: Dictionary, difficulty: int) -> void:
+	if campaign_view != null: _leave_campaign()
+	if front_menu != null or _show_front_menu():
+		if front_menu.edition != "el1": front_menu.use_edition("el1")
+	if front_menu != null and front_menu.edition == "el1" and front_menu.show_chapter_info(next, difficulty):
+		_show_front_menu_layer()
+		return
+	_begin_campaign("el1", next, difficulty)
+
+func _show_front_menu_layer() -> void:
+	menu.hide()
+	if setup_panel != null: setup_panel.hide()
+	if campaign_setup != null: campaign_setup.hide()
+	front_layer.show()
+	front_menu.show()
+
+func _leave_campaign() -> void:
+	remove_child(campaign_view)
+	campaign_view.queue_free()
+	campaign_view = null
+	stage.show()
+	stage.process_mode = Node.PROCESS_MODE_INHERIT
+	camera.current = true
+	for player: Node in battle_audio.get_children():
+		if player is AudioStreamPlayer or player is AudioStreamPlayer3D: player.stream_paused = false
+	ui.show()
+	set_process(true)
+	set_process_unhandled_input(true)
+	_refresh()
+	if front_menu != null: _show_front_menu()
+
+func _save_duel() -> void:
+	if duel == null: return
+	menu.hide()
+	if _campaign_battle() != null:
+		var view := campaign_view.camera_state()
+		view.battle = {"camera": [camera_yaw, camera_pitch, camera_distance]}
+		# The original saves only on the map; the remake also keeps the battle,
+		# in the quick-save slot.
+		var failed := ELSaveSlots.write(ELSaveSlots.quick_name(campaign_view.state.map.profile), campaign_view.director, view)
+		_notice("Campaign and battle saved. Press F9 to resume." if failed.is_empty() else failed)
+		return
+	if combat_tutorial != null:
+		_notice("The combat tutorial cannot be saved.")
+		return
+	var session := {"mode": mode_select.selected, "camera": [camera_yaw, camera_pitch, camera_distance]}
+	if duel_match != null: session.duel_match = duel_match.snapshot()
+	_notice("Duel saved. Press F9 to resume." if duel.save_file("user://duel-save.json", session) else duel.error)
+	_refresh()
+
+func _load_duel() -> void:
+	menu.hide()
+	if _campaign_battle() != null:
+		_resume_campaign(false, ELSaveSlots.quick_load_path(campaign_view.state), campaign_view.state.map.profile.id)
+		return
+	var document: Variant = JSON.parse_string(FileAccess.get_file_as_string("user://duel-save.json")) if FileAccess.file_exists("user://duel-save.json") else null
+	if document is not Dictionary:
+		_notice("No readable duel save was found.")
+		return
+	if document.get("state") is not Dictionary:
+		_notice("The duel save is incomplete.")
+		return
+	var edition := String(document.get("state", {}).get("profile", ""))
+	if not profiles.has(edition):
+		_notice("Import the original game edition used by this save.")
+		return
+	var restored := ELDuel.new()
+	if not restored.restore(profiles[edition], document):
+		_notice(restored.error)
+		return
+	var session := ELMatchSave.session(document.get("session"))
+	mode_select.select(session.mode)
+	camera_yaw = session.camera[0]
+	camera_pitch = session.camera[1]
+	camera_distance = session.camera[2]
+	demo = false
+	# A Duel mode match saved mid-round continues with its tallies.
+	var saved_match: Variant = document.get("session", {}).get("duel_match") if document.get("session") is Dictionary else null
+	var restored_match: ELDuelMatch = null
+	if saved_match is Dictionary:
+		restored_match = ELDuelMatch.new()
+		if not restored_match.restore(profiles[edition], saved_match) or restored_match.finished(): restored_match = null
+	_match_starting = restored_match != null
+	_start(edition, restored.setup, restored)
+	_match_starting = false
+	duel_match = restored_match
+	# Hot seat: a load always hands the screen over again (the box first).
+	hot_side = -1
+	hot_pending = false
+	_refresh()
+	# A round that had already ended was recorded before the save.
+	match_round_recorded = restored.phase == ELDuel.Phase.FINISHED
+	match_clock = 0.0
+	_notice(restored.load_note if not restored.load_note.is_empty() else "Saved duel restored.")
+
+func _refresh_inspector() -> void:
+	_fill_strip()
+	if inspector == null: return
+	for child in inspector_rows.get_children():
+		inspector_rows.remove_child(child)
+		child.queue_free()
+	var entity := duel.entity(selected_creature)
+	# Remake readout: every command it offers is also on the strip, rails or field.
+	inspector.visible = not entity.is_empty() and not _overlay_open() and helper_overlay()
+	if entity.is_empty(): return
+	var title := _side_name(selected_creature) if selected_creature < 2 else duel.card_name(entity.card)
+	inspector_rows.add_child(_label(title, 18, ACCENT))
+	if selected_creature < 2 and entity.get("spec", "NONE") != "NONE":
+		var row: Dictionary = profile.table("HeroesSpecs").get(entity.spec, {})
+		var spec_line := _label("Specialization: %s\n%s" % [_spec_name(entity.spec), profile.text(str(row.get("Desc", "")))], 13)
+		spec_line.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		spec_line.custom_minimum_size.x = 290
+		spec_line.set_meta("spec", entity.spec)
+		inspector_rows.add_child(spec_line)
+	if selected_creature >= 2:
+		var flags: Array[String] = []
+		for flag: String in entity.flags: flags.append(ELCatalog.flag_name(flag))
+		var stats := "%d / %d · %s" % [entity.power, entity.toughness - entity.damage, ", ".join(flags)]
+		if duel.in_plane(selected_creature): stats += "\nPale aspect: common magic cannot affect it; it cannot attack or block."
+		var line := _label(stats, 13)
+		line.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		line.custom_minimum_size.x = 290
+		inspector_rows.add_child(line)
+		if duel.can_attack(selected_creature):
+			var compulsory := duel.has_flag(selected_creature, "Berserk") and duel.attacks.has(selected_creature)
+			var attack_price := duel.attack_cost(selected_creature)
+			var attack_text := "Attack" + (" · %d ether" % attack_price if attack_price > 0 else "")
+			var command := _button("Must attack" if compulsory else ("Recall" if duel.attacks.has(selected_creature) else attack_text), func():
+				if _human_turn() and not duel.toggle_attack(selected_creature): _hint(duel.error))
+			command.set_meta("attack", selected_creature)
+			command.tooltip_text = "Ether is paid when the creature is sent to attack. Recalling it does not refund the cost." if attack_price > 0 else ""
+			command.disabled = not _human_turn() or compulsory
+			inspector_rows.add_child(command)
+		for ability: Dictionary in duel.abilities(selected_creature):
+			var price := " · %d ether" % ability.cost if ability.cost >= 0 else " · X ether"
+			if ability.has("health_cost"): price += " + %d health" % ability.health_cost
+			var button := _button("%s%s" % [ability.name, price], _select_ability.bind(selected_creature, ability))
+			button.set_meta("ability", ability.key)
+			button.disabled = not _human_turn() or not duel.can_use_ability(selected_creature, ability.key)
+			inspector_rows.add_child(button)
+		for effect: Dictionary in entity.get("temporary", []):
+			if effect.kind == "illusion": inspector_rows.add_child(_label("Shadows: until the opponent's turn ends", 12, ACCENT))
+	else:
+		# While a graveyard entry or enchantment is being chosen here, the hero's
+		# commands are hidden so the choices stay in view on compact screens.
+		var choosing: bool = (inspect_graveyard and (not ability_selection.is_empty() or selection >= 0)) or ability_selection.get("target") == "enchantment"
+		for ability: Dictionary in ([] if choosing else duel.abilities(selected_creature)):
+			var text := "%s · %d ether" % [ability.name, ability.cost]
+			if ability.effect == "artifact": text = "%s · artifact · %d charges" % [ability.name, ability.charges]
+			var button := _button(text, _select_ability.bind(selected_creature, ability))
+			button.set_meta("ability", ability.key)
+			button.disabled = not _human_turn() or not duel.can_use_ability(selected_creature, ability.key)
+			if ability.effect == "artifact":
+				var reason := duel.artifact_error(selected_creature, int(ability.artifact))
+				button.tooltip_text = duel.profile.text(String(duel.profile.table("CombatSpells")[ability.card].get("ToolTip", ""))) + ("\n" + reason if not reason.is_empty() else "")
+			inspector_rows.add_child(button)
+		inspector_rows.add_child(_button("Enchantments" if inspect_graveyard else "Graveyard (%d)" % entity.grave.size(), func():
+			inspect_graveyard = not inspect_graveyard
+			_refresh_inspector()))
+	var list_scroll := ScrollContainer.new()
+	list_scroll.custom_minimum_size = Vector2(290, 90)
+	inspector_rows.add_child(list_scroll)
+	var rows := VBoxContainer.new()
+	rows.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	list_scroll.add_child(rows)
+	if inspect_graveyard and selected_creature < 2:
+		for index in range(entity.grave.size() - 1, -1, -1):
+			var card: String = entity.grave[index]
+			var choice := _grave_choice(index)
+			var row: Control = _label(duel.card_name(card), 14) if choice.is_empty() else _button(duel.card_name(card), choice.action)
+			if not choice.is_empty():
+				row.set_meta("grave_index", index)
+				(row as Button).disabled = not choice.enabled
+			row.tooltip_text = profile.card_description(card)
+			rows.add_child(row)
+	else:
+		for enchantment: Dictionary in entity.enchantments:
+			var row := _button(duel.card_name(enchantment.card), _remove_selected_enchantment.bind(selected_creature, int(enchantment.id)))
+			row.set_meta("enchantment", enchantment.id)
+			if enchantment.card == "STSI":
+				var next_turn := duel.turn_serial + (2 if enchantment.owner == duel.attacker else 1)
+				row.text += "\nNext upkeep: %d ether" % duel.stasis_upkeep(enchantment, next_turn)
+			row.tooltip_text = profile.card_description(enchantment.card)
+			row.disabled = not _removal_allowed(enchantment)
+			row.add_theme_color_override("font_disabled_color", INK)
+			rows.add_child(row)
+
+## What a click on graveyard entry `index` of the selected hero does while a
+## spell or ability waits for one: {action, enabled}, or {} when nothing does.
+func _grave_choice(index: int) -> Dictionary:
+	var held: String = duel.heroes[duel.active_side()].hand[selection] if selection >= 0 and selection < duel.heroes[duel.active_side()].hand.size() else ""
+	var revival: bool = not held.is_empty() and ELCatalog.rule(profile, held).get("effect") == "pale_revival"
+	if selection >= 0 and exchange_target >= 2 and (selected_creature == duel.active_side() or revival):
+		return {"action": _select_grave_creature.bind(index), "enabled": _human_turn() and duel.valid_grave_targets(held).has(selected_creature * ELDuel.GRAVE_SIDE + index if revival else index)}
+	if ability_selection.get("target") == "grave":
+		return {"action": _select_grave_entry.bind(index), "enabled": _human_turn() and duel.grave_ability_targets(ability_selection.source, ability_selection.key, selected_creature).has(index)}
+	if ability_selection.is_empty() and not held.is_empty() and ELCatalog.rule(profile, held).get("effect") in ["reanimate", "repair"]:
+		return {"action": _reanimate.bind(index), "enabled": _human_turn() and duel.valid_grave_targets(held, selected_creature).has(index)}
+	return {}
+
+## Whether the pending spell or ability may take this enchantment of the
+## selected character.
+func _removal_allowed(enchantment: Dictionary) -> bool:
+	var spell_card: String = duel.heroes[duel.active_side()].hand[selection] if selection >= 0 and selection < duel.heroes[duel.active_side()].hand.size() else ""
+	var spell_effect: String = ELCatalog.rule(profile, spell_card).get("effect", "") if not spell_card.is_empty() else ""
+	var dispelling: bool = spell_effect == "dispel" or (spell_effect == "trade" and exchange_target >= 2) or ability_selection.get("target") == "enchantment"
+	# Weaving copies a caster's enchantment without removing it.
+	var copying: bool = ability_selection.get("key") == "weave" and not enchantment.get("fixed", false)
+	return _human_turn() and dispelling and (ability_selection.get("key") == "disenchant" or copying or duel.dispellable(selected_creature, enchantment)) and not (spell_effect == "trade" and selected_creature == exchange_target)
+
+## Enchantments whose own ability a creature uses from the strip.
+const ENCHANTMENT_ABILITIES := {"ENFL": "wake", "WNPZ": "unparalyze", "IMMB": "awaken"}
+
+## The ability an enchantment of the selected character grants, or {}.
+func _enchantment_ability(enchantment: Dictionary) -> Dictionary:
+	for ability: Dictionary in duel.abilities(selected_creature):
+		if selected_creature < 2 and int(ability.get("enchantment", -1)) == int(enchantment.id): return ability
+		if selected_creature >= 2 and ability.key == ENCHANTMENT_ABILITIES.get(enchantment.card, ""): return ability
+	return {}
+
+## A selected creature's own abilities, shown on the upper strip after its
+## enchantments with the card's AbilityIcon; those an enchantment grants are
+## reached through that enchantment's icon instead.
+func _strip_abilities() -> Array[Dictionary]:
+	var result: Array[Dictionary] = []
+	if selected_creature < 2 or not duel.creatures.has(selected_creature): return result
+	for ability: Dictionary in duel.abilities(selected_creature):
+		if not ENCHANTMENT_ABILITIES.values().has(ability.key): result.append(ability)
+	return result
+
+## The CombatSpells row whose ability icon and text stand for `ability`.
+func _ability_card(ability: Dictionary) -> String:
+	if ability.key == "dissipate": return "AOUP"
+	if ability.key == "courtesy": return "AOLS"
+	var manifest: Dictionary = ELCatalog.PALE_RACE_ABILITIES.get(duel.race(selected_creature), {})
+	if manifest.get("key", "") == ability.key: return String(manifest.text)
+	return String(duel.creatures[selected_creature].card)
+
+## The upper icon strip: the selected character's enchantments, or the
+## selected hero's graveyard, oldest first. An entry is offered while the
+## pending spell or ability can take it; with nothing pending, an
+## enchantment that grants the character's own ability starts that ability.
+func _fill_strip() -> void:
+	if rail == null or rail.strip == null or duel == null: return
+	rail.show_strip(inspect_graveyard)
+	var list: Array[Dictionary] = []
+	var entity := duel.entity(selected_creature) if selected_creature >= 0 else {}
+	var shown := -1 if entity.is_empty() or (inspect_graveyard and selected_creature >= 2) or (_hot_seat() and hot_pending) else selected_creature
+	if shown >= 0 and inspect_graveyard:
+		for index in entity.grave.size():
+			var card: String = entity.grave[index]
+			var choice := _grave_choice(index)
+			list.append({"icon": profile.card_icon(card), "tooltip": "%s\n%s" % [duel.card_name(card), profile.card_description(card)],
+				"enabled": choice.get("enabled", false), "meta": {"grave_index": index, "card": card}})
+	elif shown >= 0:
+		var pending := selection >= 0 or not ability_selection.is_empty()
+		for enchantment: Dictionary in entity.enchantments:
+			var ability := _enchantment_ability(enchantment)
+			var tip := duel.card_name(enchantment.card)
+			if profile.id == "el2" and not ability.is_empty() and int(ability.get("cost", -1)) >= 0 and profile.text("T_ENCHANTMENT_COST_TT").count("%") == 2:
+				tip = profile.text("T_ENCHANTMENT_COST_TT") % [tip, int(ability.cost)]
+			var own: bool = selected_creature == duel.active_side() or (selected_creature >= 2 and int(entity.get("owner", -1)) == duel.active_side())
+			var enabled: bool = _removal_allowed(enchantment) if pending else (not ability.is_empty() and own and _human_turn() and duel.can_use_ability(selected_creature, ability.key))
+			list.append({"icon": profile.card_icon(enchantment.card), "tooltip": tip, "enabled": enabled, "meta": {"enchantment": int(enchantment.id), "card": enchantment.card}})
+		var owned: bool = selected_creature >= 2 and int(entity.get("owner", -1)) == duel.active_side()
+		for ability: Dictionary in _strip_abilities():
+			var card := _ability_card(ability)
+			var tip := String(ability.name)
+			var about := profile.text(str(profile.table("CombatSpells").get(card, {}).get("AbilityText", "")))
+			if profile.id == "el2" and int(ability.get("cost", -1)) >= 0 and profile.text("T_ENCHANTMENT_COST_TT").count("%") == 2:
+				tip = profile.text("T_ENCHANTMENT_COST_TT") % [tip, int(ability.cost)]
+			if not about.is_empty() and about != tip: tip += "\n" + about
+			var icon := int(profile.table("CombatSpells").get(card, {}).get("AbilityIcon", 0))
+			list.append({"icon": profile.icon_at(icon) if icon > 0 else profile.card_icon(card), "tooltip": tip,
+				"enabled": not pending and owned and _human_turn() and duel.can_use_ability(selected_creature, ability.key), "meta": {"ability": ability.key, "card": card}})
+	var signature := "%d:%s:" % [shown, inspect_graveyard]
+	for item: Dictionary in list: signature += str(item.meta.get("card", "")) + ","
+	rail.strip.set_items(list, signature)
+
+func _strip_pressed(index: int) -> void:
+	var entity := duel.entity(selected_creature) if selected_creature >= 0 else {}
+	if entity.is_empty(): return
+	if inspect_graveyard:
+		if selected_creature >= 2 or index >= entity.grave.size(): return
+		var choice := _grave_choice(index)
+		if not choice.is_empty() and choice.enabled: choice.action.call()
+		return
+	if index >= entity.enchantments.size():
+		var own := _strip_abilities()
+		if index - entity.enchantments.size() >= own.size() or selection >= 0 or not ability_selection.is_empty(): return
+		var chosen: Dictionary = own[index - entity.enchantments.size()]
+		if selected_creature >= 2 and int(entity.owner) == duel.active_side() and _human_turn() and duel.can_use_ability(selected_creature, chosen.key): _select_ability(selected_creature, chosen)
+		return
+	var enchantment: Dictionary = entity.enchantments[index]
+	if selection >= 0 or not ability_selection.is_empty():
+		if _removal_allowed(enchantment): _remove_selected_enchantment(selected_creature, int(enchantment.id))
+		return
+	var ability := _enchantment_ability(enchantment)
+	if not ability.is_empty() and _human_turn() and duel.can_use_ability(selected_creature, ability.key): _select_ability(selected_creature, ability)
+
+func _select_ability(source: int, ability: Dictionary) -> void:
+	selection = -1
+	selection_power = 0
+	exchange_target = -1
+	ability_selection.clear()
+	if ability.get("variable", false):
+		_open_ability_power(source, ability)
+		return
+	if ability.target == "none":
+		if not duel.use_ability(source, ability.key): _hint(duel.error)
+	else:
+		ability_selection = {"source": source, "key": ability.key, "target": ability.target, "second": ability.get("second", "")}
+		var wanted := "a creature or hero" if ability.target == "any" else ("a hero's graveyard" if ability.target == "grave" else "a " + str(ability.target))
+		_hint("%s: choose %s. Esc cancels." % [ability.name, wanted])
+	_refresh()
+
+func _select_grave_entry(index: int) -> void:
+	if not _human_turn() or ability_selection.get("target") != "grave": return
+	if duel.use_ability(ability_selection.source, ability_selection.key, selected_creature, index):
+		ability_selection.clear()
+		inspect_graveyard = false
+	else: _hint(duel.error)
+	_refresh()
+
+func _reanimate(index: int) -> void:
+	if not _human_turn() or selection < 0: return
+	if duel.cast(selection, selected_creature, index):
+		selection = -1
+		inspect_graveyard = false
+		_hint("Creature returned to play.")
+	else: _hint(duel.error)
+	_refresh()
+
+func _select_grave_creature(index: int) -> void:
+	if not _human_turn() or selection < 0 or exchange_target < 2: return
+	var hand_index := selection
+	var sacrifice := exchange_target
+	# Pale revival names the graveyard as well as the entry.
+	var revival: bool = ELCatalog.rule(profile, duel.heroes[duel.active_side()].hand[hand_index]).get("effect") == "pale_revival"
+	selection = -1
+	exchange_target = -1
+	if duel.cast(hand_index, sacrifice, selected_creature * ELDuel.GRAVE_SIDE + index if revival else index):
+		_hint("Creature returned to play.")
+	else:
+		selection = hand_index
+		exchange_target = sacrifice
+		_hint(duel.error)
+	_refresh()
+
+func _remove_selected_enchantment(target: int, enchantment_id: int) -> void:
+	if selection >= 0 and ability_selection.is_empty():
+		var hand_index := selection
+		var effect: String = ELCatalog.rule(profile, duel.heroes[duel.active_side()].hand[hand_index]).get("effect", "")
+		var holder := exchange_target if effect == "trade" else target
+		if duel.cast(hand_index, holder, enchantment_id):
+			selection = -1
+			exchange_target = -1
+			_hint("Enchantment removed.")
+		else: _hint(duel.error)
+		_refresh()
+		return
+	if ability_selection.is_empty(): return
+	if duel.use_ability(ability_selection.source, ability_selection.key, target, enchantment_id):
+		ability_selection.clear()
+	else: _hint(duel.error)
+	_refresh()
+
+func _layout_hud() -> void:
+	if hud_root == null:
+		return
+	var factor := clampf(ui.size.x / 1100.0, 1.0, 1.5)
+	hud_root.scale = Vector2.ONE * factor
+	if notices != null: notices.ui_scale = factor
+	hud_root.size = ui.size / factor
+	hud.size = hud_root.size
+	hud.queue_redraw()
+	rail.size = hud_root.size
+	rail.layout()
+	if power_dialog != null:
+		power_dialog.size = hud_root.size
+		power_dialog.layout()
+	var w := hud_root.size.x
+	var h := hud_root.size.y
+	for side in 2:
+		var x := 0.0 if side == 0 else w - 80
+		portraits[side].position = Vector2(x + 3, h - 111)
+		portraits[side].size = Vector2(74, 55)
+		hero_buttons[side].position = Vector2(x, h - 115)
+		hero_buttons[side].size = Vector2(80, 115)
+		hero_values[side].position = Vector2(x + 1, h - 20)
+		hero_values[side].size = Vector2(77, 20)
+		hero_names[side].position = Vector2(x - 5, h - 137)
+		hero_names[side].size = Vector2(90, 20)
+	phase_label.position = Vector2(w - 296, h - 109)
+	phase_label.size = Vector2(118, 43)
+	attack_button.position = Vector2(w - 290, h - 55)
+	attack_button.size = Vector2(46, 46)
+	auto_button.position = Vector2(w - 181, h - 58)
+	# The original top-right place (735,10 of 800) holds the remake's Menu
+	# button, so the stop control sits just to its left.
+	auto_off_button.position = Vector2(w - 165, 10)
+	_place_end_button()
+	# The remake's notice line sits above the upper icon strip.
+	notice.position = Vector2(134, h - 160)
+	notice.size = Vector2(w - 445, 37)
+	var rail_rect := rail.hand_rect()
+	card_scroll.position = rail_rect.position
+	card_scroll.size = rail_rect.size
+
+func _place_end_button() -> void:
+	if hud_root == null or end_button == null: return
+	var w := hud_root.size.x
+	var h := hud_root.size.y
+	end_button.add_theme_stylebox_override("normal", StyleBoxEmpty.new() if end_button.text.is_empty() else _style(Color("111710ed"), ACCENT))
+	if end_button.text.is_empty():
+		end_button.position = Vector2(w - 235, h - 55)
+		end_button.size = Vector2(46, 46)
+	else:
+		# Above the panel, clear of the sockets and the enemy portrait.
+		end_button.size = Vector2(maxf(150, end_button.get_minimum_size().x), 34)
+		end_button.position = Vector2(w - 182 - end_button.size.x, h - 154)
+
+func _content_menu() -> void:
+	if ELContentLibrary.uses_import():
+		_open_content_setup()
+		return
+	var dialog := AcceptDialog.new()
+	dialog.title = "Original game content"
+	dialog.dialog_text = "Choose the installed or extracted game folder containing Resources.\nEach edition keeps its own files and rules. Both can be mounted together.\nGOG setup EXEs can be imported with tools/import_game.py."
+	ui.add_child(dialog)
+	dialog.add_button("Etherlords I folder", false, "el1")
+	dialog.add_button("Etherlords II folder", false, "el2")
+	dialog.custom_action.connect(func(edition: String):
+		import_edition = edition
+		dialog.hide()
+		dialog.queue_free()
+		folder_dialog.popup_centered_ratio(0.7))
+	dialog.confirmed.connect(dialog.queue_free)
+	dialog.popup_centered(Vector2i(680, 180))
+
+## Browser / Android game files screen (ELContentSetup) over everything else.
+func _open_content_setup() -> void:
+	if content_setup != null: return
+	if menu != null: menu.hide()
+	var layer := CanvasLayer.new()
+	layer.layer = 40
+	add_child(layer)
+	content_setup = ELContentSetup.new()
+	layer.add_child(content_setup)
+	var close := func():
+		layer.queue_free()
+		content_setup = null
+	content_setup.closed.connect(close)
+	content_setup.removed.connect(func(edition: String):
+		profiles.erase(edition)
+		if profile != null and profile.id == edition: profile = null
+		if profiles.is_empty(): _restart_after_content_change())
+	content_setup.opened.connect(func(edition: String, folder: String):
+		var imported := ELProfile.new()
+		if not imported.mount(edition, folder):
+			status.text = imported.error
+			return
+		profiles[edition] = imported
+		close.call()
+		if profile_select != null: profile_select.set_item_disabled(0 if edition == "el1" else 1, false)
+		_restart_after_content_change(edition))
+
+## After an import or removal: a fresh start on the chosen edition.
+func _restart_after_content_change(edition := "") -> void:
+	if profiles.is_empty():
+		_open_content_setup.call_deferred()
+		return
+	if not profiles.has(edition): edition = String(profiles.keys()[0])
+	# The front end lists the mounted editions; build it again for the new set.
+	if front_layer != null:
+		front_layer.queue_free()
+		front_layer = null
+		front_menu = null
+	_start(edition)
+	if not _show_front_menu(): _open_setup()
+
+func _import_folder(folder: String) -> void:
+	var imported := ELProfile.new()
+	if not imported.mount(import_edition, folder):
+		status.text = imported.error
+		return
+	profiles[import_edition] = imported
+	var config := {}
+	for edition: String in profiles:
+		config[edition] = profiles[edition].root
+	var file := FileAccess.open("user://profiles.json", FileAccess.WRITE)
+	file.store_string(JSON.stringify(config, "\t"))
+	profile_select.set_item_disabled(0 if import_edition == "el1" else 1, false)
+	_start(import_edition)
+
+## Original front end (ELFrontMenu) over the remake's duel and campaign flows.
+func _show_front_menu() -> bool:
+	if campaign_view != null or profiles.is_empty(): return false
+	var edition := profile.id if profile != null else launch_profile
+	if not profiles.has(edition) or not ELFrontMenu.supports(profiles[edition]): return false
+	if front_menu == null:
+		front_layer = CanvasLayer.new()
+		front_layer.layer = 5
+		add_child(front_layer)
+		front_menu = ELFrontMenu.new()
+		front_menu.interface_music = true
+		front_menu.music_owner_changed.connect(_pause_battle_audio)
+		front_layer.add_child(front_menu)
+		if not front_menu.build(profiles, edition):
+			front_layer.queue_free()
+			front_layer = null
+			front_menu = null
+			return false
+		front_menu.duel_requested.connect(func():
+			_hide_front_menu()
+			_open_setup())
+		front_menu.duel_match_requested.connect(_begin_duel_match)
+		front_menu.combat_tutorial_requested.connect(_begin_combat_tutorial)
+		front_menu.replay_requested.connect(_begin_replay)
+		front_menu.duel_round_closed.connect(_duel_round_closed)
+		front_menu.campaign_requested.connect(func(chosen: String, scenario: Dictionary, difficulty: int):
+			_hide_front_menu()
+			await _begin_campaign(chosen, scenario, difficulty)
+			if campaign_view == null: _show_front_menu())
+		front_menu.load_requested.connect(func():
+			_hide_front_menu()
+			_resume_campaign(true, "", front_menu.edition))
+		front_menu.single_load_requested.connect(func():
+			_hide_front_menu()
+			_resume_campaign(false, ELSingleScenario.SAVE, front_menu.edition))
+		front_menu.slot_load_requested.connect(func(row: Dictionary):
+			_hide_front_menu()
+			_load_slot(row))
+		front_menu.settings = settings
+		front_menu.settings_requested.connect(_open_settings)
+		front_menu.settings_previewed.connect(_preview_volumes)
+		front_menu.options_closed.connect(func(_applied: bool, _command: String): _apply_settings())
+		front_menu.quit_requested.connect(func(): get_tree().quit())
+		front_menu.edition_requested.connect(func(chosen: String):
+			demo = false
+			_start(chosen))
+	elif front_menu.edition != edition: front_menu.use_edition(edition)
+	else: front_menu.show_screen("main")
+	menu.hide()
+	if setup_panel != null: setup_panel.hide()
+	if campaign_setup != null: campaign_setup.hide()
+	front_layer.show()
+	front_menu.show()
+	_refresh()
+	return true
+
+## The menu's interface music replaces the battle's music and ambience behind
+## an opaque menu screen; the map's own pause rules apply during a campaign.
+func _pause_battle_audio(paused: bool) -> void:
+	if campaign_view != null or not is_instance_valid(battle_audio): return
+	battle_audio.process_mode = Node.PROCESS_MODE_DISABLED if paused else Node.PROCESS_MODE_INHERIT
+	for player: Node in battle_audio.get_children():
+		if player is AudioStreamPlayer or player is AudioStreamPlayer3D: player.stream_paused = paused
+
+func _hide_front_menu() -> void:
+	if front_menu == null: return
+	front_menu.hide()
+	front_layer.hide()
+
+# --- Original Duel mode match ------------------------------------------------
+
+## Opens the original Duel screen (the remake practice setup when the
+## edition's front-end art is missing).
+func _open_duel_screen(hot_seat := false) -> void:
+	if _campaign_battle() != null:
+		_notice("Finish or surrender the campaign battle first.")
+		return
+	if not _show_front_menu():
+		_open_setup()
+		return
+	# After a hot-seat duel: the hot-seat Duel screen for player 1.
+	if hot_seat: front_menu.duel_ui.start_hot_seat()
+	else: front_menu.show_screen("duel")
+
+func _begin_duel_match(started: ELDuelMatch) -> void:
+	duel_match = started
+	# The second game records every round of a Duel mode match.
+	match_recording = ELDuelRecording.new() if started.edition == "el2" else null
+	demo = false
+	mode_select.select(0)
+	_hide_front_menu()
+	_play_match_round()
+
+## Every round is a fresh battle from the same presets; its first attacker
+## is the round's own coin flip (ELDuelMatch.round_first_side).
+func _play_match_round() -> void:
+	var edition := duel_match.edition
+	hot_side = -1
+	hot_pending = false
+	match_round_recorded = false
+	match_clock = 0.0
+	var previous := duel
+	_match_starting = true
+	var battle_seed := (duel_match.seed_value + duel_match.played * 0x39) & 0x7fffffff
+	_start(edition, duel_match.round_options(profiles[edition]), null, battle_seed)
+	_match_starting = false
+	if match_recording != null and duel != null and duel != previous:
+		match_recording.track(duel, battle_seed)
+		if duel_match.played == 0: _label_recording()
+	_first_tutorial_battle()
+	if duel == null or duel == previous:
+		duel_match = null
+		_open_duel_screen()
+
+func _match_names() -> Array:
+	if duel_match.hot_seat: return duel_match.names.duplicate()
+	return [String(duel_match.presets[0].get("name", "")), String(duel_match.presets[1].get("name", ""))]
+
+## Records a finished round once, then shows its result after a short pause.
+func _watch_match_round(delta: float) -> void:
+	if not match_round_recorded:
+		match_round_recorded = true
+		match_clock = 0.0
+		duel_match.record(duel.winner)
+		if match_recording != null: match_recording.finish_round(duel)
+		_refresh()
+		return
+	# The second game shows the round result after every round.
+	if (duel_match.rounds < 2 and duel_match.edition != "el2") or front_menu == null or front_menu.is_visible_in_tree(): return
+	match_clock += delta
+	if match_clock >= ROUND_RESULT_DELAY and match_clock - delta < ROUND_RESULT_DELAY: _show_round_result()
+
+func _show_round_result() -> void:
+	if duel_match == null or not match_round_recorded: return
+	if front_menu == null and not _show_front_menu(): return
+	var last := 0 if duel.winner < 0 else (1 if duel.winner == 0 else -1)
+	if duel_match.edition == "el2":
+		front_menu.replay_ui.recording = match_recording
+		front_menu.duel_ui.show_round(duel_match, _match_names(), last, duel_match.finished())
+	elif duel_match.finished(): front_menu.duel_ui.show_result(duel_match, _match_names())
+	else: front_menu.duel_ui.show_round(duel_match, _match_names(), last)
+	_show_front_menu_layer()
+
+## Continue after a finished round (end button / Space): the result panel for
+## a multi-round match, the Duel screen after a single-round duel.
+func _continue_match() -> void:
+	if duel_match == null: return
+	if duel_match.rounds < 2 and duel_match.edition != "el2":
+		var hot := duel_match.hot_seat
+		duel_match = null
+		_open_duel_screen(hot)
+	else: _show_round_result()
+
+func _duel_round_closed(proceed: bool) -> void:
+	if duel_match == null: return
+	if proceed and not duel_match.finished():
+		_hide_front_menu()
+		_play_match_round()
+		return
+	# Second game: OK on the end-of-duel panel, then the match summary.
+	if proceed and duel_match.edition == "el2" and front_menu.screen == "duel_round" and duel_match.rounds >= 2:
+		front_menu.duel_ui.show_result(duel_match, _match_names())
+		return
+	if not proceed and not duel_match.finished():
+		# Ending early still shows the summary of the rounds played.
+		duel_match.rounds = maxi(duel_match.played, 1)
+		if duel_match.rounds >= 2:
+			front_menu.duel_ui.show_result(duel_match, _match_names())
+			return
+	var hot := duel_match.hot_seat
+	duel_match = null
+	_open_duel_screen(hot)
+
+## Surrender concedes only the current round.
+func _surrender_round() -> void:
+	menu.hide()
+	if duel_match == null or duel == null or duel.phase == ELDuel.Phase.FINISHED:
+		_notice("There is no Duel mode round in progress.")
+		return
+	# Hot seat: the player holding the screen concedes.
+	var side := (hot_side if hot_side >= 0 else duel.active_side()) if _hot_seat() else 0
+	if match_recording != null: match_recording.note_surrender(duel, side)
+	duel.heroes[side].health = 0
+	duel._check_winner()
+	_refresh()
+
+# --- Second-game combat tutorial ------------------------------------------------
+
+## Tutorial screen -> Combat: the recorded battle in tutorial mode.
+## The computer side replays its commands; only the awaited command is
+## accepted from the player; each command's note is the panel text.
+func _begin_combat_tutorial() -> void:
+	if not profiles.has("el2"): return
+	if _campaign_battle() != null:
+		_notice("Finish or surrender the campaign battle first.")
+		return
+	var tutorial := ELCombatTutorial.new()
+	var battle := ELDuel.new()
+	if not tutorial.load_from(profiles.el2) or not tutorial.begin(battle):
+		_notice(tutorial.error)
+		return
+	_hide_front_menu()
+	demo = false
+	mode_select.select(0)
+	_start("el2", {}, battle)
+	if duel != battle: return
+	combat_tutorial = tutorial
+	tutorial.note_changed.connect(func(): call_deferred("_tutorial_note"))
+	tutorial.diverged.connect(func(message: String):
+		_log(message)
+		_notice(message))
+	if tutorial_panel == null:
+		tutorial_panel = ELCombatTutorialPanel.new()
+		ui.add_child(tutorial_panel)
+		tutorial_panel.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		tutorial_panel.build(profiles.el2)
+		tutorial_panel.close_requested.connect(_ask_quit_combat_tutorial)
+		tutorial_quit = ConfirmationDialog.new()
+		tutorial_quit.exclusive = true
+		ui.add_child(tutorial_quit)
+		tutorial_quit.confirmed.connect(_leave_combat_tutorial)
+	tutorial_panel.show()
+	_tutorial_note()
+
+## The awaited command's note; "#d" also selects that spell.
+func _tutorial_note() -> void:
+	if combat_tutorial == null or tutorial_panel == null: return
+	tutorial_panel.set_text(combat_tutorial.note_text())
+	var index := combat_tutorial.preselected_index()
+	if index >= 0 and not combat_tutorial.opponent_due() and duel.active_side() == 0:
+		var card: String = duel.heroes[0].hand[index]
+		if duel.target_kind(card) != "none" and not duel.variable_power(card): selection = index
+	if duel.phase == ELDuel.Phase.FINISHED: _tutorial_result()
+	_refresh()
+
+## The original's round-result text for the local hero (T_RR_DUEL_*).
+func _tutorial_result() -> void:
+	var key := "T_RR_DUEL_WIN" if duel.winner == 0 else ("T_RR_DUEL_DRAW" if duel.winner < 0 else "T_RR_DUEL_LOSE")
+	_notice(profiles.el2.text(key).strip_edges())
+
+## Close button: T_COMBAT_TUTORIAL_QUIT confirmation.
+func _ask_quit_combat_tutorial() -> void:
+	if combat_tutorial == null: return
+	tutorial_quit.dialog_text = profiles.el2.text(ELCombatTutorial.QUIT_TEXT)
+	tutorial_quit.popup_centered()
+
+## Leaving or finishing returns to the Tutorial screen.
+func _leave_combat_tutorial() -> void:
+	_close_combat_tutorial()
+	if front_menu != null: front_menu.set_return_screen("tutorial")
+	if not _show_front_menu(): _open_setup()
+
+func _close_combat_tutorial() -> void:
+	if combat_tutorial != null and duel == combat_tutorial.duel: duel.gate = null
+	combat_tutorial = null
+	if tutorial_panel != null: tutorial_panel.hide()
+	if tutorial_quit != null: tutorial_quit.hide()
+
+## Names and portraits the replay list shows: my hero, the enemy hero.
+func _label_recording() -> void:
+	var names := _match_names()
+	for side in 2:
+		var template := String(duel.heroes[side].template)
+		match_recording.labels[side] = names[side] if not String(names[side]).is_empty() else template
+		match_recording.labels[side + 2] = template
+		match_recording.faces[side] = int(profile.table("HeroTemplates").get(template, {}).get("Face", -1))
+
+# --- Second-game duel replays ---------------------------------------------------
+
+## Duel -> Replay -> Load: the recorded battle plays back with the original
+## replay player panel; nothing else acts on it.
+func _begin_replay(path: String) -> void:
+	if not profiles.has("el2"): return
+	if _campaign_battle() != null:
+		_notice("Finish or surrender the campaign battle first.")
+		return
+	var player := ELDuelReplayPlayer.new()
+	var battle := ELDuel.new()
+	if not player.load_file(profiles.el2, path) or not player.begin(battle):
+		if front_menu != null and front_menu.is_visible_in_tree(): front_menu.duel_ui.show_message(player.error, Callable(), false, 300.0)
+		else: _notice(player.error)
+		return
+	_hide_front_menu()
+	demo = false
+	mode_select.select(0)
+	_start("el2", {}, battle)
+	if duel != battle: return
+	replay_player = player
+	player.changed.connect(_replay_changed)
+	player.diverged.connect(func(message: String):
+		_log(message)
+		_notice(message))
+	if replay_panel == null:
+		replay_panel = ELCombatTutorialPanel.new()
+		replay_panel.name = "ReplayPanel"
+		ui.add_child(replay_panel)
+		replay_panel.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		replay_panel.build(profiles.el2, true)
+		replay_panel.close_requested.connect(_ask_quit_replay)
+		replay_panel.play_toggled.connect(func(on: bool):
+			if replay_player != null: replay_player.set_playing(on))
+		replay_panel.rewind_requested.connect(_rewind_replay)
+		replay_panel.comment_pause_toggled.connect(func(on: bool):
+			if replay_player != null: replay_player.pause_at_comment = on)
+		replay_panel.step_requested.connect(func(mode: int):
+			if replay_player != null: replay_player.play_step(mode))
+		replay_quit = ConfirmationDialog.new()
+		replay_quit.exclusive = true
+		ui.add_child(replay_quit)
+		replay_quit.confirmed.connect(_leave_replay)
+	player.pause_at_comment = bool(replay_panel.checked.get("TP_TextPause", false))
+	replay_panel.editor = false
+	replay_panel.set_text("")
+	replay_panel.show()
+	_replay_changed()
+
+## Rewind (TP_Back): the same battle from its start, paused.
+func _rewind_replay() -> void:
+	if replay_player == null: return
+	var battle := ELDuel.new()
+	if not replay_player.begin(battle):
+		_notice(replay_player.error)
+		return
+	_start("el2", {}, battle)
+
+func _replay_changed() -> void:
+	if replay_player == null or replay_panel == null: return
+	replay_panel.set_checked("TP_Play", replay_player.playing)
+	for mode in 3: replay_panel.set_checked("TP_Pause%dE" % (mode + 1), replay_player.playing and replay_player.step_mode == mode + 1)
+	if replay_player.duel == duel and duel.phase == ELDuel.Phase.FINISHED:
+		var key := "T_RR_DUEL_WIN" if duel.winner == 0 else ("T_RR_DUEL_DRAW" if duel.winner < 0 else "T_RR_DUEL_LOSE")
+		_notice(profiles.el2.text(key).strip_edges())
+	_refresh()
+
+## Close (TP_Close / TP_CloseE): T_REPLAY_QUIT, then the Duel menu.
+func _ask_quit_replay() -> void:
+	if replay_player == null: return
+	replay_player.set_playing(false)
+	replay_quit.dialog_text = profiles.el2.text("T_REPLAY_QUIT").strip_edges()
+	replay_quit.popup_centered()
+
+func _leave_replay() -> void:
+	_close_replay()
+	if _show_front_menu(): front_menu.show_screen("duel_menu")
+	else: _open_setup()
+
+func _close_replay() -> void:
+	if replay_player != null: replay_player.release()
+	replay_player = null
+	if replay_panel != null: replay_panel.hide()
+	if replay_quit != null: replay_quit.hide()
+
+# --- Second-game Esc menu --------------------------------------------------------
+
+## Esc opens the original menu in a second-game battle once nothing is being
+## chosen (a half-made choice is cancelled first).
+func _wants_esc_menu() -> bool:
+	if profile == null or profile.id != "el2" or demo or _overlay_open(): return false
+	return selection < 0 and exchange_target < 0 and selected_creature < 0 and ability_selection.is_empty()
+
+func _open_esc_menu() -> void:
+	if esc_menu == null or esc_menu.profile != profile:
+		if esc_menu != null: esc_menu.queue_free()
+		esc_menu = ELCombatEscMenu.new()
+		if not esc_menu.build(profile):
+			esc_menu.free()
+			esc_menu = null
+			_notice("The original Esc menu art is unavailable.")
+			return
+		ui.add_child(esc_menu)
+		esc_menu.closed.connect(_close_esc_menu)
+		esc_menu.surrender_requested.connect(func(): _ask_battle("T_MB_SURRENDER", _esc_surrender))
+		esc_menu.load_requested.connect(_esc_load)
+		esc_menu.encyclopaedia_requested.connect(func():
+			var host := _battle_host()
+			if host == null: return
+			host.open_hosted("encyclopaedia", true)
+			options_layer.show()
+			host.show())
+		esc_menu.options_requested.connect(_open_battle_options)
+		esc_menu.exit_requested.connect(func(): _ask_battle("T_MB_QUIT_TO_MM", _esc_exit_to_menu))
+		esc_menu.quit_requested.connect(func(): _ask_battle("T_MB_QUIT_TO_WIN", func(): get_tree().quit()))
+		esc_menu.remake_menu_requested.connect(func():
+			_close_esc_menu()
+			menu.show())
+	menu.hide()
+	# Surrender is disabled while a replay plays.
+	esc_menu.open(replay_player == null)
+	_refresh()
+
+func _close_esc_menu() -> void:
+	if esc_menu != null: esc_menu.hide()
+	_refresh()
+
+## The original question box over the battle; OK runs `on_ok`.
+func _ask_battle(key: String, on_ok: Callable) -> void:
+	var host := _battle_host()
+	if host == null: return
+	host.ask_hosted(profile.text(key).strip_edges(), on_ok)
+	options_layer.show()
+	host.show()
+
+func _esc_surrender() -> void:
+	_close_esc_menu()
+	if _campaign_battle() != null or duel_match != null: _surrender_battle()
+	elif duel != null and duel.phase != ELDuel.Phase.FINISHED and replay_player == null and combat_tutorial == null:
+		# A practice battle: the player's side concedes.
+		duel.heroes[0].health = 0
+		duel._check_winner()
+		_refresh()
+
+## Load: the save list of the running kind of game (campaign or single mission).
+func _esc_load() -> void:
+	var host := _battle_host()
+	if host == null: return
+	var kind := ELSaveSlots.kind_of(campaign_view.state) if campaign_view != null else ELSaveSlots.KIND_SINGLE
+	host.open_hosted("load_game", true, kind)
+	options_layer.show()
+	host.show()
+
+func _esc_exit_to_menu() -> void:
+	_close_esc_menu()
+	if campaign_view != null:
+		_leave_campaign()
+		return
+	_close_combat_tutorial()
+	_close_replay()
+	duel_match = null
+	_set_auto(false)
+	_show_front_menu()
