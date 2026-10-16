@@ -10,9 +10,9 @@ extends RefCounted
 ## the close-ups a short return track brings back the player's own view.
 ##
 ## The tracks are authored for the side standing at +X and the other side sees
-## them turned half round. The remake spaces its battlefield differently, so
-## every track is anchored on the figure it frames (a hero, a creature or the
-## middle of a fight) instead of being played at its authored world position.
+## them turned half round. Hero, victory, tremor and multi-target tracks play
+## at their authored world positions (the battlefield uses the original slots);
+## creature and fight tracks are relative and follow the figure they frame.
 
 const RATE := 30.0
 const MAGIC := 0x1567fbca
@@ -93,15 +93,14 @@ func track(name: String) -> Dictionary:
 		_tracks[name] = parse(profile.read("camera", name)) if profile != null else {}
 	return _tracks[name]
 
-## A track's keys turned for `side` and moved onto `anchor`. Absolute tracks are
-## anchored by their authored look-at point on the ground; relative ones by
-## their origin (the original adds the framed figure's position to them).
+## A track's keys turned for `side`. Relative tracks are moved onto `anchor`
+## (the original adds the framed figure's position to them); absolute ones
+## keep their authored place and `anchor` only names what they frame.
 func placed(name: String, anchor: Vector3, side: int, relative := false, duration := -1.0) -> Dictionary:
 	var source := track(name)
 	if source.is_empty(): return {}
 	var turn := Basis(Vector3.UP, PI) if side == 0 else Basis.IDENTITY
-	var origin: Vector3 = Vector3.ZERO if relative else Vector3(source.target.x, 0, source.target.z)
-	var shift := anchor - turn * origin
+	var shift := anchor if relative else Vector3.ZERO
 	var positions := PackedVector3Array()
 	var rotations: Array[Quaternion] = []
 	for i in source.positions.size():
@@ -109,7 +108,21 @@ func placed(name: String, anchor: Vector3, side: int, relative := false, duratio
 		rotations.append(Quaternion(turn) * source.rotations[i])
 	var natural: float = source.positions.size() / RATE
 	return {"name": name, "positions": positions, "rotations": rotations, "fovs": source.fovs,
-		"duration": duration if duration > 0.0 else natural, "focus": turn * source.target + shift, "orbit": false, "hold": false}
+		"duration": duration if duration > 0.0 else natural, "focus": turn * source.target + shift, "anchor": anchor, "orbit": false, "hold": false}
+
+## The original's standing battle view (Default<n>.cmf, n = AutoCameraView + 1,
+## shipped 0; ReturnOwner_<n> ends on it) seen from the player's side at -X,
+## as an orbit about the point it looks at on the ground.
+func default_view(index := 0) -> Dictionary:
+	var source := track("Default%d.cmf" % (index + 1))
+	if source.is_empty(): return {}
+	var turn := Basis(Vector3.UP, PI)
+	var position: Vector3 = turn * source.positions[0]
+	var forward: Vector3 = turn * (Basis(source.rotations[0]) * Vector3.FORWARD)
+	if forward.y > -0.01: return {}
+	var target := position + forward * (-position.y / forward.y)
+	var offset := position - target
+	return {"target": target, "yaw": atan2(offset.x, offset.z), "pitch": asin(offset.y / offset.length()), "distance": offset.length()}
 
 static func view_fov(track_fov: float) -> float:
 	return rad_to_deg(2.0 * atan(tan(track_fov * 0.5) * tan(deg_to_rad(VIEW_FOV) * 0.5) / tan(TRACK_FOV * 0.5)))
@@ -135,7 +148,47 @@ func step(delta: float) -> Dictionary:
 	clock += delta
 	var fov := view_fov(lerpf(shot.fovs[i], shot.fovs[j], f))
 	if bool(shot.orbit): return {"orbit": true, "fov": fov}
-	return {"position": shot.positions[i].lerp(shot.positions[j], f), "rotation": shot.rotations[i].slerp(shot.rotations[j], f), "fov": fov, "focus": shot.focus}
+	return {"position": shot.positions[i].lerp(shot.positions[j], f), "rotation": shot.rotations[i].slerp(shot.rotations[j], f), "fov": fov, "focus": shot.focus, "anchor": shot.get("anchor", shot.focus), "with": shot.get("with", [])}
+
+## Where `point` appears (pixels) for a camera at `position` turned by
+## `rotation` with a vertical field of view `fov` (degrees) on `screen`.
+static func project(position: Vector3, rotation: Quaternion, fov: float, screen: Vector2, point: Vector3) -> Vector2:
+	var local := Basis(rotation).inverse() * (point - position)
+	var depth := maxf(-local.z, 0.001)
+	var half := tan(deg_to_rad(fov) * 0.5) * depth
+	return Vector2((local.x / (half * screen.x / screen.y) + 1.0) * 0.5 * screen.x, (1.0 - local.y / half) * 0.5 * screen.y)
+
+## The remake's battle screen has interface pieces over its edges, which the
+## authored tracks did not allow for. A close-up keeps its angle and motion but
+## slides sideways or up/down just enough that the framed `point` stays inside
+## `safe` (pixels on `screen`); the camera is unchanged when it already is.
+## `limit` (pixels) caps the slide; 0 leaves it uncapped.
+static func keep_in(position: Vector3, rotation: Quaternion, fov: float, screen: Vector2, safe: Rect2, point: Vector3, limit := 0.0) -> Vector3:
+	if screen.x <= 0.0 or screen.y <= 0.0 or not safe.has_area(): return position
+	var basis := Basis(rotation)
+	var local := basis.inverse() * (point - position)
+	var depth := -local.z
+	if depth <= 0.01: return position
+	var at := project(position, rotation, fov, screen, point)
+	var wanted := Vector2(clampf(at.x, safe.position.x, safe.end.x), clampf(at.y, safe.position.y, safe.end.y))
+	if wanted.is_equal_approx(at): return position
+	if limit > 0.0: wanted = at + (wanted - at).limit_length(limit)
+	var half := tan(deg_to_rad(fov) * 0.5) * depth
+	var per_pixel := Vector2(2.0 * half * screen.x / screen.y / screen.x, 2.0 * half / screen.y)
+	# Moving the camera right moves the point left on screen; up moves it down.
+	return position + basis.x * (at.x - wanted.x) * per_pixel.x + basis.y * (wanted.y - at.y) * per_pixel.y
+
+## A close-up's camera position kept clear of the interface: points in `with`
+## that the shot already shows (on screen but under the frame) are eased out
+## from under it by at most a tenth of the screen, then the framed `point`
+## always ends inside `safe`.
+static func clear_of_frame(position: Vector3, rotation: Quaternion, fov: float, screen: Vector2, safe: Rect2, point: Vector3, with: Array = []) -> Vector3:
+	var visible := Rect2(Vector2.ZERO, screen)
+	for other: Vector3 in with:
+		if (Basis(rotation).inverse() * (other - position)).z >= -0.01: continue
+		if visible.has_point(project(position, rotation, fov, screen, other)):
+			position = keep_in(position, rotation, fov, screen, safe, other, screen.y * 0.1)
+	return keep_in(position, rotation, fov, screen, safe, point)
 
 func _roll(percent: float) -> bool:
 	return rng.randi_range(1, 100) <= int(percent)
@@ -185,7 +238,10 @@ func cast(kind: String, caster: int, hero: Vector3, targets: Array, local: bool,
 	var variant := ((n + 1) & 1) + 1
 	var stretch := _odd(kind, "monstertracktime") if kind == "enchantment" else -1.0
 	if hero_shot:
-		list.append(placed(("InstantOwner%d_1.cmf" if kind == "sorcery" else "EnchantmentOwnerCaster%d_1.cmf") % variant, hero, caster))
+		var caster_shot := placed(("InstantOwner%d_1.cmf" if kind == "sorcery" else "EnchantmentOwnerCaster%d_1.cmf") % variant, hero, caster)
+		# The spell's single target, when the caster's shot happens to show it.
+		if not caster_shot.is_empty() and targets.size() == 1: caster_shot["with"] = [targets[0].at]
+		list.append(caster_shot)
 	if monster_shot and targets.size() == 1:
 		if kind == "sorcery": list.append(placed("InstantEnemyMonsters%d_1.cmf" % variant, targets[0].at, caster, true))
 		else: list.append(placed("EnchantmentOwnerMonster%d_1.cmf" % variant, targets[0].at, int(targets[0].side), true, stretch))
@@ -202,6 +258,36 @@ func combat(attacker: int, middle: Vector3, dynamics: int) -> bool:
 	var lateral := middle.z if attacker == 1 else -middle.z
 	var right := lateral >= 2.0 or (lateral > -2.0 and rng.randi() % 2 == 0)
 	return _queue([placed("AttackCombat%sMonsters%d_1.cmf" % ["Right" if right else "Left", rng.randi_range(1, 2)], middle, attacker, true)])
+
+## The own-attack declaration shot (EL1 event 3, EL2
+## ). The track follows the committed attackers' home
+## slots (flags from EL1 / EL2): all on even slots
+## AttackOwnLeft, all on odd slots -> AttackOwnRight; otherwise _3 when one
+## stands in slots 4-5, _2 when one stands in slots 2-3 or 6-9, else _1.
+## Monsters1/2 is a roll against the combat side-select odds.
+func attack_own(side: int, middle: Vector3, dynamics: int, slots: Array[int] = []) -> bool:
+	if profile == null or profile.id not in ["el1", "el2"] or not _roll(dynamics): return false
+	var flags := 0
+	for slot: int in slots:
+		if slot < 2: flags |= 1
+		elif slot < 4 or slot > 5: flags |= 2
+		else: flags |= 4
+		flags |= 0x10 if slot % 2 == 0 else 0x20
+	var name := "AttackOwnMonsters%d_1.cmf"
+	if flags & 0x30 == 0x10: name = "AttackOwnLeftMonsters%d_1.cmf"
+	elif flags & 0x30 == 0x20: name = "AttackOwnRightMonsters%d_1.cmf"
+	elif flags & 4: name = "AttackOwnMonsters%d_3.cmf"
+	elif flags & 2: name = "AttackOwnMonsters%d_2.cmf"
+	var variant := 2 if _roll(100.0 - _odd("combat", "camerasideselect")) else 1
+	return _queue([placed(name % variant, middle, side, true)])
+
+## The original camera archive contains a dedicated, short Tremor1.CMF
+## track (16 keys at 30 fps). Anchor its authored motion on the arena
+## centre instead of substituting the ordinary hero/monster sorcery shots.
+## The edition-specific cast dispatcher controls when this track is selected.
+func tremor(side: int, dynamics: int) -> bool:
+	if not _roll(dynamics): return false
+	return _queue([placed("Tremor1.cmf", Vector3.ZERO, side)])
 
 ## The winner's camera; it keeps its last frame until the battle closes or the
 ## player moves the view.

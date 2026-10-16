@@ -33,6 +33,10 @@ var error := ""
 
 var _bytes := PackedByteArray()
 var _at := 0
+## Byte spans [start, end) of the recorded name and of each command's note
+## block, so an edited copy keeps every other byte as recorded.
+var _name_span := Vector2i.ZERO
+var _note_spans: Array[Vector2i] = []
 
 static func fourcc(value: int) -> String:
 	var b := PackedByteArray([value & 0xff, (value >> 8) & 0xff, (value >> 16) & 0xff, (value >> 24) & 0xff])
@@ -50,7 +54,10 @@ func decode(bytes: PackedByteArray) -> bool:
 	var major := _u8()
 	version = _u8()
 	if major != 0 or version < 4 or version > 7: return _fail("Unsupported replay version.")
+	_note_spans.clear()
+	_name_span.x = _at
 	name = _string()
+	_name_span.y = _at
 	if version >= 6:
 		for i in 4: labels.append(_string())
 	setup_words.append(_i32())
@@ -111,7 +118,18 @@ func _command() -> Dictionary:
 		return {}
 	var c := {"kind": COMMANDS[kind]}
 	match kind:
-		0, 9: c.side = _i32()
+		# NextPhase, Test, StartGame and Surrender carry only the side.
+		0, 8, 9, 10: c.side = _i32()
+		# Cheats: add spell (side, code), set health/ether/channels (side,
+		# value); win (side); disenchant (entity).
+		13, 14, 15, 16:
+			c.side = _i32()
+			c.value = _i32()
+		17: c.side = _i32()
+		18:
+			# No side is recorded; -1 plays it as the computer's.
+			c.side = -1
+			c.target = _i32()
 		1, 2, 3, 11, 12:
 			c.side = _i32()
 			c.id = _i32()
@@ -139,6 +157,7 @@ func _command() -> Dictionary:
 			return {}
 		effects.append([_i32(), _i32(), _i32()])
 	c.effects = effects
+	var note_start := _at
 	var notes := _i8()
 	c.note = null
 	if notes >= 0:
@@ -146,7 +165,70 @@ func _command() -> Dictionary:
 		for i in notes: note.triples.append([_i32(), _i32(), _i32()])
 		c.note = note
 	if not error.is_empty(): return {}
+	_note_spans.append(Vector2i(note_start, _at))
 	return c
+
+## The recorded bytes with a new name and each command's current note
+## (null for none): what the original writes when it saves a loaded replay
+## again. Empty when the replay was not decoded.
+func encode(new_name: String) -> PackedByteArray:
+	if _bytes.is_empty() or _note_spans.size() != commands.size(): return PackedByteArray()
+	var out := PackedByteArray()
+	out.append_array(_bytes.slice(0, _name_span.x))
+	out.append_array(_string_bytes(new_name))
+	var at := _name_span.y
+	for index in commands.size():
+		var span := _note_spans[index]
+		out.append_array(_bytes.slice(at, span.x))
+		var note: Variant = commands[index].note
+		if note == null:
+			out.append(0xff)
+		else:
+			var triples: Array = note.get("triples", [])
+			out.append(triples.size())
+			out.append_array(_string_bytes(str(note.get("text", ""))))
+			for triple: Array in triples:
+				for value: Variant in triple:
+					var word := PackedByteArray()
+					word.resize(4)
+					word.encode_s32(0, int(value))
+					out.append_array(word)
+		at = span.y
+	out.append_array(_bytes.slice(at))
+	return out
+
+static func _string_bytes(text: String) -> PackedByteArray:
+	var body := cp1251(text)
+	var out := PackedByteArray()
+	out.resize(4)
+	out.encode_s32(0, body.size())
+	out.append_array(body)
+	return out
+
+## Windows-1251, the original's text code page (Cyrillic letters; other
+## characters outside ASCII become "?").
+static func cp1251(text: String) -> PackedByteArray:
+	var out := PackedByteArray()
+	for index in text.length():
+		var code := text.unicode_at(index)
+		if code < 0x80: out.append(code)
+		elif code >= 0x410 and code <= 0x44f: out.append(code - 0x410 + 0xc0)
+		elif code == 0x401: out.append(0xa8)
+		elif code == 0x451: out.append(0xb8)
+		else: out.append(0x3f)
+	return out
+
+static func from_cp1251(bytes: PackedByteArray) -> String:
+	var text := ""
+	for value in bytes:
+		# As before: the text ends at a NUL byte.
+		if value == 0: break
+		if value < 0x80: text += char(value)
+		elif value >= 0xc0: text += char(value - 0xc0 + 0x410)
+		elif value == 0xa8: text += char(0x401)
+		elif value == 0xb8: text += char(0x451)
+		else: text += "?"
+	return text
 
 func _ints() -> Array[int]:
 	var result: Array[int] = []
@@ -181,7 +263,7 @@ func _string() -> String:
 	if length < 0 or _at + length > _bytes.size():
 		_short()
 		return ""
-	var text := _bytes.slice(_at, _at + length).get_string_from_ascii()
+	var text := from_cp1251(_bytes.slice(_at, _at + length))
 	_at += length
 	return text
 

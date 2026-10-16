@@ -7,6 +7,8 @@ var definition: Dictionary
 var moving_layers: Array[StandardMaterial3D] = []
 var layer_speeds: Array[float] = []
 var light: DirectionalLight3D
+## The scene's ambient light (combat effects dim it with the sun).
+var environment_settings: Environment
 
 static func title(id: String) -> String:
 	var names := {"Green": "Vital forest", "Red": "Chaot desert", "Black": "Synthet wasteland", "Blue": "Kinet mountains",
@@ -41,6 +43,7 @@ func build(profile: ELProfile, arena_id := "Green.001") -> bool:
 	env.ambient_light_color = Color(ambient[0] / 255.0, ambient[1] / 255.0, ambient[2] / 255.0)
 	env.ambient_light_energy = 0.38
 	environment.environment = env
+	environment_settings = env
 	add_child(environment)
 	light = DirectionalLight3D.new()
 	var sun: Array = definition.SunColor
@@ -113,6 +116,9 @@ func _build_background(profile: ELProfile) -> void:
 	var backdrop := MeshInstance3D.new()
 	backdrop.mesh = mesh
 	backdrop.material_override = ELFigure.material(profile.texture("CombatScenes/" + definition.Background), true)
+	# The ring faces inward and is drawn one-sided, as in the original: a view
+	# from just outside it (EL2's default view) does not see the near wall.
+	backdrop.material_override.cull_mode = BaseMaterial3D.CULL_BACK
 	backdrop.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(backdrop)
 	# Original backdrop draw order: atlas, two independently scrolling halves
@@ -150,6 +156,7 @@ func _background_layer(arrays: Array, texture: Texture2D, order: int) -> Standar
 	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	material.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
 	material.render_priority = order
+	material.cull_mode = BaseMaterial3D.CULL_BACK
 	node.material_override = material
 	add_child(node)
 	return material

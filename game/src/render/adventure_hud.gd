@@ -36,6 +36,8 @@ var canvas: Control
 var art: Control
 var minimap: Control
 var minimap_texture: ImageTexture
+## True when the minimap shows the scenario's authored picture.
+var minimap_picture := false
 ## Markers above the fog overlay; the overlay shows ELFog for the local player.
 var minimap_marks: Control
 var minimap_fog: TextureRect
@@ -232,13 +234,11 @@ func _build_minimap() -> void:
 	minimap.mouse_filter = Control.MOUSE_FILTER_STOP
 	canvas.add_child(minimap)
 	var map := state.map
-	var image := Image.create(maxi(1, map.width), maxi(1, map.height), false, Image.FORMAT_RGB8)
-	var colors := _terrain_colors()
-	for y in map.height:
-		for x in map.width:
-			var color: Color = colors.get(map.tile(x, y), Color(0.25, 0.25, 0.22))
-			if map.roads.size() > y * map.width + x and map.roads[y * map.width + x] != 0: color = color.lerp(Color("8a6a44"), 0.6)
-			image.set_pixel(x, map.height - 1 - y, color)
+	# The scenario's authored picture; without one the original builds the
+	# image from the map cells, approximated here by terrain colours.
+	var image := ELMinimapPicture.load_for(map)
+	minimap_picture = image != null
+	if image == null: image = terrain_image(profile, map)
 	minimap_texture = ImageTexture.create_from_image(image)
 	minimap.draw.connect(_draw_minimap)
 	if ELFog.active(state, state.current_player):
@@ -270,15 +270,27 @@ func _build_minimap() -> void:
 				var at: Vector2 = (event.position - area.position) / area.size
 				minimap_clicked.emit(Vector2(at.x * map.width, (1.0 - at.y) * map.height)))
 
+## Terrain-colour image of the map, north row first.
+static func terrain_image(data: ELProfile, map: ELAdventureMap) -> Image:
+	var image := Image.create(maxi(1, map.width), maxi(1, map.height), false, Image.FORMAT_RGB8)
+	var colors := terrain_colors(data)
+	for y in map.height:
+		for x in map.width:
+			var color: Color = colors.get(map.tile(x, y), Color(0.25, 0.25, 0.22))
+			if map.roads.size() > y * map.width + x and map.roads[y * map.width + x] != 0: color = color.lerp(Color("8a6a44"), 0.6)
+			image.set_pixel(x, map.height - 1 - y, color)
+	return image
+
 func _minimap_area() -> Rect2:
 	var map := state.map
 	var fit := 160.0 / maxf(1, maxf(map.width, map.height))
 	var area := Vector2(map.width, map.height) * fit
 	return Rect2((Vector2(160, 160) - area) * 0.5, area)
 
-func _terrain_colors() -> Dictionary:
+## Average colour of each terrain kind's first full tile.
+static func terrain_colors(data: ELProfile) -> Dictionary:
 	var result := {}
-	var tiles := profile.terrain_tiles
+	var tiles := data.terrain_tiles if data != null else null
 	if tiles == null: return result
 	for kind: int in tiles.types:
 		var groups: Array = tiles.types[kind].full

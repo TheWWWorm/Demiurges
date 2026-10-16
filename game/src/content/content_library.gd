@@ -70,10 +70,11 @@ static func managed_root(edition: String) -> String:
 	return OS.get_user_data_dir().path_join("content").path_join(edition)
 
 
-## Imported editions present on this device: {edition: folder}.
+## Imported editions present on this device: {edition: folder}. Every
+## platform can import the GOG installer or a data pack; desktops can also use
+## an installed game folder directly.
 static func managed_roots() -> Dictionary:
 	var result := {}
-	if not uses_import(): return result
 	if OS.has_feature("web") and web_files() == null: return result
 	for edition: String in EDITIONS:
 		var root := managed_root(edition)

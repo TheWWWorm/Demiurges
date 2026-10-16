@@ -31,7 +31,15 @@ func profile() -> ELProfile:
 	return menu.profile
 
 func refresh_entries() -> void:
+	var saving_original := mode == "save" and recording != null and recording.original != null
+	# Saving an original replay again lists the .rpl copies it may replace.
 	entries = ELDuelRecording.list(menu.edition)
+	if saving_original: entries.clear()
+	# The load list also offers the original's own .rpl replays.
+	if mode == "load" or saving_original:
+		for row: Dictionary in ELDuelRecording.list_original(profile()):
+			if mode == "load" or ELDuelRecording.removable(String(row.path)): entries.append(row)
+		entries.sort_custom(func(a: Dictionary, b: Dictionary): return String(a.name).naturalnocasecmp_to(String(b.name)) < 0)
 	if descending: entries.reverse()
 
 func build_screen() -> void:
@@ -95,7 +103,7 @@ func _build_name_field() -> void:
 	name_edit.position = rect.position
 	name_edit.size = rect.size
 	name_edit.max_length = ELDuelRecording.MAX_NAME
-	name_edit.add_theme_font_override("font", menu.serif)
+	name_edit.add_theme_font_override("font", menu.arial)
 	name_edit.add_theme_font_size_override("font_size", 16)
 	name_edit.add_theme_color_override("font_color", ELFrontMenu.INK_HOVER)
 	var field := StyleBoxFlat.new()
@@ -111,7 +119,7 @@ func refresh() -> void:
 	if selected >= entries.size(): selected = -1
 	var chosen := selected >= 0
 	if menu.buttons.has("ReplayScrLoad"): menu.buttons.ReplayScrLoad.disabled = not chosen
-	if menu.buttons.has("ReplayScrDelete"): menu.buttons.ReplayScrDelete.disabled = not chosen
+	if menu.buttons.has("ReplayScrDelete"): menu.buttons.ReplayScrDelete.disabled = not chosen or not ELDuelRecording.removable(String(entries[selected].path))
 	if menu.buttons.has("ReplayScrOk"): menu.buttons.ReplayScrOk.disabled = recording == null or not recording.complete()
 	var row: Dictionary = entries[selected] if chosen else {}
 	if not chosen and mode == "save" and recording != null: row = {"labels": recording.labels, "faces": recording.faces}
@@ -146,7 +154,8 @@ func toggle_sort() -> void:
 func load_chosen() -> void:
 	if mode != "load" or selected < 0 or selected >= entries.size(): return
 	var row := entries[selected]
-	if ELDuelRecording.read(String(row.path), menu.edition).is_empty():
+	var readable := ELDuelReplayPlayer.new().load_file(profile(), String(row.path)) if row.get("original", false) else not ELDuelRecording.read(String(row.path), menu.edition).is_empty()
+	if not readable:
 		# The original's own (untranslated) message.
 		menu.duel_ui.show_message("Error loading replay", Callable(), false, 240.0)
 		return
@@ -217,7 +226,7 @@ class ReplayList extends Control:
 			accept_event()
 
 	func _draw() -> void:
-		var font := screen.menu.serif
+		var font := screen.menu.arial
 		for at in visible_rows():
 			var index := offset + at
 			if index >= screen.entries.size(): break
@@ -239,7 +248,7 @@ class SortText extends BaseButton:
 
 	func _draw() -> void:
 		var hover := get_draw_mode() in [DRAW_HOVER, DRAW_HOVER_PRESSED]
-		var font := menu.serif
+		var font := menu.arial
 		var width := font.get_string_size(caption, HORIZONTAL_ALIGNMENT_LEFT, -1, 17).x
 		var at := Vector2((size.x - width) * 0.5, (size.y - font.get_height(17)) * 0.5 + font.get_ascent(17))
 		draw_string(font, at + Vector2(1, 1), caption, HORIZONTAL_ALIGNMENT_LEFT, -1, 17, Color(0, 0, 0, 0.8))

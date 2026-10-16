@@ -268,7 +268,7 @@ class CardList extends Control:
 	func row_height(code: String) -> float:
 		if screen.creatures(): return ELEncyclopaediaScreen.ROW
 		if not _heights.has(code):
-			var font := screen.menu.serif
+			var font := screen.menu.arial
 			var cols := columns()
 			var width: float = cols.extra_end - cols.extra - 8
 			var text_height := font.get_multiline_string_size(screen.menu.profile.card_description(code), HORIZONTAL_ALIGNMENT_LEFT, width, 15).y
@@ -325,7 +325,7 @@ class CardList extends Control:
 	func _draw() -> void:
 		var codes := screen.codes()
 		var profile := screen.menu.profile
-		var font := screen.menu.serif
+		var font := screen.menu.arial
 		var cols := columns()
 		var top := 0.0
 		for index in range(offset, codes.size()):
@@ -395,7 +395,7 @@ class ModePopup extends Control:
 			accept_event()
 
 	func _draw() -> void:
-		var font := screen.menu.serif
+		var font := screen.menu.arial
 		var height := ELEncyclopaediaScreen.POPUP_ROW
 		for row in ELEncyclopaedia.MODES.size():
 			var top := row * height

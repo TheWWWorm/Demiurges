@@ -48,6 +48,15 @@ static func decode(profile: ELProfile, raw: Dictionary) -> Dictionary:
 		if h.has("spell_uses") != h.has("hand_slots"): return _bad("Incomplete spell charge state.")
 		if not h.has("spell_uses") or (profile.id == "el1" and not s.has("charge_version")): ELSpellCharges.migrate(profile, h, s.setup, side)
 		if not ELSpellCharges.valid(profile, h): return _bad("Invalid spell charge state.")
+		# Rail order keys (ELDuel._give_card); one out of step with the hand is
+		# ignored at runtime, so the hand shows in array order.
+		if h.has("hand_view"):
+			if h.hand_view is not Array: return _bad("Invalid hand order.")
+			var keys: Array = []
+			for key: Variant in h.hand_view:
+				if (key is not int and key is not float) or float(key) != floorf(float(key)) or absf(float(key)) > 1e9: return _bad("Invalid hand order.")
+				keys.append(int(key))
+			h.hand_view = keys
 		if h.get("kind", "hero") not in ["hero", "monster"]: return _bad("Invalid combatant kind.")
 		var drawn: Array[int] = []
 		for slot: Variant in h.drawn:
@@ -158,7 +167,7 @@ static func decode(profile: ELProfile, raw: Dictionary) -> Dictionary:
 static func session(raw: Variant) -> Dictionary:
 	# Older duel saves contain only the rules. Optional presentation settings
 	# have safe defaults and cannot inject invalid camera transforms.
-	var result := {"mode": 0, "camera": [-0.38, 0.7, 24.0]}
+	var result := {"mode": 0, "camera": []}
 	if raw is not Dictionary: return result
 	# "mode" is kept for older saves but always resumes against the computer;
 	# a HotSeat duel restores from its duel record instead.
@@ -166,7 +175,7 @@ static func session(raw: Variant) -> Dictionary:
 	if camera is not Array or camera.size() != 3: return result
 	for value: Variant in camera:
 		if (value is not float and value is not int) or not is_finite(float(value)): return result
-	result.camera = [wrapf(float(camera[0]), -PI, PI), clampf(float(camera[1]), 0.42, 1.05), clampf(float(camera[2]), 15, 33)]
+	result.camera = [wrapf(float(camera[0]), -PI, PI), clampf(float(camera[1]), 0.3, 1.05), clampf(float(camera[2]), 15, 40)]
 	return result
 
 static func _enchantments(profile: ELProfile, value: Variant, ids: Array[int]) -> bool:

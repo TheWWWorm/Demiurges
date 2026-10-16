@@ -18,7 +18,7 @@ var auto := false
 var winner := -1
 ## Side whose duel health can end the chapter mid-battle, or -1.
 var watch_side := -1
-## First-game victory report: experience shown and resources looted.
+## Victory report for the local winner: experience shown and resources looted.
 var report: Dictionary = {}
 ## The defender of an ethereal (Warrior of the Realm) battle, or -1.
 var ethereal_defender := -1
@@ -286,9 +286,16 @@ func finish() -> bool:
 			var before := {"health": int(victor.get("health", 0)), "level": int(victor.get("level", 1))}
 			# First-game neutral heroes never gain experience.
 			var granted := 0 if state.map.profile.id == "el1" and int(victor.get("owner", 0)) <= 0 else state.add_experience(winner_id, maxi(0, reward))
-			# Second game: the local player's won battle is journaled.
-			if state.map.profile.id == "el2" and int(victor.get("owner", -1)) == state.current_player and state.players.has(state.current_player):
-				ELSecondNotebook.add_battle(state, victor, loser, before, maxi(0, reward))
+			if state.map.profile.id == "el2":
+				# Second game: a player-owned winner takes the loser's
+				# template trophies; the local winner's battle is journaled with
+				# the awarded experience and, after a creature, the trophies, and
+				# the after-battle box reports both.
+				var trophies := ELSecondLoot.take(state, victor, loser)
+				if int(victor.get("owner", -1)) == state.current_player and state.players.has(state.current_player):
+					var monster: bool = loser.get("type") == "monster"
+					ELSecondNotebook.add_battle(state, victor, loser, before, maxi(0, granted), trophies if monster else [])
+					report = {"hero": winner_id, "opponent": defeated[0], "experience": maxi(0, granted), "resources": trophies if monster else [], "monster": monster, "artifacts": []}
 			if state.map.profile.id == "el1" and victor.get("type") == "hero" and state.players.has(int(victor.get("owner", -1))):
 				report = {"hero": winner_id, "opponent": defeated[0], "experience": maxi(0, granted), "resources": [], "monster": loser.get("type") == "monster", "artifacts": ELFirstAI.take_artifacts(victor, loser)}
 				if loser.get("type") == "monster": report.resources = loot(state, victor, loser)

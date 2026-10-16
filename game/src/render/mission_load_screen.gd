@@ -124,14 +124,14 @@ func _build_name_field() -> void:
 		menu._label("name_caption", menu._caption("SaveMissionNameStatic"), _rect("SaveMissionNameStatic"), 16, ELFrontMenu.TITLE_INK, HORIZONTAL_ALIGNMENT_RIGHT)
 	else:
 		var caption := menu._caption("SaveMissionEdit")
-		var width := ceilf(menu.serif.get_string_size(caption, HORIZONTAL_ALIGNMENT_LEFT, -1, 16).x) + 8.0
+		var width := ceilf(menu.arial.get_string_size(caption, HORIZONTAL_ALIGNMENT_LEFT, -1, 16).x) + 8.0
 		menu._label("name_caption", caption, Rect2(rect.position, Vector2(width, rect.size.y)), 16, ELFrontMenu.TITLE_INK, HORIZONTAL_ALIGNMENT_LEFT)
 		rect = Rect2(rect.position.x + width, rect.position.y, maxf(80.0, rect.size.x - width), rect.size.y)
 	name_edit = LineEdit.new()
 	name_edit.position = rect.position
 	name_edit.size = rect.size
 	name_edit.max_length = ELSaveSlots.MAX_NAME
-	name_edit.add_theme_font_override("font", menu.serif)
+	name_edit.add_theme_font_override("font", menu.arial)
 	name_edit.add_theme_font_size_override("font_size", 16)
 	name_edit.add_theme_color_override("font_color", ELFrontMenu.INK_HOVER)
 	var field := StyleBoxFlat.new()
@@ -271,7 +271,7 @@ class SaveList extends Control:
 			accept_event()
 
 	func _draw() -> void:
-		var font := screen.menu.serif
+		var font := screen.menu.arial
 		for at in visible_rows():
 			var index := offset + at
 			if index >= screen.entries.size(): break

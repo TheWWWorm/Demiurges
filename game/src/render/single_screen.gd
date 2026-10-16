@@ -305,7 +305,7 @@ class MissionList extends Control:
 		if not screen.second():
 			_draw_first(shown)
 			return
-		var font := screen.menu.serif
+		var font := screen.menu.arial
 		var profile := screen.profile()
 		var row := screen.row_height()
 		for at in visible_rows():
@@ -331,7 +331,7 @@ class MissionList extends Control:
 		var panel_9 := menu.texture_named("MISSION_PANEL_9")
 		var panel_7 := menu.texture_named("MISSION_PANEL_7")
 		var bold := FontVariation.new()
-		bold.base_font = menu.serif
+		bold.base_font = menu.arial
 		bold.variation_embolden = 0.8
 		for at in visible_rows():
 			var index := offset + at
@@ -339,7 +339,7 @@ class MissionList extends Control:
 			var entry: Dictionary = shown[index]
 			var origin := Vector2(0, at * ELSingleScreen.ROW)
 			var chosen: bool = entry.id == screen.selected
-			var font: Font = bold if chosen else menu.serif
+			var font: Font = bold if chosen else menu.arial
 			var ink := ELSingleScreen.ROW_CHOSEN_INK if chosen else ELSingleScreen.ROW_INK
 			var size_class := clampi(int(entry.size_class), 0, ELSingleScreen.SIZE_ICONS.size() - 1)
 			var icon: Rect2 = ELSingleScreen.SIZE_ICONS[size_class]
@@ -351,7 +351,9 @@ class MissionList extends Control:
 					draw_texture_rect_region(panel_7, Rect2(origin + mark[0], mark[1].size), mark[1])
 				for mark: Array in [ELSingleScreen.WIN_MARK, ELSingleScreen.LOSE_MARK]:
 					draw_texture_rect_region(panel_7, Rect2(origin + mark[0], mark[1].size), mark[1])
-			var baseline := font.get_ascent(ELSingleScreen.ROW_TEXT)
+			# ROW_TEXT is a GDI cell height, as Controls FontSize is.
+			var em := ELFrontMenu.cell_em(ELSingleScreen.ROW_TEXT)
+			var baseline := font.get_ascent(em)
 			var players: int = entry.players.size()
-			draw_string(font, origin + Vector2(42, 5 + baseline), "%d/%d" % [players, players], HORIZONTAL_ALIGNMENT_LEFT, -1, ELSingleScreen.ROW_TEXT, ink)
-			draw_string(font, origin + Vector2(105, 5 + baseline), ELSingleScenario.title(screen.profile(), entry), HORIZONTAL_ALIGNMENT_LEFT, 147, ELSingleScreen.ROW_TEXT, ink)
+			draw_string(font, origin + Vector2(42, 5 + baseline), "%d/%d" % [players, players], HORIZONTAL_ALIGNMENT_LEFT, -1, em, ink)
+			draw_string(font, origin + Vector2(105, 5 + baseline), ELSingleScenario.title(screen.profile(), entry), HORIZONTAL_ALIGNMENT_LEFT, 147, em, ink)

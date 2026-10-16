@@ -153,6 +153,9 @@ var pending_encounter: Array = []
 var second_precombat: ELSecondPrecombatView
 var lose_battle: ELSecondLoseBattleView
 
+func _enter_tree() -> void:
+	add_to_group("touch_camera")
+
 func build(profile: ELProfile, scenario: Dictionary, preferences: ELSettings, difficulty := 0, restored: Dictionary = {}) -> bool:
 	settings = preferences
 	# Building or restoring a map shows the wait cursor until the map picks again.
@@ -280,8 +283,12 @@ func _process(delta: float) -> void:
 		target += flat * delta * zoom * 0.8 * (float(settings.values.get("keyboard_scroll", 1.0)) if settings != null else 1.0)
 	_update_camera()
 	_update_rings(delta)
-	if audio != null: audio.listener = target
-	if presentation != null: presentation.listener = target
+	if audio != null:
+		audio.listener = target
+		audio.listener_forward = -camera.global_basis.z
+	if presentation != null:
+		presentation.listener = target
+		presentation.listener_forward = -camera.global_basis.z
 	_refresh_hero_info()
 	_auto_level_up()
 
@@ -298,6 +305,8 @@ func _notification(what: int) -> void:
 ## Edge direction under the pointer: first game all eight directions within
 ## 1-2 px of the edges, second game left/right within 4 px; (0,0) for none.
 func edge_direction() -> Vector2i:
+	# A finger resting near an edge must not scroll the map.
+	if ELTouchInput.enabled: return Vector2i.ZERO
 	if not edge_enabled or not _mouse_inside or _pointer.x < 0 or state == null or state.camera_locked or dragging: return Vector2i.ZERO
 	if not visible or paused or _cursor_modal(): return Vector2i.ZERO
 	var size := get_viewport().get_visible_rect().size
@@ -389,7 +398,7 @@ func _update_rings(delta: float) -> void:
 	if hero.is_empty() or not hero.get("alive", false) or not hero.get("visible", true) or hero.get("fortified", false) or not hero.get("placed", true): selected = -1
 	var hover_place := _ring_place(hover)
 	var selected_place := _ring_place(selected)
-	rings.show_rings(delta, hover, hover_place[0], hover_place[1], selected, selected_place[0], selected_place[1])
+	rings.show_rings(delta, hover, hover_place[0], hover_place[1], selected, selected_place[0], selected_place[1], selected >= 0 and hero.get("danger_pulse", false))
 
 ## Ground point and footprint (cells) of an object for its ring.
 func _ring_place(uid: int) -> Array:
@@ -397,7 +406,13 @@ func _ring_place(uid: int) -> Array:
 	if item.is_empty(): return [Vector3.ZERO, Vector2i.ONE]
 	if world.actors.has(uid):
 		var at: Vector3 = world.actors[uid].position
-		return [Vector3(at.x, 0, at.z), Vector2i.ONE]
+		# Moving figures: the first game's view objects all return radius 1.0
+		# the second game's heroes keep the default 1.0, while its
+		# roaming creatures (CMOBBuilding, built through the static map-object
+		# path) get 0.7 × their record size like buildings.
+		if state.map.profile.id == "el1" or item.get("type") == "hero": return [Vector3(at.x, 0, at.z), ELSelectionRing.NO_SIZE]
+		var figure_row: Dictionary = _art.resolve(item).get("row", {})
+		return [Vector3(at.x, 0, at.z), ELAdventureGrid.footprint(figure_row, int(item.get("rotation", 0))).size if not figure_row.is_empty() else Vector2i.ONE]
 	var row: Dictionary = _art.resolve(item).get("row", {})
 	var centre := ELAdventureGrid.center(item, row)
 	return [Vector3(centre.x * ELAdventureTerrain.CELL, 0, -centre.y * ELAdventureTerrain.CELL), ELAdventureGrid.footprint(row, int(item.get("rotation", 0))).size]
@@ -572,7 +587,8 @@ func _unhandled_input(event: InputEvent) -> void:
 			get_viewport().set_input_as_handled()
 		return
 	if building_message != null:
-		if event is InputEventKey and event.pressed and event.keycode in [KEY_ESCAPE, KEY_ENTER, KEY_KP_ENTER, KEY_SPACE]:
+		var loot_panel := building_message.message_box != null and building_message.message_box.style == "loot"
+		if event is InputEventKey and event.pressed and (building_message.message_box.key_answer(event.keycode) == "OK" if loot_panel else event.keycode in [KEY_ESCAPE, KEY_ENTER, KEY_KP_ENTER, KEY_SPACE]):
 			_close_building_message()
 			get_viewport().set_input_as_handled()
 		return
@@ -902,6 +918,48 @@ func _click_ground(tile: Vector2i) -> void:
 		following = _hero_id()
 	if tutorial_panel != null and _hero_id() >= 0: tutorial_panel.map_click(site, ordered)
 
+## Touch gestures (remake addition): the same camera limits as the mouse.
+func touch_camera_ready() -> bool:
+	return visible and camera != null and director != null and state != null and not _cursor_modal() \
+		and not (hud != null and hud.precombat.visible) and not (second_precombat != null and second_precombat.visible)
+
+## One finger moves the ground under it.
+func touch_pan(from: Vector2, to: Vector2) -> void:
+	if state.camera_locked: return
+	var ground := Plane(Vector3.UP, 0)
+	var a: Variant = ground.intersects_ray(camera.project_ray_origin(from), camera.project_ray_normal(from))
+	var b: Variant = ground.intersects_ray(camera.project_ray_origin(to), camera.project_ray_normal(to))
+	if a == null or b == null: return
+	following = -1
+	target += (a as Vector3) - (b as Vector3)
+	var low := ELAdventureScene.world_position(-0.5, float(state.map.height) - 0.5)
+	var high := ELAdventureScene.world_position(float(state.map.width) - 0.5, -0.5)
+	target.x = clampf(target.x, low.x, high.x)
+	target.z = clampf(target.z, low.z, high.z)
+	_hide_touch_tip()
+	_update_camera()
+
+func touch_orbit(turn: float, tilt: float) -> void:
+	if state.camera_locked: return
+	yaw += turn
+	pitch = clampf(pitch + tilt, 0.5, 1.35)
+	_hide_touch_tip()
+	_update_camera()
+
+func touch_zoom(factor: float) -> void:
+	zoom = clampf(zoom / factor, 16, 100)
+	_hide_touch_tip()
+	_update_camera()
+
+func touch_bar_keys() -> Array:
+	return [["Save", KEY_F5], ["Load", KEY_F9]]
+
+func _hide_touch_tip() -> void:
+	if second_hud != null:
+		map_tip.clear()
+		second_hud.hide_map_tooltip()
+	elif hud != null: hud.show_tooltip(-1, {}, Vector2.ZERO)
+
 func _update_camera() -> void:
 	if camera == null: return
 	camera.size = zoom
@@ -1009,10 +1067,26 @@ func _present(data: Dictionary) -> void:
 			building_messages.append(data)
 			_show_building_message()
 
+## The first colourless drain of a hero's day (any owner) plays the dying
+## particle and the white-zone sound once where the hero is drawn at that
+## moment. The particle does not follow the hero, is not a script effect and is
+## not saved; the sound is positional (full within 8 units, silent past 16).
+func colorless_drain(uid: int) -> void:
+	var hero := state.object(uid)
+	if hero.is_empty() or world == null: return
+	var at := ELAdventureScene.world_position(float(hero.get("x", 0)), float(hero.get("y", 0)))
+	var actor: Variant = world.actors.get(uid)
+	if actor is Node3D and is_instance_valid(actor): at = world.to_local((actor as Node3D).global_position)
+	var entry := {"file": "Dying.pfx", "x": at.x, "y": -at.z, "z": at.y}
+	var name := "colorless_drain:%d" % uid
+	if effects != null: effects.start(name, entry, 0.0)
+	if audio != null: audio.start_sound(name, entry.merged({"file": "Adventure/whitezonehb.wav", "near": 8.0, "far": 16.0, "loop": false}, true))
+
 func _state_event(data: Dictionary) -> void:
 	if data.kind in ["day_changed", "site_captured", "object_changed", "object_killed", "object_created", "skill_learned", "experience_gained"]: mana_readout = {}
 	if world == null: return
-	if audio != null and (data.kind != "colorless_drain" or int(state.object(int(data.id)).get("owner", -1)) == state.current_player): audio.script_event(data)
+	if audio != null: audio.script_event(data)
+	if data.kind == "colorless_drain": colorless_drain(int(data.id))
 	if effects != null:
 		effects.script_event(data)
 		if data.kind == "script_effect_orient": effects.orient(str(data.name), world.object_yaw(state.object(int(data.id))))
@@ -1048,6 +1122,9 @@ func _state_event(data: Dictionary) -> void:
 				_second_mine_expired()
 		"site_income":
 			if data.player == state.current_player: _remark("Mine production · " + ELResources.describe(state.map.profile.id, data.amounts, false))
+		"barrier_changed":
+			# A first-game runestone sounds as its stones move away (instant.wav).
+			if data.opened and presentation != null and world.first_barrier(state.object(data.id)): presentation.building_used(int(data.id), "instant")
 		"object_changed", "object_killed", "object_created", "shape_changed":
 			world.update_object(state.object(data.id))
 			world.fog_object(state.object(data.id))
@@ -1084,6 +1161,7 @@ func _state_event(data: Dictionary) -> void:
 			if not rewards.is_empty(): lines.append("Spells received: " + ", ".join(rewards))
 			if not artifacts.is_empty(): lines.append("Artifacts received: " + ", ".join(artifacts))
 			_remark(" · ".join(lines) if not lines.is_empty() else "No spells found.")
+			_second_loot_box(data)
 
 ## Mission end: the original WinLose picture over everything (also over a
 ## running duel). Nothing is shown in text; the score goes to the campaign and
@@ -1232,13 +1310,15 @@ func _original_options_closed() -> void:
 		"GOSave": open_save_screen()
 		"GOLoad": open_load_screen()
 		"GOMenu": leave_requested.emit()
-		"GOQuit": get_tree().quit()
+		"GOQuit": ELAudio.quiet_quit(get_tree())
 
 ## Options changed: the map takes the new values at once.
 func apply_settings() -> void:
 	if settings == null: return
 	preview_volumes(settings.values)
 	if world != null: world.set_animate_objects(bool(settings.values.get("animated_objects", true)))
+	if world != null: world.set_animate_fog(bool(settings.values.get("fog_animations", true)))
+	if world != null: world.set_blob_shadows(bool(settings.values.get("shadows", true)))
 	if presentation != null: presentation.apply(settings.values)
 	_apply_helper_overlay()
 
@@ -1249,6 +1329,34 @@ func _remark(text: String) -> void:
 	remark = text
 	# Without the original HUD art the status line is the only readout.
 	if notice != null and (helper_overlay() or (hud == null and second_hud == null)): notice.text = text
+
+## Second game: the scripted loot report (ExSendLootMessage /
+## ExSendNoLootMessage) in the message box: T_MB_RECEIVE_LOOT over one line
+## per spell and artifact, or T_MB_RECEIVE_NO_LOOT. The original shows the
+## items as pictures with names; the remake lists the names.
+func _second_loot_box(data: Dictionary) -> void:
+	if state.map.profile.id != "el2" or second_hud == null: return
+	var profile := state.map.profile
+	var items: Array = data.get("items", [])
+	var key := "T_MB_RECEIVE_NO_LOOT" if data.get("none", false) else "T_MB_RECEIVE_LOOT"
+	var lines: Array[String] = [profile.text(key).strip_edges()]
+	for item: Variant in items:
+		if not item is Dictionary: continue
+		if item.get("kind") == "spell": lines.append(profile.text(str(profile.table("CombatSpells").get(str(item.get("card", "")), {}).get("Name", item.get("card", "")))))
+		elif item.get("kind") == "artifact": lines.append(ELMapPickups.artifact_title(profile, str(item.get("name", ""))))
+	# The original queues the report behind the loot effect, so a battle's
+	# experience box comes first; queue it after the current step.
+	var message := {"kind": "building_message", "hero": -1, "building": -1, "title": "", "text": "\n".join(PackedStringArray(lines)), "resources": [], "skill": "", "key": key}
+	# Received loot uses the Messages panel: the title, then a picture and a name per item.
+	if not data.get("none", false):
+		message.text = lines[0]
+		message.loot = items.duplicate(true)
+	_queue_building_message.call_deferred(message)
+
+func _queue_building_message(message: Dictionary) -> void:
+	if ui == null: return
+	building_messages.append(message)
+	_show_building_message()
 
 ## Second game: a depleted own mine reports T_MB_MINE_EXPIRED in the message
 ## box (queues the message action when the counter reaches 0).
@@ -2118,7 +2226,7 @@ func _build_second_controls() -> void:
 	second_hud.exit_requested.connect(func():
 		close_options()
 		leave_requested.emit())
-	second_hud.quit_requested.connect(func(): get_tree().quit())
+	second_hud.quit_requested.connect(func(): ELAudio.quiet_quit(get_tree()))
 	second_hud.menu_closed.connect(close_options)
 	# EscEncyclopaedia (0x636) pushes the Encyclopaedia over the Esc menu; its OK
 	# or Esc (0xef4) closes only the Encyclopaedia, so the paused Esc menu returns.

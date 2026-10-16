@@ -79,7 +79,7 @@ func build_campaign() -> void:
 	name_edit.text = ELPlayerProfile.current_name(profile())
 	name_edit.flat = true
 	name_edit.context_menu_enabled = false
-	name_edit.add_theme_font_override("font", menu.serif)
+	name_edit.add_theme_font_override("font", menu.arial)
 	name_edit.add_theme_font_size_override("font_size", 15)
 	name_edit.add_theme_color_override("font_color", ELFrontMenu.INK)
 	name_edit.add_theme_constant_override("minimum_character_width", 0)

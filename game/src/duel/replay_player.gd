@@ -7,7 +7,9 @@ extends RefCounted
 ## Play/Pause, Rewind (back to the start, paused), Pause at comment, and in
 ## editor mode Next command / Next phase / Next turn, which play until that
 ## point and pause. If the rules refuse a recorded action, playback stops and
-## `error` names it; nothing is substituted.
+## `error` names it; nothing is substituted. An original .rpl file (the
+## original's own Duel replays) plays through the same command mapping as the
+## combat tutorial, with its recorded comments shown and paused at.
 
 signal changed
 signal diverged(message: String)
@@ -24,16 +26,31 @@ var duel: ELDuel
 var index := 0
 var error := ""
 var playing := false
-## Pause at comment: recorded notes stop playback (remake recordings carry none).
+## Pause at comment: playback stops before a command that carries a comment.
 var pause_at_comment := false
 ## The pending step of editor mode (COMMAND, PHASE or TURN), or NONE.
 var step_mode := NONE
 var _running := false
+## Original .rpl playback: its decoder and command driver.
+var original: ELCombatTutorial
 var _turn := 0
 
 func load_file(source: ELProfile, file: String) -> bool:
 	profile = source
 	path = file
+	original = null
+	if file.get_extension().to_lower() == "rpl":
+		var driver := ELCombatTutorial.new()
+		driver.label = "Replay"
+		data = {}
+		if source.id != "el2" or not driver.load_file(source, file):
+			error = "Error loading replay"
+			return false
+		original = driver
+		data = {"name": ELDuelRecording.original_name(driver.replay, file), "labels": ELDuelRecording.original_labels(source, driver.replay),
+			"seed": driver.replay.seed_value, "options": driver.start_options()}
+		error = ""
+		return true
 	data = ELDuelRecording.read(file, source.id)
 	error = "" if not data.is_empty() else "Error loading replay"
 	return error.is_empty()
@@ -46,6 +63,13 @@ func begin(target: ELDuel) -> bool:
 	error = ""
 	playing = false
 	step_mode = NONE
+	if original != null:
+		original.error = ""
+		if not original.begin(duel): return _fail(original.error)
+		original.duel.gate = original
+		_turn = duel.turn_serial
+		changed.emit()
+		return true
 	if not duel.start(profile, int(data.seed), data.options): return _fail(duel.error)
 	duel.gate = self
 	_turn = duel.turn_serial
@@ -53,7 +77,61 @@ func begin(target: ELDuel) -> bool:
 	return true
 
 func actions() -> Array:
+	if original != null: return original.replay.commands
 	return data.get("actions", [])
+
+## The comment of the next command, or "".
+func comment() -> String:
+	if not error.is_empty() or done(): return ""
+	if original != null: return original.note_text()
+	return str(actions()[index].get("note", ""))
+
+## Whether the next command carries a comment.
+func has_comment() -> bool:
+	if not error.is_empty() or done(): return false
+	if original != null: return original.current().get("note") != null
+	return actions()[index].has("note")
+
+## Replay editor: the next command's comment becomes `text` (:
+## the recorded text is replaced, its other note values kept). An emptied
+## comment is removed from remake recordings; an original keeps an empty one.
+func set_comment(text: String) -> bool:
+	if not error.is_empty() or done(): return false
+	if original != null:
+		var command: Dictionary = original.current()
+		var note: Variant = command.get("note")
+		if note == null:
+			if text.is_empty(): return true
+			command.note = {"text": text, "triples": []}
+		else:
+			var prefix := ""
+			var old := String(note.text)
+			# A "#d" preselection prefix stays with the command.
+			if old.length() >= 2 and old[0] == "#" and not text.begins_with("#"): prefix = old.left(2)
+			note.text = prefix + text
+		return true
+	var action: Dictionary = actions()[index]
+	if text.is_empty(): action.erase("note")
+	else: action.note = text
+	return true
+
+## The replay as it now stands (with edited comments), ready for the save
+## screen: a remake recording, or an original replay written back as .rpl.
+func to_recording() -> ELDuelRecording:
+	var recording := ELDuelRecording.new()
+	recording.edition = profile.id
+	var labels: Array = data.get("labels", ["", "", "", ""])
+	for side in 4: recording.labels[side] = str(labels[side]) if side < labels.size() else ""
+	var faces: Array = data.get("faces", [])
+	for side in 2:
+		var template: String = recording.labels[side + 2]
+		recording.faces[side] = int(faces[side]) if side < faces.size() else int(profile.table("HeroTemplates").get(template, {}).get("Face", -1))
+	if original != null:
+		recording.original = original.replay
+		recording.rounds = [{"seed": int(data.seed), "options": data.options, "actions": [], "winner": -1, "complete": true}]
+		return recording
+	recording.rounds = [{"seed": int(data.seed), "options": data.options, "actions": actions().duplicate(true), "winner": int(data.get("winner", -1)), "complete": true}]
+	return recording
 
 func done() -> bool:
 	return duel == null or index >= actions().size() or duel.phase == ELDuel.Phase.FINISHED
@@ -82,6 +160,22 @@ func step() -> bool:
 		changed.emit()
 		return false
 	var action: Dictionary = actions()[index]
+	if original != null:
+		if not original.run_current():
+			playing = false
+			_fail(original.error if not original.error.is_empty() else "Replay diverged at command %d (%s)" % [index, String(action.kind)])
+			diverged.emit(error)
+			changed.emit()
+			return false
+		index = original.index
+		match step_mode:
+			COMMAND: _pause()
+			PHASE: if String(action.kind) == "next_phase": _pause()
+			TURN: if duel.turn_serial != _turn: _pause()
+		if pause_at_comment and not comment().is_empty(): _pause()
+		if done(): playing = false
+		changed.emit()
+		return true
 	var ok := _apply(action)
 	if not ok:
 		playing = false
@@ -94,7 +188,9 @@ func step() -> bool:
 		COMMAND: _pause()
 		PHASE: if String(action.kind) == "end_phase": _pause()
 		TURN: if duel.turn_serial != _turn: _pause()
-	if pause_at_comment and action.get("note") is String and not String(action.note).is_empty(): _pause()
+	# Pause at comment: stop where the next command carries one (it is shown
+	# while that command waits).
+	if pause_at_comment and not comment().is_empty(): _pause()
 	if done(): playing = false
 	changed.emit()
 	return true
@@ -137,7 +233,7 @@ func gate_done(_target: ELDuel, _action: Dictionary, _ok: bool) -> void:
 	pass
 
 func release() -> void:
-	if duel != null and duel.gate == self: duel.gate = null
+	if duel != null and (duel.gate == self or (original != null and duel.gate == original)): duel.gate = null
 	playing = false
 
 func _fail(message: String) -> bool:

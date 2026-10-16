@@ -14,8 +14,10 @@ extends Node3D
 ## nodes <Colour>ManaNode, castles <Colour>Castle) loops
 ## Buildings/<folder>/cycle.wav while it exists, and plays
 ## Buildings/<folder>/Idle00.wav each time its idle animation (cidle) comes
-## round. Both are positional: full volume within 10 units of the listener,
-## falling as 10 / distance, silent beyond 25. They use the effects volume.
+## round. Both are placed (as the second game's): full
+## volume within 10 units of the listener, falling linearly to silence at 25,
+## and panned by their angle to the camera's view (ELAudio.stereo_pan). They
+## use the effects volume.
 ##
 ## Building particles. Mana nodes, volcano rocks and several additional
 ## buildings keep a looping map effect (SPEC_EFFECTS); a figure with
@@ -43,7 +45,9 @@ const MAX_ONE_SHOTS := 8
 ## Map effects started with a building figure (file name under the pfx root).
 const SPEC_EFFECTS := {"Teacher": "Teacher00", "Master": "Master00", "Magister": "Magister00",
 	"SpringOfStrength": "SpringStrength", "SpringOfDexterity": "SpringDexterity", "HealersCitadel": "HealersCitadel",
-	"WanderersCitadel": "ShrineCraftingRd", "ShrineMagic": "ShrineMagicRd", "WardingStone": "WardingStone"}
+	"WanderersCitadel": "ShrineCraftingRd", "ShrineMagic": "ShrineMagicRd", "WardingStone": "WardingStone",
+	# Their constructors pass effect ids 0x55, 0x57-0x59.
+	"AltarOfWar": "AltarOfWar", "Dungeon1": "DungeonLvl1", "Dungeon2": "DungeonLvl2", "Dungeon3": "DungeonLvl3"}
 ## Table SpecEffect kinds of mana nodes and terrain objects.
 const SPEC_KINDS := {1: "ManaNodeRed", 2: "ManaNodeBlack", 7: "BlueManaNode",
 	3: "Voulcan2x2_1", 4: "Voulcan2x2_2", 5: "Voulcan2x2_3", 6: "Voulcan2x2_4"}
@@ -56,6 +60,8 @@ var world: ELAdventureScene
 var camera: Camera3D
 ## Ground point the map is heard from (the camera target).
 var listener := Vector3.ZERO
+## The camera's view direction; placed sounds pan by their angle to it.
+var listener_forward := Vector3.FORWARD
 var effects: ELAdventureEffects
 var show_blazons := true
 var ambient_on := true
@@ -110,6 +116,7 @@ func apply(values: Dictionary) -> void:
 	_volumes = values
 	if _blazon_layer != null: _blazon_layer.visible = show_blazons
 	if not ambient_on: _stop_ambience()
+	ELAudio.positional_bus(bool(values.get("audio_reverse", false)))
 
 func _state_event(_data: Dictionary) -> void:
 	_dirty = true
@@ -190,7 +197,22 @@ static func spec_effect(item: Dictionary, row: Dictionary) -> String:
 static func distance_gain(distance: float) -> float:
 	if distance <= SOUND_NEAR: return 1.0
 	if distance >= SOUND_FAR: return 0.0
-	return SOUND_NEAR / distance
+	return 1.0 - (distance - SOUND_NEAR) / (SOUND_FAR - SOUND_NEAR)
+
+## A free panned bus for a placed building sound.
+func _placed_bus() -> StringName:
+	var used: Array = []
+	for player: AudioStreamPlayer in _one_shots: used.append(player.bus)
+	for uid: int in sounding:
+		if sounding[uid].cycle is AudioStreamPlayer: used.append(sounding[uid].cycle.bus)
+	var slot := 0
+	while used.has(StringName("Positional Map %d" % slot)): slot += 1
+	return ELAudio.pan_bus("Map %d" % slot, bool(settings.values.get("audio_reverse", false)) if settings != null else false)
+
+func _place(player: AudioStreamPlayer, at: Vector3) -> void:
+	var pan := ELAudio.stereo_pan(listener, listener_forward, at)
+	player.set_meta("pan", pan)
+	ELAudio.set_pan(player.bus, pan)
 
 func _object_position(item: Dictionary, row: Dictionary) -> Vector3:
 	var uid := int(item.uid)
@@ -301,6 +323,13 @@ func _ambience_db() -> float:
 func _ground_distance(at: Vector3) -> float:
 	return Vector2(at.x - listener.x, at.z - listener.z).length()
 
+## A building's figure started a use clip (the runestone barrier's "uinstant"):
+## its Buildings/<folder>/<sound>.wav at the building, within hearing range.
+func building_used(uid: int, sound: String) -> void:
+	var entry: Dictionary = sounding.get(uid, {})
+	if not entry.is_empty() and _ground_distance(entry.position) < SOUND_FAR:
+		_play_one_shot("Buildings/%s/%s.wav" % [entry.folder, sound], entry.position)
+
 ## A building's idle animation came round: its Idle00 sound and Idle effect.
 func _idle_round(clip: String, uid: int) -> void:
 	if clip != "cidle": return
@@ -330,10 +359,12 @@ func _play_one_shot(path: String, at: Vector3) -> void:
 		if _one_shots.size() >= MAX_ONE_SHOTS: return
 		player = AudioStreamPlayer.new()
 		add_child(player)
+		player.bus = _placed_bus()
 		_one_shots.append(player)
 	player.stream = stream
 	player.set_meta("at", at)
 	player.volume_db = _effects_db() + linear_to_db(maxf(0.0001, distance_gain(_ground_distance(at))))
+	_place(player, at)
 	player.play()
 	_note(path)
 
@@ -356,7 +387,9 @@ func _process(delta: float) -> void:
 		_spec_clock = 0.0
 		_update_spec_effects()
 	for player: AudioStreamPlayer in _one_shots:
-		if player.playing: player.volume_db = _effects_db() + linear_to_db(maxf(0.0001, distance_gain(_ground_distance(player.get_meta("at", listener)))))
+		if player.playing:
+			player.volume_db = _effects_db() + linear_to_db(maxf(0.0001, distance_gain(_ground_distance(player.get_meta("at", listener)))))
+			_place(player, player.get_meta("at", listener))
 	_clock += delta
 	while _clock >= STEP:
 		_clock -= STEP
@@ -377,8 +410,10 @@ func _update_cycles() -> void:
 			loop.loop_end = int(loop.get_length() * loop.mix_rate)
 			var player := AudioStreamPlayer.new()
 			add_child(player)
+			player.bus = _placed_bus()
 			player.stream = loop
 			player.volume_db = _effects_db() + linear_to_db(maxf(0.0001, distance_gain(distance)))
+			_place(player, entry.position)
 			player.play()
 			entry.cycle = player
 			_note("Buildings/%s/cycle.wav" % entry.folder)
@@ -387,7 +422,9 @@ func _update_cycles() -> void:
 				entry.cycle.stop()
 				entry.cycle.queue_free()
 				entry.cycle = null
-			else: entry.cycle.volume_db = _effects_db() + linear_to_db(maxf(0.0001, distance_gain(distance)))
+			else:
+				entry.cycle.volume_db = _effects_db() + linear_to_db(maxf(0.0001, distance_gain(distance)))
+				_place(entry.cycle, entry.position)
 
 func _update_spec_effects() -> void:
 	for uid: int in spec_effects:
@@ -444,6 +481,14 @@ func _ambient_step() -> void:
 			if stream != null and ambient_players.size() < MAX_ONE_SHOTS:
 				var player := AudioStreamPlayer.new()
 				add_child(player)
+				# Full volume at a random pan of -100..100.
+				var used: Array = ambient_players.map(func(other: AudioStreamPlayer) -> StringName: return other.bus)
+				var slot := 0
+				while used.has(StringName("Positional Ambience %d" % slot)): slot += 1
+				player.bus = ELAudio.pan_bus("Ambience %d" % slot, bool(_volumes.get("audio_reverse", false)))
+				var pan := (random.randi_range(0, 200) - 100) / 100.0
+				player.set_meta("pan", pan)
+				ELAudio.set_pan(player.bus, pan)
 				player.stream = stream
 				player.volume_db = _ambience_db()
 				player.finished.connect(_ambient_finished.bind(player))

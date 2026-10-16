@@ -42,7 +42,7 @@ func build(owner: ELSecondAdventureHud) -> void:
 	hint = Label.new()
 	hint.name = "LoseBattle_Text1"
 	hint.text = hud.text(str(row.get("Text", "")))
-	hint.add_theme_font_override("font", hud.serif_bold)
+	hint.add_theme_font_override("font", hud.face_bold)
 	hint.add_theme_font_size_override("font_size", int(row.get("FontSize", 18)))
 	hint.add_theme_color_override("font_color", Color("d6bb88"))
 	hint.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.85))

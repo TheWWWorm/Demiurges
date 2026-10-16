@@ -159,7 +159,8 @@ static func decode(raw: Variant) -> Variant:
 			for key: String in ["opponent_face", "opponent_level", "opponent_life", "life_before", "life_after", "level_before", "level_after", "experience"]:
 				if not _integer(entry.get(key), -1, 10000000): return null
 				entry[key] = int(entry[key])
-			if not entry.get("loot") is Array: return null
+			if not ELSecondLoot.valid(entry.get("loot")): return null
+			entry.loot = entry.loot.map(func(item: Array) -> Array: return [str(item[0]), int(item[1])])
 		result.append(entry)
 	return result
 

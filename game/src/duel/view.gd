@@ -17,6 +17,15 @@ var homes: Dictionary = {}
 var ui: Control
 var header: HBoxContainer
 var hand: HBoxContainer
+## Right-button strip preview (see _right_button).
+var strip_preview := -1
+var right_down := false
+var right_from := Vector2.ZERO
+## The original list look for hand and artifact slots (ELListLook) and the
+## layer behind the card rail that shows the frame tile in its empty slots.
+var list_look: ELListLook
+var list_look_profile: ELProfile
+var hand_frames: Control
 var status: Label
 var phase_label: Label
 var hero_buttons: Array[Button] = []
@@ -30,6 +39,12 @@ var auto_combat := false
 var hot_side := -1
 var hot_pending := false
 var auto_button: ELCutPartButton
+## The original game-menu button, top right: the first game's Options wrench
+## (DisconnectButton art) or the second game's Esc-menu button. Right-click
+## opens the remake menu. Without original art the text button stands in.
+var game_menu_button: ELCutPartButton
+var menu_button: Button
+const GAME_MENU_ART := {"el1": ["DisconnectButton", Rect2(740, 279, 52, 49)], "el2": ["AdvPanelOptionsBtn", Rect2(595, 549, 56, 40)]}
 var auto_off_button: ELCutPartButton
 var profile_select: OptionButton
 var mode_select: OptionButton
@@ -37,6 +52,10 @@ var log_text: RichTextLabel
 var logs: Array[String] = []
 var notice: Label
 var selection := -1
+## Hand rail cards seen at the last refresh ("side:key:card"), for the drop-in.
+var _rail_seen := {}
+var _rail_seen_side := -1
+var _rail_seen_duel: WeakRef = null
 var selection_power := 0
 ## The original X choice in the combat panel (ManaOk / ManaCancel /
 ## IncreaseMana / DecreaseMana); `power_amount` is its value.
@@ -69,9 +88,16 @@ var card_scroll: ScrollContainer
 var camera_yaw := -0.38
 var camera_pitch := 0.7
 var camera_distance := 24.0
+## The orbit's centre; the original's default view sets it with the angles.
+var camera_target := Vector3(0, 0.6, -0.5)
+const PITCH_LIMITS := Vector2(0.3, 1.05)
+const DISTANCE_LIMITS := Vector2(15, 40)
 var orbiting := false
 ## Options AutoCamera: authored close-ups of casts, fights and the winner.
 var auto_camera: ELAutoCamera
+## Height above a framed figure's feet that the automatic camera keeps on screen.
+const FRAMED_HEIGHT := 0.7
+const EffectTable := preload("res://src/duel/combat_sound_table.gd")
 ## The current fight already had its chance of a close-up.
 var fight_shot := false
 var setup_panel: ELDuelSetup
@@ -91,8 +117,24 @@ var blood: ELCombatBlood
 ## Spell and summon particle effects (Effects.xml) of the running battle.
 var effects: ELCombatEffects
 ## The cast whose effects start once its action has resolved:
-## {card, side, target, affected: figure ids the action touched}.
+## {card, side, target, affected: figure ids the action touched, hit: seconds
+## until the figures it hits react, artifact: used from an artifact}.
 var _effect_cast: Dictionary = {}
+## An ability's hit can wait for its own MonstersHit cue. RNST affects the
+## opposing army, so the scope may hold several creature ids. The action's
+## events remain synchronous; deferred hit timers retain their own data.
+var _ability_hit: Dictionary = {}
+## The EL2 damage reducer starts BlueFeedback on the protected hero before
+## the reflected hit lands on the opposite hero.
+## Like ability hit cues, this scopes only synchronous presentation events.
+var _feedback_hit: Dictionary = {}
+## EL2 BlackRedirect's authored Monster Hit cue (frame 25) belongs to the
+## creature(s) absorbing the hero's damage, not to the protected hero.
+var _redirect_hit: Dictionary = {}
+## Hit reactions waiting for their effect's cue frame, per figure id; the
+## serial drops reactions of an earlier battle.
+var _hits_waiting: Dictionary = {}
+var _hit_serial := 0
 ## Live floating captions per figure, stacked so they never overlap.
 var _floating: Dictionary = {}
 var campaign_setup: ELCampaignSetup
@@ -104,6 +146,11 @@ var movie_layer: CanvasLayer
 var movie_player: ELMoviePlayer
 ## Original Duel mode match in progress (ELDuelMatch); null outside it.
 var duel_match: ELDuelMatch
+## Plays combat resolution blow by blow (ELMeleePlayback); lives with the stage.
+var melee: ELMeleePlayback
+var front_line: Array[int] = []
+## The Duel mode match's report (option VisualLog), or null.
+var duel_report: ELDuelReport
 var match_round_recorded := false
 var match_clock := 0.0
 var _match_starting := false
@@ -121,6 +168,9 @@ var match_recording: ELDuelRecording
 var replay_player: ELDuelReplayPlayer
 var replay_panel: ELCombatTutorialPanel
 var replay_quit: ConfirmationDialog
+## The replay player's Inventory screen (RoundEndDuelScreen) and the hero it shows.
+var replay_inventory: ELRoundEndDuelView
+var replay_inventory_side := -1
 ## Seconds the finished round stays on screen before its result panel.
 const ROUND_RESULT_DELAY := 1.6
 ## Original cursors (ELCursors): the character under the pointer when the
@@ -136,9 +186,15 @@ var _control_tips: Dictionary = {}
 var cursor_name := ""
 
 func _ready() -> void:
+	# The window close button quits through ELAudio.quiet_quit (only when
+	# this is the running game, not a scripted check).
+	if get_tree().current_scene == self: get_tree().auto_accept_quit = false
 	# The public name; the project name keeps the existing user-data folder.
 	if get_tree().current_scene == self: get_window().title = "Demiurges"
 	settings.load_file()
+	# Touch gestures and the touch bar; inactive without a touch screen.
+	add_to_group("touch_camera")
+	add_child(ELTouchInput.new())
 	# Options gamma over every screen (front end, map, battle, movies).
 	var gamma := ELGammaLayer.new()
 	gamma.settings = settings
@@ -196,13 +252,11 @@ func _exit_tree() -> void:
 ## Android Back acts as Esc (close a window, cancel, open the game menu);
 ## the project does not quit on it.
 func _notification(what: int) -> void:
+	if what == NOTIFICATION_WM_CLOSE_REQUEST and not get_tree().auto_accept_quit:
+		ELAudio.quiet_quit(get_tree())
+		return
 	if what != NOTIFICATION_WM_GO_BACK_REQUEST: return
-	for pressed: bool in [true, false]:
-		var key := InputEventKey.new()
-		key.keycode = KEY_ESCAPE
-		key.physical_keycode = KEY_ESCAPE
-		key.pressed = pressed
-		Input.parse_input_event(key)
+	ELTouchInput.tap_key(KEY_ESCAPE)
 
 func _load_profiles() -> void:
 	var config := {}
@@ -224,7 +278,7 @@ func _load_profiles() -> void:
 			profiles[edition] = data
 		else:
 			push_warning(data.error)
-	# Browser and Android: editions the player imported on this device.
+	# Editions the player imported on this device (installer or data pack).
 	var imported := ELContentLibrary.managed_roots()
 	for edition: String in imported:
 		if profiles.has(edition): continue
@@ -239,7 +293,9 @@ func _start(edition: String, options: Dictionary = {}, restored: ELDuel = null, 
 		_notice("Finish or surrender the campaign battle first.")
 		return
 	# Any battle not started by the Duel mode match ends that match.
-	if not _match_starting: duel_match = null
+	if not _match_starting:
+		duel_match = null
+		_drop_duel_report()
 	if combat_tutorial != null and (restored == null or restored != combat_tutorial.duel): _close_combat_tutorial()
 	if replay_player != null and (restored == null or restored != replay_player.duel): _close_replay()
 	if esc_menu != null: esc_menu.hide()
@@ -248,6 +304,8 @@ func _start(edition: String, options: Dictionary = {}, restored: ELDuel = null, 
 		_notice(next_duel.error)
 		return
 	if setup_panel != null: setup_panel.hide()
+	if is_instance_valid(melee): melee.abort()
+	melee = null
 	if stage != null:
 		remove_child(stage)
 		stage.queue_free()
@@ -283,7 +341,12 @@ func _start(edition: String, options: Dictionary = {}, restored: ELDuel = null, 
 	effects = ELCombatEffects.new()
 	stage.add_child(effects)
 	effects.build(profile)
+	effects.set_scene(arena.light, arena.environment_settings)
 	_effect_cast = {}
+	_feedback_hit.clear()
+	_redirect_hit.clear()
+	_hits_waiting.clear()
+	_hit_serial += 1
 	battle_audio = ELBattleAudio.new()
 	stage.add_child(battle_audio)
 	battle_audio.build(profile, arena.definition, settings.values)
@@ -292,9 +355,9 @@ func _start(edition: String, options: Dictionary = {}, restored: ELDuel = null, 
 	stage.add_child(camera)
 	camera.fov = ELAutoCamera.VIEW_FOV
 	camera.current = true
-	auto_camera = null
-	_update_camera()
+	battle_audio.listener = camera
 	auto_camera = ELAutoCamera.new(profile, battle_seed)
+	_default_view()
 	fight_shot = false
 	for side in 2:
 		var model := ELModel.new()
@@ -305,7 +368,7 @@ func _start(edition: String, options: Dictionary = {}, restored: ELDuel = null, 
 		var directory := "Creatures/" if combatant.get("kind", "hero") == "monster" else "Heroes/"
 		if not model.build(profile, hero.Model, directory + hero.Texture, directory + hero.Texture2 if hero.has("Texture2") else ""):
 			push_error(model.error)
-		model.position = Vector3(-6.5 if side == 0 else 6.5, 0, -1.4)
+		model.position = ELMeleePlayback.hero_position(side)
 		model.set_meta("sound_directory", hero.get("SndDir", ""))
 		model.set_meta("skin_sound", hero.get("SkinSndType", ""))
 		# Hero figures (he* models) speak their hits and casts from voice/.
@@ -329,6 +392,10 @@ func _start(edition: String, options: Dictionary = {}, restored: ELDuel = null, 
 	auto_button.build(profile, "CombatMenu3", Rect2(619, 542, 47, 49))
 	auto_off_button.build(profile, "AutoCombatOff", Rect2(735, 10, 45, 44), "Type1")
 	auto_off_button.visible = false
+	var art: Array = GAME_MENU_ART.get(profile.id, [])
+	if not art.is_empty(): game_menu_button.build(profile, art[0], art[1])
+	game_menu_button.visible = not art.is_empty() and game_menu_button.has_art()
+	menu_button.visible = not game_menu_button.visible
 	rail.build(profile)
 	if power_dialog != null: power_dialog.build(profile)
 	_layout_hud()
@@ -347,11 +414,44 @@ func _start(edition: String, options: Dictionary = {}, restored: ELDuel = null, 
 	selection_ring.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	stage.add_child(selection_ring)
 	selection_ring.hide()
+	front_line = []
+	melee = ELMeleePlayback.new()
+	melee.view = self
+	stage.add_child(melee)
 	duel.changed.connect(_refresh)
 	duel.event.connect(_event)
 	profile_select.select(0 if edition == "el1" else 1)
 	_notice("Select a spell or a ready creature. Right-drag to orbit · Wheel to zoom · R resets the camera." if helper_overlay() else "")
 	_refresh()
+	# EL1 resolves global spells before models or the event listener
+	# exist. Replay their original battle-opening effects after the figures
+	# are ready, never on a loaded battle. LGWR strikes the opponent; HSTL
+	# creates the owner's HOAM enchantment (original HOAM PosEnchantment).
+	# FRGF casts a Tree Snake through the original opening spell factory; its
+	# normal TRSN GreenSummon effect was also lost before view subscription.
+	if restored == null and edition == "el1":
+		for entry: Dictionary in duel.history:
+			if entry.get("kind") != "global_spell": continue
+			var recipient := -1
+			var effect := ""
+			match str(entry.get("spell", "")):
+				"LGWR":
+					recipient = 1 - int(entry.side)
+					effect = "RedLightning"
+				"HSTL":
+					recipient = int(entry.side)
+					effect = "PosEnchantment"
+				"FRGF":
+					for event_entry: Dictionary in duel.history:
+						if event_entry.get("kind") != "summon": continue
+						var creature: Dictionary = event_entry.get("creature", {})
+						if str(creature.get("card", "")) != "TRSN" or int(creature.get("owner", -1)) != int(entry.side): continue
+						recipient = int(creature.get("id", -1))
+						effect = "GreenSummon"
+						break
+			if not effect.is_empty() and models.has(recipient):
+				battle_audio.effect(effect)
+				_figure_effect(effect, recipient)
 
 func _process(delta: float) -> void:
 	elapsed += delta
@@ -362,20 +462,20 @@ func _process(delta: float) -> void:
 		return
 	if duel != null:
 		ai_clock += delta
-		if duel_match != null and duel.phase == ELDuel.Phase.FINISHED: _watch_match_round(delta)
+		if duel_match != null and duel.phase == ELDuel.Phase.FINISHED and not _melee_busy(): _watch_match_round(delta)
 		if replay_player != null:
 			# A duel replay plays its recorded actions at the battle's pace.
-			if replay_player.playing and duel == replay_player.duel and not _overlay_open() and ai_clock >= 0.85:
+			if replay_player.playing and duel == replay_player.duel and not _overlay_open() and not _melee_busy() and ai_clock >= 0.85:
 				ai_clock = 0.0
 				replay_player.step()
 		elif combat_tutorial != null:
 			# The computer side replays its recorded commands.
-			if duel.phase != ELDuel.Phase.FINISHED and not _overlay_open() and ai_clock >= 0.85 and combat_tutorial.opponent_due():
+			if duel.phase != ELDuel.Phase.FINISHED and not _overlay_open() and not _melee_busy() and ai_clock >= 0.85 and combat_tutorial.opponent_due():
 				ai_clock = 0.0
 				combat_tutorial.step_opponent()
-		elif duel.phase != ELDuel.Phase.FINISHED and not _overlay_open() and ai_clock >= 0.85 and (demo or (mode_select.selected == 0 and duel.active_side() == 1 and not _hot_seat()) or (auto_combat and _human_side())):
+		elif duel.phase != ELDuel.Phase.FINISHED and not _overlay_open() and not _melee_busy() and ai_clock >= 0.85 and (demo or (mode_select.selected == 0 and duel.active_side() == 1 and not _hot_seat()) or (auto_combat and _human_side())):
 			ai_clock = 0.0
-			# Without "use spells", auto combat spends no hero abilities or spell charges.
+			# Without "use spells", auto combat uses no artifacts or spell charges (hero abilities stay).
 			var auto := auto_combat and _human_side() and not demo
 			ELPracticeAI.step(duel, auto and not bool(settings.values.get("use_spells", true)))
 		_step_auto_camera(delta)
@@ -387,7 +487,7 @@ func _process(delta: float) -> void:
 				continue
 			var label: Label3D = labels[id]
 			var model: ELModel = models[id]
-			var top := model.position + Vector3(0, _figure_height(model), 0)
+			var top := _numbers_point(model)
 			if id < 2:
 				# The hero panels show health; the floating readout is helper-only.
 				label.text = "%d HP" % duel.heroes[id].health if helper_overlay() else ""
@@ -432,11 +532,14 @@ func _process(delta: float) -> void:
 			var report := FileAccess.open(output.get_basename() + ".json", FileAccess.WRITE)
 			report.store_string(JSON.stringify({"state": duel.snapshot(), "events": duel.history,
 				"models": models.size(), "profile_assets_read": profile.asset_reads}, "\t"))
-		get_tree().quit()
+		ELAudio.quiet_quit(get_tree())
 
 func _input(event: InputEvent) -> void:
 	# A move that a panel takes never reaches _unhandled_input: no character.
 	if event is InputEventMouseMotion: combat_hover = -1
+	# A release over a panel still ends the preview and the turn.
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT and not event.pressed and right_down and duel != null:
+		_right_button(event)
 
 func _unhandled_input(event: InputEvent) -> void:
 	if duel == null:
@@ -455,7 +558,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			_close_esc_menu()
 			return
 		if event.keycode == KEY_ESCAPE and _wants_esc_menu():
-			_open_esc_menu()
+			_open_game_menu()
 			return
 		if event.keycode == KEY_ESCAPE:
 			selection = -1
@@ -471,10 +574,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		elif event.keycode == KEY_SPACE and (_human_turn() or ((_campaign_battle() != null or duel_match != null or combat_tutorial != null) and duel.phase == ELDuel.Phase.FINISHED and not _overlay_open())):
 			_end_phase()
 		elif event.keycode == KEY_R:
-			camera_yaw = -0.38
-			camera_pitch = 0.7
-			camera_distance = 24
-			_update_camera()
+			_default_view()
 		elif event.keycode == KEY_L:
 			log_text.visible = not log_text.visible
 		# The second game's radio tooltips name A and H as their keys.
@@ -488,13 +588,14 @@ func _unhandled_input(event: InputEvent) -> void:
 	if _overlay_open(): return
 	if event is InputEventMouseButton:
 		if event.button_index == MOUSE_BUTTON_RIGHT:
-			orbiting = event.pressed
+			_right_button(event)
 		elif event.pressed and event.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN]:
-			camera_distance = clampf(camera_distance + (-1.3 if event.button_index == MOUSE_BUTTON_WHEEL_UP else 1.3), 15, 33)
+			camera_distance = clampf(camera_distance + (-1.3 if event.button_index == MOUSE_BUTTON_WHEEL_UP else 1.3), DISTANCE_LIMITS.x, DISTANCE_LIMITS.y)
 			_update_camera()
+	if event is InputEventMouseMotion and right_down: _right_button(event)
 	if event is InputEventMouseMotion and orbiting:
 		camera_yaw -= event.relative.x * 0.006
-		camera_pitch = clampf(camera_pitch + event.relative.y * 0.005, 0.42, 1.05)
+		camera_pitch = clampf(camera_pitch + event.relative.y * 0.005, PITCH_LIMITS.x, PITCH_LIMITS.y)
 		_update_camera()
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT and _human_turn():
 		var nearest := _character_at(event.position)
@@ -535,14 +636,53 @@ func _update_cursor() -> void:
 	cursor_name = wanted
 	ELCursorDriver.request(profile, wanted)
 
+## Touch gestures (remake addition) with the mouse camera's limits: one
+## finger turns as a right drag does, two fingers turn, tilt and zoom.
+func touch_camera_ready() -> bool:
+	return duel != null and camera != null and camera.current and not _overlay_open() and not (campaign_view != null and campaign_view.visible)
+
+func touch_pan(from: Vector2, to: Vector2) -> void:
+	touch_orbit(-(to.x - from.x) * 0.006, (to.y - from.y) * 0.005)
+
+func touch_orbit(turn: float, tilt: float) -> void:
+	camera_yaw += turn
+	camera_pitch = clampf(camera_pitch + tilt, PITCH_LIMITS.x, PITCH_LIMITS.y)
+	_update_camera()
+
+func touch_zoom(factor: float) -> void:
+	camera_distance = clampf(camera_distance / factor, DISTANCE_LIMITS.x, DISTANCE_LIMITS.y)
+	_update_camera()
+
+func touch_bar_keys() -> Array:
+	return [["Camera", KEY_R]]
+
 ## The player's own view; any manual camera change ends an automatic close-up.
 func _update_camera() -> void:
 	if auto_camera != null: auto_camera.stop()
 	camera.fov = ELAutoCamera.VIEW_FOV
 	_place_orbit()
 
+## The player's standing view: the original Default1 view (AutoCameraView 0)
+## from the player's side; the remake's orbit, zoom and R start from it.
+func _default_view() -> void:
+	var original: Dictionary = auto_camera.default_view() if auto_camera != null else {}
+	if original.is_empty(): original = {"target": Vector3(0, 0.6, -0.5), "yaw": -0.38, "pitch": 0.7, "distance": 24.0}
+	camera_target = original.target
+	camera_yaw = original.yaw
+	camera_pitch = clampf(original.pitch, PITCH_LIMITS.x, PITCH_LIMITS.y)
+	camera_distance = clampf(original.distance, DISTANCE_LIMITS.x, DISTANCE_LIMITS.y)
+	_update_camera()
+
+## A saved orbit, when the save has one; otherwise the default view stays.
+func _restore_orbit(saved: Array) -> void:
+	if saved.size() != 3: return
+	camera_yaw = saved[0]
+	camera_pitch = saved[1]
+	camera_distance = saved[2]
+	_update_camera()
+
 func _place_orbit() -> void:
-	var target := Vector3(0, 0.6, -0.5)
+	var target := camera_target
 	camera.position = target + Vector3(sin(camera_yaw) * cos(camera_pitch), sin(camera_pitch), cos(camera_yaw) * cos(camera_pitch)) * camera_distance
 	camera.look_at(target)
 	arena.clear_camera_view(camera.position, target)
@@ -768,7 +908,7 @@ func _cancel_power() -> void:
 	_refresh()
 
 func _human_turn() -> bool:
-	return duel != null and replay_player == null and not demo and not auto_combat and not _overlay_open() and duel.phase != ELDuel.Phase.FINISHED and _human_side() and not hot_pending
+	return duel != null and replay_player == null and not demo and not auto_combat and not _overlay_open() and duel.phase != ELDuel.Phase.FINISHED and _human_side() and not hot_pending and not _melee_busy()
 
 # --- Hot seat (MultiplayerStart -> HotSeat) -----------------------------------
 
@@ -854,7 +994,24 @@ func _end_phase() -> void:
 	selected_creature = -1
 	ai_clock = 0.0
 	ability_selection.clear()
-	if not duel.end_phase(): _hint(duel.error)
+	# Both original editions have separate own-attack declaration shots when
+	# the player commits the group, not on every selection/recall click.
+	# It leaves the first actual strike's AttackCombat shot untouched.
+	var own_attack_side := int(duel.attacker)
+	var own_attack_middle := Vector3.ZERO
+	var own_attack_count := 0
+	var own_attack_slots: Array[int] = []
+	if profile.id in ["el1", "el2"] and duel.phase == ELDuel.Phase.ATTACK and _local_side(own_attack_side):
+		for id: int in duel.attacks:
+			if models.has(id):
+				own_attack_middle += models[id].position
+				own_attack_count += 1
+				own_attack_slots.append(int(models[id].get_meta("slot", 0)))
+	if not duel.end_phase():
+		_hint(duel.error)
+	elif own_attack_count > 0 and _auto_camera_on():
+		auto_camera.attack_own(own_attack_side, own_attack_middle / own_attack_count,
+			int(settings.values.get("auto_camera_dynamics", 50)), own_attack_slots)
 
 func _spawn_creature(c: Dictionary) -> void:
 	var original: Dictionary = profile.table("CombatCreatures")[c.card]
@@ -867,7 +1024,6 @@ func _spawn_creature(c: Dictionary) -> void:
 	model.set_meta("attack_sound", original.get("AttackSndType", ""))
 	model.set_meta("skin_sound", original.get("SkinSndType", ""))
 	model.set_meta("blood", original.get("Blood", ""))
-	model.rotation.y = _facing(c.owner)
 	var occupied: Array[int] = []
 	for other: int in models:
 		if other >= 2 and duel.creatures.has(other) and duel.creatures[other].owner == c.owner:
@@ -875,24 +1031,98 @@ func _spawn_creature(c: Dictionary) -> void:
 	var slot := 0
 	while occupied.has(slot): slot += 1
 	model.set_meta("slot", slot)
-	# The presentation has two ranks; combat ordering lives only in ELDuel.
-	model.position = Vector3((-3.2 if c.owner == 0 else 3.2) + (slot / 5) * (1.9 if c.owner == 0 else -1.9), 0, -4.6 + (slot % 5) * 2.1)
+	# The original's arc of home slots; combat ordering lives only in ELDuel.
+	model.position = ELMeleePlayback.slot_position(int(c.owner), slot, ELMeleePlayback.Line.HOME)
 	model.position.y = arena.ground_height(model.position.x, model.position.z)
+	# A new creature faces the centre of the arena.
+	model.rotation.y = atan2(-model.position.x, -model.position.z)
 	models[c.id] = model
 	homes[c.id] = model.position
 	model.animation_finished.connect(_animation_done.bind(c.id))
 	if is_instance_valid(effects): effects.attach(model)
 	_add_label(c.id)
 
+## Declared attackers step out to their front-line slots; withdrawn ones
+## walk back. Once blows are shown the playback brings everyone home.
+func _step_front_line() -> void:
+	if not is_instance_valid(melee): return
+	var declared: Array[int] = []
+	if not melee.busy() and duel.phase != ELDuel.Phase.FINISHED: declared.assign(duel.attacks)
+	if not melee.busy():
+		for id: int in declared:
+			if not front_line.has(id): melee.step_out(id)
+		for id: int in front_line:
+			if not declared.has(id): melee.step_back(id)
+	front_line = declared
+
+## Combat playback (ELMeleePlayback): true while blows are still being shown.
+func _melee_busy() -> bool:
+	return is_instance_valid(melee) and melee.busy()
+
 func _event(data: Dictionary) -> void:
+	# Blows and what follows them wait for the combat playback.
+	if is_instance_valid(melee) and melee.capture(data): return
 	if not _effect_cast.is_empty():
+		if profile.id == "el1" and _effect_cast.card == "FRNT" and data.kind == "fury_result":
+			_effect_cast.fury_attempts = int(data.get("attempts", 0))
+			_effect_cast.fury_attacker = int(data.get("attacker", duel.attacker))
+		if profile.id == "el2" and _effect_cast.card == "FRNT" and data.kind == "fury_result":
+			_effect_cast.fury_deaths = int(data.get("deaths", 0))
+			_effect_cast.fury_recipient = int(data.get("target", 1 - int(_effect_cast.side)))
+		if profile.id in ["el1", "el2"] and _effect_cast.card == "FOGG" and data.kind == "fog_creature_cue":
+			_effect_cast.fog_targets.append(int(data.target))
+		if profile.id in ["el1", "el2"] and _effect_cast.card == "FRST":
+			if data.kind == "firestorm_victim_cue":
+				_effect_cast.firestorm_targets.append(int(data.target))
+			elif data.kind == "firestorm_channel_cue":
+				_effect_cast.firestorm_loss = int(data.get("amount", 0)) < 0 and int(data.get("side", -1)) == int(_effect_cast.side)
+		if profile.id in ["el1", "el2"] and _effect_cast.card == "FRWA" and data.kind == "fire_wave_victim_cue":
+			_effect_cast.fire_wave_targets.append(int(data.target))
+		if profile.id in ["el1", "el2"] and _effect_cast.card == "LGST" and data.kind in ["lightning_storm_damage_cue", "lightning_storm_bless_cue"]:
+			_effect_cast.lightning_sites.append({"target": int(data.target), "blessed": data.kind == "lightning_storm_bless_cue"})
+		if profile.id in ["el1", "el2"] and _effect_cast.card == "WNFL" and data.kind == "winds_flame_victim_cue":
+			_effect_cast.winds_flame_targets.append(int(data.target))
+		if profile.id == "el2" and _effect_cast.card == "SNOV" and data.kind == "supernova_channel_cue":
+			_effect_cast.supernova_loss = int(data.get("amount", 0)) == -1 and int(data.get("side", -1)) == int(_effect_cast.side)
+		if profile.id == "el1" and _effect_cast.card == "SNOV" and data.kind == "supernova_global_cue":
+			_effect_cast.supernova_global = int(data.get("side", -1)) == int(_effect_cast.side)
+		if profile.id in ["el1", "el2"] and _effect_cast.card == "ANHL" and data.kind in ["annihilation_creature_cue", "annihilation_hero_cue"]:
+			_effect_cast.annihilation_sites.append(int(data.target))
+		if profile.id in ["el1", "el2"] and _effect_cast.card in ["CRHG", "RVHG"] and data.kind == "hunger_victim_cue":
+			_effect_cast.hunger_sites.append(int(data.target))
+		# Both original Tap Life callbacks (EL1, EL2)
+		# skip their life-line/rune cues if damage failed, e.g. Feedback.
+		# The untagged caster heal occurs only after successful damage;
+		# unrelated ability/revival heals carry a card or spec field.
+		if profile.id in ["el1", "el2"] and _effect_cast.card == "TPLF" and data.kind == "heal" and int(data.get("target", -1)) == int(_effect_cast.side) and not data.has("card") and not data.has("spec"):
+			_effect_cast.tap_life_landed = true
+			# The original DrainLife sound belongs to a successful hit, not the
+			# earlier cast event. Play when that hit's heal is confirmed.
+			if profile.id in ["el1", "el2"] and models.has(int(_effect_cast.side)) and models.has(1 - int(_effect_cast.side)):
+				battle_audio.spell("TPLF", models[int(_effect_cast.side)],
+					models[1 - int(_effect_cast.side)])
 		var touched := int(data.creature.id) if data.kind == "summon" else int(data.get("target", -1))
 		if data.kind in ["summon", "damage", "heal", "enchant", "disenchant", "death", "plane"] and touched >= 0 and not _effect_cast.affected.has(touched):
 			_effect_cast.affected.append(touched)
+		# A later action in the same frame no longer waits for the cast's cue.
+		if data.kind in ["strike", "phase", "ability", "combat_ability"]: _effect_cast.hit = 0.0
 	match data.kind:
 		"summon":
 			var c: Dictionary = data.creature
 			_spawn_creature(c)
+			# In both original editions Tree Snake GreenSummon's Target is the
+			# newly created creature, which exists only after the cast event.
+			# Queue its own WAV here instead of at the earlier hero cast.
+			if profile.id in ["el1", "el2"] and _effect_cast.get("card", "") == "TRSN" and str(c.card) == "TRSN" and models.has(c.id):
+				battle_audio.spell("TRSN", models.get(int(c.owner)), models[c.id])
+			# Original figures in both editions may have their own usummon clip,
+			# CreaturesPFX/<model>/summon.pfx and SndDir/Summon.wav, distinct
+			# from the casting hero's voice and the colour summon effects.
+			# Do not replay an entrance when rebuilding models from a save.
+			if profile.id in ["el1", "el2"] and models.has(c.id):
+				var summoned: ELModel = models[c.id]
+				if summoned.has_clip("usummon") and summoned.play("usummon"):
+					battle_audio.unit(summoned, "summon")
 			_log("%s summons %s." % [_side_name(c.owner), duel.card_name(c.card)])
 		"cast":
 			var animation := "usummon" if duel.is_summon(data.card) else ("uenchantment" if ELCatalog.rule(profile, data.card).get("effect") == "enchant" else "uinstant")
@@ -900,27 +1130,340 @@ func _event(data: Dictionary) -> void:
 			if not bool(settings.values.get("hide_cast", false)): models[data.side].play(animation)
 			# The caster's own sound follows its cast animation; the card's effects start with it.
 			battle_audio.unit(models[data.side], animation.trim_prefix("u"))
-			battle_audio.spell(data.card)
+			# Original EL1 Fury registers GreenDamage only after it counts at
+			# least one attempted creature hit. Its sound follows that cue too.
+			if profile.id == "el1" and data.card == "FRNT":
+				battle_audio.effect("GreenForceNature", models[data.side] if models.has(data.side) else null)
+			elif profile.id == "el2" and data.card == "FRNT":
+				# Original EL2 Draw is absent when Fury destroys no creature.
+				# Queue its original audio alongside the conditional particle.
+				battle_audio.effect("GreenForceNature", models[data.side] if models.has(data.side) else null)
+			elif profile.id == "el1" and data.card == "ASLT":
+				# Original Assault@ has one unconditional caster
+				# PosSorcery; its other sounds belong to guarded army callbacks.
+				battle_audio.effect("PosSorcery")
+			elif profile.id in ["el1", "el2"] and data.card == "FLOD":
+				# EL1 Flood@ and EL2 Flood@ register a single
+				# caster NegEnchantment; guarded creature callbacks
+				# EL1@ and EL2@ own their CantUntap sounds.
+				battle_audio.effect("NegEnchantment")
+			elif profile.id == "el1" and data.card == "ERBN":
+				# EarthBondsEnchantment@ registers NegEnchantment
+				# at its enchanted creature; @ separately registers
+				# CantUntap for each creature of that holder's race.
+				battle_audio.effect("NegEnchantment")
+			elif profile.id == "el2" and data.card == "ERBN":
+				# Original EL2 EarthBondsEnchantment attach@ queues
+				# the chosen holder's NegEnchantment only; apply@
+				# requests the separate creature CantUntap sounds per race match.
+				battle_audio.effect("NegEnchantment")
+			elif profile.id == "el2" and data.card == "SMOK":
+				# Original SmokeEnchantment attach@ registers one
+				# caster NegEnchantment. Its separate guarded creature modifier
+				# @ requests CantUntap only for applicable figures.
+				battle_audio.effect("NegEnchantment")
+			elif profile.id == "el2" and data.card == "CNAR":
+				# Original CondensedAirEnchantment attach@ requests
+				# only caster NegEnchantment; the @ creature callback
+				# supplies individual CantUntap sounds for eligible flyers.
+				battle_audio.effect("NegEnchantment")
+			elif profile.id in ["el1", "el2"] and data.card == "MDBL":
+				# Both originals play their named FX/sound for each
+				# hero whose post-shield hand-size damage is positive.
+				pass
+			elif profile.id in ["el1", "el2"] and data.card == "FOGG":
+				# BlueFog is unconditional; the original CantAttack callback
+				# supplies one creature-bound cue/sound for each live figure.
+				battle_audio.effect("BlueFog")
+			elif profile.id == "el2" and data.card == "ENLH" and int(data.get("enlightenment_count", -1)) == 0:
+				# Original ENLH has no Discard/Draw sites if its hand is empty.
+				# The hero's own casting-gesture sound still plays above.
+				pass
+			elif profile.id in ["el1", "el2"] and data.card == "BRRL" and int(data.get("broken_reality_ether", 0)) <= 0:
+				# Both original callbacks bypass LoseMana and BlackDamage
+				# registrations for zero ether; the cast gesture still plays.
+				pass
+			elif profile.id in ["el1", "el2"] and data.card == "FRST":
+				# Both originals register Firestorm FX/audio at conditional
+				# wave/victim sites rather than an unconditional cast (X=0).
+				# EL2 alone adds the caster channel-loss effect.
+				pass
+			elif profile.id in ["el1", "el2"] and data.card == "FRWA":
+				# Both original Fire Waves play one caster Start wave and
+				# separate victim-bound damage effects/audio, not a generic
+				# sound on an empty opposing board.
+				pass
+			elif profile.id in ["el1", "el2"] and data.card == "LGST":
+				# Both original Lightning Storms branch per living creature: damage
+				# gets RedLightning, Storm Mastery rescue gets three positive
+				# stat effects. Neither is an unconditional cast sound.
+				pass
+			elif profile.id in ["el1", "el2"] and data.card == "WNFL":
+				# Both originals queue Fireball and FireballExpl for each
+				# affected flying creature, never a generic caster sound.
+				# X=0 and an empty eligible set have no named FX/audio.
+				pass
+			elif profile.id in ["el1", "el2"] and data.card == "SNOV":
+				# Both originals skip RedSuperNova for X=0; EL2 alone
+				# registers an additional LoseMana after channel payment.
+				# Neither named sound belongs to the unconditional cast.
+				pass
+			elif profile.id in ["el1", "el2"] and data.card == "ANHL":
+				# Both originals' per-creature/positive-opposing-hero registrations
+				# supply the original FX sound, not a generic once-per-cast cue.
+				pass
+			elif profile.id in ["el1", "el2"] and data.card in ["CRHG", "RVHG"]:
+				# Both originals queue one Hunger effect/sound per positive-power
+				# victim, not one unconditional caster sound.
+				pass
+			elif profile.id in ["el1", "el2"] and data.card == "GRUN":
+				# Both original GreaterUnsummon callbacks queue BlueDeath/Draw
+				# separately for EACH creature it actually returns, not once
+				# unconditionally at the casting hero.
+				pass
+			elif profile.id in ["el1", "el2"] and data.card == "DPGS":
+				# Original EL1 and EL2
+				# separate caster cues from the creature callback's
+				# creature-bound negative attack/rune cues on each affected
+				# figure. No unconditional NegAttack sound at an empty board.
+				pass
+			elif profile.id in ["el1", "el2"] and data.card == "DRGS":
+				# Both original Drowsy Gas versions have separate caster and per-creature FX
+				# registrations; sound follows those sites, not the generic cast.
+				pass
+			elif profile.id in ["el1", "el2"] and data.card == "FRGS":
+				# Both originals' Frenzy Gas have separate caster and creature
+				# effect sites; the named audio follows those actual figure sites.
+				pass
+			elif profile.id in ["el1", "el2"] and data.card == "TRSN":
+				# Source GreenSummon sound belongs to the newly created Target
+				# model; the summon event starts it when the figure exists.
+				pass
+			elif profile.id in ["el1", "el2"] and data.card == "REPR":
+				# Original Repair in both editions binds BlackDamage to the
+				# opposing hero; the own-grave action target is not that source.
+				battle_audio.spell(data.card, models.get(int(data.side)),
+					models.get(1 - int(data.side)))
+			elif profile.id == "el2" and data.card == "JRRG":
+				# Original Juryrig puts BlackDamage at the opposing hero. The
+				# untargeted revive action has no model for its audio source.
+				battle_audio.spell(data.card, models.get(int(data.side)),
+					models.get(1 - int(data.side)))
+			elif profile.id in ["el1", "el2"] and data.card == "AMNS":
+				# Both originals use two hero-bound Discard sounds. EL2 alone
+				# adds caster Draw; a generic sound loses one Discard instance.
+				battle_audio.amnesia(models.get(0), models.get(1), models.get(int(data.side)))
+			elif profile.id in ["el1", "el2"] and data.card == "PWTP":
+				# Both original Powertap versions start DrainMana at opposing donor
+				# finishes at the caster, even though the card has no selected target.
+				battle_audio.spell(data.card, models.get(int(data.side)),
+					models.get(1 - int(data.side)))
+			elif profile.id == "el2" and data.card == "INCR":
+				# INCR removes an opposing channel. The owner LoseMana Target
+				# sound source follows that affected hero, not the no-target cast.
+				battle_audio.spell(data.card, models.get(int(data.side)),
+					models.get(1 - int(data.side)))
+			elif profile.id in ["el1", "el2"] and data.card == "CHNL":
+				# Both original Channels pay life on the caster but place
+				# GainLife at the opposing hero; bind that WAV source.
+				battle_audio.spell(data.card, models.get(int(data.side)),
+					models.get(1 - int(data.side)))
+			elif profile.id == "el2" and data.card == "MNBR":
+				# EL2 Mana Breeze queues a GainMana sound at EACH hero's Target,
+				# not one generic sound at the caster.
+				battle_audio.mana_breeze(models.get(int(data.side)),
+					models.get(1 - int(data.side)))
+			elif profile.id in ["el1", "el2"] and data.card == "TPLF":
+				# Original Tap Life in both editions registers DrainLife/runes only
+				# after positive damage. The cast event precedes the untagged
+				# heal, whose event handler starts the genuine bound sound.
+				pass
+			else:
+				battle_audio.spell(data.card, models.get(int(data.side)), models.get(int(data.get("target", -1))))
 			# Particles start after the action resolves, when the figures it
 			# touched (a summoned creature, the damaged ones) are known.
-			if _effect_cast.is_empty(): call_deferred("_start_cast_effects")
-			else: _start_cast_effects()
-			_effect_cast = {"card": data.card, "side": data.side, "target": int(data.get("target", -1)), "affected": []}
+			_pend_cast_effects(data, false)
 			if not data.get("script", false): _cast_notice(int(data.side), String(data.card))
 			# First game: the local player's cast by spell class.
 			if profile.id == "el1" and not demo and (data.side == 0 or mode_select.selected == 1 or _hot_seat()):
 				var spell_class := str(profile.table("CombatSpells").get(data.card, {}).get("Class", ""))
 				if ELFirstTutorial.CAST_EVENTS.has(spell_class): _first_tutorial_panel().fire(ELFirstTutorial.CAST_EVENTS[spell_class])
-		"damage":
-			if models.has(data.target):
-				battle_audio.unit(models[data.target], "hit")
-				models[data.target].play("uhit")
-				_float_number(data.target, int(data.amount))
+		"damage", "death":
+			if not _hit_later(data): _show_hit(data)
+		"exile":
+			# Both original Exile effects (EL1@, EL2@)
+			# bind BlackExile to their selected Target. Their shipped
+			# Monsters Hit callback is frame 90 (30 fps): keep the original
+			# creature model as the effect anchor until then, although the
+			# creature has already left gameplay state. Other exiles clean up
+			# just after the deferred cast effects receive their target.
+			var id := int(data.target)
+			var delay := 0.0
+			if profile.id in ["el1", "el2"] and _effect_cast.get("card", "") == "EXIL" and int(_effect_cast.get("target", -1)) == id:
+				delay = float(_effect_cast.get("hit", 0.0))
+			if delay > 0.0 and models.has(id) and is_inside_tree():
+				_hits_waiting[id] = int(_hits_waiting.get(id, 0)) + 1
+				get_tree().create_timer(delay).timeout.connect(_finish_exile.bind(id, _hit_serial))
+			else:
+				call_deferred("_remove_model", id)
 		"heal":
 			_float_number(data.target, -int(data.amount))
 			if data.get("skill") == "REGN": _log("%s regenerates 1 health." % _side_name(data.target))
+		"spwb_gain_life_cue":
+			# Original EL2 Spiritual Web graveyard callback
+			# queues one GainLife particle and authored sound at the owning
+			# hero per active copy, not at the dead creature or its controller.
+			if profile.id == "el2" and models.has(int(data.side)):
+				battle_audio.effect("GainLife")
+				_figure_effect("GainLife", int(data.side))
+		"wtlk_el1_gain_life_cue":
+			# EL1 Water Link left-play – registers a
+			# Target/GainLife at each link owner before possible reanimation,
+			# not at the departing creature, its controller or grave origin.
+			if profile.id == "el1" and models.has(int(data.side)):
+				battle_audio.effect("GainLife")
+				_figure_effect("GainLife", int(data.side))
+		"wtlk_el2_gain_life_cue":
+			# EL2 Water Link - independently registers
+			# original Target/GainLife on each owning hero on death to grave,
+			# regardless of the later optional return of the creature.
+			if profile.id == "el2" and models.has(int(data.side)):
+				battle_audio.effect("GainLife")
+				_figure_effect("GainLife", int(data.side))
+		"baso_death_draw_cue":
+			# EL1 BASO left-play registers Target/Draw at the
+			# departing creature's current controller, not the BASO caster,
+			# enchantment holder, original owner or dead model.
+			if profile.id == "el1" and models.has(int(data.side)):
+				battle_audio.effect("Draw")
+				_figure_effect("Draw", int(data.side))
+		"baso_el2_death_draw_cue":
+			# Original EL2 BASO slot6 queues its own Target/Draw
+			# on the departing creature's current controller, after the
+			# unchanged per-copy card draw. EL1 has a separate original slot.
+			if profile.id == "el2" and models.has(int(data.side)):
+				battle_audio.effect("Draw")
+				_figure_effect("Draw", int(data.side))
 		"disturbance":
+			# EL1's turn entry plays RedLightning at the damaged hero only when
+			# the ether disturbance is positive (before hero damage).
+			if profile.id == "el1" and int(data.amount) > 0 and models.has(int(data.side)):
+				battle_audio.effect("RedLightning")
+				_figure_effect("RedLightning", int(data.side))
 			_log("Ether disturbance deals %d damage to %s." % [data.amount, _side_name(data.side)])
+		"mind_blast_cue":
+			# EL1 - and EL2 -
+			# visit hero 0 then 1. Each successful
+			# positive hit gets its own original Target effect and sound;
+			# the generic caster-bound spell playback is suppressed below.
+			if profile.id in ["el1", "el2"] and models.has(int(data.target)):
+				battle_audio.effect("BlueMindBlast", models[int(data.target)])
+				_figure_effect("BlueMindBlast", int(data.target))
+		"turn_stasis":
+			# EL1's start-of-turn global Stasis marker.
+			if profile.id == "el1" and models.has(int(data.side)):
+				battle_audio.effect("BlueStasis", models[int(data.side)])
+				_figure_effect("BlueStasis", int(data.side))
+		"turn_pos_rune":
+			# EL1's positive player-modifier indicator.
+			if profile.id == "el1" and models.has(int(data.side)):
+				battle_audio.effect("PosRune")
+				_figure_effect("PosRune", int(data.side))
+		"turn_neg_rune":
+			# EL1's negative player-modifier indicator.
+			if profile.id == "el1" and models.has(int(data.side)):
+				battle_audio.effect("NegRune")
+				_figure_effect("NegRune", int(data.side))
+		"turn_creature_pos_rune", "turn_creature_neg_rune":
+			# EL1's per-creature modifier rune indicators.
+			if profile.id == "el1" and models.has(int(data.target)):
+				var name := "PosRune" if data.kind == "turn_creature_pos_rune" else "NegRune"
+				battle_audio.effect(name)
+				_figure_effect(name, int(data.target))
+		"attack_tax_effect":
+			# The original EL1 attack assignment's nonzero mana tax.
+			if profile.id == "el1" and models.has(int(data.side)):
+				battle_audio.effect("LoseMana")
+				_figure_effect("LoseMana", int(data.side))
+		"war_banner_shift":
+			# EL1 / EL2: the live creature entry/exit
+			# callback plays signed attack/defence effects at affected Target.
+			if profile.id in ["el1", "el2"] and models.has(int(data.target)):
+				var prefix := "Pos" if int(data.amount) > 0 else "Neg"
+				for name: String in [prefix + "Attack", prefix + "Defence"]:
+					battle_audio.effect(name)
+					_figure_effect(name, int(data.target))
+		"bless_expire":
+			# EL1 - and EL2 detach effects
+			# target the creature losing WandOfBless's temporary +4/+4.
+			if profile.id in ["el1", "el2"] and models.has(int(data.target)):
+				for name: String in ["NegAttack", "NegDefence", "NegRune"]:
+					battle_audio.effect(name)
+					_figure_effect(name, int(data.target))
+		"lightning_storm_bless_expire":
+			# EL1@ and EL2@ both queue three negative
+			# Target effects at the former +3/+3 recipient.
+			if profile.id in ["el1", "el2"] and models.has(int(data.target)):
+				for name: String in ["NegAttack", "NegDefence", "NegRune"]:
+					battle_audio.effect(name)
+					_figure_effect(name, int(data.target))
+		"twisted_decay", "overload_decay":
+			# Both originals' Twisted Enhancement (EL1, EL2)
+			# and Overload (EL1, EL2) end-of-turn callbacks
+			# play three Target-bound cues on the decaying creature.
+			if profile.id in ["el1", "el2"] and models.has(int(data.target)):
+				for name: String in ["NegAttack", "NegDefence", "NegRune"]:
+					battle_audio.effect(name)
+					_figure_effect(name, int(data.target))
+		"alpha_strike_death":
+			# EL1 AlphaStrikeEnchantment ends with BlackDeath
+			# at its holder, before the ordinary death animation/removal.
+			if profile.id == "el1" and models.has(int(data.target)):
+				battle_audio.effect("BlackDeath")
+				_figure_effect("BlackDeath", int(data.target))
+		"quick_fix_return":
+			# EL2 QuickFixEnchantment leave-play callback:
+			# card returns to the enchantment caster and Draw plays at Target.
+			if profile.id == "el2" and models.has(int(data.side)):
+				battle_audio.effect("Draw")
+				_figure_effect("Draw", int(data.side))
+		"delusion_return":
+			# EL2 DelusionEnchantment leave-play callback:
+			# each returned Delusion draws an original particle/audio cue at
+			# its caster even if another player controlled its creature.
+			if profile.id == "el2" and models.has(int(data.side)):
+				battle_audio.effect("Draw")
+				_figure_effect("Draw", int(data.side))
+		"mana_vortex_cue":
+			# EL1 original MNTX creature-spell callback emits
+			# Target/GainMana on the enchanted hero, not the summoner.
+			if profile.id == "el1" and models.has(int(data.side)):
+				battle_audio.effect("GainMana")
+				_figure_effect("GainMana", int(data.side))
+		"sacr_mana_gain_cue":
+			# EL1 SACR activated-ability original registers
+			# GainMana on its casting hero after sacrifice and ether change.
+			if profile.id == "el1" and models.has(int(data.side)):
+				battle_audio.effect("GainMana")
+				_figure_effect("GainMana", int(data.side))
+		"sptr_upkeep_cue":
+			# Original EL1 SPTR uses GreenDamage for each turn-start
+			# enchantment callback at the current paying hero, not its caster.
+			if profile.id == "el1" and models.has(int(data.side)):
+				battle_audio.effect("GreenDamage")
+				_figure_effect("GreenDamage", int(data.side))
+		"stsi_upkeep_draw_cue":
+			# Original EL1 STSI registers a separate Target/Draw
+			# during its own owner's turn-start upkeep callback.
+			if profile.id == "el1" and models.has(int(data.side)):
+				battle_audio.effect("Draw")
+				_figure_effect("Draw", int(data.side))
+		"eten_return_draw_cue":
+			# EL1 Eternal Enchantment: successful
+			# dispel return queues Target/Draw at the enchantment's caster.
+			if profile.id == "el1" and models.has(int(data.side)):
+				battle_audio.effect("Draw")
+				_figure_effect("Draw", int(data.side))
 		"script_cast":
 			# Battle scripts cast silently and for free; name the spell so the effect reads.
 			_float_text(data.side, duel.card_name(data.card), Color("c9a6ff"), true)
@@ -936,7 +1479,12 @@ func _event(data: Dictionary) -> void:
 		"upkeep":
 			_log("%s pays %d ether for %s." % [_side_name(data.side), data.amount, duel.card_name(data.card)])
 		"trigger":
-			battle_audio.trigger(data.card)
+			# Both original SFGS end-turn callbacks bind BlackDamage at each
+			# affected victim. Other trigger sounds remain unbound.
+			if profile.id in ["el1", "el2"] and String(data.card) == "SFGS":
+				battle_audio.trigger(data.card, models.get(int(data.target)))
+			else:
+				battle_audio.trigger(data.card)
 			if is_instance_valid(effects) and models.has(data.target):
 				var owner := int(data.target) if int(data.target) < 2 else int(duel.entity(data.target).get("owner", 0))
 				effects.trigger(data.card, {"Target": [models[data.target]], "Start": [models.get(1 - owner)]})
@@ -947,14 +1495,35 @@ func _event(data: Dictionary) -> void:
 			_log("%s draws an extra spell with %s." % [_side_name(data.side), profile.text(str(skill.get("Name", data.skill)))])
 		"enchant":
 			_float_text(data.target, "%+d / %+d" % [data.power, data.toughness] if data.power != 0 or data.toughness != 0 else duel.card_name(data.card), Color("91dcc2"), true)
-		"death":
-			if models.has(data.target):
-				_bleed(data.target)
-				battle_audio.unit(models[data.target], "death")
-				labels[data.target].hide()
-				if not models[data.target].play("udeath"): _remove_model(data.target)
+			# EL1 CombineEnchantment@ and EL2@ each
+			# queue four original Target effects on the surviving combined
+			# creature, not on the hero receiving the initial CMBN card.
+			if profile.id in ["el1", "el2"] and String(data.card) == "CMBN" and int(data.target) >= 2 and models.has(int(data.target)):
+				for name: String in ["PosAttack", "PosDefence", "Trample", "PosRune"]:
+					battle_audio.effect(name)
+					_figure_effect(name, int(data.target))
 		"unsummon":
-			_remove_model(data.target)
+			# EL1 Unsummon@, LesserUnsummon@ and
+			# EL2 Unsummon@, LesserUnsummon@ bind BlueDeath to the departing
+			# creature and Draw to its owner.
+			# Play the queued cast effects
+			# first, while the creature model still exists as an FX anchor.
+			# Game-state removal remains synchronous in both editions.
+			var unsummon_fx: bool = profile.id in ["el1", "el2"] and _effect_cast.get("card", "") in ["UNSM", "LSUS"]
+			if profile.id in ["el1", "el2"] and _effect_cast.get("card", "") == "GRUN":
+				# The original mass callback queues each creature's own BlueDeath
+				# and its ORIGINAL owner's Draw before removing the model.
+				# The event's owner may instead be a temporary controller.
+				var creature_id := int(data.target)
+				var original_owners: Dictionary = _effect_cast.get("grun_original_owners", {})
+				_effect_cast.grun_sites.append({"creature": creature_id,
+					"owner": int(original_owners.get(creature_id, data.get("owner", -1)))})
+				call_deferred("_remove_model", creature_id)
+			elif unsummon_fx and int(_effect_cast.get("target", -1)) == int(data.target):
+				_effect_cast.return_owner = int(data.get("owner", -1))
+				call_deferred("_remove_model", int(data.target))
+			else:
+				_remove_model(data.target)
 		"plane":
 			battle_audio.effect("OutPlaneEntry" if data.enter else "OutPlaneExit")
 			_figure_effect("OutPlaneEntry" if data.enter else "OutPlaneExit", data.target)
@@ -982,13 +1551,62 @@ func _event(data: Dictionary) -> void:
 			_log("%s is removed." % duel.card_name(data.card))
 		"artifact":
 			_announce("T_USE_ARTIFACT", [_hero_name(data.side), str(data.get("title", duel.card_name(data.card)))], int(data.side))
+			# The artifact's own effects (its spell's cast visual), without the hero's cast gesture.
+			# Both originals register WRBN hero PosEnchantment once; original
+			# per-creature PosAttack/PosDefence effects and WAV belong to each
+			# positive-kin non-exempt target, not the general spell sound list.
+			if profile.id in ["el1", "el2"] and data.card == "WRBN":
+				battle_audio.effect("PosEnchantment")
+			else:
+				battle_audio.spell(data.card)
+			_pend_cast_effects(data, true)
 		"ability":
 			# A hero's ability comes from an enchantment on it (T_USE_ENCHANTMENT);
 			# a creature's is its own (T_USE_ABILITY).
 			var source := int(data.get("source", data.side))
 			if source < 2: _announce("T_USE_ENCHANTMENT", [_hero_name(source), String(data.get("name", String(data.ability).capitalize()))], int(data.side))
 			else: _announce("T_USE_ABILITY", [duel.card_name(duel.entity(source).get("card", ""))], int(data.side))
+			_ability_effects(data)
+		"combat_ability":
+			_combat_ability(data)
+		"redirect":
+			# The hero's damage leaves it for each creature that takes it instead.
+			battle_audio.effect(EffectTable.REDIRECT)
+			var shields: Array = []
+			for id: int in data.get("creatures", []):
+				if models.has(id): shields.append(models[id])
+			if is_instance_valid(effects) and models.has(data.target) and not shields.is_empty():
+				effects.play(EffectTable.REDIRECT, {"Start": [models[data.target]], "Finish": shields})
+			if profile.id == "el2" and not shields.is_empty():
+				var delay := ELCombatEffects.effect_hit_delay(profile, EffectTable.REDIRECT)
+				if delay > 0.0:
+					_redirect_hit = {"targets": data.creatures.duplicate(), "hit": delay}
+					call_deferred("_clear_redirect_hit")
+		"feedback":
+			battle_audio.effect(EffectTable.FEEDBACK)
+			_figure_effect(EffectTable.FEEDBACK, int(data.target))
+			# Both originals give BlueFeedback a MonstersHit cue at frame 10.
+			# Only the reflected hit presentation waits; health is already settled.
+			if profile.id in ["el1", "el2"] and int(data.target) in [0, 1]:
+				var delay := ELCombatEffects.effect_hit_delay(profile, EffectTable.FEEDBACK)
+				if delay > 0.0:
+					_feedback_hit = {"target": 1 - int(data.target), "hit": delay}
+					call_deferred("_clear_feedback_hit")
+		"chain_mirror":
+			# Original EL2 Ethereal Chain creates RedDamage at the *receiving*
+			# hero, before the reflected hit. Game-state damage is unchanged.
+			if profile.id == "el2" and models.has(int(data.target)):
+				battle_audio.effect("RedDamage")
+				_figure_effect("RedDamage", int(data.target))
+		"barrier":
+			battle_audio.effect(EffectTable.BARRIER)
+			_figure_effect(EffectTable.BARRIER, int(data.target))
+		"stoneskin":
+			battle_audio.effect(EffectTable.STONESKIN)
+			_figure_effect(EffectTable.STONESKIN, int(data.target))
 		"strike":
+			# The combat playback presents held blows itself.
+			if is_instance_valid(melee): return
 			if not fight_shot and models.has(data.from) and models.has(data.to): _auto_fight(int(data.from), int(data.to))
 			if models.has(data.from) and models.has(data.to):
 				var model: ELModel = models[data.from]
@@ -1011,6 +1629,10 @@ func _event(data: Dictionary) -> void:
 			battle_audio.unit(models[data.side], "victory")
 			models[data.side].play("uvictory")
 			_bleed(1 - data.side)
+			# Both editions' defeated heroes have original udeath and their
+			# own SndDir/death.wav. A lethal hero emits a result event, not
+			# creature death, so _show_hit does not start this figure sound.
+			if profile.id in ["el1", "el2"]: battle_audio.unit(models[1 - int(data.side)], "death")
 			models[1 - data.side].play("udeath")
 			if _auto_camera_on(): auto_camera.victory(int(data.side), models[data.side].position)
 			if combat_tutorial != null: _tutorial_result()
@@ -1019,6 +1641,9 @@ func _event(data: Dictionary) -> void:
 		"duel_draw":
 			for side in 2:
 				_bleed(side)
+				# Each edition's fallen figure has its own original death sound;
+				# a mutual lethal result does not emit creature death events.
+				if profile.id in ["el1", "el2"]: battle_audio.unit(models[side], "death")
 				models[side].play("udeath")
 			selection = -1
 			selection_power = 0
@@ -1089,11 +1714,667 @@ func _announce(key: String, args: Array, side: int) -> void:
 ## Starts the pending cast's particles. Start = the casting hero; the target
 ## point = the chosen target, else the figures the cast touched, else the
 ## caster; effects without points sit at the arena origin.
+## Starts the previous pending cast's effects and makes `data` (a cast or an
+## artifact use) the pending one. Hits of a non-summon wait for the cue frame
+## of the card's effect.
+func _pend_cast_effects(data: Dictionary, artifact: bool) -> void:
+	if _effect_cast.is_empty(): call_deferred("_start_cast_effects")
+	else: _start_cast_effects()
+	var card := String(data.card)
+	var hit := 0.0 if duel.is_summon(card) else ELCombatEffects.hit_delay(profile, card)
+	_effect_cast = {"card": card, "side": data.side, "target": int(data.get("target", -1)), "affected": [], "hit": hit, "artifact": artifact, "power": int(data.get("power", 0)), "tap_life_landed": false}
+	if profile.id in ["el1", "el2"] and card == "GRUN":
+		# Snapshot original ownership before synchronous mass removal. An
+		# enchantment may have lent a creature to the other controller.
+		_effect_cast.grun_original_owners = {}
+		_effect_cast.grun_sites = []
+		for creature: Dictionary in duel.creatures.values():
+			_effect_cast.grun_original_owners[int(creature.id)] = duel.origin(int(creature.id))
+	if profile.id in ["el1", "el2"] and card == "FRST":
+		_effect_cast.firestorm_targets = []
+		_effect_cast.firestorm_loss = false
+	if profile.id in ["el1", "el2"] and card == "FRWA":
+		_effect_cast.fire_wave_targets = []
+	if profile.id in ["el1", "el2"] and card == "LGST":
+		_effect_cast.lightning_sites = []
+	if profile.id in ["el1", "el2"] and card == "WNFL":
+		_effect_cast.winds_flame_targets = []
+	if profile.id == "el2" and card == "SNOV":
+		_effect_cast.supernova_loss = false
+	if profile.id == "el1" and card == "SNOV":
+		_effect_cast.supernova_global = false
+	if profile.id in ["el1", "el2"] and card == "ANHL":
+		_effect_cast.annihilation_sites = []
+	if profile.id in ["el1", "el2"] and card in ["CRHG", "RVHG"]:
+		_effect_cast.hunger_sites = []
+	if profile.id == "el1" and card == "FRNT":
+		_effect_cast.fury_attempts = 0
+		_effect_cast.fury_attacker = int(duel.attacker)
+	if profile.id == "el2" and card == "FRNT":
+		_effect_cast.fury_deaths = 0
+		_effect_cast.fury_recipient = 1 - int(data.side)
+	if profile.id in ["el1", "el2"] and card == "FOGG":
+		_effect_cast.fog_targets = []
+	if profile.id == "el2" and card == "CANV":
+		_effect_cast.devour_power = int(data.get("devour_power", 0))
+	if profile.id == "el2" and card == "ENLH":
+		_effect_cast.enlightenment_count = int(data.get("enlightenment_count", -1))
+	if profile.id in ["el1", "el2"] and card == "BRRL":
+		_effect_cast.broken_reality_ether = int(data.get("broken_reality_ether", 0))
+	if profile.id in ["el1", "el2"] and card == "TRAD":
+		var second := int(data.get("second", -1))
+		_effect_cast.second = second
+		# Snapshot the second creature's controller before synchronous destruction.
+		_effect_cast.beneficiary = int(duel.creatures[second].owner) if duel.creatures.has(second) else -1
+
+## A damaged or dying figure's reaction during a cast whose effect marks a cue
+## frame waits for that frame. False when it shows at once.
+func _hit_later(data: Dictionary) -> bool:
+	var delay := float(_effect_cast.get("hit", 0.0))
+	var id := int(data.get("target", -1))
+	# EL2 RodofColossus@- applies nine damage to its
+	# selected figure and one to the rest of that figure's side, but queues
+	# just ONE ColosusLeg Target. The original MonstersHit@14
+	# belongs only to that selected figure; splash victims have no impact
+	# cue and must react immediately. Game-state damage is already settled.
+	if profile.id == "el2" and bool(_effect_cast.get("artifact", false)) and _effect_cast.get("card", "") == "RDCL" and id != int(_effect_cast.get("target", -1)):
+		delay = 0.0
+	if int(_ability_hit.get("target", -1)) == id or _ability_hit.get("targets", []).has(id):
+		delay = float(_ability_hit.get("hit", 0.0))
+	if int(_feedback_hit.get("target", -1)) == id:
+		delay = float(_feedback_hit.get("hit", 0.0))
+	if _redirect_hit.get("targets", []).has(id):
+		delay = float(_redirect_hit.get("hit", 0.0))
+	if delay <= 0.0 or not models.has(id) or not is_inside_tree(): return false
+	_hits_waiting[id] = int(_hits_waiting.get(id, 0)) + 1
+	get_tree().create_timer(delay).timeout.connect(_late_hit.bind(data, _hit_serial))
+	return true
+
+func _clear_feedback_hit() -> void:
+	_feedback_hit.clear()
+
+func _clear_redirect_hit() -> void:
+	_redirect_hit.clear()
+
+func _late_hit(data: Dictionary, serial: int) -> void:
+	if serial != _hit_serial: return
+	var id := int(data.target)
+	_hits_waiting[id] = int(_hits_waiting.get(id, 0)) - 1
+	if int(_hits_waiting[id]) <= 0: _hits_waiting.erase(id)
+	_show_hit(data)
+
+func _finish_exile(id: int, serial: int) -> void:
+	if serial != _hit_serial: return
+	_hits_waiting.erase(id)
+	_remove_model(id)
+
+## A figure's hit (clip, sound, number) or death (blood, clip, removal).
+func _show_hit(data: Dictionary) -> void:
+	var id := int(data.target)
+	if not models.has(id): return
+	var model: ELModel = models[id]
+	if data.kind == "damage":
+		# A hero already lying defeated keeps its death pose.
+		if not (id < 2 and duel.phase == ELDuel.Phase.FINISHED):
+			battle_audio.unit(model, "hit")
+			model.play("uhit")
+		_float_number(id, int(data.amount))
+		return
+	_bleed(id)
+	battle_audio.unit(model, "death")
+	if labels.has(id): labels[id].hide()
+	if not model.play("udeath"): _remove_model(id)
+
 func _start_cast_effects() -> void:
 	var pending := _effect_cast
 	_effect_cast = {}
-	_auto_cast(pending)
+	if not pending.get("artifact", false): _auto_cast(pending)
 	if pending.is_empty() or not is_instance_valid(effects): return
+	# Original EL1 GreaterUnsummon@ and EL2@ register
+	# Target/BlueDeath on EACH successfully returned creature, then
+	# Target/Draw on that creature's original owner, before hard removal.
+	# The empty/exempt board has no named FX or effect WAV. Model cleanup
+	# remains deferred only until these original-art sites are started.
+	if profile.id in ["el1", "el2"] and pending.card == "GRUN":
+		for site: Dictionary in pending.get("grun_sites", []):
+			var creature := int(site.creature)
+			var owner := int(site.owner)
+			if models.has(creature):
+				effects.play("BlueDeath", {"Target": [models[creature]]})
+				battle_audio.effect("BlueDeath")
+			if models.has(owner):
+				effects.play("Draw", {"Target": [models[owner]]})
+				battle_audio.effect("Draw")
+		return
+	# EL1 Assault@ registers caster PosSorcery. Its aura callback
+	#  checks each creature's controller against the caster
+	#  before queuing all five creature Target cues.
+	# No friendly creatures means no creature effects or their sounds.
+	if profile.id == "el1" and pending.card == "ASLT":
+		var caster := int(pending.side)
+		if models.has(caster):
+			effects.play("PosSorcery", {"Target": [models[caster]]})
+		for creature: Dictionary in duel.army(caster):
+			var id := int(creature.id)
+			if not models.has(id): continue
+			for name: String in ["PosAttack", "PosDefence", "Trample", "Berserk", "PosRune"]:
+				effects.play(name, {"Target": [models[id]]})
+				battle_audio.effect(name)
+		return
+	# Original EL1 Flood cast@ and EL2 attach@ register
+	# only hero-targeted NegEnchantment. Their individual creature
+	# callbacks (EL1 slot11@, EL2 slot13@) conditionally
+	# register Target/CantUntap, never a generic casting-hero cue.
+	# EL2 checks [figure]+8 == 0 before registration; the original
+	# property's precise semantics remain unproved by live original
+	# runtime, so reuse the already-ported ground/NoAffect eligibility.
+	if profile.id in ["el1", "el2"] and pending.card == "FLOD":
+		var caster := int(pending.side)
+		if models.has(caster):
+			effects.play("NegEnchantment", {"Target": [models[caster]]})
+		for creature: Dictionary in duel.creatures.values():
+			var id := int(creature.id)
+			if not models.has(id) or duel.has_flag(id, "Fly") or duel.has_flag(id, "NoAffect"): continue
+			effects.play("CantUntap", {"Target": [models[id]]})
+			battle_audio.effect("CantUntap")
+		return
+	# Original EL1 Earth Bonds attaches NegEnchantment to the chosen
+	# creature; its @ callback compares that holder's
+	# race with each creature before Target/CantUntap.
+	# Apply the remake's existing NoAffect exemption without changing stats.
+	if profile.id == "el1" and pending.card == "ERBN":
+		var holder := int(pending.target)
+		if not duel.creatures.has(holder): return
+		if models.has(holder):
+			effects.play("NegEnchantment", {"Target": [models[holder]]})
+		for creature: Dictionary in duel.creatures.values():
+			var id := int(creature.id)
+			if not models.has(id) or duel.race(id) != duel.race(holder) or duel.has_flag(id, "NoAffect"): continue
+			effects.play("CantUntap", {"Target": [models[id]]})
+			battle_audio.effect("CantUntap")
+		return
+	# EL2's independent EarthBondsEnchantment attach@ binds NegEnchantment to the
+	# enchanted holder. Creature callback@ compares that holder's race to each live
+	# creature before registering its own Target/CantUntap; no unconditional
+	# caster/other-race cue.
+	if profile.id == "el2" and pending.card == "ERBN":
+		var holder := int(pending.target)
+		if not duel.creatures.has(holder): return
+		if models.has(holder):
+			effects.play("NegEnchantment", {"Target": [models[holder]]})
+		for creature: Dictionary in duel.creatures.values():
+			var id := int(creature.id)
+			if not models.has(id) or duel.race(id) != duel.race(holder) or duel.has_flag(id, "NoAffect"): continue
+			effects.play("CantUntap", {"Target": [models[id]]})
+			battle_audio.effect("CantUntap")
+		return
+	# EL2 SmokeEnchantment attach@ queues one caster-bound NegEnchantment, while
+	# its creature callback@ checks original figure fields before Target/CantUntap.
+	# Use the already ported Smoke eligibility: live in-plane figures of either
+	# flying status, excluding NoAffect.
+	if profile.id == "el2" and pending.card == "SMOK":
+		var caster := int(pending.side)
+		if models.has(caster):
+			effects.play("NegEnchantment", {"Target": [models[caster]]})
+		for creature: Dictionary in duel.creatures.values():
+			var id := int(creature.id)
+			if not models.has(id) or duel.in_plane(id) or duel.has_flag(id, "NoAffect"): continue
+			effects.play("CantUntap", {"Target": [models[id]]})
+			battle_audio.effect("CantUntap")
+		return
+	# EL2 CondensedAirEnchantment attach@ registers the caster's
+	# Target/NegEnchantment; per-creature slot13@ tests the figure's
+	# flyer property before its own Target/CantUntap registration. Use the
+	# existing in-plane and NoAffect exclusions, without changing untap
+	# gameplay. There is no creature cue on empty or ground-only fields.
+	if profile.id == "el2" and pending.card == "CNAR":
+		var caster := int(pending.side)
+		if models.has(caster):
+			effects.play("NegEnchantment", {"Target": [models[caster]]})
+		for creature: Dictionary in duel.creatures.values():
+			var id := int(creature.id)
+			if not models.has(id) or duel.in_plane(id) or not duel.has_flag(id, "Fly") or duel.has_flag(id, "NoAffect"): continue
+			effects.play("CantUntap", {"Target": [models[id]]})
+			battle_audio.effect("CantUntap")
+		return
+	# Both originals' Mind Blast registers conditional effects on each damaged hero
+	# before resolution; no unconditional caster effect remains.
+	if profile.id in ["el1", "el2"] and pending.card == "MDBL": return
+	# Original EL1@ and EL2@ bypass both Target
+	# effect sites when the selected hero had no ether after payment.
+	if profile.id in ["el1", "el2"] and pending.card == "BRRL" and int(pending.get("broken_reality_ether", 0)) <= 0:
+		return
+	# Both original Fog casts (EL1@, EL2@) register an
+	# unconditional BlueFog and then Target/CantAttack for each creature
+	# in the combat list, including the opposing army.
+	# The generic targetless cast incorrectly plays CantAttack on the hero,
+	# including when the arena is empty.
+	if profile.id in ["el1", "el2"] and pending.card == "FOGG":
+		var caster := int(pending.side)
+		if models.has(caster): effects.play("BlueFog", {"Target": [models[caster]]})
+		for id: int in pending.get("fog_targets", []):
+			if not models.has(id): continue
+			effects.play("CantAttack", {"Target": [models[id]]})
+			# Both originals' CantAttack SOUN source follows this creature's Target.
+			battle_audio.effect("CantAttack", models[id])
+		return
+	# Original EL1 Annihilation@ and EL2@ register a
+	# Target/RedAnihilation per non-plane creature in side order, then
+	# cue that side's *opposing* hero iff its total creature power is
+	# positive. Empty armies register no named effect in either edition.
+	if profile.id in ["el1", "el2"] and pending.card == "ANHL":
+		for id: int in pending.get("annihilation_sites", []):
+			if not models.has(id): continue
+			effects.play("RedAnihilation", {"Target": [models[id]]})
+			battle_audio.effect("RedAnihilation", models[id])
+		return
+	# EL1 RavagingHunger@ / CurseOfHunger@ and
+	# EL2@ / @ register separate Target/Hunger sites
+	# at positive-power creatures before dealing damage.
+	# A generic cast otherwise requests one Hunger sound and leaves
+	# an incorrect caster-bound effect on an empty battlefield.
+	if profile.id in ["el1", "el2"] and pending.card in ["CRHG", "RVHG"]:
+		for id: int in pending.get("hunger_sites", []):
+			if not models.has(id): continue
+			effects.play("Hunger", {"Target": [models[id]]})
+			# Both originals attach Hunger's sound to each living victim.
+			battle_audio.effect("Hunger", models[id])
+		return
+	# Both originals' DepressGasEnchantment cast sites (EL1,
+	# EL2) register BlackDepressGas and a NegRune at the caster.
+	# Creature callbacks (EL1, EL2) register a Target
+	# NegAttack and NegRune for each affected creature as it loses power.
+	# Generic targetless playback wrongly collapses those into one pair
+	# at the casting hero, even with no figures in the battle.
+	# Bound to initial cast only; future aura recalculation/arrival cues
+	# are not inferred here. Original -2 rules and saves remain untouched.
+	if profile.id in ["el1", "el2"] and pending.card == "DPGS":
+		var caster := int(pending.side)
+		if models.has(caster):
+			for effect: String in ["BlackDepressGas", "NegRune"]:
+				effects.play(effect, {"Target": [models[caster]]})
+				if effect == "BlackDepressGas":
+					battle_audio.effect(effect, models[caster])
+				else:
+					battle_audio.effect(effect)
+		for creature: Dictionary in duel.creatures.values():
+			var id := int(creature.id)
+			if not models.has(id) or duel.has_flag(id, "NoAffect"): continue
+			for effect: String in ["NegAttack", "NegRune"]:
+				effects.play(effect, {"Target": [models[id]]})
+				battle_audio.effect(effect)
+		return
+	# Original DrowsyGasEnchantment (EL1, EL2)
+	# queues caster-bound BlackDrowsyGas/NegRune. Creature callbacks
+	# (EL1, EL2) queue a
+	# separate NegAttack/NegRune per living figure. Unlike DPGS, DRGS
+	# changes power for NoAffect creatures in the current original-backed
+	# rule, so the initial-cast creature cues cover them too. Later aura
+	# arrivals/recounts/removals are not inferred from this cast path.
+	if profile.id in ["el1", "el2"] and pending.card == "DRGS":
+		var caster := int(pending.side)
+		if models.has(caster):
+			for effect: String in ["BlackDrowsyGas", "NegRune"]:
+				effects.play(effect, {"Target": [models[caster]]})
+				if effect == "BlackDrowsyGas":
+					battle_audio.effect(effect, models[caster])
+				else:
+					battle_audio.effect(effect)
+		for creature: Dictionary in duel.creatures.values():
+			var id := int(creature.id)
+			if not models.has(id): continue
+			for effect: String in ["NegAttack", "NegRune"]:
+				effects.play(effect, {"Target": [models[id]]})
+				battle_audio.effect(effect)
+		return
+	# Original EL1 FrenzyGasEnchantment@ / creature callback@
+	# and EL2@ / @ bind BlackFrenzyGas/NegRune to the
+	# casting hero and NegDefence/NegRune to each eligible creature.
+	# Follow the existing NoAffect defence rule; later aura transitions
+	# are not inferred from this initial-cast path.
+	if profile.id in ["el1", "el2"] and pending.card == "FRGS":
+		var caster := int(pending.side)
+		if models.has(caster):
+			for effect: String in ["BlackFrenzyGas", "NegRune"]:
+				effects.play(effect, {"Target": [models[caster]]})
+				if effect == "BlackFrenzyGas":
+					battle_audio.effect(effect, models[caster])
+				else:
+					battle_audio.effect(effect)
+		for creature: Dictionary in duel.creatures.values():
+			var id := int(creature.id)
+			if not models.has(id) or duel.has_flag(id, "NoAffect"): continue
+			for effect: String in ["NegDefence", "NegRune"]:
+				effects.play(effect, {"Target": [models[id]]})
+				battle_audio.effect(effect)
+		return
+	# Original EL2 Enlightenment@- returns before either
+	# Target/Discard or Target/Draw when the hand
+	# contains no other card. Positive counts play each effect once at caster.
+	if profile.id == "el2" and pending.card == "ENLH" and int(pending.get("enlightenment_count", -1)) == 0:
+		return
+	# Both WarBanner enchantments apply PosEnchantment to their hero and
+	# PosAttack/PosDefence to each non-exempt creature with positive kin.
+	# EL1:; EL2:.
+	# The original counts same-race creatures on both armies.
+	if profile.id in ["el1", "el2"] and pending.get("artifact", false) and pending.card == "WRBN":
+		var hero := int(pending.side)
+		if models.has(hero): effects.play("PosEnchantment", {"Target": [models[hero]]})
+		var exempt: Array = []
+		for enchantment: Dictionary in duel.heroes[hero].enchantments:
+			if enchantment.card == "WRBN": exempt = enchantment.get("exempt", [])
+		for creature: Dictionary in duel.creatures.values():
+			var id := int(creature.id)
+			if not models.has(id) or exempt.has(id) or duel._kin(creature) <= 0: continue
+			effects.play("PosAttack", {"Target": [models[id]]})
+			effects.play("PosDefence", {"Target": [models[id]]})
+			battle_audio.effect("PosAttack")
+			battle_audio.effect("PosDefence")
+		return
+	# EL1 DominantRodEnchantment has only a hero-targeted
+	# PosEnchantment effect site. EL2 has additional creature-stat cues;
+	# do not borrow those cues or bind the EL1 hero effect to changed creatures.
+	if profile.id == "el1" and pending.get("artifact", false) and pending.card == "DMRD":
+		var hero := int(pending.side)
+		if models.has(hero): effects.play("PosEnchantment", {"Target": [models[hero]]})
+		return
+	# EL2 DominantRodEnchantment: the hero takes PosEnchantment,
+	# but its ally-only modifier callback binds the three stat
+	# cues to each creature under that hero's control, not to the hero.
+	if profile.id == "el2" and pending.card == "DMRD":
+		var hero := int(pending.side)
+		if models.has(hero): effects.play("PosEnchantment", {"Target": [models[hero]]})
+		for creature: Dictionary in duel.army(hero):
+			var id := int(creature.id)
+			if not models.has(id): continue
+			for name: String in ["PosAttack", "PosDefence", "PosRune"]:
+				effects.play(name, {"Target": [models[id]]})
+		return
+	# Both PouchOfDustEnchantment callbacks (EL1,
+	# EL2) queue Target-bound CantAttack and NegRune for
+	# creatures across both armies, not for the casting hero.
+	if profile.id in ["el1", "el2"] and pending.card == "PCDU":
+		for creature: Dictionary in duel.creatures.values():
+			var id := int(creature.id)
+			if not models.has(id): continue
+			effects.play("CantAttack", {"Target": [models[id]]})
+			effects.play("NegRune", {"Target": [models[id]]})
+		return
+	# EL2 RodOfDefence: plays PosSorcery on the defending
+	# hero; RodOfDefenceEnchantment attaches its +3 health
+	# cues to each of that hero's creatures (including different races).
+	# A generic targetless cast otherwise puts all three on the hero.
+	if profile.id == "el2" and pending.get("artifact", false) and pending.card == "RDDF":
+		var hero := int(pending.side)
+		if models.has(hero): effects.play("PosSorcery", {"Target": [models[hero]]})
+		for creature: Dictionary in duel.army(hero):
+			var id := int(creature.id)
+			if not models.has(id): continue
+			effects.play("PosDefence", {"Target": [models[id]]})
+			effects.play("PosRune", {"Target": [models[id]]})
+		return
+	# EL2 LiquidReality takes one channel from the other hero
+	# before granting one to the caster. The original effect-site sequence
+	# uses DrainMana Start/Finish, then a negative rune on the donor and a
+	# positive rune on the recipient (not three cues on the caster).
+	if profile.id == "el2" and pending.card == "LQRL":
+		var caster := int(pending.side)
+		var donor := 1 - caster
+		if models.has(caster) and models.has(donor):
+			effects.play("DrainMana", {"Start": [models[donor]], "Finish": [models[caster]]})
+			effects.play("NegRune", {"Target": [models[donor]]})
+			effects.play("PosRune", {"Target": [models[caster]]})
+		return
+	# Both originals' Powertap (EL1, EL2) drains the
+	# opposing hero: Start is the donor, Finish the caster. Their Target
+	# runes mark the gained ether on the caster and lost ether on the donor.
+	# Generic targetless casts otherwise collapse all three at the caster.
+	if profile.id in ["el1", "el2"] and pending.card == "PWTP":
+		var caster := int(pending.side)
+		var donor := 1 - caster
+		if models.has(caster) and models.has(donor):
+			effects.play("DrainMana", {"Start": [models[donor]], "Finish": [models[caster]]})
+			effects.play("PosRune", {"Target": [models[caster]]})
+			effects.play("NegRune", {"Target": [models[donor]]})
+		return
+	# Both originals' Channel: EL1 and EL2 bind
+	# LoseLife/GainMana to the caster, GainLife to the opposite hero.
+	# EL2 has three separate Target registrations;
+	# the generic targetless cast instead puts all effects on the caster.
+	# Preserve edition-specific X, life, ether and audio rules.
+	if profile.id in ["el1", "el2"] and pending.card == "CHNL":
+		var caster := int(pending.side)
+		if models.has(caster):
+			effects.play("LoseLife", {"Target": [models[caster]]})
+			effects.play("GainMana", {"Target": [models[caster]]})
+		if models.has(1 - caster):
+			effects.play("GainLife", {"Target": [models[1 - caster]]})
+		return
+	# Both originals' Amnesia (EL1, EL2) loop both
+	# hero records and queue a Discard Target cue for each, even when a
+	# hand is empty. Only EL2 adds a caster Draw.
+	# Generic targetless playback otherwise puts one Discard at caster.
+	if profile.id in ["el1", "el2"] and pending.card == "AMNS":
+		for hero in 2:
+			if models.has(hero): effects.play("Discard", {"Target": [models[hero]]})
+		if profile.id == "el2":
+			var caster := int(pending.side)
+			if models.has(caster): effects.play("Draw", {"Target": [models[caster]]})
+		return
+	# Both originals' Repair (EL1, EL2) binds
+	# PosSorcery/Draw to the caster, but BlackDamage to 1 - side.
+	# The generic graveyard-target cast collapsed all three onto the caster.
+	if profile.id in ["el1", "el2"] and pending.card == "REPR":
+		var caster := int(pending.side)
+		var opponent := 1 - caster
+		if models.has(caster) and models.has(opponent):
+			effects.play("PosSorcery", {"Target": [models[caster]]})
+			effects.play("BlackDamage", {"Target": [models[opponent]]})
+			effects.play("Draw", {"Target": [models[caster]]})
+		return
+	# Both originals' BodyExchange cast cues have separate target points:
+	# EL1 --; EL2 -
+	# -. PosSorcery belongs to the casting hero; BlackDamage
+	# to the sacrificed live creature, not the returned graveyard creature.
+	# The generic two-target cast incorrectly puts both on the sacrifice.
+	if profile.id in ["el1", "el2"] and pending.card == "BDEX":
+		var caster := int(pending.side)
+		var sacrificed := int(pending.target)
+		if models.has(caster): effects.play("PosSorcery", {"Target": [models[caster]]})
+		if models.has(sacrificed): effects.play("BlackDamage", {"Target": [models[sacrificed]]})
+		return
+	# Both original Cannibalism casts (EL1, EL2) queue
+	# RedDamage at the sacrificed creature (EL1, EL2)
+	# and GainLife at its casting hero (EL1, EL2).
+	# The generic target-only cast wrongly places the heal at the victim.
+	if profile.id in ["el1", "el2"] and pending.card == "CNBL":
+		var sacrificed := int(pending.target)
+		var caster := int(pending.side)
+		if models.has(sacrificed): effects.play("RedDamage", {"Target": [models[sacrificed]]})
+		if models.has(caster): effects.play("GainLife", {"Target": [models[caster]]})
+		return
+	# EL2 Juryrig: - binds PosSorcery to
+	# its casting hero, while - binds BlackDamage to
+	# 1 - side (the hurt opposing hero). The generic untargeted cast
+	# combines both effects at the affected opponent.
+	if profile.id == "el2" and pending.card == "JRRG":
+		var caster := int(pending.side)
+		var victim := 1 - caster
+		if models.has(caster): effects.play("PosSorcery", {"Target": [models[caster]]})
+		if models.has(victim): effects.play("BlackDamage", {"Target": [models[victim]]})
+		return
+	# Tap Life in both originals (EL1, EL2):
+	# DrainLife starts at the damaged opponent and finishes at the caster.
+	# PosRune marks the recipient, NegRune the donor; a nonpositive hit
+	# never creates them (X=0 and Feedback are both visually silent).
+	if profile.id in ["el1", "el2"] and pending.card == "TPLF":
+		var caster := int(pending.side)
+		var victim := 1 - caster
+		if int(pending.power) > 0 and bool(pending.tap_life_landed) and models.has(caster) and models.has(victim):
+			effects.play("DrainLife", {"Start": [models[victim]], "Finish": [models[caster]]})
+			effects.play("PosRune", {"Target": [models[caster]]})
+			effects.play("NegRune", {"Target": [models[victim]]})
+		return
+	# EL1 Unsummon / Lesser Unsummon and EL2
+	# Unsummon / Lesser Unsummon create two distinct Target effects:
+	# BlueDeath on the departing creature, Draw on its owner.
+	if profile.id in ["el1", "el2"] and pending.card in ["UNSM", "LSUS"]:
+		var creature := int(pending.target)
+		var owner := int(pending.get("return_owner", -1))
+		if models.has(creature): effects.play("BlueDeath", {"Target": [models[creature]]})
+		if models.has(owner): effects.play("Draw", {"Target": [models[owner]]})
+		return
+	# Trade in both originals: EL1 / EL2 bind separate
+	# GreenDamage Targets to the sacrificed and second creature, followed
+	# by GainLife at the second creature's current controller. Gameplay,
+	# cost, health, creature removal and save state remain synchronous.
+	if profile.id in ["el1", "el2"] and pending.card == "TRAD":
+		for victim: int in [int(pending.target), int(pending.get("second", -1))]:
+			if models.has(victim): effects.play("GreenDamage", {"Target": [models[victim]]})
+		var owner := int(pending.get("beneficiary", -1))
+		if models.has(owner): effects.play("GainLife", {"Target": [models[owner]]})
+		return
+	# Original EL2 Carnivorous@ binds GreenDamage to the eaten
+	# creature, GainLife then Draw to the caster, and another GreenDamage
+	# to the opposing hero only when the eaten creature's power was > 0
+	# . State destruction/heal/draw stay synchronous.
+	if profile.id == "el2" and pending.card == "CANV":
+		var meal := int(pending.target)
+		var caster := int(pending.side)
+		if models.has(meal): effects.play("GreenDamage", {"Target": [models[meal]]})
+		if models.has(caster):
+			effects.play("GainLife", {"Target": [models[caster]]})
+			effects.play("Draw", {"Target": [models[caster]]})
+		if int(pending.get("devour_power", 0)) > 0 and models.has(1 - caster):
+			effects.play("GreenDamage", {"Target": [models[1 - caster]]})
+		return
+	# EL1 FuryOfNature@: unconditional Target/GreenForceNature
+	#  at the caster; Target/GreenDamage only
+	# after a positive attempted-hit count at the attacking
+	# hero, including defence-phase casts. Do not borrow EL2's Draw cue.
+	if profile.id == "el1" and pending.card == "FRNT":
+		var caster := int(pending.side)
+		var attacker := int(pending.get("fury_attacker", duel.attacker))
+		if models.has(caster):
+			effects.play("GreenForceNature", {"Target": [models[caster]]})
+		if int(pending.get("fury_attempts", 0)) > 0 and models.has(attacker):
+			effects.play("GreenDamage", {"Target": [models[attacker]]})
+			battle_audio.effect("GreenDamage")
+		return
+	# EL2 FuryOfNature@ first registers GreenForceNature;
+	# - then counts actually destroyed creatures.
+	# After the draw loop, - registers exactly one
+	# opponent-bound Draw cue when that count is positive.
+	if profile.id == "el2" and pending.card == "FRNT":
+		var caster := int(pending.side)
+		var receiver := int(pending.get("fury_recipient", 1 - caster))
+		if models.has(caster):
+			effects.play("GreenForceNature", {"Target": [models[caster]]})
+		if int(pending.get("fury_deaths", 0)) > 0 and models.has(receiver):
+			effects.play("Draw", {"Target": [models[receiver]]})
+			battle_audio.effect("Draw")
+		return
+	# EL1 Firestorm@ and EL2@ both skip effect sites
+	# for X=0: positive X starts one caster wave, then RedDamage per
+	# opposing creature. Only EL2 adds caster LoseMana after channels.
+	# The former generic cast collapsed named effects onto the caster.
+	if profile.id in ["el1", "el2"] and pending.card == "FRST":
+		if int(pending.power) <= 0: return
+		var caster := int(pending.side)
+		if models.has(caster):
+			effects.play("RedFireWave", {"Start": [models[caster]]})
+			battle_audio.effect("RedFireWave", models[caster])
+		for id: int in pending.get("firestorm_targets", []):
+			if not models.has(id): continue
+			effects.play("RedDamage", {"Target": [models[id]]})
+			# Both editions' original Firestorm callbacks register the per-creature
+			# Target/RedDamage sound; use the live model for the first SOUN key.
+			battle_audio.effect("RedDamage", models[id])
+		if profile.id == "el2" and bool(pending.get("firestorm_loss", false)) and models.has(caster):
+			effects.play("LoseMana", {"Target": [models[caster]]})
+			battle_audio.effect("LoseMana", models[caster])
+		return
+	# EL1 FireWave@ registers Start/RedFireWave,
+	# then one creature Target/RedDamage in its nonempty
+	# victim loop; EL2 has the same sites.
+	# Empty/friendly-only armies still have the caster wave, but no
+	# invented RedDamage on the caster (unlike Firestorm's X guard).
+	if profile.id in ["el1", "el2"] and pending.card == "FRWA":
+		var caster := int(pending.side)
+		if models.has(caster):
+			effects.play("RedFireWave", {"Start": [models[caster]]})
+			battle_audio.effect("RedFireWave", models[caster])
+		for id: int in pending.get("fire_wave_targets", []):
+			if not models.has(id): continue
+			effects.play("RedDamage", {"Target": [models[id]]})
+			# Other/unbound and Firestorm RedDamage calls remain unchanged.
+			battle_audio.effect("RedDamage", models[id])
+		return
+	# Both LightningStorms iterate both armies in original order.
+	# EL1@ and EL2@ queue RedLightning per struck figure;
+	# successful RLSS rescue instead grants +3/+3 and queues three positive
+	# Target effects (EL1@, EL2@).
+	# No board and failed/absent mastery have no fabricated caster cues.
+	if profile.id in ["el1", "el2"] and pending.card == "LGST":
+		for site: Dictionary in pending.get("lightning_sites", []):
+			var id := int(site.target)
+			if not models.has(id): continue
+			var names: Array = ["PosAttack", "PosDefence", "PosRune"] if site.blessed else ["RedLightning"]
+			for name: String in names:
+				effects.play(name, {"Target": [models[id]]})
+				# Both originals bind Lightning Storm's RedLightning SOUN to
+				# this actual victim, not the caster or global effect origin.
+				if name == "RedLightning":
+					battle_audio.effect(name, models[id])
+				else:
+					battle_audio.effect(name)
+		return
+	# EL1 WindsOfFlame@ and EL2@ both return before
+	# these effects at X=0. For positive X the original loop queues Fireball with the
+	# caster's Start and that figure's Finish, followed by FireballExpl
+	# at the same figure's Finish. Grounded/empty fields queue no pair.
+	# Popadanie@39 delays only the hit presentation, not damage rules.
+	if profile.id in ["el1", "el2"] and pending.card == "WNFL":
+		if int(pending.power) <= 0: return
+		var caster := int(pending.side)
+		if not models.has(caster): return
+		for id: int in pending.get("winds_flame_targets", []):
+			if not models.has(id): continue
+			effects.play("Fireball", {"Start": [models[caster]], "Finish": [models[id]]})
+			battle_audio.effect("Fireball")
+			effects.play("FireballExpl", {"Finish": [models[id]]})
+			battle_audio.effect("FireballExpl", models[id])
+		return
+	# EL1 Supernova@ skips its only RedSuperNova site for
+	# X=0; positive X queues one untargeted effect before damage.
+	# EL2's later channel-loss callback is separate.
+	if profile.id == "el1" and pending.card == "SNOV":
+		if bool(pending.get("supernova_global", false)):
+			effects.play("RedSuperNova", {})
+			battle_audio.effect("RedSuperNova")
+		return
+	# EL2 Supernova@ has no visual registrations at X=0.
+	# Positive X registers one untargeted RedSuperNova screen effect
+	# then a Target/LoseMana at its paying caster
+	# after the one-channel deduction, not at every
+	# creature damaged by its all-armies shock.
+	if profile.id == "el2" and pending.card == "SNOV":
+		if int(pending.power) <= 0: return
+		effects.play("RedSuperNova", {})
+		battle_audio.effect("RedSuperNova")
+		var caster := int(pending.side)
+		if bool(pending.get("supernova_loss", false)) and models.has(caster):
+			effects.play("LoseMana", {"Target": [models[caster]]})
+			battle_audio.effect("LoseMana")
+		return
+	# EL2 Mana Breeze's two original Target/GainMana registrations are
+	# separate hero-bound particles. The generic caster fallback would
+	# discard the opponent's effect, despite both heroes gaining channels.
+	if profile.id == "el2" and pending.card == "MNBR":
+		for hero: int in [int(pending.side), 1 - int(pending.side)]:
+			if models.has(hero):
+				effects.play("GainMana", {"Target": [models[hero]]})
+		return
 	var targets: Array = []
 	for id: int in ([pending.target] if int(pending.target) >= 0 else pending.affected):
 		if models.has(id): targets.append(models[id])
@@ -1107,6 +2388,10 @@ func _auto_camera_on() -> bool:
 func _auto_cast(pending: Dictionary) -> void:
 	if pending.is_empty() or not _auto_camera_on() or not models.has(pending.side): return
 	var card := String(pending.card)
+	# Both original editions ship a dedicated Tremor1.CMF in camera.res.
+	if profile.id in ["el1", "el2"] and card == "TREM":
+		auto_camera.tremor(int(pending.side), int(settings.values.get("auto_camera_dynamics", 50)))
+		return
 	var kind := "summon" if duel.is_summon(card) else ("enchantment" if ELCatalog.rule(profile, card).get("effect") == "enchant" else "sorcery")
 	var targets: Array = []
 	for id: int in ([pending.target] if int(pending.target) >= 2 else pending.affected):
@@ -1119,10 +2404,19 @@ func _auto_fight(from: int, to: int) -> void:
 	if not _auto_camera_on() or from < 2: return
 	var middle := Vector3.ZERO
 	var count := 0
-	for id: int in (duel.attacks if not duel.attacks.is_empty() else [from, to]):
-		if models.has(id):
-			middle += models[id].position
-			count += 1
+	# Both editions supply authored AttackCombat close-ups for the fight.
+	# The chosen hit has its own source and victim; averaging the *whole*
+	# declared attacking army could move the camera away from this fight.
+	# Pair midpoint is a remake-space anchor, not a claimed original offset.
+	if profile.id in ["el1", "el2"] and models.has(from) and models.has(to):
+		middle = (models[from].position + models[to].position) * 0.5
+		count = 1
+	else:
+		# Retain the former group fallback for absent fighter models.
+		for id: int in (duel.attacks if not duel.attacks.is_empty() else [from, to]):
+			if models.has(id):
+				middle += models[id].position
+				count += 1
 	if count == 0: return
 	auto_camera.combat(int(duel.entity(from).get("owner", 0)), middle / count, int(settings.values.get("auto_camera_dynamics", 50)))
 
@@ -1135,17 +2429,274 @@ func _step_auto_camera(delta: float) -> void:
 		camera.fov = pose.fov
 		_place_orbit()
 	else:
-		camera.global_transform = Transform3D(Basis(pose.rotation), pose.position)
+		var lift := Vector3(0, FRAMED_HEIGHT, 0)
+		var with: Array = pose.with.map(func(point: Vector3) -> Vector3: return point + lift)
+		var at: Vector3 = ELAutoCamera.clear_of_frame(pose.position, pose.rotation, pose.fov, Vector2(camera.get_viewport().get_visible_rect().size), camera_safe_rect(), pose.anchor + lift, with)
+		camera.global_transform = Transform3D(Basis(pose.rotation), at)
 		camera.fov = pose.fov
-		arena.clear_camera_view(pose.position, pose.focus)
+		arena.clear_camera_view(at, pose.focus)
+
+## The part of the battle screen (viewport pixels) not covered by the interface
+## frame: the hero columns and corner pieces, the card rail and the top line,
+## less a margin so a framed figure is seen whole rather than at the edge.
+func camera_safe_rect() -> Rect2:
+	var screen := Vector2(camera.get_viewport().get_visible_rect().size) if camera != null else Vector2.ZERO
+	if hud_root == null or not hud_root.is_visible_in_tree(): return Rect2(Vector2.ZERO, screen).grow_individual(-screen.x * 0.08, -screen.y * 0.08, -screen.x * 0.08, -screen.y * 0.08)
+	var to_screen := hud_root.get_global_transform_with_canvas()
+	var size := hud_root.size
+	var area := Rect2(to_screen * Vector2(95, 40), Vector2.ZERO).expand(to_screen * Vector2(size.x - 95, size.y - 120))
+	return area.grow_individual(-area.size.x * 0.06, -area.size.y * 0.06, -area.size.x * 0.06, -area.size.y * 0.06)
+
+## The card whose ability a character used: a hero's comes from the enchantment
+## granting it, a creature's from its own card or the enchantment on it. Empty
+## for artifacts and the shared pale-plane abilities.
+func _ability_owner_card(source: int, key: String) -> String:
+	if source < 2:
+		if key.begins_with("artifact:"): return ""
+		for e: Dictionary in duel.heroes[source].get("enchantments", []):
+			if str(e.get("id", "")) == key.get_slice(":", 1): return String(e.card)
+		return ""
+	for card: String in ENCHANTMENT_ABILITIES:
+		if ENCHANTMENT_ABILITIES[card] == key: return card
+	var card := String(duel.entity(source).get("card", ""))
+	if card.is_empty() or not duel.creatures.has(source): return ""
+	for ability: Dictionary in duel.abilities(source):
+		if ability.key == key: return "" if ability.get("pale", false) and String(ability.get("name", "")) != duel.ability_name(card) else card
+	return ""
+
+## Effects and sounds of a used ability, drawn between the user and its target.
+func _ability_effects(data: Dictionary) -> void:
+	var source := int(data.get("source", data.side))
+	var side := int(data.side)
+	var card := _ability_owner_card(source, String(data.ability))
+	if card.is_empty() or not models.has(source): return
+	# The active creature actions listed below have original uinstant clips
+	# and original source figure WAVs. Start only their successful live cues,
+	# never passive powers or save-restored creatures.
+	if source >= 2 and ((profile.id == "el1" and card == "MNTS" and data.ability == "tap_target")
+		or (profile.id == "el2" and card == "MNTS" and data.ability == "tap_target")
+		or (profile.id == "el1" and card == "MTSC" and data.ability == "tap_walls")
+		or (profile.id == "el2" and card == "MTSC" and data.ability == "tap_walls")
+		or (profile.id in ["el1", "el2"] and card == "MTPT" and data.ability == "tap_race")
+		or (profile.id == "el1" and card == "ORSH" and data.ability == "ether")
+		or (profile.id == "el2" and card == "ORSH" and data.ability == "ether")
+		or (profile.id == "el2" and card == "OUS1" and data.ability == "channel_ether")
+		or (profile.id == "el2" and card == "OUS2" and data.ability == "ether_plea")
+		or (profile.id == "el2" and card == "OUS3" and data.ability == "pale_heal")
+		or (profile.id == "el2" and card == "OUD1" and data.ability == "pale_devour")
+		or (profile.id == "el2" and card == "OUD2" and data.ability == "pale_devour")
+		or (profile.id == "el2" and card == "OUD3" and data.ability == "pale_devour")
+		# EL2 Enchanter1Ability@: only successful paid Absorb
+		# of a real enchantment has the original EgipetBird action/WAV.
+		or (profile.id == "el2" and card == "OUE1" and data.ability == "absorb")
+		# EL2 Enchanter2Ability@: successful paid Weave copies an
+		# enchantment and plays the genuine EgipetSnake living-source cue.
+		or (profile.id == "el2" and card == "OUE2" and data.ability == "weave")
+		# EL2 Enchanter3Ability@: successful paid Transpose dispels
+		# the target enchantment into hand and animates its EgipetCrocodile source.
+		or (profile.id == "el2" and card == "OUE3" and data.ability == "transpose")
+		or (profile.id == "el1" and card == "SHSP" and data.ability == "rouse")
+		or (profile.id == "el2" and card == "SHSP" and data.ability == "rouse")
+		or (profile.id == "el1" and card == "CLSP" and data.ability == "recall_spirit")
+		or (profile.id == "el1" and card == "LMMN" and data.ability == "recall_lamia")
+		or (profile.id == "el1" and card == "PTRS" and data.ability == "dispel")
+		or (profile.id == "el1" and card == "BHWR" and data.ability == "gaze")
+		or (profile.id == "el1" and card == "BEHD" and data.ability == "gaze")
+		or (profile.id == "el1" and card == "FMFI" and data.ability == "necromancy")
+		or (profile.id == "el1" and card == "MLFI" and data.ability == "necromancy")
+		or (profile.id == "el1" and card == "BUDG" and data.ability == "breath")
+		or (profile.id == "el1" and card == "GRDG" and data.ability == "wall_break")
+		or (profile.id == "el2" and card == "GRDG" and data.ability == "wall_break")
+		or (profile.id == "el1" and card == "GRFG" and data.ability == "sting")
+		or (profile.id == "el1" and card == "CCLP" and data.ability == "sting")
+		or (profile.id == "el1" and card == "WZSP" and data.ability == "spirit_flight")
+		or (profile.id == "el2" and card == "LMWK" and data.ability == "draw")
+		or (profile.id == "el1" and card == "LMWK" and data.ability == "draw")
+		or (profile.id in ["el1", "el2"] and card == "VBAT" and data.ability == "bat_drain")
+		or (profile.id == "el1" and card == "RVHL" and data.ability == "siphon")
+		or (profile.id == "el2" and card == "RVHL" and data.ability == "siphon")
+		or (profile.id == "el1" and card == "SEHL" and data.ability == "siphon")
+		or (profile.id == "el2" and card == "SEHL" and data.ability == "siphon")
+		or (profile.id == "el1" and card == "SWHL" and data.ability == "siphon")
+		or (profile.id == "el2" and card == "SWHL" and data.ability == "siphon")
+		or (profile.id == "el1" and card == "BLDG" and data.ability == "slay")
+		or (profile.id == "el2" and card == "BLDG" and data.ability == "slay")
+		or (profile.id in ["el1", "el2"] and card == "RDDG" and data.ability == "breath")
+		or (profile.id == "el2" and card == "BUDG" and data.ability == "breath")
+		or (profile.id == "el1" and card == "AVMK" and data.ability == "shoot")
+		or (profile.id in ["el1", "el2"] and card == "WNHR" and data.ability == "hunt")
+		or (profile.id == "el2" and card == "AVMK" and data.ability == "shoot")
+		or (profile.id == "el2" and card == "CCLP" and data.ability == "sting")
+		or (profile.id == "el2" and card == "GRFG" and data.ability == "sting")
+		or (profile.id == "el1" and card == "GIFG" and data.ability == "sting")
+		or (profile.id == "el2" and card == "GIFG" and data.ability == "sting")
+		or (profile.id == "el2" and card == "BEHD" and data.ability == "gaze")
+		or (profile.id == "el2" and card == "BHWR" and data.ability == "gaze")
+		or (profile.id == "el1" and card == "DMRT" and data.ability == "recall_rat")
+		or (profile.id == "el2" and card == "DMRT" and data.ability == "recall_rat")
+		or (profile.id == "el1" and card == "DRAT" and data.ability == "gnaw")
+		or (profile.id == "el2" and card == "DRAT" and data.ability == "gnaw")
+		or (profile.id == "el1" and card == "PRAT" and data.ability == "plague")
+		or (profile.id == "el2" and card == "PRAT" and data.ability == "plague")
+		or (profile.id == "el2" and card == "CLSP" and data.ability == "recall_spirit")
+		or (profile.id == "el2" and card == "LMMN" and data.ability == "recall_lamia")
+		or (profile.id == "el2" and card == "PTRS" and data.ability == "dispel")
+		or (profile.id == "el2" and card == "FMFI" and data.ability == "necromancy")
+		or (profile.id == "el2" and card == "MLFI" and data.ability == "necromancy")
+		or (profile.id == "el2" and card == "WZSP" and data.ability == "spirit_flight")):
+		var actor: ELModel = models[source]
+		if actor.has_clip("uinstant") and actor.play("uinstant"):
+			battle_audio.unit(actor, "instant")
+	# Original EL1 SeaHaloAbility - registers DrainMana
+	# only when ether moves: Start on the opposing donor hero,
+	# Finish on the recipient hero. The zero-ether ability still
+	# succeeds and rests its BlueHalo but skips this particle/audio cue.
+	# This is not the EL2 generic creature-to-target DrainMana binding.
+	if profile.id == "el1" and source >= 2 and card == "SEHL" and data.ability == "siphon":
+		if int(duel.heroes[1 - side].mana) > 0 and models.has(1 - side) and models.has(side):
+			battle_audio.effect("DrainMana")
+			if is_instance_valid(effects):
+				effects.play("DrainMana", {"Start": [models[1 - side]], "Finish": [models[side]]})
+		return
+	# The successful ability event is synchronous, before target rest changes.
+	# Patriarch cues only awake, non-sick enemies of the selected race.
+	# Sick matches still pay/rest; EL2 excludes creatures in the Colourless Plane.
+	if profile.id in ["el1", "el2"] and source >= 2 and card == "MTPT" and data.ability == "tap_race":
+		var race := duel.race(int(data.target))
+		for enemy: Dictionary in duel.army(1 - side):
+			var target := int(enemy.id)
+			if profile.id == "el2" and duel.in_plane(target): continue
+			if not enemy.resting and not enemy.sick and duel.race(target) == race and models.has(target):
+				_play_ability([["NegSorcery", "at"]], source, side, target, false)
+		return
+	# Both original Mantis Scribes select awake opposing Walls (EL1
+	# –; EL2 –). Sick Walls still
+	# pay/rest, but the original Target/NegSorcery is queued separately
+	# for each awake non-sick Wall before the synchronous rest change.
+	# A magic screen does not protect a non-targeted bystander.
+	if profile.id in ["el1", "el2"] and source >= 2 and card == "MTSC" and data.ability == "tap_walls":
+		for enemy: Dictionary in duel.army(1 - side):
+			var target := int(enemy.id)
+			if not enemy.resting and not enemy.sick and duel.race(target) == "Wall" and models.has(target):
+				_play_ability([["NegSorcery", "at"]], source, side, target, false)
+		return
+	# Both original KoboldElderAbility callbacks (EL1 –,
+	# EL2 –) bind Target/PosSorcery to each newly
+	# readied allied Kobold, not the Elder. The event precedes untap.
+	if profile.id in ["el1", "el2"] and source >= 2 and card == "KBEL" and data.ability == "rally":
+		for ally: Dictionary in duel.army(side):
+			var target := int(ally.id)
+			if ally.card != "KBEL" and ally.resting and duel.race(target) == "Kobold" and models.has(target):
+				_play_ability([["PosSorcery", "at"]], source, side, target, false)
+		return
+	var items := EffectTable.ability_effects(profile.id, card)
+	if card == EffectTable.ILLUSION_CARD and data.has("grave"): items = EffectTable.illusion_effects(int(data.grave))
+	# EL2 Burnout's first selection is the creature being sacrificed;
+	# original - starts RedDamage there. The later
+	# Fireball/FireballExpl points and their impact use the second
+	# selection (onwards). EL1 presentation stays unchanged.
+	var visual_target := int(data.get("target", -1))
+	if profile.id == "el2" and card == "BROT": visual_target = int(data.get("hit_target", visual_target))
+	# RNST has no selected target: original RainOfStoneAbility strikes every
+	# opposing creature and its RedRainOfStones visual has Monsters Hit@35.
+	# Snapshot these ids before synchronous damage removes any of them.
+	if profile.id == "el2" and source < 2 and card == "RNST":
+		var victims: Array[int] = []
+		for victim: Dictionary in duel.army(1 - side):
+			if models.has(int(victim.id)): victims.append(int(victim.id))
+		var rain_delay := ELCombatEffects.ability_hit_delay(profile, card)
+		if rain_delay > 0.0 and not victims.is_empty():
+			_ability_hit = {"targets": victims, "hit": rain_delay}
+			call_deferred("_clear_ability_hit")
+	# Both editions' FRBL hero ability has Fireball's Popadanie@39 hit
+	# cue (EL1 original). EL1 GiantFingusAbility@
+	# separately starts original FingusSpit, MonstersHit@10 on its target.
+	# EL2 creature abilities and BROT's second target keep prior timing;
+	# sacrifice death and all underlying damage resolve synchronously.
+	elif visual_target >= 0 and ((profile.id == "el2" and (source >= 2 or card in ["FRBL", "BROT"])) or (profile.id == "el1" and card in ["FRBL", "GIFG"])):
+		var hit := ELCombatEffects.ability_hit_delay(profile, card)
+		if hit > 0.0:
+			_ability_hit = {"target": visual_target, "hit": hit}
+			call_deferred("_clear_ability_hit")
+	if profile.id == "el2" and card == "BROT":
+		# Two different figure bindings in the original ability sequence:
+		# its sacrifice glows, then the fireball flies to the damage victim.
+		for item: Array in items:
+			_play_ability([item], source, side, int(data.target) if String(item[0]) == "RedDamage" else visual_target, true)
+	elif profile.id == "el2" and card == "RPST" and source == side:
+		# StationAbility: PosSorcery and Draw are Target-bound to
+		# the casting hero; BlackDamage uses 1 - side.
+		# The grave choice is not a figure. Generic playback placed all
+		# three at the caster instead of showing the opposing hero's hit.
+		for item: Array in items:
+			_play_ability([item], source, side, 1 - side if String(item[0]) == "BlackDamage" else side, false)
+	else:
+		# Attach the own-edition first-key impact WAV source to that victim; leave the
+		# separate Fireball projectile unpositioned. EL2's two later original-index
+		# effect-name references have not been proven to request additional
+		# simultaneous audio at ability start.
+		_play_ability(items, source, side, visual_target, true,
+			profile.id in ["el1", "el2"] and card == "FRBL",
+			profile.id == "el2" and ((card == "ORSH" and data.ability == "ether")
+				or (card == "OUS1" and data.ability == "channel_ether")))
+	# Both editions' KBSH cr206 have a 58-frame uinstant but no figure instant.wav.
+	# Bind original RedZap Start/Finish particles to the standing cast joint
+	# first, then animate the source without inventing an extra sound.
+	if profile.id in ["el1", "el2"] and source >= 2 and card == "KBSH" and data.ability == "sting":
+		var shaman: ELModel = models[source]
+		if shaman.has_clip("uinstant"):
+			shaman.play("uinstant")
+
+func _clear_ability_hit() -> void:
+	_ability_hit.clear()
+
+## A combat power's effects and sounds, drawn at (or towards) the figure it struck.
+func _combat_ability(data: Dictionary) -> void:
+	var source := int(data.get("source", -1))
+	if not models.has(source): return
+	_play_ability(EffectTable.combat_effects(profile.id, String(data.get("key", ""))), source, int(data.get("side", 0)), int(data.get("target", -1)), false)
+
+## Plays [[effect, binding], ...] between `source` and `target`; with
+## `hero_effects`, life/ether/card effects are drawn at the acting hero.
+func _play_ability(items: Array, source: int, side: int, target: int, hero_effects: bool, frbl_victim_sound := false, hero_gainmana_source := false) -> void:
+	var user: ELModel = models.get(source)
+	if user == null: return
+	var aim: ELModel = models.get(target, models.get(1 - side))
+	for item: Array in items:
+		if item.size() < 2: continue
+		var effect := String(item[0])
+		if hero_gainmana_source and effect == "GainMana" and models.has(side):
+			# EL2 ORSH@ and OUS1@ bind their own
+			# Target/GainMana to the receiving hero. This magic effect
+			# has a separate sound source from the creature's instant.wav.
+			battle_audio.effect(effect, models[side])
+		elif frbl_victim_sound and effect == "FireballExpl" and is_instance_valid(aim):
+			battle_audio.effect(effect, aim)
+		else:
+			battle_audio.effect(effect)
+		if not is_instance_valid(effects): continue
+		var at: ELModel = models.get(side) if hero_effects and EffectTable.HERO_EFFECTS.has(effect) else models.get(target, user)
+		match String(item[1]):
+			"line": if aim != null: effects.play(effect, {"Start": [user], "Finish": [aim]})
+			"start": effects.play(effect, {"Start": [user]})
+			# Original RainOfStoneAbility binds Start to the opposing hero;
+			# falling rocks belong over that side, not the caster.
+			"enemy_start": if models.has(1 - side): effects.play(effect, {"Start": [models[1 - side]]})
+			"finish": if aim != null: effects.play(effect, {"Finish": [aim]})
+			_: if at != null: effects.play(effect, {"Target": [at]})
 
 func _figure_effect(effect: String, id: int) -> void:
 	if is_instance_valid(effects) and models.has(id): effects.play(effect, {"Target": [models[id]]})
 
-func _animation_done(_clip: String, id: int) -> void:
-	if not models.has(id):
+func _animation_done(clip: String, id: int) -> void:
+	if not models.has(id) or _hits_waiting.has(id):
 		return
+	if _melee_busy() and melee.moving(id): return
 	if id >= 2 and not duel.creatures.has(id):
+		# During combat playback a creature that falls to a later blow fights on until then.
+		if _melee_busy() and clip != "udeath":
+			models[id].play("cidle")
+			return
 		_remove_model(id)
 		return
 	if duel.phase == ELDuel.Phase.FINISHED:
@@ -1213,6 +2764,17 @@ func creature_icons(id: int) -> Array:
 		if marks[bit]: result.append(ELCombatSymbols.ICON_CODES[bit])
 	return result
 
+## Where a figure's marks hang: the original reads the model's animated
+## "numbers" node; a model without one, or whose clip leaves it
+## at the feet, uses the top of its meshes.
+func _numbers_point(model: ELModel) -> Vector3:
+	var part: Node3D = model.parts.get("numbers")
+	if part != null and model.clips.get(model.clip, {}).has("numbers"):
+		var mesh: Mesh = model._mesh_cache.get("base/numbers")
+		var at := part.global_transform * mesh.get_aabb().get_center() if mesh != null else part.global_position
+		if at.y - model.global_position.y > 0.15: return model.position + (at - model.global_position)
+	return model.position + Vector3(0, _figure_height(model), 0)
+
 ## The original flying number over a figure: damage red, healing (negative) green.
 func _float_number(id: int, amount: int) -> void:
 	if not models.has(id) or not is_instance_valid(symbols) or not is_instance_valid(models[id]): return
@@ -1240,10 +2802,42 @@ func _float_text(id: int, text: String, color: Color, remake_only := false) -> v
 	tween.tween_property(label, "position:y", label.position.y + 1.5, 0.9)
 	tween.tween_callback(label.queue_free)
 
+## A card dropping into the hand rail. The original steps its inserter
+## actions once per rendered frame (EL2 ``/``): the new card
+## starts 50 px above its place and transparent; a drawn card is opaque on the
+## next frame and falls 25 px per frame; a returned card fades in at half alpha
+## over two frames before it falls. One step here is a 60 Hz frame.
+static func rail_drop(button: Control, back: bool) -> Tween:
+	const STEP := 1.0 / 60.0
+	button.modulate.a = 0.0
+	var tween := button.create_tween()
+	# The rail's container places its cards again when the hand changes size;
+	# keep the current rise through that.
+	var box := button.get_parent() as Container
+	var keep := func() -> void: button.position.y = -float(button.get_meta("rail_rise", 0.0))
+	if box != null:
+		box.sort_children.connect(keep)
+		var release := func() -> void: if box.sort_children.is_connected(keep): box.sort_children.disconnect(keep)
+		tween.finished.connect(release)
+		button.tree_exiting.connect(release)
+	var put := func(alpha: float, rise: float) -> void:
+		button.modulate.a = alpha
+		button.set_meta("rail_rise", rise)
+		button.position.y = -rise
+	tween.tween_interval(STEP)
+	if back:
+		tween.tween_callback(put.bind(0.5, 50.0))
+		tween.tween_interval(STEP)
+	tween.tween_callback(put.bind(1.0, 25.0))
+	tween.tween_interval(STEP)
+	tween.tween_callback(put.bind(1.0, 0.0))
+	return tween
+
 func _refresh() -> void:
 	if duel == null or updating:
 		return
 	_check_handover()
+	_step_front_line()
 	updating = true
 	for child in hand.get_children():
 		hand.remove_child(child)
@@ -1254,19 +2848,25 @@ func _refresh() -> void:
 	var concealed := _hot_seat() and hot_pending
 	if _hot_seat() and hot_side >= 0: displayed = hot_side
 	var hero: Dictionary = duel.heroes[displayed]
-	var shown: Array[String] = []
-	var groups := {}
-	for i in hero.hand.size():
-		var group := "%s:%d" % [hero.hand[i], duel.hand_uses(displayed, i)]
-		groups[group] = int(groups.get(group, 0)) + 1
+	# The original rail holds one icon per hand card (EL2 ``, one
+	# CSpellInserter per hand entry); copies are not grouped.
 	var showing_artifacts := rail != null and rail.artifacts_shown
-	for i in (0 if showing_artifacts or concealed else hero.hand.size()):
+	var order: Array[int] = []
+	if not showing_artifacts and not concealed: order = duel.hand_display(displayed)
+	# A card that joins the hand the rail already shows drops in; a rebuilt rail
+	# (another side, the artifact list, a hand-over) does not (EL2 ``
+	# sets the inserter's instant flag while it rebuilds).
+	var keys: Variant = hero.get("hand_view")
+	var tracked: bool = keys is Array and keys.size() == hero.hand.size()
+	var seen := {}
+	# A loaded or new battle is a rebuild too.
+	var same_duel: bool = _rail_seen_duel != null and _rail_seen_duel.get_ref() == duel
+	var animate: bool = tracked and _rail_seen_side == displayed and same_duel
+	var old_min := INF
+	for id: String in _rail_seen: old_min = minf(old_min, float(id.get_slice(":", 0)))
+	for i: int in order:
 		var card: String = hero.hand[i]
 		var uses := duel.hand_uses(displayed, i)
-		var group := "%s:%d" % [card, uses]
-		if shown.has(group):
-			continue
-		shown.append(group)
 		var button := TextureButton.new()
 		button.custom_minimum_size = Vector2(50, 50)
 		button.texture_normal = profile.card_icon(card)
@@ -1285,34 +2885,37 @@ func _refresh() -> void:
 		button.set_meta("hand_index", i)
 		button.set_meta("charges", uses)
 		button.disabled = not _human_turn() or duel.available_mana(displayed) < duel.cost(card) or hero.channels < duel.channel_cost(card) or uses == 0
-		button.modulate = Color(0.45, 0.45, 0.45) if button.disabled else Color.WHITE
-		var outline := ReferenceRect.new()
-		outline.border_color = ACCENT if i == selection else Color(0.8, 0.65, 0.4, 0.35)
-		outline.border_width = 2 if i == selection else 1
-		outline.editor_only = false
-		outline.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		button.add_child(outline)
-		outline.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-		var count := _label("×%d" % int(groups[group]), 12)
-		count.position = Vector2(27, 1)
-		count.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		button.add_child(count)
-		var mana := _label(price.replace(" ", ""), 13, ACCENT)
-		mana.position = Vector2(24 if duel.variable_power(card) else 36, 31)
-		mana.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		button.add_child(mana)
-		if uses >= 0:
-			var charges := _label(str(uses), 12, Color("9de2d8"))
-			charges.position = Vector2(3, 31)
-			charges.add_theme_color_override("font_outline_color", Color.BLACK)
-			charges.add_theme_constant_override("outline_size", 3)
-			charges.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_list_look().dress(button)
+		if i == selection: _selection_outline(button)
+		# Remake readout: the cost, only with the helper overlay.
+		if helper_overlay():
+			var mana := _label(price.replace(" ", ""), 13, ACCENT)
+			mana.position = Vector2(2, 1)
+			mana.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			button.add_child(mana)
+		# The original prints the spellbook slot's remaining charges (runes in the
+		# first game) at the icon's lower right in its glyph digits, 0..1000, none
+		# for a generated card (EL2 ``, EL1 ``; both step 8 px).
+		if uses >= 0 and uses <= 1000:
+			var charges := _list_look().number(uses, false)
 			charges.set_meta("charge_label", true)
 			button.add_child(charges)
 		button.pressed.connect(_cast_card.bind(i))
 		button.mouse_entered.connect(_hint.bind(button.tooltip_text.replace("\n", " — ")))
 		hand.add_child(button)
+		if tracked:
+			var id := "%d:%s" % [int(keys[i]), card]
+			seen[id] = true
+			if animate and not _rail_seen.has(id):
+				# Drawn cards enter at the left, returned ones at the right.
+				var back := float(keys[i]) > old_min
+				button.set_meta("rail_drop", rail_drop(button, back))
+				if rail != null: rail.reveal_hand(back)
+	_rail_seen = seen
+	_rail_seen_side = displayed if tracked and not showing_artifacts and not concealed else -1
+	_rail_seen_duel = weakref(duel)
 	if showing_artifacts and not concealed: _fill_artifact_rail(displayed)
+	if hand_frames != null: hand_frames.queue_redraw()
 	if rail != null:
 		var tallies: Array = []
 		for side in 2:
@@ -1362,9 +2965,47 @@ func _refresh() -> void:
 			var resting: bool = duel.creatures[id].resting or duel.creatures[id].sick
 			var desired := "ctapidle" if resting else "cidle"
 			if models[id].base_clip() != desired:
-				models[id].play(desired)
+				_turn_figure(models[id], desired, bool(duel.creatures[id].resting))
 	_refresh_inspector()
 	updating = false
+
+## A creature put to rest by an action, or rising from rest, plays the figure's own tap
+## or untap clip (with its sound and clip particles) before the idle it ends
+## in; figures without the clip change idle at once.
+func _turn_figure(model: ELModel, desired: String, resting: bool) -> void:
+	var from := model.base_clip()
+	# A newly summoned figure simply waits in its resting idle.
+	var clip := "utap" if desired == "ctapidle" and from == "cidle" and resting else ("uuntap" if desired == "cidle" and from == "ctapidle" else "")
+	if not clip.is_empty() and model.has_clip(desired) and model.play(clip):
+		battle_audio.unit(model, clip.trim_prefix("u"))
+		return
+	model.play(desired)
+
+func _list_look() -> ELListLook:
+	if list_look == null or list_look_profile != profile:
+		list_look = ELListLook.load(profile)
+		list_look_profile = profile
+	return list_look
+
+## The chosen card or artifact keeps the remake's accent outline (the
+## original's selection feedback on the rail is unconfirmed).
+func _selection_outline(button: Control) -> void:
+	var outline := ReferenceRect.new()
+	outline.border_color = ACCENT
+	outline.border_width = 2
+	outline.editor_only = false
+	outline.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	button.add_child(outline)
+	outline.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+
+## The frame tile in every card-rail slot past the last card or artifact
+## (the original hand slots show their Type1 HERO_PANEL_3 layer when empty).
+func _draw_hand_frames() -> void:
+	if hand == null or profile == null or duel == null: return
+	var pitch := 53.0
+	var shown := hand.get_child_count()
+	var offset := float(card_scroll.scroll_horizontal) if card_scroll != null else 0.0
+	_list_look().draw_frames(hand_frames, Vector2(-offset, 0), shown, int(ceil((hand_frames.size.x + offset) / pitch)), pitch)
 
 ## The original Artifacts rail: the displayed hero's artifacts in the card
 ## slots with their icon and charges, greyed while the use gate refuses them;
@@ -1388,22 +3029,11 @@ func _fill_artifact_rail(displayed: int) -> void:
 		button.set_meta("artifact_index", index)
 		button.set_meta("charges", int(item.charges))
 		button.disabled = not _human_turn() or not commands.has(index) or not duel.can_use_ability(displayed, key)
-		button.modulate = Color(0.45, 0.45, 0.45) if button.disabled else Color.WHITE
-		var outline := ReferenceRect.new()
-		outline.border_color = ACCENT if ability_selection.get("key") == key else Color(0.8, 0.65, 0.4, 0.35)
-		outline.border_width = 2 if ability_selection.get("key") == key else 1
-		outline.editor_only = false
-		outline.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		button.add_child(outline)
-		outline.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-		# The original prints the charges at the icon's lower right.
-		var charges := _label(str(int(item.charges)), 13, INK)
-		charges.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-		charges.position = Vector2(0, 31)
-		charges.size = Vector2(47, 18)
-		charges.add_theme_color_override("font_outline_color", Color.BLACK)
-		charges.add_theme_constant_override("outline_size", 3)
-		charges.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_list_look().dress(button)
+		if ability_selection.get("key") == key: _selection_outline(button)
+		# The original prints the charges at the icon's lower right in its
+		# glyph digits (ELListLook.number).
+		var charges := _list_look().number(int(item.charges), profile.id == "el1")
 		charges.set_meta("charge_label", true)
 		button.add_child(charges)
 		if commands.has(index): button.pressed.connect(_select_ability.bind(displayed, commands[index]))
@@ -1563,7 +3193,7 @@ func _build_ui() -> void:
 	status.add_theme_constant_override("shadow_offset_y", 1)
 	status.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	ui.add_child(status)
-	var menu_button := _button("Menu", func(): menu.visible = not menu.visible)
+	menu_button = _button("Menu", func(): menu.visible = not menu.visible)
 	ui.add_child(menu_button)
 	menu_button.set_anchors_and_offsets_preset(Control.PRESET_TOP_RIGHT)
 	menu_button.offset_left = -112
@@ -1689,6 +3319,14 @@ func _build_ui() -> void:
 	auto_off_button.pressed.connect(func(): _set_auto(false))
 	auto_off_button.visible = false
 	hud_root.add_child(auto_off_button)
+	game_menu_button = ELCutPartButton.new()
+	game_menu_button.visible = false
+	game_menu_button.pressed.connect(_open_game_menu)
+	game_menu_button.gui_input.connect(func(event: InputEvent):
+		if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_RIGHT:
+			menu.visible = not menu.visible
+			game_menu_button.accept_event())
+	hud_root.add_child(game_menu_button)
 	attack_button.disabled = true
 	end_button.disabled = true
 	for button in [attack_button, end_button]:
@@ -1704,9 +3342,15 @@ func _build_ui() -> void:
 	notice.add_theme_constant_override("shadow_offset_y", 1)
 	notice.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	hud_root.add_child(notice)
+	hand_frames = Control.new()
+	hand_frames.clip_contents = true
+	hand_frames.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	hand_frames.draw.connect(_draw_hand_frames)
+	hud_root.add_child(hand_frames)
 	card_scroll = ScrollContainer.new()
 	card_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	hud_root.add_child(card_scroll)
+	card_scroll.get_h_scroll_bar().value_changed.connect(func(_value: float): hand_frames.queue_redraw())
 	hand = HBoxContainer.new()
 	# Cards sit on the panel's 53 px slots.
 	hand.add_theme_constant_override("separation", 3)
@@ -1755,7 +3399,7 @@ func _build_ui() -> void:
 	_layout_hud()
 
 func _overlay_open() -> bool:
-	return (first_tutorial != null and first_tutorial.visible) or (options_host != null and options_host.is_visible_in_tree()) or movie_player != null or (front_menu != null and front_menu.is_visible_in_tree()) or (setup_panel != null and setup_panel.visible) or (menu != null and menu.visible) or (settings_dialog != null and settings_dialog.visible) or (campaign_setup != null and campaign_setup.visible) or (power_dialog != null and power_dialog.visible) or (tutorial_quit != null and tutorial_quit.visible) or (esc_menu != null and esc_menu.visible) or (replay_quit != null and replay_quit.visible)
+	return (first_tutorial != null and first_tutorial.visible) or (options_host != null and options_host.is_visible_in_tree()) or movie_player != null or (front_menu != null and front_menu.is_visible_in_tree()) or (setup_panel != null and setup_panel.visible) or (menu != null and menu.visible) or (settings_dialog != null and settings_dialog.visible) or (campaign_setup != null and campaign_setup.visible) or (power_dialog != null and power_dialog.visible) or (tutorial_quit != null and tutorial_quit.visible) or (esc_menu != null and esc_menu.visible) or (replay_quit != null and replay_quit.visible) or replay_inventory != null
 
 ## First game: the tutorial panel of battles (one per view, sharing the
 ## settings' tutorial with the map).
@@ -2024,10 +3668,7 @@ func _begin_campaign(edition: String, scenario: Dictionary, difficulty: int, res
 		_begin_encounter(encounter.hero_id, encounter.opponent_id)
 		var combat_view: Dictionary = restored.camera.get("battle", {})
 		var session := ELMatchSave.session(combat_view)
-		camera_yaw = session.camera[0]
-		camera_pitch = session.camera[1]
-		camera_distance = session.camera[2]
-		_update_camera()
+		_restore_orbit(session.camera)
 
 func _campaign_battle() -> ELDuel:
 	return campaign_view.director.encounter.battle if campaign_view != null and campaign_view.director != null and campaign_view.director.encounter != null else null
@@ -2194,9 +3835,6 @@ func _load_duel() -> void:
 		return
 	var session := ELMatchSave.session(document.get("session"))
 	mode_select.select(session.mode)
-	camera_yaw = session.camera[0]
-	camera_pitch = session.camera[1]
-	camera_distance = session.camera[2]
 	demo = false
 	# A Duel mode match saved mid-round continues with its tallies.
 	var saved_match: Variant = document.get("session", {}).get("duel_match") if document.get("session") is Dictionary else null
@@ -2206,8 +3844,11 @@ func _load_duel() -> void:
 		if not restored_match.restore(profiles[edition], saved_match) or restored_match.finished(): restored_match = null
 	_match_starting = restored_match != null
 	_start(edition, restored.setup, restored)
+	_restore_orbit(session.camera)
 	_match_starting = false
 	duel_match = restored_match
+	# The original opens the report only when a match starts, not on a load.
+	_drop_duel_report()
 	# Hot seat: a load always hands the screen over again (the box first).
 	hot_side = -1
 	hot_pending = false
@@ -2346,30 +3987,61 @@ func _enchantment_ability(enchantment: Dictionary) -> Dictionary:
 ## enchantments with the card's AbilityIcon; those an enchantment grants are
 ## reached through that enchantment's icon instead.
 func _strip_abilities() -> Array[Dictionary]:
+	var subject := _strip_subject()
 	var result: Array[Dictionary] = []
-	if selected_creature < 2 or not duel.creatures.has(selected_creature): return result
-	for ability: Dictionary in duel.abilities(selected_creature):
+	if subject < 2 or not duel.creatures.has(subject): return result
+	for ability: Dictionary in duel.abilities(subject):
 		if not ENCHANTMENT_ABILITIES.values().has(ability.key): result.append(ability)
 	return result
 
 ## The CombatSpells row whose ability icon and text stand for `ability`.
 func _ability_card(ability: Dictionary) -> String:
+	var subject := _strip_subject()
 	if ability.key == "dissipate": return "AOUP"
 	if ability.key == "courtesy": return "AOLS"
-	var manifest: Dictionary = ELCatalog.PALE_RACE_ABILITIES.get(duel.race(selected_creature), {})
+	var manifest: Dictionary = ELCatalog.PALE_RACE_ABILITIES.get(duel.race(subject), {})
 	if manifest.get("key", "") == ability.key: return String(manifest.text)
-	return String(duel.creatures[selected_creature].card)
+	return String(duel.creatures[subject].card)
 
 ## The upper icon strip: the selected character's enchantments, or the
 ## selected hero's graveyard, oldest first. An entry is offered while the
 ## pending spell or ability can take it; with nothing pending, an
 ## enchantment that grants the character's own ability starts that ability.
+## Whose list the upper strip shows: the selection, or while the right
+## button is held (without turning the camera) the character under the
+## pointer; in Graveyard mode only a hero (EL2, EL1).
+func _strip_subject() -> int:
+	if strip_preview >= 0 and duel.entity(strip_preview).size() > 0 and (not inspect_graveyard or strip_preview < 2): return strip_preview
+	return selected_creature
+
+## Right button: held still it previews the hovered character's strip
+## list; dragged past 6 px it turns the camera (remake convenience, as on
+## the adventure map; the original turns the battle camera at the edges).
+func _right_button(event: InputEvent) -> void:
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT:
+		right_down = event.pressed
+		right_from = event.position
+		orbiting = false
+		_set_strip_preview(combat_hover if event.pressed else -1)
+	elif event is InputEventMouseMotion and right_down:
+		if not orbiting and event.position.distance_to(right_from) > 6.0:
+			orbiting = true
+			_set_strip_preview(-1)
+		elif not orbiting:
+			_set_strip_preview(combat_hover)
+
+func _set_strip_preview(id: int) -> void:
+	if id == strip_preview: return
+	strip_preview = id
+	_fill_strip()
+
 func _fill_strip() -> void:
+	var subject := _strip_subject()
 	if rail == null or rail.strip == null or duel == null: return
 	rail.show_strip(inspect_graveyard)
 	var list: Array[Dictionary] = []
-	var entity := duel.entity(selected_creature) if selected_creature >= 0 else {}
-	var shown := -1 if entity.is_empty() or (inspect_graveyard and selected_creature >= 2) or (_hot_seat() and hot_pending) else selected_creature
+	var entity := duel.entity(subject) if subject >= 0 else {}
+	var shown := -1 if entity.is_empty() or (inspect_graveyard and subject >= 2) or (_hot_seat() and hot_pending) else subject
 	if shown >= 0 and inspect_graveyard:
 		for index in entity.grave.size():
 			var card: String = entity.grave[index]
@@ -2383,10 +4055,10 @@ func _fill_strip() -> void:
 			var tip := duel.card_name(enchantment.card)
 			if profile.id == "el2" and not ability.is_empty() and int(ability.get("cost", -1)) >= 0 and profile.text("T_ENCHANTMENT_COST_TT").count("%") == 2:
 				tip = profile.text("T_ENCHANTMENT_COST_TT") % [tip, int(ability.cost)]
-			var own: bool = selected_creature == duel.active_side() or (selected_creature >= 2 and int(entity.get("owner", -1)) == duel.active_side())
-			var enabled: bool = _removal_allowed(enchantment) if pending else (not ability.is_empty() and own and _human_turn() and duel.can_use_ability(selected_creature, ability.key))
+			var own: bool = subject == duel.active_side() or (subject >= 2 and int(entity.get("owner", -1)) == duel.active_side())
+			var enabled: bool = _removal_allowed(enchantment) if pending else (not ability.is_empty() and own and _human_turn() and duel.can_use_ability(subject, ability.key))
 			list.append({"icon": profile.card_icon(enchantment.card), "tooltip": tip, "enabled": enabled, "meta": {"enchantment": int(enchantment.id), "card": enchantment.card}})
-		var owned: bool = selected_creature >= 2 and int(entity.get("owner", -1)) == duel.active_side()
+		var owned: bool = subject >= 2 and int(entity.get("owner", -1)) == duel.active_side()
 		for ability: Dictionary in _strip_abilities():
 			var card := _ability_card(ability)
 			var tip := String(ability.name)
@@ -2396,16 +4068,17 @@ func _fill_strip() -> void:
 			if not about.is_empty() and about != tip: tip += "\n" + about
 			var icon := int(profile.table("CombatSpells").get(card, {}).get("AbilityIcon", 0))
 			list.append({"icon": profile.icon_at(icon) if icon > 0 else profile.card_icon(card), "tooltip": tip,
-				"enabled": not pending and owned and _human_turn() and duel.can_use_ability(selected_creature, ability.key), "meta": {"ability": ability.key, "card": card}})
+				"enabled": not pending and owned and _human_turn() and duel.can_use_ability(subject, ability.key), "meta": {"ability": ability.key, "card": card}})
 	var signature := "%d:%s:" % [shown, inspect_graveyard]
 	for item: Dictionary in list: signature += str(item.meta.get("card", "")) + ","
 	rail.strip.set_items(list, signature)
 
 func _strip_pressed(index: int) -> void:
-	var entity := duel.entity(selected_creature) if selected_creature >= 0 else {}
+	var subject := _strip_subject()
+	var entity := duel.entity(subject) if subject >= 0 else {}
 	if entity.is_empty(): return
 	if inspect_graveyard:
-		if selected_creature >= 2 or index >= entity.grave.size(): return
+		if subject >= 2 or index >= entity.grave.size(): return
 		var choice := _grave_choice(index)
 		if not choice.is_empty() and choice.enabled: choice.action.call()
 		return
@@ -2413,14 +4086,14 @@ func _strip_pressed(index: int) -> void:
 		var own := _strip_abilities()
 		if index - entity.enchantments.size() >= own.size() or selection >= 0 or not ability_selection.is_empty(): return
 		var chosen: Dictionary = own[index - entity.enchantments.size()]
-		if selected_creature >= 2 and int(entity.owner) == duel.active_side() and _human_turn() and duel.can_use_ability(selected_creature, chosen.key): _select_ability(selected_creature, chosen)
+		if subject >= 2 and int(entity.owner) == duel.active_side() and _human_turn() and duel.can_use_ability(subject, chosen.key): _select_ability(subject, chosen)
 		return
 	var enchantment: Dictionary = entity.enchantments[index]
 	if selection >= 0 or not ability_selection.is_empty():
-		if _removal_allowed(enchantment): _remove_selected_enchantment(selected_creature, int(enchantment.id))
+		if _removal_allowed(enchantment): _remove_selected_enchantment(subject, int(enchantment.id))
 		return
 	var ability := _enchantment_ability(enchantment)
-	if not ability.is_empty() and _human_turn() and duel.can_use_ability(selected_creature, ability.key): _select_ability(selected_creature, ability)
+	if not ability.is_empty() and _human_turn() and duel.can_use_ability(subject, ability.key): _select_ability(subject, ability)
 
 func _select_ability(source: int, ability: Dictionary) -> void:
 	selection = -1
@@ -2523,6 +4196,7 @@ func _layout_hud() -> void:
 	# The original top-right place (735,10 of 800) holds the remake's Menu
 	# button, so the stop control sits just to its left.
 	auto_off_button.position = Vector2(w - 165, 10)
+	game_menu_button.position = Vector2(w - 16 - game_menu_button.size.x, 10)
 	_place_end_button()
 	# The remake's notice line sits above the upper icon strip.
 	notice.position = Vector2(134, h - 160)
@@ -2530,6 +4204,9 @@ func _layout_hud() -> void:
 	var rail_rect := rail.hand_rect()
 	card_scroll.position = rail_rect.position
 	card_scroll.size = rail_rect.size
+	hand_frames.position = rail_rect.position
+	hand_frames.size = rail_rect.size
+	hand_frames.queue_redraw()
 
 func _place_end_button() -> void:
 	if hud_root == null or end_button == null: return
@@ -2550,19 +4227,24 @@ func _content_menu() -> void:
 		return
 	var dialog := AcceptDialog.new()
 	dialog.title = "Original game content"
-	dialog.dialog_text = "Choose the installed or extracted game folder containing Resources.\nEach edition keeps its own files and rules. Both can be mounted together.\nGOG setup EXEs can be imported with tools/import_game.py."
+	dialog.dialog_text = "Choose the installed game folder containing Resources, or the GOG installer (setup_etherlords*.exe), which is unpacked without being run.\nEach edition keeps its own files and rules. Both can be used together."
 	ui.add_child(dialog)
-	dialog.add_button("Etherlords I folder", false, "el1")
+	# Each button goes left of the previous one: added last, shown first.
+	dialog.add_button("GOG installer or data pack…", false, "import")
 	dialog.add_button("Etherlords II folder", false, "el2")
-	dialog.custom_action.connect(func(edition: String):
-		import_edition = edition
+	dialog.add_button("Etherlords I folder", false, "el1")
+	dialog.custom_action.connect(func(action: String):
 		dialog.hide()
 		dialog.queue_free()
+		if action == "import":
+			_open_content_setup()
+			return
+		import_edition = action
 		folder_dialog.popup_centered_ratio(0.7))
 	dialog.confirmed.connect(dialog.queue_free)
 	dialog.popup_centered(Vector2i(680, 180))
 
-## Browser / Android game files screen (ELContentSetup) over everything else.
+## Game files import screen (ELContentSetup) over everything else.
 func _open_content_setup() -> void:
 	if content_setup != null: return
 	if menu != null: menu.hide()
@@ -2574,7 +4256,10 @@ func _open_content_setup() -> void:
 	var close := func():
 		layer.queue_free()
 		content_setup = null
-	content_setup.closed.connect(close)
+	content_setup.closed.connect(func():
+		close.call()
+		# Desktop: with nothing mounted, return to the folder / installer choice.
+		if profiles.is_empty() and not ELContentLibrary.uses_import(): _content_menu.call_deferred())
 	content_setup.removed.connect(func(edition: String):
 		profiles.erase(edition)
 		if profile != null and profile.id == edition: profile = null
@@ -2592,7 +4277,7 @@ func _open_content_setup() -> void:
 ## After an import or removal: a fresh start on the chosen edition.
 func _restart_after_content_change(edition := "") -> void:
 	if profiles.is_empty():
-		_open_content_setup.call_deferred()
+		_content_menu.call_deferred()
 		return
 	if not profiles.has(edition): edition = String(profiles.keys()[0])
 	# The front end lists the mounted editions; build it again for the new set.
@@ -2659,7 +4344,7 @@ func _show_front_menu() -> bool:
 		front_menu.settings_requested.connect(_open_settings)
 		front_menu.settings_previewed.connect(_preview_volumes)
 		front_menu.options_closed.connect(func(_applied: bool, _command: String): _apply_settings())
-		front_menu.quit_requested.connect(func(): get_tree().quit())
+		front_menu.quit_requested.connect(func(): ELAudio.quiet_quit(get_tree()))
 		front_menu.edition_requested.connect(func(chosen: String):
 			demo = false
 			_start(chosen))
@@ -2705,6 +4390,9 @@ func _begin_duel_match(started: ELDuelMatch) -> void:
 	duel_match = started
 	# The second game records every round of a Duel mode match.
 	match_recording = ELDuelRecording.new() if started.edition == "el2" else null
+	# The report opens only at a match's start, when the option is on.
+	_drop_duel_report()
+	if bool(settings.values.get("visual_log", false)): duel_report = ELDuelReport.new()
 	demo = false
 	mode_select.select(0)
 	_hide_front_menu()
@@ -2726,6 +4414,9 @@ func _play_match_round() -> void:
 	if match_recording != null and duel != null and duel != previous:
 		match_recording.track(duel, battle_seed)
 		if duel_match.played == 0: _label_recording()
+	if duel_report != null and duel != null and duel != previous:
+		if duel_match.played == 0: duel_report.open(profiles[edition], duel_match, duel, _match_names())
+		duel_report.round_start(duel_match.played + 1, duel)
 	_first_tutorial_battle()
 	if duel == null or duel == previous:
 		duel_match = null
@@ -2742,6 +4433,9 @@ func _watch_match_round(delta: float) -> void:
 		match_clock = 0.0
 		duel_match.record(duel.winner)
 		if match_recording != null: match_recording.finish_round(duel)
+		if duel_report != null:
+			duel_report.round_end(duel.winner)
+			if duel_match.finished(): _finish_duel_report()
 		_refresh()
 		return
 	# The second game shows the round result after every round.
@@ -2783,12 +4477,21 @@ func _duel_round_closed(proceed: bool) -> void:
 	if not proceed and not duel_match.finished():
 		# Ending early still shows the summary of the rounds played.
 		duel_match.rounds = maxi(duel_match.played, 1)
+		_finish_duel_report()
 		if duel_match.rounds >= 2:
 			front_menu.duel_ui.show_result(duel_match, _match_names())
 			return
 	var hot := duel_match.hot_seat
 	duel_match = null
 	_open_duel_screen(hot)
+
+func _finish_duel_report() -> void:
+	if duel_report != null and duel_match != null: duel_report.finish(duel_match)
+	duel_report = null
+
+func _drop_duel_report() -> void:
+	if duel_report != null: duel_report.close()
+	duel_report = null
 
 ## Surrender concedes only the current round.
 func _surrender_round() -> void:
@@ -2919,6 +4622,10 @@ func _begin_replay(path: String) -> void:
 		replay_panel.play_toggled.connect(func(on: bool):
 			if replay_player != null: replay_player.set_playing(on))
 		replay_panel.rewind_requested.connect(_rewind_replay)
+		replay_panel.inventory_requested.connect(_open_replay_inventory.bind(0))
+		replay_panel.comment_edited.connect(func(text: String):
+			if replay_player != null and replay_player.set_comment(text): replay_panel.text_box.text = text)
+		replay_panel.save_requested.connect(_save_replay_copy)
 		replay_panel.comment_pause_toggled.connect(func(on: bool):
 			if replay_player != null: replay_player.pause_at_comment = on)
 		replay_panel.step_requested.connect(func(mode: int):
@@ -2941,9 +4648,14 @@ func _rewind_replay() -> void:
 		_notice(replay_player.error)
 		return
 	_start("el2", {}, battle)
+	_replay_changed()
 
 func _replay_changed() -> void:
 	if replay_player == null or replay_panel == null: return
+	replay_panel.set_at_start(replay_player.index == 0 and replay_player.duel == duel)
+	# The comment of the next command (recorded or written in the editor).
+	replay_panel.set_text(replay_player.comment())
+	replay_panel.set_editable(replay_player.error.is_empty() and not replay_player.done())
 	replay_panel.set_checked("TP_Play", replay_player.playing)
 	for mode in 3: replay_panel.set_checked("TP_Pause%dE" % (mode + 1), replay_player.playing and replay_player.step_mode == mode + 1)
 	if replay_player.duel == duel and duel.phase == ELDuel.Phase.FINISHED:
@@ -2963,7 +4675,48 @@ func _leave_replay() -> void:
 	if _show_front_menu(): front_menu.show_screen("duel_menu")
 	else: _open_setup()
 
+## Inventory (TP_Inventory): the first hero's round-end screen,
+## read-only; its Close shows the second hero, whose Close returns to the
+## replay. Playback stays paused meanwhile.
+func _open_replay_inventory(side: int) -> void:
+	_close_replay_inventory()
+	if replay_player == null or duel != replay_player.duel or side > 1: return
+	replay_player.set_playing(false)
+	var labels: Array = replay_player.data.get("labels", [])
+	var players: Array = replay_player.data.get("options", {}).get("players", [])
+	var title := str(labels[side]) if side < labels.size() and not str(labels[side]).is_empty() else str(duel.heroes[side].template)
+	var reserve: Dictionary = players[side].get("reserve", {}) if side < players.size() and players[side] is Dictionary else {}
+	var screen := ELRoundEndDuelView.new()
+	if not screen.build(profiles.el2, duel.heroes[side], reserve, title):
+		screen.free()
+		_notice("The original round-end screen art is unavailable.")
+		return
+	ui.add_child(screen)
+	replay_inventory = screen
+	replay_inventory_side = side
+	screen.closed.connect(func():
+		if side == 0: _open_replay_inventory(1)
+		else: _close_replay_inventory())
+
+## Save changes (TP_SaveE): the replay save screen over the battle, saving
+## the replay with its edited comments under a chosen name.
+func _save_replay_copy() -> void:
+	if replay_player == null: return
+	replay_player.set_playing(false)
+	var host := _battle_host()
+	if host == null: return
+	options_layer.show()
+	host.show()
+	host.replay_ui.recording = replay_player.to_recording()
+	host.open_hosted("replay_save", true)
+
+func _close_replay_inventory() -> void:
+	if replay_inventory != null: replay_inventory.queue_free()
+	replay_inventory = null
+	replay_inventory_side = -1
+
 func _close_replay() -> void:
+	_close_replay_inventory()
 	if replay_player != null: replay_player.release()
 	replay_player = null
 	if replay_panel != null: replay_panel.hide()
@@ -2971,11 +4724,20 @@ func _close_replay() -> void:
 
 # --- Second-game Esc menu --------------------------------------------------------
 
-## Esc opens the original menu in a second-game battle once nothing is being
-## chosen (a half-made choice is cancelled first).
+## Esc opens the original game menu once nothing is being chosen (a half-made
+## choice is cancelled first). The first game's battle screen has no menu of its
+## own: the original reaches Options only from the map panel's wrench (AdvPanel
+## command 0x7c), so its battles open Options on the combat page, which holds
+## Surrender, Save, Load and the exits.
 func _wants_esc_menu() -> bool:
-	if profile == null or profile.id != "el2" or demo or _overlay_open(): return false
+	if profile == null or profile.id not in ["el1", "el2"] or demo or _overlay_open(): return false
 	return selection < 0 and exchange_target < 0 and selected_creature < 0 and ability_selection.is_empty()
+
+func _open_game_menu() -> void:
+	if profile == null: return
+	if profile.id == "el1": _open_battle_options()
+	elif esc_menu != null and esc_menu.visible: _close_esc_menu()
+	else: _open_esc_menu()
 
 func _open_esc_menu() -> void:
 	if esc_menu == null or esc_menu.profile != profile:
@@ -2998,7 +4760,7 @@ func _open_esc_menu() -> void:
 			host.show())
 		esc_menu.options_requested.connect(_open_battle_options)
 		esc_menu.exit_requested.connect(func(): _ask_battle("T_MB_QUIT_TO_MM", _esc_exit_to_menu))
-		esc_menu.quit_requested.connect(func(): _ask_battle("T_MB_QUIT_TO_WIN", func(): get_tree().quit()))
+		esc_menu.quit_requested.connect(func(): _ask_battle("T_MB_QUIT_TO_WIN", func(): ELAudio.quiet_quit(get_tree())))
 		esc_menu.remake_menu_requested.connect(func():
 			_close_esc_menu()
 			menu.show())
@@ -3045,5 +4807,7 @@ func _esc_exit_to_menu() -> void:
 	_close_combat_tutorial()
 	_close_replay()
 	duel_match = null
+	# Which original quit paths write the result block is unconfirmed: the report stops.
+	_drop_duel_report()
 	_set_auto(false)
 	_show_front_menu()

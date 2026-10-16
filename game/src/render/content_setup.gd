@@ -1,10 +1,10 @@
 class_name ELContentSetup
 extends Control
-## Game files screen for the browser and Android, where there is no installed
-## game folder to choose. The player picks the GOG installer (read, never
-## run), a data pack made with tools/prepare_game_data.py, or, in a desktop
-## browser, the installed game folder. Each edition is kept separately; either
-## one is enough to play.
+## Game files import screen, on every platform. The player picks the GOG
+## installer (read, never run), a data pack made with
+## tools/prepare_game_data.py, or, in a desktop browser, the installed game
+## folder (desktop builds also choose folders from the content dialog). Each
+## edition is kept separately; either one is enough to play.
 signal opened(edition: String, folder: String)
 signal closed
 signal removed(edition: String)

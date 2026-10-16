@@ -194,7 +194,12 @@ var text_box: RichTextLabel
 var selected_campaign := ""
 var difficulty := 1
 var campaign_data: ELCampaign
+## Times New Roman: the menu buttons (Controls FontType "Times").
 var serif: Font
+## Arial and Arial Bold: every other control (see face_for).
+var arial: Font
+var arial_bold: Font
+var courier: Font
 var _paths: Dictionary = {}
 var _rows: Dictionary = {}
 var _controls: Dictionary = {}
@@ -270,6 +275,12 @@ func build(available: Dictionary, initial: String) -> bool:
 	var system := SystemFont.new()
 	system.font_names = PackedStringArray(["Times New Roman", "Liberation Serif", "DejaVu Serif", "Noto Serif", "serif"])
 	serif = system
+	arial = ELArtDropList.row_font()
+	arial.font_weight = 400
+	arial_bold = ELArtDropList.row_font()
+	var mono := SystemFont.new()
+	mono.font_names = PackedStringArray(["Courier New", "Liberation Mono", "Cousine", "DejaVu Sans Mono", "monospace"])
+	courier = mono
 	canvas = Control.new()
 	canvas.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	canvas.size = DESIGN
@@ -463,7 +474,7 @@ func _build_text_buttons(names: Array) -> void:
 	var font_size := 24
 	var widest := 0.0
 	for control: String in names:
-		widest = maxf(widest, serif.get_string_size(_caption(control), HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x)
+		widest = maxf(widest, face_for(control).get_string_size(_caption(control), HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x)
 	# Captions longer than the 140 px design widen the shared middle section;
 	# the column stays centred on the 1024 screen as in the original.
 	var width := maxf(140.0, ceilf(widest + 72.0))
@@ -550,6 +561,8 @@ func open_hosted(target: String, over_game: bool, kind := "") -> void:
 			show_screen(target)
 		# `kind` is where it is shown: "adventure" or "combat" (combat page first).
 		"options": options_ui.open(kind if not kind.is_empty() else "adventure", "combat" if kind == "combat" else "general")
+		# The replay editor's Save changes; the host set replay_ui.recording.
+		"replay_save": show_screen("replay_save")
 
 ## A question box alone over a running game (the quick load's
 ## T_MB_LOAD_GAME): OK leaves and runs `on_ok`; Cancel or Esc only leaves.
@@ -594,6 +607,9 @@ func go_back() -> bool:
 		duel_ui.cancel_editor()
 		return true
 	if screen in ["duel_round", "duel_result"]: return false
+	if hosted and screen in REPLAY_SCREENS:
+		leave_screen()
+		return true
 	# Back from the hot-seat Duel screen returns to the connection menu.
 	if screen == "duel" and duel_ui.hot_stage >= 0:
 		duel_ui.leave_hot_seat()
@@ -657,6 +673,25 @@ func _square(control: String) -> CutButton:
 	if not tip.is_empty() and text(tip) != tip: button.tooltip_text = text(tip)
 	return button
 
+## The face a control's text is drawn in. Both games read the Controls
+## FontType keywords (EL1 ``, EL2 ``): Times or Courier pick
+## that face, anything else is Arial; Header, Dark and Bold make it bold
+## (face table {Arial, Courier New, Times New Roman}, ``).
+func face_for(control: String) -> Font:
+	# Captions built under a generic key: nearly every text control is
+	# Header, Dark or Bold, so Arial Bold.
+	if not _controls.has(control): return arial_bold
+	var keywords: Variant = _controls.get(control, {}).get("FontType", [])
+	var words: Array = keywords if keywords is Array else [keywords]
+	if words.has("Times"): return serif
+	if words.has("Courier"): return courier
+	return arial_bold if words.has("Header") or words.has("Dark") or words.has("Bold") else arial
+
+## Controls FontSize is the GDI cell height (CreateFontA with a positive
+## height); Arial's cell is 1.117 em, so a 17 px cell is a 15 px em.
+static func cell_em(cell: int) -> int:
+	return maxi(1, roundi(cell / 1.117))
+
 func _label(key: String, value: String, rect: Rect2, size_px: int, color := TITLE_INK, align := HORIZONTAL_ALIGNMENT_CENTER) -> Label:
 	var label := Label.new()
 	label.text = value
@@ -665,8 +700,8 @@ func _label(key: String, value: String, rect: Rect2, size_px: int, color := TITL
 	label.horizontal_alignment = align
 	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	label.clip_text = false
-	label.add_theme_font_override("font", serif)
-	label.add_theme_font_size_override("font_size", size_px)
+	label.add_theme_font_override("font", face_for(key))
+	label.add_theme_font_size_override("font_size", cell_em(size_px))
 	label.add_theme_color_override("font_color", color)
 	label.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.8))
 	label.add_theme_constant_override("shadow_offset_x", 1)
@@ -688,7 +723,7 @@ func _text_box(rect: Rect2, value: String, size_px := 17) -> RichTextLabel:
 	text_box.position = rect.position
 	text_box.size = rect.size
 	text_box.scroll_active = true
-	text_box.add_theme_font_override("normal_font", serif)
+	text_box.add_theme_font_override("normal_font", arial)
 	text_box.add_theme_font_size_override("normal_font_size", size_px)
 	text_box.add_theme_color_override("default_color", BODY_INK)
 	text_box.get_v_scroll_bar().modulate = Color(1, 1, 1, 0)
@@ -1116,11 +1151,12 @@ class TextButton extends BaseButton:
 		if not disabled and (mode == DRAW_HOVER or mode == DRAW_HOVER_PRESSED):
 			_draw_parts(states.get("hover_pressed" if pushed else "hover", []), Color.WHITE)
 		var color := INK_DISABLED if disabled else (INK_HOVER if mode == DRAW_HOVER or mode == DRAW_HOVER_PRESSED else INK)
-		var text_size := menu.serif.get_string_size(caption, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size)
-		var baseline := (size.y - text_size.y) * 0.5 + menu.serif.get_ascent(font_size) + (1.0 if pushed else 0.0)
+		var font := menu.face_for(name)
+		var text_size := font.get_string_size(caption, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size)
+		var baseline := (size.y - text_size.y) * 0.5 + font.get_ascent(font_size) + (1.0 if pushed else 0.0)
 		var at := Vector2((size.x - text_size.x) * 0.5, baseline)
-		draw_string(menu.serif, at + Vector2(1, 1), caption, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, Color(0, 0, 0, 0.85))
-		draw_string(menu.serif, at, caption, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, color)
+		draw_string(font, at + Vector2(1, 1), caption, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, Color(0, 0, 0, 0.85))
+		draw_string(font, at, caption, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, color)
 
 	## Caps keep their size and distance from the edges; the middle stretches.
 	func _draw_parts(parts: Array, tint: Color) -> void:

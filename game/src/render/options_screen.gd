@@ -67,13 +67,10 @@ const SPEC := {
 ## reads; the after-chapter autosave is unconditional), so it is not marked;
 ## the first game's is the end-of-turn autosave. Mouse scroll is the first
 ## game's edge-pan speed; the second game's edges only turn the view.
-## VisualLog writes a plain-text duel log file. The second game's CastMessages has no reader
-## besides this screen. FogAnimations animates the first game's ether-mist
-## texture, which the remake's plain fog dimming does not draw; HideMotion
-## speeds up creatures walking to their attack places, which the remake's
-## short strike lunge does not have. ShowChat is multiplayer only.
-const INERT := ["fog_animations",
-	"show_chat", "hide_motion", "visual_log"]
+## VisualLog (ELDuelReport) is live. The second game's CastMessages has no reader
+## besides this screen. FogAnimations (ELFogMist) is live. HideMotion
+## (ELMeleePlayback fast mode) is live. ShowChat is multiplayer only.
+const INERT := ["show_chat"]
 
 var menu: ELFrontMenu
 var page := "general"
@@ -184,7 +181,7 @@ func _tab(page_id: String) -> void:
 	var area := rect(control)
 	button.position = area.position
 	button.size = area.size
-	button.add_theme_font_override("font", menu.serif)
+	button.add_theme_font_override("font", menu.arial)
 	button.add_theme_font_size_override("font_size", int(menu._controls.get(control, {}).get("FontSize", 20)))
 	var colour := ACTIVE_TAB if page_id == page else IDLE_TAB
 	for state: String in ["font_color", "font_pressed_color", "font_focus_color"]: button.add_theme_color_override(state, colour)
@@ -255,7 +252,7 @@ func _column_end(area: Rect2) -> float:
 func _fit_caption(label: Label) -> void:
 	var font_size := label.get_theme_font_size("font_size")
 	while font_size > 12:
-		var lines := menu.serif.get_multiline_string_size(label.text, HORIZONTAL_ALIGNMENT_LEFT, label.size.x, font_size).y
+		var lines := menu.arial.get_multiline_string_size(label.text, HORIZONTAL_ALIGNMENT_LEFT, label.size.x, font_size).y
 		if lines <= label.size.y: break
 		font_size -= 1
 	label.add_theme_font_size_override("font_size", font_size)

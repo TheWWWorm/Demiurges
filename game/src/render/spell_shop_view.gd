@@ -98,6 +98,9 @@ func build(exchange: ELSpellShop) -> void:
 	cursor.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	canvas.add_child(cursor)
 	cursor.draw.connect(_draw_cursor)
+	# Leaving or hiding the screen gives the cursor back.
+	tree_exiting.connect(func(): ELCursorDriver.carry(profile, null))
+	visibility_changed.connect(func(): if not is_visible_in_tree(): ELCursorDriver.carry(profile, null))
 	sound = AudioStreamPlayer.new()
 	add_child(sound)
 	root_control.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -110,7 +113,7 @@ func _label(value: String, font_size: int, align: HorizontalAlignment) -> Label:
 	label.horizontal_alignment = align
 	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	label.clip_text = true
-	label.add_theme_font_override("font", hud.serif_bold)
+	label.add_theme_font_override("font", hud.face_bold)
 	label.add_theme_font_size_override("font_size", font_size)
 	label.add_theme_color_override("font_color", TAN)
 	label.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.85))
@@ -309,9 +312,10 @@ func draw_surface(target: Control) -> void:
 
 func _draw_cursor() -> void:
 	var entry := model.carried()
-	if entry.is_empty() or _mouse.x < -500: return
-	var icon := profile.card_icon(str(entry.card))
-	if icon != null: cursor.draw_texture_rect(icon, Rect2(_mouse - ICON * 0.5, ICON), false)
+	var icon: Texture2D = profile.card_icon(str(entry.card)) if not entry.is_empty() else null
+	# The original's cursor becomes the icon; drawn here only without one.
+	if ELCursorDriver.carry(profile, icon) or icon == null or _mouse.x < -500: return
+	cursor.draw_texture_rect(icon, Rect2(_mouse - ICON * 0.5, ICON), false)
 
 # --- Tooltips -------------------------------------------------------------------
 

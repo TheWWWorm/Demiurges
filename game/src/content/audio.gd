@@ -29,6 +29,55 @@ static func positional_bus(reverse: bool) -> StringName:
 	AudioServer.set_bus_effect_enabled(index, 0, reverse)
 	return POSITIONAL_BUS
 
+## Quits after stopping every sound. A stopped stream is only released on
+## the audio thread's next mix, so quitting in the same frame left music and
+## ambience streams alive at exit (leak warnings in the log).
+static func quiet_quit(tree: SceneTree) -> void:
+	for node: Node in tree.root.find_children("*", "AudioStreamPlayer", true, false) + tree.root.find_children("*", "AudioStreamPlayer3D", true, false):
+		node.stop()
+		node.stream = null
+	for frame in 3: await tree.process_frame
+	await tree.create_timer(0.05, true, false, true).timeout
+	tree.quit()
+
+## Stereo placement of a sound in both games: the angle between
+## the listener's level forward direction and the ground-plane direction to
+## the source sets the pan, centred ahead or behind and fully to one side at
+## a right angle (±100 as whole numbers, sent to the mixer as (p + 100) / 200).
+## Returns -1 (left) .. 1 (right) for an AudioEffectPanner.
+static func stereo_pan(listener: Vector3, forward: Vector3, source: Vector3) -> float:
+	var to := Vector2(source.x - listener.x, source.z - listener.z)
+	var ahead := Vector2(forward.x, forward.z)
+	var distance := to.length()
+	if distance <= 0.0 or ahead.length() <= 0.0: return 0.0
+	ahead = ahead.normalized()
+	var along := absf(to.dot(ahead))
+	if along > distance: return 0.0
+	var amount := roundi(100.0 / (PI / 2.0) * acos(along / distance))
+	# Right of the listener: forward (x, z) turned a quarter to (-z, x).
+	var right := Vector2(-ahead.y, ahead.x)
+	return (amount if to.dot(right) >= 0.0 else -amount) / 100.0
+
+## A bus with its own panner for one placed voice, sent through the
+## positional bus (and so through the reverse-stereo switch).
+static func pan_bus(name: String, reverse: bool) -> StringName:
+	var through := positional_bus(reverse)
+	var bus := StringName("Positional " + name)
+	var index := AudioServer.get_bus_index(bus)
+	if index < 0:
+		index = AudioServer.bus_count
+		AudioServer.add_bus(index)
+		AudioServer.set_bus_name(index, bus)
+		AudioServer.set_bus_send(index, through)
+		AudioServer.add_bus_effect(index, AudioEffectPanner.new())
+	return bus
+
+static func set_pan(bus: StringName, pan: float) -> void:
+	var index := AudioServer.get_bus_index(bus)
+	if index < 0: return
+	var panner := AudioServer.get_bus_effect(index, 0) as AudioEffectPanner
+	if panner != null: panner.pan = clampf(pan, -1.0, 1.0)
+
 static func sound(profile: ELProfile, path: String) -> AudioStreamWAV:
 	var key := ELArchive.key(path)
 	if profile.sound_cache.has(key): return profile.sound_cache[key]

@@ -115,13 +115,29 @@ func build_second(state: ELAdventureSession, second_hud: ELSecondAdventureHud, m
 	holder.add_child(message_box)
 	message_box.setup(second_hud)
 	message_box.answered.connect(func(_answer: String): closed.emit())
-	message_box.present({"box": "message", "text": str(message.get("text", "")), "question": false}, state)
+	if message.has("loot"): message_box.present({"box": "loot", "text": str(message.get("text", "")), "items": loot_rows(state.map.profile, message.loot)}, state)
+	else: message_box.present({"box": "message", "text": str(message.get("text", "")), "question": false}, state)
 	body = Label.new()
 	body.text = str(message.get("text", ""))
 	body.hide()
 	add_child(body)
 	accept = message_box.accept
 	holder.resized.connect(message_box.layout)
+
+## Second game: the loot panel's rows, a picture and a name per spell or
+## artifact. An artifact shows its spell's picture, as in the inventory.
+static func loot_rows(profile: ELProfile, items: Variant) -> Array:
+	var rows: Array = []
+	if not items is Array: return rows
+	for item: Variant in items:
+		if not item is Dictionary: continue
+		if item.get("kind") == "spell":
+			var card := str(item.get("card", ""))
+			rows.append({"icon": profile.card_icon(card), "name": profile.text(str(profile.table("CombatSpells").get(card, {}).get("Name", card)))})
+		elif item.get("kind") == "artifact":
+			var name := str(item.get("name", ""))
+			rows.append({"icon": profile.card_icon(ELSecondArtifacts.spell(profile, {"name": name})), "name": ELMapPickups.artifact_title(profile, name)})
+	return rows
 
 func build(state: ELAdventureSession, hud: ELAdventureHud, message: Dictionary) -> void:
 	data = message

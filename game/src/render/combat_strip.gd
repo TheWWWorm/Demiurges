@@ -5,7 +5,9 @@ extends Control
 ## on a 53 px pitch, oldest first. AbilitieScrollLeft/Right move it one icon
 ## per press with a short slide and repeat while held; a refill with other
 ## contents starts again at the first icon. An enabled icon plays the card
-## turn sound when clicked, a greyed one the error sound.
+## turn sound when clicked, a disabled one the error sound.
+## Drawn in the original list look (ELListLook), with the frame tile in
+## every empty visible slot.
 ## Placed in the original 800x600 layout, bottom-anchored like ELHudFrame;
 ## a wider window shows more icons, as the card rail does.
 signal item_pressed(index: int)
@@ -32,6 +34,8 @@ var _row: Control
 var _key := ""
 var _held := 0
 var _repeat := 0.0
+var _frames: Control
+var look: ELListLook
 
 func build(data: ELProfile) -> void:
 	profile = data
@@ -51,9 +55,19 @@ func build(data: ELProfile) -> void:
 	_row = Control.new()
 	_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_view.add_child(_row)
+	_frames = Control.new()
+	_frames.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_frames.draw.connect(_draw_frames)
+	_view.add_child(_frames)
+	_view.move_child(_frames, 0)
+	look = ELListLook.load(profile)
 	left = _arrow("AbilitieScrollLeft", -1)
 	right = _arrow("AbilitieScrollRight", 1)
 	layout()
+
+## The frame tile in every visible slot past the last icon.
+func _draw_frames() -> void:
+	if look != null: look.draw_frames(_frames, FIRST - CLIP.position, items.size() - first, visible_count(), PITCH, ICON)
 
 func _arrow(control: String, direction: int) -> ELCutPartButton:
 	var bounds := Rect2()
@@ -84,6 +98,9 @@ func layout() -> void:
 	if _view == null: return
 	_view.position = Vector2.ZERO
 	_view.size = size
+	if _frames != null:
+		_frames.size = size
+		_frames.queue_redraw()
 	var extra := size.x - CLIP.size.x
 	if left != null: left.position = left.get_meta("origin") - CLIP.position
 	if right != null: right.position = right.get_meta("origin") - CLIP.position + Vector2(extra, 0)
@@ -114,7 +131,7 @@ func set_items(list: Array[Dictionary], key: String) -> void:
 		button.focus_mode = Control.FOCUS_NONE
 		button.tooltip_text = str(item.get("tooltip", ""))
 		button.disabled = not item.get("enabled", false)
-		button.modulate = Color.WHITE if not button.disabled else Color(0.45, 0.45, 0.45)
+		look.dress(button)
 		for key_name: String in item.get("meta", {}): button.set_meta(key_name, item.meta[key_name])
 		ELUiSounds.bind_path(button, profile, SOUND)
 		button.pressed.connect(func(): item_pressed.emit(i))
@@ -122,6 +139,7 @@ func set_items(list: Array[Dictionary], key: String) -> void:
 		buttons.append(button)
 	_place_row()
 	_update_arrows()
+	if _frames != null: _frames.queue_redraw()
 
 func scroll(direction: int) -> void:
 	var limit := maxi(0, items.size() - visible_count())
@@ -129,6 +147,7 @@ func scroll(direction: int) -> void:
 	if next == first: return
 	first = next
 	_update_arrows()
+	if _frames != null: _frames.queue_redraw()
 	set_process(true)
 
 func _press_arrow(direction: int) -> void:

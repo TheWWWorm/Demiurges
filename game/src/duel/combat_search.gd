@@ -50,6 +50,9 @@ const SPELL_SIDES := {
 		"TGSK": 1, "THIF": 1, "UPGD": 1, "WEAK": 2, "WHAS": 64, "WNBL": 1, "ZAPP": 10},
 }
 
+## Sacrificing creatures' starting priority, before the victim's cost (both games).
+const SACRIFICE_PRIOR := {"CTMN": 0.75, "RZMN": 0.85, "SWMN": 0.8}
+
 ## Hero enchantment worth: per copy (EACH), once per kind (KIND), and by copy
 ## count (COUNT, see `_count_value`). Creature enchantments add only COUNT.
 const EACH := {
@@ -100,14 +103,16 @@ class Context:
 	var second := false
 	var registered: Array[Line] = []
 	var positions := 0
-	## Auto-combat without "use spells": no hero abilities or artifacts, and
-	## no spellbook copies that spend charges.
+	## Auto-combat without "use spells": no artifacts and no spellbook copies
+	## that spend charges (the hero's enchantment abilities stay).
 	var restricted := false
 
 ## The opponent's next command for the acting side, as a command dictionary
 ## (see `apply`). `stats`, when given, receives the number of positions.
 static func think(duel: ELDuel, stats: Dictionary = {}, restricted := false) -> Dictionary:
-	if duel.phase == ELDuel.Phase.FINISHED: return {}
+	if duel.phase == ELDuel.Phase.FINISHED:
+		if duel.scripts != null and duel.scripts.search_only: duel.scripts.close()
+		return {}
 	var ctx := Context.new()
 	ctx.restricted = restricted
 	ctx.ai = duel.active_side()
@@ -117,7 +122,11 @@ static func think(duel: ELDuel, stats: Dictionary = {}, restricted := false) -> 
 	ctx.limit = 1 if duel.phase == ELDuel.Phase.ATTACK else 0
 	var root := Line.new()
 	root.budget = BUDGET
-	_search(ctx, root, duel.search_copy(ctx.second))
+	var start := duel.search_copy(ctx.second)
+	if ctx.second: start.spec_expect = ELSpecs.sample_expectation(duel)
+	_search(ctx, root, start)
+	# The lookahead script layer lives for one think.
+	if start.scripts != null and start.scripts.search_only: start.scripts.close()
 	stats.positions = ctx.positions
 	var best: Line = null
 	for line: Line in ctx.registered:
@@ -244,8 +253,9 @@ static func _generate(ctx: Context, line: Line, s: ELDuel) -> void:
 	if side == ctx.ai:
 		_casts(ctx, line, s, side)
 		if not restricted: _artifacts(ctx, line, s, side)
+	# Restricted (auto-combat without runes) skips only the artifacts above; the
+	# hero's enchantment abilities are still used (original EL1/EL2 thinks).
 	for ability: Dictionary in s.abilities(side):
-		if restricted: break
 		if ability.effect == "artifact" or not s.can_use_ability(side, ability.key): continue
 		_ability_moves(ctx, line, s, side, side, ability)
 	var army := s.army(side)
@@ -272,7 +282,10 @@ static func _free(s: ELDuel, c: Dictionary) -> bool:
 static func _casts(ctx: Context, line: Line, s: ELDuel, side: int) -> void:
 	var hero: Dictionary = s.heroes[side]
 	var seen := {}
-	for i in hero.hand.size():
+	# Both originals keep the hand newest card first (the add-card path inserts
+	# at the list head), so equal priors are tried, and ties kept, from the
+	# newest card; a repeated card is generated from its newest copy.
+	for i in range(hero.hand.size() - 1, -1, -1):
 		var card: String = hero.hand[i]
 		if ctx.restricted and i < hero.hand_slots.size() and int(hero.hand_slots[i]) >= 0: continue
 		if seen.has(card): continue
@@ -388,7 +401,13 @@ static func _ability_prior(ctx: Context, s: ELDuel, side: int, id: int, card: St
 	var key := String(ability.key).get_slice(":", 0)
 	var target := int(args[0])
 	match key:
-		"fireball", "sting", "spores", "gaze", "hunt":
+		"spores":
+			# The second game's carnivorous fingus needs power and caps its priority.
+			if ctx.second and card == "CAFG":
+				if int(s.creatures[id].power) <= 0: return 0.0
+				return minf(0.35, _side_check(s, side, 0xa, target, -1))
+			return _side_check(s, side, 0xa, target, -1)
+		"fireball", "sting", "gaze", "hunt":
 			return _side_check(s, side, 0xa, target, -1)
 		"tap_target", "tap_race":
 			if s.creatures.has(target) and (s.creatures[target].resting or s.creatures[target].sick): return 0.0
@@ -400,6 +419,26 @@ static func _ability_prior(ctx: Context, s: ELDuel, side: int, id: int, card: St
 		"siphon":
 			var c: Dictionary = s.creatures[id]
 			return 0.5 if not c.resting and not c.sick and not s.attacks.has(id) and int(s.heroes[1 - side].mana) > 0 else 0.0
+		"sacrifice":
+			# Cutter, razor and sawer men: both games price the battle's first
+			# creature (object 2) rather than the chosen victim, so every victim ties
+			# and nothing is offered once that creature is gone. The hero's
+			# Sacrifice keeps the default.
+			if id >= 2 and SACRIFICE_PRIOR.has(card):
+				if not s.creatures.has(2): return 0.0
+				var victim: Dictionary = s.creatures[2]
+				var value := float(SACRIFICE_PRIOR[card]) - 0.1 * float(s.cost(victim.card))
+				if not victim.resting and not victim.sick: value -= 0.1
+				return maxf(value, 0.0) if ctx.second else value
+		"rebirth", "second_birth", "repair":
+			# Dearer creatures first; a second birth needs the printed cost in ether.
+			var grave: Array = s.heroes[target].grave
+			var index := int(args[1])
+			if index < 0 or index >= grave.size(): return 0.0
+			var mana := int(s.heroes[side].mana)
+			if key == "second_birth" and mana < _printed_cost(s, grave[index]): return 0.0
+			var price := s.cost(grave[index])
+			return minf(0.9, (0.71 if key == "repair" and mana < price else 0.75) + 0.1 * float(price))
 	if not ctx.second: return 0.75
 	match key:
 		"slay", "breath", "wall_break": return 0.5
@@ -410,7 +449,18 @@ static func _ability_prior(ctx: Context, s: ELDuel, side: int, id: int, card: St
 			var mana := int(s.heroes[side].mana)
 			if int(args[2]) == mana: return 0.45
 			return 0.75 if mana >= 4 and int(args[2]) == mana - 1 else 0.0
-		"burnout": return 0.5
+		"hellfire_health":
+			var mana := int(s.heroes[side].mana)
+			if int(args[2]) == mana: return 0.5
+			return 0.75 if mana >= 6 and int(args[2]) == mana - 3 else 0.0
+		"burnout": return 0.7 if int(args[1]) < 2 else 0.5
+		"channel_ether": return 0.45
+		"pale_devour": return _side_check(s, side, 0xa, target, -1)
+		"mystic": return 0.75 if card == "OUE1" else 0.0
+		"stone_rain":
+			for c: Dictionary in s.army(1 - side):
+				if not s.in_plane(c.id) and not s.has_flag(c.id, "NoAffect"): return 0.75
+			return 0.0
 	return 0.75
 
 ## The shared side test of spells and abilities: 0.75 when the target suits
@@ -562,13 +612,18 @@ static func _elusive(s: ELDuel, c: Dictionary) -> bool:
 
 # --- Attack and block plans --------------------------------------------------------
 
-## Every free creature with power attacks, the most promising first.
+## Every free creature with power attacks. The second game moves each new best
+## lone-attack priority to the front; the first game keeps army order
+## (EL1 walks the army list without scoring).
 static func _attack_plan(ctx: Context, line: Line, s: ELDuel) -> bool:
 	var order: Array[int] = []
 	var top := 0.0
 	for c: Dictionary in s.army(s.active_side()):
 		if not _free(s, c) or int(c.power) <= 0: continue
 		line.used += 1
+		if not ctx.second:
+			order.append(int(c.id))
+			continue
 		var score := _attack_prior(s, c)
 		if score > top:
 			top = score

@@ -76,10 +76,12 @@ func build(data: ELProfile, model: String, texture_name: String, secondary_textu
 			node.material_override = secondary if int(figures[name].texture_slot) == 1 else material
 		# Anchors may parent real geometry (the illusion wall uses "dust" as its
 		# root). Omit only their helper mesh; hiding the node hides descendants too.
+	# Track keys are model-space transforms, so every part hangs from the
+	# model itself. The .lnk tree only names the parts: nested under their
+	# parents, the kobolds' five-deep limbs (cr206-cr209) drifted metres above
+	# the body, and "head"/"dust" roots offset the other parts.
 	for link: Array in links:
-		var node: Node3D = parts[link[0]]
-		var parent: Node3D = parts.get(link[1], self)
-		parent.add_child(node)
+		add_child(parts[link[0]])
 	if _animations != null and _animations.has("cidle"):
 		play("cidle")
 	return not parts.is_empty()
@@ -168,6 +170,9 @@ func clip_frames() -> int:
 	return _clip_frames
 
 ## The clip the figure rests in: "cidle" while an idle variant plays.
+func has_clip(name: String) -> bool:
+	return _animations != null and _animations.has(name)
+
 func base_clip() -> String:
 	return "cidle" if _special else clip
 
@@ -181,6 +186,14 @@ func _play_special() -> void:
 	var count := special_count()
 	if count == 0: return
 	if play("cspecial%d" % (_rng.randi() % count + 1)): _special = true
+
+## The clip recorded under an original clip code (the record's with
+## its low bits cleared), or "". The originals pick movement clips by code:
+## many second-game models store their run clip under the walk code.
+func clip_for_code(code: int) -> String:
+	for name: String in timing:
+		if int(timing[name].get("code", 0)) == code and has_clip(name): return name
+	return ""
 
 ## Seconds a clip lasts at the original rate (frames / 30).
 func clip_seconds(name: String) -> float:
@@ -203,6 +216,7 @@ static func animation_table(bytes: PackedByteArray) -> Dictionary:
 			if value > 0: events.append(value)
 		var flags := bytes.decode_u32(at + 0x18)
 		result[name] = {"frames": bytes.decode_u32(at + 0x20), "loop": (bytes.decode_u32(at + 0x14) & 0x80000000) != 0,
+			"code": bytes.decode_u32(at + 0x14) & 0xffff8000,
 			"speed": bytes.decode_float(at + 0x24), "events": events,
 			"impact": bytes.decode_u32(at + 0x40) if flags & 4 else -1}
 	return result

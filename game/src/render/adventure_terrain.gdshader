@@ -5,13 +5,19 @@ uniform int columns;
 uniform float tile_side;
 uniform float pitch;
 uniform vec2 atlas_size;
-// First-game fog (ELFog): per-tile explored and visible player masks.
+// Fog (ELFog) as the original's mist pass draws it: per map corner a mist
+// opacity (unexplored 255, remembered 133, visible 0 of 255; a corner takes
+// its most fogged tile), moving toward the new value at 150/255 a second
+// (`fog_fade` is the change allowed since the masks last changed). The mist
+// texture (ELFogMist) repeats every 20 tiles and drifts along the rows.
 uniform bool fog_enabled = false;
-uniform sampler2D fog_explored : filter_nearest, repeat_disable;
-uniform sampler2D fog_visible : filter_nearest, repeat_disable;
-uniform int fog_bit = 1;
+uniform sampler2D fog_from : filter_linear, repeat_disable;
+uniform sampler2D fog_to : filter_linear, repeat_disable;
 uniform ivec2 fog_size = ivec2(1, 1);
-uniform float fog_dim = 0.3;
+uniform float fog_fade = 1.0;
+uniform sampler2D fog_mist : filter_linear, repeat_enable;
+uniform float fog_drift = 0.0;
+const float MIST_SCALE = 0.05;
 // Second-game colourless zones for the current level (ELAdventureTerrain.colorless_layer):
 // per cell a grey index (0 colour, 1 grey, n >= 2 weight tile n - 2) and quarter turns.
 uniform bool clrless_enabled = false;
@@ -26,14 +32,6 @@ varying vec2 cell;
 
 void vertex() {
 	cell = vec2(VERTEX.x, -VERTEX.z) / 2.0;
-}
-
-float fog_at(ivec2 at) {
-	at = clamp(at, ivec2(0), fog_size - ivec2(1));
-	int seen = int(texelFetch(fog_visible, at, 0).r * 255.0 + 0.5);
-	if (((seen >> fog_bit) & 1) != 0) return 1.0;
-	int known = int(texelFetch(fog_explored, at, 0).r * 255.0 + 0.5);
-	return ((known >> fog_bit) & 1) != 0 ? fog_dim : 0.0;
 }
 
 vec3 to_srgb(vec3 c) {
@@ -66,17 +64,18 @@ void fragment() {
 				weight = texture(clrless_weights, (origin + local * CLRLESS_SIDE) / clrless_atlas).r;
 			}
 			// Grey is the plain mean of the 8-bit colour channels.
-			vec3 colour = to_srgb(ALBEDO);
-			ALBEDO = to_linear(mix(colour, vec3((colour.r + colour.g + colour.b) / 3.0), weight));
+			vec3 colour = OUTPUT_IS_SRGB ? ALBEDO : to_srgb(ALBEDO);
+			colour = mix(colour, vec3((colour.r + colour.g + colour.b) / 3.0), weight);
+			ALBEDO = OUTPUT_IS_SRGB ? colour : to_linear(colour);
 		}
 	}
 	if (fog_enabled) {
-		// Blend between tile centres so fog edges are soft.
-		vec2 at = cell - vec2(0.5);
-		ivec2 base = ivec2(floor(at));
-		vec2 f = fract(at);
-		float top = mix(fog_at(base), fog_at(base + ivec2(1, 0)), f.x);
-		float bottom = mix(fog_at(base + ivec2(0, 1)), fog_at(base + ivec2(1, 1)), f.x);
-		ALBEDO *= mix(top, bottom, f.y);
+		vec2 corner = (cell + vec2(0.5)) / vec2(fog_size + ivec2(1));
+		float from = texture(fog_from, corner).r;
+		float alpha = from + clamp(texture(fog_to, corner).r - from, -fog_fade, fog_fade);
+		vec3 mist = texture(fog_mist, cell * MIST_SCALE + vec2(0.0, fog_drift)).rgb;
+		// Blended in display space, as the original's alpha blend.
+		vec3 shown = mix(OUTPUT_IS_SRGB ? ALBEDO : to_srgb(ALBEDO), mist, alpha);
+		ALBEDO = OUTPUT_IS_SRGB ? shown : to_linear(shown);
 	}
 }

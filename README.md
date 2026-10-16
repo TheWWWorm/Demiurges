@@ -40,12 +40,14 @@ Download the package for your system from the [Releases](https://github.com/TheW
 ## Getting started (desktop)
 
 1. Start the engine.
-2. When asked, choose **Etherlords I folder** or **Etherlords II folder** and select the folder of your installed game, the one containing `Resources` and `Campaigns`.
-3. The folder is remembered. The original start-up videos play, then the main menu opens.
+2. When asked, choose one of:
+   - **Etherlords I folder** or **Etherlords II folder**, then the folder of your installed game, the one containing `Resources` and `Campaigns`;
+   - **GOG installer or data pack…**, then the GOG offline installer (`setup_etherlords*.exe`) or a data pack (`.elpack`). The installer is **not run**: the engine unpacks the game files from it once (several minutes) and keeps them in its own data folder, so the installer is not needed afterwards.
+3. Your choice is remembered. The original start-up videos play, then the main menu opens.
 
 To add the other game later, start a battle, press **Esc**, choose **Remake menu…** and then **Original game content…**.
 
-If you only have the GOG installer, the included Python tool can unpack it without running it (it needs [innoextract](https://constexpr.org/innoextract/)) and registers the result:
+You can also unpack the installer yourself with the included Python tool (it needs [innoextract](https://constexpr.org/innoextract/)), which registers the result:
 
 ```sh
 python3 tools/import_game.py el1 /path/to/setup_etherlords.exe --dest /path/to/Etherlords
@@ -66,15 +68,15 @@ python3 tools/import_game.py el2 /path/to/Etherlords2
 
 The engine is still in development. Things you may notice:
 
-- Some spell and creature effects are incomplete: certain effect models, lights and screen flashes are not drawn yet, and a few ability, block and tap sounds are missing.
+- Some creature ability effects are incomplete: most Etherlords I creature abilities show no spell effect yet, a few Etherlords II abilities (such as Wall of Illusion) are still missing theirs, and the darkening of a few large spells is an approximation.
 - Some options have no effect yet: fog animation, faster creature movement and the duel log file.
 - A few rare messages are still shown in English, mostly in the Duel editor and in error messages.
-- Computer opponents follow the original's approach but are not an exact copy of its decisions. Trading between players in the first game is not available yet.
-- Etherlords II effects inside colourless zones and over unexplored areas are not drawn exactly like the original.
+- Computer opponents follow the original's approach but are not an exact copy of its decisions. As in the original, they never answer alliance or trade offers.
+- Etherlords II map particle effects use approximate sizes and blending.
 - The campaigns are tested screen by screen and system by system, not yet by playing every chapter from start to finish. Please report anything that blocks progress.
 - There is no network multiplayer. Local hot seat duels work.
 - Saves and replays of the original games cannot be loaded; the engine keeps its own.
-- Touch screens work for tapping buttons and the map, but there are no touch gestures for turning or zooming the camera, and tooltips need a mouse.
+- Touch controls have not yet been tried on real phones and tablets, only in testing. The interface keeps the original layout, so on a small phone screen text and buttons are small.
 
 Please report problems on the [Issues](https://github.com/TheWWWorm/Demiurges/issues) page.
 
@@ -95,7 +97,17 @@ The original controls work as in the games. A few useful keys:
 | I / K | | spellbook / skills (first game) |
 | N | | end the turn (first game) or the day (second game) |
 
-On Android, the Back button works like Esc.
+**Touch screens** (phones, tablets and touch browsers) have their own controls:
+
+| Gesture | Battle | Map |
+|---|---|---|
+| Tap | as a left click | as a left click |
+| Touch and hold | right click; on a button, its tooltip | right click (Etherlords II: the information panel while held) |
+| Drag with one finger | turn the camera | move the map |
+| Drag or twist with two fingers | turn and tilt the camera | turn and tilt the camera |
+| Pinch | zoom | zoom |
+
+A small bar at the top of the screen gives **Back** (Esc) everywhere, **Camera** (reset) in battle and **Save** / **Load** (quick save and load) on the map. On Android the Back button also works as Esc.
 
 ## Saves and settings
 

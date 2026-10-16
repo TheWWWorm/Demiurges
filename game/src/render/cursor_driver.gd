@@ -16,6 +16,14 @@ var clock := 0.0
 var shown: Dictionary = {}
 ## Number of cursor images sent to the display (frame steps included).
 var uploads := 0
+## Second game: a carried card's icon replaces the cursor picture (inventory
+## spell shop through). The 48x48
+## top-left of the 50x50 icon cell is copied over the cursor frame
+## so the arrow is hidden and the point stays the cursor's own
+## hotspot. Null when nothing is carried.
+var carry_image: Texture2D
+var _carry_source: Texture2D
+const CARRY_SIZE := 48
 
 ## The shared driver, created under the scene root on first use.
 static func instance() -> ELCursorDriver:
@@ -33,6 +41,13 @@ static func request(owner_profile: ELProfile, cursor_name: String) -> void:
 	var driver := instance()
 	if driver != null: driver.select(owner_profile, cursor_name)
 
+## Shows `icon` (a spell icon cell) as the cursor picture; null restores the
+## animated cursor. Returns whether the hardware cursor carries it.
+static func carry(owner_profile: ELProfile, icon: Texture2D) -> bool:
+	var driver := instance()
+	if driver == null: return false
+	return driver.set_carry(owner_profile, icon)
+
 static func current_name() -> String:
 	return _instance.current if is_instance_valid(_instance) else ""
 
@@ -42,6 +57,35 @@ func select(owner_profile: ELProfile, cursor_name: String) -> void:
 	profile = owner_profile
 	current = cursor_name
 	_apply()
+
+func set_carry(owner_profile: ELProfile, icon: Texture2D) -> bool:
+	if icon == _carry_source and (icon == null or carry_image != null): return carry_image != null
+	_carry_source = icon
+	carry_image = carry_picture(icon)
+	if owner_profile != null and profile == null: profile = owner_profile
+	shown = {} if carry_image == null else shown
+	_apply()
+	return carry_image != null
+
+## The 48x48 top-left of an icon cell as a stand-alone texture.
+static func carry_picture(icon: Texture2D) -> Texture2D:
+	if icon == null: return null
+	var image: Image
+	var origin := Vector2i.ZERO
+	if icon is AtlasTexture:
+		var atlas := icon as AtlasTexture
+		if atlas.atlas == null: return null
+		image = atlas.atlas.get_image()
+		origin = Vector2i(atlas.region.position)
+	else:
+		image = icon.get_image()
+	if image == null: return null
+	if image.is_compressed():
+		image = image.duplicate()
+		image.decompress()
+	var region := Rect2i(origin, Vector2i(CARRY_SIZE, CARRY_SIZE)).intersection(Rect2i(Vector2i.ZERO, image.get_size()))
+	if region.size.x <= 0 or region.size.y <= 0: return null
+	return ImageTexture.create_from_image(image.get_region(region))
 
 func _process(delta: float) -> void:
 	if current.is_empty() or profile == null: return
@@ -56,6 +100,13 @@ func _process(delta: float) -> void:
 
 func _apply() -> void:
 	var entry := ELCursors.cursor(profile, current) if profile != null else {}
+	if carry_image != null:
+		if shown.get("image") == carry_image: return
+		var hotspot := Vector2(entry.get("hotspot", Vector2i.ZERO))
+		Input.set_custom_mouse_cursor(carry_image, Input.CURSOR_ARROW, hotspot)
+		uploads += 1
+		shown = {"edition": profile.id if profile != null else "", "name": current, "frame": -1, "hotspot": hotspot, "point": hotspot, "image": carry_image, "carry": true}
+		return
 	if entry.is_empty() or entry.frames.is_empty():
 		if not shown.is_empty(): Input.set_custom_mouse_cursor(null)
 		shown = {}

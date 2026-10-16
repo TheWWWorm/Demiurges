@@ -89,8 +89,7 @@ const ARMY_AURAS := {"RDDF": {"toughness": 3}, "DMRD": {"power": 1, "toughness":
 	"BLKD": {"toughness": 3, "flags": ["NoAttack"]}, "HAST": {"flags": ["FS", "Trample"]}, "ORPL": {"power": 1, "toughness": 1}}
 ## Hero enchantments granting flags to the caster's enemies or to every creature.
 const HERO_AURAS := {"FURY": {"scope": "enemy", "flags": ["Berserk"]}, "ASST": {"scope": "all", "flags": ["NoAttack"]}, "PCDU": {"scope": "all", "flags": ["NoAttack"]}}
-## First-game rules established from the original game. They are enabled
-## only for Etherlords I; the second game's versions need their own evidence.
+## First-game rules established from the original game.
 const FIRST_EFFECTS := {
 	"STWO": {"effect": "enchant", "target": "none", "self": true},
 	"ENWO": {"effect": "enchant", "target": "none", "self": true},

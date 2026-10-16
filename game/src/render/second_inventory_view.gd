@@ -34,7 +34,7 @@ var surface: Surface
 var cursor: Control
 var labels: Dictionary = {}
 var buttons: Dictionary = {}
-var spec_popup: PanelContainer
+var spec_popup: ELArtDropList
 ## Refusals (T_MB_SHOP_DECK_NOT_FULL, ...) in the original MessageBox.
 var message_box: ELSecondDialogueBox
 var message_text: RichTextLabel
@@ -97,6 +97,9 @@ func build(session: ELAdventureSession, id: int) -> void:
 	cursor.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	canvas.add_child(cursor)
 	cursor.draw.connect(_draw_cursor)
+	# Leaving or hiding the screen gives the cursor back.
+	tree_exiting.connect(func(): ELCursorDriver.carry(profile, null))
+	visibility_changed.connect(func(): if not is_visible_in_tree(): ELCursorDriver.carry(profile, null))
 	sound = AudioStreamPlayer.new()
 	add_child(sound)
 	root_control.resized.connect(_layout)
@@ -108,7 +111,7 @@ func _label(value: String, font_size: int, align: HorizontalAlignment, color := 
 	label.horizontal_alignment = align
 	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	label.clip_text = true
-	label.add_theme_font_override("font", hud.serif_bold)
+	label.add_theme_font_override("font", hud.face_bold)
 	label.add_theme_font_size_override("font_size", font_size)
 	label.add_theme_color_override("font_color", color)
 	label.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.85))
@@ -118,18 +121,16 @@ func _label(value: String, font_size: int, align: HorizontalAlignment, color := 
 	canvas.add_child(label)
 	return label
 
+## SpecPopUpDialog on its own cut parts and SpecPopupUp/Down arrows.
 func _build_spec_popup() -> void:
-	spec_popup = PanelContainer.new()
+	spec_popup = ELArtDropList.new()
 	spec_popup.name = "InvScrSpecList"
-	var style := StyleBoxFlat.new()
-	style.bg_color = Color(0.05, 0.05, 0.04, 0.96)
-	style.border_color = Color("6a5a3a")
-	style.set_border_width_all(1)
-	style.content_margin_left = 4
-	style.content_margin_right = 4
-	spec_popup.add_theme_stylebox_override("panel", style)
-	spec_popup.add_child(VBoxContainer.new())
 	canvas.add_child(spec_popup)
+	var pieces: Array = []
+	for row: Dictionary in hud.rows("SpecPopupTexturesCtrl"): pieces.append(hud.cut(row))
+	spec_popup.setup(pieces, ELArtDropList.row_font(), ELSecondNotebookView.ArtButton.make(hud, "SpecPopupUp"), ELSecondNotebookView.ArtButton.make(hud, "SpecPopupDown"))
+	spec_popup.thumb_texture = ELArtDropList.thumb_art(profile)
+	spec_popup.chosen.connect(_choose_listed)
 	spec_popup.hide()
 
 func _build_message_box() -> void:
@@ -165,9 +166,7 @@ func _layout() -> void:
 		labels[control].position = design(control).position
 		labels[control].size = design(control).size
 	for control: String in buttons: buttons[control].place(_offset)
-	var drop := design("InvScrActiveSpec")
-	spec_popup.position = Vector2(drop.position.x, drop.end.y + 2)
-	spec_popup.size = Vector2(design("InvScrDropBtn").end.x - drop.position.x, 0)
+	spec_popup.place(design("SpecPopUpDialog"))
 	message_box.layout()
 	surface.queue_redraw()
 	cursor.queue_redraw()
@@ -197,29 +196,22 @@ func spec_name(code: String) -> String:
 	if code == "NONE" or code.is_empty(): return ""
 	return profile.text(str(profile.table("HeroesSpecs").get(code, {}).get("Name", code)))
 
+## SpecPopUpDialog under the drop button: opened only
+## when the hero owns a specialisation; the current one is in the brighter ink.
 func show_specs(value: bool) -> void:
-	var column: VBoxContainer = spec_popup.get_child(0)
-	for child: Node in column.get_children(): child.queue_free()
+	if spec_popup == null: return
 	if value:
+		var names: Array = []
+		var tips: Array = []
 		for code: String in _specs:
-			var option := Button.new()
-			option.name = "Spec_" + code
-			option.text = spec_name(code)
-			option.flat = true
-			option.alignment = HORIZONTAL_ALIGNMENT_LEFT
-			option.focus_mode = Control.FOCUS_NONE
-			option.tooltip_text = profile.text(str(profile.table("HeroesSpecs").get(code, {}).get("Desc", "")))
-			option.add_theme_font_override("font", hud.serif_bold)
-			option.add_theme_font_size_override("font_size", 16)
-			option.add_theme_color_override("font_color", WHITE if code == model.specialization else TAN)
-			option.add_theme_color_override("font_hover_color", WHITE)
-			option.pressed.connect(choose_spec.bind(code))
-			column.add_child(option)
+			names.append(spec_name(code))
+			tips.append(profile.text(str(profile.table("HeroesSpecs").get(code, {}).get("Desc", ""))))
+		spec_popup.fill(names, tips, _specs.find(model.specialization))
 	spec_popup.visible = value and not _specs.is_empty()
-	if spec_popup.visible:
-		spec_popup.move_to_front()
-		spec_popup.reset_size()
-		spec_popup.size.x = design("InvScrDropBtn").end.x - design("InvScrActiveSpec").position.x
+	if spec_popup.visible: spec_popup.move_to_front()
+
+func _choose_listed(index: int) -> void:
+	if index >= 0 and index < _specs.size(): choose_spec(_specs[index])
 
 ## Staged until OK (writes hero from the screen's copy).
 func choose_spec(code: String) -> void:
@@ -402,9 +394,10 @@ func _draw_skills(target: Control, hero: Dictionary) -> void:
 
 func _draw_cursor() -> void:
 	var card := model.carried()
-	if card.is_empty() or _mouse.x < -500: return
-	var icon := profile.card_icon(card)
-	if icon != null: cursor.draw_texture_rect(icon, Rect2(_mouse - ICON * 0.5, ICON), false)
+	var icon: Texture2D = profile.card_icon(card) if not card.is_empty() else null
+	# The original's cursor becomes the icon; drawn here only without one.
+	if ELCursorDriver.carry(profile, icon) or icon == null or _mouse.x < -500: return
+	cursor.draw_texture_rect(icon, Rect2(_mouse - ICON * 0.5, ICON), false)
 
 # --- Tooltips -------------------------------------------------------------------
 
@@ -447,3 +440,4 @@ class Surface extends Control:
 
 	func _get_tooltip(at_position: Vector2) -> String:
 		return view.tooltip_at(at_position)
+

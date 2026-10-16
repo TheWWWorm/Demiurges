@@ -8,30 +8,50 @@ extends Control
 ## offered. In replay player mode (Duel -> Replay) the panel carries the
 ## original player controls: Rewind, Play/Pause, Pause at comment, editor mode
 ## (Show) and Close; editor mode adds Next command / Next phase / Next turn and
-## Player mode (HideE). The editor's comment editing (Save changes, Add
-## pointer) is not ported and stays hidden.
+## Player mode (HideE). Until the first recorded command plays, Inventory
+## takes Rewind's place (544404: shown when a replay opens or
+## rewinds, swapped back): it shows each hero's deck and bag. In
+## editor mode the comment of the next command is editable, Save changes
+## (TP_SaveE) opens the replay save screen, and Add pointer
+## (TP_PointerE) is shown but does nothing, as its command has no handler in
+## the original.
 
 signal close_requested
 signal play_toggled(on: bool)
 signal rewind_requested
+signal inventory_requested
+signal save_requested
+## The editor's comment text was changed by the player.
+signal comment_edited(text: String)
 signal comment_pause_toggled(on: bool)
 ## 1 next command, 2 next phase, 3 next turn.
 signal step_requested(mode: int)
 
 const DESIGN := Vector2(1024, 768)
-const BUTTONS := ["TP_Show", "TP_Close", "TP_ScrollUp", "TP_ScrollDown", "TP_Back", "TP_Play", "TP_TextPause",
-	"TP_Pause1E", "TP_Pause2E", "TP_Pause3E", "TP_HideE", "TP_CloseE"]
+const BUTTONS := ["TP_Show", "TP_Close", "TP_ScrollUp", "TP_ScrollDown", "TP_Back", "TP_Inventory", "TP_Play", "TP_TextPause",
+	"TP_Pause1E", "TP_Pause2E", "TP_Pause3E", "TP_HideE", "TP_CloseE", "TP_SaveE", "TP_PointerE"]
 const TUTORIAL_BUTTONS := ["TP_Show", "TP_Close"]
 const PLAYER_BUTTONS := ["TP_Back", "TP_Play", "TP_TextPause", "TP_Show", "TP_Close"]
-const EDITOR_BUTTONS := ["TP_Back", "TP_Play", "TP_Pause1E", "TP_Pause2E", "TP_Pause3E", "TP_TextPause", "TP_HideE", "TP_CloseE"]
+const EDITOR_BUTTONS := ["TP_Back", "TP_Play", "TP_Pause1E", "TP_Pause2E", "TP_Pause3E", "TP_TextPause", "TP_HideE", "TP_CloseE", "TP_SaveE", "TP_PointerE"]
+## Buttons with a caption drawn over their art (Controls Text, FontSize 14).
+const CAPTIONED := ["TP_SaveE", "TP_PointerE"]
 const TEXT_INK := Color("e6dcc0")
 
 var text_box: RichTextLabel
+## Editor mode: the next command's comment, editable.
+var edit_box: TextEdit
+## Comments can be edited (a command is waiting).
+var editable := true
+var captions: Dictionary = {}
+var _font: Font
+var _setting := false
 var buttons: Dictionary = {}
 var text_shown := true
 ## Replay player (true) or combat tutorial (false); editor mode of the player.
 var player := false
 var editor := false
+## Before the first recorded command: Inventory is offered in Rewind's place.
+var at_start := false
 ## Check buttons drawn pushed: TP_Play, TP_TextPause, TP_Pause1E..3E.
 var checked: Dictionary = {}
 var _art: Dictionary = {}
@@ -79,6 +99,28 @@ func build(profile: ELProfile, player_mode := false) -> void:
 	text_box.get_v_scroll_bar().modulate = Color(1, 1, 1, 0)
 	text_box.get_v_scroll_bar().mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(text_box)
+	edit_box = TextEdit.new()
+	edit_box.name = "CommentEdit"
+	edit_box.wrap_mode = TextEdit.LINE_WRAPPING_BOUNDARY
+	edit_box.add_theme_color_override("font_color", TEXT_INK)
+	var back := StyleBoxFlat.new()
+	back.bg_color = Color(0.03, 0.04, 0.03, 0.85)
+	back.border_color = Color(0.55, 0.45, 0.3, 0.8)
+	back.set_border_width_all(1)
+	back.set_content_margin_all(4)
+	edit_box.add_theme_stylebox_override("normal", back)
+	edit_box.add_theme_stylebox_override("focus", back)
+	edit_box.add_theme_stylebox_override("read_only", back)
+	edit_box.text_changed.connect(func():
+		if not _setting: comment_edited.emit(edit_box.text))
+	add_child(edit_box)
+	var system := SystemFont.new()
+	system.font_names = PackedStringArray(["Times New Roman", "Liberation Serif", "DejaVu Serif", "Noto Serif", "serif"])
+	system.font_weight = 700
+	_font = system
+	for control: String in CAPTIONED:
+		var key := str(controls.get(control, {}).get("Text", "Ctrl" + control))
+		captions[control] = profile.text(key).strip_edges() if not profile.text(key).strip_edges().is_empty() else key
 	for control: String in BUTTONS:
 		var button := Button.new()
 		button.flat = true
@@ -104,6 +146,8 @@ func build(profile: ELProfile, player_mode := false) -> void:
 	buttons.TP_Close.pressed.connect(func(): close_requested.emit())
 	buttons.TP_CloseE.pressed.connect(func(): close_requested.emit())
 	buttons.TP_Back.pressed.connect(func(): rewind_requested.emit())
+	buttons.TP_Inventory.pressed.connect(func(): inventory_requested.emit())
+	buttons.TP_SaveE.pressed.connect(func(): save_requested.emit())
 	buttons.TP_Play.pressed.connect(func(): play_toggled.emit(not checked.get("TP_Play", false)))
 	buttons.TP_TextPause.pressed.connect(func():
 		set_checked("TP_TextPause", not checked.get("TP_TextPause", false))
@@ -118,11 +162,26 @@ func set_checked(control: String, on: bool) -> void:
 	checked[control] = on
 	queue_redraw()
 
+func set_at_start(value: bool) -> void:
+	if at_start == value: return
+	at_start = value
+	_layout()
+
 func set_text(value: String) -> void:
 	if text_box == null: return
 	text_box.text = value
 	text_box.scroll_to_line(0)
+	# The edit box follows the shown comment unless the player is typing in it.
+	if edit_box.text != value and not edit_box.has_focus():
+		_setting = true
+		edit_box.text = value
+		_setting = false
 	_layout()
+
+## Editor comments can be typed only while a command is waiting.
+func set_editable(value: bool) -> void:
+	editable = value
+	if edit_box != null: edit_box.editable = value
 
 func shown_text() -> String:
 	return text_box.text if text_box != null else ""
@@ -146,14 +205,21 @@ func _layout() -> void:
 	text_box.position = to_screen(_bounds.position)
 	text_box.size = _bounds.size * s
 	text_box.add_theme_font_size_override("normal_font_size", roundi(_font_size * s))
-	text_box.visible = text_shown
+	text_box.visible = text_shown and not (player and editor)
+	edit_box.visible = player and editor
+	edit_box.position = text_box.position
+	edit_box.size = text_box.size
+	edit_box.add_theme_font_size_override("font_size", roundi(_font_size * s))
+	if not edit_box.visible and edit_box.has_focus(): edit_box.release_focus()
 	for control: String in buttons:
 		var rect := _rect(control)
 		var button: Button = buttons[control]
 		button.position = to_screen(rect.position)
 		button.size = rect.size * s
 		var shown: Array = (EDITOR_BUTTONS if editor else PLAYER_BUTTONS) if player else TUTORIAL_BUTTONS
-		button.visible = control in shown or (control.begins_with("TP_Scroll") and text_shown and not text_box.text.strip_edges().is_empty())
+		if control == "TP_Inventory": button.visible = player and at_start
+		elif control == "TP_Back" and at_start: button.visible = false
+		else: button.visible = control in shown or (control.begins_with("TP_Scroll") and text_shown and not text_box.text.strip_edges().is_empty())
 	queue_redraw()
 
 func _scroll(step: int) -> void:
@@ -178,4 +244,14 @@ func _draw() -> void:
 			BaseButton.DRAW_HOVER: state = "hover"
 		var piece: Dictionary = _art.get(control + ":" + state, _art.get(control + ":free", {}))
 		if piece.is_empty(): continue
-		draw_texture_rect_region(piece.texture, Rect2(to_screen(piece.rect.position), piece.rect.size * s), piece.source)
+		var area := Rect2(to_screen(piece.rect.position), piece.rect.size * s)
+		draw_texture_rect_region(piece.texture, area, piece.source)
+		if captions.has(control):
+			# FontSize 14 in the registry; a longer caption is set smaller to fit.
+			var size := roundi(14 * s)
+			var width := _font.get_string_size(captions[control], HORIZONTAL_ALIGNMENT_LEFT, -1, size).x
+			while width > area.size.x - 8 and size > 8:
+				size -= 1
+				width = _font.get_string_size(captions[control], HORIZONTAL_ALIGNMENT_LEFT, -1, size).x
+			var baseline := area.position.y + (area.size.y - _font.get_height(size)) * 0.5 + _font.get_ascent(size)
+			draw_string(_font, Vector2(area.position.x + maxf(2, (area.size.x - width) * 0.5), baseline), captions[control], HORIZONTAL_ALIGNMENT_LEFT, area.size.x - 4, size, TEXT_INK)

@@ -17,6 +17,8 @@ var font: Font
 var subject := -1
 var _frame: Texture2D
 var _picture: TextureRect
+## The picture's black backdrop, one unit larger on every side.
+var _backdrop: ColorRect
 var _labels: Array[Label] = []
 var _content := Vector2.ZERO
 
@@ -25,6 +27,10 @@ func setup(source: ELProfile, serif: Font) -> void:
 	font = serif
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_frame = profile.texture(ELSecondMapTooltips.PANEL_TEXTURE)
+	_backdrop = ColorRect.new()
+	_backdrop.color = Color.BLACK
+	_backdrop.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(_backdrop)
 	_picture = TextureRect.new()
 	_picture.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_picture.stretch_mode = TextureRect.STRETCH_SCALE
@@ -41,6 +47,7 @@ func set_content(id: int, content: Dictionary) -> void:
 	var first := true
 	var picture: Dictionary = content.get("picture", {})
 	_picture.visible = not picture.is_empty()
+	_backdrop.visible = picture.get("framed", false)
 	var labels: Array = content.get("labels", [])
 	for entry: Dictionary in labels:
 		var label := Label.new()
@@ -77,6 +84,8 @@ func set_content(id: int, content: Dictionary) -> void:
 	var origin := bounds.position
 	for label in _labels: label.position -= origin
 	_picture.position -= origin
+	_backdrop.position = _picture.position - Vector2.ONE
+	_backdrop.size = _picture.size + Vector2.ONE * 2.0
 	_content = bounds.size
 	size = _content + Vector2.ONE * ELSecondMapTooltips.FRAME * 2.0
 	queue_redraw()

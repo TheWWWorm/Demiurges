@@ -27,15 +27,18 @@ const CAST := {
 		"CHNL": ["LoseLife", "GainMana", "GainLife"], "CLFR": ["Ublockable", "PosRune"], "CLIG": ["RedLightning"],
 		"CLNP": ["Disenchant"], "CLON": ["PosSorcery"], "CLSN": ["Disenchant"], "CLSP": ["BlueSummon"],
 		"CMBN": ["PosEnchantment", "PosAttack", "PosDefence", "Trample", "PosRune"],
-		"CNAR": ["NegEnchantment", "CantUntap"], "CNBL": ["RedDamage", "GainLife"], "COMT": ["RedComet"],
+		# Original EL1 CondensedAirEnchantment attach@ has only
+		# Target/NegEnchantment; unlike EL2 it has no separate CantUntap
+		# creature-presentation callback on the cast.
+		"CNAR": ["NegEnchantment"], "CNBL": ["RedDamage", "GainLife"], "COMT": ["RedComet"],
 		"COPL": ["PosEnchantment"], "CRBL": ["PosEnchantment", "FirstStrike"], "CRHG": ["Hunger"], "CRIV": ["GreenDamage"],
 		"CTMN": ["BlackSummon"], "CTST": ["RedCatstrophe"], "CURS": ["Discard"], "DECN": ["Disenchant"],
 		"DELS": ["PosEnchantment", "PosRune"], "DISM": ["NegAttack", "NegRune"],
-		"DMRD": ["PosEnchantment", "PosAttack", "PosDefence", "PosRune"], "DMRT": ["RedSummon"],
+		"DMRD": ["PosEnchantment"], "DMRT": ["RedSummon"],
 		"DNFR": ["PosEnchantment", "GreenAncientForest"], "DOMN": ["PosEnchantment", "PosAttack", "PosDefence", "PosRune"],
 		"DPGS": ["BlackDepressGas", "NegRune", "NegAttack"], "DRAT": ["RedSummon"],
 		"DRFR": ["PosEnchantment", "GreenDarkForest"], "DRGS": ["BlackDrowsyGas", "NegRune", "NegAttack"],
-		"DSIG": ["RedFireStream"], "DWND": ["NegDefence", "NegRune"], "ENAL": ["PosSorcery"], "ENFR": ["Discard", "Draw"],
+		"DSIG": ["RedFireStream"], "DWND": ["NegDefence", "NegRune"], "ENAL": ["PosSorcery"], "ENFL": ["Disenchant"], "ENFR": ["Discard", "Draw"],
 		"ENLH": ["PosEnchantment"], "ENRG": ["PosEnchantment"], "ENVM": ["NegEnchantment"],
 		"ENWO": ["PosEnchantment", "PosDefence", "PosRune"], "ERBN": ["NegEnchantment", "CantUntap"],
 		"EREL": ["BlueSummon"], "ERQA": ["Tremor"], "ETAM": ["PosEnchantment"], "ETCH": ["PosSorcery"],
@@ -66,7 +69,7 @@ const CAST := {
 		"MNVR": ["GainMana"], "MOBE": ["GreenSummon"], "MOTI": ["GreenSummon"], "MTPT": ["GreenSummon"],
 		"MTSC": ["GreenSummon"], "MXHP": ["BlackSummon"], "MYHO": ["GreenSummon"], "NOIS": ["Discard"],
 		"NWLF": ["RedSummon"], "OGKN": ["RedSummon"], "OREL": ["RedSummon"], "ORGD": ["RedSummon"], "ORSH": ["RedSummon"],
-		"ORWR": ["RedSummon"], "PALN": ["NegEnchantment"], "PCDU": ["CantAttack", "NegRune"], "PHWL": ["BlackSummon"],
+		"ORWR": ["RedSummon"], "OVRL": ["PosAttack", "PosDefence", "PosRune"], "PALN": ["NegEnchantment"], "PCDU": ["CantAttack", "NegRune"], "PHWL": ["BlackSummon"],
 		"PLMR": ["RedDamage"], "PRAT": ["RedSummon"], "PRFY": ["Disenchant"], "PSBR": ["PosAttack", "PosRune"],
 		"PTRS": ["BlackSummon"], "PWTP": ["DrainMana", "PosRune", "NegRune"],
 		"QKFX": ["NegAttack", "NegDefence", "NegRune"], "RBRT": ["PosEnchantment"], "RDCL": ["ColosusLeg"],
@@ -75,7 +78,7 @@ const CAST := {
 		"RECL": ["Draw"], "REDR": ["PosEnchantment"], "REPR": ["PosSorcery", "BlackDamage", "Draw"],
 		"RFPT": ["BlackSummon"], "RIFT": ["RedAnihilation"], "RIOT": ["Hunger", "NegRune"], "RKWL": ["RedSummon"],
 		"RPST": ["PosEnchantment"], "RVHG": ["Hunger"], "RVHL": ["BlueSummon"], "RZMN": ["BlackSummon"],
-		"SACR": ["PosEnchantment"], "SCSK": ["PosDefence", "PosRune"], "SEHL": ["BlueSummon"],
+		"SACR": ["PosEnchantment"], "SCBR": ["PosEnchantment"], "SCSK": ["PosDefence", "PosRune"], "SEHL": ["BlueSummon"],
 		"SFGS": ["BlackSuffocationGas", "NegRune"], "SGHT": ["PosEnchantment"], "SHCL": ["PosAttack", "PosRune"],
 		"SHFR": ["PosDefence", "PosRune"], "SHSK": ["PosDefence", "PosRune"], "SHSP": ["BlueSummon"],
 		"SHWL": ["RedSummon"], "SLRP": ["Regeneration", "PosRune"], "SLWL": ["RedSummon"],
@@ -201,7 +204,7 @@ const CAST := {
 		"STWO": ["PosEnchantment", "PosAttack", "PosRune"], "SWHL": ["BlueSummon"], "SWMN": ["BlackSummon"],
 		"SWSN": ["GreenSummon"], "SYMB": ["GainLife"], "TANT": ["GreenSummon"], "TGSK": ["PosDefence", "PosRune"],
 		"THIF": ["PosEnchantment", "PosRune"], "TIQN": ["GreenSummon"], "TIWK": ["GreenSummon"], "TIWR": ["GreenSummon"],
-		"TNSA": ["GreenSummon"], "TPLF": ["DrainLife", "PosRune", "NegRune"], "TRAD": ["GreenDamage"], "TREM": ["Tremor"],
+		"TNSA": ["GreenSummon"], "TPLF": ["DrainLife", "PosRune", "NegRune"], "TRAD": ["GreenDamage", "GainLife"], "TREM": ["Tremor"],
 		"TRLB": ["PosEnchantment"], "TRSN": ["GreenSummon"], "TWEN": ["PosAttack", "PosDefence", "PosRune"],
 		"TWST": ["GreenHurricane"], "UNSM": ["BlueDeath", "Draw"], "UPGD": ["PosAttack", "PosDefence", "PosRune"],
 		"VBAT": ["RedSummon"], "VOLC": ["GainMana"], "VTLY": ["PosEnchantment", "Regeneration", "PosRune"],
@@ -222,19 +225,94 @@ const TRIGGER := {
 		"ENRG": ["PosSorcery"], "FRBL": ["Fireball", "FireballExpl"], "IMMB": ["LoseLife"], "LSHE": ["GainLife"],
 		"MNTX": ["GainMana"], "QKFX": ["Draw"], "RBRT": ["LoseLife"], "RIOT": ["Draw"], "RNST": ["RedRainOfStones"],
 		"RPST": ["PosSorcery", "BlackDamage", "Draw"], "SACR": ["GreenDamage", "GainMana"], "SCBR": ["PosSorcery"],
-		"SPLK": ["GreenDamage", "GainMana"], "SPTR": ["LoseMana"], "SPWB": ["GainLife"], "STSI": ["Disenchant"],
+		"SFGS": ["BlackDamage"], "SPLK": ["GreenDamage", "GainMana"], "SPTR": ["LoseMana"], "SPWB": ["GainLife"], "STSI": ["Disenchant"],
+		"STTX": ["BlackDamage"], "WETX": ["BlackDamage"],
 		"TRLB": ["Draw", "BlackDamage"], "WNPZ": ["LoseLife"], "WTLK": ["GainLife"]
 	},
 	"el2": {
 		"ALNS": ["Draw"], "BASO": ["Draw"], "BROT": ["RedDamage", "Fireball", "FireballExpl"], "DELS": ["Draw"],
 		"ENFL": ["Disenchant"], "ENRG": ["PosSorcery"], "FRBL": ["Fireball", "FireballExpl"], "LSHE": ["GainLife"],
 		"MNTX": ["GainMana"], "OEXC": ["OuterExchange"], "PRBN": ["Draw"], "QKFX": ["Draw"], "RBRT": ["LoseLife"],
-		"RIOT": ["Draw"], "RNST": ["RedRainOfStones"], "RPST": ["PosSorcery", "BlackDamage", "Draw"],
-		"SACR": ["GreenDamage", "Draw"], "SCBR": ["PosSorcery"], "SPLK": ["GreenDamage", "GainMana"], "SPTR": ["LoseMana"],
-		"SPWB": ["GainLife"], "STSI": ["Disenchant"], "TRLB": ["Draw", "BlackDamage"], "WNPZ": ["LoseLife"],
+		"IRRT": ["BlackDamage"], "RDIS": ["BlackDamage"], "RIOT": ["Draw"], "RNST": ["RedRainOfStones"], "RPST": ["PosSorcery", "BlackDamage", "Draw"],
+		"SACR": ["GreenDamage", "Draw"], "SCBR": ["PosSorcery"], "SFGS": ["BlackDamage"], "SPLK": ["GreenDamage", "GainMana"], "SPTR": ["LoseMana"],
+		"SPWB": ["GainLife"], "STSI": ["Disenchant"], "STTX": ["BlackDamage"],
+		"TRLB": ["Draw", "BlackDamage"], "WETX": ["BlackDamage"], "WNPZ": ["LoseLife"],
 		"WTLK": ["GainLife"]
 	},
 }
+
+## ABILITY: effects started when an ability of that card is used (a creature's
+## own ability, or one an enchantment of that card grants), each with the
+## figures it is drawn between: "line" from the user to the target, "at" the
+## affected figure, "start" at the user, "finish" at the target. Effects about a
+## hero's life, ether or cards are drawn at the acting hero.
+const ABILITY := {
+	"el1": {
+		# Original EL1 BlackDragonAbility binds its original
+		# BlackDragonInstant Start/Finish particle to the slay target.
+		"BLDG": [["BlackDragonInstant", "line"]],
+		"FRBL": [["Fireball", "line"], ["FireballExpl", "finish"]],
+		# Original EL1 GiantFingusAbility@ names FingusSpit and
+		# binds it from the living actor to the selected hero or creature.
+		"GIFG": [["FingusSpit", "line"]],
+		"KBSH": [["RedZap", "line"]],
+		# SACR original – queues Target/GreenDamage
+		# on the creature selected for sacrifice before its removal.
+		# The separate post-ether hero GainMana uses a state event.
+		"SACR": [["GreenDamage", "at"]],
+		"RBRT": [["LoseLife", "at"]], "RZMN": [["BlackDamage", "at"]],
+		"SCBR": [["PosSorcery", "at"]], "WLDT": [["CantAttack", "at"]]
+	},
+	"el2": {
+		"BEHD": [["GreenDamage", "at"]], "BHWR": [["GreenDamage", "at"]], "BLDG": [["BlackDragonInstant", "line"]],
+		"BROT": [["RedDamage", "at"], ["Fireball", "line"], ["FireballExpl", "finish"]], "CAFG": [["FingusSpit", "line"]],
+		"CCLP": [["CyclopStone", "line"]], "CTMN": [["BlackRedirect", "line"]], "DMRT": [["Draw", "at"]],
+		"ENFL": [["Disenchant", "at"]], "ENRG": [["PosSorcery", "at"]], "FRBL": [["Fireball", "line"], ["FireballExpl", "finish"]],
+		"GIFG": [["FingusSpit", "line"]], "GRDG": [["GreenDragonInstant", "line"]], "GRFG": [["FingusSpit", "line"]],
+		"IMMB": [["LoseLife", "at"]], "KBEL": [["PosSorcery", "at"]], "KBSH": [["RedZap", "line"]], "LMMN": [["Draw", "at"]],
+		"LMWK": [["Draw", "at"]], "LSHE": [["GainLife", "at"]], "MNTS": [["NegSorcery", "at"]], "MTPT": [["NegSorcery", "at"]],
+		"MTSC": [["NegSorcery", "at"]], "OEXC": [["OuterExchange", "line"]], "ORSH": [["GainMana", "at"]],
+		"OUD1": [["PaleDrainLife", "line"], ["GainLife", "at"]], "OUD2": [["PaleDrainLife", "line"], ["GainLife", "at"]],
+		"OUD3": [["PaleDrainLife", "line"], ["GainMana", "at"]],
+		"OUE1": [["PaleDrainEncantment", "line"], ["Disenchant", "at"], ["GainMana", "at"]],
+		"OUE2": [["PaleDrainEncantment", "line"], ["Draw", "at"]],
+		"OUE3": [["PaleDrainEncantment", "line"], ["Disenchant", "at"], ["Draw", "at"]],
+		"OUS1": [["GainMana", "at"], ["PosRune", "at"]], "OUS2": [["NegRune", "at"], ["RedDamage", "at"]],
+		"OUS3": [["GainLife", "at"], ["PosRune", "at"]], "PHWL": [["PosAttack", "at"]], "PTRS": [["Disenchant", "at"]],
+		"RBRT": [["LoseLife", "at"]], "RFPT": [["Disenchant", "at"]], "RNST": [["RedRainOfStones", "enemy_start"]],
+		"RPST": [["PosSorcery", "at"], ["BlackDamage", "at"], ["Draw", "at"]], "RVHL": [["DrainMana", "line"]],
+		"RZMN": [["BlackRedirect", "line"]], "SACR": [["GreenDamage", "at"], ["Draw", "at"]], "SCBR": [["PosSorcery", "at"]],
+		"SEHL": [["DrainMana", "line"]], "SPFG": [["FingusSpit", "line"]], "SPLK": [["GreenDamage", "at"], ["GainMana", "at"]],
+		"SWHL": [["DrainMana", "line"]], "SWMN": [["BlackRedirect", "line"]], "VBAT": [["DrainLife", "line"]],
+		"WLDT": [["CantAttack", "at"]], "WLIF": [["PosDefence", "at"]], "WLLV": [["PosAttack", "at"]],
+		"WLWD": [["PosAttack", "at"]], "WNHR": [["HuntersArrow", "line"]], "WNPZ": [["LoseLife", "at"]],
+		"WZSP": [["PosSorcery", "at"]]
+	},
+}
+## COMBAT: effects of a creature power that acts during combat damage, keyed by
+## the power (a mastery code or a strike property), each drawn at the affected
+## figure ("at") or from the first figure to the second ("line"). The second
+## game adds none here.
+const COMBAT := {
+	"el1": {
+		"GBHD": [["GreenDamage", "at"]], "BWIT": [["CantUntap", "at"], ["NegRune", "at"]], "BPTD": [["Disenchant", "at"]],
+		"Disenchant": [["Disenchant", "at"]], "Lifetap": [["DrainLife", "line"]], "Discard": [["Discard", "at"]],
+		"ENLH": [["Draw", "at"]]
+	},
+	"el2": {},
+}
+## Effects about a hero's own life, ether or cards.
+const HERO_EFFECTS := ["GainLife", "LoseLife", "GainMana", "LoseMana", "Draw", "Discard"]
+## A hero's damage turned aside: redirection to its creatures (from the hero to
+## each creature) and feedback (at the hero); a barrier softening it (second game).
+const REDIRECT := "BlackRedirect"
+const FEEDBACK := "BlueFeedback"
+const BARRIER := "EnergyBarrierAbility"
+## Stone skin softening a strike (second game; hero or creature).
+const STONESKIN := "StoneSkinAbility"
+## Wall of Illusion's ability, both games: its defence rises when the owner's
+## graveyard holds a creature, else it falls.
+const ILLUSION_CARD := "WLIL"
 
 ## Summon effect of a creature card's colour; colourless creatures of the second
 ## game use the out-of-plane summon, the first game's red one.
@@ -257,3 +335,16 @@ static func cast_effects(edition: String, card: String) -> Array:
 
 static func trigger_effects(edition: String, card: String) -> Array:
 	return TRIGGER.get(edition, {}).get(card, [])
+
+## [[effect, binding], ...] for an ability of `card` in `edition`.
+static func ability_effects(edition: String, card: String) -> Array:
+	return ABILITY.get(edition, {}).get(card, [])
+
+## [[effect, binding], ...] for Wall of Illusion's ability with `grave` creatures
+## in its owner's graveyard.
+static func illusion_effects(grave: int) -> Array:
+	return [["PosDefence" if grave > 0 else "NegDefence", "at"]]
+
+## [[effect, binding], ...] for a combat power `key` in `edition`.
+static func combat_effects(edition: String, key: String) -> Array:
+	return COMBAT.get(edition, {}).get(key, [])

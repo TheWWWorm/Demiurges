@@ -65,7 +65,7 @@ func setup(owner: ELFrontMenu) -> void:
 		edit.context_menu_enabled = false
 		edit.alignment = HORIZONTAL_ALIGNMENT_CENTER
 		edit.max_length = ELPlayerProfile.SLOT_NAME_LIMIT
-		edit.add_theme_font_override("font", menu.serif)
+		edit.add_theme_font_override("font", menu.arial)
 		edit.add_theme_font_size_override("font_size", 16)
 		edit.add_theme_color_override("font_color", NAME_INK)
 		edit.add_theme_color_override("font_uneditable_color", NAME_INK)

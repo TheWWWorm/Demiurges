@@ -9,7 +9,8 @@ extends Control
 ## the Bane check box. Break asks for confirmation in the MessageBox and
 ## clears every changeable agreed aspect of the next day's relation.
 ## OfferPeace, InBoxPeace and OutBoxPeace open PeaceOffer as a new, received
-## or sent offer. D_OK or Escape closes the screen.
+## or sent offer; OfferTrade, InBoxTrade and OutBoxTrade open the TradeDialog
+## (ELTradeDialogView) the same way. D_OK or Escape closes the screen.
 ##
 ## PeaceOffer shows both blazons and names, the offer text and four check
 ## boxes (ether, land, vision, shops) enabled only where the relation allows
@@ -72,6 +73,7 @@ var rows: Array[Dictionary] = []
 var dialog: Canvas
 var dialog_buttons: Dictionary = {}
 var dialog_names: Array[Label] = []
+var trade: ELTradeDialogView
 ## The offer being shown: {from, to, before, mask}, and the dialog mode.
 var offer: Dictionary = {}
 var mode := NEW
@@ -112,6 +114,9 @@ func build(session: ELAdventureSession, owner: int) -> void:
 		row.buttons.OfferPeace.pressed.connect(func(): open_offer(ELDiplomacy.draft(state, player, other), NEW))
 		row.buttons.InBoxPeace.pressed.connect(func(): open_offer(ELDiplomacy.received(state, player, other), RECEIVED))
 		row.buttons.OutBoxPeace.pressed.connect(func(): open_offer(ELDiplomacy.sent(state, player, other), SENT))
+		row.buttons.OfferTrade.pressed.connect(func(): trade.open(ELDiplomacy.trade_draft(state, player, other), NEW))
+		row.buttons.InBoxTrade.pressed.connect(func(): trade.open(ELDiplomacy.trade_received(state, player, other), RECEIVED))
+		row.buttons.OutBoxTrade.pressed.connect(func(): trade.open(ELDiplomacy.trade_sent(state, player, other), SENT))
 		row.buttons.Bane.pressed.connect(func():
 			ELDiplomacy.set_bane(state, player, other, not ELDiplomacy.bane(state, player, other))
 			refresh())
@@ -119,6 +124,10 @@ func build(session: ELAdventureSession, owner: int) -> void:
 	buttons.D_OK = _button(sheet, "D_OK", Vector2.ZERO)
 	buttons.D_OK.pressed.connect(func(): closed.emit())
 	_build_dialog()
+	trade = ELTradeDialogView.new()
+	add_child(trade)
+	trade.build(self)
+	trade.closed.connect(refresh)
 	resized.connect(_layout)
 	_layout()
 	refresh()
@@ -129,16 +138,18 @@ func _layout() -> void:
 		canvas.scale = Vector2(factor, factor)
 		canvas.position = (ORIGIN + Vector2(hud.right_shift * 0.5, 0)) * factor
 		canvas.size = Vector2(660, 600)
+	if trade != null: trade.layout(factor, hud.right_shift)
 
-## Enabled states: the boxes hold an offer; Bane shows its choice. Trade
-## offers are not ported, so their buttons stay off.
+## Enabled states: the boxes hold an offer; Bane shows its choice. OfferTrade
+## is always available.
 func refresh() -> void:
 	for row: Dictionary in rows:
 		if row.player < 0: continue
 		var other: int = row.player
 		row.buttons.InBoxPeace.disabled = ELDiplomacy.received(state, player, other).is_empty()
 		row.buttons.OutBoxPeace.disabled = ELDiplomacy.sent(state, player, other).is_empty()
-		for control: String in ["OfferTrade", "InBoxTrade", "OutBoxTrade"]: row.buttons[control].disabled = true
+		row.buttons.InBoxTrade.disabled = ELDiplomacy.trade_received(state, player, other).is_empty()
+		row.buttons.OutBoxTrade.disabled = ELDiplomacy.trade_sent(state, player, other).is_empty()
 		row.buttons.Bane.active = ELDiplomacy.bane(state, player, other)
 	sheet.queue_redraw()
 
@@ -216,7 +227,8 @@ func _answer_break(accepted: bool) -> void:
 ## Escape: the message box answers itself; then the dialog, then the screen.
 func cancel() -> void:
 	if confirm != null: return
-	if dialog.visible: close_offer()
+	if trade != null and trade.visible: trade.close()
+	elif dialog.visible: close_offer()
 	else: closed.emit()
 
 func _build_dialog() -> void:

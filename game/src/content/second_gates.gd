@@ -89,7 +89,7 @@ static func use(director: ELAdventureDirector, hero: Dictionary, item: Dictionar
 			"text": text, "resources": [], "skill": "", "key": message})
 	return true
 
-## Native open/close: no key, no message; repeating the current state does nothing.
+## Original open/close: no key, no message; repeating the current state does nothing.
 static func set_open(state: ELAdventureSession, item: Dictionary, opened: bool) -> void:
 	if bool(item.get("opened", false)) == opened: return
 	item.opened = opened

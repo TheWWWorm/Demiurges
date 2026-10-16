@@ -207,7 +207,9 @@ func decode(raw: Variant, profiles: Dictionary) -> Dictionary:
 			player.relations[int(key)] = record.relations[key]
 		players[int(player.id)] = player
 	for item: Dictionary in objects.values():
-		if (item.get("building_version") == 1 or item.get("site_version") == 1 or item.get("fort_version") == 1 or item.get("addition_version") == 1) and item.owner >= 0 and not players.has(item.owner): return _reject(next, "Missing owner of a saved building.")
+		# Owner 0 is the neutral side: a neutral creature authored on a fort's
+		# tile garrisons it at start (second game, chapters 24 and 32).
+		if (item.get("building_version") == 1 or item.get("site_version") == 1 or item.get("fort_version") == 1 or item.get("addition_version") == 1) and item.owner > 0 and not players.has(item.owner): return _reject(next, "Missing owner of a saved building.")
 	if not raw.get("explored") is String: return _reject(next, "Missing exploration state.")
 	var explored := Marshalls.base64_to_raw(raw.explored)
 	if explored.size() != map.width * map.height: return _reject(next, "Invalid exploration dimensions.")
@@ -301,7 +303,13 @@ func decode(raw: Variant, profiles: Dictionary) -> Dictionary:
 		if not box is Dictionary or not box.get("text") is String or not box.get("question") is bool or not box.get("hook") is bool or not _number(box.get("speaker"), -1, 0x7fffffff): return _reject(next, "Invalid saved message box.")
 		var kept := {"speaker": int(box.speaker), "text": box.text, "question": box.question, "hook": box.hook}
 		# Box style (older saves have none: a TextDialog).
-		if box.get("box") in ["text", "message"]: kept.box = box.box
+		if box.get("box") in ["text", "message", "loot"]: kept.box = box.box
+		if box.get("created") is bool: kept.created = box.created
+		if box.get("items") is Array:
+			kept.items = []
+			for row: Variant in box.items:
+				if not row is Dictionary or not row.get("name") is String or not row.get("card") is String or not _number(row.get("icon_index", -1), -1, 0xffff): return _reject(next, "Invalid saved message box.")
+				kept.items.append({"name": row.name, "card": row.card, "icon_index": int(row.get("icon_index", -1))})
 		if box.get("speaker_box") is bool: kept.speaker_box = box.speaker_box
 		if box.get("offset") is Array and box.offset.size() == 2 and box.offset.all(func(v: Variant) -> bool: return v is float or v is int): kept.offset = box.offset
 		director.boxes.append(kept)

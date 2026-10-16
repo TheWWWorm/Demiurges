@@ -65,8 +65,14 @@ var menu_buttons: Dictionary = {}
 var scale_factor := 1.0
 var right_shift := 0.0
 var hero_id := -1
+## Times New Roman: only the menu buttons (Controls FontType "Times").
 var serif: Font
 var serif_bold: Font
+## Arial: every other control. The Controls FontType keywords
+## pick face 0 (Arial) unless Courier or Times is named; Header, Dark and
+## Bold make it bold (``, face table).
+var face: Font
+var face_bold: Font
 var _controls: Dictionary = {}
 var _rows: Dictionary = {}
 var _paths: Dictionary = {}
@@ -85,8 +91,6 @@ var _tooltip_content: Dictionary = {}
 ## ExBlinkElement on the panel (E_ADV_INVENTORY_BTN, E_ADV_LEVEL, E_ADV_LIFE,
 ## E_ADV_EXPERIENCE): each toggles every 500 ms and starts lit when set.
 const BLINK_PERIOD := 0.5
-## The experience bar's alternate tint; the life and level
-## digits use it too (their original draw is unconfirmed).
 const BLINK_TINT := Color8(0xff, 0x64, 0x00)
 var blinking: Dictionary = {}
 var blink_lit := false
@@ -118,6 +122,9 @@ func build(source: ELAdventureSession) -> bool:
 	bold.font_names = system.font_names
 	bold.font_weight = 700
 	serif_bold = bold
+	face = ELArtDropList.row_font()
+	face.font_weight = 400
+	face_bold = ELArtDropList.row_font()
 	canvas = Control.new()
 	canvas.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(canvas)
@@ -139,7 +146,7 @@ func build(source: ELAdventureSession) -> bool:
 	_build_right_panel()
 	_build_menu()
 	map_tooltip = ELSecondMapTooltip.new()
-	map_tooltip.setup(profile, serif)
+	map_tooltip.setup(profile, face)
 	canvas.add_child(map_tooltip)
 	resized.connect(_layout)
 	_layout()
@@ -260,17 +267,12 @@ func _build_minimap() -> void:
 	minimap.mouse_filter = Control.MOUSE_FILTER_STOP
 	minimap.name = "Minimap"
 	canvas.add_child(minimap)
-	var map := state.map
-	var image := Image.create(maxi(1, map.width), maxi(1, map.height), false, Image.FORMAT_RGB8)
-	var colors := _terrain_colors()
-	for y in map.height:
-		for x in map.width:
-			var color: Color = colors.get(map.tile(x, y), Color(0.25, 0.25, 0.22))
-			if map.roads.size() > y * map.width + x and map.roads[y * map.width + x] != 0: color = color.lerp(Color("8a6a44"), 0.6)
-			image.set_pixel(x, map.height - 1 - y, color)
-	minimap_texture = ImageTexture.create_from_image(image)
+	# The map's authored picture (<map>.bm1). Without one the original draws
+	# nothing here: no picture, fog or markers over the panel artwork.
+	var image := ELMinimapPicture.load_for(state.map)
+	minimap_texture = ImageTexture.create_from_image(image) if image != null else null
 	minimap.draw.connect(_draw_minimap)
-	if ELFog.active(state, state.current_player):
+	if minimap_texture != null and ELFog.active(state, state.current_player):
 		# The minimap image rows run north-up, so the explored mask is flipped.
 		minimap_fog = TextureRect.new()
 		minimap_fog.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -307,24 +309,6 @@ func minimap_cell(point: Vector2) -> Vector2:
 	var at := (point - area.position) / area.size
 	return Vector2(at.x * state.map.width, (1.0 - at.y) * state.map.height)
 
-func _terrain_colors() -> Dictionary:
-	var result := {}
-	var tiles := profile.terrain_tiles
-	if tiles == null: return result
-	for kind: int in tiles.types:
-		var groups: Array = tiles.types[kind].full
-		if groups.is_empty() or groups[0].ids.is_empty(): continue
-		var id: int = groups[0].ids[0]
-		if id < 0 or id >= tiles.pixels.size(): continue
-		var bytes: PackedByteArray = tiles.pixels[id]
-		var sum := Vector3.ZERO
-		var count := 0
-		for at in range(0, bytes.size() - 2, 3 * 37):
-			sum += Vector3(bytes[at], bytes[at + 1], bytes[at + 2])
-			count += 1
-		if count > 0: result[kind] = Color(sum.x / count / 255.0, sum.y / count / 255.0, sum.z / count / 255.0)
-	return result
-
 func _sync_minimap_fog() -> void:
 	if minimap_fog == null or ELFog.revision(state) == _fog_revision: return
 	_fog_revision = ELFog.revision(state)
@@ -339,12 +323,14 @@ func _sync_minimap_fog() -> void:
 	minimap_fog.texture = _fog_texture
 
 func _draw_minimap() -> void:
+	if minimap_texture == null: return
 	minimap.draw_rect(Rect2(Vector2.ZERO, minimap.size), Color.BLACK)
 	minimap.draw_texture_rect(minimap_texture, minimap_area(), false)
 
 ## Hero and owned-site markers are drawn only on cells the local player sees
 ## (the original second-game markers test the visible bit).
 func _draw_minimap_marks() -> void:
+	if minimap_texture == null: return
 	var area := minimap_area()
 	var map := state.map
 	var cell := area.size / Vector2(maxf(1, map.width), maxf(1, map.height))
@@ -414,11 +400,11 @@ func _build_hero_panel() -> void:
 		experience_bar.draw_rect(rect, Color(0.05, 0.05, 0.04, 0.9))
 		var fill := BLINK_TINT if blink_lit and blinking.has("E_ADV_EXPERIENCE") else Color("c9a24a")
 		experience_bar.draw_rect(Rect2(Vector2(1, 1), Vector2(maxf(0, (rect.size.x - 2) * _progress), rect.size.y - 2)), fill))
-	_label("AdvPanelLifeDig", serif_bold, INK, HORIZONTAL_ALIGNMENT_LEFT)
-	_label("AdvPanelLevelDig", serif_bold, INK, HORIZONTAL_ALIGNMENT_LEFT)
-	_label("AdvPanelHeroNameText", serif_bold, INK)
-	for index in 3: _label("AdvPanelRes%dText" % (index + 1), serif_bold, INK)
-	_label("AdvPanelDayText", serif_bold, INK)
+	_label("AdvPanelLifeDig", face_bold, INK, HORIZONTAL_ALIGNMENT_LEFT)
+	_label("AdvPanelLevelDig", face_bold, INK, HORIZONTAL_ALIGNMENT_LEFT)
+	_label("AdvPanelHeroNameText", face_bold, INK)
+	for index in 3: _label("AdvPanelRes%dText" % (index + 1), face_bold, INK)
+	_label("AdvPanelDayText", face_bold, INK)
 	buttons.AdvPanelHandBagBtn = PanelButton.make(self, "AdvPanelHandBagBtn")
 	buttons.AdvPanelHandBagBtn.pressed.connect(func(): inventory_requested.emit())
 	# Notebook (id 0x7c, accelerator N): ELSecondNotebookView.

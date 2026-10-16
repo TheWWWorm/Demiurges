@@ -38,6 +38,8 @@ var _fade_out_time := 0.0
 var sounds: Dictionary = {}
 ## Ground point the listener hears from (the camera target).
 var listener := Vector3.ZERO
+## The camera's view direction; placed sounds pan by their angle to it.
+var listener_forward := Vector3.FORWARD
 ## The map is hidden behind a battle: new sounds start paused.
 var suspended := false
 ## Volumes being previewed on the Options screen (empty: the saved ones).
@@ -101,6 +103,7 @@ func apply_volumes(values: Dictionary) -> void:
 	if fading.stream == null: background.volume_db = background_volume_now()
 	emphasis.volume_db = music_db()
 	for name: String in sounds: sounds[name].player.volume_db = _sound_db(sounds[name])
+	ELAudio.positional_bus(bool(values.get("audio_reverse", settings.values.get("audio_reverse", false))))
 
 ## Every player that pauses with the map (battles, suspended view).
 func players() -> Array[AudioStreamPlayer]:
@@ -128,8 +131,6 @@ func speak(id: String) -> bool:
 
 func script_event(data: Dictionary) -> void:
 	match data.kind:
-		# The first colourless drain of a day sounds the white zone.
-		"colorless_drain": effect_sound("Adventure/whitezonehb.wav")
 		"background_theme":
 			if str(data.theme).is_empty(): stop_theme()
 			else: start_theme(str(data.theme), float(data.fade_in), float(data.fade_out))
@@ -208,8 +209,15 @@ func start_sound(name: String, entry: Dictionary) -> void:
 	add_child(player)
 	player.stream = stream
 	var sound := {"player": player, "position": Vector3(float(entry.x), float(entry.z), -float(entry.y)), "near": float(entry.get("near", 0.0)), "far": float(entry.get("far", 0.0))}
+	# A sound with a fall-off is placed: it gets a free panned bus.
+	if sound.far > 0.0:
+		var used: Array = sounds.values().map(func(other: Dictionary) -> StringName: return other.player.bus)
+		var slot := 0
+		while used.has(StringName("Positional Adventure %d" % slot)): slot += 1
+		player.bus = ELAudio.pan_bus("Adventure %d" % slot, bool(settings.values.get("audio_reverse", false)))
 	sounds[name] = sound
 	player.volume_db = _sound_db(sound)
+	_place(sound)
 	player.play()
 	player.stream_paused = suspended
 	played.append(str(entry.file))
@@ -248,7 +256,15 @@ func _process(delta: float) -> void:
 			fading.stream = null
 			fading_theme = ""
 		else: fading.volume_db = _gain_db(1.0 - _fade_out_time / _fade_out)
-	for name: String in sounds: sounds[name].player.volume_db = _sound_db(sounds[name])
+	for name: String in sounds:
+		sounds[name].player.volume_db = _sound_db(sounds[name])
+		_place(sounds[name])
+
+## The original's stereo placement for a sound with a fall-off.
+func _place(sound: Dictionary) -> void:
+	if float(sound.far) <= 0.0: return
+	sound.pan = ELAudio.stereo_pan(listener, listener_forward, sound.position)
+	ELAudio.set_pan(sound.player.bus, sound.pan)
 
 func effect_sound(path: String) -> bool:
 	var stream := ELAudio.sound(profile, path)

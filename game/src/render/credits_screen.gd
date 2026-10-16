@@ -12,6 +12,10 @@ extends RefCounted
 ## Second game: T_CREDITS_TEXT_nnn entries (plain, _H header, _1 title, _T/_HT/_1T
 ## without the gap) scroll upwards inside CreditsScrollBounds while the Type1..4
 ## pictures cross-fade; any key or click fades out to the main menu.
+## Faces: the first game sets every credits line in Arial
+## Bold (30/17 px cells) and the copyright in Arial (15 px cell); the second sets
+## plain entries in Arial (20 px cell), headers and titles in Arial Bold (24/32).
+## Sizes below are cell heights, drawn at ELFrontMenu.cell_em.
 
 ## First game: group table (first, last entry) from the original.
 const FIRST_GROUPS := [[0, 4], [5, 13], [14, 19], [20, 25], [26, 30], [31, 37], [38, 46], [47, 55], [56, 57], [58, 59],
@@ -23,8 +27,8 @@ const FIRST_COPYRIGHT := Rect2(265, 511, 485, 89)
 const FIRST_SPLIT_GROUP := 8
 const TEXT_INK := Color("f5b427")
 const CAPTION_INK := Color("d6bb88")
-## Second game: suffix -> [font size, gap after].
-const SECOND_STYLES := {"": [20, 6], "_H": [24, 24], "_T": [20, 0], "_HT": [24, 0], "_1": [32, 32], "_1T": [32, 0]}
+## Second game: suffix -> [cell size, gap after, bold].
+const SECOND_STYLES := {"": [20, 6, false], "_H": [24, 24, true], "_T": [20, 0, false], "_HT": [24, 0, true], "_1": [32, 32, true], "_1T": [32, 0, true]}
 const SECOND_SPEED := 50.3
 const SECOND_PICTURE_TIME := 19.7
 const SECOND_FADE := 1.0
@@ -123,13 +127,13 @@ func first_layout(index: int) -> Array:
 			# Caption only: a 30 px title; nothing at all: a 10 px gap.
 			if entry.caption.is_empty(): y += 10
 			else:
-				lines.append({"text": entry.caption, "y": y, "size": title_size, "color": TEXT_INK})
+				lines.append({"text": entry.caption, "y": y, "size": title_size, "color": TEXT_INK, "bold": true})
 				y += 30
 		else:
-			lines.append({"text": entry.caption, "y": y, "size": body_size, "color": CAPTION_INK})
+			lines.append({"text": entry.caption, "y": y, "size": body_size, "color": CAPTION_INK, "bold": true})
 			y += 17
-			for line: String in wrap_commas(entry.text, menu.serif, body_size, width):
-				lines.append({"text": line, "y": y, "size": body_size, "color": TEXT_INK})
+			for line: String in wrap_commas(entry.text, menu.arial_bold, ELFrontMenu.cell_em(body_size), width):
+				lines.append({"text": line, "y": y, "size": body_size, "color": TEXT_INK, "bold": true})
 				y += 17
 		y += 20
 	var height := FIRST_AREA.size.y
@@ -148,7 +152,7 @@ static func second_entries(profile: ELProfile) -> Array:
 		for suffix: String in SECOND_STYLES:
 			var key := "T_CREDITS_TEXT_%03d%s" % [number, suffix]
 			if not profile.texts.has(key): continue
-			result.append({"key": key, "text": profile.text(key), "size": int(SECOND_STYLES[suffix][0]), "gap": int(SECOND_STYLES[suffix][1])})
+			result.append({"key": key, "text": profile.text(key), "size": int(SECOND_STYLES[suffix][0]), "gap": int(SECOND_STYLES[suffix][1]), "bold": bool(SECOND_STYLES[suffix][2])})
 			found = true
 			break
 		if not found: break
@@ -161,7 +165,7 @@ func second_layout() -> Dictionary:
 	var y := 0.0
 	for entry: Dictionary in entries:
 		for line: String in str(entry.text).split("\n"):
-			lines.append({"text": line.strip_edges(), "y": y, "size": entry.size})
+			lines.append({"text": line.strip_edges(), "y": y, "size": entry.size, "bold": entry.bold})
 			y += entry.size
 		y += entry.gap
 	return {"lines": lines, "height": y}
@@ -200,6 +204,7 @@ func build_screen() -> void:
 		if page == 0:
 			# Wrapping is set before the text so the label keeps its rectangle.
 			var copyright := menu._label("copyright", "", FIRST_COPYRIGHT, 15, TEXT_INK, HORIZONTAL_ALIGNMENT_LEFT)
+			copyright.add_theme_font_override("font", menu.arial)
 			copyright.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 			copyright.vertical_alignment = VERTICAL_ALIGNMENT_TOP
 			copyright.text = menu.text("CR_COPYRIGHT")
@@ -210,6 +215,7 @@ func build_screen() -> void:
 		view.content_height = layout.height
 		view.area = menu.control_rect("CreditsScrollBounds")
 		var copyright := menu._label("copyright", "", menu.control_rect("CreditsCopyright"), 16, TEXT_INK)
+		copyright.add_theme_font_override("font", menu.face_for("CreditsCopyright"))
 		copyright.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		copyright.text = menu._caption("CreditsCopyright")
 		view.set_process(true)
@@ -256,8 +262,6 @@ func tick(delta: float) -> void:
 			close()
 			return
 	scroll += delta * SECOND_SPEED
-	# The scroll starts below the bounds; it starts over once the last line has
-	# passed the top (repeat behaviour unverified).
 	if view != null and scroll > view.area.size.y + view.content_height: scroll = 0.0
 	if view != null: view.queue_redraw()
 
@@ -300,19 +304,20 @@ class CreditsView extends Control:
 		var shown := screen.picture()
 		_draw_picture(shown.type, 1.0)
 		if shown.weight > 0.0: _draw_picture(shown.next, shown.weight)
-		var font := screen.menu.serif
 		var top := area.position.y + (area.size.y - screen.scroll if not screen.first() else 0.0)
 		for line: Dictionary in lines:
 			var y: float = top + line.y
 			if not screen.first() and (y + line.size < area.position.y or y > area.end.y): continue
-			var width := font.get_string_size(line.text, HORIZONTAL_ALIGNMENT_LEFT, -1, line.size).x
-			var at := Vector2(area.position.x + (area.size.x - width) * 0.5, y + font.get_ascent(line.size))
+			var font: Font = screen.menu.arial_bold if line.get("bold", false) else screen.menu.arial
+			var em := ELFrontMenu.cell_em(line.size)
+			var width := font.get_string_size(line.text, HORIZONTAL_ALIGNMENT_LEFT, -1, em).x
+			var at := Vector2(area.position.x + (area.size.x - width) * 0.5, y + font.get_ascent(em))
 			var colour: Color = line.get("color", ELCreditsScreen.TEXT_INK)
 			var alpha := 1.0
 			if not screen.first():
 				# Lines fade at the edges of the scroll bounds instead of being cut.
 				alpha = clampf(minf(y + line.size - area.position.y, area.end.y - y) / float(line.size), 0.0, 1.0)
-			draw_string(font, at + Vector2(1, 1), line.text, HORIZONTAL_ALIGNMENT_LEFT, -1, line.size, Color(0, 0, 0, 0.6 * alpha))
-			draw_string(font, at, line.text, HORIZONTAL_ALIGNMENT_LEFT, -1, line.size, Color(colour, alpha))
+			draw_string(font, at + Vector2(1, 1), line.text, HORIZONTAL_ALIGNMENT_LEFT, -1, em, Color(0, 0, 0, 0.6 * alpha))
+			draw_string(font, at, line.text, HORIZONTAL_ALIGNMENT_LEFT, -1, em, Color(colour, alpha))
 		if screen.closing >= 0.0:
 			draw_rect(Rect2(Vector2.ZERO, size), Color(0, 0, 0, clampf(screen.closing / ELCreditsScreen.SECOND_FADE, 0.0, 1.0)))

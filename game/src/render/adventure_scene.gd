@@ -23,10 +23,30 @@ var fog_session: ELAdventureSession
 var fog_player := 0
 var _fog_revision := -1
 var _fog_textures: Array[ImageTexture] = []
+## Mist opacity per map corner (ELFog levels as the fog pass draws them): the
+## value the last change started from, the target and the seconds since.
+const FOG_UNEXPLORED := 255
+const FOG_REMEMBERED := 133
+const FOG_RATE := 150.0
+## Tiles of mist drawn beyond each map edge.
+const FOG_APRON := 24
+var fog_from := PackedByteArray()
+var fog_to := PackedByteArray()
+var fog_since := 0.0
+var mist: ELFogMist
+var _fog_apron: MeshInstance3D
+## Options "fog animations": false keeps the mist's first frame.
+var animate_fog := true
 var _look_materials: Dictionary = {}
 var _grey_textures: Dictionary = {}
 ## Instanced object groups that share one colourless cell value.
 var _grey_groups: Array[Dictionary] = []
+## Ground blob shadows (Effects/Shadow): one batched quad per object whose
+## class draws one, keyed by uid ({index, local, base}).
+var blobs: MultiMeshInstance3D
+var _blob_slots: Dictionary = {}
+const BLOB_ALPHA := 128.0 / 255.0
+const BLOB_LIFT := 0.01
 ## Etherlords II colourless zones: the session whose level is shown.
 var colorless_session: ELAdventureSession
 var colorless_shown := -1
@@ -73,7 +93,8 @@ func build(source: ELAdventureMap, session: ELAdventureSession = null) -> bool:
 		var center := ELAdventureGrid.center(object, definition.row)
 		var position := Vector3(center.x * ELAdventureTerrain.CELL, 0, -center.y * ELAdventureTerrain.CELL)
 		var transform := Transform3D(Basis(Vector3.UP, -float((rotation >> 2) & 3) * PI / 2.0) * Basis.from_scale(mirror * float(definition.scale)), position)
-		if definition.unit or prototype.clip_frames() > 1:
+		if blob_shadow(map.profile.id, object, definition): _blob_slots[uid] = {"index": -1, "local": blob_local(prototype), "base": transform}
+		if definition.unit or prototype.clip_frames() > 1 or first_barrier(object):
 			var model := ELModel.new()
 			add_child(model)
 			if not model.build(map.profile, definition.model, definition.texture, definition.secondary):
@@ -84,6 +105,7 @@ func build(source: ELAdventureMap, session: ELAdventureSession = null) -> bool:
 			model.set_meta("map_object", index)
 			model.set_meta("art_key", key)
 			if not object.get("alive", true): _corpse_pose(model)
+			if first_barrier(object): barrier_pose(model, bool(object.get("opened", false)), false)
 			# A garrison hero is inside its fort; its own figure is not drawn.
 			if object.get("fortified", false): model.hide()
 			object_models[uid] = model
@@ -103,6 +125,7 @@ func build(source: ELAdventureMap, session: ELAdventureSession = null) -> bool:
 				groups[group].ids.append(uid)
 		_object_keys[uid] = key
 		objects_loaded += 1
+	_build_blobs()
 	for group: Dictionary in groups.values():
 		var instances := MultiMesh.new()
 		instances.transform_format = MultiMesh.TRANSFORM_3D
@@ -131,7 +154,7 @@ func build(source: ELAdventureMap, session: ELAdventureSession = null) -> bool:
 	var environment := WorldEnvironment.new()
 	var env := Environment.new()
 	env.background_mode = Environment.BG_COLOR
-	# Beyond the map edge reads as unexplored (black, as the fog draws it).
+	# Beyond the map edge is black; with fog on, the mist apron covers it.
 	env.background_color = Color.BLACK
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
 	env.ambient_light_color = Color.WHITE
@@ -154,18 +177,90 @@ func enable_fog(session: ELAdventureSession) -> void:
 	fog_session = session if session != null and ELFog.active(session, session.current_player) else null
 	_fog_revision = -1
 	if material != null: material.set_shader_parameter("fog_enabled", fog_session != null)
+	if _fog_apron != null: _fog_apron.visible = fog_session != null
 	if fog_session == null: return
 	fog_player = session.current_player
+	if mist == null:
+		mist = ELFogMist.new()
+		mist.animate = animate_fog
+		add_child(mist)
+	if _fog_apron == null: _fog_apron = _make_fog_apron()
+	_fog_apron.visible = true
+	fog_to = fog_corners()
+	fog_from = fog_to
+	fog_since = INF
 	_fog_textures.clear()
-	for data: PackedByteArray in _fog_data():
-		_fog_textures.append(ImageTexture.create_from_image(Image.create_from_data(map.width, map.height, false, Image.FORMAT_R8, data)))
+	for data: PackedByteArray in [fog_from, fog_to]:
+		_fog_textures.append(ImageTexture.create_from_image(Image.create_from_data(map.width + 1, map.height + 1, false, Image.FORMAT_R8, data)))
 	if material != null:
-		material.set_shader_parameter("fog_explored", _fog_textures[0])
-		material.set_shader_parameter("fog_visible", _fog_textures[1])
-		material.set_shader_parameter("fog_bit", fog_player)
+		material.set_shader_parameter("fog_from", _fog_textures[0])
+		material.set_shader_parameter("fog_to", _fog_textures[1])
 		material.set_shader_parameter("fog_size", Vector2i(map.width, map.height))
-		material.set_shader_parameter("fog_dim", FOG_DIM)
-	sync_fog()
+		material.set_shader_parameter("fog_fade", 1.0)
+		material.set_shader_parameter("fog_mist", mist.get_texture())
+	_fog_revision = ELFog.revision(fog_session)
+	for item: Dictionary in fog_session.objects.values(): fog_object(item)
+	_sync_mist()
+
+func _make_fog_apron() -> MeshInstance3D:
+	var plane := PlaneMesh.new()
+	plane.size = Vector2(map.width + FOG_APRON * 2, map.height + FOG_APRON * 2) * ELAdventureTerrain.CELL
+	var node := MeshInstance3D.new()
+	node.mesh = plane
+	node.position = Vector3(map.width, 0, -map.height) * ELAdventureTerrain.CELL * 0.5
+	node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	var material := ShaderMaterial.new()
+	material.shader = load("res://src/render/adventure_fog_apron.gdshader")
+	material.set_shader_parameter("map_size", Vector2(map.width, map.height))
+	material.set_shader_parameter("fog_mist", mist.get_texture())
+	node.material_override = material
+	add_child(node)
+	return node
+
+## Mist opacity per map corner for the local player: a corner takes its most
+## fogged tile (unexplored or beyond the map 255, remembered 133, visible 0).
+func fog_corners() -> PackedByteArray:
+	var data := _fog_data()
+	var known: PackedByteArray = data[0]
+	var seen: PackedByteArray = data[1]
+	var bit := 1 << fog_player
+	var tiles := PackedByteArray()
+	tiles.resize(map.width * map.height)
+	for i in tiles.size():
+		tiles[i] = 0 if seen[i] & bit else (FOG_REMEMBERED if known[i] & bit else FOG_UNEXPLORED)
+	var columns := map.width + 1
+	var corners := PackedByteArray()
+	corners.resize(columns * (map.height + 1))
+	for y in map.height + 1:
+		for x in columns:
+			var level := 0
+			if x == 0 or y == 0 or x == map.width or y == map.height: level = FOG_UNEXPLORED
+			else:
+				var at := y * map.width + x
+				level = maxi(maxi(tiles[at], tiles[at - 1]), maxi(tiles[at - map.width], tiles[at - map.width - 1]))
+			corners[y * columns + x] = level
+	return corners
+
+## The corner opacities shown now, part way from `fog_from` to `fog_to`.
+func fog_shown() -> PackedByteArray:
+	var step := FOG_RATE * fog_since
+	if step >= 255.0: return fog_to
+	var shown := fog_from.duplicate()
+	var limit := int(step)
+	for i in shown.size():
+		shown[i] = fog_from[i] + clampi(fog_to[i] - fog_from[i], -limit, limit)
+	return shown
+
+func set_animate_fog(on: bool) -> void:
+	animate_fog = on
+	if mist != null: mist.animate = on
+
+func _sync_mist() -> void:
+	var material := map.profile.adventure_terrain_cache.get("material") as ShaderMaterial if map.profile.adventure_terrain_cache.get("map") == map.id else null
+	if material != null:
+		material.set_shader_parameter("fog_drift", mist.drift)
+		material.set_shader_parameter("fog_fade", minf(FOG_RATE * fog_since / 255.0, 1.0))
+	if _fog_apron != null: (_fog_apron.material_override as ShaderMaterial).set_shader_parameter("fog_drift", mist.drift)
 
 func _fog_data() -> Array[PackedByteArray]:
 	var size := map.width * map.height
@@ -179,8 +274,11 @@ func _fog_data() -> Array[PackedByteArray]:
 		seen.resize(size)
 	return [known, seen]
 
-func _process(_delta: float) -> void:
-	if fog_session != null: sync_fog()
+func _process(delta: float) -> void:
+	if fog_session != null:
+		fog_since += delta
+		sync_fog()
+		_sync_mist()
 	if colorless_session != null and colorless_session.colorless_level != colorless_shown: sync_colorless()
 
 ## Colourless zones: terrain corners touching a colourless cell are grey and
@@ -237,9 +335,11 @@ func grey_object(uid: int, cell := Vector2i(-1, -1)) -> void:
 func sync_fog() -> void:
 	if fog_session == null or ELFog.revision(fog_session) == _fog_revision: return
 	_fog_revision = ELFog.revision(fog_session)
-	var data := _fog_data()
-	for index in _fog_textures.size():
-		_fog_textures[index].update(Image.create_from_data(map.width, map.height, false, Image.FORMAT_R8, data[index]))
+	fog_from = fog_shown()
+	fog_to = fog_corners()
+	fog_since = 0.0
+	_fog_textures[0].update(Image.create_from_data(map.width + 1, map.height + 1, false, Image.FORMAT_R8, fog_from))
+	_fog_textures[1].update(Image.create_from_data(map.width + 1, map.height + 1, false, Image.FORMAT_R8, fog_to))
 	for item: Dictionary in fog_session.objects.values(): fog_object(item)
 
 ## Unexplored objects and remembered heroes, monsters, castles and forts are
@@ -261,9 +361,10 @@ func fog_object(item: Dictionary, passing := Vector2i(-1, -1)) -> void:
 		var multimesh: MultiMesh = entry.node.multimesh
 		multimesh.set_instance_transform(entry.index, entry.transform if present else Transform3D(Basis.from_scale(Vector3.ZERO), Vector3.ZERO))
 		if multimesh.use_colors: multimesh.set_instance_color(entry.index, Color(FOG_DIM, FOG_DIM, FOG_DIM) if dim else Color.WHITE)
+	_sync_blob(uid, present)
 
 func _game_visible(item: Dictionary) -> bool:
-	return item.get("visible", true) and item.get("placed", true) and not item.get("fortified", false) and not item.get("opened", false)
+	return item.get("visible", true) and item.get("placed", true) and not item.get("fortified", false) and (not item.get("opened", false) or first_barrier(item))
 
 func _dim_model(model: ELModel, dim: bool) -> void:
 	if model.get_meta("look_dim", false) == dim: return
@@ -308,11 +409,13 @@ func _grey_texture(texture: Texture2D) -> Texture2D:
 func update_object(item: Dictionary) -> void:
 	if item.is_empty(): return
 	var uid: int = item.uid
-	# An opened runestone barrier has moved out of the way.
-	var visible: bool = item.get("visible", true) and item.get("placed", true) and not item.get("fortified", false) and not item.get("opened", false)
+	# An opened second-game gate has moved out of the way; a first-game
+	# runestone keeps its gate (barrier_pose).
+	var visible := _game_visible(item)
 	if not visible:
 		if object_models.has(uid): object_models[uid].hide()
 		for entry: Dictionary in _instances.get(uid, []): entry.node.multimesh.set_instance_transform(entry.index, Transform3D(Basis.from_scale(Vector3.ZERO), Vector3.ZERO))
+		_sync_blob(uid, false)
 		return
 	var definition := _art.resolve(item)
 	if definition.is_empty() or definition.get("hidden", false): return
@@ -337,6 +440,7 @@ func update_object(item: Dictionary) -> void:
 			model.basis = Basis(Vector3.UP, -float((rotation >> 2) & 3) * PI / 2.0) * Basis.from_scale(mirror * float(definition.scale))
 		model.set_meta("art_key", key)
 		for part: MeshInstance3D in model.parts.values(): part.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		if _blob_slots.has(uid): _blob_slots[uid]["local"] = blob_local(model)
 		object_models[uid] = model
 		_object_keys[uid] = key
 		if unit:
@@ -349,10 +453,46 @@ func update_object(item: Dictionary) -> void:
 		var center := ELAdventureGrid.center(item, definition.row)
 		model.position = Vector3(center.x * ELAdventureTerrain.CELL, 0, -center.y * ELAdventureTerrain.CELL)
 		if not item.get("alive", true): _corpse_pose(model)
+		if first_barrier(item): barrier_pose(model, bool(item.get("opened", false)), true)
 		grey_object(uid)
+		_sync_blob(uid, visible)
 		return
 	for entry: Dictionary in _instances.get(uid, []):
 		entry.node.multimesh.set_instance_transform(entry.index, entry.transform if visible else Transform3D(Basis.from_scale(Vector3.ZERO), Vector3.ZERO))
+	_sync_blob(uid, visible)
+
+## A first-game runestone barrier (Runestone1/2), drawn as its own figure.
+func first_barrier(item: Dictionary) -> bool:
+	return map.profile.id == "el1" and item.get("group") == "additional_buildings" and item.get("name") in ["Runestone1", "Runestone2"]
+
+## Opening plays the figure's "uinstant" clip, then hides its moving parts
+## object02-object10 so the gate stays (end callback).
+## Closing shows them at the clip's first frame. A figure built or
+## loaded open, or with object animation off, takes the open pose at once.
+func barrier_pose(model: ELModel, opened: bool, animate: bool) -> void:
+	var known := model.has_meta("barrier_opened")
+	if known and bool(model.get_meta("barrier_opened")) == opened: return
+	model.set_meta("barrier_opened", opened)
+	if not opened:
+		if not known: return
+		for part: MeshInstance3D in model.parts.values(): part.visible = true
+		if model.play("uinstant"): _hold_frame(model, 0.0)
+		return
+	if animate and known and animate_objects and model.play("uinstant"):
+		model.animation_finished.connect(func(clip: String) -> void: if clip == "uinstant" and bool(model.get_meta("barrier_opened")): _barrier_stones(model), CONNECT_ONE_SHOT)
+		return
+	if model.play("uinstant"): _hold_frame(model, float(model.clip_frames() - 1))
+	_barrier_stones(model)
+
+func _barrier_stones(model: ELModel) -> void:
+	for name: String in model.parts:
+		if name.begins_with("object") and int(name.substr(6)) in range(2, 11): model.parts[name].visible = false
+
+func _hold_frame(model: ELModel, frame: float) -> void:
+	model.frame = frame
+	model.apply_frame(frame)
+	model.playing = false
+	model.set_process(false)
 
 func _corpse_pose(model: ELModel) -> void:
 	if model.play("udeath"):
@@ -397,6 +537,76 @@ func set_animate_objects(on: bool) -> void:
 	animate_objects = on
 	for model: ELModel in animated:
 		if is_instance_valid(model): model.speed = 1.0 if on else 0.0
+
+## Whether an object draws the original ground blob shadow (view flag)
+## instead of a silhouette. Second game: terrain objects whose TerrObj
+## ShadowType is 2. First game: additional buildings, spell shops, forts and
+## mana nodes (their constructors set it; the ingredient shop does not).
+static func blob_shadow(edition: String, object: Dictionary, definition: Dictionary) -> bool:
+	if definition.get("unit", false): return false
+	if edition == "el2": return object.get("group") == "terrain_objects" and str(definition.get("row", {}).get("ShadowType", "1")) == "2"
+	if edition == "el1": return object.get("group") in ["additional_buildings", "forts", "mana_nodes"] or object.get("type") == "el1_spell_shop"
+	return false
+
+## The blob quad in the model's own frame: the footprint of its mesh bounds
+## (the original's model-space rectangle) on the ground.
+static func blob_local(model: ELModel) -> Transform3D:
+	var bounds := AABB()
+	var first := true
+	for part: MeshInstance3D in model.parts.values():
+		if part.mesh == null or not part.visible: continue
+		var to_model := Transform3D.IDENTITY
+		var node: Node = part
+		while node != model and node is Node3D:
+			to_model = (node as Node3D).transform * to_model
+			node = node.get_parent()
+		var box := to_model * part.mesh.get_aabb()
+		bounds = box if first else bounds.merge(box)
+		first = false
+	var centre := bounds.get_center()
+	return Transform3D(Basis.from_scale(Vector3(maxf(bounds.size.x, 0.001), 1, maxf(bounds.size.z, 0.001))), Vector3(centre.x, 0, centre.z))
+
+func _build_blobs() -> void:
+	if _blob_slots.is_empty(): return
+	var texture := ELCombatBlood.atlas(map.profile, "Effects/Shadow")
+	if texture == null: return
+	var quad := PlaneMesh.new()
+	quad.size = Vector2.ONE
+	var material := StandardMaterial3D.new()
+	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	material.albedo_texture = texture
+	material.albedo_color = Color(1, 1, 1, BLOB_ALPHA)
+	material.cull_mode = BaseMaterial3D.CULL_DISABLED
+	var instances := MultiMesh.new()
+	instances.transform_format = MultiMesh.TRANSFORM_3D
+	instances.mesh = quad
+	instances.instance_count = _blob_slots.size()
+	blobs = MultiMeshInstance3D.new()
+	blobs.name = "BlobShadows"
+	blobs.multimesh = instances
+	blobs.material_override = material
+	blobs.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	add_child(blobs)
+	var index := 0
+	for uid: int in _blob_slots:
+		_blob_slots[uid]["index"] = index
+		index += 1
+		_sync_blob(uid, true)
+
+func _sync_blob(uid: int, present: bool) -> void:
+	if blobs == null or not _blob_slots.has(uid) or int(_blob_slots[uid].index) < 0: return
+	var slot: Dictionary = _blob_slots[uid]
+	var base: Transform3D = object_models[uid].transform if object_models.has(uid) else slot.base
+	var placed := base * (slot.local as Transform3D)
+	placed.origin.y += BLOB_LIFT
+	slot["placed"] = placed
+	slot["present"] = present
+	blobs.multimesh.set_instance_transform(slot.index, placed if present else Transform3D(Basis.from_scale(Vector3.ZERO), Vector3.ZERO))
+
+## The shadows setting hides or shows all ground blobs.
+func set_blob_shadows(on: bool) -> void:
+	if blobs != null: blobs.visible = on
 
 ## Highest point of an object's drawn figure (world units above the ground),
 ## or -1 when the object has no figure.

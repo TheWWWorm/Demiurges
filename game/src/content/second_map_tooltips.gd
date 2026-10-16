@@ -110,7 +110,11 @@ static func describe(state: ELAdventureSession, item: Dictionary, row: Dictionar
 		var corpse: Dictionary = profile.table("AdditionalBuildings").get("Corpse", {})
 		if item.get("ship", false): return generic(text(profile, "T_SHIP_CORPSE_NAME"), text(profile, "T_SHIP_CORPSE_DESC"), -1)
 		return generic(text(profile, str(corpse.get("ELKName", ""))), text(profile, str(corpse.get("ToolTip", ""))), int(corpse.get("Icon", -1)))
-	if item.get("type") in ["hero", "monster"]: return _figure(state, item, row)
+	if item.get("type") in ["hero", "monster"]:
+		# Creatures and ownerless heroes use the framed layout; players' heroes
+		# do not.
+		var shown := _figure(state, item, row)
+		return shown if item.get("type") == "hero" and state.players.has(int(item.get("owner", -1))) else _framed(shown)
 	match group:
 		"additional_buildings": return _building(state, item)
 		"buildings":
@@ -119,14 +123,13 @@ static func describe(state: ELAdventureSession, item: Dictionary, row: Dictionar
 		"forts":
 			return _fort(state, item, row)
 		"laboratories", "factories":
-			# Shop name and icon; the original also draws a symbol glyph (not ported).
-			return _title_beside_icon(text(profile, str(row.get("ELKName", ""))), int(row.get("Icon", -1)))
+			return _framed(_title_beside_icon(text(profile, str(row.get("ELKName", ""))), int(row.get("Icon", -1))))
 		"mines":
 			return _mine(state, item)
 		"mana_nodes":
 			var node := ELResourceSites.definition(profile, item)
 			var amount := ELResourceSites.mana_production(item, str(state.players.get(state.current_player, {}).get("color", "")))
-			return generic(text(profile, str(node.get("Name", ""))), format(text(profile, "T_MANA_NODE_TT"), [amount]), int(node.get("Icon", -1)))
+			return _framed(generic(text(profile, str(node.get("Name", ""))), format(text(profile, "T_MANA_NODE_TT"), [amount]), int(node.get("Icon", -1))))
 		"resource_cuts":
 			return _resources(state, item)
 		"artefacts":
@@ -152,6 +155,12 @@ static func generic(title: String, body: String, icon: int) -> Dictionary:
 static func _title_beside_icon(title: String, icon: int) -> Dictionary:
 	if icon < 0: return {"labels": [_label(title, Vector2.ZERO, true)], "picture": {}}
 	return {"labels": [_label(title, Vector2(80, 18), true)], "picture": {"kind": "building", "index": icon, "at": Vector2.ZERO, "size": ICON_SIZE}}
+
+## Shop, mine and mana-node icons and creature portraits sit on a black
+## backdrop one unit larger on every side: a 1-unit black border.
+static func _framed(shown: Dictionary) -> Dictionary:
+	if not shown.picture.is_empty(): shown.picture.framed = true
+	return shown
 
 static func _label(value: String, at: Vector2, title := false) -> Dictionary:
 	return {"text": value, "at": at, "title": title}
@@ -235,7 +244,7 @@ static func _mine(state: ELAdventureSession, item: Dictionary) -> Dictionary:
 	var icon := int(row.get("Icon", -1))
 	var labels: Array = [_label(text(profile, str(row.get("ELKName", ""))), Vector2(0, 60), true), _label(body, Vector2(0, 80))]
 	var picture := {"kind": "building", "index": icon, "at": Vector2.ZERO, "size": ICON_SIZE, "centre": true} if icon >= 0 else {}
-	return {"labels": labels, "picture": picture}
+	return _framed({"labels": labels, "picture": picture})
 
 static func _resources(state: ELAdventureSession, item: Dictionary) -> Dictionary:
 	var profile := state.map.profile

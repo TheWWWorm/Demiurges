@@ -42,6 +42,9 @@ var difficulty := 1
 ## Diagnostics: missing chunks, script errors, dropped or unsupported casts.
 var notes: Array[String] = []
 var draining := false
+## A lookahead layer (see `search_layer`): only the logic summon hook runs and
+## nothing is queued.
+var search_only := false
 ## Verification chunks by `chunk_path`, consulted before the scripts archive.
 static var fixtures: Dictionary = {}
 var _duel: WeakRef
@@ -65,6 +68,32 @@ func load_all(entries: Array) -> void:
 		states.append(state)
 		var init: Variant = state.vm.globals.get("CHook_Init")
 		if init is ELLuaVM.Closure: _call(state, init, [])
+
+## The combat opponent thinks with presentation off, so of all hooks only the
+## logic summon one still reaches the scripts during its lookahead. Its
+## immediate edits (base stats, manalinks, damage) apply to the simulated
+## position; the casts, cards and ether it would queue are dropped. The layer
+## holds private copies of the states that have that hook, built from their
+## current globals; null when no state has it.
+func search_layer(copy: ELDuel) -> ELBattleScripts:
+	if search_only: return self
+	var saved: Array = []
+	for state: Dictionary in states:
+		if state.hooks.has("CHook_OnLogicSummon"): saved.append({"name": state.name, "side": state.side, "globals": ELLuaSave.new().encode(state.vm)})
+	if saved.is_empty(): return null
+	var d := duel()
+	var session: Variant = d.adventure_session() if d != null else null
+	var variables := local_variables.duplicate()
+	if session != null and session.variables != null: variables = session.variables.values.duplicate()
+	var level := clampi(int(session.difficulty) if session != null else difficulty, 0, 2)
+	var layer := ELBattleScripts.new(copy)
+	if not layer.restore({"states": saved, "queue": [], "in_combat": in_combat, "difficulty": level, "variables": variables}).is_empty(): return null
+	layer.search_only = true
+	return layer
+
+## Lookahead copies share one layer; summons rebind it to the acting copy.
+func bind(owner: ELDuel) -> void:
+	_duel = weakref(owner)
 
 func close() -> void:
 	for state: Dictionary in states: state.vm.clear()
@@ -116,12 +145,14 @@ func _call(state: Dictionary, function: Variant, arguments: Array) -> void:
 	_running = previous
 
 func dispatch(hook: String, arguments: Array) -> void:
+	if search_only and hook != "CHook_OnLogicSummon": return
 	for state: Dictionary in states.duplicate():
 		if state.hooks.has(hook): _call(state, state.hooks[hook], arguments)
 
 ## Turn starts go only to states whose own or enemy player starts the turn.
 func turn_start(side: int, turn: int) -> void:
 	in_combat = true
+	if search_only: return
 	for state: Dictionary in states.duplicate():
 		var hook := "CHook_BeginMyTurn" if int(state.side) == side else "CHook_BeginEnemyTurn"
 		if state.hooks.has(hook): _call(state, state.hooks[hook], [float(turn)])
@@ -132,7 +163,7 @@ func summoned(side: int, card: String, id: int) -> void:
 	var previous := new_creature
 	new_creature = id
 	dispatch("CHook_OnLogicSummon", [float(side), card, float(id)])
-	dispatch("CHook_OnVisualSummon", [float(side), card, float(id)])
+	if not search_only: dispatch("CHook_OnVisualSummon", [float(side), card, float(id)])
 	new_creature = previous
 
 ## Pops queued actions until none remain; actions may raise hooks that queue more.
@@ -163,7 +194,9 @@ func _execute(action: Dictionary) -> void:
 				notes.append("Script %s by side %d dropped: %s" % [action.card, side, d.error])
 				d.error = ""
 		"add_card":
-			d._give_card(side, str(action.card))
+			# EL2 `` → `` queues ``, which runs ``:
+			# a DrawSpell, so the card enters the hand rail at the left.
+			d._give_card(side, str(action.card), -1, true)
 			d._emit({"kind": "script_card", "side": side, "card": action.card})
 		"set_mana":
 			var delta := int(action.value) - int(d.heroes[side].mana)
@@ -218,6 +251,7 @@ func _native(args: Array, name: String) -> Array:
 			if side < 0: return []
 			var card := str(args[1])
 			if not d.profile.table("CombatSpells").has(card): return _error("Unknown spell type")
+			if search_only: return []
 			if name == "ExAddSpellToHand":
 				queue.append({"op": "add_card", "side": side, "card": card})
 				return []
@@ -227,7 +261,7 @@ func _native(args: Array, name: String) -> Array:
 		"ExAddMana":
 			var side := _player(first)
 			# SetMana(mana at the call + n), applied when the action resolves.
-			if side >= 0: queue.append({"op": "set_mana", "side": side, "value": int(d.heroes[side].mana) + _integer(args[1] if args.size() > 1 else 0)})
+			if side >= 0 and not search_only: queue.append({"op": "set_mana", "side": side, "value": int(d.heroes[side].mana) + _integer(args[1] if args.size() > 1 else 0)})
 		"ExGetNewCreatureBaseStat", "ExSetNewCreatureBaseStat":
 			if new_creature < 0 or not d.creatures.has(new_creature): return _error(NO_CREATURE)
 			var index := _integer(first)
@@ -290,7 +324,7 @@ static func base_stat(d: ELDuel, id: int, index: int) -> int:
 			return 0
 	return 1 if STAT_FLAGS.has(index) and c.flags.has(STAT_FLAGS[index]) else 0
 
-## Writes the new creature's base vector; the native itself does not clamp.
+## Writes the new creature's base vector; the original itself does not clamp.
 static func set_base_stat(d: ELDuel, id: int, index: int, value: int) -> void:
 	var c: Dictionary = d.creatures[id]
 	if index in [0, 1]:

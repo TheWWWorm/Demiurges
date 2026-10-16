@@ -18,9 +18,18 @@ extends RefCounted
 ## replaces the other side's. Computer players never send, accept or decline
 ## offers, so an offer to them waits until its sender withdraws it.
 ##
+## Trade offers are kept apart from peace offers, again one per pair. Each
+## side lists the seven resources that player gives, whether it adds an
+## artifact or a global spell, and whether the other side demands any
+## artifact or global spell. Only the resources change hands: an accepted
+## trade moves them at once, both ways. The artifact and global spell marks
+## travel with the offer but never move an item. Computer players never
+## answer a trade either, so it waits until its sender withdraws it.
+##
 ## The state lives in each player's `diplomacy` record: the next-day relation
-## to each higher-numbered player, the peace offers this player has sent, the
-## offers it has accepted, and the players it has chosen not to hear (Bane).
+## to each higher-numbered player, the peace and trade offers this player has
+## sent, the peace offers it has accepted, and the players it has chosen not
+## to hear (Bane).
 const VERSION := 1
 const ASPECTS := 4
 ## Aspect indices.
@@ -33,6 +42,9 @@ const ETHER_BIT := 0x01
 const LAND_BIT := 0x04
 const VISION_BIT := 0x10
 const SHOPS_BIT := 0x40
+## Resources a trade can carry, in the original resource order.
+const TRADE_RESOURCES := 7
+const TRADE_FLAGS := ["artifact", "need_artifact", "spell", "need_spell"]
 
 static func applies(state: ELAdventureSession) -> bool:
 	return state != null and state.map != null and state.map.profile != null and state.map.profile.id == "el1"
@@ -176,18 +188,130 @@ static func new_day(state: ELAdventureSession) -> void:
 		pending.clear()
 	if changed_any: state.event.emit({"kind": "diplomacy_changed"})
 
+## An empty side of a trade: what one player gives.
+static func trade_side() -> Dictionary:
+	var resources: Array = []
+	resources.resize(TRADE_RESOURCES)
+	resources.fill(0)
+	return {"resources": resources, "artifact": false, "need_artifact": false, "spell": false, "need_spell": false}
+
+## The trade offer between two players, if any:
+## {from, to, give (the sender's side), take (the receiver's side)}.
+static func trade_between(state: ELAdventureSession, first: int, second: int) -> Dictionary:
+	for pair: Array in [[first, second], [second, first]]:
+		var sent_trades: Dictionary = _record(state, pair[0]).get("trades", {})
+		if sent_trades.has(pair[1]):
+			var entry: Dictionary = sent_trades[pair[1]]
+			return {"from": pair[0], "to": pair[1], "give": entry.give.duplicate(true), "take": entry.take.duplicate(true)}
+	return {}
+
+## The trade `player` has sent to `other` (OutBox) or received from it
+## (InBox). Both carry `before`, the resources changes are measured from: a
+## received offer arrives with its earlier amounts equal to the proposal.
+static func trade_sent(state: ELAdventureSession, player: int, other: int) -> Dictionary:
+	var found := trade_between(state, player, other)
+	return _with_before(found) if not found.is_empty() and found.from == player else {}
+
+static func trade_received(state: ELAdventureSession, player: int, other: int) -> Dictionary:
+	var found := trade_between(state, player, other)
+	return _with_before(found) if not found.is_empty() and found.from == other else {}
+
+## A new trade as OfferTrade opens it: both sides empty.
+static func trade_draft(state: ELAdventureSession, from: int, to: int) -> Dictionary:
+	if not state.players.has(from) or not state.players.has(to): return {}
+	return _with_before({"from": from, "to": to, "give": trade_side(), "take": trade_side()})
+
+static func _with_before(offer: Dictionary) -> Dictionary:
+	offer.before = {"give": offer.give.resources.duplicate(), "take": offer.take.resources.duplicate()}
+	return offer
+
+## The side `player` gives in an offer.
+static func trade_side_of(offer: Dictionary, player: int) -> Dictionary:
+	return offer.give if int(offer.get("from", -1)) == player else offer.take
+
+## Only the resource amounts count as a change (artifact and spell marks do not).
+static func trade_changed(offer: Dictionary) -> bool:
+	var before: Dictionary = offer.get("before", {})
+	return before.get("give", []) != offer.give.resources or before.get("take", []) != offer.take.resources
+
+## One more or one less of a resource on a side; never below zero.
+static func trade_step(side: Dictionary, resource: int, delta: int) -> void:
+	if resource < 0 or resource >= TRADE_RESOURCES: return
+	side.resources[resource] = maxi(0, int(side.resources[resource]) + delta)
+
+## Whether `player` may add one more of a resource to the side it gives: only
+## while it holds more than the side already carries.
+static func trade_can_raise(state: ELAdventureSession, player: int, side: Dictionary, resource: int) -> bool:
+	var held := int(state.players.get(player, {}).get("resources", {}).get(ELResources.ORIGINAL[resource], 0))
+	return held > 0 and held > int(side.resources[resource])
+
+## Sends (or replaces) a trade offer; any trade the other side had sent to
+## this player is dropped.
+static func send_trade(state: ELAdventureSession, offer: Dictionary) -> bool:
+	var from := int(offer.get("from", -1))
+	var to := int(offer.get("to", -1))
+	if not applies(state) or from == to or from < 1 or to < 1 or not state.players.has(from) or not state.players.has(to): return false
+	if not _valid_side(offer.get("give")) or not _valid_side(offer.get("take")): return false
+	_clear_trades(state, from, to)
+	_record(state, from, true)
+	if not state.players[from].diplomacy.has("trades"): state.players[from].diplomacy.trades = {}
+	state.players[from].diplomacy.trades[to] = {"give": _clean_side(offer.give), "take": _clean_side(offer.take)}
+	state.event.emit({"kind": "diplomacy_changed"})
+	return true
+
+## Withdraws or declines the trade between two players.
+static func withdraw_trade(state: ELAdventureSession, first: int, second: int) -> void:
+	_clear_trades(state, first, second)
+	state.event.emit({"kind": "diplomacy_changed"})
+
+## Accepts the trade `from` sent to `to`: the resources change hands at once.
+static func accept_trade(state: ELAdventureSession, from: int, to: int) -> bool:
+	var offer := trade_received(state, to, from)
+	if offer.is_empty(): return false
+	_clear_trades(state, from, to)
+	for index in TRADE_RESOURCES:
+		var kind: String = ELResources.ORIGINAL[index]
+		var gives := int(offer.give.resources[index])
+		var takes := int(offer.take.resources[index])
+		for pair: Array in [[from, takes - gives], [to, gives - takes]]:
+			var wallet: Dictionary = state.players[pair[0]].resources
+			wallet[kind] = clampi(int(wallet.get(kind, 0)) + int(pair[1]), 0, ELResources.MAX_AMOUNT)
+	state.event.emit({"kind": "resources_changed", "player": from})
+	state.event.emit({"kind": "resources_changed", "player": to})
+	state.event.emit({"kind": "diplomacy_changed"})
+	return true
+
+static func _valid_side(side: Variant) -> bool:
+	if not side is Dictionary or not side.get("resources") is Array or side.resources.size() != TRADE_RESOURCES: return false
+	for amount: Variant in side.resources:
+		if not ELLuaSave._integer(amount, 0, ELResources.MAX_AMOUNT): return false
+	for flag: String in TRADE_FLAGS:
+		if not side.get(flag, false) is bool: return false
+	return true
+
+static func _clean_side(side: Dictionary) -> Dictionary:
+	var clean := trade_side()
+	for index in TRADE_RESOURCES: clean.resources[index] = int(side.resources[index])
+	for flag: String in TRADE_FLAGS: clean[flag] = bool(side.get(flag, false))
+	return clean
+
+static func _clear_trades(state: ELAdventureSession, first: int, second: int) -> void:
+	_record(state, first).get("trades", {}).erase(second)
+	_record(state, second).get("trades", {}).erase(first)
+
 ## Validates and normalises the saved records (older saves carry none).
 static func restore(state: ELAdventureSession) -> String:
 	for player: int in state.players:
 		var raw: Variant = state.players[player].get("diplomacy")
 		if raw == null: continue
 		if not raw is Dictionary or raw.get("version") != VERSION: return "Invalid saved diplomacy."
-		var clean := {"version": VERSION, "next": {}, "offers": {}, "accepted": [], "bane": []}
+		var clean := {"version": VERSION, "next": {}, "offers": {}, "trades": {}, "accepted": [], "bane": []}
 		var pending: Variant = raw.get("next", {})
 		var offers: Variant = raw.get("offers", {})
 		var accepted: Variant = raw.get("accepted", [])
 		var bane_list: Variant = raw.get("bane", [])
-		if not pending is Dictionary or not offers is Dictionary or not accepted is Array or not bane_list is Array: return "Invalid saved diplomacy."
+		var trades: Variant = raw.get("trades", {})
+		if not pending is Dictionary or not offers is Dictionary or not trades is Dictionary or not accepted is Array or not bane_list is Array: return "Invalid saved diplomacy."
 		for key: Variant in pending:
 			var other := _player_key(state, key)
 			if other <= player or not ELLuaSave._integer(pending[key], 0, 255): return "Invalid saved relation."
@@ -197,6 +321,11 @@ static func restore(state: ELAdventureSession) -> String:
 			var offer: Variant = offers[key]
 			if other < 1 or other == player or not offer is Dictionary or not ELLuaSave._integer(offer.get("before"), 0, 15) or not ELLuaSave._integer(offer.get("mask"), 0, 15): return "Invalid saved peace offer."
 			clean.offers[other] = {"before": int(offer.before), "mask": int(offer.mask)}
+		for key: Variant in trades:
+			var other := _player_key(state, key)
+			var trade: Variant = trades[key]
+			if other < 1 or other == player or not trade is Dictionary or not _valid_side(trade.get("give")) or not _valid_side(trade.get("take")): return "Invalid saved trade offer."
+			clean.trades[other] = {"give": _clean_side(trade.give), "take": _clean_side(trade.take)}
 		for entry: Variant in accepted:
 			if not entry is Dictionary or _player_key(state, entry.get("to")) < 1 or not ELLuaSave._integer(entry.get("mask"), 0, 15) or accepted.size() > 64: return "Invalid saved peace offer."
 			clean.accepted.append({"to": _player_key(state, entry.to), "mask": int(entry.mask)})
@@ -216,7 +345,7 @@ static func _record(state: ELAdventureSession, player: int, create := false) -> 
 	var record: Variant = state.players[player].get("diplomacy")
 	if record is Dictionary: return record
 	if not create: return {}
-	state.players[player].diplomacy = {"version": VERSION, "next": {}, "offers": {}, "accepted": [], "bane": []}
+	state.players[player].diplomacy = {"version": VERSION, "next": {}, "offers": {}, "trades": {}, "accepted": [], "bane": []}
 	return state.players[player].diplomacy
 
 static func _set_next(state: ELAdventureSession, first: int, second: int, value: int) -> void:

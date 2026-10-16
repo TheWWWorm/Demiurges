@@ -102,6 +102,8 @@ static func choice(profile: ELProfile, preset: Dictionary, template := "") -> Di
 		var name := artifact_name(profile, code)
 		if not name.is_empty(): artifacts.append({"name": name})
 	if not artifacts.is_empty(): result.artifacts = artifacts
+	# Kept for the record only (replays show it): a battle draws from the deck.
+	if not preset.get("reserve", {}).is_empty(): result.reserve = preset.reserve.duplicate()
 	return result
 
 ## The `Artefacts` row whose spell is `code`.

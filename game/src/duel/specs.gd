@@ -34,9 +34,14 @@ static func roll(d: ELDuel, side: int, code: String, trials := 1, announce := tr
 	var hero: Dictionary = d.heroes[side]
 	if hero.get("spec", "NONE") != code or not d.setup.get("specs", true) or trials <= 0: return 0
 	var threshold := chance(d.profile, code, int(hero.get("spec_level", hero.level)))
-	# Second-game lookahead copies take the expected count without drawing:
-	# a success counts once the expectation reaches nine tenths.
-	if d.expected_specs: return (int(threshold * 100.0) * trials + 10) / 100
+	# Second-game lookahead copies take the expected count without drawing,
+	# from the hero's sampled successes per hundred (`sample_expectation`); a
+	# success counts once the expectation reaches nine tenths. Five
+	# specialisations are never expected.
+	if d.expected_specs:
+		if code in UNEXPECTED: return 0
+		var percent := int(d.spec_expect[side]) if d.spec_expect.size() == 2 else int(threshold * 100.0)
+		return (percent * trials + 10) / 100
 	var difference := int(hero.get("luck", 0)) - int(d.heroes[1 - side].get("suppression", 0))
 	var hits := 0
 	for trial in trials:
@@ -51,6 +56,32 @@ static func roll(d: ELDuel, side: int, code: String, trials := 1, announce := tr
 static func _next(d: ELDuel) -> float:
 	d.rng_state = (d.rng_state * 0x343fd + 0x269ec3) & 0xffffffff
 	return float((d.rng_state >> 16) & 0x7fff) / 32767.0
+
+## Specialisations a lookahead never expects to succeed.
+const UNEXPECTED := ["RVVE", "ATMF", "IRSK", "DRSK", "DRSL"]
+
+## Successes per hundred trials for each hero, as the second game's think
+## samples them before searching: a hundred trials of the real
+## roll for hero 0, then for hero 1, on a copy of the random sequence, which
+## the duel keeps unchanged. Every hero draws; NONE has its own table row.
+static func sample_expectation(d: ELDuel) -> Array[int]:
+	var result: Array[int] = [0, 0]
+	if not d.setup.get("specs", true): return result
+	var state := d.rng_state
+	for side in 2:
+		var hero: Dictionary = d.heroes[side]
+		var code := String(hero.get("spec", "NONE"))
+		var threshold := chance(d.profile, code, int(hero.get("spec_level", hero.level)))
+		var difference := int(hero.get("luck", 0)) - int(d.heroes[1 - side].get("suppression", 0))
+		for trial in 100:
+			state = (state * 0x343fd + 0x269ec3) & 0xffffffff
+			var r := float((state >> 16) & 0x7fff) / 32767.0
+			for extra in absi(difference):
+				state = (state * 0x343fd + 0x269ec3) & 0xffffffff
+				var other := float((state >> 16) & 0x7fff) / 32767.0
+				r = minf(r, other) if difference > 0 else maxf(r, other)
+			if r < threshold: result[side] += 1
+	return result
 
 ## The AI's expectation, without touching the duel's random sequence.
 static func expected(d: ELDuel, side: int, code: String) -> float:

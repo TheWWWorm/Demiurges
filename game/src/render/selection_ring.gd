@@ -9,12 +9,23 @@ const TICK := 0.064
 const FRAMES := 32
 ## Ring half-extent per unit of object radius (4.5 / 2).
 const SPREAD := 2.25
-## Object radius: 0.7 × the larger footprint side (cells), 1 cell = 2 units.
+## Object radius (the view object's): 0.7 × the larger footprint side
+## for objects given a size (: buildings, terrain objects, shops,
+## forts, mines), 1 cell = 2 units; otherwise the constructor's 1.0 world
+## unit, which the second game's heroes keep (no size call on that path).
+## The first game's non-building view objects return 1.0 outright;
+## its buildings use 0.7 × the larger side.
 const RADIUS_PER_CELL := 0.7
+## Size passed for an object with no footprint size: radius 1.0.
+const NO_SIZE := Vector2i.ZERO
 const HOVER_SIZE := 0.85
 const HOVER_LIGHT := 0.5
 ## Colour index (Red, Green, Blue, Black) -> texture and half (0 top, 1 bottom).
 const ATLAS := [[0, 1], [1, 1], [1, 0], [0, 0]]
+## Second game danger pulse: a triangle wave over 32 ticks takes
+## the ring to 70 % size and 40 % opacity at its peak and back.
+const PULSE_SIZE := 0.3
+const PULSE_FADE := 0.6
 
 var textures: Array[Texture2D] = []
 var colour := 0
@@ -22,6 +33,8 @@ var hover_uid := -1
 var selected_uid := -1
 var _clock := 0.0
 var _selected_age := 0.0
+## Seconds the selected ring has been pulsing; -1 when it is not.
+var _pulse_age := -1.0
 var _hover: MeshInstance3D
 var _selected: MeshInstance3D
 
@@ -68,6 +81,12 @@ static func selected_light(age: float) -> float:
 	if age <= 0.2: return HOVER_LIGHT + (1.1 - HOVER_LIGHT) * age / 0.2
 	return 1.0 + (1.1 - 1.0) * (0.4 - (age - 0.2)) / 0.4
 
+## Pulse phase 0..1..0 over 32 ticks (folded at 16).
+static func pulse_phase(seconds: float) -> float:
+	var tick := int(floor(seconds / TICK)) % FRAMES
+	if tick > FRAMES / 2: tick = FRAMES - tick
+	return float(tick) / float(FRAMES / 2)
+
 ## Animation frame (0..31) after the given time on the map.
 static func frame_at(seconds: float) -> int:
 	return int(floor(seconds / TICK)) % FRAMES
@@ -79,26 +98,31 @@ static func frame_offset(index: int, frame: int) -> Vector2:
 
 ## Half-extent in world units of a ring around a footprint of the given size.
 static func half_extent(size: Vector2i, scale: float) -> float:
+	if size == NO_SIZE: return SPREAD * scale
 	return SPREAD * scale * RADIUS_PER_CELL * float(maxi(size.x, size.y)) * ELAdventureTerrain.CELL * 0.5
 
 ## Shows the rings: hover at `hover_at` (ignored when hover is -1) and the
 ## selected one at `selected_at`; positions are ground points.
-func show_rings(delta: float, hover: int, hover_at: Vector3, hover_size: Vector2i, selected: int, selected_at: Vector3, selected_size_cells: Vector2i) -> void:
+func show_rings(delta: float, hover: int, hover_at: Vector3, hover_size: Vector2i, selected: int, selected_at: Vector3, selected_size_cells: Vector2i, selected_pulse := false) -> void:
 	if textures.is_empty(): return
 	_clock += delta
 	if selected != selected_uid: _selected_age = 0.0
 	else: _selected_age += delta
 	selected_uid = selected
 	hover_uid = hover if hover != selected else -1
+	if not selected_pulse or selected_uid < 0: _pulse_age = -1.0
+	elif _pulse_age < 0.0: _pulse_age = 0.0
+	else: _pulse_age += delta
 	var frame := frame_at(_clock)
 	_place(_hover, hover_uid >= 0, hover_at, hover_size, HOVER_SIZE, HOVER_LIGHT, frame)
-	_place(_selected, selected_uid >= 0, selected_at, selected_size_cells, selected_size(_selected_age), selected_light(_selected_age), frame)
+	var t := pulse_phase(_pulse_age) if _pulse_age >= 0.0 else 0.0
+	_place(_selected, selected_uid >= 0, selected_at, selected_size_cells, selected_size(_selected_age) * (1.0 - PULSE_SIZE * t), selected_light(_selected_age), frame, 1.0 - PULSE_FADE * t)
 
 func hide_rings() -> void:
 	if _hover != null: _hover.visible = false
 	if _selected != null: _selected.visible = false
 
-func _place(node: MeshInstance3D, shown: bool, at: Vector3, size: Vector2i, scale: float, light: float, frame: int) -> void:
+func _place(node: MeshInstance3D, shown: bool, at: Vector3, size: Vector2i, scale: float, light: float, frame: int, alpha := 1.0) -> void:
 	node.visible = shown
 	if not shown: return
 	var half := half_extent(size, scale)
@@ -107,7 +131,7 @@ func _place(node: MeshInstance3D, shown: bool, at: Vector3, size: Vector2i, scal
 	var material: StandardMaterial3D = node.material_override
 	material.albedo_texture = textures[ATLAS[clampi(colour, 0, 3)][0]]
 	material.uv1_offset = Vector3(frame_offset(colour, frame).x, frame_offset(colour, frame).y, 0)
-	material.albedo_color = Color(minf(light, 1.0), minf(light, 1.0), minf(light, 1.0))
+	material.albedo_color = Color(minf(light, 1.0), minf(light, 1.0), minf(light, 1.0), alpha)
 	# Light above 1 brightens towards white (the brief flash on selection).
 	material.emission_enabled = light > 1.0
 	if light > 1.0: material.emission = Color.WHITE * (light - 1.0)

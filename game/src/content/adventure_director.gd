@@ -24,6 +24,8 @@ var notice := ""
 ## sees BATTLE_REFUSED). The original starts every battle it is asked to.
 var battle_refusal := ""
 const BATTLE_REFUSED := "This battle cannot be fought in the remake yet."
+## Played when player 1's hero is stopped by a hostile zone.
+const ENEMY_SOUND := "Buttons/Enemy.wav"
 var encounter: ELAdventureEncounter
 var shop: ELSpellShop
 var rune_shop: ELRuneShop
@@ -93,7 +95,9 @@ func _world_changed(data: Dictionary) -> void:
 		interception.rebuild(state, grid)
 		# Second game: only player 1's heroes get the stop flag.
 		var stoppable: bool = state.map.profile.id != "el2" or placed.get("type") == "hero" and int(placed.get("owner", -1)) == 1
-		if stoppable and not interception.enemies(state, placed, Vector2i(placed.x, placed.y)).is_empty(): placed.intercepted = true
+		if stoppable and not interception.enemies(state, placed, Vector2i(placed.x, placed.y)).is_empty():
+			placed.intercepted = true
+			warn_danger(placed)
 		return
 	if data.kind == "object_killed" and ELGlobalSpells.applies(state) and state.object(data.id).get("type") == "hero": ELGlobalSpells.hero_died(state, state.object(data.id))
 	# Second game: a fallen hero's keys return to their warding stones.
@@ -115,9 +119,19 @@ func _world_changed(data: Dictionary) -> void:
 ## player in index order (each gets only Hook_Wake, then ends); after the last
 ## the round counter grows, Hook_EndOfTurn(round) runs and player 1 resumes.
 ## The travel day, income and the date are untouched.
+## Player 1's hero stopped by a hostile zone: its ground ring pulses and
+## Buttons\Enemy.wav plays until the turn boundary (EL1
+## EL2).
+func warn_danger(hero: Dictionary) -> void:
+	if hero.get("type") != "hero" or int(hero.get("owner", -1)) != 1: return
+	hero.danger_pulse = true
+	ELUiSounds.play(state.map.profile, ENEMY_SOUND)
+
 func end_player_turn() -> void:
 	for actor: Dictionary in state.objects.values():
-		if int(actor.get("owner", -1)) == state.current_player and actor.get("intercepted", false): actor.intercepted = false
+		if int(actor.get("owner", -1)) == state.current_player:
+			if actor.get("intercepted", false): actor.intercepted = false
+			actor.erase("danger_pulse")
 	var next := -1
 	var ids := state.players.keys()
 	ids.sort()
@@ -205,6 +219,8 @@ func _show_box() -> void:
 		"question": bool(box.question), "arguments": [], "direct": true, "hook": bool(box.hook),
 		"box": str(box.get("box", "text")), "speaker_box": bool(box.get("speaker_box", false))}
 	if box.has("offset"): dialogue.offset = box.offset
+	if box.has("items"): dialogue.items = box.items.duplicate(true)
+	if box.get("created", false): dialogue.created = true
 	presentation.emit({"kind": "dialogue", "dialogue": dialogue})
 
 func can_move() -> bool:
@@ -256,7 +272,9 @@ func end_day() -> bool:
 		if not state.vm.error.is_empty(): return _fail(state.vm.error)
 	# The placement stop flag lasts until that player's turn boundary.
 	for actor: Dictionary in state.objects.values():
-		if int(actor.get("owner", -1)) == state.current_player and actor.get("intercepted", false): actor.intercepted = false
+		if int(actor.get("owner", -1)) == state.current_player:
+			if actor.get("intercepted", false): actor.intercepted = false
+			actor.erase("danger_pulse")
 	return ELAdventureClock.end_player_day(state, state.current_player)
 
 func request_move(id: int, destination: Vector2i, use_id := -1) -> bool:
@@ -553,7 +571,10 @@ func finish_encounter() -> bool:
 	# loot under it as resource rows; after a hero, the experience alone.
 	var first := state.map.profile.id == "el1"
 	var hero_loot: Array = report.get("artifacts", [])
-	var show: bool = not report.is_empty() and (report.get("monster", false) or first or not hero_loot.is_empty())
+	# Second game: the experience line after any won
+	# battle; after a creature with trophies, T_MB_LOOT_MONSTER_2 and the
+	# trophies under it.
+	var show: bool = not report.is_empty() and (report.get("monster", false) or first or state.map.profile.id == "el2" or not hero_loot.is_empty())
 	if not interrupted and show and int(state.object(report.hero).get("owner", -1)) == state.current_player:
 		var profile := state.map.profile
 		var text := ELAdditionalBuildings.format(profile, "T_MB_LOOT_MONSTER_OR_HERO_1", [int(report.experience)])
@@ -564,14 +585,12 @@ func finish_encounter() -> bool:
 				message.text += "\n" + profile.text("T_MB_LOOT_MONSTER_2")
 				message.rows = report.resources
 		else:
-			text += "\n"
-			if report.get("monster", false): text += profile.text("T_MB_LOOT_MONSTER_2")
-			else:
-				# A defeated hero's battle artifacts pass to the winner.
-				var names: Array[String] = []
-				for item: Dictionary in hero_loot: names.append(ELMapPickups.artifact_title(profile, str(item.name)))
-				text += profile.text("T_MB_LOOT_HERO_2") + " " + ", ".join(names)
-			message.text = text
+			message.key = "T_MB_LOOT_MONSTER_OR_HERO_1"
+			message.resources = []
+			var trophies: Array = report.get("resources", [])
+			if report.get("monster", false) and not trophies.is_empty():
+				message.text = "\n".join(PackedStringArray([text, profile.text("T_MB_LOOT_MONSTER_2")] + Array(ELSecondLoot.lines(profile, trophies))))
+			message.trophies = trophies.duplicate(true)
 		presentation.emit(message)
 	if not interrupted and encounter_lost: presentation.emit({"kind": "lose_battle", "hero": battle.hero, "opponent": battle.opponent})
 	if not interrupted: ELFirstScenario.evaluate(self, battle)

@@ -24,6 +24,15 @@ var load_note := ""
 var setup: Dictionary = {}
 ## Pale revival's second target: graveyard side * GRAVE_SIDE + index.
 const GRAVE_SIDE := 1000
+## Confirmed EL1 player-variable-2 sources (original enchantment attach/detach
+## research). Other, untraced sources are not inferred here.
+const EL1_POS_RUNE_SOURCES := ["ENLH", "TRLB", "BLKD", "BROT", "BASO", "ANFR"]
+## Original FLOD attach/detach
+## modifies its caster's player variable 3. Other writers are untraced.
+const EL1_NEG_RUNE_SOURCES := ["FLOD"]
+## EL1 - checks four concrete creature identifiers,
+## not a general Race=Dragon attribute, during graveyard recovery.
+const EL1_IMMORTAL_DRAGONS := ["BUDG", "BLDG", "GRDG", "RDDG"]
 ## Set while cleaving: a Pale creature then dies instead of dissipating.
 var _plane_guard := false
 ## Ether-disturbance and backlash damage skip the hero's protective specialisations.
@@ -117,6 +126,14 @@ func start(data: ELProfile, seed_value := 212, options: Dictionary = {}) -> bool
 	if options.get("first_side", 0) is not int or int(options.get("first_side", 0)) not in [0, 1]: return _fail("Invalid first side.")
 	if options.get("script_variables", {}) is not Dictionary or options.get("script_difficulty", 1) not in [0, 1, 2]: return _fail("Invalid battle script settings.")
 	if options.get("opening_interleave", -1) not in [-1, 0, 1]: return _fail("Invalid opening order.")
+	# A selected EL1 combat event can be supplied by a prepared battle, like the
+	# original's preset event. The shipped random picker never picks
+	# one (returns 0), and only ARUE/ARUL/CRDS have code behind them:
+	# the cost events are read, which no battle reaches; ADMN, CRRG,
+	# ENDS, GAPI and GAPR exist only as descriptions.
+	var opening_event: Variant = options.get("combat_event", "")
+	if opening_event is not String or (not String(opening_event).is_empty() and (profile.id != "el1" or (not EL1_ARTIFACT_ROUND_EVENTS.has(opening_event) and not EL1_TURN_EVENTS.has(opening_event)))):
+		return _fail("Unsupported opening combat event.")
 	if options.get("card_ids", false):
 		for hero: Dictionary in prepared: hero.hand_ids = []
 	heroes = prepared
@@ -145,17 +162,25 @@ func start(data: ELProfile, seed_value := 212, options: Dictionary = {}) -> bool
 		scripts.load_all(script_list)
 	# Both sides open with five cards; the second side's sixth arrives with the
 	# normal draw at the start of its first turn (EL1, EL2).
-	# The originals alternate the sides card by card. The second game deals
-	# side 0 first in every battle; `opening_interleave` names the
-	# side drawing first when a replay maps the original sides differently.
-	# First-game battles keep the remake's side-by-side order.
-	var first_draw := int(options.get("opening_interleave", 0 if profile.id == "el2" else -1))
+	# Both originals alternate the sides card by card, side 0 first (EL1
+	# EL2); `opening_interleave` names the side drawing
+	# first when a replay maps the original sides differently, and -1 deals
+	# side by side.
+	var first_draw := int(options.get("opening_interleave", 0))
 	if first_draw >= 0:
 		for i in 5:
 			for side in [first_draw, 1 - first_draw]: _draw(side)
 	else:
 		for side in 2:
 			for i in 5: _draw(side)
+	# EL1 then rolls the battle's combat event once when none was
+	# preset. The shipped picker always answers "no event", so only
+	# the generator step remains.
+	if profile.id == "el1" and String(opening_event).is_empty(): random_index(1)
+	if EL1_ARTIFACT_ROUND_EVENTS.has(opening_event):
+		_artifact_event_opening(String(opening_event))
+	elif EL1_TURN_EVENTS.has(opening_event):
+		_emit({"kind": "combat_event", "code": opening_event})
 	# First-game player global spells take effect as the battle starts.
 	for side in 2:
 		var effects: Variant = options.get("players", [{}, {}])[side].get("global_effects", [])
@@ -167,6 +192,19 @@ func start(data: ELProfile, seed_value := 212, options: Dictionary = {}) -> bool
 	return true
 
 const GLOBAL_BATTLE_EFFECTS := ["LGWR", "RLWP", "FRGF", "HSTL"]
+const EL1_ARTIFACT_ROUND_EVENTS := {"ARUE": 1, "ARUL": -1}
+const EL1_TURN_EVENTS := ["CRDS"]
+
+## EL1 applies the battle-opening event to each side's artifact
+## usable-from round, clamped at zero. The binary's ARUE/ARUL signs
+## contradict the event descriptions; preserve the inspected executable
+## behavior rather than silently exchanging their labels.
+func _artifact_event_opening(code: String) -> void:
+	var shift: int = EL1_ARTIFACT_ROUND_EVENTS[code]
+	for hero: Dictionary in heroes:
+		for item: Dictionary in hero.artifacts:
+			item.ready_round = maxi(0, int(item.ready_round) + shift)
+	_emit({"kind": "combat_event", "code": code})
 
 ## Lightning Wrath: 3 damage to the opponent hero (through its protections);
 ## Channel Warp: the opponent starts one ether channel down; Gifts of the Forest:
@@ -732,7 +770,28 @@ func _cast_now(hand_index: int, target := -1, grave_index := -1, extra_ether := 
 	var free: bool = ELSpecs.roll(self, side, "MNCH") > 0
 	_spend_ether(side, (0 if free else cost(card)) + surcharge)
 	if not stays: _take_card(side, hand_index)
-	_emit({"kind": "cast", "side": side, "card": card, "target": target, "cost": cost(card) + power_price(card, extra_ether), "power": extra_ether})
+	var cast_event := {"kind": "cast", "side": side, "card": card, "target": target, "cost": cost(card) + power_price(card, extra_ether), "power": extra_ether}
+	# Both originals' Trade has two separately targeted damage effects, then
+	# healing at the second creature's controller. Save the second cue target
+	# before synchronous destruction; this does not change the combat rules.
+	if profile.id in ["el1", "el2"] and card == "TRAD": cast_event.second = grave_index
+	# EL2 Carnivorous@ only queues its second GreenDamage on the
+	# opposing hero if the sacrificed creature had positive power. Snapshot
+	# before synchronous destruction; this is presentation data, not rules.
+	if profile.id == "el2" and card == "CANV" and creatures.has(target):
+		cast_event.devour_power = maxi(0, int(creatures[target].power))
+	# EL2 Enlightenment@ exits before both original FX registrations
+	# when no other cards remain after paying/consuming the cast card.
+	# Retain that count before the synchronous discard/redraw changes the hand.
+	if profile.id == "el2" and card == "ENLH":
+		cast_event.enlightenment_count = hero.hand.size()
+	# Both original Broken Reality callbacks (EL1@,
+	# EL2@) skip LoseMana/BlackDamage when the selected
+	# hero has no ether after spell payment.
+	# Capture it before burn_mana sets the target to zero.
+	if profile.id in ["el1", "el2"] and card == "BRRL":
+		cast_event.broken_reality_ether = int(heroes[target].mana)
+	_emit(cast_event)
 	_resolve_spell(side, card, rule, target, grave_index, extra_ether, traps, true)
 	if scripts != null: scripts.dispatch("CHook_OnVisualPostSpellCast", _post_cast_arguments(side, card, null, target, extra_ether))
 	_finish_action()
@@ -779,7 +838,14 @@ func cast_free(side: int, card: String, args: Array, presented: bool) -> bool:
 		heroes[side].mana += cost(card)
 		var free: bool = ELSpecs.roll(self, side, "MNCH") > 0
 		_spend_ether(side, (0 if free else cost(card)) + surcharge)
-		_emit({"kind": "cast", "side": side, "card": card, "target": target, "cost": cost(card) + power_price(card, extra_ether), "power": extra_ether, "script": true})
+		var shown := {"kind": "cast", "side": side, "card": card, "target": target, "cost": cost(card) + power_price(card, extra_ether), "power": extra_ether, "script": true}
+		if profile.id == "el2" and card == "CANV" and creatures.has(target):
+			shown.devour_power = maxi(0, int(creatures[target].power))
+		if profile.id == "el2" and card == "ENLH":
+			shown.enlightenment_count = heroes[side].hand.size()
+		if profile.id in ["el1", "el2"] and card == "BRRL":
+			shown.broken_reality_ether = int(heroes[target].mana)
+		_emit(shown)
 	else:
 		_emit({"kind": "script_cast", "side": side, "card": card, "target": target, "power": extra_ether})
 	_resolve_spell(side, card, rule, target, grave_index, extra_ether, traps, presented)
@@ -843,14 +909,52 @@ func _resolve_spell(side: int, card: String, rule: Dictionary, target: int, grav
 			_spend_ether(side, extra_ether)
 			var amount := extra_ether if variable_power(card) else int(rule.amount)
 			if amount > 0:
+				# EL1 Supernova@: the zero-X early exit
+				#  skips its sole RedSuperNova registration.
+				# Positive X registers one global effect before any damage.
+				if profile.id == "el1" and card == "SNOV":
+					_emit({"kind": "supernova_global_cue", "side": side})
 				for victim: int in damage_targets(card, side, target):
 					# Storm mastery: the caster's creatures may gain +3/+3 instead.
 					if card == "LGST" and creatures.has(victim) and creatures[victim].owner == side and ELSpecs.roll(self, side, "RLSS") > 0:
 						_mark(victim, "RLSS", 3, 3)
+						# Both originals queue three positive Target effects
+						# at the RLSS recipient (EL1, EL2).
+						if profile.id in ["el1", "el2"]:
+							_emit({"kind": "lightning_storm_bless_cue", "target": victim})
 						continue
+					# Both originals register RedLightning for each unrescued
+					# figure before damage (EL1, EL2).
+					if profile.id in ["el1", "el2"] and card == "LGST":
+						_emit({"kind": "lightning_storm_damage_cue", "target": victim})
+					# Both originals queue one Target/RedDamage per opposing
+					# creature before damage (EL1@; EL2@).
+					# Only EL2 has a separate caster channel-loss site below.
+					if profile.id in ["el1", "el2"] and card == "FRST":
+						_emit({"kind": "firestorm_victim_cue", "target": victim})
+					# Both original Fire Wave callbacks queue Target/RedDamage once
+					# per opposing creature before synchronous one-point damage:
+					# EL1 -, EL2 -.
+					if profile.id in ["el1", "el2"] and card == "FRWA":
+						_emit({"kind": "fire_wave_victim_cue", "target": victim})
+					# EL1 WindsOfFlame@ and EL2@ both
+					# skip these sites at X=0. At positive X each eligible
+					# flying creature receives a Fireball Start/Finish and
+					# FireballExpl Finish before synchronous damage.
+					if profile.id in ["el1", "el2"] and card == "WNFL":
+						_emit({"kind": "winds_flame_victim_cue", "target": victim})
 					_damage(victim, amount)
 				if channel_cost(card) > 0:
 					_change_ether(side, 0, -channel_cost(card))
+					# One caster-bound LoseMana follows the two-channel deduction,
+					# even when the opposing army has no creatures.
+					if profile.id == "el2" and card == "FRST":
+						_emit({"kind": "firestorm_channel_cue", "side": side, "amount": -channel_cost(card)})
+					# EL2 Supernova@ likewise queues one Target/LoseMana
+					# after its positive-X single-channel payment.
+					# X=0 returns before both original effect registrations.
+					if profile.id == "el2" and card == "SNOV":
+						_emit({"kind": "supernova_channel_cue", "side": side, "amount": -channel_cost(card)})
 		"enchant":
 			if variable_power(card):
 				# Pay-X enchantments add X power (X may be zero).
@@ -928,7 +1032,12 @@ func _resolve_spell(side: int, card: String, rule: Dictionary, target: int, grav
 			_emit({"kind": "heal", "target": side, "amount": extra_ether})
 		"hunger_all":
 			for c: Dictionary in army(1 - side):
-				if creatures.has(c.id) and c.power > 0: _damage(c.id, int(c.power))
+				if creatures.has(c.id) and c.power > 0:
+					# Both originals register Target/Hunger before each hit:
+					# EL1 CurseOfHunger@, EL2@.
+					if profile.id in ["el1", "el2"]:
+						_emit({"kind": "hunger_victim_cue", "target": int(c.id)})
+					_damage(c.id, int(c.power))
 		"random_discard":
 			for i in int(rule.amount):
 				var spells: Array[int] = []
@@ -944,7 +1053,17 @@ func _resolve_spell(side: int, card: String, rule: Dictionary, target: int, grav
 			for c: Dictionary in creatures.values():
 				if not has_flag(c.id, "NoAffect"): totals[c.owner] += maxi(0, int(c.power))
 			for victim_side in 2:
-				for c: Dictionary in army(victim_side): _destroy(c.id)
+				for c: Dictionary in army(victim_side):
+					# EL1 - and EL2 -
+					# register Target/RedAnihilation per non-plane creature
+					# before destruction, in each combat side's original order.
+					if profile.id in ["el1", "el2"] and not in_plane(int(c.id)):
+						_emit({"kind": "annihilation_creature_cue", "target": int(c.id)})
+					_destroy(c.id)
+				# EL1 - and EL2 -
+				# queue the opposite hero's effect only on positive total.
+				if profile.id in ["el1", "el2"] and totals[victim_side] > 0:
+					_emit({"kind": "annihilation_hero_cue", "target": 1 - victim_side})
 				_damage(1 - victim_side, totals[victim_side])
 		"mana": _change_ether(side, effect_amount(rule))
 		"channels":
@@ -1070,7 +1189,17 @@ func _resolve_spell(side: int, card: String, rule: Dictionary, target: int, grav
 				for id: int in doomed:
 					if not creatures.has(id): deaths += 1
 				for i in deaths: _draw(1 - side)
-			elif attempts > 0: _damage(attacker, attempts)
+				# Original - creates one Draw Target cue
+				# after those draws, only for a positive actual death count.
+				# This transient event does not enter the saved game state.
+				_emit({"kind": "fury_result", "deaths": deaths, "target": 1 - side})
+			else:
+				# EL1 FuryOfNature@ queues its second, hero-bound
+				# GreenDamage only for a positive number of attempted hits.
+				# Count includes regenerated survivors. The visual callback must
+				# use the attacking hero, which can differ from the caster.
+				_emit({"kind": "fury_result", "attempts": attempts, "attacker": attacker})
+				if attempts > 0: _damage(attacker, attempts)
 		"clone": _summon(side, creatures[target].card)
 		"pale_blast":
 			# The latest enchantment goes if it can; a Pale creature then takes 3.
@@ -1174,11 +1303,24 @@ func _resolve_spell(side: int, card: String, rule: Dictionary, target: int, grav
 				var hurt: int = per_card * (heroes[victim].hand.size() - 5)
 				# Mind shield: each point may be spared.
 				if hurt > 0: hurt -= ELSpecs.roll(self, victim, "UMBD", hurt)
-				if hurt > 0: _damage(victim, hurt)
+				if hurt > 0:
+					# Original EL1 - and EL2 -:
+					# after Mind Shield, queue a BlueMindBlast Target at each
+					# positively damaged hero before that hero's damage.
+					# A silent script cast does not present the original FX.
+					if profile.id in ["el1", "el2"] and specs:
+						_emit({"kind": "mind_blast_cue", "target": victim})
+					_damage(victim, hurt)
 		"hunger_both":
 			for victim_side in 2:
 				for c: Dictionary in army(victim_side):
-					if creatures.has(c.id) and c.power > 0: _damage(c.id, int(c.power))
+					if creatures.has(c.id) and c.power > 0:
+						# EL1 RavagingHunger@ and EL2@
+						# register a Target cue before each eligible figure's
+						# damage, in side then creature order.
+						if profile.id in ["el1", "el2"]:
+							_emit({"kind": "hunger_victim_cue", "target": int(c.id)})
+						_damage(c.id, int(c.power))
 		"redraw":
 			for victim: int in ([0, 1] if rule.get("scope") == "both" else [side]):
 				var count: int = heroes[victim].hand.size()
@@ -1208,7 +1350,11 @@ func _resolve_spell(side: int, card: String, rule: Dictionary, target: int, grav
 		# Grave returns and exchanges summon creatures without casting their spells.
 		for recipient in 2:
 			for e: Dictionary in heroes[recipient].enchantments:
-				if e.card == "MNTX": _change_ether(recipient, 2)
+				if e.card == "MNTX":
+					_change_ether(recipient, 2)
+					# EL1 Mana Vortex registers GainMana
+					# its enchanted hero for every successful creature spell.
+					if profile.id == "el1": _emit({"kind": "mana_vortex_cue", "side": recipient})
 	elif profile.table("CombatSpells")[card].get("Class") != "Creature":
 		# Data attraction: each earlier copy draws a spell, then hurts its holder.
 		var copies := _enchantment_count(side, "TRLB") - (1 if card == "TRLB" else 0)
@@ -1278,8 +1424,13 @@ func _toggle_attack_now(id: int) -> bool:
 				return _fail("Recall the guard first; it needs an attacking creature of its race.")
 	else:
 		if has_flag(id, "TeamAttack") and not _team_partner(id): return _fail("A guard can attack only together with a creature of its race.")
-		if attack_cost(id) > heroes[attacker].mana: return _fail("Not enough ether to send this creature into attack.")
-		_spend_ether(attacker, attack_cost(id))
+		var tax := attack_cost(id)
+		if tax > heroes[attacker].mana: return _fail("Not enough ether to send this creature into attack.")
+		_spend_ether(attacker, tax)
+		# EL1 -: a positive attack-assignment tax
+		# queues LoseMana at the paying hero after the ether is spent.
+		if profile.id == "el1" and tax > 0:
+			_emit({"kind": "attack_tax_effect", "side": attacker, "amount": tax})
 		attacks.append(id)
 	_check_winner()
 	changed.emit()
@@ -1640,7 +1791,12 @@ func _use_ability(id: int, ability: String, target := -1, enchantment_id := -1, 
 			if e.id == definition.enchantment: e.used = true
 		if definition.effect == "rebirth": _damage(side, 2)
 		_spend_ether(side, price)
-		_emit({"kind": "ability", "source": id, "side": side, "ability": ability, "name": definition.name, "target": target})
+		var ability_event := {"kind": "ability", "source": id, "side": side, "ability": ability, "name": definition.name, "target": target}
+		# Burnout has two targets: `target` is the sacrifice, while the
+		# Fireball lands on `enchantment_id`. Keep the original two-choice
+		# contract and identify the impact figure for EL2 presentation.
+		if profile.id == "el2" and definition.effect == "burnout": ability_event.hit_target = enchantment_id
+		_emit(ability_event)
 		match definition.effect:
 			"heal":
 				c.health += int(definition.amount)
@@ -1668,6 +1824,11 @@ func _use_ability(id: int, ability: String, target := -1, enchantment_id := -1, 
 					var before := int(heroes[side].mana)
 					heroes[side].mana = maxi(0, before + value - 1)
 					_emit({"kind": "ether", "side": side, "amount": int(heroes[side].mana) - before})
+				# Original EL1 SACR – registers a second,
+				# hero-bound GainMana AFTER its direct ether settlement.
+				# The first GreenDamage cue was bound to the victim by
+				# the ability event, before _kill. No rules or EL2 changes.
+				if profile.id == "el1": _emit({"kind": "sacr_mana_gain_cue", "side": side})
 			"spirit_lock":
 				# Ether feeding: the sacrifice becomes ether channels; mastery spares it.
 				if ELSpecs.roll(self, side, "GSLO") == 0: _kill(target)
@@ -1701,7 +1862,7 @@ func _use_ability(id: int, ability: String, target := -1, enchantment_id := -1, 
 			c.temporary.append({"id": next_enchantment, "kind": "illusion", "toughness": heroes[side].grave.size() + 1 - int(profile.table("CombatCreatures")[c.card].Toughness)})
 			next_enchantment += 1
 			_refresh_stats(c)
-			_emit({"kind": "ability", "source": id, "side": side, "ability": ability, "target": id})
+			_emit({"kind": "ability", "source": id, "side": side, "ability": ability, "target": id, "grave": heroes[side].grave.size()})
 			if c.damage >= c.toughness: _kill(id)
 		"awaken", "unparalyze":
 			var price := int(definition.cost)
@@ -1799,9 +1960,12 @@ func _first_ability(id: int, definition: Dictionary, target: int, grave_index: i
 			if int(creatures[target][definition.measure]) > beholders: return _fail("Your beholders are too few for this creature.")
 		"tap_race":
 			if not creatures.has(target) or creatures[target].owner == side: return _fail("Select an enemy creature.")
+			if profile.id == "el2":
+				if in_plane(target): return _fail("This creature is in the Colourless Plane.")
+				if not targetable(target): return _fail("This creature is protected by a magic screen.")
 			price = 0
 			for enemy: Dictionary in army(1 - side):
-				if not enemy.resting and race(enemy.id) == race(target): price += 1
+				if not enemy.resting and race(enemy.id) == race(target) and (profile.id != "el2" or not in_plane(enemy.id)): price += 1
 			if available_mana(side) < price: return _fail("This costs %d ether." % price)
 	if definition.get("ready", true):
 		c.resting = true
@@ -1826,7 +1990,7 @@ func _first_ability(id: int, definition: Dictionary, target: int, grave_index: i
 		"tap_race":
 			var kind := race(target)
 			for enemy: Dictionary in army(1 - side):
-				if not enemy.resting and race(enemy.id) == kind:
+				if not enemy.resting and race(enemy.id) == kind and (profile.id != "el2" or not in_plane(enemy.id)):
 					enemy.resting = true
 					_unassign(enemy.id)
 		"distortion":
@@ -1971,6 +2135,12 @@ func _enchant(card: String, side: int, target: int, rule: Dictionary) -> void:
 	if card == "ERBN":
 		for c: Dictionary in creatures.values(): _refresh_stats(c)
 	_emit({"kind": "enchant", "target": target, "card": card, "power": e.power, "toughness": e.toughness})
+	# EL1 Fog@ and EL2 Fog@ register CantAttack against
+	# each creature in the original combat list, after opening BlueFog.
+	# These cues are transient and do not affect the enchantment/save rules.
+	if profile.id in ["el1", "el2"] and card == "FOGG":
+		for creature: Dictionary in creatures.values():
+			_emit({"kind": "fog_creature_cue", "target": int(creature.id)})
 	if target >= 2 and creatures[target].damage >= creatures[target].toughness: _lethal(target)
 	elif target < 2 and _changes_armies(card):
 		# Immolation's toughness cut kills creatures it brings to zero.
@@ -2086,6 +2256,28 @@ func _kin(c: Dictionary) -> int:
 		if other.id != c.id and race(int(other.id)) == own and not in_plane(int(other.id)): count += 1
 	return count
 
+## Presentation-only snapshots for both originals' WarBanner entry/exit hooks.
+## The modifiers already live in creature_stats; comparing them lets the view
+## show an effect only on a figure whose bonus actually changed.
+func _war_banner_bonuses() -> Dictionary:
+	var result := {}
+	if profile.id not in ["el1", "el2"] or global_enchantment_count("WRBN") == 0: return result
+	for c: Dictionary in creatures.values():
+		var bonus := 0
+		for hero: Dictionary in heroes:
+			for e: Dictionary in hero.enchantments:
+				if e.card == "WRBN" and not e.get("exempt", []).has(int(c.id)):
+					bonus += _kin(c)
+		if bonus != 0: result[int(c.id)] = bonus
+	return result
+
+func _war_banner_reactions(before: Dictionary) -> void:
+	if profile.id not in ["el1", "el2"]: return
+	var after := _war_banner_bonuses()
+	for id: int in creatures:
+		var change := int(after.get(id, 0)) - int(before.get(id, 0))
+		if change != 0: _emit({"kind": "war_banner_shift", "target": id, "amount": change})
+
 func _changes_armies(card: String) -> bool:
 	return card in ["DRGS", "DPGS", "FRGS", "WRBN"] or ELCatalog.ARMY_AURAS.has(card) or ELCatalog.HERO_AURAS.has(card)
 
@@ -2121,6 +2313,9 @@ func _dispel(holder: int, enchantment_id: int) -> void:
 	if profile.id == "el1" and caster in [0, 1] and not ELCatalog.rule(profile, e.card).is_empty() and ELSpecs.roll(self, caster, "ETEN") > 0:
 		_give_card(caster, e.card)
 		_emit({"kind": "return_card", "side": caster, "card": e.card})
+		# Original successful ETEN dispel registers one hero-bound
+		# Target/Draw only after actually returning the enchantment card.
+		_emit({"kind": "eten_return_draw_cue", "side": caster})
 
 func _remove_enchantment(target: int, enchantment_id: int) -> void:
 	var victim := entity(target)
@@ -2142,7 +2337,11 @@ func _remove_enchantment(target: int, enchantment_id: int) -> void:
 		if scripts != null: scripts.dispatch("CHook_OnVisualRemoveEnchantment", [e.card, float(target)])
 		# Alpha strike always costs the creature; a removed quick fix destroys it
 		# without regeneration (and without returning the card to hand).
-		if target >= 2 and e.card == "ALST": _kill(target)
+		if target >= 2 and e.card == "ALST":
+			# EL1 AlphaStrikeEnchantment removal queues
+			# BlackDeath on its holder before the unavoidable death.
+			if profile.id == "el1": _emit({"kind": "alpha_strike_death", "target": target})
+			_kill(target)
 		elif target >= 2 and e.card == "QKFX": _destroy(target, true)
 		elif target >= 2 and victim.damage >= victim.toughness: _lethal(target)
 		elif target < 2:
@@ -2238,6 +2437,11 @@ func _turn_enchantments(at_start: bool) -> void:
 				if target >= 2: _refresh_stats(victim)
 				else:
 					for c: Dictionary in creatures.values(): _refresh_stats(c)
+				# Both Wand of Bless detach callbacks show negative modifiers
+				# at the affected creature (EL1 -;
+				# EL2). This is presentation only.
+				if profile.id in ["el1", "el2"] and e.get("kind") == "bless":
+					_emit({"kind": "bless_expire", "target": target})
 			continue
 		if not victim.enchantments.has(e): continue
 		if at_start:
@@ -2253,6 +2457,16 @@ func _turn_enchantments(at_start: bool) -> void:
 				_: continue
 			_emit({"kind": "upkeep", "side": attacker, "card": e.card, "amount": price})
 			_spend_ether(attacker, price)
+			# EL1 original Stasis owner-start slot 2 registers
+			# one Draw FX at the owner for each paid callback.
+			# The earlier global BlueStasis turn cue is independent.
+			if profile.id == "el1" and e.card == "STSI":
+				_emit({"kind": "stsi_upkeep_draw_cue", "side": attacker})
+			# EL1 SPTR slot 2 invokes original
+			# GreenDamage for a nonempty current army at its active hero;
+			# the callback is independent of the already-accounted ether.
+			if profile.id == "el1" and e.card == "SPTR" and not army(attacker).is_empty():
+				_emit({"kind": "sptr_upkeep_cue", "side": attacker, "amount": price})
 		else:
 			# No shipped script uses these two hooks; the holder ID stands in for the
 			# unidentified second argument.
@@ -2286,6 +2500,11 @@ func _turn_enchantments(at_start: bool) -> void:
 					if target >= 2 and origin(target) != attacker:
 						if e.card == "BLSS" and ELSpecs.roll(self, origin(target), "GBLP") > 0: continue
 						_remove_enchantment(target, e.id)
+						# Both original RLSS temporary bonuses detach with
+						# Target/NegAttack/NegDefence/NegRune at the holder
+						# (EL1, EL2).
+						if profile.id in ["el1", "el2"] and e.card == "RLSS":
+							_emit({"kind": "lightning_storm_bless_expire", "target": target})
 				"FREL":
 					# The fire burn ends with a turn not owned by the burnt creature's controller.
 					if target >= 2 and victim.owner != attacker: _remove_enchantment(target, e.id)
@@ -2293,19 +2512,33 @@ func _turn_enchantments(at_start: bool) -> void:
 					# Venom strikes the poisoned hero at the end of that hero's own turns.
 					if target < 2 and target == attacker: _trigger_damage(e.card, target, 1)
 				"IRRT", "MDNS", "RDIS":
-					if target >= 2 and victim.owner == attacker: _trigger_damage(e.card, attacker, 1 if e.card == "IRRT" else 2)
+					# Original EL2 Irritation skips its damage and
+					# BlackDamage callback while the holder is out of plane.
+					# The Madness / Insanity plane conditions are not inferred here.
+					if target >= 2 and victim.owner == attacker and (profile.id != "el2" or e.card != "IRRT" or not in_plane(target)):
+						_trigger_damage(e.card, attacker, 1 if e.card == "IRRT" else 2)
 				"OVRL":
 					# Overload decays -2/-2 at each of its controller's turn ends; the
 					# decay kills without regeneration.
 					if target >= 2 and victim.owner == attacker:
 						victim.decay = int(victim.get("decay", 0)) + 1
 						_refresh_stats(victim)
+						# Both original OverloadEnchantment end-of-turn callbacks
+						# (EL1, EL2) queue NegAttack,
+						# NegDefence and NegRune on the enchanted creature.
+						if profile.id in ["el1", "el2"]:
+							_emit({"kind": "overload_decay", "target": target, "card": "OVRL"})
 						if victim.damage >= victim.toughness: _kill(target)
 				"TWEN":
 					if target < 2 or victim.owner != attacker: continue
 					e.power -= 1
 					e.toughness -= 1
 					_refresh_stats(victim)
+					# Both original TwistedEnhancement end-of-turn callbacks
+					# (EL1, EL2) queue NegAttack,
+					# NegDefence and NegRune on the enchanted creature.
+					if profile.id in ["el1", "el2"]:
+						_emit({"kind": "twisted_decay", "target": target, "card": "TWEN"})
 					if victim.damage >= victim.toughness: _lethal(target)
 	if ended_hooks: scripts.dispatch("CHook_OnVisualFinishEnchantmentEndOfTurn", [])
 	if not at_start:
@@ -2353,6 +2586,21 @@ func _trigger_damage(card: String, target: int, amount: int) -> void:
 	_emit({"kind": "trigger", "card": card, "target": target, "amount": amount})
 	_damage(target, amount)
 
+## Original tests the acting player's var 2, not the number
+## enchantments on the active hero. These known auras add to their caster's
+## counter, even when their effects apply to both sides.
+func _el1_has_pos_rune(side: int) -> bool:
+	for holder: Dictionary in heroes:
+		for e: Dictionary in holder.enchantments:
+			if int(e.owner) == side and String(e.card) in EL1_POS_RUNE_SOURCES: return true
+	return false
+
+func _el1_has_neg_rune(side: int) -> bool:
+	for holder: Dictionary in heroes:
+		for e: Dictionary in holder.enchantments:
+			if int(e.owner) == side and String(e.card) in EL1_NEG_RUNE_SOURCES: return true
+	return false
+
 func _begin_attack(draw_card: bool) -> void:
 	turn_serial += 1
 	var hero: Dictionary = heroes[attacker]
@@ -2371,12 +2619,36 @@ func _begin_attack(draw_card: bool) -> void:
 		hero.health += 1
 		_emit({"kind": "heal", "target": attacker, "amount": 1, "skill": "REGN"})
 	for e: Dictionary in hero.enchantments: e.used = false
+	# EL1 - queues PosRune once at the acting hero when
+	# player var 2 is nonzero, before its separate NegRune/Stasis checks.
+	if profile.id == "el1" and _el1_has_pos_rune(attacker):
+		_emit({"kind": "turn_pos_rune", "side": attacker})
+	# EL1 - queues NegRune once at the active hero if
+	# caster/player variable 3 is nonzero; this precedes Stasis.
+	if profile.id == "el1" and _el1_has_neg_rune(attacker):
+		_emit({"kind": "turn_neg_rune", "side": attacker})
+	# EL1 checks global state modifier 4 (Stasis) and plays
+	# BlueStasis at the active hero once, before graveyard/untap/draw.
+	if profile.id == "el1" and global_enchantment_count("STSI") > 0:
+		_emit({"kind": "turn_stasis", "side": attacker})
 	if profile.id == "el1":
-		# Dragons are immortal: before recovery and the draw, every dragon card in
-		# the hero's graveyard returns to the hand.
+		# - visits each active creature's positive and negative modifier counters, in
+		# that order, and queues a rune effect at the creature while the counter is
+		# positive.
+		for c: Dictionary in army(attacker):
+			if in_plane(int(c.id)): continue
+			var positive := false
+			var negative := false
+			for e: Dictionary in c.enchantments:
+				positive = positive or int(e.get("power", 0)) > 0 or int(e.get("toughness", 0)) > 0
+				negative = negative or int(e.get("power", 0)) < 0 or int(e.get("toughness", 0)) < 0
+			if positive: _emit({"kind": "turn_creature_pos_rune", "target": int(c.id)})
+			if negative: _emit({"kind": "turn_creature_neg_rune", "target": int(c.id)})
+		# The four original immortal dragons return before ETTI and the draw.
+		# The original loop compares concrete card IDs, not the Race text field.
 		var index := 0
 		while index < hero.grave.size():
-			if str(profile.table("CombatCreatures").get(hero.grave[index], {}).get("Race", "")) != "Dragon":
+			if str(hero.grave[index]) not in EL1_IMMORTAL_DRAGONS:
 				index += 1
 				continue
 			var dragon: String = hero.grave[index]
@@ -2388,8 +2660,20 @@ func _begin_attack(draw_card: bool) -> void:
 		var index := random_index(hero.grave.size())
 		var returned: String = hero.grave[index]
 		hero.grave.remove_at(index)
-		_give_card(attacker, returned)
+		# EL1 -: the ETTI card arrives as a DrawSpell (front).
+		_give_card(attacker, returned, -1, true)
 		_emit({"kind": "return_card", "side": attacker, "card": returned})
+	# Original EL1 -: the selected CRDS event rolls
+	# once in ten when the acting army is nonempty. A hit picks one of
+	# that side's creatures and deals exactly its remaining toughness as
+	# ordinary damage (so NoAffect/Lifeguard/regeneration still apply).
+	# Battle opening, not this subsequent-turn hook.
+	if profile.id == "el1" and turn_serial > 1 and str(setup.get("combat_event", "")) == "CRDS":
+		var eligible: Array[Dictionary] = army(attacker)
+		if not eligible.is_empty() and random_index(10) == 5:
+			var victim: int = int(eligible[random_index(eligible.size())].id)
+			if creatures.has(victim):
+				_damage(victim, maxi(0, int(creatures[victim].toughness) - int(creatures[victim].damage)))
 	# Non-Pale creatures sent to the plane return at their original owner's turn.
 	for c: Dictionary in creatures.values():
 		if in_plane(c.id) and not pale(c.id) and origin(c.id) == attacker: plane_change(c.id, false)
@@ -2419,7 +2703,11 @@ func _begin_attack(draw_card: bool) -> void:
 	if ELHeroEffects.extra_draw(hero) and _draw(attacker):
 		_emit({"kind": "skill", "side": attacker, "skill": "CONC"})
 	# First-game enlightenment: every copy gives both heroes an extra draw.
-	for i in _enchantment_count(0, "ENLH") + _enchantment_count(1, "ENLH"): _draw(attacker)
+	var enlightenment := _enchantment_count(0, "ENLH") + _enchantment_count(1, "ENLH")
+	for i in enlightenment: _draw(attacker)
+	# The original starts one Draw visual for a positive additional-draw count,
+	# after those draws and before the separate QIHN specialisation draw.
+	if profile.id == "el1" and enlightenment > 0: _combat_effect("ENLH", attacker, attacker)
 	if ELSpecs.roll(self, attacker, "QIHN") > 0: _draw(attacker)
 	var row: Dictionary = profile.table("CombatManaIncome").get(str(hero.turns), {})
 	var stasis := global_enchantment_count("STSI") > 0
@@ -2465,23 +2753,55 @@ func _draw(side: int, reject := "") -> bool:
 		card = selected.card
 		slot = selected.slot
 	if not reject.is_empty() and (profile.table("CombatSpells")[card].get("Class") == "Creature") == (reject == "creatures"): return false
-	_give_card(side, card, slot)
+	_give_card(side, card, slot, true)
 	_emit({"kind": "draw", "side": side, "card": card})
 	return true
 
-func _give_card(side: int, card: String, slot := -1) -> void:
-	heroes[side].hand.append(card)
-	heroes[side].hand_slots.append(slot)
-	if heroes[side].has("hand_ids"):
-		heroes[side].hand_ids.append(next_card)
+## `front`: the card shows at the left of the hand rail. The originals send a
+## drawn card to the front (VisualEvents DrawSpell: EL2 only from the deck draw
+## `` and turn-entry draws; EL1 also the ETTI return) and every other
+## card put into the hand to the back (DrawSpellBack: unsummons, repairs,
+## recalls, dragon returns, enchantments coming back). Rules keep the array order.
+func _give_card(side: int, card: String, slot := -1, front := false) -> void:
+	var hero: Dictionary = heroes[side]
+	var keys := _hand_view(hero)
+	hero.hand.append(card)
+	hero.hand_slots.append(slot)
+	if hero.has("hand_ids"):
+		hero.hand_ids.append(next_card)
 		next_card += 1
+	var key := 0
+	if not keys.is_empty(): key = (int(keys.min()) - 1) if front else (int(keys.max()) + 1)
+	keys.append(key)
+	hero.hand_view = keys
 
 func _take_card(side: int, index: int) -> String:
-	var card: String = heroes[side].hand[index]
-	heroes[side].hand.remove_at(index)
-	heroes[side].hand_slots.remove_at(index)
-	if heroes[side].has("hand_ids"): heroes[side].hand_ids.remove_at(index)
+	var hero: Dictionary = heroes[side]
+	var keys := _hand_view(hero)
+	var card: String = hero.hand[index]
+	hero.hand.remove_at(index)
+	hero.hand_slots.remove_at(index)
+	if hero.has("hand_ids"): hero.hand_ids.remove_at(index)
+	keys.remove_at(index)
+	hero.hand_view = keys
 	return card
+
+## Display keys parallel to the hand; array order when missing or out of step
+## (older saves, prepared states that edit the hand directly).
+static func _hand_view(hero: Dictionary) -> Array:
+	var keys: Variant = hero.get("hand_view")
+	if keys is Array and keys.size() == hero.hand.size(): return keys
+	var fresh: Array = []
+	for i in hero.hand.size(): fresh.append(i)
+	return fresh
+
+## Hand indices in the order the hand rail shows them, left to right.
+func hand_display(side: int) -> Array[int]:
+	var keys := _hand_view(heroes[side])
+	var order: Array[int] = []
+	for i in keys.size(): order.append(i)
+	order.sort_custom(func(a: int, b: int) -> bool: return int(keys[a]) < int(keys[b]) or (int(keys[a]) == int(keys[b]) and a < b))
+	return order
 
 ## Discards up to `count` random cards, one random choice per card.
 func _discard_random(side: int, count: int) -> void:
@@ -2498,6 +2818,7 @@ func random_index(count: int) -> int:
 	return ((rng_state >> 16) & 0x7fff) % maxi(1, count)
 
 func _summon(side: int, card: String) -> void:
+	var banner_before := _war_banner_bonuses()
 	var data: Dictionary = profile.table("CombatCreatures")[card]
 	var flags := ELCatalog.flags(data)
 	var creature := {"id": next_id, "owner": side, "card": card, "power": int(data.Power),
@@ -2511,11 +2832,14 @@ func _summon(side: int, card: String) -> void:
 	next_id += 1
 	if scripts != null:
 		# Summon hooks see the new creature before its stats settle and may edit its base.
+		if scripts.search_only: scripts.bind(self)
 		scripts.summoned(side, card, int(creature.id))
 		if not creatures.has(creature.id): return
 	if not ELCatalog.creature_aura(profile, card).is_empty() or global_enchantment_count("WRBN") > 0: _refresh_armies()
 	else: _refresh_stats(creature)
 	_emit({"kind": "summon", "creature": creature.duplicate(true)})
+	# Summon first: the new model must exist before any targeted aura effect.
+	_war_banner_reactions(banner_before)
 	if creatures.has(creature.id) and creature.damage >= creature.toughness: _lethal(creature.id)
 	if card == "WKHR":
 		# The walking horror's arrival hurts every other creature.
@@ -2568,9 +2892,11 @@ func _resolve_attacks() -> void:
 				if not creatures.has(blocker): continue
 				# Evil eye mastery: a beholder destroys its combat opponent before damage.
 				if race(id) == "Beholder" and not (profile.id == "el2" and has_flag(blocker, "NoAffect")) and ELSpecs.roll(self, int(attack.owner), "GBHD") > 0:
+					_combat_effect("GBHD", id, blocker)
 					_destroy(blocker)
 					continue
 				if race(blocker) == "Beholder" and not (profile.id == "el2" and has_flag(id, "NoAffect")) and ELSpecs.roll(self, int(creatures[blocker].owner), "GBHD") > 0:
+					_combat_effect("GBHD", blocker, id)
 					_destroy(id)
 					remaining = 0
 					break
@@ -2613,6 +2939,13 @@ func _resolve_attacks() -> void:
 		elif creatures.has(id): _kill(id)
 	if scripts != null and not poisoned.is_empty(): scripts.dispatch("CHook_OnVisualFinishMeleeDestroyFlag", [])
 
+## Presentation of a combat strike's creature power (first game): `key` names
+## the power (a mastery code or a strike property), drawn from `source` to `target`.
+func _combat_effect(key: String, source: int, target: int) -> void:
+	if profile.id != "el1": return
+	var side := source if source < 2 else int(entity(source).get("owner", -1))
+	_emit({"kind": "combat_ability", "key": key, "source": source, "target": target, "side": side})
+
 func _doubles(id: int) -> bool:
 	var kind := race(id)
 	if kind == "Kobold": return ELSpecs.roll(self, int(creatures[id].owner), "RKBC") > 0
@@ -2633,12 +2966,20 @@ func _witch_wall(blocker: int, id: int) -> bool:
 		return true
 	creatures[id].resting = true
 	_mark(id, "BWIT", 0, 0, {"fixed": true})
+	_combat_effect("BWIT", blocker, id)
 	return false
 
 func _strike(source: int, target: int, amount: int, poisoned: Array[int]) -> void:
+	var incoming := amount
 	# Stone skin lowers physical damage by 2 per copy.
-	if not entity(target).is_empty(): amount -= 2 * _enchantment_count(target, "STSK")
-	if amount <= 0: return
+	if not entity(target).is_empty() and _enchantment_count(target, "STSK") > 0:
+		if incoming > 0: _emit({"kind": "stoneskin", "target": target})
+		amount -= 2 * _enchantment_count(target, "STSK")
+	if amount <= 0:
+		# The original queues the material-hit sound before Stone Skin reduces
+		# damage. An absorbed, positive-power attack still plays its strike.
+		if incoming > 0: _emit({"kind": "strike", "from": source, "to": target})
+		return
 	var destroys := has_flag(source, "Destroy")
 	var disenchants := has_flag(source, "Disenchant")
 	var drains := has_flag(source, "Lifetap")
@@ -2659,11 +3000,11 @@ func _strike(source: int, target: int, amount: int, poisoned: Array[int]) -> voi
 	if card == "LASN" and creatures.has(target):
 		_mark(target, "LASN", -1, -1, {"fixed": true, "lethal": true})
 		if creatures[target].damage >= creatures[target].toughness: _lethal(target)
+	var robbed := 0
 	if target in [0, 1] and creatures.has(source):
 		if card == "GRSN": _mark(source, "GRSN", 1, 1, {"fixed": true})
 		# Venom is priced like its token row: free in the first game, 1 in the second.
 		if card in ["TRSN", "SWSN"]: _mark(target, card, 0, 0, {"owner": owner, "price": 1 if profile.id == "el2" else 0})
-		var robbed := 0
 		for flag: String in creatures[source].flags:
 			if flag.begins_with("Discard("): robbed += int(flag.trim_prefix("Discard(").trim_suffix(")"))
 		for e: Dictionary in creatures[source].enchantments: robbed += ELCatalog.granted_discard(profile, e.card)
@@ -2672,16 +3013,18 @@ func _strike(source: int, target: int, amount: int, poisoned: Array[int]) -> voi
 		if dealt > 0 and kind in ["Lamia", "Orc"] and ELSpecs.roll(self, owner, "UMTD" if kind == "Lamia" else "RORT") > 0: robbed += 1
 		# Snake mastery envenoms the hero.
 		if dealt > 0 and kind == "Snake" and ELSpecs.roll(self, owner, "GSNV") > 0: _mark(target, "ENVM", 0, 0, {"owner": owner})
-		for discard in robbed:
-			if heroes[target].hand.is_empty(): break
-			var dropped := _take_card(target, random_index(heroes[target].hand.size()))
-			_emit({"kind": "discard", "side": target, "card": dropped})
+		# EL1 - queues DrainLife before +
+		# processes the discard and Target/Discard. Keep EL2's prior order
+		# until its own combat callback is confirmed independently.
+		if profile.id != "el1": _discard_on_hit(source, target, robbed)
 	if target in [0, 1]:
 		# Life drain heals by the damage actually taken, without a maximum.
 		if drains and owner >= 0 and before > 0 and dealt > 0:
 			var gained := mini(dealt, before)
 			heroes[owner].health += gained
+			_combat_effect("Lifetap", target, owner)
 			_emit({"kind": "heal", "target": owner, "amount": gained, "source": source})
+		if profile.id == "el1": _discard_on_hit(source, target, robbed)
 		# Fighter, treant and bat masteries: an attacker's hit on the hero heals its controller.
 		var healer := {"Fighter": "BFGL", "Treant": "GTRL", "Bat": "RBTD"}
 		if not drains and owner >= 0 and dealt > 0 and attacks.has(source) and healer.has(race(source)) and ELSpecs.roll(self, owner, healer[race(source)]) > 0:
@@ -2689,12 +3032,26 @@ func _strike(source: int, target: int, amount: int, poisoned: Array[int]) -> voi
 			_emit({"kind": "heal", "target": owner, "amount": dealt, "source": source})
 		if card in ELCatalog.STINGERS and creatures.has(source) and not poisoned.has(source): poisoned.append(source)
 	# Pteros mastery: a strike strips the enchantments the target's own hero cast.
+	var stripped := false
 	if card in ["PTRS", "RFPT"] and not entity(target).is_empty() and ELSpecs.roll(self, owner, "BPTD") > 0:
+		stripped = true
+		_combat_effect("BPTD", source, target)
 		var controller := target if target < 2 else int(creatures[target].owner)
 		for e: Dictionary in entity(target).enchantments.duplicate():
 			if int(e.owner) == controller and not entity(target).is_empty(): _remove_enchantment(target, e.id)
 	if disenchants and not entity(target).is_empty():
+		if not stripped and not entity(target).enchantments.is_empty(): _combat_effect("Disenchant", source, target)
 		for e: Dictionary in entity(target).enchantments.duplicate(): _remove_enchantment(target, e.id)
+
+## Original EL1 places the successful life-drain cue before the discard
+## callback. No change to discard amount, selection RNG or authored effects.
+func _discard_on_hit(source: int, target: int, count: int) -> void:
+	if count <= 0: return
+	_combat_effect("Discard", source, target)
+	for discard in count:
+		if heroes[target].hand.is_empty(): break
+		var dropped := _take_card(target, random_index(heroes[target].hand.size()))
+		_emit({"kind": "discard", "side": target, "card": dropped})
 
 ## Returns the damage that landed: zero when a hero's feedback redirected it or
 ## an unaffected creature ignored it. Only combat can hurt unaffected creatures.
@@ -2706,9 +3063,15 @@ func _damage(target: int, amount: int, combat := false, no_regeneration := false
 	if not combat and has_flag(target, "NoAffect"): return 0
 	if in_plane(target) and not bypass: return 0
 	# Energy barrier: 3 less non-combat damage per copy; lifeguard negates one hit.
-	if not combat and not destroying: amount -= 3 * _enchantment_count(target, "ENBR")
+	if not combat and not destroying and _enchantment_count(target, "ENBR") > 0:
+		var softened := amount > 0
+		amount -= 3 * _enchantment_count(target, "ENBR")
+		if softened: _emit({"kind": "barrier", "target": target, "amount": amount})
+	# EL2's creature-damage routine checks Lifeguard after Energy Barrier,
+	# even when the barrier absorbs the full hit (before).
+	if profile.id == "el2" and _lifeguard(target): return 0
 	if amount <= 0: return 0
-	if _lifeguard(target): return 0
+	if profile.id != "el2" and _lifeguard(target): return 0
 	creatures[target].damage += amount
 	# Any damage marks the creature; Velos survive their turn end with this mark.
 	if amount > 0: creatures[target].hit = true
@@ -2783,7 +3146,9 @@ func _hurt_hero(target: int, amount: int, redirected := false, combat := false) 
 	if kind >= 1: redirected = true
 	if amount > 0 and kind < 2:
 		# Second-game protections apply before redirection.
-		if not combat: amount -= 3 * _enchantment_count(target, "ENBR")
+		if not combat and _enchantment_count(target, "ENBR") > 0:
+			amount -= 3 * _enchantment_count(target, "ENBR")
+			_emit({"kind": "barrier", "target": target, "amount": amount})
 		if amount <= 0 or _lifeguard(target): return 0
 		if not _raw_hero_damage:
 			# Specialisations, one roll each in order: ancient magic (spells) or iron
@@ -2798,7 +3163,7 @@ func _hurt_hero(target: int, amount: int, redirected := false, combat := false) 
 		for c: Dictionary in army(target):
 			if _enchantment_count(c.id, "REDR") > 0: shields.append(int(c.id))
 		if not shields.is_empty():
-			_emit({"kind": "redirect", "target": target, "amount": amount})
+			_emit({"kind": "redirect", "target": target, "amount": amount, "creatures": shields})
 			for id: int in shields:
 				if creatures.has(id): _damage(id, amount * _enchantment_count(id, "REDR"), false, false, false)
 			return 0
@@ -2814,6 +3179,10 @@ func _hurt_hero(target: int, amount: int, redirected := false, combat := false) 
 	if profile.id == "el2": mirrors = mini(mirrors, 1)
 	for copy in mirrors:
 		if heroes[1 - target].health < 1: break
+		# EL2 – starts RedDamage at the opposite hero
+		# before applying Ethereal Chain's mirrored hit.
+		if profile.id == "el2":
+			_emit({"kind": "chain_mirror", "source": target, "target": 1 - target, "amount": amount})
 		_hurt_hero(1 - target, amount, true)
 	if copies > 0: return 0
 	heroes[target].health = maxi(0, heroes[target].health - amount)
@@ -2863,14 +3232,32 @@ func _kill(id: int) -> void:
 	heroes[owner].grave.append(dead.card)
 	_remove_creature(id, "death")
 	# Barbed souls: the dead creature's controller draws once per copy in play.
-	for copy in global_enchantment_count("BASO"): _draw(int(dead.owner))
+	for copy in global_enchantment_count("BASO"):
+		_draw(int(dead.owner))
+		# EL1 BarbedSoulsEnchantment left-play –
+		# registers Target/Draw on this controller after the draw attempt,
+		# even if the book is empty. One original callback per active copy.
+		if profile.id == "el1":
+			_emit({"kind": "baso_death_draw_cue", "side": int(dead.owner)})
+		# EL2 slot6 – has its own creature-to-grave
+		# callback: [dead] must be clear; [dead] is the
+		# current controller hero. Queue Target/Draw after the real draw,
+		# unconditionally even when the book is empty.
+		elif profile.id == "el2":
+			_emit({"kind": "baso_el2_death_draw_cue", "side": int(dead.owner)})
 	# Spiritual web: each copy heals its holder by 1 for every creature sent to a graveyard.
 	for side in 2:
-		var webs := _enchantment_count(side, "SPWB")
+		var copies := _enchantment_count(side, "SPWB")
+		var webs := copies
 		# Web mastery: each copy may give 2.
 		if webs > 0: webs += ELSpecs.roll(self, side, "GSWS", webs, webs > 0)
 		if webs > 0:
 			heroes[side].health += webs
+			# EL2 original SpiritualWebEnchantment@ registers a
+			# separate Target/GainLife after health settles for each copy,
+			# even when Web mastery makes a copy heal by two.
+			if profile.id == "el2":
+				for copy in copies: _emit({"kind": "spwb_gain_life_cue", "side": side})
 			_emit({"kind": "heal", "target": side, "amount": webs, "card": "SPWB"})
 	# Water link: each link heals its caster by the creature's toughness; the
 	# first caster with room in the army reanimates the creature under its control.
@@ -2882,6 +3269,18 @@ func _kill(id: int) -> void:
 		var gain := linked_health + (maxi(0, int(dead.power)) if ELSpecs.roll(self, caster, "UWLS") > 0 else 0)
 		heroes[caster].health += gain
 		_emit({"kind": "heal", "target": caster, "amount": gain, "card": "WTLK"})
+		# EL1 WaterLinkEnchantment creature-left –:
+		# actual death-to-grave (both original exit flags clear) registers
+		# one Target/GainLife at this link's owning hero after changing
+		# health, before optional resurrection, even if that army is full.
+		if profile.id == "el1":
+			_emit({"kind": "wtlk_el1_gain_life_cue", "side": caster})
+		# EL2 WaterLinkEnchantment slot6 - registers
+		# Target/GainLife on the link owner after the real health award,
+		# before its independent capacity/corpse-return guards. Each
+		# qualifying copy queues its own effect, even when the army is full.
+		elif profile.id == "el2":
+			_emit({"kind": "wtlk_el2_gain_life_cue", "side": caster})
 		var index: int = heroes[owner].grave.rfind(dead.card)
 		if not returned and index >= 0 and army(caster).size() < 10:
 			returned = true
@@ -2895,6 +3294,7 @@ func _unassign(id: int) -> void:
 		if blocks[blocker] == id: blocks.erase(blocker)
 
 func _remove_creature(id: int, kind: String) -> void:
+	var banner_before := _war_banner_bonuses()
 	var card: String = creatures[id].card
 	var owner: int = creatures[id].owner
 	var true_owner := origin(id)
@@ -2902,8 +3302,15 @@ func _remove_creature(id: int, kind: String) -> void:
 	var leaving: Array = creatures[id].enchantments
 	creatures.erase(id)
 	_unassign(id)
-	_emit({"kind": kind, "target": id})
+	# Presentation of EL1 Unsummon needs the departed creature's owner
+	# after the creature has left the gameplay dictionary.
+	if kind == "unsummon":
+		_emit({"kind": kind, "target": id, "owner": owner})
+	else:
+		_emit({"kind": kind, "target": id})
 	if not ELCatalog.creature_aura(profile, card).is_empty() or global_enchantment_count("WRBN") > 0: _refresh_armies()
+	# Only surviving models receive the original modifier-decrease cue.
+	_war_banner_reactions(banner_before)
 	if scripts != null:
 		# The holder's enchantments go with it, then the creature leaves (death:
 		# graveyard; exile and unsummon are non-graveyard exits).
@@ -2929,13 +3336,22 @@ func _remove_creature(id: int, kind: String) -> void:
 		# then costs the holder's owner its base power.
 		var pale_card := ELCatalog.flags(profile.table("CombatCreatures")[card]).has("Outerplanar")
 		for e: Dictionary in leaving:
-			if e.card in ["DELS", "PRBN", "ALNS"]: _give_card(int(e.owner), e.card)
+			if e.card in ["DELS", "PRBN", "ALNS"]:
+				_give_card(int(e.owner), e.card)
+				if e.card == "DELS":
+					# EL2 DelusionEnchantment leave-play callback
+					# registers Draw at its caster, not a fresh deck draw.
+					_emit({"kind": "delusion_return", "side": int(e.owner)})
 			if e.card == "PRBN" and pale_card and base_power > 0: _trigger_damage("PRBN", true_owner, base_power)
 	if kind in ["death", "exile"]:
 		# Leaving play by death or exile returns quick fix to its caster's hand and
 		# releases the walking horror's final wave.
 		for e: Dictionary in leaving:
-			if e.card == "QKFX": _give_card(int(e.owner), "QKFX")
+			if e.card == "QKFX":
+				# EL2 original QuickFixEnchantment leave-play callback
+				# starts Draw at its caster. This is a visual cue, not a deck draw.
+				if profile.id == "el2": _emit({"kind": "quick_fix_return", "side": int(e.owner)})
+				_give_card(int(e.owner), "QKFX")
 		if card == "WKHR":
 			for other: Dictionary in creatures.values():
 				if creatures.has(other.id): _trigger_damage(card, other.id, 3)
@@ -2992,7 +3408,9 @@ func first_side() -> int:
 	return int(setup.get("first_side", 0))
 
 ## An independent copy for the combat opponent's lookahead: the same rules and
-## random sequence, no battle scripts, replay gate, event listeners or history.
+## random sequence, no replay gate, event listeners or history. Battle scripts
+## are reduced to the lookahead layer (`ELBattleScripts.search_layer`), shared
+## by every copy made from it.
 ## `expected_specs_on` makes specialisation rolls use their expected outcome.
 func search_copy(expected_specs_on := false) -> ELDuel:
 	var d := ELDuel.new()
@@ -3013,10 +3431,15 @@ func search_copy(expected_specs_on := false) -> ELDuel:
 	d.setup = setup
 	d.next_card = next_card
 	d.expected_specs = expected_specs_on or self.expected_specs
+	d.spec_expect = spec_expect
+	if scripts != null: d.scripts = scripts.search_layer(d)
 	return d
 
 ## Lookahead copies whose specialisation rolls use their expected outcome.
 var expected_specs := false
+## Sampled successes per hundred for each hero (ELSpecs.sample_expectation),
+## set on a think's root copy; empty means the table chance.
+var spec_expect: Array[int] = []
 
 func snapshot() -> Dictionary:
 	var result := _snapshot()

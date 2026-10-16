@@ -168,6 +168,7 @@ static func entered(director: ELAdventureDirector, actor: Dictionary) -> void:
 	var enemies := director.interception.enemies(director.state, actor, Vector2i(actor.x, actor.y))
 	if enemies.is_empty(): return
 	actor.intercepted = true
+	director.warn_danger(actor)
 	for id: int in enemies: queue_combat(director, id, actor.uid)
 	director.presentation.emit({"kind": "notice", "text": "%s was intercepted." % actor.get("title", actor.name)})
 

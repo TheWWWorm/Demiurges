@@ -31,8 +31,9 @@ const ICON_CODES := [15, 32, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28,
 const FLOAT_LIFE := 3.0
 const FLOAT_SPEED := 0.8
 const FLOAT_START := 0.17
-## Simultaneous numbers over one figure start this far apart (remake spacing).
-const STACK_STEP := 0.45
+## Simultaneous numbers over one figure stack this many glyph heights apart on
+## screen, so they stay readable from any view (remake spacing).
+const STACK_STEP := 1.25
 const STACK_AGE := 0.5
 
 var sheet: Texture2D
@@ -85,14 +86,17 @@ func add_number(point: Vector3, amount: int, key := -1) -> void:
 	var fresh := 0
 	for entry: Dictionary in floating:
 		if key >= 0 and int(entry.get("key", -1)) == key and float(entry.age) < STACK_AGE: fresh += 1
-	floating.append({"point": point + Vector3(0, FLOAT_START + STACK_STEP * fresh, 0), "glyphs": digits(mini(absi(amount), 99999)), "colour": RED if amount > 0 else GREEN, "age": 0.0, "key": key})
+	floating.append({"point": point + Vector3(0, FLOAT_START, 0), "stack": fresh, "glyphs": digits(mini(absi(amount), 99999)), "colour": RED if amount > 0 else GREEN, "age": 0.0, "key": key})
 
 ## Screen points of the rising numbers (for checks).
 func number_points() -> Array[Vector2]:
 	var result: Array[Vector2] = []
 	if camera == null or not is_instance_valid(camera): return result
-	for entry: Dictionary in floating: result.append(camera.unproject_position(entry.point))
+	for entry: Dictionary in floating: result.append(_number_at(entry))
 	return result
+
+func _number_at(entry: Dictionary) -> Vector2:
+	return camera.unproject_position(entry.point) - Vector2(0, glyph_size() * STACK_STEP * int(entry.get("stack", 0)))
 
 func _process(delta: float) -> void:
 	if floating.is_empty() and figures.is_empty():
@@ -131,7 +135,7 @@ func _draw() -> void:
 		if not order.is_empty(): _draw_order(order, anchor.x, y - size, size)
 	for entry: Dictionary in floating:
 		if camera.is_position_behind(entry.point): continue
-		var at := camera.unproject_position(entry.point)
+		var at := _number_at(entry)
 		var cells: Array = []
 		for code: int in entry.glyphs: cells.append([code, entry.colour])
 		_draw_row(cells, at.x, at.y - size, size)

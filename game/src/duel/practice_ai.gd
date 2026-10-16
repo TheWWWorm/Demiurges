@@ -893,7 +893,7 @@ static func _first_ability(d: ELDuel, side: int, ally: Dictionary, ability: Dict
 		"tap_race":
 			var counts := {}
 			for c: Dictionary in enemies:
-				if not c.resting: counts[d.race(c.id)] = counts.get(d.race(c.id), []) + [c.id]
+				if not c.resting and (d.profile.id != "el2" or not d.in_plane(c.id)): counts[d.race(c.id)] = counts.get(d.race(c.id), []) + [c.id]
 			for kind: String in counts:
 				if counts[kind].size() >= 2 and counts[kind].size() <= d.available_mana(side) and d.targetable(counts[kind][0]): return d.use_ability(ally.id, ability.key, counts[kind][0])
 		"distortion":

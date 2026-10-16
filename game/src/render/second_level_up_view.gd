@@ -98,7 +98,7 @@ func _text_label(value: String, font_size: int, align: HorizontalAlignment, colo
 	label.horizontal_alignment = align
 	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	label.clip_text = true
-	label.add_theme_font_override("font", hud.serif_bold)
+	label.add_theme_font_override("font", hud.face_bold)
 	label.add_theme_font_size_override("font_size", font_size)
 	label.add_theme_color_override("font_color", color)
 	label.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.85))

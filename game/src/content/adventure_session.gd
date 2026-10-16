@@ -202,6 +202,12 @@ func start(source: ELAdventureMap, level := 0, seed_number := 212, scenario_scri
 func close() -> void:
 	if vm != null: vm.clear()
 	vm = null
+	# The director's modal check, the grid's fog connection and the guard zones
+	# refer back to this session or its director; drop them so both are freed.
+	desktop_modal = Callable()
+	if grid != null and grid.actor_moved.is_connected(_fog_moved): grid.actor_moved.disconnect(_fog_moved)
+	grid = null
+	interception = null
 	variables = null
 	persistent = null
 	objects.clear()
@@ -716,8 +722,10 @@ func _native(args: Array, name: String) -> Array:
 			var definition := ELSecondArtifacts.template(self, str(first))
 			if definition.is_empty(): return []
 			var made := {"name": str(first), "custom": definition}
-			event.emit({"kind": "message_box", "speaker": -1, "text": map.profile.text("T_MB_ARTEFACT_CREATED") + "\n" + ELSecondArtifacts.title(map.profile, made),
-				"question": false, "hook": false, "artifact": str(first), "card": str(definition.spell), "box": "message", "speaker_box": false})
+			# The Messages panel: the title, then the artifact's picture and name.
+			event.emit({"kind": "message_box", "speaker": -1, "text": map.profile.text("T_MB_ARTEFACT_CREATED"),
+				"question": false, "hook": false, "artifact": str(first), "box": "loot", "created": true, "speaker_box": false,
+				"items": [{"name": ELSecondArtifacts.title(map.profile, made), "card": str(definition.spell), "icon_index": int(definition.get("icon", -1))}]})
 		"ExRechargeArtefacts":
 			if item.get("type") != "hero":
 				vm._fail("Hero not found: %d" % int(first if first is float or first is int else -1))
@@ -751,7 +759,7 @@ func _native(args: Array, name: String) -> Array:
 			for i in range(blanks.size() - 1, wanted - 1, -1): item.artifacts.remove_at(blanks[i])
 			for i in range(blanks.size(), wanted): item.artifacts.append(_artefact_entry("Blank"))
 		"ExSendLootMessage", "ExSendNoLootMessage":
-			var message := {"kind": "loot", "items": _loot_message.duplicate(true) if name == "ExSendLootMessage" else []}
+			var message := {"kind": "loot", "items": _loot_message.duplicate(true) if name == "ExSendLootMessage" else [], "none": name == "ExSendNoLootMessage"}
 			messages.append(message)
 			event.emit(message)
 			_loot_message.clear()

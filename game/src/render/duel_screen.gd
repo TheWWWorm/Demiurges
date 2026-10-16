@@ -188,7 +188,7 @@ func _caption_on(button: Control, value: String, size_px := 18, color := ELFront
 	label.size = button.size
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	label.add_theme_font_override("font", menu.serif)
+	label.add_theme_font_override("font", menu.arial)
 	label.add_theme_font_size_override("font_size", size_px)
 	label.add_theme_color_override("font_color", color)
 	label.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.8))
@@ -220,7 +220,7 @@ func _transparent(item_list: ItemList) -> void:
 	var hovered := StyleBoxFlat.new()
 	hovered.bg_color = Color(1, 1, 1, 0.06)
 	item_list.add_theme_stylebox_override("hovered", hovered)
-	item_list.add_theme_font_override("font", menu.serif)
+	item_list.add_theme_font_override("font", menu.arial)
 	item_list.add_theme_font_size_override("font_size", 15)
 	item_list.add_theme_color_override("font_color", ELFrontMenu.BODY_INK)
 	item_list.add_theme_color_override("font_selected_color", ELFrontMenu.INK_HOVER)
@@ -583,7 +583,7 @@ func show_message(text: String, on_ok: Callable = Callable(), ask := false, _wid
 	body.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	body.add_theme_constant_override("line_spacing", 0)
 	body.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var font: Font = menu.serif
+	var font: Font = menu.arial
 	var font_size := ELSecondDialogueBox.MESSAGE_SIZE
 	if shade.first:
 		var bold := FontVariation.new()
@@ -675,7 +675,8 @@ func open_editor(preset: Dictionary, source: String) -> void:
 	var builtin := bool(preset.get("builtin", false))
 	# The first game opens a built-in preset for viewing; the second can save
 	# a changed built-in preset under a new name only.
-	edit = {"preset": copy, "source": source, "builtin": builtin, "view_only": builtin and el1(), "tab": 0, "slot": -1, "item": -1, "art": -1, "owned": -1}
+	edit = {"preset": copy, "source": source, "builtin": builtin, "view_only": builtin and el1(), "tab": 0, "slot": -1, "item": -1, "art": -1, "owned": -1,
+		"since_race": _race_contents(copy)}
 	menu.show_screen("duel_editor")
 
 func cancel_editor() -> void:
@@ -715,7 +716,7 @@ func build_editor() -> void:
 	name_edit.size = name_rect.size
 	name_edit.text = String(editor_preset().get("name", ""))
 	name_edit.max_length = 40
-	name_edit.add_theme_font_override("font", menu.serif)
+	name_edit.add_theme_font_override("font", menu.arial)
 	name_edit.add_theme_font_size_override("font_size", 16)
 	name_edit.add_theme_color_override("font_color", ELFrontMenu.INK_HOVER)
 	var field := StyleBoxFlat.new()
@@ -745,25 +746,44 @@ func _race_controls(left: String, right: String) -> void:
 	_button(left, change_race.bind(-1))
 	_button(right, change_race.bind(1))
 
+## The race arrows (EL1, EL2
+## ): a preset changed since it was opened (or since the last race
+## change) first asks T_MB_CHANGE_RACE; the new race then starts a fresh preset
+## (hero and resource level 1, no specialisation, spells, runes, skills or
+## artifacts). The name typed in the editor stays.
 func change_race(step: int) -> void:
 	if edit.view_only: return
-	var p := editor_preset()
-	var index := ELDuelPresets.RACES.find(String(p.faction))
-	p.faction = ELDuelPresets.RACES[posmod(index + step, ELDuelPresets.RACES.size())]
-	# Own-race spells and specialisations only; skills and artifacts stay.
-	var keep: Array[String] = []
-	var runes: Array[int] = []
-	for i in p.cards.size():
-		if ELDuelCosts.spell_allowed(profile(), p.cards[i], p.faction):
-			keep.append(p.cards[i])
-			runes.append(int(p.runes[i]) if i < p.runes.size() else 0)
-	p.cards = keep
-	p.runes = runes
-	for code: String in p.reserve.keys():
-		if not ELDuelCosts.spell_allowed(profile(), code, p.faction): p.reserve.erase(code)
-	if not ELDuelCosts.spec_allowed(profile(), String(p.specialization), String(p.faction)): p.specialization = "NONE"
-	edit.slot = -1
-	menu.show_screen("duel_editor")
+	var apply := func():
+		var p := editor_preset()
+		var index := ELDuelPresets.RACES.find(String(p.faction))
+		p.faction = ELDuelPresets.RACES[posmod(index + step, ELDuelPresets.RACES.size())]
+		p.level = 1
+		p.resource_level = 1
+		p.specialization = "NONE"
+		var no_cards: Array[String] = []
+		var no_runes: Array[int] = []
+		var no_artifacts: Array[String] = []
+		p.skills = {}
+		p.cards = no_cards
+		p.runes = no_runes
+		p.reserve = {}
+		p.artifacts = no_artifacts
+		p.deck = ""
+		edit.since_race = _race_contents(p)
+		edit.slot = -1
+		edit.item = -1
+		edit.art = -1
+		edit.owned = -1
+		menu.show_screen("duel_editor")
+	if _race_contents(editor_preset()) == edit.get("since_race", {}): apply.call()
+	else: show_message(profile().text("T_MB_CHANGE_RACE"), apply, true)
+
+## What the race-change prompt compares: levels, specialisation, spells with
+## runes, skills and artifacts; not the name or race.
+func _race_contents(p: Dictionary) -> Dictionary:
+	return {"level": int(p.get("level", 1)), "resource_level": int(p.get("resource_level", 1)), "specialization": String(p.get("specialization", "NONE")),
+		"cards": Array(p.get("cards", [])).duplicate(), "runes": Array(p.get("runes", [])).map(func(r): return int(r)), "reserve": Dictionary(p.get("reserve", {})).duplicate(true),
+		"skills": Dictionary(p.get("skills", {})).duplicate(true), "artifacts": Array(p.get("artifacts", [])).duplicate()}
 
 func change_hero_level(step: int) -> void:
 	if edit.view_only: return
@@ -1387,7 +1407,9 @@ func _build_el2_misc() -> void:
 	own.position = skill_rect.position
 	own.size = skill_rect.size
 	own.focus_mode = Control.FOCUS_NONE
-	own.tooltip_text = "Double-click a skill to lower or remove it."
+	# The double-click stands in for the original drag; its hint is a
+	# helper-overlay readout like the rule reasons.
+	if menu.helper_overlay(): own.tooltip_text = "Double-click a skill to lower or remove it."
 	own.gui_input.connect(func(event: InputEvent):
 		if event is InputEventMouseButton and event.pressed and event.double_click:
 			var row := int((event.position.y) / 26.0)
@@ -1426,19 +1448,47 @@ func _build_el2_misc() -> void:
 	_artifact_strip(_rect("EPArtifactsBounds"))
 	_refresh_el2_lists()
 
+## EPDropDown1 under EPDrop1Btn, on its own cut parts and arrows; a click
+## elsewhere closes it.
 func open_spec_menu() -> void:
-	var popup := PopupMenu.new()
+	var old: Variant = menu.labels.get("spec_menu")
+	if is_instance_valid(old) and old is Control:
+		_close_spec_menu()
+		return
 	var choices := spec_choices()
-	for code: String in choices: popup.add_item(spec_name(code))
-	popup.index_pressed.connect(func(index: int):
-		act("set_spec", choices[index])
-		popup.queue_free())
-	popup.popup_hide.connect(popup.queue_free)
-	menu.add_child(popup)
-	menu.labels["spec_menu"] = popup
-	var rect := _rect("EPActiveSpec")
-	var at := menu.canvas.get_global_transform_with_canvas() * (rect.position + Vector2(0, rect.size.y))
-	popup.popup(Rect2i(Vector2i(at), Vector2i(int(rect.size.x * menu.scale_factor), 0)))
+	var catcher := Control.new()
+	catcher.name = "SpecMenuCatcher"
+	catcher.mouse_filter = Control.MOUSE_FILTER_STOP
+	catcher.position = Vector2.ZERO
+	catcher.size = menu.canvas.size
+	catcher.gui_input.connect(func(event: InputEvent):
+		if event is InputEventMouseButton and event.pressed: _close_spec_menu())
+	menu.canvas.add_child(catcher)
+	var list := ELArtDropList.new()
+	list.name = "EPDropDown1"
+	menu.canvas.add_child(list)
+	var pieces: Array = []
+	for row: Dictionary in menu.rows("EPDropDown1TexturesCtrl"): pieces.append(menu.cut(row))
+	list.setup(pieces, ELArtDropList.row_font(), menu._square("EPDropDown1Up"), menu._square("EPDropDown1Down"))
+	list.thumb_texture = ELArtDropList.thumb_art(profile())
+	list.place(_rect("EPDropDown1"))
+	var names: Array = []
+	var tips: Array = []
+	for code: String in choices:
+		names.append(spec_name(code))
+		tips.append(profile().text(str(profile().table("HeroesSpecs").get(code, {}).get("Desc", ""))) if code != "NONE" else "")
+	list.fill(names, tips, choices.find(String(editor_preset().specialization)))
+	list.chosen.connect(func(index: int):
+		_close_spec_menu()
+		if index >= 0 and index < choices.size(): act("set_spec", choices[index]))
+	menu.labels["spec_menu"] = list
+	menu.labels["spec_menu_catcher"] = catcher
+
+func _close_spec_menu() -> void:
+	for key: String in ["spec_menu", "spec_menu_catcher"]:
+		var node: Variant = menu.labels.get(key)
+		if is_instance_valid(node) and node is Node: node.queue_free()
+		menu.labels.erase(key)
 
 func _refresh_el2_lists() -> void:
 	if right_list == null: return
@@ -1567,11 +1617,10 @@ func build_round() -> void:
 		var key: String = (["T_RR_DUEL_LOSE", "T_RR_DUEL_DRAW", "T_RR_DUEL_WIN"][m.result(0) + 1]) if final else (["T_RR_ROUND_LOSE", "T_RR_ROUND_DRAW", "T_RR_ROUND_WIN"][last + 1])
 		var verdict := profile().text(key).strip_edges()
 		_text("RRRoundResult", verdict % m.played if verdict.count("%d") == 1 else verdict, ELFrontMenu.INK_HOVER)
-	var ok := _button("RROK", func(): menu.duel_round_closed.emit(true))
-	if ok != null: ok.tooltip_text = "OK" if final else "Next round"
+	# RROK/RRCancel have no CtrlTt tooltip text in either game.
+	_button("RROK", func(): menu.duel_round_closed.emit(true))
 	if el1() or not final:
-		var cancel := _button("RRCancel", func(): menu.duel_round_closed.emit(false))
-		if cancel != null and el1(): cancel.tooltip_text = "End the duel"
+		_button("RRCancel", func(): menu.duel_round_closed.emit(false))
 	if el1():
 		# The first game has no replays (and no RRSave art).
 		var none := _button("RRSave", func(): pass)
@@ -1589,7 +1638,7 @@ func build_round() -> void:
 
 # --- Small controls --------------------------------------------------------------
 
-## Text-only toggle drawn in the original serif (DuSortName, EL2 editor tabs).
+## Text-only toggle drawn in Arial (no Times in its FontType) (DuSortName, EL2 editor tabs).
 class FlatText extends BaseButton:
 	var menu: ELFrontMenu
 	var caption := ""
@@ -1608,10 +1657,10 @@ class FlatText extends BaseButton:
 		var hover := get_draw_mode() in [DRAW_HOVER, DRAW_HOVER_PRESSED]
 		var color := ELFrontMenu.INK_HOVER if active or hover else ELFrontMenu.TITLE_INK
 		if active: draw_rect(Rect2(Vector2.ZERO, size), Color(0.85, 0.7, 0.4, 0.14))
-		var text_size := menu.serif.get_string_size(caption, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size)
-		var at := Vector2((size.x - text_size.x) * 0.5, (size.y - text_size.y) * 0.5 + menu.serif.get_ascent(font_size))
-		draw_string(menu.serif, at + Vector2(1, 1), caption, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, Color(0, 0, 0, 0.8))
-		draw_string(menu.serif, at, caption, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, color)
+		var text_size := menu.arial.get_string_size(caption, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size)
+		var at := Vector2((size.x - text_size.x) * 0.5, (size.y - text_size.y) * 0.5 + menu.arial.get_ascent(font_size))
+		draw_string(menu.arial, at + Vector2(1, 1), caption, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, Color(0, 0, 0, 0.8))
+		draw_string(menu.arial, at, caption, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, color)
 
 ## Clickable hero frame; the list's target side is outlined.
 class SideFrame extends BaseButton:
@@ -1663,7 +1712,7 @@ class PresetList extends Control:
 		var shown := screen.rows()
 		offset = clampi(offset, 0, maxi(0, shown.size() - visible_rows()))
 		var s := screen.state()
-		var font := screen.menu.serif
+		var font := screen.menu.arial
 		for at in visible_rows():
 			var index := offset + at
 			if index >= shown.size(): break
@@ -1759,7 +1808,7 @@ class BookView extends Control:
 	func _draw() -> void:
 		var list := entries()
 		var c := cell()
-		var font := screen.menu.serif
+		var font := screen.menu.arial
 		var p := screen.editor_preset()
 		for index in list.size():
 			var rect := slot_rect(index)
@@ -1835,7 +1884,7 @@ class ArtifactStrip extends Control:
 			if int(screen.edit.get("owned", -1)) == index: draw_rect(icon, ELFrontMenu.INK_HOVER, false, 2)
 		if list.size() > CELLS:
 			var count := "%d" % list.size()
-			draw_string(screen.menu.serif, Vector2(size.x - 14, size.y - 3), count, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, ELFrontMenu.BODY_INK)
+			draw_string(screen.menu.arial, Vector2(size.x - 14, size.y - 3), count, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, ELFrontMenu.BODY_INK)
 
 ## Texture pieces drawn above the panel art (the editor's race picture).
 class PieceView extends Control:

@@ -60,14 +60,14 @@ func build(source_hud: ELSecondAdventureHud) -> bool:
 	canvas.add_child(art)
 	art.draw.connect(_draw_art)
 	for control: String in ["NotebookHdrLeft", "NotebookHdrRight", "NotebookHdrEvent", "NotebookHdrDay"]:
-		var label := _label(canvas, hud.text(str(hud._controls[control].get("Text", ""))), hud.serif_bold, 15, TAN, HORIZONTAL_ALIGNMENT_CENTER)
+		var label := _label(canvas, hud.text(str(hud._controls[control].get("Text", ""))), hud.face_bold, 15, TAN, HORIZONTAL_ALIGNMENT_CENTER)
 		label.name = control
 		labels[control] = label
 	labels.NotebookHdrEvent.tooltip_text = profile.text("T_NOTEBOOK_TT_EVENT")
 	labels.NotebookHdrDay.tooltip_text = profile.text("T_NOTEBOOK_TT_DAY")
 	for control: String in ["NotebookHdrEvent", "NotebookHdrDay"]: labels[control].mouse_filter = Control.MOUSE_FILTER_PASS
-	labels.NotebookCurFilter = _label(canvas, "", hud.serif_bold, 14, TAN, HORIZONTAL_ALIGNMENT_LEFT)
-	labels.NotebookCurMis = _label(canvas, hud.text("CtrlNotebookCurMis"), hud.serif_bold, 14, TAN, HORIZONTAL_ALIGNMENT_LEFT)
+	labels.NotebookCurFilter = _label(canvas, "", hud.face_bold, 14, TAN, HORIZONTAL_ALIGNMENT_LEFT)
+	labels.NotebookCurMis = _label(canvas, hud.text("CtrlNotebookCurMis"), hud.face_bold, 14, TAN, HORIZONTAL_ALIGNMENT_LEFT)
 	list = Control.new()
 	list.name = "NotebookLeftBounds"
 	list.mouse_filter = Control.MOUSE_FILTER_STOP
@@ -90,7 +90,7 @@ func build(source_hud: ELSecondAdventureHud) -> bool:
 			scroll_speech(-1 if event.button_index == MOUSE_BUTTON_WHEEL_UP else 1))
 	speech_text = Label.new()
 	speech_text.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	speech_text.add_theme_font_override("font", hud.serif)
+	speech_text.add_theme_font_override("font", hud.face)
 	speech_text.add_theme_font_size_override("font_size", 15)
 	speech_text.add_theme_color_override("font_color", TAN)
 	speech_text.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.85))
@@ -98,7 +98,7 @@ func build(source_hud: ELSecondAdventureHud) -> bool:
 	speech_text.add_theme_constant_override("shadow_offset_y", 1)
 	speech_text.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	speech.add_child(speech_text)
-	speech_name = _label(speech, "", hud.serif_bold, 15, WHITE, HORIZONTAL_ALIGNMENT_LEFT)
+	speech_name = _label(speech, "", hud.face_bold, 15, WHITE, HORIZONTAL_ALIGNMENT_LEFT)
 	speech_name.name = "Speaker"
 	for control: String in ["NotebookOkBtn", "NotebookDropBtn", "NotebookU2", "NotebookD2", "NotebookScrollUp1", "NotebookScrollDown1", "NotebookU1", "NotebookD1"]:
 		var button := ArtButton.make(hud, control)
@@ -188,7 +188,7 @@ func _build_filter_popup() -> void:
 		option.flat = true
 		option.alignment = HORIZONTAL_ALIGNMENT_LEFT
 		option.focus_mode = Control.FOCUS_NONE
-		option.add_theme_font_override("font", hud.serif_bold)
+		option.add_theme_font_override("font", hud.face_bold)
 		option.add_theme_font_size_override("font_size", 14)
 		option.add_theme_color_override("font_color", TAN)
 		option.add_theme_color_override("font_hover_color", WHITE)
@@ -360,7 +360,7 @@ func _refresh_kind() -> void:
 # --- Drawing ------------------------------------------------------------------
 
 func _text(target: CanvasItem, at: Vector2, value: String, color := TAN, bold := false, font_size := 15, width := -1.0, align := HORIZONTAL_ALIGNMENT_LEFT) -> void:
-	var font: Font = hud.serif_bold if bold else hud.serif
+	var font: Font = hud.face_bold if bold else hud.face
 	var baseline := at + Vector2(0, font.get_ascent(font_size))
 	target.draw_string(font, baseline + Vector2(1, 1), value, align, width, font_size, Color(0, 0, 0, 0.85))
 	target.draw_string(font, baseline, value, align, width, font_size, color)

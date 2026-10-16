@@ -187,6 +187,15 @@ func _step_hand(direction: int) -> void:
 	_scroll_target = clampf(base + direction * SCROLL_STEP, 0.0, _hand_limit())
 	_animating = true
 
+## A card joining the hand scrolls the rail like its arrows do: a drawn card
+## back to the start, a returned card far enough to show the new last card
+## (EL2 `` steps left to the first item, `` steps right
+## the overflow).
+func reveal_hand(at_end: bool) -> void:
+	if hand_scroll == null: return
+	_scroll_target = INF if at_end else 0.0
+	_animating = true
+
 func _hand_limit() -> float:
 	if hand_scroll == null or hand_scroll.get_child_count() == 0: return 0.0
 	var content := hand_scroll.get_child(0) as Control
