@@ -68,8 +68,7 @@ python3 tools/import_game.py el2 /path/to/Etherlords2
 
 The engine is still in development. Things you may notice:
 
-- Some creature ability effects are incomplete: most Etherlords I creature abilities show no spell effect yet, a few Etherlords II abilities (such as Wall of Illusion) are still missing theirs, and the darkening of a few large spells is an approximation.
-- Some options have no effect yet: fog animation, faster creature movement and the duel log file.
+- The darkening of a few large spells is an approximation, and the exact moment some ability effects start may differ slightly from the originals.
 - A few rare messages are still shown in English, mostly in the Duel editor and in error messages.
 - Computer opponents follow the original's approach but are not an exact copy of its decisions. As in the original, they never answer alliance or trade offers.
 - Etherlords II map particle effects use approximate sizes and blending.

@@ -260,8 +260,27 @@ const ABILITY := {
 		# on the creature selected for sacrifice before its removal.
 		# The separate post-ether hero GainMana uses a state event.
 		"SACR": [["GreenDamage", "at"]],
-		"RBRT": [["LoseLife", "at"]], "RZMN": [["BlackDamage", "at"]],
-		"SCBR": [["PosSorcery", "at"]], "WLDT": [["CantAttack", "at"]]
+		"RBRT": [["LoseLife", "at"]],
+		# Cutter, Sawer and Razor Man run BlackRedirect from the creature they
+		# sacrifice (Start) to themselves (Finish).
+		"RZMN": [["BlackRedirect", "to_user"]],
+		"SCBR": [["PosSorcery", "at"]], "WLDT": [["CantAttack", "at"]],
+		# Each creature's own EL1 ability code starts the named effect, with
+		# Start/Finish (line) or one Target as the effect's points say; the
+		# same cards use the same effects in the second game.
+		"BEHD": [["GreenDamage", "at"]], "BHWR": [["GreenDamage", "at"]], "CAFG": [["FingusSpit", "line"]],
+		"CCLP": [["CyclopStone", "line"]], "CTMN": [["BlackRedirect", "to_user"]], "DMRT": [["Draw", "at"]],
+		"ENFL": [["Disenchant", "at"]], "ENRG": [["PosSorcery", "at"]], "GRDG": [["GreenDragonInstant", "line"]],
+		"GRFG": [["FingusSpit", "line"]], "LMMN": [["Draw", "at"]], "LMWK": [["Draw", "at"]],
+		"LSHE": [["GainLife", "at"]], "MNTS": [["NegSorcery", "at"]], "ORSH": [["GainMana", "at"]],
+		"PHWL": [["PosAttack", "at"]], "PTRS": [["Disenchant", "at"]], "RFPT": [["Disenchant", "at"]],
+		"SPFG": [["FingusSpit", "line"]], "SPLK": [["GreenDamage", "at"], ["GainMana", "at"]],
+		"SWMN": [["BlackRedirect", "to_user"]], "VBAT": [["DrainLife", "line"]], "WLIF": [["PosDefence", "at"]],
+		"WLLV": [["PosAttack", "at"]], "WLWD": [["PosAttack", "at"]], "WZSP": [["PosSorcery", "at"]],
+		# The first game's Rain of Stone binds Start to the caster's own hero,
+		# after paying, unlike the second game's opposing hero.
+		"RNST": [["RedRainOfStones", "start"]],
+		"RPST": [["PosSorcery", "at"], ["BlackDamage", "at"], ["Draw", "at"]]
 	},
 	"el2": {
 		"BEHD": [["GreenDamage", "at"]], "BHWR": [["GreenDamage", "at"]], "BLDG": [["BlackDragonInstant", "line"]],

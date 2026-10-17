@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.3
+
+- Battles:
+  - In Etherlords I, most creature abilities now show their original spell effects and sounds: the Beholders' gaze, the Fingus spits, the Lamias' draws, the Mantises, the walls, the Halos, the Razor Men's sacrifice, Rain of Stone, Burnout, the Repair Station and many more. River and Swamp Halo draw their ether stream from the opposing hero to their own, as Sea Halo does.
+
 ## 0.2.2
 
 - Interface:

@@ -1796,6 +1796,12 @@ func _use_ability(id: int, ability: String, target := -1, enchantment_id := -1, 
 		# Fireball lands on `enchantment_id`. Keep the original two-choice
 		# contract and identify the impact figure for EL2 presentation.
 		if profile.id == "el2" and definition.effect == "burnout": ability_event.hit_target = enchantment_id
+		# First game: a sacrifice spared by mastery shows no RedDamage either,
+		# so the roll is taken before the event (nothing in between rolls).
+		var spared: bool = definition.effect == "burnout" and ELSpecs.roll(self, side, "RBNO") != 0
+		if profile.id == "el1" and definition.effect == "burnout":
+			ability_event.hit_target = enchantment_id
+			ability_event.spared = spared
 		_emit(ability_event)
 		match definition.effect:
 			"heal":
@@ -1807,7 +1813,7 @@ func _use_ability(id: int, ability: String, target := -1, enchantment_id := -1, 
 			"energize": creatures[target].resting = false
 			"burnout":
 				# The sacrifice's power burns the chosen hero or creature; mastery spares it.
-				if ELSpecs.roll(self, side, "RBNO") == 0: _kill(target)
+				if not spared: _kill(target)
 				if sacrificed.x > 0: _damage(enchantment_id, sacrificed.x)
 			"recycle":
 				# Plane exchange: one creature manifests, the other dissipates.

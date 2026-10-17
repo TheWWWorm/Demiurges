@@ -2552,7 +2552,9 @@ func _ability_effects(data: Dictionary) -> void:
 	# Finish on the recipient hero. The zero-ether ability still
 	# succeeds and rests its BlueHalo but skips this particle/audio cue.
 	# This is not the EL2 generic creature-to-target DrainMana binding.
-	if profile.id == "el1" and source >= 2 and card == "SEHL" and data.ability == "siphon":
+	# River Halo and Swamp Halo share this code: the same guard and the same
+	# donor-to-recipient hero binding.
+	if profile.id == "el1" and source >= 2 and card in ["SEHL", "RVHL", "SWHL"] and data.ability == "siphon":
 		if int(duel.heroes[1 - side].mana) > 0 and models.has(1 - side) and models.has(side):
 			battle_audio.effect("DrainMana")
 			if is_instance_valid(effects):
@@ -2618,12 +2620,29 @@ func _ability_effects(data: Dictionary) -> void:
 		if hit > 0.0:
 			_ability_hit = {"target": visual_target, "hit": hit}
 			call_deferred("_clear_ability_hit")
-	if profile.id == "el2" and card == "BROT":
+	if profile.id == "el1" and card == "BROT":
+		# The first game's Burnout: RedDamage on the sacrifice (skipped when
+		# mastery spares it), then the Fireball flies from the sacrifice to
+		# the second target and FireballExpl bursts there.
+		var sacrifice: ELModel = models.get(int(data.target))
+		var victim: ELModel = models.get(int(data.get("hit_target", -1)))
+		if sacrifice != null and not data.get("spared", false):
+			battle_audio.effect("RedDamage")
+			if is_instance_valid(effects): effects.play("RedDamage", {"Target": [sacrifice]})
+		if sacrifice != null and victim != null:
+			battle_audio.effect("Fireball")
+			battle_audio.effect("FireballExpl", victim)
+			if is_instance_valid(effects):
+				effects.play("Fireball", {"Start": [sacrifice], "Finish": [victim]})
+				effects.play("FireballExpl", {"Finish": [victim]})
+	elif profile.id == "el2" and card == "BROT":
 		# Two different figure bindings in the original ability sequence:
 		# its sacrifice glows, then the fireball flies to the damage victim.
 		for item: Array in items:
 			_play_ability([item], source, side, int(data.target) if String(item[0]) == "RedDamage" else visual_target, true)
-	elif profile.id == "el2" and card == "RPST" and source == side:
+	elif profile.id in ["el1", "el2"] and card == "RPST" and source == side:
+		# The first game's StationAbility binds the same way (PosSorcery and
+		# Draw at its own side, BlackDamage at 1 - side).
 		# StationAbility: PosSorcery and Draw are Target-bound to
 		# the casting hero; BlackDamage uses 1 - side.
 		# The grave choice is not a figure. Generic playback placed all
@@ -2678,6 +2697,7 @@ func _play_ability(items: Array, source: int, side: int, target: int, hero_effec
 		var at: ELModel = models.get(side) if hero_effects and EffectTable.HERO_EFFECTS.has(effect) else models.get(target, user)
 		match String(item[1]):
 			"line": if aim != null: effects.play(effect, {"Start": [user], "Finish": [aim]})
+			"to_user": if aim != null: effects.play(effect, {"Start": [aim], "Finish": [user]})
 			"start": effects.play(effect, {"Start": [user]})
 			# Original RainOfStoneAbility binds Start to the opposing hero;
 			# falling rocks belong over that side, not the caster.
