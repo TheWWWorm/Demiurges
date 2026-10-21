@@ -56,8 +56,8 @@ func build(data: ELProfile, preferences: ELSettings) -> void:
 	effect = AudioStreamPlayer.new()
 	fading = AudioStreamPlayer.new()
 	for player: AudioStreamPlayer in [voice, background, emphasis, effect, fading]: add_child(player)
-	effect.volume_db = linear_to_db(float(settings.values.effects))
-	voice.volume_db = linear_to_db(float(settings.values.effects))
+	effect.volume_db = linear_to_db(maxf(0.0001, ELAudio.option_gain(float(settings.values.effects), profile.id)))
+	voice.volume_db = linear_to_db(maxf(0.0001, ELAudio.option_gain(float(settings.values.effects), profile.id)))
 	background.volume_db = music_db()
 	fading.volume_db = music_db()
 	emphasis.volume_db = background.volume_db
@@ -91,13 +91,13 @@ func cut_music() -> void:
 	emphasis.stream = null
 
 func music_db() -> float:
-	return linear_to_db(float(_volumes.get("music", settings.values.music))) - 6.0
+	return linear_to_db(maxf(0.0001, ELAudio.option_gain(float(_volumes.get("music", settings.values.music)), profile.id))) - 6.0
 
 ## Applies music and effect volumes (and the ambient-sound switch) at once.
 func apply_volumes(values: Dictionary) -> void:
 	_volumes = {} if is_same(values, settings.values) else {"music": values.get("music", settings.values.music),
 		"effects": values.get("effects", settings.values.effects), "ambient_sounds": values.get("ambient_sounds", true)}
-	effect.volume_db = linear_to_db(float(_volumes.get("effects", settings.values.effects)))
+	effect.volume_db = linear_to_db(maxf(0.0001, ELAudio.option_gain(float(_volumes.get("effects", settings.values.effects)), profile.id)))
 	ELUiSounds.volume = clampf(float(_volumes.get("effects", settings.values.effects)), 0.0, 1.0)
 	voice.volume_db = effect.volume_db
 	if fading.stream == null: background.volume_db = background_volume_now()
@@ -243,7 +243,7 @@ func _sound_db(sound: Dictionary) -> float:
 	var distance := Vector2(offset.x, offset.z).length()
 	var near: float = sound.near
 	var gain := 1.0 if distance <= near else clampf(1.0 - (distance - near) / maxf(0.001, far - near), 0.0, 1.0)
-	return base + linear_to_db(maxf(gain, 0.0001))
+	return base + linear_to_db(maxf(ELAudio.placed_gain(gain, profile.id), 0.0001))
 
 func _process(delta: float) -> void:
 	if background.stream != null and _fade_in > 0.0 and _fade_in_time < _fade_in:
@@ -264,7 +264,7 @@ func _process(delta: float) -> void:
 func _place(sound: Dictionary) -> void:
 	if float(sound.far) <= 0.0: return
 	sound.pan = ELAudio.stereo_pan(listener, listener_forward, sound.position)
-	ELAudio.set_pan(sound.player.bus, sound.pan)
+	ELAudio.set_pan(sound.player.bus, sound.pan, profile.id)
 
 func effect_sound(path: String) -> bool:
 	var stream := ELAudio.sound(profile, path)

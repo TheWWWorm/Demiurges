@@ -31,8 +31,10 @@ extends Node3D
 ## colour is chosen in proportion to its percentage among the first four
 ## (no sound for the rest), the file uniformly from 1..count.
 const BLAZON_CELL := 41.0
-## World size of the blazon quad (measured against original map captures).
-const BLAZON_SIZE := 1.5
+## World size of the blazon quad: the original projects it with half-size
+## 0.8, centred 0.8 + 0.5 above the object's top, so it scales
+## with the camera like the map itself.
+const BLAZON_SIZE := 1.6
 const BLAZON_LIFT := 1.3
 const SOUND_NEAR := 10.0
 const SOUND_FAR := 25.0
@@ -294,7 +296,7 @@ func _sprite(sheet: String, cell: int, layer: int) -> Sprite3D:
 
 func _place_blazon(uid: int, item: Dictionary) -> void:
 	var entry: Dictionary = blazons[uid]
-	var at := _object_position(item, entry.row) + Vector3(0, float(entry.top) + BLAZON_LIFT + BLAZON_SIZE * 0.5, 0)
+	var at := _object_position(item, entry.row) + Vector3(0, float(entry.top) + BLAZON_LIFT, 0)
 	var shown := true
 	if world.actors.has(uid): shown = world.actors[uid].visible
 	for key: String in ["back", "fore"]:

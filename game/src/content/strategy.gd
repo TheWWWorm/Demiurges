@@ -47,7 +47,17 @@ static func mana_budget(state: ELAdventureSession, player: int, apply := false) 
 	var result := allocation(state.map.profile, ELResourceSites.mana_income(state, player), heroes)
 	if apply:
 		for index in heroes.size(): heroes[index].upkeep_paid = result.paid[index]
+		# The day's free ether is fixed at night end (is its only
+		# writer besides mission start and castle regeneration): heroes hired,
+		# lost or sites taken during the day change it only at the next night.
+		if state.map.profile.id == "el1" and state.players.has(player): state.players[player].free_ether = int(result.available)
 	elif state.map.profile.id == "el1" and state.players.has(player):
+		# Mission start sets each player's free ether to the full income
+		# hero upkeep is first allocated at the
+		# first night's end, so day 1 shows 50 / 50.
+		var fixed: Variant = state.players[player].get("free_ether")
+		if fixed is int or fixed is float: result.available = maxi(0, int(fixed))
+		elif int(state.day) <= 1: result.available = int(result.income)
 		# Global spell upkeep and investment already drew on today's ether.
 		result.spells = int(state.players[player].get("global_spells", {}).get("spent_today", 0))
 		result.available = maxi(0, int(result.available) - int(result.spells))

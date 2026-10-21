@@ -10,6 +10,10 @@ const RECORD := 2376
 ## forms its own layer, so grey and coloured corners meet along the terrain's
 ## own transition masks.
 const GREY := 0x40
+## Every stored tile (full, mask, overlay; 96 px EL2, 48 px EL1) repeats its
+## outer texels mirrored across this margin; a map cell shows the inner square
+## (seams between cells otherwise show mirrored crosses the original lacks).
+const BORDER := 4
 var side := 0
 var types: Dictionary = {}
 var pixels: Array[PackedByteArray] = []
@@ -151,7 +155,8 @@ func grey_weights(composition: Dictionary, out_side: int) -> PackedByteArray:
 	picks.resize(out_side * out_side)
 	for y in out_side:
 		for x in out_side:
-			picks[y * out_side + x] = (((y * side) / out_side + side / (2 * out_side)) * side + (x * side) / out_side + side / (2 * out_side)) * 3
+			var inner := side - 2 * BORDER
+			picks[y * out_side + x] = ((BORDER + (y * inner) / out_side + inner / (2 * out_side)) * side + BORDER + (x * inner) / out_side + inner / (2 * out_side)) * 3
 	for layer: Dictionary in composition.layers:
 		var value := 255 if layer.get("grey", false) else 0
 		if layer.mask.is_empty():

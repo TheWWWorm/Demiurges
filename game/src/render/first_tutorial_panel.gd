@@ -3,10 +3,14 @@ extends Control
 ## First game's tutorial panel (Controls "Tutorial"): the event's caption and
 ## text, Back / Forward through the shown events of this screen, Close and
 ## Clear, and scroll arrows for a text taller than the panel. Buttons use the
-## original CutParts art; the frame is the remake's tooltip frame (the original
-## paints it procedurally). The panel fits its text and is centred; while it
-## is open it takes every click and key of the screen below. Keys: Esc closes,
-## Left / Right browse. Design units are the 1024x768 layout.
+## original CutParts art at their registry places; the frames are painted (the
+## original paints them procedurally). Layout measured on original captures at
+## 1024x768 (mission 1 opening and the first battle hint): a fixed outer frame
+## around the registry panel, and an inner text box centred on it that fits
+## the wrapped text (caption in bold Arial 18, body Arial 15, both with
+## a dark shadow). While it is open it takes every click and key of the screen
+## below. Keys: Esc closes, Left / Right browse. Design units are the 1024x768
+## layout.
 ##
 ## Adventure use also watches the map: watch_adventure() connects the session
 ## events and the opened windows to their tutorial events.
@@ -17,15 +21,41 @@ const DESIGN := Vector2(1024, 768)
 ## Registry panel rectangle (800 layout 100,40 600x530) and its children,
 ## relative to the panel's top-left corner.
 const PANEL := Vector2(600, 530)
-const CAPTION := Rect2(100, 25, 400, 20)
-const TEXT := Rect2(20, 60, 560, 395)
-const BUTTON_GAP := 22.0
-const BAR := 53.0
+## Registry panel position in the 1024x768 layout (800 layout + ShiftX/Y).
+const PANEL_AT := Vector2(212, 124)
+## TuCaption width and TuText wrap width / scroll limit. The original wraps at
+## TuText's 560 px with hinted GDI Arial, whose advances run about 2% wider
+## than the outline metrics used here; 546 reproduces its line breaks on the
+## captured hints (breaks fall between 540 and 552 outline units).
+const CAPTION_WIDTH := 400.0
+const TEXT_WIDTH := 546.0
+const TEXT_MAX_HEIGHT := 384.0
+## Measured on the original (relative to the panel): outer frame, the inner
+## box's centre, the text block's horizontal centre, box padding and the gap
+## between the caption and the body.
+const FRAME := Rect2(-31, -16, 662, 562)
+const BOX_CENTRE_Y := 240.0
+const TEXT_CENTRE_X := 297.0
+const BOX_PAD_LEFT := 24.0
+const BOX_PAD_RIGHT := 30.0
+const BOX_PAD_TOP := 18.0
+const BOX_PAD_BOTTOM := 35.0
+const CAPTION_GAP := 15.0
+const CAPTION_SIZE := 18
+const TEXT_SIZE := 15
+const LINE_PITCH := 17.0
 const BUTTONS := {"TuClose": Vector2(-5, 477), "TuClear": Vector2(105, 477), "TuBack": Vector2(485, 477), "TuForward": Vector2(555, 477)}
 const ARROWS := {"TuScrollU": Vector2(589, 7), "TuScrollD": Vector2(589, 461)}
-const CAPTION_INK := Color("e2d29a")
-const TEXT_INK := Color("e6dcc0")
-const FRAME_GROW := 10.0
+const CAPTION_INK := Color8(214, 187, 136)
+const TEXT_INK := Color8(214, 187, 136)
+const SHADOW := Color(0, 0, 0, 0.85)
+const FRAME_FILL := Color8(49, 57, 57)
+const FRAME_EDGE := Color8(145, 128, 108)
+const FRAME_LIGHT := Color8(214, 198, 156)
+const FRAME_DARK := Color8(33, 24, 16)
+const BOX_FILL := Color8(24, 33, 33)
+const BOX_EDGE := Color8(123, 107, 90)
+const BOX_OUTLINE := Color8(41, 41, 41)
 
 var tutorial: ELFirstTutorial
 var profile: ELProfile
@@ -35,9 +65,11 @@ var body: RichTextLabel
 var buttons: Dictionary = {}
 var sound: AudioStreamPlayer
 var font: Font
-## Panel rectangle in design units (fitted to the text) and whether the text
-## scrolls.
-var panel := Rect2(Vector2(212, 124), PANEL)
+var caption_font: Font
+## Panel rectangle in design units (registry place), the inner text box
+## relative to it (fitted to the text) and whether the text scrolls.
+var panel := Rect2(PANEL_AT, PANEL)
+var box := Rect2()
 var scrolling := false
 var _art: Dictionary = {}
 var _volume := 1.0
@@ -53,23 +85,33 @@ func build(source: ELProfile, shared: ELFirstTutorial, screen: int) -> void:
 	name = "FirstTutorial"
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	var serif := SystemFont.new()
-	serif.font_names = PackedStringArray(["Times New Roman", "Liberation Serif", "DejaVu Serif", "Noto Serif", "serif"])
-	font = serif
+	var sans := SystemFont.new()
+	sans.font_names = PackedStringArray(["Arial", "Liberation Sans", "DejaVu Sans", "Noto Sans", "sans-serif"])
+	font = sans
+	var bold := SystemFont.new()
+	bold.font_names = sans.font_names
+	bold.font_weight = 700
+	caption_font = bold
 	_load_art()
 	caption = Label.new()
 	caption.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	caption.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	caption.add_theme_font_override("font", font)
+	caption.add_theme_font_override("font", caption_font)
 	caption.add_theme_color_override("font_color", CAPTION_INK)
+	caption.add_theme_color_override("font_shadow_color", SHADOW)
+	caption.add_theme_constant_override("shadow_offset_x", 1)
+	caption.add_theme_constant_override("shadow_offset_y", 1)
 	caption.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(caption)
 	body = RichTextLabel.new()
 	body.bbcode_enabled = false
 	body.scroll_active = true
-	body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	body.autowrap_mode = TextServer.AUTOWRAP_WORD
 	body.add_theme_font_override("normal_font", font)
 	body.add_theme_color_override("default_color", TEXT_INK)
+	body.add_theme_color_override("font_shadow_color", SHADOW)
+	body.add_theme_constant_override("shadow_offset_x", 1)
+	body.add_theme_constant_override("shadow_offset_y", 1)
 	body.get_v_scroll_bar().modulate = Color(1, 1, 1, 0)
 	body.get_v_scroll_bar().mouse_filter = Control.MOUSE_FILTER_IGNORE
 	body.mouse_filter = Control.MOUSE_FILTER_PASS
@@ -153,47 +195,70 @@ func shown_caption() -> String:
 	return caption.text if caption != null else ""
 
 func shown_text() -> String:
-	return body.text if body != null else ""
+	return body.text.replace(WORD_JOINER, "") if body != null else ""
+
+## The original breaks lines only at spaces ("(<Esc>-меню)" stays whole); a
+## word joiner after an inner hyphen keeps the label from breaking there.
+const WORD_JOINER := "\u2060"
+
+static func no_hyphen_breaks(value: String) -> String:
+	var regex := RegEx.create_from_string("-(?=\\S)")
+	return regex.sub(value, "-" + WORD_JOINER, true)
 
 func design_scale() -> float:
 	return maxf(1.0, minf(size.x / DESIGN.x, size.y / DESIGN.y)) if size.x > 0 and size.y > 0 else 1.0
 
-## Screen rectangle of a design rectangle given relative to the panel.
+## Screen rectangle of a design rectangle given relative to the panel (the
+## 1024x768 layout is centred in larger windows).
 func screen_rect(local: Rect2) -> Rect2:
 	var s := design_scale()
-	var origin := (size - panel.size * s) * 0.5
+	var origin := (size - DESIGN * s) * 0.5 + panel.position * s
 	return Rect2(origin + local.position * s, local.size * s)
+
+## The painted outer frame on screen.
+func frame_rect() -> Rect2:
+	return screen_rect(FRAME)
 
 func _fill() -> void:
 	var entry := ELFirstTutorial.texts(profile, tutorial.current_id())
 	caption.text = entry.caption
-	body.text = entry.body
+	body.text = no_hyphen_breaks(entry.body)
 	body.scroll_to_line(0)
 	_layout()
 
 func _layout() -> void:
 	if body == null: return
 	var s := design_scale()
-	caption.add_theme_font_size_override("font_size", roundi(20 * s))
-	body.add_theme_font_size_override("normal_font_size", roundi(17 * s))
-	# The text decides the panel's height up to the registry rectangle.
-	_text_height = font.get_multiline_string_size(body.text, HORIZONTAL_ALIGNMENT_LEFT, TEXT.size.x, 17).y + 8.0
-	scrolling = _text_height > TEXT.size.y
-	var text_height := minf(_text_height, TEXT.size.y)
-	panel.size = Vector2(PANEL.x, TEXT.position.y + text_height + BUTTON_GAP + BAR)
-	var origin := ((size / s) - panel.size) * 0.5
-	panel.position = origin
-	var text_rect := screen_rect(Rect2(TEXT.position, Vector2(TEXT.size.x, text_height)))
-	body.position = text_rect.position
-	body.size = text_rect.size
-	var caption_rect := screen_rect(CAPTION)
+	caption.add_theme_font_size_override("font_size", roundi(CAPTION_SIZE * s))
+	body.add_theme_font_size_override("normal_font_size", roundi(TEXT_SIZE * s))
+	# The body wraps at TuText's width; the box fits the widest line and the
+	# text height up to the scroll limit, centred on the panel.
+	# Measured at the drawn size so the label wraps the same way.
+	var drawn_size := roundi(TEXT_SIZE * s)
+	var measured := font.get_multiline_string_size(body.text, HORIZONTAL_ALIGNMENT_LEFT, TEXT_WIDTH * s, drawn_size) / s
+	# The original's line pitch is 17 px (the outline font's height is ~17.3).
+	var line_height := font.get_height(drawn_size) / s
+	var lines := maxi(1, roundi(measured.y / line_height))
+	var separation := roundi((LINE_PITCH - line_height) * s)
+	body.add_theme_constant_override("line_separation", separation)
+	_text_height = lines * (line_height + separation / s) + 2.0
+	scrolling = _text_height > TEXT_MAX_HEIGHT
+	var text_height := minf(_text_height, TEXT_MAX_HEIGHT)
+	var text_width := minf(maxf(measured.x, 120.0), TEXT_WIDTH)
+	var caption_height := caption_font.get_height(CAPTION_SIZE)
+	var box_height := BOX_PAD_TOP + caption_height + CAPTION_GAP + text_height + BOX_PAD_BOTTOM
+	var text_left := TEXT_CENTRE_X - text_width * 0.5
+	box = Rect2(text_left - BOX_PAD_LEFT, BOX_CENTRE_Y - box_height * 0.5, text_width + BOX_PAD_LEFT + BOX_PAD_RIGHT, box_height)
+	var caption_rect := screen_rect(Rect2(text_left, box.position.y + BOX_PAD_TOP, CAPTION_WIDTH, caption_height))
 	caption.position = caption_rect.position
 	caption.size = caption_rect.size
-	var bar_top := TEXT.position.y + text_height + BUTTON_GAP
+	# A little slack keeps the label's wrapping identical to the measurement.
+	var text_rect := screen_rect(Rect2(text_left, box.position.y + BOX_PAD_TOP + caption_height + CAPTION_GAP, text_width + 6.0, text_height))
+	body.position = text_rect.position
+	body.size = text_rect.size
 	for control: String in BUTTONS:
 		var button: Button = buttons[control]
-		var spot: Vector2 = BUTTONS[control]
-		var rect := screen_rect(Rect2(Vector2(spot.x, bar_top), Vector2(50, 50)))
+		var rect := screen_rect(Rect2(BUTTONS[control], Vector2(50, 50)))
 		button.position = rect.position
 		button.size = rect.size
 	# Back and Forward: hidden with a single entry, disabled at the ends.
@@ -204,9 +269,7 @@ func _layout() -> void:
 	buttons.TuForward.disabled = tutorial == null or not tutorial.can_forward()
 	for control: String in ARROWS:
 		var arrow: Button = buttons[control]
-		var spot: Vector2 = ARROWS[control]
-		if control == "TuScrollD": spot.y = TEXT.position.y + text_height + 6.0
-		var rect := screen_rect(Rect2(spot, Vector2(13, 12)))
+		var rect := screen_rect(Rect2(ARROWS[control], Vector2(13, 12)))
 		arrow.position = rect.position
 		arrow.size = rect.size
 		arrow.visible = scrolling
@@ -236,8 +299,7 @@ func _load_art() -> void:
 func _draw() -> void:
 	if body == null: return
 	var s := design_scale()
-	var frame := screen_rect(Rect2(Vector2(-FRAME_GROW, -FRAME_GROW), panel.size + Vector2(FRAME_GROW, FRAME_GROW) * 2))
-	draw_style_box(ELAdventureHud.tooltip_style(), frame)
+	_draw_frames(s)
 	for control: String in buttons:
 		var button: Button = buttons[control]
 		if not button.visible: continue
@@ -249,6 +311,26 @@ func _draw() -> void:
 		_draw_piece(piece, button.position, s)
 		if not button.disabled and mode in [BaseButton.DRAW_HOVER, BaseButton.DRAW_HOVER_PRESSED, BaseButton.DRAW_PRESSED]:
 			_draw_piece(_art.get(control + (":light_push" if base == "push" else ":light"), {}), button.position, s)
+
+## Outer frame: opaque slate with a bevelled tan edge (light outer line, dark
+## inner line); inner box: darker fill with a thin tan edge.
+func _draw_frames(s: float) -> void:
+	var frame := frame_rect()
+	var edge := maxi(1, roundi(4 * s))
+	draw_style_box(_flat(FRAME_FILL, FRAME_EDGE, edge), frame)
+	draw_style_box(_flat(Color(0, 0, 0, 0), FRAME_LIGHT, 1), frame)
+	draw_style_box(_flat(Color(0, 0, 0, 0), FRAME_DARK, 1), frame.grow(-edge))
+	var inner := screen_rect(box)
+	draw_style_box(_flat(Color(0, 0, 0, 0), BOX_OUTLINE, 1), inner.grow(1))
+	draw_style_box(_flat(BOX_FILL, BOX_EDGE, 1), inner)
+
+static func _flat(fill: Color, border: Color, width: int) -> StyleBoxFlat:
+	var style := StyleBoxFlat.new()
+	style.bg_color = fill
+	style.draw_center = fill.a > 0.0
+	style.border_color = border
+	style.set_border_width_all(width)
+	return style
 
 func _draw_piece(piece: Dictionary, at: Vector2, s: float) -> void:
 	if piece.is_empty(): return

@@ -5,6 +5,8 @@ signal animation_finished(clip: String)
 signal animation_started(clip: String)
 ## A looping clip ("c" prefix) wrapped round to its first frame.
 signal animation_looped(clip: String)
+## The clip passed one of its recorded event frames (footfalls of walk/run).
+signal frame_event(clip: String)
 const EFFECT_ANCHORS := ["cast", "dust", "numbers", "soul", "b_point"]
 
 var profile: ELProfile
@@ -30,6 +32,8 @@ var timing: Dictionary = {}
 ## Random one-off idle variants (cspecial1..N) played from "cidle".
 var idle_specials := true
 var _special := false
+## An idle variant was chosen and waits for the idle cycle to end.
+var _special_waiting := false
 var _rng := RandomNumberGenerator.new()
 
 func build(data: ELProfile, model: String, texture_name: String, secondary_texture := "") -> bool:
@@ -73,7 +77,9 @@ func build(data: ELProfile, model: String, texture_name: String, secondary_textu
 		parts[name] = node
 		if figures.has(name) and name not in EFFECT_ANCHORS:
 			node.mesh = _mesh_cache["base/" + name]
-			node.material_override = secondary if int(figures[name].texture_slot) == 1 else material
+			# Slot 2 parts wear the second texture (mounts, staffs, wings: the
+			# Add/Transport sheets); slot 1 and 8 parts the first.
+			node.material_override = secondary if int(figures[name].texture_slot) == 2 else material
 		# Anchors may parent real geometry (the illusion wall uses "dust" as its
 		# root). Omit only their helper mesh; hiding the node hides descendants too.
 	# Track keys are model-space transforms, so every part hangs from the
@@ -121,6 +127,7 @@ func play(name: String) -> bool:
 		clips[name] = tracks
 	clip = name
 	_special = false
+	if name != "cidle": _special_waiting = false
 	_clip_frames = 1
 	if timing.has(name):
 		# The clip lasts its recorded frame count; tracks hold their last key.
@@ -148,12 +155,20 @@ func _process(delta: float) -> void:
 	if not playing or clip.is_empty():
 		return
 	var length := clip_frames()
+	var before := frame
 	frame += delta * fps * speed
+	_frame_events(before, frame, length)
 	if frame >= length - 1 and _special:
 		# A variant plays once, then the figure returns to its idle.
 		play("cidle")
 		return
 	if frame >= length - 1:
+		if clip == "cidle" and _special_waiting:
+			# The variant chosen during the cycle starts as the cycle ends
+			# (original EL1/EL2 idle cycle callback, EL2).
+			_special_waiting = false
+			_play_special()
+			return
 		if clip.begins_with("c"):
 			frame = fmod(frame, maxf(1, length - 1))
 			animation_looped.emit(clip)
@@ -163,8 +178,19 @@ func _process(delta: float) -> void:
 			animation_finished.emit(clip)
 	apply_frame(frame)
 	set_process(playing)
-	if playing and clip == "cidle" and idle_specials and _rng.randf() < 0.04 * delta:
-		_play_special()
+	if playing and clip == "cidle" and idle_specials and not _special_waiting and _rng.randf() < 0.04 * delta:
+		_special_waiting = special_count() > 0
+
+## Emits frame_event for each recorded event frame in (from, to], also
+## across a looping clip's wrap (original EL1 / EL2).
+func _frame_events(from: float, to: float, length: int) -> void:
+	var events: Array = timing.get(clip, {}).get("events", [])
+	if events.is_empty(): return
+	var span := maxf(1.0, length - 1)
+	for e: int in events:
+		var at := float(e)
+		if (at > from and at <= to) or (clip.begins_with("c") and to >= span and at <= to - span):
+			frame_event.emit(clip)
 
 func clip_frames() -> int:
 	return _clip_frames
@@ -218,7 +244,7 @@ static func animation_table(bytes: PackedByteArray) -> Dictionary:
 		result[name] = {"frames": bytes.decode_u32(at + 0x20), "loop": (bytes.decode_u32(at + 0x14) & 0x80000000) != 0,
 			"code": bytes.decode_u32(at + 0x14) & 0xffff8000,
 			"speed": bytes.decode_float(at + 0x24), "events": events,
-			"impact": bytes.decode_u32(at + 0x40) if flags & 4 else -1}
+			"impact": bytes.decode_u32(at + 0x40) if flags & 4 else -1, "mark": bytes.decode_u32(at + 0x40)}
 	return result
 
 func apply_frame(at: float) -> void:

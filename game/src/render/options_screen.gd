@@ -321,7 +321,7 @@ func _remake_section() -> void:
 	remake_button.flat = true
 	remake_button.focus_mode = Control.FOCUS_NONE
 	remake_button.text = "Remake settings…"
-	remake_button.tooltip_text = "Settings of the remake only: ambience volume, creature shadows, adventure weather, movies."
+	remake_button.tooltip_text = "Settings of the remake only: ambience volume, creature shadows, adventure weather, movies, anti-aliasing."
 	remake_button.add_theme_font_size_override("font_size", 14)
 	remake_button.add_theme_color_override("font_color", Color(ELFrontMenu.INK, 0.7))
 	remake_button.position = Vector2(DESIGN_CENTRE - 80, 700)

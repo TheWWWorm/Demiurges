@@ -60,8 +60,10 @@ const MESSAGE_SPREAD := 8.0
 const FRAME_BORDER := 7.0
 const FRAME_CORNER := 30.0
 const FRAME_FILL := Color8(0x22, 0x22, 0x22)
-const TEXT_SIZE := 16
-const NAME_SIZE := 18
+## TextDialog fonts (text) and (name): Arial Bold with a
+## 16- and 18-pixel GDI cell, i.e. 14 and 16 pixel em (ELFrontMenu.cell_em).
+const TEXT_SIZE := 14
+const NAME_SIZE := 16
 const MESSAGE_SIZE := 17
 const CAPTION_SIZE := 14
 ## Loot rows.
@@ -136,7 +138,7 @@ func setup(source: ELSecondAdventureHud) -> void:
 	body.fit_content = true
 	body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	body.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	body.add_theme_font_override("normal_font", hud.face)
+	body.add_theme_font_override("normal_font", hud.face_bold)
 	body.add_theme_font_size_override("normal_font_size", TEXT_SIZE)
 	body.add_theme_color_override("default_color", TAN)
 	body.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.85))
@@ -215,6 +217,8 @@ func present(speech: Dictionary, state: ELAdventureSession) -> void:
 	var hero := actor if not actor.is_empty() and actor.get("type") == "hero" else {}
 	title.text = str(speech.get("title", "")) if not hero.is_empty() else hud.text("T_UNKNOWN_HERO_NAME")
 	if title.text.is_empty() and not hero.is_empty(): title.text = str(hero.get("name", ""))
+	# Speaker lines name the speaker with a trailing colon (recorded original footage).
+	if speaker_box and not title.text.is_empty() and not title.text.ends_with(":"): title.text += ":"
 	var face := UNKNOWN_FACE
 	if not hero.is_empty(): face = int(hud._art.resolve(hero).get("row", {}).get("Face", UNKNOWN_FACE))
 	portrait.texture = state.map.profile.portrait(face) if speaker_box else null
@@ -274,6 +278,7 @@ func layout() -> void:
 func _layout_text(design_width: float) -> void:
 	var origin := SPEAKER_TEXT if speaker_box else Vector2(MARGIN, MARGIN)
 	var text_width := WIDTH - MARGIN - origin.x
+	body.add_theme_font_override("normal_font", hud.face_bold)
 	body.position = origin
 	body.size = Vector2(text_width, 0)
 	body.custom_minimum_size = Vector2(text_width, 0)
@@ -304,6 +309,7 @@ func _layout_message(design_width: float) -> void:
 	portrait.visible = false
 	title.visible = false
 	var font: Font = hud.face
+	body.add_theme_font_override("normal_font", font)
 	var natural := font.get_multiline_string_size(body.text, HORIZONTAL_ALIGNMENT_CENTER, MESSAGE_WIDTH, MESSAGE_SIZE)
 	var text_width := clampf(ceilf(natural.x) + 2.0, 60.0, MESSAGE_WIDTH)
 	body.add_theme_font_size_override("normal_font_size", MESSAGE_SIZE)
@@ -328,6 +334,7 @@ func _layout_loot(design_width: float) -> void:
 	portrait.visible = false
 	title.visible = false
 	var font: Font = hud.face
+	body.add_theme_font_override("normal_font", font)
 	body.add_theme_font_size_override("normal_font_size", MESSAGE_SIZE)
 	body.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	# The original title has its own line break; nothing else wraps.
@@ -356,7 +363,7 @@ func _text_height(width: float, font_size: int) -> float:
 	if style == "text": body.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	body.size = Vector2(width, 0)
 	var measured := float(body.get_content_height())
-	var estimate := hud.face.get_multiline_string_size(body.text, body.horizontal_alignment, width, font_size).y
+	var estimate := body.get_theme_font("normal_font").get_multiline_string_size(body.text, body.horizontal_alignment, width, font_size).y
 	return ceilf(maxf(measured, estimate))
 
 func _draw_surface() -> void:

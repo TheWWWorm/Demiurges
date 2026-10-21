@@ -34,9 +34,45 @@ var decline: BaseButton
 var second_dialogue: ELSecondDialogueBox
 var route: MeshInstance3D
 var target := Vector3.ZERO
-var yaw := -0.4
-var pitch := 0.92
-var zoom := 42.0
+## First game: the original's perspective map camera, set up when a map
+## loads: the angle fixed at 45 degrees, the distance 25-50 starting at 50
+## (position = target - forward x distance), drawn with a pi/4 fov across a
+## 4:3 view (the map's projection overrides the camera object's own pi/3.5).
+## The standing rotation (map's west at the top) matches the original's
+## mission openings.
+const FIRST_FOV_4_3 := PI / 4.0
+const FIRST_YAW := PI * 0.5
+const FIRST_ZOOM := 50.0
+const FIRST_PITCH := PI / 4.0
+const FIRST_ZOOM_LIMITS := Vector2(25, 50)
+var yaw := FIRST_YAW
+var pitch := FIRST_PITCH
+var zoom := FIRST_ZOOM
+## Camera angle range (radians above the horizon); the first game's is fixed.
+var pitch_limits := Vector2(FIRST_PITCH, FIRST_PITCH)
+## Second game: the original's perspective map camera (camera object
+## defaults: fov pi/3.5 across a 4:3 view; position = target - forward x zoom),
+## at a standing distance and angle measured from original footage. While a
+## speaker box is up the original moves in to a closer, lower view and eases
+## back after it (an opening line framed at 15 / 0.70 rad, about 20 / 0.80
+## on the way back, standing at 22 / 0.92).
+const SECOND_FOV_4_3 := PI / 3.5
+const SECOND_ZOOM := 22.0
+const SECOND_YAW := 0.0
+const SECOND_PITCH := 0.92
+const SECOND_TEXT_ZOOM := 15.0
+const SECOND_TEXT_PITCH := 0.70
+## The standing distance and angle kept while a speaker box holds the close
+## view ({} otherwise), and the distance/angle the camera eases to (x < 0: none).
+var text_view: Dictionary = {}
+var view_goal := Vector2(-1, -1)
+## Scripted camera turns ease as in the original: each 64 ms tick moves the
+## view a sixth of the remaining angle, the shorter way round, and it settles
+## once that step is under 0.001 rad. INF when no turn is pending.
+const TURN_RATE := 1.0 / 6.0
+const TURN_TICK := 0.064
+var yaw_goal := INF
+var zoom_limits := Vector2(16, 100)
 var following := -1
 var dragging := false
 var error := ""
@@ -189,8 +225,20 @@ func build(profile: ELProfile, scenario: Dictionary, preferences: ELSettings, di
 	if not rings.setup(profile): rings.textures.clear()
 	camera = Camera3D.new()
 	add_child(camera)
-	camera.projection = Camera3D.PROJECTION_ORTHOGONAL
 	camera.far = 800.0
+	# Both games: perspective, the original's horizontal fov at 4:3 held as
+	# the vertical one so a wider window shows more at the sides.
+	camera.projection = Camera3D.PROJECTION_PERSPECTIVE
+	camera.keep_aspect = Camera3D.KEEP_HEIGHT
+	camera.fov = rad_to_deg(2.0 * atan(tan((SECOND_FOV_4_3 if profile.id == "el2" else FIRST_FOV_4_3) * 0.5) * 0.75))
+	camera.near = 1.0
+	zoom_limits = FIRST_ZOOM_LIMITS
+	if profile.id == "el2":
+		pitch_limits = Vector2(0.5, 1.35)
+		zoom = SECOND_ZOOM
+		yaw = SECOND_YAW
+		pitch = SECOND_PITCH
+		zoom_limits = Vector2(8, 100)
 	camera.current = true
 	var hero := state.object(_hero_id())
 	target = ELAdventureScene.world_position(hero.get("x", map.width * 0.5), hero.get("y", map.height * 0.5))
@@ -215,9 +263,12 @@ func build(profile: ELProfile, scenario: Dictionary, preferences: ELSettings, di
 	add_child(route)
 	if not restored.is_empty():
 		var saved: Dictionary = restored.camera
-		yaw = float(saved.get("yaw", yaw))
-		pitch = clampf(float(saved.get("pitch", pitch)), 0.5, 1.35)
-		zoom = clampf(float(saved.get("zoom", zoom)), 16, 100)
+		# A view saved for the other projection (an earlier orthographic map)
+		# keeps the standing view instead.
+		if bool(saved.get("perspective", false)) == (camera.projection == Camera3D.PROJECTION_PERSPECTIVE):
+			yaw = float(saved.get("yaw", yaw))
+			pitch = clampf(float(saved.get("pitch", pitch)), pitch_limits.x, pitch_limits.y)
+			zoom = clampf(float(saved.get("zoom", zoom)), zoom_limits.x, zoom_limits.y)
 		following = int(saved.get("following", following))
 		selected_hero = int(saved.get("selected_hero", state.main_hero))
 		_refresh_roster()
@@ -241,6 +292,8 @@ func build(profile: ELProfile, scenario: Dictionary, preferences: ELSettings, di
 		# The chosen name and blazon become the human player's (campaign and Single).
 		if profile.id == "el1" and scenario.get("player_name") is String:
 			ELPlayerProfile.apply(state, str(scenario.player_name), int(scenario.get("logo", -1)), int(scenario.get("colour", -1)))
+			# The blazons were placed with the map's own picture.
+			if presentation != null: presentation.sync()
 		if profile.id == "el2" and scenario.get(ELSecondCampaign.KEY) is Dictionary:
 			var problem := ELSecondCampaign.start_chapter(state, scenario[ELSecondCampaign.KEY])
 			if not problem.is_empty(): return _fail(problem)
@@ -275,6 +328,20 @@ func _process(delta: float) -> void:
 		error = director.error
 		notice.text = error
 	_update_edge(delta)
+	if yaw_goal != INF:
+		var remaining := wrapf(yaw_goal - yaw, -PI, PI)
+		if absf(remaining) * TURN_RATE < 0.001:
+			yaw = yaw_goal
+			yaw_goal = INF
+		else: yaw += remaining * (1.0 - pow(1.0 - TURN_RATE, delta / TURN_TICK))
+	if view_goal.x > 0:
+		var ease := minf(1, delta * 1.0)
+		zoom = lerpf(zoom, view_goal.x, ease)
+		pitch = lerpf(pitch, view_goal.y, ease)
+		if absf(zoom - view_goal.x) < 0.02 and absf(pitch - view_goal.y) < 0.002:
+			zoom = view_goal.x
+			pitch = view_goal.y
+			view_goal = Vector2(-1, -1)
 	if following >= 0 and world.actors.has(following):
 		target = target.lerp(world.actors[following].position, minf(1, delta * 6.0))
 	elif not state.camera_locked:
@@ -359,7 +426,8 @@ func _update_edge(delta: float) -> void:
 		target += Vector3(_edge_pan.x, 0, _edge_pan.y).rotated(Vector3.UP, yaw) * delta
 	# The same turn as dragging towards that edge.
 	yaw -= _edge_turn * delta
-	pitch = clampf(pitch + _edge_tilt * delta, 0.5, 1.35)
+	if turn_target != 0.0: yaw_goal = INF
+	pitch = clampf(pitch + _edge_tilt * delta, pitch_limits.x, pitch_limits.y)
 
 ## Held arrow keys on the camera tick (original key-down/key-up handlers).
 ## First game: arrows pan 2*KeyboardScroll units a tick; with Ctrl, Left/Right
@@ -701,11 +769,18 @@ func _unhandled_input(event: InputEvent) -> void:
 		elif event.button_index == MOUSE_BUTTON_RIGHT:
 			dragging = event.pressed and not state.camera_locked
 			# First game: a right click on an own hero cancels its order
-			# (TUT_HERO_CLICK); a drag only turns the camera.
-			if event.pressed: _right_origin = event.position
-			elif hud != null and event.position.distance_to(_right_origin) <= ELSecondMapTooltips.DRAG_THRESHOLD: _cancel_order_at(event.position)
+			# (TUT_HERO_CLICK); a drag only turns the camera. The map info
+			# panel shows only while the right button is held (original
+			# capture), not on hover.
+			if event.pressed:
+				_right_origin = event.position
+				if hud != null: hover(event.position)
+			else:
+				if hud != null: hud.show_tooltip(-1, {}, Vector2.ZERO)
+				if hud != null and event.position.distance_to(_right_origin) <= ELSecondMapTooltips.DRAG_THRESHOLD: _cancel_order_at(event.position)
 		elif event.pressed and event.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN]:
-			zoom = clampf(zoom * (0.9 if event.button_index == MOUSE_BUTTON_WHEEL_UP else 1.1), 16, 100)
+			view_goal = Vector2(-1, -1)
+			zoom = clampf(zoom * (0.9 if event.button_index == MOUSE_BUTTON_WHEEL_UP else 1.1), zoom_limits.x, zoom_limits.y)
 			if second_hud != null:
 				map_tip.clear()
 				second_hud.hide_map_tooltip()
@@ -723,8 +798,14 @@ func _unhandled_input(event: InputEvent) -> void:
 		var turn := float(settings.values.get("mouse_rotation", 1.0)) if settings != null else 1.0
 		if settings != null and bool(settings.values.get("invert_rotation", false)): turn = -turn
 		yaw -= event.relative.x * 0.006 * turn
-		pitch = clampf(pitch + event.relative.y * 0.004, 0.5, 1.35)
-	elif event is InputEventMouseMotion and hud != null: hover(event.position)
+		yaw_goal = INF
+		view_goal = Vector2(-1, -1)
+		pitch = clampf(pitch + event.relative.y * 0.004, pitch_limits.x, pitch_limits.y)
+		# A held right button keeps the info panel at the cursor until it drags.
+		if hud != null:
+			if event.position.distance_to(_right_origin) <= ELSecondMapTooltips.DRAG_THRESHOLD: hover(event.position)
+			else: hud.show_tooltip(-1, {}, Vector2.ZERO)
+	elif event is InputEventMouseMotion and hud != null and hud.tooltip.visible: hud.show_tooltip(-1, {}, Vector2.ZERO)
 
 ## Second game: every cursor move is seen here, before the panels take it;
 ## _unhandled_input marks the moves that reached the map. A right release
@@ -942,12 +1023,15 @@ func touch_pan(from: Vector2, to: Vector2) -> void:
 func touch_orbit(turn: float, tilt: float) -> void:
 	if state.camera_locked: return
 	yaw += turn
-	pitch = clampf(pitch + tilt, 0.5, 1.35)
+	if turn != 0.0: yaw_goal = INF
+	view_goal = Vector2(-1, -1)
+	pitch = clampf(pitch + tilt, pitch_limits.x, pitch_limits.y)
 	_hide_touch_tip()
 	_update_camera()
 
 func touch_zoom(factor: float) -> void:
-	zoom = clampf(zoom / factor, 16, 100)
+	view_goal = Vector2(-1, -1)
+	zoom = clampf(zoom / factor, zoom_limits.x, zoom_limits.y)
 	_hide_touch_tip()
 	_update_camera()
 
@@ -963,10 +1047,13 @@ func _hide_touch_tip() -> void:
 func _update_camera() -> void:
 	if camera == null: return
 	camera.size = zoom
-	camera.position = target + Vector3(sin(yaw) * cos(pitch), sin(pitch), cos(yaw) * cos(pitch)) * 80.0
+	# Orthographic: far back, `zoom` units tall; perspective: `zoom` away.
+	var reach := zoom if camera.projection == Camera3D.PROJECTION_PERSPECTIVE else 80.0
+	camera.position = target + Vector3(sin(yaw) * cos(pitch), sin(pitch), cos(yaw) * cos(pitch)) * reach
 	camera.look_at(target)
 	state.camera_zoom = zoom
 	state.camera_rotation = rad_to_deg(yaw)
+	if hud != null: hud.set_view(target, yaw)
 
 func _present(data: Dictionary) -> void:
 	match data.kind:
@@ -982,6 +1069,9 @@ func _present(data: Dictionary) -> void:
 		"orient": world.orient_actor(data.id, data.direction)
 		"route":
 			if not director.strategy.is_empty(): following = data.id
+			# Second game: the view goes with the main hero on a scripted walk,
+			# as after the e2mission11 gate greeting (original captures).
+			elif state.map.profile.id == "el2" and int(data.id) == state.main_hero and director.movement.get("queued", false) and not data.path.is_empty(): following = data.id
 			_draw_route(data.path, data.id)
 		"strategy_phase":
 			if data.phase == "planning":
@@ -992,6 +1082,9 @@ func _present(data: Dictionary) -> void:
 			_refresh_hero_info()
 		"dialogue":
 			var speech: Dictionary = data.dialogue
+			if state.map.profile.id == "el2" and camera.projection == Camera3D.PROJECTION_PERSPECTIVE:
+				if text_view.is_empty(): text_view = {"zoom": zoom if view_goal.x < 0 else view_goal.x, "pitch": pitch if view_goal.x < 0 else view_goal.y}
+				view_goal = Vector2(SECOND_TEXT_ZOOM, SECOND_TEXT_PITCH)
 			if second_dialogue != null:
 				second_dialogue.present(speech, state)
 				accept = second_dialogue.accept
@@ -1012,6 +1105,11 @@ func _present(data: Dictionary) -> void:
 			audio.speak(speech.text_id)
 			accept.grab_focus()
 		"dialogue_closed":
+			if not text_view.is_empty():
+				view_goal = Vector2(float(text_view.zoom), float(text_view.pitch))
+				text_view = {}
+				# Lines answered before the view moved leave nothing to ease back.
+				if absf(zoom - view_goal.x) < 0.01 and absf(pitch - view_goal.y) < 0.001: view_goal = Vector2(-1, -1)
 			dialogue_panel.hide()
 			if second_dialogue != null: second_dialogue.hide()
 			_dock_dialogue()
@@ -1022,16 +1120,20 @@ func _present(data: Dictionary) -> void:
 			following = -1
 			target = ELAdventureScene.world_position(float(data.arguments[0]), float(data.arguments[1]))
 		"CameraAttach": following = int(data.arguments[0]) if data.arguments[0] != null else -1
-		"CameraRotate": yaw = deg_to_rad(float(data.arguments[0]))
+		"CameraRotate": yaw_goal = deg_to_rad(float(data.arguments[0]))
 		"CameraRotateToObject", "CameraRotateToPos":
-			var point := Vector3.ZERO
+			# The angle runs from the main hero's cell to the object or cell,
+			# not from the camera's point (: ExGetMainHeroID
+			# position, then -atan2(dx, dy); a missing hero reads as (-1,-1)).
+			var point := Vector2.ZERO
 			if data.kind == "CameraRotateToObject":
 				var item := state.object(data.arguments[0])
 				if item.is_empty(): return
-				point = ELAdventureScene.world_position(item.x, item.y)
-			else: point = ELAdventureScene.world_position(float(data.arguments[0]), float(data.arguments[1]))
-			var direction := point - target
-			if direction.length_squared() > 0.1: yaw = atan2(-direction.x, -direction.z)
+				point = Vector2(float(item.x), float(item.y))
+			else: point = Vector2(float(data.arguments[0]), float(data.arguments[1]))
+			var hero := state.object(state.main_hero)
+			var from := Vector2(float(hero.get("x", -1)), float(hero.get("y", -1)))
+			yaw_goal = atan2(-(point.x - from.x), point.y - from.y)
 		"encounter":
 			if building_message != null:
 				# The building's message is read before the battle it announces.
@@ -1133,11 +1235,16 @@ func _state_event(data: Dictionary) -> void:
 		"ExCameraScrollToPos":
 			following = -1
 			target = ELAdventureScene.world_position(float(data.arguments[0]), float(data.arguments[1]))
-		"ExCameraRotate": yaw = deg_to_rad(float(data.arguments[0]))
-		# Script cameras: the original zoom units match the remake's; pitch is degrees
-		# below the horizon (negative in scripts). Both are applied at once.
-		"ExCameraZoom": zoom = clampf(float(data.arguments[0]), 16, 100)
-		"ExCameraPitch": pitch = clampf(deg_to_rad(absf(float(data.arguments[0]))), 0.5, 1.35)
+		"ExCameraRotate": yaw_goal = deg_to_rad(float(data.arguments[0]))
+		# Script cameras: the original zoom units match the remake's (the second
+		# game's camera distance); pitch is degrees below the horizon (negative
+		# in scripts). Both are applied at once.
+		"ExCameraZoom":
+			zoom = clampf(float(data.arguments[0]), zoom_limits.x, zoom_limits.y)
+			_set_standing(zoom, -1.0)
+		"ExCameraPitch":
+			pitch = clampf(deg_to_rad(absf(float(data.arguments[0]))), pitch_limits.x, pitch_limits.y)
+			_set_standing(-1.0, pitch)
 		"mission_finished":
 			_remark(data.get("text", "Mission complete" if data.outcome == "win" else "Mission lost"))
 			hall_record = str(data.get("hall_of_fame", ""))
@@ -2247,11 +2354,14 @@ func _build_second_controls() -> void:
 	stats.add_child(hero_info)
 	# Name, level, health and day are on AdvPanelLB/RB, experience in the level
 	# tooltip; travel points have no original readout: the box is helper-only.
-	# Next day and Skills stay: no original control reaches them.
+	# Next day and Skills have no original control (the day rolls when the
+	# main hero's travel runs out; the level-up dialog opens by itself), so
+	# they are remake helpers too; K still opens the skills.
 	helper_parts.append(stats)
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 4)
 	second_hud.remake_strip.add_child(row)
+	helper_parts.append(row)
 	# No shortcut: N belongs to the Notebook in the second game.
 	# The never-created AdvPanelEndTurnBtn's own caption and tooltip.
 	var next_day := _compact_button(_text_or("CtrlAdvPanelEndTurnBtn", "Next day"), compact)
@@ -2444,8 +2554,19 @@ static func _style() -> StyleBoxFlat:
 	style.content_margin_bottom = 12
 	return style
 
+## A script's distance or angle outlasts a speaker box's close view.
+func _set_standing(distance: float, angle: float) -> void:
+	if not text_view.is_empty():
+		if distance > 0: text_view.zoom = distance
+		if angle > 0: text_view.pitch = angle
+	elif view_goal.x > 0: view_goal = Vector2(distance if distance > 0 else view_goal.x, angle if angle > 0 else view_goal.y)
+
 func camera_state() -> Dictionary:
-	return {"yaw": yaw, "pitch": pitch, "zoom": zoom, "target": [target.x, target.y, target.z], "following": following, "selected_hero": _hero_id(), "voice_position": audio.voice.get_playback_position() if audio != null and audio.voice.playing else 0.0}
+	# The standing view is saved, not a speaker box's close view.
+	var standing := Vector2(zoom, pitch)
+	if not text_view.is_empty(): standing = Vector2(float(text_view.zoom), float(text_view.pitch))
+	elif view_goal.x > 0: standing = view_goal
+	return {"yaw": yaw, "pitch": standing.y, "zoom": standing.x, "perspective": camera != null and camera.projection == Camera3D.PROJECTION_PERSPECTIVE, "target": [target.x, target.y, target.z], "following": following, "selected_hero": _hero_id(), "voice_position": audio.voice.get_playback_position() if audio != null and audio.voice.playing else 0.0}
 
 func set_suspended(value: bool) -> void:
 	# A message shown while the battle was open keeps the map paused.

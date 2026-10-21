@@ -15,6 +15,7 @@ window/stretch/aspect="expand"
 window/handheld/orientation=6
 window/size/min_width=800
 window/size/min_height=600
+mouse_cursor/tooltip_position_offset=Vector2(66, -14)
 
 [rendering]
 renderer/rendering_method="gl_compatibility"

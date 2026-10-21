@@ -320,6 +320,46 @@ static func _string(value: Variant) -> String:
 	if typeof(value) in [TYPE_INT, TYPE_FLOAT]: return str(int(value)) if is_finite(float(value)) and float(int(value)) == float(value) else str(value)
 	return str(value)
 
+## Lua's C-style format: each directive takes the next argument, unused
+## arguments are ignored and %% is a literal percent sign.
+func _format(pattern: String, values: Array) -> String:
+	var out := ""
+	var i := 0
+	var next := 0
+	while i < pattern.length():
+		var c := pattern[i]
+		if c != "%" or i + 1 >= pattern.length():
+			out += c
+			i += 1
+			continue
+		var j := i + 1
+		while j < pattern.length() and "-+ #0123456789.".contains(pattern[j]): j += 1
+		if j >= pattern.length():
+			out += pattern.substr(i)
+			break
+		var kind := pattern[j]
+		var flags := pattern.substr(i + 1, j - i - 1)
+		i = j + 1
+		if kind == "%":
+			out += "%"
+			continue
+		var value: Variant = values[next] if next < values.size() else null
+		next += 1
+		match kind:
+			"d", "i", "u", "c", "x", "X", "o":
+				var n := int(_number(value))
+				if kind == "c": out += char(n)
+				else: out += ("%" + flags + ("d" if kind in ["i", "u"] else kind)) % n
+			"f", "e", "E", "g", "G":
+				var x := _number(value)
+				if kind == "f": out += ("%" + flags + "f") % x
+				else:
+					var digits := int(flags.get_slice(".", 1)) if flags.contains(".") else 6
+					out += String.num(x, maxi(digits, 0)) if kind in ["g", "G"] else String.num_scientific(x)
+			"q": out += "\"" + _string(value).c_escape() + "\""
+			_: out += ("%" + flags + "s") % _string(value)
+	return out
+
 func _builtin(name: String, args: Array) -> Array:
 	var first: Variant = args[0] if not args.is_empty() else null
 	match name:
@@ -381,7 +421,7 @@ func _builtin(name: String, args: Array) -> Array:
 				_fail("Empty random interval.")
 				return []
 			return [float(low + floori(value * (high - low + 1)))]
-		"format": return [_string(first) % args.slice(1)]
+		"format": return [_format(_string(first), args.slice(1))]
 		"strlen": return [float(_string(first).length())]
 		"strlower": return [_string(first).to_lower()]
 		"strupper": return [_string(first).to_upper()]

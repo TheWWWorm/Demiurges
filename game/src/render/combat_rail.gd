@@ -22,6 +22,12 @@ const ENEMY_COUNTS := [Vector2(704, 500), Vector2(704, 528), Vector2(704, 556), 
 ## Bold Arial in a 17 px cell (about 15 px em), antialiased, with the digits'
 ## top 10 px above the centre.
 const COUNT_SIZE := 15
+## Digit centres of the hero values (life, ether, channels) in the boxes
+## under each portrait, measured on the original's 1024x768 battle screen: the
+## same bold gold digits as the counts, tops at y 747 of 768 (579 of 600). The
+## opponent's column follows the right edge (x 720 of 800).
+const OWN_STATS := [Vector2(15.5, 589), Vector2(40.5, 589), Vector2(65.5, 589)]
+const ENEMY_STATS := [Vector2(734.5, 589), Vector2(759, 589), Vector2(784, 589)]
 const SCROLL_STEP := 15
 ## 3 px per frame of the original's 60 Hz update.
 const SCROLL_SPEED := 180.0
@@ -41,6 +47,8 @@ var _font: SystemFont
 var _profile: ELProfile
 ## Per side: [graveyard, enchantments, hand, artifacts]; side 0 is on the left.
 var counts: Array = [[0, 0, 0, 0], [0, 0, 0, 0]]
+## Per side: [life, ether, channels] under the hero portraits.
+var stats: Array = [[], []]
 var tabs: Dictionary = {}
 var enemy_tips: Array[Control] = []
 var _art: Dictionary = {}
@@ -163,7 +171,7 @@ func layout() -> void:
 		enemy_tips[i].size = rect.size
 	if strip != null:
 		strip.position = Vector2(ELCombatStrip.CLIP.position.x, ELCombatStrip.CLIP.position.y + size.y - 600.0)
-		strip.size = Vector2(ELCombatStrip.CLIP.size.x + maxf(0.0, size.x - 800.0), ELCombatStrip.CLIP.size.y)
+		strip.size = Vector2(ELCombatStrip.CLIP.size.x + maxf(0.0, size.x - _base()), ELCombatStrip.CLIP.size.y)
 		strip.layout()
 	for arrow in spell_arrows:
 		var rect := _place(arrow.get_meta("rect"))
@@ -172,9 +180,13 @@ func layout() -> void:
 	queue_redraw()
 
 ## The card rail's place between its arrows: x 151 to 467 of the original
-## layout, its right end following the window edge.
+## layout (both widths), its right end following the window edge.
 func hand_rect() -> Rect2:
-	return Rect2(151, size.y - 56, maxf(0.0, size.x - 800.0) + 467 - 151, 54)
+	return Rect2(151, size.y - 56, maxf(0.0, size.x - _base()) + 467 - 151, 54)
+
+## 1024 when the panel uses the original's wide layout, else 800.
+func _base() -> float:
+	return ELHudFrame.base_width(_profile, size.x)
 
 func _press_spell_arrow(direction: int) -> void:
 	_step_hand(direction)
@@ -223,15 +235,20 @@ func _process(delta: float) -> void:
 	spell_arrows[0].disabled = current <= 10.0
 	spell_arrows[1].disabled = current >= limit - 0.5
 
+## The opponent's column (x 680 on) is among the original's ShiftX 224
+## controls; the arrows are not.
 func _place(rect: Rect2) -> Rect2:
-	rect.position.y += size.y - 600.0
-	if rect.position.x >= 374: rect.position.x += size.x - 800.0
-	return rect
+	return ELHudFrame.place(rect, size, _base(), rect.position.x >= 680)
 
 func set_counts(left: Array, right: Array) -> void:
 	if counts == [left, right]: return
 	counts = [left.duplicate(), right.duplicate()]
 	_update_tips()
+	queue_redraw()
+
+func set_stats(left: Array, right: Array) -> void:
+	if stats == [left, right]: return
+	stats = [left.duplicate(), right.duplicate()]
 	queue_redraw()
 
 func _update_tips() -> void:
@@ -252,6 +269,10 @@ func _draw() -> void:
 		var pressed := 1.0 if ROWS[i] in chosen else 0.0
 		_number(str(counts[0][i]), _place(Rect2(OWN_COUNTS[i] + Vector2(pressed, pressed), Vector2.ZERO)).position)
 		_number(str(counts[1][i]), _place(Rect2(ENEMY_COUNTS[i], Vector2.ZERO)).position)
+	for i in mini(stats[0].size(), OWN_STATS.size()):
+		_number(str(stats[0][i]), _place(Rect2(OWN_STATS[i], Vector2.ZERO)).position)
+	for i in mini(stats[1].size(), ENEMY_STATS.size()):
+		_number(str(stats[1][i]), _place(Rect2(ENEMY_STATS[i], Vector2.ZERO)).position)
 
 ## A count centred on x with the digits' top 10 px above y; no outline.
 func _number(text: String, at: Vector2) -> void:

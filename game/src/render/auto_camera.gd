@@ -10,16 +10,20 @@ extends RefCounted
 ## the close-ups a short return track brings back the player's own view.
 ##
 ## The tracks are authored for the side standing at +X and the other side sees
-## them turned half round. Hero, victory, tremor and multi-target tracks play
+## them turned half round. Hero, victory and multi-target tracks play
 ## at their authored world positions (the battlefield uses the original slots);
 ## creature and fight tracks are relative and follow the figure they frame.
 
 const RATE := 30.0
 const MAGIC := 0x1567fbca
 ## The authored default view's field of view and the remake's own view (degrees,
-## vertical); other track angles keep their ratio of tangents to these.
+## vertical); other track angles keep their ratio of tangents to these. The
+## second game's cameras take the authored angle as the horizontal one of a
+## 4:3 screen (the map camera does natively; the original's standing battle
+## view fits it), which is 34.5 degrees vertically.
 const TRACK_FOV := 0.785398
 const VIEW_FOV := 38.0
+const SECOND_VIEW_FOV := 34.5
 ## Shipped CombatCamera.ini values, used when the installation lacks the file.
 const DEFAULT_ODDS := {
 	"summon": {"camerasideselect": 50.0, "playfullscene": 5.0, "playhero": 80.0, "monstertracktime": 4.0},
@@ -37,11 +41,17 @@ var clock := 0.0
 ## a fixed pattern before the odds apply.
 var counts := {"summon": 0, "sorcery": 0, "enchantment": 0}
 var _tracks: Dictionary = {}
+## Creature kinds already summoned under the camera this battle.
+var seen: Dictionary = {}
+
+## This edition's view angle (vertical degrees).
+var view_angle := VIEW_FOV
 
 func _init(source: ELProfile = null, seed := 0) -> void:
 	profile = source
 	rng.seed = seed
 	if source != null: odds = read_odds(source.file("CombatCamera.ini"))
+	if source != null and source.id == "el2": view_angle = SECOND_VIEW_FOV
 
 func active() -> bool:
 	return not shots.is_empty()
@@ -124,8 +134,13 @@ func default_view(index := 0) -> Dictionary:
 	var offset := position - target
 	return {"target": target, "yaw": atan2(offset.x, offset.z), "pitch": asin(offset.y / offset.length()), "distance": offset.length()}
 
-static func view_fov(track_fov: float) -> float:
-	return rad_to_deg(2.0 * atan(tan(track_fov * 0.5) * tan(deg_to_rad(VIEW_FOV) * 0.5) / tan(TRACK_FOV * 0.5)))
+static func view_fov(track_fov: float, angle := VIEW_FOV) -> float:
+	return rad_to_deg(2.0 * atan(tan(track_fov * 0.5) * tan(deg_to_rad(angle) * 0.5) / tan(TRACK_FOV * 0.5)))
+
+## The player's standing battle view as an orbit: the authored Default1 in
+## both games (the second game's original frames its forest arena that way).
+func standing_view() -> Dictionary:
+	return default_view()
 
 ## Advances the playing shot. Returns {position, rotation, fov, focus} for a
 ## close-up, {orbit: true, fov} while returning to the player's view, and {}
@@ -146,7 +161,7 @@ func step(delta: float) -> Dictionary:
 	var j := mini(i + 1, count - 1)
 	var f := at - i
 	clock += delta
-	var fov := view_fov(lerpf(shot.fovs[i], shot.fovs[j], f))
+	var fov := view_fov(lerpf(shot.fovs[i], shot.fovs[j], f), view_angle)
 	if bool(shot.orbit): return {"orbit": true, "fov": fov}
 	return {"position": shot.positions[i].lerp(shot.positions[j], f), "rotation": shot.rotations[i].slerp(shot.rotations[j], f), "fov": fov, "focus": shot.focus, "anchor": shot.get("anchor", shot.focus), "with": shot.get("with", [])}
 
@@ -211,45 +226,131 @@ func _queue(list: Array[Dictionary], back := true) -> bool:
 	return true
 
 ## A hero's spell. kind: "summon", "sorcery" or "enchantment"; hero: the
-## caster's figure position; targets: [{at: Vector3, side: int}] of the
-## creatures it affects (the summoned creature for a summon). `local` is the
-## player's own side: the first game shows summoning only for that side.
-func cast(kind: String, caster: int, hero: Vector3, targets: Array, local: bool, dynamics: int) -> bool:
+## caster's figure position; targets: [{at: Vector3, side: int, slot: int,
+## hero: bool}] of the figures it affects (the summoned creature for a summon;
+## `slot` is a creature's home slot). `local` is the player's own side: the
+## first game shows summoning only for that side.
+##
+## Both games choose alike: the first spell of a kind shows the caster and
+## its target, the second only the target, later ones roll PlayHero/PlayMonster. The overview OwnerMonstersAll_<view> plays
+## instead of the close-ups when the PlayFullScene roll succeeds (summons from
+## the third on; enchantments from the second; sorcery once two enchantment
+## shots have played: the original tests the enchantment counter there), when
+## neither close-up was chosen, when the targets stand on both sides (both
+## heroes, or creatures of both sides), or when a creature target stands in
+## home slots 4-5. Several targets: _3 when one stands in slots 2-3 or 6+,
+## else _2. A summoned creature in slots 4-5 gets no close-up; from the third
+## summon, neither does a kind already summoned this battle while a caster
+## shot or overview plays.
+##
+## `timing` is the caster's animation table: the caster shot and the overview
+## are stretched over its casting gesture (summon and enchantment: the summon
+## clip's length; sorcery: the instant clip's release frame).
+##
+## Sorcery that passes its effect's length (`length` seconds, plus `extra`)
+## shows no caster shot and holds the target shot length + extra + 1 s;
+## `forced` (Comet's lethal hit on a hero) always shows the target shot.
+func cast(kind: String, caster: int, hero: Vector3, targets: Array, local: bool, dynamics: int, timing := {}, length := -1.0, extra := 0.0, forced := false) -> bool:
 	if not counts.has(kind) or (kind == "summon" and not local): return false
 	if not _roll(dynamics): return false
 	var n: int = counts[kind]
 	counts[kind] = n + 1
+	var owner := caster if local else 1 - caster
+	var flags := _target_flags(caster, targets)
+	var gesture := cast_seconds(timing, kind)
 	var list: Array[Dictionary] = []
 	if kind == "summon":
 		var variant := (n & 1) + 1
-		if n >= 2 and _roll(_odd(kind, "playfullscene")): return false
-		if n == 0 or (n >= 2 and _roll(_odd(kind, "playhero"))):
-			list.append(placed("SummonOwnerCaster%d_1.cmf" % variant, hero, caster))
-		if targets.size() == 1:
+		var overview := n >= 2 and _roll(_odd(kind, "playfullscene"))
+		if overview:
+			list.append(placed("OwnerMonstersAll_1.cmf", Vector3.ZERO, owner, false, gesture))
+		elif n == 0 or (n >= 2 and _roll(_odd(kind, "playhero"))):
+			list.append(placed("SummonOwnerCaster%d_1.cmf" % variant, hero, caster, false, gesture))
+		var new_kind := false
+		for target: Dictionary in targets:
+			var key := String(target.get("card", ""))
+			if not seen.has(key):
+				new_kind = true
+				seen[key] = true
+		# From the third summon a creature kind already seen this battle gets
+		# no close-up while the caster shot or overview plays; the overview
+		# then runs on by itself.
+		if n >= 2 and not new_kind and not list.is_empty():
+			return _queue(list, not overview)
+		var stretch := _odd(kind, "monstertracktime")
+		if targets.is_empty() or flags.slots & 4: pass
+		elif flags.slots & 0x100:
 			var pick := 3 if rng.randi() % 3 == 0 else variant
-			list.append(placed("SummonOwnerMonster%d_1.cmf" % pick, targets[0].at, caster, true, _odd(kind, "monstertracktime")))
+			list.append(placed("SummonOwnerMonster%d_1.cmf" % pick, targets[0].at, caster, true, stretch))
+		else:
+			list.append(placed(("SummonOwnerMonster%d_3.cmf" if flags.slots & 2 else "SummonOwnerMonster%d_2.cmf") % variant, _middle(targets), caster, false, stretch))
 		return _queue(list)
 	var hero_shot := n == 0 or (n >= 2 and _roll(_odd(kind, "playhero")))
-	var monster_shot := n < 2 or _roll(_odd(kind, "playmonster"))
-	if targets.is_empty():
+	if kind == "sorcery" and length > 0.0: hero_shot = false
+	var monster_shot := n < 2 or (kind == "sorcery" and forced) or _roll(_odd(kind, "playmonster"))
+	if flags.sides & 0xe == 0:
 		hero_shot = hero_shot or monster_shot
 		monster_shot = false
-	if (not hero_shot and not monster_shot) or (targets.size() > 1 and _roll(_odd(kind, "playfullscene"))): return false
+	var gate: int = counts.enchantment
+	var overview := gate > 1 and _roll(_odd(kind, "playfullscene"))
+	if (not hero_shot and not monster_shot) or flags.sides & 0x30 or flags.slots & 4: overview = true
+	if overview:
+		return _queue([placed("OwnerMonstersAll_1.cmf", Vector3.ZERO, owner, false, gesture)], false)
 	var variant := ((n + 1) & 1) + 1
-	var stretch := _odd(kind, "monstertracktime") if kind == "enchantment" else -1.0
+	var stretch := _odd(kind, "monstertracktime") if kind == "enchantment" else (length + extra + 1.0 if length > 0.0 else -1.0)
 	if hero_shot:
-		var caster_shot := placed(("InstantOwner%d_1.cmf" if kind == "sorcery" else "EnchantmentOwnerCaster%d_1.cmf") % variant, hero, caster)
+		var caster_shot := placed(("InstantOwner%d_1.cmf" if kind == "sorcery" else "EnchantmentOwnerCaster%d_1.cmf") % variant, hero, caster, false, gesture)
 		# The spell's single target, when the caster's shot happens to show it.
 		if not caster_shot.is_empty() and targets.size() == 1: caster_shot["with"] = [targets[0].at]
 		list.append(caster_shot)
-	if monster_shot and targets.size() == 1:
-		if kind == "sorcery": list.append(placed("InstantEnemyMonsters%d_1.cmf" % variant, targets[0].at, caster, true))
-		else: list.append(placed("EnchantmentOwnerMonster%d_1.cmf" % variant, targets[0].at, int(targets[0].side), true, stretch))
+	# The target shot faces the targets' side: sorcery tracks look at enemy
+	# creatures and turn round for the caster's own, enchantment tracks look
+	# at the caster's own and turn round for enemies.
+	var enemy: bool = int(flags.sides) & 0xa != 0
+	var facing: int = (caster if enemy else 1 - caster) if kind == "sorcery" else (1 - caster if enemy else caster)
+	if monster_shot and flags.slots & 0x100:
+		list.append(placed(("InstantEnemyMonsters%d_1.cmf" if kind == "sorcery" else "EnchantmentOwnerMonster%d_1.cmf") % variant, targets[0].at, facing, true, stretch))
 	elif monster_shot:
-		var middle := Vector3.ZERO
-		for target: Dictionary in targets: middle += target.at
-		list.append(placed(("InstantEnemyMonsters%d_2.cmf" if kind == "sorcery" else "SummonOwnerMonster%d_2.cmf") % variant, middle / targets.size(), caster, false, stretch))
+		var name := ("InstantEnemyMonsters%d_%d.cmf" if kind == "sorcery" else "SummonOwnerMonster%d_%d.cmf") % [variant, 3 if flags.slots & 2 else 2]
+		list.append(placed(name, _middle(targets), facing, false, stretch))
 	return _queue(list)
+
+## Seconds of the caster's gesture that the caster shot and overview last
+## (-1: the track's own length): for summons and enchantments the frame count
+## of the summon clip (else the instant, else the attack clip); for sorcery the
+## release frame of the instant clip (else the attack clip).
+static func cast_seconds(timing: Dictionary, kind: String) -> float:
+	var order := ["usummon", "uinstant", "uattack"] if kind != "sorcery" else ["uinstant", "uattack"]
+	for clip: String in order:
+		if timing.has(clip):
+			var frames := int(timing[clip].get("frames" if kind != "sorcery" else "mark", 0))
+			return frames / 30.0 if frames > 0 else -1.0
+	return -1.0
+
+## The original's target flags. sides: 1 own hero, 2 other hero, 4 own creature, 8 other
+## creature, 0x10 both heroes, 0x20 creatures of both sides. slots (creatures
+## only): 1 home slots 0-1, 2 slots 2-3 or 6+, 4 slots 4-5; 0x100 exactly one
+## target of any kind.
+static func _target_flags(caster: int, targets: Array) -> Dictionary:
+	var sides := 0
+	var slots := 0
+	for target: Dictionary in targets:
+		var own := int(target.get("side", caster)) == caster
+		if target.get("hero", false):
+			sides |= 1 if own else 2
+			continue
+		sides |= 4 if own else 8
+		var slot := int(target.get("slot", 0))
+		slots |= 1 if slot < 2 else (2 if slot < 4 or slot > 5 else 4)
+	if sides & 3 == 3: sides |= 0x10
+	if sides & 0xc == 0xc: sides |= 0x20
+	if targets.size() == 1: slots |= 0x100
+	return {"sides": sides, "slots": slots}
+
+static func _middle(targets: Array) -> Vector3:
+	var middle := Vector3.ZERO
+	for target: Dictionary in targets: middle += target.at
+	return middle / targets.size()
 
 ## The first blow of a fight: a close-up beside the middle of the fighting
 ## creatures, from the attacking side; "Left"/"Right" by where the fight is.
@@ -280,14 +381,6 @@ func attack_own(side: int, middle: Vector3, dynamics: int, slots: Array[int] = [
 	elif flags & 2: name = "AttackOwnMonsters%d_2.cmf"
 	var variant := 2 if _roll(100.0 - _odd("combat", "camerasideselect")) else 1
 	return _queue([placed(name % variant, middle, side, true)])
-
-## The original camera archive contains a dedicated, short Tremor1.CMF
-## track (16 keys at 30 fps). Anchor its authored motion on the arena
-## centre instead of substituting the ordinary hero/monster sorcery shots.
-## The edition-specific cast dispatcher controls when this track is selected.
-func tremor(side: int, dynamics: int) -> bool:
-	if not _roll(dynamics): return false
-	return _queue([placed("Tremor1.cmf", Vector3.ZERO, side)])
 
 ## The winner's camera; it keeps its last frame until the battle closes or the
 ## player moves the view.

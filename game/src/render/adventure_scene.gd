@@ -47,6 +47,18 @@ var blobs: MultiMeshInstance3D
 var _blob_slots: Dictionary = {}
 const BLOB_ALPHA := 128.0 / 255.0
 const BLOB_LIFT := 0.01
+## How far the silhouette shadows darken the ground, and the sun that throws
+## them toward the lower left of the opening view (fitted to original footage).
+const SILHOUETTE_STRENGTH := 0.45
+const SUN_ROTATION := Vector3(-40, 120, 0)
+## Sun energy without and with silhouettes. The compatibility renderer adds
+## a shadowed sun in its own pass after display encoding, which lit figures
+## ≈8–11% brighter at the same energy; 0.4 keeps them within ≈1–4% of the
+## unshadowed look. The terrain shader
+## lights the ground itself and ignores the energy.
+const SUN_ENERGY := 0.7
+const SHADOW_SUN_ENERGY := 0.4
+var sun: DirectionalLight3D
 ## Etherlords II colourless zones: the session whose level is shown.
 var colorless_session: ELAdventureSession
 var colorless_shown := -1
@@ -94,6 +106,7 @@ func build(source: ELAdventureMap, session: ELAdventureSession = null) -> bool:
 		var position := Vector3(center.x * ELAdventureTerrain.CELL, 0, -center.y * ELAdventureTerrain.CELL)
 		var transform := Transform3D(Basis(Vector3.UP, -float((rotation >> 2) & 3) * PI / 2.0) * Basis.from_scale(mirror * float(definition.scale)), position)
 		if blob_shadow(map.profile.id, object, definition): _blob_slots[uid] = {"index": -1, "local": blob_local(prototype), "base": transform}
+		var casts := silhouette(map.profile.id, object, definition)
 		if definition.unit or prototype.clip_frames() > 1 or first_barrier(object):
 			var model := ELModel.new()
 			add_child(model)
@@ -113,14 +126,14 @@ func build(source: ELAdventureMap, session: ELAdventureSession = null) -> bool:
 				units[index] = model
 				actors[uid] = model
 			else: _add_animated(model)
-			for part: MeshInstance3D in model.parts.values(): part.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			for part: MeshInstance3D in model.parts.values(): _shade(part, casts)
 		else:
 			for name: String in prototype.parts:
 				var part: MeshInstance3D = prototype.parts[name]
 				if part.mesh == null or not part.visible: continue
 				var bits := ELColorless.cell_bits(map, Vector2i(center.floor())) if zoned else 0
 				var group := "%d/%d/%s/%s/%d" % [object.x / 16, object.y / 16, key, name, bits]
-				if not groups.has(group): groups[group] = {"mesh": part.mesh, "material": part.material_override, "transforms": [], "ids": [], "bits": bits}
+				if not groups.has(group): groups[group] = {"mesh": part.mesh, "material": part.material_override, "transforms": [], "ids": [], "bits": bits, "casts": casts}
 				groups[group].transforms.append(transform * prototype.global_transform.affine_inverse() * part.global_transform)
 				groups[group].ids.append(uid)
 		_object_keys[uid] = key
@@ -140,7 +153,7 @@ func build(source: ELAdventureMap, session: ELAdventureSession = null) -> bool:
 		var node := MultiMeshInstance3D.new()
 		node.multimesh = instances
 		node.material_override = group.material
-		node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		_shade(node, bool(group.casts))
 		add_child(node)
 		if int(group.bits) != 0: _grey_groups.append({"node": node, "bits": group.bits, "material": group.material})
 		for i in group.ids.size():
@@ -161,10 +174,15 @@ func build(source: ELAdventureMap, session: ELAdventureSession = null) -> bool:
 	env.ambient_light_energy = 0.7
 	environment.environment = env
 	add_child(environment)
-	var sun := DirectionalLight3D.new()
+	sun = DirectionalLight3D.new()
 	add_child(sun)
-	sun.light_energy = 0.7
-	sun.rotation_degrees = Vector3(-55, -35, 0)
+	sun.light_energy = SUN_ENERGY
+	sun.rotation_degrees = SUN_ROTATION
+	# Silhouette shadows: only the ground receives them (see `silhouette`).
+	sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS
+	sun.directional_shadow_max_distance = 90.0
+	sun.shadow_blur = 1.5
+	set_blob_shadows(true)
 	enable_fog(session)
 	enable_colorless(session)
 	build_usec = Time.get_ticks_usec() - started
@@ -439,7 +457,8 @@ func update_object(item: Dictionary) -> void:
 			var mirror := Vector3(-1 if rotation & 1 else 1, 1, -1 if rotation & 2 else 1)
 			model.basis = Basis(Vector3.UP, -float((rotation >> 2) & 3) * PI / 2.0) * Basis.from_scale(mirror * float(definition.scale))
 		model.set_meta("art_key", key)
-		for part: MeshInstance3D in model.parts.values(): part.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		var casts := silhouette(map.profile.id, item, definition)
+		for part: MeshInstance3D in model.parts.values(): _shade(part, casts)
 		if _blob_slots.has(uid): _blob_slots[uid]["local"] = blob_local(model)
 		object_models[uid] = model
 		_object_keys[uid] = key
@@ -604,9 +623,29 @@ func _sync_blob(uid: int, present: bool) -> void:
 	slot["present"] = present
 	blobs.multimesh.set_instance_transform(slot.index, placed if present else Transform3D(Basis.from_scale(Vector3.ZERO), Vector3.ZERO))
 
-## The shadows setting hides or shows all ground blobs.
+## The shadows setting hides or shows all ground blobs and, in the second
+## game, the silhouette shadows.
 func set_blob_shadows(on: bool) -> void:
 	if blobs != null: blobs.visible = on
+	var silhouettes := on and map != null and map.profile.id == "el2"
+	if sun != null:
+		sun.shadow_enabled = silhouettes
+		sun.light_energy = SHADOW_SUN_ENERGY if silhouettes else SUN_ENERGY
+	var material := map.profile.adventure_terrain_cache.get("material") as ShaderMaterial if map != null and map.profile.adventure_terrain_cache.get("map") == map.id else null
+	if material != null: material.set_shader_parameter("shadow_strength", SILHOUETTE_STRENGTH if silhouettes else 0.0)
+
+## Whether an object casts the original's silhouette shadow on the ground
+## (second game; recorded original footage shows them): every object that
+## does not draw a blob, including the volcanoes and rocks of ShadowType 0.
+## The original draws the silhouette on the ground only, so nothing else
+## receives it.
+static func silhouette(edition: String, object: Dictionary, definition: Dictionary) -> bool:
+	return edition == "el2" and not blob_shadow(edition, object, definition)
+
+func _shade(node: GeometryInstance3D, casts: bool) -> void:
+	node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON if casts else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	var material := node.material_override as BaseMaterial3D
+	if material != null: material.disable_receive_shadows = true
 
 ## Highest point of an object's drawn figure (world units above the ground),
 ## or -1 when the object has no figure.

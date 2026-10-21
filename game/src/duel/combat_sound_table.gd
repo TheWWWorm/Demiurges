@@ -30,11 +30,11 @@ const CAST := {
 		# Original EL1 CondensedAirEnchantment attach@ has only
 		# Target/NegEnchantment; unlike EL2 it has no separate CantUntap
 		# creature-presentation callback on the cast.
-		"CNAR": ["NegEnchantment"], "CNBL": ["RedDamage", "GainLife"], "COMT": ["RedComet"],
+		"CNAR": ["NegEnchantment", "CantUntap"], "CNBL": ["RedDamage", "GainLife"], "COMT": ["RedComet"],
 		"COPL": ["PosEnchantment"], "CRBL": ["PosEnchantment", "FirstStrike"], "CRHG": ["Hunger"], "CRIV": ["GreenDamage"],
 		"CTMN": ["BlackSummon"], "CTST": ["RedCatstrophe"], "CURS": ["Discard"], "DECN": ["Disenchant"],
 		"DELS": ["PosEnchantment", "PosRune"], "DISM": ["NegAttack", "NegRune"],
-		"DMRD": ["PosEnchantment"], "DMRT": ["RedSummon"],
+		"DMRD": ["PosEnchantment", "PosAttack", "PosDefence", "PosRune"], "DMRT": ["RedSummon"],
 		"DNFR": ["PosEnchantment", "GreenAncientForest"], "DOMN": ["PosEnchantment", "PosAttack", "PosDefence", "PosRune"],
 		"DPGS": ["BlackDepressGas", "NegRune", "NegAttack"], "DRAT": ["RedSummon"],
 		"DRFR": ["PosEnchantment", "GreenDarkForest"], "DRGS": ["BlackDrowsyGas", "NegRune", "NegAttack"],
@@ -70,14 +70,14 @@ const CAST := {
 		"MTSC": ["GreenSummon"], "MXHP": ["BlackSummon"], "MYHO": ["GreenSummon"], "NOIS": ["Discard"],
 		"NWLF": ["RedSummon"], "OGKN": ["RedSummon"], "OREL": ["RedSummon"], "ORGD": ["RedSummon"], "ORSH": ["RedSummon"],
 		"ORWR": ["RedSummon"], "OVRL": ["PosAttack", "PosDefence", "PosRune"], "PALN": ["NegEnchantment"], "PCDU": ["CantAttack", "NegRune"], "PHWL": ["BlackSummon"],
-		"PLMR": ["RedDamage"], "PRAT": ["RedSummon"], "PRFY": ["Disenchant"], "PSBR": ["PosAttack", "PosRune"],
+		"PLMR": ["RedDamage", "GainLife"], "PRAT": ["RedSummon"], "PRFY": ["Disenchant"], "PSBR": ["PosAttack", "PosRune"],
 		"PTRS": ["BlackSummon"], "PWTP": ["DrainMana", "PosRune", "NegRune"],
 		"QKFX": ["NegAttack", "NegDefence", "NegRune"], "RBRT": ["PosEnchantment"], "RDCL": ["ColosusLeg"],
 		"RDCM": ["PosEnchantment"], "RDDF": ["PosSorcery", "PosDefence", "PosRune"], "RDDG": ["BlueSummon"],
 		"RDHL": ["GainLife"], "RDIS": ["NegEnchantment"], "RDKN": ["BlackSummon"], "RDLG": ["RedLightning"],
 		"RECL": ["Draw"], "REDR": ["PosEnchantment"], "REPR": ["PosSorcery", "BlackDamage", "Draw"],
 		"RFPT": ["BlackSummon"], "RIFT": ["RedAnihilation"], "RIOT": ["Hunger", "NegRune"], "RKWL": ["RedSummon"],
-		"RPST": ["PosEnchantment"], "RVHG": ["Hunger"], "RVHL": ["BlueSummon"], "RZMN": ["BlackSummon"],
+		"RNST": ["PosEnchantment"], "RPST": ["PosEnchantment"], "RVHG": ["Hunger"], "RVHL": ["BlueSummon"], "RZMN": ["BlackSummon"],
 		"SACR": ["PosEnchantment"], "SCBR": ["PosEnchantment"], "SCSK": ["PosDefence", "PosRune"], "SEHL": ["BlueSummon"],
 		"SFGS": ["BlackSuffocationGas", "NegRune"], "SGHT": ["PosEnchantment"], "SHCL": ["PosAttack", "PosRune"],
 		"SHFR": ["PosDefence", "PosRune"], "SHSK": ["PosDefence", "PosRune"], "SHSP": ["BlueSummon"],
@@ -88,7 +88,7 @@ const CAST := {
 		"SPRG": ["RedAnihilation"], "SPTR": ["NegEnchantment"], "SPWB": ["PosEnchantment"],
 		"SPWR": ["Restless", "PosRune"], "STAB": ["BlackSummon"], "STAT": ["PosAttack", "PosRune"],
 		"STMC": ["BlackSummon"], "STMZ": ["BlackSummon"], "STRG": ["PosAttack", "PosRune"], "STRT": ["RedSummon"],
-		"STSI": ["NegEnchantment", "BlueStasis"], "STTX": ["NegEnchantment"], "STWO": ["PosEnchantment"],
+		"STSI": ["NegEnchantment", "BlueStasis"], "STTX": ["NegEnchantment"], "STWO": ["PosEnchantment", "PosAttack", "PosRune"],
 		"SWHL": ["BlueSummon"], "SWMN": ["BlackSummon"], "SWSN": ["GreenSummon"], "SYMB": ["GainLife"],
 		"TANT": ["GreenSummon"], "TGSK": ["PosDefence", "PosRune"], "THIF": ["PosEnchantment", "PosRune"],
 		"TIQN": ["GreenSummon"], "TIWK": ["GreenSummon"], "TIWR": ["GreenSummon"], "TNSA": ["GreenSummon"],
@@ -221,18 +221,18 @@ const CAST := {
 
 const TRIGGER := {
 	"el1": {
-		"BASO": ["Draw"], "BROT": ["RedDamage", "Fireball", "FireballExpl"], "ENFL": ["Disenchant"],
+		"BASO": ["Draw"], "BRMZ": ["BlackRedirect"], "ENVM": ["GreenDamage"], "IRMZ": ["BlackRedirect"], "STMZ": ["BlackRedirect"],  "BROT": ["RedDamage", "Fireball", "FireballExpl"], "ENFL": ["Disenchant"],
 		"ENRG": ["PosSorcery"], "FRBL": ["Fireball", "FireballExpl"], "IMMB": ["LoseLife"], "LSHE": ["GainLife"],
-		"MNTX": ["GainMana"], "QKFX": ["Draw"], "RBRT": ["LoseLife"], "RIOT": ["Draw"], "RNST": ["RedRainOfStones"],
+		"MDNS": ["BlackDamage"], "MNBN": ["RedDamage"], "SWSN": ["GreenDamage"], "TRSN": ["GreenDamage"], "MNTX": ["GainMana"], "QKFX": ["Draw"], "RBRT": ["LoseLife"], "RDIS": ["BlackDamage"], "RIOT": ["Draw"], "RNST": ["RedRainOfStones"],
 		"RPST": ["PosSorcery", "BlackDamage", "Draw"], "SACR": ["GreenDamage", "GainMana"], "SCBR": ["PosSorcery"],
 		"SFGS": ["BlackDamage"], "SPLK": ["GreenDamage", "GainMana"], "SPTR": ["LoseMana"], "SPWB": ["GainLife"], "STSI": ["Disenchant"],
 		"STTX": ["BlackDamage"], "WETX": ["BlackDamage"],
 		"TRLB": ["Draw", "BlackDamage"], "WNPZ": ["LoseLife"], "WTLK": ["GainLife"]
 	},
 	"el2": {
-		"ALNS": ["Draw"], "BASO": ["Draw"], "BROT": ["RedDamage", "Fireball", "FireballExpl"], "DELS": ["Draw"],
+		"ALNS": ["Draw"], "BASO": ["Draw"], "BRMZ": ["BlackRedirect"], "ENVM": ["GreenDamage"], "IRMZ": ["BlackRedirect"], "STMZ": ["BlackRedirect"], "OCRP": ["Draw"], "WTX2": ["BlackDamage"],  "BROT": ["RedDamage", "Fireball", "FireballExpl"], "DELS": ["Draw"],
 		"ENFL": ["Disenchant"], "ENRG": ["PosSorcery"], "FRBL": ["Fireball", "FireballExpl"], "LSHE": ["GainLife"],
-		"MNTX": ["GainMana"], "OEXC": ["OuterExchange"], "PRBN": ["Draw"], "QKFX": ["Draw"], "RBRT": ["LoseLife"],
+		"MDNS": ["BlackDamage"], "MNBN": ["RedDamage"], "SWSN": ["GreenDamage"], "TRSN": ["GreenDamage"], "MNTX": ["GainMana"], "OEXC": ["OuterExchange"], "PLWP": ["PlaneWarp", "OutplaneSpellDeath"], "PRBN": ["Draw"], "QKFX": ["Draw"], "RBRT": ["LoseLife"],
 		"IRRT": ["BlackDamage"], "RDIS": ["BlackDamage"], "RIOT": ["Draw"], "RNST": ["RedRainOfStones"], "RPST": ["PosSorcery", "BlackDamage", "Draw"],
 		"SACR": ["GreenDamage", "Draw"], "SCBR": ["PosSorcery"], "SFGS": ["BlackDamage"], "SPLK": ["GreenDamage", "GainMana"], "SPTR": ["LoseMana"],
 		"SPWB": ["GainLife"], "STSI": ["Disenchant"], "STTX": ["BlackDamage"],
@@ -279,13 +279,16 @@ const ABILITY := {
 		"WLLV": [["PosAttack", "at"]], "WLWD": [["PosAttack", "at"]], "WZSP": [["PosSorcery", "at"]],
 		# The first game's Rain of Stone binds Start to the caster's own hero,
 		# after paying, unlike the second game's opposing hero.
+		# The Wand of Heroes' Hunter shoots HuntersArrow from itself to its
+		# target (HeroAbility), as in the second game.
+		"WNHR": [["HuntersArrow", "line"]],
 		"RNST": [["RedRainOfStones", "start"]],
 		"RPST": [["PosSorcery", "at"], ["BlackDamage", "at"], ["Draw", "at"]]
 	},
 	"el2": {
 		"BEHD": [["GreenDamage", "at"]], "BHWR": [["GreenDamage", "at"]], "BLDG": [["BlackDragonInstant", "line"]],
 		"BROT": [["RedDamage", "at"], ["Fireball", "line"], ["FireballExpl", "finish"]], "CAFG": [["FingusSpit", "line"]],
-		"CCLP": [["CyclopStone", "line"]], "CTMN": [["BlackRedirect", "line"]], "DMRT": [["Draw", "at"]],
+		"CCLP": [["CyclopStone", "line"]], "CTMN": [["BlackRedirect", "to_user"]], "DMRT": [["Draw", "at"]],
 		"ENFL": [["Disenchant", "at"]], "ENRG": [["PosSorcery", "at"]], "FRBL": [["Fireball", "line"], ["FireballExpl", "finish"]],
 		"GIFG": [["FingusSpit", "line"]], "GRDG": [["GreenDragonInstant", "line"]], "GRFG": [["FingusSpit", "line"]],
 		"IMMB": [["LoseLife", "at"]], "KBEL": [["PosSorcery", "at"]], "KBSH": [["RedZap", "line"]], "LMMN": [["Draw", "at"]],
@@ -293,16 +296,16 @@ const ABILITY := {
 		"MTSC": [["NegSorcery", "at"]], "OEXC": [["OuterExchange", "line"]], "ORSH": [["GainMana", "at"]],
 		"OUD1": [["PaleDrainLife", "line"], ["GainLife", "at"]], "OUD2": [["PaleDrainLife", "line"], ["GainLife", "at"]],
 		"OUD3": [["PaleDrainLife", "line"], ["GainMana", "at"]],
-		"OUE1": [["PaleDrainEncantment", "line"], ["Disenchant", "at"], ["GainMana", "at"]],
-		"OUE2": [["PaleDrainEncantment", "line"], ["Draw", "at"]],
-		"OUE3": [["PaleDrainEncantment", "line"], ["Disenchant", "at"], ["Draw", "at"]],
+		"OUE1": [["PaleDrainEncantment", "to_user"], ["Disenchant", "at"], ["GainMana", "at"]],
+		"OUE2": [["PaleDrainEncantment", "to_user"], ["Draw", "at"]],
+		"OUE3": [["PaleDrainEncantment", "to_user"], ["Disenchant", "at"], ["Draw", "at"]],
 		"OUS1": [["GainMana", "at"], ["PosRune", "at"]], "OUS2": [["NegRune", "at"], ["RedDamage", "at"]],
 		"OUS3": [["GainLife", "at"], ["PosRune", "at"]], "PHWL": [["PosAttack", "at"]], "PTRS": [["Disenchant", "at"]],
 		"RBRT": [["LoseLife", "at"]], "RFPT": [["Disenchant", "at"]], "RNST": [["RedRainOfStones", "enemy_start"]],
 		"RPST": [["PosSorcery", "at"], ["BlackDamage", "at"], ["Draw", "at"]], "RVHL": [["DrainMana", "line"]],
-		"RZMN": [["BlackRedirect", "line"]], "SACR": [["GreenDamage", "at"], ["Draw", "at"]], "SCBR": [["PosSorcery", "at"]],
+		"RZMN": [["BlackRedirect", "to_user"]], "SACR": [["GreenDamage", "at"], ["Draw", "at"]], "SCBR": [["PosSorcery", "at"]],
 		"SEHL": [["DrainMana", "line"]], "SPFG": [["FingusSpit", "line"]], "SPLK": [["GreenDamage", "at"], ["GainMana", "at"]],
-		"SWHL": [["DrainMana", "line"]], "SWMN": [["BlackRedirect", "line"]], "VBAT": [["DrainLife", "line"]],
+		"SWHL": [["DrainMana", "line"]], "SWMN": [["BlackRedirect", "to_user"]], "VBAT": [["DrainLife", "line"]],
 		"WLDT": [["CantAttack", "at"]], "WLIF": [["PosDefence", "at"]], "WLLV": [["PosAttack", "at"]],
 		"WLWD": [["PosAttack", "at"]], "WNHR": [["HuntersArrow", "line"]], "WNPZ": [["LoseLife", "at"]],
 		"WZSP": [["PosSorcery", "at"]]
@@ -321,6 +324,18 @@ const COMBAT := {
 	"el2": {},
 }
 ## Effects about a hero's own life, ether or cards.
+## Creature auras: the effects each original aura callback starts on a
+## creature it covers (EL2 slot 13, EL1 slot 11; the same in both games).
+## "MOBE:death" is Mother Bee's frenzy on every bee when she dies.
+const AURA_EFFECTS := {
+	"TIWK": ["PosAttack", "PosDefence"], "TIQN": ["PosDefence"], "BEWK": ["PosAttack"],
+	"BEQN": ["PosAttack", "PosDefence"], "KBWR": ["PosAttack"], "MOTI": ["Restless"], "MOBE": ["FirstStrike"],
+	"MOBE:death": ["Berserk"], "SHSP": ["PosDefence"], "CLSP": ["PosAttack", "PosDefence"], "OREL": ["Restless"],
+	"SLWL": ["PosDefence"], "AVEL": ["PosAttack", "PosDefence"], "ORWR": ["PosAttack", "PosDefence", "Berserk"],
+	"WZSP": ["PosAttack"], "GRFG": ["PosAttack", "PosDefence"],
+	# Gas arrivals (the gases' per-creature callbacks).
+	"DRGS": ["NegAttack", "NegRune"], "DPGS": ["NegAttack", "NegRune"], "FRGS": ["NegDefence", "NegRune"],
+}
 const HERO_EFFECTS := ["GainLife", "LoseLife", "GainMana", "LoseMana", "Draw", "Discard"]
 ## A hero's damage turned aside: redirection to its creatures (from the hero to
 ## each creature) and feedback (at the hero); a barrier softening it (second game).

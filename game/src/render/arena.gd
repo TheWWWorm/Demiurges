@@ -51,10 +51,14 @@ func build(profile: ELProfile, arena_id := "Green.001") -> bool:
 	light.light_energy = 0.85
 	light.shadow_enabled = true
 	light.directional_shadow_max_distance = 65.0
+	# The sun shines down along the SunDirection line, whichever way the vector
+	# points: the original throws figure shadows along it, away from the sun
+	# (a wasteland arena points it along -Z, the forest arena along +Z).
 	var direction: Array = definition.SunDirection
 	add_child(light)
-	light.position = ELFigure.vector(Vector3(direction[0], direction[1], direction[2]))
-	light.look_at(Vector3.ZERO)
+	var toward := ELFigure.vector(Vector3(direction[0], direction[1], direction[2])).normalized()
+	if toward.y > 0.0: toward = -toward
+	light.look_at_from_position(-toward * 10.0, Vector3.ZERO, Vector3.UP if absf(toward.y) < 0.99 else Vector3.FORWARD)
 	return errors.is_empty()
 
 func ground_height(x: float, z: float) -> float:

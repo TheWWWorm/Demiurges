@@ -21,6 +21,9 @@ const RANDOM_KEY := "T_RANDOM"
 const GREY := Color(0.498, 0.498, 0.498)
 const RED := Color("e05a48")
 const RACE_COLOURS := {"Red": Color("d0503c"), "Green": Color("5aa848"), "Blue": Color("4a7ed8"), "Black": Color("9a9a9a")}
+## Deck-list race tiles (30x23) on DUELS_PANEL_6, identical in both games; the
+## level-sort icon (62,216) sits beside them.
+const RACE_TILES := {"Black": Rect2(31, 193, 30, 23), "Blue": Rect2(62, 193, 30, 23), "Green": Rect2(0, 216, 30, 23), "Red": Rect2(31, 216, 30, 23)}
 ## Sort modes: 0 table order, 1 race, 2 resource level (the original default
 ## mode is 2; the button-to-mode mapping is an assumption).
 const SORT_RACE := 1
@@ -52,12 +55,14 @@ var round_info: Dictionary = {}
 var hot_stage := -1
 ## Player 1's stored choice: preset id ("" = Random) and portrait template.
 var hot_first: Dictionary = {}
+var _random_portrait: Texture2D
 
 func _init(owner: ELFrontMenu) -> void:
 	menu = owner
 
 func reset() -> void:
 	edit.clear()
+	_random_portrait = null
 	leave_hot_seat()
 
 func profile() -> ELProfile:
@@ -259,6 +264,25 @@ func arena_label() -> String:
 	if index == 0: return profile().text(RANDOM_KEY)
 	return profile().text(String(profile().table("ScenesNames").get(arenas()[index - 1], {}).get("ELKName", arenas()[index - 1])))
 
+## Random-hero portrait: the "?" art the original draws for an empty side
+## (EL1: texture EDIT_HERO_PANEL_12, source 221,105 and 221,155,
+## two 35x50 halves placed side by side). The texture is identical in EL2.
+func random_portrait() -> Texture2D:
+	if _random_portrait != null: return _random_portrait
+	var sheet := menu.texture_named("EDIT_HERO_PANEL_12")
+	if sheet == null: return null
+	var source := sheet.get_image()
+	if source == null: return null
+	source = source.duplicate()
+	if source.is_compressed(): source.decompress()
+	source.clear_mipmaps()
+	source.convert(Image.FORMAT_RGBA8)
+	var image := Image.create(70, 50, false, Image.FORMAT_RGBA8)
+	image.blit_rect(source, Rect2i(221, 105, 35, 50), Vector2i.ZERO)
+	image.blit_rect(source, Rect2i(221, 155, 35, 50), Vector2i(35, 0))
+	_random_portrait = ImageTexture.create_from_image(image)
+	return _random_portrait
+
 ## Eligible cosmetic portraits of a race: non-quest templates of that colour.
 func portraits(faction: String) -> Array[String]:
 	var result: Array[String] = []
@@ -275,34 +299,92 @@ func template(side: int) -> String:
 	return list_of[index] if index >= 0 and index < list_of.size() else ""
 
 ## Visible list rows: Random first, then the presets in the chosen order.
+## The original (EL1, EL2) walks its preset list (registry
+## `DuelPresets` order, then user files) and sorts it with the STL introsort on
+## a single key: race, resource level or name (byte compare).
+## The sort is unstable, so equal keys keep the order that algorithm leaves;
+## `stl_sort` reproduces it (checked against both games' Duel captures).
 func rows() -> Array[Dictionary]:
 	var s := state()
-	var shown: Array[Dictionary] = []
+	var shown: Array = []
 	for preset: Dictionary in pool:
 		if s.filter and int(preset.resource_level) != int(s.level): continue
 		shown.append(preset)
-	var order := {}
-	for i in pool.size(): order[pool[i].id] = i
-	var mode := int(s.sort)
-	if mode != 0:
-		shown.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
-			var keys_a := _sort_key(a, mode)
-			var keys_b := _sort_key(b, mode)
-			for i in keys_a.size():
-				if keys_a[i] != keys_b[i]: return keys_a[i] < keys_b[i]
-			return order[a.id] < order[b.id])
+	match int(s.sort):
+		SORT_RACE: stl_sort(shown, func(a: Dictionary, b: Dictionary) -> bool: return ELDuelPresets.RACES.find(String(a.faction)) < ELDuelPresets.RACES.find(String(b.faction)))
+		SORT_LEVEL: stl_sort(shown, func(a: Dictionary, b: Dictionary) -> bool: return int(a.resource_level) < int(b.resource_level))
+		SORT_NAME: stl_sort(shown, func(a: Dictionary, b: Dictionary) -> bool: return String(a.name) < String(b.name))
 	var result: Array[Dictionary] = [{}]
-	result.append_array(shown)
+	for preset: Dictionary in shown: result.append(preset)
 	return result
 
-func _sort_key(preset: Dictionary, mode: int) -> Array:
-	var race := ELDuelPresets.RACES.find(String(preset.faction))
-	var level := int(preset.resource_level)
-	var name := String(preset.name).to_lower()
-	match mode:
-		SORT_RACE: return [race, level, name]
-		SORT_LEVEL: return [level, race, name]
-	return [name, race, level]
+## The games' std::sort: introsort with
+## median-of-three pivots, recursion on the right part, depth limit
+## 2*floor(log2 n) (heap sort past it), then insertion sort of the first 16
+## and unguarded insertion of the rest. In place, same `less` contract.
+static func stl_sort(items: Array, less: Callable) -> void:
+	var n := items.size()
+	if n < 2: return
+	var depth := 0
+	var k := n
+	while k != 1:
+		k >>= 1
+		depth += 1
+	_introsort(items, 0, n, depth * 2, less)
+	if n > 16:
+		_insertion(items, 0, 16, less)
+		for i in range(16, n): _linear_insert(items, i, less)
+	else:
+		_insertion(items, 0, n, less)
+
+static func _introsort(items: Array, first: int, last: int, depth: int, less: Callable) -> void:
+	while last - first > 16:
+		if depth == 0:
+			_heap_sort(items, first, last, less)
+			return
+		depth -= 1
+		var a: Variant = items[first]
+		var b: Variant = items[first + (last - first) / 2]
+		var c: Variant = items[last - 1]
+		var pivot: Variant
+		if less.call(a, b): pivot = b if less.call(b, c) else (c if less.call(a, c) else a)
+		else: pivot = a if less.call(a, c) else (c if less.call(b, c) else b)
+		var lo := first
+		var hi := last
+		while true:
+			while less.call(items[lo], pivot): lo += 1
+			hi -= 1
+			while less.call(pivot, items[hi]): hi -= 1
+			if lo >= hi: break
+			var swap: Variant = items[lo]
+			items[lo] = items[hi]
+			items[hi] = swap
+			lo += 1
+		_introsort(items, lo, last, depth, less)
+		last = lo
+
+static func _insertion(items: Array, first: int, last: int, less: Callable) -> void:
+	for i in range(first + 1, last):
+		var value: Variant = items[i]
+		if less.call(value, items[first]):
+			for j in range(i, first, -1): items[j] = items[j - 1]
+			items[first] = value
+		else:
+			_linear_insert(items, i, less)
+
+static func _linear_insert(items: Array, at: int, less: Callable) -> void:
+	var value: Variant = items[at]
+	var j := at
+	while less.call(value, items[j - 1]):
+		items[j] = items[j - 1]
+		j -= 1
+	items[j] = value
+
+## Partial-sort fallback (never reached by the shipped preset counts).
+static func _heap_sort(items: Array, first: int, last: int, less: Callable) -> void:
+	var part := items.slice(first, last)
+	part.sort_custom(less)
+	for i in part.size(): items[first + i] = part[i]
 
 func can_start() -> bool:
 	if hot_stage >= 0: return ELDuelMatch.side_valid(pool, pick(0), int(state().level))
@@ -382,13 +464,19 @@ func build_screen() -> void:
 	list = PresetList.new()
 	list.screen = self
 	var left_x := by_race.position.x if by_race != null else name_rect.position.x - 66
-	var top := maxf(by_race.position.y + by_race.size.y if by_race != null else 0.0, name_rect.end.y) + 4
+	var top := maxf(by_race.position.y + by_race.size.y if by_race != null else 0.0, name_rect.end.y) + 1
 	var right_x := up.position.x - 2 if up != null else name_rect.end.x
-	var bottom := down.position.y + down.size.y if down != null else top + 360
+	var bottom := down.position.y + down.size.y if down != null else top + 364
 	list.position = Vector2(left_x, top)
-	list.size = Vector2(right_x - left_x, bottom - top)
+	# Whole rows on the panel art's own grid (14 at 1024x768 in both games);
+	# the last row's line may fall on the frame below the arrow, as in the
+	# original.
+	list.size = Vector2(right_x - left_x, floorf((bottom - top + 4.0) / PresetList.ROW) * PresetList.ROW)
 	list.columns = [(by_race.position.x + by_race.size.x * 0.5 if by_race != null else left_x + 15) - left_x,
 		(by_level.position.x + by_level.size.x * 0.5 if by_level != null else left_x + 50) - left_x, name_rect.position.x - left_x + 4]
+	# Grid columns as the original draws them: race | level | name, the lines
+	# just left of the level sort button and right after it.
+	if by_level != null: list.splits = [by_level.position.x - 2.0 - left_x, by_level.position.x + by_level.size.x + 1.0 - left_x]
 	menu.canvas.add_child(list)
 	menu.labels["list"] = list
 	var filter := _button("DuFilterLevel", toggle_filter)
@@ -397,7 +485,8 @@ func build_screen() -> void:
 		_text("DuFilterLevel", null, ELFrontMenu.TITLE_INK, HORIZONTAL_ALIGNMENT_LEFT, label_rect)
 	for control: String in ["DuNew", "DuEdit", "DuDelete"]:
 		var button := _button(control, {"DuNew": new_preset, "DuEdit": edit_preset, "DuDelete": delete_preset}[control])
-		_caption_on(button, menu._caption(control), 18)
+		var caption_label := _caption_on(button, menu._caption(control), 18)
+		if caption_label != null: menu.labels["caption_" + control] = caption_label
 	_button("DuBack", func(): menu.go_back())
 	_button("DuStart", start)
 	if not rejected.is_empty(): menu.buttons.DuNew.tooltip_text += "\n" + "Unreadable or invalid user presets were skipped: " + ", ".join(rejected)
@@ -426,7 +515,9 @@ func update_screen() -> void:
 			name_label.text = preset_name(preset)
 			name_label.add_theme_color_override("font_color", GREY if not ELDuelMatch.side_valid(pool, preset, int(s.level)) else ELFrontMenu.INK_HOVER)
 		var picture: TextureRect = menu.labels["portrait%d" % side]
-		picture.texture = null
+		picture.texture = random_portrait() if preset.is_empty() else null
+		# The "?" art is drawn 1:1 (70x50) centred on the slot, as the original does.
+		picture.stretch_mode = TextureRect.STRETCH_KEEP_CENTERED if preset.is_empty() else TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 		if not preset.is_empty():
 			var name := template(side)
 			if name.is_empty(): name = ELDuelPresets.default_template(profile(), String(preset.faction))
@@ -442,6 +533,10 @@ func update_screen() -> void:
 	menu.buttons.DuEdit.disabled = chosen.is_empty()
 	menu.buttons.DuDelete.disabled = chosen.is_empty() or bool(chosen.get("builtin", true))
 	menu.buttons.DuStart.disabled = not can_start()
+	# The original dims the caption of a disabled New / Edit / Delete.
+	for control: String in ["DuNew", "DuEdit", "DuDelete"]:
+		if menu.labels.has("caption_" + control) and menu.buttons.has(control):
+			menu.labels["caption_" + control].add_theme_color_override("font_color", ELFrontMenu.INK_DISABLED if menu.buttons[control].disabled else ELFrontMenu.INK_HOVER)
 	list.queue_redraw()
 
 func set_target(side: int) -> void:
@@ -1681,7 +1776,17 @@ class PresetList extends Control:
 	var screen: ELDuelScreen
 	var offset := 0
 	var columns: Array = [15, 50, 70]
-	const ROW := 20.0
+	## Rows of the original list (26 px at 1024x768, 14 visible), with grid
+	## lines and a race tile per deck; Random shows "-" in both columns.
+	const ROW := 26.0
+	## Grid and row inks sampled from both originals' lists at 1024x768:
+	## available decks white, unavailable grey, Random gold; the grid is
+	## (90,85,74) in Etherlords I and (99,89,82) in Etherlords II.
+	const GRID := Color8(90, 85, 74)
+	const GRID_SECOND := Color8(99, 89, 82)
+	const INK := Color.WHITE
+	const RANDOM_INK := Color8(214, 187, 136)
+	var splits: Array = []
 
 	func _ready() -> void:
 		mouse_filter = Control.MOUSE_FILTER_STOP
@@ -1713,34 +1818,39 @@ class PresetList extends Control:
 		offset = clampi(offset, 0, maxi(0, shown.size() - visible_rows()))
 		var s := screen.state()
 		var font := screen.menu.arial
-		for at in visible_rows():
+		var tiles := screen.menu.texture_named("DUELS_PANEL_6")
+		var lines: Array = splits if splits.size() == 2 else [(float(columns[0]) + float(columns[1])) * 0.5, float(columns[2]) - 5.0]
+		var rows_drawn := mini(visible_rows(), shown.size() - offset)
+		var grid := GRID if screen.menu.edition == "el1" else GRID_SECOND
+		for at in rows_drawn:
 			var index := offset + at
-			if index >= shown.size(): break
 			var preset: Dictionary = shown[index]
 			var y := at * ROW
 			var id := String(preset.get("id", ""))
-			var sides: Array[int] = []
-			for side in 2:
-				if String(s.picks[side]) == id: sides.append(side)
-			if sides.has(int(s.target)): draw_rect(Rect2(0, y, size.x, ROW), Color(0.85, 0.7, 0.4, 0.2))
+			if String(s.picks[int(s.target)]) == id: draw_rect(Rect2(0, y, size.x, ROW), Color(0.85, 0.7, 0.4, 0.2))
 			var grey := not preset.is_empty() and int(preset.resource_level) > int(s.level)
-			var ink := ELDuelScreen.GREY if grey else ELFrontMenu.BODY_INK
+			var ink := ELDuelScreen.GREY if grey else INK
 			var baseline := y + (ROW - font.get_height(15)) * 0.5 + font.get_ascent(15)
 			if preset.is_empty():
-				draw_string(font, Vector2(columns[2], baseline), screen.profile().text(ELDuelScreen.RANDOM_KEY), HORIZONTAL_ALIGNMENT_LEFT, size.x - columns[2] - 20, 15, ink)
+				for x: float in [float(columns[0]), float(columns[1])]:
+					draw_string(font, Vector2(x - font.get_string_size("-", HORIZONTAL_ALIGNMENT_LEFT, -1, 15).x * 0.5, baseline), "-", HORIZONTAL_ALIGNMENT_LEFT, -1, 15, ink)
+				draw_string(font, Vector2(columns[2], baseline), screen.profile().text(ELDuelScreen.RANDOM_KEY), HORIZONTAL_ALIGNMENT_LEFT, size.x - columns[2] - 4, 15, RANDOM_INK)
 			else:
-				var colour: Color = ELDuelScreen.RACE_COLOURS.get(String(preset.faction), Color.WHITE)
-				if grey: colour = colour.darkened(0.45)
-				var centre := Vector2(columns[0], y + ROW * 0.5)
-				draw_colored_polygon(PackedVector2Array([centre + Vector2(0, -6), centre + Vector2(6, 0), centre + Vector2(0, 6), centre + Vector2(-6, 0)]), colour)
+				var tile: Rect2 = ELDuelScreen.RACE_TILES.get(String(preset.faction), Rect2())
+				if tiles != null and tile.size.x > 0:
+					draw_texture_rect_region(tiles, Rect2(Vector2(float(columns[0]) - tile.size.x * 0.5, y + (ROW - tile.size.y) * 0.5).round(), tile.size), tile)
+				else:
+					var centre := Vector2(columns[0], y + ROW * 0.5)
+					draw_colored_polygon(PackedVector2Array([centre + Vector2(0, -6), centre + Vector2(6, 0), centre + Vector2(0, 6), centre + Vector2(-6, 0)]), ELDuelScreen.RACE_COLOURS.get(String(preset.faction), Color.WHITE))
 				var level := str(int(preset.resource_level))
 				draw_string(font, Vector2(columns[1] - font.get_string_size(level, HORIZONTAL_ALIGNMENT_LEFT, -1, 15).x * 0.5, baseline), level, HORIZONTAL_ALIGNMENT_LEFT, -1, 15, ink)
 				var name := String(preset.name)
 				if not bool(preset.get("builtin", true)): name = "• " + name
-				draw_string(font, Vector2(columns[2], baseline), name, HORIZONTAL_ALIGNMENT_LEFT, size.x - columns[2] - 22, 15, ink)
-			var marks := "".join(sides.map(func(side: int): return str(side + 1)))
-			if not marks.is_empty():
-				draw_string(font, Vector2(size.x - 18, baseline), marks, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, ELFrontMenu.INK_HOVER)
+				draw_string(font, Vector2(columns[2], baseline), name, HORIZONTAL_ALIGNMENT_LEFT, size.x - columns[2] - 4, 15, ink)
+			draw_line(Vector2(0, y + ROW - 0.5), Vector2(size.x, y + ROW - 0.5), grid)
+		if rows_drawn > 0:
+			for x: float in lines:
+				draw_line(Vector2(x + 0.5, 0), Vector2(x + 0.5, rows_drawn * ROW), grid)
 
 ## Spellbook slots (EL1 15 with rune counts; EL2 16-spell active deck) or the
 ## EL2 reserve. Click selects a slot; double-click returns it (EL1) or moves it

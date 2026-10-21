@@ -165,6 +165,8 @@ static func regenerate(state: ELAdventureSession) -> void:
 		var before := stage(castle)
 		var amount := regeneration(ELGlobalSpells.free_ether(state, player))
 		castle.health = mini(int(castle.max), int(castle.health) + amount)
+		#  spends the rest: the night shows no free ether.
+		state.players[player].free_ether = 0
 		if amount > 0: state.event.emit({"kind": "castle_regenerated", "player": player, "amount": amount})
 		if stage(castle) != before: state.event.emit({"kind": "castle_changed", "player": player, "stage": stage(castle)})
 		show_stage(state, player)

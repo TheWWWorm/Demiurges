@@ -7,7 +7,9 @@ extends RefCounted
 ##
 ## Shared remake settings: "ambience" volume, creature "shadows", second-game
 ## adventure "weather" particles, "helper_overlay" (remake-only English readouts,
-## hints and shortcut buttons over the original screens; off by default).
+## hints and shortcut buttons over the original screens; off by default),
+## "antialiasing" (-1 automatic: 2x multisampling unless the renderer is a
+## software one; 0 off; 1 2x; 2 4x multisampling of the 3D scenes).
 ## Per edition (original Options screen order):
 ## "music"/"effects" volumes 0..1; "movies" the originals' Video key (0 none,
 ## 1 own size, 2 fitted); "blood"; "map_tooltips" (second game
@@ -22,7 +24,7 @@ extends RefCounted
 ## "visual_log". Several have no remake system yet and are only stored.
 ## "tutorial_events": the first game's shown tutorial events, one '0'/'1'
 ## per event id (settings.ini TutorialEvents); "show_tutorial" gates them.
-const SHARED := {"ambience": 0.55, "shadows": true, "weather": true, "helper_overlay": false}
+const SHARED := {"ambience": 0.55, "shadows": true, "weather": true, "helper_overlay": false, "antialiasing": -1}
 const EDITION := {"music": 0.55, "effects": 0.8, "movies": 2, "blood": true, "map_tooltips": true, "autosave": true,
 	"heroes_voices": true, "ambient_sounds": true, "adventure_fast": false, "animated_objects": true,
 	"mouse_rotation": 1.0, "keyboard_rotation": 1.0, "mouse_scroll": 1.0, "keyboard_scroll": 1.0,
@@ -35,7 +37,7 @@ const EDITION_DEFAULTS := {"el1": {}, "el2": {"auto_camera_dynamics": 96, "gamma
 ## Value ranges: [min, max] for numbers; bools are checked by type.
 const RANGES := {"music": [0.0, 1.0], "effects": [0.0, 1.0], "ambience": [0.0, 1.0], "mouse_rotation": [0.0, 2.0],
 	"keyboard_rotation": [0.0, 2.0], "mouse_scroll": [0.0, 2.0], "keyboard_scroll": [0.0, 2.0], "gamma": [-1.0, 1.0],
-	"auto_camera_dynamics": [0, 100], "movies": [0, 2]}
+	"auto_camera_dynamics": [0, 100], "movies": [0, 2], "antialiasing": [-1, 2]}
 
 var values := {}
 var edition := ""
@@ -72,6 +74,17 @@ func use_edition(id: String) -> void:
 func edition_values(id: String) -> Dictionary:
 	if id == edition: return _edition_part()
 	return _editions.get(id, defaults(id)).duplicate()
+
+## The 3D multisampling the "antialiasing" preference (`choice`) asks for on
+## the video adapter named `adapter`.
+static func multisampling(choice: int, adapter: String) -> Viewport.MSAA:
+	if choice < 0: choice = 0 if adapter.to_lower().contains("llvmpipe") or adapter.to_lower().contains("software") else 1
+	return [Viewport.MSAA_DISABLED, Viewport.MSAA_2X, Viewport.MSAA_4X][clampi(choice, 0, 2)]
+
+## Applies the display preferences to the window's viewport.
+static func apply_display(viewport: Viewport, preferences: Dictionary) -> void:
+	if viewport == null: return
+	viewport.msaa_3d = multisampling(int(preferences.get("antialiasing", -1)), RenderingServer.get_video_adapter_name())
 
 func _edition_part() -> Dictionary:
 	var part := {}

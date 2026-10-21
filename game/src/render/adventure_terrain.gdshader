@@ -1,5 +1,11 @@
 shader_type spatial;
-render_mode unshaded, cull_disabled;
+// Lit only by the sun's shadow: the ground keeps its texture colour where the
+// sun reaches it and darkens by `shadow_strength` in the silhouette shadows
+// the original lays on the ground (the sun pass draws it then; without
+// silhouettes, emission does); ambient light and highlights stay off.
+render_mode cull_disabled, ambient_light_disabled, specular_disabled;
+uniform float shadow_strength = 0.0;
+varying float shadow_weight;
 uniform sampler2D tiles : source_color, filter_linear, repeat_disable;
 uniform int columns;
 uniform float tile_side;
@@ -32,6 +38,8 @@ varying vec2 cell;
 
 void vertex() {
 	cell = vec2(VERTEX.x, -VERTEX.z) / 2.0;
+	// The ground mesh is flat and carries no normals of its own.
+	NORMAL = vec3(0.0, 1.0, 0.0);
 }
 
 vec3 to_srgb(vec3 c) {
@@ -43,8 +51,10 @@ vec3 to_linear(vec3 c) {
 }
 
 void fragment() {
-	int frame = int(floor(TIME * 10.0)) % max(1, int(UV2.y));
-	int index = int(UV2.x) + frame;
+	// Rounded: a perspective view interpolates the per-cell constants with
+	// small errors, and truncation would pick the neighbouring atlas tile.
+	int frame = int(floor(TIME * 10.0)) % max(1, int(round(UV2.y)));
+	int index = int(round(UV2.x)) + frame;
 	vec2 start = vec2(float(index % columns), float(index / columns)) * pitch + vec2(2.0);
 	ALBEDO = texture(tiles, (start + UV * tile_side) / atlas_size).rgb;
 	if (clrless_enabled) {
@@ -77,5 +87,19 @@ void fragment() {
 		// Blended in display space, as the original's alpha blend.
 		vec3 shown = mix(OUTPUT_IS_SRGB ? ALBEDO : to_srgb(ALBEDO), mist, alpha);
 		ALBEDO = OUTPUT_IS_SRGB ? shown : to_linear(shown);
+		// The mist is drawn over the shadows.
+		shadow_weight = shadow_strength * (1.0 - alpha);
+	} else {
+		shadow_weight = shadow_strength;
 	}
+	// Up, whichever side of the double-sided ground mesh is drawn.
+	NORMAL = normalize((VIEW_MATRIX * vec4(0.0, 1.0, 0.0, 0.0)).xyz);
+	// With silhouettes on, the shadowed sun gives the whole colour in its own
+	// pass: splitting it between this pass and the sun's (added together after
+	// display encoding by the compatibility renderer) would brighten the ground.
+	EMISSION = shadow_strength > 0.0 ? vec3(0.0) : ALBEDO;
+}
+
+void light() {
+	if (LIGHT_IS_DIRECTIONAL && shadow_strength > 0.0) DIFFUSE_LIGHT += vec3(1.0 - shadow_weight + shadow_weight * ATTENUATION);
 }

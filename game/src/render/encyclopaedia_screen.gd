@@ -15,9 +15,21 @@ extends RefCounted
 ## Catalogue: ELEncyclopaedia.
 
 const ROW := 55.0
+## Every text on the panel is Arial Bold (headers, column
+## captions, rows, mode, description); the chosen row and the current mode are
+## white, as in the original.
 const ROW_INK := Color("d6bb88")
 const CHOSEN_INK := Color.WHITE
+## Row and popup text: a 17 px Arial Bold cell (15 px em); row names centred
+## in the name column 6 px right of its left edge (centre x 301.5).
+const ROW_CELL := 17
+const NAME_PAD := 6.0
+## Enchantment and sorcery rows: names and descriptions start 11 px into their
+## columns (x 200 and 444).
+const TEXT_PAD := 11.0
 const POPUP_ROW := 26.0
+## Popup row text inset (measured: glyphs from popup x + 11).
+const POPUP_TEXT_X := 10.0
 ## Creature picture origin in the panel.
 const PICTURE := Vector2(403, 25)
 
@@ -78,25 +90,24 @@ func _button(control: String, action: Callable) -> ELFrontMenu.CutButton:
 func build_screen() -> void:
 	_codes = ELEncyclopaedia.codes(menu.profile, race, mode, sort, ascending)
 	if not _codes.has(selected): selected = _codes[0] if not _codes.is_empty() else ""
-	menu._label("EncHdrLeft", menu._caption("EncHdrLeft"), _rect("EncHdrLeft"), 18)
+	menu._label("EncHdrLeft", menu._caption("EncHdrLeft"), _rect("EncHdrLeft"), 18, ROW_INK)
 	if creatures():
 		# The chosen creature's name replaces the header caption.
-		var header := menu._label("EncHdrRight", menu._caption("EncHdrRight"), _rect("EncHdrRight"), 18)
+		var header := menu._label("EncHdrRight", menu._caption("EncHdrRight"), _rect("EncHdrRight"), 18, ROW_INK)
 		menu.labels["card_name"] = header
-	menu._label("EncCurMode", menu.text(ELEncyclopaedia.MODE_TEXTS[mode]), _rect("EncCurMode"), 17, ELFrontMenu.TITLE_INK, HORIZONTAL_ALIGNMENT_LEFT)
+	menu._label("EncCurMode", menu.text(ELEncyclopaedia.MODE_TEXTS[mode]), _rect("EncCurMode"), 17, ROW_INK, HORIZONTAL_ALIGNMENT_LEFT)
 	_button("EncRaceLeft", func(): set_race((race + ELEncyclopaedia.RACE_COUNT - 1) % ELEncyclopaedia.RACE_COUNT))
 	_button("EncRaceRight", func(): set_race((race + 1) % ELEncyclopaedia.RACE_COUNT))
 	_button("EncDropBtn", toggle_popup)
 	for control: String in ["EncSortRarity", "EncSortName"]:
-		var text_button := ELDuelScreen.FlatText.new()
+		var text_button := SortCaption.new()
 		text_button.menu = menu
 		text_button.caption = menu._caption(control)
-		text_button.font_size = 16
+		text_button.font_size = ELFrontMenu.cell_em(18)
 		var rect := _rect(control)
 		text_button.position = rect.position
 		text_button.size = rect.size
 		var key: String = "rarity" if control == "EncSortRarity" else "name"
-		text_button.active = sort == key
 		var tip := menu.text("CtrlTT" + control)
 		if tip != "CtrlTT" + control: text_button.tooltip_text = tip
 		menu.canvas.add_child(text_button)
@@ -117,6 +128,15 @@ func build_screen() -> void:
 	var down := "EncScrollMD" if creatures() else "EncScrollED"
 	_button(up, func(): list.scroll(-1))
 	_button(down, func(): list.scroll(1))
+	var thumb := Scroller.new()
+	thumb.list = list
+	thumb.texture = ELArtDropList.thumb_art(menu.profile)
+	var column := _rect("EncMonstaScrollBounds" if creatures() else "EncEnchantScrollBounds")
+	thumb.position = column.position
+	thumb.size = column.size
+	menu.canvas.add_child(thumb)
+	menu.labels["scroller"] = thumb
+	list.scroller = thumb
 	if creatures(): _build_detail()
 	_button("EncOkBtn", close_screen)
 	popup = ModePopup.new()
@@ -127,7 +147,48 @@ func build_screen() -> void:
 	popup.visible = popup_open
 	menu.canvas.add_child(popup)
 	menu.labels["popup"] = popup
+	var themed: Array = menu.buttons.values()
+	if menu.labels.has("abilities"): themed.append(menu.labels.abilities)
+	for control: Control in themed: control.theme = tooltip_theme()
 	refresh()
+
+var _tooltip_theme: Theme
+var _tooltip_scale := 0.0
+
+## The panel's tooltips: the original nine-slice frame Interface/black/ToolTip
+## (as the map tooltip) around italic Arial Bold (as on
+## «Выбрать другую расу», «Выбрать тип заклинаний», 35 px high frames).
+func tooltip_theme() -> Theme:
+	# Tooltips are windows outside the menu canvas: their text and margins
+	# follow the canvas scale so they keep the panel's proportions.
+	var scale := maxf(menu.scale_factor, 0.01)
+	if _tooltip_theme != null and is_equal_approx(scale, _tooltip_scale): return _tooltip_theme
+	_tooltip_scale = scale
+	_tooltip_theme = Theme.new()
+	var sheet := menu.profile.texture(ELSecondMapTooltips.PANEL_TEXTURE)
+	var style: StyleBox
+	if sheet != null:
+		var framed := StyleBoxTexture.new()
+		framed.texture = sheet
+		framed.region_rect = ELSecondMapTooltips.PANEL_SOURCE
+		framed.set_texture_margin_all(ELSecondMapTooltips.PANEL_BORDER)
+		framed.axis_stretch_horizontal = StyleBoxTexture.AXIS_STRETCH_MODE_TILE_FIT
+		framed.axis_stretch_vertical = StyleBoxTexture.AXIS_STRETCH_MODE_TILE_FIT
+		style = framed
+	else:
+		style = ELAdventureHud.tooltip_style()
+	style.content_margin_left = 9 * scale
+	style.content_margin_right = 12 * scale
+	style.content_margin_top = 8 * scale
+	style.content_margin_bottom = 8 * scale
+	_tooltip_theme.set_stylebox("panel", "TooltipPanel", style)
+	var face := ELArtDropList.row_font()
+	face.font_italic = true
+	_tooltip_theme.set_font("font", "TooltipLabel", face)
+	_tooltip_theme.set_font_size("font_size", "TooltipLabel", roundi(ELFrontMenu.cell_em(ROW_CELL) * scale))
+	_tooltip_theme.set_color("font_color", "TooltipLabel", ROW_INK)
+	_tooltip_theme.set_color("font_shadow_color", "TooltipLabel", Color(0, 0, 0, 0))
+	return _tooltip_theme
 
 func _build_detail() -> void:
 	var origin := menu.shift("Encyclopaedia") + PICTURE
@@ -146,8 +207,8 @@ func _build_detail() -> void:
 	icons.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	menu.canvas.add_child(icons)
 	menu.labels["abilities"] = icons
-	var box := menu._text_box(text_bounds, "", 16)
-	box.add_theme_color_override("default_color", ELFrontMenu.INK_HOVER)
+	var box := menu._text_box(text_bounds, "", ELFrontMenu.cell_em(ROW_CELL), ROW_INK)
+	box.add_theme_font_override("normal_font", menu.arial_bold)
 	box.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.9))
 	box.add_theme_constant_override("shadow_offset_x", 1)
 	box.add_theme_constant_override("shadow_offset_y", 1)
@@ -252,7 +313,11 @@ func escape() -> bool:
 class CardList extends Control:
 	var screen: ELEncyclopaediaScreen
 	var offset := 0
+	var scroller: Control
 	var _heights: Dictionary = {}
+
+	func last_offset() -> int:
+		return _last_offset()
 
 	func _ready() -> void:
 		mouse_filter = Control.MOUSE_FILTER_STOP
@@ -268,12 +333,27 @@ class CardList extends Control:
 	func row_height(code: String) -> float:
 		if screen.creatures(): return ELEncyclopaediaScreen.ROW
 		if not _heights.has(code):
-			var font := screen.menu.arial
-			var cols := columns()
-			var width: float = cols.extra_end - cols.extra - 8
-			var text_height := font.get_multiline_string_size(screen.menu.profile.card_description(code), HORIZONTAL_ALIGNMENT_LEFT, width, 15).y
+			var text_height := _desc_font().get_multiline_string_size(screen.menu.profile.card_description(code), HORIZONTAL_ALIGNMENT_LEFT, _text_width(), ELFrontMenu.cell_em(ELEncyclopaediaScreen.ROW_CELL)).y
 			_heights[code] = maxf(ELEncyclopaediaScreen.ROW, ceilf(text_height) + 6)
 		return _heights[code]
+
+	## Enchantment/sorcery description column: text 11 px inside it, wrapped
+	## 424 px wide (x 444..866; a 427 px line
+	## breaks, a 422 px line stays).
+	func _text_width() -> float:
+		var cols := columns()
+		return float(cols.extra_end) - float(cols.extra) - ELEncyclopaediaScreen.TEXT_PAD - 8.0
+
+	var _desc: FontVariation
+
+	## Arial Bold with the original's 17 px line pitch (measured: caps 17 px apart).
+	func _desc_font() -> Font:
+		if _desc == null:
+			_desc = FontVariation.new()
+			_desc.base_font = screen.menu.arial_bold
+			var em := ELFrontMenu.cell_em(ELEncyclopaediaScreen.ROW_CELL)
+			_desc.spacing_bottom = roundi(17.0 - screen.menu.arial_bold.get_height(em))
+		return _desc
 
 	func visible_count() -> int:
 		var codes := screen.codes()
@@ -288,6 +368,7 @@ class CardList extends Control:
 	func scroll(step: int) -> void:
 		offset = clampi(offset + step, 0, _last_offset())
 		queue_redraw()
+		if scroller != null: scroller.queue_redraw()
 
 	## Smallest offset from which every remaining row fits.
 	func _last_offset() -> int:
@@ -305,6 +386,7 @@ class CardList extends Control:
 		if index < offset: offset = index
 		while index >= offset + visible_count() and offset < index: offset += 1
 		offset = mini(offset, _last_offset())
+		if scroller != null: scroller.queue_redraw()
 
 	func row_at(y: float) -> int:
 		var codes := screen.codes()
@@ -325,27 +407,41 @@ class CardList extends Control:
 	func _draw() -> void:
 		var codes := screen.codes()
 		var profile := screen.menu.profile
-		var font := screen.menu.arial
 		var cols := columns()
 		var top := 0.0
 		for index in range(offset, codes.size()):
 			if top >= size.y: break
 			var code: String = codes[index]
 			var height := row_height(code)
-			var ink := ELEncyclopaediaScreen.CHOSEN_INK if code == screen.selected else ELEncyclopaediaScreen.ROW_INK
+			# Only the creature list marks its chosen row (the enchantment and
+			# sorcery lists have no choice).
+			var ink := ELEncyclopaediaScreen.CHOSEN_INK if code == screen.selected and screen.creatures() else ELEncyclopaediaScreen.ROW_INK
 			var icon := profile.card_icon(code)
-			var icon_top := top + (minf(height, ELEncyclopaediaScreen.ROW) - 50.0) * 0.5
+			# Icon, name and cost are centred on the row, however tall.
+			var icon_top := top + (height - 50.0) * 0.5
 			if icon != null: draw_texture_rect(icon, Rect2(Vector2((float(cols.name) - 50.0) * 0.5, icon_top), Vector2(50, 50)), false)
-			var middle := top + ELEncyclopaediaScreen.ROW * 0.5 - font.get_height(17) * 0.5 + font.get_ascent(17)
-			var name_x: float = cols.name + 4
-			draw_string(font, Vector2(name_x, middle), ELEncyclopaedia.name(profile, code), HORIZONTAL_ALIGNMENT_LEFT, float(cols.cost) - name_x - 4, 17, ink)
-			var cost := str(ELEncyclopaedia.cost(profile, code))
-			draw_string(font, Vector2(float(cols.cost), middle), cost, HORIZONTAL_ALIGNMENT_CENTER, float(cols.cost_w), 17, ink)
+			var bold := screen.menu.arial_bold
+			var em := ELFrontMenu.cell_em(ELEncyclopaediaScreen.ROW_CELL)
+			# Baseline 33 px under a 55 px row's top (measured: caps 243..252 in a row at 219).
+			var middle := top + height * 0.5 - bold.get_height(em) * 0.5 + bold.get_ascent(em) + 2.0
 			if screen.creatures():
-				draw_string(font, Vector2(float(cols.extra), middle), ELEncyclopaedia.strength(profile, code), HORIZONTAL_ALIGNMENT_CENTER, float(cols.extra_end) - float(cols.extra), 17, ink)
+				var name_x: float = cols.name + ELEncyclopaediaScreen.NAME_PAD
+				draw_string(bold, Vector2(name_x, middle), ELEncyclopaedia.name(profile, code), HORIZONTAL_ALIGNMENT_CENTER, float(cols.cost) - name_x, em, ink)
 			else:
-				var width: float = cols.extra_end - cols.extra - 8
-				draw_multiline_string(font, Vector2(float(cols.extra) + 4, top + 3 + font.get_ascent(15)), profile.card_description(code), HORIZONTAL_ALIGNMENT_LEFT, width, 15, -1, ink)
+				# Spell names start 11 px into the column (measured: x 200).
+				var left: float = cols.name + ELEncyclopaediaScreen.TEXT_PAD
+				draw_string(bold, Vector2(left, middle), ELEncyclopaedia.name(profile, code), HORIZONTAL_ALIGNMENT_LEFT, float(cols.cost) - left - 2.0, em, ink)
+			var cost := str(ELEncyclopaedia.cost(profile, code))
+			draw_string(bold, Vector2(float(cols.cost), middle), cost, HORIZONTAL_ALIGNMENT_CENTER, float(cols.cost_w), em, ink)
+			if screen.creatures():
+				draw_string(bold, Vector2(float(cols.extra), middle), ELEncyclopaedia.strength(profile, code), HORIZONTAL_ALIGNMENT_CENTER, float(cols.extra_end) - float(cols.extra), em, ink)
+			else:
+				# The wrapped description is centred on the row (17 px lines;
+				# measured: caps from row top + 9 in a two-line 55 px row).
+				var text := profile.card_description(code)
+				var desc := _desc_font()
+				var block := desc.get_multiline_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, _text_width(), em).y
+				draw_multiline_string(desc, Vector2(float(cols.extra) + ELEncyclopaediaScreen.TEXT_PAD, top + (height - block) * 0.5 + desc.get_ascent(em) + 2.0), text, HORIZONTAL_ALIGNMENT_LEFT, _text_width(), em, -1, ink)
 			top += height
 			if not screen.creatures(): draw_line(Vector2(0, top - 0.5), Vector2(size.x, top - 0.5), Color(0.55, 0.47, 0.35, 0.45), 1.0)
 
@@ -395,7 +491,8 @@ class ModePopup extends Control:
 			accept_event()
 
 	func _draw() -> void:
-		var font := screen.menu.arial
+		var font := screen.menu.arial_bold
+		var em := ELFrontMenu.cell_em(ELEncyclopaediaScreen.ROW_CELL)
 		var height := ELEncyclopaediaScreen.POPUP_ROW
 		for row in ELEncyclopaedia.MODES.size():
 			var top := row * height
@@ -414,5 +511,76 @@ class ModePopup extends Control:
 			else:
 				draw_rect(Rect2(0, top, size.x, height), Color(0.05, 0.05, 0.04, 0.97))
 			var ink := ELEncyclopaediaScreen.CHOSEN_INK if row == screen.mode else ELEncyclopaediaScreen.ROW_INK
-			var baseline := top + (height - font.get_height(17)) * 0.5 + font.get_ascent(17)
-			draw_string(font, Vector2(8, baseline), screen.menu.text(ELEncyclopaedia.MODE_TEXTS[row]), HORIZONTAL_ALIGNMENT_LEFT, size.x - 16, 17, ink)
+			var baseline := top + (height - font.get_height(em)) * 0.5 + font.get_ascent(em)
+			draw_string(font, Vector2(ELEncyclopaediaScreen.POPUP_TEXT_X, baseline), screen.menu.text(ELEncyclopaedia.MODE_TEXTS[row]), HORIZONTAL_ALIGNMENT_LEFT, size.x - 2 * ELEncyclopaediaScreen.POPUP_TEXT_X, em, ink)
+
+## Column caption (EncSortRarity, EncSortName): Controls FontType Header, an
+## 18 px cell in Arial Bold, and without a mark for the active sort
+## (the original opens sorted by rarity with the caption unmarked).
+class SortCaption extends BaseButton:
+	var menu: ELFrontMenu
+	var caption := ""
+	var font_size := 16
+
+	func _ready() -> void:
+		focus_mode = Control.FOCUS_NONE
+
+	func _draw() -> void:
+		var font := menu.arial_bold
+		var text_size := font.get_string_size(caption, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size)
+		var at := Vector2((size.x - text_size.x) * 0.5, (size.y - text_size.y) * 0.5 + font.get_ascent(font_size))
+		draw_string(font, at + Vector2(1, 1), caption, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, Color(0, 0, 0, 0.8))
+		draw_string(font, at, caption, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, ELEncyclopaediaScreen.ROW_INK)
+
+## The list's scroll column with the original scroller thumb (as
+## ELArtDropList: 11x12 from MULTIPLAYER_PANEL_8 at the column's left edge,
+## top + (column - 12) * offset / last, centred when nothing scrolls;
+## thumb at 481,211 on the first rows). Dragging snaps to the
+## nearest offset; a click on the column pages at most five rows towards it.
+class Scroller extends Control:
+	var list: CardList
+	var texture: Texture2D
+	var _drag := -1.0
+
+	func _ready() -> void:
+		mouse_filter = Control.MOUSE_FILTER_STOP
+
+	func thumb_rect(at := -1) -> Rect2:
+		var source := ELArtDropList.THUMB_SOURCE
+		var travel := size.y - source.size.y
+		var last := list.last_offset()
+		var index := list.offset if at < 0 else at
+		var y := travel * 0.5 if last == 0 else travel * index / last
+		return Rect2(0, floorf(y), source.size.x, source.size.y)
+
+	func _nearest(y: float) -> int:
+		var best := 0
+		for index in list.last_offset() + 1:
+			if absf(thumb_rect(index).position.y - y) < absf(thumb_rect(best).position.y - y): best = index
+		return best
+
+	func _gui_input(event: InputEvent) -> void:
+		if event is InputEventMouseMotion and _drag >= 0.0:
+			var nearest := _nearest(event.position.y - _drag)
+			if nearest != list.offset: list.scroll(nearest - list.offset)
+			accept_event()
+			return
+		if not event is InputEventMouseButton: return
+		if event.button_index == MOUSE_BUTTON_LEFT and not event.pressed:
+			_drag = -1.0
+			return
+		if not event.pressed: return
+		if event.button_index == MOUSE_BUTTON_WHEEL_UP: list.scroll(-1)
+		elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN: list.scroll(1)
+		elif event.button_index == MOUSE_BUTTON_LEFT:
+			var thumb := thumb_rect()
+			if thumb.has_point(event.position): _drag = event.position.y - thumb.position.y
+			else:
+				var aim := _nearest(event.position.y - ELArtDropList.THUMB_SOURCE.size.y * 0.5)
+				if event.position.y >= thumb.end.y: list.scroll(mini(list.offset + ELArtDropList.PAGE, maxi(aim, list.offset)) - list.offset)
+				elif event.position.y < thumb.position.y: list.scroll(maxi(list.offset - ELArtDropList.PAGE, mini(aim, list.offset)) - list.offset)
+		else: return
+		accept_event()
+
+	func _draw() -> void:
+		if texture != null: draw_texture_rect_region(texture, thumb_rect(), ELArtDropList.THUMB_SOURCE)

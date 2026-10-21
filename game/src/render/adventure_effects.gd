@@ -64,7 +64,7 @@ func start(name: String, entry: Dictionary, elapsed: float) -> void:
 	mesh.transform_format = MultiMesh.TRANSFORM_3D
 	mesh.use_custom_data = true
 	# A unit quad of half-extent 1, scaled in the shader by
-	# ELParticleFile.SPRITE_SIZE_FUNCTION (the size itself on the map's
+	# ELParticleFile.SPRITE_SIZE_FUNCTION (size / cos(pi / 7) on the map's
 	# orthographic camera).
 	var quad := QuadMesh.new()
 	quad.size = Vector2(2, 2)

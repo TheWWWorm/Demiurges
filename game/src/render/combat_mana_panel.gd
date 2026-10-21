@@ -22,6 +22,7 @@ var buttons: Dictionary = {}
 var amount := Range.new()
 var readout: Label
 var _rects: Dictionary = {}
+var _profile: ELProfile
 
 func build(profile: ELProfile) -> void:
 	for child in get_children():
@@ -29,6 +30,7 @@ func build(profile: ELProfile) -> void:
 		child.queue_free()
 	buttons.clear()
 	_rects.clear()
+	_profile = profile
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	amount.step = 1
 	amount.rounded = true
@@ -108,7 +110,10 @@ func layout() -> void:
 		readout.position = rect.position
 		readout.size = rect.size
 
+## In the original's 1024 layout the controls sit in the phase oval beside
+## the buttons (their ShiftX 22 / ShiftY 224 against the panel's 168).
 func _place(rect: Rect2) -> Rect2:
-	rect.position.y += size.y - 600.0
-	if rect.position.x >= 374: rect.position.x += size.x - 800.0
-	return rect
+	if ELHudFrame.wide_layout(_profile, size.x):
+		rect.position += Vector2(22, 56)
+		return ELHudFrame.place(rect, size, ELHudFrame.WIDE, false)
+	return ELHudFrame.place(rect, size, 800.0, false)

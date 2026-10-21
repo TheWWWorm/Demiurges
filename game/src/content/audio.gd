@@ -70,13 +70,54 @@ static func pan_bus(name: String, reverse: bool) -> StringName:
 		AudioServer.set_bus_name(index, bus)
 		AudioServer.set_bus_send(index, through)
 		AudioServer.add_bus_effect(index, AudioEffectPanner.new())
+		AudioServer.add_bus_effect(index, AudioEffectAmplify.new())
 	return bus
 
-static func set_pan(bus: StringName, pan: float) -> void:
+## Sets a placed voice's pan (-1..1, from stereo_pan) the way each game's
+## mixer applies it. The first game's mixer (Miles 5) keeps the near side at
+## full level and fades the far side linearly, which is the panner's balance.
+## The second game's (Miles 6.5) gives the left side (1 - q)^0.3 and the right
+## q^0.3 of the level, q = (pan + 1) / 2; every sound in that game is sent
+## centred (q = 0.5) unless placed, so the gains are taken relative to the
+## centre value and built from the panner's balance plus a boost.
+static func set_pan(bus: StringName, pan: float, edition := "") -> void:
 	var index := AudioServer.get_bus_index(bus)
 	if index < 0: return
 	var panner := AudioServer.get_bus_effect(index, 0) as AudioEffectPanner
-	if panner != null: panner.pan = clampf(pan, -1.0, 1.0)
+	var boost := AudioServer.get_bus_effect(index, 1) as AudioEffectAmplify if AudioServer.get_bus_effect_count(index) > 1 else null
+	var balance := clampf(pan, -1.0, 1.0)
+	var gain := 1.0
+	if edition == "el2":
+		var gains := channel_gains(balance, edition)
+		var near := maxf(gains.x, gains.y)
+		var far := minf(gains.x, gains.y)
+		gain = near
+		balance = signf(balance) * (1.0 - far / near) if near > 0.0 else 0.0
+	if panner != null: panner.pan = balance
+	if boost != null: boost.volume_db = linear_to_db(gain)
+
+## Left and right level of a pan in each game's mixer (centre = 1, 1).
+static func channel_gains(pan: float, edition := "") -> Vector2:
+	pan = clampf(pan, -1.0, 1.0)
+	if edition == "el2":
+		var q := (pan + 1.0) / 2.0
+		var centre := pow(0.5, 0.3)
+		return Vector2(pow(1.0 - q, 0.3), pow(q, 0.3)) / centre
+	return Vector2(clampf(1.0 - pan, 0.0, 1.0), clampf(1.0 + pan, 0.0, 1.0))
+
+## The level of a Music or Sound slider (0..1). The second game sends the
+## option times the sound's own level to its mixer as the volume, which the
+## mixer raises to the power 5/3;
+## the first game's mixer applies its volume as it is.
+static func option_gain(value: float, edition := "") -> float:
+	return placed_gain(value, edition)
+
+## A placed sound's level from its distance fade (0..1). The second game's
+## mixer raises the volume it is given to the power 5/3; the first game's
+## applies it as it is.
+static func placed_gain(fade: float, edition := "") -> float:
+	fade = clampf(fade, 0.0, 1.0)
+	return pow(fade, 5.0 / 3.0) if edition == "el2" else fade
 
 static func sound(profile: ELProfile, path: String) -> AudioStreamWAV:
 	var key := ELArchive.key(path)

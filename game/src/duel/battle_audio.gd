@@ -26,6 +26,11 @@ var _pan_source: Variant = null
 var music: AudioStreamPlayer
 var ambience: AudioStreamPlayer
 var voices: Array[AudioStreamPlayer] = []
+## The arena's TerrainType (grass, snow, sand): the figures' step folder.
+var terrain := ""
+## Looping move sounds by figure, and the voice the last play() took.
+var _glides: Dictionary = {}
+var _last_voice: AudioStreamPlayer
 var tracks: Array[String] = []
 var track_index := 0
 var ambient_sounds: Array[String] = []
@@ -92,6 +97,7 @@ func build(data: ELProfile, arena: Dictionary, volumes: Dictionary) -> void:
 	edition = profile.id
 	random.randomize()
 	settings.merge(volumes, true)
+	terrain = String(arena.get("TerrainType", "")).to_lower()
 	load_effects()
 	music = AudioStreamPlayer.new()
 	add_child(music)
@@ -1556,10 +1562,10 @@ func _next_track() -> void:
 func apply_volumes(values: Dictionary) -> void:
 	settings.merge(values, true)
 	ELUiSounds.use_volumes(settings)
-	if music != null: music.volume_db = linear_to_db(float(settings.music)) - 6.0
+	if music != null: music.volume_db = linear_to_db(maxf(0.0001, ELAudio.option_gain(float(settings.music), edition))) - 6.0
 	if ambience != null: ambience.volume_db = ambience_db()
 	for voice in voices:
-		var level := float(settings.effects) * float(voice.get_meta("spatial_gain", 1.0))
+		var level := ELAudio.option_gain(float(settings.effects), edition) * float(voice.get_meta("spatial_gain", 1.0))
 		voice.volume_db = linear_to_db(maxf(0.0001, level)) - 3.0
 	for loop in loops: loop.volume_db = ambience_db()
 	# Arena loops and the panned effect voices both go through the positional bus.
@@ -1585,21 +1591,28 @@ func _process(delta: float) -> void:
 
 ## Starts a sound on a free effects voice; false when the file is missing or
 ## every voice is busy.
-func play(path: String, spatial_gain := 1.0) -> bool:
+func play(path: String, spatial_gain := 1.0, loop := false) -> bool:
 	var source: Variant = _pan_source
 	_pan_source = null
+	_last_voice = null
 	requested.append(path)
 	if requested.size() > 80: requested.pop_front()
 	var stream := ELAudio.sound(profile, path)
 	if stream == null: return false
+	if loop:
+		stream = stream.duplicate()
+		stream.loop_mode = AudioStreamWAV.LOOP_FORWARD
+		stream.loop_end = int(stream.get_length() * stream.mix_rate)
 	for voice in voices:
 		if not voice.playing:
+			_last_voice = voice
 			voice.stream = stream
+			spatial_gain = ELAudio.placed_gain(spatial_gain, edition)
 			voice.set_meta("spatial_gain", spatial_gain)
-			voice.volume_db = linear_to_db(maxf(0.0001, float(settings.effects) * spatial_gain)) - 3.0
+			voice.volume_db = linear_to_db(maxf(0.0001, ELAudio.option_gain(float(settings.effects), edition) * spatial_gain)) - 3.0
 			var pan := stereo_pan(source) if source is Vector3 else 0.0
 			voice.set_meta("pan", pan)
-			ELAudio.set_pan(voice.bus, pan)
+			ELAudio.set_pan(voice.bus, pan, edition)
 			voice.play()
 			played.append(path)
 			if played.size() > 40: played.pop_front()
@@ -1832,3 +1845,36 @@ func unit_path(model: Node, action: String) -> String:
 func unit(model: Node, action: String) -> void:
 	var path := unit_path(model, action)
 	if not path.is_empty(): play(path)
+
+## A moving figure's ground sounds: Creatures/<SndDir>/steps/<TerrainType>/.
+## Original EL1 / EL2 play one numbered step at each event
+## frame of the walk or run clip: a random number up to 7, lower again while
+## the file is missing. EL1 / EL2 loop walk.wav or run.wav
+## from the same folder for the whole move (gliders such as the Fingus).
+func step_folder(model: Node) -> String:
+	var directory: String = model.get_meta("sound_directory", "")
+	if directory.is_empty() or terrain.is_empty(): return ""
+	return "Creatures/%s/steps/%s/" % [directory, terrain]
+
+func step(model: Node) -> void:
+	var folder := step_folder(model)
+	if folder.is_empty(): return
+	var top := 7
+	while top >= 1:
+		var n := random.randi_range(1, top) if top > 1 else 1
+		if ELAudio.sound(profile, folder + "%d.wav" % n) != null:
+			play(folder + "%d.wav" % n)
+			return
+		top = n - 1
+
+func glide(model: Node, run: bool) -> void:
+	stop_glide(model)
+	var folder := step_folder(model)
+	if folder.is_empty(): return
+	var path := folder + ("run.wav" if run else "walk.wav")
+	if ELAudio.sound(profile, path) != null and play(path, 1.0, true): _glides[model] = _last_voice
+
+func stop_glide(model: Node) -> void:
+	var voice: AudioStreamPlayer = _glides.get(model)
+	_glides.erase(model)
+	if is_instance_valid(voice): voice.stop()

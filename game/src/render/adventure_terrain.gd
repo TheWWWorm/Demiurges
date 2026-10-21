@@ -65,34 +65,29 @@ func build(map: ELAdventureMap) -> bool:
 			if compositions[keys[key]].frames == 1 and corners.count(corners[0]) == 4: orientation = (seed_value / 3) % 4
 			cells[y * map.width + x] = keys[key] * 4 + orientation
 	combinations = compositions.size()
-	var pitch := tiles.side + 2 * GUTTER
+	# Each stored tile repeats its outer ELTileSet.BORDER texels mirrored (a
+	# filtering margin); a cell shows the inner square. The margin's texels
+	# next to the inner square fill the atlas gutter.
+	var inner := tiles.side - 2 * ELTileSet.BORDER
+	var pitch := inner + 2 * GUTTER
 	var columns := ceili(sqrt(animation_frames))
 	var rows := ceili(animation_frames / float(columns))
 	if columns * pitch > 8192 or rows * pitch > 8192:
 		errors.append("Terrain atlas exceeds the texture limit.")
 		return false
 	var image := Image.create(columns * pitch, rows * pitch, false, Image.FORMAT_RGB8)
+	var margin := ELTileSet.BORDER - GUTTER
 	for plan: Dictionary in compositions:
 		for frame in plan.frames:
 			var tile := tiles.compose(plan, frame)
 			var index: int = plan.offset + frame
-			var position := Vector2i((index % columns) * pitch + GUTTER, (index / columns) * pitch + GUTTER)
-			image.blit_rect(tile, Rect2i(0, 0, tiles.side, tiles.side), position)
-			# Duplicate the border so filtering cannot sample a neighboring tile.
-			for gutter in GUTTER:
-				image.blit_rect(tile, Rect2i(0, 0, tiles.side, 1), position - Vector2i(0, gutter + 1))
-				image.blit_rect(tile, Rect2i(0, tiles.side - 1, tiles.side, 1), position + Vector2i(0, tiles.side + gutter))
-				image.blit_rect(tile, Rect2i(0, 0, 1, tiles.side), position - Vector2i(gutter + 1, 0))
-				image.blit_rect(tile, Rect2i(tiles.side - 1, 0, 1, tiles.side), position + Vector2i(tiles.side + gutter, 0))
-			for corner: Vector2i in [Vector2i(0, 0), Vector2i(1, 0), Vector2i(1, 1), Vector2i(0, 1)]:
-				var start := position + Vector2i(tiles.side if corner.x else -GUTTER, tiles.side if corner.y else -GUTTER)
-				image.fill_rect(Rect2i(start, Vector2i(GUTTER, GUTTER)), tile.get_pixel(corner.x * (tiles.side - 1), corner.y * (tiles.side - 1)))
+			image.blit_rect(tile, Rect2i(margin, margin, pitch, pitch), Vector2i((index % columns) * pitch, (index / columns) * pitch))
 	atlas = ImageTexture.create_from_image(image)
 	var material := ShaderMaterial.new()
 	material.shader = load("res://src/render/adventure_terrain.gdshader")
 	material.set_shader_parameter("tiles", atlas)
 	material.set_shader_parameter("columns", columns)
-	material.set_shader_parameter("tile_side", tiles.side)
+	material.set_shader_parameter("tile_side", inner)
 	material.set_shader_parameter("pitch", pitch)
 	material.set_shader_parameter("atlas_size", Vector2(image.get_size()))
 	# Keep only the most recently built map atlas per edition. Reloading a save
@@ -124,6 +119,11 @@ func _build_chunk(map: ELAdventureMap, origin: Vector2i, cells: PackedInt32Array
 	var arrays := []
 	arrays.resize(Mesh.ARRAY_MAX)
 	arrays[Mesh.ARRAY_VERTEX] = vertices
+	# Flat ground: up normals, which the sun's shadow lookup needs.
+	var normals := PackedVector3Array()
+	normals.resize(vertices.size())
+	normals.fill(Vector3.UP)
+	arrays[Mesh.ARRAY_NORMAL] = normals
 	arrays[Mesh.ARRAY_TEX_UV] = uvs
 	arrays[Mesh.ARRAY_TEX_UV2] = data
 	arrays[Mesh.ARRAY_INDEX] = indices

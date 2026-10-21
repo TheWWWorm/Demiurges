@@ -10,12 +10,23 @@ extends Control
 ##   rise from the top of the figure for 3 seconds.
 ## Options: ShowCreatureNumbers hides all three rows; ShowIcons the icon row;
 ## ShowOrder the order row. Floating numbers have no option.
-## Approximations: glyphs keep a fixed screen size (16 px at 768 lines; the
-## original projects them with the figure) and floating numbers rise straight
-## up at 0.8 units a second; numbers that start together over one figure
-## begin a step apart.
+## Size and placement follow the original (EL1, EL2
+## ): each glyph is as wide as a camera-facing square 0.24 world units
+## across at the figure's mark (rising numbers 0.2), so nearer figures carry
+## larger glyphs; the number row hangs just under the mark, or is centred on it
+## when an icon row follows; the order row sits one row above, rising numbers
+## are centred on their point.
+## Approximations: floating numbers rise straight up at 0.8 units a second;
+## numbers that start together over one figure begin a step apart; glyphs never
+## shrink below MIN_SIZE window pixels (remake readability floor for small
+## windows and the remake's zoomed-out orbit; the original has none).
 
 const CELL := 16.0
+## Half the glyph's world width: figure readouts, rising numbers (original
+## 0.12 / 0.1, passed with the anchor to the camera's sprite projection).
+const FIGURE_HALF := 0.12
+const FLOAT_HALF := 0.1
+const MIN_SIZE := 7.0
 const SWORD := 11
 const SHIELD := 33
 ## Glyph colours: white, red (damage), green (healing).
@@ -47,6 +58,8 @@ var _shown := false
 
 func _init() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
+	# The 16 px sheet is drawn smaller than its cells; mipmaps keep it legible.
+	texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 
 func build(profile: ELProfile) -> void:
@@ -96,7 +109,7 @@ func number_points() -> Array[Vector2]:
 	return result
 
 func _number_at(entry: Dictionary) -> Vector2:
-	return camera.unproject_position(entry.point) - Vector2(0, glyph_size() * STACK_STEP * int(entry.get("stack", 0)))
+	return camera.unproject_position(entry.point) - Vector2(0, glyph_size(entry.point, FLOAT_HALF) * STACK_STEP * int(entry.get("stack", 0)))
 
 func _process(delta: float) -> void:
 	if floating.is_empty() and figures.is_empty():
@@ -111,34 +124,66 @@ func _process(delta: float) -> void:
 	floating = floating.filter(func(entry: Dictionary) -> bool: return entry.age < FLOAT_LIFE)
 	queue_redraw()
 
-func glyph_size() -> float:
+## Glyph size in px at a world point: the screen width of a camera-facing
+## square `half` x 2 units across there (fixed 16 px without a camera).
+func glyph_size(point: Vector3, half := FIGURE_HALF) -> float:
+	if camera == null or not is_instance_valid(camera) or not camera.is_inside_tree(): return CELL
+	var right := camera.global_transform.basis.x.normalized() * half
+	var width := camera.unproject_position(point + right).distance_to(camera.unproject_position(point - right))
+	return maxf(width, MIN_SIZE / _window_scale())
+
+## Window pixels per canvas unit (the stretched canvas is larger than small windows).
+func _window_scale() -> float:
 	var viewport := get_viewport()
-	if viewport == null: return CELL
-	return roundf(CELL * maxf(viewport.get_visible_rect().size.y / 768.0, 1.0))
+	if viewport == null: return 1.0
+	var scale := viewport.get_final_transform().get_scale().y
+	return scale if scale > 0.0 else 1.0
+
+## The screen rows of one figure's readout: glyph size, anchor and the tops of
+## the number, icon and order rows (from the original's layout).
+func figure_rows(figure: Dictionary) -> Dictionary:
+	var top: Vector3 = figure.get("top", Vector3.ZERO)
+	var size := glyph_size(top)
+	var anchor := camera.unproject_position(top)
+	var numbers := anchor.y - size * 0.5 if not (figure.get("icons", []) as Array).is_empty() else anchor.y
+	return {"size": size, "anchor": anchor, "numbers": numbers, "icons": numbers + size, "order": numbers - size}
+
+## The area one figure's readout covers on screen (for checks).
+func figure_rect(figure: Dictionary) -> Rect2:
+	var rows := figure_rows(figure)
+	var size: float = rows.size
+	var width := maxf(float((figure.get("numbers", []) as Array).size()), float((figure.get("icons", []) as Array).size())) * size
+	var top: float = rows.numbers
+	if not (figure.get("order", []) as Array).is_empty():
+		width = maxf(width, 3.0 * size)
+		top = rows.order - (size * 0.5 if int(figure.order[0]) == SHIELD else 0.0)
+	var bottom: float = rows.icons + size if not (figure.get("icons", []) as Array).is_empty() else rows.numbers + size
+	return Rect2(rows.anchor.x - width * 0.5, top, width, bottom - top)
 
 func _draw() -> void:
 	if sheet == null or camera == null or not is_instance_valid(camera) or not camera.is_inside_tree(): return
-	var size := glyph_size()
 	for figure: Dictionary in figures:
 		var top: Vector3 = figure.get("top", Vector3.ZERO)
 		if camera.is_position_behind(top): continue
-		var anchor := camera.unproject_position(top)
+		var rows := figure_rows(figure)
+		var size: float = rows.size
+		var x: float = rows.anchor.x
 		var icons: Array = figure.get("icons", [])
-		var y := anchor.y - size * (2.0 if not icons.is_empty() else 1.5)
 		var numbers: Array = figure.get("numbers", [])
-		if not numbers.is_empty(): _draw_row(numbers, anchor.x, y, size)
+		if not numbers.is_empty(): _draw_row(numbers, x, rows.numbers, size)
 		if not icons.is_empty():
 			var cells: Array = []
 			for code: int in icons: cells.append([code, WHITE])
-			_draw_row(cells, anchor.x, y + size, size)
+			_draw_row(cells, x, rows.icons, size)
 		var order: Array = figure.get("order", [])
-		if not order.is_empty(): _draw_order(order, anchor.x, y - size, size)
+		if not order.is_empty(): _draw_order(order, x, rows.order, size)
 	for entry: Dictionary in floating:
 		if camera.is_position_behind(entry.point): continue
+		var size := glyph_size(entry.point, FLOAT_HALF)
 		var at := _number_at(entry)
 		var cells: Array = []
 		for code: int in entry.glyphs: cells.append([code, entry.colour])
-		_draw_row(cells, at.x, at.y - size, size)
+		_draw_row(cells, at.x, at.y - size * 0.5, size)
 
 func _cell(code: int) -> Rect2:
 	return Rect2((code % 16) * CELL, (code / 16) * CELL, CELL, CELL)

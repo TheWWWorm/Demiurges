@@ -44,6 +44,12 @@ const INK_HOVER := Color("fff4d6")
 const INK_DISABLED := Color("8a8478")
 const TITLE_INK := Color("d9cba6")
 const BODY_INK := Color("d8d2c0")
+## Original front-end text colours: cream-gold headers and legend text, and
+## the darker values of the first game's mission description.
+const GOLD_INK := Color("d6bb88")
+const VALUE_INK := Color("998c68")
+## Second game: campaign-choice caption of a card not chosen.
+const CAPTION_IDLE := Color("70645c")
 const UNAVAILABLE := "Not available in the remake yet."
 ## OK action of the open inform_hosted box (none while a question is open).
 var _inform_ok: Callable
@@ -98,7 +104,9 @@ const SCREENS := {
 	"el2": {
 		"main": {"art": "MM_MainMenuA6", "buttons": ["MM_SingleBtn", "MM_MultiplayerBtn", "MM_OptionsBtn", "MM_EncBtn", "MM_CreditsBtn", "MM_QuitBtn"]},
 		"single": {"art": "MM_SingleGameScreenA6", "buttons": ["MM_SG_TutorialBtn", "MM_SG_DuelBtn", "MM_SG_CampaignBtn", "MM_SG_MissionBtn", "MM_SG_BackBtn"], "back": "main"},
-		"campaign_menu": {"art": "MM_CampaignScreenA6", "buttons": ["MM_C_NewBtn", "MM_C_LoadBtn", "MM_C_BackBtn", "MM_C_HOFBtn"], "back": "single"},
+		# The registry also lists MM_C_HOFBtn (no command); the original page
+		# shows only New / Load / Back, so it is left out.
+		"campaign_menu": {"art": "MM_CampaignScreenA6", "buttons": ["MM_C_NewBtn", "MM_C_LoadBtn", "MM_C_BackBtn"], "back": "single"},
 		# CMMMissionScreen: New, Load, Back, Hall of Fame (scenario table).
 		"mission_menu": {"art": "MM_MissionScreenA6", "buttons": ["MM_M_NewBtn", "MM_M_LoadBtn", "MM_M_BackBtn", "MM_M_HOFBtn"], "back": "single"},
 		"hall_of_fame": {"art": "HallOfFame", "back": "mission_menu"},
@@ -118,10 +126,10 @@ const SCREENS := {
 		"legend": {"art": "CampaignText", "under": "MM_CampaignScreenA6", "back": "campaigns"},
 		"map": {"art": "GlobalMapA6", "under": "MM_CampaignScreenA6", "back": "campaigns"},
 		"duel_menu": {"art": "MM_DuelScreenA6", "buttons": ["MM_D_NewBtn", "MM_D_ReplayBtn", "MM_D_BackBtn"], "back": "single"},
-		# Main -> Multiplayer: Master Server / Duel, then the Duel connection
-		# menu whose HOTSEAT opens the Duel screen.
-		"multiplayer": {"art": "MM_MultiplayerScreenA6", "buttons": ["MM_MP_MasterServBtn", "MM_MP_DuelBtn", "MM_MP_BackBtn"], "back": "main"},
-		"mp_start": {"art": "MultiplayerStart", "buttons": ["MSTCPIP", "MSLAN", "MSGameSpy", "MSHotSeat", "MSBack"], "back": "multiplayer"},
+		# Main -> Multiplayer opens the connection menu directly: Internet / LAN /
+		# Master server / Hot seat / Back (the registry's
+		# MM_MultiplayerScreenA6 page is not shown). Hot seat opens the Duel screen.
+		"mp_start": {"art": "MultiplayerStart", "buttons": ["MSTCPIP", "MSLAN", "MSGameSpy", "MSHotSeat", "MSBack"], "back": "main"},
 		"duel": {"art": "Duel", "exclude": ["Type2"], "back": "duel_menu"},
 		# CReplayScreen: Duel -> Replay (load, Type3 art) and the final round
 		# result's Save duel replay (save, Type4 art, over the battle).
@@ -141,10 +149,9 @@ const ACTIONS := {
 	"NewGameButton": "screen:new", "LoadGameButton": "screen:load", "OptionsButton": "options", "HallOfFameButton": "hall_of_fame", "CreditsButton": "credits", "QuitButton": "quit",
 	"DuelButton": "screen:duel", "CampaignButton": "screen:campaigns", "SingleButton": "screen:single", "MultiplayerButton": "screen:mp_type", "BackButton": "back",
 	"MSTDuel": "screen:mp_start", "MSTStrategy": "", "MSTBack": "back",
-	"MM_MP_DuelBtn": "screen:mp_start", "MM_MP_MasterServBtn": "", "MM_MP_BackBtn": "back",
 	"MSTCPIP": "", "MSLAN": "", "MSGameSpy": "", "MSHotSeat": "hot_seat", "MSBack": "back",
 	"LGCampaign": "screen:load_campaign", "LGSingle": "screen:load_mission", "LGBack": "back",
-	"MM_SingleBtn": "screen:single", "MM_MultiplayerBtn": "screen:multiplayer", "MM_OptionsBtn": "options", "MM_EncBtn": "encyclopaedia", "MM_CreditsBtn": "credits", "MM_QuitBtn": "quit",
+	"MM_SingleBtn": "screen:single", "MM_MultiplayerBtn": "screen:mp_start", "MM_OptionsBtn": "options", "MM_EncBtn": "encyclopaedia", "MM_CreditsBtn": "credits", "MM_QuitBtn": "quit",
 	"MM_SG_TutorialBtn": "screen:tutorial", "MM_SG_DuelBtn": "screen:duel_menu", "MM_SG_CampaignBtn": "screen:campaign_menu", "MM_SG_MissionBtn": "screen:mission_menu", "MM_SG_BackBtn": "back",
 	# The combat tutorial is the replay Tutorial\Combat\combat_tutorial.rpl.
 	"MM_Tut_Adventure": "tutorial_adventure", "MM_Tut_Combat": "tutorial_combat", "MM_Tut_BackBtn": "back",
@@ -370,10 +377,23 @@ func rows(control: String, required: Array = [], excluded: Array = []) -> Array[
 ## Screen offset of a control: its own shift plus its parent panel's.
 func shift(control: String) -> Vector2:
 	var row: Dictionary = _controls.get(control, {})
-	var result := Vector2(float(row.get("ShiftX", 0)), float(row.get("ShiftY", 0)))
-	var parent: Dictionary = _controls.get(str(row.get("Parent", "")), {})
-	if not parent.is_empty(): result += Vector2(float(parent.get("ShiftX", 0)), float(parent.get("ShiftY", 0)))
+	var result := _own_shift(control, row)
+	var parent_name := str(row.get("Parent", ""))
+	var parent: Dictionary = _controls.get(parent_name, {})
+	if not parent.is_empty(): result += _own_shift(parent_name, parent)
 	return result
+
+## Panels the original draws elsewhere than their registry shift says: the
+## second game's campaign map panel shows at 112,84 at 1024x768 (the
+## registry gives 112,14), so art and controls sit 70 px lower.
+## The Encyclopaedia panel and its mode popup likewise show at 112,84
+## (frame top y=84, popup under EncCurMode).
+const SHIFT_OVERRIDES := {"el2": {"GlobalMapA6": Vector2(112, 84), "Encyclopaedia": Vector2(112, 84), "EncPopup": Vector2(112, 84)}}
+
+func _own_shift(control: String, row: Dictionary) -> Vector2:
+	var fixed: Variant = SHIFT_OVERRIDES.get(edition, {}).get(control)
+	if fixed != null: return fixed
+	return Vector2(float(row.get("ShiftX", 0)), float(row.get("ShiftY", 0)))
 
 func text(key: String) -> String:
 	return profile.text(key)
@@ -400,16 +420,26 @@ func show_screen(target: String) -> void:
 	var definition: Dictionary = SCREENS[edition][target]
 	_pieces.clear()
 	if definition.has("under"): _add_group(definition.under, [])
+	# Options opened from the front end keeps the main-menu art around its
+	# panel, as the original does (over a running game the game shows instead).
+	# The second game's Encyclopaedia, opened from the main menu, also keeps
+	# the main-menu art and its version line around the panel;
+	# so does the second game's Options.
+	elif target == "options" and not hosted or target == "encyclopaedia" and edition == "el2" and not hosted: _add_group(SCREENS[edition].main.art, [])
 	_add_group(definition.art, definition.get("exclude", []) + (duel_ui.art_exclude(target) if duel_ui != null else []) + (encyclopaedia_ui.art_exclude(target) if encyclopaedia_ui != null else []) + (options_ui.art_exclude(target) if options_ui != null else []))
 	if not target in ["credits", "hall_of_fame"] and not playing_interface(): stop_audio()
 	if definition.has("buttons"): _build_text_buttons(definition.buttons)
+	_add_version([definition.get("under", ""), definition.art, SCREENS[edition].main.art if target in ["encyclopaedia", "options"] and not hosted else ""])
 	match target:
 		"campaigns": _build_campaigns()
 		"legend": _build_legend()
 		"mission": _build_mission()
 		"map": _build_map()
 		"duel": duel_ui.build_screen()
-		"single", "select_mission": single_ui.build_screen()
+		# The second game's "single" is the Single game sub-menu; its mission
+		# choice is "select_mission".
+		"single", "select_mission":
+			if target == single_ui.screen_name(): single_ui.build_screen()
 		"blazon", "blazon_single": blazon_ui.build_dialog()
 		"branch": branch_ui.build()
 		"load_mission":
@@ -470,20 +500,51 @@ func _draw() -> void:
 
 # --- Stacked text buttons ----------------------------------------------------
 
+## Stacked menu buttons repeat their 34 px middle piece between the two 53 px
+## caps. Tile counts measured on the originals at 1024x768: first game main menu 7 (344 px), its sub-menus 5 (276 px);
+## every second-game menu 6 (310 px). Captions are the Controls FontSize 24
+## GDI cell (a 21 px em) in the original cream-gold.
+const BUTTON_TILE := 34.0
+const BUTTON_INK := Color("d6bb88")
+
+func button_tiles(target: String) -> int:
+	if edition == "el2": return 6
+	return 7 if target == "main" else 5
+
 func _build_text_buttons(names: Array) -> void:
-	var font_size := 24
+	var font_size := cell_em(24)
 	var widest := 0.0
 	for control: String in names:
 		widest = maxf(widest, face_for(control).get_string_size(_caption(control), HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x)
-	# Captions longer than the 140 px design widen the shared middle section;
-	# the column stays centred on the 1024 screen as in the original.
-	var width := maxf(140.0, ceilf(widest + 72.0))
+	# A longer caption (other localisations) adds whole middle tiles.
+	var tiles := button_tiles(screen)
+	while 140.0 + BUTTON_TILE * (tiles - 1) < widest + 72.0: tiles += 1
+	var width := 140.0 + BUTTON_TILE * (tiles - 1)
 	for control: String in names:
 		var button := TextButton.make(self, control, width, font_size)
 		if button == null: continue
 		canvas.add_child(button)
 		buttons[control] = button
 		_wire(button, control)
+
+## Second game: each menu page's `*_Version` text control (MM_Version,
+## MM_SG_Version, MM_C_Version, MSVersion, ...) shows T_MAIN_MENU_VERSION from
+## the installed text tables, not its own empty Ctrl text (sets
+## MM_Version's text from T_MAIN_MENU_VERSION; every other page pairs its
+## control name with the same key). Pages drawn over another page (the campaign
+## map over the Campaign page) keep the lower page's line, as the original does.
+const VERSION_KEY := "T_MAIN_MENU_VERSION"
+
+func _add_version(groups: Array) -> void:
+	var value := text(VERSION_KEY)
+	if value == VERSION_KEY or value.strip_edges().is_empty(): return
+	for control: String in _controls:
+		var row: Dictionary = _controls[control]
+		if not control.ends_with("Version") or str(row.get("Type", "")) != "Text" or not groups.has(str(row.get("Parent", ""))): continue
+		var label := _label("version", value.strip_edges(), control_rect(control), int(row.get("FontSize", 16)), GOLD_INK, HORIZONTAL_ALIGNMENT_RIGHT)
+		# Drawn from the rectangle's top (capture: cap top 3 px under it).
+		label.vertical_alignment = VERTICAL_ALIGNMENT_TOP
+		return
 
 func _caption(control: String) -> String:
 	var row: Dictionary = _controls.get(control, {})
@@ -716,19 +777,26 @@ func control_rect(control: String) -> Rect2:
 	var row: Dictionary = _controls.get(control, {})
 	return Rect2(Vector2(float(row.get("Left", 0)), float(row.get("Top", 0))) + shift(control), Vector2(float(row.get("Width", 0)), float(row.get("Height", 0))))
 
-func _text_box(rect: Rect2, value: String, size_px := 17) -> RichTextLabel:
+func _text_box(rect: Rect2, value: String, size_px := 17, ink := BODY_INK, bbcode := false) -> RichTextLabel:
 	text_box = RichTextLabel.new()
-	text_box.bbcode_enabled = false
+	text_box.bbcode_enabled = bbcode
 	text_box.text = value
 	text_box.position = rect.position
 	text_box.size = rect.size
 	text_box.scroll_active = true
 	text_box.add_theme_font_override("normal_font", arial)
 	text_box.add_theme_font_size_override("normal_font_size", size_px)
-	text_box.add_theme_color_override("default_color", BODY_INK)
+	text_box.add_theme_color_override("default_color", ink)
+	if bbcode:
+		text_box.add_theme_font_override("bold_font", arial_bold)
+		text_box.add_theme_font_size_override("bold_font_size", size_px)
 	text_box.get_v_scroll_bar().modulate = Color(1, 1, 1, 0)
 	canvas.add_child(text_box)
 	return text_box
+
+## Plain text inside BBCode: opening brackets escaped.
+static func _bb(value: String) -> String:
+	return value.replace("[", "[lb]")
 
 func scroll_text(lines: int) -> void:
 	if text_box == null: return
@@ -768,7 +836,7 @@ func _play(stream: AudioStream, channel: String) -> void:
 
 ## Music sits at the level of the battle and map music.
 func _channel_db(values: Dictionary) -> float:
-	return linear_to_db(maxf(float(values.get(_channel, 0.0)), 0.0001)) - (6.0 if _channel == "music" else 0.0)
+	return linear_to_db(maxf(ELAudio.option_gain(float(values.get(_channel, 0.0)), edition), 0.0001)) - (6.0 if _channel == "music" else 0.0)
 
 ## Volume sliders changed while the menu plays.
 func apply_volumes(values: Dictionary) -> void:
@@ -868,7 +936,15 @@ func _build_campaigns() -> void:
 		var title: String = text(card.title) if card.has("title") else data.title
 		_label("card_" + card.id, title, control_rect(card.name), 17)
 		if card.has("caption"):
-			var caption := _label("caption_" + card.id, data.title, control_rect(card.caption), 16, BODY_INK)
+			# Regular Arial ~15 px centred under its card, grey until chosen
+			# (measured on the original).
+			var below := control_rect(card.caption)
+			# The original keeps each caption on one line (wider than the 160 px control).
+			below.size.x = maxf(below.size.x, 300.0)
+			below.position.x = card.hole.get_center().x - below.size.x * 0.5
+			var caption := _label("caption_" + card.id, data.title, below, 16, CAPTION_IDLE)
+			caption.add_theme_font_override("font", arial)
+			caption.add_theme_font_size_override("font_size", 15)
 			caption.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 			caption.vertical_alignment = VERTICAL_ALIGNMENT_TOP
 	var back := _square("SCBack")
@@ -887,8 +963,11 @@ func _build_campaigns() -> void:
 		blazon_ui.build_campaign()
 		if previous_screen != "blazon": selected_campaign = ""
 		select_campaign(selected_campaign)
-	elif selected_campaign.is_empty() and not cards.is_empty(): select_campaign(cards[0].campaign)
-	else: select_campaign(selected_campaign)
+	else:
+		# The original opens with no campaign chosen (Info and Start dimmed);
+		# coming back from the campaign description keeps the choice.
+		if previous_screen != "legend": selected_campaign = ""
+		select_campaign(selected_campaign)
 
 func select_campaign(id: String) -> void:
 	var previous := selected_campaign
@@ -897,6 +976,7 @@ func select_campaign(id: String) -> void:
 	for card: CardButton in cards:
 		card.chosen = card.campaign == id
 		card.queue_redraw()
+		if labels.has("caption_" + card.campaign): labels["caption_" + card.campaign].add_theme_color_override("font_color", GOLD_INK if card.chosen else CAPTION_IDLE)
 	for control: String in ["SCStart", "SCInfo"]:
 		if buttons.has(control): buttons[control].disabled = id.is_empty()
 
@@ -944,10 +1024,12 @@ func _build_legend() -> void:
 			var arrow := _square(control)
 			if arrow != null: arrow.pressed.connect(scroll_text.bind(-3 if control == "CTUp" else 3))
 	else:
-		_label("caption", campaign_data.title if campaign_data != null else "", Rect2(297, 1, 435, 20), 17)
-		# The first-game CTText control carries no rectangle; the text uses the
-		# panel interior above the bottom bar.
-		_text_box(Rect2(182, 136, 660, 470), body)
+		# The original keeps the campaign-choice title over the legend.
+		_label("caption", text("CtrlSCCaption"), control_rect("SCCaption"), 17)
+		# The first-game CTText control carries no rectangle; column, size and
+		# colour measured on the original (Arial-like
+		# 19 px, 22 px pitch, cream-gold, left ~240, wrapping at ~780).
+		_text_box(Rect2(240, 149, 532, 460), body, 19, GOLD_INK)
 		if campaign_data != null and briefing != null:
 			briefing.start(profile, ELBriefingVoice.campaign_file(campaign_data.guid), _effects_volume())
 	var back := _square("CTBack")
@@ -965,12 +1047,17 @@ func _build_mission() -> void:
 	var header := _map_header(str(scenario.get("file_name", "")))
 	var name_rect := control_rect("CIMissName")
 	_label("mission_name", text(header.get("title", "")), name_rect, 18)
+	# Story, then the objective headers (CIMissObj1/Win1/Lose1, FontType Header:
+	# centred bold gold) over their values (regular Arial), with a blank
+	# line between sections (measured on the original).
 	var parts: Array[String] = []
 	for key: String in ["description"]:
-		if not header.get(key, "").is_empty(): parts.append(text(header[key]))
+		if not header.get(key, "").is_empty(): parts.append(_bb(text(header[key])))
 	for pair: Array in [["CtrlCIMissObj1", "objective"], ["CtrlCIMissWin1", "win_condition"], ["CtrlCIMissLose1", "lose_condition"]]:
-		if not header.get(pair[1], "").is_empty(): parts.append(text(pair[0]) + "\n" + text(header[pair[1]]))
-	_text_box(control_rect("CIMissDesc"), "\n\n".join(parts))
+		if not header.get(pair[1], "").is_empty():
+			parts.append("[center][b][color=#%s]%s[/color][/b][/center]\n%s" % [GOLD_INK.to_html(false), _bb(text(pair[0])), _bb(text(header[pair[1]]))])
+	_text_box(control_rect("CIMissDesc"), "\n\n".join(parts), 15, VALUE_INK, true)
+	text_box.add_theme_constant_override("line_separation", 3)
 	for control: String in ["CIScrollRU", "CIScrollRD"]:
 		var arrow := _square(control)
 		if arrow != null: arrow.pressed.connect(scroll_text.bind(-3 if control == "CIScrollRU" else 3))
@@ -983,6 +1070,7 @@ func _build_mission() -> void:
 	if start != null: start.pressed.connect(start_campaign)
 	if edition == "el1":
 		_add_chapter_movie(scenario)
+		_add_chapter_players(scenario)
 		if briefing != null: briefing.start(profile, ELBriefingVoice.mission_file(scenario), _effects_volume(), ELBriefingVoice.INFO_DELAY, text_box)
 
 ## First game: the chapter's own movie (`movie` of its campaign row, the
@@ -1001,6 +1089,34 @@ func _add_chapter_movie(scenario: Dictionary) -> void:
 	canvas.add_child(player)
 	labels["chapter_movie"] = player
 	player.play(ELMoviePlayer.item(profile, movie))
+
+## First game: the chapter's players in the 2x4 slot grid. The campaign info
+## screen fills the Single screen's player-slot panel from the chapter map's
+## header and puts the human in the row's `player` slot
+## (with player - 1), so each map player shows its race plate,
+## controller, relation to the human, blazon and name; the human cell shows the
+## player's name and blazon. Display only here [A: no slot or blazon clicks].
+func _add_chapter_players(scenario: Dictionary) -> void:
+	var entry := ELSingleScenario.read_header(profile, str(scenario.get("file_name", "")))
+	if entry.get("players", []).is_empty(): return
+	var slots := ELSingleSlots.new()
+	slots.setup(self)
+	slots.name = "ChapterPlayers"
+	slots.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	canvas.add_child(slots)
+	labels["players"] = slots
+	slots.show_entry(entry)
+	var human := int(scenario.get("player", 1))
+	for slot in slots.count():
+		if int(slots.player(slot).get("id", -1)) == human: slots.human = slot
+	slots._sync_edits()
+	var name := str(scenario.get("player_name", ""))
+	for slot in slots.edits.size():
+		var edit: LineEdit = slots.edits[slot]
+		edit.editable = false
+		edit.focus_mode = Control.FOCUS_NONE
+		edit.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		if slot == slots.human and not name.is_empty(): edit.text = name.left(ELPlayerProfile.SLOT_NAME_LIMIT)
 
 func _first_scenario() -> Dictionary:
 	if edition == "el1" and not chapter.is_empty(): return chapter.duplicate()
@@ -1079,7 +1195,15 @@ func _build_map() -> void:
 		map.position = clip_rect.position
 		map.size = clip_rect.size
 		map.clip_contents = true
-		map.marker = Vector2(float(scenario.get("map_x", 0)), float(scenario.get("map_y", 0)))
+		var progress: Dictionary = scenario.get(ELSecondCampaign.KEY, {})
+		var paths := journey(campaign_data.id, int(progress.get("index", 0)), int(progress.get("row", 0)), Array(progress.get("played", [])))
+		for part in paths.size():
+			if part < paths.size() - 1: map.past.append_array(paths[part])
+			else: map.current = paths[part]
+		# No journey file: the hero stands at the row's own map point.
+		map.marker = map.current[-1] if not map.current.is_empty() else Vector2(float(scenario.get("map_x", 0)), float(scenario.get("map_y", 0)))
+		if map.current.is_empty(): map.current.append(map.marker)
+		map.started = Time.get_ticks_msec()
 		var symbols := profile.texture("Interface/world_symbols_map")
 		if symbols != null and MAP_FIGURES.has(campaign_data.id):
 			map.figure = symbols
@@ -1098,6 +1222,34 @@ func _build_map() -> void:
 	if briefing != null: briefing.pressed.connect(_open_briefing)
 	var start := _square("GMA6Start")
 	if start != null: start.pressed.connect(start_campaign)
+
+## Second game: the journey on the campaign map. Each chapter has a point list
+## in regs `GlobalMap\<campaign><n>.reg` (int count, then x, y pairs in map
+## clip pixels). The screen loads the files of the chapters played so far and
+## the current one: earlier files are drawn as grey dots, the
+## current file as red dots, and the hero figure stands centred on the current
+## file's last point. White's third to fifth chapters have an "a"
+## file for the order 52 then 53 and a "b" file for 53 then 52 (the paths end
+## at those missions' map places). Returns one point list per file.
+func journey(campaign: String, index: int, row: int, played: Array = []) -> Array:
+	var result: Array = []
+	# White: was mission 52 (row 2) played before 53 (row 3)? Known from the
+	# current row while the pair is played, and from the rows already won after
+	# it; a progress without that record assumes the "a" order.
+	var order := "a"
+	if index == 2 or index == 3: order = "a" if (row == 2) == (index == 2) else "b"
+	elif index > 3 and played.size() > 2: order = "a" if int(played[2]) == 2 else "b"
+	for chapter in index + 1:
+		var name := campaign + str(chapter + 1)
+		if campaign == ELSecondCampaign.FINAL and chapter >= 2: name += order
+		var bytes := profile.read("regs", "GlobalMap/%s.reg" % name)
+		if bytes.size() < 4: continue
+		var count := bytes.decode_s32(0)
+		var points: Array[Vector2] = []
+		for point in clampi(count, 0, (bytes.size() - 4) / 8):
+			points.append(Vector2(bytes.decode_s32(4 + point * 8), bytes.decode_s32(8 + point * 8)))
+		if not points.is_empty(): result.append(points)
+	return result
 
 func _open_briefing() -> void:
 	var scenario := _first_scenario()
@@ -1150,7 +1302,8 @@ class TextButton extends BaseButton:
 		_draw_parts(states.get("pressed" if pushed else "normal", []), tint)
 		if not disabled and (mode == DRAW_HOVER or mode == DRAW_HOVER_PRESSED):
 			_draw_parts(states.get("hover_pressed" if pushed else "hover", []), Color.WHITE)
-		var color := INK_DISABLED if disabled else (INK_HOVER if mode == DRAW_HOVER or mode == DRAW_HOVER_PRESSED else INK)
+		# The original keeps the caption colour on hover (the Light overlay lights the slab).
+		var color := INK_DISABLED if disabled else BUTTON_INK
 		var font := menu.face_for(name)
 		var text_size := font.get_string_size(caption, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size)
 		var baseline := (size.y - text_size.y) * 0.5 + font.get_ascent(font_size) + (1.0 if pushed else 0.0)
@@ -1165,9 +1318,20 @@ class TextButton extends BaseButton:
 			var rect: Rect2 = part.rect
 			var x: float = rect.position.x - design_left
 			var width: float = rect.size.x
-			if part.type == "Type6": width += size.x - 140.0
+			var y: float = rect.position.y - position.y + _top_shift()
+			if part.type == "Type6":
+				# The middle piece repeats (the last copy cut to fit).
+				var span: float = width + size.x - 140.0
+				var done := 0.0
+				while done < span - 0.01:
+					var piece := minf(width, span - done)
+					var source: Rect2 = part.source
+					source.size.x = piece
+					draw_texture_rect_region(part.texture, Rect2(Vector2(x + done, y), Vector2(piece, rect.size.y)), source, tint)
+					done += piece
+				continue
 			elif part.type == "Type7": x = size.x - (right_edge - rect.position.x)
-			draw_texture_rect_region(part.texture, Rect2(Vector2(x, rect.position.y - position.y + _top_shift()), Vector2(width, rect.size.y)), part.source, tint)
+			draw_texture_rect_region(part.texture, Rect2(Vector2(x, y), Vector2(width, rect.size.y)), part.source, tint)
 
 	func _top_shift() -> float:
 		return menu.shift(name).y
@@ -1265,13 +1429,40 @@ class MapView extends Control:
 	var map: Texture2D
 	var figure: Texture2D
 	var figure_rect := Rect2()
+	## The hero's point (map clip pixels).
 	var marker := Vector2.ZERO
+	## Journey dots: earlier chapters' (all shown) and the current chapter's
+	## (one more every 1/3 s, `> 0x14d` ms; the hero appears with the last).
+	var past: Array[Vector2] = []
+	var current: Array[Vector2] = []
+	var started := 0
+	## WORLD_SYMBOLS_MAP 7x7 dots: red for the current path, grey for earlier ones.
+	const DOT_CURRENT := Rect2(10, 0, 7, 7)
+	const DOT_PAST := Rect2(30, 0, 7, 7)
+	const DOT_STEP_MS := 334
+
+	func shown_dots() -> int:
+		return mini(current.size(), int((Time.get_ticks_msec() - started) / DOT_STEP_MS))
+
+	func hero_visible() -> bool:
+		return not current.is_empty() and shown_dots() == current.size()
+
+	## Original centring: the rect moves by -(size / 2) in integer pixels.
+	static func centred(point: Vector2, rect: Rect2) -> Rect2:
+		return Rect2(point - Vector2(int(rect.size.x) / 2, int(rect.size.y) / 2), rect.size)
+
+	func _process(_delta: float) -> void:
+		# Redraw while the current path is still being revealed.
+		queue_redraw()
+		if shown_dots() >= current.size(): set_process(false)
 
 	func _draw() -> void:
 		if map == null: return
-		# Keep the mission in view when the map is wider than its clip.
-		var offset := clampf(marker.x - size.x * 0.5, 0, maxf(0, map.get_width() - size.x))
-		draw_texture_rect_region(map, Rect2(Vector2.ZERO, size), Rect2(Vector2(offset, 0), size))
-		if figure != null and figure_rect.size.x > 0:
-			var at := Vector2(marker.x - offset - figure_rect.size.x * 0.5, marker.y - figure_rect.size.y)
-			draw_texture_rect_region(figure, Rect2(at.round(), figure_rect.size), figure_rect)
+		# The map is drawn from its left edge (no scrolling, as in the
+		# original's Green and Red first chapters).
+		draw_texture_rect_region(map, Rect2(Vector2.ZERO, size), Rect2(Vector2.ZERO, size))
+		if figure == null: return
+		for point: Vector2 in past: draw_texture_rect_region(figure, centred(point, DOT_PAST), DOT_PAST)
+		for dot in shown_dots(): draw_texture_rect_region(figure, centred(current[dot], DOT_CURRENT), DOT_CURRENT)
+		if figure_rect.size.x > 0 and hero_visible():
+			draw_texture_rect_region(figure, centred(marker, figure_rect), figure_rect)

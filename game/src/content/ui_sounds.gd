@@ -66,7 +66,7 @@ static func play(profile: ELProfile, path: String) -> bool:
 		_player.name = "InterfaceSounds"
 		tree.root.add_child(_player)
 	_player.stream = stream
-	_player.volume_db = linear_to_db(volume)
+	_player.volume_db = linear_to_db(maxf(0.0001, ELAudio.option_gain(volume, profile.id)))
 	_player.play()
 	return true
 

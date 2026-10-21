@@ -47,6 +47,7 @@ static func begin(data: Dictionary, campaign_id: String) -> bool:
 	data.current = campaign_id
 	data.index = 0
 	data.row = 0
+	data.played = []
 	data.intermission = {}
 	return true
 
@@ -85,6 +86,8 @@ static func next_row(data: Dictionary, count: int) -> int:
 ## "campaign" when the next campaign opened, "finished" after the last one.
 static func complete_chapter(data: Dictionary, intermission: Dictionary, count: int) -> String:
 	if int(data.index) + 1 < count:
+		# The rows played so far (the campaign map draws their journey).
+		data.played = Array(data.get("played", [])) + [int(data.row)]
 		data.intermission = intermission.duplicate(true)
 		data.index = int(data.index) + 1
 		data.row = next_row(data, count)
@@ -101,6 +104,7 @@ static func next_campaign(data: Dictionary) -> String:
 	data.current = ""
 	data.index = 0
 	data.row = 0
+	data.played = []
 	data.intermission = {}
 	data.possible = possible
 	if possible.is_empty():
@@ -193,12 +197,18 @@ static func valid(data: Variant) -> bool:
 		if not CAMPAIGNS.has(id): return false
 	if not data.current.is_empty() and not CAMPAIGNS.has(data.current): return false
 	if not data.prev.is_empty() and not CAMPAIGNS.has(data.prev): return false
+	# Optional (older saves lack it): rows of the chapters already won.
+	if data.has("played"):
+		if not data.played is Array or data.played.size() > MAX_ROWS: return false
+		for row: Variant in data.played:
+			if not ELLuaSave._integer(row, 0, MAX_ROWS): return false
 	return true
 
 ## Normalises JSON numbers back to integers where the format requires them.
 static func normalized(data: Dictionary) -> Dictionary:
 	var result := data.duplicate(true)
 	for key: String in ["version", "counter", "index", "row", "difficulty"]: result[key] = int(result[key])
+	if result.has("played"): result.played = Array(result.played).map(func(row: Variant) -> int: return int(row))
 	return result
 
 ## Restores progress saved with a chapter (adventure save `scenario` field).

@@ -117,8 +117,8 @@ static func decode(profile: ELProfile, raw: Dictionary) -> Dictionary:
 				var illusion: bool = effect.get("kind") == "illusion" and c.card == "WLIL" and effect.get("toughness") is int
 				# Mother bee death: bees are aggressive until their source owner's turn ends.
 				var frenzy: bool = effect.get("kind") == "frenzy" and effect.get("flags") == ["Berserk"] and effect.get("until_turn_of") in [0, 1]
-				# Wall boosts: phantasmal +2 power, lava +X power, hellfire +X health.
-				var boost: bool = ({"phantasm": "PHWL", "lava_power": "WLLV", "hellfire_health": "WLIF"}.get(effect.get("kind")) == c.card) and (effect.get("power", 0) is int and effect.get("toughness", 0) is int) and int(effect.get("power", 0)) + int(effect.get("toughness", 0)) >= 1
+				# Wall boosts: phantasmal +2 power, lava/wind +X power, hellfire +X health.
+				var boost: bool = (c.card in {"phantasm": ["PHWL"], "lava_power": ["WLLV", "WLWD"], "hellfire_health": ["WLIF"]}.get(effect.get("kind"), [])) and (effect.get("power", 0) is int and effect.get("toughness", 0) is int) and int(effect.get("power", 0)) + int(effect.get("toughness", 0)) >= 1
 				# Scroll of blessing: +4/+4 until the end of the user's turn.
 				var bless: bool = effect.get("kind") == "bless" and effect.get("power") == 4 and effect.get("toughness") == 4 and effect.get("until_turn_of") in [0, 1]
 				if not illusion and not frenzy and not boost and not bless: return _bad("Invalid temporary creature effect.")

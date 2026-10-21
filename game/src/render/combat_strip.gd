@@ -7,7 +7,8 @@ extends Control
 ## contents starts again at the first icon. An enabled icon plays the card
 ## turn sound when clicked, a disabled one the error sound.
 ## Drawn in the original list look (ELListLook), with the frame tile in
-## every empty visible slot.
+## every empty visible slot after the icons; an empty strip draws nothing,
+## leaving the battlefield visible as in the original.
 ## Placed in the original 800x600 layout, bottom-anchored like ELHudFrame;
 ## a wider window shows more icons, as the card rail does.
 signal item_pressed(index: int)
@@ -67,7 +68,7 @@ func build(data: ELProfile) -> void:
 
 ## The frame tile in every visible slot past the last icon.
 func _draw_frames() -> void:
-	if look != null: look.draw_frames(_frames, FIRST - CLIP.position, items.size() - first, visible_count(), PITCH, ICON)
+	if look != null and not items.is_empty(): look.draw_frames(_frames, FIRST - CLIP.position, items.size() - first, visible_count(), PITCH, ICON)
 
 func _arrow(control: String, direction: int) -> ELCutPartButton:
 	var bounds := Rect2()
@@ -178,5 +179,8 @@ func _update_arrows() -> void:
 	if left == null or right == null: return
 	left.disabled = first <= 0
 	right.disabled = first + visible_count() >= items.size()
+	# An empty strip shows no arrows either.
+	left.visible = not items.is_empty()
+	right.visible = left.visible
 	left.queue_redraw()
 	right.queue_redraw()

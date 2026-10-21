@@ -195,6 +195,8 @@ func abort() -> void:
 	_serial += 1
 	_capturing = false
 	_running = false
+	for id: int in _moves:
+		if view.models.has(id): view.battle_audio.stop_glide(view.models[id])
 	_moves.clear()
 	_blows.clear()
 	_after.clear()
@@ -368,20 +370,35 @@ func _move(id: int, points: Array, run: bool, finish_yaw := NAN, delay := 0.0) -
 		speed = 2.0 * (recorded if recorded > 0.0 else FALLBACK_SPEED) * _scale(id)
 	var path: Array[Vector3] = []
 	for point: Vector3 in points: path.append(Vector3(point.x, 0, point.z))
-	_moves[id] = {"points": path, "speed": speed, "finish": finish_yaw, "delay": delay, "clip": clip}
-	if delay <= 0.0 and not clip.is_empty() and model.clip != clip: model.play(clip)
+	# The original names the move Run only when the figure has a clip under
+	# the run code; otherwise it walks (and loops walk.wav).
+	var running := (run or fast) and not model.clip_for_code(RUN_CODE).is_empty()
+	_moves[id] = {"points": path, "speed": speed, "finish": finish_yaw, "delay": delay, "clip": clip, "run": running}
+	if delay <= 0.0: _set_off(id)
+
+## The move's clip and its looping ground sound start together.
+func _set_off(id: int) -> void:
+	var move: Dictionary = _moves[id]
+	var model: ELModel = view.models[id]
+	if not str(move.clip).is_empty() and model.clip != move.clip: model.play(move.clip)
+	view.battle_audio.glide(model, bool(move.run))
+
+## Whether the figure is moving with this clip (its footfalls sound).
+func stepping(id: int, clip: String) -> bool:
+	return _moves.has(id) and float(_moves[id].delay) <= 0.0 and str(_moves[id].clip) == clip
 
 func _process(delta: float) -> void:
 	for id: int in _moves.keys():
 		if not _has(id):
 			_moves.erase(id)
+			if view.models.has(id): view.battle_audio.stop_glide(view.models[id])
 			continue
 		var move: Dictionary = _moves[id]
 		var model: ELModel = view.models[id]
 		if float(move.delay) > 0.0:
 			move.delay = float(move.delay) - delta
 			if float(move.delay) > 0.0: continue
-			if not str(move.clip).is_empty() and model.clip != move.clip: model.play(move.clip)
+			_set_off(id)
 		var step := float(move.speed) * delta
 		while step > 0.0 and not move.points.is_empty():
 			var goal: Vector3 = move.points[0]
@@ -401,6 +418,7 @@ func _process(delta: float) -> void:
 func _arrive(id: int) -> void:
 	var move: Dictionary = _moves.get(id, {})
 	_moves.erase(id)
+	if view.models.has(id): view.battle_audio.stop_glide(view.models[id])
 	if not _has(id): return
 	var model: ELModel = view.models[id]
 	if not move.is_empty() and not move.points.is_empty():

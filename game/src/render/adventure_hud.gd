@@ -95,9 +95,32 @@ var _precombat_pieces: Array[Dictionary] = []
 var _cell_rects: Array[Rect2] = []
 var _blockers: Array[Control] = []
 var _italic: FontVariation
+## Resource bar digits: the original draws them from ADV_SCREEN_2 (texture id
+## 0x9c), 10x10 cells at y 246 indexed from '-', tinted #, 8 px apart,
+## 35 px into the cell and 8 / 17 px below its top. The labels keep
+## the texts (and the layout) but are drawn transparent.
+var _digits: FontVariation
+const DIGIT_CELL := 10
+const DIGIT_ROW := 246
+const DIGIT_ADVANCE := 8
+var _digit_signature := ""
+const DIGIT_SIZE := 9
+const HEADER_INK := Color("d6bb88")
+## Map info text: Arial Bold Italic, about 16 px cells in the original capture.
+const TOOLTIP_SIZE := 15
 var _bold: FontVariation
 var _signature := ""
 var _art: ELAdventureArt
+## Minimap markers (CMiniMap, table): castles,
+## heroes and owned sites are TOOLTIP_1 sprites in the player's slot colour;
+## the camera marker is ADV_SCREEN_2 (157,114) 30x30, turned to the view.
+var _marks_sheet: Texture2D
+var _view_sheet: Texture2D
+var view_target := Vector3.ZERO
+var view_yaw := 0.0
+## Empty hero-column slot: ADV_PANEL1 (149,60) 74x49 one pixel left of the
+## slot (matched against an original capture).
+var _empty_slot: Dictionary = {}
 
 ## Composes the panel and returns false when this edition has no matching art.
 func build(source: ELAdventureSession) -> bool:
@@ -116,11 +139,20 @@ func build(source: ELAdventureSession) -> bool:
 	if not _rows.has("AdvPanel") or not _rows.has("InfoFrame"): return false
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	var base := ThemeDB.fallback_font
+	# Original DayText and map info text: Arial Bold, slanted for Italic
+	# (Controls FontType Header Italic; face table).
+	var base: SystemFont = ELArtDropList.row_font()
+	var slanted: SystemFont = ELArtDropList.row_font()
+	slanted.font_italic = true
 	_italic = FontVariation.new()
-	_italic.base_font = base
-	_italic.variation_embolden = 0.5
-	_italic.variation_transform = Transform2D(Vector2(1, 0), Vector2(0.22, 1), Vector2.ZERO)
+	_italic.base_font = slanted
+	var digit_face := SystemFont.new()
+	digit_face.font_names = PackedStringArray(["Arial", "Liberation Sans", "Arimo", "DejaVu Sans"])
+	digit_face.antialiasing = TextServer.FONT_ANTIALIASING_NONE
+	digit_face.hinting = TextServer.HINTING_NORMAL
+	_digits = FontVariation.new()
+	_digits.base_font = digit_face
+	_digits.spacing_glyph = 1
 	_bold = FontVariation.new()
 	_bold.base_font = base
 	_bold.variation_embolden = 0.6
@@ -139,6 +171,10 @@ func build(source: ELAdventureSession) -> bool:
 	remake_strip = VBoxContainer.new()
 	remake_strip.add_theme_constant_override("separation", 4)
 	canvas.add_child(remake_strip)
+	_marks_sheet = profile.texture(_paths.get("TOOLTIP_1", ""))
+	_view_sheet = profile.texture(_paths.get("ADV_SCREEN_2", ""))
+	var panel_sheet := profile.texture(_paths.get("ADV_PANEL1", ""))
+	if panel_sheet != null: _empty_slot = {"texture": panel_sheet, "source": Rect2(149, 60, 74, 49)}
 	_build_minimap()
 	_build_slots()
 	_build_buttons()
@@ -188,6 +224,19 @@ func _draw_art() -> void:
 		var piece := cut(row, Vector2(PANEL_SHIFT + right_shift, 9))
 		if piece.is_empty() or int((row.ScrT - 173) / 53) < used: continue
 		art.draw_texture_rect_region(piece.texture, piece.rect, piece.source)
+	_draw_digits()
+
+func _draw_digits() -> void:
+	if _view_sheet == null: return
+	for index in _cell_rects.size():
+		for line in 2:
+			var labels: Array[Label] = income_labels if line == 0 else stock_labels
+			if index >= labels.size(): continue
+			var at := _cell_rects[index].position + Vector2(35, 8 + 9 * line)
+			for character in labels[index].text:
+				var code := character.unicode_at(0) - 0x2d
+				if code >= 0 and code <= 12: art.draw_texture_rect_region(_view_sheet, Rect2(at, Vector2(DIGIT_CELL, DIGIT_CELL)), Rect2(code * DIGIT_CELL, DIGIT_ROW, DIGIT_CELL, DIGIT_CELL), HEADER_INK)
+				at.x += DIGIT_ADVANCE
 
 func _layout() -> void:
 	if size.y <= 0: return
@@ -204,20 +253,20 @@ func _layout() -> void:
 	_blockers[1].position = Vector2(0, 740)
 	_blockers[1].size = Vector2(panel_x, 28)
 	minimap.position = Vector2(859 + right_shift, 3)
-	for index in slots.size(): slots[index].position = Vector2(883 + right_shift, 183 + 53 * index)
+	for index in slots.size(): slots[index].position = Vector2(883 + right_shift, 182 + 53 * index)
 	for name: String in buttons: buttons[name].place(Vector2(right_shift, 0))
 	for name: String in dial: dial[name].place(Vector2(right_shift, 0))
 	for index in _cell_rects.size():
 		var cell := _cell_rects[index]
-		var top := income_labels[index]
-		top.size = Vector2(46, top.get_combined_minimum_size().y)
-		top.position = cell.position + Vector2(31, 8.5 - top.size.y * 0.5)
-		# Bottom-aligned so the glyphs sit on the bar's lower row inside the screen.
-		var stock := stock_labels[index]
-		stock.size = Vector2(46, stock.get_combined_minimum_size().y)
-		stock.position = cell.position + Vector2(31, minf(20.5 - stock.size.y * 0.5, cell.size.y - stock.size.y))
-	day_label.size = Vector2(150, day_label.get_combined_minimum_size().y)
-	day_label.position = Vector2(870 + right_shift, DESIGN_HEIGHT - day_label.size.y)
+		# Original digits: left edge 37 px into the cell, baselines 16 and
+		# 25 px below its top (measured on an original 1024x768 capture).
+		for line in 2:
+			var label: Label = (income_labels if line == 0 else stock_labels)[index]
+			label.size = Vector2(46, label.get_combined_minimum_size().y)
+			label.position = cell.position + Vector2(37, (16.0 if line == 0 else 25.0) - _digits.get_ascent(DIGIT_SIZE))
+	# DayText control: Left 646 + 224, Top 585 + 168, 150 x 15.
+	day_label.size = Vector2(150, 15)
+	day_label.position = Vector2(870 + right_shift, 753)
 	precombat.position = Vector2(116 + right_shift * 0.5, 286)
 	remake_strip.position = Vector2(8, 8)
 	remake_strip.size.x = 0
@@ -325,30 +374,75 @@ func _draw_minimap() -> void:
 	minimap.draw_rect(Rect2(Vector2.ZERO, minimap.size), Color.BLACK)
 	minimap.draw_texture_rect(minimap_texture, _minimap_area(), false)
 
-## Hero dots appear only on tiles the local player sees; building markers have
-## no fog test in the original.
+## Marker order and rules of the original: every living
+## player's castle, then citadels, mana nodes, mines, NewBuildings and forts
+## (owner colour, unowned black), then heroes on tiles the local
+## player sees (the neutral player's creatures as white crosses),
+## then the camera marker at the view target, turned to the view direction.
 func _draw_minimap_marks() -> void:
 	var area := _minimap_area()
 	var map := state.map
 	var cell := area.size / Vector2(maxf(1, map.width), maxf(1, map.height))
+	# Sprite size set: maps under 100 cells wide get the large sprites.
+	var size_index := 0 if map.width < 100 else (1 if map.width < 140 else 2)
+	var footprints: Dictionary = state.grid.footprints if state.grid != null else {}
+	for item: Dictionary in state.objects.values():
+		if not item.get("alive", false) or not ELFirstScenario.is_castle(item) or not state.players.has(int(item.get("owner", 0))): continue
+		_draw_mark(1, int(item.owner), item, footprints, area, cell, size_index)
 	for item: Dictionary in state.objects.values():
 		if not item.get("alive", false) or not item.get("visible", true) or not item.get("placed", true): continue
-		var owned: bool = state.players.has(int(item.get("owner", 0)))
-		var at := area.position + Vector2(float(item.x) + 0.5, map.height - float(item.y) - 0.5) * cell
-		var color: Color = PLAYER_COLORS.get(state.players.get(int(item.get("owner", 0)), {}).get("color", ""), Color("c8c8b8"))
-		if ELFirstScenario.is_castle(item): minimap_marks.draw_rect(Rect2(at - Vector2(3, 3), Vector2(6, 6)), color)
-		elif item.get("type") == "hero" and not item.get("fortified", false):
-			if ELFog.visible(state, state.current_player, Vector2i(item.x, item.y)): minimap_marks.draw_rect(Rect2(at - Vector2(1.5, 1.5), Vector2(3, 3)), color)
-		elif owned and item.get("group") in ["mines", "mana_nodes", "forts", "additional_buildings"]: minimap_marks.draw_rect(Rect2(at - Vector2(1, 1), Vector2(2, 2)), color)
-	var hero := state.object(selected)
-	if not hero.is_empty():
-		var at := area.position + Vector2(float(hero.x) + 0.5, map.height - float(hero.y) - 0.5) * cell
-		minimap_marks.draw_arc(at, 6, 0, TAU, 20, Color("d8b058"), 1.5)
+		var group := str(item.get("group", ""))
+		if group in ["mana_nodes", "mines", "laboratories", "factories", "forts"] or (group == "additional_buildings" and str(item.get("name", "")).ends_with("Citadel")):
+			var owner := int(item.get("owner", 0))
+			_draw_mark(2, owner if state.players.has(owner) else 7, item, footprints, area, cell, size_index)
+	for item: Dictionary in state.objects.values():
+		if not item.get("alive", false) or not item.get("visible", true) or not item.get("placed", true) or item.get("type") not in ["hero", "monster"] or item.get("fortified", false): continue
+		if not ELFog.visible(state, state.current_player, Vector2i(item.x, item.y)): continue
+		var owner := int(item.get("owner", 0))
+		_draw_mark(0, owner if state.players.has(owner) else 0, item, footprints, area, cell, size_index)
+	if _view_sheet != null:
+		var at := area.position + Vector2(view_target.x / ELAdventureTerrain.CELL, map.height + view_target.z / ELAdventureTerrain.CELL) * cell
+		minimap_marks.draw_set_transform(at.floor(), -view_yaw)
+		minimap_marks.draw_texture_rect_region(_view_sheet, Rect2(-15, -15, 30, 30), Rect2(157, 114, 30, 30))
+		minimap_marks.draw_set_transform(Vector2.ZERO)
+
+## Sprite cell of the original table: kind 0 hero, 1 castle, 2 site; colour is
+## the player slot (1 red, 2 yellow, 3 green, 4 violet, 5 light blue, 6 blue,
+## 7 black, 0 grey), row = 8 - colour.
+static func mark_source(kind: int, colour: int, size_index: int) -> Rect2:
+	if kind == 0 and colour == 0: return Rect2(49, 129, 3, 3)
+	var row := 7 - ((colour - 1) if colour != 0 else 7)
+	match [size_index, kind]:
+		[0, 0], [1, 0]: return Rect2(2, 0x42 + 16 * row, 4, 4)
+		[0, 1]: return Rect2(8, 0x37 + 16 * row, 11, 15)
+		[0, 2]: return Rect2(0x15, 0x3e + 16 * row, 7, 8)
+		[1, 1]: return Rect2(30, 0x3a + 13 * row, 9, 12)
+		[1, 2]: return Rect2(41, 0x3f + 13 * row, 5, 7)
+		[2, 0]: return Rect2(48, 0x43 + 8 * row, 3, 3)
+		[2, 1]: return Rect2(59, 0x41 + 8 * row, 5, 5)
+	return Rect2(53, 0xb6 if row == 7 else 0x42 + 8 * row, 4, 4)
+
+## Centred on the object's footprint (heroes on their cell).
+func _draw_mark(kind: int, colour: int, item: Dictionary, footprints: Dictionary, area: Rect2, cell: Vector2, size_index: int) -> void:
+	var size: Vector2i = footprints.get(int(item.get("uid", -1)), {}).get("size", Vector2i.ONE) if kind != 0 else Vector2i.ONE
+	var centre := Vector2(float(item.x) + size.x * 0.5, float(state.map.height) - float(item.y) - size.y * 0.5)
+	var source := mark_source(kind, colour, size_index)
+	var at := (area.position + centre * cell - source.size * 0.5).floor()
+	if _marks_sheet != null: minimap_marks.draw_texture_rect_region(_marks_sheet, Rect2(at, source.size), source)
+	else: minimap_marks.draw_rect(Rect2(at, source.size), PLAYER_COLORS.get(state.players.get(int(item.get("owner", 0)), {}).get("color", ""), Color("c8c8b8")))
+
+## The camera's target (world units) and turn; the marker follows them.
+func set_view(target: Vector3, yaw: float) -> void:
+	if target.is_equal_approx(view_target) and is_equal_approx(yaw, view_yaw): return
+	view_target = target
+	view_yaw = yaw
+	if minimap_marks != null: minimap_marks.queue_redraw()
 
 func _build_slots() -> void:
 	for index in SLOT_COUNT:
 		var slot := PortraitSlot.new()
-		slot.size = Vector2(70, 49)
+		slot.size = Vector2(71, 49)
+		slot.empty = _empty_slot
 		canvas.add_child(slot)
 		slot.pressed.connect(func():
 			if slot.hero < 0: return
@@ -414,13 +508,14 @@ func _build_bar() -> void:
 		_cell_rects.append(rect)
 		for line in 2:
 			var label := Label.new()
-			label.add_theme_font_size_override("font_size", 10)
-			label.add_theme_font_override("font", _bold)
-			label.add_theme_color_override("font_color", Color("e8e4dc"))
+			label.add_theme_font_size_override("font_size", DIGIT_SIZE)
+			label.add_theme_font_override("font", _digits)
+			label.add_theme_color_override("font_color", HEADER_INK)
 			label.add_theme_constant_override("line_spacing", 0)
 			label.size = Vector2(46, 13)
-			label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+			label.vertical_alignment = VERTICAL_ALIGNMENT_TOP
 			label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			label.self_modulate = Color(1, 1, 1, 0)
 			canvas.add_child(label)
 			(income_labels if line == 0 else stock_labels).append(label)
 		var hint := Control.new()
@@ -432,10 +527,10 @@ func _build_bar() -> void:
 	day_label = Label.new()
 	day_label.size = Vector2(150, 15)
 	day_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	day_label.vertical_alignment = VERTICAL_ALIGNMENT_BOTTOM
+	day_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	day_label.add_theme_font_override("font", _italic)
-	day_label.add_theme_font_size_override("font_size", 12)
-	day_label.add_theme_color_override("font_color", Color("e8e4dc"))
+	day_label.add_theme_font_size_override("font_size", ELFrontMenu.cell_em(15))
+	day_label.add_theme_color_override("font_color", HEADER_INK)
 	day_label.tooltip_text = profile.text("CtrlTtDayText")
 	day_label.mouse_filter = Control.MOUSE_FILTER_PASS
 	canvas.add_child(day_label)
@@ -458,7 +553,7 @@ func _build_tooltip() -> void:
 	tooltip_title = Label.new()
 	tooltip_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	tooltip_title.add_theme_font_override("font", _italic)
-	tooltip_title.add_theme_font_size_override("font_size", 13)
+	tooltip_title.add_theme_font_size_override("font_size", TOOLTIP_SIZE)
 	tooltip_title.add_theme_color_override("font_color", Color("e2d29a"))
 	rows_box.add_child(tooltip_title)
 	var columns := HBoxContainer.new()
@@ -470,7 +565,7 @@ func _build_tooltip() -> void:
 	columns.add_child(tooltip_picture)
 	tooltip_body = Label.new()
 	tooltip_body.add_theme_font_override("font", _italic)
-	tooltip_body.add_theme_font_size_override("font_size", 13)
+	tooltip_body.add_theme_font_size_override("font_size", TOOLTIP_SIZE)
 	tooltip_body.add_theme_color_override("font_color", Color("e2d29a"))
 	tooltip_body.add_theme_constant_override("line_spacing", -1)
 	tooltip_body.size_flags_vertical = Control.SIZE_SHRINK_CENTER
@@ -772,6 +867,11 @@ func refresh(selected_hero: int, budget: Dictionary, can_act: bool) -> void:
 			income_labels[index].text = str(int(budget.get("income", 0)))
 			stock_labels[index].text = str(int(budget.get("available", 0)))
 	day_label.text = day_text(profile, state.day)
+	var digits := ""
+	for label: Label in income_labels + stock_labels: digits += label.text + "/"
+	if digits != _digit_signature:
+		_digit_signature = digits
+		art.queue_redraw()
 	var hero := state.object(selected)
 	buttons.NextHero.disabled = not can_act or roster.size() < 2
 	buttons.HeroInTower.disabled = false
@@ -843,7 +943,8 @@ func refresh(selected_hero: int, budget: Dictionary, can_act: bool) -> void:
 	_sync_minimap_fog()
 	var signature := "%d/%d/%d/%d" % [selected, roster.size(), state.day, ELFog.revision(state)]
 	for item: Dictionary in state.objects.values():
-		if item.get("type") == "hero": signature += "/%d,%d,%s" % [item.x, item.y, item.alive]
+		if item.get("type") in ["hero", "monster"]: signature += "/%d,%d,%s" % [item.x, item.y, item.alive]
+		elif item.has("owner") and item.has("group"): signature += "/%s" % item.owner
 	if signature != _signature:
 		_signature = signature
 		minimap_marks.queue_redraw()
@@ -895,13 +996,18 @@ class CutButton extends BaseButton:
 			var light: Dictionary = parts.get("hover_pressed", {}) if pushed and not parts.get("hover_pressed", {}).is_empty() else parts.get("hover", {})
 			if not light.is_empty(): draw_texture_rect_region(light.texture, Rect2(light.rect.position - _origin, light.rect.size), light.source)
 
-## Hero portrait in the side panel; the selected hero gets a light frame.
+## Hero portrait in the side panel. The original shows the middle of the
+## 100x70 photo unscaled (source 15,9) and frames the selected hero with a
+## 3 px border in the ADV_SCREEN_2 frame colour (255,204,153 at 60 %); an
+## empty slot shows the panel's knot tile.
 class PortraitSlot extends BaseButton:
+	const FRAME := Color(1.0, 0.8, 0.6, 0.6)
 	var hero := -1
 	## Building-icon index while the slot lists a building.
 	var icon_index := -1
 	var picture: Texture2D
 	var current := false
+	var empty: Dictionary = {}
 
 	func set_hero(id: int, texture: Texture2D, is_selected: bool) -> void:
 		if id != hero:
@@ -914,7 +1020,11 @@ class PortraitSlot extends BaseButton:
 			queue_redraw()
 
 	func _draw() -> void:
-		if hero < 0 or picture == null: return
-		draw_texture_rect(picture, Rect2(Vector2.ZERO, size), false)
-		if current: draw_rect(Rect2(Vector2(0.5, 0.5), size - Vector2.ONE), Color("e8e0cc"), false, 1.5)
+		if hero < 0 or picture == null:
+			if not empty.is_empty(): draw_texture_rect_region(empty.texture, Rect2(Vector2(-1, 0), empty.source.size), empty.source)
+			return
+		if picture.get_size() == Vector2(100, 70): draw_texture_rect_region(picture, Rect2(Vector2.ZERO, size), Rect2(Vector2(15, 9), size))
+		else: draw_texture_rect(picture, Rect2(Vector2.ZERO, size), false)
+		if current:
+			for edge: Rect2 in [Rect2(0, 0, size.x, 3), Rect2(0, size.y - 3, size.x, 3), Rect2(0, 3, 3, size.y - 6), Rect2(size.x - 3, 3, 3, size.y - 6)]: draw_rect(edge, FRAME)
 		elif get_draw_mode() == DRAW_HOVER: draw_rect(Rect2(Vector2(0.5, 0.5), size - Vector2.ONE), Color("a09880"), false, 1.0)

@@ -12,6 +12,15 @@ extends RefCounted
 ## Second game: T_CREDITS_TEXT_nnn entries (plain, _H header, _1 title, _T/_HT/_1T
 ## without the gap) scroll upwards inside CreditsScrollBounds while the Type1..4
 ## pictures cross-fade; any key or click fades out to the main menu.
+## Second-game scroll as EL2 runs it: an entry's gap comes before its
+## first line; entries are wrapped to the bounds width and set left-aligned at
+## the bounds' left edge; lines rise from the bounds' bottom edge (clipped there)
+## and the topmost line fades out over 0.22 s once its top is within 10 px of
+## the top edge (or its predecessor has left); the screen fades to the menu
+## once the last line has gone. At 1024x768 the bounds keep their shifted
+## top-left (606,86) but reach 224 px further right and 168 px further down
+## (606..975 x 86..657), as the original lays them out (it wraps «Заместитель
+## руководителя / проекта» and clips at 657).
 ## Faces: the first game sets every credits line in Arial
 ## Bold (30/17 px cells) and the copyright in Arial (15 px cell); the second sets
 ## plain entries in Arial (20 px cell), headers and titles in Arial Bold (24/32).
@@ -23,7 +32,9 @@ const FIRST_GROUPS := [[0, 4], [5, 13], [14, 19], [20, 25], [26, 30], [31, 37], 
 ## 1024x768 rects: text column (container left, 800 layout width, container
 ## height) and copyright.
 const FIRST_AREA := Rect2(542, 19, 348, 730)
-const FIRST_COPYRIGHT := Rect2(265, 511, 485, 89)
+## Copyright: measured on the original at 1024x768 (glyphs 425..903 x 662..688, two lines near the bottom of the page); the
+## registry rectangle (265,511) is the 800x600 one and is not where it shows.
+const FIRST_COPYRIGHT := Rect2(416, 657, 560, 60)
 const FIRST_SPLIT_GROUP := 8
 const TEXT_INK := Color("f5b427")
 const CAPTION_INK := Color("d6bb88")
@@ -32,6 +43,9 @@ const SECOND_STYLES := {"": [20, 6, false], "_H": [24, 24, true], "_T": [20, 0, 
 const SECOND_SPEED := 50.3
 const SECOND_PICTURE_TIME := 19.7
 const SECOND_FADE := 1.0
+## Top-line fade (: 0xdc ms, when its top < bounds top + 10).
+const SECOND_LINE_FADE := 0.22
+const SECOND_FADE_MARGIN := 10.0
 
 var menu: ELFrontMenu
 var page := 0
@@ -159,16 +173,67 @@ static func second_entries(profile: ELProfile) -> Array:
 		number += 1
 	return result
 
-## Scroll lines in content coordinates: {text, y, size}; and the total height.
-func second_layout() -> Dictionary:
+## Scroll bounds on the 1024 canvas: the control's shifted top-left, its far
+## edges moved by the 800x600 -> 1024x768 difference (see the header).
+func second_bounds() -> Rect2:
+	var rect := menu.control_rect("CreditsScrollBounds")
+	var far := rect.end - menu.shift("CreditsScrollBounds") + ELFrontMenu.DESIGN - Vector2(800, 600)
+	return Rect2(rect.position, far - rect.position)
+
+## Greedy wrap at spaces and after hyphens to `width`; explicit newlines kept.
+static func wrap_words(text: String, font: Font, em: int, width: float) -> PackedStringArray:
+	var lines := PackedStringArray()
+	for paragraph: String in text.split("\n"):
+		paragraph = paragraph.strip_edges()
+		var line := ""
+		var at := 0
+		while at < paragraph.length():
+			# Next piece: up to and including a space or hyphen.
+			var end := at
+			while end < paragraph.length() and paragraph[end] != " " and paragraph[end] != "-": end += 1
+			var piece := paragraph.substr(at, end + 1 - at)
+			at = end + 1
+			var candidate := line + piece
+			if not line.is_empty() and font.get_string_size(candidate.strip_edges(), HORIZONTAL_ALIGNMENT_LEFT, -1, em).x > width:
+				lines.append(line.strip_edges())
+				line = piece
+			else:
+				line = candidate
+		lines.append(line.strip_edges())
+	return lines
+
+## Scroll lines in content coordinates (0 = the bounds' bottom edge at scroll
+## 0): {text, y, size, bold}; and the total height. The gap precedes the entry.
+func second_layout(width := -1.0) -> Dictionary:
+	if width < 0.0: width = second_bounds().size.x
 	var lines: Array = []
 	var y := 0.0
 	for entry: Dictionary in entries:
-		for line: String in str(entry.text).split("\n"):
-			lines.append({"text": line.strip_edges(), "y": y, "size": entry.size, "bold": entry.bold})
-			y += entry.size
 		y += entry.gap
+		var font: Font = menu.arial_bold if entry.bold else menu.arial
+		for line: String in wrap_words(str(entry.text), font, ELFrontMenu.cell_em(entry.size), width):
+			lines.append({"text": line, "y": y, "size": entry.size, "bold": entry.bold})
+			y += entry.size
 	return {"lines": lines, "height": y}
+
+## Second game: screen top of a line and its alpha (0 = gone) at this scroll.
+func second_line_state(index: int) -> Dictionary:
+	var line: Dictionary = view.lines[index]
+	var area := view.area
+	var top: float = area.end.y + line.y - scroll
+	var bottom: float = top + line.size
+	if bottom <= area.position.y: return {"top": top, "alpha": 0.0}
+	# Fade starts when the line is the topmost one left and its top is within
+	# the margin: scroll positions of both events, the later one wins.
+	var near := area.end.y + float(line.y) - area.position.y - SECOND_FADE_MARGIN
+	var first := 0.0
+	if index > 0:
+		var previous: Dictionary = view.lines[index - 1]
+		first = area.end.y + float(previous.y) + float(previous.size) - area.position.y
+	var start := maxf(near, first)
+	var alpha := 1.0
+	if scroll > start: alpha = clampf(1.0 - (scroll - start) / (SECOND_LINE_FADE * SECOND_SPEED), 0.0, 1.0)
+	return {"top": top, "alpha": alpha}
 
 ## Background picture (1..6) shown now, the next one and its fade weight.
 func picture() -> Dictionary:
@@ -210,11 +275,15 @@ func build_screen() -> void:
 			copyright.text = menu.text("CR_COPYRIGHT")
 	else:
 		if entries.is_empty(): entries = second_entries(menu.profile)
-		var layout := second_layout()
+		view.area = second_bounds()
+		var layout := second_layout(view.area.size.x)
 		view.lines = layout.lines
 		view.content_height = layout.height
-		view.area = menu.control_rect("CreditsScrollBounds")
-		var copyright := menu._label("copyright", "", menu.control_rect("CreditsCopyright"), 16, TEXT_INK)
+		# Lines are clipped at the bottom edge of the bounds.
+		view.text_layer.clip_contents = true
+		view.text_layer.size = Vector2(ELFrontMenu.DESIGN.x, view.area.end.y)
+		# No alignment keyword in its FontType: left-aligned, as the original shows it.
+		var copyright := menu._label("copyright", "", menu.control_rect("CreditsCopyright"), 16, TEXT_INK, HORIZONTAL_ALIGNMENT_LEFT)
 		copyright.add_theme_font_override("font", menu.face_for("CreditsCopyright"))
 		copyright.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		copyright.text = menu._caption("CreditsCopyright")
@@ -262,8 +331,12 @@ func tick(delta: float) -> void:
 			close()
 			return
 	scroll += delta * SECOND_SPEED
-	if view != null and scroll > view.area.size.y + view.content_height: scroll = 0.0
-	if view != null: view.queue_redraw()
+	# The last line has left the top: fade out to the menu (end).
+	if view != null and closing < 0.0 and scroll >= view.area.size.y + view.content_height: begin_close()
+	if view != null:
+		view.queue_redraw()
+		view.text_layer.queue_redraw()
+		view.fade_layer.queue_redraw()
 
 func close() -> void:
 	closing = -1.0
@@ -280,9 +353,21 @@ class CreditsView extends Control:
 	var area := Rect2()
 	var content_height := 0.0
 	var _down := false
+	## Second game: the scrolling lines, clipped at the bounds' bottom edge.
+	var text_layer := Control.new()
+	var fade_layer := Control.new()
+
+	func _init() -> void:
+		text_layer.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		text_layer.draw.connect(_draw_scroll)
+		add_child(text_layer)
+		fade_layer.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		fade_layer.draw.connect(_draw_fade)
+		add_child(fade_layer)
 
 	func _ready() -> void:
 		mouse_filter = Control.MOUSE_FILTER_STOP
+		fade_layer.size = size
 
 	func _process(delta: float) -> void:
 		screen.tick(delta)
@@ -304,20 +389,44 @@ class CreditsView extends Control:
 		var shown := screen.picture()
 		_draw_picture(shown.type, 1.0)
 		if shown.weight > 0.0: _draw_picture(shown.next, shown.weight)
-		var top := area.position.y + (area.size.y - screen.scroll if not screen.first() else 0.0)
+		if not screen.first(): return
 		for line: Dictionary in lines:
-			var y: float = top + line.y
-			if not screen.first() and (y + line.size < area.position.y or y > area.end.y): continue
 			var font: Font = screen.menu.arial_bold if line.get("bold", false) else screen.menu.arial
 			var em := ELFrontMenu.cell_em(line.size)
 			var width := font.get_string_size(line.text, HORIZONTAL_ALIGNMENT_LEFT, -1, em).x
-			var at := Vector2(area.position.x + (area.size.x - width) * 0.5, y + font.get_ascent(em))
+			var at := Vector2(area.position.x + (area.size.x - width) * 0.5, area.position.y + float(line.y) + font.get_ascent(em))
 			var colour: Color = line.get("color", ELCreditsScreen.TEXT_INK)
-			var alpha := 1.0
-			if not screen.first():
-				# Lines fade at the edges of the scroll bounds instead of being cut.
-				alpha = clampf(minf(y + line.size - area.position.y, area.end.y - y) / float(line.size), 0.0, 1.0)
-			draw_string(font, at + Vector2(1, 1), line.text, HORIZONTAL_ALIGNMENT_LEFT, -1, em, Color(0, 0, 0, 0.6 * alpha))
-			draw_string(font, at, line.text, HORIZONTAL_ALIGNMENT_LEFT, -1, em, Color(colour, alpha))
+			draw_string(font, at + Vector2(1, 1), line.text, HORIZONTAL_ALIGNMENT_LEFT, -1, em, Color(0, 0, 0, 0.6))
+			draw_string(font, at, line.text, HORIZONTAL_ALIGNMENT_LEFT, -1, em, colour)
+
+	## Hard-edged copies of the menu fonts: the original draws the scrolling
+	## credits without antialiasing (solid strokes).
+	var _hard: Dictionary = {}
+
+	func _hard_font(font: Font) -> Font:
+		if not _hard.has(font):
+			var copy: Font = font.duplicate()
+			if copy is SystemFont:
+				copy.antialiasing = TextServer.FONT_ANTIALIASING_NONE
+				copy.hinting = TextServer.HINTING_NORMAL
+			_hard[font] = copy
+		return _hard[font]
+
+	func _draw_scroll() -> void:
+		if screen.first(): return
+		for index in lines.size():
+			var line: Dictionary = lines[index]
+			var state := screen.second_line_state(index)
+			var top: float = state.top
+			if state.alpha <= 0.0 or top > area.end.y: continue
+			var font: Font = _hard_font(screen.menu.arial_bold if line.get("bold", false) else screen.menu.arial)
+			var em := ELFrontMenu.cell_em(line.size)
+			# Whole pixels with a solid black shadow, as the original draws
+			# (its shadow pixels are pure black).
+			var at := Vector2(area.position.x, top + font.get_ascent(em)).round()
+			text_layer.draw_string(font, at + Vector2(1, 1), line.text, HORIZONTAL_ALIGNMENT_LEFT, -1, em, Color(0, 0, 0, state.alpha))
+			text_layer.draw_string(font, at, line.text, HORIZONTAL_ALIGNMENT_LEFT, -1, em, Color(ELCreditsScreen.TEXT_INK, state.alpha))
+
+	func _draw_fade() -> void:
 		if screen.closing >= 0.0:
-			draw_rect(Rect2(Vector2.ZERO, size), Color(0, 0, 0, clampf(screen.closing / ELCreditsScreen.SECOND_FADE, 0.0, 1.0)))
+			fade_layer.draw_rect(Rect2(Vector2.ZERO, fade_layer.size), Color(0, 0, 0, clampf(screen.closing / ELCreditsScreen.SECOND_FADE, 0.0, 1.0)))
