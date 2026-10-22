@@ -33,7 +33,7 @@ Download the package for your system from the [Releases](https://github.com/TheW
 - **Windows (x86-64):** extract the ZIP and run `Demiurges.exe`. The program is not signed, so Windows SmartScreen may warn about an unrecognised app; choose **More info → Run anyway**.
 - **Linux (x86-64):** extract the archive and run `Demiurges.x86_64`. If your file manager dropped the executable permission, run `chmod +x Demiurges.x86_64` first.
 - **macOS (Apple silicon and Intel, one universal app):** extract the ZIP and open `Demiurges.app`. The app is not signed or notarized, so macOS may refuse the first start: right-click (or Control-click) the app and choose **Open**, or allow it under **System Settings → Privacy & Security**. You can also run `xattr -dr com.apple.quarantine Demiurges.app` in Terminal.
-- **Android 7+ (ARM64 / x86-64), preview:** install the APK; allow your browser or file manager to install apps when it asks. On first start, choose a game data pack (`.elpack`, see [Play in your browser](#play-in-your-browser)) or the GOG installer (`setup_etherlords*.exe`), which is unpacked without being run. A data pack is much faster: unpacking the installer on a phone can take a long time.
+- **Android 7+ (ARM64 / x86-64), preview:** install the APK; allow your browser or file manager to install apps when it asks. On first start, choose a game data pack (`.elpack`, see [Play in your browser](#play-in-your-browser)) or the GOG installer (`setup_etherlords*.exe`), which is unpacked without being run. Unpacking the installer takes longer on a phone than on a computer; a data pack is quicker still.
 - **Browser (WebGL 2):** nothing to download; [play the hosted version](https://demiurges.wwworm.com/), see above.
   To host the browser version yourself, use `…-web.zip`. It needs HTTPS (or `localhost`) and the `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp` headers (included in its `_headers` file); see [hosting the browser version](docs/hosting.md).
 
@@ -42,7 +42,7 @@ Download the package for your system from the [Releases](https://github.com/TheW
 1. Start the engine.
 2. When asked, choose one of:
    - **Etherlords I folder** or **Etherlords II folder**, then the folder of your installed game, the one containing `Resources` and `Campaigns`;
-   - **GOG installer or data pack…**, then the GOG offline installer (`setup_etherlords*.exe`) or a data pack (`.elpack`). The installer is **not run**: the engine unpacks the game files from it once (several minutes) and keeps them in its own data folder, so the installer is not needed afterwards.
+   - **GOG installer or data pack…**, then the GOG offline installer (`setup_etherlords*.exe`) or a data pack (`.elpack`). The installer is **not run**: the engine unpacks the game files from it once (usually well under a minute) and keeps them in its own data folder, so the installer is not needed afterwards.
 3. Your choice is remembered. The original start-up videos play, then the main menu opens.
 
 To add the other game later, start a battle, press **Esc**, choose **Remake menu…** and then **Original game content…**.
@@ -127,6 +127,8 @@ The engine source is in [`game`](game). Open it in [Godot 4.7](https://godotengi
 - **Windows, Linux, macOS:** `godot-4 --headless --path game --export-release "Windows Desktop" ../build/windows/Demiurges.exe`, with `Linux` and `../build/linux/Demiurges.x86_64`, or `macOS` and `../build/macos/Demiurges.zip`. The output path is relative to `game`; create the folder first.
 - **Browser:** `python3 tools/export_mobile.py web --output build/web`, then `python3 tools/serve_web.py build/web` and open `http://localhost:8060/`. The Web template's export alone is not enough: this tool also adds the page's local-file support, icons, offline cache and headers.
 - **Android:** `python3 tools/export_mobile.py android --output build/android --sdk /path/to/android-sdk --java /path/to/jdk` (needs the Android SDK, a JDK 17 or newer and Godot's Android export templates).
+
+The GOG installer is unpacked by a small compiled library in [`game/native`](game/native), prebuilt for every exported platform in `game/native/bin`. To rebuild it, run `python3 game/native/build.py --zig /path/to/zig --ndk /path/to/android-ndk` ([Zig](https://ziglang.org/) builds the Windows, Linux and macOS libraries, the Android NDK the Android ones). Without the library the engine still imports installers, only much more slowly.
 
 The Godot export templates for 4.7 must be installed. See [the engine overview](docs/engine_overview.md) for how the code is organised.
 

@@ -112,7 +112,7 @@ static func load_catalogue(data: ELProfile) -> Dictionary:
 		var node := parser.get_node_name()
 		if node == "Effect":
 			var name := parser.get_named_attribute_value_safe("name")
-			current = {"name": name, "particles": [], "objects": [], "lights": [], "faders": [], "scene_lights": [], "points": {}, "frames": 0, "tracks": {}, "events": [], "hit_events": []}
+			current = {"name": name, "particles": [], "objects": [], "lights": [], "faders": [], "scene_lights": [], "points": {}, "frames": 0, "tracks": {}, "events": [], "hit_events": [], "summon_events": []}
 			if not name.is_empty(): result[name.to_lower()] = current
 		elif current.is_empty():
 			continue
@@ -149,6 +149,8 @@ static func load_catalogue(data: ELProfile) -> Dictionary:
 				var cue := parser.get_named_attribute_value_safe("name").strip_edges().to_lower().replace(" ", "")
 				if cue in ["monstershit", "monsterhit", "hit", "popadanie"]:
 					current.hit_events.append(int(phase))
+				elif cue in ["monstersummon", "keyframe"]:
+					current.summon_events.append(int(phase))
 		elif node == "DirectLight":
 			current.scene_lights.append({"track": parser.get_named_attribute_value_safe("name")})
 		elif node == "ScreenFader":
@@ -173,6 +175,15 @@ static func hit_delay(data: ELProfile, card: String) -> float:
 	var known := load_catalogue(data)
 	for effect: Variant in Table.card_effects(data, card):
 		var events: Array = known.get(String(effect).to_lower(), {}).get("hit_events", [])
+		if not events.is_empty(): return float(events.min()) / ELParticleFile.FPS
+	return 0.0
+
+## Seconds from the start of a summon's effects to the moment its creature
+## appears: the first MonsterSummon or KeyFrame cue of the card's effects.
+static func summon_delay(data: ELProfile, card: String) -> float:
+	var known := load_catalogue(data)
+	for effect: Variant in Table.card_effects(data, card):
+		var events: Array = known.get(String(effect).to_lower(), {}).get("summon_events", [])
 		if not events.is_empty(): return float(events.min()) / ELParticleFile.FPS
 	return 0.0
 

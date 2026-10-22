@@ -7,8 +7,11 @@ extends RefCounted
 ## dictionary-size byte, then LZMA2 chunks). The whole output stays in memory
 ## and serves as the dictionary.
 ##
-## GDScript is slow at this, so the hot paths (literals, the range decoder's
-## bit) are written out inline instead of calling helpers.
+## Where the compiled copy of this decoder (original/el_lzma.c) is available,
+## the file chunks use it instead; this one remains for the setup header and
+## for platforms without it. GDScript is slow at this, so the hot paths
+## (literals, the range decoder's bit) are written out inline instead of
+## calling helpers.
 ##
 ## Adapted from the Cursed Lands engine (TheWWWorm, EILzma, Apache-2.0).
 
@@ -39,6 +42,22 @@ static func decode(src: PackedByteArray, pos: int, size: int, out_size: int) -> 
 ## LZMA2 stream (after Inno's dictionary-size byte) of known output size.
 static func decode2(src: PackedByteArray, pos: int, size: int, out_size: int) -> PackedByteArray:
 	return ELLzma.new().run2(src, pos, size, out_size)
+
+
+## The compiled decoder (original/el_lzma.gdextension), loaded on first use
+## where this platform has it. The web build unpacks in its own worker.
+const NATIVE := "res://native/el_lzma.gdextension"
+## Output bytes the compiled decoder produces between progress updates.
+const NATIVE_STEP := 4 << 20
+
+static func native() -> bool:
+	if ClassDB.class_exists(&"ELNativeLzma"):
+		return true
+	if OS.has_feature("web") or not FileAccess.file_exists(NATIVE):
+		return false
+	var status := GDExtensionManager.load_extension(NATIVE)
+	return status in [GDExtensionManager.LOAD_STATUS_OK, GDExtensionManager.LOAD_STATUS_ALREADY_LOADED] \
+		and ClassDB.class_exists(&"ELNativeLzma")
 
 
 var _lc := 0
@@ -94,6 +113,18 @@ func run(src: PackedByteArray, pos: int, size: int, out_size: int) -> PackedByte
 
 
 func run2(src: PackedByteArray, pos: int, size: int, out_size: int) -> PackedByteArray:
+	if pos == 0 and size == src.size() and native():
+		var handle: int = ClassDB.class_call_static(&"ELNativeLzma", &"open", src, out_size)
+		if handle >= 0:
+			while not abort:
+				var n: int = ClassDB.class_call_static(&"ELNativeLzma", &"step", handle, NATIVE_STEP)
+				# Damaged data stops here; the caller's checksum reports it.
+				if n < 0:
+					break
+				done = n
+				if n >= out_size:
+					break
+			return ClassDB.class_call_static(&"ELNativeLzma", &"take", handle)
 	_src = src
 	_pos = pos + 1   # Inno's LZMA2 dictionary-size byte
 	_end = pos + size

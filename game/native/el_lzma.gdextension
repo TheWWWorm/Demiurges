@@ -1,0 +1,12 @@
+[configuration]
+
+entry_symbol = "el_lzma_init"
+compatibility_minimum = "4.7"
+
+[libraries]
+
+linux.x86_64 = "res://native/bin/libel_lzma.linux.x86_64.so"
+windows.x86_64 = "res://native/bin/el_lzma.windows.x86_64.dll"
+macos = "res://native/bin/libel_lzma.macos.dylib"
+android.arm64 = "res://native/bin/libel_lzma.android.arm64.so"
+android.x86_64 = "res://native/bin/libel_lzma.android.x86_64.so"

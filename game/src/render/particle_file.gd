@@ -18,20 +18,20 @@ const MAX_PARTICLES := 32768
 
 ## Camera-facing particle quads in every renderer (combat effects, figure
 ## clips, adventure script effects and weather, combat blood drops) share this
-## size rule. A particle's size is a screen measure in the originals: each
-## corner moves by size / w in normalized device units on both axes, where w
+## size rule. A particle's size is a screen measure in the originals: the
+## sprite is size / w wide in normalized device units on both axes, where w
 ## comes from the originals' own projection, which is the usual perspective
 ## matrix scaled by sin(h) (h = half the horizontal field of view). As a
-## view-space half-extent that is size / cos(h). A 4:3 view is assumed so
+## view-space half-extent that is size / (2 cos(h)). A 4:3 view is assumed so
 ## sprites keep their size in wider windows. The remake's adventure map uses an
 ## orthographic camera; there the original map camera's field of view
-## (pi / 3.5 horizontal) gives size / cos(pi / 7).
+## (pi / 3.5 horizontal) gives size / (2 cos(pi / 7)).
 ## Shaders name SPRITE_SIZE_FUNCTION on its own line; `sprite_shader` inserts
 ## the function there.
 const SPRITE_SIZE_FUNCTION := """float sprite_half_extent(float size, mat4 projection) {
-	if (projection[3][3] == 1.0) return size * 1.1099162;
+	if (projection[3][3] == 1.0) return size * 0.5549581;
 	float t = 4.0 / (3.0 * projection[1][1]);
-	return size * sqrt(1.0 + t * t);
+	return size * 0.5 * sqrt(1.0 + t * t);
 }"""
 
 static func sprite_shader(code: String) -> String:

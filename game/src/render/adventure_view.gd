@@ -1545,6 +1545,14 @@ func _zones_stop(actor: Dictionary) -> bool:
 
 func _draw_route(path: Array, actor_id := -1) -> void:
 	if route == null: return
+	# Second game: a move order shows no route. Its marker figures
+	# (telapa1/telapa2) name TerrainObjects Path/Finish textures that the
+	# game's data does not contain, so nothing is drawn while the hero walks;
+	# a line here only lay under the walking figure (and stopped short of
+	# guard zones the hero then walked through).
+	if state.map.profile.id == "el2":
+		route.mesh = null
+		return
 	var actor := state.object(_hero_id() if actor_id < 0 else actor_id)
 	var zoned := _zones_stop(actor)
 	if zoned: path = director.interception.preview(state, actor, path)

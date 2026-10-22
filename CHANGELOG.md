@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.2.5
+
+- Installing:
+  - Installing from the GOG installer is much faster on Windows, Linux, macOS and Android: the game files are now unpacked by a compiled decoder instead of a script, about 50–100 times faster. On a desktop computer the whole of Etherlords takes about 10 seconds and Etherlords II about 20 seconds, instead of half an hour or more ([#1](https://github.com/TheWWWorm/Demiurges/issues/1)). The browser version is unchanged.
+- Battles:
+  - In both games, tooltips look like the originals' (the original frame and lettering, hero cards with portraits). Etherlords II shows them when the pointer rests on a control; Etherlords I while the right mouse button is held, as in the original.
+  - In both games, pressing a battle button no longer covers it with a yellow overlay, and the attack-all button stays closed when none of your creatures can attack.
+  - In both games, a hero hit by a creature flashes red for a moment, as in the originals.
+  - In both games, the automatic camera closes up on a fight only after your own attack declaration's shot, as in the original; the opponent's blows are shown from the normal view.
+  - In both games, spell and gesture particles are drawn at the original size; a hero's casting gesture in Etherlords II was covered by an oversized yellow glow.
+  - In Etherlords II, a summoned creature appears when the summoning effect reaches it, after the caster's shot; in Etherlords I, when the caster's gesture reaches its casting point, then with its colour effect, as in the original.
+  - In both games, a figure's face and body shapes no longer carry over from its previous animation into the next one.
+- Etherlords II map:
+  - A hero ordered to move no longer draws a route line under itself, as in the original.
+  - Mounted heroes' mounts walk with them instead of gliding.
+  - Each step of a moving hero no longer stalls the game for a moment on large maps.
+
 ## 0.2.4
 
 - Battles:

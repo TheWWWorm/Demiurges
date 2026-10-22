@@ -30,7 +30,12 @@ var status: Label
 var phase_label: Label
 var hero_buttons: Array[Button] = []
 var end_button: Button
-var attack_button: Button
+## The end-of-phase socket's original art and shutter, drawn under end_button
+## (which keeps the text mode of the post-battle "Continue" control).
+var end_face: ELCutPartButton
+var attack_button: ELCutPartButton
+## The battle tooltips in the original frame (ELCombatTooltip).
+var combat_tip: ELCombatTooltip
 ## Auto combat: the computer plays the human side until stopped (CombatMenu3
 ## starts it, AutoCombatOff or CombatMenu3 again stops it).
 var auto_combat := false
@@ -102,6 +107,8 @@ const FRAMED_HEIGHT := 0.7
 const EffectTable := preload("res://src/duel/combat_sound_table.gd")
 ## The current fight already had its chance of a close-up.
 var fight_shot := false
+## A hit hero shows in solid red for a moment.
+const HERO_HIT_FLASH := Color(1.0, 0.25, 0.2)
 var setup_panel: ELDuelSetup
 var match_options: Dictionary = {}
 var ability_selection: Dictionary = {}
@@ -122,6 +129,11 @@ var effects: ELCombatEffects
 ## {card, side, target, affected: figure ids the action touched, hit: seconds
 ## until the figures it hits react, artifact: used from an artifact}.
 var _effect_cast: Dictionary = {}
+## Creatures a hero is summoning in the second game, hidden until the caster
+## shot (or, without the automatic camera, the casting gesture) is over:
+## {card, side, ids, since, camera, gesture, shown_at (-1 until the card's
+## effect starts at them)}.
+var _arrivals: Array[Dictionary] = []
 ## An ability's hit can wait for its own MonstersHit cue. RNST affects the
 ## opposing army, so the scope may hold several creature ids. The action's
 ## events remain synchronous; deferred hit timers retain their own data.
@@ -349,6 +361,7 @@ func _start(edition: String, options: Dictionary = {}, restored: ELDuel = null, 
 	effects.build(profile)
 	effects.set_scene(arena.light, arena.environment_settings)
 	_effect_cast = {}
+	_arrivals.clear()
 	_feedback_hit.clear()
 	_redirect_hit.clear()
 	_hits_waiting.clear()
@@ -398,6 +411,10 @@ func _start(edition: String, options: Dictionary = {}, restored: ELDuel = null, 
 	notices.build(profile)
 	_enemy_banner_shown = false
 	auto_button.build(profile, "CombatMenu3", Rect2(619, 542, 47, 49))
+	attack_button.build(profile, "CombatMenu1", Rect2(509, 542, 47, 49))
+	end_face.build(profile, "CombatMenu2", Rect2(564, 544, 47, 46))
+	for button: ELCutPartButton in [attack_button, auto_button, end_face]: button.set_process(true)
+	combat_tip.setup(profile)
 	auto_off_button.build(profile, "AutoCombatOff", Rect2(735, 10, 45, 44), "Type1")
 	auto_off_button.visible = false
 	var art: Array = GAME_MENU_ART.get(profile.id, [])
@@ -461,9 +478,16 @@ func _start(edition: String, options: Dictionary = {}, restored: ELDuel = null, 
 				battle_audio.effect(effect)
 				_figure_effect(effect, recipient)
 
+var _melee_shown := false
+
 func _process(delta: float) -> void:
 	elapsed += delta
 	_update_cursor()
+	# The phase oval and the shutters follow a fight starting and ending.
+	if duel != null and phase_label != null and _melee_busy() != _melee_shown:
+		_melee_shown = _melee_busy()
+		phase_label.text = phase_caption()
+		_refresh_buttons()
 	if _campaign_battle() != null and not campaign_view.director.watch_encounter().is_empty():
 		# A chapter outcome reached during the duel ends the battle at once.
 		_return_from_encounter()
@@ -487,6 +511,7 @@ func _process(delta: float) -> void:
 			var auto := auto_combat and _human_side() and not demo
 			ELPracticeAI.step(duel, auto and not bool(settings.values.get("use_spells", true)))
 		_step_auto_camera(delta)
+		if not _arrivals.is_empty(): _step_arrivals()
 		_step_shake(delta)
 		var figures: Array = []
 		# NumbersOnCamera off hides the figure marks while a close-up plays.
@@ -521,7 +546,7 @@ func _process(delta: float) -> void:
 					model.set_opacity(1.0)
 					model.set_meta("pale", false)
 				# Options ShowCreatureNumbers (all rows), ShowIcons, ShowOrder.
-				if numbers:
+				if numbers and model.visible:
 					var blocked := int(duel.blocks.get(id, -1))
 					figures.append({"id": id, "top": top,
 						"numbers": ELCombatSymbols.number_row(int(c.power), int(c.toughness) - int(c.damage), int(c.damage) > 0, false),
@@ -1067,6 +1092,57 @@ func _spawn_creature(c: Dictionary) -> void:
 	if is_instance_valid(effects): effects.attach(model)
 	_add_label(c.id)
 
+## A summoned figure's own entrance: its usummon clip and Summon sound.
+func _enter(id: int) -> void:
+	var summoned: ELModel = models[id]
+	if summoned.has_clip("usummon") and summoned.play("usummon"):
+		battle_audio.unit(summoned, "summon")
+
+## Holds a hero's summon effects until the caster has been shown.
+func _hold_arrival(pending: Dictionary) -> bool:
+	var ids: Array[int] = []
+	for id: int in pending.affected:
+		if models.has(id) and models[id].get_meta("arriving", false): ids.append(id)
+	if ids.is_empty(): return false
+	var side := int(pending.side)
+	var second := profile.id == "el2"
+	_arrivals.append({"card": String(pending.card), "side": side, "ids": ids, "since": elapsed,
+		"camera": second and auto_camera != null and auto_camera.showing_caster(),
+		"gesture": (maxf(ELAutoCamera.cast_seconds(models[side].timing, "summon"), 0.0) if second else _summon_mark(side)) if models.has(side) else 0.0,
+		"shown_at": -1.0})
+	return true
+
+## Seconds from the start of a hero's summoning gesture to its mark frame,
+## where the first game starts the summoned creature's effect.
+func _summon_mark(side: int) -> float:
+	if bool(settings.values.get("hide_cast", false)): return 0.0
+	var model: ELModel = models[side]
+	var clip: Dictionary = model.timing.get("usummon", {})
+	var mark := int(clip.get("mark", -1))
+	return mark / (model.fps * maxf(model.speed, 0.01)) if mark > 0 else 0.0
+
+## Starts held summon effects once the caster shot ends, and shows each
+## creature at the effect's summon cue.
+func _step_arrivals() -> void:
+	for arrival: Dictionary in _arrivals.duplicate():
+		var waited := elapsed - float(arrival.since)
+		if float(arrival.shown_at) < 0.0:
+			var caster_shown := bool(arrival.camera) and auto_camera != null and auto_camera.showing_caster()
+			if (caster_shown or (not bool(arrival.camera) and waited < float(arrival.gesture))) and waited < 8.0: continue
+			var targets: Array = []
+			for id: int in arrival.ids:
+				if models.has(id): targets.append(models[id])
+			if is_instance_valid(effects) and not targets.is_empty():
+				effects.cast(String(arrival.card), {"Start": [models.get(int(arrival.side))], "Target": targets})
+			arrival.shown_at = elapsed + ELCombatEffects.summon_delay(profile, String(arrival.card))
+		if elapsed < float(arrival.shown_at): continue
+		_arrivals.erase(arrival)
+		for id: int in arrival.ids:
+			if not models.has(id): continue
+			models[id].visible = true
+			models[id].remove_meta("arriving")
+			_enter(id)
+
 ## Declared attackers step out to their front-line slots; withdrawn ones
 ## walk back. Once blows are shown the playback brings everyone home.
 func _step_front_line() -> void:
@@ -1144,10 +1220,14 @@ func _event(data: Dictionary) -> void:
 			# CreaturesPFX/<model>/summon.pfx and SndDir/Summon.wav, distinct
 			# from the casting hero's voice and the colour summon effects.
 			# Do not replay an entrance when rebuilding models from a save.
-			if profile.id in ["el1", "el2"] and models.has(c.id):
-				var summoned: ELModel = models[c.id]
-				if summoned.has_clip("usummon") and summoned.play("usummon"):
-					battle_audio.unit(summoned, "summon")
+			# The second game's summoning hero finishes its gesture first, the
+			# first game's reaches its gesture's mark; the creature then rises
+			# in the card's effect at its own spot.
+			if profile.id in ["el1", "el2"] and models.has(c.id) and not _effect_cast.is_empty() and String(_effect_cast.card) == String(c.card) and duel.is_summon(String(c.card)):
+				models[c.id].visible = false
+				models[c.id].set_meta("arriving", true)
+			elif profile.id in ["el1", "el2"] and models.has(c.id):
+				_enter(c.id)
 			_log("%s summons %s." % [_side_name(c.owner), duel.card_name(c.card)])
 		"cast":
 			var animation := "usummon" if duel.is_summon(data.card) else ("uenchantment" if ELCatalog.rule(profile, data.card).get("effect") == "enchant" else "uinstant")
@@ -1906,6 +1986,7 @@ func _show_hit(data: Dictionary) -> void:
 		if not (id < 2 and duel.phase == ELDuel.Phase.FINISHED):
 			battle_audio.unit(model, "hit")
 			model.play("uhit")
+			if id < 2: model.flash(HERO_HIT_FLASH, 0.1)
 		_float_number(id, int(data.amount))
 		return
 	_bleed(id)
@@ -1921,6 +2002,7 @@ func _start_cast_effects() -> void:
 	# current view, with or without the automatic camera.
 	if profile.id in ["el1", "el2"] and pending.get("card", "") in ["TREM", "ERQA"]: _start_shake()
 	_auto_cast(pending)
+	if not pending.is_empty() and _hold_arrival(pending): return
 	if pending.is_empty() or not is_instance_valid(effects): return
 	# Original EL1 GreaterUnsummon@ and EL2@ register
 	# Target/BlueDeath on EACH successfully returned creature, then
@@ -2593,27 +2675,12 @@ func _auto_cast(pending: Dictionary) -> void:
 		forced = card == "COMT" and int(pending.target) in [0, 1] and int(duel.heroes[int(pending.target)].health) <= 0
 	auto_camera.cast(kind, int(pending.side), models[pending.side].position, targets, _local_side(int(pending.side)), int(settings.values.get("auto_camera_dynamics", 50)), models[pending.side].timing, length, extra, forced)
 
-## The first blow of a fight: a close-up beside the fighting creatures.
+## The first blow of a fight: the close-up the player's own attack
+## declaration shot left for it, if any.
 func _auto_fight(from: int, to: int) -> void:
 	fight_shot = true
-	if not _auto_camera_on() or from < 2: return
-	var middle := Vector3.ZERO
-	var count := 0
-	# Both editions supply authored AttackCombat close-ups for the fight.
-	# The chosen hit has its own source and victim; averaging the *whole*
-	# declared attacking army could move the camera away from this fight.
-	# Pair midpoint is a remake-space anchor, not a claimed original offset.
-	if profile.id in ["el1", "el2"] and models.has(from) and models.has(to):
-		middle = (models[from].position + models[to].position) * 0.5
-		count = 1
-	else:
-		# Retain the former group fallback for absent fighter models.
-		for id: int in (duel.attacks if not duel.attacks.is_empty() else [from, to]):
-			if models.has(id):
-				middle += models[id].position
-				count += 1
-	if count == 0: return
-	auto_camera.combat(int(duel.entity(from).get("owner", 0)), middle / count, int(settings.values.get("auto_camera_dynamics", 50)))
+	if not _auto_camera_on() or from < 2 or not models.has(from) or not models.has(to): return
+	auto_camera.first_blow()
 
 ## The original's named camera effect (EL1, applied each frame
 ##  in every camera mode): the track's motion relative to its first
@@ -3272,7 +3339,7 @@ func _refresh() -> void:
 	if helper_overlay():
 		end_button.tooltip_text += "\n" + ("End attack [Space]" if duel.phase == ELDuel.Phase.ATTACK else "Resolve battle [Space]")
 		attack_button.tooltip_text += "\nAttack with all ready creatures"
-	attack_button.disabled = not _human_turn() or duel.phase != ELDuel.Phase.ATTACK
+	_refresh_buttons()
 	if auto_combat and duel.phase == ELDuel.Phase.FINISHED:
 		auto_combat = false
 		auto_off_button.visible = false
@@ -3286,6 +3353,14 @@ func _refresh() -> void:
 				_turn_figure(models[id], desired, bool(duel.creatures[id].resting))
 	_refresh_inspector()
 	updating = false
+
+## The panel buttons' availability (their shutters close when unavailable).
+## Attack with all is open only while one of the side's creatures can still
+## be sent.
+func _refresh_buttons() -> void:
+	if duel == null or attack_button == null: return
+	end_button.disabled = not _human_turn() and not ((_campaign_battle() != null or duel_match != null or combat_tutorial != null) and duel.phase == ELDuel.Phase.FINISHED)
+	attack_button.disabled = not _human_turn() or duel.phase != ELDuel.Phase.ATTACK or not duel.army(duel.active_side()).any(func(c: Dictionary) -> bool: return duel.can_attack(c.id) and not duel.attacks.has(c.id))
 
 ## A creature put to rest by an action, or rising from rest, plays the figure's own tap
 ## or untap clip (with its sound and clip particles) before the idle it ends
@@ -3381,6 +3456,8 @@ func phase_caption() -> String:
 		if duel.winner >= 0: return _original_text("T_WINNER", "%s wins").replace("%s", _side_name(duel.winner))
 		return _original_text("T_RR_DUEL_DRAW" if profile.id == "el2" else "T_VL_MATCH_DRAW", "Draw")
 	if hot_pending: return _original_text("T_WAIT", "Wait")
+	# While a fight plays out the original oval reads T_WAIT («Подождите…»).
+	if _melee_busy(): return _original_text("T_WAIT", "Wait")
 	var kind := target_prompt_kind()
 	if kind >= 0:
 		var first := _original_text("T_SPELL_PARAM" if kind == 0 else "T_SPELL_PARAM%02d" % (2 * kind + 1), "")
@@ -3417,18 +3494,48 @@ func _original_text(key: String, fallback: String) -> String:
 	var value := profile.text(key) if profile != null else key
 	return fallback if value.is_empty() or value == key else value
 
-## The original hand card tooltip: the spell's name, its type
-## (T_SPELL_TYPE creature, _TYPE2 sorcery, _TYPE3 enchantment), T_COST with the
-## cost in T_MANA, then the description.
+## The original hand card tooltip, both games: "<type>: <name>" (T_SPELL_TYPE
+## creature with its strength and health, _TYPE2 sorcery, _TYPE3 enchantment),
+## then T_COST with the cost in T_MANA, then the description.
 func card_tooltip(card: String) -> String:
 	var spell_class := str(profile.table("CombatSpells").get(card, {}).get("Class", ""))
-	var lines: Array[String] = [duel.card_name(card)]
 	var kind: String = {"Creature": "T_SPELL_TYPE", "Sorcery": "T_SPELL_TYPE2", "Enchantment": "T_SPELL_TYPE3"}.get(spell_class, "")
-	if not kind.is_empty(): lines.append(_original_text(kind, spell_class))
+	var title := duel.card_name(card)
+	var creature: Dictionary = profile.table("CombatCreatures").get(card, {})
+	if spell_class == "Creature" and creature.has("Power"): title += " %d/%d" % [int(creature.Power), int(creature.get("Toughness", 0))]
+	var lines: Array[String] = ["%s: %s" % [_original_text(kind, spell_class), title] if not kind.is_empty() else title]
 	lines.append("%s %d %s" % [_original_text("T_COST", "Cost:"), duel.cost(card), _original_text("T_MANA", "ether")])
 	var description := profile.card_description(card)
 	if not description.is_empty() and description != card: lines.append(description)
 	return "\n".join(lines)
+
+## The original tooltip for a battle control, or {} for its plain text: a
+## hand card's type, name, strength and cost lines (EL2 layout as
+## seen in the original), a portrait's hero card, a value box's own line.
+func _displayed_side() -> int:
+	var side := 0 if mode_select.selected == 0 and not demo else duel.active_side()
+	if _hot_seat() and hot_side >= 0: side = hot_side
+	return side
+
+func _tip_content(control: Control, at: Vector2) -> Dictionary:
+	if duel == null or profile == null: return {}
+	if control.has_meta("hero_side"):
+		var side := int(control.get_meta("hero_side"))
+		var h: Dictionary = duel.heroes[side]
+		var displayed := _displayed_side()
+		var own := side == displayed
+		# The value boxes under the portrait name their own value.
+		if at.y >= control.size.y - 22:
+			var index := clampi(int(at.x / (control.size.x / 3.0)), 0, 2)
+			return ELCombatTooltip.text_content(_control_tip("CombatTt%d" % ([1, 3, 5] if own else [2, 4, 6])[index]))
+		if at.y > 60: return {}
+		var title := _original_text(("CtrlDUMyHero" if own else "CtrlDUEnemyHero") if profile.id == "el1" else ("CtrlDuMyHero" if own else "CtrlDuEnemyHero"), _side_name(side))
+		var health := "%s: %d" % [_original_text("CtrlTTCombatTt1" if profile.id == "el2" else "CtrlTtCombatTt1", "Health"), int(h.health)]
+		var level := "%s: %d" % [_original_text("T_LEVEL", "Level"), int(h.get("level", 1))]
+		var lines: Array = [level, health] if profile.id == "el1" else [health, level]
+		if helper_overlay(): lines.append_array(control.tooltip_text.split("\n"))
+		return ELCombatTooltip.hero_content(profile.id, portraits[side].texture, title, lines)
+	return {}
 
 ## An original control's tooltip text from the Controls table, else "".
 func _control_tip(control: String) -> String:
@@ -3604,9 +3711,11 @@ func _build_ui() -> void:
 		hud_root.add_child(portrait)
 		portraits.append(portrait)
 		var button := _button("", _target.bind(side))
-		button.add_theme_stylebox_override("normal", StyleBoxEmpty.new())
-		button.add_theme_stylebox_override("hover", _style(Color(0.8, 0.65, 0.3, 0.12), ACCENT))
-		button.add_theme_stylebox_override("pressed", _style(Color(0.8, 0.65, 0.3, 0.24), ACCENT))
+		# The original portraits show no hover or press highlight.
+		for style: String in ["normal", "hover", "pressed", "hover_pressed", "focus", "disabled"]:
+			button.add_theme_stylebox_override(style, StyleBoxEmpty.new())
+		button.focus_mode = Control.FOCUS_NONE
+		button.set_meta("hero_side", side)
 		hud_root.add_child(button)
 		hero_buttons.append(button)
 		var values := _label("", 13)
@@ -3624,6 +3733,9 @@ func _build_ui() -> void:
 		name_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		hud_root.add_child(name_label)
 		hero_names.append(name_label)
+	# Godot's own tooltips stay invisible over the battle panel; ELCombatTooltip
+	# draws them in the original frame.
+	hud_root.theme = ELCombatTooltip.hidden_theme()
 	phase_label = _label("DUEL", 15, ELCombatRail.COUNT_COLOR)
 	# The original caption: bold Arial in the counts' gold, cap height 10 px
 	# at 1024x768 ("Фаза атаки" in the second game's oval).
@@ -3635,10 +3747,14 @@ func _build_ui() -> void:
 	phase_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	phase_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	hud_root.add_child(phase_label)
-	attack_button = _button("", func():
+	attack_button = ELCutPartButton.new()
+	attack_button.pressed.connect(func():
 		for c: Dictionary in duel.army(duel.active_side()):
 			if duel.can_attack(c.id) and not duel.attacks.has(c.id): duel.toggle_attack(c.id))
 	attack_button.tooltip_text = "Attack with all ready creatures"
+	end_face = ELCutPartButton.new()
+	end_face.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	hud_root.add_child(end_face)
 	end_button = _button("", _end_phase)
 	auto_button = ELCutPartButton.new()
 	auto_button.pressed.connect(_toggle_auto)
@@ -3664,12 +3780,15 @@ func _build_ui() -> void:
 	hud_root.add_child(game_menu_button)
 	attack_button.disabled = true
 	end_button.disabled = true
-	for button in [attack_button, end_button]:
-		button.add_theme_stylebox_override("normal", StyleBoxEmpty.new())
-		button.add_theme_stylebox_override("hover", _style(Color(0.9, 0.7, 0.3, 0.13), ACCENT))
-		button.add_theme_stylebox_override("pressed", _style(Color(0.9, 0.7, 0.3, 0.3), ACCENT))
-		button.add_theme_stylebox_override("disabled", _style(Color(0, 0, 0, 0.3), Color.TRANSPARENT))
-		hud_root.add_child(button)
+	end_face.mirror = end_button
+	for button: ELCutPartButton in [attack_button, auto_button, end_face]:
+		button.shutter = true
+		button.push_on_hover = true
+		button.dim_disabled = false
+		button.focus_mode = Control.FOCUS_NONE
+	hud_root.add_child(attack_button)
+	end_button.focus_mode = Control.FOCUS_NONE
+	hud_root.add_child(end_button)
 	notice = _label("", 12, INK)
 	notice.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	notice.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -3692,6 +3811,9 @@ func _build_ui() -> void:
 	card_scroll.add_child(hand)
 	card_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_SHOW_NEVER
 	rail.hand_scroll = card_scroll
+	combat_tip = ELCombatTooltip.new()
+	combat_tip.describe = _tip_content
+	hud_root.add_child(combat_tip)
 	folder_dialog = FileDialog.new()
 	folder_dialog.file_mode = FileDialog.FILE_MODE_OPEN_DIR
 	folder_dialog.access = FileDialog.ACCESS_FILESYSTEM
@@ -4582,8 +4704,10 @@ func _layout_hud() -> void:
 	else:
 		phase_label.position = Vector2(w - 296, h - 109)
 		phase_label.size = Vector2(118, 43)
-	attack_button.position = Vector2(w - 290, h - 55)
-	attack_button.size = Vector2(46, 46)
+	# The original 1024 places: CombatMenu1 (509,542) and CombatMenu2
+	# (564,544) of the 800 panel moved right by 224 and down by 168.
+	attack_button.position = Vector2(w - 291, h - 58)
+	end_face.position = Vector2(w - 236, h - 56)
 	auto_button.position = Vector2(w - 181, h - 58)
 	# The original top-right place (735,10 of 800) holds the remake's Menu
 	# button, so the stop control sits just to its left.
@@ -4604,7 +4728,14 @@ func _place_end_button() -> void:
 	if hud_root == null or end_button == null: return
 	var w := hud_root.size.x
 	var h := hud_root.size.y
-	end_button.add_theme_stylebox_override("normal", StyleBoxEmpty.new() if end_button.text.is_empty() else _style(Color("111710ed"), ACCENT))
+	var plain := end_button.text.is_empty()
+	# The socket's art (end_face) shows its states; only the text control is styled.
+	end_button.add_theme_stylebox_override("normal", StyleBoxEmpty.new() if plain else _style(Color("111710ed"), ACCENT))
+	end_button.add_theme_stylebox_override("hover", StyleBoxEmpty.new() if plain else _style(Color(0.9, 0.7, 0.3, 0.13), ACCENT))
+	end_button.add_theme_stylebox_override("pressed", StyleBoxEmpty.new() if plain else _style(Color(0.9, 0.7, 0.3, 0.3), ACCENT))
+	end_button.add_theme_stylebox_override("hover_pressed", StyleBoxEmpty.new() if plain else _style(Color(0.9, 0.7, 0.3, 0.3), ACCENT))
+	end_button.add_theme_stylebox_override("disabled", StyleBoxEmpty.new() if plain else _style(Color(0, 0, 0, 0.3), Color.TRANSPARENT))
+	if end_face != null: end_face.visible = plain
 	if end_button.text.is_empty():
 		end_button.position = Vector2(w - 235, h - 55)
 		end_button.size = Vector2(46, 46)

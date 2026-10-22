@@ -31,3 +31,13 @@ available at https://ffmpeg.org/download.html .
 The movie cache (`src/content/movie_cache.gd`) and movie player
 (`src/render/movie_player.gd`) are adapted from the Apache-2.0 licensed Cursed
 Lands engine by TheWWWorm. See LICENSE.md.
+
+## Installer decoder
+
+The GOG installer reader (`src/content/inno_setup.gd`, `src/content/lzma.gd`) is
+adapted from the Apache-2.0 licensed Cursed Lands engine by TheWWWorm. Its LZMA
+decoder, and the compiled copy in `native/el_lzma.c`, follow Igor Pavlov's
+public domain reference decoder (`LzmaSpec.cpp` in the LZMA SDK,
+https://www.7-zip.org/sdk.html); the LZMA2 framing follows xz's public domain
+`lzma2_decoder`. `native/include/gdextension_interface.h` is part of Godot and
+is distributed under Godot's MIT license.

@@ -43,6 +43,9 @@ var counts := {"summon": 0, "sorcery": 0, "enchantment": 0}
 var _tracks: Dictionary = {}
 ## Creature kinds already summoned under the camera this battle.
 var seen: Dictionary = {}
+## The fight close-up an own attack declaration shot left for the first blow:
+## {side, middle, variant}, or empty.
+var fight: Dictionary = {}
 
 ## This edition's view angle (vertical degrees).
 var view_angle := VIEW_FOV
@@ -141,6 +144,10 @@ static func view_fov(track_fov: float, angle := VIEW_FOV) -> float:
 ## both games (the second game's original frames its forest arena that way).
 func standing_view() -> Dictionary:
 	return default_view()
+
+## True while a summon's caster shot is on screen.
+func showing_caster() -> bool:
+	return not shots.is_empty() and String(shots[0].get("name", "")).begins_with("SummonOwnerCaster")
 
 ## Advances the playing shot. Returns {position, rotation, fov, focus} for a
 ## close-up, {orbit: true, fov} while returning to the player's view, and {}
@@ -352,8 +359,21 @@ static func _middle(targets: Array) -> Vector3:
 	for target: Dictionary in targets: middle += target.at
 	return middle / targets.size()
 
-## The first blow of a fight: a close-up beside the middle of the fighting
-## creatures, from the attacking side; "Left"/"Right" by where the fight is.
+## The first blow after the player's own attack declaration shot: the
+## declaration's AttackCombat close-up, at the place and in the variant the
+## declaration chose; "Left"/"Right" by where that is. Nothing plays for a
+## fight that no declaration shot introduced (the opponent's attacks, or a
+## declaration whose rolls failed).
+func first_blow() -> bool:
+	if fight.is_empty(): return false
+	var pending := fight
+	fight = {}
+	var lateral := float(pending.middle.z) if int(pending.side) == 1 else -float(pending.middle.z)
+	var right := lateral >= 2.0 or (lateral > -2.0 and rng.randi() % 2 == 0)
+	return _queue([placed("AttackCombat%sMonsters%d_1.cmf" % ["Right" if right else "Left", int(pending.variant)], pending.middle, int(pending.side), true)])
+
+## A fight close-up at one figure (a trigger's lethal hit): random side and
+## variant.
 func combat(attacker: int, middle: Vector3, dynamics: int) -> bool:
 	if not _roll(dynamics) or not _roll(_odd("combat", "playtrack")): return false
 	var lateral := middle.z if attacker == 1 else -middle.z
@@ -365,9 +385,11 @@ func combat(attacker: int, middle: Vector3, dynamics: int) -> bool:
 ## slots (flags from EL1 / EL2): all on even slots
 ## AttackOwnLeft, all on odd slots -> AttackOwnRight; otherwise _3 when one
 ## stands in slots 4-5, _2 when one stands in slots 2-3 or 6-9, else _1.
-## Monsters1/2 is a roll against the combat side-select odds.
+## Monsters1/2 is a roll against the combat side-select odds. The shot plays
+## on the PlayTrack roll and leaves its place and variant for the first blow.
 func attack_own(side: int, middle: Vector3, dynamics: int, slots: Array[int] = []) -> bool:
-	if profile == null or profile.id not in ["el1", "el2"] or not _roll(dynamics): return false
+	fight = {}
+	if profile == null or profile.id not in ["el1", "el2"] or not _roll(dynamics) or not _roll(_odd("combat", "playtrack")): return false
 	var flags := 0
 	for slot: int in slots:
 		if slot < 2: flags |= 1
@@ -380,6 +402,7 @@ func attack_own(side: int, middle: Vector3, dynamics: int, slots: Array[int] = [
 	elif flags & 4: name = "AttackOwnMonsters%d_3.cmf"
 	elif flags & 2: name = "AttackOwnMonsters%d_2.cmf"
 	var variant := 2 if _roll(100.0 - _odd("combat", "camerasideselect")) else 1
+	fight = {"side": side, "middle": middle, "variant": variant}
 	return _queue([placed(name % variant, middle, side, true)])
 
 ## The winner's camera; it keeps its last frame until the battle closes or the

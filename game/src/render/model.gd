@@ -113,6 +113,20 @@ func set_opacity(alpha: float) -> void:
 		material.albedo_color.a = alpha
 		node.material_override = material
 
+## Shows the whole figure, carried weapons included, in one lit colour for
+## `seconds` (a hit), then its own look again.
+func flash(color: Color, seconds: float) -> void:
+	var material := StandardMaterial3D.new()
+	material.albedo_color = color
+	for node: Node in find_children("*", "MeshInstance3D", true, false):
+		(node as MeshInstance3D).material_overlay = material
+	var timer := get_tree().create_timer(seconds) if is_inside_tree() else null
+	if timer == null: return
+	timer.timeout.connect(func():
+		if not is_instance_valid(self): return
+		for node: Node in find_children("*", "MeshInstance3D", true, false):
+			if (node as MeshInstance3D).material_overlay == material: (node as MeshInstance3D).material_overlay = null)
+
 func play(name: String) -> bool:
 	if _animations == null or not _animations.has(name):
 		return false
@@ -140,6 +154,11 @@ func play(name: String) -> bool:
 	frame = 0.0
 	playing = true
 	set_process(true)
+	# A part keeps its blend shape weights when its mesh changes, so the last
+	# clip's morph frames would add to the new clip's.
+	for part: String in _previous_morphs:
+		for previous: int in _previous_morphs[part]:
+			parts[part].set_blend_shape_value(previous, 0.0)
 	_previous_morphs.clear()
 	for part: String in figures:
 		if part in EFFECT_ANCHORS: continue

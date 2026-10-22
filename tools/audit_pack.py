@@ -7,7 +7,7 @@ import re
 import struct
 import subprocess
 
-ALLOWED = re.compile(r"^(?:res://)?(?:src/[^\n]+\.(?:gd|gdc|gd\.remap|gdshader|gdshader\.remap)|scenes/[^\n]+\.(?:tscn|tscn\.remap)|\.godot/[^\n]+|project\.binary|icon\.svg(?:\.import)?)$")
+ALLOWED = re.compile(r"^(?:res://)?(?:src/[^\n]+\.(?:gd|gdc|gd\.remap|gdshader|gdshader\.remap)|scenes/[^\n]+\.(?:tscn|tscn\.remap)|\.godot/[^\n]+|project\.binary|icon\.svg(?:\.import)?|native/el_lzma\.gdextension)$")
 GAME_DATA = re.compile(r"\.(res|mmp|fig|mod|anm|bon|reg|cpg|sobj|bik|wav|ogg|mp3|exe|dll|etherpack|eipack|elpack)$", re.I)
 PRIVATE = re.compile(rb"/(?:home|Users)/[^/\s\x00]+/|\.local_profiles\.json\x00?\s*[:=]|(?:FUN|DAT|LAB|PTR|SUB)_[0-9a-fA-F]{6,}")
 

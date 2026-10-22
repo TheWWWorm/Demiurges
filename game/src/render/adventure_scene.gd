@@ -23,6 +23,11 @@ var fog_session: ELAdventureSession
 var fog_player := 0
 var _fog_revision := -1
 var _fog_textures: Array[ImageTexture] = []
+## Tile levels last applied, and the largest object footprint side (tiles).
+var _fog_tiles := PackedByteArray()
+## Original clip code of the walk clips (as in battles).
+const WALK_CODE := 0x80140000
+var _fog_reach := 1
 ## Mist opacity per map corner (ELFog levels as the fog pass draws them): the
 ## value the last change started from, the target and the seconds since.
 const FOG_UNEXPLORED := 255
@@ -204,8 +209,12 @@ func enable_fog(session: ELAdventureSession) -> void:
 		add_child(mist)
 	if _fog_apron == null: _fog_apron = _make_fog_apron()
 	_fog_apron.visible = true
-	fog_to = fog_corners()
+	_fog_tiles = fog_tiles()
+	fog_to = fog_corners(_fog_tiles)
 	fog_from = fog_to
+	_fog_reach = 1
+	if session.grid != null:
+		for footprint: Dictionary in session.grid.footprints.values(): _fog_reach = maxi(_fog_reach, maxi(footprint.size.x, footprint.size.y))
 	fog_since = INF
 	_fog_textures.clear()
 	for data: PackedByteArray in [fog_from, fog_to]:
@@ -237,15 +246,8 @@ func _make_fog_apron() -> MeshInstance3D:
 
 ## Mist opacity per map corner for the local player: a corner takes its most
 ## fogged tile (unexplored or beyond the map 255, remembered 133, visible 0).
-func fog_corners() -> PackedByteArray:
-	var data := _fog_data()
-	var known: PackedByteArray = data[0]
-	var seen: PackedByteArray = data[1]
-	var bit := 1 << fog_player
-	var tiles := PackedByteArray()
-	tiles.resize(map.width * map.height)
-	for i in tiles.size():
-		tiles[i] = 0 if seen[i] & bit else (FOG_REMEMBERED if known[i] & bit else FOG_UNEXPLORED)
+func fog_corners(tiles := PackedByteArray()) -> PackedByteArray:
+	if tiles.is_empty(): tiles = fog_tiles()
 	var columns := map.width + 1
 	var corners := PackedByteArray()
 	corners.resize(columns * (map.height + 1))
@@ -258,6 +260,34 @@ func fog_corners() -> PackedByteArray:
 				level = maxi(maxi(tiles[at], tiles[at - 1]), maxi(tiles[at - map.width], tiles[at - map.width - 1]))
 			corners[y * columns + x] = level
 	return corners
+
+## Mist opacity per tile for the local player (visible 0, remembered 133,
+## unexplored 255).
+func fog_tiles() -> PackedByteArray:
+	var data := _fog_data()
+	var known: PackedByteArray = data[0]
+	var seen: PackedByteArray = data[1]
+	var bit := 1 << fog_player
+	var tiles := PackedByteArray()
+	tiles.resize(map.width * map.height)
+	for i in tiles.size():
+		tiles[i] = 0 if seen[i] & bit else (FOG_REMEMBERED if known[i] & bit else FOG_UNEXPLORED)
+	return tiles
+
+## The tiles whose fog level differs between two tile sets (empty when none).
+func _changed_tiles(before: PackedByteArray, after: PackedByteArray) -> Rect2i:
+	if before.size() != after.size(): return Rect2i(0, 0, map.width, map.height)
+	var low := Vector2i(map.width, map.height)
+	var high := Vector2i(-1, -1)
+	for y in map.height:
+		var row := y * map.width
+		# Rows without a change are skipped by comparing their slices.
+		if before.slice(row, row + map.width) == after.slice(row, row + map.width): continue
+		for x in map.width:
+			if before[row + x] == after[row + x]: continue
+			low = Vector2i(mini(low.x, x), mini(low.y, y))
+			high = Vector2i(maxi(high.x, x), maxi(high.y, y))
+	return Rect2i() if high.x < 0 else Rect2i(low, high - low + Vector2i.ONE)
 
 ## The corner opacities shown now, part way from `fog_from` to `fog_to`.
 func fog_shown() -> PackedByteArray:
@@ -353,12 +383,21 @@ func grey_object(uid: int, cell := Vector2i(-1, -1)) -> void:
 func sync_fog() -> void:
 	if fog_session == null or ELFog.revision(fog_session) == _fog_revision: return
 	_fog_revision = ELFog.revision(fog_session)
-	fog_from = fog_shown()
-	fog_to = fog_corners()
-	fog_since = 0.0
-	_fog_textures[0].update(Image.create_from_data(map.width + 1, map.height + 1, false, Image.FORMAT_R8, fog_from))
-	_fog_textures[1].update(Image.create_from_data(map.width + 1, map.height + 1, false, Image.FORMAT_R8, fog_to))
-	for item: Dictionary in fog_session.objects.values(): fog_object(item)
+	var tiles := fog_tiles()
+	var changed := _changed_tiles(_fog_tiles, tiles)
+	_fog_tiles = tiles
+	if changed.has_area():
+		fog_from = fog_shown()
+		fog_to = fog_corners(tiles)
+		fog_since = 0.0
+		_fog_textures[0].update(Image.create_from_data(map.width + 1, map.height + 1, false, Image.FORMAT_R8, fog_from))
+		_fog_textures[1].update(Image.create_from_data(map.width + 1, map.height + 1, false, Image.FORMAT_R8, fog_to))
+	# Only objects whose footprint can touch a changed tile are re-checked: a
+	# step changes the cells round the hero, and checking every object of a
+	# large map on each step held the frame.
+	var reach := changed.grow_individual(_fog_reach - 1, _fog_reach - 1, 0, 0)
+	for item: Dictionary in fog_session.objects.values():
+		if changed.has_area() and reach.has_point(Vector2i(int(item.get("x", -99)), int(item.get("y", -99)))): fog_object(item)
 
 ## Unexplored objects and remembered heroes, monsters, castles and forts are
 ## hidden; other remembered objects are dimmed. A moving actor also counts the
@@ -528,11 +567,22 @@ func move_actor(uid: int, position: Vector2, moving: bool) -> void:
 	if delta.length_squared() > 0.00001:
 		model.rotation.y = atan2(delta.x, delta.z)
 	model.position = next
-	var clip := "cmove" if moving else "cidle"
+	var clip := walk_clip(model) if moving else "cidle"
 	if model.base_clip() != clip: model.play(clip)
 	# Movement through fog stays hidden; an actor appears as it steps into view.
 	if fog_session != null: fog_object(fog_session.object(uid), Vector2i(roundi(position.x), roundi(position.y)))
 	grey_object(uid, Vector2i(roundi(position.x), roundi(position.y)))
+
+## The clip a map figure moves with: the one stored under the original walk
+## code (hero and mount models keep "cwalk" there, map creatures their run
+## clip), else a "cwalk"/"crun" clip, else its idle. Rider and mount are one
+## figure, so the mount's legs move with the same clip.
+static func walk_clip(model: ELModel) -> String:
+	if model.has_meta("walk_clip"): return model.get_meta("walk_clip")
+	var clip := model.clip_for_code(WALK_CODE)
+	if clip.is_empty(): clip = "cwalk" if model.has_clip("cwalk") else ("crun" if model.has_clip("crun") else "cidle")
+	model.set_meta("walk_clip", clip)
+	return clip
 
 func orient_actor(uid: int, direction: Vector2) -> void:
 	if actors.has(uid) and direction.length_squared() > 0.0001:

@@ -87,8 +87,9 @@ def run_checked(command, **kwargs):
 
 def stage_project(project, stage):
     stage.mkdir()
-    for name in ('src', 'scenes', 'web'):
-        shutil.copytree(project / name, stage / name, ignore=shutil.ignore_patterns('*.import', '__pycache__'))
+    for name in ('src', 'scenes', 'web', 'native'):
+        if (project / name).is_dir():
+            shutil.copytree(project / name, stage / name, ignore=shutil.ignore_patterns('*.import', '__pycache__'))
     for name in ('project.godot', 'export_presets.cfg', 'icon.svg'):
         shutil.copyfile(project / name, stage / name)
 
