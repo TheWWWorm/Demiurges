@@ -141,8 +141,6 @@ func capture(data: Dictionary) -> bool:
 	var held := data.duplicate()
 	if held.kind == "strike":
 		_note_strike(held)
-		# The fight close-up starts with the first blow (the original's Camera(3)).
-		if not view.fight_shot and _has(int(held.from)) and _has(int(held.to)): view._auto_fight(int(held.from), int(held.to))
 	queue.append(held)
 	if not busy():
 		_capturing = true
@@ -260,6 +258,9 @@ func _play(serial: int) -> void:
 			_face(pair.y, pair.x)
 		# The blow: attack clip, then at impact the hit sound and its results.
 		_face(from, to)
+		# The fight close-up starts as the first blow is struck (the
+		# original's Camera(3)), framed on the two figures.
+		if not view.fight_shot and _has(from) and _has(to): view._auto_fight(from, to, (_position(from) + _position(to)) * 0.5)
 		if _has(from):
 			var model: ELModel = view.models[from]
 			view.battle_audio.unit(model, "attack")
@@ -288,6 +289,7 @@ func _play(serial: int) -> void:
 			_go_home(pair.y, true, strike)
 			engaged[pair.x] = -1
 	if not await _moved(_moves.keys(), serial): return
+	view._auto_fight_over()
 	var rest := after.duplicate()
 	_blows.clear()
 	_after.clear()

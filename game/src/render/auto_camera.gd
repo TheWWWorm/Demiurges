@@ -46,6 +46,11 @@ var seen: Dictionary = {}
 ## The fight close-up an own attack declaration shot left for the first blow:
 ## {side, middle, variant}, or empty.
 var fight: Dictionary = {}
+## After the first blow's close-up: the declaration shot to replay when the
+## fight is over (EL2, state 5), {side, name, variant}.
+var replay: Dictionary = {}
+## Seconds a held declaration or fight shot waits past its end at most.
+const HOLD_LIMIT := 8.0
 
 ## This edition's view angle (vertical degrees).
 var view_angle := VIEW_FOV
@@ -66,6 +71,7 @@ func close_up() -> bool:
 func stop() -> void:
 	shots.clear()
 	clock = 0.0
+	replay = {}
 
 ## CombatCamera.ini: [Summon]/[Sorcery]/[Enchantment]/[Combat] with
 ## `Key = value` lines; `//` starts a comment.
@@ -155,6 +161,9 @@ func showing_caster() -> bool:
 func step(delta: float) -> Dictionary:
 	while not shots.is_empty():
 		var shot: Dictionary = shots[0]
+		# A held shot keeps its last frame; "hold_limit" (seconds past its
+		# end) lets one that nothing released go on to the next shot.
+		if bool(shot.hold) and shot.has("hold_limit") and clock >= float(shot.duration) + float(shot.hold_limit): shot.hold = false
 		if clock < float(shot.duration) or bool(shot.hold): break
 		clock -= float(shot.duration)
 		shots.pop_front()
@@ -184,7 +193,7 @@ static func project(position: Vector3, rotation: Quaternion, fov: float, screen:
 ## authored tracks did not allow for. A close-up keeps its angle and motion but
 ## slides sideways or up/down just enough that the framed `point` stays inside
 ## `safe` (pixels on `screen`); the camera is unchanged when it already is.
-## `limit` (pixels) caps the slide; 0 leaves it uncapped.
+## `limit` (pixels) caps the slide; 0 caps it at a quarter of the screen.
 static func keep_in(position: Vector3, rotation: Quaternion, fov: float, screen: Vector2, safe: Rect2, point: Vector3, limit := 0.0) -> Vector3:
 	if screen.x <= 0.0 or screen.y <= 0.0 or not safe.has_area(): return position
 	var basis := Basis(rotation)
@@ -192,9 +201,14 @@ static func keep_in(position: Vector3, rotation: Quaternion, fov: float, screen:
 	var depth := -local.z
 	if depth <= 0.01: return position
 	var at := project(position, rotation, fov, screen, point)
+	# Only a point the shot already shows, or nearly shows, is eased clear of
+	# the frame: one far outside (a track still turning towards the fight)
+	# is left to the track, which would otherwise be shoved aside and then
+	# jump back once the point passes behind the camera.
+	if not Rect2(-screen * 0.25, screen * 1.5).has_point(at): return position
 	var wanted := Vector2(clampf(at.x, safe.position.x, safe.end.x), clampf(at.y, safe.position.y, safe.end.y))
 	if wanted.is_equal_approx(at): return position
-	if limit > 0.0: wanted = at + (wanted - at).limit_length(limit)
+	wanted = at + (wanted - at).limit_length(limit if limit > 0.0 else screen.y * 0.25)
 	var half := tan(deg_to_rad(fov) * 0.5) * depth
 	var per_pixel := Vector2(2.0 * half * screen.x / screen.y / screen.x, 2.0 * half / screen.y)
 	# Moving the camera right moves the point left on screen; up moves it down.
@@ -202,8 +216,8 @@ static func keep_in(position: Vector3, rotation: Quaternion, fov: float, screen:
 
 ## A close-up's camera position kept clear of the interface: points in `with`
 ## that the shot already shows (on screen but under the frame) are eased out
-## from under it by at most a tenth of the screen, then the framed `point`
-## always ends inside `safe`.
+## from under it by at most a tenth of the screen, then the framed `point` is
+## eased towards `safe` by at most a quarter of the screen.
 static func clear_of_frame(position: Vector3, rotation: Quaternion, fov: float, screen: Vector2, safe: Rect2, point: Vector3, with: Array = []) -> Vector3:
 	var visible := Rect2(Vector2.ZERO, screen)
 	for other: Vector3 in with:
@@ -364,13 +378,43 @@ static func _middle(targets: Array) -> Vector3:
 ## declaration chose; "Left"/"Right" by where that is. Nothing plays for a
 ## fight that no declaration shot introduced (the opponent's attacks, or a
 ## declaration whose rolls failed).
-func first_blow() -> bool:
+## `at`, when given, is where the blow is struck; the close-up frames that
+## fight rather than the declaration place, which for an attacker going to
+## the hero lies far away (a remake approximation). The shot replaces the
+## declaration shot (EL2 clears the queue).
+func first_blow(at := Vector3.INF) -> bool:
 	if fight.is_empty(): return false
 	var pending := fight
 	fight = {}
-	var lateral := float(pending.middle.z) if int(pending.side) == 1 else -float(pending.middle.z)
+	var place: Vector3 = pending.middle if at == Vector3.INF else at
+	var lateral := float(place.z) if int(pending.side) == 1 else -float(place.z)
 	var right := lateral >= 2.0 or (lateral > -2.0 and rng.randi() % 2 == 0)
-	return _queue([placed("AttackCombat%sMonsters%d_1.cmf" % ["Right" if right else "Left", int(pending.variant)], pending.middle, int(pending.side), true)])
+	var shot := placed("AttackCombat%sMonsters%d_1.cmf" % ["Right" if right else "Left", int(pending.variant)], place, int(pending.side), true)
+	if shot.is_empty(): return false
+	# Held until the fight is over (the original queues it with its hold flag).
+	shot.hold = true
+	shot.hold_limit = HOLD_LIMIT
+	if not _queue([shot]): return false
+	replay = {"side": pending.side, "name": pending.get("name", ""), "variant": pending.variant}
+	return true
+
+## The fight shown by a first-blow close-up is over: the
+## declaration track again at the attackers (`middle`: where they stand now),
+## then the return to the player's view. Without attackers left, the return
+## alone.
+func fight_over(middle := Vector3.INF) -> bool:
+	if replay.is_empty(): return false
+	var pending := replay
+	replay = {}
+	var list: Array[Dictionary] = []
+	if middle != Vector3.INF and not String(pending.name).is_empty():
+		list.append(placed(String(pending.name), middle, int(pending.side), true))
+	if list.is_empty() or list[0].is_empty():
+		var home := track("ReturnOwner_1.cmf")
+		if home.is_empty(): return false
+		list = [{"name": "ReturnOwner_1.cmf", "fovs": home.fovs, "duration": home.fovs.size() / RATE, "orbit": true, "hold": false}]
+		return _queue(list, false)
+	return _queue(list)
 
 ## A fight close-up at one figure (a trigger's lethal hit): random side and
 ## variant.
@@ -402,8 +446,20 @@ func attack_own(side: int, middle: Vector3, dynamics: int, slots: Array[int] = [
 	elif flags & 4: name = "AttackOwnMonsters%d_3.cmf"
 	elif flags & 2: name = "AttackOwnMonsters%d_2.cmf"
 	var variant := 2 if _roll(100.0 - _odd("combat", "camerasideselect")) else 1
-	fight = {"side": side, "middle": middle, "variant": variant}
-	return _queue([placed(name % variant, middle, side, true)])
+	fight = {"side": side, "middle": middle, "variant": variant, "name": name % variant}
+	replay = {}
+	# Held while the attackers go into the fight, until the first blow.
+	var shot := placed(name % variant, middle, side, true)
+	if shot.is_empty(): return false
+	shot.hold = true
+	shot.hold_limit = HOLD_LIMIT
+	return _queue([shot])
+
+## Lets a held declaration or fight shot go on to the return (a declared
+## attack that ended without a blow being shown).
+func release() -> void:
+	fight = {}
+	if not shots.is_empty() and shots[0].has("hold_limit"): shots[0].hold = false
 
 ## The winner's camera; it keeps its last frame until the battle closes or the
 ## player moves the view.

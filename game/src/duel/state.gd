@@ -1430,10 +1430,24 @@ func attack_cost(id: int) -> int:
 	return global_enchantment_count("LSDS") if creatures.has(id) else 0
 
 func can_attack(id: int) -> bool:
-	return phase == Phase.ATTACK and ready(id) and creatures[id].owner == attacker and not has_flag(id, "NoAttack") and not in_plane(id) and not (
-		creatures[id].power <= 1 and _enchantment_count(1 - attacker, "DNFR") > 0) and global_enchantment_count("FOGG") + global_enchantment_count("WLDT") == 0 and not (
-		creatures[id].power <= (3 if profile.id == "el2" else 2) and _enchantment_count(1 - attacker, "DRFR") > 0) and not (
-		creatures[id].power <= (5 if profile.id == "el2" else 3) and _enchantment_count(1 - attacker, "ANFR") > 0)
+	return phase == Phase.ATTACK and ready(id) and creatures[id].owner == attacker and not has_flag(id, "NoAttack") and not in_plane(id) \
+		and global_enchantment_count("FOGG") + global_enchantment_count("WLDT") == 0 and not _forest_holds(id, 1 - attacker)
+
+## Dense, Dark and Ancient Forest: the highest power an opposing creature
+## may have and still be kept from attacking.
+func forest_limit(card: String) -> int:
+	match card:
+		"DNFR": return 1
+		"DRFR": return 3 if profile.id == "el2" else 2
+		"ANFR": return 5 if profile.id == "el2" else 3
+	return -1
+
+## True while a forest on hero `side` keeps creature `id` from attacking.
+func _forest_holds(id: int, side: int) -> bool:
+	if creatures[id].owner == side: return false
+	for card: String in ["DNFR", "DRFR", "ANFR"]:
+		if creatures[id].power <= forest_limit(card) and _enchantment_count(side, card) > 0: return true
+	return false
 
 func toggle_attack(id: int) -> bool:
 	if gate == null: return _toggle_attack_now(id)
@@ -2186,6 +2200,12 @@ func _enchant(card: String, side: int, target: int, rule: Dictionary) -> void:
 	if profile.id in ["el1", "el2"] and card == "FOGG":
 		for creature: Dictionary in creatures.values():
 			_emit({"kind": "fog_creature_cue", "target": int(creature.id)})
+	# The forests' per-creature hook (EL1 Ancient Forest@, EL2
+	# @) shows the forest only on each opposing creature it stops.
+	if target < 2 and forest_limit(card) >= 0:
+		for creature: Dictionary in creatures.values():
+			if creature.owner != target and creature.power <= forest_limit(card):
+				_emit({"kind": "forest_creature_cue", "target": int(creature.id)})
 	if target >= 2 and creatures[target].damage >= creatures[target].toughness: _lethal(target)
 	elif target < 2 and _changes_armies(card):
 		# Immolation's toughness cut kills creatures it brings to zero.

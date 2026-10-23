@@ -339,9 +339,22 @@ func _begin_move(actor: Dictionary, destination: Vector2i, queued: bool, use_id 
 		if queued: _finish_command()
 		return queued
 	var from := Vector2i(actor.x, actor.y)
+	# A new order while this hero is between two tiles finishes that step
+	# and goes on from the next tile, so the figure never jumps back.
+	var stepping: Vector2i = from
+	var progress := 0.0
+	if not queued and not movement.is_empty() and int(movement.id) == int(actor.uid) and float(movement.progress) > 0.0:
+		stepping = movement.path[int(movement.index) + 1]
+		progress = float(movement.progress)
 	# Second game: routes avoid hostile guard zones where they can.
 	var avoid := interception.hostile_cells(state, actor) if state.map.profile.id == "el2" else ([] as Array[Vector2i])
-	var path := grid.approach(from, state.object(use_id), actor.get("ship", false), avoid) if use_id >= 0 else grid.path(from, destination, actor.get("ship", false), avoid)
+	var path := grid.approach(stepping, state.object(use_id), actor.get("ship", false), avoid) if use_id >= 0 else grid.path(stepping, destination, actor.get("ship", false), avoid)
+	if stepping != from:
+		if path.is_empty() or path[0] != stepping:
+			progress = 0.0
+			path = grid.approach(from, state.object(use_id), actor.get("ship", false), avoid) if use_id >= 0 else grid.path(from, destination, actor.get("ship", false), avoid)
+		else:
+			path.insert(0, from)
 	if path.is_empty():
 		notice = "No route to that location."
 		if queued:
@@ -354,7 +367,7 @@ func _begin_move(actor: Dictionary, destination: Vector2i, queued: bool, use_id 
 			return _fail("The scenario could not find a route for %s to %s." % [actor.name, destination])
 		return false
 	if not movement.is_empty(): state.object(movement.id).orders.clear()
-	movement = {"id": actor.uid, "path": path, "index": 0, "progress": 0.0, "queued": queued, "use": use_id if use_at_end else -1}
+	movement = {"id": actor.uid, "path": path, "index": 0, "progress": progress, "queued": queued, "use": use_id if use_at_end else -1}
 	actor.orders.assign(["move"])
 	presentation.emit({"kind": "route", "id": actor.uid, "path": path})
 	if path.size() == 1: _complete_movement()

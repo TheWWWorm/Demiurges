@@ -33,6 +33,7 @@ static func positional_bus(reverse: bool) -> StringName:
 ## the audio thread's next mix, so quitting in the same frame left music and
 ## ambience streams alive at exit (leak warnings in the log).
 static func quiet_quit(tree: SceneTree) -> void:
+	if ELCrashReport.instance != null: ELCrashReport.instance.clean_exit()
 	for node: Node in tree.root.find_children("*", "AudioStreamPlayer", true, false) + tree.root.find_children("*", "AudioStreamPlayer3D", true, false):
 		node.stop()
 		node.stream = null

@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.2.6
+
+- Battles:
+  - In both games, a battle ends by itself: the defeated hero falls, then the winner plays its victory animation to its colour's fanfare, as in the originals. The winner's camera shot follows only your own win; when the computer wins, the view stays as it is. Heroes without a victory animation of their own (the Etherlords II campaign heroes) use their casting gesture, as in the original. A campaign battle then returns to the map, and a duel shows its result after the animation.
+  - In both games, Dense, Dark and Ancient Forest show their effect only on the opposing creatures they keep from attacking, with the enchantment glow on the caster; the effect was shown on the enemy hero.
+  - In both games, the automatic camera's close-up on a fight starts when the blow is struck and frames the attacker and its target, including an attack on the hero, then returns to the attacker and cuts back to the normal view, as in the original. The shot of your own attack now starts when the fight begins, after your opponent's answer, as in the original; if your attackers did not survive the answer, there is no shot. The camera no longer lurches sideways during these shots.
+- Maps:
+  - In both games, clicking again while a hero is walking no longer makes it jump back and forth: it finishes the step it is taking and goes on from there.
+  - In both games, once you move the view yourself (keys, screen edge, dragging or the minimap), the camera no longer snaps back to a walking hero. Centring on the hero makes it follow again.
+- Logs and crash reports ([#2](https://github.com/TheWWWorm/Demiurges/issues/2)):
+  - The game now keeps a log on every platform except the browser, including Android, where there was none. It notes each step of a session (battles starting and ending, maps, saves and loads), so the last lines show where a crash happened.
+  - If the game closed unexpectedly, the next start offers a report: Save report writes it to your Download folder on Android, or Downloads on a computer, and shows where; Copy to clipboard copies it. The system closing the game in the background, or swiping it away from recent apps, does not count as a crash.
+  - Remake settings › Export log… saves or copies the same report at any time, to attach to a bug report.
+- Graphics:
+  - A new Sharpening option (Off, Light, Strong; Light by default) makes figures and ground look less blurry. Textures are also filtered more sharply at steep angles.
+
 ## 0.2.5
 
 - Installing:

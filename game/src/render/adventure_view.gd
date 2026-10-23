@@ -74,6 +74,9 @@ const TURN_TICK := 0.064
 var yaw_goal := INF
 var zoom_limits := Vector2(16, 100)
 var following := -1
+## The player moved the view away from the hero; new orders leave it there
+## until the player centres the hero again.
+var view_moved := false
 var dragging := false
 var error := ""
 var paused := false
@@ -423,6 +426,7 @@ func _update_edge(delta: float) -> void:
 	_edge_tilt += (tilt_target - _edge_tilt) * (1.0 - pow(1.0 - 1.0 / 6.0, steps))
 	if _edge_pan != Vector2.ZERO:
 		following = -1
+		view_moved = true
 		target += Vector3(_edge_pan.x, 0, _edge_pan.y).rotated(Vector3.UP, yaw) * delta
 	# The same turn as dragging towards that edge.
 	yaw -= _edge_turn * delta
@@ -510,6 +514,7 @@ func _select_hero(id: int) -> void:
 	if paused or not director.can_move() or actor.is_empty() or actor.type != "hero" or not actor.alive or actor.owner != state.current_player: return
 	selected_hero = id
 	following = id
+	view_moved = false
 	_refresh_roster()
 	var path := ELStrategy.order_path(director, actor)
 	_draw_route(path)
@@ -757,8 +762,10 @@ func _unhandled_input(event: InputEvent) -> void:
 			get_viewport().set_input_as_handled()
 		# First game: H opens the tutorial; Home centres the hero.
 		elif event.keycode == KEY_H and tutorial_panel != null: tutorial_panel.open_history()
-		elif event.keycode in [KEY_HOME, KEY_H]: following = _hero_id()
-		elif event.keycode in [KEY_W, KEY_A, KEY_S, KEY_D]: following = -1
+		elif event.keycode in [KEY_HOME, KEY_H]: _centre_hero()
+		elif event.keycode in [KEY_W, KEY_A, KEY_S, KEY_D]:
+			following = -1
+			view_moved = true
 	if not director.dialogue.is_empty(): return
 	if event is InputEventMouseMotion:
 		_pointer_on_map = hud == null or hud.map_rect().has_point(event.position)
@@ -996,8 +1003,12 @@ func _click_ground(tile: Vector2i) -> void:
 	if not ordered: _remark(director.notice)
 	else:
 		_remark(director.notice)
-		following = _hero_id()
+		if not view_moved: following = _hero_id()
 	if tutorial_panel != null and _hero_id() >= 0: tutorial_panel.map_click(site, ordered)
+
+func _centre_hero() -> void:
+	following = _hero_id()
+	view_moved = false
 
 ## Touch gestures (remake addition): the same camera limits as the mouse.
 func touch_camera_ready() -> bool:
@@ -1012,6 +1023,7 @@ func touch_pan(from: Vector2, to: Vector2) -> void:
 	var b: Variant = ground.intersects_ray(camera.project_ray_origin(to), camera.project_ray_normal(to))
 	if a == null or b == null: return
 	following = -1
+	view_moved = true
 	target += (a as Vector3) - (b as Vector3)
 	var low := ELAdventureScene.world_position(-0.5, float(state.map.height) - 0.5)
 	var high := ELAdventureScene.world_position(float(state.map.width) - 0.5, -0.5)
@@ -2242,6 +2254,7 @@ func _build_first_controls() -> void:
 	hud.begin_requested.connect(begin_encounter)
 	hud.minimap_clicked.connect(func(cell: Vector2):
 		following = -1
+		view_moved = true
 		target = ELAdventureScene.world_position(cell.x - 0.5, cell.y - 0.5))
 	day_button = hud.dial.NextTurn
 	day_button.pressed.connect(_end_day)
@@ -2323,10 +2336,11 @@ func _build_second_controls() -> void:
 	second_hud.inventory_requested.connect(_open_spellbook.bind(-1))
 	second_hud.notebook_requested.connect(open_notebook)
 	second_hud.options_requested.connect(open_options)
-	second_hud.centre_requested.connect(func(): following = _hero_id())
+	second_hud.centre_requested.connect(_centre_hero)
 	second_hud.minimap_clicked.connect(func(cell: Vector2):
 		if state.camera_locked: return
 		following = -1
+		view_moved = true
 		target = ELAdventureScene.world_position(cell.x - 0.5, cell.y - 0.5))
 	# The tutorial cannot be saved, so its Save menu button is disabled.
 	if state.tutorial and second_hud.menu_buttons.has("EscSave"):
@@ -2594,6 +2608,7 @@ func set_suspended(value: bool) -> void:
 ## F5: the original quick save, the named slot T_QUICK_SAVE_NAME of this
 ## edition, overwritten without a question; T_GAME_SAVED confirms it.
 func quick_save() -> void:
+	ELCrashReport.trace("map quick save")
 	if state.tutorial:
 		notice.text = "The tutorial cannot be saved."
 		return

@@ -24,7 +24,7 @@ extends RefCounted
 ## "visual_log". Several have no remake system yet and are only stored.
 ## "tutorial_events": the first game's shown tutorial events, one '0'/'1'
 ## per event id (settings.ini TutorialEvents); "show_tutorial" gates them.
-const SHARED := {"ambience": 0.55, "shadows": true, "weather": true, "helper_overlay": false, "antialiasing": -1}
+const SHARED := {"ambience": 0.55, "shadows": true, "weather": true, "helper_overlay": false, "antialiasing": -1, "sharpening": 1}
 const EDITION := {"music": 0.55, "effects": 0.8, "movies": 2, "blood": true, "map_tooltips": true, "autosave": true,
 	"heroes_voices": true, "ambient_sounds": true, "adventure_fast": false, "animated_objects": true,
 	"mouse_rotation": 1.0, "keyboard_rotation": 1.0, "mouse_scroll": 1.0, "keyboard_scroll": 1.0,
@@ -37,7 +37,7 @@ const EDITION_DEFAULTS := {"el1": {}, "el2": {"auto_camera_dynamics": 96, "gamma
 ## Value ranges: [min, max] for numbers; bools are checked by type.
 const RANGES := {"music": [0.0, 1.0], "effects": [0.0, 1.0], "ambience": [0.0, 1.0], "mouse_rotation": [0.0, 2.0],
 	"keyboard_rotation": [0.0, 2.0], "mouse_scroll": [0.0, 2.0], "keyboard_scroll": [0.0, 2.0], "gamma": [-1.0, 1.0],
-	"auto_camera_dynamics": [0, 100], "movies": [0, 2], "antialiasing": [-1, 2]}
+	"auto_camera_dynamics": [0, 100], "movies": [0, 2], "antialiasing": [-1, 2], "sharpening": [0, 2]}
 
 var values := {}
 var edition := ""

@@ -41,3 +41,9 @@ public domain reference decoder (`LzmaSpec.cpp` in the LZMA SDK,
 https://www.7-zip.org/sdk.html); the LZMA2 framing follows xz's public domain
 `lzma2_decoder`. `native/include/gdextension_interface.h` is part of Godot and
 is distributed under Godot's MIT license.
+
+## Logs and crash reports
+
+The crash report (`src/content/crash_report.gd`) and its box
+(`src/render/crash_report_box.gd`) are adapted from the Apache-2.0 licensed
+Cursed Lands engine by TheWWWorm. See LICENSE.md.

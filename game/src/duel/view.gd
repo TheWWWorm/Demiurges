@@ -105,8 +105,16 @@ var auto_camera: ELAutoCamera
 ## Height above a framed figure's feet that the automatic camera keeps on screen.
 const FRAMED_HEIGHT := 0.7
 const EffectTable := preload("res://src/duel/combat_sound_table.gd")
+const SharpenLayer := preload("res://src/render/sharpen_layer.gd")
 ## The current fight already had its chance of a close-up.
 var fight_shot := false
+## The local side's creatures in the last committed attack (the fight-over
+## replay frames those still on the field).
+var declared_attackers: Array[int] = []
+## The side whose committed attack still waits for its declaration shot, or -1:
+## both originals play it when the fight begins, after the defender's answer,
+## at the attackers still on the field (none left, no shot).
+var own_attack_pending := -1
 ## A hit hero shows in solid red for a moment.
 const HERO_HIT_FLASH := Color(1.0, 0.25, 0.2)
 var setup_panel: ELDuelSetup
@@ -170,6 +178,7 @@ var front_line: Array[int] = []
 var duel_report: ELDuelReport
 var match_round_recorded := false
 var match_clock := 0.0
+var match_result_shown := false
 var _match_starting := false
 ## Second-game combat tutorial (ELCombatTutorial) while its battle is shown.
 var combat_tutorial: ELCombatTutorial
@@ -208,6 +217,11 @@ func _ready() -> void:
 	if get_tree().current_scene == self: get_tree().auto_accept_quit = false
 	# The public name; the project name keeps the existing user-data folder.
 	if get_tree().current_scene == self: get_window().title = "Demiurges"
+	# The session marker and log lines for crash reports (the running game).
+	if get_tree().current_scene == self and ELCrashReport.instance == null:
+		var report := ELCrashReport.new()
+		report.options_summary = _options_summary
+		get_tree().root.add_child.call_deferred(report)
 	settings.load_file()
 	ELSettings.apply_display(get_viewport(), settings.values)
 	# Touch gestures and the touch bar; inactive without a touch screen.
@@ -217,6 +231,10 @@ func _ready() -> void:
 	var gamma := ELGammaLayer.new()
 	gamma.settings = settings
 	add_child(gamma)
+	# Optional sharpening of the 3D scenes, under every interface layer.
+	var sharpen: CanvasLayer = SharpenLayer.new()
+	sharpen.settings = settings
+	add_child(sharpen)
 	for arg in OS.get_cmdline_user_args():
 		if arg.begins_with("--profile="):
 			launch_profile = arg.get_slice("=", 1)
@@ -238,8 +256,21 @@ func _ready() -> void:
 	# keep the direct duel setup.
 	if demo or not capture_path.is_empty(): return
 	var launched := get_tree().current_scene == self
+	if launched: _offer_crash_report.call_deferred()
 	if launched and _play_startup_movies(): return
 	if not (launched and _show_front_menu()): _open_setup()
+
+## After a session that ended unexpectedly: the box to save or copy its report.
+func _offer_crash_report() -> void:
+	await get_tree().process_frame
+	ELCrashReportBox.offer(ui)
+
+## The player's options in a report: the remake settings that change drawing.
+func _options_summary() -> String:
+	var parts := PackedStringArray()
+	for key: String in ["antialiasing", "sharpening", "shadows", "weather", "auto_camera", "helper_overlay"]:
+		if settings.values.has(key): parts.append("%s=%s" % [key, settings.values[key]])
+	return " ".join(parts)
 
 ## Start-up logos and intro of the launched edition (both originals play them
 ## before their first main menu, in silence otherwise); the menu follows when
@@ -271,6 +302,7 @@ func _exit_tree() -> void:
 ## the project does not quit on it.
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_WM_CLOSE_REQUEST and not get_tree().auto_accept_quit:
+		if ELCrashReport.instance != null: ELCrashReport.instance.clean_exit()
 		ELAudio.quiet_quit(get_tree())
 		return
 	if what != NOTIFICATION_WM_GO_BACK_REQUEST: return
@@ -321,9 +353,13 @@ func _start(edition: String, options: Dictionary = {}, restored: ELDuel = null, 
 	if restored == null and not next_duel.start(profiles[edition], battle_seed, options):
 		_notice(next_duel.error)
 		return
+	var kind := "campaign" if restored != null and restored == _campaign_battle() else ("restored" if restored != null else "duel")
+	ELCrashReport.trace("battle start %s %s: %s" % [edition, kind, " vs ".join(next_duel.heroes.map(func(h: Dictionary) -> String: return "%s %s" % [h.get("faction", "?"), h.get("hero", "")]))])
+	ELCrashReport.where("battle %s %s" % [edition, kind])
 	if setup_panel != null: setup_panel.hide()
 	if is_instance_valid(melee): melee.abort()
 	melee = null
+	own_attack_pending = -1
 	if stage != null:
 		remove_child(stage)
 		stage.queue_free()
@@ -378,6 +414,7 @@ func _start(edition: String, options: Dictionary = {}, restored: ELDuel = null, 
 	auto_camera = ELAutoCamera.new(profile, battle_seed)
 	_default_view()
 	fight_shot = false
+	ending = {}
 	for side in 2:
 		var model := ELModel.new()
 		stage.add_child(model)
@@ -402,7 +439,7 @@ func _start(edition: String, options: Dictionary = {}, restored: ELDuel = null, 
 		_hear_idle(model)
 		effects.attach(model)
 		if duel.phase == ELDuel.Phase.FINISHED:
-			model.play("uvictory" if duel.winner == side else "udeath")
+			model.play(victory_clip(model) if duel.winner == side else "udeath")
 		_add_label(side)
 		portraits[side].texture = profile.card_icon(ELFirstMonsters.definition(profile, combatant.monster_name, combatant.monster_difficulty).Creature) if combatant.has("monster_name") else profile.portrait(int(hero.Face))
 	hud.build(profile)
@@ -511,6 +548,7 @@ func _process(delta: float) -> void:
 			var auto := auto_combat and _human_side() and not demo
 			ELPracticeAI.step(duel, auto and not bool(settings.values.get("use_spells", true)))
 		_step_auto_camera(delta)
+		_step_ending(delta)
 		if not _arrivals.is_empty(): _step_arrivals()
 		_step_shake(delta)
 		var figures: Array = []
@@ -1042,24 +1080,36 @@ func _end_phase() -> void:
 	selected_creature = -1
 	ai_clock = 0.0
 	ability_selection.clear()
-	# Both original editions have separate own-attack declaration shots when
-	# the player commits the group, not on every selection/recall click.
-	# It leaves the first actual strike's AttackCombat shot untouched.
+	# Both original editions have separate own-attack declaration shots for
+	# the group the player commits, not for each selection/recall click; the
+	# shot itself waits for the fight (_auto_attack_own).
 	var own_attack_side := int(duel.attacker)
-	var own_attack_middle := Vector3.ZERO
-	var own_attack_count := 0
-	var own_attack_slots: Array[int] = []
+	var committing: Array[int] = []
 	if profile.id in ["el1", "el2"] and duel.phase == ELDuel.Phase.ATTACK and _local_side(own_attack_side):
 		for id: int in duel.attacks:
-			if models.has(id):
-				own_attack_middle += models[id].position
-				own_attack_count += 1
-				own_attack_slots.append(int(models[id].get_meta("slot", 0)))
+			if models.has(id): committing.append(id)
 	if not duel.end_phase():
 		_hint(duel.error)
-	elif own_attack_count > 0 and _auto_camera_on():
-		auto_camera.attack_own(own_attack_side, own_attack_middle / own_attack_count,
-			int(settings.values.get("auto_camera_dynamics", 50)), own_attack_slots)
+	elif not committing.is_empty():
+		declared_attackers = committing
+		own_attack_pending = own_attack_side
+
+## The fight of the player's committed attack begins (its first blow is about
+## to be shown): the declaration shot at the declared attackers still on the
+## field. The first blow's AttackCombat shot follows it (_auto_fight).
+func _auto_attack_own() -> void:
+	var side := own_attack_pending
+	own_attack_pending = -1
+	# A fight of the other side's turn: the player's attackers never fought.
+	if int(duel.attacker) != side or not _auto_camera_on(): return
+	var middle := Vector3.ZERO
+	var slots: Array[int] = []
+	for id: int in declared_attackers:
+		if duel.creatures.has(id) and models.has(id):
+			middle += models[id].position
+			slots.append(int(models[id].get_meta("slot", 0)))
+	if slots.is_empty(): return
+	auto_camera.attack_own(side, middle / slots.size(), int(settings.values.get("auto_camera_dynamics", 50)), slots)
 
 func _spawn_creature(c: Dictionary) -> void:
 	var original: Dictionary = profile.table("CombatCreatures")[c.card]
@@ -1101,7 +1151,7 @@ func _enter(id: int) -> void:
 ## Holds a hero's summon effects until the caster has been shown.
 func _hold_arrival(pending: Dictionary) -> bool:
 	var ids: Array[int] = []
-	for id: int in pending.affected:
+	for id: int in pending.get("affected", []):
 		if models.has(id) and models[id].get_meta("arriving", false): ids.append(id)
 	if ids.is_empty(): return false
 	var side := int(pending.side)
@@ -1161,6 +1211,7 @@ func _melee_busy() -> bool:
 	return is_instance_valid(melee) and melee.busy()
 
 func _event(data: Dictionary) -> void:
+	if own_attack_pending >= 0 and data.get("kind") == "strike" and not _melee_busy(): _auto_attack_own()
 	# Blows and what follows them wait for the combat playback.
 	if is_instance_valid(melee) and melee.capture(data): return
 	if not _effect_cast.is_empty():
@@ -1170,6 +1221,8 @@ func _event(data: Dictionary) -> void:
 		if profile.id == "el2" and _effect_cast.card == "FRNT" and data.kind == "fury_result":
 			_effect_cast.fury_deaths = int(data.get("deaths", 0))
 			_effect_cast.fury_recipient = int(data.get("target", 1 - int(_effect_cast.side)))
+		if data.kind == "forest_creature_cue" and _effect_cast.card in ["DNFR", "DRFR", "ANFR"]:
+			_effect_cast.forest_targets.append(int(data.target))
 		if profile.id in ["el1", "el2"] and _effect_cast.card == "FOGG" and data.kind == "fog_creature_cue":
 			_effect_cast.fog_targets.append(int(data.target))
 		if profile.id in ["el1", "el2"] and _effect_cast.card == "FRST":
@@ -1784,15 +1837,15 @@ func _event(data: Dictionary) -> void:
 			selected_creature = -1
 			_phase_notice(int(data.side), String(data.phase) == "attack", int(data.round))
 		"victory":
-			battle_audio.unit(models[data.side], "victory")
-			models[data.side].play("uvictory")
 			_bleed(1 - data.side)
 			# Both editions' defeated heroes have original udeath and their
 			# own SndDir/death.wav. A lethal hero emits a result event, not
 			# creature death, so _show_hit does not start this figure sound.
 			if profile.id in ["el1", "el2"]: battle_audio.unit(models[1 - int(data.side)], "death")
 			models[1 - data.side].play("udeath")
-			if _auto_camera_on(): auto_camera.victory(int(data.side), models[data.side].position)
+			# The winner's clip, camera and fanfare follow once the death
+			# clip ends (_step_ending).
+			_begin_ending(int(data.side))
 			if combat_tutorial != null: _tutorial_result()
 			else: _hint("%s wins. Start a new duel or change game profile." % _side_name(data.side))
 			_log("%s wins the duel." % _side_name(data.side))
@@ -1803,6 +1856,7 @@ func _event(data: Dictionary) -> void:
 				# a mutual lethal result does not emit creature death events.
 				if profile.id in ["el1", "el2"]: battle_audio.unit(models[side], "death")
 				models[side].play("udeath")
+			_begin_ending(-1)
 			selection = -1
 			selection_power = 0
 			_hint("Both heroes have fallen. The duel is a draw.")
@@ -1913,6 +1967,8 @@ func _pend_cast_effects(data: Dictionary, artifact: bool) -> void:
 		_effect_cast.fury_recipient = 1 - int(data.side)
 	if profile.id in ["el1", "el2"] and card == "FOGG":
 		_effect_cast.fog_targets = []
+	if card in ["DNFR", "DRFR", "ANFR"]:
+		_effect_cast.forest_targets = []
 	if profile.id == "el2" and card == "CANV":
 		_effect_cast.devour_power = int(data.get("devour_power", 0))
 	if profile.id == "el2" and card == "ENLH":
@@ -2126,6 +2182,18 @@ func _start_cast_effects() -> void:
 	# in the combat list, including the opposing army.
 	# The generic targetless cast incorrectly plays CantAttack on the hero,
 	# including when the arena is empty.
+	# The forests: the enchantment glow on the caster's hero, the forest
+	# itself only on each opposing creature it stops (none when no creature
+	# is weak enough), as in both originals.
+	if pending.card in ["DNFR", "DRFR", "ANFR"]:
+		var names: Array = EffectTable.cast_effects(profile.id, pending.card)
+		var hero := int(pending.side)
+		if models.has(hero) and names.size() > 0: effects.play(names[0], {"Target": [models[hero]]})
+		for id: int in pending.get("forest_targets", []):
+			if not models.has(id) or names.size() < 2: continue
+			effects.play(names[1], {"Target": [models[id]]})
+			battle_audio.effect(names[1], models[id])
+		return
 	if profile.id in ["el1", "el2"] and pending.card == "FOGG":
 		var caster := int(pending.side)
 		if models.has(caster): effects.play("BlueFog", {"Target": [models[caster]]})
@@ -2675,12 +2743,86 @@ func _auto_cast(pending: Dictionary) -> void:
 		forced = card == "COMT" and int(pending.target) in [0, 1] and int(duel.heroes[int(pending.target)].health) <= 0
 	auto_camera.cast(kind, int(pending.side), models[pending.side].position, targets, _local_side(int(pending.side)), int(settings.values.get("auto_camera_dynamics", 50)), models[pending.side].timing, length, extra, forced)
 
+## The end of a battle, as both originals queue it: the
+## fallen hero's death clip; then the winner's fanfare and camera and its
+## victory clip; when that clip ends the battle is
+## over (GameOver): a campaign battle returns to the map by itself, a duel
+## round shows its result. Stages: "dying", "victory", "over".
+var ending := {}
+
+func _begin_ending(winner: int) -> void:
+	var length := 0.0
+	for side in 2:
+		if side != winner and models.has(side): length = maxf(length, maxf(models[side].clip_seconds("udeath"), 0.0))
+	ending = {"winner": winner, "stage": "dying", "clock": 0.0, "length": length}
+	ELCrashReport.trace("battle over: %s, round %d" % ["side %d wins" % winner if winner >= 0 else "draw", duel.round_number if duel != null else -1])
+
+## True once the end sequence has played (or none is running).
+func ending_over() -> bool:
+	return ending.is_empty() or ending.stage == "over"
+
+## The clip a winning hero celebrates with: its victory clip, else (as the
+## originals fall back by clip code, EL2, EL1) its instant
+## cast clip, else its attack clip; "" when it has none of them.
+static func victory_clip(model: ELModel) -> String:
+	for code: int in [0x38c0000, 0x1cc0000, 0x2880000]:
+		var name := model.clip_for_code(code)
+		if not name.is_empty(): return name
+	for name: String in ["uvictory", "uinstant", "uattack"]:
+		if model.has_clip(name): return name
+	return ""
+
+func _step_ending(delta: float) -> void:
+	if ending.is_empty() or ending.stage == "over": return
+	ending.clock += delta
+	if ending.clock < float(ending.length): return
+	if ending.stage == "dying":
+		var winner := int(ending.winner)
+		ending.stage = "victory"
+		ending.clock = 0.0
+		ending.length = 0.0
+		if winner >= 0 and models.has(winner):
+			var model: ELModel = models[winner]
+			# The fanfare of the winner's colour, for a hero figure (he*) only.
+			if String(model.template).begins_with("he"):
+				battle_audio.play("buttons/%svictory.wav" % String(duel.heroes[winner].get("faction", "Red")))
+			# The winner camera follows the player's own win only (both originals).
+			if _auto_camera_on() and _local_side(winner): auto_camera.victory(winner, model.position)
+			var clip := victory_clip(model)
+			if not clip.is_empty() and model.play(clip):
+				battle_audio.unit(model, "victory")
+				ending.clip = clip
+				ending.length = maxf(model.clip_seconds(clip), 0.0)
+		return
+	ending.stage = "over"
+	# GameOver: a campaign battle closes and the map fades back in.
+	if _campaign_battle() != null and duel.phase == ELDuel.Phase.FINISHED: _return_from_encounter()
+
 ## The first blow of a fight: the close-up the player's own attack
 ## declaration shot left for it, if any.
-func _auto_fight(from: int, to: int) -> void:
+func _auto_fight(from: int, to: int, at := Vector3.INF) -> void:
 	fight_shot = true
 	if not _auto_camera_on() or from < 2 or not models.has(from) or not models.has(to): return
-	auto_camera.first_blow()
+	auto_camera.first_blow(at)
+
+## The fight a first-blow close-up showed is over: the declaration shot again
+## at the attackers still on the field, then back to the player's view.
+func _auto_fight_over() -> void:
+	if auto_camera == null: return
+	if auto_camera.replay.is_empty():
+		# A declaration shot still waiting for a blow that was never shown.
+		if not auto_camera.fight.is_empty(): auto_camera.release()
+		return
+	if not _auto_camera_on() or duel.phase == ELDuel.Phase.FINISHED:
+		auto_camera.replay = {}
+		return
+	var middle := Vector3.ZERO
+	var count := 0
+	for id: int in declared_attackers:
+		if duel.creatures.has(id) and models.has(id):
+			middle += models[id].position
+			count += 1
+	auto_camera.fight_over(middle / count if count > 0 else Vector3.INF)
 
 ## The original's named camera effect (EL1, applied each frame
 ##  in every camera mode): the track's motion relative to its first
@@ -3962,6 +4104,18 @@ func _open_settings() -> void:
 		settings.values.antialiasing = index - 1
 		ELSettings.apply_display(get_viewport(), settings.values))
 	smoothing_row.add_child(smoothing)
+	var sharpen_row := HBoxContainer.new()
+	rows.add_child(sharpen_row)
+	var sharpen_label := _label("Sharpening", 16)
+	sharpen_label.custom_minimum_size.x = 120
+	sharpen_row.add_child(sharpen_label)
+	var sharpen := OptionButton.new()
+	sharpen.name = "Sharpening"
+	sharpen.tooltip_text = "Sharpens the textures of the 3D map and battle scenes. The interface is not changed."
+	for caption: String in ["Off", "Light", "Strong"]: sharpen.add_item(caption)
+	sharpen.select(int(settings.values.sharpening))
+	sharpen.item_selected.connect(func(index: int): settings.values.sharpening = index)
+	sharpen_row.add_child(sharpen)
 	var helper_toggle := CheckButton.new()
 	helper_toggle.name = "HelperOverlay"
 	helper_toggle.text = "Show remake helper overlay"
@@ -3971,11 +4125,19 @@ func _open_settings() -> void:
 		settings.values.helper_overlay = enabled
 		_apply_settings())
 	rows.add_child(helper_toggle)
+	var export_log := Button.new()
+	export_log.name = "ExportLog"
+	export_log.text = "Export log…"
+	export_log.tooltip_text = "Save or copy the game's log with the system information, to send it with a bug report."
+	export_log.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	export_log.pressed.connect(func(): ELCrashReportBox.open(settings_dialog, {}))
+	rows.add_child(export_log)
 	settings_dialog.visibility_changed.connect(func():
 		if not settings_dialog.visible:
+			ELCrashReport.trace("settings: " + _options_summary())
 			if not settings.save_file(): _notice("Could not save preferences.")
 		_refresh())
-	settings_dialog.popup_centered(Vector2i(500, 490))
+	settings_dialog.popup_centered(Vector2i(500, 570))
 	_refresh()
 
 ## The active game's preferences (each original keeps its own settings).
@@ -4095,6 +4257,8 @@ func _open_campaigns() -> void:
 	campaign_setup.closed.connect(func(): campaign_setup.hide())
 
 func _begin_campaign(edition: String, scenario: Dictionary, difficulty: int, restored: Dictionary = {}) -> void:
+	ELCrashReport.trace("map load %s %s (difficulty %d%s)" % [edition, scenario.get("script", scenario.get("file_name", "?")), difficulty, ", from a save" if not restored.is_empty() else ""])
+	ELCrashReport.where("map %s %s" % [edition, scenario.get("script", scenario.get("file_name", "?"))])
 	if campaign_setup != null: campaign_setup.hide()
 	_notice("Loading chapter…")
 	# The original goes straight from the briefing to the map: no battle
@@ -4173,6 +4337,10 @@ func _loading_cover() -> CanvasLayer:
 	add_child(layer)
 	return layer
 
+## True while a campaign battle is on screen.
+func director_battle_open() -> bool:
+	return _campaign_battle() != null and stage.visible
+
 func _campaign_battle() -> ELDuel:
 	return campaign_view.director.encounter.battle if campaign_view != null and campaign_view.director != null and campaign_view.director.encounter != null else null
 
@@ -4209,6 +4377,7 @@ func _return_from_encounter() -> void:
 	set_process(false)
 	set_process_unhandled_input(false)
 	campaign_view.set_suspended(false)
+	ELCrashReport.where("map %s (after a battle)" % campaign_view.state.map.profile.id)
 
 func _surrender_encounter() -> void:
 	if _campaign_battle() == null:
@@ -4243,6 +4412,7 @@ func _resume_campaign(newest := false, manual := "", edition := "") -> void:
 ## A row of a save list (ELSaveSlots): an adventure save, or the second game's
 ## between-chapter campaign autosave, which opens the next chapter's map.
 func _load_slot(row: Dictionary) -> void:
+	ELCrashReport.trace("load %s" % String(row.get("path", "?")).get_file())
 	if row.get("type") == ELSaveSlots.PROGRESS:
 		var progress := ELSecondCampaign.read(str(row.path))
 		if not progress.is_empty():
@@ -4281,6 +4451,7 @@ func _show_front_menu_layer() -> void:
 	if campaign_setup != null: campaign_setup.hide()
 	front_layer.show()
 	front_menu.show()
+	ELCrashReport.where("menu")
 
 func _leave_campaign() -> void:
 	remove_child(campaign_view)
@@ -4299,6 +4470,7 @@ func _leave_campaign() -> void:
 
 func _save_duel() -> void:
 	if duel == null: return
+	ELCrashReport.trace("battle save")
 	menu.hide()
 	if _campaign_battle() != null:
 		var view := campaign_view.camera_state()
@@ -4318,6 +4490,7 @@ func _save_duel() -> void:
 
 func _load_duel() -> void:
 	menu.hide()
+	ELCrashReport.trace("battle load")
 	if _campaign_battle() != null:
 		_resume_campaign(false, ELSaveSlots.quick_load_path(campaign_view.state), campaign_view.state.map.profile.id)
 		return
@@ -4359,6 +4532,7 @@ func _load_duel() -> void:
 	# A round that had already ended was recorded before the save.
 	match_round_recorded = restored.phase == ELDuel.Phase.FINISHED
 	match_clock = 0.0
+	match_result_shown = false
 	_notice(restored.load_note if not restored.load_note.is_empty() else "Saved duel restored.")
 
 func _refresh_inspector() -> void:
@@ -4929,6 +5103,7 @@ func _play_match_round() -> void:
 	hot_pending = false
 	match_round_recorded = false
 	match_clock = 0.0
+	match_result_shown = false
 	var previous := duel
 	_match_starting = true
 	var battle_seed := (duel_match.seed_value + duel_match.played * 0x39) & 0x7fffffff
@@ -4954,6 +5129,7 @@ func _watch_match_round(delta: float) -> void:
 	if not match_round_recorded:
 		match_round_recorded = true
 		match_clock = 0.0
+		match_result_shown = false
 		duel_match.record(duel.winner)
 		if match_recording != null: match_recording.finish_round(duel)
 		if duel_report != null:
@@ -4964,7 +5140,11 @@ func _watch_match_round(delta: float) -> void:
 	# The second game shows the round result after every round.
 	if (duel_match.rounds < 2 and duel_match.edition != "el2") or front_menu == null or front_menu.is_visible_in_tree(): return
 	match_clock += delta
-	if match_clock >= ROUND_RESULT_DELAY and match_clock - delta < ROUND_RESULT_DELAY: _show_round_result()
+	# The result follows the end of the battle (the winner's clip), and
+	# never sooner than the remake's short pause.
+	if match_clock >= ROUND_RESULT_DELAY and ending_over() and not match_result_shown:
+		match_result_shown = true
+		_show_round_result()
 
 func _show_round_result() -> void:
 	if duel_match == null or not match_round_recorded: return

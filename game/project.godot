@@ -2,10 +2,18 @@ config_version=5
 
 [application]
 config/name="Etherlords Duel"
+config/version="0.2.6"
 config/icon="res://icon.svg"
 run/main_scene="res://scenes/duel.tscn"
 run/max_fps=60
 config/quit_on_go_back=false
+run/flush_stdout_on_print=true
+
+[debug]
+
+file_logging/enable_file_logging=true
+file_logging/enable_file_logging.web=false
+file_logging/max_log_files=10
 
 [display]
 window/size/viewport_width=1440
@@ -20,6 +28,7 @@ mouse_cursor/tooltip_position_offset=Vector2(66, -14)
 [rendering]
 renderer/rendering_method="gl_compatibility"
 textures/default_filters/use_nearest_mipmap_filter=false
+textures/default_filters/anisotropic_filtering_level=4
 anti_aliasing/quality/msaa_3d=2
 textures/vram_compression/import_etc2_astc=true
 
