@@ -11,6 +11,10 @@ uniform int columns;
 uniform float tile_side;
 uniform float pitch;
 uniform vec2 atlas_size;
+// Optional surface detail from the original painted texture. No geometry or
+// extra assets; animated liquid tiles keep their original appearance.
+uniform bool detail_enabled = false;
+uniform vec3 detail_sun = vec3(0.6634, 0.6428, -0.3830);
 // Fog (ELFog) as the original's mist pass draws it: per map corner a mist
 // opacity (unexplored 255, remembered 133, visible 0 of 255; a corner takes
 // its most fogged tile), moving toward the new value at 150/255 a second
@@ -56,7 +60,39 @@ void fragment() {
 	int frame = int(floor(TIME * 10.0)) % max(1, int(round(UV2.y)));
 	int index = int(round(UV2.x)) + frame;
 	vec2 start = vec2(float(index % columns), float(index / columns)) * pitch + vec2(2.0);
-	ALBEDO = texture(tiles, (start + UV * tile_side) / atlas_size).rgb;
+	vec2 tex_uv = (start + UV * tile_side) / atlas_size;
+	ALBEDO = texture(tiles, tex_uv).rgb;
+	if (detail_enabled && int(round(UV2.y)) == 1) {
+		vec2 dx = dFdx(UV);
+		vec2 dy = dFdy(UV);
+		float footprint = max(length(dx), length(dy)) * tile_side;
+		float edge = min(min(UV.x, UV.y), min(1.0 - UV.x, 1.0 - UV.y)) * tile_side;
+		// Fade before the source texels become too small, and at tile borders
+		// where the atlas gutter cannot describe the neighbouring ground.
+		float fade = (1.0 - smoothstep(1.25, 3.5, footprint)) * smoothstep(0.0, 2.0, edge);
+		if (fade > 0.0) {
+			vec2 px = 1.0 / atlas_size;
+			vec3 left = texture(tiles, tex_uv - vec2(px.x, 0.0)).rgb;
+			vec3 right = texture(tiles, tex_uv + vec2(px.x, 0.0)).rgb;
+			vec3 down = texture(tiles, tex_uv - vec2(0.0, px.y)).rgb;
+			vec3 up = texture(tiles, tex_uv + vec2(0.0, px.y)).rgb;
+			vec3 weights = vec3(0.2126, 0.7152, 0.0722);
+			vec2 slope = vec2(dot(right - left, weights), dot(up - down, weights));
+			vec3 normal = normalize((VIEW_MATRIX * vec4(0.0, 1.0, 0.0, 0.0)).xyz);
+			vec3 p2 = cross(dFdy(VERTEX), normal);
+			vec3 p1 = cross(normal, dFdx(VERTEX));
+			vec3 tangent = p2 * dx.x + p1 * dy.x;
+			vec3 bitangent = p2 * dx.y + p1 * dy.y;
+			float scale = inversesqrt(max(max(dot(tangent, tangent), dot(bitangent, bitangent)), 1e-12));
+			vec3 relief = normalize(normal - (tangent * slope.x + bitangent * slope.y) * scale * 1.4);
+			vec3 sun = normalize((VIEW_MATRIX * vec4(detail_sun, 0.0)).xyz);
+			float light = clamp(dot(relief - normal, sun) * 0.7, -0.08, 0.08);
+			vec3 lo = min(ALBEDO, min(min(left, right), min(down, up)));
+			vec3 hi = max(ALBEDO, max(max(left, right), max(down, up)));
+			vec3 enhanced = clamp(ALBEDO + (ALBEDO - (left + right + down + up) * 0.25) * 0.3, lo, hi);
+			ALBEDO = mix(ALBEDO, enhanced * (1.0 + light), fade);
+		}
+	}
 	if (clrless_enabled) {
 		ivec2 at = clamp(ivec2(floor(cell)), ivec2(0), clrless_size - ivec2(1));
 		vec4 grey = texelFetch(clrless_cells, at, 0);

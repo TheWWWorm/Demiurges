@@ -1438,6 +1438,7 @@ func apply_settings() -> void:
 	if world != null: world.set_animate_objects(bool(settings.values.get("animated_objects", true)))
 	if world != null: world.set_animate_fog(bool(settings.values.get("fog_animations", true)))
 	if world != null: world.set_blob_shadows(bool(settings.values.get("shadows", true)))
+	if world != null and world.terrain != null: world.terrain.set_detail(bool(settings.values.get("terrain_detail", false)))
 	if presentation != null: presentation.apply(settings.values)
 	_apply_helper_overlay()
 

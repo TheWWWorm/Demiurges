@@ -120,6 +120,8 @@ Saves and settings are kept in the engine's user folder:
 
 The folder keeps its earlier name, `Etherlords Duel`, so existing saves continue to work.
 
+In **Remake settings**, **Terrain detail** adds subtle texture contrast and surface relief to adventure-map ground. It is off by default; leave it off on devices where it reduces performance. The setting can be changed during play.
+
 ## Building from source
 
 The engine source is in [`game`](game). Open it in [Godot 4.7](https://godotengine.org/) and press Play, or export it with the included presets.

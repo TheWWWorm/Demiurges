@@ -2,7 +2,7 @@ config_version=5
 
 [application]
 config/name="Etherlords Duel"
-config/version="0.2.6"
+config/version="0.2.7"
 config/icon="res://icon.svg"
 run/main_scene="res://scenes/duel.tscn"
 run/max_fps=60

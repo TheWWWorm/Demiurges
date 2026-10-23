@@ -87,6 +87,9 @@ func build(source: ELAdventureMap, session: ELAdventureSession = null) -> bool:
 	for index in objects.size():
 		var object: Dictionary = objects[index]
 		var uid := int(object.get("uid", int(object.permanent_id) - 1))
+		# Defeated units leave the map. Script-created corpses are separate
+		# objects, with their own appearance and lifetime.
+		if object.get("type") in ["hero", "monster"] and not object.get("alive", true): continue
 		var definition := _art.resolve(object)
 		if definition.get("hidden", false): continue
 		if not object.get("visible", true): continue
@@ -122,7 +125,7 @@ func build(source: ELAdventureMap, session: ELAdventureSession = null) -> bool:
 			model.transform = transform
 			model.set_meta("map_object", index)
 			model.set_meta("art_key", key)
-			if not object.get("alive", true): _corpse_pose(model)
+			if object.get("type") == "corpse" or not object.get("alive", true): _corpse_pose(model)
 			if first_barrier(object): barrier_pose(model, bool(object.get("opened", false)), false)
 			# A garrison hero is inside its fort; its own figure is not drawn.
 			if object.get("fortified", false): model.hide()
@@ -421,7 +424,8 @@ func fog_object(item: Dictionary, passing := Vector2i(-1, -1)) -> void:
 	_sync_blob(uid, present)
 
 func _game_visible(item: Dictionary) -> bool:
-	return item.get("visible", true) and item.get("placed", true) and not item.get("fortified", false) and (not item.get("opened", false) or first_barrier(item))
+	return item.get("visible", true) and item.get("placed", true) and not item.get("fortified", false) and (not item.get("opened", false) or first_barrier(item)) \
+		and (item.get("alive", true) or item.get("type") not in ["hero", "monster"])
 
 func _dim_model(model: ELModel, dim: bool) -> void:
 	if model.get_meta("look_dim", false) == dim: return
@@ -470,7 +474,12 @@ func update_object(item: Dictionary) -> void:
 	# runestone keeps its gate (barrier_pose).
 	var visible := _game_visible(item)
 	if not visible:
-		if object_models.has(uid): object_models[uid].hide()
+		if object_models.has(uid):
+			var model: ELModel = object_models[uid]
+			model.hide()
+			if item.get("type") in ["hero", "monster"] and not item.get("alive", true):
+				model.playing = false
+				model.set_process(false)
 		for entry: Dictionary in _instances.get(uid, []): entry.node.multimesh.set_instance_transform(entry.index, Transform3D(Basis.from_scale(Vector3.ZERO), Vector3.ZERO))
 		_sync_blob(uid, false)
 		return
@@ -510,7 +519,7 @@ func update_object(item: Dictionary) -> void:
 		model.visible = visible
 		var center := ELAdventureGrid.center(item, definition.row)
 		model.position = Vector3(center.x * ELAdventureTerrain.CELL, 0, -center.y * ELAdventureTerrain.CELL)
-		if not item.get("alive", true): _corpse_pose(model)
+		if item.get("type") == "corpse" or not item.get("alive", true): _corpse_pose(model)
 		if first_barrier(item): barrier_pose(model, bool(item.get("opened", false)), true)
 		grey_object(uid)
 		_sync_blob(uid, visible)
@@ -553,11 +562,14 @@ func _hold_frame(model: ELModel, frame: float) -> void:
 	model.set_process(false)
 
 func _corpse_pose(model: ELModel) -> void:
-	if model.play("udeath"):
-		model.frame = float(model.clip_frames() - 1)
-		model.apply_frame(model.frame)
-		model.playing = false
-		model.set_process(false)
+	model.set_meta("corpse", true)
+	var clip := model.clip_for_code(0x061c0000)
+	if clip.is_empty() and model.has_clip("udeath"): clip = "udeath"
+	if not clip.is_empty() and model.play(clip):
+		_hold_frame(model, maxf(0.0, float(model.timing.get(clip, {}).get("frames", model.clip_frames())) - 1.0))
+	else:
+		# Some dedicated corpse figures already contain a static body pose.
+		_hold_frame(model, 0.0)
 
 func move_actor(uid: int, position: Vector2, moving: bool) -> void:
 	if not actors.has(uid): return
@@ -568,7 +580,7 @@ func move_actor(uid: int, position: Vector2, moving: bool) -> void:
 		model.rotation.y = atan2(delta.x, delta.z)
 	model.position = next
 	var clip := walk_clip(model) if moving else "cidle"
-	if model.base_clip() != clip: model.play(clip)
+	if not model.get_meta("corpse", false) and model.base_clip() != clip: model.play(clip)
 	# Movement through fog stays hidden; an actor appears as it steps into view.
 	if fog_session != null: fog_object(fog_session.object(uid), Vector2i(roundi(position.x), roundi(position.y)))
 	grey_object(uid, Vector2i(roundi(position.x), roundi(position.y)))

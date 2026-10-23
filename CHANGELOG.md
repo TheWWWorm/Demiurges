@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.7
+
+- Defeated units now disappear from the Etherlords I adventure map, including in existing saves. Rewards and movement remain available as before.
+- Etherlords II keeps its separate corpses and now uses their proper artwork and still death poses, including mounted heroes, boats and bodies placed in maps.
+- Remake settings now includes optional Terrain detail: subtle texture contrast and surface relief on the adventure map, inspired by Cursed Lands. It starts off and can be switched on or off during play.
+
 ## 0.2.6
 
 - Battles:

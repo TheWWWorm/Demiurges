@@ -9,7 +9,11 @@ func _init(source: ELAdventureMap) -> void:
 func resolve(object: Dictionary) -> Dictionary:
 	var node: Dictionary = object.node
 	if not object.get("visible", ELXml.child(node, "hidden").is_empty()): return {"hidden": true}
-	if object.get("ship", false): return {"model": "he551", "texture": "Heroes/Boat00", "secondary": "", "scale": 1.0, "row": {"TileSize": [1, 1]}, "unit": true}
+	var corpse: bool = map.profile.id == "el2" and object.get("type") == "corpse"
+	var shape := str(object.get("shape", ""))
+	if corpse and shape.is_empty(): shape = ELXml.value(node, "params")
+	if object.get("ship", false) or (corpse and shape.to_lower() == "ship"):
+		return {"model": "tebuad552" if corpse else "he551", "texture": "Heroes/Boat00", "secondary": "", "scale": 1.0, "row": {"TileSize": [1, 1]}, "unit": true}
 	var color := ELXml.value(node, "color")
 	if color.is_empty():
 		for player: Dictionary in map.players:
@@ -21,12 +25,17 @@ func resolve(object: Dictionary) -> Dictionary:
 	if object.get("type") in ["rune_shop", "el1_spell_shop", "resource_mine"]: level = str(object.level)
 	# A first-game castle shows the MainTower row of its damage stage.
 	if object.has("castle_stage") and ELFirstScenario.is_castle(object): level = str(object.castle_stage)
-	var key := "%s/%s/%s/%s/%s/%s" % [object.group, object.name, color, level, object.get("shape", ""), object.get("monster_difficulty", 0)]
+	var key := "%s/%s/%s/%s/%s/%s/%s" % [object.group, object.name, color, level, shape, object.get("monster_difficulty", 0), corpse]
 	if cache.has(key): return cache[key]
 	var row := {}
 	var category := "TerrainObjects/"
 	var adventure := false
-	if object.group in ["heroes", "np_heroes"]:
+	if corpse and object.group == "additional_buildings":
+		# Authored bodies name a shape directly in their map parameters.
+		adventure = true
+		row = map.profile.table("Shapes").get(shape, {})
+		category = "Heroes/" if str(row.get("CorpseMod", row.get("AdvMod", ""))).to_lower().begins_with("he") else "Creatures/"
+	elif object.group in ["heroes", "np_heroes"]:
 		adventure = true
 		var hero: bool = ELXml.child(node, "monster").is_empty()
 		if not String(object.get("shape", "")).is_empty():
@@ -66,9 +75,13 @@ func resolve(object: Dictionary) -> Dictionary:
 					row = candidate
 					best_score = score
 	var model := String(row.get("AdvMod", row.get("Model", ""))) if adventure else String(row.get("Model", ""))
-	if model.is_empty(): return {}
 	var texture := String(row.get("AdvTex1", row.get("Texture", ""))) if adventure else String(row.get("TextureName", row.get("Texture", "")))
 	var secondary := String(row.get("AdvTex2", "")) if adventure else String(row.get("SecTexture", ""))
+	if corpse:
+		if not str(row.get("CorpseMod", "")).is_empty(): model = str(row.CorpseMod)
+		if not str(row.get("CorpseTex1", "")).is_empty(): texture = str(row.CorpseTex1)
+		if not str(row.get("CorpseTex2", "")).is_empty(): secondary = str(row.CorpseTex2)
+	if model.is_empty(): return {}
 	# A non-hero mob may wear a hero shape (the second game's tutorial guides,
 	# IsHero 0 with RedFemale-2 etc.): take the folder that holds the texture.
 	if adventure and not texture.is_empty():

@@ -4,6 +4,7 @@ const CELL := 2.0
 const CHUNK := 16
 const GUTTER := 2
 var atlas: Texture2D
+var material: ShaderMaterial
 var errors: Array[String] = []
 var combinations := 0
 var animation_frames := 0
@@ -21,6 +22,7 @@ func build(map: ELAdventureMap) -> bool:
 	var cached := map.profile.adventure_terrain_cache
 	if cached.get("map") == map.id:
 		atlas = cached.atlas
+		material = cached.material
 		animation_frames = cached.frames
 		combinations = cached.combinations
 		for y in range(0, map.height, CHUNK):
@@ -83,7 +85,7 @@ func build(map: ELAdventureMap) -> bool:
 			var index: int = plan.offset + frame
 			image.blit_rect(tile, Rect2i(margin, margin, pitch, pitch), Vector2i((index % columns) * pitch, (index / columns) * pitch))
 	atlas = ImageTexture.create_from_image(image)
-	var material := ShaderMaterial.new()
+	material = ShaderMaterial.new()
 	material.shader = load("res://src/render/adventure_terrain.gdshader")
 	material.set_shader_parameter("tiles", atlas)
 	material.set_shader_parameter("columns", columns)
@@ -98,6 +100,9 @@ func build(map: ELAdventureMap) -> bool:
 			_build_chunk(map, Vector2i(x, y), cells, compositions, material)
 	build_usec = Time.get_ticks_usec() - started
 	return true
+
+func set_detail(enabled: bool) -> void:
+	if material != null: material.set_shader_parameter("detail_enabled", enabled)
 
 func _build_chunk(map: ELAdventureMap, origin: Vector2i, cells: PackedInt32Array, plans: Array[Dictionary], material: Material) -> void:
 	var vertices := PackedVector3Array()

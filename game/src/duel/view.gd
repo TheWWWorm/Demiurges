@@ -268,7 +268,7 @@ func _offer_crash_report() -> void:
 ## The player's options in a report: the remake settings that change drawing.
 func _options_summary() -> String:
 	var parts := PackedStringArray()
-	for key: String in ["antialiasing", "sharpening", "shadows", "weather", "auto_camera", "helper_overlay"]:
+	for key: String in ["antialiasing", "sharpening", "terrain_detail", "shadows", "weather", "auto_camera", "helper_overlay"]:
 		if settings.values.has(key): parts.append("%s=%s" % [key, settings.values[key]])
 	return " ".join(parts)
 
@@ -4028,7 +4028,7 @@ func _open_settings() -> void:
 	settings_dialog.exclusive = true
 	ui.add_child(settings_dialog)
 	var rows := VBoxContainer.new()
-	rows.add_theme_constant_override("separation", 14)
+	rows.add_theme_constant_override("separation", 10)
 	settings_dialog.add_child(rows)
 	for key: String in ["music", "ambience", "effects"]:
 		var row := HBoxContainer.new()
@@ -4116,6 +4116,15 @@ func _open_settings() -> void:
 	sharpen.select(int(settings.values.sharpening))
 	sharpen.item_selected.connect(func(index: int): settings.values.sharpening = index)
 	sharpen_row.add_child(sharpen)
+	var terrain_detail := CheckButton.new()
+	terrain_detail.name = "TerrainDetail"
+	terrain_detail.text = "Terrain detail"
+	terrain_detail.tooltip_text = "Adds subtle texture contrast and surface relief to adventure terrain. May reduce performance on slower devices."
+	terrain_detail.button_pressed = bool(settings.values.terrain_detail)
+	terrain_detail.toggled.connect(func(enabled: bool):
+		settings.values.terrain_detail = enabled
+		if campaign_view != null: campaign_view.apply_settings())
+	rows.add_child(terrain_detail)
 	var helper_toggle := CheckButton.new()
 	helper_toggle.name = "HelperOverlay"
 	helper_toggle.text = "Show remake helper overlay"
@@ -4137,7 +4146,7 @@ func _open_settings() -> void:
 			ELCrashReport.trace("settings: " + _options_summary())
 			if not settings.save_file(): _notice("Could not save preferences.")
 		_refresh())
-	settings_dialog.popup_centered(Vector2i(500, 570))
+	settings_dialog.popup_centered(Vector2i(500, 610))
 	_refresh()
 
 ## The active game's preferences (each original keeps its own settings).
