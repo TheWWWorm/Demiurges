@@ -120,7 +120,7 @@ Saves and settings are kept in the engine's user folder:
 
 The folder keeps its earlier name, `Etherlords Duel`, so existing saves continue to work.
 
-In **Remake settings**, **Terrain detail** adds subtle texture contrast and surface relief to adventure-map ground. It is off by default; leave it off on devices where it reduces performance. The setting can be changed during play.
+In **Remake settings**, **Terrain detail** adds subtle texture contrast and surface relief to adventure-map ground, and fine grain from the original detail textures to battle ground where available. **Soft shadows** smooths sun-shadow edges in battles and on Etherlords II maps. Both start off and can be changed during play; leave them off on devices where they reduce performance.
 
 ## Building from source
 

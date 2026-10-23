@@ -9,6 +9,11 @@ var layer_speeds: Array[float] = []
 var light: DirectionalLight3D
 ## The scene's ambient light (combat effects dim it with the sun).
 var environment_settings: Environment
+var _profile: ELProfile
+var _ground: ELModel
+var _ground_materials: Dictionary = {}
+var _detail_materials: Dictionary = {}
+var _camera_obstacles: Array[ELModel] = []
 
 static func title(id: String) -> String:
 	var names := {"Green": "Vital forest", "Red": "Chaot desert", "Black": "Synthet wasteland", "Blue": "Kinet mountains",
@@ -18,14 +23,16 @@ static func title(id: String) -> String:
 	return String(names.get(key, key)) + (" · " + str(int(id.get_slice(".", 1))) if key in ["Green", "Red", "Black", "Blue"] else "")
 
 func build(profile: ELProfile, arena_id := "Green.001") -> bool:
+	_profile = profile
 	definition = profile.table("CombatSceneDB").get(arena_id, {})
 	if definition.is_empty():
 		errors.append("Missing arena " + arena_id)
 		return false
-	_add_model(profile, "cosu%d" % int(definition.SurfaceFigure), "CombatScenes/" + definition.SurfaceTexture)
+	_ground = _add_model(profile, "cosu%d" % int(definition.SurfaceFigure), "CombatScenes/" + definition.SurfaceTexture)
 	var ids: Array = definition.Objects
 	var textures: Array = definition.Textures
 	var transforms: Array = definition.PosRot
+	var types: Array = definition.get("ObjectTypes", [])
 	for i in ids.size():
 		var model := _add_model(profile, "coob%d" % int(ids[i]), "CombatScenes/" + textures[i])
 		if model == null:
@@ -33,6 +40,10 @@ func build(profile: ELProfile, arena_id := "Green.001") -> bool:
 		var at := i * 7
 		model.position = ELFigure.vector(Vector3(transforms[at], transforms[at + 1], transforms[at + 2]))
 		model.quaternion = Quaternion(transforms[at + 4], transforms[at + 6], -transforms[at + 5], transforms[at + 3]).normalized()
+		# Only authored tall scenery can clear the camera's viewing corridor.
+		# Low pieces include whole hills supporting separately placed trees;
+		# their wide bounds can cross the view without blocking the action.
+		if i < types.size() and types[i] == "H": _camera_obstacles.append(model)
 	_build_background(profile)
 	var environment := WorldEnvironment.new()
 	var env := Environment.new()
@@ -60,6 +71,36 @@ func build(profile: ELProfile, arena_id := "Green.001") -> bool:
 	if toward.y > 0.0: toward = -toward
 	light.look_at_from_position(-toward * 10.0, Vector3.ZERO, Vector3.UP if absf(toward.y) < 0.99 else Vector3.FORWARD)
 	return errors.is_empty()
+
+## Optional close-up ground grain using the arena's authored detail texture
+## and world-space tile size. Missing detail art keeps the original material.
+## Materials are created on demand; Off restores the exact original material.
+func set_detail(enabled: bool) -> void:
+	if _ground == null: return
+	if enabled and _detail_materials.is_empty():
+		var name := str(definition.get("DetailTextureName", ""))
+		if name.is_empty(): return
+		var texture := _profile.texture("CombatScenes/" + name)
+		if texture == null: return
+		# These original maps are dark grain, not neutral-grey detail maps.
+		# Centre their signal so the option preserves the arena's brightness.
+		var average := texture.get_image()
+		average.clear_mipmaps()
+		average.resize(1, 1, Image.INTERPOLATE_LANCZOS)
+		var neutral := average.get_pixel(0, 0)
+		for part: MeshInstance3D in _ground.parts.values():
+			var base := part.material_override as StandardMaterial3D
+			if part.mesh == null or base == null: continue
+			_ground_materials[part] = base
+			var detail := ShaderMaterial.new()
+			detail.shader = load("res://src/render/arena_ground.gdshader")
+			detail.set_shader_parameter("base_texture", base.albedo_texture)
+			detail.set_shader_parameter("detail_texture", texture)
+			detail.set_shader_parameter("detail_neutral", (neutral.r + neutral.g + neutral.b) / 3.0)
+			detail.set_shader_parameter("detail_tile_size", maxf(0.01, float(definition.get("DetailTextureTileSize", 2.0))))
+			_detail_materials[part] = detail
+	for part: MeshInstance3D in _ground_materials:
+		part.material_override = _detail_materials[part] if enabled else _ground_materials[part]
 
 func ground_height(x: float, z: float) -> float:
 	var surface: ELModel = get_child(0)
@@ -171,11 +212,9 @@ func _process(delta: float) -> void:
 		material.uv1_offset.x = fposmod(material.uv1_offset.x + delta * layer_speeds[i], 1.0)
 
 func clear_camera_view(camera_position: Vector3, target: Vector3) -> void:
-	# Presentation-only occlusion: retain the original objects, but hide foliage
-	# between the camera and the central play area. This follows camera movement.
-	for child in get_children():
-		if child is not ELModel or child.template.begins_with("cosu"):
-			continue
+	# Hide tall scenery between the camera and the central play area. Terrain
+	# and small scenery stay visible, including the ground under distant trees.
+	for child: ELModel in _camera_obstacles:
 		var obscures := false
 		for part: MeshInstance3D in child.parts.values():
 			if part.mesh == null:

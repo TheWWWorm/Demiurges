@@ -268,7 +268,7 @@ func _offer_crash_report() -> void:
 ## The player's options in a report: the remake settings that change drawing.
 func _options_summary() -> String:
 	var parts := PackedStringArray()
-	for key: String in ["antialiasing", "sharpening", "terrain_detail", "shadows", "weather", "auto_camera", "helper_overlay"]:
+	for key: String in ["antialiasing", "sharpening", "terrain_detail", "shadows", "soft_shadows", "weather", "auto_camera", "helper_overlay"]:
 		if settings.values.has(key): parts.append("%s=%s" % [key, settings.values[key]])
 	return " ".join(parts)
 
@@ -388,6 +388,8 @@ func _start(edition: String, options: Dictionary = {}, restored: ELDuel = null, 
 		status.text = "Arena failed: " + "; ".join(arena.errors)
 		return
 	arena.light.shadow_enabled = settings.values.shadows
+	arena.light.shadow_blur = 2.0 if settings.values.soft_shadows else 1.0
+	arena.set_detail(bool(settings.values.terrain_detail))
 	blood = ELCombatBlood.new()
 	stage.add_child(blood)
 	blood.build(profile, arena, battle_seed, edition)
@@ -4051,12 +4053,24 @@ func _open_settings() -> void:
 			if is_instance_valid(battle_audio): battle_audio.apply_volumes(settings.values)
 			if front_menu != null: front_menu.apply_volumes(settings.values))
 	var shadows := CheckButton.new()
-	shadows.text = "Creature shadows"
+	shadows.name = "Shadows"
+	shadows.text = "Shadows"
 	shadows.button_pressed = settings.values.shadows
 	shadows.toggled.connect(func(enabled: bool):
 		settings.values.shadows = enabled
-		if is_instance_valid(arena): arena.light.shadow_enabled = enabled)
+		_apply_settings())
 	rows.add_child(shadows)
+	var soft_shadows := CheckButton.new()
+	soft_shadows.name = "SoftShadows"
+	soft_shadows.text = "Soft shadows"
+	soft_shadows.tooltip_text = "Softens sun-shadow edges in battles and on Etherlords II maps. May reduce performance on slower devices. Requires shadows to be enabled."
+	soft_shadows.button_pressed = bool(settings.values.soft_shadows)
+	soft_shadows.disabled = not bool(settings.values.shadows)
+	shadows.toggled.connect(func(enabled: bool): soft_shadows.disabled = not enabled)
+	soft_shadows.toggled.connect(func(enabled: bool):
+		settings.values.soft_shadows = enabled
+		_apply_settings())
+	rows.add_child(soft_shadows)
 	var weather := CheckButton.new()
 	weather.text = "Adventure weather effects"
 	weather.button_pressed = settings.values.weather
@@ -4119,10 +4133,11 @@ func _open_settings() -> void:
 	var terrain_detail := CheckButton.new()
 	terrain_detail.name = "TerrainDetail"
 	terrain_detail.text = "Terrain detail"
-	terrain_detail.tooltip_text = "Adds subtle texture contrast and surface relief to adventure terrain. May reduce performance on slower devices."
+	terrain_detail.tooltip_text = "Adds subtle surface detail to adventure terrain and battle ground. May reduce performance on slower devices."
 	terrain_detail.button_pressed = bool(settings.values.terrain_detail)
 	terrain_detail.toggled.connect(func(enabled: bool):
 		settings.values.terrain_detail = enabled
+		if is_instance_valid(arena): arena.set_detail(enabled)
 		if campaign_view != null: campaign_view.apply_settings())
 	rows.add_child(terrain_detail)
 	var helper_toggle := CheckButton.new()
@@ -4159,7 +4174,10 @@ func _use_edition(edition: String) -> void:
 func _apply_settings() -> void:
 	ELMoviePlayer.mode = int(settings.values.movies)
 	ELSettings.apply_display(get_viewport(), settings.values)
-	if is_instance_valid(arena) and arena.light != null: arena.light.shadow_enabled = settings.values.shadows
+	if is_instance_valid(arena) and arena.light != null:
+		arena.light.shadow_enabled = settings.values.shadows
+		arena.light.shadow_blur = 2.0 if settings.values.soft_shadows else 1.0
+		arena.set_detail(bool(settings.values.terrain_detail))
 	if is_instance_valid(blood): blood.set_enabled(bool(settings.values.blood))
 	_preview_volumes(settings.values)
 	if campaign_view != null: campaign_view.apply_settings()

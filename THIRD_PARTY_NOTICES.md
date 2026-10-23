@@ -10,6 +10,9 @@ The optional adventure terrain detail in `src/render/adventure_terrain.gdshader`
 adapts the texture-derived relief and bounded contrast technique from the
 Apache-2.0 licensed Cursed Lands engine by TheWWWorm, for Etherlords' tile atlas.
 
+The optional shadow filtering follows the quality-setting approach of the
+Apache-2.0 licensed Cursed Lands engine by TheWWWorm.
+
 Godot is distributed under the MIT license and its own third-party notices.
 Original Etherlords and Etherlords II content is supplied by the player and is
 not part of this engine’s source or license.

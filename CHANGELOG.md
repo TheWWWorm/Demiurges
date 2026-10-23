@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.8
+
+- Battle terrain and small scenery remain visible when the camera moves, fixing trees appearing to float above missing hills.
+- Optional Soft shadows smooths sun-shadow edges in battles and on Etherlords II maps. It starts off and can be changed during play.
+- Terrain detail now also adds subtle ground texture in battles, using each arena's original detail artwork where available. It remains off by default.
+
 ## 0.2.7
 
 - Defeated units now disappear from the Etherlords I adventure map, including in existing saves. Rewards and movement remain available as before.

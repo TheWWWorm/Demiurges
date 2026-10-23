@@ -5,7 +5,8 @@ extends RefCounted
 ## `values` is the view of the active edition plus the shared remake-only
 ## settings. Call use_edition() when the active game changes.
 ##
-## Shared remake settings: "ambience" volume, creature "shadows", second-game
+## Shared remake settings: "ambience" volume, "shadows", optional "soft_shadows",
+## optional "terrain_detail" on maps and in battles, second-game
 ## adventure "weather" particles, "helper_overlay" (remake-only English readouts,
 ## hints and shortcut buttons over the original screens; off by default),
 ## "antialiasing" (-1 automatic: 2x multisampling unless the renderer is a
@@ -24,7 +25,7 @@ extends RefCounted
 ## "visual_log". Several have no remake system yet and are only stored.
 ## "tutorial_events": the first game's shown tutorial events, one '0'/'1'
 ## per event id (settings.ini TutorialEvents); "show_tutorial" gates them.
-const SHARED := {"ambience": 0.55, "shadows": true, "weather": true, "helper_overlay": false, "antialiasing": -1, "sharpening": 1, "terrain_detail": false}
+const SHARED := {"ambience": 0.55, "shadows": true, "soft_shadows": false, "weather": true, "helper_overlay": false, "antialiasing": -1, "sharpening": 1, "terrain_detail": false}
 const EDITION := {"music": 0.55, "effects": 0.8, "movies": 2, "blood": true, "map_tooltips": true, "autosave": true,
 	"heroes_voices": true, "ambient_sounds": true, "adventure_fast": false, "animated_objects": true,
 	"mouse_rotation": 1.0, "keyboard_rotation": 1.0, "mouse_scroll": 1.0, "keyboard_scroll": 1.0,
@@ -85,6 +86,10 @@ static func multisampling(choice: int, adapter: String) -> Viewport.MSAA:
 static func apply_display(viewport: Viewport, preferences: Dictionary) -> void:
 	if viewport == null: return
 	viewport.msaa_3d = multisampling(int(preferences.get("antialiasing", -1)), RenderingServer.get_video_adapter_name())
+	# Compatibility uses the wider 13-tap filter at High; Low and Medium both
+	# use the same 5-tap filter. Keep the project default when the option is off.
+	var shadow_quality := RenderingServer.SHADOW_QUALITY_SOFT_HIGH if preferences.get("soft_shadows", false) else int(ProjectSettings.get_setting("rendering/lights_and_shadows/directional_shadow/soft_shadow_filter_quality", RenderingServer.SHADOW_QUALITY_SOFT_VERY_LOW))
+	RenderingServer.directional_soft_shadow_filter_set_quality(shadow_quality)
 
 func _edition_part() -> Dictionary:
 	var part := {}
