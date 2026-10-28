@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.9
+
+- Choosing a game: the main menu now shows **Etherlords I** and **Etherlords II** under its buttons, so you can switch with one click. The game you played last opens at the next start. A game you have not added yet offers to add it.
+- The game files screen is the same on every platform: choose the game first, then its installed folder (on a computer), the GOG installer or a data pack. It can also play, remove an imported game, or stop using a linked game folder (the folder is kept). Open it from **Options › Remake settings › Game files…**.
+- Touch screens ([#5](https://github.com/TheWWWorm/Demiurges/issues/5)): the drop-down lists in Remake settings (Movies, Anti-aliasing, Sharpening) no longer freeze the game. A tapped choice is taken and the list closes; tapping outside closes it. Sliders in dialogs can now be dragged with a finger.
+
 ## 0.2.8
 
 - Battle terrain and small scenery remain visible when the camera moves, fixing trees appearing to float above missing hills.

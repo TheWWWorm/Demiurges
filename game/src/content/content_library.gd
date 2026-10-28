@@ -88,6 +88,32 @@ static func web_files() -> JavaScriptObject:
 	return JavaScriptBridge.get_interface("EtherFiles")
 
 
+## Installed game folders the player chose on a desktop: {edition: folder}.
+const LINKS := "user://profiles.json"
+
+
+static func linked_folders() -> Dictionary:
+	if not FileAccess.file_exists(LINKS): return {}
+	var data: Variant = JSON.parse_string(FileAccess.get_file_as_string(LINKS))
+	var result := {}
+	if data is Dictionary:
+		for edition: String in EDITIONS:
+			if data.get(edition) is String: result[edition] = data[edition]
+	return result
+
+
+## Remembers (or with an empty folder, forgets) the installed folder of an
+## edition. The folder itself is never changed.
+static func link_folder(edition: String, folder: String) -> bool:
+	var links := linked_folders()
+	if folder.is_empty(): links.erase(edition)
+	else: links[edition] = folder
+	var file := FileAccess.open(LINKS, FileAccess.WRITE)
+	if file == null: return false
+	file.store_string(JSON.stringify(links, "\t"))
+	return true
+
+
 ## Remove an imported edition. Saves and settings are kept.
 static func forget(edition: String) -> void:
 	if OS.has_feature("web"):

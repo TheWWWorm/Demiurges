@@ -77,8 +77,6 @@ var launch_profile := "el1"
 var capture_path := ""
 var capture_after := 3.0
 var elapsed := 0.0
-var folder_dialog: FileDialog
-var import_edition := "el1"
 var content_setup: ELContentSetup
 var arena: ELArena
 var hud: ELHudFrame
@@ -235,6 +233,8 @@ func _ready() -> void:
 	var sharpen: CanvasLayer = SharpenLayer.new()
 	sharpen.settings = settings
 	add_child(sharpen)
+	# The game chosen last time starts again (unless the command line picks one).
+	if settings.edition in ELContentLibrary.EDITIONS: launch_profile = settings.edition
 	for arg in OS.get_cmdline_user_args():
 		if arg.begins_with("--profile="):
 			launch_profile = arg.get_slice("=", 1)
@@ -310,11 +310,12 @@ func _notification(what: int) -> void:
 
 func _load_profiles() -> void:
 	var config := {}
-	for path in ["res://.local_profiles.json", "user://profiles.json"]:
-		if FileAccess.file_exists(path):
-			var data: Variant = JSON.parse_string(FileAccess.get_file_as_string(path))
-			if data is Dictionary:
-				config.merge(data, true)
+	var local := "res://.local_profiles.json"
+	if FileAccess.file_exists(local):
+		var data: Variant = JSON.parse_string(FileAccess.get_file_as_string(local))
+		if data is Dictionary: config.merge(data, true)
+	# Installed folders the player chose on this computer.
+	config.merge(ELContentLibrary.linked_folders(), true)
 	for arg in OS.get_cmdline_user_args():
 		for edition in ["el1", "el2"]:
 			if arg.begins_with("--" + edition + "-path="):
@@ -3817,7 +3818,7 @@ func _build_ui() -> void:
 		if demo and profile != null: _start(profile.id, match_options)
 		menu.hide()
 		_refresh()))
-	menu_rows.add_child(_button("Original game content…", _content_menu))
+	menu_rows.add_child(_button("Game files…", _content_menu))
 	menu_rows.add_child(_button("Options…", _open_battle_options))
 	menu_rows.add_child(_button("Remake settings…", _open_settings))
 	menu_rows.add_child(_button("Show / hide battle log [L]", func():
@@ -3958,12 +3959,6 @@ func _build_ui() -> void:
 	combat_tip = ELCombatTooltip.new()
 	combat_tip.describe = _tip_content
 	hud_root.add_child(combat_tip)
-	folder_dialog = FileDialog.new()
-	folder_dialog.file_mode = FileDialog.FILE_MODE_OPEN_DIR
-	folder_dialog.access = FileDialog.ACCESS_FILESYSTEM
-	folder_dialog.use_native_dialog = true
-	folder_dialog.dir_selected.connect(_import_folder)
-	ui.add_child(folder_dialog)
 	ui.resized.connect(_layout_hud)
 	# 4:3 windows share one stretched canvas size; the pixel floor follows the window.
 	get_window().size_changed.connect(_layout_hud)
@@ -4155,7 +4150,20 @@ func _open_settings() -> void:
 	export_log.tooltip_text = "Save or copy the game's log with the system information, to send it with a bug report."
 	export_log.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	export_log.pressed.connect(func(): ELCrashReportBox.open(settings_dialog, {}))
-	rows.add_child(export_log)
+	var tools_row := HBoxContainer.new()
+	tools_row.add_theme_constant_override("separation", 10)
+	rows.add_child(tools_row)
+	tools_row.add_child(export_log)
+	# Adding, removing or switching games, outside a running campaign.
+	if campaign_view == null and _campaign_battle() == null:
+		var game_files := Button.new()
+		game_files.name = "GameFiles"
+		game_files.text = "Game files…"
+		game_files.tooltip_text = "Add Etherlords or Etherlords II, remove one, or switch between them."
+		game_files.pressed.connect(func():
+			settings_dialog.hide()
+			_open_content_setup())
+		tools_row.add_child(game_files)
 	settings_dialog.visibility_changed.connect(func():
 		if not settings_dialog.visible:
 			ELCrashReport.trace("settings: " + _options_summary())
@@ -4945,60 +4953,57 @@ func _place_end_button() -> void:
 		end_button.size = Vector2(maxf(150, end_button.get_minimum_size().x), 34)
 		end_button.position = Vector2(w - 182 - end_button.size.x, h - 154)
 
+## Game files screen: which games are present, adding or removing one, and
+## switching between them.
 func _content_menu() -> void:
-	if ELContentLibrary.uses_import():
-		_open_content_setup()
-		return
-	var dialog := AcceptDialog.new()
-	dialog.title = "Original game content"
-	dialog.dialog_text = "Choose the installed game folder containing Resources, or the GOG installer (setup_etherlords*.exe), which is unpacked without being run.\nEach edition keeps its own files and rules. Both can be used together."
-	ui.add_child(dialog)
-	# Each button goes left of the previous one: added last, shown first.
-	dialog.add_button("GOG installer or data pack…", false, "import")
-	dialog.add_button("Etherlords II folder", false, "el2")
-	dialog.add_button("Etherlords I folder", false, "el1")
-	dialog.custom_action.connect(func(action: String):
-		dialog.hide()
-		dialog.queue_free()
-		if action == "import":
-			_open_content_setup()
-			return
-		import_edition = action
-		folder_dialog.popup_centered_ratio(0.7))
-	dialog.confirmed.connect(dialog.queue_free)
-	dialog.popup_centered(Vector2i(680, 180))
+	_open_content_setup()
 
-## Game files import screen (ELContentSetup) over everything else.
-func _open_content_setup() -> void:
+## Game files import screen (ELContentSetup) over everything else; `edition`
+## is the game shown first.
+func _open_content_setup(edition := "") -> void:
 	if content_setup != null: return
+	if campaign_view != null or _campaign_battle() != null:
+		_notice("Leave the campaign before changing game files.")
+		return
 	if menu != null: menu.hide()
 	var layer := CanvasLayer.new()
 	layer.layer = 40
 	add_child(layer)
 	content_setup = ELContentSetup.new()
+	for each: String in profiles: content_setup.mounted[each] = profiles[each].root
+	if edition.is_empty(): edition = profile.id if profile != null else launch_profile
+	content_setup.selected = edition if edition in ELContentLibrary.EDITIONS else "el1"
 	layer.add_child(content_setup)
+	var changed := [false]
 	var close := func():
 		layer.queue_free()
 		content_setup = null
 	content_setup.closed.connect(func():
 		close.call()
-		# Desktop: with nothing mounted, return to the folder / installer choice.
-		if profiles.is_empty() and not ELContentLibrary.uses_import(): _content_menu.call_deferred())
-	content_setup.removed.connect(func(edition: String):
-		profiles.erase(edition)
-		if profile != null and profile.id == edition: profile = null
-		if profiles.is_empty(): _restart_after_content_change())
-	content_setup.opened.connect(func(edition: String, folder: String):
-		var imported := ELProfile.new()
-		if not imported.mount(edition, folder):
-			status.text = imported.error
-			return
-		profiles[edition] = imported
+		# With nothing mounted the screen comes back; after a removal the
+		# front end is built again for the games that are left.
+		if profiles.is_empty(): _content_menu.call_deferred()
+		elif changed[0] or profile == null: _restart_after_content_change(profile.id if profile != null else ""))
+	content_setup.removed.connect(func(removed_edition: String):
+		changed[0] = true
+		profiles.erase(removed_edition)
+		if profile != null and profile.id == removed_edition: profile = null)
+	content_setup.chosen.connect(func(chosen: String):
 		close.call()
-		if profile_select != null: profile_select.set_item_disabled(0 if edition == "el1" else 1, false)
-		_restart_after_content_change(edition))
+		_restart_after_content_change(chosen))
+	content_setup.opened.connect(func(opened_edition: String, folder: String):
+		var imported := ELProfile.new()
+		if not imported.mount(opened_edition, folder):
+			status.text = imported.error
+			content_setup._status.text = imported.error
+			return
+		profiles[opened_edition] = imported
+		close.call()
+		if profile_select != null: profile_select.set_item_disabled(0 if opened_edition == "el1" else 1, false)
+		_restart_after_content_change(opened_edition))
 
-## After an import or removal: a fresh start on the chosen edition.
+## After an import, a removal or a choice: a fresh start on the chosen edition,
+## which is remembered for the next start.
 func _restart_after_content_change(edition := "") -> void:
 	if profiles.is_empty():
 		_content_menu.call_deferred()
@@ -5009,22 +5014,15 @@ func _restart_after_content_change(edition := "") -> void:
 		front_layer.queue_free()
 		front_layer = null
 		front_menu = null
+	if profile_select != null:
+		for i in 2: profile_select.set_item_disabled(i, not profiles.has("el1" if i == 0 else "el2"))
 	_start(edition)
+	_remember_edition()
 	if not _show_front_menu(): _open_setup()
 
-func _import_folder(folder: String) -> void:
-	var imported := ELProfile.new()
-	if not imported.mount(import_edition, folder):
-		status.text = imported.error
-		return
-	profiles[import_edition] = imported
-	var config := {}
-	for edition: String in profiles:
-		config[edition] = profiles[edition].root
-	var file := FileAccess.open("user://profiles.json", FileAccess.WRITE)
-	file.store_string(JSON.stringify(config, "\t"))
-	profile_select.set_item_disabled(0 if import_edition == "el1" else 1, false)
-	_start(import_edition)
+## The game in use is the one the next start opens.
+func _remember_edition() -> void:
+	if not settings.save_file(): _notice("Could not save preferences.")
 
 ## Original front end (ELFrontMenu) over the remake's duel and campaign flows.
 func _show_front_menu() -> bool:
@@ -5071,7 +5069,9 @@ func _show_front_menu() -> bool:
 		front_menu.quit_requested.connect(func(): ELAudio.quiet_quit(get_tree()))
 		front_menu.edition_requested.connect(func(chosen: String):
 			demo = false
-			_start(chosen))
+			_start(chosen)
+			_remember_edition())
+		front_menu.content_requested.connect(func(chosen: String): _open_content_setup(chosen))
 	elif front_menu.edition != edition: front_menu.use_edition(edition)
 	else: front_menu.show_screen("main")
 	menu.hide()

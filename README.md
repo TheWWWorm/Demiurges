@@ -40,12 +40,12 @@ Download the package for your system from the [Releases](https://github.com/TheW
 ## Getting started (desktop)
 
 1. Start the engine.
-2. When asked, choose one of:
-   - **Etherlords I folder** or **Etherlords II folder**, then the folder of your installed game, the one containing `Resources` and `Campaigns`;
-   - **GOG installer or data pack…**, then the GOG offline installer (`setup_etherlords*.exe`) or a data pack (`.elpack`). The installer is **not run**: the engine unpacks the game files from it once (usually well under a minute) and keeps them in its own data folder, so the installer is not needed afterwards.
+2. Choose **Etherlords I** or **Etherlords II** at the top of the game files screen, then one of:
+   - **Choose the … game folder…**, then the folder of your installed game, the one containing `Resources` and `Campaigns`;
+   - **Choose installer or data pack…**, then the GOG offline installer (`setup_etherlords*.exe`) or a data pack (`.elpack`). The installer is **not run**: the engine unpacks the game files from it once (usually well under a minute) and keeps them in its own data folder, so the installer is not needed afterwards.
 3. Your choice is remembered. The original start-up videos play, then the main menu opens.
 
-To add the other game later, start a battle, press **Esc**, choose **Remake menu…** and then **Original game content…**.
+The main menu shows **Etherlords I** and **Etherlords II** under its buttons: click one to switch games. The game you played last opens at the next start. A game you have not added yet says **not installed — add…** and opens the game files screen for it. **Options › Remake settings › Game files…** opens the same screen to add a game, switch, or remove one; removing a game keeps its saves and settings, and never deletes an installed game folder.
 
 You can also unpack the installer yourself with the included Python tool (it needs [innoextract](https://constexpr.org/innoextract/)), which registers the result:
 

@@ -43,6 +43,9 @@ static func wanted() -> bool:
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
+	# The window sees every touch before an open dialog or drop-down list
+	# takes it; _input would miss those, leaving lists without clicks.
+	get_window().window_input.connect(_window_touch)
 	set_enabled(wanted())
 
 func _exit_tree() -> void:
@@ -75,14 +78,28 @@ func _input(event: InputEvent) -> void:
 			target.call("touch_zoom", (event as InputEventMagnifyGesture).factor)
 			get_viewport().set_input_as_handled()
 		return
+	# Already turned into mouse events by _window_touch.
+	if event is InputEventScreenTouch or event is InputEventScreenDrag: get_viewport().set_input_as_handled()
+
+## Every touch, in window coordinates, before it reaches the game or a dialog.
+func _window_touch(event: InputEvent) -> void:
+	if _emitting or not enabled: return
 	if not (event is InputEventScreenTouch or event is InputEventScreenDrag): return
+	var point: Vector2 = get_viewport().get_final_transform().affine_inverse() * event.position
 	if event is InputEventScreenTouch:
-		if event.pressed: _press(event.index, event.position)
-		else: _release(event.index, event.position, event.canceled)
+		if event.pressed: _press(event.index, point)
+		else: _release(event.index, point, event.canceled)
 	else:
-		_drag(event.index, event.position)
-	# After the events sent above: a nested delivery resets the handled flag.
-	get_viewport().set_input_as_handled()
+		_drag(event.index, point)
+	# Dialog buttons would also react to the raw touch itself; they ignore
+	# emulated touches, so only the mouse events sent above act on them.
+	event.device = InputEvent.DEVICE_ID_EMULATION
+
+## True while an embedded window (a dialog or a drop-down list) has focus.
+func _window_focused() -> bool:
+	for window: Window in get_viewport().get_embedded_subwindows():
+		if window.visible and window.has_focus(): return true
+	return false
 
 ## The visible camera that gestures move, or null (menus, windows, dialogs).
 func camera_owner() -> Node:
@@ -196,6 +213,7 @@ func _process(delta: float) -> void:
 ## True when the touch began on the 3D view rather than on a panel. Panels
 ## that cover the screen but let the view through join "touch_world".
 func _is_world(control: Control) -> bool:
+	if _window_focused(): return false
 	if not is_instance_valid(control): return true
 	return control.is_in_group("touch_world")
 

@@ -24,6 +24,8 @@ signal options_closed(applied: bool, command: String)
 signal settings_previewed(values: Dictionary)
 signal quit_requested
 signal edition_requested(edition: String)
+## The game choice's missing game: the host offers to add its files.
+signal content_requested(edition: String)
 ## Duel screen Start: the match is begun (presets resolved); the view plays its rounds.
 signal duel_match_requested(match: ELDuelMatch)
 ## Round-result / duel-summary OK and Cancel.
@@ -217,7 +219,10 @@ var _legend_next := ""
 var _return_screen := ""
 ## The second game's adventure tutorial map and script (catalogue entry).
 const TUTORIAL_ADVENTURE := "Tutorial/Adventure/e2tutorial"
-var _switch: Button
+## Remake: both games on the main menu (ELGameChoice), under the buttons.
+var _choice: ELGameChoice
+## The choice's place on the 1024x768 menu: centred under the last button.
+const CHOICE_TOP := 676.0
 ## Second-game campaign progress shown on the global map (ELSecondCampaign).
 var second: Dictionary = {}
 ## Duel screen, preset editor and round results (ELDuelScreen).
@@ -292,17 +297,12 @@ func build(available: Dictionary, initial: String) -> bool:
 	canvas.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	canvas.size = DESIGN
 	add_child(canvas)
-	_switch = Button.new()
-	_switch.flat = true
-	_switch.focus_mode = Control.FOCUS_NONE
-	_switch.add_theme_color_override("font_color", Color(INK, 0.55))
-	_switch.add_theme_font_size_override("font_size", 13)
-	_switch.pressed.connect(func():
-		var other := "el2" if edition == "el1" else "el1"
-		if profiles.has(other):
-			edition_requested.emit(other)
-			use_edition(other))
-	add_child(_switch)
+	_choice = ELGameChoice.new()
+	_choice.selected.connect(func(chosen: String):
+		edition_requested.emit(chosen)
+		use_edition(chosen))
+	_choice.missing.connect(func(chosen: String): content_requested.emit(chosen))
+	add_child(_choice)
 	resized.connect(_layout)
 	duel_ui = ELDuelScreen.new(self)
 	single_ui = ELSingleScreen.new(self)
@@ -345,9 +345,11 @@ func use_edition(id: String) -> bool:
 		_rows[row.get("Ctrl", "")].append(copy)
 	for row: Dictionary in profile.table("Controls").values():
 		_controls[str(row.get("Name", ""))] = row
-	var other := "el2" if id == "el1" else "el1"
-	_switch.visible = profiles.has(other) and supports(profiles[other])
-	_switch.text = profiles[other].title if profiles.has(other) else ""
+	var playable := {}
+	for each: String in profiles:
+		if supports(profiles[each]): playable[each] = true
+	_choice.show_state(id, playable)
+	_layout.call_deferred()
 	selected_campaign = ""
 	ELSingleScenario.SAVE = ELSingleScenario.save_file(id)
 	if single_ui != null: single_ui.reset()
@@ -401,6 +403,7 @@ func text(key: String) -> String:
 func show_screen(target: String) -> void:
 	if target == "main" and not _return_screen.is_empty() and SCREENS.get(edition, {}).has(_return_screen): target = _return_screen
 	_return_screen = ""
+	_choice.visible = target == "main" and not hosted
 	if briefing != null: briefing.stop_voice()
 	if target != "mission": chapter = {}
 	previous_screen = screen
@@ -491,9 +494,10 @@ func _layout() -> void:
 	scale_factor = minf(size.x / DESIGN.x, size.y / DESIGN.y)
 	canvas.scale = Vector2(scale_factor, scale_factor)
 	canvas.position = ((size - DESIGN * scale_factor) * 0.5).floor()
-	if _switch != null:
-		_switch.size = _switch.get_combined_minimum_size()
-		_switch.position = Vector2(8, size.y - _switch.size.y - 4)
+	if _choice != null:
+		_choice.size = _choice.get_combined_minimum_size()
+		_choice.scale = Vector2(scale_factor, scale_factor)
+		_choice.position = (canvas.position + Vector2(DESIGN.x * 0.5 - _choice.size.x * 0.5, CHOICE_TOP) * scale_factor).floor()
 
 func _draw() -> void:
 	if not overlay(): draw_rect(Rect2(Vector2.ZERO, size), Color.BLACK)
@@ -610,7 +614,7 @@ func start_tutorial() -> void:
 func open_hosted(target: String, over_game: bool, kind := "") -> void:
 	hosted = true
 	_over_game = over_game
-	_switch.hide()
+	_choice.hide()
 	match target:
 		"encyclopaedia": encyclopaedia_ui.open()
 		"hall_of_fame": hall_ui.open(kind)
@@ -631,7 +635,7 @@ func ask_hosted(question: String, on_ok: Callable) -> void:
 	_inform_ok = Callable()
 	hosted = true
 	_over_game = true
-	_switch.hide()
+	_choice.hide()
 	show_screen("question")
 	duel_ui.show_message(question, func():
 		leave_screen()
@@ -642,7 +646,7 @@ func ask_hosted(question: String, on_ok: Callable) -> void:
 func inform_hosted(message: String, on_ok: Callable) -> void:
 	hosted = true
 	_over_game = true
-	_switch.hide()
+	_choice.hide()
 	show_screen("question")
 	_inform_ok = on_ok
 	duel_ui.show_message(message, _close_inform)
