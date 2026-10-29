@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.10
+
+- Corrected combat spell targets, creature abilities, enchantment removal, damage and turn effects in both games, preserving their edition-specific rules.
+- Charmed and gifted creatures retain the appropriate army enchantments; returning creatures and cards go back to the correct owner. These states survive saving and loading.
+- Resting a declared attacker with Mantis keeps its attack order in both games. In Etherlords I, Wall of Illusion can survive its ability's health reduction until a later spell or completed turn checks it, allowing a subsequent spell to save it.
+- Corrected interactions involving unaffected creatures, the Colourless Plane, snake venom, redirected damage, trample, and specialisations. Fixed spell costs and the order of returned and discarded hand cards.
+- Rod of Colossus deals its splash damage in Etherlords I too. Blessing from a wand or scroll lasts through the appropriate turn.
+- Fixed a missing-camera error when opening certain Etherlords II adventure dialogs.
+
 ## 0.2.9
 
 - Choosing a game: the main menu now shows **Etherlords I** and **Etherlords II** under its buttons, so you can switch with one click. The game you played last opens at the next start. A game you have not added yet offers to add it.

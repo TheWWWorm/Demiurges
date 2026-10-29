@@ -22,7 +22,8 @@ const EFFECTS := {
 	"STAT": {"effect": "enchant", "target": "creature", "power": 1, "toughness": 0},
 	"TGSK": {"effect": "enchant", "target": "creature", "power": 0, "toughness": 1},
 	"ENFL": {"effect": "enchant", "target": "creature"},
-	"DNFR": {"effect": "enchant", "target": "hero"},
+	# Dense Forest lands on the caster's hero without a target choice in either game.
+	"DNFR": {"effect": "enchant", "target": "none", "self": true},
 	"LSDS": {"effect": "enchant", "target": "none", "self": true},
 	"MNDP": {"effect": "mana", "target": "none", "amount": 2},
 	"MNTP": {"effect": "mana", "target": "none", "amount": 3},
@@ -55,8 +56,10 @@ const EFFECTS := {
 	"SPTR": {"effect": "enchant", "target": "none", "self": true},
 	"SFGS": {"effect": "enchant", "target": "none", "self": true},
 	"FTDS": {"effect": "enchant", "target": "none", "self": true},
-	"WETX": {"effect": "enchant", "target": "hero"},
-	"STTX": {"effect": "enchant", "target": "hero"},
+	# Toxins have no target kinds in either game: the original places them on the
+	# caster's opponent without a choice.
+	"WETX": {"effect": "enchant", "target": "none", "opponent": true},
+	"STTX": {"effect": "enchant", "target": "none", "opponent": true},
 	"ENVM": {"effect": "enchant", "target": "hero"},
 	"UPGD": {"effect": "enchant", "target": "creature", "power": 2, "toughness": 2},
 	"FAIL": {"effect": "enchant", "target": "creature", "power": -2, "toughness": 0},
@@ -316,9 +319,6 @@ const SECOND_SHARED := ["WNHR", "FOGG", "MGHT", "SPWR", "JYHD", "CNAR", "IRRT", 
 	"BASO", "SACR", "WHAS", "CHNL"]
 ## Second-game rules that replace a shared card's first-game rule outright.
 const SECOND_EFFECTS := {
-	# Dense Forest has no target: its producer builds the spell with the
-	# bare base constructor (no target kinds) and it lands on the caster's hero.
-	"DNFR": {"effect": "enchant", "target": "none", "self": true},
 	"HEAL": {"effect": "half_heal", "target": "none"},
 	# Second-game dwindling can kill; enlightenment became a hand refresh.
 	"DWND": {"effect": "enchant", "target": "creature", "power": 0, "toughness": -4, "lethal": true},
@@ -465,7 +465,7 @@ static func flags(row: Dictionary) -> Array[String]:
 static func rule(profile: ELProfile, card: String) -> Dictionary:
 	var spell: Dictionary = profile.table("CombatSpells").get(card, {})
 	if spell.is_empty(): return {}
-	# Second-game rules take precedence over the shared table (DNFR).
+	# Second-game rules take precedence over the shared table.
 	if profile.id == "el2" and SECOND_EFFECTS.has(card): return SECOND_EFFECTS[card]
 	if profile.id == "el2" and card in BOOK_ARTIFACTS: return ARTIFACT_EFFECTS[card]
 	if EFFECTS.has(card): return EFFECTS[card]

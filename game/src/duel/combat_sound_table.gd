@@ -232,7 +232,7 @@ const TRIGGER := {
 	"el2": {
 		"ALNS": ["Draw"], "BASO": ["Draw"], "BRMZ": ["BlackRedirect"], "ENVM": ["GreenDamage"], "IRMZ": ["BlackRedirect"], "STMZ": ["BlackRedirect"], "OCRP": ["Draw"], "WTX2": ["BlackDamage"],  "BROT": ["RedDamage", "Fireball", "FireballExpl"], "DELS": ["Draw"],
 		"ENFL": ["Disenchant"], "ENRG": ["PosSorcery"], "FRBL": ["Fireball", "FireballExpl"], "LSHE": ["GainLife"],
-		"MDNS": ["BlackDamage"], "MNBN": ["RedDamage"], "SWSN": ["GreenDamage"], "TRSN": ["GreenDamage"], "MNTX": ["GainMana"], "OEXC": ["OuterExchange"], "PLWP": ["PlaneWarp", "OutplaneSpellDeath"], "PRBN": ["Draw"], "QKFX": ["Draw"], "RBRT": ["LoseLife"],
+		"MDNS": ["BlackDamage"], "MNBN": ["RedDamage"], "SWSN": ["GreenDamage"], "TRSN": ["GreenDamage"], "ESWS": ["GreenDamage"], "ETRS": ["GreenDamage"], "MNTX": ["GainMana"], "OEXC": ["OuterExchange"], "PLWP": ["PlaneWarp", "OutplaneSpellDeath"], "PRBN": ["Draw"], "QKFX": ["Draw"], "RBRT": ["LoseLife"],
 		"IRRT": ["BlackDamage"], "RDIS": ["BlackDamage"], "RIOT": ["Draw"], "RNST": ["RedRainOfStones"], "RPST": ["PosSorcery", "BlackDamage", "Draw"],
 		"SACR": ["GreenDamage", "Draw"], "SCBR": ["PosSorcery"], "SFGS": ["BlackDamage"], "SPLK": ["GreenDamage", "GainMana"], "SPTR": ["LoseMana"],
 		"SPWB": ["GainLife"], "STSI": ["Disenchant"], "STTX": ["BlackDamage"],

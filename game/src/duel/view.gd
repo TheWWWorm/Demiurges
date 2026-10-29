@@ -1994,7 +1994,7 @@ func _hit_later(data: Dictionary) -> bool:
 	# just ONE ColosusLeg Target. The original MonstersHit@14
 	# belongs only to that selected figure; splash victims have no impact
 	# cue and must react immediately. Game-state damage is already settled.
-	if profile.id == "el2" and bool(_effect_cast.get("artifact", false)) and _effect_cast.get("card", "") == "RDCL" and id != int(_effect_cast.get("target", -1)):
+	if bool(_effect_cast.get("artifact", false)) and _effect_cast.get("card", "") == "RDCL" and id != int(_effect_cast.get("target", -1)):
 		delay = 0.0
 	if int(_ability_hit.get("target", -1)) == id or _ability_hit.get("targets", []).has(id):
 		delay = float(_ability_hit.get("hit", 0.0))
@@ -4703,7 +4703,10 @@ func _strip_abilities() -> Array[Dictionary]:
 	var result: Array[Dictionary] = []
 	if subject < 2 or not duel.creatures.has(subject): return result
 	for ability: Dictionary in duel.abilities(subject):
-		if not ENCHANTMENT_ABILITIES.values().has(ability.key): result.append(ability)
+		# An enchantment's ability starts from its icon; first-game
+		# enfeeblement is no enchantment, so its break ability is listed here.
+		var granted_by: String = ENCHANTMENT_ABILITIES.find_key(ability.key) if ENCHANTMENT_ABILITIES.values().has(ability.key) else ""
+		if granted_by.is_empty() or duel._enchantment_count(subject, granted_by) == 0: result.append(ability)
 	return result
 
 ## The CombatSpells row whose ability icon and text stand for `ability`.
@@ -4711,6 +4714,7 @@ func _ability_card(ability: Dictionary) -> String:
 	var subject := _strip_subject()
 	if ability.key == "dissipate": return "AOUP"
 	if ability.key == "courtesy": return "AOLS"
+	if ENCHANTMENT_ABILITIES.values().has(ability.key): return String(ENCHANTMENT_ABILITIES.find_key(ability.key))
 	var manifest: Dictionary = ELCatalog.PALE_RACE_ABILITIES.get(duel.race(subject), {})
 	if manifest.get("key", "") == ability.key: return String(manifest.text)
 	return String(duel.creatures[subject].card)

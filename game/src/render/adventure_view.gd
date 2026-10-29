@@ -1094,7 +1094,7 @@ func _present(data: Dictionary) -> void:
 			_refresh_hero_info()
 		"dialogue":
 			var speech: Dictionary = data.dialogue
-			if state.map.profile.id == "el2" and camera.projection == Camera3D.PROJECTION_PERSPECTIVE:
+			if state.map.profile.id == "el2" and camera != null and camera.projection == Camera3D.PROJECTION_PERSPECTIVE:
 				if text_view.is_empty(): text_view = {"zoom": zoom if view_goal.x < 0 else view_goal.x, "pitch": pitch if view_goal.x < 0 else view_goal.y}
 				view_goal = Vector2(SECOND_TEXT_ZOOM, SECOND_TEXT_PITCH)
 			if second_dialogue != null:

@@ -303,6 +303,8 @@ static func _damage_score(victim: Dictionary, id: int, amount: int) -> float:
 
 static func _score(d: ELDuel, card: String, target: int, side: int, allies: Array[Dictionary], enemies: Array[Dictionary], grave := -1, power := 0) -> float:
 	var rule := ELCatalog.rule(d.profile, card)
+	# Untargeted hero enchantments land on a fixed hero; score them there.
+	if target < 0 and card in ["DNFR", "STTX", "WETX"]: target = side if rule.get("self", false) else 1 - side
 	var e := d.entity(target)
 	var friendly: bool = target == side if target < 2 else e.get("owner", -1) == side
 	if d.heroes[side].health <= d.global_enchantment_count("MNTH") * (d.cost(card) + power): return 0.0
@@ -632,7 +634,7 @@ static func _score(d: ELDuel, card: String, target: int, side: int, allies: Arra
 				for c: Dictionary in enemies: ground += 2.0 if not d.has_flag(c.id, "Fly") else 0.0
 				for c: Dictionary in allies: ground -= 2.0 if not d.has_flag(c.id, "Fly") else 0.0
 				return ground if d.global_enchantment_count(card) == 0 else 0.0
-			if card == "WTLK": return 2.0 + float(e.toughness) * 0.3 if d._enchantment_count(target, card) == 0 else 0.0
+			if card == "WTLK": return 2.0 + float(e.toughness) * 0.3 if d.water_links(target).is_empty() else 0.0
 			if card == "PSBR": return 3.0 + float(power) * 1.5 if friendly and (d.can_attack(target) or d.blocks.has(target)) else 0.0
 			if card == "CRBL": return float(allies.size()) * 1.5 if d._enchantment_count(side, card) == 0 else 0.0
 			if card == "DRFR":
@@ -750,7 +752,7 @@ static func _artifact(d: ELDuel, side: int, ability: Dictionary, allies: Array[D
 
 ## Enchantments the AI treats as bad for their holder.
 static func _harmful(card: String) -> bool:
-	return card in ["ENFL", "IMMB", "WETX", "STTX", "ENVM", "FAIL", "DISM", "IRRT", "TRSN", "SWSN", "ESWS", "CHCM", "HUNG", "WEAK", "MDNS", "RDCM", "RDIS", "WNPZ", "DWND", "RIOT", "PALN", "ERBN", "TWST", "OCRP", "PRBN", "WTX2", "ELKS", "PRWR"]
+	return card in ["ENFL", "IMMB", "WETX", "STTX", "ENVM", "FAIL", "DISM", "IRRT", "TRSN", "SWSN", "ESWS", "ETRS", "CHCM", "HUNG", "WEAK", "MDNS", "RDCM", "RDIS", "WNPZ", "DWND", "RIOT", "PALN", "ERBN", "TWST", "OCRP", "PRBN", "WTX2", "ELKS", "PRWR"]
 
 static func _enchantments_value(d: ELDuel, side: int, chosen: Array) -> float:
 	var score := 0.0

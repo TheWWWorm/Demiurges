@@ -22,6 +22,8 @@ var rng_state := 212
 var error := ""
 var load_note := ""
 var setup: Dictionary = {}
+## Second-game spell-jammer traps: hidden hero enchantments that no dispel removes.
+const TRAPS := ["OST1", "OST2", "OST3"]
 ## Pale revival's second target: graveyard side * GRAVE_SIDE + index.
 const GRAVE_SIDE := 1000
 ## EL1 player variables 2 (positive) and 3 (negative): each listed
@@ -55,7 +57,7 @@ const EL2_CREATURE_POS_RUNE_SOURCES := ["AILK", "ALNS", "CLFR", "DELS", "ENBR", 
 const EL2_CREATURE_NEG_RUNE_SOURCES := ["DISM", "DWND", "ENFL", "FAIL", "IMMB", "IRRT", "MDNS", "OCRP", "PALN", "RDIS",
 	"TWEN", "WEAK", "WNPZ"]
 const EL2_NEG_RUNE_SOURCES := ["ASST", "CNAR", "DPGS", "DRGS", "ENVM", "FLOD", "GCWR", "GEWR", "GSWR", "LCWR", "LEWR",
-	"LSDS", "LSWR", "MNBN", "MNTH", "PLWP", "PRWR", "PRWT", "SFGS", "SMOK", "SPTR", "STSI", "STTX", "SWSN", "TRSN", "WETX",
+	"LSDS", "LSWR", "MNBN", "MNTH", "PLWP", "PRWR", "PRWT", "SFGS", "SMOK", "SPTR", "STSI", "STTX", "SWSN", "TRSN", "ESWS", "ETRS", "WETX",
 	"WTX2"]
 ## EL1 - checks four concrete creature identifiers,
 ## not a general Race=Dragon attribute, during graveyard recovery.
@@ -289,8 +291,8 @@ static func _second_artifact_entry(data: ELProfile, item: Dictionary) -> Diction
 	if not definition.is_empty(): result.custom = definition
 	return result
 
-## The use rule of a battle artifact: the edition's artifact effect (EL2 Rod of
-## Colossus also hits the rest of the target's side for 1), a generated
+## The use rule of a battle artifact: the edition's artifact effect (Rod of
+## Colossus also hits the rest of the target's side for 1, in both games), a generated
 ## artifact's spell rule, or nothing for the Blank.
 func artifact_rule(item: Dictionary) -> Dictionary:
 	if item.has("custom"):
@@ -299,7 +301,7 @@ func artifact_rule(item: Dictionary) -> Dictionary:
 		return {"effect": "spell", "target": target}
 	if not ELCatalog.ARTIFACT_EFFECTS.has(item.spell): return {"effect": "none", "target": "none"}
 	var rule: Dictionary = ELCatalog.ARTIFACT_EFFECTS[item.spell]
-	if profile.id == "el2" and item.spell == "RDCL":
+	if item.spell == "RDCL":
 		rule = rule.duplicate()
 		rule.splash_side = 1
 	return rule
@@ -409,10 +411,13 @@ func _use_artifact_now(side: int, index: int, target := -1, choice := -1) -> boo
 			heroes[side].grave.remove_at(choice)
 			_summon(side, revived)
 		"bless":
-			# The blessing lasts until the end of the current turn.
+			# In both games, the blessing ends with the first turn
+			# its holder's controller does not play; the user's own creature
+			# keeps it through the opponent's turn, an enemy creature loses it
+			# when the user's turn ends.
 			var blessed: Dictionary = creatures[target]
 			if not blessed.has("temporary"): blessed.temporary = []
-			blessed.temporary.append({"id": next_enchantment, "kind": "bless", "power": int(rule.power), "toughness": int(rule.toughness), "until_turn_of": attacker})
+			blessed.temporary.append({"id": next_enchantment, "kind": "bless", "power": int(rule.power), "toughness": int(rule.toughness)})
 			next_enchantment += 1
 			_refresh_stats(blessed)
 	_finish_action()
@@ -512,6 +517,25 @@ func _spend_ether(side: int, amount: int) -> void:
 			_trigger_damage("MNTH", side, thorns)
 			_camera_cue("MNTH", side)
 
+## Enfeeblement holds creature `id` resting until broken (an enchantment in
+## the second game, a creature status in the first).
+func enfeebled(id: int) -> bool:
+	return creatures.has(id) and (bool(creatures[id].get("enfeebled", false)) or _enchantment_count(id, "ENFL") > 0)
+
+## Water links naming creature `id` (hero-held; older saves may still hold one on the creature
+## itself).
+func water_links(id: int) -> Array[Dictionary]:
+	var result: Array[Dictionary] = []
+	for hero: Dictionary in heroes:
+		for e: Dictionary in hero.enchantments:
+			if e.card == "WTLK" and int(e.get("link", -1)) == id: result.append(e)
+	if creatures.has(id):
+		for e: Dictionary in creatures[id].enchantments:
+			if e.card == "WTLK": result.append(e)
+	# Creation order: per-copy cues and the first eligible return follow it.
+	result.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return int(a.id) < int(b.id))
+	return result
+
 func global_enchantment_count(card: String) -> int:
 	return _enchantment_count(0, card) + _enchantment_count(1, card)
 
@@ -569,6 +593,37 @@ func entity(id: int) -> Dictionary:
 func origin(id: int) -> int:
 	return int(creatures[id].get("origin", creatures[id].owner)) if creatures.has(id) else -1
 
+## A creature's power and toughness without its own enchantments and temporary
+## bonuses; army and global modifiers still count.
+func _bare_stats(id: int) -> Vector2i:
+	var bare: Dictionary = creatures[id].duplicate()
+	bare.enchantments = []
+	bare.temporary = []
+	return creature_stats(bare)
+
+## The army enchantments covering `c`. They join an army when cast and a creature when it is
+## summoned; changing sides neither gains nor loses one. A creature that has never changed sides is
+## covered by everything its controller holds; once moved it carries an `auras` list.
+func army_auras(c: Dictionary) -> Array[Dictionary]:
+	var out: Array[Dictionary] = []
+	# Unaffected creatures never receive army auras. A creature in the Colourless
+	# Plane receives them only after it manifests.
+	if c.get("flags", []).has("NoAffect") or in_plane(int(c.id)): return out
+	if not c.has("auras"):
+		for e: Dictionary in heroes[c.owner].enchantments:
+			if ELCatalog.ARMY_AURAS.has(e.card): out.append(e)
+		return out
+	var ids := {}
+	for id: Variant in c.auras: ids[int(id)] = true
+	for hero: Dictionary in heroes:
+		for e: Dictionary in hero.enchantments:
+			if ids.has(int(e.id)) and ELCatalog.ARMY_AURAS.has(e.card): out.append(e)
+	return out
+
+func _move_army(c: Dictionary, side: int) -> void:
+	if not c.has("auras"): c.auras = army_auras(c).map(func(e: Dictionary) -> int: return int(e.id))
+	c.owner = side
+
 func targetable(id: int) -> bool:
 	return id < 2 or not (has_flag(id, "NoTarget") or in_plane(id))
 
@@ -609,12 +664,19 @@ func plane_change(id: int, enter: bool, guard := false) -> bool:
 		_unassign(id)
 	else: c.erase("plane")
 	_emit({"kind": "plane", "target": id, "enter": enter})
+	# Army auras cover creatures outside the Colourless Plane only.
+	_refresh_stats(c)
 	if global_enchantment_count("WRBN") > 0:
 		for other: Dictionary in creatures.values(): _refresh_stats(other)
 	if not enter and _enchantment_count(id, "PRGD") > 0:
 		for other: Dictionary in army(int(c.owner)):
 			if other.id != id and in_plane(other.id) and race(other.id) == race(id): plane_change(other.id, false)
 	return true
+
+## A combat ability's kill (Destroy, mechos, snake venom) is lethal damage: NoAffect ignores it,
+## regeneration saves it, and a second-game Pale creature dissipates. No pain link.
+func _ability_lethal(id: int) -> void:
+	if creatures.has(id): _damage(id, maxi(1, int(creatures[id].toughness) - int(creatures[id].damage)), false, false, false, false, true)
 
 ## State check death: a bright Pale creature dissipates instead of dying.
 func _lethal(id: int) -> void:
@@ -630,10 +692,12 @@ func find_enchantment(enchantment_id: int) -> int:
 			if int(e.id) == enchantment_id: return id
 	return -1
 
-## Card-cast enchantments (and snake venom) can be removed; creature-made ones
-## cannot. A stolen creature stays while its original owner's army is full.
-func dispellable(holder: int, e: Dictionary) -> bool:
-	if e.get("fixed", false) or not targetable(holder): return false
+## Card-cast enchantments (and snake venom) can be removed; creature-made ones cannot. A stolen
+## creature stays while its original owner's army is full. `untargeted`: a spell that names no
+## target (Cleanse, Decontamination) also clears a creature screened by a magic screen.
+func dispellable(holder: int, e: Dictionary, untargeted := false) -> bool:
+	if e.get("fixed", false) or e.card in TRAPS: return false
+	if not targetable(holder) and not (untargeted and not in_plane(holder)): return false
 	if e.card in ELCatalog.CONTROL and holder >= 2 and army(origin(holder)).size() >= 10: return false
 	return true
 
@@ -651,13 +715,16 @@ func second_surcharge(card: String) -> int:
 			for e: Dictionary in entity(id).enchantments:
 				if not e.get("fixed", false): count += 1
 	elif card in ["ANHL", "GRUN"]:
-		# Greater unsummoning pays 1 per creature it returns.
+		# Greater unsummoning pays 1 per creature it returns; neither counts a creature in the Colourless
+		# Plane.
 		for c: Dictionary in creatures.values():
-			if not has_flag(c.id, "NoAffect"): count += 1
+			if not has_flag(c.id, "NoAffect") and not in_plane(int(c.id)): count += 1
 	return count
 
+## The price of removing an enchantment (Flicker, Reinforced Pteros): its card's printed cost;
+## wardings raise casting costs only.
 func enchantment_price(e: Dictionary) -> int:
-	return int(e.get("price", cost(e.card)))
+	return int(e.get("price", int(profile.table("CombatSpells").get(e.card, {}).get("Cost", 999))))
 
 ## Enchantments a dispelling spell may choose; `target` is the holder (Purify) or
 ## the creature sacrificed first (Ether Trade), whose own enchantments are excluded.
@@ -719,8 +786,9 @@ func _target_error(card: String, target: int) -> String:
 func swap_targets(card: String, sacrifice: int) -> Array[int]:
 	var result: Array[int] = []
 	if ELCatalog.rule(profile, card).get("effect") != "swap" or not _target_error(card, sacrifice).is_empty(): return result
+	# The original's target check accepts the sacrifice again.
 	for id: int in creatures:
-		if id != sacrifice and targetable(id): result.append(id)
+		if targetable(id): result.append(id)
 	return result
 
 func valid_grave_targets(card: String, side := -1) -> Array[int]:
@@ -932,6 +1000,9 @@ func _sorcery_traps() -> Array[Dictionary]:
 ## (twin creatures, the elixir draw) roll only when `specs` is set.
 func _resolve_spell(side: int, card: String, rule: Dictionary, target: int, grave_index: int, extra_ether: int, traps: Array[Dictionary], specs: bool) -> void:
 	var hero: Dictionary = heroes[side]
+	# Second game: data attraction copies in play when the spell is cast react even if the spell
+	# removes them. The first game counts the copies left after the spell.
+	var attractions := _enchantment_count(side, "TRLB") if profile.id == "el2" else -1
 	match rule.effect:
 		"summon": _summon(side, card)
 		"damage", "wave":
@@ -1070,19 +1141,21 @@ func _resolve_spell(side: int, card: String, rule: Dictionary, target: int, grav
 		"random_discard":
 			for i in int(rule.amount):
 				var spells: Array[int] = []
-				for index in heroes[target].hand.size():
+				for index: int in hand_display(target):
 					if rule.get("any", false) or profile.table("CombatSpells").get(heroes[target].hand[index], {}).get("Class") != "Creature": spells.append(index)
 				if spells.is_empty(): break
 				var dropped := _take_card(target, spells[random_index(spells.size())])
 				_emit({"kind": "discard", "side": target, "card": dropped})
 		"annihilate":
-			# Each side's power is totalled before anything dies; then that side's
-			# creatures are destroyed and the opposing hero takes the total.
+			# Each side's power is totalled before anything dies; then that side's creatures are destroyed
+			# and the opposing hero takes the total. A creature in the Colourless Plane is neither counted
+			# nor destroyed.
 			var totals := [0, 0]
 			for c: Dictionary in creatures.values():
-				if not has_flag(c.id, "NoAffect"): totals[c.owner] += maxi(0, int(c.power))
+				if not has_flag(c.id, "NoAffect") and not in_plane(int(c.id)): totals[c.owner] += maxi(0, int(c.power))
 			for victim_side in 2:
 				for c: Dictionary in army(victim_side):
+					if in_plane(int(c.id)): continue
 					# EL1 - and EL2 -
 					# register Target/RedAnihilation per non-plane creature
 					# before destruction, in each combat side's original order.
@@ -1116,7 +1189,8 @@ func _resolve_spell(side: int, card: String, rule: Dictionary, target: int, grav
 			if amount > 0: _damage(target, amount)
 		"revive":
 			var revived: String = hero.grave.pop_back()
-			_give_card(side, revived)
+			# The first game puts it at the front of the hand like a draw, the second at the back.
+			_give_card(side, revived, -1, profile.id == "el1")
 			_emit({"kind": "return_card", "side": side, "card": revived})
 			_damage(1 - side, 1)
 		"exchange":
@@ -1129,10 +1203,13 @@ func _resolve_spell(side: int, card: String, rule: Dictionary, target: int, grav
 			for c: Dictionary in army(1 - side):
 				# Ice storm taps every non-Wall, restless or not.
 				var exempt: bool = race(c.id) == "Wall" if rule.get("scope") == "not_walls" else has_flag(c.id, "Restless")
-				# The second game also spares unaffected creatures.
-				if profile.id == "el2" and has_flag(c.id, "NoAffect"): exempt = true
+				# The second game also spares unaffected creatures, and Glade one in the Colourless Plane.
+				if profile.id == "el2" and (has_flag(c.id, "NoAffect") or (rule.get("scope") != "not_walls" and in_plane(int(c.id)))): exempt = true
 				if not c.resting and not exempt:
 					c.resting = true
+					# Glade withdraws a declared attacker in the second game; Ice Storm and the first game leave it
+					# striking.
+					if profile.id == "el2" and card == "GLDT": attacks.erase(c.id)
 					_emit({"kind": "rest", "target": c.id})
 		"hunger":
 			# Hunger mastery: the target cannot regenerate from this.
@@ -1166,16 +1243,16 @@ func _resolve_spell(side: int, card: String, rule: Dictionary, target: int, grav
 			var chosen: Array[int] = []
 			for id: int in [0, 1] + creatures.keys():
 				for e: Dictionary in entity(id).enchantments:
-					if dispellable(id, e): chosen.append(int(e.id))
+					if dispellable(id, e, true): chosen.append(int(e.id))
 			for enchantment_id: int in chosen:
 				var holder := find_enchantment(enchantment_id)
-				if holder >= 0 and dispellable(holder, _enchantment_by_id(holder, enchantment_id)): _dispel(holder, enchantment_id)
+				if holder >= 0 and dispellable(holder, _enchantment_by_id(holder, enchantment_id), true): _dispel(holder, enchantment_id)
 		"grave_fire":
 			for victim in 2:
 				if not heroes[victim].grave.is_empty(): _trigger_damage(card, victim, 2 * heroes[victim].grave.size())
 		"unsummon":
-			var victim: Dictionary = creatures[target]
-			_give_card(victim.owner, victim.card)
+			# The card returns to its original owner's hand.
+			_give_card(origin(target), creatures[target].card)
 			_remove_creature(target, "unsummon")
 		"symbiosis":
 			var gain := 2 * creatures.size()
@@ -1196,11 +1273,12 @@ func _resolve_spell(side: int, card: String, rule: Dictionary, target: int, grav
 			_emit({"kind": "heal", "target": side, "amount": value - int(heroes[side].health)})
 			heroes[side].health = value
 		"twister":
-			# Fatal disease first, then lethal damage; the attacking hero takes the power.
-			var victim: Dictionary = creatures[target]
+			# Fatal disease first, then lethal damage; the attacking hero takes the power. The power is read
+			# without the creature's own enchantments and temporary bonuses; army and global modifiers still
+			# count.
+			var power := _bare_stats(target).x
 			_mark(target, "TWST", 0, 0, {"fixed": true})
 			_destroy(target)
-			var power := int(victim.power)
 			if power > 0: _damage(attacker, power)
 		"fury_of_nature":
 			var doomed: Array[int] = []
@@ -1299,18 +1377,27 @@ func _resolve_spell(side: int, card: String, rule: Dictionary, target: int, grav
 			# that speeds the receiver's ether disturbance (see `gift_turns`).
 			var gifted: Dictionary = creatures[target]
 			_unassign(target)
-			gifted.owner = 1 - side
+			_move_army(gifted, 1 - side)
 			gifted.erase("origin")
-			if not has_flag(target, "NSS"): gifted.resting = true
+			# The receiver must wait a turn to act with it.
+			if not has_flag(target, "NSS"): gifted.sick = true
 			_refresh_armies()
-			# The receiver's modifiers can be lethal (Immolation); a creature
-			# that dies on changing sides takes no mark.
+			# The receiver's army enchantments do not cover it (see `army_auras`);
+			# a creature that dies on changing sides takes no mark.
 			if creatures.has(target): _enchant("GIFT", side, target, {"fixed": true})
 		"swap":
-			# The sacrifice dies first; the destroyed creature's controller then gains
-			# its toughness, even if it survives.
-			_kill(target)
-			if creatures.has(grave_index):
+			# The sacrifice dies first; the destroyed creature's controller then gains its toughness, even if
+			# it survives. Naming the sacrifice twice only sacrifices it; its controller still gains its
+			# toughness, read without its own enchantments.
+			if grave_index == target:
+				var gain := _bare_stats(target).y
+				var controller := int(creatures[target].owner)
+				_kill(target)
+				heroes[controller].health += gain
+				_emit({"kind": "heal", "target": controller, "amount": gain})
+			else:
+				_kill(target)
+			if grave_index != target and creatures.has(grave_index):
 				var gain := int(creatures[grave_index].toughness)
 				var controller := int(creatures[grave_index].owner)
 				_destroy(grave_index)
@@ -1322,7 +1409,7 @@ func _resolve_spell(side: int, card: String, rule: Dictionary, target: int, grav
 				for c: Dictionary in army(victim_side):
 					if not creatures.has(c.id): continue
 					# Unsummoning mastery: the controller may keep each creature in play.
-					if ELSpecs.roll(self, victim_side, "UGUS") > 0 or has_flag(c.id, "NoAffect"): continue
+					if ELSpecs.roll(self, victim_side, "UGUS") > 0 or has_flag(c.id, "NoAffect") or in_plane(int(c.id)): continue
 					_give_card(origin(c.id), c.card)
 					_remove_creature(c.id, "unsummon")
 		"amnesia":
@@ -1369,13 +1456,15 @@ func _resolve_spell(side: int, card: String, rule: Dictionary, target: int, grav
 			else:
 				for victim in 2: _discard_random(victim, 2)
 		"discard_creatures":
-			var remaining := int(rule.amount)
-			for i in range(heroes[target].hand.size() - 1, -1, -1):
-				var discarded: String = heroes[target].hand[i]
-				if profile.table("CombatCreatures").has(discarded) and remaining > 0:
-					_take_card(target, i)
-					remaining -= 1
-					_emit({"kind": "discard", "side": target, "card": discarded})
+			# From the front of the hand.
+			var chosen: Array[int] = []
+			for i: int in hand_display(target):
+				if profile.table("CombatCreatures").has(heroes[target].hand[i]) and chosen.size() < int(rule.amount): chosen.append(i)
+			var discarded: Array = chosen.map(func(i: int) -> String: return heroes[target].hand[i])
+			chosen.sort()
+			chosen.reverse()
+			for i: int in chosen: _take_card(target, i)
+			for gone: String in discarded: _emit({"kind": "discard", "side": target, "card": gone})
 	if rule.effect == "summon":
 		# A successful creature spell triggers each copy, regardless of its caster.
 		# Grave returns and exchanges summon creatures without casting their spells.
@@ -1388,11 +1477,12 @@ func _resolve_spell(side: int, card: String, rule: Dictionary, target: int, grav
 					if profile.id == "el1": _emit({"kind": "mana_vortex_cue", "side": recipient})
 	elif profile.table("CombatSpells")[card].get("Class") != "Creature":
 		# Data attraction: each earlier copy draws a spell, then hurts its holder.
-		var copies := _enchantment_count(side, "TRLB") - (1 if card == "TRLB" else 0)
-		for copy in copies:
+		if attractions < 0: attractions = _enchantment_count(side, "TRLB") - (1 if card == "TRLB" else 0)
+		for copy in attractions:
 			_draw(side)
 			_trigger_damage("TRLB", side, 3)
 		if profile.table("CombatSpells")[card].get("Class") == "Sorcery" and not traps.is_empty(): _spell_traps(side, card, extra_ether, traps)
+	_settle_illusion_health()
 	if not specs: return
 	# Velos and halo specialisations summon a second creature; elixir draws a card.
 	if rule.effect == "summon":
@@ -1429,9 +1519,11 @@ func _team_partner(id: int, guards_count := true) -> bool:
 func attack_cost(id: int) -> int:
 	return global_enchantment_count("LSDS") if creatures.has(id) else 0
 
-func can_attack(id: int) -> bool:
-	return phase == Phase.ATTACK and ready(id) and creatures[id].owner == attacker and not has_flag(id, "NoAttack") and not in_plane(id) \
-		and global_enchantment_count("FOGG") + global_enchantment_count("WLDT") == 0 and not _forest_holds(id, 1 - attacker)
+## Rest alone does not withdraw a declared attacker. Effects that cancel an
+## attack remove its assignment explicitly.
+func can_attack(id: int, declared := false) -> bool:
+	return phase == Phase.ATTACK and (ready(id) or (declared and creatures.has(id) and not creatures[id].sick)) and creatures[id].owner == attacker and not has_flag(id, "NoAttack") and not in_plane(id) \
+		and global_enchantment_count("FOGG") + global_enchantment_count("WLDT") + global_enchantment_count("EWLD") == 0 and not _forest_holds(id, 1 - attacker)
 
 ## Dense, Dark and Ancient Forest: the highest power an opposing creature
 ## may have and still be kept from attacking.
@@ -1545,11 +1637,12 @@ func abilities(id: int) -> Array[Dictionary]:
 		if ability.key in ["rouse", "phantasm"]: ability.used = creatures[id].get("ability_used", {}).get(ability.key, false)
 		result.append(ability)
 	if profile.id == "el2" and pale(id): result.append_array(_pale_abilities(id))
-	if creatures[id].card == "SPFG": result.append({"key": "spores", "name": "Burning spores", "target": "any", "cost": 0})
-	if creatures[id].card == "CAFG": result.append({"key": "spores", "name": "Stinging spores", "target": "any", "cost": 0})
+	# Spores need neither a ready nor a settled fingus.
+	if creatures[id].card == "SPFG": result.append({"key": "spores", "name": "Burning spores", "target": "any", "cost": 0, "ready": false})
+	if creatures[id].card == "CAFG": result.append({"key": "spores", "name": "Stinging spores", "target": "any", "cost": 0, "ready": false})
 	if creatures[id].card == "RFPT": result.append({"key": "disenchant", "name": "Piercing gaze", "target": "enchantment", "cost": -1})
 	if creatures[id].card == "WLIL": result.append({"key": "illusion", "name": "Shadows of the dead", "target": "none", "cost": 1, "ready": false, "used": creatures[id].get("ability_used", {}).get("illusion", false)})
-	if _enchantment_count(id, "ENFL") > 0: result.append({"key": "wake", "name": "Break enfeeblement", "target": "none", "cost": 3, "ready": false})
+	if enfeebled(id): result.append({"key": "wake", "name": "Break enfeeblement", "target": "none", "cost": 3, "ready": false})
 	if _enchantment_count(id, "WNPZ") > 0:
 		result.append({"key": "unparalyze", "name": "Break paralysis", "target": "none", "cost": 4, "health_cost": 4, "ready": false, "resting": true})
 	if _enchantment_count(id, "IMMB") > 0:
@@ -1586,7 +1679,8 @@ func _pale_error(id: int, d: Dictionary) -> String:
 			if in_plane(id): return "This creature is already in the Colourless Plane."
 			if sealed: return "A planar seal blocks every change of aspect."
 			if _enchantment_count(id, "PRBN") > 0: return "Lock Aspect keeps this creature in the Ether."
-		"sinister", "fiendish", "cryptic":
+		"sinister", "fiendish", "cryptic", "mystic":
+			# Manifesting leaves the plane.
 			if not in_plane(id): return "This creature is not in the Colourless Plane."
 			if d.key == "fiendish" and heroes[side].channels < 1: return "This needs an ether channel."
 			if d.key == "fiendish" and sealed: return "A planar seal blocks every change of aspect."
@@ -1806,10 +1900,13 @@ func _use_ability(id: int, ability: String, target := -1, enchantment_id := -1, 
 	if id < 2 and definition.has("enchantment"):
 		if available_mana(side) < int(definition.cost): return _fail("This ability costs %d ether." % definition.cost)
 		if definition.target == "any" and entity(target).is_empty(): return _fail("Select a creature or hero.")
+		# Only Ether recycling may name a creature in the Colourless Plane.
+		if target >= 2 and creatures.has(target) and in_plane(target) and definition.effect != "recycle": return _fail("This creature is in the Colourless Plane.")
 		var sacrificed := Vector2i.ZERO
 		if definition.effect == "combine":
 			if not creatures.has(target) or creatures[target].owner != side or not targetable(target): return _fail("Select one of your creatures to sacrifice.")
-			if not creatures.has(enchantment_id) or enchantment_id == target or not targetable(enchantment_id): return _fail("Select another creature to receive its strength.")
+			# Naming the sacrifice twice only sacrifices it.
+			if not creatures.has(enchantment_id) or not targetable(enchantment_id): return _fail("Select another creature to receive its strength.")
 			sacrificed = Vector2i(creatures[target].power, creatures[target].toughness)
 		if definition.effect == "burnout":
 			if not creatures.has(target) or creatures[target].owner != side or not targetable(target): return _fail("Select one of your creatures to sacrifice.")
@@ -1920,7 +2017,9 @@ func _use_ability(id: int, ability: String, target := -1, enchantment_id := -1, 
 			next_enchantment += 1
 			_refresh_stats(c)
 			_emit({"kind": "ability", "source": id, "side": side, "ability": ability, "target": id, "grave": heroes[side].grave.size()})
-			if c.damage >= c.toughness: _kill(id)
+			# First-game Shadows of the dead can leave a wall at lethal health
+			# until a spell resolves or combat ends. A later buff can save it.
+			if profile.id == "el2" and c.damage >= c.toughness: _kill(id)
 		"awaken", "unparalyze":
 			var price := int(definition.cost)
 			if available_mana(side) < price: return _fail("Awakening costs %d ether and %d health." % [price, price])
@@ -1929,21 +2028,25 @@ func _use_ability(id: int, ability: String, target := -1, enchantment_id := -1, 
 			c.resting = false
 			_emit({"kind": "ability", "source": id, "side": side, "ability": ability, "target": id})
 		"spores":
-			if target == id or entity(target).is_empty(): return _fail("Select another creature or a hero.")
+			# Carnivorous fingus may name itself: it dies and deals nothing; burning spores refuse it.
+			if (target == id and c.card != "CAFG") or entity(target).is_empty(): return _fail("Select another creature or a hero.")
 			var spore_damage := maxi(0, int(c.power)) if c.card == "CAFG" else 1
 			_emit({"kind": "ability", "source": id, "side": side, "ability": ability, "target": target})
 			# Fingus mastery: three successes out of three regenerate it for free.
-			if ELSpecs.roll(self, side, "GFNR", 3) == 3: _emit({"kind": "regenerate", "target": id, "cost": 0})
-			else: _kill(id)
-			_damage(target, spore_damage)
+			var saved := ELSpecs.roll(self, side, "GFNR", 3) == 3
+			# The target dies before the fingus; naming itself deals nothing.
+			if target != id and not entity(target).is_empty(): _damage(target, spore_damage)
+			if saved: _emit({"kind": "regenerate", "target": id, "cost": 0})
+			elif creatures.has(id): _kill(id)
 		"wake":
 			if available_mana(side) < 3: return _fail("Breaking enfeeblement costs 3 ether.")
 			_spend_ether(side, 3)
+			c.erase("enfeebled")
 			for ench: Dictionary in c.enchantments.duplicate():
 				if ench.card == "ENFL":
 					_remove_enchantment(id, ench.id)
 					break
-			if _enchantment_count(id, "ENFL") == 0: c.resting = false
+			if not enfeebled(id): c.resting = false
 			_emit({"kind": "ability", "source": id, "side": side, "ability": ability, "target": id})
 		"disenchant":
 			var victim := entity(target)
@@ -1952,7 +2055,8 @@ func _use_ability(id: int, ability: String, target := -1, enchantment_id := -1, 
 			for ench: Dictionary in victim.enchantments:
 				if int(ench.id) == enchantment_id: chosen = ench
 			if chosen.is_empty(): return _fail("Select an enchantment.")
-			var price := cost(chosen.card)
+			# The removal price, not a warded casting cost.
+			var price := enchantment_price(chosen)
 			if available_mana(side) < price: return _fail("Not enough ether to remove this enchantment.")
 			_spend_ether(side, price)
 			c.resting = true
@@ -2001,7 +2105,8 @@ func _first_ability(id: int, definition: Dictionary, target: int, grave_index: i
 		"wall_break":
 			if not creatures.has(target) or race(target) != "Wall": return _fail("Select a wall.")
 		"hunt":
-			if not creatures.has(target) or target == id or int(creatures[target].power) < 4: return _fail("Select a creature with power 4 or more.")
+			# The hunter may name itself once its own power is 4 or more.
+			if not creatures.has(target) or int(creatures[target].power) < 4: return _fail("Select a creature with power 4 or more.")
 		"necromancy":
 			if not grave_ability_targets(id, definition.key, target).has(grave_index): return _fail("Choose a cheap enough creature in a graveyard.")
 			# The second game refuses when the necromancer's army is already full.
@@ -2056,7 +2161,8 @@ func _first_ability(id: int, definition: Dictionary, target: int, grave_index: i
 			_remove_creature(id, "death")
 			attacks.clear()
 			blocks.clear()
-			_mark(side, "WLDT", 0, 0, {"price": 10 if profile.id == "el2" else 0})
+			# The second game's fog is its own support card, Distortion.
+			_mark(side, "EWLD" if profile.id == "el2" else "WLDT", 0, 0, {"price": 10 if profile.id == "el2" else 0})
 		"breath":
 			for victim: Dictionary in army(1 - side):
 				if creatures.has(victim.id) and has_flag(victim.id, "Fly") == (definition.scope == "flying"): _damage(victim.id, int(definition.amount))
@@ -2080,7 +2186,6 @@ func _first_ability(id: int, definition: Dictionary, target: int, grave_index: i
 		"tap_target":
 			if not creatures[target].resting:
 				creatures[target].resting = true
-				_unassign(target)
 		"tap_walls":
 			for wall: int in _resting_walls(1 - side):
 				creatures[wall].resting = true
@@ -2103,7 +2208,8 @@ func _first_ability(id: int, definition: Dictionary, target: int, grave_index: i
 			# Every warrior spirit flies, later arrivals included, until the end of the
 			# opponent's next turn; the effect outlives the wizard.
 			if not heroes[side].has("temporary"): heroes[side].temporary = []
-			heroes[side].temporary.append({"id": next_enchantment, "kind": "spirit_flight", "card": "WRSP", "flags": ["Fly"], "keeper": side})
+			# `source`: the wizard, which holds the original's effect object even after it dies.
+			heroes[side].temporary.append({"id": next_enchantment, "kind": "spirit_flight", "card": "WRSP", "flags": ["Fly"], "keeper": side, "source": id})
 			next_enchantment += 1
 			for spirit: Dictionary in creatures.values(): _refresh_stats(spirit)
 		"phantasm", "lava_power", "hellfire_health":
@@ -2161,23 +2267,37 @@ func _enchant(card: String, side: int, target: int, rule: Dictionary) -> void:
 		# Alpha strike heals the creature and adds its printed power.
 		creatures[target].damage = 0
 		e.power = int(profile.table("CombatCreatures")[creatures[target].card].Power)
+	if card == "ENFL" and target >= 2 and profile.id == "el1":
+		# First-game enfeeblement is no enchantment: a stat modifier and the creature's own break ability,
+		# so nothing can dispel it.
+		creatures[target].enfeebled = true
+		creatures[target].resting = true
+		_emit({"kind": "enchant", "target": target, "card": card, "power": 0, "toughness": 0})
+		return
 	next_enchantment += 1
-	entity(target).enchantments.append(e)
+	# A water link is held by the caster's hero and names its creature.
+	var holder := target
+	if card == "WTLK" and target >= 2:
+		e.link = target
+		holder = side
+	entity(holder).enchantments.append(e)
+	# A new army enchantment also covers creatures that changed sides into this army.
+	if target < 2 and ELCatalog.ARMY_AURAS.has(card):
+		for c: Dictionary in creatures.values():
+			if c.has("auras") and int(c.owner) == holder: c.auras.append(int(e.id))
 	if target >= 2:
 		_refresh_stats(creatures[target])
-		if card in ["ENFL", "IMMB"]:
+		if card in ["ENFL", "IMMB", "WNPZ"]:
+			# Taps at once. A declared blocker keeps blocking; the second game withdraws a declared attacker,
+			# the first lets it strike.
 			creatures[target].resting = true
-			_unassign(target)
+			if profile.id == "el2": attacks.erase(target)
 		elif card == "SPWR": creatures[target].resting = false
-		elif card == "WNPZ":
-			# Paralysis taps at once; the second game also withdraws a declared attacker.
-			creatures[target].resting = true
-			if profile.id == "el2": _unassign(target)
 		elif card in ELCatalog.CONTROL:
 			# Control passes to the caster; the creature must wait a turn to act.
 			var stolen: Dictionary = creatures[target]
 			stolen.origin = origin(target)
-			stolen.owner = side
+			_move_army(stolen, side)
 			stolen.sick = not (profile.id == "el2" and has_flag(target, "NSS"))
 			_unassign(target)
 			_refresh_armies()
@@ -2231,12 +2351,13 @@ func _refresh_stats(c: Dictionary) -> void:
 		for flag: String in aura.get("flags", []): granted.append(flag)
 	for effect: Dictionary in c.get("temporary", []):
 		for flag: String in effect.get("flags", []): granted.append(flag)
-	for e: Dictionary in heroes[c.owner].enchantments:
-		for flag: String in ELCatalog.ARMY_AURAS.get(e.card, {}).get("flags", []): granted.append(flag)
+	for e: Dictionary in army_auras(c):
+		for flag: String in ELCatalog.ARMY_AURAS[e.card].get("flags", []): granted.append(flag)
 	for hero: Dictionary in heroes:
 		for e: Dictionary in hero.enchantments:
 			var aura: Dictionary = ELCatalog.HERO_AURAS.get(e.card, {})
-			if aura.is_empty() or (aura.scope == "enemy" and c.owner == int(e.owner)): continue
+			# Unaffected creatures ignore them.
+			if aura.is_empty() or (aura.scope == "enemy" and c.owner == int(e.owner)) or c.flags.has("NoAffect"): continue
 			for flag: String in aura.flags: granted.append(flag)
 	for hero: Dictionary in heroes:
 		for effect: Dictionary in hero.get("temporary", []):
@@ -2258,9 +2379,8 @@ func _aura_covers(aura: Dictionary, source: Dictionary, c: Dictionary, kind: Str
 	if aura.get("race", kind) != kind or aura.get("card", c.card) != c.card: return false
 	return not (aura.get("own", false) and source.owner != c.owner)
 
-## Both originals show an aura's effect on each creature it newly covers: on
-## every covered creature when the source arrives, and on a later arrival
-## (EL2 slot 13, EL1 slot 11).
+## Both originals show an aura's effect on each creature it newly covers: on every covered creature
+## when the source arrives, and on a later arrival.
 func _aura_arrival_cues(arrival: Dictionary) -> void:
 	if not creatures.has(arrival.id): return
 	var races: Dictionary = profile.table("CombatCreatures")
@@ -2271,12 +2391,11 @@ func _aura_arrival_cues(arrival: Dictionary) -> void:
 		for c: Dictionary in covered:
 			if _aura_covers(aura, source, c, str(races.get(c.card, {}).get("Race", ""))):
 				_emit({"kind": "aura_cue", "card": source.card, "source": source.id, "target": c.id})
-	# Drowsy, Depressing and Frenzy Gas are auras over every creature: their
-	# per-creature callback (EL1 slot 11, EL2 slot 13
-	# ) also runs for a later arrival, once per copy, with the same
-	# Target cues as the cast. Exemptions follow the gases' stat rule.
+	# Drowsy, Depressing and Frenzy Gas are auras over every creature: their per-creature callback also
+	# runs for a later arrival, once per copy, with the same Target cues as the cast. Exemptions follow
+	# the gases' stat rule.
 	for card: String in ["DRGS", "DPGS", "FRGS"]:
-		if card != "DRGS" and arrival.flags.has("NoAffect"): continue
+		if arrival.flags.has("NoAffect") or arrival.get("plane", false): continue
 		for copy in global_enchantment_count(card):
 			_emit({"kind": "aura_cue", "card": card, "source": -1, "target": arrival.id})
 
@@ -2287,18 +2406,29 @@ func _refresh_armies() -> void:
 	for c: Dictionary in creatures.values():
 		if creatures.has(c.id) and c.damage >= c.toughness: _lethal(c.id)
 
+## First-game Wall of Illusion delays its ability's lethal health change.
+## Attack declarations and other creature abilities do not settle that change.
+func _settle_illusion_health() -> void:
+	if profile.id != "el1": return
+	for c: Dictionary in creatures.values():
+		if creatures.has(c.id) and c.card == "WLIL" and c.get("ability_used", {}).get("illusion", false) and c.damage >= c.toughness:
+			_lethal(c.id)
+
 func creature_stats(c: Dictionary, additional_gas := 0) -> Vector2i:
 	var base: Dictionary = profile.table("CombatCreatures")[c.card]
 	# Spell-jammers created by traps carry their own base X/X.
 	var printed := Vector2i(int(c.base[0]), int(c.base[1])) if c.has("base") else Vector2i(int(base.Power), int(base.Toughness))
-	var power := printed.x - _enchantment_count(0, "DRGS") - _enchantment_count(1, "DRGS") - additional_gas
+	var power := printed.x
 	var toughness := printed.y
-	# Depressing and frenzy gases weaken every creature except unaffected ones.
-	if not c.flags.has("NoAffect"):
+	# The gases weaken every creature except unaffected ones and those in the Colourless Plane.
+	if not c.flags.has("NoAffect") and not c.get("plane", false):
+		power -= _enchantment_count(0, "DRGS") + _enchantment_count(1, "DRGS") + additional_gas
 		power -= 2 * global_enchantment_count("DPGS")
 		toughness -= 2 * global_enchantment_count("FRGS")
 	var lethal := 0
 	for e: Dictionary in c.enchantments:
+		# Unaffected creatures keep lake snake venom's mark without its -1/-1.
+		if e.card == "LASN" and c.flags.has("NoAffect"): continue
 		power += int(e.power)
 		# Lake snake venom lowers health past the usual minimum of one.
 		if e.get("lethal", false): lethal -= int(e.toughness)
@@ -2306,9 +2436,9 @@ func creature_stats(c: Dictionary, additional_gas := 0) -> Vector2i:
 	for effect: Dictionary in c.get("temporary", []):
 		power += int(effect.get("power", 0))
 		toughness += int(effect.get("toughness", 0))
-	# Army modifiers on the owner's hero also cover creatures that arrive later.
-	for e: Dictionary in heroes[c.owner].enchantments:
-		var aura: Dictionary = ELCatalog.ARMY_AURAS.get(e.card, {})
+	# Army modifiers also cover creatures that arrive later.
+	for e: Dictionary in army_auras(c):
+		var aura: Dictionary = ELCatalog.ARMY_AURAS[e.card]
 		power += int(aura.get("power", 0))
 		toughness += int(aura.get("toughness", 0))
 		lethal += int(aura.get("lethal", 0))
@@ -2412,8 +2542,10 @@ func _remove_enchantment(target: int, enchantment_id: int) -> void:
 		if int(e.id) != enchantment_id: continue
 		victim.enchantments.erase(e)
 		if target >= 2 and e.card in ELCatalog.CONTROL and victim.has("origin"):
-			victim.owner = int(victim.origin)
+			_move_army(victim, int(victim.origin))
 			victim.erase("origin")
+			# Returned control also waits a turn, as on the steal.
+			victim.sick = not (profile.id == "el2" and has_flag(target, "NSS"))
 			_unassign(target)
 			_refresh_armies()
 		if e.card == "ERBN":
@@ -2459,12 +2591,14 @@ func _end_phase_now() -> bool:
 		if attacks.is_empty(): return _end_phase_now()
 	else:
 		_resolve_attacks()
+		_settle_illusion_health()
 		_drain_scripts()
 		if phase == Phase.FINISHED:
 			changed.emit()
 			return true
+		# The last card of the hand goes first.
 		while heroes[attacker].hand.size() > 5:
-			var card := _take_card(attacker, 0)
+			var card := _take_card(attacker, hand_display(attacker).back())
 			_emit({"kind": "discard", "side": attacker, "card": card})
 		for c: Dictionary in creatures.values():
 			# Second-game bloodlessness keeps the creature's damage.
@@ -2506,7 +2640,7 @@ func _first_turn_end() -> void:
 	# here and the other hero killed by an enchantment is a draw).
 
 ## Enchantments with an end-of-turn effect (for the unused end-of-turn script hooks).
-const END_OF_TURN_CARDS := ["MNBN", "WETX", "STTX", "WTX2", "OCRP", "ENVM", "SFGS", "TRSN", "SWSN", "ESWS", "IRRT", "MDNS", "RDIS", "OVRL", "TWEN"]
+const END_OF_TURN_CARDS := ["MNBN", "WETX", "STTX", "WTX2", "OCRP", "ENVM", "SFGS", "TRSN", "SWSN", "ESWS", "ETRS", "IRRT", "MDNS", "RDIS", "OVRL", "TWEN"]
 
 func _turn_enchantments(at_start: bool) -> void:
 	# Hero and creature enchantments share one creation-order callback list.
@@ -2524,7 +2658,8 @@ func _turn_enchantments(at_start: bool) -> void:
 		var e: Dictionary = entry.effect
 		if victim.is_empty(): continue
 		if entry.get("temporary", false):
-			var ends: bool = attacker == int(e.until_turn_of) if e.has("until_turn_of") else (attacker != int(e.keeper) if e.has("keeper") else victim.owner != attacker)
+			# A bless from an older save keeps an until_turn_of it no longer uses.
+			var ends: bool = attacker == int(e.until_turn_of) if e.has("until_turn_of") and e.get("kind") != "bless" else (attacker != int(e.keeper) if e.has("keeper") else victim.owner != attacker)
 			if not at_start and ends and victim.temporary.has(e):
 				victim.temporary.erase(e)
 				if victim.temporary.is_empty(): victim.erase("temporary")
@@ -2569,7 +2704,10 @@ func _turn_enchantments(at_start: bool) -> void:
 				ended_hooks = true
 			match e.card:
 				"MNBN":
-					if heroes[attacker].mana > 0: _trigger_damage(e.card, attacker, heroes[attacker].mana)
+					# Burn resistance spares ether here too.
+					var burn := int(heroes[attacker].mana)
+					if burn > 0: burn -= ELSpecs.roll(self, attacker, "RMBD", burn)
+					if burn > 0: _trigger_damage(e.card, attacker, burn)
 				"WETX", "STTX", "WTX2":
 					if target != attacker: _trigger_damage(e.card, target, 3 if e.card == "STTX" else 1)
 				"OCRP":
@@ -2588,7 +2726,7 @@ func _turn_enchantments(at_start: bool) -> void:
 						for c: Dictionary in army(side):
 							if ELSpecs.roll(self, side, "BSGP") == 0: _trigger_damage(e.card, c.id, 2)
 						if ELSpecs.roll(self, side, "BSGP") == 0: _trigger_damage(e.card, side, 2)
-				"RDDF", "FOGG", "FDBK", "FURY", "ASST", "ASLT", "WLDT", "ETCH", "PLSL", "ORPL", "LNRD", "PCDU":
+				"RDDF", "FOGG", "FDBK", "FURY", "ASST", "ASLT", "WLDT", "EWLD", "ETCH", "PLSL", "ORPL", "LNRD", "PCDU":
 					# These end with a turn that their caster did not own.
 					if e.owner != attacker: _remove_enchantment(target, e.id)
 				"BLSS", "CMBN", "ALST", "RLSS":
@@ -2609,7 +2747,7 @@ func _turn_enchantments(at_start: bool) -> void:
 				"FREL":
 					# The fire burn ends with a turn not owned by the burnt creature's controller.
 					if target >= 2 and victim.owner != attacker: _remove_enchantment(target, e.id)
-				"TRSN", "SWSN", "ESWS":
+				"TRSN", "SWSN", "ESWS", "ETRS":
 					# Venom strikes the poisoned hero at the end of that hero's own turns.
 					if target < 2 and target == attacker: _trigger_damage(e.card, target, 1)
 				"IRRT", "MDNS", "RDIS":
@@ -2634,6 +2772,8 @@ func _turn_enchantments(at_start: bool) -> void:
 						if victim.damage >= victim.toughness: _kill(target)
 				"TWEN":
 					if target < 2 or victim.owner != attacker: continue
+					# Decay reduces current stats: a creature held at toughness 1 only by the floor dies.
+					var floor_toughness := int(victim.toughness) - 1
 					e.power -= 1
 					e.toughness -= 1
 					_refresh_stats(victim)
@@ -2642,7 +2782,7 @@ func _turn_enchantments(at_start: bool) -> void:
 					# NegDefence and NegRune on the enchanted creature.
 					if profile.id in ["el1", "el2"]:
 						_emit({"kind": "twisted_decay", "target": target, "card": "TWEN"})
-					if victim.damage >= victim.toughness: _lethal(target)
+					if victim.damage >= mini(int(victim.toughness), floor_toughness): _lethal(target)
 	if ended_hooks: scripts.dispatch("CHook_OnVisualFinishEnchantmentEndOfTurn", [])
 	if not at_start:
 		# Expiring defence can expose damage retained by Fatal Disease. The original
@@ -2762,6 +2902,8 @@ func _begin_attack(draw_card: bool) -> void:
 			for e: Dictionary in c.enchantments:
 				positive = positive or String(e.card) in pos_sources
 				negative = negative or String(e.card) in neg_sources
+			# A hero-held water link still marks its creature (creature variable 0).
+			positive = positive or not water_links(int(c.id)).is_empty()
 			if positive: _emit({"kind": "turn_creature_pos_rune", "target": int(c.id)})
 			if negative: _emit({"kind": "turn_creature_neg_rune", "target": int(c.id)})
 	if profile.id == "el1":
@@ -2805,7 +2947,7 @@ func _begin_attack(draw_card: bool) -> void:
 			# Pale aspect ignores freezes and smoke, not the creature's own no-untap.
 			c.sick = false
 			if c.has("ability_used"): c.ability_used.clear()
-			if _enchantment_count(c.id, "ENFL") == 0 and _enchantment_count(c.id, "IMMB") == 0 and not has_flag(c.id, "NoUntap"): c.resting = false
+			if not enfeebled(c.id) and _enchantment_count(c.id, "IMMB") == 0 and not has_flag(c.id, "NoUntap"): c.resting = false
 			continue
 		# Condensed air holds flyers and a flood holds the rest: no recovery,
 		# sickness or ability reset.
@@ -2818,7 +2960,7 @@ func _begin_attack(draw_card: bool) -> void:
 		var smoked := global_enchantment_count("SMOK") > 0 and not has_flag(c.id, "NoAffect")
 		# Smoke mastery: a tapped creature may recover anyway.
 		if smoked and c.resting and ELSpecs.roll(self, attacker, "RSMP") > 0: smoked = false
-		if _enchantment_count(c.id, "ENFL") == 0 and _enchantment_count(c.id, "IMMB") == 0 and not has_flag(c.id, "NoUntap") and not smoked: c.resting = false
+		if not enfeebled(c.id) and _enchantment_count(c.id, "IMMB") == 0 and not has_flag(c.id, "NoUntap") and not smoked: c.resting = false
 	_pale_warp()
 	if draw_card: _draw(attacker)
 	if ELHeroEffects.extra_draw(hero) and _draw(attacker):
@@ -2830,7 +2972,9 @@ func _begin_attack(draw_card: bool) -> void:
 	# after those draws and before the separate QIHN specialisation draw.
 	if profile.id == "el1" and enlightenment > 0: _combat_effect("ENLH", attacker, attacker)
 	if ELSpecs.roll(self, attacker, "QIHN") > 0: _draw(attacker)
-	var row: Dictionary = profile.table("CombatManaIncome").get(str(hero.turns), {})
+	var income: Dictionary = profile.table("CombatManaIncome")
+	# The final ether-income row is not applied in either edition.
+	var row: Dictionary = income.get(str(hero.turns), {}) if int(hero.turns) < income.size() else {}
 	var stasis := global_enchantment_count("STSI") > 0
 	if not stasis or profile.id == "el1": hero.channels += int(row.get("Level%d" % hero.level, 0))
 	if not stasis: hero.mana = hero.channels * (1 + global_enchantment_count("MNVR"))
@@ -2878,11 +3022,10 @@ func _draw(side: int, reject := "") -> bool:
 	_emit({"kind": "draw", "side": side, "card": card})
 	return true
 
-## `front`: the card shows at the left of the hand rail. The originals send a
-## drawn card to the front (VisualEvents DrawSpell: EL2 only from the deck draw
-## `` and turn-entry draws; EL1 also the ETTI return) and every other
-## card put into the hand to the back (DrawSpellBack: unsummons, repairs,
-## recalls, dragon returns, enchantments coming back). Rules keep the array order.
+## `front`: the card shows at the left of the hand rail. Drawn cards arrive at the front;
+## returned cards normally arrive at the back. First-game ETTI and JRRG returns also go
+## to the front. The array keeps arrival order; positional rules such as random discards,
+## Curse and the turn-end trim use the rail order.
 func _give_card(side: int, card: String, slot := -1, front := false) -> void:
 	var hero: Dictionary = heroes[side]
 	var keys := _hand_view(hero)
@@ -2928,7 +3071,7 @@ func hand_display(side: int) -> Array[int]:
 func _discard_random(side: int, count: int) -> void:
 	for i in count:
 		if heroes[side].hand.is_empty(): return
-		_emit({"kind": "discard", "side": side, "card": _take_card(side, random_index(heroes[side].hand.size()))})
+		_emit({"kind": "discard", "side": side, "card": _take_card(side, hand_display(side)[random_index(heroes[side].hand.size())])})
 
 func hand_uses(side: int, index: int) -> int:
 	var slot: int = heroes[side].hand_slots[index]
@@ -2991,7 +3134,7 @@ func _return_buried_creatures(side: int) -> void:
 func _sync_attacks() -> void:
 	if phase != Phase.ATTACK: return
 	for id: int in attacks.duplicate():
-		if not can_attack(id): attacks.erase(id)
+		if not can_attack(id, true): attacks.erase(id)
 	# Original compulsory assignment is suppressed while attacking has a cost.
 	if global_enchantment_count("LSDS") > 0: return
 	for c: Dictionary in army(attacker):
@@ -3000,16 +3143,22 @@ func _sync_attacks() -> void:
 
 func _resolve_attacks() -> void:
 	var poisoned: Array[int] = []
+	var regenerated_before: Array = creatures.keys().filter(func(i: int) -> bool: return creatures[i].regenerated)
 	for id in attacks.duplicate():
 		if not creatures.has(id): continue
 		var attack: Dictionary = creatures[id]
+		# First game: an attacker that regenerated in the defence phase stays declared (it can still be
+		# blocked) but neither fights nor rests.
+		if profile.id == "el1" and attack.regenerated: continue
 		attack.resting = not has_flag(id, "Restless")
 		var defenders: Array[int] = []
+		# A declared blocker rested afterwards still blocks.
 		for blocker: int in blocks:
-			if blocks[blocker] == id and creatures.has(blocker) and ready(blocker): defenders.append(blocker)
+			if blocks[blocker] == id and creatures.has(blocker): defenders.append(blocker)
 		# Kobold and aviak masteries double an attacker's whole damage pool.
 		var remaining: int = maxi(0, attack.power) * (2 if _doubles(id) else 1)
 		var walled := false
+		var gazed := 0
 		if defenders.is_empty():
 			_strike(id, 1 - attacker, remaining, poisoned)
 		else:
@@ -3020,6 +3169,7 @@ func _resolve_attacks() -> void:
 				if race(id) == "Beholder" and not (profile.id == "el2" and has_flag(blocker, "NoAffect")) and ELSpecs.roll(self, int(attack.owner), "GBHD") > 0:
 					_combat_effect("GBHD", id, blocker)
 					_destroy(blocker)
+					gazed += 1
 					continue
 				if race(blocker) == "Beholder" and not (profile.id == "el2" and has_flag(id, "NoAffect")) and ELSpecs.roll(self, int(creatures[blocker].owner), "GBHD") > 0:
 					_combat_effect("GBHD", blocker, id)
@@ -3032,37 +3182,45 @@ func _resolve_attacks() -> void:
 				# A first-striking blocker gives no counter-strike.
 				var defender_first := has_flag(blocker, "FS") and not has_flag(id, "FS")
 				var pre := defender_first
-				# Hornet mastery (both editions): a hornet's hero may
-				# cancel the blocker's first strike, or win a first strike for a
-				# blocking hornet; the blocker's hero rolls before the attacker's.
+				# Hornet mastery: a hornet's hero may cancel the blocker's first strike, or win a first strike
+				# for a blocking hornet; the blocker's hero rolls before the attacker's.
 				if defender_first: pre = not _hornet(id)
 				else: pre = _hornet(blocker) and not _hornet(id)
 				if pre:
 					_strike(blocker, id, _blocker_damage(blocker), poisoned)
-					if not creatures.has(id) or attack.regenerated: break
+					if not creatures.has(id) or attack.regenerated or in_plane(id): break
 					if _witch_wall(blocker, id):
 						remaining = 0
 						break
-				var dealt := mini(remaining, maxi(0, creatures[blocker].toughness - creatures[blocker].damage))
+				# The allotment covers what Stone Skin will absorb, so a trampler carries only the rest over.
+				var dealt := mini(remaining, maxi(0, creatures[blocker].toughness - creatures[blocker].damage) + 2 * _enchantment_count(blocker, "STSK"))
 				remaining -= dealt
 				_strike(id, blocker, dealt, poisoned)
-				if not defender_first and creatures.has(blocker) and not creatures[blocker].regenerated:
+				# A blocker that dissipated into the plane has left combat.
+				if not defender_first and creatures.has(blocker) and not creatures[blocker].regenerated and not in_plane(blocker):
 					_strike(blocker, id, _blocker_damage(blocker), poisoned)
 					if _witch_wall(blocker, id):
 						remaining = 0
 						break
-			if creatures.has(id) and not attack.regenerated and has_flag(id, "Trample") and remaining > 0:
+			# A beholder whose gaze destroyed every blocker hits the hero with its whole damage; one that
+			# fought any blocker does not.
+			if gazed == defenders.size() and creatures.has(id) and not attack.regenerated and remaining > 0:
+				_strike(id, 1 - attacker, remaining, poisoned)
+			elif creatures.has(id) and not attack.regenerated and has_flag(id, "Trample") and remaining > 0:
 				_strike(id, 1 - attacker, remaining, poisoned)
 		if walled and creatures.has(id): _damage(id, 1000000)
+		# Rest is settled after the attacker's own fight: a creature aura's Restless (OREL, MOTI) lost
+		# because the attacker killed its source in that fight, even in the ordinary exchange, leaves the
+		# attacker resting.
+		if creatures.has(id) and not attack.resting and not has_flag(id, "Restless"): attack.resting = true
 		# Cutter and gibberling masteries: a surviving attacker stays ready.
 		if creatures.has(id) and attack.resting and race(id) in ["Cutter", "Gibberling"] and ELSpecs.roll(self, int(attack.owner), "BCTR" if race(id) == "Cutter" else "UOCR") > 0: attack.resting = false
 		_check_winner()
 		if phase == Phase.FINISHED: break
 	if scripts != null and not poisoned.is_empty(): scripts.dispatch("CHook_OnVisualStartMeleeDestroyFlag", [])
 	for id: int in poisoned:
-		# Second-game poison is lethal damage, so a Pale creature dissipates.
-		if creatures.has(id) and profile.id == "el2": _lethal(id)
-		elif creatures.has(id): _kill(id)
+		# A creature that regenerated during this combat is already saved.
+		if creatures.has(id) and not (creatures[id].regenerated and not regenerated_before.has(id)): _ability_lethal(id)
 	if scripts != null and not poisoned.is_empty(): scripts.dispatch("CHook_OnVisualFinishMeleeDestroyFlag", [])
 
 ## Presentation of a combat strike's creature power (first game): `key` names
@@ -3118,25 +3276,40 @@ func _strike(source: int, target: int, amount: int, poisoned: Array[int]) -> voi
 	var flyer := has_flag(target, "Fly")
 	# The fire elemental's burn lands before the lethal check, so it blocks regeneration.
 	if card == "FREL" and creatures.has(target) and (profile.id == "el1" or amount > 0): _mark(target, "FREL", 0, 0, {"fixed": true})
+	# Second-game snake venom lowers health before the lethal check, so a creature it reduces to
+	# nothing cannot regenerate.
+	var venom_first := card == "LASN" and profile.id == "el2" and creatures.has(target)
+	if venom_first: _mark(target, "LASN", -1, -1, {"fixed": true, "lethal": true})
+	# First game: a disenchanting strike strips a creature before its (already allotted) damage is
+	# checked. The second game strips after.
+	var stripped_first: bool = profile.id == "el1" and disenchants and creatures.has(target) and not creatures[target].enchantments.is_empty()
+	if stripped_first:
+		_combat_effect("Disenchant", source, target)
+		for e: Dictionary in creatures[target].enchantments.duplicate(): _remove_enchantment(target, e.id)
+	# A hit its hero redirects onto a creature robs no cards.
+	var shielded: bool = target in [0, 1] and army(target).any(func(x: Dictionary) -> bool: return _enchantment_count(int(x.id), "REDR") > 0)
 	var dealt := _damage(target, amount, true)
+	if venom_first and creatures.has(target) and creatures[target].damage >= creatures[target].toughness: _ability_lethal(target)
 	if destroys and creatures.has(target) and not poisoned.has(target): poisoned.append(target)
 	if card in ELCatalog.MECHOS and creatures.has(target) and race(target) != "Wall" and not poisoned.has(target): poisoned.append(target)
 	# The hellfire wall's whirl destroys flyers it damages, like poison.
 	if card == "WLIF" and flyer and creatures.has(target) and not poisoned.has(target): poisoned.append(target)
-	if card == "LASN" and creatures.has(target):
+	if card == "LASN" and not venom_first and creatures.has(target):
 		_mark(target, "LASN", -1, -1, {"fixed": true, "lethal": true})
-		if creatures[target].damage >= creatures[target].toughness: _lethal(target)
+		if creatures[target].damage >= creatures[target].toughness: _ability_lethal(target)
 	var robbed := 0
 	if target in [0, 1] and creatures.has(source):
 		if card == "GRSN": _mark(source, "GRSN", 1, 1, {"fixed": true})
-		# Venom is priced like its token row: free in the first game, 1 in the second.
-		if card in ["TRSN", "SWSN"]: _mark(target, card, 0, 0, {"owner": owner, "price": 1 if profile.id == "el2" else 0})
+		# Venom is priced like its token row: free in the first game, 1 in the second. The second game's
+		# venom is its own support card.
+		if card in ["TRSN", "SWSN"]: _mark(target, ({"TRSN": "ETRS", "SWSN": "ESWS"}[card] if profile.id == "el2" else card), 0, 0, {"owner": owner, "price": 1 if profile.id == "el2" else 0})
 		for flag: String in creatures[source].flags:
 			if flag.begins_with("Discard("): robbed += int(flag.trim_prefix("Discard(").trim_suffix(")"))
 		for e: Dictionary in creatures[source].enchantments: robbed += ELCatalog.granted_discard(profile, e.card)
 		# Lamia and orc masteries: one more discard on a hit.
 		var kind := race(source)
 		if dealt > 0 and kind in ["Lamia", "Orc"] and ELSpecs.roll(self, owner, "UMTD" if kind == "Lamia" else "RORT") > 0: robbed += 1
+		if shielded: robbed = 0
 		# Snake mastery envenoms the hero.
 		if dealt > 0 and kind == "Snake" and ELSpecs.roll(self, owner, "GSNV") > 0: _mark(target, "ENVM", 0, 0, {"owner": owner})
 		# EL1 - queues DrainLife before +
@@ -3165,7 +3338,7 @@ func _strike(source: int, target: int, amount: int, poisoned: Array[int]) -> voi
 		var controller := target if target < 2 else int(creatures[target].owner)
 		for e: Dictionary in entity(target).enchantments.duplicate():
 			if int(e.owner) == controller and not entity(target).is_empty(): _remove_enchantment(target, e.id)
-	if disenchants and not entity(target).is_empty():
+	if disenchants and not entity(target).is_empty() and not stripped_first:
 		if not stripped and not entity(target).enchantments.is_empty(): _combat_effect("Disenchant", source, target)
 		for e: Dictionary in entity(target).enchantments.duplicate(): _remove_enchantment(target, e.id)
 
@@ -3176,7 +3349,7 @@ func _discard_on_hit(source: int, target: int, count: int) -> void:
 	_combat_effect("Discard", source, target)
 	for discard in count:
 		if heroes[target].hand.is_empty(): break
-		var dropped := _take_card(target, random_index(heroes[target].hand.size()))
+		var dropped := _take_card(target, hand_display(target)[random_index(heroes[target].hand.size())])
 		_emit({"kind": "discard", "side": target, "card": dropped})
 
 ## Returns the damage that landed: zero when a hero's feedback redirected it or
@@ -3198,13 +3371,15 @@ func _damage(target: int, amount: int, combat := false, no_regeneration := false
 	if profile.id == "el2" and _lifeguard(target): return 0
 	if amount <= 0: return 0
 	if profile.id != "el2" and _lifeguard(target): return 0
+	# Pain link: the controller takes the same damage once per copy (never redirected); combat damage
+	# only up to the creature's remaining toughness.
+	var pain := amount if not combat else mini(amount, maxi(0, int(creatures[target].toughness) - int(creatures[target].damage)))
 	creatures[target].damage += amount
 	# Any damage marks the creature; Velos survive their turn end with this mark.
 	if amount > 0: creatures[target].hit = true
 	_emit({"kind": "damage", "target": target, "amount": amount})
-	# Pain link: the controller takes the same damage once per copy (never redirected).
-	if linked and amount > 0:
-		for copy in _enchantment_count(target, "PALN"): _hurt_hero(int(creatures[target].owner), amount, true)
+	if linked and pain > 0:
+		for copy in _enchantment_count(target, "PALN"): _hurt_hero(int(creatures[target].owner), pain, true)
 	if not creatures.has(target): return amount
 	if creatures[target].damage < creatures[target].toughness: return amount
 	var victim: Dictionary = creatures[target]
@@ -3255,8 +3430,8 @@ func regeneration_cost(id: int) -> int:
 		if flag.begins_with("Regen("): costs.append(int(flag.trim_prefix("Regen(").trim_suffix(")")))
 	for e: Dictionary in c.enchantments:
 		if ELCatalog.GRANTED_REGENERATION.has(e.card): costs.append(int(ELCatalog.GRANTED_REGENERATION[e.card]))
-	for e: Dictionary in heroes[c.owner].enchantments:
-		if ELCatalog.ARMY_AURAS.get(e.card, {}).has("regeneration"): costs.append(int(ELCatalog.ARMY_AURAS[e.card].regeneration))
+	for e: Dictionary in army_auras(c):
+		if ELCatalog.ARMY_AURAS[e.card].has("regeneration"): costs.append(int(ELCatalog.ARMY_AURAS[e.card].regeneration))
 	var best := 0
 	for value: int in costs:
 		if value > 0 and (best == 0 or value < best): best = value
@@ -3356,8 +3531,7 @@ func _kill(id: int) -> void:
 	var dead: Dictionary = creatures[id]
 	var owner := origin(id)
 	var links: Array[int] = []
-	for e: Dictionary in dead.enchantments:
-		if e.card == "WTLK": links.append(int(e.owner))
+	for e: Dictionary in water_links(id): links.append(int(e.owner))
 	heroes[owner].grave.append(dead.card)
 	_remove_creature(id, "death")
 	# Barbed souls: the dead creature's controller draws once per copy in play.
@@ -3414,7 +3588,8 @@ func _kill(id: int) -> void:
 		var index: int = heroes[owner].grave.rfind(dead.card)
 		if not returned and index >= 0 and army(caster).size() < 10:
 			returned = true
-			heroes[owner].grave.remove_at(index)
+			# The original takes the graveyard's first card, whichever it is.
+			heroes[owner].grave.remove_at(0)
 			_summon(caster, dead.card)
 
 func _unassign(id: int) -> void:
@@ -3430,6 +3605,12 @@ func _remove_creature(id: int, kind: String) -> void:
 	var true_owner := origin(id)
 	var base_power := int(creatures[id].get("base", [int(profile.table("CombatCreatures")[card].Power)])[0])
 	var leaving: Array = creatures[id].enchantments
+	# Its water links end with it, by any route (death, exile, unsummon).
+	for hero: Dictionary in heroes:
+		for e: Dictionary in hero.enchantments.duplicate():
+			if e.card == "WTLK" and int(e.get("link", -1)) == id:
+				hero.enchantments.erase(e)
+				leaving.append(e)
 	creatures.erase(id)
 	_unassign(id)
 	# Presentation of EL1 Unsummon needs the departed creature's owner
@@ -3447,9 +3628,9 @@ func _remove_creature(id: int, kind: String) -> void:
 		for e: Dictionary in leaving: scripts.dispatch("CHook_OnVisualRemoveEnchantment", [e.card, float(id)])
 		scripts.dispatch("CHook_OnVisualCreatureDeath", [card, float(id), null if kind == "death" else 1.0, 1.0 if kind == "unsummon" else null, float(true_owner), float(owner)])
 	if card == "MOBE" and kind == "death":
-		# All bees become aggressive until the end of the mother bee owner's turn.
+		# Its hero's bees become aggressive until the end of that hero's turn.
 		for bee: Dictionary in creatures.values():
-			if race(bee.id) != "Bee": continue
+			if race(bee.id) != "Bee" or int(bee.owner) != owner: continue
 			if not bee.has("temporary"): bee.temporary = []
 			bee.temporary.append({"id": next_enchantment, "kind": "frenzy", "flags": ["Berserk"], "until_turn_of": owner})
 			next_enchantment += 1

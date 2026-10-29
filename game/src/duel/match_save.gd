@@ -89,7 +89,7 @@ static func decode(profile: ELProfile, raw: Dictionary) -> Dictionary:
 		if c is not Dictionary or c.get("id") != id or id < 2 or id >= s.next_id or creatures.has(id): return _bad("Invalid creature.")
 		for field in ["id", "owner", "power", "toughness", "damage"]:
 			if c.get(field) is not int: return _bad("Invalid creature value.")
-		if c.owner not in [0, 1] or c.toughness < 1 or c.damage < 0 or c.damage >= c.toughness: return _bad("Invalid creature health.")
+		if c.owner not in [0, 1] or c.toughness < 0 or c.damage < 0: return _bad("Invalid creature health.")
 		for field in ["resting", "sick", "flying", "regenerated"]:
 			if c.get(field) is not bool: return _bad("Invalid creature status.")
 		if c.get("flags") is not Array or c.get("card") is not String or (ELCatalog.rule(profile, c.card).get("effect") != "summon" and ELCatalog.ARTIFACT_EFFECTS.get(c.card, {}).get("effect") != "summon"):
@@ -102,25 +102,30 @@ static func decode(profile: ELProfile, raw: Dictionary) -> Dictionary:
 				var pale_rest: bool = profile.id == "el2" and c.card in ELCatalog.PALE_SUMMONS and (ability == "dissipate" or ELCatalog.PALE_ABILITIES.get(c.card, {}).get("key") == ability)
 				if not ({"illusion": "WLIL", "rouse": "SHSP", "phantasm": "PHWL"}.get(ability) == c.card or pale_rest) or c.ability_used[ability] is not bool: return _bad("Invalid creature ability state.")
 		if c.has("origin") and (c.origin not in [0, 1] or c.origin == c.owner): return _bad("Invalid creature control.")
+		if c.has("auras") and (c.auras is not Array or c.auras.any(func(v: Variant) -> bool: return (v is not int and v is not float) or v < 0)): return _bad("Invalid creature control.")
 		if c.has("hit") and (c.hit is not bool): return _bad("Invalid creature combat mark.")
 		# Colourless Plane aspect and trap-made spell-jammer base stats (second game).
 		if c.has("plane") and (c.plane is not bool or profile.id != "el2"): return _bad("Invalid creature aspect.")
 		# Second-game battle scripts may rewrite a new creature's base vector.
 		if c.has("script_base") and (c.script_base is not bool or profile.id != "el2" or not c.has("base")): return _bad("Invalid creature base stats.")
 		if c.has("base") and ((c.card not in ["OSJ2", "OSJ3"] and not c.get("script_base", false)) or c.base is not Array or c.base.size() != 2 or c.base.any(func(v: Variant) -> bool: return v is not int)): return _bad("Invalid creature base stats.")
+		if c.has("enfeebled") and (c.enfeebled is not bool or profile.id != "el1"): return _bad("Invalid creature status.")
 		if c.has("decay") and (c.decay is not int or c.decay < 1): return _bad("Invalid creature decay.")
 		if c.has("granted") and (c.granted is not Array or c.granted.any(func(f: Variant) -> bool: return f is not String)): return _bad("Invalid creature flag.")
+		var pending_illusion := false
 		if c.has("temporary"):
 			if c.temporary is not Array or c.temporary.size() > 64: return _bad("Invalid temporary creature effect.")
 			for effect: Variant in c.temporary:
 				if effect is not Dictionary: return _bad("Invalid temporary creature effect.")
 				var illusion: bool = effect.get("kind") == "illusion" and c.card == "WLIL" and effect.get("toughness") is int
+				pending_illusion = pending_illusion or (illusion and profile.id == "el1" and c.get("ability_used", {}).get("illusion", false))
 				# Mother bee death: bees are aggressive until their source owner's turn ends.
 				var frenzy: bool = effect.get("kind") == "frenzy" and effect.get("flags") == ["Berserk"] and effect.get("until_turn_of") in [0, 1]
 				# Wall boosts: phantasmal +2 power, lava/wind +X power, hellfire +X health.
 				var boost: bool = (c.card in {"phantasm": ["PHWL"], "lava_power": ["WLLV", "WLWD"], "hellfire_health": ["WLIF"]}.get(effect.get("kind"), [])) and (effect.get("power", 0) is int and effect.get("toughness", 0) is int) and int(effect.get("power", 0)) + int(effect.get("toughness", 0)) >= 1
-				# Scroll of blessing: +4/+4 until the end of the user's turn.
-				var bless: bool = effect.get("kind") == "bless" and effect.get("power") == 4 and effect.get("toughness") == 4 and effect.get("until_turn_of") in [0, 1]
+				# Scroll of blessing: +4/+4 until a turn of the other side ends
+				# (older saves also stored the user's side, now unused).
+				var bless: bool = effect.get("kind") == "bless" and effect.get("power") == 4 and effect.get("toughness") == 4 and effect.get("until_turn_of", 0) in [0, 1]
 				if not illusion and not frenzy and not boost and not bless: return _bad("Invalid temporary creature effect.")
 				# Earlier saves lacked temporary-effect order. Give them stable IDs
 				# after the recorded enchantments; future saves retain exact order.
@@ -129,6 +134,9 @@ static func decode(profile: ELProfile, raw: Dictionary) -> Dictionary:
 					s.next_enchantment += 1
 				if effect.id is not int or effect.id < 1 or enchantment_ids.has(effect.id): return _bad("Invalid temporary effect sequence.")
 				enchantment_ids.append(effect.id)
+		# First-game Shadows of the dead can leave a lethal wall awaiting the
+		# next spell or resolved combat; retain that state across saves.
+		if c.damage >= c.toughness and not pending_illusion: return _bad("Invalid creature health.")
 		if not _enchantments(profile, c.get("enchantments"), enchantment_ids): return _bad("Invalid creature enchantment.")
 		counts[c.owner] += 1
 		if counts[c.owner] > 10: return _bad("Too many creatures.")
@@ -185,7 +193,7 @@ static func _enchantments(profile: ELProfile, value: Variant, ids: Array[int]) -
 		# Twister leaves a fixed fatal-disease mark on a creature it could not kill.
 		var mark: bool = (ELCatalog.FIRST_MARKS.has(e.card) or e.card == "TWST") and ELCatalog.shared(profile, e.card)
 		# Second game: devourer growth marks and the outer ripple's army bonus.
-		if profile.id == "el2" and e.card in ["OUD1", "OUD2", "ORPL"]: mark = true
+		if profile.id == "el2" and e.card in ["OUD1", "OUD2", "ORPL", "EWLD", "ESWS", "ETRS"]: mark = true
 		# Storm mastery's +3/+3 blessing.
 		if e.card in ["RLSS", "BWIT"]: mark = true
 		var rule := ELCatalog.rule(profile, e.card)
@@ -193,6 +201,7 @@ static func _enchantments(profile: ELProfile, value: Variant, ids: Array[int]) -
 		if e.has("fixed") and e.fixed is not bool: return false
 		if e.has("lethal") and (e.lethal is not bool or e.card not in ["LASN", "DWND", "ELKS"]): return false
 		if e.has("price") and (e.price is not int or e.price < 0): return false
+		if e.has("link") and (e.card != "WTLK" or e.link is not int or e.link < 2): return false
 		if e.has("exempt") and (e.card != "WRBN" or e.exempt is not Array or e.exempt.any(func(x: Variant) -> bool: return x is not int)): return false
 		for key in ["id", "owner", "born", "power", "toughness"]:
 			if e.get(key) is not int: return false
