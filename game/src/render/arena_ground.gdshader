@@ -5,6 +5,7 @@ uniform sampler2D base_texture : source_color, filter_linear_mipmap_anisotropic,
 uniform sampler2D detail_texture : filter_linear_mipmap_anisotropic, repeat_enable;
 uniform float detail_tile_size = 2.0;
 uniform float detail_neutral = 0.0;
+#include "res://src/render/arena_light.gdshaderinc"
 varying vec2 detail_uv;
 
 void vertex() {
@@ -25,4 +26,8 @@ void fragment() {
 	ALPHA_SCISSOR_THRESHOLD = 0.5;
 	ROUGHNESS = 1.0;
 	SPECULAR = 0.0;
+}
+
+void light() {
+	DIFFUSE_LIGHT += arena_sun(LIGHT_COLOR, ATTENUATION, NORMAL, LIGHT, ALBEDO);
 }

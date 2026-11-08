@@ -1557,6 +1557,9 @@ func _focus_object(id: int) -> void:
 func _zones_stop(actor: Dictionary) -> bool:
 	return state.map.profile.id == "el1" or state.map.profile.id == "el2" and int(actor.get("owner", -1)) == 1
 
+## First-game route marker colours, by the owner's map colour (Path00..03).
+const ROUTE_COLOURS := ["Black", "Red", "Blue", "Green"]
+
 func _draw_route(path: Array, actor_id := -1) -> void:
 	if route == null: return
 	# Second game: a move order shows no route. Its marker figures
@@ -1567,37 +1570,30 @@ func _draw_route(path: Array, actor_id := -1) -> void:
 	if state.map.profile.id == "el2":
 		route.mesh = null
 		return
+	route.mesh = null
+	for mark: Node in route.get_children(): mark.queue_free()
 	var actor := state.object(_hero_id() if actor_id < 0 else actor_id)
-	var zoned := _zones_stop(actor)
-	if zoned: path = director.interception.preview(state, actor, path)
-	if path.size() < 2:
-		route.mesh = null
-		return
-	var mesh := ImmediateMesh.new()
-	mesh.surface_begin(Mesh.PRIMITIVE_LINES)
+	if _zones_stop(actor): path = director.interception.preview(state, actor, path)
+	if path.size() < 2: return
+	# First game: the original marks the route with figures, not lines: a
+	# telapa1 square on each step and telapa2 (square and four arrows) at the
+	# end, in the owner's colour (TerrainObjects Path0N / Finish0N) while the
+	# day's movement points last, NoPath / NoFinish beyond.
+	var colour := ROUTE_COLOURS.find(str(state.players.get(int(actor.get("owner", state.current_player)), {}).get("color", "")))
 	var remaining := int(actor.get("ap", 0))
 	for index in range(1, path.size()):
 		remaining -= director.grid.passability(path[index])
-		var color := Color("788587") if state.map.profile.id == "el1" and director.strategy.is_empty() and remaining < 0 else Color("f4da87")
-		if zoned and not director.interception.enemies(state, actor, path[index]).is_empty(): color = Color("f07561")
-		mesh.surface_set_color(color)
-		mesh.surface_add_vertex(ELAdventureScene.world_position(path[index - 1].x, path[index - 1].y) + Vector3(0, 0.12, 0))
-		mesh.surface_set_color(color)
-		mesh.surface_add_vertex(ELAdventureScene.world_position(path[index].x, path[index].y) + Vector3(0, 0.12, 0))
-	if zoned and not director.interception.enemies(state, actor, path[-1]).is_empty():
-		var stop := ELAdventureScene.world_position(path[-1].x, path[-1].y) + Vector3(0, 0.12, 0)
-		var corners := [Vector3(-0.2, 0, 0), Vector3(0, 0, -0.2), Vector3(0.2, 0, 0), Vector3(0, 0, 0.2)]
-		mesh.surface_set_color(Color("f07561"))
-		for index in 4:
-			mesh.surface_add_vertex(stop + corners[index])
-			mesh.surface_add_vertex(stop + corners[(index + 1) % 4])
-	mesh.surface_end()
-	route.mesh = mesh
-	var material := StandardMaterial3D.new()
-	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	material.vertex_color_use_as_albedo = true
-	route.material_override = material
-	route.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		var within := not (director.strategy.is_empty() and remaining < 0) and colour >= 0
+		var last := index == path.size() - 1
+		var texture := ("Finish%02d" if last else "Path%02d") % colour if within else ("NoFinish" if last else "NoPath")
+		var mark := ELModel.new()
+		route.add_child(mark)
+		if not mark.build(state.map.profile, "telapa2" if last else "telapa1", "TerrainObjects/" + texture):
+			mark.queue_free()
+			continue
+		if mark.has_clip("uidle"): mark.play("uidle")
+		mark.position = ELAdventureScene.world_position(path[index].x, path[index].y) + Vector3(0, 0.02, 0)
+		for part: MeshInstance3D in mark.parts.values(): part.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 
 ## `scripted` is ExShowInventory: the script opens the main hero's inventory
 ## whatever the player is doing.

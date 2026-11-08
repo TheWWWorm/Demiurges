@@ -14,6 +14,15 @@ var _ground: ELModel
 var _ground_materials: Dictionary = {}
 var _detail_materials: Dictionary = {}
 var _camera_obstacles: Array[ELModel] = []
+## Scenery materials whose ambient plus sun light is limited to full brightness.
+var _lit_materials: Array[ShaderMaterial] = []
+var _ambient_seen := Color(-1, -1, -1)
+## Upper bound of ambient plus sun on scenery (1 = the originals' full brightness).
+var light_limit := 1.0
+const LIT_SHADER := preload("res://src/render/arena_lit.gdshader")
+const BACKDROP_SHADER := preload("res://src/render/arena_backdrop.gdshader")
+var _lit: Dictionary = {}
+var _unlit: Dictionary = {}
 
 static func title(id: String) -> String:
 	var names := {"Green": "Vital forest", "Red": "Chaot desert", "Black": "Synthet wasteland", "Blue": "Kinet mountains",
@@ -34,7 +43,10 @@ func build(profile: ELProfile, arena_id := "Green.001") -> bool:
 	var transforms: Array = definition.PosRot
 	var types: Array = definition.get("ObjectTypes", [])
 	for i in ids.size():
-		var model := _add_model(profile, "coob%d" % int(ids[i]), "CombatScenes/" + textures[i])
+		# Pieces painted on the backdrop's own sheet extend the backdrop (its
+		# mist and distant valleys, reaching beyond the ring): drawn unlit and
+		# behind everything else, like the backdrop itself.
+		var model := _add_model(profile, "coob%d" % int(ids[i]), "CombatScenes/" + textures[i], ELArchive.key(str(textures[i])) == ELArchive.key(str(definition.get("Background", ""))))
 		if model == null:
 			continue
 		var at := i * 7
@@ -70,7 +82,25 @@ func build(profile: ELProfile, arena_id := "Green.001") -> bool:
 	var toward := ELFigure.vector(Vector3(direction[0], direction[1], direction[2])).normalized()
 	if toward.y > 0.0: toward = -toward
 	light.look_at_from_position(-toward * 10.0, Vector3.ZERO, Vector3.UP if absf(toward.y) < 0.99 else Vector3.FORWARD)
+	_sync_light()
 	return errors.is_empty()
+
+## Keeps the scenery's light limit in step with the ambient light, which
+## combat effects dim and restore.
+func _sync_light() -> void:
+	if environment_settings == null: return
+	var ambient := environment_settings.ambient_light_color * environment_settings.ambient_light_energy
+	var encoded := light != null and light.visible and light.shadow_enabled
+	ambient.a = light_limit + (1000.0 if encoded else 0.0)
+	if ambient == _ambient_seen: return
+	_ambient_seen = ambient
+	# The colour is given in display encoding; shaders light in linear terms.
+	var linear := environment_settings.ambient_light_color.srgb_to_linear() * environment_settings.ambient_light_energy
+	var level := Vector3(linear.r, linear.g, linear.b)
+	for material: ShaderMaterial in _lit_materials:
+		material.set_shader_parameter("ambient_light", level)
+		material.set_shader_parameter("light_limit", light_limit)
+		material.set_shader_parameter("encoded_sun_pass", encoded)
 
 ## Optional close-up ground grain using the arena's authored detail texture
 ## and world-space tile size. Missing detail art keeps the original material.
@@ -89,12 +119,14 @@ func set_detail(enabled: bool) -> void:
 		average.resize(1, 1, Image.INTERPOLATE_LANCZOS)
 		var neutral := average.get_pixel(0, 0)
 		for part: MeshInstance3D in _ground.parts.values():
-			var base := part.material_override as StandardMaterial3D
-			if part.mesh == null or base == null: continue
+			var base := part.material_override
+			if part.mesh == null or base == null or not part.has_meta("albedo"): continue
 			_ground_materials[part] = base
 			var detail := ShaderMaterial.new()
 			detail.shader = load("res://src/render/arena_ground.gdshader")
-			detail.set_shader_parameter("base_texture", base.albedo_texture)
+			detail.set_shader_parameter("base_texture", part.get_meta("albedo"))
+			_lit_materials.append(detail)
+			_ambient_seen = Color(-1, -1, -1)
 			detail.set_shader_parameter("detail_texture", texture)
 			detail.set_shader_parameter("detail_neutral", (neutral.r + neutral.g + neutral.b) / 3.0)
 			detail.set_shader_parameter("detail_tile_size", maxf(0.01, float(definition.get("DetailTextureTileSize", 2.0))))
@@ -207,6 +239,7 @@ func _background_layer(arrays: Array, texture: Texture2D, order: int) -> Standar
 	return material
 
 func _process(delta: float) -> void:
+	_sync_light()
 	for i in moving_layers.size():
 		var material := moving_layers[i]
 		material.uv1_offset.x = fposmod(material.uv1_offset.x + delta * layer_speeds[i], 1.0)
@@ -224,7 +257,7 @@ func clear_camera_view(camera_position: Vector3, target: Vector3) -> void:
 				obscures = true
 		child.visible = not obscures
 
-func _add_model(profile: ELProfile, model_name: String, texture_name: String) -> ELModel:
+func _add_model(profile: ELProfile, model_name: String, texture_name: String, backdrop := false) -> ELModel:
 	var model := ELModel.new()
 	add_child(model)
 	if not model.build(profile, model_name, texture_name):
@@ -236,5 +269,23 @@ func _add_model(profile: ELProfile, model_name: String, texture_name: String) ->
 	# Keep dynamic shadows on combatants; scenery retains its original shading.
 	for part: MeshInstance3D in model.parts.values():
 		part.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		var standard := part.material_override as StandardMaterial3D
+		if standard == null: continue
+		if backdrop:
+			if not _unlit.has(standard):
+				var far := ShaderMaterial.new()
+				far.shader = BACKDROP_SHADER
+				far.set_shader_parameter("albedo_texture", standard.albedo_texture)
+				_unlit[standard] = far
+			part.material_override = _unlit[standard]
+			continue
+		if not _lit.has(standard):
+			var lit := ShaderMaterial.new()
+			lit.shader = LIT_SHADER
+			lit.set_shader_parameter("albedo_texture", standard.albedo_texture)
+			_lit[standard] = lit
+			_lit_materials.append(lit)
+		part.material_override = _lit[standard]
+		part.set_meta("albedo", standard.albedo_texture)
 	objects_loaded += 1
 	return model

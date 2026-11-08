@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.11
+
+- Etherlords II from Steam: creatures and heroes no longer stand in a T-pose. The Steam release stores its animations in a compact form, which is now read alongside the GOG one.
+- Battles: the end-of-phase (hourglass) button is available again as soon as a cast, summon or attack finishes, without first clicking the hero.
+- Battle scenery is no longer over-bright with shadows on. Snowy arenas show their snow texture instead of plain white, and lit surfaces stay within their original colours.
+- Etherlords II Vital city arena: the flat white patches at the edge of the battlefield are gone; the distant valley behind the arena stays behind the scenery.
+- Etherlords I map: planned routes are marked with the original step and destination markers in the player's colour instead of thin lines.
+
 ## 0.2.10
 
 - Corrected combat spell targets, creature abilities, enchantment removal, damage and turn effects in both games, preserving their edition-specific rules.

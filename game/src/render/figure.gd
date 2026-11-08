@@ -96,6 +96,9 @@ static func hierarchy(bytes: PackedByteArray) -> Array:
 	return out
 
 static func track(bytes: PackedByteArray) -> Dictionary:
+	if not _plain_track(bytes):
+		var unpacked := unpack_track(bytes)
+		if not unpacked.is_empty(): bytes = unpacked
 	var result := {"data": bytes, "frames": 1, "morph_frames": 0, "morph_vertices": 0}
 	var p := 0
 	# Etherlords adds scale keys between translation and vertex deformation.
@@ -119,6 +122,110 @@ static func track(bytes: PackedByteArray) -> Dictionary:
 			result.morph_offset = p + 8
 			result.frames = maxi(result.frames, frames)
 	return result
+
+## True when the track fills the plain layout exactly: 32-bit counts with
+## float rotation, position and scale keys, then an 8-byte vertex animation
+## header and its float offsets.
+static func _plain_track(bytes: PackedByteArray) -> bool:
+	var p := 0
+	for size: int in [16, 12, 12]:
+		if p + 4 > bytes.size(): return false
+		p += 4 + bytes.decode_u32(p) * size
+		if p > bytes.size(): return false
+	var rest := bytes.size() - p
+	if rest == 0: return true
+	return rest >= 8 and rest == 8 + bytes.decode_u32(p) * bytes.decode_u32(p + 4) * 12
+
+## Converts a packed track (the Etherlords II release sold on Steam) to the
+## plain layout, or returns an empty array when the bytes are not one. Packed
+## tracks use 16-bit counts, store positions and vertex offsets as
+## thousandths in 16-bit integers, omit all-zero positions and all-one scales,
+## and keep only the key frames of each vertex coordinate, with straight
+## lines between them.
+static func unpack_track(bytes: PackedByteArray) -> PackedByteArray:
+	var out := PackedByteArray()
+	var size := bytes.size()
+	var p := 0
+	if p + 2 > size: return PackedByteArray()
+	var count := bytes.decode_u16(p)
+	p += 2
+	if p + count * 16 > size: return PackedByteArray()
+	_put_u32(out, count)
+	out.append_array(bytes.slice(p, p + count * 16))
+	p += count * 16
+	if p + 2 > size: return PackedByteArray()
+	count = bytes.decode_u16(p)
+	p += 2
+	if p + count * 6 > size: return PackedByteArray()
+	_put_u32(out, count)
+	for i in count * 3:
+		_put_float(out, bytes.decode_s16(p + i * 2) / 1000.0)
+	p += count * 6
+	if p + 2 > size: return PackedByteArray()
+	count = bytes.decode_u16(p)
+	p += 2
+	if p + count * 12 > size: return PackedByteArray()
+	_put_u32(out, count)
+	out.append_array(bytes.slice(p, p + count * 12))
+	p += count * 12
+	if p == size:
+		out.append_array(PackedByteArray([0, 0, 0, 0, 0, 0, 0, 0]))
+		return out
+	if p + 4 > size: return PackedByteArray()
+	var frames := bytes.decode_u16(p)
+	var vertices := bytes.decode_u16(p + 2)
+	p += 4
+	_put_u32(out, frames)
+	_put_u32(out, vertices)
+	if frames == 0 or vertices == 0:
+		return out if p == size else PackedByteArray()
+	# Offsets in the plain layout run frame by frame; packed ones vertex by vertex.
+	var values := PackedFloat32Array()
+	values.resize(frames * vertices * 3)
+	var mask_bytes := frames / 8 + 1
+	var keys := PackedInt32Array()
+	for vertex in vertices:
+		if p + 1 > size: return PackedByteArray()
+		var keyed := bytes[p]
+		p += 1
+		if keyed == 0:
+			if p + frames * 6 > size: return PackedByteArray()
+			for frame in frames:
+				for axis in 3:
+					values[(frame * vertices + vertex) * 3 + axis] = bytes.decode_s16(p + (frame * 3 + axis) * 2) / 1000.0
+			p += frames * 6
+			continue
+		for axis in 3:
+			if p + mask_bytes + 2 > size: return PackedByteArray()
+			keys.clear()
+			for frame in frames:
+				if bytes[p + frame / 8] & (1 << (frame % 8)): keys.append(frame)
+			p += mask_bytes
+			count = bytes.decode_u16(p)
+			p += 2
+			if count != keys.size() or count == 0 or p + count * 2 > size: return PackedByteArray()
+			var key := 0
+			for frame in frames:
+				while key + 1 < count and keys[key + 1] <= frame: key += 1
+				var value := bytes.decode_s16(p + key * 2) / 1000.0
+				if frame > keys[key] and key + 1 < count:
+					var next := bytes.decode_s16(p + (key + 1) * 2) / 1000.0
+					value += (next - value) * float(frame - keys[key]) / float(keys[key + 1] - keys[key])
+				values[(frame * vertices + vertex) * 3 + axis] = value
+			p += count * 2
+	if p != size: return PackedByteArray()
+	out.append_array(values.to_byte_array())
+	return out
+
+static func _put_u32(out: PackedByteArray, value: int) -> void:
+	var at := out.size()
+	out.resize(at + 4)
+	out.encode_u32(at, value)
+
+static func _put_float(out: PackedByteArray, value: float) -> void:
+	var at := out.size()
+	out.resize(at + 4)
+	out.encode_float(at, value)
 
 static func material(texture: Texture2D, unlit := false) -> StandardMaterial3D:
 	var m := StandardMaterial3D.new()

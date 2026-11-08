@@ -527,7 +527,11 @@ func _process(delta: float) -> void:
 	if duel != null and phase_label != null and _melee_busy() != _melee_shown:
 		_melee_shown = _melee_busy()
 		phase_label.text = phase_caption()
-		_refresh_buttons()
+	# The end-of-phase and attack controls follow every condition of the
+	# player's turn (a fight, a summon or effect finishing, a closed window),
+	# not only the moments a full refresh runs: the original's controls are
+	# open whenever the player may act.
+	_refresh_buttons()
 	if _campaign_battle() != null and not campaign_view.director.watch_encounter().is_empty():
 		# A chapter outcome reached during the duel ends the battle at once.
 		_return_from_encounter()
