@@ -130,3 +130,53 @@ static func remove_tree(path: String) -> void:
 	for name in DirAccess.get_directories_at(path):
 		remove_tree(path.path_join(name))
 	DirAccess.remove_absolute(path)
+
+
+## Steam's install folder names of each edition.
+const STEAM_FOLDERS := {"el1": "Etherlords", "el2": "Etherlords II"}
+
+## Editions installed through Steam on this computer: {edition: folder}.
+## Looks in every Steam library (steamapps/libraryfolders.vdf) of the usual
+## Steam locations, and on Windows also where the registry says Steam is.
+## Desktop only; each folder must hold the edition's files.
+static func steam_folders() -> Dictionary:
+	var result := {}
+	if uses_import() or OS.has_feature("web"): return result
+	var libraries: Array[String] = []
+	for steam: String in _steam_roots():
+		if not DirAccess.dir_exists_absolute(steam.path_join("steamapps")): continue
+		if not libraries.has(steam): libraries.append(steam)
+		var vdf := steam.path_join("steamapps/libraryfolders.vdf")
+		if not FileAccess.file_exists(vdf): continue
+		for line in FileAccess.get_file_as_string(vdf).split("\n"):
+			var parts := line.strip_edges().split("\"", false)
+			# A library line reads: "path"  "D:\\SteamLibrary"
+			if parts.size() >= 3 and parts[0] == "path":
+				var library := parts[parts.size() - 1].replace("\\\\", "/").replace("\\", "/").simplify_path()
+				if not libraries.has(library): libraries.append(library)
+	for library in libraries:
+		for edition: String in STEAM_FOLDERS:
+			if result.has(edition): continue
+			var folder := library.path_join("steamapps/common").path_join(STEAM_FOLDERS[edition])
+			if detect(folder) == edition: result[edition] = folder
+	return result
+
+
+static func _steam_roots() -> Array[String]:
+	var roots: Array[String] = []
+	var home := OS.get_environment("HOME")
+	if OS.has_feature("windows"):
+		var output: Array = []
+		if OS.execute("reg", ["query", "HKCU\\Software\\Valve\\Steam", "/v", "SteamPath"], output) == 0 and not output.is_empty():
+			for line in str(output[0]).split("\n"):
+				var at := line.find("REG_SZ")
+				if at >= 0: roots.append(line.substr(at + 6).strip_edges().replace("\\", "/"))
+		for variable in ["ProgramFiles(x86)", "ProgramFiles"]:
+			var base := OS.get_environment(variable)
+			if not base.is_empty(): roots.append(base.replace("\\", "/").path_join("Steam"))
+	elif OS.has_feature("macos"):
+		roots.append(home.path_join("Library/Application Support/Steam"))
+	else:
+		for relative in [".steam/steam", ".local/share/Steam", ".var/app/com.valvesoftware.Steam/.local/share/Steam", "snap/steam/common/.local/share/Steam"]:
+			roots.append(home.path_join(relative))
+	return roots

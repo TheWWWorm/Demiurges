@@ -27,7 +27,7 @@ static func flood(grid: ELAdventureGrid, origin: Vector2i, radius: int, allowed:
 			var point := current + direction
 			if visited.has(point) or origin.distance_squared_to(point) >= radius * radius - 1 or not grid.contains(point): continue
 			# A fort zone admits its own blocked footprint cells.
-			if grid.passability(point) < 0 and not allowed.has(point): continue
+			if grid.passability(point, false, grid.map.profile.id == "el1") < 0 and not allowed.has(point): continue
 			visited[point] = true
 			result.append(point)
 	return result

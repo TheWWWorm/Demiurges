@@ -20,6 +20,16 @@ var profile: ELProfile
 var edition := ""
 ## The combat camera supplies the original's approximate ground-plane listener.
 var listener: Camera3D
+## Set while a menu covers the battle: Godot's play() would unpause a voice,
+## so no new sound starts until the battle is shown again.
+var paused := false:
+	set(value):
+		paused = value
+		# A track that ended while paused starts once the battle is back.
+		if not paused and _music_due:
+			_music_due = false
+			_next_track()
+var _music_due := false
 ## Where the next play() call's sound is placed, from the gain helper that
 ## computed its distance (null: not placed, centred).
 var _pan_source: Variant = null
@@ -1549,6 +1559,9 @@ static func _find(bytes: PackedByteArray, pattern: PackedByteArray) -> int:
 	return -1
 
 func _next_track() -> void:
+	if paused:
+		_music_due = true
+		return
 	for attempt in tracks.size():
 		var path := profile.file("Resources/Music/" + tracks[track_index] + ".mp3")
 		track_index = (track_index + 1) % tracks.size()
@@ -1597,6 +1610,7 @@ func play(path: String, spatial_gain := 1.0, loop := false) -> bool:
 	_last_voice = null
 	requested.append(path)
 	if requested.size() > 80: requested.pop_front()
+	if paused: return false
 	var stream := ELAudio.sound(profile, path)
 	if stream == null: return false
 	if loop:

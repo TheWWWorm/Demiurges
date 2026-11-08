@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.12
+
+- Steam copies are found automatically on Windows, Linux and macOS: on a first start the game uses any it finds, and the game files screen offers **Use the Steam copy** for a game not set up yet.
+- Etherlords II from Steam in Russian (and the matching 1.03 repack): menus, cards and the encyclopedia show their text again instead of internal names such as `CtrlMM_SingleBtn` ([#6](https://github.com/TheWWWorm/Demiurges/issues/6)). That release stores its text table scrambled, which is now read.
+- Etherlords II from Steam: starting a campaign no longer returns to the main menu ([#7](https://github.com/TheWWWorm/Demiurges/issues/7)). Its map scripts use a random-seed function the remake did not provide.
+- Etherlords II map: heroes and monsters occupy their cells, as in the original, so heroes walk around each other instead of through.
+- Battle sounds, including death and victory sounds, no longer play over the main menu or other menus.
+- Duel screen: hovering a spell in the spell lists shows its type, strength and health, cost and description.
+
 ## 0.2.11
 
 - Etherlords II from Steam: creatures and heroes no longer stand in a T-pose. The Steam release stores its animations in a compact form, which is now read alongside the GOG one.

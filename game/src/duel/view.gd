@@ -338,6 +338,15 @@ func _load_profiles() -> void:
 			profiles[edition] = data
 		else:
 			push_warning(data.error)
+	# First start with nothing set up: Steam copies found on this computer are
+	# linked as if the player had chosen their folders.
+	if profiles.is_empty():
+		var found := ELContentLibrary.steam_folders()
+		for edition: String in found:
+			var data := ELProfile.new()
+			if data.mount(edition, found[edition]):
+				profiles[edition] = data
+				ELContentLibrary.link_folder(edition, found[edition])
 
 func _start(edition: String, options: Dictionary = {}, restored: ELDuel = null, battle_seed := 212) -> void:
 	if _campaign_battle() != null and restored != _campaign_battle():
@@ -4340,6 +4349,7 @@ func _begin_campaign(edition: String, scenario: Dictionary, difficulty: int, res
 	stage.process_mode = Node.PROCESS_MODE_DISABLED
 	for player: Node in battle_audio.get_children():
 		if player is AudioStreamPlayer or player is AudioStreamPlayer3D: player.stream_paused = true
+	battle_audio.paused = true
 	ui.hide()
 	campaign_view.leave_requested.connect(_leave_campaign)
 	campaign_view.resume_requested.connect(func(): _resume_campaign(false, ELSaveSlots.quick_load_path(campaign_view.state), edition))
@@ -4410,6 +4420,7 @@ func _return_from_encounter() -> void:
 	stage.process_mode = Node.PROCESS_MODE_DISABLED
 	for player: Node in battle_audio.get_children():
 		if player is AudioStreamPlayer or player is AudioStreamPlayer3D: player.stream_paused = true
+	battle_audio.paused = true
 	ui.hide()
 	mode_select.disabled = false
 	profile_select.disabled = false
@@ -4501,6 +4512,7 @@ func _leave_campaign() -> void:
 	camera.current = true
 	for player: Node in battle_audio.get_children():
 		if player is AudioStreamPlayer or player is AudioStreamPlayer3D: player.stream_paused = false
+	battle_audio.paused = false
 	ui.show()
 	set_process(true)
 	set_process_unhandled_input(true)
@@ -5095,6 +5107,7 @@ func _show_front_menu() -> bool:
 func _pause_battle_audio(paused: bool) -> void:
 	if campaign_view != null or not is_instance_valid(battle_audio): return
 	battle_audio.process_mode = Node.PROCESS_MODE_DISABLED if paused else Node.PROCESS_MODE_INHERIT
+	battle_audio.paused = paused
 	for player: Node in battle_audio.get_children():
 		if player is AudioStreamPlayer or player is AudioStreamPlayer3D: player.stream_paused = paused
 

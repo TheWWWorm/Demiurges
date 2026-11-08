@@ -70,10 +70,9 @@ func rebuild(objects: Dictionary) -> void:
 
 func occupies(actor: Dictionary) -> bool:
 	# A garrison leaves map occupancy; the fort keeps its own footprint.
-	return map.profile.id == "el1" and actor.get("type") in ["hero", "monster"] and actor.get("alive", false) and actor.get("visible", false) and actor.get("placed", true) and not actor.get("fortified", false) and contains(Vector2i(actor.x, actor.y))
+	return actor.get("type") in ["hero", "monster"] and actor.get("alive", false) and actor.get("visible", false) and actor.get("placed", true) and not actor.get("fortified", false) and contains(Vector2i(actor.x, actor.y))
 
 func update_actor(actor: Dictionary) -> void:
-	if map.profile.id != "el1": return
 	var before: Vector2i = occupied.get(int(actor.uid), Vector2i(-1, -1))
 	var after := Vector2i(actor.x, actor.y) if occupies(actor) else Vector2i(-1, -1)
 	if before == after: return
@@ -98,12 +97,15 @@ func _update_cell(pos: Vector2i) -> void:
 func contains(pos: Vector2i) -> bool:
 	return pos.x >= 0 and pos.y >= 0 and pos.x < map.width and pos.y < map.height
 
-func passability(pos: Vector2i, ship := false) -> int:
+## `actors` false ignores heroes and monsters (the second game's guard-zone
+## fill counts terrain and objects only).
+func passability(pos: Vector2i, ship := false, actors := true) -> int:
 	if not contains(pos): return -1
 	var index := pos.y * map.width + pos.x
 	var corners: Array[int] = [map.tile(pos.x, pos.y), map.tile(pos.x + 1, pos.y), map.tile(pos.x + 1, pos.y + 1), map.tile(pos.x, pos.y + 1)]
 	if map.profile.id == "el1": return strategic_cost(map.profile.terrain_tiles, corners, int(map.roads[index]), blockers[index] != 0 or actor_blockers[index] != 0)
-	return terrain_passability(map.profile.terrain_tiles, corners, int(map.roads[index]), bridges[index] != 0, blockers[index] != 0, ship)
+	# Both games count heroes and monsters on a cell as blocking it.
+	return terrain_passability(map.profile.terrain_tiles, corners, int(map.roads[index]), bridges[index] != 0, blockers[index] != 0 or (actors and actor_blockers[index] != 0), ship)
 
 static func strategic_cost(tiles: ELTileSet, corners: Array[int], road: int, blocked: bool) -> int:
 	if blocked: return -1

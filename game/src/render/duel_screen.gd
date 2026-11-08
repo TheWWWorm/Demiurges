@@ -933,6 +933,24 @@ func artifact_charges(code: String) -> int:
 	var name := ELDuelPresets.artifact_name(profile(), code)
 	return int(profile().table("Artefacts").get(name, {}).get("MaxCharges", 0))
 
+## A spell's card as the battle hand shows it: "<type>: <name> <strength>/<health>",
+## its ether cost, then the description (remake addition on this screen).
+func spell_tooltip(card: String) -> String:
+	var row: Dictionary = profile().table("CombatSpells").get(card, {})
+	var spell_class := str(row.get("Class", ""))
+	var kind: String = {"Creature": "T_SPELL_TYPE", "Sorcery": "T_SPELL_TYPE2", "Enchantment": "T_SPELL_TYPE3"}.get(spell_class, "")
+	var title := spell_name(card)
+	var creature: Dictionary = profile().table("CombatCreatures").get(card, {})
+	if spell_class == "Creature" and creature.has("Power"): title += " %d/%d" % [int(creature.Power), int(creature.get("Toughness", 0))]
+	var type_text := profile().text(kind) if not kind.is_empty() else ""
+	var lines: Array[String] = ["%s: %s" % [type_text if type_text != kind else spell_class, title] if not kind.is_empty() else title]
+	var cost_text := profile().text("T_COST")
+	var mana_text := profile().text("T_MANA")
+	lines.append("%s %d %s" % [cost_text if cost_text != "T_COST" else "Cost:", int(row.get("Cost", 0)), mana_text if mana_text != "T_MANA" else "ether"])
+	var description := profile().card_description(card)
+	if not description.is_empty() and description != card: lines.append(description)
+	return "\n".join(lines)
+
 func spell_name(code: String) -> String:
 	return profile().text(String(profile().table("CombatSpells").get(code, {}).get("Name", code + "Nm")))
 
@@ -1348,7 +1366,7 @@ func refresh_editor_lists() -> void:
 			0:
 				for card: String in spell_choices():
 					var copies := Array(p.cards).count(card)
-					right_items.append({"action": "add_spell", "value": card, "label": "%s%s" % [spell_name(card), "  ×%d" % copies if copies > 0 else ""], "icon": profile().card_icon(card)})
+					right_items.append({"action": "add_spell", "value": card, "label": "%s%s" % [spell_name(card), "  ×%d" % copies if copies > 0 else ""], "icon": profile().card_icon(card), "tooltip": spell_tooltip(card)})
 			1:
 				for code: String in ELDuelCosts.duel_skills(profile()):
 					var rank := int(p.skills.get(code, -1))
@@ -1597,7 +1615,7 @@ func _refresh_el2_lists() -> void:
 			var row: Dictionary = profile().table("CombatSpells")[card]
 			var price := []
 			for r: String in ELDuelCosts.EL2_RESOURCES: price.append(int(row.get("Cost" + r, 0)))
-			right_items.append({"action": "add_spell", "value": card, "label": "%s\n%d / %d / %d%s" % [spell_name(card), price[0], price[1], price[2], "  ×%d" % copies if copies > 0 else ""], "icon": profile().card_icon(card)})
+			right_items.append({"action": "add_spell", "value": card, "label": "%s\n%d / %d / %d%s" % [spell_name(card), price[0], price[1], price[2], "  ×%d" % copies if copies > 0 else ""], "icon": profile().card_icon(card), "tooltip": "%s\n%d / %d / %d" % [spell_tooltip(card), price[0], price[1], price[2]]})
 	else:
 		for code: String in ELDuelCosts.duel_skills(profile()):
 			var rank := int(p.skills.get(code, -1))
@@ -1612,7 +1630,7 @@ func _refresh_el2_lists() -> void:
 	for entry: Dictionary in right_items:
 		# Icon grid: the name and price are the tooltip.
 		var index := right_list.add_item("", entry.get("icon"))
-		right_list.set_item_tooltip(index, entry.label)
+		right_list.set_item_tooltip(index, entry.get("tooltip", entry.label))
 		if entry.get("owned", false) and int(p.skills.get(entry.value, -1)) >= ELHeroSkills.MAX_RANK: right_list.set_item_icon_modulate(index, Color(0.5, 0.5, 0.5))
 	if int(edit.item) >= 0 and int(edit.item) < right_items.size(): right_list.select(int(edit.item))
 	right_list.get_v_scroll_bar().value = keep

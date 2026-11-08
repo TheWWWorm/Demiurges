@@ -343,7 +343,7 @@ func collect_resources(hero_id: int, resource_id: int) -> bool:
 	return true
 
 func _bindings() -> Array[String]:
-	return ["date", "ExSetVariable", "ExGetVariable", "ExClearVariables", "ExGetMainHeroID", "ExGetCurrentPlayer", "ExGetDay", "ExSetDay", "ExGetPos", "ExGetTilePoint", "ExGetObjectPoint", "ExGetMapSize", "ExGetObjectType", "ExIsAlive", "ExIsHostile", "ExGetMobCount", "ExGetMobByIndex", "ExGetResources", "ExAddResources",
+	return ["date", "ExGetRandomSeed", "ExSetVariable", "ExGetVariable", "ExClearVariables", "ExGetMainHeroID", "ExGetCurrentPlayer", "ExGetDay", "ExSetDay", "ExGetPos", "ExGetTilePoint", "ExGetObjectPoint", "ExGetMapSize", "ExGetObjectType", "ExIsAlive", "ExIsHostile", "ExGetMobCount", "ExGetMobByIndex", "ExGetResources", "ExAddResources",
 		"ExCreateHero", "ExCreateHeroForPlayer", "ExKillHero", "ExHideHero", "ExCreateCorpse", "ExGetCorpseHero", "ExSetHeroShape", "ExSetHeroName", "ExSetHostility", "ExWinLoseMission",
 		"ExIsShip", "ExHideExploration", "ExSetHeroColorlessnessTolerance", "ExGetClrlessLevel", "ExSetClrlessLevel", "ExIsSpecializationAvailable", "ExHaveSpecialization", "ExGiveNewSpecialization",
 		"ExClearHand", "ExAddSpellToHand", "ExAllowCardColor", "ExIsCardColorAllowed", "ExTakeObject", "ExPlaceObject", "ExGetUsability",
@@ -443,6 +443,9 @@ func _native(args: Array, name: String) -> Array:
 	var item := object(first)
 	match name:
 		"date": return [str(seed_value)]
+		# The Steam release's library seeds its random numbers from the engine
+		# instead of formatting the date.
+		"ExGetRandomSeed": return [float(seed_value)]
 		"ExSetVariable":
 			if args.size() >= 2: set_variable(first, args[1], args.size() >= 3 and _truthy_flag(args[2]))
 		"ExGetVariable": return [variables.values.get(first)]

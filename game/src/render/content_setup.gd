@@ -19,6 +19,9 @@ var _choice: ELGameChoice
 var _buttons: Array[Button] = []
 var _play: Button
 var _folder: Button
+var _steam: Button
+## Steam installs found on this computer ({edition: folder}).
+var _steam_found: Dictionary = {}
 var _forget: Button
 var _unlink: Button
 var _cancel: Button
@@ -56,7 +59,7 @@ func _ready() -> void:
 	elif ELContentLibrary.uses_import():
 		info.text += "Choose the GOG installer (setup_etherlords*.exe) or a data pack (.elpack). The installer is unpacked without being run; a data pack is much faster."
 	else:
-		info.text += "Choose the installed game folder (the one containing Resources and Campaigns), or the GOG installer (setup_etherlords*.exe) or a data pack (.elpack). The installer is unpacked once without being run."
+		info.text += "Choose the installed game folder (the one containing Resources and Campaigns), or the GOG installer (setup_etherlords*.exe) or a data pack (.elpack). The installer is unpacked once without being run. Copies installed through Steam are found automatically."
 	box.add_child(info)
 	_choice = ELGameChoice.new()
 	_choice.selected.connect(_select)
@@ -89,6 +92,8 @@ func _ready() -> void:
 			_folder_dialog.use_native_dialog = true
 			_folder_dialog.dir_selected.connect(_link)
 			add_child(_folder_dialog)
+			_steam_found = ELContentLibrary.steam_folders()
+			_steam = _add(box, "", func(): _link(str(_steam_found.get(selected, ""))))
 			_folder = _add(box, "", func(): _folder_dialog.popup_centered_ratio(0.7))
 		_dialog = FileDialog.new()
 		_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
@@ -151,6 +156,10 @@ func _refresh() -> void:
 	_play.text = "Play " + title
 	_play.visible = mounted.has(selected)
 	if _folder != null: _folder.text = "Choose the " + title + " game folder…"
+	if _steam != null:
+		_steam.text = "Use the Steam copy of " + title
+		_steam.tooltip_text = str(_steam_found.get(selected, ""))
+		_steam.visible = _steam_found.has(selected) and str(mounted.get(selected, "")) != str(_steam_found[selected])
 	_forget.text = "Remove imported " + title
 	_forget.visible = imported.has(selected)
 	_unlink.text = "Stop using this " + title + " folder"
