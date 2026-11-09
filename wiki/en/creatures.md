@@ -1,7 +1,7 @@
 ---
-title: Creatures
-category: content
-order: 30
+title: About creatures
+category: all-creatures
+order: -2
 summary: Power, toughness, resting and abilities
 ---
 Creatures are summoned with creature [spells](spells) and fight for their hero.
@@ -22,4 +22,4 @@ Most creatures have abilities, shown as icons. See [Creature abilities](abilitie
 
 A hero can control at most 10 creatures. Destroyed creatures go to their owner's graveyard; some spells bring them back.
 
-All creatures: [Etherlords](el1-creatures) · [Etherlords II](el2-creatures).
+All creatures of both games: [the list of creatures](all-creatures).

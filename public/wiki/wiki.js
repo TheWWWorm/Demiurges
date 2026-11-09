@@ -92,6 +92,14 @@ function results() {
       const link = document.createElement('a');
       link.href = href(entry.key, lang);
       link.textContent = entry.title;
+      // An entry that only one game has names it (I or II).
+      if (entry.games?.length === 1) {
+        const only = document.createElement('span');
+        only.className = 'edition';
+        only.textContent = entry.games[0] === 'el1' ? 'I' : 'II';
+        only.title = entry.games[0] === 'el1' ? 'Etherlords' : 'Etherlords II';
+        link.append(' ', only);
+      }
       if (entry.summary && words.length) {
         const detail = document.createElement('small');
         detail.textContent = entry.summary;
@@ -151,10 +159,21 @@ async function load({focus = false} = {}) {
     index = await catalogue(lang);
     $('#version').textContent = text('version', {v: index.version});
     let key = page;
+    // Addresses of the first encyclopedia, which had a page per game.
+    if (!index.entries.some(entry => entry.key === key)) {
+      const old = /^el[12]-(.+)$/.exec(key)?.[1];
+      const moved = !old ? '' : ['creatures', 'spells', 'artifacts', 'skills', 'specializations'].includes(old) ? 'all-' + old
+        : /^(skill|spec)-/.test(old) ? old : 'card-' + old;
+      if (moved && index.entries.some(entry => entry.key === moved)) {
+        history.replaceState(null, '', href(moved, lang));
+        key = moved;
+      }
+    }
+    const found = key;
     if (!index.entries.some(entry => entry.key === key)) key = 'home';
     render(await article(lang, key), lang);
-    $('#notice').hidden = key === page;
-    $('#notice').textContent = key === page ? '' : text('missing');
+    $('#notice').hidden = key === found;
+    $('#notice').textContent = key === found ? '' : text('missing');
     results();
     if (location.hash) document.getElementById(location.hash.slice(1))?.scrollIntoView();
     if (focus) $('#article').focus({preventScroll: true});

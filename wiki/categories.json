@@ -1,8 +1,12 @@
 [
-  {"id": "start", "en": "Getting started", "ru": "С чего начать"},
-  {"id": "play", "en": "Playing", "ru": "Игра"},
-  {"id": "combat", "en": "Combat", "ru": "Бой"},
-  {"id": "content", "en": "Spells, creatures and heroes", "ru": "Заклинания, существа и герои"},
+  {"id": "wiki", "en": "Demiurges wiki", "ru": "Вики Demiurges"},
+  {"id": "all-creatures", "en": "Creatures", "ru": "Создания", "catalog": true},
+  {"id": "all-spells", "en": "Sorceries and enchantments", "ru": "Колдовство и чары", "catalog": true},
+  {"id": "all-artifacts", "en": "Artifacts", "ru": "Артефакты", "catalog": true},
+  {"id": "all-skills", "en": "Hero skills", "ru": "Навыки героев", "catalog": true},
+  {"id": "all-specializations", "en": "Specializations", "ru": "Специализации", "catalog": true},
+  {"id": "rules", "en": "Game mechanics", "ru": "Правила игры"},
   {"id": "modes", "en": "Campaigns and modes", "ru": "Кампании и режимы"},
+  {"id": "start", "en": "Installing and playing", "ru": "Установка и запуск"},
   {"id": "remake", "en": "About the remake", "ru": "О ремейке"}
 ]

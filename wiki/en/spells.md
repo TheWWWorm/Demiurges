@@ -1,7 +1,7 @@
 ---
-title: Spells
-category: content
-order: 20
+title: About spells
+category: all-spells
+order: -2
 summary: Creatures, enchantments and sorceries
 ---
 Everything a hero does in battle is a spell. There are three kinds:
@@ -26,4 +26,4 @@ Some spells are artifacts: battle items with a limited number of uses. See [Rune
 
 The games' own spellbook and Encyclopedia (Etherlords II) screens describe every spell.
 
-All sorceries and enchantments: [Etherlords](el1-spells) · [Etherlords II](el2-spells).
+All sorceries and enchantments of both games: [the list of spells](all-spells).

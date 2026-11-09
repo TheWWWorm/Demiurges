@@ -1,6 +1,6 @@
 ---
 title: Автоматический бой и камера
-category: combat
+category: rules
 order: 50
 summary: Бой за вас и камера боя
 ---

@@ -1,7 +1,7 @@
 ---
 title: Runes and artifacts
-category: content
-order: 40
+category: all-artifacts
+order: -2
 summary: How often spells can be used, and battle items
 ---
 ## Runes (Etherlords)
@@ -21,4 +21,4 @@ Both games have **artifacts**: battle items with charges. An artifact can be use
 
 See [Heroes and levels](heroes) for the skills mentioned here.
 
-All artifacts: [Etherlords](el1-artifacts) · [Etherlords II](el2-artifacts).
+All artifacts of both games: [the list of artifacts](all-artifacts).

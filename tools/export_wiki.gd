@@ -1,17 +1,19 @@
 extends SceneTree
-## Exports the encyclopedia pages of one installed game for the hosted wiki
-## (tools/build_wiki.py packages them). The pages are built by the engine's own
-## ELWikiCatalog, exactly as the in-game wiki builds them.
+## Exports the encyclopedia of the installed games for the hosted wiki
+## (tools/build_wiki.py packages it). The pages are built by the engine's own
+## ELWikiCatalog from both games at once, exactly as the in-game wiki builds
+## them: one page per card, both editions merged.
 ##
-##   godot --path game --script /abs/tools/export_wiki.gd -- \
-##     --wiki-game=el1 --wiki-path="/path/to/Etherlords" --wiki-language=ru \
-##     --wiki-output=/path/to/repo/wiki/catalog [--wiki-images=/path/to/repo/wiki/catalog/images]
+##   godot --path game --script /abs/tools/export_wiki.gd -- --wiki-language=ru ##     --wiki-el1="/path/to/Etherlords" --wiki-el2="/path/to/Etherlords II" ##     --wiki-output=/path/to/repo/wiki/catalog [--wiki-images=/path/to/repo/wiki/catalog/images]
 ##
-## --wiki-texts=<text.res> and --wiki-regs=<regs.res> replace the installed
-## game's text and table archives, for example with those of another language
-## edition, without changing the installation. --wiki-pages-from=<export.json>
-## builds only the pages of another export, so language editions match. --wiki-images renders every
-## creature (needs rendering, so omit --headless) and saves every card icon.
+## Without --wiki-el1/--wiki-el2 the Steam copies are used.
+## --wiki-el1-texts=<text.res> and --wiki-el1-regs=<regs.res> (and the same for
+## el2) replace a game's text and table archives, for example with those of
+## another language edition, without changing the installation.
+## --wiki-pages-from=<export.json> builds only the pages of another export, so
+## language editions match. --wiki-images renders the creatures (needs
+## rendering, so omit --headless) and saves the card icons of each game into
+## <images>/<game>/; pictures already there are kept unless --wiki-images-all.
 
 func _initialize() -> void:
 	_run.call_deferred()
@@ -21,37 +23,54 @@ func _arg(name: String, fallback := "") -> String:
 		if arg.begins_with("--%s=" % name): return arg.get_slice("=", 1).strip_edges().trim_prefix("\"").trim_suffix("\"")
 	return fallback
 
+func _flag(name: String) -> bool:
+	return ("--" + name) in OS.get_cmdline_user_args()
+
 func _fail(message: String) -> void:
 	printerr("export_wiki: ", message)
 	quit(1)
 
-func _run() -> void:
-	var game := _arg("wiki-game")
-	var language := _arg("wiki-language", "en")
-	var output := _arg("wiki-output")
-	if not game in ["el1", "el2"] or output.is_empty() or _arg("wiki-path").is_empty():
-		_fail("needs --wiki-game=el1|el2, --wiki-path and --wiki-output")
-		return
+## The game `edition` from its folder, with replaced archives; null on failure.
+func _mount(edition: String, folder: String) -> ELProfile:
 	var profile := ELProfile.new()
-	if not profile.mount(game, _arg("wiki-path")):
-		_fail(profile.error)
-		return
-	var texts := _arg("wiki-texts")
+	if not profile.mount(edition, folder):
+		_fail("%s: %s" % [edition, profile.error])
+		return null
+	var texts := _arg("wiki-%s-texts" % edition)
 	if not texts.is_empty():
 		var archive := ELArchive.open(texts)
 		if not archive.error.is_empty():
 			_fail(texts + ": " + archive.error)
-			return
+			return null
 		profile.texts.clear()
 		for entry: String in archive.entries: profile.texts.merge(ELText.parse(archive.read(entry)), true)
-	var regs := _arg("wiki-regs")
+	var regs := _arg("wiki-%s-regs" % edition)
 	if not regs.is_empty():
 		var tables := ELArchive.open(regs)
 		if not tables.error.is_empty():
 			_fail(regs + ": " + tables.error)
-			return
+			return null
 		profile.archives["regs"] = tables
 		profile.tables.clear()
+	return profile
+
+func _run() -> void:
+	var language := _arg("wiki-language", "en")
+	var output := _arg("wiki-output")
+	if output.is_empty():
+		_fail("needs --wiki-output (and --wiki-el1/--wiki-el2 without Steam copies)")
+		return
+	var folders := ELContentLibrary.steam_folders()
+	var profiles := {}
+	for edition: String in ELWikiCatalog.EDITIONS:
+		var folder := _arg("wiki-" + edition, str(folders.get(edition, "")))
+		if folder.is_empty(): continue
+		var profile := _mount(edition, folder)
+		if profile == null: return
+		profiles[edition] = profile
+	if profiles.is_empty():
+		_fail("no game found; pass --wiki-el1 and --wiki-el2")
+		return
 	# --wiki-pages-from=<another export>: build exactly that export's pages.
 	var only := {}
 	var reference := _arg("wiki-pages-from")
@@ -61,16 +80,18 @@ func _run() -> void:
 			_fail("cannot read " + reference)
 			return
 		for page: Dictionary in other.pages: only[page.key] = true
-	var catalog := ELWikiCatalog.build(profile, language, only)
-	var data := {"game": game, "language": language, "categories": ELWikiCatalog.categories(game, language), "pages": catalog.pages}
+	var catalog := ELWikiCatalog.build(profiles, language, only)
+	var data := {"games": profiles.keys(), "language": language, "pages": catalog.pages}
 	DirAccess.make_dir_recursive_absolute(output)
-	var path := output.path_join("%s-%s.json" % [game, language])
+	var path := output.path_join("%s.json" % language)
 	var file := FileAccess.open(path, FileAccess.WRITE)
-	file.store_string(JSON.stringify(data, "", true) + "\n")
+	file.store_string(JSON.stringify(data, "", true) + "
+")
 	file.close()
-	print("export_wiki: %d pages -> %s" % [catalog.pages.size(), path])
+	print("export_wiki: %d pages from %s -> %s" % [catalog.pages.size(), ", ".join(profiles.keys()), path])
 	var images := _arg("wiki-images")
-	if not images.is_empty(): await _images(profile, catalog, images.path_join(game))
+	if not images.is_empty():
+		for edition: String in profiles: await _images(profiles[edition], catalog, images.path_join(edition))
 	quit(0)
 
 func _images(profile: ELProfile, catalog: ELWikiCatalog, folder: String) -> void:
@@ -78,27 +99,33 @@ func _images(profile: ELProfile, catalog: ELWikiCatalog, folder: String) -> void
 		printerr("export_wiki: images need rendering; run without --headless")
 		return
 	DirAccess.make_dir_recursive_absolute(folder)
+	var redo := _flag("wiki-images-all")
 	var icons := 0
 	var models := 0
 	for page: Dictionary in catalog.pages:
 		var code := str(page.get("card", ""))
-		if code.is_empty(): continue
-		var icon := profile.card_icon(code)
-		var picture := icon.get_image() if icon != null else null
-		if picture != null and not picture.is_empty():
-			picture.save_png(folder.path_join("icon-%s.png" % code))
-			icons += 1
-		if page.get("kind") != "creature": continue
+		if code.is_empty() or not profile.id in page.get("games", []): continue
+		var icon_path := folder.path_join("icon-%s.png" % code)
+		if redo or not FileAccess.file_exists(icon_path):
+			var icon := profile.card_icon(code)
+			var picture := icon.get_image() if icon != null else null
+			if picture != null and not picture.is_empty():
+				picture.save_png(icon_path)
+				icons += 1
+		var model_path := folder.path_join("%s.webp" % code)
+		if page.get("kind") != "creature" or not profile.id in page.get("models", []): continue
+		if not redo and FileAccess.file_exists(model_path): continue
 		var view := ELWikiPreview.stage(profile, code, Vector2i(960, 960))
 		if view == null:
 			printerr("export_wiki: no model for ", code)
 			continue
 		root.add_child(view)
-		await process_frame
+		# Let the idle clip and its particles run for a moment.
+		for i in 12: await process_frame
 		ELWikiPreview.frame(view, ELWikiPreview.YAW, ELWikiPreview.PITCH)
 		for i in 3: await process_frame
 		var shot := _cropped(view.get_texture().get_image(), 480)
-		shot.save_webp(folder.path_join("%s.webp" % code), true, 0.86)
+		shot.save_webp(model_path, true, 0.86)
 		view.queue_free()
 		models += 1
 	print("export_wiki: %d icons, %d creature pictures -> %s" % [icons, models, folder])
@@ -113,7 +140,7 @@ func _cropped(image: Image, size: int) -> Image:
 	for y in range(0, image.get_height(), 2):
 		for x in range(0, image.get_width(), 2):
 			var c := image.get_pixel(x, y)
-			if absf(c.r - background.r) + absf(c.g - background.g) + absf(c.b - background.b) < 0.06: continue
+			if absf(c.r - background.r) + absf(c.g - background.g) + absf(c.b - background.b) < 0.025: continue
 			low = Vector2i(mini(low.x, x), mini(low.y, y))
 			high = Vector2i(maxi(high.x, x), maxi(high.y, y))
 	if high.x < 0: return image

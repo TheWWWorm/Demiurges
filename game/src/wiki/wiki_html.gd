@@ -1,8 +1,9 @@
 class_name ELWikiHtml
 extends RefCounted
 ## Small offline HTML reader for wiki articles (as the EI remake's WikiHtml):
-## the escaped subset written by tools/build_wiki.py (h1-h3, p, ul/ol/li, table,
-## th/td, strong/b, em/i, code, a) becomes RichTextLabel BBCode. Nothing is
+## the escaped subset written by tools/build_wiki.py and ELWikiCatalog (h1-h3,
+## p, ul/ol/li, table, th/td, strong/b, em/i, code, a; `p.note`, `p.games` and
+## `td.changed`) becomes RichTextLabel BBCode. Nothing is
 ## executed or fetched. Text brackets are escaped, so article text can never
 ## open a BBCode tag. Internal links stay `wiki://<page>`; https:// links are
 ## kept for the reader to open in the system browser.
@@ -11,6 +12,10 @@ const HEADING := "d6bb88"
 const NOTE := "c8b48e"
 const LINE := "4a3c2c"
 const HEAD_CELL := "2f261d"
+## Cells with a value Etherlords II changed, and the "which games" line.
+const CHANGED_CELL := "4a3516"
+const CHANGED := "ffd88a"
+const GAMES := "9fc3a0"
 
 static func to_bbcode(html: String, scale := 1.0) -> String:
 	var parser := XMLParser.new()
@@ -20,6 +25,8 @@ static func to_bbcode(html: String, scale := 1.0) -> String:
 	var lists: Array[String] = []
 	var anchors: Array[bool] = []
 	var note := false
+	var games := false
+	var changed := false
 	var first_cell := false
 	while parser.read() == OK:
 		var type := parser.get_node_type()
@@ -31,7 +38,9 @@ static func to_bbcode(html: String, scale := 1.0) -> String:
 				"h3": out += "[font_size=%d][b]" % roundi(23 * scale)
 				"p":
 					note = parser.get_named_attribute_value_safe("class") == "note"
+					games = parser.get_named_attribute_value_safe("class") == "games"
 					if note: out += "[indent][color=#%s][i]" % NOTE
+					if games: out += "[color=#%s][b]" % GAMES
 				"strong", "b": out += "[b]"
 				"em", "i": out += "[i]"
 				"code": out += "[code]"
@@ -46,7 +55,10 @@ static func to_bbcode(html: String, scale := 1.0) -> String:
 				"table":
 					var columns := clampi(parser.get_named_attribute_value_safe("data-columns").to_int(), 1, 8)
 					out += "[table=%d]" % columns
-				"td": out += "[cell border=#%s padding=10,5,10,5]" % LINE
+				"td":
+					changed = parser.get_named_attribute_value_safe("class") == "changed"
+					if changed: out += "[cell border=#%s bg=#%s padding=10,5,10,5][color=#%s]" % [LINE, CHANGED_CELL, CHANGED]
+					else: out += "[cell border=#%s padding=10,5,10,5]" % LINE
 				"th": out += "[cell border=#%s bg=#%s padding=10,5,10,5][b][color=#%s]" % [LINE, HEAD_CELL, HEADING]
 				"a":
 					var href := parser.get_named_attribute_value_safe("href")
@@ -59,7 +71,9 @@ static func to_bbcode(html: String, scale := 1.0) -> String:
 				"h3": out += "[/b][/font_size]\n"
 				"p":
 					if note: out += "[/i][/color][/indent]"
+					if games: out += "[/b][/color]"
 					note = false
+					games = false
 					out += "\n\n"
 				"strong", "b": out += "[/b]"
 				"em", "i": out += "[/i]"
@@ -69,7 +83,9 @@ static func to_bbcode(html: String, scale := 1.0) -> String:
 					if not lists.is_empty(): lists.pop_back()
 					out = out.trim_suffix("\n") + ("[/ul]" if parser.get_node_name() == "ul" else "[/ol]") + "\n\n"
 				"table": out += "[/table]\n\n"
-				"td": out += "[/cell]"
+				"td":
+					out += "[/color][/cell]" if changed else "[/cell]"
+					changed = false
 				"th": out += "[/color][/b][/cell]"
 				"a":
 					if not anchors.is_empty() and anchors.pop_back(): out += "[/url]"

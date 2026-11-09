@@ -295,20 +295,20 @@ func _data() -> Dictionary:
 	if _content.has(language): return _content[language]
 	var pages: Array = []
 	var categories: Array = []
+	var rank := {}
 	for category: Dictionary in ELWikiData.CATEGORIES:
-		categories.append({"id": category.id, "title": str(category.get(language, category.en)), "catalog": false})
+		rank[category.id] = categories.size()
+		categories.append({"id": category.id, "title": str(category.get(language, category.en)), "catalog": bool(category.get("catalog", false))})
 	pages.append_array(ELWikiData.PAGES.get(language, ELWikiData.PAGES.en))
-	for edition: String in ["el1", "el2"]:
-		var profile: ELProfile = profiles.get(edition)
-		if profile == null or profile.archives.is_empty(): continue
-		var built: Array = ELWikiCatalog.build(profile, language).pages
-		# List pages first, then the entries by name.
-		built.sort_custom(func(a, b):
-			if int(a.get("order", 0)) != int(b.get("order", 0)): return int(a.get("order", 0)) < int(b.get("order", 0))
-			return str(a.title).naturalnocasecmp_to(str(b.title)) < 0)
-		pages.append_array(built)
-		for category: Dictionary in ELWikiCatalog.categories(edition, language):
-			categories.append({"id": category.id, "title": category.title, "catalog": true})
+	# One encyclopedia for the installed games, both editions merged.
+	pages.append_array(ELWikiCatalog.build(profiles, language).pages)
+	# By category; in each, the guides and the list first, then entries by name.
+	pages.sort_custom(func(a, b):
+		var ca: int = rank.get(a.category, 99)
+		var cb: int = rank.get(b.category, 99)
+		if ca != cb: return ca < cb
+		if int(a.get("order", 0)) != int(b.get("order", 0)): return int(a.get("order", 0)) < int(b.get("order", 0))
+		return str(a.title).naturalnocasecmp_to(str(b.title)) < 0)
 	var index := {}
 	for row: Dictionary in pages: index[row.key] = row
 	_content[language] = {"pages": pages, "categories": categories, "index": index}
@@ -326,7 +326,8 @@ func _text(key: String) -> String:
 ## Shows `key` ("home" when unknown); `remember` keeps the current page for Back.
 func navigate(key: String, remember := true) -> void:
 	# Encyclopedia pages of a game that is not installed lead to the contents.
-	_notice = _text("missing_game") if _entry(key).is_empty() and key.begins_with("el") and key.substr(3, 1) == "-" else ""
+	var encyclopedia := key.begins_with("card-") or key.begins_with("skill-") or key.begins_with("spec-") or key.begins_with("all-")
+	_notice = _text("missing_game") if _entry(key).is_empty() and encyclopedia else ""
 	if _entry(key).is_empty(): key = "home"
 	if remember and key != page and _article != null:
 		_history.append({"page": page, "scroll": _article.get_v_scroll_bar().value})
@@ -392,13 +393,32 @@ func _show_visual(row: Dictionary) -> void:
 		_visual.remove_child(child)
 		child.queue_free()
 	_preview = null
-	var profile: ELProfile = profiles.get(str(row.get("game", "")))
 	var card := str(row.get("card", ""))
-	_visual.visible = profile != null and not card.is_empty()
+	# The editions to show, newest first, among the installed games.
+	var editions: Array = []
+	for edition: Variant in row.get("models", []):
+		if profiles.get(edition) != null: editions.push_front(edition)
+	for edition: Variant in row.get("games", []):
+		if editions.is_empty() and profiles.get(edition) != null: editions.append(edition)
+	_visual.visible = not editions.is_empty() and not card.is_empty()
 	if not _visual.visible: return
+	var profile: ELProfile = profiles[editions[0]]
 	if row.get("kind") == "creature":
 		var preview := ELWikiPreview.new()
 		if preview.show_creature(profile, card):
+			# Etherlords draws this creature differently: switch between them.
+			if editions.size() > 1:
+				var switch := HBoxContainer.new()
+				var group := ButtonGroup.new()
+				for edition: String in editions:
+					var choice := _button(ELWikiCatalog.LABELS.get(language, ELWikiCatalog.LABELS.en)[edition])
+					choice.toggle_mode = true
+					choice.button_group = group
+					choice.button_pressed = edition == editions[0]
+					choice.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+					choice.pressed.connect(func(): preview.show_creature(profiles[edition], card))
+					switch.add_child(choice)
+				_visual.add_child(switch)
 			preview.size_flags_vertical = Control.SIZE_EXPAND_FILL
 			preview.custom_minimum_size = Vector2(0, 320)
 			_visual.add_child(preview)
@@ -452,7 +472,9 @@ func _fill_list() -> void:
 				heading.set_custom_color(0, MUTED)
 				heading.set_custom_font_size(0, 14)
 			var item := _tree.create_item(heading)
-			item.set_text(0, row.title)
+			# An entry that only one game has names it (I or II).
+			var games: Array = row.get("games", [])
+			item.set_text(0, row.title + ("   " + ("I" if games[0] == "el1" else "II") if games.size() == 1 and profiles.size() > 1 else ""))
 			item.set_metadata(0, row.key)
 			if row.key == page:
 				item.select(0)

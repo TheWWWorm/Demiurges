@@ -1,6 +1,6 @@
 ---
 title: Automatic combat and the camera
-category: combat
+category: rules
 order: 50
 summary: Letting the computer fight, and the battle camera
 ---

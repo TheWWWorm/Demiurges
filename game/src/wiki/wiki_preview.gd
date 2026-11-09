@@ -2,7 +2,9 @@ class_name ELWikiPreview
 extends SubViewportContainer
 ## The live creature beside a wiki card page (as the EI remake's WikiPreview):
 ## the creature's own model and textures from the installed game, playing its
-## idle animation in a small world of its own. Drag to turn it, use the wheel
+## idle animation with its own particles (the whirlwind of an air wall, a
+## spirit's trail: CreaturesPFX/<model>/idle.pfx, as in battle) in a small
+## world of its own. Drag to turn it, use the wheel
 ## (or pinch) to zoom; Reset restores the view. tools/export_wiki.gd renders the
 ## same scene into the website's screenshots (ELWikiPreview.stage).
 
@@ -56,6 +58,22 @@ static func stage(profile: ELProfile, code: String, size: Vector2i, transparent 
 		view.free()
 		return null
 	figure.scale = Vector3.ONE * float(original.get("Scale", 1.0))
+	# Alpha32 skins (air walls, spirits) fade out in soft alpha: the wall's
+	# lower half is a wisp of see-through cloth. Blend them instead of the
+	# figure material's alpha cut-off, which drops everything below half.
+	if str(original.get("Texture", "")).to_lower().begins_with("alpha32"):
+		for part: Node in figure.get_children():
+			var mesh := part as MeshInstance3D
+			if mesh != null and mesh.material_override is StandardMaterial3D:
+				var blended: StandardMaterial3D = mesh.material_override.duplicate()
+				blended.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_DEPTH_PRE_PASS
+				mesh.material_override = blended
+	# The figure's own particles start with its clips once the stage is shown.
+	var effects := ELCombatEffects.new()
+	effects.name = "Effects"
+	view.add_child(effects)
+	effects.build(profile)
+	effects.attach.call_deferred(figure)
 	var pivot_node := Node3D.new()
 	pivot_node.name = "Pivot"
 	view.add_child(pivot_node)
@@ -76,6 +94,15 @@ static func bounds(figure: ELModel) -> AABB:
 		local = AABB(local.position * figure.scale, local.size * figure.scale)
 		box = local if first else box.merge(local)
 		first = false
+	# Particles drawn so far (the emitters already carry the figure's scale).
+	var effects := figure.get_parent().get_node_or_null("Effects")
+	if effects != null:
+		for node: Node in effects.get_children():
+			var emitter := node as MultiMeshInstance3D
+			if emitter == null or not emitter.visible or emitter.multimesh == null or emitter.multimesh.visible_instance_count == 0: continue
+			var local := emitter.transform * emitter.multimesh.get_aabb()
+			box = local if first else box.merge(local)
+			first = false
 	return box if not first else AABB(Vector3(-0.5, 0, -0.5), Vector3.ONE)
 
 ## Points the camera of `view` at its model from `yaw`/`pitch`; returns the
@@ -96,6 +123,11 @@ static func frame(view: SubViewport, yaw: float, pitch: float, zoom := 1.0) -> f
 
 ## Shows `code`'s creature; false when it has no model in this game.
 func show_creature(profile: ELProfile, code: String) -> bool:
+	# Switching editions replaces the creature shown.
+	if viewport != null:
+		remove_child(viewport)
+		viewport.queue_free()
+		viewport = null
 	viewport = stage(profile, code, Vector2i(512, 512))
 	if viewport == null: return false
 	stretch = true
@@ -106,7 +138,14 @@ func show_creature(profile: ELProfile, code: String) -> bool:
 	pivot = viewport.get_node("Pivot")
 	camera = pivot.get_node("Camera")
 	reset_view()
+	# Frame again once the particles have started (they start deferred).
+	_settle.call_deferred()
 	return true
+
+func _settle() -> void:
+	if viewport == null or _dragging: return
+	await get_tree().process_frame
+	if viewport != null and not _dragging: reset_view()
 
 func reset_view() -> void:
 	_yaw = YAW

@@ -1,7 +1,7 @@
 ---
 title: Об этой вики
-category: remake
-order: 30
+category: wiki
+order: 10
 summary: Вики в игре и в Интернете
 ---
 Вики доступна в двух местах, с одинаковыми статьями:

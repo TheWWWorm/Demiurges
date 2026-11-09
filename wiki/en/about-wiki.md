@@ -1,7 +1,7 @@
 ---
 title: About this wiki
-category: remake
-order: 30
+category: wiki
+order: 10
 summary: Opening the wiki in the game and on the web
 ---
 The wiki is available in two places with the same articles:

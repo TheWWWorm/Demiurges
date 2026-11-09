@@ -1,7 +1,7 @@
 ---
 title: Options
-category: play
-order: 20
+category: start
+order: 50
 summary: The original options and the remake settings
 ---
 **Options** opens the original Options screen of each game, from the main menu or the game menu. Each game keeps its own settings.

@@ -1,7 +1,7 @@
 ---
 title: The four races
-category: content
-order: 10
+category: rules
+order: 5
 summary: Chaots, Vitals, Kinets and Synthets
 ---
 Etherlords has four races, each drawing on its own colour of ether. A race's spells share a style of play.

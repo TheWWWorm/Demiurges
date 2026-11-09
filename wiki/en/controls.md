@@ -1,7 +1,7 @@
 ---
 title: Controls
-category: play
-order: 10
+category: start
+order: 40
 summary: Mouse, keyboard and touch
 ---
 The original controls work as in the games. These keys are the most useful.

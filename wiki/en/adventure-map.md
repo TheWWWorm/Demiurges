@@ -1,7 +1,7 @@
 ---
 title: The adventure map
-category: play
-order: 30
+category: rules
+order: 60
 summary: Heroes, resources, buildings, turns and days
 ---
 Between battles your heroes travel the adventure map: they visit buildings, collect resources and meet enemies. Touching an enemy hero or creature starts a [battle](combat).

@@ -1,6 +1,6 @@
 ---
 title: Attack and defence
-category: combat
+category: rules
 order: 30
 summary: Attackers, blockers, damage and first strike
 ---

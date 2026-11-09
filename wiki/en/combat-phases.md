@@ -1,6 +1,6 @@
 ---
 title: Turn and phases
-category: combat
+category: rules
 order: 20
 summary: Attack/Cast Phase, Block Phase and the order of a turn
 ---

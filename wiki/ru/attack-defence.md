@@ -1,6 +1,6 @@
 ---
 title: Атака и защита
-category: combat
+category: rules
 order: 30
 summary: Атакующие, блокирующие, урон и первый удар
 ---

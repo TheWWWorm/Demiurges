@@ -1,56 +1,36 @@
 ---
 title: Demiurges wiki
-category: start
+category: wiki
 order: 0
 summary: Contents of the wiki
 ---
-**Demiurges** is a fan-made engine for **Etherlords** (2001) and **Etherlords II** (2003). It plays the games from the files of your own copy, with newly written combat, campaign, interface and rendering code that follows the original rules. This wiki explains how to set it up and how to play.
-
-> Demiurges contains no game content. You need your own copy of the game you want to play. The GOG editions are the tested ones.
-
-## Getting started
-
-- [Installing the game files](installing): the game folder, the GOG installer or a data pack.
-- [Playing in the browser](browser): nothing to install, and your files stay on your device.
-- [Main menu, saves and settings](main-menu): switching games and where saves are kept.
-
-## Playing
-
-- [Controls](controls): mouse, keyboard and touch.
-- [Options](options): the original options and the remake's own settings.
-- [The adventure map](adventure-map): heroes, resources, buildings and turns.
-
-## Combat
-
-- [How a battle works](combat): heroes, health, mana and spells.
-- [Turn and phases](combat-phases): the order of a turn.
-- [Attack and defence](attack-defence): attackers, blockers and damage.
-- [Creature abilities](abilities): the most common abilities.
-- [Automatic combat and the camera](automatic-combat).
+An encyclopedia of **Etherlords** (2001) and **Etherlords II** (2003): every creature, sorcery, enchantment, artifact, hero skill and specialization of both games, with its statistics, description and picture, and what Etherlords II changed. It belongs to **Demiurges**, a fan-made engine that plays both games from your own copy.
 
 ## Encyclopedia
 
-Every creature, spell, artifact, skill and specialization of both games, with its statistics and description:
+| Section | Contents |
+|---|---|
+| [Creatures](all-creatures) | Every creature by race: ether cost, power, toughness and abilities |
+| [Sorceries and enchantments](all-spells) | Every spell by race: type, rarity and ether cost |
+| [Artifacts](all-artifacts) | Artifacts, including those that summon a creature |
+| [Hero skills](all-skills) | Skills and the effect of each rank |
+| [Specializations](all-specializations) | Chance-based talents of heroes |
 
-| | Etherlords | Etherlords II |
-|---|---|---|
-| Creatures | [list](el1-creatures) | [list](el2-creatures) |
-| Sorceries and enchantments | [list](el1-spells) | [list](el2-spells) |
-| Artifacts | [list](el1-artifacts) | [list](el2-artifacts) |
-| Skills | [list](el1-skills) | [list](el2-skills) |
-| Specializations | [list](el1-specializations) | [list](el2-specializations) |
+A card has one page for both games. Its table shows the two editions side by side: a highlighted value is one Etherlords II changed, and a card that only one game has says so. The lists mark each entry with the games that have it (I, II). In the game, a creature's page shows the creature itself: drag it to turn it and use the wheel to zoom.
 
-In the game, a creature's page shows the creature itself: drag it to turn it and use the wheel to zoom.
+## Game mechanics
 
-## Spells, creatures and heroes
-
-- [The four races](races) · [Spells](spells) · [Creatures](creatures)
-- [Runes and artifacts](runes-artifacts) · [Heroes and levels](heroes)
+- [The four races](races) · [How a battle works](combat) · [Turn and phases](combat-phases) · [Attack and defence](attack-defence)
+- [Creature abilities](abilities) · [Automatic combat and the camera](automatic-combat) · [The adventure map](adventure-map)
+- [About creatures](creatures) · [About spells](spells) · [Runes and artifacts](runes-artifacts) · [Heroes and levels](heroes)
 
 ## Campaigns and modes
 
 - [Etherlords campaigns](campaign-el1) · [Etherlords II campaigns](campaign-el2) · [Duel](duel)
 
-## About the remake
+## Playing on Demiurges
 
+> Demiurges contains no game content. You need your own copy of the game you want to play. The GOG editions are the tested ones.
+
+- [Installing the game files](installing) · [Playing in the browser](browser) · [Main menu, saves and settings](main-menu) · [Controls](controls) · [Options](options)
 - [Differences from the originals](differences) · [Problems and reporting](troubleshooting) · [About this wiki](about-wiki)

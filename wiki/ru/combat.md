@@ -1,6 +1,6 @@
 ---
 title: Как устроен бой
-category: combat
+category: rules
 order: 10
 summary: Герои, здоровье, эфир, рука и книга заклинаний
 ---

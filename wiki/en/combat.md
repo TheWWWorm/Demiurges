@@ -1,6 +1,6 @@
 ---
 title: How a battle works
-category: combat
+category: rules
 order: 10
 summary: Heroes, health, ether, the hand and the spellbook
 ---

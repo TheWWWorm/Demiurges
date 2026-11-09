@@ -1,6 +1,6 @@
 ---
 title: Creature abilities
-category: combat
+category: rules
 order: 40
 summary: The most common creature abilities
 ---

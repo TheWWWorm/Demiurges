@@ -60,7 +60,7 @@ func _run() -> void:
 				links += 1
 				var target := found.get_string(1)
 				# Encyclopedia lists come from the installed games (checked below).
-				var listed := target.substr(0, 4) in ["el1-", "el2-"] and target.substr(4) in ELWikiCatalog.KINDS
+				var listed: bool = target in ELWikiCatalog.LISTS.values()
 				check(keys[lang].has(target) or listed, "%s/%s links to %s" % [lang, row.key, target])
 	probe.queue_free()
 	check(ELWikiHtml.key_from_url("wiki://combat") == "combat", "internal links resolve")
@@ -147,42 +147,74 @@ func _catalog(screen: ELWikiScreen, shots: String) -> void:
 	screen._content.clear()
 	for lang: String in ELWikiData.LANGUAGES:
 		screen.set_language(lang)
-		for edition: String in profiles:
-			var catalog := ELWikiCatalog.build(profiles[edition], lang)
-			check(catalog.pages.size() > 100, "%s/%s has encyclopedia pages" % [edition, lang])
-			var keys := {}
-			for row: Dictionary in catalog.pages: keys[row.key] = true
-			var link := RegEx.create_from_string("wiki://([a-z0-9-]+)")
+		var catalog := ELWikiCatalog.build(profiles, lang)
+		check(catalog.pages.size() > 100, "%s has encyclopedia pages" % lang)
+		var keys := {}
+		for row: Dictionary in catalog.pages: keys[row.key] = true
+		check(keys.size() == catalog.pages.size(), "%s: every encyclopedia page has its own name" % lang)
+		var link := RegEx.create_from_string("wiki://([a-z0-9-]+)")
+		for row: Dictionary in catalog.pages:
+			for found: RegExMatch in link.search_all(row.html):
+				check(keys.has(found.get_string(1)), "%s: %s links to %s" % [lang, row.key, found.get_string(1)])
+		for kind: String in ELWikiCatalog.KINDS:
+			screen.navigate(ELWikiCatalog.LISTS[kind])
+			check(screen.page == ELWikiCatalog.LISTS[kind], "%s: the %s list opens" % [lang, kind])
+		if profiles.size() > 1:
+			var merged := 0
+			var single := 0
 			for row: Dictionary in catalog.pages:
-				for found: RegExMatch in link.search_all(row.html):
-					check(keys.has(found.get_string(1)), "%s: %s links to %s" % [lang, row.key, found.get_string(1)])
-			for kind: String in ELWikiCatalog.KINDS:
-				screen.navigate("%s-%s" % [edition, kind])
-				check(screen.page == "%s-%s" % [edition, kind], "%s: the %s %s list opens" % [lang, edition, kind])
+				if row.kind == "list": continue
+				if row.games.size() > 1: merged += 1
+				else: single += 1
+			check(merged > 100 and single > 0, "%s: cards of both games share a page, others name their game" % lang)
 	screen.set_language("en")
-	for edition: String in profiles:
-		var creature := ""
-		var sorcery := ""
-		for row: Dictionary in screen._pages():
-			if row.get("game") != edition: continue
-			if creature.is_empty() and row.get("kind") == "creature": creature = row.key
-			if sorcery.is_empty() and row.get("kind") == "card": sorcery = row.key
-		screen.navigate(creature)
+	var creature := ""
+	var sorcery := ""
+	var artifact_creature := ""
+	var two_models := ""
+	for row: Dictionary in screen._pages():
+		if creature.is_empty() and row.get("kind") == "creature": creature = row.key
+		if sorcery.is_empty() and row.get("kind") == "card": sorcery = row.key
+		if artifact_creature.is_empty() and row.get("kind") == "creature" and row.category == ELWikiCatalog.LISTS.artifacts: artifact_creature = row.key
+		if two_models.is_empty() and row.get("models", []).size() > 1: two_models = row.key
+	for key: String in [creature, artifact_creature]:
+		if key.is_empty(): continue
+		screen.navigate(key)
 		await process_frame
-		check(screen._preview != null and screen._preview.model != null, "%s: a creature page shows the live model" % creature)
+		check(screen._preview != null and screen._preview.model != null, "%s: a creature page shows the live model" % key)
+	if screen._preview != null:
+		var before := screen._preview.pivot.rotation.y
+		screen._preview.turn(Vector2(60, 0))
+		check(not is_equal_approx(before, screen._preview.pivot.rotation.y), "dragging turns the model")
+		var distance := screen._preview.camera.position.z
+		screen._preview.zoom(0.8)
+		check(screen._preview.camera.position.z < distance, "the wheel zooms")
+		screen._preview.reset_view()
+	await _shot(shots, "artifact-creature")
+	if profiles.has("el1"):
+		# An air wall: its lower half is see-through cloth in soft alpha, which
+		# the preview blends (an alpha cut-off would drop it).
+		screen.navigate("card-wlbz")
+		for i in 4: await process_frame
+		var blended := false
+		var effects: Node = null
 		if screen._preview != null:
-			var before := screen._preview.pivot.rotation.y
-			screen._preview.turn(Vector2(60, 0))
-			check(not is_equal_approx(before, screen._preview.pivot.rotation.y), "%s: dragging turns the model" % creature)
-			var distance := screen._preview.camera.position.z
-			screen._preview.zoom(0.8)
-			check(screen._preview.camera.position.z < distance, "%s: the wheel zooms" % creature)
-			screen._preview.reset_view()
-		await _shot(shots, "%s-creature" % edition)
-		screen.navigate(sorcery)
-		check(screen._preview == null and screen._visual.visible, "%s: a spell page shows its icon" % sorcery)
-		await _shot(shots, "%s-spell" % edition)
+			effects = screen._preview.viewport.get_node_or_null("Effects")
+			for part: Node in screen._preview.model.get_children():
+				if part is MeshInstance3D and part.material_override is StandardMaterial3D:
+					blended = blended or part.material_override.transparency == BaseMaterial3D.TRANSPARENCY_ALPHA_DEPTH_PRE_PASS
+		check(blended, "card-wlbz: the air wall's see-through skin is blended")
+		check(effects is ELCombatEffects, "card-wlbz: the creature's own particles run with its clips")
+		await _shot(shots, "air-wall")
+	if not two_models.is_empty():
+		screen.navigate(two_models)
+		await process_frame
+		check(screen._visual.get_child(0) is HBoxContainer, "%s: both editions' models can be shown" % two_models)
+		await _shot(shots, "two-models")
+	screen.navigate(sorcery)
+	check(screen._preview == null and screen._visual.visible, "%s: a spell page shows its icon" % sorcery)
+	await _shot(shots, "spell")
 	screen.set_language("ru")
-	screen.navigate("el1-creatures" if profiles.has("el1") else "el2-creatures")
+	screen.navigate("all-creatures")
 	await _shot(shots, "ru-creature-list")
 	screen.set_language("en")

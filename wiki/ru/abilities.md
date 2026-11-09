@@ -1,6 +1,6 @@
 ---
 title: Способности существ
-category: combat
+category: rules
 order: 40
 summary: Самые частые способности созданий
 ---

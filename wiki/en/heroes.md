@@ -1,7 +1,7 @@
 ---
 title: Heroes and levels
-category: content
-order: 50
+category: all-skills
+order: -2
 summary: Experience, skills and specialisations
 ---
 Heroes gain experience from battles and grow through 20 levels. Each level adds health and ether income in battle.
@@ -31,4 +31,4 @@ Every hero has one **specialisation**: a chance-based talent in battle, such as 
 
 See [Runes and artifacts](runes-artifacts) and [How a battle works](combat).
 
-All skills: [Etherlords](el1-skills) · [Etherlords II](el2-skills). All specializations: [Etherlords](el1-specializations) · [Etherlords II](el2-specializations).
+All [hero skills](all-skills) and [specializations](all-specializations) of both games.

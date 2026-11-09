@@ -1,6 +1,6 @@
 ---
 title: Ход и фазы
-category: combat
+category: rules
 order: 20
 summary: Фаза атаки, фаза защиты и порядок хода
 ---

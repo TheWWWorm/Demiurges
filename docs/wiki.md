@@ -1,6 +1,6 @@
 # Wiki
 
-The Demiurges wiki has two parts, as the EI remake's wiki does: **guides** (installing, controls, rules, campaigns, duels, options, differences from the originals) and an **encyclopedia** with a page for every creature, sorcery, enchantment, artifact, skill and specialization of both games, plus a list page per category. It has two readers:
+The Demiurges wiki is, like the EI remake's, first an **encyclopedia**: a page for every creature, sorcery, enchantment, artifact, hero skill and specialization, and a list page per kind. Both games share one pool: a card both games have (the same code) has one page with the two editions side by side, the values Etherlords II changed highlighted and listed under "Changes in Etherlords II"; a card only one game has says so, and the lists and the sidebar mark it I or II. Both editions are named in Etherlords II's words, so only real changes are highlighted, not rewordings. The encyclopedia categories come first in the sidebar; the **guides** follow (game mechanics, campaigns and modes, installing and playing, the remake). It has two readers:
 
 - **On the web** at [demiurges.wwworm.com/wiki](https://demiurges.wwworm.com/wiki/), served from `public/wiki` beside the browser build. It needs no game files, engine or account: the page never loads the engine, and the game's service worker passes its requests through. The browser build's start page (`game/web/shell.html`) links to it before any files are chosen.
 - **In the game**: the **Wiki** button beside the game choice on the main menu and the game files screen, a **Wiki (F1)** button under the Etherlords II Esc menus in battle and on the map, and **F1** on every screen (the `WikiHotkey` autoload). The game is paused while it is open; **Esc**, **F1** or **Close** resumes it as it was.
@@ -9,13 +9,13 @@ Every article exists in English and Russian. Both readers have an EN/RU switch a
 
 Guides name game things as the original English (GOG) and Russian editions do.
 
-The engine ships no game content. The in-game encyclopedia is built live from the player's installed copy by `ELWikiCatalog`, so it follows that copy's language, data and patches, and a creature's page shows the creature's own model, playing its idle animation, which the player can drag to turn and zoom with the wheel (`ELWikiPreview`). Encyclopedia pages exist only for installed games; links to another game's pages lead to the contents with a note. The website's encyclopedia is the same builder's output, exported from the original editions together with rendered creature pictures and card icons (see below); like EI's public wiki, it publishes the games' names, descriptions and pictures, credited to their owners.
+The engine ships no game content. The in-game encyclopedia is built live from the player's installed copies by `ELWikiCatalog` (with one game installed, it shows that game's cards), so it follows their language, data and patches. A creature's page, artifact creatures included, shows the creature's own model playing its idle animation with its own particles, which the player can drag to turn and zoom with the wheel (`ELWikiPreview`); see-through "Alpha32" skins (air walls, spirits) are blended rather than cut at half alpha, so a wall's wispy lower half shows. When the games draw a creature differently, buttons switch between the two. Links to pages of a game that is not installed lead to the contents with a note. The website's encyclopedia is the same builder's output, exported from the original editions together with rendered creature pictures and card icons (see below); like EI's public wiki, it publishes the games' names, descriptions and pictures, credited to their owners.
 
 ## Sources
 
 | Path | Contents |
 |---|---|
-| `wiki/categories.json` | Categories in their order, with English and Russian names |
+| `wiki/categories.json` | Categories in their order, with English and Russian names; `"catalog": true` marks the encyclopedia's (their ids are the list pages `all-creatures`, `all-spells`, `all-artifacts`, `all-skills`, `all-specializations`) |
 | `wiki/en/<page>.md`, `wiki/ru/<page>.md` | One article per language; the file name is the page name |
 | `web/wiki/` | The website: `index.html`, `wiki.js`, `wiki.css` and the interface texts `i18n.json` |
 | `tools/build_wiki.py` | Validates the sources and writes both outputs |
@@ -23,10 +23,10 @@ The engine ships no game content. The in-game encyclopedia is built live from th
 | `game/src/wiki/wiki_html.gd` | `ELWikiHtml`: the article HTML subset to RichTextLabel BBCode |
 | `game/src/wiki/wiki_screen.gd` | `ELWikiScreen`: the in-game reader |
 | `game/src/wiki/wiki_hotkey.gd` | The `WikiHotkey` autoload (F1) |
-| `game/src/wiki/wiki_catalog.gd` | `ELWikiCatalog`: encyclopedia pages from a loaded game (`ELProfile`) |
+| `game/src/wiki/wiki_catalog.gd` | `ELWikiCatalog`: encyclopedia pages from the loaded games (`ELProfile`s), both editions merged (`card-<code>`, `skill-<code>`, `spec-<code>`) |
 | `game/src/wiki/wiki_preview.gd` | `ELWikiPreview`: the turnable creature model, also used to render website pictures |
-| `tools/export_wiki.gd` | Exports one game's encyclopedia (and pictures) for the website |
-| `wiki/catalog/` | The exported encyclopedia: `<game>-<lang>.json` and `images/<game>/` (`<CODE>.webp` creatures, `icon-<CODE>.png` cards) |
+| `tools/export_wiki.gd` | Exports the encyclopedia of both games (and pictures) for the website |
+| `wiki/catalog/` | The exported encyclopedia: `<lang>.json` and `images/<game>/` (`<CODE>.webp` creatures, `icon-<CODE>.png` cards; only pictures a page shows are kept and published) |
 
 Each article starts with front matter:
 
@@ -43,21 +43,22 @@ summary: The order of a turn
 
 ## Exporting the encyclopedia
 
-The website's encyclopedia is exported, not written. Export each game once per language with the engine (Godot 4.7, the project imported):
+The website's encyclopedia is exported, not written. Export it once per language with the engine (Godot 4.7, the project imported); without `--wiki-el1`/`--wiki-el2` the Steam copies are used:
 
 ```sh
-godot --path game --script /abs/tools/export_wiki.gd -- --wiki-game=el1 \
-  --wiki-path="/path/to/Etherlords" --wiki-language=ru \
+godot --path game --script /abs/tools/export_wiki.gd -- --wiki-language=ru \
+  --wiki-el1="/path/to/Etherlords" --wiki-el2="/path/to/Etherlords II" \
   --wiki-output=/abs/wiki/catalog --wiki-images=/abs/wiki/catalog/images
-godot --headless --path game --script /abs/tools/export_wiki.gd -- --wiki-game=el1 \
-  --wiki-path="/path/to/Etherlords" --wiki-language=en --wiki-output=/abs/wiki/catalog \
-  --wiki-texts=/private/gog-el1/Resources/text.res --wiki-regs=/private/gog-el1/Resources/regs.res \
-  --wiki-pages-from=/abs/wiki/catalog/el1-ru.json
+godot --headless --path game --script /abs/tools/export_wiki.gd -- --wiki-language=en \
+  --wiki-el1="/path/to/Etherlords" --wiki-el2="/path/to/Etherlords II" --wiki-output=/abs/wiki/catalog \
+  --wiki-el1-texts=/private/gog-el1/Resources/text.res --wiki-el1-regs=/private/gog-el1/Resources/regs.res \
+  --wiki-el2-texts=/private/gog-el2/Resources/text.res --wiki-el2-regs=/private/gog-el2/Resources/regs.res \
+  --wiki-pages-from=/abs/wiki/catalog/ru.json
 ```
 
-and the same with `--wiki-game=el2` and the Etherlords II folder. `--wiki-language` sets the page labels; names and descriptions come from the mounted game. The checked export uses the Russian Steam copies for Russian and, for English, the same installs with the text and table archives of the GOG English editions (`--wiki-texts`, `--wiki-regs`; nothing in the installation changes). Those two archives can be taken from a GOG installer without running it, for example with the engine's `ELInnoSetup` or innoextract. `--wiki-pages-from` keeps the English export to the Russian page set: the GOG English tables name a few internal helper records (such as `AOUD` or "GraveyardToPlay") that the Russian edition leaves unnamed. Records whose name is only their code are never listed.
+`--wiki-language` sets the page labels; names and descriptions come from the mounted games. The checked export uses the Russian Steam copies for Russian and, for English, the same installs with the text and table archives of the GOG English editions (`--wiki-el1-texts`, `--wiki-el1-regs` and the same for el2; nothing in the installations changes). Those archives can be taken from a GOG installer without running it, for example with the engine's `ELInnoSetup` or innoextract. `--wiki-pages-from` keeps the English export to the Russian page set: the GOG English tables name a few internal helper records (such as `AOUD` or "GraveyardToPlay") that the Russian edition leaves unnamed. Records whose name is only their code are never listed.
 
-`--wiki-images` needs rendering, so that run omits `--headless`: it saves each card's icon and renders each creature with `ELWikiPreview` (960 px, cropped to the creature, saved as 480 px WebP). Run it once per game; the pictures do not depend on the language.
+`--wiki-images` needs rendering, so that run omits `--headless`: it saves each card's icon and renders each creature with `ELWikiPreview` (its idle clip and particles run for a moment; 960 px, cropped to the creature, saved as 480 px WebP) into `images/<game>/`. A creature is rendered for Etherlords II, and for Etherlords too when that game uses another model or skin. Pictures already there are kept; add `--wiki-images-all` to render them all again. The pictures do not depend on the language.
 
 ## Building
 
@@ -91,4 +92,4 @@ godot --headless --path game --import
 godot --headless --path game --script /absolute/path/to/tools/wiki_check.gd
 ```
 
-It converts every page in both languages, follows every link, and exercises history, search, the language switch, narrow windows and pausing. With Steam copies installed (or `-- --wiki-el1=<folder> --wiki-el2=<folder>`), it also builds both games' encyclopedias in both languages, checks their links and list pages, opens a creature page and turns and zooms its live model. Without `--headless`, add `-- --wiki-shots=<folder>` to save screenshots. It restores the player's remembered wiki language afterwards. Check the website in a browser in both languages, including Back and reload, on a desktop and a phone-sized window.
+It converts every page in both languages, follows every link, and exercises history, search, the language switch, narrow windows and pausing. With Steam copies installed (or `-- --wiki-el1=<folder> --wiki-el2=<folder>`), it also builds the merged encyclopedia in both languages, checks its links, list pages and merging, opens a creature and an artifact creature and turns and zooms the live model, checks the air wall's blended skin and the switch between two editions' models. Without `--headless`, add `-- --wiki-shots=<folder>` to save screenshots. It restores the player's remembered wiki language afterwards. Check the website in a browser in both languages, including Back and reload, on a desktop and a phone-sized window.
