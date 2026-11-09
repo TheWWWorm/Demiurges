@@ -348,6 +348,8 @@ func use_edition(id: String) -> bool:
 	var playable := {}
 	for each: String in profiles:
 		if supports(profiles[each]): playable[each] = true
+	var main_buttons: Array = SCREENS.get(edition, {}).get("main", {}).get("buttons", [])
+	_choice.wiki_hint = _caption(main_buttons[0]) if not main_buttons.is_empty() else ""
 	_choice.show_state(id, playable)
 	_layout.call_deferred()
 	selected_campaign = ""

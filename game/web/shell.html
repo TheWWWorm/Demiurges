@@ -17,7 +17,7 @@ html,body{margin:0;position:fixed;inset:0;overflow:hidden;background:#0f1118;col
 #start{position:fixed;inset:0;display:grid;place-content:center;text-align:center;padding:24px;gap:16px;background:#0f1118;z-index:4;overflow:auto}
 button{font:inherit;color:inherit;background:#262b3d;border:1px solid #6f7aa8;padding:12px 20px;border-radius:5px;min-height:48px}
 button:disabled{opacity:.6}#bar{height:6px;background:#262b3d;border-radius:3px;overflow:hidden}#bar>div{height:100%;width:0;background:#8fa3e8;transition:width .2s}#bar[hidden]{display:none}
-#notice{max-width:38em;white-space:pre-wrap}#safe-probe{position:fixed;visibility:hidden;padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)}
+#wiki-link{color:#8fa3e8;padding:8px}#notice{max-width:38em;white-space:pre-wrap}#safe-probe{position:fixed;visibility:hidden;padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)}
 #runtime-error{position:fixed;bottom:env(safe-area-inset-bottom);left:10%;right:10%;background:#4a1d22;color:white;z-index:5}#runtime-error:empty{display:none}
 #rotate{display:none;position:fixed;inset:0;background:#0f1118eb;z-index:6;align-content:center;text-align:center;padding:32px}
 #start,#rotate{padding-left:max(24px,env(safe-area-inset-left),env(safe-area-inset-right));padding-right:max(24px,env(safe-area-inset-left),env(safe-area-inset-right));padding-top:max(24px,env(safe-area-inset-top));padding-bottom:max(24px,env(safe-area-inset-bottom))}
@@ -26,7 +26,7 @@ button:disabled{opacity:.6}#bar{height:6px;background:#262b3d;border-radius:3px;
 <canvas id="canvas" tabindex="0">This game requires WebGL 2.</canvas>
 <div id="safe-probe"></div><div id="runtime-error" role="alert"></div>
 <div id="rotate">Turn your device sideways to play.<p><button onclick="this.parentElement.parentElement.style.display='none'">Continue upright</button></p></div>
-<div id="start"><h1>Demiurges</h1><div id="notice">Preparing…</div><div id="bar" hidden><div></div></div><button id="play">Play</button><button onclick="EtherFiles.fullscreen()">Fullscreen / Home Screen</button></div>
+<div id="start"><h1>Demiurges</h1><div id="notice">Preparing…</div><div id="bar" hidden><div></div></div><button id="play">Play</button><button onclick="EtherFiles.fullscreen()">Fullscreen / Home Screen</button><a id="wiki-link" href="wiki/" target="_blank" rel="noopener">Wiki: how to play · Вики</a></div>
 <script src="storage.js"></script><script src="files.js"></script><script src="$GODOT_URL"></script>
 <script>
 const GODOT_CONFIG = $GODOT_CONFIG;

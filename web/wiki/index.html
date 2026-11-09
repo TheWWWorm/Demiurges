@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#1c1712">
+  <meta name="description" content="The Demiurges wiki: how to play Etherlords and Etherlords II on the Demiurges engine. Installing game files, controls, combat rules, campaigns, duels and options, in English and Russian.">
+  <title>Demiurges · Wiki</title>
+  <link rel="icon" href="/index.icon.png">
+  <link rel="stylesheet" href="/wiki/wiki.css">
+  <script type="module" src="/wiki/wiki.js"></script>
+</head>
+<body>
+  <a class="skip" href="#article" data-text="skip">Skip to article</a>
+  <header>
+    <a class="brand" href="/wiki/" id="brand"><img class="crest" src="/icon-192.png" width="44" height="44" alt=""><span>Demiurges<small data-text="tagline">Wiki</small></span></a>
+    <nav aria-label="Language">
+      <label class="sr-only" for="language" data-text="language">Language</label>
+      <select id="language"><option value="en">English</option><option value="ru">Русский</option></select>
+      <a href="/" class="play" data-text="play">Play in the browser</a>
+    </nav>
+  </header>
+  <button id="browse-toggle" aria-controls="browse" aria-expanded="false" data-text="browse">Contents and search</button>
+  <div class="layout">
+    <aside id="browse">
+      <label for="search" data-text="search">Search the wiki</label>
+      <input id="search" type="search" autocomplete="off" spellcheck="false">
+      <p id="status" role="status" aria-live="polite"></p>
+      <nav id="results" aria-label="Pages"></nav>
+    </aside>
+    <main>
+      <p id="notice" role="status" data-text="loading">Loading the wiki…</p>
+      <nav id="toc" aria-label="On this page"></nav>
+      <article id="article" tabindex="-1"></article>
+      <footer>
+        <p data-text="disclaimer">Demiurges is a fan-made engine. Etherlords and Etherlords II belong to their owners; this wiki contains no game content.</p>
+        <p><span id="version"></span> · <a href="https://github.com/TheWWWorm/Demiurges" data-text="project">Project and source code</a></p>
+      </footer>
+    </main>
+  </div>
+  <noscript><p class="notice">Enable JavaScript to read the wiki. / Включите JavaScript, чтобы читать вики.</p></noscript>
+</body>
+</html>

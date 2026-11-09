@@ -18,6 +18,8 @@ const CONTENT_TYPES = {
   pck: 'application/octet-stream',
 };
 
+const WIKI_POLICY = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+
 function isolate(headers) {
   headers.set('Cross-Origin-Opener-Policy', 'same-origin');
   headers.set('Cross-Origin-Embedder-Policy', 'require-corp');
@@ -33,13 +35,24 @@ export default {
       url.protocol = 'https:';
       return Response.redirect(url.href, 308);
     }
+    // The wiki (public/wiki, built by tools/build_wiki.py) is a static site of
+    // its own: it never needs the engine and allows nothing but its own files.
+    if (url.pathname === '/wiki') {
+      url.pathname = '/wiki/';
+      return Response.redirect(url.href, 308);
+    }
     const entry = parts[url.pathname];
     if (!entry) {
       const response = await env.ASSETS.fetch(request);
+      const headers = isolate(new Headers(response.headers));
+      if (url.pathname.startsWith('/wiki/')) {
+        headers.set('Cache-Control', 'no-cache');
+        headers.set('Content-Security-Policy', WIKI_POLICY);
+      }
       return new Response(response.body, {
         status: response.status,
         statusText: response.statusText,
-        headers: isolate(new Headers(response.headers)),
+        headers,
       });
     }
     const headers = isolate(new Headers());

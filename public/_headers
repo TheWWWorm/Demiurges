@@ -19,3 +19,8 @@
 
 /service-worker.js
   Cache-Control: no-cache
+
+# The wiki is plain articles: revalidated, and allowed nothing but its own files.
+/wiki/*
+  Cache-Control: no-cache
+  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'

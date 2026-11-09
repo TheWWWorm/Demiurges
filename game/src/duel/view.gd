@@ -414,6 +414,10 @@ func _start(edition: String, options: Dictionary = {}, restored: ELDuel = null, 
 	_redirect_hit.clear()
 	_hits_waiting.clear()
 	_hit_serial += 1
+	_cast_queue.clear()
+	_cast_until = 0.0
+	_hero_shown = [-1, -1]
+	_wound_shown.clear()
 	battle_audio = ELBattleAudio.new()
 	stage.add_child(battle_audio)
 	battle_audio.build(profile, arena.definition, settings.values)
@@ -493,7 +497,7 @@ func _start(edition: String, options: Dictionary = {}, restored: ELDuel = null, 
 	melee.view = self
 	stage.add_child(melee)
 	duel.changed.connect(_refresh)
-	duel.event.connect(_event)
+	duel.event.connect(_on_duel_event)
 	profile_select.select(0 if edition == "el1" else 1)
 	_notice("Select a spell or a ready creature. Right-drag to orbit · Wheel to zoom · R resets the camera." if helper_overlay() else "")
 	_refresh()
@@ -528,6 +532,7 @@ func _start(edition: String, options: Dictionary = {}, restored: ELDuel = null, 
 				_figure_effect(effect, recipient)
 
 var _melee_shown := false
+var _tutorial_end_clock := 0.0
 
 func _process(delta: float) -> void:
 	elapsed += delta
@@ -547,7 +552,20 @@ func _process(delta: float) -> void:
 		return
 	if duel != null:
 		ai_clock += delta
+		if not _cast_queue.is_empty(): _step_cast_queue()
+		if not _presentation_held(): _sync_shown()
+		_show_hero_stats()
+		# The computer, a replay and the tutorial's recorded side act only once
+		# the previous action has been shown (fight and cast alike).
+		if _melee_busy() or _cast_busy(): ai_clock = minf(ai_clock, 0.85 - 0.25)
 		if duel_match != null and duel.phase == ELDuel.Phase.FINISHED and not _melee_busy(): _watch_match_round(delta)
+		# The tutorial battle closes by itself too, once its result has been read.
+		if combat_tutorial != null and duel == combat_tutorial.duel and duel.phase == ELDuel.Phase.FINISHED and not _melee_busy() and ending_over() and not _overlay_open():
+			_tutorial_end_clock += delta
+			if _tutorial_end_clock >= ROUND_RESULT_DELAY + 2.0:
+				_tutorial_end_clock = 0.0
+				_leave_combat_tutorial()
+		else: _tutorial_end_clock = 0.0
 		if replay_player != null:
 			# A duel replay plays its recorded actions at the battle's pace.
 			if replay_player.playing and duel == replay_player.duel and not _overlay_open() and not _melee_busy() and ai_clock >= 0.85:
@@ -578,10 +596,11 @@ func _process(delta: float) -> void:
 			var top := _numbers_point(model)
 			if id < 2:
 				# The hero panels show health; the floating readout is helper-only.
-				label.text = "%d HP" % duel.heroes[id].health if helper_overlay() else ""
+				label.text = "%d HP" % shown_health(id) if helper_overlay() else ""
 				var hero: Dictionary = duel.heroes[id]
 				if numbers and duel.phase != ELDuel.Phase.FINISHED:
-					figures.append({"id": id, "top": top, "numbers": ELCombatSymbols.number_row(0, int(hero.health), int(hero.health) < int(hero.get("maximum", hero.health)), true), "icons": [], "order": []})
+					var health := shown_health(id)
+					figures.append({"id": id, "top": top, "numbers": ELCombatSymbols.number_row(0, health, health < int(hero.get("maximum", hero.health)), true), "icons": [], "order": []})
 			elif duel.creatures.has(id):
 				var c: Dictionary = duel.creatures[id]
 				# Remake-only state words (helper overlay); the original marks are glyphs.
@@ -603,7 +622,7 @@ func _process(delta: float) -> void:
 				if numbers and model.visible:
 					var blocked := int(duel.blocks.get(id, -1))
 					figures.append({"id": id, "top": top,
-						"numbers": ELCombatSymbols.number_row(int(c.power), int(c.toughness) - int(c.damage), int(c.damage) > 0, false),
+						"numbers": ELCombatSymbols.number_row(int(c.power), int(c.toughness) - shown_damage(id), shown_damage(id) > 0, false),
 						"icons": creature_icons(id) if bool(settings.values.get("ability_icons", true)) else [],
 						"order": ELCombatSymbols.order_row(duel.attacks.find(id) + 1, duel.attacks.find(blocked) + 1 if blocked >= 0 else 0) if bool(settings.values.get("attack_order", true)) else []})
 			label.position = top + Vector3(0, 0.35, 0)
@@ -1226,10 +1245,105 @@ func _step_front_line() -> void:
 func _melee_busy() -> bool:
 	return is_instance_valid(melee) and melee.busy()
 
+## Casts are shown one after another. The original's battle tick takes no
+## further command while visual events are pending (the gate
+## live players and the replay player share); the rules here settle a cast at
+## once, so a quick second cast's presentation (gesture, voice, effects and
+## everything it touches) waits in this queue until the previous cast's
+## gesture and hit have played, instead of starting over it.
+const CAST_KINDS := ["cast", "artifact"]
+var _cast_queue: Array[Dictionary] = []
+## `elapsed` when the cast being shown has played.
+var _cast_until := 0.0
+var _cast_dispatching := false
+## Hero health as last shown (stamped on its damage and heal events), and each
+## creature's damage as last shown, while a fight or queued casts still play.
+var _hero_shown: Array[int] = [-1, -1]
+var _wound_shown: Dictionary = {}
+
+## A cast is still being shown, or casts wait for their turn.
+func _cast_busy() -> bool:
+	return not _cast_queue.is_empty() or elapsed < _cast_until
+
+## Events the rules have settled but the screen has not shown yet.
+func _presentation_held() -> bool:
+	return _melee_busy() or not _cast_queue.is_empty()
+
+## The rules' event, stamped with the hero health it leaves (the screen shows
+## that value only when the event itself is shown).
+func _on_duel_event(data: Dictionary) -> void:
+	var target := int(data.get("target", -1))
+	if duel != null and data.get("kind") in ["damage", "heal"] and target in [0, 1]:
+		data = data.duplicate()
+		data.shown_health = int(duel.heroes[target].health)
+	_event(data)
+
+## Holds an event behind the cast being shown. Events the combat playback
+## sequences itself pass, as does everything once the queue is drained.
+func _hold_cast(data: Dictionary) -> bool:
+	if _cast_dispatching or (is_instance_valid(melee) and melee.dispatching()): return false
+	if _cast_queue.is_empty() and (_melee_busy() or not data.get("kind") in CAST_KINDS or elapsed >= _cast_until): return false
+	_cast_queue.append(data)
+	return true
+
+## Shows queued events in order; a queued cast waits for the previous one.
+## A fight waits until its playback has collected all its blows.
+func _step_cast_queue() -> void:
+	var shown := false
+	while not _cast_queue.is_empty():
+		var next: Dictionary = _cast_queue[0]
+		if next.get("kind") in CAST_KINDS and elapsed < _cast_until: break
+		if is_instance_valid(melee) and melee.running(): break
+		_cast_queue.pop_front()
+		_cast_dispatching = true
+		_event(next)
+		_cast_dispatching = false
+		shown = true
+	if shown: _refresh()
+
+## Seconds a cast's presentation holds the next one: the hero's gesture, and
+## the card effect's hit or summon cue.
+func _cast_seconds(data: Dictionary) -> float:
+	var seconds := 0.0
+	var side := int(data.get("side", -1))
+	var card := String(data.get("card", ""))
+	if data.kind == "cast" and models.has(side) and not bool(settings.values.get("hide_cast", false)):
+		var animation := "usummon" if duel.is_summon(card) else ("uenchantment" if ELCatalog.rule(profile, card).get("effect") == "enchant" else "uinstant")
+		seconds = maxf(models[side].clip_seconds(animation), 0.0)
+	var cue := ELCombatEffects.summon_delay(profile, card) if duel.is_summon(card) else ELCombatEffects.hit_delay(profile, card)
+	return clampf(maxf(seconds, cue + 0.3), 0.8, 6.0)
+
+## Keeps the shown values equal to the rules' while nothing waits.
+func _sync_shown() -> void:
+	if duel == null: return
+	_hero_shown = [int(duel.heroes[0].health), int(duel.heroes[1].health)]
+	_wound_shown.clear()
+	for id: int in duel.creatures: _wound_shown[id] = int(duel.creatures[id].damage)
+
+## Hero health as the screen shows it: it drops with each blow and spell as
+## they land, not when the rules settle the whole fight.
+func shown_health(side: int) -> int:
+	if _presentation_held() and _hero_shown[side] >= 0: return _hero_shown[side]
+	return int(duel.heroes[side].health)
+
+## A creature's damage as the screen shows it (see shown_health).
+func shown_damage(id: int) -> int:
+	if _presentation_held() and _wound_shown.has(id): return int(_wound_shown[id])
+	return int(duel.creatures[id].damage) if duel.creatures.has(id) else 0
+
+## Notes what a shown event changes in the shown values.
+func _note_shown(data: Dictionary) -> void:
+	var target := int(data.get("target", -1))
+	if data.has("shown_health") and target in [0, 1]: _hero_shown[target] = int(data.shown_health)
+	elif data.get("kind") == "damage" and target >= 2: _wound_shown[target] = int(_wound_shown.get(target, 0)) + int(data.get("amount", 0))
+
 func _event(data: Dictionary) -> void:
+	if _hold_cast(data): return
 	if own_attack_pending >= 0 and data.get("kind") == "strike" and not _melee_busy(): _auto_attack_own()
 	# Blows and what follows them wait for the combat playback.
 	if is_instance_valid(melee) and melee.capture(data): return
+	_note_shown(data)
+	if data.get("kind") in CAST_KINDS: _cast_until = elapsed + _cast_seconds(data)
 	if not _effect_cast.is_empty():
 		if profile.id == "el1" and _effect_cast.card == "FRNT" and data.kind == "fury_result":
 			_effect_cast.fury_attempts = int(data.get("attempts", 0))
@@ -3234,7 +3348,7 @@ func _animation_done(clip: String, id: int) -> void:
 	if _melee_busy() and melee.moving(id): return
 	if id >= 2 and not duel.creatures.has(id):
 		# During combat playback a creature that falls to a later blow fights on until then.
-		if _melee_busy() and clip != "udeath":
+		if _presentation_held() and clip != "udeath":
 			models[id].play("cidle")
 			return
 		_remove_model(id)
@@ -3242,6 +3356,17 @@ func _animation_done(clip: String, id: int) -> void:
 	if duel.phase == ELDuel.Phase.FINISHED:
 		return
 	var resting: bool = id >= 2 and (duel.creatures[id].resting or duel.creatures[id].sick)
+	# The rules rest an attacker as soon as the fight is settled; its figure
+	# fights on in its combat idle and lies down only once it is back home.
+	if resting and _melee_busy() and melee.away(id):
+		models[id].play("cidle")
+		return
+	# Home again after a fight (a move's end): the figure's own tap clip, then
+	# its resting idle (_turn_figure), rather than a jump into the pose.
+	if resting and clip.is_empty() and id >= 2 and bool(duel.creatures[id].resting) and models[id].has_clip("utap") and models[id].has_clip("ctapidle") and models[id].base_clip() != "ctapidle":
+		if models[id].play("utap"):
+			battle_audio.unit(models[id], "tap")
+			return
 	if not models[id].play("ctapidle" if resting else "cidle"):
 		models[id].play("cidle")
 
@@ -3373,13 +3498,56 @@ static func rail_drop(button: Control, back: bool) -> Tween:
 	tween.tween_callback(put.bind(1.0, 0.0))
 	return tween
 
+## A card that stays in the hand slides from `shift` pixels away to its
+## place, at the rail's 11 px per 60 Hz frame (AbilitieScroll slide).
+static func rail_slide(button: Control, shift: float) -> Tween:
+	var box := button.get_parent() as Container
+	var state := {"base": NAN, "shift": shift}
+	var apply := func() -> void:
+		if not is_nan(float(state.base)): button.position.x = float(state.base) + float(state.shift)
+	var keep := func() -> void:
+		state.base = button.position.x
+		apply.call()
+	if box != null: box.sort_children.connect(keep)
+	var tween := button.create_tween()
+	var step := func(value: float) -> void:
+		state.shift = value
+		apply.call()
+	tween.tween_method(step, shift, 0.0, clampf(absf(shift) / 660.0, 0.08, 0.6)).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	var release := func() -> void: if box != null and box.sort_children.is_connected(keep): box.sort_children.disconnect(keep)
+	tween.finished.connect(release)
+	button.tree_exiting.connect(release)
+	return tween
+
+## The picture of a card leaving the hand shrinks and fades where it stood.
+func _rail_leave(card: Dictionary) -> void:
+	var rect: Rect2 = card.rect
+	if rect.size.x <= 0.0 or card.texture == null: return
+	var ghost := TextureRect.new()
+	ghost.texture = card.texture
+	ghost.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	ghost.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	ghost.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	hand_frames.add_child(ghost)
+	var scale := hand_frames.get_global_transform().get_scale()
+	ghost.position = (rect.position - hand_frames.global_position) / scale
+	ghost.size = rect.size / scale
+	ghost.pivot_offset = ghost.size * 0.5
+	var tween := ghost.create_tween().set_parallel()
+	tween.tween_property(ghost, "scale", Vector2(0.2, 0.2), 10.0 / 60.0)
+	tween.tween_property(ghost, "modulate:a", 0.0, 10.0 / 60.0)
+	tween.chain().tween_callback(ghost.queue_free)
+
 func _refresh() -> void:
 	if duel == null or updating:
 		return
 	_check_handover()
 	_step_front_line()
 	updating = true
+	# Where each card stood, so the cards that stay slide to their new places.
+	var was := {}
 	for child in hand.get_children():
+		if child.has_meta("rail_id"): was[String(child.get_meta("rail_id"))] = {"index": was.size(), "rect": Rect2(child.global_position, child.size * child.get_global_transform().get_scale()), "texture": (child as TextureButton).texture_normal}
 		hand.remove_child(child)
 		child.queue_free()
 	var active := duel.active_side()
@@ -3424,7 +3592,7 @@ func _refresh() -> void:
 		button.set_meta("card", card)
 		button.set_meta("hand_index", i)
 		button.set_meta("charges", uses)
-		button.disabled = not _human_turn() or duel.available_mana(displayed) < duel.cost(card) or hero.channels < duel.channel_cost(card) or uses == 0
+		button.disabled = not _human_turn() or duel.available_mana(displayed) < duel.cost(card) or hero.channels < duel.channel_cost(card) or uses == 0 or not duel.phase_allows(card)
 		_list_look().dress(button)
 		if i == selection: _selection_outline(button)
 		# Remake readout: the cost, only with the helper overlay.
@@ -3445,12 +3613,22 @@ func _refresh() -> void:
 		hand.add_child(button)
 		if tracked:
 			var id := "%d:%s" % [int(keys[i]), card]
+			button.set_meta("rail_id", id)
+			if animate and was.has(id) and int(was[id].index) != seen.size():
+				# A card that stays moves over to its new place.
+				rail_slide(button, float(int(was[id].index) - seen.size()) * (50.0 + hand.get_theme_constant("separation")))
 			seen[id] = true
 			if animate and not _rail_seen.has(id):
 				# Drawn cards enter at the left, returned ones at the right.
 				var back := float(keys[i]) > old_min
 				button.set_meta("rail_drop", rail_drop(button, back))
 				if rail != null: rail.reveal_hand(back)
+	# A card that left (cast, discarded) shrinks away where it stood while
+	# the others close the gap (the first game steps a leaving card for ten
+	# ticks before the list drops it).
+	if animate and hand_frames != null:
+		for id: String in was:
+			if not seen.has(id): _rail_leave(was[id])
 	_rail_seen = seen
 	_rail_seen_side = displayed if tracked and not showing_artifacts and not concealed else -1
 	_rail_seen_duel = weakref(duel)
@@ -3462,10 +3640,7 @@ func _refresh() -> void:
 			var h: Dictionary = duel.heroes[side]
 			tallies.append([h.grave.size(), h.enchantments.size(), h.hand.size(), h.get("artifacts", []).size()])
 		rail.set_counts(tallies[0], tallies[1])
-	for side in 2:
-		var h: Dictionary = duel.heroes[side]
-		hero_values[side].text = "%d   %d   %d" % [h.health, h.mana, h.channels]
-	if rail != null: rail.set_stats([duel.heroes[0].health, duel.heroes[0].mana, duel.heroes[0].channels], [duel.heroes[1].health, duel.heroes[1].mana, duel.heroes[1].channels])
+	_show_hero_stats()
 	for side in 2:
 		var h: Dictionary = duel.heroes[side]
 		hero_names[side].text = _side_name(side)
@@ -3488,9 +3663,11 @@ func _refresh() -> void:
 	phase_label.tooltip_text = "%s's phase" % _side_name(active) if helper_overlay() else ""
 	# The phase control is the original panel's end-phase socket; its icon is
 	# part of the panel art. Only the post-battle return control carries text.
-	end_button.text = "Continue to map" if _campaign_battle() != null and duel.phase == ELDuel.Phase.FINISHED else ("Continue" if (duel_match != null or combat_tutorial != null) and duel.phase == ELDuel.Phase.FINISHED else "")
+	# The originals have no post-battle control: a finished battle closes by
+	# itself once its winner's clip has played (GameOver; _step_ending).
+	end_button.text = ""
 	_place_end_button()
-	end_button.disabled = not _human_turn() and not ((_campaign_battle() != null or duel_match != null or combat_tutorial != null) and duel.phase == ELDuel.Phase.FINISHED)
+	end_button.disabled = not _human_turn()
 	# The original control tooltips (CombatMenu2 end of phase, CombatMenu1 attack with all).
 	end_button.tooltip_text = _control_tip("CombatMenu2")
 	attack_button.tooltip_text = _control_tip("CombatMenu1")
@@ -3504,6 +3681,9 @@ func _refresh() -> void:
 	# Hot seat has no auto combat (unavailable in HotSeat in the original).
 	auto_button.disabled = not auto_combat and (not _human_turn() or combat_tutorial != null or _hot_seat())
 	for id: int in models:
+		# Fighters the combat playback is still moving or holding at their
+		# fight point keep their clip until they are home.
+		if _melee_busy() and (melee.moving(id) or melee.away(id)): continue
 		if id >= 2 and duel.creatures.has(id) and models[id].clip.begins_with("c"):
 			var resting: bool = duel.creatures[id].resting or duel.creatures[id].sick
 			var desired := "ctapidle" if resting else "cidle"
@@ -3512,12 +3692,23 @@ func _refresh() -> void:
 	_refresh_inspector()
 	updating = false
 
+## The heroes' health, ether and channels on the panel (health as shown).
+func _show_hero_stats() -> void:
+	if duel == null or hero_values.size() < 2: return
+	var stats: Array = []
+	for side in 2:
+		var h: Dictionary = duel.heroes[side]
+		stats.append([shown_health(side), int(h.mana), int(h.channels)])
+		var text := "%d   %d   %d" % stats[side]
+		if hero_values[side].text != text: hero_values[side].text = text
+	if rail != null: rail.set_stats(stats[0], stats[1])
+
 ## The panel buttons' availability (their shutters close when unavailable).
 ## Attack with all is open only while one of the side's creatures can still
 ## be sent.
 func _refresh_buttons() -> void:
 	if duel == null or attack_button == null: return
-	end_button.disabled = not _human_turn() and not ((_campaign_battle() != null or duel_match != null or combat_tutorial != null) and duel.phase == ELDuel.Phase.FINISHED)
+	end_button.disabled = not _human_turn()
 	attack_button.disabled = not _human_turn() or duel.phase != ELDuel.Phase.ATTACK or not duel.army(duel.active_side()).any(func(c: Dictionary) -> bool: return duel.can_attack(c.id) and not duel.attacks.has(c.id))
 
 ## A creature put to rest by an action, or rising from rest, plays the figure's own tap
@@ -5185,14 +5376,18 @@ func _watch_match_round(delta: float) -> void:
 			if duel_match.finished(): _finish_duel_report()
 		_refresh()
 		return
+	if front_menu != null and front_menu.is_visible_in_tree(): return
+	var single := duel_match.rounds < 2 and duel_match.edition != "el2"
 	# The second game shows the round result after every round.
-	if (duel_match.rounds < 2 and duel_match.edition != "el2") or front_menu == null or front_menu.is_visible_in_tree(): return
+	if not single and front_menu == null: return
 	match_clock += delta
 	# The result follows the end of the battle (the winner's clip), and
-	# never sooner than the remake's short pause.
+	# never sooner than the remake's short pause. A single first-game battle
+	# ends the original way (GameOver): back to the Duel screen by itself.
 	if match_clock >= ROUND_RESULT_DELAY and ending_over() and not match_result_shown:
 		match_result_shown = true
-		_show_round_result()
+		if single: _continue_match()
+		else: _show_round_result()
 
 func _show_round_result() -> void:
 	if duel_match == null or not match_round_recorded: return

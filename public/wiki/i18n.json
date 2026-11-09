@@ -1,0 +1,38 @@
+{
+  "en": {
+    "title": "Demiurges · Wiki",
+    "skip": "Skip to article",
+    "tagline": "Wiki",
+    "language": "Language",
+    "play": "Play in the browser",
+    "browse": "Contents and search",
+    "search": "Search the wiki",
+    "loading": "Loading the wiki…",
+    "failed": "The wiki could not be loaded. Check your connection and reload the page.",
+    "missing": "There is no such page. Showing the contents instead.",
+    "found": "{n} pages found",
+    "nothing": "Nothing found. Try a shorter word.",
+    "contents": "On this page",
+    "disclaimer": "Demiurges is a fan-made engine. Etherlords and Etherlords II belong to their owners; this wiki contains no game content.",
+    "project": "Project and source code",
+    "version": "Wiki for Demiurges {v}"
+  },
+  "ru": {
+    "title": "Demiurges · Вики",
+    "skip": "Перейти к статье",
+    "tagline": "Вики",
+    "language": "Язык",
+    "play": "Играть в браузере",
+    "browse": "Содержание и поиск",
+    "search": "Поиск по вики",
+    "loading": "Загрузка вики…",
+    "failed": "Не удалось загрузить вики. Проверьте подключение и обновите страницу.",
+    "missing": "Такой страницы нет. Открыто содержание.",
+    "found": "Найдено страниц: {n}",
+    "nothing": "Ничего не найдено. Попробуйте более короткое слово.",
+    "contents": "На этой странице",
+    "disclaimer": "Demiurges — любительский движок. «Демиурги» и «Демиурги II» принадлежат своим правообладателям; в этой вики нет материалов из игр.",
+    "project": "Проект и исходный код",
+    "version": "Вики для Demiurges {v}"
+  }
+}

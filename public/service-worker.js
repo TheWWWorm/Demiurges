@@ -1,27 +1,27 @@
 'use strict';
 // Filled in with content hashes and the engine files by the Web build tool.
-const ENGINE_CACHE = 'demiurges-engine-ea2ad21463bf358c90f8';
+const ENGINE_CACHE = 'demiurges-engine-098bc27197d15aad23aa';
 // Hosts may redirect /index.html to / (Cloudflare Workers assets do). A
 // redirected response must never answer a navigation (the browser fails it
 // with ERR_FAILED), so the shell is fetched and stored as "./".
 const SHELL = new URL('./', self.registration.scope).href;
 const HASHES = {
-"data-worker.js": "62d9c0fc3917459464fab4304f6a4b5ce525011ef0afc3ed9654e13438b91af3",
-"files.js": "a6572ae934be13785fc271b72dfac9c4edb27f9ef46e2b99d65d76623204aaf2",
-"icon-192.png": "fa94638c64864b32febe00ceace21e2ebcf77574e2d3e7db66759016883e77ab",
-"icon-512.png": "29d0dbd57a68b456062b0017941f78184fe40b4e0df835755a3a6cbe864d23c6",
-"index.apple-touch-icon.png": "3401326adaf50750e3284f669e07a85a1a57027ad78912d368b832eebd035f50",
+"data-worker.js": "12d7e9d71fb7aac25c4bd9979ec5be964a62367254a9165d95c9faf1177a7210",
+"files.js": "24beb83161a5a2579d031b630e6bcf5a9942054e0fae0eca3db17a4598c5d44e",
+"icon-192.png": "a1f972afd34f9a84c4b12255eea2876f574e47770f1675b062d932daa9351342",
+"icon-512.png": "32a106a97042a0f481da08efd413555a1000ad260992149816e7d7f34f6e19fb",
+"index.apple-touch-icon.png": "cf9474458ad0da20d7f3fe85a012e896ca3302a9d5fd8f3d953f996fb4bdc44e",
 "index.audio.position.worklet.js": "be33985bc7160d6bf9646f259cd86b259cd67b02ccb297ee5c44f8ac84327bc8",
 "index.audio.worklet.js": "5b476a9c9ce642c0ee4256436d1bc31d9c38f868aca0f9a8e2a57c18d2dec2a3",
-"index.html": "4fd21d8ed4f659f6eae4c86806ac2a9fcaa7202301e15e26c13fa26277d1d5a6",
-"index.icon.png": "ef998d2468c229ce9c956f1bdfcc07e0e73350d132c4030b370ca98b9213e891",
+"index.html": "eb2e88671b8ce8572bfd68a1123fc78094fa24544fb33430fe1645e697d4a01d",
+"index.icon.png": "1fdbf8b2c58724c78f28f92250eb58fd70cdfa4fbb89e64e8709714d093dab9b",
 "index.js": "63795a00d4edd57a3896618ade5b12d063684a41c1e39ee3ade00de7362d9da5",
-"index.pck": "c562656fd12749b873b721be2829a7f48f4d551374ea078f00a1966ac9292d93",
-"index.png": "3cb4495c0b98dfbe4b663cbf2b6836473572339beb66d902367893162a70be0e",
+"index.pck": "22a64633504466520514d0673a13ddfe61e46baa6186933b72755b174b510331",
+"index.png": "7b4d9beb8e031a5fa9349c18431241fdcc35f2f68481d872661b45a5ad6dd2d8",
 "index.wasm": "7eda98958eb09135a1acb54a4323a00b1a55af1997f15fa1cdc2b93e3df46656",
-"installer-worker.js": "32abae13d4e3491ccfa627435c1bacb63f28e4422c4debe6b7097a5f3be38192",
+"installer-worker.js": "8bc8a5ab27aaa5389bfc9dc83484c5e7682ddf4e693aac23836f0689f35783f6",
 "manifest.webmanifest": "91bb1425a9391403fbded910f0f2899bd8e440a804e14590775a806235093b01",
-"storage.js": "09da3290981038eeff1b9565d69a9954b70fce6d94d1e1ecea4d9ce3ef2c7ab4"
+"storage.js": "8998b34b6e0544c99a6f72eb54b90aaea94a4f219ec43d28520cb391fff57446"
 };   // file name → SHA-256
 const ENGINE_FILES = Object.keys(HASHES).map(name => name === 'index.html' ? SHELL : new URL(name, SHELL).href);
 let progress = {type: 'progress', loaded: 0, total: 0};

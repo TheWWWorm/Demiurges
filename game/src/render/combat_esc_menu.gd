@@ -115,10 +115,22 @@ func build(source: ELProfile) -> bool:
 	remake_button.add_theme_font_size_override("font_size", 15)
 	remake_button.tooltip_text = "The remake's own battle menu."
 	var panel := control_rect(PANEL)
-	remake_button.position = Vector2(panel.position.x + panel.size.x * 0.5 - 70, panel.end.y + 10)
+	remake_button.position = Vector2(panel.position.x + panel.size.x * 0.5 - 145, panel.end.y + 10)
 	remake_button.size = Vector2(140, 30)
 	remake_button.pressed.connect(func(): remake_menu_requested.emit())
 	canvas.add_child(remake_button)
+	# Remake-only: the wiki over the battle (also F1).
+	var wiki := Button.new()
+	wiki.name = "Wiki"
+	var russian := ELWikiScreen.remembered_language(header.text) == "ru"
+	wiki.text = "Вики (F1)" if russian else "Wiki (F1)"
+	wiki.tooltip_text = "Правила боя и управление" if russian else "Combat rules and controls."
+	wiki.focus_mode = Control.FOCUS_NONE
+	wiki.add_theme_font_size_override("font_size", 15)
+	wiki.position = Vector2(panel.position.x + panel.size.x * 0.5 + 5, panel.end.y + 10)
+	wiki.size = Vector2(140, 30)
+	wiki.pressed.connect(func(): ELWikiScreen.open(self, "combat", header.text))
+	canvas.add_child(wiki)
 	resized.connect(_layout)
 	_layout()
 	hide()

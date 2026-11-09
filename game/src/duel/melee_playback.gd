@@ -129,9 +129,22 @@ static func flat_distance(a: Vector3, b: Vector3) -> float:
 func busy() -> bool:
 	return _running or _capturing
 
+## Blows are being shown (collecting them has ended).
+func running() -> bool:
+	return _running
+
+## An event the playback hands back to the view is being handled.
+func dispatching() -> bool:
+	return _dispatching
+
 ## Whether the playback is moving this figure (its run/walk clip must stay).
 func moving(id: int) -> bool:
 	return _moves.has(id)
+
+## Whether a figure stands away from its home slot (at its fight point or on
+## the front line): it stays on its feet until it has walked home.
+func away(id: int) -> bool:
+	return _has(id) and view.homes.has(id) and flat_distance(_position(id), view.homes[id]) > 0.05
 
 ## Takes an event from the battle. Returns true when the playback holds it:
 ## the first strike opens playback, and every later event waits its turn.

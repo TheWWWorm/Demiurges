@@ -977,6 +977,19 @@ func apply(preset: Dictionary, action: String, value: Variant) -> Variant:
 			else:
 				if p.cards.size() < ELDuelCosts.EL2_DECK: p.cards.append(value)
 				else: p.reserve[value] = int(p.reserve.get(value, 0)) + 1
+		"place_spell":
+			# [card, slot]: a picked spell put on a book slot. An occupied slot
+			# takes the new spell (its runes go back), an empty one adds it.
+			var card: String = value[0]
+			var slot := int(value[1])
+			if slot >= 0 and slot < p.cards.size():
+				if p.cards[slot] == card: return null
+				p.cards[slot] = card
+				if slot < p.runes.size(): p.runes[slot] = 0
+			else:
+				return apply(preset, "add_spell", card)
+		"spell_to_reserve":
+			p.reserve[value] = int(p.reserve.get(value, 0)) + 1
 		"remove_slot":
 			if int(value) < 0 or int(value) >= p.cards.size(): return null
 			p.cards.remove_at(int(value))
@@ -1917,6 +1930,18 @@ class BookView extends Control:
 		if not (event is InputEventMouseButton and event.pressed): return
 		var index := slot_at(event.position)
 		accept_event()
+		# A spell picked in the list goes where the book is clicked: on a
+		# slot (replacing it) or on an empty place (added).
+		var pending := screen.selected_action()
+		if event.button_index == MOUSE_BUTTON_LEFT and not event.double_click and not pending.is_empty() and pending[0] == "add_spell":
+			var placed := screen.act("spell_to_reserve", pending[1]) if reserve else screen.act("place_spell", [pending[1], index])
+			if placed:
+				screen.edit.item = -1
+				screen.edit.slot = -1
+				if screen.right_list != null and is_instance_valid(screen.right_list): screen.right_list.deselect_all()
+				screen.update_editor()
+				queue_redraw()
+				return
 		if index < 0: return
 		var entry: Dictionary = entries()[index]
 		if event.button_index == MOUSE_BUTTON_RIGHT:

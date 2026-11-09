@@ -2,6 +2,8 @@
 
 Play **Etherlords** («Демиурги», Nival, 2001) and **Etherlords II** («Демиурги II», 2003) on a modern engine on Windows, Linux, macOS and Android or in your browser.
 
+**[Play](https://demiurges.wwworm.com/) · [Download](https://github.com/TheWWWorm/Demiurges/releases/latest) · [Wiki](https://demiurges.wwworm.com/wiki/) · [Вики](https://demiurges.wwworm.com/wiki/?lang=ru)**
+
 Demiurges is a fan-made replacement engine built in Godot. It reads the game files you already own (models, textures, animations, sounds, music, texts, maps, campaign scripts and game tables) and plays them with newly written combat, campaign, interface and rendering systems that follow the original games' rules.
 
 > **You need your own copy of the game you want to play.** No game content ships with this engine and nothing is downloaded for you. The GOG versions are the tested editions. Either game is enough; with both, you can switch between them. Each game keeps its own rules, files and saves.
@@ -37,7 +39,13 @@ Download the package for your system from the [Releases](https://github.com/TheW
 - **Browser (WebGL 2):** nothing to download; [play the hosted version](https://demiurges.wwworm.com/), see above.
   To host the browser version yourself, use `…-web.zip`. It needs HTTPS (or `localhost`) and the `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp` headers (included in its `_headers` file); see [hosting the browser version](docs/hosting.md).
 
+## Wiki
+
+The [**Demiurges wiki**](https://demiurges.wwworm.com/wiki/) is free to read without game files, an account or the engine. It explains installing, controls, combat rules and phases, spells and creatures, the campaigns, duels, options and the differences from the originals, in English and [Russian](https://demiurges.wwworm.com/wiki/?lang=ru). Good starting points: [installing the game files](https://demiurges.wwworm.com/wiki/?page=installing), [controls](https://demiurges.wwworm.com/wiki/?page=controls), [how a battle works](https://demiurges.wwworm.com/wiki/?page=combat) and [turn and phases](https://demiurges.wwworm.com/wiki/?page=combat-phases). The same articles open in the game: **Wiki** on the main menu or **F1** on any screen. See [the wiki guide](docs/wiki.md) to edit or rebuild it.
+
 ## Getting started (desktop)
+
+See also [Installing the game files](https://demiurges.wwworm.com/wiki/?page=installing) in the wiki.
 
 1. Start the engine.
 2. Choose **Etherlords I** or **Etherlords II** at the top of the game files screen, then one of:
@@ -77,9 +85,11 @@ The engine is still in development. Things you may notice:
 - Saves and replays of the original games cannot be loaded; the engine keeps its own.
 - Touch controls have not yet been tried on real phones and tablets, only in testing. The interface keeps the original layout, so on a small phone screen text and buttons are small.
 
-Please report problems on the [Issues](https://github.com/TheWWWorm/Demiurges/issues) page.
+Please report problems on the [Issues](https://github.com/TheWWWorm/Demiurges/issues) page. The wiki lists [known gaps](https://demiurges.wwworm.com/wiki/?page=troubleshooting) and [differences from the originals](https://demiurges.wwworm.com/wiki/?page=differences).
 
 ## Controls
+
+The wiki has the [full controls](https://demiurges.wwworm.com/wiki/?page=controls) and [combat rules](https://demiurges.wwworm.com/wiki/?page=combat). **F1** opens the wiki in the game.
 
 The original controls work as in the games. A few useful keys:
 

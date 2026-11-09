@@ -12,6 +12,9 @@ import json
 import pathlib
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
+WIKI_POLICY = ("default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; "
+               "object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
+
 
 class Handler(SimpleHTTPRequestHandler):
     extensions_map = {**SimpleHTTPRequestHandler.extensions_map, '.wasm': 'application/wasm',
@@ -23,6 +26,9 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_header('Cross-Origin-Embedder-Policy', 'require-corp')
         self.send_header('Cross-Origin-Resource-Policy', 'same-origin')
         self.send_header('Cache-Control', 'no-cache')
+        if self.path.startswith('/wiki/'):
+            # The same policy as worker.js, so local checks catch inline code.
+            self.send_header('Content-Security-Policy', WIKI_POLICY)
         super().end_headers()
 
     def send_head(self):

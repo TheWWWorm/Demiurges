@@ -27,4 +27,6 @@ python3 tools/prepare_web_host.py --source build/web --output public
 
 The first command exports the engine with the Web preset and adds the page's local-file support, icons, the service worker and `_headers`. The second splits files over 25 MiB and writes `parts.json` next to `public/`.
 
+The wiki at `/wiki/` is a separate static site in `public/wiki`, built by `python3 tools/build_wiki.py` and kept when `prepare_web_host.py` replaces the export; see [the wiki guide](wiki.md).
+
 Players' game files never reach the server: they are imported and stored in the player's own browser.

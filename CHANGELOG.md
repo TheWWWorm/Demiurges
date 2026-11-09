@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.2.13
+
+- New wiki in English and Russian: on the web at [demiurges.wwworm.com/wiki](https://demiurges.wwworm.com/wiki/) and inside the game (main menu **Wiki**, or F1).
+- New Demiurges logo for the app icon and the start-up screen.
+- Battles: quick casts are shown one after another, as in the originals, instead of starting over each other with overlapping sounds. The computer opponent also waits for each cast to be shown.
+- Battles: a hero's health drops with each blow as it lands, instead of jumping to the result when the fight starts. Creature health in the figure numbers follows the blows too.
+- Battles: attackers stay on their feet after striking and lie down to rest only once they have walked home, with their own rest animation.
+- Battles: the defending hero can cast only the spells the originals allow in the defence phase (Polymorph, Fog and Energize All, plus «Самопожертвование» and «Телохранитель» in Etherlords II). The computer opponent no longer casts other spells while defending.
+- Battles: cards entering and leaving the hand slide into place; a cast card shrinks away where it stood.
+- Battles end the original way, without a Continue button: a campaign battle, a single Etherlords I duel and the Etherlords II combat tutorial close by themselves after the winner's animation.
+- Closed arenas such as Etherlords I's «Круг времени» are no longer black from the standing camera: scenery is drawn one-sided, as in the originals.
+- A fallen hero's glowing staff (and similar death effects) no longer replays its fall over and over.
+- Duel screen: pick a spell in the list, then click a place in the spellbook to put it there (an empty place adds it, a filled slot is replaced).
+
 ## 0.2.12
 
 - Steam copies are found automatically on Windows, Linux and macOS: on a first start the game uses any it finds, and the game files screen offers **Use the Steam copy** for a game not set up yet.

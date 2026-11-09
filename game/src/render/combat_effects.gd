@@ -293,7 +293,13 @@ func _figure_animation(clip: String, model: ELModel) -> void:
 	requested.append(path)
 	if requested.size() > 80: requested.pop_front()
 	var emitter := _spawn(path, false, 0, _figure_transform(model), model)
-	if not emitter.is_empty(): _figure_emitters[id] = emitter
+	if emitter.is_empty(): return
+	# A one-shot clip (death, attack, cast...) emits its particles once: the
+	# figure holds the clip's last frame afterwards, so a cyclic file would
+	# replay the motion baked into it (a fallen hero's staff glow falling
+	# again and again, EL1 he201/he203/he205/he207/he401/he403 death.pfx).
+	if not clip.begins_with("c"): emitter.life = int(emitter.entry.file.frames)
+	_figure_emitters[id] = emitter
 
 ## The figure's place, facing and scale.
 static func _figure_transform(model: Node3D) -> Transform3D:

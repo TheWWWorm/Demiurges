@@ -12,6 +12,11 @@ var current := ""
 var available: Dictionary = {}
 var buttons: Dictionary = {}
 var font_size := 16
+## Opens the wiki (ELWikiScreen).
+var wiki_button: Button
+## A caption in the current game's language: Russian game texts open the wiki
+## in Russian until the player picks a language there.
+var wiki_hint := ""
 
 
 func _ready() -> void:
@@ -36,6 +41,23 @@ func _ready() -> void:
 		button.pressed.connect(_chosen.bind(edition))
 		add_child(button)
 		buttons[edition] = button
+	# The remake's wiki (also F1 anywhere).
+	wiki_button = Button.new()
+	wiki_button.name = "Wiki"
+	wiki_button.focus_mode = Control.FOCUS_NONE
+	wiki_button.custom_minimum_size = Vector2(96, 46)
+	wiki_button.add_theme_font_size_override("font_size", font_size)
+	for state: String in ["font_color", "font_focus_color", "font_pressed_color"]:
+		wiki_button.add_theme_color_override(state, Color(INK, 0.85))
+	wiki_button.add_theme_color_override("font_hover_color", INK.lightened(0.25))
+	wiki_button.add_theme_stylebox_override("normal", _plate(0.72, Color(INK, 0.3)))
+	wiki_button.add_theme_stylebox_override("hover", _plate(0.8, Color(INK, 0.6)))
+	wiki_button.add_theme_stylebox_override("pressed", _plate(0.88, INK))
+	wiki_button.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
+	wiki_button.pressed.connect(func():
+		var wiki := ELWikiScreen.open(self, "", wiki_hint)
+		if not wiki.closed.is_connected(_refresh): wiki.closed.connect(_refresh))
+	add_child(wiki_button)
 	_refresh()
 
 
@@ -66,6 +88,10 @@ func _refresh() -> void:
 		button.text = title if available.has(edition) else title + "\nnot installed — add…"
 		button.tooltip_text = ("Play " + title) if available.has(edition) else ("Add your copy of " + title)
 		button.set_pressed_no_signal(edition == current)
+	if wiki_button != null:
+		var russian := ELWikiScreen.remembered_language(wiki_hint) == "ru"
+		wiki_button.text = "Вики" if russian else "Wiki"
+		wiki_button.tooltip_text = "Справка по игре на движке Demiurges (F1)" if russian else "How to play on the Demiurges engine (F1)"
 
 
 func _chosen(edition: String) -> void:

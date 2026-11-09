@@ -44,6 +44,11 @@ BASE_HEADERS = """# Served by static hosts that read _headers (Cloudflare Worker
 
 /service-worker.js
   Cache-Control: no-cache
+
+# The wiki is plain articles: revalidated, and allowed nothing but its own files.
+/wiki/*
+  Cache-Control: no-cache
+  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'
 """
 
 
@@ -65,9 +70,19 @@ def prepare(source, output, limit=LIMIT, chunk=CHUNK, manifest=None):
         raise ValueError(f'{source} does not hold a Web export (no index.html)')
     if output == source or source.is_relative_to(output):
         raise ValueError('The output directory must not contain the source')
+    # The wiki (tools/build_wiki.py) is built separately: keep it, unless the
+    # export brings its own.
+    kept = None
+    if (output / 'wiki').is_dir() and not (source / 'wiki').exists():
+        kept = output.parent / f'.{output.name}-wiki-kept'
+        if kept.exists():
+            shutil.rmtree(kept)
+        shutil.move(output / 'wiki', kept)
     if output.exists():
         shutil.rmtree(output)
     shutil.copytree(source, output, symlinks=False)
+    if kept is not None:
+        shutil.move(kept, output / 'wiki')
     divided = {}
     for path in sorted(output.rglob('*')):
         if path.is_file() and path.stat().st_size > limit:

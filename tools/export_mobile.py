@@ -38,10 +38,9 @@ func _initialize():
 '''
 ICON_SCRIPT = '''extends SceneTree
 func _initialize():
- var source = FileAccess.get_file_as_string(OS.get_cmdline_user_args()[0])
  for size in [192, 512]:
-  var img = Image.new()
-  img.load_svg_from_string(source, float(size) / 512.0)
+  var img = Image.load_from_file(OS.get_cmdline_user_args()[0])
+  img.resize(size, size, Image.INTERPOLATE_LANCZOS)
   img.save_png(OS.get_cmdline_user_args()[1].path_join("icon-%d.png" % size))
  quit()
 '''
@@ -71,6 +70,11 @@ HEADERS = '''# Served by static hosts that read _headers (Cloudflare Workers ass
 
 /service-worker.js
   Cache-Control: no-cache
+
+# The wiki (tools/build_wiki.py) is plain articles: revalidated, and allowed nothing but its own files.
+/wiki/*
+  Cache-Control: no-cache
+  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'
 '''
 
 
@@ -87,10 +91,10 @@ def run_checked(command, **kwargs):
 
 def stage_project(project, stage):
     stage.mkdir()
-    for name in ('src', 'scenes', 'web', 'native'):
+    for name in ('src', 'scenes', 'web', 'native', 'assets'):
         if (project / name).is_dir():
             shutil.copytree(project / name, stage / name, ignore=shutil.ignore_patterns('*.import', '__pycache__'))
-    for name in ('project.godot', 'export_presets.cfg', 'icon.svg'):
+    for name in ('project.godot', 'export_presets.cfg', 'icon.png'):
         shutil.copyfile(project / name, stage / name)
 
 
@@ -161,7 +165,7 @@ def finish_web(stage, output, notices, godot, env):
     with tempfile.TemporaryDirectory(prefix='demiurges-icons-') as folder:
         icon_script = pathlib.Path(folder) / 'icons.gd'
         icon_script.write_text(ICON_SCRIPT)
-        run_checked([godot, '--headless', '--script', icon_script, '--', stage / 'icon.svg', output], env=env)
+        run_checked([godot, '--headless', '--script', icon_script, '--', stage / 'icon.png', output], env=env)
     manifest = {'id': './', 'name': 'Demiurges', 'short_name': 'Demiurges', 'start_url': './', 'scope': './',
                 'display': 'standalone', 'orientation': 'landscape', 'background_color': '#0f1118',
                 'theme_color': '#0f1118', 'icons': [{'src': f'icon-{size}.png', 'sizes': f'{size}x{size}',

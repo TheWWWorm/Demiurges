@@ -254,6 +254,8 @@ func _layout() -> void:
 	var header: Label = menu.get_node("EscHdr")
 	header.position = control_rect("EscHdr").position
 	header.size = control_rect("EscHdr").size
+	var panel := control_rect(MENU)
+	menu.get_node("Wiki").position = Vector2(panel.position.x + panel.size.x * 0.5 - 70, panel.end.y + 10)
 	remake_strip.position = Vector2(8, 8)
 	remake_strip.size.x = 0
 	art.queue_redraw()
@@ -565,6 +567,17 @@ func _build_menu() -> void:
 	if menu_buttons.has("EscExitMM"): menu_buttons.EscExitMM.pressed.connect(func(): exit_requested.emit())
 	if menu_buttons.has("EscExitWin"): menu_buttons.EscExitWin.pressed.connect(func(): quit_requested.emit())
 	menu_buttons.EscCancel.pressed.connect(func(): menu_closed.emit())
+	# Remake-only: the wiki over the map (also F1).
+	var wiki := Button.new()
+	wiki.name = "Wiki"
+	var russian := ELWikiScreen.remembered_language(header.text) == "ru"
+	wiki.text = "Вики (F1)" if russian else "Wiki (F1)"
+	wiki.tooltip_text = "Справка по игре на движке Demiurges" if russian else "How to play on the Demiurges engine."
+	wiki.focus_mode = Control.FOCUS_NONE
+	wiki.add_theme_font_size_override("font_size", 15)
+	wiki.size = Vector2(140, 30)
+	wiki.pressed.connect(func(): ELWikiScreen.open(self, "adventure-map", header.text))
+	menu.add_child(wiki)
 	menu.hide()
 
 func _caption(control: String) -> String:

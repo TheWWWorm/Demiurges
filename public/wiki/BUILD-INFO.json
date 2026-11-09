@@ -1,0 +1,227 @@
+{
+  "version": "0.2.13",
+  "languages": {
+    "en": {
+      "pages": 23,
+      "links": 69
+    },
+    "ru": {
+      "pages": 23,
+      "links": 69
+    }
+  },
+  "requires_game_files": false,
+  "requires_account": false,
+  "translation_keys": 16,
+  "files": {
+    "data/en/index.json": {
+      "bytes": 34436,
+      "sha256": "3100655f5720e3df1284c557533dbde28590f14fff68c7faaa251d2df3e34a9f"
+    },
+    "data/en/pages/abilities.json": {
+      "bytes": 2239,
+      "sha256": "cd0d473ae17ae0204834b005d276bab5ecd4f498f19a99a8681dc2685f8c5e7b"
+    },
+    "data/en/pages/about-wiki.json": {
+      "bytes": 1501,
+      "sha256": "dfdb2dcdfad81698c360e0c7b7f9f7f7113665d4d64fe62b78fa71a84b1b977a"
+    },
+    "data/en/pages/adventure-map.json": {
+      "bytes": 1982,
+      "sha256": "b1a3ef7fa5c19c38397f1eb5706ca38711b0dffbf862fcfe19a5915b3a7ce62d"
+    },
+    "data/en/pages/attack-defence.json": {
+      "bytes": 2299,
+      "sha256": "3d0ed1febae38f83b4509be8c0335f031de7e7c3b1f3590f964e65be2a7a318e"
+    },
+    "data/en/pages/automatic-combat.json": {
+      "bytes": 1278,
+      "sha256": "2b2f9742f85ec19b1c3300216b9411ae11aaa8bb26b4f84fd11a1edf0807e479"
+    },
+    "data/en/pages/browser.json": {
+      "bytes": 1667,
+      "sha256": "ab1be1e8b659de7fa75db6a74d380c686dbccbc1e99082ee75af58e249f18e79"
+    },
+    "data/en/pages/campaign-el1.json": {
+      "bytes": 1057,
+      "sha256": "bff2be5b2860a1766219cd8ec6ee5ec59e15eef1cc161cff194cb35f70f24c8e"
+    },
+    "data/en/pages/campaign-el2.json": {
+      "bytes": 1163,
+      "sha256": "242e19dc85100507adb267d9b14ad52c03b64e42b41855474c4098313e0660ae"
+    },
+    "data/en/pages/combat-phases.json": {
+      "bytes": 2350,
+      "sha256": "54fe67b57522ec865edbb0c3072aefdfccbdee437dff602592042b574ef23429"
+    },
+    "data/en/pages/combat.json": {
+      "bytes": 2869,
+      "sha256": "ce1eba18cb2efaec56cff18e806e088942ffa1e4f2ce299f2d59113fd9dc748c"
+    },
+    "data/en/pages/controls.json": {
+      "bytes": 2324,
+      "sha256": "ba38f3d25e93c5fe7c12c46ac772fac5dc1aa5d3f23b1cc6c8380bf9c564c430"
+    },
+    "data/en/pages/creatures.json": {
+      "bytes": 1136,
+      "sha256": "57df3904cdc7286b3dfda4d4ab423b9f76a8865d8ba7819dfb2f781bb89cb6f1"
+    },
+    "data/en/pages/differences.json": {
+      "bytes": 1859,
+      "sha256": "edbb4b8237dee8847a19f3be4dbaf1b564725d40dfff927bf765c6114cec3515"
+    },
+    "data/en/pages/duel.json": {
+      "bytes": 1635,
+      "sha256": "3e66770611f21881d624617fe7589be571f470029b3936992bc9dc26ac2f3db2"
+    },
+    "data/en/pages/heroes.json": {
+      "bytes": 1939,
+      "sha256": "25f748b0e15ee6b8d1fed17e7888f9354e40c737cac742e182cdab41e2a28ac5"
+    },
+    "data/en/pages/home.json": {
+      "bytes": 2473,
+      "sha256": "031574346e0ba6880fc4f35abed724f030bfa23973fd8fac298baf630298252f"
+    },
+    "data/en/pages/installing.json": {
+      "bytes": 3199,
+      "sha256": "3ea449e2a696eab0d78dc780ddd732fd2e990c3935b024786c88f5a2ac68825e"
+    },
+    "data/en/pages/main-menu.json": {
+      "bytes": 2108,
+      "sha256": "b00c328a75ad68716a361e4997e40e9119ec7b4ac459188e3cd7378dd882b094"
+    },
+    "data/en/pages/options.json": {
+      "bytes": 2464,
+      "sha256": "96a830bed1655d867e385c56e8bb8076d70521f842440fbff0bf0bdf06ecebda"
+    },
+    "data/en/pages/races.json": {
+      "bytes": 1263,
+      "sha256": "433699d9668117e59aec6f1751538aec544b2bb2db3bd927d78009478f2325c2"
+    },
+    "data/en/pages/runes-artifacts.json": {
+      "bytes": 1449,
+      "sha256": "082d3fe7c342d3a2a6974d6a14016077c370f2e0485af029f45e159ba482b2f8"
+    },
+    "data/en/pages/spells.json": {
+      "bytes": 1514,
+      "sha256": "d2a79d058727a11e3e4912e79d78074ef7f5e7e7db5ed38de73124dc64b40a6b"
+    },
+    "data/en/pages/troubleshooting.json": {
+      "bytes": 1663,
+      "sha256": "0936ac8d28863fd537678acc4c03d6599ed9ba9fabb2eccad00e2361782e7a18"
+    },
+    "data/ru/index.json": {
+      "bytes": 61170,
+      "sha256": "37862e109383576d0762ad36e8f17f7faf5c09d3910759c045ba04ca9b83a30a"
+    },
+    "data/ru/pages/abilities.json": {
+      "bytes": 3686,
+      "sha256": "ca2afd2426f5f02163732a92e98f1737e74969437ece317c1b6c59a6ef1cc096"
+    },
+    "data/ru/pages/about-wiki.json": {
+      "bytes": 2238,
+      "sha256": "6c481274e6d8323c57b2555d3f08a240cc86b73765d1469588af25d9c36a5f8a"
+    },
+    "data/ru/pages/adventure-map.json": {
+      "bytes": 3107,
+      "sha256": "55f71a2f0dc0d6a1d34d88a3b28c156ba656074da3e8e185e2ea911535757ec4"
+    },
+    "data/ru/pages/attack-defence.json": {
+      "bytes": 3700,
+      "sha256": "5583e842804e1f2eddefd3c8ecc97f292ebd84ceab99253ca433248eb2f8a086"
+    },
+    "data/ru/pages/automatic-combat.json": {
+      "bytes": 2309,
+      "sha256": "a0de0970ab96596c4d4aa3ad36bb7123b09e3e08f95804d8a878c11c30e24cab"
+    },
+    "data/ru/pages/browser.json": {
+      "bytes": 2659,
+      "sha256": "ad25133ecf008b4b5f598195fea08a0df592d866fa78eaa95785feb52b6e9020"
+    },
+    "data/ru/pages/campaign-el1.json": {
+      "bytes": 1599,
+      "sha256": "3b34121441af772ddbdf51f7407d0e6f996672542c645530fd3b68d3190f7289"
+    },
+    "data/ru/pages/campaign-el2.json": {
+      "bytes": 1759,
+      "sha256": "59eb8d62f9b116e32f864aa219d42bdd00167db67feb90e4ed833177821b432f"
+    },
+    "data/ru/pages/combat-phases.json": {
+      "bytes": 3922,
+      "sha256": "c09cbf1da9d3dcd38fda22fc63643364f8d615d22d6a897ce462f87d07640114"
+    },
+    "data/ru/pages/combat.json": {
+      "bytes": 4881,
+      "sha256": "8311960646d9092cc14083df4dfd724586f91fcccbc60496fffd72ec9ab3e12e"
+    },
+    "data/ru/pages/controls.json": {
+      "bytes": 3668,
+      "sha256": "6f813083cc884e24680242462de9bd4a19fdd2d2066b5d910ae46feaef9aec40"
+    },
+    "data/ru/pages/creatures.json": {
+      "bytes": 1971,
+      "sha256": "4fc9f41f1d2c1e516d81090325c8f2a09c0df12723206d5d2df0ea1c0d4ac66c"
+    },
+    "data/ru/pages/differences.json": {
+      "bytes": 3208,
+      "sha256": "8c6a61927b03804f83604fd058976b817e5ac8d30dfb1fab2c06df5eee35efbf"
+    },
+    "data/ru/pages/duel.json": {
+      "bytes": 2660,
+      "sha256": "7df583c78592ef63334a1de32a0044032d9f94ef6dbd6ad324312ed8d794fe80"
+    },
+    "data/ru/pages/heroes.json": {
+      "bytes": 3007,
+      "sha256": "c0d64533fb9dc23873417e8e71e3107d712df0a4fceac7d7037b0e7517452dc1"
+    },
+    "data/ru/pages/home.json": {
+      "bytes": 3431,
+      "sha256": "9acf111da5b7380b2dc9a21f89b0adc7fc6fbd93ed87b0f6d1962e8825a0a5a3"
+    },
+    "data/ru/pages/installing.json": {
+      "bytes": 5060,
+      "sha256": "3ec5607e04b4478ab537b2f63b1a3d5549fd27329efd7b277eda83f8d9e7abf2"
+    },
+    "data/ru/pages/main-menu.json": {
+      "bytes": 3049,
+      "sha256": "241cc813cf5345adaa0baff0e8217ff5ea899d983936a542ac10e4b29c0ff9b3"
+    },
+    "data/ru/pages/options.json": {
+      "bytes": 3807,
+      "sha256": "af8b38f5482117fa215480233ef637e38c3c6cf578479e57360ecff3822df5c3"
+    },
+    "data/ru/pages/races.json": {
+      "bytes": 2000,
+      "sha256": "92a26b65c72c75d1b8ecd0827ff602f315faaafb230825d0f8a0a2a53dfad7dd"
+    },
+    "data/ru/pages/runes-artifacts.json": {
+      "bytes": 2402,
+      "sha256": "b2667663cf3eb2daa2bdb0519b00e5d27c5c025891cfdbcde184fb45dfdf7c49"
+    },
+    "data/ru/pages/spells.json": {
+      "bytes": 2533,
+      "sha256": "155969424dc3703695dfad66b637aaef1bc26941b036d7760163521bef2ec2df"
+    },
+    "data/ru/pages/troubleshooting.json": {
+      "bytes": 2842,
+      "sha256": "9810c317ec14dacfda608823b73b9f238aaa1e4fbc0530aa60500fa6f662ecf1"
+    },
+    "i18n.json": {
+      "bytes": 1930,
+      "sha256": "9f2bca75c6940f93197a2d687ddc0bd6cd3d9ffe982b04e7356f0ee56d16406e"
+    },
+    "index.html": {
+      "bytes": 2337,
+      "sha256": "41ad3d570070b5a095ebcbb2e13bd81f4d23da09f10675c64dcda06881e1f969"
+    },
+    "wiki.css": {
+      "bytes": 5091,
+      "sha256": "fad58ea9b55bc5430f5c410329186cf7076f2891e5da331b503b587b62bd6833"
+    },
+    "wiki.js": {
+      "bytes": 7136,
+      "sha256": "563bf46ba700688b8eccda6e5b07919c4031dc6c6958227fe1d26883610ed000"
+    }
+  },
+  "bytes": 225029
+}

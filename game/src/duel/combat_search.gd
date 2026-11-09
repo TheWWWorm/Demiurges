@@ -291,8 +291,7 @@ static func _casts(ctx: Context, line: Line, s: ELDuel, side: int) -> void:
 		if seen.has(card): continue
 		seen[card] = true
 		if s.cost(card) > s.available_mana(side): continue
-		var use_in := String(s.profile.table("CombatSpells")[card].get("UseIn", "Both"))
-		if (use_in == "Attack" and s.phase != ELDuel.Phase.ATTACK) or (use_in in ["Defence", "Defense"] and s.phase != ELDuel.Phase.DEFENCE): continue
+		if not s.phase_allows(card): continue
 		if card == "STSI":
 			var prior := _stasis_prior(s, side, card)
 			_add(line, {"kind": "cast", "index": i, "card": card, "target": -1, "grave": -1, "power": 0}, prior, MOVE_CAST)

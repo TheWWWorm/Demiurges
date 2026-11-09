@@ -1,0 +1,8 @@
+[
+  {"id": "start", "en": "Getting started", "ru": "С чего начать"},
+  {"id": "play", "en": "Playing", "ru": "Игра"},
+  {"id": "combat", "en": "Combat", "ru": "Бой"},
+  {"id": "content", "en": "Spells, creatures and heroes", "ru": "Заклинания, существа и герои"},
+  {"id": "modes", "en": "Campaigns and modes", "ru": "Кампании и режимы"},
+  {"id": "remake", "en": "About the remake", "ru": "О ремейке"}
+]

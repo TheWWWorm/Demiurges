@@ -821,6 +821,22 @@ func cast(hand_index: int, target := -1, grave_index := -1, extra_ether := 0) ->
 	gate.gate_done(self, action, ok)
 	return ok
 
+## Hand spells the defending hero may cast. Every CombatSpells row says
+## UseIn Both; the originals keep the rule on the spell object instead (its
+## defence-castable flag, checked by the first game's phase rule): in the
+## defence phase only those spells may be cast, as the manual says ("Most
+## spells cannot be cast during defense phase") and each one's description
+## states ("Это заклинание может использоваться в фазу защиты").
+const DEFENCE_SPELLS := {"el1": ["PLMR", "FOGG", "ENAL"], "el2": ["PLMR", "FOGG", "ENAL", "CMBN", "LFGR"]}
+
+## Whether `card` may be cast from the hand in the current phase.
+func phase_allows(card: String) -> bool:
+	var use_in := String(profile.table("CombatSpells").get(card, {}).get("UseIn", "Both"))
+	if use_in == "Attack" and phase != Phase.ATTACK: return false
+	if use_in in ["Defence", "Defense"] and phase != Phase.DEFENCE: return false
+	if phase == Phase.DEFENCE and not use_in in ["Defence", "Defense"]: return card in DEFENCE_SPELLS.get(profile.id, [])
+	return true
+
 func _cast_now(hand_index: int, target := -1, grave_index := -1, extra_ether := 0) -> bool:
 	error = ""
 	if phase == Phase.FINISHED: return _fail("This duel has ended.")
@@ -838,9 +854,7 @@ func _cast_now(hand_index: int, target := -1, grave_index := -1, extra_ether := 
 	if hero.channels < channel_cost(card): return _fail("This spell requires %d ether channels." % channel_cost(card))
 	var channel_invalid := channel_error(card, side)
 	if not channel_invalid.is_empty(): return _fail(channel_invalid)
-	var use_in := String(profile.table("CombatSpells")[card].get("UseIn", "Both"))
-	if (use_in == "Attack" and phase != Phase.ATTACK) or (use_in in ["Defence", "Defense"] and phase != Phase.DEFENCE):
-		return _fail("This spell cannot be cast in the current phase.")
+	if not phase_allows(card): return _fail("This spell cannot be cast in the current phase.")
 	var invalid := _cast_error(side, card, rule, target, grave_index)
 	if not invalid.is_empty(): return _fail(invalid)
 	var surcharge := 0
