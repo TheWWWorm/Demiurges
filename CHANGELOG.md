@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.15
+
+- Battles: air walls and spirits show their see-through lower halves (a wall's wispy dress, a spirit's trailing body) instead of being cut off at the waist.
+- Wiki: one encyclopedia for both games. Cards both games share have one page with the editions side by side and Etherlords II's changed values highlighted; cards found in only one game are marked I or II.
+
 ## 0.2.14
 
 - Wiki encyclopedia: a page for every creature, sorcery, enchantment, artifact, skill and specialization of both games, in English and Russian. In the game, creatures are 3D models you can turn; on the website they are shown as pictures.

@@ -70,6 +70,11 @@ func build(data: ELProfile, model: String, texture_name: String, secondary_textu
 	_rng.seed = hash(template)
 	var material := ELFigure.material(profile.texture(texture_name))
 	var secondary := ELFigure.material(profile.texture(secondary_texture)) if not secondary_texture.is_empty() else material
+	# Alpha32 skins (air walls, spirits) fade out in soft alpha, such as a wall's
+	# wispy lower dress: blend them instead of the half-alpha cut-off.
+	for pair: Array in [[material, texture_name], [secondary, secondary_texture]]:
+		if String(pair[1]).to_lower().contains("alpha32"):
+			pair[0].transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_DEPTH_PRE_PASS
 	for link: Array in links:
 		var name: String = link[0]
 		var node := MeshInstance3D.new()
