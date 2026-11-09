@@ -2,6 +2,12 @@
 
 Versions follow [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html) from 0.3.0 on.
 
+## 0.3.1
+
+- Battles: a blocking creature steps out to its front line as soon as it is told to block and turns to face its attacker, as in the originals. When combat starts it runs from there, instead of from home straight through its own hero.
+- Battles (Etherlords II): the opponent's spell icons at the top left show only the game's tooltip, not a second plain one.
+- Battles: a summoned creature's own effects, such as the fire of «Стена магмы», appear with the creature instead of at its spot before it is summoned.
+
 ## 0.3.0
 
 - New Demiurges logo for the app icon, the Windows program file and the start-up screen.

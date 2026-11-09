@@ -174,6 +174,8 @@ var duel_match: ELDuelMatch
 ## Plays combat resolution blow by blow (ELMeleePlayback); lives with the stage.
 var melee: ELMeleePlayback
 var front_line: Array[int] = []
+## Blockers on the front line: blocker -> the attacker it faces.
+var front_faces: Dictionary = {}
 ## The Duel mode match's report (option VisualLog), or null.
 var duel_report: ELDuelReport
 var match_round_recorded := false
@@ -496,6 +498,7 @@ func _start(edition: String, options: Dictionary = {}, restored: ELDuel = null, 
 	stage.add_child(selection_ring)
 	selection_ring.hide()
 	front_line = []
+	front_faces = {}
 	melee = ELMeleePlayback.new()
 	melee.view = self
 	stage.add_child(melee)
@@ -1248,20 +1251,31 @@ func _step_arrivals() -> void:
 			if not models.has(id): continue
 			models[id].visible = true
 			models[id].remove_meta("arriving")
+			# Its own particles, held while it was hidden.
+			if is_instance_valid(effects): effects.attach(models[id])
 			_enter(id)
 
-## Declared attackers step out to their front-line slots; withdrawn ones
-## walk back. Once blows are shown the playback brings everyone home.
+## Declared attackers and blockers step out to their front-line slots (a
+## blocker then turns to the attacker it blocks); withdrawn ones walk back.
+## Once blows are shown the playback brings everyone home.
 func _step_front_line() -> void:
 	if not is_instance_valid(melee): return
 	var declared: Array[int] = []
-	if not melee.busy() and duel.phase != ELDuel.Phase.FINISHED: declared.assign(duel.attacks)
+	var faces := {}
+	if not melee.busy() and duel.phase != ELDuel.Phase.FINISHED:
+		declared.assign(duel.attacks)
+		for id: int in duel.blocks:
+			if duel.attacks.has(int(duel.blocks[id])) and not declared.has(id):
+				declared.append(id)
+				faces[id] = int(duel.blocks[id])
 	if not melee.busy():
 		for id: int in declared:
-			if not front_line.has(id): melee.step_out(id)
+			if not front_line.has(id): melee.step_out(id, int(faces.get(id, -1)))
+			elif faces.has(id) and int(front_faces.get(id, -1)) != int(faces[id]): melee.face_block(id, int(faces[id]))
 		for id: int in front_line:
 			if not declared.has(id): melee.step_back(id)
 	front_line = declared
+	front_faces = faces
 
 ## Combat playback (ELMeleePlayback): true while blows are still being shown.
 func _melee_busy() -> bool:
@@ -4030,6 +4044,8 @@ func _build_ui() -> void:
 	ui.add_child(symbols)
 	notices = ELCombatNotices.new()
 	notices.describe_card = card_tooltip
+	# Its tooltips are drawn by the battle overlay, like the panel's.
+	notices.theme = ELCombatTooltip.hidden_theme()
 	ui.add_child(notices)
 	status = _label("Choose your original game content from Menu.", 14, Color("e9e4d4"))
 	status.position = Vector2(20, 16)

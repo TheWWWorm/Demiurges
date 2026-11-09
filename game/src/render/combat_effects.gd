@@ -288,6 +288,9 @@ func _figure_animation(clip: String, model: ELModel) -> void:
 		_figure_emitters.erase(id)
 		if previous.following and is_same(previous.follow, model): _release(previous)
 	if not enabled or not is_instance_valid(model): return
+	# A summoned figure waits hidden for its summoning effect; its own
+	# particles start when it appears (see attach), not at its home before.
+	if not model.is_visible_in_tree(): return
 	var path := animation_file(model, clip)
 	if path.is_empty(): return
 	requested.append(path)

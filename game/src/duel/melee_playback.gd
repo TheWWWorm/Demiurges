@@ -32,8 +32,9 @@ extends Node
 ## at x ±3.75; a side's creatures take the first free of ten slots on an arc
 ## of radius 12.75 about x = -6 (mirrored for side 0), two per angle step,
 ## slots 6-9 a second row 1.5 further out. Home slots sit 1.5 further from the
-## centre; front-line slots 3 closer in. A declared attacker runs to its front
-## line after a random 0-0.1 s stagger; a withdrawn one walks back through it.
+## centre; front-line slots 3 closer in. A declared attacker or blocker runs to
+## its front line after a random 0-0.1 s stagger (a blocker then faces its
+## attacker); a withdrawn one walks back through it.
 ## Every walk home passes the front line, then the figure faces the enemy hero.
 
 const FIGHT_BACKOFF := 0.75
@@ -93,12 +94,31 @@ static func slot_position(side: int, index: int, line: Line) -> Vector3:
 static func hero_position(side: int) -> Vector3:
 	return Vector3(-HERO_X if side == 0 else HERO_X, 0, 0)
 
-## Attack declared: the creature runs to its front-line slot after a short stagger.
-func step_out(id: int) -> void:
+## Attack or block declared: the creature runs to its front-line slot after
+## a short stagger. A blocker then faces the attacker it blocks; at the
+## exchange it sets off from there, clear of its own hero.
+func step_out(id: int, facing := -1) -> void:
 	if not _has(id) or not view.duel.creatures.has(id): return
 	var c: Dictionary = view.duel.creatures[id]
 	var front := slot_position(int(c.owner), int(view.models[id].get_meta("slot", 0)), Line.FRONT)
-	_move(id, [front], true, _yaw_at(front, int(c.owner)), randf() * 0.1)
+	var yaw := _yaw_at(front, int(c.owner))
+	if facing >= 0: yaw = _yaw_to(front, _front_of(facing))
+	_move(id, [front], true, yaw, randf() * 0.1)
+
+## A blocker already out turns to the attacker it now blocks.
+func face_block(id: int, attacker: int) -> void:
+	if not _has(id): return
+	var yaw := _yaw_to(_position(id), _front_of(attacker))
+	if _moves.has(id): _moves[id].finish = yaw
+	else: view.models[id].rotation.y = yaw
+
+## Where a declared attacker stands: its front-line slot.
+func _front_of(id: int) -> Vector3:
+	if not _has(id) or not view.duel.creatures.has(id): return _position(id)
+	return slot_position(int(view.duel.creatures[id].owner), int(view.models[id].get_meta("slot", 0)), Line.FRONT)
+
+func _yaw_to(at: Vector3, target: Vector3) -> float:
+	return atan2(target.x - at.x, target.z - at.z)
 
 ## Attack withdrawn: back through the front line to its home slot.
 func step_back(id: int) -> void:
