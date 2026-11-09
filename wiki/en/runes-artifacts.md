@@ -20,3 +20,5 @@ Both games have **artifacts**: battle items with charges. An artifact can be use
 - In Etherlords II, heroes keep their artifacts and their charges after battle. Blank artifacts can be made into new ones and spent artifacts can be recharged.
 
 See [Heroes and levels](heroes) for the skills mentioned here.
+
+All artifacts: [Etherlords](el1-artifacts) · [Etherlords II](el2-artifacts).

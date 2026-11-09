@@ -25,3 +25,5 @@ Spells are cantrips, common, rare or unique. **Cantrips** are simple, unlimited 
 Some spells are artifacts: battle items with a limited number of uses. See [Runes and artifacts](runes-artifacts).
 
 The games' own spellbook and Encyclopedia (Etherlords II) screens describe every spell.
+
+All sorceries and enchantments: [Etherlords](el1-spells) · [Etherlords II](el2-spells).

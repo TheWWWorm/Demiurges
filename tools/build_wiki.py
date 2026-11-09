@@ -187,8 +187,15 @@ def load():
             rows.append({'key': key, 'title': meta['title'], 'category': meta['category'],
                          'order': meta['order'], 'summary': meta.get('summary', ''),
                          'html': body, 'search': words.lower(), 'sections': sections, 'links': sorted(links)})
-        rows.sort(key=lambda r: (rank[r['category']], r['order'], r['key']))
         pages[lang] = rows
+    games, catalog_pages = load_catalog()
+    for game_cats in games:
+        for c in game_cats:
+            rank[c['id']] = len(rank)
+        cats.extend(game_cats)
+    catalog_keys = {r['key'] for r in catalog_pages.get('en', [])}
+    for lang in LANGUAGES:
+        pages[lang].sort(key=lambda r: (rank[r['category']], r['order'], r['key']))
     keys = {lang: [r['key'] for r in pages[lang]] for lang in LANGUAGES}
     if 'home' not in keys['en']:
         raise WikiError('The wiki needs a "home" page')
@@ -206,12 +213,69 @@ def load():
         if len({tuple(r['links']) for r in rows}) != 1:
             raise WikiError(f'{key}: the translations link to different pages')
         for target in rows[0]['links']:
-            if target not in by_key['en']:
+            if target not in by_key['en'] and target not in catalog_keys:
                 raise WikiError(f'{key}: link to missing page {target!r}')
     for row in pages['en']:
         if row['key'] != 'home' and not any(row['key'] in r['links'] for r in pages['en']):
             raise WikiError(f'{row["key"]}: no other page links to it')
+    linked = {target for r in pages['en'] for target in r['links']}
+    for game_cats in games:
+        for c in game_cats:
+            if catalog_keys and c['id'] not in linked:
+                raise WikiError(f'{c["id"]}: no guide page links to this list')
+    for lang in LANGUAGES:
+        pages[lang] = sorted(pages[lang] + catalog_pages.get(lang, []),
+                             key=lambda r: (rank[r['category']], r['order'], r['title'].lower() if r.get('catalog') else r['key']))
     return cats, pages
+
+
+CATALOG = SOURCE / 'catalog'
+FIGURE = re.compile(r'<figure data-card="(el[12])/([A-Za-z0-9_]+)" data-kind="(\w+)"></figure>')
+
+
+def load_catalog():
+    """Exported encyclopedia pages (tools/export_wiki.gd) of each game, in
+    every language: ([categories per game], {lang: [page, ...]})."""
+    games, pages = [], {lang: [] for lang in LANGUAGES}
+    if not CATALOG.is_dir():
+        return games, pages
+    for game in ['el1', 'el2']:
+        files = {lang: CATALOG / f'{game}-{lang}.json' for lang in LANGUAGES}
+        present = [lang for lang, path in files.items() if path.is_file()]
+        if not present:
+            continue
+        if len(present) != len(LANGUAGES):
+            raise WikiError(f'catalog: {game} is exported only in {present}; export every language')
+        data = {lang: json.loads(files[lang].read_text(encoding='utf-8')) for lang in LANGUAGES}
+        keys = {lang: {p['key'] for p in data[lang]['pages']} for lang in LANGUAGES}
+        for lang in LANGUAGES[1:]:
+            if keys[lang] != keys['en']:
+                raise WikiError(f'catalog: {game} English and {lang} pages differ: {sorted(keys[lang] ^ keys["en"])[:12]}')
+        titles = {lang: {c['id']: c['title'] for c in data[lang]['categories']} for lang in LANGUAGES}
+        games.append([{'id': cid, **{lang: titles[lang][cid] for lang in LANGUAGES}, 'catalog': True} for cid in titles['en']])
+        every = keys['en'] | {c for c in titles['en']}
+        for lang in LANGUAGES:
+            for p in data[lang]['pages']:
+                links = sorted(set(re.findall(r'href="wiki://([a-z0-9-]+)"', p['html'])))
+                for target in links:
+                    if target not in every:
+                        raise WikiError(f'catalog: {p["key"]} links to missing page {target!r}')
+                pages[lang].append({'key': p['key'], 'title': p['title'], 'category': p['category'],
+                                    'order': int(p.get('order', 0)), 'summary': p.get('summary', ''),
+                                    'html': p['html'], 'search': p.get('search', ''), 'links': links,
+                                    'catalog': True, 'game': game})
+    return games, pages
+
+
+def web_figures(html, images):
+    """The website shows the exported creature picture, or the card icon."""
+    def figure(m):
+        game, code, kind = m.groups()
+        for name, css in ([(f'{code}.webp', 'model')] if kind == 'creature' else []) + [(f'icon-{code}.png', 'icon')]:
+            if f'{game}/{name}' in images:
+                return f'<figure class="{css}"><img src="/wiki/images/{game}/{name}" alt="" loading="lazy"></figure>'
+        return ''
+    return FIGURE.sub(figure, html)
 
 
 # --- Outputs ------------------------------------------------------------------
@@ -234,6 +298,10 @@ def write_public(output, cats, pages):
     for source in sorted(FRONTEND.iterdir()):
         if source.is_file():
             shutil.copyfile(source, output / source.name)
+    images = set()
+    if (CATALOG / 'images').is_dir():
+        shutil.copytree(CATALOG / 'images', output / 'images')
+        images = {p.relative_to(output / 'images').as_posix() for p in (output / 'images').rglob('*') if p.is_file()}
     version = game_version()
     report = {'version': version, 'languages': {}, 'requires_game_files': False, 'requires_account': False}
     for lang in LANGUAGES:
@@ -241,14 +309,20 @@ def write_public(output, cats, pages):
         folder.mkdir(parents=True)
         entries = []
         for row in pages[lang]:
-            page = {'key': row['key'], 'title': row['title'], 'category': row['category'], 'html': row['html']}
+            page = {'key': row['key'], 'title': row['title'], 'category': row['category'], 'html': web_figures(row['html'], images)}
             (folder / f'{row["key"]}.json').write_text(json.dumps(page, ensure_ascii=False, sort_keys=True) + '\n', encoding='utf-8', newline='\n')
-            entries.append({'key': row['key'], 'title': row['title'], 'category': row['category'],
-                            'summary': row['summary'], 'search': row['search']})
+            entry = {'key': row['key'], 'title': row['title'], 'category': row['category'],
+                     'summary': row['summary'], 'search': row['search']}
+            if row.get('catalog'):
+                entry['game'] = row['game']
+            entries.append(entry)
         index = {'version': version, 'language': lang,
-                 'categories': [{'id': c['id'], 'title': c[lang]} for c in cats], 'entries': entries}
+                 'categories': [{'id': c['id'], 'title': c[lang], **({'catalog': True} if c.get('catalog') else {})} for c in cats],
+                 'entries': entries}
         (output / 'data' / lang / 'index.json').write_text(json.dumps(index, ensure_ascii=False, sort_keys=True) + '\n', encoding='utf-8', newline='\n')
-        report['languages'][lang] = {'pages': len(entries), 'links': sum(len(r['links']) for r in pages[lang])}
+        report['languages'][lang] = {'pages': len(entries), 'catalog_pages': sum(1 for r in pages[lang] if r.get('catalog')),
+                                     'links': sum(len(r['links']) for r in pages[lang])}
+    report['images'] = len(images)
     report['translation_keys'] = len(interface_labels()['en'])
     files = {p.relative_to(output).as_posix(): {'bytes': p.stat().st_size, 'sha256': hashlib.sha256(p.read_bytes()).hexdigest()}
              for p in sorted(output.rglob('*')) if p.is_file()}
@@ -276,11 +350,15 @@ def game_script(cats, pages):
         'const CATEGORIES := [',
     ]
     for c in cats:
+        if c.get('catalog'):
+            continue
         lines.append('\t{' + ', '.join(f'{gd_string(k)}: {gd_string(c[k])}' for k in ['id', *LANGUAGES]) + '},')
     lines += [']', '', 'const PAGES := {']
     for lang in LANGUAGES:
         lines.append(f'\t{gd_string(lang)}: [')
         for row in pages[lang]:
+            if row.get('catalog'):
+                continue
             fields = {k: row[k] for k in ['key', 'title', 'category', 'html', 'search']}
             lines.append('\t\t{' + ', '.join(f'{gd_string(k)}: {gd_string(v)}' for k, v in fields.items()) + '},')
         lines.append('\t],')

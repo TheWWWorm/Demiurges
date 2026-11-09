@@ -72,6 +72,7 @@ function matches(entry, words) {
 
 function results() {
   const {lang, page} = route();
+  const current = index.entries.find(entry => entry.key === page)?.category;
   const query = $('#search').value.trim().toLowerCase();
   const words = query.split(/\s+/).filter(Boolean);
   const list = $('#results');
@@ -80,9 +81,12 @@ function results() {
   for (const category of index.categories) {
     const rows = index.entries.filter(entry => entry.category === category.id && matches(entry, words));
     if (!rows.length) continue;
-    const group = document.createElement('section');
-    const heading = document.createElement('h2');
-    heading.textContent = category.title;
+    // Encyclopedia lists are long: they open while searching, or around the
+    // page being read.
+    const group = document.createElement('details');
+    group.open = !category.catalog || words.length > 0 || rows.some(entry => entry.key === page) || category.id === current;
+    const heading = document.createElement('summary');
+    heading.textContent = category.title + (category.catalog ? ` (${rows.length})` : '');
     group.append(heading);
     for (const entry of rows) {
       const link = document.createElement('a');

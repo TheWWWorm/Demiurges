@@ -21,3 +21,5 @@ Most creatures have abilities, shown as icons. See [Creature abilities](abilitie
 ## Limits
 
 A hero can control at most 10 creatures. Destroyed creatures go to their owner's graveyard; some spells bring them back.
+
+All creatures: [Etherlords](el1-creatures) · [Etherlords II](el2-creatures).

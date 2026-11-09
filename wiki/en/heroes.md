@@ -30,3 +30,5 @@ Etherlords also has skills for the map, such as **Mobility**, **Estates** and **
 Every hero has one **specialisation**: a chance-based talent in battle, such as a creature dealing double damage. Its chance grows with the battle's level. **Luck** and the opponent's **Suppression** change it.
 
 See [Runes and artifacts](runes-artifacts) and [How a battle works](combat).
+
+All skills: [Etherlords](el1-skills) · [Etherlords II](el2-skills). All specializations: [Etherlords](el1-specializations) · [Etherlords II](el2-specializations).

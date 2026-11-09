@@ -23,14 +23,19 @@ const UI := {
 	"en": {"title": "Demiurges wiki", "back": "Back", "forward": "Forward", "home": "Contents",
 		"search": "Search the wiki", "close": "Close", "list": "Pages", "nothing": "Nothing found",
 		"back_tip": "Previous page (Alt+Left)", "forward_tip": "Next page (Alt+Right)", "close_tip": "Close the wiki (Esc)",
-		"language_tip": "Language of the wiki", "online": "This wiki is also online at demiurges.wwworm.com/wiki"},
+		"language_tip": "Language of the wiki", "online": "This wiki is also online at demiurges.wwworm.com/wiki",
+		"turn": "Drag to turn · wheel to zoom", "reset": "Reset view", "missing_game": "This page needs that game: add it under Options › Remake settings › Game files."},
 	"ru": {"title": "Вики Demiurges", "back": "Назад", "forward": "Вперёд", "home": "Содержание",
 		"search": "Поиск по вики", "close": "Закрыть", "list": "Страницы", "nothing": "Ничего не найдено",
 		"back_tip": "Предыдущая страница (Alt+←)", "forward_tip": "Следующая страница (Alt+→)", "close_tip": "Закрыть вики (Esc)",
-		"language_tip": "Язык вики", "online": "Эта вики есть и в Интернете: demiurges.wwworm.com/wiki"},
+		"language_tip": "Язык вики", "online": "Эта вики есть и в Интернете: demiurges.wwworm.com/wiki",
+		"turn": "Перетаскивайте, чтобы повернуть · колесо — масштаб", "reset": "Сбросить вид", "missing_game": "Для этой страницы нужна эта игра: добавьте её в Настройки › Remake settings › Game files."},
 }
 
 static var instance: ELWikiScreen
+## The installed games ({edition: ELProfile}), set by the main menu. Their
+## encyclopedia pages (ELWikiCatalog) are built from the player's own copy.
+static var profiles: Dictionary = {}
 
 var language := "en"
 var page := "home"
@@ -53,6 +58,12 @@ var _article: RichTextLabel
 var _footer: Label
 var _sans: Font
 var _serif: Font
+## The side panel: the live creature (ELWikiPreview) or the card's icon.
+var _visual: VBoxContainer
+var _preview: ELWikiPreview
+## Pages, categories and an index per language (authored + encyclopedia).
+var _content: Dictionary = {}
+var _notice := ""
 
 ## Opens the wiki over the running game (or brings it to `target`). `hint` is
 ## a sample of the game's own text: Cyrillic picks Russian the first time.
@@ -249,6 +260,11 @@ func _build() -> void:
 	_article.add_theme_color_override("font_outline_color", Color.TRANSPARENT)
 	_article.meta_clicked.connect(_link)
 	reading.add_child(_article)
+	_visual = VBoxContainer.new()
+	_visual.custom_minimum_size.x = 340
+	_visual.add_theme_constant_override("separation", 6)
+	_visual.hide()
+	body.add_child(_visual)
 	_footer = Label.new()
 	_footer.add_theme_font_override("font", _sans)
 	_footer.add_theme_font_size_override("font_size", 14)
@@ -267,24 +283,50 @@ func _layout() -> void:
 	_frame.size = area - margin * 2.0
 	var narrow := _frame.size.x < 1000
 	_side.custom_minimum_size.x = 260 if narrow else 320
+	_visual.custom_minimum_size.x = 240 if narrow else 340
 	# Narrow windows show either the list or the article, as on a phone.
 	if narrow and not _list_toggle.button_pressed: _side.visible = false
 
 # --- Content ------------------------------------------------------------------
 
+## Authored pages and, for each installed game, its encyclopedia in the
+## wiki language (built once per language while the wiki is open).
+func _data() -> Dictionary:
+	if _content.has(language): return _content[language]
+	var pages: Array = []
+	var categories: Array = []
+	for category: Dictionary in ELWikiData.CATEGORIES:
+		categories.append({"id": category.id, "title": str(category.get(language, category.en)), "catalog": false})
+	pages.append_array(ELWikiData.PAGES.get(language, ELWikiData.PAGES.en))
+	for edition: String in ["el1", "el2"]:
+		var profile: ELProfile = profiles.get(edition)
+		if profile == null or profile.archives.is_empty(): continue
+		var built: Array = ELWikiCatalog.build(profile, language).pages
+		# List pages first, then the entries by name.
+		built.sort_custom(func(a, b):
+			if int(a.get("order", 0)) != int(b.get("order", 0)): return int(a.get("order", 0)) < int(b.get("order", 0))
+			return str(a.title).naturalnocasecmp_to(str(b.title)) < 0)
+		pages.append_array(built)
+		for category: Dictionary in ELWikiCatalog.categories(edition, language):
+			categories.append({"id": category.id, "title": category.title, "catalog": true})
+	var index := {}
+	for row: Dictionary in pages: index[row.key] = row
+	_content[language] = {"pages": pages, "categories": categories, "index": index}
+	return _content[language]
+
 func _pages() -> Array:
-	return ELWikiData.PAGES.get(language, ELWikiData.PAGES.en)
+	return _data().pages
 
 func _entry(key: String) -> Dictionary:
-	for row: Dictionary in _pages():
-		if row.key == key: return row
-	return {}
+	return _data().index.get(key, {})
 
 func _text(key: String) -> String:
 	return UI.get(language, UI.en).get(key, UI.en.get(key, key))
 
 ## Shows `key` ("home" when unknown); `remember` keeps the current page for Back.
 func navigate(key: String, remember := true) -> void:
+	# Encyclopedia pages of a game that is not installed lead to the contents.
+	_notice = _text("missing_game") if _entry(key).is_empty() and key.begins_with("el") and key.substr(3, 1) == "-" else ""
 	if _entry(key).is_empty(): key = "home"
 	if remember and key != page and _article != null:
 		_history.append({"page": page, "scroll": _article.get_v_scroll_bar().value})
@@ -319,7 +361,11 @@ func set_language(lang: String) -> void:
 func _show(scroll: float) -> void:
 	var row := _entry(page)
 	_article.clear()
-	_article.parse_bbcode(ELWikiHtml.to_bbcode(str(row.get("html", ""))))
+	var code := ELWikiHtml.to_bbcode(str(row.get("html", "")))
+	if not _notice.is_empty() and page == "home": code = "[i][color=#%s]%s[/color][/i]\n\n" % [MUTED.to_html(false), _notice.replace("[", "[lb]")] + code
+	_notice = ""
+	_article.parse_bbcode(code)
+	_show_visual(row)
 	_restore_scroll.call_deferred(scroll)
 	_title.text = _text("title")
 	_home.text = _text("home")
@@ -340,6 +386,44 @@ func _show(scroll: float) -> void:
 	if _frame.size.x < 1000 and page != "home" and _list_toggle.button_pressed:
 		_list_toggle.button_pressed = false
 
+## The live creature of a creature page, or the icon of another card.
+func _show_visual(row: Dictionary) -> void:
+	for child: Node in _visual.get_children():
+		_visual.remove_child(child)
+		child.queue_free()
+	_preview = null
+	var profile: ELProfile = profiles.get(str(row.get("game", "")))
+	var card := str(row.get("card", ""))
+	_visual.visible = profile != null and not card.is_empty()
+	if not _visual.visible: return
+	if row.get("kind") == "creature":
+		var preview := ELWikiPreview.new()
+		if preview.show_creature(profile, card):
+			preview.size_flags_vertical = Control.SIZE_EXPAND_FILL
+			preview.custom_minimum_size = Vector2(0, 320)
+			_visual.add_child(preview)
+			_preview = preview
+			var hint := Label.new()
+			hint.text = _text("turn")
+			hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			hint.add_theme_font_override("font", _sans)
+			hint.add_theme_font_size_override("font_size", 14)
+			hint.add_theme_color_override("font_color", MUTED)
+			_visual.add_child(hint)
+			var reset := _button(_text("reset"))
+			reset.pressed.connect(preview.reset_view)
+			_visual.add_child(reset)
+		else:
+			preview.free()
+	var icon := profile.card_icon(card)
+	if icon != null:
+		var picture := TextureRect.new()
+		picture.texture = icon
+		picture.custom_minimum_size = Vector2(100, 100)
+		picture.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		picture.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		_visual.add_child(picture)
+
 func _restore_scroll(value: float) -> void:
 	_article.get_v_scroll_bar().value = value
 
@@ -354,13 +438,16 @@ func _fill_list() -> void:
 	var root := _tree.create_item()
 	var words := _search.text.strip_edges().to_lower().split(" ", false)
 	var found := 0
-	for category: Dictionary in ELWikiData.CATEGORIES:
+	var current := str(_entry(page).get("category", ""))
+	for category: Dictionary in _data().categories:
 		var heading: TreeItem = null
 		for row: Dictionary in _pages():
 			if row.category != category.id or not _matches(row, words): continue
 			if heading == null:
 				heading = _tree.create_item(root)
-				heading.set_text(0, str(category.get(language, category.en)).to_upper())
+				heading.set_text(0, str(category.title).to_upper())
+				# Encyclopedia lists open while searching or around the page read.
+				heading.collapsed = category.catalog and words.is_empty() and category.id != current
 				heading.set_selectable(0, false)
 				heading.set_custom_color(0, MUTED)
 				heading.set_custom_font_size(0, 14)

@@ -28,6 +28,20 @@ summary: Contents of the wiki
 - [Creature abilities](abilities): the most common abilities.
 - [Automatic combat and the camera](automatic-combat).
 
+## Encyclopedia
+
+Every creature, spell, artifact, skill and specialization of both games, with its statistics and description:
+
+| | Etherlords | Etherlords II |
+|---|---|---|
+| Creatures | [list](el1-creatures) | [list](el2-creatures) |
+| Sorceries and enchantments | [list](el1-spells) | [list](el2-spells) |
+| Artifacts | [list](el1-artifacts) | [list](el2-artifacts) |
+| Skills | [list](el1-skills) | [list](el2-skills) |
+| Specializations | [list](el1-specializations) | [list](el2-specializations) |
+
+In the game, a creature's page shows the creature itself: drag it to turn it and use the wheel to zoom.
+
 ## Spells, creatures and heroes
 
 - [The four races](races) · [Spells](spells) · [Creatures](creatures)

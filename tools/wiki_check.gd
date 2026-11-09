@@ -58,7 +58,10 @@ func _run() -> void:
 			check(not "&amp;" in shown and not "&lt;" in shown and not "&quot;" in shown, "%s/%s has no HTML entities left" % [lang, row.key])
 			for found: RegExMatch in link.search_all(row.html):
 				links += 1
-				check(keys[lang].has(found.get_string(1)), "%s/%s links to %s" % [lang, row.key, found.get_string(1)])
+				var target := found.get_string(1)
+				# Encyclopedia lists come from the installed games (checked below).
+				var listed := target.substr(0, 4) in ["el1-", "el2-"] and target.substr(4) in ELWikiCatalog.KINDS
+				check(keys[lang].has(target) or listed, "%s/%s links to %s" % [lang, row.key, target])
 	probe.queue_free()
 	check(ELWikiHtml.key_from_url("wiki://combat") == "combat", "internal links resolve")
 	check(ELWikiHtml.key_from_url("wiki://x]y") == "" and ELWikiHtml.key_from_url("wiki://../a") == "", "unsafe links are refused")
@@ -104,6 +107,7 @@ func _run() -> void:
 	check(screen._tree.get_root().get_first_child().get_metadata(0) == null, "an empty search says nothing was found")
 	screen.navigate("no-such-page")
 	check(screen.page == "home", "an unknown page shows the contents")
+	await _catalog(screen, shots)
 	root.size = Vector2i(800, 600)
 	await process_frame
 	screen.navigate("combat-phases")
@@ -123,3 +127,62 @@ func _run() -> void:
 		file.close()
 	print("wiki check: %d pages per language, %d links, %d failures" % [keys.en.size(), links, failures.size()])
 	quit(1 if not failures.is_empty() else 0)
+
+## Encyclopedia pages of the installed games (Steam copies are found
+## automatically; otherwise pass `-- --wiki-el1=<folder> --wiki-el2=<folder>`).
+func _catalog(screen: ELWikiScreen, shots: String) -> void:
+	var folders := ELContentLibrary.steam_folders()
+	for arg: String in OS.get_cmdline_user_args():
+		for edition: String in ["el1", "el2"]:
+			if arg.begins_with("--wiki-%s=" % edition): folders[edition] = arg.get_slice("=", 1)
+	if folders.is_empty():
+		print("wiki check: no installed game; encyclopedia pages not checked")
+		return
+	var profiles := {}
+	for edition: String in folders:
+		var profile := ELProfile.new()
+		check(profile.mount(edition, folders[edition]), "%s mounts from %s" % [edition, folders[edition]])
+		profiles[edition] = profile
+	ELWikiScreen.profiles = profiles
+	screen._content.clear()
+	for lang: String in ELWikiData.LANGUAGES:
+		screen.set_language(lang)
+		for edition: String in profiles:
+			var catalog := ELWikiCatalog.build(profiles[edition], lang)
+			check(catalog.pages.size() > 100, "%s/%s has encyclopedia pages" % [edition, lang])
+			var keys := {}
+			for row: Dictionary in catalog.pages: keys[row.key] = true
+			var link := RegEx.create_from_string("wiki://([a-z0-9-]+)")
+			for row: Dictionary in catalog.pages:
+				for found: RegExMatch in link.search_all(row.html):
+					check(keys.has(found.get_string(1)), "%s: %s links to %s" % [lang, row.key, found.get_string(1)])
+			for kind: String in ELWikiCatalog.KINDS:
+				screen.navigate("%s-%s" % [edition, kind])
+				check(screen.page == "%s-%s" % [edition, kind], "%s: the %s %s list opens" % [lang, edition, kind])
+	screen.set_language("en")
+	for edition: String in profiles:
+		var creature := ""
+		var sorcery := ""
+		for row: Dictionary in screen._pages():
+			if row.get("game") != edition: continue
+			if creature.is_empty() and row.get("kind") == "creature": creature = row.key
+			if sorcery.is_empty() and row.get("kind") == "card": sorcery = row.key
+		screen.navigate(creature)
+		await process_frame
+		check(screen._preview != null and screen._preview.model != null, "%s: a creature page shows the live model" % creature)
+		if screen._preview != null:
+			var before := screen._preview.pivot.rotation.y
+			screen._preview.turn(Vector2(60, 0))
+			check(not is_equal_approx(before, screen._preview.pivot.rotation.y), "%s: dragging turns the model" % creature)
+			var distance := screen._preview.camera.position.z
+			screen._preview.zoom(0.8)
+			check(screen._preview.camera.position.z < distance, "%s: the wheel zooms" % creature)
+			screen._preview.reset_view()
+		await _shot(shots, "%s-creature" % edition)
+		screen.navigate(sorcery)
+		check(screen._preview == null and screen._visual.visible, "%s: a spell page shows its icon" % sorcery)
+		await _shot(shots, "%s-spell" % edition)
+	screen.set_language("ru")
+	screen.navigate("el1-creatures" if profiles.has("el1") else "el2-creatures")
+	await _shot(shots, "ru-creature-list")
+	screen.set_language("en")

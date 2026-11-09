@@ -282,6 +282,7 @@ var _over_game := false
 ## front-end art is not present.
 func build(available: Dictionary, initial: String) -> bool:
 	profiles = available
+	ELWikiScreen.profiles = available
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	var system := SystemFont.new()

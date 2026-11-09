@@ -37,7 +37,8 @@ aside { position: sticky; top: 0; align-self: start; max-height: 100vh; overflow
 aside label { display: block; font-size: 14px; color: var(--muted); margin-bottom: 4px; }
 aside input { width: 100%; }
 #status { min-height: 1.2em; margin: 6px 0; font-size: 14px; color: var(--muted); }
-#results h2 { margin: 18px 0 4px; font: 600 13px var(--sans); color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+#results summary { margin: 14px 0 4px; font: 600 13px var(--sans); color: var(--muted); text-transform: uppercase; letter-spacing: .06em; cursor: pointer; }
+#results details:not([open]) summary { margin-bottom: 0; }
 #results a { display: block; padding: 4px 8px; border-radius: 4px; text-decoration: none; color: var(--ink); line-height: 1.35; }
 #results a small { display: block; color: var(--muted); font-size: 13px; }
 #results a:hover { background: var(--panel-2); }
@@ -59,6 +60,10 @@ article p, article li { max-width: 72ch; }
 article ul, article ol { padding-left: 1.4em; }
 article li { margin: 4px 0; }
 article code { font: 15px ui-monospace, Consolas, monospace; background: var(--panel-2); padding: 1px 5px; border-radius: 4px; }
+article figure { margin: 0 0 16px 24px; float: right; }
+article figure.model img { width: 300px; height: 300px; border: 1px solid var(--line); border-radius: 8px; background: #120e0b; }
+article figure.icon img { width: 100px; height: 100px; image-rendering: auto; border: 1px solid var(--line); border-radius: 6px; }
+article h1 + figure + p, article table { clear: none; }
 article .note { padding: 10px 14px; background: var(--note); border-left: 3px solid var(--gold); border-radius: 4px; }
 .table { overflow-x: auto; margin: 12px 0; }
 table { border-collapse: collapse; min-width: 50%; }
@@ -74,5 +79,7 @@ footer { clear: both; margin-top: 48px; padding-top: 12px; border-top: 1px solid
   body.browse-open aside { display: block; }
   main { padding: 16px; }
   #toc { float: none; width: auto; margin: 0 0 16px; }
+  article figure { float: none; margin: 0 0 16px; }
+  article figure.model img { width: 100%; height: auto; max-width: 360px; }
   article h1 { font-size: 30px; }
 }

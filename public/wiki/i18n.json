@@ -13,7 +13,7 @@
     "found": "{n} pages found",
     "nothing": "Nothing found. Try a shorter word.",
     "contents": "On this page",
-    "disclaimer": "Demiurges is a fan-made engine. Etherlords and Etherlords II belong to their owners; this wiki contains no game content.",
+    "disclaimer": "Demiurges is a fan-made engine. Etherlords and Etherlords II, their names, texts and pictures belong to their owners.",
     "project": "Project and source code",
     "version": "Wiki for Demiurges {v}"
   },
@@ -31,7 +31,7 @@
     "found": "Найдено страниц: {n}",
     "nothing": "Ничего не найдено. Попробуйте более короткое слово.",
     "contents": "На этой странице",
-    "disclaimer": "Demiurges — любительский движок. «Демиурги» и «Демиурги II» принадлежат своим правообладателям; в этой вики нет материалов из игр.",
+    "disclaimer": "Demiurges — любительский движок. «Демиурги» и «Демиурги II», их названия, тексты и изображения принадлежат правообладателям.",
     "project": "Проект и исходный код",
     "version": "Вики для Demiurges {v}"
   }
