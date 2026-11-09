@@ -32,7 +32,7 @@ select, input[type=search], button { font: inherit; color: var(--ink); backgroun
 .play:hover { background: var(--panel-2); }
 
 #browse-toggle { display: none; margin: 12px 16px 0; width: calc(100% - 32px); }
-.layout { display: grid; grid-template-columns: 300px minmax(0, 1fr); max-width: 1280px; margin: 0 auto; }
+.layout { display: grid; grid-template-columns: 300px minmax(0, 1fr); max-width: 1480px; margin: 0 auto; }
 aside { position: sticky; top: 0; align-self: start; max-height: 100vh; overflow-y: auto; padding: 20px 16px 32px 24px; border-right: 1px solid var(--line); }
 aside label { display: block; font-size: 14px; color: var(--muted); margin-bottom: 4px; }
 aside input { width: 100%; }
@@ -45,14 +45,20 @@ aside input { width: 100%; }
 #results a:hover { background: var(--panel-2); }
 #results a[aria-current=page] { background: var(--panel-2); color: var(--gold); box-shadow: inset 3px 0 var(--gold); }
 
-main { padding: 24px 40px 40px; min-width: 0; }
+/* The article takes the width; "On this page" keeps to its own column at the
+   far right on wide screens and sits above the article on narrower ones. */
+main { padding: 24px 40px 40px; min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) 210px; column-gap: 32px; align-items: start; }
+main:has(#toc:empty) { grid-template-columns: minmax(0, 1fr); }
+#notice { grid-column: 1 / -1; grid-row: 1; }
+footer { grid-column: 1 / -1; grid-row: 3; }
+#article { grid-column: 1; grid-row: 2; }
 #notice { padding: 10px 14px; background: var(--note); border: 1px solid var(--line); border-radius: 6px; }
 #notice:empty, #notice[hidden] { display: none; }
-#toc { float: right; width: 240px; margin: 4px 0 16px 24px; padding: 10px 14px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; font-size: 15px; }
+#toc { grid-column: 2; grid-row: 2; position: sticky; top: 16px; max-height: calc(100vh - 32px); overflow-y: auto; padding: 10px 14px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; font-size: 15px; }
 #toc:empty { display: none; }
 #toc h2 { margin: 0 0 6px; font: 600 13px var(--sans); color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
 #toc a { display: block; padding: 2px 0; text-decoration: none; }
-article { max-width: 780px; }
+article { max-width: 920px; }
 article:focus { outline: none; }
 article h1 { margin: 0 0 16px; font: 600 38px/1.15 var(--serif); color: var(--gold); }
 article h2 { margin: 32px 0 8px; font: 600 26px/1.25 var(--serif); color: var(--gold); border-bottom: 1px solid var(--line); padding-bottom: 4px; }
@@ -72,11 +78,17 @@ article .figures figure.model img { width: 220px; height: 220px; }
 article figcaption { text-align: center; font-size: 14px; color: var(--muted); margin-top: 4px; }
 td.changed { background: #4a3516; color: #ffd88a; }
 article .note { padding: 10px 14px; background: var(--note); border-left: 3px solid var(--gold); border-radius: 4px; }
-.table { overflow-x: auto; margin: 12px 0; }
+.table { overflow-x: auto; margin: 12px 0; clear: both; }
 table { border-collapse: collapse; min-width: 50%; }
 th, td { border: 1px solid var(--line); padding: 6px 10px; text-align: left; vertical-align: top; }
 th { background: var(--panel-2); color: var(--gold); font-weight: 600; }
 footer { clear: both; margin-top: 48px; padding-top: 12px; border-top: 1px solid var(--line); font-size: 14px; color: var(--muted); }
+
+@media (max-width: 1439px) {
+  main { display: block; }
+  #toc { position: static; max-height: none; display: flex; flex-wrap: wrap; gap: 2px 16px; margin: 0 0 16px; }
+  #toc h2 { width: 100%; }
+}
 
 @media (max-width: 860px) {
   header { padding: 10px 16px; }
