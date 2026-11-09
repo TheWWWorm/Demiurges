@@ -42,6 +42,7 @@ These work as in the games: autosave, faster map movement, animated objects, amb
 | Movies | Off, original size or fit to the screen. |
 | Map tooltips on hover | Etherlords II map tooltips without a right click. |
 | Remake helper overlay | The remake's readouts, hints and shortcut buttons over the original screens. Off at first. |
+| Frame rate counter | Frames per second in the top right corner. Off at first. |
 | Discord activity | Shows in the Discord desktop app which game you play and whether you are in the menus, on a map or in a battle. Nothing else is shared. On at first. |
 
 At the bottom, **Export log…** saves a log with system information for a [problem report](troubleshooting), and **Game files…** adds, switches or removes a game: see [Installing the game files](installing).

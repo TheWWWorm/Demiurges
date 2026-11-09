@@ -202,6 +202,8 @@ const RU := {
 	"Second game: an object's tooltip when the cursor rests on it. The right mouse button shows it either way.": "Вторая игра: подсказка к объекту, когда курсор задерживается на нём. Правая кнопка мыши показывает её в любом случае.",
 	"Remake helper overlay": "Подсказки ремейка",
 	"Remake-only readouts, hints and shortcut buttons over the original screens.": "Сведения, подсказки и кнопки быстрого доступа ремейка поверх экранов оригинала.",
+	"Frame rate counter": "Счётчик кадров",
+	"Shows frames per second in the top right corner.": "Показывает число кадров в секунду в правом верхнем углу.",
 	"Discord activity": "Активность в Discord",
 	"Shows the game and whether you are in the menus, on a map or in a battle in the Discord desktop app. Nothing else is shared; off clears it.": "Показывает в приложении Discord, во что вы играете и где находитесь: в меню, на карте или в бою. Больше ничего не передаётся; выключение убирает активность.",
 	# Discord activity

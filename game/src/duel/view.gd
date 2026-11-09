@@ -247,6 +247,7 @@ func _ready() -> void:
 	var sharpen: CanvasLayer = SharpenLayer.new()
 	sharpen.settings = settings
 	add_child(sharpen)
+	_update_fps_counter()
 	path_tracing = ELPathTracing.new()
 	path_tracing.settings = settings
 	path_tracing.translate = _t
@@ -1474,6 +1475,8 @@ func _event(data: Dictionary) -> void:
 			if not bool(settings.values.get("hide_cast", false)): models[data.side].play(animation)
 			# The caster's own sound follows its cast animation; the card's effects start with it.
 			battle_audio.unit(models[data.side], animation.trim_prefix("u"))
+			# The spell's own sounds wait, like its effects, for the gesture's release.
+			battle_audio.hold(_cast_release(int(data.side), String(data.card)))
 			# Original EL1 Fury registers GreenDamage only after it counts at
 			# least one attempted creature hit. Its sound follows that cue too.
 			if profile.id == "el1" and data.card == "FRNT":
@@ -4453,7 +4456,8 @@ func _graphics_page(page: VBoxContainer) -> void:
 	smoothing.select(int(settings.values.antialiasing) + 1)
 	smoothing.item_selected.connect(func(index: int):
 		settings.values.antialiasing = index - 1
-		ELSettings.apply_display(get_viewport(), settings.values))
+		ELSettings.apply_display(get_viewport(), settings.values)
+		if is_instance_valid(path_tracing): path_tracing.display_applied())
 	_settings_row(picture, "Anti-aliasing", "Smooths the edges of the 3D map and battle scenes. Automatic uses 2x unless the graphics are rendered in software. Path tracing uses its own smoothing.", smoothing)
 	var sharpen := OptionButton.new()
 	sharpen.name = "Sharpening"
@@ -4542,6 +4546,13 @@ func _interface_page(page: VBoxContainer) -> void:
 		settings.values.helper_overlay = enabled
 		_apply_settings())
 	_settings_row(screens, "Remake helper overlay", "Remake-only readouts, hints and shortcut buttons over the original screens.", helper_toggle)
+	var fps_toggle := CheckButton.new()
+	fps_toggle.name = "ShowFps"
+	fps_toggle.button_pressed = bool(settings.values.get("show_fps", false))
+	fps_toggle.toggled.connect(func(enabled: bool):
+		settings.values.show_fps = enabled
+		_update_fps_counter())
+	_settings_row(screens, "Frame rate counter", "Shows frames per second in the top right corner.", fps_toggle)
 	var sharing := _settings_box(page, "Sharing")
 	var discord_toggle := CheckButton.new()
 	discord_toggle.name = "DiscordActivity"
@@ -4551,6 +4562,36 @@ func _interface_page(page: VBoxContainer) -> void:
 		settings.values.discord_activity = enabled
 		if is_instance_valid(discord): discord.enabled = enabled)
 	_settings_row(sharing, "Discord activity", "Shows the game and whether you are in the menus, on a map or in a battle in the Discord desktop app. Nothing else is shared; off clears it.", discord_toggle)
+
+## The optional frame rate counter (setting "show_fps"), above every screen.
+var _fps_layer: CanvasLayer
+var _fps_label: Label
+
+func _update_fps_counter() -> void:
+	var on := bool(settings.values.get("show_fps", false))
+	if on and _fps_layer == null:
+		_fps_layer = CanvasLayer.new()
+		_fps_layer.layer = 120
+		add_child(_fps_layer)
+		_fps_label = Label.new()
+		_fps_label.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+		_fps_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_fps_label.set_anchors_and_offsets_preset(Control.PRESET_TOP_RIGHT)
+		_fps_label.offset_left = -120
+		_fps_label.offset_right = -8
+		_fps_label.offset_top = 4
+		_fps_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		_fps_label.add_theme_font_size_override("font_size", 16)
+		_fps_label.add_theme_color_override("font_color", Color("e6dcc0"))
+		_fps_label.add_theme_color_override("font_outline_color", Color.BLACK)
+		_fps_label.add_theme_constant_override("outline_size", 5)
+		_fps_layer.add_child(_fps_label)
+		var timer := Timer.new()
+		timer.wait_time = 0.5
+		timer.autostart = true
+		timer.timeout.connect(func(): _fps_label.text = "%d FPS" % roundi(Engine.get_frames_per_second()))
+		_fps_layer.add_child(timer)
+	if _fps_layer != null: _fps_layer.visible = on
 
 ## `text` in the language of the game being played (see ELRemakeText).
 func _t(text: String) -> String:
@@ -4739,6 +4780,7 @@ func _apply_settings() -> void:
 	ELMoviePlayer.mode = int(settings.values.movies)
 	if is_instance_valid(discord): discord.enabled = bool(settings.values.discord_activity)
 	ELSettings.apply_display(get_viewport(), settings.values)
+	if is_instance_valid(path_tracing): path_tracing.display_applied()
 	if is_instance_valid(arena) and arena.light != null:
 		arena.light.shadow_enabled = settings.values.shadows
 		arena.light.shadow_blur = 2.0 if settings.values.soft_shadows else 1.0

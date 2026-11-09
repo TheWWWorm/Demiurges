@@ -2,6 +2,17 @@
 
 Versions follow [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html) from 0.3.0 on.
 
+## 0.5.0
+
+- Frame rate counter (Remake settings › Interface): frames per second in the top right corner. Off at first.
+- Battles: a spell's sounds start when the caster releases it, together with its effects, instead of at the start of the gesture.
+- Etherlords II map leaders and mounts that were drawn plain white now show their skins: the remake finds their textures where the originals keep them. This also fixes two of the first game's lords.
+- Mines battlefield: the stream and waterfall are drawn see-through, as in the original, instead of cut out; with path tracing they no longer turn black.
+- Path tracing: rune circles of buffs and debuffs no longer leave dark squares on the ground.
+- Path tracing: trees, buildings and statues in parts of a map uncovered from the fog cast shadows straight away.
+- Path tracing stays on after surrendering a battle or closing the original Options screen.
+- The «Remake settings…» button on the Options screen is easier to see.
+
 ## 0.4.0
 
 - Path-traced lighting (optional, Remake settings › Graphics): real shadows, sky light, light bounced between surfaces, and light from fire and spells that recolours the scene, on adventure maps and in battles. It needs the Forward+ (Vulkan) renderer and a graphics card with ray tracing, and costs about 2–3 ms a frame on a fast card. F7 switches it during play; Shift+F7 shows the light alone.

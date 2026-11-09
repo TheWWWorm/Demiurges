@@ -18,8 +18,8 @@
   "translation_keys": 16,
   "files": {
     "data/en/index.json": {
-      "bytes": 220060,
-      "sha256": "686250aa78c62c8f5ed72332fb897a0a64062efdda553951d6686a489f2bf6dd"
+      "bytes": 220136,
+      "sha256": "2e3d04b2791c5f5f2fe152730c13a88155af7dc7bd132709e14a226597fefbb9"
     },
     "data/en/pages/abilities.json": {
       "bytes": 2238,
@@ -1538,8 +1538,8 @@
       "sha256": "b00c328a75ad68716a361e4997e40e9119ec7b4ac459188e3cd7378dd882b094"
     },
     "data/en/pages/options.json": {
-      "bytes": 3833,
-      "sha256": "5127e69f2dd345c20c4d1cf16396ae794d74f3a3f0775f8309a1470492995b7e"
+      "bytes": 3934,
+      "sha256": "c92c4c4712fc16680b73727b88172e499b42a68264d7ba5f5dc4e5b6896a81b8"
     },
     "data/en/pages/races.json": {
       "bytes": 1261,
@@ -1846,8 +1846,8 @@
       "sha256": "fb65d1488afb1da162ed16685ce2381ebeff2116c1715ceaa50302313a1d08ba"
     },
     "data/ru/index.json": {
-      "bytes": 386385,
-      "sha256": "6a25a3d0f8623395801b181d106c2c0e27be95369339f052e5292ea0cfcb5c72"
+      "bytes": 386531,
+      "sha256": "88858eaa33839995ea8d01f2287c358f83de08b69b63dc8fe57da31afe4e7a3b"
     },
     "data/ru/pages/abilities.json": {
       "bytes": 3685,
@@ -3366,8 +3366,8 @@
       "sha256": "241cc813cf5345adaa0baff0e8217ff5ea899d983936a542ac10e4b29c0ff9b3"
     },
     "data/ru/pages/options.json": {
-      "bytes": 6141,
-      "sha256": "691286f41f8396db3b57fcbfc48cefb216afa6f0c1b259525d0b724378a2eba6"
+      "bytes": 6312,
+      "sha256": "87c2da8cbc9afdac017244c4f65110083fe9438498c3e05c0ec3fa94dd11f2b4"
     },
     "data/ru/pages/races.json": {
       "bytes": 1998,
@@ -5122,5 +5122,5 @@
       "sha256": "aabab5bcfce15545227916db3d8f7e6c353fbf93c2b073e25dec7262d79874ed"
     }
   },
-  "bytes": 5470891
+  "bytes": 5471385
 }

@@ -73,7 +73,8 @@ func build(data: ELProfile, model: String, texture_name: String, secondary_textu
 	# Alpha32 skins (air walls, spirits) fade out in soft alpha, such as a wall's
 	# wispy lower dress: blend them instead of the half-alpha cut-off.
 	for pair: Array in [[material, texture_name], [secondary, secondary_texture]]:
-		if String(pair[1]).to_lower().contains("alpha32"):
+		var skin := pair[0].albedo_texture as Texture2D
+		if String(pair[1]).to_lower().contains("alpha32") or (skin != null and skin.has_meta("alpha32")):
 			pair[0].transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_DEPTH_PRE_PASS
 	for link: Array in links:
 		var name: String = link[0]

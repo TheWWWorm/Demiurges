@@ -175,6 +175,11 @@ func _say(text: String) -> void:
 func _activate() -> void:
 	if _effect == null or _active or not is_instance_valid(_camera): return
 	_active = true
+	# The traced scene is rebuilt from scratch whenever tracing starts: the
+	# scene may have changed meanwhile, and a stale copy lost its objects
+	# (no shadows on a map after switching tracing off and on).
+	_reset()
+	_scan = 0.0
 	_effect.enabled = true
 	_effect.history_reset = true
 	var viewport := get_viewport()
@@ -188,6 +193,19 @@ func _activate() -> void:
 		_sun.shadow_enabled = false
 	_bloom(true)
 	changed.emit(true)
+
+## After the display options were applied again (closing the original
+## Options or a question box does this): the options' anti-aliasing becomes
+## the one restored when tracing stops, and tracing keeps multisampling off,
+## which the traced image cannot be composed onto.
+func display_applied() -> void:
+	if not _active: return
+	var viewport := get_viewport()
+	_saved_msaa = viewport.msaa_3d
+	_saved_aa = viewport.screen_space_aa
+	viewport.msaa_3d = Viewport.MSAA_DISABLED
+	viewport.screen_space_aa = Viewport.SCREEN_SPACE_AA_FXAA
+	_effect.history_reset = true
 
 func _deactivate() -> void:
 	if not _active: return
@@ -304,16 +322,20 @@ func _scan_statics(ops: Array) -> void:
 		if look.is_empty() or mesh == null or not _update_slot(ops, id, mesh, -1, look): continue
 		var cached: Array = _static_cache.get(id, [])
 		var count := 1
+		# Instances change in place too: map objects hidden under the fog are
+		# shown by their instance transforms, which the count does not see.
+		var placement := 0
 		if node is MultiMeshInstance3D:
 			var multimesh: MultiMesh = node.multimesh
 			count = multimesh.instance_count if multimesh.visible_instance_count < 0 else multimesh.visible_instance_count
-		if cached.is_empty() or cached[0] != node.global_transform or cached[1] != count:
+			placement = hash(multimesh.buffer)
+		if cached.is_empty() or cached[0] != node.global_transform or cached[1] != count or cached[3] != placement:
 			var placed := []
 			if node is MultiMeshInstance3D:
 				for i in count: placed.append([id, node.global_transform * node.multimesh.get_instance_transform(i)])
 			else:
 				placed.append([id, node.global_transform])
-			cached = [node.global_transform, count, placed]
+			cached = [node.global_transform, count, placed, placement]
 			_static_cache[id] = cached
 		entries.append_array(cached[2])
 	if entries != _static_entries:
@@ -453,6 +475,10 @@ func _restore_effect_lights() -> void:
 ## (instanced objects and the map's ground) under `node`.
 func _collect(node: Node) -> void:
 	for child in node.get_children():
+		# Effect models (runes, glows, walls of fire) keep their raster light,
+		# as particles do: their soft shapes, traced as solid, darkened the
+		# ground beneath them into squares.
+		if child is ELCombatEffects: continue
 		if child is ELModel:
 			_models.append(child)
 			continue
@@ -473,6 +499,9 @@ func _surface(node: GeometryInstance3D) -> Dictionary:
 		if standard.transparency not in [BaseMaterial3D.TRANSPARENCY_DISABLED, BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR]: return {}
 		return {"texture": standard.albedo_texture, "alpha": standard.transparency == BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR, "scenery": false}
 	if material is ShaderMaterial and node.has_meta("albedo"):
+		# Blended scenery (soft-alpha water sheets) keeps its raster light, as
+		# effects do: as solid surfaces they shut the light off what lies below.
+		if (material as ShaderMaterial).shader == ELArena.LIT_BLEND_SHADER: return {}
 		var texture := node.get_meta("albedo") as Texture2D
 		if texture == null: return {}
 		return {"texture": texture, "alpha": (material as ShaderMaterial).shader == ELArena.LIT_SHADER, "scenery": true}

@@ -20,7 +20,8 @@ var _ambient_seen := Color(-1, -1, -1)
 ## Upper bound of ambient plus sun on scenery (1 = the originals' full brightness).
 var light_limit := 1.0
 const LIT_SHADER := preload("res://src/render/arena_lit.gdshader")
-const BACKDROP_SHADER := preload("res://src/render/arena_backdrop.gdshader")
+const LIT_BLEND_SHADER := preload("res://src/render/arena_lit_blend.gdshader")
+const BACKDROP_SHADER :=preload("res://src/render/arena_backdrop.gdshader")
 var _lit: Dictionary = {}
 var _unlit: Dictionary = {}
 
@@ -282,7 +283,10 @@ func _add_model(profile: ELProfile, model_name: String, texture_name: String, ba
 			continue
 		if not _lit.has(standard):
 			var lit := ShaderMaterial.new()
-			lit.shader = LIT_SHADER
+			# Soft-alpha sheets (Alpha32: the Mines' running water) blend.
+			var soft := standard.transparency == BaseMaterial3D.TRANSPARENCY_ALPHA_DEPTH_PRE_PASS
+			lit.shader = LIT_BLEND_SHADER if soft else LIT_SHADER
+			if soft: lit.render_priority = -1
 			lit.set_shader_parameter("albedo_texture", standard.albedo_texture)
 			_lit[standard] = lit
 			_lit_materials.append(lit)

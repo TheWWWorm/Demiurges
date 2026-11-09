@@ -114,12 +114,33 @@ func texture(name: String) -> Texture2D:
 	var key := ELArchive.key(name)
 	if _textures.has(key):
 		return _textures[key]
-	var bytes := read("textures", key if key.ends_with(".mmp") else key + ".mmp")
+	var file := key if key.ends_with(".mmp") else key + ".mmp"
+	var bytes := read("textures", file)
+	# Tables name some textures without the Alpha or Alpha32 folder they are
+	# stored in (the second game's map leaders, such as SmBlackFemale00 in
+	# Heroes/Alpha): look there too, as the originals do.
+	# Failing that, the closest stored variant: the full-size skin of a small
+	# ("Sm") one, the first colour of a set ("_00") or a lord's main sheet.
+	var soft := false
+	if bytes.is_empty() and "/" in file:
+		var folder := file.get_base_dir()
+		var base := file.get_file().get_basename()
+		var names := [base]
+		if base.begins_with("sm"): names.append(base.substr(2))
+		for stem: String in names.duplicate(): names.append_array([stem + "_00", stem + "main"])
+		for stem: String in names:
+			for sub in ["", "alpha", "alpha32"]:
+				bytes = read("textures", folder.path_join(sub).path_join(stem + ".mmp"))
+				soft = sub == "alpha32"
+				if not bytes.is_empty(): break
+			if not bytes.is_empty(): break
 	var img := ELTexture.decode(bytes)
 	if img == null:
 		return null
 	img.generate_mipmaps()
 	var tex := ImageTexture.create_from_image(img)
+	# Found in Alpha32: a soft-alpha skin (see ELModel.build).
+	if soft: tex.set_meta("alpha32", true)
 	_textures[key] = tex
 	return tex
 

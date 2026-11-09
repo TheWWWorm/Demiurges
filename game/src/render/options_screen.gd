@@ -318,14 +318,25 @@ func _remake_section() -> void:
 	if menu.settings_requested.get_connections().is_empty() or context != "menu": return
 	remake_button = Button.new()
 	remake_button.name = "RemakeSettings"
-	remake_button.flat = true
 	remake_button.focus_mode = Control.FOCUS_NONE
 	remake_button.text = ELRemakeText.t("Remake settings…", menu.profile)
 	remake_button.tooltip_text = ELRemakeText.t("Settings of the remake only: path tracing, volumes, shadows, weather, movies, anti-aliasing.", menu.profile)
-	remake_button.add_theme_font_size_override("font_size", 14)
-	remake_button.add_theme_color_override("font_color", Color(ELFrontMenu.INK, 0.7))
-	remake_button.position = Vector2(DESIGN_CENTRE - 110, 700)
-	remake_button.size = Vector2(220, 28)
+	remake_button.add_theme_font_size_override("font_size", 15)
+	# A framed dark plate with the menus' gold lettering: readable over the
+	# options art, where plain text was hard to see.
+	for state: String in ["normal", "hover", "pressed"]:
+		var plate := StyleBoxFlat.new()
+		plate.bg_color = Color(0.05, 0.04, 0.03, 0.82 if state == "normal" else 0.92)
+		plate.border_color = Color(ELFrontMenu.GOLD_INK, 0.75 if state == "normal" else 1.0)
+		plate.set_border_width_all(1)
+		plate.set_corner_radius_all(3)
+		plate.set_content_margin_all(4)
+		remake_button.add_theme_stylebox_override(state, plate)
+	remake_button.add_theme_color_override("font_color", ELFrontMenu.GOLD_INK)
+	remake_button.add_theme_color_override("font_hover_color", ELFrontMenu.INK_HOVER)
+	remake_button.add_theme_color_override("font_pressed_color", ELFrontMenu.INK_HOVER)
+	remake_button.position = Vector2(DESIGN_CENTRE - 120, 698)
+	remake_button.size = Vector2(240, 32)
 	remake_button.pressed.connect(func():
 		finish(true, "")
 		menu.settings_requested.emit())

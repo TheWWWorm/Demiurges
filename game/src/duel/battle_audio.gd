@@ -41,6 +41,12 @@ var terrain := ""
 ## Looping move sounds by figure, and the voice the last play() took.
 var _glides: Dictionary = {}
 var _last_voice: AudioStreamPlayer
+var _held_until := 0
+
+## Holds back the sounds started in the next `seconds` until then: a cast's
+## sounds play from its gesture's release frame, with its effects.
+func hold(seconds: float) -> void:
+	_held_until = maxi(_held_until, Time.get_ticks_msec() + int(seconds * 1000.0))
 var tracks: Array[String] = []
 var track_index := 0
 var ambient_sounds: Array[String] = []
@@ -1608,6 +1614,14 @@ func play(path: String, spatial_gain := 1.0, loop := false) -> bool:
 	var source: Variant = _pan_source
 	_pan_source = null
 	_last_voice = null
+	# A spell's sounds wait for its hero's gesture to release it, as its
+	# effects do (see hold()).
+	var wait := (_held_until - Time.get_ticks_msec()) / 1000.0
+	if wait > 0.0 and not loop and is_inside_tree():
+		get_tree().create_timer(wait).timeout.connect(func() -> void:
+			_pan_source = source
+			play(path, spatial_gain))
+		return true
 	requested.append(path)
 	if requested.size() > 80: requested.pop_front()
 	if paused: return false
