@@ -1,5 +1,19 @@
 # Changelog
 
+Versions follow [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html) from 0.3.0 on.
+
+## 0.3.0
+
+- New Demiurges logo for the app icon, the Windows program file and the start-up screen.
+- Battles: when a hero's health drops to zero the battle ends there, as in the originals. Attackers still on the field run home (walk if wounded) and lie down instead of running on the spot, and the hero shows its hurt animation for every blow before the deciding one.
+- Battles: a creature keeps its numbers until its death blow is shown, then loses them; a defeated hero's numbers disappear with its death.
+- Battles: the summoning camera stays on the caster during the gesture and cuts to the creature as it appears, instead of showing empty ground for seconds. The next spell waits until the creature is there, and its camera shots follow the creature's close-up instead of cutting it short.
+- Battles: cards entering and leaving the hand now visibly slide and drop into place (the hand was rebuilt several times per change, which cut the animation off).
+- Battles (Etherlords II): the opponent's spell icons at the top left have their frame, clear at the opponent's next turn instead of piling up, and show the spell's tooltip on hover.
+- Battles: the ring under creatures and heroes follows the mouse; outside your turn you can click any character to see its enchantments (such as «Дым») on the upper strip.
+- Battles: hero portraits fill their window (no thin line of battlefield along their edges), and the enchantment strip reaches its right arrow on wide screens.
+- Options and other screens opened over a battle dim the whole window, not only a 4:3 area.
+
 ## 0.2.15
 
 - Battles: air walls and spirits show their see-through lower halves (a wall's wispy dress, a spirit's trailing body) instead of being cut off at the waist.

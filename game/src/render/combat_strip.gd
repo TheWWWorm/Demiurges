@@ -68,7 +68,9 @@ func build(data: ELProfile) -> void:
 
 ## The frame tile in every visible slot past the last icon.
 func _draw_frames() -> void:
-	if look != null and not items.is_empty(): look.draw_frames(_frames, FIRST - CLIP.position, items.size() - first, visible_count(), PITCH, ICON)
+	# One frame more than fits whole: like the hand row, the strip fills up to
+	# its right arrow with a clipped slot instead of leaving a gap.
+	if look != null and not items.is_empty(): look.draw_frames(_frames, FIRST - CLIP.position, items.size() - first, visible_count() + 1, PITCH, ICON)
 
 func _arrow(control: String, direction: int) -> ELCutPartButton:
 	var bounds := Rect2()

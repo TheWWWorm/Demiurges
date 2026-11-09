@@ -40,14 +40,19 @@ var banner_age := 0.0
 var _sounded := false
 ## First game message lines: {"text", "colour", "age"}.
 var lines: Array = []
-## Second game enemy cast icons: {"texture", "age"}.
+## Second game enemy cast icons: {"texture", "card", "age"}.
 var icons: Array = []
+## The icons' frame: WORLD_SYMBOLS_MAP (140,0)-(190,50), drawn over each icon.
+var frame: Texture2D
+## Tooltip text for a cast card (the hand's card tooltip).
+var describe_card: Callable
 var _font: SystemFont
 ## The combat panel's scale (the HUD's 800x600 layout factor); lines and icons follow it.
 var ui_scale := 1.0
 
 func _init() -> void:
-	mouse_filter = Control.MOUSE_FILTER_IGNORE
+	# Only the icons take the mouse (see _has_point), for their spell tooltips.
+	mouse_filter = Control.MOUSE_FILTER_PASS
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_font = SystemFont.new()
 	_font.font_names = PackedStringArray(["Arial", "Liberation Sans", "Arimo", "DejaVu Sans"])
@@ -60,6 +65,10 @@ func build(source: ELProfile) -> void:
 		for index in [1, 2]:
 			var texture := profile.texture("Interface/combat_text_%d" % index)
 			if texture != null: halves.append(texture)
+		frame = null
+		for row: Dictionary in profile.table("InterfaceTextures").values():
+			if row.get("Name", "") == "WORLD_SYMBOLS_MAP":
+				frame = profile.texture("Interface/" + str(row.get("Path", "")).replace("\\", "/"))
 	clear()
 
 func clear() -> void:
@@ -81,9 +90,9 @@ func add_line(text: String, colour: Color) -> void:
 	lines.append({"text": text.strip_edges(), "colour": colour, "age": 0.0})
 	queue_redraw()
 
-func add_icon(texture: Texture2D) -> void:
-	if texture == null: return
-	icons.append({"texture": texture, "age": 0.0})
+func add_icon(texture: Texture2D, card := "") -> void:
+	if texture == null or (texture is AtlasTexture and texture.atlas == null): return
+	icons.append({"texture": texture, "card": card, "age": 0.0})
 	queue_redraw()
 
 func clear_icons() -> void:
@@ -139,8 +148,30 @@ func _draw() -> void:
 		var icon: Dictionary = icons[index]
 		var tick := int(float(icon.age) / BLINK_TICK)
 		if tick < BLINK_TICKS and tick % 2 == 1: continue
-		var cell := (ORIGIN + Vector2((index % ICON_ROW) * ICON_STEP, (index / ICON_ROW) * ICON_STEP)) * k
-		draw_texture_rect(icon.texture, Rect2(cell, Vector2(ICON, ICON) * k), false)
+		var cell := icon_rect(index)
+		draw_texture_rect(icon.texture, cell, false)
+		if frame != null: draw_texture_rect_region(frame, cell, Rect2(140, 0, 50, 50))
+
+## Icon `index`'s place: rows of five; past five rows the list moves up a row
+## per extra row, as in the original.
+func icon_rect(index: int) -> Rect2:
+	var k := maxf(ui_scale, 0.5)
+	var over := maxi(0, (icons.size() + ICON_ROW - 1) / ICON_ROW - 5)
+	var cell := ORIGIN + Vector2((index % ICON_ROW) * ICON_STEP, (index / ICON_ROW - over) * ICON_STEP)
+	return Rect2(cell * k, Vector2(ICON, ICON) * k)
+
+func _icon_at(at: Vector2) -> int:
+	for index in icons.size():
+		if icon_rect(index).has_point(at): return index
+	return -1
+
+func _has_point(point: Vector2) -> bool:
+	return _icon_at(point) >= 0
+
+func _get_tooltip(at: Vector2) -> String:
+	var index := _icon_at(at)
+	if index < 0 or not describe_card.is_valid(): return ""
+	return String(describe_card.call(String(icons[index].card)))
 
 func _draw_banner() -> void:
 	var rect := banner_rect()

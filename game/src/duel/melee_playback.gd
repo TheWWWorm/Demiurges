@@ -301,6 +301,12 @@ func _play(serial: int) -> void:
 		elif next.y != pair.y and pair.y >= 2 and engaged.get(pair.x, -1) == pair.y:
 			_go_home(pair.y, true, strike)
 			engaged[pair.x] = -1
+	# After the last blow (or a hero's death, which stops the combat) every
+	# living figure still out on the field goes home: unhurt ones run.
+	for id: int in view.models.keys():
+		if id >= 2 and not _moves.has(id) and away(id) and view.duel.creatures.has(id):
+			var c: Dictionary = view.duel.creatures[id]
+			_move(id, _home_path(id, int(c.owner)), int(_wounds.get(id, 0)) == 0, _yaw_at(view.homes[id], int(c.owner)))
 	if not await _moved(_moves.keys(), serial): return
 	view._auto_fight_over()
 	var rest := after.duplicate()

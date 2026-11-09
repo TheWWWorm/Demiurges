@@ -43,6 +43,10 @@ var counts := {"summon": 0, "sorcery": 0, "enchantment": 0}
 var _tracks: Dictionary = {}
 ## Creature kinds already summoned under the camera this battle.
 var seen: Dictionary = {}
+## A summon whose creature has not appeared yet: {variant, overview, n,
+## caster, targets}. Its close-up waits for summoned(), as in the original,
+## where the creature shot is queued when the figure is created.
+var summon_pending: Dictionary = {}
 ## The fight close-up an own attack declaration shot left for the first blow:
 ## {side, middle, variant}, or empty.
 var fight: Dictionary = {}
@@ -71,6 +75,7 @@ func close_up() -> bool:
 func stop() -> void:
 	shots.clear()
 	clock = 0.0
+	summon_pending = {}
 	replay = {}
 
 ## CombatCamera.ini: [Summon]/[Sorcery]/[Enchantment]/[Combat] with
@@ -153,7 +158,7 @@ func standing_view() -> Dictionary:
 
 ## True while a summon's caster shot is on screen.
 func showing_caster() -> bool:
-	return not shots.is_empty() and String(shots[0].get("name", "")).begins_with("SummonOwnerCaster")
+	return not shots.is_empty() and String(shots[0].get("name", "")).begins_with("SummonOwnerCaster") and clock < float(shots[0].duration)
 
 ## Advances the playing shot. Returns {position, rotation, fov, focus} for a
 ## close-up, {orbit: true, fov} while returning to the player's view, and {}
@@ -238,13 +243,23 @@ func _queue(list: Array[Dictionary], back := true) -> bool:
 		if not shot.is_empty(): playable.append(shot)
 	if playable.is_empty(): return false
 	if back:
-		var home := track("ReturnOwner_1.cmf")
-		if not home.is_empty():
-			playable.append({"name": "ReturnOwner_1.cmf", "fovs": home.fovs, "duration": home.fovs.size() / RATE, "orbit": true, "hold": false})
-	# A new event replaces whatever was still playing.
+		var home := _home_shot()
+		if not home.is_empty(): playable.append(home)
+	# A new event replaces whatever was still playing, except a summoned
+	# creature's close-up: the original queues the next shots after it.
+	if not shots.is_empty() and String(shots[0].get("name", "")).begins_with("SummonOwnerMonster") and clock < float(shots[0].duration):
+		var after: Array[Dictionary] = [shots[0]]
+		after.append_array(playable)
+		shots = after
+		return true
 	shots = playable
 	clock = 0.0
 	return true
+
+func _home_shot() -> Dictionary:
+	var home := track("ReturnOwner_1.cmf")
+	if home.is_empty(): return {}
+	return {"name": "ReturnOwner_1.cmf", "fovs": home.fovs, "duration": home.fovs.size() / RATE, "orbit": true, "hold": false}
 
 ## A hero's spell. kind: "summon", "sorcery" or "enchantment"; hero: the
 ## caster's figure position; targets: [{at: Vector3, side: int, slot: int,
@@ -271,6 +286,49 @@ func _queue(list: Array[Dictionary], back := true) -> bool:
 ## Sorcery that passes its effect's length (`length` seconds, plus `extra`)
 ## shows no caster shot and holds the target shot length + extra + 1 s;
 ## `forced` (Comet's lethal hit on a hero) always shows the target shot.
+## The summoned creature appears: its close-up (MonsterTrackTime long) after
+## the caster shot, or cutting an overview short, then the way back. From the
+## third summon a kind already seen gets no close-up while a caster shot or
+## overview plays; the camera then just returns. `targets` as for cast().
+func summoned(targets: Array) -> bool:
+	if summon_pending.is_empty(): return false
+	var pending := summon_pending
+	summon_pending = {}
+	if not targets.is_empty(): pending.targets = targets
+	var n: int = pending.n
+	var variant: int = pending.variant
+	var caster: int = pending.caster
+	var playing := not shots.is_empty()
+	for shot: Dictionary in shots: shot.hold = false
+	var new_kind := false
+	for target: Dictionary in pending.targets:
+		var key := String(target.get("card", ""))
+		if not seen.has(key):
+			new_kind = true
+			seen[key] = true
+	var close_up := {}
+	var flags := _target_flags(caster, pending.targets)
+	if not (n >= 2 and not new_kind and playing) and not pending.targets.is_empty() and not flags.slots & 4:
+		var stretch := _odd("summon", "monstertracktime")
+		if flags.slots & 0x100:
+			var pick := 3 if rng.randi() % 3 == 0 else variant
+			close_up = placed("SummonOwnerMonster%d_1.cmf" % pick, pending.targets[0].at, caster, true, stretch)
+		else:
+			close_up = placed(("SummonOwnerMonster%d_3.cmf" if flags.slots & 2 else "SummonOwnerMonster%d_2.cmf") % variant, _middle(pending.targets), caster, false, stretch)
+	if close_up.is_empty():
+		if not playing: return false
+		var back := _home_shot()
+		if not back.is_empty(): shots.append(back)
+		return true
+	if pending.overview or not playing:
+		shots = [close_up]
+		clock = 0.0
+	else:
+		shots.append(close_up)
+	var home := _home_shot()
+	if not home.is_empty(): shots.append(home)
+	return true
+
 func cast(kind: String, caster: int, hero: Vector3, targets: Array, local: bool, dynamics: int, timing := {}, length := -1.0, extra := 0.0, forced := false) -> bool:
 	if not counts.has(kind) or (kind == "summon" and not local): return false
 	if not _roll(dynamics): return false
@@ -287,25 +345,14 @@ func cast(kind: String, caster: int, hero: Vector3, targets: Array, local: bool,
 			list.append(placed("OwnerMonstersAll_1.cmf", Vector3.ZERO, owner, false, gesture))
 		elif n == 0 or (n >= 2 and _roll(_odd(kind, "playhero"))):
 			list.append(placed("SummonOwnerCaster%d_1.cmf" % variant, hero, caster, false, gesture))
-		var new_kind := false
-		for target: Dictionary in targets:
-			var key := String(target.get("card", ""))
-			if not seen.has(key):
-				new_kind = true
-				seen[key] = true
-		# From the third summon a creature kind already seen this battle gets
-		# no close-up while the caster shot or overview plays; the overview
-		# then runs on by itself.
-		if n >= 2 and not new_kind and not list.is_empty():
-			return _queue(list, not overview)
-		var stretch := _odd(kind, "monstertracktime")
-		if targets.is_empty() or flags.slots & 4: pass
-		elif flags.slots & 0x100:
-			var pick := 3 if rng.randi() % 3 == 0 else variant
-			list.append(placed("SummonOwnerMonster%d_1.cmf" % pick, targets[0].at, caster, true, stretch))
-		else:
-			list.append(placed(("SummonOwnerMonster%d_3.cmf" if flags.slots & 2 else "SummonOwnerMonster%d_2.cmf") % variant, _middle(targets), caster, false, stretch))
-		return _queue(list)
+		# The caster shot (or overview) plays over the gesture; the creature's
+		# close-up and the way back follow once the creature appears.
+		summon_pending = {"variant": variant, "overview": overview, "n": n, "caster": caster, "targets": targets}
+		# The shot holds its last frame until the creature appears.
+		if not list.is_empty() and not list[-1].is_empty():
+			list[-1].hold = true
+			list[-1].hold_limit = 4.0
+		return _queue(list, false)
 	var hero_shot := n == 0 or (n >= 2 and _roll(_odd(kind, "playhero")))
 	if kind == "sorcery" and length > 0.0: hero_shot = false
 	var monster_shot := n < 2 or (kind == "sorcery" and forced) or _roll(_odd(kind, "playmonster"))

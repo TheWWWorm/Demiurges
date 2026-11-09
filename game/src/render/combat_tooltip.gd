@@ -152,6 +152,8 @@ func _process(delta: float) -> void:
 
 func _owns(control: Control) -> bool:
 	var owner_node := get_parent()
+	# The opponent's cast icons are drawn over the battle, outside the HUD.
+	if control is ELCombatNotices: return true
 	return owner_node != null and owner_node.is_ancestor_of(control) and control != self and not is_ancestor_of(control)
 
 ## First-game hero titles are centred over the whole frame.

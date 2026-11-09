@@ -13,6 +13,8 @@ var stage: Node3D
 var camera: Camera3D
 var models: Dictionary = {}
 var labels: Dictionary = {}
+## The last rules record of each creature shown, for rows during playback.
+var _last_creature: Dictionary = {}
 var homes: Dictionary = {}
 var ui: Control
 var header: HBoxContainer
@@ -415,6 +417,7 @@ func _start(edition: String, options: Dictionary = {}, restored: ELDuel = null, 
 	_hits_waiting.clear()
 	_hit_serial += 1
 	_cast_queue.clear()
+	_last_creature.clear()
 	_cast_until = 0.0
 	_hero_shown = [-1, -1]
 	_wound_shown.clear()
@@ -596,13 +599,16 @@ func _process(delta: float) -> void:
 			var top := _numbers_point(model)
 			if id < 2:
 				# The hero panels show health; the floating readout is helper-only.
-				label.text = "%d HP" % shown_health(id) if helper_overlay() else ""
+				label.text = "%d HP" % shown_health(id) if helper_overlay() and ending.is_empty() else ""
 				var hero: Dictionary = duel.heroes[id]
-				if numbers and duel.phase != ELDuel.Phase.FINISHED:
+				if numbers and ending.is_empty():
 					var health := shown_health(id)
 					figures.append({"id": id, "top": top, "numbers": ELCombatSymbols.number_row(0, health, health < int(hero.get("maximum", hero.health)), true), "icons": [], "order": []})
-			elif duel.creatures.has(id):
-				var c: Dictionary = duel.creatures[id]
+			elif duel.creatures.has(id) or (_last_creature.has(id) and _presentation_held() and not model.get_meta("dying", false)):
+				# A creature the rules have already killed keeps its row until
+				# its death blow is shown, and loses it then.
+				if duel.creatures.has(id): _last_creature[id] = duel.creatures[id]
+				var c: Dictionary = _last_creature[id]
 				# Remake-only state words (helper overlay); the original marks are glyphs.
 				var parts: Array[String] = []
 				if helper_overlay():
@@ -628,8 +634,15 @@ func _process(delta: float) -> void:
 			label.position = top + Vector3(0, 0.35, 0)
 		if is_instance_valid(symbols): symbols.figures = figures
 		if is_instance_valid(selection_ring):
-			selection_ring.visible = models.has(selected_creature) and not duel.entity(selected_creature).is_empty()
-			if selection_ring.visible: selection_ring.position = models[selected_creature].position + Vector3(0, 0.08, 0)
+			# The ring marks the character under the mouse (pulsing, as the
+			# original's hover ring), else the selected one.
+			var hovered := combat_hover if models.has(combat_hover) and not _overlay_open() else -1
+			var ringed := hovered if hovered >= 0 else selected_creature
+			selection_ring.visible = models.has(ringed) and not duel.entity(ringed).is_empty()
+			if selection_ring.visible:
+				selection_ring.position = models[ringed].position + Vector3(0, 0.08, 0)
+				var pulse := 1.0 + (0.08 * sin(elapsed * TAU * 1.5) if hovered >= 0 else 0.0)
+				selection_ring.scale = Vector3(pulse, 1.0, pulse)
 	if not capture_path.is_empty() and elapsed >= capture_after:
 		var output := capture_path
 		capture_path = ""
@@ -814,6 +827,12 @@ func _facing(side: int) -> float:
 
 func _target(id: int) -> void:
 	if not _human_turn():
+		# Outside my turn a click only shows that character's enchantments
+		# on the upper strip (so an enemy hero's «Дым» can be read).
+		if duel != null and not demo and (id < 2 or duel.creatures.has(id)):
+			selected_creature = id
+			inspect_graveyard = false
+			_refresh()
 		return
 	if not ability_selection.is_empty():
 		if ability_selection.target == "enchantment":
@@ -1219,6 +1238,9 @@ func _step_arrivals() -> void:
 				if models.has(id): targets.append(models[id])
 			if is_instance_valid(effects) and not targets.is_empty():
 				effects.cast(String(arrival.card), {"Start": [models.get(int(arrival.side))], "Target": targets})
+			# The creature's close-up starts with its summoning effect, just
+			# before it appears (the original queues it at the figure's creation).
+			if _auto_camera_on() and auto_camera != null: auto_camera.summoned(_camera_targets(arrival.ids, int(arrival.side)))
 			arrival.shown_at = elapsed + ELCombatEffects.summon_delay(profile, String(arrival.card))
 		if elapsed < float(arrival.shown_at): continue
 		_arrivals.erase(arrival)
@@ -1282,7 +1304,7 @@ func _on_duel_event(data: Dictionary) -> void:
 ## sequences itself pass, as does everything once the queue is drained.
 func _hold_cast(data: Dictionary) -> bool:
 	if _cast_dispatching or (is_instance_valid(melee) and melee.dispatching()): return false
-	if _cast_queue.is_empty() and (_melee_busy() or not data.get("kind") in CAST_KINDS or elapsed >= _cast_until): return false
+	if _cast_queue.is_empty() and (_melee_busy() or not data.get("kind") in CAST_KINDS or (elapsed >= _cast_until and _arrivals.is_empty())): return false
 	_cast_queue.append(data)
 	return true
 
@@ -1292,7 +1314,8 @@ func _step_cast_queue() -> void:
 	var shown := false
 	while not _cast_queue.is_empty():
 		var next: Dictionary = _cast_queue[0]
-		if next.get("kind") in CAST_KINDS and elapsed < _cast_until: break
+		# A summoned creature appears before the next cast is shown.
+		if next.get("kind") in CAST_KINDS and (elapsed < _cast_until or not _arrivals.is_empty()): break
 		if is_instance_valid(melee) and melee.running(): break
 		_cast_queue.pop_front()
 		_cast_dispatching = true
@@ -2007,8 +2030,9 @@ func _phase_notice(side: int, attack: bool, round_number: int) -> void:
 	elif not _enemy_banner_shown:
 		band = 2
 		_enemy_banner_shown = true
-		# Second game: the opponent's cast icons clear when its turn begins.
-		if attack and is_instance_valid(notices): notices.clear_icons()
+		# Second game: the opponent's cast icons clear at its turn's first
+		# phase, which is usually its defence right after my attack.
+		if is_instance_valid(notices): notices.clear_icons()
 	if band >= 0 and bool(settings.values.get("combat_phases", true)) and is_instance_valid(notices): notices.show_banner(band)
 
 ## Whether `side` is played at this screen (both sides in a local two-player battle).
@@ -2020,7 +2044,7 @@ func _local_side(side: int) -> bool:
 func _cast_notice(side: int, card: String) -> void:
 	if profile.id == "el2":
 		_log(_format_text("T_CASTING", [_hero_name(side), duel.card_name(card)]))
-		if not _local_side(side) and is_instance_valid(notices): notices.add_icon(profile.card_icon(card))
+		if not _local_side(side) and is_instance_valid(notices): notices.add_icon(profile.card_icon(card), card)
 		return
 	_announce("T_CASTING", [_hero_name(side), duel.card_name(card)], side)
 
@@ -2168,14 +2192,16 @@ func _show_hit(data: Dictionary) -> void:
 	if not models.has(id): return
 	var model: ELModel = models[id]
 	if data.kind == "damage":
-		# A hero already lying defeated keeps its death pose.
-		if not (id < 2 and duel.phase == ELDuel.Phase.FINISHED):
+		# A hero already lying defeated keeps its death pose (the ending has
+		# begun); earlier blows of the deciding combat still hurt it.
+		if not (id < 2 and not ending.is_empty()):
 			battle_audio.unit(model, "hit")
 			model.play("uhit")
 			if id < 2: model.flash(HERO_HIT_FLASH, 0.1)
 		_float_number(id, int(data.amount))
 		return
 	_bleed(id)
+	model.set_meta("dying", true)
 	battle_audio.unit(model, "death")
 	if labels.has(id): labels[id].hide()
 	if not model.play("udeath"): _remove_model(id)
@@ -3353,7 +3379,9 @@ func _animation_done(clip: String, id: int) -> void:
 			return
 		_remove_model(id)
 		return
-	if duel.phase == ELDuel.Phase.FINISHED:
+	# A battle settles before its blows are shown: only the heroes keep their
+	# end poses, creatures still finish their moves and lie down at home.
+	if duel.phase == ELDuel.Phase.FINISHED and id < 2:
 		return
 	var resting: bool = id >= 2 and (duel.creatures[id].resting or duel.creatures[id].sick)
 	# The rules rest an attacker as soon as the fight is settled; its figure
@@ -3378,6 +3406,7 @@ func _bleed(id: int) -> void:
 
 func _remove_model(id: int) -> void:
 	if not models.has(id): return
+	_last_creature.erase(id)
 	models[id].queue_free()
 	models.erase(id)
 	labels[id].queue_free()
@@ -3517,7 +3546,21 @@ static func rail_slide(button: Control, shift: float) -> Tween:
 	var release := func() -> void: if box != null and box.sort_children.is_connected(keep): box.sort_children.disconnect(keep)
 	tween.finished.connect(release)
 	button.tree_exiting.connect(release)
+	state.tween = tween
+	state.release = release
+	button.set_meta("rail_slide", state)
 	return tween
+
+## Stops a card's running slide; returns how far it still stood from its place.
+static func rail_slide_stop(button: Control) -> float:
+	var state: Dictionary = button.get_meta("rail_slide", {})
+	if state.is_empty(): return 0.0
+	button.remove_meta("rail_slide")
+	var tween: Tween = state.get("tween")
+	if tween == null or not tween.is_valid() or not tween.is_running(): return 0.0
+	tween.kill()
+	(state.release as Callable).call()
+	return float(state.shift)
 
 ## The picture of a card leaving the hand shrinks and fades where it stood.
 func _rail_leave(card: Dictionary) -> void:
@@ -3546,8 +3589,13 @@ func _refresh() -> void:
 	updating = true
 	# Where each card stood, so the cards that stay slide to their new places.
 	var was := {}
+	var kept := {}
 	for child in hand.get_children():
-		if child.has_meta("rail_id"): was[String(child.get_meta("rail_id"))] = {"index": was.size(), "rect": Rect2(child.global_position, child.size * child.get_global_transform().get_scale()), "texture": (child as TextureButton).texture_normal}
+		if child.has_meta("rail_id"):
+			var key := String(child.get_meta("rail_id"))
+			was[key] = {"index": was.size(), "rect": Rect2(child.global_position, child.size * child.get_global_transform().get_scale()), "texture": (child as TextureButton).texture_normal}
+			if not child.is_queued_for_deletion(): kept[key] = child
+			continue
 		hand.remove_child(child)
 		child.queue_free()
 	var active := duel.active_side()
@@ -3572,10 +3620,22 @@ func _refresh() -> void:
 	var animate: bool = tracked and _rail_seen_side == displayed and same_duel
 	var old_min := INF
 	for id: String in _rail_seen: old_min = minf(old_min, float(id.get_slice(":", 0)))
+	var place := 0
 	for i: int in order:
 		var card: String = hero.hand[i]
 		var uses := duel.hand_uses(displayed, i)
-		var button := TextureButton.new()
+		var rail_id := "%d:%s" % [int(keys[i]), card] if tracked else ""
+		var reused: TextureButton = kept.get(rail_id) if animate and kept.has(rail_id) else null
+		if reused != null: kept.erase(rail_id)
+		var button := reused if reused != null else TextureButton.new()
+		if reused != null:
+			# A card that stays keeps its button (and any running slide or drop).
+			for child in button.get_children():
+				button.remove_child(child)
+				child.queue_free()
+			for signal_name: String in ["pressed", "mouse_entered"]:
+				for connection: Dictionary in button.get_signal_connection_list(signal_name):
+					button.disconnect(signal_name, connection.callable)
 		button.custom_minimum_size = Vector2(50, 50)
 		button.texture_normal = profile.card_icon(card)
 		button.ignore_texture_size = true
@@ -3610,13 +3670,17 @@ func _refresh() -> void:
 			button.add_child(charges)
 		button.pressed.connect(_cast_card.bind(i))
 		button.mouse_entered.connect(_hint.bind(button.tooltip_text.replace("\n", " — ")))
-		hand.add_child(button)
+		if reused == null: hand.add_child(button)
+		hand.move_child(button, place)
+		place += 1
 		if tracked:
-			var id := "%d:%s" % [int(keys[i]), card]
+			var id := rail_id
 			button.set_meta("rail_id", id)
 			if animate and was.has(id) and int(was[id].index) != seen.size():
-				# A card that stays moves over to its new place.
-				rail_slide(button, float(int(was[id].index) - seen.size()) * (50.0 + hand.get_theme_constant("separation")))
+				# A card that stays moves over to its new place, continuing from
+				# where a slide still running had brought it.
+				var left := rail_slide_stop(button)
+				rail_slide(button, float(int(was[id].index) - seen.size()) * (50.0 + hand.get_theme_constant("separation")) + left)
 			seen[id] = true
 			if animate and not _rail_seen.has(id):
 				# Drawn cards enter at the left, returned ones at the right.
@@ -3629,6 +3693,9 @@ func _refresh() -> void:
 	if animate and hand_frames != null:
 		for id: String in was:
 			if not seen.has(id): _rail_leave(was[id])
+	for button: Node in kept.values():
+		hand.remove_child(button)
+		button.queue_free()
 	_rail_seen = seen
 	_rail_seen_side = displayed if tracked and not showing_artifacts and not concealed else -1
 	_rail_seen_duel = weakref(duel)
@@ -3962,6 +4029,7 @@ func _build_ui() -> void:
 	symbols = ELCombatSymbols.new()
 	ui.add_child(symbols)
 	notices = ELCombatNotices.new()
+	notices.describe_card = card_tooltip
 	ui.add_child(notices)
 	status = _label("Choose your original game content from Menu.", 14, Color("e9e4d4"))
 	status.position = Vector2(20, 16)
@@ -5109,8 +5177,9 @@ func _layout_hud() -> void:
 	var h := hud_root.size.y
 	for side in 2:
 		var x := 0.0 if side == 0 else w - 80
-		portraits[side].position = Vector2(x + 3, h - 111)
-		portraits[side].size = Vector2(74, 55)
+		# The panel's portrait window: 75x56, one pixel further out on the mirrored right panel.
+		portraits[side].position = Vector2(x + (3 if side == 0 else 2), h - 112)
+		portraits[side].size = Vector2(75, 56)
 		hero_buttons[side].position = Vector2(x, h - 115)
 		hero_buttons[side].size = Vector2(80, 115)
 		hero_values[side].position = Vector2(x + 1, h - 20)

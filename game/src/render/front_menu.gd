@@ -488,8 +488,8 @@ static func _layer(row: Dictionary) -> int:
 	return 2 if row.masks.has("Last") else 0
 
 func _draw_art() -> void:
-	if overlay(): art.draw_rect(Rect2(Vector2.ZERO, DESIGN), Color(0, 0, 0, 0.35))
-	else: art.draw_rect(Rect2(Vector2.ZERO, DESIGN), Color.BLACK)
+	# Over a battle the dim covers the whole window (see _draw), not only the 4:3 art.
+	if not overlay(): art.draw_rect(Rect2(Vector2.ZERO, DESIGN), Color.BLACK)
 	for piece: Dictionary in _pieces: art.draw_texture_rect_region(piece.texture, piece.rect, piece.source)
 
 func _layout() -> void:
@@ -503,7 +503,7 @@ func _layout() -> void:
 		_choice.position = (canvas.position + Vector2(DESIGN.x * 0.5 - _choice.size.x * 0.5, CHOICE_TOP) * scale_factor).floor()
 
 func _draw() -> void:
-	if not overlay(): draw_rect(Rect2(Vector2.ZERO, size), Color.BLACK)
+	draw_rect(Rect2(Vector2.ZERO, size), Color(0, 0, 0, 0.35) if overlay() else Color.BLACK)
 
 # --- Stacked text buttons ----------------------------------------------------
 
