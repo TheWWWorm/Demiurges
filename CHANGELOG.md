@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.14
+
+- Wiki encyclopedia: a page for every creature, sorcery, enchantment, artifact, skill and specialization of both games, in English and Russian. In the game, creatures are 3D models you can turn; on the website they are shown as pictures.
+- The Windows program file, taskbar and window use the new Demiurges icon, and the start-up screen shows the name under the logo.
+
 ## 0.2.13
 
 - New wiki in English and Russian: on the web at [demiurges.wwworm.com/wiki](https://demiurges.wwworm.com/wiki/) and inside the game (main menu **Wiki**, or F1).

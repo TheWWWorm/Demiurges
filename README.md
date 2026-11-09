@@ -1,5 +1,7 @@
 # Demiurges
 
+<img src="https://raw.githubusercontent.com/TheWWWorm/Demiurges/main/game/icon.png?v=690afce75038" alt="Demiurges" width="160">
+
 Play **Etherlords** («Демиурги», Nival, 2001) and **Etherlords II** («Демиурги II», 2003) on a modern engine on Windows, Linux, macOS and Android or in your browser.
 
 **[Play](https://demiurges.wwworm.com/) · [Download](https://github.com/TheWWWorm/Demiurges/releases/latest) · [Wiki](https://demiurges.wwworm.com/wiki/) · [Вики](https://demiurges.wwworm.com/wiki/?lang=ru)**
