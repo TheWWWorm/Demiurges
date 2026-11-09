@@ -137,5 +137,7 @@ void fragment() {
 }
 
 void light() {
-	if (LIGHT_IS_DIRECTIONAL && shadow_strength > 0.0) DIFFUSE_LIGHT += vec3(1.0 - shadow_weight + shadow_weight * ATTENUATION);
+	// The original darkens the ground by shadow_strength as shown on screen;
+	// this light is linear, so the shown factor is decoded from display space.
+	if (LIGHT_IS_DIRECTIONAL && shadow_strength > 0.0) DIFFUSE_LIGHT += vec3(pow(1.0 - shadow_weight + shadow_weight * ATTENUATION, 2.2));
 }

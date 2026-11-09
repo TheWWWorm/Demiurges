@@ -1,0 +1,692 @@
+class_name ELRemakeText
+extends RefCounted
+## Texts of the remake's own screens in the language of the game being
+## played: Russian when the installed game's texts are Russian, English
+## otherwise (and before any game is chosen, the system's language).
+## Texts are written in English in the code and looked up here; a missing
+## translation shows the English text. DEMIURGES_LANGUAGE (en, ru)
+## overrides the choice for testing.
+
+static var _languages: Dictionary = {}
+
+## "ru" or "en" for the game `profile` (null: none chosen yet).
+static func language(profile: ELProfile) -> String:
+	var forced := OS.get_environment("DEMIURGES_LANGUAGE")
+	if forced in ["en", "ru"]: return forced
+	if profile == null: return "ru" if OS.get_locale_language() == "ru" else "en"
+	var key := profile.root + "|" + profile.id
+	if _languages.has(key): return _languages[key]
+	var cyrillic := RegEx.create_from_string("[\\x{0400}-\\x{04FF}]")
+	var russian := 0
+	var latin := 0
+	var seen := 0
+	for value: Variant in profile.texts.values():
+		var text := str(value)
+		if text.length() < 3: continue
+		if cyrillic.search(text) != null: russian += 1
+		else: latin += 1
+		seen += 1
+		if seen >= 200: break
+	var result := "ru" if russian > latin else ("en" if seen > 0 else ("ru" if OS.get_locale_language() == "ru" else "en"))
+	_languages[key] = result
+	return result
+
+## `text` in the language of `profile`'s game.
+static func t(text: String, profile: ELProfile) -> String:
+	if language(profile) != "ru": return text
+	return russian(text)
+
+static var _translation: ELRemakeTranslation
+static var _cache: Dictionary = {}
+static var _patterns: Array = []
+static var _latin := RegEx.create_from_string("[A-Za-z]{2}")
+static var _placeholder := RegEx.create_from_string("%[+]?[ds]")
+
+## Shows the remake's own screens in the language of `profile`'s game from
+## now on (Godot translates every label, button and tooltip by locale).
+static func use(profile: ELProfile) -> void:
+	if _translation == null:
+		_translation = ELRemakeTranslation.new()
+		_translation.locale = "ru"
+		TranslationServer.add_translation(_translation)
+	var wanted := language(profile)
+	if TranslationServer.get_locale() != wanted: TranslationServer.set_locale(wanted)
+
+## The Russian for a remake text. Texts built with numbers or names match
+## the table's "%d" and "%s" entries; a text the table lacks is translated
+## line by line and then piece by piece between " · " separators, and what
+## is still unknown stays as it is.
+static func russian(text: String) -> String:
+	if _cache.has(text): return _cache[text]
+	var result := _russian(text, 0)
+	if _cache.size() > 4000: _cache.clear()
+	_cache[text] = result
+	return result
+
+static func _russian(text: String, depth: int) -> String:
+	if RU.has(text): return RU[text]
+	if depth > 6 or _latin.search(text) == null: return text
+	var stripped := text.strip_edges()
+	if stripped != text:
+		if stripped.is_empty(): return text
+		var lead := text.find(stripped)
+		return text.left(lead) + _russian(stripped, depth + 1) + text.substr(lead + stripped.length())
+	for pattern: Array in _compiled():
+		var found: RegExMatch = pattern[0].search(text)
+		if found == null: continue
+		var values: Array[String] = []
+		for i in range(1, found.get_group_count() + 1):
+			var value := found.get_string(i)
+			values.append(_russian(value, depth + 1) if pattern[2][i - 1] == "s" else value)
+		return _fill(pattern[1], values)
+	for separator: String in ["\n", "  ·  ", " · ", "   "]:
+		if not text.contains(separator): continue
+		var parts := PackedStringArray()
+		for part: String in text.split(separator): parts.append(_russian(part, depth + 1))
+		return separator.join(parts)
+	return text
+
+## The table's entries with "%d" or "%s" as anchored patterns, the most
+## specific (longest fixed text) first.
+static func _compiled() -> Array:
+	if not _patterns.is_empty(): return _patterns
+	for key: String in RU:
+		if _placeholder.search(key) == null: continue
+		var expression := "(?s)^"
+		var kinds := ""
+		var fixed := 0
+		var at := 0
+		for found: RegExMatch in _placeholder.search_all(key):
+			var literal := key.substr(at, found.get_start() - at)
+			expression += _escape(literal)
+			fixed += literal.length()
+			match found.get_string():
+				"%d": expression += "(-?\\d+)"
+				"%+d": expression += "([+-]\\d+)"
+				_: expression += "(.+?)"
+			kinds += "s" if found.get_string() == "%s" else "d"
+			at = found.get_end()
+		expression += _escape(key.substr(at)) + "$"
+		fixed += key.length() - at
+		_patterns.append([RegEx.create_from_string(expression), RU[key], kinds, fixed])
+	_patterns.sort_custom(func(a: Array, b: Array) -> bool: return a[3] > b[3])
+	return _patterns
+
+static func _escape(text: String) -> String:
+	var out := ""
+	for character: String in text:
+		out += ("\\" + character) if character in ["\\", ".", "^", "$", "|", "?", "*", "+", "(", ")", "[", "]", "{", "}"] else character
+	return out
+
+static func _fill(template: String, values: Array[String]) -> String:
+	var out := ""
+	var at := 0
+	var index := 0
+	for found: RegExMatch in _placeholder.search_all(template):
+		out += template.substr(at, found.get_start() - at) + (values[index] if index < values.size() else "")
+		index += 1
+		at = found.get_end()
+	return out + template.substr(at)
+
+const RU := {
+	# Menus
+	"Remake settings…": "Настройки ремейка…",
+	"Remake settings": "Настройки ремейка",
+	"Settings of the remake only: path tracing, volumes, shadows, weather, movies, anti-aliasing.": "Настройки самого ремейка: трассировка пути, громкость, тени, погода, ролики, сглаживание.",
+	"Close": "Закрыть",
+	"Export log…": "Сохранить журнал…",
+	"Save or copy the game's log with the system information, to send it with a bug report.": "Сохранить или скопировать журнал игры со сведениями о системе, чтобы приложить его к сообщению об ошибке.",
+	"Game files…": "Файлы игры…",
+	"Add Etherlords or Etherlords II, remove one, or switch between them.": "Добавить «Демиургов» или «Демиургов II», удалить игру или переключиться на другую.",
+	"Could not save preferences.": "Не удалось сохранить настройки.",
+	# Tabs and groups
+	"Graphics": "Графика",
+	"Audio": "Звук",
+	"Interface": "Интерфейс",
+	"Path tracing": "Трассировка пути",
+	"Picture": "Изображение",
+	"Scene": "Сцена",
+	"Volume": "Громкость",
+	"Screens": "Экраны",
+	"Sharing": "Публикация",
+	# Path tracing
+	"Renderer": "Отрисовка",
+	"Compatibility (default)": "Совместимость (по умолчанию)",
+	"Forward+ (Vulkan)": "Forward+ (Vulkan)",
+	"Restart now": "Перезапустить",
+	"Path tracing needs Forward+ (Vulkan). Compatibility runs on more computers. A change takes effect after a restart.": "Трассировке пути нужен Forward+ (Vulkan). «Совместимость» работает на большем числе компьютеров. Изменение вступает в силу после перезапуска.",
+	"Path-traced lighting": "Освещение трассировкой пути",
+	"Real shadows, sky light, light bounced between surfaces and light from fire and spells, on maps and in battles. Costs about 2–3 ms a frame on a fast ray-tracing GPU. F7 switches it in the game.": "Настоящие тени, свет неба, свет, отражённый от поверхностей, и свет огня и заклинаний — на картах и в боях. Стоит около 2–3 мс на кадр на быстрой видеокарте с трассировкой лучей. В игре переключается клавишей F7.",
+	"Show light only": "Только свет",
+	"Draws the traced light without textures, to see what it does (Shift+F7). Not kept after a restart.": "Показывает рассчитанный свет без текстур, чтобы видеть, что он делает (Shift+F7). Не сохраняется после перезапуска.",
+	"Ready on %s.": "Готово: %s.",
+	"Not available with the Compatibility renderer: choose Forward+ (Vulkan) above and restart.": "Недоступно в режиме «Совместимость»: выберите выше Forward+ (Vulkan) и перезапустите игру.",
+	"Not available: %s has no ray-tracing support in Vulkan.": "Недоступно: %s не поддерживает трассировку лучей в Vulkan.",
+	"Path tracing: on": "Трассировка пути: вкл.",
+	"Path tracing: off": "Трассировка пути: выкл.",
+	"Traced light only": "Только рассчитанный свет",
+	"Path tracing needs the Forward+ (Vulkan) renderer and a ray-tracing GPU": "Трассировке пути нужны отрисовка Forward+ (Vulkan) и видеокарта с трассировкой лучей",
+	"(F7 on/off, Shift+F7 light view)": "(F7 — вкл./выкл., Shift+F7 — только свет)",
+	# Picture and scene
+	"Anti-aliasing": "Сглаживание",
+	"Automatic": "Автоматически",
+	"Off": "Выкл.",
+	"Smooths the edges of the 3D map and battle scenes. Automatic uses 2x unless the graphics are rendered in software. Path tracing uses its own smoothing.": "Сглаживает края в 3D на карте и в бою. «Автоматически» включает 2x, если графика не рисуется программно. У трассировки пути своё сглаживание.",
+	"Sharpening": "Резкость",
+	"Light": "Слабая",
+	"Strong": "Сильная",
+	"Sharpens the textures of the 3D map and battle scenes. The interface is not changed.": "Повышает резкость текстур в 3D на карте и в бою. Интерфейс не меняется.",
+	"Shadows": "Тени",
+	"Shadows of figures in battles and of trees, rocks and buildings on maps.": "Тени фигур в бою и деревьев, скал и зданий на картах.",
+	"Soft shadows": "Мягкие тени",
+	"Softer shadow edges. May reduce performance on slower devices.": "Более мягкие края теней. На медленных устройствах может снизить скорость.",
+	"Terrain detail": "Детали земли",
+	"Subtle surface detail on map terrain and battle ground. May reduce performance on slower devices.": "Лёгкая фактура земли на карте и в бою. На медленных устройствах может снизить скорость.",
+	"Map weather": "Погода на карте",
+	"Rain, snow and other weather particles on adventure maps.": "Дождь, снег и другая погода на картах приключений.",
+	"Combat blood": "Кровь в бою",
+	"Blood when figures are hit or die in battle.": "Кровь, когда фигуры получают удар или гибнут в бою.",
+	# Audio
+	"Music": "Музыка",
+	"The menu, map and battle music.": "Музыка меню, карты и боя.",
+	"Ambience": "Окружение",
+	"Remake-only background sounds of maps and battles.": "Фоновые звуки карт и боёв, добавленные ремейком.",
+	"Effects": "Эффекты",
+	"Spells, blows, voices and the interface.": "Заклинания, удары, голоса и интерфейс.",
+	# Interface
+	"Movies": "Ролики",
+	"Original size": "Исходный размер",
+	"Fit to screen": "Во весь экран",
+	"The games' intro and story movies.": "Вступительные и сюжетные ролики игр.",
+	"Map tooltips on hover": "Подсказки на карте при наведении",
+	"Second game: an object's tooltip when the cursor rests on it. The right mouse button shows it either way.": "Вторая игра: подсказка к объекту, когда курсор задерживается на нём. Правая кнопка мыши показывает её в любом случае.",
+	"Remake helper overlay": "Подсказки ремейка",
+	"Remake-only readouts, hints and shortcut buttons over the original screens.": "Сведения, подсказки и кнопки быстрого доступа ремейка поверх экранов оригинала.",
+	"Discord activity": "Активность в Discord",
+	"Shows the game and whether you are in the menus, on a map or in a battle in the Discord desktop app. Nothing else is shared; off clears it.": "Показывает в приложении Discord, во что вы играете и где находитесь: в меню, на карте или в бою. Больше ничего не передаётся; выключение убирает активность.",
+	# Discord activity
+	"Main menu": "Главное меню",
+	"Campaign map": "Карта кампании",
+	"Campaign battle": "Бой в кампании",
+	"Watching a battle": "Смотрит бой",
+	"Duel (hot seat)": "Дуэль (за одним компьютером)",
+	"Duel": "Дуэль",
+	# Game names
+	"Etherlords I": "Демиурги",
+	"Etherlords II": "Демиурги II",
+	"Etherlords": "Демиурги",
+	"ETHERLORDS": "ДЕМИУРГИ",
+	"Chaots": "Хаоты",
+	"Vitals": "Виталы",
+	"Synthets": "Синтеты",
+	"Kinets": "Кинеты",
+	"%s spellbook": "Книга заклинаний: %s",
+	"Vital forest": "Лес виталов",
+	"Chaot desert": "Пустыня хаотов",
+	"Synthet wasteland": "Пустошь синтетов",
+	"Kinet mountains": "Горы кинетов",
+	"Fortress": "Крепость",
+	"Ether plane": "План Эфира",
+	"Dungeon": "Подземелье",
+	"White Lord's arena": "Арена Белого Властелина",
+	"Ship": "Корабль",
+	"Chaot city": "Город хаотов",
+	"Vital city": "Город виталов",
+	"Synthet city": "Город синтетов",
+	# Battle menu
+	"Menu": "Меню",
+	"DUEL": "ДУЭЛЬ",
+	"Duel screen…": "Экран дуэли…",
+	"Practice setup / Spellbooks…": "Тренировка и книги заклинаний…",
+	"Campaigns…": "Кампании…",
+	"Campaigns": "Кампании",
+	"Save duel [F5]": "Сохранить дуэль [F5]",
+	"Load duel [F9]": "Загрузить дуэль [F9]",
+	"Surrender campaign battle": "Сдаться в бою кампании",
+	"Surrender duel round": "Сдаться в раунде дуэли",
+	"Watch / stop demo": "Смотреть / остановить демо",
+	"Options…": "Параметры…",
+	"Show / hide battle log [L]": "Показать / скрыть журнал боя [L]",
+	"Right-drag: orbit   Wheel: zoom": "Правая кнопка: вращение   Колесо: масштаб",
+	"R: reset camera   Space: end phase": "R: сброс камеры   Пробел: конец фазы",
+	"Practice AI": "Компьютер",
+	"Two local sides": "Два игрока за одним компьютером",
+	"Player 1": "Игрок 1",
+	"Player 2": "Игрок 2",
+	"Player %d": "Игрок %d",
+	"Remake menu…": "Меню ремейка…",
+	"The remake's own battle menu.": "Собственное боевое меню ремейка.",
+	# Duel setup
+	"Choose your duel": "Выберите дуэль",
+	"Your hero": "Ваш герой",
+	"Opponent": "Противник",
+	"Level": "Уровень",
+	"Edit spellbook…": "Изменить книгу заклинаний…",
+	"Battlefield": "Поле боя",
+	"Play against computer": "Игра против компьютера",
+	"Begin duel": "Начать дуэль",
+	"Resume saved duel": "Продолжить сохранённую дуэль",
+	"Return to current duel": "Вернуться к текущей дуэли",
+	"%d spells · %d summons": "Заклинаний: %d · призывов: %d",
+	"Add →": "Добавить →",
+	"← Remove": "← Убрать",
+	"Starter deck": "Начальная колода",
+	"Select a spell to read its effect. Double-click to add or remove.": "Выберите заклинание, чтобы прочитать его действие. Двойной щелчок добавляет или убирает его.",
+	"Use spellbook": "Взять эту книгу",
+	"%d / %d spells": "Заклинаний: %d / %d",
+	# Campaign setup
+	"Begin chapter": "Начать главу",
+	"Back": "Назад",
+	"Resume saved campaign": "Продолжить сохранённую кампанию",
+	"Chapter %d": "Глава %d",
+	"Chapter %d · %s": "Глава %d · %s",
+	"Reached by winning the chapter before it.": "Открывается победой в предыдущей главе.",
+	"Easy": "Лёгкая",
+	"Normal": "Обычная",
+	"Hard": "Трудная",
+	"Expert": "Эксперт",
+	"Master": "Мастер",
+	# Game files
+	"Use the files of your own copy of Etherlords or Etherlords II. They stay on this device; nothing is uploaded. Choose the game first; either one is enough, and you can add the other later.": "Используются файлы вашей копии «Демиургов» или «Демиургов II». Они остаются на этом устройстве, ничего не загружается в сеть. Сначала выберите игру; достаточно любой одной, вторую можно добавить позже.",
+	"Choose the GOG installer (setup_etherlords*.exe): the browser unpacks it without running it. The installed game folder or a data pack (.elpack) also work.": "Выберите установщик GOG (setup_etherlords*.exe): браузер распакует его, не запуская. Подойдут и папка установленной игры, и пакет данных (.elpack).",
+	"Choose the GOG installer (setup_etherlords*.exe) or a data pack (.elpack). The installer is unpacked without being run; a data pack is much faster.": "Выберите установщик GOG (setup_etherlords*.exe) или пакет данных (.elpack). Установщик распаковывается без запуска; пакет данных загружается намного быстрее.",
+	"Choose the installed game folder (the one containing Resources and Campaigns), or the GOG installer (setup_etherlords*.exe) or a data pack (.elpack). The installer is unpacked once without being run. Copies installed through Steam are found automatically.": "Выберите папку установленной игры (ту, где лежат Resources и Campaigns), установщик GOG (setup_etherlords*.exe) или пакет данных (.elpack). Установщик распаковывается один раз и не запускается. Копии из Steam находятся автоматически.",
+	"Choose installer or data pack…": "Выбрать установщик или пакет данных…",
+	"Choose game folder…": "Выбрать папку игры…",
+	"%s is ready.": "%s: всё готово.",
+	"Cancel import": "Отменить импорт",
+	"Browser storage is unavailable, so saves will not be kept. Allow site storage before playing.": "Хранилище браузера недоступно, сохранения не будут храниться. Разрешите сайту хранить данные перед игрой.",
+	"%s is installed: %s": "%s: игра установлена в %s",
+	"%s is not installed yet.": "%s: игра ещё не установлена.",
+	"Play %s": "Играть в «%s»",
+	"Choose the %s game folder…": "Выбрать папку игры «%s»…",
+	"Use the Steam copy of %s": "Использовать копию «%s» из Steam",
+	"Remove imported %s": "Удалить импортированную игру «%s»",
+	"Stop using this %s folder": "Не использовать эту папку «%s»",
+	"The folder and its files are kept; only this link is removed.": "Папка и её файлы остаются, удаляется только эта связь.",
+	"No Etherlords game was found in that folder. Choose the folder that contains Resources and Campaigns.": "В этой папке нет игры «Демиурги». Выберите папку, в которой лежат Resources и Campaigns.",
+	"Could not remember the folder.": "Не удалось запомнить папку.",
+	"That folder holds %s.": "В этой папке — %s.",
+	"This page cannot read local files. Reload it and try again.": "Эта страница не может читать локальные файлы. Обновите её и попробуйте снова.",
+	"%s was removed from this device. Saves and settings are kept.": "%s: игра удалена с этого устройства. Сохранения и настройки остались.",
+	"%s is no longer used. Its folder, saves and settings are kept.": "%s: игра больше не используется. Папка, сохранения и настройки остались.",
+	"Add your copy of %s": "Добавить свою копию «%s»",
+	"not installed — add…": "не установлена — добавить…",
+	"Etherlords installer or data pack": "Установщик «Демиургов» или пакет данных",
+	# Log export
+	"Export log": "Сохранение журнала",
+	"Save the game's log with the system information, or copy it, to send it with a bug report.": "Сохраните или скопируйте журнал игры со сведениями о системе, чтобы приложить его к сообщению об ошибке.",
+	"The game closed unexpectedly": "Игра неожиданно закрылась",
+	"The game closed unexpectedly last time. A report with the log of that session helps to find the cause. Save it or copy it, and attach it to a bug report.": "В прошлый раз игра неожиданно закрылась. Отчёт с журналом того сеанса поможет найти причину. Сохраните или скопируйте его и приложите к сообщению об ошибке.",
+	"Save report": "Сохранить отчёт",
+	"Saves the report as a text file: Download on Android, Downloads on a computer. The box shows where.": "Сохраняет отчёт текстовым файлом: в Download на Android, в «Загрузки» на компьютере. Здесь будет показано, куда именно.",
+	"Copy to clipboard": "Копировать в буфер обмена",
+	"Copies the system information and the log's last lines, to paste into a message or a bug report.": "Копирует сведения о системе и последние строки журнала, чтобы вставить их в сообщение или отчёт об ошибке.",
+	"Report saved: %s": "Отчёт сохранён: %s",
+	"The report could not be saved.": "Не удалось сохранить отчёт.",
+	"Copied to the clipboard.": "Скопировано в буфер обмена.",
+	# Notices
+	"Choose a game folder to begin. Original content is required.": "Чтобы начать, выберите папку игры. Нужны файлы оригинала.",
+	"Choose your original game content from Menu.": "Выберите файлы оригинальной игры в меню.",
+	"Finish or surrender the campaign battle first.": "Сначала закончите бой кампании или сдайтесь.",
+	"Arena failed: %s": "Не удалось построить поле боя: %s",
+	"The original Options art is unavailable.": "Графика экрана параметров оригинала недоступна.",
+	"Surrender ends campaign battles and Duel mode rounds.": "Сдаться можно в бою кампании или в раунде дуэли.",
+	"Loading chapter…": "Загрузка главы…",
+	"Loading…": "Загрузка…",
+	"Defeat %s to continue. F5 saves both the battle and campaign.": "Чтобы продолжить, победите противника (%s). F5 сохраняет и бой, и кампанию.",
+	"There is no active campaign battle.": "Сейчас нет боя кампании.",
+	"The campaign autosave could not be read.": "Не удалось прочитать автосохранение кампании.",
+	"Campaign and battle saved. Press F9 to resume.": "Кампания и бой сохранены. F9 — продолжить.",
+	"The combat tutorial cannot be saved.": "Обучение бою нельзя сохранить.",
+	"Duel saved. Press F9 to resume.": "Дуэль сохранена. F9 — продолжить.",
+	"No readable duel save was found.": "Сохранённая дуэль не найдена или не читается.",
+	"The duel save is incomplete.": "Сохранение дуэли неполное.",
+	"Import the original game edition used by this save.": "Добавьте ту версию оригинальной игры, в которой сделано это сохранение.",
+	"Saved duel restored.": "Сохранённая дуэль загружена.",
+	"Older save: spellbook charges reset because charge history was not recorded. Cards in hand were kept.": "Старое сохранение: заряды книги заклинаний сброшены, потому что их история не записывалась. Карты в руке сохранены.",
+	"Leave the campaign before changing game files.": "Выйдите из кампании, прежде чем менять файлы игры.",
+	"There is no Duel mode round in progress.": "Сейчас не идёт раунд дуэли.",
+	"The original round-end screen art is unavailable.": "Графика экрана конца раунда оригинала недоступна.",
+	"The original Esc menu art is unavailable.": "Графика меню Esc оригинала недоступна.",
+	"Cannot write the duel save.": "Не удалось записать сохранение дуэли.",
+	"Cannot replace the duel save.": "Не удалось заменить сохранение дуэли.",
+	"Unsupported duel save.": "Это сохранение дуэли не поддерживается.",
+	"This save needs its original game edition.": "Для этого сохранения нужна его версия оригинальной игры.",
+	"No saved campaign.": "Нет сохранённой кампании.",
+	"No saved mission.": "Нет сохранённой миссии.",
+	"The combat tutorial replay is missing from the game content.": "В файлах игры нет записи обучения бою.",
+	# Battle hints (helper overlay)
+	"Select a spell or a ready creature. Right-drag to orbit · Wheel to zoom · R resets the camera.": "Выберите заклинание или готовое существо. Правая кнопка — вращение · колесо — масштаб · R — сброс камеры.",
+	"Selection cancelled.": "Выбор отменён.",
+	"Spell selection cancelled.": "Выбор заклинания отменён.",
+	"Choose the enchantment to remove on the upper strip.": "Выберите на верхней полосе чары, которые нужно снять.",
+	"Choose the enchantment to remove on the upper strip. Esc cancels.": "Выберите на верхней полосе чары, которые нужно снять. Esc — отмена.",
+	"Choose a creature in the Colourless Plane.": "Выберите существо в Бесцветном плане.",
+	"Choose one of your creatures to sacrifice.": "Выберите своё существо для жертвы.",
+	"Now choose a creature in the Ether to send away. Esc cancels.": "Теперь выберите существо в Эфире, которое нужно изгнать. Esc — отмена.",
+	"Now choose a creature or hero to burn. Esc cancels.": "Теперь выберите существо или героя, которого нужно сжечь. Esc — отмена.",
+	"Now choose the creature that receives its strength. Esc cancels.": "Теперь выберите существо, которое получит его силу. Esc — отмена.",
+	"Choose a creature in this graveyard. Esc cancels.": "Выберите существо на этом кладбище. Esc — отмена.",
+	"Click a hero portrait to open that graveyard.": "Щёлкните портрет героя, чтобы открыть его кладбище.",
+	"Choose a character, then the enchantment to remove. Esc cancels.": "Выберите персонажа, затем чары, которые нужно снять. Esc — отмена.",
+	"Now choose the creature to destroy. Esc cancels.": "Теперь выберите существо, которое нужно уничтожить. Esc — отмена.",
+	"Spell cast.": "Заклинание произнесено.",
+	"No graveyard holds a creature to return.": "Ни на одном кладбище нет существа, которое можно вернуть.",
+	"Now click a hero portrait and choose a creature in that graveyard. Esc cancels.": "Теперь щёлкните портрет героя и выберите существо на его кладбище. Esc — отмена.",
+	"Your graveyard contains no creature to return.": "На вашем кладбище нет существа, которое можно вернуть.",
+	"Choose the creature to return from your graveyard. Esc cancels.": "Выберите существо, которое нужно вернуть с вашего кладбища. Esc — отмена.",
+	"Select a %s for %s. Esc cancels.": "Выберите цель (%s) для «%s». Esc — отмена.",
+	"hero portrait to open its graveyard": "портрет героя, чтобы открыть его кладбище",
+	"creature": "существо",
+	"hero": "герой",
+	"any": "любая",
+	"enchantment": "чары",
+	"%s · %d ether: choose a %s. Esc cancels.": "%s · %d эфира: выберите цель (%s). Esc — отмена.",
+	"%s · %d damage. Select a creature or hero. Esc cancels.": "%s · урон %d. Выберите существо или героя. Esc — отмена.",
+	"%s: choose %s. Esc cancels.": "%s: выберите %s. Esc — отмена.",
+	"a creature or hero": "существо или героя",
+	"a hero's graveyard": "кладбище героя",
+	"a creature": "существо",
+	"a hero": "героя",
+	"a enchantment": "чары",
+	"The selected spell changed. Select it again.": "Выбранное заклинание изменилось. Выберите его снова.",
+	"%s wins. Start a new duel or change game profile.": "Побеждает %s. Начните новую дуэль или выберите другую игру.",
+	"Both heroes have fallen. The duel is a draw.": "Оба героя пали. Ничья.",
+	"Creature returned to play.": "Существо возвращено в игру.",
+	"Enchantment removed.": "Чары сняты.",
+	# Spell power dialog
+	"health to pay (X)": "здоровье к оплате (X)",
+	"extra ether (X)": "дополнительный эфир (X)",
+	"ether to pay (X)": "эфир к оплате (X)",
+	"Pay %d ether · %d left after use": "Оплата: %d эфира · останется %d",
+	"Enemy creatures": "Существа противника",
+	"All creatures": "Все существа",
+	"All creatures without flying": "Все существа без полёта",
+	"All flying creatures": "Все летающие существа",
+	"Both heroes": "Оба героя",
+	"A creature or hero of your choice": "Существо или герой на ваш выбор",
+	"The chosen hero": "Выбранный герой",
+	"The chosen creature": "Выбранное существо",
+	"draws %d cards": "берёт карт: %d",
+	"+%d health": "+%d здоровья",
+	"+%d power": "+%d силы",
+	"You take %d damage · opponent heals %d": "Вы получаете %d урона · противник лечит %d",
+	"+%d ether": "+%d эфира",
+	"%d ether total": "всего %d эфира",
+	"After casting: %d health · %d ether": "После заклинания: здоровье %d · эфир %d",
+	"After casting: %d ether · %d channels": "После заклинания: эфир %d · каналов %d",
+	"Requires %d channels; sacrifices them when X is greater than zero.": "Нужно каналов: %d; при X больше нуля они теряются.",
+	# Battle readouts and controls
+	"Manifests": "Проявляется",
+	"Pale aspect": "Бледный облик",
+	"Protected": "Защищено",
+	"Regeneration": "Регенерация",
+	"Disenchanted": "Чары сняты",
+	"SUMMONED": "ПРИЗВАНО",
+	"RESTING": "ОТДЫХАЕТ",
+	"%d HP": "%d здор.",
+	"%s's phase": "Фаза: %s",
+	"%s vs %s": "%s против %s",
+	"End attack [Space]": "Завершить атаку [Пробел]",
+	"Resolve battle [Space]": "Провести бой [Пробел]",
+	"Attack with all ready creatures": "Атаковать всеми готовыми существами",
+	"%d ether": "%d эфира",
+	"%d + X ether": "%d + X эфира",
+	"%d rune left in this spellbook copy.": "В этом экземпляре осталось рун: %d.",
+	"%d runes left in this spellbook copy.": "В этом экземпляре осталось рун: %d.",
+	"%d charge left in this spellbook copy.": "В этом экземпляре осталось зарядов: %d.",
+	"%d charges left in this spellbook copy.": "В этом экземпляре осталось зарядов: %d.",
+	"Unlimited cantrip.": "Неограниченный кантрип.",
+	"Returned or created spell: no spellbook charge required.": "Возвращённое или созданное заклинание: заряд книги не нужен.",
+	"%d / %d health · %d ether · %d channels": "Здоровье %d / %d · эфир %d · каналов %d",
+	"%d cards in hand · %d creatures in the graveyard": "Карт в руке: %d · существ на кладбище: %d",
+	"Click this portrait to target the hero.": "Щёлкните портрет, чтобы выбрать героя целью.",
+	"Specialization: %s": "Специализация: %s",
+	"Attack": "Атаковать",
+	"Must attack": "Обязан атаковать",
+	"Recall": "Отозвать",
+	"Ether is paid when the creature is sent to attack. Recalling it does not refund the cost.": "Эфир платится, когда существо отправляется в атаку. Отзыв не возвращает плату.",
+	"Shadows: until the opponent's turn ends": "Тени: до конца хода противника",
+	"Enchantments": "Чары",
+	"Graveyard (%d)": "Кладбище (%d)",
+	"Next upkeep: %d ether": "Следующее содержание: %d эфира",
+	# Duel rules (helper overlay refusals)
+	"Artifacts can be used only by the acting hero.": "Артефакты может применять только действующий герой.",
+	"Select an artifact.": "Выберите артефакт.",
+	"A blank artifact cannot be used in combat.": "Пустой артефакт нельзя применить в бою.",
+	"This artifact has no charges left.": "У этого артефакта не осталось зарядов.",
+	"No more artifacts can be used in this battle.": "В этом бою больше нельзя применять артефакты.",
+	"This artifact is recharging until round %d.": "Этот артефакт перезаряжается до раунда %d.",
+	"This artifact can be used only during defence.": "Этот артефакт можно применить только в защите.",
+	"This artifact cannot be used in the current phase.": "Этот артефакт нельзя применить в этой фазе.",
+	"This artifact can be used only while attacking.": "Этот артефакт можно применить только в атаке.",
+	"This artifact cannot be used in combat.": "Этот артефакт нельзя применить в бою.",
+	"Select a creature.": "Выберите существо.",
+	"Select a creature or hero.": "Выберите существо или героя.",
+	"Choose an enchantment that can be removed.": "Выберите чары, которые можно снять.",
+	"Choose a creature in your graveyard.": "Выберите существо на своём кладбище.",
+	"Select an attacking creature.": "Выберите атакующее существо.",
+	"Select an enemy creature.": "Выберите существо противника.",
+	"This creature is in combat.": "Это существо в бою.",
+	"A hero can control at most ten creatures.": "Герой может управлять не более чем десятью существами.",
+	"Your opponent must have more ether channels.": "У противника должно быть больше каналов эфира.",
+	"Your opponent has no ether channel to remove.": "У противника нет канала эфира, который можно отнять.",
+	"Select a hero.": "Выберите героя.",
+	"Select a graveyard.": "Выберите кладбище.",
+	"Select a character with an enchantment.": "Выберите персонажа с чарами.",
+	"This character has no enchantment that can be removed.": "У этого персонажа нет чар, которые можно снять.",
+	"Spell is not available yet.": "Это заклинание пока недоступно.",
+	"This creature is in the Colourless Plane.": "Это существо в Бесцветном плане.",
+	"This creature is protected by a magic screen.": "Это существо защищено магическим экраном.",
+	"Select one of your creatures.": "Выберите своё существо.",
+	"Select a Pale creature.": "Выберите бледное существо.",
+	"Select a creature in the Colourless Plane.": "Выберите существо в Бесцветном плане.",
+	"Your opponent already controls ten creatures.": "Противник уже управляет десятью существами.",
+	"Select a creature of the right kind.": "Выберите существо подходящего вида.",
+	"Select a flying creature.": "Выберите летающее существо.",
+	"Select one of your creatures to sacrifice.": "Выберите своё существо для жертвы.",
+	"There is no other enchantment to remove.": "Других чар, которые можно снять, нет.",
+	"This creature costs too much ether to unsummon.": "Отозвать это существо стоит слишком много эфира.",
+	"This duel has ended.": "Эта дуэль закончена.",
+	"Select a spell in the active hand.": "Выберите заклинание в руке действующего героя.",
+	"Not enough ether.": "Недостаточно эфира.",
+	"Not enough ether for the chosen spell power.": "Недостаточно эфира для выбранной силы заклинания.",
+	"This spell requires %d ether channels.": "Этому заклинанию нужно каналов эфира: %d.",
+	"This spell cannot be cast in the current phase.": "Это заклинание нельзя произнести в этой фазе.",
+	"Not enough ether to remove this enchantment.": "Недостаточно эфира, чтобы снять эти чары.",
+	"This spell needs %d more ether.": "Этому заклинанию нужно ещё %d эфира.",
+	"This spellbook copy has no charges left.": "У этого экземпляра в книге не осталось зарядов.",
+	"The graveyard is empty.": "Кладбище пусто.",
+	"Choose a creature from your graveyard to return to play.": "Выберите существо на своём кладбище, чтобы вернуть его в игру.",
+	"Choose a creature in a graveyard.": "Выберите существо на кладбище.",
+	"That graveyard's hero already controls ten creatures.": "Герой этого кладбища уже управляет десятью существами.",
+	"This creature cannot enter the Colourless Plane now.": "Это существо сейчас не может уйти в Бесцветный план.",
+	"Choose another creature to destroy.": "Выберите другое существо для уничтожения.",
+	"Your opponent must hold more spells than you.": "У противника в руке должно быть больше заклинаний, чем у вас.",
+	"This creature cannot attack now.": "Это существо сейчас не может атаковать.",
+	"An aggressive creature must attack when able.": "Агрессивное существо обязано атаковать, когда может.",
+	"Recall the guard first; it needs an attacking creature of its race.": "Сначала отзовите стража: ему нужно атакующее существо его расы.",
+	"A guard can attack only together with a creature of its race.": "Страж может атаковать только вместе с существом своей расы.",
+	"Not enough ether to send this creature into attack.": "Недостаточно эфира, чтобы отправить это существо в атаку.",
+	"Select a ready defending creature.": "Выберите готовое защищающееся существо.",
+	"Select an attacking creature to block.": "Выберите атакующее существо, которое нужно блокировать.",
+	"A ground creature cannot block a flying creature.": "Наземное существо не может блокировать летающее.",
+	"This creature cannot be blocked.": "Это существо нельзя блокировать.",
+	"Only bodyguards can block this creature.": "Это существо могут блокировать только телохранители.",
+	"Walls cannot block beholders while a beholder mother is in play.": "Стены не могут блокировать созерцателей, пока в игре мать созерцателей.",
+	"This creature must be ready and unused this turn.": "Это существо должно быть готово и не использовано в этом ходу.",
+	"This creature is already in the Colourless Plane.": "Это существо уже в Бесцветном плане.",
+	"A planar seal blocks every change of aspect.": "Печать планов не даёт менять облик.",
+	"Lock Aspect keeps this creature in the Ether.": "Закреплённый облик удерживает это существо в Эфире.",
+	"This creature is not in the Colourless Plane.": "Это существо не в Бесцветном плане.",
+	"This needs an ether channel.": "Для этого нужен канал эфира.",
+	"This needs a card in hand.": "Для этого нужна карта в руке.",
+	"This creature must be ready.": "Это существо должно быть готово.",
+	"Your opponent has no ether.": "У противника нет эфира.",
+	"Choose a card in a graveyard.": "Выберите карту на кладбище.",
+	"Select another of your creatures.": "Выберите другое своё существо.",
+	"Select an enchantment.": "Выберите чары.",
+	"Choose an enchantment cast by your hero.": "Выберите чары, наложенные вашим героем.",
+	"This enchantment has no caster to copy.": "У этих чар нет заклинателя, которого можно скопировать.",
+	"This enchantment cannot be removed.": "Эти чары нельзя снять.",
+	"Select a creature in the Ether.": "Выберите существо в Эфире.",
+	"This creature is too strong to devour.": "Это существо слишком сильное, чтобы его поглотить.",
+	"Select one of your characters.": "Выберите своего персонажа.",
+	"An enchantment prevents this creature from using abilities.": "Чары не дают этому существу применять способности.",
+	"This character does not have that ability.": "У этого персонажа нет такой способности.",
+	"This ability cannot be used in the Colourless Plane.": "Эту способность нельзя применить в Бесцветном плане.",
+	"This ability has already been used this turn.": "Эта способность уже применялась в этом ходу.",
+	"This ability has already been used this round.": "Эта способность уже применялась в этом раунде.",
+	"This creature must be ready to use its ability.": "Чтобы применить способность, существо должно быть готово.",
+	"This creature is already awake.": "Это существо уже бодрствует.",
+	"This creature must be resting to use its ability.": "Чтобы применить способность, существо должно отдыхать.",
+	"This ability can be used only while attacking.": "Эту способность можно применить только в атаке.",
+	"This ability costs %d ether.": "Эта способность стоит %d эфира.",
+	"Select another creature to receive its strength.": "Выберите другое существо, которое получит его силу.",
+	"Select another creature or a hero to burn.": "Выберите другое существо или героя, которого нужно сжечь.",
+	"Then choose a creature in the Ether.": "Затем выберите существо в Эфире.",
+	"Select a resting creature.": "Выберите отдыхающее существо.",
+	"This creature is assigned to combat.": "Это существо уже назначено в бой.",
+	"Shadows of the dead costs 1 ether.": "«Тени мёртвых» стоят 1 эфир.",
+	"Awakening costs %d ether and %d health.": "Пробуждение стоит %d эфира и %d здоровья.",
+	"Select another creature or a hero.": "Выберите другое существо или героя.",
+	"Breaking enfeeblement costs 3 ether.": "Снять ослабление стоит 3 эфира.",
+	"Choose how much ether to pay (up to %d).": "Выберите, сколько эфира заплатить (до %d).",
+	"Select another of your creatures to sacrifice.": "Выберите для жертвы другое своё существо.",
+	"Choose a suitable creature in a graveyard.": "Выберите подходящее существо на кладбище.",
+	"Select an attacking enemy creature.": "Выберите атакующее существо противника.",
+	"Select a hero's graveyard.": "Выберите кладбище героя.",
+	"Select an enchantment that can be removed.": "Выберите чары, которые можно снять.",
+	"Select another creature.": "Выберите другое существо.",
+	"Select a resting creature that is not in combat.": "Выберите отдыхающее существо, которое не в бою.",
+	"Select a wall.": "Выберите стену.",
+	"Select a creature with power 4 or more.": "Выберите существо с силой 4 или больше.",
+	"Choose a cheap enough creature in a graveyard.": "Выберите на кладбище достаточно дешёвое существо.",
+	"The opponent has no ether to draw.": "У противника нет эфира, который можно забрать.",
+	"Walls resist this gaze.": "Стены не поддаются этому взгляду.",
+	"Your beholders are too few for this creature.": "Ваших созерцателей слишком мало для этого существа.",
+	"This costs %d ether.": "Это стоит %d эфира.",
+	"A spellbook cannot be empty.": "Книга заклинаний не может быть пустой.",
+	"Spell is not available yet: %s": "Это заклинание пока недоступно: %s",
+	"Spell belongs to another faction: %s": "Заклинание другой расы: %s",
+	"Artifact is not available yet: %s": "Этот артефакт пока недоступен: %s",
+	# Duel screen
+	"Unreadable or invalid user presets were skipped: %s": "Пропущены нечитаемые или неверные наборы игрока: %s",
+	"View only: built-in presets cannot be changed.": "Только просмотр: встроенные наборы менять нельзя.",
+	"Over budget: %s": "Превышен бюджет: %s",
+	"The spellbook needs 1-15 spells.": "В книге должно быть от 1 до 15 заклинаний.",
+	"The active deck needs exactly 16 spells.": "В активной колоде должно быть ровно 16 заклинаний.",
+	"More than 4 copies: %s": "Больше 4 копий: %s",
+	"Another race's spell: %s": "Заклинание другой расы: %s",
+	"Too many runes in slot %d": "Слишком много рун в ячейке %d",
+	"Specialisation not allowed for this race": "Эта специализация недоступна этой расе",
+	"At most 5 skills": "Не больше 5 навыков",
+	"At most %d artifacts": "Не больше %d артефактов",
+	"Artifact not sold in duels: %s": "Артефакт не продаётся в дуэлях: %s",
+	"Double-click a skill to lower or remove it.": "Двойной щелчок по навыку понижает или убирает его.",
+	"This duel was not recorded from its start (it was resumed from a saved game).": "Эта дуэль записана не с начала (она продолжена из сохранения).",
+	# Adventure map
+	"Continue  [Space]": "Продолжить  [Пробел]",
+	"Yes": "Да",
+	"No": "Нет",
+	"Spellbook  [I]": "Книга заклинаний  [I]",
+	"Skills  [K]": "Навыки  [K]",
+	"Skills (%d)  [K]": "Навыки (%d)  [K]",
+	"Skills": "Навыки",
+	"Skills (%d)": "Навыки (%d)",
+	"Global spells  [G]": "Глобальные заклинания  [G]",
+	"Clear order": "Отменить приказ",
+	"Cancel the selected hero's planned order (Backspace).": "Отменить запланированный приказ выбранного героя (Backspace).",
+	"The Encyclopaedia art is unavailable.": "Графика энциклопедии недоступна.",
+	"The Notebook art is unavailable.": "Графика записной книжки недоступна.",
+	"The tutorial cannot be saved.": "Обучение нельзя сохранить.",
+	"Next day": "Следующий день",
+	"Return to menu": "Выйти в меню",
+	"Save  [F5]": "Сохранить  [F5]",
+	"Load  [F9]": "Загрузить  [F9]",
+	"End turn  [N]": "Конец хода  [N]",
+	"Next day  [N]": "Следующий день  [N]",
+	"Resolve planned orders and collect production.": "Выполнить запланированные приказы и собрать доход.",
+	"Spend the remaining travel points and collect mine production.": "Потратить оставшиеся очки пути и собрать доход шахт.",
+	"Leave fort": "Покинуть форт",
+	"The garrison returns to the tile it entered from.": "Гарнизон возвращается на клетку, с которой вошёл.",
+	"There is no quick save to load.": "Нет быстрого сохранения.",
+	"Level %d": "Уровень %d",
+	"%d / %d XP": "Опыт: %d / %d",
+	"%d XP": "Опыт: %d",
+	"Maximum level": "максимальный уровень",
+	"Day %d": "День %d",
+	"%d / %d travel": "Путь: %d / %d",
+	"%d / %d movement": "Движение: %d / %d",
+	"%d health": "Здоровье: %d",
+	"%d spells": "Заклинаний: %d",
+	"Ether: %d income · %d/%d upkeep · %d available": "Эфир: доход %d · содержание %d/%d · доступно %d",
+	"Castle %d / %d energy": "Замок: энергия %d / %d",
+	"Garrisoning %s": "В гарнизоне: %s",
+	"Training in the %s": "Обучение: %s",
+	"+%d XP each day": "+%d опыта в день",
+	"Ether upkeep %d / %d": "Содержание эфира: %d / %d",
+	"Experience %d / %d": "Опыт: %d / %d",
+	"Roots: %d": "Корни: %d",
+	"Lotus: %d": "Лотос: %d",
+	"Rubies: %d": "Рубины: %d",
+	"Emeralds: %d": "Изумруды: %d",
+	"Sapphires: %d": "Сапфиры: %d",
+	"Diamonds: %d": "Алмазы: %d",
+	"Frozen flames: %d": "Застывшее пламя: %d",
+	"Herbs: %d": "Травы: %d",
+	"Gems: %d": "Самоцветы: %d",
+	# Hero skills and spellbook on the map
+	"Close  [Esc]": "Закрыть  [Esc]",
+	"Choose one skill to learn or improve": "Выберите навык, чтобы изучить или улучшить его",
+	"Learned skills · Five slots": "Изученные навыки · пять ячеек",
+	"Active specialization": "Активная специализация",
+	"Learn selected skill": "Изучить выбранный навык",
+	"%s · Skills · %d choice available": "%s · Навыки · доступно выборов: %d",
+	"%s · Skills · %d choices available": "%s · Навыки · доступно выборов: %d",
+	"Choose carefully: learning a skill spends one level-up choice.": "Выбирайте внимательно: изучение навыка тратит один выбор за уровень.",
+	"Gain a level to learn or improve a skill.": "Получите уровень, чтобы изучить или улучшить навык.",
+	"Active specialization: %s": "Активная специализация: %s",
+	"Description": "Описание",
+	"Equipped spellbook": "Книга заклинаний",
+	"Reserve spells": "Запас заклинаний",
+	"Move to reserve  →": "В запас  →",
+	"←  Add to spellbook": "←  В книгу",
+	"Artifacts": "Артефакты",
+	"%s · Spellbook %d / %d": "%s · Книга %d / %d",
+	"Select a spell to move it between your book and reserve.": "Выберите заклинание, чтобы переложить его между книгой и запасом.",
+	"Add a spell to your book before entering battle.": "Добавьте заклинание в книгу, прежде чем вступать в бой.",
+	"%d rune": "рун: %d",
+	"%d runes": "рун: %d",
+	"unlimited": "без ограничений",
+	"%s · %s · %d ether": "%s · %s · %d эфира",
+	"%d rune remaining. When this copy runs out, drawing it chooses a cantrip of the same color and spell class.": "Осталось рун: %d. Когда этот экземпляр закончится, вместо него будет вытянут кантрип того же цвета и класса.",
+	"%d runes remaining. When this copy runs out, drawing it chooses a cantrip of the same color and spell class.": "Осталось рун: %d. Когда этот экземпляр закончится, вместо него будет вытянут кантрип того же цвета и класса.",
+	"Move a spell to reserve to make room.": "Переложите заклинание в запас, чтобы освободить место.",
+	"This hero cannot use that spell's magic color.": "Этот герой не владеет магией цвета этого заклинания.",
+	"Add this copy to your equipped spellbook.": "Добавить этот экземпляр в книгу заклинаний.",
+	# File dialogs
+	"Open a File": "Открыть файл",
+	"Open File(s)": "Открыть файлы",
+	"Open a Directory": "Открыть папку",
+	"Open a File or Directory": "Открыть файл или папку",
+	"Save a File": "Сохранить файл",
+	"Select Current Folder": "Выбрать текущую папку",
+	"Select This Folder": "Выбрать эту папку",
+	"Open": "Открыть",
+	"Save": "Сохранить",
+	"Cancel": "Отмена",
+	"OK": "ОК",
+	"All Files": "Все файлы",
+	"All Recognized": "Все поддерживаемые",
+	"Path:": "Путь:",
+	"File:": "Файл:",
+	"Directories & Files:": "Папки и файлы:",
+	"Create Folder": "Создать папку",
+	"Refresh files.": "Обновить список файлов.",
+	"Go to previous folder.": "Перейти в предыдущую папку.",
+	"Go to next folder.": "Перейти в следующую папку.",
+	"Go to parent folder.": "Перейти в родительскую папку.",
+	"Toggle the visibility of hidden files.": "Показать или скрыть скрытые файлы.",
+}

@@ -10,7 +10,10 @@ extends RefCounted
 ## adventure "weather" particles, "helper_overlay" (remake-only English readouts,
 ## hints and shortcut buttons over the original screens; off by default),
 ## "antialiasing" (-1 automatic: 2x multisampling unless the renderer is a
-## software one; 0 off; 1 2x; 2 4x multisampling of the 3D scenes).
+## software one; 0 off; 1 2x; 2 4x multisampling of the 3D scenes);
+## "discord_activity" (the game and mode shown in the Discord desktop app);
+## "renderer" (0 Compatibility, 1 Forward+ on Vulkan; applied at start) and
+## "path_tracing" (traced lighting where the renderer and GPU allow it).
 ## Per edition (original Options screen order):
 ## "music"/"effects" volumes 0..1; "movies" the originals' Video key (0 none,
 ## 1 own size, 2 fitted); "blood"; "map_tooltips" (second game
@@ -25,7 +28,7 @@ extends RefCounted
 ## "visual_log". Several have no remake system yet and are only stored.
 ## "tutorial_events": the first game's shown tutorial events, one '0'/'1'
 ## per event id (settings.ini TutorialEvents); "show_tutorial" gates them.
-const SHARED := {"ambience": 0.55, "shadows": true, "soft_shadows": false, "weather": true, "helper_overlay": false, "antialiasing": -1, "sharpening": 1, "terrain_detail": false}
+const SHARED := {"ambience": 0.55, "shadows": true, "soft_shadows": false, "weather": true, "helper_overlay": false, "antialiasing": -1, "sharpening": 1, "terrain_detail": false, "discord_activity": true, "renderer": 0, "path_tracing": false}
 const EDITION := {"music": 0.55, "effects": 0.8, "movies": 2, "blood": true, "map_tooltips": true, "autosave": true,
 	"heroes_voices": true, "ambient_sounds": true, "adventure_fast": false, "animated_objects": true,
 	"mouse_rotation": 1.0, "keyboard_rotation": 1.0, "mouse_scroll": 1.0, "keyboard_scroll": 1.0,
@@ -38,7 +41,7 @@ const EDITION_DEFAULTS := {"el1": {}, "el2": {"auto_camera_dynamics": 96, "gamma
 ## Value ranges: [min, max] for numbers; bools are checked by type.
 const RANGES := {"music": [0.0, 1.0], "effects": [0.0, 1.0], "ambience": [0.0, 1.0], "mouse_rotation": [0.0, 2.0],
 	"keyboard_rotation": [0.0, 2.0], "mouse_scroll": [0.0, 2.0], "keyboard_scroll": [0.0, 2.0], "gamma": [-1.0, 1.0],
-	"auto_camera_dynamics": [0, 100], "movies": [0, 2], "antialiasing": [-1, 2], "sharpening": [0, 2]}
+	"auto_camera_dynamics": [0, 100], "movies": [0, 2], "antialiasing": [-1, 2], "sharpening": [0, 2], "renderer": [0, 1]}
 
 var values := {}
 var edition := ""

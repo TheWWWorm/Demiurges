@@ -24,7 +24,7 @@ Demiurges follows the rules of the original games. It runs on modern systems and
 
 - Computer opponents follow the original's approach but are not an exact copy of its decisions.
 - The darkening of a few large spells, the timing of some ability effects and Etherlords II map particles are approximations.
-- A few rare messages are still in English.
+- The remake's own screens follow the language of your game. A few rare error messages and the battle log are still in English.
 
 ## Kept on purpose
 

@@ -5,7 +5,11 @@ const ACCENT := Color("e0af68")
 const INK := Color("e5e3da")
 const MUTED := Color("a8b4b1")
 var profiles: Dictionary = {}
-var profile: ELProfile
+var profile: ELProfile:
+	set(value):
+		profile = value
+		# The remake's own screens follow the language of the game in use.
+		ELRemakeText.use(_shown_profile())
 ## Heading of the X dialog: ether for most spells, health for Channel.
 var power_heading: Label
 var duel: ELDuel
@@ -81,6 +85,10 @@ var capture_after := 3.0
 var elapsed := 0.0
 var content_setup: ELContentSetup
 var arena: ELArena
+## Experimental path-traced battle lighting (F7), where the renderer allows it.
+var path_tracing: ELPathTracing
+## The game and mode shown in the Discord desktop app (optional).
+var discord: ELDiscordPresence
 var hud: ELHudFrame
 ## Original Hand / Artifacts radio pair and the side counters (ELCombatRail).
 var rail: ELCombatRail
@@ -225,6 +233,8 @@ func _ready() -> void:
 		report.options_summary = _options_summary
 		get_tree().root.add_child.call_deferred(report)
 	settings.load_file()
+	# The chosen renderer needs the game started with it.
+	if _ensure_renderer(): return
 	ELSettings.apply_display(get_viewport(), settings.values)
 	# Touch gestures and the touch bar; inactive without a touch screen.
 	add_to_group("touch_camera")
@@ -237,6 +247,13 @@ func _ready() -> void:
 	var sharpen: CanvasLayer = SharpenLayer.new()
 	sharpen.settings = settings
 	add_child(sharpen)
+	path_tracing = ELPathTracing.new()
+	path_tracing.settings = settings
+	path_tracing.translate = _t
+	add_child(path_tracing)
+	discord = ELDiscordPresence.new()
+	discord.source = _discord_activity
+	add_child(discord)
 	# The game chosen last time starts again (unless the command line picks one).
 	if settings.edition in ELContentLibrary.EDITIONS: launch_profile = settings.edition
 	for arg in OS.get_cmdline_user_args():
@@ -249,6 +266,7 @@ func _ready() -> void:
 		elif arg == "--demo":
 			demo = true
 	_load_profiles()
+	ELRemakeText.use(_shown_profile())
 	_build_ui()
 	if profiles.is_empty():
 		status.text = "Choose a game folder to begin. Original content is required."
@@ -272,7 +290,7 @@ func _offer_crash_report() -> void:
 ## The player's options in a report: the remake settings that change drawing.
 func _options_summary() -> String:
 	var parts := PackedStringArray()
-	for key: String in ["antialiasing", "sharpening", "terrain_detail", "shadows", "soft_shadows", "weather", "auto_camera", "helper_overlay"]:
+	for key: String in ["renderer", "path_tracing", "antialiasing", "sharpening", "terrain_detail", "shadows", "soft_shadows", "weather", "auto_camera", "helper_overlay"]:
 		if settings.values.has(key): parts.append("%s=%s" % [key, settings.values[key]])
 	return " ".join(parts)
 
@@ -432,6 +450,7 @@ func _start(edition: String, options: Dictionary = {}, restored: ELDuel = null, 
 	camera.fov = auto_camera_angle()
 	camera.current = true
 	battle_audio.listener = camera
+	if path_tracing != null: path_tracing.attach(stage, arena, camera, effects)
 	auto_camera = ELAutoCamera.new(profile, battle_seed)
 	_default_view()
 	fight_shot = false
@@ -1347,7 +1366,7 @@ func _cast_seconds(data: Dictionary) -> float:
 	if data.kind == "cast" and models.has(side) and not bool(settings.values.get("hide_cast", false)):
 		var animation := "usummon" if duel.is_summon(card) else ("uenchantment" if ELCatalog.rule(profile, card).get("effect") == "enchant" else "uinstant")
 		seconds = maxf(models[side].clip_seconds(animation), 0.0)
-	var cue := ELCombatEffects.summon_delay(profile, card) if duel.is_summon(card) else ELCombatEffects.hit_delay(profile, card)
+	var cue := ELCombatEffects.summon_delay(profile, card) if duel.is_summon(card) else (_cast_release(side, card) if data.kind == "cast" else 0.0) + ELCombatEffects.hit_delay(profile, card)
 	return clampf(maxf(seconds, cue + 0.3), 0.8, 6.0)
 
 ## Keeps the shown values equal to the rules' while nothing waits.
@@ -2098,11 +2117,14 @@ func _announce(key: String, args: Array, side: int) -> void:
 ## artifact use) the pending one. Hits of a non-summon wait for the cue frame
 ## of the card's effect.
 func _pend_cast_effects(data: Dictionary, artifact: bool) -> void:
-	if _effect_cast.is_empty(): call_deferred("_start_cast_effects")
+	if _effect_cast.is_empty(): call_deferred("_present_cast")
 	else: _start_cast_effects()
 	var card := String(data.card)
-	var hit := 0.0 if duel.is_summon(card) else ELCombatEffects.hit_delay(profile, card)
-	_effect_cast = {"card": card, "side": data.side, "target": int(data.get("target", -1)), "affected": [], "hit": hit, "artifact": artifact, "power": int(data.get("power", 0)), "tap_life_landed": false}
+	# A spell leaves the hero's hand at its gesture's release frame: its
+	# effects start there and its hits count from there.
+	var release := 0.0 if artifact else _cast_release(int(data.side), card)
+	var hit := 0.0 if duel.is_summon(card) else release + ELCombatEffects.hit_delay(profile, card)
+	_effect_cast = {"card": card, "side": data.side, "target": int(data.get("target", -1)), "affected": [], "hit": hit, "release": release, "artifact": artifact, "power": int(data.get("power", 0)), "tap_life_landed": false}
 	if profile.id in ["el1", "el2"] and card == "GRUN":
 		# Snapshot original ownership before synchronous mass removal. An
 		# enchantment may have lent a creature to the other controller.
@@ -2220,6 +2242,33 @@ func _show_hit(data: Dictionary) -> void:
 	if labels.has(id): labels[id].hide()
 	if not model.play("udeath"): _remove_model(id)
 
+## Seconds from the start of a hero's casting gesture to its release frame,
+## where a (non-summon) spell's effects start. Zero for summons (their
+## arrival waits for the gesture itself) and when gestures are hidden.
+func _cast_release(side: int, card: String) -> float:
+	if duel.is_summon(card) or not models.has(side) or bool(settings.values.get("hide_cast", false)): return 0.0
+	var model: ELModel = models[side]
+	var animation := "uenchantment" if ELCatalog.rule(profile, card).get("effect") == "enchant" else "uinstant"
+	var clip: Dictionary = model.timing.get(animation, {})
+	var mark := int(clip.get("mark", -1))
+	if mark <= 0 or mark >= int(clip.get("frames", 0)): return 0.0
+	return mark / (model.fps * maxf(model.speed, 0.01))
+
+## Once the cast's events are in: the camera's spell shots start with the
+## gesture, the effects at its release frame.
+func _present_cast() -> void:
+	if _effect_cast.is_empty(): return
+	_auto_cast(_effect_cast)
+	_effect_cast.camera_shown = true
+	var release := float(_effect_cast.get("release", 0.0))
+	if release <= 0.0 or not is_inside_tree():
+		_start_cast_effects()
+		return
+	var pending := _effect_cast
+	get_tree().create_timer(release).timeout.connect(func() -> void:
+		# A later cast may already have started this one's effects.
+		if is_same(_effect_cast, pending): _start_cast_effects())
+
 func _start_cast_effects() -> void:
 	var pending := _effect_cast
 	_effect_cast = {}
@@ -2227,7 +2276,7 @@ func _start_cast_effects() -> void:
 	# (EL1, EL2): a shake over the
 	# current view, with or without the automatic camera.
 	if profile.id in ["el1", "el2"] and pending.get("card", "") in ["TREM", "ERQA"]: _start_shake()
-	_auto_cast(pending)
+	if not pending.get("camera_shown", false): _auto_cast(pending)
 	if not pending.is_empty() and _hold_arrival(pending): return
 	if pending.is_empty() or not is_instance_valid(effects): return
 	# Original EL1 GreaterUnsummon@ and EL2@ register
@@ -3963,7 +4012,7 @@ func _tip_content(control: Control, at: Vector2) -> Dictionary:
 		var health := "%s: %d" % [_original_text("CtrlTTCombatTt1" if profile.id == "el2" else "CtrlTtCombatTt1", "Health"), int(h.health)]
 		var level := "%s: %d" % [_original_text("T_LEVEL", "Level"), int(h.get("level", 1))]
 		var lines: Array = [level, health] if profile.id == "el1" else [health, level]
-		if helper_overlay(): lines.append_array(control.tooltip_text.split("\n"))
+		if helper_overlay(): lines.append_array(control.atr(control.tooltip_text).split("\n"))
 		return ELCombatTooltip.hero_content(profile.id, portraits[side].texture, title, lines)
 	return {}
 
@@ -4066,6 +4115,8 @@ func _build_ui() -> void:
 	menu.offset_left = -310
 	menu.offset_right = -16
 	menu.offset_top = 56
+	# Longer (translated) captions widen it to the left, not off the screen.
+	menu.grow_horizontal = Control.GROW_DIRECTION_BEGIN
 	menu.add_theme_stylebox_override("panel", _style(Color("111710f5")))
 	menu.visible = false
 	var menu_rows := VBoxContainer.new()
@@ -4309,145 +4360,38 @@ func _open_settings() -> void:
 	menu.hide()
 	if settings_dialog != null: settings_dialog.queue_free()
 	settings_dialog = AcceptDialog.new()
-	settings_dialog.title = "Remake settings"
+	settings_dialog.title = _t("Remake settings")
 	settings_dialog.exclusive = true
+	settings_dialog.ok_button_text = _t("Close")
+	settings_dialog.theme = _settings_theme()
 	ui.add_child(settings_dialog)
-	var rows := VBoxContainer.new()
-	rows.add_theme_constant_override("separation", 10)
-	settings_dialog.add_child(rows)
-	for key: String in ["music", "ambience", "effects"]:
-		var row := HBoxContainer.new()
-		rows.add_child(row)
-		var label := _label(key.capitalize(), 16)
-		label.custom_minimum_size.x = 120
-		row.add_child(label)
-		var slider := HSlider.new()
-		slider.custom_minimum_size.x = 240
-		slider.min_value = 0
-		slider.max_value = 100
-		slider.value = float(settings.values[key]) * 100
-		row.add_child(slider)
-		var number := _label("%d%%" % slider.value, 16)
-		number.custom_minimum_size.x = 50
-		row.add_child(number)
-		slider.value_changed.connect(func(value: float):
-			settings.values[key] = value / 100.0
-			number.text = "%d%%" % value
-			if is_instance_valid(battle_audio): battle_audio.apply_volumes(settings.values)
-			if front_menu != null: front_menu.apply_volumes(settings.values))
-	var shadows := CheckButton.new()
-	shadows.name = "Shadows"
-	shadows.text = "Shadows"
-	shadows.button_pressed = settings.values.shadows
-	shadows.toggled.connect(func(enabled: bool):
-		settings.values.shadows = enabled
-		_apply_settings())
-	rows.add_child(shadows)
-	var soft_shadows := CheckButton.new()
-	soft_shadows.name = "SoftShadows"
-	soft_shadows.text = "Soft shadows"
-	soft_shadows.tooltip_text = "Softens sun-shadow edges in battles and on Etherlords II maps. May reduce performance on slower devices. Requires shadows to be enabled."
-	soft_shadows.button_pressed = bool(settings.values.soft_shadows)
-	soft_shadows.disabled = not bool(settings.values.shadows)
-	shadows.toggled.connect(func(enabled: bool): soft_shadows.disabled = not enabled)
-	soft_shadows.toggled.connect(func(enabled: bool):
-		settings.values.soft_shadows = enabled
-		_apply_settings())
-	rows.add_child(soft_shadows)
-	var weather := CheckButton.new()
-	weather.text = "Adventure weather effects"
-	weather.button_pressed = settings.values.weather
-	weather.toggled.connect(func(enabled: bool): settings.values.weather = enabled)
-	rows.add_child(weather)
-	var blood_toggle := CheckButton.new()
-	blood_toggle.text = "Combat blood"
-	blood_toggle.button_pressed = settings.values.blood
-	blood_toggle.toggled.connect(func(enabled: bool):
-		settings.values.blood = enabled
-		if is_instance_valid(blood): blood.set_enabled(enabled))
-	rows.add_child(blood_toggle)
-	var tooltip_toggle := CheckButton.new()
-	tooltip_toggle.text = "Map tooltips on hover"
-	tooltip_toggle.tooltip_text = "Second game: show an object's tooltip when the cursor rests on it. The right mouse button shows it either way."
-	tooltip_toggle.button_pressed = settings.values.map_tooltips
-	tooltip_toggle.toggled.connect(func(enabled: bool): settings.values.map_tooltips = enabled)
-	rows.add_child(tooltip_toggle)
-	# The originals' Video key: no movies, own size, or fitted (shipped).
-	var movie_row := HBoxContainer.new()
-	rows.add_child(movie_row)
-	var movie_label := _label("Movies", 16)
-	movie_label.custom_minimum_size.x = 120
-	movie_row.add_child(movie_label)
-	var movie_mode := OptionButton.new()
-	movie_mode.name = "MovieMode"
-	for caption: String in ["Off", "Original size", "Fit to screen"]: movie_mode.add_item(caption)
-	movie_mode.select(int(settings.values.movies))
-	movie_mode.item_selected.connect(func(index: int):
-		settings.values.movies = index
-		ELMoviePlayer.mode = index)
-	movie_row.add_child(movie_mode)
-	# Optional smoothing of 3D edges; automatic keeps it off on software rendering.
-	var smoothing_row := HBoxContainer.new()
-	rows.add_child(smoothing_row)
-	var smoothing_label := _label("Anti-aliasing", 16)
-	smoothing_label.custom_minimum_size.x = 120
-	smoothing_row.add_child(smoothing_label)
-	var smoothing := OptionButton.new()
-	smoothing.name = "Antialiasing"
-	smoothing.tooltip_text = "Smooths the edges of the 3D map and battle scenes. Automatic uses 2x unless the graphics are rendered in software."
-	for caption: String in ["Automatic", "Off", "2x", "4x"]: smoothing.add_item(caption)
-	smoothing.select(int(settings.values.antialiasing) + 1)
-	smoothing.item_selected.connect(func(index: int):
-		settings.values.antialiasing = index - 1
-		ELSettings.apply_display(get_viewport(), settings.values))
-	smoothing_row.add_child(smoothing)
-	var sharpen_row := HBoxContainer.new()
-	rows.add_child(sharpen_row)
-	var sharpen_label := _label("Sharpening", 16)
-	sharpen_label.custom_minimum_size.x = 120
-	sharpen_row.add_child(sharpen_label)
-	var sharpen := OptionButton.new()
-	sharpen.name = "Sharpening"
-	sharpen.tooltip_text = "Sharpens the textures of the 3D map and battle scenes. The interface is not changed."
-	for caption: String in ["Off", "Light", "Strong"]: sharpen.add_item(caption)
-	sharpen.select(int(settings.values.sharpening))
-	sharpen.item_selected.connect(func(index: int): settings.values.sharpening = index)
-	sharpen_row.add_child(sharpen)
-	var terrain_detail := CheckButton.new()
-	terrain_detail.name = "TerrainDetail"
-	terrain_detail.text = "Terrain detail"
-	terrain_detail.tooltip_text = "Adds subtle surface detail to adventure terrain and battle ground. May reduce performance on slower devices."
-	terrain_detail.button_pressed = bool(settings.values.terrain_detail)
-	terrain_detail.toggled.connect(func(enabled: bool):
-		settings.values.terrain_detail = enabled
-		if is_instance_valid(arena): arena.set_detail(enabled)
-		if campaign_view != null: campaign_view.apply_settings())
-	rows.add_child(terrain_detail)
-	var helper_toggle := CheckButton.new()
-	helper_toggle.name = "HelperOverlay"
-	helper_toggle.text = "Show remake helper overlay"
-	helper_toggle.tooltip_text = "Remake-only readouts, hints and shortcut buttons over the original screens."
-	helper_toggle.button_pressed = helper_overlay()
-	helper_toggle.toggled.connect(func(enabled: bool):
-		settings.values.helper_overlay = enabled
-		_apply_settings())
-	rows.add_child(helper_toggle)
+	var body := VBoxContainer.new()
+	body.add_theme_constant_override("separation", 10)
+	settings_dialog.add_child(body)
+	var tabs := TabContainer.new()
+	tabs.name = "Pages"
+	tabs.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	tabs.custom_minimum_size = Vector2(660, 520)
+	body.add_child(tabs)
+	_graphics_page(_settings_page(tabs, "Graphics"))
+	_audio_page(_settings_page(tabs, "Audio"))
+	_interface_page(_settings_page(tabs, "Interface"))
+	for i in tabs.get_tab_count(): tabs.set_tab_title(i, str(tabs.get_tab_control(i).get_meta("title", tabs.get_tab_title(i))))
 	var export_log := Button.new()
 	export_log.name = "ExportLog"
-	export_log.text = "Export log…"
-	export_log.tooltip_text = "Save or copy the game's log with the system information, to send it with a bug report."
-	export_log.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	export_log.text = _t("Export log…")
+	export_log.tooltip_text = _t("Save or copy the game's log with the system information, to send it with a bug report.")
 	export_log.pressed.connect(func(): ELCrashReportBox.open(settings_dialog, {}))
 	var tools_row := HBoxContainer.new()
 	tools_row.add_theme_constant_override("separation", 10)
-	rows.add_child(tools_row)
+	body.add_child(tools_row)
 	tools_row.add_child(export_log)
 	# Adding, removing or switching games, outside a running campaign.
 	if campaign_view == null and _campaign_battle() == null:
 		var game_files := Button.new()
 		game_files.name = "GameFiles"
-		game_files.text = "Game files…"
-		game_files.tooltip_text = "Add Etherlords or Etherlords II, remove one, or switch between them."
+		game_files.text = _t("Game files…")
+		game_files.tooltip_text = _t("Add Etherlords or Etherlords II, remove one, or switch between them.")
 		game_files.pressed.connect(func():
 			settings_dialog.hide()
 			_open_content_setup())
@@ -4455,10 +4399,334 @@ func _open_settings() -> void:
 	settings_dialog.visibility_changed.connect(func():
 		if not settings_dialog.visible:
 			ELCrashReport.trace("settings: " + _options_summary())
-			if not settings.save_file(): _notice("Could not save preferences.")
+			if not settings.save_file(): _notice(_t("Could not save preferences."))
 		_refresh())
-	settings_dialog.popup_centered(Vector2i(500, 610))
+	settings_dialog.popup_centered(Vector2i(720, 660))
 	_refresh()
+
+## Graphics: path tracing first (renderer, switch, light view, what this
+## computer supports), then the picture and scene options.
+func _graphics_page(page: VBoxContainer) -> void:
+	var traced := _settings_box(page, "Path tracing", true)
+	var renderer := OptionButton.new()
+	renderer.name = "Renderer"
+	for caption: String in ["Compatibility (default)", "Forward+ (Vulkan)"]: renderer.add_item(_t(caption))
+	renderer.select(int(settings.values.renderer))
+	var running := 1 if RenderingServer.get_current_rendering_method() == "forward_plus" else 0
+	var restart := Button.new()
+	restart.name = "Restart"
+	restart.text = _t("Restart now")
+	restart.visible = int(settings.values.renderer) != running
+	_settings_row(traced, "Renderer", "Path tracing needs Forward+ (Vulkan). Compatibility runs on more computers. A change takes effect after a restart.", renderer, restart)
+	var status := _label(_path_tracing_status(), 14, ACCENT if ELPathTracing.available() else MUTED)
+	status.name = "PathTracingStatus"
+	status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	var toggle := CheckButton.new()
+	toggle.name = "PathTracing"
+	toggle.button_pressed = bool(settings.values.path_tracing)
+	toggle.disabled = not ELPathTracing.available()
+	_settings_row(traced, "Path-traced lighting", "Real shadows, sky light, light bounced between surfaces and light from fire and spells, on maps and in battles. Costs about 2–3 ms a frame on a fast ray-tracing GPU. F7 switches it in the game.", toggle)
+	var light_view := CheckButton.new()
+	light_view.name = "LightView"
+	light_view.button_pressed = is_instance_valid(path_tracing) and path_tracing.lighting_view
+	light_view.disabled = toggle.disabled or not toggle.button_pressed
+	_settings_row(traced, "Show light only", "Draws the traced light without textures, to see what it does (Shift+F7). Not kept after a restart.", light_view)
+	traced.add_child(status)
+	renderer.item_selected.connect(func(index: int):
+		settings.values.renderer = index
+		restart.visible = index != running)
+	restart.pressed.connect(func():
+		settings_dialog.hide()
+		_restart_game())
+	toggle.toggled.connect(func(on: bool):
+		settings.values.path_tracing = on
+		light_view.disabled = not on
+		if not on: light_view.button_pressed = false
+		if is_instance_valid(path_tracing): path_tracing.set_enabled(on))
+	light_view.toggled.connect(func(on: bool):
+		if is_instance_valid(path_tracing): path_tracing.lighting_view = on and path_tracing.enabled)
+	var picture := _settings_box(page, "Picture")
+	# Optional smoothing of 3D edges; automatic keeps it off on software rendering.
+	var smoothing := OptionButton.new()
+	smoothing.name = "Antialiasing"
+	for caption: String in ["Automatic", "Off", "2x", "4x"]: smoothing.add_item(_t(caption))
+	smoothing.select(int(settings.values.antialiasing) + 1)
+	smoothing.item_selected.connect(func(index: int):
+		settings.values.antialiasing = index - 1
+		ELSettings.apply_display(get_viewport(), settings.values))
+	_settings_row(picture, "Anti-aliasing", "Smooths the edges of the 3D map and battle scenes. Automatic uses 2x unless the graphics are rendered in software. Path tracing uses its own smoothing.", smoothing)
+	var sharpen := OptionButton.new()
+	sharpen.name = "Sharpening"
+	for caption: String in ["Off", "Light", "Strong"]: sharpen.add_item(_t(caption))
+	sharpen.select(int(settings.values.sharpening))
+	sharpen.item_selected.connect(func(index: int): settings.values.sharpening = index)
+	_settings_row(picture, "Sharpening", "Sharpens the textures of the 3D map and battle scenes. The interface is not changed.", sharpen)
+	var scene := _settings_box(page, "Scene")
+	var shadows := CheckButton.new()
+	shadows.name = "Shadows"
+	shadows.button_pressed = settings.values.shadows
+	_settings_row(scene, "Shadows", "Shadows of figures in battles and of trees, rocks and buildings on maps.", shadows)
+	var soft_shadows := CheckButton.new()
+	soft_shadows.name = "SoftShadows"
+	soft_shadows.button_pressed = bool(settings.values.soft_shadows)
+	soft_shadows.disabled = not bool(settings.values.shadows)
+	_settings_row(scene, "Soft shadows", "Softer shadow edges. May reduce performance on slower devices.", soft_shadows)
+	shadows.toggled.connect(func(enabled: bool):
+		settings.values.shadows = enabled
+		soft_shadows.disabled = not enabled
+		_apply_settings())
+	soft_shadows.toggled.connect(func(enabled: bool):
+		settings.values.soft_shadows = enabled
+		_apply_settings())
+	var terrain_detail := CheckButton.new()
+	terrain_detail.name = "TerrainDetail"
+	terrain_detail.button_pressed = bool(settings.values.terrain_detail)
+	terrain_detail.toggled.connect(func(enabled: bool):
+		settings.values.terrain_detail = enabled
+		if is_instance_valid(arena): arena.set_detail(enabled)
+		if campaign_view != null: campaign_view.apply_settings())
+	_settings_row(scene, "Terrain detail", "Subtle surface detail on map terrain and battle ground. May reduce performance on slower devices.", terrain_detail)
+	var weather := CheckButton.new()
+	weather.name = "Weather"
+	weather.button_pressed = settings.values.weather
+	weather.toggled.connect(func(enabled: bool): settings.values.weather = enabled)
+	_settings_row(scene, "Map weather", "Rain, snow and other weather particles on adventure maps.", weather)
+	var blood_toggle := CheckButton.new()
+	blood_toggle.name = "Blood"
+	blood_toggle.button_pressed = settings.values.blood
+	blood_toggle.toggled.connect(func(enabled: bool):
+		settings.values.blood = enabled
+		if is_instance_valid(blood): blood.set_enabled(enabled))
+	_settings_row(scene, "Combat blood", "Blood when figures are hit or die in battle.", blood_toggle)
+
+func _audio_page(page: VBoxContainer) -> void:
+	var volumes := _settings_box(page, "Volume")
+	var captions := {"music": ["Music", "The menu, map and battle music."], "ambience": ["Ambience", "Remake-only background sounds of maps and battles."], "effects": ["Effects", "Spells, blows, voices and the interface."]}
+	for key: String in ["music", "ambience", "effects"]:
+		var slider := HSlider.new()
+		slider.name = key.capitalize()
+		slider.custom_minimum_size.x = 200
+		slider.min_value = 0
+		slider.max_value = 100
+		slider.value = float(settings.values[key]) * 100
+		var number := _label("%d%%" % slider.value, 15)
+		number.custom_minimum_size.x = 44
+		number.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		slider.value_changed.connect(func(value: float):
+			settings.values[key] = value / 100.0
+			number.text = "%d%%" % value
+			if is_instance_valid(battle_audio): battle_audio.apply_volumes(settings.values)
+			if front_menu != null: front_menu.apply_volumes(settings.values))
+		_settings_row(volumes, captions[key][0], captions[key][1], slider, number)
+
+func _interface_page(page: VBoxContainer) -> void:
+	var screens := _settings_box(page, "Screens")
+	# The originals' Video key: no movies, own size, or fitted (shipped).
+	var movie_mode := OptionButton.new()
+	movie_mode.name = "MovieMode"
+	for caption: String in ["Off", "Original size", "Fit to screen"]: movie_mode.add_item(_t(caption))
+	movie_mode.select(int(settings.values.movies))
+	movie_mode.item_selected.connect(func(index: int):
+		settings.values.movies = index
+		ELMoviePlayer.mode = index)
+	_settings_row(screens, "Movies", "The games' intro and story movies.", movie_mode)
+	var tooltip_toggle := CheckButton.new()
+	tooltip_toggle.name = "MapTooltips"
+	tooltip_toggle.button_pressed = settings.values.map_tooltips
+	tooltip_toggle.toggled.connect(func(enabled: bool): settings.values.map_tooltips = enabled)
+	_settings_row(screens, "Map tooltips on hover", "Second game: an object's tooltip when the cursor rests on it. The right mouse button shows it either way.", tooltip_toggle)
+	var helper_toggle := CheckButton.new()
+	helper_toggle.name = "HelperOverlay"
+	helper_toggle.button_pressed = helper_overlay()
+	helper_toggle.toggled.connect(func(enabled: bool):
+		settings.values.helper_overlay = enabled
+		_apply_settings())
+	_settings_row(screens, "Remake helper overlay", "Remake-only readouts, hints and shortcut buttons over the original screens.", helper_toggle)
+	var sharing := _settings_box(page, "Sharing")
+	var discord_toggle := CheckButton.new()
+	discord_toggle.name = "DiscordActivity"
+	discord_toggle.button_pressed = bool(settings.values.discord_activity)
+	discord_toggle.disabled = not ClassDB.class_exists("ELDiscordIpc")
+	discord_toggle.toggled.connect(func(enabled: bool):
+		settings.values.discord_activity = enabled
+		if is_instance_valid(discord): discord.enabled = enabled)
+	_settings_row(sharing, "Discord activity", "Shows the game and whether you are in the menus, on a map or in a battle in the Discord desktop app. Nothing else is shared; off clears it.", discord_toggle)
+
+## `text` in the language of the game being played (see ELRemakeText).
+func _t(text: String) -> String:
+	return ELRemakeText.t(text, _shown_profile())
+
+## The game whose language the remake's screens use: the one being played,
+## else the one the game starts with.
+func _shown_profile() -> ELProfile:
+	if profile != null: return profile
+	return profiles.get(launch_profile) if profiles.has(launch_profile) else null
+
+## What the path tracing status line says on this computer.
+func _path_tracing_status() -> String:
+	if ELPathTracing.available(): return _t("Ready on %s.") % RenderingServer.get_video_adapter_name()
+	if RenderingServer.get_current_rendering_method() != "forward_plus": return _t("Not available with the Compatibility renderer: choose Forward+ (Vulkan) above and restart.")
+	return _t("Not available: %s has no ray-tracing support in Vulkan.") % RenderingServer.get_video_adapter_name()
+
+## A tab of the settings dialog: a scrolling column.
+func _settings_page(tabs: TabContainer, title: String) -> VBoxContainer:
+	var scroll := ScrollContainer.new()
+	scroll.name = title
+	scroll.set_meta("title", _t(title))
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	tabs.add_child(scroll)
+	var margin := MarginContainer.new()
+	margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	for side: String in ["left", "right", "top", "bottom"]: margin.add_theme_constant_override("margin_" + side, 12)
+	scroll.add_child(margin)
+	var page := VBoxContainer.new()
+	page.add_theme_constant_override("separation", 14)
+	margin.add_child(page)
+	return page
+
+## A titled group of settings; `featured` frames it in the accent colour.
+func _settings_box(page: VBoxContainer, title: String, featured := false) -> VBoxContainer:
+	var panel := PanelContainer.new()
+	panel.name = title.replace(" ", "")
+	var style := _style(Color("2a2519f0") if featured else Color("1d201ae0"), ACCENT if featured else Color("4a4032"))
+	style.set_content_margin_all(12)
+	style.set_corner_radius_all(4)
+	panel.add_theme_stylebox_override("panel", style)
+	page.add_child(panel)
+	var column := VBoxContainer.new()
+	column.add_theme_constant_override("separation", 10)
+	panel.add_child(column)
+	column.add_child(_label(_t(title), 19, ACCENT))
+	return column
+
+## One setting: its name and a line of explanation on the left, its
+## control (and an optional extra) on the right.
+func _settings_row(box: VBoxContainer, title: String, description: String, control: Control, extra: Control = null) -> void:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 12)
+	box.add_child(row)
+	var text := VBoxContainer.new()
+	text.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	text.add_theme_constant_override("separation", 2)
+	row.add_child(text)
+	text.add_child(_label(_t(title), 16, INK))
+	var note := _label(_t(description), 13, MUTED)
+	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	note.custom_minimum_size.x = 300
+	text.add_child(note)
+	control.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	control.tooltip_text = _t(description)
+	row.add_child(control)
+	if extra != null:
+		extra.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		row.add_child(extra)
+
+## The settings dialog's look: the game's dark panels and gold accents.
+func _settings_theme() -> Theme:
+	var theme := Theme.new()
+	theme.default_font_size = 16
+	var window := _style(Color("14161ef8"), Color("66523a"))
+	window.set_content_margin_all(14)
+	theme.set_stylebox("panel", "AcceptDialog", window)
+	# The frame round the dialog, its title bar included.
+	var frame := _style(Color("14161ef8"), Color("66523a"))
+	frame.expand_margin_top = 34
+	frame.expand_margin_left = 6
+	frame.expand_margin_right = 6
+	frame.expand_margin_bottom = 6
+	for kind in ["embedded_border", "embedded_unfocused_border"]: theme.set_stylebox(kind, "Window", frame)
+	theme.set_color("title_color", "Window", ACCENT)
+	theme.set_font_size("title_font_size", "Window", 18)
+	# Switches: a gold track when on, a dark one when off.
+	var none := StyleBoxEmpty.new()
+	for state in ["normal", "hover", "pressed", "disabled", "focus", "hover_pressed"]: theme.set_stylebox(state, "CheckButton", none)
+	theme.set_icon("checked", "CheckButton", _switch_icon(true, false))
+	theme.set_icon("unchecked", "CheckButton", _switch_icon(false, false))
+	theme.set_icon("checked_disabled", "CheckButton", _switch_icon(true, true))
+	theme.set_icon("unchecked_disabled", "CheckButton", _switch_icon(false, true))
+	for kind in ["Button", "OptionButton"]:
+		theme.set_stylebox("normal", kind, _style(Color("161913e8"), Color("66523a")))
+		theme.set_stylebox("hover", kind, _style(Color("353329"), ACCENT))
+		theme.set_stylebox("pressed", kind, _style(Color("483b2e"), ACCENT))
+		theme.set_stylebox("disabled", kind, _style(Color("17171188")))
+		theme.set_color("font_color", kind, INK)
+		theme.set_color("font_disabled_color", kind, Color("81918b"))
+	theme.set_stylebox("panel", "TabContainer", _style(Color("181a14f0"), Color("4a4032")))
+	theme.set_stylebox("tab_selected", "TabContainer", _style(Color("2a2519"), ACCENT))
+	theme.set_stylebox("tab_unselected", "TabContainer", _style(Color("16181288"), Color("3a3328")))
+	theme.set_stylebox("tab_hovered", "TabContainer", _style(Color("26241c"), Color("66523a")))
+	theme.set_color("font_selected_color", "TabContainer", ACCENT)
+	theme.set_color("font_unselected_color", "TabContainer", MUTED)
+	theme.set_color("font_hovered_color", "TabContainer", INK)
+	return theme
+
+## A switch drawn for the settings dialog: a rounded track with its knob
+## at the right (on, gold) or left (off, dark); faded when disabled.
+static func _switch_icon(on: bool, disabled: bool) -> Texture2D:
+	const W := 46
+	const H := 24
+	var image := Image.create(W, H, false, Image.FORMAT_RGBA8)
+	var track := ACCENT.darkened(0.15) if on else Color("3a3a34")
+	var knob := Color("f4ecd8") if on else Color("9aa39f")
+	var edge := Color("66523a")
+	var radius := H * 0.5
+	var centre := Vector2(W - radius if on else radius, radius)
+	for y in H:
+		for x in W:
+			var p := Vector2(x + 0.5, y + 0.5)
+			# Distance to the track's capsule (a segment between the end centres).
+			var nearest := Vector2(clampf(p.x, radius, W - radius), radius)
+			var d := p.distance_to(nearest) - radius
+			var colour := Color(0, 0, 0, 0)
+			if d < 0.0: colour = edge if d > -1.2 else track
+			colour.a *= clampf(0.5 - d, 0.0, 1.0)
+			var k := p.distance_to(centre) - (radius - 3.5)
+			if k < 0.0: colour = colour.blend(Color(knob, clampf(0.5 - k, 0.0, 1.0)))
+			if disabled: colour.a *= 0.4
+			image.set_pixel(x, y, colour)
+	return ImageTexture.create_from_image(image)
+
+## Starts the game again (for a new renderer) and closes this one.
+func _restart_game() -> void:
+	settings.save_file()
+	OS.create_process(OS.get_executable_path(), _relaunch_args(false))
+	get_tree().quit()
+
+## This game's command line with the chosen renderer in place of any named
+## one; `marked` adds the note that stops a second automatic restart.
+func _relaunch_args(marked: bool) -> PackedStringArray:
+	var args := PackedStringArray()
+	# A game run from its project folder (not exported) names that folder.
+	if not OS.has_feature("template"): args.append_array(["--path", ProjectSettings.globalize_path("res://")])
+	var skip := false
+	for arg: String in OS.get_cmdline_args():
+		if skip:
+			skip = false
+		elif arg in ["--rendering-method", "--rendering-driver"]:
+			skip = true
+		else:
+			args.append(arg)
+	if int(settings.values.renderer) == 1: args.append_array(["--rendering-method", "forward_plus", "--rendering-driver", "vulkan"])
+	else: args.append_array(["--rendering-method", "gl_compatibility"])
+	var user := PackedStringArray(OS.get_cmdline_user_args())
+	if user.has("--renderer-restarted"): user.remove_at(user.find("--renderer-restarted"))
+	if marked: user.append("--renderer-restarted")
+	if not user.is_empty():
+		args.append("--")
+		args.append_array(user)
+	return args
+
+## At start: when the chosen renderer is not the one running, the game
+## starts again with it (once; a renderer that cannot start is not retried,
+## and a renderer named on the command line wins).
+func _ensure_renderer() -> bool:
+	if get_tree().current_scene != self or OS.has_feature("web") or OS.has_feature("mobile") or OS.has_feature("editor"): return false
+	if OS.get_cmdline_user_args().has("--renderer-restarted") or OS.get_cmdline_args().has("--rendering-method"): return false
+	var wanted := "forward_plus" if int(settings.values.renderer) == 1 else "gl_compatibility"
+	if RenderingServer.get_current_rendering_method() == wanted: return false
+	OS.create_process(OS.get_executable_path(), _relaunch_args(true))
+	get_tree().quit()
+	return true
 
 ## The active game's preferences (each original keeps its own settings).
 func _use_edition(edition: String) -> void:
@@ -4469,6 +4737,7 @@ func _use_edition(edition: String) -> void:
 ## takes the new values.
 func _apply_settings() -> void:
 	ELMoviePlayer.mode = int(settings.values.movies)
+	if is_instance_valid(discord): discord.enabled = bool(settings.values.discord_activity)
 	ELSettings.apply_display(get_viewport(), settings.values)
 	if is_instance_valid(arena) and arena.light != null:
 		arena.light.shadow_enabled = settings.values.shadows
@@ -4478,6 +4747,23 @@ func _apply_settings() -> void:
 	_preview_volumes(settings.values)
 	if campaign_view != null: campaign_view.apply_settings()
 	_refresh()
+
+## What Discord shows: the game, and the menus, a campaign map or a battle.
+## No hero, player or save names.
+func _discord_activity() -> Dictionary:
+	discord.enabled = bool(settings.values.get("discord_activity", true))
+	var russian := ELRemakeText.language(_shown_profile()) == "ru"
+	var game := ELContentLibrary.title(profile.id) if profile != null else "Demiurges"
+	if russian and profile != null: game = "Демиурги" if profile.id == "el1" else "Демиурги II"
+	var state := "Main menu"
+	if front_menu != null and front_menu.is_visible_in_tree(): state = "Main menu"
+	elif campaign_view != null and campaign_view.visible: state = "Campaign map"
+	elif duel != null and duel.phase != ELDuel.Phase.FINISHED:
+		if campaign_view != null: state = "Campaign battle"
+		elif demo: state = "Watching a battle"
+		elif _hot_seat(): state = "Duel (hot seat)"
+		else: state = "Duel"
+	return discord.activity(game, _t(state))
 
 func _preview_volumes(values: Dictionary) -> void:
 	if is_instance_valid(battle_audio): battle_audio.apply_volumes(values)
@@ -4619,6 +4905,8 @@ func _begin_campaign(edition: String, scenario: Dictionary, difficulty: int, res
 	if previous != null:
 		remove_child(previous)
 		previous.queue_free()
+	if path_tracing != null:
+		path_tracing.register(campaign_view.camera, campaign_view.world, campaign_view.world.sun, campaign_view.world.environment)
 	cover.queue_free()
 	stage.hide()
 	stage.process_mode = Node.PROCESS_MODE_DISABLED

@@ -49,6 +49,9 @@ static var _files: Dictionary = {}
 static var _order: Array[String] = []
 static var _cached_bytes := 0
 static var _materials: Dictionary = {}
+## Brightness of glowing (additive) particles: above 1 they reach past white,
+## for bloom to pick up (path-traced lighting turns this on).
+static var glow_level := 1.0
 
 var profile: ELProfile
 var edition := ""
@@ -487,7 +490,7 @@ func _free_emitter() -> Dictionary:
 	node.visible = false
 	add_child(node)
 	var emitter := {"node": node, "mesh": mesh, "entry": {}, "elapsed": 0.0, "frame": -1, "life": 0, "reverse": false, "active": false, "follow": null, "following": false,
-		"where": Transform3D.IDENTITY, "track": PackedFloat32Array(), "opacity": 1.0, "own": null}
+		"where": Transform3D.IDENTITY, "track": PackedFloat32Array(), "opacity": 1.0, "own": null, "glow": []}
 	emitters.append(emitter)
 	return emitter
 
@@ -547,6 +550,7 @@ func _track_emitter(emitter: Dictionary, track: PackedFloat32Array) -> void:
 		own.render_priority = shared.render_priority
 		own.set_shader_parameter("atlas", shared.get_shader_parameter("atlas"))
 		own.set_shader_parameter("grid", shared.get_shader_parameter("grid"))
+		own.set_shader_parameter("glow", shared.get_shader_parameter("glow"))
 		emitter.node.material_override = own
 	emitter.opacity = -1.0
 	_apply_emitter_track(emitter, 0)
@@ -843,15 +847,210 @@ func _draw(emitter: Dictionary, frame: int) -> void:
 			_cached_bytes += joined.size() * 4
 		buffer = stored[0]
 		count = stored[1]
+		emitter.glow = _glow(cached, "c%d" % key, buffer, count)
 	else:
 		var at := (file.frames - 1 - frame) if emitter.reverse else frame
 		at = clampi(at, 0, file.frames - 1)
 		buffer = _frame(cached, at)
 		count = _count(file, at)
+		emitter.glow = _glow(cached, "f%d" % at, buffer, count)
 	var size := buffer.size() / 16
 	if mesh.instance_count != size: mesh.instance_count = size
 	mesh.buffer = buffer
 	mesh.visible_instance_count = count
+
+## Patch size and most patches a glowing frame is split into for lighting.
+const GLOW_PATCH := 1.5
+const GLOW_PATCHES := 6
+## Most light (brightest channel) one glowing system or effect model gives.
+const EMITTER_GLOW := 12.0
+
+## The light a glowing (additive) frame gives off, for traced lighting: a
+## soft source per patch of its particles, so a wall of fire lights along
+## its length: [[centre, extent, summed colour], ...], brightest first.
+## Kept per frame.
+static func _glow(cached: Dictionary, key: String, buffer: PackedFloat32Array, count: int) -> Array:
+	if count == 0: return []
+	var glows: Dictionary = cached.get("glows", {})
+	cached.glows = glows
+	if glows.has(key): return glows[key]
+	var patches := {}
+	for n in count:
+		var o := n * 16
+		var rgb := Vector3(buffer[o + 12], buffer[o + 13], buffer[o + 14]) * buffer[o + 15]
+		var w := rgb.x + rgb.y + rgb.z
+		if w <= 0.0001: continue
+		var p := Vector3(buffer[o + 3], buffer[o + 7], buffer[o + 11])
+		var cell := Vector3i((p / GLOW_PATCH).floor())
+		var patch: Array = patches.get(cell, [Vector3.ZERO, Vector3.ZERO, 0.0, 0.0])
+		patch[0] += p * w
+		patch[1] += rgb
+		patch[2] += w
+		patch[3] += p.length_squared() * w
+		patches[cell] = patch
+	var result := []
+	for patch: Array in patches.values():
+		var centre: Vector3 = patch[0] / patch[2]
+		var spread := sqrt(maxf(patch[3] / patch[2] - centre.length_squared(), 0.0))
+		result.append([centre, spread, patch[1]])
+	result.sort_custom(func(a, b): return a[2].length_squared() > b[2].length_squared())
+	if result.size() > GLOW_PATCHES:
+		# Light of the patches left out goes to the ones kept, nearest first.
+		for extra: Array in result.slice(GLOW_PATCHES):
+			var best := 0
+			for i in GLOW_PATCHES:
+				if result[i][0].distance_squared_to(extra[0]) < result[best][0].distance_squared_to(extra[0]): best = i
+			result[best][2] += extra[2]
+		result.resize(GLOW_PATCHES)
+	glows[key] = result
+	return result
+
+## Glowing particle systems now showing, for traced lighting:
+## [world centre, extent, summed colour times opacity] per patch.
+func glow_sources() -> Array:
+	var result := []
+	for emitter in emitters:
+		if not emitter.active or not emitter.node.is_visible_in_tree(): continue
+		var glow: Array = emitter.glow
+		if glow.is_empty(): continue
+		var node: MultiMeshInstance3D = emitter.node
+		var scale := node.global_transform.basis.get_scale()
+		var size := (scale.x + scale.y + scale.z) / 3.0
+		var atlas := (node.material_override as ShaderMaterial).get_shader_parameter("atlas") as Texture2D
+		# Blended (not additive) sprites glow only when they are flame-like:
+		# bright and strongly coloured, as fire is and smoke is not.
+		var tint := _atlas_tint(atlas) if emitter.entry.file.additive else _flame_colour(atlas)
+		if tint == Vector3.ZERO: continue
+		var opacity := clampf(float(emitter.opacity), 0.0, 1.0)
+		# However many patches it splits into, one system gives at most
+		# EMITTER_GLOW in all.
+		var lit := []
+		var total := 0.0
+		for patch: Array in glow:
+			var colour := _saturate(patch[2] * tint) * opacity
+			total += maxf(colour.x, maxf(colour.y, colour.z))
+			lit.append([node.global_transform * patch[0], patch[1] * size, colour])
+		var share := minf(1.0, EMITTER_GLOW / maxf(total, 0.0001))
+		for light: Array in lit:
+			light[2] *= share
+			result.append(light)
+	# Glowing (additive) effect models, such as a wall of fire: light from
+	# their bounds in proportion to their surface, split along their length.
+	for item in objects:
+		if not item.active or not item.add: continue
+		var model: ELModel = item.node
+		if not model.is_visible_in_tree(): continue
+		var colour := _saturate(_texture_glow((item.faded as StandardMaterial3D).albedo_texture)) * float(item.opacity)
+		if colour.length_squared() < 1e-6: continue
+		for part: MeshInstance3D in model.parts.values():
+			if part.mesh == null or not part.visible: continue
+			var box := part.global_transform * part.get_aabb()
+			var s := box.size
+			var axis := 0 if s.x >= s.y and s.x >= s.z else (1 if s.y >= s.z else 2)
+			var pieces := clampi(ceili(s[axis] / 2.0), 1, 4)
+			var area := (s.x * s.y + s.y * s.z + s.x * s.z) * OBJECT_GLOW / pieces
+			var step := Vector3.ZERO
+			step[axis] = s[axis] / pieces
+			var other := s
+			other[axis] = step[axis]
+			var extent := other.length() * 0.35
+			var piece := colour * area
+			var peak := maxf(piece.x, maxf(piece.y, piece.z)) * pieces
+			if peak > EMITTER_GLOW: piece *= EMITTER_GLOW / peak
+			for i in pieces:
+				result.append([box.position + step * (i + 0.5) + Vector3(s.x if axis != 0 else 0.0, s.y if axis != 1 else 0.0, s.z if axis != 2 else 0.0) * 0.5, extent, piece])
+	return result
+
+static var _flames: Dictionary = {}
+
+## The colour a blended sprite sheet glows with, or zero when it does not
+## look like flame (dim, or grey like smoke and dust): its average colour
+## where it is opaque.
+static func _flame_colour(atlas: Texture2D) -> Vector3:
+	if atlas == null: return Vector3.ZERO
+	if _flames.has(atlas): return _flames[atlas]
+	var result := Vector3.ZERO
+	var image := atlas.get_image()
+	if image != null:
+		image = image.duplicate()
+		if image.is_compressed(): image.decompress()
+		image.clear_mipmaps()
+		image.convert(Image.FORMAT_RGBA8)
+		image.resize(32, 32, Image.INTERPOLATE_BILINEAR)
+		var sum := Vector3.ZERO
+		var cover := 0.0
+		for y in 32:
+			for x in 32:
+				var c := image.get_pixel(x, y)
+				sum += Vector3(c.r, c.g, c.b) * c.a
+				cover += c.a
+		if cover > 0.0:
+			var average := sum / cover
+			var peak := maxf(average.x, maxf(average.y, average.z))
+			var low := minf(average.x, minf(average.y, average.z))
+			if peak > 0.45 and (peak - low) / peak > 0.4:
+				var linear := Color(average.x, average.y, average.z).srgb_to_linear()
+				result = Vector3(linear.r, linear.g, linear.b)
+	_flames[atlas] = result
+	return result
+
+## Light per square metre of a glowing effect model's surface, before the
+## texture's average colour.
+const OBJECT_GLOW := 2.0
+static var _texture_glows: Dictionary = {}
+
+## Average linear colour a glowing texture adds (colour times alpha).
+static func _texture_glow(texture: Texture2D) -> Vector3:
+	if texture == null: return Vector3.ZERO
+	if _texture_glows.has(texture): return _texture_glows[texture]
+	var image := texture.get_image()
+	var sum := Vector3.ZERO
+	if image != null:
+		image = image.duplicate()
+		if image.is_compressed(): image.decompress()
+		image.clear_mipmaps()
+		image.convert(Image.FORMAT_RGBA8)
+		image.resize(32, 32, Image.INTERPOLATE_BILINEAR)
+		for y in 32:
+			for x in 32:
+				var c := image.get_pixel(x, y).srgb_to_linear()
+				sum += Vector3(c.r, c.g, c.b) * c.a
+		sum /= 1024.0
+	_texture_glows[texture] = sum
+	return sum
+
+## Glow colours lean towards white where many bright sprites overlap; the
+## light they cast reads as the flame's colour, so its hue is deepened
+## (keeping its brightest channel).
+static func _saturate(colour: Vector3) -> Vector3:
+	var peak := maxf(colour.x, maxf(colour.y, colour.z))
+	if peak <= 0.0: return colour
+	var hue := colour / peak
+	return Vector3(hue.x * hue.x, hue.y * hue.y, hue.z * hue.z) * peak
+
+static var _tints: Dictionary = {}
+
+## Average linear colour a sprite sheet adds (colour times alpha).
+static func _atlas_tint(atlas: Texture2D) -> Vector3:
+	if atlas == null: return Vector3.ONE
+	if _tints.has(atlas): return _tints[atlas]
+	var image := atlas.get_image()
+	var tint := Vector3.ONE
+	if image != null:
+		image = image.duplicate()
+		if image.is_compressed(): image.decompress()
+		image.clear_mipmaps()
+		image.convert(Image.FORMAT_RGBA8)
+		image.resize(32, 32, Image.INTERPOLATE_BILINEAR)
+		var sum := Vector3.ZERO
+		for y in 32:
+			for x in 32:
+				var c := image.get_pixel(x, y).srgb_to_linear()
+				sum += Vector3(c.r, c.g, c.b) * c.a
+		# Hue only: how bright a system glows comes from its particles.
+		tint = sum / maxf(maxf(sum.x, sum.y), maxf(sum.z, 0.0001))
+	_tints[atlas] = tint
+	return tint
 
 static func _count(file: ELParticleFile, frame: int) -> int:
 	return file.starts[frame + 1] - file.starts[frame]
@@ -946,8 +1145,19 @@ static func _material(data: ELProfile, file: ELParticleFile) -> ShaderMaterial:
 	material.set_shader_parameter("atlas", texture)
 	material.set_shader_parameter("grid", Vector2(file.columns, file.rows))
 	material.render_priority = 10
+	material.set_shader_parameter("glow", glow_level if file.additive else 1.0)
 	_materials[key] = material
 	return material
+
+## Sets how bright glowing particles draw (see glow_level), running ones too.
+func set_glow(value: float) -> void:
+	glow_level = value
+	for key: String in _materials:
+		var material: ShaderMaterial = _materials[key]
+		if material != null and key.ends_with("|true"): material.set_shader_parameter("glow", value)
+	for emitter in emitters:
+		var own: ShaderMaterial = emitter.own
+		if own != null and not emitter.entry.is_empty() and emitter.entry.file.additive: own.set_shader_parameter("glow", value)
 
 ## Camera-facing quads; atlas cells and row order as ELAdventureEffects; the
 ## quad size follows ELParticleFile.SPRITE_SIZE_FUNCTION.
@@ -957,6 +1167,7 @@ render_mode unshaded, cull_disabled, depth_draw_never, shadows_disabled, BLEND;
 uniform sampler2D atlas : source_color, filter_linear_mipmap;
 uniform vec2 grid = vec2(1.0);
 uniform float opacity = 1.0;
+uniform float glow = 1.0;
 varying vec4 tint;
 SPRITE_SIZE_FUNCTION
 void vertex() {
@@ -972,7 +1183,7 @@ void vertex() {
 }
 void fragment() {
 	vec4 texel = texture(atlas, UV);
-	ALBEDO = texel.rgb * tint.rgb;
+	ALBEDO = texel.rgb * tint.rgb * glow;
 	ALPHA = texel.a * tint.a * opacity;
 }
 """

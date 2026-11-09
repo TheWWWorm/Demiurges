@@ -134,7 +134,7 @@ func _process(delta: float) -> void:
 	var cursor := get_local_mouse_position()
 	var content: Dictionary = describe.call(hovered, hovered.get_local_mouse_position()) if describe.is_valid() else {}
 	if content.is_empty():
-		var text := hovered.get_tooltip(hovered.get_local_mouse_position()).strip_edges()
+		var text := hovered.atr(hovered.get_tooltip(hovered.get_local_mouse_position())).strip_edges()
 		if text.is_empty():
 			if panel.visible: panel.hide()
 			_shown_key = ""

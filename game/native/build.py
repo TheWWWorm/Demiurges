@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
-"""Build the native installer decoder (el_lzma.c) for every exported platform.
+"""Build the native libraries for every exported platform: the installer
+decoder (el_lzma.c) and, on desktop, the local Discord activity link
+(el_discord.c).
 
   python3 native/build.py [--zig ZIG] [--ndk NDK] [linux windows macos android]
 
 Linux, Windows and macOS are cross-compiled with Zig (zig cc); Android with
-the Android NDK's clang. The libraries go to native/bin/, named as
-el_lzma.gdextension expects. The macOS library is universal (arm64 + x86_64).
+the Android NDK's clang. The libraries go to native/bin/, named as their
+.gdextension files expect. The macOS libraries are universal (arm64 + x86_64).
 Platforms whose compiler is missing are skipped with a message; the game then
-uses its GDScript decoder there.
+uses its GDScript decoder there and shows no Discord activity.
 """
 import argparse
 import os
@@ -19,8 +21,9 @@ import sys
 import tempfile
 
 HERE = Path(__file__).resolve().parent
-SOURCE = HERE / "el_lzma.c"
 BIN = HERE / "bin"
+# Each library and the platforms it is built for.
+LIBRARIES = {"el_lzma": ("linux", "windows", "macos", "android"), "el_discord": ("linux", "windows", "macos")}
 # Paths of the build machine are kept out of the libraries.
 FLAGS = ["-std=c11", "-O2", "-Wall", "-Wextra", "-Wno-cast-function-type", "-fvisibility=hidden", "-shared",
          f"-ffile-prefix-map={HERE}=native", "-g0"]
@@ -32,8 +35,8 @@ def run(cmd):
     subprocess.run([str(c) for c in cmd], check=True)
 
 
-def zig_cc(zig, target, output, extra=()):
-    run([zig, "cc", "-target", target, *FLAGS, *extra, "-o", output, SOURCE])
+def zig_cc(zig, target, output, name, extra=()):
+    run([zig, "cc", "-target", target, *FLAGS, *extra, "-o", output, HERE / f"{name}.c"])
 
 
 def fat_macho(slices, output):
@@ -54,35 +57,35 @@ def fat_macho(slices, output):
     Path(output).write_bytes(bytes(out))
 
 
-def linux(zig, ndk):
-    zig_cc(zig, "x86_64-linux-gnu.2.28", BIN / "libel_lzma.linux.x86_64.so", ["-fPIC", "-s"])
+def linux(zig, ndk, name):
+    zig_cc(zig, "x86_64-linux-gnu.2.28", BIN / f"lib{name}.linux.x86_64.so", name, ["-fPIC", "-s"])
 
 
-def windows(zig, ndk):
+def windows(zig, ndk, name):
     with tempfile.TemporaryDirectory() as tmp:
-        dll = Path(tmp) / "el_lzma.dll"
-        zig_cc(zig, "x86_64-windows-gnu", dll, ["-s"])
-        shutil.copy(dll, BIN / "el_lzma.windows.x86_64.dll")
+        dll = Path(tmp) / f"{name}.dll"
+        zig_cc(zig, "x86_64-windows-gnu", dll, name, ["-s"])
+        shutil.copy(dll, BIN / f"{name}.windows.x86_64.dll")
 
 
-def macos(zig, ndk):
+def macos(zig, ndk, name):
     with tempfile.TemporaryDirectory() as tmp:
         slices = []
         for arch in ("aarch64", "x86_64"):
             thin = Path(tmp) / f"{arch}.dylib"
-            zig_cc(zig, f"{arch}-macos.11.0", thin, ["-fPIC", "-s", "-Wl,-install_name,@rpath/libel_lzma.macos.dylib"])
+            zig_cc(zig, f"{arch}-macos.11.0", thin, name, ["-fPIC", "-s", f"-Wl,-install_name,@rpath/lib{name}.macos.dylib"])
             slices.append(thin)
-        fat_macho(slices, BIN / "libel_lzma.macos.dylib")
+        fat_macho(slices, BIN / f"lib{name}.macos.dylib")
 
 
-def android(zig, ndk):
+def android(zig, ndk, name):
     tools = Path(ndk) / "toolchains/llvm/prebuilt/linux-x86_64/bin"
     for arch, triple in (("arm64", "aarch64-linux-android"), ("x86_64", "x86_64-linux-android")):
         clang = tools / f"{triple}{ANDROID_API}-clang"
         if not clang.exists():
             raise FileNotFoundError(clang)
         # 16 KB pages: required by recent Android devices.
-        run([clang, *FLAGS, "-fPIC", "-s", "-Wl,-z,max-page-size=16384", "-o", BIN / f"libel_lzma.android.{arch}.so", SOURCE])
+        run([clang, *FLAGS, "-fPIC", "-s", "-Wl,-z,max-page-size=16384", "-o", BIN / f"lib{name}.android.{arch}.so", HERE / f"{name}.c"])
 
 
 PLATFORMS = {"linux": linux, "windows": windows, "macos": macos, "android": android}
@@ -102,7 +105,8 @@ def main():
             skipped.append(name)
             continue
         print(name)
-        PLATFORMS[name](args.zig, args.ndk)
+        for library, platforms in LIBRARIES.items():
+            if name in platforms: PLATFORMS[name](args.zig, args.ndk, library)
     for library in sorted(BIN.iterdir()):
         data = library.read_bytes()
         if str(HERE).encode() in data or b"/home/" in data or b"/tmp/" in data:

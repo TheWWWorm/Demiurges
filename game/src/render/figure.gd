@@ -57,6 +57,7 @@ static func mesh(figure: Dictionary, track: Dictionary = {}) -> ArrayMesh:
 	var mesh := ArrayMesh.new()
 	var arrays: Array = figure.arrays
 	var shapes := []
+	var positions: Array[PackedVector3Array] = []
 	var frames: int = track.get("morph_frames", 0)
 	var count: int = track.get("morph_vertices", 0)
 	if frames > 0 and count > 0:
@@ -74,10 +75,13 @@ static func mesh(figure: Dictionary, track: Dictionary = {}) -> ArrayMesh:
 			var shape := []
 			shape.resize(Mesh.ARRAY_MAX)
 			shape[Mesh.ARRAY_VERTEX] = vertices
+			positions.append(vertices)
 			shape[Mesh.ARRAY_NORMAL] = arrays[Mesh.ARRAY_NORMAL]
 			shapes.append(shape)
 			mesh.add_blend_shape("frame_%d" % frame)
 	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays, shapes)
+	# Each frame's whole vertex positions, for traced lighting.
+	if not positions.is_empty(): mesh.set_meta("morph_positions", positions)
 	return mesh
 
 static func hierarchy(bytes: PackedByteArray) -> Array:

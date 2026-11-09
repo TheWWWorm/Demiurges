@@ -284,7 +284,8 @@ func _home_shot() -> Dictionary:
 ## clip's length; sorcery: the instant clip's release frame).
 ##
 ## Sorcery that passes its effect's length (`length` seconds, plus `extra`)
-## shows no caster shot and holds the target shot length + extra + 1 s;
+## shows no caster shot and holds the target shot (or overview) over the
+## gesture up to its release frame, then length + extra + 1 s;
 ## `forced` (Comet's lethal hit on a hero) always shows the target shot.
 ## The summoned creature appears: its close-up (MonsterTrackTime long) after
 ## the caster shot, or cutting an overview short, then the way back. From the
@@ -362,10 +363,13 @@ func cast(kind: String, caster: int, hero: Vector3, targets: Array, local: bool,
 	var gate: int = counts.enchantment
 	var overview := gate > 1 and _roll(_odd(kind, "playfullscene"))
 	if (not hero_shot and not monster_shot) or flags.sides & 0x30 or flags.slots & 4: overview = true
+	# A sorcery's effect leaves the hero's hand at the gesture's release
+	# frame, so shots that follow the effect last through the gesture too.
+	var effect_shot := maxf(gesture, 0.0) + length + extra + 1.0 if kind == "sorcery" and length > 0.0 else -1.0
 	if overview:
-		return _queue([placed("OwnerMonstersAll_1.cmf", Vector3.ZERO, owner, false, gesture)], false)
+		return _queue([placed("OwnerMonstersAll_1.cmf", Vector3.ZERO, owner, false, effect_shot if effect_shot > 0.0 else gesture)], false)
 	var variant := ((n + 1) & 1) + 1
-	var stretch := _odd(kind, "monstertracktime") if kind == "enchantment" else (length + extra + 1.0 if length > 0.0 else -1.0)
+	var stretch := _odd(kind, "monstertracktime") if kind == "enchantment" else effect_shot
 	if hero_shot:
 		var caster_shot := placed(("InstantOwner%d_1.cmf" if kind == "sorcery" else "EnchantmentOwnerCaster%d_1.cmf") % variant, hero, caster, false, gesture)
 		# The spell's single target, when the caster's shot happens to show it.

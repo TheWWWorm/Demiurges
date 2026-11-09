@@ -64,6 +64,8 @@ const SUN_ROTATION := Vector3(-40, 120, 0)
 const SUN_ENERGY := 0.7
 const SHADOW_SUN_ENERGY := 0.4
 var sun: DirectionalLight3D
+## The map's ambient light and background.
+var environment: Environment
 ## Etherlords II colourless zones: the session whose level is shown.
 var colorless_session: ELAdventureSession
 var colorless_shown := -1
@@ -182,6 +184,7 @@ func build(source: ELAdventureMap, session: ELAdventureSession = null) -> bool:
 	env.ambient_light_energy = 0.7
 	environment.environment = env
 	add_child(environment)
+	self.environment = env
 	sun = DirectionalLight3D.new()
 	add_child(sun)
 	sun.light_energy = SUN_ENERGY
@@ -685,24 +688,27 @@ func _sync_blob(uid: int, present: bool) -> void:
 	slot["present"] = present
 	blobs.multimesh.set_instance_transform(slot.index, placed if present else Transform3D(Basis.from_scale(Vector3.ZERO), Vector3.ZERO))
 
-## The shadows setting hides or shows all ground blobs and, in the second
-## game, the silhouette shadows.
+## The shadows setting hides or shows all ground blobs and the silhouette
+## shadows.
 func set_blob_shadows(on: bool) -> void:
 	if blobs != null: blobs.visible = on
-	var silhouettes := on and map != null and map.profile.id == "el2"
+	var silhouettes := on and map != null and map.profile.id in ["el1", "el2"]
 	if sun != null:
 		sun.shadow_enabled = silhouettes
-		sun.light_energy = SHADOW_SUN_ENERGY if silhouettes else SUN_ENERGY
+		# Only the compatibility renderer's encoded sun pass needs the lower energy.
+		var encoded := silhouettes and RenderingServer.get_current_rendering_method() == "gl_compatibility"
+		sun.light_energy = SHADOW_SUN_ENERGY if encoded else SUN_ENERGY
 	var material := map.profile.adventure_terrain_cache.get("material") as ShaderMaterial if map != null and map.profile.adventure_terrain_cache.get("map") == map.id else null
 	if material != null: material.set_shader_parameter("shadow_strength", SILHOUETTE_STRENGTH if silhouettes else 0.0)
 
 ## Whether an object casts the original's silhouette shadow on the ground
-## (second game; recorded original footage shows them): every object that
-## does not draw a blob, including the volcanoes and rocks of ShadowType 0.
+## (recorded footage of both games shows them under trees, rocks and
+## buildings): every object that does not draw a blob, including the second
+## game's volcanoes and rocks of ShadowType 0.
 ## The original draws the silhouette on the ground only, so nothing else
 ## receives it.
 static func silhouette(edition: String, object: Dictionary, definition: Dictionary) -> bool:
-	return edition == "el2" and not blob_shadow(edition, object, definition)
+	return edition in ["el1", "el2"] and not blob_shadow(edition, object, definition)
 
 func _shade(node: GeometryInstance3D, casts: bool) -> void:
 	node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON if casts else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF

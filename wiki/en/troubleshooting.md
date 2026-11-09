@@ -8,7 +8,7 @@ Demiurges is still in development. These are the things you are most likely to n
 
 ## Known gaps
 
-- A few rare messages are still shown in English, mostly in the Duel editor and in error messages.
+- A few rare error messages and the battle log are still shown in English.
 - Computer opponents follow the original's approach but do not copy its decisions exactly. As in the original, they never answer alliance or trade offers.
 - The campaigns are tested screen by screen and system by system, not yet by playing every chapter from start to finish.
 - There is no network multiplayer. Local hot seat duels work.

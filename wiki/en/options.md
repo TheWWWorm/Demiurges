@@ -12,22 +12,38 @@ These work as in the games: autosave, faster map movement, animated objects, amb
 
 ## Remake settings
 
-**Remake settings…** on the Options screen holds the engine's own settings:
+**Remake settings…** on the Options screen (also in the battle's remake menu) holds the engine's own settings on three tabs. Like the rest of the remake's own screens, it is shown in the language of the game you play: Russian for a Russian copy, English otherwise.
+
+### Graphics
 
 | Setting | What it does |
 |---|---|
-| Music, Ambience, Effects | Volumes; Ambience is the sound of the adventure map. |
-| Shadows | Shadows of creatures and objects. |
-| Soft shadows | Smooths sun-shadow edges in battles and on Etherlords II maps. Off at first. |
-| Adventure weather effects | Weather on Etherlords II maps. |
-| Combat blood | Blood in battles. |
-| Map tooltips on hover | Etherlords II map tooltips without a right click. |
-| Movies | Off, original size or fit to the screen. |
+| Renderer | **Compatibility** (the default) runs on more computers. **Forward+ (Vulkan)** is needed for path tracing. **Restart now** restarts the game with the chosen renderer. |
+| Path-traced lighting | Real shadows, sky light, light bounced between surfaces, and light from fire and spells, on maps and in battles. Needs Forward+ and a graphics card with ray tracing. It costs about 2–3 ms a frame on a fast card. **F7** switches it during play. The line under it says whether your computer can use it. |
+| Show light only | Shows the traced light without textures (**Shift+F7**). |
 | Anti-aliasing | Smoother edges in 3D: automatic, off, 2× or 4×. |
 | Sharpening | Sharper 3D textures (not the interface): off, light or strong. |
+| Shadows | Shadows of figures in battles and of trees, rocks and buildings on maps. |
+| Soft shadows | Softer shadow edges. Off at first. |
 | Terrain detail | Subtle texture and relief on map ground and fine grain on battle ground. Off at first. |
-| Show remake helper overlay | English hints and shortcut buttons of the remake. Off at first. |
-| Export log… | Saves a log with system information for a [problem report](troubleshooting). |
-| Game files… | Adds, switches or removes a game: see [Installing the game files](installing). |
+| Map weather | Rain, snow and other weather on adventure maps. |
+| Combat blood | Blood in battles. |
 
-Leave the heavier settings (soft shadows, terrain detail, 4× anti-aliasing) off on devices where they slow the game down.
+### Audio
+
+| Setting | What it does |
+|---|---|
+| Music, Ambience, Effects | Volumes. Ambience is the remake's own background sound of maps and battles. |
+
+### Interface
+
+| Setting | What it does |
+|---|---|
+| Movies | Off, original size or fit to the screen. |
+| Map tooltips on hover | Etherlords II map tooltips without a right click. |
+| Remake helper overlay | The remake's readouts, hints and shortcut buttons over the original screens. Off at first. |
+| Discord activity | Shows in the Discord desktop app which game you play and whether you are in the menus, on a map or in a battle. Nothing else is shared. On at first. |
+
+At the bottom, **Export log…** saves a log with system information for a [problem report](troubleshooting), and **Game files…** adds, switches or removes a game: see [Installing the game files](installing).
+
+Leave the heavier settings (path tracing, soft shadows, terrain detail, 4× anti-aliasing) off on devices where they slow the game down.

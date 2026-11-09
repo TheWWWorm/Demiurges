@@ -2,6 +2,16 @@
 
 Versions follow [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html) from 0.3.0 on.
 
+## 0.4.0
+
+- Path-traced lighting (optional, Remake settings › Graphics): real shadows, sky light, light bounced between surfaces, and light from fire and spells that recolours the scene, on adventure maps and in battles. It needs the Forward+ (Vulkan) renderer and a graphics card with ray tracing, and costs about 2–3 ms a frame on a fast card. F7 switches it during play; Shift+F7 shows the light alone.
+- Remake settings has a new layout with Graphics, Audio and Interface tabs. It can switch the renderer between Compatibility and Forward+ (Vulkan) and restart the game with it, and it says whether path tracing works on this computer.
+- The remake's own screens are shown in the language of your game: Russian for a Russian copy, English otherwise. This covers Remake settings, the duel and campaign setup, the battle menu, the game files screen, the log export, the remake's map buttons and readouts, and its hints and messages.
+- Discord activity (Remake settings › Interface): the Discord desktop app shows which game you play and whether you are in the menus, on a map or in a battle. Nothing else is shared, and switching it off clears it. Windows, Linux and macOS.
+- Adventure maps: trees, rocks and buildings cast clearer shadows in both games without path tracing, as in the originals.
+- Battles: spells take effect when the caster releases them, not at the start of the gesture. «Электрошок» strikes after the cast, and «Огненная волна» damages creatures when the wave reaches them.
+- Battles: the camera follows a travelling spell such as «Огненная волна» over its targets instead of staying on the caster.
+
 ## 0.3.1
 
 - Battles: a blocking creature steps out to its front line as soon as it is told to block and turns to face its attacker, as in the originals. When combat starts it runs from there, instead of from home straight through its own hero.

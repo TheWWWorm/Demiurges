@@ -134,6 +134,8 @@ The folder keeps its earlier name, `Etherlords Duel`, so existing saves continue
 
 In **Remake settings**, **Terrain detail** adds subtle texture contrast and surface relief to adventure-map ground, and fine grain from the original detail textures to battle ground where available. **Soft shadows** smooths sun-shadow edges in battles and on Etherlords II maps. Both start off and can be changed during play; leave them off on devices where they reduce performance.
 
+**Path-traced lighting** (Remake settings › Graphics) adds real shadows, sky light, light bounced between surfaces and light from fire and spells, on maps and in battles. It needs the **Forward+ (Vulkan)** renderer, chosen on the same tab (the game restarts with it), and a graphics card with ray tracing. **F7** switches it during play. The remake's own screens are shown in the language of your game: Russian for a Russian copy, English otherwise.
+
 ## Building from source
 
 The engine source is in [`game`](game). Open it in [Godot 4.7](https://godotengine.org/) and press Play, or export it with the included presets.

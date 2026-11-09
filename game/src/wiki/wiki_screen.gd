@@ -97,6 +97,9 @@ static func remembered_language(hint := "") -> String:
 func _init() -> void:
 	instance = self
 	name = "WikiScreen"
+	# The wiki has its own language choice; the remake's translation of
+	# its screens stays out of it.
+	auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	mouse_filter = Control.MOUSE_FILTER_STOP

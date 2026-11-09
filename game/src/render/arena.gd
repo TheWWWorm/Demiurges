@@ -90,7 +90,8 @@ func build(profile: ELProfile, arena_id := "Green.001") -> bool:
 func _sync_light() -> void:
 	if environment_settings == null: return
 	var ambient := environment_settings.ambient_light_color * environment_settings.ambient_light_energy
-	var encoded := light != null and light.visible and light.shadow_enabled
+	# Only the Compatibility renderer adds a shadowed sun in a display-encoded pass.
+	var encoded := light != null and light.visible and light.shadow_enabled 		and RenderingServer.get_current_rendering_method() == "gl_compatibility"
 	ambient.a = light_limit + (1000.0 if encoded else 0.0)
 	if ambient == _ambient_seen: return
 	_ambient_seen = ambient
