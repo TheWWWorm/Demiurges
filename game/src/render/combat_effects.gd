@@ -62,6 +62,7 @@ static var _materials: Dictionary = {}
 ## Brightness of glowing (additive) particles: above 1 they reach past white,
 ## for bloom to pick up (path-traced lighting turns this on).
 static var glow_level := 1.0
+const ARENA_HDR_LIMIT := 1.12
 
 var profile: ELProfile
 var edition := ""
@@ -392,10 +393,11 @@ func _start_arena() -> void:
 		if at + 2 < positions.size():
 			where.origin = ELFigure.vector(Vector3(positions[at], positions[at + 1], positions[at + 2]))
 		if path.ends_with(".fx"):
-			var entry := definition(path.get_file().get_basename())
+			var name := path.get_file().get_basename()
+			var entry := definition(name)
 			for object: Dictionary in entry.get("objects", []):
 				var track: PackedFloat32Array = entry.tracks.get(object.track, PackedFloat32Array())
-				if not track.is_empty(): _spawn_object(object, track, where, true)
+				if not track.is_empty(): _spawn_object(object, track, where, true, name == "etherarena")
 		elif i < times.size() and float(times[i]) > 0.0:
 			_arena_random.append({"path": path, "where": where, "chance": ARENA_TICK / float(times[i]),
 				"sound": String(sounds[i]) if i < sounds.size() else ""})
@@ -564,7 +566,7 @@ func _spawn(path: String, reverse: bool, effect_frames: int, where: Transform3D,
 	var cached := _file(profile, path)
 	if cached.is_empty(): return {}
 	var file: ELParticleFile = cached.file
-	var material := _material(profile, file)
+	var material := _material(profile, file, ambient)
 	if material == null: return {}
 	if file.additive and not cached.has("glow_tints"):
 		var atlas := material.get_shader_parameter("atlas") as Texture2D
@@ -721,7 +723,7 @@ static func _key_transform(track: PackedFloat32Array, k: int) -> Transform3D:
 	var scale := Vector3(track[k + 7], track[k + 9], track[k + 8])
 	return Transform3D(basis.scaled_local(scale), ELFigure.vector(Vector3(track[k], track[k + 1], track[k + 2])))
 
-func _spawn_object(object: Dictionary, track: PackedFloat32Array, where: Transform3D, ambient := false) -> bool:
+func _spawn_object(object: Dictionary, track: PackedFloat32Array, where: Transform3D, ambient := false, ether_vent := false) -> bool:
 	var item := _free_object(object, arena_objects if ambient else objects, OBJECT_CACHE if ambient else OBJECT_POOL)
 	if item.is_empty():
 		if not ambient: dropped += 1
@@ -732,11 +734,13 @@ func _spawn_object(object: Dictionary, track: PackedFloat32Array, where: Transfo
 	item.frame = -1
 	item.life = track.size() / KEY
 	item.loop = ambient
+	item.ether_vent = ether_vent
 	item.opacity = -1.0
 	item.active = true
 	var model: ELModel = item.node
 	model.play("cidle")
 	_apply_object(item, 0)
+	if ether_vent: _set_vent_glow(item)
 	return true
 
 ## Cache common models and reuse spare entries before growing to the burst limit.
@@ -817,6 +821,8 @@ func _apply_object(item: Dictionary, frame: int) -> void:
 	var model: Node3D = item.node
 	model.transform = item.where * _key_transform(track, k)
 	var opacity := clampf(track[k + 10], 0.0, 1.0)
+	# Stay in the blended pass through the brightest key and across the loop.
+	if item.ether_vent: opacity = lerpf(0.24, 0.44, opacity)
 	model.visible = opacity > 0.004
 	if opacity == float(item.opacity): return
 	item.opacity = opacity
@@ -1391,8 +1397,9 @@ static func cached_files(data: ELProfile) -> int:
 		if key.begins_with(data.id + ":"): count += 1
 	return count
 
-static func _material(data: ELProfile, file: ELParticleFile) -> ShaderMaterial:
-	var key := "%s|%s|%s" % [data.id, file.texture.to_lower(), file.additive]
+static func _material(data: ELProfile, file: ELParticleFile, ambient: bool) -> ShaderMaterial:
+	var capped := ambient and file.additive
+	var key := "%s|%s|%s|%s" % [data.id, file.texture.to_lower(), "arena" if capped else "effect", file.additive]
 	if _materials.has(key): return _materials[key]
 	var name := file.texture.get_basename() if file.texture.to_lower().ends_with(".bmp") else file.texture
 	var texture := data.texture("Effects/" + name)
@@ -1406,7 +1413,8 @@ static func _material(data: ELProfile, file: ELParticleFile) -> ShaderMaterial:
 	material.set_shader_parameter("atlas", texture)
 	material.set_shader_parameter("grid", Vector2(file.columns, file.rows))
 	material.render_priority = 10
-	material.set_shader_parameter("glow", glow_level if file.additive else 1.0)
+	var glow := minf(glow_level, ARENA_HDR_LIMIT) if capped else glow_level
+	material.set_shader_parameter("glow", glow if file.additive else 1.0)
 	_materials[key] = material
 	return material
 
@@ -1415,10 +1423,21 @@ func set_glow(value: float) -> void:
 	glow_level = value
 	for key: String in _materials:
 		var material: ShaderMaterial = _materials[key]
-		if material != null and key.ends_with("|true"): material.set_shader_parameter("glow", value)
+		if material != null and key.ends_with("|true"):
+			material.set_shader_parameter("glow", minf(value, ARENA_HDR_LIMIT) if key.ends_with("|arena|true") else value)
 	for emitter in emitters:
 		var own: ShaderMaterial = emitter.own
 		if own != null and not emitter.entry.is_empty() and emitter.entry.file.additive: own.set_shader_parameter("glow", value)
+	for item: Dictionary in arena_objects:
+		if item.active and item.ether_vent: _set_vent_glow(item)
+
+## Only the hottest part of the flame crosses the bloom threshold.
+func _set_vent_glow(item: Dictionary) -> void:
+	var gain := 1.0 + (glow_level - 1.0) * 0.62
+	for variants: Array in item.magic_materials.values():
+		var source: Color = variants[0].albedo_color
+		var blend: StandardMaterial3D = variants[1]
+		blend.albedo_color = Color(source.r * gain, source.g * gain, source.b * gain, blend.albedo_color.a)
 
 ## Camera-facing quads; atlas cells and row order as ELAdventureEffects; the
 ## quad size follows ELParticleFile.SPRITE_SIZE_FUNCTION.

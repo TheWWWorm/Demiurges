@@ -365,17 +365,22 @@ void main() {
 	vec3 eye = frame.camera_position.xyz;
 	float distance_to_eye = length(world - eye);
 	vec3 view_direction = (world - eye) / max(distance_to_eye, 1e-4);
-	// Only surfaces of the traced scene are relit; effects, the painted
-	// backdrop and anything else keep their raster light.
-	// Match the raster face selection when a hidden wall lies in front of it.
-	Payload primary = closest(eye, view_direction, distance_to_eye * 1.03 + 0.1, RAY_SOLID, 0u, frame.counts.z > 0u, gl_RayFlagsCullBackFacingTrianglesEXT, false);
+	// Rasterization already resolved texture coverage and chose the visible
+	// surface. Look up its material at that depth so a cutout in front of it
+	// cannot leave an unlit silhouette around the model.
+	float tolerance = max(0.005, 0.0008 * distance_to_eye);
+	payload.shadow_ray = false;
+	payload.include_secondary = frame.counts.z > 0u;
+	traceRayEXT(scene, gl_RayFlagsCullBackFacingTrianglesEXT, RAY_SOLID, 0, 0, 0,
+		eye, max(distance_to_eye - tolerance, 0.0), view_direction, distance_to_eye + tolerance, 0);
+	Payload primary = payload;
 	if ((frame.info.w & 4u) != 0u) {
 		imageStore(light_out, pixel, vec4(float(primary.found), primary.found != 0u ? primary.distance / max(distance_to_eye, 0.001) * 0.5 : 0.0, distance_to_eye / 50.0, 1.0));
 		imageStore(guide_out, pixel, vec4(0.0, 0.0, 1.0, 1.0));
 		imageStore(primary_out, pixel, vec4(0.0));
 		return;
 	}
-	if (primary.found == 0u || abs(primary.distance - distance_to_eye) > 0.02 * distance_to_eye + 0.05) {
+	if (primary.found == 0u) {
 		imageStore(light_out, pixel, vec4(0.0));
 		imageStore(guide_out, pixel, vec4(0.0));
 		return;
@@ -391,9 +396,13 @@ void main() {
 	bool ground = (primary_look.geometry.z & SLOT_GROUND) != 0u;
 	imageStore(primary_out, pixel, vec4(surface_emission(primary_look, primary.uv, 0.0), ground ? 1.0 : 0.0));
 	if (frame.counts.z > 0u) imageStore(secondary_out, pixel, vec4(primary.secondary, 0.0));
-	if (dot(normal, view_direction) > 0.0) normal = -normal;
+	// A smoothed vertex normal can face away from the camera near a low-poly
+	// silhouette while still pointing out of its triangle. Flipping it there
+	// sends lighting rays into the model and draws a black rim.
+	vec3 geometric_normal = primary.normal;
+	if (dot(normal, geometric_normal) < 0.0) normal = -normal;
 	uint state = hash(uint(pixel.x) * 1973u + uint(pixel.y) * 9277u + frame.info.x * 26699u);
-	vec3 origin = world + normal * (0.02 + distance_to_eye * 0.001);
+	vec3 origin = eye + view_direction * primary.distance + geometric_normal * (0.02 + distance_to_eye * 0.001);
 
 	// Sun: soft shadow through a cone of the sun's angular size.
 	vec3 lighting = vec3(0.0);

@@ -2,6 +2,14 @@
 
 Versions follow [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html) from 0.3.0 on.
 
+## 0.6.2
+
+- Path tracing follows the hero's animated pose and visible cutout edges, removing the extra outlines around the rider and mount.
+- The Ship arena supports enhanced water and preserves the planks beneath its rails. Path-traced rigging and railings flicker less.
+- Ether arena vents loop without a bright flash. Bloom stays visible around bright effects with a tighter spread.
+- Etherlords II battle tooltips show hero and creature details on hover or right-click.
+- The battle Esc buttons have room for their labels, and the remake menu scrolls above the battle HUD.
+
 ## 0.6.1
 
 - Path-traced lighting respects transparent cutouts when tracing shadows from foliage and figures.

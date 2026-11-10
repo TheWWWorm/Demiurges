@@ -2,8 +2,8 @@ class_name ELCombatTooltip
 extends Control
 ## The battle screen's tooltips, drawn as the originals draw them: the
 ## Interface/black/ToolTip frame with bold italic text in the panel ink.
-## The second game shows them when the pointer rests on a control; the first
-## game only while the right button is held over it. Godot's own tooltip is
+## The second game shows them on hover or right click; the first game shows
+## them while the right button is held. Godot's own tooltip is
 ## kept invisible for the battle panel (`hidden_theme`) and its text is read
 ## from the hovered control, so every control keeps its tooltip_text.
 ##
@@ -35,14 +35,17 @@ const FIRST_FRAME := {"border": 5.0, "fill": Rect2(150, 50, 50, 50),
 
 var profile: ELProfile
 var panel: ELSecondMapTooltip
-## The control under the pointer and the seconds it has been there.
+## The control or figure under the pointer and the seconds it has been there.
 var subject: Control
+var figure_subject := -1
 var rest := 0.0
 ## Builds the content for a control: returns {} to fall back to its text.
 var describe: Callable
 var describe_figure: Callable
+var blocked: Callable
 var touch: ELTouchInput
 var _shown_key := ""
+var _right_clicked := false
 
 ## Bold Arial slanted, with the upright bold advances: the originals' tooltip
 ## lines are as wide as plain bold text of the same size.
@@ -117,38 +120,52 @@ static func place(edition: String, frame: Vector2, cursor: Vector2, screen: Vect
 
 func hide_tip() -> void:
 	subject = null
+	figure_subject = -1
 	rest = 0.0
 	_shown_key = ""
 	if panel != null: panel.hide()
 
+func _input(event: InputEvent) -> void:
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
+		_right_clicked = true
+
 func _process(delta: float) -> void:
+	var right_clicked := _right_clicked
+	_right_clicked = false
 	if panel == null or not is_visible_in_tree(): return
+	if blocked.is_valid() and blocked.call():
+		hide_tip()
+		return
 	var hovered := get_viewport().gui_get_hovered_control()
 	var first := profile != null and profile.id == "el1"
 	var touch_hold := touch != null and touch.holding()
-	if first and not (Input.is_mouse_button_pressed(MOUSE_BUTTON_RIGHT) or touch_hold):
+	var inspecting := Input.is_mouse_button_pressed(MOUSE_BUTTON_RIGHT) or touch_hold
+	if first and not inspecting:
 		hide_tip()
 		return
-	var figure := first and hovered == null and describe_figure.is_valid()
-	if not figure and (hovered == null or not _owns(hovered)):
+	if hovered != null and not _owns(hovered):
 		hide_tip()
 		return
-	if hovered != subject:
+	var point := touch.hold_position() if touch_hold else get_viewport().get_mouse_position()
+	var figure := hovered == null
+	var content: Dictionary = describe_figure.call(point) if figure and describe_figure.is_valid() else {}
+	var id := int(content.get("figure_id", -1))
+	if figure and id < 0:
+		hide_tip()
+		return
+	if hovered != subject or id != figure_subject:
 		hide_tip()
 		subject = hovered
+		figure_subject = id
 	rest += delta
-	if not first and rest < DELAY: return
-	var point := touch.hold_position() if touch_hold else get_viewport().get_mouse_position()
+	if inspecting or right_clicked: rest = maxf(rest, DELAY)
+	if rest < DELAY: return
 	var cursor := get_global_transform_with_canvas().affine_inverse() * point
-	var content: Dictionary = describe_figure.call(point) if figure else {}
 	var at := Vector2.ZERO
 	if not figure: at = hovered.get_global_transform_with_canvas().affine_inverse() * point
 	if not figure and describe.is_valid():
 		content = describe.call(hovered, at)
 	if content.is_empty():
-		if figure:
-			hide_tip()
-			return
 		var text := hovered.atr(hovered.get_tooltip(at)).strip_edges()
 		if text.is_empty():
 			if panel.visible: panel.hide()
@@ -158,7 +175,7 @@ func _process(delta: float) -> void:
 	var key := str(content.hash())
 	if key != _shown_key:
 		_shown_key = key
-		panel.set_content(0 if figure else hovered.get_instance_id(), content)
+		panel.set_content(-1 - id if figure else hovered.get_instance_id(), content)
 		_centre_titles(content)
 	panel.position = place(profile.id if profile != null else "el2", panel.size, cursor, size)
 	if not panel.visible:

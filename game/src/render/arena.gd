@@ -3,6 +3,7 @@ extends Node3D
 
 var objects_loaded := 0
 var errors: Array[String] = []
+var scene_id := ""
 var definition: Dictionary
 var moving_layers: Array[StandardMaterial3D] = []
 var layer_speeds: Array[float] = []
@@ -11,6 +12,10 @@ var light: DirectionalLight3D
 var environment_settings: Environment
 var _profile: ELProfile
 var _ground: ELModel
+var _sea: MeshInstance3D
+var _ship_surface: MeshInstance3D
+var _ship_original_mesh: Mesh
+var _ship_deck_mesh: ArrayMesh
 var _ground_materials: Dictionary = {}
 var _detail_materials: Dictionary = {}
 var _secondary_overlays: Dictionary = {}
@@ -28,6 +33,7 @@ const LIT_SHADER := preload("res://src/render/arena_lit.gdshader")
 const LIT_BLEND_SHADER := preload("res://src/render/arena_lit_blend.gdshader")
 const SECONDARY_SHADER := preload("res://src/render/arena_secondary.gdshader")
 const BACKDROP_SHADER :=preload("res://src/render/arena_backdrop.gdshader")
+const SEA_SHADER := preload("res://src/render/arena_sea.gdshader")
 ## The original cutout pass accepts alpha bytes greater than 200.
 const MASKED_ALPHA_CUTOFF := 201.0 / 255.0
 var _lit: Dictionary = {}
@@ -42,6 +48,7 @@ static func title(id: String) -> String:
 
 func build(profile: ELProfile, arena_id := "Green.001") -> bool:
 	_profile = profile
+	scene_id = arena_id
 	definition = profile.table("CombatSceneDB").get(arena_id, {})
 	if definition.is_empty():
 		errors.append("Missing arena " + arena_id)
@@ -97,8 +104,61 @@ func build(profile: ELProfile, arena_id := "Green.001") -> bool:
 	var toward := ELFigure.vector(Vector3(direction[0], direction[1], direction[2])).normalized()
 	if toward.y > 0.0: toward = -toward
 	light.look_at_from_position(-toward * 10.0, Vector3.ZERO, Vector3.UP if absf(toward.y) < 0.99 else Vector3.FORWARD)
+	if arena_id == "Ship.001": _build_sea(-toward)
 	_sync_light()
 	return errors.is_empty()
+
+## Ship's flat surface combines the deck with the sea. Most of the sea uses
+## a planar atlas mapping, while the planks have bespoke UVs.
+func _build_sea(sun_direction: Vector3) -> void:
+	if _ground == null: return
+	var part := _ground.parts.get("surface") as MeshInstance3D
+	if part == null or part.mesh == null: return
+	var texture := part.get_meta("albedo", null) as Texture2D
+	if texture == null: return
+	var arrays := part.mesh.surface_get_arrays(0)
+	var vertices: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+	var uvs: PackedVector2Array = arrays[Mesh.ARRAY_TEX_UV]
+	var indices: PackedInt32Array = arrays[Mesh.ARRAY_INDEX]
+	var deck := PackedInt32Array()
+	var water := PackedInt32Array()
+	for i in range(0, indices.size(), 3):
+		var sea_triangle := true
+		var centre_z := 0.0
+		for j in range(i, i + 3):
+			var vertex := vertices[indices[j]]
+			centre_z += vertex.z / 3.0
+			var projected := Vector2(0.500163, 0.5) - Vector2(vertex.z, vertex.x) * 0.0171833
+			sea_triangle = sea_triangle and projected.distance_squared_to(uvs[indices[j]]) <= 0.0001 * 0.0001
+		# The strip either side of the hull uses different UVs. The sea shader
+		# keeps its wood texels under the rails and replaces the open water.
+		if sea_triangle or absf(centre_z - 0.0095) > 10.0: water.append_array(indices.slice(i, i + 3))
+		else: deck.append_array(indices.slice(i, i + 3))
+	if deck.is_empty() or water.is_empty(): return
+	_ship_surface = part
+	_ship_original_mesh = part.mesh
+	_ship_deck_mesh = ArrayMesh.new()
+	arrays[Mesh.ARRAY_INDEX] = deck
+	_ship_deck_mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	var sea_mesh := ArrayMesh.new()
+	arrays[Mesh.ARRAY_INDEX] = water
+	sea_mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	_sea = MeshInstance3D.new()
+	_sea.mesh = sea_mesh
+	_sea.transform = part.transform
+	_sea.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	var material := ShaderMaterial.new()
+	material.shader = SEA_SHADER
+	material.set_shader_parameter("sun_direction", sun_direction)
+	material.set_shader_parameter("ship_atlas", texture)
+	_sea.material_override = material
+	_ground.add_child(_sea)
+	set_water(false)
+
+func set_water(enabled: bool) -> void:
+	if _sea == null: return
+	_ship_surface.mesh = _ship_deck_mesh if enabled else _ship_original_mesh
+	_sea.visible = enabled
 
 func is_surface(model: ELModel) -> bool:
 	return model == _ground

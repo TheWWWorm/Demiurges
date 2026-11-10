@@ -458,6 +458,7 @@ func _start(edition: String, options: Dictionary = {}, restored: ELDuel = null, 
 	arena.light.shadow_enabled = settings.values.shadows
 	arena.light.shadow_blur = 2.0 if settings.values.soft_shadows else 1.0
 	arena.set_detail(bool(settings.values.terrain_detail))
+	arena.set_water(bool(settings.values.enhanced_water))
 	blood = ELCombatBlood.new()
 	stage.add_child(blood)
 	blood.build(profile, arena, battle_seed, edition)
@@ -829,15 +830,21 @@ func _unhandled_input(event: InputEvent) -> void:
 			if event.double_click and nearest >= 2 and duel.phase == ELDuel.Phase.ATTACK and selection < 0 and ability_selection.is_empty():
 				if not duel.toggle_attack(nearest): _hint(duel.error)
 
-## The hero or creature drawn nearest a screen point (within 65 px), or -1.
-func _character_at(at: Vector2) -> int:
+## The nearest hero or creature. Inspection follows the full posed height.
+func _character_at(at: Vector2, inspect := false) -> int:
 	var nearest := -1
-	var distance := 65.0
+	var distance := 34.0 if inspect else 65.0
 	if duel == null or camera == null: return nearest
 	for id: int in models:
 		if id >= 2 and not duel.creatures.has(id):
 			continue
-		var point := camera.unproject_position(models[id].position + Vector3(0, 0.7, 0))
+		var model: ELModel = models[id]
+		if not model.is_visible_in_tree() or camera.is_position_behind(model.global_position): continue
+		var point := camera.unproject_position(model.global_position + Vector3(0, 0.7, 0))
+		if inspect:
+			var feet := camera.unproject_position(model.global_position)
+			var head := camera.unproject_position(model.global_position + Vector3.UP * _figure_height(model))
+			point = Geometry2D.get_closest_point_to_segment(at, feet, head)
 		var d := point.distance_to(at)
 		if d < distance:
 			distance = d
@@ -4164,29 +4171,42 @@ func _tip_content(control: Control, at: Vector2) -> Dictionary:
 	if duel == null or profile == null: return {}
 	if control.has_meta("hero_side"):
 		var side := int(control.get_meta("hero_side"))
-		var h: Dictionary = duel.heroes[side]
-		var displayed := _displayed_side()
-		var own := side == displayed
+		var own := side == _displayed_side()
 		# The value boxes under the portrait name their own value.
 		if at.y >= control.size.y - 22:
 			var index := clampi(int(at.x / (control.size.x / 3.0)), 0, 2)
 			return ELCombatTooltip.text_content(_control_tip("CombatTt%d" % ([1, 3, 5] if own else [2, 4, 6])[index]))
 		if at.y > 60: return {}
-		var title := _original_text(("CtrlDUMyHero" if own else "CtrlDUEnemyHero") if profile.id == "el1" else ("CtrlDuMyHero" if own else "CtrlDuEnemyHero"), _side_name(side))
-		var health := "%s: %d" % [_original_text("CtrlTTCombatTt1" if profile.id == "el2" else "CtrlTtCombatTt1", "Health"), int(h.health)]
-		var level := "%s: %d" % [_original_text("T_LEVEL", "Level"), int(h.get("level", 1))]
-		var lines: Array = [level, health] if profile.id == "el1" else [health, level]
-		if helper_overlay(): lines.append_array(control.atr(control.tooltip_text).split("\n"))
-		return ELCombatTooltip.hero_content(profile.id, portraits[side].texture, title, lines)
+		return _hero_tip(side, control)
 	return {}
 
+func _hero_tip(side: int, control: Control = null) -> Dictionary:
+	var hero: Dictionary = duel.heroes[side]
+	var own := side == _displayed_side()
+	var role := ("CtrlDUMyHero" if own else "CtrlDUEnemyHero") if profile.id == "el1" else ("CtrlDuMyHero" if own else "CtrlDuEnemyHero")
+	var title := _original_text(role, _side_name(side)) if control != null else _side_name(side)
+	var health := "%s: %d" % [_original_text("CtrlTTCombatTt1" if profile.id == "el2" else "CtrlTtCombatTt1", "Health"), int(hero.health)]
+	var level := "%s: %d" % [_original_text("T_LEVEL", "Level"), int(hero.get("level", 1))]
+	var lines: Array = [level, health] if profile.id == "el1" else [health, level]
+	if control != null and helper_overlay(): lines.append_array(control.atr(control.tooltip_text).split("\n"))
+	return ELCombatTooltip.hero_content(profile.id, portraits[side].texture, title, lines)
+
 func _figure_tip(at: Vector2) -> Dictionary:
-	if duel == null or _overlay_open() or orbiting: return {}
-	var id := _character_at(at)
-	if id < 2: return {}
-	var creature := duel.entity(id)
-	if creature.is_empty(): return {}
-	return ELCombatTooltip.text_content(card_tooltip(str(creature.card)))
+	if duel == null or orbiting or (_hot_seat() and hot_pending): return {}
+	var id := _character_at(at, true)
+	if id < 0: return {}
+	var content: Dictionary
+	if id < 2:
+		content = _hero_tip(id)
+	else:
+		var creature := duel.entity(id)
+		var card := str(creature.card)
+		var label := "%s %d/%d" % [duel.card_name(card), int(creature.power), maxi(0, int(creature.toughness) - int(creature.damage))]
+		var description := profile.card_description(card)
+		if not description.is_empty() and description != card: label += "\n" + description
+		content = ELCombatTooltip.text_content(label)
+	content.figure_id = id
+	return content
 
 ## An original control's tooltip text from the Controls table, else "".
 func _control_tip(control: String) -> String:
@@ -4291,9 +4311,21 @@ func _build_ui() -> void:
 	menu.grow_horizontal = Control.GROW_DIRECTION_BEGIN
 	menu.add_theme_stylebox_override("panel", _style(Color("111710f5")))
 	menu.visible = false
+	menu.visibility_changed.connect(func():
+		if menu.visible: menu.move_to_front())
+	var menu_scroll := ScrollContainer.new()
+	menu_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	menu_scroll.follow_focus = true
+	menu.add_child(menu_scroll)
 	var menu_rows := VBoxContainer.new()
+	menu_rows.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	menu_rows.add_theme_constant_override("separation", 8)
-	menu.add_child(menu_rows)
+	menu_scroll.add_child(menu_rows)
+	var fit_menu := func():
+		var height := menu_rows.get_combined_minimum_size().y + menu.get_theme_stylebox("panel").get_minimum_size().y
+		menu.offset_bottom = minf(menu.offset_top + height, ui.size.y - 16.0)
+	ui.resized.connect(fit_menu)
+	menu_rows.minimum_size_changed.connect(fit_menu, CONNECT_DEFERRED)
 	menu_rows.add_child(_label("DUEL", 20, ACCENT))
 	profile_select = OptionButton.new()
 	profile_select.add_item("Etherlords I", 0)
@@ -4470,6 +4502,7 @@ func _build_ui() -> void:
 	combat_tip = ELCombatTooltip.new()
 	combat_tip.describe = _tip_content
 	combat_tip.describe_figure = _figure_tip
+	combat_tip.blocked = func() -> bool: return _overlay_open() or orbiting
 	combat_tip.touch = touch_input
 	hud_root.add_child(combat_tip)
 	ui.resized.connect(_layout_hud)
@@ -4684,8 +4717,9 @@ func _graphics_page(page: VBoxContainer) -> void:
 	enhanced_water.button_pressed = settings.values.enhanced_water
 	enhanced_water.toggled.connect(func(enabled: bool):
 		settings.values.enhanced_water = enabled
+		if is_instance_valid(arena): arena.set_water(enabled)
 		if campaign_view != null: campaign_view.apply_settings())
-	_settings_row(scene, "Enhanced water", "Adds reflections, ripples, shoreline foam and rain rings to adventure map water.", enhanced_water)
+	_settings_row(scene, "Enhanced water", "Adds reflections, ripples, shoreline foam and rain rings to map water, and animated waves to the Ship arena.", enhanced_water)
 	var weather := CheckButton.new()
 	weather.name = "Weather"
 	weather.button_pressed = settings.values.weather
@@ -4983,6 +5017,7 @@ func _apply_settings() -> void:
 		arena.light.shadow_enabled = settings.values.shadows
 		arena.light.shadow_blur = 2.0 if settings.values.soft_shadows else 1.0
 		arena.set_detail(bool(settings.values.terrain_detail))
+		arena.set_water(bool(settings.values.enhanced_water))
 	if is_instance_valid(blood): blood.set_enabled(bool(settings.values.blood))
 	_preview_volumes(settings.values)
 	if campaign_view != null: campaign_view.apply_settings()
@@ -5613,13 +5648,13 @@ func _right_button(event: InputEvent) -> void:
 		right_down = event.pressed
 		right_from = event.position
 		orbiting = false
-		_set_strip_preview(combat_hover if event.pressed else -1)
+		_set_strip_preview(_character_at(event.position, true) if event.pressed else -1)
 	elif event is InputEventMouseMotion and right_down:
 		if not orbiting and event.position.distance_to(right_from) > 6.0:
 			orbiting = true
 			_set_strip_preview(-1)
 		elif not orbiting:
-			_set_strip_preview(combat_hover)
+			_set_strip_preview(_character_at(event.position, true))
 
 func _set_strip_preview(id: int) -> void:
 	if id == strip_preview: return

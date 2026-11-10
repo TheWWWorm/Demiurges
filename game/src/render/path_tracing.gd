@@ -40,9 +40,10 @@ const GLOW_LIMIT := 10.0
 const GLOW_REACH := 8.0
 ## Bloom while tracing: glowing particles draw this much brighter, and only
 ## what passes white blooms, so daylit scenery stays as it was.
-const EFFECT_HDR := 2.5
+const EFFECT_HDR := 1.8
 const BLOOM_THRESHOLD := 1.0
-const BLOOM_INTENSITY := 0.9
+const BLOOM_INTENSITY := 0.52
+const BLOOM_LEVELS := [0.0, 0.8, 0.35, 0.1, 0.0, 0.0, 0.0]
 ## Scene membership is re-read this often (seconds).
 const SCAN_INTERVAL := 0.5
 
@@ -72,7 +73,7 @@ var _scan := 0.0
 var _label: Label
 var _label_time := 0.0
 # Main-thread snapshot state, cleared together with the GPU side on a reset.
-var _slots := {}          # node id -> {mesh, frame, look, flags}
+var _slots := {}          # node id -> {mesh, pose, look, flags}
 var _layers := {}         # [texture, solid] -> [layer, has alpha]
 var _next_layer := 0
 var _mesh_data := {}      # Mesh -> {vertex, index, uv}
@@ -208,7 +209,7 @@ func _activate() -> void:
 		_saved_msaa = viewport.msaa_3d
 		_saved_aa = viewport.screen_space_aa
 	viewport.msaa_3d = Viewport.MSAA_DISABLED
-	viewport.screen_space_aa = Viewport.SCREEN_SPACE_AA_FXAA
+	viewport.screen_space_aa = _traced_antialiasing()
 	if is_instance_valid(_sun):
 		_sun.set_meta("traced_shadow", _sun.shadow_enabled)
 		_sun.shadow_enabled = false
@@ -226,8 +227,14 @@ func display_applied() -> void:
 	_saved_msaa = viewport.msaa_3d
 	_saved_aa = viewport.screen_space_aa
 	viewport.msaa_3d = Viewport.MSAA_DISABLED
-	viewport.screen_space_aa = Viewport.SCREEN_SPACE_AA_FXAA
+	viewport.screen_space_aa = _traced_antialiasing()
 	_effect.history_reset = true
+
+func _traced_antialiasing() -> Viewport.ScreenSpaceAA:
+	# Small changes in traced light make post AA switch abruptly between the
+	# bright wood and the dark sides of Ship's thin rigging and railings.
+	if is_instance_valid(_arena) and _arena.scene_id == "Ship.001": return Viewport.SCREEN_SPACE_AA_DISABLED
+	return Viewport.SCREEN_SPACE_AA_FXAA
 
 func _deactivate() -> void:
 	if not _active: return
@@ -296,11 +303,16 @@ func _snapshot(delta: float) -> void:
 				look.flags |= SURFACE_ARENA_SCENERY
 			var mesh: Mesh = node.mesh
 			var frame := -1
+			var next_frame := -1
+			var weight := 0.0
 			var pair: Array = morphs.get(part_name, [])
 			if pair.size() == 2 and mesh.has_meta("morph_positions"):
-				frame = pair[1] if node.get_blend_shape_value(pair[1]) > 0.5 else pair[0]
+				frame = pair[0]
+				if pair[1] != frame:
+					next_frame = pair[1]
+					weight = node.get_blend_shape_value(next_frame)
 			var id := node.get_instance_id()
-			if not _update_slot(ops, id, mesh, frame, look): continue
+			if not _update_slot(ops, id, mesh, frame, look, next_frame, weight): continue
 			live[id] = true
 			instances.append([id, node.global_transform])
 	for id: int in _slots.keys():
@@ -321,9 +333,9 @@ func _snapshot(delta: float) -> void:
 		"ambient": Vector4(ambient.r, ambient.g, ambient.b, _arena.light_limit if _arena != null else 1000.0),
 		"lighting_view": lighting_view})
 
-## Defines a slot for a node's mesh (and the morph frame it shows) when new or
+## Defines a slot for a node's mesh (and the morph pose it shows) when new or
 ## changed. False when the mesh has nothing to trace.
-func _update_slot(ops: Array, id: int, mesh: Mesh, frame: int, look: Dictionary) -> bool:
+func _update_slot(ops: Array, id: int, mesh: Mesh, frame: int, look: Dictionary, next_frame := -1, weight := 0.0) -> bool:
 	var data := _arrays(mesh)
 	if data.is_empty(): return false
 	var vertices: PackedVector3Array = data.vertex
@@ -341,16 +353,22 @@ func _update_slot(ops: Array, id: int, mesh: Mesh, frame: int, look: Dictionary)
 			if (flags & SURFACE_ARENA_SCENERY) != 0:
 				normals = _secondary_corner_normals(mesh, data.index)
 			ops.append(["define", id, vertices.size(), data.index.to_byte_array(), data.uv.to_byte_array(), normals])
-			slot = {"frame": -2}
+			slot = {}
 		ops.append(["material", id, record])
 		slot.look = look
 		slot.flags = flags
 		slot.mesh = mesh
 		_slots[id] = slot
-	if slot.frame != frame:
+	var pose := Vector3(frame, next_frame, weight)
+	if slot.get("pose") != pose:
 		var positions: PackedVector3Array = vertices if frame < 0 else mesh.get_meta("morph_positions")[frame]
+		if next_frame >= 0 and weight > 0.0:
+			# Match the raster mesh's normalized blend between the two frames.
+			var next: PackedVector3Array = mesh.get_meta("morph_positions")[next_frame]
+			positions = positions.duplicate()
+			for i in positions.size(): positions[i] = positions[i].lerp(next[i], weight)
 		ops.append(["pose", id, positions.to_byte_array()])
-		slot.frame = frame
+		slot.pose = pose
 	return true
 
 static func _secondary_corner_normals(mesh: Mesh, indices: PackedInt32Array) -> PackedByteArray:
@@ -531,13 +549,15 @@ func _bloom(on: bool) -> void:
 	var env := _env
 	if on:
 		if not env.has_meta("bloom_saved"):
-			env.set_meta("bloom_saved", [env.glow_enabled, env.glow_hdr_threshold, env.glow_intensity, env.glow_blend_mode, env.glow_bloom])
+			var levels := PackedFloat32Array()
+			for level in BLOOM_LEVELS.size(): levels.append(env.get_glow_level(level))
+			env.set_meta("bloom_saved", [env.glow_enabled, env.glow_hdr_threshold, env.glow_intensity, env.glow_blend_mode, env.glow_bloom, levels])
 		env.glow_enabled = true
 		env.glow_hdr_threshold = BLOOM_THRESHOLD
 		env.glow_intensity = BLOOM_INTENSITY
 		env.glow_bloom = 0.0
 		env.glow_blend_mode = Environment.GLOW_BLEND_MODE_ADDITIVE
-		for level in 7: env.set_glow_level(level, 1.0 if level in [1, 2, 3, 4] else 0.0)
+		for level in BLOOM_LEVELS.size(): env.set_glow_level(level, BLOOM_LEVELS[level])
 	elif env.has_meta("bloom_saved"):
 		var saved: Array = env.get_meta("bloom_saved")
 		env.glow_enabled = saved[0]
@@ -545,6 +565,7 @@ func _bloom(on: bool) -> void:
 		env.glow_intensity = saved[2]
 		env.glow_blend_mode = saved[3]
 		env.glow_bloom = saved[4]
+		for level in BLOOM_LEVELS.size(): env.set_glow_level(level, saved[5][level])
 		env.remove_meta("bloom_saved")
 
 func _restore_effect_lights() -> void:

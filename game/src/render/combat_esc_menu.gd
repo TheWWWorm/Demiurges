@@ -32,6 +32,7 @@ var canvas: Control
 var art: Control
 var header: Label
 var remake_button: Button
+var _footer: HBoxContainer
 var buttons: Dictionary = {}
 var serif: Font
 var serif_bold: Font
@@ -109,27 +110,26 @@ func build(source: ELProfile) -> bool:
 	_connect("EscOptions", options_requested)
 	_connect("EscExitMM", exit_requested)
 	_connect("EscExitWin", quit_requested)
+	_footer = HBoxContainer.new()
+	_footer.add_theme_constant_override("separation", 10)
+	canvas.add_child(_footer)
 	# Remake-only: the remake battle menu (editions, practice setup, saves...).
 	remake_button = Button.new()
-	remake_button.text = "Remake menu…"
+	remake_button.text = ELRemakeText.t("Remake menu…", profile)
 	remake_button.focus_mode = Control.FOCUS_NONE
 	remake_button.add_theme_font_size_override("font_size", 15)
-	remake_button.tooltip_text = "The remake's own battle menu."
-	var panel := control_rect(PANEL)
-	var centre := panel.get_center().x
-	remake_button.position = Vector2(centre - 270, panel.end.y + 10)
-	remake_button.size = Vector2(140, 30)
+	remake_button.tooltip_text = ELRemakeText.t("The remake's own battle menu.", profile)
+	remake_button.custom_minimum_size = Vector2(140, 30)
 	remake_button.pressed.connect(func(): remake_menu_requested.emit())
-	canvas.add_child(remake_button)
+	_footer.add_child(remake_button)
 	var settings := Button.new()
 	settings.name = "RemakeSettings"
 	settings.text = ELRemakeText.t("Remake settings…", profile)
 	settings.focus_mode = Control.FOCUS_NONE
 	settings.add_theme_font_size_override("font_size", 15)
-	settings.position = Vector2(centre - 120, panel.end.y + 10)
-	settings.size = Vector2(240, 30)
+	settings.custom_minimum_size = Vector2(240, 30)
 	settings.pressed.connect(func(): remake_settings_requested.emit())
-	canvas.add_child(settings)
+	_footer.add_child(settings)
 	# Remake-only: the wiki over the battle (also F1).
 	var wiki := Button.new()
 	wiki.name = "Wiki"
@@ -138,10 +138,10 @@ func build(source: ELProfile) -> bool:
 	wiki.tooltip_text = "Правила боя и управление" if russian else "Combat rules and controls."
 	wiki.focus_mode = Control.FOCUS_NONE
 	wiki.add_theme_font_size_override("font_size", 15)
-	wiki.position = Vector2(centre + 130, panel.end.y + 10)
-	wiki.size = Vector2(140, 30)
+	wiki.custom_minimum_size = Vector2(140, 30)
 	wiki.pressed.connect(func(): ELWikiScreen.open(self, "combat", header.text))
-	canvas.add_child(wiki)
+	_footer.add_child(wiki)
+	_footer.minimum_size_changed.connect(_layout, CONNECT_DEFERRED)
 	resized.connect(_layout)
 	_layout()
 	hide()
@@ -162,6 +162,9 @@ func _layout() -> void:
 	var scale_factor := minf(size.x / DESIGN.x, size.y / DESIGN.y)
 	canvas.scale = Vector2(scale_factor, scale_factor)
 	canvas.position = ((size - DESIGN * scale_factor) * 0.5).floor()
+	var panel := control_rect(PANEL)
+	_footer.size = _footer.get_combined_minimum_size()
+	_footer.position = Vector2(panel.get_center().x - _footer.size.x * 0.5, panel.end.y + 10)
 	queue_redraw()
 
 func _draw() -> void:

@@ -65,27 +65,7 @@ vec3 to_linear(vec3 c) {
 	return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), step(vec3(0.04045), c));
 }
 
-vec3 ripple_corner(vec2 lattice, vec2 offset) {
-	vec3 seed = fract(lattice.xyx * vec3(0.1031, 0.1030, 0.0973));
-	seed += dot(seed, seed.yzx + 33.33);
-	vec2 gradient = 2.0 * fract((seed.xx + seed.yz) * seed.zy) - 1.0;
-	float falloff = max(0.5 - dot(offset, offset), 0.0);
-	float falloff2 = falloff * falloff;
-	float height = dot(gradient, offset);
-	return falloff2 * falloff * vec3(falloff * height, falloff * gradient - 8.0 * height * offset);
-}
-
-// Simplex height and slope, with a different gradient at each vertex.
-vec3 ripple_field(vec2 point) {
-	const float SKEW = 0.3660254;
-	const float UNSKEW = 0.2113249;
-	vec2 lattice = floor(point + (point.x + point.y) * SKEW);
-	vec2 offset = point - lattice + (lattice.x + lattice.y) * UNSKEW;
-	vec2 step_to_corner = offset.x > offset.y ? vec2(1.0, 0.0) : vec2(0.0, 1.0);
-	return 70.0 * (ripple_corner(lattice, offset)
-		+ ripple_corner(lattice + step_to_corner, offset - step_to_corner + UNSKEW)
-		+ ripple_corner(lattice + 1.0, offset - 1.0 + 2.0 * UNSKEW));
-}
+#include "res://src/render/water_ripples.gdshaderinc"
 
 vec2 rain_ring_slope(vec2 point) {
 	float rain = 0.0;
@@ -120,16 +100,10 @@ vec3 water_surface(vec3 original, vec2 weights, vec3 view, vec2 screen_uv, mat3 
 	// Drift broad ripples and smaller chop in different directions through
 	// world space. Both continue across the original terrain tile edges.
 	vec2 point = cell * 2.0;
-	mat2 swell_basis = mat2(vec2(0.92, 0.39), vec2(-0.39, 0.92));
-	mat2 chop_basis = mat2(vec2(0.61, -0.79), vec2(0.79, 0.61));
-	vec2 swell_scale = vec2(0.44, 1.20);
-	vec2 chop_scale = vec2(1.45, 3.20);
-	vec3 swell = ripple_field((transpose(swell_basis) * point) * swell_scale + TIME * vec2(0.12, -0.38));
-	vec3 chop = ripple_field((transpose(chop_basis) * point) * chop_scale + vec2(17.3, 8.9) + TIME * vec2(-0.33, 0.71));
-	float crest_height = 0.70 * swell.x + 0.30 * chop.x;
+	vec4 ripple = water_ripples(point);
+	float crest_height = ripple.x;
 	float wind = ripple_fade * mix(1.0, 0.36, bog);
-	vec2 slope = (0.030 * (swell_basis * (swell.yz * swell_scale))
-		+ 0.009 * (chop_basis * (chop.yz * chop_scale))) * wind;
+	vec2 slope = ripple.yz * wind;
 	vec2 rain = vec2(0.0);
 	if (water_rain_count > 0 && ripple_fade > 0.0 && coverage > 0.4) {
 		rain = rain_ring_slope(point) * vec2(1.0, -1.0) * ripple_fade * smoothstep(0.4, 0.95, coverage) * 0.24;
@@ -171,7 +145,7 @@ vec3 water_surface(vec3 original, vec2 weights, vec3 view, vec2 screen_uv, mat3 
 	vec3 liquid = mix(shallows, deep, smoothstep(0.15, 1.0, coverage));
 	// Only the bog's duckweed uses the painted colour within the water.
 	liquid = mix(liquid, base, bog);
-	vec3 waves = liquid * (1.0 + (0.08 * swell.x + 0.04 * chop.x) * wind + ring_light);
+	vec3 waves = liquid * (1.0 + ripple.w * wind + ring_light);
 	vec3 water = mix(waves, sky, fresnel) + sparkle * (0.14 * glint + 0.016 * crest + 0.15 * foam + 0.4 * max(ring_light, 0.0));
 	vec3 enhanced = mix(base, water, coverage);
 	return srgb ? to_srgb(enhanced) : enhanced;
