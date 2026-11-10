@@ -36,7 +36,7 @@ var _special := false
 var _special_waiting := false
 var _rng := RandomNumberGenerator.new()
 
-func build(data: ELProfile, model: String, texture_name: String, secondary_texture := "") -> bool:
+func build(data: ELProfile, model: String, texture_name: String, secondary_texture := "", wave_texture := "") -> bool:
 	set_process(false)
 	profile = data
 	template = ELArchive.key(model)
@@ -70,6 +70,11 @@ func build(data: ELProfile, model: String, texture_name: String, secondary_textu
 	_rng.seed = hash(template)
 	var material := ELFigure.material(profile.texture(texture_name))
 	var secondary := ELFigure.material(profile.texture(secondary_texture)) if not secondary_texture.is_empty() else material
+	var wave := profile.texture(wave_texture) if not wave_texture.is_empty() else null
+	var wave_material: StandardMaterial3D
+	if wave != null:
+		wave_material = ELFigure.material(wave, true)
+		wave_material.set_meta("water_surface", true)
 	# Alpha32 skins (air walls, spirits) fade out in soft alpha, such as a wall's
 	# wispy lower dress: blend them instead of the half-alpha cut-off.
 	for pair: Array in [[material, texture_name], [secondary, secondary_texture]]:
@@ -87,6 +92,10 @@ func build(data: ELProfile, model: String, texture_name: String, secondary_textu
 			# Slot 2 parts wear the second texture (mounts, staffs, wings: the
 			# Add/Transport sheets); slot 1 and 8 parts the first.
 			var part_material := secondary if int(figures[name].texture_slot) == 2 else material
+			# The FIG's animated texture slot carries the wave collar at the waterline.
+			if int(figures[name].texture_slot) == 14 and wave_material != null:
+				node.material_override = wave_material
+				continue
 			var material_id := int(figures[name].material_id)
 			var fullbright := material_id == ELFigure.MATERIAL_MAGIC
 			var diffuse := profile.figure_diffuse(material_id)
@@ -313,6 +322,20 @@ func apply_frame(at: float) -> void:
 			if a != b:
 				node.set_blend_shape_value(b, f - a)
 			_previous_morphs[name] = [a, b]
+
+## Local bounds of a rendered mesh part at its current pose. The mesh's
+## culling box spans the whole clip, including space the pose does not occupy.
+func posed_part_bounds(name: String) -> AABB:
+	var part: MeshInstance3D = parts[name]
+	var frames: Array = _previous_morphs.get(name, [])
+	if frames.is_empty(): return part.get_aabb()
+	var bounds: Array = part.mesh.get_meta("morph_bounds", [])
+	if bounds.is_empty(): return part.get_aabb()
+	var first: AABB = bounds[frames[0]]
+	if frames[0] == frames[1]: return first
+	var next: AABB = bounds[frames[1]]
+	var weight := part.get_blend_shape_value(frames[1])
+	return AABB(first.position.lerp(next.position, weight), first.size.lerp(next.size, weight))
 
 func _vec_sample(track: Dictionary, field: String, at: float, default: Vector3, scaling := false) -> Vector3:
 	var count: int = track[field + "_count"]

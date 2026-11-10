@@ -4,7 +4,7 @@ extends Control
 ## articles of tools/build_wiki.py (ELWikiData) in English or Russian, with a
 ## searchable contents list, page history (Back/Forward, Alt+Left/Right),
 ## internal links and a language switch. It is drawn over whatever is open,
-## from the main menu, the battle and map Esc menus or F1 anywhere (ELWikiHotkey).
+## from the main menu, the battle and map Esc menus or Shift+F1 (ELWikiHotkey).
 ## The game is paused while the wiki is open and resumes as it was on Close
 ## (Esc or F1). It reads no game files and never changes saves or settings
 ## other than its own remembered language (user://wiki.cfg).

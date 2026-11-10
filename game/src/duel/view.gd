@@ -673,6 +673,7 @@ func _process(delta: float) -> void:
 			var auto := auto_combat and _human_side() and not demo
 			ELPracticeAI.step(duel, auto and not bool(settings.values.get("use_spells", true)))
 		_step_auto_camera(delta)
+		_step_keyboard_camera(delta)
 		_step_ending(delta)
 		if not _arrivals.is_empty(): _step_arrivals()
 		_step_shake(delta)
@@ -749,23 +750,53 @@ func _input(event: InputEvent) -> void:
 			get_viewport().set_input_as_handled()
 		return
 	if event is InputEventKey and duel != null and is_processing_unhandled_input() and not _overlay_open():
+		if event.keycode >= KEY_F1 and event.keycode <= KEY_F4 and not (event.shift_pressed or event.ctrl_pressed or event.alt_pressed or event.meta_pressed) and battle_camera_presets_active():
+			get_viewport().set_input_as_handled()
+			if event.pressed and not event.echo:
+				auto_camera.view_index = event.keycode - KEY_F1
+				_default_view()
+			return
 		if event.pressed and not event.echo and event.keycode in [KEY_ENTER, KEY_KP_ENTER] and _network_chat_button != null and _network_chat_button.visible:
 			_set_network_chat_open(true)
 			get_viewport().set_input_as_handled()
 			return
-		var end_key: bool = event.keycode == KEY_TAB if profile.id == "el2" else event.ctrl_pressed and KEY_E in [event.keycode, event.physical_keycode]
-		if event.keycode == KEY_SPACE or end_key:
+		var action := ELSettings.hotkey_action(settings, profile.id, "Battle", event)
+		if not action.is_empty():
 			get_viewport().set_input_as_handled()
-			if not event.pressed or event.echo: return
-			if event.keycode == KEY_SPACE: _skip_battle_presentation()
-			elif _human_turn() or ((_campaign_battle() != null or duel_match != null or combat_tutorial != null or network_duel != null or _expedition_battle != null) and duel.phase == ELDuel.Phase.FINISHED):
-				_end_phase()
+			if not event.pressed or (event.echo and action != "skip"): return
+			match action:
+				"end_phase":
+					if _human_turn() or ((_campaign_battle() != null or duel_match != null or combat_tutorial != null or network_duel != null or _expedition_battle != null) and duel.phase == ELDuel.Phase.FINISHED): _end_phase()
+				"attack_all": _attack_all()
+				"auto_combat": _toggle_auto()
+				"skip": _skip_battle_presentation()
+				"battle_save": _save_duel()
+				"battle_load": _load_duel()
+				"reset_camera": _default_view()
+				"combat_log": log_text.visible = not log_text.visible
+				"artifacts", "hand":
+					if rail != null: rail._select(action == "artifacts")
+				"enchantments", "graveyard":
+					if rail != null: rail.select_strip(action == "graveyard")
+				_:
+					if action.begins_with("battle_slot_"): _press_battle_slot(int(action.get_slice("_", 2)) - 1)
 			return
 	# A move that a panel takes never reaches _unhandled_input: no character.
 	if event is InputEventMouseMotion: combat_hover = -1
 	# A release over a panel still ends the preview and the turn.
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT and not event.pressed and right_down and duel != null:
 		_right_button(event)
+
+func _press_battle_slot(index: int) -> void:
+	if not _human_turn() or card_scroll == null: return
+	var visible_cards := card_scroll.get_global_rect()
+	for button: Node in hand.get_children():
+		if not button is TextureButton or not button.is_visible_in_tree(): continue
+		if not visible_cards.has_point(button.get_global_rect().get_center()): continue
+		if index == 0:
+			if not button.disabled: button.pressed.emit()
+			return
+		index -= 1
 
 func _unhandled_input(event: InputEvent) -> void:
 	if game_console != null and game_console.visible: return
@@ -797,18 +828,6 @@ func _unhandled_input(event: InputEvent) -> void:
 			_hint("Selection cancelled.")
 			if setup_panel != null and setup_panel.visible: setup_panel.hide()
 			_refresh()
-		elif event.keycode == KEY_F5: _save_duel()
-		elif event.keycode == KEY_F9: _load_duel()
-		elif event.keycode == KEY_R:
-			_default_view()
-		elif event.keycode == KEY_L:
-			log_text.visible = not log_text.visible
-		# The second game's radio tooltips name A and H as their keys.
-		elif event.keycode in [KEY_A, KEY_H] and profile != null and profile.id == "el2" and rail != null and not _overlay_open():
-			rail._select(event.keycode == KEY_A)
-		# E and G choose the upper strip's list in the second game.
-		elif event.keycode in [KEY_E, KEY_G] and profile != null and profile.id == "el2" and rail != null and not _overlay_open():
-			rail.select_strip(event.keycode == KEY_G)
 		# First game: H opens the tutorial.
 		elif event.keycode == KEY_H and profile != null and profile.id == "el1" and not demo and not _overlay_open(): _first_tutorial_panel().open_history()
 	if _overlay_open(): return
@@ -823,33 +842,61 @@ func _unhandled_input(event: InputEvent) -> void:
 		camera_yaw -= event.relative.x * 0.006
 		camera_pitch = clampf(camera_pitch + event.relative.y * 0.005, PITCH_LIMITS.x, PITCH_LIMITS.y)
 		_update_camera()
-	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT and _human_turn():
+	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
 		var nearest := _character_at(event.position)
 		if nearest >= 0:
 			_target(nearest)
-			if event.double_click and nearest >= 2 and duel.phase == ELDuel.Phase.ATTACK and selection < 0 and ability_selection.is_empty():
+			if event.double_click and _human_turn() and nearest >= 2 and duel.phase == ELDuel.Phase.ATTACK and selection < 0 and ability_selection.is_empty():
 				if not duel.toggle_attack(nearest): _hint(duel.error)
 
-## The nearest hero or creature. Inspection follows the full posed height.
-func _character_at(at: Vector2, inspect := false) -> int:
+## Actions, hover and inspection share the visible figure's posed part bounds.
+## A small screen-space margin helps with narrow limbs at distant zooms;
+## direct hits take precedence, and overlapping figures pick the nearer one.
+func _character_at(at: Vector2) -> int:
 	var nearest := -1
-	var distance := 34.0 if inspect else 65.0
+	var distance := INF
 	if duel == null or camera == null: return nearest
+	var assisted := -1
+	var assisted_distance := INF
+	var origin := camera.project_ray_origin(at)
+	var direction := camera.project_ray_normal(at)
+	var view := camera.global_transform.affine_inverse()
+	var margin := camera.project_position(at + Vector2(6, 0), 1.0).distance_to(camera.project_position(at, 1.0))
 	for id: int in models:
 		if id >= 2 and not duel.creatures.has(id):
 			continue
 		var model: ELModel = models[id]
 		if not model.is_visible_in_tree() or camera.is_position_behind(model.global_position): continue
-		var point := camera.unproject_position(model.global_position + Vector3(0, 0.7, 0))
-		if inspect:
-			var feet := camera.unproject_position(model.global_position)
-			var head := camera.unproject_position(model.global_position + Vector3.UP * _figure_height(model))
-			point = Geometry2D.get_closest_point_to_segment(at, feet, head)
-		var d := point.distance_to(at)
-		if d < distance:
-			distance = d
-			nearest = id
-	return nearest
+		for name: String in model.parts:
+			var part: MeshInstance3D = model.parts[name]
+			if part.mesh == null or not part.is_visible_in_tree(): continue
+			var bounds := model.posed_part_bounds(name)
+			if bounds.size.is_zero_approx(): continue
+			var pose := part.global_transform
+			if is_zero_approx(pose.basis.determinant()): continue
+			var inverse := pose.affine_inverse()
+			var local_origin := inverse * origin
+			var local_direction := inverse.basis * direction
+			var hit: Variant = bounds.intersects_ray(local_origin, local_direction)
+			if hit != null:
+				var depth := direction.dot(pose * (hit as Vector3) - origin)
+				if depth >= camera.near and depth < distance:
+					distance = depth
+					nearest = id
+				continue
+			if nearest >= 0: continue
+			var depth := maxf(0.0, -(view * pose.origin).z)
+			var padding := margin * (1.0 if camera.projection == Camera3D.PROJECTION_ORTHOGONAL else depth)
+			var local_padding := Vector3.ONE * padding / pose.basis.get_scale().abs().max(Vector3.ONE * 0.0001)
+			bounds.position -= local_padding
+			bounds.size += local_padding * 2.0
+			hit = bounds.intersects_ray(local_origin, local_direction)
+			if hit != null:
+				depth = direction.dot(pose * (hit as Vector3) - origin)
+				if depth >= camera.near and depth < assisted_distance:
+					assisted_distance = depth
+					assisted = id
+	return nearest if nearest >= 0 else assisted
 
 ## Requests the original cursor for the battle or menu on screen. The
 ## adventure map, while shown, picks its own.
@@ -886,7 +933,31 @@ func touch_zoom(factor: float) -> void:
 	_update_camera()
 
 func touch_bar_keys() -> Array:
-	return [["Camera", KEY_R]]
+	var keys := [["Camera", KEY_R]]
+	if profile != null and profile.id == "el1": keys.append(["Tutorial", KEY_H])
+	return keys
+
+## F1 belongs to the original camera presets while the battle is in automatic mode.
+func battle_camera_presets_active() -> bool:
+	return is_processing_unhandled_input() and _auto_camera_on() and touch_camera_ready() and ending.is_empty()
+
+func _step_keyboard_camera(delta: float) -> void:
+	if not is_processing_unhandled_input() or not touch_camera_ready() or not ending.is_empty(): return
+	var automatic := _auto_camera_on()
+	if automatic and profile.id == "el2": return
+	var zoom := float(Input.is_physical_key_pressed(KEY_PAGEDOWN)) - float(Input.is_physical_key_pressed(KEY_PAGEUP))
+	var turn := 0.0
+	var tilt := 0.0
+	if not automatic:
+		turn = float(Input.is_physical_key_pressed(KEY_LEFT)) - float(Input.is_physical_key_pressed(KEY_RIGHT))
+		tilt = float(Input.is_physical_key_pressed(KEY_UP)) - float(Input.is_physical_key_pressed(KEY_DOWN))
+		if profile.id == "el2": tilt = -tilt
+	if zoom == 0.0 and turn == 0.0 and tilt == 0.0: return
+	var rotation_speed := float(settings.values.get("keyboard_rotation", 1.0)) * delta
+	camera_yaw += turn * rotation_speed
+	camera_pitch = clampf(camera_pitch + tilt * rotation_speed, PITCH_LIMITS.x, PITCH_LIMITS.y)
+	camera_distance = clampf(camera_distance + zoom * 12.0 * delta, DISTANCE_LIMITS.x, DISTANCE_LIMITS.y)
+	_update_camera()
 
 ## The player's own view; any manual camera change ends an automatic close-up.
 func _update_camera() -> void:
@@ -898,9 +969,7 @@ func _update_camera() -> void:
 func auto_camera_angle() -> float:
 	return auto_camera.view_angle if auto_camera != null else (ELAutoCamera.SECOND_VIEW_FOV if profile != null and profile.id == "el2" else ELAutoCamera.VIEW_FOV)
 
-## The player's standing view: the first game's original Default1 view
-## (AutoCameraView 0), the second game's view from original footage, both from
-## the player's side; the remake's orbit, zoom and R start from it.
+## The selected original standing view, seen from the player's side.
 func _default_view() -> void:
 	var original: Dictionary = auto_camera.standing_view() if auto_camera != null else {}
 	if original.is_empty(): original = {"target": Vector3(0, 0.6, -0.5), "yaw": -0.38, "pitch": 0.7, "distance": 24.0}
@@ -1041,7 +1110,7 @@ func _target(id: int) -> void:
 	_refresh()
 
 func _cast_card(index: int) -> void:
-	if not _human_turn() or (game_console != null and game_console.enemy_hand(duel)):
+	if not _human_turn() or (game_console != null and game_console.enemy_hand(duel)) or not duel.can_cast_from_hand(index):
 		return
 	var card: String = duel.heroes[duel.active_side()].hand[index]
 	ability_selection.clear()
@@ -1318,25 +1387,32 @@ func _spawn_creature(c: Dictionary) -> void:
 	model.set_meta("attack_sound", original.get("AttackSndType", ""))
 	model.set_meta("skin_sound", original.get("SkinSndType", ""))
 	model.set_meta("blood", original.get("Blood", ""))
-	var occupied: Array[int] = []
-	for other: int in models:
-		if other >= 2 and duel.creatures.has(other) and duel.creatures[other].owner == c.owner:
-			occupied.append(int(models[other].get_meta("slot", 0)))
-	var slot := 0
-	while occupied.has(slot): slot += 1
-	model.set_meta("slot", slot)
-	# The original's arc of home slots; combat ordering lives only in ELDuel.
-	model.position = ELMeleePlayback.slot_position(int(c.owner), slot, ELMeleePlayback.Line.HOME)
-	model.position.y = arena.ground_height(model.position.x, model.position.z)
+	models[c.id] = model
+	_assign_creature_home(int(c.id), int(c.owner))
+	model.position = homes[c.id]
 	# A new creature faces the centre of the arena.
 	model.rotation.y = atan2(-model.position.x, -model.position.z)
-	models[c.id] = model
-	homes[c.id] = model.position
 	model.animation_finished.connect(_animation_done.bind(c.id))
 	model.frame_event.connect(_footfall.bind(c.id))
 	_hear_idle(model)
 	if is_instance_valid(effects): effects.attach(model)
 	_add_label(c.id)
+
+## Assigns a free slot on the side currently shown by the battle playback.
+func _assign_creature_home(id: int, side: int) -> void:
+	var occupied: Array[int] = []
+	for other: int in models:
+		if other != id and duel.creatures.has(other) and int(models[other].get_meta("slot_side", -1)) == side:
+			occupied.append(int(models[other].get_meta("slot", 0)))
+	var slot := 0
+	while occupied.has(slot): slot += 1
+	var model: ELModel = models[id]
+	model.set_meta("slot", slot)
+	model.set_meta("slot_side", side)
+	# The original's arc of home slots; combat ordering lives only in ELDuel.
+	var home := ELMeleePlayback.slot_position(side, slot, ELMeleePlayback.Line.HOME)
+	home.y = arena.ground_height(home.x, home.z)
+	homes[id] = home
 
 ## A summoned figure's own entrance: its usummon clip and Summon sound.
 func _enter(id: int) -> void:
@@ -1578,6 +1654,14 @@ func _event(data: Dictionary) -> void:
 		# A later action in the same frame no longer waits for the cast's cue.
 		if data.kind in ["strike", "phase", "ability", "combat_ability"]: _effect_cast.hit = 0.0
 	match data.kind:
+		"army_changed":
+			var id := int(data.target)
+			var side := int(data.side)
+			if models.has(id):
+				_assign_creature_home(id, side)
+				front_line.erase(id)
+				front_faces.erase(id)
+				melee.change_side(id, side)
 		"summon":
 			var c: Dictionary = data.creature
 			_spawn_creature(c)
@@ -2052,8 +2136,14 @@ func _event(data: Dictionary) -> void:
 			_float_text(data.target, "Pale aspect" if data.enter else "Manifests", Color("c9d4dd"), true)
 			_log("%s %s the Colourless Plane." % [duel.card_name(duel.entity(data.target).get("card", "")), "enters" if data.enter else "leaves"])
 		"spec":
-			_float_text(data.side, _spec_name(data.spec), Color("e8c66a"), true)
-			_announce("T_SPEC_WORKED", [_spec_name(data.spec), _hero_name(data.side)], int(data.side))
+			var side := int(data.side)
+			var name := _spec_name(data.spec)
+			# Both originals bind the Specialisation cue to the activating hero.
+			if models.has(side):
+				_figure_effect("Specialisation", side)
+				battle_audio.effect("Specialisation")
+			_float_text(side, name, Color("e8c66a"), true)
+			_announce("T_SPEC_WORKED", [name, _hero_name(side)], side)
 		"global_spell":
 			var spell := profile.text(str(profile.table("GlobalSpells").get(data.spell, {}).get("Name", data.spell)))
 			_float_text(data.side, spell, Color("9fc4ff"), true)
@@ -2207,7 +2297,7 @@ func _local_side(side: int) -> bool:
 	if _strategic_battle(): return side == strategic_session.relay.local_side
 	if network_duel != null and network_duel.live: return side == network_duel.local_side
 	if replay_player != null and replay_player.duel == duel: return side == replay_player.local_side()
-	var local := game_console.player_side(duel) if game_console != null else 0
+	var local := game_console.player_side(duel) if game_console != null else _battle_player_side(duel)
 	return side == local or _hot_seat() or (mode_select != null and mode_select.selected == 1 and combat_tutorial == null)
 
 ## A hero's cast: T_CASTING in the log; the first game also lists it on screen,
@@ -3600,7 +3690,7 @@ func _footfall(clip: String, id: int) -> void:
 func _animation_done(clip: String, id: int) -> void:
 	if not models.has(id) or _hits_waiting.has(id) or models[id].get_meta("returning", false):
 		return
-	if _melee_busy() and melee.moving(id): return
+	if is_instance_valid(melee) and melee.moving(id): return
 	if id >= 2 and not duel.creatures.has(id):
 		# During combat playback a creature that falls to a later blow fights on until then.
 		if _presentation_held() and clip != "udeath":
@@ -3680,7 +3770,7 @@ func creature_icons(id: int) -> Array:
 	var marks: Array = [c.get("resting", false), c.get("sick", false), owned.has("NoAttack"), owned.has("Fly"), owned.has("FS"),
 		owned.has("Trample"), owned.has("Restless"), owned.has("Lifetap"), duel.regeneration_cost(id) > 0,
 		owned.any(func(flag: Variant) -> bool: return String(flag).begins_with("Discard(")), owned.has("Disenchant"), owned.has("Destroy"),
-		owned.has("NoUntap"), owned.has("UB"), owned.has("NSS"), owned.has("Berserk"), owned.has("TeamAttack"), owned.has("Elusive")]
+		duel.cannot_rise(id), owned.has("UB"), owned.has("NSS"), owned.has("Berserk"), owned.has("TeamAttack"), owned.has("Elusive")]
 	if profile.id == "el2": marks.append_array([duel.pale(id), duel.in_plane(id), duel.race(id) == "OutSpellJammer"])
 	var result: Array = []
 	for bit in marks.size():
@@ -3882,7 +3972,7 @@ func _refresh() -> void:
 		button.set_meta("card", card)
 		button.set_meta("hand_index", i)
 		button.set_meta("charges", uses)
-		button.disabled = peek or not _human_turn() or duel.available_mana(hand_side) < duel.cost(card) or hero.channels < duel.channel_cost(card) or uses == 0 or not duel.phase_allows(card)
+		button.disabled = peek or not _human_turn() or not duel.can_cast_from_hand(i)
 		_list_look().dress(button)
 		if not peek and i == selection: _selection_outline(button)
 		# Remake readout: the cost, only with the helper overlay.
@@ -3949,11 +4039,6 @@ func _refresh() -> void:
 		for index: int in ([1, 3, 5] if side == displayed else [2, 4, 6]): tips.append(_control_tip("CombatTt%d" % index))
 		hero_buttons[side].tooltip_text = "\n".join(tips)
 		if helper_overlay(): hero_buttons[side].tooltip_text += "\n%s\n%d / %d health · %d ether · %d channels\n%d cards in hand · %d creatures in the graveyard\nClick this portrait to target the hero." % [_side_name(side), h.health, h.maximum, h.mana, h.channels, h.hand.size(), h.grave.size()]
-		for code: String in h.get("skills", {}):
-			var rank := int(h.skills[code])
-			var skill := ELHeroSkills.definition(profile, code, rank)
-			hero_buttons[side].tooltip_text += "\n%s %s" % [profile.text(str(skill.get("Name", code))), ["I", "II", "III"][rank]]
-		if str(h.get("spec", "NONE")) != "NONE" and helper_overlay(): hero_buttons[side].tooltip_text += "\n%s" % _spec_name(h.spec)
 	# The battle title line is a remake readout (helper overlay only).
 	status.text = "%s · %s vs %s" % [profile.title, ELCatalog.faction_name(duel.heroes[0].faction), ELCatalog.faction_name(duel.heroes[1].faction)] if helper_overlay() else ""
 	phase_label.text = phase_caption()
@@ -3980,7 +4065,7 @@ func _refresh() -> void:
 	for id: int in models:
 		# Fighters the combat playback is still moving or holding at their
 		# fight point keep their clip until they are home.
-		if _melee_busy() and (melee.moving(id) or melee.away(id)): continue
+		if is_instance_valid(melee) and (melee.moving(id) or (_melee_busy() and melee.away(id))): continue
 		if id >= 2 and duel.creatures.has(id) and models[id].clip.begins_with("c"):
 			var resting: bool = duel.creatures[id].resting or duel.creatures[id].sick
 			var desired := "ctapidle" if resting else "cidle"
@@ -4006,7 +4091,19 @@ func _show_hero_stats() -> void:
 func _refresh_buttons() -> void:
 	if duel == null or attack_button == null: return
 	end_button.disabled = not (_human_turn() or (network_duel != null and network_duel.live and duel.phase == ELDuel.Phase.FINISHED and ending_over() and not _overlay_open()))
-	attack_button.disabled = not _human_turn() or duel.phase != ELDuel.Phase.ATTACK or not duel.army(duel.active_side()).any(func(c: Dictionary) -> bool: return duel.can_attack(c.id) and not duel.attacks.has(c.id))
+	var available := duel.phase == ELDuel.Phase.ATTACK and duel.army(duel.active_side()).any(func(c: Dictionary) -> bool: return duel.can_declare_attack(c.id))
+	attack_button.disabled = not _human_turn() or not available
+	# Keep the original shutter where available. Without its art, hide the
+	# inactive control rather than leaving the swords exposed.
+	attack_button.visible = available or attack_button.has_shutter()
+
+func _attack_all() -> void:
+	if not _human_turn() or duel.phase != ELDuel.Phase.ATTACK: return
+	var army := duel.army(duel.active_side())
+	# Declare ordinary attackers first so their guards can follow.
+	for guards: bool in [false, true]:
+		for c: Dictionary in army:
+			if duel.has_flag(c.id, "TeamAttack") == guards and duel.can_declare_attack(c.id): duel.toggle_attack(c.id)
 
 ## A creature put to rest by an action, or rising from rest, plays the figure's own tap
 ## or untap clip (with its sound and clip particles) before the idle it ends
@@ -4144,16 +4241,7 @@ func _original_text(key: String, fallback: String) -> String:
 ## creature with its strength and health, _TYPE2 sorcery, _TYPE3 enchantment),
 ## then T_COST with the cost in T_MANA, then the description.
 func card_tooltip(card: String) -> String:
-	var spell_class := str(profile.table("CombatSpells").get(card, {}).get("Class", ""))
-	var kind: String = {"Creature": "T_SPELL_TYPE", "Sorcery": "T_SPELL_TYPE2", "Enchantment": "T_SPELL_TYPE3"}.get(spell_class, "")
-	var title := duel.card_name(card)
-	var creature: Dictionary = profile.table("CombatCreatures").get(card, {})
-	if spell_class == "Creature" and creature.has("Power"): title += " %d/%d" % [int(creature.Power), int(creature.get("Toughness", 0))]
-	var lines: Array[String] = ["%s: %s" % [_original_text(kind, spell_class), title] if not kind.is_empty() else title]
-	lines.append("%s %d %s" % [_original_text("T_COST", "Cost:"), duel.cost(card), _original_text("T_MANA", "ether")])
-	var description := profile.card_description(card)
-	if not description.is_empty() and description != card: lines.append(description)
-	return "\n".join(lines)
+	return ELCombatTooltip.spell_text(profile, card, duel.cost(card), duel.card_name(card))
 
 ## The original tooltip for a battle control, or {} for its plain text: a
 ## hand card's type, name, strength and cost lines (EL2 layout as
@@ -4162,7 +4250,7 @@ func _displayed_side() -> int:
 	if _strategic_battle(): return maxi(0, strategic_session.relay.local_side)
 	if network_duel != null and network_duel.live: return network_duel.local_side
 	if replay_player != null and replay_player.duel == duel: return replay_player.local_side()
-	var local := game_console.player_side(duel) if game_console != null else 0
+	var local := game_console.player_side(duel) if game_console != null else _battle_player_side(duel)
 	var side := local if mode_select.selected == 0 and not demo else duel.active_side()
 	if _hot_seat() and hot_side >= 0: side = hot_side
 	return side
@@ -4189,11 +4277,20 @@ func _hero_tip(side: int, control: Control = null) -> Dictionary:
 	var level := "%s: %d" % [_original_text("T_LEVEL", "Level"), int(hero.get("level", 1))]
 	var lines: Array = [level, health] if profile.id == "el1" else [health, level]
 	if control != null and helper_overlay(): lines.append_array(control.atr(control.tooltip_text).split("\n"))
+	for code: String in hero.get("skills", {}):
+		var rank := int(hero.skills[code])
+		var skill := ELHeroSkills.definition(profile, code, rank)
+		lines.append("%s %s" % [profile.text(str(skill.get("Name", code))), ["I", "II", "III"][rank]])
+	var code := str(hero.get("spec", "NONE"))
+	if code != "NONE":
+		lines.append(_spec_name(code))
+		var description := _spec_text(code, "Desc", "")
+		if not description.is_empty(): lines.append(description)
 	return ELCombatTooltip.hero_content(profile.id, portraits[side].texture, title, lines)
 
 func _figure_tip(at: Vector2) -> Dictionary:
 	if duel == null or orbiting or (_hot_seat() and hot_pending): return {}
-	var id := _character_at(at, true)
+	var id := _character_at(at)
 	if id < 0: return {}
 	var content: Dictionary
 	if id < 2:
@@ -4231,7 +4328,15 @@ func _hint(text: String) -> void:
 	notice.visible = helper_overlay()
 
 func _spec_name(code: String) -> String:
-	return profile.text(str(profile.table("HeroesSpecs").get(code, {}).get("Name", code)))
+	return _spec_text(code, "Name", code)
+
+func _spec_text(code: String, field: String, fallback: String) -> String:
+	var specs := profile.table("HeroesSpecs")
+	var value := _original_text(str(specs.get(code, {}).get(field, "")), "")
+	# Some Etherlords II releases leave the alternate Dragon Skin text blank.
+	if value.is_empty() and code == "DRSL":
+		value = _original_text(str(specs.get("DRSK", {}).get(field, "")), "")
+	return fallback if value.is_empty() else value
 
 func _log(text: String) -> void:
 	logs.append(text)
@@ -4436,9 +4541,7 @@ func _build_ui() -> void:
 	phase_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	hud_root.add_child(phase_label)
 	attack_button = ELCutPartButton.new()
-	attack_button.pressed.connect(func():
-		for c: Dictionary in duel.army(duel.active_side()):
-			if duel.can_attack(c.id) and not duel.attacks.has(c.id): duel.toggle_attack(c.id))
+	attack_button.pressed.connect(_attack_all)
 	attack_button.tooltip_text = "Attack with all ready creatures"
 	end_face = ELCutPartButton.new()
 	end_face.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -4601,6 +4704,7 @@ func _open_settings() -> void:
 	_graphics_page(_settings_page(tabs, "Graphics"))
 	_audio_page(_settings_page(tabs, "Audio"))
 	_interface_page(_settings_page(tabs, "Interface"))
+	_hotkeys_page(_settings_page(tabs, "Hotkeys"))
 	for i in tabs.get_tab_count(): tabs.set_tab_title(i, str(tabs.get_tab_control(i).get_meta("title", tabs.get_tab_title(i))))
 	var export_log := Button.new()
 	export_log.name = "ExportLog"
@@ -4628,6 +4732,88 @@ func _open_settings() -> void:
 		_refresh())
 	settings_dialog.popup_centered(Vector2i(720, 660))
 	_refresh()
+
+func _hotkeys_page(page: VBoxContainer) -> void:
+	var controls := HBoxContainer.new()
+	page.add_child(controls)
+	var edition_pick := OptionButton.new()
+	edition_pick.add_item(_t("Etherlords I"))
+	edition_pick.add_item(_t("Etherlords II"))
+	edition_pick.select(1 if settings.edition == "el2" else 0)
+	controls.add_child(edition_pick)
+	var reset := _button(_t("Reset defaults"), func():
+		settings.reset_hotkeys("el2" if edition_pick.selected == 1 else "el1")
+		edition_pick.item_selected.emit(edition_pick.selected))
+	controls.add_child(reset)
+	var status := _label("", 14, ACCENT)
+	status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	page.add_child(status)
+	var rows := VBoxContainer.new()
+	page.add_child(rows)
+	edition_pick.item_selected.connect(func(index: int): _show_hotkeys(rows, status, "el2" if index == 1 else "el1"))
+	edition_pick.item_selected.emit(edition_pick.selected)
+
+func _show_hotkeys(rows: VBoxContainer, status: Label, id: String) -> void:
+	for child: Node in rows.get_children():
+		rows.remove_child(child)
+		child.queue_free()
+	status.text = _t("Select a shortcut and press a new key or key combination. Esc cancels.")
+	for group: String in ["Battle", "Map", "Shops"]:
+		var box := _settings_box(rows, group)
+		for action: String in ELSettings.HOTKEYS:
+			var defaults := ELSettings.hotkey_defaults(id, action)
+			if ELSettings.HOTKEYS[action][0] != group or defaults.is_empty(): continue
+			var row := HBoxContainer.new()
+			box.add_child(row)
+			var caption := _label(_t(ELSettings.HOTKEYS[action][1]), 16, INK)
+			caption.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			row.add_child(caption)
+			var field := HotkeyField.new()
+			field.name = action
+			field.custom_minimum_size.x = 172
+			field.prompt = _t("Press a key…")
+			field.show_keys(settings.hotkey_overrides(id).get(action), defaults)
+			field.chosen.connect(func(code: int):
+				var problem := settings.set_hotkey(id, action, code)
+				status.text = _t(problem) if not problem.is_empty() else _t("Shortcut updated.")
+				field.show_keys(settings.hotkey_overrides(id).get(action), defaults))
+			row.add_child(field)
+
+class HotkeyField extends Button:
+	signal chosen(code: int)
+	var prompt := ""
+	var _caption := ""
+	var _waiting := false
+
+	func _ready() -> void:
+		pressed.connect(func():
+			_waiting = true
+			text = prompt
+			grab_focus())
+		focus_exited.connect(_finish)
+
+	func show_keys(custom: Variant, defaults: Array) -> void:
+		var keys: Array = [custom] if custom != null else defaults
+		var names: PackedStringArray = []
+		for key: int in keys: names.append(OS.get_keycode_string(key))
+		_caption = " / ".join(names)
+		_finish()
+
+	func _finish() -> void:
+		_waiting = false
+		text = _caption
+
+	func _gui_input(event: InputEvent) -> void:
+		if not _waiting or not event is InputEventKey: return
+		accept_event()
+		if not event.pressed or event.echo: return
+		if event.keycode == KEY_ESCAPE:
+			_finish()
+			return
+		if event.keycode in [KEY_CTRL, KEY_ALT, KEY_SHIFT, KEY_META]: return
+		var code: int = event.get_keycode_with_modifiers() if event.keycode != 0 else event.get_physical_keycode_with_modifiers()
+		_finish()
+		chosen.emit(code)
 
 ## Graphics: path tracing first (renderer, switch, light view, what this
 ## computer supports), then the picture and scene options.
@@ -5155,7 +5341,7 @@ func _begin_campaign(edition: String, scenario: Dictionary, difficulty: int, res
 	_notice("Loading chapter…")
 	# The original goes straight from the briefing to the map: no battle
 	# scene or earlier map stays on screen while the chapter builds.
-	var cover := _loading_cover()
+	var cover := _loading_cover(profiles[edition])
 	var stage_was_visible := stage.visible
 	stage.hide()
 	set_process(false)
@@ -5170,6 +5356,8 @@ func _begin_campaign(edition: String, scenario: Dictionary, difficulty: int, res
 	var previous := campaign_view
 	if previous != null: previous.paused = true
 	await get_tree().process_frame
+	cover.panel.stage = 2
+	cover.panel.queue_redraw()
 	await get_tree().process_frame
 	if online != null and (online != strategic_session or not online.link.live):
 		cover.queue_free()
@@ -5222,9 +5410,9 @@ func _begin_campaign(edition: String, scenario: Dictionary, difficulty: int, res
 		online.view_opened()
 		campaign_view._refresh_hero_info()
 
-## Black screen with a small caption over everything while a chapter loads.
-func _loading_cover() -> CanvasLayer:
-	var layer := CanvasLayer.new()
+## The original black loading screen with its progress-panel artwork.
+func _loading_cover(source: ELProfile) -> ChapterLoading:
+	var layer := ChapterLoading.new()
 	layer.layer = 100
 	layer.name = "ChapterLoading"
 	var black := ColorRect.new()
@@ -5232,15 +5420,59 @@ func _loading_cover() -> CanvasLayer:
 	black.mouse_filter = Control.MOUSE_FILTER_STOP
 	black.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	layer.add_child(black)
-	var caption := Label.new()
-	caption.text = "Loading…"
-	caption.add_theme_color_override("font_color", Color(0.85, 0.8, 0.68, 0.8))
-	caption.set_anchors_and_offsets_preset(Control.PRESET_CENTER)
-	caption.grow_horizontal = Control.GROW_DIRECTION_BOTH
-	caption.grow_vertical = Control.GROW_DIRECTION_BOTH
-	black.add_child(caption)
+	layer.panel = LoadingPanel.new()
+	black.add_child(layer.panel)
+	layer.panel.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	layer.panel.build(source)
 	add_child(layer)
 	return layer
+
+class ChapterLoading extends CanvasLayer:
+	var panel: LoadingPanel
+
+class LoadingPanel extends Control:
+	const DESIGN := Vector2(1024, 768)
+	var pieces: Array[Dictionary] = []
+	var stage := 1
+
+	func build(source: ELProfile) -> void:
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+		var offset := Vector2.ZERO
+		for row: Dictionary in source.table("Controls").values():
+			if row.get("Name") == "ProgressBar":
+				offset = Vector2(float(row.get("ShiftX", 0)), float(row.get("ShiftY", 0)))
+				break
+		var textures := {}
+		for row: Dictionary in source.table("InterfaceTextures").values():
+			if str(row.get("Name", "")).begins_with("PROGRESS_PANEL_"):
+				textures[row.Name] = source.texture("Interface/" + str(row.Path).replace("\\", "/"))
+		for row: Dictionary in source.table("CutParts").values():
+			if row.get("Ctrl") != "ProgressBar" or textures.get(row.Txt) == null: continue
+			var raw: Variant = row.get("Msk", [])
+			var masks: Array = raw if raw is Array else [raw]
+			var step := 0
+			for mask: String in masks:
+				if mask.begins_with("Type"): step = int(mask.substr(4))
+				elif mask == "Phase1": step = 9
+			var cut := Rect2(row.TxtL, row.TxtT, row.TxtW, row.TxtH)
+			var bounds := Rect2(offset + Vector2(row.ScrL, row.ScrT), Vector2(row.get("ScrW", row.TxtW), row.get("ScrH", row.TxtH)))
+			pieces.append({"step": step, "texture": textures[row.Txt], "cut": cut, "bounds": bounds})
+		pieces.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return a.step < b.step)
+		if not pieces.is_empty(): return
+		var caption := Label.new()
+		caption.text = "Loading…"
+		caption.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		caption.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		caption.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		add_child(caption)
+
+	func _draw() -> void:
+		var factor := minf(size.x / DESIGN.x, size.y / DESIGN.y)
+		var offset := (size - DESIGN * factor) * 0.5
+		for piece: Dictionary in pieces:
+			if int(piece.step) > stage: break
+			var bounds: Rect2 = piece.bounds
+			draw_texture_rect_region(piece.texture, Rect2(offset + bounds.position * factor, bounds.size * factor), piece.cut)
 
 ## True while a campaign battle is on screen.
 func director_battle_open() -> bool:
@@ -5248,6 +5480,10 @@ func director_battle_open() -> bool:
 
 func _campaign_battle() -> ELDuel:
 	return campaign_view.director.encounter.battle if campaign_view != null and campaign_view.director != null and campaign_view.director.encounter != null else null
+
+func _battle_player_side(battle: ELDuel) -> int:
+	if battle != null and battle == _campaign_battle(): return campaign_view.director.encounter.player_side()
+	return 0
 
 func _begin_encounter(_hero: int, _opponent: int) -> void:
 	var battle := _campaign_battle()
@@ -5268,7 +5504,7 @@ func _begin_encounter(_hero: int, _opponent: int) -> void:
 	set_process(true)
 	set_process_unhandled_input(true)
 	if _strategic_battle(): strategic_session.view_opened()
-	_notice("Defeat %s to continue. F5 saves both the battle and campaign." % _side_name(1) if helper_overlay() else "")
+	_notice("Defeat %s to continue. F5 saves both the battle and campaign." % _side_name(1 - _battle_player_side(battle)) if helper_overlay() else "")
 	if not battle.load_note.is_empty(): _notice(battle.load_note)
 
 func _return_from_encounter() -> void:
@@ -5300,7 +5536,7 @@ func _surrender_encounter() -> void:
 		if not strategic_session.relay.surrender(): _notice("You can concede when it is your action.")
 		return
 	if duel.phase != ELDuel.Phase.FINISHED:
-		duel.heroes[0].health = 0
+		duel.heroes[_battle_player_side(duel)].health = 0
 		duel._check_winner()
 	_return_from_encounter()
 
@@ -5648,13 +5884,13 @@ func _right_button(event: InputEvent) -> void:
 		right_down = event.pressed
 		right_from = event.position
 		orbiting = false
-		_set_strip_preview(_character_at(event.position, true) if event.pressed else -1)
+		_set_strip_preview(_character_at(event.position) if event.pressed else -1)
 	elif event is InputEventMouseMotion and right_down:
 		if not orbiting and event.position.distance_to(right_from) > 6.0:
 			orbiting = true
 			_set_strip_preview(-1)
 		elif not orbiting:
-			_set_strip_preview(_character_at(event.position, true))
+			_set_strip_preview(_character_at(event.position))
 
 func _set_strip_preview(id: int) -> void:
 	if id == strip_preview: return
@@ -6039,7 +6275,7 @@ func _open_network_lobby(lan := false) -> void:
 	_network_lobby.edit_requested.connect(_open_network_editor)
 	_network_lobby.visibility_changed.connect(func():
 		if _network_lobby != null and not _network_lobby.visible and not _network_editor_open: _close_network_lobby())
-	_network_lobby.popup_centered()
+	_network_lobby.popup_centered(_network_lobby.min_size)
 
 func _open_network_editor(preset: Dictionary, cap: int) -> void:
 	if _network_lobby == null or _network_editor_open: return
@@ -6053,7 +6289,7 @@ func _return_from_network_editor(saved_id: String, previous_screen: String) -> v
 	_network_editor_open = false
 	front_menu.show_screen(previous_screen)
 	_network_lobby.reload_presets(saved_id)
-	_network_lobby.popup_centered()
+	_network_lobby.popup_centered(_network_lobby.min_size)
 
 func _connect_network_duel(hosting: bool, address: String, port: int, deck: String, battlefield: String, resource_level: int, rounds: int, turn_seconds: int, deck_seconds: int) -> void:
 	if network_duel != null: return
@@ -6173,6 +6409,7 @@ func _show_network_round() -> void:
 		var label := String(preset.get("name", ""))
 		names.append(label if not label.is_empty() else _side_name(side))
 	var local := network_duel.local_side
+	ELHallOfFame.record_duel(profile, result, names, local)
 	var last := 0 if duel.winner < 0 else (1 if duel.winner == local else -1)
 	network_duel.begin_round_selection()
 	var edit_deck := Callable()
@@ -6190,7 +6427,7 @@ func _open_network_deck() -> void:
 	panel.build(network_duel)
 	panel.visibility_changed.connect(func():
 		if _network_deck == panel and not panel.visible: _close_network_deck())
-	panel.popup_centered()
+	panel.popup_centered(panel.min_size)
 
 func _close_network_deck() -> void:
 	if _network_deck == null: return
@@ -6246,7 +6483,7 @@ func _open_strategic_lobby(save_path := "", details := "", restored: Dictionary 
 		if _strategic_lobby == null or _strategic_lobby.get_instance_id() != lobby_id or _strategic_lobby.visible: return
 		_drop_strategic_lobby()
 		if strategic_session != null and not strategic_session.link.live: _close_strategic_session())
-	_strategic_lobby.popup_centered()
+	_strategic_lobby.popup_centered(_strategic_lobby.min_size)
 
 func _connect_strategic(hosting: bool, address: String, port: int, map_id: String, players: Vector2i, difficulty: int) -> void:
 	if strategic_session != null: return
@@ -6551,6 +6788,7 @@ func _watch_match_round(delta: float) -> void:
 		match_clock = 0.0
 		match_result_shown = false
 		duel_match.record(duel.winner)
+		ELHallOfFame.record_duel(profile, duel_match, _match_names())
 		if match_recording != null: match_recording.finish_round(duel)
 		if duel_report != null:
 			duel_report.round_end(duel.winner)

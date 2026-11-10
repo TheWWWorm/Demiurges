@@ -428,6 +428,7 @@ func show_screen(target: String) -> void:
 	for child in canvas.get_children():
 		canvas.remove_child(child)
 		child.queue_free()
+	canvas.theme = ELCombatTooltip.hidden_theme() if target == "duel_editor" else null
 	art = Control.new()
 	art.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	art.size = DESIGN

@@ -44,6 +44,7 @@ var _pieces: Array[Dictionary] = []
 var _offset := Vector2.ZERO
 var _specs: Array[String] = []
 var _mouse := Vector2(-1000, -1000)
+var hotkey_settings: ELSettings
 
 static func make(source_hud: ELSecondAdventureHud) -> ELSecondInventoryView:
 	var view := ELSecondInventoryView.new()
@@ -92,6 +93,11 @@ func build(session: ELAdventureSession, id: int) -> void:
 	buttons.InvScrScrollDown1.pressed.connect(scroll_bag.bind(1))
 	_build_spec_popup()
 	_build_message_box()
+	var tips := ELCombatTooltip.new()
+	tips.blocked = func() -> bool: return message_box.visible or spec_popup.visible or not model.carried().is_empty()
+	root_control.theme = ELCombatTooltip.hidden_theme()
+	root_control.add_child(tips)
+	tips.setup(profile)
 	cursor = Control.new()
 	cursor.name = "CarriedCard"
 	cursor.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -271,7 +277,7 @@ func surface_input(event: InputEvent) -> void:
 		_mouse = event.position
 		if not model.carried().is_empty(): cursor.queue_redraw()
 		return
-	if not event is InputEventMouseButton or not event.pressed: return
+	if not event is InputEventMouseButton or not event.pressed or message_box.visible: return
 	_mouse = event.position
 	match event.button_index:
 		MOUSE_BUTTON_WHEEL_UP: scroll_bag(-1)
@@ -283,11 +289,17 @@ func surface_input(event: InputEvent) -> void:
 			var target := hit(event.position)
 			var result := ""
 			var returning := model.picked_zone == "deck"
-			match target[0]:
-				"bag": result = model.click_bag(target[1])
-				"deck": result = model.click_deck(target[1])
-				_: return
-			if returning and target[0] == "bag":
+			var quick: bool = event.double_click and target[0] == model.picked_zone and target[1] == model.picked
+			if quick and target[0] == "bag":
+				result = model.click_deck(model.deck.find(""))
+			elif quick and target[0] == "deck":
+				result = model.click_bag(-1)
+			else:
+				match target[0]:
+					"bag": result = model.click_bag(target[1])
+					"deck": result = model.click_deck(target[1])
+					_: return
+			if returning and (target[0] == "bag" or quick):
 				# A card returned to the bag is appended and scrolled into view.
 				top_row = maxi(top_row, (model.bag.size() - 1) / BAG_COLUMNS - BAG_ROWS + 1)
 			_play(result)
@@ -327,15 +339,14 @@ func show_message(value: String) -> void:
 
 func _unhandled_key_input(event: InputEvent) -> void:
 	if not event is InputEventKey or not event.pressed or event.echo: return
-	match event.keycode:
-		KEY_ESCAPE, KEY_I:
-			if message_box.visible: message_box.hide()
-			elif spec_popup.visible: show_specs(false)
-			else: cancel()
-		KEY_ENTER, KEY_KP_ENTER:
-			if message_box.visible: message_box.hide()
-			else: accept()
-		_: return
+	if event.keycode == KEY_ESCAPE or ELSettings.hotkey_action(hotkey_settings, "el2", "Map", event) == "inventory":
+		if message_box.visible: message_box.hide()
+		elif spec_popup.visible: show_specs(false)
+		else: cancel()
+	elif event.keycode in [KEY_ENTER, KEY_KP_ENTER]:
+		if message_box.visible: message_box.hide()
+		else: accept()
+	else: return
 	get_viewport().set_input_as_handled()
 
 # --- Drawing --------------------------------------------------------------------
@@ -426,8 +437,7 @@ func tooltip_at(at: Vector2) -> String:
 	return ""
 
 func card_tooltip(card: String) -> String:
-	var row: Dictionary = profile.table("CombatSpells").get(card, {})
-	return profile.text(str(row.get("Name", card))) + "\n" + profile.card_description(card)
+	return ELCombatTooltip.spell_text(profile, card)
 
 class Surface extends Control:
 	var view

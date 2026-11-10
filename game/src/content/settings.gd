@@ -30,6 +30,7 @@ extends RefCounted
 ## "visual_log". Several have no remake system yet and are only stored.
 ## "tutorial_events": the first game's shown tutorial events, one '0'/'1'
 ## per event id (settings.ini TutorialEvents); "show_tutorial" gates them.
+const SETTINGS_VERSION := 3
 const SHARED := {"ambience": 0.55, "shadows": true, "soft_shadows": false, "weather": true, "helper_overlay": false, "antialiasing": -1, "sharpening": 1, "terrain_detail": false, "enhanced_water": false, "discord_activity": true, "renderer": 0, "path_tracing": false, "show_fps": false}
 const EDITION := {"music": 0.55, "effects": 0.8, "movies": 2, "blood": true, "map_tooltips": true, "autosave": true,
 	"heroes_voices": true, "ambient_sounds": true, "adventure_fast": false, "animated_objects": true,
@@ -37,13 +38,52 @@ const EDITION := {"music": 0.55, "effects": 0.8, "movies": 2, "blood": true, "ma
 	"invert_rotation": false, "gamma": 0.0, "audio_reverse": false, "fog_animations": true, "show_blazons": true,
 	"show_tutorial": true, "show_chat": true, "use_spells": true, "auto_camera": true, "auto_camera_dynamics": 50,
 	"hide_motion": false, "hide_cast": false, "combat_phases": true, "heroes_casting": true, "creature_numbers": true,
-	"ability_icons": true, "numbers_on_camera": true, "attack_order": true, "visual_log": false, "tutorial_events": ""}
+	"ability_icons": true, "numbers_on_camera": true, "attack_order": true, "visual_log": false, "tutorial_events": "", "hotkeys": {}}
 ## Shipped settings.ini values that differ from the common defaults.
-const EDITION_DEFAULTS := {"el1": {}, "el2": {"auto_camera_dynamics": 96, "gamma": 0.071429, "visual_log": true}}
+const EDITION_DEFAULTS := {"el1": {}, "el2": {"auto_camera_dynamics": 96, "visual_log": true}}
 ## Value ranges: [min, max] for numbers; bools are checked by type.
 const RANGES := {"music": [0.0, 1.0], "effects": [0.0, 1.0], "ambience": [0.0, 1.0], "mouse_rotation": [0.0, 2.0],
 	"keyboard_rotation": [0.0, 2.0], "mouse_scroll": [0.0, 2.0], "keyboard_scroll": [0.0, 2.0], "gamma": [-1.0, 1.0],
 	"auto_camera_dynamics": [0, 100], "movies": [0, 2], "antialiasing": [-1, 2], "sharpening": [0, 2], "renderer": [0, 1]}
+
+## Context, caption, then the default keys for each edition. Empty means the
+## action is unavailable in that edition.
+const HOTKEYS := {
+	"end_phase": ["Battle", "End phase", [KEY_MASK_CTRL | KEY_E], [KEY_TAB]],
+	"attack_all": ["Battle", "Attack with all ready creatures", [KEY_MASK_ALT | KEY_A], [KEY_MASK_ALT | KEY_A]],
+	"auto_combat": ["Battle", "Toggle auto combat", [KEY_MASK_ALT | KEY_C], [KEY_MASK_ALT | KEY_C]],
+	"skip": ["Battle", "Skip battle animation", [KEY_SPACE], [KEY_SPACE]],
+	"battle_save": ["Battle", "Quick save", [KEY_F5], [KEY_F5]],
+	"battle_load": ["Battle", "Quick load", [KEY_F9], [KEY_F9]],
+	"reset_camera": ["Battle", "Reset camera", [KEY_R], [KEY_R]],
+	"combat_log": ["Battle", "Combat log", [KEY_L], [KEY_L]],
+	"artifacts": ["Battle", "Show artifacts", [], [KEY_A]],
+	"hand": ["Battle", "Show spells in hand", [], [KEY_H]],
+	"enchantments": ["Battle", "Show enchantments", [], [KEY_E]],
+	"graveyard": ["Battle", "Show graveyard", [], [KEY_G]],
+	"battle_slot_1": ["Battle", "Spell or artifact slot 1", [], [KEY_1]],
+	"battle_slot_2": ["Battle", "Spell or artifact slot 2", [], [KEY_2]],
+	"battle_slot_3": ["Battle", "Spell or artifact slot 3", [], [KEY_3]],
+	"battle_slot_4": ["Battle", "Spell or artifact slot 4", [], [KEY_4]],
+	"battle_slot_5": ["Battle", "Spell or artifact slot 5", [], [KEY_5]],
+	"battle_slot_6": ["Battle", "Spell or artifact slot 6", [], [KEY_6]],
+	"end_day": ["Map", "End turn or day", [KEY_MASK_CTRL | KEY_E, KEY_N], [KEY_MASK_CTRL | KEY_E]],
+	"inventory": ["Map", "Spellbook or inventory", [KEY_I], [KEY_I]],
+	"skills": ["Map", "Skills", [KEY_K], [KEY_K]],
+	"skill_offer_1": ["Map", "Level-up skill choice 1", [], [KEY_1]],
+	"skill_offer_2": ["Map", "Level-up skill choice 2", [], [KEY_2]],
+	"skill_offer_3": ["Map", "Level-up skill choice 3", [], [KEY_3]],
+	"notebook": ["Map", "Notebook", [], [KEY_N]],
+	"global_spells": ["Map", "Global spells", [KEY_G], []],
+	"cancel_order": ["Map", "Cancel hero order", [KEY_BACKSPACE], []],
+	"map_save": ["Map", "Quick save", [KEY_F5], [KEY_F5]],
+	"map_load": ["Map", "Quick load", [KEY_F8, KEY_F9], [KEY_F8, KEY_F9]],
+	"center_hero": ["Map", "Center on hero", [KEY_HOME], [KEY_HOME, KEY_H]],
+	"shop_confirm": ["Shops", "Confirm trade", [KEY_ENTER, KEY_KP_ENTER], [KEY_ENTER, KEY_KP_ENTER]],
+	"shop_buy": ["Shops", "Stage a purchase", [KEY_B], []],
+	"shop_undo": ["Shops", "Undo purchase or put back spell", [KEY_U], [KEY_BACKSPACE]],
+}
+const HOTKEY_MODIFIERS := KEY_MASK_CTRL | KEY_MASK_ALT | KEY_MASK_SHIFT | KEY_MASK_META
 
 var values := {}
 var edition := ""
@@ -69,7 +109,7 @@ func use_edition(id: String) -> void:
 		for each: String in ["el1", "el2"]:
 			var part: Dictionary = _editions.get(each, defaults(each))
 			for key: String in EDITION:
-				if values[key] != flat[key]: part[key] = values[key]
+				if key != "hotkeys" and values[key] != flat[key]: part[key] = values[key]
 			_editions[each] = part
 	edition = id
 	var part: Dictionary = _editions.get(id, defaults(id))
@@ -102,6 +142,14 @@ func _edition_part() -> Dictionary:
 	return part
 
 static func _clean(key: String, value: Variant, fallback: Variant) -> Variant:
+	if key == "hotkeys":
+		var result := {}
+		if value is Dictionary:
+			for action: String in HOTKEYS:
+				var code: Variant = value.get(action)
+				if (code is int or code is float) and is_finite(float(code)) and float(code) == floor(float(code)) and code > 0 and code <= 0x7fffffff:
+					result[action] = int(code)
+		return result
 	if fallback is bool: return value if value is bool else fallback
 	if fallback is String: return value if value is String and value.length() <= 256 and value.replace("0", "").replace("1", "").is_empty() else fallback
 	if not (value is int or value is float) or not is_finite(float(value)): return fallback
@@ -110,6 +158,49 @@ static func _clean(key: String, value: Variant, fallback: Variant) -> Variant:
 		var number := int(value)
 		return clampi(number, int(bounds[0]), int(bounds[1])) if not bounds.is_empty() else number
 	return clampf(float(value), float(bounds[0]), float(bounds[1])) if not bounds.is_empty() else float(value)
+
+static func hotkey_defaults(id: String, action: String) -> Array:
+	return HOTKEYS[action][3 if id == "el2" else 2]
+
+func hotkey_overrides(id: String) -> Dictionary:
+	return values.hotkeys if id == edition else _editions.get(id, {}).get("hotkeys", {})
+
+static func hotkey_action(preferences: ELSettings, id: String, group: String, event: InputEventKey) -> String:
+	var overrides := preferences.hotkey_overrides(id) if preferences != null and event.device != InputEvent.DEVICE_ID_EMULATION else {}
+	var logical := int(event.get_keycode_with_modifiers())
+	var physical := int(event.get_physical_keycode_with_modifiers())
+	for action: String in HOTKEYS:
+		var defaults := hotkey_defaults(id, action)
+		if HOTKEYS[action][0] != group or defaults.is_empty(): continue
+		var keys: Array = [overrides[action]] if overrides.has(action) else defaults
+		if logical in keys or physical in keys: return action
+	return ""
+
+func set_hotkey(id: String, action: String, code: int) -> String:
+	var group: String = HOTKEYS[action][0]
+	var key := code & ~HOTKEY_MODIFIERS
+	if key in [0, KEY_SHIFT, KEY_CTRL, KEY_ALT, KEY_META, KEY_ESCAPE, KEY_F1, KEY_F2, KEY_F3, KEY_F4, KEY_F7, KEY_F10, KEY_QUOTELEFT,
+			KEY_UP, KEY_DOWN, KEY_LEFT, KEY_RIGHT, KEY_PAGEUP, KEY_PAGEDOWN] or (group == "Map" and (key in [KEY_W, KEY_A, KEY_S, KEY_D] or (id == "el1" and key == KEY_H))):
+		return "This key is reserved."
+	if (group != "Battle" and key == KEY_TAB) or (group == "Battle" and key in [KEY_ENTER, KEY_KP_ENTER]): return "This key is reserved."
+	var overrides := hotkey_overrides(id).duplicate()
+	for other: String in HOTKEYS:
+		if other == action or HOTKEYS[other][0] != group: continue
+		var defaults := hotkey_defaults(id, other)
+		if defaults.is_empty(): continue
+		if code in ([overrides[other]] if overrides.has(other) else defaults): return "This shortcut is already assigned."
+	overrides[action] = code
+	_set_hotkeys(id, overrides)
+	return ""
+
+func reset_hotkeys(id: String) -> void:
+	_set_hotkeys(id, {})
+
+func _set_hotkeys(id: String, overrides: Dictionary) -> void:
+	if id == edition: values.hotkeys = overrides
+	else:
+		if not _editions.has(id): _editions[id] = defaults(id)
+		_editions[id].hotkeys = overrides
 
 ## Reads the file. A file from before per-edition settings (flat keys) gives
 ## its values to both editions. With no active edition, the edition that was
@@ -121,10 +212,16 @@ func load_file(path := "user://settings.json") -> void:
 	var shared: Dictionary = raw.get("shared", raw) if raw.get("shared") is Dictionary else raw
 	for key: String in SHARED: values[key] = _clean(key, shared.get(key), values[key])
 	var current := edition
+	var version: Variant = raw.get("version", 0)
+	var legacy: bool = (version is int or version is float) and version < SETTINGS_VERSION
 	for id: String in ["el1", "el2"]:
 		var source: Variant = raw.get(id) if raw.get(id) is Dictionary else raw
 		var part := defaults(id)
 		for key: String in EDITION: part[key] = _clean(key, source.get(key), part[key])
+		# Older files saved EL2's bright default even when Gamma was untouched.
+		# The Options slider uses steps of 0.02, so it could not set this value.
+		if legacy and id == "el2" and is_equal_approx(float(part.gamma), 0.071429):
+			part.gamma = EDITION.gamma
 		_editions[id] = part
 	# Without an active edition, the edition active when the file was saved
 	# becomes the active one.
@@ -143,10 +240,12 @@ func load_file(path := "user://settings.json") -> void:
 
 func save_file(path := "user://settings.json") -> bool:
 	ELUiSounds.use_volumes(values)
-	var data := {"version": 2, "shared": {}}
+	var data := {"version": SETTINGS_VERSION, "shared": {}}
 	for key: String in SHARED: data.shared[key] = values[key]
 	# Values set before any edition was chosen belong to both editions.
-	for id: String in ["el1", "el2"]: data[id] = edition_values(id) if not edition.is_empty() else _edition_part()
+	for id: String in ["el1", "el2"]:
+		data[id] = edition_values(id) if not edition.is_empty() else _edition_part()
+		if edition.is_empty() and _editions.has(id): data[id].hotkeys = hotkey_overrides(id)
 	if not edition.is_empty(): data["edition"] = edition
 	var file := FileAccess.open(path, FileAccess.WRITE)
 	if file == null: return false

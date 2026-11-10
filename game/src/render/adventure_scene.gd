@@ -54,6 +54,10 @@ var blobs: MultiMeshInstance3D
 var _blob_slots: Dictionary = {}
 const BLOB_ALPHA := 128.0 / 255.0
 const BLOB_LIFT := 0.01
+## Bushes and forest groups cast foliage silhouettes and a small contact shadow.
+const FOLIAGE_BLOB_SCALE := 0.76
+const FOLIAGE_BLOB_ALPHA := 0.25
+const BLOB_SHADER := preload("res://src/render/adventure_blob_shadow.gdshader")
 ## How far the silhouette shadows darken the ground, and the sun that throws
 ## them toward the lower left of the opening view (fitted to original footage).
 const SILHOUETTE_STRENGTH := 0.45
@@ -100,11 +104,11 @@ func build(source: ELAdventureMap, session: ELAdventureSession = null) -> bool:
 		if definition.is_empty():
 			errors.append("Missing art: %s / %s" % [object.group, object.name])
 			continue
-		var key := "%s/%s/%s" % [definition.model, definition.texture, definition.secondary]
+		var key := "%s/%s/%s/%s" % [definition.model, definition.texture, definition.secondary, definition.get("wave", "")]
 		if not prototypes.has(key):
 			var prototype := ELModel.new()
 			add_child(prototype)
-			if not prototype.build(map.profile, definition.model, definition.texture, definition.secondary):
+			if not prototype.build(map.profile, definition.model, definition.texture, definition.secondary, definition.get("wave", "")):
 				errors.append(prototype.error)
 				prototype.queue_free()
 				continue
@@ -117,12 +121,16 @@ func build(source: ELAdventureMap, session: ELAdventureSession = null) -> bool:
 		var center := ELAdventureGrid.center(object, definition.row)
 		var position := Vector3(center.x * ELAdventureTerrain.CELL, 0, -center.y * ELAdventureTerrain.CELL)
 		var transform := Transform3D(Basis(Vector3.UP, -float((rotation >> 2) & 3) * PI / 2.0) * Basis.from_scale(mirror * float(definition.scale)), position)
-		if blob_shadow(map.profile.id, object, definition): _blob_slots[uid] = {"index": -1, "local": blob_local(prototype), "base": transform}
+		if blob_shadow(map.profile.id, object, definition):
+			var foliage := _foliage_shadow(map.profile.id, object, definition)
+			var footprint := FOLIAGE_BLOB_SCALE if foliage else 1.0
+			_blob_slots[uid] = {"index": -1, "local": blob_local(prototype, footprint), "base": transform,
+				"footprint": footprint, "opacity": FOLIAGE_BLOB_ALPHA if foliage else BLOB_ALPHA}
 		var casts := silhouette(map.profile.id, object, definition)
-		if definition.unit or prototype.clip_frames() > 1 or first_barrier(object):
+		if definition.unit or prototype.clip_frames() > 1 or first_barrier(object) or _movable_portal(object):
 			var model := ELModel.new()
 			add_child(model)
-			if not model.build(map.profile, definition.model, definition.texture, definition.secondary):
+			if not model.build(map.profile, definition.model, definition.texture, definition.secondary, definition.get("wave", "")):
 				errors.append(model.error)
 				model.queue_free()
 				continue
@@ -494,12 +502,15 @@ func update_object(item: Dictionary) -> void:
 		return
 	var definition := _art.resolve(item)
 	if definition.is_empty() or definition.get("hidden", false): return
-	var key := "%s/%s/%s" % [definition.model, definition.texture, definition.secondary]
+	var key := "%s/%s/%s/%s" % [definition.model, definition.texture, definition.secondary, definition.get("wave", "")]
 	var unit: bool = item.type in ["hero", "monster", "corpse"]
-	if (unit or item.type in ["rune_shop", "el1_spell_shop", "resource_mine", "mana_node", "fort"] or ELFirstScenario.is_castle(item)) and (_object_keys.get(uid, "") != key or (unit and not object_models.has(uid))):
+	var movable_portal := _movable_portal(item)
+	var replaceable: bool = unit or movable_portal or item.type in ["rune_shop", "el1_spell_shop", "resource_mine", "mana_node", "fort"] or ELFirstScenario.is_castle(item)
+	var needs_model := (unit or movable_portal) and not object_models.has(uid)
+	if replaceable and (_object_keys.get(uid, "") != key or needs_model):
 		var model := ELModel.new()
 		add_child(model)
-		if not model.build(map.profile, definition.model, definition.texture, definition.secondary):
+		if not model.build(map.profile, definition.model, definition.texture, definition.secondary, definition.get("wave", "")):
 			errors.append(model.error)
 			model.queue_free()
 			return
@@ -516,7 +527,7 @@ func update_object(item: Dictionary) -> void:
 		model.set_meta("art_key", key)
 		var casts := silhouette(map.profile.id, item, definition)
 		for part: MeshInstance3D in model.parts.values(): _shade(part, casts)
-		if _blob_slots.has(uid): _blob_slots[uid]["local"] = blob_local(model)
+		if _blob_slots.has(uid): _blob_slots[uid]["local"] = blob_local(model, float(_blob_slots[uid].footprint))
 		object_models[uid] = model
 		_object_keys[uid] = key
 		if unit:
@@ -536,6 +547,11 @@ func update_object(item: Dictionary) -> void:
 	for entry: Dictionary in _instances.get(uid, []):
 		entry.node.multimesh.set_instance_transform(entry.index, entry.transform if visible else Transform3D(Basis.from_scale(Vector3.ZERO), Vector3.ZERO))
 	_sync_blob(uid, visible)
+
+## Scripts swap portals in from off the map. Give each a model whose
+## position follows the object instead of baking it into a static batch.
+func _movable_portal(item: Dictionary) -> bool:
+	return map.profile.id == "el2" and item.get("group") == "additional_buildings" and item.get("name") in ["Teleport", "TeleportReceiver"]
 
 ## A first-game runestone barrier (Runestone1/2), drawn as its own figure.
 func first_barrier(item: Dictionary) -> bool:
@@ -695,18 +711,19 @@ func move_actor(uid: int, position: Vector2, moving: bool, tiles_per_second := 0
 	var clip := walk_clip(model) if moving else "cidle"
 	if not model.get_meta("corpse", false):
 		if map.profile.id == "el2":
-			# Accelerated travel plays the run clip at its ordinary rate.
-			# Mounts with no run clip keep their idle at this speed.
-			if moving and fast:
-				clip = model.clip_for_code(RUN_CODE)
-				if clip.is_empty(): clip = "cidle"
 			model.speed = 1.0
-			if moving and not fast:
+			var run := model.clip_for_code(RUN_CODE) if moving and fast else ""
+			if moving and fast and run.is_empty() and model.has_clip("crun"): run = "crun"
+			if not run.is_empty():
+				clip = run
+			elif moving:
 				# The original advances 15 frames per world unit divided by
-				# the authored walk speed, adjusted by the figure's scale.
+				# the authored walk speed. Use that gait at the faster travel
+				# rate when a mounted figure only ships a walk clip.
 				var stride := float(model.timing.get(clip, {}).get("speed", 0.0)) * model.scale.x
 				if stride > 0.0 and tiles_per_second > 0.0:
 					model.speed = (15.0 * ELAdventureTerrain.CELL * tiles_per_second) / (model.fps * stride)
+				elif fast and clip != "cidle": model.speed = 2.0
 		if model.base_clip() != clip: model.play(clip)
 	# Movement through fog stays hidden; an actor appears as it steps into view.
 	if fog_session != null: fog_object(fog_session.object(uid), Vector2i(roundi(position.x), roundi(position.y)))
@@ -746,8 +763,8 @@ func set_animate_objects(on: bool) -> void:
 	for model: ELModel in animated:
 		if is_instance_valid(model): model.speed = 1.0 if on else 0.0
 
-## Whether an object draws the original ground blob shadow (view flag)
-## instead of a silhouette. Second game: terrain objects whose TerrObj
+## Whether an object draws the original ground blob shadow (view flag).
+## Second game: terrain objects whose TerrObj
 ## ShadowType is 2. First game: additional buildings, spell shops, forts and
 ## mana nodes (their constructors set it; the ingredient shop does not).
 static func blob_shadow(edition: String, object: Dictionary, definition: Dictionary) -> bool:
@@ -756,9 +773,14 @@ static func blob_shadow(edition: String, object: Dictionary, definition: Diction
 	if edition == "el1": return object.get("group") in ["additional_buildings", "forts", "mana_nodes"] or object.get("type") == "el1_spell_shop"
 	return false
 
+static func _foliage_shadow(edition: String, object: Dictionary, definition: Dictionary) -> bool:
+	if edition != "el2" or object.get("group") != "terrain_objects": return false
+	var title := str(definition.get("row", {}).get("METitle", "")).to_lower()
+	return ".bush" in title or ".forest" in title
+
 ## The blob quad in the model's own frame: the footprint of its mesh bounds
 ## (the original's model-space rectangle) on the ground.
-static func blob_local(model: ELModel) -> Transform3D:
+static func blob_local(model: ELModel, footprint := 1.0) -> Transform3D:
 	var bounds := AABB()
 	var first := true
 	for part: MeshInstance3D in model.parts.values():
@@ -772,7 +794,7 @@ static func blob_local(model: ELModel) -> Transform3D:
 		bounds = box if first else bounds.merge(box)
 		first = false
 	var centre := bounds.get_center()
-	return Transform3D(Basis.from_scale(Vector3(maxf(bounds.size.x, 0.001), 1, maxf(bounds.size.z, 0.001))), Vector3(centre.x, 0, centre.z))
+	return Transform3D(Basis.from_scale(Vector3(maxf(bounds.size.x * footprint, 0.001), 1, maxf(bounds.size.z * footprint, 0.001))), Vector3(centre.x, 0, centre.z))
 
 func _build_blobs() -> void:
 	if _blob_slots.is_empty(): return
@@ -780,14 +802,12 @@ func _build_blobs() -> void:
 	if texture == null: return
 	var quad := PlaneMesh.new()
 	quad.size = Vector2.ONE
-	var material := StandardMaterial3D.new()
-	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	material.albedo_texture = texture
-	material.albedo_color = Color(1, 1, 1, BLOB_ALPHA)
-	material.cull_mode = BaseMaterial3D.CULL_DISABLED
+	var material := ShaderMaterial.new()
+	material.shader = BLOB_SHADER
+	material.set_shader_parameter("mask_texture", texture)
 	var instances := MultiMesh.new()
 	instances.transform_format = MultiMesh.TRANSFORM_3D
+	instances.use_custom_data = true
 	instances.mesh = quad
 	instances.instance_count = _blob_slots.size()
 	blobs = MultiMeshInstance3D.new()
@@ -799,6 +819,7 @@ func _build_blobs() -> void:
 	var index := 0
 	for uid: int in _blob_slots:
 		_blob_slots[uid]["index"] = index
+		instances.set_instance_custom_data(index, Color(float(_blob_slots[uid].opacity), 0, 0, 0))
 		index += 1
 		_sync_blob(uid, true)
 
@@ -827,17 +848,17 @@ func set_blob_shadows(on: bool) -> void:
 
 ## Whether an object casts the original's silhouette shadow on the ground
 ## (recorded footage of both games shows them under trees, rocks and
-## buildings): every object that does not draw a blob, including the second
-## game's volcanoes and rocks of ShadowType 0.
+## buildings). Bushes and grouped forests cast shadows beyond the canopy.
 ## The original draws the silhouette on the ground only, so nothing else
 ## receives it.
 static func silhouette(edition: String, object: Dictionary, definition: Dictionary) -> bool:
-	return edition in ["el1", "el2"] and not blob_shadow(edition, object, definition)
+	return edition in ["el1", "el2"] and (not blob_shadow(edition, object, definition) or _foliage_shadow(edition, object, definition))
 
 func _shade(node: GeometryInstance3D, casts: bool) -> void:
-	node.layers |= ELAdventureTerrain.REFLECTION_LAYER
-	node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON if casts else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	var material := node.material_override as BaseMaterial3D
+	var wave := material != null and material.has_meta("water_surface")
+	if not wave: node.layers |= ELAdventureTerrain.REFLECTION_LAYER
+	node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON if casts and not wave else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	if material != null: material.disable_receive_shadows = true
 
 ## Highest point of an object's drawn figure (world units above the ground),

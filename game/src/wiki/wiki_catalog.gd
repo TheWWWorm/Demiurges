@@ -23,6 +23,18 @@ const LISTS := {"creatures": "all-creatures", "spells": "all-spells", "artifacts
 	"skills": "all-skills", "specializations": "all-specializations"}
 const COLORS := ["Red", "Green", "Blue", "Black", "White"]
 const RACE_KEYS := {"Red": "T_VL_CHAOTS", "Green": "T_VL_VITALS", "Blue": "T_VL_KINETS", "Black": "T_VL_SYNTHETS", "White": "T_RACE_NAME_0"}
+const EN_FACTIONS := {"Red": "Chaot", "Green": "Vital", "Blue": "Kinet", "Black": "Synthet"}
+const RU_CREATURE_RACES := {
+	"Abomination": "Исчадия", "Aviak": "Авиаки", "Bat": "Летучие мыши", "Bee": "Пчёлы",
+	"Beholder": "Злобоглазы", "Cutter": "Пилильщики", "Cyclope": "Циклопы", "Dragon": "Драконы",
+	"Elemental": "Элементали", "Fighter": "Некроманты", "Fingus": "Фингусы", "Gibberling": "Гибберлины",
+	"Halo": "Нимбы", "Hero": "Герои", "Hopper": "Прыгуны", "Hornet": "Шершни", "Horror": "Ужасы",
+	"Knight": "Рыцари", "Kobold": "Кобольды", "Lamia": "Ламии", "Maggot": "Магготы", "Mantis": "Мантисы",
+	"Mechos": "Мехосы", "Mechozaurus": "Мехозавры", "Mechworm": "Механические черви",
+	"Ogre": "Людоеды", "Orc": "Орки", "OutDevourer": "Бесцветные жнецы", "OutEnchanter": "Бесцветные ткачи",
+	"OutSamurai": "Бесцветные воины", "OutShifter": "Бесцветные чародеи", "OutSpellJammer": "Бесцветные каратели",
+	"Pteros": "Птеросы", "Rat": "Крысы", "Snake": "Змеи", "Spirit": "Призраки", "Tick": "Клещи",
+	"Treant": "Древни", "Velos": "Колесники", "Wall": "Стены", "Wolf": "Волки"}
 ## EL1 resource columns in the order of T_RESOURCE_NAME_1..7; EL2 uses three.
 const RESOURCES := {"el1": ["Root", "Lotus", "Ruby", "Emerald", "Sapphire", "Diamond", "Stone"], "el2": ["Root", "Ruby", "Stone"]}
 ## The first game's text table keeps resource names in the genitive; the
@@ -41,19 +53,20 @@ const LABELS := {
 		"creatures": "creatures", "spells": "spells", "artifacts": "artifacts", "skills": "skills", "specializations": "specializations",
 		"creatures_title": "All creatures", "spells_title": "All sorceries and enchantments", "artifacts_title": "All artifacts",
 		"skills_title": "All hero skills", "specializations_title": "All specializations",
-		"games": "Games", "type": "Type", "race": "Race", "rarity": "Rarity", "cost": "Ether cost", "power": "Power", "toughness": "Toughness",
+		"games": "Games", "type": "Type", "race": "Race", "faction": "Faction", "code": "Code", "artifact_code": "Artifact code",
+		"rarity": "Rarity", "cost": "Ether cost", "power": "Power", "toughness": "Toughness",
 		"abilities": "Abilities", "artifact": "Artifact", "yes": "yes", "name": "Name", "price": "Price", "description": "Description",
 		"resource": "Resource", "shop": "Price in shops and the duel editor", "rune": "Price of a rune", "ability": "Ability",
 		"Cantrip": "Cantrip", "Common": "Common", "Rare": "Rare", "Unique": "Unique", "NoAffect": "Unaffected",
-		"level": "Rank", "effect": "Effect", "duel_price": "Duel editor price", "chance": "Chance", "colors": "Races",
+		"level": "Rank", "effect": "Effect", "duel_price": "Duel editor price", "chance": "Chance", "colors": "Factions",
 		"Ulow": "very low", "Low": "low", "Med": "medium", "High": "high", "other": "Other",
 		"both": "In Etherlords and Etherlords II", "only": "Only in %s",
 		"changes": "Changes in Etherlords II", "changed_from": "%s: %s → %s", "old_text": "%s in Etherlords:",
 		"same": "Etherlords II keeps this card unchanged.",
 		"count": "%d entries. Select a name for its page.", "back": "All %s",
 		"legend": "Games: I is Etherlords, II is Etherlords II. A highlighted value changed in Etherlords II (Etherlords → Etherlords II).",
-		"intro_creatures": "Every creature of both games with its race, ether cost, power, toughness and abilities, by race.",
-		"intro_spells": "Every sorcery and enchantment of both games with its type, rarity and ether cost, by race.",
+		"intro_creatures": "Every creature of both games with its ether cost, power, toughness and abilities, grouped by faction.",
+		"intro_spells": "Every sorcery and enchantment of both games with its type, rarity and ether cost, grouped by faction.",
 		"intro_artifacts": "Every artifact of both games. Artifacts are used during battle a limited number of times; some of them summon a creature.",
 		"intro_skills": "Hero skills of both games. A hero learns at most five, each up to rank 3.",
 		"intro_specializations": "Hero specializations of both games: chance-based talents in battle.",
@@ -62,19 +75,20 @@ const LABELS := {
 		"creatures": "создания", "spells": "заклинания", "artifacts": "артефакты", "skills": "навыки", "specializations": "специализации",
 		"creatures_title": "Все создания", "spells_title": "Всё колдовство и чары", "artifacts_title": "Все артефакты",
 		"skills_title": "Все навыки героев", "specializations_title": "Все специализации",
-		"games": "Игры", "type": "Вид", "race": "Раса", "rarity": "Редкость", "cost": "Стоимость в эфире", "power": "Сила", "toughness": "Стойкость",
+		"games": "Игры", "type": "Вид", "race": "Раса", "faction": "Фракция", "code": "Код", "artifact_code": "Код артефакта",
+		"rarity": "Редкость", "cost": "Стоимость в эфире", "power": "Сила", "toughness": "Стойкость",
 		"abilities": "Способности", "artifact": "Артефакт", "yes": "да", "name": "Название", "price": "Цена", "description": "Описание",
 		"resource": "Ресурс", "shop": "Цена в лавках и редакторе дуэли", "rune": "Цена руны", "ability": "Способность",
 		"Cantrip": "Примитив", "Common": "Обычное", "Rare": "Редкое", "Unique": "Тайное", "NoAffect": "Невосприимчивость",
-		"level": "Ступень", "effect": "Действие", "duel_price": "Цена в редакторе дуэли", "chance": "Шанс", "colors": "Расы",
+		"level": "Ступень", "effect": "Действие", "duel_price": "Цена в редакторе дуэли", "chance": "Шанс", "colors": "Фракции",
 		"Ulow": "очень низкий", "Low": "низкий", "Med": "средний", "High": "высокий", "other": "Прочие",
 		"both": "Есть в «Демиургах» и «Демиургах II»", "only": "Только в игре «%s»",
 		"changes": "Изменения в «Демиургах II»", "changed_from": "%s: %s → %s", "old_text": "%s в «Демиургах»:",
 		"same": "В «Демиургах II» эта карта не изменилась.",
 		"count": "Записей: %d. Выберите название, чтобы открыть страницу.", "back": "Все %s",
 		"legend": "Игры: I — «Демиурги», II — «Демиурги II». Выделенное значение изменилось в «Демиургах II» («Демиурги» → «Демиурги II»).",
-		"intro_creatures": "Все создания обеих игр по расам: стоимость в эфире, сила, стойкость и способности.",
-		"intro_spells": "Всё колдовство и все чары обеих игр по расам: вид, редкость и стоимость в эфире.",
+		"intro_creatures": "Все создания обеих игр по фракциям: стоимость в эфире, сила, стойкость и способности.",
+		"intro_spells": "Всё колдовство и все чары обеих игр по фракциям: вид, редкость и стоимость в эфире.",
 		"intro_artifacts": "Все артефакты обеих игр. Артефакты применяются в бою ограниченное число раз; некоторые призывают создание.",
 		"intro_skills": "Навыки героев обеих игр. Герой знает не больше пяти навыков, каждый до 3-й ступени.",
 		"intro_specializations": "Специализации героев обеих игр — случайные таланты в бою.",
@@ -207,6 +221,13 @@ func _games_short(games: Array) -> String:
 	for edition: String in games: parts.append(_l(edition + "_short"))
 	return ", ".join(parts)
 
+func _code_line(code: String) -> String:
+	return "<p>%s: <code>%s</code></p>" % [_e(_l("code")), _e(code)]
+
+func _creature_race(creature: Dictionary) -> String:
+	var race := str(creature.get("Race", ""))
+	return str(RU_CREATURE_RACES.get(race, race)) if language == "ru" else race
+
 ## One comparison table of facts: `facts` is {edition: [[label, value], ...]}
 ## (values already escaped). With two editions each row shows both, and a
 ## value Etherlords II changed is highlighted; changes are appended to
@@ -240,6 +261,12 @@ func _build() -> void:
 		var profile: ELProfile = sources[edition]
 		var spells := profile.table("CombatSpells")
 		var creatures := profile.table("CombatCreatures")
+		var artifacts := {}
+		var templates := profile.table("Artefacts")
+		for name: String in templates:
+			var spell := str(templates[name].get("SpellType", ""))
+			if not artifacts.has(spell): artifacts[spell] = []
+			artifacts[spell].append(name)
 		for code: String in spells:
 			var row: Dictionary = spells[code]
 			var title := _t(edition, str(row.get("Name", "")))
@@ -252,6 +279,7 @@ func _build() -> void:
 			var creature: Dictionary = creatures.get(code, {}) if str(row.get("Class", "")) == "Creature" else {}
 			if not cards.has(code): cards[code] = {}
 			cards[code][edition] = {"row": row, "creature": creature, "title": title,
+				"artifact_codes": artifacts.get(code, []),
 				"description": _clean(_t(edition, str(row.get("ToolTip", "")))),
 				"ability": _clean(_t(edition, str(row.get("AbilityText", "")))),
 				"kind": "artifacts" if artifact else ("creatures" if not creature.is_empty() else "spells")}
@@ -278,9 +306,17 @@ static func _same_model(a: Dictionary, b: Dictionary) -> bool:
 
 func _card_facts(edition: String, record: Dictionary) -> Array:
 	var row: Dictionary = record.row
-	var facts: Array = [[_l("type"), _e(_type(edition, row))], [_l("race"), _e(_race(edition, str(row.get("Color", ""))))],
-		[_l("rarity"), _e(_l(str(row.get("Rarity", ""))))], [_l("cost"), str(row.get("Cost", 0))]]
+	var color := str(row.get("Color", ""))
+	var faction := str(EN_FACTIONS.get(color, _race(edition, color))) if language == "en" else _race(edition, color)
+	var facts: Array = [[_l("type"), _e(_type(edition, row))], [_l("faction"), _e(faction)]]
+	var race := _creature_race(record.creature)
+	if not race.is_empty(): facts.append([_l("race"), _e(race)])
+	facts.append_array([[_l("rarity"), _e(_l(str(row.get("Rarity", ""))))], [_l("cost"), str(row.get("Cost", 0))]])
 	if record.kind == "artifacts": facts.append([_l("artifact"), _l("yes")])
+	if not record.artifact_codes.is_empty():
+		var codes: Array = []
+		for code: String in record.artifact_codes: codes.append("<code>%s</code>" % _e(code))
+		facts.append([_l("artifact_code"), ", ".join(codes)])
 	var creature: Dictionary = record.creature
 	if not creature.is_empty():
 		facts.append([_l("power"), str(creature.get("Power", 0))])
@@ -301,7 +337,7 @@ func _card_page(code: String, records: Dictionary) -> Dictionary:
 	var shown: Array = [latest]
 	if creature and games.size() > 1 and not records.el1.creature.is_empty() and not _same_model(records.el1.creature, main.creature):
 		shown = games
-	var html := "<h1>%s</h1>" % _e(main.title)
+	var html := "<h1>%s</h1>%s" % [_e(main.title), _code_line(code)]
 	html += "<figure data-card=\"%s\" data-kind=\"%s\" data-games=\"%s\"></figure>" % [code, "creature" if creature else "card", " ".join(shown)]
 	html += _games_line(games)
 	html += _paragraphs(main.description)
@@ -337,10 +373,13 @@ func _card_page(code: String, records: Dictionary) -> Dictionary:
 	var summary := " · ".join([_type(latest, main.row), _race(latest, str(main.row.get("Color", ""))), str(main.row.get("Cost", 0))])
 	if creature: summary += " · %s/%s" % [main.creature.get("Power", 0), main.creature.get("Toughness", 0)]
 	summary += " · " + _games_short(games)
-	var words := ""
+	var words := code
 	for edition: String in games:
 		var record: Dictionary = records[edition]
 		words += " %s %s %s" % [record.title, record.description, record.ability]
+		var race := _creature_race(record.creature)
+		if not race.is_empty(): words += " " + race
+		for artifact_code: String in record.artifact_codes: words += " " + artifact_code
 		for flag: String in _flags(record.creature): words += " " + _flag(edition, flag)
 	return {"key": card_key(code), "title": main.title, "category": LISTS[kind], "summary": summary, "html": html,
 		"search": words.strip_edges().to_lower(), "games": games, "card": code, "models": shown,
@@ -366,8 +405,8 @@ func _skills(lists: Dictionary) -> void:
 		var latest: String = games.back()
 		var title := _t(latest, str(records[latest][0].get("Name", "")))
 		if title.is_empty(): continue
-		var html := "<h1>%s</h1>%s" % [_e(title), _games_line(games)]
-		var words := title
+		var html := "<h1>%s</h1>%s%s" % [_e(title), _code_line(code), _games_line(games)]
+		var words := code + " " + title
 		var effects := {}
 		for edition: String in games:
 			effects[edition] = {}
@@ -426,7 +465,7 @@ func _specializations(lists: Dictionary) -> void:
 			var price := _price_text(edition, row, "DuelCost")
 			if not price.is_empty(): facts[edition].append([_l("duel_price"), _e(price)])
 		var changes: Array = []
-		var html := "<h1>%s</h1>%s%s" % [_e(main.title), _games_line(games), _paragraphs(main.effect)]
+		var html := "<h1>%s</h1>%s%s%s" % [_e(main.title), _code_line(code), _games_line(games), _paragraphs(main.effect)]
 		html += _compare(games, facts, changes)
 		if games.size() > 1:
 			if records.el1.effect != main.effect and not records.el1.effect.is_empty():
@@ -435,7 +474,7 @@ func _specializations(lists: Dictionary) -> void:
 			html += "<ul>%s</ul>" % "".join(changes) if not changes.is_empty() else "<p>%s</p>" % _e(_l("same"))
 		html += "<p>%s</p>" % _link(LISTS.specializations, _l("back") % _l("specializations"))
 		var page := {"key": key, "title": main.title, "category": LISTS.specializations, "summary": "%s · %s" % [races[latest], _games_short(games)],
-			"html": html, "search": (main.title + " " + main.effect).to_lower(), "games": games, "card": "", "models": [], "kind": "specialization"}
+			"html": html, "search": ("%s %s %s" % [code, main.title, main.effect]).to_lower(), "games": games, "card": "", "models": [], "kind": "specialization"}
 		pages.append(page)
 		lists.specializations.append({"page": page, "records": records})
 
@@ -475,7 +514,7 @@ func _list_page(kind: String, entries: Array) -> Dictionary:
 	var cost := func(edition: String, record: Dictionary) -> String: return str(record.row.get("Cost", 0))
 	match kind:
 		"creatures", "spells":
-			# Grouped by race (the newest edition's), as the games' spellbooks.
+			# Grouped by faction (the newest edition's), as the games' spellbooks.
 			var groups := {}
 			for entry: Dictionary in entries:
 				var records: Dictionary = entry.records
@@ -507,7 +546,7 @@ func _list_page(kind: String, entries: Array) -> Dictionary:
 							_cell(records, func(_ed, r): return _l(str(r.row.get("Rarity", "")))), _cell(records, cost)]))
 					html += _table(rows, 5)
 		"artifacts":
-			var rows: Array = [_row([_l("name"), _l("games"), _l("type"), _l("race"), _l("cost")], true)]
+			var rows: Array = [_row([_l("name"), _l("games"), _l("type"), _l("faction"), _l("cost")], true)]
 			for entry: Dictionary in entries:
 				var records: Dictionary = entry.records
 				rows.append(_row([name_cell.call(entry), games_cell.call(entry), _cell(records, func(ed, r): return _type(ed, r.row)),

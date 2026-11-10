@@ -30,18 +30,22 @@ var rng_state := 0
 ## who take the screen in turn; `names` are the two players' names.
 var hot_seat := false
 var names: Array = ["", ""]
+var hall_run := ""
 
-## Presets the Random choice draws from: exactly the current level.
-static func random_pool(pool: Array, level: int) -> Array:
-	return pool.filter(func(p: Dictionary): return int(p.resource_level) == level)
+## At either new EL2 tier, include level 3 so stock opponents remain available.
+static func random_pool(pool: Array, level: int, edition := "") -> Array:
+	var minimum := level
+	if edition == "el2" and level >= ELDuelCosts.EL2_EXTENDED_LEVEL:
+		minimum = ELDuelCosts.EL2_EXTENDED_LEVEL - 1
+	return pool.filter(func(p: Dictionary): return int(p.resource_level) >= minimum and int(p.resource_level) <= level)
 
 ## A side's choice (a preset, or {} for Random) is valid at `level`.
-static func side_valid(pool: Array, pick: Dictionary, level: int) -> bool:
-	if pick.is_empty(): return not random_pool(pool, level).is_empty()
+static func side_valid(pool: Array, pick: Dictionary, level: int, edition := "") -> bool:
+	if pick.is_empty(): return not random_pool(pool, level, edition).is_empty()
 	return int(pick.resource_level) <= level
 
-static func can_start(pool: Array, picks: Array, level: int) -> bool:
-	return side_valid(pool, picks[0], level) and side_valid(pool, picks[1], level)
+static func can_start(pool: Array, picks: Array, level: int, edition := "") -> bool:
+	return side_valid(pool, picks[0], level, edition) and side_valid(pool, picks[1], level, edition)
 
 ## Arena ids in list order (the Random entry is not included).
 static func arenas(profile: ELProfile) -> Array[String]:
@@ -62,7 +66,7 @@ func begin(profile: ELProfile, pool: Array, picks: Array, level: int, round_coun
 	if level < levels.x or level > levels.y: return "Resource level out of range."
 	if round_count < 1 or round_count > MAX_ROUNDS: return "Rounds out of range."
 	if arena_id != RANDOM and not arenas(profile).has(arena_id): return "Unknown arena."
-	if not can_start(pool, picks, level): return "Choose a preset for each side."
+	if not can_start(pool, picks, level, profile.id): return "Choose a preset for each side."
 	edition = profile.id
 	resource_level = level
 	rounds = round_count
@@ -71,7 +75,7 @@ func begin(profile: ELProfile, pool: Array, picks: Array, level: int, round_coun
 	rng_state = seed & 0xffffffff
 	for side in 2:
 		if picks[side].is_empty():
-			var candidates := random_pool(pool, level)
+			var candidates := random_pool(pool, level, edition)
 			presets[side] = candidates[_rand() % candidates.size()].duplicate(true)
 			templates[side] = ""
 		else:
@@ -81,6 +85,7 @@ func begin(profile: ELProfile, pool: Array, picks: Array, level: int, round_coun
 	played = 0
 	wins = [0, 0]
 	draws = 0
+	hall_run = ELHallOfFame.new_run() if edition == "el2" else ""
 	return ""
 
 ## Round `index`'s own random value number `salt`: a pure function of the
@@ -143,13 +148,16 @@ func shows_summary() -> bool:
 	return rounds >= 2
 
 func snapshot() -> Dictionary:
-	return {"edition": edition, "resource_level": resource_level, "rounds": rounds, "arena": arena,
+	var data := {"edition": edition, "resource_level": resource_level, "rounds": rounds, "arena": arena,
 		"presets": presets.duplicate(true), "templates": templates.duplicate(), "seed": seed_value,
 		"played": played, "wins": wins.duplicate(), "draws": draws, "rng_state": rng_state,
 		"hot_seat": hot_seat, "names": names.duplicate()}
+	if not hall_run.is_empty(): data.hall_run = hall_run
+	return data
 
 func restore(profile: ELProfile, data: Dictionary) -> bool:
 	if data.get("edition") != profile.id: return false
+	if data.has("hall_run") and not ELHallOfFame.valid_run(data.hall_run): return false
 	for key in ["resource_level", "rounds", "seed", "played", "draws", "rng_state"]:
 		if not ELLuaSave._integer(data.get(key), 0, 0xffffffff): return false
 	var w: Variant = data.get("wins")
@@ -182,4 +190,5 @@ func restore(profile: ELProfile, data: Dictionary) -> bool:
 	rng_state = int(data.rng_state)
 	hot_seat = hot
 	names = [String(n[0]).left(64), String(n[1]).left(64)]
+	hall_run = str(data.get("hall_run", JSON.stringify(data).sha256_text().left(32))) if edition == "el2" else ""
 	return true

@@ -22,6 +22,8 @@ The editor changes a preset. Everything costs resources, and the total must fit 
 
 Set the number of rounds (1–99, all of them are played) and the arena, or **Random** for a new arena every round. A coin decides who attacks first in each round.
 
+In Etherlords II, the remake records a duel win in the local **Hall of Fame** under **Duels**. The winner earns 100 points per round won. Open the Hall of Fame from **Single › Mission** and use its switch button to reach the duel table.
+
 ## HotSeat
 
 Two players can play on one computer (**HotSeat**). A message between turns tells the next player to take the seat.

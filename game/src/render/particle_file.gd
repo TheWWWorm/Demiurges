@@ -1,16 +1,20 @@
 class_name ELParticleFile
 extends RefCounted
-## Second-game baked particle animation (.pfx in pfx.res), 30 frames a second.
+## Baked particle animation (.pfx in pfx.res), 30 frames a second.
 ##
 ##   u32, u32 frames
 ##   per frame: u32 n; n x u32 particle id; n x (x, y, z) f32; n x f32 size;
 ##              n x u16 atlas cell; n x (r, g, b) u8; n x u8 alpha
 ##   u16 length + texture name; u32 atlas columns; u32 atlas rows;
 ##   u16 blend (1 additive, 0 alpha); u32 loop start; u32 loop end
+## The packed format uses u16 frame and particle counts, omits particle IDs,
+## and stores positions as s16 hundredths and sizes as u16 fiftieths. Its
+## texture-name length is u32 and its loop start is u8.
 ## Coordinates are relative to the effect origin, z up, two units per map cell.
 ## A non-zero loop end makes the effect cyclic: the emission repeats every
 ## (loop end) frames while earlier cycles play their tail to the last frame.
 const MAGIC := 0x1468fcca
+const PACKED_MAGIC := 0x1478fcca
 const FPS := 30.0
 const MAX_FRAMES := 4096
 ## Largest frame in the shipped files: Ublockable.pfx (combat), 18,645.
@@ -65,28 +69,42 @@ static func decode(bytes: PackedByteArray) -> ELParticleFile:
 	return file
 
 func _parse(bytes: PackedByteArray) -> void:
-	if bytes.size() < 8 or bytes.decode_u32(0) != MAGIC:
+	var magic := bytes.decode_u32(0) if bytes.size() >= 8 else 0
+	if magic != MAGIC and magic != PACKED_MAGIC:
 		error = "Not a particle file"
 		return
-	frames = bytes.decode_u32(4)
+	var packed := magic == PACKED_MAGIC
+	frames = bytes.decode_u16(4) if packed else bytes.decode_u32(4)
 	if frames < 1 or frames > MAX_FRAMES:
 		error = "Invalid particle frame count"
 		return
-	var at := 8
+	var count_width := 2 if packed else 4
+	var particle_width := 14 if packed else 26
+	var at := 4 + count_width
 	starts.resize(frames + 1)
 	var total := 0
 	for frame in frames:
 		starts[frame] = total
-		if at + 4 > bytes.size(): return _bad()
-		var count := bytes.decode_u32(at)
-		at += 4
-		if count > MAX_PARTICLES or at + count * 26 > bytes.size(): return _bad()
+		if at + count_width > bytes.size(): return _bad()
+		var count := bytes.decode_u16(at) if packed else bytes.decode_u32(at)
+		at += count_width
+		if count > MAX_PARTICLES or at + count * particle_width > bytes.size(): return _bad()
 		max_count = maxi(max_count, count)
-		at += count * 4
-		positions.append_array(bytes.slice(at, at + count * 12).to_float32_array())
-		at += count * 12
-		sizes.append_array(bytes.slice(at, at + count * 4).to_float32_array())
-		at += count * 4
+		if packed:
+			positions.resize((total + count) * 3)
+			for i in count * 3:
+				positions[total * 3 + i] = bytes.decode_s16(at + i * 2) * 0.01
+			at += count * 6
+			sizes.resize(total + count)
+			for i in count:
+				sizes[total + i] = bytes.decode_u16(at + i * 2) * 0.02
+			at += count * 2
+		else:
+			at += count * 4
+			positions.append_array(bytes.slice(at, at + count * 12).to_float32_array())
+			at += count * 12
+			sizes.append_array(bytes.slice(at, at + count * 4).to_float32_array())
+			at += count * 4
 		cells.append_array(bytes.slice(at, at + count * 2))
 		at += count * 2
 		rgb.append_array(bytes.slice(at, at + count * 3))
@@ -94,17 +112,18 @@ func _parse(bytes: PackedByteArray) -> void:
 		at += count * 4
 		total += count
 	starts[frames] = total
-	if at + 2 > bytes.size(): return _bad()
-	var length := bytes.decode_u16(at)
-	at += 2
-	if at + length + 18 > bytes.size(): return _bad()
+	var length_width := 4 if packed else 2
+	if at + length_width > bytes.size(): return _bad()
+	var length := bytes.decode_u32(at) if packed else bytes.decode_u16(at)
+	at += length_width
+	if at + length + (15 if packed else 18) > bytes.size(): return _bad()
 	texture = bytes.slice(at, at + length).get_string_from_ascii()
 	at += length
 	columns = clampi(bytes.decode_u32(at), 1, 64)
 	rows = clampi(bytes.decode_u32(at + 4), 1, 64)
 	additive = bytes.decode_u16(at + 8) == 1
-	loop_start = bytes.decode_u32(at + 10)
-	loop_end = bytes.decode_u32(at + 14)
+	loop_start = bytes[at + 10] if packed else bytes.decode_u32(at + 10)
+	loop_end = bytes.decode_u32(at + (11 if packed else 14))
 	if loop_end >= frames or loop_start > loop_end: loop_end = 0
 
 func _bad() -> void:

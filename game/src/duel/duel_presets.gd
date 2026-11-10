@@ -88,6 +88,8 @@ static func choice(profile: ELProfile, preset: Dictionary, template := "") -> Di
 	var result := {"faction": String(preset.faction), "hero": template if not template.is_empty() else default_template(profile, String(preset.faction)),
 		"level": int(preset.level), "skills": preset.get("skills", {}).duplicate(), "specialization": String(preset.get("specialization", "NONE")),
 		"preset": String(preset.get("id", ""))}
+	var resource_level := int(preset.get("resource_level", 1))
+	if ELDuelCosts.sandbox(profile, resource_level): result.resource_level = resource_level
 	var deck := String(preset.get("deck", ""))
 	if not deck.is_empty() and _same(ELCatalog.deck(profile, deck), preset.cards) and _same(ELCatalog.deck_uses(profile, deck), preset.get("runes", [])):
 		# Unchanged shipped deck: the duel reads the authored per-slot uses itself.
@@ -133,10 +135,11 @@ static func with_reserve_deck(preset: Dictionary, cards: Array) -> Dictionary:
 	for code: String in preset.cards:
 		reserve[code] = int(reserve.get(code, 0)) + 1
 	var active := {}
+	var copy_limit := ELDuelCosts.el2_copy_limit(int(preset.get("resource_level", 1)))
 	for code: Variant in cards:
 		if code is not String or int(reserve.get(code, 0)) <= 0: return {}
 		active[code] = int(active.get(code, 0)) + 1
-		if active[code] > ELDuelCosts.EL2_COPIES: return {}
+		if active[code] > copy_limit: return {}
 		reserve[code] -= 1
 		if reserve[code] == 0: reserve.erase(code)
 	var result := preset.duplicate(true)
@@ -186,13 +189,11 @@ static func normalize(value: Variant) -> Dictionary:
 		"skills": skills, "cards": cards, "runes": runes, "reserve": reserve, "artifacts": artifacts, "deck": String(p.get("deck", ""))}
 
 # --- User presets ------------------------------------------------------------
-# The original writes `Duel\<name>.prs` (MSXML `duel_preset`) into the game
-# folder. The remake never writes there: user presets are normalized JSON
-# dictionaries in an edition-specific user folder, one file per preset, named
-# after the preset. (The exact .prs element/attribute layout is not
-# transcribed, so original .prs files are not imported yet.)
+# User presets are normalized JSON in the edition's user folder. Original
+# .prs files copied there are converted once and kept as backups.
 
 const USER_FORMAT := 1
+const MAX_ORIGINAL_PRESET_BYTES := 256 * 1024
 ## Characters the second game rejects in a preset name (T_MB_WRONG_PRESET_NAME);
 ## also applied to the first game, whose rule is unconfirmed, because the name
 ## becomes a file name.
@@ -210,6 +211,65 @@ static func valid_name(name: String) -> bool:
 static func _user_path(profile: ELProfile, name: String) -> String:
 	return user_dir(profile).path_join(name.strip_edges() + ".json")
 
+## MSXML writes the preset header as root attributes and preserves deck order.
+static func _original_preset(profile: ELProfile, path: String) -> Dictionary:
+	var file := FileAccess.open(path, FileAccess.READ)
+	if file == null or file.get_length() > MAX_ORIGINAL_PRESET_BYTES: return {}
+	var bytes := file.get_buffer(file.get_length())
+	file.close()
+	if bytes.size() < 2: return {}
+	if (bytes[0] == 255 and bytes[1] == 254) or (bytes[0] == 254 and bytes[1] == 255):
+		bytes = bytes.get_string_from_utf16().to_utf8_buffer()
+	var root := ELXml.parse(bytes)
+	if root.get("tag") != "duel_preset": return {}
+	var header: Dictionary = root.attrs
+	var resource := String(header.get("resource_level", ""))
+	var hero := String(header.get("hero_level", ""))
+	if not resource.is_valid_int() or not hero.is_valid_int(): return {}
+	var preset := blank(String(header.get("magic", "")).capitalize(), int(resource))
+	preset.level = int(hero)
+	preset.specialization = String(header.get("specialization", "NONE"))
+	if preset.specialization.is_empty(): preset.specialization = "NONE"
+	var el1 := profile.id == "el1"
+	var bag := ELXml.child(root, "bag_spells")
+	if el1 and not bag.is_empty(): return {}
+	for entry in ELXml.children(ELXml.child(root, "skills"), "skill"):
+		var code := String(entry.attrs.get("type", ""))
+		var level := String(entry.attrs.get("level", ""))
+		if not level.is_valid_int() or preset.skills.has(code): return {}
+		preset.skills[code] = int(level) - 1
+	for entry in ELXml.children(ELXml.child(root, "deck"), "spell"):
+		var uses := String(entry.attrs.get("components", "0"))
+		if not uses.is_valid_int(): return {}
+		preset.cards.append(String(entry.attrs.get("code", "")))
+		preset.runes.append(int(uses))
+	for entry in ELXml.children(ELXml.child(root, "artefacts"), "artefact"):
+		var code := String(entry.attrs.get("code", ""))
+		if not el1 and entry.attrs.has("name"):
+			code = String(profile.table("Artefacts").get(entry.attrs.name, {}).get("SpellType", ""))
+		preset.artifacts.append(code)
+	for entry in ELXml.children(bag, "spell"):
+		var code := String(entry.attrs.get("type", ""))
+		var count := String(entry.attrs.get("count", ""))
+		if not count.is_valid_int() or int(count) < 0 or preset.reserve.has(code): return {}
+		preset.reserve[code] = int(count)
+	return preset
+
+static func _import_original(profile: ELProfile, directory: String, files: Array, rejected: Array) -> void:
+	for file: String in files:
+		if file.get_extension().to_lower() != "prs": continue
+		var name := file.get_basename().strip_edges()
+		if user_exists(profile, name): continue
+		var source := directory.path_join(file)
+		var preset := _original_preset(profile, source)
+		if preset.is_empty() or not save_user(profile, preset, name, false).is_empty():
+			rejected.append(file)
+			continue
+		var backup := source + ".imported"
+		if FileAccess.file_exists(backup):
+			backup = "%s.%d.imported" % [source, Time.get_ticks_usec()]
+		DirAccess.rename_absolute(source, backup)
+
 ## Readable user presets of this edition, sorted by name; files that fail the
 ## shape check or the edition's rules (ELDuelCosts.errors) are skipped.
 static func load_user(profile: ELProfile, rejected: Array = []) -> Array[Dictionary]:
@@ -217,6 +277,9 @@ static func load_user(profile: ELProfile, rejected: Array = []) -> Array[Diction
 	var dir := user_dir(profile)
 	if not DirAccess.dir_exists_absolute(dir): return result
 	var files := Array(DirAccess.get_files_at(dir))
+	if files.any(func(file: String): return file.get_extension().to_lower() == "prs"):
+		_import_original(profile, dir, files, rejected)
+		files = Array(DirAccess.get_files_at(dir))
 	files.sort()
 	for file: String in files:
 		if not file.ends_with(".json"): continue
@@ -237,7 +300,7 @@ static func user_exists(profile: ELProfile, name: String) -> bool:
 	return FileAccess.file_exists(_user_path(profile, name))
 
 ## Writes a user preset under `name`; returns "" or an error.
-static func save_user(profile: ELProfile, preset: Dictionary, name: String) -> String:
+static func save_user(profile: ELProfile, preset: Dictionary, name: String, replace := true) -> String:
 	if not valid_name(name): return "name"
 	var copy := normalize(preset)
 	if copy.is_empty(): return "shape"
@@ -249,9 +312,17 @@ static func save_user(profile: ELProfile, preset: Dictionary, name: String) -> S
 	copy.format = USER_FORMAT
 	copy.edition = profile.id
 	DirAccess.make_dir_recursive_absolute(user_dir(profile))
-	var file := FileAccess.open(_user_path(profile, name), FileAccess.WRITE)
+	var path := _user_path(profile, name)
+	var temporary := "%s.%d-%d.tmp" % [path, OS.get_process_id(), Time.get_ticks_usec()]
+	var file := FileAccess.open(temporary, FileAccess.WRITE)
 	if file == null: return "write"
 	file.store_string(JSON.stringify(copy, "\t"))
+	file.flush()
+	var written := file.get_error()
+	file.close()
+	if written != OK or (not replace and FileAccess.file_exists(path)) or DirAccess.rename_absolute(temporary, path) != OK:
+		DirAccess.remove_absolute(temporary)
+		return "write"
 	return ""
 
 static func delete_user(profile: ELProfile, name: String) -> bool:

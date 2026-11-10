@@ -11,12 +11,14 @@ var _time := Label.new()
 
 func build(link: ELNetworkDuel) -> void:
 	_link = link
-	title = tr("Change deck")
-	exclusive = true
+	title = ELRemakeText.t("Change deck", link.profile)
+	ELNetworkLobby.style_dialog(self, link.profile, "TCPIPDialog")
 	min_size = Vector2i(620, 440)
-	get_ok_button().text = tr("Back to score")
+	size = min_size
+	get_ok_button().tooltip_text = ELRemakeText.t("Back to score", link.profile)
 	var body := VBoxContainer.new()
 	add_child(body)
+	body.add_child(ELNetworkLobby.heading(title))
 	var columns := HBoxContainer.new()
 	columns.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	body.add_child(columns)
@@ -26,6 +28,7 @@ func build(link: ELNetworkDuel) -> void:
 	_swap.pressed.connect(_exchange)
 	body.add_child(_swap)
 	_message.custom_minimum_size = Vector2(570, 38)
+	_message.size.x = min_size.x - 64
 	_message.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_message.text = tr("Select a spell in each column to swap them.")
 	body.add_child(_message)

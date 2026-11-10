@@ -2,6 +2,17 @@
 
 Versions follow [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html) from 0.3.0 on.
 
+## 0.6.3
+
+- Hero specializations show their effects and descriptions in battle. The HUD disables spells without legal targets, shows status markers on affected creatures, and offers Attack All when creatures can attack. Controlled creatures move to the other side, and movement animations keep pace with faster battles.
+- Etherlords II campaign play restores autosaves, native loading screens, teleport effects, and altar glows. Enemy-initiated encounters keep the player on the defending side. The first Vitals map's exit portal is visible, and the load dialog places saves in the list.
+- Etherlords II's Hall of Fame records new scores for campaign completions and duel match wins and imports eligible original scores.
+- Remake settings support remapping hotkeys for map, battle, and shop actions. Holding Space continues its action in supported battle and dialogue screens.
+- Deck, inventory, and shop tooltips follow the original layout and show spell costs. Online play uses the original-style menus, and Etherlords II supports original custom duel presets.
+- The wiki shows codes wherever available and lists creature races separately from factions.
+- Adventure rendering restores the original brightness balance, waterlines around rocks and beacons, and stronger foliage shadows for bushes and forest clusters.
+- On Android, the Etherlords tutorial opens when re-enabled, and the touch UI offers battle history and trophy inspection.
+
 ## 0.6.2
 
 - Path tracing follows the hero's animated pose and visible cutout edges, removing the extra outlines around the rider and mount.

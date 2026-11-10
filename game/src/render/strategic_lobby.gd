@@ -5,7 +5,7 @@ signal requested(hosting: bool, address: String, port: int, map_id: String, play
 signal load_requested
 
 const DEFAULT_DIFFICULTY := 2
-const MINIMUM_SIZE := Vector2i(480, 345)
+const MINIMUM_SIZE := Vector2i(740, 370)
 const INSTRUCTIONS := "Host a map for one guest, or enter the host’s address to join."
 const LAN_INSTRUCTIONS := "Host a map, select a waiting LAN game, or enter the host’s address."
 
@@ -27,6 +27,7 @@ var _discovery: ELNetworkDiscovery
 var _map_titles := {}
 var _seats := Vector2i.ZERO
 var _waiting := false
+var _profile: ELProfile
 var save_path := ""
 var pending_save := {}
 
@@ -35,18 +36,22 @@ func _exit_tree() -> void:
 	if not pending_save.is_empty(): pending_save.state.close()
 
 func build(profile: ELProfile, saved_path := "", saved_details := "", lan := false) -> void:
+	_profile = profile
 	save_path = saved_path
-	title = "Strategic multiplayer preview"
-	exclusive = true
+	title = ELRemakeText.t("Strategic multiplayer", profile)
+	ELNetworkLobby.style_dialog(self, profile, "StrategicScreen")
 	min_size = MINIMUM_SIZE
-	get_ok_button().text = "Close"
+	size = min_size
 	var fields := VBoxContainer.new()
 	fields.add_theme_constant_override("separation", 8)
 	add_child(fields)
-	var new_match := VBoxContainer.new()
+	fields.add_child(ELNetworkLobby.heading(title))
+	var new_match := HBoxContainer.new()
 	new_match.add_theme_constant_override("separation", 8)
 	fields.add_child(new_match)
 	new_match.visible = save_path.is_empty()
+	var mission := ELNetworkLobby.group(new_match, profile.text("CtrlMSSSelectMission"))
+	var connection := ELNetworkLobby.group(new_match, profile.text("CtrlMuJoin" if lan else "CtrlTCPJoin"))
 	if not save_path.is_empty():
 		var details := Label.new()
 		details.text = saved_details
@@ -55,6 +60,7 @@ func build(profile: ELProfile, saved_path := "", saved_details := "", lan := fal
 
 	_maps.name = "StrategicMap"
 	_maps.fit_to_longest_item = false
+	_maps.clip_text = true
 	if save_path.is_empty():
 		for entry: Dictionary in catalogue(profile):
 			var index := _maps.item_count
@@ -63,9 +69,10 @@ func build(profile: ELProfile, saved_path := "", saved_details := "", lan := fal
 			_maps.set_item_tooltip(index, entry.title)
 			_map_titles[entry.id] = entry.title
 	_maps.item_selected.connect(_select_map)
-	_field(new_match, "Host map", _maps)
+	_field(mission, "Host map", _maps)
 	_map_details.add_theme_color_override("font_color", Color("b9b5a7"))
-	new_match.add_child(_map_details)
+	_map_details.clip_text = true
+	mission.add_child(_map_details)
 
 	_host_seat.name = "HostSeat"
 	_guest_seat.name = "GuestSeat"
@@ -73,22 +80,21 @@ func build(profile: ELProfile, saved_path := "", saved_details := "", lan := fal
 	_guest_seat.fit_to_longest_item = false
 	_host_seat.item_selected.connect(_select_seat.bind(true))
 	_guest_seat.item_selected.connect(_select_seat.bind(false))
-	_field(new_match, "Host seat", _host_seat)
-	_field(new_match, "Guest seat", _guest_seat)
+	_field(mission, "Host seat", _host_seat)
+	_field(mission, "Guest seat", _guest_seat)
 	for difficulty in 5: _difficulty.add_item(str(difficulty + 1), difficulty)
 	_difficulty.select(DEFAULT_DIFFICULTY)
-	_field(new_match, "Difficulty", _difficulty)
+	_field(mission, "Difficulty", _difficulty)
 	_turn_seconds.name = "AdventureTimeLimit"
 	_turn_seconds.max_value = ELNetworkStrategy.MAX_TURN_SECONDS
 	_turn_seconds.suffix = "s"
 	_turn_seconds.tooltip_text = ELRemakeText.t("Adventure time limit in seconds. Zero is unlimited.", profile)
-	_field(new_match, ELRemakeText.t("Adventure time limit", profile), _turn_seconds)
+	_field(mission, "Adventure time limit", _turn_seconds)
 	_combat_seconds.name = "CombatTimeLimit"
 	_combat_seconds.max_value = ELNetworkStrategy.MAX_TURN_SECONDS
 	_combat_seconds.suffix = "s"
 	_combat_seconds.tooltip_text = ELRemakeText.t("Seconds per attack or defence phase. Zero is unlimited.", profile)
-	_field(new_match, ELRemakeText.t("Combat time limit", profile), _combat_seconds)
-	new_match.add_child(HSeparator.new())
+	_field(mission, "Combat time limit", _combat_seconds)
 	if lan and save_path.is_empty():
 		_discovery = ELNetworkDiscovery.new(ELNetworkStrategy.DISCOVERY_PORT, ELNetworkStrategy.PROTOCOL)
 		_sessions = OptionButton.new()
@@ -96,28 +102,32 @@ func build(profile: ELProfile, saved_path := "", saved_details := "", lan := fal
 		_sessions.fit_to_longest_item = false
 		_sessions.clip_text = true
 		_sessions.item_selected.connect(_select_session)
-		_field(new_match, "LAN games", _sessions)
+		_field(connection, "LAN games", _sessions)
 
 	_address.name = "JoinAddress"
-	_address.placeholder_text = "Host name or IP address"
+	_address.placeholder_text = "IP / DNS"
 	_address.max_length = 253
 	_address.text_submitted.connect(func(_value: String): _request(&"join"))
 	_port.name = "StrategicPort"
 	_port.text = str(ELNetworkStrategy.PORT)
 	_port.max_length = 5
 	_port.virtual_keyboard_type = LineEdit.KEYBOARD_TYPE_NUMBER
-	_field(new_match, "Join address", _address)
-	_field(fields, "UDP port", _port)
+	_field(connection, profile.text("CtrlTCPStatic2"), _address)
+	_field(fields if not save_path.is_empty() else connection, "UDP port", _port)
 
 	_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_status.custom_minimum_size.y = 40
 	# The popup measures the wrapping label before the container lays it out.
 	_status.size.x = MINIMUM_SIZE.x - 32
 	fields.add_child(_status)
-	_host = add_button("Host", true, "host")
+	_host = add_button(profile.text("CtrlMuCreateHost" if lan else "CtrlTCPCreate"), false, "host")
+	ELNetworkLobby.style_button(_host, profile, "MuCreateHost" if lan else "TCPCreate")
 	if save_path.is_empty():
-		_join = add_button("Join", true, "join")
-		_load = add_button("Load", true, "load")
+		_join = add_button(profile.text("CtrlMuJoin" if lan else "CtrlTCPJoin"), false, "join")
+		ELNetworkLobby.style_button(_join, profile, "MuJoin" if lan else "TCPJoin")
+		_load = add_button(ELRemakeText.t("Load", profile), false, "load")
+	get_ok_button().get_parent().move_child(get_ok_button(), 0)
+	if _join != null: _host.get_parent().move_child(_host, _join.get_index())
 	custom_action.connect(_request)
 
 	if not save_path.is_empty():
@@ -151,8 +161,8 @@ static func catalogue(profile: ELProfile) -> Array[Dictionary]:
 func _field(fields: VBoxContainer, caption: String, input: Control) -> void:
 	var row := HBoxContainer.new()
 	var label := Label.new()
-	label.text = caption
-	label.custom_minimum_size.x = 156
+	label.text = ELRemakeText.t(caption, _profile)
+	label.custom_minimum_size.x = 136
 	row.add_child(label)
 	input.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	row.add_child(input)
@@ -169,7 +179,7 @@ func _select_map(index: int) -> void:
 	_guest_seat.select(1)
 	_seats = Vector2i(_host_seat.get_selected_id(), _guest_seat.get_selected_id())
 	var dimensions: Vector2i = entry.size
-	_map_details.text = "%d × %d · %d authored seats" % [dimensions.x, dimensions.y, entry.seat_count]
+	_map_details.text = ELRemakeText.t("%d × %d · %d seats", _profile) % [dimensions.x, dimensions.y, entry.seat_count]
 
 func _select_seat(index: int, hosting: bool) -> void:
 	# Choosing the other person's seat swaps the two assignments.
@@ -207,7 +217,7 @@ func _request(action: StringName) -> void:
 		requested.emit(false, address, port, "", Vector2i.ZERO, DEFAULT_DIFFICULTY)
 
 func set_status(message: String) -> void:
-	_status.text = message
+	_status.text = ELRemakeText.t(message, _profile)
 
 func set_waiting(waiting: bool) -> void:
 	_waiting = waiting
@@ -235,7 +245,7 @@ func _process(_delta: float) -> void:
 func _refresh_sessions() -> void:
 	var selected: Variant = _sessions.get_selected_metadata()
 	_sessions.clear()
-	_sessions.add_item(tr("No waiting LAN games"))
+	_sessions.add_item(ELRemakeText.t("No waiting LAN games", _profile))
 	for id: String in _discovery.sessions:
 		var session: Dictionary = _discovery.sessions[id]
 		if not _map_titles.has(session.location): continue
@@ -245,7 +255,7 @@ func _refresh_sessions() -> void:
 		_sessions.set_item_metadata(index, id)
 		_sessions.set_item_tooltip(index, caption)
 		if id == selected: _sessions.select(index)
-	if _sessions.item_count > 1: _sessions.set_item_text(0, tr("Choose a LAN game…"))
+	if _sessions.item_count > 1: _sessions.set_item_text(0, ELRemakeText.t("Choose a LAN game…", _profile))
 
 func _select_session(index: int) -> void:
 	var session: Dictionary = _discovery.sessions.get(_sessions.get_item_metadata(index), {})

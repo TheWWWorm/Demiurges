@@ -110,9 +110,14 @@ func start(data: ELProfile, seed_value := 212, options: Dictionary = {}) -> bool
 		# never refuse an empty one; that hero simply draws nothing. Duel mode
 		# books are full (the deck editor keeps 16).
 		if cards.is_empty() and not (options.get("adventure", false) and profile.id == "el2"): return _fail("A spellbook cannot be empty.")
+		var resource_level := int(choice.get("resource_level", 1))
+		var sandbox_book := ELDuelCosts.sandbox(profile, resource_level)
 		for card: String in cards:
 			if ELCatalog.rule(profile, card).is_empty(): return _fail("Spell is not available yet: " + card)
-			if not options.get("adventure", false) and not _book_colour(String(profile.table("CombatSpells")[card].get("Color", "")), faction): return _fail("Spell belongs to another faction: " + card)
+			if not options.get("adventure", false):
+				var colour := String(profile.table("CombatSpells")[card].get("Color", ""))
+				var allowed := ELDuelCosts.spell_allowed(profile, card, faction, resource_level) if sandbox_book else _book_colour(colour, faction)
+				if not allowed: return _fail("Spell belongs to another faction: " + card)
 		var level := int(choice.get("level", template.get("Level", 1)))
 		if not profile.table("CombatManaIncome").get("1", {}).has("Level%d" % level): return _fail("Unsupported hero level.")
 		var skill_values: Variant = choice.get("skills", ELHeroSkills.from_template(profile, template))
@@ -383,9 +388,7 @@ func _use_artifact_now(side: int, index: int, target := -1, choice := -1) -> boo
 	if rule.get("self", false): target = side
 	invalid = artifact_target_error(side, item.spell, target, choice)
 	if not invalid.is_empty(): return _fail(invalid)
-	item.charges = int(item.charges) - 1
-	item.ready_round = artifact_round() + _artifact_gap(item)
-	heroes[side].artifact_uses = int(heroes[side].get("artifact_uses", 0)) + 1
+	_spend_artifact_use(side, item)
 	var shown := {"kind": "artifact", "side": side, "artifact": item.name, "card": item.spell, "target": target, "charges": item.charges}
 	if profile.id == "el2": shown.title = artifact_title(item)
 	_emit(shown)
@@ -439,14 +442,18 @@ func _use_custom_artifact(side: int, item: Dictionary, target: int, choice: int)
 		_acting = -1
 		return _fail(invalid)
 	var traps := _sorcery_traps()
-	item.charges = int(item.charges) - 1
-	item.ready_round = artifact_round() + _artifact_gap(item)
-	heroes[side].artifact_uses = int(heroes[side].get("artifact_uses", 0)) + 1
+	_spend_artifact_use(side, item)
 	_emit({"kind": "artifact", "side": side, "artifact": item.name, "card": item.spell, "target": target, "charges": item.charges, "title": artifact_title(item)})
 	_resolve_spell(side, item.spell, rule, target, choice, 0, traps, false)
 	_acting = -1
 	_finish_action()
 	return true
+
+func _spend_artifact_use(side: int, item: Dictionary) -> void:
+	if not setup.get("expert_artificer", true) or ELSpecs.roll(self, side, "ARTF") == 0:
+		item.charges = int(item.charges) - 1
+	item.ready_round = artifact_round() + _artifact_gap(item)
+	heroes[side].artifact_uses = int(heroes[side].get("artifact_uses", 0)) + 1
 
 func active_side() -> int:
 	return attacker if phase == Phase.ATTACK else 1 - attacker
@@ -523,6 +530,9 @@ func _spend_ether(side: int, amount: int) -> void:
 ## the second game, a creature status in the first).
 func enfeebled(id: int) -> bool:
 	return creatures.has(id) and (bool(creatures[id].get("enfeebled", false)) or _enchantment_count(id, "ENFL") > 0)
+
+func cannot_rise(id: int) -> bool:
+	return enfeebled(id) or _enchantment_count(id, "IMMB") > 0 or has_flag(id, "NoUntap")
 
 ## Water links naming creature `id` (hero-held; older saves may still hold one on the creature
 ## itself).
@@ -624,7 +634,9 @@ func army_auras(c: Dictionary) -> Array[Dictionary]:
 
 func _move_army(c: Dictionary, side: int) -> void:
 	if not c.has("auras"): c.auras = army_auras(c).map(func(e: Dictionary) -> int: return int(e.id))
+	if int(c.owner) == side: return
 	c.owner = side
+	_emit({"kind": "army_changed", "target": int(c.id), "side": side})
 
 func targetable(id: int) -> bool:
 	return id < 2 or not (has_flag(id, "NoTarget") or in_plane(id))
@@ -839,6 +851,50 @@ func phase_allows(card: String) -> bool:
 	if phase == Phase.DEFENCE and not use_in in ["Defence", "Defense"]: return card in DEFENCE_SPELLS.get(profile.id, [])
 	return true
 
+## Does this card have at least one legal, affordable cast right now?
+func can_cast_from_hand(index: int) -> bool:
+	if phase == Phase.FINISHED: return false
+	var side := active_side()
+	var hero: Dictionary = heroes[side]
+	if index < 0 or index >= hero.hand.size() or hero.hand_slots.size() != hero.hand.size() or hand_uses(side, index) == 0:
+		return false
+	var card: String = hero.hand[index]
+	var rule := ELCatalog.rule(profile, card)
+	if rule.is_empty() or not _hand_cast_error(side, card).is_empty(): return false
+	var kind := target_kind(card)
+	if kind == "none":
+		var target := side if rule.get("self", false) else (1 - side if rule.get("opponent", false) else -1)
+		return _legal_cast_option(side, card, rule, target, -1)
+	var targets: Array = [0, 1]
+	if kind not in ["hero", "grave"]: targets += creatures.keys()
+	for target: int in targets:
+		if not _target_error(card, target).is_empty(): continue
+		var choices: Array = [-1]
+		if kind == "grave" or rule.effect == "exchange": choices = valid_grave_targets(card, target)
+		elif rule.effect == "swap": choices = swap_targets(card, target)
+		elif rule.effect in ["dispel", "trade"]: choices = valid_enchantment_targets(card, target)
+		for choice: int in choices:
+			if _legal_cast_option(side, card, rule, target, choice): return true
+	return false
+
+func _legal_cast_option(side: int, card: String, rule: Dictionary, target: int, choice: int) -> bool:
+	return _cast_error(side, card, rule, target, choice).is_empty() and available_mana(side) >= cost(card) + _cast_surcharge(card, rule, target, choice)
+
+func _hand_cast_error(side: int, card: String) -> String:
+	if available_mana(side) < cost(card): return "Not enough ether."
+	if heroes[side].channels < channel_cost(card): return "This spell requires %d ether channels." % channel_cost(card)
+	var invalid := channel_error(card, side)
+	if not invalid.is_empty(): return invalid
+	if not phase_allows(card): return "This spell cannot be cast in the current phase."
+	return ""
+
+func _cast_surcharge(card: String, rule: Dictionary, target: int, choice: int) -> int:
+	var surcharge := second_surcharge(card)
+	if rule.get("priced", false): surcharge += enchantment_price(_enchantment_by_id(find_enchantment(choice), choice))
+	# Disintegration also pays the target creature's printed cost.
+	if rule.get("priced_target", false): surcharge += int(profile.table("CombatSpells")[creatures[target].card].Cost)
+	return surcharge
+
 func _cast_now(hand_index: int, target := -1, grave_index := -1, extra_ether := 0) -> bool:
 	error = ""
 	if phase == Phase.FINISHED: return _fail("This duel has ended.")
@@ -850,23 +906,16 @@ func _cast_now(hand_index: int, target := -1, grave_index := -1, extra_ether := 
 	if rule.is_empty(): return _fail("Spell is not available yet: " + card)
 	if rule.get("self", false): target = side
 	if rule.get("opponent", false): target = 1 - side
-	if available_mana(side) < cost(card): return _fail("Not enough ether.")
+	var unavailable := _hand_cast_error(side, card)
+	if not unavailable.is_empty(): return _fail(unavailable)
 	if extra_ether < 0 or (extra_ether != 0 and not variable_power(card)): return _fail("Invalid extra ether amount.")
 	if extra_ether > maximum_power(card): return _fail("Not enough ether for the chosen spell power.")
-	if hero.channels < channel_cost(card): return _fail("This spell requires %d ether channels." % channel_cost(card))
-	var channel_invalid := channel_error(card, side)
-	if not channel_invalid.is_empty(): return _fail(channel_invalid)
-	if not phase_allows(card): return _fail("This spell cannot be cast in the current phase.")
 	var invalid := _cast_error(side, card, rule, target, grave_index)
 	if not invalid.is_empty(): return _fail(invalid)
-	var surcharge := 0
-	if rule.get("priced", false):
-		surcharge = enchantment_price(_enchantment_by_id(find_enchantment(grave_index), grave_index))
-		if available_mana(side) < cost(card) + surcharge: return _fail("Not enough ether to remove this enchantment.")
-	# Disintegration also pays the target creature's printed cost.
-	if rule.get("priced_target", false): surcharge += int(profile.table("CombatSpells")[creatures[target].card].Cost)
-	surcharge += second_surcharge(card)
-	if surcharge > 0 and available_mana(side) < cost(card) + surcharge: return _fail("This spell needs %d more ether." % surcharge)
+	var surcharge := _cast_surcharge(card, rule, target, grave_index)
+	if surcharge > 0 and available_mana(side) < cost(card) + surcharge:
+		if rule.get("priced", false): return _fail("Not enough ether to remove this enchantment.")
+		return _fail("This spell needs %d more ether." % surcharge)
 	if hero.hand_slots.size() != hero.hand.size(): return _fail("Invalid hand charge state.")
 	var slot: int = hero.hand_slots[hand_index]
 	if slot >= 0 and hero.spell_uses[slot] == 0: return _fail("This spellbook copy has no charges left.")
@@ -1540,6 +1589,10 @@ func attack_cost(id: int) -> int:
 func can_attack(id: int, declared := false) -> bool:
 	return phase == Phase.ATTACK and (ready(id) or (declared and creatures.has(id) and not creatures[id].sick)) and creatures[id].owner == attacker and not has_flag(id, "NoAttack") and not in_plane(id) \
 		and global_enchantment_count("FOGG") + global_enchantment_count("WLDT") + global_enchantment_count("EWLD") == 0 and not _forest_holds(id, 1 - attacker)
+
+func can_declare_attack(id: int) -> bool:
+	return not attacks.has(id) and can_attack(id) and attack_cost(id) <= int(heroes[attacker].mana) \
+		and (not has_flag(id, "TeamAttack") or _team_partner(id))
 
 ## Dense, Dark and Ancient Forest: the highest power an opposing creature
 ## may have and still be kept from attacking.
@@ -2964,7 +3017,7 @@ func _begin_attack(draw_card: bool) -> void:
 			# Pale aspect ignores freezes and smoke, not the creature's own no-untap.
 			c.sick = false
 			if c.has("ability_used"): c.ability_used.clear()
-			if not enfeebled(c.id) and _enchantment_count(c.id, "IMMB") == 0 and not has_flag(c.id, "NoUntap"): c.resting = false
+			if not cannot_rise(c.id): c.resting = false
 			continue
 		# Condensed air holds flyers and a flood holds the rest: no recovery,
 		# sickness or ability reset.
@@ -2977,7 +3030,7 @@ func _begin_attack(draw_card: bool) -> void:
 		var smoked := global_enchantment_count("SMOK") > 0 and not has_flag(c.id, "NoAffect")
 		# Smoke mastery: a tapped creature may recover anyway.
 		if smoked and c.resting and ELSpecs.roll(self, attacker, "RSMP") > 0: smoked = false
-		if not enfeebled(c.id) and _enchantment_count(c.id, "IMMB") == 0 and not has_flag(c.id, "NoUntap") and not smoked: c.resting = false
+		if not cannot_rise(c.id) and not smoked: c.resting = false
 	_pale_warp()
 	if draw_card: _draw(attacker)
 	if ELHeroEffects.extra_draw(hero) and _draw(attacker):

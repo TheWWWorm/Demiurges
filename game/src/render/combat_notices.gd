@@ -12,9 +12,9 @@ extends Control
 ##   top left. Each line holds 3 s, then fades over 0.5 s while the list
 ##   slides up.
 ## - second game: the opponent's cast spells as icons, top left. There are 5
-##   per row at a 53 px step, and new ones blink. The list is cleared when the
+##   per row at a 53 px step. The list is cleared when the
 ##   opponent's next turn starts.
-## Approximations: list and icon origins, the line font, and the blink rate.
+## Approximations: list and icon origins, and the line font.
 
 const BAND := 85.0
 const GROW := 0.25
@@ -29,8 +29,6 @@ const LINE_HEIGHT := 18.0
 const ICON := 50.0
 const ICON_STEP := 53.0
 const ICON_ROW := 5
-const BLINK_TICKS := 5
-const BLINK_TICK := 0.15
 const ORIGIN := Vector2(12, 8)
 
 var profile: ELProfile
@@ -41,7 +39,7 @@ var banner_age := 0.0
 var _sounded := false
 ## First game message lines: {"text", "colour", "age"}.
 var lines: Array = []
-## Second game enemy cast icons: {"texture", "card", "age"}.
+## Second game enemy cast icons: {"texture", "card"}.
 var icons: Array = []
 ## The icons' frame: WORLD_SYMBOLS_MAP (140,0)-(190,50), drawn over each icon.
 var frame: Texture2D
@@ -95,18 +93,15 @@ func add_line(text: String, colour: Color, chat := false) -> void:
 
 func add_icon(texture: Texture2D, card := "") -> void:
 	if texture == null or (texture is AtlasTexture and texture.atlas == null): return
-	icons.append({"texture": texture, "card": card, "age": 0.0})
+	icons.append({"texture": texture, "card": card})
 	queue_redraw()
 
 func clear_icons() -> void:
 	icons.clear()
 	queue_redraw()
 
-func busy() -> bool:
-	return banner >= 0 or not lines.is_empty() or not icons.is_empty()
-
 func _process(delta: float) -> void:
-	if not busy(): return
+	if banner < 0 and lines.is_empty(): return
 	if banner >= 0:
 		banner_age += delta
 		if not _sounded and banner_age >= GROW:
@@ -115,7 +110,6 @@ func _process(delta: float) -> void:
 		if banner_age >= GROW + HOLD + SHRINK: banner = -1
 	for line: Dictionary in lines: line.age = float(line.age) + delta
 	lines = lines.filter(func(line: Dictionary) -> bool: return float(line.age) < HOLD_LINE + FADE_LINE)
-	for icon: Dictionary in icons: icon.age = float(icon.age) + delta
 	queue_redraw()
 
 ## The banner's scale in percent and its alpha (0..1) at `age` seconds.
@@ -149,8 +143,6 @@ func _draw() -> void:
 		y += LINE_HEIGHT * k * (1.0 - fade)
 	for index in icons.size():
 		var icon: Dictionary = icons[index]
-		var tick := int(float(icon.age) / BLINK_TICK)
-		if tick < BLINK_TICKS and tick % 2 == 1: continue
 		var cell := icon_rect(index)
 		draw_texture_rect(icon.texture, cell, false)
 		if frame != null: draw_texture_rect_region(frame, cell, Rect2(140, 0, 50, 50))

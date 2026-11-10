@@ -172,6 +172,12 @@ func setup(source: ELSecondAdventureHud) -> void:
 			captions[control] = label
 	hide()
 
+func _gui_input(event: InputEvent) -> void:
+	if style != "text" or question: return
+	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+		accept_event()
+		answered.emit("OK")
+
 func _texture(texture_name: String) -> Texture2D:
 	var path: String = hud._paths.get(texture_name, "")
 	return hud.profile.texture(path) if not path.is_empty() else null

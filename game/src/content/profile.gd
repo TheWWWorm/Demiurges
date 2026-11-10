@@ -64,7 +64,7 @@ func mount(edition: String, folder: String) -> bool:
 	if not _files.has(marker):
 		error = "This folder does not contain the selected game: " + title
 		return false
-	for name: String in ["figures", "crfigures", "textures", "regs", "text", "animdb", "sfx", "camera", "pfx", "fx", "scripts", "materials"]:
+	for name: String in ["figures", "crfigures", "textures", "regs", "text", "animdb", "sfx", "camera", "pfx", "fx", "scripts", "materials", "gp1tex"]:
 		var paths: Array[String] = []
 		# Numbered patch packs override the base; installation-root packs override
 		# Resources. Resolution is per entry, so patches may contain only a few files.
@@ -84,7 +84,7 @@ func mount(edition: String, folder: String) -> bool:
 		for path: String in paths:
 			var arc := ELArchive.open(_files[path])
 			if not arc.error.is_empty():
-				if name == "materials": continue
+				if name in ["materials", "gp1tex"]: continue
 				error = path + ": " + arc.error
 				return false
 			layers.append(arc)
@@ -137,6 +137,8 @@ func texture(name: String) -> Texture2D:
 		return _textures[key]
 	var file := key if key.ends_with(".mmp") else key + ".mmp"
 	var bytes := read("textures", file)
+	if bytes.is_empty() and file.begins_with("interface/black/progress_panel_"):
+		bytes = read("gp1tex", file)
 	# Tables name some textures without the Alpha or Alpha32 folder they are
 	# stored in (the second game's map leaders, such as SmBlackFemale00 in
 	# Heroes/Alpha): look there too, as the originals do.

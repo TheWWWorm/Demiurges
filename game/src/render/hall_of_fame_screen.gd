@@ -1,8 +1,8 @@
 class_name ELHallOfFameScreen
 extends RefCounted
 ## Hall of Fame (HallOfFame panel, both games) on the ELFrontMenu canvas: the
-## campaign or scenario table (ten rows: number, name, points, campaign or
-## mission title), HFSwitch between the two tables (its art and the last
+## campaign, scenario, or EL2 duel table (ten rows: number, name, points and
+## title), HFSwitch between the tables (its art and the last
 ## column caption follow the mode: Type1 campaign, Type2 scenario) and
 ## HFClose; Esc closes, Tab/Left/Right switch. The last mode shown is
 ## remembered. The first game returns to the main menu; the second game opens
@@ -33,7 +33,7 @@ func art_exclude(target: String) -> Array:
 ## won mission (: 0 scenario, 1 campaign), and plays the fanfare.
 func open(kind := "") -> void:
 	tables = ELHallOfFame.load_tables(menu.profile)
-	mode = kind if kind in ELHallOfFame.KINDS else tables.mode
+	mode = kind if kind in ELHallOfFame.kinds(menu.edition) else tables.mode
 	opened = mode
 	tables.mode = mode
 	menu.show_screen("hall_of_fame")
@@ -46,11 +46,17 @@ func build_screen() -> void:
 	if tables.is_empty():
 		tables = ELHallOfFame.load_tables(menu.profile)
 		mode = tables.mode
-	menu._label("caption", menu._caption("HFCaption").replace("  ", " "), menu.control_rect("HFCaption"), 17)
+	var heading := ELRemakeText.t("Hall of Fame · Duels", menu.profile) if mode == "duel" else menu._caption("HFCaption").replace("  ", " ")
+	menu._label("caption", heading, menu.control_rect("HFCaption"), 17)
 	for control: String in ["HFCaption1", "HFCaption2", "HFCaption3"]:
 		menu._label(control, menu._caption(control), menu.control_rect(control), 17)
 	var last := "HFCaption42" if mode == "campaign" else "HFCaption41"
-	menu._label("HFCaption4", menu._caption(last), menu.control_rect(last), 17)
+	var last_caption := ELRemakeText.t("Arena", menu.profile) if mode == "duel" else menu._caption(last)
+	menu._label("HFCaption4", last_caption, menu.control_rect(last), 17)
+	if menu.edition == "el2" and mode != "scenario":
+		var rule := "100 points per round won in a winning match." if mode == "duel" else "100 points per chapter won, multiplied by difficulty (1–3)."
+		menu.labels.HFCaption3.tooltip_text = ELRemakeText.t(rule, menu.profile)
+		menu.labels.HFCaption3.mouse_filter = Control.MOUSE_FILTER_PASS
 	_switch_button()
 	var close := menu._square("HFClose")
 	if close != null: close.pressed.connect(close_screen)
@@ -85,10 +91,14 @@ func _switch_button() -> void:
 	button.pressed.connect(toggle)
 
 func toggle() -> void:
-	set_mode("scenario" if mode == "campaign" else "campaign")
+	_cycle(1)
+
+func _cycle(step: int) -> void:
+	var kinds := ELHallOfFame.kinds(menu.edition)
+	set_mode(kinds[posmod(kinds.find(mode) + step, kinds.size())])
 
 func set_mode(kind: String) -> void:
-	mode = kind if kind in ELHallOfFame.KINDS else "campaign"
+	mode = kind if kind in ELHallOfFame.kinds(menu.edition) else "campaign"
 	tables.mode = mode
 	ELHallOfFame.set_mode(menu.profile, mode)
 	menu.show_screen("hall_of_fame")
@@ -96,7 +106,7 @@ func set_mode(kind: String) -> void:
 func close_screen() -> void:
 	menu.stop_audio()
 	if menu.edition == "el2" and not menu.hosted:
-		menu.show_screen("mission_menu" if opened == "scenario" else "campaign_menu")
+		menu.show_screen("campaign_menu" if opened == "campaign" else "mission_menu")
 		return
 	menu.leave_screen()
 
@@ -105,7 +115,8 @@ func key(event: InputEventKey) -> void:
 	if not event.pressed or event.echo: return
 	match event.keycode:
 		KEY_ESCAPE: close_screen()
-		KEY_TAB, KEY_LEFT, KEY_RIGHT: toggle()
+		KEY_TAB, KEY_RIGHT: _cycle(1)
+		KEY_LEFT: _cycle(-1)
 
 ## Visible table text, row by row (number, name, points, title).
 func table_text() -> Array:

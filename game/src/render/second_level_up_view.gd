@@ -8,7 +8,8 @@ extends ELHeroSkillsView
 ## and the name, rows 26 pixels apart) and the LUOk button.
 ##
 ## Choosing an offer previews it in the skill rows (a new skill appended, a
-## known one raised). LUOk learns the chosen offer and closes the dialog once no
+## known one raised). Rank dots show the offered and previewed skill levels.
+## LUOk learns the chosen offer and closes the dialog once no
 ## choice is left. The remake keeps LUOk disabled while offers wait without a
 ## selection, so a pending choice is never lost; Escape closes the dialog and
 ## keeps it. The active specialisation is chosen on the inventory screen, as in
@@ -17,10 +18,12 @@ extends ELHeroSkillsView
 const PANEL := "LevelUpDialog"
 const CELL := 69
 const ICON := 50
-const ROW := 26
 const TAN := Color("d6bb88")
 const WHITE := Color("f2ead8")
 const MARK := Rect2(0, 60, 4, 4)
+const RANK_WIDTH := 24.0
+const DOT_STEP := 7.0
+const DOT_EDGE := Color("21180e")
 
 var hud: ELSecondAdventureHud
 var root_control: Control
@@ -137,6 +140,7 @@ func _layout() -> void:
 		# evenly to both sides instead of being cut.
 		var wide := label.get_minimum_size().x if control.begins_with("LUHeader") else 0.0
 		if wide > box.size.x: box = box.grow_individual((wide - box.size.x) * 0.5, 0, (wide - box.size.x) * 0.5, 0)
+		if control.begins_with("LUSkill"): box.size.x -= RANK_WIDTH
 		label.position = box.position
 		label.size = box.size
 	offers.position = design("LUBounds").position
@@ -149,19 +153,29 @@ func _layout() -> void:
 func _draw_surface() -> void:
 	var origin := surface.position
 	for piece: Dictionary in _pieces: surface.draw_texture_rect_region(piece.texture, Rect2(piece.rect.position - origin, piece.rect.size), piece.source)
-	if _skills_sheet == null: return
-	var skill_origin := design("LUSkill1").position - origin
 	var left := design("LUSkillsBounds").position.x - origin.x + 4
 	for index in mini(5, _rows.size()):
-		var icon := _icon_index(str(_rows[index][0]), int(_rows[index][1]))
-		if icon < 0: continue
-		surface.draw_texture_rect_region(_skills_sheet, Rect2(Vector2(left, skill_origin.y + 3 + index * ROW), Vector2(20, 20)), _cell(icon))
+		var row := design("LUSkill%d" % (index + 1))
+		var rank := int(_rows[index][1])
+		var icon := _icon_index(str(_rows[index][0]), rank)
+		if icon >= 0 and _skills_sheet != null:
+			surface.draw_texture_rect_region(_skills_sheet, Rect2(Vector2(left, row.position.y - origin.y + 3), Vector2(20, 20)), _cell(icon))
+		var center := Vector2(row.end.x - RANK_WIDTH * 0.5, row.get_center().y) - origin
+		_draw_rank(surface, center, rank)
 
 func _icon_index(code: String, rank: int) -> int:
 	return int(ELHeroSkills.definition(state.map.profile, code, rank).get("Icon", -1))
 
 static func _cell(icon: int) -> Rect2:
 	return Rect2((icon / 5) * 50, (icon % 5) * 50, 50, 50)
+
+## Skills use zero-based ranks, so rank zero is shown as one dot.
+static func _draw_rank(target: Control, center: Vector2, rank: int) -> void:
+	var start := center - Vector2(DOT_STEP * rank * 0.5, 0)
+	for index in rank + 1:
+		var dot := start + Vector2(DOT_STEP * index, 0)
+		target.draw_circle(dot, 3.0, DOT_EDGE, true, -1, true)
+		target.draw_circle(dot, 2.0, TAN, true, -1, true)
 
 # --- State --------------------------------------------------------------------
 
@@ -173,6 +187,11 @@ func refresh() -> void:
 		offers.add_item(code, rank)
 	learned.clear()
 	for code: String in hero.skills: learned.add_item(code, int(hero.skills[code]))
+	_select()
+
+func select_offer(index: int) -> void:
+	if index < 0 or index >= offers.item_count: return
+	offers.select(index)
 	_select()
 
 func _select() -> void:
@@ -286,12 +305,16 @@ class OfferStrip extends Control:
 		tooltip_text = " "
 
 	func _draw() -> void:
-		if view._skills_sheet == null: return
 		for index in _items.size():
-			var icon := view._icon_index(str(_items[index][0]), int(_items[index][1]))
+			var rank := int(_items[index][1])
+			var icon := view._icon_index(str(_items[index][0]), rank)
 			var box := get_item_rect(index)
-			if icon >= 0: draw_texture_rect_region(view._skills_sheet, box, ELSecondLevelUpView._cell(icon))
+			if icon >= 0 and view._skills_sheet != null: draw_texture_rect_region(view._skills_sheet, box, ELSecondLevelUpView._cell(icon))
 			if index == _selected and view._mark_sheet != null: draw_texture_rect_region(view._mark_sheet, box, MARK)
+			var center := Vector2(box.get_center().x, box.end.y - 7.0)
+			var badge := Vector2(RANK_WIDTH, 9)
+			draw_rect(Rect2(center - badge * 0.5, badge), Color(DOT_EDGE, 0.9))
+			ELSecondLevelUpView._draw_rank(self, center, rank)
 
 ## The hero's skill rows (drawn by the dialog surface); a list interface only.
 class SkillRows extends Control:

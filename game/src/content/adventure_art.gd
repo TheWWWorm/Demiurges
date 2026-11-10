@@ -77,6 +77,7 @@ func resolve(object: Dictionary) -> Dictionary:
 	var model := String(row.get("AdvMod", row.get("Model", ""))) if adventure else String(row.get("Model", ""))
 	var texture := String(row.get("AdvTex1", row.get("Texture", ""))) if adventure else String(row.get("TextureName", row.get("Texture", "")))
 	var secondary := String(row.get("AdvTex2", "")) if adventure else String(row.get("SecTexture", ""))
+	var wave := String(row.get("AnimatedTextureName", row.get("AnimTexture", "")))
 	if corpse:
 		if not str(row.get("CorpseMod", "")).is_empty(): model = str(row.CorpseMod)
 		if not str(row.get("CorpseTex1", "")).is_empty(): texture = str(row.CorpseTex1)
@@ -90,6 +91,7 @@ func resolve(object: Dictionary) -> Dictionary:
 		var found := func(folder: String) -> bool: return archive.has(ELArchive.key(folder + texture + ("" if texture.to_lower().ends_with(".mmp") else ".mmp")))
 		if archive != null and not found.call(category) and found.call(other): category = other
 	var result := {"model": model, "texture": category + texture, "secondary": category + secondary if not secondary.is_empty() else "",
+		"wave": category + wave if not wave.is_empty() else "",
 		"scale": float(row.get("AdvScale", 1.0)) if adventure else 1.0, "row": row, "unit": adventure}
 	cache[key] = result
 	return result

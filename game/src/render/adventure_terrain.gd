@@ -2,7 +2,9 @@ class_name ELAdventureTerrain
 extends Node3D
 const CELL := 2.0
 const CHUNK := 16
-const GUTTER := 2
+# Four source border texels keep each tile isolated through mip level two.
+# Both editions' atlas pitches are multiples of four (48 and 96).
+const GUTTER := 4
 ## Only scenery and figures are visible to the reflected camera. The terrain,
 ## fog apron and selection markers all live on the main camera's layers.
 const REFLECTION_LAYER := 1 << 16
@@ -101,6 +103,7 @@ func build(map: ELAdventureMap) -> bool:
 			var tile := tiles.compose(plan, frame)
 			var index: int = plan.offset + frame
 			image.blit_rect(tile, Rect2i(margin, margin, pitch, pitch), Vector2i((index % columns) * pitch, (index / columns) * pitch))
+	image.generate_mipmaps()
 	atlas = ImageTexture.create_from_image(image)
 	material = ShaderMaterial.new()
 	material.shader = load("res://src/render/adventure_terrain.gdshader")
@@ -108,6 +111,7 @@ func build(map: ELAdventureMap) -> bool:
 	material.set_shader_parameter("columns", columns)
 	material.set_shader_parameter("tile_side", inner)
 	material.set_shader_parameter("pitch", pitch)
+	material.set_shader_parameter("tile_margin", GUTTER)
 	material.set_shader_parameter("atlas_size", Vector2(image.get_size()))
 	# Keep only the most recently built map atlas per edition. Reloading a save
 	# can reuse it without accumulating every visited chapter's textures.

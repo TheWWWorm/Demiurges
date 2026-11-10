@@ -19,6 +19,8 @@ const COUNT_COLOR := Color("d6bb88")
 ## per radio; a pressed radio's count moves by one pixel right and down.
 const OWN_COUNTS := [Vector2(104, 500), Vector2(104, 523), Vector2(104, 557), Vector2(104, 580)]
 const ENEMY_COUNTS := [Vector2(704, 500), Vector2(704, 528), Vector2(704, 556), Vector2(704, 584)]
+## Centres the count ink beside the row icon.
+const COUNT_OFFSET := Vector2(0, 6)
 ## Bold Arial in a 17 px cell (about 15 px em), antialiased, with the digits'
 ## top 10 px above the centre.
 const COUNT_SIZE := 15
@@ -267,8 +269,8 @@ func _draw() -> void:
 		if _art.has(key): draw_texture_rect_region(_art[key].texture, _place(_art[key].rect), _art[key].source)
 	for i in ROWS.size():
 		var pressed := 1.0 if ROWS[i] in chosen else 0.0
-		_number(str(counts[0][i]), _place(Rect2(OWN_COUNTS[i] + Vector2(pressed, pressed), Vector2.ZERO)).position)
-		_number(str(counts[1][i]), _place(Rect2(ENEMY_COUNTS[i], Vector2.ZERO)).position)
+		_number(str(counts[0][i]), _place(Rect2(OWN_COUNTS[i] + COUNT_OFFSET + Vector2(pressed, pressed), Vector2.ZERO)).position)
+		_number(str(counts[1][i]), _place(Rect2(ENEMY_COUNTS[i] + COUNT_OFFSET, Vector2.ZERO)).position)
 	for i in mini(stats[0].size(), OWN_STATS.size()):
 		_number(str(stats[0][i]), _place(Rect2(OWN_STATS[i], Vector2.ZERO)).position)
 	for i in mini(stats[1].size(), ENEMY_STATS.size()):
@@ -295,3 +297,13 @@ static func artifact_tooltip(profile: ELProfile, item: Dictionary, title: String
 	var wanted := body.count("%d")
 	var details := body % values.slice(0, wanted) if wanted >= 1 and wanted <= values.size() and body.count("%") == wanted else str(values[0])
 	return "%s\n%s\n%s" % [title, details, profile.card_description(str(item.get("spell", "")))]
+
+## A preset stores the spell code, with a full set of charges each duel.
+static func preset_artifact_tooltip(profile: ELProfile, code: String) -> String:
+	var name := ELDuelPresets.artifact_name(profile, code)
+	if name.is_empty():
+		var row: Dictionary = profile.table("CombatSpells").get(code, {})
+		return "%s\n%s" % [profile.text(str(row.get("Name", code))), profile.card_description(code)]
+	var template: Dictionary = profile.table("Artefacts")[name]
+	var item := {"name": name, "spell": code, "charges": int(template.get("MaxCharges", 0))}
+	return artifact_tooltip(profile, item, ELMapPickups.artifact_title(profile, name))

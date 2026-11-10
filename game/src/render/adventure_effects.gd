@@ -1,6 +1,6 @@
 class_name ELAdventureEffects
 extends Node3D
-## Second game: particle effects from adventure scripts and specialization shrines, each one
+## Second game: particle effects from adventure scripts and shrines, each one
 ## MultiMesh of camera-facing quads from a baked .pfx animation
 ## (ELParticleFile), redrawn when its 30 fps frame changes. Two kinds:
 ## - ambience: terrain particles (terrainpfx: rain, snow, ash, sand storms,
@@ -14,6 +14,7 @@ extends Node3D
 ## object's facing (OrientEffectByObject).
 const CACHE_LIMIT := 6
 const RAIN_FILES := ["terrainpfx/rain.pfx", "terrainpfx/rainnocycle.pfx"]
+const SHRINE_EFFECTS := [ELSecondBuildings.SHRINE, "AltarOfChaos", "ShrineOfOrdering", "ShrineOfSynthesis", "SourceOfLife"]
 
 signal rain_changed(areas: PackedVector4Array)
 
@@ -44,7 +45,8 @@ func build(data: ELProfile, settings: ELSettings, state: ELAdventureSession) -> 
 	if data.id == "el2":
 		_shrine_session = state
 		for item: Dictionary in state.objects.values():
-			if ELSecondBuildings.kind(item) == "specialization": _shrines[int(item.uid)] = item
+			if item.get("group") == "additional_buildings" and item.get("name") in SHRINE_EFFECTS:
+				_shrines[int(item.uid)] = item
 		_sync_shrines()
 
 func set_enabled(value: bool) -> void:
@@ -80,12 +82,14 @@ func _sync_shrine(item: Dictionary) -> void:
 	if item.get("used", false) or not item.get("alive", true) or not item.get("visible", true) or not item.get("placed", true) or ELFog.object_state(_shrine_session, 1, item) != ELFog.VISIBLE:
 		finish(name)
 		return
-	if effects.has(name): return
 	var row := ELSecondBuildings.definition(profile, item)
 	var file := str(row.get("Effect", ""))
 	if file.is_empty(): return
 	var center := ELAdventureGrid.center(item, row) * ELAdventureTerrain.CELL
-	start(name, {"file": file, "x": center.x, "y": center.y, "z": 0.0, "story": true}, 0.0)
+	if effects.has(name):
+		effects[name].node.position = Vector3(center.x, 0.0, -center.y)
+	else:
+		start(name, {"file": file, "x": center.x, "y": center.y, "z": 0.0, "story": true}, 0.0)
 	orient(name, -float((int(item.rotation) >> 2) & 3) * PI / 2.0)
 
 ## Turns a running effect about the vertical axis (the object's facing).

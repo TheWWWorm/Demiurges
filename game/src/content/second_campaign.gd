@@ -39,7 +39,8 @@ const HERO_FIELDS := ["experience", "experience_penalty", "level", "level_histor
 
 static func new_game(difficulty := 1) -> Dictionary:
 	return {"version": VERSION, "counter": 0, "possible": FIRST.duplicate(), "current": "", "prev": "", "index": 0, "row": 0,
-		"difficulty": clampi(difficulty, 0, DIFFICULTIES - 1), "intermission": {}, "finished": false}
+		"difficulty": clampi(difficulty, 0, DIFFICULTIES - 1), "intermission": {}, "finished": false,
+		"hall_run": ELHallOfFame.new_run(), "hall_points": 0}
 
 ## Starts one of the offered campaigns at its first chapter with no carried data.
 static func begin(data: Dictionary, campaign_id: String) -> bool:
@@ -192,6 +193,8 @@ static func valid(data: Variant) -> bool:
 	for key: String in ["counter", "index", "row", "difficulty"]:
 		if not ELLuaSave._integer(data.get(key), 0, MAX_ROWS): return false
 	if int(data.counter) > 3 or int(data.difficulty) >= DIFFICULTIES: return false
+	if data.has("hall_points") and not ELLuaSave._integer(data.hall_points, 0, MAX_ROWS * ELHallOfFame.WIN_POINTS * DIFFICULTIES): return false
+	if data.has("hall_run") and not ELHallOfFame.valid_run(data.hall_run): return false
 	if not data.get("possible") is Array or not data.get("current") is String or not data.get("prev") is String or not data.get("intermission") is Dictionary or not data.get("finished") is bool: return false
 	for id: Variant in data.possible:
 		if not CAMPAIGNS.has(id): return false
@@ -208,6 +211,9 @@ static func valid(data: Variant) -> bool:
 static func normalized(data: Dictionary) -> Dictionary:
 	var result := data.duplicate(true)
 	for key: String in ["version", "counter", "index", "row", "difficulty"]: result[key] = int(result[key])
+	var previous_points := Array(result.get("played", [])).size() * ELHallOfFame.WIN_POINTS * (int(result.difficulty) + 1)
+	result.hall_points = int(result.get("hall_points", previous_points))
+	if not result.has("hall_run"): result.hall_run = JSON.stringify(data).sha256_text().left(32)
 	if result.has("played"): result.played = Array(result.played).map(func(row: Variant) -> int: return int(row))
 	return result
 
@@ -224,13 +230,8 @@ static func progress(state: ELAdventureSession) -> Dictionary:
 # --- Between-chapter autosave ---------------------------------------------------
 
 static func write(path: String, data: Dictionary) -> bool:
-	if not valid(data): return false
-	var temporary := path + ".tmp"
-	var file := FileAccess.open(temporary, FileAccess.WRITE)
-	if file == null: return false
-	file.store_string(JSON.stringify({"format": AUTOSAVE_FORMAT, "version": 1, "edition": "el2", "campaign": data}))
-	file.close()
-	return DirAccess.rename_absolute(temporary, path) == OK
+	if not valid(data) or data.finished or str(data.current).is_empty(): return false
+	return ELAdventureSave.new().write_document(path, {"format": AUTOSAVE_FORMAT, "version": 1, "edition": "el2", "campaign": data})
 
 static func read(path: String) -> Dictionary:
 	if not FileAccess.file_exists(path): return {}
@@ -238,6 +239,7 @@ static func read(path: String) -> Dictionary:
 	if file == null or file.get_length() > 4 * 1024 * 1024: return {}
 	var raw: Variant = JSON.parse_string(file.get_as_text())
 	if not raw is Dictionary or raw.get("format") != AUTOSAVE_FORMAT or not valid(raw.get("campaign")): return {}
+	if raw.campaign.finished or str(raw.campaign.current).is_empty(): return {}
 	return normalized(raw.campaign)
 
 static func _plain(value: Variant) -> Variant:

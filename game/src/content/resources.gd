@@ -75,3 +75,16 @@ static func describe(edition: String, value: Dictionary, include_zero := true) -
 		var amount := int(value.get(kind, 0))
 		if include_zero or amount != 0: parts.append("%s: %d" % [LABELS[kind], amount])
 	return "  ·  ".join(parts)
+
+static func price_tooltip(profile: ELProfile, value: Dictionary) -> String:
+	var parts: PackedStringArray = []
+	var kinds := types(profile.id)
+	for i in kinds.size():
+		var kind: String = kinds[i]
+		var amount := int(value.get(kind, 0))
+		if amount == 0: continue
+		var key := "T_RESOURCE_NAME_%d" % (i + 1)
+		var title := profile.text(key)
+		parts.append("%d %s" % [amount, LABELS[kind] if title == key else title])
+	var cost := profile.text("T_COST")
+	return "%s %s" % ["Cost:" if cost == "T_COST" else cost, "0" if parts.is_empty() else ", ".join(parts)]

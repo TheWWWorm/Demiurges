@@ -17,7 +17,7 @@ signal guest_departed(voluntary: bool)
 const PORT := 27186
 const DISCOVERY_PORT := 27187
 # v11 peers wait for the final tactical commit before installing a result.
-const VERSION := 11
+const VERSION := 12
 const MAX_TURN_SECONDS := 3600
 const EDITION := "el1"
 const PROTOCOL := "DemiurgesStrategy"

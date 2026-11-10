@@ -62,6 +62,7 @@ static func mesh(figure: Dictionary, track: Dictionary = {}) -> ArrayMesh:
 	var arrays: Array = figure.arrays
 	var shapes := []
 	var positions: Array[PackedVector3Array] = []
+	var morph_bounds: Array[AABB] = []
 	var frames: int = track.get("morph_frames", 0)
 	var count: int = track.get("morph_vertices", 0)
 	if frames > 0 and count > 0:
@@ -76,6 +77,9 @@ static func mesh(figure: Dictionary, track: Dictionary = {}) -> ArrayMesh:
 					continue
 				var p: int = track.morph_offset + (frame * count + index) * 12
 				vertices[i] += vector(Vector3(source.decode_float(p), source.decode_float(p + 4), source.decode_float(p + 8)))
+			var bounds := AABB(vertices[0], Vector3.ZERO) if not vertices.is_empty() else AABB()
+			for vertex: Vector3 in vertices: bounds = bounds.expand(vertex)
+			morph_bounds.append(bounds)
 			var shape := []
 			shape.resize(Mesh.ARRAY_MAX)
 			shape[Mesh.ARRAY_VERTEX] = vertices
@@ -85,7 +89,9 @@ static func mesh(figure: Dictionary, track: Dictionary = {}) -> ArrayMesh:
 			mesh.add_blend_shape("frame_%d" % frame)
 	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays, shapes)
 	# Each frame's whole vertex positions, for traced lighting.
-	if not positions.is_empty(): mesh.set_meta("morph_positions", positions)
+	if not positions.is_empty():
+		mesh.set_meta("morph_positions", positions)
+		mesh.set_meta("morph_bounds", morph_bounds)
 	return mesh
 
 static func hierarchy(bytes: PackedByteArray) -> Array:

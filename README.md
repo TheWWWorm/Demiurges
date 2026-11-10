@@ -43,7 +43,7 @@ Download the package for your system from the [Releases](https://github.com/TheW
 
 ## Wiki
 
-The [**Demiurges wiki**](https://demiurges.wwworm.com/wiki/) is free to read without game files, an account or the engine. Its encyclopedia has a page for every creature (with a picture), sorcery, enchantment, artifact, skill and specialization of both games. Its guides explain installing, controls, combat rules and phases, spells and creatures, the campaigns, duels, options and the differences from the originals, in English and [Russian](https://demiurges.wwworm.com/wiki/?lang=ru). Good starting points: [installing the game files](https://demiurges.wwworm.com/wiki/?page=installing), [controls](https://demiurges.wwworm.com/wiki/?page=controls), [how a battle works](https://demiurges.wwworm.com/wiki/?page=combat) and [turn and phases](https://demiurges.wwworm.com/wiki/?page=combat-phases). The same articles open in the game: **Wiki** on the main menu or **F1** on any screen. See [the wiki guide](docs/wiki.md) to edit or rebuild it.
+The [**Demiurges wiki**](https://demiurges.wwworm.com/wiki/) is free to read without game files, an account or the engine. Its encyclopedia has a page for every creature (with a picture), sorcery, enchantment, artifact, skill and specialization of both games. Its guides explain installing, controls, combat rules and phases, spells and creatures, the campaigns, duels, options and the differences from the originals, in English and [Russian](https://demiurges.wwworm.com/wiki/?lang=ru). Good starting points: [installing the game files](https://demiurges.wwworm.com/wiki/?page=installing), [controls](https://demiurges.wwworm.com/wiki/?page=controls), [how a battle works](https://demiurges.wwworm.com/wiki/?page=combat) and [turn and phases](https://demiurges.wwworm.com/wiki/?page=combat-phases). The same articles open in the game: **Wiki** on the main menu or **Shift+F1** on any screen. See [the wiki guide](docs/wiki.md) to edit or rebuild it.
 
 Creature pages in the in-game wiki can play the installed game's attack, death, and other available animations with their own sounds.
 
@@ -79,6 +79,10 @@ python3 tools/import_game.py el2 /path/to/Etherlords2
 - **Automatic battle camera**: spells, the first blow of a fight and the winner get close-ups along the games' own camera tracks before the view returns to yours. **Camera dynamics** in Options sets how often they happen, and the numbers over creatures can be hidden during close-ups. Moving the camera yourself ends a close-up at once.
 - **Original interface**: the main menu, campaign and mission screens, Options, saving and loading, the map interface and the battle screen use the games' own art and texts.
 - **Language**: texts come from your copy of the game.
+
+To import an original custom duel preset, copy its `.prs` file into the remake's `user://duel/el1` or `user://duel/el2` folder for the matching game, alongside the remake's `.json` decks. Open Duel to convert it into an editable preset. The source is kept as a `.prs.imported` backup, and any existing JSON preset with the same name takes precedence. On Windows, `user://` is normally `%APPDATA%\Godot\app_userdata\Etherlords Duel`.
+
+In Etherlords II duels, resource level 4 has a larger budget and level 5 has unlimited resources. Level 6 also lets you mix playable spells and creatures from every faction, including neutral cards, and use as many copies as you like in the 16-card deck.
 
 ## Not finished yet
 

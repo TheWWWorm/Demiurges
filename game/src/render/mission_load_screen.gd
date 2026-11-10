@@ -81,21 +81,22 @@ func _button(control: String, action: Callable) -> ELFrontMenu.CutButton:
 func build_screen() -> void:
 	var caption := "SaveMissionText" if mode == "save" else "LoadMissionText"
 	menu._label("caption", menu._caption(caption), _rect(caption), 18)
+	var headers := ["SMSortName", "SMSortDate", "SMSortTime"] if menu.edition == "el2" else ["SMCaption1", "SMCaption2", "SMCaption3"]
 	for index in 3:
-		var control := "SMCaption%d" % (index + 1)
+		var control: String = headers[index]
 		menu._label("column%d" % index, menu._caption(control), _rect(control), 17)
 	list = SaveList.new()
 	list.screen = self
 	# The grid under the column captions: it starts 33 px left of the name
 	# caption (the art's narrow first column) and ends at the scroll bar and
 	# its down arrow.
-	var name_column := _rect("SMCaption1")
+	var name_column := _rect(headers[0])
 	var bar := _rect("SMGamesBarBounds")
 	var down := _rect("SMScrollD")
 	list.position = Vector2(name_column.position.x - 33, name_column.end.y + 1)
 	list.size = Vector2(bar.position.x - list.position.x - 2, floorf((down.end.y - list.position.y) / ROW) * ROW)
 	for index in 3:
-		var column := _rect("SMCaption%d" % (index + 1))
+		var column := _rect(headers[index])
 		list.columns.append(Vector2(column.position.x - list.position.x, column.size.x))
 	menu.canvas.add_child(list)
 	menu.labels["list"] = list

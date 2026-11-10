@@ -58,6 +58,7 @@ const HOLD_LIMIT := 8.0
 
 ## This edition's view angle (vertical degrees).
 var view_angle := VIEW_FOV
+var view_index := 0
 
 func _init(source: ELProfile = null, seed := 0) -> void:
 	profile = source
@@ -151,10 +152,9 @@ func default_view(index := 0) -> Dictionary:
 static func view_fov(track_fov: float, angle := VIEW_FOV) -> float:
 	return rad_to_deg(2.0 * atan(tan(track_fov * 0.5) * tan(deg_to_rad(angle) * 0.5) / tan(TRACK_FOV * 0.5)))
 
-## The player's standing battle view as an orbit: the authored Default1 in
-## both games (the second game's original frames its forest arena that way).
+## The selected authored battle view as an orbit.
 func standing_view() -> Dictionary:
-	return default_view()
+	return default_view(view_index)
 
 ## True while a summon's caster shot is on screen.
 func showing_caster() -> bool:
@@ -257,9 +257,10 @@ func _queue(list: Array[Dictionary], back := true) -> bool:
 	return true
 
 func _home_shot() -> Dictionary:
-	var home := track("ReturnOwner_1.cmf")
+	var name := "ReturnOwner_%d.cmf" % (view_index + 1)
+	var home := track(name)
 	if home.is_empty(): return {}
-	return {"name": "ReturnOwner_1.cmf", "fovs": home.fovs, "duration": home.fovs.size() / RATE, "orbit": true, "hold": false}
+	return {"name": name, "fovs": home.fovs, "duration": home.fovs.size() / RATE, "orbit": true, "hold": false}
 
 ## A hero's spell. kind: "summon", "sorcery" or "enchantment"; hero: the
 ## caster's figure position; targets: [{at: Vector3, side: int, slot: int,
@@ -343,7 +344,7 @@ func cast(kind: String, caster: int, hero: Vector3, targets: Array, local: bool,
 		var variant := (n & 1) + 1
 		var overview := n >= 2 and _roll(_odd(kind, "playfullscene"))
 		if overview:
-			list.append(placed("OwnerMonstersAll_1.cmf", Vector3.ZERO, owner, false, gesture))
+			list.append(placed("OwnerMonstersAll_%d.cmf" % (view_index + 1), Vector3.ZERO, owner, false, gesture))
 		elif n == 0 or (n >= 2 and _roll(_odd(kind, "playhero"))):
 			list.append(placed("SummonOwnerCaster%d_1.cmf" % variant, hero, caster, false, gesture))
 		# The caster shot (or overview) plays over the gesture; the creature's
@@ -367,7 +368,7 @@ func cast(kind: String, caster: int, hero: Vector3, targets: Array, local: bool,
 	# frame, so shots that follow the effect last through the gesture too.
 	var effect_shot := maxf(gesture, 0.0) + length + extra + 1.0 if kind == "sorcery" and length > 0.0 else -1.0
 	if overview:
-		return _queue([placed("OwnerMonstersAll_1.cmf", Vector3.ZERO, owner, false, effect_shot if effect_shot > 0.0 else gesture)], false)
+		return _queue([placed("OwnerMonstersAll_%d.cmf" % (view_index + 1), Vector3.ZERO, owner, false, effect_shot if effect_shot > 0.0 else gesture)], false)
 	var variant := ((n + 1) & 1) + 1
 	var stretch := _odd(kind, "monstertracktime") if kind == "enchantment" else effect_shot
 	if hero_shot:
@@ -461,10 +462,7 @@ func fight_over(middle := Vector3.INF) -> bool:
 	if middle != Vector3.INF and not String(pending.name).is_empty():
 		list.append(placed(String(pending.name), middle, int(pending.side), true))
 	if list.is_empty() or list[0].is_empty():
-		var home := track("ReturnOwner_1.cmf")
-		if home.is_empty(): return false
-		list = [{"name": "ReturnOwner_1.cmf", "fovs": home.fovs, "duration": home.fovs.size() / RATE, "orbit": true, "hold": false}]
-		return _queue(list, false)
+		return _queue([_home_shot()], false)
 	return _queue(list)
 
 ## A fight close-up at one figure (a trigger's lethal hit): random side and

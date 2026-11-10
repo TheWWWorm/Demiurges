@@ -49,6 +49,7 @@ func build_shop(owner: ELAdventureDirector, panel: ELAdventureHud, exchange_trad
 	sheet.view = self
 	sheet.size = Vector2(660, 600)
 	sheet.mouse_filter = Control.MOUSE_FILTER_STOP
+	sheet.tooltip_text = " "
 	add_child(sheet)
 	_compose()
 	_build_side(0)
@@ -273,8 +274,9 @@ func _draw_sheet() -> void:
 func tooltip_at(point: Vector2) -> String:
 	var index := shop_at(point)
 	if index >= 0:
-		var row: Dictionary = profile.table("CombatSpells").get(trade.stock[index], {})
-		return profile.text(str(row.get("Name", trade.stock[index]))) + "\n" + profile.text(str(row.get("ToolTip", "")))
+		var card: String = trade.stock[index]
+		var row: Dictionary = profile.table("CombatSpells").get(card, {})
+		return profile.text(str(row.get("Name", card))) + "\n" + profile.card_description(card) + "\n" + ELResources.price_tooltip(profile, trade.quote(card, slot))
 	for name: String in TIPS:
 		if name == ("SpellTt3" if rune_price else "SpellTt4"): continue
 		if TIPS[name].has_point(point): return profile.text("CtrlTt" + name)

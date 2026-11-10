@@ -12,16 +12,23 @@ The original controls work as in the games. These keys are the most useful.
 |---|---|---|
 | Left click | choose a spell, creature or target | move, talk, visit or attack |
 | Space | skip the current presentation | continue a conversation |
-| Ctrl+E (EL1) / Tab (EL2) | end the current phase | — |
+| Ctrl+E (EL1) / Tab (EL2) | end the current phase | Ctrl+E ends the turn or day in either game |
+| Alt+A | send all ready creatures to attack | — |
+| Alt+C | toggle auto combat | — |
+| A / H (EL2) | show artifacts / spells in hand | — |
+| E / G (EL2) | show enchantments / graveyard | — |
 | Esc | cancel targeting, or open the game menu | close a window, or open the game menu |
-| F1 | open this wiki | open this wiki |
-| F5 / F9 | quick save / quick load | quick save / quick load |
+| Shift+F1 | open this wiki | open this wiki (F1 also works) |
+| F1–F4 | choose an automatic camera view | — |
+| F5 / F9 | quick save / quick load | quick save / quick load (F8 also loads) |
 | Right drag, wheel | turn and zoom the camera | turn and zoom the camera |
 | R | reset the camera | — |
-| W A S D, arrows | — | move the camera |
+| Page Up / Page Down | zoom in or out (EL2 in manual camera mode) | zoom in or out |
+| Arrows | orbit or tilt in manual camera mode | EL1 pans, Ctrl+arrows rotate or tilt. EL2 Left/Right rotate and Up/Down zoom |
+| W A S D | — | move the camera |
 | H or Home | — | follow the selected hero |
-| I / K | — | spellbook / skills (first game) |
-| N | — | end the turn (first game) or the day (second game) |
+| I / K | — | spellbook / skills in EL1. I opens inventory in EL2 |
+| N | — | end the turn in EL1 or open the notebook in EL2 |
 
 ## Touch screens
 

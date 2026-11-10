@@ -566,7 +566,7 @@ func _update_status() -> void:
 func player_side(duel: ELDuel) -> int:
 	if _battle == null or _battle.get_ref() != duel:
 		_battle = weakref(duel) if duel != null else null
-		_local_side = 0
+		_local_side = game._battle_player_side(duel) if game != null else 0
 		_reveal_hand = false
 	return _local_side
 

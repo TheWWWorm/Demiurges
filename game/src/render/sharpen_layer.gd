@@ -46,7 +46,7 @@ func _init() -> void:
 
 func _process(_delta: float) -> void:
 	if settings == null: return
-	var wanted := clampi(int(settings.values.get("sharpening", 1)), 0, AMOUNTS.size() - 1)
+	var wanted := clampi(int(settings.values.get("sharpening", ELSettings.SHARED.sharpening)), 0, AMOUNTS.size() - 1)
 	if wanted != choice: apply(wanted)
 
 func apply(value: int) -> void:

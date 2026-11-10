@@ -16,6 +16,12 @@ const EL2_RESOURCES: Array[String] = ["Root", "Ruby", "Stone"]
 ## (the spell shop's table).
 const MULTIPLIERS: Array[int] = [1, 2, 3, 5, 10, 20, 40, 80, 160, 320, 640, 1280, 2560, 5120, 10240, 20480]
 const EL2_NEUTRAL := "White"
+const EL2_EXTENDED_LEVEL := 4
+# A level 13 hero can carry a premium artifact, but a second premium
+# artifact usually calls for a lower hero level or fewer upgrades.
+const EL2_EXTENDED_BUDGET := {"Root": 2100, "Ruby": 800, "Stone": 165}
+const EL2_UNLIMITED_LEVEL := 5
+const EL2_SANDBOX_LEVEL := 6
 const EL2_DECK := 16
 const EL2_COPIES := 4
 const EL1_BOOK := 15
@@ -26,13 +32,23 @@ static func resources(profile: ELProfile) -> Array[String]:
 
 ## Selectable resource levels on the Duel screen and in the editor.
 static func resource_levels(profile: ELProfile) -> Vector2i:
-	return Vector2i(1, 5 if profile.id == "el1" else 3)
+	return Vector2i(1, 5 if profile.id == "el1" else EL2_SANDBOX_LEVEL)
+
+static func sandbox(profile: ELProfile, resource_level: int) -> bool:
+	return profile.id == "el2" and resource_level == EL2_SANDBOX_LEVEL
+
+static func el2_copy_limit(resource_level: int) -> int:
+	return EL2_DECK if resource_level == EL2_SANDBOX_LEVEL else EL2_COPIES
 
 ## Hero levels the preset editor allows.
 static func hero_levels(profile: ELProfile) -> Vector2i:
 	return Vector2i(1, 15 if profile.id == "el1" else 13)
 
+## A budget lists the capped resources. The unlimited tier has no caps.
 static func budget(profile: ELProfile, resource_level: int) -> Dictionary:
+	if profile.id == "el2":
+		if resource_level == EL2_EXTENDED_LEVEL: return EL2_EXTENDED_BUDGET.duplicate()
+		if resource_level in [EL2_UNLIMITED_LEVEL, EL2_SANDBOX_LEVEL]: return {}
 	var row: Dictionary = profile.table("DuelResourceLevels").get(str(resource_level), {})
 	var result := {}
 	for r: String in resources(profile): result[r] = int(row.get(r, 0))
@@ -143,10 +159,12 @@ static func duel_artifacts(profile: ELProfile) -> Array[String]:
 static func artifact_limit(profile: ELProfile) -> int:
 	return -1 if profile.id == "el1" else EL2_ARTIFACTS
 
-static func spell_allowed(profile: ELProfile, card: String, faction: String) -> bool:
+static func spell_allowed(profile: ELProfile, card: String, faction: String, resource_level := 1) -> bool:
 	var row: Dictionary = profile.table("CombatSpells").get(card, {})
 	if row.is_empty() or artifact(profile, card) or str(row.get("Support", "False")).to_lower() == "true": return false
 	var colour := String(row.get("Color", ""))
+	if sandbox(profile, resource_level):
+		return (ELCatalog.FACTIONS.has(colour) or colour == EL2_NEUTRAL) and row.get("Use", "+") == "+" and not ELCatalog.rule(profile, card).is_empty()
 	return colour == faction or (profile.id != "el1" and colour == EL2_NEUTRAL)
 
 ## Rune slots hold at most the Providence capacity (5/7/10/15); cantrips carry none.
@@ -183,7 +201,7 @@ static func errors(profile: ELProfile, preset: Dictionary) -> Array[String]:
 	for card: String in cards:
 		counts[card] = int(counts.get(card, 0)) + 1
 		if not profile.table("CombatSpells").has(card): result.append("spell:" + card)
-		elif not spell_allowed(profile, card, faction): result.append("colour:" + card)
+		elif not spell_allowed(profile, card, faction, resource_level): result.append("colour:" + card)
 	if profile.id == "el1":
 		var runes: Array = preset.get("runes", [])
 		var capacity := rune_capacity(skills)
@@ -193,11 +211,12 @@ static func errors(profile: ELProfile, preset: Dictionary) -> Array[String]:
 			if count < 0 or count > capacity: result.append("runes:%d" % index)
 		if not preset.get("reserve", {}).is_empty(): result.append("reserve")
 	else:
+		var copy_limit := el2_copy_limit(resource_level)
 		for card: String in counts:
-			if int(counts[card]) > EL2_COPIES: result.append("copies:" + card)
+			if int(counts[card]) > copy_limit: result.append("copies:" + card)
 		var reserve: Dictionary = preset.get("reserve", {})
 		for card: String in reserve:
-			if int(reserve[card]) < 0 or not spell_allowed(profile, card, faction): result.append("reserve:" + card)
+			if int(reserve[card]) < 0 or not spell_allowed(profile, card, faction, resource_level): result.append("reserve:" + card)
 	var offered := duel_artifacts(profile)
 	var artifacts: Array = preset.get("artifacts", [])
 	for code: String in artifacts:

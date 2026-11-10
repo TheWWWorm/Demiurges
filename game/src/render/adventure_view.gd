@@ -320,7 +320,8 @@ func build(profile: ELProfile, scenario: Dictionary, preferences: ELSettings, di
 		# First game: every mission start is saved as T_AUTOSAVE_START_MISSION.
 		if profile.id == "el1" and not state.tutorial:
 			wait_cursor(profile)
-			ELSaveSlots.write_auto("T_AUTOSAVE_START_MISSION", director, camera_state())
+			var failed := ELSaveSlots.write_auto("T_AUTOSAVE_START_MISSION", director, camera_state())
+			if not failed.is_empty(): push_warning(failed)
 	if profile.id == "el1": _build_first_tutorial()
 	for pickup: Dictionary in restored.get("pickup_notices", []): _present(pickup)
 	for message: Dictionary in restored.get("site_notices", []):
@@ -450,6 +451,10 @@ func _update_edge(delta: float) -> void:
 		edge_cursor = named
 		update_cursor()
 	var keys := keyboard_motion()
+	var zoom_direction := float(keys.get("zoom", 0.0))
+	if zoom_direction != 0.0:
+		view_goal = Vector2(-1, -1)
+		zoom = clampf(zoom - zoom_direction * 2.0 * delta / EDGE_TICK, zoom_limits.x, zoom_limits.y)
 	if direction == Vector2i.ZERO and keys.is_empty():
 		_edge_pan = Vector2.ZERO
 		_edge_turn = 0.0
@@ -484,26 +489,29 @@ func _update_edge(delta: float) -> void:
 	if turn_target != 0.0: yaw_goal = INF
 	pitch = clampf(pitch + _edge_tilt * delta, pitch_limits.x, pitch_limits.y)
 
-## Held arrow keys on the camera tick (original key-down/key-up handlers).
+## Held camera keys on the camera tick (original key-down/key-up handlers).
 ## First game: arrows pan 2*KeyboardScroll units a tick; with Ctrl, Left/Right
 ## turn 0.2*KeyboardRotation rad a tick (Ctrl+Left the way Ctrl at the right
-## edge turns) and Up/Down tilt as Ctrl at the top/bottom edge. Second game:
-## Left/Right turn the way the matching edge does (InvertRotation flips), never
-## while a script holds the map; no keyboard panning. Empty when idle.
+## edge turns) and Up/Down tilt as Ctrl at the top/bottom edge. Page Up/Down
+## zoom. In the second game Up/Down also zoom, while Left/Right turn the map.
 func keyboard_motion() -> Dictionary:
 	if state == null or state.map == null or director == null or state.camera_locked or not visible or paused or _cursor_modal(): return {}
 	var focus := get_viewport().gui_get_focus_owner() if get_viewport() != null else null
 	if focus is LineEdit or focus is TextEdit: return {}
 	var x := float(Input.is_physical_key_pressed(KEY_RIGHT)) - float(Input.is_physical_key_pressed(KEY_LEFT))
 	var y := float(Input.is_physical_key_pressed(KEY_DOWN)) - float(Input.is_physical_key_pressed(KEY_UP))
-	if x == 0.0 and y == 0.0: return {}
+	var second := state.map.profile.id == "el2"
+	if second and state.exclusive: return {}
+	var zoom_in := Input.is_physical_key_pressed(KEY_PAGEUP) or (second and Input.is_physical_key_pressed(KEY_UP))
+	var zoom_out := Input.is_physical_key_pressed(KEY_PAGEDOWN) or (second and Input.is_physical_key_pressed(KEY_DOWN))
+	var zoom_direction := float(zoom_in) - float(zoom_out)
+	if x == 0.0 and (second or y == 0.0) and zoom_direction == 0.0: return {}
 	var values: Dictionary = settings.values if settings != null else {}
 	var rotation_speed := float(values.get("keyboard_rotation", 1.0))
-	if state.map.profile.id == "el2":
-		if x == 0.0 or state.exclusive: return {}
-		return {"turn": x * EDGE_TURN * rotation_speed * (-1.0 if bool(values.get("invert_rotation", false)) else 1.0)}
-	if Input.is_key_pressed(KEY_CTRL): return {"turn": -x * EDGE_TURN * rotation_speed, "tilt": y * EDGE_TILT}
-	return {"pan": Vector2(x, y) * EDGE_PAN * float(values.get("keyboard_scroll", 1.0))}
+	if second:
+		return {"turn": x * EDGE_TURN * rotation_speed * (-1.0 if bool(values.get("invert_rotation", false)) else 1.0), "zoom": zoom_direction}
+	if Input.is_key_pressed(KEY_CTRL): return {"turn": -x * EDGE_TURN * rotation_speed, "tilt": y * EDGE_TILT, "zoom": zoom_direction}
+	return {"pan": Vector2(x, y) * EDGE_PAN * float(values.get("keyboard_scroll", 1.0)), "zoom": zoom_direction}
 
 ## Hover ring on the picked object (not the player's own heroes) and the
 ## selected hero's ring, in the local player's colour.
@@ -743,17 +751,23 @@ func _end_day() -> void:
 
 func _unhandled_input(event: InputEvent) -> void:
 	if console_open: return
+	var key := event as InputEventKey
+	var continue_dialogue := key != null and key.pressed and (
+		not key.echo or (key.keycode == KEY_SPACE and director != null and not bool(director.dialogue.get("question", false))))
+	var action := ""
+	if key != null and key.pressed and not key.echo and state != null and state.map != null:
+		action = ELSettings.hotkey_action(settings, state.map.profile.id, "Map", key)
 	# The tutorial panel takes every key and click while it is open.
 	if tutorial_panel != null and tutorial_panel.handle_input(event): return
 	# A script message box over a window is modal: keys answer it.
 	if dialogue_blocker != null and dialogue_blocker.visible and director != null and not director.dialogue.is_empty():
 		if second_dialogue != null:
-			if event is InputEventKey and event.pressed and not event.echo:
+			if continue_dialogue:
 				var answer := second_dialogue.key_answer(event.keycode)
 				if not answer.is_empty(): director.acknowledge(answer)
 				if not answer.is_empty() or event.keycode in [KEY_SPACE, KEY_ENTER, KEY_KP_ENTER, KEY_ESCAPE]: get_viewport().set_input_as_handled()
 			return
-		if event is InputEventKey and event.pressed and not event.echo and event.keycode in [KEY_SPACE, KEY_ENTER, KEY_KP_ENTER, KEY_ESCAPE]:
+		if continue_dialogue and event.keycode in [KEY_SPACE, KEY_ENTER, KEY_KP_ENTER, KEY_ESCAPE]:
 			director.acknowledge("CANCEL" if event.keycode == KEY_ESCAPE and bool(director.dialogue.get("question", false)) else "OK")
 			get_viewport().set_input_as_handled()
 		return
@@ -783,26 +797,14 @@ func _unhandled_input(event: InputEvent) -> void:
 			diplomacy.cancel()
 			get_viewport().set_input_as_handled()
 		return
-	if first_shop != null:
-		if event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE:
-			first_shop.cancel_trade()
-			get_viewport().set_input_as_handled()
-		return
-	if rune_shop != null:
-		if event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE:
-			rune_shop.cancel_trade()
-			get_viewport().set_input_as_handled()
-		elif event is InputEventKey and event.pressed and event.keycode in RUNE_SHOP_KEYS:
-			rune_shop.move_selection(RUNE_SHOP_KEYS[event.keycode])
-			get_viewport().set_input_as_handled()
-		return
-	if shop != null:
-		if event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE:
-			shop.cancel_trade()
-			get_viewport().set_input_as_handled()
+	if first_shop != null or rune_shop != null or shop != null:
+		if key != null and key.pressed: _shop_hotkey(key)
 		return
 	if skills != null:
-		if event is InputEventKey and event.pressed and event.keycode in [KEY_ESCAPE, KEY_K]:
+		if key != null and key.pressed and not key.echo and action.begins_with("skill_offer_") and skills is ELSecondLevelUpView:
+			(skills as ELSecondLevelUpView).select_offer(int(action.get_slice("_", 2)) - 1)
+			get_viewport().set_input_as_handled()
+		elif key != null and key.pressed and (key.keycode == KEY_ESCAPE or action == "skills"):
 			_close_skills()
 			get_viewport().set_input_as_handled()
 		elif event is InputEventKey and event.pressed and event.keycode in [KEY_ENTER, KEY_KP_ENTER] and skills is ELSecondLevelUpView:
@@ -810,7 +812,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			get_viewport().set_input_as_handled()
 		return
 	if spellbook != null:
-		if event is InputEventKey and event.pressed and event.keycode in [KEY_ESCAPE, KEY_I]:
+		if key != null and key.pressed and (key.keycode == KEY_ESCAPE or action == "inventory"):
 			_close_spellbook()
 			get_viewport().set_input_as_handled()
 		return
@@ -820,7 +822,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			get_viewport().set_input_as_handled()
 		return
 	if notebook != null:
-		if event is InputEventKey and event.pressed and event.keycode in [KEY_ESCAPE, KEY_N]:
+		if key != null and key.pressed and (key.keycode == KEY_ESCAPE or action == "notebook"):
 			notebook.close()
 			get_viewport().set_input_as_handled()
 		return
@@ -843,34 +845,37 @@ func _unhandled_input(event: InputEvent) -> void:
 			get_viewport().set_input_as_handled()
 		return
 	# Second game: the open script box takes its keys first (Enter/Esc/Space).
-	if second_dialogue != null and event is InputEventKey and event.pressed and not event.echo and not director.dialogue.is_empty():
+	if second_dialogue != null and continue_dialogue and not director.dialogue.is_empty():
 		var answer := second_dialogue.key_answer(event.keycode)
 		if not answer.is_empty(): director.acknowledge(answer)
 		if not answer.is_empty() or event.keycode in [KEY_SPACE, KEY_ENTER, KEY_KP_ENTER, KEY_ESCAPE]:
 			get_viewport().set_input_as_handled()
 			return
 	if event is InputEventKey and event.pressed:
-		if event.keycode == KEY_I: _open_spellbook(-1)
-		elif event.keycode == KEY_K: _open_skills()
-		elif event.keycode == KEY_G and ELGlobalSpells.applies(state): open_global_spells()
-		# Second game: N is the Notebook accelerator; the first keeps
-		# N for its end-turn command.
-		elif event.keycode == KEY_N and second_hud != null:
-			if director.dialogue.is_empty(): open_notebook()
-		elif event.keycode == KEY_N: _end_day()
-		elif event.keycode == KEY_BACKSPACE and state.map.profile.id == "el1": _cancel_map_order()
-		elif event.keycode == KEY_F5: quick_save()
-		# F8 is the original quick load; F9 is kept as the remake's key.
-		elif event.keycode in [KEY_F8, KEY_F9]: ask_quick_load()
+		if not action.is_empty():
+			get_viewport().set_input_as_handled()
+			match action:
+				"end_day":
+					if not _cursor_modal(): _end_day()
+				"inventory": _open_spellbook(-1)
+				"skills": _open_skills()
+				"global_spells":
+					if ELGlobalSpells.applies(state): open_global_spells()
+				"notebook":
+					if director.dialogue.is_empty() and second_hud != null: open_notebook()
+				"cancel_order": _cancel_map_order()
+				"map_save": quick_save()
+				"map_load": ask_quick_load()
+				"center_hero": _centre_hero()
 		elif event.keycode == KEY_ESCAPE and second_hud != null and director.dialogue.is_empty():
 			open_options()
 			get_viewport().set_input_as_handled()
-		elif event.keycode == KEY_SPACE and not director.dialogue.is_empty():
+		elif continue_dialogue and event.keycode == KEY_SPACE and not director.dialogue.is_empty():
 			director.acknowledge()
 			get_viewport().set_input_as_handled()
 		# First game: H opens the tutorial; Home centres the hero.
 		elif event.keycode == KEY_H and tutorial_panel != null: tutorial_panel.open_history()
-		elif event.keycode in [KEY_HOME, KEY_H]: _centre_hero()
+		elif event.keycode == KEY_H and state.map.profile.id == "el1": _centre_hero()
 		elif event.keycode in [KEY_W, KEY_A, KEY_S, KEY_D]:
 			following = -1
 			view_moved = true
@@ -927,6 +932,29 @@ func _unhandled_input(event: InputEvent) -> void:
 			if event.position.distance_to(_right_origin) <= ELSecondMapTooltips.DRAG_THRESHOLD: hover(event.position)
 			else: hud.show_tooltip(-1, {}, Vector2.ZERO)
 	elif event is InputEventMouseMotion and hud != null and hud.tooltip.visible: hud.show_tooltip(-1, {}, Vector2.ZERO)
+
+func _shop_hotkey(key: InputEventKey) -> void:
+	if key.keycode == KEY_ESCAPE:
+		if first_shop != null: first_shop.cancel_trade()
+		elif rune_shop != null: rune_shop.cancel_trade()
+		else: shop.cancel_trade()
+	elif rune_shop != null and key.keycode in RUNE_SHOP_KEYS:
+		rune_shop.move_selection(RUNE_SHOP_KEYS[key.keycode])
+	elif shop == null and not key.echo:
+		var action := ELSettings.hotkey_action(settings, state.map.profile.id, "Shops", key)
+		match action:
+			"shop_confirm":
+				if first_shop != null: first_shop.accept()
+				else: rune_shop.accept()
+			"shop_buy":
+				if first_shop != null: first_shop.buy()
+				elif rune_shop != null and not rune_shop.buttons.CompBuy1.disabled: rune_shop.buttons.CompBuy1.pressed.emit()
+			"shop_undo":
+				if first_shop != null: first_shop.retrieve()
+				elif rune_shop != null and not rune_shop.buttons.CompBack1.disabled: rune_shop.buttons.CompBack1.pressed.emit()
+			_: return
+	else: return
+	get_viewport().set_input_as_handled()
 
 ## Second game: every cursor move is seen here, before the panels take it;
 ## _unhandled_input marks the moves that reached the map. A right release
@@ -1183,7 +1211,9 @@ func touch_zoom(factor: float) -> void:
 	_update_camera()
 
 func touch_bar_keys() -> Array:
-	return [["Save", KEY_F5], ["Load", KEY_F9]]
+	var keys := [["Save", KEY_F5], ["Load", KEY_F9]]
+	if tutorial_panel != null: keys.append(["Tutorial", KEY_H])
+	return keys
 
 func _hide_touch_tip() -> void:
 	if second_hud != null:
@@ -1367,7 +1397,7 @@ func _travel_phase(play_sound := true) -> void:
 	if portal.is_empty(): portal = state.object(travel.hero)
 	var center := ELAdventureGrid.center(portal, _art.resolve(portal).get("row", {})) * ELAdventureTerrain.CELL
 	var at := {"x": center.x, "y": center.y, "z": 0.0}
-	effects.start("portal_travel", at.merged({"file": "teleport.pfx"}), ELAdventureDirector.PORTAL_SECONDS - float(travel.remaining))
+	effects.start("portal_travel", at.merged({"file": "teleport.pfx"}), ELAdventureDirector.PORTAL_SECONDS - float(travel.remaining), true)
 	if play_sound and audio != null:
 		if travel.arrived: audio.listener = target
 		audio.start_sound("portal_travel", at.merged({"file": "Adventure/teleport.wav", "near": 30.0, "far": 60.0}))
@@ -1627,15 +1657,19 @@ func open_original_options() -> void:
 	# First game: GOInfo opens the running mission's objectives.
 	extras.mission_texts = ELFirstObjectivesScreen.mission_texts(state.map) if state != null and ELFirstObjectivesScreen.supports(state.map.profile) else {}
 	if not extras.settings_previewed.is_connected(preview_volumes): extras.settings_previewed.connect(preview_volumes)
-	open_extras("options", true, _original_options_closed, "adventure")
+	var tutorial_was_enabled := bool(settings.values.get("show_tutorial", true))
+	open_extras("options", true, _original_options_closed.bind(tutorial_was_enabled), "adventure")
 
-func _original_options_closed() -> void:
+func _original_options_closed(tutorial_was_enabled: bool) -> void:
 	apply_settings()
 	match extras.options_ui.last_command:
 		"GOSave": open_save_screen()
 		"GOLoad": open_load_screen()
 		"GOMenu": leave_requested.emit()
 		"GOQuit": ELAudio.quiet_quit(get_tree())
+		_:
+			if tutorial_panel != null and not tutorial_was_enabled and bool(settings.values.get("show_tutorial", true)):
+				tutorial_panel.open_history()
 
 ## Options changed: the map takes the new values at once.
 func apply_settings() -> void:
@@ -1751,8 +1785,15 @@ func _second_chapter_end() -> void:
 			error = campaign.error
 			leave_requested.emit()
 			return
+		progress = ELSecondCampaign.normalized(progress)
+		var campaign_id := str(progress.current)
+		progress.hall_points += ELHallOfFame.WIN_POINTS * (int(progress.difficulty) + 1)
 		result_kind = ELSecondCampaign.complete_chapter(progress, ELSecondCampaign.capture(state), campaign.scenarios.size())
-		if not ELSecondCampaign.write(ELSecondCampaign.AUTOSAVE, progress): push_warning("The campaign progress could not be autosaved.")
+		if result_kind in ["campaign", "finished"]:
+			ELHallOfFame.record_second_campaign(state, campaign_id, int(progress.hall_points), str(progress.hall_run))
+			progress.hall_points = 0
+		if result_kind != "finished" and not ELSecondCampaign.write(ELSecondCampaign.AUTOSAVE, progress):
+			push_warning("The campaign progress could not be autosaved.")
 	result_progress = progress
 	if result_kind in ["lost", "finished"] or ELSecondCampaign.chapter(profile, progress).is_empty():
 		_leave_after_result()
@@ -1837,6 +1878,7 @@ func _open_spellbook(scripted_hero := -1) -> void:
 		inventory_blinks = BlinkFrames.new()
 		inventory_blinks.state = state
 		var screen: ELSecondInventoryView = spellbook
+		screen.hotkey_settings = settings
 		inventory_blinks.origin = func() -> Vector2: return screen._offset
 		screen.canvas.add_child(inventory_blinks)
 	# Second game: Hook_OnDialogOpen("Inventory") once the bag opens from the
@@ -2314,6 +2356,7 @@ func _open_shop() -> void:
 	scrim.color = Color(0, 0, 0, 0)
 	shop = ELSpellShopView.new()
 	shop.hud = second_hud
+	shop.hotkey_settings = settings
 	scrim.add_child(shop)
 	shop.build(director.shop)
 	shop.closed.connect(_close_shop)

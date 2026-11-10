@@ -11,7 +11,7 @@ signal chat_posted(side: int, text: String)
 signal closed(reason: String)
 
 const PORT := 27184
-const VERSION := 8
+const VERSION := 9
 const MAX_PACKET := 4096
 const MAX_PENDING := 128
 const MAX_CHAT_LENGTH := 240

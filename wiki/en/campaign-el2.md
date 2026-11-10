@@ -12,6 +12,8 @@ Etherlords II has five campaigns, played in a set order. Open them from **Single
 
 The race campaigns have four chapters each, the last one five. The main hero, money and progress carry over between chapters. Each chapter can be played at three difficulty levels.
 
+The remake awards 100 points per chapter won, multiplied by the difficulty level (1–3). Completing a campaign adds its total to the campaign table in **Single › Mission › Hall of Fame**.
+
 ## Tutorial and missions
 
 - **Single › Tutorial** teaches the map (adventures) and battles (combat).

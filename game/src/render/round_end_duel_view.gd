@@ -87,6 +87,7 @@ func build(source: ELProfile, shown: Dictionary, reserve: Dictionary, title: Str
 	canvas = Control.new()
 	canvas.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	canvas.size = DESIGN
+	canvas.theme = ELCombatTooltip.hidden_theme()
 	add_child(canvas)
 	surface = Surface.new()
 	surface.view = self
@@ -121,6 +122,9 @@ func build(source: ELProfile, shown: Dictionary, reserve: Dictionary, title: Str
 	buttons.RED_DropBtn.disabled = true
 	buttons.RED_ScrollUp1.pressed.connect(scroll_bag.bind(-1))
 	buttons.RED_ScrollDown1.pressed.connect(scroll_bag.bind(1))
+	var tips := ELCombatTooltip.new()
+	canvas.add_child(tips)
+	tips.setup(profile)
 	_refresh_scroll()
 	resized.connect(_layout)
 	_layout()
@@ -254,7 +258,9 @@ func tooltip_at(at: Vector2) -> String:
 		"deck": return card_tooltip(deck[target[1]])
 		"artifact":
 			var item: Variant = artifacts()[target[1]]
-			return ELSecondArtifacts.tooltip(profile, item) if item is Dictionary else card_tooltip(str(item))
+			if item is not Dictionary: return ELCombatRail.preset_artifact_tooltip(profile, str(item))
+			var details: Dictionary = item.merged({"spell": _artifact_spell(item)})
+			return ELCombatRail.artifact_tooltip(profile, details, ELSecondArtifacts.title(profile, details))
 	var skills: Array = hero.get("skills", {}).keys()
 	for index in mini(5, skills.size()):
 		if design("RED_Skill%d" % (index + 1)).has_point(at):

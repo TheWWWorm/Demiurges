@@ -139,7 +139,14 @@ func setup(panel: ELAdventureHud, text: String, box_mode := OK_ONLY, extras: Dic
 		pieces.append({"texture": picture, "rect": picture_rect})
 	for index in rows.size():
 		var at := body.position + Vector2(20, text_size.y + 5 + ROW_STEP * index)
-		_resource_icon(at, str(rows[index][0]))
+		var kind := str(rows[index][0])
+		_resource_icon(at, kind)
+		var resource_hint := Control.new()
+		resource_hint.position = at
+		resource_hint.size = RESOURCE_FRAME.size
+		resource_hint.mouse_filter = Control.MOUSE_FILTER_PASS
+		resource_hint.tooltip_text = ELAdditionalBuildings.resource_name(profile, kind)
+		canvas.add_child(resource_hint)
 		var amount := Label.new()
 		amount.text = str(int(rows[index][1]))
 		amount.add_theme_font_override("font", font)

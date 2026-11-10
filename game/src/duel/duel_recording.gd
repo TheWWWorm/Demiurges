@@ -13,7 +13,7 @@ extends RefCounted
 ## played. Files live in user://duel/<edition>/Replays/<name>.json.
 
 const FORMAT := "etherlords-remake-duel-replay"
-const VERSION := 1
+const VERSION := 2
 const FOLDER := "Replays"
 const EXTENSION := ".json"
 ## Characters T_MB_WRONG_REPLAY_NAME forbids (an empty name is refused too).
@@ -151,7 +151,7 @@ static func read(path: String, edition_id: String) -> Dictionary:
 	# Files are written with JSON.from_native (typed values); anything else is not a replay.
 	if parsed is not Dictionary or parsed.get("type") != "Dictionary": return {}
 	var data: Variant = JSON.to_native(parsed)
-	if data is not Dictionary or data.get("format") != FORMAT or data.get("version") != VERSION or data.get("edition") != edition_id: return {}
+	if data is not Dictionary or data.get("format") != FORMAT or data.get("version") not in [1, VERSION] or data.get("edition") != edition_id: return {}
 	if data.get("options") is not Dictionary or data.get("actions") is not Array or data.get("seed") is not int: return {}
 	if data.get("labels") is not Array or data.labels.size() != 4 or data.get("faces") is not Array or data.faces.size() != 2: return {}
 	if not ELLuaSave._integer(data.get("local_side", 0), 0, 1): return {}
@@ -159,6 +159,8 @@ static func read(path: String, edition_id: String) -> Dictionary:
 		if action is not Dictionary or not KINDS.has(action.get("kind")) or action.get("side") not in [0, 1]: return {}
 		# A comment written in the replay editor.
 		if action.has("note") and action.note is not String: return {}
+	# Version 1 recordings never drew an Expert Artificer roll.
+	if data.version == 1: data.options.expert_artificer = false
 	return data
 
 ## Saved replays of an edition: {name, path, labels, faces}, by name.

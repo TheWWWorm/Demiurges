@@ -262,6 +262,7 @@ func button(point: Vector2, pressed: bool, which := MOUSE_BUTTON_LEFT, double :=
 static func tap_key(keycode: Key) -> void:
 	for pressed: bool in [true, false]:
 		var key := InputEventKey.new()
+		key.device = InputEvent.DEVICE_ID_EMULATION
 		key.keycode = keycode
 		key.physical_keycode = keycode
 		key.pressed = pressed

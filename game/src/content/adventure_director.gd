@@ -829,7 +829,7 @@ static func teleport_coordinates(source: Dictionary) -> Vector2i:
 
 func _teleport(actor: Dictionary, source: Dictionary) -> bool:
 	var second := state.map.profile.id == "el2"
-	var time := PORTAL_SECONDS if second and ELFog.object_state(state, 1, source) == ELFog.VISIBLE else 0.0
+	var time := PORTAL_SECONDS if second and (int(actor.owner) == 1 or ELFog.object_state(state, 1, source) == ELFog.VISIBLE) else 0.0
 	if second:
 		var coordinates := teleport_coordinates(source)
 		if grid.contains(coordinates):
@@ -898,7 +898,7 @@ func _advance_travel(delta: float) -> void:
 			state._native([float(actor.uid), float(exit.x), float(exit.y)], "ExJumpToPos")
 			presentation.emit({"kind": "teleport", "hero": actor.uid, "source": travel.source, "target": travel.target})
 			var target := state.object(travel.target)
-			var visible := ELFog.visible(state, 1, exit) if target.is_empty() else ELFog.object_state(state, 1, target) == ELFog.VISIBLE
+			var visible := int(actor.owner) == 1 or (ELFog.visible(state, 1, exit) if target.is_empty() else ELFog.object_state(state, 1, target) == ELFog.VISIBLE)
 			travel.remaining = PORTAL_SECONDS if visible else 0.0
 		ELAdventureClock.use_points(state, actor, ELSecondBuildings.USE_COST)
 		if travel.remaining > 0.0:

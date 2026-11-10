@@ -32,6 +32,7 @@ var hud: ELSecondAdventureHud
 var trade: ELSpellShop
 var model := ELSecondSpellShop.new()
 var profile: ELProfile
+var hotkey_settings: ELSettings
 var root_control: Control
 var canvas: Control
 var surface: Surface
@@ -66,6 +67,9 @@ func build(exchange: ELSpellShop) -> void:
 	surface.name = "Surface"
 	surface.mouse_filter = Control.MOUSE_FILTER_STOP
 	surface.tooltip_text = " "
+	surface.mouse_exited.connect(func():
+		_mouse = Vector2(-1000, -1000)
+		_show_selected_price())
 	canvas.add_child(surface)
 	for control: String in HEADERS:
 		var row: Dictionary = hud._controls.get(control, {})
@@ -93,6 +97,11 @@ func build(exchange: ELSpellShop) -> void:
 	message_box.setup(hud)
 	message_box.name = "SpellShopMessage"
 	message_box.answered.connect(func(_answer: String): message_box.hide())
+	var tips := ELCombatTooltip.new()
+	tips.blocked = func() -> bool: return message_box.visible or not model.carried().is_empty()
+	root_control.theme = ELCombatTooltip.hidden_theme()
+	root_control.add_child(tips)
+	tips.setup(profile)
 	cursor = Control.new()
 	cursor.name = "CarriedCard"
 	cursor.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -156,26 +165,33 @@ func _layout() -> void:
 
 func refresh() -> void:
 	if surface == null: return
-	var price := model.selected_price()
+	_show_selected_price()
 	var total := model.bill()
 	var money := model.wallet()
 	for column in 3:
 		var kind: String = ELResources.SEQUEL[column]
-		var picked: Label = labels["SpellShopRes1%d" % (column + 1)]
 		var bill: Label = labels["SpellShopRes2%d" % (column + 1)]
 		var stock: Label = labels["SpellShopRes3%d" % (column + 1)]
 		# "-" until the first click, then figures (0 with nothing carried).
-		picked.text = str(int(price[kind])) if model.touched else "-"
 		bill.text = str(int(total[kind])) if model.touched else "-"
 		stock.text = str(int(money.get(kind, 0)))
 		bill.add_theme_color_override("font_color", RED if int(total[kind]) > int(money.get(kind, 0)) else TAN)
 	_refresh_scroll()
 	_layout()
 
+func _show_selected_price() -> void:
+	var entry := model.carried()
+	if entry.is_empty(): entry = _entry_at(_mouse)
+	var price := model.value(entry)
+	for column in 3:
+		var kind: String = ELResources.SEQUEL[column]
+		labels["SpellShopRes1%d" % (column + 1)].text = str(int(price[kind])) if model.touched or not entry.is_empty() else "-"
+
 func scroll(which: String, delta: int) -> void:
 	if which == "bag": bag_row = clampi(bag_row + delta, 0, _last_row("bag"))
 	else: shop_row = clampi(shop_row + delta, 0, _last_row("shop"))
 	_refresh_scroll()
+	_show_selected_price()
 	surface.queue_redraw()
 
 func _last_row(which: String) -> int:
@@ -225,6 +241,7 @@ func cell_rect(which: String, index: int) -> Rect2:
 func surface_input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion:
 		_mouse = event.position
+		_show_selected_price()
 		if not model.carried().is_empty(): cursor.queue_redraw()
 		return
 	if not event is InputEventMouseButton or not event.pressed: return
@@ -235,17 +252,18 @@ func surface_input(event: InputEvent) -> void:
 		MOUSE_BUTTON_WHEEL_UP: if target[0] in ["bag", "shop"]: scroll(target[0], -1)
 		MOUSE_BUTTON_WHEEL_DOWN: if target[0] in ["bag", "shop"]: scroll(target[0], 1)
 		MOUSE_BUTTON_RIGHT:
-			if model.right_click():
-				_play(model.last_sound)
-				_changed()
+			put_back()
 		MOUSE_BUTTON_LEFT:
 			var result := ""
 			var sizes := [model.bag.size(), model.shop.size()]
-			match target[0]:
-				"bag": result = model.click_bag(target[1])
-				"deck": result = model.click_deck(target[1])
-				"shop": result = model.click_shop(target[1])
-				_: return
+			if event.double_click and target[0] == model.picked_zone and target[1] == model.picked and target[1] >= 0:
+				result = model.click_bag(-1) if target[0] == "shop" else model.click_shop(-1)
+			else:
+				match target[0]:
+					"bag": result = model.click_bag(target[1])
+					"deck": result = model.click_deck(target[1])
+					"shop": result = model.click_shop(target[1])
+					_: return
 			# A card appended to a list is scrolled into view.
 			if model.bag.size() > sizes[0]: bag_row = maxi(bag_row, (model.bag.size() - 1) / BAG_COLUMNS - BAG_ROWS + 1)
 			if model.shop.size() > sizes[1]: shop_row = maxi(shop_row, (model.shop.size() - 1) / SHOP_COLUMNS - SHOP_ROWS + 1)
@@ -285,12 +303,20 @@ func show_message(value: String) -> void:
 	message_box.present({"box": "message", "text": value, "question": false}, trade.state)
 	message_box.move_to_front()
 
+func confirm_trade() -> void:
+	if message_box.visible: message_box.hide()
+	else: _commit()
+
+func put_back() -> void:
+	if not message_box.visible and model.right_click():
+		_play(model.last_sound)
+		_changed()
+
 func _unhandled_key_input(event: InputEvent) -> void:
 	if not event is InputEventKey or not event.pressed or event.echo: return
-	match event.keycode:
-		KEY_ENTER, KEY_KP_ENTER:
-			if message_box.visible: message_box.hide()
-			else: _commit()
+	match ELSettings.hotkey_action(hotkey_settings, "el2", "Shops", event):
+		"shop_confirm": confirm_trade()
+		"shop_undo": put_back()
 		_: return
 	get_viewport().set_input_as_handled()
 
@@ -319,13 +345,14 @@ func _draw_cursor() -> void:
 
 # --- Tooltips -------------------------------------------------------------------
 
-func tooltip_at(at: Vector2) -> String:
+func _entry_at(at: Vector2) -> Dictionary:
 	var target := hit(at)
-	if target[0].is_empty() or target[1] < 0: return ""
-	var entry: Dictionary = model.zone(target[0])[target[1]]
-	if entry.is_empty(): return ""
-	var row: Dictionary = profile.table("CombatSpells").get(entry.card, {})
-	return profile.text(str(row.get("Name", entry.card))) + "\n" + profile.card_description(str(entry.card)) + "\n" + ELResources.describe("el2", model.value(entry), false)
+	if target[0].is_empty() or target[1] < 0: return {}
+	return model.zone(target[0])[target[1]]
+
+func tooltip_at(at: Vector2) -> String:
+	var entry := _entry_at(at)
+	return "" if entry.is_empty() else ELCombatTooltip.spell_text(profile, str(entry.card))
 
 class Surface extends Control:
 	var view

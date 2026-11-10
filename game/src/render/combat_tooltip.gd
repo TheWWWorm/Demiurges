@@ -44,6 +44,8 @@ var describe: Callable
 var describe_figure: Callable
 var blocked: Callable
 var touch: ELTouchInput
+## The deck editor can show the first game's frame on hover as well.
+var hover_in_first_game := false
 var _shown_key := ""
 var _right_clicked := false
 
@@ -93,6 +95,23 @@ static func text_content(text: String) -> Dictionary:
 		labels.append({"text": lines[i], "at": Vector2(0, i * LINE)})
 	return {"labels": labels, "picture": {}, "flow": true}
 
+static func spell_text(source: ELProfile, card: String, ether_cost := -1, card_title := "") -> String:
+	var row: Dictionary = source.table("CombatSpells").get(card, {})
+	var spell_class := str(row.get("Class", ""))
+	var key: String = {"Creature": "T_SPELL_TYPE", "Sorcery": "T_SPELL_TYPE2", "Enchantment": "T_SPELL_TYPE3"}.get(spell_class, "")
+	var title := card_title if not card_title.is_empty() else source.text(str(row.get("Name", card)))
+	var creature: Dictionary = source.table("CombatCreatures").get(card, {})
+	if spell_class == "Creature" and creature.has("Power"):
+		title += " %d/%d" % [int(creature.Power), int(creature.get("Toughness", 0))]
+	var kind := source.text(key)
+	if not key.is_empty(): title = "%s: %s" % [spell_class if kind == key else kind, title]
+	var cost := source.text("T_COST")
+	var mana := source.text("T_MANA")
+	var lines := [title, "%s %d %s" % ["Cost:" if cost == "T_COST" else cost, int(row.get("Cost", 0)) if ether_cost < 0 else ether_cost, "ether" if mana == "T_MANA" else mana]]
+	var description := source.card_description(card)
+	if not description.is_empty() and description != str(row.get("ToolTip", card)): lines.append(description)
+	return "\n".join(lines)
+
 ## A hero card: the portrait and lines beside it (second game), or a centred
 ## title over the portrait and lines (first game).
 static func hero_content(edition: String, picture: Texture2D, title: String, lines: Array) -> Dictionary:
@@ -126,7 +145,7 @@ func hide_tip() -> void:
 	if panel != null: panel.hide()
 
 func _input(event: InputEvent) -> void:
-	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT and event.pressed and not event.shift_pressed:
 		_right_clicked = true
 
 func _process(delta: float) -> void:
@@ -140,7 +159,7 @@ func _process(delta: float) -> void:
 	var first := profile != null and profile.id == "el1"
 	var touch_hold := touch != null and touch.holding()
 	var inspecting := Input.is_mouse_button_pressed(MOUSE_BUTTON_RIGHT) or touch_hold
-	if first and not inspecting:
+	if first and not hover_in_first_game and not inspecting:
 		hide_tip()
 		return
 	if hovered != null and not _owns(hovered):
@@ -177,7 +196,12 @@ func _process(delta: float) -> void:
 		_shown_key = key
 		panel.set_content(-1 - id if figure else hovered.get_instance_id(), content)
 		_centre_titles(content)
-	panel.position = place(profile.id if profile != null else "el2", panel.size, cursor, size)
+	var screen := get_global_transform_with_canvas().affine_inverse() * get_viewport_rect()
+	var fit := minf(1.0, minf(screen.size.x / maxf(1.0, panel.size.x), screen.size.y / maxf(1.0, panel.size.y)))
+	panel.scale = Vector2.ONE * fit
+	var frame := panel.size * fit
+	var position_on_screen := place(profile.id if profile != null else "el2", frame, cursor - screen.position, screen.size)
+	panel.position = screen.position + position_on_screen.clamp(Vector2.ZERO, (screen.size - frame).max(Vector2.ZERO))
 	if not panel.visible:
 		panel.show()
 	move_to_front()

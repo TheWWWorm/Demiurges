@@ -6,10 +6,11 @@ shader_type spatial;
 render_mode cull_disabled, ambient_light_disabled, specular_disabled;
 uniform float shadow_strength = 0.0;
 varying float shadow_weight;
-uniform sampler2D tiles : source_color, filter_linear, repeat_disable;
+uniform sampler2D tiles : source_color, filter_linear_mipmap, repeat_disable;
 uniform int columns;
 uniform float tile_side;
 uniform float pitch;
+uniform float tile_margin;
 uniform vec2 atlas_size;
 // Optional surface detail from the original painted texture. No geometry or
 // extra assets; animated liquid tiles keep their original appearance.
@@ -156,23 +157,29 @@ void fragment() {
 	// small errors, and truncation would pick the neighbouring atlas tile.
 	int frame = int(floor(TIME * 10.0)) % max(1, int(round(UV2.y)));
 	int index = int(round(UV2.x)) + frame;
-	vec2 start = vec2(float(index % columns), float(index / columns)) * pitch + vec2(2.0);
+	vec2 start = vec2(float(index % columns), float(index / columns)) * pitch + vec2(tile_margin);
 	vec2 tex_uv = (start + UV * tile_side) / atlas_size;
-	ALBEDO = texture(tiles, tex_uv).rgb;
+	// Filter fine ground detail as it recedes instead of sampling only the
+	// full-resolution tiles. The four-texel gutter remains separate through
+	// level two; coarser atlas levels would mix unrelated neighbouring tiles.
+	vec2 footprint_x = dFdx(UV) * tile_side;
+	vec2 footprint_y = dFdy(UV) * tile_side;
+	float footprint = max(length(footprint_x), length(footprint_y));
+	float terrain_lod = clamp(log2(max(footprint, 1.0)), 0.0, 2.0);
+	ALBEDO = textureLod(tiles, tex_uv, terrain_lod).rgb;
 	if (detail_enabled && int(round(UV2.y)) == 1) {
 		vec2 dx = dFdx(UV);
 		vec2 dy = dFdy(UV);
-		float footprint = max(length(dx), length(dy)) * tile_side;
 		float edge = min(min(UV.x, UV.y), min(1.0 - UV.x, 1.0 - UV.y)) * tile_side;
 		// Fade before the source texels become too small, and at tile borders
 		// where the atlas gutter cannot describe the neighbouring ground.
 		float fade = (1.0 - smoothstep(1.25, 3.5, footprint)) * smoothstep(0.0, 2.0, edge);
 		if (fade > 0.0) {
 			vec2 px = 1.0 / atlas_size;
-			vec3 left = texture(tiles, tex_uv - vec2(px.x, 0.0)).rgb;
-			vec3 right = texture(tiles, tex_uv + vec2(px.x, 0.0)).rgb;
-			vec3 down = texture(tiles, tex_uv - vec2(0.0, px.y)).rgb;
-			vec3 up = texture(tiles, tex_uv + vec2(0.0, px.y)).rgb;
+			vec3 left = textureLod(tiles, tex_uv - vec2(px.x, 0.0), terrain_lod).rgb;
+			vec3 right = textureLod(tiles, tex_uv + vec2(px.x, 0.0), terrain_lod).rgb;
+			vec3 down = textureLod(tiles, tex_uv - vec2(0.0, px.y), terrain_lod).rgb;
+			vec3 up = textureLod(tiles, tex_uv + vec2(0.0, px.y), terrain_lod).rgb;
 			vec3 weights = vec3(0.2126, 0.7152, 0.0722);
 			vec2 slope = vec2(dot(right - left, weights), dot(up - down, weights));
 			vec3 normal = normalize((VIEW_MATRIX * vec4(0.0, 1.0, 0.0, 0.0)).xyz);

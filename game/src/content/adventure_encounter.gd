@@ -36,6 +36,11 @@ var lose_screen := false
 const FIRST_ARENAS := ["Black.002", "Green.002", "Blue.002", "Red.002", "Ether.001", "White.001", "Dungeon.001", "Fort.001"]
 const SECOND_TERRAIN_ARENAS := ["Black", "Green", "Blue", "Red", "Ether"]
 
+## Campaign battles keep the actor order even when the local hero defends.
+func player_side() -> int:
+	if state == null or state.map.profile.id != "el2": return 0
+	return 1 if int(state.object(hero_id).get("owner", -1)) != 1 and int(state.object(opponent_id).get("owner", -1)) == 1 else 0
+
 ## `defender` is the second actor of the queued battle pair; its tile picks the arena.
 func prepare(session: ELAdventureSession, first: int, second: int, defender := -1) -> bool:
 	state = session

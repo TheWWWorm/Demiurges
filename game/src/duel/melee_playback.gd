@@ -126,6 +126,9 @@ func step_back(id: int) -> void:
 	var c: Dictionary = view.duel.creatures[id]
 	_move(id, _home_path(id, int(c.owner)), true, _yaw_at(view.homes[id], int(c.owner)))
 
+func change_side(id: int, side: int) -> void:
+	_move(id, [view.homes[id]], true, _yaw_at(view.homes[id], side))
+
 func _home_path(id: int, side: int) -> Array:
 	var slot := int(view.models[id].get_meta("slot", 0))
 	var front := slot_position(side, slot, Line.FRONT)
@@ -233,7 +236,9 @@ func abort() -> void:
 	_capturing = false
 	_running = false
 	for id: int in _moves:
-		if view.models.has(id): view.battle_audio.stop_glide(view.models[id])
+		if view.models.has(id):
+			view.models[id].speed = 1.0
+			view.battle_audio.stop_glide(view.models[id])
 	_moves.clear()
 	_blows.clear()
 	_after.clear()
@@ -412,26 +417,29 @@ func _move(id: int, points: Array, run: bool, finish_yaw := NAN, delay := 0.0) -
 	if not _has(id) or points.is_empty(): return
 	var model: ELModel = view.models[id]
 	var fast := bool(view.settings.values.get("hide_motion", false))
-	var clip := model.clip_for_code(RUN_CODE) if run or fast else ""
+	var run_clip := model.clip_for_code(RUN_CODE) if run or fast else ""
+	var clip := run_clip
 	if clip.is_empty(): clip = model.clip_for_code(WALK_CODE)
 	if clip.is_empty() and (run or fast): clip = "crun" if model.has_clip("crun") else ""
 	if clip.is_empty(): clip = "cwalk" if model.has_clip("cwalk") else ""
-	var speed := FAST_SPEED
-	if not fast:
-		var recorded := float(model.timing.get(clip, {}).get("speed", 0.0)) if not clip.is_empty() else 0.0
-		speed = 2.0 * (recorded if recorded > 0.0 else FALLBACK_SPEED) * _scale(id)
+	var recorded := float(model.timing.get(clip, {}).get("speed", 0.0))
+	var natural_speed := 2.0 * (recorded if recorded > 0.0 else FALLBACK_SPEED) * _scale(id)
+	var speed := FAST_SPEED if fast else natural_speed
+	# Accelerated travel keeps the authored run rate. Walk-only figures
+	# need a faster cycle to keep pace with the accelerated path.
+	var cadence := maxf(1.0, speed / maxf(natural_speed, 0.01)) if fast and run_clip.is_empty() else 1.0
 	var path: Array[Vector3] = []
 	for point: Vector3 in points: path.append(Vector3(point.x, 0, point.z))
 	# The original names the move Run only when the figure has a clip under
 	# the run code; otherwise it walks (and loops walk.wav).
-	var running := (run or fast) and not model.clip_for_code(RUN_CODE).is_empty()
-	_moves[id] = {"points": path, "speed": speed, "finish": finish_yaw, "delay": delay, "clip": clip, "run": running}
+	_moves[id] = {"points": path, "speed": speed, "finish": finish_yaw, "delay": delay, "clip": clip, "run": not run_clip.is_empty(), "cadence": cadence}
 	if delay <= 0.0: _set_off(id)
 
 ## The move's clip and its looping ground sound start together.
 func _set_off(id: int) -> void:
 	var move: Dictionary = _moves[id]
 	var model: ELModel = view.models[id]
+	model.speed = float(move.cadence)
 	if not str(move.clip).is_empty() and model.clip != move.clip: model.play(move.clip)
 	view.battle_audio.glide(model, bool(move.run))
 
@@ -473,6 +481,7 @@ func _arrive(id: int) -> void:
 	if view.models.has(id): view.battle_audio.stop_glide(view.models[id])
 	if not _has(id): return
 	var model: ELModel = view.models[id]
+	model.speed = 1.0
 	if not move.is_empty() and not move.points.is_empty():
 		var goal: Vector3 = move.points[-1]
 		model.position = Vector3(goal.x, view.arena.ground_height(goal.x, goal.z), goal.z)

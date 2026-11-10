@@ -387,8 +387,8 @@ static func _heap_sort(items: Array, first: int, last: int, less: Callable) -> v
 	for i in part.size(): items[first + i] = part[i]
 
 func can_start() -> bool:
-	if hot_stage >= 0: return ELDuelMatch.side_valid(pool, pick(0), int(state().level))
-	return ELDuelMatch.can_start(pool, [pick(0), pick(1)], int(state().level))
+	if hot_stage >= 0: return ELDuelMatch.side_valid(pool, pick(0), int(state().level), profile().id)
+	return ELDuelMatch.can_start(pool, [pick(0), pick(1)], int(state().level), profile().id)
 
 func build_screen() -> void:
 	refresh_pool()
@@ -513,7 +513,7 @@ func update_screen() -> void:
 		var name_label: Label = menu.labels.get("DuPresetName%d" % (side + 1))
 		if name_label != null:
 			name_label.text = preset_name(preset)
-			name_label.add_theme_color_override("font_color", GREY if not ELDuelMatch.side_valid(pool, preset, int(s.level)) else ELFrontMenu.INK_HOVER)
+			name_label.add_theme_color_override("font_color", GREY if not ELDuelMatch.side_valid(pool, preset, int(s.level), profile().id) else ELFrontMenu.INK_HOVER)
 		var picture: TextureRect = menu.labels["portrait%d" % side]
 		picture.texture = random_portrait() if preset.is_empty() else null
 		# The "?" art is drawn 1:1 (70x50) centred on the slot, as the original does.
@@ -846,6 +846,11 @@ func build_editor() -> void:
 	if el1(): status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	else: status.clip_text = true
 	update_editor()
+	var tips := ELCombatTooltip.new()
+	tips.hover_in_first_game = true
+	tips.blocked = message_open
+	menu.canvas.add_child(tips)
+	tips.setup(profile())
 
 func _race_controls(left: String, right: String) -> void:
 	_button(left, change_race.bind(-1))
@@ -899,7 +904,12 @@ func change_hero_level(step: int) -> void:
 func change_resource_level(step: int) -> void:
 	if edit.view_only: return
 	var levels := _editor_resource_levels()
-	editor_preset().resource_level = clampi(int(editor_preset().resource_level) + step, levels.x, levels.y)
+	var preset := editor_preset()
+	var previous := int(preset.resource_level)
+	preset.resource_level = clampi(previous + step, levels.x, levels.y)
+	if ELDuelCosts.sandbox(profile(), previous) != ELDuelCosts.sandbox(profile(), int(preset.resource_level)):
+		edit.item = -1
+		refresh_editor_lists()
 	update_editor()
 
 func _editor_resource_levels() -> Vector2i:
@@ -908,13 +918,18 @@ func _editor_resource_levels() -> Vector2i:
 	if cap > 0: levels.y = mini(levels.y, cap)
 	return levels
 
-## Spells the editor offers: own colour (and the second game's neutral White).
+## The sandbox offers every faction's playable cards, including creatures.
 func spell_choices() -> Array[String]:
-	var faction := String(editor_preset().faction)
-	var result := ELCatalog.available_cards(profile(), faction)
-	if not el1():
-		for card: String in ELCatalog.available_cards(profile(), ELDuelCosts.EL2_NEUTRAL): result.append(card)
-	return result.filter(func(card: String): return ELDuelCosts.spell_allowed(profile(), card, faction))
+	var preset := editor_preset()
+	var faction := String(preset.faction)
+	var resource_level := int(preset.resource_level)
+	var colours: Array[String] = [faction]
+	if ELDuelCosts.sandbox(profile(), resource_level): colours.assign(ELDuelPresets.RACES)
+	if not el1(): colours.append(ELDuelCosts.EL2_NEUTRAL)
+	var result: Array[String] = []
+	for colour in colours:
+		result.append_array(ELCatalog.available_cards(profile(), colour))
+	return result.filter(func(card: String): return ELDuelCosts.spell_allowed(profile(), card, faction, resource_level))
 
 func spec_choices() -> Array[String]:
 	var result: Array[String] = ["NONE"]
@@ -927,45 +942,29 @@ func spec_choices() -> Array[String]:
 func artifact_choices() -> Array[String]:
 	return ELDuelCosts.duel_artifacts(profile())
 
-## Tooltip of an artifact: name, the spell's text, duel price and the charges
-## it starts every duel round with.
-func artifact_tooltip(code: String) -> String:
-	var row: Dictionary = profile().table("CombatSpells").get(code, {})
+func _purchase_price(row: Dictionary) -> String:
 	var price := PackedStringArray()
 	var resources := ELDuelCosts.resources(profile())
 	for i in resources.size():
 		var amount := int(row.get("Cost" + resources[i], 0))
 		if amount > 0: price.append("%s %d" % [resource_title(i), amount])
-	var key := String(row.get("ToolTip", ""))
-	var text := profile().text(key) if not key.is_empty() else ""
-	var lines := PackedStringArray([spell_name(code)])
-	if not text.is_empty() and text != key: lines.append(text)
-	lines.append(", ".join(price))
-	lines.append("Charges: %d" % artifact_charges(code))
-	return "\n".join(lines)
+	return ", ".join(price)
 
-## Charges an artifact starts each duel round with (the edition's MaxCharges).
-func artifact_charges(code: String) -> int:
-	var name := ELDuelPresets.artifact_name(profile(), code)
-	return int(profile().table("Artefacts").get(name, {}).get("MaxCharges", 0))
+func artifact_tooltip(code: String, for_sale := false) -> String:
+	var source := profile()
+	var text := ELCombatRail.preset_artifact_tooltip(source, code)
+	if for_sale and el1():
+		var price := _purchase_price(source.table("CombatSpells").get(code, {}))
+		if not price.is_empty(): text += "\n" + price
+	return text
 
-## A spell's card as the battle hand shows it: "<type>: <name> <strength>/<health>",
-## its ether cost, then the description (remake addition on this screen).
-func spell_tooltip(card: String) -> String:
-	var row: Dictionary = profile().table("CombatSpells").get(card, {})
-	var spell_class := str(row.get("Class", ""))
-	var kind: String = {"Creature": "T_SPELL_TYPE", "Sorcery": "T_SPELL_TYPE2", "Enchantment": "T_SPELL_TYPE3"}.get(spell_class, "")
-	var title := spell_name(card)
-	var creature: Dictionary = profile().table("CombatCreatures").get(card, {})
-	if spell_class == "Creature" and creature.has("Power"): title += " %d/%d" % [int(creature.Power), int(creature.get("Toughness", 0))]
-	var type_text := profile().text(kind) if not kind.is_empty() else ""
-	var lines: Array[String] = ["%s: %s" % [type_text if type_text != kind else spell_class, title] if not kind.is_empty() else title]
-	var cost_text := profile().text("T_COST")
-	var mana_text := profile().text("T_MANA")
-	lines.append("%s %d %s" % [cost_text if cost_text != "T_COST" else "Cost:", int(row.get("Cost", 0)), mana_text if mana_text != "T_MANA" else "ether"])
-	var description := profile().card_description(card)
-	if not description.is_empty() and description != card: lines.append(description)
-	return "\n".join(lines)
+## A spell's type, ether cost and description, using the battle tooltip text.
+func spell_tooltip(card: String, for_sale := false) -> String:
+	var text := ELCombatTooltip.spell_text(profile(), card)
+	if for_sale and el1():
+		var price := _purchase_price(profile().table("CombatSpells").get(card, {}))
+		if not price.is_empty(): text += "\n" + price
+	return text
 
 func spell_name(code: String) -> String:
 	return profile().text(String(profile().table("CombatSpells").get(code, {}).get("Name", code + "Nm")))
@@ -1100,7 +1099,7 @@ func update_editor() -> void:
 		if menu.labels.has("cost_" + r):
 			menu.labels["cost_" + r].text = str(price[r])
 			menu.labels["cost_" + r].add_theme_color_override("font_color", RED if short.has(r) else ELFrontMenu.INK_HOVER)
-		if menu.labels.has("budget_" + r): menu.labels["budget_" + r].text = str(limit[r])
+		if menu.labels.has("budget_" + r): menu.labels["budget_" + r].text = str(limit[r]) if limit.has(r) else "∞"
 		if menu.labels.has("item_" + r): menu.labels["item_" + r].text = str(selected.get(r, 0)) if not selected.is_empty() else "-"
 	menu.labels.hero_level.text = str(p.level)
 	menu.labels.health.text = str(ELDuelPresets.health(profile(), p))
@@ -1392,7 +1391,7 @@ func refresh_editor_lists() -> void:
 			0:
 				for card: String in spell_choices():
 					var copies := Array(p.cards).count(card)
-					right_items.append({"action": "add_spell", "value": card, "label": "%s%s" % [spell_name(card), "  ×%d" % copies if copies > 0 else ""], "icon": profile().card_icon(card), "tooltip": spell_tooltip(card)})
+					right_items.append({"action": "add_spell", "value": card, "label": "%s%s" % [spell_name(card), "  ×%d" % copies if copies > 0 else ""], "icon": profile().card_icon(card), "tooltip": spell_tooltip(card, true)})
 			1:
 				for code: String in ELDuelCosts.duel_skills(profile()):
 					var rank := int(p.skills.get(code, -1))
@@ -1401,11 +1400,11 @@ func refresh_editor_lists() -> void:
 				var capacity := ELDuelCosts.rune_capacity(p.skills)
 				for i in p.cards.size():
 					var runes := int(p.runes[i]) if i < p.runes.size() else 0
-					right_items.append({"action": "add_rune", "value": i, "label": "%d. %s  %s" % [i + 1, spell_name(p.cards[i]), "∞" if _cantrip(p.cards[i]) else "%d/%d" % [runes, capacity]]})
+					right_items.append({"action": "add_rune", "value": i, "label": "%d. %s  %s" % [i + 1, spell_name(p.cards[i]), "∞" if _cantrip(p.cards[i]) else "%d/%d" % [runes, capacity]], "tooltip": spell_tooltip(p.cards[i])})
 			3:
 				for code: String in artifact_choices():
 					var count := Array(p.artifacts).count(code)
-					right_items.append({"action": "add_artifact", "value": code, "label": "%s%s" % [spell_name(code), "  ×%d" % count if count > 0 else ""], "icon": profile().card_icon(code), "tooltip": artifact_tooltip(code)})
+					right_items.append({"action": "add_artifact", "value": code, "label": "%s%s" % [spell_name(code), "  ×%d" % count if count > 0 else ""], "icon": profile().card_icon(code), "tooltip": artifact_tooltip(code, true)})
 			4:
 				for code: String in spec_choices():
 					right_items.append({"action": "set_spec", "value": code, "label": spec_name(code), "owned": p.specialization == code})
@@ -1649,7 +1648,7 @@ func _refresh_el2_lists() -> void:
 			var row: Dictionary = profile().table("CombatSpells")[card]
 			var price := []
 			for r: String in ELDuelCosts.EL2_RESOURCES: price.append(int(row.get("Cost" + r, 0)))
-			right_items.append({"action": "add_spell", "value": card, "label": "%s\n%d / %d / %d%s" % [spell_name(card), price[0], price[1], price[2], "  ×%d" % copies if copies > 0 else ""], "icon": profile().card_icon(card), "tooltip": "%s\n%d / %d / %d" % [spell_tooltip(card), price[0], price[1], price[2]]})
+			right_items.append({"action": "add_spell", "value": card, "label": "%s\n%d / %d / %d%s" % [spell_name(card), price[0], price[1], price[2], "  ×%d" % copies if copies > 0 else ""], "icon": profile().card_icon(card), "tooltip": spell_tooltip(card, true)})
 	else:
 		for code: String in ELDuelCosts.duel_skills(profile()):
 			var rank := int(p.skills.get(code, -1))
@@ -1659,7 +1658,7 @@ func _refresh_el2_lists() -> void:
 		if all != null and is_instance_valid(all) and all.item_count == 0:
 			for code: String in artifact_choices():
 				var index := all.add_item("", profile().card_icon(code))
-				all.set_item_tooltip(index, artifact_tooltip(code))
+				all.set_item_tooltip(index, artifact_tooltip(code, true))
 		if menu.labels.has("artifacts"): menu.labels.artifacts.queue_redraw()
 	for entry: Dictionary in right_items:
 		# Icon grid: the name and price are the tooltip.
@@ -1977,14 +1976,21 @@ class BookView extends Control:
 		queue_redraw()
 
 	func slot_at(point: Vector2) -> int:
+		if not Rect2(Vector2.ZERO, size).has_point(point): return -1
 		var c := cell()
-		var index := (int(point.y / c.y) + offset) * columns + int(point.x / c.x)
+		var row := int(point.y / c.y)
+		if (row + 1) * c.y > size.y + 1: return -1
+		var index := (row + offset) * columns + int(point.x / c.x)
 		return index if index < entries().size() else -1
 
 	func slot_rect(index: int) -> Rect2:
 		var c := cell()
 		var row := index / columns - offset
 		return Rect2(Vector2((index % columns) * c.x, row * c.y), c)
+
+	func _get_tooltip(at: Vector2) -> String:
+		var index := slot_at(at)
+		return screen.spell_tooltip(entries()[index].card) if index >= 0 else ""
 
 	func _gui_input(event: InputEvent) -> void:
 		if not (event is InputEventMouseButton and event.pressed): return
@@ -2005,8 +2011,9 @@ class BookView extends Control:
 		if index < 0: return
 		var entry: Dictionary = entries()[index]
 		if event.button_index == MOUSE_BUTTON_RIGHT:
-			if reserve: screen.act("remove_reserve", entry.card)
-			else: screen.act("remove_slot", index)
+			if event.shift_pressed:
+				if reserve: screen.act("remove_reserve", entry.card)
+				else: screen.act("remove_slot", index)
 			return
 		if event.button_index != MOUSE_BUTTON_LEFT: return
 		if event.double_click:
@@ -2061,7 +2068,7 @@ class ArtifactStrip extends Control:
 	## Preset index under a local point, or -1 (an empty cell).
 	func index_at(point: Vector2) -> int:
 		var index := offset + int(point.x / cell().x)
-		return index if point.x >= 0 and index < screen.editor_preset().artifacts.size() else -1
+		return index if Rect2(Vector2.ZERO, size).has_point(point) and index < screen.editor_preset().artifacts.size() else -1
 
 	func cell_rect(index: int) -> Rect2:
 		return Rect2(Vector2((index - offset) * cell().x, 0), cell())
@@ -2076,7 +2083,7 @@ class ArtifactStrip extends Control:
 		if event.button_index == MOUSE_BUTTON_WHEEL_UP: scroll(-1)
 		elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN: scroll(1)
 		var index := index_at(event.position)
-		if event.button_index == MOUSE_BUTTON_RIGHT or (event.button_index == MOUSE_BUTTON_LEFT and event.double_click):
+		if (event.button_index == MOUSE_BUTTON_RIGHT and event.shift_pressed) or (event.button_index == MOUSE_BUTTON_LEFT and event.double_click):
 			if index >= 0 and not screen.edit.view_only:
 				screen.edit.owned = index
 				screen.return_artifact()

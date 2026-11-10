@@ -12,7 +12,7 @@ These work as in the games: autosave, faster map movement, animated objects, amb
 
 ## Remake settings
 
-**Remake settings…** is available on the Options screen and in the Etherlords II Esc menus on maps and in battle. It opens three tabs in the language of your game.
+**Remake settings…** is available on the Options screen and in the Etherlords II Esc menus on maps and in battle.
 
 ### Graphics
 
@@ -22,7 +22,7 @@ These work as in the games: autosave, faster map movement, animated objects, amb
 | Path-traced lighting | Real shadows, sky light, light bounced between surfaces, and light from fire and spells, on maps and in battles. Needs Forward+ and a graphics card with ray tracing. It costs about 2–3 ms a frame on a fast card. **F7** switches it during play. The line under it says whether your computer can use it. |
 | Show light only | Shows the traced light without textures (**Shift+F7**). |
 | Anti-aliasing | Smoother edges in 3D: automatic, off, 2× or 4×. |
-| Sharpening | Sharper 3D textures (not the interface): off, light or strong. |
+| Sharpening | Sharpens 3D textures. Choose off, light (default), or strong. |
 | Shadows | Shadows of figures in battles and of trees, rocks and buildings on maps. |
 | Soft shadows | Softer shadow edges. Off at first. |
 | Terrain detail | Subtle texture and relief on map ground and fine grain on battle ground. Off at first. |
@@ -45,6 +45,8 @@ These work as in the games: autosave, faster map movement, animated objects, amb
 | Remake helper overlay | The remake's readouts, hints and shortcut buttons over the original screens. Off at first. |
 | Frame rate counter | Frames per second in the top right corner. Off at first. |
 | Discord activity | Shows in the Discord desktop app which game you play and whether you are in the menus, on a map or in a battle. Nothing else is shared. On at first. |
+
+On the **Hotkeys** tab, choose an edition and select a shortcut to change it. Press a key or key combination, or press **Esc** to cancel. **Reset defaults** restores the selected edition’s shortcuts for battle, maps and shops.
 
 At the bottom, **Export log…** saves a log with system information for a [problem report](troubleshooting), and **Game files…** adds, switches or removes a game: see [Installing the game files](installing).
 

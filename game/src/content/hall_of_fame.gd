@@ -1,35 +1,51 @@
 class_name ELHallOfFame
 extends RefCounted
-## Hall of Fame of both games: two tables (campaign, scenario) of at most ten
+## Hall of Fame tables of at most ten
 ## records {name, id, points}, sorted by points descending with ties kept in
 ## arrival order. A won single mission adds a scenario record (map GUID, map
 ## player name, chapter score); a won campaign final adds a campaign record
 ## (campaign GUID, campaign player name, campaign score). The remake keeps the
-## tables in its own per-edition user file; when that file does not exist yet,
-## the records of the player's original HallOfFame.hl are read once.
-## The second game keeps the same screen and file but reads only the scenario
-## table, keeping records whose id is the GUID of one of its maps; nothing in
-## it adds a record or opens the Hall of Fame after a win, so its campaign
-## table always starts empty.
+## tables in its own per-edition user file and includes eligible records from
+## the player's original HallOfFame.hl.
+## Etherlords II imports the original scenario table and awards remake
+## points for completed campaigns and won duel matches.
 
 const LIMIT := 10
 const KINDS := ["campaign", "scenario"]
+const SECOND_KINDS := ["campaign", "scenario", "duel"]
+const WIN_POINTS := 100
+
+static func kinds(edition: String) -> Array:
+	return SECOND_KINDS if edition == "el2" else KINDS
+
+static func new_run() -> String:
+	return Crypto.new().generate_random_bytes(16).hex_encode()
+
+static func valid_run(value: Variant) -> bool:
+	return value is String and value.length() == 32 and value.is_valid_hex_number() and value[0] not in ["+", "-"]
 
 static func path(edition: String) -> String:
 	return "user://hall-of-fame-%s.json" % edition
 
-## Stored tables and the last shown mode ("campaign" or "scenario").
+## Stored tables and the last shown mode.
 static func load_tables(profile: ELProfile) -> Dictionary:
 	var result := {"campaign": [], "scenario": [], "mode": "campaign"}
+	if profile.id == "el2": result.duel = []
 	var file := path(profile.id)
 	if FileAccess.file_exists(file):
 		var raw: Variant = JSON.parse_string(FileAccess.get_file_as_string(file))
 		if raw is Dictionary:
-			for kind: String in KINDS:
+			for kind: String in kinds(profile.id):
 				result[kind] = _valid_records(raw.get(kind))
-			if raw.get("mode") in KINDS: result.mode = raw.mode
-		return result
-	for kind: String in KINDS: result[kind] = original_records(profile, kind) if kind in original_kinds(profile.id) else []
+			if raw.get("mode") in kinds(profile.id): result.mode = raw.mode
+	for kind: String in original_kinds(profile.id):
+		# The local table may already contain imported records. Match each once
+		# so a later original score can appear without duplicating earlier ones.
+		var unmatched: Array = result[kind].duplicate()
+		for record: Dictionary in original_records(profile, kind):
+			var index := unmatched.find(record)
+			if index >= 0: unmatched.remove_at(index)
+			else: insert(result[kind], record)
 	return result
 
 ## Tables the edition's game reads back from HallOfFame.hl at start-up.
@@ -37,10 +53,7 @@ static func original_kinds(edition: String) -> Array:
 	return KINDS if edition == "el1" else ["scenario"]
 
 static func save_tables(edition: String, tables: Dictionary) -> bool:
-	var file := FileAccess.open(path(edition), FileAccess.WRITE)
-	if file == null: return false
-	file.store_string(JSON.stringify({"campaign": tables.campaign, "scenario": tables.scenario, "mode": tables.mode}))
-	return true
+	return ELAdventureSave.new().write_document(path(edition), tables)
 
 static func _valid_records(raw: Variant) -> Array:
 	var records: Array = []
@@ -49,7 +62,9 @@ static func _valid_records(raw: Variant) -> Array:
 		if not row is Dictionary or not row.get("name") is String or not row.get("id") is String: continue
 		var points: Variant = row.get("points")
 		if not (points is int or points is float) or float(points) < 0 or float(points) > 4294967295.0: continue
-		records.append({"name": row.name, "id": row.id, "points": int(points)})
+		var record := {"name": row.name, "id": row.id, "points": int(points)}
+		if valid_run(row.get("run")): record.run = row.run
+		records.append(record)
 		if records.size() >= LIMIT: break
 	return records
 
@@ -63,9 +78,11 @@ static func original_records(profile: ELProfile, kind: String) -> Array:
 ## only records whose id is the GUID of one of its maps.
 static func document_records(profile: ELProfile, document: Dictionary, kind: String) -> Array:
 	if document.get("tag") != "hall": return []
+	var rows := ELXml.children(ELXml.child(document, kind), "record")
+	if rows.is_empty(): return []
 	var records: Array = []
 	var known := known_maps(profile) if profile.id != "el1" else {}
-	for record: Dictionary in ELXml.children(ELXml.child(document, kind), "record"):
+	for record: Dictionary in rows:
 		var points := str(record.attrs.get("points", ""))
 		if not points.is_valid_int(): continue
 		if profile.id != "el1" and not known.has(str(record.attrs.get("id", "")).to_upper()): continue
@@ -90,16 +107,22 @@ static func _sorted(records: Array) -> Array:
 
 ## Adds one record and makes its table the mode shown next; returns the row
 ## (0-based) or -1 when the points do not reach the table.
-static func add(profile: ELProfile, kind: String, name: String, id: String, points: int) -> int:
+static func add(profile: ELProfile, kind: String, name: String, id: String, points: int, run := "") -> int:
 	var tables := load_tables(profile)
-	var row := insert(tables[kind], {"name": name, "id": id, "points": maxi(0, points)})
+	var record := {"name": name, "id": id, "points": maxi(0, points)}
+	if not run.is_empty():
+		if tables[kind].any(func(entry: Dictionary) -> bool: return entry.get("run") == run): return -1
+		record.run = run
+	var row := insert(tables[kind], record)
 	tables.mode = kind
-	save_tables(profile.id, tables)
+	if not save_tables(profile.id, tables):
+		push_warning("Could not save the Hall of Fame.")
+		return -1
 	return row
 
 static func set_mode(profile: ELProfile, kind: String) -> void:
 	var tables := load_tables(profile)
-	tables.mode = kind if kind in KINDS else "campaign"
+	tables.mode = kind if kind in kinds(profile.id) else "campaign"
 	save_tables(profile.id, tables)
 
 ## GUID in a map document header (<id>{...}</id>).
@@ -139,17 +162,17 @@ static func campaign_info(profile: ELProfile, campaign_id: String) -> Dictionary
 
 ## Title shown in the last column: the campaign name or the map title whose GUID matches.
 static func title(profile: ELProfile, kind: String, guid: String) -> String:
+	if kind == "duel":
+		if guid.is_empty(): return ELRemakeText.t("Random arena", profile)
+		return profile.text(str(profile.table("ScenesNames").get(guid, {}).get("ELKName", guid)))
 	var wanted := guid.to_upper()
 	if wanted.is_empty(): return ""
-	# The second game shows no title for campaign rows and the catalogue
-	# title of the map for scenario rows.
-	if profile.id != "el1":
-		return "" if kind == "campaign" else str(known_maps(profile).get(wanted, {}).get("title", ""))
 	if kind == "campaign":
 		for campaign_id: String in ELCampaign.available(profile):
 			var info := campaign_info(profile, campaign_id)
-			if info.get("id", "") == wanted: return info.name
+			if info.get("id", "") == wanted or (profile.id == "el2" and campaign_id.to_upper() == wanted): return info.name
 		return ""
+	if profile.id == "el2": return str(known_maps(profile).get(wanted, {}).get("title", ""))
 	for key: String in profile.files_under("Maps/"):
 		if not key.ends_with(".map") or key.count("/") != 1: continue
 		var map_id := key.get_file().get_basename()
@@ -162,6 +185,25 @@ static func title(profile: ELProfile, kind: String, guid: String) -> String:
 ## player name the campaign screen's edit starts with.
 static func campaign_player(profile: ELProfile, _campaign_id: String) -> String:
 	return ELPlayerProfile.default_name(profile)
+
+static func record_second_campaign(state: ELAdventureSession, campaign_id: String, points: int, run: String) -> void:
+	var profile := state.map.profile
+	var hero := state.object(state.main_hero)
+	var name := str(hero.get("title", "")).strip_edges()
+	if name.is_empty(): name = ELPlayerProfile.current_name(profile)
+	var token := ("%s:%s" % [run, campaign_id]).sha256_text().left(32)
+	add(profile, "campaign", name, campaign_id, points, token)
+
+## Single-player wins and local online wins count. In hot seat the winning
+## player's name is recorded. A tie or unfinished match earns no entry.
+static func record_duel(profile: ELProfile, match_state: ELDuelMatch, names: Array, local := 0) -> void:
+	if profile.id != "el2" or not match_state.finished() or match_state.hall_run.is_empty(): return
+	var result := match_state.result(local)
+	if result == 0 or (result < 0 and not match_state.hot_seat): return
+	var winner := local if result > 0 else 1 - local
+	var name := str(names[winner]).strip_edges()
+	if name.is_empty(): name = ELPlayerProfile.current_name(profile)
+	add(profile, "duel", name, match_state.arena, match_state.wins[winner] * WIN_POINTS, match_state.hall_run)
 
 ## Mission won: single missions add a scenario record; the campaign
 ## final adds the campaign record. Returns the kind recorded, or "".
