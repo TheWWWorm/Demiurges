@@ -12,7 +12,7 @@ These work as in the games: autosave, faster map movement, animated objects, amb
 
 ## Remake settings
 
-**Remake settings…** on the Options screen (also in the battle's remake menu) holds the engine's own settings on three tabs. Like the rest of the remake's own screens, it is shown in the language of the game you play: Russian for a Russian copy, English otherwise.
+**Remake settings…** is available on the Options screen and in the Etherlords II Esc menus on maps and in battle. It opens three tabs in the language of your game.
 
 ### Graphics
 
@@ -26,7 +26,7 @@ These work as in the games: autosave, faster map movement, animated objects, amb
 | Shadows | Shadows of figures in battles and of trees, rocks and buildings on maps. |
 | Soft shadows | Softer shadow edges. Off at first. |
 | Terrain detail | Subtle texture and relief on map ground and fine grain on battle ground. Off at first. |
-| Enhanced water | Ripples, a sky tint, and soft shoreline foam on the adventure map. Bog water has gentler ripples and no foam. In Etherlords II, rain adds rings to the water while Map weather is enabled. Off at first. |
+| Enhanced water | Reflected scenery, animated ripples, and soft shoreline foam on the adventure map. Bog water has gentler ripples. In Etherlords II, rain adds rings to the water while Map weather is enabled. Off at first. |
 | Map weather | Rain, snow and other weather on adventure maps. |
 | Combat blood | Blood in battles. |
 

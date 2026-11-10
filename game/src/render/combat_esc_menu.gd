@@ -16,6 +16,7 @@ signal options_requested
 signal exit_requested
 signal quit_requested
 signal remake_menu_requested
+signal remake_settings_requested
 signal closed
 
 const DESIGN := Vector2(1024, 768)
@@ -115,10 +116,20 @@ func build(source: ELProfile) -> bool:
 	remake_button.add_theme_font_size_override("font_size", 15)
 	remake_button.tooltip_text = "The remake's own battle menu."
 	var panel := control_rect(PANEL)
-	remake_button.position = Vector2(panel.position.x + panel.size.x * 0.5 - 145, panel.end.y + 10)
+	var centre := panel.get_center().x
+	remake_button.position = Vector2(centre - 270, panel.end.y + 10)
 	remake_button.size = Vector2(140, 30)
 	remake_button.pressed.connect(func(): remake_menu_requested.emit())
 	canvas.add_child(remake_button)
+	var settings := Button.new()
+	settings.name = "RemakeSettings"
+	settings.text = ELRemakeText.t("Remake settings…", profile)
+	settings.focus_mode = Control.FOCUS_NONE
+	settings.add_theme_font_size_override("font_size", 15)
+	settings.position = Vector2(centre - 120, panel.end.y + 10)
+	settings.size = Vector2(240, 30)
+	settings.pressed.connect(func(): remake_settings_requested.emit())
+	canvas.add_child(settings)
 	# Remake-only: the wiki over the battle (also F1).
 	var wiki := Button.new()
 	wiki.name = "Wiki"
@@ -127,7 +138,7 @@ func build(source: ELProfile) -> bool:
 	wiki.tooltip_text = "Правила боя и управление" if russian else "Combat rules and controls."
 	wiki.focus_mode = Control.FOCUS_NONE
 	wiki.add_theme_font_size_override("font_size", 15)
-	wiki.position = Vector2(panel.position.x + panel.size.x * 0.5 + 5, panel.end.y + 10)
+	wiki.position = Vector2(centre + 130, panel.end.y + 10)
 	wiki.size = Vector2(140, 30)
 	wiki.pressed.connect(func(): ELWikiScreen.open(self, "combat", header.text))
 	canvas.add_child(wiki)

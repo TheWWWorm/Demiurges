@@ -321,7 +321,7 @@ func _command(control: String) -> void:
 ## Remake-only settings stay in the remake's dialog, below the original frame.
 func _remake_section() -> void:
 	remake_button = null
-	if menu.settings_requested.get_connections().is_empty() or context != "menu": return
+	if menu.settings_requested.get_connections().is_empty(): return
 	remake_button = Button.new()
 	remake_button.name = "RemakeSettings"
 	remake_button.focus_mode = Control.FOCUS_NONE

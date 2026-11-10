@@ -4556,7 +4556,7 @@ func _open_settings() -> void:
 	settings_dialog.exclusive = true
 	settings_dialog.ok_button_text = _t("Close")
 	settings_dialog.theme = _settings_theme()
-	ui.add_child(settings_dialog)
+	add_child(settings_dialog)
 	var body := VBoxContainer.new()
 	body.add_theme_constant_override("separation", 10)
 	settings_dialog.add_child(body)
@@ -4685,7 +4685,7 @@ func _graphics_page(page: VBoxContainer) -> void:
 	enhanced_water.toggled.connect(func(enabled: bool):
 		settings.values.enhanced_water = enabled
 		if campaign_view != null: campaign_view.apply_settings())
-	_settings_row(scene, "Enhanced water", "Adds ripples, sky tint, soft shoreline foam and rain rings to adventure map water.", enhanced_water)
+	_settings_row(scene, "Enhanced water", "Adds reflections, ripples, shoreline foam and rain rings to adventure map water.", enhanced_water)
 	var weather := CheckButton.new()
 	weather.name = "Weather"
 	weather.button_pressed = settings.values.weather
@@ -5042,6 +5042,7 @@ func _battle_host() -> ELFrontMenu:
 			options_host = null
 			return
 		options_host.settings_previewed.connect(_preview_volumes)
+		options_host.settings_requested.connect(_open_settings)
 		options_host.hosted_closed.connect(func():
 			options_host.hide()
 			options_layer.hide()
@@ -5167,6 +5168,7 @@ func _begin_campaign(edition: String, scenario: Dictionary, difficulty: int, res
 	battle_audio.paused = true
 	ui.hide()
 	campaign_view.leave_requested.connect(_leave_campaign)
+	campaign_view.remake_settings_requested.connect(_open_settings)
 	campaign_view.resume_requested.connect(func(): _resume_campaign(false, ELSaveSlots.quick_load_path(campaign_view.state), edition))
 	campaign_view.slot_requested.connect(_load_slot)
 	campaign_view.encounter_requested.connect(_begin_encounter)
@@ -6852,6 +6854,7 @@ func _open_esc_menu() -> void:
 			options_layer.show()
 			host.show())
 		esc_menu.options_requested.connect(_open_battle_options)
+		esc_menu.remake_settings_requested.connect(_open_settings)
 		esc_menu.exit_requested.connect(func(): _ask_battle("T_MB_QUIT_TO_MM", _esc_exit_to_menu))
 		esc_menu.quit_requested.connect(func(): _ask_battle("T_MB_QUIT_TO_WIN", func(): ELAudio.quiet_quit(get_tree())))
 		esc_menu.remake_menu_requested.connect(func():

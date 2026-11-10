@@ -3,6 +3,9 @@ extends Node3D
 const CELL := 2.0
 const CHUNK := 16
 const GUTTER := 2
+## Only scenery and figures are visible to the reflected camera. The terrain,
+## fog apron and selection markers all live on the main camera's layers.
+const REFLECTION_LAYER := 1 << 16
 var atlas: Texture2D
 var material: ShaderMaterial
 var errors: Array[String] = []
@@ -11,6 +14,15 @@ var animation_frames := 0
 var build_usec := 0
 var _tiles: ELTileSet
 var _cache: Dictionary
+var _water_bounds: Array[AABB] = []
+var _reflection: SubViewport
+var _mirror_camera: Camera3D
+var _mirror_active := false
+
+func _ready() -> void:
+	set_process(false)
+	visibility_changed.connect(func():
+		if not is_visible_in_tree(): _show_water_reflection(false))
 
 func build(map: ELAdventureMap) -> bool:
 	var started := Time.get_ticks_usec()
@@ -64,6 +76,7 @@ func build(map: ELAdventureMap) -> bool:
 				var identity := JSON.stringify(plan.layers)
 				if not unique_plans.has(identity):
 					unique_plans[identity] = compositions.size()
+					plan.water = plan.layers.any(func(layer: Dictionary) -> bool: return layer.water)
 					plan.offset = animation_frames
 					animation_frames += int(plan.frames)
 					compositions.append(plan)
@@ -135,6 +148,69 @@ func set_water(enabled: bool) -> void:
 		material.set_shader_parameter("water_weights", _cache.water_weights)
 		material.set_shader_parameter("water_atlas_size", Vector2(_cache.water_weights.get_size()))
 	material.set_shader_parameter("water_enabled", enabled)
+	var reflect := enabled and DisplayServer.get_name() != "headless"
+	set_process(reflect)
+	if reflect: _update_water_reflection()
+	else: _show_water_reflection(false)
+
+func _process(_delta: float) -> void:
+	_update_water_reflection()
+
+func _update_water_reflection() -> void:
+	var viewport := get_viewport()
+	var source := viewport.get_camera_3d()
+	var visible_water := is_visible_in_tree() and source != null and _water_in_view(source)
+	if not visible_water:
+		_show_water_reflection(false)
+		return
+	if _reflection == null:
+		_reflection = SubViewport.new()
+		_reflection.name = "WaterReflection"
+		_reflection.transparent_bg = true
+		_reflection.gui_disable_input = true
+		_reflection.positional_shadow_atlas_size = 0
+		_reflection.render_target_update_mode = SubViewport.UPDATE_DISABLED
+		add_child(_reflection)
+		_reflection.world_3d = source.get_world_3d()
+		_mirror_camera = Camera3D.new()
+		_mirror_camera.cull_mask = REFLECTION_LAYER
+		_reflection.add_child(_mirror_camera)
+		_mirror_camera.current = true
+		material.set_shader_parameter("water_reflection", _reflection.get_texture())
+	var dimensions := viewport.get_texture().get_size()
+	var scale_factor := minf(0.75, 1024.0 / maxf(dimensions.x, dimensions.y))
+	_reflection.size = Vector2i((dimensions * scale_factor).round()).max(Vector2i(2, 2))
+	_mirror_camera.keep_aspect = source.keep_aspect
+	_mirror_camera.projection = source.projection
+	_mirror_camera.fov = source.fov
+	_mirror_camera.size = source.size
+	_mirror_camera.near = source.near
+	_mirror_camera.far = source.far
+	var pose := source.get_camera_transform()
+	var flip := Vector3(1.0, -1.0, 1.0)
+	# Reflect around the map's y = 0 plane, then reverse the horizontal axis
+	# to keep the camera right-handed. The water sampler flips its U back.
+	_mirror_camera.global_transform = Transform3D(
+		Basis(-pose.basis.x * flip, pose.basis.y * flip, pose.basis.z * flip), pose.origin * flip)
+	_show_water_reflection(true)
+
+func _show_water_reflection(on: bool) -> void:
+	if on == _mirror_active: return
+	_mirror_active = on
+	_reflection.render_target_update_mode = SubViewport.UPDATE_ALWAYS if on else SubViewport.UPDATE_DISABLED
+	material.set_shader_parameter("water_reflection_enabled", on)
+
+func _water_in_view(source: Camera3D) -> bool:
+	var frustum := source.get_frustum()
+	for bounds: AABB in _water_bounds:
+		var outside := false
+		for plane: Plane in frustum:
+			var radius := plane.normal.abs().dot(bounds.size * 0.5)
+			if plane.distance_to(bounds.get_center()) > radius:
+				outside = true
+				break
+		if not outside: return true
+	return false
 
 func set_water_rain(areas: PackedVector4Array) -> void:
 	if material == null: return
@@ -149,10 +225,13 @@ func _build_chunk(map: ELAdventureMap, origin: Vector2i, cells: PackedInt32Array
 	var uvs := PackedVector2Array()
 	var data := PackedVector2Array()
 	var indices := PackedInt32Array()
-	for y in range(origin.y, mini(origin.y + CHUNK, map.height)):
-		for x in range(origin.x, mini(origin.x + CHUNK, map.width)):
+	var limit := (origin + Vector2i(CHUNK, CHUNK)).min(Vector2i(map.width, map.height))
+	var contains_water := false
+	for y in range(origin.y, limit.y):
+		for x in range(origin.x, limit.x):
 			var cell := cells[y * map.width + x]
 			var plan: Dictionary = plans[cell / 4]
+			contains_water = contains_water or plan.water
 			var base := vertices.size()
 			var corners: Array[Vector2i] = [Vector2i(0, 0), Vector2i(1, 0), Vector2i(1, 1), Vector2i(0, 1)]
 			for i in 4:
@@ -179,6 +258,9 @@ func _build_chunk(map: ELAdventureMap, origin: Vector2i, cells: PackedInt32Array
 	chunk.material_override = material
 	chunk.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(chunk)
+	if contains_water:
+		_water_bounds.append(AABB(Vector3(origin.x, 0, -limit.y) * CELL,
+			Vector3(limit.x - origin.x, 0, limit.y - origin.y) * CELL))
 
 ## Etherlords II colourless zones: per-level grey data for the terrain shader.
 ## Cells whose four corners are grey show the greyscale of their tile, cells

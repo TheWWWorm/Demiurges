@@ -2,6 +2,13 @@
 
 Versions follow [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html) from 0.3.0 on.
 
+## 0.6.1
+
+- Path-traced lighting respects transparent cutouts when tracing shadows from foliage and figures.
+- Enhanced water draws a new surface with scenery reflections, irregular ripples, and shoreline foam. The original terrain masks shape the shore.
+- Remake settings are accessible from the in-game Options screen and the Etherlords II Esc menus on maps and in battle.
+- Expedition encounters, camp choices, and rewards open in a dialogue. Resolve the choice to continue along the route.
+
 ## 0.6.0
 
 - Ether Expedition is a three-act deck-building campaign for Etherlords II. Choose branching routes, draft spells, visit camps and illustrated encounters, and fight original guardians. Runs save between rooms and after settled combat actions.

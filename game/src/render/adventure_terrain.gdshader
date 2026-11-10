@@ -15,11 +15,12 @@ uniform vec2 atlas_size;
 // extra assets; animated liquid tiles keep their original appearance.
 uniform bool detail_enabled = false;
 uniform vec3 detail_sun = vec3(0.6634, 0.6428, -0.3830);
-// The original water artwork and its animation stay visible through the
-// optional ripples. The mask follows the authored shore transitions.
+// The optional water surface uses the original liquid masks for its shores.
 uniform bool water_enabled = false;
 uniform sampler2D water_weights : filter_linear, repeat_disable;
 uniform vec2 water_atlas_size = vec2(1.0);
+uniform bool water_reflection_enabled = false;
+uniform sampler2D water_reflection : source_color, filter_linear, repeat_disable;
 // World-space rectangles from active, authored EL2 rain particles.
 uniform int water_rain_count = 0;
 uniform vec4 water_rain_areas[64];
@@ -64,6 +65,28 @@ vec3 to_linear(vec3 c) {
 	return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), step(vec3(0.04045), c));
 }
 
+vec3 ripple_corner(vec2 lattice, vec2 offset) {
+	vec3 seed = fract(lattice.xyx * vec3(0.1031, 0.1030, 0.0973));
+	seed += dot(seed, seed.yzx + 33.33);
+	vec2 gradient = 2.0 * fract((seed.xx + seed.yz) * seed.zy) - 1.0;
+	float falloff = max(0.5 - dot(offset, offset), 0.0);
+	float falloff2 = falloff * falloff;
+	float height = dot(gradient, offset);
+	return falloff2 * falloff * vec3(falloff * height, falloff * gradient - 8.0 * height * offset);
+}
+
+// Simplex height and slope, with a different gradient at each vertex.
+vec3 ripple_field(vec2 point) {
+	const float SKEW = 0.3660254;
+	const float UNSKEW = 0.2113249;
+	vec2 lattice = floor(point + (point.x + point.y) * SKEW);
+	vec2 offset = point - lattice + (lattice.x + lattice.y) * UNSKEW;
+	vec2 step_to_corner = offset.x > offset.y ? vec2(1.0, 0.0) : vec2(0.0, 1.0);
+	return 70.0 * (ripple_corner(lattice, offset)
+		+ ripple_corner(lattice + step_to_corner, offset - step_to_corner + UNSKEW)
+		+ ripple_corner(lattice + 1.0, offset - 1.0 + 2.0 * UNSKEW));
+}
+
 vec2 rain_ring_slope(vec2 point) {
 	float rain = 0.0;
 	for (int i = 0; i < water_rain_count; i++) {
@@ -91,18 +114,22 @@ vec2 rain_ring_slope(vec2 point) {
 	return slope * rain;
 }
 
-vec3 water_surface(vec3 original, vec2 weights, vec3 view, float ripple_fade, bool srgb) {
+vec3 water_surface(vec3 original, vec2 weights, vec3 view, vec2 screen_uv, mat3 view_basis, float ripple_fade, bool srgb) {
 	float coverage = weights.r;
 	float bog = clamp(weights.g / coverage, 0.0, 1.0);
-	// Continuous across tile edges, unlike the rotated art atlas.
+	// Drift broad ripples and smaller chop in different directions through
+	// world space. Both continue across the original terrain tile edges.
 	vec2 point = cell * 2.0;
-	float a = dot(point, vec2(2.15, 1.16)) - TIME * 1.65;
-	float b = dot(point, vec2(-2.71, 3.20)) + TIME * 1.37;
-	float c = dot(point, vec2(4.34, -4.61)) - TIME * 2.08;
-	float primary = cos(a + 0.34 * sin(b));
-	float secondary = cos(b + 0.19 * sin(c));
+	mat2 swell_basis = mat2(vec2(0.92, 0.39), vec2(-0.39, 0.92));
+	mat2 chop_basis = mat2(vec2(0.61, -0.79), vec2(0.79, 0.61));
+	vec2 swell_scale = vec2(0.44, 1.20);
+	vec2 chop_scale = vec2(1.45, 3.20);
+	vec3 swell = ripple_field((transpose(swell_basis) * point) * swell_scale + TIME * vec2(0.12, -0.38));
+	vec3 chop = ripple_field((transpose(chop_basis) * point) * chop_scale + vec2(17.3, 8.9) + TIME * vec2(-0.33, 0.71));
+	float crest_height = 0.70 * swell.x + 0.30 * chop.x;
 	float wind = ripple_fade * mix(1.0, 0.36, bog);
-	vec2 slope = (vec2(0.06, -0.04) * primary + vec2(-0.035, 0.075) * secondary) * wind;
+	vec2 slope = (0.030 * (swell_basis * (swell.yz * swell_scale))
+		+ 0.009 * (chop_basis * (chop.yz * chop_scale))) * wind;
 	vec2 rain = vec2(0.0);
 	if (water_rain_count > 0 && ripple_fade > 0.0 && coverage > 0.4) {
 		rain = rain_ring_slope(point) * vec2(1.0, -1.0) * ripple_fade * smoothstep(0.4, 0.95, coverage) * 0.24;
@@ -110,21 +137,42 @@ vec3 water_surface(vec3 original, vec2 weights, vec3 view, float ripple_fade, bo
 	slope += rain;
 	vec3 normal = normalize(vec3(slope.x, 1.0, slope.y));
 	vec3 sun = normalize(detail_sun);
-	float fresnel = 0.18 * pow(1.0 - clamp(dot(normal, view), 0.0, 1.0), 4.0);
+	float grazing = 1.0 - clamp(dot(normal, view), 0.0, 1.0);
+	// Clear water still reflects the sky from the map's steep default view.
+	float fresnel = mix(0.075 + 0.24 * pow(grazing, 3.0), 0.18 * pow(grazing, 4.0), bog);
 	// Bog's duckweed has no sun glint. Keep it on the water share of mixed tiles.
-	float glint = pow(max(dot(normal, normalize(sun + view)), 0.0), 85.0) * ripple_fade * (1.0 - bog);
+	float glint = pow(max(dot(normal, normalize(sun + view)), 0.0), 45.0) * ripple_fade * (1.0 - bog);
+	float crest = smoothstep(0.12, 0.62, crest_height) * ripple_fade * (1.0 - bog);
 	float shore = 4.0 * coverage * (1.0 - coverage);
-	float foam = shore * smoothstep(0.30, 0.92, primary * 0.65 + secondary * 0.35) * ripple_fade * (1.0 - bog);
+	float foam = shore * smoothstep(0.04, 0.56, crest_height) * ripple_fade * (1.0 - bog);
 	// Rain rings catch the sky even at steep view angles. Foam masks the reflection.
 	fresnel += min(length(rain) * 0.6, 0.18) * (1.0 - foam);
 	// Match the linear water lighting in both renderers. Compatibility
 	// supplies the terrain sample in display space.
 	vec3 base = srgb ? to_linear(original) : original;
-	vec3 sky = to_linear(vec3(0.47, 0.63, 0.76));
+	float sky_height = clamp(reflect(-view, normal).y, 0.0, 1.0);
+	vec3 sky = to_linear(mix(vec3(0.63, 0.72, 0.77), vec3(0.39, 0.61, 0.80), sky_height));
+	if (water_reflection_enabled && bog < 1.0) {
+		vec2 offset = (view_basis * vec3(slope.x, 0.0, slope.y)).xy * 0.055;
+		vec2 uv = vec2(1.0 - screen_uv.x, screen_uv.y) + offset;
+		vec2 edge = min(uv, 1.0 - uv);
+		vec4 mirror = texture(water_reflection, uv);
+		float reflected = mirror.a * smoothstep(0.0, 0.025, min(edge.x, edge.y)) * (1.0 - bog);
+		// The transparent viewport stores premultiplied edges.
+		vec3 reflected_colour = clamp(mirror.rgb / max(mirror.a, 0.001), 0.0, 1.0);
+		if (srgb) reflected_colour = to_linear(reflected_colour);
+		sky = mix(sky, reflected_colour, reflected);
+		fresnel = mix(fresnel, max(fresnel, 0.40), reflected);
+	}
 	vec3 sparkle = to_linear(vec3(0.66, 0.79, 0.85));
 	float ring_light = dot(rain, sun.xz);
-	vec3 waves = base * (1.0 + (0.11 * primary + 0.045 * secondary) * wind + ring_light);
-	vec3 water = mix(waves, sky, fresnel) + sparkle * (0.12 * glint + 0.11 * foam + 0.4 * max(ring_light, 0.0));
+	vec3 shallows = to_linear(vec3(0.30, 0.46, 0.45));
+	vec3 deep = to_linear(vec3(0.10, 0.21, 0.27));
+	vec3 liquid = mix(shallows, deep, smoothstep(0.15, 1.0, coverage));
+	// Only the bog's duckweed uses the painted colour within the water.
+	liquid = mix(liquid, base, bog);
+	vec3 waves = liquid * (1.0 + (0.08 * swell.x + 0.04 * chop.x) * wind + ring_light);
+	vec3 water = mix(waves, sky, fresnel) + sparkle * (0.14 * glint + 0.016 * crest + 0.15 * foam + 0.4 * max(ring_light, 0.0));
 	vec3 enhanced = mix(base, water, coverage);
 	return srgb ? to_srgb(enhanced) : enhanced;
 }
@@ -137,12 +185,6 @@ void fragment() {
 	vec2 start = vec2(float(index % columns), float(index / columns)) * pitch + vec2(2.0);
 	vec2 tex_uv = (start + UV * tile_side) / atlas_size;
 	ALBEDO = texture(tiles, tex_uv).rgb;
-	if (water_enabled) {
-		vec2 water_start = vec2(float(index % columns), float(index / columns)) * WATER_PITCH + vec2(1.0);
-		vec2 weights = texture(water_weights, (water_start + UV * WATER_SIDE) / water_atlas_size).rg;
-		float ripple_fade = 1.0 - smoothstep(0.035, 0.19, length(dFdx(cell)) + length(dFdy(cell)));
-		if (weights.r > 0.0) ALBEDO = water_surface(ALBEDO, weights, mat3(INV_VIEW_MATRIX) * VIEW, ripple_fade, OUTPUT_IS_SRGB);
-	}
 	if (detail_enabled && int(round(UV2.y)) == 1) {
 		vec2 dx = dFdx(UV);
 		vec2 dy = dFdy(UV);
@@ -172,6 +214,15 @@ void fragment() {
 			vec3 hi = max(ALBEDO, max(max(left, right), max(down, up)));
 			vec3 enhanced = clamp(ALBEDO + (ALBEDO - (left + right + down + up) * 0.25) * 0.3, lo, hi);
 			ALBEDO = mix(ALBEDO, enhanced * (1.0 + light), fade);
+		}
+	}
+	if (water_enabled) {
+		vec2 water_start = vec2(float(index % columns), float(index / columns)) * WATER_PITCH + vec2(1.0);
+		vec2 weights = texture(water_weights, (water_start + UV * WATER_SIDE) / water_atlas_size).rg;
+		float ripple_fade = 1.0 - smoothstep(0.035, 0.19, length(dFdx(cell)) + length(dFdy(cell)));
+		if (weights.r > 0.0) {
+			ALBEDO = water_surface(ALBEDO, weights, mat3(INV_VIEW_MATRIX) * VIEW,
+				SCREEN_UV, mat3(VIEW_MATRIX), ripple_fade, OUTPUT_IS_SRGB);
 		}
 	}
 	if (clrless_enabled) {

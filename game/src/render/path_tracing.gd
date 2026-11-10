@@ -335,12 +335,12 @@ func _update_slot(ops: Array, id: int, mesh: Mesh, frame: int, look: Dictionary)
 		if cutoff > 1.0 or (cutoff > 0.0 and layer[1]) or (flags & SURFACE_SOFT_EMITTER) != 0:
 			flags |= SURFACE_ALPHA
 		var record := _material_record(look, layer[0], _layer(look.get("emission_texture"))[0], flags)
-		var geometry_flags := SURFACE_ALPHA | SURFACE_ARENA_SCENERY
+		var geometry_flags := SURFACE_ARENA_SCENERY
 		if slot.is_empty() or slot.mesh != mesh or (slot.flags & geometry_flags) != (flags & geometry_flags):
 			var normals := PackedByteArray()
 			if (flags & SURFACE_ARENA_SCENERY) != 0:
 				normals = _secondary_corner_normals(mesh, data.index)
-			ops.append(["define", id, vertices.size(), data.index.to_byte_array(), data.uv.to_byte_array(), flags, normals])
+			ops.append(["define", id, vertices.size(), data.index.to_byte_array(), data.uv.to_byte_array(), normals])
 			slot = {"frame": -2}
 		ops.append(["material", id, record])
 		slot.look = look
@@ -855,10 +855,9 @@ class Effect extends CompositorEffect:
 		var rays := RDShaderSource.new()
 		rays.language = RenderingDevice.SHADER_LANGUAGE_GLSL
 		rays.set_stage_source(RenderingDevice.SHADER_STAGE_RAYGEN, SHADERS.RAYGEN)
-		rays.set_stage_source(RenderingDevice.SHADER_STAGE_ANY_HIT, SHADERS.ANY_HIT)
 		rays.set_stage_source(RenderingDevice.SHADER_STAGE_CLOSEST_HIT, SHADERS.CLOSEST_HIT)
 		rays.set_stage_source(RenderingDevice.SHADER_STAGE_MISS, SHADERS.MISS)
-		made.append(_compile(rays, [RenderingDevice.SHADER_STAGE_RAYGEN, RenderingDevice.SHADER_STAGE_ANY_HIT,
+		made.append(_compile(rays, [RenderingDevice.SHADER_STAGE_RAYGEN,
 			RenderingDevice.SHADER_STAGE_CLOSEST_HIT, RenderingDevice.SHADER_STAGE_MISS], "Path trace"))
 		for shader in made:
 			if not shader.is_valid(): return false
@@ -869,7 +868,6 @@ class Effect extends CompositorEffect:
 		program.shader = _trace_shader
 		var group := RDHitGroup.new()
 		group.closest_hit_shader = program
-		group.any_hit_shader = program
 		_trace_pipeline = _rd.raytracing_pipeline_create([program], [program], [group], 1)
 		if not _trace_pipeline.is_valid(): return false
 		_sbt = _rd.hit_sbt_create(_trace_pipeline, 1)
@@ -986,10 +984,10 @@ class Effect extends CompositorEffect:
 		_next_corner += corners
 		_rd.buffer_update(_indices, slot.first_index * 4, index_bytes.size(), index_bytes)
 		_rd.buffer_update(_source_uv, slot.vertex * 8, mini(uv_bytes.size(), vertices * 8), uv_bytes)
-		var normals: PackedByteArray = op[6]
+		var normals: PackedByteArray = op[5]
 		if not normals.is_empty() and not _store_corner_normals(slot_index, normals): return false
 		var geometry := RDAccelerationStructureGeometry.new()
-		if (op[5] & ELPathTracing.SURFACE_ALPHA) == 0: geometry.flags = RenderingDevice.ACCELERATION_STRUCTURE_GEOMETRY_OPAQUE_BIT
+		geometry.flags = RenderingDevice.ACCELERATION_STRUCTURE_GEOMETRY_OPAQUE_BIT
 		geometry.vertex_buffer = _corners
 		geometry.vertex_offset = slot.corner * 12
 		geometry.vertex_stride = 12

@@ -73,6 +73,8 @@ struct Payload {
 	uint instance;
 	uint found;
 	uint alpha_seed;
+	float opacity_sample;
+	bool shadow_ray;
 	bool include_secondary;
 	vec3 secondary;
 };
@@ -115,24 +117,6 @@ vec3 surface_emission(Slot look, vec2 uv, float lod) {
 }
 """
 
-const ANY_HIT := SCENE + """
-layout(location = 0) rayPayloadInEXT Payload payload;
-hitAttributeEXT vec2 bary;
-void main() {
-	uint slot = instance_slot(uint(gl_InstanceCustomIndexEXT));
-	Slot look = slots[slot];
-	float alpha = surface_albedo(look, surface_uv(slot, uint(gl_PrimitiveID), bary), 0.0).a;
-	if ((look.geometry.z & (SLOT_SOFT_EMITTER | SLOT_SOFT_CUTOUT)) == SLOT_SOFT_EMITTER) {
-		// Accept the surface with its coverage probability. A rejected sample
-		// continues on to the next surface instead of blocking the bounce.
-		uint sample_id = hash(payload.alpha_seed ^ hash(uint(gl_InstanceID)) ^ hash(uint(gl_PrimitiveID)));
-		if (float(sample_id >> 8) / 16777216.0 >= alpha * look.tint.a) ignoreIntersectionEXT;
-	} else if ((look.geometry.z & SLOT_ALPHA) != 0u && alpha < look.tint.a) {
-		ignoreIntersectionEXT;
-	}
-}
-"""
-
 const CLOSEST_HIT := SCENE + """
 layout(location = 0) rayPayloadInEXT Payload payload;
 hitAttributeEXT vec2 bary;
@@ -166,18 +150,24 @@ vec3 secondary_at(uint normal_index, vec3 local_point, bool normal_aware) {
 void main() {
 	uint index = uint(gl_InstanceCustomIndexEXT);
 	uint slot = instance_slot(index);
+	uint flags = slots[slot].geometry.z;
+	payload.distance = gl_HitTEXT;
+	payload.instance = index;
+	payload.found = 1u;
+	if (!payload.shadow_ray || (flags & SLOT_ALPHA) != 0u)
+		payload.uv = surface_uv(slot, uint(gl_PrimitiveID), bary);
+	if ((flags & (SLOT_SOFT_EMITTER | SLOT_SOFT_CUTOUT)) == SLOT_SOFT_EMITTER) {
+		uint sample_id = hash(payload.alpha_seed ^ hash(uint(gl_InstanceID)) ^ hash(uint(gl_PrimitiveID)));
+		payload.opacity_sample = float(sample_id >> 8) / 16777216.0;
+	}
+	if (payload.shadow_ray) return;
 	uint first = slots[slot].geometry.x + uint(gl_PrimitiveID) * 3u;
 	vec3 a = corner(first), b = corner(first + 1u), c = corner(first + 2u);
 	vec3 n = cross(mat3(gl_ObjectToWorldEXT) * (b - a), mat3(gl_ObjectToWorldEXT) * (c - a));
 	n = length(n) > 0.0 ? normalize(n) : -gl_WorldRayDirectionEXT;
 	payload.normal = dot(n, gl_WorldRayDirectionEXT) > 0.0 ? -n : n;
-	payload.distance = gl_HitTEXT;
-	payload.uv = surface_uv(slot, uint(gl_PrimitiveID), bary);
-	payload.instance = index;
-	payload.found = 1u;
 	if (payload.include_secondary) {
 		payload.secondary = vec3(0.0);
-		uint flags = slots[slot].geometry.z;
 		if ((flags & (SLOT_ARENA_FLOOR | SLOT_ARENA_SCENERY)) != 0u) {
 			bool normal_aware = (flags & SLOT_ARENA_SCENERY) != 0u;
 			uint normal_base = normal_aware ? corner_normals[slot] + uint(gl_PrimitiveID) * 9u : 0u;
@@ -276,17 +266,30 @@ vec3 sunlight(float n_dot_l, bool scenery) {
 	return frame.sun_color.rgb * max(n_dot_l, 0.0) * scale * SUN_TINT / dot(SUN_TINT, LUMINANCE);
 }
 
-bool occluded(vec3 origin, vec3 direction, float max_distance) {
-	payload.found = 1u;
-	traceRayEXT(scene, gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsSkipClosestHitShaderEXT, RAY_SOLID, 0, 0, 0, origin, 0.0, direction, max_distance, 0);
-	return payload.found != 0u;
-}
-
-Payload closest(vec3 origin, vec3 direction, float max_distance, uint mask, uint alpha_seed, bool include_secondary, uint flags) {
+Payload closest(vec3 origin, vec3 direction, float max_distance, uint mask, uint alpha_seed, bool include_secondary, uint flags, bool shadow_ray) {
 	payload.alpha_seed = alpha_seed;
 	payload.include_secondary = include_secondary;
-	traceRayEXT(scene, flags, mask, 0, 0, 0, origin, 0.0, direction, max_distance, 0);
+	payload.shadow_ray = shadow_ray;
+	// Test coverage in raygen. On Vulkan, the any-hit path can accept whole
+	// cutout triangles, leaving foliage cards and transparent parts in shadows.
+	// Advance past each rejected hit to find the next surface on this ray.
+	float start = 0.0;
+	for (int i = 0; i < 32 && start < max_distance; i++) {
+		traceRayEXT(scene, flags, mask, 0, 0, 0, origin, start, direction, max_distance, 0);
+		if (payload.found == 0u) return payload;
+		Slot look = slots[instance_slot(payload.instance)];
+		if ((look.geometry.z & SLOT_ALPHA) == 0u) return payload;
+		float alpha = surface_albedo(look, payload.uv, 0.0).a;
+		bool soft = (look.geometry.z & (SLOT_SOFT_EMITTER | SLOT_SOFT_CUTOUT)) == SLOT_SOFT_EMITTER;
+		if (soft ? payload.opacity_sample < alpha * look.tint.a : alpha >= look.tint.a) return payload;
+		start = payload.distance + 0.0001;
+	}
+	payload.found = 0u;
 	return payload;
+}
+
+bool occluded(vec3 origin, vec3 direction, float max_distance) {
+	return closest(origin, direction, max_distance, RAY_SOLID, 0u, false, gl_RayFlagsNoneEXT, true).found != 0u;
 }
 
 float random(inout uint state) {
@@ -365,7 +368,7 @@ void main() {
 	// Only surfaces of the traced scene are relit; effects, the painted
 	// backdrop and anything else keep their raster light.
 	// Match the raster face selection when a hidden wall lies in front of it.
-	Payload primary = closest(eye, view_direction, distance_to_eye * 1.03 + 0.1, RAY_SOLID, 0u, frame.counts.z > 0u, gl_RayFlagsCullBackFacingTrianglesEXT);
+	Payload primary = closest(eye, view_direction, distance_to_eye * 1.03 + 0.1, RAY_SOLID, 0u, frame.counts.z > 0u, gl_RayFlagsCullBackFacingTrianglesEXT, false);
 	if ((frame.info.w & 4u) != 0u) {
 		imageStore(light_out, pixel, vec4(float(primary.found), primary.found != 0u ? primary.distance / max(distance_to_eye, 0.001) * 0.5 : 0.0, distance_to_eye / 50.0, 1.0));
 		imageStore(guide_out, pixel, vec4(0.0, 0.0, 1.0, 1.0));
@@ -417,7 +420,7 @@ void main() {
 			basis(n, t, b);
 			float r = sqrt(random(state)), phi = 6.2831853 * random(state);
 			vec3 direction = normalize(t * r * cos(phi) + b * r * sin(phi) + n * sqrt(max(0.0, 1.0 - r * r)));
-			Payload bounce = closest(p, direction, 60.0, RAY_SOLID | RAY_SOFT_EMITTER, state, false, gl_RayFlagsNoneEXT);
+			Payload bounce = closest(p, direction, 60.0, RAY_SOLID | RAY_SOFT_EMITTER, state, false, gl_RayFlagsNoneEXT, false);
 			if (bounce.found == 0u) {
 				lighting += throughput * sky(direction);
 				break;

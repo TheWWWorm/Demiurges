@@ -835,6 +835,7 @@ static func silhouette(edition: String, object: Dictionary, definition: Dictiona
 	return edition in ["el1", "el2"] and not blob_shadow(edition, object, definition)
 
 func _shade(node: GeometryInstance3D, casts: bool) -> void:
+	node.layers |= ELAdventureTerrain.REFLECTION_LAYER
 	node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON if casts else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	var material := node.material_override as BaseMaterial3D
 	if material != null: material.disable_receive_shadows = true

@@ -44,6 +44,9 @@ var _subtitle: Label
 var _vitals: Label
 var _art: TextureRect
 var _map: Control
+var _body: HBoxContainer
+var _journal_panel: PanelContainer
+var _dialogue: ColorRect
 var _scroll: ScrollContainer
 var _journal: VBoxContainer
 var _deck_button: Button
@@ -60,7 +63,6 @@ var _journey_open := false
 var _retry_confirmation := false
 var _save_error := ""
 var _replacement := {}
-var _comparison: PanelContainer
 var _starter_preview: PanelContainer
 
 func build(data: ELProfile) -> void:
@@ -123,28 +125,47 @@ func build(data: ELProfile) -> void:
 	_return.pressed.connect(func(): left.emit())
 	heading.add_child(_return)
 
-	var body := HBoxContainer.new()
-	body.add_theme_constant_override("separation", 20)
-	body.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	layout.add_child(body)
+	_body = HBoxContainer.new()
+	_body.add_theme_constant_override("separation", 20)
+	_body.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	layout.add_child(_body)
 	_map = Control.new()
 	_map.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_map.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_map.resized.connect(_place_nodes)
 	_map.draw.connect(_draw_routes)
-	body.add_child(_map)
-	var panel := PanelContainer.new()
-	panel.custom_minimum_size.x = 370
-	panel.add_theme_stylebox_override("panel", _plate(Color("201a16f7"), Color("967449"), 18))
-	body.add_child(panel)
+	_body.add_child(_map)
+	_journal_panel = PanelContainer.new()
+	_journal_panel.custom_minimum_size.x = 370
+	_journal_panel.add_theme_stylebox_override("panel", _plate(Color("201a16f7"), Color("967449"), 18))
+	_body.add_child(_journal_panel)
 	_scroll = ScrollContainer.new()
 	_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	_scroll.follow_focus = true
-	panel.add_child(_scroll)
+	_journal_panel.add_child(_scroll)
 	_journal = VBoxContainer.new()
 	_journal.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_journal.add_theme_constant_override("separation", 12)
 	_scroll.add_child(_journal)
+	_dialogue = ColorRect.new()
+	_dialogue.name = "EncounterDialogue"
+	_dialogue.color = Color(0, 0, 0, 0.64)
+	_dialogue.mouse_filter = Control.MOUSE_FILTER_STOP
+	add_child(_dialogue)
+	_dialogue.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_dialogue.hide()
+	resized.connect(_layout_dialogue)
+	_journal.minimum_size_changed.connect(_layout_dialogue, CONNECT_DEFERRED)
+
+func _choice_pending() -> bool:
+	return run != null and run.phase in ["event", "rest", "reward"]
+
+func _layout_dialogue() -> void:
+	if not _dialogue.visible: return
+	var margins := _journal_panel.get_theme_stylebox("panel").get_minimum_size()
+	var height := maxf(260.0, _journal.get_combined_minimum_size().y + margins.y)
+	_journal_panel.size = Vector2(minf(700.0, size.x - 48.0), minf(height, size.y - 88.0))
+	_journal_panel.position = (size - _journal_panel.size) * 0.5
 
 func show_run(active: ELExpeditionRun, save_error := "") -> void:
 	run = active
@@ -158,7 +179,13 @@ func show_run(active: ELExpeditionRun, save_error := "") -> void:
 	_scout_room_id = ""
 	_journey_open = false
 	_retry_confirmation = false
-	_deck_button.visible = run != null and _save_error.is_empty()
+	var modal := _choice_pending()
+	var parent: Control = _dialogue if modal else _body
+	if _journal_panel.get_parent() != parent: _journal_panel.reparent(parent, false)
+	_dialogue.visible = modal
+	_layout_dialogue()
+	_deck_button.visible = run != null and _save_error.is_empty() and not modal
+	_return.disabled = modal
 	_subtitle.text = _text("A deck-building journey through Etherlords II", "Путешествие по миру «Демиургов II»") if run == null else _text("ACT %d OF 3  ·  SEED %d", "АКТ %d ИЗ 3  ·  СИД %d") % [run.act, run.seed_value]
 	_vitals.text = "" if run == null else _text("LIFE  %d / %d   ·   %d SPELLS", "ЗДОРОВЬЕ  %d / %d   ·   КАРТЫ %d") % [run.health, run.max_health, run.deck.size()]
 	for button: Button in _nodes.values():
@@ -211,6 +238,7 @@ func _unhandled_key_input(event: InputEvent) -> void:
 		elif _retry_confirmation: _show_retry(false)
 		elif not _replacement.is_empty(): _show_replacement({})
 		elif run != null and not run.pending_card.is_empty() and _save_error.is_empty(): choice_made.emit("back")
+		elif _choice_pending() and _save_error.is_empty(): return
 		else: left.emit()
 
 func _place_nodes() -> void:
@@ -255,10 +283,7 @@ func _draw_journal() -> void:
 		_map.remove_child(_starter_preview)
 		_starter_preview.queue_free()
 		_starter_preview = null
-	if _comparison != null:
-		_map.remove_child(_comparison)
-		_comparison.queue_free()
-		_comparison = null
+	_scroll.scroll_vertical = 0
 	for child: Node in _journal.get_children():
 		_journal.remove_child(child)
 		child.queue_free()
@@ -269,6 +294,10 @@ func _draw_journal() -> void:
 		var retry := _button(_text("Retry save", "Повторить сохранение"), GOLD)
 		retry.pressed.connect(func(): save_retried.emit())
 		_journal.add_child(retry)
+		if _choice_pending():
+			var leave := _button(_text("Main menu", "Главное меню"))
+			leave.pressed.connect(func(): left.emit())
+			_journal.add_child(leave)
 		return
 	if run == null:
 		_journal.add_child(_label(_text("Into the highlands", "В путь по нагорью"), 27, GOLD))
@@ -321,6 +350,11 @@ func _draw_journal() -> void:
 		return
 	_deck_button.text = _text("Route", "Маршрут") if _display_deck else _text("Deck", "Колода")
 	if _display_deck:
+		if _choice_pending():
+			var back := _button(_text("Back to choices", "К выбору"))
+			back.name = "DeckBack"
+			back.pressed.connect(_show_deck.bind(false))
+			_journal.add_child(back)
 		_journal.add_child(_label(_text("Your spellbook", "Ваша книга заклинаний"), 27, GOLD))
 		var copies := {}
 		var creatures := 0
@@ -397,6 +431,13 @@ func _draw_journal() -> void:
 		_journal.add_child(_label(_text("Next duel · %s", "Следующий бой · %s") % artifact_title, 17, GOLD))
 	if not run.pending_card.is_empty():
 		_journal.add_child(_spell_tile(run.pending_card, _text("INCOMING SPELL", "НОВОЕ ЗАКЛИНАНИЕ"), false))
+	_draw_choices()
+	if _choice_pending():
+		_journal.add_child(HSeparator.new())
+		var deck := _button(_text("View spellbook", "Посмотреть книгу"), GOLD)
+		deck.name = "EncounterDeck"
+		deck.pressed.connect(_show_deck.bind(true))
+		_journal.add_child(deck)
 	if run.phase == "map":
 		_journal.add_child(HSeparator.new())
 		_journal.add_child(_label("%s   %s" % [MARK.boss, _guardian_brief()], 17, ACCENTS.boss))
@@ -423,6 +464,8 @@ func _draw_journal() -> void:
 		]
 		for row: Array in legend:
 			_journal.add_child(_label("%s   %s" % [MARK[row[0]], row[1]], 17, ACCENTS[row[0]]))
+
+func _draw_choices() -> void:
 	var listed := {}
 	for option: Dictionary in run.choices():
 		var id: String = option.id
@@ -555,6 +598,9 @@ func _show_deck(enabled: bool) -> void:
 	_draw_journal()
 	var back := _journal.get_node_or_null("ReplacementBack") as Button
 	if back != null: back.grab_focus()
+	elif _choice_pending():
+		var control := _journal.get_node_or_null("DeckBack" if enabled else "EncounterDeck") as Button
+		if control != null: control.grab_focus()
 	else: _deck_button.grab_focus()
 
 func _show_scout(act: int) -> void:
@@ -769,6 +815,11 @@ func _draw_replacement() -> void:
 	_journal.add_child(_label(_text("Replace one copy. Your spellbook stays at %d cards.", "Заменяется одна копия. В книге останется карт: %d.") % run.deck.size(), 17, MUTED))
 	var delta := ELEncyclopaedia.cost(profile, next) - ELEncyclopaedia.cost(profile, old)
 	_journal.add_child(_label(_text("Average base ether\n%.1f → %.1f", "Средняя базовая цена\n%.1f → %.1f") % [_average_ether(), _average_ether(delta)], 19, GOLD))
+	var columns := HBoxContainer.new()
+	columns.add_theme_constant_override("separation", 14)
+	_journal.add_child(columns)
+	columns.add_child(_spell_tile(old, _text("OUTGOING", "УБИРАЕМ"), true))
+	columns.add_child(_spell_tile(next, _text("INCOMING", "ДОБАВЛЯЕМ"), true))
 	var confirm := _button(_text("Confirm replacement", "Подтвердить замену"), GOLD)
 	confirm.pressed.connect(func(): choice_made.emit(_replacement.id))
 	_journal.add_child(confirm)
@@ -776,27 +827,6 @@ func _draw_replacement() -> void:
 	back.name = "ReplacementBack"
 	back.pressed.connect(_show_replacement.bind({}))
 	_journal.add_child(back)
-
-	_comparison = PanelContainer.new()
-	_comparison.add_theme_stylebox_override("panel", _plate(Color("211a16f7"), Color("967449"), 20))
-	_map.add_child(_comparison)
-	_comparison.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	_comparison.offset_top = 45
-	_comparison.offset_bottom = -45
-	var content := VBoxContainer.new()
-	content.add_theme_constant_override("separation", 16)
-	_comparison.add_child(content)
-	content.add_child(_label(_text("Compare spells", "Сравнение заклинаний"), 31, GOLD))
-	var scroll := ScrollContainer.new()
-	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	content.add_child(scroll)
-	var columns := HBoxContainer.new()
-	columns.add_theme_constant_override("separation", 14)
-	columns.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	scroll.add_child(columns)
-	columns.add_child(_spell_tile(old, _text("OUTGOING", "УБИРАЕМ"), true))
-	columns.add_child(_spell_tile(next, _text("INCOMING", "ДОБАВЛЯЕМ"), true))
 
 func _average_ether(delta := 0) -> float:
 	var total := delta

@@ -443,7 +443,7 @@ const RU := {
 	"Softer shadow edges. May reduce performance on slower devices.": "Более мягкие края теней. На медленных устройствах может снизить скорость.",
 	"Terrain detail": "Детали земли",
 	"Enhanced water": "Улучшенная вода",
-	"Adds ripples, sky tint, soft shoreline foam and rain rings to adventure map water.": "Добавляет рябь, оттенок неба, пену у берегов и круги от дождя на воде на карте приключений.",
+	"Adds reflections, ripples, shoreline foam and rain rings to adventure map water.": "Добавляет отражения, рябь, пену у берегов и круги от дождя на воде на карте приключений.",
 	"Subtle surface detail on map terrain and battle ground. May reduce performance on slower devices.": "Лёгкая фактура земли на карте и в бою. На медленных устройствах может снизить скорость.",
 	"Map weather": "Погода на карте",
 	"Rain, snow and other weather particles on adventure maps.": "Дождь, снег и другая погода на картах приключений.",

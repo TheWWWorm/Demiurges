@@ -2,6 +2,7 @@ class_name ELAdventureView
 extends Node3D
 var strategic_session: ELStrategicSession
 signal leave_requested
+signal remake_settings_requested
 signal encounter_requested(hero: int, opponent: int)
 ## F9 / F8: resume the quick save (ELSaveSlots.quick_path).
 signal resume_requested
@@ -1610,6 +1611,7 @@ func _extras_ready() -> bool:
 		extras = null
 		return false
 	extras.hosted_closed.connect(_close_extras)
+	extras.settings_requested.connect(func(): remake_settings_requested.emit())
 	extras.slot_chosen.connect(func(row: Dictionary): slot_requested.emit(row))
 	return true
 
@@ -2643,6 +2645,7 @@ func _build_second_controls() -> void:
 	# EscEncyclopaedia (0x636) pushes the Encyclopaedia over the Esc menu; its OK
 	# or Esc (0xef4) closes only the Encyclopaedia, so the paused Esc menu returns.
 	second_hud.original_options_requested.connect(open_original_options)
+	second_hud.remake_settings_requested.connect(func(): remake_settings_requested.emit())
 	second_hud.encyclopaedia_requested.connect(func():
 		if not open_extras("encyclopaedia", true): notice.text = "The Encyclopaedia art is unavailable.")
 	var compact := _style()
