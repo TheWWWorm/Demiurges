@@ -2,11 +2,10 @@ class_name ELColorless
 extends RefCounted
 ## Etherlords II colourless zones. Each map cell carries up to four level bits
 ## (the map's <clrless> grid); scripts choose the active level with
-## ExSetClrlessLevel (0..3). Paying travel points on a colourless
-## cell drains experience from heroes that are neither White nor tolerant
-## (travel consumption): lost experience grows
-## effective × spent × 0.08 / daily capacity, and the level is settled again
-## . The first drain of a day plays the white-zone effect.
+## ExSetClrlessLevel (0..3). Paying travel points on a colourless cell drains
+## experience unless the actor is tolerant or serves a White commander.
+## Lost experience grows by effective × spent × 0.08 / daily capacity.
+## The first drain of a day plays the white-zone effect.
 
 const RATE := 0.08
 
@@ -17,14 +16,9 @@ static func zone_at(state: ELAdventureSession, cell: Vector2i) -> bool:
 	var level := clampi(state.colorless_level, 0, 3)
 	return ((map.colorless[cell.y * map.width + cell.x] >> level) & 1) == 1
 
-## The hero template's colour (the original reads template +8).
-static func colour(profile: ELProfile, actor: Dictionary) -> String:
-	var row: Dictionary = profile.table("HeroTemplates").get(str(actor.get("name", "")), {})
-	if row.is_empty() and not str(actor.get("shape", "")).is_empty(): row = profile.table("Shapes").get(str(actor.shape), {})
-	return str(row.get("Color", ""))
-
 static func exempt(state: ELAdventureSession, actor: Dictionary) -> bool:
-	return actor.get("colorless_tolerant", false) or colour(state.map.profile, actor) == "White"
+	var owner: Dictionary = state.players.get(int(actor.get("owner", -1)), {})
+	return actor.get("colorless_tolerant", false) or owner.get("color") == "White"
 
 ## Called for each paid chunk of travel points.
 static func drain(state: ELAdventureSession, hero: Dictionary, spent: int) -> void:

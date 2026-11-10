@@ -80,6 +80,10 @@ func actions() -> Array:
 	if original != null: return original.replay.commands
 	return data.get("actions", [])
 
+## Original recordings already remap their local player to side 0.
+func local_side() -> int:
+	return int(data.get("local_side", 0))
+
 ## The comment of the next command, or "".
 func comment() -> String:
 	if not error.is_empty() or done(): return ""
@@ -120,6 +124,7 @@ func set_comment(text: String) -> bool:
 func to_recording() -> ELDuelRecording:
 	var recording := ELDuelRecording.new()
 	recording.edition = profile.id
+	recording.local_side = local_side()
 	var labels: Array = data.get("labels", ["", "", "", ""])
 	for side in 4: recording.labels[side] = str(labels[side]) if side < labels.size() else ""
 	var faces: Array = data.get("faces", [])
@@ -201,6 +206,12 @@ func _pause() -> void:
 
 func _apply(action: Dictionary) -> bool:
 	_running = true
+	var ok := apply_command(duel, action)
+	_running = false
+	return ok
+
+## Playback and network play both enter through the ordinary duel commands.
+static func apply_command(duel: ELDuel, action: Dictionary) -> bool:
 	var ok := false
 	var side := int(action.side)
 	match String(action.kind):
@@ -216,13 +227,13 @@ func _apply(action: Dictionary) -> bool:
 			ok = duel.attacks.has(id) == (action.kind == "retreat") and duel.toggle_attack(id)
 		"block": ok = duel.assign_block(int(action.id), int(action.target))
 		"ability": ok = duel.use_ability(int(action.id), String(action.ability), int(action.get("target", -1)), int(action.get("enchantment", -1)), int(action.get("amount", -1)))
+		"console": ok = duel.console_action(action)
 		"surrender":
 			if duel.phase != ELDuel.Phase.FINISHED:
 				duel.heroes[side].health = 0
 				duel._check_winner()
 				duel.changed.emit()
 				ok = true
-	_running = false
 	return ok
 
 ## ELDuel gate: only the player's own recorded actions may run.

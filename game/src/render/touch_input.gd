@@ -19,6 +19,12 @@ const DOUBLE_TAP_MS := 330
 ## (for example no edge scrolling under a finger).
 static var enabled := false
 
+func holding() -> bool:
+	return enabled and _mode == "hold"
+
+func hold_position() -> Vector2:
+	return _last
+
 var fingers: Dictionary = {}
 var _primary := -1
 var _start := Vector2.ZERO

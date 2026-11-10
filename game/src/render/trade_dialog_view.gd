@@ -69,6 +69,7 @@ var other := -1
 var mode := NEW
 ## The offer being shown (ELDiplomacy trade layout) and the two sides.
 var offer: Dictionary = {}
+var terms_key := ""
 var mine: Dictionary = {}
 var theirs: Dictionary = {}
 var canvas: ELDiplomacyView.Canvas
@@ -159,10 +160,11 @@ func layout(factor: float, right_shift: float) -> void:
 	canvas.size = SIZE
 
 ## Shows an offer: NEW drafts one, RECEIVED answers one, SENT reviews one.
-func open(shown: Dictionary, shown_mode: int) -> void:
+func open(shown: Dictionary, shown_mode: int, prior_key := "") -> void:
 	if shown.is_empty(): return
 	offer = shown
 	mode = shown_mode
+	terms_key = "" if mode == NEW else prior_key if not prior_key.is_empty() else ELDiplomacy.offer_key(offer)
 	other = int(offer.to) if int(offer.from) == player else int(offer.from)
 	mine = ELDiplomacy.trade_side_of(offer, player)
 	theirs = ELDiplomacy.trade_side_of(offer, other)
@@ -204,7 +206,7 @@ static func artifacts_of(session: ELAdventureSession, owner: int) -> Array:
 
 func refresh() -> void:
 	if offer.is_empty(): return
-	var editable := mode != SENT
+	var editable := mode != SENT and not view.order_pending
 	for resource in ELDiplomacy.TRADE_RESOURCES:
 		minus[0][resource].disabled = not editable or int(mine.resources[resource]) == 0
 		minus[1][resource].disabled = not editable or int(theirs.resources[resource]) == 0
@@ -222,9 +224,10 @@ func refresh() -> void:
 	buttons.TDScrollLD.disabled = true
 	buttons.TDScrollRD.disabled = true
 	var changed := ELDiplomacy.trade_changed(offer)
-	buttons.TDOK1.disabled = not changed
-	buttons.TDOK2.disabled = changed
-	buttons.TDSend2.disabled = not changed
+	buttons.TDOK1.disabled = view.order_pending or not changed
+	buttons.TDOK2.disabled = view.order_pending or changed
+	buttons.TDSend2.disabled = view.order_pending or not changed
+	for control: String in ["TDLeave2", "TDLeave3", "TDCancel1", "TDCancel2", "TDCancel3"]: buttons[control].disabled = view.order_pending
 	canvas.queue_redraw()
 
 func amount_center(side: int, resource: int) -> Vector2:
@@ -299,16 +302,25 @@ func _toggle(side: Dictionary, flag: String) -> void:
 
 ## OK of a new offer and Send of a received one send it from this player.
 func _send() -> void:
+	if view.strategic_session != null:
+		view.submit_order(["trade_offer", other, terms_key] + mine.resources + theirs.resources, close)
+		return
 	var sent := {"from": player, "to": other, "give": mine, "take": theirs}
 	ELDiplomacy.send_trade(state, sent)
 	close()
 
 func _accept() -> void:
+	if view.strategic_session != null and mode == RECEIVED:
+		view.submit_order(["trade_accept", other, terms_key], close)
+		return
 	if mode == RECEIVED: ELDiplomacy.accept_trade(state, other, player)
 	close()
 
 ## Cancel declines a received offer or withdraws a sent one.
 func _decline() -> void:
+	if view.strategic_session != null and mode != NEW:
+		view.submit_order(["trade_remove", other, terms_key], close)
+		return
 	if mode != NEW: ELDiplomacy.withdraw_trade(state, player, other)
 	close()
 

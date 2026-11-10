@@ -50,6 +50,49 @@ static func definition(profile: ELProfile, item: Dictionary) -> Dictionary:
 static func params(item: Dictionary) -> String:
 	return str(ELXml.value(item.get("node", {}), "params")).strip_edges()
 
+static func is_tunnel(item: Dictionary) -> bool:
+	return item.get("group") == "additional_buildings" and item.get("type") in ["tunnelblack", "tunnelblue", "tunnelgreen", "tunnelred"]
+
+## Each authored mouth owns its own off-map guard before the chapter script
+## registers loot. The original draws a template even from a one-entry list.
+static func initialize_tunnel_guards(state: ELAdventureSession, fresh: bool) -> void:
+	for mouth: Dictionary in state.objects.values():
+		if not is_tunnel(mouth): continue
+		if mouth.has("guard"):
+			var held := state.object(mouth.guard)
+			if not held.is_empty() and not held.alive: mouth.guard = -1
+			continue
+		mouth.guard = -1
+		var candidates: Array[String] = []
+		for template: String in params(mouth).split(";").slice(1):
+			template = template.strip_edges()
+			if state.map.mobs.has(template): candidates.append(template)
+		if candidates.is_empty(): continue
+		var pick := ELAdditionalBuildings._random(state) % candidates.size() if fresh else 0
+		mouth.guard = state.create_hero(0, candidates[pick], -1, -1, false)
+
+## Earlier saves registered scripted loot against the entrance itself.
+static func restore_tunnel_loot(state: ELAdventureSession) -> void:
+	var registrations: Variant = state.vm.globals.get("g_LootSpellCorpse")
+	if not registrations is ELLuaVM.Table: return
+	for index in int(state.vm.globals.get("g_LootSpellCorpseCount", 0)):
+		var key := float(index * 2 + 1)
+		var mouth := state.object(registrations.values.get(key))
+		if not is_tunnel(mouth): continue
+		var guard := state.object(mouth.get("guard"))
+		if not guard.is_empty() and int(guard.get("tunnel_source", mouth.uid)) == mouth.uid:
+			registrations.values[key] = float(guard.uid)
+
+## A victory clears every matching mouth; only the fought defender gets
+## the encounter's kill hook and its own reward.
+static func clear_tunnel_guards(state: ELAdventureSession, source: Dictionary) -> void:
+	var route := params(source).get_slice(";", 0)
+	for mouth: Dictionary in state.objects.values():
+		if not is_tunnel(mouth) or params(mouth).get_slice(";", 0) != route: continue
+		var guard := state.object(mouth.get("guard"))
+		if guard.get("alive", false): state._native([float(guard.uid)], "ExKillHero")
+		mouth.guard = -1
+
 ## The shrine's specialization: a valid four-letter code, otherwise none.
 static func shrine_code(profile: ELProfile, item: Dictionary) -> String:
 	var code := params(item)
@@ -121,7 +164,7 @@ static func use(director: ELAdventureDirector, actor: Dictionary, item: Dictiona
 			state.event.emit({"kind": "object_killed", "id": item.uid})
 			text = first_placeholder(profile.text(key), prisoner_name(state, item))
 	state.event.emit({"kind": "building_used", "id": item.uid, "hero": actor.uid, "player": actor.owner, "message": key})
-	if int(actor.owner) == state.current_player:
+	if int(actor.owner) == 1:
 		director.notice = text
 		director.presentation.emit({"kind": "building_message", "hero": actor.uid, "building": item.uid, "title": profile.text(str(row.get("ELKName", item.name))),
 			"text": text, "resources": [], "skill": "", "key": key})

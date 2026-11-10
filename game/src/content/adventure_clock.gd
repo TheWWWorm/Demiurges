@@ -33,21 +33,27 @@ static func use_points(state: ELAdventureSession, hero: Dictionary, amount: int)
 
 static func end_day(state: ELAdventureSession, hero: Dictionary) -> bool:
 	if state.map.profile.id != "el2" or hero.is_empty() or not hero.get("alive", false) or hero.get("type") not in ["hero", "monster"]: return false
-	hero.ap = int(hero.travel_capacity)
-	hero.travel_day += 1
+	_refill_day(state, hero)
 	if hero.uid == state.main_hero:
 		state.day += 1
 		hero.travel_day = state.day
 		for other: Dictionary in state.objects.values():
 			if other.uid == hero.uid or not other.alive or other.get("type") not in ["hero", "monster"]: continue
-			other.ap = int(other.travel_capacity)
-			other.travel_day += 1
+			_refill_day(state, other)
 		ELBattlegrounds.new_day(state)
 		ELResourceSites.settle_income(state, true)
 		# CCloseBowls runs before the begin-of-turn fog recompute.
 		ELFog.close_eyes(state)
 		state.event.emit({"kind": "day_changed", "day": state.day})
 	return true
+
+## Ending a day spends the remaining travel on the current tile before refilling.
+static func _refill_day(state: ELAdventureSession, hero: Dictionary) -> void:
+	var remaining := int(hero.ap)
+	hero.ap = 0
+	ELColorless.drain(state, hero, remaining)
+	hero.ap = int(hero.travel_capacity)
+	hero.travel_day += 1
 
 static func end_player_day(state: ELAdventureSession, player: int) -> bool:
 	for hero: Dictionary in state.objects.values():

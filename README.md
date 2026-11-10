@@ -45,6 +45,12 @@ Download the package for your system from the [Releases](https://github.com/TheW
 
 The [**Demiurges wiki**](https://demiurges.wwworm.com/wiki/) is free to read without game files, an account or the engine. Its encyclopedia has a page for every creature (with a picture), sorcery, enchantment, artifact, skill and specialization of both games. Its guides explain installing, controls, combat rules and phases, spells and creatures, the campaigns, duels, options and the differences from the originals, in English and [Russian](https://demiurges.wwworm.com/wiki/?lang=ru). Good starting points: [installing the game files](https://demiurges.wwworm.com/wiki/?page=installing), [controls](https://demiurges.wwworm.com/wiki/?page=controls), [how a battle works](https://demiurges.wwworm.com/wiki/?page=combat) and [turn and phases](https://demiurges.wwworm.com/wiki/?page=combat-phases). The same articles open in the game: **Wiki** on the main menu or **F1** on any screen. See [the wiki guide](docs/wiki.md) to edit or rebuild it.
 
+Creature pages in the in-game wiki can play the installed game's attack, death, and other available animations with their own sounds.
+
+## Ether Expedition
+
+With Etherlords II installed, select **Expedition** on the main menu for a three-act deck-building run. Pick routes, fight original enemies and bosses, and use rewards, camps, and events to change your spellbook. Elite victories and the first two guardians offer extra spell choices, with priority given to rare and unique spells. **Resume expedition** restores the current room and the last settled combat action.
+
 ## Getting started (desktop)
 
 See also [Installing the game files](https://demiurges.wwworm.com/wiki/?page=installing) in the wiki.
@@ -83,7 +89,7 @@ The engine is still in development. Things you may notice:
 - Computer opponents follow the original's approach but are not an exact copy of its decisions. As in the original, they never answer alliance or trade offers.
 - Etherlords II map particle effects use approximate sizes and blending.
 - The campaigns are tested screen by screen and system by system, not yet by playing every chapter from start to finish. Please report anything that blocks progress.
-- There is no network multiplayer. Local hot seat duels work.
+- Native builds support LAN and direct-IP duels in both games. Etherlords I also has a strategic preview for two human commanders. See the [multiplayer guide](https://demiurges.wwworm.com/wiki/?page=duel) for supported map actions and connection details.
 - Saves and replays of the original games cannot be loaded; the engine keeps its own.
 - Touch controls have not yet been tried on real phones and tablets, only in testing. The interface keeps the original layout, so on a small phone screen text and buttons are small.
 
@@ -98,7 +104,8 @@ The original controls work as in the games. A few useful keys:
 | Key | Battle | Map |
 |---|---|---|
 | Left click | choose a spell, creature or target | move, talk, visit or attack |
-| Space | end the current phase | continue a conversation |
+| Space | skip the current presentation | continue a conversation |
+| Ctrl+E (EL1) / Tab (EL2) | end the current phase | — |
 | Esc | cancel targeting, or open the game menu | close a window, or open the game menu |
 | F5 / F9 | quick save / quick load | quick save / quick load |
 | Right drag, wheel | turn and zoom the camera | turn and zoom the camera |
@@ -120,6 +127,8 @@ The original controls work as in the games. A few useful keys:
 
 A small bar at the top of the screen gives **Back** (Esc) everywhere, **Camera** (reset) in battle and **Save** / **Load** (quick save and load) on the map. On Android the Back button also works as Esc.
 
+Press the **grave/tilde** key under **Esc** (**Ё** on a Russian keyboard), press **F10**, or tap **Console** on a touch device to open the developer console. In a mission or local battle, choose **Enable commands** or enter `EtherRevelation`. **Help** lists the available commands. **Tab** completes a suggestion, **Enter** runs it, and the up and down arrows recall earlier commands. Use **Find** to filter output and **Copy** to copy it. Press **Esc** or the console key to close the panel. Game commands are disabled in network duels.
+
 ## Saves and settings
 
 Saves and settings are kept in the engine's user folder:
@@ -132,7 +141,7 @@ Saves and settings are kept in the engine's user folder:
 
 The folder keeps its earlier name, `Etherlords Duel`, so existing saves continue to work.
 
-In **Remake settings**, **Terrain detail** adds subtle texture contrast and surface relief to adventure-map ground, and fine grain from the original detail textures to battle ground where available. **Soft shadows** smooths sun-shadow edges in battles and on Etherlords II maps. Both start off and can be changed during play; leave them off on devices where they reduce performance.
+In **Remake settings**, **Terrain detail** adds subtle texture contrast and surface relief to adventure-map ground, and fine grain from the original detail textures to battle ground where available. **Enhanced water** adds ripples, a subtle sky tint and foam along adventure-map shores. **Soft shadows** smooths sun-shadow edges in battles and on Etherlords II maps. All three start off and can be changed during play.
 
 **Path-traced lighting** (Remake settings › Graphics) adds real shadows, sky light, light bounced between surfaces and light from fire and spells, on maps and in battles. It needs the **Forward+ (Vulkan)** renderer, chosen on the same tab (the game restarts with it), and a graphics card with ray tracing. **F7** switches it during play. The remake's own screens are shown in the language of your game: Russian for a Russian copy, English otherwise.
 

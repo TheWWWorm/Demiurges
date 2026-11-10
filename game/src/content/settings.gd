@@ -6,7 +6,8 @@ extends RefCounted
 ## settings. Call use_edition() when the active game changes.
 ##
 ## Shared remake settings: "ambience" volume, "shadows", optional "soft_shadows",
-## optional "terrain_detail" on maps and in battles, second-game
+## optional "terrain_detail" on maps and in battles, optional "enhanced_water"
+## on adventure maps, second-game
 ## adventure "weather" particles, "helper_overlay" (remake-only English readouts,
 ## hints and shortcut buttons over the original screens; off by default),
 ## "antialiasing" (-1 automatic: 2x multisampling unless the renderer is a
@@ -29,7 +30,7 @@ extends RefCounted
 ## "visual_log". Several have no remake system yet and are only stored.
 ## "tutorial_events": the first game's shown tutorial events, one '0'/'1'
 ## per event id (settings.ini TutorialEvents); "show_tutorial" gates them.
-const SHARED := {"ambience": 0.55, "shadows": true, "soft_shadows": false, "weather": true, "helper_overlay": false, "antialiasing": -1, "sharpening": 1, "terrain_detail": false, "discord_activity": true, "renderer": 0, "path_tracing": false, "show_fps": false}
+const SHARED := {"ambience": 0.55, "shadows": true, "soft_shadows": false, "weather": true, "helper_overlay": false, "antialiasing": -1, "sharpening": 1, "terrain_detail": false, "enhanced_water": false, "discord_activity": true, "renderer": 0, "path_tracing": false, "show_fps": false}
 const EDITION := {"music": 0.55, "effects": 0.8, "movies": 2, "blood": true, "map_tooltips": true, "autosave": true,
 	"heroes_voices": true, "ambient_sounds": true, "adventure_fast": false, "animated_objects": true,
 	"mouse_rotation": 1.0, "keyboard_rotation": 1.0, "mouse_scroll": 1.0, "keyboard_scroll": 1.0,

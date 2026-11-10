@@ -50,6 +50,21 @@ static func take_problem(state: ELAdventureSession, hero: Dictionary, item: Dict
 	if item.group == "global_spells" and str(item.name) not in [FULL, PART]: return "This scroll is unknown."
 	return ""
 
+static func _pickup_message(state: ELAdventureSession, hero: Dictionary, item: Dictionary) -> Dictionary:
+	var profile := state.map.profile
+	if item.group == "artefacts":
+		return {"key": "T_MB_TAKE_ARTIFACT", "text": ELAdditionalBuildings.format(profile, "T_MB_TAKE_ARTIFACT", [artifact_title(profile, str(item.name))]), "artifact": str(item.name)}
+	var code := resolve(profile, scroll_spells(profile, item), str(state.players[int(hero.owner)].get("color", "")))
+	return {"key": "T_MB_TAKE_GS", "text": ELAdditionalBuildings.format(profile, "T_MB_TAKE_GS", [spell_title(profile, code)]), "spell": code}
+
+static func pickup_notice(state: ELAdventureSession, hero: Dictionary, item: Dictionary) -> Dictionary:
+	return _notice(hero, _pickup_message(state, hero, item))
+
+static func _notice(hero: Dictionary, message: Dictionary) -> Dictionary:
+	# The original MessageBox shows the artifact or spell picture above the text.
+	var picture := ["artifact", message.artifact] if message.has("artifact") else ["global_spell", message.spell]
+	return {"kind": "building_message", "hero": hero.uid, "building": -1, "title": "", "text": message.text, "resources": [], "skill": "", "key": message.key, "box": "first", "picture": picture}
+
 ## Called from the use stage once the hero stands beside the object.
 static func take(director: ELAdventureDirector, hero: Dictionary, item: Dictionary) -> Dictionary:
 	var state := director.state
@@ -60,18 +75,15 @@ static func take(director: ELAdventureDirector, hero: Dictionary, item: Dictiona
 	if not problem.is_empty():
 		if local: director.presentation.emit({"kind": "notice", "text": problem})
 		return {}
-	var message := {}
+	var message := _pickup_message(state, hero, item)
 	if item.group == "artefacts":
 		if not hero.has("artifacts"): hero.artifacts = []
 		# Taken artifacts are fully charged; charges are spent only inside a battle.
 		hero.artifacts.append({"name": str(item.name), "charges": int(profile.table("Artefacts")[item.name].get("MaxCharges", 0))})
-		message = {"key": "T_MB_TAKE_ARTIFACT", "text": ELAdditionalBuildings.format(profile, "T_MB_TAKE_ARTIFACT", [artifact_title(profile, str(item.name))]), "artifact": str(item.name)}
 	else:
 		if not hero.has("gs_items"): hero.gs_items = []
 		var codes := scroll_spells(profile, item)
 		hero.gs_items.append({"kind": str(item.name), "spells": codes})
-		var code := resolve(profile, codes, str(state.players[int(hero.owner)].get("color", "")))
-		message = {"key": "T_MB_TAKE_GS", "text": ELAdditionalBuildings.format(profile, "T_MB_TAKE_GS", [spell_title(profile, code)]), "spell": code}
 	item.alive = false
 	item.visible = false
 	item.enabled = false
@@ -81,9 +93,7 @@ static func take(director: ELAdventureDirector, hero: Dictionary, item: Dictiona
 	state.event.emit({"kind": "pickup_taken", "id": item.uid, "hero": hero.uid, "player": hero.owner, "message": message.key})
 	if local:
 		director.notice = message.text
-		# The original MessageBox shows the artifact or spell picture above the text.
-		var picture := ["artifact", message.artifact] if message.has("artifact") else ["global_spell", message.spell]
-		director.presentation.emit({"kind": "building_message", "hero": hero.uid, "building": -1, "title": "", "text": message.text, "resources": [], "skill": "", "key": message.key, "box": "first", "picture": picture})
+		director.presentation.emit(_notice(hero, message))
 	return message
 
 ## Authored castle spells of a player: the <global_spells> list in its map entry.

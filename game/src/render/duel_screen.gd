@@ -633,8 +633,7 @@ func new_preset() -> void:
 	var faction := "Red"
 	var chosen := pick(int(s.target))
 	if not chosen.is_empty(): faction = String(chosen.faction)
-	open_editor({"id": "", "name": "", "builtin": false, "faction": faction, "resource_level": int(s.level), "level": 1, "specialization": "NONE",
-		"skills": {}, "cards": [], "runes": [], "reserve": {}, "artifacts": [], "deck": ""}, "")
+	open_editor(ELDuelPresets.blank(faction, int(s.level)), "")
 
 func edit_preset() -> void:
 	var chosen := pick(int(state().target))
@@ -764,21 +763,32 @@ func message_open() -> bool:
 
 # --- Preset editor -------------------------------------------------------------
 
-func open_editor(preset: Dictionary, source: String) -> void:
+func open_editor(preset: Dictionary, source: String, on_close := Callable(), resource_cap := 0) -> void:
 	var copy := ELDuelPresets.normalize(preset)
 	copy.name = String(preset.get("name", ""))
 	var builtin := bool(preset.get("builtin", false))
 	# The first game opens a built-in preset for viewing; the second can save
 	# a changed built-in preset under a new name only.
 	edit = {"preset": copy, "source": source, "builtin": builtin, "view_only": builtin and el1(), "tab": 0, "slot": -1, "item": -1, "art": -1, "owned": -1,
-		"since_race": _race_contents(copy)}
+		"since_race": _race_contents(copy), "on_close": on_close, "resource_cap": resource_cap}
 	menu.show_screen("duel_editor")
 
 func cancel_editor() -> void:
 	if message_open():
 		close_message()
 		return
+	_close_editor()
+
+func _close_editor(saved_id := "") -> void:
+	var on_close: Callable = edit.get("on_close", Callable())
 	edit.clear()
+	if on_close.is_valid():
+		on_close.call(saved_id)
+		return
+	if not saved_id.is_empty():
+		var s := state()
+		s.picks[int(s.target)] = saved_id
+		s.portraits[int(s.target)] = -1
 	menu.show_screen("duel")
 
 func editor_preset() -> Dictionary:
@@ -888,9 +898,15 @@ func change_hero_level(step: int) -> void:
 
 func change_resource_level(step: int) -> void:
 	if edit.view_only: return
-	var levels := ELDuelCosts.resource_levels(profile())
+	var levels := _editor_resource_levels()
 	editor_preset().resource_level = clampi(int(editor_preset().resource_level) + step, levels.x, levels.y)
 	update_editor()
+
+func _editor_resource_levels() -> Vector2i:
+	var levels := ELDuelCosts.resource_levels(profile())
+	var cap: int = edit.get("resource_cap", 0)
+	if cap > 0: levels.y = mini(levels.y, cap)
+	return levels
 
 ## Spells the editor offers: own colour (and the second game's neutral White).
 func spell_choices() -> Array[String]:
@@ -1102,7 +1118,7 @@ func update_editor() -> void:
 		status.text = "View only: built-in presets cannot be changed." if edit.view_only else ("\n" if el1() else "  ·  ").join(problems.slice(0, 2 if el1() else 4).map(describe_error))
 		status.add_theme_color_override("font_color", ELFrontMenu.BODY_INK if edit.view_only else RED)
 	var hero_levels := ELDuelCosts.hero_levels(profile())
-	var res_levels := ELDuelCosts.resource_levels(profile())
+	var res_levels := _editor_resource_levels()
 	for pair: Array in [["DecHeroLevel", int(p.level) <= hero_levels.x], ["IncHeroLevel", int(p.level) >= hero_levels.y],
 			["DecResLevel", int(p.resource_level) <= res_levels.x], ["IncResLevel", int(p.resource_level) >= res_levels.y]]:
 		var control: String = ("EH" if el1() else "EP") + pair[0]
@@ -1228,20 +1244,17 @@ func save_editor() -> void:
 		var text := profile().text("T_MB_WRONG_PRESET_NAME")
 		show_message(text if not text.begins_with("T_MB") else "A preset name must not be empty or contain: | \\ / : * ? \" < > . [ ] , ; =")
 		return
-	for preset: Dictionary in pool:
-		if bool(preset.get("builtin", false)) and String(preset.name) == name and not el1():
-			show_message(profile().text("T_MB_CANT_OVERWRITE_PRESET"))
-			return
+	if not el1():
+		for preset: Dictionary in ELDuelPresets.shipped(profile()):
+			if String(preset.name) == name:
+				show_message(profile().text("T_MB_CANT_OVERWRITE_PRESET"))
+				return
 	var write := func():
 		var failure := ELDuelPresets.save_user(profile(), editor_preset(), name)
 		if not failure.is_empty():
 			show_message("The preset could not be saved (%s)." % failure)
 			return
-		var s := state()
-		s.picks[int(s.target)] = "user:" + name
-		s.portraits[int(s.target)] = -1
-		edit.clear()
-		menu.show_screen("duel")
+		_close_editor("user:" + name)
 	if ELDuelPresets.user_exists(profile(), name) and edit.source != "user:" + name:
 		show_message(profile().text("T_MB_OVERWRITE_PRESET"), write, true)
 	else: write.call()
@@ -1450,7 +1463,15 @@ func _build_el2_editor() -> void:
 	_auto("EPIncHeroLevel", change_hero_level.bind(1))
 	_value("hero_level", "", _rect("EPDigLevel"))
 	_value("health", "", _rect("EPDigLife"))
-	_text("EPHdrResLev", null, ELFrontMenu.TITLE_INK, HORIZONTAL_ALIGNMENT_LEFT)
+	var resource_header := _text("EPHdrResLev", null, ELFrontMenu.TITLE_INK, HORIZONTAL_ALIGNMENT_RIGHT)
+	if resource_header != null:
+		var bounds := _rect("EPHdrResLev")
+		var font := resource_header.get_theme_font("font")
+		var size_px := resource_header.get_theme_font_size("font_size")
+		var width := font.get_string_size(resource_header.text, HORIZONTAL_ALIGNMENT_LEFT, -1, size_px).x
+		if width > bounds.size.x:
+			resource_header.add_theme_font_size_override("font_size", maxi(1, floori(size_px * bounds.size.x / width)))
+		resource_header.size = bounds.size
 	_auto("EPDecResLevel", change_resource_level.bind(-1))
 	_auto("EPIncResLevel", change_resource_level.bind(1))
 	_value("resource_level", "", _rect("EPDigResLev"))
@@ -1661,14 +1682,49 @@ func _update_el2_misc() -> void:
 # --- Round result / duel summary ----------------------------------------------
 
 ## Shows the RoundResult panel over the battle after a round
-## (CDuelIntermediateScreen). `last` is that round from side 0's view: win 1,
+## (CDuelIntermediateScreen). `last` is that round from the chosen side's view: win 1,
 ## draw 0, loss -1. The second game shows it after every round: between rounds
 ## (header T_RR_HDR_END_OF_ROUND, verdict T_RR_ROUND_*, Surrender = RRCancel)
 ## and, with `final`, at the end of the match (T_RR_HDR_END_OF_DUEL, the
 ## match verdict T_RR_DUEL_*, and "Save duel replay" in RRCancel's place).
-func show_round(duel_match: ELDuelMatch, names: Array, last := 0, final := false) -> void:
-	round_info = {"match": duel_match, "names": names, "last": last, "final": final}
+func show_round(duel_match: ELDuelMatch, names: Array, last := 0, final := false, perspective := 0, edit_deck := Callable(), deck_seconds := -1) -> void:
+	round_info = {"match": duel_match, "names": names, "last": last, "final": final, "perspective": perspective,
+		"edit_deck": edit_deck, "deck_seconds": deck_seconds}
 	menu.show_screen("duel_round")
+
+func wait_for_network_round() -> void:
+	round_info.waiting = true
+	menu.show_screen("duel_round")
+
+func show_deck_time(seconds: int) -> void:
+	var label: Label = menu.labels.get("deck_change_clock")
+	if label != null and seconds >= 0: label.text = "%02d:%02d" % [seconds / 60, seconds % 60]
+
+func _round_deck_controls() -> void:
+	var edit: Callable = round_info.edit_deck
+	var seconds: int = round_info.deck_seconds
+	if not edit.is_valid() and seconds < 0: return
+	var controls := HBoxContainer.new()
+	controls.alignment = BoxContainer.ALIGNMENT_CENTER
+	controls.position = Vector2(_rect("RRCaption").get_center().x - 160.0, _rect("RROK").end.y + 24.0)
+	controls.size.x = 320
+	menu.canvas.add_child(controls)
+	if edit.is_valid():
+		var button := Button.new()
+		button.text = menu.tr("Change deck")
+		button.pressed.connect(edit)
+		controls.add_child(button)
+		menu.buttons["network_deck"] = button
+	if seconds >= 0:
+		var time := Label.new()
+		time.custom_minimum_size.x = 64
+		time.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		time.add_theme_font_size_override("font_size", 18)
+		time.add_theme_color_override("font_shadow_color", Color.BLACK)
+		time.add_theme_constant_override("outline_size", 4)
+		controls.add_child(time)
+		menu.labels["deck_change_clock"] = time
+		show_deck_time(seconds)
 
 ## Final duel summary after the last round of a match of two or more rounds:
 ## the T_MB_DUEL_RESULT_1..3 message box.
@@ -1720,6 +1776,8 @@ func build_round() -> void:
 	var final := bool(round_info.get("final", false))
 	var pattern := menu._caption("RRCaption")
 	if not el1(): pattern = profile().text("T_RR_HDR_END_OF_DUEL" if final else "T_RR_HDR_END_OF_ROUND").strip_edges()
+	var waiting := bool(round_info.get("waiting", false))
+	if waiting: pattern = menu.tr("Waiting for the other player…")
 	_text("RRCaption", pattern % [m.played, m.rounds] if pattern.count("%d") == 2 else pattern)
 	var boxes := _round_boxes()
 	for side in 2:
@@ -1740,11 +1798,13 @@ func build_round() -> void:
 	# Only the second game's panel carries a round verdict (RRRoundResult).
 	var last := int(round_info.get("last", 0))
 	if not el1():
-		var key: String = (["T_RR_DUEL_LOSE", "T_RR_DUEL_DRAW", "T_RR_DUEL_WIN"][m.result(0) + 1]) if final else (["T_RR_ROUND_LOSE", "T_RR_ROUND_DRAW", "T_RR_ROUND_WIN"][last + 1])
+		var key: String = (["T_RR_DUEL_LOSE", "T_RR_DUEL_DRAW", "T_RR_DUEL_WIN"][m.result(int(round_info.perspective)) + 1]) if final else (["T_RR_ROUND_LOSE", "T_RR_ROUND_DRAW", "T_RR_ROUND_WIN"][last + 1])
 		var verdict := profile().text(key).strip_edges()
 		_text("RRRoundResult", verdict % m.played if verdict.count("%d") == 1 else verdict, ELFrontMenu.INK_HOVER)
 	# RROK/RRCancel have no CtrlTt tooltip text in either game.
-	_button("RROK", func(): menu.duel_round_closed.emit(true))
+	var ready := _button("RROK", func(): menu.duel_round_closed.emit(true))
+	if ready != null: ready.disabled = waiting
+	if not final and not waiting: _round_deck_controls()
 	if el1() or not final:
 		_button("RRCancel", func(): menu.duel_round_closed.emit(false))
 	if el1():

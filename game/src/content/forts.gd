@@ -67,13 +67,13 @@ static func garrison_of(state: ELAdventureSession, actor: Dictionary) -> Diction
 	var fort := state.object(actor.get("fort", -1))
 	return fort if fort.get("type") == "fort" and int(fort.garrison) == int(actor.uid) else {}
 
-static func enter_problem(state: ELAdventureSession, hero_id: int, fort_id: int) -> String:
+static func enter_problem(state: ELAdventureSession, hero_id: int, fort_id: int, assault := false) -> String:
 	var hero := state.object(hero_id)
 	var fort := state.object(fort_id)
 	if fort.get("type") != "fort" or not fort.alive or not fort.visible or not fort.enabled: return "This fort is unavailable."
 	if hero.is_empty() or hero.type != "hero" or not hero.alive or not state.players.has(hero.owner): return "This hero cannot enter a fort."
 	if hero.get("fortified", false): return "This hero is already in a fort."
-	if fort.garrison >= 0: return "This fort is already occupied."
+	if fort.garrison >= 0 and not assault: return "This fort is already occupied."
 	return ""
 
 ## Occupation happens in the use phase. An occupied fort ignores the

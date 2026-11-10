@@ -213,14 +213,15 @@ func present(speech: Dictionary, state: ELAdventureSession) -> void:
 	var shift: Array = speech.get("offset", [0.0, 0.0])
 	offset = Vector2(float(shift[0]), float(shift[1])) if shift.size() > 1 else Vector2.ZERO
 	body.text = str(speech.get("text", ""))
-	var actor := state.object(int(speech.get("actor", -1))) if speech.has("actor") else {}
-	var hero := actor if not actor.is_empty() and actor.get("type") == "hero" else {}
+	var hero := ELSecondNotebook.speaker(state, speech.get("actor", -1))
 	title.text = str(speech.get("title", "")) if not hero.is_empty() else hud.text("T_UNKNOWN_HERO_NAME")
 	if title.text.is_empty() and not hero.is_empty(): title.text = str(hero.get("name", ""))
 	# Speaker lines name the speaker with a trailing colon (recorded original footage).
 	if speaker_box and not title.text.is_empty() and not title.text.ends_with(":"): title.text += ":"
 	var face := UNKNOWN_FACE
-	if not hero.is_empty(): face = int(hud._art.resolve(hero).get("row", {}).get("Face", UNKNOWN_FACE))
+	if not hero.is_empty():
+		var actor_face := ELSecondNotebook.face_of(state, hero)
+		if actor_face >= 0: face = actor_face
 	portrait.texture = state.map.profile.portrait(face) if speaker_box else null
 	for button: BaseButton in buttons.values(): button.hide()
 	if style == "loot":

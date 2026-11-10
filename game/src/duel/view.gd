@@ -4,6 +4,7 @@ extends Node3D
 const ACCENT := Color("e0af68")
 const INK := Color("e5e3da")
 const MUTED := Color("a8b4b1")
+const TRANSLATION_USERS := &"remake_translation_users"
 var profiles: Dictionary = {}
 var profile: ELProfile:
 	set(value):
@@ -19,6 +20,7 @@ var models: Dictionary = {}
 var labels: Dictionary = {}
 ## The last rules record of each creature shown, for rows during playback.
 var _last_creature: Dictionary = {}
+var _before_turn_cleanup: Dictionary = {}
 var homes: Dictionary = {}
 var ui: Control
 var header: HBoxContainer
@@ -42,6 +44,8 @@ var end_face: ELCutPartButton
 var attack_button: ELCutPartButton
 ## The battle tooltips in the original frame (ELCombatTooltip).
 var combat_tip: ELCombatTooltip
+var game_console: ELGameConsole
+var touch_input: ELTouchInput
 ## Auto combat: the computer plays the human side until stopped (CombatMenu3
 ## starts it, AutoCombatOff or CombatMenu3 again stops it).
 var auto_combat := false
@@ -167,7 +171,8 @@ var _trigger_hit: Dictionary = {}
 ## Hit reactions waiting for their effect's cue frame, per figure id; the
 ## serial drops reactions of an earlier battle.
 var _hits_waiting: Dictionary = {}
-var _hit_serial := 0
+var _battle_cues: Dictionary[int, Dictionary] = {}
+var _next_battle_cue := 0
 ## Live floating captions per figure, stacked so they never overlap.
 var _floating: Dictionary = {}
 var campaign_setup: ELCampaignSetup
@@ -179,6 +184,24 @@ var movie_layer: CanvasLayer
 var movie_player: ELMoviePlayer
 ## Original Duel mode match in progress (ELDuelMatch); null outside it.
 var duel_match: ELDuelMatch
+var network_duel: ELNetworkDuel
+var strategic_session: ELStrategicSession
+var _strategic_lobby: ELStrategicLobby
+var _strategic_lan := false
+var _strategic_playable := false
+var _strategic_clock: ELFirstClock
+var _network_clock: ELFirstClock
+var _network_deck: ELNetworkDeck
+var _network_battle_chat: ELNetworkChat
+var _network_chat_button: Button
+var _network_unread := 0
+var _network_lobby: ELNetworkLobby
+var _network_editor_open := false
+var expedition_run: ELExpeditionRun
+var _expedition_screen: ELExpeditionScreen
+var _expedition_layer: CanvasLayer
+var _expedition_battle: ELDuel
+var _expedition_save_error := ""
 ## Plays combat resolution blow by blow (ELMeleePlayback); lives with the stage.
 var melee: ELMeleePlayback
 var front_line: Array[int] = []
@@ -221,6 +244,9 @@ var _enemy_banner_shown := false
 var _control_tips: Dictionary = {}
 var cursor_name := ""
 
+func _enter_tree() -> void:
+	add_to_group(TRANSLATION_USERS)
+
 func _ready() -> void:
 	# The window close button quits through ELAudio.quiet_quit (only when
 	# this is the running game, not a scripted check).
@@ -238,7 +264,11 @@ func _ready() -> void:
 	ELSettings.apply_display(get_viewport(), settings.values)
 	# Touch gestures and the touch bar; inactive without a touch screen.
 	add_to_group("touch_camera")
-	add_child(ELTouchInput.new())
+	touch_input = ELTouchInput.new()
+	add_child(touch_input)
+	game_console = ELGameConsole.new()
+	game_console.game = self
+	add_child(game_console)
 	# Options gamma over every screen (front end, map, battle, movies).
 	var gamma := ELGammaLayer.new()
 	gamma.settings = settings
@@ -291,7 +321,7 @@ func _offer_crash_report() -> void:
 ## The player's options in a report: the remake settings that change drawing.
 func _options_summary() -> String:
 	var parts := PackedStringArray()
-	for key: String in ["renderer", "path_tracing", "antialiasing", "sharpening", "terrain_detail", "shadows", "soft_shadows", "weather", "auto_camera", "helper_overlay"]:
+	for key: String in ["renderer", "path_tracing", "antialiasing", "sharpening", "terrain_detail", "enhanced_water", "shadows", "soft_shadows", "weather", "auto_camera", "helper_overlay"]:
 		if settings.values.has(key): parts.append("%s=%s" % [key, settings.values[key]])
 	return " ".join(parts)
 
@@ -319,6 +349,11 @@ func _play_startup_movies() -> bool:
 	return true
 
 func _exit_tree() -> void:
+	if _expedition_battle != null: expedition_run.save_battle(_expedition_battle)
+	elif expedition_run != null and not _expedition_save_error.is_empty(): expedition_run.persist()
+	remove_from_group(TRANSLATION_USERS)
+	if not get_tree().has_group(TRANSLATION_USERS): ELRemakeText.release()
+	if network_duel != null: network_duel.close()
 	ELMoviePlayer.shutdown()
 
 ## Android Back acts as Esc (close a window, cancel, open the game menu);
@@ -430,21 +465,22 @@ func _start(edition: String, options: Dictionary = {}, restored: ELDuel = null, 
 	effects = ELCombatEffects.new()
 	stage.add_child(effects)
 	effects.build(profile)
-	effects.set_scene(arena.light, arena.environment_settings)
 	_effect_cast = {}
 	_arrivals.clear()
 	_feedback_hit.clear()
 	_redirect_hit.clear()
 	_hits_waiting.clear()
-	_hit_serial += 1
+	_battle_cues.clear()
 	_cast_queue.clear()
 	_last_creature.clear()
+	_before_turn_cleanup.clear()
 	_cast_until = 0.0
 	_hero_shown = [-1, -1]
 	_wound_shown.clear()
 	battle_audio = ELBattleAudio.new()
 	stage.add_child(battle_audio)
 	battle_audio.build(profile, arena.definition, settings.values)
+	effects.set_arena(arena, battle_audio.play)
 	if front_menu != null and front_menu.music_owned(): _pause_battle_audio(true)
 	camera = Camera3D.new()
 	stage.add_child(camera)
@@ -524,6 +560,7 @@ func _start(edition: String, options: Dictionary = {}, restored: ELDuel = null, 
 	stage.add_child(melee)
 	duel.changed.connect(_refresh)
 	duel.event.connect(_on_duel_event)
+	duel.turn_cleanup.connect(_on_turn_cleanup)
 	profile_select.select(0 if edition == "el1" else 1)
 	_notice("Select a spell or a ready creature. Right-drag to orbit · Wheel to zoom · R resets the camera." if helper_overlay() else "")
 	_refresh()
@@ -562,6 +599,22 @@ var _tutorial_end_clock := 0.0
 
 func _process(delta: float) -> void:
 	elapsed += delta
+	_update_strategic_clock()
+	if _strategic_battle():
+		var playable := strategic_session.battle_started and strategic_session.relay.can_play()
+		if playable != _strategic_playable:
+			_strategic_playable = playable
+			_refresh()
+		if duel.phase == ELDuel.Phase.FINISHED and ending_over() and _strategic_presentation_idle():
+			_return_from_encounter()
+	if network_duel != null:
+		network_duel.poll(not _melee_busy() and not _cast_busy() and _arrivals.is_empty() and _effect_cast.is_empty(), _expire_network_phase)
+		if network_duel != null and match_result_shown and front_menu.screen == "duel_round":
+			var deck_seconds := network_duel.deck_time_remaining()
+			front_menu.duel_ui.show_deck_time(deck_seconds)
+			if _network_deck != null: _network_deck.show_time(deck_seconds)
+	_update_network_clock()
+	_update_network_chat()
 	_update_cursor()
 	# The phase oval and the shutters follow a fight starting and ending.
 	if duel != null and phase_label != null and _melee_busy() != _melee_shown:
@@ -584,7 +637,14 @@ func _process(delta: float) -> void:
 		# The computer, a replay and the tutorial's recorded side act only once
 		# the previous action has been shown (fight and cast alike).
 		if _melee_busy() or _cast_busy(): ai_clock = minf(ai_clock, 0.85 - 0.25)
+		if duel == _expedition_battle and duel.phase == ELDuel.Phase.FINISHED and ending_over() and not _presentation_held() and not _cast_busy() and not _overlay_open():
+			_finish_expedition_battle()
+			return
 		if duel_match != null and duel.phase == ELDuel.Phase.FINISHED and not _melee_busy(): _watch_match_round(delta)
+		if network_duel != null and network_duel.match_state != null and duel.phase == ELDuel.Phase.FINISHED:
+			match_clock += delta
+			if match_clock >= ROUND_RESULT_DELAY and ending_over() and not _presentation_held() and not _overlay_open():
+				_show_network_round()
 		# The tutorial battle closes by itself too, once its result has been read.
 		if combat_tutorial != null and duel == combat_tutorial.duel and duel.phase == ELDuel.Phase.FINISHED and not _melee_busy() and ending_over() and not _overlay_open():
 			_tutorial_end_clock += delta
@@ -602,7 +662,11 @@ func _process(delta: float) -> void:
 			if duel.phase != ELDuel.Phase.FINISHED and not _overlay_open() and not _melee_busy() and ai_clock >= 0.85 and combat_tutorial.opponent_due():
 				ai_clock = 0.0
 				combat_tutorial.step_opponent()
-		elif duel.phase != ELDuel.Phase.FINISHED and not _overlay_open() and not _melee_busy() and ai_clock >= 0.85 and (demo or (mode_select.selected == 0 and duel.active_side() == 1 and not _hot_seat()) or (auto_combat and _human_side())):
+		elif _strategic_battle():
+			if strategic_session.battle_started and _strategic_presentation_idle() and ai_clock >= 0.85:
+				ai_clock = 0.0
+				strategic_session.relay.step_neutral_ai()
+		elif network_duel == null and duel.phase != ELDuel.Phase.FINISHED and not _overlay_open() and not _melee_busy() and ai_clock >= 0.85 and (demo or (mode_select.selected == 0 and not _human_side()) or (auto_combat and _human_side())):
 			ai_clock = 0.0
 			# Without "use spells", auto combat uses no artifacts or spell charges (hero abilities stay).
 			var auto := auto_combat and _human_side() and not demo
@@ -635,8 +699,7 @@ func _process(delta: float) -> void:
 				# Remake-only state words (helper overlay); the original marks are glyphs.
 				var parts: Array[String] = []
 				if helper_overlay():
-					if c.sick: parts.append("SUMMONED")
-					elif c.resting: parts.append("RESTING")
+					if c.resting and not c.sick: parts.append("RESTING")
 				label.text = "  •  ".join(parts)
 				label.modulate = ACCENT if not c.enchantments.is_empty() else INK
 				# Pale aspect: the figure's opacity pulses 0.2-0.6 (1.8 s triangle wave).
@@ -650,8 +713,9 @@ func _process(delta: float) -> void:
 				# Options ShowCreatureNumbers (all rows), ShowIcons, ShowOrder.
 				if numbers and model.visible:
 					var blocked := int(duel.blocks.get(id, -1))
+					var stats: Dictionary = _before_turn_cleanup.get(id, c)
 					figures.append({"id": id, "top": top,
-						"numbers": ELCombatSymbols.number_row(int(c.power), int(c.toughness) - shown_damage(id), shown_damage(id) > 0, false),
+						"numbers": ELCombatSymbols.number_row(int(stats.power), int(stats.toughness) - shown_damage(id), shown_damage(id) > 0, false),
 						"icons": creature_icons(id) if bool(settings.values.get("ability_icons", true)) else [],
 						"order": ELCombatSymbols.order_row(duel.attacks.find(id) + 1, duel.attacks.find(blocked) + 1 if blocked >= 0 else 0) if bool(settings.values.get("attack_order", true)) else []})
 			label.position = top + Vector3(0, 0.35, 0)
@@ -678,6 +742,24 @@ func _process(delta: float) -> void:
 		ELAudio.quiet_quit(get_tree())
 
 func _input(event: InputEvent) -> void:
+	if _network_battle_chat != null and _network_battle_chat.visible and event is InputEventKey:
+		if event.keycode == KEY_ESCAPE:
+			if event.pressed and not event.echo: _set_network_chat_open(false)
+			get_viewport().set_input_as_handled()
+		return
+	if event is InputEventKey and duel != null and is_processing_unhandled_input() and not _overlay_open():
+		if event.pressed and not event.echo and event.keycode in [KEY_ENTER, KEY_KP_ENTER] and _network_chat_button != null and _network_chat_button.visible:
+			_set_network_chat_open(true)
+			get_viewport().set_input_as_handled()
+			return
+		var end_key: bool = event.keycode == KEY_TAB if profile.id == "el2" else event.ctrl_pressed and KEY_E in [event.keycode, event.physical_keycode]
+		if event.keycode == KEY_SPACE or end_key:
+			get_viewport().set_input_as_handled()
+			if not event.pressed or event.echo: return
+			if event.keycode == KEY_SPACE: _skip_battle_presentation()
+			elif _human_turn() or ((_campaign_battle() != null or duel_match != null or combat_tutorial != null or network_duel != null or _expedition_battle != null) and duel.phase == ELDuel.Phase.FINISHED):
+				_end_phase()
+			return
 	# A move that a panel takes never reaches _unhandled_input: no character.
 	if event is InputEventMouseMotion: combat_hover = -1
 	# A release over a panel still ends the preview and the turn.
@@ -685,6 +767,8 @@ func _input(event: InputEvent) -> void:
 		_right_button(event)
 
 func _unhandled_input(event: InputEvent) -> void:
+	if game_console != null and game_console.visible: return
+	if _network_battle_chat != null and _network_battle_chat.visible: return
 	if duel == null:
 		return
 	# The tutorial panel takes every key and click while it is open.
@@ -714,8 +798,6 @@ func _unhandled_input(event: InputEvent) -> void:
 			_refresh()
 		elif event.keycode == KEY_F5: _save_duel()
 		elif event.keycode == KEY_F9: _load_duel()
-		elif event.keycode == KEY_SPACE and (_human_turn() or ((_campaign_battle() != null or duel_match != null or combat_tutorial != null) and duel.phase == ELDuel.Phase.FINISHED and not _overlay_open())):
-			_end_phase()
 		elif event.keycode == KEY_R:
 			_default_view()
 		elif event.keycode == KEY_L:
@@ -952,7 +1034,7 @@ func _target(id: int) -> void:
 	_refresh()
 
 func _cast_card(index: int) -> void:
-	if not _human_turn():
+	if not _human_turn() or (game_console != null and game_console.enemy_hand(duel)):
 		return
 	var card: String = duel.heroes[duel.active_side()].hand[index]
 	ability_selection.clear()
@@ -1071,6 +1153,7 @@ func _cancel_power() -> void:
 	_refresh()
 
 func _human_turn() -> bool:
+	if _strategic_battle() and (not strategic_session.battle_started or not strategic_session.relay.can_play()): return false
 	return duel != null and replay_player == null and not demo and not auto_combat and not _overlay_open() and duel.phase != ELDuel.Phase.FINISHED and _human_side() and not hot_pending and not _melee_busy()
 
 # --- Hot seat (MultiplayerStart -> HotSeat) -----------------------------------
@@ -1121,11 +1204,12 @@ func _confirm_handover() -> void:
 
 ## The acting side is played from this screen (not by the practice opponent).
 func _human_side() -> bool:
-	return (mode_select.selected == 1 and combat_tutorial == null) or duel.active_side() == 0 or _hot_seat()
+	return _local_side(duel.active_side())
 
 ## Starts auto combat on the player's turn, or stops it at any time; starting
 ## cancels any half-made selection. Not offered in the recorded tutorial.
 func _toggle_auto() -> void:
+	if network_duel != null or strategic_session != null: return
 	if auto_combat:
 		_set_auto(false)
 	elif _human_turn() and combat_tutorial == null and not _hot_seat():
@@ -1142,6 +1226,12 @@ func _set_auto(on: bool) -> void:
 	_refresh()
 
 func _end_phase() -> void:
+	if duel == _expedition_battle and duel.phase == ELDuel.Phase.FINISHED:
+		if ending_over(): _finish_expedition_battle()
+		return
+	if network_duel != null and duel.phase == ELDuel.Phase.FINISHED:
+		if ending_over(): _show_network_round()
+		return
 	if _campaign_battle() != null and duel.phase == ELDuel.Phase.FINISHED:
 		_return_from_encounter()
 		return
@@ -1170,6 +1260,28 @@ func _end_phase() -> void:
 	elif not committing.is_empty():
 		declared_attackers = committing
 		own_attack_pending = own_attack_side
+
+## Space skips the presentation of the phase in the original combat controls.
+func _skip_battle_presentation() -> void:
+	if (_melee_busy() or _cast_busy() or not _arrivals.is_empty() or not _effect_cast.is_empty()
+		or not _battle_cues.is_empty() or (auto_camera != null and auto_camera.active())):
+		var remaining := _cast_queue.size() + 1
+		for _step in remaining:
+			if _melee_busy(): melee.finish()
+			if not _effect_cast.is_empty(): _start_cast_effects()
+			_step_arrivals(true)
+			_cast_until = elapsed
+			if _cast_queue.is_empty(): break
+			_step_cast_queue()
+		_finish_battle_cues()
+		if camera != null: _update_camera()
+		for id: int in models.keys():
+			var clip: String = models[id].clip
+			if clip in ["uattack", "uhit", "utap", "uuntap", "usummon", "uenchantment", "uinstant"]:
+				_animation_done(clip, id)
+		_sync_shown()
+		_refresh()
+	if effects != null: effects.finish_transients()
 
 ## The fight of the player's committed attack begins (its first blow is about
 ## to be shown): the declaration shot at the declared attackers still on the
@@ -1250,12 +1362,12 @@ func _summon_mark(side: int) -> float:
 
 ## Starts held summon effects once the caster shot ends, and shows each
 ## creature at the effect's summon cue.
-func _step_arrivals() -> void:
+func _step_arrivals(instant := false) -> void:
 	for arrival: Dictionary in _arrivals.duplicate():
 		var waited := elapsed - float(arrival.since)
 		if float(arrival.shown_at) < 0.0:
 			var caster_shown := bool(arrival.camera) and auto_camera != null and auto_camera.showing_caster()
-			if (caster_shown or (not bool(arrival.camera) and waited < float(arrival.gesture))) and waited < 8.0: continue
+			if not instant and (caster_shown or (not bool(arrival.camera) and waited < float(arrival.gesture))) and waited < 8.0: continue
 			var targets: Array = []
 			for id: int in arrival.ids:
 				if models.has(id): targets.append(models[id])
@@ -1263,9 +1375,9 @@ func _step_arrivals() -> void:
 				effects.cast(String(arrival.card), {"Start": [models.get(int(arrival.side))], "Target": targets})
 			# The creature's close-up starts with its summoning effect, just
 			# before it appears (the original queues it at the figure's creation).
-			if _auto_camera_on() and auto_camera != null: auto_camera.summoned(_camera_targets(arrival.ids, int(arrival.side)))
+			if not instant and _auto_camera_on() and auto_camera != null: auto_camera.summoned(_camera_targets(arrival.ids, int(arrival.side)))
 			arrival.shown_at = elapsed + ELCombatEffects.summon_delay(profile, String(arrival.card))
-		if elapsed < float(arrival.shown_at): continue
+		if not instant and elapsed < float(arrival.shown_at): continue
 		_arrivals.erase(arrival)
 		for id: int in arrival.ids:
 			if not models.has(id): continue
@@ -1334,6 +1446,14 @@ func _on_duel_event(data: Dictionary) -> void:
 		data.shown_health = int(duel.heroes[target].health)
 	_event(data)
 
+func _on_turn_cleanup() -> void:
+	# The rules finish synchronously while the figures are still fighting.
+	if _presentation_held():
+		for id: int in duel.creatures:
+			var c: Dictionary = duel.creatures[id]
+			_before_turn_cleanup[id] = {"power": c.power, "toughness": c.toughness, "owner": c.owner}
+	_event({"kind": "turn_cleanup"})
+
 ## Holds an event behind the cast being shown. Events the combat playback
 ## sequences itself pass, as does everything once the queue is drained.
 func _hold_cast(data: Dictionary) -> bool:
@@ -1399,6 +1519,9 @@ func _event(data: Dictionary) -> void:
 	if own_attack_pending >= 0 and data.get("kind") == "strike" and not _melee_busy(): _auto_attack_own()
 	# Blows and what follows them wait for the combat playback.
 	if is_instance_valid(melee) and melee.capture(data): return
+	if data.get("kind") == "turn_cleanup":
+		_before_turn_cleanup.clear()
+		return
 	_note_shown(data)
 	if data.get("kind") in CAST_KINDS: _cast_until = elapsed + _cast_seconds(data)
 	if not _effect_cast.is_empty():
@@ -1526,6 +1649,9 @@ func _event(data: Dictionary) -> void:
 				# Original ENLH has no Discard/Draw sites if its hand is empty.
 				# The hero's own casting-gesture sound still plays above.
 				pass
+			elif profile.id == "el2" and data.card == "ENFR":
+				# The release presents both effects at each hero.
+				pass
 			elif profile.id in ["el1", "el2"] and data.card == "BRRL" and int(data.get("broken_reality_ether", 0)) <= 0:
 				# Both original callbacks bypass LoseMana and BlackDamage
 				# registrations for zero ether; the cast gesture still plays.
@@ -1650,7 +1776,7 @@ func _event(data: Dictionary) -> void:
 				delay = float(_effect_cast.get("hit", 0.0))
 			if delay > 0.0 and models.has(id) and is_inside_tree():
 				_hits_waiting[id] = int(_hits_waiting.get(id, 0)) + 1
-				get_tree().create_timer(delay).timeout.connect(_finish_exile.bind(id, _hit_serial))
+				_schedule_battle_cue(delay, _finish_exile.bind(id))
 			else:
 				call_deferred("_remove_model", id)
 		"heal":
@@ -1897,25 +2023,22 @@ func _event(data: Dictionary) -> void:
 		"unsummon":
 			# EL1 Unsummon@, LesserUnsummon@ and
 			# EL2 Unsummon@, LesserUnsummon@ bind BlueDeath to the departing
-			# creature and Draw to its owner.
-			# Play the queued cast effects
-			# first, while the creature model still exists as an FX anchor.
-			# Game-state removal remains synchronous in both editions.
+			# creature and Draw to its owner. The model stays until the queued
+			# cast effects start at the hero's release frame.
+			var creature_id := int(data.target)
 			var unsummon_fx: bool = profile.id in ["el1", "el2"] and _effect_cast.get("card", "") in ["UNSM", "LSUS"]
 			if profile.id in ["el1", "el2"] and _effect_cast.get("card", "") == "GRUN":
 				# The original mass callback queues each creature's own BlueDeath
 				# and its ORIGINAL owner's Draw before removing the model.
 				# The event's owner may instead be a temporary controller.
-				var creature_id := int(data.target)
 				var original_owners: Dictionary = _effect_cast.get("grun_original_owners", {})
 				_effect_cast.grun_sites.append({"creature": creature_id,
 					"owner": int(original_owners.get(creature_id, data.get("owner", -1)))})
-				call_deferred("_remove_model", creature_id)
-			elif unsummon_fx and int(_effect_cast.get("target", -1)) == int(data.target):
+			elif unsummon_fx and int(_effect_cast.get("target", -1)) == creature_id:
 				_effect_cast.return_owner = int(data.get("owner", -1))
-				call_deferred("_remove_model", int(data.target))
 			else:
-				_remove_model(data.target)
+				_remove_model(creature_id)
+			if models.has(creature_id): models[creature_id].set_meta("returning", true)
 		"plane":
 			battle_audio.effect("OutPlaneEntry" if data.enter else "OutPlaneExit")
 			_figure_effect("OutPlaneEntry" if data.enter else "OutPlaneExit", data.target)
@@ -2024,6 +2147,7 @@ func _event(data: Dictionary) -> void:
 			selection_power = 0
 			exchange_target = -1
 			selected_creature = -1
+			ability_selection.clear()
 			_phase_notice(int(data.side), String(data.phase) == "attack", int(data.round))
 		"victory":
 			_bleed(1 - data.side)
@@ -2073,7 +2197,11 @@ func _phase_notice(side: int, attack: bool, round_number: int) -> void:
 
 ## Whether `side` is played at this screen (both sides in a local two-player battle).
 func _local_side(side: int) -> bool:
-	return side == 0 or _hot_seat() or (mode_select != null and mode_select.selected == 1 and combat_tutorial == null)
+	if _strategic_battle(): return side == strategic_session.relay.local_side
+	if network_duel != null and network_duel.live: return side == network_duel.local_side
+	if replay_player != null and replay_player.duel == duel: return side == replay_player.local_side()
+	var local := game_console.player_side(duel) if game_console != null else 0
+	return side == local or _hot_seat() or (mode_select != null and mode_select.selected == 1 and combat_tutorial == null)
 
 ## A hero's cast: T_CASTING in the log; the first game also lists it on screen,
 ## the second shows the opponent's spell icon at the top left.
@@ -2201,8 +2329,28 @@ func _hit_later(data: Dictionary) -> bool:
 		delay = maxf(delay, (actor.clip_frames() - actor.frame) / (actor.fps * actor.speed))
 	if delay <= 0.0 or not models.has(id) or not is_inside_tree(): return false
 	_hits_waiting[id] = int(_hits_waiting.get(id, 0)) + 1
-	get_tree().create_timer(delay).timeout.connect(_late_hit.bind(data, _hit_serial))
+	_schedule_battle_cue(delay, _late_hit.bind(data))
 	return true
+
+func _schedule_battle_cue(delay: float, action: Callable) -> void:
+	_next_battle_cue += 1
+	_battle_cues[_next_battle_cue] = {"due": Time.get_ticks_usec() + roundi(delay * 1000000.0), "action": action}
+	get_tree().create_timer(delay).timeout.connect(_run_battle_cue.bind(_next_battle_cue))
+
+func _run_battle_cue(id: int) -> void:
+	if not _battle_cues.has(id): return
+	var action: Callable = _battle_cues[id].action
+	_battle_cues.erase(id)
+	action.call()
+
+## The native effect manager delivers any remaining markers before release.
+func _finish_battle_cues() -> void:
+	var ids := _battle_cues.keys()
+	ids.sort_custom(func(a: int, b: int) -> bool:
+		var left: int = _battle_cues[a].due
+		var right: int = _battle_cues[b].due
+		return a < b if left == right else left < right)
+	for id: int in ids: _run_battle_cue(id)
 
 func _clear_feedback_hit() -> void:
 	_feedback_hit.clear()
@@ -2213,15 +2361,13 @@ func _clear_redirect_hit() -> void:
 func _clear_trigger_hit() -> void:
 	_trigger_hit.clear()
 
-func _late_hit(data: Dictionary, serial: int) -> void:
-	if serial != _hit_serial: return
+func _late_hit(data: Dictionary) -> void:
 	var id := int(data.target)
 	_hits_waiting[id] = int(_hits_waiting.get(id, 0)) - 1
 	if int(_hits_waiting[id]) <= 0: _hits_waiting.erase(id)
 	_show_hit(data)
 
-func _finish_exile(id: int, serial: int) -> void:
-	if serial != _hit_serial: return
+func _finish_exile(id: int) -> void:
 	_hits_waiting.erase(id)
 	_remove_model(id)
 
@@ -2297,6 +2443,7 @@ func _start_cast_effects() -> void:
 			if models.has(owner):
 				effects.play("Draw", {"Target": [models[owner]]})
 				battle_audio.effect("Draw")
+			_remove_model(creature)
 		return
 	# EL1 Assault@ registers caster PosSorcery. Its aura callback
 	#  checks each creature's controller against the caster
@@ -2520,6 +2667,13 @@ func _start_cast_effects() -> void:
 	# contains no other card. Positive counts play each effect once at caster.
 	if profile.id == "el2" and pending.card == "ENLH" and int(pending.get("enlightenment_count", -1)) == 0:
 		return
+	if profile.id == "el2" and pending.card == "ENFR":
+		for hero in 2:
+			if not models.has(hero): continue
+			for effect: String in EffectTable.cast_effects(profile.id, pending.card):
+				effects.play(effect, {"Target": [models[hero]]})
+				battle_audio.effect(effect, models[hero])
+		return
 	# Both WarBanner enchantments apply PosEnchantment to their hero and
 	# PosAttack/PosDefence to each non-exempt creature with positive kin.
 	# EL1:; EL2:.
@@ -2694,10 +2848,12 @@ func _start_cast_effects() -> void:
 	# Unsummon / Lesser Unsummon create two distinct Target effects:
 	# BlueDeath on the departing creature, Draw on its owner.
 	if profile.id in ["el1", "el2"] and pending.card in ["UNSM", "LSUS"]:
+		if not pending.has("return_owner"): return
 		var creature := int(pending.target)
-		var owner := int(pending.get("return_owner", -1))
+		var owner := int(pending.return_owner)
 		if models.has(creature): effects.play("BlueDeath", {"Target": [models[creature]]})
 		if models.has(owner): effects.play("Draw", {"Target": [models[owner]]})
+		_remove_model(creature)
 		return
 	# Trade in both originals: EL1 / EL2 bind separate
 	# GreenDamage Targets to the sacrificed and second creature, followed
@@ -3435,7 +3591,7 @@ func _footfall(clip: String, id: int) -> void:
 	if models.has(id) and is_instance_valid(melee) and melee.stepping(id, clip): battle_audio.step(models[id])
 
 func _animation_done(clip: String, id: int) -> void:
-	if not models.has(id) or _hits_waiting.has(id):
+	if not models.has(id) or _hits_waiting.has(id) or models[id].get_meta("returning", false):
 		return
 	if _melee_busy() and melee.moving(id): return
 	if id >= 2 and not duel.creatures.has(id):
@@ -3665,16 +3821,17 @@ func _refresh() -> void:
 		hand.remove_child(child)
 		child.queue_free()
 	var active := duel.active_side()
-	var displayed := 0 if mode_select.selected == 0 and not demo else active
+	var displayed := _displayed_side()
 	# Hot seat: the confirmed player's side; nothing while a hand-over waits.
-	var concealed := _hot_seat() and hot_pending
-	if _hot_seat() and hot_side >= 0: displayed = hot_side
-	var hero: Dictionary = duel.heroes[displayed]
+	var concealed := (_hot_seat() and hot_pending) or (_strategic_battle() and strategic_session.relay.local_side < 0)
+	var peek := game_console != null and game_console.enemy_hand(duel)
+	var hand_side := 1 - displayed if peek else displayed
+	var hero: Dictionary = duel.heroes[hand_side]
 	# The original rail holds one icon per hand card (EL2 ``, one
 	# CSpellInserter per hand entry); copies are not grouped.
 	var showing_artifacts := rail != null and rail.artifacts_shown
 	var order: Array[int] = []
-	if not showing_artifacts and not concealed: order = duel.hand_display(displayed)
+	if not showing_artifacts and not concealed: order = duel.hand_display(hand_side)
 	# A card that joins the hand the rail already shows drops in; a rebuilt rail
 	# (another side, the artifact list, a hand-over) does not (EL2 ``
 	# sets the inserter's instant flag while it rebuilds).
@@ -3683,13 +3840,13 @@ func _refresh() -> void:
 	var seen := {}
 	# A loaded or new battle is a rebuild too.
 	var same_duel: bool = _rail_seen_duel != null and _rail_seen_duel.get_ref() == duel
-	var animate: bool = tracked and _rail_seen_side == displayed and same_duel
+	var animate: bool = tracked and _rail_seen_side == hand_side and same_duel
 	var old_min := INF
 	for id: String in _rail_seen: old_min = minf(old_min, float(id.get_slice(":", 0)))
 	var place := 0
 	for i: int in order:
 		var card: String = hero.hand[i]
-		var uses := duel.hand_uses(displayed, i)
+		var uses := duel.hand_uses(hand_side, i)
 		var rail_id := "%d:%s" % [int(keys[i]), card] if tracked else ""
 		var reused: TextureButton = kept.get(rail_id) if animate and kept.has(rail_id) else null
 		if reused != null: kept.erase(rail_id)
@@ -3718,9 +3875,9 @@ func _refresh() -> void:
 		button.set_meta("card", card)
 		button.set_meta("hand_index", i)
 		button.set_meta("charges", uses)
-		button.disabled = not _human_turn() or duel.available_mana(displayed) < duel.cost(card) or hero.channels < duel.channel_cost(card) or uses == 0 or not duel.phase_allows(card)
+		button.disabled = peek or not _human_turn() or duel.available_mana(hand_side) < duel.cost(card) or hero.channels < duel.channel_cost(card) or uses == 0 or not duel.phase_allows(card)
 		_list_look().dress(button)
-		if i == selection: _selection_outline(button)
+		if not peek and i == selection: _selection_outline(button)
 		# Remake readout: the cost, only with the helper overlay.
 		if helper_overlay():
 			var mana := _label(price.replace(" ", ""), 13, ACCENT)
@@ -3735,7 +3892,7 @@ func _refresh() -> void:
 			charges.set_meta("charge_label", true)
 			button.add_child(charges)
 		button.pressed.connect(_cast_card.bind(i))
-		button.mouse_entered.connect(_hint.bind(button.tooltip_text.replace("\n", " — ")))
+		button.mouse_entered.connect(_hint.bind(_t(button.tooltip_text).replace("\n", " — ")))
 		if reused == null: hand.add_child(button)
 		hand.move_child(button, place)
 		place += 1
@@ -3763,7 +3920,7 @@ func _refresh() -> void:
 		hand.remove_child(button)
 		button.queue_free()
 	_rail_seen = seen
-	_rail_seen_side = displayed if tracked and not showing_artifacts and not concealed else -1
+	_rail_seen_side = hand_side if tracked and not showing_artifacts and not concealed else -1
 	_rail_seen_duel = weakref(duel)
 	if showing_artifacts and not concealed: _fill_artifact_rail(displayed)
 	if hand_frames != null: hand_frames.queue_redraw()
@@ -3812,7 +3969,7 @@ func _refresh() -> void:
 		auto_combat = false
 		auto_off_button.visible = false
 	# Hot seat has no auto combat (unavailable in HotSeat in the original).
-	auto_button.disabled = not auto_combat and (not _human_turn() or combat_tutorial != null or _hot_seat())
+	auto_button.disabled = network_duel != null or strategic_session != null or (not auto_combat and (not _human_turn() or combat_tutorial != null or _hot_seat()))
 	for id: int in models:
 		# Fighters the combat playback is still moving or holding at their
 		# fight point keep their clip until they are home.
@@ -3841,7 +3998,7 @@ func _show_hero_stats() -> void:
 ## be sent.
 func _refresh_buttons() -> void:
 	if duel == null or attack_button == null: return
-	end_button.disabled = not _human_turn()
+	end_button.disabled = not (_human_turn() or (network_duel != null and network_duel.live and duel.phase == ELDuel.Phase.FINISHED and ending_over() and not _overlay_open()))
 	attack_button.disabled = not _human_turn() or duel.phase != ELDuel.Phase.ATTACK or not duel.army(duel.active_side()).any(func(c: Dictionary) -> bool: return duel.can_attack(c.id) and not duel.attacks.has(c.id))
 
 ## A creature put to rest by an action, or rising from rest, plays the figure's own tap
@@ -3995,7 +4152,11 @@ func card_tooltip(card: String) -> String:
 ## hand card's type, name, strength and cost lines (EL2 layout as
 ## seen in the original), a portrait's hero card, a value box's own line.
 func _displayed_side() -> int:
-	var side := 0 if mode_select.selected == 0 and not demo else duel.active_side()
+	if _strategic_battle(): return maxi(0, strategic_session.relay.local_side)
+	if network_duel != null and network_duel.live: return network_duel.local_side
+	if replay_player != null and replay_player.duel == duel: return replay_player.local_side()
+	var local := game_console.player_side(duel) if game_console != null else 0
+	var side := local if mode_select.selected == 0 and not demo else duel.active_side()
 	if _hot_seat() and hot_side >= 0: side = hot_side
 	return side
 
@@ -4018,6 +4179,14 @@ func _tip_content(control: Control, at: Vector2) -> Dictionary:
 		if helper_overlay(): lines.append_array(control.atr(control.tooltip_text).split("\n"))
 		return ELCombatTooltip.hero_content(profile.id, portraits[side].texture, title, lines)
 	return {}
+
+func _figure_tip(at: Vector2) -> Dictionary:
+	if duel == null or _overlay_open() or orbiting: return {}
+	var id := _character_at(at)
+	if id < 2: return {}
+	var creature := duel.entity(id)
+	if creature.is_empty(): return {}
+	return ELCombatTooltip.text_content(card_tooltip(str(creature.card)))
 
 ## An original control's tooltip text from the Controls table, else "".
 func _control_tip(control: String) -> String:
@@ -4300,6 +4469,8 @@ func _build_ui() -> void:
 	rail.hand_scroll = card_scroll
 	combat_tip = ELCombatTooltip.new()
 	combat_tip.describe = _tip_content
+	combat_tip.describe_figure = _figure_tip
+	combat_tip.touch = touch_input
 	hud_root.add_child(combat_tip)
 	ui.resized.connect(_layout_hud)
 	# 4:3 windows share one stretched canvas size; the pixel floor follows the window.
@@ -4339,7 +4510,25 @@ func _build_ui() -> void:
 	_layout_hud()
 
 func _overlay_open() -> bool:
+	if game_console != null and game_console.visible: return true
+	if _network_battle_chat != null and _network_battle_chat.visible: return true
+	if ELWikiScreen.is_open(): return true
+	if _expedition_screen != null and _expedition_screen.visible: return true
 	return (first_tutorial != null and first_tutorial.visible) or (options_host != null and options_host.is_visible_in_tree()) or movie_player != null or (front_menu != null and front_menu.is_visible_in_tree()) or (setup_panel != null and setup_panel.visible) or (menu != null and menu.visible) or (settings_dialog != null and settings_dialog.visible) or (campaign_setup != null and campaign_setup.visible) or (power_dialog != null and power_dialog.visible) or (tutorial_quit != null and tutorial_quit.visible) or (esc_menu != null and esc_menu.visible) or (replay_quit != null and replay_quit.visible) or replay_inventory != null
+
+func _console_visibility(opened: bool) -> void:
+	if opened and _network_battle_chat != null and _network_battle_chat.visible:
+		_set_network_chat_open(false)
+	if campaign_view != null: campaign_view.console_open = opened
+	if not opened and (campaign_view == null or not campaign_view.visible): _refresh()
+
+func _console_refresh() -> void:
+	selection = -1
+	selection_power = 0
+	exchange_target = -1
+	selected_creature = -1
+	ability_selection.clear()
+	_refresh()
 
 ## First game: the tutorial panel of battles (one per view, sharing the
 ## settings' tutorial with the map).
@@ -4490,10 +4679,19 @@ func _graphics_page(page: VBoxContainer) -> void:
 		if is_instance_valid(arena): arena.set_detail(enabled)
 		if campaign_view != null: campaign_view.apply_settings())
 	_settings_row(scene, "Terrain detail", "Subtle surface detail on map terrain and battle ground. May reduce performance on slower devices.", terrain_detail)
+	var enhanced_water := CheckButton.new()
+	enhanced_water.name = "EnhancedWater"
+	enhanced_water.button_pressed = settings.values.enhanced_water
+	enhanced_water.toggled.connect(func(enabled: bool):
+		settings.values.enhanced_water = enabled
+		if campaign_view != null: campaign_view.apply_settings())
+	_settings_row(scene, "Enhanced water", "Adds ripples, sky tint, soft shoreline foam and rain rings to adventure map water.", enhanced_water)
 	var weather := CheckButton.new()
 	weather.name = "Weather"
 	weather.button_pressed = settings.values.weather
-	weather.toggled.connect(func(enabled: bool): settings.values.weather = enabled)
+	weather.toggled.connect(func(enabled: bool):
+		settings.values.weather = enabled
+		if campaign_view != null: campaign_view.apply_settings())
 	_settings_row(scene, "Map weather", "Rain, snow and other weather particles on adventure maps.", weather)
 	var blood_toggle := CheckButton.new()
 	blood_toggle.name = "Blood"
@@ -4836,6 +5034,7 @@ func _battle_host() -> ELFrontMenu:
 		options_layer.layer = 6
 		add_child(options_layer)
 		options_host = ELFrontMenu.new()
+		options_host.console_captures = game_console.reserves_key
 		options_host.settings = settings
 		options_layer.add_child(options_host)
 		if not options_host.build({profile.id: profile}, profile.id):
@@ -4857,7 +5056,13 @@ func _battle_host() -> ELFrontMenu:
 	return options_host
 
 func _surrender_battle() -> void:
-	if _campaign_battle() != null: _surrender_encounter()
+	if network_duel != null:
+		if not network_duel.surrender(): _notice("You can concede when it is your action.")
+	elif _expedition_battle != null:
+		duel.heroes[0].health = 0
+		duel._check_winner()
+		_save_expedition_battle(_expedition_battle.get_instance_id())
+	elif _campaign_battle() != null: _surrender_encounter()
 	elif duel_match != null: _surrender_round()
 	else: _notice("Surrender ends campaign battles and Duel mode rounds.")
 
@@ -4907,7 +5112,7 @@ func _open_campaigns() -> void:
 	campaign_setup.resume_requested.connect(func(): _resume_campaign(false, ELSingleScenario.campaign_file(campaign_setup.chosen_edition())))
 	campaign_setup.closed.connect(func(): campaign_setup.hide())
 
-func _begin_campaign(edition: String, scenario: Dictionary, difficulty: int, restored: Dictionary = {}) -> void:
+func _begin_campaign(edition: String, scenario: Dictionary, difficulty: int, restored: Dictionary = {}, online: ELStrategicSession = null) -> void:
 	ELCrashReport.trace("map load %s %s (difficulty %d%s)" % [edition, scenario.get("script", scenario.get("file_name", "?")), difficulty, ", from a save" if not restored.is_empty() else ""])
 	ELCrashReport.where("map %s %s" % [edition, scenario.get("script", scenario.get("file_name", "?"))])
 	if campaign_setup != null: campaign_setup.hide()
@@ -4930,7 +5135,11 @@ func _begin_campaign(edition: String, scenario: Dictionary, difficulty: int, res
 	if previous != null: previous.paused = true
 	await get_tree().process_frame
 	await get_tree().process_frame
+	if online != null and (online != strategic_session or not online.link.live):
+		cover.queue_free()
+		return
 	campaign_view = ELAdventureView.new()
+	campaign_view.strategic_session = online
 	add_child(campaign_view)
 	_use_edition(edition)
 	if not campaign_view.build(profiles[edition], scenario, settings, difficulty, restored):
@@ -4943,6 +5152,7 @@ func _begin_campaign(edition: String, scenario: Dictionary, difficulty: int, res
 		else:
 			set_process(true)
 			set_process_unhandled_input(true)
+		if online != null: online.link.abort("The strategic map view could not be opened.")
 		return
 	if previous != null:
 		remove_child(previous)
@@ -4967,9 +5177,13 @@ func _begin_campaign(edition: String, scenario: Dictionary, difficulty: int, res
 	if campaign_view.director.encounter != null:
 		var encounter := campaign_view.director.encounter
 		_begin_encounter(encounter.hero_id, encounter.opponent_id)
-		var combat_view: Dictionary = restored.camera.get("battle", {})
-		var session := ELMatchSave.session(combat_view)
-		_restore_orbit(session.camera)
+		if online == null or not online.observes_battle():
+			var combat_view: Dictionary = restored.camera.get("battle", {})
+			var session := ELMatchSave.session(combat_view)
+			_restore_orbit(session.camera)
+	elif online != null:
+		online.view_opened()
+		campaign_view._refresh_hero_info()
 
 ## Black screen with a small caption over everything while a chapter loads.
 func _loading_cover() -> CanvasLayer:
@@ -5001,6 +5215,10 @@ func _campaign_battle() -> ELDuel:
 func _begin_encounter(_hero: int, _opponent: int) -> void:
 	var battle := _campaign_battle()
 	if battle == null: return
+	if strategic_session != null and strategic_session.observes_battle():
+		strategic_session.view_opened()
+		campaign_view._refresh_hero_info()
+		return
 	campaign_view.set_suspended(true)
 	demo = false
 	menu.hide()
@@ -5012,12 +5230,15 @@ func _begin_encounter(_hero: int, _opponent: int) -> void:
 	_first_tutorial_battle()
 	set_process(true)
 	set_process_unhandled_input(true)
+	if _strategic_battle(): strategic_session.view_opened()
 	_notice("Defeat %s to continue. F5 saves both the battle and campaign." % _side_name(1) if helper_overlay() else "")
 	if not battle.load_note.is_empty(): _notice(battle.load_note)
 
 func _return_from_encounter() -> void:
 	if _campaign_battle() == null or (duel.phase != ELDuel.Phase.FINISHED and campaign_view.state.outcome.is_empty()): return
-	if not campaign_view.director.finish_encounter():
+	if _strategic_battle():
+		if not ending_over() or not strategic_session.finish_battle(): return
+	elif not campaign_view.director.finish_encounter():
 		_notice(campaign_view.director.error)
 		return
 	menu.hide()
@@ -5038,6 +5259,9 @@ func _surrender_encounter() -> void:
 	if _campaign_battle() == null:
 		_notice("There is no active campaign battle.")
 		return
+	if _strategic_battle():
+		if not strategic_session.relay.surrender(): _notice("You can concede when it is your action.")
+		return
 	if duel.phase != ELDuel.Phase.FINISHED:
 		duel.heroes[0].health = 0
 		duel._check_winner()
@@ -5048,6 +5272,7 @@ func _surrender_encounter() -> void:
 ## `manual` is a campaign or single-mission save; empty means the campaign
 ## save of `edition` (each edition keeps its own).
 func _resume_campaign(newest := false, manual := "", edition := "") -> void:
+	if strategic_session != null: return
 	if edition.is_empty(): edition = front_menu.edition if front_menu != null and not front_menu.edition.is_empty() else (profile.id if profile != null else "el1")
 	if manual.is_empty(): manual = ELSingleScenario.campaign_file(edition)
 	var automatic := ELSecondCampaign.AUTOSAVE
@@ -5067,6 +5292,10 @@ func _resume_campaign(newest := false, manual := "", edition := "") -> void:
 ## A row of a save list (ELSaveSlots): an adventure save, or the second game's
 ## between-chapter campaign autosave, which opens the next chapter's map.
 func _load_slot(row: Dictionary) -> void:
+	if row.get("kind") == ELSaveSlots.KIND_STRATEGIC:
+		_stage_strategic_save(row)
+		return
+	if strategic_session != null: return
 	ELCrashReport.trace("load %s" % String(row.get("path", "?")).get_file())
 	if row.get("type") == ELSaveSlots.PROGRESS:
 		var progress := ELSecondCampaign.read(str(row.path))
@@ -5109,6 +5338,11 @@ func _show_front_menu_layer() -> void:
 	ELCrashReport.where("menu")
 
 func _leave_campaign() -> void:
+	if strategic_session != null and strategic_session.link.live and not strategic_session.link.is_host:
+		if strategic_session._leaving: return
+		campaign_view.paused = true
+		await strategic_session.leave_guest()
+	_close_strategic_session()
 	remove_child(campaign_view)
 	campaign_view.queue_free()
 	campaign_view = null
@@ -5125,6 +5359,15 @@ func _leave_campaign() -> void:
 	if front_menu != null: _show_front_menu()
 
 func _save_duel() -> void:
+	if strategic_session != null:
+		_notice("Network matches cannot be saved here.")
+		return
+	if _expedition_battle != null:
+		_notice("The expedition is saved at room boundaries.")
+		return
+	if network_duel != null:
+		_notice("Network duels cannot be saved.")
+		return
 	if duel == null: return
 	ELCrashReport.trace("battle save")
 	menu.hide()
@@ -5145,6 +5388,15 @@ func _save_duel() -> void:
 	_refresh()
 
 func _load_duel() -> void:
+	if strategic_session != null:
+		_notice("Leave the network match before loading.")
+		return
+	if _expedition_battle != null:
+		_notice("Resume the expedition from the main menu.")
+		return
+	if network_duel != null:
+		_notice("Leave the network duel before loading a save.")
+		return
 	menu.hide()
 	ELCrashReport.trace("battle load")
 	if _campaign_battle() != null:
@@ -5212,7 +5464,7 @@ func _refresh_inspector() -> void:
 		inspector_rows.add_child(spec_line)
 	if selected_creature >= 2:
 		var flags: Array[String] = []
-		for flag: String in entity.flags: flags.append(ELCatalog.flag_name(flag))
+		for flag: String in entity.flags: flags.append(_t(ELCatalog.flag_name(flag)))
 		var stats := "%d / %d · %s" % [entity.power, entity.toughness - entity.damage, ", ".join(flags)]
 		if duel.in_plane(selected_creature): stats += "\nPale aspect: common magic cannot affect it; it cannot attack or block."
 		var line := _label(stats, 13)
@@ -5232,7 +5484,7 @@ func _refresh_inspector() -> void:
 		for ability: Dictionary in duel.abilities(selected_creature):
 			var price := " · %d ether" % ability.cost if ability.cost >= 0 else " · X ether"
 			if ability.has("health_cost"): price += " + %d health" % ability.health_cost
-			var button := _button("%s%s" % [ability.name, price], _select_ability.bind(selected_creature, ability))
+			var button := _button("%s%s" % [_t(str(ability.name)), _t(price)], _select_ability.bind(selected_creature, ability))
 			button.set_meta("ability", ability.key)
 			button.disabled = not _human_turn() or not duel.can_use_ability(selected_creature, ability.key)
 			inspector_rows.add_child(button)
@@ -5655,11 +5907,26 @@ func _show_front_menu() -> bool:
 	if campaign_view != null or profiles.is_empty(): return false
 	var edition := profile.id if profile != null else launch_profile
 	if not profiles.has(edition) or not ELFrontMenu.supports(profiles[edition]): return false
+	_close_network_deck()
+	_drop_network_chat()
+	if network_duel != null:
+		if front_menu != null: front_menu.replay_ui.recording = null
+		network_duel.close()
+		network_duel = null
+	game_console.refresh_chat()
+	if _network_lobby != null: _close_network_lobby()
+	remove_from_group(&"live_network_duel")
+	if _expedition_battle != null: _save_expedition_battle(_expedition_battle.get_instance_id())
+	_expedition_battle = null
+	expedition_run = null
+	_expedition_save_error = ""
+	if _expedition_screen != null: _expedition_screen.hide()
 	if front_menu == null:
 		front_layer = CanvasLayer.new()
 		front_layer.layer = 5
 		add_child(front_layer)
 		front_menu = ELFrontMenu.new()
+		front_menu.console_captures = game_console.reserves_key
 		front_menu.interface_music = true
 		front_menu.music_owner_changed.connect(_pause_battle_audio)
 		front_layer.add_child(front_menu)
@@ -5672,6 +5939,9 @@ func _show_front_menu() -> bool:
 			_hide_front_menu()
 			_open_setup())
 		front_menu.duel_match_requested.connect(_begin_duel_match)
+		front_menu.expedition_requested.connect(_open_expedition)
+		front_menu.network_requested.connect(_open_network_lobby)
+		front_menu.strategy_requested.connect(func(lan: bool): _open_strategic_lobby("", "", {}, lan))
 		front_menu.combat_tutorial_requested.connect(_begin_combat_tutorial)
 		front_menu.replay_requested.connect(_begin_replay)
 		front_menu.duel_round_closed.connect(_duel_round_closed)
@@ -5686,7 +5956,7 @@ func _show_front_menu() -> bool:
 			_hide_front_menu()
 			_resume_campaign(false, ELSingleScenario.SAVE, front_menu.edition))
 		front_menu.slot_load_requested.connect(func(row: Dictionary):
-			_hide_front_menu()
+			if row.get("kind") != ELSaveSlots.KIND_STRATEGIC: _hide_front_menu()
 			_load_slot(row))
 		front_menu.settings = settings
 		front_menu.settings_requested.connect(_open_settings)
@@ -5721,6 +5991,465 @@ func _hide_front_menu() -> void:
 	if front_menu == null: return
 	front_menu.hide()
 	front_layer.hide()
+
+func _open_network_lobby(lan := false) -> void:
+	if _network_lobby != null: return
+	_network_lobby = ELNetworkLobby.new()
+	add_child(_network_lobby)
+	_network_lobby.build(front_menu.profile, lan)
+	_network_lobby.requested.connect(_connect_network_duel)
+	_network_lobby.preset_confirmed.connect(_confirm_network_preset)
+	_network_lobby.edit_requested.connect(_open_network_editor)
+	_network_lobby.visibility_changed.connect(func():
+		if _network_lobby != null and not _network_lobby.visible and not _network_editor_open: _close_network_lobby())
+	_network_lobby.popup_centered()
+
+func _open_network_editor(preset: Dictionary, cap: int) -> void:
+	if _network_lobby == null or _network_editor_open: return
+	_network_editor_open = true
+	_network_lobby.hide()
+	var done := _return_from_network_editor.bind(front_menu.screen)
+	front_menu.duel_ui.open_editor(preset, String(preset.id), done, cap)
+
+func _return_from_network_editor(saved_id: String, previous_screen: String) -> void:
+	if _network_lobby == null: return
+	_network_editor_open = false
+	front_menu.show_screen(previous_screen)
+	_network_lobby.reload_presets(saved_id)
+	_network_lobby.popup_centered()
+
+func _connect_network_duel(hosting: bool, address: String, port: int, deck: String, battlefield: String, resource_level: int, rounds: int, turn_seconds: int, deck_seconds: int) -> void:
+	if network_duel != null: return
+	network_duel = ELNetworkDuel.new()
+	network_duel.message.connect(_network_lobby.set_status)
+	network_duel.offer_received.connect(_network_lobby.show_offer)
+	network_duel.chat_opened.connect(func(): _network_lobby.show_chat(network_duel))
+	network_duel.chat_posted.connect(_network_chat_posted)
+	network_duel.started.connect(_begin_network_duel)
+	network_duel.round_ready.connect(_wait_for_network_round)
+	network_duel.closed.connect(_network_closed)
+	var data := front_menu.profile
+	var result := network_duel.host(data, port, deck, battlefield, resource_level, rounds, _network_lobby.lan_mode, turn_seconds, deck_seconds) if hosting else network_duel.join(data, address, port)
+	if result != OK:
+		_network_lobby.set_status("Could not open the connection. %s" % error_string(result))
+		network_duel = null
+		return
+	_network_lobby.set_waiting(true)
+
+func _confirm_network_preset(deck: String) -> void:
+	if network_duel == null: return
+	if network_duel.confirm_preset(deck) != OK:
+		_network_lobby.set_status("This hero preset is no longer available for this match.")
+		return
+	_network_lobby.set_waiting(true)
+	_network_lobby.set_status("Checking the match setup…")
+
+func _close_network_lobby() -> void:
+	var lobby := _network_lobby
+	_network_lobby = null
+	_network_editor_open = false
+	lobby.queue_free()
+	if network_duel != null and not network_duel.live:
+		network_duel.close()
+		network_duel = null
+
+func _begin_network_duel(battle: ELDuel) -> void:
+	_close_network_deck()
+	if _network_lobby != null: _close_network_lobby()
+	_hide_front_menu()
+	if not is_in_group(&"live_network_duel"): add_to_group(&"live_network_duel")
+	demo = false
+	match_clock = 0.0
+	match_result_shown = false
+	mode_select.select(0)
+	_start(network_duel.profile.id, {}, battle)
+	if network_duel.can_chat() and _network_battle_chat == null: _build_network_chat()
+
+func _build_network_chat() -> void:
+	_network_battle_chat = ELNetworkChat.new()
+	ui.add_child(_network_battle_chat)
+	_network_battle_chat.build(network_duel)
+	_network_battle_chat.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_LEFT)
+	_network_battle_chat.offset_left = 24
+	_network_battle_chat.offset_top = -336
+	_network_battle_chat.offset_right = 454
+	_network_battle_chat.offset_bottom = -182
+	_network_battle_chat.hide()
+	_network_chat_button = Button.new()
+	_network_chat_button.focus_mode = Control.FOCUS_NONE
+	_network_chat_button.text = tr("Chat")
+	_network_chat_button.tooltip_text = tr("Chat with your opponent (Enter)")
+	_network_chat_button.pressed.connect(func():
+		if _network_battle_chat.visible or not _overlay_open(): _set_network_chat_open(not _network_battle_chat.visible))
+	ui.add_child(_network_chat_button)
+	_network_chat_button.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_LEFT)
+	_network_chat_button.offset_left = 24
+	_network_chat_button.offset_top = -174
+	_network_chat_button.offset_right = 136
+	_network_chat_button.offset_bottom = -142
+
+func _network_chat_posted(side: int, line: String) -> void:
+	if network_duel.profile.id == "el1":
+		game_console.refresh_chat()
+		if _network_battle_chat != null and _network_chat_button.visible and is_instance_valid(notices) and bool(settings.values.get("show_chat", true)):
+			var own := side == network_duel.local_side
+			notices.add_line("%s  %s" % [ELNetworkChat.speaker(own), line], Color("d6bb88") if own else Color("a8cdf2"), true)
+	if _network_battle_chat == null or _network_battle_chat.visible or side == network_duel.local_side: return
+	_network_unread = mini(_network_unread + 1, ELNetworkDuel.MAX_CHAT_HISTORY)
+	_network_chat_button.text = "%s (%d)" % [tr("Chat"), _network_unread]
+
+func _set_network_chat_open(open: bool) -> void:
+	if _network_battle_chat == null: return
+	_network_battle_chat.visible = open
+	game_console.set_process_input(not open or profile.id == "el1")
+	if open:
+		_network_unread = 0
+		_network_chat_button.text = tr("Chat")
+		_network_battle_chat.entry.grab_focus()
+	else:
+		_network_battle_chat.entry.release_focus()
+
+func _update_network_chat() -> void:
+	if _network_chat_button == null: return
+	var available := (network_duel != null and network_duel.can_chat() and network_duel.live
+		and duel != null and duel.phase != ELDuel.Phase.FINISHED)
+	_network_chat_button.visible = available
+	if not available and _network_battle_chat.visible: _set_network_chat_open(false)
+
+func _drop_network_chat() -> void:
+	if _network_battle_chat == null: return
+	_set_network_chat_open(false)
+	_network_battle_chat.queue_free()
+	_network_chat_button.queue_free()
+	_network_battle_chat = null
+	_network_chat_button = null
+	_network_unread = 0
+
+func _show_network_round() -> void:
+	if match_result_shown or front_menu == null: return
+	var result := network_duel.match_state
+	if result.played == 0: return
+	match_result_shown = true
+	var names: Array = []
+	for side in 2:
+		var preset: Dictionary = result.presets[side]
+		var label := String(preset.get("name", ""))
+		names.append(label if not label.is_empty() else _side_name(side))
+	var local := network_duel.local_side
+	var last := 0 if duel.winner < 0 else (1 if duel.winner == local else -1)
+	network_duel.begin_round_selection()
+	var edit_deck := Callable()
+	if profile.id == "el2" and not result.finished() and network_duel.round_preset().reserve.values().any(func(count: int): return count > 0):
+		edit_deck = _open_network_deck
+	front_menu.replay_ui.recording = network_duel.recording if result.finished() else null
+	front_menu.duel_ui.show_round(result, names, last, result.finished(), local, edit_deck, network_duel.deck_time_remaining())
+	_show_front_menu_layer()
+
+func _open_network_deck() -> void:
+	if _network_deck != null or network_duel == null: return
+	var panel := ELNetworkDeck.new()
+	_network_deck = panel
+	add_child(panel)
+	panel.build(network_duel)
+	panel.visibility_changed.connect(func():
+		if _network_deck == panel and not panel.visible: _close_network_deck())
+	panel.popup_centered()
+
+func _close_network_deck() -> void:
+	if _network_deck == null: return
+	var panel := _network_deck
+	_network_deck = null
+	panel.hide()
+	panel.queue_free()
+
+func _wait_for_network_round() -> void:
+	_close_network_deck()
+	if front_menu.screen == "duel_round": front_menu.duel_ui.wait_for_network_round()
+
+func _network_closed(reason: String) -> void:
+	game_console.refresh_chat()
+	if network_duel.match_state != null and network_duel.match_state.finished(): return
+	network_duel = null
+	if _network_lobby != null:
+		_network_lobby.set_waiting(false)
+		_network_lobby.set_status(reason)
+	elif _show_front_menu():
+		front_menu.show_screen("mp_start")
+		front_menu.inform_hosted(reason, func(): pass)
+
+func _stage_strategic_save(row: Dictionary) -> void:
+	if _strategic_lobby != null or not profiles.has("el1"): return
+	var restored := ELSaveSlots.read_strategy(str(row.path), profiles.el1)
+	if restored.has("error"):
+		if campaign_view != null: campaign_view._remark(restored.error)
+		else: front_menu.refuse(restored.error, 360.0)
+		return
+	if campaign_view != null: await _leave_campaign()
+	if restored.local_authority:
+		_new_strategic_session().resume_local(restored)
+		return
+	front_menu.show_screen("load_strategy")
+	var details := ELSaveSlots.current_row(restored.state)
+	details.name = row.get("name", "")
+	_open_strategic_lobby(str(row.path), ELSaveSlots.info(profiles.el1, details), restored, _strategic_lan)
+
+func _open_strategic_lobby(save_path := "", details := "", restored: Dictionary = {}, lan := false) -> void:
+	if _strategic_lobby != null or strategic_session != null: return
+	_strategic_lan = lan
+	_strategic_lobby = ELStrategicLobby.new()
+	add_child(_strategic_lobby)
+	_strategic_lobby.pending_save = restored
+	_strategic_lobby.build(front_menu.profile, save_path, details, lan)
+	_strategic_lobby.requested.connect(_connect_strategic)
+	_strategic_lobby.load_requested.connect(func():
+		_drop_strategic_lobby()
+		front_menu.show_screen("load_strategy"))
+	var lobby_id := _strategic_lobby.get_instance_id()
+	_strategic_lobby.visibility_changed.connect(func():
+		if _strategic_lobby == null or _strategic_lobby.get_instance_id() != lobby_id or _strategic_lobby.visible: return
+		_drop_strategic_lobby()
+		if strategic_session != null and not strategic_session.link.live: _close_strategic_session())
+	_strategic_lobby.popup_centered()
+
+func _connect_strategic(hosting: bool, address: String, port: int, map_id: String, players: Vector2i, difficulty: int) -> void:
+	if strategic_session != null: return
+	var restored := _strategic_lobby.pending_save
+	if hosting and not _strategic_lobby.save_path.is_empty() and restored.is_empty():
+		restored = ELSaveSlots.read_strategy(_strategic_lobby.save_path, front_menu.profile)
+		if restored.has("error"):
+			_strategic_lobby.set_status(restored.error)
+			return
+	_strategic_lobby.pending_save = {}
+	var session := _new_strategic_session()
+	var result: Error
+	if not restored.is_empty(): result = session.host_saved(restored, port, _strategic_lan)
+	elif hosting: result = session.link.host(session.profile, map_id, port, players, difficulty, randi() & 0x7fffffff, 1,
+		_strategic_lobby.turn_limit(), _strategic_lobby.combat_limit(), _strategic_lan)
+	else: result = session.link.join(session.profile, address, port)
+	if result != OK:
+		_close_strategic_session()
+		_strategic_lobby.set_status("Could not open the connection. %s" % error_string(result))
+		return
+	_strategic_lobby.set_waiting(true)
+
+func _new_strategic_session() -> ELStrategicSession:
+	var session := ELStrategicSession.new()
+	session.profile = front_menu.profile
+	session.presentation_ready = _strategic_presentation_idle
+	session.message.connect(_strategic_message)
+	session.takeover_notice.connect(func(_text: String):
+		if is_in_group(&"live_network_duel"): remove_from_group(&"live_network_duel"))
+	var session_id := session.get_instance_id()
+	session.closed.connect(func(reason: String):
+		if strategic_session != null and strategic_session.get_instance_id() == session_id: _strategic_closed(reason))
+	session.world_ready.connect(func(restored: Dictionary):
+		if strategic_session != null and strategic_session.get_instance_id() == session_id: _open_strategic_world(restored))
+	strategic_session = session
+	add_child(session)
+	return session
+
+func _open_strategic_world(restored: Dictionary) -> void:
+	_drop_strategic_lobby()
+	_hide_front_menu()
+	if not strategic_session.link.local_authority: add_to_group(&"live_network_duel")
+	var spell_selection := {}
+	var diplomacy_selection := {}
+	var summon_playback := {}
+	var resume_hero := -1
+	var resume_building := -1
+	if campaign_view != null:
+		restored.camera = campaign_view.camera_state()
+		if restored.get("strategic_refresh", false):
+			summon_playback = campaign_view.summon_playback()
+			if campaign_view.global_spells != null: spell_selection = campaign_view.global_spells.selection_state()
+			if campaign_view.diplomacy != null: diplomacy_selection = campaign_view.diplomacy.selection_state()
+			var panel := campaign_view.hero_screen
+			if panel != null and not panel.exchange: resume_hero = panel.heroes[0]
+			if campaign_view.building_screen != null: resume_building = campaign_view.building_screen.building_id
+	var state: ELAdventureSession = restored.state
+	await _begin_campaign("el1", {"file_name": state.map.id}, state.difficulty, restored, strategic_session)
+	if campaign_view == null or campaign_view.state != state: return
+	campaign_view.resume_summon_playback(summon_playback)
+	if restored.get("recruit", -1) >= 0: campaign_view.focus_recruit(restored.recruit)
+	for cue: Array in restored.get("summons", []): campaign_view.present_summon(int(cue[0]), cue[1])
+	if not spell_selection.is_empty():
+		campaign_view.open_global_spells(campaign_view.global_spell_waiting)
+		if campaign_view.global_spells != null: campaign_view.global_spells.restore_selection(spell_selection)
+	elif not diplomacy_selection.is_empty():
+		campaign_view.open_diplomacy()
+		if campaign_view.diplomacy != null: campaign_view.diplomacy.restore_selection(diplomacy_selection)
+	elif resume_hero >= 0: campaign_view.open_hero_screen(resume_hero)
+	elif resume_building >= 0: campaign_view.open_building_screen(resume_building)
+
+func _drop_strategic_lobby() -> void:
+	if _strategic_lobby == null: return
+	var lobby := _strategic_lobby
+	_strategic_lobby = null
+	lobby.hide()
+	lobby.queue_free()
+
+func _close_strategic_session() -> void:
+	if strategic_session == null: return
+	strategic_session.queue_free()
+	strategic_session = null
+	_strategic_playable = false
+	if is_in_group(&"live_network_duel"): remove_from_group(&"live_network_duel")
+
+func _strategic_message(message: String) -> void:
+	if _strategic_lobby != null: _strategic_lobby.set_status(message)
+	elif campaign_view != null: campaign_view._remark(message)
+
+func _strategic_closed(reason: String) -> void:
+	_close_strategic_session()
+	if _strategic_lobby != null:
+		_strategic_lobby.set_waiting(false)
+		_strategic_lobby.set_status(reason)
+		return
+	if campaign_view != null: _leave_campaign()
+	else:
+		stage.show()
+		set_process(true)
+		set_process_unhandled_input(true)
+	if _show_front_menu():
+		front_menu.show_screen("mp_type")
+		front_menu.inform_hosted(reason, func(): pass)
+
+func _strategic_battle() -> bool:
+	return strategic_session != null and duel != null and strategic_session.relay.duel == duel
+
+func _update_strategic_clock() -> void:
+	var seconds := strategic_session.relay.clock_remaining() if _strategic_battle() else -1
+	if _strategic_clock == null:
+		if seconds < 0: return
+		_strategic_clock = ELFirstClock.new()
+		ui.add_child(_strategic_clock)
+		_strategic_clock.build(profile, true)
+	_strategic_clock.show_seconds(seconds)
+
+func _update_network_clock() -> void:
+	var seconds := network_duel.clock_remaining() if network_duel != null else -1
+	if _network_clock == null:
+		if seconds < 0: return
+		_network_clock = ELFirstClock.new()
+		ui.add_child(_network_clock)
+		_network_clock.build(profile, true)
+	_network_clock.show_seconds(seconds)
+
+func _expire_network_phase() -> void:
+	if power_dialog != null and power_dialog.visible:
+		pending_power.clear()
+		_hide_power_panel()
+	_end_phase()
+
+func _strategic_presentation_idle() -> bool:
+	if not _strategic_battle(): return true
+	return not _melee_busy() and not _cast_busy() and _arrivals.is_empty() and _effect_cast.is_empty() and ending_over()
+
+func _open_expedition() -> void:
+	if not profiles.has("el2"): return
+	_hide_front_menu()
+	if _expedition_screen == null:
+		_expedition_layer = CanvasLayer.new()
+		_expedition_layer.layer = 5
+		add_child(_expedition_layer)
+		_expedition_screen = ELExpeditionScreen.new()
+		_expedition_layer.add_child(_expedition_screen)
+		_expedition_screen.build(profiles.el2)
+		_expedition_screen.started.connect(_new_expedition)
+		_expedition_screen.resumed.connect(_resume_expedition)
+		_expedition_screen.node_chosen.connect(_expedition_node)
+		_expedition_screen.choice_made.connect(_expedition_choice)
+		_expedition_screen.save_retried.connect(func(): _expedition_checkpoint())
+		_expedition_screen.retried.connect(_retry_expedition)
+		_expedition_screen.left.connect(func(): _show_front_menu())
+	_show_expedition()
+
+func _new_expedition(preset: String, run_seed := ELExpeditionScreen.RANDOM_SEED) -> void:
+	var next := ELExpeditionRun.new()
+	if run_seed == ELExpeditionScreen.RANDOM_SEED: run_seed = randi() & 0x7fffffff
+	if not next.create(profiles.el2, preset, run_seed):
+		_expedition_screen.message(next.error)
+		return
+	_store_new_expedition(next)
+
+func _retry_expedition() -> void:
+	if expedition_run == null or not _expedition_save_error.is_empty(): return
+	var next := expedition_run.retry()
+	if next != null: _store_new_expedition(next)
+
+func _store_new_expedition(next: ELExpeditionRun) -> void:
+	if not next.persist():
+		if expedition_run != null: _show_expedition()
+		_expedition_screen.message(next.error)
+		return
+	expedition_run = next
+	_show_expedition()
+
+func _resume_expedition() -> void:
+	var saved := ELExpeditionRun.new()
+	if not saved.restore(profiles.el2):
+		_expedition_screen.message(saved.error)
+		return
+	expedition_run = saved
+	if expedition_run.phase == "battle": _start_expedition_battle()
+	else: _show_expedition()
+
+func _expedition_node(id: String) -> void:
+	if expedition_run == null or not _expedition_save_error.is_empty(): return
+	var previous := expedition_run.snapshot()
+	if expedition_run.choose_node(id) and _expedition_checkpoint(previous) and expedition_run.phase == "battle":
+		_start_expedition_battle()
+
+func _expedition_choice(id: String) -> void:
+	if expedition_run == null or not _expedition_save_error.is_empty(): return
+	var previous := expedition_run.snapshot()
+	if expedition_run.choose(id) and _expedition_checkpoint(previous) and expedition_run.phase == "battle":
+		_start_expedition_battle()
+
+func _show_expedition() -> void:
+	_expedition_screen.show_run(expedition_run, _expedition_save_error)
+	_expedition_screen.show()
+	_pause_battle_audio(true)
+
+func _expedition_checkpoint(previous: Dictionary = {}) -> bool:
+	var saved := expedition_run.persist()
+	var failure := expedition_run.error
+	# A room choice must be durable before proceeding. A settled duel has
+	# already happened, so retain its result and offer a save retry instead.
+	var reverted := not saved and not previous.is_empty() and expedition_run.restore_snapshot(profiles.el2, previous)
+	_expedition_save_error = "" if saved or reverted else failure
+	_show_expedition()
+	if reverted: _expedition_screen.message(failure)
+	return saved
+
+func _start_expedition_battle() -> void:
+	var battle := expedition_run.build_battle()
+	if battle == null:
+		_expedition_screen.message(expedition_run.error)
+		return
+	_expedition_battle = battle
+	if battle.phase == ELDuel.Phase.FINISHED:
+		_finish_expedition_battle()
+		return
+	_expedition_screen.hide()
+	demo = false
+	mode_select.select(0)
+	_start("el2", {}, battle)
+	var battle_id := battle.get_instance_id()
+	battle.changed.connect(_save_expedition_battle.bind(battle_id), CONNECT_DEFERRED)
+	_save_expedition_battle(battle_id)
+
+func _save_expedition_battle(battle_id: int) -> void:
+	if _expedition_battle == null or _expedition_battle.get_instance_id() != battle_id: return
+	if not expedition_run.save_battle(_expedition_battle): _notice(expedition_run.error)
+
+func _finish_expedition_battle() -> void:
+	var battle := _expedition_battle
+	_expedition_battle = null
+	if expedition_run.resolve_battle(battle): _expedition_checkpoint()
+	else:
+		_show_expedition()
+		_expedition_screen.message(expedition_run.error)
 
 # --- Original Duel mode match ------------------------------------------------
 
@@ -5826,6 +6555,11 @@ func _continue_match() -> void:
 	else: _show_round_result()
 
 func _duel_round_closed(proceed: bool) -> void:
+	if network_duel != null and network_duel.match_state != null:
+		if proceed and not network_duel.match_state.finished():
+			network_duel.continue_round()
+		elif _show_front_menu(): front_menu.show_screen("mp_start")
+		return
 	if duel_match == null: return
 	if proceed and not duel_match.finished():
 		_hide_front_menu()
@@ -5941,12 +6675,7 @@ func _close_combat_tutorial() -> void:
 
 ## Names and portraits the replay list shows: my hero, the enemy hero.
 func _label_recording() -> void:
-	var names := _match_names()
-	for side in 2:
-		var template := String(duel.heroes[side].template)
-		match_recording.labels[side] = names[side] if not String(names[side]).is_empty() else template
-		match_recording.labels[side + 2] = template
-		match_recording.faces[side] = int(profile.table("HeroTemplates").get(template, {}).get("Face", -1))
+	match_recording.label_heroes(duel, _match_names())
 
 # --- Second-game duel replays ---------------------------------------------------
 
@@ -5983,7 +6712,8 @@ func _begin_replay(path: String) -> void:
 		replay_panel.play_toggled.connect(func(on: bool):
 			if replay_player != null: replay_player.set_playing(on))
 		replay_panel.rewind_requested.connect(_rewind_replay)
-		replay_panel.inventory_requested.connect(_open_replay_inventory.bind(0))
+		replay_panel.inventory_requested.connect(func():
+			if replay_player != null: _open_replay_inventory(replay_player.local_side()))
 		replay_panel.comment_edited.connect(func(text: String):
 			if replay_player != null and replay_player.set_comment(text): replay_panel.text_box.text = text)
 		replay_panel.save_requested.connect(_save_replay_copy)
@@ -6020,7 +6750,7 @@ func _replay_changed() -> void:
 	replay_panel.set_checked("TP_Play", replay_player.playing)
 	for mode in 3: replay_panel.set_checked("TP_Pause%dE" % (mode + 1), replay_player.playing and replay_player.step_mode == mode + 1)
 	if replay_player.duel == duel and duel.phase == ELDuel.Phase.FINISHED:
-		var key := "T_RR_DUEL_WIN" if duel.winner == 0 else ("T_RR_DUEL_DRAW" if duel.winner < 0 else "T_RR_DUEL_LOSE")
+		var key := "T_RR_DUEL_WIN" if duel.winner == replay_player.local_side() else ("T_RR_DUEL_DRAW" if duel.winner < 0 else "T_RR_DUEL_LOSE")
 		_notice(profiles.el2.text(key).strip_edges())
 	_refresh()
 
@@ -6045,7 +6775,9 @@ func _open_replay_inventory(side: int) -> void:
 	replay_player.set_playing(false)
 	var labels: Array = replay_player.data.get("labels", [])
 	var players: Array = replay_player.data.get("options", {}).get("players", [])
-	var title := str(labels[side]) if side < labels.size() and not str(labels[side]).is_empty() else str(duel.heroes[side].template)
+	var local := replay_player.local_side()
+	var label := side ^ local
+	var title := str(labels[label]) if label < labels.size() and not str(labels[label]).is_empty() else str(duel.heroes[side].template)
 	var reserve: Dictionary = players[side].get("reserve", {}) if side < players.size() and players[side] is Dictionary else {}
 	var screen := ELRoundEndDuelView.new()
 	if not screen.build(profiles.el2, duel.heroes[side], reserve, title):
@@ -6056,7 +6788,7 @@ func _open_replay_inventory(side: int) -> void:
 	replay_inventory = screen
 	replay_inventory_side = side
 	screen.closed.connect(func():
-		if side == 0: _open_replay_inventory(1)
+		if side == local: _open_replay_inventory(1 - local)
 		else: _close_replay_inventory())
 
 ## Save changes (TP_SaveE): the replay save screen over the battle, saving
@@ -6144,7 +6876,7 @@ func _ask_battle(key: String, on_ok: Callable) -> void:
 
 func _esc_surrender() -> void:
 	_close_esc_menu()
-	if _campaign_battle() != null or duel_match != null: _surrender_battle()
+	if network_duel != null or _expedition_battle != null or _campaign_battle() != null or duel_match != null: _surrender_battle()
 	elif duel != null and duel.phase != ELDuel.Phase.FINISHED and replay_player == null and combat_tutorial == null:
 		# A practice battle: the player's side concedes.
 		duel.heroes[0].health = 0
@@ -6153,6 +6885,15 @@ func _esc_surrender() -> void:
 
 ## Load: the save list of the running kind of game (campaign or single mission).
 func _esc_load() -> void:
+	if strategic_session != null:
+		_notice("Leave the network match before loading.")
+		return
+	if _expedition_battle != null:
+		_notice("Resume the expedition from the main menu.")
+		return
+	if network_duel != null:
+		_notice("Leave the network duel before loading a save.")
+		return
 	var host := _battle_host()
 	if host == null: return
 	var kind := ELSaveSlots.kind_of(campaign_view.state) if campaign_view != null else ELSaveSlots.KIND_SINGLE

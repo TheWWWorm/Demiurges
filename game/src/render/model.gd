@@ -76,6 +76,7 @@ func build(data: ELProfile, model: String, texture_name: String, secondary_textu
 		var skin := pair[0].albedo_texture as Texture2D
 		if String(pair[1]).to_lower().contains("alpha32") or (skin != null and skin.has_meta("alpha32")):
 			pair[0].transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_DEPTH_PRE_PASS
+	var authored_materials := {}
 	for link: Array in links:
 		var name: String = link[0]
 		var node := MeshInstance3D.new()
@@ -85,7 +86,21 @@ func build(data: ELProfile, model: String, texture_name: String, secondary_textu
 			node.mesh = _mesh_cache["base/" + name]
 			# Slot 2 parts wear the second texture (mounts, staffs, wings: the
 			# Add/Transport sheets); slot 1 and 8 parts the first.
-			node.material_override = secondary if int(figures[name].texture_slot) == 2 else material
+			var part_material := secondary if int(figures[name].texture_slot) == 2 else material
+			var material_id := int(figures[name].material_id)
+			var fullbright := material_id == ELFigure.MATERIAL_MAGIC
+			var diffuse := profile.figure_diffuse(material_id)
+			if fullbright or diffuse != Color.WHITE:
+				var key := [part_material, material_id]
+				if not authored_materials.has(key):
+					var authored := part_material.duplicate() as StandardMaterial3D
+					authored.albedo_color = diffuse
+					if fullbright:
+						authored.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+						authored.set_meta(ELFigure.AUTHORED_FULLBRIGHT, true)
+					authored_materials[key] = authored
+				part_material = authored_materials[key]
+			node.material_override = part_material
 		# Anchors may parent real geometry (the illusion wall uses "dust" as its
 		# root). Omit only their helper mesh; hiding the node hides descendants too.
 	# Track keys are model-space transforms, so every part hangs from the

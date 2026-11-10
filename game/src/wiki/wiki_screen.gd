@@ -33,6 +33,10 @@ const UI := {
 }
 
 static var instance: ELWikiScreen
+const CLIP_LABELS := {
+	"en": ["Idle", "Attack", "Ranged attack", "Hit reaction", "Death", "Summon", "Rest", "Rise", "Ability", "Play"],
+	"ru": ["Ожидание", "Атака", "Дальняя атака", "Получение удара", "Гибель", "Призыв", "Отдых", "Подъём", "Способность", "Играть"],
+}
 ## The installed games ({edition: ELProfile}), set by the main menu. Their
 ## encyclopedia pages (ELWikiCatalog) are built from the player's own copy.
 static var profiles: Dictionary = {}
@@ -114,7 +118,8 @@ func _init() -> void:
 
 func _enter_tree() -> void:
 	_was_paused = get_tree().paused
-	get_tree().paused = true
+	if get_tree().get_first_node_in_group(&"live_network_duel") == null:
+		get_tree().paused = true
 
 func _exit_tree() -> void:
 	if instance == self: instance = null
@@ -426,6 +431,7 @@ func _show_visual(row: Dictionary) -> void:
 			preview.custom_minimum_size = Vector2(0, 320)
 			_visual.add_child(preview)
 			_preview = preview
+			_add_animation_controls(preview)
 			var hint := Label.new()
 			hint.text = _text("turn")
 			hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -446,6 +452,31 @@ func _show_visual(row: Dictionary) -> void:
 		picture.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 		picture.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 		_visual.add_child(picture)
+
+func _add_animation_controls(preview: ELWikiPreview) -> void:
+	var controls := HBoxContainer.new()
+	var options := OptionButton.new()
+	options.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	options.fit_to_longest_item = false
+	var labels: Array = CLIP_LABELS.get(language, CLIP_LABELS.en)
+	var play := _button(labels.back())
+	controls.add_child(options)
+	controls.add_child(play)
+	_visual.add_child(controls)
+	var refresh := func():
+		options.clear()
+		for clip: String in preview.animations():
+			options.add_item(labels[ELWikiPreview.ANIMATIONS.find(clip)])
+			options.set_item_metadata(options.item_count - 1, clip)
+		controls.visible = options.item_count > 0
+		if controls.visible: options.select(0)
+	preview.creature_changed.connect(refresh)
+	refresh.call()
+	play.pressed.connect(func():
+		if options.selected >= 0:
+			var settings := ELSettings.new()
+			settings.load_file()
+			preview.play_animation(options.get_selected_metadata(), float(settings.values.get("effects", 0.8))))
 
 func _restore_scroll(value: float) -> void:
 	_article.get_v_scroll_bar().value = value

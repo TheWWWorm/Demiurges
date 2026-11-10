@@ -211,6 +211,11 @@ func _catalog(screen: ELWikiScreen, shots: String) -> void:
 		await process_frame
 		check(screen._visual.get_child(0) is HBoxContainer, "%s: both editions' models can be shown" % two_models)
 		await _shot(shots, "two-models")
+	if profiles.has("el2"):
+		screen.navigate("card-orwr")
+		await process_frame
+		_check_animations(screen)
+		await _shot(shots, "creature-animation-controls")
 	screen.navigate(sorcery)
 	check(screen._preview == null and screen._visual.visible, "%s: a spell page shows its icon" % sorcery)
 	await _shot(shots, "spell")
@@ -218,3 +223,31 @@ func _catalog(screen: ELWikiScreen, shots: String) -> void:
 	screen.navigate("all-creatures")
 	await _shot(shots, "ru-creature-list")
 	screen.set_language("en")
+
+func _check_animations(screen: ELWikiScreen) -> void:
+	var preview := screen._preview
+	check(preview != null, "Orc Warrior has an animation preview")
+	if preview == null: return
+	var controls := preview.get_parent().get_child(preview.get_index() + 1) as HBoxContainer
+	check(controls != null, "The animation menu and Play button appear below the model")
+	if controls == null: return
+	var options := controls.get_child(0) as OptionButton
+	var play := controls.get_child(1) as Button
+	var settings := ELSettings.new()
+	settings.load_file()
+	var volume := float(settings.values.get("effects", 0.8))
+	for label: String in ["Attack", "Death", "Idle"]:
+		var index := -1
+		for i in options.item_count:
+			if options.get_item_text(i) == label:
+				index = i
+				break
+		check(index >= 0, "Orc Warrior offers %s" % label)
+		if index < 0: continue
+		options.select(index)
+		play.pressed.emit()
+		check(preview.model.clip == options.get_selected_metadata(), "Play starts the %s clip" % label)
+		if label == "Idle" or volume <= 0.0:
+			check(not preview._sound.playing, "%s stops the previous sound" % label)
+		else:
+			check(preview._sound.playing and preview._sound.stream is AudioStreamWAV, "%s plays an original creature sound" % label)

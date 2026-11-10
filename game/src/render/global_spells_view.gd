@@ -65,6 +65,9 @@ const PROMPT_ICON := Vector2(146, 122)
 var state: ELAdventureSession
 var hud: ELAdventureHud
 var profile: ELProfile
+var strategic_session: ELStrategicSession
+var _pending := false
+var _status: Label
 var player := -1
 var sheet: Canvas
 var buttons: Dictionary = {}
@@ -108,10 +111,11 @@ func build(session: ELAdventureSession, owner: int) -> void:
 	_label(sheet, Rect2(475, 28, 128, 15), "CtrlSelectCastle", 15)
 	for line: Array in [[388, "CtrlGSUpkeep"], [419, "CtrlGSProtection"], [538, "CtrlGSProtection1"]]:
 		_label(sheet, Rect2(157, line[0], 110, 16), line[1], 15, HORIZONTAL_ALIGNMENT_RIGHT)
+	if strategic_session != null: _status = _label(sheet, Rect2(20, 570, 600, 22), "", 15)
 	_button(sheet, buttons, "MoreMana").pressed.connect(func(): extra += 1; refresh())
 	_button(sheet, buttons, "LessMana").pressed.connect(func(): extra = maxi(0, extra - 1); refresh())
 	_button(sheet, buttons, "CastSpell").pressed.connect(_produce)
-	_button(sheet, buttons, "CancelSpell").pressed.connect(func(): ELGlobalSpells.cancel(state, player); refresh())
+	_button(sheet, buttons, "CancelSpell").pressed.connect(_cancel_production)
 	_button(sheet, buttons, "GSDispell").pressed.connect(_dispel)
 	_button(sheet, buttons, "GSOK").pressed.connect(func(): closed.emit())
 	for list in SCROLLS.size():
@@ -180,11 +184,13 @@ func refresh() -> void:
 		buttons[SCROLLS[list][0]].disabled = scrolls[list] <= 0
 		buttons[SCROLLS[list][1]].disabled = scrolls[list] >= count - VISIBLE
 	var code := selected_code()
-	buttons.MoreMana.disabled = code.is_empty()
-	buttons.LessMana.disabled = code.is_empty() or extra <= 0
-	buttons.CastSpell.disabled = code.is_empty() or not ELGlobalSpells.produce_problem(state, player, code).is_empty()
-	buttons.CancelSpell.disabled = production().is_empty()
-	buttons.GSDispell.disabled = entries[1].is_empty()
+	var supported := not code.is_empty()
+	buttons.MoreMana.disabled = not supported or _pending
+	buttons.LessMana.disabled = not supported or extra <= 0 or _pending
+	buttons.CastSpell.disabled = not supported or _pending or not ELGlobalSpells.produce_problem(state, player, code).is_empty()
+	buttons.CancelSpell.disabled = production().is_empty() or _pending
+	buttons.GSDispell.disabled = entries[1].is_empty() or _pending
+	buttons.GSOK.disabled = _pending
 	sheet.queue_redraw()
 
 func selected_code() -> String:
@@ -193,16 +199,74 @@ func selected_code() -> String:
 func production() -> Dictionary:
 	return ELGlobalSpells.data(state, player).get("production", {})
 
+## A same-day network refresh can replace this screen while the player aims.
+func selection_state() -> Dictionary:
+	var chosen: Array[int] = []
+	if prompt.visible:
+		for list in _targets.size():
+			var index := prompt_picks[list]
+			chosen.append(int(_targets[list][index]) if index >= 0 and index < _targets[list].size() else -1)
+	return {
+		"code": selected_code(), "extra": extra,
+		"ready": production().get("code", "") if prompt.visible else "", "targets": chosen,
+	}
+
+func restore_selection(selection: Dictionary) -> void:
+	var index: int = entries[0].find_custom(func(entry: Dictionary): return entry.code == selection.code)
+	if index >= 0:
+		picks[0] = index
+		scrolls[0] = maxi(0, index - VISIBLE + 1)
+		extra = selection.extra
+		refresh()
+	if not prompt.visible or production().get("code", "") != selection.ready: return
+	for list in mini(_targets.size(), selection.targets.size()):
+		prompt_picks[list] = _targets[list].find(selection.targets[list])
+		prompt_scrolls[list] = maxi(0, prompt_picks[list] - VISIBLE + 1)
+	_refresh_prompt()
+
 func _produce() -> void:
 	var code := selected_code()
+	if strategic_session != null:
+		if not code.is_empty(): _submit_order(["global_produce", code, extra], _produced)
+		return
 	if code.is_empty() or not ELGlobalSpells.produce(state, player, code, extra): return
+	_produced()
+
+func _produced() -> void:
 	extra = 0
 	refresh()
 	if int(production().get("state", 0)) == 2: open_prompt()
 
+func _cancel_production() -> void:
+	if strategic_session != null:
+		if not production().is_empty(): _submit_order(["global_cancel", production().code], prompt.hide)
+		return
+	ELGlobalSpells.cancel(state, player)
+	refresh()
+
+func _submit_order(order: Array, on_success: Callable) -> void:
+	if _pending: return
+	_pending = true
+	_pending = strategic_session.manage_hero(order, _order_done.bind(on_success))
+	_status.text = "Confirming global spell order…" if _pending else ""
+	refresh()
+	if prompt.visible: _refresh_prompt()
+
+func _order_done(reason: String, on_success: Callable) -> void:
+	if not is_inside_tree() or is_queued_for_deletion(): return
+	_pending = false
+	_status.text = reason
+	if reason.is_empty(): on_success.call()
+	refresh()
+	if prompt.visible: _refresh_prompt()
+
 func _dispel() -> void:
 	if picks[1] < 0: return
-	ELGlobalSpells.dispel(state, player, int(entries[1][picks[1]].serial))
+	var serial := int(entries[1][picks[1]].serial)
+	if strategic_session != null:
+		_submit_order(["global_dispel", serial], func(): pass)
+		return
+	ELGlobalSpells.dispel(state, player, serial)
 	refresh()
 
 func _scroll(list: int, delta: int) -> void:
@@ -366,6 +430,7 @@ func _castle_label(id: int) -> String:
 
 ## Escape answers the prompt first (as SelectCancel), then closes the screen.
 func cancel() -> void:
+	if _pending: return
 	if prompt.visible: _dismiss_prompt()
 	else: closed.emit()
 
@@ -420,11 +485,12 @@ func _refresh_prompt() -> void:
 	var possible := true
 	for list in _targets.size():
 		var count: int = _targets[list].size()
-		possible = possible and count > 0
+		possible = possible and prompt_picks[list] >= 0 and prompt_picks[list] < count
 		prompt_scrolls[list] = clampi(prompt_scrolls[list], 0, maxi(0, count - VISIBLE))
 		prompt_buttons[PROMPT_SCROLLS[list][0]].disabled = prompt_scrolls[list] <= 0
 		prompt_buttons[PROMPT_SCROLLS[list][1]].disabled = prompt_scrolls[list] >= count - VISIBLE
-	prompt_buttons.SelectOK.disabled = not possible
+	prompt_buttons.SelectOK.disabled = not possible or _pending
+	prompt_buttons.SelectCancel.disabled = _pending
 	prompt.queue_redraw()
 
 func prompt_cell(list: int, slot: int) -> Rect2:
@@ -445,13 +511,27 @@ func _scroll_prompt(list: int, delta: int) -> void:
 
 func _apply() -> void:
 	var chosen: Array = []
-	for list in _targets.size(): chosen.append(_targets[list][prompt_picks[list]])
+	for list in _targets.size():
+		if prompt_picks[list] < 0 or prompt_picks[list] >= _targets[list].size(): return
+		chosen.append(_targets[list][prompt_picks[list]])
+	if strategic_session != null:
+		if not production().is_empty():
+			var completed := _open_remote_shop if production().code == ELGlobalSpells.REMOTE_USE else prompt.hide
+			_submit_order(["global_cast", production().code] + chosen, completed)
+		return
 	prompt.hide()
 	ELGlobalSpells.cast(state, player, chosen)
 	refresh()
 
+func _open_remote_shop() -> void:
+	prompt.hide()
+	if strategic_session.remote_shop_open(player): closed.emit()
+
 ## SelectCancel: the created spell is dispelled.
 func _dismiss_prompt() -> void:
+	if strategic_session != null:
+		_cancel_production()
+		return
 	prompt.hide()
 	ELGlobalSpells.cancel(state, player)
 	refresh()

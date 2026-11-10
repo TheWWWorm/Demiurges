@@ -71,13 +71,12 @@ static func pickable(state: ELAdventureSession, item: Dictionary) -> bool:
 	if item.is_empty() or item.get("group") == "terrain_objects": return false
 	var corpse: bool = item.get("type") == "corpse"
 	if not (item.get("alive", false) or corpse) or not item.get("visible", false) or not item.get("placed", true) or item.get("fortified", false): return false
-	var player := state.current_player
-	return not ELFog.active(state, player) or ELFog.shown(state, player, item)
+	return ELFog.shown(state, 1, item)
 
 ## The picked object at a map point (tile units): standing figures accept
 ## points slightly behind them and win over buildings, as they are drawn in
 ## front; buildings and pickups use their footprint.
-static func object_at(state: ELAdventureSession, point: Vector2) -> int:
+static func object_at(state: ELAdventureSession, point: Vector2, picking_action := false) -> int:
 	var best := -1
 	var distance := INF
 	var building := -1
@@ -85,6 +84,7 @@ static func object_at(state: ELAdventureSession, point: Vector2) -> int:
 	for id: int in state.objects:
 		var item: Dictionary = state.objects[id]
 		if item.get("group") == "terrain_objects" or not pickable(state, item): continue
+		if picking_action and item.get("type") == "corpse" and item.get("enabled", false) and Rect2(item.x, item.y, 1, 1).has_point(point): return id
 		if item.get("type") in ["hero", "monster"]:
 			var offset := point - Vector2(float(item.x) + 0.5, float(item.y) + 0.5)
 			if absf(offset.x) < 0.9 and offset.y > -0.9 and offset.y < 2.2 and offset.length() < distance:

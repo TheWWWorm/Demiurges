@@ -11,7 +11,7 @@ Demiurges is still in development. These are the things you are most likely to n
 - A few rare error messages and the battle log are still shown in English.
 - Computer opponents follow the original's approach but do not copy its decisions exactly. As in the original, they never answer alliance or trade offers.
 - The campaigns are tested screen by screen and system by system, not yet by playing every chapter from start to finish.
-- There is no network multiplayer. Local hot seat duels work.
+- Network duels use the host's address. The browser build supports local hot seat.
 - Touch controls have only been tried in testing, not yet on many real phones. The interface keeps the original layout, so on a small phone text and buttons are small.
 - Intro and ending videos are not played in the browser yet.
 

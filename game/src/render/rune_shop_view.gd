@@ -64,6 +64,7 @@ func build_shop(owner: ELAdventureDirector, panel: ELAdventureHud, exchange_trad
 	# The arrow keys select book slots, so the buttons never take focus.
 	for button: BaseButton in buttons.values(): button.focus_mode = Control.FOCUS_NONE
 	slot = 0
+	_build_online_message()
 	resized.connect(_layout)
 	_layout()
 	refresh()
@@ -133,13 +134,23 @@ func _act(_ok: bool) -> void:
 	refresh()
 
 func accept() -> void:
+	if _purchase_pending: return
+	if strategic_session != null:
+		if not has_pending():
+			cancel_trade()
+			return
+		var action := "visit_buy_runes" if strategic_shop_visit else "buy_runes"
+		if trade.problem().is_empty(): _manage_online([action, trade.hero_id, trade.shop_id] + trade.pending, true)
+		return
 	if not trade.commit():
 		refresh()
 		return
 	closed.emit()
 
 func cancel_trade() -> void:
-	if trade.cancel(): closed.emit()
+	if _purchase_pending: return
+	if strategic_shop_visit: _manage_online(["visit_close", trade.hero_id, trade.shop_id], true)
+	elif trade.cancel(): closed.emit()
 
 ## Escape closes the screen without buying.
 func cancel() -> void:
@@ -166,6 +177,8 @@ func refresh() -> void:
 	buttons.CompBack3.disabled = not has_pending()
 	buttons.CompOK.disabled = not trade.problem().is_empty()
 	buttons.CompCancel.disabled = false
+	if _purchase_pending:
+		for name: String in COMMANDS: buttons[name].disabled = true
 	sheet.queue_redraw()
 
 ## The price of one rune for the selected spell, or {} ("-") without one.

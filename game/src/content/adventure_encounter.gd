@@ -22,6 +22,8 @@ var watch_side := -1
 var report: Dictionary = {}
 ## The defender of an ethereal (Warrior of the Realm) battle, or -1.
 var ethereal_defender := -1
+## The EL2 fort use that started this battle, or -1 for an ordinary encounter.
+var assault_fort := -1
 ## Map artifacts carried into battle that the duel cannot use yet (first game:
 ## unknown rows; second game: generated artifacts whose spell has no rule).
 var unsupported_artifacts: Array[String] = []
@@ -32,6 +34,7 @@ var declined := false
 var lose_screen := false
 ## First-game automatic arenas, indexed by the original terrain classification.
 const FIRST_ARENAS := ["Black.002", "Green.002", "Blue.002", "Red.002", "Ether.001", "White.001", "Dungeon.001", "Fort.001"]
+const SECOND_TERRAIN_ARENAS := ["Black", "Green", "Blue", "Red", "Ether"]
 
 ## `defender` is the second actor of the queued battle pair; its tile picks the arena.
 func prepare(session: ELAdventureSession, first: int, second: int, defender := -1) -> bool:
@@ -113,7 +116,6 @@ func _prepare_duel(state: ELAdventureSession, defender: int) -> bool:
 				carried.append(entry)
 			if _second_garrison_rod(state, actor): carried.append({"name": "RodOfDefence"})
 			if not carried.is_empty(): options.players[-1].artifacts = carried
-		if id == hero_id and profile.table("CombatSceneDB").has(color + ".001"): options.arena = color + ".001"
 	if profile.id == "el1":
 		# Player battle spells act only when both sides belong to players.
 		var owners: Array[int] = [int(state.object(hero_id).owner), int(state.object(opponent_id).owner)]
@@ -124,19 +126,26 @@ func _prepare_duel(state: ELAdventureSession, defender: int) -> bool:
 		for side in 2: options.players[side].level = levels[side]
 	else:
 		# Second-game difficulty moves only the specialisation level.
-		var levels := ELSpecs.second_levels([int(options.players[0].level), int(options.players[1].level)], state.difficulty)
-		# A garrison of a tier-two fort raises its side by one more.
+		var levels: Array[int] = [int(options.players[0].level), int(options.players[1].level)]
+		# A tier-two garrison adds one before the final level clamp.
 		for side in 2:
-			if int(ELForts.garrison_of(state, state.object(hero_id if side == 0 else opponent_id)).get("fort_level", 0)) == ELForts.MAX_LEVEL: levels[side] = mini(levels[side] + 1, 20)
+			if int(ELForts.garrison_of(state, state.object(hero_id if side == 0 else opponent_id)).get("fort_level", 0)) == ELForts.MAX_LEVEL: levels[side] += 1
+		var local_side := 0 if int(state.object(hero_id).owner) == 1 else 1
+		levels = ELSpecs.second_levels(levels, state.difficulty, local_side)
 		for side in 2: options.players[side].spec_level = levels[side]
 		# Mob `Script=` chunks and battleground buildings (ELBattleScripts.select).
 		var scripts := ELBattleScripts.select(state, [hero_id, opponent_id])
 		if not scripts.is_empty(): options.scripts = scripts
+	var scripted_arena := ""
 	if state.vm != null:
 		var chosen := state.vm.invoke("Hook_OnGetArena", [float(hero_id), float(opponent_id)])
 		if not state.vm.error.is_empty(): return _fail(state.vm.error)
-		if not chosen.is_empty() and chosen[0] is String and not chosen[0].is_empty(): options.arena = chosen[0]
-	var battle_seed := state.seed_value + hero_id + opponent_id
+		if not chosen.is_empty() and chosen[0] is String: scripted_arena = chosen[0]
+	if not scripted_arena.is_empty(): options.arena = scripted_arena
+	elif profile.id == "el2": options.arena = second_arena(state, hero_id, opponent_id, randi())
+	# Both original battle constructors take a fresh rand() value. Reloading
+	# a map before combat creates a new battle, while an active battle restores its state.
+	var battle_seed := randi() & 0x7fff
 	var colours: Array[String] = [String(options.players[0].faction), String(options.players[1].faction)]
 	options.first_side = first_side(state, hero_id, opponent_id, colours, battle_seed)
 	battle = ELDuel.new()
@@ -171,19 +180,37 @@ static func first_arena(state: ELAdventureSession, first: int, second: int, defe
 		at = Vector2i(int(other.get("x", 0)), int(other.get("y", 0)))
 	return FIRST_ARENAS[terrain_class(map, at)]
 
+## In the second game, a tunnel or dungeon guard uses the Ether arena.
+## Ordinary battles use the second actor's tile unless that actor is unplaced.
+static func second_arena(state: ELAdventureSession, first: int, second: int, roll: int) -> String:
+	var a := state.object(first)
+	var b := state.object(second)
+	if a.has("tunnel_source") or b.has("tunnel_source"): return "Ether.001"
+	if state.map.id.contains("mission17") or state.map.id.contains("mission27"): return "White.001"
+	if not ELForts.garrison_of(state, a).is_empty() or not ELForts.garrison_of(state, b).is_empty(): return "Fort.001"
+	if a.get("ship", false) or b.get("ship", false): return "Ship.001"
+	var at := Vector2i(int(b.get("x", -1)), int(b.get("y", -1)))
+	if at == Vector2i(-1, -1): at = Vector2i(int(a.get("x", -1)), int(a.get("y", -1)))
+	if at == Vector2i(-1, -1): at = Vector2i.ZERO
+	return second_terrain_arena(state.map, at, roll)
+
+static func second_terrain_arena(map: ELAdventureMap, at: Vector2i, roll: int) -> String:
+	var terrain := terrain_class(map, at)
+	return "%s.%03d" % [SECOND_TERRAIN_ARENAS[terrain], 1 if terrain == 4 else 1 + (roll & 1)]
+
 ## The tile's terrain class (0 Black-arena, 1 Green, 2 Blue, 3 Red-arena land,
-## 4 other): three equal corners win, otherwise the first corner with a class
-## other than 4 (EL1; EL2 masks each kind with 0xbf first).
+## 4 other): three equal raw corners win, otherwise the first corner with a
+## class other than 4. EL2 masks the terrain flag only during classification.
 static func terrain_class(map: ELAdventureMap, at: Vector2i) -> int:
 	var c: Array[int] = [map.tile(at.x, at.y), map.tile(at.x + 1, at.y), map.tile(at.x + 1, at.y + 1), map.tile(at.x, at.y + 1)]
-	if map.profile.id == "el2":
-		for i in 4: c[i] &= 0xbf
-	if c[0] == c[1] and c[0] == c[2]: return terrain_arena(c[0])
-	if c[1] == c[2] and c[1] == c[3]: return terrain_arena(c[1])
-	if c[2] == c[3] and c[2] == c[0]: return terrain_arena(c[2])
-	if c[3] == c[0] and c[3] == c[1]: return terrain_arena(c[3])
+	var mask := 0xbf if map.profile.id == "el2" else -1
+	if c[0] == c[1] and c[0] == c[2]: return terrain_arena(c[0] & mask)
+	if c[1] == c[2] and c[1] == c[3]: return terrain_arena(c[1] & mask)
+	if c[2] == c[3] and c[2] == c[0]: return terrain_arena(c[2] & mask)
+	if c[3] == c[0] and c[3] == c[1]: return terrain_arena(c[3] & mask)
 	for kind: int in c:
-		if terrain_arena(kind) != 4: return terrain_arena(kind)
+		var family := terrain_arena(kind & mask)
+		if family != 4: return family
 	return 4
 
 ## The original colour enum (EL1, EL2): Red 0, Green 1,
@@ -213,11 +240,9 @@ static func first_side(state: ELAdventureSession, first: int, second: int, colou
 	if matches[0] != matches[1]: return 0 if matches[0] else 1
 	return coin_flip(battle_seed)
 
-## Independent 50/50 from a battle seed (stands in for the battle object's rand()).
+## The original uses the battle seed's parity when terrain cannot decide.
 static func coin_flip(battle_seed: int) -> int:
-	var value := ((battle_seed ^ 0x2545f491) * 214013 + 2531011) & 0xffffffff
-	value = (value * 214013 + 2531011) & 0xffffffff
-	return (value >> 16) & 1
+	return battle_seed & 1
 
 ## Campaign difficulty adjusts temporary battle levels: the local side gains two
 ## (Easy) or one (Normal); the opponent loses one on Easy and gains one or two on
@@ -261,7 +286,9 @@ func finish() -> bool:
 	if state.vm != null:
 		var finishing := state.vm.invoke("Hook_OnBattleFinishing", [float(hero_id), float(opponent_id), float(winner_id)])
 		if not state.vm.error.is_empty(): return _fail(state.vm.error)
-		kill_loser = finishing.is_empty() or finishing[0] != null
+		# The EL2 native reads a numeric zero as a veto, as in chapter 54's retry.
+		if state.map.profile.id == "el2": kill_loser = finishing.is_empty() or ELAdventureSession._truthy_flag(finishing[0])
+		else: kill_loser = finishing.is_empty() or finishing[0] != null
 	if state.map.profile.id == "el2" and scripted_winner < 0 and battle != null and kill_loser:
 		# Second game: an accepted battle writes the used charges back;
 		# a cancelled finish (nil hook result, e.g. the main hero's loss) keeps them.

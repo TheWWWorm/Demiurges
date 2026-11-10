@@ -22,9 +22,9 @@ static func winner(state: ELAdventureSession, first: Dictionary, second: Diction
 	return second if level < roll else first
 
 ## Decides the battle and applies its result. Returns false on a script failure.
-static func resolve(director: ELAdventureDirector, first: Dictionary, second: Dictionary) -> bool:
+static func resolve(director: ELAdventureDirector, first: Dictionary, second: Dictionary, forfeit_winner := -1) -> bool:
 	var state := director.state
-	var victor := winner(state, first, second)
+	var victor := state.object(forfeit_winner) if forfeit_winner >= 0 else winner(state, first, second)
 	var loser := second if victor == first else first
 	if state.players.has(int(victor.owner)) and int(victor.owner) >= 1:
 		state.add_experience(victor.uid, ELHeroProgression.battle_reward(state.map.profile, int(loser.get("level", 1))))
@@ -77,7 +77,8 @@ static func plan(director: ELAdventureDirector) -> void:
 	var state := director.state
 	if state.map.profile.id != "el1": return
 	scripts(director)
-	for player: int in computer_players(state): plan_player(director, player)
+	for player: int in computer_players(state):
+		if not director.is_strategy_human(player): plan_player(director, player)
 
 static func plan_player(director: ELAdventureDirector, player: int) -> void:
 	var state := director.state

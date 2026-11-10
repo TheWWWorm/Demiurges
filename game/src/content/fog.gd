@@ -135,8 +135,8 @@ static func refresh(state: ELAdventureSession) -> void:
 			if item.get("name") == "AncientTomb": _rect(state, seen, everyone, _bounds(state, item), TOMB_RADIUS, bool(state.scenario.get("tomb_open", false)))
 	if el2:
 		# Closed Runestones keep their rectangles unseen for the local
-		# player's group; observations are revealed afterwards.
-		var local := group_mask(state, state.current_player)
+		# player's group even on an AI turn; observations are revealed afterwards.
+		var local := group_mask(state, 1)
 		if local != 0:
 			for item: Dictionary in state.objects.values():
 				if not ELSecondGates.is_gate(item) or item.get("opened", false): continue
@@ -178,7 +178,14 @@ static func revision(state: ELAdventureSession) -> int:
 
 ## Whether the fog changes what this player sees at all.
 static func active(state: ELAdventureSession, player: int) -> bool:
-	return applies(state) and bit(player) != 0
+	return applies(state) and bit(player) != 0 and int(state.fog.get("console_reveal", -1)) != player
+
+## The console lifts the fog for the local player without altering exploration.
+static func reveal_for_console(state: ELAdventureSession, player: int, reveal: bool) -> void:
+	var wanted := player if reveal else -1
+	if int(state.fog.get("console_reveal", -1)) == wanted: return
+	state.fog.console_reveal = wanted
+	state.fog.revision = revision(state) + 1
 
 static func explored(state: ELAdventureSession, player: int, point: Vector2i) -> bool:
 	if not active(state, player): return true

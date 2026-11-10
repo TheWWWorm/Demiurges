@@ -52,7 +52,7 @@ const FALLBACK_SPEED := 2.0
 const WALK_CODE := 0x80140000
 const RUN_CODE := 0x80100000
 ## Kinds that start the battle's next stage; they wait until everyone is home.
-const AFTER_KINDS := ["phase", "turn_pos_rune", "turn_neg_rune", "turn_stasis"]
+const AFTER_KINDS := ["phase", "turn_cleanup", "turn_pos_rune", "turn_neg_rune", "turn_stasis"]
 
 ## The duel view (ELDuel view script): models, homes and event handling.
 var view: Node
@@ -213,13 +213,19 @@ func finish() -> void:
 	_blows.clear()
 	_after.clear()
 	queue.clear()
-	_dispatch_all(rest)
-	for id: int in view.homes:
-		if view.models.has(id) and view.duel.creatures.has(id):
-			view.models[id].position = view.homes[id]
-			view.models[id].rotation.y = _enemy_yaw(id, int(view.duel.creatures[id].owner))
+	for data: Dictionary in rest:
+		if data.kind == "turn_cleanup": _place_home()
+		_dispatch(data)
+	_place_home()
 	_running = false
 	view._refresh()
+
+func _place_home() -> void:
+	for id: int in view.homes:
+		var c := _returning_creature(id)
+		if _has(id) and not c.is_empty():
+			view.models[id].position = view.homes[id]
+			view.models[id].rotation.y = _enemy_yaw(id, int(c.owner))
 
 ## Drops the playback without handling anything (the battle is being replaced).
 func abort() -> void:
@@ -324,8 +330,9 @@ func _play(serial: int) -> void:
 	# After the last blow (or a hero's death, which stops the combat) every
 	# living figure still out on the field goes home: unhurt ones run.
 	for id: int in view.models.keys():
-		if id >= 2 and not _moves.has(id) and away(id) and view.duel.creatures.has(id):
-			var c: Dictionary = view.duel.creatures[id]
+		if id >= 2 and not _moves.has(id) and away(id):
+			var c := _returning_creature(id)
+			if c.is_empty(): continue
 			_move(id, _home_path(id, int(c.owner)), int(_wounds.get(id, 0)) == 0, _yaw_at(view.homes[id], int(c.owner)))
 	if not await _moved(_moves.keys(), serial): return
 	view._auto_fight_over()
@@ -386,10 +393,14 @@ func _face(id: int, target: int) -> void:
 	var direction := _position(target) - _position(id)
 	if Vector2(direction.x, direction.z).length() > 0.001: view.models[id].rotation.y = atan2(direction.x, direction.z)
 
+func _returning_creature(id: int) -> Dictionary:
+	return view._before_turn_cleanup.get(id, view.duel.creatures.get(id, {}))
+
 ## A figure's walk home after its exchange; it faces the enemy once there.
 func _go_home(id: int, blocker: bool, strike: Dictionary) -> void:
-	if not _has(id) or not view.homes.has(id) or not view.duel.creatures.has(id): return
-	var c: Dictionary = view.duel.creatures[id]
+	if not _has(id) or not view.homes.has(id): return
+	var c := _returning_creature(id)
+	if c.is_empty(): return
 	var wounds := int(_wounds.get(id, 0))
 	var run := true
 	if view.profile.id == "el1": run = wounds * 3 < int(c.get("toughness", 1))

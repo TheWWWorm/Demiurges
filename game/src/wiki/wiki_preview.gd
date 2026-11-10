@@ -13,7 +13,9 @@ const YAW := deg_to_rad(-28.0)
 const PITCH := deg_to_rad(14.0)
 ## The bounding-sphere framing leaves wide margins; the reader starts closer.
 const OPENING_ZOOM := 0.72
+const ANIMATIONS := ["cidle", "uattack", "ushot", "uhit", "udeath", "usummon", "utap", "uuntap", "uinstant"]
 
+signal creature_changed
 var viewport: SubViewport
 var pivot: Node3D
 var camera: Camera3D
@@ -21,7 +23,16 @@ var model: ELModel
 var _distance := 4.0
 var _yaw := YAW
 var _pitch := PITCH
+var _zoom := OPENING_ZOOM
 var _dragging := false
+var _sound: AudioStreamPlayer
+var _sound_directory := ""
+var _profile: ELProfile
+
+func _ready() -> void:
+	_sound = AudioStreamPlayer.new()
+	add_child(_sound)
+	resized.connect(_refit)
 
 ## A viewport holding `code`'s creature, framed; null when the game has no
 ## model for it. `transparent` leaves the background clear (screenshots).
@@ -114,7 +125,10 @@ static func frame(view: SubViewport, yaw: float, pitch: float, zoom := 1.0) -> f
 	var box := bounds(figure)
 	pivot_node.position = box.get_center()
 	var radius := maxf(box.size.length() * 0.5, 0.2)
-	var distance := radius / sin(deg_to_rad(eye.fov) * 0.5) * 1.05 * zoom
+	var vertical := deg_to_rad(eye.fov) * 0.5
+	var aspect := float(view.size.x) / maxf(1.0, float(view.size.y))
+	var limiting := minf(vertical, atan(tan(vertical) * maxf(0.01, aspect)))
+	var distance := radius / sin(limiting) * 1.05 * zoom
 	pivot_node.rotation = Vector3(-pitch, yaw, 0)
 	eye.position = Vector3(0, 0, distance)
 	eye.near = maxf(distance * 0.02, 0.01)
@@ -129,36 +143,69 @@ func show_creature(profile: ELProfile, code: String) -> bool:
 		viewport.queue_free()
 		viewport = null
 	viewport = stage(profile, code, Vector2i(512, 512))
-	if viewport == null: return false
+	if _sound != null: _sound.stop()
+	if viewport == null:
+		model = null
+		creature_changed.emit()
+		return false
+	_profile = profile
+	_sound_directory = str(profile.table("CombatCreatures")[code].get("SndDir", ""))
 	stretch = true
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	custom_minimum_size = Vector2(320, 320)
 	add_child(viewport)
 	model = viewport.get_node("Model")
+	model.animation_finished.connect(_resume_idle)
 	pivot = viewport.get_node("Pivot")
 	camera = pivot.get_node("Camera")
 	reset_view()
 	# Frame again once the particles have started (they start deferred).
 	_settle.call_deferred()
+	creature_changed.emit()
 	return true
 
+func animations() -> Array:
+	return ANIMATIONS.filter(func(clip: String) -> bool: return model != null and model.has_clip(clip))
+
+func play_animation(clip: String, volume: float) -> void:
+	if model == null or not clip in ANIMATIONS or not model.play(clip): return
+	if _sound == null: return
+	_sound.stop()
+	if _sound_directory.is_empty() or clip == "cidle" or volume <= 0.0: return
+	_sound.stream = ELAudio.sound(_profile, "Creatures/%s/%s.wav" % [_sound_directory, clip.trim_prefix("u")])
+	if _sound.stream == null: return
+	_sound.volume_db = linear_to_db(volume)
+	_sound.play()
+
+func _resume_idle(clip: String) -> void:
+	# Let the model finish applying the last pose before changing clips.
+	if clip != "udeath": model.play.call_deferred("cidle")
+
 func _settle() -> void:
-	if viewport == null or _dragging: return
+	if not is_inside_tree() or viewport == null or _dragging: return
 	await get_tree().process_frame
-	if viewport != null and not _dragging: reset_view()
+	if is_inside_tree() and viewport != null and not _dragging: _refit()
 
 func reset_view() -> void:
+	if viewport == null: return
 	_yaw = YAW
 	_pitch = PITCH
-	_distance = frame(viewport, _yaw, _pitch, OPENING_ZOOM)
+	_zoom = OPENING_ZOOM
+	_refit()
+
+func _refit() -> void:
+	if viewport == null: return
+	var opening := 1.0 / OPENING_ZOOM if viewport.size.x < viewport.size.y else 1.0
+	_distance = frame(viewport, _yaw, _pitch, _zoom * opening)
 
 func _apply() -> void:
 	pivot.rotation = Vector3(-_pitch, _yaw, 0)
 	camera.position = Vector3(0, 0, _distance)
 
 func zoom(factor: float) -> void:
-	var base := frame(viewport, _yaw, _pitch)
-	_distance = clampf(_distance * factor, base * 0.35, base * 2.5)
+	var before := _zoom
+	_zoom = clampf(_zoom * factor, 0.35, 2.5)
+	_distance *= _zoom / before
 	_apply()
 
 func turn(by: Vector2) -> void:

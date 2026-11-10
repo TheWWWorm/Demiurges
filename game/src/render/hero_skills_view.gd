@@ -3,6 +3,7 @@ extends PanelContainer
 signal closed
 var state: ELAdventureSession
 var hero_id := -1
+var strategic_session: ELStrategicSession
 var heading: Label
 ## Item lists here; the second game's level-up dialog supplies its own strips
 ## with the same selection interface.
@@ -128,7 +129,7 @@ func _select() -> void:
 	var hero := state.object(hero_id)
 	var offered: PackedInt32Array = offers.get_selected_items()
 	var known: PackedInt32Array = learned.get_selected_items()
-	accept.disabled = offered.is_empty()
+	accept.disabled = offered.is_empty() or (strategic_session != null and not strategic_session.can_plan())
 	var code := ""
 	var rank := 0
 	if not offered.is_empty():
@@ -147,9 +148,19 @@ func _choose() -> void:
 	var selected: PackedInt32Array = offers.get_selected_items()
 	if selected.is_empty() or accept.disabled: return
 	var code := str(state.object(hero_id).skill_offers[selected[0]])
+	if strategic_session != null:
+		if strategic_session.manage_hero(["learn_skill", hero_id, code], _online_result):
+			accept.disabled = true
+			message.text = "Confirming hero order…"
+		return
 	if not state.choose_skill(hero_id, code):
 		message.text = state.error
 		return
 	refresh()
 	learned.select(_learned.find(code))
 	_select()
+
+func _online_result(reason: String) -> void:
+	if not is_inside_tree() or is_queued_for_deletion(): return
+	refresh()
+	if not reason.is_empty(): message.text = reason

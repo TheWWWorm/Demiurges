@@ -40,8 +40,6 @@ const SPEC := {
 				[Vector2(463, 152), "music", "volume"], [Vector2(463, 208), "effects", "volume"], [Vector2(200, 418), "gamma", "gamma"]],
 			"combat": [[Vector2(200, 453), "auto_camera_dynamics", "percent"]]},
 		"commands": {"general": ["GOQuit", "GOMenu", "GOSave", "GOLoad", "GOInfo"], "combat": ["Surrender"]},
-		# Multiplayer only: shown with its Disabled art.
-		"disabled": ["ShowChat"],
 	},
 	"el2": {
 		"tabs": {"general": "OP_ShowGen", "combat": "OP_ShowCom"},
@@ -59,7 +57,6 @@ const SPEC := {
 				["OPG_MVolSlider", "music", "volume"], ["OPG_SVolSlider", "effects", "volume"], ["OPG_GammaSlider", "gamma", "gamma"]],
 			"combat": [["OPC_AutoCamDynSlider", "auto_camera_dynamics", "percent"]]},
 		"commands": {"general": [], "combat": []},
-		"disabled": [],
 	},
 }
 ## Settings with no remake system (stored only). The second game's Autosave
@@ -69,13 +66,14 @@ const SPEC := {
 ## game's edge-pan speed; the second game's edges only turn the view.
 ## VisualLog (ELDuelReport) is live. The second game's CastMessages has no reader
 ## besides this screen. FogAnimations (ELFogMist) is live. HideMotion
-## (ELMeleePlayback fast mode) is live. ShowChat is multiplayer only.
-const INERT := ["show_chat"]
+## (ELMeleePlayback fast mode) is live. The first game's ShowChat controls
+## the transient message list.
 
 var menu: ELFrontMenu
 var page := "general"
 ## Where the screen is shown: "menu" (main menu), "adventure" or "combat".
 var context := "menu"
+var adventure_load_allowed := true
 var pending: Dictionary = {}
 var checks: Dictionary = {}
 var sliders: Dictionary = {}
@@ -105,7 +103,7 @@ func open(where := "menu", first_page := "general") -> void:
 	menu.show_screen("options")
 
 static func inert(key: String, edition: String) -> bool:
-	return key in INERT or (key == "mouse_scroll" and edition == "el2") or (key == "heroes_casting" and edition == "el2")
+	return edition == "el2" and key in ["show_chat", "mouse_scroll", "heroes_casting"]
 
 ## Screen offset of a control: its own shift plus every parent panel's.
 func shift(control: String) -> Vector2:
@@ -147,8 +145,15 @@ func build_screen() -> void:
 	for control: String in page_controls("Text"):
 		var row: Dictionary = menu._controls[control]
 		var heading := str(row.get("FontType", "")) == "Dark"
-		var label := menu._label(control, menu._caption(control), rect(control), int(row.get("FontSize", 17)), HEADING if heading else CAPTION)
+		var area := rect(control)
+		var label := menu._label(control, menu._caption(control), area, int(row.get("FontSize", 17)), HEADING if heading else CAPTION)
 		label.clip_text = true
+		label.size = area.size
+		var font := label.get_theme_font("font")
+		var font_size := label.get_theme_font_size("font_size")
+		while font_size > 12 and font.get_string_size(label.text, HORIZONTAL_ALIGNMENT_CENTER, -1, font_size).x > area.size.x - 2.0:
+			font_size -= 1
+		label.add_theme_font_size_override("font_size", font_size)
 	for page_id: String in ["general", "combat"]: _tab(page_id)
 	for control: String in page_controls("CheckButton"): _check(control)
 	for item: Array in spec().sliders[page]: _slider(item)
@@ -205,13 +210,13 @@ func _check(control: String) -> void:
 	var box := Check.make(menu, control, shift(control))
 	if box == null: return
 	box.button_pressed = bool(pending.get(key, false)) if not key.is_empty() else false
-	box.disabled = key.is_empty() or control in spec().disabled
+	box.disabled = key.is_empty()
 	box.set_meta("setting", key)
 	menu.canvas.add_child(box)
 	menu.buttons[control] = box
 	checks[control] = box
 	var tip := _tip(control)
-	if key.is_empty() or control in spec().disabled: tip = (tip + "\n" if not tip.is_empty() else "") + ELFrontMenu.UNAVAILABLE
+	if box.disabled: tip = (tip + "\n" if not tip.is_empty() else "") + ELFrontMenu.UNAVAILABLE
 	elif inert(key, menu.edition): tip = (tip + "\n" if not tip.is_empty() else "") + NO_EFFECT
 	box.tooltip_text = tip
 	box.toggled.connect(func(on: bool):
@@ -304,7 +309,8 @@ func _command(control: String) -> void:
 	var enabled := false
 	match control:
 		"GOQuit": enabled = true
-		"GOMenu", "GOSave", "GOLoad": enabled = context == "adventure"
+		"GOMenu", "GOSave": enabled = context == "adventure"
+		"GOLoad": enabled = context == "adventure" and adventure_load_allowed
 		"GOInfo": enabled = context == "adventure" and not menu.mission_texts.is_empty()
 		"Surrender": enabled = context == "combat"
 	button.disabled = not enabled

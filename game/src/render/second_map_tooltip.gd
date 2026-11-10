@@ -54,6 +54,7 @@ func set_content(id: int, content: Dictionary) -> void:
 	_picture.visible = not picture.is_empty()
 	_backdrop.visible = picture.get("framed", false)
 	var labels: Array = content.get("labels", [])
+	var wrap_offset := 0.0
 	for entry: Dictionary in labels:
 		var label := Label.new()
 		label.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -64,15 +65,18 @@ func set_content(id: int, content: Dictionary) -> void:
 		label.add_theme_constant_override("line_spacing", LINE_SPACING)
 		add_child(label)
 		label.size = label.get_minimum_size()
+		var at := Vector2(entry.at) + Vector2(0.0, wrap_offset)
 		if label.size.x > MAX_LABEL_WIDTH:
+			var unwrapped_height := label.size.y
 			label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 			label.custom_minimum_size.x = MAX_LABEL_WIDTH
 			label.size = Vector2(MAX_LABEL_WIDTH, 0)
 			label.size = Vector2(MAX_LABEL_WIDTH, label.get_minimum_size().y)
-		label.position = Vector2(entry.at) + inset
+			if content.get("flow", false): wrap_offset += label.size.y - unwrapped_height
+		label.position = at + inset
 		_labels.append(label)
 		if label.text.is_empty(): continue
-		var rect := Rect2(entry.at, label.size)
+		var rect := Rect2(at, label.size)
 		bounds = rect if first else bounds.merge(rect)
 		first = false
 	if not picture.is_empty():

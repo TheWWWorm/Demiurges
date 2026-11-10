@@ -185,6 +185,7 @@ func start(source: ELAdventureMap, level := 0, seed_number := 212, scenario_scri
 		ELForts.occupy_placed(self)
 		theme_fade = ELSecondAmbience.theme_fades(map.profile)
 		vm = ELLuaVM.new()
+		ELSecondBuildings.initialize_tunnel_guards(self, true)
 		variables = vm.table()
 		vm.globals["__engine_variables"] = variables
 		persistent = vm.table()
@@ -245,7 +246,7 @@ func object(id: Variant) -> Dictionary:
 func _mobs() -> Array[int]:
 	return _mob_ids
 
-func create_hero(owner: int, template: String, x: int, y: int) -> int:
+func create_hero(owner: int, template: String, x: int, y: int, visible := true) -> int:
 	if not map.mobs.has(template):
 		vm._fail("Missing adventure hero template: " + template)
 		return -1
@@ -254,7 +255,7 @@ func create_hero(owner: int, template: String, x: int, y: int) -> int:
 	var id := _next_object
 	_next_object += 1
 	var item := {"uid": id, "permanent_id": id, "source_index": -1, "id": id, "name": template, "owner": owner, "group": "heroes" if owner else "np_heroes", "x": x, "y": y, "rotation": 0,
-		"type": "hero" if mob.attrs.get("IsHero", "0") == "1" else "monster", "alive": true, "visible": true, "enabled": true, "shape": mob.attrs.get("shape", ""),
+		"type": "hero" if mob.attrs.get("IsHero", "0") == "1" else "monster", "alive": true, "visible": visible, "enabled": true, "shape": mob.attrs.get("shape", ""),
 		"level": int(mob.attrs.get("Lvl", 1)), "health": int(mob.attrs.get("Hp", 10)), "base_ap": int(mob.attrs.get("AP", 0)), "ap": int(mob.attrs.get("AP", 0)), "experience": 0,
 		"cards": [], "spell_stock": {}, "stock_separate": true, "skills": {}, "inventory": [], "orders": [], "node": {}, "title": map.profile.text(mob.attrs.get("ElkName", template)), "specialization": mob.attrs.get("Spec", "NONE"), "battle_script": mob.attrs.get("Script", "")}
 	item.ship = _water_cell(x, y)
@@ -308,20 +309,22 @@ func add_experience(hero_id: int, amount: int) -> int:
 		event.emit({"kind": "experience_gained", "id": hero_id, "amount": granted, "levels": int(hero.level) - previous})
 	return granted
 
-func move_spell(hero_id: int, card: String, index := -1, reserve_index := 0) -> bool:
+func move_spell(hero_id: int, card: String, index := -1, reserve_index := 0, commander := -1) -> bool:
 	error = ""
 	var hero := object(hero_id)
-	if hero.is_empty() or not hero.alive or hero.owner != current_player or hero.type != "hero": return _fail("This hero's spellbook is unavailable.")
+	var owner := current_player if commander < 0 else commander
+	if hero.is_empty() or not hero.alive or hero.owner != owner or hero.type != "hero": return _fail("This hero's spellbook is unavailable.")
 	var problem := ELSpellInventory.unequip(map.profile, hero, index) if index >= 0 else ELSpellInventory.equip(map.profile, hero, card, reserve_index)
 	if not problem.is_empty(): return _fail(problem)
 	if not hook("Hook_OnInventorySpellMoved"): return false
 	event.emit({"kind": "inventory_changed", "id": hero_id})
 	return true
 
-func choose_skill(hero_id: int, code: String) -> bool:
+func choose_skill(hero_id: int, code: String, commander := -1) -> bool:
 	error = ""
 	var hero := object(hero_id)
-	if hero.is_empty() or not hero.alive or hero.owner != current_player or hero.type != "hero": return _fail("This hero's skills are unavailable.")
+	var owner := current_player if commander < 0 else commander
+	if hero.is_empty() or not hero.alive or hero.owner != owner or hero.type != "hero": return _fail("This hero's skills are unavailable.")
 	var problem := ELHeroSkills.choose(map.profile, hero, code)
 	if not problem.is_empty(): return _fail(problem)
 	event.emit({"kind": "skill_learned", "id": hero_id, "code": code, "rank": hero.skills[code]})
@@ -339,7 +342,7 @@ func collect_resources(hero_id: int, resource_id: int) -> bool:
 	item.visible = false
 	item.enabled = false
 	event.emit({"kind": "object_killed", "id": resource_id})
-	event.emit({"kind": "resources_collected", "player": actor.owner, "amounts": amounts})
+	event.emit({"kind": "resources_collected", "id": resource_id, "player": actor.owner, "amounts": amounts})
 	return true
 
 func _bindings() -> Array[String]:
@@ -462,7 +465,9 @@ func _native(args: Array, name: String) -> Array:
 		"ExGetTilePoint": return [(float(args[0]) + 0.5) * 2.0, (float(args[1]) + 0.5) * 2.0, 0.0] if args.size() > 1 else []
 		"ExGetObjectPoint": return [(float(item.get("x", -1)) + 0.5) * 2.0, (float(item.get("y", -1)) + 0.5) * 2.0, 0.0]
 		"ExGetMapSize": return [float(map.width), float(map.height)]
-		"ExGetObjectType": return ["other" if ELResourceSites.TYPES.has(item.get("group", "")) else item.get("type", "")]
+		"ExGetObjectType":
+			if ELSecondBuildings.is_tunnel(item): return ["mob_building"]
+			return ["other" if ELResourceSites.TYPES.has(item.get("group", "")) else item.get("type", "")]
 		"ExIsShip": return [1.0 if item.get("ship", false) else null]
 		"ExIsHeroFortified": return [1.0 if ELGlobalSpells.held_in_fort(item) else null]
 		"ExHideExploration":
@@ -513,6 +518,7 @@ func _native(args: Array, name: String) -> Array:
 				event.emit({"kind": "object_killed", "id": item.uid})
 		"ExHideHero":
 			if not item.is_empty():
+				if map.profile.id == "el2" and item.get("type") in ["hero", "monster"] and item.visible: item.hidden_by_script = true
 				item.visible = false
 				event.emit({"kind": "object_changed", "id": item.uid})
 		"ExCreateCorpse":
@@ -572,11 +578,15 @@ func _native(args: Array, name: String) -> Array:
 			if not item.is_empty() and args.size() > 1: add_experience(int(first), int(args[1]))
 		"ExGetCommandQueueSize": return [float(commands.size())]
 		"ExHasCmd": return [1.0 if not item.get("orders", []).is_empty() else null]
-		"ExRunToPosCmd", "ExRunAndUseObjectCmd", "ExRunToObjectCmd", "ExRemoteUseObjectCmd":
+		"ExRunToPosCmd", "ExRunAndUseObjectCmd", "ExRunToObjectCmd":
 			# Orders replace the hero's plan; nothing moves until ExExecuteCmd.
 			if not item.is_empty():
 				var kind: String = {"ExRunToPosCmd": "Moving", "ExRunToObjectCmd": "MoveToObject"}.get(name, "MoveAndUseObject")
 				item.orders.assign([{"kind": kind, "arguments": args.duplicate()}])
+		"ExRemoteUseObjectCmd":
+			var target := object(args[1]) if args.size() > 1 else {}
+			if item.get("type") in ["hero", "monster"] and target.get("type") in ["hero", "monster"] and item.uid != target.uid:
+				item.orders.assign([{"kind": "RemoteUseHero", "arguments": [int(item.uid), int(target.uid)]}])
 		"ExCanRunAndUseObject":
 			var goal := object(args[1]) if args.size() > 1 else {}
 			if item.is_empty() or goal.is_empty() or goal.get("uid") == item.get("uid") or grid == null: return [null]
@@ -585,7 +595,7 @@ func _native(args: Array, name: String) -> Array:
 		"ExPassability":
 			if item.is_empty() or grid == null or args.size() < 3: return [-1.0]
 			var cell := Vector2i(int(args[1]), int(args[2]))
-			return [1.0 if grid.contains(cell) and grid.passability(cell, item.get("ship", false)) > 0.0 else -1.0]
+			return [1.0 if grid.contains(cell) and grid.passability(cell, item.get("ship", false), false) > 0.0 else -1.0]
 		"ExGetBuildingMob":
 			if item.is_empty():
 				vm._fail("Object not found")
@@ -598,7 +608,7 @@ func _native(args: Array, name: String) -> Array:
 			# Notebook: a standard box with a
 			# hero is journaled with that speaker; OkCancel when its
 			# third argument is set; Dialog never (drops its flag).
-			if name == "ExMessageBoxStandard" and args.size() > 1 and not ELSecondNotebook._hero(self, args[1]).is_empty(): ELSecondNotebook.add_phrase(self, first, args[1], true)
+			if name == "ExMessageBoxStandard" and args.size() > 1 and not ELSecondNotebook.speaker(self, args[1]).is_empty(): ELSecondNotebook.add_phrase(self, first, args[1], true)
 			elif name == "ExMessageBoxOkCancel" and args.size() > 2 and ELSecondNotebook.lua_flag(args[2]): ELSecondNotebook.add_phrase(self, first, null, false)
 			# Standard boxes use the MessageBox panel; Dialog and OkCancel
 			# the TextDialog without a speaker.
@@ -796,8 +806,14 @@ func _native(args: Array, name: String) -> Array:
 			if not item.is_empty() and args.size() > 2:
 				item.x = int(args[1])
 				item.y = int(args[2])
-				# EL2 actors travel by ship wherever they are set down on water.
-				if map.profile.id == "el2" and item.get("type") in ["hero", "monster"]: item.ship = _water_cell(item.x, item.y)
+				if map.profile.id == "el2" and item.get("type") in ["hero", "monster"]:
+					var ship := _water_cell(item.x, item.y)
+					if ship != bool(item.get("ship", false)):
+						item.ship = ship
+						ELSecondBuildings.refresh_travel(item)
+					# ExHideHero only drops the native model below the map. A
+					# scripted jump resets the model, including on the same tile.
+					if item.alive and item.erase("hidden_by_script"): item.visible = true
 				event.emit({"kind": "object_changed", "id": item.uid})
 		"ExCameraGetZoom": return [camera_zoom]
 		"ExCameraGetRotate": return [camera_rotation]
@@ -810,12 +826,13 @@ func _native(args: Array, name: String) -> Array:
 		"ExCameraRotate":
 			camera_rotation = float(first)
 			event.emit({"kind": name, "arguments": args.duplicate()})
-		# Zoom and pitch take a value and an optional duration (-1 = default).
+		# The optional second argument selects easing (-1) or an instant change.
 		"ExCameraZoom":
-			camera_zoom = float(first)
-			event.emit({"kind": name, "arguments": args.duplicate()})
+			if not camera_locked:
+				camera_zoom = float(first)
+				event.emit({"kind": name, "arguments": args.duplicate()})
 		"ExCameraPitch":
-			event.emit({"kind": name, "arguments": args.duplicate()})
+			if not camera_locked: event.emit({"kind": name, "arguments": args.duplicate()})
 		"ExCameraInstantScrollToObject", "ExCameraInstantScrollToPos":
 			event.emit({"kind": name.replace("Instant", ""), "arguments": args.duplicate(), "instant": true})
 		"ExTrace": pass
@@ -837,7 +854,9 @@ func _native(args: Array, name: String) -> Array:
 			return [1.0 if maxi(absi(int(item.x) - int(other.x)), absi(int(item.y) - int(other.y))) <= 1 else null]
 		"ExOrientMobToPoint":
 			if not item.is_empty() and args.size() > 2: event.emit({"kind": "orient_to_point", "id": item.uid, "x": float(args[1]), "y": float(args[2])})
-		"ExCameraScrollToObject", "ExCameraScrollToPos", "ExStartEmphasisTheme", "ExStopEmphasisTheme":
+		"ExStartEmphasisTheme":
+			event.emit({"kind": name, "arguments": args.duplicate(), "theme_fade": theme_fade})
+		"ExCameraScrollToObject", "ExCameraScrollToPos", "ExStopEmphasisTheme":
 			event.emit({"kind": name, "arguments": args.duplicate()})
 		"ExStartBackgroundTheme": ELSecondAmbience.start_theme(self, args)
 		"ExStopBackgroundTheme": ELSecondAmbience.stop_theme(self)

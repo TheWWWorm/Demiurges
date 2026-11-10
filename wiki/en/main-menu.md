@@ -6,10 +6,12 @@ summary: Switching games, saves and where they are kept
 ---
 The main menu is the original game's menu. Under its buttons the remake adds **Etherlords I** and **Etherlords II**: click one to switch games, or **Wiki** to open this wiki. The game you played last opens at the next start. A game you have not added yet says **not installed — add…** and opens the [game files screen](installing) for it.
 
+From the Wiki, open a creature's page to [play its attacks, death, and other animations with sound](creatures).
+
 ## What the menu offers
 
 - **Etherlords**: **New Game** (Duel, Campaign, Single Mission), **Load Game**, **Options**, **Hall of Fame**, **Credits** and **Quit**. See [Duel](duel).
-- **Etherlords II**: **Single** (Tutorial, Duel, Campaign, Mission), **Options**, **Encyclopedia**, **Credits** and **Quit**. **Multiplayer** is not available.
+- **Etherlords II**: **Single** (Tutorial, Duel, Campaign, Mission), **Multiplayer** ([network and hot seat duels](duel)), **Options**, **Encyclopedia**, **Credits** and **Quit**.
 
 ## Saves
 

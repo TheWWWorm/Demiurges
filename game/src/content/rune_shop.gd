@@ -10,6 +10,7 @@ var shop_id := -1
 var pending: Array[int] = []
 var error := ""
 var finished := false
+var _commander := -1
 var _before: Dictionary
 var _quotes: Array[Dictionary] = []
 
@@ -39,10 +40,11 @@ static func price(profile: ELProfile, hero: Dictionary, portal: Dictionary, card
 	return result
 
 ## `remote` (Remote Use) opens the screen without capturing the portal.
-func open(session: ELAdventureSession, actor: int, building: int, remote := false) -> bool:
+func open(session: ELAdventureSession, actor: int, building: int, remote := false, commander := -1) -> bool:
 	state = session
 	hero_id = actor
 	shop_id = building
+	_commander = commander
 	error = ""
 	finished = false
 	if state.map.profile.id != "el1": return _fail("Component portals belong to the first edition.")
@@ -64,7 +66,8 @@ func open(session: ELAdventureSession, actor: int, building: int, remote := fals
 func _access_problem() -> String:
 	var hero := state.object(hero_id)
 	var portal := state.object(shop_id)
-	if hero.is_empty() or hero.type != "hero" or not hero.alive or hero.owner != state.current_player: return "This hero cannot buy runes."
+	var commander := state.current_player if _commander < 0 else _commander
+	if hero.is_empty() or hero.type != "hero" or not hero.alive or hero.owner != commander: return "This hero cannot buy runes."
 	if portal.is_empty() or portal.group != "factories" or not portal.alive or not portal.visible or not portal.enabled or definition(state.map.profile, portal).is_empty(): return "This component portal is unavailable."
 	if not state.players.has(hero.owner): return "This hero has no resource balance."
 	return ""
@@ -91,6 +94,16 @@ func change(slot: int, amount: int) -> bool:
 	if slot < 0 or slot >= pending.size() or amount not in [-1, 1]: return _fail("Select a spell to refill.")
 	if amount > 0 and not can_add(slot): return _fail("This spell needs no additional runes.")
 	pending[slot] = maxi(0, pending[slot] + amount)
+	return true
+
+func set_amount(slot: int, amount: int) -> bool:
+	error = _stale_problem()
+	if not error.is_empty(): return false
+	if slot < 0 or slot >= pending.size() or amount < 0: return _fail("Invalid rune purchase.")
+	var uses := int(_before.uses[slot])
+	if amount > 0 and (uses < 0 or uses + amount > ELRunes.capacity(state.object(hero_id))):
+		return _fail("This spell needs no additional runes.")
+	pending[slot] = amount
 	return true
 
 func fill(slot: int) -> bool:

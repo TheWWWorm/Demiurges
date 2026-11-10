@@ -16,7 +16,7 @@ Demiurges follows the rules of the original games. It runs on modern systems and
 
 ## Not available
 
-- Network play. Local hot seat [duels](duel) work.
+- GameSpy and full strategic multiplayer. Native builds offer [network duels and a strategic preview](duel).
 - Loading saves of the original games. Original Etherlords II replays can be watched.
 - Intro and ending videos in the browser.
 

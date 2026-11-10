@@ -11,6 +11,8 @@ Guides name game things as the original English (GOG) and Russian editions do.
 
 The engine ships no game content. The in-game encyclopedia is built live from the player's installed copies by `ELWikiCatalog` (with one game installed, it shows that game's cards), so it follows their language, data and patches. A creature's page, artifact creatures included, shows the creature's own model playing its idle animation with its own particles, which the player can drag to turn and zoom with the wheel (`ELWikiPreview`); see-through "Alpha32" skins (air walls, spirits) are blended rather than cut at half alpha, so a wall's wispy lower half shows. When the games draw a creature differently, buttons switch between the two. Links to pages of a game that is not installed lead to the contents with a note. The website's encyclopedia is the same builder's output, exported from the original editions together with rendered creature pictures and card icons (see below); like EI's public wiki, it publishes the games' names, descriptions and pictures, credited to their owners.
 
+In the in-game reader, choose an action below the creature model and press **Play**. The menu lists the clips available for that creature and edition. Attacks, hit reactions, deaths and other actions play their original sound when one is available, at the configured **Effects** volume. See the [English](../wiki/en/creatures.md#preview-animations-and-sounds) and [Russian](../wiki/ru/creatures.md#просмотр-анимаций-со-звуком) player guides.
+
 ## Sources
 
 | Path | Contents |

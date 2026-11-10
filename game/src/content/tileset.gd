@@ -14,6 +14,9 @@ const GREY := 0x40
 ## outer texels mirrored across this margin; a map cell shows the inner square
 ## (seams between cells otherwise show mirrored crosses the original lacks).
 const BORDER := 4
+## Water and bog share the liquid terrain treatment. Lava has its own tile.
+const BOG_KIND := 19
+const WATER_KINDS := [16, BOG_KIND]
 var side := 0
 var types: Dictionary = {}
 var pixels: Array[PackedByteArray] = []
@@ -81,7 +84,8 @@ func plan(corners: Array[int], variation := 0, base_rotation := 0) -> Dictionary
 	if corners.count(kind) == 4:
 		variant = variation % record.full.size()
 		variation /= record.full.size()
-	var layers := [{"source": record.full[variant], "mask": {}, "overlay": {}, "rotation": base_rotation & 3, "grey": (kind & GREY) != 0}]
+	var layers := [{"source": record.full[variant], "mask": {}, "overlay": {}, "rotation": base_rotation & 3,
+		"grey": (kind & GREY) != 0, "water": (kind & ~GREY) in WATER_KINDS, "bog": (kind & ~GREY) == BOG_KIND}]
 	var frames: int = record.full[variant].ids.size()
 	for i in 4:
 		if remaining[i] == kind: remaining[i] = -1
@@ -108,7 +112,8 @@ func plan(corners: Array[int], variation := 0, base_rotation := 0) -> Dictionary
 		variant = variation % masks.size()
 		variation /= masks.size()
 		var overlay: Dictionary = record.overlays[shape][variant] if variant < record.overlays[shape].size() else {}
-		layers.append({"source": record.full[0], "mask": masks[variant], "overlay": overlay, "rotation": rotation, "grey": (kind & GREY) != 0})
+		layers.append({"source": record.full[0], "mask": masks[variant], "overlay": overlay, "rotation": rotation,
+			"grey": (kind & GREY) != 0, "water": (kind & ~GREY) in WATER_KINDS, "bog": (kind & ~GREY) == BOG_KIND})
 		frames = maxi(frames, maxi(record.full[0].ids.size(), masks[variant].ids.size()))
 		for i in 4:
 			if remaining[i] == kind and (shape > 0 or i == rotation): remaining[i] = -1
@@ -148,6 +153,11 @@ func compose(composition: Dictionary, frame := 0) -> Image:
 ## greyscale by this weight, which matches the composed greyscale layers
 ## wherever one layer covers a texel. Frame 0 of animated masks is used.
 func grey_weights(composition: Dictionary, out_side: int) -> PackedByteArray:
+	return layer_weights(composition, out_side, "grey")
+
+## Coverage of marked layers in a tile at the given animation frame, using
+## its original transition mask and overlay.
+func layer_weights(composition: Dictionary, out_side: int, flag: String, frame := 0) -> PackedByteArray:
 	var output := PackedByteArray()
 	output.resize(out_side * out_side)
 	if composition.is_empty() or side < 1: return output
@@ -158,12 +168,12 @@ func grey_weights(composition: Dictionary, out_side: int) -> PackedByteArray:
 			var inner := side - 2 * BORDER
 			picks[y * out_side + x] = ((BORDER + (y * inner) / out_side + inner / (2 * out_side)) * side + BORDER + (x * inner) / out_side + inner / (2 * out_side)) * 3
 	for layer: Dictionary in composition.layers:
-		var value := 255 if layer.get("grey", false) else 0
+		var value := 255 if layer.get(flag, false) else 0
 		if layer.mask.is_empty():
 			output.fill(value)
 			continue
-		var mask := _rotated(layer.mask.ids[0], layer.rotation)
-		var overlay := _rotated(layer.overlay.ids[0], layer.rotation) if not layer.overlay.is_empty() else PackedByteArray()
+		var mask := _rotated(layer.mask.ids[frame % layer.mask.ids.size()], layer.rotation)
+		var overlay := _rotated(layer.overlay.ids[frame % layer.overlay.ids.size()], layer.rotation) if not layer.overlay.is_empty() else PackedByteArray()
 		for i in picks.size():
 			var at := picks[i]
 			var m := int(mask[at])

@@ -34,6 +34,8 @@ const INK := Color("e6dcc0")
 const INK_HOVER := Color("fff4d6")
 const INK_DISABLED := Color("8a8478")
 const PLAYER_COLORS := {"Red": Color("d23a22"), "Green": Color("4fbf3a"), "Blue": Color("3a78e0"), "Black": Color("9a8fb8"), "White": Color("e8e4dc")}
+## The minimap belongs to the local player through every player's turn.
+const MINIMAP_LOCAL_PLAYER := 1
 ## CMiniMapA6 (fog colours): unexplored cells are opaque black,
 ## explored ones are drawn normally; there is no remembered dimming.
 const MINIMAP_FOG := """shader_type canvas_item;
@@ -274,7 +276,7 @@ func _build_minimap() -> void:
 	var image := ELMinimapPicture.load_for(state.map)
 	minimap_texture = ImageTexture.create_from_image(image) if image != null else null
 	minimap.draw.connect(_draw_minimap)
-	if minimap_texture != null and ELFog.active(state, state.current_player):
+	if minimap_texture != null and ELFog.active(state, MINIMAP_LOCAL_PLAYER):
 		# The minimap image rows run north-up, so the explored mask is flipped.
 		minimap_fog = TextureRect.new()
 		minimap_fog.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -284,7 +286,7 @@ func _build_minimap() -> void:
 		var material := ShaderMaterial.new()
 		material.shader = Shader.new()
 		material.shader.code = MINIMAP_FOG
-		material.set_shader_parameter("bit", state.current_player)
+		material.set_shader_parameter("bit", MINIMAP_LOCAL_PLAYER)
 		minimap_fog.material = material
 		minimap.add_child(minimap_fog)
 	minimap_marks = Control.new()
@@ -336,13 +338,12 @@ func _draw_minimap_marks() -> void:
 	var area := minimap_area()
 	var map := state.map
 	var cell := area.size / Vector2(maxf(1, map.width), maxf(1, map.height))
-	var player := state.current_player
 	for item: Dictionary in state.objects.values():
 		if not item.get("alive", false) or not item.get("visible", true) or not item.get("placed", true): continue
 		var at := area.position + Vector2(float(item.x) + 0.5, map.height - float(item.y) - 0.5) * cell
 		var owner := int(item.get("owner", 0))
 		var color: Color = PLAYER_COLORS.get(str(state.players.get(owner, {}).get("color", "")), Color("c8c8b8"))
-		if not ELFog.visible(state, player, Vector2i(int(item.x), int(item.y))): continue
+		if not ELFog.visible(state, MINIMAP_LOCAL_PLAYER, Vector2i(int(item.x), int(item.y))): continue
 		if item.get("type") == "hero": minimap_marks.draw_rect(Rect2(at - Vector2(1.5, 1.5), Vector2(3, 3)), color)
 		elif state.players.has(owner) and owner > 0 and ELResourceSites.TYPES.has(str(item.get("group", ""))): minimap_marks.draw_rect(Rect2(at - Vector2(1, 1), Vector2(2, 2)), color)
 	var hero := state.object(hero_id)

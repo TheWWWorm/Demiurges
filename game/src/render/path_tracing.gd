@@ -16,9 +16,22 @@ signal changed(active: bool)
 const LAYER_SIZE := 256
 const LAYER_MIPMAPS := 9
 const LAYERS := 192
+const SURFACE_ALPHA := 1
+const SURFACE_SCENERY := 2
+const SURFACE_GROUND := 4
+const SURFACE_EMISSION := 8
+const SURFACE_EMISSION_MULTIPLY := 16
+const SURFACE_FULLBRIGHT := 64
+const SURFACE_SOFT_EMITTER := 128
+const SURFACE_SOFT_CUTOUT := 256
+const SURFACE_ARENA_FLOOR := 512
+const SURFACE_ARENA_SCENERY := 1024
+const SURFACE_PRIMARY_CULL_BACK := 2048
+const SURFACE_PRIMARY_CULL_FRONT := 4096
+const SURFACE_CLAMP_UV := 32
 ## Angular radius of the sun's disc (tangent), which sets shadow softness.
 const SUN_RADIUS := 0.02
-## Effect lights traced at once (the brightest are kept).
+## Effect lights traced at once. Authored point lights have priority over glow.
 const LIGHT_LIMIT := 64
 ## Light given off per unit of summed particle colour, and its reach.
 const GLOW_STRENGTH := 1.0
@@ -49,6 +62,7 @@ var _sun: DirectionalLight3D
 var _env: Environment
 var _arena: ELArena
 var _effects: ELCombatEffects
+var _adventure_effects: ELAdventureEffects
 var _models: Array[ELModel] = []
 var _static_nodes: Array[GeometryInstance3D] = []
 var _static_entries := []
@@ -58,8 +72,9 @@ var _scan := 0.0
 var _label: Label
 var _label_time := 0.0
 # Main-thread snapshot state, cleared together with the GPU side on a reset.
-var _slots := {}          # node id -> {mesh, frame, vertices, layer, flags}
+var _slots := {}          # node id -> {mesh, frame, look, flags}
 var _layers := {}         # [texture, solid] -> [layer, has alpha]
+var _next_layer := 0
 var _mesh_data := {}      # Mesh -> {vertex, index, uv}
 var _benchmarking := false
 # Development check (--path-tracing-fx=Effect): repeats an effect from the
@@ -128,6 +143,12 @@ func _switch(context: Dictionary) -> void:
 	_env = context.environment
 	_effects = context.effects if is_instance_valid(context.effects) else null
 	_arena = context.arena if is_instance_valid(context.arena) else null
+	_adventure_effects = null
+	if _arena == null:
+		for child: Node in _root.get_children():
+			if child is ELAdventureEffects and child.profile != null and child.profile.id == "el2":
+				_adventure_effects = child
+				break
 	_models.clear()
 	_static_nodes.clear()
 	_static_entries.clear()
@@ -192,6 +213,7 @@ func _activate() -> void:
 		_sun.set_meta("traced_shadow", _sun.shadow_enabled)
 		_sun.shadow_enabled = false
 	_bloom(true)
+	if is_instance_valid(_arena): _arena.set_secondary_traced(true)
 	changed.emit(true)
 
 ## After the display options were applied again (closing the original
@@ -222,6 +244,7 @@ func _deactivate() -> void:
 		_sun.remove_meta("traced_shadow")
 	_restore_effect_lights()
 	_bloom(false)
+	if is_instance_valid(_arena): _arena.set_secondary_traced(false)
 	changed.emit(false)
 
 func _process(delta: float) -> void:
@@ -260,11 +283,17 @@ func _snapshot(delta: float) -> void:
 	for model: ELModel in _models:
 		if not is_instance_valid(model) or not model.is_visible_in_tree(): continue
 		var morphs: Dictionary = model._previous_morphs
+		var effect := model.get_parent() is ELCombatEffects
+		var arena_floor := is_instance_valid(_arena) and _arena.is_surface(model)
 		for part_name: String in model.parts:
 			var node: MeshInstance3D = model.parts[part_name]
 			if node.mesh == null or not node.is_visible_in_tree(): continue
-			var look := _surface(node)
+			var look := _surface(node, effect)
 			if look.is_empty(): continue
+			if arena_floor:
+				look.flags |= SURFACE_ARENA_FLOOR
+			elif is_instance_valid(_arena) and _arena.is_normal_secondary_receiver(model, node):
+				look.flags |= SURFACE_ARENA_SCENERY
 			var mesh: Mesh = node.mesh
 			var frame := -1
 			var pair: Array = morphs.get(part_name, [])
@@ -286,6 +315,7 @@ func _snapshot(delta: float) -> void:
 		"statics": _static_entries,
 		"static_version": _static_version,
 		"lights": _effect_lights(),
+		"secondary_lights": _secondary_lights(),
 		"sun_direction": Vector4(toward.x, toward.y, toward.z, SUN_RADIUS),
 		"sun_color": Vector4(sun.r, sun.g, sun.b, 1.0 if sun_on else 0.0),
 		"ambient": Vector4(ambient.r, ambient.g, ambient.b, _arena.light_limit if _arena != null else 1000.0),
@@ -298,18 +328,51 @@ func _update_slot(ops: Array, id: int, mesh: Mesh, frame: int, look: Dictionary)
 	if data.is_empty(): return false
 	var vertices: PackedVector3Array = data.vertex
 	var slot: Dictionary = _slots.get(id, {})
-	var layer: Array = _layer(look.texture, look.get("solid", false))
-	var flags := (1 if look.alpha and layer[1] else 0) | (2 if look.scenery else 0)
-	if slot.is_empty() or slot.vertices != vertices.size() or slot.layer != layer[0] or slot.flags != flags:
-		ops.append(["define", id, vertices.size(), data.index.to_byte_array(), data.uv.to_byte_array(), layer[0], flags])
-		slot = {"vertices": vertices.size(), "layer": layer[0], "flags": flags, "mesh": null, "frame": -2}
+	if slot.is_empty() or slot.mesh != mesh or slot.look != look:
+		var layer := _layer(look.texture, look.get("solid", false))
+		var cutoff: float = look.get("cutoff", 0.0)
+		var flags: int = look.get("flags", 0)
+		if cutoff > 1.0 or (cutoff > 0.0 and layer[1]) or (flags & SURFACE_SOFT_EMITTER) != 0:
+			flags |= SURFACE_ALPHA
+		var record := _material_record(look, layer[0], _layer(look.get("emission_texture"))[0], flags)
+		var geometry_flags := SURFACE_ALPHA | SURFACE_ARENA_SCENERY
+		if slot.is_empty() or slot.mesh != mesh or (slot.flags & geometry_flags) != (flags & geometry_flags):
+			var normals := PackedByteArray()
+			if (flags & SURFACE_ARENA_SCENERY) != 0:
+				normals = _secondary_corner_normals(mesh, data.index)
+			ops.append(["define", id, vertices.size(), data.index.to_byte_array(), data.uv.to_byte_array(), flags, normals])
+			slot = {"frame": -2}
+		ops.append(["material", id, record])
+		slot.look = look
+		slot.flags = flags
+		slot.mesh = mesh
 		_slots[id] = slot
-	if slot.mesh != mesh or slot.frame != frame:
+	if slot.frame != frame:
 		var positions: PackedVector3Array = vertices if frame < 0 else mesh.get_meta("morph_positions")[frame]
 		ops.append(["pose", id, positions.to_byte_array()])
-		slot.mesh = mesh
 		slot.frame = frame
 	return true
+
+static func _secondary_corner_normals(mesh: Mesh, indices: PackedInt32Array) -> PackedByteArray:
+	var normals: PackedVector3Array = mesh.surface_get_arrays(0)[Mesh.ARRAY_NORMAL]
+	var corners := PackedVector3Array()
+	corners.resize(indices.size())
+	for corner in indices.size():
+		corners[corner] = normals[indices[corner]]
+	return corners.to_byte_array()
+
+static func _material_record(look: Dictionary, layer: int, emission_layer: int, flags: int) -> PackedByteArray:
+	var tint: Color = look.get("tint", Color.WHITE)
+	var emission: Color = look.get("emission", Color.BLACK)
+	var uv: Vector4 = look.get("uv", Vector4(1, 1, 0, 0))
+	# The render thread fills the first corner. The remaining fields match Slot
+	# in the ray shaders, with all vectors aligned to 16 bytes.
+	var record := PackedInt32Array([0, layer, flags, emission_layer]).to_byte_array()
+	record.append_array(PackedFloat32Array([
+		tint.r, tint.g, tint.b, look.get("opacity", look.get("cutoff", 0.0)),
+		emission.r, emission.g, emission.b, look.get("emission_energy", 0.0),
+		uv.x, uv.y, uv.z, uv.w]).to_byte_array())
+	return record
 
 ## Unmoving scenery (instanced map objects, the map's ground): its placements
 ## are gathered on each scan and sent only when they change.
@@ -322,17 +385,27 @@ func _scan_statics(ops: Array) -> void:
 		if look.is_empty() or mesh == null or not _update_slot(ops, id, mesh, -1, look): continue
 		var cached: Array = _static_cache.get(id, [])
 		var count := 1
+		var fog_colours := false
 		# Instances change in place too: map objects hidden under the fog are
 		# shown by their instance transforms, which the count does not see.
 		var placement := 0
 		if node is MultiMeshInstance3D:
 			var multimesh: MultiMesh = node.multimesh
 			count = multimesh.instance_count if multimesh.visible_instance_count < 0 else multimesh.visible_instance_count
-			placement = hash(multimesh.buffer)
+			var material := node.material_override as BaseMaterial3D
+			fog_colours = node.get_parent() is ELAdventureScene and multimesh.use_colors and material != null and material.vertex_color_use_as_albedo
+			placement = hash([multimesh.buffer, fog_colours])
 		if cached.is_empty() or cached[0] != node.global_transform or cached[1] != count or cached[3] != placement:
 			var placed := []
 			if node is MultiMeshInstance3D:
-				for i in count: placed.append([id, node.global_transform * node.multimesh.get_instance_transform(i)])
+				var multimesh: MultiMesh = node.multimesh
+				for i in count:
+					var transform := multimesh.get_instance_transform(i)
+					# The adventure map hides undiscovered objects with zero scale.
+					if transform.basis == Basis.from_scale(Vector3.ZERO): continue
+					var placement_row := [id, node.global_transform * transform]
+					if fog_colours: placement_row.append(roundi(multimesh.get_instance_color(i).r * 255.0))
+					placed.append(placement_row)
 			else:
 				placed.append([id, node.global_transform])
 			cached = [node.global_transform, count, placed, placement]
@@ -412,34 +485,43 @@ func _benchmark(window_size: String) -> void:
 	get_tree().quit()
 
 ## The effects' light: each glowing particle system as one soft source, and
-## the effects' own point lights (their raster light is held back meanwhile,
-## so it is not counted twice). Returns packed place/colour pairs.
+## the effects' own point lights. Only transparent additive models keep their
+## raster light while the opaque pass traces it. Returns packed place/colour pairs.
 func _effect_lights() -> PackedFloat32Array:
 	var found := []
+	var glows := _effects.glow_sources() if is_instance_valid(_effects) else []
+	if is_instance_valid(_adventure_effects): glows.append_array(_adventure_effects.glow_sources())
+	for glow: Array in glows:
+		var colour: Vector3 = glow[2] * GLOW_STRENGTH
+		var peak := maxf(colour.x, maxf(colour.y, colour.z))
+		if peak > GLOW_LIMIT: colour *= GLOW_LIMIT / peak
+		var extent := clampf(glow[1], 0.1, 3.0)
+		found.append([glow[0], extent, colour, GLOW_REACH + extent * 3.0])
+	var authored := []
 	if is_instance_valid(_effects):
-		for glow: Array in _effects.glow_sources():
-			var colour: Vector3 = glow[2] * GLOW_STRENGTH
-			var peak := maxf(colour.x, maxf(colour.y, colour.z))
-			if peak > GLOW_LIMIT: colour *= GLOW_LIMIT / peak
-			var extent := clampf(glow[1], 0.1, 3.0)
-			found.append([glow[0], extent, colour, GLOW_REACH + extent * 3.0])
 		for item: Dictionary in _effects.lights:
 			var omni: OmniLight3D = item.node
-			if omni.light_cull_mask != 0:
+			if not omni.has_meta("cull_mask"):
 				omni.set_meta("cull_mask", omni.light_cull_mask)
-				omni.light_cull_mask = 0
+				omni.light_cull_mask &= ELCombatEffects.LIT_ADDITIVE_LAYER
 			if not item.active or not omni.is_visible_in_tree(): continue
 			var c := omni.light_color.srgb_to_linear() * omni.light_energy
-			found.append([omni.global_position, 0.15, Vector3(c.r, c.g, c.b), omni.omni_range])
-	if found.size() > LIGHT_LIMIT:
+			authored.append([omni.global_position, 0.15, Vector3(c.r, c.g, c.b), omni.omni_range])
+	# Preserve authored light keys before filling the budget with inferred glow.
+	var glow_limit := maxi(LIGHT_LIMIT - authored.size(), 0)
+	if found.size() > glow_limit:
 		found.sort_custom(func(a, b): return a[2].length_squared() > b[2].length_squared())
-		found.resize(LIGHT_LIMIT)
+		found.resize(glow_limit)
+	found.append_array(authored)
 	var data := PackedFloat32Array()
 	for light: Array in found:
 		var p: Vector3 = light[0]
 		var c: Vector3 = light[2]
 		data.append_array([p.x, p.y, p.z, light[1], c.x, c.y, c.z, light[3]])
 	return data
+
+func _secondary_lights() -> PackedFloat32Array:
+	return _effects.secondary_light_sources() if is_instance_valid(_effects) else PackedFloat32Array()
 
 ## Bloom on the scene's environment and HDR glowing particles while tracing;
 ## the previous settings return when it stops.
@@ -469,16 +551,20 @@ func _restore_effect_lights() -> void:
 	if not is_instance_valid(_effects): return
 	for item: Dictionary in _effects.lights:
 		var omni: OmniLight3D = item.node
-		if omni.has_meta("cull_mask"): omni.light_cull_mask = omni.get_meta("cull_mask")
+		if not omni.has_meta("cull_mask"): continue
+		omni.light_cull_mask = omni.get_meta("cull_mask")
+		omni.remove_meta("cull_mask")
 
 ## Figures (ELModel, traced part by part each frame) and unmoving scenery
 ## (instanced objects and the map's ground) under `node`.
 func _collect(node: Node) -> void:
 	for child in node.get_children():
-		# Effect models (runes, glows, walls of fire) keep their raster light,
-		# as particles do: their soft shapes, traced as solid, darkened the
-		# ground beneath them into squares.
-		if child is ELCombatEffects: continue
+		if child is ELCombatEffects:
+			for pool: Array[Dictionary] in [child.objects, child.arena_objects]:
+				for item: Dictionary in pool:
+					if not item.magic_materials.is_empty(): _models.append(item.node)
+			continue
+		if child is ELAdventureEffects: continue
 		if child is ELModel:
 			_models.append(child)
 			continue
@@ -489,27 +575,66 @@ func _collect(node: Node) -> void:
 			_static_nodes.append(child)
 		_collect(child)
 
-## The traced look of a part: its albedo texture, cut-out and kind, or empty
-## for parts drawn unlit or blended (left to their raster light).
-func _surface(node: GeometryInstance3D) -> Dictionary:
+## Authored full-bright blends and effects participate in diffuse bounces only.
+func _surface(node: GeometryInstance3D, effect := false) -> Dictionary:
 	var material := node.material_override
-	if material is StandardMaterial3D:
-		var standard := material as StandardMaterial3D
-		if standard.shading_mode == BaseMaterial3D.SHADING_MODE_UNSHADED or standard.albedo_texture == null: return {}
-		if standard.transparency not in [BaseMaterial3D.TRANSPARENCY_DISABLED, BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR]: return {}
-		return {"texture": standard.albedo_texture, "alpha": standard.transparency == BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR, "scenery": false}
+	if material == null:
+		if node is MeshInstance3D and node.mesh != null and node.mesh.get_surface_count() > 0:
+			material = node.get_active_material(0)
+		elif node is MultiMeshInstance3D and node.multimesh != null and node.multimesh.mesh != null:
+			var mesh: Mesh = node.multimesh.mesh
+			if mesh.get_surface_count() > 0: material = mesh.surface_get_material(0)
+	if material is BaseMaterial3D:
+		var base := material as BaseMaterial3D
+		var fullbright := base.has_meta(ELFigure.AUTHORED_FULLBRIGHT)
+		if effect and not fullbright: return {}
+		if base.shading_mode == BaseMaterial3D.SHADING_MODE_UNSHADED and not fullbright: return {}
+		var soft := fullbright and base.blend_mode == BaseMaterial3D.BLEND_MODE_MIX and (effect or base.transparency in [
+			BaseMaterial3D.TRANSPARENCY_ALPHA, BaseMaterial3D.TRANSPARENCY_ALPHA_DEPTH_PRE_PASS])
+		if not soft and base.transparency not in [BaseMaterial3D.TRANSPARENCY_DISABLED, BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR]: return {}
+		var look := {"texture": base.albedo_texture, "tint": base.albedo_color.srgb_to_linear(),
+			"uv": Vector4(base.uv1_scale.x, base.uv1_scale.y, base.uv1_offset.x, base.uv1_offset.y),
+			"flags": 0 if base.texture_repeat else SURFACE_CLAMP_UV}
+		match base.cull_mode:
+			BaseMaterial3D.CULL_BACK: look.flags |= SURFACE_PRIMARY_CULL_BACK
+			BaseMaterial3D.CULL_FRONT: look.flags |= SURFACE_PRIMARY_CULL_FRONT
+		var cutout := base.transparency == BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR
+		if cutout:
+			look.cutoff = base.alpha_scissor_threshold / maxf(base.albedo_color.a, 0.000001)
+		if fullbright: look.flags |= SURFACE_FULLBRIGHT
+		if soft:
+			if base.albedo_color.a <= 0.0: return {}
+			look.flags |= SURFACE_SOFT_EMITTER
+			if cutout: look.flags |= SURFACE_SOFT_CUTOUT
+			else: look.opacity = base.albedo_color.a
+		if base.emission_enabled and base.emission_energy_multiplier > 0.0:
+			look.flags |= SURFACE_EMISSION
+			if base.emission_operator == BaseMaterial3D.EMISSION_OP_MULTIPLY: look.flags |= SURFACE_EMISSION_MULTIPLY
+			look.emission = base.emission.srgb_to_linear()
+			look.emission_energy = base.emission_energy_multiplier
+			look.emission_texture = base.emission_texture
+		return look
 	if material is ShaderMaterial and node.has_meta("albedo"):
 		# Blended scenery (soft-alpha water sheets) keeps its raster light, as
 		# effects do: as solid surfaces they shut the light off what lies below.
-		if (material as ShaderMaterial).shader == ELArena.LIT_BLEND_SHADER: return {}
+		var shader := material as ShaderMaterial
+		if shader.shader == ELArena.LIT_BLEND_SHADER: return {}
 		var texture := node.get_meta("albedo") as Texture2D
 		if texture == null: return {}
-		return {"texture": texture, "alpha": (material as ShaderMaterial).shader == ELArena.LIT_SHADER, "scenery": true}
+		var look := {"texture": texture, "flags": SURFACE_SCENERY}
+		if shader.shader == ELArena.LIT_SHADER:
+			look.flags |= SURFACE_PRIMARY_CULL_BACK
+			var authored: Variant = shader.get_shader_parameter("albedo_tint")
+			var tint: Color = authored if authored is Color else Color.WHITE
+			var cutoff: Variant = shader.get_shader_parameter("alpha_cutoff")
+			look.tint = tint.srgb_to_linear()
+			look.cutoff = (cutoff if cutoff is float else 0.5) / maxf(tint.a, 0.000001)
+		return look
 	# The map's ground: its tile atlas gives one average colour for bounces.
 	if node.get_parent() is ELAdventureTerrain and material is ShaderMaterial:
 		var tiles := (material as ShaderMaterial).get_shader_parameter("tiles") as Texture2D
 		if tiles == null: return {}
-		return {"texture": tiles, "alpha": false, "scenery": false, "solid": true}
+		return {"texture": tiles, "flags": SURFACE_GROUND, "solid": true}
 	return {}
 
 func _arrays(mesh: Mesh) -> Dictionary:
@@ -532,35 +657,52 @@ func _arrays(mesh: Mesh) -> Dictionary:
 ## The texture-array layer holding a texture (uploaded on first use), and
 ## whether its alpha cuts anything out. `solid` stores its average colour only.
 func _layer(texture: Texture2D, solid := false) -> Array:
+	if texture == null: return [-1, false]
 	var key := [texture, solid]
 	if _layers.has(key): return _layers[key]
-	var entry := [0, false]
-	if _layers.size() < LAYERS and texture != null:
+	var entry := [-1, false]
+	if _next_layer < LAYERS:
 		var image := texture.get_image()
 		if image != null:
-			image = image.duplicate()
-			if image.is_compressed(): image.decompress()
-			image.clear_mipmaps()
-			image.convert(Image.FORMAT_RGBA8)
-			if solid:
-				image.resize(16, 16, Image.INTERPOLATE_BILINEAR)
-				image.resize(1, 1, Image.INTERPOLATE_BILINEAR)
-				var average := image.get_pixel(0, 0)
-				average.a = 1.0
-				image = Image.create(LAYER_SIZE, LAYER_SIZE, false, Image.FORMAT_RGBA8)
-				image.fill(average)
+			var authored := _authored_layer(texture, image) if not solid else null
+			if authored != null:
+				image = authored
 			else:
-				image.resize(LAYER_SIZE, LAYER_SIZE, Image.INTERPOLATE_BILINEAR)
+				image = image.duplicate()
+				if image.is_compressed(): image.decompress()
+				image.clear_mipmaps()
+				image.convert(Image.FORMAT_RGBA8)
+				if solid:
+					image.resize(16, 16, Image.INTERPOLATE_BILINEAR)
+					image.resize(1, 1, Image.INTERPOLATE_BILINEAR)
+					var average := image.get_pixel(0, 0)
+					average.a = 1.0
+					image = Image.create(LAYER_SIZE, LAYER_SIZE, false, Image.FORMAT_RGBA8)
+					image.fill(average)
+				else:
+					image.resize(LAYER_SIZE, LAYER_SIZE, Image.INTERPOLATE_BILINEAR)
 			var alpha := image.detect_alpha() != Image.ALPHA_NONE
-			image.generate_mipmaps()
-			entry = [_layers.size(), alpha]
+			if authored == null: image.generate_mipmaps()
+			entry = [_next_layer, alpha]
+			_next_layer += 1
 			_effect.queue_layer(entry[0], image.get_data())
 	_layers[key] = entry
 	return entry
 
+## Keep the original mask at the ray atlas's resolution when the asset has it.
+static func _authored_layer(texture: Texture2D, image: Image) -> Image:
+	if not texture.has_meta(ELTexture.AUTHORED_MASK_MIPS) or image.get_width() != image.get_height(): return null
+	var side := image.get_width()
+	for level in int(texture.get_meta(ELTexture.AUTHORED_MASK_MIPS)):
+		if side == LAYER_SIZE:
+			return Image.create_from_data(side, side, true, Image.FORMAT_RGBA8, image.get_data().slice(image.get_mipmap_offset(level)))
+		side /= 2
+	return null
+
 func _reset() -> void:
 	_slots.clear()
 	_layers.clear()
+	_next_layer = 0
 	_mesh_data.clear()
 	_static_entries = []
 	_static_cache.clear()
@@ -577,7 +719,10 @@ class Effect extends CompositorEffect:
 	const VERTEX_CAPACITY := 1 << 20
 	const CORNER_CAPACITY := 3 << 20
 	const SLOT_CAPACITY := 8192
+	const NORMAL_HEADER_BYTES := SLOT_CAPACITY * 4
+	const SLOT_BYTES := 64
 	const FRAME_BYTES := 304
+	const DOUBLE_SIDED := RenderingDevice.ACCELERATION_STRUCTURE_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT
 
 	var history_reset := true
 	var _mutex := Mutex.new()
@@ -599,6 +744,9 @@ class Effect extends CompositorEffect:
 	var _indices := RID()
 	var _corners := RID()
 	var _corner_uv := RID()
+	var _corner_normals := RID()
+	var _normal_bytes_used := 0
+	var _normal_capacity := 0
 	var _slot_buffer := RID()
 	var _frame_buffer := RID()
 	var _light_buffer := RID()
@@ -609,7 +757,7 @@ class Effect extends CompositorEffect:
 	var _sbt := RID()
 	var _hit_range := 0
 	var _tlas_capacity := 0
-	var _images: Array[RID] = []   # light 0/1, guide 0/1, filter 0/1
+	var _images: Array[RID] = []   # light 0/1, guide 0/1, filter 0/1, primary surface, secondary
 	var _size := Vector2i.ZERO
 	var _parity := 0
 	var _frame_number := 0
@@ -732,12 +880,15 @@ class Effect extends CompositorEffect:
 		_source_uv = _rd.storage_buffer_create(VERTEX_CAPACITY * 8)
 		_indices = _rd.storage_buffer_create(CORNER_CAPACITY * 4)
 		_corner_uv = _rd.storage_buffer_create(CORNER_CAPACITY * 8)
+		_corner_normals = _rd.storage_buffer_create(NORMAL_HEADER_BYTES)
+		if not _corner_normals.is_valid(): return false
 		_corners = _rd.vertex_buffer_create(CORNER_CAPACITY * 12, PackedByteArray(),
 			RenderingDevice.BUFFER_CREATION_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT |
 			RenderingDevice.BUFFER_CREATION_DEVICE_ADDRESS_BIT | RenderingDevice.BUFFER_CREATION_AS_STORAGE_BIT)
-		_slot_buffer = _rd.storage_buffer_create(SLOT_CAPACITY * 16)
+		_slot_buffer = _rd.storage_buffer_create(SLOT_CAPACITY * SLOT_BYTES)
 		_frame_buffer = _rd.storage_buffer_create(FRAME_BYTES)
-		_light_buffer = _rd.storage_buffer_create(ELPathTracing.LIGHT_LIMIT * 32)
+		var authored_limit := ELCombatEffects.LIGHT_POOL
+		_light_buffer = _rd.storage_buffer_create((maxi(ELPathTracing.LIGHT_LIMIT, authored_limit) + authored_limit) * 32)
 		var format := RDTextureFormat.new()
 		format.texture_type = RenderingDevice.TEXTURE_TYPE_2D_ARRAY
 		format.width = ELPathTracing.LAYER_SIZE
@@ -755,7 +906,7 @@ class Effect extends CompositorEffect:
 		sampler.repeat_v = RenderingDevice.SAMPLER_REPEAT_MODE_REPEAT
 		_linear = _rd.sampler_create(sampler)
 		_nearest = _rd.sampler_create(RDSamplerState.new())
-		for rid: RID in [_expand_pipeline, _trace_pipeline, _filter_pipeline, _source, _source_uv, _indices, _corner_uv, _corners, _slot_buffer, _frame_buffer, _light_buffer, _albedo, _linear, _nearest]:
+		for rid: RID in [_expand_pipeline, _trace_pipeline, _filter_pipeline, _source, _source_uv, _indices, _corner_uv, _corner_normals, _corners, _slot_buffer, _frame_buffer, _light_buffer, _albedo, _linear, _nearest]:
 			if not rid.is_valid(): return false
 		return true
 
@@ -776,7 +927,7 @@ class Effect extends CompositorEffect:
 		format.height = size.y
 		format.format = RenderingDevice.DATA_FORMAT_R16G16B16A16_SFLOAT
 		format.usage_bits = RenderingDevice.TEXTURE_USAGE_STORAGE_BIT | RenderingDevice.TEXTURE_USAGE_SAMPLING_BIT | RenderingDevice.TEXTURE_USAGE_CAN_COPY_TO_BIT
-		for i in 6:
+		for i in 8:
 			var image := _rd.texture_create(format, RDTextureView.new())
 			_rd.texture_clear(image, Color(0, 0, 0, 0), 0, 1, 0, 1)
 			_images.append(image)
@@ -792,6 +943,7 @@ class Effect extends CompositorEffect:
 				"layer":
 					if _rd.texture_update(_albedo, op[1], op[2]) != OK: push_warning("Path tracing: texture layer upload failed")
 				"define": if not _define(op): return _overflowed()
+				"material": _update_material(op[1], op[2])
 				"pose": _pose(op[1], op[2])
 				"free": _free_slot(op[1])
 		return true
@@ -810,6 +962,7 @@ class Effect extends CompositorEffect:
 		_next_index = 0
 		_next_corner = 0
 		_next_slot = 0
+		_normal_bytes_used = 0
 		_free_indices.clear()
 		_dirty.clear()
 		history_reset = true
@@ -828,15 +981,15 @@ class Effect extends CompositorEffect:
 			if _next_slot >= SLOT_CAPACITY: return false
 			_next_slot += 1
 		var slot := {"index": slot_index, "vertex": _next_vertex, "first_index": _next_corner, "corner": _next_corner,
-			"corners": corners, "vertices": vertices, "uv": true, "posed": false, "flags": op[6]}
+			"corners": corners, "vertices": vertices, "uv": true, "posed": false}
 		_next_vertex += vertices
 		_next_corner += corners
 		_rd.buffer_update(_indices, slot.first_index * 4, index_bytes.size(), index_bytes)
 		_rd.buffer_update(_source_uv, slot.vertex * 8, mini(uv_bytes.size(), vertices * 8), uv_bytes)
-		var record := PackedInt32Array([slot.corner, op[5], op[6], 0]).to_byte_array()
-		_rd.buffer_update(_slot_buffer, slot_index * 16, 16, record)
+		var normals: PackedByteArray = op[6]
+		if not normals.is_empty() and not _store_corner_normals(slot_index, normals): return false
 		var geometry := RDAccelerationStructureGeometry.new()
-		if (op[6] & 1) == 0: geometry.flags = RenderingDevice.ACCELERATION_STRUCTURE_GEOMETRY_OPAQUE_BIT
+		if (op[5] & ELPathTracing.SURFACE_ALPHA) == 0: geometry.flags = RenderingDevice.ACCELERATION_STRUCTURE_GEOMETRY_OPAQUE_BIT
 		geometry.vertex_buffer = _corners
 		geometry.vertex_offset = slot.corner * 12
 		geometry.vertex_stride = 12
@@ -847,6 +1000,45 @@ class Effect extends CompositorEffect:
 		if not slot.blas.is_valid(): return false
 		_slots[id] = slot
 		return true
+
+	## Binding 7 starts with a word offset for every slot. Only normal-aware
+	## receivers append data, in the same order as their expanded triangles.
+	func _store_corner_normals(slot_index: int, normals: PackedByteArray) -> bool:
+		var required := _normal_bytes_used + normals.size()
+		if required > CORNER_CAPACITY * 12: return false
+		if required > _normal_capacity:
+			var capacity := mini(maxi(required, _normal_capacity * 2), CORNER_CAPACITY * 12)
+			var grown := _rd.storage_buffer_create(NORMAL_HEADER_BYTES + capacity)
+			if not grown.is_valid(): return false
+			if _normal_bytes_used > 0 and _rd.buffer_copy(_corner_normals, grown, 0, 0, NORMAL_HEADER_BYTES + _normal_bytes_used) != OK:
+				_rd.free_rid(grown)
+				return false
+			_rd.free_rid(_corner_normals)
+			_corner_normals = grown
+			_normal_capacity = capacity
+		var start := NORMAL_HEADER_BYTES + _normal_bytes_used
+		var offset := PackedInt32Array([start / 4]).to_byte_array()
+		if _rd.buffer_update(_corner_normals, start, normals.size(), normals) != OK: return false
+		if _rd.buffer_update(_corner_normals, slot_index * 4, offset.size(), offset) != OK: return false
+		_normal_bytes_used = required
+		return true
+
+	func _update_material(id: int, record: PackedByteArray) -> void:
+		var slot: Dictionary = _slots.get(id, {})
+		if slot.is_empty(): return
+		var flags := record.decode_u32(8)
+		var mask := 2 if (flags & ELPathTracing.SURFACE_SOFT_EMITTER) != 0 else 1
+		var facing := DOUBLE_SIDED
+		# Vulkan's ray-facing test sees Godot's raster fronts with reversed winding.
+		if (flags & ELPathTracing.SURFACE_PRIMARY_CULL_BACK) != 0:
+			facing = RenderingDevice.ACCELERATION_STRUCTURE_INSTANCE_TRIANGLE_FLIP_FACING_BIT
+		elif (flags & ELPathTracing.SURFACE_PRIMARY_CULL_FRONT) != 0:
+			facing = 0
+		if slot.get("mask", 1) != mask or slot.get("facing", DOUBLE_SIDED) != facing: _static_dirty = true
+		slot.mask = mask
+		slot.facing = facing
+		record.encode_u32(0, slot.corner)
+		_rd.buffer_update(_slot_buffer, slot.index * SLOT_BYTES, SLOT_BYTES, record)
 
 	func _pose(id: int, positions: PackedByteArray) -> void:
 		var slot: Dictionary = _slots.get(id, {})
@@ -905,9 +1097,12 @@ class Effect extends CompositorEffect:
 			if slot.is_empty() or not slot.posed: continue
 			var instance := RDAccelerationStructureInstance.new()
 			instance.transform = entry[1]
-			instance.id = slot.index
-			instance.mask = 0xFF
-			instance.flags = RenderingDevice.ACCELERATION_STRUCTURE_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT
+			# Vulkan's 24-bit custom index carries the 16-bit slot and an
+			# 8-bit grayscale fog multiplier. All instances still share the BLAS.
+			var tint := clampi(int(entry[2]), 0, 255) if entry.size() > 2 else 255
+			instance.id = slot.index | (tint << 16)
+			instance.mask = slot.mask
+			instance.flags = slot.get("facing", DOUBLE_SIDED)
 			instance.blas = slot.blas
 			instance.hit_sbt_range = _hit_range
 			list.append(instance)
@@ -933,8 +1128,11 @@ class Effect extends CompositorEffect:
 		var lights: PackedFloat32Array = frame.lights
 		var light_count := lights.size() / 8
 		if light_count > 0: _rd.buffer_update(_light_buffer, 0, lights.size() * 4, lights.to_byte_array())
+		var secondary: PackedFloat32Array = frame.secondary_lights
+		var secondary_count := secondary.size() / 8
+		if secondary_count > 0: _rd.buffer_update(_light_buffer, lights.size() * 4, secondary.size() * 4, secondary.to_byte_array())
 		# Effect light changes quickly: a shorter history keeps it from smearing.
-		for value in [_frame_number, size.x, size.y, flags, light_count, 12 if light_count > 0 else 48, 0, 0]:
+		for value in [_frame_number, size.x, size.y, flags, light_count, 12 if light_count > 0 else 48, secondary_count, 0]:
 			data.encode_u32(at, value)
 			at += 4
 		_rd.buffer_update(_frame_buffer, 0, FRAME_BYTES, data)
@@ -955,7 +1153,7 @@ class Effect extends CompositorEffect:
 		frame_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER
 		frame_uniform.binding = 0
 		frame_uniform.add_id(_frame_buffer)
-		var common: Array[RDUniform] = [frame_uniform, tlas, _storage(2, _corners), _storage(3, _corner_uv), _storage(4, _slot_buffer), albedo, _storage(6, _light_buffer)]
+		var common: Array[RDUniform] = [frame_uniform, tlas, _storage(2, _corners), _storage(3, _corner_uv), _storage(4, _slot_buffer), albedo, _storage(6, _light_buffer), _storage(7, _corner_normals)]
 
 		var previous := _parity
 		var current := 1 - _parity
@@ -972,7 +1170,8 @@ class Effect extends CompositorEffect:
 		normal.binding = 1
 		normal.add_id(_nearest)
 		normal.add_id(buffers.get_texture("forward_clustered", "normal_roughness"))
-		var trace_set: Array[RDUniform] = [depth, normal, _image(2, light[previous]), _image(3, guide[previous]), _image(4, light[current]), _image(5, guide[current])]
+		var trace_set: Array[RDUniform] = [depth, normal, _image(2, light[previous]), _image(3, guide[previous]),
+			_image(4, light[current]), _image(5, guide[current]), _image(6, _images[6]), _image(7, _images[7])]
 		var groups := Vector3i((size.x + 7) / 8, (size.y + 7) / 8, 1)
 		var rays := _rd.raytracing_list_begin()
 		_rd.raytracing_list_bind_raytracing_pipeline(rays, _trace_pipeline)
@@ -985,7 +1184,7 @@ class Effect extends CompositorEffect:
 		var color := buffers.get_color_layer(0)
 		var passes := [[light[current], _images[4], 1, 0], [_images[4], _images[5], 2, 0], [_images[5], _images[4], 4, 1]]
 		for step: Array in passes:
-			var filter_set: Array[RDUniform] = [_image(0, step[0]), _image(1, guide[current]), _image(2, step[1]), _image(3, color)]
+			var filter_set: Array[RDUniform] = [_image(0, step[0]), _image(1, guide[current]), _image(2, step[1]), _image(3, color), _image(4, _images[6]), _image(5, _images[7])]
 			var push := PackedInt32Array([step[2], step[3], 0, 0]).to_byte_array()
 			var list := _rd.compute_list_begin()
 			_rd.compute_list_bind_compute_pipeline(list, _filter_pipeline)
@@ -1020,7 +1219,7 @@ class Effect extends CompositorEffect:
 		if _rd == null: return
 		_clear_scene()
 		var owned: Array[RID] = [_tlas, _sbt, _expand_pipeline, _trace_pipeline, _filter_pipeline, _expand_shader, _trace_shader, _filter_shader,
-			_source, _source_uv, _indices, _corner_uv, _corners, _slot_buffer, _frame_buffer, _light_buffer, _albedo, _linear, _nearest]
+			_source, _source_uv, _indices, _corner_uv, _corner_normals, _corners, _slot_buffer, _frame_buffer, _light_buffer, _albedo, _linear, _nearest]
 		owned.append_array(_images)
 		for rid in owned:
 			if rid.is_valid(): _rd.free_rid(rid)
@@ -1028,4 +1227,5 @@ class Effect extends CompositorEffect:
 		_tlas = RID()
 		_sbt = RID()
 		_tlas_capacity = 0
+		_normal_capacity = 0
 		_ready_state = 0

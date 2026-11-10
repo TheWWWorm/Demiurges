@@ -2,6 +2,17 @@
 
 Versions follow [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html) from 0.3.0 on.
 
+## 0.6.0
+
+- Ether Expedition is a three-act deck-building campaign for Etherlords II. Choose branching routes, draft spells, visit camps and illustrated encounters, and fight original guardians. Runs save between rooms and after settled combat actions.
+- Native builds support LAN and direct-IP duels in both games, including clocks, chat, and Etherlords II reserve swaps and replay recording. The Etherlords I strategic preview adds shared nights, more original map interactions, saves, and AI takeover after a disconnect. Both players need the same build.
+- The game console opens with the grave key or F10. It supports original local commands, searchable help, completion, and command history.
+- Enhanced Water is optional. It adds moving shoreline detail and rain reflections. Path tracing uses more of the original arena and spell material and light data.
+- Battles restore missing arena and spell effects, including Enforcements in Etherlords II. Crowded fights can display more simultaneous spell effects and lights. Space skips the current presentation and keeps the turn state. A fresh campaign battle can deal a different opening hand, while loading an active battle preserves its exact state.
+- Etherlords II campaign fixes cover speaker portraits, scripted cameras and waits, boarding and landing, teleport and tunnel travel, guarded tunnel rewards, and the White Lord portal finale. The new build can recover saves stranded by the old finale order.
+- The in-game wiki previews creature attacks, hit reactions, deaths, and other original animations with their available sounds.
+- The Load screen recovers valid saves whose list metadata is missing or damaged. Older saves without a stored name appear under the map name and a short identifier. More console, combat, and campaign messages are shown in Russian when the interface uses Russian.
+
 ## 0.5.0
 
 - Frame rate counter (Remake settings › Interface): frames per second in the top right corner. Off at first.

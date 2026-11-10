@@ -2,6 +2,8 @@ class_name ELProfile
 extends RefCounted
 ## Each edition owns its archives and caches. Identical card/asset names never
 ## resolve through another edition's mounted content.
+## Original FIG material table. Magic has its own full-bright override.
+const FIGURE_MATERIALS := {17: "leather.mat", 18: "wood.mat", 19: "metal.mat", 20: "cloth.mat", 21: "skin.mat", 22: "stone.mat", 25: "metal.mat"}
 var id := ""
 var title := ""
 var root := ""
@@ -10,6 +12,7 @@ var archives: Dictionary = {}
 var tables: Dictionary = {}
 var texts: Dictionary = {}
 var _textures: Dictionary = {}
+var _figure_diffuse: Dictionary = {}
 var _files: Dictionary = {}
 var asset_reads := 0
 var model_resources: Dictionary = {}
@@ -30,6 +33,7 @@ func mount(edition: String, folder: String) -> bool:
 	tables.clear()
 	texts.clear()
 	_textures.clear()
+	_figure_diffuse.clear()
 	_icons.clear()
 	sound_cache.clear()
 	sound_bytes = 0
@@ -60,7 +64,7 @@ func mount(edition: String, folder: String) -> bool:
 	if not _files.has(marker):
 		error = "This folder does not contain the selected game: " + title
 		return false
-	for name: String in ["figures", "crfigures", "textures", "regs", "text", "animdb", "sfx", "camera", "pfx", "fx", "scripts"]:
+	for name: String in ["figures", "crfigures", "textures", "regs", "text", "animdb", "sfx", "camera", "pfx", "fx", "scripts", "materials"]:
 		var paths: Array[String] = []
 		# Numbered patch packs override the base; installation-root packs override
 		# Resources. Resolution is per entry, so patches may contain only a few files.
@@ -80,6 +84,7 @@ func mount(edition: String, folder: String) -> bool:
 		for path: String in paths:
 			var arc := ELArchive.open(_files[path])
 			if not arc.error.is_empty():
+				if name == "materials": continue
 				error = path + ": " + arc.error
 				return false
 			layers.append(arc)
@@ -102,6 +107,22 @@ func read(archive: String, entry: String) -> PackedByteArray:
 		return PackedByteArray()
 	asset_reads += 1
 	return a.read(entry)
+
+## MAT begins with a length-prefixed name followed by four RGBA values
+## (diffuse, ambient, specular, emissive) and the specular exponent.
+func figure_diffuse(material_id: int) -> Color:
+	if not archives.has("materials") or not FIGURE_MATERIALS.has(material_id): return Color.WHITE
+	if not _figure_diffuse.has(material_id):
+		var bytes := read("materials", FIGURE_MATERIALS[material_id])
+		var color := Color.WHITE
+		if bytes.size() >= 2:
+			var offset := 2 + bytes.decode_u16(0)
+			if offset + 68 <= bytes.size():
+				var rgba := Color(bytes.decode_float(offset), bytes.decode_float(offset + 4), bytes.decode_float(offset + 8), bytes.decode_float(offset + 12))
+				if rgba.r >= 0.0 and rgba.r <= 1.0 and rgba.g >= 0.0 and rgba.g <= 1.0 and rgba.b >= 0.0 and rgba.b <= 1.0 and rgba.a >= 0.0 and rgba.a <= 1.0:
+					color = rgba
+		_figure_diffuse[material_id] = color
+	return _figure_diffuse[material_id]
 
 func figure(name: String) -> PackedByteArray:
 	for archive in ["crfigures", "figures"]:
@@ -137,8 +158,15 @@ func texture(name: String) -> Texture2D:
 	var img := ELTexture.decode(bytes)
 	if img == null:
 		return null
-	img.generate_mipmaps()
+	var one_bit_alpha := bytes.decode_u32(32) == 1
+	var authored: Image
+	if one_bit_alpha and file.begins_with("combatscenes/"):
+		authored = ELTexture.authored_mask_mipmaps(bytes, img)
+	if authored != null: img = authored
+	else: img.generate_mipmaps()
 	var tex := ImageTexture.create_from_image(img)
+	if one_bit_alpha: tex.set_meta(ELTexture.ONE_BIT_ALPHA, true)
+	if authored != null: tex.set_meta(ELTexture.AUTHORED_MASK_MIPS, bytes.decode_u32(12))
 	# Found in Alpha32: a soft-alpha skin (see ELModel.build).
 	if soft: tex.set_meta("alpha32", true)
 	_textures[key] = tex

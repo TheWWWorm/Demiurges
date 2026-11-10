@@ -1,5 +1,12 @@
 class_name ELBuildingScreen
 extends RefCounted
+
+const STRATEGIC_UPGRADES := {
+	"resource_mine": "upgrade_mine",
+	"fort": "upgrade_fort",
+	"rune_shop": "upgrade_shop",
+	"el1_spell_shop": "upgrade_shop",
+}
 ## First-game buildings as the adventure panel lists them (BuildingsMode) and
 ## as the BuildingScreen shows them: the five categories of the BuildingType
 ## buttons, the upgrade cost of the next level and the upgrade itself. The
@@ -90,16 +97,16 @@ static func cost_entries(state: ELAdventureSession, item: Dictionary) -> Array[D
 		if int(price.get(kind, 0)) > 0 and result.size() < 4: result.append({"kind": kind, "amount": int(price[kind])})
 	return result
 
-static func upgrade_problem(state: ELAdventureSession, player: int, id: int) -> String:
+static func upgrade_problem(state: ELAdventureSession, player: int, id: int, allow_remote := false) -> String:
 	var item := state.object(id)
-	if item.is_empty() or int(item.get("owner", -1)) != player or player != state.current_player: return "This building does not belong to the current player."
+	if item.is_empty() or int(item.get("owner", -1)) != player or (not allow_remote and player != state.current_player): return "This building does not belong to the current player."
 	if not upgradable(state, item): return "This building cannot be upgraded."
 	if not ELResources.can_pay("el1", state.players[player].resources, upgrade_price(state, item)): return "Not enough resources to upgrade this building."
 	return ""
 
 ## Pays and raises the level; the world and HUD follow the emitted events.
-static func upgrade(state: ELAdventureSession, player: int, id: int) -> bool:
-	if not upgrade_problem(state, player, id).is_empty(): return false
+static func upgrade(state: ELAdventureSession, player: int, id: int, allow_remote := false) -> bool:
+	if not upgrade_problem(state, player, id, allow_remote).is_empty(): return false
 	var item := state.object(id)
 	if category(item) == 1: return ELForts.upgrade(state, id, player)
 	if not ELResources.pay("el1", state.players[player].resources, upgrade_price(state, item)): return false

@@ -3,6 +3,7 @@ extends PanelContainer
 signal closed
 var state: ELAdventureSession
 var hero_id := -1
+var strategic_session: ELStrategicSession
 var book: ItemList
 var reserve: ItemList
 var heading: Label
@@ -167,6 +168,9 @@ func _select() -> void:
 		if hero.cards.size() >= ELSpellInventory.book_size(state.map.profile): message.text = "Move a spell to reserve to make room."
 		elif not ELSpellInventory.allows(state.map.profile, hero, card): message.text = "This hero cannot use that spell's magic color."
 		else: message.text = "Add this copy to your equipped spellbook."
+	if strategic_session != null and not strategic_session.can_plan():
+		equip.disabled = true
+		unequip.disabled = true
 
 func _deselect_artifacts() -> void:
 	if artifacts != null: artifacts.deselect_all()
@@ -186,6 +190,9 @@ func _equip() -> void:
 	var selected := reserve.get_selected_items()
 	if selected.is_empty() or equip.disabled: return
 	var card := _reserve_cards[selected[0]]
+	if strategic_session != null:
+		_manage_online(["equip", hero_id, card, _reserve_indices[selected[0]]])
+		return
 	if not state.move_spell(hero_id, card, -1, _reserve_indices[selected[0]]):
 		message.text = state.error
 		return
@@ -197,6 +204,9 @@ func _unequip() -> void:
 	var selected := book.get_selected_items()
 	if selected.is_empty() or unequip.disabled: return
 	var card: String = state.object(hero_id).cards[selected[0]]
+	if strategic_session != null:
+		_manage_online(["reserve", hero_id, card, selected[0]])
+		return
 	var count := int(state.object(hero_id).rune_uses[selected[0]]) if state.map.profile.id == "el1" else 0
 	if not state.move_spell(hero_id, "", selected[0]):
 		message.text = state.error
@@ -207,3 +217,14 @@ func _unequip() -> void:
 			reserve.select(index)
 			break
 	_select()
+
+func _manage_online(order: Array) -> void:
+	if not strategic_session.manage_hero(order, _online_result): return
+	equip.disabled = true
+	unequip.disabled = true
+	message.text = "Confirming hero order…"
+
+func _online_result(reason: String) -> void:
+	if not is_inside_tree() or is_queued_for_deletion(): return
+	refresh()
+	if not reason.is_empty(): message.text = reason

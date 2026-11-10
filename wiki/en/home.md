@@ -16,7 +16,9 @@ An encyclopedia of **Etherlords** (2001) and **Etherlords II** (2003): every cre
 | [Hero skills](all-skills) | Skills and the effect of each rank |
 | [Specializations](all-specializations) | Chance-based talents of heroes |
 
-A card has one page for both games. Its table shows the two editions side by side: a highlighted value is one Etherlords II changed, and a card that only one game has says so. The lists mark each entry with the games that have it (I, II). In the game, a creature's page shows the creature itself: drag it to turn it and use the wheel to zoom.
+A card has one page for both games. Its table shows the two editions side by side: a highlighted value is one Etherlords II changed, and a card that only one game has says so. The lists mark each entry with the games that have it (I, II).
+
+Open a creature's page in the game to rotate and zoom its 3D model. Choose an action below the model and press **Play** to preview attacks, hit reactions, and deaths with their original sounds when available. See [About creatures](creatures) for the controls.
 
 ## Game mechanics
 

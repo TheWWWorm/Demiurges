@@ -29,6 +29,8 @@ const CONSUMED := ["CLPS", "DSGB", "DSLC", "ETWB", "SPBS", "SPWD"]
 const OWN_CASTLE := ["AURP", "ERBR", "MSRP", "SHIC", "WTWL"]
 const COUNTDOWN := "CNTD"
 const SUMMONS := ["SCWR", "SCCH", "SCHR", "SKWR", "SKCH", "SKHR", "SSWR", "SSCH", "SSHR", "SVWR", "SVCH", "SVHR"]
+const STRATEGIC_ORDERS := ["global_produce", "global_cancel", "global_cast", "global_dispel"]
+const STRATEGIC_WORLD_ORDERS := ["global_cast", "global_dispel"]
 ## Lesser and Greater Fortification and Bastion act alike: the hero holds its
 ## tile with a radius-three guard area and takes no orders while it lasts.
 const FORT_SPELLS := ["LFTC", "LFTK", "LFTS", "LFTV", "GFTC", "GFTF", "GFTK", "GFTV", "BSNC", "BSNK", "BSNS", "BSNV"]
@@ -203,7 +205,9 @@ static func cast(state: ELAdventureSession, player: int, chosen: Array = []) -> 
 		state.event.emit({"kind": "castle_spell", "player": player, "spell": code, "damage": -REPAIRS[code]})
 	elif RITUALS.has(code): state.change_resources(player, RITUALS[code])
 	elif code == COUNTDOWN: spell.counter = 1
-	elif SUMMONS.has(code): summon(state, player, SUMMON_LEVELS[code.substr(2)])
+	elif SUMMONS.has(code):
+		var recruit := summon(state, player, SUMMON_LEVELS[code.substr(2)])
+		if recruit >= 0: state.event.emit({"kind": "summon_cast", "id": recruit, "spell": code})
 	elif code == "RCLL": recall(state, state.object(spell.hero))
 	elif code == "RSSR": resurrect(state, player)
 	elif code == REMOTE_USE:
@@ -462,7 +466,7 @@ static func summon(state: ELAdventureSession, player: int, level: int) -> int:
 	if level > 1: state.add_experience(id, ELHeroProgression.threshold(profile, level))
 	var record := data(state, player)
 	record.summons = int(record.summons) + 1
-	state.event.emit({"kind": "hero_placed", "id": id})
+	state.event.emit({"kind": "hero_placed", "id": id, "recruited": true})
 	return id
 
 ## Recall: the hero appears beside its castle; its old tile still counts as

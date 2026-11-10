@@ -41,7 +41,8 @@ static func face_of(state: ELAdventureSession, hero: Dictionary) -> int:
 	var row: Dictionary = ELAdventureArt.new(state.map).resolve(probe).get("row", {})
 	return int(row.get("Face", -1))
 
-static func _hero(state: ELAdventureSession, id: Variant) -> Dictionary:
+## Scripted speakers can be map creatures as well as playable heroes.
+static func speaker(state: ELAdventureSession, id: Variant) -> Dictionary:
 	if not (id is float or id is int): return {}
 	var item := state.object(id)
 	return item if not item.is_empty() and str(item.get("group", "")) in ["heroes", "np_heroes"] else {}
@@ -61,14 +62,14 @@ static func _base(state: ELAdventureSession, kind: String, hero: Dictionary) -> 
 
 ## A journaled phrase. `speaker` false: no name or face; true: the
 ## hero's name and face, or "Unknown" for a missing hero.
-static func add_phrase(state: ELAdventureSession, text: Variant, speaker_id: Variant, speaker: bool) -> Dictionary:
+static func add_phrase(state: ELAdventureSession, text: Variant, speaker_id: Variant, show_speaker: bool) -> Dictionary:
 	if not applies(state) or text == null: return {}
-	var hero := _hero(state, speaker_id) if speaker else {}
+	var hero := speaker(state, speaker_id) if show_speaker else {}
 	var entry := _base(state, PHRASE, hero)
 	entry.text = str(text).left(MAX_TEXT)
 	entry.speaker = ""
 	entry.face = -1
-	if speaker:
+	if show_speaker:
 		if hero.is_empty():
 			entry.speaker = state.map.profile.text(UNKNOWN_NAME)
 			entry.face = UNKNOWN_FACE

@@ -16,6 +16,10 @@ const RACES: Array[String] = ["Red", "Green", "Blue", "Black"]
 ## Fallback when `Duel\heroes.def` is absent (identical in both editions).
 const DEFAULT_HEROES := {"Red": "RedMale4", "Green": "GreenFemale2", "Blue": "BlueWingedFemale1", "Black": "StartBlackMale"}
 
+static func blank(faction: String, resource_level: int) -> Dictionary:
+	return {"id": "", "name": "", "builtin": false, "faction": faction, "resource_level": resource_level,
+		"level": 1, "specialization": "NONE", "skills": {}, "cards": [], "runes": [], "reserve": {}, "artifacts": [], "deck": ""}
+
 static func shipped(profile: ELProfile) -> Array[Dictionary]:
 	var result: Array[Dictionary] = []
 	var rows := profile.table("DuelPresets")
@@ -121,6 +125,25 @@ static func find(presets: Array, id: String) -> Dictionary:
 	for preset: Dictionary in presets:
 		if preset.id == id: return preset
 	return {}
+
+## A between-round edit can only repartition this hero's owned copies.
+static func with_reserve_deck(preset: Dictionary, cards: Array) -> Dictionary:
+	if cards.size() != ELDuelCosts.EL2_DECK: return {}
+	var reserve: Dictionary = preset.reserve.duplicate()
+	for code: String in preset.cards:
+		reserve[code] = int(reserve.get(code, 0)) + 1
+	var active := {}
+	for code: Variant in cards:
+		if code is not String or int(reserve.get(code, 0)) <= 0: return {}
+		active[code] = int(active.get(code, 0)) + 1
+		if active[code] > ELDuelCosts.EL2_COPIES: return {}
+		reserve[code] -= 1
+		if reserve[code] == 0: reserve.erase(code)
+	var result := preset.duplicate(true)
+	result.cards.assign(cards)
+	result.reserve = reserve
+	if result.cards != preset.cards: result.deck = ""
+	return result
 
 static func _same(a: Array, b: Array) -> bool:
 	if a.size() != b.size(): return false

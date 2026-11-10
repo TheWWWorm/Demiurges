@@ -24,6 +24,11 @@ var readout: Label
 var _rects: Dictionary = {}
 var _profile: ELProfile
 
+func _init() -> void:
+	# Keep the nonvisual value owned by the panel across art rebuilds.
+	amount.hide()
+	add_child(amount, false, Node.INTERNAL_MODE_BACK)
+
 func build(profile: ELProfile) -> void:
 	for child in get_children():
 		remove_child(child)

@@ -2,6 +2,8 @@ class_name ELDuel
 extends RefCounted
 signal changed
 signal event(data: Dictionary)
+## Presentation boundary between combat damage and the turn-end callbacks.
+signal turn_cleanup
 
 enum Phase { ATTACK, DEFENCE, FINISHED }
 var profile: ELProfile
@@ -2610,6 +2612,7 @@ func _end_phase_now() -> bool:
 		if phase == Phase.FINISHED:
 			changed.emit()
 			return true
+		turn_cleanup.emit()
 		# The last card of the hand goes first.
 		while heroes[attacker].hand.size() > 5:
 			var card := _take_card(attacker, hand_display(attacker).back())
@@ -3699,16 +3702,58 @@ func _check_winner() -> void:
 		return
 	for side in 2:
 		if heroes[side].health <= 0:
-			winner = 1 - side
-			phase = Phase.FINISHED
-			_emit({"kind": "victory", "side": winner})
+			_declare_victory(1 - side)
 			return
+
+func _declare_victory(side: int) -> void:
+	winner = side
+	phase = Phase.FINISHED
+	_emit({"kind": "victory", "side": winner})
 
 func _finish_action() -> void:
 	_sync_attacks()
 	_check_winner()
 	_drain_scripts()
 	changed.emit()
+
+## Console mutations are replay actions, including ones made out of turn.
+func console_action(action: Dictionary) -> bool:
+	error = ""
+	if gate != null and not gate.gate_check(self, action): return _refused()
+	var ok := _apply_console_action(action)
+	if gate != null: gate.gate_done(self, action, ok)
+	return ok
+
+func _apply_console_action(action: Dictionary) -> bool:
+	if phase == Phase.FINISHED: return _fail("This duel has ended.")
+	if not ELLuaSave._integer(action.get("side"), 0, 1): return _fail("Invalid player.")
+	var side := int(action.side)
+	var card := str(action.get("card", ""))
+	match str(action.get("op", "")):
+		"spell":
+			if not profile.table("CombatSpells").has(card): return _fail("Unknown spell: " + card)
+			_give_card(side, card)
+		"creature":
+			if not profile.table("CombatCreatures").has(card): return _fail("Unknown creature: " + card)
+			if army(side).size() >= 10: return _fail("A hero can control at most ten creatures.")
+			_summon(side, card)
+		"health", "mana", "link", "links":
+			var value: Variant = action.get("value")
+			if not ELLuaSave._integer(value, 0, 0x7fffffff): return _fail("Invalid amount.")
+			var field := "channels" if action.op in ["link", "links"] else str(action.op)
+			heroes[side][field] = int(value)
+		"disenchant":
+			if not ELLuaSave._integer(action.get("target"), 0, 0x7fffffff): return _fail("Select a hero or creature.")
+			var id := int(action.target)
+			var target := entity(id)
+			if target.is_empty(): return _fail("Select a hero or creature.")
+			for item: Dictionary in target.enchantments.duplicate():
+				_remove_enchantment(id, int(item.id))
+		"win":
+			_declare_victory(side)
+		_: return _fail("Unknown combat action.")
+	_finish_action()
+	return true
 
 ## Resolves queued script actions before anyone acts again.
 func _drain_scripts() -> void:

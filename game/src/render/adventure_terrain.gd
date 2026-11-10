@@ -9,6 +9,8 @@ var errors: Array[String] = []
 var combinations := 0
 var animation_frames := 0
 var build_usec := 0
+var _tiles: ELTileSet
+var _cache: Dictionary
 
 func build(map: ELAdventureMap) -> bool:
 	var started := Time.get_ticks_usec()
@@ -19,8 +21,10 @@ func build(map: ELAdventureMap) -> bool:
 			return false
 		map.profile.terrain_tiles = tiles
 	var tiles := map.profile.terrain_tiles
+	_tiles = tiles
 	var cached := map.profile.adventure_terrain_cache
 	if cached.get("map") == map.id:
+		_cache = cached
 		atlas = cached.atlas
 		material = cached.material
 		animation_frames = cached.frames
@@ -94,7 +98,9 @@ func build(map: ELAdventureMap) -> bool:
 	material.set_shader_parameter("atlas_size", Vector2(image.get_size()))
 	# Keep only the most recently built map atlas per edition. Reloading a save
 	# can reuse it without accumulating every visited chapter's textures.
-	map.profile.adventure_terrain_cache = {"map": map.id, "atlas": atlas, "frames": animation_frames, "combinations": combinations, "cells": cells, "plans": compositions, "material": material}
+	_cache = {"map": map.id, "atlas": atlas, "frames": animation_frames, "combinations": combinations, "cells": cells, "plans": compositions, "material": material,
+		"water_masks_animate": map.profile.id == "el2"}
+	map.profile.adventure_terrain_cache = _cache
 	for y in range(0, map.height, CHUNK):
 		for x in range(0, map.width, CHUNK):
 			_build_chunk(map, Vector2i(x, y), cells, compositions, material)
@@ -103,6 +109,40 @@ func build(map: ELAdventureMap) -> bool:
 
 func set_detail(enabled: bool) -> void:
 	if material != null: material.set_shader_parameter("detail_enabled", enabled)
+
+func set_water(enabled: bool) -> void:
+	if material == null: return
+	if enabled and not _cache.has("water_format"):
+		_cache.water_format = _water_format(_cache.plans)
+	enabled = enabled and _cache.water_format != Image.FORMAT_MAX
+	if enabled:
+		if not _cache.has("water_weights"):
+			var columns := int(material.get_shader_parameter("columns"))
+			var rows := ceili(animation_frames / float(columns))
+			# Red is all liquid coverage. Green is the bog share of that coverage.
+			var weights := Image.create(columns * WEIGHT_PITCH, rows * WEIGHT_PITCH, false, _cache.water_format)
+			for plan: Dictionary in _cache.plans:
+				if not plan.layers.any(func(layer: Dictionary) -> bool: return layer.water): continue
+				var has_bog: bool = plan.layers.any(func(layer: Dictionary) -> bool: return layer.bog)
+				# EL1's shore overlays animate their colours with fixed coverage.
+				var animated: bool = _cache.water_masks_animate and plan.layers.any(func(layer: Dictionary) -> bool:
+					return layer.mask.get("ids", []).size() > 1 or layer.overlay.get("ids", []).size() > 1)
+				var tile := _liquid_weight_tile(plan, has_bog, 0)
+				for frame: int in plan.frames:
+					if frame > 0 and animated: tile = _liquid_weight_tile(plan, has_bog, frame)
+					_blit_weights(weights, tile, int(plan.offset) + frame, columns)
+			_cache.water_weights = ImageTexture.create_from_image(weights)
+		material.set_shader_parameter("water_weights", _cache.water_weights)
+		material.set_shader_parameter("water_atlas_size", Vector2(_cache.water_weights.get_size()))
+	material.set_shader_parameter("water_enabled", enabled)
+
+func set_water_rain(areas: PackedVector4Array) -> void:
+	if material == null: return
+	var count := mini(areas.size(), ELSecondAmbience.MAX_ENTRIES)
+	material.set_shader_parameter("water_rain_count", count)
+	if count > 0:
+		areas.resize(ELSecondAmbience.MAX_ENTRIES)
+		material.set_shader_parameter("water_rain_areas", areas)
 
 func _build_chunk(map: ELAdventureMap, origin: Vector2i, cells: PackedInt32Array, plans: Array[Dictionary], material: Material) -> void:
 	var vertices := PackedVector3Array()
@@ -147,7 +187,38 @@ func _build_chunk(map: ELAdventureMap, origin: Vector2i, cells: PackedInt32Array
 ## terrain's transition masks across the cells touching the zone. Built on a
 ## level switch only; weight tiles are kept per map for later switches.
 const GREY_SIDE := 32
-const GREY_PITCH := GREY_SIDE + 2
+const WEIGHT_SIDE := GREY_SIDE
+const WEIGHT_PITCH := WEIGHT_SIDE + 2
+
+static func _water_format(plans: Array) -> Image.Format:
+	var format := Image.FORMAT_MAX
+	for plan: Dictionary in plans:
+		for layer: Dictionary in plan.layers:
+			if layer.bog: return Image.FORMAT_RG8
+			if layer.water: format = Image.FORMAT_R8
+	return format
+
+func _liquid_weight_tile(plan: Dictionary, has_bog: bool, frame: int) -> Image:
+	var liquid := _tiles.layer_weights(plan, WEIGHT_SIDE, "water", frame)
+	var bog := _tiles.layer_weights(plan, WEIGHT_SIDE, "bog", frame) if has_bog else PackedByteArray()
+	return _weight_tile(liquid, bog, _cache.water_format)
+
+static func _weight_tile(bytes: PackedByteArray, second := PackedByteArray(), format := Image.FORMAT_R8) -> Image:
+	# A one-texel border repeats the edge so filtering stays in the tile.
+	var channels := 2 if format == Image.FORMAT_RG8 else 1
+	var bordered := PackedByteArray()
+	bordered.resize(WEIGHT_PITCH * WEIGHT_PITCH * channels)
+	for y in WEIGHT_PITCH:
+		var row := clampi(y - 1, 0, WEIGHT_SIDE - 1) * WEIGHT_SIDE
+		for x in WEIGHT_PITCH:
+			var source := row + clampi(x - 1, 0, WEIGHT_SIDE - 1)
+			var target := (y * WEIGHT_PITCH + x) * channels
+			bordered[target] = bytes[source]
+			if not second.is_empty(): bordered[target + 1] = second[source]
+	return Image.create_from_data(WEIGHT_PITCH, WEIGHT_PITCH, false, format, bordered)
+
+static func _blit_weights(atlas: Image, tile: Image, index: int, columns: int) -> void:
+	atlas.blit_rect(tile, Rect2i(0, 0, WEIGHT_PITCH, WEIGHT_PITCH), Vector2i((index % columns) * WEIGHT_PITCH, (index / columns) * WEIGHT_PITCH))
 
 ## Returns {"cells": Image (RGBA8, index low/high byte, quarter turns),
 ## "weights": Image (R8 atlas), "columns": int}. Index 0 = coloured,
@@ -201,15 +272,9 @@ static func colorless_layer(map: ELAdventureMap, level: int) -> Dictionary:
 			data[cell + 2] = orientation
 	var columns := maxi(1, ceili(sqrt(weight_tiles.size())))
 	var rows := maxi(1, ceili(weight_tiles.size() / float(columns)))
-	var atlas := Image.create(columns * GREY_PITCH, rows * GREY_PITCH, false, Image.FORMAT_R8)
+	var atlas := Image.create(columns * WEIGHT_PITCH, rows * WEIGHT_PITCH, false, Image.FORMAT_R8)
 	for i in weight_tiles.size():
 		var bytes: PackedByteArray = weight_tiles[i]
 		if bytes.is_empty(): continue
-		# A one-texel border repeats the edge so filtering stays in the tile.
-		var bordered := PackedByteArray()
-		bordered.resize(GREY_PITCH * GREY_PITCH)
-		for y in GREY_PITCH:
-			var row := clampi(y - 1, 0, GREY_SIDE - 1) * GREY_SIDE
-			for x in GREY_PITCH: bordered[y * GREY_PITCH + x] = bytes[row + clampi(x - 1, 0, GREY_SIDE - 1)]
-		atlas.blit_rect(Image.create_from_data(GREY_PITCH, GREY_PITCH, false, Image.FORMAT_R8, bordered), Rect2i(0, 0, GREY_PITCH, GREY_PITCH), Vector2i((i % columns) * GREY_PITCH, (i / columns) * GREY_PITCH))
+		_blit_weights(atlas, _weight_tile(bytes), i, columns)
 	return {"cells": Image.create_from_data(map.width, map.height, false, Image.FORMAT_RGBA8, data), "weights": atlas, "columns": columns}

@@ -14,10 +14,12 @@ extends RefCounted
 ## characters with T_MB_WRONG_SAVE_NAME; the first keeps Save disabled while
 ## the name is blank. Approximations: rows follow name order (the original
 ## lists its folder order), the date is dd.mm.yyyy and the time hh:mm (the
-## original uses the Windows short date), and the saved picture is not shown.
+## original uses the Windows short date).
 
 ## Rows follow the 26 px grid of the SaveMissionScreen list art.
 const ROW := 26.0
+## EL2's scene capture rectangle, relative to SaveMissionScreen.
+const PREVIEW := Rect2(481, 60, 256, 192)
 ## Panel-local rectangles of controls the first game takes from CutParts only
 ## (its art is the second game's: the same pieces at the same places).
 const FALLBACK := {"SMGamesBarBounds": Rect2(449, 72, 14, 415), "SMScrollD": Rect2(447, 487, 15, 12), "SMInfoBounds": Rect2(480, 278, 242, 219)}
@@ -28,7 +30,7 @@ var selected := -1
 var list: SaveList
 ## "load" or "save".
 var mode := "load"
-## ELSaveSlots.KIND_CAMPAIGN or KIND_SINGLE.
+## The save category of this screen.
 var kind := ELSaveSlots.KIND_SINGLE
 ## Shown over a running game: Load asks first, Save is possible.
 var in_game := false
@@ -37,6 +39,8 @@ var saver := Callable()
 ## Save mode: the running game's row (information box before a row is chosen).
 var current: Dictionary = {}
 var name_edit: LineEdit
+var _preview: TextureRect
+var _previews := {}
 
 func _init(owner: ELFrontMenu) -> void:
 	menu = owner
@@ -95,6 +99,16 @@ func build_screen() -> void:
 		list.columns.append(Vector2(column.position.x - list.position.x, column.size.x))
 	menu.canvas.add_child(list)
 	menu.labels["list"] = list
+	_preview = null
+	_previews.clear()
+	if menu.edition == "el2":
+		_preview = TextureRect.new()
+		_preview.name = "SavePreview"
+		_preview.position = menu.shift("SaveMissionScreen") + PREVIEW.position
+		_preview.size = PREVIEW.size
+		_preview.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		_preview.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		menu.canvas.add_child(_preview)
 	var info := menu.control_rect("SMInfoBounds") if menu.control_rect("SMInfoBounds").size.x > 0 else menu.control_rect("SMInfo")
 	if info.size.x <= 0: info = _rect("SMInfoBounds")
 	menu._text_box(info.grow_individual(-6, -4, -4, -4), "", 16)
@@ -111,9 +125,12 @@ func build_screen() -> void:
 	entries = saves(profile(), kind)
 	selected = 0 if mode == "load" and not entries.is_empty() else -1
 	refresh()
-	if name_edit != null:
-		var edit := name_edit
-		(func(): if is_instance_valid(edit) and edit.is_inside_tree(): edit.grab_focus()).call_deferred()
+	if mode == "save" and name_edit != null:
+		_focus_name.call_deferred(name_edit.get_instance_id())
+
+func _focus_name(id: int) -> void:
+	var edit := instance_from_id(id) as LineEdit
+	if is_instance_valid(edit) and edit.is_inside_tree(): edit.grab_focus()
 
 ## The name field: the second game's caption control left of it; the first
 ## game's caption ("Имя файла:", the edit control's own text) at the start of
@@ -150,11 +167,20 @@ func refresh() -> void:
 	if menu.buttons.has("LoadButton"): menu.buttons.LoadButton.disabled = not chosen
 	if menu.buttons.has("SMDelete"): menu.buttons.SMDelete.disabled = not chosen
 	_sync_save()
+	var row: Dictionary = entries[selected] if chosen else current
 	if menu.text_box != null:
-		var row: Dictionary = entries[selected] if chosen else current
 		menu.text_box.text = ELSaveSlots.info(profile(), row) if not row.is_empty() else ""
 		menu.text_box.get_v_scroll_bar().value = 0
+	if is_instance_valid(_preview):
+		_preview.texture = row.get("preview") if not chosen else _saved_preview(row)
 	if list != null: list.queue_redraw()
+
+func _saved_preview(row: Dictionary) -> Texture2D:
+	var path := str(row.get("path", ""))
+	if not _previews.has(path):
+		var image := ELSaveSlots.preview_image(row)
+		_previews[path] = ImageTexture.create_from_image(image) if image != null else null
+	return _previews[path]
 
 ## First game: Save only while the name has a non-space character.
 func _sync_save() -> void:
@@ -203,7 +229,7 @@ func save_chosen() -> void:
 		if menu.edition == "el2": menu.duel_ui.show_message(menu.text("T_MB_WRONG_SAVE_NAME").strip_edges(), Callable(), false, 320.0)
 		return
 	name_edit.text = cleaned
-	if ELSaveSlots.exists(menu.edition, cleaned):
+	if ELSaveSlots.exists(menu.edition, cleaned, kind):
 		menu.duel_ui.show_message(menu.text("T_MB_OVERWRITE").strip_edges(), func(): _save(cleaned), true)
 		return
 	_save(cleaned)
@@ -278,9 +304,14 @@ class SaveList extends Control:
 			var entry: Dictionary = screen.entries[index]
 			var y := at * ELMissionLoadScreen.ROW
 			if index == screen.selected: draw_rect(Rect2(0, y, size.x, ELMissionLoadScreen.ROW), Color(0.85, 0.7, 0.4, 0.22))
-			var baseline := y + (ELMissionLoadScreen.ROW - font.get_height(15)) * 0.5 + font.get_ascent(15)
 			var ink := ELFrontMenu.INK_HOVER if index == screen.selected else ELFrontMenu.BODY_INK
 			var when := ELMissionLoadScreen.stamp(int(entry.modified))
 			var cells: Array[String] = [str(entry.name), when[0], when[1]]
 			for column in mini(columns.size(), cells.size()):
-				draw_string(font, Vector2(columns[column].x + 2, baseline), cells[column], HORIZONTAL_ALIGNMENT_LEFT, columns[column].y - 4, 15, ink)
+				var width := columns[column].y - 4
+				var font_size := 15
+				# The complete date and time must fit even with a wider system font.
+				while column > 0 and font_size > 1 and font.get_string_size(cells[column], HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x > width:
+					font_size -= 1
+				var baseline := y + (ELMissionLoadScreen.ROW - font.get_height(font_size)) * 0.5 + font.get_ascent(font_size)
+				draw_string(font, Vector2(columns[column].x + 2, baseline), cells[column], HORIZONTAL_ALIGNMENT_LEFT, width, font_size, ink)

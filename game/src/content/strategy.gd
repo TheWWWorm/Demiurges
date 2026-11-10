@@ -97,7 +97,8 @@ static func _close_unseen(director: ELAdventureDirector, actor: Dictionary) -> A
 	var closed: Array[Vector2i] = []
 	var state := director.state
 	var player := int(actor.get("owner", -1))
-	if state.map.profile.id != "el1" or not ELFog.active(state, player) or ELFirstAI.computer_players(state).has(player): return closed
+	if state.map.profile.id != "el1" or not ELFog.active(state, player): return closed
+	if not director.is_human_strategy_order(player) and ELFirstAI.computer_players(state).has(player): return closed
 	var seen: PackedByteArray = state.fog.get("visible", PackedByteArray())
 	var size := state.map.width * state.map.height
 	if seen.size() != size: return closed
@@ -210,6 +211,7 @@ static func advance(director: ELAdventureDirector) -> void:
 		var limit: int = turn.combats.size() if turn.phase == "combat" else turn.actors.size()
 		if turn.index >= limit:
 			if turn.phase == "use":
+				if director.strategy_shop_wait.is_valid() and director.strategy_shop_wait.call(): return
 				# Night end: the weekly spring expiry precedes the movement refill;
 				# building day-start resets follow. The elapsed-day counter is the
 				# number of nights begun (state day 1 is the mission's first day).
@@ -241,17 +243,21 @@ static func advance(director: ELAdventureDirector) -> void:
 			turn.index += 1
 			var first := state.object(pair[0])
 			var second := state.object(pair[1])
+			var forfeit_winner := director.strategic_forfeit_winner(pair[0], pair[1])
 			if pair.size() > 2:
 				if not first.alive or not second.alive: continue
-				if state.current_player in [int(first.owner), int(second.owner)]: director.start_ethereal(first.uid, second.uid)
+				if director.is_strategy_human(first.owner) or director.is_strategy_human(second.owner): director.start_ethereal(first.uid, second.uid)
+				elif forfeit_winner >= 0: ELGlobalSpells.ethereal_result(state, second.uid, forfeit_winner)
 				else: ELGlobalSpells.ethereal_result(state, second.uid, ELFirstAI.winner(state, first, second).uid)
 				continue
 			if not first.alive or not second.alive or not (state.hostile(first, second) or ELFirstAI.hunts(state, first, second)): continue
-			if second.owner == state.current_player:
+			# Preserve the host's usual seat order when present. A guest's
+			# encounter still opens and waits for a result if the host is absent.
+			if second.owner == state.current_player or (first.owner != state.current_player and director.is_strategy_human(second.owner)):
 				director.use_object(second.uid, first.uid, second.uid)
-			elif first.owner == state.current_player:
+			elif director.is_strategy_human(first.owner):
 				director.use_object(first.uid, second.uid, second.uid)
-			elif not ELFirstAI.resolve(director, first, second): return
+			elif not ELFirstAI.resolve(director, first, second, forfeit_winner): return
 			continue
 		var actor := state.object(turn.actors[turn.index])
 		turn.index += 1

@@ -99,8 +99,8 @@ static func remap(code: String, difficulty: int) -> String:
 
 ## Second-game difficulty moves specialisation levels: the local side +2 and
 ## the opponent -1 on the easiest setting, the opponent +2 on the hardest.
-static func second_levels(levels: Array[int], difficulty: int) -> Array[int]:
+static func second_levels(levels: Array[int], difficulty: int, local_side := 0) -> Array[int]:
 	var change: Array = [[2, -1], [0, 0], [0, 2]][clampi(difficulty, 0, 2)]
 	var result: Array[int] = []
-	for side in 2: result.append(clampi(levels[side] + int(change[side]), 1, 20))
+	for side in 2: result.append(clampi(levels[side] + int(change[0 if side == local_side else 1]), 1, 20))
 	return result

@@ -25,6 +25,7 @@ const RUNESTONES := ["Runestone1", "Runestone2"]
 ## Each destroyed Altar of War replaces the roaming Konung with the next weaker template.
 const KONUNG := {"Konung of Fire IV": "Konung of Fire III", "Konung of Fire III": "Konung of Fire II", "Konung of Fire II": "Konung of Fire I"}
 const OWNED := ["ShrineMagic", "HealersCitadel", "WanderersCitadel"]
+const RUNE_VISITS := ["MageWagon", "GnomeAlchemist"]
 ## Lairs hold one neutral creature of these level ranges, restocked weekly.
 const DUNGEONS := {"Dungeon1": [2, 4], "Dungeon2": [5, 7], "Dungeon3": [8, 10]}
 const DUNGEON_ARENA := "Dungeon.001"
@@ -40,6 +41,9 @@ const BOWL := "ReflectingBowl"
 static func supported(item: Dictionary) -> bool:
 	var name := str(item.get("name", ""))
 	return item.get("group") == "additional_buildings" and (name in VISITED + WEEKLY_FLAG + ONE_TIME + OWNED + RUNESTONES or name in [CAMP, LAKE] or DUNGEONS.has(name))
+
+static func is_strategic_visit(item: Dictionary) -> bool:
+	return item.get("group") == "additional_buildings" and item.get("name") in OWNED + WEEKLY_VISITED + RUNE_VISITS
 
 static func definition(profile: ELProfile, item: Dictionary) -> Dictionary:
 	return profile.table("AdditionalBuildings").get(str(item.get("name", "")), {})
@@ -215,12 +219,23 @@ static func visit(director: ELAdventureDirector, hero: Dictionary, item: Diction
 		return {}
 	if DUNGEONS.has(item.name): return precombat(director, hero, item)
 	var message := activate(state, hero, item)
-	state.event.emit({"kind": "building_used", "id": item.uid, "hero": hero.uid, "player": hero.owner, "message": message.key})
+	var used := {"kind": "building_used", "id": item.uid, "hero": hero.uid, "player": hero.owner, "message": message.key}
+	if message.has("bonus"): used.bonus = message.bonus
+	state.event.emit(used)
 	if local:
 		director.notice = message.text
-		director.presentation.emit({"kind": "building_message", "hero": hero.uid, "building": item.uid, "title": title(state.map.profile, item),
-			"text": message.text, "resources": message.get("resources", []), "skill": message.get("skill", ""), "key": message.key})
+		director.presentation.emit(visit_notice(state.map.profile, hero, item, message))
 	return message
+
+## Network visits rebuild their text from the original registry and awarded amount.
+static func visit_notice(profile: ELProfile, hero: Dictionary, item: Dictionary, message: Dictionary = {}) -> Dictionary:
+	if not message.has("key"):
+		var key := str(definition(profile, item).get("Message1", "BldngMsg1" + item.name))
+		var values: Array = [message.bonus] if message.has("bonus") else []
+		message = {"key": key, "text": format(profile, key, values)}
+	return {"kind": "building_message", "hero": hero.uid, "building": item.uid, "title": title(profile, item),
+		"text": message.text, "resources": message.get("resources", []), "skill": message.get("skill", ""), "key": message.key,
+		"site_notice": is_strategic_visit(item)}
 
 ## Lair visit, resolved in the movement pass once the hero stands beside it:
 ## the held creature is queued for the combat phase and the order ends. A won
@@ -319,6 +334,7 @@ static func activate(state: ELAdventureSession, hero: Dictionary, item: Dictiona
 			var amount := (int(hero.health) if strength else int(hero.get("strategy_capacity", 0))) >> 2
 			hero.temp_buffs.append([amount, 0] if strength else [0, amount])
 			recalculate(profile, hero)
+			result.bonus = amount
 			values.append(amount)
 		"Prison":
 			var freed := spawn_hero(state, prisoner(item), int(hero.owner), int(item.x), int(item.y))

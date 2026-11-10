@@ -12,6 +12,7 @@ var cards: Array[String] = []
 var uses: Array[int] = []
 var error := ""
 var finished := false
+var _commander := -1
 var _before: Dictionary
 var _bill: Dictionary
 
@@ -41,10 +42,11 @@ static func price(profile: ELProfile, hero: Dictionary, book: Array, card: Strin
 	return result
 
 ## `remote` (Remote Use) opens the screen without capturing the shop.
-func open(session: ELAdventureSession, actor: int, building: int, remote := false) -> bool:
+func open(session: ELAdventureSession, actor: int, building: int, remote := false, commander := -1) -> bool:
 	state = session
 	hero_id = actor
 	shop_id = building
+	_commander = commander
 	error = ""
 	finished = false
 	if state.map.profile.id != "el1": return _fail("This shop belongs to the first edition.")
@@ -64,7 +66,8 @@ func open(session: ELAdventureSession, actor: int, building: int, remote := fals
 func _access_problem() -> String:
 	var hero := state.object(hero_id)
 	var shop := state.object(shop_id)
-	if hero.is_empty() or hero.type != "hero" or not hero.alive or hero.owner != state.current_player: return "This hero cannot buy spells."
+	var commander := state.current_player if _commander < 0 else _commander
+	if hero.is_empty() or hero.type != "hero" or not hero.alive or hero.owner != commander: return "This hero cannot buy spells."
 	if shop.is_empty() or shop.group != "laboratories" or not shop.alive or not shop.visible or not shop.enabled or ELBuildings.definition(state.map.profile, shop).get("Type") not in ["SpellShop", "CreatureShop"]: return "This shop is unavailable."
 	if not state.players.has(hero.owner): return "This hero has no resource balance."
 	return ""

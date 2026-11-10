@@ -8,8 +8,8 @@ extends Node3D
 ## figure's ground position, "cast" = its casting anchor, "soul" = its body
 ## anchor; the figure's facing turns the effect. A particle with one point
 ## is drawn about that point (its authored position subtracted); with a begin
-## and an end point the authored segment is stretched and turned onto the
-## figures'; without points it sits at the arena origin. One copy is drawn per
+## and an end point the native span matrix places the particle centres;
+## without points it sits at the arena origin. One copy is drawn per
 ## bound figure (per pair for two points). The pfx positions are already
 ## baked in effect space. "reverse" plays the frames backwards. Effects do not
 ## follow figures after they start and never change the battle.
@@ -22,7 +22,7 @@ extends Node3D
 ## An effect may also name effect models (small animated figures such as rune
 ## discs or falling rocks), point lights and screen faders. The effect's .fx
 ## file holds one key per 1/30 s for each named part: a model gets its place
-## and opacity from its keys, a particle system its scale and opacity, a light
+## and opacity from its keys, a particle system its opacity, a light
 ## its place, range, colour and switch, a fader its colour and strength.
 ##
 ## Emitters are pooled MultiMesh nodes; each frame's instance data is built
@@ -30,15 +30,25 @@ extends Node3D
 ## file's overlapping cycles are combined once per frame phase. Effect models,
 ## lights and faders are pooled too.
 const Table := preload("res://src/duel/combat_sound_table.gd")
-const POOL_SIZE := 48
-const OBJECT_POOL := 24
-const LIGHT_POOL := 4
-const FADER_POOL := 2
+## Lazy pools allow whole-board and overlapping cues while bounding malformed input.
+const PARTICLE_POOL := 192
+const ARENA_PARTICLE_POOL := 48
+const OBJECT_CACHE := 24
+const OBJECT_POOL := 96
+const LIGHT_POOL := 96
+const FADER_POOL := 16
+## Faders composite over the rendered scene, below sharpening and the HUD.
+const FADER_LAYER := -11
+## Authored lamps still light these late transparent draws during path tracing.
+const LIT_ADDITIVE_LAYER := 1 << 19
+## Arena weather rolls once per original scene update (64 ms).
+const ARENA_TICK := 0.064
 ## Floats per decoded .fx key (both kinds): models and particles keep place,
 ## turn (x y z w), scale and opacity; lights and faders keep place, range or
 ## strength, two colours and the on switch.
 const KEY := 11
 const MIN_BUCKET := 64
+const PARTICLE_BOUNDS := AABB(Vector3(-64, -16, -64), Vector3(128, 96, 128))
 ## Decoded particle files (with frame instance data) kept per edition.
 const CACHE_BYTES := 96 * 1024 * 1024
 
@@ -59,8 +69,10 @@ var enabled := true
 var catalogue: Dictionary = {}
 ## Pool: each emitter {node, mesh, entry, elapsed, frame, life, reverse, active}.
 var emitters: Array[Dictionary] = []
+var arena_emitters: Array[Dictionary] = []
 ## Pools: effect models {node, key, add, opaque, faded, ...}, lights, faders.
 var objects: Array[Dictionary] = []
+var arena_objects: Array[Dictionary] = []
 var lights: Array[Dictionary] = []
 var faders: Array[Dictionary] = []
 ## The one scene light an effect may dim (the arena's sun and ambient light):
@@ -70,12 +82,22 @@ var scene_light := {"active": false, "track": PackedFloat32Array(), "elapsed": 0
 var sun: DirectionalLight3D
 var sky: Environment
 ## Point lights can be switched off on their own (they cost a light pass).
-var lights_enabled := true
+var lights_enabled := true:
+	set(value):
+		if lights_enabled == value: return
+		lights_enabled = value
+		_sync_arena_secondary()
 var _fader_shaders: Dictionary = {}
+var _fader_layer: CanvasLayer
 ## Figure (instance id) -> its running animation emitter.
 var _figure_emitters: Dictionary = {}
 ## Figure animation particle files that exist ("model/clip" -> path or "").
 var _animation_files: Dictionary = {}
+var _arena: ELArena
+var _arena_sound: Callable
+var _arena_tick := 0.0
+var _arena_chance := RandomNumberGenerator.new()
+var _arena_random: Array[Dictionary] = []
 ## Started effect names (latest 40) and every request (latest 80), for checks.
 var started: Array[String] = []
 var requested: Array[String] = []
@@ -88,6 +110,8 @@ var peak_cost_usec := 0
 func build(data: ELProfile) -> void:
 	profile = data
 	edition = profile.id
+	# Sample attached particles after the figures advance their animations.
+	process_priority = 1
 	catalogue = load_catalogue(profile)
 
 ## Effects.xml of the edition: per effect its particles, points and length.
@@ -300,11 +324,6 @@ func _figure_animation(clip: String, model: ELModel) -> void:
 	if requested.size() > 80: requested.pop_front()
 	var emitter := _spawn(path, false, 0, _figure_transform(model), model)
 	if emitter.is_empty(): return
-	# A one-shot clip (death, attack, cast...) emits its particles once: the
-	# figure holds the clip's last frame afterwards, so a cyclic file would
-	# replay the motion baked into it (a fallen hero's staff glow falling
-	# again and again, EL1 he201/he203/he205/he207/he401/he403 death.pfx).
-	if not clip.begins_with("c"): emitter.life = int(emitter.entry.file.frames)
 	_figure_emitters[id] = emitter
 
 ## The figure's place, facing and scale.
@@ -313,18 +332,89 @@ static func _figure_transform(model: Node3D) -> Transform3D:
 	return Transform3D(basis.orthonormalized().scaled(model.scale), model.global_position)
 
 func set_enabled(value: bool) -> void:
+	if enabled == value: return
 	enabled = value
-	if not value:
+	if value:
+		if is_instance_valid(_arena): _start_arena()
+	else:
 		for emitter in emitters: _release(emitter)
-		for list: Array[Dictionary] in [objects, lights, faders]:
-			for item in list: _hide(item)
+		for emitter in arena_emitters: _release(emitter)
+		_arena_random.clear()
+		for list: Array[Dictionary] in [objects, arena_objects, lights, faders]:
+			for item in list: _hide(item, false)
+		_sync_arena_secondary()
 		_end_scene_light()
+
+## Space finishes spell and trigger effects. The arena and the particles
+## attached to figure clips are exempt in both original games.
+func finish_transients() -> void:
+	for emitter in emitters:
+		if emitter.active and not emitter.following: _release(emitter)
+	for pool: Array[Dictionary] in [objects, lights, faders]:
+		for item in pool:
+			if item.active: _hide(item, false)
+	_sync_arena_secondary()
+	_end_scene_light(lights_enabled)
 
 ## The arena's sun and ambient light that scene-light effects dim.
 func set_scene(light: DirectionalLight3D, environment: Environment) -> void:
 	_end_scene_light()
 	sun = light
 	sky = environment
+
+## Scenery FX and spell FX have separate pools. ParticlesCP gives their world
+## origins. A linked particle follows its prop's visibility, with that same
+## authored origin.
+func set_arena(arena: ELArena, sound: Callable) -> void:
+	if is_instance_valid(_arena) and _arena != arena: _arena.set_secondary_lights(PackedFloat32Array())
+	for emitter in arena_emitters: _release(emitter)
+	for item in arena_objects: _hide(item)
+	_arena_random.clear()
+	_arena_tick = 0.0
+	_arena = arena
+	_arena_sound = sound
+	set_scene(arena.light, arena.environment_settings)
+	_sync_arena_secondary()
+	if enabled: _start_arena()
+
+func _start_arena() -> void:
+	var row := _arena.definition
+	var particles: Variant = row.get("Particles", [])
+	var paths: Array = particles if particles is Array else [particles]
+	var positions: Array = row.get("ParticlesCP", [])
+	var links: Array = row.get("ParticlesObjectLinks", [])
+	var times: Array = row.get("ParticlesRandomPlayTime", [])
+	var sounds: Array = row.get("ParticlesSnd", [])
+	for i in paths.size():
+		var path := ELArchive.key(String(paths[i]))
+		var where := Transform3D.IDENTITY
+		var at := i * 3
+		if at + 2 < positions.size():
+			where.origin = ELFigure.vector(Vector3(positions[at], positions[at + 1], positions[at + 2]))
+		if path.ends_with(".fx"):
+			var entry := definition(path.get_file().get_basename())
+			for object: Dictionary in entry.get("objects", []):
+				var track: PackedFloat32Array = entry.tracks.get(object.track, PackedFloat32Array())
+				if not track.is_empty(): _spawn_object(object, track, where, true)
+		elif i < times.size() and float(times[i]) > 0.0:
+			_arena_random.append({"path": path, "where": where, "chance": ARENA_TICK / float(times[i]),
+				"sound": String(sounds[i]) if i < sounds.size() else ""})
+		else:
+			var emitter := _spawn(path, false, 0, where, null, true)
+			if emitter.is_empty(): continue
+			emitter.loop = true
+			if i < links.size() and int(links[i]) >= 0:
+				emitter.visibility_link = _arena.scenery(int(links[i]))
+
+func _step_arena_weather(delta: float) -> void:
+	if _arena_random.is_empty(): return
+	_arena_tick += delta
+	while _arena_tick >= ARENA_TICK:
+		_arena_tick -= ARENA_TICK
+		for cue in _arena_random:
+			if _arena_chance.randf() >= float(cue.chance): continue
+			if _spawn(cue.path, false, 0, cue.where, null, true).is_empty(): continue
+			if _arena_sound.is_valid() and not String(cue.sound).is_empty(): _arena_sound.call(cue.sound)
 
 ## Starts the effects a cast of `card` names (summons: the colour's effect).
 ## `bindings`: point name -> figures (ELModel), see the class description.
@@ -346,8 +436,9 @@ func play(effect: String, bindings: Dictionary) -> int:
 	var tracks: Dictionary = entry.tracks
 	for particle: Dictionary in entry.particles:
 		var track: PackedFloat32Array = tracks.get(particle.track, PackedFloat32Array())
-		for where: Transform3D in _copies(entry, particle, bindings):
-			var emitter := _spawn(String(particle.file), bool(particle.reverse), int(entry.frames), where)
+		var particle_span := not String(particle.begin).is_empty() and not String(particle.end).is_empty()
+		for where: Transform3D in _copies(entry, particle, bindings, particle_span):
+			var emitter := _spawn(String(particle.file), bool(particle.reverse), int(entry.frames), where, null, false, particle_span)
 			if emitter.is_empty(): continue
 			count += 1
 			if not track.is_empty(): _track_emitter(emitter, track)
@@ -357,11 +448,15 @@ func play(effect: String, bindings: Dictionary) -> int:
 		for where: Transform3D in _copies(entry, object, bindings):
 			if _spawn_object(object, track, where): count += 1
 	if lights_enabled:
+		var lights_started := false
 		for light: Dictionary in entry.lights:
 			var track: PackedFloat32Array = tracks.get(light.track, PackedFloat32Array())
 			if track.is_empty(): continue
-			for where: Transform3D in _copies(entry, light, bindings):
-				if _spawn_light(track, where): count += 1
+			for where: Transform3D in _copies(entry, light, bindings, true):
+				if _spawn_light(track, where):
+					count += 1
+					lights_started = true
+		if lights_started: _sync_arena_secondary()
 	if lights_enabled and is_instance_valid(sun):
 		for light: Dictionary in entry.scene_lights:
 			var track: PackedFloat32Array = tracks.get(light.track, PackedFloat32Array())
@@ -375,14 +470,14 @@ func play(effect: String, bindings: Dictionary) -> int:
 	return count
 
 ## One placement per bound figure (per pair for two points) of an effect part.
-static func _copies(entry: Dictionary, part: Dictionary, bindings: Dictionary) -> Array[Transform3D]:
+static func _copies(entry: Dictionary, part: Dictionary, bindings: Dictionary, native_span := false) -> Array[Transform3D]:
 	var begin := String(part.begin)
 	var finish := String(part.end)
 	var starts: Array = [null] if begin.is_empty() else _figures(bindings, begin)
 	var ends: Array = [null] if finish.is_empty() else _figures(bindings, finish)
 	var result: Array[Transform3D] = []
 	for a: Variant in starts:
-		for b: Variant in ends: result.append(placement(entry, begin, a, finish, b))
+		for b: Variant in ends: result.append(placement(entry, begin, a, finish, b, native_span))
 	return result
 
 ## Figures bound to a point; "Finish" and "Target" share the target binding.
@@ -395,7 +490,7 @@ static func _figures(bindings: Dictionary, point: String) -> Array:
 	return result
 
 ## Effect-space to world transform for one copy.
-static func placement(entry: Dictionary, begin: String, a: Variant, finish: String, b: Variant) -> Transform3D:
+static func placement(entry: Dictionary, begin: String, a: Variant, finish: String, b: Variant, native_span := false) -> Transform3D:
 	var points: Dictionary = entry.points
 	if a == null and b == null: return Transform3D.IDENTITY
 	if a == null or b == null:
@@ -411,10 +506,36 @@ static func placement(entry: Dictionary, begin: String, a: Variant, finish: Stri
 	var authored := ELFigure.vector(q.position) - authored_from
 	var from := anchor(a, String(p.tag))
 	var actual := anchor(b, String(q.tag)) - from
+	if native_span: return _spell_span_placement(authored_from, authored, from, actual)
 	# A degenerate authored segment only moves the effect to the begin point.
 	if authored.length() < 0.001 or actual.length() < 0.001: return Transform3D(Basis.IDENTITY, from)
 	var turn := Basis(Quaternion(authored.normalized(), actual.normalized()))
 	var basis := turn.scaled(Vector3.ONE * (actual.length() / authored.length()))
+	return Transform3D(basis, from - basis * authored_from)
+
+## Native two-point spell matrix (EL1 0x453b70, EL2 0x45b37f).
+static func _spell_span_placement(authored_from: Vector3, authored: Vector3, from: Vector3, actual: Vector3) -> Transform3D:
+	var authored_length := authored.length()
+	var actual_length := actual.length()
+	if authored_length < 0.001 or actual_length == 0.0:
+		return Transform3D(Basis.IDENTITY, from - authored_from)
+	var authored_flat := Vector2(authored.x, authored.z)
+	var actual_flat := Vector2(actual.x, actual.z)
+	var source_yaw := authored_flat.normalized() if authored_flat != Vector2.ZERO else Vector2.RIGHT
+	var to_x := Basis(Vector3(source_yaw.x, 0, -source_yaw.y), Vector3.UP, Vector3(source_yaw.y, 0, source_yaw.x))
+	var authored_height := authored.y
+	var actual_height := actual.y
+	var authored_run := authored_flat.length()
+	var actual_run := actual_flat.length()
+	var pitch_cos := (authored_run * actual_run + authored_height * actual_height) / (authored_length * actual_length)
+	var pitch_sin_sq := 1.0 - pitch_cos * pitch_cos
+	var pitch_sin := sqrt(pitch_sin_sq) if pitch_sin_sq >= 0.001 else 0.0
+	if authored_height * actual_run > actual_height * authored_run: pitch_sin = -pitch_sin
+	var pitch := Basis(Vector3(pitch_cos, pitch_sin, 0), Vector3(-pitch_sin, pitch_cos, 0), Vector3.BACK)
+	# The native final yaw divides by the full span, even on a steep shot.
+	var target_yaw := actual_flat / actual_length
+	var from_x := Basis(Vector3(target_yaw.x, 0, target_yaw.y), Vector3.UP, Vector3(-target_yaw.y, 0, target_yaw.x))
+	var basis := (from_x * pitch * to_x).scaled(Vector3.ONE * (actual_length / authored_length))
 	return Transform3D(basis, from - basis * authored_from)
 
 ## World position of a figure's point: ground position, or its "cast"/"soul"
@@ -438,23 +559,28 @@ static func anchor(figure: Node3D, tag: String) -> Vector3:
 	var forward := model.global_transform.basis.z.normalized()
 	return model.global_position + Vector3(0, height * 0.75, 0) + forward * 0.5
 
-## Starts a pooled emitter; `follow` keeps it on a figure. A cyclic file
-## repeats for the effect's length, or while its figure's clip runs.
-func _spawn(path: String, reverse: bool, effect_frames: int, where: Transform3D, follow: Node3D = null) -> Dictionary:
+## Starts a pooled emitter. Attached particles use the figure's animation frame.
+func _spawn(path: String, reverse: bool, effect_frames: int, where: Transform3D, follow: ELModel = null, ambient := false, particle_span := false) -> Dictionary:
 	var cached := _file(profile, path)
 	if cached.is_empty(): return {}
 	var file: ELParticleFile = cached.file
 	var material := _material(profile, file)
 	if material == null: return {}
-	var emitter := _free_emitter()
+	if file.additive and not cached.has("glow_tints"):
+		var atlas := material.get_shader_parameter("atlas") as Texture2D
+		cached.glow_tints = _atlas_cell_tints(atlas, Vector2i(file.columns, file.rows))
+	var emitter := _free_emitter(ambient)
 	if emitter.is_empty():
-		dropped += 1
+		if not ambient: dropped += 1
 		return {}
 	var node: MultiMeshInstance3D = emitter.node
 	node.material_override = material
-	node.transform = where
+	node.transform = Transform3D(Basis.IDENTITY, where.origin) if particle_span else where
+	emitter.centre_basis = where.basis if particle_span else Basis.IDENTITY
+	node.custom_aabb = PARTICLE_BOUNDS
+	if particle_span:
+		node.custom_aabb = PARTICLE_BOUNDS.merge(Transform3D(where.basis, Vector3.ZERO) * PARTICLE_BOUNDS)
 	node.visible = true
-	emitter.where = where
 	emitter.track = PackedFloat32Array()
 	emitter.opacity = 1.0
 	emitter.entry = cached
@@ -463,18 +589,21 @@ func _spawn(path: String, reverse: bool, effect_frames: int, where: Transform3D,
 	emitter.reverse = reverse
 	emitter.follow = follow
 	emitter.following = follow != null
+	emitter.visibility_link = null
+	emitter.loop = false
 	emitter.life = file.frames
-	if file.loop_end > 0: emitter.life = maxi(effect_frames, 1) if follow == null else 1 << 30
+	if file.loop_end > 0 and follow == null: emitter.life = maxi(effect_frames, 1)
 	emitter.active = true
 	emitter.mesh.visible_instance_count = 0
-	spawned += 1
-	_draw(emitter, 0)
+	if not ambient: spawned += 1
+	_draw(emitter, roundi(follow.frame) if follow != null else 0)
 	return emitter
 
-func _free_emitter() -> Dictionary:
-	for emitter in emitters:
+func _free_emitter(ambient: bool) -> Dictionary:
+	var pool := arena_emitters if ambient else emitters
+	for emitter in pool:
 		if not emitter.active: return emitter
-	if emitters.size() >= POOL_SIZE: return {}
+	if pool.size() >= (ARENA_PARTICLE_POOL if ambient else PARTICLE_POOL): return {}
 	var mesh := MultiMesh.new()
 	mesh.transform_format = MultiMesh.TRANSFORM_3D
 	mesh.use_custom_data = true
@@ -486,18 +615,18 @@ func _free_emitter() -> Dictionary:
 	var node := MultiMeshInstance3D.new()
 	node.multimesh = mesh
 	node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	node.custom_aabb = AABB(Vector3(-64, -16, -64), Vector3(128, 96, 128))
 	node.visible = false
 	add_child(node)
 	var emitter := {"node": node, "mesh": mesh, "entry": {}, "elapsed": 0.0, "frame": -1, "life": 0, "reverse": false, "active": false, "follow": null, "following": false,
-		"where": Transform3D.IDENTITY, "track": PackedFloat32Array(), "opacity": 1.0, "own": null, "glow": []}
-	emitters.append(emitter)
+		"track": PackedFloat32Array(), "opacity": 1.0, "own": null, "glow": []}
+	pool.append(emitter)
 	return emitter
 
 func _release(emitter: Dictionary) -> void:
 	emitter.active = false
 	emitter.entry = {}
 	emitter.follow = null
+	emitter.visibility_link = null
 	emitter.following = false
 	emitter.track = PackedFloat32Array()
 	emitter.node.visible = false
@@ -511,30 +640,49 @@ func active_count() -> int:
 
 func _process(delta: float) -> void:
 	var clock := Time.get_ticks_usec()
-	for emitter in emitters:
-		if not emitter.active: continue
-		emitter.elapsed += delta
-		var frame := int(emitter.elapsed * ELParticleFile.FPS)
-		# A freed figure compares equal to null, so the flag says whether it follows.
-		if frame >= int(emitter.life) or (emitter.following and not is_instance_valid(emitter.follow)):
-			_release(emitter)
-			continue
-		if emitter.following: emitter.node.transform = _figure_transform(emitter.follow)
-		if frame != int(emitter.frame):
-			if not emitter.track.is_empty(): _apply_emitter_track(emitter, frame)
-			_draw(emitter, frame)
+	_step_arena_weather(delta)
+	for pool: Array[Dictionary] in [emitters, arena_emitters]:
+		for emitter in pool:
+			if emitter.active: _step_emitter(emitter, delta)
 	for item in objects:
 		if item.active: _step_object(item, delta)
+	for item in arena_objects:
+		if item.active: _step_object(item, delta)
+	var lights_changed := false
 	for item in lights:
-		if item.active: _step_light(item, delta)
+		if item.active and _step_light(item, delta): lights_changed = true
+	if lights_changed: _sync_arena_secondary()
 	for item in faders:
 		if item.active: _step_fader(item, delta)
 	if scene_light.active: _step_scene_light(delta)
 	last_cost_usec = Time.get_ticks_usec() - clock
 	peak_cost_usec = maxi(peak_cost_usec, last_cost_usec)
 
-## A particle system with its own .fx keys: their scale and opacity apply
-## each frame (the system's place is already baked into its particles).
+func _step_emitter(emitter: Dictionary, delta: float) -> void:
+	# A freed figure compares equal to null, so the flag says whether it follows.
+	if emitter.following:
+		if not is_instance_valid(emitter.follow):
+			_release(emitter)
+			return
+		var model: ELModel = emitter.follow
+		emitter.node.transform = _figure_transform(model)
+		emitter.node.visible = model.is_visible_in_tree()
+		var animation_frame := roundi(model.frame)
+		if animation_frame != int(emitter.frame): _draw(emitter, animation_frame)
+		return
+	emitter.elapsed += delta
+	var frame := int(emitter.elapsed * ELParticleFile.FPS)
+	if not emitter.loop and frame >= int(emitter.life):
+		_release(emitter)
+		return
+	if is_instance_valid(emitter.visibility_link): emitter.node.visible = emitter.visibility_link.is_visible_in_tree()
+	if emitter.loop and emitter.entry.file.loop_end == 0: frame %= int(emitter.life)
+	if frame != int(emitter.frame):
+		if not emitter.track.is_empty(): _apply_emitter_track(emitter, frame)
+		_draw(emitter, frame)
+
+## Spell particles keep their placement matrix. The native matrix draw reads
+## billboard size from the particle file and opacity from the .fx track.
 func _track_emitter(emitter: Dictionary, track: PackedFloat32Array) -> void:
 	emitter.track = track
 	var fades := false
@@ -558,8 +706,6 @@ func _track_emitter(emitter: Dictionary, track: PackedFloat32Array) -> void:
 func _apply_emitter_track(emitter: Dictionary, frame: int) -> void:
 	var track: PackedFloat32Array = emitter.track
 	var k := clampi(frame, 0, track.size() / KEY - 1) * KEY
-	var scale := Vector3(track[k + 7], track[k + 9], track[k + 8])
-	emitter.node.transform = emitter.where * Transform3D(Basis.from_scale(scale), Vector3.ZERO)
 	var opacity := clampf(track[k + 10], 0.0, 1.0)
 	if opacity != float(emitter.opacity):
 		emitter.opacity = opacity
@@ -575,16 +721,17 @@ static func _key_transform(track: PackedFloat32Array, k: int) -> Transform3D:
 	var scale := Vector3(track[k + 7], track[k + 9], track[k + 8])
 	return Transform3D(basis.scaled_local(scale), ELFigure.vector(Vector3(track[k], track[k + 1], track[k + 2])))
 
-func _spawn_object(object: Dictionary, track: PackedFloat32Array, where: Transform3D) -> bool:
-	var item := _free_object(object)
+func _spawn_object(object: Dictionary, track: PackedFloat32Array, where: Transform3D, ambient := false) -> bool:
+	var item := _free_object(object, arena_objects if ambient else objects, OBJECT_CACHE if ambient else OBJECT_POOL)
 	if item.is_empty():
-		dropped += 1
+		if not ambient: dropped += 1
 		return false
 	item.where = where
 	item.track = track
 	item.elapsed = 0.0
 	item.frame = -1
 	item.life = track.size() / KEY
+	item.loop = ambient
 	item.opacity = -1.0
 	item.active = true
 	var model: ELModel = item.node
@@ -592,25 +739,24 @@ func _spawn_object(object: Dictionary, track: PackedFloat32Array, where: Transfo
 	_apply_object(item, 0)
 	return true
 
-## A spare pooled model of the same kind, a new one while the pool has room,
-## else a spare of another kind rebuilt.
-func _free_object(object: Dictionary) -> Dictionary:
+## Cache common models and reuse spare entries before growing to the burst limit.
+func _free_object(object: Dictionary, pool: Array[Dictionary], limit: int) -> Dictionary:
 	var key := "%s|%s|%s" % [String(object.model).to_lower(), String(object.texture).to_lower(), object.add]
 	var spare := -1
-	for i in objects.size():
-		if objects[i].active: continue
-		if objects[i].key == key: return objects[i]
+	for i in pool.size():
+		if pool[i].active: continue
+		if pool[i].key == key: return pool[i]
 		if spare < 0: spare = i
-	if objects.size() >= OBJECT_POOL and spare < 0: return {}
+	if pool.size() >= limit and spare < 0: return {}
 	var item := _build_object(object, key)
 	if item.is_empty(): return {}
-	if objects.size() < OBJECT_POOL:
-		objects.append(item)
+	if spare < 0 or pool.size() < OBJECT_CACHE:
+		pool.append(item)
 	else:
-		var old: Node = objects[spare].node
+		var old: Node = pool[spare].node
 		remove_child(old)
 		old.queue_free()
-		objects[spare] = item
+		pool[spare] = item
 	return item
 
 func _build_object(object: Dictionary, key: String) -> Dictionary:
@@ -626,22 +772,42 @@ func _build_object(object: Dictionary, key: String) -> Dictionary:
 	faded.cull_mode = BaseMaterial3D.CULL_DISABLED
 	faded.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	faded.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
-	if add:
-		faded.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
-		faded.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	var additive_materials := {}
+	var magic_materials := {}
 	# Effect models are light and glow shapes: they cast no shadow.
-	for node: MeshInstance3D in model.parts.values(): node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	for node: MeshInstance3D in model.parts.values():
+		node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		var material := node.material_override as StandardMaterial3D
+		if material == null: continue
+		if add:
+			# The native additive pass changes the destination blend only.
+			if not additive_materials.has(material):
+				var blend := material.duplicate() as StandardMaterial3D
+				blend.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+				blend.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+				blend.texture_filter = faded.texture_filter
+				additive_materials[material] = blend
+			node.material_override = additive_materials[material]
+			if material.shading_mode != BaseMaterial3D.SHADING_MODE_UNSHADED:
+				node.layers |= LIT_ADDITIVE_LAYER
+		elif material.has_meta(ELFigure.AUTHORED_FULLBRIGHT):
+			var blend := material.duplicate() as StandardMaterial3D
+			blend.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+			magic_materials[node] = [material, blend]
 	model.visible = false
 	add_child(model)
 	return {"node": model, "key": key, "add": add, "opaque": ELFigure.material(texture), "faded": faded, "shown": null,
+		"magic_materials": magic_materials, "additive_materials": additive_materials.values(),
 		"active": false, "elapsed": 0.0, "frame": -1, "life": 0, "where": Transform3D.IDENTITY, "track": PackedFloat32Array(), "opacity": 1.0}
 
 func _step_object(item: Dictionary, delta: float) -> void:
 	item.elapsed += delta
 	var frame := int(item.elapsed * ELParticleFile.FPS)
 	if frame >= int(item.life):
-		_hide(item)
-		return
+		if not item.loop:
+			_hide(item)
+			return
+		frame %= int(item.life)
 	if frame != int(item.frame): _apply_object(item, frame)
 
 func _apply_object(item: Dictionary, frame: int) -> void:
@@ -654,12 +820,19 @@ func _apply_object(item: Dictionary, frame: int) -> void:
 	model.visible = opacity > 0.004
 	if opacity == float(item.opacity): return
 	item.opacity = opacity
-	var material: StandardMaterial3D = item.faded if item.add or opacity < 0.999 else item.opaque
-	material.albedo_color.a = opacity if is_same(material, item.faded) else 1.0
+	if item.add:
+		for material: StandardMaterial3D in item.additive_materials: material.albedo_color.a = opacity
+		return
+	var blend := opacity < 0.999
+	var material: StandardMaterial3D = item.faded if blend else item.opaque
+	material.albedo_color.a = opacity if blend else 1.0
+	for variants: Array in item.magic_materials.values(): variants[1].albedo_color.a = opacity
 	if is_same(item.shown, material): return
 	item.shown = material
 	for node: MeshInstance3D in model.parts.values():
-		if node.mesh != null: node.material_override = material
+		if node.mesh == null: continue
+		var variants: Array = item.magic_materials.get(node, [])
+		node.material_override = material if variants.is_empty() else variants[int(blend)]
 
 func _spawn_light(track: PackedFloat32Array, where: Transform3D) -> bool:
 	var item: Dictionary = {}
@@ -682,29 +855,49 @@ func _spawn_light(track: PackedFloat32Array, where: Transform3D) -> bool:
 	item.elapsed = 0.0
 	item.life = track.size() / KEY
 	item.active = true
-	_apply_light(item, 0)
+	_apply_light(item, 0, false)
 	return true
 
-func _step_light(item: Dictionary, delta: float) -> void:
+func _step_light(item: Dictionary, delta: float) -> bool:
 	item.elapsed += delta
 	var frame := int(item.elapsed * ELParticleFile.FPS)
 	if frame >= int(item.life) or not lights_enabled:
-		_hide(item)
-		return
-	if frame != int(item.frame): _apply_light(item, frame)
+		_hide(item, false)
+		return true
+	if frame == int(item.frame): return false
+	_apply_light(item, frame, false)
+	return true
 
-## Place, reach (stretched with the effect) and colour; dark or switched-off
-## keys hide the light.
-func _apply_light(item: Dictionary, frame: int) -> void:
+## The spell matrix moves the light center. The key's radius stays in world units.
+func _apply_light(item: Dictionary, frame: int, sync_secondary := true) -> void:
 	item.frame = frame
 	var track: PackedFloat32Array = item.track
 	var k := clampi(frame, 0, track.size() / KEY - 1) * KEY
 	var where: Transform3D = item.where
 	var node: OmniLight3D = item.node
 	node.position = where * ELFigure.vector(Vector3(track[k], track[k + 1], track[k + 2]))
-	node.omni_range = maxf(track[k + 3] * where.basis.get_scale().x, 0.01)
+	var reach := track[k + 3]
+	node.omni_range = maxf(reach, 0.01)
+	# Native secondary vertex light stays independent of the diffuse OmniLight.
+	item.secondary = Vector4(track[k + 7], track[k + 8], track[k + 9], reach) if track[k + 10] > 0.5 and reach > 0.0 else Vector4.ZERO
 	node.light_color = Color(track[k + 4], track[k + 5], track[k + 6])
 	node.visible = track[k + 10] > 0.5 and track[k + 3] > 0.01 and track[k + 4] + track[k + 5] + track[k + 6] > 0.004
+	if sync_secondary: _sync_arena_secondary()
+
+## Separate original vertex-light colour and reach, independent of OmniLight visibility.
+func secondary_light_sources() -> PackedFloat32Array:
+	var data := PackedFloat32Array()
+	if not lights_enabled or not is_visible_in_tree(): return data
+	for item: Dictionary in lights:
+		if not item.active: continue
+		var colour: Vector4 = item.get("secondary", Vector4.ZERO)
+		if colour.x + colour.y + colour.z <= 0.0: continue
+		var p: Vector3 = item.node.global_position
+		data.append_array([p.x, p.y, p.z, 0.0, colour.x, colour.y, colour.z, colour.w])
+	return data
+
+func _sync_arena_secondary() -> void:
+	if is_instance_valid(_arena): _arena.set_secondary_lights(secondary_light_sources())
 
 func _spawn_fader(track: PackedFloat32Array, add: bool) -> bool:
 	var item: Dictionary = {}
@@ -716,18 +909,18 @@ func _spawn_fader(track: PackedFloat32Array, add: bool) -> bool:
 		if faders.size() >= FADER_POOL:
 			dropped += 1
 			return false
-		var quad := QuadMesh.new()
-		quad.size = Vector2(2, 2)
-		var node := MeshInstance3D.new()
-		node.mesh = quad
-		node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-		# The quad covers the whole view wherever the camera looks.
-		node.extra_cull_margin = 16384.0
+		if _fader_layer == null:
+			_fader_layer = CanvasLayer.new()
+			_fader_layer.layer = FADER_LAYER
+			_fader_layer.visible = is_visible_in_tree()
+			add_child(_fader_layer)
+		var node := ColorRect.new()
+		node.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		node.set_anchors_preset(Control.PRESET_FULL_RECT)
 		node.visible = false
 		var material := ShaderMaterial.new()
-		material.render_priority = 100
-		node.material_override = material
-		add_child(node)
+		node.material = material
+		_fader_layer.add_child(node)
 		item = {"node": node, "material": material, "active": false, "elapsed": 0.0, "frame": -1, "life": 0, "track": PackedFloat32Array()}
 		faders.append(item)
 	item.material.shader = _fader_shader(add)
@@ -737,6 +930,10 @@ func _spawn_fader(track: PackedFloat32Array, add: bool) -> bool:
 	item.active = true
 	_apply_fader(item, 0)
 	return true
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_VISIBILITY_CHANGED and is_instance_valid(_fader_layer):
+		_fader_layer.visible = is_visible_in_tree()
 
 func _fader_shader(add: bool) -> Shader:
 	var key := "add" if add else "mix"
@@ -754,23 +951,24 @@ func _step_fader(item: Dictionary, delta: float) -> void:
 		return
 	if frame != int(item.frame): _apply_fader(item, frame)
 
-## The fader's colour at its strength: added to the view, or blended over it.
+## The native fader packs the second RGB and the range as an ARGB vertex.
 func _apply_fader(item: Dictionary, frame: int) -> void:
 	item.frame = frame
 	var track: PackedFloat32Array = item.track
 	var k := clampi(frame, 0, track.size() / KEY - 1) * KEY
-	var strength := clampf(track[k + 3], 0.0, 1.0)
-	item.material.set_shader_parameter("colour", Color(track[k + 4], track[k + 5], track[k + 6], strength))
-	item.node.visible = track[k + 10] > 0.5 and strength > 0.004
+	var alpha := int(clampf(track[k + 3], 0.0, 1.0) * 255.0)
+	var red := int(track[k + 7] * 255.0)
+	var green := int(track[k + 8] * 255.0)
+	var blue := int(track[k + 9] * 255.0)
+	item.material.set_shader_parameter("colour", Color8(red, green, blue, alpha))
+	item.node.visible = track[k + 10] > 0.5 and alpha > 0
 
-## A scene light keys the arena's light relative to its first key: the first
-## colour scales the sun, the second the ambient light; the keys' straight-down
-## direction leaves the sun's own direction (and shadows) alone. A newer effect
-## takes over the one slot; the arena's light returns when it ends.
+## The first DLIT colour multiplies the arena's sun colour. The second replaces
+## its ambient colour. The sun keeps its arena direction and shadows.
 func _start_scene_light(track: PackedFloat32Array) -> bool:
 	if not scene_light.active:
 		scene_light.colour = sun.light_color
-		scene_light.ambient = sky.ambient_light_energy if sky != null else 0.0
+		scene_light.ambient = sky.ambient_light_color if sky != null else Color.BLACK
 	scene_light.active = true
 	scene_light.track = track
 	scene_light.elapsed = 0.0
@@ -782,8 +980,11 @@ func _start_scene_light(track: PackedFloat32Array) -> bool:
 func _step_scene_light(delta: float) -> void:
 	scene_light.elapsed += delta
 	var frame := int(scene_light.elapsed * ELParticleFile.FPS)
-	if frame >= int(scene_light.life) or not lights_enabled or not is_instance_valid(sun):
+	if not lights_enabled or not is_instance_valid(sun):
 		_end_scene_light()
+		return
+	if frame >= int(scene_light.life):
+		_end_scene_light(true)
 		return
 	if frame != int(scene_light.frame): _apply_scene_light(frame)
 
@@ -792,25 +993,27 @@ func _apply_scene_light(frame: int) -> void:
 	var track: PackedFloat32Array = scene_light.track
 	var k := clampi(frame, 0, track.size() / KEY - 1) * KEY
 	var on := track[k + 10] > 0.5
-	var first := Vector3(track[4], track[5], track[6])
-	var second := Vector3(track[7], track[8], track[9])
-	var colour := Vector3(track[k + 4], track[k + 5], track[k + 6]) / first.max(Vector3.ONE / 255.0) if on else Vector3.ZERO
-	var ambient := Vector3(track[k + 7], track[k + 8], track[k + 9]) / second.max(Vector3.ONE / 255.0) if on else Vector3.ONE
 	var base: Color = scene_light.colour
-	if is_instance_valid(sun): sun.light_color = Color(base.r * colour.x, base.g * colour.y, base.b * colour.z, base.a)
-	if sky != null: sky.ambient_light_energy = float(scene_light.ambient) * (ambient.x + ambient.y + ambient.z) / 3.0
+	if is_instance_valid(sun):
+		sun.light_color = Color(base.r * track[k + 4], base.g * track[k + 5], base.b * track[k + 6], base.a) if on else base
+	if sky != null:
+		sky.ambient_light_color = Color(track[k + 7], track[k + 8], track[k + 9]) if on else scene_light.ambient
 
-func _end_scene_light() -> void:
+func _end_scene_light(completed := false) -> void:
 	if not scene_light.active: return
 	scene_light.active = false
 	scene_light.track = PackedFloat32Array()
-	if is_instance_valid(sun): sun.light_color = scene_light.colour
-	if sky != null: sky.ambient_light_energy = scene_light.ambient
+	if is_instance_valid(sun):
+		var base: Color = scene_light.colour
+		# Native completion reapplies the saved RGB as a multiplier on itself.
+		sun.light_color = Color(base.r * base.r, base.g * base.g, base.b * base.b, base.a) if completed else base
+	if sky != null: sky.ambient_light_color = scene_light.ambient
 
-func _hide(item: Dictionary) -> void:
+func _hide(item: Dictionary, sync_secondary := true) -> void:
 	item.active = false
 	item.track = PackedFloat32Array()
 	item.node.visible = false
+	if sync_secondary and item.has("secondary"): _sync_arena_secondary()
 
 ## Running effect models, lights and faders.
 func part_count() -> int:
@@ -825,9 +1028,13 @@ func _draw(emitter: Dictionary, frame: int) -> void:
 	var cached: Dictionary = emitter.entry
 	var file: ELParticleFile = cached.file
 	var mesh: MultiMesh = emitter.mesh
+	if emitter.following and frame >= file.frames:
+		mesh.visible_instance_count = 0
+		emitter.glow = []
+		return
 	var buffer: PackedFloat32Array
 	var count := 0
-	if file.loop_end > 0:
+	if file.loop_end > 0 and not emitter.following:
 		# Every running cycle shows at once. Past the first pass the set of
 		# frames depends only on the phase, so combined buffers are cached.
 		var key := frame if frame < file.frames else file.frames + (frame - file.frames) % file.loop_end
@@ -854,6 +1061,17 @@ func _draw(emitter: Dictionary, frame: int) -> void:
 		buffer = _frame(cached, at)
 		count = _count(file, at)
 		emitter.glow = _glow(cached, "f%d" % at, buffer, count)
+	# The span matrix changes centres. Keep the instance axes that encode
+	# billboard size and atlas index, even when a vertical span collapses.
+	var centre_basis: Basis = emitter.centre_basis
+	if centre_basis != Basis.IDENTITY:
+		buffer = buffer.duplicate()
+		for i in count:
+			var o := i * 16
+			var p := centre_basis * Vector3(buffer[o + 3], buffer[o + 7], buffer[o + 11])
+			buffer[o + 3] = p.x
+			buffer[o + 7] = p.y
+			buffer[o + 11] = p.z
 	var size := buffer.size() / 16
 	if mesh.instance_count != size: mesh.instance_count = size
 	mesh.buffer = buffer
@@ -875,9 +1093,14 @@ static func _glow(cached: Dictionary, key: String, buffer: PackedFloat32Array, c
 	cached.glows = glows
 	if glows.has(key): return glows[key]
 	var patches := {}
+	var glow_tints: PackedVector3Array = cached.get("glow_tints", PackedVector3Array())
 	for n in count:
 		var o := n * 16
+		# Some authored tails keep particle colour after the billboard collapses.
+		if buffer[o + 10] == 0.0: continue
+		var atlas_cell := int(buffer[o + 5]) - 1
 		var rgb := Vector3(buffer[o + 12], buffer[o + 13], buffer[o + 14]) * buffer[o + 15]
+		if atlas_cell >= 0 and atlas_cell < glow_tints.size(): rgb *= glow_tints[atlas_cell]
 		var w := rgb.x + rgb.y + rgb.z
 		if w <= 0.0001: continue
 		var p := Vector3(buffer[o + 3], buffer[o + 7], buffer[o + 11])
@@ -909,18 +1132,22 @@ static func _glow(cached: Dictionary, key: String, buffer: PackedFloat32Array, c
 ## [world centre, extent, summed colour times opacity] per patch.
 func glow_sources() -> Array:
 	var result := []
-	for emitter in emitters:
+	for emitter: Dictionary in emitters + arena_emitters:
 		if not emitter.active or not emitter.node.is_visible_in_tree(): continue
 		var glow: Array = emitter.glow
 		if glow.is_empty(): continue
 		var node: MultiMeshInstance3D = emitter.node
-		var scale := node.global_transform.basis.get_scale()
-		var size := (scale.x + scale.y + scale.z) / 3.0
-		var atlas := (node.material_override as ShaderMaterial).get_shader_parameter("atlas") as Texture2D
-		# Blended (not additive) sprites glow only when they are flame-like:
-		# bright and strongly coloured, as fire is and smoke is not.
-		var tint := _atlas_tint(atlas) if emitter.entry.file.additive else _flame_colour(atlas)
-		if tint == Vector3.ZERO: continue
+		var placement := node.global_transform
+		var centre_basis: Basis = emitter.centre_basis
+		if centre_basis != Basis.IDENTITY: placement.basis *= centre_basis
+		var basis := placement.basis
+		var size := (basis.x.length() + basis.y.length() + basis.z.length()) / 3.0
+		var tint := Vector3.ONE
+		if not emitter.entry.file.additive:
+			# Only bright, strongly coloured alpha-blended sheets act as flames.
+			var atlas := (node.material_override as ShaderMaterial).get_shader_parameter("atlas") as Texture2D
+			tint = _flame_colour(atlas)
+			if tint == Vector3.ZERO: continue
 		var opacity := clampf(float(emitter.opacity), 0.0, 1.0)
 		# However many patches it splits into, one system gives at most
 		# EMITTER_GLOW in all.
@@ -929,21 +1156,21 @@ func glow_sources() -> Array:
 		for patch: Array in glow:
 			var colour := _saturate(patch[2] * tint) * opacity
 			total += maxf(colour.x, maxf(colour.y, colour.z))
-			lit.append([node.global_transform * patch[0], patch[1] * size, colour])
+			lit.append([placement * patch[0], patch[1] * size, colour])
 		var share := minf(1.0, EMITTER_GLOW / maxf(total, 0.0001))
 		for light: Array in lit:
 			light[2] *= share
 			result.append(light)
-	# Glowing (additive) effect models, such as a wall of fire: light from
-	# their bounds in proportion to their surface, split along their length.
-	for item in objects:
+	# Transparent additive emitters stay outside the traced mesh pass. Use
+	# their bounds only when the active material actually emits light.
+	for item: Dictionary in objects + arena_objects:
 		if not item.active or not item.add: continue
 		var model: ELModel = item.node
 		if not model.is_visible_in_tree(): continue
-		var colour := _saturate(_texture_glow((item.faded as StandardMaterial3D).albedo_texture)) * float(item.opacity)
-		if colour.length_squared() < 1e-6: continue
 		for part: MeshInstance3D in model.parts.values():
 			if part.mesh == null or not part.visible: continue
+			var colour := _additive_model_glow(part.material_override as StandardMaterial3D)
+			if colour.length_squared() < 1e-6: continue
 			var box := part.global_transform * part.get_aabb()
 			var s := box.size
 			var axis := 0 if s.x >= s.y and s.x >= s.z else (1 if s.y >= s.z else 2)
@@ -960,6 +1187,26 @@ func glow_sources() -> Array:
 			for i in pieces:
 				result.append([box.position + step * (i + 0.5) + Vector3(s.x if axis != 0 else 0.0, s.y if axis != 1 else 0.0, s.z if axis != 2 else 0.0) * 0.5, extent, piece])
 	return result
+
+static func _additive_model_glow(material: StandardMaterial3D) -> Vector3:
+	if material == null or material.blend_mode != BaseMaterial3D.BLEND_MODE_ADD or material.transparency != BaseMaterial3D.TRANSPARENCY_ALPHA:
+		return Vector3.ZERO
+	var fullbright := material.has_meta(ELFigure.AUTHORED_FULLBRIGHT)
+	var emissive := material.emission_enabled and material.emission_energy_multiplier > 0.0
+	if not fullbright and not emissive: return Vector3.ZERO
+	var albedo := _texture_glow(material.albedo_texture) if material.albedo_texture != null else Vector4.ONE
+	var colour := Vector3.ZERO
+	if fullbright:
+		var tint := material.albedo_color.srgb_to_linear()
+		colour = Vector3(albedo.x * tint.r, albedo.y * tint.g, albedo.z * tint.b)
+	if emissive:
+		var tint := material.emission.srgb_to_linear()
+		var emission := Vector3(tint.r, tint.g, tint.b)
+		var tex := _texture_glow(material.emission_texture, false)
+		var rgb := Vector3(tex.x, tex.y, tex.z)
+		emission = emission * rgb if material.emission_operator == BaseMaterial3D.EMISSION_OP_MULTIPLY else emission + rgb
+		colour += emission * (material.emission_energy_multiplier * albedo.w)
+	return _saturate(colour) * material.albedo_color.a
 
 static var _flames: Dictionary = {}
 
@@ -999,12 +1246,13 @@ static func _flame_colour(atlas: Texture2D) -> Vector3:
 const OBJECT_GLOW := 2.0
 static var _texture_glows: Dictionary = {}
 
-## Average linear colour a glowing texture adds (colour times alpha).
-static func _texture_glow(texture: Texture2D) -> Vector3:
-	if texture == null: return Vector3.ZERO
-	if _texture_glows.has(texture): return _texture_glows[texture]
+## Approximate average linear colour and coverage for a model's light proxy.
+static func _texture_glow(texture: Texture2D, weight_alpha := true) -> Vector4:
+	if texture == null: return Vector4.ZERO
+	var key := [texture, weight_alpha]
+	if _texture_glows.has(key): return _texture_glows[key]
 	var image := texture.get_image()
-	var sum := Vector3.ZERO
+	var sum := Vector4.ZERO
 	if image != null:
 		image = image.duplicate()
 		if image.is_compressed(): image.decompress()
@@ -1014,9 +1262,10 @@ static func _texture_glow(texture: Texture2D) -> Vector3:
 		for y in 32:
 			for x in 32:
 				var c := image.get_pixel(x, y).srgb_to_linear()
-				sum += Vector3(c.r, c.g, c.b) * c.a
+				var weight := c.a if weight_alpha else 1.0
+				sum += Vector4(c.r * weight, c.g * weight, c.b * weight, c.a)
 		sum /= 1024.0
-	_texture_glows[texture] = sum
+	_texture_glows[key] = sum
 	return sum
 
 ## Glow colours lean towards white where many bright sprites overlap; the
@@ -1028,29 +1277,41 @@ static func _saturate(colour: Vector3) -> Vector3:
 	var hue := colour / peak
 	return Vector3(hue.x * hue.x, hue.y * hue.y, hue.z * hue.z) * peak
 
-static var _tints: Dictionary = {}
+static var _atlas_tints: Dictionary = {}
 
-## Average linear colour a sprite sheet adds (colour times alpha).
-static func _atlas_tint(atlas: Texture2D) -> Vector3:
-	if atlas == null: return Vector3.ONE
-	if _tints.has(atlas): return _tints[atlas]
+## Alpha-weighted linear hue per additive cell. Particle alpha and the emitter
+## budget control strength. Black or transparent cells have no colour to add.
+static func _atlas_cell_tints(atlas: Texture2D, grid: Vector2i) -> PackedVector3Array:
+	if atlas == null: return PackedVector3Array()
+	var key := [atlas, grid]
+	if _atlas_tints.has(key): return _atlas_tints[key]
+	var tints := PackedVector3Array()
 	var image := atlas.get_image()
-	var tint := Vector3.ONE
-	if image != null:
-		image = image.duplicate()
+	if image != null and grid.x <= image.get_width() and grid.y <= image.get_height():
 		if image.is_compressed(): image.decompress()
 		image.clear_mipmaps()
 		image.convert(Image.FORMAT_RGBA8)
-		image.resize(32, 32, Image.INTERPOLATE_BILINEAR)
-		var sum := Vector3.ZERO
-		for y in 32:
-			for x in 32:
-				var c := image.get_pixel(x, y).srgb_to_linear()
-				sum += Vector3(c.r, c.g, c.b) * c.a
-		# Hue only: how bright a system glows comes from its particles.
-		tint = sum / maxf(maxf(sum.x, sum.y), maxf(sum.z, 0.0001))
-	_tints[atlas] = tint
-	return tint
+		var pixels := image.get_data()
+		var width := image.get_width()
+		var height := image.get_height()
+		var linear := PackedFloat32Array()
+		linear.resize(256)
+		for value in 256:
+			linear[value] = Color(value / 255.0, 0, 0).srgb_to_linear().r
+		tints.resize(grid.x * grid.y)
+		for cell in tints.size():
+			var column := cell % grid.x
+			# Sprite indices count upward from the texture's bottom row.
+			var row := grid.y - 1 - cell / grid.x
+			var sum := Vector3.ZERO
+			for y in range(row * height / grid.y, (row + 1) * height / grid.y):
+				for x in range(column * width / grid.x, (column + 1) * width / grid.x):
+					var i := (y * width + x) * 4
+					sum += Vector3(linear[pixels[i]], linear[pixels[i + 1]], linear[pixels[i + 2]]) * pixels[i + 3]
+			var peak := maxf(sum.x, maxf(sum.y, sum.z))
+			if peak > 0.0: tints[cell] = sum / peak
+	_atlas_tints[key] = tints
+	return tints
 
 static func _count(file: ELParticleFile, frame: int) -> int:
 	return file.starts[frame + 1] - file.starts[frame]
@@ -1188,16 +1449,12 @@ void fragment() {
 }
 """
 
-## Whole-view colour layer of a screen fader, drawn over the battle scene.
+## Composite the packed fader in the same display space as the original.
 const FADER_SHADER := """
-shader_type spatial;
-render_mode unshaded, cull_disabled, depth_test_disabled, depth_draw_never, shadows_disabled, BLEND;
+shader_type canvas_item;
+render_mode unshaded, BLEND;
 uniform vec4 colour = vec4(0.0);
-void vertex() {
-	POSITION = vec4(VERTEX.xy, 0.0, 1.0);
-}
 void fragment() {
-	ALBEDO = colour.rgb;
-	ALPHA = colour.a;
+	COLOR = colour;
 }
 """

@@ -209,9 +209,13 @@ static func scenario(entry: Dictionary, player := 1) -> Dictionary:
 ## tutorial is never saved).
 static func is_single(state: ELAdventureSession) -> bool:
 	if state == null or state.map == null: return false
-	match state.map.profile.id:
-		"el1": return not state.scenario.is_empty() and not bool(state.scenario.get("campaign", true))
-		"el2": return not state.tutorial and not state.scenario.has(ELSecondCampaign.KEY) and ELXml.child(state.map.document, "campaign").is_empty()
+	if state.map.profile.id == "el2" and state.tutorial: return false
+	return is_single_setup(state.map.profile.id, state.scenario, not ELXml.child(state.map.document, "campaign").is_empty())
+
+static func is_single_setup(edition: String, scenario: Dictionary, campaign_map: bool) -> bool:
+	match edition:
+		"el1": return not scenario.is_empty() and not bool(scenario.get("campaign", true))
+		"el2": return not scenario.has(ELSecondCampaign.KEY) and not campaign_map
 	return false
 
 static func save_file(edition: String) -> String:

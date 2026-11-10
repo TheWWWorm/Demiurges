@@ -26,6 +26,9 @@ const CAPTION := Color("d8c89a")
 const RED := Color(1, 0, 0)
 
 var director: ELAdventureDirector
+var strategic_session: ELStrategicSession
+var _upgrade_pending := false
+var _online_message: Label
 var state: ELAdventureSession
 var hud: ELAdventureHud
 var profile: ELProfile
@@ -68,6 +71,8 @@ func build(owner: ELAdventureDirector, panel: ELAdventureHud, id: int) -> void:
 	var ok := _button("BuildOk1" if spells else "BuildOk")
 	ok.pressed.connect(func(): closed.emit())
 	buttons.Ok = ok
+	if strategic_session != null:
+		_online_message = _label(Rect2(20, 531 - sheet_offset().y, 460, 20), 13, TEXT, hud._bold)
 	sheet.size = Vector2(500, 520)
 	resized.connect(_layout)
 	_layout()
@@ -137,6 +142,7 @@ func stock() -> Dictionary:
 
 func can_upgrade() -> bool:
 	var acting := director.can_move() and director.movement.is_empty()
+	if strategic_session != null: acting = not _upgrade_pending and strategic_session.can_plan()
 	return acting and ELBuildingScreen.upgrade_problem(state, state.current_player, building_id).is_empty()
 
 func refresh() -> void:
@@ -156,7 +162,25 @@ func refresh() -> void:
 
 func upgrade_building() -> void:
 	if not can_upgrade(): return
+	if strategic_session != null:
+		var kind: String = ELBuildingScreen.STRATEGIC_UPGRADES[building().type]
+		_upgrade_pending = strategic_session.manage_hero([kind, building_id], _upgrade_confirmed)
+		_online_message.text = ""
+		if _upgrade_pending:
+			match kind:
+				"upgrade_fort": _online_message.text = "Confirming fort upgrade…"
+				"upgrade_mine": _online_message.text = "Confirming mine upgrade…"
+				_: _online_message.text = "Confirming shop upgrade…"
+		refresh()
+		return
 	if ELBuildingScreen.upgrade(state, state.current_player, building_id): upgraded.emit(building_id)
+	refresh()
+
+func _upgrade_confirmed(reason: String) -> void:
+	if not is_inside_tree() or is_queued_for_deletion(): return
+	_upgrade_pending = false
+	_online_message.text = reason
+	if reason.is_empty(): upgraded.emit(building_id)
 	refresh()
 
 ## Spells of the laboratory's three tiers; tiers above the level are dimmed.

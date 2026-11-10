@@ -44,9 +44,10 @@ func encode(director: ELAdventureDirector, camera: Dictionary = {}) -> Dictionar
 	var encounter := {}
 	if director.encounter != null:
 		encounter = {"hero": director.encounter.hero_id, "opponent": director.encounter.opponent_id, "ethereal": director.encounter.ethereal_defender, "battle": {"format": "etherlords-duel", "version": 1, "state": director.encounter.battle.snapshot()}}
+		if director.encounter.assault_fort >= 0: encounter.fort = director.encounter.assault_fort
 	return {"format": FORMAT, "version": 1, "edition": state.map.profile.id, "map": state.map.id, "map_hash": _map_hash(state.map), "script_name": state.script_name, "encounter": encounter,
 		"world": world, "scenario": state.scenario.duplicate(true), "objects": objects, "players": players, "explored": Marshalls.raw_to_base64(state.explored), "notebook": ELSecondNotebook.encode(state), "observations": state.observations.duplicate(true), "ambience": ELSecondAmbience.encode(state), "script": script,
-		"commands": state.commands.duplicate(true), "director": {"movement": movement, "strategy": director.strategy.duplicate(true), "guard_zones": director.interception.snapshot(), "dialogue": director.dialogue.duplicate(true), "boxes": director.boxes.duplicate(true), "action_wait": director.action_wait, "player_round": director.player_round, "woken": director._woken, "waiting": director._waiting, "wait_remaining": director.wait_remaining, "clock": director._clock}, "camera": camera.duplicate(true)}
+		"commands": state.commands.duplicate(true), "director": {"movement": movement, "travel": director.travel.duplicate(), "strategy": director.strategy.duplicate(true), "guard_zones": director.interception.snapshot(), "dialogue": director.dialogue.duplicate(true), "boxes": director.boxes.duplicate(true), "action_wait": director.action_wait, "player_round": director.player_round, "woken": director._woken, "waiting": director._waiting, "wait_remaining": director.wait_remaining, "clock": director._clock, "commands_pending": director._commands_pending}, "camera": camera.duplicate(true)}
 
 func write(path: String, director: ELAdventureDirector, camera: Dictionary = {}) -> bool:
 	# The remake keeps fixed campaign/mission slots; the tutorial is not saved
@@ -54,25 +55,39 @@ func write(path: String, director: ELAdventureDirector, camera: Dictionary = {})
 	if director != null and director.state != null and director.state.tutorial: return _fail("The tutorial cannot be saved.")
 	var document := encode(director, camera)
 	if document.is_empty(): return false
+	return write_document(path, document)
+
+## Shared by adventure files and strategic slot envelopes.
+func write_document(path: String, document: Dictionary) -> bool:
+	error = ""
 	# Full precision: script numbers (e.g. EL2 battle-script weights) must
 	# survive the round trip exactly.
-	var text := JSON.stringify(document, "", true, true)
-	if text.length() > MAX_BYTES: return _fail("Campaign save exceeds its size limit.")
-	var temporary := path + ".tmp"
+	var data := JSON.stringify(document, "", true, true).to_utf8_buffer()
+	if data.size() > MAX_BYTES: return _fail("The save exceeds its size limit.")
+	var temporary := "%s.%d-%d.tmp" % [path, OS.get_process_id(), Time.get_ticks_usec()]
 	var file := FileAccess.open(temporary, FileAccess.WRITE)
-	if file == null: return _fail("Could not write the campaign save.")
-	file.store_string(text)
+	if file == null: return _fail("Could not write the save.")
+	file.store_buffer(data)
 	file.flush()
+	var written := file.get_error()
 	file.close()
-	if DirAccess.rename_absolute(temporary, path) != OK: return _fail("Could not replace the campaign save.")
+	if written != OK or DirAccess.rename_absolute(temporary, path) != OK:
+		DirAccess.remove_absolute(temporary)
+		return _fail("Could not replace the save.")
 	return true
 
 func read(path: String, profiles: Dictionary) -> Dictionary:
+	var document: Variant = read_document(path)
+	if not error.is_empty(): return {}
+	return decode(document, profiles)
+
+func read_document(path: String) -> Variant:
+	error = ""
 	var file := FileAccess.open(path, FileAccess.READ)
 	if file == null or file.get_length() > MAX_BYTES:
-		_fail("No readable campaign save was found.")
-		return {}
-	return decode(JSON.parse_string(file.get_as_text()), profiles)
+		_fail("No readable save was found.")
+		return null
+	return JSON.parse_string(file.get_as_text())
 
 func decode(raw: Variant, profiles: Dictionary) -> Dictionary:
 	error = ""
@@ -189,6 +204,7 @@ func decode(raw: Variant, profiles: Dictionary) -> Dictionary:
 		# Creatures created at start (lair stock) are replaced by the saved ones.
 		if not objects.has(id) and int(next.objects[id].get("source_index", -1)) >= 0: return _reject(next, "A placed map object is missing from the save.")
 	if not ELForts.valid_links(objects, map): return _reject(next, "Invalid saved fort garrison.")
+	if map.profile.id == "el2" and not ELSecondGates.valid_links(objects): return _reject(next, "Invalid saved warding stone holder.")
 	if map.profile.id == "el1" and not ELAdditionalBuildings.valid_links(objects): return _reject(next, "Invalid saved lair creature.")
 	for item: Dictionary in objects.values():
 		var order: Dictionary = item.get("strategy_order", {})
@@ -222,8 +238,18 @@ func decode(raw: Variant, profiles: Dictionary) -> Dictionary:
 		if not key is String or key.is_empty() or not entry is Array or entry.size() != 3: return _reject(next, "Invalid saved observations.")
 		if not ELLuaSave._integer(entry[0], -0x80000000, 0x7fffffff) or not ELLuaSave._integer(entry[1], -0x80000000, 0x7fffffff) or not ELLuaSave._integer(entry[2], 0, 0x7fffffff): return _reject(next, "Invalid saved observations.")
 		observations[key] = [int(entry[0]), int(entry[1]), int(entry[2])]
+	if map.profile.id == "el2":
+		for actor: Dictionary in objects.values():
+			for plan: Variant in actor.orders:
+				if plan is Dictionary and plan.get("kind") == "RemoteUseHero" and (not _valid_remote_order(plan, objects) or int(plan.arguments[0]) != actor.uid):
+					return _reject(next, "Invalid saved remote encounter plan.")
 	for command: Variant in raw.commands:
-		if not command is Dictionary or not command.get("kind") is String or not command.get("arguments") is Array or not next._bindings().has("ExAddCommand" + command.kind): return _reject(next, "Invalid queued campaign command.")
+		if not command is Dictionary or not command.get("kind") is String or not command.get("arguments") is Array:
+			return _reject(next, "Invalid queued campaign command.")
+		if command.kind == "RemoteUseHero" and map.profile.id == "el2":
+			if not _valid_remote_order(command, objects): return _reject(next, "Invalid saved remote encounter order.")
+		elif not next._bindings().has("ExAddCommand" + command.kind):
+			return _reject(next, "Invalid queued campaign command.")
 	if next.vm != null:
 		var codec := ELLuaSave.new()
 		if not codec.decode(next.vm, raw.get("script")): return _reject(next, codec.error)
@@ -239,6 +265,15 @@ func decode(raw: Variant, profiles: Dictionary) -> Dictionary:
 	next.observations = observations
 	next.commands.assign(raw.commands)
 	for key: String in STATE_FIELDS: next.set(key, world[key])
+	# Earlier builds saved the sole shipped remote order as a walking plan.
+	if next.vm != null and next.script_name.replace("\\", "/").get_file().to_lower() == "e2mission54" and next.variables.values.get("ScriptSpecialState") == "WhiteLord54":
+		var hero := next.object(next.main_hero)
+		if not hero.is_empty() and not hero.visible:
+			hero.hidden_by_script = true
+			var plans: Array = hero.orders
+			var target_id := int(next.vm.globals.get("ID_WHITELORD", -1))
+			if plans.size() == 1 and plans[0] is Dictionary and plans[0].get("kind") == "MoveAndUseObject" and _valid_remote_order(plans[0], objects) and int(plans[0].arguments[0]) == hero.uid and int(plans[0].arguments[1]) == target_id:
+				plans[0].kind = "RemoteUseHero"
 	if map.profile.id == "el1":
 		if not next.players.has(next.current_player): return _reject(next, "The saved human player is missing.")
 		# Earlier checkpoints predate castles; campaign maps are recognised by their chapter row.
@@ -265,6 +300,9 @@ func decode(raw: Variant, profiles: Dictionary) -> Dictionary:
 	next._mob_ids.clear()
 	for item: Dictionary in objects.values():
 		if item.alive and item.type in ["hero", "monster"]: next._mob_ids.append(int(item.uid))
+	if map.profile.id == "el2":
+		ELSecondBuildings.initialize_tunnel_guards(next, false)
+		ELSecondBuildings.restore_tunnel_loot(next)
 	var director := ELAdventureDirector.new()
 	if not director.build(next): return _reject(next, director.error)
 	var playback: Dictionary = raw.director
@@ -295,6 +333,26 @@ func decode(raw: Variant, profiles: Dictionary) -> Dictionary:
 		actor.orders.clear()
 		movement = {}
 	director.movement = movement
+	var travel: Variant = playback.get("travel", {})
+	if not travel is Dictionary: return _reject(next, "Invalid saved travel.")
+	if not travel.is_empty():
+		if map.profile.id != "el2" or not movement.is_empty() or travel.get("kind") not in ["teleport", "dock"] or not travel.get("arrived") is bool: return _reject(next, "Invalid saved travel.")
+		var duration := ELAdventureDirector.PORTAL_SECONDS if travel.kind == "teleport" else (ELAdventureDirector.DOCK_MESSAGE_SECONDS if travel.arrived else ELAdventureDirector.DOCK_FADE_SECONDS)
+		if not _number(travel.get("remaining"), 0.0, duration): return _reject(next, "Invalid saved travel time.")
+		if not ELLuaSave._integer(travel.get("x"), 0, map.width - 1) or not ELLuaSave._integer(travel.get("y"), 0, map.height - 1): return _reject(next, "Invalid saved travel destination.")
+		for key: String in ["hero", "source"]:
+			if not ELLuaSave._integer(travel.get(key), 0, 0x7fffffff) or not objects.has(int(travel[key])): return _reject(next, "Missing travel participant.")
+		if objects[int(travel.hero)].type not in ["hero", "monster"] or objects[int(travel.source)].type != travel.kind: return _reject(next, "Invalid saved travel participant.")
+		if not ELLuaSave._integer(travel.get("target"), -1, 0x7fffffff): return _reject(next, "Missing travel participant.")
+		var target_id := int(travel.target)
+		if travel.kind == "dock" and target_id != int(travel.source): return _reject(next, "Invalid saved dock.")
+		if travel.kind == "teleport":
+			if target_id == -1:
+				var preferred := ELAdventureDirector.teleport_coordinates(objects[int(travel.source)])
+				if not director.grid.contains(preferred) or not Rect2i(preferred, Vector2i.ONE).grow(1).has_point(Vector2i(int(travel.x), int(travel.y))): return _reject(next, "Invalid saved portal coordinates.")
+			elif objects.get(target_id, {}).get("type") not in ["teleport", "teleportreceiver"]:
+				return _reject(next, "Invalid saved portal.")
+		director.travel = travel.duplicate()
 	director.dialogue = playback.dialogue.duplicate(true)
 	if not director.dialogue.is_empty() and (not director.dialogue.get("question") is bool or not director.dialogue.get("text_id") is String or not ELLuaSave._integer(director.dialogue.get("actor"), -1, 0x7fffffff)): return _reject(next, "Invalid saved conversation.")
 	if not director.dialogue.is_empty(): director.dialogue.actor = int(director.dialogue.actor)
@@ -321,6 +379,8 @@ func decode(raw: Variant, profiles: Dictionary) -> Dictionary:
 	director._waiting = playback.waiting
 	director.wait_remaining = float(playback.wait_remaining)
 	director._clock = float(playback.clock)
+	if not playback.get("commands_pending", false) is bool: return _reject(next, "Invalid saved command queue flag.")
+	director._commands_pending = playback.get("commands_pending", false)
 	if (director._waiting or not director.dialogue.is_empty() or movement.get("queued", false)) and next.commands.is_empty(): return _reject(next, "The active command is missing.")
 	var combat: Variant = raw.get("encounter", {})
 	if not combat is Dictionary: return _reject(next, "Invalid saved encounter.")
@@ -347,6 +407,14 @@ func decode(raw: Variant, profiles: Dictionary) -> Dictionary:
 		var ethereal: Variant = combat.get("ethereal", -1)
 		if not ELLuaSave._integer(ethereal, -1, 0x7fffffff) or (int(ethereal) >= 0 and int(ethereal) not in [int(combat.hero), int(combat.opponent)]): return _reject(next, "Invalid ethereal encounter.")
 		director.encounter.ethereal_defender = int(ethereal)
+		var assault_fort: Variant = combat.get("fort", -1)
+		if not ELLuaSave._integer(assault_fort, -1, 0x7fffffff): return _reject(next, "Invalid encounter fort.")
+		if int(assault_fort) >= 0:
+			var fort: Dictionary = objects.get(int(assault_fort), {})
+			var attacker: Dictionary = objects[int(combat.hero)]
+			if map.profile.id != "el2" or int(ethereal) >= 0 or fort.get("type") != "fort" or not fort.alive or int(fort.garrison) != int(combat.opponent) or attacker.get("fortified", false):
+				return _reject(next, "Invalid encounter fort.")
+			director.encounter.assault_fort = int(assault_fort)
 		director.encounter.battle = battle
 	return {"state": next, "director": director, "camera": raw.camera.duplicate(true)}
 
@@ -377,6 +445,13 @@ func _restore_progression(profile: ELProfile, hero: Dictionary) -> bool:
 	if hero.level_history < hero.level or hero.skill_points >= ELHeroProgression.MAX_LEVEL or not _number(hero.get("experience_penalty"), 0, EXPERIENCE_LIMIT): return false
 	hero.experience_penalty = float(hero.experience_penalty)
 	return ELHeroSkills.restore(profile, hero)
+
+static func _valid_remote_order(order: Dictionary, objects: Dictionary) -> bool:
+	var arguments: Variant = order.get("arguments")
+	if not arguments is Array or arguments.size() != 2 or arguments[0] == arguments[1]: return false
+	for id: Variant in arguments:
+		if not ELLuaSave._integer(id, 0, 0x7fffffff) or objects.get(int(id), {}).get("type") not in ["hero", "monster"]: return false
+	return not order.has("resume_round") or ELLuaSave._integer(order.resume_round, 0, 0xffffffff)
 
 func _reject(state: ELAdventureSession, message: String) -> Dictionary:
 	state.close()

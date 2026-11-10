@@ -10,7 +10,20 @@ var boxes: Array[Dictionary] = []
 ## Script waits on the mission's action list, in seconds.
 var action_wait := 0.0
 var movement: Dictionary = {}
+## Second-game portal and dock use, which hold the next order until arrival.
+var travel: Dictionary = {}
+const PORTAL_SECONDS := 40.0 / 15.0
+const DOCK_FADE_SECONDS := 15.0 / 15.0
+const DOCK_MESSAGE_SECONDS := 20.0 / 15.0
 var strategy: Dictionary = {}
+var strategy_shop_wait: Callable
+## Empty in local play. Network planning keeps the map's viewing player and
+## the set of human commanders separate.
+var _strategic_players: Array[int] = []
+var _strategic_ai := -1
+var _strategic_handoff_day := -1
+var _strategic_forfeits := {}
+var _strategic_ready: Array[int] = []
 var interception := ELInterception.new()
 ## Second game: completed player rounds (Hook_EndOfTurn's argument; saved).
 var player_round := 0
@@ -86,7 +99,7 @@ func _world_changed(data: Dictionary) -> void:
 		return
 	if data.kind == "remote_use":
 		# Only the local caster sees the screen (the computer never casts).
-		if int(data.player) == state.current_player: open_first_shop(data.hero, data.shop, true)
+		if _strategic_players.is_empty() and int(data.player) == state.current_player: open_first_shop(data.hero, data.shop, true)
 		return
 	if data.kind == "hero_placed":
 		# A hero set down inside a hostile zone cannot move on that night.
@@ -101,7 +114,7 @@ func _world_changed(data: Dictionary) -> void:
 		return
 	if data.kind == "object_killed" and ELGlobalSpells.applies(state) and state.object(data.id).get("type") == "hero": ELGlobalSpells.hero_died(state, state.object(data.id))
 	# Second game: a fallen hero's keys return to their warding stones.
-	if data.kind == "object_killed" and ELSecondGates.applies(state) and state.object(data.id).get("type") == "hero": ELSecondGates.drop_keys(state, state.object(data.id))
+	if data.kind == "object_killed" and ELSecondGates.applies(state) and state.object(data.id).get("type") in ["hero", "monster"]: ELSecondGates.drop_keys(state, state.object(data.id))
 	if data.kind not in ["object_changed", "object_killed", "object_created", "shape_changed"]: return
 	var actor := state.object(data.id)
 	if actor.get("type") in ["hero", "monster"]:
@@ -155,21 +168,42 @@ func _player_alive(player: int) -> bool:
 
 func _busy(player: int) -> bool:
 	for actor: Dictionary in state.objects.values():
-		if int(actor.get("owner", -1)) == player and actor.get("alive", false) and not actor.get("orders", []).is_empty(): return true
+		if int(actor.get("owner", -1)) == player and actor.get("alive", false) and not actor.get("orders", []).is_empty():
+			var order: Variant = actor.orders[0]
+			if not order is Dictionary or order.get("kind") != "RemoteUseHero": return true
 	return false
+
+## The local EL2 commander ends its turn when a remote plan is waiting and
+## activates it when the next round starts. Keep that phase on the saved plan.
+func _advance_remote_order() -> void:
+	for id: int in state._mobs():
+		var actor := state.object(id)
+		if int(actor.owner) != 1 or not actor.alive or actor.orders.is_empty(): continue
+		var order: Variant = actor.orders[0]
+		if not order is Dictionary or order.get("kind") != "RemoteUseHero": continue
+		if not order.has("resume_round"):
+			order.resume_round = player_round + 1
+			end_player_turn()
+		elif player_round >= int(order.resume_round):
+			state.commands.append(order.duplicate(true))
+		return
 
 func advance(delta: float) -> void:
 	if not error.is_empty() or not state.outcome.is_empty() or encounter != null or _shopping(): return
 	if not dialogue.is_empty(): return
-	if not movement.is_empty(): _advance_movement(delta)
+	var action_held := action_wait > 0.0
+	if not action_held and not movement.is_empty(): _advance_movement(delta)
+	if not travel.is_empty():
+		_advance_travel(delta)
+		return
 	if encounter != null or _shopping(): return
 	if not strategy.is_empty():
 		ELStrategy.advance(self)
 		return
-	if action_wait > 0.0:
+	if action_held:
 		action_wait = maxf(0.0, action_wait - delta)
-		return
-	if _waiting:
+		if is_zero_approx(action_wait): action_wait = 0.0
+	if _waiting and not action_held:
 		wait_remaining -= delta
 		if wait_remaining > 0: return
 		_waiting = false
@@ -179,23 +213,29 @@ func advance(delta: float) -> void:
 	# ExWaitCmd and the tutorial's "150 segments = 10 sec").
 	if _clock >= (1.0 / 15.0 if state.map.profile.id == "el2" else 0.1):
 		_clock = 0.0
-		var wake := movement.is_empty() and not _busy(state.current_player)
+		var wake := not action_held and movement.is_empty() and not _busy(state.current_player)
 		if not state.step(wake):
 			_fail(state.error)
 			return
 		if wake: _woken = state.current_player
-	if not movement.is_empty(): return
+	# A mission action can start during the step hook or a queued callback.
+	# It suspends the storyboard and commander while step/post-step still tick.
+	if action_held or action_wait > 0.0 or not movement.is_empty(): return
 	for budget in 32:
 		if not state.commands.is_empty(): _commands_pending = true
-		if state.commands.is_empty() or not dialogue.is_empty() or not movement.is_empty() or _waiting or not error.is_empty() or encounter != null or _shopping(): break
+		if state.commands.is_empty() or not dialogue.is_empty() or not movement.is_empty() or not travel.is_empty() or _waiting or not error.is_empty() or encounter != null or _shopping(): break
 		_execute(state.commands[0])
-	if _commands_pending and state.commands.is_empty() and movement.is_empty() and not _waiting and dialogue.is_empty() and error.is_empty() and encounter == null:
+		if action_wait > 0.0: return
+	if _commands_pending and state.commands.is_empty() and movement.is_empty() and travel.is_empty() and not _waiting and dialogue.is_empty() and error.is_empty() and encounter == null:
 		_commands_pending = false
 		if not state.hook("Hook_AllCommandsFinished"): _fail(state.error)
 	# A computer player's commander, once woken with no hero busy, queues its end
 	# of turn at once; script commands run on their own queue.
-	if state.map.profile.id == "el2" and state.current_player != 1 and _woken == state.current_player and error.is_empty() and encounter == null and not _busy(state.current_player):
-		end_player_turn()
+	if state.map.profile.id == "el2":
+		if state.current_player != 1 and _woken == state.current_player and error.is_empty() and encounter == null and travel.is_empty() and not _busy(state.current_player):
+			end_player_turn()
+		elif state.current_player == 1 and _map_idle() and movement.is_empty() and not _waiting:
+			_advance_remote_order()
 
 func acknowledge(answer := "OK") -> bool:
 	if dialogue.is_empty(): return false
@@ -226,7 +266,10 @@ func _show_box() -> void:
 func can_move() -> bool:
 	# Second game: the local player waits while other players take their turn.
 	if state.map.profile.id == "el2" and state.current_player != 1: return false
-	return error.is_empty() and state.outcome.is_empty() and dialogue.is_empty() and state.commands.is_empty() and not state.exclusive and encounter == null and not _shopping() and strategy.is_empty()
+	return not strategy_ready(state.current_player) and _map_idle()
+
+func _map_idle() -> bool:
+	return error.is_empty() and state.outcome.is_empty() and dialogue.is_empty() and state.commands.is_empty() and action_wait <= 0.0 and not state.exclusive and encounter == null and not _shopping() and strategy.is_empty() and travel.is_empty()
 
 ## Hook_OnHeroCommandRun: a missing hook or a script error lets the
 ## order run; otherwise the native boolean of the result (nil and 0 false).
@@ -260,11 +303,11 @@ func inspect_site(hero_id: int, site_id: int) -> bool:
 	return true
 
 func end_day() -> bool:
+	if state.map.profile.id == "el1": return submit_strategy_turn(state.current_player, state.day)
 	if not can_move() or not movement.is_empty():
 		notice = "Finish the current action before waiting for the next day."
 		return false
 	notice = ""
-	if state.map.profile.id == "el1": return ELStrategy.begin(self)
 	# The original calls the hook for its effects and discards its result. The
 	# second game calls it only when a player round ends (end_player_turn).
 	if state.map.profile.id != "el2" and state.vm != null and state.vm.has_function("Hook_EndOfTurn"):
@@ -278,13 +321,13 @@ func end_day() -> bool:
 	return ELAdventureClock.end_player_day(state, state.current_player)
 
 func request_move(id: int, destination: Vector2i, use_id := -1) -> bool:
+	if state.map.profile.id == "el1": return plan_strategy_move(state.current_player, state.day, id, destination, use_id)
 	if not can_move():
 		notice = "Finish the current conversation first."
 		return false
 	var actor := state.object(id)
 	if actor.is_empty() or actor.owner != state.current_player or not actor.alive: return false
 	notice = ""
-	if state.map.profile.id == "el1": return ELStrategy.plan(self, actor, destination, use_id)
 	if actor.get("fortified", false):
 		# Second game: a garrison cannot step; using its own fort
 		# again is how it leaves.
@@ -323,13 +366,243 @@ func upgrade_fort(id: int) -> bool:
 	return ELForts.upgrade(state, id)
 
 func cancel_order(id: int) -> bool:
+	return cancel_strategy_move(state.current_player, state.day, id)
+
+## Bind human commanders before accepting orders. Single-player keeps its
+## original local commander and still lets the AI plan at night.
+func bind_strategy_players(players: Array[int], local_authority := false) -> bool:
+	if not _strategic_players.is_empty() or not ELFirstScenario.applies(state) or bool(state.scenario.get("campaign", false)): return false
+	if players.size() < 2 or not players.has(state.current_player) or not can_move() or not movement.is_empty(): return false
+	if local_authority and (players.size() != 2 or players[0] != state.current_player): return false
+	var unique := {}
+	for player: int in players:
+		if unique.has(player) or not state.players.has(player): return false
+		if not ELFirstScenario.alive(state, player) and (not local_authority or player != players[1]): return false
+		unique[player] = true
+	_strategic_players.assign(players)
+	if local_authority: _strategic_ai = players[1]
+	return true
+
+func is_strategy_human(player: int) -> bool:
+	return player == state.current_player if _strategic_players.is_empty() else player != _strategic_ai and _strategic_players.has(player)
+
+## Orders already committed for this night keep the departed player's rules.
+func is_human_strategy_order(player: int) -> bool:
+	return is_strategy_human(player) or (player == _strategic_ai and _strategic_handoff_day == state.day and not strategy.is_empty())
+
+func strategy_commanders() -> Array[int]:
+	var commanders := _strategic_players.duplicate()
+	commanders.erase(_strategic_ai)
+	return commanders
+
+func strategy_seats() -> Array[int]:
+	return _strategic_players.duplicate()
+
+func replace_strategy_guest(player: int) -> void:
+	_strategic_ai = player
+	_strategic_handoff_day = state.day if not strategy.is_empty() else -1
+	_strategic_ready.clear()
+	# Only battle records already queued at departure can be forfeited.
+	_strategic_forfeits.clear()
+	var from := int(strategy.index) if strategy.get("phase") == "combat" else 0
+	for pair: Array in strategy.get("combats", []).slice(from):
+		var first := int(pair[0])
+		var second := int(pair[1])
+		var first_left: bool = state.object(first).get("owner") == player
+		var second_left: bool = state.object(second).get("owner") == player
+		if first_left != second_left:
+			_strategic_forfeits[Vector2i(mini(first, second), maxi(first, second))] = second if first_left else first
+
+func strategic_forfeit_winner(first: int, second: int) -> int:
+	if _strategic_handoff_day != state.day or strategy.get("phase") != "combat": return -1
+	return int(_strategic_forfeits.get(Vector2i(mini(first, second), maxi(first, second)), -1))
+
+func strategy_ready(player: int) -> bool:
+	return _strategic_ready.has(player)
+
+## Network hero orders apply to the authenticated commander, independently of
+## the map's viewing seat. They use the existing inventory and skill rules.
+func manage_strategy_hero(player: int, day: int, order: Array) -> String:
+	if not _strategy_input(player, day) or not movement.is_empty(): return "This commander cannot change heroes now."
+	if order.size() == 2 and order[0] in ELBuildingScreen.STRATEGIC_UPGRADES.values() and _strategy_number(order[1]):
+		var id := int(order[1])
+		var building := state.object(id)
+		if (ELBuildingScreen.STRATEGIC_UPGRADES.get(building.get("type")) != order[0]
+			or not building.get("alive", false) or not building.get("visible", false) or not building.get("enabled", false)):
+			match order[0]:
+				"upgrade_fort": return "This fort is unavailable."
+				"upgrade_mine": return "This mine is unavailable."
+				_: return "This shop is unavailable."
+		var problem := ELBuildingScreen.upgrade_problem(state, player, id, true)
+		if not problem.is_empty(): return problem
+		return "" if ELBuildingScreen.upgrade(state, player, id, true) else "This building cannot be upgraded."
+	if order.size() < 2 or not order[0] is String or not _strategy_number(order[1]): return "Invalid hero order."
+	var id := int(order[1])
+	var hero := state.object(id)
+	if hero.get("type") != "hero" or hero.get("owner") != player or not hero.get("alive", false):
+		return "That hero is unavailable."
+	if order[0] == "dismiss_hero":
+		if order.size() != 2: return "Invalid dismissal order."
+		return "" if ELHeroExchange.dismiss(self, id, player) else "This hero cannot be dismissed."
+	if order[0] == "leave_fort":
+		if order.size() != 2: return "Invalid fort order."
+		return "" if ELForts.leave(state, id) else "This hero cannot leave right now."
+	if order.size() < 3: return "Invalid hero order."
+	var previous_error := state.error
+	var applied := false
+	match order[0]:
+		"equip", "reserve":
+			if order.size() != 4 or not _strategy_code(order[2]) or not _strategy_number(order[3]): return "Invalid spellbook order."
+			var index := int(order[3])
+			if order[0] == "equip": applied = state.move_spell(id, order[2], -1, index, player)
+			else:
+				if index >= hero.cards.size() or hero.cards[index] != order[2]: return "That spellbook slot has changed."
+				applied = state.move_spell(id, "", index, 0, player)
+		"learn_skill":
+			if order.size() != 3 or not _strategy_code(order[2]): return "Invalid skill order."
+			ELHeroSkills.prepare(state.map.profile, hero)
+			applied = state.choose_skill(id, order[2], player)
+		"transfer":
+			if order.size() != 5 or not _strategy_number(order[2]) or not _strategy_number(order[3]) or not _strategy_number(order[4]): return "Invalid equipment order."
+			var target := int(order[3])
+			if target != id:
+				var receiver := state.object(target)
+				if not receiver.get("visible", false) or not receiver.get("placed", true) or receiver.get("fortified", false):
+					return "That hero is unavailable."
+				var problem := ELHeroExchange.exchange_problem(self, id, target, player)
+				if not problem.is_empty(): return problem
+			return "" if ELHeroExchange.transfer(state, id, int(order[2]), target, int(order[4]), player) else "That equipment cannot be moved."
+		"buy_runes", "buy_spells":
+			return strategy_purchase(player, hero, order)
+		_: return "Unknown hero order."
+	var reason := state.error
+	state.error = previous_error
+	return "" if applied else reason if not reason.is_empty() else "The hero order was refused."
+
+## Open an independent draft. The authority uses the same draft rules with
+## the authenticated commander, even when its own shop screen is open.
+func strategy_shop_trade(player: int, hero_id: int, shop_id: int, remote := false) -> RefCounted:
+	var hero := state.object(hero_id)
+	var target := state.object(shop_id)
+	if hero.get("owner") != player or hero.get("type") != "hero" or not hero.get("alive", false) or target.is_empty(): return null
+	if remote:
+		if ELGlobalSpells.held(hero) or not ELFog.explored(state, player, Vector2i(target.x, target.y)): return null
+	else:
+		if not hero.get("visible", false) or not hero.get("placed", true) or hero.get("fortified", false) or int(hero.get("camp", -1)) >= 0: return null
+		if not target.get("placed", true) or target.owner != player or not ELFog.shown(state, player, target) or not ELStrategy.adjacent(self, hero, target): return null
+	if target.type == "rune_shop":
+		var runes := ELRuneShop.new()
+		if runes.open(state, hero_id, shop_id, true, player): return runes
+	elif target.type == "el1_spell_shop":
+		var spells := ELFirstSpellShop.new()
+		if spells.open(state, hero_id, shop_id, true, player): return spells
+	return null
+
+func strategy_purchase(player: int, hero: Dictionary, order: Array, remote := false) -> String:
+	if not _strategy_number(order[2]) or order.size() != 3 + hero.cards.size(): return "Invalid shop order."
+	var trade := strategy_shop_trade(player, hero.uid, int(order[2]), remote)
+	if order[0] == "buy_runes" and trade is ELRuneShop:
+		for slot in hero.cards.size():
+			if not ELLuaSave._integer(order[slot + 3], 0, 15): return "Invalid rune purchase."
+			if not trade.set_amount(slot, int(order[slot + 3])): return trade.error
+	elif order[0] == "buy_spells" and trade is ELFirstSpellShop:
+		for slot in hero.cards.size():
+			var card: Variant = order[slot + 3]
+			if not card is String or (not card.is_empty() and card.length() != 4): return "Invalid spell purchase."
+			if not card.is_empty() and not trade.replace(slot, card): return trade.error
+	else: return "Move next to a shop you control first."
+	return "" if trade.commit() else trade.error
+
+static func _strategy_number(value: Variant) -> bool:
+	return ELLuaSave._integer(value, 0, 0x7fffffff)
+
+static func _strategy_code(value: Variant) -> bool:
+	return value is String and value.length() <= 32 and value.is_valid_identifier()
+
+func manage_strategy_spell(player: int, day: int, order: Array) -> String:
+	if not _strategy_input(player, day) or not movement.is_empty(): return "This commander cannot use global spells now."
+	if order.size() < 2: return "Invalid global spell order."
+	var previous := state.error
+	if order[0] == "global_dispel":
+		if order.size() != 2 or not _strategy_number(order[1]): return "Invalid global spell order."
+		var dispelled := ELGlobalSpells.dispel(state, player, int(order[1]))
+		var problem := state.error
+		state.error = previous
+		return "" if dispelled else problem
+	if not order[1] is String: return "Invalid global spell order."
+	var code: String = order[1]
+	var applied := false
+	if order[0] == "global_produce":
+		var cost := ELGlobalSpells.ether_cost(state, player, code)
+		if order.size() != 3 or not ELLuaSave._integer(order[2], 0, 1000000 - cost): return "Invalid global spell order."
+		applied = ELGlobalSpells.produce(state, player, code, int(order[2]))
+	else:
+		if ELGlobalSpells.data(state, player).production.get("code") != code: return "The current global spell has changed."
+		if order[0] == "global_cast":
+			var targets := order.slice(2)
+			for id: Variant in targets:
+				if not _strategy_number(id): return "Invalid global spell order."
+			applied = ELGlobalSpells.cast(state, player, targets)
+		elif order[0] == "global_cancel":
+			if order.size() != 2: return "Invalid global spell order."
+			applied = ELGlobalSpells.cancel(state, player)
+		else:
+			return "Invalid global spell order."
+	var reason := state.error
+	state.error = previous
+	return "" if applied else reason if not reason.is_empty() else "The global spell order was refused."
+
+func manage_strategy_diplomacy(player: int, day: int, order: Array) -> String:
+	if not _strategy_input(player, day): return "This commander cannot use diplomacy now."
+	return ELDiplomacy.strategic_order(state, player, order)
+
+func _strategy_input(player: int, day: int, ending := false) -> bool:
+	if state.map.profile.id != "el1" or not is_strategy_human(player) or day != state.day: return false
+	if not _map_idle() or ((ending or not _strategic_players.is_empty()) and not movement.is_empty()):
+		notice = "Finish the current action before waiting for the next day." if ending else "Finish the current conversation first."
+		return false
+	if strategy_ready(player):
+		notice = "This commander has ended the turn."
+		return false
+	return _strategic_players.is_empty() or ELFirstScenario.alive(state, player)
+
+func plan_strategy_move(player: int, day: int, id: int, destination: Vector2i, use_id := -1) -> bool:
+	if not _strategy_input(player, day): return false
 	var actor := state.object(id)
-	if state.map.profile.id != "el1" or not can_move() or actor.is_empty() or actor.owner != state.current_player: return false
+	if actor.is_empty() or actor.owner != player or not actor.alive: return false
+	notice = ""
+	if not _strategic_players.is_empty():
+		if actor.type != "hero" or not actor.visible: return false
+		if use_id >= 0:
+			var target := state.object(use_id)
+			if target.is_empty() or not target.alive or not target.visible or not target.enabled or not target.get("placed", true) or not ELFog.shown(state, player, target): return false
+			var size: Vector2i = grid.footprints.get(use_id, {}).get("size", Vector2i.ONE)
+			if not Rect2i(target.x, target.y, size.x, size.y).has_point(destination): return false
+	return ELStrategy.plan(self, actor, destination, use_id)
+
+func cancel_strategy_move(player: int, day: int, id: int) -> bool:
+	if not _strategy_input(player, day): return false
+	var actor := state.object(id)
+	if actor.is_empty() or actor.owner != player: return false
+	if not _strategic_players.is_empty() and (actor.type != "hero" or not actor.alive or not actor.visible): return false
 	actor.strategy_order = {}
 	notice = ""
 	presentation.emit({"kind": "route", "id": id, "path": []})
 	presentation.emit({"kind": "notice", "text": notice})
 	return true
+
+func submit_strategy_turn(player: int, day: int) -> bool:
+	if not _strategy_input(player, day, true): return false
+	notice = ""
+	if _strategic_players.is_empty(): return ELStrategy.begin(self)
+	_strategic_ready.append(player)
+	for commander: int in strategy_commanders():
+		if ELFirstScenario.alive(state, commander) and not strategy_ready(commander):
+			presentation.emit({"kind": "strategy_ready", "player": player})
+			return true
+	var begun := ELStrategy.begin(self)
+	if begun: _strategic_ready.clear()
+	return begun
 
 func _begin_move(actor: Dictionary, destination: Vector2i, queued: bool, use_id := -1, use_at_end := true) -> bool:
 	# Second game: Hook_OnHeroCommandRun(hero) as the order executes (
@@ -373,12 +646,21 @@ func _begin_move(actor: Dictionary, destination: Vector2i, queued: bool, use_id 
 	if path.size() == 1: _complete_movement()
 	return true
 
+## Travel in tiles per second. Second-game figures receive a six-unit-per-second
+## map speed override, or four times that in accelerated mode.
+func movement_speed(actor: Dictionary) -> float:
+	if state.map.profile.id == "el1": return 16.0 if fast_mode else 4.0
+	if fast_mode: return 12.0
+	return 4.5 if actor.get("ship", false) and ELSecondBuildings.has_beacon(actor) else 3.0
+
 func _advance_movement(delta: float) -> void:
 	var actor := state.object(movement.id)
 	if actor.is_empty() or not actor.alive or actor.orders.is_empty():
 		_complete_movement(false)
 		return
-	var travel := delta * (16.0 if fast_mode else 4.0)
+	var travel := delta * movement_speed(actor)
+	var second := state.map.profile.id == "el2"
+	var fog_viewer := 1 if second else state.current_player
 	for budget in 64:
 		var index: int = movement.index
 		var from := Vector2(movement.path[index])
@@ -389,8 +671,10 @@ func _advance_movement(delta: float) -> void:
 			return
 		var distance := from.distance_to(to)
 		var remaining: float = distance * (1.0 - movement.progress)
-		# EL1: a step the local player cannot see on either tile takes no time.
-		if movement.get("strategic", false) and not ELFog.visible(state, state.current_player, Vector2i(from)) and not ELFog.visible(state, state.current_player, Vector2i(to)): travel = maxf(travel, remaining)
+		# Hidden EL2 steps spend no animation time, including on AI turns.
+		if (second or movement.get("strategic", false)) and not ELFog.visible(state, fog_viewer, Vector2i(from)) and not ELFog.visible(state, fog_viewer, Vector2i(to)):
+			if second: remaining = 0.0
+			else: travel = maxf(travel, remaining)
 		if travel < remaining:
 			movement.progress += travel / distance
 			presentation.emit({"kind": "actor_moving", "id": actor.uid, "position": from.lerp(to, movement.progress), "moving": true})
@@ -431,43 +715,43 @@ func _complete_movement(use := true) -> void:
 func use_object(hero_id: int, target_id: int, defender := -1) -> void:
 	var actor := state.object(hero_id)
 	var target := state.object(target_id)
+	var corpse: bool = state.map.profile.id == "el2" and target.get("type") == "corpse"
 	# A lair's creature waits off the map; its battle is still fought.
-	if actor.is_empty() or target.is_empty() or not target.alive or not (target.visible or target.has("dungeon")) or not target.enabled or encounter != null or _shopping(): return
+	if actor.is_empty() or target.is_empty() or not (target.alive or corpse) or not (target.visible or target.has("dungeon")) or not target.enabled or encounter != null or _shopping() or not travel.is_empty(): return
+	if corpse and hero_id != state.main_hero: return
 	if state.vm != null:
 		var result := state.vm.invoke("Hook_OnPreUse", [float(target_id), float(hero_id)])
 		if not state.vm.error.is_empty():
 			_fail(state.vm.error)
 			return
-		if not result.is_empty() and result[0] == null: return
+		if not result.is_empty() and not ELAdventureSession._truthy_flag(result[0]): return
+	# Looting is wholly scripted through Hook_OnPreUse.
+	if corpse: return
 	if target.type in ["hero", "monster"] and state.hostile(actor, target):
-		var next := ELAdventureEncounter.new()
-		if not next.prepare(state, hero_id, target_id, defender):
-			_refuse_battle(next.error)
-			return
-		encounter = next
-		if not next.unsupported_artifacts.is_empty() and state.current_player in [int(actor.owner), int(target.owner)]:
-			var names: Array[String] = []
-			for name: String in next.unsupported_artifacts: names.append(ELMapPickups.artifact_title(state.map.profile, name))
-			notice = "Not usable in battle yet: " + ", ".join(names)
-			presentation.emit({"kind": "notice", "text": notice})
-		if next.scripted_winner >= 0 or next.auto:
-			finish_encounter()
-			return
-		presentation.emit({"kind": "encounter", "hero": hero_id, "opponent": target_id})
+		_begin_encounter(actor, target, defender)
 	else:
 		if ELResourceSites.TYPES.has(target.group):
 			inspect_site(hero_id, target_id)
 		elif target.type == "fort" and state.map.profile.id == "el2" and int(actor.get("fort", -1)) == target_id:
-			ELForts.leave(state, hero_id)
+			if ELForts.leave(state, hero_id): ELAdventureClock.use_points(state, actor, ELSecondBuildings.USE_COST)
 		elif target.type == "fort":
-			var problem := ELForts.enter_problem(state, hero_id, target_id)
+			var garrison := state.object(target.garrison)
+			var assault: bool = state.map.profile.id == "el2" and garrison.get("alive", false) and state.hostile(actor, garrison)
+			var problem := ELForts.enter_problem(state, hero_id, target_id, assault)
 			if not problem.is_empty() or not ELStrategy.adjacent(self, actor, target):
 				if actor.owner == state.current_player: presentation.emit({"kind": "notice", "text": problem if not problem.is_empty() else "Move next to this fort first."})
 				return
-			ELForts.enter(state, hero_id, target_id)
+			if assault: _begin_encounter(actor, garrison, -1, target_id)
+			elif ELForts.enter(state, hero_id, target_id) and state.map.profile.id == "el2":
+				ELAdventureClock.use_points(state, actor, ELSecondBuildings.USE_COST)
 		elif target.group == "resource_cuts":
 			if not state.collect_resources(hero_id, target_id): presentation.emit({"kind": "notice", "text": state.error})
-		elif target.type in ["el1_spell_shop", "rune_shop"]: open_first_shop(hero_id, target_id)
+		elif target.type in ["el1_spell_shop", "rune_shop"]:
+			if _strategic_players.is_empty(): open_first_shop(hero_id, target_id)
+			elif is_human_strategy_order(actor.owner):
+				ELBuildings.capture(state, target, actor.owner)
+				if is_strategy_human(actor.owner):
+					state.event.emit({"kind": "strategy_shop_visit", "hero": hero_id, "shop": target_id, "player": actor.owner})
 		elif target.type == "spell_shop":
 			var next := ELSpellShop.new()
 			if not next.open(state, hero_id, target_id):
@@ -486,7 +770,7 @@ func use_object(hero_id: int, target_id: int, defender := -1) -> void:
 			elif actor.owner == state.current_player: presentation.emit({"kind": "notice", "text": "Move next to this building first."})
 		elif ELSecondGates.applies(state) and target.group == "additional_buildings" and target.name == ELFog.EL2_LAKE:
 			if ELStrategy.adjacent(self, actor, target): _lake(actor, target)
-			elif actor.owner == state.current_player: presentation.emit({"kind": "notice", "text": "Move next to this building first."})
+			elif actor.owner == 1: presentation.emit({"kind": "notice", "text": "Move next to this building first."})
 		elif ELSecondArtifacts.applies(state.map.profile) and ELSecondArtifacts.is_building(target): ELSecondArtifacts.visit(self, actor, target)
 		elif ELSecondGates.applies(state) and not ELBattlegrounds.affect(state, target).is_empty():
 			if not ELStrategy.adjacent(self, actor, target):
@@ -494,19 +778,35 @@ func use_object(hero_id: int, target_id: int, defender := -1) -> void:
 			elif not ELBattlegrounds.use(self, actor, target) and actor.owner == state.current_player: presentation.emit({"kind": "notice", "text": "This building cannot be used now."})
 		elif ELSecondBuildings.applies(state, target):
 			if not ELStrategy.adjacent(self, actor, target):
-				if actor.owner == state.current_player: presentation.emit({"kind": "notice", "text": "Move next to this building first."})
-			elif not ELSecondBuildings.use(self, actor, target) and actor.owner == state.current_player: presentation.emit({"kind": "notice", "text": "This building cannot be used now."})
+				if actor.owner == 1: presentation.emit({"kind": "notice", "text": "Move next to this building first."})
+			elif not ELSecondBuildings.use(self, actor, target) and actor.owner == 1: presentation.emit({"kind": "notice", "text": "This building cannot be used now."})
 		elif target.type == "teleport": _teleport(actor, target)
+		elif state.map.profile.id == "el2" and ELSecondBuildings.is_tunnel(target): _use_tunnel(actor, target)
 		elif target.type == "dock":
 			var ship: bool = not actor.get("ship", false)
 			var exit := grid.dock_exit(target, ship)
 			if exit.x >= 0:
-				actor.ship = ship
-				ELSecondBuildings.refresh_travel(actor)
-				state._native([float(actor.uid), float(exit.x), float(exit.y)], "ExJumpToPos")
-				presentation.emit({"kind": "dock", "hero": actor.uid, "ship": ship})
+				if state.map.profile.id == "el2": _begin_travel("dock", actor, target, target.uid, exit, DOCK_FADE_SECONDS)
+				else: _arrive_dock(actor, exit, ship)
 			else: presentation.emit({"kind": "notice", "text": "There is no room to leave this dock."})
 		else: presentation.emit({"kind": "use_object", "hero": hero_id, "target": target_id})
+
+func _begin_encounter(actor: Dictionary, target: Dictionary, defender := -1, assault_fort := -1, remote_use := false) -> void:
+	var next := ELAdventureEncounter.new()
+	if not next.prepare(state, int(actor.uid), int(target.uid), defender):
+		_refuse_battle(next.error)
+		return
+	next.assault_fort = assault_fort
+	encounter = next
+	if not next.unsupported_artifacts.is_empty() and state.current_player in [int(actor.owner), int(target.owner)]:
+		var names: Array[String] = []
+		for name: String in next.unsupported_artifacts: names.append(ELMapPickups.artifact_title(state.map.profile, name))
+		notice = "Not usable in battle yet: " + ", ".join(names)
+		presentation.emit({"kind": "notice", "text": notice})
+	if next.scripted_winner >= 0 or next.auto:
+		finish_encounter()
+		return
+	presentation.emit({"kind": "encounter", "hero": actor.uid, "opponent": target.uid, "remote_use": remote_use})
 
 ## EL2 Lake: scry the matching ReflectingEyes and show the visitor's local
 ## owner the Lake message every time.
@@ -514,13 +814,29 @@ func _lake(actor: Dictionary, lake: Dictionary) -> void:
 	# The Lake is always usable and pays the shared 2-point use price.
 	ELAdventureClock.use_points(state, actor, ELSecondBuildings.USE_COST)
 	ELFog.scry(state, actor, lake)
-	if int(actor.owner) != state.current_player: return
+	if int(actor.owner) != 1: return
 	var row: Dictionary = state.map.profile.table("AdditionalBuildings").get(ELFog.EL2_LAKE, {})
 	var key := str(row.get("Message1", ""))
 	presentation.emit({"kind": "building_message", "hero": actor.uid, "building": lake.uid, "title": state.map.profile.text(str(row.get("ELKName", lake.name))),
 		"text": state.map.profile.text(key), "resources": [], "skill": "", "key": key})
 
+## A two-coordinate EL2 portal has no receiver object.
+static func teleport_coordinates(source: Dictionary) -> Vector2i:
+	var params := str(ELXml.value(source.get("node", {}), "params"))
+	var parts := params.replace(",", " ").replace("\t", " ").replace("\n", " ").split(" ", false)
+	if parts.size() != 2 or not parts[0].is_valid_int() or not parts[1].is_valid_int(): return Vector2i(-1, -1)
+	return Vector2i(parts[0].to_int(), parts[1].to_int())
+
 func _teleport(actor: Dictionary, source: Dictionary) -> bool:
+	var second := state.map.profile.id == "el2"
+	var time := PORTAL_SECONDS if second and ELFog.object_state(state, 1, source) == ELFog.VISIBLE else 0.0
+	if second:
+		var coordinates := teleport_coordinates(source)
+		if grid.contains(coordinates):
+			var exit := grid.find_landing(Rect2i(coordinates, Vector2i.ONE).grow(1), coordinates, actor.get("ship", false))
+			if exit.x < 0: return false
+			_begin_travel("teleport", actor, source, -1, exit, time)
+			return true
 	var name := ELXml.value(source.node, "params")
 	var receivers: Array[Dictionary] = []
 	for target: Dictionary in state.objects.values():
@@ -531,7 +847,14 @@ func _teleport(actor: Dictionary, source: Dictionary) -> bool:
 	state.seed_value = (state.seed_value * 0x343fd + 0x269ec3) & 0xffffffff
 	var target: Dictionary = receivers[((state.seed_value >> 16) & 0x7fff) % receivers.size()]
 	var offsets := [Vector2i(1, 2), Vector2i(2, 0), Vector2i(0, -1), Vector2i(-1, 1)]
-	var preferred: Vector2i = Vector2i(target.x, target.y) + offsets[(int(target.rotation) >> 2) & 3]
+	var origin := Vector2i(target.x, target.y)
+	var preferred: Vector2i = origin + offsets[(int(target.rotation) >> 2) & 3]
+	if second:
+		var size: Vector2i = grid.footprints.get(int(target.uid), {}).get("size", Vector2i.ONE)
+		var exit := grid.find_landing(Rect2i(origin, size).grow(1), preferred, actor.get("ship", false))
+		if exit.x < 0: return false
+		_begin_travel("teleport", actor, source, target.uid, exit, time)
+		return true
 	var destination := Vector2i(-1, -1)
 	var distance := INF
 	for radius in 9:
@@ -552,10 +875,82 @@ func _teleport(actor: Dictionary, source: Dictionary) -> bool:
 	presentation.emit({"kind": "teleport", "hero": actor.uid, "source": source.uid, "target": target.uid})
 	return true
 
-## A Warrior of the Realm battle the local player takes part in; the local
-## side plays first, as in every adventure battle.
+func _begin_travel(kind: String, actor: Dictionary, source: Dictionary, target_id: int, destination: Vector2i, time: float) -> void:
+	travel = {"kind": kind, "hero": int(actor.uid), "source": int(source.uid), "target": target_id,
+		"x": destination.x, "y": destination.y, "remaining": time, "arrived": false}
+	presentation.emit({"kind": "travel_phase"})
+	if time <= 0.0: _advance_travel(0.0)
+
+func _advance_travel(delta: float) -> void:
+	travel.remaining = maxf(0.0, float(travel.remaining) - delta)
+	if travel.remaining > 0.00001: return
+	var actor := state.object(travel.hero)
+	if not actor.get("alive", false):
+		_end_travel()
+		return
+	if not travel.arrived:
+		travel.arrived = true
+		var exit := Vector2i(travel.x, travel.y)
+		if travel.kind == "dock":
+			_arrive_dock(actor, exit, not actor.get("ship", false))
+			travel.remaining = DOCK_MESSAGE_SECONDS if int(actor.owner) == 1 else 0.0
+		else:
+			state._native([float(actor.uid), float(exit.x), float(exit.y)], "ExJumpToPos")
+			presentation.emit({"kind": "teleport", "hero": actor.uid, "source": travel.source, "target": travel.target})
+			var target := state.object(travel.target)
+			var visible := ELFog.visible(state, 1, exit) if target.is_empty() else ELFog.object_state(state, 1, target) == ELFog.VISIBLE
+			travel.remaining = PORTAL_SECONDS if visible else 0.0
+		ELAdventureClock.use_points(state, actor, ELSecondBuildings.USE_COST)
+		if travel.remaining > 0.0:
+			presentation.emit({"kind": "travel_phase"})
+			return
+	_end_travel()
+
+func _arrive_dock(actor: Dictionary, exit: Vector2i, ship: bool) -> void:
+	actor.ship = ship
+	ELSecondBuildings.refresh_travel(actor)
+	state._native([float(actor.uid), float(exit.x), float(exit.y)], "ExJumpToPos")
+	presentation.emit({"kind": "dock", "hero": actor.uid, "ship": ship})
+
+func _end_travel() -> void:
+	var finished := travel
+	travel = {}
+	presentation.emit({"kind": "travel_finished", "hero": finished.hero})
+	var actor := state.object(finished.hero)
+	if finished.kind == "dock" and finished.arrived and actor.get("alive", false) and int(actor.owner) == 1:
+		var key := "BldngMsg1Dock" if actor.get("ship", false) else "BldngMsg2Dock"
+		presentation.emit({"kind": "building_message", "hero": actor.uid, "building": finished.source, "text": state.map.profile.text(key), "key": key})
+
+func _use_tunnel(actor: Dictionary, source: Dictionary) -> void:
+	var route := ELSecondBuildings.params(source).get_slice(";", 0)
+	if route.is_empty(): return
+	var exits: Array[Dictionary] = []
+	for target: Dictionary in state.objects.values():
+		if int(target.uid) == int(source.uid) or not ELSecondBuildings.is_tunnel(target) or ELSecondBuildings.params(target).get_slice(";", 0) != route: continue
+		var cell := grid.tunnel_exit(target, actor.get("ship", false))
+		if cell.x >= 0: exits.append({"id": target.uid, "cell": cell})
+	if exits.is_empty(): return
+	var guard := state.object(source.get("guard"))
+	if guard.get("alive", false):
+		guard.tunnel_source = int(source.uid)
+		if int(actor.owner) == state.current_player:
+			var key := str(ELSecondBuildings.definition(state.map.profile, source).get("Message1", ""))
+			presentation.emit({"kind": "building_message", "hero": actor.uid, "building": source.uid,
+				"text": state.map.profile.text(key).replace("%s", str(guard.get("title", guard.name))), "key": key})
+		_begin_encounter(actor, guard)
+		return
+	state.seed_value = (state.seed_value * 0x343fd + 0x269ec3) & 0xffffffff
+	var exit: Dictionary = exits[((state.seed_value >> 16) & 0x7fff) % exits.size()]
+	ELAdventureClock.use_points(state, actor, ELSecondBuildings.USE_COST)
+	state._native([float(actor.uid), float(exit.cell.x), float(exit.cell.y)], "ExJumpToPos")
+	presentation.emit({"kind": "tunnel", "hero": actor.uid, "source": source.uid, "target": exit.id})
+
+## A Warrior of the Realm battle with a human commander. Keep the viewing
+## player's usual slot if involved, otherwise put the remote commander first.
 func start_ethereal(attacker: int, defender: int) -> void:
-	var local_first := int(state.object(attacker).owner) == state.current_player
+	var attacker_owner := int(state.object(attacker).owner)
+	var defender_owner := int(state.object(defender).owner)
+	var local_first := attacker_owner == state.current_player or (defender_owner != state.current_player and is_strategy_human(attacker_owner))
 	var next := ELAdventureEncounter.new()
 	next.ethereal_defender = defender
 	if not next.prepare(state, attacker if local_first else defender, defender if local_first else attacker, defender):
@@ -579,7 +974,12 @@ func finish_encounter() -> bool:
 	var battle := {"hero": encounter.hero_id, "opponent": encounter.opponent_id, "winner": encounter.winner}
 	var report := encounter.report
 	var encounter_lost := encounter.lose_screen
+	var assault_fort := encounter.assault_fort
 	encounter = null
+	# The fort action resumes after battle resolution clears its garrison.
+	if assault_fort >= 0 and battle.winner == battle.hero and state.outcome.is_empty():
+		if ELForts.enter(state, battle.hero, assault_fort):
+			ELAdventureClock.use_points(state, state.object(battle.hero), ELSecondBuildings.USE_COST)
 	# The local winner sees the experience gained: after a creature, with the
 	# loot under it as resource rows; after a hero, the experience alone.
 	var first := state.map.profile.id == "el1"
@@ -606,6 +1006,12 @@ func finish_encounter() -> bool:
 			message.trophies = trophies.duplicate(true)
 		presentation.emit(message)
 	if not interrupted and encounter_lost: presentation.emit({"kind": "lose_battle", "hero": battle.hero, "opponent": battle.opponent})
+	var opponent := state.object(battle.opponent)
+	if state.outcome.is_empty() and battle.winner == battle.hero and opponent.has("tunnel_source") and not opponent.alive:
+		var source := state.object(opponent.tunnel_source)
+		if not source.is_empty():
+			ELSecondBuildings.clear_tunnel_guards(state, source)
+			_use_tunnel(state.object(battle.hero), source)
 	if not interrupted: ELFirstScenario.evaluate(self, battle)
 	return true
 
@@ -668,6 +1074,15 @@ func _execute(command: Dictionary) -> void:
 				_fail("Missing destination in scenario command.")
 				return
 			_begin_move(actor, Vector2i(int(args[1]), int(args[2])) if kind == "Moving" else Vector2i(target.x, target.y), true, int(args[1]) if kind == "MoveAndUseObject" else -1)
+		"RemoteUseHero":
+			var actor := state.object(first)
+			var target := state.object(args[1]) if args.size() > 1 else {}
+			_finish_command()
+			var plan: Variant = actor.get("orders", []).front() if not actor.get("orders", []).is_empty() else null
+			if not plan is Dictionary or plan.get("kind") != kind or plan.get("arguments") != args: return
+			actor.orders.clear()
+			if actor.alive and target.get("alive", false) and not _command_run_vetoed(actor):
+				_begin_encounter(actor, target, int(target.uid), -1, true)
 		"ExecuteScriptFunction":
 			_finish_command()
 			# A script function, or a native called by name; anything else is

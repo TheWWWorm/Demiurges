@@ -17,7 +17,7 @@ var object_models: Dictionary = {}
 var _instances: Dictionary = {}
 var _object_keys: Dictionary = {}
 var _art: ELAdventureArt
-## First-game fog of war (ELFog) as the local player sees it.
+## Fog of war (ELFog) as the local player sees it.
 const FOG_DIM := 0.3
 var fog_session: ELAdventureSession
 var fog_player := 0
@@ -27,6 +27,7 @@ var _fog_textures: Array[ImageTexture] = []
 var _fog_tiles := PackedByteArray()
 ## Original clip code of the walk clips (as in battles).
 const WALK_CODE := 0x80140000
+const RUN_CODE := 0x80100000
 var _fog_reach := 1
 ## Mist opacity per map corner (ELFog levels as the fog pass draws them): the
 ## value the last change started from, the target and the seconds since.
@@ -44,6 +45,7 @@ var _fog_apron: MeshInstance3D
 var animate_fog := true
 var _look_materials: Dictionary = {}
 var _grey_textures: Dictionary = {}
+var _pick_images: Dictionary = {}
 ## Instanced object groups that share one colourless cell value.
 var _grey_groups: Array[Dictionary] = []
 ## Ground blob shadows (Effects/Shadow): one batched quad per object whose
@@ -82,7 +84,7 @@ func build(source: ELAdventureMap, session: ELAdventureSession = null) -> bool:
 	var prototypes := {}
 	var groups := {}
 	var objects: Array = session.objects.values() if session != null else map.objects
-	var fogged := session != null and ELFog.active(session, session.current_player)
+	var fogged := session != null and ELFog.active(session, _fog_viewer(session))
 	# Instances are grouped by their colourless cell value so a level switch
 	# can grey whole groups.
 	var zoned := session != null and map.profile.id == "el2" and map.colorless.size() == map.width * map.height
@@ -199,16 +201,19 @@ func build(source: ELAdventureMap, session: ELAdventureSession = null) -> bool:
 	build_usec = Time.get_ticks_usec() - started
 	return errors.is_empty()
 
-## Turns the terrain and object fog on for the session's local player, or off
-## (Etherlords II, the neutral player, or a scene without a session).
+## EL2 always displays the human side. EL1 follows the strategic seat.
+static func _fog_viewer(session: ELAdventureSession) -> int:
+	return 1 if session.map.profile.id == "el2" else session.current_player
+
+## Turns the terrain and object fog on for the session's local player.
 func enable_fog(session: ELAdventureSession) -> void:
 	var material := map.profile.adventure_terrain_cache.get("material") as ShaderMaterial if map.profile.adventure_terrain_cache.get("map") == map.id else null
-	fog_session = session if session != null and ELFog.active(session, session.current_player) else null
+	fog_player = _fog_viewer(session) if session != null else 0
+	fog_session = session if session != null and ELFog.active(session, fog_player) else null
 	_fog_revision = -1
 	if material != null: material.set_shader_parameter("fog_enabled", fog_session != null)
 	if _fog_apron != null: _fog_apron.visible = fog_session != null
 	if fog_session == null: return
-	fog_player = session.current_player
 	if mist == null:
 		mist = ELFogMist.new()
 		mist.animate = animate_fog
@@ -276,6 +281,7 @@ func fog_tiles() -> PackedByteArray:
 	var bit := 1 << fog_player
 	var tiles := PackedByteArray()
 	tiles.resize(map.width * map.height)
+	if not ELFog.active(fog_session, fog_player): return tiles
 	for i in tiles.size():
 		tiles[i] = 0 if seen[i] & bit else (FOG_REMEMBERED if known[i] & bit else FOG_UNEXPLORED)
 	return tiles
@@ -418,7 +424,7 @@ func fog_object(item: Dictionary, passing := Vector2i(-1, -1)) -> void:
 	var dim := mode != ELFog.VISIBLE
 	if object_models.has(uid):
 		var model: ELModel = object_models[uid]
-		model.visible = present
+		model.visible = present and not model.get_meta("portal_hidden", false)
 		_dim_model(model, present and dim)
 	for entry: Dictionary in _instances.get(uid, []):
 		var multimesh: MultiMesh = entry.node.multimesh
@@ -574,7 +580,111 @@ func _corpse_pose(model: ELModel) -> void:
 		# Some dedicated corpse figures already contain a static body pose.
 		_hold_frame(model, 0.0)
 
-func move_actor(uid: int, position: Vector2, moving: bool) -> void:
+## EL2 corpses can be drawn beyond their one-cell interaction footprint.
+## Use their held pose so a pointer on the body can still select them.
+func corpse_at(origin: Vector3, direction: Vector3) -> int:
+	var closest := INF
+	var picked := -1
+	for id: int in actors:
+		var model: ELModel = actors[id]
+		if not model.has_meta("corpse") or not model.is_visible_in_tree(): continue
+		for surface: Dictionary in _corpse_surfaces(model):
+			var part: MeshInstance3D = surface.part
+			if not part.visible: continue
+			var inverse := part.global_transform.affine_inverse()
+			var start := inverse * origin
+			var ray := inverse.basis * direction
+			if surface.bounds.intersects_ray(start, ray) == null: continue
+			var vertices: PackedVector3Array = surface.vertices
+			var indices: PackedInt32Array = surface.indices
+			var uv: PackedVector2Array = surface.uv
+			var material := part.material_override as BaseMaterial3D
+			for i in range(0, indices.size(), 3):
+				var a := indices[i]
+				var b := indices[i + 1]
+				var c := indices[i + 2]
+				var hit: Variant = Geometry3D.ray_intersects_triangle(start, ray, vertices[a], vertices[b], vertices[c])
+				if hit == null: continue
+				if material != null and material.transparency == BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR and not _pick_opaque(material, hit, vertices[a], vertices[b], vertices[c], uv[a], uv[b], uv[c]): continue
+				var distance := origin.distance_squared_to(part.to_global(hit))
+				if distance < closest:
+					closest = distance
+					picked = id
+	if picked >= 0 and _corpse_blocked(origin, origin + direction.normalized() * sqrt(closest)):
+		return -1
+	return picked
+
+## Opaque scenery can cover a body. Check the current draw instances only
+## after a corpse hit, so ordinary map picking pays no scenery traversal cost.
+func _corpse_blocked(origin: Vector3, hit: Vector3) -> bool:
+	for entries: Array in _instances.values():
+		for entry: Dictionary in entries:
+			var node: MultiMeshInstance3D = entry.node
+			var material := node.material_override as BaseMaterial3D
+			if material == null or material.transparency not in [BaseMaterial3D.TRANSPARENCY_DISABLED, BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR] or not node.is_visible_in_tree(): continue
+			var mesh := node.multimesh.mesh
+			var transform: Transform3D = node.global_transform * entry.transform
+			if (transform * mesh.get_aabb()).intersects_segment(origin, hit) == null: continue
+			if is_zero_approx(node.multimesh.get_instance_transform(entry.index).basis.determinant()): continue
+			var inverse := transform.affine_inverse()
+			var start := inverse * origin
+			var end := inverse * hit
+			var arrays := mesh.surface_get_arrays(0)
+			var vertices: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+			var indices: PackedInt32Array = arrays[Mesh.ARRAY_INDEX]
+			var uv: PackedVector2Array = arrays[Mesh.ARRAY_TEX_UV]
+			for i in range(0, indices.size(), 3):
+				var a := indices[i]
+				var b := indices[i + 1]
+				var c := indices[i + 2]
+				var point: Variant = Geometry3D.segment_intersects_triangle(start, end, vertices[a], vertices[b], vertices[c])
+				if point == null: continue
+				if material.transparency == BaseMaterial3D.TRANSPARENCY_DISABLED or _pick_opaque(material, point, vertices[a], vertices[b], vertices[c], uv[a], uv[b], uv[c]):
+					return true
+	return false
+
+func _pick_opaque(material: BaseMaterial3D, point: Vector3, a: Vector3, b: Vector3, c: Vector3, ua: Vector2, ub: Vector2, uc: Vector2) -> bool:
+	var opacity := material.albedo_color.a
+	var texture := material.albedo_texture
+	if texture != null:
+		if not _pick_images.has(texture):
+			var image := texture.get_image()
+			if image != null and image.is_compressed(): image.decompress()
+			_pick_images[texture] = image if image != null and image.detect_alpha() != Image.ALPHA_NONE else null
+		var image: Image = _pick_images[texture]
+		if image != null:
+			var ab := b - a
+			var ac := c - a
+			var normal := ab.cross(ac)
+			var weight_b := (point - a).cross(ac).dot(normal) / normal.length_squared()
+			var weight_c := ab.cross(point - a).dot(normal) / normal.length_squared()
+			var uv := ua + (ub - ua) * weight_b + (uc - ua) * weight_c
+			uv = uv * Vector2(material.uv1_scale.x, material.uv1_scale.y) + Vector2(material.uv1_offset.x, material.uv1_offset.y)
+			uv = uv.posmod(1.0) if material.texture_repeat else uv.clamp(Vector2.ZERO, Vector2.ONE)
+			var size := image.get_size()
+			var pixel := Vector2i(uv * Vector2(size)).clamp(Vector2i.ZERO, size - Vector2i.ONE)
+			opacity *= image.get_pixelv(pixel).a
+	return opacity >= material.alpha_scissor_threshold
+
+func _corpse_surfaces(model: ELModel) -> Array:
+	if model.has_meta(&"corpse_surfaces"): return model.get_meta(&"corpse_surfaces")
+	var surfaces := []
+	for name: String in model.parts:
+		var part: MeshInstance3D = model.parts[name]
+		if part.mesh == null or not model.figures.has(name): continue
+		var arrays: Array = model.figures[name].arrays
+		var vertices: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+		var morph: Array = model._previous_morphs.get(name, [])
+		if not morph.is_empty() and part.mesh.has_meta("morph_positions"):
+			vertices = part.mesh.get_meta("morph_positions")[morph.front()]
+		if vertices.is_empty(): continue
+		var bounds := AABB(vertices[0], Vector3.ZERO)
+		for vertex: Vector3 in vertices: bounds = bounds.expand(vertex)
+		surfaces.append({"part": part, "vertices": vertices, "indices": arrays[Mesh.ARRAY_INDEX], "uv": arrays[Mesh.ARRAY_TEX_UV], "bounds": bounds})
+	model.set_meta(&"corpse_surfaces", surfaces)
+	return surfaces
+
+func move_actor(uid: int, position: Vector2, moving: bool, tiles_per_second := 0.0, fast := false) -> void:
 	if not actors.has(uid): return
 	var model: ELModel = actors[uid]
 	var next := world_position(position.x, position.y)
@@ -583,7 +693,21 @@ func move_actor(uid: int, position: Vector2, moving: bool) -> void:
 		model.rotation.y = atan2(delta.x, delta.z)
 	model.position = next
 	var clip := walk_clip(model) if moving else "cidle"
-	if not model.get_meta("corpse", false) and model.base_clip() != clip: model.play(clip)
+	if not model.get_meta("corpse", false):
+		if map.profile.id == "el2":
+			# Accelerated travel plays the run clip at its ordinary rate.
+			# Mounts with no run clip keep their idle at this speed.
+			if moving and fast:
+				clip = model.clip_for_code(RUN_CODE)
+				if clip.is_empty(): clip = "cidle"
+			model.speed = 1.0
+			if moving and not fast:
+				# The original advances 15 frames per world unit divided by
+				# the authored walk speed, adjusted by the figure's scale.
+				var stride := float(model.timing.get(clip, {}).get("speed", 0.0)) * model.scale.x
+				if stride > 0.0 and tiles_per_second > 0.0:
+					model.speed = (15.0 * ELAdventureTerrain.CELL * tiles_per_second) / (model.fps * stride)
+		if model.base_clip() != clip: model.play(clip)
 	# Movement through fog stays hidden; an actor appears as it steps into view.
 	if fog_session != null: fog_object(fog_session.object(uid), Vector2i(roundi(position.x), roundi(position.y)))
 	grey_object(uid, Vector2i(roundi(position.x), roundi(position.y)))

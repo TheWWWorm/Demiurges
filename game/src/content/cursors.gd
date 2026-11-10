@@ -134,6 +134,7 @@ static func _second_object(state: ELAdventureSession, hero: Dictionary, item: Di
 	if figure and int(item.get("owner", -1)) == int(hero.get("owner", -2)): return "cancel"
 	# A garrisoned or Fortify hero can only act on forts.
 	if (hero.get("fortified", false) or int(hero.get("spell_fort", 0)) > 0) and item.get("type") != "fort": return "cancel"
+	if item.get("type") == "corpse": return "use" if item.get("enabled", false) and int(hero.uid) == state.main_hero else "cancel"
 	if figure:
 		if state.hostile(hero, item): return "attack"
 		return "speak" if item.get("enabled", true) else "cancel"

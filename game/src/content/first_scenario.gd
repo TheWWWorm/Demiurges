@@ -221,9 +221,14 @@ static func evaluate(director: ELAdventureDirector, battle: Dictionary = {}) -> 
 	var win := false
 	var id := state.map.id
 	if not state.scenario.campaign:
-		win = not lose
-		for player: int in state.scenario.castles:
-			if player != human and player >= 1 and alive(state, player) and state.hostile({"owner": human}, {"owner": player}): win = false
+		var commanders := director.strategy_commanders()
+		if commanders.is_empty(): win = not lose and not _has_rival(state, human)
+		else:
+			# Defeating the host does not end the match while a guest is still
+			# fighting an authored computer commander.
+			for commander: int in commanders:
+				if alive(state, commander) and _has_rival(state, commander): return ""
+			win = not lose
 	elif not lose:
 		if BATTLE_GOALS.has(id) and not battle.is_empty():
 			var opponent := _opponent_of_human(state, battle)
@@ -266,6 +271,11 @@ static func evaluate(director: ELAdventureDirector, battle: Dictionary = {}) -> 
 	if win: return finish(director, "win")
 	return ""
 
+static func _has_rival(state: ELAdventureSession, commander: int) -> bool:
+	for player: int in state.scenario.castles:
+		if player != commander and player >= 1 and alive(state, player) and state.hostile({"owner": commander}, {"owner": player}): return true
+	return false
+
 ## Last-step chapters skip the usual first day: the hero's spell lab opens with
 ## free exchange, then the two White Lord battles follow in order.
 static func opening(director: ELAdventureDirector) -> bool:
@@ -300,7 +310,7 @@ static func finish(director: ELAdventureDirector, result: String) -> String:
 	state.outcome = result
 	var message := text(state, "T_MB_YOU_WIN", "Victory!") if result == "win" else text(state, "T_MB_YOU_LOSE", "Mission lost")
 	# A won single mission or campaign final enters the Hall of Fame.
-	var hall := ELHallOfFame.record_mission(state) if result == "win" else ""
+	var hall := ELHallOfFame.record_mission(state) if result == "win" and director.strategy_commanders().is_empty() else ""
 	state.event.emit({"kind": "mission_finished", "outcome": result, "text": message, "hall_of_fame": hall})
 	return result
 

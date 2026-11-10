@@ -1,6 +1,6 @@
 extends CanvasLayer
 ## A small row of touch buttons for actions that otherwise need a keyboard:
-## Back (Esc) everywhere, plus the camera owner's own keys (quick save/load on
+## Back (Esc) and Console everywhere, plus the camera owner's keys (quick save/load on
 ## the map, camera reset in battle). Shown only in touch mode.
 
 var row: HBoxContainer
@@ -16,7 +16,7 @@ func _init() -> void:
 
 func _process(_delta: float) -> void:
 	if not visible: return
-	var keys: Array = [["Back", KEY_ESCAPE]]
+	var keys: Array = [["Back", KEY_ESCAPE], ["Console", KEY_F10]]
 	var cam: Node = get_parent().call("camera_owner") if get_parent() != null and get_parent().has_method("camera_owner") else null
 	if cam != null and cam.has_method("touch_bar_keys"): keys.append_array(cam.call("touch_bar_keys"))
 	if keys != _keys:

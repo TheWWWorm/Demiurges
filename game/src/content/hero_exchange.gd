@@ -24,16 +24,17 @@ static func applies(state: ELAdventureSession) -> bool:
 ## Ctrl+click exchange: the local player's planning turn, two
 ## different living heroes of the same owner, the selected one standing on or
 ## 8-adjacent to the target's footprint.
-static func exchange_problem(director: ELAdventureDirector, selected_id: int, target_id: int) -> String:
+static func exchange_problem(director: ELAdventureDirector, selected_id: int, target_id: int, commander := -1) -> String:
 	var state := director.state
 	if not applies(state): return "Heroes exchange items only in the first game."
-	if not director.can_move() or not director.movement.is_empty(): return "Heroes can exchange items only during your turn."
+	if (commander < 0 and not director.can_move()) or not director.movement.is_empty(): return "Heroes can exchange items only during your turn."
 	var selected := state.object(selected_id)
 	var target := state.object(target_id)
 	if selected.is_empty() or target.is_empty() or selected.get("type") != "hero" or target.get("type") != "hero": return "Select one of your heroes, then Ctrl+click another."
 	if not selected.get("alive", false) or not target.get("alive", false): return "Select one of your heroes, then Ctrl+click another."
 	if selected_id == target_id: return "Ctrl+click a different hero to exchange items."
-	if int(selected.get("owner", -1)) != state.current_player or int(target.get("owner", -1)) != int(selected.owner): return "Items can be exchanged only between your own heroes."
+	var owner := state.current_player if commander < 0 else commander
+	if int(selected.get("owner", -1)) != owner or int(target.get("owner", -1)) != owner: return "Items can be exchanged only between your own heroes."
 	if not ELStrategy.adjacent(director, selected, target): return "The heroes must stand next to each other."
 	return ""
 
@@ -72,10 +73,11 @@ static func find(hero: Dictionary, item: Dictionary) -> int:
 	return -1
 
 ## Applies a drag on the adventure map and announces the changed inventories.
-static func transfer(state: ELAdventureSession, source_id: int, index: int, target_id: int, position: int) -> bool:
+static func transfer(state: ELAdventureSession, source_id: int, index: int, target_id: int, position: int, commander := -1) -> bool:
 	var source := state.object(source_id)
 	var target := state.object(target_id)
-	if not applies(state) or int(source.get("owner", -1)) != state.current_player or int(target.get("owner", -2)) != int(source.get("owner", -1)): return false
+	var owner := state.current_player if commander < 0 else commander
+	if not applies(state) or int(source.get("owner", -1)) != owner or int(target.get("owner", -2)) != owner: return false
 	if not move(source, index, target, position): return false
 	state.event.emit({"kind": "inventory_changed", "id": source_id})
 	if target_id != source_id: state.event.emit({"kind": "inventory_changed", "id": target_id})
@@ -83,15 +85,21 @@ static func transfer(state: ELAdventureSession, source_id: int, index: int, targ
 
 ## DismissHero (0x631, CDismissHero): after confirmation the hero
 ## is lost through the same routine as a death; its items go with it.
-static func dismiss_problem(director: ELAdventureDirector, hero_id: int) -> String:
+static func dismiss_problem(director: ELAdventureDirector, hero_id: int, commander := -1) -> String:
 	var hero := director.state.object(hero_id)
-	if not applies(director.state) or hero.get("type") != "hero" or not hero.get("alive", false) or int(hero.get("owner", -1)) != director.state.current_player: return "This hero cannot be dismissed."
-	if not director.can_move() or not director.movement.is_empty(): return "Heroes can be dismissed only during your turn."
+	var owner := director.state.current_player if commander < 0 else commander
+	if not applies(director.state) or hero.get("type") != "hero" or not hero.get("alive", false) or int(hero.get("owner", -1)) != owner: return "This hero cannot be dismissed."
+	if (commander < 0 and not director.can_move()) or not director.movement.is_empty(): return "Heroes can be dismissed only during your turn."
 	return ""
 
-static func dismiss(director: ELAdventureDirector, hero_id: int) -> bool:
-	if not dismiss_problem(director, hero_id).is_empty(): return false
+static func dismiss(director: ELAdventureDirector, hero_id: int, commander := -1) -> bool:
+	if not dismiss_problem(director, hero_id, commander).is_empty(): return false
 	# Removed from the world rather than left as a corpse figure.
 	director.state.object(hero_id).visible = false
+	for actor: Dictionary in director.state.objects.values():
+		var order: Dictionary = actor.get("strategy_order", {})
+		if not order.is_empty() and (actor.uid == hero_id or order.get("use") == hero_id):
+			actor.strategy_order = {}
+			director.presentation.emit({"kind": "route", "id": actor.uid, "path": []})
 	director.state._native([float(hero_id)], "ExKillHero")
 	return not director.state.object(hero_id).get("alive", true)

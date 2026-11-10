@@ -1836,6 +1836,10 @@ func effect(name: String, target: Node3D = null) -> void:
 		# instant.wav and unbound/EL1 GainMana retain their existing levels.
 		elif edition == "el2" and name == "GainMana" and is_instance_valid(target):
 			play(path, _gainmana_gain(target))
+		elif edition == "el2" and name == "Discard" and is_instance_valid(target):
+			play(path, _amnesia_discard_gain(target))
+		elif edition == "el2" and name == "Draw" and is_instance_valid(target):
+			play(path, _draw_gain(target))
 		else:
 			play(path, _turn_stasis_gain(target) if name == "BlueStasis" else 1.0)
 

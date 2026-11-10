@@ -156,18 +156,58 @@ func path(from: Vector2i, to: Vector2i, ship := false, avoid: Array[Vector2i] = 
 	return result
 
 func approach(from: Vector2i, target: Dictionary, ship := false, avoid: Array[Vector2i] = []) -> Array[Vector2i]:
+	if map.profile.id == "el2" and target.get("type") == "corpse" and from == Vector2i(target.x, target.y): return [from]
 	var size: Vector2i = footprints.get(int(target.uid), {}).get("size", Vector2i.ONE)
 	var best: Array[Vector2i] = []
 	var best_cost := 0x7fffffff
 	for y in range(-1, size.y + 1):
 		for x in range(-1, size.x + 1):
 			if x >= 0 and x < size.x and y >= 0 and y < size.y: continue
-			var candidate := path(from, Vector2i(target.x + x, target.y + y), ship, avoid)
+			var point := Vector2i(target.x + x, target.y + y)
+			# The moving hero already occupies this approach cell.
+			if point == from and map.profile.id == "el2" and passability(from, ship, false) >= 0: return [from]
+			var candidate := path(from, point, ship, avoid)
 			if not candidate.is_empty():
 				var cost := path_cost(candidate, ship)
 				if cost < best_cost:
 					best = candidate
 					best_cost = cost
+	return best
+
+## The two-cell strip outside a tunnel mouth and its preferred exit cell.
+func tunnel_exit(target: Dictionary, ship: bool) -> Vector2i:
+	var size: Vector2i = footprints.get(int(target.uid), {}).get("size", Vector2i(4, 4))
+	var origin := Vector2i(target.x, target.y)
+	var area: Rect2i
+	var preferred: Vector2i
+	match (int(target.rotation) >> 2) & 3:
+		0:
+			area = Rect2i(0, -2, size.x, 2)
+			preferred = Vector2i(2, -1)
+		1:
+			area = Rect2i(-2, 0, 2, size.y)
+			preferred = Vector2i(-1, 1)
+		2:
+			area = Rect2i(0, size.y, size.x, 2)
+			preferred = Vector2i(1, size.y)
+		3:
+			area = Rect2i(size.x, 0, 2, size.y)
+			preferred = Vector2i(size.x, 2)
+	area.position += origin
+	preferred += origin
+	return _closest_exit(area, preferred, ship)
+
+## Native square rings choose the lowest x, then lowest y within a ring.
+func _closest_exit(area: Rect2i, preferred: Vector2i, ship: bool) -> Vector2i:
+	var best := Vector2i(-1, -1)
+	var distance := 0x7fffffff
+	for x in range(area.position.x, area.end.x):
+		for y in range(area.position.y, area.end.y):
+			var point := Vector2i(x, y)
+			var steps := maxi(absi(x - preferred.x), absi(y - preferred.y))
+			if steps < distance and passability(point, ship) >= 0:
+				best = point
+				distance = steps
 	return best
 
 func dock_exit(target: Dictionary, ship: bool) -> Vector2i:
@@ -188,6 +228,8 @@ func dock_exit(target: Dictionary, ship: bool) -> Vector2i:
 		3:
 			area = Rect2i(target.x + 2, target.y - 1, 3, size.y + 2)
 			preferred = Vector2i(target.x + 4, target.y)
+	if map.profile.id == "el2":
+		return find_landing(area, preferred, ship)
 	var best := Vector2i(-1, -1)
 	var distance := INF
 	for y in range(area.position.y, area.end.y):
@@ -197,6 +239,15 @@ func dock_exit(target: Dictionary, ship: bool) -> Vector2i:
 				best = point
 				distance = point.distance_squared_to(preferred)
 	return best
+
+## EL2 docks and portals clip the landing rectangle before searching its rings.
+func find_landing(area: Rect2i, preferred: Vector2i, ship: bool) -> Vector2i:
+	var bounds := Rect2i(0, 0, map.width, map.height)
+	area = area.intersection(bounds)
+	if not area.has_area(): return Vector2i(-1, -1)
+	preferred = preferred.clamp(bounds.position, bounds.end - Vector2i.ONE)
+	if not area.has_point(preferred): preferred = area.position
+	return _closest_exit(area, preferred, ship)
 
 static func footprint(row: Dictionary, rotation: int) -> Dictionary:
 	var dimensions: Array = row.get("TileSize", [int(row.get("SizeX", 1)), int(row.get("SizeY", 1))])

@@ -40,6 +40,8 @@ var subject: Control
 var rest := 0.0
 ## Builds the content for a control: returns {} to fall back to its text.
 var describe: Callable
+var describe_figure: Callable
+var touch: ELTouchInput
 var _shown_key := ""
 
 ## Bold Arial slanted, with the upright bold advances: the originals' tooltip
@@ -86,7 +88,7 @@ static func text_content(text: String) -> Dictionary:
 	var lines := text.split("\n")
 	for i in lines.size():
 		labels.append({"text": lines[i], "at": Vector2(0, i * LINE)})
-	return {"labels": labels, "picture": {}}
+	return {"labels": labels, "picture": {}, "flow": true}
 
 ## A hero card: the portrait and lines beside it (second game), or a centred
 ## title over the portrait and lines (first game).
@@ -123,7 +125,12 @@ func _process(delta: float) -> void:
 	if panel == null or not is_visible_in_tree(): return
 	var hovered := get_viewport().gui_get_hovered_control()
 	var first := profile != null and profile.id == "el1"
-	if hovered == null or not _owns(hovered) or (first and not Input.is_mouse_button_pressed(MOUSE_BUTTON_RIGHT)):
+	var touch_hold := touch != null and touch.holding()
+	if first and not (Input.is_mouse_button_pressed(MOUSE_BUTTON_RIGHT) or touch_hold):
+		hide_tip()
+		return
+	var figure := first and hovered == null and describe_figure.is_valid()
+	if not figure and (hovered == null or not _owns(hovered)):
 		hide_tip()
 		return
 	if hovered != subject:
@@ -131,10 +138,18 @@ func _process(delta: float) -> void:
 		subject = hovered
 	rest += delta
 	if not first and rest < DELAY: return
-	var cursor := get_local_mouse_position()
-	var content: Dictionary = describe.call(hovered, hovered.get_local_mouse_position()) if describe.is_valid() else {}
+	var point := touch.hold_position() if touch_hold else get_viewport().get_mouse_position()
+	var cursor := get_global_transform_with_canvas().affine_inverse() * point
+	var content: Dictionary = describe_figure.call(point) if figure else {}
+	var at := Vector2.ZERO
+	if not figure: at = hovered.get_global_transform_with_canvas().affine_inverse() * point
+	if not figure and describe.is_valid():
+		content = describe.call(hovered, at)
 	if content.is_empty():
-		var text := hovered.atr(hovered.get_tooltip(hovered.get_local_mouse_position())).strip_edges()
+		if figure:
+			hide_tip()
+			return
+		var text := hovered.atr(hovered.get_tooltip(at)).strip_edges()
 		if text.is_empty():
 			if panel.visible: panel.hide()
 			_shown_key = ""
@@ -143,7 +158,7 @@ func _process(delta: float) -> void:
 	var key := str(content.hash())
 	if key != _shown_key:
 		_shown_key = key
-		panel.set_content(hovered.get_instance_id(), content)
+		panel.set_content(0 if figure else hovered.get_instance_id(), content)
 		_centre_titles(content)
 	panel.position = place(profile.id if profile != null else "el2", panel.size, cursor, size)
 	if not panel.visible:

@@ -4,7 +4,7 @@ category: rules
 order: 20
 summary: Attack/Cast Phase, Block Phase and the order of a turn
 ---
-A turn belongs to one hero, the attacker. It has two phases: the attacker's **Attack/Cast Phase**, then the opponent's **Block Phase**. Then the heroes swap roles and the next turn begins. Press **Space** or the **End of Phase** button to finish your phase.
+A turn belongs to one hero, the attacker. It has two phases: the attacker's **Attack/Cast Phase**, then the opponent's **Block Phase**. Then the heroes swap roles and the next turn begins. Use the **End of Phase** button, **Ctrl+E** in Etherlords, or **Tab** in Etherlords II to finish your phase. **Space** skips the current presentation.
 
 ## Start of the turn
 

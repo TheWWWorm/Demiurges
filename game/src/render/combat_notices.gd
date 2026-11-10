@@ -24,6 +24,7 @@ const OUTLINE := Color8(0x0f, 0x1f, 0x37)
 const FILL := Color8(0xdf, 0xf4, 0xf9)
 const HOLD_LINE := 3.0
 const FADE_LINE := 0.5
+const MAX_CHAT_LINES := 5
 const LINE_HEIGHT := 18.0
 const ICON := 50.0
 const ICON_STEP := 53.0
@@ -85,9 +86,11 @@ func show_banner(band: int) -> void:
 	_sounded = false
 	queue_redraw()
 
-func add_line(text: String, colour: Color) -> void:
+func add_line(text: String, colour: Color, chat := false) -> void:
 	if text.strip_edges().is_empty(): return
-	lines.append({"text": text.strip_edges(), "colour": colour, "age": 0.0})
+	if chat and lines.filter(func(line: Dictionary) -> bool: return line.chat).size() >= MAX_CHAT_LINES:
+		lines.remove_at(lines.find_custom(func(line: Dictionary) -> bool: return line.chat))
+	lines.append({"text": text.strip_edges(), "colour": colour, "age": 0.0, "chat": chat})
 	queue_redraw()
 
 func add_icon(texture: Texture2D, card := "") -> void:

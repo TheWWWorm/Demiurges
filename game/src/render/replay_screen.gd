@@ -88,9 +88,11 @@ func build_screen() -> void:
 	refresh_entries()
 	selected = 0 if mode == "load" and not entries.is_empty() else -1
 	refresh()
-	if name_edit != null:
-		var edit := name_edit
-		(func(): if is_instance_valid(edit) and edit.is_inside_tree(): edit.grab_focus()).call_deferred()
+	if mode == "save": _focus_save_name.call_deferred()
+
+func _focus_save_name() -> void:
+	if is_instance_valid(menu) and menu.screen == "replay_save" and is_instance_valid(name_edit) and name_edit.is_inside_tree():
+		name_edit.grab_focus()
 
 func _button(control: String, action: Callable) -> ELFrontMenu.CutButton:
 	var button := menu._square(control)

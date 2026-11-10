@@ -5,8 +5,8 @@ extends Node
 ##
 ## Second game: the background theme cross-fades (the old theme fades out over
 ## its fade-out, the new one fades in over its fade-in), repeats while it is
-## selected, and is not restarted when the same theme is asked for again. An
-## emphasis theme pauses it. Script sounds (ExSoundBeginFX) are positional: the
+## selected, and is not restarted when the same theme is asked for again.
+## Scripted emphasis themes cross-fade with it. Script sounds (ExSoundBeginFX) are positional: the
 ## volume falls off linearly from the near to the far distance, measured on the
 ## ground from the camera's target, and looping ones (weather) repeat until
 ## cancelled.
@@ -34,6 +34,10 @@ var _fade_in := 0.0
 var _fade_in_time := 0.0
 var _fade_out := 0.0
 var _fade_out_time := 0.0
+var _fade_out_gain := 1.0
+var _emphasis_name := ""
+var _emphasis_fade := Vector2.ZERO
+var _emphasis_time := 0.0
 ## Script sound name -> {player, position (Vector3), near, far}.
 var sounds: Dictionary = {}
 ## Ground point the listener hears from (the camera target).
@@ -86,9 +90,13 @@ func first_battle(opened: bool, state: ELAdventureSession) -> void:
 ## Leaving the finished map for the Hall of Fame: the music stops at once.
 func cut_music() -> void:
 	_theme_fade = Vector2.ZERO
-	stop_theme()
+	background.stop()
+	background.stream = null
+	theme = ""
 	emphasis.stop()
 	emphasis.stream = null
+	_emphasis_name = ""
+	_clear_fading()
 
 func music_db() -> float:
 	return linear_to_db(maxf(0.0001, ELAudio.option_gain(float(_volumes.get("music", settings.values.music)), profile.id))) - 6.0
@@ -100,8 +108,8 @@ func apply_volumes(values: Dictionary) -> void:
 	effect.volume_db = linear_to_db(maxf(0.0001, ELAudio.option_gain(float(_volumes.get("effects", settings.values.effects)), profile.id)))
 	ELUiSounds.volume = clampf(float(_volumes.get("effects", settings.values.effects)), 0.0, 1.0)
 	voice.volume_db = effect.volume_db
-	if fading.stream == null: background.volume_db = background_volume_now()
-	emphasis.volume_db = music_db()
+	background.volume_db = background_volume_now()
+	emphasis.volume_db = _gain_db(_fade_gain(_emphasis_time, _emphasis_fade.x))
 	for name: String in sounds: sounds[name].player.volume_db = _sound_db(sounds[name])
 	ELAudio.positional_bus(bool(values.get("audio_reverse", settings.values.get("audio_reverse", false))))
 
@@ -138,21 +146,15 @@ func script_event(data: Dictionary) -> void:
 			if data.entry.is_empty(): cancel_sound(str(data.name))
 			else: start_sound(str(data.name), data.entry)
 		"ExStartEmphasisTheme":
-			if _theme(emphasis, str(data.arguments[0])):
-				background.stream_paused = true
-				fading.stop()
+			_start_emphasis(data.arguments, data.get("theme_fade", Vector2.ONE * ELSecondAmbience.DEFAULT_FADE))
 		"ExStopEmphasisTheme":
-			emphasis.stop()
-			emphasis.stream = null
-			background.stream_paused = false
+			_stop_emphasis()
 
 func start_theme(name: String, fade_in: float, fade_out: float) -> bool:
 	if name == theme and background.stream != null: return true
+	var stream := _theme_stream(name)
+	if stream == null: return false
 	_release_background()
-	var path := profile.file("Resources/Music/" + name + ".mp3")
-	if path.is_empty(): return false
-	var stream := AudioStreamMP3.new()
-	stream.data = FileAccess.get_file_as_bytes(path)
 	stream.loop = true
 	background.stream = stream
 	theme = name
@@ -161,7 +163,7 @@ func start_theme(name: String, fade_in: float, fade_out: float) -> bool:
 	_fade_in_time = 0.0
 	background.volume_db = music_db() if fade_in <= 0.0 else -80.0
 	background.play()
-	background.stream_paused = emphasis.playing
+	background.stream_paused = emphasis.stream != null
 	return true
 
 func stop_theme() -> void:
@@ -169,28 +171,62 @@ func stop_theme() -> void:
 
 ## The playing background theme moves to the fading player.
 func _release_background() -> void:
-	if background.stream == null:
-		theme = ""
-		return
-	fading.stop()
-	var position := background.get_playback_position()
-	fading.stream = background.stream
-	fading_theme = theme
-	_fade_out = _theme_fade.y
-	_fade_out_time = 0.0
+	if background.stream != null and emphasis.stream == null:
+		_fade_player(background, theme, _theme_fade.y)
 	background.stop()
 	background.stream = null
 	theme = ""
-	if _fade_out > 0.0 and not emphasis.playing:
-		fading.volume_db = background_volume_now()
-		fading.play(position)
-	else:
-		fading.stream = null
-		fading_theme = ""
+
+func _start_emphasis(args: Array, defaults: Vector2) -> void:
+	if args.is_empty(): return
+	var name := str(args[0])
+	if name == _emphasis_name: return
+	var stream := _theme_stream(name)
+	if stream == null: return
+	var fade_in := float(args[1]) if args.size() > 1 and args[1] != null else -1.0
+	var fade_out := float(args[2]) if args.size() > 2 and args[2] != null else -1.0
+	if emphasis.stream != null: _fade_player(emphasis, _emphasis_name, _emphasis_fade.y)
+	elif background.stream != null: _fade_player(background, theme, _theme_fade.y)
+	background.stream_paused = true
+	emphasis.stop()
+	emphasis.stream = stream
+	_emphasis_name = name
+	_emphasis_fade = Vector2(fade_in if fade_in >= 0.0 else defaults.x, fade_out if fade_out >= 0.0 else defaults.y)
+	_emphasis_time = 0.0
+	emphasis.volume_db = _gain_db(_fade_gain(0.0, _emphasis_fade.x))
+	emphasis.play()
+
+func _stop_emphasis() -> void:
+	if emphasis.stream == null: return
+	_fade_player(emphasis, _emphasis_name, _emphasis_fade.y)
+	emphasis.stop()
+	emphasis.stream = null
+	_emphasis_name = ""
+	_fade_in_time = 0.0
+	background.volume_db = background_volume_now()
+	background.stream_paused = false
+
+func _clear_fading() -> void:
+	fading.stop()
+	fading.stream = null
+	fading_theme = ""
+
+func _fade_player(player: AudioStreamPlayer, name: String, duration: float) -> void:
+	_clear_fading()
+	if duration <= 0.0 or not player.playing: return
+	fading.stream = player.stream
+	fading_theme = name
+	_fade_out = duration
+	_fade_out_time = 0.0
+	_fade_out_gain = db_to_linear(player.volume_db - music_db())
+	fading.volume_db = player.volume_db
+	fading.play(player.get_playback_position())
 
 func background_volume_now() -> float:
-	if _fade_in <= 0.0 or _fade_in_time >= _fade_in: return music_db()
-	return _gain_db(_fade_in_time / _fade_in)
+	return _gain_db(_fade_gain(_fade_in_time, _fade_in))
+
+func _fade_gain(time: float, duration: float) -> float:
+	return minf(1.0, time / duration) if duration > 0.0 else 1.0
 
 func _gain_db(fraction: float) -> float:
 	return music_db() + linear_to_db(clampf(fraction, 0.0001, 1.0))
@@ -246,16 +282,16 @@ func _sound_db(sound: Dictionary) -> float:
 	return base + linear_to_db(maxf(ELAudio.placed_gain(gain, profile.id), 0.0001))
 
 func _process(delta: float) -> void:
-	if background.stream != null and _fade_in > 0.0 and _fade_in_time < _fade_in:
+	if not suspended and background.stream != null and not background.stream_paused and _fade_in_time < _fade_in:
 		_fade_in_time += delta
 		background.volume_db = background_volume_now()
-	if fading.stream != null:
+	if not suspended and emphasis.stream != null and _emphasis_time < _emphasis_fade.x:
+		_emphasis_time += delta
+		emphasis.volume_db = _gain_db(_fade_gain(_emphasis_time, _emphasis_fade.x))
+	if not suspended and fading.stream != null:
 		_fade_out_time += delta
-		if _fade_out_time >= _fade_out:
-			fading.stop()
-			fading.stream = null
-			fading_theme = ""
-		else: fading.volume_db = _gain_db(1.0 - _fade_out_time / _fade_out)
+		if _fade_out_time >= _fade_out: _clear_fading()
+		else: fading.volume_db = _gain_db(_fade_out_gain * (1.0 - _fade_out_time / _fade_out))
 	for name: String in sounds:
 		sounds[name].player.volume_db = _sound_db(sounds[name])
 		_place(sounds[name])
@@ -274,15 +310,12 @@ func effect_sound(path: String) -> bool:
 	played.append(path)
 	return true
 
-func _theme(player: AudioStreamPlayer, name: String) -> bool:
+func _theme_stream(name: String) -> AudioStreamMP3:
 	var path := profile.file("Resources/Music/" + name + ".mp3")
-	if path.is_empty(): return false
-	player.stop()
+	if path.is_empty(): return null
 	var stream := AudioStreamMP3.new()
 	stream.data = FileAccess.get_file_as_bytes(path)
-	player.stream = stream
-	player.play()
-	return true
+	return stream
 
 func _exit_tree() -> void:
 	for child: Node in get_children():

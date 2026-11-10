@@ -74,6 +74,10 @@ var dialog: Canvas
 var dialog_buttons: Dictionary = {}
 var dialog_names: Array[Label] = []
 var trade: ELTradeDialogView
+var strategic_session: ELStrategicSession
+var order_pending := false
+var _status: Label
+var _terms_key := ""
 ## The offer being shown: {from, to, before, mask}, and the dialog mode.
 var offer: Dictionary = {}
 var mode := NEW
@@ -118,11 +122,15 @@ func build(session: ELAdventureSession, owner: int) -> void:
 		row.buttons.InBoxTrade.pressed.connect(func(): trade.open(ELDiplomacy.trade_received(state, player, other), RECEIVED))
 		row.buttons.OutBoxTrade.pressed.connect(func(): trade.open(ELDiplomacy.trade_sent(state, player, other), SENT))
 		row.buttons.Bane.pressed.connect(func():
-			ELDiplomacy.set_bane(state, player, other, not ELDiplomacy.bane(state, player, other))
+			var value := not ELDiplomacy.bane(state, player, other)
+			if strategic_session != null: submit_order(["diplomacy_bane", other, value], refresh)
+			else: ELDiplomacy.set_bane(state, player, other, value)
 			refresh())
 		rows.append(row)
 	buttons.D_OK = _button(sheet, "D_OK", Vector2.ZERO)
-	buttons.D_OK.pressed.connect(func(): closed.emit())
+	buttons.D_OK.pressed.connect(func(): if not order_pending: closed.emit())
+	if strategic_session != null:
+		_status = _label(sheet, Rect2(40, 566, 580, 20), "", 15, TEXT, hud._bold)
 	_build_dialog()
 	trade = ELTradeDialogView.new()
 	add_child(trade)
@@ -146,12 +154,52 @@ func refresh() -> void:
 	for row: Dictionary in rows:
 		if row.player < 0: continue
 		var other: int = row.player
-		row.buttons.InBoxPeace.disabled = ELDiplomacy.received(state, player, other).is_empty()
-		row.buttons.OutBoxPeace.disabled = ELDiplomacy.sent(state, player, other).is_empty()
-		row.buttons.InBoxTrade.disabled = ELDiplomacy.trade_received(state, player, other).is_empty()
-		row.buttons.OutBoxTrade.disabled = ELDiplomacy.trade_sent(state, player, other).is_empty()
+		row.buttons.InBoxPeace.disabled = order_pending or ELDiplomacy.received(state, player, other).is_empty()
+		row.buttons.OutBoxPeace.disabled = order_pending or ELDiplomacy.sent(state, player, other).is_empty()
+		row.buttons.InBoxTrade.disabled = order_pending or ELDiplomacy.trade_received(state, player, other).is_empty()
+		row.buttons.OutBoxTrade.disabled = order_pending or ELDiplomacy.trade_sent(state, player, other).is_empty()
+		for control: String in ["OfferPeace", "OfferTrade", "Break", "Bane"]: row.buttons[control].disabled = order_pending
 		row.buttons.Bane.active = ELDiplomacy.bane(state, player, other)
+	buttons.D_OK.disabled = order_pending
 	sheet.queue_redraw()
+
+func submit_order(order: Array, completed: Callable) -> void:
+	if order_pending: return
+	order_pending = true
+	order_pending = strategic_session.manage_hero(order, _order_result.bind(completed))
+	_status.text = ELRemakeText.t("Confirming diplomacy order…", profile) if order_pending else ""
+	_refresh_order()
+
+func _order_result(reason: String, completed: Callable) -> void:
+	if not is_inside_tree() or is_queued_for_deletion(): return
+	order_pending = false
+	_status.text = ELRemakeText.t(reason, profile)
+	if reason.is_empty(): completed.call()
+	_refresh_order()
+
+func _refresh_order() -> void:
+	refresh()
+	if dialog.visible: _refresh_dialog()
+	if trade.visible: trade.refresh()
+
+## Restore a local draft by value across an authoritative same-day map update.
+func selection_state() -> Dictionary:
+	var selection := {"open": true}
+	if confirm != null: selection.break_target = _confirm_target
+	elif trade.visible: selection.merge({"trade": trade.offer.duplicate(true), "mode": trade.mode, "key": trade.terms_key})
+	elif dialog.visible: selection.merge({"peace": offer.duplicate(true), "mode": mode, "key": _terms_key})
+	return selection
+
+func restore_selection(selection: Dictionary) -> void:
+	if selection.has("break_target"):
+		_ask_break(selection.break_target)
+	elif selection.has("trade"):
+		trade.open(selection.trade, selection.mode, selection.key)
+	elif selection.has("peace"):
+		open_offer(selection.peace, selection.mode)
+		_terms_key = selection.key
+		offer.before = selection.peace.before
+		_refresh_dialog()
 
 func row_rect(index: int) -> Rect2:
 	return Rect2(ROW_AT + Vector2(0, ROW_STEP * index), Vector2(165, 49))
@@ -218,7 +266,9 @@ func _ask_break(other: int) -> void:
 	confirm.answered.connect(_answer_break)
 
 func _answer_break(accepted: bool) -> void:
-	if accepted and _confirm_target >= 0: ELDiplomacy.break_alliance(state, player, _confirm_target)
+	if accepted and _confirm_target >= 0:
+		if strategic_session != null: submit_order(["peace_break", _confirm_target], refresh)
+		else: ELDiplomacy.break_alliance(state, player, _confirm_target)
 	_confirm_target = -1
 	if confirm != null: confirm.queue_free()
 	confirm = null
@@ -226,7 +276,7 @@ func _answer_break(accepted: bool) -> void:
 
 ## Escape: the message box answers itself; then the dialog, then the screen.
 func cancel() -> void:
-	if confirm != null: return
+	if confirm != null or order_pending: return
 	if trade != null and trade.visible: trade.close()
 	elif dialog.visible: close_offer()
 	else: closed.emit()
@@ -263,6 +313,7 @@ func _build_dialog() -> void:
 ## Shows an offer: NEW drafts one, RECEIVED answers one, SENT reviews one.
 func open_offer(shown: Dictionary, shown_mode: int) -> void:
 	if shown.is_empty(): return
+	_terms_key = ELDiplomacy.offer_key(shown) if shown_mode != NEW else ""
 	offer = shown.duplicate()
 	mode = shown_mode
 	# The receiving side measures changes from the proposal itself (a received
@@ -294,12 +345,12 @@ func _refresh_dialog() -> void:
 		var box: ELAdventureHud.CutButton = dialog_buttons[STATES[aspect]]
 		box.active = int(offer.mask) & (1 << aspect) != 0
 		# A sent offer is shown, not edited.
-		box.disabled = mode == SENT or not ELDiplomacy.changeable(value, aspect)
+		box.disabled = order_pending or mode == SENT or not ELDiplomacy.changeable(value, aspect)
 	var changed := ELDiplomacy.changed(offer)
-	dialog_buttons.POLeave.disabled = false
-	dialog_buttons.POCancel.disabled = false
-	dialog_buttons.POOK.disabled = not changed if mode == NEW else changed
-	dialog_buttons.POSend.disabled = not changed
+	dialog_buttons.POLeave.disabled = order_pending
+	dialog_buttons.POCancel.disabled = order_pending
+	dialog_buttons.POOK.disabled = order_pending or (not changed if mode == NEW else changed)
+	dialog_buttons.POSend.disabled = order_pending or not changed
 	dialog.queue_redraw()
 
 func close_offer() -> void:
@@ -308,17 +359,28 @@ func close_offer() -> void:
 	refresh()
 
 func _offer_ok() -> void:
+	if strategic_session != null:
+		if mode == NEW: submit_order(["peace_offer", int(offer.to), int(offer.mask), ""], close_offer)
+		elif mode == RECEIVED: submit_order(["peace_accept", int(offer.from), _terms_key], close_offer)
+		return
 	if mode == NEW: ELDiplomacy.send(state, offer)
 	elif mode == RECEIVED: ELDiplomacy.accept(state, int(offer.from), int(offer.to))
 	close_offer()
 
 ## Cancel drops a new offer, declines a received one, withdraws a sent one.
 func _offer_cancel() -> void:
+	if strategic_session != null and mode != NEW:
+		var other := int(offer.to) if mode == SENT else int(offer.from)
+		submit_order(["peace_remove", other, _terms_key], close_offer)
+		return
 	if mode != NEW: ELDiplomacy.withdraw(state, int(offer.from), int(offer.to))
 	close_offer()
 
 ## A received offer answered with a revised one goes back to its sender.
 func _offer_send() -> void:
+	if strategic_session != null:
+		submit_order(["peace_offer", int(offer.from), int(offer.mask), _terms_key], close_offer)
+		return
 	ELDiplomacy.send(state, {"from": player, "to": int(offer.from), "before": int(offer.before), "mask": int(offer.mask)})
 	close_offer()
 

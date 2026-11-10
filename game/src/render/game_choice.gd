@@ -5,6 +5,7 @@ extends HBoxContainer
 ## missing one emits `missing` so the host can offer to add it.
 signal selected(edition: String)
 signal missing(edition: String)
+signal expedition_requested
 
 const INK := Color("d6bb88")
 var current := ""
@@ -14,6 +15,8 @@ var buttons: Dictionary = {}
 var font_size := 16
 ## Opens the wiki (ELWikiScreen).
 var wiki_button: Button
+var expedition_available := false
+var _expedition_button: Button
 ## A caption in the current game's language: Russian game texts open the wiki
 ## in Russian until the player picks a language there.
 var wiki_hint := ""
@@ -58,6 +61,16 @@ func _ready() -> void:
 		var wiki := ELWikiScreen.open(self, "", wiki_hint)
 		if not wiki.closed.is_connected(_refresh): wiki.closed.connect(_refresh))
 	add_child(wiki_button)
+	if expedition_available:
+		_expedition_button = Button.new()
+		_expedition_button.name = "Expedition"
+		_expedition_button.custom_minimum_size = Vector2(138, 46)
+		_expedition_button.add_theme_font_size_override("font_size", font_size)
+		_expedition_button.add_theme_color_override("font_color", INK)
+		_expedition_button.add_theme_stylebox_override("normal", _plate(0.86, Color(INK, 0.55)))
+		_expedition_button.add_theme_stylebox_override("hover", _plate(0.92, INK))
+		_expedition_button.pressed.connect(func(): expedition_requested.emit())
+		add_child(_expedition_button)
 	_refresh()
 
 
@@ -92,6 +105,8 @@ func _refresh() -> void:
 		var russian := ELWikiScreen.remembered_language(wiki_hint) == "ru"
 		wiki_button.text = "Вики" if russian else "Wiki"
 		wiki_button.tooltip_text = "Справка по игре на движке Demiurges (F1)" if russian else "How to play on the Demiurges engine (F1)"
+		if _expedition_button != null:
+			_expedition_button.text = "Экспедиция" if russian else "Expedition"
 
 
 func _chosen(edition: String) -> void:

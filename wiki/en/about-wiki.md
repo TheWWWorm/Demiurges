@@ -20,3 +20,5 @@ Names of game things (races, phases, menus) follow the original games' own Engli
 The guides explain how to play the games on this engine and how the engine differs from the originals. The **encyclopedia** has a page for every creature, sorcery, enchantment, artifact, skill and specialization of both games, with its statistics, prices and description. On the website, creature pages show a picture of the creature; in the game they show the creature itself, which you can turn and zoom.
 
 The encyclopedia in the game is built from your own copy, so it follows your game's language and data. The website's encyclopedia was exported from the original Russian and English (GOG) editions. Names, descriptions and pictures of the games' content belong to their owners.
+
+To preview attacks, hit reactions, deaths, and other actions with their original sounds, press **F1** in the game and open a creature page. Choose an action below the 3D model and press **Play**. See [About creatures](creatures) for the full controls.

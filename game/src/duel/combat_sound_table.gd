@@ -134,7 +134,7 @@ const CAST := {
 		"DSIG": ["RedFireStream"], "DWND": ["NegDefence", "NegRune"], "EHUN": ["OutplanarSummon"],
 		"EKON": ["OutplanarSummon"], "EMAG": ["OutplanarSummon"], "ENAL": ["PosSorcery"],
 		"ENBR": ["PosRune", "EnergyBarrier", "PosEnchantment"], "ENFL": ["CantUntap", "NegRune"],
-		"ENLH": ["Discard", "Draw"], "ENRG": ["PosEnchantment"], "ENVM": ["NegEnchantment"],
+		"ENFR": ["Discard", "Draw"], "ENLH": ["Discard", "Draw"], "ENRG": ["PosEnchantment"], "ENVM": ["NegEnchantment"],
 		"ENWO": ["PosEnchantment", "PosDefence", "PosRune"], "ERBN": ["NegEnchantment", "CantUntap"],
 		"EREL": ["BlueSummon"], "ERQA": ["Tremor"], "ETAM": ["PosEnchantment"], "ETCH": ["PosSorcery"],
 		"ETTD": ["GreenDamage", "Disenchant"], "EWLD": ["CantAttack"], "EXIL": ["BlackExile"],

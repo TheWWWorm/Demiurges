@@ -18,10 +18,11 @@ const FOLDER := "Replays"
 const EXTENSION := ".json"
 ## Characters T_MB_WRONG_REPLAY_NAME forbids (an empty name is refused too).
 const FORBIDDEN := ["\\", "/", ":", "*", "?", "\"", "<", ">", "|", ".", "[", "]", ",", ";", "="]
-const KINDS := ["cast", "artifact", "attack", "retreat", "block", "ability", "end_phase", "surrender"]
+const KINDS := ["cast", "artifact", "attack", "retreat", "block", "ability", "end_phase", "surrender", "console"]
 const MAX_NAME := 64
 
 var edition := ""
+var local_side := 0
 ## My hero name, enemy hero name, my hero template, enemy hero template.
 var labels: Array[String] = ["", "", "", ""]
 ## Hero portrait (face) indices of the two sides.
@@ -32,23 +33,37 @@ var rounds: Array[Dictionary] = []
 ## it is written as .rpl, one file, keeping every other recorded byte.
 var original: ELDuelReplay
 var _duel: WeakRef
+var _gate: WeakRef
 
 ## Starts recording a round of the match: the battle as started and its seed.
 ## The recording vets nothing; it only notes each accepted action.
-func track(duel: ELDuel, seed_value: int) -> void:
+func track(duel: ELDuel, seed_value: int, owner_gate: RefCounted = null) -> void:
 	untrack()
 	edition = duel.profile.id
 	rounds.append({"seed": seed_value, "options": duel.setup.duplicate(true), "actions": [], "winner": -1, "complete": false})
 	_duel = weakref(duel)
-	if duel.gate == null: duel.gate = self
+	_gate = weakref(self if owner_gate == null else owner_gate)
+	if owner_gate == null and duel.gate == null: duel.gate = self
 
 func tracking(duel: ELDuel) -> bool:
-	return _duel != null and _duel.get_ref() == duel and duel.gate == self
+	if _duel == null or _duel.get_ref() != duel: return false
+	var expected: RefCounted = _gate.get_ref()
+	return expected != null and duel.gate == expected
 
 func untrack() -> void:
 	var duel: ELDuel = _duel.get_ref() if _duel != null else null
 	if duel != null and duel.gate == self: duel.gate = null
 	_duel = null
+	_gate = null
+
+func label_heroes(duel: ELDuel, names: Array) -> void:
+	for side in 2:
+		var seat := side ^ local_side
+		var template := String(duel.heroes[seat].template)
+		var title := String(names[seat])
+		labels[side] = title if not title.is_empty() else template
+		labels[side + 2] = template
+		faces[side] = int(duel.profile.table("HeroTemplates").get(template, {}).get("Face", -1))
 
 ## ELDuel gate: every action may run; accepted ones are recorded.
 func gate_check(target: ELDuel, _action: Dictionary) -> bool:
@@ -120,7 +135,7 @@ func save(name: String) -> String:
 	for index in rounds.size():
 		var round: Dictionary = rounds[index]
 		var data := {"format": FORMAT, "version": VERSION, "edition": edition, "name": names[index], "labels": labels.duplicate(),
-			"faces": faces.duplicate(), "round": index + 1, "rounds": rounds.size(), "seed": int(round.seed),
+			"faces": faces.duplicate(), "local_side": local_side, "round": index + 1, "rounds": rounds.size(), "seed": int(round.seed),
 			"options": round.options, "actions": round.actions, "winner": int(round.winner)}
 		var file := FileAccess.open(folder.path_join(names[index] + EXTENSION), FileAccess.WRITE)
 		if file == null: return "The replay cannot be written."
@@ -139,6 +154,7 @@ static func read(path: String, edition_id: String) -> Dictionary:
 	if data is not Dictionary or data.get("format") != FORMAT or data.get("version") != VERSION or data.get("edition") != edition_id: return {}
 	if data.get("options") is not Dictionary or data.get("actions") is not Array or data.get("seed") is not int: return {}
 	if data.get("labels") is not Array or data.labels.size() != 4 or data.get("faces") is not Array or data.faces.size() != 2: return {}
+	if not ELLuaSave._integer(data.get("local_side", 0), 0, 1): return {}
 	for action: Variant in data.actions:
 		if action is not Dictionary or not KINDS.has(action.get("kind")) or action.get("side") not in [0, 1]: return {}
 		# A comment written in the replay editor.

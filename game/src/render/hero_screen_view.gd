@@ -21,6 +21,10 @@ const TEXT := Color("f2eee4")
 const CAPTION := Color("d8c89a")
 
 var director: ELAdventureDirector
+var strategic_session: ELStrategicSession
+var _online_message: Label
+var _purchase_pending := false
+var strategic_shop_visit := false
 var state: ELAdventureSession
 var hud: ELAdventureHud
 var profile: ELProfile
@@ -72,6 +76,7 @@ func build(owner: ELAdventureDirector, panel: ELAdventureHud, ids: Array[int], i
 		_button("Dispell", Vector2.ZERO).pressed.connect(_dispel)
 		_button("AcceptLevelUp", Vector2.ZERO).pressed.connect(_accept_skill)
 		ELHeroSkills.prepare(profile, state.object(heroes[0]))
+	_build_online_message()
 	resized.connect(_layout)
 	_layout()
 	refresh()
@@ -160,7 +165,7 @@ func _refresh_sides() -> void:
 
 func refresh() -> void:
 	_refresh_sides()
-	var acting := director.can_move() and director.movement.is_empty()
+	var acting := strategic_session.can_plan() if strategic_session != null else director.can_move() and director.movement.is_empty()
 	if not exchange:
 		var hero := state.object(heroes[0])
 		var spells := attached(heroes[0])
@@ -172,7 +177,7 @@ func refresh() -> void:
 		var offers: Array = hero.get("skill_offers", [])
 		if offer_pick >= offers.size(): offer_pick = -1
 		buttons.AcceptLevelUp.disabled = not acting or offer_pick < 0 or int(hero.get("skill_points", 0)) <= 0
-		buttons.DismissHero.disabled = not ELHeroExchange.dismiss_problem(director, heroes[0]).is_empty()
+		buttons.DismissHero.disabled = not acting or not ELHeroExchange.dismiss_problem(director, heroes[0]).is_empty()
 	sheet.queue_redraw()
 
 func _skill_name(code: String, rank: int) -> String:
@@ -215,6 +220,7 @@ func drop(point: Vector2) -> bool:
 		var hit := slot_at(point)
 		var target := state.object(heroes[side])
 		var position := ELHeroExchange.drop_position(target, int(hit[1]) if int(hit[0]) == side else -1, point.x < rect.get_center().x)
+		if strategic_session != null: return _manage_online(["transfer", source, index, heroes[side], position])
 		var moved := ELHeroExchange.transfer(state, source, index, heroes[side], position)
 		refresh()
 		return moved
@@ -294,6 +300,9 @@ func _dispel() -> void:
 	if spells.is_empty() or gs_pick >= spells.size(): return
 	var spell: Dictionary = spells[gs_pick]
 	if int(spell.player) != state.current_player: return
+	if strategic_session != null:
+		_manage_online(["global_dispel", int(spell.serial)])
+		return
 	ELGlobalSpells.dispel(state, int(spell.player), int(spell.serial))
 	refresh()
 
@@ -301,12 +310,41 @@ func _accept_skill() -> void:
 	var hero := state.object(heroes[0])
 	var offers: Array = hero.get("skill_offers", [])
 	if offer_pick < 0 or offer_pick >= offers.size(): return
+	if strategic_session != null:
+		_manage_online(["learn_skill", heroes[0], str(offers[offer_pick])])
+		return
 	if state.choose_skill(heroes[0], str(offers[offer_pick])): offer_pick = -1
+	refresh()
+
+func _build_online_message() -> void:
+	if strategic_session != null:
+		_online_message = _label(Rect2(12, 603, 613, 20), "", 13, TEXT, hud._bold)
+
+func _manage_online(order: Array, purchase := false) -> bool:
+	var queued := strategic_session.manage_hero(order, _online_result.bind(order[0]))
+	_purchase_pending = queued and purchase
+	_online_message.text = "Confirming hero order…" if queued else ""
+	refresh()
+	return queued
+
+func _online_result(reason: String, kind: String) -> void:
+	if not is_inside_tree() or is_queued_for_deletion(): return
+	var purchased := _purchase_pending and reason.is_empty()
+	_purchase_pending = false
+	if purchased:
+		closed.emit()
+		return
+	if kind == "dismiss_hero" and reason.is_empty():
+		dismissed.emit(heroes[0])
+		return
+	if reason.is_empty(): offer_pick = -1
+	_online_message.text = reason
 	refresh()
 
 ## The original MessageBox asks T_MB_DISMISS_HERO with OK and Cancel.
 func _ask_dismiss() -> void:
 	if confirm != null or not ELHeroExchange.dismiss_problem(director, heroes[0]).is_empty(): return
+	if strategic_session != null and not strategic_session.can_plan(): return
 	confirm = ELFirstMessageBox.new()
 	add_child(confirm)
 	confirm.setup(hud, profile.text("T_MB_DISMISS_HERO").strip_edges(), ELFirstMessageBox.OK_CANCEL)
@@ -316,7 +354,11 @@ func _answer_dismiss(accepted: bool) -> void:
 	if confirm == null: return
 	confirm.queue_free()
 	confirm = null
-	if accepted and ELHeroExchange.dismiss(director, heroes[0]): dismissed.emit(heroes[0])
+	if not accepted: return
+	if strategic_session != null:
+		_manage_online(["dismiss_hero", heroes[0]])
+	elif ELHeroExchange.dismiss(director, heroes[0]):
+		dismissed.emit(heroes[0])
 
 ## Escape closes the confirmation first, then the screen.
 func cancel() -> void:

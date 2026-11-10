@@ -1,15 +1,15 @@
 {
-  "version": "0.5.0",
+  "version": "0.6.0",
   "languages": {
     "en": {
       "pages": 456,
       "catalog_pages": 433,
-      "links": 935
+      "links": 939
     },
     "ru": {
       "pages": 456,
       "catalog_pages": 433,
-      "links": 935
+      "links": 939
     }
   },
   "requires_game_files": false,
@@ -18,16 +18,16 @@
   "translation_keys": 16,
   "files": {
     "data/en/index.json": {
-      "bytes": 220136,
-      "sha256": "2e7a961f6b89808fed61b15894663f9ec9239171cb6fd5891b3612e6b97b98bf"
+      "bytes": 234627,
+      "sha256": "a7e21a5c8cff2e64af7375650fc6aa1a7ac58dca812d4a3ce603635da0341482"
     },
     "data/en/pages/abilities.json": {
       "bytes": 2238,
       "sha256": "3acffbe9c1ef065e3d80003abbfa2e6d31517ad4521c340c163efb4116169671"
     },
     "data/en/pages/about-wiki.json": {
-      "bytes": 1947,
-      "sha256": "d1cd3de410f85ff7ac61dc6550f11ba9d74a8a86163ac55c470bad445cba7b0b"
+      "bytes": 2251,
+      "sha256": "4c978ecfab6847d46cb9448661d94b7ba75a04226655173fa6efef1cfae51445"
     },
     "data/en/pages/adventure-map.json": {
       "bytes": 1983,
@@ -1498,48 +1498,48 @@
       "sha256": "2c30f339f4059b1aca9835fda71203b2af893b438b01ba42148b95b531657466"
     },
     "data/en/pages/combat-phases.json": {
-      "bytes": 2349,
-      "sha256": "fd852806e454c7b1329dd6bb8e618c35c20d6769e5ece7c6f56b84a27b915e04"
+      "bytes": 2457,
+      "sha256": "7b6cb9fdcc953e7aef7369a2c4c5e6834a73a722dcefae5ac42593c8da3a03d2"
     },
     "data/en/pages/combat.json": {
       "bytes": 2868,
       "sha256": "2835691aad23ffe54e349c8ea5a3d94b4e49ecff8684cd2c59986451bd05768b"
     },
     "data/en/pages/controls.json": {
-      "bytes": 2325,
-      "sha256": "0f9e08b0bbf8d3347e0b6f90343b6a11f1ac50a645240ce0ac37eaa63339130c"
+      "bytes": 4364,
+      "sha256": "eecf2391a99b53eba3562a2af519f7267ee764425f9845194087c51edc4a4bd8"
     },
     "data/en/pages/creatures.json": {
-      "bytes": 1249,
-      "sha256": "7d8a255d0d676b34a12e899afc121da04ca73a2bade72c853809a4124df75f8f"
+      "bytes": 2138,
+      "sha256": "8bb8f3740b23fafc52b0d871a8a716faffd4c23dd8f37177f4f352b7417feef0"
     },
     "data/en/pages/differences.json": {
-      "bytes": 1943,
-      "sha256": "ca3e59a01c85f867bd82debbf258650e6bb83e8ca747fa5af09f7eba7be467f3"
+      "bytes": 2001,
+      "sha256": "27b950c3d446217683197f782226393a7bc655a19cf8716d3678024ce608677c"
     },
     "data/en/pages/duel.json": {
-      "bytes": 1635,
-      "sha256": "3e66770611f21881d624617fe7589be571f470029b3936992bc9dc26ac2f3db2"
+      "bytes": 14350,
+      "sha256": "e0184609dd8fcbcb6716d13c9a5b2306d99b97f9f4e6efd3ba58fd3d78791e68"
     },
     "data/en/pages/heroes.json": {
       "bytes": 2076,
       "sha256": "4bc835997c8ef73d15dc4eb58c6cf86ab878d3c055262995f04a2e2ae28d7588"
     },
     "data/en/pages/home.json": {
-      "bytes": 3054,
-      "sha256": "2663614bdfaf1583268ae4445c14c1bab0fcc6f6c259e3618515287dea682dfb"
+      "bytes": 3249,
+      "sha256": "e1b8dfcf6347d47638d3638b30c8847d6f532c08ef58f2d20486d4b104919670"
     },
     "data/en/pages/installing.json": {
       "bytes": 3199,
       "sha256": "3ea449e2a696eab0d78dc780ddd732fd2e990c3935b024786c88f5a2ac68825e"
     },
     "data/en/pages/main-menu.json": {
-      "bytes": 2108,
-      "sha256": "b00c328a75ad68716a361e4997e40e9119ec7b4ac459188e3cd7378dd882b094"
+      "bytes": 2286,
+      "sha256": "4e3ec2edba87f4d33a1a0687353c3afc04ba2dc48e3c5a056d5f194a29f80236"
     },
     "data/en/pages/options.json": {
-      "bytes": 3934,
-      "sha256": "c92c4c4712fc16680b73727b88172e499b42a68264d7ba5f5dc4e5b6896a81b8"
+      "bytes": 4175,
+      "sha256": "91f35e1fb1e84053c7a6ce5b3412ad22a0142dda921af85aceed341bfb9a574b"
     },
     "data/en/pages/races.json": {
       "bytes": 1261,
@@ -1842,20 +1842,20 @@
       "sha256": "6dfda8d3137c2e2d0413169247a96fbc2ca1513d5656972212bd111f664b2270"
     },
     "data/en/pages/troubleshooting.json": {
-      "bytes": 1639,
-      "sha256": "fb65d1488afb1da162ed16685ce2381ebeff2116c1715ceaa50302313a1d08ba"
+      "bytes": 1660,
+      "sha256": "1b067870a7a8e91c2adbf015259678dbca8ab20167f1730e52cd34fee0d24934"
     },
     "data/ru/index.json": {
-      "bytes": 386531,
-      "sha256": "74f30207cff006850ec80b90d14da25b939cd4ccdbe73d2467021e009e8d37e7"
+      "bytes": 415291,
+      "sha256": "6c17c395948fd99cac3386c3f3afbbec30f08ce7ecea71a721833ea2767a33d8"
     },
     "data/ru/pages/abilities.json": {
       "bytes": 3685,
       "sha256": "0af17ac68ef1894ede232692e47fa002e85de2894e76023ac251a9273b6c2633"
     },
     "data/ru/pages/about-wiki.json": {
-      "bytes": 3062,
-      "sha256": "a32d871f1f7479dabe1e6371cc9be72dbd2c3fd744d2e31f97ad1250f7838ebe"
+      "bytes": 3626,
+      "sha256": "b73d8a62f7e0c4fb8827c8c42c17b87448c331503027c9f01d8035950dd84e3a"
     },
     "data/ru/pages/adventure-map.json": {
       "bytes": 3108,
@@ -3326,48 +3326,48 @@
       "sha256": "4957719ebd6ad1a6e2ca87147b24fda6b2110da0a0aedc942ae6e655fa1ce958"
     },
     "data/ru/pages/combat-phases.json": {
-      "bytes": 3921,
-      "sha256": "8369c46df94a8ce6c797740977b00dac8f4c64ed01b5c12154f707e17ed2043b"
+      "bytes": 4076,
+      "sha256": "a479e666769660097b595e0332a987fc02eb47a6c64cf448f8f229ccd7d79346"
     },
     "data/ru/pages/combat.json": {
       "bytes": 4880,
       "sha256": "597e40d1c330b2faa80fb5b6b8554fa3dd1732b13ffeae4c1a3821ee4755105a"
     },
     "data/ru/pages/controls.json": {
-      "bytes": 3669,
-      "sha256": "e441867b9dae51066bd0e3168c155c836f8d45b98dce94fa9a31e647a9453c23"
+      "bytes": 6958,
+      "sha256": "c4350dbebd98327688f4b14a3e9ffe1ceca643e564455b626fe165efaffb2a20"
     },
     "data/ru/pages/creatures.json": {
-      "bytes": 2104,
-      "sha256": "4f20fdf3cd6464233c613fdb509a3752d849d98ac5eb17ce98766c66419295af"
+      "bytes": 3555,
+      "sha256": "df574ebbfdf357564ae2db7d6e1453adb617fe3da4db75b187e01bfcf2f52f04"
     },
     "data/ru/pages/differences.json": {
-      "bytes": 3364,
-      "sha256": "3ffe7a092ca0de53d6ff5c29088b7da417bb43233cb49d443291c3b70f16642b"
+      "bytes": 3497,
+      "sha256": "f5e413b6aef4e1c755bdeb42e1a8896d3c534657441fa34a065e343ee9db7578"
     },
     "data/ru/pages/duel.json": {
-      "bytes": 2660,
-      "sha256": "7df583c78592ef63334a1de32a0044032d9f94ef6dbd6ad324312ed8d794fe80"
+      "bytes": 26827,
+      "sha256": "9237c518978ad2e67f33130f887cac0ebc1d24f1735e2b589a03ca190d5bfad9"
     },
     "data/ru/pages/heroes.json": {
       "bytes": 3175,
       "sha256": "139375cc49eba811d4cd45cc6bebeba7acdab03f51337013b86eb479d7416212"
     },
     "data/ru/pages/home.json": {
-      "bytes": 4360,
-      "sha256": "c7d198849e067ea64cf1f1dca5be12475fe5bd960134bff163b77206cf9aebbd"
+      "bytes": 4770,
+      "sha256": "72423f4cde7385905829c01f9f9822f4b24060d88a25688e3f33077b9a0b37ff"
     },
     "data/ru/pages/installing.json": {
       "bytes": 4986,
       "sha256": "203cca7687042e152be6f3214388d683dbbe8ba705ed7c5df38cb474e5073be9"
     },
     "data/ru/pages/main-menu.json": {
-      "bytes": 3049,
-      "sha256": "241cc813cf5345adaa0baff0e8217ff5ea899d983936a542ac10e4b29c0ff9b3"
+      "bytes": 3375,
+      "sha256": "96abbbeb17df2fd141943b625a343d9c07ee63542d2f359a7a69d1ba4eaa86ef"
     },
     "data/ru/pages/options.json": {
-      "bytes": 6312,
-      "sha256": "87c2da8cbc9afdac017244c4f65110083fe9438498c3e05c0ec3fa94dd11f2b4"
+      "bytes": 6702,
+      "sha256": "2ab16fbbcaf472bda7ba5bf0d5617f9b87361991ef931ecf6b229eebee6d237b"
     },
     "data/ru/pages/races.json": {
       "bytes": 1998,
@@ -3670,8 +3670,8 @@
       "sha256": "83ca3e58050dddaac18cc8483b4c963256612816ea2152337110d8aec0eb2617"
     },
     "data/ru/pages/troubleshooting.json": {
-      "bytes": 2784,
-      "sha256": "de3ba81ca695d1da24425e6c73f6e46bf6cc7ab0cc5db8b04f43f9072cbf082b"
+      "bytes": 2804,
+      "sha256": "dae6ffef3387111f47b4fdabddcc176ed524bd3d0077911fffd52c8444c1e1a6"
     },
     "i18n.json": {
       "bytes": 1917,
@@ -5122,5 +5122,5 @@
       "sha256": "aabab5bcfce15545227916db3d8f7e6c353fbf93c2b073e25dec7262d79874ed"
     }
   },
-  "bytes": 5471385
+  "bytes": 5562289
 }

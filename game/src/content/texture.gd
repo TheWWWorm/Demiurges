@@ -6,6 +6,8 @@ extends RefCounted
 
 const MAGIC := 0x00504D4D  # "MMP\0"
 const DATA_OFFSET := 76
+const ONE_BIT_ALPHA := &"one_bit_alpha"
+const AUTHORED_MASK_MIPS := &"authored_mask_mips"
 
 
 static func decode(data: PackedByteArray) -> Image:
@@ -35,6 +37,29 @@ static func decode(data: PackedByteArray) -> Image:
 	return img
 
 
+## Arena QU cutouts store a separate one-bit mask and colour at every level.
+static func authored_mask_mipmaps(data: PackedByteArray, base: Image) -> Image:
+	var levels := data.decode_u32(12)
+	if levels < 2 or data.decode_u32(16) != 0x5551 or data.decode_u32(20) != 16: return null
+	var width := base.get_width()
+	var height := base.get_height()
+	var offset := DATA_OFFSET + width * height * 2
+	var pixels := base.get_data()
+	var last: Image
+	for level in range(1, levels):
+		if width == 1 and height == 1: return null
+		width = maxi(1, width / 2)
+		height = maxi(1, height / 2)
+		if offset + width * height * 2 > data.size(): return null
+		last = _decode_raw(data, width, height, offset)
+		pixels.append_array(last.get_data())
+		offset += width * height * 2
+	# Godot uploads a complete chain. Generate its tail from the last stored level.
+	last.generate_mipmaps()
+	pixels.append_array(last.get_data().slice(width * height * 4))
+	return Image.create_from_data(base.get_width(), base.get_height(), true, Image.FORMAT_RGBA8, pixels)
+
+
 static func _decode_pnt3(data: PackedByteArray, size: int, w: int, h: int) -> Image:
 	# Simple RLE: a dword with non-zero alpha is a BGRA pixel, otherwise it
 	# is a count of zero bytes to emit.
@@ -57,7 +82,7 @@ static func _decode_pnt3(data: PackedByteArray, size: int, w: int, h: int) -> Im
 	return Image.create_from_data(w, h, false, Image.FORMAT_RGBA8, out)
 
 
-static func _decode_raw(data: PackedByteArray, w: int, h: int) -> Image:
+static func _decode_raw(data: PackedByteArray, w: int, h: int, src := DATA_OFFSET) -> Image:
 	var bpp := data.decode_u32(20) / 8
 	var masks: Array[PackedInt64Array] = []
 	for c in 4:  # a, r, g, b: (mask, shift, bit count)
@@ -65,7 +90,6 @@ static func _decode_raw(data: PackedByteArray, w: int, h: int) -> Image:
 		masks.append(PackedInt64Array([data.decode_u32(p), data.decode_u32(p + 4), data.decode_u32(p + 8)]))
 	var out := PackedByteArray()
 	out.resize(w * h * 4)
-	var src := DATA_OFFSET
 	for i in w * h:
 		var px: int = data.decode_u16(src) if bpp == 2 else data.decode_u32(src)
 		src += bpp

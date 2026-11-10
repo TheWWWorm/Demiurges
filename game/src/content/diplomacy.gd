@@ -45,6 +45,82 @@ const SHOPS_BIT := 0x40
 ## Resources a trade can carry, in the original resource order.
 const TRADE_RESOURCES := 7
 const TRADE_FLAGS := ["artifact", "need_artifact", "spell", "need_spell"]
+const STRATEGIC_ORDERS := ["peace_offer", "peace_accept", "peace_remove", "peace_break", "trade_offer", "trade_accept", "trade_remove", "diplomacy_bane"]
+
+## Identify the terms actually shown to the player, even if the other
+## commander replaces the offer while its dialog is open.
+static func offer_key(offer: Dictionary) -> String:
+	if offer.is_empty(): return ""
+	var terms: Array = [int(offer.from), int(offer.to)]
+	if offer.has("mask"): terms.append(int(offer.mask))
+	else: terms.append_array([offer.give.resources, offer.take.resources])
+	return JSON.stringify(terms).sha256_text()
+
+static func strategic_order(state: ELAdventureSession, player: int, order: Array) -> String:
+	if order.size() < 2 or not ELLuaSave._integer(order[1], 1, 32): return "Invalid diplomacy order."
+	var other := int(order[1])
+	if other == player or not state.players.has(other): return "Invalid diplomacy order."
+	var kind: String = order[0]
+	match kind:
+		"peace_break":
+			if order.size() != 2: return "Invalid diplomacy order."
+			break_alliance(state, player, other)
+		"diplomacy_bane":
+			if order.size() != 3 or not order[2] is bool: return "Invalid diplomacy order."
+			set_bane(state, player, other, order[2])
+			state.event.emit({"kind": "diplomacy_changed"})
+		"peace_offer":
+			if order.size() != 4 or not ELLuaSave._integer(order[2], 0, 15) or not order[3] is String: return "Invalid diplomacy order."
+			var incoming := received(state, player, other)
+			if not order[3].is_empty() and order[3] != offer_key(incoming): return "The diplomacy offer has changed."
+			var relation_byte := next_relation(state, player, other)
+			var current := mask(relation_byte)
+			var proposal := int(order[2])
+			for aspect in ASPECTS:
+				if (proposal ^ current) & (1 << aspect) and not changeable(relation_byte, aspect): return "That alliance term is fixed."
+			var baseline := current if order[3].is_empty() else int(incoming.mask)
+			if proposal == baseline: return "The diplomacy offer has no changes."
+			send(state, {"from": player, "to": other, "before": baseline, "mask": proposal})
+		"trade_offer":
+			if order.size() != 3 + TRADE_RESOURCES * 2 or not order[2] is String: return "Invalid diplomacy order."
+			var incoming := trade_received(state, player, other)
+			if not order[2].is_empty() and order[2] != offer_key(incoming): return "The diplomacy offer has changed."
+			var give := trade_side()
+			var take := trade_side()
+			give.resources = order.slice(3, 3 + TRADE_RESOURCES)
+			take.resources = order.slice(3 + TRADE_RESOURCES)
+			if not _valid_side(give) or not _valid_side(take): return "Invalid diplomacy order."
+			var previous_give: Dictionary = trade_side() if order[2].is_empty() else incoming.take
+			var previous_take: Dictionary = trade_side() if order[2].is_empty() else incoming.give
+			if give.resources == previous_give.resources and take.resources == previous_take.resources: return "The diplomacy offer has no changes."
+			if not _trade_funded(state, player, give): return "A commander cannot afford this trade."
+			var next := {"from": player, "to": other, "give": give, "take": take}
+			if not send_trade(state, next): return "Invalid diplomacy order."
+		"peace_accept", "peace_remove", "trade_accept", "trade_remove":
+			if order.size() != 3 or not order[2] is String or order[2].is_empty(): return "Invalid diplomacy order."
+			var peace := kind.begins_with("peace")
+			var accepting := kind.ends_with("accept")
+			var found := offer_between(state, player, other) if peace else trade_between(state, player, other)
+			if order[2] != offer_key(found) or (accepting and found.from != other): return "The diplomacy offer has changed."
+			if peace:
+				if accepting:
+					var accepted: Array = _record(state, other).get("accepted", [])
+					if accepted.size() >= 64: return "Finish the day before accepting more peace offers."
+					accept(state, other, player)
+				else: withdraw(state, player, other)
+			elif accepting:
+				if not _trade_funded(state, other, found.give, found.take.resources) or not _trade_funded(state, player, found.take, found.give.resources): return "A commander cannot afford this trade."
+				accept_trade(state, other, player)
+			else: withdraw_trade(state, player, other)
+		_: return "Invalid diplomacy order."
+	return ""
+
+static func _trade_funded(state: ELAdventureSession, player: int, side: Dictionary, incoming: Array = []) -> bool:
+	var wallet: Dictionary = state.players[player].resources
+	for index in TRADE_RESOURCES:
+		var credit := 0 if incoming.is_empty() else int(incoming[index])
+		if int(side.resources[index]) - credit > int(wallet.get(ELResources.ORIGINAL[index], 0)): return false
+	return true
 
 static func applies(state: ELAdventureSession) -> bool:
 	return state != null and state.map != null and state.map.profile != null and state.map.profile.id == "el1"

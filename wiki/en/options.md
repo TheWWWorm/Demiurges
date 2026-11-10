@@ -26,6 +26,7 @@ These work as in the games: autosave, faster map movement, animated objects, amb
 | Shadows | Shadows of figures in battles and of trees, rocks and buildings on maps. |
 | Soft shadows | Softer shadow edges. Off at first. |
 | Terrain detail | Subtle texture and relief on map ground and fine grain on battle ground. Off at first. |
+| Enhanced water | Ripples, a sky tint, and soft shoreline foam on the adventure map. Bog water has gentler ripples and no foam. In Etherlords II, rain adds rings to the water while Map weather is enabled. Off at first. |
 | Map weather | Rain, snow and other weather on adventure maps. |
 | Combat blood | Blood in battles. |
 

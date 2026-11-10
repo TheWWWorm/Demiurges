@@ -1,5 +1,6 @@
 class_name ELAdventureView
 extends Node3D
+var strategic_session: ELStrategicSession
 signal leave_requested
 signal encounter_requested(hero: int, opponent: int)
 ## F9 / F8: resume the quick save (ELSaveSlots.quick_path).
@@ -19,6 +20,7 @@ var ui: Control
 var title: Label
 var hero_info: Label
 var notice: Label
+var _observer_battle_note := ""
 var dialogue_panel: Control
 ## Catches clicks while a script message box sits over a modal window.
 var dialogue_blocker: Control
@@ -66,6 +68,7 @@ const SECOND_TEXT_PITCH := 0.70
 ## view ({} otherwise), and the distance/angle the camera eases to (x < 0: none).
 var text_view: Dictionary = {}
 var view_goal := Vector2(-1, -1)
+var _script_lens := false
 ## Scripted camera turns ease as in the original: each 64 ms tick moves the
 ## view a sixth of the remaining angle, the shorter way round, and it settles
 ## once that step is under 0.001 rad. INF when no turn is pending.
@@ -74,12 +77,14 @@ const TURN_TICK := 0.064
 var yaw_goal := INF
 var zoom_limits := Vector2(16, 100)
 var following := -1
+var script_camera_attached := true
 ## The player moved the view away from the hero; new orders leave it there
 ## until the player centres the hero again.
 var view_moved := false
 var dragging := false
 var error := ""
 var paused := false
+var console_open := false
 var settings: ELSettings
 var _art: ELAdventureArt
 var audio: ELAdventureAudio
@@ -94,6 +99,7 @@ var diplomacy: ELDiplomacyView
 var global_spell_waiting := false
 var skill_button: Button
 var day_button: BaseButton
+var _turn_clock: ELFirstClock
 var hero_selector: OptionButton
 var cancel_button: Button
 ## Remake-only helper parts over the original HUD (the readout box, shortcut
@@ -180,6 +186,7 @@ var cursor_context: Dictionary = {}
 ## won single mission or campaign final.
 var extras: ELFrontMenu
 var extras_layer: CanvasLayer
+var _save_preview_pending := false
 var _after_extras := Callable()
 ## Hall of Fame table a won mission wrote ("scenario", "campaign" or "").
 var hall_record := ""
@@ -248,15 +255,17 @@ func build(profile: ELProfile, scenario: Dictionary, preferences: ELSettings, di
 	following = _hero_id()
 	_update_camera()
 	_build_ui()
+	if strategic_session != null: strategic_session.management_changed.connect(_refresh_hero_info)
 	_refresh_hero_info()
 	audio = ELAdventureAudio.new()
 	add_child(audio)
 	audio.build(profile, preferences)
 	apply_settings()
+	effects = ELAdventureEffects.new()
+	world.add_child(effects)
+	if profile.id == "el2": effects.rain_changed.connect(world.terrain.set_water_rain)
+	effects.build(profile, preferences, state)
 	if profile.id == "el2":
-		effects = ELAdventureEffects.new()
-		world.add_child(effects)
-		effects.build(profile, preferences, state)
 		audio.listener = target
 		audio.restore(state)
 	elif profile.id == "el1":
@@ -273,6 +282,7 @@ func build(profile: ELProfile, scenario: Dictionary, preferences: ELSettings, di
 			pitch = clampf(float(saved.get("pitch", pitch)), pitch_limits.x, pitch_limits.y)
 			zoom = clampf(float(saved.get("zoom", zoom)), zoom_limits.x, zoom_limits.y)
 		following = int(saved.get("following", following))
+		script_camera_attached = bool(saved.get("script_camera_attached", true))
 		selected_hero = int(saved.get("selected_hero", state.main_hero))
 		_refresh_roster()
 		var point: Variant = saved.get("target")
@@ -283,8 +293,12 @@ func build(profile: ELProfile, scenario: Dictionary, preferences: ELSettings, di
 		if not director.movement.is_empty():
 			_draw_route(director.movement.path, director.movement.id)
 			var at: int = director.movement.index
-			world.move_actor(director.movement.id, Vector2(director.movement.path[at]).lerp(Vector2(director.movement.path[at + 1]), director.movement.progress), true)
+			director.fast_mode = bool(settings.values.get("adventure_fast", false)) if settings != null else false
+			var id: int = director.movement.id
+			var point_on_path := Vector2(director.movement.path[at]).lerp(Vector2(director.movement.path[at + 1]), director.movement.progress)
+			world.move_actor(id, point_on_path, true, director.movement_speed(state.object(id)), director.fast_mode)
 		elif profile.id == "el1": _draw_route(ELStrategy.order_path(director, state.object(_hero_id())))
+		if not director.travel.is_empty(): _travel_phase(false)
 		_update_camera()
 	else:
 		if profile.id == "el1" and scenario.has("campaign") and scenario.has("number"):
@@ -307,6 +321,18 @@ func build(profile: ELProfile, scenario: Dictionary, preferences: ELSettings, di
 			wait_cursor(profile)
 			ELSaveSlots.write_auto("T_AUTOSAVE_START_MISSION", director, camera_state())
 	if profile.id == "el1": _build_first_tutorial()
+	for pickup: Dictionary in restored.get("pickup_notices", []): _present(pickup)
+	for message: Dictionary in restored.get("site_notices", []):
+		match message.kind:
+			"resources_collected": _first_pickup_box(message)
+			"site_captured": _first_capture_box(message)
+			"building_message": _present(message)
+	if strategic_session != null:
+		strategic_session.site_notice_open = func() -> bool:
+			return (building_message != null and building_message.data.get("site_notice", false)) \
+				or building_messages.any(func(message: Dictionary) -> bool: return message.get("site_notice", false))
+	if ELGlobalSpells.applies(state):
+		global_spell_waiting = ELGlobalSpells.data(state, state.current_player).get("production", {}).get("state", 0) == 2
 	if not state.outcome.is_empty(): _show_result()
 	return true
 
@@ -314,19 +340,36 @@ func _exit_tree() -> void:
 	if state != null: state.close()
 
 func _process(delta: float) -> void:
+	if strategic_session != null and notice != null:
+		var battle_note := strategic_session.observer_battle_note()
+		if battle_note != _observer_battle_note:
+			_observer_battle_note = battle_note
+			notice.text = remark if battle_note.is_empty() else battle_note
+	if _turn_clock != null:
+		_turn_clock.show_seconds(strategic_session.clock_remaining())
 	if hud != null and paused and hud.tooltip.visible: hud.tooltip.hide()
 	_tick_cursor(delta)
 	if second_hud != null: _tick_map_tooltip(delta)
-	if director == null or not error.is_empty() or paused or extras_open():
+	if director == null or not error.is_empty() or paused or console_open or extras_open():
 		# Second game: the hero readouts follow the state under a message box or
 		# window too (a building use pays its points before its message opens).
 		if second_hud != null and director != null: _refresh_hero_info()
 		return
+	if global_spell_waiting and _can_act():
+		_offer_global_spell()
+		if global_spells != null: return
+	if strategic_session != null:
+		var visit := strategic_session.local_shop_visit()
+		if not visit.is_empty():
+			if not _open_strategy_shop(visit[0], visit[1], true, strategic_session.remote_shop_open(state.current_player)):
+				strategic_session.manage_hero(["visit_close"] + visit, func(_reason: String): pass)
+			return
 	# Notebook entries keep the point the camera looks at.
 	state.view_point = Vector2(target.x, -target.z) / ELAdventureTerrain.CELL
-	# Options "Accelerated mode": map movement at 16 instead of 4 cells a second.
+	# Options "Accelerated mode": map movement at four times its normal rate.
 	director.fast_mode = bool(settings.values.get("adventure_fast", false)) if settings != null else false
-	director.advance(delta)
+	if strategic_session == null or strategic_session.link.is_host: director.advance(delta)
+	_travel_pose()
 	if not director.error.is_empty():
 		error = director.error
 		notice.text = error
@@ -338,10 +381,17 @@ func _process(delta: float) -> void:
 			yaw_goal = INF
 		else: yaw += remaining * (1.0 - pow(1.0 - TURN_RATE, delta / TURN_TICK))
 	if view_goal.x > 0:
-		var ease := minf(1, delta * 1.0)
-		zoom = lerpf(zoom, view_goal.x, ease)
-		pitch = lerpf(pitch, view_goal.y, ease)
-		if absf(zoom - view_goal.x) < 0.02 and absf(pitch - view_goal.y) < 0.002:
+		var settled: bool
+		if _script_lens:
+			zoom = _script_lens_step(zoom, view_goal.x, 0.25, delta)
+			pitch = _script_lens_step(pitch, view_goal.y, 1.0 / 3.0, delta)
+			settled = zoom == view_goal.x and pitch == view_goal.y
+		else:
+			var ease := minf(1.0, delta)
+			zoom = lerpf(zoom, view_goal.x, ease)
+			pitch = lerpf(pitch, view_goal.y, ease)
+			settled = absf(zoom - view_goal.x) < 0.02 and absf(pitch - view_goal.y) < 0.002
+		if settled:
 			zoom = view_goal.x
 			pitch = view_goal.y
 			view_goal = Vector2(-1, -1)
@@ -468,6 +518,7 @@ func _update_rings(delta: float) -> void:
 	var selected := _hero_id()
 	var hero := state.object(selected)
 	if hero.is_empty() or not hero.get("alive", false) or not hero.get("visible", true) or hero.get("fortified", false) or not hero.get("placed", true): selected = -1
+	if int(director.travel.get("hero", -1)) == selected: selected = -1
 	var hover_place := _ring_place(hover)
 	var selected_place := _ring_place(selected)
 	rings.show_rings(delta, hover, hover_place[0], hover_place[1], selected, selected_place[0], selected_place[1], selected >= 0 and hero.get("danger_pulse", false))
@@ -525,8 +576,55 @@ func _select_hero(id: int) -> void:
 	_remark(director.notice)
 	_refresh_hero_info()
 
+func focus_recruit(id: int) -> void:
+	var actor := state.object(id)
+	if actor.get("owner") != state.current_player or not actor.get("alive", false) or not actor.get("visible", false): return
+	selected_hero = id
+	following = id
+	view_moved = false
+	_draw_route([])
+	_refresh_roster()
+	_refresh_hero_info()
+
+## The cast plays its sound on each client. Fog gates the map particles and
+## camera, and selection stays with the recruit's own commander.
+func present_summon(id: int, code: String) -> void:
+	var hero := state.object(id)
+	if not hero.get("alive", false) or not hero.get("visible", false): return
+	# Spell colour drives the cue even when a mod grants it to another race.
+	var colour: String = {"C": "Red", "K": "Blue", "S": "Black", "V": "Green"}[code[1]]
+	audio.effect_sound("Magic/Global%sSummon.wav" % colour)
+	var owned: bool = hero.owner == state.current_player
+	if owned and (selected_hero != id or following != id): focus_recruit(id)
+	if not ELFog.shown(state, state.current_player, hero): return
+	if owned:
+		target = ELAdventureScene.world_position(hero.x, hero.y)
+	else:
+		_focus_object(id)
+	var at := target
+	var actor: Node3D = world.actors.get(id)
+	if is_instance_valid(actor): at = world.to_local(actor.global_position)
+	effects.start("summon:%d" % id, {"file": "GlobalSummon%s.pfx" % colour, "x": at.x, "y": -at.z, "z": at.y,
+		"tile": Vector2i(hero.x, hero.y), "loops": 0}, 0.0)
+
+## A same-day guest refresh replaces the scene. Keep only the active summon
+## sprites and their clocks, independently of the original cast's other cues.
+func summon_playback() -> Dictionary:
+	var playback := {}
+	for name: String in effects.effects:
+		if not name.begins_with("summon:"): continue
+		var effect: Dictionary = effects.effects[name]
+		playback[name] = {"entry": effect.entry, "elapsed": effect.elapsed, "drawn": effect.frame >= 0}
+	return playback
+
+func resume_summon_playback(playback: Dictionary) -> void:
+	for name: String in playback:
+		var cue: Dictionary = playback[name]
+		if ELFog.visible(state, state.current_player, cue.entry.tile):
+			effects.start(name, cue.entry, cue.elapsed, cue.drawn)
+
 func _can_act() -> bool:
-	return not paused and director.can_move() and director.movement.is_empty()
+	return not paused and director.can_move() and director.movement.is_empty() and (strategic_session == null or strategic_session.can_plan())
 
 func _refresh_hero_info() -> void:
 	var hero := state.object(_hero_id())
@@ -548,7 +646,7 @@ func _refresh_hero_info() -> void:
 		hero_info.text += "\nEther: %d income · %d/%d upkeep · %d available" % [mana_readout.income, mana_readout.spent, mana_readout.required, mana_readout.available]
 		var castle: Dictionary = state.scenario.get("castles", {}).get(state.current_player, {})
 		if not castle.is_empty(): hero_info.text += "  ·  Castle %d / %d energy" % [castle.health, castle.max]
-	if day_button != null: day_button.disabled = paused or not director.can_move() or not director.movement.is_empty()
+	if day_button != null: day_button.disabled = paused or not director.can_move() or not director.movement.is_empty() or (strategic_session != null and not strategic_session.can_plan())
 	if hero_selector != null: hero_selector.disabled = paused or not director.can_move()
 	if cancel_button != null: cancel_button.disabled = paused or not director.can_move() or hero.get("strategy_order", {}).is_empty()
 	if leave_button != null:
@@ -571,6 +669,10 @@ func _refresh_first_hud(hero: Dictionary) -> void:
 	var acting := _can_act()
 	if cancel_button != null: cancel_button.disabled = not acting or hero.get("strategy_order", {}).is_empty()
 	hud.refresh(_hero_id(), mana_readout, acting)
+	if strategic_session != null:
+		hud.buttons.Save.disabled = not strategic_session.link.local_authority or not strategic_session.can_save() or paused
+		hud.buttons.Load.disabled = not strategic_session.link.local_authority or not acting
+		leave_button.disabled = leave_button.disabled or not hero.get("fortified", false)
 
 func _next_hero() -> void:
 	if hud.roster.is_empty(): return
@@ -626,6 +728,10 @@ func _open_lose_battle() -> void:
 
 func _end_day() -> void:
 	if paused: return
+	if strategic_session != null:
+		strategic_session.end_turn()
+		_refresh_hero_info()
+		return
 	# First game: the Autosave option saves before the turn ends.
 	if state.map.profile.id == "el1" and (settings == null or bool(settings.values.get("autosave", true))) and director.can_move() and director.movement.is_empty():
 		wait_cursor(state.map.profile)
@@ -635,6 +741,7 @@ func _end_day() -> void:
 	_refresh_hero_info()
 
 func _unhandled_input(event: InputEvent) -> void:
+	if console_open: return
 	# The tutorial panel takes every key and click while it is open.
 	if tutorial_panel != null and tutorial_panel.handle_input(event): return
 	# A script message box over a window is modal: keys answer it.
@@ -750,7 +857,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		elif event.keycode == KEY_N and second_hud != null:
 			if director.dialogue.is_empty(): open_notebook()
 		elif event.keycode == KEY_N: _end_day()
-		elif event.keycode == KEY_BACKSPACE and state.map.profile.id == "el1": director.cancel_order(_hero_id())
+		elif event.keycode == KEY_BACKSPACE and state.map.profile.id == "el1": _cancel_map_order()
 		elif event.keycode == KEY_F5: quick_save()
 		# F8 is the original quick load; F9 is kept as the remake's key.
 		elif event.keycode in [KEY_F8, KEY_F9]: ask_quick_load()
@@ -794,7 +901,13 @@ func _unhandled_input(event: InputEvent) -> void:
 		elif event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
 			var hit: Variant = Plane(Vector3.UP, 0).intersects_ray(camera.project_ray_origin(event.position), camera.project_ray_normal(event.position))
 			if hit != null and hud != null and ELHeroExchange.applies(state) and (event.ctrl_pressed or event.double_click) and _hero_click(Vector2i(floori(hit.x / 2.0), floori(-hit.z / 2.0)), event.ctrl_pressed): return
-			if hit != null: _click_ground(Vector2i(floori(hit.x / 2.0), floori(-hit.z / 2.0)))
+			if hit != null:
+				var corpse := _corpse_under_pointer(event.position) if second_hud != null else -1
+				var body := state.object(corpse)
+				if body.get("enabled", false):
+					_click_ground(Vector2i(body.x, body.y), corpse)
+				else:
+					_click_ground(Vector2i(floori(hit.x / 2.0), floori(-hit.z / 2.0)))
 	elif event is InputEventMouseMotion and second_hud != null and _right_down and not dragging:
 		if not state.camera_locked and event.position.distance_to(_right_origin) > ELSecondMapTooltips.DRAG_THRESHOLD:
 			dragging = true
@@ -857,6 +970,8 @@ func _map_tooltip_blocked() -> bool:
 ## The object under the last map cursor position, or -1.
 func _map_tip_pick() -> int:
 	if not _tip_on_map or _tip_point.x < 0: return -1
+	var corpse := _corpse_under_pointer(_tip_point)
+	if corpse >= 0: return corpse
 	var hit: Variant = Plane(Vector3.UP, 0).intersects_ray(camera.project_ray_origin(_tip_point), camera.project_ray_normal(_tip_point))
 	if hit == null: return -1
 	return ELSecondMapTooltips.object_at(state, Vector2(hit.x, -hit.z) / ELAdventureTerrain.CELL)
@@ -933,7 +1048,14 @@ func update_cursor() -> void:
 			var point := Vector2(hit.x, -hit.z) / ELAdventureTerrain.CELL
 			context.tile = Vector2i(floori(point.x), floori(point.y))
 			context.in_bounds = context.tile.x >= 0 and context.tile.y >= 0 and context.tile.x < state.map.width and context.tile.y < state.map.height
-			if context.in_bounds: context.picked = ELSecondMapTooltips.object_at(state, point) if second else _object_at(point)
+			if second:
+				context.picked = _corpse_under_pointer(_pointer)
+				if context.picked >= 0:
+					var corpse := state.object(context.picked)
+					context.tile = Vector2i(corpse.x, corpse.y)
+					context.in_bounds = true
+				elif context.in_bounds: context.picked = ELSecondMapTooltips.object_at(state, point, true)
+			elif context.in_bounds: context.picked = _object_at(point)
 	cursor_context = context
 	cursor_name = ELCursors.second_adventure(state, director, context) if second else ELCursors.first_adventure(state, director, context)
 	if not edge_cursor.is_empty() and not context.modal: cursor_name = edge_cursor
@@ -941,7 +1063,7 @@ func update_cursor() -> void:
 
 ## Windows, panels and message boxes over the map show the default cursor.
 func _cursor_modal() -> bool:
-	return paused or not error.is_empty() or extras_open() or not director.dialogue.is_empty() \
+	return paused or console_open or not error.is_empty() or extras_open() or not director.dialogue.is_empty() \
 		or hero_screen != null or building_screen != null or building_message != null or global_spells != null or diplomacy != null \
 		or first_shop != null or rune_shop != null or shop != null or skills != null or spellbook != null or notebook != null \
 		or (second_hud != null and second_hud.menu.visible) or result_shown \
@@ -981,15 +1103,21 @@ func _object_at(point: Vector2) -> int:
 func _fogged(item: Dictionary) -> bool:
 	return ELFog.active(state, state.current_player) and not ELFog.shown(state, state.current_player, item)
 
-func _click_ground(tile: Vector2i) -> void:
-	var use_id := -1
-	for id: int in state.objects:
+func _corpse_under_pointer(at: Vector2) -> int:
+	var id := world.corpse_at(camera.project_ray_origin(at), camera.project_ray_normal(at))
+	return id if ELSecondMapTooltips.pickable(state, state.object(id)) else -1
+
+func _click_ground(tile: Vector2i, use_id := -1) -> void:
+	var second := state.map.profile.id == "el2"
+	var hero_id := _hero_id()
+	for id: int in state.objects if use_id < 0 else []:
 		var item: Dictionary = state.objects[id]
-		if id == _hero_id() or not item.alive or not item.visible or not item.enabled or not item.get("placed", true) or item.get("fortified", false) or item.group == "terrain_objects" or _fogged(item): continue
+		var corpse: bool = second and item.type == "corpse"
+		if id == hero_id or not (item.alive or corpse) or not item.visible or not item.enabled or not item.get("placed", true) or item.get("fortified", false) or item.group == "terrain_objects" or _fogged(item): continue
 		var size: Vector2i = director.grid.footprints.get(id, {}).get("size", Vector2i.ONE)
 		if Rect2i(item.x, item.y, size.x, size.y).has_point(tile):
-			use_id = id
-			break
+			if use_id < 0 or corpse: use_id = id
+			if not second or corpse: break
 	var site := state.object(use_id)
 	if state.map.profile.id == "el1" and not site.is_empty() and site.type == "hero" and site.owner == state.current_player:
 		_select_hero(use_id)
@@ -999,12 +1127,18 @@ func _click_ground(tile: Vector2i) -> void:
 	# EL2 move-and-use has no action for it). An own fort is used
 	# like any fort: entered when empty, left by its own garrison (EL2).
 	if not site.is_empty() and ELResourceSites.TYPES.has(site.group) and site.owner == state.current_player: return
-	var ordered := director.request_move(_hero_id(), tile, use_id)
+	if site.get("type") in ["el1_spell_shop", "rune_shop"] and _open_strategy_shop(hero_id, use_id): return
+	var ordered := director.request_move(_hero_id(), tile, use_id) if strategic_session == null else strategic_session.move(_hero_id(), tile, use_id)
 	if not ordered: _remark(director.notice)
 	else:
 		_remark(director.notice)
 		if not view_moved: following = _hero_id()
 	if tutorial_panel != null and _hero_id() >= 0: tutorial_panel.map_click(site, ordered)
+
+func _cancel_map_order(hero := -1) -> void:
+	var id := _hero_id() if hero < 0 else hero
+	if strategic_session != null: strategic_session.cancel(id)
+	else: director.cancel_order(id)
 
 func _centre_hero() -> void:
 	following = _hero_id()
@@ -1063,7 +1197,7 @@ func _update_camera() -> void:
 	var reach := zoom if camera.projection == Camera3D.PROJECTION_PERSPECTIVE else 80.0
 	camera.position = target + Vector3(sin(yaw) * cos(pitch), sin(pitch), cos(yaw) * cos(pitch)) * reach
 	camera.look_at(target)
-	state.camera_zoom = zoom
+	state.camera_zoom = view_goal.x if _script_lens and view_goal.x > 0 else zoom
 	state.camera_rotation = rad_to_deg(yaw)
 	if hud != null: hud.set_view(target, yaw)
 
@@ -1077,13 +1211,14 @@ func _present(data: Dictionary) -> void:
 				return
 			if data.kind == "rune_shop": _open_rune_shop()
 			else: _open_first_shop()
-		"actor_moving": world.move_actor(data.id, data.position, data.moving)
+		"actor_moving": world.move_actor(data.id, data.position, data.moving, director.movement_speed(state.object(data.id)), director.fast_mode)
 		"orient": world.orient_actor(data.id, data.direction)
 		"route":
+			if strategic_session != null and state.object(data.id).get("owner") != state.current_player: return
 			if not director.strategy.is_empty(): following = data.id
 			# Second game: the view goes with the main hero on a scripted walk,
 			# as after the e2mission11 gate greeting (original captures).
-			elif state.map.profile.id == "el2" and int(data.id) == state.main_hero and director.movement.get("queued", false) and not data.path.is_empty(): following = data.id
+			elif script_camera_attached and state.map.profile.id == "el2" and int(data.id) == state.main_hero and director.movement.get("queued", false) and not data.path.is_empty(): following = data.id
 			_draw_route(data.path, data.id)
 		"strategy_phase":
 			if data.phase == "planning":
@@ -1097,6 +1232,7 @@ func _present(data: Dictionary) -> void:
 			if state.map.profile.id == "el2" and camera != null and camera.projection == Camera3D.PROJECTION_PERSPECTIVE:
 				if text_view.is_empty(): text_view = {"zoom": zoom if view_goal.x < 0 else view_goal.x, "pitch": pitch if view_goal.x < 0 else view_goal.y}
 				view_goal = Vector2(SECOND_TEXT_ZOOM, SECOND_TEXT_PITCH)
+				_script_lens = false
 			if second_dialogue != null:
 				second_dialogue.present(speech, state)
 				accept = second_dialogue.accept
@@ -1120,6 +1256,7 @@ func _present(data: Dictionary) -> void:
 			if not text_view.is_empty():
 				view_goal = Vector2(float(text_view.zoom), float(text_view.pitch))
 				text_view = {}
+				_script_lens = false
 				# Lines answered before the view moved leave nothing to ease back.
 				if absf(zoom - view_goal.x) < 0.01 and absf(pitch - view_goal.y) < 0.001: view_goal = Vector2(-1, -1)
 			dialogue_panel.hide()
@@ -1127,11 +1264,27 @@ func _present(data: Dictionary) -> void:
 			_dock_dialogue()
 			audio.voice.stop()
 			audio.voice.stream = null
-		"CameraToObject": _focus_object(int(data.arguments[0]))
+		"CameraToObject":
+			var id := int(data.arguments[0])
+			_focus_object(id)
+			# An attached main-hero focus returns control from a cutscene.
+			if script_camera_attached and id >= 0 and id == state.main_hero:
+				following = id
+				view_moved = false
 		"CameraToPos":
 			following = -1
 			target = ELAdventureScene.world_position(float(data.arguments[0]), float(data.arguments[1]))
-		"CameraAttach": following = int(data.arguments[0]) if data.arguments[0] != null else -1
+		"CameraAttach":
+			var was_attached := script_camera_attached
+			script_camera_attached = ELAdventureSession._truthy_flag(data.arguments[0])
+			if not script_camera_attached:
+				following = -1
+			elif not was_attached and world.actors.has(state.main_hero):
+				# The tutorial mirror focuses the hero before attaching the camera.
+				var hero := state.object(state.main_hero)
+				if not hero.is_empty() and target == ELAdventureScene.world_position(hero.x, hero.y):
+					following = state.main_hero
+					view_moved = false
 		"CameraRotate": yaw_goal = deg_to_rad(float(data.arguments[0]))
 		"CameraRotateToObject", "CameraRotateToPos":
 			# The angle runs from the main hero's cell to the object or cell,
@@ -1151,7 +1304,7 @@ func _present(data: Dictionary) -> void:
 				# The building's message is read before the battle it announces.
 				deferred_encounter = data
 				return
-			if hud != null and precombat_preview:
+			if hud != null and precombat_preview and strategic_session == null:
 				var number := 1
 				var total := 1
 				if director.strategy.get("phase") == "combat":
@@ -1159,11 +1312,20 @@ func _present(data: Dictionary) -> void:
 					total = director.strategy.combats.size()
 				pending_encounter = [data.hero, data.opponent]
 				hud.show_precombat(data.hero, data.opponent, number, total)
-			elif second_precombat != null and precombat_preview: _open_second_precombat(data.hero, data.opponent)
+			elif second_precombat != null and precombat_preview and not data.get("remote_use", false): _open_second_precombat(data.hero, data.opponent)
 			else: encounter_requested.emit(data.hero, data.opponent)
 		"lose_battle": _open_lose_battle()
-		"teleport", "dock":
-			if data.hero == state.main_hero:
+		"travel_phase": _travel_phase()
+		"travel_finished":
+			if effects != null: effects.finish("portal_travel")
+			var model: ELModel = world.actors.get(int(data.hero))
+			if model != null:
+				if model.has_meta("portal_hidden"): model.remove_meta("portal_hidden")
+				model.set_opacity(1.0)
+				world.fog_object(state.object(data.hero))
+		"teleport", "tunnel", "dock":
+			if not director.travel.is_empty(): _face_travel_exit()
+			if data.hero == state.main_hero and world.actors.has(state.main_hero):
 				following = _hero_id()
 				target = world.actors[state.main_hero].position
 				_draw_route([])
@@ -1180,6 +1342,44 @@ func _present(data: Dictionary) -> void:
 			_remark(data.text)
 			building_messages.append(data)
 			_show_building_message()
+
+## A portal hides its traveller until the receiver's effect has finished.
+## At a dock the departing figure fades before the switch to the new model.
+func _travel_pose() -> void:
+	var travel := director.travel
+	if travel.is_empty(): return
+	var model: ELModel = world.actors.get(int(travel.hero))
+	if model == null: return
+	if travel.kind == "teleport":
+		model.set_meta("portal_hidden", true)
+		model.hide()
+	elif not travel.arrived: model.set_opacity(clampf(float(travel.remaining) / ELAdventureDirector.DOCK_FADE_SECONDS, 0.0, 1.0))
+
+func _travel_phase(play_sound := true) -> void:
+	var travel := director.travel
+	_travel_pose()
+	if not play_sound and travel.arrived: _face_travel_exit()
+	if travel.kind != "teleport" or effects == null: return
+	effects.finish("portal_travel")
+	if float(travel.remaining) <= 0.0: return
+	var portal := state.object(travel.target if travel.arrived else travel.source)
+	if portal.is_empty(): portal = state.object(travel.hero)
+	var center := ELAdventureGrid.center(portal, _art.resolve(portal).get("row", {})) * ELAdventureTerrain.CELL
+	var at := {"x": center.x, "y": center.y, "z": 0.0}
+	effects.start("portal_travel", at.merged({"file": "teleport.pfx"}), ELAdventureDirector.PORTAL_SECONDS - float(travel.remaining))
+	if play_sound and audio != null:
+		if travel.arrived: audio.listener = target
+		audio.start_sound("portal_travel", at.merged({"file": "Adventure/teleport.wav", "near": 30.0, "far": 60.0}))
+
+func _face_travel_exit() -> void:
+	var travel := director.travel
+	var destination := state.object(travel.target)
+	if destination.is_empty(): return
+	var center := ELAdventureGrid.center(destination, _art.resolve(destination).get("row", {}))
+	var away := Vector2(float(travel.x) + 0.5, float(travel.y) + 0.5) - center
+	if absf(away.x) > absf(away.y): away.y = 0.0
+	else: away.x = 0.0
+	world.orient_actor(int(travel.hero), away)
 
 ## The first colourless drain of a hero's day (any owner) plays the dying
 ## particle and the white-zone sound once where the hero is drawn at that
@@ -1218,6 +1418,10 @@ func _state_event(data: Dictionary) -> void:
 			if spellbook != null and int(data.id) == spellbook.hero_id: spellbook.refresh()
 		"global_spell_ready":
 			if int(data.player) == state.current_player: _offer_global_spell()
+		"hero_placed":
+			if data.get("recruited", false): focus_recruit(int(data.id))
+		"summon_cast":
+			present_summon(int(data.id), str(data.spell))
 		"specialization_learned":
 			# The original reports a learned specialisation in a message box.
 			_remark(data.text)
@@ -1248,23 +1452,22 @@ func _state_event(data: Dictionary) -> void:
 			following = -1
 			target = ELAdventureScene.world_position(float(data.arguments[0]), float(data.arguments[1]))
 		"ExCameraRotate": yaw_goal = deg_to_rad(float(data.arguments[0]))
-		# Script cameras: the original zoom units match the remake's (the second
-		# game's camera distance); pitch is degrees below the horizon (negative
-		# in scripts). Both are applied at once.
 		"ExCameraZoom":
-			zoom = clampf(float(data.arguments[0]), zoom_limits.x, zoom_limits.y)
-			_set_standing(zoom, -1.0)
+			var distance := clampf(float(data.arguments[0]), zoom_limits.x, zoom_limits.y)
+			_set_script_lens(distance, -1.0, data.arguments.size() > 1 and float(data.arguments[1]) != -1.0)
 		"ExCameraPitch":
-			pitch = clampf(deg_to_rad(absf(float(data.arguments[0]))), pitch_limits.x, pitch_limits.y)
-			_set_standing(-1.0, pitch)
+			var angle := clampf(-deg_to_rad(float(data.arguments[0])), pitch_limits.x, pitch_limits.y)
+			_set_script_lens(-1.0, angle, data.arguments.size() > 1 and float(data.arguments[1]) != -1.0)
 		"mission_finished":
 			_remark(data.get("text", "Mission complete" if data.outcome == "win" else "Mission lost"))
 			hall_record = str(data.get("hall_of_fame", ""))
 			_show_result()
 		"resources_collected":
+			if state.map.profile.id == "el1" and int(data.player) != state.current_player: return
 			_remark("Collected " + ELResources.describe(state.map.profile.id, data.amounts, false))
 			_first_pickup_box(data)
-		"shop_captured": _first_capture_box(data)
+		"shop_captured":
+			_first_capture_box(data)
 		"experience_gained":
 			if int(state.object(data.id).get("owner", -1)) != state.current_player: return
 			var gained := "%d experience gained" % data.amount
@@ -1418,6 +1621,7 @@ func open_original_options() -> void:
 		notice.text = "The original Options art is unavailable."
 		return
 	extras.settings = settings
+	extras.options_ui.adventure_load_allowed = _can_load_in_place()
 	# First game: GOInfo opens the running mission's objectives.
 	extras.mission_texts = ELFirstObjectivesScreen.mission_texts(state.map) if state != null and ELFirstObjectivesScreen.supports(state.map.profile) else {}
 	if not extras.settings_previewed.is_connected(preview_volumes): extras.settings_previewed.connect(preview_volumes)
@@ -1435,10 +1639,17 @@ func _original_options_closed() -> void:
 func apply_settings() -> void:
 	if settings == null: return
 	preview_volumes(settings.values)
+	var weather := bool(settings.values.get("weather", true))
+	var enhanced_water := bool(settings.values.get("enhanced_water", false))
+	if effects != null:
+		if effects.enabled != weather: effects.set_enabled(weather)
+		effects.set_water_ripples(enhanced_water)
 	if world != null: world.set_animate_objects(bool(settings.values.get("animated_objects", true)))
 	if world != null: world.set_animate_fog(bool(settings.values.get("fog_animations", true)))
 	if world != null: world.set_blob_shadows(bool(settings.values.get("shadows", true)))
-	if world != null and world.terrain != null: world.terrain.set_detail(bool(settings.values.get("terrain_detail", false)))
+	if world != null and world.terrain != null:
+		world.terrain.set_detail(bool(settings.values.get("terrain_detail", false)))
+		world.terrain.set_water(enhanced_water)
 	if world != null and world.sun != null: world.sun.shadow_blur = 2.5 if settings.values.get("soft_shadows", false) else 1.5
 	if presentation != null: presentation.apply(settings.values)
 	_apply_helper_overlay()
@@ -1449,7 +1660,7 @@ func apply_settings() -> void:
 func _remark(text: String) -> void:
 	remark = text
 	# Without the original HUD art the status line is the only readout.
-	if notice != null and (helper_overlay() or (hud == null and second_hud == null)): notice.text = text
+	if notice != null and _observer_battle_note.is_empty() and (strategic_session != null or helper_overlay() or (hud == null and second_hud == null)): notice.text = text
 
 ## Second game: the scripted loot report (ExSendLootMessage /
 ## ExSendNoLootMessage) in the message box: T_MB_RECEIVE_LOOT over one line
@@ -1598,6 +1809,7 @@ func _draw_route(path: Array, actor_id := -1) -> void:
 ## `scripted` is ExShowInventory: the script opens the main hero's inventory
 ## whatever the player is doing.
 func _open_spellbook(scripted_hero := -1) -> void:
+	if strategic_session != null and not strategic_session.can_plan(): return
 	if spellbook != null or paused: return
 	if scripted_hero < 0 and (not director.can_move() or not director.movement.is_empty()):
 		_remark("Finish the current action before opening the spellbook.")
@@ -1615,6 +1827,7 @@ func _open_spellbook(scripted_hero := -1) -> void:
 	scrim.mouse_filter = Control.MOUSE_FILTER_STOP
 	# Second game: the original InventoryScreen (ELSecondInventoryView).
 	spellbook = ELSecondInventoryView.make(second_hud) if second_hud != null else ELSpellbookView.new()
+	spellbook.strategic_session = strategic_session
 	scrim.add_child(spellbook)
 	spellbook.build(state, shown)
 	spellbook.closed.connect(_close_spellbook)
@@ -1701,6 +1914,7 @@ func _auto_level_up() -> void:
 	if skills != null and audio != null: audio.effect_sound("Adventure/victory.wav")
 
 func _open_skills(for_hero := -1) -> void:
+	if strategic_session != null and not strategic_session.can_plan(): return
 	if skills != null or paused: return
 	if not director.can_move() or not director.movement.is_empty():
 		_remark("Finish the current action before opening skills.")
@@ -1725,12 +1939,14 @@ func _open_skills(for_hero := -1) -> void:
 		skills = dialog
 	else:
 		skills = ELHeroSkillsView.new()
+	skills.strategic_session = strategic_session
 	scrim.add_child(skills)
 	skills.build(state, shown)
 	skills.closed.connect(_close_skills)
 
 ## First-game global spells screen; `prompt` opens the finished spell's prompt.
 func open_global_spells(prompt := false) -> void:
+	if strategic_session != null and not strategic_session.can_plan(): return
 	if global_spells != null:
 		if prompt: global_spells.open_prompt()
 		return
@@ -1746,13 +1962,16 @@ func open_global_spells(prompt := false) -> void:
 	hud.show_tooltip(-1, {}, Vector2.ZERO)
 	global_spells = ELGlobalSpellsView.new()
 	global_spells.hud = hud
+	global_spells.strategic_session = strategic_session
 	scrim.add_child(global_spells)
 	global_spells.build(state, state.current_player)
 	global_spells.closed.connect(_close_global_spells)
+	_refresh_hero_info()
 	if prompt: global_spells.open_prompt()
 
 ## First-game Diplomacy screen (DiplomacyMode).
 func open_diplomacy() -> void:
+	if strategic_session != null and not strategic_session.can_plan(): return
 	if diplomacy != null or paused or hud == null or not ELDiplomacy.applies(state) or not state.players.has(state.current_player): return
 	paused = true
 	dragging = false
@@ -1765,9 +1984,11 @@ func open_diplomacy() -> void:
 	hud.show_tooltip(-1, {}, Vector2.ZERO)
 	diplomacy = ELDiplomacyView.new()
 	diplomacy.hud = hud
+	diplomacy.strategic_session = strategic_session
 	scrim.add_child(diplomacy)
 	diplomacy.build(state, state.current_player)
 	diplomacy.closed.connect(_close_diplomacy)
+	_refresh_hero_info()
 	tutorial_event("OPEN_DIPLOMACY_SCREEN")
 
 func _close_diplomacy() -> void:
@@ -1776,6 +1997,7 @@ func _close_diplomacy() -> void:
 	diplomacy = null
 	paused = false
 	if world != null: world.process_mode = Node.PROCESS_MODE_INHERIT
+	_refresh_hero_info()
 
 func _close_global_spells() -> void:
 	if global_spells == null: return
@@ -1787,10 +2009,34 @@ func _close_global_spells() -> void:
 	_refresh_hero_info()
 	if global_spell_waiting: _offer_global_spell()
 
+func _timed_turn_ended() -> void:
+	global_spell_waiting = false
+	_close_global_spells()
+	_close_diplomacy()
+	_close_first_shop()
+	_close_rune_shop()
+	_close_hero_screen()
+	_close_building_screen()
+	_close_skills()
+	_close_spellbook()
+	if extras_open():
+		_after_extras = Callable()
+		_close_extras()
+	_refresh_hero_info()
+
+func _show_takeover_notice(text: String) -> void:
+	var ready: bool = ELGlobalSpells.data(state, state.current_player).get("production", {}).get("state") == 2
+	if first_shop == null and rune_shop == null: _timed_turn_ended()
+	global_spell_waiting = ready
+	_queue_building_message({"kind": "building_message", "hero": -1, "building": -1, "title": "", "text": text, "resources": [], "skill": "", "key": "", "box": "first"})
+
 ## A click on a spell in the adventure panel's list orders it without extra
 ## ether; a spell finished at once asks for its targets.
 func _order_global_spell(code: String) -> void:
 	if paused or not _can_act(): return
+	if strategic_session != null:
+		strategic_session.manage_hero(["global_produce", code, 0], _remark)
+		return
 	ELGlobalSpells.produce(state, state.current_player, code)
 
 ## A finished spell asks to be applied once the map is free of other windows.
@@ -1801,7 +2047,7 @@ func _offer_global_spell() -> void:
 		global_spells.refresh()
 		global_spells.open_prompt()
 		return
-	if paused or building_message != null or not director.strategy.is_empty(): return
+	if paused or building_message != null or not director.strategy.is_empty() or (strategic_session != null and not strategic_session.can_plan()): return
 	global_spell_waiting = false
 	open_global_spells(true)
 
@@ -1816,7 +2062,7 @@ func _close_skills() -> void:
 ## A building message pauses the night like the original message box; queued
 ## messages from the same night follow one another.
 func _show_building_message() -> void:
-	if building_message != null or building_messages.is_empty() or ui == null: return
+	if building_message != null or first_shop != null or rune_shop != null or building_messages.is_empty() or ui == null: return
 	paused = true
 	dragging = false
 	var scrim := ColorRect.new()
@@ -1827,6 +2073,9 @@ func _show_building_message() -> void:
 	building_message = ELBuildingMessageView.new()
 	scrim.add_child(building_message)
 	var message: Dictionary = building_messages.pop_front()
+	if strategic_session != null and message.get("site_notice", false) and message.building >= 0:
+		_focus_object(int(message.hero))
+		_update_camera()
 	if hud != null and state.map.profile.id == "el1" and ELBuildingMessageView.first_applies(message):
 		# The original MessageBox does not darken the map.
 		scrim.color = Color(0, 0, 0, 0)
@@ -1848,7 +2097,7 @@ func _first_pickup_box(data: Dictionary) -> void:
 	for kind: String in ELResources.ORIGINAL:
 		if int(data.amounts.get(kind, 0)) > 0: rows.append([kind, int(data.amounts[kind])])
 	if rows.is_empty(): return
-	building_messages.append({"kind": "building_message", "hero": -1, "building": -1, "title": "", "text": state.map.profile.text("T_MB_TAKE_PLUHA_1"), "resources": [], "skill": "", "key": "T_MB_TAKE_PLUHA_1", "box": "first", "rows": rows})
+	building_messages.append({"kind": "building_message", "hero": -1, "building": -1, "title": "", "text": state.map.profile.text("T_MB_TAKE_PLUHA_1"), "resources": [], "skill": "", "key": "T_MB_TAKE_PLUHA_1", "box": "first", "rows": rows, "site_notice": true})
 	_show_building_message()
 
 ## First game: a mine, ether node or shop taken by or from the local player,
@@ -1880,6 +2129,7 @@ func _first_capture_box(data: Dictionary) -> void:
 	else:
 		message.key = "T_MB_TAKE_SHOP" if taken else "T_MB_LOSE_SHOP"
 		message.text = _fill(profile.text(message.key), [str(item.get("title", profile.text(str(_art.resolve(item).get("row", {}).get("ELKName", item.name)))))])
+	message.site_notice = true
 	building_messages.append(message)
 	_show_building_message()
 
@@ -1949,11 +2199,12 @@ func _cancel_order_at(at: Vector2) -> void:
 	var tile := Vector2i(floori(hit.x / 2.0), floori(-hit.z / 2.0))
 	for item: Dictionary in state.objects.values():
 		if item.get("type") == "hero" and item.alive and item.visible and item.get("placed", true) and not item.get("fortified", false) and int(item.owner) == state.current_player and Vector2i(item.x, item.y) == tile and not item.get("strategy_order", {}).is_empty():
-			director.cancel_order(int(item.uid))
+			_cancel_map_order(int(item.uid))
 			_refresh_hero_info()
 			return
 
 func _hero_click(tile: Vector2i, exchange: bool) -> bool:
+	if strategic_session != null and not strategic_session.can_plan(): return false
 	var clicked := -1
 	for item: Dictionary in state.objects.values():
 		if item.get("type") == "hero" and item.alive and item.visible and item.get("placed", true) and not item.get("fortified", false) and Vector2i(item.x, item.y) == tile and not _fogged(item): clicked = int(item.uid)
@@ -1979,6 +2230,7 @@ func _hero_click(tile: Vector2i, exchange: bool) -> bool:
 	return true
 
 func open_hero_screen(id: int) -> void:
+	if strategic_session != null and not strategic_session.can_plan(): return
 	var hero := state.object(id)
 	if hero.is_empty() or not hero.alive or int(hero.owner) != state.current_player: return
 	if id != _hero_id(): _select_hero(id)
@@ -1996,6 +2248,7 @@ func _open_hero_view(ids: Array[int], exchange: bool) -> void:
 	scrim.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	scrim.mouse_filter = Control.MOUSE_FILTER_STOP
 	hero_screen = ELHeroScreenView.new()
+	hero_screen.strategic_session = strategic_session
 	scrim.add_child(hero_screen)
 	hero_screen.build(director, hud, ids, exchange)
 	hero_screen.closed.connect(_close_hero_screen)
@@ -2009,6 +2262,7 @@ func open_building_screen(id: int) -> void:
 	if building_screen != null or paused or hud == null: return
 	var item := state.object(id)
 	if item.is_empty() or not item.get("alive", false) or int(item.get("owner", -1)) != state.current_player: return
+	if strategic_session != null and (not strategic_session.can_plan() or item.type not in ELBuildingScreen.STRATEGIC_UPGRADES): return
 	_focus_object(id)
 	paused = true
 	dragging = false
@@ -2020,6 +2274,7 @@ func open_building_screen(id: int) -> void:
 	scrim.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	scrim.mouse_filter = Control.MOUSE_FILTER_STOP
 	building_screen = ELBuildingScreenView.new()
+	building_screen.strategic_session = strategic_session
 	scrim.add_child(building_screen)
 	building_screen.build(director, hud, id)
 	building_screen.closed.connect(_close_building_screen)
@@ -2061,8 +2316,19 @@ func _open_shop() -> void:
 	shop.build(director.shop)
 	shop.closed.connect(_close_shop)
 
-func _open_rune_shop() -> void:
-	if rune_shop != null or director.rune_shop == null or hud == null: return
+func _open_strategy_shop(hero: int, building: int, visit := false, remote := false) -> bool:
+	if hud == null or (not visit and not _can_act()): return false
+	var trade := director.strategy_shop_trade(state.current_player, hero, building, remote)
+	if trade is ELRuneShop: _open_rune_shop(trade, visit)
+	elif trade is ELFirstSpellShop: _open_first_shop(trade, visit)
+	else: return false
+	_refresh_hero_info()
+	return true
+
+func _open_rune_shop(trade: ELRuneShop = null, strategic_visit := false) -> void:
+	if trade == null: trade = director.rune_shop
+	if rune_shop != null or trade == null or hud == null: return
+	if strategic_session == null: director.rune_shop = trade
 	paused = true
 	dragging = false
 	if world != null: world.process_mode = Node.PROCESS_MODE_DISABLED
@@ -2073,8 +2339,10 @@ func _open_rune_shop() -> void:
 	scrim.mouse_filter = Control.MOUSE_FILTER_STOP
 	hud.show_tooltip(-1, {}, Vector2.ZERO)
 	rune_shop = ELRuneShopView.new()
+	rune_shop.strategic_session = strategic_session
+	rune_shop.strategic_shop_visit = strategic_visit
 	scrim.add_child(rune_shop)
-	rune_shop.build_shop(director, hud, director.rune_shop)
+	rune_shop.build_shop(director, hud, trade)
 	rune_shop.closed.connect(_close_rune_shop)
 
 func _close_rune_shop() -> void:
@@ -2085,9 +2353,12 @@ func _close_rune_shop() -> void:
 	paused = false
 	if world != null: world.process_mode = Node.PROCESS_MODE_INHERIT
 	_refresh_hero_info()
+	_show_building_message()
 
-func _open_first_shop() -> void:
-	if first_shop != null or director.first_shop == null or hud == null: return
+func _open_first_shop(trade: ELFirstSpellShop = null, strategic_visit := false) -> void:
+	if trade == null: trade = director.first_shop
+	if first_shop != null or trade == null or hud == null: return
+	if strategic_session == null: director.first_shop = trade
 	paused = true
 	dragging = false
 	if world != null: world.process_mode = Node.PROCESS_MODE_DISABLED
@@ -2098,8 +2369,10 @@ func _open_first_shop() -> void:
 	scrim.mouse_filter = Control.MOUSE_FILTER_STOP
 	hud.show_tooltip(-1, {}, Vector2.ZERO)
 	first_shop = ELFirstSpellShopView.new()
+	first_shop.strategic_session = strategic_session
+	first_shop.strategic_shop_visit = strategic_visit
 	scrim.add_child(first_shop)
-	first_shop.build_shop(director, hud, director.first_shop)
+	first_shop.build_shop(director, hud, trade)
 	first_shop.closed.connect(_close_first_shop)
 
 func _close_first_shop() -> void:
@@ -2110,6 +2383,7 @@ func _close_first_shop() -> void:
 	paused = false
 	if world != null: world.process_mode = Node.PROCESS_MODE_INHERIT
 	_refresh_hero_info()
+	_show_building_message()
 
 func _close_shop() -> void:
 	if shop == null: return
@@ -2256,12 +2530,23 @@ func _build_first_controls() -> void:
 		target = ELAdventureScene.world_position(cell.x - 0.5, cell.y - 0.5))
 	day_button = hud.dial.NextTurn
 	day_button.pressed.connect(_end_day)
+	if strategic_session != null:
+		_turn_clock = ELFirstClock.new()
+		ui.add_child(_turn_clock)
+		_turn_clock.build(state.map.profile, false)
+		strategic_session.turn_timeout.connect(_timed_turn_ended)
+		strategic_session.takeover_notice.connect(_show_takeover_notice)
 	hud.buttons.NextHero.pressed.connect(_next_hero)
 	hud.buttons.HeroInTower.pressed.connect(func():
 		hud.tower_only = not hud.tower_only
 		_refresh_hero_info())
 	leave_button = hud.buttons.RemoveHero
 	leave_button.pressed.connect(func():
+		if strategic_session != null:
+			if not strategic_session.manage_hero(["leave_fort", _hero_id()], func(reason: String):
+				if not reason.is_empty(): _remark(reason)):
+				_remark("This hero cannot leave right now.")
+			return
 		if not director.leave_fort(_hero_id()): _remark("This hero cannot leave right now.")
 		_refresh_hero_info())
 	hud.buttons.Save.pressed.connect(open_save_screen)
@@ -2302,7 +2587,7 @@ func _build_first_controls() -> void:
 		row.add_child(spells_button)
 	cancel_button = _compact_button("Clear order", compact)
 	cancel_button.tooltip_text = "Cancel the selected hero's planned order (Backspace)."
-	cancel_button.pressed.connect(func(): director.cancel_order(_hero_id()))
+	cancel_button.pressed.connect(_cancel_map_order)
 	row.add_child(cancel_button)
 
 func _compact_button(text: String, style: StyleBoxFlat) -> Button:
@@ -2536,7 +2821,7 @@ func _build_remake_controls() -> void:
 		cancel_button.offset_left = -180
 		cancel_button.offset_right = -16
 		cancel_button.offset_top = 376
-		cancel_button.pressed.connect(func(): director.cancel_order(_hero_id()))
+		cancel_button.pressed.connect(_cancel_map_order)
 		var leave := Button.new()
 		leave_button = leave
 		ui.add_child(leave_button)
@@ -2574,19 +2859,36 @@ static func _style() -> StyleBoxFlat:
 	style.content_margin_bottom = 12
 	return style
 
+## The original advances in 64 ms steps and scales the remainder by 67 ms.
+static func _script_lens_step(current: float, goal: float, rate: float, delta: float) -> float:
+	var difference := goal - current
+	if absf(difference * rate) < 0.001: return goal
+	var steps := maxf(0, ceilf(delta / TURN_TICK) - 1.0)
+	var remainder := delta - steps * TURN_TICK
+	return goal - difference * pow(1.0 - rate, steps) * (1.0 - rate * remainder / 0.067)
+
 ## A script's distance or angle outlasts a speaker box's close view.
-func _set_standing(distance: float, angle: float) -> void:
+func _set_script_lens(distance: float, angle: float, instant: bool) -> void:
+	var goal := view_goal if view_goal.x > 0 else Vector2(zoom, pitch)
+	if distance > 0:
+		goal.x = distance
+		if instant: zoom = distance
+	if angle > 0:
+		goal.y = angle
+		if instant: pitch = angle
+	view_goal = goal if goal != Vector2(zoom, pitch) else Vector2(-1, -1)
+	if not instant: _script_lens = true
+	if distance > 0: state.camera_zoom = distance
 	if not text_view.is_empty():
 		if distance > 0: text_view.zoom = distance
 		if angle > 0: text_view.pitch = angle
-	elif view_goal.x > 0: view_goal = Vector2(distance if distance > 0 else view_goal.x, angle if angle > 0 else view_goal.y)
 
 func camera_state() -> Dictionary:
 	# The standing view is saved, not a speaker box's close view.
 	var standing := Vector2(zoom, pitch)
 	if not text_view.is_empty(): standing = Vector2(float(text_view.zoom), float(text_view.pitch))
 	elif view_goal.x > 0: standing = view_goal
-	return {"yaw": yaw, "pitch": standing.y, "zoom": standing.x, "perspective": camera != null and camera.projection == Camera3D.PROJECTION_PERSPECTIVE, "target": [target.x, target.y, target.z], "following": following, "selected_hero": _hero_id(), "voice_position": audio.voice.get_playback_position() if audio != null and audio.voice.playing else 0.0}
+	return {"yaw": yaw, "pitch": standing.y, "zoom": standing.x, "perspective": camera != null and camera.projection == Camera3D.PROJECTION_PERSPECTIVE, "target": [target.x, target.y, target.z], "following": following, "script_camera_attached": script_camera_attached, "selected_hero": _hero_id(), "voice_position": audio.voice.get_playback_position() if audio != null and audio.voice.playing else 0.0}
 
 func set_suspended(value: bool) -> void:
 	# A message shown while the battle was open keeps the map paused.
@@ -2606,50 +2908,106 @@ func set_suspended(value: bool) -> void:
 ## F5: the original quick save, the named slot T_QUICK_SAVE_NAME of this
 ## edition, overwritten without a question; T_GAME_SAVED confirms it.
 func quick_save() -> void:
+	if _save_preview_pending: return
 	ELCrashReport.trace("map quick save")
 	if state.tutorial:
 		notice.text = "The tutorial cannot be saved."
 		return
 	wait_cursor(state.map.profile)
-	var error_text := ELSaveSlots.write(ELSaveSlots.quick_name(state.map.profile), director, camera_state())
+	var preview := await _capture_save_preview()
+	var error_text := _save_named(ELSaveSlots.quick_name(state.map.profile), preview)
 	notice.text = state.map.profile.text("T_GAME_SAVED").strip_edges() if error_text.is_empty() else error_text
 
 ## F8 / F9: the quick load asks T_MB_LOAD_GAME first; OK resumes the quick
 ## save, Cancel or Esc keeps playing. Nothing happens without a quick save
 ## (or an old single-slot file) to load.
 func ask_quick_load() -> void:
-	if not FileAccess.file_exists(ELSaveSlots.quick_load_path(state)):
+	if not _can_load_in_place(): return
+	var load_save := func(): resume_requested.emit()
+	var path := ELSaveSlots.quick_load_path(state)
+	if strategic_session != null:
+		path = ELSaveSlots.save_path(state.map.profile.id, ELSaveSlots.quick_name(state.map.profile), ELSaveSlots.KIND_STRATEGIC)
+		var row := {"path": path, "kind": ELSaveSlots.KIND_STRATEGIC, "name": ELSaveSlots.quick_name(state.map.profile)}
+		load_save = func(): slot_requested.emit(row)
+	if not FileAccess.file_exists(path):
 		notice.text = "There is no quick save to load."
 		return
 	if not _extras_ready():
-		resume_requested.emit()
+		load_save.call()
 		return
 	_after_extras = Callable()
 	dragging = false
-	extras.ask_hosted(state.map.profile.text("T_MB_LOAD_GAME").strip_edges(), func(): resume_requested.emit())
+	extras.ask_hosted(state.map.profile.text("T_MB_LOAD_GAME").strip_edges(), load_save)
 	extras_layer.show()
 	extras.show()
 
 ## Options Save / Esc menu Save: SaveMissionScreen in save mode over the map
 ## (the quick save when the original art is missing).
 func open_save_screen() -> void:
+	if _save_preview_pending: return
+	if strategic_session != null:
+		var problem := strategic_session.save_problem()
+		if not problem.is_empty():
+			_remark(problem)
+			return
 	if state.tutorial:
 		notice.text = "The tutorial cannot be saved."
 		return
-	if not _open_save_list("save_game"): quick_save()
+	if not _extras_ready():
+		quick_save()
+		return
+	var preview := await _capture_save_preview()
+	_open_save_list("save_game", preview)
 
 ## Options Load / Esc menu Load: SaveMissionScreen in load mode over the map
 ## (the quick save when the original art is missing).
 func open_load_screen() -> void:
-	if not _open_save_list("load_game"): resume_requested.emit()
+	if not _can_load_in_place(): return
+	if _open_save_list("load_game"): return
+	if strategic_session != null: ask_quick_load()
+	else: resume_requested.emit()
 
-func _open_save_list(target: String) -> bool:
+func _can_load_in_place() -> bool:
+	return strategic_session == null or (strategic_session.link.local_authority and strategic_session.can_plan())
+
+func _save_named(name: String, preview: Image = null) -> String:
+	if strategic_session != null: return strategic_session.save(name, camera_state())
+	return ELSaveSlots.write(name, director, camera_state(), preview)
+
+## Render the current map without its panels before opening the save screen.
+func _capture_save_preview() -> Image:
+	if state.map.profile.id != "el2" or DisplayServer.get_name() == "headless" or not is_visible_in_tree(): return null
+	if not RenderingServer.is_render_loop_enabled(): return null
+	var viewport := get_viewport()
+	if viewport.get_camera_3d() != camera: return null
+	_save_preview_pending = true
+	var was_paused := paused
+	var ui_shown := ui.visible
+	var extras_shown := extras_layer != null and extras_layer.visible
+	paused = true
+	ui.hide()
+	if extras_shown: extras_layer.hide()
+	await RenderingServer.frame_post_draw
+	var image := viewport.get_texture().get_image() if viewport.get_camera_3d() == camera else null
+	ui.visible = ui_shown
+	if extras_shown: extras_layer.show()
+	paused = was_paused
+	_save_preview_pending = false
+	if image == null or image.is_empty(): return null
+	image.resize(ELSaveSlots.PREVIEW_SIZE.x, ELSaveSlots.PREVIEW_SIZE.y, Image.INTERPOLATE_LANCZOS)
+	image.convert(Image.FORMAT_RGB8)
+	return image
+
+func _open_save_list(target: String, preview: Image = null) -> bool:
 	if not _extras_ready(): return false
 	extras.mission_load_ui.saver = func(name: String) -> String:
 		wait_cursor(state.map.profile)
-		return ELSaveSlots.write(name, director, camera_state())
+		return _save_named(name, preview)
 	extras.mission_load_ui.current = ELSaveSlots.current_row(state)
-	return open_extras(target, true, Callable(), ELSaveSlots.kind_of(state))
+	if preview != null: extras.mission_load_ui.current.preview = ImageTexture.create_from_image(preview)
+	var kind := ELSaveSlots.kind_of(state) if strategic_session == null else ELSaveSlots.KIND_STRATEGIC
+	extras.mission_load_ui.current.kind = kind
+	return open_extras(target, true, Callable(), kind)
 
 ## First game: the tutorial panel over the map. The adventure screen event
 ## fires when the human's turn begins (the first day here, later day starts

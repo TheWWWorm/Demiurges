@@ -6,7 +6,7 @@ extends RefCounted
 ## keys, without a leading "*", names the barrier's key, and the barrier is
 ## closed or that key starts with "*" (a toggle key). Use toggles the barrier;
 ## a warding stone gives its key and disappears. Script natives open, close
-## and give keys silently. A fallen hero's keys return to their stones.
+## and give keys silently. A fallen actor returns the warding stones it collected.
 
 const GATES := ["Runestone1", "Runestone2"]
 const WARDING := "WardingStone"
@@ -76,6 +76,7 @@ static func use(director: ELAdventureDirector, hero: Dictionary, item: Dictionar
 	elif is_warding(item):
 		ELAdventureClock.use_points(state, hero, ELSecondBuildings.USE_COST)
 		give_key(hero, key(item))
+		item.warding_holder = int(hero.uid)
 		item.used = true
 		item.visible = false
 		item.enabled = false
@@ -100,12 +101,31 @@ static func give_key(hero: Dictionary, value: String) -> void:
 	if not hero.has("keys"): hero.keys = []
 	if not hero.keys.has(value): hero.keys.append(value)
 
-## A fallen hero's keys go back to the warding stones that gave them.
+## A fallen actor returns the stones it collected. ExGiveKey has no source.
 static func drop_keys(state: ELAdventureSession, hero: Dictionary) -> void:
-	for held: Variant in hero.get("keys", []):
-		for item: Dictionary in state.objects.values():
-			if is_warding(item) and item.get("used", false) and key(item) == str(held):
-				item.merge({"used": false, "visible": true, "enabled": true}, true)
-				state.event.emit({"kind": "object_changed", "id": item.uid})
-				break
+	var held: Variant = hero.get("keys", [])
+	if not held is Array or held.is_empty(): return
+	var legacy_returned := {}
+	for item: Dictionary in state.objects.values():
+		if not is_warding(item) or not item.get("used", false): continue
+		if item.has("warding_holder"):
+			if int(item.warding_holder) != int(hero.uid): continue
+			item.erase("warding_holder")
+		else:
+			# Old saves only recorded the key names. Retain their first match.
+			var name := key(item)
+			if not held.has(name) or legacy_returned.has(name): continue
+			legacy_returned[name] = true
+		item.merge({"used": false, "visible": true, "enabled": true}, true)
+		state.event.emit({"kind": "object_changed", "id": item.uid})
 	hero.keys = []
+
+static func valid_links(objects: Dictionary) -> bool:
+	for item: Dictionary in objects.values():
+		if not item.has("warding_holder"): continue
+		if not is_warding(item) or not item.get("used", false) or not ELLuaSave._integer(item.warding_holder, 0, 0x7fffffff): return false
+		var hero: Dictionary = objects.get(int(item.warding_holder), {})
+		var keys: Variant = hero.get("keys")
+		if hero.get("type") not in ["hero", "monster"] or not hero.get("alive", false) or not keys is Array or not keys.has(key(item)): return false
+		item.warding_holder = int(item.warding_holder)
+	return true

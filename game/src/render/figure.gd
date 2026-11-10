@@ -1,6 +1,10 @@
 class_name ELFigure
 extends RefCounted
 ## FIG1/FIG8 mesh layout; adapted from Cursed Lands' FIG reader.
+## Both original material loaders give Magic full emission (RGB 1).
+const MATERIAL_MAGIC := 23
+const AUTHORED_FULLBRIGHT := &"authored_fullbright"
+
 static func vector(v: Vector3) -> Vector3:
 	return Vector3(v.x, v.z, -v.y)
 
@@ -51,7 +55,7 @@ static func parse(data: PackedByteArray) -> Dictionary:
 	arrays[Mesh.ARRAY_TEX_UV] = uvs
 	arrays[Mesh.ARRAY_INDEX] = indices
 	return {"arrays": arrays, "source_indices": source_indices, "vertices": nc, "triangles": ni / 3,
-		"texture_slot": data.decode_u32(36)}
+		"material_id": data.decode_u32(32), "texture_slot": data.decode_u32(36)}
 
 static func mesh(figure: Dictionary, track: Dictionary = {}) -> ArrayMesh:
 	var mesh := ArrayMesh.new()

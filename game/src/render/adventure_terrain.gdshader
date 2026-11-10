@@ -15,6 +15,16 @@ uniform vec2 atlas_size;
 // extra assets; animated liquid tiles keep their original appearance.
 uniform bool detail_enabled = false;
 uniform vec3 detail_sun = vec3(0.6634, 0.6428, -0.3830);
+// The original water artwork and its animation stay visible through the
+// optional ripples. The mask follows the authored shore transitions.
+uniform bool water_enabled = false;
+uniform sampler2D water_weights : filter_linear, repeat_disable;
+uniform vec2 water_atlas_size = vec2(1.0);
+// World-space rectangles from active, authored EL2 rain particles.
+uniform int water_rain_count = 0;
+uniform vec4 water_rain_areas[64];
+const float WATER_SIDE = 32.0;
+const float WATER_PITCH = 34.0;
 // Fog (ELFog) as the original's mist pass draws it: per map corner a mist
 // opacity (unexplored 255, remembered 133, visible 0 of 255; a corner takes
 // its most fogged tile), moving toward the new value at 150/255 a second
@@ -54,6 +64,71 @@ vec3 to_linear(vec3 c) {
 	return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), step(vec3(0.04045), c));
 }
 
+vec2 rain_ring_slope(vec2 point) {
+	float rain = 0.0;
+	for (int i = 0; i < water_rain_count; i++) {
+		vec4 area = water_rain_areas[i];
+		vec2 inside = area.zw - abs(point - area.xy);
+		rain = max(rain, smoothstep(0.0, 2.5, min(inside.x, inside.y)));
+	}
+	if (rain <= 0.0) return vec2(0.0);
+	// The rings stay in world space as the original tile frames and UVs change.
+	// A ring fits within reach of the four surrounding lattice points.
+	vec2 grid = point * 1.18;
+	vec2 base = floor(grid);
+	vec2 slope = vec2(0.0);
+	for (int i = 0; i < 4; i++) {
+		vec2 site = base + vec2(float(i % 2), float(i / 2));
+		vec3 hash = fract(sin(vec3(dot(site, vec2(91.31, 57.61)), dot(site, vec2(74.17, 113.9)), dot(site, vec2(19.71, 81.7)))) * 27417.37);
+		vec2 offset = grid - site - (hash.xy - 0.5) * 0.30;
+		float distance = length(offset);
+		float age = fract(TIME * 1.23 + hash.z);
+		float radius = mix(0.03, 0.43, age);
+		float band = (distance - radius) * 13.0;
+		float envelope = (1.0 - smoothstep(0.5, 1.0, abs(band))) * smoothstep(0.0, 0.15, age) * (1.0 - age);
+		slope += offset / max(distance, 0.001) * sin(band * 3.14159) * envelope;
+	}
+	return slope * rain;
+}
+
+vec3 water_surface(vec3 original, vec2 weights, vec3 view, float ripple_fade, bool srgb) {
+	float coverage = weights.r;
+	float bog = clamp(weights.g / coverage, 0.0, 1.0);
+	// Continuous across tile edges, unlike the rotated art atlas.
+	vec2 point = cell * 2.0;
+	float a = dot(point, vec2(2.15, 1.16)) - TIME * 1.65;
+	float b = dot(point, vec2(-2.71, 3.20)) + TIME * 1.37;
+	float c = dot(point, vec2(4.34, -4.61)) - TIME * 2.08;
+	float primary = cos(a + 0.34 * sin(b));
+	float secondary = cos(b + 0.19 * sin(c));
+	float wind = ripple_fade * mix(1.0, 0.36, bog);
+	vec2 slope = (vec2(0.06, -0.04) * primary + vec2(-0.035, 0.075) * secondary) * wind;
+	vec2 rain = vec2(0.0);
+	if (water_rain_count > 0 && ripple_fade > 0.0 && coverage > 0.4) {
+		rain = rain_ring_slope(point) * vec2(1.0, -1.0) * ripple_fade * smoothstep(0.4, 0.95, coverage) * 0.24;
+	}
+	slope += rain;
+	vec3 normal = normalize(vec3(slope.x, 1.0, slope.y));
+	vec3 sun = normalize(detail_sun);
+	float fresnel = 0.18 * pow(1.0 - clamp(dot(normal, view), 0.0, 1.0), 4.0);
+	// Bog's duckweed has no sun glint. Keep it on the water share of mixed tiles.
+	float glint = pow(max(dot(normal, normalize(sun + view)), 0.0), 85.0) * ripple_fade * (1.0 - bog);
+	float shore = 4.0 * coverage * (1.0 - coverage);
+	float foam = shore * smoothstep(0.30, 0.92, primary * 0.65 + secondary * 0.35) * ripple_fade * (1.0 - bog);
+	// Rain rings catch the sky even at steep view angles. Foam masks the reflection.
+	fresnel += min(length(rain) * 0.6, 0.18) * (1.0 - foam);
+	// Match the linear water lighting in both renderers. Compatibility
+	// supplies the terrain sample in display space.
+	vec3 base = srgb ? to_linear(original) : original;
+	vec3 sky = to_linear(vec3(0.47, 0.63, 0.76));
+	vec3 sparkle = to_linear(vec3(0.66, 0.79, 0.85));
+	float ring_light = dot(rain, sun.xz);
+	vec3 waves = base * (1.0 + (0.11 * primary + 0.045 * secondary) * wind + ring_light);
+	vec3 water = mix(waves, sky, fresnel) + sparkle * (0.12 * glint + 0.11 * foam + 0.4 * max(ring_light, 0.0));
+	vec3 enhanced = mix(base, water, coverage);
+	return srgb ? to_srgb(enhanced) : enhanced;
+}
+
 void fragment() {
 	// Rounded: a perspective view interpolates the per-cell constants with
 	// small errors, and truncation would pick the neighbouring atlas tile.
@@ -62,6 +137,12 @@ void fragment() {
 	vec2 start = vec2(float(index % columns), float(index / columns)) * pitch + vec2(2.0);
 	vec2 tex_uv = (start + UV * tile_side) / atlas_size;
 	ALBEDO = texture(tiles, tex_uv).rgb;
+	if (water_enabled) {
+		vec2 water_start = vec2(float(index % columns), float(index / columns)) * WATER_PITCH + vec2(1.0);
+		vec2 weights = texture(water_weights, (water_start + UV * WATER_SIDE) / water_atlas_size).rg;
+		float ripple_fade = 1.0 - smoothstep(0.035, 0.19, length(dFdx(cell)) + length(dFdy(cell)));
+		if (weights.r > 0.0) ALBEDO = water_surface(ALBEDO, weights, mat3(INV_VIEW_MATRIX) * VIEW, ripple_fade, OUTPUT_IS_SRGB);
+	}
 	if (detail_enabled && int(round(UV2.y)) == 1) {
 		vec2 dx = dFdx(UV);
 		vec2 dy = dFdy(UV);

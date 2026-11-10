@@ -66,6 +66,7 @@ func build_shop(owner: ELAdventureDirector, panel: ELAdventureHud, exchange_trad
 	_button("ComponentPrice", Vector2.ZERO).pressed.connect(func(): rune_price = not rune_price; refresh())
 	slot = 0
 	pick = 0 if not trade.stock.is_empty() else -1
+	_build_online_message()
 	resized.connect(_layout)
 	_layout()
 	refresh()
@@ -167,24 +168,36 @@ func selected_card() -> String:
 	return trade.stock[pick] if pick >= 0 and pick < trade.stock.size() else ""
 
 func buy() -> void:
+	if _purchase_pending: return
 	var card := selected_card()
 	if card.is_empty() or slot < 0 or slot >= trade.cards.size(): return
 	trade.replace(slot, card)
 	refresh()
 
 func retrieve() -> void:
+	if _purchase_pending: return
 	if slot < 0 or slot >= trade.pending.size() or trade.pending[slot].is_empty(): return
 	trade.clear(slot)
 	refresh()
 
 func accept() -> void:
+	if _purchase_pending: return
+	if strategic_session != null:
+		if not trade.pending.any(func(card: String): return not card.is_empty()):
+			cancel_trade()
+			return
+		var action := "visit_buy_spells" if strategic_shop_visit else "buy_spells"
+		if trade.problem().is_empty(): _manage_online([action, trade.hero_id, trade.shop_id] + trade.pending, true)
+		return
 	if not trade.commit():
 		refresh()
 		return
 	closed.emit()
 
 func cancel_trade() -> void:
-	if trade.cancel(): closed.emit()
+	if _purchase_pending: return
+	if strategic_shop_visit: _manage_online(["visit_close", trade.hero_id, trade.shop_id], true)
+	elif trade.cancel(): closed.emit()
 
 ## Escape closes the screen without buying.
 func cancel() -> void:
@@ -226,6 +239,11 @@ func refresh() -> void:
 	for name: String in ["BuySpell", "RetrieveSpell", "AcceptBuy", "ComponentPrice"]: buttons[name].visible = stocked
 	buttons.RetrieveSpell.disabled = slot >= trade.pending.size() or trade.pending[slot].is_empty()
 	buttons.AcceptBuy.disabled = not trade.problem().is_empty()
+	buttons.BuySpell.disabled = _purchase_pending
+	buttons.DeclineBuy.disabled = _purchase_pending
+	if _purchase_pending:
+		buttons.RetrieveSpell.disabled = true
+		buttons.AcceptBuy.disabled = true
 	buttons.SShopUp.disabled = shop_scroll <= 0
 	buttons.SShopDown.disabled = shop_scroll >= max_scroll()
 	_price_button()

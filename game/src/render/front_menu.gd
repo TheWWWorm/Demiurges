@@ -28,6 +28,9 @@ signal edition_requested(edition: String)
 signal content_requested(edition: String)
 ## Duel screen Start: the match is begun (presets resolved); the view plays its rounds.
 signal duel_match_requested(match: ELDuelMatch)
+signal expedition_requested
+signal network_requested(lan: bool)
+signal strategy_requested(lan: bool)
 ## Round-result / duel-summary OK and Cancel.
 signal duel_round_closed(proceed: bool)
 ## Tutorial -> Combat: the combat tutorial replay (second game).
@@ -39,6 +42,9 @@ signal hosted_closed
 ## The menu's own music took over the sound (true) or gave it back (false):
 ## the host pauses whatever plays behind an opaque menu screen.
 signal music_owner_changed(owned: bool)
+
+## The developer console owns its shortcuts even when a front-end page covers play.
+var console_captures: Callable
 
 const DESIGN := Vector2(1024, 768)
 const INK := Color("e6dcc0")
@@ -56,11 +62,11 @@ const UNAVAILABLE := "Not available in the remake yet."
 ## OK action of the open inform_hosted box (none while a question is open).
 var _inform_ok: Callable
 ## Screens built by ELMissionLoadScreen (SaveMissionScreen in its modes).
-const SAVE_SCREENS := ["load_mission", "load_campaign", "save_game", "load_game"]
+const SAVE_SCREENS := ["load_mission", "load_campaign", "load_strategy", "save_game", "load_game"]
 const NO_REPLAYS := "Replays are not supported in the remake yet."
-## Network and master-server play are outside the remake; hot seat is local.
-const NO_NETWORK := "Network play is not part of the remake."
-const NETWORK_CONTROLS := ["MSTCPIP", "MSLAN", "MSGameSpy", "MM_MP_MasterServBtn", "MSTStrategy"]
+## The original master-server services are unavailable.
+const NO_NETWORK := "This multiplayer mode is unavailable."
+const NETWORK_CONTROLS := ["MSGameSpy", "MSGameSpyS", "MM_MP_MasterServBtn"]
 ## Screens built by ELReplayScreen (second game).
 const REPLAY_SCREENS := ["replay_load", "replay_save"]
 ## Screen definitions per edition. "art" is the CutParts control group drawn as
@@ -80,15 +86,16 @@ const SCREENS := {
 		"legend": {"art": "CampaignText", "under": "SelectCampaign", "back": "campaigns"},
 		"mission": {"art": "CampaignInfo", "back": "campaigns"},
 		"duel": {"art": "Duel", "exclude": ["Type2"], "back": "new"},
-		# New game -> Multiplayer: Duel / Strategy, then the Duel connection
-		# menu whose Hot seat opens the Duel screen.
-		# Network play and the strategic (network-only) branch stay disabled.
+		# New game -> Multiplayer offers Duel and Strategy. The Duel connection
+		# menu also opens the local Duel screen through Hot seat.
 		"mp_type": {"art": "MultiplayerSelectType", "buttons": ["MSTDuel", "MSTStrategy", "MSTBack"], "back": "new"},
 		"mp_start": {"art": "MultiplayerStart", "buttons": ["MSTCPIP", "MSLAN", "MSGameSpy", "MSHotSeat", "MSBack"], "back": "mp_type"},
+		"mp_start_strategy": {"art": "MultiplayerStartStrategy", "buttons": ["MSTCPIPS", "MSLANS", "MSGameSpyS", "MSBackS"], "back": "mp_type"},
 		"single": {"art": "SelectMission", "back": "new"},
 		# Load game -> Campaign / Single: SaveMissionScreen in load mode.
 		"load_campaign": {"art": "SaveMissionScreen", "back": "load"},
 		"load_mission": {"art": "SaveMissionScreen", "back": "load"},
+		"load_strategy": {"art": "SaveMissionScreen", "back": "mp_start_strategy"},
 		# Hosted over a running game (adventure Options column Save / Load).
 		"save_game": {"art": "SaveMissionScreen", "back": "main"},
 		"load_game": {"art": "SaveMissionScreen", "back": "main"},
@@ -150,8 +157,9 @@ const SCREENS := {
 const ACTIONS := {
 	"NewGameButton": "screen:new", "LoadGameButton": "screen:load", "OptionsButton": "options", "HallOfFameButton": "hall_of_fame", "CreditsButton": "credits", "QuitButton": "quit",
 	"DuelButton": "screen:duel", "CampaignButton": "screen:campaigns", "SingleButton": "screen:single", "MultiplayerButton": "screen:mp_type", "BackButton": "back",
-	"MSTDuel": "screen:mp_start", "MSTStrategy": "", "MSTBack": "back",
-	"MSTCPIP": "", "MSLAN": "", "MSGameSpy": "", "MSHotSeat": "hot_seat", "MSBack": "back",
+	"MSTDuel": "screen:mp_start", "MSTStrategy": "screen:mp_start_strategy", "MSTBack": "back",
+	"MSTCPIP": "network", "MSLAN": "lan", "MSGameSpy": "", "MSHotSeat": "hot_seat", "MSBack": "back",
+	"MSTCPIPS": "strategy", "MSLANS": "strategy_lan", "MSGameSpyS": "", "MSBackS": "back",
 	"LGCampaign": "screen:load_campaign", "LGSingle": "screen:load_mission", "LGBack": "back",
 	"MM_SingleBtn": "screen:single", "MM_MultiplayerBtn": "screen:mp_start", "MM_OptionsBtn": "options", "MM_EncBtn": "encyclopaedia", "MM_CreditsBtn": "credits", "MM_QuitBtn": "quit",
 	"MM_SG_TutorialBtn": "screen:tutorial", "MM_SG_DuelBtn": "screen:duel_menu", "MM_SG_CampaignBtn": "screen:campaign_menu", "MM_SG_MissionBtn": "screen:mission_menu", "MM_SG_BackBtn": "back",
@@ -299,6 +307,8 @@ func build(available: Dictionary, initial: String) -> bool:
 	canvas.size = DESIGN
 	add_child(canvas)
 	_choice = ELGameChoice.new()
+	_choice.expedition_available = available.has("el2")
+	_choice.expedition_requested.connect(func(): expedition_requested.emit())
 	_choice.selected.connect(func(chosen: String):
 		edition_requested.emit(chosen)
 		use_edition(chosen))
@@ -454,6 +464,9 @@ func show_screen(target: String) -> void:
 		"load_campaign":
 			mission_load_ui.prepare("load", ELSaveSlots.KIND_CAMPAIGN)
 			mission_load_ui.build_screen()
+		"load_strategy":
+			mission_load_ui.prepare("load", ELSaveSlots.KIND_STRATEGIC)
+			mission_load_ui.build_screen()
 		"save_game", "load_game": mission_load_ui.build_screen()
 		"replay_load", "replay_save": replay_ui.build_screen()
 		"duel_editor": duel_ui.build_editor()
@@ -573,6 +586,14 @@ func _wire(button: BaseButton, control: String) -> void:
 		button.disabled = true
 		button.tooltip_text = "The combat tutorial replay is missing from the game content."
 		return
+	if action in ["network", "lan"] and OS.has_feature("web"):
+		button.disabled = true
+		button.tooltip_text = "Network duels require the desktop or mobile game."
+		return
+	if action in ["strategy", "strategy_lan", "screen:mp_start_strategy"] and OS.has_feature("web"):
+		button.disabled = true
+		button.tooltip_text = "Strategic multiplayer requires the desktop or mobile game."
+		return
 	if action.is_empty():
 		button.disabled = true
 		button.tooltip_text = NO_REPLAYS if control == "MM_D_ReplayBtn" else (NO_NETWORK if control in NETWORK_CONTROLS else UNAVAILABLE)
@@ -588,6 +609,8 @@ func _run(action: String) -> void:
 		"back": go_back()
 		"duel": duel_requested.emit()
 		"hot_seat": duel_ui.start_hot_seat()
+		"network", "lan": network_requested.emit(action == "lan")
+		"strategy", "strategy_lan": strategy_requested.emit(action == "strategy_lan")
 		"settings": settings_requested.emit()
 		"options": options_ui.open("menu")
 		"quit": quit_requested.emit()
@@ -696,6 +719,7 @@ func _input(event: InputEvent) -> void:
 	if not is_visible_in_tree(): return
 	# Keys belong to the menu while it covers the game (Esc steps back).
 	if event is InputEventKey:
+		if console_captures.is_valid() and console_captures.call(event): return
 		# An open message box answers its keys first.
 		if event.pressed and not event.echo and duel_ui != null and duel_ui.message_key(event.keycode):
 			get_viewport().set_input_as_handled()

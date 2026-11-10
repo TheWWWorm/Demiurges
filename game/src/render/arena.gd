@@ -13,7 +13,12 @@ var _profile: ELProfile
 var _ground: ELModel
 var _ground_materials: Dictionary = {}
 var _detail_materials: Dictionary = {}
+var _secondary_overlays: Dictionary = {}
+var _secondary_sources := PackedFloat32Array()
+var _secondary_traced := false
+var _secondary_scenery: Array[ELModel] = []
 var _camera_obstacles: Array[ELModel] = []
+var _scenery: Dictionary = {}
 ## Scenery materials whose ambient plus sun light is limited to full brightness.
 var _lit_materials: Array[ShaderMaterial] = []
 var _ambient_seen := Color(-1, -1, -1)
@@ -21,7 +26,10 @@ var _ambient_seen := Color(-1, -1, -1)
 var light_limit := 1.0
 const LIT_SHADER := preload("res://src/render/arena_lit.gdshader")
 const LIT_BLEND_SHADER := preload("res://src/render/arena_lit_blend.gdshader")
+const SECONDARY_SHADER := preload("res://src/render/arena_secondary.gdshader")
 const BACKDROP_SHADER :=preload("res://src/render/arena_backdrop.gdshader")
+## The original cutout pass accepts alpha bytes greater than 200.
+const MASKED_ALPHA_CUTOFF := 201.0 / 255.0
 var _lit: Dictionary = {}
 var _unlit: Dictionary = {}
 
@@ -52,11 +60,17 @@ func build(profile: ELProfile, arena_id := "Green.001") -> bool:
 			continue
 		var at := i * 7
 		model.position = ELFigure.vector(Vector3(transforms[at], transforms[at + 1], transforms[at + 2]))
-		model.quaternion = Quaternion(transforms[at + 4], transforms[at + 6], -transforms[at + 5], transforms[at + 3]).normalized()
+		# PosRot stores an axis and angle in radians after each position.
+		var axis := ELFigure.vector(Vector3(transforms[at + 3], transforms[at + 4], transforms[at + 5]))
+		if not axis.is_zero_approx(): model.quaternion = Quaternion(axis.normalized(), transforms[at + 6])
+		var id := int(ids[i])
+		if not _scenery.has(id): _scenery[id] = model
 		# Only authored tall scenery can clear the camera's viewing corridor.
 		# Low pieces include whole hills supporting separately placed trees;
 		# their wide bounds can cross the view without blocking the action.
-		if i < types.size() and types[i] == "H": _camera_obstacles.append(model)
+		if i < types.size():
+			if types[i] == "H": _camera_obstacles.append(model)
+			if types[i] == "S": _secondary_scenery.append(model)
 	_build_background(profile)
 	var environment := WorldEnvironment.new()
 	var env := Environment.new()
@@ -85,6 +99,71 @@ func build(profile: ELProfile, arena_id := "Green.001") -> bool:
 	light.look_at_from_position(-toward * 10.0, Vector3.ZERO, Vector3.UP if absf(toward.y) < 0.99 else Vector3.FORWARD)
 	_sync_light()
 	return errors.is_empty()
+
+func is_surface(model: ELModel) -> bool:
+	return model == _ground
+
+func is_normal_secondary_receiver(model: ELModel, part: MeshInstance3D) -> bool:
+	var material := part.material_override as ShaderMaterial
+	return model in _secondary_scenery and material != null and material.shader == LIT_SHADER
+
+func set_secondary_lights(sources: PackedFloat32Array) -> void:
+	if _secondary_sources == sources: return
+	_secondary_sources = sources
+	_update_secondary_overlays()
+
+func set_secondary_traced(traced: bool) -> void:
+	if _secondary_traced == traced: return
+	_secondary_traced = traced
+	_update_secondary_overlays()
+
+func _update_secondary_overlays() -> void:
+	if _secondary_traced or _secondary_sources.is_empty():
+		for part: MeshInstance3D in _secondary_overlays:
+			if is_instance_valid(part) and part.material_overlay == _secondary_overlays[part]:
+				part.material_overlay = null
+		return
+	var sources := PackedVector4Array()
+	# The shader accepts two vectors for each combat light slot.
+	sources.resize(ELCombatEffects.LIGHT_POOL * 2)
+	for i in _secondary_sources.size() / 4:
+		var at := 4 * i
+		sources[i] = Vector4(_secondary_sources[at], _secondary_sources[at + 1],
+			_secondary_sources[at + 2], _secondary_sources[at + 3])
+	if is_instance_valid(_ground):
+		_update_secondary_model(_ground, sources)
+	for model: ELModel in _secondary_scenery:
+		if is_instance_valid(model):
+			_update_secondary_model(model, sources)
+
+func _update_secondary_model(model: ELModel, sources: PackedVector4Array) -> void:
+	for part: MeshInstance3D in model.parts.values():
+		var base := part.material_override as ShaderMaterial
+		if base == null or not part.has_meta("albedo"): continue
+		var detail: bool = base == _detail_materials.get(part)
+		var normal_aware := model != _ground
+		if normal_aware:
+			if not is_normal_secondary_receiver(model, part): continue
+		elif not detail and base.shader != LIT_SHADER: continue
+		var overlay: ShaderMaterial = _secondary_overlays.get(part)
+		if part.material_overlay != null and part.material_overlay != overlay: continue
+		if overlay == null:
+			overlay = ShaderMaterial.new()
+			overlay.shader = SECONDARY_SHADER
+			overlay.render_priority = Material.RENDER_PRIORITY_MIN
+			overlay.set_shader_parameter("base_texture", part.get_meta("albedo"))
+			_secondary_overlays[part] = overlay
+		var tint: Color = Color.WHITE if detail else base.get_shader_parameter("albedo_tint")
+		overlay.set_shader_parameter("base_alpha", tint.a)
+		overlay.set_shader_parameter("alpha_cutoff", 0.5 if detail else base.get_shader_parameter("alpha_cutoff"))
+		overlay.set_shader_parameter("two_sided", detail)
+		overlay.set_shader_parameter("normal_aware", normal_aware)
+		overlay.set_shader_parameter("sources", sources)
+		overlay.set_shader_parameter("source_count", _secondary_sources.size() / 8)
+		if part.material_overlay != overlay: part.material_overlay = overlay
+
+func scenery(id: int) -> ELModel:
+	return _scenery.get(id)
 
 ## Keeps the scenery's light limit in step with the ambient light, which
 ## combat effects dim and restore.
@@ -135,6 +214,7 @@ func set_detail(enabled: bool) -> void:
 			_detail_materials[part] = detail
 	for part: MeshInstance3D in _ground_materials:
 		part.material_override = _detail_materials[part] if enabled else _ground_materials[part]
+	_update_secondary_overlays()
 
 func ground_height(x: float, z: float) -> float:
 	var surface: ELModel = get_child(0)
@@ -158,6 +238,20 @@ func ground_height(x: float, z: float) -> float:
 				return a.y + (b.y - a.y) * u + (c.y - a.y) * v
 	return 0.0
 
+func _backdrop_foot(point: Vector3) -> Vector3:
+	if _ground == null: return point
+	var nearest := Vector3.ZERO
+	var distance := INF
+	for figure: Dictionary in _ground.figures.values():
+		var vertices: PackedVector3Array = figure.arrays[Mesh.ARRAY_VERTEX]
+		for vertex in vertices:
+			var distance_squared := point.distance_squared_to(vertex)
+			if distance_squared < distance:
+				distance = distance_squared
+				nearest = vertex
+	# The backdrop shares the ground's outline, with a small overlap at its foot.
+	return nearest - Vector3(signf(nearest.x), 1.0, signf(nearest.z)) * 0.01
+
 func _build_background(profile: ELProfile) -> void:
 	# The original engine wraps four atlas panels around a twelve-segment ring.
 	var corners := [
@@ -178,7 +272,7 @@ func _build_background(profile: ELProfile) -> void:
 			var x := cos(angle) * 28.5
 			var z := -sin(angle) * 28.5
 			var index := section * 4 + j
-			vertices[index] = Vector3(x, ground_height(x, z), z)
+			vertices[index] = _backdrop_foot(Vector3(x, 0, z))
 			vertices[index + 16] = vertices[index] + Vector3(0, 20, 0)
 			var f := j / 3.0
 			uvs[index] = Vector2(lerpf(quad[2].x, quad[3].x, f) / 1024.0, 1 - lerpf(quad[3].y, quad[2].y, f) / 1024.0)
@@ -281,6 +375,17 @@ func _add_model(profile: ELProfile, model_name: String, texture_name: String, ba
 				_unlit[standard] = far
 			part.material_override = _unlit[standard]
 			continue
+		if model_name.begins_with("coob") and standard.albedo_texture != null and standard.albedo_texture.has_meta(ELTexture.ONE_BIT_ALPHA):
+			standard.alpha_scissor_threshold = MASKED_ALPHA_CUTOFF
+		if standard.has_meta(ELFigure.AUTHORED_FULLBRIGHT):
+			# Magic parts keep their authored light. Match the one-sided arena
+			# scenery while leaving their texture and authored emission intact.
+			standard.cull_mode = BaseMaterial3D.CULL_BACK
+			if standard.transparency == BaseMaterial3D.TRANSPARENCY_ALPHA_DEPTH_PRE_PASS:
+				standard.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+				standard.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+				standard.render_priority = -1
+			continue
 		if not _lit.has(standard):
 			var lit := ShaderMaterial.new()
 			# Soft-alpha sheets (Alpha32: the Mines' running water) blend.
@@ -288,6 +393,8 @@ func _add_model(profile: ELProfile, model_name: String, texture_name: String, ba
 			lit.shader = LIT_BLEND_SHADER if soft else LIT_SHADER
 			if soft: lit.render_priority = -1
 			lit.set_shader_parameter("albedo_texture", standard.albedo_texture)
+			lit.set_shader_parameter("albedo_tint", standard.albedo_color)
+			if not soft: lit.set_shader_parameter("alpha_cutoff", standard.alpha_scissor_threshold)
 			_lit[standard] = lit
 			_lit_materials.append(lit)
 		part.material_override = _lit[standard]
