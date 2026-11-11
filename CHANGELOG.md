@@ -2,7 +2,7 @@
 
 Versions follow [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html) from 0.3.0 on.
 
-## Unreleased
+## 0.9.0
 
 - Etherlords II: custom maps that come with only their map file (`.sbm`), as most published maps do, now play. Copy the map's folder into the maps folder (or import its archive) and it is listed and starts like any other; no scenario file (`.smp`) is needed. The remake reads the map file itself, exactly as the game does.
 - Etherlords II: when an enemy attacks your hero, your hero now stays on the left of the battle screen with your portrait, health and ether, next to your spell and artifact buttons. Map scripts still see the attacker first.

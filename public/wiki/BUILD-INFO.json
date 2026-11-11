@@ -1,5 +1,5 @@
 {
-  "version": "0.8.0",
+  "version": "0.9.0",
   "languages": {
     "en": {
       "pages": 458,
@@ -19,7 +19,7 @@
   "files": {
     "data/en/index.json": {
       "bytes": 247771,
-      "sha256": "d7f238d317be25a5f5f2d7e1a1586e7f9770251fb77163abc1440c629a8e4cb1"
+      "sha256": "d829bc85a0f5305239c4645ecf231c43f70dde1bdb52b1b1a960a8118a00c63b"
     },
     "data/en/pages/abilities.json": {
       "bytes": 2238,
@@ -1855,7 +1855,7 @@
     },
     "data/ru/index.json": {
       "bytes": 438137,
-      "sha256": "2211ec271861b4b625a7567aa490c36e53ac2d34916009ddd8fe872f0bc20563"
+      "sha256": "7e8cad82903e04b0516eb5c6989dad96a5251cac830d02f2950cccd2739e54b3"
     },
     "data/ru/pages/abilities.json": {
       "bytes": 3685,
