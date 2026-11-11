@@ -146,7 +146,15 @@ func build_screen() -> void:
 	menu.canvas.add_child(list)
 	menu.labels["list"] = list
 	menu._label("mission_name", "", _rect("MissName"), 18)
-	menu._text_box(_rect("MissDesc"), "")
+	var box := menu._text_box(_rect("MissDesc"), "")
+	# Its own dark backing with a margin: some editions' art only darkens the
+	# top of the box, and the text would run over the panel's lines and edge.
+	var backing := StyleBoxFlat.new()
+	backing.bg_color = Color(0.02, 0.02, 0.02, 0.92)
+	backing.set_content_margin_all(10.0)
+	backing.content_margin_top = 6.0
+	box.add_theme_stylebox_override("normal", backing)
+	box.meta_clicked.connect(_on_description_meta)
 	slots = null
 	if not second():
 		slots = ELSingleSlots.new()
@@ -207,9 +215,12 @@ func _fill_description(entry: Dictionary) -> void:
 	if entry.get("custom", false):
 		var picture := ELCustomMaps.picture(profile(), str(entry.id))
 		if picture != null:
-			var width := box.size.x - 24.0
+			var width := box.size.x - 32.0
 			var height := minf(width * picture.get_height() / maxf(picture.get_width(), 1.0), box.size.y * 0.6)
+			# Clicked, the picture opens at full size.
+			box.push_meta("picture", RichTextLabel.META_UNDERLINE_NEVER, ELRemakeText.t("Click to enlarge", profile()))
 			box.add_image(picture, roundi(height * picture.get_width() / maxf(picture.get_height(), 1.0)), roundi(height))
+			box.pop()
 			box.add_text(char(10) + char(10))
 	var description := menu.text(str(entry.description)).strip_edges() if not entry.is_empty() and not str(entry.get("description", "")).is_empty() else ""
 	if not entry.get("playable", true):
@@ -226,6 +237,45 @@ func _fill_description(entry: Dictionary) -> void:
 		box.add_text("\n" + str(pair[0]))
 		box.pop()
 		box.add_text("\n" + str(pair[1]))
+
+# --- The custom map's picture, enlarged ------------------------------------------
+
+var _enlarged: Control
+
+func _on_description_meta(meta: Variant) -> void:
+	if str(meta) != "picture": return
+	var entry := chosen()
+	if not entry.get("custom", false): return
+	var picture := ELCustomMaps.picture(profile(), str(entry.id))
+	if picture != null: _enlarge(picture)
+
+## The picture over the whole window on a dark backdrop; a click or Esc closes it.
+func _enlarge(picture: Texture2D) -> void:
+	close_picture()
+	var shade := ColorRect.new()
+	shade.name = "EnlargedPicture"
+	shade.color = Color(0, 0, 0, 0.88)
+	shade.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	shade.mouse_filter = Control.MOUSE_FILTER_STOP
+	var view := TextureRect.new()
+	view.texture = picture
+	view.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	view.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	view.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR
+	view.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT, Control.PRESET_MODE_MINSIZE, 32)
+	view.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	shade.add_child(view)
+	shade.gui_input.connect(func(event: InputEvent):
+		if event is InputEventMouseButton and event.pressed: close_picture())
+	menu.add_child(shade)
+	_enlarged = shade
+
+## Closes the enlarged picture; false when none was open (Esc steps back).
+func close_picture() -> bool:
+	if not is_instance_valid(_enlarged): return false
+	_enlarged.queue_free()
+	_enlarged = null
+	return true
 
 ## Re-applies the filter and sort; with no current choice the first row is
 ## chosen (the original selects the first row after every rebuild).

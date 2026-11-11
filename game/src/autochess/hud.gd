@@ -466,7 +466,13 @@ class Badge extends Button:
 		var ink: Color = ELAutochessHud.ALLIANCE[key]
 		var box := Rect2(0, 2, 38, 38)
 		draw_rect(box, Color(0.03, 0.04, 0.04, 0.8))
-		if picture != null: draw_texture_rect(picture, box.grow(-2), false, Color.WHITE if active else Color(0.55, 0.55, 0.55, 0.8))
+		if picture != null:
+			# Kept in proportion (the faction emblems are wider than tall).
+			var inner := box.grow(-2)
+			var shape := picture.get_size()
+			var fit := minf(inner.size.x / maxf(1.0, shape.x), inner.size.y / maxf(1.0, shape.y))
+			var drawn := Rect2(inner.get_center() - shape * fit * 0.5, shape * fit)
+			draw_texture_rect(picture, drawn, false, Color.WHITE if active else Color(0.55, 0.55, 0.55, 0.8))
 		draw_rect(box, ink if active else Color("65706a"), false, 2.0 if active else 1.0)
 		var thresholds: Array = rule.thresholds
 		var x := 42.0

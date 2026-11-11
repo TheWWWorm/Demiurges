@@ -6829,6 +6829,7 @@ func _autochess_screen_ready() -> void:
 	_autochess_layer.move_child(_autochess_screen, 0)
 	_autochess_screen.path_tracing = path_tracing
 	_autochess_screen.build(profiles.el2, settings.values)
+	_autochess_screen.remake_settings_requested.connect(_open_settings)
 	_autochess_screen.left.connect(func():
 		_autochess_lobby.open()
 		_autochess_screen.show_backdrop(_autochess_lobby.hero))

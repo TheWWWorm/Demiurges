@@ -2,6 +2,18 @@
 
 Versions follow [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html) from 0.3.0 on.
 
+## 0.7.1
+
+- Autochess: a creature placed on the board, bought or brought from the reserve, is summoned as in the duel: its colour's summon effect rises and the creature appears at the effect's cue. The reserve just shows a bought creature (no flash, no summon sound). Creatures summoned in battle appear the same way.
+- Autochess: when a fight ends, the winning side's surviving creatures turn to the losing hero and send fire bolts at it, each showing its share of the damage.
+- Autochess: heroes on the sideline stand clear of the battlefield's rocks and walls.
+- Autochess: Remake settings are in the Esc menu.
+- Autochess: the faction alliances show the Encyclopaedia's race emblems.
+- Path tracing: glowing effects (hero auras, glowing weapons) light their surroundings without bleaching them, and bloom is softer.
+- The widescreen menu frame lines up with the 4:3 art (it was drawn a few pixels off and slightly shrunk) and frames every menu screen drawn on it, with panels such as the duel replay list kept over the frame.
+- Custom maps: the description has its own dark backing and margin, and clicking the map's picture shows it full size.
+- Duel deck editor: the deck name and Randomize stay inside the name frame.
+
 ## 0.7.0
 
 - Etherlords II has an Autochess mode on the main menu: nine heroes share one pool of 33 creature lines (Spawns, Wheelers, Huntresses and Ticks among them), evolve three copies into stronger forms and fight real-time battles on the original battlefields. The last hero standing wins.

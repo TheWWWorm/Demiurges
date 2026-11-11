@@ -37,7 +37,9 @@ func _initialize() -> void:
 		quit(1)
 		return
 	print("Lua compiler: ", "Lua 4.0.1 (native)" if ELLuaVM.native_compiler else "GDScript only")
-	_compile_all(folders if not folders.is_empty() else [profile.root.path_join("Maps")] as Array[String])
+	var compiled: Array[String] = folders.duplicate()
+	if compiled.is_empty(): compiled.append(profile.root.path_join("Maps"))
+	_compile_all(compiled)
 	var seconds := float(_arg("seconds", "60"))
 	for entry: Dictionary in ELSingleScenario.catalog(profile):
 		if entry.get("custom", false): _check_map(profile, entry, seconds)

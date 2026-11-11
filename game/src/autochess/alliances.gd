@@ -27,9 +27,9 @@ const EFFECTS := {
 	"strikers": ["+30% opening blow", "+60% opening blow"],
 }
 const ORDER := ["chaots", "kinets", "vitals", "synthets", "flyers", "strikers"]
-## Game art for each alliance: a spell of the faction's own magic (fire,
-## lightning, healing, a cyborg skull), and the flaming wings and the sword
-## of the second game's effect icons for flyers and first strike.
+## Game art for each alliance: the factions show the Encyclopaedia's race
+## emblems (spells of their own magic where those are missing), flyers and
+## first strike the flaming wings and the sword of the effect icons.
 const ICONS := {"chaots": ["spell", "FRST"], "kinets": ["spell", "JUST"], "vitals": ["spell", "HEAL"],
 	"synthets": ["spell", "BDEX"], "flyers": ["affect", 12], "strikers": ["affect", 5]}
 
@@ -39,9 +39,9 @@ static func icon(profile: ELProfile, key: String) -> Texture2D:
 	var cache := profile.root + "|" + key
 	if _icons.has(cache): return _icons[cache]
 	var source: Array = ICONS.get(key, ["spell", ""])
-	var result: Texture2D
-	if source[0] == "spell": result = profile.card_icon(String(source[1]))
-	else:
+	var result: Texture2D = emblem(profile, String(RULES.get(key, {}).get("color", "")))
+	if result == null and source[0] == "spell": result = profile.card_icon(String(source[1]))
+	elif result == null:
 		# The effect sheets keep the spell sheets' 5 x 5 column-major cells.
 		var atlas := AtlasTexture.new()
 		atlas.atlas = profile.texture("Interface/affects/icon_01")
@@ -51,6 +51,31 @@ static func icon(profile: ELProfile, key: String) -> Texture2D:
 		result = atlas
 	_icons[cache] = result
 	return result
+
+## The Encyclopaedia panel's race emblem pieces, by magic colour.
+const EMBLEM_PHASES := {"Red": "Phase1", "Green": "Phase2", "Blue": "Phase3", "Black": "Phase4", "White": "Phase5"}
+
+## A faction's emblem as the Encyclopaedia shows it (null without one).
+static func emblem(profile: ELProfile, color: String) -> Texture2D:
+	var phase := String(EMBLEM_PHASES.get(color, ""))
+	if phase.is_empty(): return null
+	for row: Dictionary in profile.table("CutParts").values():
+		if String(row.get("Ctrl", "")) != "Encyclopaedia": continue
+		var masks: Variant = row.get("Msk", [])
+		if not (masks is Array and phase in masks or str(masks) == phase): continue
+		var sheet := ""
+		for definition: Dictionary in profile.table("InterfaceTextures").values():
+			if definition.get("Name", "") == row.get("Txt", ""): sheet = "Interface/" + str(definition.get("Path", "")).replace("\\", "/")
+		var texture := profile.texture(sheet) if not sheet.is_empty() else null
+		if texture == null: return null
+		var atlas := AtlasTexture.new()
+		atlas.atlas = texture
+		# Its middle square: the emblem sits centred in a wider cell.
+		var side := minf(float(row.TxtW), float(row.TxtH))
+		atlas.region = Rect2(float(row.TxtL) + (float(row.TxtW) - side) * 0.5, float(row.TxtT) + (float(row.TxtH) - side) * 0.5, side, side)
+		atlas.filter_clip = true
+		return atlas
+	return null
 
 static var _traits: Dictionary = {}
 

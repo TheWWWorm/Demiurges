@@ -17,6 +17,8 @@ const ABILITY_EFFECTS := {
 }
 
 var profile: ELProfile
+## Creatures (by uid) the screen is about to summon onto the board.
+var arriving: Dictionary = {}
 var arena: ELArena
 var effects: ELCombatEffects
 var audio: ELBattleAudio
@@ -133,6 +135,8 @@ func _build_fire() -> void:
 	var ramp := Gradient.new()
 	ramp.offsets = PackedFloat32Array([0.0, 0.15, 0.7, 1.0])
 	ramp.colors = PackedColorArray([Color(1, 1, 1, 0), Color(1, 0.95, 0.85, 0.9), Color(1, 0.8, 0.6, 0.75), Color(1, 0.6, 0.4, 0)])
+	_flame_material = material
+	_flame_ramp = ramp
 	var field := ELAutochessRules.FIELD
 	var segments := 30
 	for index in segments:
@@ -224,13 +228,115 @@ func _place_hero(side: int) -> void:
 	var model: ELModel = heroes.get(side, {}).get("model")
 	if not is_instance_valid(model): return
 	var field := ELAutochessRules.FIELD
-	# On the field's own ground at its edge, beyond the deployment area.
-	var spot := Vector2(-10.5 if side == 0 else 4.0, field.end.y - 0.4)
+	# On the field's own ground at its edge, beyond the deployment area,
+	# moved to the nearest spot clear of the battlefield's rocks and walls.
+	var spot := _hero_spot(Vector2(-10.5 if side == 0 else 4.0, field.end.y - 0.4))
 	var height := arena.ground_height(spot.x, spot.y) if is_instance_valid(arena) else 0.0
 	model.position = Vector3(spot.x, height, spot.y)
 	# Watching the middle of the field, turned toward their own half.
 	var look := Vector2(spot.x * 0.5, 0.0) - spot
 	model.rotation.y = atan2(look.x, look.y)
+
+## Free hero spots found per battlefield: "scene|x|z" -> spot.
+var _hero_spots: Dictionary = {}
+
+func _hero_spot(wanted: Vector2) -> Vector2:
+	if not is_instance_valid(arena): return wanted
+	var key := "%s|%.1f|%.1f" % [arena_id, wanted.x, wanted.y]
+	if _hero_spots.has(key): return _hero_spots[key]
+	var candidates: Array[Vector2] = []
+	for across in range(-6, 7):
+		for depth: float in [0.0, -0.6, 0.6, -1.2]: candidates.append(wanted + Vector2(across * 0.75, depth))
+	# Nearest first; moving off the sideline counts a little more than along it.
+	candidates.sort_custom(func(a: Vector2, b: Vector2) -> bool:
+		return absf(a.x - wanted.x) + 1.3 * absf(a.y - wanted.y) < absf(b.x - wanted.x) + 1.3 * absf(b.y - wanted.y))
+	var found := wanted
+	for candidate in candidates:
+		if arena.clear_spot(candidate, 0.8):
+			found = candidate
+			break
+	_hero_spots[key] = found
+	return found
+
+# --- The round's end ------------------------------------------------------------
+# As in the original autochess: each surviving recruit of the winning side turns
+# to the losing hero and sends it a fire bolt worth its share of the damage.
+
+const BOLT_SECONDS := 0.75
+const BOLT_STAGGER := 0.18
+var _flame_material: StandardMaterial3D
+var _flame_ramp: Gradient
+## Battle figures turned to the losing hero (fighter id -> yaw).
+var _turned: Dictionary = {}
+
+func survivors_fire(winner: int) -> void:
+	if battle == null or winner < 0 or _flame_material == null: return
+	var mine := 1 if flip else 0
+	var hero: ELModel = heroes.get(1 if winner == mine else 0, {}).get("model")
+	if not is_instance_valid(hero): return
+	var order := 0
+	for u: ELAutochessBattle.Fighter in battle.units:
+		if u.dead or u.team != winner or u.creep or u.echo or u.family < 0: continue
+		var model: ELModel = models.get(u.id)
+		if model == null or not model.visible: continue
+		var look := hero.global_position - model.global_position
+		_turned[u.id] = atan2(look.x, look.z)
+		_send_bolt(model, hero, ELAutochessRules.survivor_damage(u.family, u.rank), 0.35 + order * BOLT_STAGGER)
+		order += 1
+
+func _send_bolt(source: ELModel, hero: ELModel, share: int, delay: float) -> void:
+	var bolt := Node3D.new()
+	bolt.name = "SurvivorBolt"
+	add_child(bolt)
+	bolt.visible = false
+	var flames := CPUParticles3D.new()
+	var quad := QuadMesh.new()
+	quad.size = Vector2(0.45, 0.6)
+	quad.material = _flame_material
+	flames.mesh = quad
+	flames.material_override = _flame_material
+	flames.amount = 24
+	flames.lifetime = 0.35
+	# A trail left in the air behind the bolt.
+	flames.local_coords = false
+	flames.emission_shape = CPUParticles3D.EMISSION_SHAPE_SPHERE
+	flames.emission_sphere_radius = 0.08
+	flames.gravity = Vector3(0, 0.6, 0)
+	flames.initial_velocity_max = 0.2
+	flames.scale_amount_min = 0.7
+	flames.scale_amount_max = 1.2
+	flames.color_ramp = _flame_ramp
+	flames.anim_speed_min = 1.0
+	flames.anim_speed_max = 1.0
+	# No light of its own: a light appearing mid-battle recompiles shaders
+	# (a hitch); the additive flames glow on their own.
+	bolt.add_child(flames)
+	var source_ref: WeakRef = weakref(source)
+	var hero_ref: WeakRef = weakref(hero)
+	var from := source.global_position + Vector3(0, box(source).end.y * 0.6, 0)
+	var rise := Vector3(0, 1.0 + from.distance_to(head(hero)) * 0.12, 0)
+	bolt.position = from
+	var tween := create_tween()
+	tween.tween_interval(delay)
+	tween.tween_callback(func():
+		bolt.visible = true
+		var caster: ELModel = source_ref.get_ref()
+		if caster != null and caster.has_clip("uinstant"): caster.play("uinstant"))
+	tween.tween_method(func(at: float):
+		var target: ELModel = hero_ref.get_ref()
+		if target == null: return
+		var goal := head(target) - Vector3(0, 0.35, 0)
+		bolt.position = from.lerp(goal, at) + rise * 4.0 * at * (1.0 - at), 0.0, 1.0, BOLT_SECONDS).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN)
+	tween.tween_callback(func():
+		flames.emitting = false
+		var target: ELModel = hero_ref.get_ref()
+		if target == null: return
+		if share > 0: _number(target, "-%d" % share, Color(1.0, 0.45, 0.3))
+		if not (target.clip == "uhit" and target.playing) and target.has_clip("uhit"): target.play("uhit")
+		if is_instance_valid(effects): effects.play("RedDamage", {"Target": [target]})
+		if is_instance_valid(audio): audio.effect("RedDamage", target))
+	tween.tween_interval(0.6)
+	tween.tween_callback(bolt.queue_free)
 
 ## The sideline heroes' head points for the overlay: [{side, at}].
 func hero_rows() -> Array:
@@ -271,6 +377,7 @@ func clear_units() -> void:
 	models.clear()
 	_codes.clear()
 	_numbers.clear()
+	_turned.clear()
 	_pending.clear()
 	_shown_dead.clear()
 	battle = null
@@ -338,6 +445,8 @@ func show_preparation(rows: Array, opponent: Array = []) -> void:
 			models[key] = _make_model(code)
 			_codes[key] = code
 			models[key].set_meta("uid", int(entry.uid))
+			# A creature being summoned stays hidden until its summon cue.
+			if arriving.has(int(entry.uid)): models[key].visible = false
 		var model: ELModel = models[key]
 		var target := world(Vector2(float(entry.point[0]), float(entry.point[1])))
 		model.set_meta("goal", target)
@@ -433,7 +542,8 @@ func _process(delta: float) -> void:
 			model.position += offset * minf(1.0, delta * 12.0)
 		model.position.y = arena.ground_height(model.position.x, model.position.z)
 		if not u.dead:
-			model.rotation.y = lerp_angle(model.rotation.y, _yaw(u.facing), minf(1.0, delta * 10.0))
+			var facing: float = _turned.get(u.id, _yaw(u.facing))
+			model.rotation.y = lerp_angle(model.rotation.y, facing, minf(1.0, delta * 10.0))
 		if u.dead or _shown_dead.has(u.id): continue
 		if model.clip in ["uattack", "uinstant", "uhit", "usummon"] and model.playing: continue
 		# Once the battle is decided everyone stands still where they are.
@@ -455,9 +565,14 @@ func _move_clip(model: ELModel) -> String:
 	if clip.is_empty(): clip = "crun" if model.has_clip("crun") else "cwalk"
 	return clip
 
+## Clips that play out before the figure settles back to idle.
+const ONE_OFF_CLIPS := ["usummon", "uinstant", "uvictory", "uattack", "uhit"]
+
 func _set_clip(model: ELModel, clip: String) -> void:
 	if model.clip == clip and model.playing: return
 	if model.clip == "cidle" and clip == "cidle": return
+	# An entrance (a summon, an evolution) is not cut short by standing still.
+	if clip == "cidle" and model.playing and model.clip in ONE_OFF_CLIPS: return
 	if model.has_clip(clip): model.play(clip)
 
 func _model(id: int) -> ELModel:
@@ -512,13 +627,37 @@ func _event(e: Dictionary) -> void:
 			model.speed = 1.0
 			model.play("udeath")
 			audio.unit(model, "death")
-		"revive", "spawn":
+		"revive":
 			var model := _model(int(e.u))
 			if model == null: return
 			_shown_dead.erase(int(e.u))
 			if not model.play("usummon"): model.play("cidle")
 			if is_instance_valid(effects): effects.play("PosSorcery", {"Target": [model]})
 			audio.unit(model, "summon")
+		"spawn":
+			# A summoned creature rises in its colour's summon effect and
+			# appears at the effect's summon cue, as in the duel.
+			var model := _model(int(e.u))
+			if model == null: return
+			var u := battle.unit(int(e.u))
+			var code := u.code if u != null else ""
+			var delay := 0.0
+			if is_instance_valid(effects):
+				var names := EffectTable.card_effects(profile, code)
+				for effect: String in names if not names.is_empty() else ["PosSorcery"]: effects.play(effect, {"Target": [model]})
+				if not names.is_empty(): delay = ELCombatEffects.summon_delay(profile, code)
+			model.play("cidle")
+			model.visible = delay <= 0.0
+			# Held weakly: the battle may be cleared before the cue.
+			var held: WeakRef = weakref(model)
+			var appear := func():
+				var shown: ELModel = held.get_ref()
+				if shown == null: return
+				shown.visible = true
+				if not shown.play("usummon"): shown.play("cidle")
+				audio.unit(shown, "summon")
+			if delay <= 0.0: appear.call()
+			else: get_tree().create_timer(delay).timeout.connect(appear)
 		"ability":
 			var source := _model(int(e.u))
 			var targets: Array = []
@@ -594,6 +733,7 @@ func _step_numbers(delta: float) -> void:
 func floating_numbers() -> Array:
 	var result := []
 	for n: Dictionary in _numbers:
+		if not is_instance_valid(n.model): continue
 		var model: ELModel = n.model
 		var top := head(model) + Vector3(float(n.offset), 0.4 + float(n.age) * 1.2, 0)
 		result.append([top, n.text, n.color, 1.0 - float(n.age) / NUMBER_SECONDS])
@@ -643,7 +783,7 @@ func health_rows() -> Array:
 	if battle == null: return rows
 	var mine := 1 if flip else 0
 	for u: ELAutochessBattle.Fighter in battle.units:
-		if u.dead or not models.has(u.id): continue
+		if u.dead or not models.has(u.id) or not models[u.id].visible: continue
 		rows.append({"at": head(models[u.id]), "hp": u.hp, "max": u.max_hp, "shield": u.shield, "rank": u.rank, "tier": u.tier, "uid": u.uid, "friend": u.team == mine, "creep": u.creep})
 	return rows
 

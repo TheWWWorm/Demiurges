@@ -423,6 +423,7 @@ func show_screen(target: String) -> void:
 	if target != "mission": chapter = {}
 	previous_screen = screen
 	screen = target
+	if single_ui != null: single_ui.close_picture()
 	buttons.clear()
 	labels.clear()
 	cards.clear()
@@ -436,8 +437,8 @@ func show_screen(target: String) -> void:
 	art.size = DESIGN
 	art.draw.connect(_draw_art)
 	canvas.add_child(art)
-	_add_wide_frame(target)
 	var definition: Dictionary = SCREENS[edition][target]
+	_add_wide_frame(target, definition.has("under"))
 	_pieces.clear()
 	if definition.has("under"): _add_group(definition.under, [])
 	# Options opened from the front end keeps the main-menu art around its
@@ -446,6 +447,7 @@ func show_screen(target: String) -> void:
 	# the main-menu art and its version line around the panel;
 	# so does the second game's Options.
 	elif target == "options" and not hosted or target == "encyclopaedia" and edition == "el2" and not hosted: _add_group(SCREENS[edition].main.art, [])
+	_frame_after = _pieces.size() if definition.has("under") else -1
 	_add_group(definition.art, definition.get("exclude", []) + (duel_ui.art_exclude(target) if duel_ui != null else []) + (encyclopaedia_ui.art_exclude(target) if encyclopaedia_ui != null else []) + (options_ui.art_exclude(target) if options_ui != null else []))
 	if not target in ["credits", "hall_of_fame"] and not playing_interface(): stop_audio()
 	if definition.has("buttons"): _build_text_buttons(definition.buttons)
@@ -505,26 +507,41 @@ static func _layer(row: Dictionary) -> int:
 	return 2 if row.masks.has("Last") else 0
 
 # --- Widescreen frame -----------------------------------------------------------
-# Remake art: each game's main-menu frame widened to 16:9. Its middle 1032 of
-# 1376 columns cover the 4:3 design exactly (the opaque edges replace the
-# original frame's borders), the outer columns fill the window's side bars.
+# Remake art: each game's main-menu frame widened to 16:9. The 4:3 design sits
+# in its middle at 1:1 (a margin of 176 columns each side and 3 rows above and
+# below, which stay outside the window); the outer columns fill the side bars.
 
 const WIDE_FRAMES := {"el1": "res://assets/widescreen/etherlords-main-menu-frame-overlay.png",
 	"el2": "res://assets/widescreen/etherlords-ii-main-menu-frame-overlay.png"}
-## Columns of the 1376-wide art outside the 4:3 design on each side.
-const WIDE_SIDE := 172.0
 ## Narrower side bars than this (design pixels) keep the plain 4:3 screen.
 const WIDE_MINIMUM := 48.0
-## Front-end screens drawn on the main-menu frame.
-const WIDE_SCREENS := ["main", "new", "load", "options", "encyclopaedia", "multiplayer", "single", "duel"]
+## Front-end screens drawn on the main-menu frame (the frame's pixels under
+## the widened art match the main menu's exactly). Panels drawn over the
+## main-menu art (the replay list reaches into the frame) take it beneath them.
+## Not the second game's in-game save and load sheets (a frame of their own,
+## over the running game).
+const WIDE_SCREENS := {
+	"el1": ["main", "new", "load", "campaigns", "duel", "single", "options", "hall_of_fame", "mp_type", "mp_start",
+		"mp_start_strategy", "load_campaign", "load_mission", "load_strategy", "load_game", "save_game"],
+	"el2": ["main", "single", "campaign_menu", "mission_menu", "tutorial", "duel_menu", "campaigns", "select_mission",
+		"load_campaign", "load_mission", "replay_load", "hall_of_fame", "duel", "mp_start", "encyclopaedia", "options"],
+}
 var _wide_frame: Control
 var _wide_texture: Texture2D
+## A panel over the main-menu art (the screen's "under" sheet) takes the
+## frame beneath it: drawn by the art after this many pieces (-1: on top).
+var _frame_after := -1
+var _frame_in_art := false
 
-func _add_wide_frame(target: String) -> void:
+func _add_wide_frame(target: String, under_panel := false) -> void:
 	_wide_frame = null
-	if overlay() or hosted or not target in WIDE_SCREENS or not WIDE_FRAMES.has(edition): return
+	_frame_in_art = false
+	if overlay() or hosted or not WIDE_FRAMES.has(edition) or not target in WIDE_SCREENS.get(edition, []): return
 	if not ResourceLoader.exists(WIDE_FRAMES[edition]): return
 	_wide_texture = load(WIDE_FRAMES[edition])
+	if under_panel:
+		_frame_in_art = true
+		return
 	_wide_frame = Control.new()
 	_wide_frame.name = "WideFrame"
 	_wide_frame.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -532,22 +549,26 @@ func _add_wide_frame(target: String) -> void:
 	_wide_frame.draw.connect(_draw_wide_frame)
 	canvas.add_child(_wide_frame)
 
-func _draw_wide_frame() -> void:
-	if _wide_texture == null or scale_factor <= 0.0: return
+func _draw_wide_frame(target: CanvasItem = null) -> void:
+	if target == null: target = _wide_frame
+	if _wide_texture == null or scale_factor <= 0.0 or target == null: return
 	var side := (size.x / scale_factor - DESIGN.x) * 0.5
 	if side < WIDE_MINIMUM: return
 	var source := Vector2(_wide_texture.get_size())
-	var inner := source.x - 2.0 * WIDE_SIDE
-	var outer := minf(side, WIDE_SIDE * DESIGN.y / source.y)
-	_wide_frame.draw_texture_rect_region(_wide_texture, Rect2(0, 0, DESIGN.x, DESIGN.y), Rect2(WIDE_SIDE, 0, inner, source.y))
+	var margin := ((source - DESIGN) * 0.5).floor()
+	var outer := minf(side, margin.x)
+	target.draw_texture_rect_region(_wide_texture, Rect2(Vector2.ZERO, DESIGN), Rect2(margin, DESIGN))
 	# Between 4:3 and 16:9 the outer columns are narrowed to the side bars.
-	_wide_frame.draw_texture_rect_region(_wide_texture, Rect2(-outer, 0, outer, DESIGN.y), Rect2(0, 0, WIDE_SIDE, source.y))
-	_wide_frame.draw_texture_rect_region(_wide_texture, Rect2(DESIGN.x, 0, outer, DESIGN.y), Rect2(source.x - WIDE_SIDE, 0, WIDE_SIDE, source.y))
+	target.draw_texture_rect_region(_wide_texture, Rect2(-outer, 0, outer, DESIGN.y), Rect2(0, margin.y, margin.x, DESIGN.y))
+	target.draw_texture_rect_region(_wide_texture, Rect2(DESIGN.x, 0, outer, DESIGN.y), Rect2(source.x - margin.x, margin.y, margin.x, DESIGN.y))
 
 func _draw_art() -> void:
 	# Over a battle the dim covers the whole window (see _draw), not only the 4:3 art.
 	if not overlay(): art.draw_rect(Rect2(Vector2.ZERO, DESIGN), Color.BLACK)
-	for piece: Dictionary in _pieces: art.draw_texture_rect_region(piece.texture, piece.rect, piece.source)
+	for index in _pieces.size():
+		if _frame_in_art and index == _frame_after: _draw_wide_frame(art)
+		var piece: Dictionary = _pieces[index]
+		art.draw_texture_rect_region(piece.texture, piece.rect, piece.source)
 
 func _layout() -> void:
 	if canvas == null or size.x <= 0 or size.y <= 0: return
@@ -555,6 +576,7 @@ func _layout() -> void:
 	canvas.scale = Vector2(scale_factor, scale_factor)
 	canvas.position = ((size - DESIGN * scale_factor) * 0.5).floor()
 	if is_instance_valid(_wide_frame): _wide_frame.queue_redraw()
+	if _frame_in_art and is_instance_valid(art): art.queue_redraw()
 	if _choice != null:
 		_choice.size = _choice.get_combined_minimum_size()
 		_choice.scale = Vector2(scale_factor, scale_factor)
@@ -788,6 +810,7 @@ func _input(event: InputEvent) -> void:
 			return
 		if event.pressed and not event.echo and event.keycode == KEY_ESCAPE:
 			if screen == "encyclopaedia" and encyclopaedia_ui.escape(): return
+			if single_ui != null and single_ui.close_picture(): return
 			if screen == "options":
 				options_ui.close()
 				return

@@ -24,6 +24,10 @@ var _secondary_traced := false
 var _secondary_scenery: Array[ELModel] = []
 var _camera_obstacles: Array[ELModel] = []
 var _scenery: Dictionary = {}
+## Scenery standing in the ring (not the backdrop), and its triangles in
+## arena space once asked for: [{"box": Rect2 (x, z), "triangles": PackedVector3Array}].
+var _solid_models: Array[ELModel] = []
+var _solids: Array = []
 ## Scenery materials whose ambient plus sun light is limited to full brightness.
 var _lit_materials: Array[ShaderMaterial] = []
 var _ambient_seen := Color(-1, -1, -1)
@@ -72,6 +76,7 @@ func build(profile: ELProfile, arena_id := "Green.001") -> bool:
 		if not axis.is_zero_approx(): model.quaternion = Quaternion(axis.normalized(), transforms[at + 6])
 		var id := int(ids[i])
 		if not _scenery.has(id): _scenery[id] = model
+		if ELArchive.key(str(textures[i])) != ELArchive.key(str(definition.get("Background", ""))): _solid_models.append(model)
 		# Only authored tall scenery can clear the camera's viewing corridor.
 		# Low pieces include whole hills supporting separately placed trees;
 		# their wide bounds can cross the view without blocking the action.
@@ -297,6 +302,73 @@ func ground_height(x: float, z: float) -> float:
 			if u >= -0.001 and v >= -0.001 and u + v <= 1.001:
 				return a.y + (b.y - a.y) * u + (c.y - a.y) * v
 	return 0.0
+
+## Whether a figure `radius` wide stands clear at `spot` (x, z): no scenery
+## (rocks, walls, trees, bushes) rises between its knees and its head inside
+## that circle, and the ground there is not a slope or a cliff.
+func clear_spot(spot: Vector2, radius: float, height := 3.0) -> bool:
+	var floor_height := ground_height(spot.x, spot.y)
+	for angle in 8:
+		var around := spot + Vector2.from_angle(angle * TAU / 8.0) * radius
+		if absf(ground_height(around.x, around.y) - floor_height) > 0.6: return false
+	var low := floor_height + 0.35
+	var high := floor_height + height
+	var reach := Rect2(spot - Vector2.ONE * radius, Vector2.ONE * radius * 2.0)
+	for solid: Dictionary in _solid_list():
+		if not (solid.box as Rect2).intersects(reach): continue
+		var triangles: PackedVector3Array = solid.triangles
+		for i in range(0, triangles.size(), 3):
+			var a := triangles[i]
+			var b := triangles[i + 1]
+			var c := triangles[i + 2]
+			if minf(a.x, minf(b.x, c.x)) > reach.end.x or maxf(a.x, maxf(b.x, c.x)) < reach.position.x: continue
+			if minf(a.z, minf(b.z, c.z)) > reach.end.y or maxf(a.z, maxf(b.z, c.z)) < reach.position.y: continue
+			if minf(a.y, minf(b.y, c.y)) > high or maxf(a.y, maxf(b.y, c.y)) < low: continue
+			# The surface over the spot itself.
+			var va := Vector2(a.x, a.z)
+			var determinant := (Vector2(b.x, b.z) - va).cross(Vector2(c.x, c.z) - va)
+			if absf(determinant) > 0.00001:
+				var u := (spot - va).cross(Vector2(c.x, c.z) - va) / determinant
+				var v := (Vector2(b.x, b.z) - va).cross(spot - va) / determinant
+				if u >= 0.0 and v >= 0.0 and u + v <= 1.0:
+					var over := a.y + (b.y - a.y) * u + (c.y - a.y) * v
+					if over > low and over < high: return false
+			# Its edges crossing the circle (upright cards and walls).
+			for edge: Array in [[a, b], [b, c], [c, a]]:
+				var from: Vector3 = edge[0]
+				var to: Vector3 = edge[1]
+				var flat := Vector2(to.x - from.x, to.z - from.z)
+				var along := 0.0 if flat.length_squared() < 0.000001 else clampf((spot - Vector2(from.x, from.z)).dot(flat) / flat.length_squared(), 0.0, 1.0)
+				var closest := from.lerp(to, along)
+				if Vector2(closest.x, closest.z).distance_to(spot) > radius: continue
+				# The edge's highest and lowest point within the circle are
+				# near its closest point; its ends cover upright edges.
+				var top := maxf(closest.y, maxf(from.y, to.y) if flat.length() < radius * 2.0 else closest.y)
+				var bottom := minf(closest.y, minf(from.y, to.y) if flat.length() < radius * 2.0 else closest.y)
+				if top > low and bottom < high: return false
+	return true
+
+func _solid_list() -> Array:
+	if not _solids.is_empty() or _solid_models.is_empty(): return _solids
+	for model: ELModel in _solid_models:
+		if not is_instance_valid(model): continue
+		var triangles := PackedVector3Array()
+		var low := Vector2.INF
+		var high := -Vector2.INF
+		for part: MeshInstance3D in model.parts.values():
+			if part.mesh == null: continue
+			var place := model.transform * part.transform
+			for surface in part.mesh.get_surface_count():
+				var arrays := part.mesh.surface_get_arrays(surface)
+				var vertices: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+				var indices: PackedInt32Array = arrays[Mesh.ARRAY_INDEX] if arrays[Mesh.ARRAY_INDEX] != null else PackedInt32Array(range(vertices.size()))
+				for index in indices:
+					var point := place * vertices[index]
+					triangles.append(point)
+					low = low.min(Vector2(point.x, point.z))
+					high = high.max(Vector2(point.x, point.z))
+		if not triangles.is_empty(): _solids.append({"box": Rect2(low, high - low), "triangles": triangles})
+	return _solids
 
 func _backdrop_foot(point: Vector3) -> Vector3:
 	if _ground == null: return point

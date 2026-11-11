@@ -165,19 +165,6 @@ static func free_spares() -> void:
 	_spare.clear()
 	_spare_count = 0
 
-## A new recruit's arrival: its summon clip where it has one, rising into
-## view in a glow of its colour's summon (the shop has no particles).
-func arrive(glow: Color) -> void:
-	if is_instance_valid(model) and model.has_clip("usummon"): model.play("usummon")
-	pivot_offset = Vector2(size.x * 0.5, size.y)
-	scale = Vector2(0.55, 0.55)
-	modulate.a = 0.0
-	set_glow(glow, 1.0, false)
-	var tween := create_tween().set_parallel()
-	tween.tween_property(self, "scale", Vector2.ONE, 0.45).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
-	tween.tween_property(self, "modulate:a", 1.0, 0.3)
-	tween.chain().tween_method(func(strength: float): set_glow(glow, strength, false), 1.0, 0.0, 0.8)
-
 ## Plays a one-off clip (an evolution's summon), then returns to idle.
 func act(clip: String) -> void:
 	if is_instance_valid(model) and model.has_clip(clip): model.play(clip)

@@ -9,6 +9,8 @@ extends Control
 ## board stays open: most of the interface is outlined text over the scene.
 
 signal left
+## The remake's settings asked for from the menu.
+signal remake_settings_requested
 
 const H := preload("res://src/autochess/hud.gd")
 const DESIGN := Vector2(1440, 900)
@@ -117,7 +119,7 @@ var _message_left := 0.0
 var _last_stage := ""
 const SummonTable := preload("res://src/duel/combat_sound_table.gd")
 var _known_level := -1
-## Recruits whose entrance (usummon clip and Summon sound) has not played yet.
+## Creatures that stepped onto the board and wait for their summon entrance.
 var _arriving: Dictionary = {}
 var _last_round := -1
 var _pulses := {}
@@ -547,14 +549,18 @@ func _act(op: String, args: Array) -> void:
 		_sound(op, "")
 		return
 	_known_level = company().capacity()
-	var owned := company().army.map(func(entry: Dictionary) -> int: return int(entry.uid))
+	var fielded := company().army.filter(func(entry: Dictionary) -> bool: return entry.deployed).map(func(entry: Dictionary) -> int: return int(entry.uid))
 	var error := ELAutochessCommands.apply(game, me, op, args)
-	if op == "buy" and error.is_empty():
-		# A new recruit arrives as the original summons do: its entrance clip
-		# and Summon sound when its figure first shows.
+	if error.is_empty():
+		# A creature is summoned as in the original (its entrance clip, its
+		# colour's summon effect and Summon sound) whenever it steps onto the
+		# board, bought or brought from the reserve. The reserve just shows it.
 		for entry: Dictionary in company().army:
-			if not owned.has(int(entry.uid)): _arriving[int(entry.uid)] = true
-		for uid: int in company().last_evolutions: _arriving[uid] = true
+			var uid := int(entry.uid)
+			if entry.deployed and not fielded.has(uid): _arriving[uid] = true
+		board.arriving = _arriving
+		if op == "buy":
+			for uid: int in company().last_evolutions: _arriving[uid] = true
 	if not error.is_empty(): _say(_t(error))
 	_sound(op, error)
 	if op == "buy" and error.is_empty():
@@ -838,6 +844,7 @@ func _process(delta: float) -> void:
 	if path_tracing != null and is_instance_valid(board.arena) and _traced_arena != board.arena and camera.is_current():
 		_traced_arena = board.arena
 		path_tracing.register(camera, stage, board.arena.light, board.arena.environment_settings, board.effects, board.arena)
+	_board_arrivals()
 	if game == null:
 		if visible:
 			_camera_yaw += delta * 0.05
@@ -992,6 +999,8 @@ func _on_fight() -> void:
 
 func _on_board_finished(index: int) -> void:
 	var row: Dictionary = game.boards[index]
+	# The survivors' fire at the losing hero on the board being watched.
+	if board.battle == row.battle: board.survivors_fire((row.battle as ELAutochessBattle).winner)
 	for player: int in [int(row.home), int(row.visitor)]:
 		if player != watched: continue
 		var result: Dictionary = game.round_results.get(player, {})
@@ -1215,15 +1224,44 @@ func _summon_sound(code: String) -> void:
 	var directory := String(row.get("SndDir", ""))
 	if not directory.is_empty(): H.play_sound("Creatures/" + directory + "/summon.wav")
 
-## The glow of a creature's summon colour.
-func _summon_color(code: String) -> Color:
-	var spell: Dictionary = profile.table("CombatSpells").get(code, {})
-	match String(spell.get("Color", "")):
-		"Red": return Color(1.0, 0.45, 0.2)
-		"Green": return Color(0.45, 1.0, 0.35)
-		"Blue": return Color(0.4, 0.7, 1.0)
-		"Black": return Color(0.75, 0.4, 1.0)
-	return Color(1.0, 0.85, 0.5)
+## Entrances of the creatures that stepped onto the board. The board builds
+## at most two figures a frame, so one whose figure is not built yet waits
+## (checked every frame); one no longer on the board is dropped.
+func _board_arrivals() -> void:
+	if _arriving.is_empty() or game == null: return
+	if watched != me:
+		_arriving.clear()
+		return
+	var own := company()
+	for uid: int in _arriving.keys():
+		var entry := own.unit(uid)
+		if entry.is_empty() or not bool(entry.deployed): _arriving.erase(uid)
+	for row: Dictionary in board.preparation_rows(own.army):
+		if not _arriving.has(int(row.uid)) or not is_instance_valid(row.get("model")): continue
+		_arriving.erase(int(row.uid))
+		var model: ELModel = row.model
+		var code := String(row.code)
+		# As in the duel: the colour's summon effect rises at the spot and the
+		# creature appears at its summon cue, then plays its entrance clip.
+		var delay := 0.0
+		if is_instance_valid(board.effects):
+			for effect: String in SummonTable.card_effects(profile, code): board.effects.play(effect, {"Target": [model]})
+			delay = ELCombatEffects.summon_delay(profile, code)
+		_summon_sound(code)
+		if delay <= 0.0:
+			_enter(model)
+			continue
+		model.visible = false
+		# Held weakly: a new round may free the figure before its cue.
+		var held: WeakRef = weakref(model)
+		get_tree().create_timer(delay).timeout.connect(func():
+			var shown: ELModel = held.get_ref()
+			if shown != null: _enter(shown))
+
+## A summoned figure shows and plays its entrance clip.
+func _enter(model: ELModel) -> void:
+	model.visible = true
+	if model.has_clip("usummon"): model.play("usummon")
 
 func _refresh_bench() -> void:
 	var own := viewed()
@@ -1237,19 +1275,7 @@ func _refresh_bench() -> void:
 		if not shown.is_empty(): shown["item"] = own.item_for(int(entry.uid))
 		reserve.show_entry(profile, shown, kind in ["reserve", "field"] and not entry.is_empty() and int(_selected.uid) == int(entry.uid), returning)
 		reserve.disabled = watched != me
-		if not entry.is_empty() and _arriving.has(int(entry.uid)) and watched == me:
-			_arriving.erase(int(entry.uid))
-			reserve.figure.arrive(_summon_color(String(entry.code)))
-			_summon_sound(String(entry.code))
-	if watched == me and not _arriving.is_empty():
-		for row: Dictionary in board.preparation_rows(own.army):
-			if _arriving.has(int(row.uid)) and is_instance_valid(row.get("model")):
-				_arriving.erase(int(row.uid))
-				if row.model.has_clip("usummon"): row.model.play("usummon")
-				if is_instance_valid(board.effects):
-					for effect: String in SummonTable.card_effects(profile, String(row.code)): board.effects.play(effect, {"Target": [row.model]})
-				_summon_sound(String(row.code))
-		_arriving.clear()
+	_board_arrivals()
 	_army_label.text = _t("Army %d/%d") % [own.deployed_count(), own.capacity()]
 	var chosen := own.unit(int(_selected.get("uid", 0))) if kind in ["field", "reserve"] and watched == me else {}
 	_sell_target.visible = not chosen.is_empty() and own.can_shop() and (game.stage == "prepare" or not bool(chosen.deployed))
@@ -1512,6 +1538,8 @@ func _toggle_menu() -> void:
 	if _modal.visible: return
 	_open_modal(_t("Menu"), "menu", 300.0)
 	H.button(_modal_box, _t("Resume"), _close_modal)
+	# The game stays paused under the settings; the menu returns after them.
+	H.button(_modal_box, ELRemakeText.t("Remake settings…", profile), func(): remake_settings_requested.emit())
 	H.button(_modal_box, _t("Leave (the game is saved)") if online == null else _t("Leave the online game"), _leave)
 	H.button(_modal_box, _t("Concede and end the game"), _concede)
 	if online == null: game.paused = true
@@ -1771,6 +1799,8 @@ func _draw_overlay() -> void:
 	if board.battle == null:
 		var prepared := _placed(board.preparation_rows(viewed().army), s)
 		for row: Dictionary in prepared:
+			# A creature being summoned is labelled once it has appeared.
+			if not row.model.visible: continue
 			var at: Vector2 = row.screen
 			var values := _stats(String(row.code), int(row.family), int(row.rank))
 			_draw_head(font, at, int(row.rank), H.line_accent(int(row.family)), "%d/%d" % [int(values.health), int(values.health)], 1.0, Color("5aa6c8"), s)

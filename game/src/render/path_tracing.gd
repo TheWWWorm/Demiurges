@@ -35,15 +35,19 @@ const SUN_RADIUS := 0.02
 const LIGHT_LIMIT := 64
 ## Light given off per unit of summed particle colour, and its reach.
 const GLOW_STRENGTH := 1.0
-## Brightest colour component one effect light may reach.
-const GLOW_LIMIT := 10.0
-const GLOW_REACH := 8.0
+## Brightest colour component one effect light may reach. A dense aura sums
+## to a very bright source (a hero's glowing weapon passes 8), which bleached
+## the ground around it; capped, it still lights its surroundings.
+const GLOW_LIMIT := 2.5
+const GLOW_REACH := 4.0
 ## Bloom while tracing: glowing particles draw this much brighter, and only
-## what passes white blooms, so daylit scenery stays as it was.
-const EFFECT_HDR := 1.8
-const BLOOM_THRESHOLD := 1.0
-const BLOOM_INTENSITY := 0.52
-const BLOOM_LEVELS := [0.0, 0.8, 0.35, 0.1, 0.0, 0.0, 0.0]
+## what passes white blooms, so daylit scenery stays as it was. Kept close
+## and soft: a hero's aura or a glowing weapon shines without washing out
+## the ground around it (bright snow passes white under traced light too).
+const EFFECT_HDR := 1.3
+const BLOOM_THRESHOLD := 1.25
+const BLOOM_INTENSITY := 0.3
+const BLOOM_LEVELS := [0.0, 0.7, 0.2, 0.0, 0.0, 0.0, 0.0]
 ## Scene membership is re-read this often (seconds).
 const SCAN_INTERVAL := 0.5
 

@@ -827,10 +827,15 @@ func build_editor() -> void:
 	var field := StyleBoxFlat.new()
 	field.bg_color = Color(0, 0, 0, 0.25)
 	field.content_margin_left = 4
+	# No vertical padding: the field keeps to the art's frame (22 high).
+	field.content_margin_top = 0
+	field.content_margin_bottom = 0
 	for style in ["normal", "focus", "read_only"]: name_edit.add_theme_stylebox_override(style, field)
 	name_edit.editable = not edit.view_only
 	name_edit.text_changed.connect(func(_t: String): update_editor())
 	menu.canvas.add_child(name_edit)
+	# Sized again in the tree (its first minimum used the default padding).
+	name_edit.size.y = name_rect.size.y
 	menu.labels["name"] = name_edit
 	# Second game: a random deck (the community generator's recipe) beside the
 	# name, when the editor may use the sandbox resource level.
@@ -841,10 +846,11 @@ func build_editor() -> void:
 		random.font_size = 14
 		random.caption = ELRemakeText.t("Randomize", profile())
 		random.tooltip_text = "A random hero, skills, artifact, deck and reserve of every colour, as in the community's random deck generator. The hero level stays; the resource level becomes the sandbox (any colour, no budget)."
+		# Inside the right end of the name's frame, clear of its edges.
 		var width := 132.0
-		name_edit.size.x -= width + 8.0
-		random.position = Vector2(name_edit.position.x + name_edit.size.x + 8.0, name_edit.position.y)
-		random.size = Vector2(width, name_edit.size.y)
+		name_edit.size.x = name_rect.size.x - width - 6.0
+		random.position = Vector2(name_rect.end.x - width - 2.0, name_rect.position.y + 2.0)
+		random.size = Vector2(width, name_rect.size.y - 4.0)
 		random.pressed.connect(random_preset)
 		menu.canvas.add_child(random)
 		menu.buttons["random_deck"] = random

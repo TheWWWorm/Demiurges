@@ -482,6 +482,7 @@ const RU := {
 	"This map came without its scenario file (.smp), which the remake needs to play it.": "Карта поставляется без файла сценария (.smp), а он нужен ремейку, чтобы в неё играть.",
 	"The archive has no custom map: it needs a scenario (.smp) or map file (.sbm).": "В архиве нет пользовательской карты: нужен сценарий (.smp) или файл карты (.sbm).",
 	"Maps folder": "Папка карт",
+	"Click to enlarge": "Нажмите, чтобы увеличить",
 	"Custom map archive": "Архив пользовательской карты",
 	"Custom maps made with the map editor: a .zip with the map's .smp, .sbm and .scp files, or those files copied into the maps folder.": "Пользовательские карты из редактора карт: архив .zip с файлами карты .smp, .sbm и .scp или те же файлы, скопированные в папку карт.",
 	"The archive could not be opened.": "Не удалось открыть архив.",
