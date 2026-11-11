@@ -89,6 +89,8 @@ class Fighter:
 var profile: ELProfile
 var units: Array[Fighter] = []
 var events: Array[Dictionary] = []
+const ITEM_GAP := 0.8
+var _item_marks := {}
 var time := 0.0
 var quiet := 0.0
 var finished := false
@@ -113,6 +115,7 @@ func setup(data: ELProfile, home: Array, visitor: Array, seed_value: int, round_
 	rng.seed = seed_value
 	units.clear()
 	events.clear()
+	_item_marks.clear()
 	time = 0.0
 	quiet = 0.0
 	finished = false
@@ -290,6 +293,13 @@ func advance(delta: float) -> bool:
 
 func run_to_end() -> void:
 	while not finished: _tick()
+
+## Marks a visible item proc, at most once per ITEM_GAP per carrier.
+func _item_used(u: Fighter) -> void:
+	if u == null or u.item.is_empty(): return
+	if time - float(_item_marks.get(u.id, -9.0)) < ITEM_GAP: return
+	_item_marks[u.id] = time
+	_emit("item", {"u": u.id, "g": u.item})
 
 func _emit(kind: String, values: Dictionary) -> void:
 	values["k"] = kind
@@ -561,7 +571,10 @@ func _strike(u: Fighter, target: Fighter) -> void:
 	var before := target.hp
 	var dealt := _harm(target, maxf(raw * 0.2, raw - target.defense), u.id, "attack", u.ranged)
 	if "Lifetap" in u.flags and dealt > 0.0: _heal(u, dealt * 0.25)
-	if u.gear.has("lifesteal") and dealt > 0.0: _heal(u, dealt * float(u.gear.lifesteal))
+	if u.gear.has("lifesteal") and dealt > 0.0:
+		_heal(u, dealt * float(u.gear.lifesteal))
+		_item_used(u)
+	if u.gear.get("dispel_hit", false): _item_used(u)
 	if "Disenchant" in u.flags or u.gear.get("dispel_hit", false): _dispel(target)
 	var a := u.ability
 	if not target.dead and not _immune(target):
@@ -576,18 +589,24 @@ func _strike(u: Fighter, target: Fighter) -> void:
 			"burn": target.burn_left = maxf(target.burn_left, float(a.seconds))
 			"silence_hit": target.silenced = maxf(target.silenced, float(a.seconds))
 	if String(a.get("kind", "")) == "grow": u.growth = mini(int(a.limit), u.growth + 1)
-	if not target.dead and u.gear.has("poison"): _poison(target, raw * float(u.gear.poison), 3.0, u.id)
+	if not target.dead and u.gear.has("poison"):
+		_poison(target, raw * float(u.gear.poison), 3.0, u.id)
+		_item_used(u)
 	if not target.dead and u.gear.has("venom") and target.venoms.is_empty() and not _immune(target):
 		target.venoms.append({"left": 4.0, "threshold": float(u.gear.venom), "source": u.id})
+		_item_used(u)
 	if not target.dead and u.gear.has("paralyze") and rng.randf() < float(u.gear.paralyze):
 		_stun(target, float(u.gear.paralyze_seconds))
+		_item_used(u)
 	# Thorns: melee hits on a spiked carrier.
 	if not u.ranged and target.gear.has("thorns") and not u.dead:
+		_item_used(target)
 		_harm(u, float(target.gear.thorns), target.id, "thorns")
 	if u.gear.has("storm") and u.hits_dealt % int(u.gear.storm_every) == 0:
 		var other := _nearest_enemy(target, 4.0, u.team, target)
 		if other != null:
 			_emit("ability", {"u": u.id, "t": [other.id], "a": "storm"})
+			_item_used(u)
 			_harm(other, float(u.gear.storm), u.id, "storm")
 	# Trample: a killing blow carries on into the next enemy.
 	if target.dead and "Trample" in u.flags:
@@ -638,8 +657,11 @@ func _harm(target: Fighter, amount: float, source: int, kind: String, ranged := 
 	if target.dead or amount <= 0.0: return 0.0
 	var dealer := unit(source)
 	if kind in ["ability", "storm", "rod"] and "Outerplanar" in target.flags: amount *= 0.75
-	if kind in ["ability", "storm", "rod"] and target.gear.has("spell_guard"): amount *= 1.0 - float(target.gear.spell_guard)
+	if kind in ["ability", "storm", "rod"] and target.gear.has("spell_guard"):
+		amount *= 1.0 - float(target.gear.spell_guard)
+		_item_used(target)
 	if kind in ["ability", "storm", "rod"] and target.gear.has("reflect") and dealer != null and dealer.team != target.team:
+		_item_used(target)
 		_harm(dealer, amount * float(target.gear.reflect), target.id, "thorns")
 	var absorbed := minf(target.shield, amount)
 	target.shield -= absorbed
@@ -662,6 +684,7 @@ func _after_wound(target: Fighter) -> void:
 	if target.gear.has("ward") and not target.ward_used and target.hp < target.max_hp * 0.4:
 		target.ward_used = true
 		_emit("ability", {"u": target.id, "t": [target.id], "a": "ward"})
+		_item_used(target)
 		_heal(target, target.max_hp * float(target.gear.ward))
 	if target.gear.has("dust") and not target.dust_used and target.hp < target.max_hp * 0.5:
 		target.dust_used = true
@@ -671,6 +694,7 @@ func _after_wound(target: Fighter) -> void:
 			o.dusted = float(target.gear.dust)
 			hit.append(o.id)
 		_emit("ability", {"u": target.id, "t": hit, "a": "dust"})
+		_item_used(target)
 	# Ring of Command: one wounded enemy changes sides.
 	for holder: Fighter in units:
 		if holder.dead or holder.team == target.team or not holder.gear.has("command") or commanded[holder.team]: continue
@@ -681,6 +705,7 @@ func _after_wound(target: Fighter) -> void:
 		target.action = ""
 		target.facing += PI
 		_emit("team", {"u": target.id, "team": target.team, "s": holder.id})
+		_item_used(holder)
 		break
 
 func _die(target: Fighter, source: int) -> void:
@@ -706,9 +731,11 @@ func _die(target: Fighter, source: int) -> void:
 		knight.hp = knight.max_hp
 		knight.facing = target.facing
 		_emit("spawn", {"u": knight.id})
+		_item_used(target)
 	elif target.gear.has("revive") and not target.revived:
 		target.revived = true
 		_restore(target, float(target.gear.revive))
+		_item_used(target)
 	# Hoppers rise again after enough creatures have fallen.
 	for o: Fighter in units:
 		if not o.dead or o.rise_used or String(o.ability.get("kind", "")) != "rise" or o == target: continue
@@ -745,6 +772,7 @@ func _rod(u: Fighter, target: Fighter) -> void:
 		for o: Fighter in units:
 			if not o.dead and o.team != u.team and o != target: hit.append(o.id)
 	_emit("ability", {"u": u.id, "t": hit, "a": "rod", "item": u.item})
+	_item_used(u)
 	_harm(target, float(u.gear.rod), u.id, "rod")
 	for i in range(1, hit.size()):
 		var o := unit(hit[i])

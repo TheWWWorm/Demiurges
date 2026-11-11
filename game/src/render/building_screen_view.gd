@@ -6,8 +6,9 @@ extends Control
 ## with their spell list; other buildings use the Type2 layout, shifted down
 ## by half the spell panel's height. The name and level are formatted by
 ## CtrlBuildingName. While the building has a next level, up to four upgrade
-## costs are shown (red when above the stock); the upgrade button appears
-## only when the owner can pay, and upgrades without a hero.
+## costs are shown (red when above the stock); the upgrade button shows for
+## the owner's buildings, greyed out with the reason as its tooltip while the
+## upgrade is not possible, and upgrades without a hero.
 signal closed
 signal upgraded(id: int)
 const PANEL := "BuildingScreen"
@@ -156,8 +157,14 @@ func refresh() -> void:
 	name_label.add_theme_font_size_override("font_size", size)
 	description_label.text = ELBuildingScreen.description(profile, item)
 	var available := can_upgrade()
-	buttons.Upgrade.visible = available
-	upgrade_label.visible = available
+	var shown := not costs().is_empty() and int(item.get("owner", -1)) == state.current_player
+	buttons.Upgrade.visible = shown
+	buttons.Upgrade.disabled = not available
+	upgrade_label.visible = shown
+	upgrade_label.modulate = Color.WHITE if available else Color(0.6, 0.6, 0.6)
+	var problem := ELBuildingScreen.upgrade_problem(state, state.current_player, building_id)
+	var tip := profile.text("CtrlTtBuildUpgrade")
+	buttons.Upgrade.tooltip_text = ELRemakeText.t(problem, profile) if not problem.is_empty() else (tip if tip != "CtrlTtBuildUpgrade" else "")
 	sheet.queue_redraw()
 
 func upgrade_building() -> void:

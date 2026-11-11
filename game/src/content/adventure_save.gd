@@ -47,7 +47,7 @@ func encode(director: ELAdventureDirector, camera: Dictionary = {}) -> Dictionar
 		if director.encounter.assault_fort >= 0: encounter.fort = director.encounter.assault_fort
 	return {"format": FORMAT, "version": 1, "edition": state.map.profile.id, "map": state.map.id, "map_hash": _map_hash(state.map), "script_name": state.script_name, "encounter": encounter,
 		"world": world, "scenario": state.scenario.duplicate(true), "objects": objects, "players": players, "explored": Marshalls.raw_to_base64(state.explored), "notebook": ELSecondNotebook.encode(state), "observations": state.observations.duplicate(true), "ambience": ELSecondAmbience.encode(state), "script": script, "artifact_templates": state.artifact_templates.duplicate(true),
-		"commands": state.commands.duplicate(true), "director": {"movement": movement, "travel": director.travel.duplicate(), "strategy": director.strategy.duplicate(true), "guard_zones": director.interception.snapshot(), "dialogue": director.dialogue.duplicate(true), "boxes": director.boxes.duplicate(true), "action_wait": director.action_wait, "player_round": director.player_round, "woken": director._woken, "waiting": director._waiting, "wait_remaining": director.wait_remaining, "clock": director._clock, "commands_pending": director._commands_pending}, "camera": camera.duplicate(true)}
+		"commands": state.commands.duplicate(true), "director": {"movement": movement, "travel": director.travel.duplicate(), "strategy": director.strategy.duplicate(true), "free_queue": director.free_queue.duplicate(true), "guard_zones": director.interception.snapshot(), "dialogue": director.dialogue.duplicate(true), "boxes": director.boxes.duplicate(true), "action_wait": director.action_wait, "player_round": director.player_round, "woken": director._woken, "waiting": director._waiting, "wait_remaining": director.wait_remaining, "clock": director._clock, "commands_pending": director._commands_pending}, "camera": camera.duplicate(true)}
 
 func write(path: String, director: ELAdventureDirector, camera: Dictionary = {}) -> bool:
 	# The remake keeps fixed campaign/mission slots; the tutorial is not saved
@@ -317,6 +317,10 @@ func decode(raw: Variant, profiles: Dictionary) -> Dictionary:
 	if playback.has("guard_zones") and not director.interception.restore(playback.guard_zones, next, director.grid): return _reject(next, "Invalid saved guard areas.")
 	director.strategy = ELStrategy.restore_turn(playback.get("strategy", {}), next)
 	if director.strategy.has("error"): return _reject(next, director.strategy.error)
+	if director.strategy.has("free"):
+		director.free_queue = ELStrategy.restore_queue(playback.get("free_queue", []), next)
+		# A computer player's move always has the night after it.
+		if director.strategy.free == "ai" and director.free_queue.is_empty(): director.free_queue = [{"kind": "night"}]
 	if not playback.get("movement") is Dictionary or not playback.get("dialogue") is Dictionary or not playback.get("waiting") is bool or not _number(playback.get("wait_remaining"), -1, 86400) or not _number(playback.get("clock"), 0, 1): return _reject(next, "Invalid campaign playback state.")
 	var movement: Dictionary = playback.movement.duplicate(true)
 	if not movement.is_empty():

@@ -30,6 +30,9 @@ var flip := false
 var models: Dictionary = {}
 var _codes: Dictionary = {}
 var _event_index := 0
+## Fighter id -> seconds left of its item-use flash.
+var item_pops := {}
+const ITEM_POP := 1.2
 var _numbers: Array[Dictionary] = []
 var _pending: Array = []
 var _preparation: Array = []
@@ -222,6 +225,7 @@ func set_hero(side: int, id: String) -> void:
 		if clip != "udeath" and is_instance_valid(model): model.play.call_deferred("cidle"))
 	if is_instance_valid(effects): effects.attach(model)
 	heroes[side] = {"id": id, "model": model}
+	_fallen.erase(side)
 	_place_hero(side)
 
 func _place_hero(side: int) -> void:
@@ -348,8 +352,32 @@ func hero_rows() -> Array:
 
 ## The hero on `side` plays `clip` (victory, a flinch, a summon gesture).
 func hero_react(side: int, clip: String) -> void:
+	if _fallen.get(side, false): return
 	var model: ELModel = heroes.get(side, {}).get("model")
 	if is_instance_valid(model) and model.has_clip(clip): model.play(clip)
+
+## Heroes out of health, by side: they fall and stay down.
+var _fallen: Dictionary = {}
+
+## A hero at 0 health falls (after `delay`, so the survivors' bolts land
+## first) and lies there; `at_once` shows it already lying.
+func set_fallen(side: int, fallen: bool, delay := 0.0, at_once := false) -> void:
+	if bool(_fallen.get(side, false)) == fallen: return
+	_fallen[side] = fallen
+	var model: ELModel = heroes.get(side, {}).get("model")
+	if not is_instance_valid(model): return
+	if not fallen:
+		model.play("cidle")
+		return
+	if at_once:
+		if model.play("udeath"): model.frame = maxf(0, model.clip_frames() - 1)
+		return
+	var fall := func():
+		if is_instance_valid(model) and _fallen.get(side, false) and heroes.get(side, {}).get("model") == model:
+			model.play("udeath")
+			if is_instance_valid(audio): audio.unit(model, "death")
+	if delay > 0.0 and is_inside_tree(): get_tree().create_timer(delay).timeout.connect(fall)
+	else: fall.call()
 
 func set_arena(scene_id: String) -> void:
 	if scene_id != arena_id: _build_arena(scene_id)
@@ -382,6 +410,7 @@ func clear_units() -> void:
 	_shown_dead.clear()
 	battle = null
 	_event_index = 0
+	item_pops.clear()
 
 func world(point: Vector2) -> Vector3:
 	var p := -point if flip else point
@@ -526,6 +555,9 @@ func _process(delta: float) -> void:
 		var u := battle.unit(int(_pending.pop_front()))
 		if u != null: _ensure(u)
 		built += 1
+	for id: int in item_pops.keys():
+		item_pops[id] = float(item_pops[id]) - delta
+		if float(item_pops[id]) <= 0.0: item_pops.erase(id)
 	var events := battle.events
 	while _event_index < events.size():
 		_event(events[_event_index])
@@ -584,6 +616,8 @@ func _model(id: int) -> ELModel:
 func _event(e: Dictionary) -> void:
 	var kind := String(e.k)
 	match kind:
+		"item":
+			item_pops[int(e.u)] = ITEM_POP
 		"attack":
 			var model := _model(int(e.u))
 			if model == null: return
@@ -784,7 +818,7 @@ func health_rows() -> Array:
 	var mine := 1 if flip else 0
 	for u: ELAutochessBattle.Fighter in battle.units:
 		if u.dead or not models.has(u.id) or not models[u.id].visible: continue
-		rows.append({"at": head(models[u.id]), "hp": u.hp, "max": u.max_hp, "shield": u.shield, "rank": u.rank, "tier": u.tier, "uid": u.uid, "friend": u.team == mine, "creep": u.creep})
+		rows.append({"at": head(models[u.id]), "hp": u.hp, "max": u.max_hp, "shield": u.shield, "rank": u.rank, "tier": u.tier, "uid": u.uid, "friend": u.team == mine, "creep": u.creep, "pop": float(item_pops.get(u.id, 0.0)) / ITEM_POP})
 	return rows
 
 func preparation_rows(rows: Array) -> Array:

@@ -344,7 +344,7 @@ func _idle_round(clip: String, uid: int) -> void:
 	var model := str(definition.get("model", ""))
 	var file := "BuildingsPFX/%s/Idle.pfx" % model
 	var archive: ELArchive = profile.archives.get("pfx")
-	if not model.is_empty() and archive != null and archive.has(file) and _near_view(_object_position(item, definition.get("row", {}))):
+	if not model.is_empty() and archive != null and archive.has(file) and _near_view(_object_position(item, definition.get("row", {}))) and _in_sight(uid):
 		var at := _object_position(item, definition.get("row", {}))
 		effects.start("idle:%d" % uid, {"file": file, "x": at.x, "y": -at.z, "z": at.y, "loops": 1}, 0.0)
 		effects.orient("idle:%d" % uid, world.object_yaw(item))
@@ -428,10 +428,18 @@ func _update_cycles() -> void:
 				entry.cycle.volume_db = _effects_db() + linear_to_db(maxf(0.0001, distance_gain(distance)))
 				_place(entry.cycle, entry.position)
 
+## An object the local player sees now: effects never play under the fog.
+func _in_sight(uid: int) -> bool:
+	var model: ELModel = world.object_models.get(uid)
+	if model != null and not model.visible: return false
+	if world.fog_session == null: return true
+	var item := state.object(uid)
+	return not item.is_empty() and ELFog.object_state(world.fog_session, world.fog_player, item) == ELFog.VISIBLE
+
 func _update_spec_effects() -> void:
 	for uid: int in spec_effects:
 		var entry: Dictionary = spec_effects[uid]
-		var near := _near_view(entry.position)
+		var near := _near_view(entry.position) and _in_sight(uid)
 		if near and not entry.running:
 			effects.start("spec:%d" % uid, {"file": entry.file + ".pfx", "x": entry.position.x, "y": -entry.position.z, "z": entry.position.y, "loops": -1}, 0.0)
 			effects.orient("spec:%d" % uid, float(entry.yaw))

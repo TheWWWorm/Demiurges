@@ -28,6 +28,7 @@ const ADVENTURE := [
 	["player", "", "Show player information."],
 	["view resources", " [player index, 0 = neutral]", "Show the local player's resources."],
 	["view heroes", "", "List living heroes by commander, with their map coordinates."],
+	["teleport", " X Y | ID", "Move the selected hero to a map cell, or next to an object (IDs from view heroes)."],
 	["open_fog", "", "Reveal the map."],
 	["hide_fog", "", "Restore the fog of war."],
 	["give all", " [amount]", "Add resources to the local player. The default is 15 of each."],
@@ -614,6 +615,7 @@ func _adventure(view: ELAdventureView, verb: String, words: PackedStringArray) -
 				state.scenario.tomb_open = true
 				state.event.emit({"kind": "tomb_opened"})
 			return ""
+		"teleport": return _teleport_hero(view, words)
 		"win", "lose":
 			close()
 			state._native([1.0 if verb == "win" else 0.0], "ExWinLoseMission")
@@ -627,6 +629,32 @@ func _adventure(view: ELAdventureView, verb: String, words: PackedStringArray) -
 			view.ask_quick_load()
 			return ""
 	return UNKNOWN
+
+## teleport X Y: the selected hero jumps to the free cell nearest (X, Y);
+## teleport ID: to the free cell nearest that object's footprint.
+func _teleport_hero(view: ELAdventureView, words: PackedStringArray) -> String:
+	var state := view.state
+	var director := view.director
+	var hero := state.object(view._hero_id())
+	if hero.is_empty() or not hero.get("alive", false): return tr("Select one of your heroes first.")
+	if not director.can_move() or not director.movement.is_empty(): return tr("Wait until the map is idle.")
+	var area: Rect2i
+	if words.size() == 3 and words[1].is_valid_int() and words[2].is_valid_int():
+		area = Rect2i(Vector2i(words[1].to_int(), words[2].to_int()), Vector2i.ONE)
+	elif words.size() == 2 and words[1].is_valid_int():
+		var target := state.object(words[1].to_int())
+		if target.is_empty() or target.uid == hero.uid: return tr("No such object.")
+		var size: Vector2i = director.grid.footprints.get(int(target.uid), {}).get("size", Vector2i.ONE)
+		area = Rect2i(Vector2i(target.x, target.y), size).grow(1)
+	else: return tr("Usage: teleport X Y, or teleport ID")
+	if not director.grid.contains(area.position) and not director.grid.contains(area.end - Vector2i.ONE): return tr("That cell is outside the map.")
+	var cell := director.grid.find_landing(area.grow(3), area.position + area.size / 2, bool(hero.get("ship", false)))
+	if cell.x < 0: return tr("There is no free cell there.")
+	view._cancel_map_order(int(hero.uid))
+	hero.orders.clear()
+	state._native([float(hero.uid), float(cell.x), float(cell.y)], "ExJumpToPos")
+	view._centre_hero()
+	return "%s (%d, %d)" % [hero.get("title", hero.name), cell.x, cell.y]
 
 func _list_adventure_heroes(state: ELAdventureSession) -> String:
 	# Native commander lists begin with neutral, followed by the authored seats.

@@ -17,6 +17,8 @@ const DESIGN := Vector2(1440, 900)
 const SPEEDS := [1.0, 2.0]
 const PULSE_SECONDS := 1.6
 const STANDINGS_WIDTH := 200.0
+## Seconds from a board's end until the survivors' bolts have struck its hero.
+const BOLTS_LAND := 1.6
 
 var profile: ELProfile
 var settings: Dictionary = {}
@@ -73,6 +75,8 @@ var _damage_heading: Label
 var _damage_list: VBoxContainer
 var _badges := {}
 var _items_heading: Label
+## The right column: the player list with the artifacts and spells under it.
+var _right_column: VBoxContainer
 var _items: HFlowContainer
 var _bench: HBoxContainer
 var _army_label: Label
@@ -130,6 +134,14 @@ var _signatures := {}
 
 func _t(text: String) -> String:
 	return ELAutochessText.t(profile, text)
+
+## The Options volumes now: music, ambience and effects of the battlefield
+## and the interface sounds (later battlefields are built with them too).
+func apply_volumes(values: Dictionary) -> void:
+	settings = values
+	if board == null: return
+	board.settings = values
+	if is_instance_valid(board.audio): board.audio.apply_volumes(values)
 
 func build(data: ELProfile, values: Dictionary) -> void:
 	profile = data
@@ -288,10 +300,15 @@ func _build_round_panel() -> void:
 		_refresh())
 
 func _build_standings() -> void:
+	_right_column = VBoxContainer.new()
+	_right_column.add_theme_constant_override("separation", 12)
+	_right_column.custom_minimum_size.x = STANDINGS_WIDTH
+	_right_column.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	hud.add_child(_right_column)
 	_standings = VBoxContainer.new()
 	_standings.add_theme_constant_override("separation", 2)
 	_standings.custom_minimum_size.x = STANDINGS_WIDTH
-	hud.add_child(_standings)
+	_right_column.add_child(_standings)
 
 func _build_sidebar() -> void:
 	_sidebar = VBoxContainer.new()
@@ -315,12 +332,17 @@ func _build_sidebar() -> void:
 		badge.picture = ELAutochessAlliances.icon(profile, key)
 		grid.add_child(badge)
 		_badges[key] = badge
-	_items_heading = H.label(_sidebar, _t("Artifacts and spells"), 21, H.GOLD, true)
+	# Artifacts and spells sit under the player list, where the right side
+	# has room; under the alliances they ran into the army count.
+	_items_heading = H.label(_right_column, _t("Artifacts and spells"), 21, H.GOLD, true)
+	# Long translations wrap instead of widening the column past the edge.
+	_items_heading.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_items_heading.custom_minimum_size.x = STANDINGS_WIDTH
 	_items = HFlowContainer.new()
 	_items.add_theme_constant_override("h_separation", 6)
 	_items.add_theme_constant_override("v_separation", 6)
-	_items.custom_minimum_size.x = 250
-	_sidebar.add_child(_items)
+	_items.custom_minimum_size.x = STANDINGS_WIDTH
+	_right_column.add_child(_items)
 
 ## Each alliance is pictured by the card of one of its lines' strongest
 ## form, a different line for every alliance.
@@ -446,7 +468,7 @@ func _layout() -> void:
 	var actions_size := _actions.get_combined_minimum_size()
 	_actions.size = Vector2(maxf(196, actions_size.x), actions_size.y)
 	_actions.position = Vector2(_round_panel.position.x - _actions.size.x - 16, 18)
-	_standings.position = Vector2(w - 16 - STANDINGS_WIDTH, _round_panel.position.y + _round_panel.size.y + 12)
+	_right_column.position = Vector2(w - 16 - STANDINGS_WIDTH, _round_panel.position.y + _round_panel.size.y + 12)
 	_sell_target.size = Vector2(200, 44)
 	_sell_target.position = Vector2(w - 16 - 200, h - 44 - 120 - 56)
 	_bench.position = Vector2(24, h - 44 - 120)
@@ -469,12 +491,16 @@ func _layout_rail() -> void:
 	hud.move_child(_sell_target, _rail.get_index() + 1)
 	var top := _round_panel.position.y + _round_panel.size.y + 12
 	var bottom := (_sell_target.position.y - 8) if _sell_target.visible else (_bench.position.y - 8)
-	var content := _rail_box.get_combined_minimum_size().y + 24
-	var height := clampf(content, 80, maxf(120, bottom - top))
+	var content := maxf(80.0, _rail_box.get_combined_minimum_size().y + 24)
+	# The whole card always shows: a card taller than the room is drawn
+	# smaller instead of scrolling.
+	var room := maxf(120.0, bottom - top)
+	var fit := minf(1.0, room / content)
 	# The scroll's minimum first, so the frame can also shrink.
-	(_rail.get_child(0) as ScrollContainer).custom_minimum_size = Vector2(296, height - 20)
-	_rail.position = Vector2(hud.size.x - 16 - 320, top)
-	_rail.size = Vector2(320, height)
+	(_rail.get_child(0) as ScrollContainer).custom_minimum_size = Vector2(296, content - 20)
+	_rail.scale = Vector2(fit, fit)
+	_rail.position = Vector2(hud.size.x - 16 - 320 * fit, top)
+	_rail.size = Vector2(320, content)
 
 # --- Match ----------------------------------------------------------------------
 
@@ -899,19 +925,28 @@ func _update_cursor() -> void:
 func _hover(delta: float) -> void:
 	if not _selected.is_empty() or _modal.visible or _overview.visible or _orbiting:
 		_hover_key = ""
+		# Turning the camera or opening a window ends a hover's details.
+		if not (_modal.visible or _overview.visible or _orbiting) or not _rail.get_meta("hover", false): return
+		_hide_rail()
 		return
 	var key := ""
-	var control := get_viewport().gui_get_hovered_control()
+	var control := get_viewport().gui_get_hovered_control() if not _touch_pointer else null
 	var node: Node = control
 	while node != null and node != self:
+		# The key names what the slot holds, so a bought offer or a moved
+		# reserve creature ends its details even with the pointer still.
 		if node is H.Offer:
-			key = "offer:%d" % _offers.find(node)
+			var index := _offers.find(node)
+			var shop := company().shop
+			if index >= 0 and index < shop.size() and int(shop[index].family) >= 0: key = "offer:%d:%d:%d" % [index, int(shop[index].family), int(shop[index].get("rank", 0))]
 			break
 		if node is H.Reserve:
-			key = "reserve:%d" % _reserves.find(node)
+			var index := _reserves.find(node)
+			var slots := viewed().reserve_slots()
+			if index >= 0 and index < slots.size() and not slots[index].is_empty(): key = "reserve:%d:%d:%d" % [index, int(slots[index].get("uid", -1)), int(slots[index].get("rank", 0))]
 			break
 		node = node.get_parent()
-	if key.is_empty() and _on_board:
+	if key.is_empty() and _on_board and not _touch_pointer:
 		var hit := board.pick(camera, _board_mouse)
 		if not hit.is_empty(): key = "unit:" + str(hit.key)
 	if key != _hover_key:
@@ -964,12 +999,27 @@ func _update_clock() -> void:
 
 ## Puts the watched hero's board on screen: the formation while preparing, or
 ## the battle that hero is fighting.
+## A Synthet's nickname without its serial ("Alpha-200E "Insidious"").
+static func _short_name(name: String) -> String:
+	for marks: Array in [["«", "»"], ["\"", "\""]]:
+		var start := name.find(marks[0])
+		var end := name.find(marks[1], start + 1)
+		if start > 0 and end > start + 1: return name.substr(start + 1, end - start - 1) + name.substr(end + 1)
+	return name
+
+func _name_of(player: int) -> String:
+	return ELAutochessCharacters.shown(profile, game.names[player])
+
 func _sync_board() -> void:
 	var owner := viewed()
 	board.set_arena(ELAutochessCharacters.arena(profile, owner.character))
 	board.set_hero(0, owner.character)
 	var rival := game.opponent_for(watched)
 	board.set_hero(1, game.companies[rival].character if rival >= 0 and rival != watched and not game.is_creep_round() else "")
+	# A hero out of health falls once the bolts have landed, and stays down.
+	var finished := game.stage != "fight"
+	board.set_fallen(0, owner.health <= 0, BOLTS_LAND, finished and _shown_board < 0)
+	if rival >= 0 and rival != watched and not game.is_creep_round(): board.set_fallen(1, game.companies[rival].health <= 0, BOLTS_LAND)
 	board.set_fire(game.stage == "prepare")
 	if game.stage == "fight" or (game.stage in ["result", "over"] and not game.boards.is_empty()):
 		var info := game.board_of(watched)
@@ -1014,9 +1064,8 @@ func _on_board_finished(index: int) -> void:
 
 func _on_eliminated(player: int, place: int) -> void:
 	if player == me:
-		board.hero_react(0, "udeath")
 		_show_end(_t("You finished in place %d of %d") % [place, ELAutochessRules.PLAYER_COUNT])
-	else: _say(_t("%s is out of the tournament (place %d).") % [game.names[player], place], 4.0)
+	else: _say(_t("%s is out of the tournament (place %d).") % [_name_of(player), place], 4.0)
 
 func _round_name() -> String:
 	return _t("Round %d") % game.round_number
@@ -1074,7 +1123,7 @@ func _refresh() -> void:
 	if game.is_creep_round(): _encounter.text = _t("Neutral round")
 	else:
 		var opponent := game.opponent_for(watched)
-		_encounter.text = ((_t("Opponent: %s (copy)") if game.ghost_for(watched) else _t("Opponent: %s")) % game.names[opponent]) if opponent >= 0 else ""
+		_encounter.text = ((_t("Opponent: %s (copy)") if game.ghost_for(watched) else _t("Opponent: %s")) % _name_of(opponent)) if opponent >= 0 else ""
 	_refresh_standings()
 	_refresh_alliances()
 	_refresh_items()
@@ -1136,7 +1185,8 @@ func _refresh_standings() -> void:
 		picture.modulate = Color.WHITE if alive else Color(0.5, 0.5, 0.5, 0.6)
 		row.add_child(picture)
 		var name := Button.new()
-		name.text = game.names[player]
+		name.text = _short_name(_name_of(player))
+		name.tooltip_text = _name_of(player)
 		H.fit(name, name.text, STANDINGS_WIDTH - 30 - 28 - 20, 14, 10)
 		name.focus_mode = Control.FOCUS_NONE
 		name.clip_text = true
@@ -1170,7 +1220,7 @@ func _refresh_standings() -> void:
 		var value := H.label(row, str(hp) if hp > 0 else "#%d" % game.placements[player] if game.placements[player] > 0 else _t("Out"), 14, H.LOSS if hp > 0 and hp < 25 else H.GOLD)
 		value.custom_minimum_size.x = 28
 		value.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	_standings.visible = not _rail.visible
+	_right_column.visible = not _rail.visible
 
 func _watch(player: int) -> void:
 	watched = player
@@ -1387,10 +1437,13 @@ func _inspect(line: int, rank: int, entry: Dictionary, offer := -1) -> void:
 	_series(_t("Attack"), tiers.map(func(v: Dictionary) -> String: return str(roundi(float(v.damage)))), rank)
 	_series(_t("Defense"), tiers.map(func(v: Dictionary) -> String: return str(roundi(float(v.defense)))), rank)
 	_series(_t("Attack every"), tiers.map(func(v: Dictionary) -> String: return "%.1f %s" % [float(v.interval), _t("s")]), rank)
-	var flags := PackedStringArray()
-	for flag: String in values.flags: flags.append(_t(_flag_name(flag)))
-	if int(values.regen) > 0: flags.append(_t("Regeneration"))
-	if not flags.is_empty(): H.wrap(_rail_box, ", ".join(flags), 13, H.GOLD)
+	# Each keyword with what it does in these battles, in brackets.
+	var flags: Array[String] = []
+	for flag: String in values.flags: flags.append(flag)
+	if int(values.regen) > 0: flags.append("Regeneration")
+	for flag: String in flags:
+		var help := String(FLAG_HELP.get(flag, ""))
+		H.wrap(_rail_box, _t(_flag_name(flag)) + (" (%s)" % _t(help) if not help.is_empty() else ""), 13, H.GOLD)
 	var ability := ELAutochessAbilities.describe(code, float(values.ability_power))
 	if not ability.is_empty(): H.wrap(_rail_box, _t(ability), 13)
 	if not entry.is_empty():
@@ -1419,7 +1472,7 @@ func _inspect(line: int, rank: int, entry: Dictionary, offer := -1) -> void:
 		if not error.is_empty(): H.wrap(_rail_box, _t(error), 12, H.MUTED)
 	_rail.show()
 	_rail.set_meta("hover", false)
-	_standings.hide()
+	_right_column.hide()
 	_layout_rail.call_deferred()
 
 ## "Health 40 / 76 / 140": the three evolutions with the shown one in bold.
@@ -1449,7 +1502,7 @@ func _rule(parent: Node) -> void:
 
 func _hide_rail() -> void:
 	_rail.hide()
-	_standings.show()
+	_right_column.show()
 
 func _refresh_rail() -> void:
 	var kind := String(_selected.get("kind", ""))
@@ -1461,6 +1514,27 @@ func _refresh_rail() -> void:
 		elif _rail.get_meta("shown", "") != "%d:%s:%d" % [entry.uid, entry.code, int(entry.deployed)]:
 			_rail.set_meta("shown", "%d:%s:%d" % [entry.uid, entry.code, int(entry.deployed)])
 			_inspect(int(entry.family), int(entry.rank), entry)
+
+## What each keyword does in autochess battles (ELAutochessBattle, ELAutochessRules).
+const FLAG_HELP := {
+	"Fly": "flies; enemies cannot dodge its blows",
+	"FS": "its first blow on each enemy lands at once and delays that enemy's swing",
+	"Trample": "a killing blow carries on into the next enemy",
+	"Berserk": "attacks 10% faster and keeps hitting its target until it falls",
+	"Restless": "attacks 5% faster and uses abilities without pausing",
+	"Lifetap": "heals a quarter of the damage it deals",
+	"Elusive": "slips past the front line to reach archers and casters",
+	"UB": "slips past the front line to reach archers and casters",
+	"Disenchant": "each blow removes the target's enchantments",
+	"TeamAttack": "+15% damage for each ally attacking the same enemy, up to two",
+	"NoUntap": "attacks 45% slower but hits 45% harder",
+	"Destroy": "no effect in autochess battles",
+	"NSS": "moves faster and uses its first ability sooner",
+	"NoTarget": "enemy abilities and poisons do not affect it",
+	"NoAffect": "enemy abilities and poisons do not affect it",
+	"Outerplanar": "takes 25% less damage from abilities and artifacts",
+	"Regeneration": "recovers health after two seconds without taking damage",
+}
 
 func _flag_name(flag: String) -> String:
 	return {"Fly": "Flying", "FS": "First strike", "Trample": "Trample", "Berserk": "Bloodthirsty", "Restless": "Tireless",
@@ -1579,10 +1653,14 @@ func _toggle_speed() -> void:
 
 func _sell_selected() -> void:
 	if String(_selected.get("kind", "")) in ["field", "reserve"]:
-		_act("sell", [int(_selected.uid)])
+		# A carried artifact is not sold: it returns to the artifacts list.
+		var uid := int(_selected.uid)
+		var carried := company().item_for(uid)
+		_act("sell", [uid])
 		_selected.clear()
 		_hide_rail()
 		_refresh()
+		if not carried.is_empty() and company().unit(uid).is_empty(): _say(_t("%s returns to your artifacts.") % ELAutochessArtifacts.title(profile, carried))
 
 func _select(value: Dictionary) -> void:
 	if watched != me: return
@@ -1623,10 +1701,19 @@ func _reserve_input(event: InputEvent, slot: int) -> void:
 var _on_board := false
 var _board_mouse := Vector2.ZERO
 
+func _notification(what: int) -> void:
+	# A pointer that leaves the window no longer hovers the battlefield.
+	if what == NOTIFICATION_WM_MOUSE_EXIT: _on_board = false
+
+## The pointer comes from a touch screen: it stays where the last tap was,
+## so it never hovers (a tap shows the details instead).
+var _touch_pointer := false
+
 func _input(event: InputEvent) -> void:
 	# Every move first counts as over the interface; one that no control
 	# takes reaches _unhandled_input and marks the battlefield.
 	if event is InputEventMouseMotion: _on_board = false
+	if event is InputEventMouse: _touch_pointer = event.device == InputEvent.DEVICE_ID_EMULATION
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion:
@@ -1814,7 +1901,7 @@ func _draw_overlay() -> void:
 		var color := Color("5aa6c8") if row.friend else Color("c8574f")
 		_draw_head(font, at, int(row.rank), H.cost_accent(int(row.tier)), str(ceili(float(row.hp))), float(row.hp) / maxf(1.0, float(row.max)), color, s, float(row.shield) / maxf(1.0, float(row.max)))
 		var carrier := viewed() if row.friend else (game.companies[rival] if rival >= 0 else null)
-		if carrier != null: _draw_item(at, carrier.item_for(int(row.uid)), s)
+		if carrier != null: _draw_item(at, carrier.item_for(int(row.uid)), s, float(row.get("pop", 0.0)))
 	# The heroes on the sideline: their name and the tournament health left.
 	for row: Dictionary in board.hero_rows():
 		if camera.is_position_behind(row.at): continue
@@ -1828,7 +1915,7 @@ func _draw_overlay() -> void:
 		overlay.draw_rect(Rect2(bar_top - Vector2(1, 1), Vector2(width + 2, 7 * s)), Color(0.05, 0.06, 0.06, 0.8))
 		overlay.draw_rect(Rect2(bar_top, Vector2(width * clampf(hero_health / float(ELAutochessRules.START_HEALTH), 0.0, 1.0), 5 * s)), color)
 		H.centered(overlay, font, "♥ %d" % hero_health, at + Vector2(0, -6 * s), roundi(16 * s), Color("eef2f2"), 4)
-		H.centered(overlay, font, game.names[player], at + Vector2(0, -28 * s), roundi(14 * s), Color("ffe3a1"), 4)
+		H.centered(overlay, font, _name_of(player), at + Vector2(0, -28 * s), roundi(14 * s), Color("ffe3a1"), 4)
 	for number: Array in board.floating_numbers():
 		if camera.is_position_behind(number[0]): continue
 		var at := camera.unproject_position(number[0])
@@ -1880,14 +1967,31 @@ func _draw_head(font: Font, at: Vector2, rank: int, star_color: Color, text: Str
 	H.draw_stars(overlay, at + Vector2(-count * 7.0 * s - 6 * s, -38 * s), count, star_color, s)
 
 ## The carried artifact or spell: its icon in a small ring right of the bar.
-func _draw_item(at: Vector2, kind: String, s: float) -> void:
+## `pop` (1 down to 0) flashes it as just used: the ring swells and glows
+## and a larger copy of the icon rises from it and fades.
+func _draw_item(at: Vector2, kind: String, s: float, pop := 0.0) -> void:
 	if kind.is_empty(): return
 	var center := at + Vector2(23 * s + 13 * s, -2 * s)
 	var radius := 12.0 * s
-	overlay.draw_circle(center, radius + 1.5 * s, Color(0.03, 0.04, 0.05, 0.9))
+	var accent := H.cost_accent(ELAutochessArtifacts.tier(kind))
 	var icon := ELAutochessArtifacts.icon(profile, kind)
-	if icon != null: overlay.draw_texture_rect(icon, Rect2(center - Vector2.ONE * radius * 0.78, Vector2.ONE * radius * 1.56), false)
-	overlay.draw_arc(center, radius, 0, TAU, 24, H.cost_accent(ELAutochessArtifacts.tier(kind)), 2.0 * s, true)
+	var swell := 1.0 + 0.35 * sin(clampf(pop, 0.0, 1.0) * PI) if pop > 0.0 else 1.0
+	if pop > 0.0:
+		var age := 1.0 - pop
+		overlay.draw_circle(center, radius * (1.2 + age * 1.3), Color(accent, 0.35 * pop))
+		overlay.draw_arc(center, radius * (1.1 + age * 1.8), 0, TAU, 32, Color(accent, pop), 2.5 * s, true)
+	var r := radius * swell
+	overlay.draw_circle(center, r + 1.5 * s, Color(0.03, 0.04, 0.05, 0.9))
+	if icon != null: overlay.draw_texture_rect(icon, Rect2(center - Vector2.ONE * r * 0.78, Vector2.ONE * r * 1.56), false)
+	overlay.draw_arc(center, r, 0, TAU, 24, accent.lightened(0.5 * pop), 2.0 * s, true)
+	if pop > 0.0 and icon != null:
+		var age := 1.0 - pop
+		var size := 34.0 * s
+		var rise := at + Vector2(0, -58 * s - age * 34 * s)
+		var alpha := clampf(pop * 1.6, 0.0, 1.0)
+		overlay.draw_circle(rise, size * 0.62, Color(0.03, 0.04, 0.05, 0.75 * alpha))
+		overlay.draw_texture_rect(icon, Rect2(rise - Vector2.ONE * size * 0.5, Vector2.ONE * size), false, Color(1, 1, 1, alpha))
+		overlay.draw_arc(rise, size * 0.62, 0, TAU, 32, Color(accent, alpha), 2.0 * s, true)
 
 ## Corner brackets around a figure's outline on screen, `grow` pixels out.
 func _draw_frame(outline: Rect2, grow: float, color: Color, s: float) -> void:
@@ -1945,7 +2049,7 @@ func _draw_overview() -> void:
 			for entry: Dictionary in game.companies[player].army:
 				if entry.deployed: _overview.draw_arc(center + Vector2(float(entry.point[0]), float(entry.point[1])) * scale * 0.85, 4.0, 0, TAU, 12, Color("6fd0ff"), 1.6, true)
 		var hp := game.companies[player].health
-		H.centered(_overview, font, game.names[player], Vector2(cell.get_center().x, cell.end.y - 26), 15, H.GOLD, 3)
+		H.centered(_overview, font, _name_of(player), Vector2(cell.get_center().x, cell.end.y - 26), 15, H.GOLD, 3)
 		H.centered(_overview, font, str(hp) if hp > 0 else "#%d" % game.placements[player], Vector2(cell.get_center().x, cell.end.y - 8), 15, H.GOLD, 3)
 
 func _overview_input(event: InputEvent) -> void:

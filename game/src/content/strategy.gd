@@ -148,6 +148,7 @@ static func plan(director: ELAdventureDirector, actor: Dictionary, destination: 
 
 static func begin(director: ELAdventureDirector) -> bool:
 	var state := director.state
+	if free_mode(director): return begin_free(director)
 	# Computer players plan once the local player has ended the day.
 	ELFirstAI.plan(director)
 	var actors: Array[Dictionary] = []
@@ -212,6 +213,9 @@ static func advance(director: ELAdventureDirector) -> void:
 		if turn.index >= limit:
 			if turn.phase == "use":
 				if director.strategy_shop_wait.is_valid() and director.strategy_shop_wait.call(): return
+				if turn.get("free", "") in ["act", "ai"]:
+					_finish_act(director, turn)
+					return
 				# Night end: the weekly spring expiry precedes the movement refill;
 				# building day-start resets follow. The elapsed-day counter is the
 				# number of nights begun (state day 1 is the mission's first day).
@@ -233,7 +237,7 @@ static func advance(director: ELAdventureDirector) -> void:
 				ELFirstScenario.evaluate(director)
 				return
 			# Ethereal attacks are planned once the moves are over.
-			if turn.phase == "movement": ELGlobalSpells.plan_ethereal(director)
+			if turn.phase == "movement" and turn.get("free", "night") == "night": ELGlobalSpells.plan_ethereal(director)
 			turn.phase = "combat" if turn.phase == "movement" else "use"
 			turn.index = 0
 			director.presentation.emit({"kind": "strategy_phase", "phase": turn.phase})
@@ -263,6 +267,8 @@ static func advance(director: ELAdventureDirector) -> void:
 		turn.index += 1
 		if actor.is_empty() or not actor.alive or actor.get("strategy_order", {}).is_empty(): continue
 		var order: Dictionary = actor.strategy_order
+		# Free movement: heroes moved during the day; the night moves no one.
+		if turn.phase == "movement" and turn.get("free", "") == "night": continue
 		if turn.phase == "movement":
 			var path := order_path(director, actor)
 			if path.is_empty():
@@ -294,10 +300,19 @@ static func advance(director: ELAdventureDirector) -> void:
 		if target.type in ["hero", "monster"] and (state.hostile(actor, target) or ELFirstAI.hunts(state, actor, target)): continue
 		if not adjacent(director, actor, target): continue
 		if ELFirstScenario.is_castle(target):
-			# The assault order persists: the hero strikes again every night.
+			# The assault order persists: the hero strikes again every night
+			# (with free movement, at night only, not on each move).
+			if turn.get("free", "") in ["act", "ai"]: continue
 			if not ELFirstScenario.assault(director, actor, target): actor.strategy_order = {}
 			continue
+		# Free movement: other uses ran when the hero arrived.
+		if turn.get("free", "") == "night": continue
 		actor.strategy_order = {}
+		# A computer hero at a spell shop or component portal buys on the spot
+		# (remake option); the shop screens are the local player's.
+		if target.get("type") in ["el1_spell_shop", "rune_shop"] and int(actor.get("owner", 0)) >= 1 and not director.is_strategy_human(int(actor.owner)):
+			ELFirstAIEconomy.visit(director, actor, target)
+			continue
 		if ELResourceSites.TYPES.has(target.group):
 			ELResourceSites.capture(state, actor.uid, target.uid, false)
 		else:
@@ -325,4 +340,143 @@ static func restore_turn(raw: Variant, state: ELAdventureSession) -> Dictionary:
 	var legacy: bool = raw.get("legacy_orders", not raw.has("combats"))
 	var limit: int = combats.size() if raw.phase == "combat" and not legacy else ids.size()
 	if not ELLuaSave._integer(raw.get("index"), 0, limit): return {"error": "Invalid strategy cursor."}
-	return {"phase": raw.phase, "actors": ids, "index": int(raw.index), "combats": combats, "legacy_orders": legacy}
+	var turn := {"phase": raw.phase, "actors": ids, "index": int(raw.index), "combats": combats, "legacy_orders": legacy}
+	if raw.has("free"):
+		if raw.free not in ["act", "ai", "night"]: return {"error": "Invalid strategy phase."}
+		turn.free = raw.free
+	return turn
+
+## Remake option "free movement" (single-player first-game maps): heroes move
+## at once, as many times a day as their movement points allow. A move runs
+## the movement, battle and use passes for that hero alone. Ending the day
+## lets each computer player move its heroes the same way; then the night
+## strikes castles, sends ethereal attacks and starts the next day. Network
+## and hot-seat games and the tutorial keep simultaneous orders.
+static func free_mode(director: ELAdventureDirector) -> bool:
+	var state := director.state
+	return director.free_movement and state.map.profile.id == "el1" and director._strategic_players.is_empty() and not state.tutorial
+
+## Moves `actor` along its order now.
+static func act(director: ELAdventureDirector, actor: Dictionary, kind := "act") -> bool:
+	if actor.is_empty() or not actor.get("alive", false) or actor.get("strategy_order", {}).is_empty(): return false
+	director.strategy = {"phase": "movement", "actors": [int(actor.uid)], "index": 0, "combats": [], "legacy_orders": false, "free": kind}
+	director.presentation.emit({"kind": "strategy_phase", "phase": "movement"})
+	return true
+
+## The move is over. A hero that fought its way clear may go on with the
+## points it has left; the turn passes on (the player plans again, a computer
+## player moves its next hero).
+static func _finish_act(director: ELAdventureDirector, turn: Dictionary) -> void:
+	var state := director.state
+	director.strategy = {}
+	for id: int in turn.actors:
+		var actor := state.object(id)
+		if actor.get("alive", false) and actor.get("intercepted", false) and director.interception.enemies(state, actor, Vector2i(actor.x, actor.y)).is_empty(): actor.intercepted = false
+	ELFirstScenario.evaluate(director)
+	if not director.free_queue.is_empty():
+		free_next(director)
+		return
+	director.presentation.emit({"kind": "strategy_phase", "phase": "planning"})
+
+## End of the player's day: the computer players' turns, scripted neutral
+## heroes, then the night.
+static func begin_free(director: ELAdventureDirector) -> bool:
+	var state := director.state
+	ELFirstAI.scripts(director)
+	director.free_queue = []
+	for player: int in ELFirstAI.computer_players(state):
+		if not director.is_strategy_human(player): director.free_queue.append({"kind": "ai", "player": player, "round": 0, "pending": [], "planned": false, "positions": {}})
+	var neutral: Array = []
+	for actor: Dictionary in state.objects.values():
+		if actor.type == "hero" and actor.alive and actor.visible and int(actor.owner) <= 0 and not actor.get("strategy_order", {}).is_empty(): neutral.append(int(actor.uid))
+	if not neutral.is_empty(): director.free_queue.append({"kind": "neutral", "pending": neutral})
+	director.free_queue.append({"kind": "night"})
+	free_next(director)
+	return true
+
+## How often a computer player plans again in one day while its heroes still
+## make progress.
+const FREE_AI_ROUNDS := 6
+
+static func free_next(director: ELAdventureDirector) -> void:
+	var state := director.state
+	for budget in 256:
+		if director.free_queue.is_empty() or not state.outcome.is_empty() or not director.error.is_empty(): return
+		var entry: Dictionary = director.free_queue[0]
+		match entry.kind:
+			"ai":
+				var player := int(entry.player)
+				if not state.scenario.get("castles", {}).is_empty() and not ELFirstScenario.alive(state, player):
+					director.free_queue.pop_front()
+					continue
+				if not entry.planned:
+					# Plan again only while the last round moved a hero that
+					# still has points left.
+					if int(entry.round) > 0:
+						var progress := false
+						for hero: Dictionary in ELFirstAI.heroes_of(state, player):
+							var before: Variant = entry.positions.get(str(hero.uid))
+							if before != null and before != [int(hero.x), int(hero.y)] and int(hero.ap) > 0: progress = true
+						if not progress or int(entry.round) >= FREE_AI_ROUNDS:
+							director.free_queue.pop_front()
+							continue
+					ELFirstAI.plan_player(director, player, int(entry.round) == 0)
+					entry.planned = true
+					entry.round = int(entry.round) + 1
+					entry.positions = {}
+					entry.pending = []
+					for hero: Dictionary in ELFirstAI.heroes_of(state, player):
+						entry.positions[str(hero.uid)] = [int(hero.x), int(hero.y)]
+						if int(hero.ap) > 0 and not hero.get("strategy_order", {}).is_empty(): entry.pending.append(int(hero.uid))
+				if entry.pending.is_empty():
+					entry.planned = false
+					continue
+				if act(director, state.object(int(entry.pending.pop_front())), "ai"): return
+			"neutral":
+				if entry.pending.is_empty():
+					director.free_queue.pop_front()
+					continue
+				if act(director, state.object(int(entry.pending.pop_front())), "ai"): return
+			_:
+				director.free_queue.pop_front()
+				_begin_night(director)
+				return
+
+## The night of a free-movement day: heroes beside an enemy castle strike it,
+## ethereal attacks are planned and fought, then income and the new day.
+static func _begin_night(director: ELAdventureDirector) -> void:
+	var state := director.state
+	var ids: Array[int] = []
+	for actor: Dictionary in state.objects.values():
+		if actor.type == "hero" and actor.alive and actor.visible and not actor.get("strategy_order", {}).is_empty(): ids.append(int(actor.uid))
+	director.strategy = {"phase": "movement", "actors": ids, "index": 0, "combats": [], "legacy_orders": false, "free": "night"}
+	# Unused ether restores castle energy before the night begins.
+	ELFirstScenario.regenerate(state)
+	state.day += 1
+	director.presentation.emit({"kind": "strategy_phase", "phase": "movement"})
+
+## The rest of a free-movement day from a save (JSON numbers come back as
+## floats); anything malformed is dropped and the night follows.
+static func restore_queue(raw: Variant, state: ELAdventureSession) -> Array:
+	var queue: Array = []
+	if not raw is Array or raw.size() > 64: return queue
+	for item: Variant in raw:
+		if not item is Dictionary or item.get("kind") not in ["ai", "neutral", "night"]: return [{"kind": "night"}]
+		var entry := {"kind": item.kind}
+		if item.kind != "night":
+			var pending: Array = []
+			for id: Variant in item.get("pending", []) if item.get("pending") is Array else []:
+				if ELLuaSave._integer(id, 0, 0x7fffffff) and state.object(int(id)).get("type") == "hero": pending.append(int(id))
+			entry.pending = pending
+		if item.kind == "ai":
+			if not ELLuaSave._integer(item.get("player"), 1, 64) or not ELLuaSave._integer(item.get("round"), 0, FREE_AI_ROUNDS): return [{"kind": "night"}]
+			entry.player = int(item.player)
+			entry.round = int(item.round)
+			entry.planned = bool(item.get("planned", false))
+			entry.positions = {}
+			if item.get("positions") is Dictionary:
+				for key: Variant in item.positions:
+					var at: Variant = item.positions[key]
+					if at is Array and at.size() == 2: entry.positions[str(key)] = [int(at[0]), int(at[1])]
+		queue.append(entry)
+	return queue

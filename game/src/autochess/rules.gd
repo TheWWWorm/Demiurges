@@ -87,6 +87,8 @@ const FAMILIES := [
 const HEALTH_BUDGET := [44.0, 60.0, 78.0, 99.0, 122.0]
 const DAMAGE_BUDGET := [13.0, 16.0, 20.0, 24.0, 29.0]
 const STAR_HEALTH := [1.0, 2.1, 5.0]
+## Every creature's health is doubled so fights last long enough to read.
+const HEALTH_SCALE := 2.0
 const STAR_DAMAGE := [1.0, 1.75, 4.0]
 const ROLE_HEALTH := {"Melee": 1.0, "Ranged": 0.85}
 const RANGED_REACH := 7.0
@@ -223,7 +225,7 @@ static func stats(profile: ELProfile, code: String, unit_tier: int, star: int, i
 	var t := clampi(unit_tier, 1, 5) - 1
 	var s := clampi(star, 0, 2)
 	var health: float = HEALTH_BUDGET[t] * (0.55 + 0.9 * (1.0 - share)) * float(ROLE_HEALTH.get(role, 1.0))
-	health *= float(species.get("health", 1.0)) * STAR_HEALTH[s]
+	health *= float(species.get("health", 1.0)) * STAR_HEALTH[s] * HEALTH_SCALE
 	var damage: float = DAMAGE_BUDGET[t] * (0.55 + 0.9 * share) * float(species.get("damage", 1.0)) * STAR_DAMAGE[s]
 	var list := flags(profile, code)
 	# Original attack timing: the attack clip at the original 30 fps, never

@@ -21,6 +21,10 @@ var next_id := 2
 var next_enchantment := 1
 var turn_serial := 0
 var rng_state := 212
+## Remake option "smarter computer players": sides whose computer opponent
+## searches further with steady judgement (ELCombatSearch). Read only by the
+## opponent's think; not saved (each battle sets it from the settings).
+var smart_sides: Array[int] = []
 var error := ""
 var load_note := ""
 var setup: Dictionary = {}

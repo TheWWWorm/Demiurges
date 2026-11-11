@@ -13,6 +13,18 @@ extends RefCounted
 
 const THRESHOLD := 0.01
 const BUDGET := 1000
+## Remake option (ELDuel.smart_sides): the middle of each weight's range
+## instead of a random draw (no misjudged position on an unlucky roll), and a
+## wider search with the budget to fill it. A further phase of lookahead and
+## casting replies are available but measured no stronger in computer-vs-
+## computer duels for their extra thinking time, so they are off.
+static var smart_budget := 3000
+static var smart_phases := 0
+static var smart_steady := true
+static var smart_replies := false
+## Replies tried per position (the original stops after three, two past depth
+## four and one past depth nine).
+static var smart_width := 6
 
 ## Move flags.
 const MOVE_FAILED := 1
@@ -103,6 +115,9 @@ class Context:
 	var second := false
 	var registered: Array[Line] = []
 	var positions := 0
+	## Remake option: the opponent's replies in the lookahead may cast too.
+	var replies := false
+	var width := 0
 	## Auto-combat without "use spells": no artifacts and no spellbook copies
 	## that spend charges (the hero's enchantment abilities stay).
 	var restricted := false
@@ -118,10 +133,13 @@ static func think(duel: ELDuel, stats: Dictionary = {}, restricted := false) -> 
 	ctx.ai = duel.active_side()
 	ctx.edition = duel.profile.id
 	ctx.second = ctx.edition == "el2"
-	ctx.w = weights(duel.rng_state, ctx.second)
-	ctx.limit = 1 if duel.phase == ELDuel.Phase.ATTACK else 0
+	var smart := duel.smart_sides.has(ctx.ai)
+	ctx.w = steady_weights(ctx.second) if smart and smart_steady else weights(duel.rng_state, ctx.second)
+	ctx.limit = (1 if duel.phase == ELDuel.Phase.ATTACK else 0) + (smart_phases if smart else 0)
 	var root := Line.new()
-	root.budget = BUDGET
+	root.budget = smart_budget if smart else BUDGET
+	ctx.replies = smart and smart_replies
+	ctx.width = smart_width if smart else 0
 	var start := duel.search_copy(ctx.second)
 	if ctx.second: start.spec_expect = ELSpecs.sample_expectation(duel)
 	_search(ctx, root, start)
@@ -149,17 +167,27 @@ static func apply(d: ELDuel, command: Dictionary) -> bool:
 ## The nine evaluation weights for one think, drawn from a copy of the battle's
 ## random state (the battle itself does not advance).
 static func weights(state: int, second: bool) -> PackedFloat64Array:
-	var ranges := [[-0.1, 0.5, 0.3], [-0.05, 0.0, -0.01], [-0.1, 0.3, 1.5], [0.0, 1.0, 1.5], [-0.1, 0.1, 0.8],
-		[-0.1, 0.1, 0.6], [-0.1, 0.1, 1.2], [0.0, 0.2, 0.3], [-0.1, 0.1, 0.8]]
-	if not second:
-		ranges[3] = [0.0, 1.5, 1.5]
-		ranges[7] = [0.0, 0.5, 0.1]
+	var ranges := _ranges(second)
 	var result := PackedFloat64Array()
 	var x := state & 0xffffffff
 	for r: Array in ranges:
 		x = (x * 0x343fd + 0x269ec3) & 0xffffffff
 		var t := float(((x >> 16) & 0x7fff) % 1000) * 0.001
 		result.append(float(r[0]) + t * (float(r[1]) - float(r[0])) + float(r[2]))
+	return result
+
+static func _ranges(second: bool) -> Array:
+	var ranges := [[-0.1, 0.5, 0.3], [-0.05, 0.0, -0.01], [-0.1, 0.3, 1.5], [0.0, 1.0, 1.5], [-0.1, 0.1, 0.8],
+		[-0.1, 0.1, 0.6], [-0.1, 0.1, 1.2], [0.0, 0.2, 0.3], [-0.1, 0.1, 0.8]]
+	if not second:
+		ranges[3] = [0.0, 1.5, 1.5]
+		ranges[7] = [0.0, 0.5, 0.1]
+	return ranges
+
+## The middle of each weight's range (remake option).
+static func steady_weights(second: bool) -> PackedFloat64Array:
+	var result := PackedFloat64Array()
+	for r: Array in _ranges(second): result.append(float(r[0]) + 0.5 * (float(r[1]) - float(r[0])) + float(r[2]))
 	return result
 
 static func _search(ctx: Context, line: Line, before: ELDuel) -> bool:
@@ -179,7 +207,7 @@ static func _search(ctx: Context, line: Line, before: ELDuel) -> bool:
 	while true:
 		var child := _pick(line)
 		if child == null: break
-		if not _allot(line, child): break
+		if not _allot(line, child, ctx.width): break
 		var ok := _search(ctx, child, s)
 		line.used += child.used
 		if ok:
@@ -226,10 +254,12 @@ static func _pick(line: Line) -> Line:
 
 ## Shares the position budget: up to a fifth per root move, then half for the
 ## first reply and a third for later ones; deeper positions try fewer replies.
-static func _allot(line: Line, child: Line) -> bool:
+static func _allot(line: Line, child: Line, width := 0) -> bool:
 	var d := line.depth
 	var e := line.explored
-	if (d > 0 and e > 2) or (d > 4 and e > 1) or (d > 9 and e > 0): return false
+	if width > 0:
+		if (d > 0 and e >= width) or (d > 4 and e >= maxi(2, width / 2)) or (d > 9 and e > 0): return false
+	elif (d > 0 and e > 2) or (d > 4 and e > 1) or (d > 9 and e > 0): return false
 	var share := line.budget / 5 if d == 0 else (line.budget / 3 if e != 0 else line.budget / 2)
 	child.budget = maxi(0, mini(share, line.budget - line.used))
 	return child.budget > 0 or (e < 2 and d < 20)
@@ -250,7 +280,7 @@ static func _generate(ctx: Context, line: Line, s: ELDuel) -> void:
 	var side := s.active_side()
 	_add(line, {"kind": "end_phase"}, 1.1, MOVE_NEXT)
 	var restricted := ctx.restricted and side == ctx.ai
-	if side == ctx.ai:
+	if side == ctx.ai or ctx.replies:
 		_casts(ctx, line, s, side)
 		if not restricted: _artifacts(ctx, line, s, side)
 	# Restricted (auto-combat without runes) skips only the artifacts above; the

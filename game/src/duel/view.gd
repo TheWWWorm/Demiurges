@@ -699,6 +699,9 @@ func _process(delta: float) -> void:
 			ai_clock = 0.0
 			# Without "use spells", auto combat uses no artifacts or spell charges (hero abilities stay).
 			var auto := auto_combat and _human_side() and not demo
+			# Remake option "smarter computer players": the first game's computer
+			# opponent judges steadily and searches wider (ELCombatSearch).
+			duel.smart_sides = [duel.active_side()] if profile.id == "el1" and not demo and not _human_side() and bool(settings.values.get("smart_ai", true)) else []
 			ELPracticeAI.step(duel, auto and not bool(settings.values.get("use_spells", true)))
 		_step_auto_camera(delta)
 		_step_keyboard_camera(delta)
@@ -5102,6 +5105,7 @@ func _audio_page(page: VBoxContainer) -> void:
 			settings.values[key] = value / 100.0
 			number.text = "%d%%" % value
 			if is_instance_valid(battle_audio): battle_audio.apply_volumes(settings.values)
+			if is_instance_valid(_autochess_screen): _autochess_screen.apply_volumes(settings.values)
 			if front_menu != null: front_menu.apply_volumes(settings.values))
 		_settings_row(volumes, captions[key][0], captions[key][1], slider, number)
 
@@ -5135,6 +5139,18 @@ func _interface_page(page: VBoxContainer) -> void:
 		settings.values.show_fps = enabled
 		_update_fps_counter())
 	_settings_row(screens, "Frame rate counter", "Shows frames per second in the top right corner.", fps_toggle)
+	var gameplay := _settings_box(page, "Gameplay")
+	var free_toggle := CheckButton.new()
+	free_toggle.name = "FreeMovement"
+	free_toggle.button_pressed = bool(settings.values.get("free_movement", true))
+	free_toggle.toggled.connect(func(enabled: bool):
+		settings.values.free_movement = enabled)
+	var smart_toggle := CheckButton.new()
+	smart_toggle.name = "SmartAi"
+	smart_toggle.button_pressed = bool(settings.values.get("smart_ai", true))
+	smart_toggle.toggled.connect(func(enabled: bool): settings.values.smart_ai = enabled)
+	_settings_row(gameplay, "Smarter computer players", "First game, single player: computer heroes pick skills as they level up, buy spells and runes at shops, and the computer players cast global spells; in battle the computer judges positions steadily and looks at more replies. Off: the original computer players.", smart_toggle)
+	_settings_row(gameplay, "Free movement", "First game, single player: heroes move as soon as you confirm a route and may move several times a day until their movement points run out; computer players move their heroes the same way when you end the day. Off: the original orders, carried out together at night.", free_toggle)
 	var sharing := _settings_box(page, "Sharing")
 	var discord_toggle := CheckButton.new()
 	discord_toggle.name = "DiscordActivity"
@@ -5392,6 +5408,7 @@ func _discord_activity() -> Dictionary:
 
 func _preview_volumes(values: Dictionary) -> void:
 	if is_instance_valid(battle_audio): battle_audio.apply_volumes(values)
+	if is_instance_valid(_autochess_screen): _autochess_screen.apply_volumes(values)
 	if front_menu != null: front_menu.apply_volumes(values)
 	if campaign_view != null: campaign_view.preview_volumes(values)
 
@@ -6837,6 +6854,8 @@ func _autochess_screen_ready() -> void:
 func _begin_autochess(game: ELAutochessMatch, seat: int, online: ELAutochessOnline) -> void:
 	_autochess_screen_ready()
 	_autochess_lobby.hide()
+	# The volumes as they stand now (they may have changed since the screen was built).
+	_autochess_screen.apply_volumes(settings.values)
 	_autochess_screen.show_match(game, seat, online)
 
 func _close_autochess(to_menu := true) -> void:
@@ -7332,6 +7351,9 @@ func _close_replay() -> void:
 ## Surrender, Save, Load and the exits.
 func _wants_esc_menu() -> bool:
 	if profile == null or profile.id not in ["el1", "el2"] or demo or _overlay_open(): return false
+	# A won or lost map battle is on its way back to the map: Options opened
+	# now would stay over the map.
+	if duel != null and duel.phase == ELDuel.Phase.FINISHED and _campaign_battle() != null: return false
 	return selection < 0 and exchange_target < 0 and selected_creature < 0 and ability_selection.is_empty()
 
 func _open_game_menu() -> void:

@@ -20,6 +20,14 @@ var strategy_shop_wait: Callable
 ## Empty in local play. Network planning keeps the map's viewing player and
 ## the set of human commanders separate.
 var _strategic_players: Array[int] = []
+## Remake option: first-game heroes move at once, several times a day
+## (ELStrategy.free_mode). The queue holds the rest of the computer players'
+## day while it runs.
+var free_movement := false
+## Remake option: computer players pick skills, shop and cast global spells
+## (ELFirstAIEconomy).
+var smart_ai := false
+var free_queue: Array = []
 var _strategic_ai := -1
 var _strategic_handoff_day := -1
 var _strategic_forfeits := {}
@@ -578,6 +586,11 @@ func plan_strategy_move(player: int, day: int, id: int, destination: Vector2i, u
 			if target.is_empty() or not target.alive or not target.visible or not target.enabled or not target.get("placed", true) or not ELFog.shown(state, player, target): return false
 			var size: Vector2i = grid.footprints.get(use_id, {}).get("size", Vector2i.ONE)
 			if not Rect2i(target.x, target.y, size.x, size.y).has_point(destination): return false
+	# Free movement: choosing the planned destination again sets off at once.
+	if ELStrategy.free_mode(self) and actor.type == "hero":
+		var order: Dictionary = actor.get("strategy_order", {})
+		if not order.is_empty() and int(order.use) == use_id and (use_id >= 0 or Vector2i(order.destination[0], order.destination[1]) == destination):
+			return ELStrategy.act(self, actor)
 	return ELStrategy.plan(self, actor, destination, use_id)
 
 func cancel_strategy_move(player: int, day: int, id: int) -> bool:

@@ -32,6 +32,24 @@ static func title(profile: ELProfile, id: String) -> String:
 	var text := ELAutochessArtifacts._elk(profile, key)
 	return text if not text.is_empty() else id.get_slice(" ", 0)
 
+## Hero names as a Russian game names them; the English copy has only
+## Latin names, so a Russian interface would show them untranslated.
+const RU_NAMES := {
+	"Hegrir": "Хегрир", "Frotti": "Фротти", "Haereid": "Хэрейд", "Veldi": "Вельди",
+	"Rinalda": "Ринальда", "Barnard": "Барнард", "Agnette": "Агнетта", "Ermelaus": "Эрмелаус",
+	"Aline": "Алина", "Esmond": "Эсмонд", "Deavan": "Деаван", "Fiona": "Фиона",
+	"Alpha-900E \"Suppressor\"": "Альфа-900E «Подавитель»", "Gamma-200F \"Tricker\"": "Гамма-200F «Ловкач»",
+	"Delta-300B \"Perfectionist\"": "Дельта-300B «Совершенство»", "Alpha-200E \"Insidious\"": "Альфа-200E «Коварный»",
+}
+
+## A seat's name as shown: a hero's name in the interface language; names
+## the players typed stay as they are.
+static func shown(profile: ELProfile, name: String) -> String:
+	if ELRemakeText.language(profile) != "ru": return name
+	var tail := " (AI)" if name.ends_with(" (AI)") else ""
+	var base := name.trim_suffix(tail)
+	return String(RU_NAMES.get(base, base)) + tail
+
 static func color(profile: ELProfile, id: String) -> String:
 	return String(row(profile, id).get("Color", "Red"))
 

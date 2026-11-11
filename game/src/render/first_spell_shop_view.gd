@@ -8,10 +8,14 @@ extends ELHeroScreenView
 ## selected book slot, and the total bill or, with ComponentPrice, the rune
 ## price of the selected spell.
 ##
-## A book click selects the slot to replace, a shop click selects the spell
-## (a double click buys it). BuySpell stages the replacement, RetrieveSpell
-## undoes the selected slot, AcceptBuy pays and closes, DeclineBuy or Escape
-## closes without buying. ELFirstSpellShop keeps the pricing and draft rules.
+## As in the second game's shop, a shop spell is picked up with a click and
+## put on a book slot with a second click (the right button lets it go); a
+## right click on a shop spell buys it into the selected slot, one on a bought
+## slot gives it back. A book click alone selects the slot to replace, a
+## double click on a shop spell buys it. Each purchase moves the selection on
+## to the next slot. BuySpell stages the replacement, RetrieveSpell undoes the
+## selected slot, AcceptBuy pays and closes, DeclineBuy or Escape closes
+## without buying. ELFirstSpellShop keeps the pricing and draft rules.
 const PANEL := "SpellShop"
 const SHOP_CELL := Vector2(516, 107)
 const SHOP_COLUMNS := 2
@@ -32,6 +36,9 @@ var pick := 0
 ## ComponentPrice: false shows the total bill, true the selected spell's rune price.
 var rune_price := false
 var shop_scroll := 0
+## The shop spell carried on the cursor ("" for none) and where it is drawn.
+var carry := ""
+var carry_at := Vector2.ZERO
 var _type_pieces := {"Type1": [], "Type2": []}
 
 func build_shop(owner: ELAdventureDirector, panel: ELAdventureHud, exchange_trade: ELFirstSpellShop) -> void:
@@ -75,7 +82,15 @@ func build_shop(owner: ELAdventureDirector, panel: ELAdventureHud, exchange_trad
 ## Panel art in registry order, "Last" pieces on top; the third price
 ## column's header has a Type1 (bill) and a Type2 (rune price) variant.
 func _compose() -> void:
-	_pieces.clear()
+	var parts := panel_parts(hud, profile)
+	_pieces.assign(parts.pieces)
+	_type_pieces = {"Type1": parts.Type1, "Type2": parts.Type2}
+
+## The SpellShop panel art: {"pieces", "Type1", "Type2"} (the book screen
+## draws on the same panel).
+static func panel_parts(hud: ELAdventureHud, profile: ELProfile) -> Dictionary:
+	var _pieces: Array[Dictionary] = []
+	var _type_pieces := {"Type1": [], "Type2": []}
 	var table := profile.table("CutParts")
 	var keys: Array = table.keys()
 	keys.sort_custom(func(a: Variant, b: Variant): return int(a) < int(b))
@@ -97,7 +112,7 @@ func _compose() -> void:
 		else: _pieces.append(piece)
 	generic.append_array(_pieces)
 	generic.append_array(last)
-	_pieces = generic
+	return {"pieces": generic, "Type1": _type_pieces.Type1, "Type2": _type_pieces.Type2}
 
 ## Header text, reduced until it fits its original box.
 func _header(rect: Rect2, key: String, size: int, text := "") -> Label:
@@ -149,16 +164,50 @@ func book_at(point: Vector2) -> int:
 	return -1
 
 func press(point: Vector2) -> void:
+	carry_at = point
 	var book := book_at(point)
 	if book >= 0:
 		slot = book
+		if not carry.is_empty():
+			var card := carry
+			carry = ""
+			_stage(book, card)
 		refresh()
 		return
 	var index := shop_at(point)
-	if index < 0: return
+	if index < 0:
+		carry = ""
+		refresh()
+		return
 	pick = index
-	if double_click: buy()
-	else: refresh()
+	if double_click:
+		carry = ""
+		buy()
+		return
+	carry = trade.stock[index] if not _purchase_pending else ""
+	refresh()
+
+## Right button: lets a carried spell go, gives back a bought slot, or buys
+## the shop spell under the cursor into the selected slot.
+func right_press(point: Vector2) -> bool:
+	if not carry.is_empty():
+		carry = ""
+		refresh()
+		return true
+	var book := book_at(point)
+	if book >= 0:
+		slot = book
+		retrieve()
+		return true
+	var index := shop_at(point)
+	if index < 0: return false
+	pick = index
+	buy()
+	return true
+
+func pointer(point: Vector2) -> void:
+	carry_at = point
+	if not carry.is_empty(): sheet.queue_redraw()
 
 func wheel(point: Vector2, direction: int) -> bool:
 	if not Rect2(SHOP_CELL, Vector2(STEP * SHOP_COLUMNS, 52 * SHOP_ROWS)).has_point(point): return false
@@ -172,8 +221,14 @@ func buy() -> void:
 	if _purchase_pending: return
 	var card := selected_card()
 	if card.is_empty() or slot < 0 or slot >= trade.cards.size(): return
-	trade.replace(slot, card)
+	_stage(slot, card)
 	refresh()
+
+## Stages `card` into book slot `at`; the selection moves on to the next slot
+## so several copies are bought with repeated clicks.
+func _stage(at: int, card: String) -> void:
+	if _purchase_pending or not trade.replace(at, card): return
+	if trade.cards.size() > 1: slot = (at + 1) % trade.cards.size()
 
 func retrieve() -> void:
 	if _purchase_pending: return
@@ -270,13 +325,24 @@ func _draw_sheet() -> void:
 			var at := Vector2(box.get_center().x - width * 0.5, box.position.y + 14)
 			sheet.draw_string(font, at + Vector2(1, 1), text, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color(0, 0, 0, 0.9))
 			sheet.draw_string(font, at, text, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, RED if not values.is_empty() and price_red(column, kinds[row]) else WHITE)
+	# Bought slots carry a gold frame; the carried spell follows the cursor.
+	for index in mini(15, trade.pending.size()):
+		if not trade.pending[index].is_empty(): sheet.draw_rect(book_rect(index).grow(-1), Color(0.95, 0.8, 0.35, 0.8), false, 1.5)
+	if not carry.is_empty():
+		var rect := Rect2(carry_at - ICON * 0.5, ICON)
+		sheet.draw_texture_rect(profile.card_icon(carry), rect, false, Color(1, 1, 1, 0.85))
+		sheet.draw_rect(rect, PICK, false, 1.5)
 
 func tooltip_at(point: Vector2) -> String:
 	var index := shop_at(point)
 	if index >= 0:
 		var card: String = trade.stock[index]
 		var row: Dictionary = profile.table("CombatSpells").get(card, {})
-		return profile.text(str(row.get("Name", card))) + "\n" + profile.card_description(card) + "\n" + ELResources.price_tooltip(profile, trade.quote(card, slot))
+		return profile.text(str(row.get("Name", card))) + "\n" + profile.card_description(card) + "\n" + ELResources.price_tooltip(profile, trade.quote(card, slot)) \
+			+ "\n\n" + ELRemakeText.t("Click to pick it up, then click a book slot. Right click: buy into the selected slot.", profile)
+	var book := book_at(point)
+	if book >= 0 and book < trade.pending.size() and not trade.pending[book].is_empty():
+		return super.tooltip_at(point) + "\n" + ELRemakeText.t("Right click: give this purchase back.", profile)
 	for name: String in TIPS:
 		if name == ("SpellTt3" if rune_price else "SpellTt4"): continue
 		if TIPS[name].has_point(point): return profile.text("CtrlTt" + name)

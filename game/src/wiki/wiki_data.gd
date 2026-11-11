@@ -5,7 +5,7 @@ extends RefCounted
 ## The wiki articles for the in-game reader (ELWikiScreen), in every
 ## language. Each page: key, title, category, html (escaped subset), search.
 
-const VERSION := "0.7.1"
+const VERSION := "0.8.0"
 const LANGUAGES: Array[String] = ["en", "ru"]
 const CATEGORIES := [
 	{"id": "wiki", "en": "Demiurges wiki", "ru": "Вики Demiurges"},

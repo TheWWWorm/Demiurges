@@ -40,6 +40,8 @@ var minimap_texture: ImageTexture
 var minimap_picture := false
 ## Markers above the fog overlay; the overlay shows ELFog for the local player.
 var minimap_marks: Control
+## The camera marker, redrawn alone while the view moves.
+var minimap_view: Control
 var minimap_fog: TextureRect
 var _fog_textures: Array[ImageTexture] = []
 var _fog_revision := -1
@@ -72,6 +74,8 @@ var precombat_portraits: Array[TextureRect] = []
 var precombat_pair: Array = []
 var remake_strip: VBoxContainer
 var mode := "heroes"
+## Free movement: the hero portraits show steps left / steps a day.
+var free_steps := false
 var tower_only := false
 ## BuildingType1..5 choice (0..4) or -1; the list shows that category only.
 var building_kind := -1
@@ -109,7 +113,7 @@ const HEADER_INK := Color("d6bb88")
 ## Map info text: Arial Bold Italic, about 16 px cells in the original capture.
 const TOOLTIP_SIZE := 15
 var _bold: FontVariation
-var _signature := ""
+var _signature := -1
 var _art: ELAdventureArt
 ## Minimap markers (CMiniMap, table): castles,
 ## heroes and owned sites are TOOLTIP_1 sprites in the player's slot colour;
@@ -312,12 +316,20 @@ func _build_minimap() -> void:
 	minimap_marks.size = minimap.size
 	minimap.add_child(minimap_marks)
 	minimap_marks.draw.connect(_draw_minimap_marks)
+	minimap_view = Control.new()
+	minimap_view.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	minimap_view.size = minimap.size
+	minimap.add_child(minimap_view)
+	minimap_view.draw.connect(_draw_minimap_view)
+	# A click moves the view; holding the button drags it across the map.
 	minimap.gui_input.connect(func(event: InputEvent):
-		if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
-			var area := _minimap_area()
-			if area.has_point(event.position):
-				var at: Vector2 = (event.position - area.position) / area.size
-				minimap_clicked.emit(Vector2(at.x * map.width, (1.0 - at.y) * map.height)))
+		var press: bool = event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT
+		var drag: bool = event is InputEventMouseMotion and (event.button_mask & MOUSE_BUTTON_MASK_LEFT) != 0
+		if not press and not drag: return
+		var area := _minimap_area()
+		if press and not area.has_point(event.position): return
+		var at: Vector2 = ((event.position - area.position) / area.size).clamp(Vector2.ZERO, Vector2.ONE)
+		minimap_clicked.emit(Vector2(at.x * map.width, (1.0 - at.y) * map.height)))
 
 ## Terrain-colour image of the map, north row first.
 static func terrain_image(data: ELProfile, map: ELAdventureMap) -> Image:
@@ -358,6 +370,9 @@ static func terrain_colors(data: ELProfile) -> Dictionary:
 func _sync_minimap_fog() -> void:
 	if minimap_fog == null or ELFog.revision(state) == _fog_revision: return
 	_fog_revision = ELFog.revision(state)
+	# The console's open_fog lifts the fog without exploring anything.
+	minimap_fog.visible = ELFog.active(state, state.current_player)
+	if minimap_marks != null: minimap_marks.queue_redraw()
 	var size := state.map.width * state.map.height
 	var masks: Array[PackedByteArray] = [state.explored, state.fog.get("visible", PackedByteArray())]
 	for index in masks.size():
@@ -400,11 +415,16 @@ func _draw_minimap_marks() -> void:
 		if not ELFog.visible(state, state.current_player, Vector2i(item.x, item.y)): continue
 		var owner := int(item.get("owner", 0))
 		_draw_mark(0, owner if state.players.has(owner) else 0, item, footprints, area, cell, size_index)
-	if _view_sheet != null:
-		var at := area.position + Vector2(view_target.x / ELAdventureTerrain.CELL, map.height + view_target.z / ELAdventureTerrain.CELL) * cell
-		minimap_marks.draw_set_transform(at.floor(), -view_yaw)
-		minimap_marks.draw_texture_rect_region(_view_sheet, Rect2(-15, -15, 30, 30), Rect2(157, 114, 30, 30))
-		minimap_marks.draw_set_transform(Vector2.ZERO)
+
+func _draw_minimap_view() -> void:
+	if _view_sheet == null: return
+	var area := _minimap_area()
+	var map := state.map
+	var cell := area.size / Vector2(maxf(1, map.width), maxf(1, map.height))
+	var at := area.position + Vector2(view_target.x / ELAdventureTerrain.CELL, map.height + view_target.z / ELAdventureTerrain.CELL) * cell
+	minimap_view.draw_set_transform(at.floor(), -view_yaw)
+	minimap_view.draw_texture_rect_region(_view_sheet, Rect2(-15, -15, 30, 30), Rect2(157, 114, 30, 30))
+	minimap_view.draw_set_transform(Vector2.ZERO)
 
 ## Sprite cell of the original table: kind 0 hero, 1 castle, 2 site; colour is
 ## the player slot (1 red, 2 yellow, 3 green, 4 violet, 5 light blue, 6 blue,
@@ -436,7 +456,7 @@ func set_view(target: Vector3, yaw: float) -> void:
 	if target.is_equal_approx(view_target) and is_equal_approx(yaw, view_yaw): return
 	view_target = target
 	view_yaw = yaw
-	if minimap_marks != null: minimap_marks.queue_redraw()
+	if minimap_view != null: minimap_view.queue_redraw()
 
 func _build_slots() -> void:
 	for index in SLOT_COUNT:
@@ -940,11 +960,16 @@ func refresh(selected_hero: int, budget: Dictionary, can_act: bool) -> void:
 		var id: int = roster[index] if index < roster.size() else -1
 		slots[slot_index].disabled = not can_act or id < 0
 		slots[slot_index].set_hero(id, profile.portrait(int(_art.resolve(state.object(id)).get("row", {}).get("Face", 0))) if id >= 0 and slots[slot_index].hero != id else null, id == selected)
+		var walker := state.object(id) if id >= 0 else {}
+		slots[slot_index].set_steps("%d/%d" % [int(walker.get("ap", 0)), int(walker.get("strategy_capacity", walker.get("base_ap", 0)))] if free_steps and not walker.is_empty() else "")
 	_sync_minimap_fog()
-	var signature := "%d/%d/%d/%d" % [selected, roster.size(), state.day, ELFog.revision(state)]
+	# What the marks show, packed as numbers (this runs every frame).
+	var values := PackedInt64Array([selected, roster.size(), state.day, ELFog.revision(state)])
 	for item: Dictionary in state.objects.values():
-		if item.get("type") in ["hero", "monster"]: signature += "/%d,%d,%s" % [item.x, item.y, item.alive]
-		elif item.has("owner") and item.has("group"): signature += "/%s" % item.owner
+		var kind: Variant = item.get("type")
+		if kind == "hero" or kind == "monster": values.append_array([int(item.x), int(item.y), int(item.alive)])
+		elif item.has("owner") and item.has("group"): values.append(int(item.owner))
+	var signature := hash(values)
 	if signature != _signature:
 		_signature = signature
 		minimap_marks.queue_redraw()
@@ -986,6 +1011,29 @@ class CutButton extends BaseButton:
 		size = bounds.size
 		queue_redraw()
 
+	## The dial's sectors overlap as rectangles: a point counts only where the
+	## button's own art is opaque, so a click reaches the sector under it.
+	func _has_point(point: Vector2) -> bool:
+		if not Rect2(Vector2.ZERO, size).has_point(point): return false
+		var part: Dictionary = parts.get("normal", {})
+		if part.is_empty() or part.texture == null: return true
+		var local: Vector2 = point + _origin - part.rect.position
+		if not Rect2(Vector2.ZERO, part.rect.size).has_point(local): return false
+		var image := _image(part.texture)
+		if image == null: return true
+		var source: Rect2 = part.source
+		var at := Vector2i(source.position + local * source.size / part.rect.size)
+		if at.x < 0 or at.y < 0 or at.x >= image.get_width() or at.y >= image.get_height(): return true
+		return image.get_pixelv(at).a > 0.1
+
+	## The art's pixels, kept on the texture for the next hit test.
+	static func _image(texture: Texture2D) -> Image:
+		if texture.has_meta("hit_image"): return texture.get_meta("hit_image")
+		var image := texture.get_image()
+		if image != null and image.is_compressed(): image.decompress()
+		texture.set_meta("hit_image", image)
+		return image
+
 	func _draw() -> void:
 		var mode := get_draw_mode()
 		var pushed := mode == DRAW_PRESSED or mode == DRAW_HOVER_PRESSED or active
@@ -1008,6 +1056,13 @@ class PortraitSlot extends BaseButton:
 	var picture: Texture2D
 	var current := false
 	var empty: Dictionary = {}
+	## Free movement: steps left / steps a day, bottom right.
+	var steps := ""
+
+	func set_steps(text: String) -> void:
+		if text == steps: return
+		steps = text
+		queue_redraw()
 
 	func set_hero(id: int, texture: Texture2D, is_selected: bool) -> void:
 		if id != hero:
@@ -1028,3 +1083,10 @@ class PortraitSlot extends BaseButton:
 		if current:
 			for edge: Rect2 in [Rect2(0, 0, size.x, 3), Rect2(0, size.y - 3, size.x, 3), Rect2(0, 3, 3, size.y - 6), Rect2(size.x - 3, 3, 3, size.y - 6)]: draw_rect(edge, FRAME)
 		elif get_draw_mode() == DRAW_HOVER: draw_rect(Rect2(Vector2(0.5, 0.5), size - Vector2.ONE), Color("a09880"), false, 1.0)
+		if not steps.is_empty():
+			var font := get_theme_default_font()
+			var width := font.get_string_size(steps, HORIZONTAL_ALIGNMENT_LEFT, -1, 12).x
+			var box := Rect2(size - Vector2(width + 8, 16), Vector2(width + 6, 14))
+			draw_rect(box, Color(0, 0, 0, 0.65))
+			var tint := Color("f6e7a8") if not steps.begins_with("0/") else Color(1.0, 0.45, 0.4)
+			draw_string(font, box.position + Vector2(3, 11), steps, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, tint)

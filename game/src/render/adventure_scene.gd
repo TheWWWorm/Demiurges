@@ -198,7 +198,11 @@ func build(source: ELAdventureMap, session: ELAdventureSession = null) -> bool:
 	sun = DirectionalLight3D.new()
 	add_child(sun)
 	sun.light_energy = SUN_ENERGY
-	sun.rotation_degrees = SUN_ROTATION
+	# The sun was fitted to the second game's opening view (camera yaw 0).
+	# The first game's map camera looks a quarter turn round (yaw 90 degrees),
+	# so its sun turns with it: shadows fall toward the lower left of the
+	# view, at a figure's feet, instead of behind it.
+	sun.rotation_degrees = SUN_ROTATION + (Vector3(0, 90, 0) if map.profile.id == "el1" else Vector3.ZERO)
 	# Silhouette shadows: only the ground receives them (see `silhouette`).
 	sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS
 	sun.directional_shadow_max_distance = 90.0
@@ -870,6 +874,25 @@ func _shade(node: GeometryInstance3D, casts: bool) -> void:
 	if not wave: node.layers |= ELAdventureTerrain.REFLECTION_LAYER
 	node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON if casts and not wave else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	if material != null: material.disable_receive_shadows = true
+
+## World-space bounds of an object's drawn figure (its model parts or
+## instanced pieces), or an empty box when it has none.
+func object_bounds(uid: int) -> AABB:
+	var bounds := AABB()
+	var first := true
+	if object_models.has(uid):
+		var model: ELModel = object_models[uid]
+		for part: MeshInstance3D in model.parts.values():
+			if part.mesh == null or not part.visible: continue
+			var box := global_transform.affine_inverse() * part.global_transform * part.mesh.get_aabb()
+			bounds = box if first else bounds.merge(box)
+			first = false
+		return bounds
+	for entry: Dictionary in _instances.get(uid, []):
+		var box: AABB = entry.transform * entry.node.multimesh.mesh.get_aabb()
+		bounds = box if first else bounds.merge(box)
+		first = false
+	return bounds
 
 ## Highest point of an object's drawn figure (world units above the ground),
 ## or -1 when the object has no figure.

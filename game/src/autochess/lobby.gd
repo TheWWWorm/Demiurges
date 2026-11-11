@@ -81,7 +81,7 @@ func build(data: ELProfile) -> void:
 	_picker.focus_mode = Control.FOCUS_NONE
 	_picker.tooltip_text = _t("Your hero represents you on the board and picks the battlefield. It does not change your army.")
 	for id: String in _choices:
-		_picker.add_icon_item(ELAutochessCharacters.portrait(profile, id), ELAutochessCharacters.title(profile, id))
+		_picker.add_icon_item(ELAutochessCharacters.portrait(profile, id), ELAutochessCharacters.shown(profile, ELAutochessCharacters.title(profile, id)))
 	var popup := _picker.get_popup()
 	popup.add_theme_constant_override("icon_max_width", 36)
 	_picker.add_theme_constant_override("icon_max_width", 30)
@@ -298,7 +298,7 @@ func _roster_rows() -> void:
 		var name := H.label(line, "%d. %s" % [seat + 1, String(member.name) if not member.is_empty() else _t("Computer")], 14, Color("f2b36f") if not member.is_empty() else H.MUTED)
 		name.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		name.clip_text = true
-		if not member.is_empty(): H.label(line, ELAutochessCharacters.title(profile, String(member.character)), 13, H.MUTED)
+		if not member.is_empty(): H.label(line, ELAutochessCharacters.shown(profile, ELAutochessCharacters.title(profile, String(member.character))), 13, H.MUTED)
 
 func _pick(id: String, announce := true) -> void:
 	if id.is_empty(): return

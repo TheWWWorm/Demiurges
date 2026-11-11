@@ -399,6 +399,10 @@ func _value(center: Vector2, text: String, color: Color, canvas: Canvas = null) 
 func _tooltip(point: Vector2) -> String:
 	for name: String in TIPS:
 		if TIPS[name].has_point(point): return profile.text("CtrlTt" + name)
+	# The rune icons over the price row (and their numbers) name their rune.
+	for row in ELResources.types("el1").size():
+		var center := COST_ROW + Vector2(COST_STEP * row, 0)
+		if Rect2(center - Vector2(17, 40), Vector2(34, 52)).has_point(point): return profile.text("T_RESOURCE_NAME_%d" % (row + 1))
 	if Rect2(PRODUCTION, CELL).has_point(point) and not production().is_empty(): return ELGlobalSpells.title(profile, str(production().code))
 	var hit := entry_at(point)
 	if int(hit[0]) == 0:

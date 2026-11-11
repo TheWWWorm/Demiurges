@@ -93,7 +93,11 @@ var audio: ELAdventureAudio
 var effects: ELAdventureEffects
 ## First game: blazons, building sounds and effects, terrain ambience.
 var presentation: ELFirstMapPresentation
-var spellbook: ELSpellbookView
+## ELSpellbookView, or (first game) ELFirstBookView.
+var spellbook: Control
+## The open spellbook when it is the plain or second-game screen. Keeping this
+## typed member also keeps the script load order that frees cleanly at exit.
+var plain_spellbook: ELSpellbookView
 var skills: ELHeroSkillsView
 var global_spells: ELGlobalSpellsView
 var diplomacy: ELDiplomacyView
@@ -341,6 +345,9 @@ func build(profile: ELProfile, scenario: Dictionary, preferences: ELSettings, di
 func _exit_tree() -> void:
 	if state != null: state.close()
 
+var _hud_clock := 0.0
+var _hud_key := Vector2i(-2, -2)
+
 func _process(delta: float) -> void:
 	if strategic_session != null and notice != null:
 		var battle_note := strategic_session.observer_battle_note()
@@ -370,7 +377,18 @@ func _process(delta: float) -> void:
 	state.view_point = Vector2(target.x, -target.z) / ELAdventureTerrain.CELL
 	# Options "Accelerated mode": map movement at four times its normal rate.
 	director.fast_mode = bool(settings.values.get("adventure_fast", false)) if settings != null else false
+	# Remake option: first-game heroes move at once, several times a day.
+	director.free_movement = bool(settings.values.get("free_movement", true)) if settings != null else false
+	director.smart_ai = bool(settings.values.get("smart_ai", true)) if settings != null else false
+	if hud != null: hud.free_steps = ELStrategy.free_mode(director)
 	if strategic_session == null or strategic_session.link.is_host: director.advance(delta)
+	# Free movement: End Day pressed while a hero was still walking ends the
+	# day once the move is over (a battle on the way cancels it).
+	if _end_day_queued:
+		if director.encounter != null or not director.dialogue.is_empty() or not state.outcome.is_empty(): _end_day_queued = false
+		elif director.can_move() and director.movement.is_empty():
+			_end_day_queued = false
+			_end_day()
 	_travel_pose()
 	if not director.error.is_empty():
 		error = director.error
@@ -403,6 +421,7 @@ func _process(delta: float) -> void:
 		var direction := Vector2(float(Input.is_physical_key_pressed(KEY_D)) - float(Input.is_physical_key_pressed(KEY_A)), float(Input.is_physical_key_pressed(KEY_S)) - float(Input.is_physical_key_pressed(KEY_W)))
 		var flat := Vector3(direction.x, 0, direction.y).rotated(Vector3.UP, yaw)
 		target += flat * delta * zoom * 0.8 * (float(settings.values.get("keyboard_scroll", 1.0)) if settings != null else 1.0)
+	if view_moved and following < 0: _clamp_target()
 	_update_camera()
 	_update_rings(delta)
 	if audio != null:
@@ -411,7 +430,15 @@ func _process(delta: float) -> void:
 	if presentation != null:
 		presentation.listener = target
 		presentation.listener_forward = -camera.global_basis.z
-	_refresh_hero_info()
+	# First game: the HUD rescans every map object, so the frame loop
+	# refreshes it ten times a second, or at once when the selection or turn
+	# changes; map events refresh it directly.
+	_hud_clock += delta
+	var hud_key := Vector2i(_hero_id(), int(_can_act()))
+	if hud == null or _hud_clock >= 0.1 or hud_key != _hud_key:
+		_hud_clock = 0.0
+		_hud_key = hud_key
+		_refresh_hero_info()
 	_auto_level_up()
 
 ## The original wait cursor while a map is built, loaded or saved (never while
@@ -735,8 +762,14 @@ func _open_lose_battle() -> void:
 	lose_battle.build(second_hud)
 	lose_battle.closed.connect(func(): lose_battle = null)
 
+var _end_day_queued := false
+
 func _end_day() -> void:
 	if paused: return
+	if strategic_session == null and ELStrategy.free_mode(director) and director.strategy.get("free", "") == "act":
+		_end_day_queued = true
+		_remark("The day ends when this move is over.")
+		return
 	if strategic_session != null:
 		strategic_session.end_turn()
 		_refresh_hero_info()
@@ -870,6 +903,11 @@ func _unhandled_input(event: InputEvent) -> void:
 		elif event.keycode == KEY_ESCAPE and second_hud != null and director.dialogue.is_empty():
 			open_options()
 			get_viewport().set_input_as_handled()
+		# First game: Esc opens the Options screen (the tutorial calls it the
+		# <Esc> menu), like the Options column's wrench.
+		elif event.keycode == KEY_ESCAPE and hud != null and director.dialogue.is_empty() and not event.echo:
+			open_original_options()
+			get_viewport().set_input_as_handled()
 		elif continue_dialogue and event.keycode == KEY_SPACE and not director.dialogue.is_empty():
 			director.acknowledge()
 			get_viewport().set_input_as_handled()
@@ -910,8 +948,14 @@ func _unhandled_input(event: InputEvent) -> void:
 			if hit != null:
 				var corpse := _corpse_under_pointer(event.position) if second_hud != null else -1
 				var body := state.object(corpse)
+				# First game: the click uses what the cursor shows, also a
+				# castle tower or figure drawn over the ground behind it.
+				var shown := _object_at(Vector2(hit.x, -hit.z) / ELAdventureTerrain.CELL, event.position) if hud != null else -1
+				var picked := state.object(shown)
 				if body.get("enabled", false):
 					_click_ground(Vector2i(body.x, body.y), corpse)
+				elif picked.get("enabled", false):
+					_click_ground(Vector2i(picked.x, picked.y), shown)
 				else:
 					_click_ground(Vector2i(floori(hit.x / 2.0), floori(-hit.z / 2.0)))
 	elif event is InputEventMouseMotion and second_hud != null and _right_down and not dragging:
@@ -964,6 +1008,12 @@ func _input(event: InputEvent) -> void:
 		_pointer = event.position
 		_pointer_on_map = false
 		_cursor_moved = true
+	# First game: a right release over a window or menu (Esc opened one while
+	# the button was held) still ends the camera drag and the info panel,
+	# or the view would keep turning and the panel stay on screen.
+	if hud != null and event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT and not event.pressed:
+		dragging = false
+		hud.show_tooltip(-1, {}, Vector2.ZERO)
 	if second_hud == null: return
 	if event is InputEventMouseMotion:
 		_tip_point = event.position
@@ -1084,7 +1134,14 @@ func update_cursor() -> void:
 					context.tile = Vector2i(corpse.x, corpse.y)
 					context.in_bounds = true
 				elif context.in_bounds: context.picked = ELSecondMapTooltips.object_at(state, point, true)
-			elif context.in_bounds: context.picked = _object_at(point)
+			else:
+				# A tall figure near the map edge is drawn over ground
+				# beyond it: the pick then gives the cursor its tile.
+				context.picked = _object_at(point, _pointer)
+				var shown := state.object(context.picked)
+				if not context.in_bounds and not shown.is_empty():
+					context.tile = Vector2i(shown.x, shown.y)
+					context.in_bounds = true
 	cursor_context = context
 	cursor_name = ELCursors.second_adventure(state, director, context) if second else ELCursors.first_adventure(state, director, context)
 	if not edge_cursor.is_empty() and not context.modal: cursor_name = edge_cursor
@@ -1103,7 +1160,7 @@ func hover(at: Vector2) -> void:
 	var id := -1
 	if hud.map_rect().has_point(at):
 		var hit: Variant = Plane(Vector3.UP, 0).intersects_ray(camera.project_ray_origin(at), camera.project_ray_normal(at))
-		if hit != null: id = _object_at(Vector2(hit.x, -hit.z) / ELAdventureTerrain.CELL)
+		if hit != null: id = _object_at(Vector2(hit.x, -hit.z) / ELAdventureTerrain.CELL, at)
 	var item := state.object(id)
 	hud.show_tooltip(id, hud.describe(item, _art.resolve(item).get("row", {})) if not item.is_empty() else {}, at)
 
@@ -1111,22 +1168,66 @@ func hover(at: Vector2) -> void:
 const FIRST_SITE_GROUPS := ["mines", "mana_nodes", "forts", "laboratories", "factories", "resource_cuts"]
 
 ## Standing figures extend above their tile, so actors accept points slightly
-## behind them; buildings use their footprint.
-func _object_at(point: Vector2) -> int:
+## behind them; buildings use their footprint. With the pointer's screen
+## position, the camera ray also picks the visible body of a figure or a tall
+## building (a castle tower drawn over the ground behind it).
+func _object_at(point: Vector2, screen := Vector2(-1, -1)) -> int:
 	var best := -1
 	var distance := INF
+	var building := -1
+	var building_depth := INF
+	var origin := Vector3.ZERO
+	var normal := Vector3.ZERO
+	if screen.x >= 0 and camera != null and world != null:
+		origin = world.to_local(camera.project_ray_origin(screen))
+		normal = world.global_basis.inverse() * camera.project_ray_normal(screen)
+	# This runs on every pointer move: the cheap position tests come first,
+	# the fog and kind lookups only for objects under the pointer.
+	var first := state.map.profile.id == "el1"
+	var footprints: Dictionary = director.grid.footprints
 	for id: int in state.objects:
 		var item: Dictionary = state.objects[id]
-		if not item.alive or not item.visible or not item.get("placed", true) or item.get("fortified", false) or _fogged(item): continue
-		if item.get("type") in ["hero", "monster"]:
+		if not item.alive or not item.visible or not item.get("placed", true) or item.get("fortified", false): continue
+		var kind: Variant = item.get("type")
+		if kind == "hero" or kind == "monster":
 			var offset := point - Vector2(float(item.x) + 0.5, float(item.y) + 0.5)
-			if absf(offset.x) < 0.9 and offset.y > -0.9 and offset.y < 2.2 and offset.length() < distance:
+			var near := offset.length()
+			if near >= distance: continue
+			var hit := absf(offset.x) < 0.9 and offset.y > -0.9 and offset.y < 2.2
+			if not hit and normal != Vector3.ZERO and near < 12.0: hit = _pick_box(id, Rect2(float(item.x) + 0.15, float(item.y) + 0.15, 0.7, 0.7), 1.6).intersects_ray(origin, normal) != null
+			if hit and not _fogged(item):
 				best = id
-				distance = offset.length()
-		elif best < 0 and (ELFirstScenario.is_castle(item) or (state.map.profile.id == "el1" and str(item.get("group", "")) in FIRST_SITE_GROUPS) or (ELMapPickups.is_pickup(item) and (state.map.profile.id == "el1" or item.group == "artefacts")) or (item.get("group") == "additional_buildings" and state.map.profile.id == "el1" and not ELAdditionalBuildings.title(state.map.profile, item).is_empty())):
-			var size: Vector2i = director.grid.footprints.get(id, {}).get("size", Vector2i.ONE)
-			if Rect2(item.x, item.y, size.x, size.y).has_point(point): best = id
-	return best
+				distance = near
+		elif best < 0:
+			var size: Vector2i = footprints.get(id, {}).get("size", Vector2i.ONE)
+			var cells := Rect2(item.x, item.y, size.x, size.y)
+			# The footprint under the pointer wins; otherwise the nearest
+			# building body the camera ray passes through.
+			var depth := INF
+			if cells.has_point(point): depth = -1.0
+			elif normal != Vector3.ZERO and cells.grow(16.0).has_point(point):
+				var crossing: Variant = _pick_box(id, cells, 0.0).intersects_ray(origin, normal)
+				if crossing != null: depth = origin.distance_to(crossing)
+			if depth >= building_depth: continue
+			var group := str(item.get("group", ""))
+			if not (ELFirstScenario.is_castle(item) or (first and group in FIRST_SITE_GROUPS) or (ELMapPickups.is_pickup(item) and (first or group == "artefacts")) or (group == "additional_buildings" and first and not ELAdditionalBuildings.title(state.map.profile, item).is_empty())): continue
+			if _fogged(item): continue
+			building = id
+			building_depth = depth
+	return best if best >= 0 else building
+
+## Box the camera ray tests for an object: its footprint `cells` (map
+## cells), `fallback` cells tall, merged with its drawn figure. Buildings keep
+## theirs; moving figures are measured where they stand.
+var _pick_boxes: Dictionary = {}
+func _pick_box(id: int, cells: Rect2, fallback: float) -> AABB:
+	if _pick_boxes.has(id) and not world.actors.has(id): return _pick_boxes[id]
+	var cell := ELAdventureTerrain.CELL
+	var box := AABB(Vector3(cells.position.x * cell, 0.0, -cells.end.y * cell), Vector3(cells.size.x * cell, fallback * cell, cells.size.y * cell))
+	var drawn := world.object_bounds(id)
+	if drawn.has_volume(): box = box.merge(drawn)
+	_pick_boxes[id] = box
+	return box
 
 ## Objects the local player cannot see under the first-game fog are not picked.
 func _fogged(item: Dictionary) -> bool:
@@ -1188,12 +1289,16 @@ func touch_pan(from: Vector2, to: Vector2) -> void:
 	following = -1
 	view_moved = true
 	target += (a as Vector3) - (b as Vector3)
+	_clamp_target()
+	_hide_touch_tip()
+	_update_camera()
+
+## The view's centre stays over the map (scrolling stops at its edges).
+func _clamp_target() -> void:
 	var low := ELAdventureScene.world_position(-0.5, float(state.map.height) - 0.5)
 	var high := ELAdventureScene.world_position(float(state.map.width) - 0.5, -0.5)
 	target.x = clampf(target.x, low.x, high.x)
 	target.z = clampf(target.z, low.z, high.z)
-	_hide_touch_tip()
-	_update_camera()
 
 func touch_orbit(turn: float, tilt: float) -> void:
 	if state.camera_locked: return
@@ -1248,7 +1353,10 @@ func _present(data: Dictionary) -> void:
 		"orient": world.orient_actor(data.id, data.direction)
 		"route":
 			if strategic_session != null and state.object(data.id).get("owner") != state.current_player: return
-			if not director.strategy.is_empty(): following = data.id
+			# Night moves: the view goes with heroes the local player can see,
+			# never into the fog after an unseen one.
+			if not director.strategy.is_empty():
+				if ELFog.shown(state, state.current_player, state.object(data.id)): following = data.id
 			# Second game: the view goes with the main hero on a scripted walk,
 			# as after the e2mission11 gate greeting (original captures).
 			elif script_camera_attached and state.map.profile.id == "el2" and int(data.id) == state.main_hero and director.movement.get("queued", false) and not data.path.is_empty(): following = data.id
@@ -1257,7 +1365,10 @@ func _present(data: Dictionary) -> void:
 			if data.phase == "planning":
 				following = _hero_id()
 				_draw_route(ELStrategy.order_path(director, state.object(_hero_id())))
-				_remark(director.notice if not director.notice.is_empty() else "Plan your heroes' orders, then end the turn.")
+				var hint := "Choose a destination, then choose it again to move; end the day when your heroes are done." if ELStrategy.free_mode(director) else "Plan your heroes' orders, then end the turn."
+				_remark(director.notice if not director.notice.is_empty() else hint)
+			elif director.strategy.get("free", "") == "act": _remark("Moving…")
+			elif director.strategy.get("free", "") == "ai": _remark("Other players are moving…")
 			else: _remark("Resolving " + str(data.phase) + "…")
 			_refresh_hero_info()
 		"dialogue":
@@ -1344,6 +1455,15 @@ func _present(data: Dictionary) -> void:
 					number = int(director.strategy.index)
 					total = director.strategy.combats.size()
 				pending_encounter = [data.hero, data.opponent]
+				# The view centres between the two sides, as for the second
+				# game's panel (not left on the last hero that moved).
+				var ends: Array[Vector3] = []
+				for id: int in [int(data.hero), int(data.opponent)]:
+					var side := state.object(id)
+					if not side.is_empty() and side.get("placed", true) and int(side.get("x", -1)) >= 0: ends.append(ELAdventureScene.world_position(side.x, side.y))
+				if not ends.is_empty() and not state.camera_locked:
+					following = -1
+					target = (ends[0] + ends[-1]) * 0.5
 				hud.show_precombat(data.hero, data.opponent, number, total)
 			elif second_precombat != null and precombat_preview and not data.get("remote_use", false): _open_second_precombat(data.hero, data.opponent)
 			else: encounter_requested.emit(data.hero, data.opponent)
@@ -1448,7 +1568,7 @@ func _state_event(data: Dictionary) -> void:
 		"show_inventory": _open_spellbook(int(data.id))
 		"blink": if second_hud != null: second_hud.set_blink(str(data.element), bool(data.on))
 		"inventory_changed":
-			if spellbook != null and int(data.id) == spellbook.hero_id: spellbook.refresh()
+			if spellbook != null and int(data.id) == int(spellbook.get("hero_id")): spellbook.call("refresh")
 		"global_spell_ready":
 			if int(data.player) == state.current_player: _offer_global_spell()
 		"hero_placed":
@@ -1624,6 +1744,7 @@ func open_extras(target: String, over_game: bool, after := Callable(), kind := "
 	if not _extras_ready(): return false
 	_after_extras = after
 	dragging = false
+	if hud != null: hud.show_tooltip(-1, {}, Vector2.ZERO)
 	extras.open_hosted(target, over_game, kind)
 	extras_layer.show()
 	extras.show()
@@ -1872,11 +1993,24 @@ func _open_spellbook(scripted_hero := -1) -> void:
 	scrim.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	scrim.mouse_filter = Control.MOUSE_FILTER_STOP
 	# Second game: the original InventoryScreen (ELSecondInventoryView).
-	spellbook = ELSecondInventoryView.make(second_hud) if second_hud != null else ELSpellbookView.new()
-	spellbook.strategic_session = strategic_session
-	scrim.add_child(spellbook)
-	spellbook.build(state, shown)
-	spellbook.closed.connect(_close_spellbook)
+	# First game: the book and reserve on the original laboratory panel.
+	if hud != null and state.map.profile.id == "el1":
+		scrim.color = Color(0, 0, 0, 0.55)
+		hud.show_tooltip(-1, {}, Vector2.ZERO)
+		var first := ELFirstBookView.new()
+		first.strategic_session = strategic_session
+		scrim.add_child(first)
+		first.build_book(director, hud, shown)
+		first.closed.connect(_close_spellbook)
+		spellbook = first
+		return
+	var plain: ELSpellbookView = ELSecondInventoryView.make(second_hud) if second_hud != null else ELSpellbookView.new()
+	spellbook = plain
+	plain_spellbook = plain
+	plain.strategic_session = strategic_session
+	scrim.add_child(plain)
+	plain.build(state, shown)
+	plain.closed.connect(_close_spellbook)
 	if spellbook is ELSecondInventoryView:
 		inventory_blinks = BlinkFrames.new()
 		inventory_blinks.state = state
@@ -1943,6 +2077,7 @@ func _close_spellbook() -> void:
 	inventory_blinks = null
 	spellbook.get_parent().queue_free()
 	spellbook = null
+	plain_spellbook = null
 	paused = false
 	if world != null: world.process_mode = Node.PROCESS_MODE_INHERIT
 	_refresh_hero_info()

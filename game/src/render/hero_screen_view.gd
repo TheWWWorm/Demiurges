@@ -19,6 +19,12 @@ const ICON := Vector2(50, 50)
 const BAR := Rect2(5, 134, 306, 56)
 const TEXT := Color("f2eee4")
 const CAPTION := Color("d8c89a")
+## Skill boxes: an icon box (22×18) left of each skill name, two columns.
+const SKILL_BOXES := [Vector2(14, 267), Vector2(14, 295), Vector2(14, 322), Vector2(158, 267), Vector2(158, 295)]
+const SKILL_BOX := Vector2(22, 18)
+## The bold and italic faces draw their capitals about two pixels below the
+## middle of a label; labels over the art's boxes move up by this much.
+const RAISE := Vector2(0, -2)
 
 var director: ELAdventureDirector
 var strategic_session: ELStrategicSession
@@ -67,8 +73,8 @@ func build(owner: ELAdventureDirector, panel: ELAdventureHud, ids: Array[int], i
 		_caption(Rect2(320, 110, 300, 17), "CtrlHeroText2", 15)
 		_caption(Rect2(380, 197, 200, 17), "CtrlHeroText5", 15)
 		for line in 3:
-			_label(Rect2(430, 33 + 27 * line, 190, 18), "", 14, CAPTION, hud._bold, HORIZONTAL_ALIGNMENT_LEFT).text = profile.text("CtrlLevelInfo_%d" % (line + 1))
-			_labels.append({"key": "level_info", "line": line, "label": _label(Rect2(354, 33 + 27 * line, 70, 18), "", 14, TEXT, hud._bold, HORIZONTAL_ALIGNMENT_LEFT)})
+			_label(Rect2(430, 30 + 27 * line, 190, 18), "", 14, CAPTION, hud._bold, HORIZONTAL_ALIGNMENT_LEFT).text = profile.text("CtrlLevelInfo_%d" % (line + 1))
+			_labels.append({"key": "level_info", "line": line, "label": _label(Rect2(354, 30 + 27 * line, 70, 18), "", 14, TEXT, hud._bold, HORIZONTAL_ALIGNMENT_LEFT)})
 		_button("HeroScrOk", Vector2.ZERO).pressed.connect(func(): closed.emit())
 		_button("DismissHero", Vector2.ZERO).pressed.connect(_ask_dismiss)
 		_button("GlSpScrL", Vector2.ZERO).pressed.connect(func(): gs_scroll = maxi(0, gs_scroll - 1); refresh())
@@ -83,17 +89,18 @@ func build(owner: ELAdventureDirector, panel: ELAdventureHud, ids: Array[int], i
 
 func _build_side(side: int) -> void:
 	var at := RIGHT * side
-	_labels.append({"key": "name", "side": side, "label": _label(Rect2(Vector2(15, 89) + at, Vector2(150, 15)), "", 12, TEXT, hud._italic)})
+	_labels.append({"key": "name", "side": side, "label": _label(Rect2(Vector2(15, 87) + at, Vector2(150, 15)), "", 12, TEXT, hud._italic)})
 	for line in 3:
-		_labels.append({"key": "stat", "side": side, "line": line, "label": _label(Rect2(Vector2(181, 25 + 27 * line) + at, Vector2(30, 18)), "", 14, TEXT, hud._bold)})
+		_labels.append({"key": "stat", "side": side, "line": line, "label": _label(Rect2(Vector2(186, 27 + 27 * line) + at, Vector2(30, 18)), "", 14, TEXT, hud._bold)})
 		_label(Rect2(Vector2(214, 25 + 27 * line) + at, Vector2(90, 18)), "", 13, CAPTION, hud._bold, HORIZONTAL_ALIGNMENT_LEFT).text = profile.text(["T_LEVEL", "T_LIFE", "T_SIGHT"][line])
 	_caption(Rect2(Vector2(60, 110) + at, Vector2(200, 17)), "CtrlHeroText3", 15)
 	_caption(Rect2(Vector2(40, 197) + at, Vector2(240, 17)), "CtrlHeroText4", 15)
 	_caption(Rect2(Vector2(58, 355) + at, Vector2(202, 17)), "CtrlHeroText6", 15)
-	_labels.append({"key": "spec", "side": side, "label": _label(Rect2(Vector2(40, 232) + at, Vector2(235, 17)), "", 14, TEXT, hud._bold)})
-	var places := [Vector2(40, 269), Vector2(40, 299), Vector2(40, 326), Vector2(185, 269), Vector2(185, 299)]
-	for index in places.size():
-		_labels.append({"key": "skill", "side": side, "index": index, "label": _label(Rect2(places[index] + at, Vector2(120, 20)), "", 12, TEXT, hud._bold, HORIZONTAL_ALIGNMENT_LEFT)})
+	_labels.append({"key": "spec", "side": side, "label": _label(Rect2(Vector2(40, 230) + at, Vector2(235, 17)), "", 14, TEXT, hud._bold)})
+	for index in SKILL_BOXES.size():
+		# The name follows its icon box, level with it.
+		var place: Vector2 = SKILL_BOXES[index] + Vector2(SKILL_BOX.x + 4, -3)
+		_labels.append({"key": "skill", "side": side, "index": index, "label": _label(Rect2(place + at, Vector2(120, 20)), "", 12, TEXT, hud._bold, HORIZONTAL_ALIGNMENT_LEFT)})
 	var left := _button("EquipScrL", at)
 	left.pressed.connect(func(): scroll[side] = maxi(0, scroll[side] - 1); refresh())
 	var right := _button("EquipScrR", at)
@@ -111,8 +118,7 @@ func _button(control: String, offset: Vector2) -> ELAdventureHud.CutButton:
 	return button
 
 func _caption(rect: Rect2, key: String, size: int) -> Label:
-	var label := _label(rect, profile.text(key), size, CAPTION, hud._italic)
-	return label
+	return _label(Rect2(rect.position + RAISE, rect.size), profile.text(key), size, CAPTION, hud._italic)
 
 func _label(rect: Rect2, text: String, size: int, color: Color, font: Font, align := HORIZONTAL_ALIGNMENT_CENTER) -> Label:
 	var label := Label.new()
@@ -393,11 +399,18 @@ func _draw_sheet() -> void:
 			var rect := Rect2(Vector2(29 + 53 * (index % 5), 389 + 52 * (index / 5)) + at, ICON)
 			sheet.draw_texture_rect(profile.card_icon(str(cards[index])), rect, false)
 			if index < uses.size() and int(uses[index]) >= 0: _digits(rect, str(int(uses[index])), font)
-		# Skill ranks: one to three stars left of each skill name.
+		# Skills: the icon in the box left of each name (the middle of the
+		# 50 px icon, cut to the box's shape), the rank as one to three stars.
 		var codes: Array = hero.get("skills", {}).keys()
-		var places := [Vector2(40, 269), Vector2(40, 299), Vector2(40, 326), Vector2(185, 269), Vector2(185, 299)]
-		for index in mini(places.size(), codes.size()):
-			for star in int(hero.skills[codes[index]]) + 1: _star(places[index] + at + Vector2(-16, 4 + star * 6))
+		for index in mini(SKILL_BOXES.size(), codes.size()):
+			var box := Rect2(SKILL_BOXES[index] + at, SKILL_BOX)
+			var rank := int(hero.skills[codes[index]])
+			var icon := ELBuildingMessageView.skill_icon(profile, str(codes[index]), rank)
+			if icon is AtlasTexture:
+				var region: Rect2 = (icon as AtlasTexture).region
+				var tall := region.size.x * SKILL_BOX.y / SKILL_BOX.x
+				sheet.draw_texture_rect_region((icon as AtlasTexture).atlas, box, Rect2(region.position + Vector2(0, (region.size.y - tall) * 0.5), Vector2(region.size.x, tall)))
+			for star in rank + 1: _star(box.position + Vector2(4.5 + star * 6.5, SKILL_BOX.y - 3.5))
 	if not exchange:
 		var spells := attached(heroes[0])
 		for slot in 3:
@@ -421,6 +434,16 @@ func _draw_sheet() -> void:
 			if icon != null: sheet.draw_texture_rect(icon, rect, false)
 			sheet.draw_rect(rect, Color("e8e0cc"), false, 1.5)
 
+## A right click on the sheet; true when consumed.
+func right_press(_point: Vector2) -> bool:
+	return false
+
+## Cursor moves over the sheet: a dragged entry follows it.
+func pointer(point: Vector2) -> void:
+	if drag.is_empty(): return
+	drag.at = point
+	sheet.queue_redraw()
+
 ## Mouse wheel over the sheet; true when consumed.
 func wheel(_point: Vector2, _direction: int) -> bool:
 	return false
@@ -442,12 +465,15 @@ func _digits(rect: Rect2, text: String, font: Font) -> void:
 	sheet.draw_string(font, at, text, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color("f6e7a8"))
 
 func _star(center: Vector2) -> void:
-	var points := PackedVector2Array()
-	for index in 10:
-		var radius := 3.6 if index % 2 == 0 else 1.5
-		var angle := -PI / 2 + index * PI / 5
-		points.append(center + Vector2(cos(angle), sin(angle)) * radius)
-	sheet.draw_colored_polygon(points, Color("e8c860"))
+	for pass_index in 2:
+		# A dark rim keeps the star readable over the skill icon.
+		var grow := 1.0 if pass_index == 0 else 0.0
+		var points := PackedVector2Array()
+		for index in 10:
+			var radius := (3.4 if index % 2 == 0 else 1.4) + grow
+			var angle := -PI / 2 + index * PI / 5
+			points.append(center + Vector2(cos(angle), sin(angle)) * radius)
+		sheet.draw_colored_polygon(points, Color(0, 0, 0, 0.85) if pass_index == 0 else Color("e8c860"))
 
 ## Drawing, drag input and tooltips of the composed panel.
 class Sheet extends Control:
@@ -464,9 +490,10 @@ class Sheet extends Control:
 			if event.pressed: view.press(event.position)
 			elif not view.drag.is_empty(): view.drop(event.position)
 			accept_event()
-		elif event is InputEventMouseMotion and not view.drag.is_empty():
-			view.drag.at = event.position
-			queue_redraw()
+		elif event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_RIGHT:
+			if view.right_press(event.position): accept_event()
+		elif event is InputEventMouseMotion:
+			view.pointer(event.position)
 
 	func _get_tooltip(at_position: Vector2) -> String:
 		return view.tooltip_at(at_position)

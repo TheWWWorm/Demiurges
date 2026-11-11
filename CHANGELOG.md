@@ -2,6 +2,23 @@
 
 Versions follow [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html) from 0.3.0 on.
 
+## 0.8.0
+
+- Etherlords: a new **Free movement** option (on by default, Gameplay settings) moves heroes at once, as many times a day as their movement points allow, in the manner of Heroes of Might and Magic. Choosing the same destination again starts the move. Computer players move their heroes the same way when the day ends, and the night then strikes castles and sends ethereal attacks. Network, hot-seat and tutorial games keep simultaneous orders. Hero portraits show the steps left for the day (such as 9/14). Pressing End Day while a hero is still walking ends the day once the move is over.
+- Etherlords: with **Smarter computer players** (on by default) computer heroes learn skills, buy spells at laboratories, refill their runes at component portals, upgrade their books with better spells and cast global spells: castle repairs, attacks on the weakest castle, summons, rituals and hero blessings. In battle they search more moves ahead.
+- Etherlords: spell shops work like the Etherlords II shop. Click a shop spell to pick it up and click a book slot to put it there; a right click buys a spell into the selected slot or gives a bought slot back, and the selection moves on to the next slot after each purchase.
+- Etherlords: the spellbook and reserve (I) open on the original laboratory panel: the book on the left, the reserve on the right with copies and runes on each spell. A double or right click moves a spell between the two.
+- Etherlords: a building's upgrade button stays visible while the upgrade is out of reach, greyed out, with the reason as its tooltip.
+- Etherlords: building effects such as smoke, sparkles and mana-node lightning no longer show through the fog of war. The `open_fog` console command also reveals the minimap, holding the left button on the minimap drags the view, and the dial buttons react only where their art is drawn, so clicks near a button's edge no longer reach its neighbour.
+- Etherlords: the global spells screen names each rune under the mouse. A right button released over a window no longer leaves the map's info panel open or the camera turning.
+- Etherlords: Esc works on the map and in battle, the End Day hotkey works, the hero screen shows the skill icons with their captions aligned, and the hero stats sit in the middle of their boxes. The `teleport` console command moves the selected hero to a cell or next to an object.
+- Autochess: carried items flash when they act (lifesteal, poison, thorns, storm, reflection, wards and more), and a larger copy of the item rises above the creature.
+- Autochess: creature health is doubled, so battles last long enough to follow.
+- Autochess: a hero out of health falls when the last bolts land and stays down.
+- Autochess: keyword abilities on creature cards explain themselves in brackets, and the whole card always fits on screen without scrolling.
+- Autochess: the computer heroes' names appear in Russian when the game's texts are Russian; Synthets show their nicknames in the standings.
+- Autochess: artifacts and spells sit under the player list, the creature tooltip no longer stays on screen after the cursor leaves, and the sound volume settings apply to Autochess.
+
 ## 0.7.1
 
 - Autochess: a creature placed on the board, bought or brought from the reserve, is summoned as in the duel: its colour's summon effect rises and the creature appears at the effect's cue. The reserve just shows a bought creature (no flash, no summon sound). Creatures summoned in battle appear the same way.

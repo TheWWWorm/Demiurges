@@ -5,6 +5,8 @@ extends RefCounted
 ## player: the loser simply leaves the map. Computer heroes gain experience and
 ## levels (with their health) but never spend skill picks: in both games only
 ## the human's level-up dialog chooses skills, so they keep their authored ones.
+## The remake option "smarter computer players" adds skills, shopping and
+## global spells (ELFirstAIEconomy).
 
 ## Winner of a strategic battle that the local player takes no part in. The
 ## pair keeps its queue order (guard or interceptor first).
@@ -49,7 +51,7 @@ static func take_artifacts(victor: Dictionary, loser: Dictionary) -> Array:
 const VERSION := 1
 ## Buildings the computer never sets out to use.
 const SKIPPED_BUILDINGS := ["Lake", "WhiteCastle", "AncientTomb", "AltarOfWar", "TownBunker", "MoveableRock", "TrainingCamp", "ReflectingBowl", "WardingStone", "Runestone1", "Runestone2"]
-const KINDS := ["monster", "mine", "cut", "node", "tower", "building", "explore", "hero"]
+const KINDS := ["monster", "mine", "cut", "node", "tower", "building", "explore", "hero", "shop"]
 const AVOIDED := 10000
 const NONE := 0x7fffffff
 const EXPLORE_LIMIT := 9
@@ -80,7 +82,9 @@ static func plan(director: ELAdventureDirector) -> void:
 	for player: int in computer_players(state):
 		if not director.is_strategy_human(player): plan_player(director, player)
 
-static func plan_player(director: ELAdventureDirector, player: int) -> void:
+## With free movement a player plans again after each round of moves; the
+## daily events (a recruit, a scripted ethereal attack) happen once a day.
+static func plan_player(director: ELAdventureDirector, player: int, daily := true) -> void:
 	var state := director.state
 	var ai := data(state, player)
 	if not ai.built:
@@ -95,10 +99,12 @@ static func plan_player(director: ELAdventureDirector, player: int) -> void:
 	ai.champion = int(champion.get("uid", -1))
 	# Fewer than two heroes: a free level-one recruit joins beside the castle.
 	# It first receives orders on the next day.
-	if heroes.size() < 2: ELGlobalSpells.summon(state, player, 1)
+	if daily and heroes.size() < 2: ELGlobalSpells.summon(state, player, 1)
+	# Remake option: skills, global spells (ELFirstAIEconomy).
+	if daily: ELFirstAIEconomy.daily(director, player)
 	# mission13: after day ten the Kinet leader may send an ethereal attack on
 	# the first player's castle (one chance in three each day).
-	if state.map.id == "mission13" and player == 2 and state.day > 10 and not champion.is_empty() and ELAdditionalBuildings._random(state) % 3 == 1:
+	if daily and state.map.id == "mission13" and player == 2 and state.day > 10 and not champion.is_empty() and ELAdditionalBuildings._random(state) % 3 == 1:
 		ELGlobalSpells.script_attack(state, player, champion, 1)
 	# Route costs only cross tiles this player has explored.
 	var closed := _close_unexplored(director, player)
@@ -190,7 +196,7 @@ static func refresh(director: ELAdventureDirector, player: int) -> void:
 		match task.kind:
 			"mine", "node": if int(item.get("owner", -1)) >= 0: continue
 			"cut", "monster": if not item.get("alive", false): continue
-			"explore", "hero": continue
+			"explore", "hero", "shop": continue
 		if task.kind != "explore" and item.is_empty(): continue
 		kept.append(task)
 	for tile: Vector2i in frontier(director, player): kept.append({"kind": "explore", "target": -1, "tile": [tile.x, tile.y]})
@@ -199,6 +205,14 @@ static func refresh(director: ELAdventureDirector, player: int) -> void:
 	for id: int in ids:
 		var item := state.object(id)
 		if item.type == "hero" and int(item.owner) >= 1 and int(item.owner) != player and item.alive and item.visible and item.get("placed", true): kept.append({"kind": "hero", "target": id})
+	# Remake option: spell shops and component portals the player has seen.
+	if ELFirstAIEconomy.applies(director):
+		var taken := {}
+		for pair: Array in ai.assigned:
+			if pair[1].get("kind") == "shop": taken[int(pair[1].target)] = true
+		for id: int in ids:
+			var item := state.object(id)
+			if ELFirstAIEconomy.is_shop(item) and not taken.has(id) and ELFog.explored(state, player, Vector2i(item.x, item.y)): kept.append({"kind": "shop", "target": id})
 	ai.tasks = kept
 
 ## Explored, unoccupied tiles beside unexplored ones, nearest the castle first
@@ -259,6 +273,7 @@ static func finished(director: ELAdventureDirector, hero: Dictionary, task: Dict
 		"mine", "node": return int(item.get("owner", -1)) == int(hero.owner)
 		"tower": return not ELFirstScenario.alive(state, int(item.get("owner", -1)))
 		"building": return not ELAdditionalBuildings.visit_problem(state, hero, item).is_empty()
+		"shop": return ELFirstAIEconomy.wants(director, hero, item) == 0
 		"explore":
 			var tile := Vector2i(task.tile[0], task.tile[1])
 			return Vector2i(hero.x, hero.y) == tile or director.grid.path(Vector2i(hero.x, hero.y), tile).is_empty()
@@ -291,6 +306,13 @@ static func cost(director: ELAdventureDirector, hero: Dictionary, role: int, tas
 			var value := square / 2 if task.kind == "node" else square / 3
 			if value >= limit or _route_cost(director, hero, item, false) == NONE: return NONE
 			return value
+		"shop":
+			# Worth a detour when there is something to buy; a hero short of
+			# runes goes sooner. Champions shop too, since they do the fighting.
+			if ELFirstAIEconomy.wants(director, hero, item) == 0: return NONE
+			var route := _route_cost(director, hero, item, true)
+			if route == NONE or route > ELFirstAIEconomy.SHOP_DAYS * maxi(1, int(hero.get("strategy_capacity", 1))): return NONE
+			return route / 2 if ELFirstAIEconomy.rune_health(state, hero) < 0.5 else route
 		"explore":
 			if role != 1: return NONE
 			var path := director.grid.path(Vector2i(hero.x, hero.y), Vector2i(task.tile[0], task.tile[1]))

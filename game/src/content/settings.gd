@@ -38,7 +38,7 @@ extends RefCounted
 ## Version 4: sharpening became Off by default (the original ground is soft);
 ## older files still on the former default (light) move to Off.
 const SETTINGS_VERSION := 4
-const SHARED := {"ambience": 0.55, "shadows": true, "soft_shadows": false, "weather": true, "helper_overlay": false, "antialiasing": -1, "sharpening": 0, "terrain_detail": false, "enhanced_water": false, "discord_activity": true, "renderer": 0, "path_tracing": false, "show_fps": false, "hardware_check": 0,
+const SHARED := {"ambience": 0.55, "shadows": true, "soft_shadows": false, "weather": true, "helper_overlay": false, "antialiasing": -1, "sharpening": 0, "terrain_detail": false, "enhanced_water": false, "discord_activity": true, "renderer": 0, "path_tracing": false, "show_fps": false, "hardware_check": 0, "free_movement": true, "smart_ai": true,
 	"window_mode": 0, "window_width": 0, "window_height": 0, "frame_rate": 0}
 const EDITION := {"music": 0.55, "effects": 0.8, "movies": 2, "blood": true, "map_tooltips": true, "autosave": true,
 	"heroes_voices": true, "ambient_sounds": true, "adventure_fast": false, "animated_objects": true,

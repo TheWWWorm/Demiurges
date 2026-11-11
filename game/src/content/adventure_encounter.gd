@@ -86,6 +86,11 @@ func _prepare_duel(state: ELAdventureSession, defender: int) -> bool:
 		if row.is_empty(): return _fail("The encounter appearance is missing: " + actor.name)
 		var color := String(row.get("Color", ""))
 		options.players.append({"faction": color, "shape": actor.shape, "kind": actor.type, "title": actor.get("title", actor.name), "level": actor.level, "health": actor.health, "cards": actor.cards.duplicate(), "skills": actor.get("skills", {}).duplicate()})
+		# The battle shows the map hero's own template (figure, face): without
+		# it every hero fought as its faction's default hero, and heroes drawn
+		# as creatures on the map (Fire Elemental X, Walking Horror X) turned
+		# into ordinary heroes.
+		if actor.type == "hero" and actor.shape.is_empty() and profile.table("HeroTemplates").has(actor.name): options.players[-1].hero = actor.name
 		# Dragon skin is remapped by difficulty for heroes; whether first-game
 		# neutral monster rows take the same path is unknown, so they keep theirs.
 		var spec := String(actor.get("specialization", "NONE"))
