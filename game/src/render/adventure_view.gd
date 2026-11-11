@@ -1230,6 +1230,8 @@ func _update_camera() -> void:
 	camera.look_at(target)
 	state.camera_zoom = view_goal.x if _script_lens and view_goal.x > 0 else zoom
 	state.camera_rotation = rad_to_deg(yaw)
+	state.camera_pitch = -rad_to_deg(pitch)
+	state.camera_scroll = Vector2(target.x / ELAdventureTerrain.CELL - 0.5, -target.z / ELAdventureTerrain.CELL - 0.5)
 	if hud != null: hud.set_view(target, yaw)
 
 func _present(data: Dictionary) -> void:
@@ -1483,6 +1485,7 @@ func _state_event(data: Dictionary) -> void:
 			following = -1
 			target = ELAdventureScene.world_position(float(data.arguments[0]), float(data.arguments[1]))
 		"ExCameraRotate": yaw_goal = deg_to_rad(float(data.arguments[0]))
+		"hero_animation": world.play_actor_clip(int(data.id), str(data.clip))
 		"ExCameraZoom":
 			var distance := clampf(float(data.arguments[0]), zoom_limits.x, zoom_limits.y)
 			_set_script_lens(distance, -1.0, data.arguments.size() > 1 and float(data.arguments[1]) != -1.0)

@@ -29,6 +29,7 @@ signal content_requested(edition: String)
 ## Duel screen Start: the match is begun (presets resolved); the view plays its rounds.
 signal duel_match_requested(match: ELDuelMatch)
 signal expedition_requested
+signal autochess_requested
 signal network_requested(lan: bool)
 signal strategy_requested(lan: bool)
 ## Round-result / duel-summary OK and Cancel.
@@ -309,6 +310,7 @@ func build(available: Dictionary, initial: String) -> bool:
 	_choice = ELGameChoice.new()
 	_choice.expedition_available = available.has("el2")
 	_choice.expedition_requested.connect(func(): expedition_requested.emit())
+	_choice.autochess_requested.connect(func(): autochess_requested.emit())
 	_choice.selected.connect(func(chosen: String):
 		edition_requested.emit(chosen)
 		use_edition(chosen))
@@ -434,6 +436,7 @@ func show_screen(target: String) -> void:
 	art.size = DESIGN
 	art.draw.connect(_draw_art)
 	canvas.add_child(art)
+	_add_wide_frame(target)
 	var definition: Dictionary = SCREENS[edition][target]
 	_pieces.clear()
 	if definition.has("under"): _add_group(definition.under, [])
@@ -501,6 +504,46 @@ static func _layer(row: Dictionary) -> int:
 		if row.masks.has("Last%d" % index): return index
 	return 2 if row.masks.has("Last") else 0
 
+# --- Widescreen frame -----------------------------------------------------------
+# Remake art: each game's main-menu frame widened to 16:9. Its middle 1032 of
+# 1376 columns cover the 4:3 design exactly (the opaque edges replace the
+# original frame's borders), the outer columns fill the window's side bars.
+
+const WIDE_FRAMES := {"el1": "res://assets/widescreen/etherlords-main-menu-frame-overlay.png",
+	"el2": "res://assets/widescreen/etherlords-ii-main-menu-frame-overlay.png"}
+## Columns of the 1376-wide art outside the 4:3 design on each side.
+const WIDE_SIDE := 172.0
+## Narrower side bars than this (design pixels) keep the plain 4:3 screen.
+const WIDE_MINIMUM := 48.0
+## Front-end screens drawn on the main-menu frame.
+const WIDE_SCREENS := ["main", "new", "load", "options", "encyclopaedia", "multiplayer", "single", "duel"]
+var _wide_frame: Control
+var _wide_texture: Texture2D
+
+func _add_wide_frame(target: String) -> void:
+	_wide_frame = null
+	if overlay() or hosted or not target in WIDE_SCREENS or not WIDE_FRAMES.has(edition): return
+	if not ResourceLoader.exists(WIDE_FRAMES[edition]): return
+	_wide_texture = load(WIDE_FRAMES[edition])
+	_wide_frame = Control.new()
+	_wide_frame.name = "WideFrame"
+	_wide_frame.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_wide_frame.size = DESIGN
+	_wide_frame.draw.connect(_draw_wide_frame)
+	canvas.add_child(_wide_frame)
+
+func _draw_wide_frame() -> void:
+	if _wide_texture == null or scale_factor <= 0.0: return
+	var side := (size.x / scale_factor - DESIGN.x) * 0.5
+	if side < WIDE_MINIMUM: return
+	var source := Vector2(_wide_texture.get_size())
+	var inner := source.x - 2.0 * WIDE_SIDE
+	var outer := minf(side, WIDE_SIDE * DESIGN.y / source.y)
+	_wide_frame.draw_texture_rect_region(_wide_texture, Rect2(0, 0, DESIGN.x, DESIGN.y), Rect2(WIDE_SIDE, 0, inner, source.y))
+	# Between 4:3 and 16:9 the outer columns are narrowed to the side bars.
+	_wide_frame.draw_texture_rect_region(_wide_texture, Rect2(-outer, 0, outer, DESIGN.y), Rect2(0, 0, WIDE_SIDE, source.y))
+	_wide_frame.draw_texture_rect_region(_wide_texture, Rect2(DESIGN.x, 0, outer, DESIGN.y), Rect2(source.x - WIDE_SIDE, 0, WIDE_SIDE, source.y))
+
 func _draw_art() -> void:
 	# Over a battle the dim covers the whole window (see _draw), not only the 4:3 art.
 	if not overlay(): art.draw_rect(Rect2(Vector2.ZERO, DESIGN), Color.BLACK)
@@ -511,6 +554,7 @@ func _layout() -> void:
 	scale_factor = minf(size.x / DESIGN.x, size.y / DESIGN.y)
 	canvas.scale = Vector2(scale_factor, scale_factor)
 	canvas.position = ((size - DESIGN * scale_factor) * 0.5).floor()
+	if is_instance_valid(_wide_frame): _wide_frame.queue_redraw()
 	if _choice != null:
 		_choice.size = _choice.get_combined_minimum_size()
 		_choice.scale = Vector2(scale_factor, scale_factor)
@@ -847,6 +891,12 @@ func play_music(name: String) -> bool:
 	_music_path = path
 	return true
 
+## Music from a file outside the archives (a custom map's own track).
+func play_music_file(path: String, stream: AudioStream) -> void:
+	if _audio == null or stream == null: return
+	_play(stream, "music")
+	_music_path = path
+
 ## One interface sound from the sound archive at the effects volume.
 func play_sound(path: String) -> bool:
 	var stream := ELAudio.sound(profile, path) if _audio != null else null
@@ -1167,7 +1217,7 @@ func _first_scenario() -> Dictionary:
 
 ## Scenario header fields from the original map document.
 func _map_header(map_id: String) -> Dictionary:
-	var path := profile.file("Maps/" + map_id + ".map")
+	var path := profile.file(ELSingleScenario.map_path(map_id) + ".map")
 	if path.is_empty(): return {}
 	var head := FileAccess.get_file_as_bytes(path).slice(0, 8192).get_string_from_ascii()
 	var result := {}

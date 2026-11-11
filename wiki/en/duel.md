@@ -18,6 +18,8 @@ The editor changes a preset. Everything costs resources, and the total must fit 
 - Etherlords II: resource levels 1–3, hero levels 1–13. The bag holds 16 spells with at most 4 copies of one.
 - Up to five skills and five artifacts.
 
+In Etherlords II, **Randomize** beside the preset name builds a random hero the way the community's random deck generator does. It picks a random race, skills and an artifact, and keeps the hero level you set. It fills the deck mostly with cantrips and common spells and the reserve with rare, unique and colourless spells, mixing every colour. The preset uses resource level 6, which allows any colour without a budget. Press it again for another deck, then save it like any other preset.
+
 ## The match
 
 Set the number of rounds (1–99, all of them are played) and the arena, or **Random** for a new arena every round. A coin decides who attacks first in each round.

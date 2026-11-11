@@ -3,6 +3,8 @@ extends RefCounted
 ## Bounded Lua 4 bytecode execution for original campaign and arena scripts.
 ## Adapted semantics from Lua 4.0 lvm.c; this is a new Godot implementation.
 ## No filesystem, shell, dynamic source execution, or implicit engine bindings.
+## A custom map's plain-text scripts are compiled when loaded (compile_source);
+## scripts themselves still cannot compile or run text.
 class Table extends RefCounted:
 	var values: Dictionary = {}
 class Closure extends RefCounted:
@@ -41,8 +43,16 @@ func bind(name: String, function: Callable) -> void:
 	bindings[name] = function
 
 func load_script(bytes: PackedByteArray, name: String) -> bool:
+	var prototype: Dictionary
+	if not bytes.is_empty() and bytes[0] != 27:
+		# Source text (custom maps); compiled chunks start with ESC "Lua".
+		var compiled := compile_source(bytes, name)
+		if compiled.is_empty() or compiled[0] != 27:
+			error = compiled.get_string_from_ascii() if not compiled.is_empty() else name + ": the script does not compile."
+			return false
+		bytes = compiled
 	var reader := ELLuaChunk.new()
-	var prototype := reader.parse(bytes, name)
+	prototype = reader.parse(bytes, name)
 	if prototype.is_empty():
 		error = name + ": " + reader.error
 		return false
@@ -53,6 +63,25 @@ func load_script(bytes: PackedByteArray, name: String) -> bool:
 	_begin()
 	_invoke(closure, [])
 	return error.is_empty()
+
+## The Lua 4.0.1 compiler (native/el_lua.c), where the platform has it.
+static var native_compiler := ClassDB.class_exists(&"ELNativeLua")
+
+## A custom map's script text as a binary chunk; the error message as text
+## (not starting with ESC) when it does not compile. Uses the Lua 4.0.1
+## compiler where the platform has it, else ELLuaCompiler.
+static func compile_source(source: PackedByteArray, name: String) -> PackedByteArray:
+	if native_compiler:
+		# The chunk's strings are Windows-1251 bytes, as the originals'.
+		if ELLuaCompiler.valid_utf8(source): source = ELLuaCompiler.to_cp1251(source.get_string_from_utf8())
+		var result: PackedByteArray = ClassDB.class_call_static(&"ELNativeLua", &"compile", source, name.to_utf8_buffer())
+		if result.is_empty() or result[0] == 27: return result
+		# Lua's message is Windows-1251 text like the source.
+		return ELLuaCompiler.decode(result).to_utf8_buffer()
+	var compiler := ELLuaCompiler.new()
+	var prototype := compiler.compile(source, name)
+	if prototype.is_empty(): return compiler.error.to_utf8_buffer()
+	return ELLuaCompiler.encode_chunk(prototype)
 
 func invoke(name: String, arguments: Array = []) -> Array:
 	_begin()
@@ -187,7 +216,8 @@ func _execute(function: Closure, arguments: Array) -> Array:
 				_table_set(stack[size - a], stack[size - a + 1], stack[-1])
 				stack.resize(size - b)
 			21:
-				for i in b: _table_set(stack[size - b - 1], float(a * 64 + i + 1), stack[size - b + i])
+				# Lua 4.0 flushes list items in groups of 62 (MAXSTACK / 4).
+				for i in b: _table_set(stack[size - b - 1], float(a * 62 + i + 1), stack[size - b + i])
 				stack.resize(size - b)
 			22:
 				for i in range(u - 1, -1, -1): _table_set(stack[size - 2 * u - 1], stack[size - 2 * u + i * 2], stack[size - 2 * u + i * 2 + 1])

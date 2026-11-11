@@ -1,0 +1,12 @@
+[configuration]
+
+entry_symbol = "el_lua_init"
+compatibility_minimum = "4.7"
+
+[libraries]
+
+linux.x86_64 = "res://native/bin/libel_lua.linux.x86_64.so"
+windows.x86_64 = "res://native/bin/el_lua.windows.x86_64.dll"
+macos = "res://native/bin/libel_lua.macos.dylib"
+android.arm64 = "res://native/bin/libel_lua.android.arm64.so"
+android.x86_64 = "res://native/bin/libel_lua.android.x86_64.so"

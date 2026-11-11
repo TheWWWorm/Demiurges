@@ -22,7 +22,7 @@ These work as in the games: autosave, faster map movement, animated objects, amb
 | Path-traced lighting | Real shadows, sky light, light bounced between surfaces, and light from fire and spells, on maps and in battles. Needs Forward+ and a graphics card with ray tracing. It costs about 2–3 ms a frame on a fast card. **F7** switches it during play. The line under it says whether your computer can use it. |
 | Show light only | Shows the traced light without textures (**Shift+F7**). |
 | Anti-aliasing | Smoother edges in 3D: automatic, off, 2× or 4×. |
-| Sharpening | Sharpens 3D textures. Choose off, light (default), or strong. |
+| Sharpening | Sharpens 3D textures. Choose off (default), light, or strong. Off matches the soft textures of the original games. |
 | Shadows | Shadows of figures in battles and of trees, rocks and buildings on maps. |
 | Soft shadows | Softer shadow edges. Off at first. |
 | Terrain detail | Subtle texture and relief on map ground and fine grain on battle ground. Off at first. |

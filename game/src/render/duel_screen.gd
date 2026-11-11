@@ -832,6 +832,22 @@ func build_editor() -> void:
 	name_edit.text_changed.connect(func(_t: String): update_editor())
 	menu.canvas.add_child(name_edit)
 	menu.labels["name"] = name_edit
+	# Second game: a random deck (the community generator's recipe) beside the
+	# name, when the editor may use the sandbox resource level.
+	if not el1() and not edit.view_only and _editor_resource_levels().y >= ELDuelCosts.EL2_SANDBOX_LEVEL:
+		var random := FlatText.new()
+		random.menu = menu
+		random.framed = true
+		random.font_size = 14
+		random.caption = ELRemakeText.t("Randomize", profile())
+		random.tooltip_text = "A random hero, skills, artifact, deck and reserve of every colour, as in the community's random deck generator. The hero level stays; the resource level becomes the sandbox (any colour, no budget)."
+		var width := 132.0
+		name_edit.size.x -= width + 8.0
+		random.position = Vector2(name_edit.position.x + name_edit.size.x + 8.0, name_edit.position.y)
+		random.size = Vector2(width, name_edit.size.y)
+		random.pressed.connect(random_preset)
+		menu.canvas.add_child(random)
+		menu.buttons["random_deck"] = random
 	_text("EHSaveHero" if el1() else "EPHdrSave", null, ELFrontMenu.TITLE_INK, HORIZONTAL_ALIGNMENT_LEFT)
 	var ok := _button("EHOK" if el1() else "EPOK", save_editor)
 	if ok != null: menu.buttons["editor_ok"] = ok
@@ -851,6 +867,22 @@ func build_editor() -> void:
 	tips.blocked = message_open
 	menu.canvas.add_child(tips)
 	tips.setup(profile())
+
+## Replaces the edited preset with a random one (ELRandomDeck) at the same
+## hero level; the typed name stays, an empty one becomes "Random deck".
+func random_preset() -> void:
+	if edit.view_only or el1(): return
+	var preset := editor_preset()
+	var typed := name_edit.text.strip_edges() if is_instance_valid(name_edit) else String(preset.get("name", ""))
+	var fresh := ELRandomDeck.make(profile(), int(preset.level), typed if not typed.is_empty() else ELRemakeText.t("Random deck", profile()))
+	for key: String in ["name", "faction", "resource_level", "level", "specialization", "skills", "cards", "runes", "reserve", "artifacts", "deck"]:
+		preset[key] = fresh[key]
+	edit.since_race = _race_contents(preset)
+	edit.slot = -1
+	edit.item = -1
+	edit.art = -1
+	edit.owned = -1
+	menu.show_screen("duel_editor")
 
 func _race_controls(left: String, right: String) -> void:
 	_button(left, change_race.bind(-1))
@@ -1462,20 +1494,17 @@ func _build_el2_editor() -> void:
 	_auto("EPIncHeroLevel", change_hero_level.bind(1))
 	_value("hero_level", "", _rect("EPDigLevel"))
 	_value("health", "", _rect("EPDigLife"))
-	var resource_header := _text("EPHdrResLev", null, ELFrontMenu.TITLE_INK, HORIZONTAL_ALIGNMENT_RIGHT)
-	if resource_header != null:
-		var bounds := _rect("EPHdrResLev")
-		var font := resource_header.get_theme_font("font")
-		var size_px := resource_header.get_theme_font_size("font_size")
-		var width := font.get_string_size(resource_header.text, HORIZONTAL_ALIGNMENT_LEFT, -1, size_px).x
-		if width > bounds.size.x:
-			resource_header.add_theme_font_size_override("font_size", maxi(1, floori(size_px * bounds.size.x / width)))
-		resource_header.size = bounds.size
+	_fitted_header("EPHdrResLev")
 	_auto("EPDecResLevel", change_resource_level.bind(-1))
 	_auto("EPIncResLevel", change_resource_level.bind(1))
 	_value("resource_level", "", _rect("EPDigResLev"))
-	_text("EPHdrSelectedItem", null, ELFrontMenu.TITLE_INK, HORIZONTAL_ALIGNMENT_LEFT)
-	_text("EPHdrPresetCost", null, ELFrontMenu.TITLE_INK, HORIZONTAL_ALIGNMENT_LEFT)
+	# The cost rows end at their resource cells, clear of the panel's left
+	# edge and the tabs (the original captions begin on the tab border).
+	var costs := [_fitted_header("EPHdrSelectedItem", 14.0), _fitted_header("EPHdrPresetCost", 14.0)]
+	if costs.all(func(label: Label): return label != null):
+		# One size for both rows.
+		var smallest := mini(costs[0].get_theme_font_size("font_size"), costs[1].get_theme_font_size("font_size"))
+		for label: Label in costs: label.add_theme_font_size_override("font_size", smallest)
 	# Rows: budget (resource level), selected item, preset cost; one column per resource.
 	var resources := ELDuelCosts.resources(profile())
 	for i in resources.size():
@@ -1504,6 +1533,23 @@ func _build_el2_editor() -> void:
 		tab.pressed.connect(select_tab.bind(pair[1]))
 	if int(edit.tab) == 0: _build_el2_spells()
 	else: _build_el2_misc()
+
+## A caption right-aligned in its control, shrunk to fit; `inset` keeps it
+## that far from the control's left edge.
+func _fitted_header(control: String, inset := 0.0) -> Label:
+	var label := _text(control, null, ELFrontMenu.TITLE_INK, HORIZONTAL_ALIGNMENT_RIGHT)
+	if label == null: return null
+	var bounds := _rect(control)
+	bounds.position.x += inset
+	bounds.size.x = maxf(1.0, bounds.size.x - inset)
+	var font := label.get_theme_font("font")
+	var size_px := label.get_theme_font_size("font_size")
+	var width := font.get_string_size(label.text, HORIZONTAL_ALIGNMENT_LEFT, -1, size_px).x
+	if width > bounds.size.x:
+		label.add_theme_font_size_override("font_size", maxi(1, floori(size_px * bounds.size.x / width)))
+	label.position = bounds.position
+	label.size = bounds.size
+	return label
 
 func _build_el2_spells() -> void:
 	for control: String in ["EPHdrReserveSpells", "EPHdrDeck", "EPHdrAllSpells"]: _text(control)
@@ -1828,6 +1874,8 @@ class FlatText extends BaseButton:
 	var menu: ELFrontMenu
 	var caption := ""
 	var font_size := 17
+	## A thin outline, for a stand-alone button.
+	var framed := false
 	var active := false:
 		set(value):
 			active = value
@@ -1842,6 +1890,9 @@ class FlatText extends BaseButton:
 		var hover := get_draw_mode() in [DRAW_HOVER, DRAW_HOVER_PRESSED]
 		var color := ELFrontMenu.INK_HOVER if active or hover else ELFrontMenu.TITLE_INK
 		if active: draw_rect(Rect2(Vector2.ZERO, size), Color(0.85, 0.7, 0.4, 0.14))
+		if framed:
+			draw_rect(Rect2(Vector2.ZERO, size), Color(0, 0, 0, 0.3))
+			draw_rect(Rect2(Vector2(0.5, 0.5), size - Vector2.ONE), Color(0.85, 0.7, 0.4, 0.55 if hover else 0.3), false, 1.0)
 		var text_size := menu.arial.get_string_size(caption, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size)
 		var at := Vector2((size.x - text_size.x) * 0.5, (size.y - text_size.y) * 0.5 + menu.arial.get_ascent(font_size))
 		draw_string(menu.arial, at + Vector2(1, 1), caption, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, Color(0, 0, 0, 0.8))

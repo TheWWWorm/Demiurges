@@ -15,6 +15,10 @@ extends RefCounted
 ## only the size (Sort1) and name (Mission) sorts, which never clear; three
 ## difficulties; name and description only; no row is chosen when the screen
 ## opens, so Start stays disabled until one is clicked (rows: size icon, name).
+## Remake additions on the second game's screen: custom maps (ELCustomMaps)
+## follow the shipped ones, with their picture above the description and
+## their own music while chosen; Import map adds a map archive and Maps folder
+## opens the folder maps can be copied into.
 
 ## First game: rows of the original list, 26 px apart from (57,125) of the
 ## 800 layout, 317 px wide.
@@ -45,6 +49,12 @@ var list: MissionList
 var slots: ELSingleSlots
 ## The human's slot while the blazon choice is open.
 var kept_slot := 0
+## Custom map whose music plays now ("" for none).
+var music_map := ""
+var _import_dialog: FileDialog
+## Shown in the description box instead of the chosen map's text (an import's
+## result), until another row is chosen.
+var notice := ""
 
 func _init(owner: ELFrontMenu) -> void:
 	menu = owner
@@ -147,6 +157,12 @@ func build_screen() -> void:
 	_button("SMScrollRD", func(): menu.scroll_text(3))
 	_button("SMBack", func(): menu.go_back())
 	_button("SMStart", start)
+	music_map = ""
+	notice = ""
+	if second():
+		# Maps copied into a maps folder while the game runs appear on reopening.
+		profile().refresh_custom_maps()
+		_build_map_buttons()
 	# Showing the screen rebuilds the list. The first game chooses its first row
 	# the second game chooses none (selects -1). Back from the
 	# blazon choice keeps the chosen map and the human's slot.
@@ -185,7 +201,21 @@ func details_text() -> String:
 func _fill_description(entry: Dictionary) -> void:
 	var box := menu.text_box
 	box.clear()
+	if not notice.is_empty():
+		box.add_text(notice)
+		return
+	if entry.get("custom", false):
+		var picture := ELCustomMaps.picture(profile(), str(entry.id))
+		if picture != null:
+			var width := box.size.x - 24.0
+			var height := minf(width * picture.get_height() / maxf(picture.get_width(), 1.0), box.size.y * 0.6)
+			box.add_image(picture, roundi(height * picture.get_width() / maxf(picture.get_height(), 1.0)), roundi(height))
+			box.add_text(char(10) + char(10))
 	var description := menu.text(str(entry.description)).strip_edges() if not entry.is_empty() and not str(entry.get("description", "")).is_empty() else ""
+	if not entry.get("playable", true):
+		box.push_color(ELFrontMenu.TITLE_INK)
+		box.add_text(ELRemakeText.t("This map came without its scenario file (.smp), which the remake needs to play it.", profile()) + char(10) + char(10))
+		box.pop()
 	box.add_text(description)
 	if second() or entry.is_empty(): return
 	for pair: Array in detail_pairs(entry):
@@ -215,8 +245,9 @@ func refresh() -> void:
 	if menu.text_box != null:
 		_fill_description(entry)
 		menu.text_box.get_v_scroll_bar().value = 0
+	_sync_music(entry)
 	if slots != null and slots.entry.get("id", "") != entry.get("id", ""): slots.show_entry(entry)
-	if menu.buttons.has("SMStart"): menu.buttons.SMStart.disabled = entry.is_empty()
+	if menu.buttons.has("SMStart"): menu.buttons.SMStart.disabled = entry.is_empty() or not entry.get("playable", true)
 	if list != null:
 		list.reveal(shown.find(entry))
 		list.queue_redraw()
@@ -245,6 +276,73 @@ func choose_row(index: int) -> void:
 	var shown := rows()
 	if index < 0 or index >= shown.size(): return
 	selected = shown[index].id
+	notice = ""
+	refresh()
+
+## A chosen custom map plays its own music; choosing another map returns to
+## the interface music.
+func _sync_music(entry: Dictionary) -> void:
+	var wanted := str(entry.id) if second() and entry.get("custom", false) and not ELCustomMaps.music_path(profile(), str(entry.id)).is_empty() else ""
+	if wanted == music_map: return
+	music_map = wanted
+	if wanted.is_empty():
+		menu.play_music("interface")
+		return
+	menu.play_music_file(ELCustomMaps.music_path(profile(), wanted), ELCustomMaps.music(profile(), wanted))
+
+## Import map and Maps folder, between Back and Start.
+func _build_map_buttons() -> void:
+	var back := _rect("SMBack")
+	var go := _rect("SMStart")
+	var back_button: Control = menu.buttons.get("SMBack")
+	var start_button: Control = menu.buttons.get("SMStart")
+	if back_button != null: back = Rect2(back_button.position, back_button.size)
+	if start_button != null: go = Rect2(start_button.position, start_button.size)
+	if back.size.x <= 0 or go.size.x <= 0: return
+	var left := back.end.x + 6
+	var right := go.position.x - 6
+	var actions: Array = []
+	if not OS.has_feature("web"): actions.append(["Import map…", _open_import])
+	if not OS.has_feature("web") and not OS.has_feature("mobile"): actions.append(["Maps folder", func(): OS.shell_open(ELCustomMaps.user_folder())])
+	if actions.is_empty() or right - left < 60: return
+	var width := (right - left) / actions.size()
+	for i in actions.size():
+		var button := ELDuelScreen.FlatText.new()
+		button.menu = menu
+		button.caption = ELRemakeText.t(str(actions[i][0]), profile())
+		button.font_size = 13
+		button.position = Vector2(left + i * width, back.position.y)
+		button.size = Vector2(width, back.size.y)
+		button.tooltip_text = ELRemakeText.t("Custom maps made with the map editor: a .zip with the map's .smp, .sbm and .scp files, or those files copied into the maps folder.", profile())
+		button.pressed.connect(actions[i][1])
+		menu.canvas.add_child(button)
+		menu.buttons["MapImport%d" % i] = button
+
+func _open_import() -> void:
+	if _import_dialog == null or not is_instance_valid(_import_dialog):
+		_import_dialog = FileDialog.new()
+		_import_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
+		_import_dialog.access = FileDialog.ACCESS_FILESYSTEM
+		_import_dialog.use_native_dialog = true
+		if not OS.has_feature("mobile"): _import_dialog.filters = PackedStringArray(["*.zip ; " + ELRemakeText.t("Custom map archive", profile())])
+		_import_dialog.file_selected.connect(import_map)
+		menu.add_child(_import_dialog)
+	_import_dialog.popup_centered_ratio(0.7)
+
+## Imports a custom map archive and chooses its map.
+func import_map(path: String) -> void:
+	var result := ELCustomMaps.import_zip(path)
+	profile().refresh_custom_maps()
+	var imported: Array = result.maps
+	if not str(result.error).is_empty() or imported.is_empty():
+		selected = ""
+		notice = ELRemakeText.t(str(result.error), profile())
+		refresh()
+		return
+	notice = ""
+	size_filter = ELSingleScenario.ALL_SIZES
+	selected = str(imported[0])
+	if list != null: list.reveal(rows().map(func(entry: Dictionary): return entry.id).find(selected))
 	refresh()
 
 func start() -> void:

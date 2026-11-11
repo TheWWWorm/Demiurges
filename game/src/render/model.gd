@@ -36,30 +36,50 @@ var _special := false
 var _special_waiting := false
 var _rng := RandomNumberGenerator.new()
 
+## Reads and parses a model's figures and animation archive once per
+## profile (shared by every figure of it). Returns "" or the error.
+static func prepare(profile: ELProfile, model: String) -> String:
+	var template := ELArchive.key(model)
+	if profile.model_resources.has(template): return ""
+	var package := ELArchive.from_bytes(profile.figure(template + ".mod"))
+	if not package.error.is_empty(): return template + ": " + package.error
+	var hierarchy := ELFigure.hierarchy(package.read(template))
+	var parsed_figures := {}
+	var meshes := {}
+	for link: Array in hierarchy:
+		var parsed := ELFigure.parse(package.read(link[0]))
+		if not parsed.is_empty():
+			parsed_figures[link[0]] = parsed
+			meshes["base/" + link[0]] = ELFigure.mesh(parsed)
+	var animations: ELArchive
+	var animation_bytes := profile.figure(template + ".anm")
+	if ELArchive.is_archive(animation_bytes):
+		animations = ELArchive.from_bytes(animation_bytes)
+	profile.model_resources[template] = {"links": hierarchy, "figures": parsed_figures,
+		"meshes": meshes, "animations": animations, "clips": {},
+		"timing": animation_table(profile.read("animdb", template + ".adb"))}
+	return ""
+
+## Decodes a clip's tracks for the parts named in `links` (pure data work:
+## a loading screen runs it on worker threads).
+static func decode_clip(animations: ELArchive, name: String, links: Array) -> Dictionary:
+	var names := {}
+	for link: Array in links: names[link[0]] = true
+	var arc := ELArchive.from_bytes(animations.read(name))
+	var tracks := {}
+	for part: String in arc.entries:
+		if names.has(part):
+			var decoded := ELFigure.track(arc.read(part))
+			if not decoded.is_empty():
+				tracks[part] = decoded
+	return tracks
+
 func build(data: ELProfile, model: String, texture_name: String, secondary_texture := "", wave_texture := "") -> bool:
 	set_process(false)
 	profile = data
 	template = ELArchive.key(model)
-	if not profile.model_resources.has(template):
-		var package := ELArchive.from_bytes(profile.figure(template + ".mod"))
-		if not package.error.is_empty():
-			error = template + ": " + package.error
-			return false
-		var hierarchy := ELFigure.hierarchy(package.read(template))
-		var parsed_figures := {}
-		var meshes := {}
-		for link: Array in hierarchy:
-			var parsed := ELFigure.parse(package.read(link[0]))
-			if not parsed.is_empty():
-				parsed_figures[link[0]] = parsed
-				meshes["base/" + link[0]] = ELFigure.mesh(parsed)
-		var animations: ELArchive
-		var animation_bytes := profile.figure(template + ".anm")
-		if ELArchive.is_archive(animation_bytes):
-			animations = ELArchive.from_bytes(animation_bytes)
-		profile.model_resources[template] = {"links": hierarchy, "figures": parsed_figures,
-			"meshes": meshes, "animations": animations, "clips": {},
-			"timing": animation_table(profile.read("animdb", template + ".adb"))}
+	error = prepare(profile, model)
+	if not error.is_empty(): return false
 	var resources: Dictionary = profile.model_resources[template]
 	var links: Array = resources.links
 	figures = resources.figures

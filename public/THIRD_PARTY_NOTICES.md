@@ -23,6 +23,11 @@ are a new Godot adaptation informed by Lua 4.0's `lundump.c`, `lopcodes.h`, and
 not the original Lua runtime. The original permission notice is included in
 `licenses/Lua-4.0.txt`. Reference source: https://www.lua.org/ftp/lua-4.0.tar.gz .
 
+The custom-map script compiler `game/native/el_lua.c` builds the unmodified Lua 4.0.1
+parser and code generator in `game/native/lua40/` (copyright (C) 1994–2000 TeCGraf,
+PUC-Rio; permission notice in `game/native/lua40/COPYRIGHT` and `licenses/Lua-4.0.txt`).
+`src/content/lua_compiler.gd` is a GDScript adaptation of the same compiler.
+
 ## Bink movie decoder
 
 `src/content/bink.gd` and `src/content/bink_audio.gd` are GDScript ports of the

@@ -1127,6 +1127,12 @@ func _execute(command: Dictionary) -> void:
 		"FinishSound":
 			ELSecondAmbience.cancel_sound(state, first)
 			_finish_command()
+		"StartLight":
+			ELSecondAmbience.start_light(state, args)
+			_finish_command()
+		"FinishLight":
+			ELSecondAmbience.finish_light(state, first)
+			_finish_command()
 		"OrientEffectByObject":
 			ELSecondAmbience.orient_effect(state, first, args[1] if args.size() > 1 else null)
 			_finish_command()

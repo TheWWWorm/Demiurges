@@ -127,7 +127,7 @@ static func set_mode(profile: ELProfile, kind: String) -> void:
 
 ## GUID in a map document header (<id>{...}</id>).
 static func map_guid(profile: ELProfile, map_id: String) -> String:
-	return _header_tag(profile.file("Maps/" + map_id + ".map"), "<id>\\s*(\\{[^<]*\\})\\s*</id>").to_upper()
+	return _header_tag(profile.file(ELSingleScenario.map_path(map_id) + ".map"), "<id>\\s*(\\{[^<]*\\})\\s*</id>").to_upper()
 
 static func _header_tag(file: String, pattern: String) -> String:
 	var handle := FileAccess.open(file, FileAccess.READ) if not file.is_empty() else null

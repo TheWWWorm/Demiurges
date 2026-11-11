@@ -108,7 +108,8 @@ static func chunk_path(name: String) -> String:
 func _open(name: String, side: int) -> Dictionary:
 	var d := duel()
 	var bytes: PackedByteArray = fixtures.get(chunk_path(name), PackedByteArray())
-	if bytes.is_empty() and not name.strip_edges().is_empty(): bytes = d.profile.read("scripts", chunk_path(name))
+	# A custom map's creature scripts are text files beside the map.
+	if bytes.is_empty() and not name.strip_edges().is_empty(): bytes = d.profile.script_bytes(name)
 	if bytes.is_empty():
 		notes.append("Battle script %s is not in the scripts archive; skipped." % name)
 		return {}

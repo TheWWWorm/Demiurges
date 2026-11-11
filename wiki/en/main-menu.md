@@ -11,7 +11,7 @@ From the Wiki, open a creature's page to [play its attacks, death, and other ani
 ## What the menu offers
 
 - **Etherlords**: **New Game** (Duel, Campaign, Single Mission), **Load Game**, **Options**, **Hall of Fame**, **Credits** and **Quit**. See [Duel](duel).
-- **Etherlords II**: **Single** (Tutorial, Duel, Campaign, Mission), **Multiplayer** ([network and hot seat duels](duel)), **Options**, **Encyclopedia**, **Credits** and **Quit**.
+- **Etherlords II**: **Single** (Tutorial, Duel, Campaign, Mission, which also lists [custom maps](custom-maps)), **Multiplayer** ([network and hot seat duels](duel)), **Options**, **Encyclopedia**, **Credits** and **Quit**. With Etherlords II installed, the remake adds [Autochess](autochess) beside the game choice.
 
 ## Saves
 

@@ -2,6 +2,24 @@
 
 Versions follow [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html) from 0.3.0 on.
 
+## 0.7.0
+
+- Etherlords II has an Autochess mode on the main menu: nine heroes share one pool of 33 creature lines (Spawns, Wheelers, Huntresses and Ticks among them), evolve three copies into stronger forms and fight real-time battles on the original battlefields. The last hero standing wins.
+- Creature health, attack and defense follow the original Power and Toughness. First strike, regeneration, poison and other abilities are adapted to real-time battles. Six alliances reward deploying different lines of the same faction or trait.
+- Neutral rounds award a choice of Etherlords II enchantments and artifacts in five tiers, each given to a single creature.
+- Play against eight computer heroes with a saved single-player tournament, or online by address with computer heroes filling empty seats.
+- The shop, reserves, evolution notices and damage list show the creatures' own animated models; offers that complete an evolution glow, and every creature carries its stars, health number and bar. The heroes watch from the sideline, a line of battlefield fire marks the deployment edge, and the standings show each hero's portrait.
+- Shop actions, evolutions, level-ups and battle results play the original interface sounds. The original hand cursor appears over creatures that can be moved. A loading screen prepares every creature, hero and battlefield before the Autochess lobby opens, so choosing a hero, buying, hovering or starting a battle does not pause the game.
+- Textures, models and animations decode in parallel, and compiled decoders read them on every platform: textures decode about 14 times faster and packed animations about 45 times faster, and opening Autochess takes about 5 seconds instead of 40.
+- Newly bought creatures arrive with their summon animation, glow and sound. Creatures that cast in battle show their original spell effects, and every creature stands still once a battle ends. Offers, reserve slots and stars use one rarity colour per price tier, and the hero portraits are framed on the face with softer light. Refresh moved to R, so D pans the camera.
+- In duels, several Haste creatures summoned together all step forward to attack, and a creature that uses an ability on arrival finishes its summon first. Casts, artifacts and abilities wait for the effects before them.
+- On first start the game checks whether Vulkan runs and switches to Forward+ if it does, then measures the GPU and turns on shadows, terrain detail and enhanced water when it can keep 60 frames per second. Pressing F7 without Vulkan explains how to enable path tracing.
+- The Etherlords II duel editor has a **Randomize** button. Like the community's random deck generator, it builds a random race, skills, artifact, deck and reserve that mix every colour, at the chosen hero level and resource level 6.
+- Etherlords II plays custom maps made with the map editor. Maps in the game's `Maps\Custom` folder or added with **Import map…** (a `.zip`) are listed under Single → Mission, with their picture and music. Their plain-text Lua scripts and creature battle scripts are compiled with the original Lua 4.0 compiler when the map starts. Map creatures can carry artifacts and keys, artifacts a script creates can be handed out again later, and the original's remaining map commands (hero animations, point lights, camera and command-queue queries) work. Saves refuse to load when their custom map is missing or has changed. Script tables built from long lists now get every entry, in shipped scripts too.
+- On wide screens the main menus of both games fill the whole window: each game's menu frame and background continue into the side bars (narrowed to fit between 4:3 and 16:9). A 4:3 window keeps the original screen.
+- Sharpening is now Off by default, so the 3D ground stays as soft as in the original games; settings still on the former default switch to Off once. Light and Strong remain in the graphics settings.
+- A new Display page in the remake settings selects window, borderless or exclusive full screen, the window resolution, and the frame rate: V-Sync at the display's refresh rate, a cap up to 360 frames per second, or unlimited.
+
 ## 0.6.4
 
 - Spell clicks stay responsive as the hand shifts after a cast. Delayed phase playback preserves a spell selected in the current phase.

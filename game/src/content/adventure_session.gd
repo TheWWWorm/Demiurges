@@ -20,6 +20,12 @@ var seed_value := 212
 var camera_zoom := 40.0
 var camera_rotation := 0.0
 var camera_locked := false
+## The view's pitch in degrees and the cell it centres (ExCameraGetPitch /
+## ExCameraGetScroll), kept current by the view.
+var camera_pitch := 0.0
+var camera_scroll := Vector2.ZERO
+## ExSetRepeatControlFlag: kept for the script, no effect in the remake.
+var repeat_control := false
 ## Mission music fades (in, out), read and written by scripts; second game:
 ## initialised from settings.ini MusicThemeFadeIn/Out.
 var theme_fade := Vector2(1.0, 1.0)
@@ -31,6 +37,10 @@ var outcome := ""
 ## First-game castles, campaign mode and chapter flags (ELFirstScenario).
 var scenario: Dictionary = {}
 var colorless_level := 0
+## Second game: artifacts ExCreateArtifact made this mission (CustomN name ->
+## definition). A template outlives its copies, so a script may remove the
+## new artifact and hand it out again later.
+var artifact_templates: Dictionary = {}
 var explored := PackedByteArray()
 ## Guard zones, set by the director (second-game ExCheckIntercepts).
 var interception: ELInterception
@@ -90,7 +100,7 @@ func start(source: ELAdventureMap, level := 0, seed_number := 212, scenario_scri
 	map = source
 	difficulty = clampi(level, 0, 4)
 	seed_value = seed_number
-	script_name = scenario_script if not scenario_script.is_empty() else "Maps/" + map.id
+	script_name = scenario_script if not scenario_script.is_empty() else ELSingleScenario.map_path(map.id)
 	error = ""
 	day = 0 if map.profile.id == "el2" else 1
 	income_day = 0
@@ -98,6 +108,7 @@ func start(source: ELAdventureMap, level := 0, seed_number := 212, scenario_scri
 	main_hero = -1
 	outcome = ""
 	colorless_level = 0
+	artifact_templates = {}
 	explored.resize(map.width * map.height)
 	explored.fill(0)
 	fog = {}
@@ -131,7 +142,7 @@ func start(source: ELAdventureMap, level := 0, seed_number := 212, scenario_scri
 				object.health = int(mob.attrs.get("Hp", 10))
 				object.base_ap = int(mob.attrs.get("AP", 0))
 				object.ap = object.base_ap
-				object.title = map.profile.text(mob.attrs.get("ElkName", placed.name))
+				object.title = _hero_title(str(mob.attrs.get("ElkName", "")), placed.name)
 				object.specialization = mob.attrs.get("Spec", "NONE")
 				object.battle_script = mob.attrs.get("Script", "")
 				var runes: Array[int] = []
@@ -150,7 +161,7 @@ func start(source: ELAdventureMap, level := 0, seed_number := 212, scenario_scri
 				object.level = int(template.get("Level", 1))
 				var growth := int(template.get("HealthIncrease", 3))
 				object.health = int(template.get("BaseHealth", 7)) + object.level * growth
-				object.title = map.profile.text(str(template.get("ELKName", placed.name)))
+				object.title = _hero_title(str(template.get("ELKName", "")), placed.name)
 				object.specialization = template.get("Specialization", "NONE")
 				object.cards = ELCatalog.deck(map.profile, str(template.get("StartDeck", "")))
 				object.skills = ELHeroSkills.from_template(map.profile, template)
@@ -192,8 +203,11 @@ func start(source: ELAdventureMap, level := 0, seed_number := 212, scenario_scri
 		vm.globals["__engine_persistent"] = persistent
 		for name: String in _bindings(): vm.bind(name, _native.bind(name))
 		var library_post_step: Variant = null
-		for name: String in ["Maps/adventure_lib.scp.sobj", script_name + ".scp.sobj"]:
-			if not vm.load_script(map.profile.read("scripts", name), name): return _fail(vm.error)
+		for name: String in ["Maps/adventure_lib.scp", script_name + ".scp"]:
+			# Shipped maps' compiled chunks; a custom map's own text script.
+			var bytes := map.profile.script_bytes(name)
+			if bytes.is_empty(): return _fail("Missing script: " + name)
+			if not vm.load_script(bytes, name): return _fail(vm.error)
 			if library_post_step == null: library_post_step = vm.globals.get("Hook_OnPostStep")
 		scenario_post_step = vm.has_function("Hook_OnPostStep") and vm.globals.get("Hook_OnPostStep") != library_post_step
 		if not hook("Hook_Init"): return false
@@ -246,6 +260,11 @@ func object(id: Variant) -> Dictionary:
 func _mobs() -> Array[int]:
 	return _mob_ids
 
+## A hero's shown name: its name text, or (custom maps leave ElkName empty)
+## the map creature's own name.
+func _hero_title(text_key: String, name: String) -> String:
+	return map.profile.text(text_key) if not text_key.strip_edges().is_empty() else map.profile.text(name)
+
 func create_hero(owner: int, template: String, x: int, y: int, visible := true) -> int:
 	if not map.mobs.has(template):
 		vm._fail("Missing adventure hero template: " + template)
@@ -257,7 +276,7 @@ func create_hero(owner: int, template: String, x: int, y: int, visible := true) 
 	var item := {"uid": id, "permanent_id": id, "source_index": -1, "id": id, "name": template, "owner": owner, "group": "heroes" if owner else "np_heroes", "x": x, "y": y, "rotation": 0,
 		"type": "hero" if mob.attrs.get("IsHero", "0") == "1" else "monster", "alive": true, "visible": visible, "enabled": true, "shape": mob.attrs.get("shape", ""),
 		"level": int(mob.attrs.get("Lvl", 1)), "health": int(mob.attrs.get("Hp", 10)), "base_ap": int(mob.attrs.get("AP", 0)), "ap": int(mob.attrs.get("AP", 0)), "experience": 0,
-		"cards": [], "spell_stock": {}, "stock_separate": true, "skills": {}, "inventory": [], "orders": [], "node": {}, "title": map.profile.text(mob.attrs.get("ElkName", template)), "specialization": mob.attrs.get("Spec", "NONE"), "battle_script": mob.attrs.get("Script", "")}
+		"cards": [], "spell_stock": {}, "stock_separate": true, "skills": {}, "inventory": [], "orders": [], "node": {}, "title": _hero_title(str(mob.attrs.get("ElkName", "")), template), "specialization": mob.attrs.get("Spec", "NONE"), "battle_script": mob.attrs.get("Script", "")}
 	item.ship = _water_cell(x, y)
 	var runes: Array[int] = []
 	for spell: Dictionary in ELXml.children(ELXml.child(mob, "deck"), "spell"):
@@ -354,7 +373,7 @@ func _bindings() -> Array[String]:
 		"ExRunToPosCmd", "ExRunAndUseObjectCmd", "ExExecuteCmd",
 		"ExGetHeroLevel", "ExGetHeroBaseAP", "ExSetHeroBaseAP", "ExGetHeroProperAP", "ExSetHeroProperAP", "ExUseHeroProperAP", "ExEndOfTurn", "ExGetExp", "ExAddExp", "ExGetBattleExp", "ExGetCommandQueueSize", "ExHasCmd", "ExSoftAbortCmd", "ExAbortAllCommand", "ExCheckIntercepts", "ExSetExclusiveFlag", "ExGetTextByID", "ExSetUsability", "ExGetRotateMirror", "ExSetRotateMirror", "ExJumpToPos",
 		"ExCameraGetZoom", "ExCameraGetRotate", "ExCameraLock", "ExCameraUnlock", "ExCameraRotate", "ExCameraScrollToObject", "ExCameraScrollToPos", "ExGetThemeFadeIn", "ExGetThemeFadeOut", "ExStartBackgroundTheme", "ExStopBackgroundTheme", "ExStartEmphasisTheme", "ExStopEmphasisTheme", "ExStartEffect", "ExFinishEffect", "ExSoundBeginFX", "ExSoundCancelFX", "ExOrientEffect", "ExOrientEffectByObject",
-		"ExAddCommandWait", "ExAddCommandText", "ExAddCommandQuestion", "ExAddCommandMoving", "ExAddCommandMoveAndUseObject", "ExAddCommandCameraToObject", "ExAddCommandCameraToPos", "ExAddCommandCameraRotate", "ExAddCommandCameraRotateToObject", "ExAddCommandCameraRotateToPos", "ExAddCommandCameraAttach", "ExAddCommandJumpToPos", "ExAddCommandStartEffect", "ExAddCommandStartSound", "ExAddCommandFinishEffect", "ExAddCommandFinishSound", "ExAddCommandKillHero", "ExAddCommandLose", "ExAddCommandWin", "ExAddCommandMobOrient", "ExAddCommandMobOrientToObject", "ExAddCommandMobOrientToPoint", "ExAddCommandStartObservation", "ExAddCommandFinishObservation", "ExAddCommandExecuteScriptFunction", "ExAddCommandOrientEffectByObject", "ExAddCommandTakeObject", "ExAddCommandStartAffect", "ExAddCommandEndOfTurn", "ExStartObservation", "ExFinishObservation"] + UNPORTED + ["ExTrace", "ExError", "ExGetTickCount", "ExGetTickCountDelta", "ExGetHeroName", "ExGetExclusiveFlag",
+		"ExAddCommandWait", "ExAddCommandText", "ExAddCommandQuestion", "ExAddCommandMoving", "ExAddCommandMoveAndUseObject", "ExAddCommandCameraToObject", "ExAddCommandCameraToPos", "ExAddCommandCameraRotate", "ExAddCommandCameraRotateToObject", "ExAddCommandCameraRotateToPos", "ExAddCommandCameraAttach", "ExAddCommandJumpToPos", "ExAddCommandStartEffect", "ExAddCommandStartSound", "ExAddCommandFinishEffect", "ExAddCommandFinishSound", "ExAddCommandKillHero", "ExAddCommandLose", "ExAddCommandWin", "ExAddCommandMobOrient", "ExAddCommandMobOrientToObject", "ExAddCommandMobOrientToPoint", "ExAddCommandStartObservation", "ExAddCommandFinishObservation", "ExAddCommandExecuteScriptFunction", "ExAddCommandOrientEffectByObject", "ExAddCommandTakeObject", "ExAddCommandStartAffect", "ExAddCommandEndOfTurn", "ExStartObservation", "ExFinishObservation"] + CUSTOM_MAP_NATIVES + ["ExTrace", "ExError", "ExGetTickCount", "ExGetTickCountDelta", "ExGetHeroName", "ExGetExclusiveFlag",
 		"ExCameraInstantScrollToObject", "ExCameraInstantScrollToPos", "ExCameraZoom", "ExCameraPitch", "ExCanRunToPos", "ExCanRunToObject", "ExIsAccesibleGoalPos", "ExIsAccesibleGoalObject", "ExIsNear", "ExOrientMobToPoint",
 		"ExAddCommandPlaceObject", "ExAddCommandFinishAffect", "ExAddCommandAddSpell", "ExAddCommandAddArtefact",
 		"ExHasArtefact", "ExAddArtefact", "ExRemoveArtefact", "ExGetArtefactBlankCount", "ExSetArtefactBlankCount", "ExAddLootMessageArtefact",
@@ -365,9 +384,9 @@ func _bindings() -> Array[String]:
 		"ExPassability", "ExRemoteUseObjectCmd", "ExRunToObjectCmd", "ExWaitCmd", "ExCanRunAndUseObject", "ExGetBuildingMob", "ExSetThemeFadeIn", "ExSetThemeFadeOut",
 		"ExGetAffectCount", "ExGetAffectByIndex", "ExStartAffect", "ExFinishAffect"]
 
-## Original adventure natives the remake does not implement yet: bound so a
-## script that calls one stops with its name instead of a nil call.
-const UNPORTED := ["ExPlayHeroAnimation", "ExSetRepeatControlFlag",
+## Original adventure natives no shipped map calls. Custom maps may; their
+## arguments are inferred from the names and the related natives.
+const CUSTOM_MAP_NATIVES := ["ExPlayHeroAnimation", "ExSetRepeatControlFlag",
 	"ExStartLight", "ExFinishLight",
 	"ExCameraGetPitch", "ExCameraGetScroll", "ExCameraScroll", "ExCommandGroup",
 	"ExGetCommandAtQueue", "ExIsCommandExist", "ExGetCommandInfo", "ExAbortCommand", "ExAddCommandStartLight",
@@ -636,7 +655,7 @@ func _native(args: Array, name: String) -> Array:
 		"ExWaitCmd": event.emit({"kind": "script_wait", "ticks": maxf(0.0, float(first) if first != null else 0.0)})
 		# Script affects: hero status entries {name, id} from the AffectsList.
 		"ExStartAffect", "ExFinishAffect", "ExGetAffectCount", "ExGetAffectByIndex":
-			if item.get("type") != "hero":
+			if not item.get("type") in ["hero", "monster"]:
 				vm._fail("Hero not found: %d" % int(first if first is float or first is int else -1))
 				return []
 			if not item.has("affects"): item.affects = []
@@ -661,6 +680,31 @@ func _native(args: Array, name: String) -> Array:
 		"ExSoftAbortCmd":
 			if not item.is_empty(): item.orders.clear()
 		"ExAbortAllCommand": commands.clear()
+		# The queue as the script sees it: index 0 is the running command; a
+		# kind is the ExAddCommand name without its prefix ("Wait", "Text").
+		"ExGetCommandAtQueue":
+			var index := int(first) if first is float else -1
+			return [str(commands[index].kind) if index >= 0 and index < commands.size() else null]
+		"ExGetCommandInfo":
+			var index := int(first) if first is float else -1
+			if index < 0 or index >= commands.size(): return [null]
+			return [str(commands[index].kind)] + commands[index].arguments
+		"ExIsCommandExist":
+			var wanted := str(first).trim_prefix("ExAddCommand") if first != null else ""
+			for command: Dictionary in commands:
+				if str(command.kind) == wanted: return [1.0]
+			return [null]
+		"ExAbortCommand":
+			# By index, or every queued command of a kind; a running move or
+			# wait finishes on its own.
+			if first is float:
+				if int(first) >= 0 and int(first) < commands.size(): commands.remove_at(int(first))
+			elif first != null:
+				var wanted := str(first).trim_prefix("ExAddCommand")
+				commands.assign(commands.filter(func(command: Dictionary) -> bool: return str(command.kind) != wanted))
+		# Grouping is not known; queued commands keep running one after another.
+		"ExCommandGroup": pass
+		"ExSetRepeatControlFlag": repeat_control = first != null and not (first is float and int(first) == 0)
 		"ExCheckIntercepts":
 			# Second game: the hero's cell in the guard zones, with the veto hook.
 			if map.profile.id == "el2" and interception != null:
@@ -700,7 +744,7 @@ func _native(args: Array, name: String) -> Array:
 		"ExAddLootMessageArtefact":
 			if _artefact_valid(str(first)): _loot_message.append({"kind": "artifact", "name": str(first)})
 		"ExAddArtefact", "ExRemoveArtefact", "ExHasArtefact":
-			if item.get("type") != "hero":
+			if not item.get("type") in ["hero", "monster"]:
 				vm._fail("Hero not found: %d" % int(first if first is float or first is int else -1))
 				return []
 			var artefact := str(args[1]) if args.size() > 1 and args[1] != null else ""
@@ -722,7 +766,7 @@ func _native(args: Array, name: String) -> Array:
 				vm._fail("Spell not found: " + code)
 				return []
 			var hero := object(main_hero)
-			if hero.get("type") != "hero":
+			if not hero.get("type") in ["hero", "monster"]:
 				vm._fail("Main hero not found")
 				return []
 			var values: Array[int] = []
@@ -740,7 +784,7 @@ func _native(args: Array, name: String) -> Array:
 				"question": false, "hook": false, "artifact": str(first), "box": "loot", "created": true, "speaker_box": false,
 				"items": [{"name": ELSecondArtifacts.title(map.profile, made), "card": str(definition.spell), "icon_index": int(definition.get("icon", -1))}]})
 		"ExRechargeArtefacts":
-			if item.get("type") != "hero":
+			if not item.get("type") in ["hero", "monster"]:
 				vm._fail("Hero not found: %d" % int(first if first is float or first is int else -1))
 				return []
 			ELSecondArtifacts.recharge(map.profile, item)
@@ -755,12 +799,12 @@ func _native(args: Array, name: String) -> Array:
 				return []
 			ELSecondGates.set_open(self, item, name == "ExOpenGate")
 		"ExGiveKey":
-			if item.get("type") != "hero":
+			if not item.get("type") in ["hero", "monster"]:
 				vm._fail("Hero not found: %d" % int(first if first is float or first is int else -1))
 				return []
 			ELSecondGates.give_key(item, str(args[1]) if args.size() > 1 and args[1] != null else "")
 		"ExGetArtefactBlankCount", "ExSetArtefactBlankCount":
-			if item.get("type") != "hero":
+			if not item.get("type") in ["hero", "monster"]:
 				vm._fail("Hero not found: %d" % int(first if first is float or first is int else -1))
 				return []
 			if not item.has("artifacts"): item.artifacts = []
@@ -817,6 +861,18 @@ func _native(args: Array, name: String) -> Array:
 				event.emit({"kind": "object_changed", "id": item.uid})
 		"ExCameraGetZoom": return [camera_zoom]
 		"ExCameraGetRotate": return [camera_rotation]
+		"ExCameraGetPitch": return [camera_pitch]
+		"ExCameraGetScroll": return [camera_scroll.x, camera_scroll.y]
+		# By cells from the current centre.
+		"ExCameraScroll":
+			if args.size() > 1 and not camera_locked:
+				event.emit({"kind": "ExCameraScrollToPos", "arguments": [camera_scroll.x + float(first), camera_scroll.y + float(args[1])]})
+		# "Instant", "Death" and the like: the figure's u-clip of that name.
+		"ExPlayHeroAnimation":
+			if not item.is_empty() and args.size() > 1 and args[1] != null:
+				event.emit({"kind": "hero_animation", "id": int(item.uid), "clip": "u" + str(args[1]).to_lower()})
+		"ExStartLight": ELSecondAmbience.start_light(self, args)
+		"ExFinishLight": ELSecondAmbience.finish_light(self, first)
 		"ExCameraLock":
 			camera_locked = true
 			event.emit({"kind": "camera_lock", "locked": true})
@@ -832,7 +888,9 @@ func _native(args: Array, name: String) -> Array:
 				camera_zoom = float(first)
 				event.emit({"kind": name, "arguments": args.duplicate()})
 		"ExCameraPitch":
-			if not camera_locked: event.emit({"kind": name, "arguments": args.duplicate()})
+			if not camera_locked:
+				camera_pitch = float(first)
+				event.emit({"kind": name, "arguments": args.duplicate()})
 		"ExCameraInstantScrollToObject", "ExCameraInstantScrollToPos":
 			event.emit({"kind": name.replace("Instant", ""), "arguments": args.duplicate(), "instant": true})
 		"ExTrace": pass

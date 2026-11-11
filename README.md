@@ -51,6 +51,10 @@ Creature pages in the in-game wiki can play the installed game's attack, death, 
 
 With Etherlords II installed, select **Expedition** on the main menu for a three-act deck-building run. Pick routes, fight original enemies and bosses, and use rewards, camps, and events to change your spellbook. Elite victories and the first two guardians offer extra spell choices, with priority given to rare and unique spells. **Resume expedition** restores the current room and the last settled combat action.
 
+## Autochess
+
+With Etherlords II installed, select **Autochess** on the main menu. Nine heroes recruit Etherlords II creatures from one shared pool, evolve three copies into stronger forms, combine faction alliances and fight real-time battles on the game's battlefields; the last hero standing wins. Creature stats come from the originals' Power and Toughness, their abilities are adapted to real time, and rewards after neutral rounds are the game's own enchantments and artifacts. Play against eight computer heroes or online by address. See [Autochess](https://demiurges.wwworm.com/wiki/?page=autochess) in the wiki.
+
 ## Getting started (desktop)
 
 See also [Installing the game files](https://demiurges.wwworm.com/wiki/?page=installing) in the wiki.

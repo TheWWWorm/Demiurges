@@ -29,8 +29,12 @@ func load_map(data: ELProfile, map_id: String) -> bool:
 	# are relative to the installation; plain ids live in Maps/.
 	var path := profile.file((id if id.contains("/") else "Maps/" + id) + ".map")
 	if path.is_empty(): return _fail("Missing scenario: " + id)
-	document = ELXml.parse(FileAccess.get_file_as_bytes(path))
-	if document.get("tag") != "scenario": return _fail(String(document.get("error", "Invalid scenario document.")))
+	var bytes := FileAccess.get_file_as_bytes(path)
+	# The map editor saves a custom scenario (.smp) under <new_scenario>, in
+	# UTF-8 or the Windows-1251 of the originals.
+	if ELCustomMaps.is_custom(id) and not ELLuaCompiler.valid_utf8(bytes): bytes = ELLuaCompiler.decode(bytes).to_utf8_buffer()
+	document = ELXml.parse(bytes)
+	if not document.get("tag") in ["scenario", "new_scenario"]: return _fail(String(document.get("error", "Invalid scenario document.")))
 	title = profile.text(ELXml.value(document, "title", id))
 	objective = profile.text(ELXml.value(document, "objective"))
 	var map := ELXml.child(document, "map")

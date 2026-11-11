@@ -16,7 +16,11 @@ extends RefCounted
 ##   (the command queue) started it. A record stays until it is finished by
 ##   name, even after its animation has played out;
 ## - named looping positional sounds (ExSoundBeginFX / the queued StartSound
-##   with the loop flag, until ExSoundCancelFX / FinishSound).
+##   with the loop flag, until ExSoundCancelFX / FinishSound);
+## - named point lights (ExStartLight / ExFinishLight and the queued
+##   StartLight / FinishLight). No shipped map uses them, so their arguments
+##   are read as (name, x, y, z[, radius[, red, green, blue]]) in the same
+##   coordinates as effects, colour channels 0-255.
 ## Starting a name that is already running replaces it (is called
 ## first by both start routines). An effect file the game does not have starts
 ## nothing. Queued effect and sound commands complete at once; cutscenes time
@@ -27,9 +31,11 @@ const DEFAULT_FADE := 0.6
 ## The terrain particle family (weather and scenery).
 const EFFECT_FOLDER := "terrainpfx/"
 const MAX_ENTRIES := 64
+## A light's radius when a script passes none (four cells).
+const DEFAULT_LIGHT_RADIUS := 8.0
 
 static func blank() -> Dictionary:
-	return {"tick": 0, "theme": "", "fade_in": DEFAULT_FADE, "fade_out": DEFAULT_FADE, "effects": {}, "sounds": {}}
+	return {"tick": 0, "theme": "", "fade_in": DEFAULT_FADE, "fade_out": DEFAULT_FADE, "effects": {}, "sounds": {}, "lights": {}}
 
 ## settings.ini of the installation: MusicThemeFadeIn / MusicThemeFadeOut.
 static func theme_fades(profile: ELProfile) -> Vector2:
@@ -125,6 +131,26 @@ static func cancel_sound(state: ELAdventureSession, name: Variant) -> void:
 	state.ambience.sounds.erase(str(name))
 	state.event.emit({"kind": "positional_sound", "name": str(name), "entry": {}})
 
+## ExStartLight(name, x, y, z[, radius[, red, green, blue]]).
+static func start_light(state: ELAdventureSession, args: Array) -> void:
+	if args.size() < 4 or args[0] == null: return
+	var name := str(args[0])
+	finish_light(state, name)
+	if not state.ambience.has("lights"): state.ambience.lights = {}
+	var lights: Dictionary = state.ambience.lights
+	if lights.size() >= MAX_ENTRIES: return
+	var radius := _number(args[4]) if args.size() > 4 else 0.0
+	var color := Color.WHITE
+	if args.size() > 7:
+		color = Color(clampf(_number(args[5]) / 255.0, 0.0, 1.0), clampf(_number(args[6]) / 255.0, 0.0, 1.0), clampf(_number(args[7]) / 255.0, 0.0, 1.0))
+	var entry := {"x": _number(args[1]), "y": _number(args[2]), "z": _number(args[3]), "radius": minf(radius, 1000.0) if radius > 0.0 else DEFAULT_LIGHT_RADIUS, "color": color.to_html(false)}
+	lights[name] = entry
+	state.event.emit({"kind": "script_light", "name": name, "entry": entry.duplicate()})
+
+static func finish_light(state: ELAdventureSession, name: Variant) -> void:
+	if name == null or not state.ambience.has("lights"): return
+	if state.ambience.lights.erase(str(name)): state.event.emit({"kind": "script_light", "name": str(name), "entry": {}})
+
 ## A script flag: nil is off, a number is on unless it truncates to
 ## 0, anything else is on.
 static func _flag(value: Variant) -> bool:
@@ -167,5 +193,15 @@ static func restore(state: ELAdventureSession, raw: Variant) -> bool:
 		for key: String in ["x", "y", "z", "near", "far"]:
 			if not (entry.get(key) is float or entry.get(key) is int) or not is_finite(float(entry[key])): return false
 		sounds[name] = {"file": entry.file, "x": float(entry.x), "y": float(entry.y), "z": float(entry.z), "near": float(entry.near), "far": float(entry.far), "loop": entry.loop}
-	state.ambience = {"tick": int(raw.tick), "theme": raw.theme, "fade_in": float(raw.fade_in), "fade_out": float(raw.fade_out), "effects": effects, "sounds": sounds}
+	# Saves from before lights carry none.
+	var lights := {}
+	var raw_lights: Variant = raw.get("lights", {})
+	if not raw_lights is Dictionary or raw_lights.size() > MAX_ENTRIES: return false
+	for name: Variant in raw_lights:
+		var entry: Variant = raw_lights[name]
+		if not name is String or not entry is Dictionary or not entry.get("color") is String or not Color.html_is_valid(entry.color): return false
+		for key: String in ["x", "y", "z", "radius"]:
+			if not (entry.get(key) is float or entry.get(key) is int) or not is_finite(float(entry[key])): return false
+		lights[name] = {"x": float(entry.x), "y": float(entry.y), "z": float(entry.z), "radius": clampf(float(entry.radius), 0.0, 1000.0), "color": entry.color}
+	state.ambience = {"tick": int(raw.tick), "theme": raw.theme, "fade_in": float(raw.fade_in), "fade_out": float(raw.fade_out), "effects": effects, "sounds": sounds, "lights": lights}
 	return true

@@ -8,6 +8,8 @@ const MAGIC := 0x00504D4D  # "MMP\0"
 const DATA_OFFSET := 76
 const ONE_BIT_ALPHA := &"one_bit_alpha"
 const AUTHORED_MASK_MIPS := &"authored_mask_mips"
+## The compiled decoders (native/el_assets.c), where the platform has them.
+static var native := ClassDB.class_exists(&"ELNativeAssets")
 
 
 static func decode(data: PackedByteArray) -> Image:
@@ -63,6 +65,9 @@ static func authored_mask_mipmaps(data: PackedByteArray, base: Image) -> Image:
 static func _decode_pnt3(data: PackedByteArray, size: int, w: int, h: int) -> Image:
 	# Simple RLE: a dword with non-zero alpha is a BGRA pixel, otherwise it
 	# is a count of zero bytes to emit.
+	if native:
+		var decoded: PackedByteArray = ClassDB.class_call_static(&"ELNativeAssets", &"decode_pnt3", data, size, w, h)
+		if decoded.size() == w * h * 4: return Image.create_from_data(w, h, false, Image.FORMAT_RGBA8, decoded)
 	var out := PackedByteArray()
 	out.resize(w * h * 4)
 	var dst := 0
@@ -82,7 +87,20 @@ static func _decode_pnt3(data: PackedByteArray, size: int, w: int, h: int) -> Im
 	return Image.create_from_data(w, h, false, Image.FORMAT_RGBA8, out)
 
 
+## Every 16-bit pixel value of a format, already as RGBA8 (one per mask set,
+## shared by the worker threads that decode textures).
+static var _tables := {}
+static var _tables_lock := Mutex.new()
+
+static func _channel(px: int, m: PackedInt64Array, alpha: bool) -> int:
+	if alpha and m[2] == 0: return 255
+	var full := m[0] >> m[1]
+	return int(0.5 + 255.0 * ((px & m[0]) >> m[1]) / full) if full else 0
+
 static func _decode_raw(data: PackedByteArray, w: int, h: int, src := DATA_OFFSET) -> Image:
+	if native:
+		var decoded: PackedByteArray = ClassDB.class_call_static(&"ELNativeAssets", &"decode_raw", data, w, h, src)
+		if decoded.size() == w * h * 4: return Image.create_from_data(w, h, false, Image.FORMAT_RGBA8, decoded)
 	var bpp := data.decode_u32(20) / 8
 	var masks: Array[PackedInt64Array] = []
 	for c in 4:  # a, r, g, b: (mask, shift, bit count)
@@ -90,15 +108,23 @@ static func _decode_raw(data: PackedByteArray, w: int, h: int, src := DATA_OFFSE
 		masks.append(PackedInt64Array([data.decode_u32(p), data.decode_u32(p + 4), data.decode_u32(p + 8)]))
 	var out := PackedByteArray()
 	out.resize(w * h * 4)
+	if bpp == 2:
+		# a,r,g,b -> r,g,b,a, through the format's table.
+		var signature := str(masks)
+		_tables_lock.lock()
+		var table: PackedInt32Array = _tables.get(signature, PackedInt32Array())
+		if table.is_empty():
+			table.resize(65536)
+			for px in 65536:
+				table[px] = _channel(px, masks[1], false) | (_channel(px, masks[2], false) << 8) | (_channel(px, masks[3], false) << 16) | (_channel(px, masks[0], true) << 24)
+			_tables[signature] = table
+		_tables_lock.unlock()
+		var end := mini(w * h, (data.size() - src) / 2)
+		for i in end:
+			out.encode_u32(i * 4, table[data.decode_u16(src + i * 2)])
+		return Image.create_from_data(w, h, false, Image.FORMAT_RGBA8, out)
 	for i in w * h:
-		var px: int = data.decode_u16(src) if bpp == 2 else data.decode_u32(src)
+		var px: int = data.decode_u32(src)
 		src += bpp
-		for c in 4:
-			var m := masks[c]
-			var v := 255
-			if c != 0 or m[2] != 0:
-				var full := m[0] >> m[1]
-				v = int(0.5 + 255.0 * ((px & m[0]) >> m[1]) / full) if full else 0
-			# a,r,g,b -> r,g,b,a
-			out[i * 4 + (c + 3) % 4] = v
+		out.encode_u32(i * 4, _channel(px, masks[1], false) | (_channel(px, masks[2], false) << 8) | (_channel(px, masks[3], false) << 16) | (_channel(px, masks[0], true) << 24))
 	return Image.create_from_data(w, h, false, Image.FORMAT_RGBA8, out)

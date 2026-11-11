@@ -46,7 +46,7 @@ func encode(director: ELAdventureDirector, camera: Dictionary = {}) -> Dictionar
 		encounter = {"hero": director.encounter.hero_id, "opponent": director.encounter.opponent_id, "ethereal": director.encounter.ethereal_defender, "battle": {"format": "etherlords-duel", "version": 1, "state": director.encounter.battle.snapshot()}}
 		if director.encounter.assault_fort >= 0: encounter.fort = director.encounter.assault_fort
 	return {"format": FORMAT, "version": 1, "edition": state.map.profile.id, "map": state.map.id, "map_hash": _map_hash(state.map), "script_name": state.script_name, "encounter": encounter,
-		"world": world, "scenario": state.scenario.duplicate(true), "objects": objects, "players": players, "explored": Marshalls.raw_to_base64(state.explored), "notebook": ELSecondNotebook.encode(state), "observations": state.observations.duplicate(true), "ambience": ELSecondAmbience.encode(state), "script": script,
+		"world": world, "scenario": state.scenario.duplicate(true), "objects": objects, "players": players, "explored": Marshalls.raw_to_base64(state.explored), "notebook": ELSecondNotebook.encode(state), "observations": state.observations.duplicate(true), "ambience": ELSecondAmbience.encode(state), "script": script, "artifact_templates": state.artifact_templates.duplicate(true),
 		"commands": state.commands.duplicate(true), "director": {"movement": movement, "travel": director.travel.duplicate(), "strategy": director.strategy.duplicate(true), "guard_zones": director.interception.snapshot(), "dialogue": director.dialogue.duplicate(true), "boxes": director.boxes.duplicate(true), "action_wait": director.action_wait, "player_round": director.player_round, "woken": director._woken, "waiting": director._waiting, "wait_remaining": director.wait_remaining, "clock": director._clock, "commands_pending": director._commands_pending}, "camera": camera.duplicate(true)}
 
 func write(path: String, director: ELAdventureDirector, camera: Dictionary = {}) -> bool:
@@ -94,18 +94,19 @@ func decode(raw: Variant, profiles: Dictionary) -> Dictionary:
 	if not raw is Dictionary or raw.get("format") != FORMAT or raw.get("version") != 1 or not profiles.has(raw.get("edition")):
 		_fail("This is not a campaign save for an installed edition.")
 		return {}
-	if not raw.get("map") is String or not String(raw.map).is_valid_identifier() or not raw.get("script_name") is String or not raw.get("world") is Dictionary or not raw.get("objects") is Array or not raw.get("players") is Array or not raw.get("commands") is Array or not raw.get("director") is Dictionary or not raw.get("camera") is Dictionary:
+	if not raw.get("map") is String or not (String(raw.map).is_valid_identifier() or ELCustomMaps.valid_id(raw.map)) or not raw.get("script_name") is String or not raw.get("world") is Dictionary or not raw.get("objects") is Array or not raw.get("players") is Array or not raw.get("commands") is Array or not raw.get("director") is Dictionary or not raw.get("camera") is Dictionary:
 		_fail("Campaign save data is incomplete.")
 		return {}
 	if raw.objects.size() > 100000 or not _plain(raw, 0):
 		_fail("Campaign save data exceeds its limits.")
 		return {}
 	var map := ELAdventureMap.new()
+	var custom := ELCustomMaps.is_custom(String(raw.map))
 	if not map.load_map(profiles[raw.edition], raw.map):
-		_fail(map.error)
+		_fail("The custom map %s is missing: put it back in Maps/Custom or the maps folder." % String(raw.map).trim_prefix(ELCustomMaps.FOLDER) if custom else map.error)
 		return {}
 	if raw.get("map_hash") != _map_hash(map):
-		_fail("The original map has changed since this campaign was saved.")
+		_fail("The custom map has changed since this game was saved." if custom else "The original map has changed since this campaign was saved.")
 		return {}
 	var world: Dictionary = raw.world
 	for key: String in STATE_FIELDS:
@@ -127,6 +128,13 @@ func decode(raw: Variant, profiles: Dictionary) -> Dictionary:
 	var notes: Variant = ELSecondNotebook.decode(raw.get("notebook", []))
 	if notes == null: return _reject(next, "Invalid saved notebook.")
 	next.notebook = notes
+	# Saves from before created-artifact templates carry none.
+	var templates: Variant = raw.get("artifact_templates", {})
+	if not templates is Dictionary or templates.size() > 1024: return _reject(next, "Invalid saved artifact templates.")
+	for template_name: Variant in templates:
+		var definition := ELSecondArtifacts.custom_definition(map.profile, templates[template_name]) if templates[template_name] is Dictionary else {}
+		if not template_name is String or String(template_name).length() > 64 or definition.is_empty(): return _reject(next, "Invalid saved artifact templates.")
+		next.artifact_templates[template_name] = definition
 	next.notebook_next = ELSecondNotebook.next_id(notes)
 	var objects := {}
 	for record: Variant in raw.objects:
@@ -198,7 +206,7 @@ func decode(raw: Variant, profiles: Dictionary) -> Dictionary:
 		if map.profile.id == "el1" and item.type in ["hero", "monster"] and not ELStrategy.restore(map.profile, item, map): return _reject(next, "Invalid saved strategic movement.")
 		if map.profile.id == "el1" and item.type == "hero" and not ELAdditionalBuildings.restore_hero(item): return _reject(next, "Invalid saved building bonus.")
 		if map.profile.id == "el1" and item.type == "hero" and not ELMapPickups.restore_hero(map.profile, item): return _reject(next, "Invalid saved hero items.")
-		if map.profile.id == "el2" and item.type == "hero" and not ELSecondArtifacts.restore_hero(map.profile, item): return _reject(next, "Invalid saved hero artifacts.")
+		if map.profile.id == "el2" and item.type in ["hero", "monster"] and not ELSecondArtifacts.restore_hero(map.profile, item): return _reject(next, "Invalid saved hero artifacts.")
 		objects[item.uid] = item
 	for id: int in next.objects:
 		# Creatures created at start (lair stock) are replaced by the saved ones.
@@ -459,7 +467,9 @@ func _reject(state: ELAdventureSession, message: String) -> Dictionary:
 	return {}
 
 func _map_hash(map: ELAdventureMap) -> String:
-	return FileAccess.get_sha256(map.profile.file("Maps/" + map.id + ".map"))
+	# A custom map's saves check its scenario, map file and scripts.
+	if ELCustomMaps.is_custom(map.id): return ELCustomMaps.content_hash(map.profile, map.id)
+	return FileAccess.get_sha256(map.profile.file(ELSingleScenario.map_path(map.id) + ".map"))
 
 func _plain(value: Variant, depth: int) -> bool:
 	if depth > 32: return false

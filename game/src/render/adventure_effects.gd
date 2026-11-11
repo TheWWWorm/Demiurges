@@ -27,6 +27,8 @@ var enabled := true
 var weather_layer: Node3D
 ## Effect name -> {entry, file, node, elapsed, frame, optional}.
 var effects: Dictionary = {}
+## Scripted point lights by name (ExStartLight).
+var lights: Dictionary = {}
 var _materials: Dictionary = {}
 var _rain_on_water := false
 var _shrine_session: ELAdventureSession
@@ -42,6 +44,8 @@ func build(data: ELProfile, settings: ELSettings, state: ELAdventureSession) -> 
 	# A restored map recreates every running effect from its first frame.
 	for name: String in state.ambience.get("effects", {}):
 		start(name, state.ambience.effects[name], 0.0)
+	for name: String in state.ambience.get("lights", {}):
+		_light(name, state.ambience.lights[name])
 	if data.id == "el2":
 		_shrine_session = state
 		for item: Dictionary in state.objects.values():
@@ -72,6 +76,24 @@ func script_event(data: Dictionary) -> void:
 	if data.kind == "script_effect":
 		finish(str(data.name))
 		if not data.entry.is_empty(): start(str(data.name), data.entry, 0.0)
+	if data.kind == "script_light": _light(str(data.name), data.entry)
+
+## Places, moves or (with an empty entry) removes a scripted light.
+func _light(name: String, entry: Dictionary) -> void:
+	var node: OmniLight3D = lights.get(name)
+	if entry.is_empty():
+		if node != null: node.queue_free()
+		lights.erase(name)
+		return
+	if node == null:
+		node = OmniLight3D.new()
+		node.shadow_enabled = false
+		add_child(node)
+		lights[name] = node
+	# Script coordinates: x east, y north, z up, two units per cell.
+	node.position = Vector3(float(entry.x), float(entry.z), -float(entry.y))
+	node.omni_range = float(entry.radius)
+	node.light_color = Color.html(str(entry.color))
 
 func _sync_shrines() -> void:
 	_shrine_fog_revision = ELFog.revision(_shrine_session)

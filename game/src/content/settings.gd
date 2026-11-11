@@ -15,7 +15,12 @@ extends RefCounted
 ## "discord_activity" (the game and mode shown in the Discord desktop app);
 ## "renderer" (0 Compatibility, 1 Forward+ on Vulkan; applied at start) and
 ## "path_tracing" (traced lighting where the renderer and GPU allow it) and
-## "show_fps" (a frame rate counter in a corner of the screen).
+## "show_fps" (a frame rate counter in a corner of the screen) and
+## "hardware_check" (how far the first start's ELHardwareCheck has got);
+## the Display page: "window_mode" (0 window, 1 borderless full screen, 2
+## exclusive full screen), "window_width"/"window_height" (the window's size,
+## 0 the default) and "frame_rate" (0 the display's refresh rate with
+## V-Sync, -1 unlimited, otherwise a frame cap without V-Sync).
 ## Per edition (original Options screen order):
 ## "music"/"effects" volumes 0..1; "movies" the originals' Video key (0 none,
 ## 1 own size, 2 fitted); "blood"; "map_tooltips" (second game
@@ -30,8 +35,11 @@ extends RefCounted
 ## "visual_log". Several have no remake system yet and are only stored.
 ## "tutorial_events": the first game's shown tutorial events, one '0'/'1'
 ## per event id (settings.ini TutorialEvents); "show_tutorial" gates them.
-const SETTINGS_VERSION := 3
-const SHARED := {"ambience": 0.55, "shadows": true, "soft_shadows": false, "weather": true, "helper_overlay": false, "antialiasing": -1, "sharpening": 1, "terrain_detail": false, "enhanced_water": false, "discord_activity": true, "renderer": 0, "path_tracing": false, "show_fps": false}
+## Version 4: sharpening became Off by default (the original ground is soft);
+## older files still on the former default (light) move to Off.
+const SETTINGS_VERSION := 4
+const SHARED := {"ambience": 0.55, "shadows": true, "soft_shadows": false, "weather": true, "helper_overlay": false, "antialiasing": -1, "sharpening": 0, "terrain_detail": false, "enhanced_water": false, "discord_activity": true, "renderer": 0, "path_tracing": false, "show_fps": false, "hardware_check": 0,
+	"window_mode": 0, "window_width": 0, "window_height": 0, "frame_rate": 0}
 const EDITION := {"music": 0.55, "effects": 0.8, "movies": 2, "blood": true, "map_tooltips": true, "autosave": true,
 	"heroes_voices": true, "ambient_sounds": true, "adventure_fast": false, "animated_objects": true,
 	"mouse_rotation": 1.0, "keyboard_rotation": 1.0, "mouse_scroll": 1.0, "keyboard_scroll": 1.0,
@@ -44,7 +52,8 @@ const EDITION_DEFAULTS := {"el1": {}, "el2": {"auto_camera_dynamics": 96, "visua
 ## Value ranges: [min, max] for numbers; bools are checked by type.
 const RANGES := {"music": [0.0, 1.0], "effects": [0.0, 1.0], "ambience": [0.0, 1.0], "mouse_rotation": [0.0, 2.0],
 	"keyboard_rotation": [0.0, 2.0], "mouse_scroll": [0.0, 2.0], "keyboard_scroll": [0.0, 2.0], "gamma": [-1.0, 1.0],
-	"auto_camera_dynamics": [0, 100], "movies": [0, 2], "antialiasing": [-1, 2], "sharpening": [0, 2], "renderer": [0, 1]}
+	"auto_camera_dynamics": [0, 100], "movies": [0, 2], "antialiasing": [-1, 2], "sharpening": [0, 2], "renderer": [0, 1], "hardware_check": [0, 2],
+	"window_mode": [0, 2], "window_width": [0, 16384], "window_height": [0, 16384], "frame_rate": [-1, 1000]}
 
 ## Context, caption, then the default keys for each edition. Empty means the
 ## action is unavailable in that edition.
@@ -136,6 +145,44 @@ static func apply_display(viewport: Viewport, preferences: Dictionary) -> void:
 	var shadow_quality := RenderingServer.SHADOW_QUALITY_SOFT_HIGH if preferences.get("soft_shadows", false) else int(ProjectSettings.get_setting("rendering/lights_and_shadows/directional_shadow/soft_shadow_filter_quality", RenderingServer.SHADOW_QUALITY_SOFT_VERY_LOW))
 	RenderingServer.directional_soft_shadow_filter_set_quality(shadow_quality)
 
+## Window mode, window size and frame rate (the remake's Display page).
+static func apply_window(preferences: Dictionary) -> void:
+	if OS.has_feature("web") or OS.has_feature("mobile") or DisplayServer.get_name() == "headless": return
+	var screen := DisplayServer.window_get_current_screen()
+	match int(preferences.get("window_mode", 0)):
+		1:
+			DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_FULLSCREEN)
+		2:
+			DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_EXCLUSIVE_FULLSCREEN)
+		_:
+			if DisplayServer.window_get_mode() in [DisplayServer.WINDOW_MODE_FULLSCREEN, DisplayServer.WINDOW_MODE_EXCLUSIVE_FULLSCREEN]:
+				DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_WINDOWED)
+			var wanted := Vector2i(int(preferences.get("window_width", 0)), int(preferences.get("window_height", 0)))
+			if wanted.x > 0 and wanted.y > 0 and DisplayServer.window_get_mode() == DisplayServer.WINDOW_MODE_WINDOWED:
+				var usable := DisplayServer.screen_get_usable_rect(screen)
+				wanted = wanted.min(usable.size)
+				if DisplayServer.window_get_size() != wanted:
+					DisplayServer.window_set_size(wanted)
+					DisplayServer.window_set_position(usable.position + (usable.size - wanted) / 2)
+	var rate := int(preferences.get("frame_rate", 0))
+	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_ENABLED if rate == 0 else DisplayServer.VSYNC_DISABLED)
+	Engine.max_fps = maxi(0, rate)
+
+## Window sizes offered on the Display page: common ones that fit the screen,
+## and the screen's own.
+static func window_sizes() -> Array[Vector2i]:
+	var screen := DisplayServer.screen_get_size(DisplayServer.window_get_current_screen())
+	var result: Array[Vector2i] = []
+	for size: Vector2i in [Vector2i(1024, 768), Vector2i(1280, 720), Vector2i(1280, 800), Vector2i(1280, 1024), Vector2i(1366, 768),
+			Vector2i(1440, 900), Vector2i(1600, 900), Vector2i(1680, 1050), Vector2i(1920, 1080), Vector2i(1920, 1200),
+			Vector2i(2560, 1080), Vector2i(2560, 1440), Vector2i(2560, 1600), Vector2i(3440, 1440), Vector2i(3840, 2160)]:
+		if size.x <= screen.x and size.y <= screen.y: result.append(size)
+	if screen.x > 0 and not result.has(screen): result.append(screen)
+	return result
+
+## Frame rates offered: 0 (the display's own, V-Sync), caps and -1 (none).
+const FRAME_RATES := [0, 30, 60, 75, 90, 100, 120, 144, 165, 180, 240, 360, -1]
+
 func _edition_part() -> Dictionary:
 	var part := {}
 	for key: String in EDITION: part[key] = values.get(key, EDITION[key])
@@ -214,6 +261,7 @@ func load_file(path := "user://settings.json") -> void:
 	var current := edition
 	var version: Variant = raw.get("version", 0)
 	var legacy: bool = (version is int or version is float) and version < SETTINGS_VERSION
+	if (version is int or version is float) and version < 4 and int(values.sharpening) == 1: values.sharpening = 0
 	for id: String in ["el1", "el2"]:
 		var source: Variant = raw.get(id) if raw.get(id) is Dictionary else raw
 		var part := defaults(id)

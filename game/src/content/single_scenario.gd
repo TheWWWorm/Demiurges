@@ -65,6 +65,18 @@ static func maps(profile: ELProfile) -> Array[Dictionary]:
 			var entry := read_binary_header(profile, "Maps/" + id) if second else read_header(profile, id)
 			if not entry.is_empty(): found.append(entry)
 		if second:
+			# Custom maps (Maps/Custom and the remake's maps folder) follow the shipped ones.
+			# A map without its map file (.sbm) is listed from its scenario.
+			for custom: String in ELCustomMaps.ids(profile):
+				var entry := read_binary_header(profile, custom)
+				if entry.is_empty(): entry = read_header(profile, custom)
+				if entry.is_empty(): entry = {"title": custom.trim_prefix(ELCustomMaps.FOLDER), "description": "", "players": [], "races": [], "width": 0, "size_class": 0, "campaign": false}
+				entry.id = custom
+				entry.path = custom
+				entry.custom = true
+				entry.campaign = false
+				entry.playable = ELCustomMaps.playable(profile, custom)
+				found.append(entry)
 			var tutorial := read_binary_header(profile, SECOND_TUTORIAL)
 			if not tutorial.is_empty(): found.append(tutorial)
 		_cache[key] = found
@@ -72,16 +84,23 @@ static func maps(profile: ELProfile) -> Array[Dictionary]:
 	result.assign(_cache[key])
 	return result
 
+## Installation-relative path of a map id without extension: ids with a
+## folder (the tutorial, custom maps) as they are, plain ids in Maps/.
+static func map_path(id: String) -> String:
+	return id if id.contains("/") else "Maps/" + id
+
 static func clear_cache() -> void:
 	_cache.clear()
 
 ## Header summary of one map document: text keys, players, size class.
 static func read_header(profile: ELProfile, id: String) -> Dictionary:
-	var path := profile.file("Maps/" + id + ".map")
+	var path := profile.file(map_path(id) + ".map")
 	if path.is_empty(): return {}
-	var document := FileAccess.get_file_as_bytes(path).get_string_from_ascii()
+	var bytes := FileAccess.get_file_as_bytes(path)
+	# Custom scenarios (<new_scenario>) are UTF-8 or Windows-1251.
+	var document := bytes.get_string_from_ascii() if not ELCustomMaps.is_custom(id) else (bytes.get_string_from_utf8() if ELLuaCompiler.valid_utf8(bytes) else ELLuaCompiler.decode(bytes))
 	var players_at := document.find("<players>")
-	if not document.contains("<scenario>") or players_at < 0: return {}
+	if not (document.contains("<scenario>") or document.contains("<new_scenario>")) or players_at < 0: return {}
 	var head := document.substr(0, players_at)
 	var entry := {"id": id, "campaign": head.contains("<campaign/>") or head.contains("<campaign>"), "players": [], "races": []}
 	for field: String in ["title", "objective", "win_condition", "lose_condition", "description"]:

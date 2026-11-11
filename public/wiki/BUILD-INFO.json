@@ -1,15 +1,15 @@
 {
-  "version": "0.6.4",
+  "version": "0.7.0",
   "languages": {
     "en": {
-      "pages": 456,
+      "pages": 458,
       "catalog_pages": 433,
-      "links": 939
+      "links": 943
     },
     "ru": {
-      "pages": 456,
+      "pages": 458,
       "catalog_pages": 433,
-      "links": 939
+      "links": 943
     }
   },
   "requires_game_files": false,
@@ -18,8 +18,8 @@
   "translation_keys": 16,
   "files": {
     "data/en/index.json": {
-      "bytes": 240106,
-      "sha256": "49ec25fa5c2020ebdf1a99c248caabca425d7fc5f94d2275c831db643d2e0f18"
+      "bytes": 247670,
+      "sha256": "50877020a52dfc8ff7527b862df2a6f4abbd8ba4da9e31a480c47e6b0a3d1afe"
     },
     "data/en/pages/abilities.json": {
       "bytes": 2238,
@@ -56,6 +56,10 @@
     "data/en/pages/attack-defence.json": {
       "bytes": 2298,
       "sha256": "ca198b0e201008b44aa46c2ee5f16280cd4729d9c9b0fe2c0ee476e537cdbc60"
+    },
+    "data/en/pages/autochess.json": {
+      "bytes": 5164,
+      "sha256": "95494a569ac24fb94cef28b2389f17a350f047fabbe50b4f414a425e75d21a8a"
     },
     "data/en/pages/automatic-combat.json": {
       "bytes": 1277,
@@ -1513,13 +1517,17 @@
       "bytes": 2138,
       "sha256": "8bb8f3740b23fafc52b0d871a8a716faffd4c23dd8f37177f4f352b7417feef0"
     },
+    "data/en/pages/custom-maps.json": {
+      "bytes": 3399,
+      "sha256": "0847e307c3786d77f248d4cded8b3452cbc49c492e784666794df3c779daf78f"
+    },
     "data/en/pages/differences.json": {
       "bytes": 2001,
       "sha256": "27b950c3d446217683197f782226393a7bc655a19cf8716d3678024ce608677c"
     },
     "data/en/pages/duel.json": {
-      "bytes": 14634,
-      "sha256": "e297347932e2608c50cd1f8b472406eccee7142954bca87739e72b09609ee8f4"
+      "bytes": 15143,
+      "sha256": "375980da549d5b51686691e2e19b153f0bae2048647e38201564aee25d1a6d16"
     },
     "data/en/pages/heroes.json": {
       "bytes": 2076,
@@ -1534,12 +1542,12 @@
       "sha256": "3ea449e2a696eab0d78dc780ddd732fd2e990c3935b024786c88f5a2ac68825e"
     },
     "data/en/pages/main-menu.json": {
-      "bytes": 2286,
-      "sha256": "4e3ec2edba87f4d33a1a0687353c3afc04ba2dc48e3c5a056d5f194a29f80236"
+      "bytes": 2464,
+      "sha256": "d276f1beaf7a04c87a15a6b9f94f26d83ff93bb50acc5c11cf7270a7f456cb21"
     },
     "data/en/pages/options.json": {
-      "bytes": 4301,
-      "sha256": "26376c35fb8b23bf4f97ffc9c4558451f63704fed953e76bdfac8ffbf1544406"
+      "bytes": 4354,
+      "sha256": "fc80994d50ab64f063f2022abbf7e92454a95d9f5838e5841140ad7b2c0ae65f"
     },
     "data/en/pages/races.json": {
       "bytes": 1261,
@@ -1846,8 +1854,8 @@
       "sha256": "1b067870a7a8e91c2adbf015259678dbca8ab20167f1730e52cd34fee0d24934"
     },
     "data/ru/index.json": {
-      "bytes": 424067,
-      "sha256": "29eaf5f183a0e3b33ab0aeb9e997697ea37ceff2cb7ddbc83bf26d4b49cf9a7f"
+      "bytes": 437900,
+      "sha256": "fed2bfb824596a253758702dea825174d808d438e9d82ab08bc92d9dfba4559a"
     },
     "data/ru/pages/abilities.json": {
       "bytes": 3685,
@@ -1884,6 +1892,10 @@
     "data/ru/pages/attack-defence.json": {
       "bytes": 3699,
       "sha256": "466b14f6e844d1ff61e563ece68a00ae5b338184f83b1466655b2c3bc9aed07e"
+    },
+    "data/ru/pages/autochess.json": {
+      "bytes": 8518,
+      "sha256": "2f37f6fe95a520806aaddb1365432eec26fd87c56dfa057383d7acfd439a9774"
     },
     "data/ru/pages/automatic-combat.json": {
       "bytes": 2308,
@@ -3341,13 +3353,17 @@
       "bytes": 3555,
       "sha256": "df574ebbfdf357564ae2db7d6e1453adb617fe3da4db75b187e01bfcf2f52f04"
     },
+    "data/ru/pages/custom-maps.json": {
+      "bytes": 5640,
+      "sha256": "620c96e2662e8d07f928153fa19624cb26d13c1ed6964d8953d7f7a48948a4b6"
+    },
     "data/ru/pages/differences.json": {
       "bytes": 3497,
       "sha256": "f5e413b6aef4e1c755bdeb42e1a8896d3c534657441fa34a065e343ee9db7578"
     },
     "data/ru/pages/duel.json": {
-      "bytes": 27304,
-      "sha256": "16a9d95b9b5f55f6f4013f0d5eae693a0e7f2578b7e2407e47967f1fefc95737"
+      "bytes": 28287,
+      "sha256": "1d6935b3d28e5cf7dea6c4786d4ca3ba0ffef0a230ceefea47761dea844fa19c"
     },
     "data/ru/pages/heroes.json": {
       "bytes": 3175,
@@ -3362,12 +3378,12 @@
       "sha256": "203cca7687042e152be6f3214388d683dbbe8ba705ed7c5df38cb474e5073be9"
     },
     "data/ru/pages/main-menu.json": {
-      "bytes": 3375,
-      "sha256": "96abbbeb17df2fd141943b625a343d9c07ee63542d2f359a7a69d1ba4eaa86ef"
+      "bytes": 3648,
+      "sha256": "4e3239ac3d748c2488a721c5b97e0e0e3ee634413d7bd68a9127fa4eda7196a1"
     },
     "data/ru/pages/options.json": {
-      "bytes": 6899,
-      "sha256": "75cfff0dd9bf518546aa36a1b27a8f3eabcd57786849da7694267de1ea966f45"
+      "bytes": 7001,
+      "sha256": "d43c3eb17578b5d893f7ef08c0092332ab4ef86098324fdcc718b32e9807b0d5"
     },
     "data/ru/pages/races.json": {
       "bytes": 1998,
@@ -5122,5 +5138,5 @@
       "sha256": "aabab5bcfce15545227916db3d8f7e6c353fbf93c2b073e25dec7262d79874ed"
     }
   },
-  "bytes": 5631191
+  "bytes": 5677407
 }

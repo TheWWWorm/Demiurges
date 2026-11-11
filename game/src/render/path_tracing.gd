@@ -161,10 +161,15 @@ func _switch(context: Dictionary) -> void:
 func _input(event: InputEvent) -> void:
 	var key := event as InputEventKey
 	if key == null or not key.pressed or key.echo or key.keycode != KEY_F7: return
-	if not is_instance_valid(_camera): return
 	if _effect == null:
-		_say(_t("Path tracing needs the Forward+ (Vulkan) renderer and a ray-tracing GPU"))
+		# Said even where no scene is traced (the Compatibility renderer has none).
+		if RenderingServer.get_current_rendering_method() != "forward_plus" or RenderingServer.get_current_rendering_driver_name() != "vulkan":
+			_say(_t("Path tracing needs Vulkan: choose Forward+ (Vulkan) in Options and restart the game"))
+		else:
+			_say(_t("Path tracing needs a GPU with hardware ray tracing"))
+		get_viewport().set_input_as_handled()
 		return
+	if not is_instance_valid(_camera): return
 	if key.shift_pressed:
 		if not enabled: return
 		lighting_view = not lighting_view

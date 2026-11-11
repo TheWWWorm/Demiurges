@@ -63,6 +63,7 @@ static func tooltip(profile: ELProfile, item: Dictionary) -> String:
 
 ## Every hero artifact that carries the definition `name`, across the world.
 static func template(state: ELAdventureSession, name: String) -> Dictionary:
+	if state.artifact_templates.has(name): return state.artifact_templates[name]
 	for actor: Dictionary in state.objects.values():
 		for item: Variant in actor.get("artifacts", []):
 			if item is Dictionary and is_custom(item) and str(item.get("name", "")) == name: return item.custom
@@ -88,7 +89,9 @@ static func next_custom_name(state: ELAdventureSession) -> String:
 static func create(state: ELAdventureSession, hero: Dictionary, elk_name: String, code: String, charges: int, first: int, gap: int, icon: int) -> String:
 	var name := next_custom_name(state)
 	if not hero.has("artifacts"): hero.artifacts = []
-	hero.artifacts.append({"name": name, "charges": maxi(0, charges), "custom": {"elk_name": elk_name, "spell": code, "first": maxi(0, first), "gap": maxi(0, gap), "max": maxi(0, charges), "icon": icon, "r_count": 0, "r_duration": 0}})
+	var definition := {"elk_name": elk_name, "spell": code, "first": maxi(0, first), "gap": maxi(0, gap), "max": maxi(0, charges), "icon": icon, "r_count": 0, "r_duration": 0}
+	state.artifact_templates[name] = definition.duplicate(true)
+	hero.artifacts.append({"name": name, "charges": maxi(0, charges), "custom": definition})
 	state.event.emit({"kind": "inventory_changed", "id": int(hero.uid)})
 	return name
 

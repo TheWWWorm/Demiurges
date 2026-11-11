@@ -572,7 +572,7 @@ static func _valid_hash(value: Variant) -> bool:
 	return value is String and value.length() == 64 and value.is_valid_hex_number(false)
 
 static func _map_hash(profile: ELProfile, map_id: String) -> String:
-	var path := profile.file("Maps/" + map_id + ".map")
+	var path := profile.file(ELSingleScenario.map_path(map_id) + ".map")
 	return FileAccess.get_sha256(path) if not path.is_empty() else ""
 
 static func _valid_players(map: ELAdventureMap, players: Vector2i) -> bool:

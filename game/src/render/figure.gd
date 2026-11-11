@@ -4,6 +4,8 @@ extends RefCounted
 ## Both original material loaders give Magic full emission (RGB 1).
 const MATERIAL_MAGIC := 23
 const AUTHORED_FULLBRIGHT := &"authored_fullbright"
+## The compiled readers (native/el_assets.c), where the platform has them.
+static var native := ClassDB.class_exists(&"ELNativeAssets")
 
 static func vector(v: Vector3) -> Vector3:
 	return Vector3(v.x, v.z, -v.y)
@@ -29,6 +31,12 @@ static func parse(data: PackedByteArray) -> Dictionary:
 	var co := io + ni * 2
 	if variants < 1 or variants > 8 or co + nc * 6 > data.size():
 		return {}
+	if native:
+		var arrays := _native_arrays(ClassDB.class_call_static(&"ELNativeAssets", &"figure", data), nc)
+		if not arrays.is_empty():
+			var source_indices: PackedInt32Array = arrays.pop_back()
+			return {"arrays": arrays, "source_indices": source_indices, "vertices": nc, "triangles": ni / 3,
+				"material_id": data.decode_u32(32), "texture_slot": data.decode_u32(36)}
 	var vertices := PackedVector3Array()
 	var normals := PackedVector3Array()
 	var uvs := PackedVector2Array()
@@ -57,6 +65,27 @@ static func parse(data: PackedByteArray) -> Dictionary:
 	return {"arrays": arrays, "source_indices": source_indices, "vertices": nc, "triangles": ni / 3,
 		"material_id": data.decode_u32(32), "texture_slot": data.decode_u32(36)}
 
+## The mesh arrays from the native reader's block, with the source vertex
+## indices appended last; empty when the block does not match.
+static func _native_arrays(block: PackedByteArray, corners: int) -> Array:
+	if block.size() < 8 or block.decode_u32(0) != corners: return []
+	var count := block.decode_u32(4)
+	var at := 8
+	if block.size() != at + corners * 36 + count * 4: return []
+	var arrays := []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = block.slice(at, at + corners * 12).to_vector3_array()
+	at += corners * 12
+	arrays[Mesh.ARRAY_NORMAL] = block.slice(at, at + corners * 12).to_vector3_array()
+	at += corners * 12
+	arrays[Mesh.ARRAY_TEX_UV] = block.slice(at, at + corners * 8).to_vector2_array()
+	at += corners * 8
+	var source_indices := block.slice(at, at + corners * 4).to_int32_array()
+	at += corners * 4
+	arrays[Mesh.ARRAY_INDEX] = block.slice(at, at + count * 4).to_int32_array()
+	arrays.append(source_indices)
+	return arrays
+
 static func mesh(figure: Dictionary, track: Dictionary = {}) -> ArrayMesh:
 	var mesh := ArrayMesh.new()
 	var arrays: Array = figure.arrays
@@ -69,17 +98,42 @@ static func mesh(figure: Dictionary, track: Dictionary = {}) -> ArrayMesh:
 		mesh.blend_shape_mode = Mesh.BLEND_SHAPE_MODE_NORMALIZED
 		var source: PackedByteArray = track.data
 		var base: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+		var source_indices: PackedInt32Array = figure.source_indices
+		var block := PackedByteArray()
+		if native:
+			block = ClassDB.class_call_static(&"ELNativeAssets", &"morph", base.to_byte_array(), source_indices.to_byte_array(), source, int(track.morph_offset), frames, count)
+			if block.size() != frames * (base.size() * 12 + 24): block = PackedByteArray()
+		if not block.is_empty():
+			var bounds := block.slice(frames * base.size() * 12).to_vector3_array()
+			for frame in frames:
+				var vertices := block.slice(frame * base.size() * 12, (frame + 1) * base.size() * 12).to_vector3_array()
+				morph_bounds.append(AABB(bounds[frame * 2], bounds[frame * 2 + 1] - bounds[frame * 2]))
+				var shape := []
+				shape.resize(Mesh.ARRAY_MAX)
+				shape[Mesh.ARRAY_VERTEX] = vertices
+				positions.append(vertices)
+				shape[Mesh.ARRAY_NORMAL] = arrays[Mesh.ARRAY_NORMAL]
+				shapes.append(shape)
+				mesh.add_blend_shape("frame_%d" % frame)
+			frames = 0
+		# Every frame's offsets as floats at once (a native conversion).
+		var offsets := source.slice(int(track.morph_offset), int(track.morph_offset) + frames * count * 12).to_float32_array()
+		var vertex_count := base.size()
 		for frame in frames:
 			var vertices := base.duplicate()
-			for i in vertices.size():
-				var index: int = figure.source_indices[i]
-				if index >= count:
-					continue
-				var p: int = track.morph_offset + (frame * count + index) * 12
-				vertices[i] += vector(Vector3(source.decode_float(p), source.decode_float(p + 4), source.decode_float(p + 8)))
-			var bounds := AABB(vertices[0], Vector3.ZERO) if not vertices.is_empty() else AABB()
-			for vertex: Vector3 in vertices: bounds = bounds.expand(vertex)
-			morph_bounds.append(bounds)
+			var first := frame * count * 3
+			var low := Vector3.INF
+			var high := -Vector3.INF
+			for i in vertex_count:
+				var index := source_indices[i]
+				var vertex := vertices[i]
+				if index < count:
+					var q := first + index * 3
+					vertex += Vector3(offsets[q], offsets[q + 2], -offsets[q + 1])
+					vertices[i] = vertex
+				low = low.min(vertex)
+				high = high.max(vertex)
+			morph_bounds.append(AABB(low, high - low) if vertex_count > 0 else AABB())
 			var shape := []
 			shape.resize(Mesh.ARRAY_MAX)
 			shape[Mesh.ARRAY_VERTEX] = vertices
@@ -157,6 +211,7 @@ static func _plain_track(bytes: PackedByteArray) -> bool:
 ## and keep only the key frames of each vertex coordinate, with straight
 ## lines between them.
 static func unpack_track(bytes: PackedByteArray) -> PackedByteArray:
+	if native: return ClassDB.class_call_static(&"ELNativeAssets", &"unpack_track", bytes)
 	var out := PackedByteArray()
 	var size := bytes.size()
 	var p := 0

@@ -202,6 +202,12 @@ var _expedition_screen: ELExpeditionScreen
 var _expedition_layer: CanvasLayer
 var _expedition_battle: ELDuel
 var _expedition_save_error := ""
+var _autochess_layer: CanvasLayer
+var _autochess_lobby: ELAutochessLobby
+var _autochess_screen: ELAutochessScreen
+## The duel's own interface layers hidden while autochess is open (they draw
+## over every 3D scene, autochess included).
+var _autochess_hidden: Array[CanvasLayer] = []
 ## Plays combat resolution blow by blow (ELMeleePlayback); lives with the stage.
 var melee: ELMeleePlayback
 var front_line: Array[int] = []
@@ -248,6 +254,8 @@ func _enter_tree() -> void:
 	add_to_group(TRANSLATION_USERS)
 
 func _ready() -> void:
+	# The first start's renderer probe (a hidden copy of the game) only reports.
+	if get_tree().current_scene == self and ELHardwareCheck.run_probe(get_tree()): return
 	# The window close button quits through ELAudio.quiet_quit (only when
 	# this is the running game, not a scripted check).
 	if get_tree().current_scene == self: get_tree().auto_accept_quit = false
@@ -262,6 +270,7 @@ func _ready() -> void:
 	# The chosen renderer needs the game started with it.
 	if _ensure_renderer(): return
 	ELSettings.apply_display(get_viewport(), settings.values)
+	if get_tree().current_scene == self: ELSettings.apply_window(settings.values)
 	# Touch gestures and the touch bar; inactive without a touch screen.
 	add_to_group("touch_camera")
 	touch_input = ELTouchInput.new()
@@ -309,9 +318,26 @@ func _ready() -> void:
 	# keep the direct duel setup.
 	if demo or not capture_path.is_empty(): return
 	var launched := get_tree().current_scene == self
+	if launched and ELHardwareCheck.pending(settings): _check_hardware()
 	if launched: _offer_crash_report.call_deferred()
 	if launched and _play_startup_movies(): return
 	if not (launched and _show_front_menu()): _open_setup()
+
+## The first start's hardware check: Forward+ where Vulkan runs (the game
+## starts again on it), then the extras the GPU keeps at 60 frames per second.
+func _check_hardware() -> void:
+	var check := ELHardwareCheck.new()
+	check.settings = settings
+	check.profile = profile
+	add_child(check)
+	check.finished.connect(func(restart: bool):
+		check.queue_free()
+		if restart:
+			OS.create_process(OS.get_executable_path(), _relaunch_args(true))
+			get_tree().quit()
+			return
+		_apply_settings(), CONNECT_ONE_SHOT)
+	check.begin(_relaunch_args)
 
 ## After a session that ended unexpectedly: the box to save or copy its report.
 func _offer_crash_report() -> void:
@@ -633,6 +659,8 @@ func _process(delta: float) -> void:
 	if duel != null:
 		ai_clock += delta
 		if not _cast_queue.is_empty(): _step_cast_queue()
+		# Figures that have just appeared join the front line they were declared to.
+		_step_front_line()
 		if not _presentation_held(): _sync_shown()
 		_show_hero_stats()
 		# The computer, a replay and the tutorial's recorded side act only once
@@ -912,8 +940,14 @@ func _update_cursor() -> void:
 				if item.key == ability_selection.key: definition = item
 			pending = {"ability": definition, "source": int(ability_selection.source)}
 		wanted = ELCursors.first_combat(duel, combat_hover, pending, selected_creature)
+	# The autochess screen (an Etherlords II mode whichever game is chosen)
+	# asks for its own: the hand over movable creatures.
+	var owner := profile
+	if _autochess_layer != null and _autochess_layer.visible and profiles.el2 != null:
+		owner = profiles.el2
+		wanted = _autochess_screen.cursor_name if _autochess_screen != null and _autochess_screen.visible else "default"
 	cursor_name = wanted
-	ELCursorDriver.request(profile, wanted)
+	ELCursorDriver.request(owner, wanted)
 
 ## Touch gestures (remake addition) with the mouse camera's limits: one
 ## finger turns as a right drag does, two fingers turn, tilt and zoom.
@@ -1341,6 +1375,7 @@ func _end_phase() -> void:
 func _skip_battle_presentation() -> void:
 	if (_melee_busy() or _cast_busy() or not _arrivals.is_empty() or not _effect_cast.is_empty()
 		or not _battle_cues.is_empty() or (auto_camera != null and auto_camera.active())):
+		_skipping_presentation = true
 		var remaining := _cast_queue.size() + 1
 		for _step in remaining:
 			if _melee_busy(): melee.finish()
@@ -1355,6 +1390,7 @@ func _skip_battle_presentation() -> void:
 			var clip: String = models[id].clip
 			if clip in ["uattack", "uhit", "utap", "uuntap", "usummon", "uenchantment", "uinstant"]:
 				_animation_done(clip, id)
+		_skipping_presentation = false
 		_sync_shown()
 		_refresh()
 	if effects != null: effects.finish_transients()
@@ -1518,6 +1554,11 @@ func _step_front_line() -> void:
 			if duel.attacks.has(int(duel.blocks[id])) and not declared.has(id):
 				declared.append(id)
 				faces[id] = int(duel.blocks[id])
+		# The rules declare an aggressive creature as it is summoned; its
+		# figure steps out only once it has appeared and played its entrance
+		# (one still waiting for its summon is not on the field yet).
+		declared.assign(declared.filter(func(id: int) -> bool:
+			return models.has(id) and not models[id].get_meta("arriving", false) and models[id].clip != "usummon"))
 	if not melee.busy():
 		for id: int in declared:
 			if not front_line.has(id): melee.step_out(id, int(faces.get(id, -1)))
@@ -1538,6 +1579,12 @@ func _melee_busy() -> bool:
 ## everything it touches) waits in this queue until the previous cast's
 ## gesture and hit have played, instead of starting over it.
 const CAST_KINDS := ["cast", "artifact"]
+## Events that start a new action (a cast, a creature's ability, the end of a
+## phase): like the original's input gate, each waits until the previous
+## action has been shown, its summoned creatures included.
+const SEQUENCED_KINDS := ["cast", "artifact", "ability", "phase"]
+## Set while Space skips the presentation: nothing waits then.
+var _skipping_presentation := false
 var _cast_queue: Array[Dictionary] = []
 ## `elapsed` when the cast being shown has played.
 var _cast_until := 0.0
@@ -1546,6 +1593,15 @@ var _cast_dispatching := false
 ## creature's damage as last shown, while a fight or queued casts still play.
 var _hero_shown: Array[int] = [-1, -1]
 var _wound_shown: Dictionary = {}
+
+## The previous action is still on screen: a cast's gesture and cue, a
+## summon waiting for its effect, or a summoned creature's entrance clip.
+func _presenting() -> bool:
+	if _skipping_presentation: return false
+	if elapsed < _cast_until or not _arrivals.is_empty(): return true
+	for id: int in models:
+		if id >= 2 and is_instance_valid(models[id]) and models[id].visible and models[id].clip == "usummon": return true
+	return false
 
 ## A cast is still being shown, or casts wait for their turn.
 func _cast_busy() -> bool:
@@ -1587,7 +1643,7 @@ func _on_turn_cleanup() -> void:
 ## sequences itself pass, as does everything once the queue is drained.
 func _hold_cast(data: Dictionary) -> bool:
 	if _cast_dispatching or (is_instance_valid(melee) and melee.dispatching()): return false
-	if _cast_queue.is_empty() and (_melee_busy() or not data.get("kind") in CAST_KINDS or (elapsed >= _cast_until and _arrivals.is_empty())): return false
+	if _cast_queue.is_empty() and (_melee_busy() or not data.get("kind") in SEQUENCED_KINDS or not _presenting()): return false
 	_cast_queue.append(data)
 	return true
 
@@ -1597,8 +1653,9 @@ func _step_cast_queue() -> void:
 	var shown := false
 	while not _cast_queue.is_empty():
 		var next: Dictionary = _cast_queue[0]
-		# A summoned creature appears before the next cast is shown.
-		if next.get("kind") in CAST_KINDS and (elapsed < _cast_until or not _arrivals.is_empty()): break
+		# A summoned creature appears (and plays its entrance) before the
+		# next action is shown.
+		if next.get("kind") in SEQUENCED_KINDS and _presenting(): break
 		if is_instance_valid(melee) and melee.running(): break
 		_cast_queue.pop_front()
 		_cast_dispatching = true
@@ -2218,6 +2275,10 @@ func _event(data: Dictionary) -> void:
 			else: _announce("T_USE_ABILITY", [duel.card_name(duel.entity(source).get("card", ""))], int(data.side))
 			_ability_effects(data)
 			_auto_ability(data)
+			# The next action waits for the creature's own action clip.
+			var user := int(data.get("source", -1))
+			if user >= 2 and models.has(user) and models[user].clip.begins_with("u") and models[user].clip != "usummon":
+				_cast_until = maxf(_cast_until, elapsed + clampf(models[user].clip_seconds(models[user].clip), 0.0, 4.0))
 		"trigger_cue":
 			# A trigger's original effect without damage (Outer Cripple's draw).
 			battle_audio.trigger(data.card)
@@ -4756,6 +4817,7 @@ func _open_settings() -> void:
 	tabs.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	tabs.custom_minimum_size = Vector2(660, 520)
 	body.add_child(tabs)
+	_display_page(_settings_page(tabs, "Display"))
 	_graphics_page(_settings_page(tabs, "Graphics"))
 	_audio_page(_settings_page(tabs, "Audio"))
 	_interface_page(_settings_page(tabs, "Interface"))
@@ -4872,6 +4934,53 @@ class HotkeyField extends Button:
 
 ## Graphics: path tracing first (renderer, switch, light view, what this
 ## computer supports), then the picture and scene options.
+## Window mode, window size and frame rate.
+func _display_page(page: VBoxContainer) -> void:
+	var box := _settings_box(page, "Display")
+	var mode := OptionButton.new()
+	mode.name = "WindowMode"
+	for caption: String in ["Window", "Borderless full screen", "Exclusive full screen"]: mode.add_item(_t(caption))
+	mode.select(int(settings.values.window_mode))
+	_settings_row(box, "Window mode", "Borderless full screen switches quickly between programs; exclusive full screen gives the display to the game alone.", mode)
+	var sizes := ELSettings.window_sizes()
+	var resolution := OptionButton.new()
+	resolution.name = "Resolution"
+	resolution.add_item(_t("Default"))
+	var chosen := Vector2i(int(settings.values.window_width), int(settings.values.window_height))
+	resolution.select(0)
+	for i in sizes.size():
+		resolution.add_item("%d × %d" % [sizes[i].x, sizes[i].y])
+		if sizes[i] == chosen: resolution.select(i + 1)
+	resolution.disabled = int(settings.values.window_mode) != 0
+	_settings_row(box, "Resolution", "The window's size. Full screen always uses the display's own resolution.", resolution)
+	var hertz := roundi(DisplayServer.screen_get_refresh_rate(DisplayServer.window_get_current_screen()))
+	var rate := OptionButton.new()
+	rate.name = "FrameRate"
+	for value: int in ELSettings.FRAME_RATES:
+		match value:
+			0: rate.add_item(_t("Display refresh rate (V-Sync)") + (" · %d Hz" % hertz if hertz > 0 else ""))
+			-1: rate.add_item(_t("Unlimited"))
+			_: rate.add_item(_t("%d frames per second") % value)
+	rate.select(maxi(0, ELSettings.FRAME_RATES.find(int(settings.values.frame_rate))))
+	_settings_row(box, "Frame rate", "V-Sync follows the display's refresh rate without tearing. A higher cap or unlimited lowers input delay on fast displays.", rate)
+	mode.item_selected.connect(func(index: int):
+		settings.values.window_mode = index
+		resolution.disabled = index != 0
+		ELSettings.apply_window(settings.values))
+	resolution.item_selected.connect(func(index: int):
+		var size: Vector2i = sizes[index - 1] if index > 0 else Vector2i.ZERO
+		settings.values.window_width = size.x
+		settings.values.window_height = size.y
+		if size == Vector2i.ZERO and DisplayServer.window_get_mode() == DisplayServer.WINDOW_MODE_WINDOWED:
+			var usable := DisplayServer.screen_get_usable_rect(DisplayServer.window_get_current_screen())
+			var default := Vector2i(int(ProjectSettings.get_setting("display/window/size/viewport_width", 1440)), int(ProjectSettings.get_setting("display/window/size/viewport_height", 900))).min(usable.size)
+			DisplayServer.window_set_size(default)
+			DisplayServer.window_set_position(usable.position + (usable.size - default) / 2)
+		ELSettings.apply_window(settings.values))
+	rate.item_selected.connect(func(index: int):
+		settings.values.frame_rate = int(ELSettings.FRAME_RATES[index])
+		ELSettings.apply_window(settings.values))
+
 func _graphics_page(page: VBoxContainer) -> void:
 	var traced := _settings_box(page, "Path tracing", true)
 	var renderer := OptionButton.new()
@@ -6268,6 +6377,7 @@ func _show_front_menu() -> bool:
 			_open_setup())
 		front_menu.duel_match_requested.connect(_begin_duel_match)
 		front_menu.expedition_requested.connect(_open_expedition)
+		front_menu.autochess_requested.connect(_open_autochess)
 		front_menu.network_requested.connect(_open_network_lobby)
 		front_menu.strategy_requested.connect(func(lan: bool): _open_strategic_lobby("", "", {}, lan))
 		front_menu.combat_tutorial_requested.connect(_begin_combat_tutorial)
@@ -6673,6 +6783,73 @@ func _expire_network_phase() -> void:
 func _strategic_presentation_idle() -> bool:
 	if not _strategic_battle(): return true
 	return not _melee_busy() and not _cast_busy() and _arrivals.is_empty() and _effect_cast.is_empty() and ending_over()
+
+## The nine-hero autochess mode (Etherlords II only): its own lobby, screen,
+## battlefield and camera, over the hidden battle stage.
+func _open_autochess() -> void:
+	if not profiles.has("el2"): return
+	_hide_front_menu()
+	if _autochess_layer == null:
+		_autochess_layer = CanvasLayer.new()
+		_autochess_layer.layer = 5
+		add_child(_autochess_layer)
+		_autochess_lobby = ELAutochessLobby.new()
+		_autochess_layer.add_child(_autochess_lobby)
+		_autochess_lobby.build(profiles.el2)
+		_autochess_lobby.left.connect(_close_autochess)
+		_autochess_lobby.begin.connect(_begin_autochess)
+		_autochess_lobby.hero_changed.connect(func(id: String):
+			if _autochess_screen != null and _autochess_lobby.visible: _autochess_screen.show_backdrop(id))
+	stage.hide()
+	_pause_battle_audio(true)
+	_autochess_layer.show()
+	for child: Node in get_children():
+		if child is CanvasLayer and child.visible and child not in [_autochess_layer, options_layer, movie_layer, _fps_layer]:
+			child.hide()
+			_autochess_hidden.append(child)
+	_autochess_screen_ready()
+	if _autochess_screen.loaded_all:
+		_autochess_lobby.open()
+		_autochess_screen.show_backdrop(_autochess_lobby.hero)
+		return
+	# A loading screen first: everything is read and prepared once, so the
+	# landing and the games after it play without pauses.
+	_autochess_lobby.hide()
+	_autochess_screen.loaded.connect(func():
+		if _autochess_screen == null or not _autochess_layer.visible: return
+		_autochess_lobby.open()
+		_autochess_screen.show_backdrop(_autochess_lobby.hero), CONNECT_ONE_SHOT)
+	_autochess_screen.load_everything()
+
+## The screen doubles as the landing's backdrop: the chosen hero's field.
+func _autochess_screen_ready() -> void:
+	if _autochess_screen != null: return
+	_autochess_screen = ELAutochessScreen.new()
+	_autochess_layer.add_child(_autochess_screen)
+	_autochess_layer.move_child(_autochess_screen, 0)
+	_autochess_screen.path_tracing = path_tracing
+	_autochess_screen.build(profiles.el2, settings.values)
+	_autochess_screen.left.connect(func():
+		_autochess_lobby.open()
+		_autochess_screen.show_backdrop(_autochess_lobby.hero))
+
+func _begin_autochess(game: ELAutochessMatch, seat: int, online: ELAutochessOnline) -> void:
+	_autochess_screen_ready()
+	_autochess_lobby.hide()
+	_autochess_screen.show_match(game, seat, online)
+
+func _close_autochess(to_menu := true) -> void:
+	# The screen stays, with everything it loaded, for the next visit.
+	if _autochess_screen != null: _autochess_screen.suspend()
+	if _autochess_layer != null: _autochess_layer.hide()
+	for layer: CanvasLayer in _autochess_hidden:
+		if is_instance_valid(layer): layer.show()
+	_autochess_hidden.clear()
+	stage.show()
+	camera.current = true
+	if path_tracing != null and is_instance_valid(arena): path_tracing.attach(stage, arena, camera, effects)
+	_pause_battle_audio(false)
+	if to_menu: _show_front_menu()
 
 func _open_expedition() -> void:
 	if not profiles.has("el2"): return

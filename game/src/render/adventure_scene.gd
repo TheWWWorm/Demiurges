@@ -740,6 +740,16 @@ static func walk_clip(model: ELModel) -> String:
 	model.set_meta("walk_clip", clip)
 	return clip
 
+## A scripted clip (ExPlayHeroAnimation): the figure plays it once and rests
+## again; a death clip keeps its last frame. A figure without the clip is left
+## as it is.
+func play_actor_clip(uid: int, clip: String) -> void:
+	var model: ELModel = actors.get(uid)
+	if model == null or not model.has_clip(clip) or not model.play(clip): return
+	if clip == "udeath": return
+	model.animation_finished.connect(func(finished: String) -> void:
+		if is_instance_valid(model) and finished == clip and model.clip == clip: model.play("cidle"), CONNECT_ONE_SHOT)
+
 func orient_actor(uid: int, direction: Vector2) -> void:
 	if actors.has(uid) and direction.length_squared() > 0.0001:
 		actors[uid].rotation.y = atan2(direction.x, -direction.y)
