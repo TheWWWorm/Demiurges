@@ -27,7 +27,11 @@ const PLACEMENT := {
 	"el2": {"below": Vector2(45, -8), "above": Vector2(-13, -13), "margin": Vector2(10, 10), "right": 33.0, "left": 0.0},
 	"el1": {"below": Vector2(45, -8), "above": Vector2(-35, -25), "margin": Vector2(38, 28.5), "right": 24.0, "left": 12.0},
 }
-const PORTRAIT := Vector2(100, 70)
+const PORTRAIT := Vector2(84, 59)
+const HERO_TEXT_WIDTH := 360.0
+## Limit tooltip text to 20 pixels through 1440p, then grow with the viewport.
+const STANDARD_PIXEL_SCALE := 1.25
+const LARGE_VIEWPORT_HEIGHT := 1440.0
 ## The first game's frame: strips of the same texture rather than one square.
 const FIRST_FRAME := {"border": 5.0, "fill": Rect2(150, 50, 50, 50),
 	"top": Rect2(0, 50, 50, 5), "bottom": Rect2(200, 45, 50, 5), "left": Rect2(50, 50, 5, 50), "right": Rect2(145, 50, 5, 50),
@@ -120,10 +124,12 @@ static func hero_content(edition: String, picture: Texture2D, title: String, lin
 		labels.append({"text": title, "at": Vector2(PORTRAIT.x * 0.5 + 20, 0), "centre": true})
 		for i in lines.size(): labels.append({"text": str(lines[i]), "at": Vector2(PORTRAIT.x + 16, 20 + i * LINE)})
 		# The card sits closer to its frame than text lines do.
-		return {"labels": labels, "picture": {"texture": picture, "at": Vector2(0, 20), "size": PORTRAIT}, "margin": Vector2(20, 9)}
+		return {"labels": labels, "picture": {"texture": picture, "at": Vector2(0, 20), "size": PORTRAIT},
+			"margin": Vector2(20, 9), "flow": true, "max_label_width": HERO_TEXT_WIDTH}
 	labels.append({"text": title, "at": Vector2(PORTRAIT.x + 16, 9)})
 	for i in lines.size(): labels.append({"text": str(lines[i]), "at": Vector2(PORTRAIT.x + 16, 9 + (i + 1) * LINE)})
-	return {"labels": labels, "picture": {"texture": picture, "at": Vector2.ZERO, "size": PORTRAIT}}
+	return {"labels": labels, "picture": {"texture": picture, "at": Vector2.ZERO, "size": PORTRAIT},
+		"flow": true, "max_label_width": HERO_TEXT_WIDTH}
 
 ## Top-left of a frame of `frame` size for the pointer at `cursor` on a panel
 ## of `screen` size.
@@ -196,15 +202,22 @@ func _process(delta: float) -> void:
 		_shown_key = key
 		panel.set_content(-1 - id if figure else hovered.get_instance_id(), content)
 		_centre_titles(content)
-	var screen := get_global_transform_with_canvas().affine_inverse() * get_viewport_rect()
-	var fit := minf(1.0, minf(screen.size.x / maxf(1.0, panel.size.x), screen.size.y / maxf(1.0, panel.size.y)))
+	_layout_tip(cursor)
+	if not panel.visible:
+		panel.show()
+	move_to_front()
+
+func _layout_tip(cursor: Vector2) -> void:
+	var canvas := get_global_transform_with_canvas()
+	var screen := canvas.affine_inverse() * get_viewport_rect()
+	var pixels_per_unit := (get_viewport().get_final_transform() * canvas).y.length()
+	var pixel_scale := maxf(STANDARD_PIXEL_SCALE, screen.size.y * pixels_per_unit / LARGE_VIEWPORT_HEIGHT)
+	var fit := minf(1.0, pixel_scale / maxf(0.01, pixels_per_unit))
+	fit = minf(fit, minf(screen.size.x / maxf(1.0, panel.size.x), screen.size.y / maxf(1.0, panel.size.y)))
 	panel.scale = Vector2.ONE * fit
 	var frame := panel.size * fit
 	var position_on_screen := place(profile.id if profile != null else "el2", frame, cursor - screen.position, screen.size)
 	panel.position = screen.position + position_on_screen.clamp(Vector2.ZERO, (screen.size - frame).max(Vector2.ZERO))
-	if not panel.visible:
-		panel.show()
-	move_to_front()
 
 func _owns(control: Control) -> bool:
 	var owner_node := get_parent()

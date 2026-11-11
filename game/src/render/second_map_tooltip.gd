@@ -54,6 +54,7 @@ func set_content(id: int, content: Dictionary) -> void:
 	_picture.visible = not picture.is_empty()
 	_backdrop.visible = picture.get("framed", false)
 	var labels: Array = content.get("labels", [])
+	var max_label_width := float(content.get("max_label_width", MAX_LABEL_WIDTH))
 	var wrap_offset := 0.0
 	for entry: Dictionary in labels:
 		var label := Label.new()
@@ -66,12 +67,12 @@ func set_content(id: int, content: Dictionary) -> void:
 		add_child(label)
 		label.size = label.get_minimum_size()
 		var at := Vector2(entry.at) + Vector2(0.0, wrap_offset)
-		if label.size.x > MAX_LABEL_WIDTH:
+		if label.size.x > max_label_width:
 			var unwrapped_height := label.size.y
 			label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-			label.custom_minimum_size.x = MAX_LABEL_WIDTH
-			label.size = Vector2(MAX_LABEL_WIDTH, 0)
-			label.size = Vector2(MAX_LABEL_WIDTH, label.get_minimum_size().y)
+			label.custom_minimum_size.x = max_label_width
+			label.size = Vector2(max_label_width, 0)
+			label.size = Vector2(max_label_width, label.get_minimum_size().y)
 			if content.get("flow", false): wrap_offset += label.size.y - unwrapped_height
 		label.position = at + inset
 		_labels.append(label)

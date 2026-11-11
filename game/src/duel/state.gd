@@ -2383,6 +2383,10 @@ func _enchant(card: String, side: int, target: int, rule: Dictionary) -> void:
 	if card == "ERBN":
 		for c: Dictionary in creatures.values(): _refresh_stats(c)
 	_emit({"kind": "enchant", "target": target, "card": card, "power": e.power, "toughness": e.toughness})
+	if card == "FURY":
+		for creature: Dictionary in army(1 - side):
+			if not creature.flags.has("NoAffect"):
+				_emit({"kind": "aura_cue", "card": card, "source": -1, "target": creature.id})
 	# EL1 Fog@ and EL2 Fog@ register CantAttack against
 	# each creature in the original combat list, after opening BlueFog.
 	# These cues are transient and do not affect the enchantment/save rules.
@@ -2459,14 +2463,19 @@ func _aura_arrival_cues(arrival: Dictionary) -> void:
 		var covered: Array = creatures.values() if source.id == arrival.id else [arrival]
 		for c: Dictionary in covered:
 			if _aura_covers(aura, source, c, str(races.get(c.card, {}).get("Race", ""))):
-				_emit({"kind": "aura_cue", "card": source.card, "source": source.id, "target": c.id})
+				_emit({"kind": "aura_cue", "card": source.card, "source": source.id, "target": c.id, "arrival": arrival.id})
 	# Drowsy, Depressing and Frenzy Gas are auras over every creature: their per-creature callback also
 	# runs for a later arrival, once per copy, with the same Target cues as the cast. Exemptions follow
 	# the gases' stat rule.
 	for card: String in ["DRGS", "DPGS", "FRGS"]:
 		if arrival.flags.has("NoAffect") or arrival.get("plane", false): continue
 		for copy in global_enchantment_count(card):
-			_emit({"kind": "aura_cue", "card": card, "source": -1, "target": arrival.id})
+			_emit({"kind": "aura_cue", "card": card, "source": -1, "target": arrival.id, "arrival": arrival.id})
+	if not arrival.flags.has("NoAffect"):
+		for hero: Dictionary in heroes:
+			for enchantment: Dictionary in hero.enchantments:
+				if enchantment.card == "FURY" and int(enchantment.owner) != int(arrival.owner):
+					_emit({"kind": "aura_cue", "card": "FURY", "source": -1, "target": arrival.id, "arrival": arrival.id})
 
 ## Recompute every creature after an aura source arrives or leaves; retained
 ## damage that becomes lethal kills without regeneration.
@@ -2559,12 +2568,15 @@ func _war_banner_bonuses() -> Dictionary:
 		if bonus != 0: result[int(c.id)] = bonus
 	return result
 
-func _war_banner_reactions(before: Dictionary) -> void:
+func _war_banner_reactions(before: Dictionary, arrival := -1) -> void:
 	if profile.id not in ["el1", "el2"]: return
 	var after := _war_banner_bonuses()
 	for id: int in creatures:
 		var change := int(after.get(id, 0)) - int(before.get(id, 0))
-		if change != 0: _emit({"kind": "war_banner_shift", "target": id, "amount": change})
+		if change != 0:
+			var cue := {"kind": "war_banner_shift", "target": id, "amount": change}
+			if arrival >= 0: cue.arrival = arrival
+			_emit(cue)
 
 func _changes_armies(card: String) -> bool:
 	return card in ["DRGS", "DPGS", "FRGS", "WRBN"] or ELCatalog.ARMY_AURAS.has(card) or ELCatalog.HERO_AURAS.has(card)
@@ -3131,7 +3143,10 @@ static func _hand_view(hero: Dictionary) -> Array:
 
 ## Hand indices in the order the hand rail shows them, left to right.
 func hand_display(side: int) -> Array[int]:
-	var keys := _hand_view(heroes[side])
+	return hand_order(heroes[side])
+
+static func hand_order(hero: Dictionary) -> Array[int]:
+	var keys := _hand_view(hero)
 	var order: Array[int] = []
 	for i in keys.size(): order.append(i)
 	order.sort_custom(func(a: int, b: int) -> bool: return int(keys[a]) < int(keys[b]) or (int(keys[a]) == int(keys[b]) and a < b))
@@ -3144,8 +3159,11 @@ func _discard_random(side: int, count: int) -> void:
 		_emit({"kind": "discard", "side": side, "card": _take_card(side, hand_display(side)[random_index(heroes[side].hand.size())])})
 
 func hand_uses(side: int, index: int) -> int:
-	var slot: int = heroes[side].hand_slots[index]
-	return int(heroes[side].spell_uses[slot]) if slot >= 0 else -1
+	return hand_copy_uses(heroes[side], index)
+
+static func hand_copy_uses(hero: Dictionary, index: int) -> int:
+	var slot: int = hero.hand_slots[index]
+	return int(hero.spell_uses[slot]) if slot >= 0 else -1
 
 func random_index(count: int) -> int:
 	rng_state = (rng_state * 0x343fd + 0x269ec3) & 0xffffffff
@@ -3174,7 +3192,7 @@ func _summon(side: int, card: String) -> void:
 	_emit({"kind": "summon", "creature": creature.duplicate(true)})
 	_aura_arrival_cues(creature)
 	# Summon first: the new model must exist before any targeted aura effect.
-	_war_banner_reactions(banner_before)
+	_war_banner_reactions(banner_before, int(creature.id))
 	if creatures.has(creature.id) and creature.damage >= creature.toughness: _lethal(creature.id)
 	if card == "WKHR":
 		# The walking horror's arrival hurts every other creature, each hit
@@ -3418,9 +3436,12 @@ func _discard_on_hit(source: int, target: int, count: int) -> void:
 	if count <= 0: return
 	_combat_effect("Discard", source, target)
 	for discard in count:
-		if heroes[target].hand.is_empty(): break
-		var dropped := _take_card(target, hand_display(target)[random_index(heroes[target].hand.size())])
-		_emit({"kind": "discard", "side": target, "card": dropped})
+		var hero: Dictionary = heroes[target]
+		if hero.hand.is_empty(): break
+		var index := hand_display(target)[random_index(hero.hand.size())]
+		var key := int(_hand_view(hero)[index])
+		var dropped := _take_card(target, index)
+		_emit({"kind": "discard", "side": target, "card": dropped, "hand_key": key})
 
 ## Returns the damage that landed: zero when a hero's feedback redirected it or
 ## an unaffected creature ignored it. Only combat can hurt unaffected creatures.

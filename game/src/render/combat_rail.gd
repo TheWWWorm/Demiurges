@@ -174,6 +174,8 @@ func layout() -> void:
 	if strip != null:
 		strip.position = Vector2(ELCombatStrip.CLIP.position.x, ELCombatStrip.CLIP.position.y + size.y - 600.0)
 		strip.size = Vector2(ELCombatStrip.CLIP.size.x + maxf(0.0, size.x - _base()), ELCombatStrip.CLIP.size.y)
+		strip.row_width = hand_rect().size.x
+		strip.wide = _base() == ELHudFrame.WIDE
 		strip.layout()
 	for arrow in spell_arrows:
 		var rect := _place(arrow.get_meta("rect"))
@@ -184,7 +186,7 @@ func layout() -> void:
 ## The card rail's place between its arrows: x 151 to 467 of the original
 ## layout (both widths), its right end following the window edge.
 func hand_rect() -> Rect2:
-	return Rect2(151, size.y - 56, maxf(0.0, size.x - _base()) + 467 - 151, 54)
+	return Rect2(ELHudFrame.RAIL_LEFT, size.y - 56, maxf(0.0, size.x - _base()) + ELHudFrame.RAIL_RIGHT - ELHudFrame.RAIL_LEFT, ELListLook.ITEM_SIZE)
 
 ## 1024 when the panel uses the original's wide layout, else 800.
 func _base() -> float:

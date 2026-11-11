@@ -14,10 +14,10 @@ extends Control
 signal item_pressed(index: int)
 
 const CLIP := Rect2(130, 480, 360, 60)
-const FIRST := Vector2(151, 489)
-const VISIBLE := 6
-const PITCH := 53
-const ICON := 50
+const FIRST := Vector2(ELHudFrame.RAIL_LEFT, 489)
+const PITCH := ELListLook.PITCH
+const ICON := ELListLook.ITEM_SIZE
+const RAIL_TILE := Rect2(22, 152, PITCH, 58)
 ## 11 px per frame of the original's 60 Hz update.
 const SLIDE := 660.0
 const REPEAT := 0.3
@@ -27,6 +27,8 @@ var profile: ELProfile
 var items: Array[Dictionary] = []
 var first := 0
 var offset := 0.0
+var row_width := ELHudFrame.RAIL_RIGHT - ELHudFrame.RAIL_LEFT
+var wide := false
 var left: ELCutPartButton
 var right: ELCutPartButton
 var buttons: Array[TextureButton] = []
@@ -37,6 +39,8 @@ var _held := 0
 var _repeat := 0.0
 var _frames: Control
 var look: ELListLook
+var _backing: Texture2D
+var _caps: Texture2D
 
 func build(data: ELProfile) -> void:
 	profile = data
@@ -62,15 +66,31 @@ func build(data: ELProfile) -> void:
 	_view.add_child(_frames)
 	_view.move_child(_frames, 0)
 	look = ELListLook.load(profile)
+	_backing = profile.texture("Interface/black/combat_panel_2")
+	_caps = profile.texture("Interface/black/combat_screen_1")
 	left = _arrow("AbilitieScrollLeft", -1)
 	right = _arrow("AbilitieScrollRight", 1)
 	layout()
 
 ## The frame tile in every visible slot past the last icon.
 func _draw_frames() -> void:
-	# One frame more than fits whole: like the hand row, the strip fills up to
-	# its right arrow with a clipped slot instead of leaving a gap.
-	if look != null and not items.is_empty(): look.draw_frames(_frames, FIRST - CLIP.position, items.size() - first, visible_count() + 1, PITCH, ICON)
+	if look != null and not items.is_empty():
+		var slots := ceili((row_width + offset) / PITCH)
+		look.draw_frames(_frames, Vector2(-offset, 0), items.size(), slots)
+
+func _draw() -> void:
+	if items.is_empty() or _backing == null: return
+	# The original Abilities panel has its own arrow art and end caps.
+	var left_edge := Vector2(127, 481) - CLIP.position
+	var first_bay := left_edge + Vector2(22, 0)
+	var right_edge := first_bay + Vector2(row_width + 4.0, 0)
+	var right_width := 17.0 if wide else 21.0
+	draw_texture_rect_region(_backing, Rect2(left_edge, Vector2(22, 58)), Rect2(0, 152, 22, 58))
+	ELHudFrame.draw_rail_backing(self, _backing, first_bay, row_width + 4.0, RAIL_TILE)
+	draw_texture_rect_region(_backing, Rect2(right_edge, Vector2(right_width, 58)), Rect2(86, 94, right_width, 58))
+	if _caps != null:
+		draw_texture_rect_region(_caps, Rect2(left_edge - Vector2(9, 0), Vector2(9, 58)), Rect2(240, 58, 9, 58))
+		if not wide: draw_texture_rect_region(_caps, Rect2(right_edge + Vector2(right_width, 0), Vector2(9, 58)), Rect2(231, 58, 9, 58))
 
 func _arrow(control: String, direction: int) -> ELCutPartButton:
 	var bounds := Rect2()
@@ -80,7 +100,6 @@ func _arrow(control: String, direction: int) -> ELCutPartButton:
 		bounds = rect if bounds.size == Vector2.ZERO else bounds.merge(rect)
 	var button := ELCutPartButton.new()
 	button.build(profile, control, bounds)
-	button.push_at_rest = true
 	button.focus_mode = Control.FOCUS_NONE
 	button.action_mode = BaseButton.ACTION_MODE_BUTTON_PRESS
 	button.dim_disabled = false
@@ -95,20 +114,22 @@ func _arrow(control: String, direction: int) -> ELCutPartButton:
 
 ## Icons that fit: six in the original window, more when it is wider.
 func visible_count() -> int:
-	return VISIBLE + maxi(0, int((size.x - CLIP.size.x) / PITCH))
+	return floori((row_width + ELListLook.ITEM_GAP) / PITCH)
 
 func layout() -> void:
 	if _view == null: return
-	_view.position = Vector2.ZERO
-	_view.size = size
+	_view.position = FIRST - CLIP.position
+	_view.size = Vector2(row_width, ICON)
 	if _frames != null:
-		_frames.size = size
-		_frames.queue_redraw()
+		_frames.size = _view.size
+	first = mini(first, maxi(0, items.size() - visible_count()))
+	offset = minf(offset, first * PITCH)
 	var extra := size.x - CLIP.size.x
 	if left != null: left.position = left.get_meta("origin") - CLIP.position
 	if right != null: right.position = right.get_meta("origin") - CLIP.position + Vector2(extra, 0)
 	_place_row()
 	_update_arrows()
+	queue_redraw()
 
 ## Replaces the icons. `key` names the shown list (character, mode and
 ## contents); a different list starts again at the first icon.
@@ -130,7 +151,7 @@ func set_items(list: Array[Dictionary], key: String) -> void:
 		button.ignore_texture_size = true
 		button.stretch_mode = TextureButton.STRETCH_KEEP_ASPECT_CENTERED
 		button.size = Vector2(ICON, ICON)
-		button.position = Vector2(FIRST.x - CLIP.position.x + i * PITCH, FIRST.y - CLIP.position.y)
+		button.position = Vector2(i * PITCH, 0)
 		button.focus_mode = Control.FOCUS_NONE
 		button.tooltip_text = str(item.get("tooltip", ""))
 		button.disabled = not item.get("enabled", false)
@@ -142,7 +163,7 @@ func set_items(list: Array[Dictionary], key: String) -> void:
 		buttons.append(button)
 	_place_row()
 	_update_arrows()
-	if _frames != null: _frames.queue_redraw()
+	queue_redraw()
 
 func scroll(direction: int) -> void:
 	var limit := maxi(0, items.size() - visible_count())
@@ -176,6 +197,7 @@ func _process(delta: float) -> void:
 
 func _place_row() -> void:
 	if _row != null: _row.position = Vector2(-offset, 0)
+	if _frames != null: _frames.queue_redraw()
 
 func _update_arrows() -> void:
 	if left == null or right == null: return

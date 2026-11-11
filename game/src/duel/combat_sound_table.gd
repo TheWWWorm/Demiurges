@@ -330,7 +330,7 @@ const COMBAT := {
 const AURA_EFFECTS := {
 	"TIWK": ["PosAttack", "PosDefence"], "TIQN": ["PosDefence"], "BEWK": ["PosAttack"],
 	"BEQN": ["PosAttack", "PosDefence"], "KBWR": ["PosAttack"], "MOTI": ["Restless"], "MOBE": ["FirstStrike"],
-	"MOBE:death": ["Berserk"], "SHSP": ["PosDefence"], "CLSP": ["PosAttack", "PosDefence"], "OREL": ["Restless"],
+	"MOBE:death": ["Berserk"], "FURY": ["Berserk"], "SHSP": ["PosDefence"], "CLSP": ["PosAttack", "PosDefence"], "OREL": ["Restless"],
 	"SLWL": ["PosDefence"], "AVEL": ["PosAttack", "PosDefence"], "ORWR": ["PosAttack", "PosDefence", "Berserk"],
 	"WZSP": ["PosAttack"], "GRFG": ["PosAttack", "PosDefence"],
 	# Gas arrivals (the gases' per-creature callbacks).

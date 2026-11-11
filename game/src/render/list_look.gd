@@ -11,6 +11,9 @@ extends RefCounted
 ## - a pressed enabled item is drawn 2 px smaller on every side.
 
 const FRAME := Rect2(206, 60, 50, 50)
+const ITEM_SIZE := 50
+const ITEM_GAP := 3
+const PITCH := ITEM_SIZE + ITEM_GAP
 const VEIL := Rect2(40, 60, 19, 19)
 const VEIL_TINT := Color8(0x55, 0x11, 0x11)
 const HOVER := Rect2(206, 155, 50, 50)
@@ -53,10 +56,10 @@ func dress(button: TextureButton) -> void:
 		button.connect(signal_name, face.queue_redraw)
 
 ## Empty slot tiles from `start` up to `count` slots of `pitch` px at `origin`.
-func draw_frames(canvas: CanvasItem, origin: Vector2, start: int, count: int, pitch: float, size := 50.0) -> void:
+func draw_frames(canvas: CanvasItem, origin: Vector2, start: int, count: int) -> void:
 	if frame == null: return
 	for slot in range(maxi(0, start), count):
-		canvas.draw_texture_rect(frame, Rect2(origin + Vector2(slot * pitch, 0), Vector2(size, size)), false)
+		canvas.draw_texture_rect(frame, Rect2(origin + Vector2(slot * PITCH, 0), Vector2.ONE * ITEM_SIZE), false)
 
 class Face extends Control:
 	var look: ELListLook

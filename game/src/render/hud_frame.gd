@@ -7,6 +7,10 @@ extends Control
 ## nothing over them. A panel at least 1024 wide uses the second when the
 ## content has its pieces.
 const WIDE := 1024.0
+const RAIL_LEFT := 151.0
+const RAIL_RIGHT := 467.0
+## A complete 53 px bay between the original left arrow and the next bay.
+const RAIL_TILE := Rect2(31, 0, ELListLook.PITCH, 61)
 
 var pieces: Array[Dictionary] = []
 var panel_texture: Texture2D
@@ -62,15 +66,8 @@ static func place(rect: Rect2, panel: Vector2, base: float, shifted: bool) -> Re
 	return rect
 
 func _draw() -> void:
-	# Corners retain their proportions; the central card rail grows with the window.
 	var wide := has_wide and size.x >= WIDE
 	var extra := size.x - (WIDE if wide else 800.0)
-	if panel_texture != null and extra > 0:
-		var x := 374.0
-		while x < 374 + extra:
-			var width := minf(50, 374 + extra - x)
-			draw_texture_rect_region(panel_texture, Rect2(x, size.y - 61, width, 61), Rect2(32, 0, width, 61))
-			x += width
 	for piece: Dictionary in pieces:
 		if piece.layout == (1 if wide else 2):
 			continue
@@ -79,3 +76,14 @@ func _draw() -> void:
 		if destination.position.x >= 374:
 			destination.position.x += extra
 		draw_texture_rect_region(piece.texture, destination, piece.source)
+	# Continue the original bays at their own pitch between the fixed end caps.
+	draw_rail_backing(self, panel_texture, Vector2(RAIL_LEFT - 2, size.y - RAIL_TILE.size.y),
+		RAIL_RIGHT - RAIL_LEFT + maxf(0.0, extra) + 4.0, RAIL_TILE)
+
+static func draw_rail_backing(canvas: CanvasItem, texture: Texture2D, at: Vector2, width: float, tile: Rect2) -> void:
+	if texture == null: return
+	var end := at.x + width
+	while at.x < end:
+		var tile_size := Vector2(minf(tile.size.x, end - at.x), tile.size.y)
+		canvas.draw_texture_rect_region(texture, Rect2(at, tile_size), Rect2(tile.position, tile_size))
+		at.x += tile_size.x

@@ -18,11 +18,18 @@ extends RefCounted
 
 ## Rows follow the 26 px grid of the SaveMissionScreen list art.
 const ROW := 26.0
+## The grid painted by SaveMissionScreen, in panel-local coordinates.
+## The registry calls its column controls SMCaption or SMSort depending on the install.
+const GRID := Rect2(60, 83, 387, 416)
+const COLUMNS := [Rect2(93, 58, 200, 24), Rect2(296, 58, 79, 24), Rect2(378, 58, 64, 24)]
+const SORT_HEADERS := ["CtrlSMSortName", "CtrlSMSortDate", "CtrlSMSortTime"]
+const EN_HEADERS := ["Name", "Date", "Time"]
+const RU_HEADERS := ["Имя", "Дата", "Время"]
 ## EL2's scene capture rectangle, relative to SaveMissionScreen.
 const PREVIEW := Rect2(481, 60, 256, 192)
 ## Panel-local rectangles of controls the first game takes from CutParts only
 ## (its art is the second game's: the same pieces at the same places).
-const FALLBACK := {"SMGamesBarBounds": Rect2(449, 72, 14, 415), "SMScrollD": Rect2(447, 487, 15, 12), "SMInfoBounds": Rect2(480, 278, 242, 219)}
+const FALLBACK := {"SMInfoBounds": Rect2(480, 278, 242, 219)}
 
 var menu: ELFrontMenu
 var entries: Array[Dictionary] = []
@@ -81,23 +88,15 @@ func _button(control: String, action: Callable) -> ELFrontMenu.CutButton:
 func build_screen() -> void:
 	var caption := "SaveMissionText" if mode == "save" else "LoadMissionText"
 	menu._label("caption", menu._caption(caption), _rect(caption), 18)
-	var headers := ["SMSortName", "SMSortDate", "SMSortTime"] if menu.edition == "el2" else ["SMCaption1", "SMCaption2", "SMCaption3"]
-	for index in 3:
-		var control: String = headers[index]
-		menu._label("column%d" % index, menu._caption(control), _rect(control), 17)
+	var origin := menu.shift("SaveMissionScreen")
 	list = SaveList.new()
 	list.screen = self
-	# The grid under the column captions: it starts 33 px left of the name
-	# caption (the art's narrow first column) and ends at the scroll bar and
-	# its down arrow.
-	var name_column := _rect(headers[0])
-	var bar := _rect("SMGamesBarBounds")
-	var down := _rect("SMScrollD")
-	list.position = Vector2(name_column.position.x - 33, name_column.end.y + 1)
-	list.size = Vector2(bar.position.x - list.position.x - 2, floorf((down.end.y - list.position.y) / ROW) * ROW)
-	for index in 3:
-		var column := _rect(headers[index])
-		list.columns.append(Vector2(column.position.x - list.position.x, column.size.x))
+	list.position = origin + GRID.position
+	list.size = GRID.size
+	for index in COLUMNS.size():
+		var column: Rect2 = COLUMNS[index]
+		menu._label("column%d" % index, _column_caption(index), Rect2(origin + column.position, column.size), 17)
+		list.columns.append(Vector2(column.position.x - GRID.position.x, column.size.x))
 	menu.canvas.add_child(list)
 	menu.labels["list"] = list
 	_preview = null
@@ -128,6 +127,14 @@ func build_screen() -> void:
 	refresh()
 	if mode == "save" and name_edit != null:
 		_focus_name.call_deferred(name_edit.get_instance_id())
+
+func _column_caption(index: int) -> String:
+	var plain := "CtrlSMCaption%d" % (index + 1)
+	var sort: String = SORT_HEADERS[index]
+	for key: String in ([sort, plain] if menu.edition == "el2" else [plain, sort]):
+		var caption := menu.text(key)
+		if not caption.is_empty() and caption != key: return caption
+	return RU_HEADERS[index] if ELRemakeText.language(profile()) == "ru" else EN_HEADERS[index]
 
 func _focus_name(id: int) -> void:
 	var edit := instance_from_id(id) as LineEdit

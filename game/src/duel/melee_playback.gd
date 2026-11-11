@@ -63,6 +63,7 @@ var _running := false
 var _serial := 0
 ## id -> {points: Array[Vector3], speed: float, finish: float (facing yaw or NAN)}
 var _moves := {}
+var _trails: Dictionary[int, MovementTrail] = {}
 ## The blows being played, the events after them, and the first blow whose
 ## events are not yet handled.
 var _blows: Array[Dictionary] = []
@@ -71,6 +72,9 @@ var _next_blow := 0
 ## Damage each figure has taken in the blows shown so far (the rules clear
 ## combat damage before the playback ends).
 var _wounds := {}
+## Hand rows retained until a combat discard is shown at the blow's impact.
+var _hands: Array[Dictionary] = []
+var _hands_with_discards: Array[int] = []
 
 ## A side's slot position in remake axes (original x, -y).
 static func slot_position(side: int, index: int, line: Line) -> Vector3:
@@ -177,8 +181,15 @@ func capture(data: Dictionary) -> bool:
 	var held := data.duplicate()
 	if held.kind == "strike":
 		_note_strike(held)
+	if held.kind == "discard" and held.has("hand_key") and not int(held.side) in _hands_with_discards:
+		_hands_with_discards.append(int(held.side))
 	queue.append(held)
 	if not busy():
+		_hands.clear()
+		_hands_with_discards.clear()
+		for hero: Dictionary in view.duel.heroes:
+			_hands.append({"hand": hero.hand.duplicate(), "hand_view": ELDuel._hand_view(hero).duplicate(),
+				"hand_slots": hero.hand_slots.duplicate(), "spell_uses": hero.spell_uses.duplicate()})
 		_capturing = true
 		call_deferred("_start")
 	return true
@@ -204,6 +215,7 @@ func _start() -> void:
 ## Ends the playback at once: every held event is handled and the figures
 ## stand at home (a new battle, a load, or a check that needs the result).
 func finish() -> void:
+	_clear_trails()
 	if not busy(): return
 	_serial += 1
 	_capturing = false
@@ -221,6 +233,8 @@ func finish() -> void:
 		_dispatch(data)
 	_place_home()
 	_running = false
+	_hands.clear()
+	_hands_with_discards.clear()
 	view._refresh()
 
 func _place_home() -> void:
@@ -232,6 +246,7 @@ func _place_home() -> void:
 
 ## Drops the playback without handling anything (the battle is being replaced).
 func abort() -> void:
+	_clear_trails()
 	_serial += 1
 	_capturing = false
 	_running = false
@@ -243,12 +258,28 @@ func abort() -> void:
 	_blows.clear()
 	_after.clear()
 	queue.clear()
+	_hands.clear()
+	_hands_with_discards.clear()
 
 func _dispatch(data: Dictionary) -> void:
 	if data.kind == "damage": _wounds[int(data.target)] = int(_wounds.get(int(data.target), 0)) + int(data.amount)
+	var hand_changed := _show_discard(data) if data.kind == "discard" and data.has("hand_key") else false
 	_dispatching = true
 	view._event(data)
 	_dispatching = false
+	if hand_changed: view._refresh()
+
+func shown_hand(side: int) -> Dictionary:
+	if busy() and side in _hands_with_discards: return _hands[side]
+	return view.duel.heroes[side]
+
+func _show_discard(data: Dictionary) -> bool:
+	if _hands.is_empty(): return false
+	var hand := _hands[int(data.side)]
+	var index: int = hand.hand_view.find(int(data.hand_key))
+	if index < 0 or hand.hand[index] != data.card: return false
+	for field: String in ["hand", "hand_view", "hand_slots"]: hand[field].remove_at(index)
+	return true
 
 func _play(serial: int) -> void:
 	# Split the held events: blows with what each settles, then what follows.
@@ -351,6 +382,8 @@ func _play(serial: int) -> void:
 		var late := queue.duplicate()
 		queue.clear()
 		_dispatch_all(late)
+	_hands.clear()
+	_hands_with_discards.clear()
 	view._refresh()
 
 func _dispatch_all(events: Array) -> void:
@@ -432,7 +465,7 @@ func _move(id: int, points: Array, run: bool, finish_yaw := NAN, delay := 0.0) -
 	for point: Vector3 in points: path.append(Vector3(point.x, 0, point.z))
 	# The original names the move Run only when the figure has a clip under
 	# the run code; otherwise it walks (and loops walk.wav).
-	_moves[id] = {"points": path, "speed": speed, "finish": finish_yaw, "delay": delay, "clip": clip, "run": not run_clip.is_empty(), "cadence": cadence}
+	_moves[id] = {"points": path, "speed": speed, "finish": finish_yaw, "delay": delay, "clip": clip, "run": not run_clip.is_empty(), "cadence": cadence, "fast": fast}
 	if delay <= 0.0: _set_off(id)
 
 ## The move's clip and its looping ground sound start together.
@@ -448,6 +481,11 @@ func stepping(id: int, clip: String) -> bool:
 	return _moves.has(id) and float(_moves[id].delay) <= 0.0 and str(_moves[id].clip) == clip
 
 func _process(delta: float) -> void:
+	for id: int in _trails.keys():
+		var trail := _trails[id]
+		if not trail.advance(delta) and not _moves.has(id):
+			trail.queue_free()
+			_trails.erase(id)
 	for id: int in _moves.keys():
 		if not _has(id):
 			_moves.erase(id)
@@ -460,19 +498,110 @@ func _process(delta: float) -> void:
 			if float(move.delay) > 0.0: continue
 			_set_off(id)
 		var step := float(move.speed) * delta
+		var leave_trail := bool(move.fast) and model.is_visible_in_tree()
 		while step > 0.0 and not move.points.is_empty():
 			var goal: Vector3 = move.points[0]
 			var flat := Vector3(goal.x - model.position.x, 0, goal.z - model.position.z)
-			if flat.length() > 0.001: model.rotation.y = atan2(flat.x, flat.z)
-			if flat.length() <= step:
+			var distance := flat.length()
+			if distance > 0.001:
+				if leave_trail:
+					_sample_trail(id, model)
+					leave_trail = false
+				model.rotation.y = atan2(flat.x, flat.z)
+			if distance <= step:
 				model.position = Vector3(goal.x, model.position.y, goal.z)
-				step -= flat.length()
+				step -= distance
 				move.points.pop_front()
 			else:
 				model.position += flat.normalized() * step
 				step = 0.0
 		model.position.y = view.arena.ground_height(model.position.x, model.position.z)
 		if move.points.is_empty(): _arrive(id)
+
+func _sample_trail(id: int, model: ELModel) -> void:
+	if not _trails.has(id):
+		var trail := MovementTrail.new()
+		add_child(trail)
+		_trails[id] = trail
+	_trails[id].sample(model)
+
+func _clear_trails() -> void:
+	for trail: MovementTrail in _trails.values():
+		trail.hide()
+		trail.queue_free()
+	_trails.clear()
+
+## Keeps three short-lived snapshots of a running figure. The mesh and skin
+## are shared with the live model; each copy keeps its own pose and opacity.
+class MovementTrail extends Node3D:
+	const INTERVAL := 0.04
+	const LIFETIME := 0.14
+	const SAMPLE_COUNT := 3
+	const OPACITY := 0.27
+
+	var _samples: Array[Dictionary] = []
+	var _next := 0
+	var _cooldown := 0.0
+
+	func advance(delta: float) -> bool:
+		_cooldown -= delta
+		var visible_sample := false
+		for snapshot: Dictionary in _samples:
+			var node: Node3D = snapshot.node
+			if not node.visible: continue
+			snapshot.age += delta
+			var opacity := OPACITY * maxf(0.0, 1.0 - float(snapshot.age) / LIFETIME)
+			node.visible = opacity > 0.0
+			visible_sample = visible_sample or node.visible
+			if node.visible:
+				for material: StandardMaterial3D in snapshot.materials.values():
+					material.albedo_color.a = opacity * float(material.get_meta("source_alpha"))
+		return visible_sample
+
+	func sample(model: ELModel) -> void:
+		if _cooldown > 0.0: return
+		_cooldown = INTERVAL
+		if _next == _samples.size():
+			var node := Node3D.new()
+			add_child(node)
+			_samples.append({"node": node, "parts": {}, "materials": {}, "age": 0.0})
+		var snapshot := _samples[_next]
+		_next = (_next + 1) % SAMPLE_COUNT
+		snapshot.age = 0.0
+		snapshot.node.show()
+		for name: String in model.parts:
+			var part: MeshInstance3D = model.parts[name]
+			var ghost: MeshInstance3D = snapshot.parts.get(name)
+			if part.mesh == null or not part.is_visible_in_tree():
+				if ghost != null: ghost.hide()
+				continue
+			var source := part.get_active_material(0) as StandardMaterial3D
+			if source == null:
+				if ghost != null: ghost.hide()
+				continue
+			if ghost == null:
+				ghost = MeshInstance3D.new()
+				ghost.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+				snapshot.node.add_child(ghost)
+				snapshot.parts[name] = ghost
+			if ghost.mesh == part.mesh:
+				for index: int in ghost.get_meta("morphs", []): ghost.set_blend_shape_value(index, 0.0)
+			else:
+				ghost.mesh = part.mesh
+			var morphs: Array = model._previous_morphs.get(name, [])
+			for index: int in morphs: ghost.set_blend_shape_value(index, part.get_blend_shape_value(index))
+			ghost.set_meta("morphs", morphs)
+			var material: StandardMaterial3D = snapshot.materials.get(source)
+			if material == null:
+				material = source.duplicate()
+				material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+				material.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+				snapshot.materials[source] = material
+			material.set_meta("source_alpha", source.albedo_color.a)
+			material.albedo_color.a = source.albedo_color.a * OPACITY
+			ghost.material_override = material
+			ghost.global_transform = part.global_transform
+			ghost.show()
 
 ## A move's end: the final facing, then the figure's resting clip.
 func _arrive(id: int) -> void:

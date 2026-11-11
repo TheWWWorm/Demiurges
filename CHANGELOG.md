@@ -2,6 +2,14 @@
 
 Versions follow [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html) from 0.3.0 on.
 
+## 0.6.4
+
+- Spell clicks stay responsive as the hand shifts after a cast. Delayed phase playback preserves a spell selected in the current phase.
+- Battle tooltips stay compact at high resolutions and group localized skill names and ranks. The two spell rows use matching slot spacing and the original arrow artwork.
+- The Save and Load dialogs align save names, dates, and times with the original grid across different installations.
+- Summon audio follows the summon effect. Buffs and their stat changes appear when the creature enters, and fast-moving creatures leave a short trail. Orc Robbers removes the visible card at the hit.
+- Spell effects use their original recipients for Inconsistent Reality, Ether Breeze, Ether Storm, Steal Reality, Reanimate, Catastrophe, and Fury. A missing target no longer redirects the visual effect to the caster.
+
 ## 0.6.3
 
 - Hero specializations show their effects and descriptions in battle. The HUD disables spells without legal targets, shows status markers on affected creatures, and offers Attack All when creatures can attack. Controlled creatures move to the other side, and movement animations keep pace with faster battles.

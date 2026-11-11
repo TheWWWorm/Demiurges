@@ -715,7 +715,7 @@ func _process(delta: float) -> void:
 				# Options ShowCreatureNumbers (all rows), ShowIcons, ShowOrder.
 				if numbers and model.visible:
 					var blocked := int(duel.blocks.get(id, -1))
-					var stats: Dictionary = _before_turn_cleanup.get(id, c)
+					var stats := _shown_creature_stats(id, c)
 					figures.append({"id": id, "top": top,
 						"numbers": ELCombatSymbols.number_row(int(stats.power), int(stats.toughness) - shown_damage(id), shown_damage(id) > 0, false),
 						"icons": creature_icons(id) if bool(settings.values.get("ability_icons", true)) else [],
@@ -1428,9 +1428,19 @@ func _hold_arrival(pending: Dictionary) -> bool:
 	if ids.is_empty(): return false
 	var side := int(pending.side)
 	var second := profile.id == "el2"
+	var gesture := 0.0
+	if models.has(side) and not pending.artifact and not bool(settings.values.get("hide_cast", false)):
+		gesture = maxf(0.0, models[side].clip_seconds("usummon")) if second else _summon_mark(side)
+	var buffs: Array = pending.get("arrival_buffs", [])
+	var previous: Dictionary = pending.get("arrival_stats", {})
+	var stats := {}
+	for cue: Dictionary in buffs:
+		var target := int(cue.target)
+		if previous.has(target): stats[target] = previous[target]
 	_arrivals.append({"card": String(pending.card), "side": side, "ids": ids, "since": elapsed,
 		"camera": second and auto_camera != null and auto_camera.showing_caster(),
-		"gesture": (maxf(ELAutoCamera.cast_seconds(models[side].timing, "summon"), 0.0) if second else _summon_mark(side)) if models.has(side) else 0.0,
+		"gesture": gesture,
+		"buffs": buffs, "stats": stats,
 		"shown_at": -1.0})
 	return true
 
@@ -1450,12 +1460,14 @@ func _step_arrivals(instant := false) -> void:
 		var waited := elapsed - float(arrival.since)
 		if float(arrival.shown_at) < 0.0:
 			var caster_shown := bool(arrival.camera) and auto_camera != null and auto_camera.showing_caster()
-			if not instant and (caster_shown or (not bool(arrival.camera) and waited < float(arrival.gesture))) and waited < 8.0: continue
+			if not instant and (caster_shown or waited < float(arrival.gesture)) and waited < 8.0: continue
 			var targets: Array = []
 			for id: int in arrival.ids:
 				if models.has(id): targets.append(models[id])
-			if is_instance_valid(effects) and not targets.is_empty():
-				effects.cast(String(arrival.card), {"Start": [models.get(int(arrival.side))], "Target": targets})
+			if not targets.is_empty():
+				var caster: ELModel = models.get(int(arrival.side))
+				battle_audio.spell(String(arrival.card), caster, targets[0])
+				if is_instance_valid(effects): effects.cast(String(arrival.card), {"Start": [caster], "Target": targets})
 			# The creature's close-up starts with its summoning effect, just
 			# before it appears (the original queues it at the figure's creation).
 			if not instant and _auto_camera_on() and auto_camera != null: auto_camera.summoned(_camera_targets(arrival.ids, int(arrival.side)))
@@ -1466,9 +1478,32 @@ func _step_arrivals(instant := false) -> void:
 			if not models.has(id): continue
 			models[id].visible = true
 			models[id].remove_meta("arriving")
+			if labels.has(id): labels[id].visible = not models[id].get_meta("dying", false)
 			# Its own particles, held while it was hidden.
 			if is_instance_valid(effects): effects.attach(models[id])
 			_enter(id)
+		for cue: Dictionary in arrival.buffs:
+			_show_aura_cue(cue)
+
+## Live rules resolve the summon immediately. Keep the visible stats from
+## before its buffs until the source is on screen.
+func _shown_creature_stats(id: int, creature: Dictionary) -> Dictionary:
+	for arrival: Dictionary in _arrivals:
+		if arrival.stats.has(id): return arrival.stats[id]
+	return _before_turn_cleanup.get(id, creature)
+
+func _show_aura_cue(cue: Dictionary) -> void:
+	var target := int(cue.target)
+	if not models.has(target): return
+	if cue.kind == "war_banner_shift":
+		var prefix := "Pos" if int(cue.amount) > 0 else "Neg"
+		for effect: String in [prefix + "Attack", prefix + "Defence"]:
+			battle_audio.effect(effect)
+			_figure_effect(effect, target)
+	else:
+		for effect: String in EffectTable.AURA_EFFECTS.get(String(cue.card), []):
+			battle_audio.effect(effect, models[target])
+			_figure_effect(effect, target)
 
 ## Declared attackers and blockers step out to their front-line slots (a
 ## blocker then turns to the attacker it blocks); withdrawn ones walk back.
@@ -1523,6 +1558,17 @@ func _presentation_held() -> bool:
 ## The rules' event, stamped with the hero health it leaves (the screen shows
 ## that value only when the event itself is shown).
 func _on_duel_event(data: Dictionary) -> void:
+	if data.get("kind") == "phase":
+		# Clear input as the rules change phase. The queued phase notice may
+		# play after the player has already picked a spell in the new phase.
+		selection = -1
+		selection_power = 0
+		exchange_target = -1
+		selected_creature = -1
+		ability_selection.clear()
+		if not pending_power.is_empty():
+			pending_power.clear()
+			_hide_power_panel()
 	var target := int(data.get("target", -1))
 	if duel != null and data.get("kind") in ["damage", "heal"] and target in [0, 1]:
 		data = data.duplicate()
@@ -1665,11 +1711,6 @@ func _event(data: Dictionary) -> void:
 		"summon":
 			var c: Dictionary = data.creature
 			_spawn_creature(c)
-			# In both original editions Tree Snake GreenSummon's Target is the
-			# newly created creature, which exists only after the cast event.
-			# Queue its own WAV here instead of at the earlier hero cast.
-			if profile.id in ["el1", "el2"] and _effect_cast.get("card", "") == "TRSN" and str(c.card) == "TRSN" and models.has(c.id):
-				battle_audio.spell("TRSN", models.get(int(c.owner)), models[c.id])
 			# Original figures in both editions may have their own usummon clip,
 			# CreaturesPFX/<model>/summon.pfx and SndDir/Summon.wav, distinct
 			# from the casting hero's voice and the colour summon effects.
@@ -1680,20 +1721,28 @@ func _event(data: Dictionary) -> void:
 			if profile.id in ["el1", "el2"] and models.has(c.id) and not _effect_cast.is_empty() and String(_effect_cast.card) == String(c.card) and duel.is_summon(String(c.card)):
 				models[c.id].visible = false
 				models[c.id].set_meta("arriving", true)
+				labels[c.id].hide()
 			elif profile.id in ["el1", "el2"] and models.has(c.id):
 				_enter(c.id)
 			_log("%s summons %s." % [_side_name(c.owner), duel.card_name(c.card)])
 		"cast":
-			var animation := "usummon" if duel.is_summon(data.card) else ("uenchantment" if ELCatalog.rule(profile, data.card).get("effect") == "enchant" else "uinstant")
+			var summon := duel.is_summon(data.card)
+			var animation := "usummon" if summon else ("uenchantment" if ELCatalog.rule(profile, data.card).get("effect") == "enchant" else "uinstant")
 			# Options "Hide casting animations" skips the hero's gesture only.
 			if not bool(settings.values.get("hide_cast", false)): models[data.side].play(animation)
-			# The caster's own sound follows its cast animation; the card's effects start with it.
+			# The caster's voice starts with its gesture.
 			battle_audio.unit(models[data.side], animation.trim_prefix("u"))
 			# The spell's own sounds wait, like its effects, for the gesture's release.
 			battle_audio.hold(_cast_release(int(data.side), String(data.card)))
 			# Original EL1 Fury registers GreenDamage only after it counts at
 			# least one attempted creature hit. Its sound follows that cue too.
-			if profile.id == "el1" and data.card == "FRNT":
+			if summon:
+				# The summon sound starts with the effect at the creature's slot.
+				pass
+			elif data.card == "FURY":
+				# The aura's sound comes from its affected creatures at release.
+				pass
+			elif profile.id == "el1" and data.card == "FRNT":
 				battle_audio.effect("GreenForceNature", models[data.side] if models.has(data.side) else null)
 			elif profile.id == "el2" and data.card == "FRNT":
 				# Original EL2 Draw is absent when Fury destroys no creature.
@@ -1799,17 +1848,13 @@ func _event(data: Dictionary) -> void:
 				# Both originals' Frenzy Gas have separate caster and creature
 				# effect sites; the named audio follows those actual figure sites.
 				pass
-			elif profile.id in ["el1", "el2"] and data.card == "TRSN":
-				# Source GreenSummon sound belongs to the newly created Target
-				# model; the summon event starts it when the figure exists.
-				pass
 			elif profile.id in ["el1", "el2"] and data.card == "REPR":
 				# Original Repair in both editions binds BlackDamage to the
 				# opposing hero; the own-grave action target is not that source.
 				battle_audio.spell(data.card, models.get(int(data.side)),
 					models.get(1 - int(data.side)))
-			elif profile.id == "el2" and data.card == "JRRG":
-				# Original Juryrig puts BlackDamage at the opposing hero. The
+			elif data.card == "JRRG":
+				# Both originals put BlackDamage at the opposing hero. The
 				# untargeted revive action has no model for its audio source.
 				battle_audio.spell(data.card, models.get(int(data.side)),
 					models.get(1 - int(data.side)))
@@ -1817,14 +1862,12 @@ func _event(data: Dictionary) -> void:
 				# Both originals use two hero-bound Discard sounds. EL2 alone
 				# adds caster Draw; a generic sound loses one Discard instance.
 				battle_audio.amnesia(models.get(0), models.get(1), models.get(int(data.side)))
-			elif profile.id in ["el1", "el2"] and data.card == "PWTP":
-				# Both original Powertap versions start DrainMana at opposing donor
-				# finishes at the caster, even though the card has no selected target.
+			elif data.card in ["PWTP", "LQRL"]:
+				# Both transfers start DrainMana at the donor and finish at the caster.
 				battle_audio.spell(data.card, models.get(int(data.side)),
 					models.get(1 - int(data.side)))
-			elif profile.id == "el2" and data.card == "INCR":
-				# INCR removes an opposing channel. The owner LoseMana Target
-				# sound source follows that affected hero, not the no-target cast.
+			elif data.card == "INCR":
+				# Its automatic target is the hero losing the channel.
 				battle_audio.spell(data.card, models.get(int(data.side)),
 					models.get(1 - int(data.side)))
 			elif profile.id in ["el1", "el2"] and data.card == "CHNL":
@@ -1832,11 +1875,8 @@ func _event(data: Dictionary) -> void:
 				# GainLife at the opposing hero; bind that WAV source.
 				battle_audio.spell(data.card, models.get(int(data.side)),
 					models.get(1 - int(data.side)))
-			elif profile.id == "el2" and data.card == "MNBR":
-				# EL2 Mana Breeze queues a GainMana sound at EACH hero's Target,
-				# not one generic sound at the caster.
-				battle_audio.mana_breeze(models.get(int(data.side)),
-					models.get(1 - int(data.side)))
+			elif data.card in ["MNBR", "MNST"]:
+				battle_audio.shared_mana_gain(models.get(0), models.get(1))
 			elif profile.id in ["el1", "el2"] and data.card == "TPLF":
 				# Original Tap Life in both editions registers DrainLife/runes only
 				# after positive damage. The cast event precedes the untagged
@@ -1878,12 +1918,14 @@ func _event(data: Dictionary) -> void:
 			if data.get("card") == "COPL" and profile.id in ["el1", "el2"] and models.has(int(data.target)):
 				battle_audio.effect("GainLife")
 				_figure_effect("GainLife", int(data.target))
-		"aura_cue":
-			var covered := int(data.target)
-			if models.has(covered):
-				for effect: String in EffectTable.AURA_EFFECTS.get(String(data.card), []):
-					battle_audio.effect(effect, models[covered])
-					_figure_effect(effect, covered)
+		"aura_cue", "war_banner_shift":
+			var arrival := int(data.get("arrival", -1))
+			if _effect_cast.has("arrival_buffs") and models.has(arrival) and models[arrival].get_meta("arriving", false):
+				_effect_cast.arrival_buffs.append(data)
+			elif _effect_cast.has("fury_buffs") and data.get("card", "") == "FURY" and arrival < 0:
+				_effect_cast.fury_buffs.append(data)
+			else:
+				_show_aura_cue(data)
 		"bat_drain_cue":
 			# Vampire Bat (EL1, EL2):
 			# DrainLife runs from the opposing hero to the bats' own hero.
@@ -1971,14 +2013,6 @@ func _event(data: Dictionary) -> void:
 			if profile.id in ["el1", "el2"] and models.has(taxed):
 				battle_audio.effect("LoseMana")
 				_figure_effect("LoseMana", taxed)
-		"war_banner_shift":
-			# EL1 / EL2: the live creature entry/exit
-			# callback plays signed attack/defence effects at affected Target.
-			if profile.id in ["el1", "el2"] and models.has(int(data.target)):
-				var prefix := "Pos" if int(data.amount) > 0 else "Neg"
-				for name: String in [prefix + "Attack", prefix + "Defence"]:
-					battle_audio.effect(name)
-					_figure_effect(name, int(data.target))
 		"walking_horror_hit":
 			if profile.id in ["el1", "el2"] and models.has(int(data.target)):
 				battle_audio.effect("BlackDamage")
@@ -2169,7 +2203,11 @@ func _event(data: Dictionary) -> void:
 			# positive-kin non-exempt target, not the general spell sound list.
 			if profile.id in ["el1", "el2"] and data.card == "WRBN":
 				battle_audio.effect("PosEnchantment")
-			else:
+			elif data.card in ["MNBR", "MNST"]:
+				battle_audio.shared_mana_gain(models.get(0), models.get(1))
+			elif data.card in ["PWTP", "LQRL", "JRRG", "INCR"]:
+				battle_audio.spell(data.card, models.get(int(data.side)), models.get(1 - int(data.side)))
+			elif data.card != "FURY" and not duel.is_summon(data.card):
 				battle_audio.spell(data.card)
 			_pend_cast_effects(data, true)
 		"ability":
@@ -2240,11 +2278,6 @@ func _event(data: Dictionary) -> void:
 				tween.tween_property(model, "position", start, 0.36)
 		"phase":
 			fight_shot = false
-			selection = -1
-			selection_power = 0
-			exchange_target = -1
-			selected_creature = -1
-			ability_selection.clear()
 			_phase_notice(int(data.side), String(data.phase) == "attack", int(data.round))
 		"victory":
 			_bleed(1 - data.side)
@@ -2352,7 +2385,16 @@ func _pend_cast_effects(data: Dictionary, artifact: bool) -> void:
 	# effects start there and its hits count from there.
 	var release := 0.0 if artifact else _cast_release(int(data.side), card)
 	var hit := 0.0 if duel.is_summon(card) else release + ELCombatEffects.hit_delay(profile, card)
-	_effect_cast = {"card": card, "side": data.side, "target": int(data.get("target", -1)), "affected": [], "hit": hit, "release": release, "artifact": artifact, "power": int(data.get("power", 0)), "tap_life_landed": false}
+	# Incursion has an automatic target for LoseMana and its camera shot.
+	var target := 1 - int(data.side) if card == "INCR" else int(data.get("target", -1))
+	_effect_cast = {"card": card, "side": data.side, "target": target, "affected": [], "hit": hit, "release": release, "artifact": artifact, "power": int(data.get("power", 0)), "tap_life_landed": false}
+	if card == "FURY": _effect_cast.fury_buffs = []
+	if duel.is_summon(card):
+		_effect_cast.arrival_buffs = []
+		_effect_cast.arrival_stats = {}
+		for creature: Dictionary in duel.creatures.values():
+			_effect_cast.arrival_stats[int(creature.id)] = {"power": creature.power, "toughness": creature.toughness,
+				"granted": creature.get("granted", [])}
 	if profile.id in ["el1", "el2"] and card == "GRUN":
 		# Snapshot original ownership before synchronous mass removal. An
 		# enchantment may have lent a creature to the other controller.
@@ -2525,6 +2567,10 @@ func _start_cast_effects() -> void:
 	if not pending.get("camera_shown", false): _auto_cast(pending)
 	if not pending.is_empty() and _hold_arrival(pending): return
 	if pending.is_empty() or not is_instance_valid(effects): return
+	if pending.card == "FURY":
+		for cue: Dictionary in pending.fury_buffs:
+			_show_aura_cue(cue)
+		return
 	# Original EL1 GreaterUnsummon@ and EL2@ register
 	# Target/BlueDeath on EACH successfully returned creature, then
 	# Target/Draw on that creature's original owner, before hard removal.
@@ -2839,11 +2885,9 @@ func _start_cast_effects() -> void:
 			effects.play("PosDefence", {"Target": [models[id]]})
 			effects.play("PosRune", {"Target": [models[id]]})
 		return
-	# EL2 LiquidReality takes one channel from the other hero
-	# before granting one to the caster. The original effect-site sequence
-	# uses DrainMana Start/Finish, then a negative rune on the donor and a
-	# positive rune on the recipient (not three cues on the caster).
-	if profile.id == "el2" and pending.card == "LQRL":
+	# Steal Reality transfers a channel from the opposing hero to the caster,
+	# then marks the donor and recipient with separate runes.
+	if pending.card == "LQRL":
 		var caster := int(pending.side)
 		var donor := 1 - caster
 		if models.has(caster) and models.has(donor):
@@ -2919,11 +2963,9 @@ func _start_cast_effects() -> void:
 		if models.has(sacrificed): effects.play("RedDamage", {"Target": [models[sacrificed]]})
 		if models.has(caster): effects.play("GainLife", {"Target": [models[caster]]})
 		return
-	# EL2 Juryrig: - binds PosSorcery to
-	# its casting hero, while - binds BlackDamage to
-	# 1 - side (the hurt opposing hero). The generic untargeted cast
-	# combines both effects at the affected opponent.
-	if profile.id == "el2" and pending.card == "JRRG":
+	# Both original Reanimate callbacks bind PosSorcery to the caster and
+	# BlackDamage to the opposing hero.
+	if pending.card == "JRRG":
 		var caster := int(pending.side)
 		var victim := 1 - caster
 		if models.has(caster): effects.play("PosSorcery", {"Target": [models[caster]]})
@@ -3095,18 +3137,22 @@ func _start_cast_effects() -> void:
 			effects.play("LoseMana", {"Target": [models[caster]]})
 			battle_audio.effect("LoseMana")
 		return
-	# EL2 Mana Breeze's two original Target/GainMana registrations are
-	# separate hero-bound particles. The generic caster fallback would
-	# discard the opponent's effect, despite both heroes gaining channels.
-	if profile.id == "el2" and pending.card == "MNBR":
-		for hero: int in [int(pending.side), 1 - int(pending.side)]:
-			if models.has(hero):
-				effects.play("GainMana", {"Target": [models[hero]]})
+	# The original callbacks visit both heroes for Ether Breeze and Ether Storm.
+	if pending.card in ["MNBR", "MNST"]:
+		for hero in 2:
+			_figure_effect("GainMana", hero)
 		return
+	# Catastrophe anchors its single eruption and flash at the caster.
+	if pending.card == "CTST":
+		_figure_effect("RedCatstrophe", int(pending.side))
+		return
+	var recipients: Array = [pending.target] if int(pending.target) >= 0 else pending.affected
 	var targets: Array = []
-	for id: int in ([pending.target] if int(pending.target) >= 0 else pending.affected):
+	for id: int in recipients:
 		if models.has(id): targets.append(models[id])
-	if targets.is_empty() and models.has(pending.side): targets.append(models[pending.side])
+	# A cast with no recipient uses the caster. A removed recipient keeps
+	# its point unbound, so its effect cannot jump to another figure.
+	if recipients.is_empty() and models.has(pending.side): targets.append(models[pending.side])
 	effects.cast(String(pending.card), {"Start": [models.get(pending.side)], "Target": targets})
 
 func _auto_camera_on() -> bool:
@@ -3766,7 +3812,7 @@ func creature_icons(id: int) -> Array:
 	if c.is_empty(): return []
 	var owned: Array = []
 	owned.append_array(c.get("flags", []))
-	owned.append_array(c.get("granted", []))
+	owned.append_array(_shown_creature_stats(id, c).get("granted", c.get("granted", [])))
 	var marks: Array = [c.get("resting", false), c.get("sick", false), owned.has("NoAttack"), owned.has("Fly"), owned.has("FS"),
 		owned.has("Trample"), owned.has("Restless"), owned.has("Lifetap"), duel.regeneration_cost(id) > 0,
 		owned.any(func(flag: Variant) -> bool: return String(flag).begins_with("Discard(")), owned.has("Disenchant"), owned.has("Destroy"),
@@ -3923,12 +3969,12 @@ func _refresh() -> void:
 	var concealed := (_hot_seat() and hot_pending) or (_strategic_battle() and strategic_session.relay.local_side < 0)
 	var peek := game_console != null and game_console.enemy_hand(duel)
 	var hand_side := 1 - displayed if peek else displayed
-	var hero: Dictionary = duel.heroes[hand_side]
+	var hero: Dictionary = melee.shown_hand(hand_side) if is_instance_valid(melee) else duel.heroes[hand_side]
 	# The original rail holds one icon per hand card (EL2 ``, one
 	# CSpellInserter per hand entry); copies are not grouped.
 	var showing_artifacts := rail != null and rail.artifacts_shown
 	var order: Array[int] = []
-	if not showing_artifacts and not concealed: order = duel.hand_display(hand_side)
+	if not showing_artifacts and not concealed: order = ELDuel.hand_order(hero)
 	# A card that joins the hand the rail already shows drops in; a rebuilt rail
 	# (another side, the artifact list, a hand-over) does not (EL2 ``
 	# sets the inserter's instant flag while it rebuilds).
@@ -3943,7 +3989,7 @@ func _refresh() -> void:
 	var place := 0
 	for i: int in order:
 		var card: String = hero.hand[i]
-		var uses := duel.hand_uses(hand_side, i)
+		var uses := ELDuel.hand_copy_uses(hero, i)
 		var rail_id := "%d:%s" % [int(keys[i]), card] if tracked else ""
 		var reused: TextureButton = kept.get(rail_id) if animate and kept.has(rail_id) else null
 		if reused != null: kept.erase(rail_id)
@@ -3956,10 +4002,13 @@ func _refresh() -> void:
 			for signal_name: String in ["pressed", "mouse_entered"]:
 				for connection: Dictionary in button.get_signal_connection_list(signal_name):
 					button.disconnect(signal_name, connection.callable)
-		button.custom_minimum_size = Vector2(50, 50)
+		button.custom_minimum_size = Vector2.ONE * ELListLook.ITEM_SIZE
 		button.texture_normal = profile.card_icon(card)
 		button.ignore_texture_size = true
 		button.stretch_mode = TextureButton.STRETCH_KEEP_ASPECT_CENTERED
+		# A mouse press picks the visible card before it can slide away.
+		# Touch waits for release so a drag can still scroll the hand.
+		button.action_mode = BaseButton.ACTION_MODE_BUTTON_RELEASE if ELTouchInput.enabled else BaseButton.ACTION_MODE_BUTTON_PRESS
 		var price := "%d + X" % duel.cost(card) if duel.variable_power(card) and ELCatalog.rule(profile, card).get("x_source") != "health" else str(duel.cost(card))
 		button.tooltip_text = card_tooltip(card)
 		if helper_overlay():
@@ -4000,7 +4049,7 @@ func _refresh() -> void:
 				# A card that stays moves over to its new place, continuing from
 				# where a slide still running had brought it.
 				var left := rail_slide_stop(button)
-				rail_slide(button, float(int(was[id].index) - seen.size()) * (50.0 + hand.get_theme_constant("separation")) + left)
+				rail_slide(button, float(int(was[id].index) - seen.size()) * ELListLook.PITCH + left)
 			seen[id] = true
 			if animate and not _rail_seen.has(id):
 				# Drawn cards enter at the left, returned ones at the right.
@@ -4025,7 +4074,8 @@ func _refresh() -> void:
 		var tallies: Array = []
 		for side in 2:
 			var h: Dictionary = duel.heroes[side]
-			tallies.append([h.grave.size(), h.enchantments.size(), h.hand.size(), h.get("artifacts", []).size()])
+			var shown: Dictionary = melee.shown_hand(side) if is_instance_valid(melee) else h
+			tallies.append([h.grave.size(), h.enchantments.size(), shown.hand.size(), h.get("artifacts", []).size()])
 		rail.set_counts(tallies[0], tallies[1])
 	_show_hero_stats()
 	for side in 2:
@@ -4140,10 +4190,9 @@ func _selection_outline(button: Control) -> void:
 ## (the original hand slots show their Type1 HERO_PANEL_3 layer when empty).
 func _draw_hand_frames() -> void:
 	if hand == null or profile == null or duel == null: return
-	var pitch := 53.0
 	var shown := hand.get_child_count()
 	var offset := float(card_scroll.scroll_horizontal) if card_scroll != null else 0.0
-	_list_look().draw_frames(hand_frames, Vector2(-offset, 0), shown, int(ceil((hand_frames.size.x + offset) / pitch)), pitch)
+	_list_look().draw_frames(hand_frames, Vector2(-offset, 0), shown, ceili((hand_frames.size.x + offset) / ELListLook.PITCH))
 
 ## The original Artifacts rail: the displayed hero's artifacts in the card
 ## slots with their icon and charges, greyed while the use gate refuses them;
@@ -4156,7 +4205,7 @@ func _fill_artifact_rail(displayed: int) -> void:
 	for index in items.size():
 		var item: Dictionary = items[index]
 		var button := TextureButton.new()
-		button.custom_minimum_size = Vector2(50, 50)
+		button.custom_minimum_size = Vector2.ONE * ELListLook.ITEM_SIZE
 		var icon := int(item.custom.get("icon", -1)) if item.has("custom") else -1
 		button.texture_normal = profile.icon_at(icon) if icon >= 0 else profile.card_icon(item.spell)
 		button.ignore_texture_size = true
@@ -4275,15 +4324,20 @@ func _hero_tip(side: int, control: Control = null) -> Dictionary:
 	var title := _original_text(role, _side_name(side)) if control != null else _side_name(side)
 	var health := "%s: %d" % [_original_text("CtrlTTCombatTt1" if profile.id == "el2" else "CtrlTtCombatTt1", "Health"), int(hero.health)]
 	var level := "%s: %d" % [_original_text("T_LEVEL", "Level"), int(hero.get("level", 1))]
-	var lines: Array = [level, health] if profile.id == "el1" else [health, level]
+	var stats := [level, health] if profile.id == "el1" else [health, level]
+	var lines: Array = [" · ".join(stats)]
 	if control != null and helper_overlay(): lines.append_array(control.atr(control.tooltip_text).split("\n"))
+	var skills := PackedStringArray()
 	for code: String in hero.get("skills", {}):
 		var rank := int(hero.skills[code])
 		var skill := ELHeroSkills.definition(profile, code, rank)
-		lines.append("%s %s" % [profile.text(str(skill.get("Name", code))), ["I", "II", "III"][rank]])
+		var name := _original_text(str(skill.get("Name", "")), "")
+		if not name.is_empty(): skills.append("%s %s" % [name, ["I", "II", "III"][rank]])
+	if not skills.is_empty(): lines.append(", ".join(skills))
 	var code := str(hero.get("spec", "NONE"))
 	if code != "NONE":
-		lines.append(_spec_name(code))
+		var name := _spec_text(code, "Name", "")
+		if not name.is_empty(): lines.append(name)
 		var description := _spec_text(code, "Desc", "")
 		if not description.is_empty(): lines.append(description)
 	return ELCombatTooltip.hero_content(profile.id, portraits[side].texture, title, lines)
@@ -4298,7 +4352,8 @@ func _figure_tip(at: Vector2) -> Dictionary:
 	else:
 		var creature := duel.entity(id)
 		var card := str(creature.card)
-		var label := "%s %d/%d" % [duel.card_name(card), int(creature.power), maxi(0, int(creature.toughness) - int(creature.damage))]
+		var stats := _shown_creature_stats(id, creature)
+		var label := "%s %d/%d" % [duel.card_name(card), int(stats.power), maxi(0, int(stats.toughness) - shown_damage(id))]
 		var description := profile.card_description(card)
 		if not description.is_empty() and description != card: label += "\n" + description
 		content = ELCombatTooltip.text_content(label)
@@ -4598,7 +4653,7 @@ func _build_ui() -> void:
 	card_scroll.get_h_scroll_bar().value_changed.connect(func(_value: float): hand_frames.queue_redraw())
 	hand = HBoxContainer.new()
 	# Cards sit on the panel's 53 px slots.
-	hand.add_theme_constant_override("separation", 3)
+	hand.add_theme_constant_override("separation", ELListLook.ITEM_GAP)
 	card_scroll.add_child(hand)
 	card_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_SHOW_NEVER
 	rail.hand_scroll = card_scroll

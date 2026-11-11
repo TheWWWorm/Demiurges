@@ -1710,12 +1710,10 @@ func spell(card: String, caster: Node3D = null, target: Node3D = null) -> void:
 		# Unbound and unrelated Draw requests keep their prior levels.
 		elif edition in ["el1", "el2"] and card == "REPR" and path == effect_sound("Draw"):
 			play(path, _draw_gain(caster))
-		# Original EL2 Juryrig@ places BlackDamage on the opposing
-		# hero, distinct from caster PosSorcery. Use its own original .fx
-		# first-SOUN source only for this bound JRRG cast.
-		elif edition == "el2" and card == "JRRG" and path == effect_sound("BlackDamage"):
+		# Reanimate places BlackDamage on the opposing hero and PosSorcery on the caster.
+		elif edition in ["el1", "el2"] and card == "JRRG" and path == effect_sound("BlackDamage"):
 			play(path, _target_blackdamage_gain(target))
-		elif edition == "el2" and card == "JRRG" and path == effect_sound("PosSorcery"):
+		elif edition in ["el1", "el2"] and card == "JRRG" and path == effect_sound("PosSorcery"):
 			play(path, _target_possorcery_gain(caster))
 		elif edition in ["el1", "el2"] and card == "TRSN" and path == effect_sound("GreenSummon"):
 			play(path, _tree_snake_summon_gain(target))
@@ -1734,7 +1732,7 @@ func spell(card: String, caster: Node3D = null, target: Node3D = null) -> void:
 			play(path, _amnesia_discard_gain(target))
 		elif edition in ["el1", "el2"] and card == "DSIG" and path == effect_sound("RedFireStream"):
 			play(path, _disintegrate_gain(caster, target))
-		elif edition in ["el1", "el2"] and card == "PWTP" and path == effect_sound("DrainMana"):
+		elif edition in ["el1", "el2"] and card in ["PWTP", "LQRL"] and path == effect_sound("DrainMana"):
 			play(path, _powertap_drain_gain(caster, target))
 		# Both originals' Channel heal the opposing hero, not the life-paying
 		# caster (EL1, EL2). Use each edition's first
@@ -1766,15 +1764,11 @@ func spell(card: String, caster: Node3D = null, target: Node3D = null) -> void:
 		else:
 			play(path)
 
-## Original EL2 ManaBreeze@ and @ registers a distinct
-## Target/GainMana on each hero. Play both original first-SOUN instances from
-## their own targets, not one generic caster or shared-center cue. Preserve
-## the ordinary, unbound spell() API and EL1's separate behavior.
-func mana_breeze(caster: Node3D, opponent: Node3D) -> void:
-	if edition != "el2": return
+## Ether Breeze and Ether Storm register GainMana on each hero.
+func shared_mana_gain(hero0: Node3D, hero1: Node3D) -> void:
 	var path := effect_sound("GainMana")
 	if path.is_empty(): return
-	for hero: Node3D in [caster, opponent]:
+	for hero: Node3D in [hero0, hero1]:
 		if is_instance_valid(hero):
 			play(path, _gainmana_gain(hero))
 
