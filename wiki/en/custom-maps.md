@@ -20,14 +20,14 @@ A map is a set of files that share its name:
 
 | File | Content |
 |---|---|
-| `.smp` | the scenario: terrain, objects, players, heroes and creatures |
-| `.sbm` | the map file with its title and description |
+| `.sbm` | the map as the game plays it: title, description, terrain, objects, players, heroes and creatures |
+| `.smp` | the map editor's copy of the same map (optional) |
 | `.scp` | scripts: the map's own story and the battle scripts of its creatures |
 | `.bm1` | the minimap |
 | `.png`, `.bmp`, `.bm2` | pictures; the first one found is shown on the Mission screen |
 | `.mp3` | music played while the map is chosen |
 
-The `.smp` is what the remake plays. A map with only a `.sbm` is listed with a note and cannot be started; a map with only a `.smp` plays and takes its title from the scenario. When a map's `.smp` and `.sbm` are named differently but are the only two in their folder, they count as one map.
+A map needs one of the two. Most published maps bring only the `.sbm`, which is enough: just copy the map's folder into the maps folder. When both are there, the remake plays the `.smp`; a map with only a `.smp` takes its title from it. When a map's `.smp` and `.sbm` are named differently but are the only two in their folder, they count as one map.
 
 Scripts may sit in sub-folders: a map that names `Maps\Custom\CtT\Hero.scp` finds `CtT\Hero.scp` next to it. All custom maps share these names, so two maps with a script of the same name and folder use the same file.
 

@@ -43,7 +43,7 @@ func encode(director: ELAdventureDirector, camera: Dictionary = {}) -> Dictionar
 		movement.path = points
 	var encounter := {}
 	if director.encounter != null:
-		encounter = {"hero": director.encounter.hero_id, "opponent": director.encounter.opponent_id, "ethereal": director.encounter.ethereal_defender, "battle": {"format": "etherlords-duel", "version": 1, "state": director.encounter.battle.snapshot()}}
+		encounter = {"hero": director.encounter.hero_id, "opponent": director.encounter.opponent_id, "ethereal": director.encounter.ethereal_defender, "swapped": director.encounter.swapped, "battle": {"format": "etherlords-duel", "version": 1, "state": director.encounter.battle.snapshot()}}
 		if director.encounter.assault_fort >= 0: encounter.fort = director.encounter.assault_fort
 	return {"format": FORMAT, "version": 1, "edition": state.map.profile.id, "map": state.map.id, "map_hash": _map_hash(state.map), "script_name": state.script_name, "encounter": encounter,
 		"world": world, "scenario": state.scenario.duplicate(true), "objects": objects, "players": players, "explored": Marshalls.raw_to_base64(state.explored), "notebook": ELSecondNotebook.encode(state), "observations": state.observations.duplicate(true), "ambience": ELSecondAmbience.encode(state), "script": script, "artifact_templates": state.artifact_templates.duplicate(true),
@@ -419,12 +419,15 @@ func decode(raw: Variant, profiles: Dictionary) -> Dictionary:
 		var ethereal: Variant = combat.get("ethereal", -1)
 		if not ELLuaSave._integer(ethereal, -1, 0x7fffffff) or (int(ethereal) >= 0 and int(ethereal) not in [int(combat.hero), int(combat.opponent)]): return _reject(next, "Invalid ethereal encounter.")
 		director.encounter.ethereal_defender = int(ethereal)
+		var swapped: Variant = combat.get("swapped", false)
+		if not swapped is bool: return _reject(next, "Invalid encounter sides.")
+		director.encounter.swapped = swapped
 		var assault_fort: Variant = combat.get("fort", -1)
 		if not ELLuaSave._integer(assault_fort, -1, 0x7fffffff): return _reject(next, "Invalid encounter fort.")
 		if int(assault_fort) >= 0:
 			var fort: Dictionary = objects.get(int(assault_fort), {})
-			var attacker: Dictionary = objects[int(combat.hero)]
-			if map.profile.id != "el2" or int(ethereal) >= 0 or fort.get("type") != "fort" or not fort.alive or int(fort.garrison) != int(combat.opponent) or attacker.get("fortified", false):
+			var attacker: Dictionary = objects[int(combat.opponent if swapped else combat.hero)]
+			if map.profile.id != "el2" or int(ethereal) >= 0 or fort.get("type") != "fort" or not fort.alive or int(fort.garrison) != int(combat.hero if swapped else combat.opponent) or attacker.get("fortified", false):
 				return _reject(next, "Invalid encounter fort.")
 			director.encounter.assault_fort = int(assault_fort)
 		director.encounter.battle = battle

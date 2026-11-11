@@ -2,6 +2,12 @@
 
 Versions follow [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html) from 0.3.0 on.
 
+## Unreleased
+
+- Etherlords II: custom maps that come with only their map file (`.sbm`), as most published maps do, now play. Copy the map's folder into the maps folder (or import its archive) and it is listed and starts like any other; no scenario file (`.smp`) is needed. The remake reads the map file itself, exactly as the game does.
+- Etherlords II: when an enemy attacks your hero, your hero now stays on the left of the battle screen with your portrait, health and ether, next to your spell and artifact buttons. Map scripts still see the attacker first.
+- Etherlords: bushes cast a darker contact shadow, as in Etherlords II. In both games, low creatures and bushes keep their shadow at their feet instead of a lifted, faded one.
+
 ## 0.8.0
 
 - Etherlords: a new **Free movement** option (on by default, Gameplay settings) moves heroes at once, as many times a day as their movement points allow, in the manner of Heroes of Might and Magic. Choosing the same destination again starts the move. Computer players move their heroes the same way when the day ends, and the night then strikes castles and sends ethereal attacks. Network, hot-seat and tutorial games keep simultaneous orders. Hero portraits show the steps left for the day (such as 9/14). Pressing End Day while a hero is still walking ends the day once the move is over.

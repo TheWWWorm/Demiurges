@@ -18,8 +18,8 @@
   "translation_keys": 16,
   "files": {
     "data/en/index.json": {
-      "bytes": 247670,
-      "sha256": "c34b130efdaa647a3fe4e3634edf67e93e22f96caf76befda1caf4fd8208f02f"
+      "bytes": 247771,
+      "sha256": "d7f238d317be25a5f5f2d7e1a1586e7f9770251fb77163abc1440c629a8e4cb1"
     },
     "data/en/pages/abilities.json": {
       "bytes": 2238,
@@ -1518,8 +1518,8 @@
       "sha256": "8bb8f3740b23fafc52b0d871a8a716faffd4c23dd8f37177f4f352b7417feef0"
     },
     "data/en/pages/custom-maps.json": {
-      "bytes": 3399,
-      "sha256": "0847e307c3786d77f248d4cded8b3452cbc49c492e784666794df3c779daf78f"
+      "bytes": 3500,
+      "sha256": "da2f17b3ea6b4d4cfe1291eca5bc3bae27a9a7a87cd82ca3ee1131026720c395"
     },
     "data/en/pages/differences.json": {
       "bytes": 2001,
@@ -1854,8 +1854,8 @@
       "sha256": "1b067870a7a8e91c2adbf015259678dbca8ab20167f1730e52cd34fee0d24934"
     },
     "data/ru/index.json": {
-      "bytes": 437900,
-      "sha256": "882ef69987035f22a74c60f36f7d438469b38bd4a55d1ae8f35122ff695f0e2e"
+      "bytes": 438137,
+      "sha256": "2211ec271861b4b625a7567aa490c36e53ac2d34916009ddd8fe872f0bc20563"
     },
     "data/ru/pages/abilities.json": {
       "bytes": 3685,
@@ -3354,8 +3354,8 @@
       "sha256": "df574ebbfdf357564ae2db7d6e1453adb617fe3da4db75b187e01bfcf2f52f04"
     },
     "data/ru/pages/custom-maps.json": {
-      "bytes": 5640,
-      "sha256": "620c96e2662e8d07f928153fa19624cb26d13c1ed6964d8953d7f7a48948a4b6"
+      "bytes": 5877,
+      "sha256": "32c05c086a8c41abd37fccd81ae69b8cadc24bdc89280db7e786d5ef94103572"
     },
     "data/ru/pages/differences.json": {
       "bytes": 3497,
@@ -5138,5 +5138,5 @@
       "sha256": "aabab5bcfce15545227916db3d8f7e6c353fbf93c2b073e25dec7262d79874ed"
     }
   },
-  "bytes": 5677407
+  "bytes": 5678083
 }

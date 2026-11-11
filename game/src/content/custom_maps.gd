@@ -16,12 +16,14 @@ extends RefCounted
 ## holding Maps/Custom, as a map's repository does, counts from there). Files
 ## keep their sub-folders. All appear to the game under Maps/Custom/.
 ## A map whose .smp and .sbm names differ (an editor copy beside the release)
-## pairs them when its folder has one of each; a map with only the .sbm is
-## listed but cannot be played (the remake does not read the binary map).
+## pairs them when its folder has one of each; a map with only the .sbm plays
+## from the scenario ELBinaryMap reads out of it.
 
 const FOLDER := "Maps/Custom/"
 const KEY_PREFIX := "maps/custom/"
 const USER_FOLDER := "user://maps"
+## Scenarios read from map files that came without one.
+const CACHE_FOLDER := "user://maps-cache"
 ## The files a custom map may bring. An import copies nothing else.
 const EXTENSIONS := ["smp", "sbm", "scp", "bm1", "bm2", "bmp", "png", "jpg", "mp3", "ogg", "txt"]
 ## Custom files that stand in for the shipped extensions the loaders read.
@@ -68,6 +70,7 @@ static func index(files: Dictionary, root: String) -> Array[String]:
 			files[key] = map_folder.path_join(relative)
 			added.append(key)
 		_pair(files, map_folder, added)
+	_read_binary_maps(files, added)
 	for key: String in files.keys():
 		if not key.begins_with(KEY_PREFIX): continue
 		var extension := key.get_extension()
@@ -121,6 +124,39 @@ static func _pair(files: Dictionary, map_folder: String, added: Array[String]) -
 	if files.get(own, "") == files[key] and added.has(own):
 		files.erase(own)
 		added.erase(own)
+
+## A map with only its map file (.sbm) plays from the scenario read out of
+## it (ELBinaryMap), kept in CACHE_FOLDER under the file's SHA-256 so it is
+## rebuilt only when the map changes. A map file that cannot be read stays
+## listed but unplayable.
+static func _read_binary_maps(files: Dictionary, added: Array[String]) -> void:
+	for key: String in files.keys():
+		if not key.begins_with(KEY_PREFIX) or key.count("/") != 2 or key.get_extension() != "sbm": continue
+		var scenario := key.get_basename() + ".smp"
+		if files.has(scenario): continue
+		var path := scenario_from_binary(String(files[key]))
+		if path.is_empty(): continue
+		files[scenario] = path
+		added.append(scenario)
+
+## The cached scenario file built from a binary map, or "" when it is unreadable.
+static func scenario_from_binary(source: String) -> String:
+	var bytes := FileAccess.get_file_as_bytes(source)
+	if bytes.is_empty() or bytes.size() > MAX_FILE_BYTES: return ""
+	var folder := ProjectSettings.globalize_path(CACHE_FOLDER)
+	var hash := FileAccess.get_sha256(source)
+	var path := folder.path_join("%s-%d.smp" % [hash, ELBinaryMap.VERSION])
+	if FileAccess.file_exists(path): return path
+	var result := ELBinaryMap.scenario(bytes)
+	if String(result.text).is_empty():
+		push_warning("Custom map %s: %s" % [source.get_file(), result.error])
+		return ""
+	DirAccess.make_dir_recursive_absolute(folder)
+	var file := FileAccess.open(path, FileAccess.WRITE)
+	if file == null: return ""
+	file.store_string(result.text)
+	file.close()
+	return path
 
 ## Whether a map id names a custom map ("Maps/Custom/<name>").
 static func is_custom(id: String) -> bool:

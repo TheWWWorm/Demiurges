@@ -984,7 +984,7 @@ func finish_encounter() -> bool:
 	if encounter == null: return false
 	var interrupted := not state.outcome.is_empty()
 	if not encounter.finish(): return _fail(encounter.error)
-	var battle := {"hero": encounter.hero_id, "opponent": encounter.opponent_id, "winner": encounter.winner}
+	var battle := {"hero": encounter.attacker(), "opponent": encounter.target(), "winner": encounter.winner}
 	var report := encounter.report
 	var encounter_lost := encounter.lose_screen
 	var assault_fort := encounter.assault_fort

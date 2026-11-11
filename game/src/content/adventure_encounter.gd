@@ -36,7 +36,21 @@ var lose_screen := false
 const FIRST_ARENAS := ["Black.002", "Green.002", "Blue.002", "Red.002", "Ether.001", "White.001", "Dungeon.001", "Fort.001"]
 const SECOND_TERRAIN_ARENAS := ["Black", "Green", "Blue", "Red", "Ether"]
 
-## Campaign battles keep the actor order even when the local hero defends.
+## Second game: the local hero defends, so it takes battle side 0 (the left
+## panel and spell buttons are always the player's) while hooks, events, the
+## arena and the first move keep the attacker first.
+var swapped := false
+
+## The attacking actor (the first of the queued battle pair).
+func attacker() -> int:
+	return opponent_id if swapped else hero_id
+
+## The actor attacked.
+func target() -> int:
+	return hero_id if swapped else opponent_id
+
+## The battle side of the local player. Older saves of a defending battle
+## kept the attacker on side 0.
 func player_side() -> int:
 	if state == null or state.map.profile.id != "el2": return 0
 	return 1 if int(state.object(hero_id).get("owner", -1)) != 1 and int(state.object(opponent_id).get("owner", -1)) == 1 else 0
@@ -44,8 +58,9 @@ func player_side() -> int:
 ## `defender` is the second actor of the queued battle pair; its tile picks the arena.
 func prepare(session: ELAdventureSession, first: int, second: int, defender := -1) -> bool:
 	state = session
-	hero_id = first
-	opponent_id = second
+	swapped = session.map.profile.id == "el2" and int(session.object(first).get("owner", -1)) != 1 and int(session.object(second).get("owner", -1)) == 1
+	hero_id = second if swapped else first
+	opponent_id = first if swapped else second
 	if state.map.profile.id == "el2":
 		if int(state.object(hero_id).get("owner", -1)) == 1 or int(state.object(opponent_id).get("owner", -1)) == 1: return _prepare_duel(state, defender)
 		auto = true
@@ -148,16 +163,17 @@ func _prepare_duel(state: ELAdventureSession, defender: int) -> bool:
 		if not scripts.is_empty(): options.scripts = scripts
 	var scripted_arena := ""
 	if state.vm != null:
-		var chosen := state.vm.invoke("Hook_OnGetArena", [float(hero_id), float(opponent_id)])
+		var chosen := state.vm.invoke("Hook_OnGetArena", [float(attacker()), float(target())])
 		if not state.vm.error.is_empty(): return _fail(state.vm.error)
 		if not chosen.is_empty() and chosen[0] is String: scripted_arena = chosen[0]
 	if not scripted_arena.is_empty(): options.arena = scripted_arena
-	elif profile.id == "el2": options.arena = second_arena(state, hero_id, opponent_id, randi())
+	elif profile.id == "el2": options.arena = second_arena(state, attacker(), target(), randi())
 	# Both original battle constructors take a fresh rand() value. Reloading
 	# a map before combat creates a new battle, while an active battle restores its state.
 	var battle_seed := randi() & 0x7fff
 	var colours: Array[String] = [String(options.players[0].faction), String(options.players[1].faction)]
-	options.first_side = first_side(state, hero_id, opponent_id, colours, battle_seed)
+	if swapped: colours.reverse()
+	options.first_side = first_side(state, attacker(), target(), colours, battle_seed) ^ (1 if swapped else 0)
 	battle = ELDuel.new()
 	if not battle.start(profile, battle_seed, options): return _fail(battle.error)
 	watch_side = ELFirstScenario.duel_watch(state, hero_id, opponent_id)
@@ -276,7 +292,7 @@ func finish() -> bool:
 		# No winner: nobody dies and no finishing hook runs.
 		resolved = true
 		winner = -1
-		state.event.emit({"kind": "battle_finished", "hero": hero_id, "opponent": opponent_id, "winner": -1})
+		state.event.emit({"kind": "battle_finished", "hero": attacker(), "opponent": target(), "winner": -1})
 		return true
 	var winner_id := scripted_winner
 	if scripted_winner < 0 and battle != null and battle.winner >= 0: winner_id = hero_id if battle.winner == 0 else opponent_id
@@ -294,7 +310,7 @@ func finish() -> bool:
 					state.set_variable("IsNewSpecialization", 1.0)
 					state.set_variable("NewSpecializationType", str(entry.spec))
 	if state.vm != null:
-		var finishing := state.vm.invoke("Hook_OnBattleFinishing", [float(hero_id), float(opponent_id), float(winner_id)])
+		var finishing := state.vm.invoke("Hook_OnBattleFinishing", [float(attacker()), float(target()), float(winner_id)])
 		if not state.vm.error.is_empty(): return _fail(state.vm.error)
 		# The EL2 native reads a numeric zero as a veto, as in chapter 54's retry.
 		if state.map.profile.id == "el2": kill_loser = finishing.is_empty() or ELAdventureSession._truthy_flag(finishing[0])
@@ -348,7 +364,7 @@ func finish() -> bool:
 		lose_screen = not (counted and int(state.object(winner_id).get("owner", -1)) == 1)
 	resolved = true
 	winner = winner_id
-	state.event.emit({"kind": "battle_finished", "hero": hero_id, "opponent": opponent_id, "winner": winner_id})
+	state.event.emit({"kind": "battle_finished", "hero": attacker(), "opponent": target(), "winner": winner_id})
 	return true
 
 ## Second game: PreCombatCancel declines a prepared local battle.
@@ -361,12 +377,12 @@ func decline() -> bool:
 	var local := hero_id if int(state.object(hero_id).get("owner", -1)) == 1 else opponent_id
 	var other := opponent_id if local == hero_id else hero_id
 	if state.vm != null:
-		state.vm.invoke("Hook_OnBattleFinishing", [float(hero_id), float(opponent_id), float(other)])
+		state.vm.invoke("Hook_OnBattleFinishing", [float(attacker()), float(target()), float(other)])
 		if not state.vm.error.is_empty(): return _fail(state.vm.error)
 	resolved = true
 	declined = true
 	winner = -1
-	state.event.emit({"kind": "battle_finished", "hero": hero_id, "opponent": opponent_id, "winner": -1, "declined": true})
+	state.event.emit({"kind": "battle_finished", "hero": attacker(), "opponent": target(), "winner": -1, "declined": true})
 	return true
 
 ## A neutral creature's loot goes to the winning hero's player.

@@ -121,7 +121,7 @@ func build(source: ELAdventureMap, session: ELAdventureSession = null) -> bool:
 		var center := ELAdventureGrid.center(object, definition.row)
 		var position := Vector3(center.x * ELAdventureTerrain.CELL, 0, -center.y * ELAdventureTerrain.CELL)
 		var transform := Transform3D(Basis(Vector3.UP, -float((rotation >> 2) & 3) * PI / 2.0) * Basis.from_scale(mirror * float(definition.scale)), position)
-		if blob_shadow(map.profile.id, object, definition):
+		if blob_shadow(map.profile.id, object, definition) or _foliage_shadow(map.profile.id, object, definition):
 			var foliage := _foliage_shadow(map.profile.id, object, definition)
 			var footprint := FOLIAGE_BLOB_SCALE if foliage else 1.0
 			_blob_slots[uid] = {"index": -1, "local": blob_local(prototype, footprint), "base": transform,
@@ -207,6 +207,11 @@ func build(source: ELAdventureMap, session: ELAdventureSession = null) -> bool:
 	sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS
 	sun.directional_shadow_max_distance = 90.0
 	sun.shadow_blur = 1.5
+	# Only the ground receives these shadows and it casts none, so the sun
+	# needs no bias against self-shadowing; the default one lifted the shadows
+	# of low figures and bushes off their feet and thinned them.
+	sun.shadow_bias = 0.0
+	sun.shadow_normal_bias = 0.0
 	set_blob_shadows(true)
 	enable_fog(session)
 	enable_colorless(session)
@@ -787,10 +792,14 @@ static func blob_shadow(edition: String, object: Dictionary, definition: Diction
 	if edition == "el1": return object.get("group") in ["additional_buildings", "forts", "mana_nodes"] or object.get("type") == "el1_spell_shop"
 	return false
 
+## Bushes and forest groups: besides their silhouette, a small contact blob,
+## since their thin leaf cards leave only a faint silhouette. The first game's
+## bushes (GreenBush07, blackbush_2) have no blob of their own and get it too.
 static func _foliage_shadow(edition: String, object: Dictionary, definition: Dictionary) -> bool:
-	if edition != "el2" or object.get("group") != "terrain_objects": return false
+	if object.get("group") != "terrain_objects" or definition.get("unit", false): return false
 	var title := str(definition.get("row", {}).get("METitle", "")).to_lower()
-	return ".bush" in title or ".forest" in title
+	if edition == "el1": return "bush" in title or "bush" in str(object.get("name", "")).to_lower()
+	return edition == "el2" and (".bush" in title or ".forest" in title)
 
 ## The blob quad in the model's own frame: the footprint of its mesh bounds
 ## (the original's model-space rectangle) on the ground.
