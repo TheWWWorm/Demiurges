@@ -8,6 +8,9 @@ extends SceneTree
 ##   godot --headless --path game --script /path/to/tools/wiki_check.gd
 
 var failures: Array[String] = []
+## Encyclopedia pages the guides link to ({lang: {page: guide}}), checked
+## against the encyclopedia of the installed games.
+var guide_cards := {}
 
 func check(condition: bool, what: String) -> void:
 	if not condition:
@@ -59,8 +62,11 @@ func _run() -> void:
 			for found: RegExMatch in link.search_all(row.html):
 				links += 1
 				var target := found.get_string(1)
-				# Encyclopedia lists come from the installed games (checked below).
+				# Encyclopedia lists and cards come from the installed games (checked below).
 				var listed: bool = target in ELWikiCatalog.LISTS.values()
+				if target.begins_with("card-") or target.begins_with("skill-") or target.begins_with("spec-"):
+					listed = true
+					guide_cards.get_or_add(lang, {})[target] = row.key
 				check(keys[lang].has(target) or listed, "%s/%s links to %s" % [lang, row.key, target])
 	probe.queue_free()
 	check(ELWikiHtml.key_from_url("wiki://combat") == "combat", "internal links resolve")
@@ -156,6 +162,10 @@ func _catalog(screen: ELWikiScreen, shots: String) -> void:
 		for row: Dictionary in catalog.pages:
 			for found: RegExMatch in link.search_all(row.html):
 				check(keys.has(found.get_string(1)), "%s: %s links to %s" % [lang, row.key, found.get_string(1)])
+		if profiles.size() > 1:
+			var cards: Dictionary = guide_cards.get(lang, {})
+			for target: String in cards:
+				check(keys.has(target), "%s/%s links to %s" % [lang, cards[target], target])
 		for kind: String in ELWikiCatalog.KINDS:
 			screen.navigate(ELWikiCatalog.LISTS[kind])
 			check(screen.page == ELWikiCatalog.LISTS[kind], "%s: the %s list opens" % [lang, kind])
@@ -168,6 +178,10 @@ func _catalog(screen: ELWikiScreen, shots: String) -> void:
 				else: single += 1
 			check(merged > 100 and single > 0, "%s: cards of both games share a page, others name their game" % lang)
 	screen.set_language("en")
+	# Story pages show their heroes' models from the installed games.
+	for story: String in ["diamanda", "white-lord"]:
+		screen.navigate(story)
+		check(screen._preview != null and screen._preview.model != null, "the %s page shows its hero" % story)
 	var creature := ""
 	var sorcery := ""
 	var artifact_creature := ""

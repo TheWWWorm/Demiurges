@@ -1,6 +1,7 @@
 class_name ELWikiPreview
 extends SubViewportContainer
-## The live creature beside a wiki card page (as the EI remake's WikiPreview):
+## The live creature beside a wiki card page (as the EI remake's WikiPreview),
+## or a story hero beside a guide that lists `heroes` (Diamanda, the White Lord):
 ## the creature's own model and textures from the installed game, playing its
 ## idle animation with its own particles (the whirlwind of an air wall, a
 ## spirit's trail: CreaturesPFX/<model>/idle.pfx, as in battle) in a small
@@ -39,6 +40,21 @@ func _ready() -> void:
 static func stage(profile: ELProfile, code: String, size: Vector2i, transparent := false) -> SubViewport:
 	var original: Dictionary = profile.table("CombatCreatures").get(code, {})
 	if original.is_empty(): return null
+	var secondary := "Creatures/" + str(original.SecTexture) if original.has("SecTexture") else ""
+	return _stage(profile, str(original.get("Model", "")), "Creatures/" + str(original.get("Texture", "")), secondary,
+		float(original.get("Scale", 1.0)), size, transparent)
+
+## A viewport holding the hero of HeroTemplates row `template` (story pages:
+## Diamanda, the White Lord), with its battle model and skin; null when the
+## game has no such hero.
+static func stage_hero(profile: ELProfile, template: String, size: Vector2i, transparent := false) -> SubViewport:
+	var row: Dictionary = profile.table("HeroTemplates").get(template, {})
+	if row.is_empty(): return null
+	var skin := "Heroes/" + str(row.get("Texture", "")).replace("\\", "/")
+	var secondary := "Heroes/" + str(row.Texture2).replace("\\", "/") if row.has("Texture2") else ""
+	return _stage(profile, str(row.get("Model", "")), skin, secondary, 1.0, size, transparent)
+
+static func _stage(profile: ELProfile, model_name: String, skin: String, secondary: String, scale: float, size: Vector2i, transparent: bool) -> SubViewport:
 	var view := SubViewport.new()
 	view.size = size
 	view.own_world_3d = true
@@ -64,15 +80,14 @@ static func stage(profile: ELProfile, code: String, size: Vector2i, transparent 
 	var figure := ELModel.new()
 	figure.name = "Model"
 	view.add_child(figure)
-	var secondary := "Creatures/" + str(original.SecTexture) if original.has("SecTexture") else ""
-	if not figure.build(profile, str(original.get("Model", "")), "Creatures/" + str(original.get("Texture", "")), secondary):
+	if not figure.build(profile, model_name, skin, secondary):
 		view.free()
 		return null
-	figure.scale = Vector3.ONE * float(original.get("Scale", 1.0))
+	figure.scale = Vector3.ONE * scale
 	# Alpha32 skins (air walls, spirits) fade out in soft alpha: the wall's
 	# lower half is a wisp of see-through cloth. Blend them instead of the
 	# figure material's alpha cut-off, which drops everything below half.
-	if str(original.get("Texture", "")).to_lower().begins_with("alpha32"):
+	if skin.to_lower().trim_prefix("creatures/").trim_prefix("heroes/").begins_with("alpha32"):
 		for part: Node in figure.get_children():
 			var mesh := part as MeshInstance3D
 			if mesh != null and mesh.material_override is StandardMaterial3D:
@@ -84,7 +99,8 @@ static func stage(profile: ELProfile, code: String, size: Vector2i, transparent 
 	effects.name = "Effects"
 	view.add_child(effects)
 	effects.build(profile)
-	effects.attach.call_deferred(figure)
+	# The reader may already have moved on to another page by then.
+	(func() -> void: if is_instance_valid(figure) and figure.is_inside_tree(): effects.attach(figure)).call_deferred()
 	var pivot_node := Node3D.new()
 	pivot_node.name = "Pivot"
 	view.add_child(pivot_node)
@@ -137,19 +153,26 @@ static func frame(view: SubViewport, yaw: float, pitch: float, zoom := 1.0) -> f
 
 ## Shows `code`'s creature; false when it has no model in this game.
 func show_creature(profile: ELProfile, code: String) -> bool:
-	# Switching editions replaces the creature shown.
+	return _show(profile, stage(profile, code, Vector2i(512, 512)), str(profile.table("CombatCreatures").get(code, {}).get("SndDir", "")))
+
+## Shows the hero of HeroTemplates row `template`; false when the game has none.
+func show_hero(profile: ELProfile, template: String) -> bool:
+	return _show(profile, stage_hero(profile, template, Vector2i(512, 512)), "")
+
+func _show(profile: ELProfile, staged: SubViewport, sounds: String) -> bool:
+	# Switching editions (or heroes) replaces the figure shown.
 	if viewport != null:
 		remove_child(viewport)
 		viewport.queue_free()
 		viewport = null
-	viewport = stage(profile, code, Vector2i(512, 512))
+	viewport = staged
 	if _sound != null: _sound.stop()
 	if viewport == null:
 		model = null
 		creature_changed.emit()
 		return false
 	_profile = profile
-	_sound_directory = str(profile.table("CombatCreatures")[code].get("SndDir", ""))
+	_sound_directory = sounds
 	stretch = true
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	custom_minimum_size = Vector2(320, 320)

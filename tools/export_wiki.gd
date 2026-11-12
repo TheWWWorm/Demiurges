@@ -14,6 +14,10 @@ extends SceneTree
 ## language editions match. --wiki-images renders the creatures (needs
 ## rendering, so omit --headless) and saves the card icons of each game into
 ## <images>/<game>/; pictures already there are kept unless --wiki-images-all.
+## It also renders the story heroes that guide pages list (`heroes:` front
+## matter, ELWikiData) as <images>/<game>/hero-<row>.webp. Without
+## --wiki-output only the pictures are made and no export is written;
+## --wiki-heroes-only skips the cards.
 
 func _initialize() -> void:
 	_run.call_deferred()
@@ -57,8 +61,8 @@ func _mount(edition: String, folder: String) -> ELProfile:
 func _run() -> void:
 	var language := _arg("wiki-language", "en")
 	var output := _arg("wiki-output")
-	if output.is_empty():
-		_fail("needs --wiki-output (and --wiki-el1/--wiki-el2 without Steam copies)")
+	if output.is_empty() and _arg("wiki-images").is_empty():
+		_fail("needs --wiki-output and/or --wiki-images (and --wiki-el1/--wiki-el2 without Steam copies)")
 		return
 	var folders := ELContentLibrary.steam_folders()
 	var profiles := {}
@@ -81,14 +85,15 @@ func _run() -> void:
 			return
 		for page: Dictionary in other.pages: only[page.key] = true
 	var catalog := ELWikiCatalog.build(profiles, language, only)
-	var data := {"games": profiles.keys(), "language": language, "pages": catalog.pages}
-	DirAccess.make_dir_recursive_absolute(output)
-	var path := output.path_join("%s.json" % language)
-	var file := FileAccess.open(path, FileAccess.WRITE)
-	file.store_string(JSON.stringify(data, "", true) + "
+	if not output.is_empty():
+		var data := {"games": profiles.keys(), "language": language, "pages": catalog.pages}
+		DirAccess.make_dir_recursive_absolute(output)
+		var path := output.path_join("%s.json" % language)
+		var file := FileAccess.open(path, FileAccess.WRITE)
+		file.store_string(JSON.stringify(data, "", true) + "
 ")
-	file.close()
-	print("export_wiki: %d pages from %s -> %s" % [catalog.pages.size(), ", ".join(profiles.keys()), path])
+		file.close()
+		print("export_wiki: %d pages from %s -> %s" % [catalog.pages.size(), ", ".join(profiles.keys()), path])
 	var images := _arg("wiki-images")
 	if not images.is_empty():
 		for edition: String in profiles: await _images(profiles[edition], catalog, images.path_join(edition))
@@ -102,7 +107,8 @@ func _images(profile: ELProfile, catalog: ELWikiCatalog, folder: String) -> void
 	var redo := _flag("wiki-images-all")
 	var icons := 0
 	var models := 0
-	for page: Dictionary in catalog.pages:
+	# --wiki-heroes-only renders just the story heroes.
+	for page: Dictionary in [] if _flag("wiki-heroes-only") else catalog.pages:
 		var code := str(page.get("card", ""))
 		if code.is_empty() or not profile.id in page.get("games", []): continue
 		var icon_path := folder.path_join("icon-%s.png" % code)
@@ -115,24 +121,39 @@ func _images(profile: ELProfile, catalog: ELWikiCatalog, folder: String) -> void
 		var model_path := folder.path_join("%s.webp" % code)
 		if page.get("kind") != "creature" or not profile.id in page.get("models", []): continue
 		if not redo and FileAccess.file_exists(model_path): continue
-		var view := ELWikiPreview.stage(profile, code, Vector2i(960, 960))
-		if view == null:
-			printerr("export_wiki: no model for ", code)
-			continue
-		root.add_child(view)
-		# Let the idle clip and its particles run for a moment.
-		for i in 12: await process_frame
-		ELWikiPreview.frame(view, ELWikiPreview.YAW, ELWikiPreview.PITCH)
-		for i in 3: await process_frame
-		var shot := _cropped(view.get_texture().get_image(), 480)
-		shot.save_webp(model_path, true, 0.86)
-		view.queue_free()
-		models += 1
-	print("export_wiki: %d icons, %d creature pictures -> %s" % [icons, models, folder])
+		if await _render(ELWikiPreview.stage(profile, code, Vector2i(960, 960)), model_path): models += 1
+		else: printerr("export_wiki: no model for ", code)
+	# The story heroes of the guide pages.
+	var heroes := 0
+	var seen := {}
+	for row: Dictionary in ELWikiData.PAGES.get("en", []):
+		for hero: Array in row.get("heroes", []):
+			if hero[0] != profile.id or seen.has(hero[1]): continue
+			seen[hero[1]] = true
+			var name := RegEx.create_from_string("[^a-z0-9]+").sub(str(hero[1]).to_lower(), "-", true).strip_edges().trim_prefix("-").trim_suffix("-")
+			var hero_path := folder.path_join("hero-%s.webp" % name)
+			if not redo and FileAccess.file_exists(hero_path): continue
+			# Heroes carry faint glows; a firmer threshold frames the figure itself.
+			if await _render(ELWikiPreview.stage_hero(profile, hero[1], Vector2i(960, 960)), hero_path, 0.12): heroes += 1
+			else: printerr("export_wiki: no hero ", hero[1])
+	print("export_wiki: %d icons, %d creature and %d hero pictures -> %s" % [icons, models, heroes, folder])
+
+## Renders a staged figure into `path` (480 px WebP); false without a stage.
+func _render(view: SubViewport, path: String, threshold := 0.025) -> bool:
+	if view == null: return false
+	root.add_child(view)
+	# Let the idle clip and its particles run for a moment.
+	for i in 12: await process_frame
+	ELWikiPreview.frame(view, ELWikiPreview.YAW, ELWikiPreview.PITCH)
+	for i in 3: await process_frame
+	var shot := _cropped(view.get_texture().get_image(), 480, threshold)
+	shot.save_webp(path, true, 0.86)
+	view.queue_free()
+	return true
 
 ## The square around the drawn creature (pixels unlike the background), with a
 ## margin, scaled to `size`.
-func _cropped(image: Image, size: int) -> Image:
+func _cropped(image: Image, size: int, threshold := 0.025) -> Image:
 	image.convert(Image.FORMAT_RGB8)
 	var background := image.get_pixel(0, 0)
 	var low := Vector2i(image.get_width(), image.get_height())
@@ -140,7 +161,7 @@ func _cropped(image: Image, size: int) -> Image:
 	for y in range(0, image.get_height(), 2):
 		for x in range(0, image.get_width(), 2):
 			var c := image.get_pixel(x, y)
-			if absf(c.r - background.r) + absf(c.g - background.g) + absf(c.b - background.b) < 0.025: continue
+			if absf(c.r - background.r) + absf(c.g - background.g) + absf(c.b - background.b) < threshold: continue
 			low = Vector2i(mini(low.x, x), mini(low.y, y))
 			high = Vector2i(maxi(high.x, x), maxi(high.y, y))
 	if high.x < 0: return image

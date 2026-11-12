@@ -6,7 +6,8 @@
   {"id": "all-skills", "en": "Hero skills", "ru": "Навыки героев", "catalog": true},
   {"id": "all-specializations", "en": "Specializations", "ru": "Специализации", "catalog": true},
   {"id": "rules", "en": "Game mechanics", "ru": "Правила игры"},
-  {"id": "modes", "en": "Campaigns and modes", "ru": "Кампании и режимы"},
+  {"id": "story", "en": "Story and world", "ru": "Сюжет и мир"},
+  {"id": "modes","en": "Campaigns and modes", "ru": "Кампании и режимы"},
   {"id": "start", "en": "Installing and playing", "ru": "Установка и запуск"},
   {"id": "remake", "en": "About the remake", "ru": "О ремейке"}
 ]

@@ -85,6 +85,26 @@ def inline(text, page, links):
     return ''.join(out)
 
 
+HERO = re.compile(r'(el1|el2)/([^=|]+?)\s*=\s*([^|]+)')
+
+
+def heroes(value, name):
+    """Story heroes of a page: `heroes: el1/Diamanda = Caption | el2/...`, each a
+    HeroTemplates row of a game and its caption -> [[game, row, caption], ...]."""
+    out = []
+    for item in filter(None, (part.strip() for part in value.split('|'))):
+        m = HERO.fullmatch(item)
+        if not m:
+            raise WikiError(f'{name}: heroes entries are "el1|el2/<HeroTemplates row> = <caption>", not {item!r}')
+        out.append([m[1], m[2].strip(), m[3].strip()])
+    return out
+
+
+def hero_image(game, template):
+    """The exported picture of a story hero (tools/export_wiki.gd names it so)."""
+    return f'{game}/hero-' + re.sub(r'[^a-z0-9]+', '-', template.lower()).strip('-') + '.webp'
+
+
 def parse(path):
     """Returns (meta, html, plain text, h2 count, links) for one source file."""
     text = path.read_text(encoding='utf-8').replace('\r\n', '\n')
@@ -99,6 +119,7 @@ def parse(path):
     if not meta.get('title') or not meta.get('category'):
         raise WikiError(f'{name}: front matter needs title and category')
     meta['order'] = int(meta.get('order', 100))
+    meta['heroes'] = heroes(meta.get('heroes', ''), name)
     body = text[m.end():].strip('\n').split('\n')
     links, out, plain, sections = set(), [f'<h1>{html.escape(meta["title"], quote=False)}</h1>'], [meta['title']], 0
     i = 0
@@ -186,7 +207,7 @@ def load():
             if lang == 'ru' and len(CYRILLIC.findall(words)) < len(words) * 0.3:
                 raise WikiError(f'ru/{path.name}: the Russian article is mostly not in Russian')
             rows.append({'key': key, 'title': meta['title'], 'category': meta['category'],
-                         'order': meta['order'], 'summary': meta.get('summary', ''),
+                         'order': meta['order'], 'summary': meta.get('summary', ''), 'heroes': meta['heroes'],
                          'html': body, 'search': words.lower(), 'sections': sections, 'links': sorted(links)})
         pages[lang] = rows
     catalog_pages = load_catalog(known)
@@ -205,6 +226,8 @@ def load():
         rows = [by_key[lang][key] for lang in LANGUAGES]
         if len({r['category'] for r in rows}) != 1 or len({r['order'] for r in rows}) != 1:
             raise WikiError(f'{key}: category and order must match in every language')
+        if len({tuple((h[0], h[1]) for h in r['heroes']) for r in rows}) != 1:
+            raise WikiError(f'{key}: the translations list different heroes')
         if len({r['sections'] for r in rows}) != 1:
             raise WikiError(f'{key}: the translations have different numbers of "## " sections')
         if len({tuple(r['links']) for r in rows}) != 1:
@@ -284,6 +307,22 @@ def web_figures(html, images, used):
     return FIGURE.sub(figure, html)
 
 
+def web_heroes(page, heroes, images, used):
+    """A story page's heroes as a captioned gallery under its heading, for the
+    heroes whose pictures were exported."""
+    out = ''
+    for game, template, caption in heroes:
+        name = hero_image(game, template)
+        if name in images:
+            used.add(name)
+            out += (f'<figure class="model"><img src="/wiki/images/{name}" alt="{html.escape(caption)}" loading="lazy">'
+                    f'<figcaption>{html.escape(caption, quote=False)}</figcaption></figure>')
+    if not out:
+        return page
+    head, _, rest = page.partition('</h1>')
+    return f'{head}</h1><div class="heroes">{out}</div>{rest}'
+
+
 # --- Outputs ------------------------------------------------------------------
 
 def interface_labels():
@@ -314,7 +353,8 @@ def write_public(output, cats, pages):
         folder.mkdir(parents=True)
         entries = []
         for row in pages[lang]:
-            page = {'key': row['key'], 'title': row['title'], 'category': row['category'], 'html': web_figures(row['html'], images, used)}
+            page = {'key': row['key'], 'title': row['title'], 'category': row['category'],
+                    'html': web_heroes(web_figures(row['html'], images, used), row.get('heroes', []), images, used)}
             (folder / f'{row["key"]}.json').write_text(json.dumps(page, ensure_ascii=False, sort_keys=True) + '\n', encoding='utf-8', newline='\n')
             entry = {'key': row['key'], 'title': row['title'], 'category': row['category'],
                      'summary': row['summary'], 'search': row['search']}
@@ -368,6 +408,8 @@ def game_script(cats, pages):
             if row.get('catalog'):
                 continue
             fields = {k: row[k] for k in ['key', 'title', 'category', 'html', 'search']}
+            if row.get('heroes'):
+                fields['heroes'] = row['heroes']
             lines.append('\t\t{' + ', '.join(f'{gd_string(k)}: {gd_string(v)}' for k, v in fields.items()) + '},')
         lines.append('\t],')
     lines.append('}')

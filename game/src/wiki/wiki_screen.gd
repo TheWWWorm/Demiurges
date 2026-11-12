@@ -401,6 +401,15 @@ func _show_visual(row: Dictionary) -> void:
 		_visual.remove_child(child)
 		child.queue_free()
 	_preview = null
+	# Story pages list heroes to show (from the installed games only).
+	var heroes: Array = []
+	for hero: Variant in row.get("heroes", []):
+		var profile: ELProfile = profiles.get(hero[0])
+		if profile != null and not profile.table("HeroTemplates").get(hero[1], {}).is_empty(): heroes.append(hero)
+	if not heroes.is_empty():
+		_visual.visible = true
+		_show_heroes(heroes)
+		return
 	var card := str(row.get("card", ""))
 	# The editions to show, newest first, among the installed games.
 	var editions: Array = []
@@ -452,6 +461,33 @@ func _show_visual(row: Dictionary) -> void:
 		picture.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 		picture.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 		_visual.add_child(picture)
+
+## The heroes of a story page ([game, HeroTemplates row, caption]), one at a
+## time, with a choice between them.
+func _show_heroes(heroes: Array) -> void:
+	var preview := ELWikiPreview.new()
+	if heroes.size() > 1:
+		var choice := OptionButton.new()
+		choice.fit_to_longest_item = false
+		for hero: Array in heroes: choice.add_item(str(hero[2]))
+		choice.item_selected.connect(func(index: int): preview.show_hero(profiles[heroes[index][0]], heroes[index][1]))
+		_visual.add_child(choice)
+	preview.show_hero(profiles[heroes[0][0]], heroes[0][1])
+	preview.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	preview.custom_minimum_size = Vector2(0, 320)
+	_visual.add_child(preview)
+	_preview = preview
+	_add_animation_controls(preview)
+	var hint := Label.new()
+	hint.text = (str(heroes[0][2]) + "\n" if heroes.size() == 1 else "") + _text("turn")
+	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	hint.add_theme_font_override("font", _sans)
+	hint.add_theme_font_size_override("font_size", 14)
+	hint.add_theme_color_override("font_color", MUTED)
+	_visual.add_child(hint)
+	var reset := _button(_text("reset"))
+	reset.pressed.connect(preview.reset_view)
+	_visual.add_child(reset)
 
 func _add_animation_controls(preview: ELWikiPreview) -> void:
 	var controls := HBoxContainer.new()

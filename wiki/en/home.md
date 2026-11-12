@@ -26,6 +26,13 @@ Open a creature's page in the game to rotate and zoom its 3D model. Choose an ac
 - [Creature abilities](abilities) · [Automatic combat and the camera](automatic-combat) · [The adventure map](adventure-map)
 - [About creatures](creatures) · [About spells](spells) · [Runes and artifacts](runes-artifacts) · [Heroes and levels](heroes)
 
+## Story and world
+
+- [The world of ether](story-world) · [Races and peoples](story-peoples) · [Places](places) · [Characters](story-characters)
+- [Chaots](chaots) · [Kinets](kinets) · [Vitals](vitals) · [Synthets](synthets) · [The Pale](pale)
+- [Diamanda](diamanda) · [The White Lord](white-lord)
+- [The story of Etherlords](story-el1) · [The story of Etherlords II](story-el2)
+
 ## Campaigns and modes
 
 - [Etherlords campaigns](campaign-el1) · [Etherlords II campaigns](campaign-el2) · [Duel](duel)

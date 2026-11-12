@@ -75,6 +75,10 @@ article .games { display: inline-block; margin: 0 0 12px; padding: 2px 10px; bor
 article .figures { float: right; display: flex; gap: 12px; margin: 0 0 16px 24px; }
 article .figures figure { float: none; margin: 0; }
 article .figures figure.model img { width: 220px; height: 220px; }
+article .heroes { display: flex; flex-wrap: wrap; gap: 12px; margin: 0 0 16px; }
+article .heroes figure { float: none; margin: 0; }
+article .heroes figure.model img { width: 200px; height: 200px; }
+article .heroes figcaption { max-width: 200px; }
 article figcaption { text-align: center; font-size: 14px; color: var(--muted); margin-top: 4px; }
 td.changed { background: #4a3516; color: #ffd88a; }
 article .note { padding: 10px 14px; background: var(--note); border-left: 3px solid var(--gold); border-radius: 4px; }
@@ -102,5 +106,7 @@ footer { clear: both; margin-top: 48px; padding-top: 12px; border-top: 1px solid
   article figure.model img { width: 100%; height: auto; max-width: 360px; }
   article .figures { float: none; margin: 0 0 16px; }
   article .figures figure.model img { width: 100%; max-width: 220px; }
+  article .heroes figure { margin: 0; flex: 1 1 140px; max-width: 200px; }
+  article .heroes figure.model img { width: 100%; height: auto; }
   article h1 { font-size: 30px; }
 }

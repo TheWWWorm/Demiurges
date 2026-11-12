@@ -26,6 +26,13 @@ summary: Содержание вики
 - [Способности существ](abilities) · [Автоматический бой и камера](automatic-combat) · [Карта приключений](adventure-map)
 - [О созданиях](creatures) · [О заклинаниях](spells) · [Руны и артефакты](runes-artifacts) · [Герои и уровни](heroes)
 
+## Сюжет и мир
+
+- [Мир эфира](story-world) · [Расы и народы](story-peoples) · [Места](places) · [Персонажи](story-characters)
+- [Хаоты](chaots) · [Кинеты](kinets) · [Виталы](vitals) · [Синтеты](synthets) · [Бесцветные](pale)
+- [Диаманда](diamanda) · [Белый Лорд](white-lord)
+- [Сюжет «Демиургов»](story-el1) · [Сюжет «Демиургов II»](story-el2)
+
 ## Кампании и режимы
 
 - [Кампании «Демиургов»](campaign-el1) · [Кампании «Демиургов II»](campaign-el2) · [Дуэль](duel)

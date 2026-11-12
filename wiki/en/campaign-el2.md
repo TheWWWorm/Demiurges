@@ -20,3 +20,5 @@ The remake awards 100 points per chapter won, multiplied by the difficulty level
 - **Single › Mission** plays the single missions.
 
 See [The adventure map](adventure-map) and [Races](races).
+
+The plot of all five campaigns is told in [The story of Etherlords II](story-el2).

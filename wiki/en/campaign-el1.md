@@ -22,3 +22,5 @@ Your score for a chapter depends on how many days you needed compared with the e
 **New Game › Single Mission** plays the single missions on their own, with their own saves.
 
 See [The adventure map](adventure-map) for what happens on the map.
+
+The plot of both campaigns is told in [The story of Etherlords](story-el1).
