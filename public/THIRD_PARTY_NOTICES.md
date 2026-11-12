@@ -59,3 +59,38 @@ is distributed under Godot's MIT license.
 The crash report (`src/content/crash_report.gd`) and its box
 (`src/render/crash_report_box.gd`) are adapted from the Apache-2.0 licensed
 Cursed Lands engine by TheWWWorm. See LICENSE.md.
+
+## Optional NVIDIA DLSS and Reflex
+
+The Windows build with graphics SDKs includes NVIDIA Streamline 2.14.16 and its
+signed production components for NVIDIA DLSS (Super Resolution, DLAA, Ray
+Reconstruction and Frame Generation), NGX and NVIDIA Reflex, under their
+respective licenses in `licenses/NVIDIA/`. They are not covered by the
+project's Apache-2.0 license. Streamline's integration code is MIT licensed.
+This software contains source code provided by NVIDIA Corporation. Other
+builds (the Compatibility renderer, the browser, Android, Linux, macOS and the
+ordinary Windows build) contain none of these components.
+
+NVIDIA, the NVIDIA logo, GeForce RTX and DLSS are trademarks and/or registered
+trademarks of NVIDIA Corporation in the U.S. and other countries. The GeForce
+RTX artwork in `game/assets/branding/vendors/` and the splash variants made
+from it (`game/assets/branding/splash-graphics.png`, `splash-nvidia.png`) are
+excluded from the project's Apache-2.0 license; see
+`game/assets/branding/vendors/NOTICE.md`. They are shown on the splash screen
+and in the credits with NVIDIA's approval.
+
+## Optional AMD FSR
+
+The Windows build with graphics SDKs includes the signed AMD FidelityFX SDK
+2.4.0 Vulkan loader, upscaler and frame-generation libraries
+(`amd_fidelityfx_*_vk.dll`) for AMD FSR 3.1 and FSR 4 upscaling and frame
+generation. Their license and third-party notices are supplied under
+`licenses/AMD-FidelityFX/`. These binaries retain their own terms and are not
+relicensed under the project's Apache-2.0 license. The SDK API headers retain
+their original MIT notices.
+
+AMD, the AMD Arrow logo, AMD FSR and combinations thereof are trademarks of
+Advanced Micro Devices, Inc. The official AMD FSR Upscaling and AMD FSR Frame
+Generation lockups in `game/assets/branding/vendors/` and the splash variants
+made from them (`splash-graphics.png`, `splash-fsr.png`) retain AMD's
+trademark rights and are not covered by the project's Apache-2.0 license.

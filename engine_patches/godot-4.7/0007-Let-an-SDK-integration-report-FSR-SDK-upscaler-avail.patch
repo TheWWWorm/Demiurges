@@ -1,0 +1,82 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: WWWorm <noreply@localhost>
+Date: Thu, 12 Nov 2026 10:50:17 +0100
+Subject: [PATCH] Let an SDK integration report FSR SDK upscaler availability
+
+Viewport.SCALING_3D_MODE_FSR_SDK (6) and SCALING_3D_MODE_DLSS (7) follow
+the stock modes. FSR_SDK falls back to FSR 2.2 or bilinear unless the
+integration's RendererViewport::fsr_sdk_upscaler_available hook reports
+it usable. The editor hint lists both modes.
+---
+ scene/main/viewport.cpp                 | 4 ++--
+ servers/rendering/renderer_viewport.cpp | 3 +--
+ servers/rendering/renderer_viewport.h   | 4 ++++
+ servers/rendering/rendering_server.cpp  | 2 +-
+ 4 files changed, 8 insertions(+), 5 deletions(-)
+
+diff --git a/scene/main/viewport.cpp b/scene/main/viewport.cpp
+index 5c6fb83..bfbac26 100644
+--- a/scene/main/viewport.cpp
++++ b/scene/main/viewport.cpp
+@@ -5386,7 +5386,7 @@ void Viewport::_bind_methods() {
+ 
+ #ifndef _3D_DISABLED
+ 	ADD_GROUP("Scaling 3D", "");
+-	ADD_PROPERTY(PropertyInfo(Variant::INT, "scaling_3d_mode", PROPERTY_HINT_ENUM, "Nearest (Fastest):5,Bilinear (Fastest):0,FSR 1.0 (Fast):1,FSR 2.2 (Slow):2,MetalFX (Spatial - Fast):3,MetalFX (Temporal - Slow):4"), "set_scaling_3d_mode", "get_scaling_3d_mode");
++	ADD_PROPERTY(PropertyInfo(Variant::INT, "scaling_3d_mode", PROPERTY_HINT_ENUM, "Nearest (Fastest):5,Bilinear (Fastest):0,FSR 1.0 (Fast):1,FSR 2.2 (Slow):2,MetalFX (Spatial - Fast):3,MetalFX (Temporal - Slow):4,AMD FSR SDK (Temporal):6,NVIDIA DLSS (Temporal):7"), "set_scaling_3d_mode", "get_scaling_3d_mode");
+ 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "frame_generation"), "set_frame_generation", "get_frame_generation");
+ 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "scaling_3d_scale", PROPERTY_HINT_RANGE, "0.1,2.0,0.0001"), "set_scaling_3d_scale", "get_scaling_3d_scale");
+ 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "texture_mipmap_bias", PROPERTY_HINT_RANGE, "-2,2,0.001"), "set_texture_mipmap_bias", "get_texture_mipmap_bias");
+@@ -5451,8 +5451,8 @@ void Viewport::_bind_methods() {
+ 	BIND_ENUM_CONSTANT(SCALING_3D_MODE_METALFX_SPATIAL);
+ 	BIND_ENUM_CONSTANT(SCALING_3D_MODE_METALFX_TEMPORAL);
+ 	BIND_ENUM_CONSTANT(SCALING_3D_MODE_NEAREST);
+-	BIND_ENUM_CONSTANT(SCALING_3D_MODE_DLSS);
+ 	BIND_ENUM_CONSTANT(SCALING_3D_MODE_FSR_SDK);
++	BIND_ENUM_CONSTANT(SCALING_3D_MODE_DLSS);
+ 	BIND_ENUM_CONSTANT(SCALING_3D_MODE_MAX);
+ 
+ 	BIND_ENUM_CONSTANT(MSAA_DISABLED);
+diff --git a/servers/rendering/renderer_viewport.cpp b/servers/rendering/renderer_viewport.cpp
+index 530497f..7e31687 100644
+--- a/servers/rendering/renderer_viewport.cpp
++++ b/servers/rendering/renderer_viewport.cpp
+@@ -147,8 +147,7 @@ void RendererViewport::_configure_3d_render_buffers(Viewport *p_viewport) {
+ 					(Streamline::get_singleton() == nullptr || !Streamline::get_singleton()->get_capability(STREAMLINE_CAPABILITY_DLSS))) {
+ 				scaling_3d_mode = p_viewport->fsr_enabled ? RSE::VIEWPORT_SCALING_3D_MODE_FSR2 : RSE::VIEWPORT_SCALING_3D_MODE_BILINEAR;
+ 			}
+-			if (scaling_3d_mode == RSE::VIEWPORT_SCALING_3D_MODE_FSR_SDK) {
+-				// The AMD FidelityFX SDK integration is not part of this build.
++			if (scaling_3d_mode == RSE::VIEWPORT_SCALING_3D_MODE_FSR_SDK && !(fsr_sdk_upscaler_available && fsr_sdk_upscaler_available())) {
+ 				scaling_3d_mode = p_viewport->fsr_enabled ? RSE::VIEWPORT_SCALING_3D_MODE_FSR2 : RSE::VIEWPORT_SCALING_3D_MODE_BILINEAR;
+ 			}
+ 			RSE::ViewportScaling3DType scaling_type = RSE::scaling_3d_mode_type(scaling_3d_mode);
+diff --git a/servers/rendering/renderer_viewport.h b/servers/rendering/renderer_viewport.h
+index 21ac8aa..cd0ba67 100644
+--- a/servers/rendering/renderer_viewport.h
++++ b/servers/rendering/renderer_viewport.h
+@@ -39,6 +39,10 @@
+ 
+ class RendererViewport {
+ public:
++	// Set by an SDK integration that implements VIEWPORT_SCALING_3D_MODE_FSR_SDK.
++	// Without it (or when it reports false) the mode falls back to FSR 2.2 or bilinear.
++	static inline bool (*fsr_sdk_upscaler_available)() = nullptr;
++
+ 	struct CanvasBase {
+ 	};
+ 
+diff --git a/servers/rendering/rendering_server.cpp b/servers/rendering/rendering_server.cpp
+index 8a123c0..6794dcf 100644
+--- a/servers/rendering/rendering_server.cpp
++++ b/servers/rendering/rendering_server.cpp
+@@ -2921,8 +2921,8 @@ void RenderingServer::_bind_methods() {
+ 	BIND_ENUM_CONSTANT(RSE::VIEWPORT_SCALING_3D_MODE_METALFX_SPATIAL);
+ 	BIND_ENUM_CONSTANT(RSE::VIEWPORT_SCALING_3D_MODE_METALFX_TEMPORAL);
+ 	BIND_ENUM_CONSTANT(RSE::VIEWPORT_SCALING_3D_MODE_NEAREST);
+-	BIND_ENUM_CONSTANT(RSE::VIEWPORT_SCALING_3D_MODE_DLSS);
+ 	BIND_ENUM_CONSTANT(RSE::VIEWPORT_SCALING_3D_MODE_FSR_SDK);
++	BIND_ENUM_CONSTANT(RSE::VIEWPORT_SCALING_3D_MODE_DLSS);
+ 	BIND_ENUM_CONSTANT(RSE::VIEWPORT_SCALING_3D_MODE_MAX);
+ 
+ 	BIND_ENUM_CONSTANT(RSE::VIEWPORT_UPDATE_DISABLED);

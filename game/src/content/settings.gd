@@ -23,6 +23,13 @@ extends RefCounted
 ## exclusive full screen), "window_width"/"window_height" (the window's size,
 ## 0 the default) and "frame_rate" (0 the display's refresh rate with
 ## V-Sync, -1 unlimited, otherwise a frame cap without V-Sync).
+## Upscaling and frame generation (ELGraphicsSDK; only a Windows build whose
+## engine includes the vendors' SDKs uses them, elsewhere they load and stay
+## unused): "upscaler" (0 off, 1 AMD FSR, 2 NVIDIA DLSS), "fsr_version" (4,
+## or 3 for FSR 3.1), "upscale_quality" (0 full-resolution AA / DLAA, 1 Quality, 2
+## Balanced, 3 Performance), "frame_generation" (0 off, 1 AMD FSR, 2 NVIDIA
+## DLSS; NVIDIA needs DLSS upscaling, AMD never goes with DLSS) and
+## "ray_reconstruction" (DLSS Ray Reconstruction for the path tracer).
 ## Per edition (original Options screen order):
 ## "music"/"effects" volumes 0..1; "movies" the originals' Video key (0 none,
 ## 1 own size, 2 fitted); "blood"; "map_tooltips" (second game
@@ -41,7 +48,8 @@ extends RefCounted
 ## older files still on the former default (light) move to Off.
 const SETTINGS_VERSION := 4
 const SHARED := {"ambience": 0.55, "shadows": true, "soft_shadows": false, "weather": true, "helper_overlay": false, "antialiasing": -1, "sharpening": 0, "terrain_detail": false, "enhanced_water": false, "discord_activity": true, "renderer": 0, "path_tracing": false, "sky_light": 1.0, "light_bounces": 2, "show_fps": false, "hardware_check": 0, "free_movement": true, "smart_ai": true,
-	"window_mode": 0, "window_width": 0, "window_height": 0, "frame_rate": 0}
+	"window_mode": 0, "window_width": 0, "window_height": 0, "frame_rate": 0,
+	"upscaler": 0, "fsr_version": 4, "upscale_quality": 1, "frame_generation": 0, "ray_reconstruction": false}
 const EDITION := {"music": 0.55, "effects": 0.8, "movies": 2, "blood": true, "map_tooltips": true, "autosave": true,
 	"heroes_voices": true, "ambient_sounds": true, "adventure_fast": false, "animated_objects": true,
 	"mouse_rotation": 1.0, "keyboard_rotation": 1.0, "mouse_scroll": 1.0, "keyboard_scroll": 1.0,
@@ -56,7 +64,8 @@ const RANGES := {"music": [0.0, 1.0], "effects": [0.0, 1.0], "ambience": [0.0, 1
 	"keyboard_rotation": [0.0, 2.0], "mouse_scroll": [0.0, 2.0], "keyboard_scroll": [0.0, 2.0], "gamma": [-1.0, 1.0],
 	"auto_camera_dynamics": [0, 100], "movies": [0, 2], "antialiasing": [-1, 2], "sharpening": [0, 2], "renderer": [0, 1], "hardware_check": [0, 2],
 	"sky_light": [0.0, 2.0], "light_bounces": [1, 4],
-	"window_mode": [0, 2], "window_width": [0, 16384], "window_height": [0, 16384], "frame_rate": [-1, 1000]}
+	"window_mode": [0, 2], "window_width": [0, 16384], "window_height": [0, 16384], "frame_rate": [-1, 1000],
+	"upscaler": [0, 2], "fsr_version": [3, 4], "upscale_quality": [0, 3], "frame_generation": [0, 2]}
 
 ## Context, caption, then the default keys for each edition. Empty means the
 ## action is unavailable in that edition.
@@ -147,6 +156,8 @@ static func apply_display(viewport: Viewport, preferences: Dictionary) -> void:
 	# use the same 5-tap filter. Keep the project default when the option is off.
 	var shadow_quality := RenderingServer.SHADOW_QUALITY_SOFT_HIGH if preferences.get("soft_shadows", false) else int(ProjectSettings.get_setting("rendering/lights_and_shadows/directional_shadow/soft_shadow_filter_quality", RenderingServer.SHADOW_QUALITY_SOFT_VERY_LOW))
 	RenderingServer.directional_soft_shadow_filter_set_quality(shadow_quality)
+	# An SDK upscaler on the window replaces the smoothing (stock engines: none).
+	ELGraphicsSDK.apply_upscaling(viewport, preferences)
 
 ## Window mode, window size and frame rate (the remake's Display page).
 static func apply_window(preferences: Dictionary) -> void:
@@ -261,6 +272,7 @@ func load_file(path := "user://settings.json") -> void:
 	if raw is not Dictionary: return
 	var shared: Dictionary = raw.get("shared", raw) if raw.get("shared") is Dictionary else raw
 	for key: String in SHARED: values[key] = _clean(key, shared.get(key), values[key])
+	ELGraphicsSDK.normalize(values)
 	var current := edition
 	var version: Variant = raw.get("version", 0)
 	var legacy: bool = (version is int or version is float) and version < SETTINGS_VERSION

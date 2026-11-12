@@ -2,6 +2,20 @@
 
 Versions follow [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html) from 0.3.0 on.
 
+## 0.10.0
+
+- Windows: the game can use **NVIDIA DLSS** and **AMD FSR** with the Forward+ (Vulkan) renderer. The Graphics page of the remake settings has new rows next to Anti-aliasing: **Upscaling** (AMD FSR Upscaling or NVIDIA DLSS), **AMD FSR version** (FSR 4 or FSR 3.1), **Upscale quality** (Native AA, which is DLAA with DLSS, Quality, Balanced, Performance) and **Frame generation** (AMD FSR Frame Generation or NVIDIA DLSS Frame Generation). With path tracing on and DLSS upscaling, **DLSS Ray Reconstruction** removes the traced light's noise in place of the path tracer's own smoothing.
+- DLSS needs a GeForce RTX GPU; DLSS Frame Generation needs a GeForce RTX 40 series or newer GPU and turns on NVIDIA Reflex. FSR 3.1 runs on most current GPUs; FSR 4 needs a Radeon GPU that AMD supports for it (FSR 4 frame generation: Radeon RX 9000 series or newer, Windows 11). Choices this computer cannot use are greyed out with the reason, and FSR 4 never quietly turns into FSR 3.1.
+- Frame generation runs on maps and in battles and pauses in menus, loading screens, movies and while the window is in the background. While AMD frame generation runs, the frame rate is held just under half the display's refresh rate (or your lower cap). The frame rate counter shows the frames shown and, in brackets, the frames rendered.
+- AMD and NVIDIA cannot be mixed: switching between them asks for a restart. The Windows build's start-up screen shows the GeForce RTX and AMD FSR logos, and an **About** tab in the settings lists their credits; the licences are in the `licenses` folder. The Compatibility renderer and the Linux, macOS, Android and browser builds are unchanged.
+- Online play through room codes: a host gets a six-letter code to share, so no ports need to be opened. Duels in both games, the Etherlords strategic game and online Autochess can use it, in the browser too; each lobby offers **Online room** or **Direct address**. A duel guest whose connection drops can join again within two minutes, and an Autochess player takes their hero back from the computer. The Autochess Join box accepts `[IPv6]:port` addresses.
+- Path tracing: cards and trees cast shadows with their real outline (they were square), unlit map scenery takes the sun's shadow, metal armour and weapons shine, and figures with their backs to the sun no longer go nearly black. New **Sky light** (0–200%) and **Light bounces** (1–4) options.
+- Card texts that describe something other than what the games do now show corrected wording in English and Russian (unsummoned creatures return to their owner, effects that last through the opponent's turn, Velos and Hopper timing, Pale creature rewards and more); your game files stay untouched. The wiki's differences page lists them.
+- The remake's own menus (settings, network lobbies, game files, Expedition) are drawn with the games' own interface art, and Expedition rewards, camps and encounters open on the spell shop board.
+- The wiki has a new **Story and world** section in English and Russian: the world of ether, the races, the Pale, places, characters and the plots of both games, with the battle models of Diamanda and the White Lord.
+- Etherlords: battles against the computer no longer stall on its turn. A move order brings the view back to the hero after the map was panned. The duel setup, winner caption and cast messages match the original's frames and hero captions.
+- The adventure camera no longer goes into tunnel ceilings.
+
 ## 0.9.0
 
 - Etherlords II: custom maps that come with only their map file (`.sbm`), as most published maps do, now play. Copy the map's folder into the maps folder (or import its archive) and it is listed and starts like any other; no scenario file (`.smp`) is needed. The remake reads the map file itself, exactly as the game does.

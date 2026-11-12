@@ -1,0 +1,158 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: WWWorm <noreply@localhost>
+Date: Thu, 12 Nov 2026 10:37:27 +0100
+Subject: [PATCH] Add the graphics SDK seam for the Vulkan driver
+
+---
+ drivers/vulkan/graphics_sdk_vulkan.h | 129 +++++++++++++++++++++++++++
+ drivers/vulkan/vulkan_hooks.cpp      |   4 +
+ 2 files changed, 133 insertions(+)
+ create mode 100755 drivers/vulkan/graphics_sdk_vulkan.h
+
+diff --git a/drivers/vulkan/graphics_sdk_vulkan.h b/drivers/vulkan/graphics_sdk_vulkan.h
+new file mode 100755
+index 0000000..1d75b6c
+--- /dev/null
++++ b/drivers/vulkan/graphics_sdk_vulkan.h
+@@ -0,0 +1,129 @@
++/**************************************************************************/
++/*  graphics_sdk_vulkan.h                                                 */
++/**************************************************************************/
++/*                         This file is part of:                          */
++/*                             GODOT ENGINE                               */
++/*                        https://godotengine.org                         */
++/**************************************************************************/
++/* Copyright (c) 2014-present Godot Engine contributors (see AUTHORS.md). */
++/* Copyright (c) 2007-2014 Juan Linietsky, Ariel Manzur.                  */
++/*                                                                        */
++/* Permission is hereby granted, free of charge, to any person obtaining  */
++/* a copy of this software and associated documentation files (the        */
++/* "Software"), to deal in the Software without restriction, including    */
++/* without limitation the rights to use, copy, modify, merge, publish,    */
++/* distribute, sublicense, and/or sell copies of the Software, and to     */
++/* permit persons to whom the Software is furnished to do so, subject to  */
++/* the following conditions:                                              */
++/*                                                                        */
++/* The above copyright notice and this permission notice shall be         */
++/* included in all copies or substantial portions of the Software.        */
++/*                                                                        */
++/* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,        */
++/* EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF     */
++/* MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. */
++/* IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY   */
++/* CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,   */
++/* TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE      */
++/* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                 */
++/**************************************************************************/
++
++#pragma once
++
++// Seam between the Vulkan driver and an optional vendor graphics SDK
++// (NVIDIA Streamline, AMD FidelityFX) that must take part in instance and
++// device creation and may own presentation.
++//
++// At most one provider is active per process. It is chosen before the
++// rendering context is created (see GraphicsSDKVulkan::select_owner) and
++// cannot change until restart. With no provider every call below is a no-op
++// and the driver behaves exactly like stock Godot.
++
++#include "core/string/ustring.h"
++#include "core/templates/local_vector.h"
++
++#include "drivers/vulkan/godot_vulkan.h"
++
++class GraphicsSDKVulkanProvider {
++public:
++	// Table of swapchain/presentation entry points. The driver calls these
++	// instead of the loader's functions. A provider that owns presentation
++	// replaces some of them (Streamline hooks, FidelityFX replacement
++	// swapchain); unset entries keep the loader's function.
++	struct SwapchainFunctions {
++		PFN_vkCreateSwapchainKHR create_swapchain = nullptr;
++		PFN_vkDestroySwapchainKHR destroy_swapchain = nullptr;
++		PFN_vkGetSwapchainImagesKHR get_swapchain_images = nullptr;
++		PFN_vkAcquireNextImageKHR acquire_next_image = nullptr;
++		PFN_vkQueuePresentKHR queue_present = nullptr;
++		PFN_vkDeviceWaitIdle device_wait_idle = nullptr;
++	};
++
++	// Extra queues the provider needs created alongside Godot's own.
++	struct QueueRequest {
++		VkQueueFlags required_flags = 0;
++		bool dedicated_family = false; // e.g. DLSS-G optical flow queue.
++		uint32_t count = 1;
++		// Filled by the driver after vkCreateDevice.
++		uint32_t family_index = UINT32_MAX;
++		uint32_t first_queue_index = 0;
++	};
++
++	virtual ~GraphicsSDKVulkanProvider() {}
++
++	virtual const char *get_name() const = 0;
++
++	// Before vkCreateInstance. Extensions added here are requested as optional
++	// unless the provider marks them required.
++	virtual void get_instance_extensions(LocalVector<CharString> &r_required, LocalVector<CharString> &r_optional) {}
++	virtual uint32_t get_minimum_api_version() const { return VK_API_VERSION_1_0; }
++	virtual void instance_created(VkInstance p_instance, PFN_vkGetInstanceProcAddr p_get_instance_proc_addr) {}
++
++	// Before vkCreateDevice, for the chosen physical device.
++	virtual void get_device_extensions(VkPhysicalDevice p_physical_device, LocalVector<CharString> &r_required, LocalVector<CharString> &r_optional) {}
++	// Lets the provider enable feature bits in the structs the driver is
++	// about to pass (any of them may be null when not chained).
++	virtual void adjust_device_features(VkPhysicalDevice p_physical_device, VkPhysicalDeviceFeatures2 *r_features2, VkPhysicalDeviceVulkan12Features *r_features12, VkPhysicalDeviceVulkan13Features *r_features13) {}
++	virtual void get_queue_requests(VkPhysicalDevice p_physical_device, LocalVector<QueueRequest> &r_requests) {}
++
++	struct DeviceInfo {
++		VkInstance instance = VK_NULL_HANDLE;
++		VkPhysicalDevice physical_device = VK_NULL_HANDLE;
++		VkDevice device = VK_NULL_HANDLE;
++		PFN_vkGetInstanceProcAddr get_instance_proc_addr = nullptr;
++		PFN_vkGetDeviceProcAddr get_device_proc_addr = nullptr;
++		uint32_t graphics_queue_family = UINT32_MAX;
++		uint32_t graphics_queue_index = 0;
++		VkQueue graphics_queue = VK_NULL_HANDLE;
++		LocalVector<QueueRequest> extra_queues; // as requested, with indices filled.
++	};
++	// After vkCreateDevice. Returning false disables the provider for this
++	// run (ordinary rendering continues).
++	virtual bool device_created(const DeviceInfo &p_info) { return true; }
++	virtual void device_destroying() {}
++
++	// Called once after device_created; the provider overwrites the entries
++	// it takes over.
++	virtual void get_swapchain_functions(SwapchainFunctions &r_functions) {}
++
++	// Frame markers around the driver's present.
++	virtual void present_begin(uint64_t p_frame) {}
++	virtual void present_end(uint64_t p_frame) {}
++};
++
++class GraphicsSDKVulkan {
++	static GraphicsSDKVulkanProvider *owner;
++
++public:
++	// Called by the SDK drivers (drivers/streamline, drivers/fsr_sdk) during
++	// startup, before the Vulkan context is created. The first call wins.
++	static bool select_owner(GraphicsSDKVulkanProvider *p_provider) {
++		if (owner != nullptr) {
++			return owner == p_provider;
++		}
++		owner = p_provider;
++		return true;
++	}
++	static GraphicsSDKVulkanProvider *get_owner() { return owner; }
++	static void clear_owner() { owner = nullptr; }
++};
+diff --git a/drivers/vulkan/vulkan_hooks.cpp b/drivers/vulkan/vulkan_hooks.cpp
+index 416efca..245d9c8 100644
+--- a/drivers/vulkan/vulkan_hooks.cpp
++++ b/drivers/vulkan/vulkan_hooks.cpp
+@@ -43,3 +43,7 @@ VulkanHooks::~VulkanHooks() {
+ 		singleton = nullptr;
+ 	}
+ }
++
++#include "graphics_sdk_vulkan.h"
++
++GraphicsSDKVulkanProvider *GraphicsSDKVulkan::owner = nullptr;

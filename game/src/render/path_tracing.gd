@@ -10,6 +10,13 @@ extends Node
 ## (figures' morph frames and placements are refreshed each frame), smooths
 ## the noise over time and space, and swaps the raster light for the traced
 ## light. Each scene registers its camera; tracing follows the current one.
+##
+## With NVIDIA DLSS upscaling and the "ray_reconstruction" setting (engines
+## with the SDK, ELGraphicsSDK), DLSS Ray Reconstruction removes the noise
+## instead: one fresh sample a pixel, no temporal or spatial smoothing, rays cast
+## with the renderer's jittered camera, and the relit colour handed over with
+## four guides at the internal size (diffuse albedo, specular albedo, world
+## normal and roughness, specular hit distance).
 
 signal changed(active: bool)
 
@@ -97,6 +104,10 @@ var _fx_shot_at := 0.0
 var _snapshot_us := 0
 var _saved_msaa := -1
 var _saved_aa := -1
+## DLSS Ray Reconstruction this run, for the graphics status file: whether it
+## was asked for last frame and how many frames' guides the engine took or
+## refused.
+static var ray_reconstruction_report := {}
 
 static func available() -> bool:
 	if DisplayServer.get_name() == "headless": return false
@@ -247,6 +258,8 @@ func _traced_antialiasing() -> Viewport.ScreenSpaceAA:
 	# Small changes in traced light make post AA switch abruptly between the
 	# bright wood and the dark sides of Ship's thin rigging and railings.
 	if is_instance_valid(_arena) and _arena.scene_id == "Ship.001": return Viewport.SCREEN_SPACE_AA_DISABLED
+	# An SDK upscaler smooths the whole image itself.
+	if settings != null and ELGraphicsSDK.active_upscaler(settings.values) != ELGraphicsSDK.OFF: return Viewport.SCREEN_SPACE_AA_DISABLED
 	return Viewport.SCREEN_SPACE_AA_FXAA
 
 func _deactivate() -> void:
@@ -356,7 +369,17 @@ func _snapshot(delta: float) -> void:
 		"ambient": Vector4(ambient.r, ambient.g, ambient.b, _arena.light_limit if _arena != null else 1000.0),
 		"lighting_view": lighting_view,
 		"sky_light": float(settings.values.get("sky_light", 1.0)) if settings != null else 1.0,
-		"bounces": clampi(int(settings.values.get("light_bounces", 2)), 1, 4) if settings != null else 2})
+		"bounces": clampi(int(settings.values.get("light_bounces", 2)), 1, 4) if settings != null else 2,
+		"ray_reconstruction": _ray_reconstruction()})
+	ray_reconstruction_report = _effect.reconstruction_report()
+
+## DLSS Ray Reconstruction replaces the tracer's own smoothing: chosen, with
+## DLSS upscaling rendering on an engine that takes the guides, and the
+## ordinary picture shown (not the light view or the debug view).
+func _ray_reconstruction() -> bool:
+	if settings == null or lighting_view or not bool(settings.values.get("ray_reconstruction", false)): return false
+	if OS.get_cmdline_user_args().has("--path-tracing-debug"): return false
+	return ELGraphicsSDK.ray_reconstruction_active(settings.values)
 
 ## Defines a slot for a node's mesh (and the morph pose it shows) when new or
 ## changed. False when the mesh has nothing to trace.
@@ -826,6 +849,15 @@ class Effect extends CompositorEffect:
 	var _static_version := -1
 	var _static_dirty := true
 	var _static_list: Array[RDAccelerationStructureInstance] = []
+	# DLSS Ray Reconstruction: the guide-writing composing program (compiled
+	# on first use), its four guides at the internal size, and counters.
+	var _rr_shader := RID()
+	var _rr_pipeline := RID()
+	var _rr_state := 0   # 0 untried, 1 ready, -1 failed
+	var _rr_images: Array[RID] = []   # diffuse albedo, specular albedo, normal/roughness, hit distance
+	var _rr_size := Vector2i.ZERO
+	var _rr_was := false
+	var _rr_counts := {"requested": false, "submitted_frames": 0, "refused_frames": 0, "resets": 0, "guides_failed": false}
 
 	func _init() -> void:
 		effect_callback_type = EFFECT_CALLBACK_TYPE_POST_OPAQUE
@@ -858,6 +890,13 @@ class Effect extends CompositorEffect:
 
 	func release() -> void:
 		RenderingServer.call_on_render_thread(_free_all)
+
+	## A copy of the Ray Reconstruction counters (main thread).
+	func reconstruction_report() -> Dictionary:
+		_mutex.lock()
+		var result := _rr_counts.duplicate()
+		_mutex.unlock()
+		return result
 
 	func _render_callback(_type: int, render_data: RenderData) -> void:
 		if _ready_state == 0: _ready_state = 1 if _prepare() else -1
@@ -1160,8 +1199,31 @@ class Effect extends CompositorEffect:
 	func _trace(buffers: RenderSceneBuffersRD, scene: RenderSceneData, frame: Dictionary, size: Vector2i) -> void:
 		var camera := scene.get_cam_transform()
 		var projection := scene.get_cam_projection()
+		# DLSS Ray Reconstruction: the engine checks the guides (size, format,
+		# DLSS on this view) before any ray is cast; they are filled below,
+		# ahead of the upscale. Refused, this frame renders as without it.
+		var rr := false
+		var rr_reset := history_reset or not _rr_was
+		if bool(frame.get("ray_reconstruction", false)) and buffers.get_view_count() == 1 \
+				and buffers.has_method("set_dlss_ray_reconstruction") and scene.has_method("get_ray_projection") and _rr_ready(size):
+			rr = bool(buffers.call("set_dlss_ray_reconstruction", _rr_images[0], _rr_images[1], _rr_images[2], _rr_images[3], rr_reset))
+			_mutex.lock()
+			_rr_counts.submitted_frames += 1 if rr else 0
+			_rr_counts.refused_frames += 0 if rr else 1
+			_rr_counts.resets += 1 if rr and rr_reset else 0
+			_mutex.unlock()
+		_mutex.lock()
+		_rr_counts.requested = bool(frame.get("ray_reconstruction", false))
+		_mutex.unlock()
+		if rr:
+			# The reconstruction works on the jittered picture the raster drew.
+			projection = scene.call("get_ray_projection")
 		var view_projection := projection * Projection(camera.affine_inverse())
 		var flags := (1 if history_reset else 0) | (2 if frame.lighting_view else 0) | (4 if OS.get_cmdline_user_args().has("--path-tracing-debug") else 0)
+		# Ray Reconstruction gets one fresh sample a pixel (no accumulation),
+		# and the tracer's history starts again when it stops.
+		if rr or _rr_was: flags |= 1
+		_rr_was = rr
 		history_reset = false
 		var data := PackedByteArray()
 		data.resize(FRAME_BYTES)
@@ -1230,6 +1292,9 @@ class Effect extends CompositorEffect:
 
 		var frame_only: Array[RDUniform] = [frame_uniform]
 		var color := buffers.get_color_layer(0)
+		if rr:
+			_reconstruction_pass(buffers, frame_only, light[current], guide[current], color, groups)
+			return
 		var passes := [[light[current], _images[4], 1, 0], [_images[4], _images[5], 2, 0], [_images[5], _images[4], 4, 1]]
 		for step: Array in passes:
 			var filter_set: Array[RDUniform] = [_image(0, step[0]), _image(1, guide[current]), _image(2, step[1]), _image(3, color), _image(4, _images[6]), _image(5, _images[7])]
@@ -1241,6 +1306,66 @@ class Effect extends CompositorEffect:
 			_rd.compute_list_set_push_constant(list, push, push.size())
 			_rd.compute_list_dispatch(list, groups.x, groups.y, 1)
 			_rd.compute_list_end()
+
+	## With DLSS Ray Reconstruction: one composing pass of the unsmoothed light
+	## (the same relighting as the last smoothing pass), writing the guides.
+	func _reconstruction_pass(buffers: RenderSceneBuffersRD, frame_only: Array[RDUniform], light: RID, guide: RID, color: RID, groups: Vector3i) -> void:
+		var depth := RDUniform.new()
+		depth.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
+		depth.binding = 10
+		depth.add_id(_nearest)
+		depth.add_id(buffers.get_depth_layer(0))
+		var normal := RDUniform.new()
+		normal.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
+		normal.binding = 11
+		normal.add_id(_nearest)
+		normal.add_id(buffers.get_texture("forward_clustered", "normal_roughness"))
+		var filter_set: Array[RDUniform] = [_image(0, light), _image(1, guide), _image(2, _images[4]), _image(3, color), _image(4, _images[6]), _image(5, _images[7]),
+			_image(6, _rr_images[0]), _image(7, _rr_images[1]), _image(8, _rr_images[2]), _image(9, _rr_images[3]), depth, normal]
+		var push := PackedInt32Array([4, 1, 0, 0]).to_byte_array()
+		var list := _rd.compute_list_begin()
+		_rd.compute_list_bind_compute_pipeline(list, _rr_pipeline)
+		_rd.compute_list_bind_uniform_set(list, UniformSetCacheRD.get_cache(_rr_shader, 0, frame_only), 0)
+		_rd.compute_list_bind_uniform_set(list, UniformSetCacheRD.get_cache(_rr_shader, 1, filter_set), 1)
+		_rd.compute_list_set_push_constant(list, push, push.size())
+		_rd.compute_list_dispatch(list, groups.x, groups.y, 1)
+		_rd.compute_list_end()
+
+	## The guide program and the four guides at `size` (made when first needed).
+	func _rr_ready(size: Vector2i) -> bool:
+		if _rr_state == 0:
+			_rr_state = -1
+			var source := RDShaderSource.new()
+			source.language = RenderingDevice.SHADER_LANGUAGE_GLSL
+			source.source_compute = SHADERS.FILTER.replace("#version 460\n", "#version 460\n#define RAY_RECONSTRUCTION\n")
+			_rr_shader = _compile(source, [RenderingDevice.SHADER_STAGE_COMPUTE], "Path trace reconstruction guides")
+			if _rr_shader.is_valid(): _rr_pipeline = _rd.compute_pipeline_create(_rr_shader)
+			if _rr_pipeline.is_valid(): _rr_state = 1
+			else:
+				_mutex.lock()
+				_rr_counts.guides_failed = true
+				_mutex.unlock()
+		if _rr_state < 0: return false
+		if size != _rr_size:
+			_free_rr_images()
+			for i in 4:
+				var format := RDTextureFormat.new()
+				format.width = size.x
+				format.height = size.y
+				format.format = RenderingDevice.DATA_FORMAT_R16_SFLOAT if i == 3 else RenderingDevice.DATA_FORMAT_R16G16B16A16_SFLOAT
+				format.usage_bits = RenderingDevice.TEXTURE_USAGE_STORAGE_BIT | RenderingDevice.TEXTURE_USAGE_SAMPLING_BIT | RenderingDevice.TEXTURE_USAGE_CAN_COPY_FROM_BIT
+				var image := _rd.texture_create(format, RDTextureView.new())
+				if not image.is_valid():
+					_free_rr_images()
+					return false
+				_rr_images.append(image)
+			_rr_size = size
+		return true
+
+	func _free_rr_images() -> void:
+		for rid in _rr_images: if rid.is_valid(): _rd.free_rid(rid)
+		_rr_images.clear()
+		_rr_size = Vector2i.ZERO
 
 	static func _put4(data: PackedByteArray, at: int, v: Vector4) -> int:
 		data.encode_float(at, v.x)
@@ -1269,9 +1394,15 @@ class Effect extends CompositorEffect:
 		var owned: Array[RID] = [_tlas, _sbt, _expand_pipeline, _trace_pipeline, _filter_pipeline, _expand_shader, _trace_shader, _filter_shader,
 			_source, _source_uv, _indices, _corner_uv, _corner_normals, _corners, _slot_buffer, _frame_buffer, _light_buffer, _albedo, _linear, _nearest]
 		owned.append_array(_images)
+		_free_rr_images()
+		owned.append_array([_rr_pipeline, _rr_shader])
 		for rid in owned:
 			if rid.is_valid(): _rd.free_rid(rid)
 		_images.clear()
+		_rr_shader = RID()
+		_rr_pipeline = RID()
+		_rr_state = 0
+		_rr_was = false
 		_tlas = RID()
 		_sbt = RID()
 		_tlas_capacity = 0

@@ -1,0 +1,2433 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: WWWorm <noreply@localhost>
+Date: Thu, 12 Nov 2026 11:28:17 +0100
+Subject: [PATCH] Add Streamline on Vulkan as a graphics SDK owner
+
+Windows only, enabled with use_streamline=yes vulkan=yes. The interposer
+is loaded from the executable directory after its signature is checked.
+The owner is chosen before the rendering context is created from
+user://graphics_sdk.cfg or --graphics-sdk=nvidia; headless runs never
+initialize it.
+---
+ SConstruct                                |   9 +
+ doc/classes/Streamline.xml                |  65 +++
+ drivers/SCsub                             |   3 +
+ drivers/streamline/SCsub                  |  17 +
+ drivers/streamline/streamline.cpp         | 371 +++++++++++++++++
+ drivers/streamline/streamline.h           |  71 ++++
+ drivers/streamline/streamline_context.cpp | 434 ++++++++++++++++++++
+ drivers/streamline/streamline_context.h   | 171 ++++++++
+ drivers/streamline/streamline_data.h      |  82 ++++
+ drivers/streamline/streamline_headers.h   |  67 +++
+ drivers/streamline/streamline_security.h  | 478 ++++++++++++++++++++++
+ drivers/streamline/streamline_vulkan.cpp  | 360 ++++++++++++++++
+ drivers/streamline/streamline_vulkan.h    |  40 ++
+ main/main.cpp                             |  65 +++
+ 14 files changed, 2233 insertions(+)
+ create mode 100644 doc/classes/Streamline.xml
+ create mode 100644 drivers/streamline/SCsub
+ create mode 100644 drivers/streamline/streamline.cpp
+ create mode 100644 drivers/streamline/streamline.h
+ create mode 100644 drivers/streamline/streamline_context.cpp
+ create mode 100644 drivers/streamline/streamline_context.h
+ create mode 100644 drivers/streamline/streamline_data.h
+ create mode 100644 drivers/streamline/streamline_headers.h
+ create mode 100644 drivers/streamline/streamline_security.h
+ create mode 100644 drivers/streamline/streamline_vulkan.cpp
+ create mode 100644 drivers/streamline/streamline_vulkan.h
+
+diff --git a/SConstruct b/SConstruct
+index d8d9301..de68827 100644
+--- a/SConstruct
++++ b/SConstruct
+@@ -199,6 +199,7 @@ opts.Add(BoolVariable("opengl3", "Enable the OpenGL/GLES3 rendering driver", Tru
+ opts.Add(BoolVariable("d3d12", "Enable the Direct3D 12 rendering driver on supported platforms", False))
+ opts.Add(BoolVariable("metal", "Enable the Metal rendering driver on supported platforms (Apple arm64 only)", False))
+ opts.Add(BoolVariable("use_volk", "Use the volk library to load the Vulkan loader dynamically", True))
++opts.Add(BoolVariable("use_streamline", "Enable the NVIDIA Streamline (DLSS, Reflex) integration on Windows Vulkan", False))
+ opts.Add(BoolVariable("accesskit", "Enable the AccessKit driver for screen reader support", True))
+ opts.Add(BoolVariable("angle", "Enable the ANGLE rendering driver for OpenGL ES 3.0 on supported platforms", True))
+ opts.Add(BoolVariable("sdl", "Enable the SDL3 input driver", True))
+@@ -596,6 +597,14 @@ if not env["deprecated"]:
+ if env["precision"] == "double":
+     env.Append(CPPDEFINES=["REAL_T_IS_DOUBLE"])
+ 
++if env["use_streamline"]:
++    # Streamline is integrated on the Windows Vulkan backend only.
++    if env["platform"] == "windows" and env["vulkan"]:
++        env.AppendUnique(CPPDEFINES=["STREAMLINE_ENABLED"])
++    else:
++        print_warning("use_streamline=yes needs platform=windows and vulkan=yes; building without Streamline.")
++        env["use_streamline"] = False
++
+ # Library Support
+ if env["library_type"] != "executable":
+     if "library" not in env.get("supported", []):
+diff --git a/doc/classes/Streamline.xml b/doc/classes/Streamline.xml
+new file mode 100644
+index 0000000..6ac9dae
+--- /dev/null
++++ b/doc/classes/Streamline.xml
+@@ -0,0 +1,65 @@
++<?xml version="1.0" encoding="UTF-8" ?>
++<class name="Streamline" inherits="Object" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="../class.xsd">
++	<brief_description>
++		Streamline interface.
++	</brief_description>
++	<description>
++		Global streamline interface, facilitates advanced graphics features.
++	</description>
++	<tutorials>
++	</tutorials>
++	<methods>
++		<method name="get_status" qualifiers="const">
++			<return type="Dictionary" />
++			<description>
++				Reports compiled and initialized state, runtime capabilities, successful DLSS evaluations, SDK presented-frame counts and last errors. Feature support does not imply successful rendering. This experimental integration only initializes for Windows Direct3D 12 with --experimental-rtx after the argument separator.
++			</description>
++		</method>
++		<method name="get_capability">
++			<return type="bool" />
++			<param index="0" name="capability_type" type="int" enum="StreamlineCapabilityType" />
++			<description>
++				Enumerate various capabilities related to Streamline. See [enum StreamlineCapabilityType] for types.
++			</description>
++		</method>
++		<method name="set_parameter">
++			<return type="void" />
++			<param index="0" name="parameter_type" type="int" enum="StreamlineParameterType" />
++			<param index="1" name="value" type="Variant" />
++			<description>
++				Set various parameters related to Streamline. See [enum StreamlineParameterType] for types.
++			</description>
++		</method>
++	</methods>
++	<constants>
++		<constant name="STREAMLINE_PARAM_REFLEX_MODE" value="0" enum="StreamlineParameterType">
++			Enable/Disable reflex. Set parameter to 0.0 to disable, 1.0 to enable, 2.0 to enable with low latency boost.
++		</constant>
++		<constant name="STREAMLINE_PARAM_REFLEX_FRAME_LIMIT_US" value="1" enum="StreamlineParameterType">
++			Do frame limiting using Streamline Reflex, improving latency. Example: Set to 16666.7 for 60 FPS. (1000000/60 = 16666.7 us = 16.67 ms)
++		</constant>
++		<constant name="STREAMLINE_PARAM_DLSS_PRESET" value="2" enum="StreamlineParameterType">
++			The default DLSS preset to use.
++			Valid values: ?,F,G,H,I,J,K,L,M,N,O
++		</constant>
++		<constant name="STREAMLINE_PARAM_DLSS_RR_PRESET" value="3" enum="StreamlineParameterType">
++			The default DLSS Ray Reconstruction preset to use.
++			Valid values: ?,D,E,F,G,H,I,J,K,L,M,N,O
++		</constant>
++		<constant name="STREAMLINE_CAPABILITY_DLSS" value="0" enum="StreamlineCapabilityType">
++			Whether Streamline reports that NVIDIA DLSS upscaling is supported.
++		</constant>
++		<constant name="STREAMLINE_CAPABILITY_DLSS_G" value="1" enum="StreamlineCapabilityType">
++			Whether Streamline reports that NVIDIA DLSS frame generation is supported.
++		</constant>
++		<constant name="STREAMLINE_CAPABILITY_NIS" value="4" enum="StreamlineCapabilityType">
++			Whether Streamline reports that NVIDIA Image Scaling upscaling is supported.
++		</constant>
++		<constant name="STREAMLINE_CAPABILITY_REFLEX" value="2" enum="StreamlineCapabilityType">
++			Whether Streamline reports that NVIDIA Reflex is supported.
++		</constant>
++		<constant name="STREAMLINE_CAPABILITY_PCL" value="3" enum="StreamlineCapabilityType">
++			Whether Streamline reports that PCL metrics are supported.
++		</constant>
++	</constants>
++</class>
+diff --git a/drivers/SCsub b/drivers/SCsub
+index a1eb851..2c4e361 100644
+--- a/drivers/SCsub
++++ b/drivers/SCsub
+@@ -68,6 +68,9 @@ if env["sdl"] and env["platform"] in ["linuxbsd", "macos", "windows", "ios", "vi
+ # Core dependencies
+ SConscript("png/SCsub")
+ 
++# NVIDIA Streamline (after the Vulkan driver, whose include paths it needs).
++SConscript("streamline/SCsub")
++
+ env.add_source_files(env.drivers_sources, "*.cpp")
+ 
+ lib = env.add_library("drivers", env.drivers_sources)
+diff --git a/drivers/streamline/SCsub b/drivers/streamline/SCsub
+new file mode 100644
+index 0000000..0b1f4a6
+--- /dev/null
++++ b/drivers/streamline/SCsub
+@@ -0,0 +1,17 @@
++#!/usr/bin/env python
++from misc.utility.scons_hints import *
++
++Import("env")
++
++env_streamline = env.Clone()
++
++driver_obj = []
++
++# The Streamline singleton is always built; it reports "not compiled" without
++# use_streamline. The SDK code is Windows + Vulkan only (STREAMLINE_ENABLED);
++# the Vulkan include paths and USE_VOLK come from drivers/vulkan/SCsub.
++if env["use_streamline"]:
++    env_streamline.Prepend(CPPPATH=["#thirdparty/streamline/include"])
++
++env_streamline.add_source_files(driver_obj, "*.cpp")
++env.drivers_sources += driver_obj
+diff --git a/drivers/streamline/streamline.cpp b/drivers/streamline/streamline.cpp
+new file mode 100644
+index 0000000..f5867fc
+--- /dev/null
++++ b/drivers/streamline/streamline.cpp
+@@ -0,0 +1,371 @@
++/**************************************************************************/
++/*  streamline.cpp                                                        */
++/**************************************************************************/
++/*                         This file is part of:                          */
++/*                             GODOT ENGINE                               */
++/*                        https://godotengine.org                         */
++/**************************************************************************/
++/* Copyright (c) 2014-present Godot Engine contributors (see AUTHORS.md). */
++/* Copyright (c) 2007-2014 Juan Linietsky, Ariel Manzur.                  */
++/*                                                                        */
++/* Permission is hereby granted, free of charge, to any person obtaining  */
++/* a copy of this software and associated documentation files (the        */
++/* "Software"), to deal in the Software without restriction, including    */
++/* without limitation the rights to use, copy, modify, merge, publish,    */
++/* distribute, sublicense, and/or sell copies of the Software, and to     */
++/* permit persons to whom the Software is furnished to do so, subject to  */
++/* the following conditions:                                              */
++/*                                                                        */
++/* The above copyright notice and this permission notice shall be         */
++/* included in all copies or substantial portions of the Software.        */
++/*                                                                        */
++/* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,        */
++/* EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF     */
++/* MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. */
++/* IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY   */
++/* CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,   */
++/* TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE      */
++/* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                 */
++/**************************************************************************/
++
++#include "streamline.h"
++#include "streamline_context.h"
++#include "streamline_vulkan.h"
++
++#include "core/config/engine.h"
++#include "core/config/project_settings.h"
++#include "core/input/input.h"
++#include "core/object/object.h"
++
++Streamline *Streamline::singleton = nullptr;
++
++void Streamline::_bind_methods() {
++	ClassDB::bind_method(D_METHOD("set_parameter", "parameter_type", "value"), &Streamline::set_parameter);
++	ClassDB::bind_method(D_METHOD("get_status"), &Streamline::get_status);
++	ClassDB::bind_method(D_METHOD("get_capability", "capability_type"), &Streamline::get_capability);
++
++	BIND_ENUM_CONSTANT(STREAMLINE_PARAM_REFLEX_MODE);
++	BIND_ENUM_CONSTANT(STREAMLINE_PARAM_REFLEX_FRAME_LIMIT_US);
++	BIND_ENUM_CONSTANT(STREAMLINE_PARAM_DLSS_PRESET);
++	BIND_ENUM_CONSTANT(STREAMLINE_PARAM_DLSS_RR_PRESET);
++
++	BIND_ENUM_CONSTANT(STREAMLINE_CAPABILITY_DLSS);
++	BIND_ENUM_CONSTANT(STREAMLINE_CAPABILITY_DLSS_G);
++	BIND_ENUM_CONSTANT(STREAMLINE_CAPABILITY_DLSS_RR);
++	BIND_ENUM_CONSTANT(STREAMLINE_CAPABILITY_NIS);
++	BIND_ENUM_CONSTANT(STREAMLINE_CAPABILITY_REFLEX);
++	BIND_ENUM_CONSTANT(STREAMLINE_CAPABILITY_PCL);
++}
++
++void Streamline::register_singleton() {
++	GDREGISTER_CLASS(Streamline);
++	Engine::get_singleton()->add_singleton(Engine::Singleton("Streamline", Streamline::get_singleton()));
++
++	GLOBAL_DEF("rendering/streamline/streamline_log", false);
++	GLOBAL_DEF("rendering/streamline/streamline_imgui", false);
++	GLOBAL_DEF(PropertyInfo(Variant::INT, "rendering/streamline/reflex_mode", PROPERTY_HINT_RANGE, "0,2,1"), 0);
++	GLOBAL_DEF(PropertyInfo(Variant::INT, "rendering/streamline/reflex_frame_limit_us", PROPERTY_HINT_RANGE, "0,1000000,1"), 0);
++	GLOBAL_DEF(PropertyInfo(Variant::STRING, "rendering/streamline/dlss_preset", PROPERTY_HINT_ENUM, "?,F,G,H,I,J,K,L,M,N,O"), "?");
++	GLOBAL_DEF(PropertyInfo(Variant::STRING, "rendering/streamline/dlss_ray_reconstruction_preset", PROPERTY_HINT_ENUM, "?,D,E,F,G,H,I,J,K,L,M,N,O"), "?");
++}
++
++void Streamline::set_unavailable(const String &p_reason) {
++	requested = true;
++	unavailable_reason = p_reason;
++}
++
++Streamline *Streamline::get_singleton() {
++	return singleton;
++}
++
++Streamline::Streamline() {
++	singleton = this;
++}
++
++Streamline::~Streamline() {
++	singleton = nullptr;
++}
++
++void Streamline::update_project_settings() {
++#ifdef STREAMLINE_ENABLED
++	set_parameter(STREAMLINE_PARAM_REFLEX_MODE, (double)GLOBAL_GET("rendering/streamline/reflex_mode"));
++	set_parameter(STREAMLINE_PARAM_REFLEX_FRAME_LIMIT_US, (double)GLOBAL_GET("rendering/streamline/reflex_frame_limit_us"));
++	set_parameter(STREAMLINE_PARAM_DLSS_PRESET, GLOBAL_GET("rendering/streamline/dlss_preset"));
++	set_parameter(STREAMLINE_PARAM_DLSS_RR_PRESET, GLOBAL_GET("rendering/streamline/dlss_ray_reconstruction_preset"));
++#endif
++}
++
++void Streamline::emit_marker(StreamlineMarkerType marker) {
++#ifdef STREAMLINE_ENABLED
++	StreamlineContext &sl_context = StreamlineContext::get();
++
++	switch (marker) {
++		case StreamlineMarkerType::STREAMLINE_MARKER_INITIALIZE_VULKAN:
++			requested = true;
++			sl_context.initialize();
++			if (sl_context.initialized) {
++				// Streamline takes part in Vulkan instance/device creation and
++				// owns presentation for this run.
++				if (!streamline_vulkan_select_owner()) {
++					sl_context.init_reason = "another graphics SDK owns presentation";
++				}
++			}
++			return;
++		case StreamlineMarkerType::STREAMLINE_MARKER_INITIALIZE_D3D12:
++			requested = true;
++			sl_context.init_reason = "this build integrates Streamline on Vulkan only";
++			return;
++		case StreamlineMarkerType::STREAMLINE_MARKER_AFTER_DEVICE_CREATION:
++			sl_context.load_functions_post_init();
++
++			if (sl_context.streamline_capabilities.pcl_available) {
++				sl::PCLOptions pcl_options = {};
++				pcl_options.virtualKey = sl::PCLHotKey::eVK_F13;
++				pcl_options.idThread = 0;
++				sl_context.pcl_set_options(pcl_options);
++			}
++
++			if (sl_context.streamline_capabilities.reflex_available) {
++				sl::ReflexOptions reflex_options = {};
++				reflex_options.frameLimitUs = 0;
++				reflex_options.virtualKey = (uint16_t)sl::PCLHotKey::eVK_F13;
++				reflex_options.mode = sl::ReflexMode::eOff;
++				reflex_options.useMarkersToOptimize = false;
++				reflex_options.idThread = 0;
++				sl_context.reflex_set_options(reflex_options);
++			}
++
++			// load initial project settings
++			update_project_settings();
++			return;
++		case StreamlineMarkerType::STREAMLINE_MARKER_BEFORE_DEVICE_DESTROY:
++			if (sl_context.initialized && sl_context.slShutdown) {
++				print_verbose("Streamline: shutting down before the Vulkan device is destroyed.");
++				sl_context.slShutdown();
++				print_verbose("Streamline: shut down.");
++				sl_context.initialized = false;
++				sl_context.device_ready = false;
++				sl_context.slShutdown = nullptr;
++				sl_context.last_token = nullptr;
++				sl_context.init_reason = "shut down";
++			}
++			return;
++		default:
++			break;
++	}
++
++	if (!sl_context.initialized || !sl_context.device_ready) { return; }
++	if (marker == STREAMLINE_MARKER_BEGIN_RENDER) {
++		// Loading and shader warm-up may force multiple draws within one
++		// simulation iteration. Each submission needs a fresh SDK frame token;
++		// reusing it rejects constants and permanently disables SR.
++		if (sl_context.frame_token_rendered || !sl_context.last_token) {
++			sl_context.get_new_frame_token();
++			if (sl_context.last_token && sl_context.is_game && sl_context.streamline_capabilities.reflex_available) {
++				// A forced draw has no additional simulation work.
++				sl_context.pcl_marker(sl_context.last_token, sl::PCLMarker::eSimulationStart);
++				sl_context.pcl_marker(sl_context.last_token, sl::PCLMarker::eSimulationEnd);
++			}
++		}
++		sl_context.frame_token_rendered = true;
++		sl_context.fg_tagged_this_frame = false;
++		sl_context.rr_active.set(0);
++	}
++	if (marker == STREAMLINE_MARKER_BEGIN_SIMULATION && !sl_context.last_token) { sl_context.get_new_frame_token(); }
++	if (marker == STREAMLINE_MARKER_BEGIN_PRESENT && !sl_context.fg_tagged_this_frame) { sl_context.dlssg_disable(); }
++	if (marker == STREAMLINE_MARKER_END_PRESENT) { sl_context.game_presents.increment(); sl_context.poll_presented_frames(); }
++	if (!sl_context.is_game || !sl_context.streamline_capabilities.reflex_available) {
++		// Make sure we still get frame tokens, needed for DLSS.
++		if (marker == StreamlineMarkerType::STREAMLINE_MARKER_BEFORE_MESSAGE_LOOP) {
++			sl_context.get_new_frame_token();
++		}
++		return;
++	}
++
++	sl::PCLMarker sl_marker = sl::PCLMarker::eMaximum;
++	switch (marker) {
++		case StreamlineMarkerType::STREAMLINE_MARKER_MODIFY_SWAPCHAIN:
++			sl_context.dlssg_disable();
++			return;
++		case StreamlineMarkerType::STREAMLINE_MARKER_BEFORE_MESSAGE_LOOP:
++			if (sl_context.dlssg_delay > 0) {
++				--sl_context.dlssg_delay;
++			}
++			if (sl_context.pcl_options_dirty) {
++				sl_context.pcl_set_options(sl_context.pcl_options);
++			}
++			if (sl_context.reflex_options_dirty) {
++				sl_context.reflex_set_options(sl_context.reflex_options);
++			}
++
++			sl_context.get_new_frame_token();
++			if (sl_context.reflex_options.mode != sl::ReflexMode::eOff || sl_context.reflex_options.frameLimitUs > 0) {
++				sl_context.reflex_sleep(sl_context.last_token);
++			}
++			break;
++		case StreamlineMarkerType::STREAMLINE_MARKER_BEGIN_RENDER:
++			sl_marker = sl::PCLMarker::eRenderSubmitStart;
++			break;
++		case StreamlineMarkerType::STREAMLINE_MARKER_END_RENDER:
++			sl_marker = sl::PCLMarker::eRenderSubmitEnd;
++			break;
++		case StreamlineMarkerType::STREAMLINE_MARKER_BEGIN_SIMULATION:
++			sl_marker = sl::PCLMarker::eSimulationStart;
++			break;
++		case StreamlineMarkerType::STREAMLINE_MARKER_END_SIMULATION:
++			sl_marker = sl::PCLMarker::eSimulationEnd;
++			break;
++		case StreamlineMarkerType::STREAMLINE_MARKER_BEGIN_PRESENT:
++			sl_marker = sl::PCLMarker::ePresentStart;
++			break;
++		case StreamlineMarkerType::STREAMLINE_MARKER_END_PRESENT:
++			sl_marker = sl::PCLMarker::ePresentEnd;
++			break;
++		case StreamlineMarkerType::STREAMLINE_MARKER_PC_PING:
++			sl_marker = sl::PCLMarker::ePCLatencyPing;
++			break;
++		default:
++			return;
++	}
++
++	if (sl_context.last_token && sl_marker != sl::PCLMarker::eMaximum) {
++		sl_context.pcl_marker(sl_context.last_token, sl_marker);
++	}
++#endif
++}
++void Streamline::set_parameter(StreamlineParameterType p_parameter_type, const Variant &p_value) {
++	_THREAD_SAFE_METHOD_
++	switch (p_parameter_type) {
++#ifdef STREAMLINE_ENABLED
++		case StreamlineParameterType::STREAMLINE_PARAM_REFLEX_MODE: {
++			double val = p_value;
++			sl::ReflexMode newMode;
++			if (val > 1.0) {
++				newMode = sl::ReflexMode::eLowLatencyWithBoost;
++			} else if (val > 0.0) {
++				newMode = sl::ReflexMode::eLowLatency;
++			} else {
++				newMode = sl::ReflexMode::eOff;
++			}
++
++			if (StreamlineContext::get().reflex_options.mode != newMode) {
++				StreamlineContext::get().reflex_options_dirty = true;
++			}
++			StreamlineContext::get().reflex_options.mode = newMode;
++			break;
++		}
++		case StreamlineParameterType::STREAMLINE_PARAM_REFLEX_FRAME_LIMIT_US: {
++			double val = p_value;
++			bool updated = StreamlineContext::get().reflex_options.frameLimitUs != (unsigned int)val;
++			StreamlineContext::get().reflex_options.frameLimitUs = (unsigned int)val;
++			if (updated) {
++				StreamlineContext::get().reflex_options_dirty = true;
++			}
++			break;
++		}
++		case StreamlineParameterType::STREAMLINE_PARAM_DLSS_PRESET: {
++			if (p_value.is_string()) {
++				String preset = p_value;
++				if (preset.length() == 1) {
++					StreamlineContext::get().dlss_default_preset = (char)preset.get(0);
++				}
++			}
++			break;
++		}
++		case StreamlineParameterType::STREAMLINE_PARAM_DLSS_RR_PRESET: {
++			if (p_value.is_string()) {
++				String preset = p_value;
++				if (preset.length() == 1) {
++					StreamlineContext::get().dlss_rr_default_preset = (char)preset.get(0);
++				}
++			}
++			break;
++		}
++#endif
++		default:
++			break;
++	}
++}
++
++bool Streamline::get_capability(StreamlineCapabilityType p_capability_type) {
++#ifdef STREAMLINE_ENABLED
++	_THREAD_SAFE_METHOD_
++	switch (p_capability_type) {
++		case STREAMLINE_CAPABILITY_DLSS:
++			return StreamlineContext::get().streamline_capabilities.dlss_available && !StreamlineContext::get().sr_failed.get();
++		case STREAMLINE_CAPABILITY_DLSS_G:
++			return StreamlineContext::get().streamline_capabilities.dlss_g_available && !StreamlineContext::get().fg_failed.get();
++		case STREAMLINE_CAPABILITY_DLSS_RR:
++			return StreamlineContext::get().streamline_capabilities.dlss_rr_available;
++		case STREAMLINE_CAPABILITY_NIS:
++			return StreamlineContext::get().streamline_capabilities.nis_available;
++		case STREAMLINE_CAPABILITY_REFLEX:
++			return StreamlineContext::get().streamline_capabilities.reflex_available;
++		case STREAMLINE_CAPABILITY_PCL:
++			return StreamlineContext::get().streamline_capabilities.pcl_available;
++	}
++#endif
++	return false;
++}
++void Streamline::set_internal_parameter(const char *p_key, void *p_value) {
++	// D3D12 integration hooks; unused by the Vulkan integration.
++}
++
++void *Streamline::get_internal_parameter(StreamlineInternalParameterType p_internal_parameter_type) {
++	return nullptr;
++}
++
++Dictionary Streamline::get_status() const {
++	Dictionary out;
++	out["compiled"] = false;
++	out["requested"] = requested;
++	out["init_reason"] = !requested ? String("not requested") : (!unavailable_reason.is_empty() ? unavailable_reason : String("built without use_streamline"));
++#ifdef STREAMLINE_ENABLED
++	auto &ctx = StreamlineContext::get();
++	out["compiled"] = true;
++	out["render_api"] = "vulkan";
++	out["initialized"] = ctx.initialized && ctx.device_ready;
++	if (requested && unavailable_reason.is_empty()) {
++		out["init_reason"] = ctx.init_reason;
++	}
++	out["owner"] = streamline_vulkan_is_owner();
++	out["missing_device_extensions"] = ctx.missing_device_extensions;
++	out["sr_supported"] = ctx.initialized && ctx.streamline_capabilities.dlss_available && !ctx.sr_failed.get();
++	out["fg_supported"] = ctx.initialized && ctx.streamline_capabilities.dlss_g_available && !ctx.fg_failed.get();
++	out["reflex_supported"] = ctx.initialized && ctx.streamline_capabilities.reflex_available;
++	out["reflex_support_result"] = (uint32_t)ctx.reflex_support_result;
++	out["reflex_support_reason"] = StreamlineContext::result_to_string(ctx.reflex_support_result);
++	out["enhanced_barriers"] = ctx.enhanced_barriers;
++	out["sr_support_result"] = (uint32_t)ctx.sr_support_result;
++	out["fg_support_result"] = (uint32_t)ctx.fg_support_result;
++	out["sr_support_reason"] = StreamlineContext::result_to_string(ctx.sr_support_result);
++	out["fg_support_reason"] = StreamlineContext::result_to_string(ctx.fg_support_result);
++	out["dlss_evaluations"] = ctx.dlss_evaluations.get();
++	out["rr_supported"] = ctx.initialized && ctx.streamline_capabilities.dlss_rr_available && !ctx.rr_failed.get();
++	out["rr_support_result"] = (uint32_t)ctx.rr_support_result;
++	out["rr_support_reason"] = StreamlineContext::result_to_string(ctx.rr_support_result);
++	out["rr_evaluations"] = ctx.rr_evaluations.get();
++	out["rr_resets"] = ctx.rr_resets.get();
++	out["rr_active"] = ctx.rr_active.get() != 0;
++	out["rr_last_error"] = ctx.rr_last_error.get();
++	out["rr_input_size"] = Vector2i(ctx.rr_input_width.get(), ctx.rr_input_height.get());
++	out["rr_preset"] = "F";
++	out["presented_frames"] = ctx.presented_frames.get();
++	out["game_presents"] = ctx.game_presents.get();
++	out["present_count_available"] = ctx.initialized && ctx.streamline_capabilities.dlss_g_available;
++	out["frame_generation_active"] = ctx.fg_active.get() != 0;
++	out["last_error"] = ctx.last_error.get();
++	out["frame_generation_status"] = ctx.fg_status.get();
++	out["frame_generation_ui_alpha_frames"] = ctx.ui_alpha_frames.get();
++	out["frame_generation_ui_alpha_texture"] = RID::from_uint64(ctx.ui_alpha_texture.get());
++	out["frame_generation_input_size"] = Vector2i(ctx.fg_input_width.get(),ctx.fg_input_height.get());
++	out["frame_generation_output_size"] = Vector2i(ctx.fg_output_width.get(),ctx.fg_output_height.get());
++	out["frame_generation_size_supported"] = ctx.fg_size_supported.get()!=0;
++#endif
++	return out;
++}
++
++bool Streamline::upgrade_interface(void **p_interface) {
++	// D3D12 only. Vulkan uses manual hooking (see streamline_vulkan.cpp).
++	return true;
++}
+diff --git a/drivers/streamline/streamline.h b/drivers/streamline/streamline.h
+new file mode 100644
+index 0000000..9cbce65
+--- /dev/null
++++ b/drivers/streamline/streamline.h
+@@ -0,0 +1,71 @@
++/**************************************************************************/
++/*  streamline.h                                                          */
++/**************************************************************************/
++/*                         This file is part of:                          */
++/*                             GODOT ENGINE                               */
++/*                        https://godotengine.org                         */
++/**************************************************************************/
++/* Copyright (c) 2014-present Godot Engine contributors (see AUTHORS.md). */
++/* Copyright (c) 2007-2014 Juan Linietsky, Ariel Manzur.                  */
++/*                                                                        */
++/* Permission is hereby granted, free of charge, to any person obtaining  */
++/* a copy of this software and associated documentation files (the        */
++/* "Software"), to deal in the Software without restriction, including    */
++/* without limitation the rights to use, copy, modify, merge, publish,    */
++/* distribute, sublicense, and/or sell copies of the Software, and to     */
++/* permit persons to whom the Software is furnished to do so, subject to  */
++/* the following conditions:                                              */
++/*                                                                        */
++/* The above copyright notice and this permission notice shall be         */
++/* included in all copies or substantial portions of the Software.        */
++/*                                                                        */
++/* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,        */
++/* EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF     */
++/* MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. */
++/* IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY   */
++/* CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,   */
++/* TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE      */
++/* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                 */
++/**************************************************************************/
++
++#pragma once
++
++#include "core/object/class_db.h"
++#include "core/object/object.h"
++#include "core/os/thread_safe.h"
++#include "core/variant/binder_common.h"
++#include "core/variant/variant.h"
++#include "streamline_data.h"
++
++class Streamline : public Object {
++	GDCLASS(Streamline, Object);
++	_THREAD_SAFE_CLASS_
++protected:
++	static void _bind_methods();
++	static Streamline *singleton;
++
++public:
++	static Streamline *get_singleton();
++	static void register_singleton();
++
++	bool requested = false;
++	String unavailable_reason;
++	// The owner asked for Streamline, but this run cannot use it.
++	void set_unavailable(const String &p_reason);
++	bool upgrade_interface(void **p_interface);
++	void emit_marker(StreamlineMarkerType p_marker);
++	void set_parameter(StreamlineParameterType p_parameter_type, const Variant &p_value);
++	Dictionary get_status() const;
++	bool get_capability(StreamlineCapabilityType p_capability_type);
++
++	void set_internal_parameter(const char *p_key, void *p_value);
++	void *get_internal_parameter(StreamlineInternalParameterType p_internal_parameter_type);
++
++	void update_project_settings();
++
++	Streamline();
++	virtual ~Streamline();
++};
++
++VARIANT_ENUM_CAST(StreamlineParameterType);
++VARIANT_ENUM_CAST(StreamlineCapabilityType);
+diff --git a/drivers/streamline/streamline_context.cpp b/drivers/streamline/streamline_context.cpp
+new file mode 100644
+index 0000000..20d758f
+--- /dev/null
++++ b/drivers/streamline/streamline_context.cpp
+@@ -0,0 +1,434 @@
++/**************************************************************************/
++/*  streamline_context.cpp                                                */
++/**************************************************************************/
++/*                         This file is part of:                          */
++/*                             GODOT ENGINE                               */
++/*                        https://godotengine.org                         */
++/**************************************************************************/
++/* Copyright (c) 2014-present Godot Engine contributors (see AUTHORS.md). */
++/* Copyright (c) 2007-2014 Juan Linietsky, Ariel Manzur.                  */
++/*                                                                        */
++/* Permission is hereby granted, free of charge, to any person obtaining  */
++/* a copy of this software and associated documentation files (the        */
++/* "Software"), to deal in the Software without restriction, including    */
++/* without limitation the rights to use, copy, modify, merge, publish,    */
++/* distribute, sublicense, and/or sell copies of the Software, and to     */
++/* permit persons to whom the Software is furnished to do so, subject to  */
++/* the following conditions:                                              */
++/*                                                                        */
++/* The above copyright notice and this permission notice shall be         */
++/* included in all copies or substantial portions of the Software.        */
++/*                                                                        */
++/* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,        */
++/* EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF     */
++/* MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. */
++/* IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY   */
++/* CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,   */
++/* TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE      */
++/* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                 */
++/**************************************************************************/
++
++#include "streamline_context.h"
++
++#ifdef STREAMLINE_ENABLED
++#ifdef _WIN32
++#include "core/os/os.h"
++#include "streamline_security.h"
++#include <windows.h>
++#endif
++
++#include "core/config/engine.h"
++#include "core/config/project_settings.h"
++#include "core/io/file_access.h"
++#include "core/string/print_string.h"
++
++StreamlineContext &StreamlineContext::get() {
++	static StreamlineContext _context;
++	return _context;
++}
++
++// Loads sl.interposer.dll only from the executable's directory, and only when
++// it carries a valid NVIDIA signature.
++bool StreamlineContext::load_functions() {
++#ifdef _WIN32
++	String path = OS::get_singleton()->get_executable_path().get_base_dir().path_join("sl.interposer.dll");
++	if (!FileAccess::exists(path)) {
++		init_reason = "sl.interposer.dll not found next to the executable";
++		return false;
++	}
++	Char16String wide_path = path.utf16();
++	if (!sl::security::verifyEmbeddedSignature((const wchar_t *)wide_path.get_data())) {
++		init_reason = "sl.interposer.dll signature verification failed";
++		return false;
++	}
++	HMODULE streamline = LoadLibraryExW((const wchar_t *)wide_path.get_data(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
++	if (streamline == nullptr) {
++		init_reason = "sl.interposer.dll could not be loaded";
++		return false;
++	}
++	interposer = (void *)streamline;
++#define SL_GETPROC(type, name) (type *)(void *)GetProcAddress(streamline, name)
++	this->slInit = SL_GETPROC(PFun_slInit, "slInit");
++	this->slShutdown = SL_GETPROC(PFun_slShutdown, "slShutdown");
++	this->slIsFeatureSupported = SL_GETPROC(PFun_slIsFeatureSupported, "slIsFeatureSupported");
++	this->slIsFeatureLoaded = SL_GETPROC(PFun_slIsFeatureLoaded, "slIsFeatureLoaded");
++	this->slGetFeatureFunction = SL_GETPROC(PFun_slGetFeatureFunction, "slGetFeatureFunction");
++	this->slGetFeatureRequirements = SL_GETPROC(PFun_slGetFeatureRequirements, "slGetFeatureRequirements");
++	this->slGetNewFrameToken = SL_GETPROC(PFun_slGetNewFrameToken, "slGetNewFrameToken");
++	this->slSetFeatureLoaded = SL_GETPROC(PFun_slSetFeatureLoaded, "slSetFeatureLoaded");
++	this->slAllocateResources = SL_GETPROC(PFun_slAllocateResources, "slAllocateResources");
++	this->slFreeResources = SL_GETPROC(PFun_slFreeResources, "slFreeResources");
++	this->slEvaluateFeature = SL_GETPROC(PFun_slEvaluateFeature, "slEvaluateFeature");
++	this->slSetTagForFrame = SL_GETPROC(PFun_slSetTagForFrame, "slSetTagForFrame");
++	this->slSetConstants = SL_GETPROC(PFun_slSetConstants, "slSetConstants");
++#undef SL_GETPROC
++	this->slSetVulkanInfo = (void *)GetProcAddress(streamline, "slSetVulkanInfo");
++	this->vk_get_instance_proc_addr = (void *)GetProcAddress(streamline, "vkGetInstanceProcAddr");
++	this->vk_get_device_proc_addr = (void *)GetProcAddress(streamline, "vkGetDeviceProcAddr");
++	return true;
++#else
++	init_reason = "Streamline is only available on Windows";
++	return false;
++#endif
++}
++
++void StreamlineContext::load_functions_post_init() {
++	if (!initialized || !device_ready) {
++		return;
++	}
++	if (slGetFeatureFunction) {
++		slGetFeatureFunction(sl::kFeatureReflex, "slReflexSetOptions", (void *&)this->slReflexSetOptions);
++		slGetFeatureFunction(sl::kFeatureReflex, "slReflexSleep", (void *&)this->slReflexSleep);
++		slGetFeatureFunction(sl::kFeatureReflex, "slReflexGetState", (void *&)this->slReflexGetState);
++		slGetFeatureFunction(sl::kFeaturePCL, "slPCLSetMarker", (void *&)this->slPCLSetMarker);
++		slGetFeatureFunction(sl::kFeaturePCL, "slPCLSetOptions", (void *&)this->slPCLSetOptions);
++
++		slGetFeatureFunction(sl::kFeatureDLSS, "slDLSSGetOptimalSettings", (void *&)this->slDLSSGetOptimalSettings);
++		slGetFeatureFunction(sl::kFeatureDLSS, "slDLSSGetState", (void *&)this->slDLSSGetState);
++		slGetFeatureFunction(sl::kFeatureDLSS, "slDLSSSetOptions", (void *&)this->slDLSSSetOptions);
++
++		// Asking an unsupported feature for its functions only logs errors.
++		if (streamline_capabilities.dlss_g_available) {
++			slGetFeatureFunction(sl::kFeatureDLSS_G, "slDLSSGGetState", (void *&)this->slDLSSGGetState);
++			slGetFeatureFunction(sl::kFeatureDLSS_G, "slDLSSGSetOptions", (void *&)this->slDLSSGSetOptions);
++		}
++
++		// DLSS Ray Reconstruction (DLSS-RR)
++		slGetFeatureFunction(sl::kFeatureDLSS_RR, "slDLSSDGetOptimalSettings", (void *&)this->slDLSSDGetOptimalSettings);
++		slGetFeatureFunction(sl::kFeatureDLSS_RR, "slDLSSDGetState", (void *&)this->slDLSSDGetState);
++		slGetFeatureFunction(sl::kFeatureDLSS_RR, "slDLSSDSetOptions", (void *&)this->slDLSSDSetOptions);
++	}
++	streamline_capabilities.dlss_available &= slDLSSSetOptions && slDLSSGetOptimalSettings;
++	streamline_capabilities.dlss_rr_available &= slDLSSDSetOptions && slDLSSDGetOptimalSettings && slDLSSDGetState;
++	streamline_capabilities.dlss_g_available &= slDLSSGSetOptions && slDLSSGGetState;
++	streamline_capabilities.reflex_available &= slReflexSetOptions && slReflexSleep;
++	// DLSS-G needs Reflex.
++	streamline_capabilities.dlss_g_available &= streamline_capabilities.reflex_available;
++}
++
++void StreamlineContext::query_requirements() {
++	if (!initialized || !slGetFeatureRequirements) {
++		return;
++	}
++	for (int i = 0; i < FEATURE_COUNT; i++) {
++		VulkanRequirements &out = requirements[i];
++		out = VulkanRequirements();
++		bool loaded = false;
++		if (slIsFeatureLoaded && (slIsFeatureLoaded(features[i], loaded) != sl::Result::eOk || !loaded)) {
++			continue;
++		}
++		sl::FeatureRequirements req;
++		if (slGetFeatureRequirements(features[i], req) != sl::Result::eOk) {
++			continue;
++		}
++		out.loaded = true;
++		for (uint32_t j = 0; j < req.vkNumInstanceExtensions; j++) {
++			out.instance_extensions.push_back(CharString(req.vkInstanceExtensions[j]));
++		}
++		for (uint32_t j = 0; j < req.vkNumDeviceExtensions; j++) {
++			out.device_extensions.push_back(CharString(req.vkDeviceExtensions[j]));
++		}
++		for (uint32_t j = 0; j < req.vkNumFeatures12; j++) {
++			out.features12.push_back(CharString(req.vkFeatures12[j]));
++		}
++		for (uint32_t j = 0; j < req.vkNumFeatures13; j++) {
++			out.features13.push_back(CharString(req.vkFeatures13[j]));
++		}
++		out.graphics_queues = req.vkNumGraphicsQueuesRequired;
++		out.compute_queues = req.vkNumComputeQueuesRequired;
++		out.optical_flow_queues = req.vkNumOpticalFlowQueuesRequired;
++		if (OS::get_singleton()->is_stdout_verbose()) {
++			String line = vformat("Streamline: feature %d needs %d graphics, %d compute, %d optical flow queues; device extensions:", (int)features[i], out.graphics_queues, out.compute_queues, out.optical_flow_queues);
++			for (const CharString &e : out.device_extensions) {
++				line += " " + String::utf8(e.get_data());
++			}
++			line += "; instance extensions:";
++			for (const CharString &e : out.instance_extensions) {
++				line += " " + String::utf8(e.get_data());
++			}
++			print_line(line);
++		}
++	}
++}
++
++void StreamlineContext::enumerate_support_vulkan(void *vk_physical_device) {
++	StreamlineCapabilities support;
++	if (initialized && slIsFeatureSupported) {
++		sl::AdapterInfo adapter_info;
++		adapter_info.vkPhysicalDevice = vk_physical_device;
++		sr_support_result = slIsFeatureSupported(sl::kFeatureDLSS, adapter_info);
++		fg_support_result = slIsFeatureSupported(sl::kFeatureDLSS_G, adapter_info);
++		rr_support_result = slIsFeatureSupported(sl::kFeatureDLSS_RR, adapter_info);
++		reflex_support_result = slIsFeatureSupported(sl::kFeatureReflex, adapter_info);
++		support.dlss_available = sr_support_result == sl::Result::eOk;
++		support.dlss_g_available = fg_support_result == sl::Result::eOk;
++		support.dlss_rr_available = rr_support_result == sl::Result::eOk;
++		support.reflex_available = reflex_support_result == sl::Result::eOk;
++		support.pcl_available = slIsFeatureSupported(sl::kFeaturePCL, adapter_info) == sl::Result::eOk;
++		support.nis_available = false;
++	}
++	streamline_capabilities = support;
++}
++
++#define STREAMLINE_GAME_ONLY \
++	if (!is_game || !initialized) \
++		return;
++
++void StreamlineContext::dlssg_disable() {
++	STREAMLINE_GAME_ONLY; // Disable DLSS-G for editor or project settings.
++
++	if (slDLSSGSetOptions && (uint32_t)dlssg_viewport != UINT_MAX) {
++		dlssg_delay = 10;
++		fg_active.set(0);
++
++		sl::DLSSGOptions dlssGOptions{};
++		dlssGOptions.mode = sl::DLSSGMode::eOff;
++		slDLSSGSetOptions(dlssg_viewport, dlssGOptions);
++
++		dlssg_viewport = sl::ViewportHandle(-1);
++	}
++}
++
++void StreamlineContext::reflex_set_options(const sl::ReflexOptions &opts) {
++	STREAMLINE_GAME_ONLY; // Disable reflex for editor or project settings.
++
++	reflex_options = opts;
++	reflex_options_dirty = false;
++	sl::Result result = this->slReflexSetOptions ? this->slReflexSetOptions(opts) : sl::Result::eOk;
++	if (!check(result, true)) { return; }
++}
++
++void StreamlineContext::pcl_set_options(const sl::PCLOptions &opts) {
++	STREAMLINE_GAME_ONLY; // Disable PCL for editor or project settings.
++
++	pcl_options = opts;
++	pcl_options_dirty = false;
++	sl::Result result = this->slPCLSetOptions ? this->slPCLSetOptions(opts) : sl::Result::eOk;
++	if (!check(result, true)) { return; }
++}
++
++void StreamlineContext::pcl_marker(sl::FrameToken *frameToken, sl::PCLMarker marker) {
++	STREAMLINE_GAME_ONLY; // Disable PCL for editor or project settings.
++
++	sl::Result result = this->slPCLSetMarker ? this->slPCLSetMarker(marker, *frameToken) : sl::Result::eOk;
++	if (!check(result, true)) { return; }
++}
++
++void StreamlineContext::reflex_sleep(sl::FrameToken *frameToken) {
++	STREAMLINE_GAME_ONLY; // Disable reflex for editor or project settings.
++
++	if (frameToken == nullptr) {
++		return;
++	}
++
++	sl::Result result = this->slReflexSleep ? this->slReflexSleep(*frameToken) : sl::Result::eOk;
++	if (!check(result, true)) { return; }
++}
++
++void StreamlineContext::reflex_get_state(sl::ReflexState &reflexState) {
++	STREAMLINE_GAME_ONLY; // Disable reflex for editor or project settings.
++
++	sl::Result result = this->slReflexGetState ? this->slReflexGetState(reflexState) : sl::Result::eOk;
++	if (!check(result, true)) { return; }
++}
++
++sl::FrameToken *StreamlineContext::get_new_frame_token() {
++	if (!initialized || !device_ready) { return nullptr; }
++	sl::Result result = this->slGetNewFrameToken ? this->slGetNewFrameToken(last_token, nullptr) : sl::Result::eOk;
++	ERR_FAIL_COND_V_MSG(result != sl::Result::eOk, nullptr, StreamlineContext::result_to_string(result));
++	frame_token_rendered = false;
++	return last_token;
++}
++
++const char *StreamlineContext::result_to_string(sl::Result result) {
++	switch (result) {
++		case sl::Result::eOk:
++			return "sl::eOk";
++		case sl::Result::eErrorIO:
++			return "sl::eErrorIO";
++		case sl::Result::eErrorDriverOutOfDate:
++			return "sl::eErrorDriverOutOfDate";
++		case sl::Result::eErrorOSOutOfDate:
++			return "sl::eErrorOSOutOfDate";
++		case sl::Result::eErrorOSDisabledHWS:
++			return "sl::eErrorOSDisabledHWS";
++		case sl::Result::eErrorDeviceNotCreated:
++			return "sl::eErrorDeviceNotCreated";
++		case sl::Result::eErrorNoSupportedAdapterFound:
++			return "sl::eErrorNoSupportedAdapterFound";
++		case sl::Result::eErrorAdapterNotSupported:
++			return "sl::eErrorAdapterNotSupported";
++		case sl::Result::eErrorNoPlugins:
++			return "sl::eErrorNoPlugins";
++		case sl::Result::eErrorVulkanAPI:
++			return "sl::eErrorVulkanAPI";
++		case sl::Result::eErrorDXGIAPI:
++			return "sl::eErrorDXGIAPI";
++		case sl::Result::eErrorD3DAPI:
++			return "sl::eErrorD3DAPI";
++		case sl::Result::eErrorNRDAPI:
++			return "sl::eErrorNRDAPI";
++		case sl::Result::eErrorNVAPI:
++			return "sl::eErrorNVAPI";
++		case sl::Result::eErrorReflexAPI:
++			return "sl::eErrorReflexAPI";
++		case sl::Result::eErrorNGXFailed:
++			return "sl::eErrorNGXFailed";
++		case sl::Result::eErrorJSONParsing:
++			return "sl::eErrorJSONParsing";
++		case sl::Result::eErrorMissingProxy:
++			return "sl::eErrorMissingProxy";
++		case sl::Result::eErrorMissingResourceState:
++			return "sl::eErrorMissingResourceState";
++		case sl::Result::eErrorInvalidIntegration:
++			return "sl::eErrorInvalidIntegration";
++		case sl::Result::eErrorMissingInputParameter:
++			return "sl::eErrorMissingInputParameter";
++		case sl::Result::eErrorNotInitialized:
++			return "sl::eErrorNotInitialized";
++		case sl::Result::eErrorComputeFailed:
++			return "sl::eErrorComputeFailed";
++		case sl::Result::eErrorInitNotCalled:
++			return "sl::eErrorInitNotCalled";
++		case sl::Result::eErrorExceptionHandler:
++			return "sl::eErrorExceptionHandler";
++		case sl::Result::eErrorInvalidParameter:
++			return "sl::eErrorInvalidParameter";
++		case sl::Result::eErrorMissingConstants:
++			return "sl::eErrorMissingConstants";
++		case sl::Result::eErrorDuplicatedConstants:
++			return "sl::eErrorDuplicatedConstants";
++		case sl::Result::eErrorMissingOrInvalidAPI:
++			return "sl::eErrorMissingOrInvalidAPI";
++		case sl::Result::eErrorCommonConstantsMissing:
++			return "sl::eErrorCommonConstantsMissing";
++		case sl::Result::eErrorUnsupportedInterface:
++			return "sl::eErrorUnsupportedInterface";
++		case sl::Result::eErrorFeatureMissing:
++			return "sl::eErrorFeatureMissing";
++		case sl::Result::eErrorFeatureNotSupported:
++			return "sl::eErrorFeatureNotSupported";
++		case sl::Result::eErrorFeatureMissingHooks:
++			return "sl::eErrorFeatureMissingHooks";
++		case sl::Result::eErrorFeatureFailedToLoad:
++			return "sl::eErrorFeatureFailedToLoad";
++		case sl::Result::eErrorFeatureWrongPriority:
++			return "sl::eErrorFeatureWrongPriority";
++		case sl::Result::eErrorFeatureMissingDependency:
++			return "sl::eErrorFeatureMissingDependency";
++		case sl::Result::eErrorFeatureManagerInvalidState:
++			return "sl::eErrorFeatureManagerInvalidState";
++		case sl::Result::eErrorInvalidState:
++			return "sl::eErrorInvalidState";
++		case sl::Result::eWarnOutOfVRAM:
++			return "sl::eWarnOutOfVRAM";
++		default:
++			return "sl::eUnknown";
++	}
++}
++
++void StreamlineContext::initialize() {
++	StreamlineContext &context = StreamlineContext::get();
++	context.is_game = !(Engine::get_singleton()->is_editor_hint() || Engine::get_singleton()->is_project_manager_hint());
++
++	if (context.slInit != nullptr) {
++		return; // Already initialized.
++	}
++
++	if (!context.load_functions()) {
++		return;
++	}
++	if (!context.slInit || !context.slShutdown || !context.slIsFeatureSupported || !context.slGetFeatureFunction ||
++			!context.slSetConstants || !context.slSetTagForFrame || !context.slEvaluateFeature ||
++			!context.slGetNewFrameToken || !context.slFreeResources || !context.slGetFeatureRequirements ||
++			!context.slSetVulkanInfo || !context.vk_get_device_proc_addr || !context.vk_get_instance_proc_addr) {
++		context.init_reason = "sl.interposer.dll lacks required exports";
++		context.slInit = nullptr;
++		return;
++	}
++
++	sl::Preferences pref;
++	pref.featuresToLoad = context.features;
++	pref.numFeaturesToLoad = FEATURE_COUNT;
++	pref.renderAPI = sl::RenderAPI::eVulkan;
++	pref.applicationId = 0;
++	pref.engine = sl::EngineType::eCustom;
++	pref.engineVersion = "Godot 4.7 / Demiurges";
++	pref.projectId = "5d1f8c7e-3b2a-4d6e-9f40-7a1c2e8b9d36";
++	// Vulkan manual hooking: Godot creates the instance and device itself and
++	// routes only the hooked swapchain and surface calls through Streamline.
++	pref.flags = sl::PreferenceFlags::eDisableCLStateTracking | sl::PreferenceFlags::eUseFrameBasedResourceTagging | sl::PreferenceFlags::eUseManualHooking;
++
++	if (bool(GLOBAL_GET("rendering/streamline/streamline_log")) || OS::get_singleton()->is_stdout_verbose()) {
++		pref.logLevel = sl::LogLevel::eVerbose;
++		pref.showConsole = false;
++		pref.logMessageCallback = [](sl::LogType p_type, const char *p_message) {
++			print_line("Streamline: " + String::utf8(p_message).strip_edges());
++		};
++	} else {
++		pref.logLevel = sl::LogLevel::eOff;
++		pref.showConsole = false;
++	}
++	sl::Result result = context.slInit(pref, sl::kSDKVersion);
++	context.initialized = result == sl::Result::eOk;
++	context.last_error.set((uint32_t)result);
++	if (!context.initialized) {
++		context.init_reason = String("slInit failed: ") + result_to_string(result);
++		return;
++	}
++	context.init_reason = "waiting for the Vulkan device";
++	context.query_requirements();
++}
++
++bool StreamlineContext::check(sl::Result result, bool frame_generation) {
++	if (result == sl::Result::eOk) { return true; }
++	last_error.set((uint32_t)result);
++	if (frame_generation) { fg_failed.set(1); } else { sr_failed.set(1); }
++	dlssg_disable();
++	WARN_PRINT("NVIDIA experiment disabled after SDK error: " + String(result_to_string(result)));
++	return false;
++}
++
++bool StreamlineContext::check_rr(sl::Result result) {
++	if (result == sl::Result::eOk) { return true; }
++	rr_last_error.set((uint32_t)result);
++	rr_failed.set(1);
++	rr_active.set(0);
++	// An optional RR failure must not disable ordinary SR/DLAA.
++	WARN_PRINT("DLSS Ray Reconstruction unavailable after SDK error: " + String(result_to_string(result)));
++	return false;
++}
++
++void StreamlineContext::poll_presented_frames() {
++	if (!initialized || !slDLSSGGetState || (uint32_t)dlssg_viewport == UINT_MAX) { return; }
++	sl::DLSSGState state;
++	if (!check(slDLSSGGetState(dlssg_viewport, state, nullptr), true)) { return; }
++	presented_frames.add(state.numFramesActuallyPresented);
++	fg_status.set((uint32_t)state.status);
++	if (state.status != sl::DLSSGStatus::eOk) {
++		fg_failed.set(1);
++		dlssg_disable();
++	}
++}
++
++#endif
+diff --git a/drivers/streamline/streamline_context.h b/drivers/streamline/streamline_context.h
+new file mode 100644
+index 0000000..182da57
+--- /dev/null
++++ b/drivers/streamline/streamline_context.h
+@@ -0,0 +1,171 @@
++/**************************************************************************/
++/*  streamline_context.h                                                  */
++/**************************************************************************/
++/*                         This file is part of:                          */
++/*                             GODOT ENGINE                               */
++/*                        https://godotengine.org                         */
++/**************************************************************************/
++/* Copyright (c) 2014-present Godot Engine contributors (see AUTHORS.md). */
++/* Copyright (c) 2007-2014 Juan Linietsky, Ariel Manzur.                  */
++/*                                                                        */
++/* Permission is hereby granted, free of charge, to any person obtaining  */
++/* a copy of this software and associated documentation files (the        */
++/* "Software"), to deal in the Software without restriction, including    */
++/* without limitation the rights to use, copy, modify, merge, publish,    */
++/* distribute, sublicense, and/or sell copies of the Software, and to     */
++/* permit persons to whom the Software is furnished to do so, subject to  */
++/* the following conditions:                                              */
++/*                                                                        */
++/* The above copyright notice and this permission notice shall be         */
++/* included in all copies or substantial portions of the Software.        */
++/*                                                                        */
++/* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,        */
++/* EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF     */
++/* MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. */
++/* IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY   */
++/* CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,   */
++/* TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE      */
++/* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                 */
++/**************************************************************************/
++
++#pragma once
++
++#include "core/string/ustring.h"
++#include "core/templates/local_vector.h"
++#include "core/templates/safe_refcount.h"
++#include "streamline_data.h"
++#include "streamline_headers.h"
++
++#ifdef STREAMLINE_ENABLED
++class StreamlineContext {
++public:
++	bool initialized = false;
++	bool device_ready = false; // slSetVulkanInfo succeeded.
++	bool enhanced_barriers = false; // D3D12 only; always false on Vulkan.
++	String init_reason = "not requested";
++	SafeNumeric<uint64_t> dlss_evaluations{ 0 };
++	SafeNumeric<uint64_t> rr_evaluations{ 0 }, rr_resets{ 0 };
++	SafeNumeric<uint32_t> rr_failed{ 0 }, rr_active{ 0 }, rr_last_error{ 0 };
++	SafeNumeric<uint32_t> rr_input_width{ 0 }, rr_input_height{ 0 };
++	SafeNumeric<uint64_t> ui_alpha_frames{ 0 };
++	SafeNumeric<uint64_t> ui_alpha_texture{ 0 };
++	SafeNumeric<uint32_t> fg_input_width{ 0 }, fg_input_height{ 0 }, fg_output_width{ 0 }, fg_output_height{ 0 }, fg_size_supported{ 0 };
++	SafeNumeric<uint64_t> game_presents;
++	SafeNumeric<uint64_t> presented_frames{ 0 };
++	SafeNumeric<uint32_t> last_error{ 0 };
++	sl::Result sr_support_result = sl::Result::eErrorNotInitialized;
++	sl::Result rr_support_result = sl::Result::eErrorNotInitialized;
++	sl::Result fg_support_result = sl::Result::eErrorNotInitialized;
++	sl::Result reflex_support_result = sl::Result::eErrorNotInitialized;
++	SafeNumeric<uint32_t> fg_status{ 0 };
++	SafeNumeric<uint32_t> fg_active{ 0 };
++	SafeNumeric<uint32_t> sr_failed{ 0 };
++	SafeNumeric<uint32_t> fg_failed{ 0 };
++	bool frame_token_rendered = false;
++	bool fg_tagged_this_frame = false; // Render/present thread only.
++	bool check(sl::Result result, bool frame_generation = false);
++	bool check_rr(sl::Result result);
++	void poll_presented_frames();
++	// Interposer
++	void *interposer = nullptr; // HMODULE of sl.interposer.dll.
++	PFun_slInit *slInit = nullptr;
++	PFun_slShutdown *slShutdown = nullptr;
++	PFun_slIsFeatureSupported *slIsFeatureSupported = nullptr;
++	PFun_slIsFeatureLoaded *slIsFeatureLoaded = nullptr;
++	PFun_slGetFeatureFunction *slGetFeatureFunction = nullptr;
++	PFun_slGetFeatureRequirements *slGetFeatureRequirements = nullptr;
++	void *slSetVulkanInfo = nullptr; // PFun_slSetVulkanInfo (sl_helpers_vk.h needs Vulkan headers).
++
++	PFun_slGetNewFrameToken *slGetNewFrameToken = nullptr;
++	PFun_slAllocateResources *slAllocateResources = nullptr;
++	PFun_slFreeResources *slFreeResources = nullptr;
++	PFun_slEvaluateFeature *slEvaluateFeature = nullptr;
++	PFun_slSetTagForFrame *slSetTagForFrame = nullptr;
++	PFun_slSetConstants *slSetConstants = nullptr;
++	PFun_slSetFeatureLoaded *slSetFeatureLoaded = nullptr;
++
++	// Vulkan proxies exported by the interposer (manual hooking). Typed as
++	// generic pointers here so this header does not need the Vulkan headers.
++	void *vk_get_instance_proc_addr = nullptr;
++	void *vk_get_device_proc_addr = nullptr;
++
++	// Reflex
++	sl::ReflexOptions reflex_options = {};
++	bool reflex_options_dirty = true;
++	PFun_slReflexGetState *slReflexGetState = nullptr;
++	PFun_slReflexSetOptions *slReflexSetOptions = nullptr;
++	PFun_slReflexSleep *slReflexSleep = nullptr;
++
++	// PCL
++	sl::PCLOptions pcl_options = {};
++	bool pcl_options_dirty = true;
++	PFun_slPCLSetMarker *slPCLSetMarker = nullptr;
++	PFun_slPCLSetOptions *slPCLSetOptions = nullptr;
++
++	// DLSS Super Resolution
++	PFun_slDLSSGetOptimalSettings *slDLSSGetOptimalSettings = nullptr;
++	PFun_slDLSSGetState *slDLSSGetState = nullptr;
++	PFun_slDLSSSetOptions *slDLSSSetOptions = nullptr;
++	char dlss_default_preset = '?';
++	char dlss_rr_default_preset = '?';
++
++	// DLSS Ray Reconstruction (DLSS-D / DLSS-RR)
++	PFun_slDLSSDGetOptimalSettings *slDLSSDGetOptimalSettings = nullptr;
++	PFun_slDLSSDGetState *slDLSSDGetState = nullptr;
++	PFun_slDLSSDSetOptions *slDLSSDSetOptions = nullptr;
++
++	// DLSS Frame Generation
++	PFun_slDLSSGGetState *slDLSSGGetState = nullptr;
++	PFun_slDLSSGSetOptions *slDLSSGSetOptions = nullptr;
++
++	// NIS
++	PFun_slNISSetOptions *slNISSetOptions = nullptr;
++
++	// Features requested from slInit, and what each needs from the Vulkan
++	// instance and device (copied out of slGetFeatureRequirements).
++	struct VulkanRequirements {
++		LocalVector<CharString> instance_extensions;
++		LocalVector<CharString> device_extensions;
++		LocalVector<CharString> features12;
++		LocalVector<CharString> features13;
++		uint32_t graphics_queues = 0;
++		uint32_t compute_queues = 0;
++		uint32_t optical_flow_queues = 0;
++		bool loaded = false;
++	};
++	static constexpr int FEATURE_COUNT = 5;
++	sl::Feature features[FEATURE_COUNT] = { sl::kFeatureDLSS, sl::kFeatureDLSS_RR, sl::kFeatureDLSS_G, sl::kFeatureReflex, sl::kFeaturePCL };
++	VulkanRequirements requirements[FEATURE_COUNT];
++	// Device extensions a feature asked for but the device did not enable.
++	String missing_device_extensions;
++
++	bool load_functions();
++	void load_functions_post_init();
++	void query_requirements();
++	static const char *result_to_string(sl::Result result);
++
++	void reflex_set_options(const sl::ReflexOptions &opts);
++	void reflex_sleep(sl::FrameToken *frameToken);
++	void reflex_get_state(sl::ReflexState &reflexState);
++	void pcl_set_options(const sl::PCLOptions &opts);
++	void pcl_marker(sl::FrameToken *frameToken, sl::PCLMarker marker);
++	sl::FrameToken *get_new_frame_token();
++
++	void dlssg_disable();
++
++	static void initialize();
++
++	static StreamlineContext &get();
++
++	sl::FrameToken *last_token = nullptr;
++	bool is_game = false;
++
++	sl::ViewportHandle dlssg_viewport{ UINT_MAX };
++	int dlssg_delay = 0;
++
++	// Called once the Vulkan device exists (slSetVulkanInfo already done).
++	void enumerate_support_vulkan(void *vk_physical_device);
++
++	StreamlineCapabilities streamline_capabilities;
++};
++#endif
+diff --git a/drivers/streamline/streamline_data.h b/drivers/streamline/streamline_data.h
+new file mode 100644
+index 0000000..374d6a2
+--- /dev/null
++++ b/drivers/streamline/streamline_data.h
+@@ -0,0 +1,82 @@
++/**************************************************************************/
++/*  streamline_data.h                                                     */
++/**************************************************************************/
++/*                         This file is part of:                          */
++/*                             GODOT ENGINE                               */
++/*                        https://godotengine.org                         */
++/**************************************************************************/
++/* Copyright (c) 2014-present Godot Engine contributors (see AUTHORS.md). */
++/* Copyright (c) 2007-2014 Juan Linietsky, Ariel Manzur.                  */
++/*                                                                        */
++/* Permission is hereby granted, free of charge, to any person obtaining  */
++/* a copy of this software and associated documentation files (the        */
++/* "Software"), to deal in the Software without restriction, including    */
++/* without limitation the rights to use, copy, modify, merge, publish,    */
++/* distribute, sublicense, and/or sell copies of the Software, and to     */
++/* permit persons to whom the Software is furnished to do so, subject to  */
++/* the following conditions:                                              */
++/*                                                                        */
++/* The above copyright notice and this permission notice shall be         */
++/* included in all copies or substantial portions of the Software.        */
++/*                                                                        */
++/* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,        */
++/* EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF     */
++/* MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. */
++/* IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY   */
++/* CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,   */
++/* TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE      */
++/* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                 */
++/**************************************************************************/
++
++#pragma once
++
++enum StreamlineMarkerType {
++	STREAMLINE_MARKER_INITIALIZE_VULKAN,
++	STREAMLINE_MARKER_INITIALIZE_D3D12,
++	STREAMLINE_MARKER_BEFORE_MESSAGE_LOOP,
++	STREAMLINE_MARKER_BEFORE_DEVICE_DESTROY,
++	STREAMLINE_MARKER_AFTER_DEVICE_CREATION,
++	STREAMLINE_MARKER_MODIFY_SWAPCHAIN,
++	STREAMLINE_MARKER_BEGIN_SIMULATION,
++	STREAMLINE_MARKER_END_SIMULATION,
++	STREAMLINE_MARKER_BEGIN_RENDER,
++	STREAMLINE_MARKER_END_RENDER,
++	STREAMLINE_MARKER_BEGIN_PRESENT,
++	STREAMLINE_MARKER_END_PRESENT,
++	STREAMLINE_MARKER_PC_PING
++};
++
++enum StreamlineCapabilityType {
++	STREAMLINE_CAPABILITY_DLSS,
++	STREAMLINE_CAPABILITY_DLSS_G,
++	STREAMLINE_CAPABILITY_DLSS_RR,
++	STREAMLINE_CAPABILITY_REFLEX,
++	STREAMLINE_CAPABILITY_PCL,
++	STREAMLINE_CAPABILITY_NIS
++};
++
++enum StreamlineInternalParameterType {
++	STREAMLINE_INTERNAL_PARAMETER_FUNC_D3D12GetInterface,
++	STREAMLINE_INTERNAL_PARAMETER_FUNC_D3D12CreateDevice,
++	STREAMLINE_INTERNAL_PARAMETER_FUNC_DXGIGetDebugInterface1,
++	STREAMLINE_INTERNAL_PARAMETER_FUNC_CreateDXGIFactory,
++	STREAMLINE_INTERNAL_PARAMETER_FUNC_CreateDXGIFactory1,
++	STREAMLINE_INTERNAL_PARAMETER_FUNC_CreateDXGIFactory2,
++};
++
++struct StreamlineCapabilities {
++	bool dlss_available = false;
++	bool dlss_g_available = false;
++	bool dlss_rr_available = false;
++	bool reflex_available = false;
++	bool pcl_available = false;
++	bool nis_available = false;
++};
++
++enum StreamlineParameterType {
++	STREAMLINE_PARAM_REFLEX_MODE, // [double] 0.0 = off, 1.0 = on, 2.0 = on with boost
++	STREAMLINE_PARAM_REFLEX_FRAME_LIMIT_US, // [double] frame limit in microseconds
++	STREAMLINE_PARAM_DLSS_PRESET, // [string] DLSS preset. Defaults to "?" (auto). Can be overridden to "J" or "K" for transformer models.
++	STREAMLINE_PARAM_DLSS_RR_PRESET, // [string] DLSS RR preset. Defaults to "?" (auto). Can be overridden to "D" or "E" for transformer models.
++	STREAMLINE_PARAM_COUNT,
++};
+diff --git a/drivers/streamline/streamline_headers.h b/drivers/streamline/streamline_headers.h
+new file mode 100644
+index 0000000..8f6156f
+--- /dev/null
++++ b/drivers/streamline/streamline_headers.h
+@@ -0,0 +1,67 @@
++/**************************************************************************/
++/*  streamline_headers.h                                                  */
++/**************************************************************************/
++/*                         This file is part of:                          */
++/*                             GODOT ENGINE                               */
++/*                        https://godotengine.org                         */
++/**************************************************************************/
++/* Copyright (c) 2014-present Godot Engine contributors (see AUTHORS.md). */
++/* Copyright (c) 2007-2014 Juan Linietsky, Ariel Manzur.                  */
++/*                                                                        */
++/* Permission is hereby granted, free of charge, to any person obtaining  */
++/* a copy of this software and associated documentation files (the        */
++/* "Software"), to deal in the Software without restriction, including    */
++/* without limitation the rights to use, copy, modify, merge, publish,    */
++/* distribute, sublicense, and/or sell copies of the Software, and to     */
++/* permit persons to whom the Software is furnished to do so, subject to  */
++/* the following conditions:                                              */
++/*                                                                        */
++/* The above copyright notice and this permission notice shall be         */
++/* included in all copies or substantial portions of the Software.        */
++/*                                                                        */
++/* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,        */
++/* EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF     */
++/* MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. */
++/* IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY   */
++/* CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,   */
++/* TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE      */
++/* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                 */
++/**************************************************************************/
++
++#pragma once
++#ifdef STREAMLINE_ENABLED
++
++#if defined(__clang__)
++#pragma clang diagnostic push
++#pragma clang diagnostic ignored "-Wnon-virtual-dtor"
++#pragma clang diagnostic ignored "-Wshadow"
++#pragma clang diagnostic ignored "-Wdeprecated-declarations"
++#elif defined(__GNUC__)
++#pragma GCC diagnostic push
++#pragma GCC diagnostic ignored "-Wshadow"
++#pragma GCC diagnostic ignored "-Wnon-virtual-dtor"
++#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
++#elif defined(_MSC_VER)
++#pragma warning(push)
++#pragma warning(disable : 5257)
++#pragma warning(disable : 4471)
++#endif
++
++#include "../../thirdparty/streamline/include/sl.h"
++#include "../../thirdparty/streamline/include/sl_consts.h"
++#include "../../thirdparty/streamline/include/sl_dlss.h"
++#include "../../thirdparty/streamline/include/sl_dlss_d.h"
++#include "../../thirdparty/streamline/include/sl_dlss_g.h"
++#include "../../thirdparty/streamline/include/sl_nis.h"
++#include "../../thirdparty/streamline/include/sl_pcl.h"
++#include "../../thirdparty/streamline/include/sl_reflex.h"
++
++#if defined(__clang__)
++#pragma clang diagnostic pop
++#elif defined(__GNUC__)
++#pragma GCC diagnostic pop
++#elif defined(_MSC_VER)
++#pragma warning(pop)
++#endif
++
++#endif
+diff --git a/drivers/streamline/streamline_security.h b/drivers/streamline/streamline_security.h
+new file mode 100644
+index 0000000..f1364a6
+--- /dev/null
++++ b/drivers/streamline/streamline_security.h
+@@ -0,0 +1,478 @@
++/*
++* Copyright (c) 2022-2023 NVIDIA CORPORATION. All rights reserved
++*
++* Permission is hereby granted, free of charge, to any person obtaining a copy
++* of this software and associated documentation files (the "Software"), to deal
++* in the Software without restriction, including without limitation the rights
++* to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
++* copies of the Software, and to permit persons to whom the Software is
++* furnished to do so, subject to the following conditions:
++*
++* The above copyright notice and this permission notice shall be included in all
++* copies or substantial portions of the Software.
++*
++* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++* IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++* FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
++* AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++* LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
++* OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
++* SOFTWARE.
++*/
++
++#pragma once
++
++#define _UNICODE 1
++#define UNICODE 1
++
++#include <tchar.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <windows.h>
++#include <softpub.h>
++#include <wincrypt.h>
++#include <wintrust.h>
++#include <inttypes.h>
++
++// MinGW 12 predates the Windows 8 signature extensions. Match the public ABI.
++#ifndef WSS_VERIFY_SPECIFIC
++#define WSS_VERIFY_SPECIFIC 0x00000001
++#define WSS_GET_SECONDARY_SIG_COUNT 0x00000002
++struct WINTRUST_SIGNATURE_SETTINGS {
++    DWORD cbStruct, dwIndex, dwFlags, cSecondarySigs, dwVerifiedSigIndex;
++    PCERT_STRONG_SIGN_PARA pCryptoPolicy;
++};
++struct StreamlineWinTrustData : WINTRUST_DATA {
++    WINTRUST_SIGNATURE_SETTINGS *pSignatureSettings;
++};
++#else
++using StreamlineWinTrustData = WINTRUST_DATA;
++#endif
++
++
++#define GetProc(hModule, procName, proc) ((proc || (proc = reinterpret_cast<decltype(proc)>(GetProcAddress(hModule, procName)))) ? TRUE : FALSE)
++
++typedef BOOL(WINAPI* PfnCryptMsgClose)(IN HCRYPTMSG hCryptMsg);
++static PfnCryptMsgClose pfnCryptMsgClose = NULL;
++
++typedef BOOL(WINAPI* PfnCertCloseStore)(IN HCERTSTORE hCertStore, DWORD dwFlags);
++static PfnCertCloseStore pfnCertCloseStore = NULL;
++
++typedef HCERTSTORE (WINAPI* PfnCertOpenStore)(
++    _In_ LPCSTR lpszStoreProvider,
++    _In_ DWORD dwEncodingType,
++    _In_opt_ HCRYPTPROV_LEGACY hCryptProv,
++    _In_ DWORD dwFlags,
++    _In_opt_ const void* pvPara
++);
++static PfnCertOpenStore pfnCertOpenStore = NULL;
++
++typedef BOOL(WINAPI* PfnCertFreeCertificateContext)(IN PCCERT_CONTEXT pCertContext);
++static PfnCertFreeCertificateContext pfnCertFreeCertificateContext = NULL;
++
++typedef PCCERT_CONTEXT(WINAPI* PfnCertFindCertificateInStore)(
++    IN HCERTSTORE hCertStore,
++    IN DWORD dwCertEncodingType,
++    IN DWORD dwFindFlags,
++    IN DWORD dwFindType,
++    IN const void* pvFindPara,
++    IN PCCERT_CONTEXT pPrevCertContext
++    );
++static PfnCertFindCertificateInStore pfnCertFindCertificateInStore = NULL;
++
++typedef BOOL(WINAPI* PfnCryptMsgGetParam)(
++    IN HCRYPTMSG hCryptMsg,
++    IN DWORD dwParamType,
++    IN DWORD dwIndex,
++    OUT void* pvData,
++    IN OUT DWORD* pcbData
++    );
++static PfnCryptMsgGetParam pfnCryptMsgGetParam = NULL;
++
++typedef HCRYPTMSG (WINAPI* PfnCryptMsgOpenToDecode)(
++    _In_ DWORD dwMsgEncodingType,
++    _In_ DWORD dwFlags,
++    _In_ DWORD dwMsgType,
++    _In_opt_ HCRYPTPROV_LEGACY hCryptProv,
++    _Reserved_ PCERT_INFO pRecipientInfo,
++    _In_opt_ PCMSG_STREAM_INFO pStreamInfo
++);
++PfnCryptMsgOpenToDecode pfnCryptMsgOpenToDecode = {};
++
++typedef BOOL (WINAPI* PfnCryptMsgUpdate)(
++    _In_ HCRYPTMSG hCryptMsg,
++    _In_reads_bytes_opt_(cbData) const BYTE* pbData,
++    _In_ DWORD cbData,
++    _In_ BOOL fFinal
++);
++PfnCryptMsgUpdate pfnCryptMsgUpdate = {};
++
++typedef BOOL(WINAPI* PfnCryptQueryObject)(
++    DWORD            dwObjectType,
++    const void* pvObject,
++    DWORD            dwExpectedContentTypeFlags,
++    DWORD            dwExpectedFormatTypeFlags,
++    DWORD            dwFlags,
++    DWORD* pdwMsgAndCertEncodingType,
++    DWORD* pdwContentType,
++    DWORD* pdwFormatType,
++    HCERTSTORE* phCertStore,
++    HCRYPTMSG* phMsg,
++    const void** ppvContext
++    );
++static PfnCryptQueryObject pfnCryptQueryObject = NULL;
++
++typedef BOOL(WINAPI* PfnCryptDecodeObjectEx)(
++    IN DWORD              dwCertEncodingType,
++    IN LPCSTR             lpszStructType,
++    IN const BYTE* pbEncoded,
++    IN DWORD              cbEncoded,
++    IN DWORD              dwFlags,
++    IN PCRYPT_DECODE_PARA pDecodePara,
++    OUT void* pvStructInfo,
++    IN OUT DWORD* pcbStructInfo
++    );
++static PfnCryptDecodeObjectEx pfnCryptDecodeObjectEx = NULL;
++
++typedef LONG(WINAPI* PfnWinVerifyTrust)(
++    IN HWND   hwnd,
++    IN GUID* pgActionID,
++    IN LPVOID pWVTData
++    );
++static PfnWinVerifyTrust pfnWinVerifyTrust = NULL;
++
++namespace sl
++{
++
++namespace security
++{
++
++bool isSignedByNVIDIA(const wchar_t* pathToFile)
++{
++    bool valid = false;
++
++    // Now let's make sure this is actually signed by NVIDIA
++
++    DWORD dwEncoding, dwContentType, dwFormatType;
++    HCERTSTORE hStore = NULL;
++    HCRYPTMSG hMsg = NULL;
++    PCMSG_SIGNER_INFO pSignerInfo = NULL;
++    DWORD dwSignerInfo;
++
++    if (!pfnCertOpenStore)
++    {
++        // We only support Win10+ so we can search for module in system32 directly
++        auto hModCrypt32 = LoadLibraryExW(L"crypt32.dll", NULL, LOAD_LIBRARY_SEARCH_SYSTEM32);
++        if (!hModCrypt32 ||
++            !GetProc(hModCrypt32, "CryptMsgClose", pfnCryptMsgClose) ||
++            !GetProc(hModCrypt32, "CertOpenStore", pfnCertOpenStore) ||
++            !GetProc(hModCrypt32, "CertCloseStore", pfnCertCloseStore) ||
++            !GetProc(hModCrypt32, "CertFreeCertificateContext", pfnCertFreeCertificateContext) ||
++            !GetProc(hModCrypt32, "CertFindCertificateInStore", pfnCertFindCertificateInStore) ||
++            !GetProc(hModCrypt32, "CryptMsgGetParam", pfnCryptMsgGetParam) ||
++            !GetProc(hModCrypt32, "CryptMsgUpdate", pfnCryptMsgUpdate) ||
++            !GetProc(hModCrypt32, "CryptMsgOpenToDecode", pfnCryptMsgOpenToDecode) ||
++            !GetProc(hModCrypt32, "CryptQueryObject", pfnCryptQueryObject) ||
++            !GetProc(hModCrypt32, "CryptDecodeObjectEx", pfnCryptDecodeObjectEx))
++        {
++            return false;
++        }
++    }
++
++    // Get message handle and store handle from the signed file.
++    auto bResult = pfnCryptQueryObject(CERT_QUERY_OBJECT_FILE,
++        pathToFile,
++        CERT_QUERY_CONTENT_FLAG_PKCS7_SIGNED_EMBED,
++        CERT_QUERY_FORMAT_FLAG_BINARY,
++        0,
++        &dwEncoding,
++        &dwContentType,
++        &dwFormatType,
++        &hStore,
++        &hMsg,
++        NULL);
++    if (!bResult)
++    {
++        return false;
++    }
++
++    // Get signer information size.
++    bResult = pfnCryptMsgGetParam(hMsg,
++        CMSG_SIGNER_INFO_PARAM,
++        0,
++        NULL,
++        &dwSignerInfo);
++    if (!bResult)
++    {
++        return false;
++    }
++
++    // Allocate memory for signer information.
++    pSignerInfo = (PCMSG_SIGNER_INFO)LocalAlloc(LPTR, dwSignerInfo);
++    if (!pSignerInfo)
++    {
++        return false;
++    }
++
++    // Get Signer Information.
++    bResult = pfnCryptMsgGetParam(hMsg,
++        CMSG_SIGNER_INFO_PARAM,
++        0,
++        (PVOID)pSignerInfo,
++        &dwSignerInfo);
++    if (!bResult)
++    {
++        LocalFree(pSignerInfo);
++        return false;
++    }
++
++    // Look for nested signature
++    constexpr const char* kOID_NESTED_SIGNATURE = "1.3.6.1.4.1.311.2.4.1";
++    for (DWORD i = 0; i < pSignerInfo->UnauthAttrs.cAttr; i++)
++    {
++        if (strcmp(kOID_NESTED_SIGNATURE, pSignerInfo->UnauthAttrs.rgAttr[i].pszObjId) == 0)
++        {
++            HCRYPTMSG hMsg2 = pfnCryptMsgOpenToDecode(X509_ASN_ENCODING | PKCS_7_ASN_ENCODING, 0, 0, NULL, NULL, NULL);
++            if (hMsg2)
++            {
++                if (pfnCryptMsgUpdate(hMsg2,pSignerInfo->UnauthAttrs.rgAttr[i].rgValue->pbData,pSignerInfo->UnauthAttrs.rgAttr[i].rgValue->cbData,TRUE))
++                {
++                    dwSignerInfo = 0;
++                    pfnCryptMsgGetParam(hMsg2, CMSG_SIGNER_INFO_PARAM, 0, NULL, &dwSignerInfo);
++                    if (dwSignerInfo != 0)
++                    {
++                        PCMSG_SIGNER_INFO pSignerInfo2 = (PCMSG_SIGNER_INFO)LocalAlloc(LPTR, dwSignerInfo);
++                        if (pSignerInfo2)
++                        {
++                            if (pfnCryptMsgGetParam(hMsg2, CMSG_SIGNER_INFO_PARAM, 0, (PVOID)pSignerInfo2, &dwSignerInfo))
++                            {
++                                CRYPT_DATA_BLOB c7Data;
++                                c7Data.pbData = pSignerInfo->UnauthAttrs.rgAttr[i].rgValue->pbData;
++                                c7Data.cbData = pSignerInfo->UnauthAttrs.rgAttr[i].rgValue->cbData;
++
++                                auto hStore2 = pfnCertOpenStore(CERT_STORE_PROV_PKCS7, X509_ASN_ENCODING | PKCS_7_ASN_ENCODING, NULL, 0, &c7Data);
++                                if (!hStore2)
++                                {
++                                    LocalFree(pSignerInfo2);
++                                    return false;
++                                }
++
++                                CERT_INFO CertInfo{};
++                                PCCERT_CONTEXT pCertContext = NULL;
++
++                                // Search for the signer certificate in the temporary certificate store.
++                                CertInfo.Issuer = pSignerInfo2->Issuer;
++                                CertInfo.SerialNumber = pSignerInfo2->SerialNumber;
++                                pCertContext = pfnCertFindCertificateInStore(hStore2,
++                                    (X509_ASN_ENCODING | PKCS_7_ASN_ENCODING),
++                                    0,
++                                    CERT_FIND_SUBJECT_CERT,
++                                    (PVOID)&CertInfo,
++                                    NULL);
++                                if (!pCertContext)
++                                {
++                                    LocalFree(pSignerInfo2);
++                                    pfnCertCloseStore(hStore2, CERT_CLOSE_STORE_FORCE_FLAG);
++                                    return false;
++                                }
++
++                                void* decodedPublicKey{};
++                                DWORD decodedPublicLength{};
++                                if (pfnCryptDecodeObjectEx((PKCS_7_ASN_ENCODING | X509_ASN_ENCODING),
++                                    CNG_RSA_PUBLIC_KEY_BLOB,
++                                    pCertContext->pCertInfo->SubjectPublicKeyInfo.PublicKey.pbData,
++                                    pCertContext->pCertInfo->SubjectPublicKeyInfo.PublicKey.cbData,
++                                    CRYPT_ENCODE_ALLOC_FLAG,
++                                    NULL,
++                                    &decodedPublicKey,
++                                    &decodedPublicLength))
++                                {
++                                    static uint8_t s_rsaStreamlinePublicKey[] =
++                                    {
++                                        0x52, 0x53, 0x41, 0x31, 0x00, 0x0c, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00, 0x80, 0x01, 0x00, 0x00,
++                                        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0xc1, 0x8e, 0x40, 0xc3, 0xf5,
++                                        0xa7, 0x01, 0x9a, 0x37, 0x6b, 0x47, 0xa8, 0x58, 0xe8, 0xbe, 0xe3, 0x55, 0x0a, 0xee, 0x0f, 0x0d,
++                                        0x32, 0xaa, 0x12, 0xf9, 0x56, 0x7f, 0x5d, 0xfd, 0x82, 0x09, 0x33, 0x21, 0x42, 0xf2, 0xe8, 0x74,
++                                        0x98, 0x51, 0xb3, 0x88, 0x74, 0xcd, 0x00, 0x6e, 0xb1, 0x08, 0x10, 0x4b, 0xf1, 0xda, 0xd6, 0x97,
++                                        0x87, 0xd4, 0x9c, 0xb1, 0x13, 0xa8, 0xa2, 0x86, 0x15, 0x0e, 0xc1, 0xa5, 0x9c, 0xe5, 0x90, 0x9b,
++                                        0xbe, 0x69, 0xdc, 0x6a, 0x82, 0xbe, 0xb4, 0x4b, 0x4b, 0xfa, 0x95, 0x8e, 0xc1, 0xfc, 0x2b, 0x61,
++                                        0x95, 0xd1, 0x91, 0xed, 0xeb, 0x87, 0xe7, 0x09, 0x84, 0x05, 0x41, 0x03, 0xb0, 0x2d, 0xd4, 0x39,
++                                        0x7f, 0x62, 0x06, 0x56, 0x33, 0x93, 0x7e, 0x77, 0x54, 0x06, 0x77, 0x2b, 0x75, 0x05, 0xbc, 0xeb,
++                                        0x98, 0xea, 0xc0, 0xa2, 0xca, 0x98, 0x86, 0x0f, 0x10, 0x65, 0xde, 0x19, 0x2c, 0xa6, 0x1e, 0x93,
++                                        0xb0, 0x92, 0x5d, 0x5f, 0x5b, 0x6f, 0x79, 0x6d, 0x2c, 0x76, 0xa6, 0x67, 0x50, 0xaa, 0x8f, 0xc2,
++                                        0x4c, 0xf1, 0x08, 0xf7, 0xc0, 0x27, 0x29, 0xf0, 0x68, 0xf4, 0x64, 0x00, 0x1c, 0xb6, 0x28, 0x1e,
++                                        0x25, 0xb8, 0xf3, 0x8a, 0xd1, 0x6e, 0x65, 0xa3, 0x61, 0x9d, 0xf8, 0xca, 0x4a, 0x41, 0x60, 0x80,
++                                        0x62, 0xdf, 0x41, 0xa4, 0x8b, 0xdc, 0x97, 0xee, 0xeb, 0x64, 0x6f, 0xe4, 0x8f, 0x4b, 0xdf, 0x24,
++                                        0x01, 0x80, 0xd9, 0xb4, 0x0a, 0xec, 0x0d, 0x3e, 0xb7, 0x76, 0xba, 0xe9, 0xe7, 0xde, 0x07, 0xdd,
++                                        0x30, 0xc8, 0x4a, 0x14, 0x79, 0xec, 0x15, 0xed, 0x5c, 0xc6, 0xcc, 0xd4, 0xe6, 0x06, 0x3c, 0x42,
++                                        0x92, 0x10, 0xf7, 0x7c, 0x80, 0x1e, 0x78, 0xd3, 0xb4, 0x9f, 0xc2, 0x3b, 0xa8, 0x7b, 0xa0, 0xe3,
++                                        0x0c, 0xd9, 0xad, 0x2e, 0x09, 0x72, 0xe2, 0x8f, 0x54, 0x28, 0x87, 0x3c, 0xba, 0x7c, 0x97, 0x80,
++                                        0xdc, 0x09, 0xb5, 0x12, 0x34, 0x78, 0x9a, 0x26, 0xd0, 0xa3, 0xa7, 0xa7, 0x1b, 0x25, 0x19, 0xe5,
++                                        0x6e, 0xbe, 0xd7, 0x5a, 0x91, 0x32, 0xc4, 0xa9, 0x2f, 0xcc, 0xd5, 0x82, 0x4b, 0x5b, 0x9f, 0xad,
++                                        0xf3, 0x2f, 0xed, 0x4f, 0x33, 0xe1, 0x50, 0x33, 0xd6, 0x90, 0x79, 0x22, 0xe5, 0x1c, 0xc7, 0x35,
++                                        0xe7, 0x58, 0xe6, 0xb4, 0x8b, 0xc4, 0x28, 0x20, 0xec, 0xca, 0x70, 0xbb, 0x02, 0x1b, 0x48, 0xd8,
++                                        0x84, 0x51, 0x24, 0x33, 0x2a, 0x08, 0xb1, 0x15, 0x4e, 0xbc, 0x88, 0xa5, 0xe1, 0x37, 0x76, 0x70,
++                                        0xe6, 0xdf, 0x3f, 0x73, 0xfd, 0x0d, 0x8a, 0xd9, 0x0d, 0xa5, 0x35, 0xb2, 0xb4, 0x01, 0x42, 0x96,
++                                        0xc4, 0xaa, 0x1c, 0xeb, 0x68, 0x62, 0x36, 0xbf, 0xef, 0x5e, 0x2a, 0x3d, 0x18, 0x91, 0x8b, 0x92,
++                                        0x0a, 0x1e, 0xce, 0x98, 0x5b, 0x7b, 0x64, 0x42, 0x09, 0xb0, 0x1d
++                                    };
++
++                                    valid = decodedPublicLength == sizeof(s_rsaStreamlinePublicKey) && memcmp(s_rsaStreamlinePublicKey, decodedPublicKey, decodedPublicLength) == 0;
++                                    LocalFree(decodedPublicKey);
++                                }
++
++                                pfnCertFreeCertificateContext(pCertContext);
++                                pfnCertCloseStore(hStore2, CERT_CLOSE_STORE_FORCE_FLAG);
++                            }
++                            LocalFree(pSignerInfo2);
++                        }
++                    }
++                }
++                pfnCryptMsgClose(hMsg2);
++            }
++            break;
++        }
++    }
++
++    LocalFree(pSignerInfo);
++    pfnCryptMsgClose(hMsg);
++    pfnCertCloseStore(hStore, CERT_CLOSE_STORE_FORCE_FLAG);
++
++    return valid;
++}
++
++//! See https://docs.microsoft.com/en-us/windows/win32/seccrypto/example-c-program--verifying-the-signature-of-a-pe-file
++//!
++//! IMPORTANT: Always pass in the FULL PATH to the file, relative paths are NOT allowed!
++bool verifyEmbeddedSignature(const wchar_t* pathToFile)
++{
++    bool valid = true;
++
++    LONG lStatus = {};
++
++    // Initialize the WINTRUST_FILE_INFO structure.
++
++    WINTRUST_FILE_INFO FileData;
++    memset(&FileData, 0, sizeof(FileData));
++    FileData.cbStruct = sizeof(WINTRUST_FILE_INFO);
++    FileData.pcwszFilePath = pathToFile;
++    FileData.hFile = NULL;
++    FileData.pgKnownSubject = NULL;
++
++    if (!pfnWinVerifyTrust)
++    {
++        // We only support Win10+ so we can search for module in system32 directly
++        auto hModWintrust = LoadLibraryExW(L"wintrust.dll", NULL, LOAD_LIBRARY_SEARCH_SYSTEM32);
++        if (!hModWintrust || !GetProc(hModWintrust, "WinVerifyTrust", pfnWinVerifyTrust))
++        {
++            return false;
++        }
++    }
++
++    /*
++    WVTPolicyGUID specifies the policy to apply on the file
++    WINTRUST_ACTION_GENERIC_VERIFY_V2 policy checks:
++
++    1) The certificate used to sign the file chains up to a root
++    certificate located in the trusted root certificate store. This
++    implies that the identity of the publisher has been verified by
++    a certification authority.
++
++    2) In cases where user interface is displayed (which this example
++    does not do), WinVerifyTrust will check for whether the
++    end entity certificate is stored in the trusted publisher store,
++    implying that the user trusts content from this publisher.
++
++    3) The end entity certificate has sufficient permission to sign
++    code, as indicated by the presence of a code signing EKU or no
++    EKU.
++    */
++
++    GUID WVTPolicyGUID = WINTRUST_ACTION_GENERIC_VERIFY_V2;
++    StreamlineWinTrustData WinTrustData;
++
++    // Initialize the WinVerifyTrust input data structure.
++
++    // Default all fields to 0.
++    memset(&WinTrustData, 0, sizeof(WinTrustData));
++
++    WinTrustData.cbStruct = sizeof(WinTrustData);
++    // Use default code signing EKU.
++    WinTrustData.pPolicyCallbackData = NULL;
++    // No data to pass to SIP.
++    WinTrustData.pSIPClientData = NULL;
++    // Disable WVT UI.
++    WinTrustData.dwUIChoice = WTD_UI_NONE;
++    // No revocation checking.
++    WinTrustData.fdwRevocationChecks = WTD_REVOKE_NONE;
++    // Verify an embedded signature on a file.
++    WinTrustData.dwUnionChoice = WTD_CHOICE_FILE;
++    // Verify action.
++    WinTrustData.dwStateAction = WTD_STATEACTION_VERIFY;
++    // Verification sets this value.
++    WinTrustData.hWVTStateData = NULL;
++    // Not used.
++    WinTrustData.pwszURLReference = NULL;
++    // This is not applicable if there is no UI because it changes
++    // the UI to accommodate running applications instead of
++    // installing applications.
++    WinTrustData.dwUIContext = 0;
++    // Set pFile.
++    WinTrustData.pFile = &FileData;
++
++    // First verify the primary signature (index 0) to determine how many secondary signatures
++    // are present. We use WSS_VERIFY_SPECIFIC and dwIndex to do this, also setting
++    // WSS_GET_SECONDARY_SIG_COUNT to have the number of secondary signatures returned.
++    WINTRUST_SIGNATURE_SETTINGS SignatureSettings = {};
++    CERT_STRONG_SIGN_PARA StrongSigPolicy = {};
++    SignatureSettings.cbStruct = sizeof(WINTRUST_SIGNATURE_SETTINGS);
++    SignatureSettings.dwFlags = WSS_GET_SECONDARY_SIG_COUNT | WSS_VERIFY_SPECIFIC;
++    SignatureSettings.dwIndex = 0;
++    WinTrustData.pSignatureSettings = &SignatureSettings;
++
++    StrongSigPolicy.cbSize = sizeof(CERT_STRONG_SIGN_PARA);
++    StrongSigPolicy.dwInfoChoice = CERT_STRONG_SIGN_OID_INFO_CHOICE;
++    StrongSigPolicy.pszOID = (LPSTR)szOID_CERT_STRONG_SIGN_OS_CURRENT;
++    WinTrustData.pSignatureSettings->pCryptoPolicy = &StrongSigPolicy;
++
++    // WinVerifyTrust verifies signatures as specified by the GUID  and Wintrust_Data.
++    lStatus = pfnWinVerifyTrust(NULL, &WVTPolicyGUID, &WinTrustData);
++
++    // First signature must be validated by the OS
++    valid = lStatus == ERROR_SUCCESS;
++    if (!valid)
++    {
++        printf("File '%S' is NOT correctly signed - Streamline will not load unsecured modules\n", pathToFile);
++    }
++    else
++    {
++        // Now there has to be a secondary one
++        valid &= WinTrustData.pSignatureSettings->cSecondarySigs == 1;
++        if (!valid)
++        {
++            printf("File '%S' does not have the secondary NVIDIA signature - Streamline will not load unsecured modules\n", pathToFile);
++        }
++        else
++        {
++            // The secondary signature must be from NVIDIA
++            valid &= isSignedByNVIDIA(pathToFile);
++            if (valid)
++            {
++                printf("File '%S' is signed by NVIDIA and the signature was verified.\n", pathToFile);
++            }
++            else
++            {
++                printf("File '%S' is NOT correctly signed - Streamline will not load unsecured modules\n", pathToFile);
++            }
++        }
++    }
++
++    // Any hWVTStateData must be released by a call with close.
++    WinTrustData.dwStateAction = WTD_STATEACTION_CLOSE;
++    lStatus = pfnWinVerifyTrust(NULL, &WVTPolicyGUID, &WinTrustData);
++
++    return valid;
++}
++
++}
++}
+diff --git a/drivers/streamline/streamline_vulkan.cpp b/drivers/streamline/streamline_vulkan.cpp
+new file mode 100644
+index 0000000..9db50a4
+--- /dev/null
++++ b/drivers/streamline/streamline_vulkan.cpp
+@@ -0,0 +1,360 @@
++/**************************************************************************/
++/*  streamline_vulkan.cpp                                                 */
++/**************************************************************************/
++/*                         This file is part of:                          */
++/*                             GODOT ENGINE                               */
++/*                        https://godotengine.org                         */
++/**************************************************************************/
++/* Copyright (c) 2014-present Godot Engine contributors (see AUTHORS.md). */
++/* Copyright (c) 2007-2014 Juan Linietsky, Ariel Manzur.                  */
++/*                                                                        */
++/* Permission is hereby granted, free of charge, to any person obtaining  */
++/* a copy of this software and associated documentation files (the        */
++/* "Software"), to deal in the Software without restriction, including    */
++/* without limitation the rights to use, copy, modify, merge, publish,    */
++/* distribute, sublicense, and/or sell copies of the Software, and to     */
++/* permit persons to whom the Software is furnished to do so, subject to  */
++/* the following conditions:                                              */
++/*                                                                        */
++/* The above copyright notice and this permission notice shall be         */
++/* included in all copies or substantial portions of the Software.        */
++/*                                                                        */
++/* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,        */
++/* EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF     */
++/* MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. */
++/* IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY   */
++/* CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,   */
++/* TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE      */
++/* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                 */
++/**************************************************************************/
++
++#include "streamline_vulkan.h"
++
++#if defined(STREAMLINE_ENABLED) && defined(VULKAN_ENABLED)
++
++// The Vulkan headers must come before the Streamline headers so that
++// Streamline's Vulkan types (sl::VulkanInfo, SL_VKResult) are declared.
++#include "drivers/vulkan/graphics_sdk_vulkan.h"
++
++#include "streamline.h"
++#include "streamline_context.h"
++
++#include "core/os/os.h"
++#include "core/string/print_string.h"
++
++#if defined(__clang__)
++#pragma clang diagnostic push
++#pragma clang diagnostic ignored "-Wshadow"
++#elif defined(__GNUC__)
++#pragma GCC diagnostic push
++#pragma GCC diagnostic ignored "-Wshadow"
++#endif
++#include <cassert>
++#include "../../thirdparty/streamline/include/sl_helpers_vk.h"
++#if defined(__clang__)
++#pragma clang diagnostic pop
++#elif defined(__GNUC__)
++#pragma GCC diagnostic pop
++#endif
++
++// Streamline on Vulkan with manual hooking (Streamline ProgrammingGuideManualHooking.md):
++// - slInit(eUseManualHooking) runs before vkCreateInstance (Main::setup).
++// - Godot creates the instance and device itself, adding the extensions,
++//   1.2/1.3 features and extra queues reported by slGetFeatureRequirements.
++// - slSetVulkanInfo then gives Streamline the handles and its queue indices.
++// - Only the hooked entry points (swapchain, present, acquire, device idle,
++//   Win32 surface) go through the proxies exported by sl.interposer.dll.
++class StreamlineVulkanProvider : public GraphicsSDKVulkanProvider {
++	enum {
++		FEATURE_DLSS = 0,
++		FEATURE_DLSS_RR = 1,
++		FEATURE_DLSS_G = 2,
++		FEATURE_REFLEX = 3,
++		FEATURE_PCL = 4,
++	};
++
++	VkInstance instance = VK_NULL_HANDLE;
++	VkDevice device = VK_NULL_HANDLE;
++	bool active = false;
++
++	static void _append_unique(LocalVector<CharString> &r_list, const CharString &p_name) {
++		for (const CharString &name : r_list) {
++			if (name == p_name) {
++				return;
++			}
++		}
++		r_list.push_back(p_name);
++	}
++
++	static void _or_features(VkBool32 *r_dst, const VkBool32 *p_src, size_t p_bytes) {
++		for (size_t i = 0; i < p_bytes / sizeof(VkBool32); i++) {
++			r_dst[i] = r_dst[i] || p_src[i];
++		}
++	}
++
++public:
++	bool is_active() const { return active; }
++
++	virtual const char *get_name() const override { return "nvidia"; }
++
++	virtual void get_instance_extensions(LocalVector<CharString> &r_required, LocalVector<CharString> &r_optional) override {
++		StreamlineContext &ctx = StreamlineContext::get();
++		for (int i = 0; i < StreamlineContext::FEATURE_COUNT; i++) {
++			for (const CharString &name : ctx.requirements[i].instance_extensions) {
++				_append_unique(r_optional, name);
++			}
++		}
++	}
++
++	virtual uint32_t get_minimum_api_version() const override {
++		StreamlineContext &ctx = StreamlineContext::get();
++		for (int i = 0; i < StreamlineContext::FEATURE_COUNT; i++) {
++			if (!ctx.requirements[i].features13.is_empty()) {
++				return VK_API_VERSION_1_3;
++			}
++		}
++		return VK_API_VERSION_1_2;
++	}
++
++	virtual void instance_created(VkInstance p_instance, PFN_vkGetInstanceProcAddr p_get_instance_proc_addr) override {
++		instance = p_instance;
++	}
++
++	virtual void get_device_extensions(VkPhysicalDevice p_physical_device, LocalVector<CharString> &r_required, LocalVector<CharString> &r_optional) override {
++		// All optional: a missing extension disables the feature that asked for
++		// it (see device_created) instead of failing device creation.
++		StreamlineContext &ctx = StreamlineContext::get();
++		for (int i = 0; i < StreamlineContext::FEATURE_COUNT; i++) {
++			for (const CharString &name : ctx.requirements[i].device_extensions) {
++				_append_unique(r_optional, name);
++			}
++		}
++	}
++
++	virtual void adjust_device_features(VkPhysicalDevice p_physical_device, VkPhysicalDeviceFeatures2 *r_features2, VkPhysicalDeviceVulkan12Features *r_features12, VkPhysicalDeviceVulkan13Features *r_features13) override {
++		StreamlineContext &ctx = StreamlineContext::get();
++		for (int i = 0; i < StreamlineContext::FEATURE_COUNT; i++) {
++			const StreamlineContext::VulkanRequirements &req = ctx.requirements[i];
++			if (r_features12 != nullptr && !req.features12.is_empty()) {
++				LocalVector<const char *> names;
++				for (const CharString &name : req.features12) {
++					names.push_back(name.get_data());
++				}
++				VkPhysicalDeviceVulkan12Features wanted = sl::getVkPhysicalDeviceVulkan12Features(names.size(), names.ptr());
++				const size_t header = offsetof(VkPhysicalDeviceVulkan12Features, samplerMirrorClampToEdge);
++				_or_features((VkBool32 *)((uint8_t *)r_features12 + header), (const VkBool32 *)((const uint8_t *)&wanted + header), sizeof(wanted) - header);
++			}
++			if (r_features13 != nullptr && !req.features13.is_empty()) {
++				LocalVector<const char *> names;
++				for (const CharString &name : req.features13) {
++					names.push_back(name.get_data());
++				}
++				VkPhysicalDeviceVulkan13Features wanted = sl::getVkPhysicalDeviceVulkan13Features(names.size(), names.ptr());
++				const size_t header = offsetof(VkPhysicalDeviceVulkan13Features, robustImageAccess);
++				_or_features((VkBool32 *)((uint8_t *)r_features13 + header), (const VkBool32 *)((const uint8_t *)&wanted + header), sizeof(wanted) - header);
++			}
++		}
++	}
++
++	virtual void get_queue_requests(VkPhysicalDevice p_physical_device, LocalVector<QueueRequest> &r_requests) override {
++		StreamlineContext &ctx = StreamlineContext::get();
++		uint32_t graphics = 0;
++		uint32_t compute = 0;
++		uint32_t optical_flow = 0;
++		for (int i = 0; i < StreamlineContext::FEATURE_COUNT; i++) {
++			graphics += ctx.requirements[i].graphics_queues;
++			compute += ctx.requirements[i].compute_queues;
++			optical_flow = MAX(optical_flow, ctx.requirements[i].optical_flow_queues);
++		}
++		if (graphics > 0) {
++			QueueRequest request;
++			request.required_flags = VK_QUEUE_GRAPHICS_BIT;
++			request.count = graphics;
++			r_requests.push_back(request);
++		}
++		if (compute > 0) {
++			QueueRequest request;
++			request.required_flags = VK_QUEUE_COMPUTE_BIT;
++			request.count = compute;
++			r_requests.push_back(request);
++		}
++		if (optical_flow > 0) {
++			// Native optical flow needs the first queue of a family that serves
++			// nothing else (DLSS-G); without it DLSS-G runs optical flow in interop mode.
++			QueueRequest request;
++			request.required_flags = VK_QUEUE_OPTICAL_FLOW_BIT_NV;
++			request.dedicated_family = true;
++			request.count = optical_flow;
++			r_requests.push_back(request);
++		}
++	}
++
++	virtual bool device_created(const DeviceInfo &p_info) override {
++		StreamlineContext &ctx = StreamlineContext::get();
++		if (!ctx.initialized || ctx.slSetVulkanInfo == nullptr) {
++			return false;
++		}
++		device = p_info.device;
++		instance = p_info.instance;
++
++		sl::VulkanInfo info;
++		info.device = p_info.device;
++		info.instance = p_info.instance;
++		info.physicalDevice = p_info.physical_device;
++		// Defaults: right after Godot's own queue in the graphics family.
++		info.graphicsQueueFamily = p_info.graphics_queue_family;
++		info.graphicsQueueIndex = p_info.graphics_queue_index + 1;
++		info.computeQueueFamily = p_info.graphics_queue_family;
++		info.computeQueueIndex = p_info.graphics_queue_index + 1;
++		bool native_optical_flow = false;
++		for (const QueueRequest &request : p_info.extra_queues) {
++			if (request.family_index == UINT32_MAX) {
++				print_verbose(vformat("Streamline: extra queue with flags 0x%x was not created.", request.required_flags));
++				continue;
++			}
++			if (request.required_flags == VK_QUEUE_GRAPHICS_BIT) {
++				info.graphicsQueueFamily = request.family_index;
++				info.graphicsQueueIndex = request.first_queue_index;
++			} else if (request.required_flags == VK_QUEUE_COMPUTE_BIT) {
++				info.computeQueueFamily = request.family_index;
++				info.computeQueueIndex = request.first_queue_index;
++			} else if (request.required_flags == VK_QUEUE_OPTICAL_FLOW_BIT_NV) {
++				info.opticalFlowQueueFamily = request.family_index;
++				info.opticalFlowQueueIndex = request.first_queue_index;
++				native_optical_flow = request.first_queue_index == 0;
++			}
++		}
++		info.useNativeOpticalFlowMode = native_optical_flow;
++
++		PFun_slSetVulkanInfo *set_vulkan_info = (PFun_slSetVulkanInfo *)ctx.slSetVulkanInfo;
++		sl::Result result = set_vulkan_info(info);
++		if (result != sl::Result::eOk) {
++			ctx.last_error.set((uint32_t)result);
++			ctx.init_reason = String("slSetVulkanInfo failed: ") + StreamlineContext::result_to_string(result);
++			WARN_PRINT("Streamline: " + ctx.init_reason + "; DLSS disabled for this run.");
++			if (ctx.slShutdown) {
++				ctx.slShutdown();
++			}
++			ctx.initialized = false;
++			ctx.slShutdown = nullptr;
++			return false;
++		}
++		ctx.device_ready = true;
++		active = true;
++
++		// A feature whose device extensions are missing cannot run.
++		bool feature_ok[StreamlineContext::FEATURE_COUNT];
++		ctx.missing_device_extensions = String();
++		for (int i = 0; i < StreamlineContext::FEATURE_COUNT; i++) {
++			feature_ok[i] = true;
++			for (const CharString &name : ctx.requirements[i].device_extensions) {
++				bool found = false;
++				for (const CharString &enabled : p_info.enabled_device_extensions) {
++					if (enabled == name) {
++						found = true;
++						break;
++					}
++				}
++				if (!found) {
++					feature_ok[i] = false;
++					if (!ctx.missing_device_extensions.is_empty()) {
++						ctx.missing_device_extensions += " ";
++					}
++					ctx.missing_device_extensions += String::utf8(name.get_data());
++				}
++			}
++		}
++
++		ctx.enumerate_support_vulkan((void *)p_info.physical_device);
++		ctx.streamline_capabilities.dlss_available &= feature_ok[FEATURE_DLSS];
++		ctx.streamline_capabilities.dlss_rr_available &= feature_ok[FEATURE_DLSS_RR];
++		ctx.streamline_capabilities.dlss_g_available &= feature_ok[FEATURE_DLSS_G];
++		ctx.streamline_capabilities.reflex_available &= feature_ok[FEATURE_REFLEX];
++		ctx.streamline_capabilities.pcl_available &= feature_ok[FEATURE_PCL];
++		ctx.init_reason = "ok";
++
++		if (Streamline::get_singleton()) {
++			Streamline::get_singleton()->emit_marker(STREAMLINE_MARKER_AFTER_DEVICE_CREATION);
++		}
++		print_verbose(vformat("Streamline: Vulkan device ready (DLSS %s, RR %s, DLSS-G %s, Reflex %s).",
++				StreamlineContext::result_to_string(ctx.sr_support_result), StreamlineContext::result_to_string(ctx.rr_support_result),
++				StreamlineContext::result_to_string(ctx.fg_support_result), StreamlineContext::result_to_string(ctx.reflex_support_result)));
++		return true;
++	}
++
++	virtual void device_destroying() override {
++		if (Streamline::get_singleton()) {
++			Streamline::get_singleton()->emit_marker(STREAMLINE_MARKER_BEFORE_DEVICE_DESTROY);
++		}
++		active = false;
++		device = VK_NULL_HANDLE;
++	}
++
++	virtual void get_swapchain_functions(SwapchainFunctions &r_functions) override {
++		StreamlineContext &ctx = StreamlineContext::get();
++		PFN_vkGetDeviceProcAddr get_proc = (PFN_vkGetDeviceProcAddr)ctx.vk_get_device_proc_addr;
++		if (get_proc == nullptr || device == VK_NULL_HANDLE) {
++			return;
++		}
++#define SL_HOOK(member, type, name)                                \
++	{                                                              \
++		type hooked = (type)get_proc(device, name);                \
++		if (hooked != nullptr) {                                   \
++			r_functions.member = hooked;                           \
++		} else {                                                   \
++			WARN_PRINT(String("Streamline: no hook for ") + name); \
++		}                                                          \
++	}
++		SL_HOOK(create_swapchain, PFN_vkCreateSwapchainKHR, "vkCreateSwapchainKHR");
++		SL_HOOK(destroy_swapchain, PFN_vkDestroySwapchainKHR, "vkDestroySwapchainKHR");
++		SL_HOOK(get_swapchain_images, PFN_vkGetSwapchainImagesKHR, "vkGetSwapchainImagesKHR");
++		SL_HOOK(acquire_next_image, PFN_vkAcquireNextImageKHR, "vkAcquireNextImageKHR");
++		SL_HOOK(queue_present, PFN_vkQueuePresentKHR, "vkQueuePresentKHR");
++		SL_HOOK(device_wait_idle, PFN_vkDeviceWaitIdle, "vkDeviceWaitIdle");
++#undef SL_HOOK
++	}
++
++	virtual void get_surface_functions(SurfaceFunctions &r_functions) override {
++		StreamlineContext &ctx = StreamlineContext::get();
++		PFN_vkGetInstanceProcAddr get_proc = (PFN_vkGetInstanceProcAddr)ctx.vk_get_instance_proc_addr;
++		if (get_proc == nullptr || instance == VK_NULL_HANDLE) {
++			return;
++		}
++		r_functions.create_win32_surface = get_proc(instance, "vkCreateWin32SurfaceKHR");
++		r_functions.destroy_surface = (PFN_vkDestroySurfaceKHR)get_proc(instance, "vkDestroySurfaceKHR");
++	}
++
++	virtual void present_begin(uint64_t p_frame) override {
++		if (Streamline::get_singleton()) {
++			Streamline::get_singleton()->emit_marker(STREAMLINE_MARKER_BEGIN_PRESENT);
++		}
++	}
++
++	virtual void present_end(uint64_t p_frame) override {
++		if (Streamline::get_singleton()) {
++			Streamline::get_singleton()->emit_marker(STREAMLINE_MARKER_END_PRESENT);
++		}
++	}
++};
++
++static StreamlineVulkanProvider streamline_vulkan_provider;
++
++bool streamline_vulkan_select_owner() {
++	return GraphicsSDKVulkan::select_owner(&streamline_vulkan_provider);
++}
++
++bool streamline_vulkan_is_owner() {
++	return GraphicsSDKVulkan::get_owner() == &streamline_vulkan_provider && streamline_vulkan_provider.is_active();
++}
++
++#else
++
++bool streamline_vulkan_select_owner() {
++	return false;
++}
++
++bool streamline_vulkan_is_owner() {
++	return false;
++}
++
++#endif // STREAMLINE_ENABLED && VULKAN_ENABLED
+diff --git a/drivers/streamline/streamline_vulkan.h b/drivers/streamline/streamline_vulkan.h
+new file mode 100644
+index 0000000..27bc35f
+--- /dev/null
++++ b/drivers/streamline/streamline_vulkan.h
+@@ -0,0 +1,40 @@
++/**************************************************************************/
++/*  streamline_vulkan.h                                                   */
++/**************************************************************************/
++/*                         This file is part of:                          */
++/*                             GODOT ENGINE                               */
++/*                        https://godotengine.org                         */
++/**************************************************************************/
++/* Copyright (c) 2014-present Godot Engine contributors (see AUTHORS.md). */
++/* Copyright (c) 2007-2014 Juan Linietsky, Ariel Manzur.                  */
++/*                                                                        */
++/* Permission is hereby granted, free of charge, to any person obtaining  */
++/* a copy of this software and associated documentation files (the        */
++/* "Software"), to deal in the Software without restriction, including    */
++/* without limitation the rights to use, copy, modify, merge, publish,    */
++/* distribute, sublicense, and/or sell copies of the Software, and to     */
++/* permit persons to whom the Software is furnished to do so, subject to  */
++/* the following conditions:                                              */
++/*                                                                        */
++/* The above copyright notice and this permission notice shall be         */
++/* included in all copies or substantial portions of the Software.        */
++/*                                                                        */
++/* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,        */
++/* EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF     */
++/* MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. */
++/* IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY   */
++/* CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,   */
++/* TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE      */
++/* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                 */
++/**************************************************************************/
++
++#pragma once
++
++// Streamline as the Vulkan graphics SDK owner (drivers/vulkan/graphics_sdk_vulkan.h).
++// Kept free of Vulkan headers so callers outside drivers/ can include it.
++
++// Registers the Streamline provider as the presentation owner. Call after a
++// successful slInit and before the Vulkan rendering context is created.
++bool streamline_vulkan_select_owner();
++// True while the Streamline provider owns this run's Vulkan device.
++bool streamline_vulkan_is_owner();
+diff --git a/main/main.cpp b/main/main.cpp
+index b8a7c6c..4996c3a 100644
+--- a/main/main.cpp
++++ b/main/main.cpp
+@@ -156,6 +156,9 @@
+ #endif // TOOLS_ENABLED && !GDSCRIPT_NO_LSP
+ #endif // MODULE_GDSCRIPT_ENABLED
+ 
++#include "core/io/config_file.h"
++#include "drivers/streamline/streamline.h"
++
+ /* Static members */
+ 
+ // Singletons
+@@ -196,6 +199,7 @@ static PhysicsServer3D *physics_server_3d = nullptr;
+ #ifndef XR_DISABLED
+ static XRServer *xr_server = nullptr;
+ #endif // XR_DISABLED
++static Streamline *streamline = nullptr;
+ // We error out if setup2() doesn't turn this true
+ static bool _start_success = false;
+ 
+@@ -1081,6 +1085,10 @@ Error Main::setup(const char *execpath, int argc, char *argv[], bool p_second_ph
+ 
+ 	MAIN_PRINT("Main: Parse CMDLine");
+ 
++	/* create streamline and register singleton */
++	streamline = memnew(Streamline);
++	Streamline::register_singleton();
++
+ 	/* argument parsing and main creation */
+ 	List<String> args;
+ 	List<String> main_args;
+@@ -2667,6 +2675,39 @@ Error Main::setup(const char *execpath, int argc, char *argv[], bool p_second_ph
+ 	OS::get_singleton()->set_current_rendering_driver_name(rendering_driver, rendering_driver_source);
+ 	OS::get_singleton()->set_current_rendering_method(rendering_method, rendering_method_source);
+ 
++	{
++		// The graphics SDK that owns presentation is chosen once per run, before
++		// the rendering context exists (drivers/vulkan/graphics_sdk_vulkan.h).
++		// The game saves it in user://graphics_sdk.cfg ([startup] owner =
++		// "nvidia", "amd" or ""); --graphics-sdk=<owner> overrides it.
++		String graphics_sdk_owner;
++		Ref<ConfigFile> graphics_sdk_config;
++		graphics_sdk_config.instantiate();
++		if (graphics_sdk_config->load("user://graphics_sdk.cfg") == OK && graphics_sdk_config->has_section_key("startup", "owner")) {
++			graphics_sdk_owner = String(graphics_sdk_config->get_value("startup", "owner", "")).strip_edges().to_lower();
++		}
++		List<String> graphics_sdk_args = OS::get_singleton()->get_cmdline_args();
++		for (const String &arg : OS::get_singleton()->get_cmdline_user_args()) {
++			graphics_sdk_args.push_back(arg);
++		}
++		for (const String &arg : graphics_sdk_args) {
++			if (arg.begins_with("--graphics-sdk=")) {
++				graphics_sdk_owner = arg.substr(String("--graphics-sdk=").length()).strip_edges().to_lower();
++			}
++		}
++		if (graphics_sdk_owner == "nvidia" && Streamline::get_singleton()) {
++			if (display_driver == "headless") {
++				Streamline::get_singleton()->set_unavailable("headless runs do not use Streamline");
++			} else if (rendering_method != "forward_plus") {
++				Streamline::get_singleton()->set_unavailable("needs the Forward+ renderer");
++			} else if (rendering_driver != "vulkan") {
++				Streamline::get_singleton()->set_unavailable("needs the Vulkan rendering driver");
++			} else {
++				Streamline::get_singleton()->emit_marker(STREAMLINE_MARKER_INITIALIZE_VULKAN);
++			}
++		}
++	}
++
+ #ifdef TOOLS_ENABLED
+ 	if (!force_res && project_manager) {
+ 		// Ensure splash screen size matches the project manager window size
+@@ -2961,6 +3002,11 @@ error:
+ 
+ 	EngineDebugger::deinitialize();
+ 
++	if (streamline) {
++		memdelete(streamline);
++		streamline = nullptr;
++	}
++
+ 	if (performance) {
+ 		memdelete(performance);
+ 	}
+@@ -4917,6 +4963,10 @@ static uint64_t navigation_process_max = 0;
+ bool Main::iteration() {
+ 	GodotProfileZone("Main::iteration");
+ 	GodotProfileZoneGroupedFirst(_profile_zone, "prepare");
++
++	if (Streamline::get_singleton()) {
++		Streamline::get_singleton()->emit_marker(STREAMLINE_MARKER_BEGIN_SIMULATION);
++	}
+ 	iterating++;
+ 
+ 	const uint64_t ticks = OS::get_singleton()->get_ticks_usec();
+@@ -5069,6 +5119,10 @@ bool Main::iteration() {
+ 	NavigationServer3D::get_singleton()->process(process_step * time_scale);
+ #endif // NAVIGATION_3D_DISABLED
+ 
++	if (Streamline::get_singleton()) {
++		Streamline::get_singleton()->emit_marker(STREAMLINE_MARKER_END_SIMULATION);
++	}
++
+ 	GodotProfileZoneGrouped(_profile_zone, "RenderingServer::sync");
+ 	RenderingServer::get_singleton()->sync(); //sync if still drawing from previous frames.
+ 
+@@ -5196,6 +5250,11 @@ bool Main::iteration() {
+ 	}
+ #endif
+ 
++	if (Streamline::get_singleton()) {
++		// Reflex sleep and the next frame token, before the next simulation.
++		Streamline::get_singleton()->emit_marker(STREAMLINE_MARKER_BEFORE_MESSAGE_LOOP);
++	}
++
+ 	return exit;
+ }
+ 
+@@ -5331,6 +5390,12 @@ void Main::cleanup(bool p_force) {
+ 
+ 	finalize_display();
+ 
++	// The rendering device shuts Streamline down when it is destroyed.
++	if (streamline) {
++		memdelete(streamline);
++		streamline = nullptr;
++	}
++
+ 	if (input) {
+ 		memdelete(input);
+ 	}

@@ -91,6 +91,10 @@ var content_setup: ELContentSetup
 var arena: ELArena
 ## Experimental path-traced battle lighting (F7), where the renderer allows it.
 var path_tracing: ELPathTracing
+## Optional DLSS / FSR upscaling and frame generation (Windows SDK builds).
+var graphics_sdk: ELGraphicsSDK
+## Updates the Graphics page's Ray Reconstruction row (while it is shown).
+var _ray_reconstruction_refresh := Callable()
 ## The game and mode shown in the Discord desktop app (optional).
 var discord: ELDiscordPresence
 var hud: ELHudFrame
@@ -294,6 +298,11 @@ func _ready() -> void:
 	path_tracing.settings = settings
 	path_tracing.translate = _t
 	add_child(path_tracing)
+	graphics_sdk = ELGraphicsSDK.new()
+	graphics_sdk.settings = settings
+	graphics_sdk.scene_blockers = _frame_generation_blockers
+	graphics_sdk.upscaling_changed.connect(_apply_display_options)
+	add_child(graphics_sdk)
 	discord = ELDiscordPresence.new()
 	discord.source = _discord_activity
 	add_child(discord)
@@ -350,7 +359,7 @@ func _offer_crash_report() -> void:
 ## The player's options in a report: the remake settings that change drawing.
 func _options_summary() -> String:
 	var parts := PackedStringArray()
-	for key: String in ["renderer", "path_tracing", "antialiasing", "sharpening", "terrain_detail", "enhanced_water", "shadows", "soft_shadows", "weather", "auto_camera", "helper_overlay"]:
+	for key: String in ["renderer", "path_tracing", "antialiasing", "upscaler", "fsr_version", "upscale_quality", "frame_generation", "ray_reconstruction", "sharpening", "terrain_detail", "enhanced_water", "shadows", "soft_shadows", "weather", "auto_camera", "helper_overlay"]:
 		if settings.values.has(key): parts.append("%s=%s" % [key, settings.values[key]])
 	return " ".join(parts)
 
@@ -4843,6 +4852,7 @@ func _open_settings() -> void:
 	_audio_page(_settings_page(tabs, "Audio"))
 	_interface_page(_settings_page(tabs, "Interface"))
 	_hotkeys_page(_settings_page(tabs, "Hotkeys"))
+	if not ELGraphicsSDK.credits_bbcode().is_empty(): _about_page(_settings_page(tabs, "About"))
 	for i in tabs.get_tab_count(): tabs.set_tab_title(i, str(tabs.get_tab_control(i).get_meta("title", tabs.get_tab_title(i))))
 	var export_log := Button.new()
 	export_log.name = "ExportLog"
@@ -4875,6 +4885,7 @@ func _open_settings() -> void:
 	settings_dialog.visibility_changed.connect(func():
 		if not settings_dialog.visible:
 			ELCrashReport.trace("settings: " + _options_summary())
+			ELGraphicsSDK.write_owner_file(settings.values)
 			if not settings.save_file(): _notice(_t("Could not save preferences."))
 		_refresh())
 	if _settings_kit != null: ELMenuKit.refit(settings_dialog)
@@ -5063,6 +5074,7 @@ func _graphics_page(page: VBoxContainer) -> void:
 		settings.values.light_bounces = int(value)
 		bounce_number.text = str(int(value)))
 	_settings_row(traced, "Light bounces", "How many times light bounces between surfaces. More fills in corners and shade with reflected colour and costs more time a frame.", bounces, bounce_number)
+	_ray_reconstruction_row(traced)
 	traced.add_child(status)
 	renderer.item_selected.connect(func(index: int):
 		settings.values.renderer = index
@@ -5074,7 +5086,8 @@ func _graphics_page(page: VBoxContainer) -> void:
 		settings.values.path_tracing = on
 		light_view.disabled = not on
 		if not on: light_view.button_pressed = false
-		if is_instance_valid(path_tracing): path_tracing.set_enabled(on))
+		if is_instance_valid(path_tracing): path_tracing.set_enabled(on)
+		if _ray_reconstruction_refresh.is_valid(): _ray_reconstruction_refresh.call())
 	light_view.toggled.connect(func(on: bool):
 		if is_instance_valid(path_tracing): path_tracing.lighting_view = on and path_tracing.enabled)
 	var picture := _settings_box(page, "Picture")
@@ -5094,6 +5107,7 @@ func _graphics_page(page: VBoxContainer) -> void:
 	sharpen.select(int(settings.values.sharpening))
 	sharpen.item_selected.connect(func(index: int): settings.values.sharpening = index)
 	_settings_row(picture, "Sharpening", "Sharpens the textures of the 3D map and battle scenes. The interface is not changed.", sharpen)
+	_upscaling_rows(picture, smoothing, renderer)
 	var scene := _settings_box(page, "Scene")
 	var shadows := CheckButton.new()
 	shadows.name = "Shadows"
@@ -5229,7 +5243,7 @@ func _update_fps_counter() -> void:
 		_fps_label.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
 		_fps_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		_fps_label.set_anchors_and_offsets_preset(Control.PRESET_TOP_RIGHT)
-		_fps_label.offset_left = -120
+		_fps_label.offset_left = -260
 		_fps_label.offset_right = -8
 		_fps_label.offset_top = 4
 		_fps_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
@@ -5241,7 +5255,9 @@ func _update_fps_counter() -> void:
 		var timer := Timer.new()
 		timer.wait_time = 0.5
 		timer.autostart = true
-		timer.timeout.connect(func(): _fps_label.text = "%d FPS" % roundi(Engine.get_frames_per_second()))
+		timer.timeout.connect(func():
+			# With frame generation: the frames shown and the frames rendered.
+			_fps_label.text = graphics_sdk.fps_text(_t) if is_instance_valid(graphics_sdk) else "%d FPS" % roundi(Engine.get_frames_per_second()))
 		_fps_layer.add_child(timer)
 	if _fps_layer != null: _fps_layer.visible = on
 
@@ -5260,6 +5276,166 @@ func _path_tracing_status() -> String:
 	if ELPathTracing.available(): return _t("Ready on %s.") % RenderingServer.get_video_adapter_name()
 	if RenderingServer.get_current_rendering_method() != "forward_plus": return _t("Not available with the Compatibility renderer: choose Forward+ (Vulkan) above and restart.")
 	return _t("Not available: %s has no ray-tracing support in Vulkan.") % RenderingServer.get_video_adapter_name()
+
+## The display options again (an SDK upscaler started or stopped).
+func _apply_display_options() -> void:
+	ELSettings.apply_display(get_viewport(), settings.values)
+	if is_instance_valid(path_tracing): path_tracing.display_applied()
+
+## What stops frame generation now: anything over the map or battle (menus,
+## dialogs, the console), movies, loading screens, or no map or battle shown.
+func _frame_generation_blockers() -> Array:
+	var blockers := []
+	if _overlay_open(): blockers.append("menu")
+	if movie_layer != null and movie_layer.visible: blockers.append("movie")
+	for child: Node in get_children():
+		if child is ChapterLoading and child.visible: blockers.append("loading")
+	var map_shown := campaign_view != null and campaign_view.is_visible_in_tree() and not campaign_view.paused
+	var battle_shown := stage != null and stage.visible
+	var autochess_shown := _autochess_layer != null and _autochess_layer.visible and _autochess_lobby != null and not _autochess_lobby.visible
+	if not (map_shown or battle_shown or autochess_shown): blockers.append("no_scene")
+	return blockers
+
+## DLSS Ray Reconstruction for the path tracer, under its other options. Only
+## an engine with NVIDIA's SDK shows it; it is greyed out, with the reason,
+## until path tracing and DLSS upscaling can both run.
+func _ray_reconstruction_row(box: VBoxContainer) -> void:
+	_ray_reconstruction_refresh = Callable()
+	if not ELGraphicsSDK.compiled(ELGraphicsSDK.NVIDIA): return
+	var values: Dictionary = settings.values
+	var toggle := CheckButton.new()
+	toggle.name = "RayReconstruction"
+	toggle.button_pressed = bool(values.ray_reconstruction)
+	_settings_row(box, "DLSS Ray Reconstruction", ELGraphicsSDK.RAY_RECONSTRUCTION_HELP, toggle)
+	var note := _last_row_note(box)
+	toggle.toggled.connect(func(on: bool): values.ray_reconstruction = on)
+	_ray_reconstruction_refresh = func():
+		if not is_instance_valid(toggle): return
+		var reason := _t(ELGraphicsSDK.ray_reconstruction_reason(values, ELPathTracing.available() and bool(values.path_tracing)))
+		toggle.disabled = not reason.is_empty()
+		_set_row_note(toggle, note, ELGraphicsSDK.RAY_RECONSTRUCTION_HELP, PackedStringArray([reason]) if not reason.is_empty() else PackedStringArray())
+	_ray_reconstruction_refresh.call()
+
+## Upscaling, AMD FSR version, upscale quality and frame generation, under
+## Anti-aliasing (ELGraphicsSDK). Only an engine with the vendors' SDKs shows
+## them. Choices this computer cannot use are greyed out and the row's note
+## says why; a change of vendor offers a restart.
+func _upscaling_rows(box: VBoxContainer, smoothing: OptionButton, renderer: OptionButton) -> void:
+	if not ELGraphicsSDK.engine_has_sdk(): return
+	var values: Dictionary = settings.values
+	var upscaler := _choice_button("Upscaler", ELGraphicsSDK.UPSCALER_CHOICES)
+	_settings_row(box, "Upscaling", ELGraphicsSDK.UPSCALING_HELP, upscaler)
+	var upscaler_note := _last_row_note(box)
+	var version := _choice_button("FsrVersion", ELGraphicsSDK.VERSION_CHOICES)
+	_settings_row(box, "AMD FSR version", ELGraphicsSDK.VERSION_HELP, version)
+	var version_note := _last_row_note(box)
+	var quality := _choice_button("UpscaleQuality", ELGraphicsSDK.QUALITY_CHOICES)
+	_settings_row(box, "Upscale quality", ELGraphicsSDK.QUALITY_HELP, quality)
+	var quality_note := _last_row_note(box)
+	var generation := _choice_button("FrameGeneration", ELGraphicsSDK.FRAME_GENERATION_CHOICES)
+	_settings_row(box, "Frame generation", ELGraphicsSDK.FRAME_GENERATION_HELP, generation)
+	var generation_note := _last_row_note(box)
+	var restart_row := HBoxContainer.new()
+	restart_row.add_theme_constant_override("separation", 12)
+	box.add_child(restart_row)
+	var hint := _label(_t(ELGraphicsSDK.NEED_RESTART), 14, ACCENT)
+	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	hint.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	restart_row.add_child(hint)
+	var restart := Button.new()
+	restart.name = "UpscalingRestart"
+	restart.text = _t("Restart now")
+	restart_row.add_child(restart)
+	var refresh := func():
+		var lines := PackedStringArray()
+		for i in upscaler.item_count:
+			var reason := _t(ELGraphicsSDK.upscaler_reason(i, values))
+			upscaler.set_item_disabled(i, not reason.is_empty())
+			upscaler.set_item_tooltip(i, reason)
+			if not reason.is_empty(): lines.append(_t(ELGraphicsSDK.UPSCALER_CHOICES[i]) + ": " + reason)
+		_set_row_note(upscaler, upscaler_note, ELGraphicsSDK.UPSCALING_HELP, lines)
+		lines = PackedStringArray()
+		for i in version.item_count:
+			var reason := _t(ELGraphicsSDK.version_reason(ELGraphicsSDK.VERSION_VALUES[i], values))
+			version.set_item_disabled(i, not reason.is_empty())
+			version.set_item_tooltip(i, reason)
+			if not reason.is_empty(): lines.append(str(ELGraphicsSDK.VERSION_CHOICES[i]) + ": " + reason)
+		version.select(ELGraphicsSDK.VERSION_VALUES.find(3 if int(values.fsr_version) == 3 else 4))
+		version.disabled = int(values.upscaler) != ELGraphicsSDK.AMD and int(values.frame_generation) != ELGraphicsSDK.AMD
+		_set_row_note(version, version_note, ELGraphicsSDK.VERSION_HELP, lines)
+		var quality_reason := _t(ELGraphicsSDK.quality_reason(values))
+		quality.disabled = not quality_reason.is_empty()
+		_set_row_note(quality, quality_note, ELGraphicsSDK.QUALITY_HELP, PackedStringArray([quality_reason]) if not quality_reason.is_empty() else PackedStringArray())
+		lines = PackedStringArray()
+		for i in generation.item_count:
+			var reason := _t(ELGraphicsSDK.frame_generation_reason(i, values))
+			generation.set_item_disabled(i, not reason.is_empty())
+			generation.set_item_tooltip(i, reason)
+			if not reason.is_empty(): lines.append(_t(ELGraphicsSDK.FRAME_GENERATION_CHOICES[i]) + ": " + reason)
+		_set_row_note(generation, generation_note, ELGraphicsSDK.FRAME_GENERATION_HELP, lines)
+		upscaler.select(int(values.upscaler))
+		quality.select(int(values.upscale_quality))
+		generation.select(int(values.frame_generation))
+		smoothing.disabled = ELGraphicsSDK.active_upscaler(values) != ELGraphicsSDK.OFF
+		restart_row.visible = ELGraphicsSDK.needs_restart(values)
+	var changed := func():
+		ELGraphicsSDK.normalize(values)
+		# The SDKs run only with Forward+ on Vulkan.
+		if not ELGraphicsSDK.wanted_owner(values).is_empty() and int(values.renderer) != 1:
+			renderer.select(1)
+			renderer.item_selected.emit(1)
+		ELGraphicsSDK.write_owner_file(values)
+		_apply_display_options()
+		refresh.call()
+		if _ray_reconstruction_refresh.is_valid(): _ray_reconstruction_refresh.call()
+	upscaler.item_selected.connect(func(index: int):
+		values.upscaler = index
+		changed.call())
+	version.item_selected.connect(func(index: int):
+		values.fsr_version = ELGraphicsSDK.VERSION_VALUES[index]
+		changed.call())
+	quality.item_selected.connect(func(index: int):
+		values.upscale_quality = index
+		changed.call())
+	generation.item_selected.connect(func(index: int):
+		values.frame_generation = index
+		changed.call())
+	restart.pressed.connect(func():
+		settings_dialog.hide()
+		_restart_game())
+	refresh.call()
+
+## An option list with these (translated) captions.
+func _choice_button(button_name: String, captions: Array) -> OptionButton:
+	var button := OptionButton.new()
+	button.name = button_name
+	for caption: String in captions: button.add_item(_t(caption))
+	return button
+
+## The note (explanation) of the row just added to `box`.
+func _last_row_note(box: VBoxContainer) -> Label:
+	var row := box.get_child(box.get_child_count() - 1)
+	return row.get_child(0).get_child(1) as Label
+
+## A row's note and tooltip: its explanation, then why choices are greyed out.
+func _set_row_note(control: Control, note: Label, description: String, reasons: PackedStringArray) -> void:
+	var text := _t(description)
+	if not reasons.is_empty(): text += "\n" + "\n".join(reasons)
+	note.text = text
+	control.tooltip_text = text
+
+## About: the credits of the graphics technologies this build includes.
+func _about_page(page: VBoxContainer) -> void:
+	var box := _settings_box(page, "Graphics technologies")
+	var credits := RichTextLabel.new()
+	credits.name = "GraphicsCredits"
+	credits.bbcode_enabled = true
+	credits.fit_content = true
+	credits.scroll_active = false
+	credits.custom_minimum_size.x = 560
+	credits.add_theme_color_override("default_color", ELMenuKit.BODY_INK if _settings_kit != null else INK)
+	credits.text = ELGraphicsSDK.credits_bbcode(_t)
+	box.add_child(credits)
 
 ## A tab of the settings dialog: a scrolling column.
 func _settings_page(tabs: TabContainer, title: String) -> VBoxContainer:
@@ -5384,6 +5560,7 @@ static func _switch_icon(on: bool, disabled: bool) -> Texture2D:
 ## Starts the game again (for a new renderer) and closes this one.
 func _restart_game() -> void:
 	settings.save_file()
+	ELGraphicsSDK.write_owner_file(settings.values)
 	OS.create_process(OS.get_executable_path(), _relaunch_args(false))
 	get_tree().quit()
 
@@ -5399,9 +5576,12 @@ func _relaunch_args(marked: bool) -> PackedStringArray:
 			skip = false
 		elif arg in ["--rendering-method", "--rendering-driver"]:
 			skip = true
+		elif arg.begins_with("--graphics-sdk="):
+			# The owner file names the upscaler's vendor for the next start.
+			pass
 		else:
 			args.append(arg)
-	if int(settings.values.renderer) == 1: args.append_array(["--rendering-method", "forward_plus", "--rendering-driver", "vulkan"])
+	if int(settings.values.renderer) == 1 or ELGraphicsSDK.needs_forward_plus(settings.values): args.append_array(["--rendering-method", "forward_plus", "--rendering-driver", "vulkan"])
 	else: args.append_array(["--rendering-method", "gl_compatibility"])
 	var user := PackedStringArray(OS.get_cmdline_user_args())
 	if user.has("--renderer-restarted"): user.remove_at(user.find("--renderer-restarted"))
@@ -5415,10 +5595,14 @@ func _relaunch_args(marked: bool) -> PackedStringArray:
 ## starts again with it (once; a renderer that cannot start is not retried,
 ## and a renderer named on the command line wins).
 func _ensure_renderer() -> bool:
-	if get_tree().current_scene != self or OS.has_feature("web") or OS.has_feature("mobile") or OS.has_feature("editor"): return false
+	if get_tree().current_scene != self or OS.has_feature("web") or OS.has_feature("mobile"): return false
+	# The upscaler's vendor is set up when the engine starts: a changed
+	# choice (or a missing file) restarts the game once, like the renderer.
+	var owner_changed := ELGraphicsSDK.write_owner_file(settings.values)
+	if OS.has_feature("editor"): return false
 	if OS.get_cmdline_user_args().has("--renderer-restarted") or OS.get_cmdline_args().has("--rendering-method"): return false
 	var wanted := "forward_plus" if int(settings.values.renderer) == 1 else "gl_compatibility"
-	if RenderingServer.get_current_rendering_method() == wanted: return false
+	if RenderingServer.get_current_rendering_method() == wanted and not (owner_changed and ELGraphicsSDK.needs_restart(settings.values)): return false
 	OS.create_process(OS.get_executable_path(), _relaunch_args(true))
 	get_tree().quit()
 	return true

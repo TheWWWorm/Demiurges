@@ -1,0 +1,40 @@
+{
+  "version": "2.4.0",
+  "base_url": "https://raw.githubusercontent.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/v2.4.0/",
+  "runtime": [
+    "amd_fidelityfx_loader_vk.dll",
+    "amd_fidelityfx_upscaler_vk.dll",
+    "amd_fidelityfx_framegeneration_vk.dll"
+  ],
+  "headers": [
+    "Kits/FidelityFX/api/include/ffx_api.h",
+    "Kits/FidelityFX/api/include/ffx_api_types.h",
+    "Kits/FidelityFX/api/include/ffx_api_loader.h",
+    "Kits/FidelityFX/api/include/vk/ffx_api_vk.h",
+    "Kits/FidelityFX/upscalers/include/ffx_upscale.h",
+    "Kits/FidelityFX/framegeneration/include/ffx_framegeneration.h",
+    "Kits/FidelityFX/framegeneration/include/ffx_framegeneration_api_types.h",
+    "Kits/FidelityFX/framegeneration/include/vk/ffx_api_framegeneration_vk.h"
+  ],
+  "licenses": {
+    "Kits/FidelityFX/docs/license.md": "license.md",
+    "docs/license.md": "sdk-license.md",
+    "3rdpartynotice.md": "3rdpartynotice.md"
+  },
+  "files": {
+    "Kits/FidelityFX/api/include/ffx_api.h": "4d9dcf243ef5efbf03340a02f16b51a22053243a22e8a9a0b3ce91c26982b4bf",
+    "Kits/FidelityFX/api/include/ffx_api_types.h": "53f07c113a9ba493f297656e4481b6539aed0afc9f3cc8da682aa477d270c46c",
+    "Kits/FidelityFX/api/include/ffx_api_loader.h": "18d1901dbbc881e8131b91c65ad44bb3b4a1de6c31435d5b75236f16727ba80e",
+    "Kits/FidelityFX/api/include/vk/ffx_api_vk.h": "09ac1855bc4c2f711243d6982909385072ca3f8d30db44d1a82ee5bd637832ad",
+    "Kits/FidelityFX/upscalers/include/ffx_upscale.h": "13091e7fe5fd9c82b1fb7c044b9f08f664d9653f599d2ea500738709236fca4d",
+    "Kits/FidelityFX/framegeneration/include/ffx_framegeneration.h": "bc78a18aa95f5157b4699b0602700592b624788c5bc55d1762cb46a1b6557ca1",
+    "Kits/FidelityFX/framegeneration/include/ffx_framegeneration_api_types.h": "396596af3df63310674e8036abd2ad0fcd061e61334e7a2c76653a2be3c686b4",
+    "Kits/FidelityFX/framegeneration/include/vk/ffx_api_framegeneration_vk.h": "321d3138005757759d9ee05281d3dcd4cc2c3608bc1d524f9b1d0a6dadd49f61",
+    "Kits/FidelityFX/docs/license.md": "32357259b965d6a8001e9e508ba60eda6034027c5923a7d226ffbaff813c2bfb",
+    "docs/license.md": "410f9c138e766e846acf2dc93db768198def0293a017d7e3296815b451688dbe",
+    "3rdpartynotice.md": "3b69b1a1011622557a81b55a9a211dd797d01b8160924a5ec51b4c3432d33a4f",
+    "Kits/FidelityFX/signedbin/amd_fidelityfx_loader_vk.dll": "38a56a01fb3565c0757d9f5c1e4e69de4b65e5f2e5769b323b200dc1f142bab9",
+    "Kits/FidelityFX/signedbin/amd_fidelityfx_upscaler_vk.dll": "4a7e895af6e0b615d40a84d59eb8c2b1054ad91cdd0c739567940270d51bdab7",
+    "Kits/FidelityFX/signedbin/amd_fidelityfx_framegeneration_vk.dll": "d002dabff8c5e71eaa715fc99438cd4dc81230262a7897b16bc402efec3498b4"
+  }
+}

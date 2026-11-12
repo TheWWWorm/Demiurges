@@ -658,6 +658,38 @@ layout(push_constant, std430) uniform Push {
 	int pad1;
 } push;
 
+#ifdef RAY_RECONSTRUCTION
+// Compiled only for DLSS Ray Reconstruction (ELPathTracing adds the define):
+// one composing pass of the unsmoothed light, which also writes the guides.
+// The composed colour is diffuse albedo times light plus emission, so the
+// raster colour before relighting is the albedo guide. All traced light is
+// treated as diffuse: no specular albedo and no specular hit distance.
+layout(set = 1, binding = 6, rgba16f) uniform writeonly image2D rr_diffuse_albedo;
+layout(set = 1, binding = 7, rgba16f) uniform writeonly image2D rr_specular_albedo;
+layout(set = 1, binding = 8, rgba16f) uniform writeonly image2D rr_normal_roughness;
+layout(set = 1, binding = 9, r16f) uniform writeonly image2D rr_hit_distance;
+layout(set = 1, binding = 10) uniform sampler2D rr_depth;
+layout(set = 1, binding = 11) uniform sampler2D rr_raster_normal;
+
+// `normal` is the traced world normal, or zero to use the raster's.
+void store_guides(ivec2 pixel, vec3 albedo, vec3 normal) {
+	float roughness = 1.0;
+	if (texelFetch(rr_depth, pixel, 0).r <= 0.0) {
+		// The sky is drawn after this pass.
+		albedo = vec3(1.0);
+		normal = vec3(0.0);
+	} else {
+		vec4 raster = texelFetch(rr_raster_normal, pixel, 0);
+		roughness = clamp(min(raster.a, 1.0 - raster.a) * (255.0 / 127.0), 0.0, 1.0);
+		if (dot(normal, normal) == 0.0) normal = normalize(mat3(frame.camera) * normalize(raster.xyz * 2.0 - 1.0));
+	}
+	imageStore(rr_diffuse_albedo, pixel, vec4(clamp(albedo, vec3(0.0), vec3(1.0)), 1.0));
+	imageStore(rr_specular_albedo, pixel, vec4(0.0));
+	imageStore(rr_normal_roughness, pixel, vec4(normal, roughness));
+	imageStore(rr_hit_distance, pixel, vec4(0.0));
+}
+#endif
+
 const float KERNEL[3] = float[](3.0 / 8.0, 1.0 / 4.0, 1.0 / 16.0);
 
 vec3 to_display(vec3 linear) {
@@ -689,8 +721,16 @@ void main() {
 	if (g.w == 0.0) {
 		if (push.last == 0) imageStore(target, pixel, center);
 		else if ((frame.info.w & 2u) != 0u) imageStore(color, pixel, vec4(0.02, 0.02, 0.03, 1.0));  // untraced
+#ifdef RAY_RECONSTRUCTION
+		// Untraced (unlit scenery): its raster colour is all albedo.
+		else store_guides(pixel, imageLoad(color, pixel).rgb, vec3(0.0));
+#endif
 		return;
 	}
+#ifdef RAY_RECONSTRUCTION
+	// The reconstruction removes the noise: the light stays as traced.
+	vec3 filtered = center.rgb;
+#else
 	float d = abs(g.w);
 	float luminance = dot(center.rgb, vec3(0.299, 0.587, 0.114));
 	float sigma = 0.3 * (luminance + 0.05) * mix(4.0, 1.0, clamp(center.a / 16.0, 0.0, 1.0));
@@ -712,6 +752,7 @@ void main() {
 		}
 	}
 	vec3 filtered = total > 0.0 ? sum / total : center.rgb;
+#endif
 	if (push.last == 0) {
 		imageStore(target, pixel, vec4(filtered, center.a));
 		return;
@@ -725,6 +766,9 @@ void main() {
 		// raster shadow map is off. Keep its water, fog and detail in that colour.
 		vec3 raster = surface.a > 0.5 ? vec3(1.0) : frame.ambient.rgb + sun_term(dot(g.xyz, frame.sun_direction.xyz), scenery);
 		vec3 emission = min(surface.rgb, c.rgb);
+#ifdef RAY_RECONSTRUCTION
+		store_guides(pixel, c.rgb - emission, g.xyz);
+#endif
 		c.rgb = (c.rgb - emission) * exposed(filtered / max(raster, vec3(0.02))) + emission;
 		if (frame.counts.z > 0u && (frame.info.w & 4u) == 0u) {
 			vec3 secondary = imageLoad(secondary_light, pixel).rgb;

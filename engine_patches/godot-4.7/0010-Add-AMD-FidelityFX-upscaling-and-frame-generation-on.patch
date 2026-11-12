@@ -1,0 +1,2011 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: WWWorm <noreply@localhost>
+Date: Thu, 12 Nov 2026 11:26:29 +0100
+Subject: [PATCH] Add AMD FidelityFX upscaling and frame generation on Vulkan
+
+Loads the FSR SDK 2.4.0 ffx-api runtime (hash-checked) next to the
+executable and drives FSR 3.1/FSR 4 upscaling from the forward clustered
+renderer as Viewport.SCALING_3D_MODE_FSR_SDK. Upscaling needs no
+presentation owner. With the startup owner "amd" FidelityFX becomes the
+graphics SDK owner: it asks for its present, async compute and image
+acquire queues, enables subgroup size control and synchronization2, and
+replaces the swapchain so Viewport.frame_generation runs FSR frame
+generation. With DLSS the same flag belongs to DLSS-G.
+
+The temporal scene shader preparation is shared with DLSS, FSR 2 and TAA.
+Exposed to scripts through the FidelityFX singleton. Enabled with
+use_fsr_sdk=yes on Windows Vulkan builds.
+---
+ .gitignore                                    |   3 +
+ SConstruct                                    |  11 +
+ drivers/SCsub                                 |   3 +
+ drivers/fsr_sdk/SCsub                         |   6 +
+ drivers/fsr_sdk/fsr_sdk.cpp                   | 981 ++++++++++++++++++
+ drivers/fsr_sdk/fsr_sdk.h                     | 181 ++++
+ main/main.cpp                                 |  18 +-
+ .../rendering/renderer_rd/effects/fsr_sdk.cpp | 309 ++++++
+ .../rendering/renderer_rd/effects/fsr_sdk.h   |  73 ++
+ .../render_forward_clustered.cpp              |  96 +-
+ .../render_forward_clustered.h                |   5 +
+ .../shaders/effects/fsr_sdk_prepare.glsl      |  28 +
+ 12 files changed, 1709 insertions(+), 5 deletions(-)
+ create mode 100644 drivers/fsr_sdk/SCsub
+ create mode 100755 drivers/fsr_sdk/fsr_sdk.cpp
+ create mode 100755 drivers/fsr_sdk/fsr_sdk.h
+ create mode 100755 servers/rendering/renderer_rd/effects/fsr_sdk.cpp
+ create mode 100755 servers/rendering/renderer_rd/effects/fsr_sdk.h
+ create mode 100644 servers/rendering/renderer_rd/shaders/effects/fsr_sdk_prepare.glsl
+
+diff --git a/.gitignore b/.gitignore
+index 1406aa5..a9a386b 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -396,3 +396,6 @@ $RECYCLE.BIN/
+ *.msp
+ *.lnk
+ *.generated.props
++
++# AMD FSR SDK headers, installed by tools/engine/prepare_fsr_sdk.py
++thirdparty/amd-fsr-sdk/
+diff --git a/SConstruct b/SConstruct
+index de68827..78d6b8c 100644
+--- a/SConstruct
++++ b/SConstruct
+@@ -200,6 +200,7 @@ opts.Add(BoolVariable("d3d12", "Enable the Direct3D 12 rendering driver on suppo
+ opts.Add(BoolVariable("metal", "Enable the Metal rendering driver on supported platforms (Apple arm64 only)", False))
+ opts.Add(BoolVariable("use_volk", "Use the volk library to load the Vulkan loader dynamically", True))
+ opts.Add(BoolVariable("use_streamline", "Enable the NVIDIA Streamline (DLSS, Reflex) integration on Windows Vulkan", False))
++opts.Add(BoolVariable("use_fsr_sdk", "Enable AMD FidelityFX (FSR SDK) upscaling and frame generation on Windows Vulkan", False))
+ opts.Add(BoolVariable("accesskit", "Enable the AccessKit driver for screen reader support", True))
+ opts.Add(BoolVariable("angle", "Enable the ANGLE rendering driver for OpenGL ES 3.0 on supported platforms", True))
+ opts.Add(BoolVariable("sdl", "Enable the SDL3 input driver", True))
+@@ -605,6 +606,16 @@ if env["use_streamline"]:
+         print_warning("use_streamline=yes needs platform=windows and vulkan=yes; building without Streamline.")
+         env["use_streamline"] = False
+ 
++if env["use_fsr_sdk"]:
++    if env["platform"] == "windows" and env["vulkan"]:
++        if not os.path.isfile("thirdparty/amd-fsr-sdk/fsr_sdk_runtime.gen.h"):
++            print_error("use_fsr_sdk=yes needs the SDK headers; run tools/engine/prepare_fsr_sdk.py --engine <this tree>.")
++            Exit(255)
++        env.AppendUnique(CPPDEFINES=["FSR_SDK_ENABLED"])
++    else:
++        print_warning("use_fsr_sdk is only supported on Windows with vulkan=yes; disabling it.")
++        env["use_fsr_sdk"] = False
++
+ # Library Support
+ if env["library_type"] != "executable":
+     if "library" not in env.get("supported", []):
+diff --git a/drivers/SCsub b/drivers/SCsub
+index 2c4e361..e44b72e 100644
+--- a/drivers/SCsub
++++ b/drivers/SCsub
+@@ -71,6 +71,9 @@ SConscript("png/SCsub")
+ # NVIDIA Streamline (after the Vulkan driver, whose include paths it needs).
+ SConscript("streamline/SCsub")
+ 
++# AMD FidelityFX (stub unless use_fsr_sdk).
++SConscript("fsr_sdk/SCsub")
++
+ env.add_source_files(env.drivers_sources, "*.cpp")
+ 
+ lib = env.add_library("drivers", env.drivers_sources)
+diff --git a/drivers/fsr_sdk/SCsub b/drivers/fsr_sdk/SCsub
+new file mode 100644
+index 0000000..9ad6234
+--- /dev/null
++++ b/drivers/fsr_sdk/SCsub
+@@ -0,0 +1,6 @@
++#!/usr/bin/env python
++from misc.utility.scons_hints import *
++
++Import("env")
++
++env.add_source_files(env.drivers_sources, "*.cpp")
+diff --git a/drivers/fsr_sdk/fsr_sdk.cpp b/drivers/fsr_sdk/fsr_sdk.cpp
+new file mode 100755
+index 0000000..f5b0b85
+--- /dev/null
++++ b/drivers/fsr_sdk/fsr_sdk.cpp
+@@ -0,0 +1,981 @@
++/**************************************************************************/
++/*  fsr_sdk.cpp                                                           */
++/**************************************************************************/
++/*                         This file is part of:                          */
++/*                             GODOT ENGINE                               */
++/*                        https://godotengine.org                         */
++/**************************************************************************/
++/* Copyright (c) 2014-present Godot Engine contributors (see AUTHORS.md). */
++/* Copyright (c) 2007-2014 Juan Linietsky, Ariel Manzur.                  */
++/*                                                                        */
++/* Permission is hereby granted, free of charge, to any person obtaining  */
++/* a copy of this software and associated documentation files (the        */
++/* "Software"), to deal in the Software without restriction, including    */
++/* without limitation the rights to use, copy, modify, merge, publish,    */
++/* distribute, sublicense, and/or sell copies of the Software, and to     */
++/* permit persons to whom the Software is furnished to do so, subject to  */
++/* the following conditions:                                              */
++/*                                                                        */
++/* The above copyright notice and this permission notice shall be         */
++/* included in all copies or substantial portions of the Software.        */
++/*                                                                        */
++/* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,        */
++/* EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF     */
++/* MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. */
++/* IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY   */
++/* CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,   */
++/* TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE      */
++/* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                 */
++/**************************************************************************/
++
++#include "fsr_sdk.h"
++
++#include "core/config/engine.h"
++#include "core/os/os.h"
++#include "servers/rendering/renderer_viewport.h"
++
++#ifdef FSR_SDK_ENABLED
++#include "core/io/file_access.h"
++#include "drivers/vulkan/godot_vulkan.h"
++#include "drivers/vulkan/graphics_sdk_vulkan.h"
++#include "servers/display/display_server.h"
++#include "servers/rendering/rendering_device.h"
++
++#include "thirdparty/amd-fsr-sdk/api/include/vk/ffx_api_vk.h"
++#include "thirdparty/amd-fsr-sdk/framegeneration/include/vk/ffx_api_framegeneration_vk.h"
++#include "thirdparty/amd-fsr-sdk/fsr_sdk_runtime.gen.h"
++
++#include <windows.h>
++#endif
++
++FidelityFX *FidelityFX::singleton = nullptr;
++
++#ifdef FSR_SDK_ENABLED
++
++struct FidelityFX::VulkanState {
++	VkInstance instance = VK_NULL_HANDLE;
++	VkPhysicalDevice physical_device = VK_NULL_HANDLE;
++	VkDevice device = VK_NULL_HANDLE;
++	VkDeviceContext device_context = {};
++	// Frame generation needs four distinct queues; Godot's main queue is the game queue.
++	VkQueueInfoFFXAPI game_queue = {};
++	VkQueueInfoFFXAPI async_compute_queue = {};
++	VkQueueInfoFFXAPI present_queue = {};
++	VkQueueInfoFFXAPI image_acquire_queue = {};
++	bool queues_ready = false;
++	GraphicsSDKVulkanProvider::SwapchainFunctions loader;
++	ffxQueryDescSwapchainReplacementFunctionsVK replacement = {};
++	VkPhysicalDeviceSubgroupSizeControlFeatures subgroup_size_control = {};
++	VkPhysicalDeviceSynchronization2Features synchronization2 = {};
++};
++
++namespace {
++
++// Presentation owner for frame generation: extra queues, features and the
++// replacement swapchain. Upscaling alone never needs it.
++class FidelityFXVulkanProvider : public GraphicsSDKVulkanProvider {
++public:
++	FidelityFX *api = nullptr;
++
++	virtual const char *get_name() const override { return "amd"; }
++
++	virtual void get_queue_requests(VkPhysicalDevice p_physical_device, LocalVector<QueueRequest> &r_requests) override {
++		// The driver puts each request in the family with the fewest
++		// capabilities that has the flags, after Godot's own queues, so the
++		// async compute and image acquire queues land in the compute-only and
++		// transfer-only families where the GPU has them.
++		QueueRequest present;
++		present.required_flags = VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT; // UI composition and present.
++		r_requests.push_back(present);
++		QueueRequest async_compute;
++		async_compute.required_flags = VK_QUEUE_COMPUTE_BIT;
++		r_requests.push_back(async_compute);
++		QueueRequest image_acquire;
++		image_acquire.required_flags = VK_QUEUE_TRANSFER_BIT;
++		r_requests.push_back(image_acquire);
++	}
++
++	virtual void adjust_device_features(VkPhysicalDevice p_physical_device, VkPhysicalDeviceFeatures2 *r_features2, VkPhysicalDeviceVulkan12Features *r_features12, VkPhysicalDeviceVulkan13Features *r_features13) override {
++		if (r_features2 == nullptr) {
++			return;
++		}
++		// The SDK backend selects wave32 pipelines and synchronization2 from the
++		// device's supported extensions, so enable the matching features.
++		uint32_t count = 0;
++		vkEnumerateDeviceExtensionProperties(p_physical_device, nullptr, &count, nullptr);
++		LocalVector<VkExtensionProperties> extensions;
++		extensions.resize(count);
++		vkEnumerateDeviceExtensionProperties(p_physical_device, nullptr, &count, extensions.ptr());
++		bool has_subgroup_size_control = false;
++		bool has_synchronization2 = false;
++		for (const VkExtensionProperties &extension : extensions) {
++			has_subgroup_size_control |= strcmp(extension.extensionName, VK_EXT_SUBGROUP_SIZE_CONTROL_EXTENSION_NAME) == 0;
++			has_synchronization2 |= strcmp(extension.extensionName, VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME) == 0;
++		}
++		FidelityFX::VulkanState *vk = api->vk;
++		vk->subgroup_size_control.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_FEATURES;
++		vk->synchronization2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SYNCHRONIZATION_2_FEATURES;
++		vk->subgroup_size_control.pNext = &vk->synchronization2;
++		VkPhysicalDeviceFeatures2 supported = {};
++		supported.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
++		supported.pNext = &vk->subgroup_size_control;
++		vkGetPhysicalDeviceFeatures2(p_physical_device, &supported);
++		vk->subgroup_size_control.pNext = nullptr;
++		vk->synchronization2.pNext = nullptr;
++		const bool want_subgroup_size_control = has_subgroup_size_control && vk->subgroup_size_control.subgroupSizeControl;
++		const bool want_synchronization2 = has_synchronization2 && vk->synchronization2.synchronization2;
++		if (r_features13 != nullptr) {
++			// Covered by the core 1.3 struct; the individual structs must not be chained too.
++			r_features13->subgroupSizeControl |= want_subgroup_size_control;
++			r_features13->synchronization2 |= want_synchronization2;
++			return;
++		}
++		// Reuse structs already in the chain; prepend ours otherwise.
++		for (VkBaseOutStructure *s = (VkBaseOutStructure *)r_features2->pNext; s != nullptr; s = s->pNext) {
++			if (s->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_FEATURES && want_subgroup_size_control) {
++				((VkPhysicalDeviceSubgroupSizeControlFeatures *)s)->subgroupSizeControl = VK_TRUE;
++				vk->subgroup_size_control.subgroupSizeControl = VK_FALSE;
++			} else if (s->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SYNCHRONIZATION_2_FEATURES && want_synchronization2) {
++				((VkPhysicalDeviceSynchronization2Features *)s)->synchronization2 = VK_TRUE;
++				vk->synchronization2.synchronization2 = VK_FALSE;
++			}
++		}
++		if (want_subgroup_size_control && vk->subgroup_size_control.subgroupSizeControl) {
++			vk->subgroup_size_control.pNext = r_features2->pNext;
++			r_features2->pNext = &vk->subgroup_size_control;
++		}
++		if (want_synchronization2 && vk->synchronization2.synchronization2) {
++			vk->synchronization2.pNext = r_features2->pNext;
++			r_features2->pNext = &vk->synchronization2;
++		}
++	}
++
++	virtual bool device_created(const DeviceInfo &p_info) override {
++		FidelityFX::VulkanState *vk = api->vk;
++		vk->instance = p_info.instance;
++		vk->physical_device = p_info.physical_device;
++		vk->device = p_info.device;
++		vk->device_context.vkDevice = p_info.device;
++		vk->device_context.vkPhysicalDevice = p_info.physical_device;
++		vk->device_context.vkDeviceProcAddr = p_info.get_device_proc_addr ? p_info.get_device_proc_addr : vkGetDeviceProcAddr;
++		vk->game_queue = { p_info.graphics_queue, p_info.graphics_queue_family, nullptr };
++		VkQueueInfoFFXAPI *targets[3] = { &vk->present_queue, &vk->async_compute_queue, &vk->image_acquire_queue };
++		vk->queues_ready = p_info.graphics_queue != VK_NULL_HANDLE && p_info.extra_queues.size() == 3;
++		for (uint32_t i = 0; i < p_info.extra_queues.size() && i < 3; i++) {
++			const QueueRequest &request = p_info.extra_queues[i];
++			if (request.family_index == UINT32_MAX) {
++				vk->queues_ready = false;
++				continue;
++			}
++			VkQueue queue = VK_NULL_HANDLE;
++			vkGetDeviceQueue(p_info.device, request.family_index, request.first_queue_index, &queue);
++			*targets[i] = { queue, request.family_index, nullptr };
++			vk->queues_ready = vk->queues_ready && queue != VK_NULL_HANDLE;
++		}
++		print_verbose(vformat("FidelityFX: game queue family %d, present %d, async compute %d, image acquire %d.", vk->game_queue.familyIndex, vk->present_queue.familyIndex, vk->async_compute_queue.familyIndex, vk->image_acquire_queue.familyIndex));
++		api->device_ready = true;
++		api->query_versions();
++		return true;
++	}
++
++	virtual void device_destroying() override {
++		api->shutdown_device();
++	}
++
++	virtual void get_swapchain_functions(SwapchainFunctions &r_functions) override;
++};
++
++FidelityFXVulkanProvider vulkan_provider;
++
++FidelityFX::VulkanState *vk_state() {
++	return FidelityFX::get_singleton()->vk;
++}
++
++bool is_frame_generation_swapchain(VkSwapchainKHR p_swapchain) {
++	FidelityFX *api = FidelityFX::get_singleton();
++	return p_swapchain != VK_NULL_HANDLE && api->swap_chain != 0 && (uint64_t)p_swapchain == api->swap_chain;
++}
++
++VKAPI_ATTR VkResult VKAPI_CALL fsr_create_swapchain(VkDevice p_device, const VkSwapchainCreateInfoKHR *p_info, const VkAllocationCallbacks *p_allocator, VkSwapchainKHR *r_swapchain) {
++	FidelityFX *api = FidelityFX::get_singleton();
++	FidelityFX::VulkanState *vk = api->vk;
++	const bool fg_possible = api->presentation_owner && api->device_ready && vk->queues_ready && (api->fg_supported[0] || api->fg_supported[1]);
++	if (!fg_possible || api->swap_chain != 0 || p_info->oldSwapchain != VK_NULL_HANDLE) {
++		return vk->loader.create_swapchain(p_device, p_info, p_allocator, r_swapchain);
++	}
++
++	ffxCreateContextDescFrameGenerationSwapChainVersionVK version = {};
++	version.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_FRAMEGENERATIONSWAPCHAIN_VERSION_VK;
++	version.version = FFX_FRAMEGENERATION_SWAPCHAIN_VK_VERSION;
++	VkSwapchainKHR swapchain = VK_NULL_HANDLE;
++	ffxCreateContextDescFrameGenerationSwapChainVK desc = {};
++	desc.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_FGSWAPCHAIN_VK;
++	desc.header.pNext = &version.header;
++	desc.physicalDevice = vk->physical_device;
++	desc.device = p_device;
++	desc.swapchain = &swapchain;
++	desc.allocator = nullptr;
++	desc.createInfo = *p_info;
++	desc.gameQueue = vk->game_queue;
++	desc.asyncComputeQueue = vk->async_compute_queue;
++	desc.presentQueue = vk->present_queue;
++	desc.imageAcquireQueue = vk->image_acquire_queue;
++
++	ffxContext context = nullptr;
++	ffxReturnCode_t code = api->create(&context, &desc.header, nullptr);
++	if (code != FFX_API_RETURN_OK || swapchain == VK_NULL_HANDLE) {
++		api->swap_reason = vformat("frame generation swapchain creation failed (SDK error %d)", code);
++		WARN_PRINT("FidelityFX: " + api->swap_reason + "; presenting without frame generation.");
++		if (context) {
++			api->destroy(&context, nullptr);
++		}
++		api->fg_failed.set(1);
++		return vk->loader.create_swapchain(p_device, p_info, p_allocator, r_swapchain);
++	}
++
++	ffxQueryDescSwapchainReplacementFunctionsVK replacement = {};
++	replacement.header.type = FFX_API_QUERY_DESC_TYPE_FGSWAPCHAIN_FUNCTIONS_VK;
++	code = api->query(&context, &replacement.header);
++	if (code != FFX_API_RETURN_OK || !replacement.pOutQueuePresentKHR || !replacement.pOutAcquireNextImageKHR || !replacement.pOutGetSwapchainImagesKHR || !replacement.pOutDestroySwapchainFFXAPI) {
++		// The replacement swapchain cannot be used or destroyed without these.
++		api->destroy(&context, nullptr);
++		api->swap_reason = vformat("swapchain replacement functions unavailable (SDK error %d)", code);
++		api->fg_failed.set(1);
++		ERR_FAIL_V_MSG(VK_ERROR_INITIALIZATION_FAILED, "FidelityFX: " + api->swap_reason + ".");
++	}
++
++	{
++		MutexLock lock(api->fg_mutex);
++		vk->replacement = replacement;
++		api->swap_context = context;
++		api->swap_chain = (uint64_t)swapchain;
++		api->swap_format = ffxApiGetSurfaceFormatVK(p_info->imageFormat);
++		api->swap_width = p_info->imageExtent.width;
++		api->swap_height = p_info->imageExtent.height;
++		api->last_present_count = 0;
++		api->swap_reason = String();
++	}
++	api->swapchain_creations.increment();
++	ffxQueryGetProviderVersion provider = {};
++	provider.header.type = FFX_API_QUERY_DESC_TYPE_GET_PROVIDER_VERSION;
++	if (api->query(&api->swap_context, &provider.header) == FFX_API_RETURN_OK && provider.versionName) {
++		api->swap_provider = String::utf8(provider.versionName);
++	}
++	print_verbose(vformat("FidelityFX: frame generation swapchain %dx%d (%s).", api->swap_width, api->swap_height, api->swap_provider));
++	*r_swapchain = swapchain;
++	return VK_SUCCESS;
++}
++
++VKAPI_ATTR void VKAPI_CALL fsr_destroy_swapchain(VkDevice p_device, VkSwapchainKHR p_swapchain, const VkAllocationCallbacks *p_allocator) {
++	FidelityFX *api = FidelityFX::get_singleton();
++	FidelityFX::VulkanState *vk = api->vk;
++	if (!is_frame_generation_swapchain(p_swapchain)) {
++		vk->loader.destroy_swapchain(p_device, p_swapchain, p_allocator);
++		return;
++	}
++	// The frame generation context references the swapchain; release it first,
++	// then let in-flight presents finish before the swapchain context goes.
++	api->release_frame_generation();
++	MutexLock lock(api->fg_mutex);
++	api->wait_for_presents();
++	if (api->swap_context) {
++		api->destroy(&api->swap_context, nullptr);
++		api->swap_context = nullptr;
++	}
++	api->swap_chain = 0;
++	vk->replacement.pOutDestroySwapchainFFXAPI(p_device, p_swapchain, p_allocator, nullptr);
++}
++
++VKAPI_ATTR VkResult VKAPI_CALL fsr_get_swapchain_images(VkDevice p_device, VkSwapchainKHR p_swapchain, uint32_t *r_count, VkImage *r_images) {
++	FidelityFX::VulkanState *vk = vk_state();
++	if (is_frame_generation_swapchain(p_swapchain)) {
++		return vk->replacement.pOutGetSwapchainImagesKHR(p_device, p_swapchain, r_count, r_images);
++	}
++	return vk->loader.get_swapchain_images(p_device, p_swapchain, r_count, r_images);
++}
++
++VKAPI_ATTR VkResult VKAPI_CALL fsr_acquire_next_image(VkDevice p_device, VkSwapchainKHR p_swapchain, uint64_t p_timeout, VkSemaphore p_semaphore, VkFence p_fence, uint32_t *r_index) {
++	FidelityFX::VulkanState *vk = vk_state();
++	if (is_frame_generation_swapchain(p_swapchain)) {
++		return vk->replacement.pOutAcquireNextImageKHR(p_device, p_swapchain, p_timeout, p_semaphore, p_fence, r_index);
++	}
++	return vk->loader.acquire_next_image(p_device, p_swapchain, p_timeout, p_semaphore, p_fence, r_index);
++}
++
++VkResult present_frame_generation(VkQueue p_queue, const VkPresentInfoKHR *p_info) {
++	FidelityFX *api = FidelityFX::get_singleton();
++	FidelityFX::VulkanState *vk = api->vk;
++	MutexLock lock(api->fg_mutex);
++	if (!api->prepared || !api->fg_version.get() || api->fg_failed.get()) {
++		api->disable_frame_generation();
++	}
++	// The SDK records the interpolation workload through generate() on this
++	// thread, inside the replacement present.
++	VkResult result = vk->replacement.pOutQueuePresentKHR(p_queue, p_info);
++	if (result == VK_SUCCESS || result == VK_SUBOPTIMAL_KHR) {
++		api->game_presents.increment();
++	}
++	if (vk->replacement.pOutGetLastPresentCountFFXAPI) {
++		// Counts presents of the real swapchain, generated frames included.
++		const uint64_t count = vk->replacement.pOutGetLastPresentCountFFXAPI((VkSwapchainKHR)api->swap_chain);
++		api->present_count_available.set(1);
++		if (count >= api->last_present_count) {
++			api->presented_frames.add(count - api->last_present_count);
++		}
++		api->last_present_count = count;
++	}
++	api->prepared = false;
++	api->frame_id++;
++	return result;
++}
++
++VKAPI_ATTR VkResult VKAPI_CALL fsr_queue_present(VkQueue p_queue, const VkPresentInfoKHR *p_info) {
++	FidelityFX::VulkanState *vk = vk_state();
++	int32_t fg_index = -1;
++	for (uint32_t i = 0; i < p_info->swapchainCount; i++) {
++		if (is_frame_generation_swapchain(p_info->pSwapchains[i])) {
++			fg_index = i;
++		}
++	}
++	if (fg_index < 0) {
++		return vk->loader.queue_present(p_queue, p_info);
++	}
++	if (p_info->swapchainCount == 1) {
++		return present_frame_generation(p_queue, p_info);
++	}
++
++	// Several windows: Godot signals one semaphore per swapchain, in order.
++	const bool per_swapchain_semaphores = p_info->waitSemaphoreCount == p_info->swapchainCount;
++	LocalVector<VkSwapchainKHR> other_swapchains;
++	LocalVector<uint32_t> other_indices;
++	LocalVector<VkSemaphore> other_semaphores;
++	LocalVector<VkResult> other_results;
++	for (uint32_t i = 0; i < p_info->swapchainCount; i++) {
++		if ((int32_t)i == fg_index) {
++			continue;
++		}
++		other_swapchains.push_back(p_info->pSwapchains[i]);
++		other_indices.push_back(p_info->pImageIndices[i]);
++		if (per_swapchain_semaphores) {
++			other_semaphores.push_back(p_info->pWaitSemaphores[i]);
++		}
++	}
++	VkPresentInfoKHR fg_info = *p_info;
++	VkResult fg_result = VK_SUCCESS;
++	fg_info.swapchainCount = 1;
++	fg_info.pSwapchains = &p_info->pSwapchains[fg_index];
++	fg_info.pImageIndices = &p_info->pImageIndices[fg_index];
++	fg_info.pResults = &fg_result;
++	if (per_swapchain_semaphores) {
++		fg_info.waitSemaphoreCount = 1;
++		fg_info.pWaitSemaphores = &p_info->pWaitSemaphores[fg_index];
++	}
++	VkResult result = present_frame_generation(p_queue, &fg_info);
++
++	other_results.resize(other_swapchains.size());
++	VkPresentInfoKHR other_info = *p_info;
++	other_info.swapchainCount = other_swapchains.size();
++	other_info.pSwapchains = other_swapchains.ptr();
++	other_info.pImageIndices = other_indices.ptr();
++	other_info.pResults = other_results.ptr();
++	other_info.waitSemaphoreCount = other_semaphores.size();
++	other_info.pWaitSemaphores = other_semaphores.ptr();
++	VkResult other_result = vk->loader.queue_present(p_queue, &other_info);
++
++	if (p_info->pResults) {
++		uint32_t other = 0;
++		for (uint32_t i = 0; i < p_info->swapchainCount; i++) {
++			p_info->pResults[i] = (int32_t)i == fg_index ? fg_result : other_results[other++];
++		}
++	}
++	return result != VK_SUCCESS ? result : other_result;
++}
++
++void FidelityFXVulkanProvider::get_swapchain_functions(SwapchainFunctions &r_functions) {
++	api->vk->loader = r_functions;
++	r_functions.create_swapchain = fsr_create_swapchain;
++	r_functions.destroy_swapchain = fsr_destroy_swapchain;
++	r_functions.get_swapchain_images = fsr_get_swapchain_images;
++	r_functions.acquire_next_image = fsr_acquire_next_image;
++	r_functions.queue_present = fsr_queue_present;
++}
++
++// Reads "3.1.6" or "FSR 4.0.2" style provider names.
++bool parse_provider_version(const String &p_name, int &r_major, int &r_minor) {
++	int i = 0;
++	while (i < p_name.length() && !is_digit(p_name[i])) {
++		i++;
++	}
++	const PackedStringArray parts = p_name.substr(i).split(".");
++	if (parts.size() < 2 || !parts[0].is_valid_int() || !parts[1].get_slicec(' ', 0).is_valid_int()) {
++		return false;
++	}
++	r_major = parts[0].to_int();
++	r_minor = parts[1].get_slicec(' ', 0).to_int();
++	return true;
++}
++
++} // namespace
++
++#endif // FSR_SDK_ENABLED
++
++#ifdef FSR_SDK_ENABLED
++static bool fsr_sdk_upscaler_available() {
++	return FidelityFX::get_singleton() && FidelityFX::get_singleton()->sr_available();
++}
++#endif
++
++FidelityFX::FidelityFX() {
++	singleton = this;
++#ifdef FSR_SDK_ENABLED
++	vk = memnew(VulkanState);
++	vulkan_provider.api = this;
++	for (int i = 0; i < 2; i++) {
++		sr_reason[i] = "runtime not initialized";
++		fg_reason[i] = "runtime not initialized";
++	}
++	RendererViewport::fsr_sdk_upscaler_available = fsr_sdk_upscaler_available;
++#endif
++}
++
++FidelityFX::~FidelityFX() {
++#ifdef FSR_SDK_ENABLED
++	finish_context_job();
++	RendererViewport::fsr_sdk_upscaler_available = nullptr;
++	if (GraphicsSDKVulkan::get_owner() == &vulkan_provider) {
++		GraphicsSDKVulkan::clear_owner();
++	}
++	memdelete(vk);
++	vk = nullptr;
++#endif
++	singleton = nullptr;
++}
++
++void FidelityFX::register_singleton() {
++	GDREGISTER_CLASS(FidelityFX);
++	Engine::get_singleton()->add_singleton(Engine::Singleton("FidelityFX", singleton));
++}
++
++void FidelityFX::_bind_methods() {
++	ClassDB::bind_method(D_METHOD("get_status"), &FidelityFX::get_status);
++	ClassDB::bind_method(D_METHOD("set_upscaler_version", "version"), &FidelityFX::set_upscaler_version);
++	ClassDB::bind_method(D_METHOD("set_frame_generation_version", "version"), &FidelityFX::set_frame_generation_version);
++}
++
++void FidelityFX::set_upscaler_version(int p_version) {
++	if (p_version == 3 || p_version == 4) {
++		sr_version.set(p_version);
++	}
++}
++
++void FidelityFX::set_frame_generation_version(int p_version) {
++	fg_version.set(p_version == 3 || p_version == 4 ? p_version : 0);
++}
++
++bool FidelityFX::sr_available() const {
++#ifdef FSR_SDK_ENABLED
++	return device_ready && sr_supported[sr_version.get() - 3] && !sr_failed.get();
++#else
++	return false;
++#endif
++}
++
++Dictionary FidelityFX::get_status() const {
++	MutexLock lock(status_mutex);
++	Dictionary d;
++	d["compiled"] = false;
++	d["initialized"] = false;
++	d["sr3_supported"] = false;
++	d["sr4_supported"] = false;
++	d["fg3_supported"] = false;
++	d["fg4_supported"] = false;
++#ifdef FSR_SDK_ENABLED
++	d["compiled"] = true;
++	d["backend"] = "vulkan";
++	d["sdk_version"] = FSR_SDK_PINNED_VERSION;
++	d["initialized"] = device_ready;
++	d["runtime_loaded"] = runtime_loaded;
++	d["runtime_reason"] = runtime_reason;
++	d["requested_owner"] = GraphicsSDKVulkan::get_requested_owner();
++	d["presentation_owner"] = presentation_owner;
++	d["presentation_owner_reason"] = owner_reason;
++	d["sr3_supported"] = sr_supported[0] && !sr_failed.get();
++	d["sr4_supported"] = sr_supported[1] && !sr_failed.get();
++	d["fg3_supported"] = fg_supported[0] && swap_chain != 0 && !fg_failed.get();
++	d["fg4_supported"] = fg_supported[1] && swap_chain != 0 && !fg_failed.get();
++	const String failed_sr = vformat("upscaling disabled after SDK error %d", last_error.get());
++	const String failed_fg = vformat("frame generation disabled after SDK error %d", last_error.get());
++	for (int i = 0; i < 2; i++) {
++		String sr = sr_supported[i] ? String() : sr_reason[i];
++		if (sr_supported[i] && sr_failed.get()) {
++			sr = failed_sr;
++		}
++		String fg = fg_supported[i] ? String() : fg_reason[i];
++		if (fg_supported[i] && fg_failed.get()) {
++			fg = swap_reason.is_empty() ? failed_fg : swap_reason;
++		} else if (fg_supported[i] && swap_chain == 0) {
++			fg = swap_reason.is_empty() ? String("no frame generation swapchain yet") : swap_reason;
++		}
++		d[i == 0 ? "sr3_reason" : "sr4_reason"] = sr;
++		d[i == 0 ? "fg3_reason" : "fg4_reason"] = fg;
++	}
++	d["upscaler_versions"] = sr_versions_found;
++	d["frame_generation_versions"] = fg_versions_found;
++	d["swapchain_versions"] = swapchain_versions_found;
++	d["upscaler_version_requested"] = (int64_t)sr_version.get();
++	d["frame_generation_version_requested"] = (int64_t)fg_version.get();
++	d["upscaler_provider"] = sr_provider;
++	d["frame_generation_provider"] = fg_provider;
++	// Some runtimes do not answer the provider query for the swapchain context;
++	// report the first listed swapchain version then.
++	String swapchain_provider = swap_provider;
++	if (swapchain_provider.is_empty() && swap_chain != 0) {
++		swapchain_provider = swapchain_versions_found.get_slicec(',', 0).strip_edges();
++	}
++	d["swapchain_provider"] = swapchain_provider;
++	d["swapchain_active"] = swap_chain != 0;
++	d["swapchain_creations"] = (int64_t)swapchain_creations.get();
++	d["upscale_evaluations"] = (int64_t)sr_evaluations.get();
++	d["frame_generation_dispatches"] = (int64_t)fg_dispatches.get();
++	d["generated_frames"] = (int64_t)generated_frames.get();
++	d["game_presents"] = (int64_t)game_presents.get();
++	d["presented_frames"] = (int64_t)presented_frames.get();
++	d["present_count_available"] = present_count_available.get() != 0;
++	d["frame_generation_active"] = fg_active.get() != 0;
++	d["last_error"] = last_error.get();
++	d["temporal_shaders_initializing"] = temporal_shaders_initializing.get() != 0;
++	d["upscaler_initializing"] = initializing_effect.get() == 1;
++	d["frame_generation_initializing"] = initializing_effect.get() == 2;
++	d["upscaler_create_ms"] = sr_create_usec.get() / 1000.0;
++	d["upscaler_max_dispatch_ms"] = sr_max_dispatch_usec.get() / 1000.0;
++	d["prepare_max_ms"] = prepare_max_usec.get() / 1000.0;
++	d["frame_generation_create_ms"] = fg_create_usec.get() / 1000.0;
++	d["upscaler_context_creations"] = (int64_t)sr_context_creations.get();
++	d["frame_generation_context_creations"] = (int64_t)fg_context_creations.get();
++	// Vulkan has no frame latency waitable object: with frame generation the
++	// game should cap its own rate slightly below half the display refresh.
++	d["frame_latency_waitable"] = false;
++	int64_t recommended_max_fps = 0;
++	if (fg_active.get() && DisplayServer::get_singleton()) {
++		const float refresh = DisplayServer::get_singleton()->screen_get_refresh_rate();
++		if (refresh > 0.0f) {
++			recommended_max_fps = MAX(int64_t(1), int64_t(refresh * 0.5f) - 1);
++		}
++	}
++	d["recommended_max_fps"] = recommended_max_fps;
++#endif
++	return d;
++}
++
++void FidelityFX::select_presentation_owner() {
++#ifdef FSR_SDK_ENABLED
++	if (Engine::get_singleton()->is_editor_hint()) {
++		owner_reason = "not used in the editor";
++		return;
++	}
++	if (GraphicsSDKVulkan::get_requested_owner() != "amd") {
++		owner_reason = "presentation owner is not amd";
++		return;
++	}
++	if (OS::get_singleton()->get_current_rendering_method() != "forward_plus" || OS::get_singleton()->get_current_rendering_driver_name() != "vulkan") {
++		owner_reason = "needs the Forward+ renderer on Vulkan";
++		return;
++	}
++	if (!load_runtime()) {
++		owner_reason = runtime_reason;
++		return;
++	}
++	if (!GraphicsSDKVulkan::select_owner(&vulkan_provider)) {
++		owner_reason = vformat("presentation is owned by %s", GraphicsSDKVulkan::get_owner()->get_name());
++		return;
++	}
++	presentation_owner = true;
++	debug_frames = OS::get_singleton()->get_cmdline_user_args().find("--fsr-debug-frames") != nullptr;
++#endif
++}
++
++#ifdef FSR_SDK_ENABLED
++
++bool FidelityFX::load_runtime() {
++	if (runtime_attempted) {
++		return runtime_loaded;
++	}
++	runtime_attempted = true;
++	// Only the pinned, signed SDK binaries beside the executable; never the
++	// working directory or the DLL search path.
++	const String base_dir = OS::get_singleton()->get_executable_path().get_base_dir();
++	HMODULE loader = nullptr;
++	for (const FSRSDKRuntimeFile &file : FSR_SDK_RUNTIME_FILES) {
++		const String path = base_dir.path_join(file.name);
++		if (!FileAccess::exists(path)) {
++			runtime_reason = vformat("%s is missing", file.name);
++			break;
++		}
++		if (FileAccess::get_sha256(path) != file.sha256) {
++			runtime_reason = vformat("%s does not match the pinned AMD FSR SDK %s", file.name, FSR_SDK_PINNED_VERSION);
++			break;
++		}
++		const Char16String wide = path.replace("/", "\\").utf16();
++		HMODULE module = LoadLibraryExW((LPCWSTR)wide.get_data(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
++		if (!module) {
++			runtime_reason = vformat("%s could not be loaded (error %d)", file.name, (int64_t)GetLastError());
++			break;
++		}
++		// Modules stay loaded until exit; effect callbacks outlive frames.
++		loader = module;
++	}
++	if (runtime_reason.is_empty() && loader) {
++		create = (PfnFfxCreateContext)(void *)GetProcAddress(loader, "ffxCreateContext");
++		destroy = (PfnFfxDestroyContext)(void *)GetProcAddress(loader, "ffxDestroyContext");
++		query = (PfnFfxQuery)(void *)GetProcAddress(loader, "ffxQuery");
++		dispatch = (PfnFfxDispatch)(void *)GetProcAddress(loader, "ffxDispatch");
++		configure = (PfnFfxConfigure)(void *)GetProcAddress(loader, "ffxConfigure");
++		if (!create || !destroy || !query || !dispatch || !configure) {
++			runtime_reason = "the AMD FSR loader does not export the FidelityFX API";
++		}
++	}
++	runtime_loaded = runtime_reason.is_empty();
++	if (!runtime_loaded) {
++		WARN_PRINT("FidelityFX unavailable: " + runtime_reason + ".");
++		for (int i = 0; i < 2; i++) {
++			sr_reason[i] = runtime_reason;
++			fg_reason[i] = runtime_reason;
++		}
++	}
++	return runtime_loaded;
++}
++
++void FidelityFX::initialize_from_rendering_device() {
++	if (device_ready) {
++		return;
++	}
++	RenderingDevice *rd = RenderingDevice::get_singleton();
++	String reason;
++	if (Engine::get_singleton()->is_editor_hint()) {
++		reason = "not used in the editor";
++	} else if (!rd || rd->get_device_api_name() != "Vulkan" || OS::get_singleton()->get_current_rendering_method() != "forward_plus") {
++		reason = "needs the Forward+ renderer on Vulkan";
++	} else if (!load_runtime()) {
++		reason = runtime_reason;
++	}
++	if (!reason.is_empty()) {
++		for (int i = 0; i < 2; i++) {
++			sr_reason[i] = reason;
++			fg_reason[i] = reason;
++		}
++		return;
++	}
++	vk->instance = (VkInstance)rd->get_driver_resource(RD::DRIVER_RESOURCE_TOPMOST_OBJECT);
++	vk->physical_device = (VkPhysicalDevice)rd->get_driver_resource(RD::DRIVER_RESOURCE_PHYSICAL_DEVICE);
++	vk->device = (VkDevice)rd->get_driver_resource(RD::DRIVER_RESOURCE_LOGICAL_DEVICE);
++	vk->device_context.vkDevice = vk->device;
++	vk->device_context.vkPhysicalDevice = vk->physical_device;
++	vk->device_context.vkDeviceProcAddr = vkGetDeviceProcAddr;
++	device_ready = vk->device != VK_NULL_HANDLE;
++	if (device_ready) {
++		query_versions();
++	}
++}
++
++void FidelityFX::query_versions() {
++	struct Effect {
++		uint64_t type;
++		uint64_t *ids;
++		bool *supported;
++		String *reasons;
++		String *found;
++	};
++	Effect effects[3] = {
++		{ FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE, sr_ids, sr_supported, sr_reason, &sr_versions_found },
++		{ FFX_API_CREATE_CONTEXT_DESC_TYPE_FRAMEGENERATION, fg_ids, fg_supported, fg_reason, &fg_versions_found },
++		{ FFX_API_CREATE_CONTEXT_DESC_TYPE_FGSWAPCHAIN_VK, nullptr, nullptr, nullptr, &swapchain_versions_found },
++	};
++	for (Effect &effect : effects) {
++		uint64_t count = 32;
++		uint64_t ids[32] = {};
++		const char *names[32] = {};
++		ffxQueryDescGetVersions q = {};
++		q.header.type = FFX_API_QUERY_DESC_TYPE_GET_VERSIONS;
++		q.createDescType = effect.type;
++		q.device = &vk->device_context;
++		q.outputCount = &count;
++		q.versionIds = ids;
++		q.versionNames = names;
++		const ffxReturnCode_t code = query(nullptr, &q.header);
++		PackedStringArray found;
++		if (code == FFX_API_RETURN_OK) {
++			for (uint64_t i = 0; i < MIN(count, uint64_t(32)); i++) {
++				// Names may live in shared SDK memory; copy them right away.
++				const String name = names[i] ? String::utf8(names[i]) : String();
++				found.push_back(name);
++				int major = 0;
++				int minor = 0;
++				if (!effect.ids || !parse_provider_version(name, major, minor)) {
++					continue;
++				}
++				const int index = (major == 3 && minor >= 1) ? 0 : (major == 4 ? 1 : -1);
++				if (index < 0 || effect.supported[index]) {
++					continue;
++				}
++				// Version ids are opaque; only reuse ids returned for this device.
++				effect.ids[index] = ids[i];
++				effect.supported[index] = true;
++			}
++		}
++		*effect.found = String(", ").join(found);
++		print_line(vformat("FidelityFX %s providers: %s", effect.type == FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE ? "upscaler" : (effect.type == FFX_API_CREATE_CONTEXT_DESC_TYPE_FRAMEGENERATION ? "frame generation" : "swapchain"), found.is_empty() ? vformat("none (SDK result %d)", code) : *effect.found));
++		if (!effect.ids) {
++			continue;
++		}
++		for (int i = 0; i < 2; i++) {
++			if (!effect.supported[i]) {
++				effect.reasons[i] = code == FFX_API_RETURN_OK ? vformat("the SDK reports no FSR %s provider for this GPU", i == 0 ? "3.1" : "4") : vformat("the SDK version query failed (error %d)", code);
++			} else {
++				effect.reasons[i] = String();
++			}
++		}
++	}
++	// Frame generation additionally needs presentation and its queues.
++	for (int i = 0; i < 2; i++) {
++		if (!fg_supported[i]) {
++			continue;
++		}
++		if (!presentation_owner) {
++			fg_supported[i] = false;
++			fg_reason[i] = owner_reason.is_empty() ? String("presentation owner is not amd") : owner_reason;
++		} else if (!vk->queues_ready) {
++			fg_supported[i] = false;
++			fg_reason[i] = "the GPU cannot provide the four separate Vulkan queues frame generation needs";
++		}
++	}
++}
++
++void FidelityFX::shutdown_device() {
++	finish_context_job();
++	device_ready = false;
++}
++
++FfxApiResource FidelityFX::get_resource(RID p_texture, uint32_t p_state, uint32_t p_additional_usage) const {
++	RenderingDevice *rd = RenderingDevice::get_singleton();
++	const VkImage image = (VkImage)rd->get_driver_resource(RD::DRIVER_RESOURCE_TEXTURE, p_texture);
++	const RD::TextureFormat format = rd->texture_get_format(p_texture);
++	VkImageCreateInfo info = {};
++	info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
++	info.imageType = VK_IMAGE_TYPE_2D;
++	info.format = (VkFormat)rd->get_driver_resource(RD::DRIVER_RESOURCE_TEXTURE_DATA_FORMAT, p_texture);
++	info.extent = { format.width, format.height, 1 };
++	info.mipLevels = format.mipmaps;
++	info.arrayLayers = format.array_layers;
++	if (format.usage_bits & RD::TEXTURE_USAGE_STORAGE_BIT) {
++		info.usage |= VK_IMAGE_USAGE_STORAGE_BIT;
++	}
++	FfxApiResourceDescription description = ffxApiGetImageResourceDescriptionVK(image, info, p_additional_usage);
++	return ffxApiGetResourceVK((void *)image, description, p_state);
++}
++
++void FidelityFX::create_context_worker(void *p_userdata) {
++	ContextJob *job = static_cast<ContextJob *>(p_userdata);
++	FidelityFX *api = job->api;
++	Thread::set_name("FSR context preparation");
++	const uint64_t started = OS::get_singleton()->get_ticks_usec();
++	ffxCreateBackendVKDesc backend = {};
++	backend.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_BACKEND_VK;
++	backend.deviceContext = api->vk->device_context;
++	ffxOverrideVersion version = {};
++	version.header.type = FFX_API_DESC_TYPE_OVERRIDE_VERSION;
++	version.versionId = (job->fg ? api->fg_ids : api->sr_ids)[job->version - 3];
++	if (job->fg) {
++		ffxCreateContextDescFrameGenerationVersion api_version = {};
++		api_version.header = { FFX_API_CREATE_CONTEXT_DESC_TYPE_FRAMEGENERATION_VERSION, &version.header };
++		api_version.version = FFX_FRAMEGENERATION_VERSION;
++		ffxCreateContextDescFrameGenerationHudless hudless = {};
++		hudless.header = { FFX_API_CREATE_CONTEXT_DESC_TYPE_FRAMEGENERATION_HUDLESS, &api_version.header };
++		hudless.hudlessBackBufferFormat = job->hudless_format;
++		backend.header.pNext = &hudless.header;
++		ffxCreateContextDescFrameGeneration desc = {};
++		desc.header = { FFX_API_CREATE_CONTEXT_DESC_TYPE_FRAMEGENERATION, &backend.header };
++		desc.flags = FFX_FRAMEGENERATION_ENABLE_DEPTH_INVERTED;
++		desc.displaySize = { (uint32_t)job->target_size.x, (uint32_t)job->target_size.y };
++		desc.maxRenderSize = { (uint32_t)job->render_size.x, (uint32_t)job->render_size.y };
++		desc.backBufferFormat = job->back_buffer_format;
++		job->result = api->create(&job->context, &desc.header, nullptr);
++		api->fg_create_usec.set(OS::get_singleton()->get_ticks_usec() - started);
++		api->fg_context_creations.increment();
++	} else {
++		ffxCreateContextDescUpscaleVersion api_version = {};
++		api_version.header = { FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE_VERSION, &version.header };
++		api_version.version = FFX_UPSCALER_VERSION;
++		backend.header.pNext = &api_version.header;
++		ffxCreateContextDescUpscale desc = {};
++		desc.header = { FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE, &backend.header };
++		desc.flags = FFX_UPSCALE_ENABLE_HIGH_DYNAMIC_RANGE | FFX_UPSCALE_ENABLE_DEPTH_INVERTED | FFX_UPSCALE_ENABLE_AUTO_EXPOSURE;
++		desc.maxRenderSize = { (uint32_t)job->render_size.x, (uint32_t)job->render_size.y };
++		desc.maxUpscaleSize = { (uint32_t)job->target_size.x, (uint32_t)job->target_size.y };
++		job->result = api->create(&job->context, &desc.header, nullptr);
++		api->sr_create_usec.set(OS::get_singleton()->get_ticks_usec() - started);
++		api->sr_context_creations.increment();
++	}
++	api->initializing_effect.set(0);
++	job->done.set(1); // Publish the context/result only after creation is complete.
++}
++
++ffxContext FidelityFX::request_context(bool p_fg, int p_version, Size2i p_render, Size2i p_target, uint32_t p_hudless_format) {
++	if (context_job) {
++		if (!context_job->done.get()) {
++			return nullptr;
++		}
++		context_job->thread.wait_to_finish();
++		const bool matches = context_job->fg == p_fg && context_job->version == p_version &&
++				context_job->render_size == p_render && context_job->target_size == p_target && context_job->hudless_format == p_hudless_format &&
++				(!p_fg || context_job->back_buffer_format == swap_format);
++		if (matches) {
++			const bool ok = check(context_job->result, p_fg);
++			ffxContext result = ok ? context_job->context : nullptr;
++			if (!ok && context_job->context) {
++				destroy(&context_job->context, nullptr);
++			}
++			memdelete(context_job);
++			context_job = nullptr;
++			return result;
++		}
++		// An unused context has never been submitted to the GPU or configured
++		// on the swapchain. Discard stale size/version requests without a stall.
++		finish_context_job();
++	}
++	context_job = memnew(ContextJob);
++	context_job->api = this;
++	context_job->fg = p_fg;
++	context_job->version = p_version;
++	context_job->render_size = p_render;
++	context_job->target_size = p_target;
++	context_job->hudless_format = p_hudless_format;
++	context_job->back_buffer_format = swap_format;
++	initializing_effect.set(p_fg ? 2 : 1);
++	Thread::Settings settings;
++	settings.priority = Thread::PRIORITY_LOW;
++	context_job->thread.start(create_context_worker, context_job, settings);
++	return nullptr;
++}
++
++void FidelityFX::finish_context_job() {
++	if (!context_job) {
++		return;
++	}
++	if (context_job->thread.is_started()) {
++		context_job->thread.wait_to_finish();
++	}
++	if (context_job->context) {
++		destroy(&context_job->context, nullptr);
++	}
++	memdelete(context_job);
++	context_job = nullptr;
++	initializing_effect.set(0);
++}
++
++bool FidelityFX::check(ffxReturnCode_t p_code, bool p_fg) {
++	if (p_code == FFX_API_RETURN_OK) {
++		return true;
++	}
++	last_error.set(p_code);
++	(p_fg ? fg_failed : sr_failed).set(1);
++	WARN_PRINT(vformat("FidelityFX %s disabled after SDK error %d.", p_fg ? "frame generation" : "upscaling", p_code));
++	return false;
++}
++
++void FidelityFX::record_provider(ffxContext *p_context, bool p_fg) {
++	ffxQueryGetProviderVersion q = {};
++	q.header.type = FFX_API_QUERY_DESC_TYPE_GET_PROVIDER_VERSION;
++	if (query(p_context, &q.header) == FFX_API_RETURN_OK && q.versionName) {
++		MutexLock lock(status_mutex);
++		(p_fg ? fg_provider : sr_provider) = String::utf8(q.versionName);
++	}
++}
++
++void FidelityFX::disable_frame_generation() {
++	if (fg_context && fg_config.frameGenerationEnabled) {
++		fg_config.frameGenerationEnabled = false;
++		check(configure(&fg_context, &fg_config.header), true);
++	}
++	fg_active.set(0);
++	prepared = false;
++}
++
++void FidelityFX::wait_for_presents() {
++	if (!swap_context) {
++		return;
++	}
++	ffxDispatchDescFrameGenerationSwapChainWaitForPresentsVK wait = {};
++	wait.header.type = FFX_API_DISPATCH_DESC_TYPE_FGSWAPCHAIN_WAIT_FOR_PRESENTS_VK;
++	check(dispatch(&swap_context, &wait.header), true);
++}
++
++void FidelityFX::release_frame_generation() {
++	MutexLock lock(fg_mutex);
++	disable_frame_generation();
++	wait_for_presents();
++	if (fg_context) {
++		destroy(&fg_context, nullptr);
++		fg_context = nullptr;
++	}
++	active_fg_version = 0;
++}
++
++bool FidelityFX::ensure_frame_generation(Size2i p_render, Size2i p_target, uint32_t p_hudless_format) {
++	const int version = fg_version.get();
++	if (!swap_chain || fg_failed.get() || version < 3 || version > 4 || !fg_supported[version - 3]) {
++		return false;
++	}
++	if (swap_width != (uint32_t)p_target.x || swap_height != (uint32_t)p_target.y) {
++		return false;
++	}
++	// Reserve at least display resolution, so ordinary quality changes can
++	// reuse the same context, including switching upscaling off entirely.
++	p_render = p_render.max(p_target);
++	if (fg_context && (active_fg_version != version || fg_desc.displaySize.width != (uint32_t)p_target.x || fg_desc.displaySize.height != (uint32_t)p_target.y ||
++								fg_desc.maxRenderSize.width != (uint32_t)p_render.x || fg_desc.maxRenderSize.height != (uint32_t)p_render.y ||
++								fg_desc.backBufferFormat != swap_format)) {
++		disable_frame_generation();
++		wait_for_presents();
++		destroy(&fg_context, nullptr);
++		fg_context = nullptr;
++	}
++	if (fg_context) {
++		return true;
++	}
++	// The worker owns a separate, unconfigured context. Present cannot touch
++	// it until this render-thread handoff under fg_mutex.
++	fg_context = request_context(true, version, p_render, p_target, p_hudless_format);
++	if (!fg_context) {
++		return false;
++	}
++	fg_desc.displaySize = { (uint32_t)p_target.x, (uint32_t)p_target.y };
++	fg_desc.maxRenderSize = { (uint32_t)p_render.x, (uint32_t)p_render.y };
++	fg_desc.backBufferFormat = swap_format;
++	active_fg_version = version;
++	record_provider(&fg_context, true);
++	fg_config = {};
++	fg_config.header.type = FFX_API_CONFIGURE_DESC_TYPE_FRAMEGENERATION;
++	fg_config.swapChain = (void *)(VkSwapchainKHR)swap_chain;
++	fg_config.frameGenerationCallback = generate;
++	fg_config.frameGenerationCallbackUserContext = this;
++	// Interpolation stays on the game queue with the single HUD-less copy.
++	fg_config.allowAsyncWorkloads = false;
++	fg_config.generationRect = { 0, 0, p_target.x, p_target.y };
++	if (debug_frames) {
++		fg_config.flags = FFX_FRAMEGENERATION_FLAG_DRAW_DEBUG_TEAR_LINES | FFX_FRAMEGENERATION_FLAG_DRAW_DEBUG_RESET_INDICATORS;
++	}
++	return true;
++}
++
++ffxReturnCode_t FidelityFX::generate(ffxDispatchDescFrameGeneration *p_desc, void *p_user) {
++	FidelityFX *self = static_cast<FidelityFX *>(p_user);
++	// The replacement present holds fg_mutex and calls this on the same thread.
++	const ffxReturnCode_t code = self->dispatch(&self->fg_context, &p_desc->header);
++	if (self->check(code, true)) {
++		self->fg_dispatches.increment();
++		self->generated_frames.add(p_desc->numGeneratedFrames);
++	}
++	return code;
++}
++
++#endif // FSR_SDK_ENABLED
+diff --git a/drivers/fsr_sdk/fsr_sdk.h b/drivers/fsr_sdk/fsr_sdk.h
+new file mode 100755
+index 0000000..78233a5
+--- /dev/null
++++ b/drivers/fsr_sdk/fsr_sdk.h
+@@ -0,0 +1,181 @@
++/**************************************************************************/
++/*  fsr_sdk.h                                                             */
++/**************************************************************************/
++/*                         This file is part of:                          */
++/*                             GODOT ENGINE                               */
++/*                        https://godotengine.org                         */
++/**************************************************************************/
++/* Copyright (c) 2014-present Godot Engine contributors (see AUTHORS.md). */
++/* Copyright (c) 2007-2014 Juan Linietsky, Ariel Manzur.                  */
++/*                                                                        */
++/* Permission is hereby granted, free of charge, to any person obtaining  */
++/* a copy of this software and associated documentation files (the        */
++/* "Software"), to deal in the Software without restriction, including    */
++/* without limitation the rights to use, copy, modify, merge, publish,    */
++/* distribute, sublicense, and/or sell copies of the Software, and to     */
++/* permit persons to whom the Software is furnished to do so, subject to  */
++/* the following conditions:                                              */
++/*                                                                        */
++/* The above copyright notice and this permission notice shall be         */
++/* included in all copies or substantial portions of the Software.        */
++/*                                                                        */
++/* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,        */
++/* EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF     */
++/* MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. */
++/* IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY   */
++/* CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,   */
++/* TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE      */
++/* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                 */
++/**************************************************************************/
++
++#pragma once
++
++// AMD FidelityFX (FSR SDK) on the Vulkan driver: FSR 3.1 / FSR 4 upscaling
++// and frame generation through the SDK's replacement swapchain.
++//
++// Upscaling works whenever the pinned runtime DLLs load and the SDK reports a
++// provider for the GPU. Frame generation also needs this driver to own
++// presentation for the run (startup owner "amd"), because the swapchain and
++// four separate queues must be set up when the device is created.
++
++#include "core/object/class_db.h"
++#include "core/object/object.h"
++#include "core/os/mutex.h"
++#include "core/os/thread.h"
++#include "core/templates/rid.h"
++#include "core/templates/safe_refcount.h"
++
++#ifdef FSR_SDK_ENABLED
++#include "thirdparty/amd-fsr-sdk/api/include/ffx_api.h"
++#include "thirdparty/amd-fsr-sdk/framegeneration/include/ffx_framegeneration.h"
++#include "thirdparty/amd-fsr-sdk/upscalers/include/ffx_upscale.h"
++#endif
++
++class FidelityFX : public Object {
++	GDCLASS(FidelityFX, Object);
++
++	static FidelityFX *singleton;
++	static void _bind_methods();
++
++	mutable Mutex status_mutex;
++
++public:
++	SafeNumeric<uint32_t> sr_version{ 3 };
++	SafeNumeric<uint32_t> fg_version{ 0 };
++
++	FidelityFX();
++	~FidelityFX();
++	static FidelityFX *get_singleton() { return singleton; }
++	static void register_singleton();
++
++	Dictionary get_status() const;
++	void set_upscaler_version(int p_version);
++	void set_frame_generation_version(int p_version);
++	bool sr_available() const;
++	int get_upscaler_version() const { return sr_version.get(); }
++
++	// Startup, before the display server creates the Vulkan context.
++	void select_presentation_owner();
++
++#ifdef FSR_SDK_ENABLED
++	struct VulkanState;
++	VulkanState *vk = nullptr; // Vulkan handles; defined in fsr_sdk.cpp.
++
++	PfnFfxCreateContext create = nullptr;
++	PfnFfxDestroyContext destroy = nullptr;
++	PfnFfxQuery query = nullptr;
++	PfnFfxDispatch dispatch = nullptr;
++	PfnFfxConfigure configure = nullptr;
++
++	bool runtime_attempted = false;
++	bool runtime_loaded = false;
++	String runtime_reason;
++	bool presentation_owner = false;
++	bool device_ready = false;
++	String owner_reason;
++
++	uint64_t sr_ids[2]{};
++	uint64_t fg_ids[2]{};
++	bool sr_supported[2]{};
++	bool fg_supported[2]{};
++	String sr_reason[2];
++	String fg_reason[2];
++	String sr_versions_found;
++	String fg_versions_found;
++	String swapchain_versions_found;
++
++	SafeNumeric<uint64_t> sr_evaluations{ 0 };
++	SafeNumeric<uint64_t> fg_dispatches{ 0 };
++	SafeNumeric<uint64_t> generated_frames{ 0 };
++	SafeNumeric<uint64_t> game_presents{ 0 };
++	SafeNumeric<uint64_t> presented_frames{ 0 };
++	SafeNumeric<uint32_t> present_count_available{ 0 };
++	uint64_t last_present_count = 0;
++	SafeNumeric<uint32_t> sr_failed{ 0 };
++	SafeNumeric<uint32_t> fg_failed{ 0 };
++	SafeNumeric<uint32_t> last_error{ 0 };
++	SafeNumeric<uint32_t> fg_active{ 0 };
++	SafeNumeric<uint32_t> temporal_shaders_initializing{ 0 };
++	SafeNumeric<uint64_t> swapchain_creations{ 0 };
++
++	Mutex fg_mutex;
++	ffxContext fg_context = nullptr;
++	ffxContext swap_context = nullptr;
++	uint64_t swap_chain = 0; // VkSwapchainKHR of the frame generation swapchain, or 0.
++	uint32_t swap_format = 0; // FfxApiSurfaceFormat of the backbuffer.
++	uint32_t swap_width = 0;
++	uint32_t swap_height = 0;
++	String swap_provider;
++	String swap_reason;
++	uint64_t frame_id = 0;
++	bool prepared = false;
++	int active_fg_version = 0;
++	String sr_provider;
++	String fg_provider;
++	ffxCreateContextDescFrameGeneration fg_desc{};
++	ffxConfigureDescFrameGeneration fg_config{};
++	bool debug_frames = false;
++
++	// Only the worker touches a pending context. Rendering adopts it after
++	// completion; disabling/resizing never waits for first-use compilation.
++	struct ContextJob {
++		FidelityFX *api = nullptr;
++		Thread thread;
++		SafeNumeric<uint32_t> done{ 0 };
++		bool fg = false;
++		int version = 0;
++		Size2i render_size, target_size;
++		uint32_t hudless_format = 0;
++		uint32_t back_buffer_format = 0;
++		ffxContext context = nullptr;
++		ffxReturnCode_t result = FFX_API_RETURN_OK;
++	};
++	ContextJob *context_job = nullptr; // Render thread owns the bounded, single slot.
++	SafeNumeric<uint32_t> initializing_effect{ 0 };
++	SafeNumeric<uint64_t> sr_create_usec{ 0 }, fg_create_usec{ 0 };
++	SafeNumeric<uint64_t> sr_max_dispatch_usec{ 0 }, prepare_max_usec{ 0 };
++	SafeNumeric<uint64_t> sr_context_creations{ 0 }, fg_context_creations{ 0 };
++	static void create_context_worker(void *p_userdata);
++
++	bool load_runtime();
++	void query_versions();
++	// Without presentation ownership, adopt the device RenderingDevice created.
++	void initialize_from_rendering_device();
++	void shutdown_device();
++
++	ffxContext request_context(bool p_fg, int p_version, Size2i p_render, Size2i p_target, uint32_t p_hudless_format = 0);
++	void finish_context_job(); // Only shutdown may wait for an unfinished job.
++
++	// Native SDK description of an RD texture. p_state is an FfxApiResourceState
++	// matching the layout the render graph put the texture in.
++	FfxApiResource get_resource(RID p_texture, uint32_t p_state, uint32_t p_additional_usage = 0) const;
++
++	void release_frame_generation();
++	void wait_for_presents();
++	void disable_frame_generation(); // Caller holds fg_mutex.
++	bool ensure_frame_generation(Size2i p_render, Size2i p_target, uint32_t p_hudless_format);
++	bool check(ffxReturnCode_t p_code, bool p_fg = false);
++	void record_provider(ffxContext *p_context, bool p_fg);
++	static ffxReturnCode_t generate(ffxDispatchDescFrameGeneration *p_desc, void *p_user);
++#endif
++};
+diff --git a/main/main.cpp b/main/main.cpp
+index d51a003..6c8ea0a 100644
+--- a/main/main.cpp
++++ b/main/main.cpp
+@@ -157,6 +157,7 @@
+ #endif // MODULE_GDSCRIPT_ENABLED
+ 
+ #include "core/io/config_file.h"
++#include "drivers/fsr_sdk/fsr_sdk.h"
+ #include "drivers/streamline/streamline.h"
+ #ifdef VULKAN_ENABLED
+ #include "drivers/vulkan/graphics_sdk_vulkan.h"
+@@ -203,6 +204,7 @@ static PhysicsServer3D *physics_server_3d = nullptr;
+ static XRServer *xr_server = nullptr;
+ #endif // XR_DISABLED
+ static Streamline *streamline = nullptr;
++static FidelityFX *fidelityfx = nullptr;
+ // We error out if setup2() doesn't turn this true
+ static bool _start_success = false;
+ 
+@@ -1091,6 +1093,8 @@ Error Main::setup(const char *execpath, int argc, char *argv[], bool p_second_ph
+ 	/* create streamline and register singleton */
+ 	streamline = memnew(Streamline);
+ 	Streamline::register_singleton();
++	fidelityfx = memnew(FidelityFX);
++	FidelityFX::register_singleton();
+ 
+ 	/* argument parsing and main creation */
+ 	List<String> args;
+@@ -3014,6 +3018,10 @@ error:
+ 		memdelete(streamline);
+ 		streamline = nullptr;
+ 	}
++	if (fidelityfx) {
++		memdelete(fidelityfx);
++		fidelityfx = nullptr;
++	}
+ 
+ 	if (performance) {
+ 		memdelete(performance);
+@@ -3415,6 +3423,10 @@ Error Main::setup2(bool p_show_boot_logo) {
+ 		accessibility_server->set_mode(accessibility_mode);
+ 
+ 		String rendering_driver = OS::get_singleton()->get_current_rendering_driver_name();
++		if (fidelityfx) {
++			// Takes presentation only when the requested owner is "amd".
++			fidelityfx->select_presentation_owner();
++		}
+ 		display_server = DisplayServer::create(display_driver_idx, rendering_driver, window_mode, window_vsync_mode, window_flags, window_position, window_size, init_screen, context, init_embed_parent_window_id, err);
+ 		if (err != OK || display_server == nullptr) {
+ 			String last_name = DisplayServer::get_create_function_name(display_driver_idx);
+@@ -5398,11 +5410,15 @@ void Main::cleanup(bool p_force) {
+ 
+ 	finalize_display();
+ 
+-	// The rendering device shuts Streamline down when it is destroyed.
++	// The rendering device shuts Streamline and FidelityFX down when it is destroyed.
+ 	if (streamline) {
+ 		memdelete(streamline);
+ 		streamline = nullptr;
+ 	}
++	if (fidelityfx) {
++		memdelete(fidelityfx);
++		fidelityfx = nullptr;
++	}
+ 
+ 	if (input) {
+ 		memdelete(input);
+diff --git a/servers/rendering/renderer_rd/effects/fsr_sdk.cpp b/servers/rendering/renderer_rd/effects/fsr_sdk.cpp
+new file mode 100755
+index 0000000..b68217e
+--- /dev/null
++++ b/servers/rendering/renderer_rd/effects/fsr_sdk.cpp
+@@ -0,0 +1,309 @@
++/**************************************************************************/
++/*  fsr_sdk.cpp                                                           */
++/**************************************************************************/
++/*                         This file is part of:                          */
++/*                             GODOT ENGINE                               */
++/*                        https://godotengine.org                         */
++/**************************************************************************/
++/* Copyright (c) 2014-present Godot Engine contributors (see AUTHORS.md). */
++/* Copyright (c) 2007-2014 Juan Linietsky, Ariel Manzur.                  */
++/*                                                                        */
++/* Permission is hereby granted, free of charge, to any person obtaining  */
++/* a copy of this software and associated documentation files (the        */
++/* "Software"), to deal in the Software without restriction, including    */
++/* without limitation the rights to use, copy, modify, merge, publish,    */
++/* distribute, sublicense, and/or sell copies of the Software, and to     */
++/* permit persons to whom the Software is furnished to do so, subject to  */
++/* the following conditions:                                              */
++/*                                                                        */
++/* The above copyright notice and this permission notice shall be         */
++/* included in all copies or substantial portions of the Software.        */
++/*                                                                        */
++/* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,        */
++/* EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF     */
++/* MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. */
++/* IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY   */
++/* CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,   */
++/* TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE      */
++/* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                 */
++/**************************************************************************/
++
++#include "fsr_sdk.h"
++
++#include "../uniform_set_cache_rd.h"
++#include "core/os/os.h"
++#include "drivers/fsr_sdk/fsr_sdk.h"
++
++using namespace RendererRD;
++
++#ifdef FSR_SDK_ENABLED
++
++namespace RendererRD {
++
++class FSRSDKContextVulkan : public FSRSDKContext {
++public:
++	ffxContext sr = nullptr;
++	int version = 3;
++	Size2i target_size;
++	RID reactive;
++	RID hudless;
++	bool first = true;
++	bool evaluated = false;
++
++	~FSRSDKContextVulkan() {
++		FidelityFX *api = FidelityFX::get_singleton();
++		RD::get_singleton()->_flush_and_stall_for_all_frames();
++		api->release_frame_generation();
++		if (sr) {
++			api->destroy(&sr, nullptr);
++		}
++		if (reactive.is_valid()) {
++			RD::get_singleton()->free_rid(reactive);
++		}
++		if (hudless.is_valid()) {
++			RD::get_singleton()->free_rid(hudless);
++		}
++	}
++};
++
++} // namespace RendererRD
++
++// Read-only inputs are handed over by the render graph in
++// SHADER_READ_ONLY_OPTIMAL (SDK state COMPUTE_READ); written images in GENERAL
++// (SDK state UNORDERED_ACCESS). The SDK returns each image to that state.
++static void add_callback_resource(LocalVector<RD::CallbackResource> &r_resources, RID p_texture, bool p_write) {
++	RD::CallbackResource resource;
++	resource.rid = p_texture;
++	resource.usage = p_write ? RD::CALLBACK_RESOURCE_USAGE_STORAGE_IMAGE_READ_WRITE : RD::CALLBACK_RESOURCE_USAGE_TEXTURE_SAMPLE;
++	r_resources.push_back(resource);
++}
++
++static FfxApiResource input_resource(RID p_texture, uint32_t p_usage = 0) {
++	return FidelityFX::get_singleton()->get_resource(p_texture, FFX_API_RESOURCE_STATE_COMPUTE_READ, p_usage);
++}
++
++FSRSDKEffect::FSRSDKEffect() {
++	Vector<String> modes;
++	modes.push_back("\n");
++	shader.initialize(modes, "");
++	shader_version = shader.version_create();
++	pipeline = RD::get_singleton()->compute_pipeline_create(shader.version_get_shader(shader_version, 0));
++	FidelityFX::get_singleton()->initialize_from_rendering_device();
++}
++
++FSRSDKEffect::~FSRSDKEffect() {
++	shader.version_free(shader_version);
++}
++
++bool FSRSDKEffect::is_version_current(FSRSDKContext *p_context, bool p_upscaling) const {
++	const int version = p_upscaling ? FidelityFX::get_singleton()->get_upscaler_version() : 0;
++	return p_context && static_cast<FSRSDKContextVulkan *>(p_context)->version == version;
++}
++
++FSRSDKContext *FSRSDKEffect::create_context(Size2i p_internal, Size2i p_target, bool p_upscaling) {
++	FidelityFX *api = FidelityFX::get_singleton();
++	const int version = p_upscaling ? api->get_upscaler_version() : 0;
++	ffxContext sr = nullptr;
++	if (p_upscaling) {
++		if (!api->sr_available()) {
++			return nullptr;
++		}
++		sr = api->request_context(false, version, p_internal, p_target);
++		if (!sr) {
++			return nullptr;
++		}
++		api->record_provider(&sr, false);
++	}
++	FSRSDKContextVulkan *ctx = memnew(FSRSDKContextVulkan);
++	ctx->sr = sr;
++	ctx->version = version;
++	ctx->target_size = p_target;
++	RD::TextureFormat format;
++	format.format = RD::DATA_FORMAT_R8_UNORM;
++	format.width = p_internal.x;
++	format.height = p_internal.y;
++	format.usage_bits = RD::TEXTURE_USAGE_STORAGE_BIT | RD::TEXTURE_USAGE_SAMPLING_BIT;
++	ctx->reactive = RD::get_singleton()->texture_create(format, RD::TextureView());
++	return ctx;
++}
++
++void FSRSDKEffect::process(const FSRSDKContext::Parameters &p_params) {
++	FSRSDKContextVulkan *ctx = static_cast<FSRSDKContextVulkan *>(p_params.context);
++	FidelityFX *api = FidelityFX::get_singleton();
++	if (!ctx || (ctx->sr && !api->sr_available())) {
++		return;
++	}
++	const uint64_t started = OS::get_singleton()->get_ticks_usec();
++	ctx->last_parameters = p_params;
++	ctx->evaluated = false;
++	RD *rd = RD::get_singleton();
++	UniformSetCacheRD *cache = UniformSetCacheRD::get_singleton();
++	RID shader_rid = shader.version_get_shader(shader_version, 0);
++	RD::ComputeListID list = rd->compute_list_begin();
++	rd->compute_list_bind_compute_pipeline(list, pipeline);
++	RD::Uniform uniforms[] = {
++		RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 0, p_params.velocity),
++		RD::Uniform(RD::UNIFORM_TYPE_TEXTURE, 0, p_params.depth),
++		RD::Uniform(RD::UNIFORM_TYPE_TEXTURE, 0, p_params.color),
++		RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 0, ctx->reactive),
++	};
++	for (int i = 0; i < 4; i++) {
++		rd->compute_list_bind_uniform_set(list, cache->get_cache(shader_rid, i, uniforms[i]), i);
++	}
++	float constants[20] = {};
++	constants[0] = p_params.internal_size.x;
++	constants[1] = p_params.internal_size.y;
++	memcpy(constants + 4, &p_params.reprojection.columns[0].x, sizeof(float) * 16);
++	rd->compute_list_set_push_constant(list, constants, sizeof(constants));
++	rd->compute_list_dispatch_threads(list, p_params.internal_size.x, p_params.internal_size.y, 1);
++	rd->compute_list_end();
++	api->prepare_max_usec.set(MAX(api->prepare_max_usec.get(), OS::get_singleton()->get_ticks_usec() - started));
++	if (!ctx->sr) {
++		ctx->evaluated = true;
++		return;
++	}
++	LocalVector<RD::CallbackResource> resources;
++	add_callback_resource(resources, p_params.color, false);
++	add_callback_resource(resources, p_params.depth, false);
++	add_callback_resource(resources, p_params.velocity, false);
++	add_callback_resource(resources, ctx->reactive, false);
++	add_callback_resource(resources, p_params.output, true);
++	rd->driver_callback_add(upscale_callback, ctx, VectorView<RD::CallbackResource>(resources.ptr(), resources.size()));
++}
++
++void FSRSDKEffect::upscale_callback(RenderingDeviceDriver *p_driver, RenderingDeviceDriver::CommandBufferID p_commands, void *p_userdata) {
++	FSRSDKContextVulkan *ctx = static_cast<FSRSDKContextVulkan *>(p_userdata);
++	FidelityFX *api = FidelityFX::get_singleton();
++	const FSRSDKContext::Parameters &p = ctx->last_parameters;
++	ffxDispatchDescUpscale d = {};
++	d.header.type = FFX_API_DISPATCH_DESC_TYPE_UPSCALE;
++	d.commandList = p_driver->command_buffer_get_native_handle(p_commands);
++	if (!d.commandList) {
++		return;
++	}
++	d.color = input_resource(p.color);
++	d.depth = input_resource(p.depth, FFX_API_RESOURCE_USAGE_DEPTHTARGET);
++	d.motionVectors = input_resource(p.velocity);
++	d.reactive = input_resource(ctx->reactive);
++	d.output = api->get_resource(p.output, FFX_API_RESOURCE_STATE_UNORDERED_ACCESS);
++	d.jitterOffset = { (float)p.jitter.x, (float)p.jitter.y };
++	d.motionVectorScale = { (float)p.internal_size.x, (float)p.internal_size.y };
++	d.renderSize = { (uint32_t)p.internal_size.x, (uint32_t)p.internal_size.y };
++	d.upscaleSize = { (uint32_t)ctx->target_size.x, (uint32_t)ctx->target_size.y };
++	d.frameTimeDelta = MAX(p.delta_time * 1000.0f, 0.1f);
++	d.preExposure = 1.0f;
++	d.reset = ctx->first || p.reset_accumulation;
++	d.cameraNear = p.z_near;
++	d.cameraFar = p.z_far;
++	d.cameraFovAngleVertical = Math::deg_to_rad(p.fovy);
++	d.viewSpaceToMetersFactor = 1.0f;
++	d.enableSharpening = true;
++	d.sharpness = p.sharpness;
++	const uint64_t started = OS::get_singleton()->get_ticks_usec();
++	const bool ok = api->check(api->dispatch(&ctx->sr, &d.header));
++	api->sr_max_dispatch_usec.set(MAX(api->sr_max_dispatch_usec.get(), OS::get_singleton()->get_ticks_usec() - started));
++	if (ok) {
++		ctx->evaluated = true;
++		api->sr_evaluations.increment();
++		ctx->first = false;
++	}
++}
++
++void FSRSDKEffect::prepare_frame_generation(FSRSDKContext *p_context, RID p_color) {
++	FSRSDKContextVulkan *ctx = static_cast<FSRSDKContextVulkan *>(p_context);
++	if (!ctx || !ctx->last_parameters.frame_generation) {
++		return;
++	}
++	RD *rd = RD::get_singleton();
++	RD::TextureFormat format = rd->texture_get_format(p_color);
++	if (ctx->hudless.is_valid()) {
++		const RD::TextureFormat current = rd->texture_get_format(ctx->hudless);
++		if (current.width != format.width || current.height != format.height || current.format != format.format) {
++			rd->free_rid(ctx->hudless);
++			ctx->hudless = RID();
++		}
++	}
++	if (!ctx->hudless.is_valid()) {
++		format.usage_bits = RD::TEXTURE_USAGE_SAMPLING_BIT | RD::TEXTURE_USAGE_CAN_COPY_TO_BIT;
++		format.shareable_formats.clear();
++		ctx->hudless = rd->texture_create(format, RD::TextureView());
++	}
++	// HUD-less colour: the tonemapped frame before the 2D interface is drawn.
++	rd->texture_copy(p_color, ctx->hudless, Vector3(), Vector3(), Vector3(format.width, format.height, 1), 0, 0, 0, 0);
++	LocalVector<RD::CallbackResource> resources;
++	add_callback_resource(resources, ctx->hudless, false);
++	add_callback_resource(resources, ctx->last_parameters.depth, false);
++	add_callback_resource(resources, ctx->last_parameters.velocity, false);
++	rd->driver_callback_add(frame_generation_callback, ctx, VectorView<RD::CallbackResource>(resources.ptr(), resources.size()));
++}
++
++void FSRSDKEffect::frame_generation_callback(RenderingDeviceDriver *p_driver, RenderingDeviceDriver::CommandBufferID p_commands, void *p_userdata) {
++	FSRSDKContextVulkan *ctx = static_cast<FSRSDKContextVulkan *>(p_userdata);
++	FidelityFX *api = FidelityFX::get_singleton();
++	if (!ctx->evaluated) {
++		return;
++	}
++	MutexLock lock(api->fg_mutex);
++	// The interpolation reads the HUD-less copy at present time, after this
++	// frame's commands; the render graph leaves it in SHADER_READ_ONLY_OPTIMAL.
++	const FfxApiResource hudless = input_resource(ctx->hudless);
++	if (!api->ensure_frame_generation(ctx->last_parameters.internal_size, ctx->target_size, hudless.description.format)) {
++		return;
++	}
++	const FSRSDKContext::Parameters &p = ctx->last_parameters;
++	// Required order: Configure -> PrepareV2 -> dispatch from the replacement present.
++	api->fg_config.frameGenerationEnabled = true;
++	api->fg_config.frameID = api->frame_id;
++	api->fg_config.HUDLessColor = hudless;
++	if (!api->check(api->configure(&api->fg_context, &api->fg_config.header), true)) {
++		return;
++	}
++	ffxDispatchDescFrameGenerationPrepareV2 d = {};
++	d.header.type = FFX_API_DISPATCH_DESC_TYPE_FRAMEGENERATION_PREPARE_V2;
++	d.commandList = p_driver->command_buffer_get_native_handle(p_commands);
++	if (!d.commandList) {
++		return;
++	}
++	d.depth = input_resource(p.depth, FFX_API_RESOURCE_USAGE_DEPTHTARGET);
++	d.motionVectors = input_resource(p.velocity);
++	d.frameID = api->frame_id;
++	d.flags = api->fg_config.flags;
++	d.jitterOffset = { (float)p.jitter.x, (float)p.jitter.y };
++	d.motionVectorScale = { (float)p.internal_size.x, (float)p.internal_size.y };
++	d.renderSize = { (uint32_t)p.internal_size.x, (uint32_t)p.internal_size.y };
++	d.frameTimeDelta = MAX(p.delta_time * 1000.0f, 0.1f);
++	d.reset = p.reset_accumulation || !api->fg_active.get();
++	d.cameraNear = p.z_near;
++	d.cameraFar = p.z_far;
++	d.cameraFovAngleVertical = Math::deg_to_rad(p.fovy);
++	d.viewSpaceToMetersFactor = 1.0f;
++	const Vector3 pos = p.cam_transform.origin;
++	const Vector3 up = p.cam_transform.basis.get_column(1);
++	const Vector3 right = p.cam_transform.basis.get_column(0);
++	const Vector3 forward = -p.cam_transform.basis.get_column(2);
++	for (int i = 0; i < 3; i++) {
++		d.cameraPosition[i] = pos[i];
++		d.cameraUp[i] = up[i];
++		d.cameraRight[i] = right[i];
++		d.cameraForward[i] = forward[i];
++	}
++	if (api->check(api->dispatch(&api->fg_context, &d.header), true)) {
++		api->prepared = true;
++		api->fg_active.set(1);
++	}
++}
++
++#else
++
++FSRSDKEffect::FSRSDKEffect() {}
++FSRSDKEffect::~FSRSDKEffect() {}
++FSRSDKContext *FSRSDKEffect::create_context(Size2i, Size2i, bool) {
++	return nullptr;
++}
++bool FSRSDKEffect::is_version_current(FSRSDKContext *, bool) const {
++	return false;
++}
++void FSRSDKEffect::process(const FSRSDKContext::Parameters &) {}
++void FSRSDKEffect::prepare_frame_generation(FSRSDKContext *, RID) {}
++
++#endif
+diff --git a/servers/rendering/renderer_rd/effects/fsr_sdk.h b/servers/rendering/renderer_rd/effects/fsr_sdk.h
+new file mode 100755
+index 0000000..4dd863a
+--- /dev/null
++++ b/servers/rendering/renderer_rd/effects/fsr_sdk.h
+@@ -0,0 +1,73 @@
++/**************************************************************************/
++/*  fsr_sdk.h                                                             */
++/**************************************************************************/
++/*                         This file is part of:                          */
++/*                             GODOT ENGINE                               */
++/*                        https://godotengine.org                         */
++/**************************************************************************/
++/* Copyright (c) 2014-present Godot Engine contributors (see AUTHORS.md). */
++/* Copyright (c) 2007-2014 Juan Linietsky, Ariel Manzur.                  */
++/*                                                                        */
++/* Permission is hereby granted, free of charge, to any person obtaining  */
++/* a copy of this software and associated documentation files (the        */
++/* "Software"), to deal in the Software without restriction, including    */
++/* without limitation the rights to use, copy, modify, merge, publish,    */
++/* distribute, sublicense, and/or sell copies of the Software, and to     */
++/* permit persons to whom the Software is furnished to do so, subject to  */
++/* the following conditions:                                              */
++/*                                                                        */
++/* The above copyright notice and this permission notice shall be         */
++/* included in all copies or substantial portions of the Software.        */
++/*                                                                        */
++/* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,        */
++/* EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF     */
++/* MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. */
++/* IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY   */
++/* CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,   */
++/* TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE      */
++/* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                 */
++/**************************************************************************/
++
++#pragma once
++
++#include "core/math/projection.h"
++#include "core/math/transform_3d.h"
++#include "servers/rendering/renderer_rd/shaders/effects/fsr_sdk_prepare.glsl.gen.h"
++#include "servers/rendering/rendering_device.h"
++
++namespace RendererRD {
++
++// Temporal inputs for the AMD FSR SDK, independent of other upscalers.
++class FSRSDKContext {
++public:
++	struct Parameters {
++		FSRSDKContext *context = nullptr;
++		Size2i internal_size;
++		RID color, depth, velocity, output;
++		float z_near = 0.1f, z_far = 1000.0f, fovy = 70.0f;
++		Vector2 jitter;
++		float delta_time = 0.0f, sharpness = 0.0f;
++		bool reset_accumulation = false, frame_generation = false;
++		Projection reprojection;
++		Transform3D cam_transform;
++	} last_parameters;
++	virtual ~FSRSDKContext() {}
++};
++
++class FSRSDKEffect {
++	FsrSdkPrepareShaderRD shader;
++	RID shader_version;
++	RID pipeline;
++	static void upscale_callback(RenderingDeviceDriver *p_driver, RenderingDeviceDriver::CommandBufferID p_commands, void *p_userdata);
++	static void frame_generation_callback(RenderingDeviceDriver *p_driver, RenderingDeviceDriver::CommandBufferID p_commands, void *p_userdata);
++
++public:
++	FSRSDKEffect();
++	~FSRSDKEffect();
++	FSRSDKContext *create_context(Size2i p_internal, Size2i p_target, bool p_upscaling);
++	bool is_version_current(FSRSDKContext *p_context, bool p_upscaling) const;
++	void process(const FSRSDKContext::Parameters &p_params);
++	void prepare_frame_generation(FSRSDKContext *p_context, RID p_color);
++};
++
++} // namespace RendererRD
+diff --git a/servers/rendering/renderer_rd/forward_clustered/render_forward_clustered.cpp b/servers/rendering/renderer_rd/forward_clustered/render_forward_clustered.cpp
+index 6e782de..a6ba1c9 100644
+--- a/servers/rendering/renderer_rd/forward_clustered/render_forward_clustered.cpp
++++ b/servers/rendering/renderer_rd/forward_clustered/render_forward_clustered.cpp
+@@ -29,6 +29,7 @@
+ /**************************************************************************/
+ 
+ #include "render_forward_clustered.h"
++#include "drivers/fsr_sdk/fsr_sdk.h"
+ 
+ #include "core/config/project_settings.h"
+ #include "servers/rendering/renderer_rd/environment/fog.h"
+@@ -90,6 +91,17 @@ void RenderForwardClustered::RenderBufferDataForwardClustered::ensure_dlss(Rende
+ 	}
+ }
+ 
++void RenderForwardClustered::RenderBufferDataForwardClustered::ensure_fsr_sdk(RendererRD::FSRSDKEffect *p_effect) {
++	const bool upscaling = render_buffers->get_scaling_3d_mode() == RSE::VIEWPORT_SCALING_3D_MODE_FSR_SDK;
++	if (fsr_sdk_context && !p_effect->is_version_current(fsr_sdk_context, upscaling)) {
++		memdelete(fsr_sdk_context);
++		fsr_sdk_context = nullptr;
++	}
++	if (!fsr_sdk_context) {
++		fsr_sdk_context = p_effect->create_context(render_buffers->get_internal_size(), render_buffers->get_target_size(), upscaling);
++	}
++}
++
+ void RenderForwardClustered::RenderBufferDataForwardClustered::ensure_fsr2(RendererRD::FSR2Effect *p_effect) {
+ 	if (fsr2_context == nullptr) {
+ 		fsr2_context = p_effect->create_context(render_buffers->get_internal_size(), render_buffers->get_target_size());
+@@ -122,6 +134,10 @@ void RenderForwardClustered::RenderBufferDataForwardClustered::free_data() {
+ 		memdelete(dlss_context);
+ 		dlss_context = nullptr;
+ 	}
++	if (fsr_sdk_context) {
++		memdelete(fsr_sdk_context);
++		fsr_sdk_context = nullptr;
++	}
+ 	// JIC, should already have been cleared
+ 	if (render_buffers) {
+ 		render_buffers->clear_context(RB_SCOPE_FORWARD_CLUSTERED);
+@@ -1798,6 +1814,7 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
+ 		SCALE_FSR2,
+ 		SCALE_MFX,
+ 		SCALE_DLSS,
++		SCALE_FSR_SDK,
+ 	} scale_type = SCALE_NONE;
+ 
+ 	switch (rb->get_scaling_3d_mode()) {
+@@ -1807,6 +1824,9 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
+ 		case RSE::VIEWPORT_SCALING_3D_MODE_DLSS:
+ 			scale_type = SCALE_DLSS;
+ 			break;
++		case RSE::VIEWPORT_SCALING_3D_MODE_FSR_SDK:
++			scale_type = SCALE_FSR_SDK;
++			break;
+ 		case RSE::VIEWPORT_SCALING_3D_MODE_METALFX_TEMPORAL:
+ #ifdef METAL_MFXTEMPORAL_ENABLED
+ 			scale_type = SCALE_MFX;
+@@ -1818,17 +1838,25 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
+ 			break;
+ 	}
+ 
++	// Frame generation belongs to DLSS-G with SCALE_DLSS (see the DLSS effect)
++	// and otherwise to FidelityFX when it owns presentation for this run.
++	bool using_fsr_frame_generation = false;
++#ifdef FSR_SDK_ENABLED
++	using_fsr_frame_generation = !is_reflection_probe && rb->get_frame_generation() && rb->get_view_count() == 1 && scale_type != SCALE_DLSS &&
++			FidelityFX::get_singleton() && FidelityFX::get_singleton()->presentation_owner;
++#endif
+ 	bool temporal_preparing = false;
+ 	// Cancellation does not cancel shared compiler jobs. Keep material
+ 	// validation on the base group until the optional group actually finishes.
+ 	if (scene_shader.defer_advanced_compilation.is_set() && scene_shader.shader.is_group_compilation_ready(SceneShaderForwardClustered::SHADER_GROUP_ADVANCED)) {
+ 		scene_shader.defer_advanced_compilation.clear();
+ 	}
+-	// DLSS, FSR 2, MetalFX and TAA need motion vectors. A compositor effect's
++	// DLSS, FSR SDK, FSR 2, MetalFX, TAA and FSR frame generation need motion
++	// vectors. A compositor effect's
+ 	// motion-vector request (DLSS Ray Reconstruction guides) waits with them:
+ 	// only the temporal pass consumes those vectors.
+ 	const bool temporal_requested = rb->get_view_count() == 1 && !using_debug_mvs &&
+-			(scale_type == SCALE_DLSS || scale_type == SCALE_FSR2 || scale_type == SCALE_MFX || using_taa);
++			(scale_type == SCALE_DLSS || scale_type == SCALE_FSR_SDK || scale_type == SCALE_FSR2 || scale_type == SCALE_MFX || using_taa || using_fsr_frame_generation);
+ 	if (!is_reflection_probe && rb_data.is_valid() && !rb_data->temporal_scene_prepared && temporal_requested) {
+ 		// Enabling motion vectors starts the advanced scene-shader group for
+ 		// every material already loaded. Joining it on the first draw freezes
+@@ -1855,6 +1883,12 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
+ 			rb_data->temporal_scene_prepared = !temporal_preparing;
+ 		}
+ 	}
++#ifdef FSR_SDK_ENABLED
++	if (!is_reflection_probe && FidelityFX::get_singleton()) {
++		FidelityFX::get_singleton()->temporal_shaders_initializing.set(temporal_preparing ? 1 : 0);
++	}
++#endif
++	using_fsr_frame_generation = using_fsr_frame_generation && !temporal_preparing;
+ 	using_taa = using_taa && !temporal_preparing;
+ 	bool using_upscaling = scale_type != SCALE_NONE && !temporal_preparing;
+ 
+@@ -1866,7 +1900,7 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
+ 		motion_vectors_required = true;
+ 	} else if (!is_reflection_probe && using_taa) {
+ 		motion_vectors_required = true;
+-	} else if (!is_reflection_probe && using_upscaling) {
++	} else if ((!is_reflection_probe && using_upscaling) || using_fsr_frame_generation) {
+ 		motion_vectors_required = true;
+ 	} else {
+ 		motion_vectors_required = false;
+@@ -2488,7 +2522,7 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
+ 	RD::get_singleton()->draw_command_begin_label("Resolve");
+ 
+ 	if (rb_data.is_valid() && use_msaa) {
+-		bool resolve_velocity_buffer = (using_taa || using_upscaling || ce_needs_motion_vectors) && rb->has_velocity_buffer(true);
++		bool resolve_velocity_buffer = (using_taa || using_upscaling || using_fsr_frame_generation || ce_needs_motion_vectors) && rb->has_velocity_buffer(true);
+ 		for (uint32_t v = 0; v < rb->get_view_count(); v++) {
+ 			RD::get_singleton()->texture_resolve_multisample(rb->get_color_msaa(v), rb->get_internal_texture(v));
+ 			resolve_effects->resolve_depth(rb->get_depth_msaa(v), rb->get_depth_texture(v), rb->get_internal_size(), texture_multisamples[msaa]);
+@@ -2518,6 +2552,54 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
+ 		for (uint32_t v = 0; v < rb->get_view_count(); v++) {
+ 			copy_effects->copy_to_rect(rb->get_internal_texture(v), rb->get_upscaled_texture(v), Rect2i(Point2i(), rb->get_target_size()), false, false, true);
+ 		}
++	} else if (rb_data.is_valid() && (scale_type == SCALE_FSR_SDK || using_fsr_frame_generation)) {
++		RENDER_TIMESTAMP("FidelityFX");
++		RD::get_singleton()->draw_command_begin_label("FidelityFX");
++		rb_data->ensure_fsr_sdk(fsr_sdk_effect);
++
++		const bool cur_camera_reset = p_render_data->scene_data->cam_transform.origin.distance_to(p_render_data->scene_data->prev_cam_transform.origin) > 5.0f ||
++				p_render_data->scene_data->cam_transform.basis.get_column(2).dot(p_render_data->scene_data->prev_cam_transform.basis.get_column(2)) < 0.8f ||
++				Math::abs(p_render_data->scene_data->cam_projection.get_fov() - p_render_data->scene_data->prev_cam_projection.get_fov()) > 1.0f;
++		for (uint32_t v = 0; v < rb->get_view_count(); v++) {
++			real_t fov = p_render_data->scene_data->cam_projection.get_fov();
++			real_t aspect = p_render_data->scene_data->cam_projection.get_aspect();
++			real_t fovy = p_render_data->scene_data->cam_projection.get_fovy(fov, 1.0 / aspect);
++			Vector2 jitter = p_render_data->scene_data->taa_jitter * Vector2(rb->get_internal_size()) * 0.5f;
++			RendererRD::FSRSDKContext::Parameters params;
++			params.context = rb_data->get_fsr_sdk_context();
++			params.internal_size = rb->get_internal_size();
++			params.sharpness = CLAMP((rb->get_fsr_sharpness() / 2.0f), 0.0f, 1.0f);
++			params.color = rb->get_internal_texture(v);
++			params.depth = rb->get_depth_texture(v);
++			params.velocity = rb->get_velocity_buffer(false, v);
++			if (scale_type == SCALE_FSR_SDK) {
++				params.output = rb->get_upscaled_texture(v);
++			}
++			params.frame_generation = using_fsr_frame_generation;
++			params.z_near = p_render_data->scene_data->z_near;
++			params.z_far = p_render_data->scene_data->z_far;
++			params.fovy = fovy;
++			params.jitter = jitter;
++			params.delta_time = float(time_step);
++			params.reset_accumulation = cur_camera_reset;
++
++			Projection correction;
++			correction.set_depth_correction(true, true, false);
++
++			const Projection &prev_proj = p_render_data->scene_data->prev_cam_projection;
++			const Projection &cur_proj = p_render_data->scene_data->cam_projection;
++			const Transform3D &prev_transform = p_render_data->scene_data->prev_cam_transform;
++			const Transform3D &cur_transform = p_render_data->scene_data->cam_transform;
++			params.reprojection = (correction * prev_proj) * prev_transform.affine_inverse() * cur_transform * (correction * cur_proj).inverse();
++			params.cam_transform = cur_transform;
++
++			if (scale_type == SCALE_FSR_SDK) {
++				// Spatial fallback: FSR overwrites it when it evaluates this frame.
++				copy_effects->copy_to_rect(params.color, params.output, Rect2i(Point2i(), rb->get_target_size()), false, false, true);
++			}
++			fsr_sdk_effect->process(params);
++		}
++		RD::get_singleton()->draw_command_end_label();
+ 	}
+ 
+ 	if (rb_data.is_valid() && (using_upscaling || using_taa)) {
+@@ -2674,6 +2756,10 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
+ 			// HUD-less colour for DLSS Frame Generation, before the canvas draws the interface.
+ 			dlss_effect->prepare_frame_generation(rb_data->get_dlss_context(), RendererRD::TextureStorage::get_singleton()->render_target_get_rd_texture(rb->get_render_target()));
+ 		}
++		if (using_fsr_frame_generation) {
++			// HUD-less colour for FSR frame generation, before the canvas draws the interface.
++			fsr_sdk_effect->prepare_frame_generation(rb_data->get_fsr_sdk_context(), RendererRD::TextureStorage::get_singleton()->render_target_get_rd_texture(rb->get_render_target()));
++		}
+ 	}
+ 
+ 	if (rb_data.is_valid()) {
+@@ -5364,6 +5450,7 @@ RenderForwardClustered::RenderForwardClustered() {
+ 
+ 	taa = memnew(RendererRD::TAA);
+ 	dlss_effect = memnew(RendererRD::DLSSEffect);
++	fsr_sdk_effect = memnew(RendererRD::FSRSDKEffect);
+ 	fsr2_effect = memnew(RendererRD::FSR2Effect);
+ 	ss_effects = memnew(RendererRD::SSEffects);
+ #ifdef METAL_MFXTEMPORAL_ENABLED
+@@ -5374,6 +5461,7 @@ RenderForwardClustered::RenderForwardClustered() {
+ 
+ RenderForwardClustered::~RenderForwardClustered() {
+ 	memdelete(dlss_effect);
++	memdelete(fsr_sdk_effect);
+ 	if (ss_effects != nullptr) {
+ 		memdelete(ss_effects);
+ 		ss_effects = nullptr;
+diff --git a/servers/rendering/renderer_rd/forward_clustered/render_forward_clustered.h b/servers/rendering/renderer_rd/forward_clustered/render_forward_clustered.h
+index 6a9a817..33f5c43 100644
+--- a/servers/rendering/renderer_rd/forward_clustered/render_forward_clustered.h
++++ b/servers/rendering/renderer_rd/forward_clustered/render_forward_clustered.h
+@@ -35,6 +35,7 @@
+ #include "servers/rendering/renderer_rd/cluster_builder_rd.h"
+ #include "servers/rendering/renderer_rd/effects/dlss.h"
+ #include "servers/rendering/renderer_rd/effects/fsr2.h"
++#include "servers/rendering/renderer_rd/effects/fsr_sdk.h"
+ #include "servers/rendering/renderer_rd/effects/motion_vectors_store.h"
+ #include "servers/rendering/renderer_rd/effects/ss_effects.h"
+ #include "servers/rendering/renderer_rd/effects/taa.h"
+@@ -98,6 +99,7 @@ public:
+ 		RenderSceneBuffersRD *render_buffers = nullptr;
+ 		RendererRD::FSR2Context *fsr2_context = nullptr;
+ 		RendererRD::DLSSContext *dlss_context = nullptr;
++		RendererRD::FSRSDKContext *fsr_sdk_context = nullptr;
+ #ifdef METAL_MFXTEMPORAL_ENABLED
+ 		RendererRD::MFXTemporalContext *mfx_temporal_context = nullptr;
+ #endif
+@@ -148,6 +150,8 @@ public:
+ 
+ 		void ensure_dlss(RendererRD::DLSSEffect *p_effect);
+ 		RendererRD::DLSSContext *get_dlss_context() const { return dlss_context; }
++		void ensure_fsr_sdk(RendererRD::FSRSDKEffect *p_effect);
++		RendererRD::FSRSDKContext *get_fsr_sdk_context() const { return fsr_sdk_context; }
+ 		void ensure_fsr2(RendererRD::FSR2Effect *p_effect);
+ 		RendererRD::FSR2Context *get_fsr2_context() const { return fsr2_context; }
+ 
+@@ -751,6 +755,7 @@ private:
+ 	RendererRD::TAA *taa = nullptr;
+ 	RendererRD::FSR2Effect *fsr2_effect = nullptr;
+ 	RendererRD::DLSSEffect *dlss_effect = nullptr;
++	RendererRD::FSRSDKEffect *fsr_sdk_effect = nullptr;
+ 	RendererRD::SSEffects *ss_effects = nullptr;
+ 
+ #ifdef METAL_MFXTEMPORAL_ENABLED
+diff --git a/servers/rendering/renderer_rd/shaders/effects/fsr_sdk_prepare.glsl b/servers/rendering/renderer_rd/shaders/effects/fsr_sdk_prepare.glsl
+new file mode 100644
+index 0000000..9c93d9a
+--- /dev/null
++++ b/servers/rendering/renderer_rd/shaders/effects/fsr_sdk_prepare.glsl
+@@ -0,0 +1,28 @@
++#[compute]
++#version 450
++#VERSION_DEFINES
++#extension GL_EXT_samplerless_texture_functions : require
++#include "motion_vector_inc.glsl"
++layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
++layout(rg16f, set = 0, binding = 0) uniform restrict image2D velocity_buffer;
++layout(set = 1, binding = 0) uniform texture2D depth_buffer;
++layout(set = 2, binding = 0) uniform texture2D color_buffer;
++layout(r8, set = 3, binding = 0) uniform restrict writeonly image2D reactive_buffer;
++layout(push_constant, std430) uniform Params {
++	vec4 resolution;
++	mat4 reprojection;
++} params;
++void main() {
++	ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
++	if (any(greaterThanEqual(pixel, ivec2(params.resolution.xy)))) { return; }
++	vec2 velocity = imageLoad(velocity_buffer, pixel).rg;
++	if (all(lessThanEqual(velocity, vec2(-1.0)))) {
++		float depth = texelFetch(depth_buffer, pixel, 0).r;
++		vec2 uv = (vec2(pixel) + 0.5) / params.resolution.xy;
++		velocity = derive_motion_vector(uv, depth, params.reprojection);
++	}
++	imageStore(velocity_buffer, pixel, vec4(velocity, 0.0, 0.0));
++	// Godot stores its reactive mask in scene color alpha. Native SDK views
++	// cannot retain Godot's alpha-to-red swizzle, so materialize an R8 texture.
++	imageStore(reactive_buffer, pixel, vec4(texelFetch(color_buffer, pixel, 0).a));
++}

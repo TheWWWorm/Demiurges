@@ -1,0 +1,458 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: WWWorm <noreply@localhost>
+Date: Thu, 12 Nov 2026 11:28:17 +0100
+Subject: [PATCH] Add DLSS scaling mode, frame generation and ray
+ reconstruction inputs
+
+Viewport.SCALING_3D_MODE_DLSS falls back to FSR2 when DLSS is not
+available. Ray reconstruction guides are set per frame on the scene
+buffers.
+---
+ scene/main/viewport.cpp                       | 20 +++++++++++++
+ scene/main/viewport.h                         |  6 ++++
+ .../renderer_rd/renderer_scene_render_rd.cpp  |  2 +-
+ .../storage_rd/render_scene_buffers_rd.cpp    | 22 ++++++++++++++-
+ .../storage_rd/render_scene_buffers_rd.h      | 12 ++++++++
+ .../storage_rd/render_scene_data_rd.cpp       | 11 ++++++++
+ .../storage_rd/render_scene_data_rd.h         |  4 +++
+ servers/rendering/renderer_viewport.cpp       | 28 ++++++++++++++++++-
+ servers/rendering/renderer_viewport.h         |  3 ++
+ servers/rendering/rendering_server.cpp        |  3 ++
+ servers/rendering/rendering_server.h          |  1 +
+ servers/rendering/rendering_server_default.h  |  1 +
+ servers/rendering/rendering_server_enums.h    |  4 ++-
+ .../rendering/storage/render_scene_buffers.h  |  5 ++++
+ 14 files changed, 118 insertions(+), 4 deletions(-)
+
+diff --git a/scene/main/viewport.cpp b/scene/main/viewport.cpp
+index 54f9f2c..5c6fb83 100644
+--- a/scene/main/viewport.cpp
++++ b/scene/main/viewport.cpp
+@@ -5062,6 +5062,20 @@ Viewport::Scaling3DMode Viewport::get_scaling_3d_mode() const {
+ 	return scaling_3d_mode;
+ }
+ 
++void Viewport::set_frame_generation(bool p_frame_generation) {
++	ERR_MAIN_THREAD_GUARD;
++	if (frame_generation == p_frame_generation) {
++		return;
++	}
++
++	frame_generation = p_frame_generation;
++	RS::get_singleton()->viewport_set_frame_generation(viewport, p_frame_generation);
++}
++
++bool Viewport::get_frame_generation() const {
++	return frame_generation;
++}
++
+ void Viewport::set_scaling_3d_scale(float p_scaling_3d_scale) {
+ 	ERR_MAIN_THREAD_GUARD;
+ 	// Clamp to reasonable values that are actually useful.
+@@ -5326,6 +5340,9 @@ void Viewport::_bind_methods() {
+ 	ClassDB::bind_method(D_METHOD("set_scaling_3d_scale", "scale"), &Viewport::set_scaling_3d_scale);
+ 	ClassDB::bind_method(D_METHOD("get_scaling_3d_scale"), &Viewport::get_scaling_3d_scale);
+ 
++	ClassDB::bind_method(D_METHOD("set_frame_generation", "frame_generation"), &Viewport::set_frame_generation);
++	ClassDB::bind_method(D_METHOD("get_frame_generation"), &Viewport::get_frame_generation);
++
+ 	ClassDB::bind_method(D_METHOD("set_fsr_sharpness", "fsr_sharpness"), &Viewport::set_fsr_sharpness);
+ 	ClassDB::bind_method(D_METHOD("get_fsr_sharpness"), &Viewport::get_fsr_sharpness);
+ 
+@@ -5370,6 +5387,7 @@ void Viewport::_bind_methods() {
+ #ifndef _3D_DISABLED
+ 	ADD_GROUP("Scaling 3D", "");
+ 	ADD_PROPERTY(PropertyInfo(Variant::INT, "scaling_3d_mode", PROPERTY_HINT_ENUM, "Nearest (Fastest):5,Bilinear (Fastest):0,FSR 1.0 (Fast):1,FSR 2.2 (Slow):2,MetalFX (Spatial - Fast):3,MetalFX (Temporal - Slow):4"), "set_scaling_3d_mode", "get_scaling_3d_mode");
++	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "frame_generation"), "set_frame_generation", "get_frame_generation");
+ 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "scaling_3d_scale", PROPERTY_HINT_RANGE, "0.1,2.0,0.0001"), "set_scaling_3d_scale", "get_scaling_3d_scale");
+ 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "texture_mipmap_bias", PROPERTY_HINT_RANGE, "-2,2,0.001"), "set_texture_mipmap_bias", "get_texture_mipmap_bias");
+ 	ADD_PROPERTY(PropertyInfo(Variant::INT, "anisotropic_filtering_level", PROPERTY_HINT_ENUM, String::utf8("Disabled (Fastest),2× (Faster),4× (Fast),8× (Average),16x (Slow)")), "set_anisotropic_filtering_level", "get_anisotropic_filtering_level");
+@@ -5433,6 +5451,8 @@ void Viewport::_bind_methods() {
+ 	BIND_ENUM_CONSTANT(SCALING_3D_MODE_METALFX_SPATIAL);
+ 	BIND_ENUM_CONSTANT(SCALING_3D_MODE_METALFX_TEMPORAL);
+ 	BIND_ENUM_CONSTANT(SCALING_3D_MODE_NEAREST);
++	BIND_ENUM_CONSTANT(SCALING_3D_MODE_DLSS);
++	BIND_ENUM_CONSTANT(SCALING_3D_MODE_FSR_SDK);
+ 	BIND_ENUM_CONSTANT(SCALING_3D_MODE_MAX);
+ 
+ 	BIND_ENUM_CONSTANT(MSAA_DISABLED);
+diff --git a/scene/main/viewport.h b/scene/main/viewport.h
+index 4e1c272..c7c06e6 100644
+--- a/scene/main/viewport.h
++++ b/scene/main/viewport.h
+@@ -104,6 +104,8 @@ public:
+ 		SCALING_3D_MODE_METALFX_SPATIAL,
+ 		SCALING_3D_MODE_METALFX_TEMPORAL,
+ 		SCALING_3D_MODE_NEAREST,
++		SCALING_3D_MODE_FSR_SDK,
++		SCALING_3D_MODE_DLSS,
+ 		SCALING_3D_MODE_MAX
+ 	};
+ 
+@@ -322,6 +324,7 @@ private:
+ 
+ 	Scaling3DMode scaling_3d_mode = SCALING_3D_MODE_BILINEAR;
+ 	float scaling_3d_scale = 1.0;
++	bool frame_generation = false;
+ 	float fsr_sharpness = 0.2f;
+ 	float texture_mipmap_bias = 0.0f;
+ 	AnisotropicFiltering anisotropic_filtering_level = ANISOTROPY_4X;
+@@ -607,6 +610,9 @@ public:
+ 	void set_scaling_3d_scale(float p_scaling_3d_scale);
+ 	float get_scaling_3d_scale() const;
+ 
++	void set_frame_generation(bool p_frame_generation);
++	bool get_frame_generation() const;
++
+ 	void set_fsr_sharpness(float p_fsr_sharpness);
+ 	float get_fsr_sharpness() const;
+ 
+diff --git a/servers/rendering/renderer_rd/renderer_scene_render_rd.cpp b/servers/rendering/renderer_rd/renderer_scene_render_rd.cpp
+index fb4d422..e64c2be 100644
+--- a/servers/rendering/renderer_rd/renderer_scene_render_rd.cpp
++++ b/servers/rendering/renderer_rd/renderer_scene_render_rd.cpp
+@@ -470,7 +470,7 @@ void RendererSceneRenderRD::_render_buffers_post_process_and_tonemap(const Rende
+ 	bool can_use_storage = _render_buffers_can_be_storage();
+ 
+ 	RSE::ViewportScaling3DMode scale_mode = rb->get_scaling_3d_mode();
+-	bool use_upscaled_texture = rb->has_upscaled_texture() && (scale_mode == RSE::VIEWPORT_SCALING_3D_MODE_FSR2 || scale_mode == RSE::VIEWPORT_SCALING_3D_MODE_METALFX_TEMPORAL);
++	bool use_upscaled_texture = rb->has_upscaled_texture() && (scale_mode == RSE::VIEWPORT_SCALING_3D_MODE_FSR2 || scale_mode == RSE::VIEWPORT_SCALING_3D_MODE_METALFX_TEMPORAL || scale_mode == RSE::VIEWPORT_SCALING_3D_MODE_DLSS || scale_mode == RSE::VIEWPORT_SCALING_3D_MODE_FSR_SDK);
+ 	SpatialUpscaler *spatial_upscaler = nullptr;
+ 	if (can_use_effects) {
+ 		if (scale_mode == RSE::VIEWPORT_SCALING_3D_MODE_FSR) {
+diff --git a/servers/rendering/renderer_rd/storage_rd/render_scene_buffers_rd.cpp b/servers/rendering/renderer_rd/storage_rd/render_scene_buffers_rd.cpp
+index 610ab92..b9116ef 100644
+--- a/servers/rendering/renderer_rd/storage_rd/render_scene_buffers_rd.cpp
++++ b/servers/rendering/renderer_rd/storage_rd/render_scene_buffers_rd.cpp
+@@ -49,6 +49,7 @@ RenderSceneBuffersRD::~RenderSceneBuffersRD() {
+ }
+ 
+ void RenderSceneBuffersRD::_bind_methods() {
++	ClassDB::bind_method(D_METHOD("set_dlss_ray_reconstruction", "diffuse_albedo", "specular_albedo", "normal_roughness", "specular_hit_distance", "reset"), &RenderSceneBuffersRD::set_dlss_ray_reconstruction);
+ 	ClassDB::bind_method(D_METHOD("has_texture", "context", "name"), &RenderSceneBuffersRD::has_texture);
+ 	ClassDB::bind_method(D_METHOD("create_texture", "context", "name", "data_format", "usage_bits", "texture_samples", "size", "layers", "mipmaps", "unique", "discardable"), &RenderSceneBuffersRD::create_texture);
+ 	ClassDB::bind_method(D_METHOD("create_texture_from_format", "context", "name", "format", "view", "unique"), &RenderSceneBuffersRD::_create_texture_from_format);
+@@ -107,7 +108,7 @@ void RenderSceneBuffersRD::update_samplers() {
+ 	float computed_mipmap_bias = texture_mipmap_bias;
+ 
+ 	if (use_taa || (RSE::scaling_3d_mode_type(scaling_3d_mode) == RSE::VIEWPORT_SCALING_3D_TYPE_TEMPORAL)) {
+-		// Use negative mipmap LOD bias when TAA or FSR2 is enabled to compensate for loss of sharpness.
++		// Use negative mipmap LOD bias when TAA or temporal upscaling is enabled to compensate for loss of sharpness.
+ 		// This restores sharpness in still images to be roughly at the same level as without TAA,
+ 		// but moving scenes will still be blurrier.
+ 		computed_mipmap_bias -= 0.5;
+@@ -125,6 +126,7 @@ void RenderSceneBuffersRD::update_samplers() {
+ }
+ 
+ void RenderSceneBuffersRD::cleanup() {
++	clear_dlss_ray_reconstruction();
+ 	// Free our data buffers (but don't destroy them)
+ 	for (KeyValue<StringName, Ref<RenderBufferCustomDataRD>> &E : data_buffers) {
+ 		E.value->free_data();
+@@ -166,6 +168,7 @@ void RenderSceneBuffersRD::configure(const RenderSceneBuffersConfiguration *p_co
+ 	msaa_3d = p_config->get_msaa_3d();
+ 	screen_space_aa = p_config->get_screen_space_aa();
+ 
++	frame_generation = p_config->get_use_frame_generation();
+ 	fsr_sharpness = p_config->get_fsr_sharpness();
+ 	texture_mipmap_bias = p_config->get_texture_mipmap_bias();
+ 	anisotropic_filtering_level = p_config->get_anisotropic_filtering_level();
+@@ -225,6 +228,7 @@ void RenderSceneBuffersRD::configure_for_reflections(const Size2i p_reflection_s
+ 	screen_space_aa = RSE::VIEWPORT_SCREEN_SPACE_AA_DISABLED;
+ 	use_taa = false;
+ 	use_debanding = false;
++	frame_generation = false;
+ 	view_count = 1;
+ 
+ 	// cleanout any old buffers we had.
+@@ -863,3 +867,19 @@ float RenderSceneBuffersRD::get_luminance_multiplier() const {
+ 	// to fit 0-2 range color values into a UNORM buffer.
+ 	return (force_hdr || can_be_storage) ? 1.0 : 2.0;
+ }
++
++// Reject stale/wrong-sized or incompatible guides instead of passing invalid
++// resources into a native SDK. No allocation or ownership transfer occurs here.
++bool RenderSceneBuffersRD::set_dlss_ray_reconstruction(RID p_diffuse, RID p_specular, RID p_normal_roughness, RID p_hit_distance, bool p_reset) {
++	clear_dlss_ray_reconstruction();
++	if (view_count != 1 || scaling_3d_mode != RSE::VIEWPORT_SCALING_3D_MODE_DLSS || msaa_3d != RSE::VIEWPORT_MSAA_DISABLED) { return false; }
++	RD *rd = RD::get_singleton();
++	for (RID texture : { p_diffuse, p_specular, p_normal_roughness, p_hit_distance }) {
++		if (!texture.is_valid() || !rd->texture_is_valid(texture)) { return false; }
++		RD::TextureFormat format = rd->texture_get_format(texture);
++		RD::DataFormat expected = texture == p_hit_distance ? RD::DATA_FORMAT_R16_SFLOAT : RD::DATA_FORMAT_R16G16B16A16_SFLOAT;
++		if (format.format != expected || format.width != (uint32_t)internal_size.x || format.height != (uint32_t)internal_size.y || format.array_layers != 1 || format.samples != RD::TEXTURE_SAMPLES_1) { return false; }
++	}
++	ray_reconstruction_inputs = { p_diffuse, p_specular, p_normal_roughness, p_hit_distance, true, p_reset };
++	return true;
++}
+diff --git a/servers/rendering/renderer_rd/storage_rd/render_scene_buffers_rd.h b/servers/rendering/renderer_rd/storage_rd/render_scene_buffers_rd.h
+index cae09e1..a0c58ba 100644
+--- a/servers/rendering/renderer_rd/storage_rd/render_scene_buffers_rd.h
++++ b/servers/rendering/renderer_rd/storage_rd/render_scene_buffers_rd.h
+@@ -83,6 +83,7 @@ private:
+ 	// The internal size of the textures we render 3D to in case we render at a lower resolution and upscale
+ 	Size2i internal_size = Size2i(0, 0);
+ 	RSE::ViewportScaling3DMode scaling_3d_mode = RSE::VIEWPORT_SCALING_3D_MODE_OFF;
++	bool frame_generation = false;
+ 	float fsr_sharpness = 0.2f;
+ 	float texture_mipmap_bias = 0.0f;
+ 	RSE::ViewportAnisotropicFiltering anisotropic_filtering_level = RSE::VIEWPORT_ANISOTROPY_4X;
+@@ -182,6 +183,15 @@ protected:
+ 	static void _bind_methods();
+ 
+ public:
++	// Borrowed, current-frame guides supplied by a pre-opaque compositor.
++	// The owner retains them through rendering. Clear every frame and resize.
++	struct RayReconstructionInputs {
++		RID diffuse_albedo, specular_albedo, normal_roughness, specular_hit_distance;
++		bool valid = false;
++		bool reset = false;
++	} ray_reconstruction_inputs;
++	bool set_dlss_ray_reconstruction(RID p_diffuse, RID p_specular, RID p_normal_roughness, RID p_hit_distance, bool p_reset);
++	void clear_dlss_ray_reconstruction() { ray_reconstruction_inputs = RayReconstructionInputs(); }
+ 	RenderSceneBuffersRD();
+ 	virtual ~RenderSceneBuffersRD();
+ 
+@@ -240,6 +250,8 @@ public:
+ 	_FORCE_INLINE_ Size2i get_target_size() const { return target_size; }
+ 	_FORCE_INLINE_ RSE::ViewportScaling3DMode get_scaling_3d_mode() const { return scaling_3d_mode; }
+ 	_FORCE_INLINE_ float get_fsr_sharpness() const { return fsr_sharpness; }
++	_FORCE_INLINE_ bool get_frame_generation() const { return frame_generation; }
++	void set_frame_generation(bool p_enabled) override { frame_generation = p_enabled; }
+ 	_FORCE_INLINE_ RSE::ViewportMSAA get_msaa_3d() const { return msaa_3d; }
+ 	_FORCE_INLINE_ RD::TextureSamples get_texture_samples() const { return texture_samples; }
+ 	_FORCE_INLINE_ RSE::ViewportScreenSpaceAA get_screen_space_aa() const { return screen_space_aa; }
+diff --git a/servers/rendering/renderer_rd/storage_rd/render_scene_data_rd.cpp b/servers/rendering/renderer_rd/storage_rd/render_scene_data_rd.cpp
+index 7120d53..58660ba 100644
+--- a/servers/rendering/renderer_rd/storage_rd/render_scene_data_rd.cpp
++++ b/servers/rendering/renderer_rd/storage_rd/render_scene_data_rd.cpp
+@@ -29,6 +29,7 @@
+ /**************************************************************************/
+ 
+ #include "render_scene_data_rd.h"
++#include "core/object/class_db.h"
+ 
+ #include "servers/rendering/renderer_rd/renderer_scene_render_rd.h"
+ #include "servers/rendering/renderer_rd/storage_rd/light_storage.h"
+@@ -300,3 +301,13 @@ void RenderSceneDataRD::update_ubo(RID p_uniform_buffer, RSE::ViewportDebugDraw
+ RID RenderSceneDataRD::get_uniform_buffer() const {
+ 	return uniform_buffer;
+ }
++
++void RenderSceneDataRD::_bind_methods() {
++	ClassDB::bind_method(D_METHOD("get_ray_projection"), &RenderSceneDataRD::get_ray_projection);
++}
++
++Projection RenderSceneDataRD::get_ray_projection() const {
++	Projection jitter;
++	jitter.add_jitter_offset(Vector2(taa_jitter.x, flip_y ? -taa_jitter.y : taa_jitter.y));
++	return jitter * cam_projection;
++}
+diff --git a/servers/rendering/renderer_rd/storage_rd/render_scene_data_rd.h b/servers/rendering/renderer_rd/storage_rd/render_scene_data_rd.h
+index 85a9a1e..0d500a6 100644
+--- a/servers/rendering/renderer_rd/storage_rd/render_scene_data_rd.h
++++ b/servers/rendering/renderer_rd/storage_rd/render_scene_data_rd.h
+@@ -39,7 +39,11 @@
+ class RenderSceneDataRD : public RenderSceneData {
+ 	GDCLASS(RenderSceneDataRD, RenderSceneData);
+ 
++protected:
++	static void _bind_methods();
++
+ public:
++	Projection get_ray_projection() const;
+ 	bool calculate_motion_vectors = false;
+ 
+ 	Transform3D cam_transform;
+diff --git a/servers/rendering/renderer_viewport.cpp b/servers/rendering/renderer_viewport.cpp
+index 8098fea..530497f 100644
+--- a/servers/rendering/renderer_viewport.cpp
++++ b/servers/rendering/renderer_viewport.cpp
+@@ -32,6 +32,7 @@
+ 
+ #include "core/config/engine.h"
+ #include "core/config/project_settings.h"
++#include "drivers/streamline/streamline.h"
+ #include "core/math/transform_interpolator.h"
+ #include "core/object/worker_thread_pool.h"
+ #include "core/os/os.h"
+@@ -142,6 +143,14 @@ void RendererViewport::_configure_3d_render_buffers(Viewport *p_viewport) {
+ 			float scaling_3d_scale = p_viewport->scaling_3d_scale;
+ 			RSE::ViewportScaling3DMode scaling_3d_mode = p_viewport->scaling_3d_mode;
+ 			bool upscaler_available = p_viewport->fsr_enabled;
++			if (scaling_3d_mode == RSE::VIEWPORT_SCALING_3D_MODE_DLSS &&
++					(Streamline::get_singleton() == nullptr || !Streamline::get_singleton()->get_capability(STREAMLINE_CAPABILITY_DLSS))) {
++				scaling_3d_mode = p_viewport->fsr_enabled ? RSE::VIEWPORT_SCALING_3D_MODE_FSR2 : RSE::VIEWPORT_SCALING_3D_MODE_BILINEAR;
++			}
++			if (scaling_3d_mode == RSE::VIEWPORT_SCALING_3D_MODE_FSR_SDK) {
++				// The AMD FidelityFX SDK integration is not part of this build.
++				scaling_3d_mode = p_viewport->fsr_enabled ? RSE::VIEWPORT_SCALING_3D_MODE_FSR2 : RSE::VIEWPORT_SCALING_3D_MODE_BILINEAR;
++			}
+ 			RSE::ViewportScaling3DType scaling_type = RSE::scaling_3d_mode_type(scaling_3d_mode);
+ 
+ 			if ((!upscaler_available || (scaling_type == RSE::VIEWPORT_SCALING_3D_TYPE_SPATIAL)) && scaling_3d_scale >= (1.0 - EPSILON) && scaling_3d_scale <= (1.0 + EPSILON)) {
+@@ -242,6 +251,8 @@ void RendererViewport::_configure_3d_render_buffers(Viewport *p_viewport) {
+ 				case RSE::VIEWPORT_SCALING_3D_MODE_METALFX_SPATIAL:
+ 				case RSE::VIEWPORT_SCALING_3D_MODE_METALFX_TEMPORAL:
+ 				case RSE::VIEWPORT_SCALING_3D_MODE_FSR:
++				case RSE::VIEWPORT_SCALING_3D_MODE_DLSS:
++				case RSE::VIEWPORT_SCALING_3D_MODE_FSR_SDK:
+ 				case RSE::VIEWPORT_SCALING_3D_MODE_FSR2:
+ 					target_width = p_viewport->size.width;
+ 					target_height = p_viewport->size.height;
+@@ -295,6 +306,7 @@ void RendererViewport::_configure_3d_render_buffers(Viewport *p_viewport) {
+ 			rb_config.set_texture_mipmap_bias(texture_mipmap_bias);
+ 			rb_config.set_anisotropic_filtering_level(p_viewport->anisotropic_filtering_level);
+ 			rb_config.set_use_taa(use_taa);
++			rb_config.set_use_frame_generation(p_viewport->frame_generation);
+ 			rb_config.set_use_debanding(p_viewport->use_debanding);
+ 
+ 			p_viewport->render_buffers->configure(&rb_config);
+@@ -1096,6 +1108,20 @@ void RendererViewport::viewport_set_scaling_3d_scale(RID p_viewport, float p_sca
+ 	_configure_3d_render_buffers(viewport);
+ }
+ 
++void RendererViewport::viewport_set_frame_generation(RID p_viewport, bool p_frame_generation) {
++	Viewport *viewport = viewport_owner.get_or_null(p_viewport);
++	ERR_FAIL_NULL(viewport);
++
++	if (viewport->frame_generation == p_frame_generation) { return; }
++	const bool motion_vectors_before = _viewport_requires_motion_vectors(viewport);
++	viewport->frame_generation = p_frame_generation;
++	const bool motion_vectors_after = _viewport_requires_motion_vectors(viewport);
++	if (motion_vectors_before != motion_vectors_after) {
++		num_viewports_with_motion_vectors += motion_vectors_after ? 1 : -1;
++	}
++	if (viewport->render_buffers.is_valid()) { viewport->render_buffers->set_frame_generation(p_frame_generation); }
++}
++
+ void RendererViewport::viewport_set_size(RID p_viewport, int p_width, int p_height, int p_view_count) {
+ 	ERR_FAIL_COND(p_width < 0 || p_height < 0 || p_view_count < 0);
+ 
+@@ -1119,7 +1145,7 @@ void RendererViewport::_viewport_set_size(Viewport *p_viewport, int p_width, int
+ }
+ 
+ bool RendererViewport::_viewport_requires_motion_vectors(Viewport *p_viewport) {
+-	return p_viewport->use_taa ||
++	return p_viewport->use_taa || p_viewport->frame_generation ||
+ 			RSE::scaling_3d_mode_type(p_viewport->scaling_3d_mode) == RSE::VIEWPORT_SCALING_3D_TYPE_TEMPORAL ||
+ 			p_viewport->debug_draw == RSE::VIEWPORT_DEBUG_DRAW_MOTION_VECTORS || p_viewport->force_motion_vectors;
+ }
+diff --git a/servers/rendering/renderer_viewport.h b/servers/rendering/renderer_viewport.h
+index 2c70de5..21ac8aa 100644
+--- a/servers/rendering/renderer_viewport.h
++++ b/servers/rendering/renderer_viewport.h
+@@ -61,6 +61,8 @@ public:
+ 		float texture_mipmap_bias = 0.0f;
+ 		RSE::ViewportAnisotropicFiltering anisotropic_filtering_level = RSE::VIEWPORT_ANISOTROPY_4X;
+ 		bool fsr_enabled = false;
++		bool dlss_enabled = false;
++		bool frame_generation = false;
+ 		uint32_t jitter_phase_count = 0;
+ 		RSE::ViewportUpdateMode update_mode = RSE::VIEWPORT_UPDATE_WHEN_VISIBLE;
+ 		RID render_target;
+@@ -234,6 +236,7 @@ public:
+ 
+ 	void viewport_set_scaling_3d_mode(RID p_viewport, RSE::ViewportScaling3DMode p_mode);
+ 	void viewport_set_scaling_3d_scale(RID p_viewport, float p_scaling_3d_scale);
++	void viewport_set_frame_generation(RID p_viewport, bool p_frame_generation);
+ 	void viewport_set_fsr_sharpness(RID p_viewport, float p_sharpness);
+ 	void viewport_set_texture_mipmap_bias(RID p_viewport, float p_mipmap_bias);
+ 	void viewport_set_anisotropic_filtering_level(RID p_viewport, RSE::ViewportAnisotropicFiltering p_anisotropic_filtering_level);
+diff --git a/servers/rendering/rendering_server.cpp b/servers/rendering/rendering_server.cpp
+index d2b235f..8a123c0 100644
+--- a/servers/rendering/rendering_server.cpp
++++ b/servers/rendering/rendering_server.cpp
+@@ -2861,6 +2861,7 @@ void RenderingServer::_bind_methods() {
+ 
+ 	ClassDB::bind_method(D_METHOD("viewport_set_scaling_3d_mode", "viewport", "scaling_3d_mode"), &RenderingServer::viewport_set_scaling_3d_mode);
+ 	ClassDB::bind_method(D_METHOD("viewport_set_scaling_3d_scale", "viewport", "scale"), &RenderingServer::viewport_set_scaling_3d_scale);
++	ClassDB::bind_method(D_METHOD("viewport_set_frame_generation", "viewport", "frame_generation"), &RenderingServer::viewport_set_frame_generation);
+ 	ClassDB::bind_method(D_METHOD("viewport_set_fsr_sharpness", "viewport", "sharpness"), &RenderingServer::viewport_set_fsr_sharpness);
+ 	ClassDB::bind_method(D_METHOD("viewport_set_texture_mipmap_bias", "viewport", "mipmap_bias"), &RenderingServer::viewport_set_texture_mipmap_bias);
+ 	ClassDB::bind_method(D_METHOD("viewport_set_anisotropic_filtering_level", "viewport", "anisotropic_filtering_level"), &RenderingServer::viewport_set_anisotropic_filtering_level);
+@@ -2920,6 +2921,8 @@ void RenderingServer::_bind_methods() {
+ 	BIND_ENUM_CONSTANT(RSE::VIEWPORT_SCALING_3D_MODE_METALFX_SPATIAL);
+ 	BIND_ENUM_CONSTANT(RSE::VIEWPORT_SCALING_3D_MODE_METALFX_TEMPORAL);
+ 	BIND_ENUM_CONSTANT(RSE::VIEWPORT_SCALING_3D_MODE_NEAREST);
++	BIND_ENUM_CONSTANT(RSE::VIEWPORT_SCALING_3D_MODE_DLSS);
++	BIND_ENUM_CONSTANT(RSE::VIEWPORT_SCALING_3D_MODE_FSR_SDK);
+ 	BIND_ENUM_CONSTANT(RSE::VIEWPORT_SCALING_3D_MODE_MAX);
+ 
+ 	BIND_ENUM_CONSTANT(RSE::VIEWPORT_UPDATE_DISABLED);
+diff --git a/servers/rendering/rendering_server.h b/servers/rendering/rendering_server.h
+index 4a5f852..70a11a2 100644
+--- a/servers/rendering/rendering_server.h
++++ b/servers/rendering/rendering_server.h
+@@ -549,6 +549,7 @@ public:
+ 
+ 	virtual void viewport_set_scaling_3d_mode(RID p_viewport, RSE::ViewportScaling3DMode p_scaling_3d_mode) = 0;
+ 	virtual void viewport_set_scaling_3d_scale(RID p_viewport, float p_scaling_3d_scale) = 0;
++	virtual void viewport_set_frame_generation(RID p_viewport, bool p_frame_generation) = 0;
+ 	virtual void viewport_set_fsr_sharpness(RID p_viewport, float p_fsr_sharpness) = 0;
+ 	virtual void viewport_set_texture_mipmap_bias(RID p_viewport, float p_texture_mipmap_bias) = 0;
+ 	virtual void viewport_set_anisotropic_filtering_level(RID p_viewport, RSE::ViewportAnisotropicFiltering p_anisotropic_filtering_level) = 0;
+diff --git a/servers/rendering/rendering_server_default.h b/servers/rendering/rendering_server_default.h
+index 9bc7181..0f55b58 100644
+--- a/servers/rendering/rendering_server_default.h
++++ b/servers/rendering/rendering_server_default.h
+@@ -748,6 +748,7 @@ public:
+ 
+ 	FUNC2(viewport_set_scaling_3d_mode, RID, RSE::ViewportScaling3DMode)
+ 	FUNC2(viewport_set_scaling_3d_scale, RID, float)
++	FUNC2(viewport_set_frame_generation, RID, bool)
+ 	FUNC2(viewport_set_fsr_sharpness, RID, float)
+ 	FUNC2(viewport_set_texture_mipmap_bias, RID, float)
+ 	FUNC2(viewport_set_anisotropic_filtering_level, RID, RSE::ViewportAnisotropicFiltering)
+diff --git a/servers/rendering/rendering_server_enums.h b/servers/rendering/rendering_server_enums.h
+index 47d4dbf..1d1bd35 100644
+--- a/servers/rendering/rendering_server_enums.h
++++ b/servers/rendering/rendering_server_enums.h
+@@ -460,6 +460,8 @@ enum ViewportScaling3DMode {
+ 	VIEWPORT_SCALING_3D_MODE_METALFX_SPATIAL,
+ 	VIEWPORT_SCALING_3D_MODE_METALFX_TEMPORAL,
+ 	VIEWPORT_SCALING_3D_MODE_NEAREST,
++	VIEWPORT_SCALING_3D_MODE_FSR_SDK,
++	VIEWPORT_SCALING_3D_MODE_DLSS,
+ 	VIEWPORT_SCALING_3D_MODE_MAX,
+ 	VIEWPORT_SCALING_3D_MODE_OFF = 255, // for internal use only
+ };
+@@ -474,7 +476,7 @@ enum ViewportScaling3DType {
+ inline ViewportScaling3DType scaling_3d_mode_type(ViewportScaling3DMode p_mode) {
+ 	if (p_mode == VIEWPORT_SCALING_3D_MODE_NEAREST || p_mode == VIEWPORT_SCALING_3D_MODE_BILINEAR || p_mode == VIEWPORT_SCALING_3D_MODE_FSR || p_mode == VIEWPORT_SCALING_3D_MODE_METALFX_SPATIAL) {
+ 		return VIEWPORT_SCALING_3D_TYPE_SPATIAL;
+-	} else if (p_mode == VIEWPORT_SCALING_3D_MODE_FSR2 || p_mode == VIEWPORT_SCALING_3D_MODE_METALFX_TEMPORAL) {
++	} else if (p_mode == VIEWPORT_SCALING_3D_MODE_FSR2 || p_mode == VIEWPORT_SCALING_3D_MODE_METALFX_TEMPORAL || p_mode == VIEWPORT_SCALING_3D_MODE_DLSS || p_mode == VIEWPORT_SCALING_3D_MODE_FSR_SDK) {
+ 		return VIEWPORT_SCALING_3D_TYPE_TEMPORAL;
+ 	}
+ 	return VIEWPORT_SCALING_3D_TYPE_NONE;
+diff --git a/servers/rendering/storage/render_scene_buffers.h b/servers/rendering/storage/render_scene_buffers.h
+index c67a022..1e09a0a 100644
+--- a/servers/rendering/storage/render_scene_buffers.h
++++ b/servers/rendering/storage/render_scene_buffers.h
+@@ -52,6 +52,7 @@ private:
+ 	float texture_mipmap_bias = 0.0;
+ 	bool use_taa = false;
+ 	bool use_debanding = false;
++	bool use_frame_generation = false;
+ 
+ protected:
+ 	static void _bind_methods();
+@@ -93,6 +94,9 @@ public:
+ 	bool get_use_debanding() const { return use_debanding; }
+ 	void set_use_debanding(bool p_use_debanding) { use_debanding = p_use_debanding; }
+ 
++	bool get_use_frame_generation() const { return use_frame_generation; }
++	void set_use_frame_generation(bool p_frame_generation) { use_frame_generation = p_frame_generation; }
++
+ 	RenderSceneBuffersConfiguration() {}
+ 	virtual ~RenderSceneBuffersConfiguration() {}
+ };
+@@ -108,6 +112,7 @@ public:
+ 	virtual ~RenderSceneBuffers() {}
+ 
+ 	virtual void configure(const RenderSceneBuffersConfiguration *p_config) = 0;
++	virtual void set_frame_generation(bool p_enabled) {}
+ 
+ 	// for those settings that are unlikely to require buffers to be recreated, we'll add setters
+ 	virtual void set_fsr_sharpness(float p_fsr_sharpness) = 0;

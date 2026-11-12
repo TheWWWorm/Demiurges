@@ -1,0 +1,3 @@
+# Engine patches are applied byte for byte; shell scripts run in Linux/WSL.
+engine_patches/**/*.patch -text
+tools/engine/*.sh text eol=lf

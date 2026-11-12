@@ -1,0 +1,792 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: WWWorm <noreply@localhost>
+Date: Thu, 12 Nov 2026 11:28:17 +0100
+Subject: [PATCH] Wire the graphics SDK seam into the Vulkan context and device
+ drivers
+
+An SDK owner can add instance and device extensions, core features and
+extra queues, hook swapchain, present and surface functions, and wrap
+presentation. Without an owner the drivers behave as before.
+---
+ drivers/vulkan/graphics_sdk_vulkan.h          |  16 +
+ .../rendering_context_driver_vulkan.cpp       |  55 ++-
+ .../vulkan/rendering_context_driver_vulkan.h  |  21 +
+ .../vulkan/rendering_device_driver_vulkan.cpp | 358 +++++++++++++++++-
+ .../vulkan/rendering_device_driver_vulkan.h   |  11 +
+ ...endering_context_driver_vulkan_windows.cpp |  40 +-
+ .../rendering_context_driver_vulkan_windows.h |   2 +
+ servers/rendering/rendering_device_driver.h   |   3 +
+ 8 files changed, 497 insertions(+), 9 deletions(-)
+ mode change 100755 => 100644 drivers/vulkan/graphics_sdk_vulkan.h
+
+diff --git a/drivers/vulkan/graphics_sdk_vulkan.h b/drivers/vulkan/graphics_sdk_vulkan.h
+old mode 100755
+new mode 100644
+index 1d75b6c..3e9737d
+--- a/drivers/vulkan/graphics_sdk_vulkan.h
++++ b/drivers/vulkan/graphics_sdk_vulkan.h
+@@ -59,6 +59,16 @@ public:
+ 		PFN_vkDeviceWaitIdle device_wait_idle = nullptr;
+ 	};
+ 
++	// Window-surface entry points. Like the swapchain table, unset entries keep
++	// the loader's function. create_win32_surface is a PFN_vkCreateWin32SurfaceKHR
++	// (kept untyped so this header stays platform-neutral). Queried after
++	// device_created; surfaces created earlier are recreated through it before
++	// their first swapchain.
++	struct SurfaceFunctions {
++		PFN_vkVoidFunction create_win32_surface = nullptr;
++		PFN_vkDestroySurfaceKHR destroy_surface = nullptr;
++	};
++
+ 	// Extra queues the provider needs created alongside Godot's own.
+ 	struct QueueRequest {
+ 		VkQueueFlags required_flags = 0;
+@@ -96,6 +106,10 @@ public:
+ 		uint32_t graphics_queue_index = 0;
+ 		VkQueue graphics_queue = VK_NULL_HANDLE;
+ 		LocalVector<QueueRequest> extra_queues; // as requested, with indices filled.
++		// Device extensions actually enabled (optional requests may be missing).
++		LocalVector<CharString> enabled_device_extensions;
++		// VkApplicationInfo::apiVersion the instance was created with.
++		uint32_t instance_api_version = VK_API_VERSION_1_0;
+ 	};
+ 	// After vkCreateDevice. Returning false disables the provider for this
+ 	// run (ordinary rendering continues).
+@@ -105,6 +119,8 @@ public:
+ 	// Called once after device_created; the provider overwrites the entries
+ 	// it takes over.
+ 	virtual void get_swapchain_functions(SwapchainFunctions &r_functions) {}
++	// Called once after get_swapchain_functions.
++	virtual void get_surface_functions(SurfaceFunctions &r_functions) {}
+ 
+ 	// Frame markers around the driver's present.
+ 	virtual void present_begin(uint64_t p_frame) {}
+diff --git a/drivers/vulkan/rendering_context_driver_vulkan.cpp b/drivers/vulkan/rendering_context_driver_vulkan.cpp
+index 96f633f..28a25b3 100644
+--- a/drivers/vulkan/rendering_context_driver_vulkan.cpp
++++ b/drivers/vulkan/rendering_context_driver_vulkan.cpp
+@@ -35,6 +35,7 @@
+ #include "core/config/engine.h"
+ #include "core/config/project_settings.h"
+ #include "core/version.h"
++#include "drivers/vulkan/graphics_sdk_vulkan.h"
+ #include "drivers/vulkan/rendering_device_driver_vulkan.h"
+ #include "drivers/vulkan/vulkan_hooks.h"
+ 
+@@ -460,6 +461,25 @@ Error RenderingContextDriverVulkan::_initialize_instance_extensions() {
+ 		_register_requested_instance_extension(VK_EXT_DEBUG_UTILS_EXTENSION_NAME, false);
+ 	}
+ 
++	// Extensions needed by the graphics SDK that owns this run (if any).
++	if (GraphicsSDKVulkan::get_owner() != nullptr && VulkanHooks::get_singleton() == nullptr) {
++		LocalVector<CharString> sdk_required;
++		LocalVector<CharString> sdk_optional;
++		GraphicsSDKVulkan::get_owner()->get_instance_extensions(sdk_required, sdk_optional);
++		for (const CharString &extension_name : sdk_required) {
++			if (!requested_instance_extensions.has(extension_name)) {
++				_register_requested_instance_extension(extension_name, true);
++			} else {
++				requested_instance_extensions[extension_name] = true;
++			}
++		}
++		for (const CharString &extension_name : sdk_optional) {
++			if (!requested_instance_extensions.has(extension_name)) {
++				_register_requested_instance_extension(extension_name, false);
++			}
++		}
++	}
++
+ 	// Load instance extensions that are available.
+ 	uint32_t instance_extension_count = 0;
+ 	VkResult err = vkEnumerateInstanceExtensionProperties(nullptr, &instance_extension_count, nullptr);
+@@ -687,7 +707,14 @@ Error RenderingContextDriverVulkan::_initialize_instance() {
+ 	// We'll set application version to the Vulkan version we're developing against, even if our instance is based on an older Vulkan
+ 	// version, devices can still support newer versions of Vulkan. The exception is when we're on Vulkan 1.0, we should not set this
+ 	// to anything but 1.0. Note that this value is only used by validation layers to warn us about version issues.
+-	uint32_t application_api_version = instance_api_version == VK_API_VERSION_1_0 ? VK_API_VERSION_1_0 : VK_API_VERSION_1_2;
++	application_api_version = instance_api_version == VK_API_VERSION_1_0 ? VK_API_VERSION_1_0 : VK_API_VERSION_1_2;
++	if (GraphicsSDKVulkan::get_owner() != nullptr && VulkanHooks::get_singleton() == nullptr) {
++		// A graphics SDK may need newer core feature structs (Vulkan 1.3) on the device.
++		const uint32_t sdk_api_version = GraphicsSDKVulkan::get_owner()->get_minimum_api_version();
++		if (sdk_api_version > application_api_version && instance_api_version >= sdk_api_version) {
++			application_api_version = sdk_api_version;
++		}
++	}
+ 
+ 	CharString cs = GLOBAL_GET("application/config/name").operator String().utf8();
+ 	VkApplicationInfo app_info = {};
+@@ -745,6 +772,10 @@ Error RenderingContextDriverVulkan::_initialize_instance() {
+ 	volkLoadInstance(instance);
+ #endif
+ 
++	if (GraphicsSDKVulkan::get_owner() != nullptr && VulkanHooks::get_singleton() == nullptr) {
++		GraphicsSDKVulkan::get_owner()->instance_created(instance, vkGetInstanceProcAddr);
++	}
++
+ 	// Physical device.
+ 	if (enabled_instance_extension_names.has(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME)) {
+ 		functions.GetPhysicalDeviceFeatures2 = PFN_vkGetPhysicalDeviceFeatures2(vkGetInstanceProcAddr(instance, "vkGetPhysicalDeviceFeatures2"));
+@@ -1038,10 +1069,30 @@ bool RenderingContextDriverVulkan::surface_get_needs_resize(SurfaceID p_surface)
+ 
+ void RenderingContextDriverVulkan::surface_destroy(SurfaceID p_surface) {
+ 	Surface *surface = (Surface *)(p_surface);
+-	vkDestroySurfaceKHR(instance, surface->vk_surface, get_allocation_callbacks(VK_OBJECT_TYPE_SURFACE_KHR));
++	if (surface->graphics_sdk_surface && graphics_sdk_destroy_surface != nullptr) {
++		graphics_sdk_destroy_surface(instance, surface->vk_surface, get_allocation_callbacks(VK_OBJECT_TYPE_SURFACE_KHR));
++	} else {
++		vkDestroySurfaceKHR(instance, surface->vk_surface, get_allocation_callbacks(VK_OBJECT_TYPE_SURFACE_KHR));
++	}
+ 	memdelete(surface);
+ }
+ 
++void RenderingContextDriverVulkan::graphics_sdk_surface_functions_set(PFN_vkVoidFunction p_create, PFN_vkDestroySurfaceKHR p_destroy) {
++	graphics_sdk_create_surface = p_create;
++	graphics_sdk_destroy_surface = p_destroy;
++}
++
++void RenderingContextDriverVulkan::surface_prepare_for_graphics_sdk(SurfaceID p_surface) {
++	Surface *surface = (Surface *)(p_surface);
++	if (surface == nullptr || surface->graphics_sdk_surface || graphics_sdk_create_surface == nullptr) {
++		return;
++	}
++	// Only valid while no swapchain references the old surface.
++	if (!_surface_recreate_for_graphics_sdk(p_surface)) {
++		WARN_PRINT("Graphics SDK: Couldn't recreate the window surface through the SDK; keeping the original surface.");
++	}
++}
++
+ bool RenderingContextDriverVulkan::is_debug_utils_enabled() const {
+ 	return enabled_instance_extension_names.has(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+ }
+diff --git a/drivers/vulkan/rendering_context_driver_vulkan.h b/drivers/vulkan/rendering_context_driver_vulkan.h
+index 5de12a2..26c8362 100644
+--- a/drivers/vulkan/rendering_context_driver_vulkan.h
++++ b/drivers/vulkan/rendering_context_driver_vulkan.h
+@@ -107,6 +107,11 @@ private:
+ 	VkDebugUtilsMessengerEXT debug_messenger = VK_NULL_HANDLE;
+ 	VkDebugReportCallbackEXT debug_report = VK_NULL_HANDLE;
+ 	Functions functions;
++	// apiVersion passed in VkApplicationInfo.
++	uint32_t application_api_version = VK_API_VERSION_1_0;
++	// Surface entry points of the graphics SDK owner (see graphics_sdk_vulkan.h).
++	PFN_vkVoidFunction graphics_sdk_create_surface = nullptr;
++	PFN_vkDestroySurfaceKHR graphics_sdk_destroy_surface = nullptr;
+ 
+ 	Error _initialize_vulkan_version();
+ 	void _register_requested_instance_extension(const CharString &p_extension_name, bool p_required);
+@@ -128,6 +133,11 @@ protected:
+ 	virtual bool _use_validation_layers() const;
+ 	virtual Error _create_vulkan_instance(const VkInstanceCreateInfo *p_create_info, VkInstance *r_instance);
+ 
++	// Recreates the surface's VkSurfaceKHR through the graphics SDK's surface
++	// entry point. Only platforms whose SDKs hook surface creation override it.
++	virtual bool _surface_recreate_for_graphics_sdk(SurfaceID p_surface) { return false; }
++	PFN_vkVoidFunction _graphics_sdk_create_surface_get() const { return graphics_sdk_create_surface; }
++
+ public:
+ 	virtual Error initialize() override;
+ 	virtual const Device &device_get(uint32_t p_device_index) const override;
+@@ -171,9 +181,20 @@ public:
+ 		float hdr_reference_luminance = 200.0f;
+ 		float hdr_max_luminance = 1000.0f;
+ 		float hdr_linear_luminance_scale = 100.0f;
++
++		// Platform window data kept to recreate the surface for a graphics SDK.
++		void *platform_window = nullptr;
++		void *platform_instance = nullptr;
++		bool graphics_sdk_surface = false;
+ 	};
+ 
+ 	VkInstance instance_get() const;
++	uint32_t application_api_version_get() const { return application_api_version; }
++	// Set by the device driver from the graphics SDK owner; null restores the loader's functions.
++	void graphics_sdk_surface_functions_set(PFN_vkVoidFunction p_create, PFN_vkDestroySurfaceKHR p_destroy);
++	// Before the first swapchain of a surface: recreate it through the graphics
++	// SDK if the SDK hooks surface creation and the surface predates it.
++	void surface_prepare_for_graphics_sdk(SurfaceID p_surface);
+ 	VkPhysicalDevice physical_device_get(uint32_t p_device_index) const;
+ 	uint32_t queue_family_get_count(uint32_t p_device_index) const;
+ 	VkQueueFamilyProperties queue_family_get(uint32_t p_device_index, uint32_t p_queue_family_index) const;
+diff --git a/drivers/vulkan/rendering_device_driver_vulkan.cpp b/drivers/vulkan/rendering_device_driver_vulkan.cpp
+index 46c5a4b..5cd6f75 100644
+--- a/drivers/vulkan/rendering_device_driver_vulkan.cpp
++++ b/drivers/vulkan/rendering_device_driver_vulkan.cpp
+@@ -617,6 +617,24 @@ Error RenderingDeviceDriverVulkan::_initialize_device_extensions() {
+ 
+ 	_register_requested_device_extension(VK_KHR_DRIVER_PROPERTIES_EXTENSION_NAME, false);
+ 
++	if (graphics_sdk != nullptr) {
++		LocalVector<CharString> sdk_required;
++		LocalVector<CharString> sdk_optional;
++		graphics_sdk->get_device_extensions(physical_device, sdk_required, sdk_optional);
++		for (const CharString &extension_name : sdk_required) {
++			if (!requested_device_extensions.has(extension_name)) {
++				_register_requested_device_extension(extension_name, true);
++			} else {
++				requested_device_extensions[extension_name] = true;
++			}
++		}
++		for (const CharString &extension_name : sdk_optional) {
++			if (!requested_device_extensions.has(extension_name)) {
++				_register_requested_device_extension(extension_name, false);
++			}
++		}
++	}
++
+ 	uint32_t device_extension_count = 0;
+ 	VkResult err = vkEnumerateDeviceExtensionProperties(physical_device, nullptr, &device_extension_count, nullptr);
+ 	ERR_FAIL_COND_V_MSG(err != VK_SUCCESS, ERR_CANT_CREATE, vformat("Couldn't get Vulkan device extension count (VkResult error %d).", err));
+@@ -1326,9 +1344,230 @@ Error RenderingDeviceDriverVulkan::_add_queue_create_info(LocalVector<VkDeviceQu
+ 		queue_families[i].resize(create_info.queueCount);
+ 	}
+ 
++	// Extra queues for the graphics SDK. They are created after Godot's own
++	// queues in a family and never handed out by command_queue_create().
++	graphics_sdk_queue_requests.clear();
++	if (graphics_sdk != nullptr) {
++		graphics_sdk->get_queue_requests(physical_device, graphics_sdk_queue_requests);
++		static const float sdk_queue_priorities[32] = {};
++		for (GraphicsSDKVulkanProvider::QueueRequest &request : graphics_sdk_queue_requests) {
++			request.family_index = UINT32_MAX;
++			request.first_queue_index = 0;
++			if (request.count == 0) {
++				continue;
++			}
++			uint32_t picked_family = UINT32_MAX;
++			VkQueueFlags picked_flags = VK_QUEUE_FLAG_BITS_MAX_ENUM;
++			for (uint32_t i = 0; i < queue_family_count; i++) {
++				const VkQueueFlags flags = queue_family_properties[i].queueFlags;
++				if ((flags & request.required_flags) != request.required_flags) {
++					continue;
++				}
++				if (request.dedicated_family && (flags & queue_flags_mask) != 0) {
++					continue;
++				}
++				// Prefer the family with the fewest capabilities, like command_queue_family_get().
++				if (flags < picked_flags) {
++					picked_family = i;
++					picked_flags = flags;
++				}
++			}
++			if (picked_family == UINT32_MAX) {
++				print_verbose(vformat("Graphics SDK: no queue family with flags 0x%x for an extra queue.", request.required_flags));
++				continue;
++			}
++			VkDeviceQueueCreateInfo *family_info = nullptr;
++			for (VkDeviceQueueCreateInfo &create_info : r_queue_create_info) {
++				if (create_info.queueFamilyIndex == picked_family) {
++					family_info = &create_info;
++					break;
++				}
++			}
++			const uint32_t used = family_info != nullptr ? family_info->queueCount : 0;
++			if (used + request.count > queue_family_properties[picked_family].queueCount || used + request.count > 32) {
++				print_verbose(vformat("Graphics SDK: queue family %d has no room for %d extra queues.", picked_family, request.count));
++				continue;
++			}
++			if (family_info == nullptr) {
++				VkDeviceQueueCreateInfo create_info = {};
++				create_info.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
++				create_info.queueFamilyIndex = picked_family;
++				create_info.queueCount = request.count;
++				create_info.pQueuePriorities = sdk_queue_priorities;
++				r_queue_create_info.push_back(create_info);
++			} else {
++				family_info->queueCount += request.count;
++				family_info->pQueuePriorities = sdk_queue_priorities;
++			}
++			request.family_index = picked_family;
++			request.first_queue_index = used;
++		}
++	}
++
+ 	return OK;
+ }
+ 
++void RenderingDeviceDriverVulkan::_graphics_sdk_fold_core_features(void *&r_create_info_next, VkPhysicalDeviceFeatures &r_features) {
++	// The SDK asks for Vulkan 1.2/1.3 core features. Those structs may not be
++	// chained together with the individual structs they replace, so move the
++	// bits Godot already enables into them and unlink the individual ones.
++	const uint32_t api_version = MIN(physical_device_properties.apiVersion, context_driver->application_api_version_get());
++	const bool use_12 = api_version >= VK_API_VERSION_1_2;
++	const bool use_13 = api_version >= VK_API_VERSION_1_3;
++
++	static VkPhysicalDeviceVulkan12Features features_12;
++	static VkPhysicalDeviceVulkan13Features features_13;
++	features_12 = {};
++	features_12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
++	features_13 = {};
++	features_13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
++
++	VkBaseOutStructure *head = (VkBaseOutStructure *)r_create_info_next;
++	VkBaseOutStructure *kept_head = nullptr;
++	VkBaseOutStructure *kept_tail = nullptr;
++	while (head != nullptr) {
++		VkBaseOutStructure *next = head->pNext;
++		bool folded = false;
++		if (use_12) {
++			switch (head->sType) {
++				case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_FLOAT16_INT8_FEATURES: {
++					const VkPhysicalDeviceShaderFloat16Int8Features *f = (const VkPhysicalDeviceShaderFloat16Int8Features *)head;
++					features_12.shaderFloat16 |= f->shaderFloat16;
++					features_12.shaderInt8 |= f->shaderInt8;
++					folded = true;
++				} break;
++				case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES: {
++					const VkPhysicalDeviceBufferDeviceAddressFeatures *f = (const VkPhysicalDeviceBufferDeviceAddressFeatures *)head;
++					features_12.bufferDeviceAddress |= f->bufferDeviceAddress;
++					features_12.bufferDeviceAddressCaptureReplay |= f->bufferDeviceAddressCaptureReplay;
++					features_12.bufferDeviceAddressMultiDevice |= f->bufferDeviceAddressMultiDevice;
++					folded = true;
++				} break;
++				case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_MEMORY_MODEL_FEATURES: {
++					const VkPhysicalDeviceVulkanMemoryModelFeatures *f = (const VkPhysicalDeviceVulkanMemoryModelFeatures *)head;
++					features_12.vulkanMemoryModel |= f->vulkanMemoryModel;
++					features_12.vulkanMemoryModelDeviceScope |= f->vulkanMemoryModelDeviceScope;
++					features_12.vulkanMemoryModelAvailabilityVisibilityChains |= f->vulkanMemoryModelAvailabilityVisibilityChains;
++					folded = true;
++				} break;
++				case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES: {
++					features_12.timelineSemaphore |= ((const VkPhysicalDeviceTimelineSemaphoreFeatures *)head)->timelineSemaphore;
++					folded = true;
++				} break;
++				case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_HOST_QUERY_RESET_FEATURES: {
++					features_12.hostQueryReset |= ((const VkPhysicalDeviceHostQueryResetFeatures *)head)->hostQueryReset;
++					folded = true;
++				} break;
++				case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SCALAR_BLOCK_LAYOUT_FEATURES: {
++					features_12.scalarBlockLayout |= ((const VkPhysicalDeviceScalarBlockLayoutFeatures *)head)->scalarBlockLayout;
++					folded = true;
++				} break;
++				default:
++					break;
++			}
++		}
++		if (use_13 && !folded) {
++			switch (head->sType) {
++				case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PIPELINE_CREATION_CACHE_CONTROL_FEATURES: {
++					features_13.pipelineCreationCacheControl |= ((const VkPhysicalDevicePipelineCreationCacheControlFeatures *)head)->pipelineCreationCacheControl;
++					folded = true;
++				} break;
++				case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SYNCHRONIZATION_2_FEATURES: {
++					features_13.synchronization2 |= ((const VkPhysicalDeviceSynchronization2Features *)head)->synchronization2;
++					folded = true;
++				} break;
++				case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_FEATURES: {
++					const VkPhysicalDeviceSubgroupSizeControlFeatures *f = (const VkPhysicalDeviceSubgroupSizeControlFeatures *)head;
++					features_13.subgroupSizeControl |= f->subgroupSizeControl;
++					features_13.computeFullSubgroups |= f->computeFullSubgroups;
++					folded = true;
++				} break;
++				case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TEXTURE_COMPRESSION_ASTC_HDR_FEATURES: {
++					features_13.textureCompressionASTC_HDR |= ((const VkPhysicalDeviceTextureCompressionASTCHDRFeatures *)head)->textureCompressionASTC_HDR;
++					folded = true;
++				} break;
++				case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES: {
++					features_13.dynamicRendering |= ((const VkPhysicalDeviceDynamicRenderingFeatures *)head)->dynamicRendering;
++					folded = true;
++				} break;
++				case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_4_FEATURES: {
++					features_13.maintenance4 |= ((const VkPhysicalDeviceMaintenance4Features *)head)->maintenance4;
++					folded = true;
++				} break;
++				default:
++					break;
++			}
++		}
++		if (!folded) {
++			head->pNext = nullptr;
++			if (kept_tail == nullptr) {
++				kept_head = head;
++			} else {
++				kept_tail->pNext = head;
++			}
++			kept_tail = head;
++		}
++		head = next;
++	}
++
++	VkPhysicalDeviceFeatures2 features_2 = {};
++	features_2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
++	features_2.features = r_features;
++	graphics_sdk->adjust_device_features(physical_device, &features_2, use_12 ? &features_12 : nullptr, use_13 ? &features_13 : nullptr);
++
++	// Never enable what the device does not support.
++	VkPhysicalDeviceFeatures supported_features = physical_device_features;
++	VkPhysicalDeviceVulkan12Features supported_12 = {};
++	supported_12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
++	VkPhysicalDeviceVulkan13Features supported_13 = {};
++	supported_13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
++	const RenderingContextDriverVulkan::Functions &functions = context_driver->functions_get();
++	bool have_supported = false;
++	if (functions.GetPhysicalDeviceFeatures2 != nullptr && use_12) {
++		have_supported = true;
++		VkPhysicalDeviceFeatures2 query = {};
++		query.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
++		query.pNext = &supported_12;
++		if (use_13) {
++			supported_12.pNext = &supported_13;
++		}
++		functions.GetPhysicalDeviceFeatures2(physical_device, &query);
++		supported_features = query.features;
++	}
++	{
++		VkBool32 *requested = (VkBool32 *)&features_2.features;
++		const VkBool32 *supported = (const VkBool32 *)&supported_features;
++		for (uint32_t i = 0; i < sizeof(VkPhysicalDeviceFeatures) / sizeof(VkBool32); i++) {
++			requested[i] = requested[i] && supported[i];
++		}
++		r_features = features_2.features;
++	}
++
++	const auto mask_bools = [](VkBool32 *p_requested, const VkBool32 *p_supported, size_t p_bytes) {
++		for (size_t i = 0; i < p_bytes / sizeof(VkBool32); i++) {
++			p_requested[i] = p_requested[i] && p_supported[i];
++		}
++	};
++	if (have_supported) {
++		// Every member after sType and pNext is a VkBool32 in both structs.
++		const size_t header = offsetof(VkPhysicalDeviceVulkan12Features, samplerMirrorClampToEdge);
++		mask_bools((VkBool32 *)((uint8_t *)&features_12 + header), (const VkBool32 *)((const uint8_t *)&supported_12 + header), sizeof(features_12) - header);
++		const size_t header_13 = offsetof(VkPhysicalDeviceVulkan13Features, robustImageAccess);
++		mask_bools((VkBool32 *)((uint8_t *)&features_13 + header_13), (const VkBool32 *)((const uint8_t *)&supported_13 + header_13), sizeof(features_13) - header_13);
++	}
++
++	void *next = kept_head;
++	if (use_12) {
++		features_12.pNext = next;
++		next = &features_12;
++	}
++	if (use_13) {
++		features_13.pNext = next;
++		next = &features_13;
++	}
++	r_create_info_next = next;
++}
++
+ Error RenderingDeviceDriverVulkan::_initialize_device(const LocalVector<VkDeviceQueueCreateInfo> &p_queue_create_info) {
+ 	TightLocalVector<const char *> enabled_extension_names;
+ 	enabled_extension_names.reserve(enabled_device_extension_names.size());
+@@ -1483,6 +1722,11 @@ Error RenderingDeviceDriverVulkan::_initialize_device(const LocalVector<VkDevice
+ 		}
+ 	}
+ 
++	VkPhysicalDeviceFeatures enabled_device_features = requested_device_features;
++	if (graphics_sdk != nullptr) {
++		_graphics_sdk_fold_core_features(create_info_next, enabled_device_features);
++	}
++
+ 	VkDeviceCreateInfo create_info = {};
+ 	create_info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+ 	create_info.pNext = create_info_next;
+@@ -1490,7 +1734,7 @@ Error RenderingDeviceDriverVulkan::_initialize_device(const LocalVector<VkDevice
+ 	create_info.pQueueCreateInfos = p_queue_create_info.ptr();
+ 	create_info.enabledExtensionCount = enabled_extension_names.size();
+ 	create_info.ppEnabledExtensionNames = enabled_extension_names.ptr();
+-	create_info.pEnabledFeatures = &requested_device_features;
++	create_info.pEnabledFeatures = &enabled_device_features;
+ 
+ 	if (VulkanHooks::get_singleton() != nullptr) {
+ 		bool device_created = VulkanHooks::get_singleton()->create_vulkan_device(&create_info, &vk_device);
+@@ -1542,9 +1786,83 @@ Error RenderingDeviceDriverVulkan::_initialize_device(const LocalVector<VkDevice
+ 		}
+ 	}
+ 
++	if (graphics_sdk != nullptr) {
++		_graphics_sdk_device_created();
++	}
++
+ 	return OK;
+ }
+ 
++void RenderingDeviceDriverVulkan::_graphics_sdk_device_created() {
++	const RenderingContextDriverVulkan::Functions &functions = context_driver->functions_get();
++
++	GraphicsSDKVulkanProvider::DeviceInfo info;
++	info.instance = context_driver->instance_get();
++	info.physical_device = physical_device;
++	info.device = vk_device;
++	info.get_instance_proc_addr = vkGetInstanceProcAddr;
++	info.get_device_proc_addr = functions.GetDeviceProcAddr;
++	info.instance_api_version = context_driver->application_api_version_get();
++
++	// The main queue is the one command_queue_family_get() picks for graphics:
++	// the graphics family with the fewest capabilities, queue 0.
++	VkQueueFlags picked_flags = VK_QUEUE_FLAG_BITS_MAX_ENUM;
++	for (uint32_t i = 0; i < queue_family_properties.size(); i++) {
++		if (queue_families[i].is_empty() || !(queue_family_properties[i].queueFlags & VK_QUEUE_GRAPHICS_BIT)) {
++			continue;
++		}
++		if (queue_family_properties[i].queueFlags < picked_flags) {
++			picked_flags = queue_family_properties[i].queueFlags;
++			info.graphics_queue_family = i;
++		}
++	}
++	if (info.graphics_queue_family != UINT32_MAX) {
++		info.graphics_queue_index = 0;
++		info.graphics_queue = queue_families[info.graphics_queue_family][0].queue;
++	}
++	for (const GraphicsSDKVulkanProvider::QueueRequest &request : graphics_sdk_queue_requests) {
++		info.extra_queues.push_back(request);
++	}
++	for (const CharString &extension_name : enabled_device_extension_names) {
++		info.enabled_device_extensions.push_back(extension_name);
++	}
++
++	if (!graphics_sdk->device_created(info)) {
++		print_line(vformat("Graphics SDK %s declined the Vulkan device; continuing without it.", graphics_sdk->get_name()));
++		graphics_sdk = nullptr;
++		return;
++	}
++
++	GraphicsSDKVulkanProvider::SwapchainFunctions swapchain_functions;
++	swapchain_functions.create_swapchain = device_functions.CreateSwapchainKHR;
++	swapchain_functions.destroy_swapchain = device_functions.DestroySwapchainKHR;
++	swapchain_functions.get_swapchain_images = device_functions.GetSwapchainImagesKHR;
++	swapchain_functions.acquire_next_image = device_functions.AcquireNextImageKHR;
++	swapchain_functions.queue_present = device_functions.QueuePresentKHR;
++	swapchain_functions.device_wait_idle = nullptr;
++	graphics_sdk->get_swapchain_functions(swapchain_functions);
++	if (swapchain_functions.create_swapchain != nullptr) {
++		device_functions.CreateSwapchainKHR = swapchain_functions.create_swapchain;
++	}
++	if (swapchain_functions.destroy_swapchain != nullptr) {
++		device_functions.DestroySwapchainKHR = swapchain_functions.destroy_swapchain;
++	}
++	if (swapchain_functions.get_swapchain_images != nullptr) {
++		device_functions.GetSwapchainImagesKHR = swapchain_functions.get_swapchain_images;
++	}
++	if (swapchain_functions.acquire_next_image != nullptr) {
++		device_functions.AcquireNextImageKHR = swapchain_functions.acquire_next_image;
++	}
++	if (swapchain_functions.queue_present != nullptr) {
++		device_functions.QueuePresentKHR = swapchain_functions.queue_present;
++	}
++	device_functions.DeviceWaitIdle = swapchain_functions.device_wait_idle;
++
++	GraphicsSDKVulkanProvider::SurfaceFunctions surface_functions;
++	graphics_sdk->get_surface_functions(surface_functions);
++	context_driver->graphics_sdk_surface_functions_set(surface_functions.create_win32_surface, surface_functions.destroy_surface);
++}
++
+ Error RenderingDeviceDriverVulkan::_initialize_allocator() {
+ 	VmaAllocatorCreateInfo allocator_info = {};
+ 	allocator_info.physicalDevice = physical_device;
+@@ -1828,6 +2146,9 @@ Error RenderingDeviceDriverVulkan::initialize(uint32_t p_device_index, uint32_t
+ 	physical_device = context_driver->physical_device_get(p_device_index);
+ 	frame_count = p_frame_count;
+ 
++	// A graphics SDK takes part in device creation unless VulkanHooks (OpenXR) owns it.
++	graphics_sdk = VulkanHooks::get_singleton() == nullptr ? GraphicsSDKVulkan::get_owner() : nullptr;
++
+ 	// Copy the queue family properties the context already retrieved.
+ 	uint32_t queue_family_count = context_driver->queue_family_get_count(p_device_index);
+ 	queue_family_properties.resize(queue_family_count);
+@@ -3306,6 +3627,11 @@ Error RenderingDeviceDriverVulkan::command_queue_execute_and_present(CommandQueu
+ 		present_info.pImageIndices = image_indices.ptr();
+ 		present_info.pResults = results.ptr();
+ 
++		const uint64_t present_frame = graphics_sdk_present_frame++;
++		if (graphics_sdk != nullptr) {
++			graphics_sdk->present_begin(present_frame);
++		}
++
+ 		device_queue.submit_mutex.lock();
+ #if defined(SWAPPY_FRAME_PACING_ENABLED)
+ 		if (swappy_frame_pacer_enable) {
+@@ -3319,6 +3645,10 @@ Error RenderingDeviceDriverVulkan::command_queue_execute_and_present(CommandQueu
+ 
+ 		device_queue.submit_mutex.unlock();
+ 
++		if (graphics_sdk != nullptr) {
++			graphics_sdk->present_end(present_frame);
++		}
++
+ 		// Set the index to an invalid value. If any of the swap chains returned out of date, indicate it should be resized the next time it's acquired.
+ 		bool any_result_is_out_of_date = false;
+ 		for (uint32_t i = 0; i < p_swap_chains.size(); i++) {
+@@ -3670,9 +4000,19 @@ Error RenderingDeviceDriverVulkan::swap_chain_resize(CommandQueueID p_cmd_queue,
+ 	CommandQueue *command_queue = (CommandQueue *)(p_cmd_queue.id);
+ 	SwapChain *swap_chain = (SwapChain *)(p_swap_chain.id);
+ 
++	if (graphics_sdk != nullptr && device_functions.DeviceWaitIdle != nullptr) {
++		// A presentation-owning SDK expects the device idle around swapchain recreation.
++		device_functions.DeviceWaitIdle(vk_device);
++	}
++
+ 	// Release all current contents of the swap chain.
+ 	_swap_chain_release(swap_chain);
+ 
++	if (graphics_sdk != nullptr) {
++		// No swapchain references the surface now; let the SDK see its creation.
++		context_driver->surface_prepare_for_graphics_sdk(swap_chain->surface);
++	}
++
+ 	// Validate if the command queue being used supports creating the swap chain for this surface.
+ 	const RenderingContextDriverVulkan::Functions &functions = context_driver->functions_get();
+ 	if (!context_driver->queue_family_supports_present(physical_device, command_queue->queue_family, swap_chain->surface)) {
+@@ -4162,6 +4502,9 @@ void RenderingDeviceDriverVulkan::swap_chain_free(SwapChainID p_swap_chain) {
+ 	DEV_ASSERT(p_swap_chain.id != 0);
+ 
+ 	SwapChain *swap_chain = (SwapChain *)(p_swap_chain.id);
++	if (graphics_sdk != nullptr && device_functions.DeviceWaitIdle != nullptr && swap_chain->vk_swapchain != VK_NULL_HANDLE) {
++		device_functions.DeviceWaitIdle(vk_device);
++	}
+ 	_swap_chain_release(swap_chain);
+ 
+ 	memdelete(swap_chain);
+@@ -6854,6 +7197,11 @@ void RenderingDeviceDriverVulkan::command_end_label(CommandBufferID p_cmd_buffer
+ 	functions.CmdEndDebugUtilsLabelEXT(command_buffer->vk_command_buffer);
+ }
+ 
++void *RenderingDeviceDriverVulkan::command_buffer_get_native_handle(CommandBufferID p_cmd_buffer) {
++	const CommandBufferInfo *command_buffer = (const CommandBufferInfo *)(p_cmd_buffer.id);
++	return command_buffer != nullptr ? (void *)command_buffer->vk_command_buffer : nullptr;
++}
++
+ /****************/
+ /**** DEBUG *****/
+ /****************/
+@@ -7497,6 +7845,14 @@ RenderingDeviceDriverVulkan::~RenderingDeviceDriverVulkan() {
+ 		}
+ 	}
+ 
++	if (graphics_sdk != nullptr) {
++		// The SDK shuts down before the device goes away; surfaces destroyed
++		// afterwards use the loader again.
++		context_driver->graphics_sdk_surface_functions_set(nullptr, nullptr);
++		graphics_sdk->device_destroying();
++		graphics_sdk = nullptr;
++	}
++
+ 	if (vk_device != VK_NULL_HANDLE) {
+ 		vkDestroyDevice(vk_device, VKC::get_allocation_callbacks(VK_OBJECT_TYPE_DEVICE));
+ 	}
+diff --git a/drivers/vulkan/rendering_device_driver_vulkan.h b/drivers/vulkan/rendering_device_driver_vulkan.h
+index cf6ef9f..3b4301b 100644
+--- a/drivers/vulkan/rendering_device_driver_vulkan.h
++++ b/drivers/vulkan/rendering_device_driver_vulkan.h
+@@ -33,6 +33,7 @@
+ #include "core/templates/hash_map.h"
+ #include "core/templates/paged_allocator.h"
+ #include "core/templates/rb_map.h"
++#include "drivers/vulkan/graphics_sdk_vulkan.h"
+ #include "drivers/vulkan/rendering_context_driver_vulkan.h"
+ #include "drivers/vulkan/rendering_shader_container_vulkan.h"
+ #include "servers/rendering/rendering_device_driver.h"
+@@ -115,6 +116,8 @@ class RenderingDeviceDriverVulkan : public RenderingDeviceDriver {
+ 		PFN_vkGetSwapchainImagesKHR GetSwapchainImagesKHR = nullptr;
+ 		PFN_vkAcquireNextImageKHR AcquireNextImageKHR = nullptr;
+ 		PFN_vkQueuePresentKHR QueuePresentKHR = nullptr;
++		// Only set while a graphics SDK owner hooks it (see graphics_sdk_vulkan.h).
++		PFN_vkDeviceWaitIdle DeviceWaitIdle = nullptr;
+ 		PFN_vkCreateRenderPass2KHR CreateRenderPass2KHR = nullptr;
+ 		PFN_vkCmdEndRenderPass2KHR EndRenderPass2KHR = nullptr;
+ 
+@@ -173,6 +176,13 @@ class RenderingDeviceDriverVulkan : public RenderingDeviceDriver {
+ #endif
+ 	DeviceFunctions device_functions;
+ 
++	// Active graphics SDK (null when there is no owner or it declined the device).
++	GraphicsSDKVulkanProvider *graphics_sdk = nullptr;
++	LocalVector<GraphicsSDKVulkanProvider::QueueRequest> graphics_sdk_queue_requests;
++	uint64_t graphics_sdk_present_frame = 0;
++	void _graphics_sdk_fold_core_features(void *&r_create_info_next, VkPhysicalDeviceFeatures &r_features);
++	void _graphics_sdk_device_created();
++
+ 	struct PendingFlushes {
+ 		LocalVector<VmaAllocation> allocations;
+ 		LocalVector<VkDeviceSize> offsets;
+@@ -768,6 +778,7 @@ public:
+ 	/**** DEBUG *****/
+ 	/****************/
+ 	virtual void command_insert_breadcrumb(CommandBufferID p_cmd_buffer, uint32_t p_data) override final;
++	virtual void *command_buffer_get_native_handle(CommandBufferID p_cmd_buffer) override final;
+ 	void print_lost_device_info();
+ 	void on_device_lost() const;
+ 	static String get_vulkan_result(VkResult err);
+diff --git a/platform/windows/rendering_context_driver_vulkan_windows.cpp b/platform/windows/rendering_context_driver_vulkan_windows.cpp
+index 5eca85c..7764928 100644
+--- a/platform/windows/rendering_context_driver_vulkan_windows.cpp
++++ b/platform/windows/rendering_context_driver_vulkan_windows.cpp
+@@ -54,18 +54,46 @@ RenderingContextDriverVulkanWindows::~RenderingContextDriverVulkanWindows() {
+ RenderingContextDriver::SurfaceID RenderingContextDriverVulkanWindows::surface_create(const void *p_platform_data) {
+ 	const WindowPlatformData *wpd = (const WindowPlatformData *)(p_platform_data);
+ 
+-	VkWin32SurfaceCreateInfoKHR create_info = {};
+-	create_info.sType = VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR;
+-	create_info.hinstance = wpd->instance;
+-	create_info.hwnd = wpd->window;
+-
++	const bool graphics_sdk = _graphics_sdk_create_surface_get() != nullptr;
+ 	VkSurfaceKHR vk_surface = VK_NULL_HANDLE;
+-	VkResult err = vkCreateWin32SurfaceKHR(instance_get(), &create_info, get_allocation_callbacks(VK_OBJECT_TYPE_SURFACE_KHR), &vk_surface);
++	VkResult err = _create_win32_surface(wpd->window, wpd->instance, graphics_sdk, &vk_surface);
+ 	ERR_FAIL_COND_V(err != VK_SUCCESS, SurfaceID());
+ 
+ 	Surface *surface = memnew(Surface);
+ 	surface->vk_surface = vk_surface;
++	surface->platform_window = (void *)wpd->window;
++	surface->platform_instance = (void *)wpd->instance;
++	surface->graphics_sdk_surface = graphics_sdk;
+ 	return SurfaceID(surface);
+ }
+ 
++VkResult RenderingContextDriverVulkanWindows::_create_win32_surface(HWND p_window, HINSTANCE p_instance, bool p_graphics_sdk, VkSurfaceKHR *r_surface) {
++	VkWin32SurfaceCreateInfoKHR create_info = {};
++	create_info.sType = VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR;
++	create_info.hinstance = p_instance;
++	create_info.hwnd = p_window;
++
++	PFN_vkCreateWin32SurfaceKHR create_surface = vkCreateWin32SurfaceKHR;
++	if (p_graphics_sdk) {
++		create_surface = (PFN_vkCreateWin32SurfaceKHR)_graphics_sdk_create_surface_get();
++	}
++	return create_surface(instance_get(), &create_info, get_allocation_callbacks(VK_OBJECT_TYPE_SURFACE_KHR), r_surface);
++}
++
++bool RenderingContextDriverVulkanWindows::_surface_recreate_for_graphics_sdk(SurfaceID p_surface) {
++	Surface *surface = (Surface *)(p_surface);
++	if (surface->platform_window == nullptr) {
++		return false;
++	}
++	VkSurfaceKHR vk_surface = VK_NULL_HANDLE;
++	VkResult err = _create_win32_surface((HWND)surface->platform_window, (HINSTANCE)surface->platform_instance, true, &vk_surface);
++	if (err != VK_SUCCESS) {
++		return false;
++	}
++	vkDestroySurfaceKHR(instance_get(), surface->vk_surface, get_allocation_callbacks(VK_OBJECT_TYPE_SURFACE_KHR));
++	surface->vk_surface = vk_surface;
++	surface->graphics_sdk_surface = true;
++	return true;
++}
++
+ #endif // WINDOWS_ENABLED && VULKAN_ENABLED
+diff --git a/platform/windows/rendering_context_driver_vulkan_windows.h b/platform/windows/rendering_context_driver_vulkan_windows.h
+index d9e384b..1d1b5ba 100644
+--- a/platform/windows/rendering_context_driver_vulkan_windows.h
++++ b/platform/windows/rendering_context_driver_vulkan_windows.h
+@@ -42,6 +42,8 @@ private:
+ 
+ protected:
+ 	SurfaceID surface_create(const void *p_platform_data) override final;
++	bool _surface_recreate_for_graphics_sdk(SurfaceID p_surface) override final;
++	VkResult _create_win32_surface(HWND p_window, HINSTANCE p_instance, bool p_graphics_sdk, VkSurfaceKHR *r_surface);
+ 
+ public:
+ 	struct WindowPlatformData {
+diff --git a/servers/rendering/rendering_device_driver.h b/servers/rendering/rendering_device_driver.h
+index 103bd99..f8db4ed 100644
+--- a/servers/rendering/rendering_device_driver.h
++++ b/servers/rendering/rendering_device_driver.h
+@@ -844,6 +844,9 @@ public:
+ 	/****************/
+ 	virtual void command_insert_breadcrumb(CommandBufferID p_cmd_buffer, uint32_t p_data) = 0;
+ 
++	/// Returns the underlying native command buffer handle (e.g. ID3D12GraphicsCommandList* or VkCommandBuffer).
++	virtual void *command_buffer_get_native_handle(CommandBufferID p_cmd_buffer) { return nullptr; }
++
+ 	/********************/
+ 	/**** SUBMISSION ****/
+ 	/********************/

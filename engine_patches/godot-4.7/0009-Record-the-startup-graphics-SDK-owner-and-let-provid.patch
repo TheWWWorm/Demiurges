@@ -1,0 +1,80 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: WWWorm <noreply@localhost>
+Date: Thu, 12 Nov 2026 11:33:59 +0100
+Subject: [PATCH] Record the startup graphics SDK owner and let providers
+ extend the feature chain
+
+The owner read in Main::setup() (user://graphics_sdk.cfg [startup] owner,
+overridden by --graphics-sdk=<owner>) is stored with
+GraphicsSDKVulkan::set_requested_owner() so every SDK driver sees the same
+value. The device driver passes the remaining feature chain to the owner,
+which may enable bits in it or prepend structs that have no core 1.2/1.3
+equivalent on the device.
+---
+ drivers/vulkan/graphics_sdk_vulkan.h              | 5 ++++-
+ drivers/vulkan/rendering_device_driver_vulkan.cpp | 5 +++++
+ main/main.cpp                                     | 8 ++++++++
+ 3 files changed, 17 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/vulkan/graphics_sdk_vulkan.h b/drivers/vulkan/graphics_sdk_vulkan.h
+index edf0266..b2b4a95 100644
+--- a/drivers/vulkan/graphics_sdk_vulkan.h
++++ b/drivers/vulkan/graphics_sdk_vulkan.h
+@@ -92,7 +92,10 @@ public:
+ 	// Before vkCreateDevice, for the chosen physical device.
+ 	virtual void get_device_extensions(VkPhysicalDevice p_physical_device, LocalVector<CharString> &r_required, LocalVector<CharString> &r_optional) {}
+ 	// Lets the provider enable feature bits in the structs the driver is
+-	// about to pass (any of them may be null when not chained).
++	// about to pass (any of them may be null when not chained). r_features2's
++	// pNext is the rest of the device feature chain; the provider may set bits
++	// in it or prepend its own structs, but must not chain a struct whose
++	// features are covered by a non-null r_features12/r_features13.
+ 	virtual void adjust_device_features(VkPhysicalDevice p_physical_device, VkPhysicalDeviceFeatures2 *r_features2, VkPhysicalDeviceVulkan12Features *r_features12, VkPhysicalDeviceVulkan13Features *r_features13) {}
+ 	virtual void get_queue_requests(VkPhysicalDevice p_physical_device, LocalVector<QueueRequest> &r_requests) {}
+ 
+diff --git a/drivers/vulkan/rendering_device_driver_vulkan.cpp b/drivers/vulkan/rendering_device_driver_vulkan.cpp
+index 5cd6f75..cd682ad 100644
+--- a/drivers/vulkan/rendering_device_driver_vulkan.cpp
++++ b/drivers/vulkan/rendering_device_driver_vulkan.cpp
+@@ -1510,10 +1510,15 @@ void RenderingDeviceDriverVulkan::_graphics_sdk_fold_core_features(void *&r_crea
+ 		head = next;
+ 	}
+ 
++	// The provider sees the remaining chain through features_2.pNext and may set
++	// bits in it or prepend structs of its own (for features without a core
++	// struct on this device).
+ 	VkPhysicalDeviceFeatures2 features_2 = {};
+ 	features_2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+ 	features_2.features = r_features;
++	features_2.pNext = kept_head;
+ 	graphics_sdk->adjust_device_features(physical_device, &features_2, use_12 ? &features_12 : nullptr, use_13 ? &features_13 : nullptr);
++	kept_head = (VkBaseOutStructure *)features_2.pNext;
+ 
+ 	// Never enable what the device does not support.
+ 	VkPhysicalDeviceFeatures supported_features = physical_device_features;
+diff --git a/main/main.cpp b/main/main.cpp
+index 4996c3a..d51a003 100644
+--- a/main/main.cpp
++++ b/main/main.cpp
+@@ -158,6 +158,9 @@
+ 
+ #include "core/io/config_file.h"
+ #include "drivers/streamline/streamline.h"
++#ifdef VULKAN_ENABLED
++#include "drivers/vulkan/graphics_sdk_vulkan.h"
++#endif
+ 
+ /* Static members */
+ 
+@@ -2695,6 +2698,11 @@ Error Main::setup(const char *execpath, int argc, char *argv[], bool p_second_ph
+ 				graphics_sdk_owner = arg.substr(String("--graphics-sdk=").length()).strip_edges().to_lower();
+ 			}
+ 		}
++#ifdef VULKAN_ENABLED
++		// Each SDK driver reads this: Streamline initializes only for "nvidia",
++		// FidelityFX takes presentation only for "amd" (its upscaling needs no owner).
++		GraphicsSDKVulkan::set_requested_owner(graphics_sdk_owner);
++#endif
+ 		if (graphics_sdk_owner == "nvidia" && Streamline::get_singleton()) {
+ 			if (display_driver == "headless") {
+ 				Streamline::get_singleton()->set_unavailable("headless runs do not use Streamline");

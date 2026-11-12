@@ -2,13 +2,16 @@ config_version=5
 
 [application]
 config/name="Etherlords Duel"
-config/version="0.9.0"
+config/version="0.10.0"
 config/icon="res://icon.png"
 config/windows_native_icon="res://assets/branding/icon.ico"
 config/macos_native_icon="res://assets/branding/icon.icns"
 boot_splash/bg_color=Color(0, 0, 0, 1)
 boot_splash/stretch_mode=1
 boot_splash/image="res://assets/branding/splash.png"
+boot_splash/image.graphics_sdk="res://assets/branding/splash-graphics.png"
+graphics_sdk/nvidia.graphics_sdk=true
+graphics_sdk/amd.graphics_sdk=true
 boot_splash/show_image=true
 run/main_scene="res://scenes/duel.tscn"
 run/max_fps=60

@@ -1,0 +1,33 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: WWWorm <noreply@localhost>
+Date: Thu, 12 Nov 2026 10:51:01 +0100
+Subject: [PATCH] Record the requested presentation owner in the graphics SDK
+ seam
+
+---
+ drivers/vulkan/graphics_sdk_vulkan.h | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/drivers/vulkan/graphics_sdk_vulkan.h b/drivers/vulkan/graphics_sdk_vulkan.h
+index 3e9737d..edf0266 100644
+--- a/drivers/vulkan/graphics_sdk_vulkan.h
++++ b/drivers/vulkan/graphics_sdk_vulkan.h
+@@ -129,6 +129,7 @@ public:
+ 
+ class GraphicsSDKVulkan {
+ 	static GraphicsSDKVulkanProvider *owner;
++	static inline String requested_owner;
+ 
+ public:
+ 	// Called by the SDK drivers (drivers/streamline, drivers/fsr_sdk) during
+@@ -142,4 +143,10 @@ public:
+ 	}
+ 	static GraphicsSDKVulkanProvider *get_owner() { return owner; }
+ 	static void clear_owner() { owner = nullptr; }
++
++	// The presentation owner requested for this run ("amd", "nvidia" or empty),
++	// read at startup from user://graphics_sdk.cfg or --graphics-sdk=<owner>.
++	// An SDK driver selects itself with select_owner() only when it matches.
++	static void set_requested_owner(const String &p_owner) { requested_owner = p_owner; }
++	static String get_requested_owner() { return requested_owner; }
+ };

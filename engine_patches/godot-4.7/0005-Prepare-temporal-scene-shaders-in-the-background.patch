@@ -1,0 +1,239 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: WWWorm <noreply@localhost>
+Date: Thu, 12 Nov 2026 11:28:17 +0100
+Subject: [PATCH] Prepare temporal scene shaders in the background
+
+The motion vector shader group compiles at low priority; until it is
+ready the scene draws with a spatial copy.
+---
+ .../scene_shader_forward_clustered.cpp        | 23 +++++++++--
+ .../scene_shader_forward_clustered.h          |  5 ++-
+ .../renderer_rd/pipeline_hash_map_rd.h        |  9 +++++
+ servers/rendering/renderer_rd/shader_rd.cpp   | 38 ++++++++++++++++---
+ servers/rendering/renderer_rd/shader_rd.h     |  7 ++--
+ 5 files changed, 68 insertions(+), 14 deletions(-)
+
+diff --git a/servers/rendering/renderer_rd/forward_clustered/scene_shader_forward_clustered.cpp b/servers/rendering/renderer_rd/forward_clustered/scene_shader_forward_clustered.cpp
+index 401ffd7..244dd97 100644
+--- a/servers/rendering/renderer_rd/forward_clustered/scene_shader_forward_clustered.cpp
++++ b/servers/rendering/renderer_rd/forward_clustered/scene_shader_forward_clustered.cpp
+@@ -552,7 +552,7 @@ uint64_t SceneShaderForwardClustered::ShaderData::get_vertex_input_mask(Pipeline
+ bool SceneShaderForwardClustered::ShaderData::is_valid() const {
+ 	if (version.is_valid()) {
+ 		ERR_FAIL_NULL_V(SceneShaderForwardClustered::singleton, false);
+-		return SceneShaderForwardClustered::singleton->shader.version_is_valid(version);
++		return SceneShaderForwardClustered::singleton->shader.version_is_valid(version, singleton->defer_advanced_compilation.is_set() ? SHADER_GROUP_BASE : -1);
+ 	} else {
+ 		return false;
+ 	}
+@@ -1010,6 +1010,13 @@ void fragment() {
+ }
+ 
+ void SceneShaderForwardClustered::set_default_specialization(const ShaderSpecialization &p_specialization) {
++	// Reapplying unchanged graphics options must not drain pending compiler
++	// jobs and discard every cached pipeline (including while preparing FSR).
++	if (default_specialization.packed_0 == p_specialization.packed_0 &&
++			default_specialization.packed_1 == p_specialization.packed_1 &&
++			default_specialization.packed_2 == p_specialization.packed_2) {
++		return;
++	}
+ 	default_specialization = p_specialization;
+ 
+ 	for (SelfList<ShaderData> *E = shader_list.first(); E; E = E->next()) {
+@@ -1021,11 +1028,18 @@ void SceneShaderForwardClustered::enable_multiview_shader_group() {
+ 	shader.enable_group(SHADER_GROUP_MULTIVIEW);
+ }
+ 
+-void SceneShaderForwardClustered::enable_advanced_shader_group(bool p_needs_multiview) {
++void SceneShaderForwardClustered::enable_advanced_shader_group(bool p_needs_multiview, bool p_high_priority) {
+ 	if (p_needs_multiview || RendererCompositorRD::get_singleton()->is_xr_enabled()) {
+-		shader.enable_group(SHADER_GROUP_ADVANCED_MULTIVIEW);
++		shader.enable_group(SHADER_GROUP_ADVANCED_MULTIVIEW, p_high_priority);
++	}
++	shader.enable_group(SHADER_GROUP_ADVANCED, p_high_priority);
++}
++
++bool SceneShaderForwardClustered::are_pipelines_ready() {
++	for (SelfList<ShaderData> *E = shader_list.first(); E; E = E->next()) {
++		if (!E->self()->pipeline_hash_map.is_compilation_ready()) { return false; }
+ 	}
+-	shader.enable_group(SHADER_GROUP_ADVANCED);
++	return true;
+ }
+ 
+ bool SceneShaderForwardClustered::is_multiview_shader_group_enabled() const {
+@@ -1033,6 +1047,7 @@ bool SceneShaderForwardClustered::is_multiview_shader_group_enabled() const {
+ }
+ 
+ bool SceneShaderForwardClustered::is_advanced_shader_group_enabled(bool p_multiview) const {
++	if (defer_advanced_compilation.is_set()) { return false; }
+ 	if (p_multiview) {
+ 		return shader.is_group_enabled(SHADER_GROUP_ADVANCED_MULTIVIEW);
+ 	} else {
+diff --git a/servers/rendering/renderer_rd/forward_clustered/scene_shader_forward_clustered.h b/servers/rendering/renderer_rd/forward_clustered/scene_shader_forward_clustered.h
+index feb98ff..ca6bc78 100644
+--- a/servers/rendering/renderer_rd/forward_clustered/scene_shader_forward_clustered.h
++++ b/servers/rendering/renderer_rd/forward_clustered/scene_shader_forward_clustered.h
+@@ -31,6 +31,7 @@
+ #pragma once
+ 
+ #include "servers/rendering/renderer_rd/pipeline_hash_map_rd.h"
++#include "core/templates/safe_refcount.h"
+ #include "servers/rendering/renderer_rd/shaders/forward_clustered/scene_forward_clustered.glsl.gen.h"
+ #include "servers/rendering/renderer_rd/storage_rd/material_storage.h"
+ #include "servers/rendering/rendering_server_types.h"
+@@ -380,7 +381,9 @@ public:
+ 	void init(const String p_defines);
+ 	void set_default_specialization(const ShaderSpecialization &p_specialization);
+ 	void enable_multiview_shader_group();
+-	void enable_advanced_shader_group(bool p_needs_multiview = false);
++	void enable_advanced_shader_group(bool p_needs_multiview = false, bool p_high_priority = true);
++	bool are_pipelines_ready();
++	SafeFlag defer_advanced_compilation;
+ 	bool is_multiview_shader_group_enabled() const;
+ 	bool is_advanced_shader_group_enabled(bool p_multiview) const;
+ 	uint32_t get_pipeline_compilations(RSE::PipelineSource p_source);
+diff --git a/servers/rendering/renderer_rd/pipeline_hash_map_rd.h b/servers/rendering/renderer_rd/pipeline_hash_map_rd.h
+index 18a5ef6..671c475 100644
+--- a/servers/rendering/renderer_rd/pipeline_hash_map_rd.h
++++ b/servers/rendering/renderer_rd/pipeline_hash_map_rd.h
+@@ -175,6 +175,15 @@ public:
+ 		}
+ 	}
+ 
++	// Non-blocking readiness check for a rendering feature being prepared.
++	bool is_compilation_ready() {
++		MutexLock lock(local_mutex);
++		for (const KeyValue<uint32_t, WorkerThreadPool::TaskID> &task : compilation_tasks) {
++			if (!WorkerThreadPool::get_singleton()->is_task_completed(task.value)) { return false; }
++		}
++		return true;
++	}
++
+ 	// Retrieve a pipeline. It'll return an empty pipeline if it's not available yet, but it'll be guaranteed to succeed if 'wait for compilation' is true and stall as necessary. Source is just an optional number to aid debugging.
+ 	RID get_pipeline(const Key &p_key, uint32_t p_key_hash, bool p_wait_for_compilation, RSE::PipelineSource p_source) {
+ 		RBMap<uint32_t, RID>::Element *e = hash_map.find(p_key_hash);
+diff --git a/servers/rendering/renderer_rd/shader_rd.cpp b/servers/rendering/renderer_rd/shader_rd.cpp
+index d264f26..93c73e4 100644
+--- a/servers/rendering/renderer_rd/shader_rd.cpp
++++ b/servers/rendering/renderer_rd/shader_rd.cpp
+@@ -712,7 +712,7 @@ void ShaderRD::_allocate_placeholders(Version *p_version, int p_group) {
+ 
+ // Try to compile all variants for a given group.
+ // Will skip variants that are disabled.
+-void ShaderRD::_compile_version_start(Version *p_version, int p_group) {
++void ShaderRD::_compile_version_start(Version *p_version, int p_group, bool p_high_priority) {
+ 	if (!group_enabled[p_group]) {
+ 		return;
+ 	}
+@@ -731,7 +731,7 @@ void ShaderRD::_compile_version_start(Version *p_version, int p_group) {
+ 	compile_data.version = p_version;
+ 	compile_data.group = p_group;
+ 
+-	WorkerThreadPool::GroupID group_task = WorkerThreadPool::get_singleton()->add_template_group_task(this, &ShaderRD::_compile_variant, compile_data, group_to_variant_map[p_group].size(), -1, true, SNAME("ShaderCompilation"));
++	WorkerThreadPool::GroupID group_task = WorkerThreadPool::get_singleton()->add_template_group_task(this, &ShaderRD::_compile_variant, compile_data, group_to_variant_map[p_group].size(), -1, p_high_priority, SNAME("ShaderCompilation"));
+ 	p_version->group_compilation_tasks.write[p_group] = group_task;
+ }
+ 
+@@ -861,7 +861,7 @@ void ShaderRD::version_set_raytracing_code(RID p_version, const HashMap<String,
+ 	_version_set(version, p_code, p_custom_defines);
+ }
+ 
+-bool ShaderRD::version_is_valid(RID p_version) {
++bool ShaderRD::version_is_valid(RID p_version, int p_group) {
+ 	Version *version = version_owner.get_or_null(p_version);
+ 	ERR_FAIL_NULL_V(version, false);
+ 
+@@ -878,7 +878,13 @@ bool ShaderRD::version_is_valid(RID p_version) {
+ 		}
+ 	}
+ 
+-	_compile_ensure_finished(version);
++	// A renderer preparing an optional group may keep drawing its already
++	// valid base group. Do not force that draw to join the optional work.
++	if (p_group < 0) {
++		_compile_ensure_finished(version);
++	} else {
++		_compile_version_end(version, p_group);
++	}
+ 
+ 	return version->valid;
+ }
+@@ -927,7 +933,7 @@ int ShaderRD::get_variant_to_group(int p_variant) const {
+ 	return variant_to_group[p_variant];
+ }
+ 
+-void ShaderRD::enable_group(int p_group) {
++void ShaderRD::enable_group(int p_group, bool p_high_priority) {
+ 	ERR_FAIL_INDEX(p_group, group_enabled.size());
+ 
+ 	if (group_enabled[p_group]) {
+@@ -941,7 +947,7 @@ void ShaderRD::enable_group(int p_group) {
+ 	for (const RID &version_rid : version_owner.get_owned_list()) {
+ 		Version *version = version_owner.get_or_null(version_rid);
+ 		version->mutex->lock();
+-		_compile_version_start(version, p_group);
++		_compile_version_start(version, p_group, p_high_priority);
+ 		version->mutex->unlock();
+ 	}
+ }
+@@ -950,6 +956,26 @@ bool ShaderRD::is_group_enabled(int p_group) const {
+ 	return group_enabled[p_group];
+ }
+ 
++// Poll background compilation without making the render thread join it.
++bool ShaderRD::is_group_compilation_ready(int p_group) {
++	ERR_FAIL_INDEX_V(p_group, group_enabled.size(), false);
++	if (!group_enabled[p_group]) { return false; }
++	for (const RID &version_rid : version_owner.get_owned_list()) {
++		const Version *version = version_owner.get_or_null(version_rid);
++		// Another compiler may hold this mutex while joining a shader job.
++		// A readiness poll must never wait for that mutex either.
++		if (!version->mutex->try_lock()) { return false; }
++		bool ready = true;
++		if (!version->dirty && version->group_compilation_tasks.size() > p_group) {
++			WorkerThreadPool::GroupID task = version->group_compilation_tasks[p_group];
++			ready = task == 0 || WorkerThreadPool::get_singleton()->is_group_task_completed(task);
++		}
++		version->mutex->unlock();
++		if (!ready) { return false; }
++	}
++	return true;
++}
++
+ int64_t ShaderRD::get_group_count() const {
+ 	return group_enabled.size();
+ }
+diff --git a/servers/rendering/renderer_rd/shader_rd.h b/servers/rendering/renderer_rd/shader_rd.h
+index 9ec4cbd..ee11118 100644
+--- a/servers/rendering/renderer_rd/shader_rd.h
++++ b/servers/rendering/renderer_rd/shader_rd.h
+@@ -102,7 +102,7 @@ private:
+ 
+ 	void _initialize_version(Version *p_version);
+ 	void _clear_version(Version *p_version);
+-	void _compile_version_start(Version *p_version, int p_group);
++	void _compile_version_start(Version *p_version, int p_group, bool p_high_priority = true);
+ 	void _compile_version_end(Version *p_version, int p_group);
+ 	void _compile_ensure_finished(Version *p_version);
+ 	void _allocate_placeholders(Version *p_version, int p_group);
+@@ -227,7 +227,7 @@ public:
+ 		return version->variants[p_variant];
+ 	}
+ 
+-	bool version_is_valid(RID p_version);
++	bool version_is_valid(RID p_version, int p_group = -1);
+ 
+ 	bool version_free(RID p_version);
+ 
+@@ -238,8 +238,9 @@ public:
+ 	int get_variant_to_group(int p_variant) const;
+ 
+ 	// Enable/disable groups for things that might be enabled at run time.
+-	void enable_group(int p_group);
++	void enable_group(int p_group, bool p_high_priority = true);
+ 	bool is_group_enabled(int p_group) const;
++	bool is_group_compilation_ready(int p_group);
+ 	int64_t get_group_count() const;
+ 	const LocalVector<int> &get_group_to_variants(int p_group) const;
+ 

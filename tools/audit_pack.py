@@ -7,8 +7,10 @@ import re
 import struct
 import subprocess
 
-ALLOWED = re.compile(r"^(?:res://)?(?:src/[^\n]+\.(?:gd|gdc|gd\.remap|gdshader|gdshader\.remap|gdshaderinc)|scenes/[^\n]+\.(?:tscn|tscn\.remap)|\.godot/[^\n]+|project\.binary|icon\.(?:svg|png)(?:\.import)?|assets/branding/(?:(?:splash|expedition-highland|expedition-citadel|expedition-reliquary|expedition-warden)\.png(?:\.import)?|icon\.ico)|assets/widescreen/etherlords(?:-ii)?-main-menu-frame-overlay\.png(?:\.import)?|native/el_(?:lzma|discord|assets|lua)\.gdextension)$")
+ALLOWED = re.compile(r"^(?:res://)?(?:src/[^\n]+\.(?:gd|gdc|gd\.remap|gdshader|gdshader\.remap|gdshaderinc)|scenes/[^\n]+\.(?:tscn|tscn\.remap)|\.godot/[^\n]+|project\.binary|icon\.(?:svg|png)(?:\.import)?|assets/branding/(?:(?:splash|splash-graphics|expedition-highland|expedition-citadel|expedition-reliquary|expedition-warden)\.png(?:\.import)?|icon\.ico|vendors/[a-z-]+\.png\.import|vendors/nvidia-geforce-rtx\.tres\.remap)|assets/widescreen/etherlords(?:-ii)?-main-menu-frame-overlay\.png(?:\.import)?|native/el_(?:lzma|discord|assets|lua)\.gdextension)$")
 GAME_DATA = re.compile(r"\.(res|mmp|fig|mod|anm|bon|reg|cpg|sobj|bik|wav|ogg|mp3|exe|dll|etherpack|eipack|elpack)$", re.I)
+# Godot's own binary copies of text resources (.tres) in an export.
+GODOT_EXPORTED = re.compile(r"^\.godot/exported/\d+/export-[0-9a-f]{32}-[\w-]+\.(?:res|scn)$")
 PRIVATE = re.compile(rb"/(?:home|Users)/[^/\s\x00]+/|\.local_profiles\.json\x00?\s*[:=]|(?:FUN|DAT|LAB|PTR|SUB)_[0-9a-fA-F]{6,}")
 
 
@@ -46,7 +48,7 @@ def audit(path):
         count += 1
         if not ALLOWED.fullmatch(name) or ".." in name.split("/"):
             problems.append(f"Unexpected entry: {name}")
-        if GAME_DATA.search(name) or "profiles.json" in name or "/tools/" in name:
+        if (GAME_DATA.search(name) and not GODOT_EXPORTED.match(name)) or "profiles.json" in name or "/tools/" in name:
             problems.append(f"Private/content entry: {name}")
         if payload[:4] == b"GDSC":
             size = struct.unpack_from("<I", payload, 8)[0]
