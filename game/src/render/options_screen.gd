@@ -9,7 +9,22 @@ extends RefCounted
 ## them, Cancel (or Esc) drops them. Volume sliders are heard while dragged.
 ## Options without a remake system are kept and saved but have no effect; their
 ## tooltip says so.
+## The remake's own settings join them: a column of page buttons beside the
+## frame (the two original pages first) shows the remake's pages inside the
+## frame, built by `remake_host`. Those apply while they are edited; OK keeps
+## them and Cancel (or Esc) puts back what they were when the screen opened.
 ## Approximations: slider travel 140 px; caption placement beside each box.
+
+## The game that builds the remake's pages: remake_pages(menu) gives
+## [id, title, parent page or ""] rows (pages with a parent are sub-pages,
+## reached from inside it); build_remake_page(menu, id, column, kit) fills a
+## page ("tools": the buttons under it); remake_session(menu, phase) is told
+## "open", "apply" or "cancel".
+static var remake_host: Object
+const ORIGINAL_PAGES := ["general", "combat"]
+## The page column beside the frame (1024x768 design pixels).
+const PAGE_LIST_WIDTH := 192.0
+const PAGE_LIST_GAP := 12.0
 
 const NO_EFFECT := "No effect in the remake yet."
 const THUMB := Rect2(241, 123, 6, 24)
@@ -79,11 +94,15 @@ var checks: Dictionary = {}
 var sliders: Dictionary = {}
 var commands: Dictionary = {}
 var tabs: Dictionary = {}
-var remake_button: Button
 ## The way the last session ended: OK (true) or Cancel, and the command
 ## button pressed ("" for OK / Cancel).
 var last_applied := false
 var last_command := ""
+## The values when the screen opened: OK stores only what the original pages
+## changed (the remake pages edit the settings themselves).
+var _opened: Dictionary = {}
+## The panel holding a remake page, over the frame's inside.
+var remake_panel: Control
 
 func _init(owner: ELFrontMenu) -> void:
 	menu = owner
@@ -95,12 +114,27 @@ func art_exclude(target: String) -> Array:
 	if target != "options": return []
 	return ["Type2"] if page == "combat" else ["Type1"]
 
+## The remake builds its own pages here (a game is running this screen).
+func has_remake_pages() -> bool:
+	return is_instance_valid(remake_host) and not remake_pages().is_empty()
+
+func remake_pages() -> Array:
+	return remake_host.call("remake_pages", menu) if is_instance_valid(remake_host) else []
+
+func on_remake_page() -> bool:
+	return page not in ORIGINAL_PAGES
+
 ## Starts editing: a copy of the active edition's values, on `first_page`.
 func open(where := "menu", first_page := "general") -> void:
 	context = where
-	page = first_page
-	pending = menu.option_settings().values.duplicate()
+	page = first_page if first_page in ORIGINAL_PAGES or has_remake_pages() else "general"
+	pending = menu.option_settings().values.duplicate(true)
+	_opened = pending.duplicate(true)
+	_remake_session("open")
 	menu.show_screen("options")
+
+func _remake_session(phase: String) -> void:
+	if is_instance_valid(remake_host): remake_host.call("remake_session", menu, phase)
 
 static func inert(key: String, edition: String) -> bool:
 	return edition == "el2" and key in ["show_chat", "mouse_scroll", "heroes_casting"]
@@ -137,7 +171,17 @@ func build_screen() -> void:
 	sliders.clear()
 	commands.clear()
 	tabs.clear()
-	if pending.is_empty(): pending = menu.option_settings().values.duplicate()
+	remake_panel = null
+	if pending.is_empty():
+		pending = menu.option_settings().values.duplicate(true)
+		_opened = pending.duplicate(true)
+	if on_remake_page() and not has_remake_pages(): page = "general"
+	if on_remake_page():
+		for page_id: String in ORIGINAL_PAGES: _tab(page_id)
+		_ok_cancel()
+		_remake_page()
+		_page_list()
+		return
 	# The first game's slider tracks are pieces of the page panels.
 	if spec().has("panels"):
 		menu._add_group(spec().panels[page], [])
@@ -158,6 +202,10 @@ func build_screen() -> void:
 	for control: String in page_controls("CheckButton"): _check(control)
 	for item: Array in spec().sliders[page]: _slider(item)
 	for control: String in spec().commands[page]: _command(control)
+	_ok_cancel()
+	_page_list()
+
+func _ok_cancel() -> void:
 	var ok := ELFrontMenu.CutButton.make(menu, spec().ok, shift(spec().ok))
 	if ok != null:
 		menu.canvas.add_child(ok)
@@ -170,7 +218,136 @@ func build_screen() -> void:
 		menu.buttons[spec().cancel] = cancel
 		cancel.tooltip_text = _tip(spec().cancel)
 		cancel.pressed.connect(close)
-	_remake_section()
+
+## The frame's inside below its tab row and above OK / Cancel.
+func inside_rect() -> Rect2:
+	var first := rect(spec().tabs.general)
+	var last := rect(spec().tabs.combat)
+	var bottom := first.end.y + 400.0
+	var ok: Control = menu.buttons.get(spec().ok)
+	if ok != null: bottom = ok.position.y - 6.0
+	return Rect2(first.position.x, first.position.y, last.end.x - first.position.x, bottom - first.position.y)
+
+## A remake page over the frame's inside (its tab row included): a header
+## with the page's title (and the way back from a sub-page), the page in a
+## scrolling column, and the tools row beside OK / Cancel.
+func _remake_page() -> void:
+	var kit := ELMenuKit.for_profile(menu.profile)
+	var look := kit.theme() if kit != null else null
+	if look == null: kit = null
+	var area := inside_rect()
+	var panel := PanelContainer.new()
+	panel.name = "RemakePage"
+	panel.position = area.position
+	panel.size = area.size
+	if look != null:
+		panel.theme = look
+		var style := kit.panel_style("box", Vector4(10, 8, 6, 8))
+		if style != null: panel.add_theme_stylebox_override("panel", style)
+	menu.canvas.add_child(panel)
+	remake_panel = panel
+	var column := VBoxContainer.new()
+	column.add_theme_constant_override("separation", 8)
+	panel.add_child(column)
+	var header := HBoxContainer.new()
+	header.add_theme_constant_override("separation", 8)
+	column.add_child(header)
+	var row := _page_row(page)
+	var parent_page: String = str(row[2]) if row.size() > 2 else ""
+	if not parent_page.is_empty():
+		var back := Button.new()
+		back.name = "Back"
+		back.focus_mode = Control.FOCUS_NONE
+		var parent_title := str(_page_row(parent_page)[1])
+		if kit == null or not kit.icon_button(back, str(kit.art.get("back", "")), parent_title): back.text = "‹ " + parent_title
+		back.pressed.connect(show_page.bind(parent_page))
+		header.add_child(back)
+	var title := ELMenuKit.heading(str(row[1]) if row.size() > 1 else page, 19)
+	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	header.add_child(title)
+	if not parent_page.is_empty():
+		# Balances the back button, so the title stays centred.
+		var spacer := Control.new()
+		spacer.custom_minimum_size.x = header.get_child(0).get_combined_minimum_size().x
+		header.add_child(spacer)
+	var scroll := ScrollContainer.new()
+	scroll.name = "Scroll"
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	scroll.follow_focus = true
+	column.add_child(scroll)
+	var margin := MarginContainer.new()
+	margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	margin.add_theme_constant_override("margin_right", 10)
+	scroll.add_child(margin)
+	var content := VBoxContainer.new()
+	content.name = "Content"
+	content.add_theme_constant_override("separation", 12)
+	margin.add_child(content)
+	remake_host.call("build_remake_page", menu, page, content, kit)
+	# Export log and Game files sit left of OK / Cancel.
+	var ok: Control = menu.buttons.get(spec().ok)
+	if ok != null:
+		var tools := HBoxContainer.new()
+		tools.name = "Tools"
+		tools.add_theme_constant_override("separation", 8)
+		if look != null: tools.theme = look
+		menu.canvas.add_child(tools)
+		remake_host.call("build_remake_page", menu, "tools", tools, kit)
+		var height := tools.get_combined_minimum_size().y
+		tools.position = Vector2(area.position.x + 4.0, ok.position.y + (ok.size.y - height) * 0.5)
+		tools.size = Vector2(ok.position.x - 12.0 - tools.position.x, height)
+
+## An all-capitals tab caption ("ОСНОВНЫЕ ПАРАМЕТРЫ") in the page list's
+## sentence case ("Основные параметры").
+static func _sentence(text: String) -> String:
+	text = text.strip_edges()
+	if text != text.to_upper() or text.length() < 2: return text
+	return text.left(1) + text.substr(1).to_lower()
+
+func _page_row(id: String) -> Array:
+	for row: Array in remake_pages():
+		if row[0] == id: return row
+	return [id, id, ""]
+
+## The page buttons beside the frame: the original two pages, then the
+## remake's (a sub-page lights its parent).
+func _page_list() -> void:
+	if not has_remake_pages(): return
+	var kit := ELMenuKit.for_profile(menu.profile)
+	var look := kit.theme() if kit != null else null
+	var list := VBoxContainer.new()
+	list.name = "Pages"
+	list.add_theme_constant_override("separation", 6)
+	if look != null: list.theme = look
+	var shown := page
+	var row := _page_row(page)
+	if row.size() > 2 and not str(row[2]).is_empty(): shown = str(row[2])
+	var entries: Array = [["general", _sentence(menu._caption(spec().tabs.general))], ["combat", _sentence(menu._caption(spec().tabs.combat))]]
+	for entry: Array in remake_pages():
+		if entry.size() <= 2 or str(entry[2]).is_empty(): entries.append(entry)
+	for entry: Array in entries:
+		var button := Button.new()
+		button.name = "Page_" + str(entry[0])
+		button.text = str(entry[1])
+		button.focus_mode = Control.FOCUS_NONE
+		button.toggle_mode = true
+		button.button_pressed = entry[0] == shown
+		button.custom_minimum_size = Vector2(PAGE_LIST_WIDTH, 34)
+		button.clip_text = true
+		# Long captions shrink to fit the button.
+		var font: Font = look.get_default_font() if look != null else menu.arial
+		var font_size := 15
+		while font_size > 11 and font.get_string_size(button.text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x > PAGE_LIST_WIDTH - 30.0: font_size -= 1
+		button.add_theme_font_size_override("font_size", font_size)
+		button.pressed.connect(func():
+			button.button_pressed = true
+			show_page(str(entry[0])))
+		list.add_child(button)
+	menu.canvas.add_child(list)
+	var frame := inside_rect()
+	list.size = list.get_combined_minimum_size()
+	list.position = Vector2(frame.position.x - PAGE_LIST_GAP - 13.0 - list.size.x, frame.position.y)
 
 func _tip(control: String) -> String:
 	var key := str(menu._controls.get(control, {}).get("ToolTip", ""))
@@ -318,38 +495,6 @@ func _command(control: String) -> void:
 		button.tooltip_text += ("\n" if not button.tooltip_text.is_empty() else "") + ELFrontMenu.UNAVAILABLE
 	button.pressed.connect(func(): finish(true, control))
 
-## Remake-only settings stay in the remake's dialog, below the original frame.
-func _remake_section() -> void:
-	remake_button = null
-	if menu.settings_requested.get_connections().is_empty(): return
-	remake_button = Button.new()
-	remake_button.name = "RemakeSettings"
-	remake_button.focus_mode = Control.FOCUS_NONE
-	remake_button.text = ELRemakeText.t("Remake settings…", menu.profile)
-	remake_button.tooltip_text = ELRemakeText.t("Settings of the remake only: path tracing, volumes, shadows, weather, movies, anti-aliasing.", menu.profile)
-	remake_button.add_theme_font_size_override("font_size", 15)
-	# A framed dark plate with the menus' gold lettering: readable over the
-	# options art, where plain text was hard to see.
-	for state: String in ["normal", "hover", "pressed"]:
-		var plate := StyleBoxFlat.new()
-		plate.bg_color = Color(0.05, 0.04, 0.03, 0.82 if state == "normal" else 0.92)
-		plate.border_color = Color(ELFrontMenu.GOLD_INK, 0.75 if state == "normal" else 1.0)
-		plate.set_border_width_all(1)
-		plate.set_corner_radius_all(3)
-		plate.set_content_margin_all(4)
-		remake_button.add_theme_stylebox_override(state, plate)
-	remake_button.add_theme_color_override("font_color", ELFrontMenu.GOLD_INK)
-	remake_button.add_theme_color_override("font_hover_color", ELFrontMenu.INK_HOVER)
-	remake_button.add_theme_color_override("font_pressed_color", ELFrontMenu.INK_HOVER)
-	remake_button.position = Vector2(DESIGN_CENTRE - 120, 698)
-	remake_button.size = Vector2(240, 32)
-	remake_button.pressed.connect(func():
-		finish(true, "")
-		menu.settings_requested.emit())
-	menu.canvas.add_child(remake_button)
-
-const DESIGN_CENTRE := 512.0
-
 ## OK: the edited values become the settings (saved), then the screen closes.
 func accept() -> void:
 	finish(true, "")
@@ -361,10 +506,16 @@ func close() -> void:
 func finish(apply: bool, command: String) -> void:
 	var settings := menu.option_settings()
 	if apply:
-		for key: String in pending: settings.values[key] = pending[key]
+		# Only what the original pages changed: the remake pages set theirs.
+		for key: String in pending:
+			if not _opened.has(key) or pending[key] != _opened[key]: settings.values[key] = pending[key]
+		_remake_session("apply")
 		settings.save_file(menu.settings_path)
-	else: menu.preview_volumes(settings.values)
+	else:
+		_remake_session("cancel")
+		menu.preview_volumes(settings.values)
 	pending = {}
+	_opened = {}
 	last_command = command
 	last_applied = apply
 	menu.options_closed.emit(apply, command)

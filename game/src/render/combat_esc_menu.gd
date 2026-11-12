@@ -16,7 +16,6 @@ signal options_requested
 signal exit_requested
 signal quit_requested
 signal remake_menu_requested
-signal remake_settings_requested
 signal closed
 
 const DESIGN := Vector2(1024, 768)
@@ -122,14 +121,6 @@ func build(source: ELProfile) -> bool:
 	remake_button.custom_minimum_size = Vector2(140, 30)
 	remake_button.pressed.connect(func(): remake_menu_requested.emit())
 	_footer.add_child(remake_button)
-	var settings := Button.new()
-	settings.name = "RemakeSettings"
-	settings.text = ELRemakeText.t("Remake settings…", profile)
-	settings.focus_mode = Control.FOCUS_NONE
-	settings.add_theme_font_size_override("font_size", 15)
-	settings.custom_minimum_size = Vector2(240, 30)
-	settings.pressed.connect(func(): remake_settings_requested.emit())
-	_footer.add_child(settings)
 	# Remake-only: the wiki over the battle (also F1).
 	var wiki := Button.new()
 	wiki.name = "Wiki"

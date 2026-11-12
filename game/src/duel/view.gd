@@ -86,6 +86,10 @@ var updating := false
 var launch_profile := "el1"
 var capture_path := ""
 var capture_after := 3.0
+## Debug: "--open-options=WHERE:PAGE" opens the merged Options screen at start
+## (WHERE "menu" over the main menu, "battle" over the battle; "remake" opens
+## the remake menu instead), for screenshots with --capture.
+var _debug_options := ""
 var elapsed := 0.0
 var content_setup: ELContentSetup
 var arena: ELArena
@@ -266,6 +270,10 @@ func _ready() -> void:
 	# The window close button quits through ELAudio.quiet_quit (only when
 	# this is the running game, not a scripted check).
 	if get_tree().current_scene == self: get_tree().auto_accept_quit = false
+	# Dialogs never stop the window's close button (see _watch_window).
+	if get_tree().current_scene == self: get_tree().node_added.connect(_watch_window)
+	# The Options screen's remake pages come from here.
+	ELOptionsScreen.remake_host = self
 	# The public name; the project name keeps the existing user-data folder.
 	if get_tree().current_scene == self: get_window().title = "Demiurges"
 	# The session marker and log lines for crash reports (the running game).
@@ -274,6 +282,8 @@ func _ready() -> void:
 		report.options_summary = _options_summary
 		get_tree().root.add_child.call_deferred(report)
 	settings.load_file()
+	# After a start that ended unexpectedly on Vulkan, Compatibility again (said once).
+	if get_tree().current_scene == self and ELCrashReport.renderer_fallback(settings.values): settings.save_file()
 	# The chosen renderer needs the game started with it.
 	if _ensure_renderer(): return
 	ELSettings.apply_display(get_viewport(), settings.values)
@@ -315,6 +325,8 @@ func _ready() -> void:
 			capture_path = arg.trim_prefix("--capture=")
 		elif arg.begins_with("--capture-after="):
 			capture_after = float(arg.get_slice("=", 1))
+		elif arg.begins_with("--open-options="):
+			_debug_options = arg.trim_prefix("--open-options=")
 		elif arg == "--demo":
 			demo = true
 	_load_profiles()
@@ -325,6 +337,7 @@ func _ready() -> void:
 		if get_tree().current_scene == self and not demo and capture_path.is_empty(): _content_menu.call_deferred()
 		return
 	_start(launch_profile if profiles.has(launch_profile) else String(profiles.keys()[0]))
+	if not _debug_options.is_empty(): _open_debug_options.call_deferred()
 	# The original front end opens when the game itself is launched, after the
 	# edition's start-up movies; scripted checks that instantiate this scene
 	# keep the direct duel setup.
@@ -387,12 +400,63 @@ func _play_startup_movies() -> bool:
 	return true
 
 func _exit_tree() -> void:
+	if ELOptionsScreen.remake_host == self: ELOptionsScreen.remake_host = null
 	if _expedition_battle != null: expedition_run.save_battle(_expedition_battle)
 	elif expedition_run != null and not _expedition_save_error.is_empty(): expedition_run.persist()
 	remove_from_group(TRANSLATION_USERS)
 	if not get_tree().has_group(TRANSLATION_USERS): ELRemakeText.release()
 	if network_duel != null: network_duel.close()
 	ELMoviePlayer.shutdown()
+	ELPracticeAI.finish()
+
+## The engine drops the window's close request while the window has an
+## exclusive dialog, so the close button did nothing while one was open. A
+## dialog over the game is shown as an ordinary one instead, and a blocker
+## under it keeps the game behind it from being clicked (a click there gives
+## the dialog back its focus).
+var _modal_windows: Array[Window] = []
+var _modal_blocker: CanvasLayer
+
+func _watch_window(node: Node) -> void:
+	if not node is Window or node == get_tree().root: return
+	# A window inside a dialog is that dialog's business.
+	if node.get_parent() is Window: return
+	var window := node as Window
+	window.visibility_changed.connect(_window_shown.bind(window))
+	window.tree_exiting.connect(func(): _forget_modal(window))
+
+func _window_shown(window: Window) -> void:
+	if window.visible and window.exclusive:
+		window.exclusive = false
+		window.set_meta("modal", true)
+	if not window.has_meta("modal"): return
+	if window.visible:
+		if not _modal_windows.has(window): _modal_windows.append(window)
+	else: _forget_modal(window)
+	_update_modal_blocker()
+
+func _forget_modal(window: Window) -> void:
+	_modal_windows.erase(window)
+	_update_modal_blocker.call_deferred()
+
+func _update_modal_blocker() -> void:
+	_modal_windows = _modal_windows.filter(func(window: Window) -> bool: return is_instance_valid(window) and window.visible)
+	if _modal_windows.is_empty():
+		if _modal_blocker != null: _modal_blocker.hide()
+		return
+	if _modal_blocker == null:
+		_modal_blocker = CanvasLayer.new()
+		_modal_blocker.name = "ModalBlocker"
+		_modal_blocker.layer = 128
+		add_child(_modal_blocker)
+		var cover := Control.new()
+		cover.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		cover.mouse_filter = Control.MOUSE_FILTER_STOP
+		cover.gui_input.connect(func(event: InputEvent):
+			if event is InputEventMouseButton and event.pressed and not _modal_windows.is_empty():
+				_modal_windows.back().grab_focus())
+		_modal_blocker.add_child(cover)
+	_modal_blocker.show()
 
 ## Android Back acts as Esc (close a window, cancel, open the game menu);
 ## the project does not quit on it.
@@ -847,6 +911,11 @@ func _press_battle_slot(index: int) -> void:
 func _unhandled_input(event: InputEvent) -> void:
 	if game_console != null and game_console.visible: return
 	if _network_battle_chat != null and _network_battle_chat.visible: return
+	# Esc closes the remake menu.
+	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_ESCAPE and menu != null and menu.visible:
+		get_viewport().set_input_as_handled()
+		_close_remake_menu()
+		return
 	if duel == null:
 		return
 	# The tutorial panel takes every key and click while it is open.
@@ -4566,7 +4635,18 @@ func _build_ui() -> void:
 		menu.offset_bottom = minf(menu.offset_top + height, ui.size.y - 16.0)
 	ui.resized.connect(fit_menu)
 	menu_rows.minimum_size_changed.connect(fit_menu, CONNECT_DEFERRED)
-	menu_rows.add_child(_label("DUEL", 20, ACCENT))
+	# The title and a close button (Esc closes it too).
+	var menu_head := HBoxContainer.new()
+	menu_rows.add_child(menu_head)
+	var menu_title := _label("DUEL", 20, ACCENT)
+	menu_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	menu_head.add_child(menu_title)
+	var menu_close := _button("×", _close_remake_menu)
+	menu_close.name = "Close"
+	menu_close.tooltip_text = "Close (Esc)"
+	menu_close.custom_minimum_size = Vector2(34, 30)
+	menu_close.add_theme_font_size_override("font_size", 20)
+	menu_head.add_child(menu_close)
 	profile_select = OptionButton.new()
 	profile_select.add_item("Etherlords I", 0)
 	profile_select.add_item("Etherlords II", 1)
@@ -4603,7 +4683,6 @@ func _build_ui() -> void:
 		_refresh()))
 	menu_rows.add_child(_button("Game files…", _content_menu))
 	menu_rows.add_child(_button("Options…", _open_battle_options))
-	menu_rows.add_child(_button("Remake settings…", _open_settings))
 	menu_rows.add_child(_button("Show / hide battle log [L]", func():
 		log_text.visible = not log_text.visible
 		menu.hide()))
@@ -4780,6 +4859,12 @@ func _build_ui() -> void:
 	power_dialog.cancelled.connect(_cancel_power)
 	_layout_hud()
 
+## The remake menu (top right) closes: its close button or Esc.
+func _close_remake_menu() -> void:
+	if menu == null or not menu.visible: return
+	menu.hide()
+	_refresh()
+
 func _overlay_open() -> bool:
 	if game_console != null and game_console.visible: return true
 	if _network_battle_chat != null and _network_battle_chat.visible: return true
@@ -4819,78 +4904,151 @@ func _first_tutorial_battle() -> void:
 	if duel == null or profile == null or profile.id != "el1" or demo: return
 	_first_tutorial_panel().fire("COMBAT_SCREEN")
 
-func _open_settings() -> void:
+## The game's Options screen (the original pages and the remake's) from a
+## place without an Options button of its own, on `page`. Without the
+## original art, the remake's pages open in a dialog of their own.
+func _open_settings(page := "graphics") -> void:
 	menu.hide()
+	if profile != null and ELFrontMenu.supports(profile):
+		var host := _battle_host()
+		if host != null:
+			host.open_hosted("options", true, "settings")
+			host.options_ui.show_page(page)
+			options_layer.show()
+			host.show()
+			return
+	_open_settings_dialog()
+
+## The remake's pages in a dialog (no original Options art).
+func _open_settings_dialog() -> void:
 	if settings_dialog != null: settings_dialog.queue_free()
 	settings_dialog = AcceptDialog.new()
-	settings_dialog.title = _t("Remake settings")
-	settings_dialog.exclusive = true
+	settings_dialog.title = _t("Options")
 	settings_dialog.ok_button_text = _t("Close")
-	_settings_kit = ELMenuKit.for_profile(profile)
-	var look: Theme = _settings_kit.theme() if _settings_kit != null else null
-	if look == null: _settings_kit = null
-	settings_dialog.theme = look if look != null else _settings_theme()
+	_settings_kit = null
+	_settings_menu = null
+	settings_dialog.theme = _settings_theme()
 	add_child(settings_dialog)
 	var body := VBoxContainer.new()
 	body.add_theme_constant_override("separation", 10)
 	settings_dialog.add_child(body)
-	if _settings_kit != null:
-		# The Options frame has no title bar: the title heads the panel, and
-		# Close is the original OK button at the right of the tools row.
-		settings_dialog.borderless = true
-		body.add_child(ELMenuKit.heading(settings_dialog.title))
-		settings_dialog.get_ok_button().hide()
 	var tabs := TabContainer.new()
 	tabs.name = "Pages"
 	tabs.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	# The original frame is taller round its pages: shorter pages keep the
-	# dialog clear of the game choice under it.
-	tabs.custom_minimum_size = Vector2(660, 480 if _settings_kit != null else 520)
+	tabs.custom_minimum_size = Vector2(660, 520)
 	body.add_child(tabs)
-	_display_page(_settings_page(tabs, "Display"))
-	_graphics_page(_settings_page(tabs, "Graphics"))
-	_audio_page(_settings_page(tabs, "Audio"))
-	_interface_page(_settings_page(tabs, "Interface"))
-	_hotkeys_page(_settings_page(tabs, "Hotkeys"))
-	if not ELGraphicsSDK.credits_bbcode().is_empty(): _about_page(_settings_page(tabs, "About"))
-	for i in tabs.get_tab_count(): tabs.set_tab_title(i, str(tabs.get_tab_control(i).get_meta("title", tabs.get_tab_title(i))))
+	remake_session(null, "open")
+	for row: Array in remake_pages(null):
+		var scroll := ScrollContainer.new()
+		scroll.name = str(row[0])
+		scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+		tabs.add_child(scroll)
+		tabs.set_tab_title(tabs.get_tab_count() - 1, str(row[1]))
+		var margin := MarginContainer.new()
+		margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		for side: String in ["left", "right", "top", "bottom"]: margin.add_theme_constant_override("margin_" + side, 12)
+		scroll.add_child(margin)
+		var column := VBoxContainer.new()
+		column.add_theme_constant_override("separation", 14)
+		margin.add_child(column)
+		build_remake_page(null, str(row[0]), column, null)
+	var tools := HBoxContainer.new()
+	tools.add_theme_constant_override("separation", 10)
+	body.add_child(tools)
+	build_remake_page(null, "tools", tools, null)
+	settings_dialog.visibility_changed.connect(func():
+		if not settings_dialog.visible: remake_session(null, "apply")
+		_refresh())
+	settings_dialog.popup_centered(Vector2i(720, 660))
+	_refresh()
+
+# --- The remake's pages of the Options screen (ELOptionsScreen.remake_host) ---
+
+## The menu whose Options screen shows the remake's pages being built (null
+## in the dialog).
+var _settings_menu: ELFrontMenu
+## The settings when the Options screen opened: Cancel puts them back.
+var _settings_before := {}
+## The page a restart or Game files leaves from: the Options screen is closed
+## with OK first, so its original pages are kept too.
+func _leave_settings() -> void:
+	if is_instance_valid(_settings_menu) and _settings_menu.screen == "options" and _settings_menu.is_visible_in_tree():
+		_settings_menu.options_ui.accept()
+	elif settings_dialog != null and settings_dialog.visible: settings_dialog.hide()
+
+## [id, title, parent page] of the remake's pages; "path_tracing" is reached
+## from Graphics.
+func remake_pages(_menu: ELFrontMenu) -> Array:
+	var pages := []
+	if not (OS.has_feature("web") or OS.has_feature("mobile")): pages.append(["display", _t("Display"), ""])
+	pages.append(["graphics", _t("Graphics"), ""])
+	pages.append(["path_tracing", _t("Path tracing"), "graphics"])
+	pages.append(["interface", _t("Interface"), ""])
+	pages.append(["hotkeys", _t("Hotkeys"), ""])
+	if not ELGraphicsSDK.credits_bbcode().is_empty(): pages.append(["about", _t("About"), ""])
+	return pages
+
+## Fills the remake's page `id` into `column` (dressed in `kit`, the original
+## art, when there is one).
+func build_remake_page(owner: ELFrontMenu, id: String, column: Control, kit: ELMenuKit) -> void:
+	_settings_menu = owner
+	_settings_kit = kit
+	match id:
+		"display": _display_page(column)
+		"graphics": _graphics_page(column)
+		"path_tracing": _path_tracing_page(column)
+		"interface": _interface_page(column)
+		"hotkeys": _hotkeys_page(column)
+		"about": _about_page(column)
+		"tools": _settings_tools(column)
+	if kit != null: ELMenuKit.refit(column)
+
+## The Options screen opened ("open"), was left with OK ("apply") or Cancel
+## ("cancel"): the remake's settings as they were at the start come back.
+func remake_session(_owner: ELFrontMenu, phase: String) -> void:
+	match phase:
+		"open":
+			_settings_before = {"values": settings.values.duplicate(true), "light_view": is_instance_valid(path_tracing) and path_tracing.lighting_view,
+				"hotkeys": {"el1": settings.hotkey_overrides("el1").duplicate(), "el2": settings.hotkey_overrides("el2").duplicate()}}
+		"apply":
+			ELCrashReport.trace("settings: " + _options_summary())
+			ELGraphicsSDK.write_owner_file(settings.values)
+			if _settings_menu == null and not settings.save_file(): _notice(_t("Could not save preferences."))
+		"cancel":
+			if _settings_before.is_empty(): return
+			var before: Dictionary = _settings_before.values
+			for key: String in ELSettings.SHARED: settings.values[key] = before[key]
+			if before.has("movies"): settings.values.movies = before.movies
+			for id: String in ["el1", "el2"]: settings.set_hotkeys(id, _settings_before.hotkeys[id])
+			ELSettings.apply_window(settings.values)
+			if is_instance_valid(path_tracing):
+				path_tracing.set_enabled(bool(settings.values.path_tracing))
+				path_tracing.lighting_view = bool(_settings_before.light_view) and path_tracing.enabled
+			ELGraphicsSDK.write_owner_file(settings.values)
+			_update_fps_counter()
+			_apply_settings()
+	if phase != "open": _settings_before = {}
+
+## Export log and Game files, beside OK / Cancel.
+func _settings_tools(row: Control) -> void:
 	var export_log := Button.new()
 	export_log.name = "ExportLog"
 	export_log.text = _t("Export log…")
+	export_log.focus_mode = Control.FOCUS_NONE
 	export_log.tooltip_text = _t("Save or copy the game's log with the system information, to send it with a bug report.")
-	export_log.pressed.connect(func(): ELCrashReportBox.open(settings_dialog, {}))
-	var tools_row := HBoxContainer.new()
-	tools_row.add_theme_constant_override("separation", 10)
-	body.add_child(tools_row)
-	tools_row.add_child(export_log)
+	export_log.pressed.connect(func(): ELCrashReportBox.open(self, {}))
+	row.add_child(export_log)
 	# Adding, removing or switching games, outside a running campaign.
 	if campaign_view == null and _campaign_battle() == null:
 		var game_files := Button.new()
 		game_files.name = "GameFiles"
 		game_files.text = _t("Game files…")
+		game_files.focus_mode = Control.FOCUS_NONE
 		game_files.tooltip_text = _t("Add Etherlords or Etherlords II, remove one, or switch between them.")
 		game_files.pressed.connect(func():
-			settings_dialog.hide()
+			_leave_settings()
 			_open_content_setup())
-		tools_row.add_child(game_files)
-	if _settings_kit != null:
-		var gap := Control.new()
-		gap.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		tools_row.add_child(gap)
-		var close := Button.new()
-		close.name = "Close"
-		_settings_kit.icon_button(close, str(_settings_kit.art.get("close", "")), _t("Close"))
-		close.pressed.connect(settings_dialog.hide)
-		tools_row.add_child(close)
-	settings_dialog.visibility_changed.connect(func():
-		if not settings_dialog.visible:
-			ELCrashReport.trace("settings: " + _options_summary())
-			ELGraphicsSDK.write_owner_file(settings.values)
-			if not settings.save_file(): _notice(_t("Could not save preferences."))
-		_refresh())
-	if _settings_kit != null: ELMenuKit.refit(settings_dialog)
-	settings_dialog.popup_centered(Vector2i(720, 600 if _settings_kit != null else 660))
-	_refresh()
+		row.add_child(game_files)
 
 func _hotkeys_page(page: VBoxContainer) -> void:
 	var controls := HBoxContainer.new()
@@ -4924,7 +5082,7 @@ func _show_hotkeys(rows: VBoxContainer, status: Label, id: String) -> void:
 			if ELSettings.HOTKEYS[action][0] != group or defaults.is_empty(): continue
 			var row := HBoxContainer.new()
 			box.add_child(row)
-			var caption := _label(_t(ELSettings.HOTKEYS[action][1]), 16, INK)
+			var caption := _label(_t(ELSettings.HOTKEYS[action][1]), 15 if _settings_kit != null else 16, ELMenuKit.BODY_INK if _settings_kit != null else INK)
 			caption.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 			row.add_child(caption)
 			var field := HotkeyField.new()
@@ -4943,6 +5101,10 @@ class HotkeyField extends Button:
 	var prompt := ""
 	var _caption := ""
 	var _waiting := false
+
+	## Waiting for a key: screens that take keys leave them to the field.
+	func captures_keys() -> bool:
+		return _waiting
 
 	func _ready() -> void:
 		pressed.connect(func():
@@ -4974,11 +5136,9 @@ class HotkeyField extends Button:
 		_finish()
 		chosen.emit(code)
 
-## Graphics: path tracing first (renderer, switch, light view, what this
-## computer supports), then the picture and scene options.
-## Window mode, window size and frame rate.
+## Window mode, window size and frame rate (desktop only).
 func _display_page(page: VBoxContainer) -> void:
-	var box := _settings_box(page, "Display")
+	var box := _settings_box(page, "Game window")
 	var mode := OptionButton.new()
 	mode.name = "WindowMode"
 	for caption: String in ["Window", "Borderless full screen", "Exclusive full screen"]: mode.add_item(_t(caption))
@@ -5023,73 +5183,9 @@ func _display_page(page: VBoxContainer) -> void:
 		settings.values.frame_rate = int(ELSettings.FRAME_RATES[index])
 		ELSettings.apply_window(settings.values))
 
+## Graphics: the picture (upscaling and frame generation where the build has
+## them, anti-aliasing, sharpening), the scene, and the way to path tracing.
 func _graphics_page(page: VBoxContainer) -> void:
-	var traced := _settings_box(page, "Path tracing", true)
-	var renderer := OptionButton.new()
-	renderer.name = "Renderer"
-	for caption: String in ["Compatibility (default)", "Forward+ (Vulkan)"]: renderer.add_item(_t(caption))
-	renderer.select(int(settings.values.renderer))
-	var running := 1 if RenderingServer.get_current_rendering_method() == "forward_plus" else 0
-	var restart := Button.new()
-	restart.name = "Restart"
-	restart.text = _t("Restart now")
-	restart.visible = int(settings.values.renderer) != running
-	_settings_row(traced, "Renderer", "Path tracing needs Forward+ (Vulkan). Compatibility runs on more computers. A change takes effect after a restart.", renderer, restart)
-	var status := _label(_path_tracing_status(), 14, ACCENT if ELPathTracing.available() else MUTED)
-	status.name = "PathTracingStatus"
-	status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	var toggle := CheckButton.new()
-	toggle.name = "PathTracing"
-	toggle.button_pressed = bool(settings.values.path_tracing)
-	toggle.disabled = not ELPathTracing.available()
-	_settings_row(traced, "Path-traced lighting", "Real shadows, sky light, light bounced between surfaces and light from fire and spells, on maps and in battles. Costs about 2–3 ms a frame on a fast ray-tracing GPU. F7 switches it in the game.", toggle)
-	var light_view := CheckButton.new()
-	light_view.name = "LightView"
-	light_view.button_pressed = is_instance_valid(path_tracing) and path_tracing.lighting_view
-	light_view.disabled = toggle.disabled or not toggle.button_pressed
-	_settings_row(traced, "Show light only", "Draws the traced light without textures, to see what it does (Shift+F7). Not kept after a restart.", light_view)
-	var sky := HSlider.new()
-	sky.name = "SkyLight"
-	sky.custom_minimum_size.x = 200
-	sky.max_value = 200
-	sky.step = 5
-	sky.value = float(settings.values.sky_light) * 100
-	var sky_number := _label("%d%%" % sky.value, 15)
-	sky_number.custom_minimum_size.x = 44
-	sky_number.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	sky.value_changed.connect(func(value: float):
-		settings.values.sky_light = value / 100.0
-		sky_number.text = "%d%%" % value)
-	_settings_row(traced, "Sky light", "How much the sky lights shade. Lower gives deeper, more contrasting shadows; higher gives softer, brighter shade. Sunlit ground stays the same.", sky, sky_number)
-	var bounces := HSlider.new()
-	bounces.name = "LightBounces"
-	bounces.custom_minimum_size.x = 200
-	bounces.min_value = 1
-	bounces.max_value = 4
-	bounces.value = int(settings.values.light_bounces)
-	var bounce_number := _label(str(int(bounces.value)), 15)
-	bounce_number.custom_minimum_size.x = 44
-	bounce_number.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	bounces.value_changed.connect(func(value: float):
-		settings.values.light_bounces = int(value)
-		bounce_number.text = str(int(value)))
-	_settings_row(traced, "Light bounces", "How many times light bounces between surfaces. More fills in corners and shade with reflected colour and costs more time a frame.", bounces, bounce_number)
-	_ray_reconstruction_row(traced)
-	traced.add_child(status)
-	renderer.item_selected.connect(func(index: int):
-		settings.values.renderer = index
-		restart.visible = index != running)
-	restart.pressed.connect(func():
-		settings_dialog.hide()
-		_restart_game())
-	toggle.toggled.connect(func(on: bool):
-		settings.values.path_tracing = on
-		light_view.disabled = not on
-		if not on: light_view.button_pressed = false
-		if is_instance_valid(path_tracing): path_tracing.set_enabled(on)
-		if _ray_reconstruction_refresh.is_valid(): _ray_reconstruction_refresh.call())
-	light_view.toggled.connect(func(on: bool):
-		if is_instance_valid(path_tracing): path_tracing.lighting_view = on and path_tracing.enabled)
 	var picture := _settings_box(page, "Picture")
 	# Optional smoothing of 3D edges; automatic keeps it off on software rendering.
 	var smoothing := OptionButton.new()
@@ -5100,6 +5196,7 @@ func _graphics_page(page: VBoxContainer) -> void:
 		settings.values.antialiasing = index - 1
 		ELSettings.apply_display(get_viewport(), settings.values)
 		if is_instance_valid(path_tracing): path_tracing.display_applied())
+	_upscaling_rows(picture, smoothing)
 	_settings_row(picture, "Anti-aliasing", "Smooths the edges of the 3D map and battle scenes. Automatic uses 2x unless the graphics are rendered in software. Path tracing uses its own smoothing.", smoothing)
 	var sharpen := OptionButton.new()
 	sharpen.name = "Sharpening"
@@ -5107,7 +5204,6 @@ func _graphics_page(page: VBoxContainer) -> void:
 	sharpen.select(int(settings.values.sharpening))
 	sharpen.item_selected.connect(func(index: int): settings.values.sharpening = index)
 	_settings_row(picture, "Sharpening", "Sharpens the textures of the 3D map and battle scenes. The interface is not changed.", sharpen)
-	_upscaling_rows(picture, smoothing, renderer)
 	var scene := _settings_box(page, "Scene")
 	var shadows := CheckButton.new()
 	shadows.name = "Shadows"
@@ -5148,36 +5244,109 @@ func _graphics_page(page: VBoxContainer) -> void:
 		settings.values.weather = enabled
 		if campaign_view != null: campaign_view.apply_settings())
 	_settings_row(scene, "Map weather", "Rain, snow and other weather particles on adventure maps.", weather)
-	var blood_toggle := CheckButton.new()
-	blood_toggle.name = "Blood"
-	blood_toggle.button_pressed = settings.values.blood
-	blood_toggle.toggled.connect(func(enabled: bool):
-		settings.values.blood = enabled
-		if is_instance_valid(blood): blood.set_enabled(enabled))
-	_settings_row(scene, "Combat blood", "Blood when figures are hit or die in battle.", blood_toggle)
+	# The Options screen's combat page has the original blood box.
+	if _settings_menu == null:
+		var blood_toggle := CheckButton.new()
+		blood_toggle.name = "Blood"
+		blood_toggle.button_pressed = settings.values.blood
+		blood_toggle.toggled.connect(func(enabled: bool):
+			settings.values.blood = enabled
+			if is_instance_valid(blood): blood.set_enabled(enabled))
+		_settings_row(scene, "Combat blood", "Blood when figures are hit or die in battle.", blood_toggle)
+	# Path tracing has a page of its own (in the dialog, a tab).
+	if _settings_menu != null:
+		var traced := _settings_box(page, "Path tracing", true)
+		var open := Button.new()
+		open.name = "PathTracingPage"
+		open.text = _t("Path tracing…")
+		open.focus_mode = Control.FOCUS_NONE
+		var owner := _settings_menu
+		open.pressed.connect(func(): owner.options_ui.show_page("path_tracing"))
+		var state := _t("Path tracing: on") if bool(settings.values.path_tracing) and ELPathTracing.available() else _t("Path tracing: off")
+		_settings_row(traced, state, "The renderer, path-traced lighting, sky light, light bounces and DLSS Ray Reconstruction.", open)
+		var status := _label(_path_tracing_status(), 13, ELMenuKit.NOTE_INK if _settings_kit != null else (ACCENT if ELPathTracing.available() else MUTED))
+		status.name = "PathTracingStatus"
+		status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		traced.add_child(status)
 
-func _audio_page(page: VBoxContainer) -> void:
-	var volumes := _settings_box(page, "Volume")
-	var captions := {"music": ["Music", "The menu, map and battle music."], "ambience": ["Ambience", "Remake-only background sounds of maps and battles."], "effects": ["Effects", "Spells, blows, voices and the interface."]}
-	for key: String in ["music", "ambience", "effects"]:
-		var slider := HSlider.new()
-		slider.name = key.capitalize()
-		slider.custom_minimum_size.x = 200
-		slider.min_value = 0
-		slider.max_value = 100
-		slider.value = float(settings.values[key]) * 100
-		var number := _label("%d%%" % slider.value, 15)
-		number.custom_minimum_size.x = 44
-		number.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-		slider.value_changed.connect(func(value: float):
-			settings.values[key] = value / 100.0
-			number.text = "%d%%" % value
-			if is_instance_valid(battle_audio): battle_audio.apply_volumes(settings.values)
-			if is_instance_valid(_autochess_screen): _autochess_screen.apply_volumes(settings.values)
-			if front_menu != null: front_menu.apply_volumes(settings.values))
-		_settings_row(volumes, captions[key][0], captions[key][1], slider, number)
+## Path tracing: the renderer, the switch, light view, sky light, bounces,
+## Ray Reconstruction and what this computer supports.
+func _path_tracing_page(page: VBoxContainer) -> void:
+	# The renderer and what this computer supports head the page.
+	var renderer_box := VBoxContainer.new()
+	renderer_box.add_theme_constant_override("separation", 10)
+	page.add_child(renderer_box)
+	var renderer := OptionButton.new()
+	renderer.name = "Renderer"
+	for caption: String in ["Compatibility (default)", "Forward+ (Vulkan)"]: renderer.add_item(_t(caption))
+	renderer.select(int(settings.values.renderer))
+	var running := 1 if RenderingServer.get_current_rendering_method() == "forward_plus" else 0
+	var restart := Button.new()
+	restart.name = "Restart"
+	restart.text = _t("Restart now")
+	restart.visible = int(settings.values.renderer) != running
+	_settings_row(renderer_box, "Renderer", "Path tracing needs Forward+ (Vulkan). Compatibility runs on more computers. A change takes effect after a restart.", renderer, restart)
+	var status := _label(_path_tracing_status(), 14, ELMenuKit.TITLE_INK if _settings_kit != null else (ACCENT if ELPathTracing.available() else MUTED))
+	status.name = "PathTracingStatus"
+	status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	renderer_box.add_child(status)
+	var traced := _settings_box(page, "Lighting", true)
+	var toggle := CheckButton.new()
+	toggle.name = "PathTracing"
+	toggle.button_pressed = bool(settings.values.path_tracing)
+	toggle.disabled = not ELPathTracing.available()
+	_settings_row(traced, "Path-traced lighting", "Real shadows, sky light, light bounced between surfaces and light from fire and spells, on maps and in battles. Costs about 2–3 ms a frame on a fast ray-tracing GPU. F7 switches it in the game.", toggle)
+	var light_view := CheckButton.new()
+	light_view.name = "LightView"
+	light_view.button_pressed = is_instance_valid(path_tracing) and path_tracing.lighting_view
+	light_view.disabled = toggle.disabled or not toggle.button_pressed
+	var sky := HSlider.new()
+	sky.name = "SkyLight"
+	sky.custom_minimum_size.x = 160
+	sky.max_value = 200
+	sky.step = 5
+	sky.value = float(settings.values.sky_light) * 100
+	var sky_number := _label("%d%%" % sky.value, 15, ELMenuKit.BODY_INK if _settings_kit != null else INK)
+	sky_number.custom_minimum_size.x = 44
+	sky_number.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	sky.value_changed.connect(func(value: float):
+		settings.values.sky_light = value / 100.0
+		sky_number.text = "%d%%" % value)
+	_settings_row(traced, "Sky light", "How much the sky lights shade. Lower gives deeper, more contrasting shadows; higher gives softer, brighter shade. Sunlit ground stays the same.", sky, sky_number)
+	var bounces := HSlider.new()
+	bounces.name = "LightBounces"
+	bounces.custom_minimum_size.x = 160
+	bounces.min_value = 1
+	bounces.max_value = 4
+	bounces.value = int(settings.values.light_bounces)
+	var bounce_number := _label(str(int(bounces.value)), 15, ELMenuKit.BODY_INK if _settings_kit != null else INK)
+	bounce_number.custom_minimum_size.x = 44
+	bounce_number.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	bounces.value_changed.connect(func(value: float):
+		settings.values.light_bounces = int(value)
+		bounce_number.text = str(int(value)))
+	_settings_row(traced, "Light bounces", "How many times light bounces between surfaces. More fills in corners and shade with reflected colour and costs more time a frame.", bounces, bounce_number)
+	_ray_reconstruction_row(traced)
+	# A debugging view, kept apart from the lighting settings.
+	var debug := _settings_box(page, "Debug")
+	_settings_row(debug, "Show light only", "A debugging view: draws the traced light without textures, to see what the path tracer does (Shift+F7). Not kept after a restart.", light_view)
+	renderer.item_selected.connect(func(index: int):
+		settings.values.renderer = index
+		restart.visible = index != running)
+	restart.pressed.connect(_restart_from_settings)
+	toggle.toggled.connect(func(on: bool):
+		settings.values.path_tracing = on
+		light_view.disabled = not on
+		if not on: light_view.button_pressed = false
+		if is_instance_valid(path_tracing): path_tracing.set_enabled(on)
+		if _ray_reconstruction_refresh.is_valid(): _ray_reconstruction_refresh.call())
+	light_view.toggled.connect(func(on: bool):
+		if is_instance_valid(path_tracing): path_tracing.lighting_view = on and path_tracing.enabled)
 
+## The remake's own interface, sound and gameplay settings (with music,
+## effects, blood and map tooltips in the dialog, which has no original pages).
 func _interface_page(page: VBoxContainer) -> void:
+	var merged := _settings_menu != null
 	var screens := _settings_box(page, "Screens")
 	# The originals' Video key: no movies, own size, or fitted (shipped).
 	var movie_mode := OptionButton.new()
@@ -5188,11 +5357,12 @@ func _interface_page(page: VBoxContainer) -> void:
 		settings.values.movies = index
 		ELMoviePlayer.mode = index)
 	_settings_row(screens, "Movies", "The games' intro and story movies.", movie_mode)
-	var tooltip_toggle := CheckButton.new()
-	tooltip_toggle.name = "MapTooltips"
-	tooltip_toggle.button_pressed = settings.values.map_tooltips
-	tooltip_toggle.toggled.connect(func(enabled: bool): settings.values.map_tooltips = enabled)
-	_settings_row(screens, "Map tooltips on hover", "Second game: an object's tooltip when the cursor rests on it. The right mouse button shows it either way.", tooltip_toggle)
+	if not merged:
+		var tooltip_toggle := CheckButton.new()
+		tooltip_toggle.name = "MapTooltips"
+		tooltip_toggle.button_pressed = settings.values.map_tooltips
+		tooltip_toggle.toggled.connect(func(enabled: bool): settings.values.map_tooltips = enabled)
+		_settings_row(screens, "Map tooltips on hover", "Second game: an object's tooltip when the cursor rests on it. The right mouse button shows it either way.", tooltip_toggle)
 	var helper_toggle := CheckButton.new()
 	helper_toggle.name = "HelperOverlay"
 	helper_toggle.button_pressed = helper_overlay()
@@ -5207,6 +5377,26 @@ func _interface_page(page: VBoxContainer) -> void:
 		settings.values.show_fps = enabled
 		_update_fps_counter())
 	_settings_row(screens, "Frame rate counter", "Shows frames per second in the top right corner.", fps_toggle)
+	# Music and effects are on the original General page.
+	var volumes := _settings_box(page, "Sound")
+	var captions := {"music": ["Music", "The menu, map and battle music."], "ambience": ["Ambience", "Remake-only background sounds of maps and battles."], "effects": ["Effects", "Spells, blows, voices and the interface."]}
+	for key: String in (["ambience"] if merged else ["music", "ambience", "effects"]):
+		var slider := HSlider.new()
+		slider.name = key.capitalize()
+		slider.custom_minimum_size.x = 160
+		slider.min_value = 0
+		slider.max_value = 100
+		slider.value = float(settings.values[key]) * 100
+		var number := _label("%d%%" % slider.value, 15, ELMenuKit.BODY_INK if _settings_kit != null else INK)
+		number.custom_minimum_size.x = 44
+		number.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		slider.value_changed.connect(func(value: float):
+			settings.values[key] = value / 100.0
+			number.text = "%d%%" % value
+			if is_instance_valid(battle_audio): battle_audio.apply_volumes(settings.values)
+			if is_instance_valid(_autochess_screen): _autochess_screen.apply_volumes(settings.values)
+			if front_menu != null: front_menu.apply_volumes(settings.values))
+		_settings_row(volumes, captions[key][0], captions[key][1], slider, number)
 	var gameplay := _settings_box(page, "Gameplay")
 	var free_toggle := CheckButton.new()
 	free_toggle.name = "FreeMovement"
@@ -5228,6 +5418,12 @@ func _interface_page(page: VBoxContainer) -> void:
 		settings.values.discord_activity = enabled
 		if is_instance_valid(discord): discord.enabled = enabled)
 	_settings_row(sharing, "Discord activity", "Shows the game and whether you are in the menus, on a map or in a battle in the Discord desktop app. Nothing else is shared; off clears it.", discord_toggle)
+
+## A restart asked for from the settings: the Options screen closes with OK
+## first, so its original pages are kept too.
+func _restart_from_settings() -> void:
+	_leave_settings()
+	_restart_game()
 
 ## The optional frame rate counter (setting "show_fps"), above every screen.
 var _fps_layer: CanvasLayer
@@ -5274,7 +5470,7 @@ func _shown_profile() -> ELProfile:
 ## What the path tracing status line says on this computer.
 func _path_tracing_status() -> String:
 	if ELPathTracing.available(): return _t("Ready on %s.") % RenderingServer.get_video_adapter_name()
-	if RenderingServer.get_current_rendering_method() != "forward_plus": return _t("Not available with the Compatibility renderer: choose Forward+ (Vulkan) above and restart.")
+	if RenderingServer.get_current_rendering_method() != "forward_plus": return _t("Not available with the Compatibility renderer: choose Forward+ (Vulkan) as the renderer and restart.")
 	return _t("Not available: %s has no ray-tracing support in Vulkan.") % RenderingServer.get_video_adapter_name()
 
 ## The display options again (an SDK upscaler started or stopped).
@@ -5307,7 +5503,7 @@ func _ray_reconstruction_row(box: VBoxContainer) -> void:
 	toggle.name = "RayReconstruction"
 	toggle.button_pressed = bool(values.ray_reconstruction)
 	_settings_row(box, "DLSS Ray Reconstruction", ELGraphicsSDK.RAY_RECONSTRUCTION_HELP, toggle)
-	var note := _last_row_note(box)
+	var note := _row_note(toggle)
 	toggle.toggled.connect(func(on: bool): values.ray_reconstruction = on)
 	_ray_reconstruction_refresh = func():
 		if not is_instance_valid(toggle): return
@@ -5316,94 +5512,122 @@ func _ray_reconstruction_row(box: VBoxContainer) -> void:
 		_set_row_note(toggle, note, ELGraphicsSDK.RAY_RECONSTRUCTION_HELP, PackedStringArray([reason]) if not reason.is_empty() else PackedStringArray())
 	_ray_reconstruction_refresh.call()
 
-## Upscaling, AMD FSR version, upscale quality and frame generation, under
+## Upscaling (the upscaler: NVIDIA DLSS, or AMD FSR with the version this GPU
+## gets), its quality, and frame generation (the upscaler's vendor), above
 ## Anti-aliasing (ELGraphicsSDK). Only an engine with the vendors' SDKs shows
-## them. Choices this computer cannot use are greyed out and the row's note
-## says why; a change of vendor offers a restart.
-func _upscaling_rows(box: VBoxContainer, smoothing: OptionButton, renderer: OptionButton) -> void:
+## them. Choices this computer cannot use are greyed out and a line under the
+## row says why; a change that needs another vendor set up offers a restart.
+func _upscaling_rows(box: VBoxContainer, smoothing: OptionButton) -> void:
 	if not ELGraphicsSDK.engine_has_sdk(): return
 	var values: Dictionary = settings.values
-	var upscaler := _choice_button("Upscaler", ELGraphicsSDK.UPSCALER_CHOICES)
+	var upscaler := OptionButton.new()
+	upscaler.name = "Upscaler"
+	for vendor: int in ELGraphicsSDK.UPSCALERS: upscaler.add_item(ELGraphicsSDK.upscaler_name(vendor, _t), vendor)
 	_settings_row(box, "Upscaling", ELGraphicsSDK.UPSCALING_HELP, upscaler)
-	var upscaler_note := _last_row_note(box)
-	var version := _choice_button("FsrVersion", ELGraphicsSDK.VERSION_CHOICES)
-	_settings_row(box, "AMD FSR version", ELGraphicsSDK.VERSION_HELP, version)
-	var version_note := _last_row_note(box)
-	var quality := _choice_button("UpscaleQuality", ELGraphicsSDK.QUALITY_CHOICES)
+	var upscaler_note := _row_note(upscaler)
+	var quality := OptionButton.new()
+	quality.name = "UpscaleQuality"
+	for level in 4: quality.add_item(ELGraphicsSDK.quality_name(level, ELGraphicsSDK.NVIDIA, _t), level)
 	_settings_row(box, "Upscale quality", ELGraphicsSDK.QUALITY_HELP, quality)
-	var quality_note := _last_row_note(box)
-	var generation := _choice_button("FrameGeneration", ELGraphicsSDK.FRAME_GENERATION_CHOICES)
+	var generation := CheckButton.new()
+	generation.name = "FrameGeneration"
 	_settings_row(box, "Frame generation", ELGraphicsSDK.FRAME_GENERATION_HELP, generation)
-	var generation_note := _last_row_note(box)
+	var generation_note := _row_note(generation)
 	var restart_row := HBoxContainer.new()
+	restart_row.name = "UpscalingRestartRow"
 	restart_row.add_theme_constant_override("separation", 12)
 	box.add_child(restart_row)
-	var hint := _label(_t(ELGraphicsSDK.NEED_RESTART), 14, ACCENT)
+	var hint := _label("", 14, ELMenuKit.TITLE_INK if _settings_kit != null else ACCENT)
 	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	hint.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	restart_row.add_child(hint)
 	var restart := Button.new()
 	restart.name = "UpscalingRestart"
 	restart.text = _t("Restart now")
+	restart.focus_mode = Control.FOCUS_NONE
 	restart_row.add_child(restart)
 	var refresh := func():
-		var lines := PackedStringArray()
+		# Choices sharing a reason (the renderer, a missing SDK) say it once.
+		var reasons := {}
 		for i in upscaler.item_count:
-			var reason := _t(ELGraphicsSDK.upscaler_reason(i, values))
+			var reason := _t(ELGraphicsSDK.upscaling_reason(upscaler.get_item_id(i)))
 			upscaler.set_item_disabled(i, not reason.is_empty())
 			upscaler.set_item_tooltip(i, reason)
-			if not reason.is_empty(): lines.append(_t(ELGraphicsSDK.UPSCALER_CHOICES[i]) + ": " + reason)
+			if not reason.is_empty():
+				if not reasons.has(reason): reasons[reason] = PackedStringArray()
+				reasons[reason].append(upscaler.get_item_text(i))
+		var lines := PackedStringArray()
+		for reason: String in reasons:
+			lines.append(reason if reasons[reason].size() == upscaler.item_count - 1 else ", ".join(reasons[reason]) + ": " + reason)
+		var vendor := ELGraphicsSDK.upscaler_of(values)
+		upscaler.select(maxi(0, upscaler.get_item_index(vendor)))
 		_set_row_note(upscaler, upscaler_note, ELGraphicsSDK.UPSCALING_HELP, lines)
-		lines = PackedStringArray()
-		for i in version.item_count:
-			var reason := _t(ELGraphicsSDK.version_reason(ELGraphicsSDK.VERSION_VALUES[i], values))
-			version.set_item_disabled(i, not reason.is_empty())
-			version.set_item_tooltip(i, reason)
-			if not reason.is_empty(): lines.append(str(ELGraphicsSDK.VERSION_CHOICES[i]) + ": " + reason)
-		version.select(ELGraphicsSDK.VERSION_VALUES.find(3 if int(values.fsr_version) == 3 else 4))
-		version.disabled = int(values.upscaler) != ELGraphicsSDK.AMD and int(values.frame_generation) != ELGraphicsSDK.AMD
-		_set_row_note(version, version_note, ELGraphicsSDK.VERSION_HELP, lines)
-		var quality_reason := _t(ELGraphicsSDK.quality_reason(values))
-		quality.disabled = not quality_reason.is_empty()
-		_set_row_note(quality, quality_note, ELGraphicsSDK.QUALITY_HELP, PackedStringArray([quality_reason]) if not quality_reason.is_empty() else PackedStringArray())
-		lines = PackedStringArray()
-		for i in generation.item_count:
-			var reason := _t(ELGraphicsSDK.frame_generation_reason(i, values))
-			generation.set_item_disabled(i, not reason.is_empty())
-			generation.set_item_tooltip(i, reason)
-			if not reason.is_empty(): lines.append(_t(ELGraphicsSDK.FRAME_GENERATION_CHOICES[i]) + ": " + reason)
-		_set_row_note(generation, generation_note, ELGraphicsSDK.FRAME_GENERATION_HELP, lines)
-		upscaler.select(int(values.upscaler))
-		quality.select(int(values.upscale_quality))
-		generation.select(int(values.frame_generation))
+		quality.set_item_text(0, ELGraphicsSDK.quality_name(0, vendor, _t))
+		quality.select(ELGraphicsSDK.quality_of(values))
+		quality.disabled = vendor == ELGraphicsSDK.OFF
+		var on := bool(values.frame_generation)
+		var reason := _t(ELGraphicsSDK.frame_generation_reason(values))
+		generation.set_pressed_no_signal(on)
+		# Switching off always works.
+		generation.disabled = not on and not reason.is_empty()
+		var uses := _t("With these settings: %s.") % _t(ELGraphicsSDK.generation_name(values))
+		_set_row_note(generation, generation_note, ELGraphicsSDK.FRAME_GENERATION_HELP, PackedStringArray([reason if not reason.is_empty() else uses]))
 		smoothing.disabled = ELGraphicsSDK.active_upscaler(values) != ELGraphicsSDK.OFF
 		restart_row.visible = ELGraphicsSDK.needs_restart(values)
-	var changed := func():
+		if restart_row.visible:
+			hint.text = _t(ELGraphicsSDK.NEED_RESTART) % ELGraphicsSDK.VENDOR_NAMES[ELGraphicsSDK.OWNER_NAMES.find(ELGraphicsSDK.wanted_owner(values))]
+	var changed := func(before: Dictionary):
 		ELGraphicsSDK.normalize(values)
 		# The SDKs run only with Forward+ on Vulkan.
-		if not ELGraphicsSDK.wanted_owner(values).is_empty() and int(values.renderer) != 1:
-			renderer.select(1)
-			renderer.item_selected.emit(1)
+		if not ELGraphicsSDK.wanted_owner(values).is_empty() and int(values.renderer) != 1: values.renderer = 1
 		ELGraphicsSDK.write_owner_file(values)
 		_apply_display_options()
 		refresh.call()
 		if _ray_reconstruction_refresh.is_valid(): _ray_reconstruction_refresh.call()
+		var message := ELGraphicsSDK.restart_message(before, values)
+		if not message.is_empty(): _offer_restart(message, values)
 	upscaler.item_selected.connect(func(index: int):
-		values.upscaler = index
-		changed.call())
-	version.item_selected.connect(func(index: int):
-		values.fsr_version = ELGraphicsSDK.VERSION_VALUES[index]
-		changed.call())
+		var before := values.duplicate()
+		values.upscaler = upscaler.get_item_id(index)
+		changed.call(before))
 	quality.item_selected.connect(func(index: int):
-		values.upscale_quality = index
-		changed.call())
-	generation.item_selected.connect(func(index: int):
-		values.frame_generation = index
-		changed.call())
-	restart.pressed.connect(func():
-		settings_dialog.hide()
-		_restart_game())
+		var before := values.duplicate()
+		values.upscale_quality = quality.get_item_id(index)
+		changed.call(before))
+	generation.toggled.connect(func(on: bool):
+		var before := values.duplicate()
+		values.frame_generation = on
+		changed.call(before))
+	restart.pressed.connect(_restart_from_settings)
 	refresh.call()
+
+## The message that a choice needs a restart (the vendor's SDK is set up when
+## the game starts), with Restart now and Later.
+func _offer_restart(message: String, values: Dictionary) -> void:
+	var vendor: String = ELGraphicsSDK.VENDOR_NAMES[maxi(0, ELGraphicsSDK.OWNER_NAMES.find(ELGraphicsSDK.wanted_owner(values)))]
+	var box := ConfirmationDialog.new()
+	box.name = "RestartNeeded"
+	box.title = _t(ELGraphicsSDK.RESTART_TITLE)
+	box.ok_button_text = _t("Restart now")
+	box.cancel_button_text = _t("Later")
+	var kit := _settings_kit
+	var look: Theme = kit.theme() if kit != null else null
+	box.theme = look if look != null else _settings_theme()
+	var rows := VBoxContainer.new()
+	rows.add_theme_constant_override("separation", 10)
+	box.add_child(rows)
+	if look != null:
+		# The original frame has no title bar: the title heads the box.
+		box.borderless = true
+		rows.add_child(ELMenuKit.heading(box.title))
+	var text := _label(_t(message) % vendor, 16, ELMenuKit.BODY_INK if look != null else INK)
+	text.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	text.custom_minimum_size.x = 400
+	rows.add_child(text)
+	box.confirmed.connect(_restart_from_settings)
+	box.canceled.connect(box.queue_free)
+	add_child(box)
+	box.popup_centered(Vector2i(480, 0))
 
 ## An option list with these (translated) captions.
 func _choice_button(button_name: String, captions: Array) -> OptionButton:
@@ -5412,17 +5636,17 @@ func _choice_button(button_name: String, captions: Array) -> OptionButton:
 	for caption: String in captions: button.add_item(_t(caption))
 	return button
 
-## The note (explanation) of the row just added to `box`.
-func _last_row_note(box: VBoxContainer) -> Label:
-	var row := box.get_child(box.get_child_count() - 1)
-	return row.get_child(0).get_child(1) as Label
+## The status line under a setting's row.
+func _row_note(control: Control) -> Label:
+	return control.get_meta("row_note") as Label
 
-## A row's note and tooltip: its explanation, then why choices are greyed out.
+## A row's status line and tooltip: its explanation goes to the tooltip (and
+## the row's (?)); the line under the row shows only `reasons` (why choices
+## are greyed out, what a setting uses now), hidden when there are none.
 func _set_row_note(control: Control, note: Label, description: String, reasons: PackedStringArray) -> void:
-	var text := _t(description)
-	if not reasons.is_empty(): text += "\n" + "\n".join(reasons)
-	note.text = text
-	control.tooltip_text = text
+	note.text = "\n".join(reasons)
+	note.visible = not note.text.is_empty()
+	control.tooltip_text = _t(description) + ("\n" + note.text if note.visible else "")
 
 ## About: the credits of the graphics technologies this build includes.
 func _about_page(page: VBoxContainer) -> void:
@@ -5432,26 +5656,10 @@ func _about_page(page: VBoxContainer) -> void:
 	credits.bbcode_enabled = true
 	credits.fit_content = true
 	credits.scroll_active = false
-	credits.custom_minimum_size.x = 560
+	credits.custom_minimum_size.x = 0 if _settings_menu != null else 560
 	credits.add_theme_color_override("default_color", ELMenuKit.BODY_INK if _settings_kit != null else INK)
 	credits.text = ELGraphicsSDK.credits_bbcode(_t)
 	box.add_child(credits)
-
-## A tab of the settings dialog: a scrolling column.
-func _settings_page(tabs: TabContainer, title: String) -> VBoxContainer:
-	var scroll := ScrollContainer.new()
-	scroll.name = title
-	scroll.set_meta("title", _t(title))
-	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	tabs.add_child(scroll)
-	var margin := MarginContainer.new()
-	margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	for side: String in ["left", "right", "top", "bottom"]: margin.add_theme_constant_override("margin_" + side, 12)
-	scroll.add_child(margin)
-	var page := VBoxContainer.new()
-	page.add_theme_constant_override("separation", 14)
-	margin.add_child(page)
-	return page
 
 ## A titled group of settings; `featured` frames it in the accent colour.
 func _settings_box(page: VBoxContainer, title: String, featured := false) -> VBoxContainer:
@@ -5469,28 +5677,92 @@ func _settings_box(page: VBoxContainer, title: String, featured := false) -> VBo
 	column.add_child(_label(_t(title), 19, ACCENT))
 	return column
 
-## One setting: its name and a line of explanation on the left, its
-## control (and an optional extra) on the right.
+## One setting: its name and a (?) with its explanation, then its control
+## (and an optional extra) on one line; under them a status line that stays
+## hidden until _set_row_note gives it something to say.
 func _settings_row(box: VBoxContainer, title: String, description: String, control: Control, extra: Control = null) -> void:
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 12)
+	var row := VBoxContainer.new()
+	row.add_theme_constant_override("separation", 2)
 	box.add_child(row)
-	var text := VBoxContainer.new()
-	text.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	text.add_theme_constant_override("separation", 2)
-	row.add_child(text)
+	var line := HBoxContainer.new()
+	line.add_theme_constant_override("separation", 10)
+	row.add_child(line)
 	var original := _settings_kit != null
-	text.add_child(_label(_t(title), 16, ELMenuKit.BODY_INK if original else INK))
-	var note := _label(_t(description), 13, ELMenuKit.NOTE_INK if original else MUTED)
-	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	note.custom_minimum_size.x = 300
-	text.add_child(note)
+	var help_text := _t(description)
+	var heading := HBoxContainer.new()
+	heading.add_theme_constant_override("separation", 6)
+	heading.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	line.add_child(heading)
+	var caption := _label(_t(title), 15 if original else 16, ELMenuKit.BODY_INK if original else INK)
+	caption.mouse_filter = Control.MOUSE_FILTER_PASS
+	caption.tooltip_text = help_text
+	heading.add_child(caption)
+	if not description.is_empty():
+		var help := _help_button(help_text)
+		help.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		heading.add_child(help)
 	control.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	control.tooltip_text = _t(description)
-	row.add_child(control)
+	control.tooltip_text = help_text
+	line.add_child(control)
 	if extra != null:
 		extra.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-		row.add_child(extra)
+		line.add_child(extra)
+	var note := _label("", 12 if original else 13, ELMenuKit.NOTE_INK if original else MUTED)
+	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	note.visible = false
+	row.add_child(note)
+	control.set_meta("row_note", note)
+
+## A small round (?) button: hovering shows `text` as its tooltip; a click or
+## tap shows it in a small box (touch screens have no hover).
+func _help_button(text: String) -> Button:
+	var help := Button.new()
+	help.name = "Help"
+	help.text = "?"
+	help.tooltip_text = text
+	help.focus_mode = Control.FOCUS_NONE
+	help.custom_minimum_size = Vector2(22, 22)
+	help.add_theme_font_size_override("font_size", 13)
+	for state: String in ["normal", "hover", "pressed", "hover_pressed"]:
+		var round := StyleBoxFlat.new()
+		round.bg_color = Color("3a3020") if state.begins_with("hover") else Color("1c1812")
+		round.border_color = Color("c9b07a") if state != "normal" else Color("8a7350")
+		round.set_border_width_all(1)
+		round.set_corner_radius_all(11)
+		round.content_margin_left = 6
+		round.content_margin_right = 6
+		round.content_margin_top = 0
+		round.content_margin_bottom = 0
+		help.add_theme_stylebox_override(state, round)
+	for key: String in ["font_color", "font_hover_color", "font_pressed_color", "font_hover_pressed_color"]:
+		help.add_theme_color_override(key, ELMenuKit.TITLE_INK)
+	help.pressed.connect(func(): _show_help(help))
+	return help
+
+## The (?) text in a small box under the button; a click elsewhere closes it.
+func _show_help(button: Control) -> void:
+	var box := PopupPanel.new()
+	box.name = "HelpPopup"
+	var style := StyleBoxFlat.new()
+	style.bg_color = Color("101210f4")
+	style.border_color = Color("8a7350")
+	style.set_border_width_all(1)
+	style.set_content_margin_all(10)
+	box.add_theme_stylebox_override("panel", style)
+	var text := Label.new()
+	text.text = button.tooltip_text
+	text.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	text.custom_minimum_size.x = 320
+	text.add_theme_font_size_override("font_size", 15)
+	text.add_theme_color_override("font_color", ELMenuKit.BODY_INK)
+	box.add_child(text)
+	add_child(box)
+	box.popup_hide.connect(box.queue_free)
+	var area := get_viewport().get_visible_rect().size
+	var at := button.get_screen_position() + Vector2(0, button.size.y * button.get_global_transform_with_canvas().get_scale().y + 4)
+	var wanted := Vector2(340, text.get_minimum_size().y + 20)
+	at = at.clamp(Vector2.ZERO, (area - wanted).max(Vector2.ZERO))
+	box.popup(Rect2i(Vector2i(at), Vector2i(wanted)))
 
 ## The settings dialog's look: the game's dark panels and gold accents.
 func _settings_theme() -> Theme:
@@ -5581,8 +5853,7 @@ func _relaunch_args(marked: bool) -> PackedStringArray:
 			pass
 		else:
 			args.append(arg)
-	if int(settings.values.renderer) == 1 or ELGraphicsSDK.needs_forward_plus(settings.values): args.append_array(["--rendering-method", "forward_plus", "--rendering-driver", "vulkan"])
-	else: args.append_array(["--rendering-method", "gl_compatibility"])
+	args.append_array(ELHardwareCheck.renderer_args(int(settings.values.renderer) == 1 or ELGraphicsSDK.needs_forward_plus(settings.values)))
 	var user := PackedStringArray(OS.get_cmdline_user_args())
 	if user.has("--renderer-restarted"): user.remove_at(user.find("--renderer-restarted"))
 	if marked: user.append("--renderer-restarted")
@@ -5652,6 +5923,38 @@ func _preview_volumes(values: Dictionary) -> void:
 	if front_menu != null: front_menu.apply_volumes(values)
 	if campaign_view != null: campaign_view.preview_volumes(values)
 
+## See `_debug_options`.
+func _open_debug_options() -> void:
+	await get_tree().create_timer(0.5).timeout
+	var where := _debug_options.get_slice(":", 0)
+	var page := _debug_options.get_slice(":", 1) if _debug_options.contains(":") else "general"
+	var then := _debug_options.get_slice(":", 2) if _debug_options.count(":") >= 2 else ""
+	var host: ELFrontMenu = null
+	match where:
+		"menu":
+			if not _show_front_menu(): return
+			front_menu.options_ui.open("menu", page)
+			host = front_menu
+		"battle":
+			_open_battle_options()
+			if options_host != null: options_host.options_ui.show_page(page)
+			host = options_host
+		"remake":
+			menu.show()
+	# A third part opens a list of the page ("OptionButtonName"), the first
+	# setting's help ("help") or the restart message ("restart").
+	if then.is_empty() or host == null: return
+	await get_tree().create_timer(0.5).timeout
+	if then == "restart":
+		_offer_restart(ELGraphicsSDK.RESTART_FRAME_GENERATION, {"frame_generation": true})
+		return
+	if then == "help":
+		var help := host.canvas.find_child("Help", true, false)
+		if help is Button: help.pressed.emit()
+		return
+	var found := host.canvas.find_child(then, true, false)
+	if found is OptionButton: found.show_popup()
+
 ## The original Options screen over the battle, on its combat page; its
 ## Surrender concedes the campaign battle or the Duel mode round.
 func _open_battle_options() -> void:
@@ -5684,7 +5987,6 @@ func _battle_host() -> ELFrontMenu:
 			options_host = null
 			return
 		options_host.settings_previewed.connect(_preview_volumes)
-		options_host.settings_requested.connect(_open_settings)
 		options_host.hosted_closed.connect(func():
 			options_host.hide()
 			options_layer.hide()
@@ -5812,7 +6114,6 @@ func _begin_campaign(edition: String, scenario: Dictionary, difficulty: int, res
 	battle_audio.paused = true
 	ui.hide()
 	campaign_view.leave_requested.connect(_leave_campaign)
-	campaign_view.remake_settings_requested.connect(_open_settings)
 	campaign_view.resume_requested.connect(func(): _resume_campaign(false, ELSaveSlots.quick_load_path(campaign_view.state), edition))
 	campaign_view.slot_requested.connect(_load_slot)
 	campaign_view.encounter_requested.connect(_begin_encounter)
@@ -6655,7 +6956,6 @@ func _show_front_menu() -> bool:
 			if row.get("kind") != ELSaveSlots.KIND_STRATEGIC: _hide_front_menu()
 			_load_slot(row))
 		front_menu.settings = settings
-		front_menu.settings_requested.connect(_open_settings)
 		front_menu.settings_previewed.connect(_preview_volumes)
 		front_menu.options_closed.connect(func(_applied: bool, _command: String): _apply_settings())
 		front_menu.quit_requested.connect(func(): ELAudio.quiet_quit(get_tree()))
@@ -7097,7 +7397,7 @@ func _autochess_screen_ready() -> void:
 	_autochess_layer.move_child(_autochess_screen, 0)
 	_autochess_screen.path_tracing = path_tracing
 	_autochess_screen.build(profiles.el2, settings.values)
-	_autochess_screen.remake_settings_requested.connect(_open_settings)
+	_autochess_screen.options_requested.connect(_open_settings)
 	_autochess_screen.left.connect(func():
 		_autochess_lobby.open()
 		_autochess_screen.show_backdrop(_autochess_lobby.hero))
@@ -7633,7 +7933,6 @@ func _open_esc_menu() -> void:
 			options_layer.show()
 			host.show())
 		esc_menu.options_requested.connect(_open_battle_options)
-		esc_menu.remake_settings_requested.connect(_open_settings)
 		esc_menu.exit_requested.connect(func(): _ask_battle("T_MB_QUIT_TO_MM", _esc_exit_to_menu))
 		esc_menu.quit_requested.connect(func(): _ask_battle("T_MB_QUIT_TO_WIN", func(): ELAudio.quiet_quit(get_tree())))
 		esc_menu.remake_menu_requested.connect(func():

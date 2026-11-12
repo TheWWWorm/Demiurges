@@ -24,12 +24,12 @@ const UI := {
 		"search": "Search the wiki", "close": "Close", "list": "Pages", "nothing": "Nothing found",
 		"back_tip": "Previous page (Alt+Left)", "forward_tip": "Next page (Alt+Right)", "close_tip": "Close the wiki (Esc)",
 		"language_tip": "Language of the wiki", "online": "This wiki is also online at demiurges.wwworm.com/wiki",
-		"turn": "Drag to turn · wheel to zoom", "reset": "Reset view", "missing_game": "This page needs that game: add it under Options › Remake settings › Game files."},
+		"turn": "Drag to turn · wheel to zoom", "reset": "Reset view", "missing_game": "This page needs that game: add it with Game files… on the remake pages of Options."},
 	"ru": {"title": "Вики Demiurges", "back": "Назад", "forward": "Вперёд", "home": "Содержание",
 		"search": "Поиск по вики", "close": "Закрыть", "list": "Страницы", "nothing": "Ничего не найдено",
 		"back_tip": "Предыдущая страница (Alt+←)", "forward_tip": "Следующая страница (Alt+→)", "close_tip": "Закрыть вики (Esc)",
 		"language_tip": "Язык вики", "online": "Эта вики есть и в Интернете: demiurges.wwworm.com/wiki",
-		"turn": "Перетаскивайте, чтобы повернуть · колесо — масштаб", "reset": "Сбросить вид", "missing_game": "Для этой страницы нужна эта игра: добавьте её в Настройки › Remake settings › Game files."},
+		"turn": "Перетаскивайте, чтобы повернуть · колесо — масштаб", "reset": "Сбросить вид", "missing_game": "Для этой страницы нужна эта игра: добавьте её кнопкой «Файлы игры…» на страницах ремейка в параметрах."},
 }
 
 static var instance: ELWikiScreen

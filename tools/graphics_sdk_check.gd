@@ -1,7 +1,8 @@
 extends SceneTree
 ## Headless check of the upscaling and frame generation settings
 ## (ELGraphicsSDK) on a stock engine: every DLSS / FSR choice is unavailable
-## with a reason, saved choices from an SDK build load harmlessly, and the
+## with a reason, saved choices from an SDK build load harmlessly (older files
+## move to the upscaler, its quality and the frame generation switch), and the
 ## display options leave the window's viewport exactly as without them.
 ## Also: the frame-rate cap under AMD frame generation and the path tracer's
 ## Ray Reconstruction guide program (compiled where a rendering device exists).
@@ -27,25 +28,65 @@ func _run() -> void:
 	var stock := not Engine.has_singleton("Streamline") and not Engine.has_singleton("FidelityFX")
 	print("Engine %s, renderer %s/%s, %s" % [Engine.get_version_info().string, RenderingServer.get_current_rendering_method(), RenderingServer.get_current_rendering_driver_name(), "stock" if stock else "with SDK singletons"])
 	var defaults := ELSettings.new().values
-	check(int(defaults.upscaler) == 0 and int(defaults.frame_generation) == 0 and int(defaults.fsr_version) == 4 and int(defaults.upscale_quality) == 1 and defaults.ray_reconstruction == false, "new settings start with upscaling and frame generation off")
+	check(int(defaults.upscaler) == 0 and int(defaults.upscale_quality) == 1 and defaults.frame_generation == false and defaults.ray_reconstruction == false and not defaults.has("upscaling") and not defaults.has("fsr_version"), "new settings start with upscaling and frame generation off")
 
-	# Saved choices from a Windows SDK build, some out of range.
+	# Saved choices from a Windows SDK build: version 4 files (frame generation
+	# by vendor) and version 5 files (one "upscaling" code) move to the
+	# upscaler, its quality and the frame generation switch.
 	var path := "user://graphics_sdk_check_settings.json"
-	var file := FileAccess.open(path, FileAccess.WRITE)
-	file.store_string(JSON.stringify({"version": ELSettings.SETTINGS_VERSION, "shared": {"upscaler": 2, "frame_generation": 2, "fsr_version": 99, "upscale_quality": 7, "ray_reconstruction": true, "antialiasing": 2}}))
-	file.close()
-	var loaded := ELSettings.new()
-	loaded.load_file(path)
-	DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
+	var load := func(data: Dictionary) -> ELSettings:
+		var out := FileAccess.open(path, FileAccess.WRITE)
+		out.store_string(JSON.stringify(data))
+		out.close()
+		var result := ELSettings.new()
+		result.load_file(path)
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
+		return result
+	# [file version, shared, upscaler, quality, frame generation, what]
+	var cases := [
+		[4, {"upscaler": 2, "frame_generation": 2, "fsr_version": 99, "upscale_quality": 7}, 2, 3, true, "DLSS Performance (quality clamped) with DLSS Frame Generation"],
+		[4, {"upscaler": 2, "frame_generation": 0, "upscale_quality": 0}, 2, 0, false, "DLAA"],
+		[4, {"upscaler": 1, "frame_generation": 1, "fsr_version": 3, "upscale_quality": 2}, 1, 2, true, "FSR Balanced with AMD frame generation"],
+		[4, {"upscaler": 0, "frame_generation": 1, "upscale_quality": 1}, 0, 1, true, "AMD frame generation without upscaling"],
+		[4, {"upscaler": 1, "frame_generation": 2, "upscale_quality": 1}, 1, 1, false, "FSR with DLSS Frame Generation (never allowed): frame generation off"],
+		[4, {"upscaler": 2, "frame_generation": 1, "upscale_quality": 3}, 2, 3, false, "DLSS with AMD frame generation (never allowed): frame generation off"],
+		[4, {"upscaler": "x", "frame_generation": null}, 0, 1, false, "nonsense values: off"],
+		[5, {"upscaling": 22, "frame_generation": true}, 2, 2, true, "DLSS Balanced with frame generation"],
+		[5, {"upscaling": 20, "frame_generation": false}, 2, 0, false, "DLAA"],
+		[5, {"upscaling": 13, "frame_generation": true}, 1, 3, true, "FSR Performance with frame generation"],
+		[5, {"upscaling": 0, "frame_generation": true}, 0, 1, true, "AMD frame generation without upscaling"],
+		[5, {"upscaling": 99}, 0, 1, false, "a code that names no choice: off"],
+		[5, {"upscaling": 15}, 0, 1, false, "a quality past Performance: off"],
+	]
+	for item: Array in cases:
+		var shared: Dictionary = item[1].duplicate()
+		shared.ray_reconstruction = true
+		var migrated: Dictionary = load.call({"version": item[0], "shared": shared}).values
+		check(int(migrated.upscaler) == item[2] and int(migrated.upscale_quality) == item[3] and migrated.frame_generation == item[4] and migrated.ray_reconstruction == true and not migrated.has("upscaling"),
+			"version %d file: %s -> upscaler %d, quality %d, frame generation %s" % [item[0], item[5], item[2], item[3], item[4]])
+	var flat: Dictionary = load.call({"upscaler": 1, "frame_generation": 1, "upscale_quality": 0}).values
+	check(int(flat.upscaler) == 1 and int(flat.upscale_quality) == 0 and flat.frame_generation == true, "a file without a version (flat keys) migrates too")
+	var loaded: ELSettings = load.call({"version": ELSettings.SETTINGS_VERSION, "shared": {"upscaler": 2, "upscale_quality": 1, "frame_generation": true, "ray_reconstruction": true, "antialiasing": 2}})
 	var values := loaded.values
-	check(int(values.upscaler) == 2 and int(values.frame_generation) == 2 and int(values.fsr_version) == 4 and int(values.upscale_quality) == 3 and values.ray_reconstruction == true, "saved DLSS choices load, clamped to their ranges")
-	var mixed := {"upscaler": 1, "frame_generation": 2}
-	check(sdk.normalize(mixed) and int(mixed.frame_generation) == 0, "DLSS Frame Generation without DLSS upscaling is switched off")
-	mixed = {"upscaler": 2, "frame_generation": 1}
-	check(sdk.normalize(mixed) and int(mixed.frame_generation) == 0, "AMD frame generation never goes with DLSS")
-	mixed = {"upscaler": 0, "frame_generation": 1}
-	check(not sdk.normalize(mixed) and int(mixed.frame_generation) == 1, "AMD frame generation works without upscaling")
-	check(sdk.wanted_owner({"upscaler": 2}) == "nvidia" and sdk.wanted_owner({"frame_generation": 1}) == "amd" and sdk.wanted_owner({}) == "", "presentation owner follows the vendor")
+	check(int(values.upscaler) == 2 and int(values.upscale_quality) == 1 and values.frame_generation == true and values.ray_reconstruction == true, "saved version %d choices load as they are" % ELSettings.SETTINGS_VERSION)
+	for wrong: Variant in [9, -3, 3]:
+		check(int(load.call({"version": ELSettings.SETTINGS_VERSION, "shared": {"upscaler": wrong}}).values.upscaler) == 0, "an upscaler value %s that names no vendor loads as off" % wrong)
+	check(int(load.call({"version": ELSettings.SETTINGS_VERSION, "shared": {"upscale_quality": 9}}).values.upscale_quality) == 3, "a quality past Performance is clamped")
+	loaded.save_file(path)
+	var saved: Dictionary = JSON.parse_string(FileAccess.get_file_as_string(path))
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
+	check(int(saved.version) == ELSettings.SETTINGS_VERSION and not saved.shared.has("upscaling") and not saved.shared.has("fsr_version") and int(saved.shared.upscaler) == 2 and int(saved.shared.upscale_quality) == 1 and saved.shared.frame_generation == true, "saved files keep only the current keys")
+
+	# What the choices mean.
+	check(sdk.UPSCALERS == [sdk.OFF, sdk.NVIDIA, sdk.AMD], "the upscaler list: Off, NVIDIA DLSS, AMD FSR")
+	check(sdk.upscaler_of({"upscaler": 2}) == sdk.NVIDIA and sdk.upscaler_of({"upscaler": 7}) == sdk.OFF and sdk.quality_of({"upscale_quality": 2}) == 2 and sdk.quality_of({}) == 1, "vendor and quality")
+	check(sdk.generation_of({"upscaler": 2, "frame_generation": true}) == sdk.NVIDIA and sdk.generation_of({"upscaler": 1, "frame_generation": true}) == sdk.AMD and sdk.generation_of({"upscaler": 0, "frame_generation": true}) == sdk.AMD and sdk.generation_of({"upscaler": 2, "frame_generation": false}) == sdk.OFF, "frame generation follows the upscaler's vendor (AMD without upscaling)")
+	check(sdk.upscaler_name(sdk.OFF) == "Off" and sdk.upscaler_name(sdk.NVIDIA) == "NVIDIA DLSS" and sdk.quality_name(0, sdk.NVIDIA) == "DLAA" and sdk.quality_name(0, sdk.AMD) == "Native AA" and sdk.quality_name(2, sdk.AMD) == "Balanced", "upscaler and quality names")
+	if stock: check(sdk.upscaler_name(sdk.AMD) == "AMD FSR", "FSR names no version the SDK has not reported")
+	var mixed := {"upscaler": 5}
+	check(sdk.normalize(mixed) and int(mixed.upscaler) == 0, "an upscaler value that names no vendor becomes off")
+	check(sdk.wanted_owner({"upscaler": 2}) == "nvidia" and sdk.wanted_owner({"frame_generation": true}) == "amd" and sdk.wanted_owner({"upscaler": 1}) == "amd" and sdk.wanted_owner({}) == "", "presentation owner follows the vendor")
+	check(sdk.restart_message({}, {"frame_generation": true}) == "" or not stock, "stock engine: no restart message")
 
 	# Reasons and frame counting do not depend on the engine.
 	var meter := ELGraphicsSDK.FrameMeter.new()
@@ -86,17 +127,17 @@ func _run() -> void:
 	else:
 		check(not sdk.engine_has_sdk() and not sdk.compiled(sdk.AMD) and not sdk.compiled(sdk.NVIDIA), "stock engine: no SDK compiled")
 		check(sdk.running_owner() == sdk.OFF, "stock engine: no presentation owner")
-		for choice: int in [1, 2]:
-			var reason := sdk.upscaler_reason(choice, values)
-			check(not reason.is_empty(), "upscaler %s unavailable: %s" % [sdk.UPSCALER_CHOICES[choice], reason])
+		for vendor: int in [sdk.NVIDIA, sdk.AMD]:
+			var reason := sdk.upscaling_reason(vendor)
+			check(not reason.is_empty(), "upscaler %s unavailable: %s" % [sdk.upscaler_name(vendor), reason])
 			var proposed := values.duplicate()
-			proposed.upscaler = choice
-			reason = sdk.frame_generation_reason(choice, proposed)
-			check(not reason.is_empty(), "frame generation %s unavailable: %s" % [sdk.FRAME_GENERATION_CHOICES[choice], reason])
-		for version: int in [4, 3]:
-			var reason := sdk.version_reason(version, values)
-			check(not reason.is_empty(), "FSR %d unavailable: %s" % [version, reason])
-		check(not sdk.quality_reason(values).is_empty(), "upscale quality unavailable: " + sdk.quality_reason(values))
+			proposed.upscaler = vendor
+			proposed.frame_generation = true
+			reason = sdk.frame_generation_reason(proposed)
+			check(not reason.is_empty(), "frame generation with %s unavailable: %s" % [sdk.upscaler_name(vendor), reason])
+		check(not sdk.frame_generation_reason({"upscaler": 0, "frame_generation": true}).is_empty(), "frame generation without upscaling unavailable: " + sdk.frame_generation_reason({"upscaler": 0}))
+		check(sdk.fsr_version("sr") == 0 and sdk.fsr_version("fg") == 0, "stock engine: no FSR version reported")
+		check(sdk.restart_message({}, values).is_empty(), "stock engine: no restart message")
 		check(sdk.active_upscaler(values) == sdk.OFF and sdk.available_frame_generation(values) == sdk.OFF, "saved DLSS choices stay unused")
 		check(not sdk.ray_reconstruction_compiled() and sdk.ray_reconstruction_reason(values) == sdk.NO_NVIDIA, "Ray Reconstruction unavailable: " + sdk.ray_reconstruction_reason(values))
 		check(not sdk.ray_reconstruction_active(values), "saved Ray Reconstruction stays unused")

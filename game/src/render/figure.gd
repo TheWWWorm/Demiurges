@@ -301,62 +301,50 @@ static func _put_float(out: PackedByteArray, value: float) -> void:
 const METAL_PARTS := ["sword", "blade", "axe", "knife", "pike", "shield", "helm", "kirasa",
 	"naplechnik", "noplechnik", "naruch", "plate", "chain", "kreplenie", "armshell",
 	"shouldershell", "legshell", "footshell", "kolenka"]
+## Parts that are feathers, hair, fur, tails or cloth: never metal, whatever
+## colour they are painted.
+const SOFT_PARTS := ["wing", "l_w_", "r_w_", "feather", "pero", "hair", "fur", "xvost", "tail",
+	"cloth", "coat", "cape", "balahon", "robe", "flag", "ponit", "ponyt", "skin", "face", "hvost"]
+## Parts that are cloth on one figure although nothing in their paint tells
+## them from its armour: the White Lord's silver robe and hat are painted in
+## the very steel of his sword and shield.
+const CLOTH_PARTS := {"he500": ["body", "hat"], "he501": ["body", "hat"]}
 ## Metal's look: how metallic its grey and gold texels become, its
-## reflectance and its roughness (a broad, soft sheen).
+## reflectance and its roughness (a broad, soft sheen). The reflectance is
+## the non-metallic share's: none, so texels the mask leaves out (plumes,
+## hair, straps and skin on an armoured part) stay as matte as before and
+## only the metallic texels shine.
 const METAL_METALLIC := 0.6
-const METAL_SPECULAR := 1.0
+const METAL_SPECULAR := 0.0
 const METAL_ROUGHNESS := 0.28
-const METAL_MASK_SIZE := 128
-static var _metal_masks := {}
 
 static func is_metal_part(part: String) -> bool:
+	return _named(part, METAL_PARTS)
+
+## Parts never metal: soft ones and the figure's named cloth.
+static func is_cloth(template: String, part: String) -> bool:
+	return is_soft_part(part) or part.to_lower() in CLOTH_PARTS.get(template.to_lower(), [])
+
+static func is_soft_part(part: String) -> bool:
+	return _named(part, SOFT_PARTS)
+
+static func _named(part: String, words: Array) -> bool:
 	var name := part.to_lower()
-	for word: String in METAL_PARTS:
+	for word: String in words:
 		if word in name: return true
 	return false
 
-## A part's material as metal. Only its grey (steel, iron) and bright gold
-## texels turn metallic, so straps, cloth and fur painted on the same part
-## stay as they were.
-static func metal_material(base: StandardMaterial3D) -> StandardMaterial3D:
+## A part's material as metal, metallic where `mask` says (ELMetalMasks).
+static func metal_material(base: StandardMaterial3D, mask: Texture2D) -> StandardMaterial3D:
 	var metal := base.duplicate() as StandardMaterial3D
 	metal.specular_mode = BaseMaterial3D.SPECULAR_SCHLICK_GGX
 	metal.metallic = METAL_METALLIC
 	metal.metallic_specular = METAL_SPECULAR
 	metal.roughness = METAL_ROUGHNESS
-	var mask := metal_mask(base.albedo_texture)
 	if mask != null:
 		metal.metallic_texture = mask
 		metal.metallic_texture_channel = BaseMaterial3D.TEXTURE_CHANNEL_RED
 	return metal
-
-## Where a skin is painted as metal: low saturation at a mid to high value,
-## or a bright gold. Built once per texture at a reduced size.
-static func metal_mask(texture: Texture2D) -> Texture2D:
-	if texture == null: return null
-	if _metal_masks.has(texture): return _metal_masks[texture]
-	var image := texture.get_image()
-	var mask: ImageTexture = null
-	if image != null:
-		image = image.duplicate()
-		if image.is_compressed(): image.decompress()
-		image.clear_mipmaps()
-		image.convert(Image.FORMAT_RGBA8)
-		var side := mini(METAL_MASK_SIZE, maxi(image.get_width(), image.get_height()))
-		image.resize(side, side, Image.INTERPOLATE_BILINEAR)
-		var out := Image.create(side, side, false, Image.FORMAT_L8)
-		for y in side:
-			for x in side:
-				var c := image.get_pixel(x, y)
-				var v := maxf(c.r, maxf(c.g, c.b))
-				var s := 0.0 if v <= 0.0 else (v - minf(c.r, minf(c.g, c.b))) / v
-				var grey := smoothstep(0.38, 0.18, s) * smoothstep(0.15, 0.35, v)
-				var gold := smoothstep(0.45, 0.65, v) * (1.0 - smoothstep(0.02, 0.06, absf(c.h - 0.12))) * smoothstep(0.25, 0.4, s)
-				out.set_pixel(x, y, Color(maxf(grey, gold), 0, 0))
-		out.generate_mipmaps()
-		mask = ImageTexture.create_from_image(out)
-	_metal_masks[texture] = mask
-	return mask
 
 static func material(texture: Texture2D, unlit := false) -> StandardMaterial3D:
 	var m := StandardMaterial3D.new()

@@ -65,6 +65,7 @@ const uint SLOT_ARENA_FLOOR = 512u;
 const uint SLOT_ARENA_SCENERY = 1024u;
 const uint SLOT_UNLIT_SHADOWED = 8192u;
 const uint SLOT_METAL = 16384u;
+const uint SLOT_THIN = 32768u;
 const uint RAY_SOLID = 1u;
 const uint RAY_SOFT_EMITTER = 2u;
 const uint NO_TEXTURE = 0xffffffffu;
@@ -202,13 +203,13 @@ const float SCENERY_HEADROOM = 1.1;
 // around the horizon, as hazy daylight is, so upright figures and walls
 // facing away from the sun still see plenty of it; almost nothing from below. The maps light sky and sun
 // about equally, which flattens everything; daylight is mostly sun. So the
-// sky keeps SKY_SHARE of the ambient, and the warm sun takes over the rest
-// on open, level ground, which stays as bright as before. Shade, walls and
-// anything under cover lose that share and turn cool, lit by what they face.
-// A clear sky still lights open shade at a fifth or so of full sun; a smaller
-// share left figures with their backs to the sun nearly black.
+// sky keeps SKY_SHARE of the ambient, and the sun takes over the rest on
+// open, level ground, which stays as bright and keeps the colour the map gave
+// it. Shade, walls and anything under cover lose that share and turn cool,
+// lit by what they face. A clear sky still lights open shade at a fifth or so
+// of full sun; a smaller share left figures with their backs to the sun
+// nearly black.
 const vec3 SKY_TINT = vec3(0.58, 0.86, 1.80);
-const vec3 SUN_TINT = vec3(1.30, 1.00, 0.60);
 // Scaled by the player's sky strength: less sky, deeper and cooler shade.
 #define SKY_SHARE (0.28 * frame.tuning.x)
 const float ZENITH = 1.0, HORIZON = 1.4, GROUND = 0.08;
@@ -220,17 +221,31 @@ vec3 sky(vec3 direction) {
 	return frame.ambient.rgb * SKY_SHARE * mix(HORIZON, ZENITH, h) * mix(vec3(1.0), SKY_TINT / dot(SKY_TINT, LUMINANCE), h);
 }
 
+// What the sky gives open, level ground: sky() over the cosine-weighted
+// hemisphere (with h = sqrt(cos), E[h] = 4/5 and E[h^2] = 2/3).
+vec3 sky_on_level() {
+	vec3 tint = SKY_TINT / dot(SKY_TINT, LUMINANCE) - 1.0;
+	vec3 mean = HORIZON + 0.8 * ((ZENITH - HORIZON) + HORIZON * tint) + (2.0 / 3.0) * (ZENITH - HORIZON) * tint;
+	return frame.ambient.rgb * SKY_SHARE * mean;
+}
+
 // Arena scenery caps its raster sun (painted light is already in its
 // textures), which would flatten the sun's share again. The traced sun keeps
 // its full cosine falloff and is scaled so open, level ground receives what
 // the raster gave it there: the capped sun plus the ambient the sky gave up.
+// Its colour is what that ground needs besides the blue sky to come out in
+// the raster's light colour: so the sun still reads warm against the cool
+// shade, but the ground keeps the colour the map lights it with. A fixed
+// warm tint on the sun (neutral map light on the ice and snow fields too)
+// turned snow and ice cream-coloured.
 vec3 sunlight(float n_dot_l, bool scenery) {
 	if (frame.sun_color.w < 0.5) return vec3(0.0);
 	float level = max(frame.sun_direction.y, 0.35);
-	float raw = max(dot(frame.sun_color.rgb, LUMINANCE) * level, 1e-4);
-	float shown = dot(sun_term(level, scenery), LUMINANCE);
-	float scale = (shown + (1.0 - SKY_SHARE) * dot(frame.ambient.rgb, LUMINANCE)) / raw;
-	return frame.sun_color.rgb * max(n_dot_l, 0.0) * scale * SUN_TINT / dot(SUN_TINT, LUMINANCE);
+	vec3 shown = sun_term(level, scenery);
+	float bright = dot(shown, LUMINANCE) + (1.0 - SKY_SHARE) * dot(frame.ambient.rgb, LUMINANCE);
+	vec3 colour = max(shown + frame.ambient.rgb - sky_on_level(), vec3(0.0));
+	colour = dot(colour, LUMINANCE) > 1e-4 ? colour / dot(colour, LUMINANCE) : frame.sun_color.rgb / max(dot(frame.sun_color.rgb, LUMINANCE), 1e-4);
+	return colour * bright * max(n_dot_l, 0.0) / level;
 }
 
 // The arena's vertex light at one corner of a hit triangle, from the
@@ -321,6 +336,41 @@ bool occluded(vec3 origin, vec3 direction, float max_distance) {
 	return closest(origin, direction, max_distance, RAY_SOLID, 0u, false, gl_RayFlagsNoneEXT, true).found != 0u;
 }
 
+// How much of the sun reaches a point along `direction`. Feather and hair
+// cards (SLOT_THIN) let light through by their coverage at a coarse mip, not
+// by the cut at single texels: overlapping feather cards cast that cut on each
+// other as fine, binary specks that changed with every frame of a wing's
+// motion. Anything else blocks the sun outright, as `occluded` does.
+const float CARD_SHADOW_LOD = 3.0;
+// The share of the sun a thin card passes to its far side.
+const float THIN_TRANSMISSION = 0.5;
+float sun_transmission(vec3 origin, vec3 direction, float max_distance) {
+	float light = 1.0;
+	float start = 0.0;
+	for (int i = 0; i < 32 && start < max_distance; i++) {
+		payload.alpha_seed = 0u;
+		payload.include_secondary = false;
+		payload.shadow_ray = true;
+		traceRayEXT(scene, gl_RayFlagsNoneEXT, RAY_SOLID, 0, 0, 0, origin, start, direction, max_distance, 0);
+		if (payload.found == 0u) return light;
+		resolve_hit(payload, direction);
+		Slot look = slots[instance_slot(payload.instance)];
+		uint flags = look.geometry.z;
+		if ((flags & SLOT_ALPHA) == 0u) return 0.0;
+		bool soft = (flags & (SLOT_SOFT_EMITTER | SLOT_SOFT_CUTOUT)) == SLOT_SOFT_EMITTER;
+		if (soft || (flags & SLOT_THIN) == 0u) {
+			float alpha = surface_albedo(look, payload.uv, 0.0).a;
+			if (soft ? payload.opacity_sample < alpha * look.tint.a : alpha >= look.tint.a) return 0.0;
+		} else {
+			float coverage = surface_albedo(look, payload.uv, CARD_SHADOW_LOD).a;
+			light *= 1.0 - smoothstep(look.tint.a - 0.25, look.tint.a + 0.25, coverage);
+			if (light < 0.02) return 0.0;
+		}
+		start = payload.distance + 0.0001;
+	}
+	return light;
+}
+
 float random(inout uint state) {
 	state = hash(state);
 	return float(state >> 8) / 16777216.0;
@@ -397,7 +447,7 @@ const float METAL_A2 = 0.0256;
 const float RASTER_METALLIC = 0.6;
 
 // Where a texel is painted as metal: low saturation at a mid to high value,
-// or a bright gold (as ELFigure.metal_mask builds the raster's mask).
+// or a bright gold (as ELFigure._painted_metal judges it).
 float metal_mask(vec3 c) {
 	float high = max(c.r, max(c.g, c.b));
 	float low = min(c.r, min(c.g, c.b));
@@ -413,6 +463,14 @@ float metal_mask(vec3 c) {
 	}
 	float gold = smoothstep(0.45, 0.65, high) * (1.0 - smoothstep(0.02, 0.06, abs(hue - 0.12))) * smoothstep(0.25, 0.4, saturation);
 	return max(grey, gold);
+}
+
+// How metallic a metal surface's texel is: its mask (ELMetalMasks,
+// in the emission layer's place), else judged from its colour.
+float metal_texels(Slot look, vec2 uv) {
+	if ((look.geometry.z & SLOT_EMISSION) == 0u && look.geometry.w != NO_TEXTURE)
+		return sample_layer(look.geometry.w, uv, 0.0, look.geometry.z).r;
+	return metal_mask(surface_albedo(look, uv, 0.0).rgb);
 }
 
 float ggx_d(float n_dot_h, float a2) {
@@ -490,12 +548,31 @@ void main() {
 	// Rasterization already resolved texture coverage and chose the visible
 	// surface. Look up its material at that depth so a cutout in front of it
 	// cannot leave an unlit silhouette around the model.
+	// Feather and hair cards overlap closer than that depth tolerance: the
+	// first card in it may be cut away right here (the raster saw through
+	// it), so its normal and texture would light this pixel. Pass such cuts.
 	float tolerance = max(0.005, 0.0008 * distance_to_eye);
-	payload.shadow_ray = false;
-	payload.include_secondary = frame.counts.z > 0u;
-	traceRayEXT(scene, gl_RayFlagsCullBackFacingTrianglesEXT, RAY_SOLID, 0, 0, 0,
-		eye, max(distance_to_eye - tolerance, 0.0), view_direction, distance_to_eye + tolerance, 0);
-	if (payload.found != 0u) resolve_hit(payload, view_direction);
+	float window = max(distance_to_eye - tolerance, 0.0);
+	Payload first;
+	first.found = 0u;
+	for (int i = 0; i < 8; i++) {
+		payload.shadow_ray = false;
+		payload.include_secondary = frame.counts.z > 0u;
+		traceRayEXT(scene, gl_RayFlagsCullBackFacingTrianglesEXT, RAY_SOLID, 0, 0, 0,
+			eye, window, view_direction, distance_to_eye + tolerance, 0);
+		if (payload.found == 0u) {
+			// All cut away at this texel's detail: the raster's filtered
+			// coverage kept it, so the first card stands.
+			payload = first;
+			break;
+		}
+		resolve_hit(payload, view_direction);
+		if (first.found == 0u) first = payload;
+		Slot seen = slots[instance_slot(payload.instance)];
+		if ((seen.geometry.z & (SLOT_ALPHA | SLOT_SOFT_EMITTER)) != SLOT_ALPHA || surface_albedo(seen, payload.uv, 0.0).a >= seen.tint.a) break;
+		window = payload.distance + 0.0001;
+		if (i == 7) payload = first;
+	}
 	Payload primary = payload;
 	if ((frame.info.w & 4u) != 0u) {
 		imageStore(light_out, pixel, vec4(float(primary.found), primary.found != 0u ? primary.distance / max(distance_to_eye, 0.001) * 0.5 : 0.0, distance_to_eye / 50.0, 1.0));
@@ -538,13 +615,25 @@ void main() {
 		vec3 sun = frame.sun_direction.xyz;
 		float n_dot_l = dot(normal, sun);
 		bool sun_visible = false;
+		// A feather or hair card lit from behind passes part of the sun through
+		// (seen from there, its side away from the sun). Lit only from the
+		// front, a flapping wing's cards turned from full sun to deep shade
+		// each time they swung past edge-on to the sun.
+		vec3 sun_origin = origin;
+		float sun_share = 1.0;
+		if (n_dot_l < 0.0 && (primary_look.geometry.z & SLOT_THIN) != 0u) {
+			n_dot_l = -n_dot_l;
+			sun_origin = origin - geometric_normal * 2.0 * (0.02 + distance_to_eye * 0.001);
+			sun_share = THIN_TRANSMISSION;
+		}
 		if (n_dot_l > 0.0 && frame.sun_color.w > 0.5) {
 			vec3 t, b;
 			basis(sun, t, b);
 			float r = sqrt(random(state)) * frame.sun_direction.w, phi = 6.2831853 * random(state);
 			vec3 towards = normalize(sun + (t * cos(phi) + b * sin(phi)) * r);
-			sun_visible = !occluded(origin, towards, 200.0);
-			if (sun_visible) lighting += sunlight(n_dot_l, scenery);
+			float sun_seen = sun_transmission(sun_origin, towards, 200.0) * sun_share;
+			sun_visible = sun_seen > 0.5;
+			lighting += sunlight(n_dot_l, scenery) * sun_seen;
 		}
 
 		effects = effect_light(origin, normal, true, state);
@@ -587,7 +676,7 @@ void main() {
 			}
 		}
 		if ((primary_look.geometry.z & SLOT_METAL) != 0u) {
-			float raster_mask = metal_mask(surface_albedo(primary_look, primary.uv, 0.0).rgb);
+			float raster_mask = metal_texels(primary_look, primary.uv);
 			float metal = raster_mask * METALNESS;
 			if (metal > 0.0) {
 				vec3 shine = metal_shine(origin, normal, geometric_normal, view_direction, sun_visible, state);

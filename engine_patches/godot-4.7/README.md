@@ -17,6 +17,8 @@ renderer on Vulkan. Other platforms use the stock templates.
   8. `0008` requested owner in the seam
   9. `0009` shared owner value, provider feature chain
   10. `0010` FidelityFX (`drivers/fsr_sdk`, FSR effect, `use_fsr_sdk`)
+  11. `0011` worker tasks nobody waited for release their callables before
+      the script languages exit (stock 4.7 crashes at exit otherwise)
 - SDK headers are not part of the series. `tools/engine/prepare_streamline_sdk.py`
   and `tools/engine/prepare_fsr_sdk.py` install them (and stage the signed
   runtime DLLs and licences) from the pinned, hash-checked SDK releases.

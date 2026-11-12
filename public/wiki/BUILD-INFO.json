@@ -1,5 +1,5 @@
 {
-  "version": "0.10.0",
+  "version": "0.11.0",
   "languages": {
     "en": {
       "pages": 471,
@@ -18,8 +18,8 @@
   "translation_keys": 16,
   "files": {
     "data/en/index.json": {
-      "bytes": 309706,
-      "sha256": "85a21fb0ba5ef888db98edf6167d2682869aadcdba341ddca876f3db00989e8b"
+      "bytes": 310927,
+      "sha256": "b2064ecb3167eb905908b47c23d6579a3b41cb685d74d00ff9af0dd290234b9a"
     },
     "data/en/pages/abilities.json": {
       "bytes": 2238,
@@ -1530,8 +1530,8 @@
       "sha256": "72dc65a9bd7c594b24b6d7879f80c5fbb6087360a0a7db9fd4e325e5d7e0a32b"
     },
     "data/en/pages/differences.json": {
-      "bytes": 4999,
-      "sha256": "1d3d17dcf7c53e2c4fb48f4cda5ebf5b74b3a93bbe2199aa3aaef32e920e616d"
+      "bytes": 5021,
+      "sha256": "de8f8d0ee312bda94e10671c4295edf7cd4fd84f85fd316d249df5e35ad547df"
     },
     "data/en/pages/duel.json": {
       "bytes": 15760,
@@ -1546,8 +1546,8 @@
       "sha256": "1fc2ff48fb6e6edd602aba4d42259d508b246f854fe6e3bcba4a31ce798d1a11"
     },
     "data/en/pages/installing.json": {
-      "bytes": 3199,
-      "sha256": "3ea449e2a696eab0d78dc780ddd732fd2e990c3935b024786c88f5a2ac68825e"
+      "bytes": 3215,
+      "sha256": "445d995a6f0e85540c56bf9e045403802dccdfe34ef10f798e271e071fce4dda"
     },
     "data/en/pages/kinets.json": {
       "bytes": 5124,
@@ -1558,8 +1558,8 @@
       "sha256": "d276f1beaf7a04c87a15a6b9f94f26d83ff93bb50acc5c11cf7270a7f456cb21"
     },
     "data/en/pages/options.json": {
-      "bytes": 6856,
-      "sha256": "24f68011770c8f63d010b0a17f4a9011add5f8e29cd0a8dcfe70a3e3a88d7e9a"
+      "bytes": 8350,
+      "sha256": "e3239f7dc36447ccd82dade5942763418a8a7e77debd1c707d38f553d64eb231"
     },
     "data/en/pages/pale.json": {
       "bytes": 4811,
@@ -1906,8 +1906,8 @@
       "sha256": "d18c0bf1a09af1788f0ca5427f86b6ecbb3cc60bc9a08d9da6d1b068de46ddaa"
     },
     "data/ru/index.json": {
-      "bytes": 544731,
-      "sha256": "f6e0ffc1921ccb827ae90574ee322eceb02619c5453e386fac155b57f35060d9"
+      "bytes": 547083,
+      "sha256": "753389cd9c576bb67a7605738cba7c7079a3a26a6cdbd67cca7057cfe9ce49c5"
     },
     "data/ru/pages/abilities.json": {
       "bytes": 3685,
@@ -3418,8 +3418,8 @@
       "sha256": "3c9369d7aa813fa967968521f3e2130097449768ceec74ca71ee30e10dcfcc47"
     },
     "data/ru/pages/differences.json": {
-      "bytes": 8551,
-      "sha256": "ec2cae6f85c373d2e139ce2fe44d2047fa9e81b43ea3e35edb03ccaf230a9e80"
+      "bytes": 8586,
+      "sha256": "b8b6db212fe5b734222dc99544e80c4cd9c286d2eacd9eeac54f1b61bafb494d"
     },
     "data/ru/pages/duel.json": {
       "bytes": 29385,
@@ -3434,8 +3434,8 @@
       "sha256": "add0cf218a62b25ea5f36149ff7c27bc9b0a6b7ace70b445e0f87e5603ee70e8"
     },
     "data/ru/pages/installing.json": {
-      "bytes": 4986,
-      "sha256": "203cca7687042e152be6f3214388d683dbbe8ba705ed7c5df38cb474e5073be9"
+      "bytes": 5015,
+      "sha256": "de5ee973f3202e635a2f3e26ccc04a6f9c18d8c2d772c80860980b3f4e0615ae"
     },
     "data/ru/pages/kinets.json": {
       "bytes": 7951,
@@ -3446,8 +3446,8 @@
       "sha256": "4e3239ac3d748c2488a721c5b97e0e0e3ee634413d7bd68a9127fa4eda7196a1"
     },
     "data/ru/pages/options.json": {
-      "bytes": 11260,
-      "sha256": "2acae2a38c371842cbcebb99e3281a0bb36b683982ad2514415460dd15e7b997"
+      "bytes": 13901,
+      "sha256": "b672cebb596a57b456e52761535474a51c5df077f725ab7cf3941e3f7ce555da"
     },
     "data/ru/pages/pale.json": {
       "bytes": 7741,
@@ -5262,5 +5262,5 @@
       "sha256": "aabab5bcfce15545227916db3d8f7e6c353fbf93c2b073e25dec7262d79874ed"
     }
   },
-  "bytes": 6094003
+  "bytes": 6101813
 }

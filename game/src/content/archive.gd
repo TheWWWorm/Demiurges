@@ -41,6 +41,15 @@ func read(entry: String) -> PackedByteArray:
 	var bounds: Variant = entries.get(key(entry))
 	return _range(bounds.x, bounds.y) if bounds != null else PackedByteArray()
 
+## Where an entry is stored, [path, offset, size], for reading it with a file
+## of one's own (worker threads), or [] for in-memory archives.
+func locate(entry: String) -> Array:
+	if _sources.has(key(entry)):
+		return _sources[key(entry)].locate(entry)
+	var bounds: Variant = entries.get(key(entry))
+	if bounds == null or _file == null: return []
+	return [_file.get_path_absolute(), int(bounds.x), int(bounds.y)]
+
 func has(entry: String) -> bool:
 	return entries.has(key(entry))
 

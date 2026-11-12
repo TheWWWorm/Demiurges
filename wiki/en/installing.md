@@ -39,4 +39,4 @@ A data pack holds the files of one game in a single file. It is useful on a phon
 
 ## Adding, switching and removing games
 
-**Options › Remake settings › Game files…** opens the same screen at any time to add a game, switch to another one or remove one. Removing a game keeps its saves and settings and never deletes an installed game folder.
+**Game files…** on the remake pages of **Options** opens the same screen at any time to add a game, switch to another one or remove one. Removing a game keeps its saves and settings and never deletes an installed game folder.

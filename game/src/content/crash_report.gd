@@ -114,6 +114,56 @@ static func scan(own_pid: int) -> Dictionary:
 		trace("previous session %s ended unexpectedly in %s; its log: %s" % [best.get("session", "?"), best.get("where", "?"), best.log])
 	return best
 
+## Seconds within which an unexpected end counts as a start-up crash.
+const EARLY_CRASH_S := 60
+## The renderer a start-up crash happened on when renderer_fallback() moved
+## the choice back to Compatibility ("" = no fallback); the crash box says so.
+static var renderer_fell_back := ""
+
+## The rendering method ("forward_plus", "mobile") of the newest session that
+## ended unexpectedly while starting (still at its start, or in its first
+## minute) on a Vulkan renderer; "" when there is none. Unlike scan(), the
+## markers stay for the report.
+static func early_vulkan_crash(own_pid: int, folder := DIR) -> String:
+	var best := {}
+	if not DirAccess.dir_exists_absolute(folder): return ""
+	for file in DirAccess.get_files_at(folder):
+		if not (file.begins_with(MARK_PREFIX) and file.ends_with(".cfg")): continue
+		var config := ConfigFile.new()
+		if config.load(folder.path_join(file)) != OK: continue
+		var pid := int(config.get_value("session", "pid", -1))
+		if pid == own_pid or alive(pid): continue
+		if String(config.get_value("session", "state", "")) != "foreground": continue
+		if handheld and String(config.get_value("session", "focus", "")) == "out": continue
+		var updated := String(config.get_value("session", "updated", ""))
+		if best.is_empty() or updated > String(best.updated):
+			best = {"updated": updated, "renderer": String(config.get_value("session", "renderer", "")),
+				"where": String(config.get_value("session", "where", "")), "uptime": int(config.get_value("session", "uptime_s", 0))}
+	if best.is_empty(): return ""
+	if not (best.where == "(start)" or int(best.uptime) < EARLY_CRASH_S): return ""
+	var method := String(best.renderer).get_slice(" / ", 0).strip_edges()
+	return "" if method in ["", "gl_compatibility"] else method
+
+## At start, before the chosen renderer is applied: when the previous session
+## crashed while starting on Vulkan and Vulkan is the player's choice (the
+## renderer, or an upscaler that needs it), the choice goes back to
+## Compatibility so the game keeps starting; the crash box says so once.
+## True when `values` changed (the caller saves them).
+static func renderer_fallback(values: Dictionary, own_pid := OS.get_process_id(), folder := DIR) -> bool:
+	if not enabled: return false
+	var vulkan_chosen := int(values.get("renderer", 0)) == 1 or int(values.get("upscaler", 0)) != 0 or bool(values.get("frame_generation", false))
+	if not vulkan_chosen: return false
+	var method := early_vulkan_crash(own_pid, folder)
+	if method.is_empty(): return false
+	values.renderer = 0
+	values.path_tracing = false
+	values.upscaler = 0
+	values.frame_generation = false
+	values.ray_reconstruction = false
+	renderer_fell_back = method
+	print("Previous start ended unexpectedly on %s: renderer back to Compatibility" % method)
+	return true
+
 ## A process `pid` runs (Linux / Android: /proc). Elsewhere a second game
 ## window's marker counts as left.
 static func alive(pid: int) -> bool:

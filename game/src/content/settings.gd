@@ -25,10 +25,10 @@ extends RefCounted
 ## V-Sync, -1 unlimited, otherwise a frame cap without V-Sync).
 ## Upscaling and frame generation (ELGraphicsSDK; only a Windows build whose
 ## engine includes the vendors' SDKs uses them, elsewhere they load and stay
-## unused): "upscaler" (0 off, 1 AMD FSR, 2 NVIDIA DLSS), "fsr_version" (4,
-## or 3 for FSR 3.1), "upscale_quality" (0 full-resolution AA / DLAA, 1 Quality, 2
-## Balanced, 3 Performance), "frame_generation" (0 off, 1 AMD FSR, 2 NVIDIA
-## DLSS; NVIDIA needs DLSS upscaling, AMD never goes with DLSS) and
+## unused): "upscaler" (0 off, 1 AMD FSR, 2 NVIDIA DLSS), "upscale_quality"
+## (0 full resolution: Native AA, DLAA with NVIDIA; 1 Quality, 2 Balanced, 3
+## Performance),
+## "frame_generation" (on or off; the upscaler's vendor, AMD without one) and
 ## "ray_reconstruction" (DLSS Ray Reconstruction for the path tracer).
 ## Per edition (original Options screen order):
 ## "music"/"effects" volumes 0..1; "movies" the originals' Video key (0 none,
@@ -46,10 +46,15 @@ extends RefCounted
 ## per event id (settings.ini TutorialEvents); "show_tutorial" gates them.
 ## Version 4: sharpening became Off by default (the original ground is soft);
 ## older files still on the former default (light) move to Off.
-const SETTINGS_VERSION := 4
+## Version 5: one "upscaling" choice and a "frame_generation" switch replace
+## "upscaler", "fsr_version", "upscale_quality" and the vendor of
+## "frame_generation" (the FSR version follows the GPU).
+## Version 6: the upscaler and its quality are separate choices again
+## ("upscaler", "upscale_quality"); version 5 kept them in one "upscaling".
+const SETTINGS_VERSION := 6
 const SHARED := {"ambience": 0.55, "shadows": true, "soft_shadows": false, "weather": true, "helper_overlay": false, "antialiasing": -1, "sharpening": 0, "terrain_detail": false, "enhanced_water": false, "discord_activity": true, "renderer": 0, "path_tracing": false, "sky_light": 1.0, "light_bounces": 2, "show_fps": false, "hardware_check": 0, "free_movement": true, "smart_ai": true,
 	"window_mode": 0, "window_width": 0, "window_height": 0, "frame_rate": 0,
-	"upscaler": 0, "fsr_version": 4, "upscale_quality": 1, "frame_generation": 0, "ray_reconstruction": false}
+	"upscaler": 0, "upscale_quality": 1, "frame_generation": false, "ray_reconstruction": false}
 const EDITION := {"music": 0.55, "effects": 0.8, "movies": 2, "blood": true, "map_tooltips": true, "autosave": true,
 	"heroes_voices": true, "ambient_sounds": true, "adventure_fast": false, "animated_objects": true,
 	"mouse_rotation": 1.0, "keyboard_rotation": 1.0, "mouse_scroll": 1.0, "keyboard_scroll": 1.0,
@@ -64,8 +69,7 @@ const RANGES := {"music": [0.0, 1.0], "effects": [0.0, 1.0], "ambience": [0.0, 1
 	"keyboard_rotation": [0.0, 2.0], "mouse_scroll": [0.0, 2.0], "keyboard_scroll": [0.0, 2.0], "gamma": [-1.0, 1.0],
 	"auto_camera_dynamics": [0, 100], "movies": [0, 2], "antialiasing": [-1, 2], "sharpening": [0, 2], "renderer": [0, 1], "hardware_check": [0, 2],
 	"sky_light": [0.0, 2.0], "light_bounces": [1, 4],
-	"window_mode": [0, 2], "window_width": [0, 16384], "window_height": [0, 16384], "frame_rate": [-1, 1000],
-	"upscaler": [0, 2], "fsr_version": [3, 4], "upscale_quality": [0, 3], "frame_generation": [0, 2]}
+	"window_mode": [0, 2], "window_width": [0, 16384], "window_height": [0, 16384], "frame_rate": [-1, 1000], "upscale_quality": [0, 3]}
 
 ## Context, caption, then the default keys for each edition. Empty means the
 ## action is unavailable in that edition.
@@ -257,6 +261,10 @@ func set_hotkey(id: String, action: String, code: int) -> String:
 func reset_hotkeys(id: String) -> void:
 	_set_hotkeys(id, {})
 
+## Puts back an edition's custom shortcuts (as hotkey_overrides() gave them).
+func set_hotkeys(id: String, overrides: Dictionary) -> void:
+	_set_hotkeys(id, overrides.duplicate())
+
 func _set_hotkeys(id: String, overrides: Dictionary) -> void:
 	if id == edition: values.hotkeys = overrides
 	else:
@@ -271,10 +279,11 @@ func load_file(path := "user://settings.json") -> void:
 	var raw: Variant = JSON.parse_string(FileAccess.get_file_as_string(path))
 	if raw is not Dictionary: return
 	var shared: Dictionary = raw.get("shared", raw) if raw.get("shared") is Dictionary else raw
+	var version: Variant = raw.get("version", 0)
+	if (version is int or version is float) and version < SETTINGS_VERSION: shared = migrate_upscaling(shared, int(version))
 	for key: String in SHARED: values[key] = _clean(key, shared.get(key), values[key])
 	ELGraphicsSDK.normalize(values)
 	var current := edition
-	var version: Variant = raw.get("version", 0)
 	var legacy: bool = (version is int or version is float) and version < SETTINGS_VERSION
 	if (version is int or version is float) and version < 4 and int(values.sharpening) == 1: values.sharpening = 0
 	for id: String in ["el1", "el2"]:
@@ -300,6 +309,31 @@ func load_file(path := "user://settings.json") -> void:
 		for key: String in EDITION:
 			values[key] = _editions.el1[key] if _editions.el1[key] == _editions.el2[key] else flat[key]
 	ELUiSounds.use_volumes(values)
+
+## Older upscaling settings (file `version`). Before version 5:
+## "frame_generation" was 0 off, 1 AMD, 2 NVIDIA (the vendors never mixed)
+## and becomes a switch; "fsr_version" goes (FSR follows the GPU). Version 5:
+## "upscaling" (0 off, else the vendor times ten plus the quality) becomes
+## "upscaler" and "upscale_quality". Returns a copy.
+static func migrate_upscaling(shared: Dictionary, version: int) -> Dictionary:
+	var result := shared.duplicate()
+	var number := func(key: String, fallback: int) -> int:
+		var value: Variant = shared.get(key)
+		return int(value) if (value is int or value is float) and is_finite(float(value)) else fallback
+	if version == 5:
+		var code: int = number.call("upscaling", 0)
+		var vendor := code / 10 if code > 0 else 0
+		result.upscaler = vendor if vendor in [ELGraphicsSDK.AMD, ELGraphicsSDK.NVIDIA] and code % 10 <= 3 else 0
+		result.upscale_quality = code % 10 if result.upscaler != 0 else 1
+		result.erase("upscaling")
+		return result
+	var upscaler: int = number.call("upscaler", 0)
+	var generation: int = number.call("frame_generation", 0)
+	# Only the pairs the older settings allowed keep frame generation on.
+	result.frame_generation = (generation == ELGraphicsSDK.NVIDIA and upscaler == ELGraphicsSDK.NVIDIA) \
+		or (generation == ELGraphicsSDK.AMD and upscaler != ELGraphicsSDK.NVIDIA)
+	result.erase("fsr_version")
+	return result
 
 func save_file(path := "user://settings.json") -> bool:
 	ELUiSounds.use_volumes(values)

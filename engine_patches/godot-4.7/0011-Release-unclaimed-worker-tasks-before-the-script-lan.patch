@@ -1,0 +1,74 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: WWWorm <noreply@localhost>
+Date: Thu, 12 Nov 2026 15:28:46 +0100
+Subject: [PATCH] Release unclaimed worker tasks before the script languages
+ exit
+
+A task that finished but was never waited for stayed in the pool until
+WorkerThreadPool::finish(), which runs from unregister_core_types() after
+ScriptServer::finish_languages(). Freeing its Callable then destroyed
+whatever a script had captured or bound into it; ~GDScriptInstance locks
+GDScriptLanguage's mutex, which is gone by then, and the process crashed
+at exit (access violation in RtlEnterCriticalSection).
+
+exit_languages_threads() now takes the callables of the tasks left in the
+pool once the threads are idle and releases them, outside the task lock,
+while the languages still exist. Stock 4.7 has the same crash.
+---
+ core/object/worker_thread_pool.cpp | 40 ++++++++++++++++++++++--------
+ 1 file changed, 30 insertions(+), 10 deletions(-)
+
+diff --git a/core/object/worker_thread_pool.cpp b/core/object/worker_thread_pool.cpp
+index f5574c4..6eda325 100644
+--- a/core/object/worker_thread_pool.cpp
++++ b/core/object/worker_thread_pool.cpp
+@@ -841,19 +841,39 @@ void WorkerThreadPool::exit_languages_threads() {
+ 		return;
+ 	}
+ 
+-	MutexLock lock(task_mutex);
++	// Callables of tasks that finished but were never waited for.
++	LocalVector<Callable> unclaimed;
+ 
+-	// Wait until all threads are idle.
+-	_switch_runlevel(RUNLEVEL_PRE_EXIT_LANGUAGES);
+-	while (runlevel_data.pre_exit_languages.num_idle_threads != threads.size()) {
+-		control_cond_var.wait(lock);
+-	}
++	{
++		MutexLock lock(task_mutex);
+ 
+-	// Wait until all threads have detached from scripting languages.
+-	_switch_runlevel(RUNLEVEL_EXIT_LANGUAGES);
+-	while (runlevel_data.exit_languages.num_exited_threads != threads.size()) {
+-		control_cond_var.wait(lock);
++		// Wait until all threads are idle.
++		_switch_runlevel(RUNLEVEL_PRE_EXIT_LANGUAGES);
++		while (runlevel_data.pre_exit_languages.num_idle_threads != threads.size()) {
++			control_cond_var.wait(lock);
++		}
++
++		// Wait until all threads have detached from scripting languages.
++		_switch_runlevel(RUNLEVEL_EXIT_LANGUAGES);
++		while (runlevel_data.exit_languages.num_exited_threads != threads.size()) {
++			control_cond_var.wait(lock);
++		}
++
++		// A task nobody waited for stays in the pool until finish(), which runs
++		// after the scripting languages are gone. Its callable may hold script
++		// objects (a lambda's captures, bound arguments) whose destructors need
++		// their language, so release the callables while the languages exist.
++		for (KeyValue<TaskID, Task *> &E : tasks) {
++			if (E.value->callable.is_valid()) {
++				print_verbose("WorkerThreadPool: releasing task never waited for: " + E.value->description);
++				unclaimed.push_back(E.value->callable);
++				E.value->callable = Callable();
++			}
++		}
+ 	}
++
++	// Outside the lock: the destructors may run script code.
++	unclaimed.clear();
+ }
+ 
+ void WorkerThreadPool::finish() {

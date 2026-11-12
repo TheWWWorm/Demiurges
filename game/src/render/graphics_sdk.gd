@@ -7,18 +7,20 @@ extends Node
 ## renderer, the browser, Android, Linux, macOS and ordinary Windows builds
 ## see every choice as unavailable and their viewport is never touched.
 ##
-## Settings (shared, see ELSettings): "upscaler" (0 off, 1 AMD FSR, 2 NVIDIA
-## DLSS), "fsr_version" (4 or 3 for FSR 3.1; AMD upscaling and frame
-## generation), "upscale_quality" (0 full-resolution AA / DLAA, 1 Quality, 2 Balanced,
-## 3 Performance), "frame_generation" (0 off, 1 AMD FSR, 2 NVIDIA DLSS) and
+## Settings (shared, see ELSettings): "upscaler" (OFF, AMD FSR or NVIDIA
+## DLSS), "upscale_quality" (0 full resolution: Native AA, DLAA with NVIDIA;
+## 1 Quality, 2 Balanced, 3 Performance),
+## "frame_generation" (on or off: NVIDIA DLSS Frame Generation with DLSS
+## upscaling, AMD FSR Frame Generation with FSR or without upscaling) and
 ## "ray_reconstruction" (DLSS Ray Reconstruction in place of the path
-## tracer's own smoothing, see ELPathTracing). A setting is a request: only
-## the SDK's own status says whether it renders.
+## tracer's own smoothing, see ELPathTracing). AMD FSR runs as FSR 4 where
+## the SDK reports it for this GPU, otherwise as FSR 3.1 (upscaling and frame
+## generation each on their own). A setting is a request: only the SDK's own
+## status says whether it renders.
 ##
 ## One vendor owns presentation per start. The engine reads the owner from
 ## OWNER_FILE when it starts; the game writes it, and a change of owner needs
-## a restart. DLSS Frame Generation needs DLSS upscaling; AMD frame
-## generation works with or without FSR upscaling; the vendors never mix.
+## a restart. The vendors never mix.
 ##
 ## As a node (a child of the game) it switches frame generation on only
 ## while a map or battle is on screen: not in menus, loading screens or
@@ -33,38 +35,36 @@ const NVIDIA := 2
 const OWNER_FILE := "user://graphics_sdk.cfg"
 const STATUS_FILE := "user://graphics-sdk-status.json"
 const OWNER_NAMES := ["", "amd", "nvidia"]
+## The upscaler choices in the order they are offered.
+const UPSCALERS := [OFF, NVIDIA, AMD]
 ## Render scale per "upscale_quality".
 const FSR_SCALES := [1.0, 1.0 / 1.5, 1.0 / 1.7, 0.5]
 const DLSS_SCALES := [1.0, 2.0 / 3.0, 0.58, 0.5]
+const QUALITY_NAMES := ["Native AA", "Quality", "Balanced", "Performance"]
 ## Streamline.set_parameter: NVIDIA Reflex mode.
 const REFLEX_MODE := 0
 ## Viewport meta: the scaling the viewport had before an SDK upscaler.
 const SAVED_SCALING := &"graphics_sdk_saved_scaling"
 
-const UPSCALING_HELP := "Renders the 3D map and battle scenes at a lower resolution and rebuilds the picture with AMD FSR or NVIDIA DLSS, which also smooth edges in place of Anti-aliasing. Switching between AMD and NVIDIA takes a restart."
-const VERSION_HELP := "Which AMD FSR to use for upscaling and frame generation. FSR 4 needs a supported Radeon GPU; FSR 3.1 also runs on other GPUs."
-const QUALITY_HELP := "Native AA keeps the full resolution (DLAA with NVIDIA DLSS). Quality, Balanced and Performance render fewer pixels for a higher frame rate."
-const FRAME_GENERATION_HELP := "Adds generated frames between the rendered ones on maps and in battles. It pauses in menus, loading screens and movies and while the window is in the background. NVIDIA needs DLSS upscaling and turns on NVIDIA Reflex. The frame rate counter then shows the frames shown and the frames rendered."
-const UPSCALER_CHOICES :=["Off", "AMD FSR Upscaling", "NVIDIA DLSS"]
-const VERSION_CHOICES := ["FSR 4", "FSR 3.1"]
-const VERSION_VALUES := [4, 3]
-const QUALITY_CHOICES := ["Native AA (DLAA with NVIDIA DLSS)", "Quality", "Balanced", "Performance"]
-const FRAME_GENERATION_CHOICES := ["Off", "AMD FSR Frame Generation", "NVIDIA DLSS Frame Generation"]
+const UPSCALING_HELP := "Renders the 3D map and battle scenes at a lower resolution and rebuilds the picture with NVIDIA DLSS or AMD FSR, which also smooth edges in place of Anti-aliasing. AMD FSR runs as FSR 4 where this GPU supports it, otherwise as FSR 3.1. Switching between NVIDIA and AMD takes a restart."
+const QUALITY_HELP := "How many pixels the upscaler renders. Native AA (DLAA with NVIDIA DLSS) keeps the full resolution and only smooths edges; Quality, Balanced and Performance render fewer pixels for a higher frame rate."
+const FRAME_GENERATION_HELP := "Adds generated frames between the rendered ones on maps and in battles: NVIDIA DLSS Frame Generation with DLSS upscaling (it also turns on NVIDIA Reflex), otherwise AMD FSR Frame Generation. It pauses in menus, loading screens and movies and while the window is in the background. The frame rate counter then shows the frames shown and the frames rendered."
 const RAY_RECONSTRUCTION_HELP := "With NVIDIA DLSS upscaling, the path-traced light goes unsmoothed to DLSS Ray Reconstruction, which removes its noise in place of the path tracer's own smoothing and keeps moving light and shadows sharper."
 
 const NO_NVIDIA := "This build does not include NVIDIA DLSS."
 const NO_AMD := "This build does not include AMD FSR."
-const NEED_API := "Needs Windows and the Forward+ (Vulkan) renderer: choose Forward+ (Vulkan) above and restart."
-const NEED_RESTART := "Restart the game to switch between AMD and NVIDIA."
+const NEED_API := "Needs Windows and the Forward+ (Vulkan) renderer: choose it under Path tracing and restart."
 const NEED_DLSS := "NVIDIA DLSS is not available on this GPU or driver, or its runtime could not be loaded."
 const NEED_DLSS_FG := "DLSS Frame Generation is not available: it needs a GeForce RTX 40 series or newer GPU, a current driver and Windows hardware-accelerated GPU scheduling."
-const NEED_FSR4 := "FSR 4 is not available on this GPU or driver. Choose FSR 3.1."
-const NEED_FSR3 := "FSR 3.1 is not available on this GPU or driver, or its runtime could not be loaded."
-const NEED_FSR4_FG := "FSR 4 frame generation needs Windows 11 and a Radeon RX 9000 series or newer GPU. Choose FSR 3.1."
-const NEED_FSR3_FG := "AMD FSR Frame Generation is not available on this GPU or driver."
+const NEED_FSR := "AMD FSR is not available on this GPU or driver, or its runtime could not be loaded."
+const NEED_FSR_FG := "AMD FSR Frame Generation is not available on this GPU or driver."
 const NEED_DLSS_UPSCALING := "Choose NVIDIA DLSS upscaling first."
-const NEED_UPSCALER := "Choose AMD FSR or NVIDIA DLSS upscaling first."
-const NO_MIXING := "NVIDIA DLSS and AMD FSR cannot be used together."
+## The restart a change of presentation owner needs (the vendor's name, %s).
+const NEED_RESTART := "Restart the game to use %s."
+const RESTART_TITLE := "Restart needed"
+const RESTART_FRAME_GENERATION := "Frame generation needs a restart: %s is set up when the game starts. Until then it stays off."
+const RESTART_UPSCALING := "%s needs a restart: it is set up when the game starts. Until then the picture is not upscaled."
+const VENDOR_NAMES := ["", "AMD FSR", "NVIDIA DLSS"]
 const FAILED := "Stopped after an error. Restart the game to try again."
 const NO_RR := "This build's NVIDIA DLSS does not include Ray Reconstruction."
 const NEED_RR := "DLSS Ray Reconstruction is not available on this GPU or driver, or its runtime could not be loaded."
@@ -128,8 +128,54 @@ static func running_owner() -> int:
 	if named > 0 and not status(named).has("requested"): return named
 	return OFF
 
-static func _fsr_version(values: Dictionary) -> int:
-	return 3 if int(values.get("fsr_version", 4)) == 3 else 4
+# --- The settings' meaning ----------------------------------------------------
+
+## The chosen upscaler: AMD, NVIDIA or OFF.
+static func upscaler_of(values: Dictionary) -> int:
+	var vendor := int(values.get("upscaler", OFF))
+	return vendor if vendor in UPSCALERS else OFF
+
+## The chosen quality: 0 full resolution (DLAA, Native AA), 1 Quality, 2
+## Balanced, 3 Performance.
+static func quality_of(values: Dictionary) -> int:
+	return clampi(int(values.get("upscale_quality", 1)), 0, 3)
+
+## The frame generation asked for: OFF, NVIDIA (with DLSS upscaling) or AMD.
+static func generation_of(values: Dictionary) -> int:
+	if not bool(values.get("frame_generation", false)): return OFF
+	return NVIDIA if upscaler_of(values) == NVIDIA else AMD
+
+## The FSR this GPU runs for upscaling (`feature` "sr") or frame generation
+## ("fg"): 4 where the SDK reports it, else 3 (for FSR 3.1); 0 while unknown
+## (the SDK is not set up in this run, or reports neither).
+static func fsr_version(feature := "sr") -> int:
+	var state := status(AMD)
+	if not bool(state.get("initialized", false)): return 0
+	for version: int in [4, 3]:
+		if bool(state.get("%s%d_supported" % [feature, version], false)): return version
+	return 0
+
+## The name of upscaler `vendor`: AMD FSR names the version this GPU gets
+## (none while unknown). `translate` turns "Off".
+static func upscaler_name(vendor: int, translate := Callable()) -> String:
+	if vendor == NVIDIA: return "NVIDIA DLSS"
+	if vendor == AMD:
+		var version := fsr_version("sr")
+		return "AMD FSR" + (" 4" if version == 4 else " 3.1" if version == 3 else "")
+	return translate.call("Off") if translate.is_valid() else "Off"
+
+## The name of quality `quality` with upscaler `vendor` (full resolution is
+## DLAA with NVIDIA DLSS, Native AA otherwise).
+static func quality_name(quality: int, vendor: int, translate := Callable()) -> String:
+	var text: String = "DLAA" if quality == 0 and vendor == NVIDIA else QUALITY_NAMES[clampi(quality, 0, 3)]
+	return translate.call(text) if translate.is_valid() else text
+
+## What frame generation `values` would use: "NVIDIA DLSS Frame Generation"
+## or AMD's with the FSR version this GPU gets.
+static func generation_name(values: Dictionary) -> String:
+	if upscaler_of(values) == NVIDIA: return "NVIDIA DLSS Frame Generation"
+	var version := fsr_version("fg")
+	return "AMD FSR" + (" 4" if version == 4 else " 3.1" if version == 3 else "") + " Frame Generation"
 
 ## Facts about one vendor in this run.
 static func facts(vendor: int) -> Dictionary:
@@ -178,59 +224,41 @@ static func needs_forward_plus(values: Dictionary) -> bool:
 
 # --- Reasons a choice cannot be used ----------------------------------------
 
-## Why upscaler `choice` cannot be chosen with `values` ("" when it can; a
-## choice for the vendor not owning this run can be chosen and asks for a
-## restart).
-static func upscaler_reason(choice: int, values: Dictionary) -> String:
-	if choice == OFF: return ""
-	var info := facts(choice)
-	if not info.engine: return NO_NVIDIA if choice == NVIDIA else NO_AMD
+## Why upscaler `vendor` cannot be chosen ("" when it can; the vendor not
+## owning this run can be chosen and asks for a restart).
+static func upscaling_reason(vendor: int) -> String:
+	if vendor not in [AMD, NVIDIA]: return ""
+	var info := facts(vendor)
+	if not info.engine: return NO_NVIDIA if vendor == NVIDIA else NO_AMD
 	if not info.api: return NEED_API
 	if not info.owner: return ""
-	if choice == NVIDIA:
+	if vendor == NVIDIA:
 		if not info.sr: return FAILED if info.runtime_error else _with(NEED_DLSS, info.sr_reason)
 		return ""
-	var version := _fsr_version(values)
-	if not info["sr%d" % version]:
+	if fsr_version("sr") == 0:
 		if info.runtime_error: return FAILED
-		return _with(NEED_FSR4 if version == 4 else NEED_FSR3, info["sr%d_reason" % version])
+		return _with(NEED_FSR, str(info.sr3_reason))
 	return ""
 
-## Why frame generation `choice` cannot be chosen with `values`.
-static func frame_generation_reason(choice: int, values: Dictionary) -> String:
-	if choice == OFF: return ""
-	var upscaler := int(values.get("upscaler", OFF))
-	var info := facts(choice)
-	if not info.engine: return NO_NVIDIA if choice == NVIDIA else NO_AMD
+## Why frame generation cannot be switched on with `values`' upscaling ("" when
+## it can, or when it asks for a restart first).
+static func frame_generation_reason(values: Dictionary) -> String:
+	var vendor := NVIDIA if upscaler_of(values) == NVIDIA else AMD
+	var info := facts(vendor)
+	if not info.engine:
+		# Without AMD's SDK, NVIDIA's still generates frames with DLSS.
+		if vendor == AMD and compiled(NVIDIA): return NEED_DLSS_UPSCALING
+		return NO_NVIDIA if vendor == NVIDIA else NO_AMD
 	if not info.api: return NEED_API
-	if choice == NVIDIA and upscaler != NVIDIA: return NEED_DLSS_UPSCALING
-	if choice == AMD and upscaler == NVIDIA: return NO_MIXING
 	if not info.owner: return ""
-	if choice == NVIDIA:
+	if vendor == NVIDIA:
 		if not info.sr: return FAILED if info.runtime_error else _with(NEED_DLSS, info.sr_reason)
 		if not info.fg: return FAILED if info.runtime_error else _with(NEED_DLSS_FG, info.fg_reason)
 		return ""
-	var version := _fsr_version(values)
-	if not info["fg%d" % version]:
+	if fsr_version("fg") == 0:
 		if info.runtime_error: return FAILED
-		return _with(NEED_FSR4_FG if version == 4 else NEED_FSR3_FG, info["fg%d_reason" % version])
+		return _with(NEED_FSR_FG, str(info.fg3_reason))
 	return ""
-
-## Why the FSR version `version` (4 or 3) cannot be chosen.
-static func version_reason(version: int, values: Dictionary) -> String:
-	var proposed := values.duplicate()
-	proposed.fsr_version = version
-	var upscaler := int(values.get("upscaler", OFF))
-	var generation := int(values.get("frame_generation", OFF))
-	if upscaler != AMD and generation != AMD: return upscaler_reason(AMD, proposed)
-	var reason := upscaler_reason(AMD, proposed) if upscaler == AMD else ""
-	if reason.is_empty() and generation == AMD: reason = frame_generation_reason(AMD, proposed)
-	return reason
-
-## Why the quality choice cannot be changed.
-static func quality_reason(values: Dictionary) -> String:
-	var upscaler := int(values.get("upscaler", OFF))
-	return NEED_UPSCALER if upscaler == OFF else upscaler_reason(upscaler, values)
 
 ## The engine takes Ray Reconstruction guides from scripts.
 static func ray_reconstruction_compiled() -> bool:
@@ -245,10 +273,10 @@ static func ray_reconstruction_reason(values: Dictionary, path_tracing := true) 
 	if not ray_reconstruction_compiled(): return NO_RR
 	if not info.api: return NEED_API
 	if not path_tracing: return NEED_PATH_TRACING
-	if int(values.get("upscaler", OFF)) != NVIDIA: return NEED_DLSS_UPSCALING
+	if upscaler_of(values) != NVIDIA: return NEED_DLSS_UPSCALING
 	# DLSS chosen for the next start: the upscaling row offers the restart.
 	if not info.owner: return ""
-	var upscaling := upscaler_reason(NVIDIA, values)
+	var upscaling := upscaling_reason(upscaler_of(values))
 	if not upscaling.is_empty(): return upscaling
 	if not info.rr: return FAILED if info.rr_error else _with(NEED_RR, info.rr_reason)
 	return ""
@@ -265,22 +293,19 @@ static func frame_rate_cap(user_rate: int, recommended: int) -> int:
 	if recommended <= 0: return maxi(0, user_rate)
 	return recommended if user_rate <= 0 else mini(user_rate, recommended)
 
-## Settings that cannot go together are set apart: DLSS Frame Generation
-## without DLSS, AMD frame generation with DLSS. Returns whether any changed.
+## An upscaler value that names no vendor becomes Off. Returns whether it
+## changed.
 static func normalize(values: Dictionary) -> bool:
-	var upscaler := int(values.get("upscaler", OFF))
-	var generation := int(values.get("frame_generation", OFF))
-	if (generation == NVIDIA and upscaler != NVIDIA) or (generation == AMD and upscaler == NVIDIA):
-		values.frame_generation = OFF
-		return true
-	return false
+	if int(values.get("upscaler", OFF)) in UPSCALERS: return false
+	values.upscaler = OFF
+	return true
 
 # --- Presentation owner ------------------------------------------------------
 
 ## The vendor `values` need to own presentation ("" for none).
 static func wanted_owner(values: Dictionary) -> String:
-	var upscaler := int(values.get("upscaler", OFF))
-	var generation := int(values.get("frame_generation", OFF))
+	var upscaler := upscaler_of(values)
+	var generation := generation_of(values)
 	if upscaler == NVIDIA or generation == NVIDIA: return "nvidia"
 	if upscaler == AMD or generation == AMD: return "amd"
 	return ""
@@ -311,15 +336,26 @@ static func needs_restart(values: Dictionary) -> bool:
 
 ## The upscaler rendering now: AMD, NVIDIA or OFF.
 static func active_upscaler(values: Dictionary) -> int:
-	var choice := int(values.get("upscaler", OFF))
+	var choice := upscaler_of(values)
 	if choice == OFF or running_owner() != choice: return OFF
-	return choice if upscaler_reason(choice, values).is_empty() else OFF
+	return choice if upscaling_reason(upscaler_of(values)).is_empty() else OFF
 
 ## Frame generation the settings allow now (ignoring what is on screen).
 static func available_frame_generation(values: Dictionary) -> int:
-	var choice := int(values.get("frame_generation", OFF))
+	var choice := generation_of(values)
 	if choice == OFF or running_owner() != choice: return OFF
-	return choice if frame_generation_reason(choice, values).is_empty() else OFF
+	return choice if frame_generation_reason(values).is_empty() else OFF
+
+## What a change of the settings from `before` to `values` asks the player:
+## the restart message when the new choices need another presentation owner
+## than this run's and the old ones did not need that same one ("" otherwise).
+static func restart_message(before: Dictionary, values: Dictionary) -> String:
+	if not needs_restart(values): return ""
+	if needs_restart(before) and wanted_owner(before) == wanted_owner(values): return ""
+	var vendor := OWNER_NAMES.find(wanted_owner(values))
+	if generation_of(values) != OFF and (generation_of(before) == OFF or upscaler_of(values) == upscaler_of(before)):
+		return RESTART_FRAME_GENERATION
+	return RESTART_UPSCALING if upscaler_of(values) == vendor else RESTART_FRAME_GENERATION
 
 # --- Applying ----------------------------------------------------------------
 
@@ -340,13 +376,13 @@ static func apply_upscaling(viewport: Viewport, values: Dictionary) -> void:
 	var sdk_modes := [ClassDB.class_get_integer_constant("Viewport", "SCALING_3D_MODE_DLSS"), ClassDB.class_get_integer_constant("Viewport", "SCALING_3D_MODE_FSR_SDK")]
 	if not viewport.has_meta(SAVED_SCALING) and int(viewport.scaling_3d_mode) not in sdk_modes:
 		viewport.set_meta(SAVED_SCALING, [int(viewport.scaling_3d_mode), viewport.scaling_3d_scale])
-	var quality := clampi(int(values.get("upscale_quality", 1)), 0, 3)
+	var quality := quality_of(values)
 	viewport.msaa_3d = Viewport.MSAA_DISABLED
 	viewport.screen_space_aa = Viewport.SCREEN_SPACE_AA_DISABLED
 	viewport.use_taa = false
 	var constant := "SCALING_3D_MODE_DLSS"
 	if vendor == AMD:
-		fidelityfx().call("set_upscaler_version", _fsr_version(values))
+		fidelityfx().call("set_upscaler_version", maxi(3, fsr_version("sr")))
 		constant = "SCALING_3D_MODE_FSR_SDK"
 	viewport.scaling_3d_scale = (DLSS_SCALES if vendor == NVIDIA else FSR_SCALES)[quality]
 	viewport.set("scaling_3d_mode", ClassDB.class_get_integer_constant("Viewport", constant))
@@ -355,12 +391,12 @@ static func apply_upscaling(viewport: Viewport, values: Dictionary) -> void:
 static func status_report(values: Dictionary) -> Dictionary:
 	return {"platform_ready": platform_ready(), "running_owner": OWNER_NAMES[running_owner()],
 		"wanted_owner": wanted_owner(values), "owner_file": read_owner_file(),
-		"requested": {"upscaler": int(values.get("upscaler", 0)), "fsr_version": _fsr_version(values),
-			"upscale_quality": int(values.get("upscale_quality", 1)), "frame_generation": int(values.get("frame_generation", 0)),
+		"requested": {"upscaler": upscaler_of(values), "quality": quality_of(values),
+			"frame_generation": generation_of(values), "fsr_upscaler_version": fsr_version("sr"), "fsr_frame_generation_version": fsr_version("fg"),
 			"ray_reconstruction": bool(values.get("ray_reconstruction", false))},
 		"active_upscaler": active_upscaler(values),
-		"upscaler_reason": upscaler_reason(int(values.get("upscaler", 0)), values),
-		"frame_generation_reason": frame_generation_reason(int(values.get("frame_generation", 0)), values),
+		"upscaler_reason": upscaling_reason(upscaler_of(values)),
+		"frame_generation_reason": frame_generation_reason(values) if generation_of(values) != OFF else "",
 		"ray_reconstruction_reason": ray_reconstruction_reason(values, bool(values.get("path_tracing", false))),
 		"ray_reconstruction_active": ray_reconstruction_active(values),
 		"path_tracing_ray_reconstruction": ELPathTracing.ray_reconstruction_report,
@@ -398,7 +434,7 @@ func _process(delta: float) -> void:
 		_upscaling = upscaling
 		upscaling_changed.emit()
 	var root := get_tree().root
-	var wanted := int(values.get("frame_generation", OFF))
+	var wanted := generation_of(values)
 	var blockers: Array = []
 	if wanted == OFF: blockers.append("option_off")
 	elif available_frame_generation(values) == OFF: blockers.append("unavailable")
@@ -433,21 +469,20 @@ func _switch(vendor: int, on: bool, root: Window) -> void:
 		# NVIDIA Reflex is required by DLSS Frame Generation.
 		streamline().call("set_parameter", REFLEX_MODE, 1.0 if on else 0.0)
 	elif vendor == AMD:
-		fidelityfx().call("set_frame_generation_version", _fsr_version(settings.values) if on else 0)
+		fidelityfx().call("set_frame_generation_version", maxi(3, fsr_version("fg")) if on else 0)
 	if not on: root.set("frame_generation", false)
 
-## The FSR version the SDK runs follows the setting (changed while running,
-## frame generation would otherwise keep the version it started with): FSR 4
-## never quietly runs as 3.1, and an unavailable version stops instead.
-func _keep_fsr_version(values: Dictionary) -> void:
+## The FSR versions the SDK runs follow what it reports for this GPU (FSR 4
+## where it can, else FSR 3.1), for upscaling and frame generation each.
+func _keep_fsr_version(_values: Dictionary) -> void:
 	if _upscaling != AMD and _generation != AMD: return
-	var version := _fsr_version(values)
 	var state := status(AMD)
-	if _upscaling == AMD and int(state.get("upscaler_version_requested", version)) != version:
-		fidelityfx().call("set_upscaler_version", version)
-	# Frame generation runs here only while its reason for `version` is empty.
-	if _generation == AMD and int(state.get("frame_generation_version_requested", version)) != version:
-		fidelityfx().call("set_frame_generation_version", version)
+	var upscaling := fsr_version("sr")
+	if _upscaling == AMD and upscaling > 0 and int(state.get("upscaler_version_requested", upscaling)) != upscaling:
+		fidelityfx().call("set_upscaler_version", upscaling)
+	var generation := fsr_version("fg")
+	if _generation == AMD and generation > 0 and int(state.get("frame_generation_version_requested", generation)) != generation:
+		fidelityfx().call("set_frame_generation_version", generation)
 
 ## While AMD frame generation is active, Engine.max_fps follows the SDK's
 ## recommendation (or the player's lower cap); the player's cap returns after.

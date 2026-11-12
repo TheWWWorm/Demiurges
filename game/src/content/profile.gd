@@ -30,6 +30,8 @@ var _prefetch: Array = []
 var _prefetch_task := -1
 ## Interface button sounds by control name (ELUiSounds).
 var button_sounds: Dictionary = {}
+## Where figures' skins are painted as metal (worked out on worker threads).
+var metal_masks: ELMetalMasks
 
 func mount(edition: String, folder: String) -> bool:
 	error = ""
@@ -100,6 +102,10 @@ func mount(edition: String, folder: String) -> bool:
 	var ta: ELArchive = archives.text
 	for name: String in ta.entries:
 		texts.merge(ELText.parse(ta.read(name)), true)
+	if metal_masks != null: metal_masks.stop()
+	metal_masks = ELMetalMasks.new(id)
+	# Headless runs (checks, exports) build figures without drawing them.
+	if DisplayServer.get_name() != "headless": metal_masks.precompute(self)
 	return true
 
 func table(name: String) -> Dictionary:
@@ -130,6 +136,14 @@ func figure_diffuse(material_id: int) -> Color:
 		_figure_diffuse[material_id] = color
 	return _figure_diffuse[material_id]
 
+## Where a figure package is stored (ELArchive.locate).
+func locate_figure(name: String) -> Array:
+	for archive in ["crfigures", "figures"]:
+		var a: ELArchive = archives[archive]
+		if a.has(name):
+			return a.locate(name)
+	return []
+
 func figure(name: String) -> PackedByteArray:
 	for archive in ["crfigures", "figures"]:
 		var a: ELArchive = archives[archive]
@@ -150,16 +164,34 @@ func texture(name: String) -> Texture2D:
 ## stays on the main thread.
 func _texture_source(key: String) -> Dictionary:
 	var file := key if key.ends_with(".mmp") else key + ".mmp"
-	var bytes := read("textures", file)
-	if bytes.is_empty() and file.begins_with("interface/black/progress_panel_"):
-		bytes = read("gp1tex", file)
+	for candidate: Array in _texture_candidates(file):
+		var bytes := read(candidate[0], candidate[1])
+		if not bytes.is_empty(): return {"file": file, "bytes": bytes, "soft": candidate[2]}
+	return {"file": file, "bytes": PackedByteArray(), "soft": false}
+
+## Where a texture is stored, {location (ELArchive.locate), soft}, or {}.
+func texture_location(name: String) -> Dictionary:
+	var key := ELArchive.key(name)
+	var file := key if key.ends_with(".mmp") else key + ".mmp"
+	for candidate: Array in _texture_candidates(file):
+		var a: ELArchive = archives.get(candidate[0])
+		if a == null or not a.has(candidate[1]): continue
+		var location := a.locate(candidate[1])
+		if location.size() == 3 and int(location[2]) > 0: return {"location": location, "soft": candidate[2]}
+	return {}
+
+## Archive entries a texture may be stored as, in order: [archive, entry,
+## soft alpha].
+func _texture_candidates(file: String) -> Array:
+	var candidates := [["textures", file, false]]
+	if file.begins_with("interface/black/progress_panel_"):
+		candidates.append(["gp1tex", file, false])
 	# Tables name some textures without the Alpha or Alpha32 folder they are
 	# stored in (the second game's map leaders, such as SmBlackFemale00 in
 	# Heroes/Alpha): look there too, as the originals do.
 	# Failing that, the closest stored variant: the full-size skin of a small
 	# ("Sm") one, the first colour of a set ("_00") or a lord's main sheet.
-	var soft := false
-	if bytes.is_empty() and "/" in file:
+	if "/" in file:
 		var folder := file.get_base_dir()
 		var base := file.get_file().get_basename()
 		var names := [base]
@@ -167,11 +199,8 @@ func _texture_source(key: String) -> Dictionary:
 		for stem: String in names.duplicate(): names.append_array([stem + "_00", stem + "main"])
 		for stem: String in names:
 			for sub in ["", "alpha", "alpha32"]:
-				bytes = read("textures", folder.path_join(sub).path_join(stem + ".mmp"))
-				soft = sub == "alpha32"
-				if not bytes.is_empty(): break
-			if not bytes.is_empty(): break
-	return {"file": file, "bytes": bytes, "soft": soft}
+				candidates.append(["textures", folder.path_join(sub).path_join(stem + ".mmp"), sub == "alpha32"])
+	return candidates
 
 ## Decodes a texture's bytes into its image and mipmaps: {image, one_bit,
 ## authored, soft} or empty. Touches nothing shared, so worker threads may

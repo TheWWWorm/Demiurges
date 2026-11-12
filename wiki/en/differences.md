@@ -10,7 +10,7 @@ Demiurges follows the rules of the original games. It runs on modern systems and
 
 - Both games in one program, switched from the main menu, each with its own rules, saves and settings.
 - Windows, Linux, macOS, Android and the browser; touch controls.
-- [Remake settings](options): soft shadows, terrain detail, sharpening, anti-aliasing and more.
+- Remake settings on the [Options](options) screen: soft shadows, terrain detail, sharpening, anti-aliasing and more.
 - The automatic camera can be interrupted by moving the camera yourself.
 - This wiki, in English and Russian, in the game and on the web.
 

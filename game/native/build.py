@@ -85,8 +85,10 @@ def android(zig, ndk, name):
         clang = tools / f"{triple}{ANDROID_API}-clang"
         if not clang.exists():
             raise FileNotFoundError(clang)
-        # 16 KB pages: required by recent Android devices.
-        run([clang, *FLAGS, "-fPIC", "-s", "-Wl,-z,max-page-size=16384", "-o", BIN / f"lib{name}.android.{arch}.so", HERE / f"{name}.c"])
+        # 16 KB pages: required by recent Android devices. libm is linked
+        # explicitly: Godot opens the library with every symbol resolved at
+        # once, and the maths functions (sincos) are not in libc.
+        run([clang, *FLAGS, "-fPIC", "-s", "-Wl,-z,max-page-size=16384", "-o", BIN / f"lib{name}.android.{arch}.so", HERE / f"{name}.c", "-lm"])
 
 
 PLATFORMS = {"linux": linux, "windows": windows, "macos": macos, "android": android}

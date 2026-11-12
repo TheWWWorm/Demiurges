@@ -15,7 +15,6 @@ signal notebook_requested
 signal options_requested
 ## Esc menu Options: the original Options screen.
 signal original_options_requested
-signal remake_settings_requested
 signal centre_requested
 signal minimap_clicked(cell: Vector2)
 signal save_requested
@@ -259,8 +258,7 @@ func _layout() -> void:
 	header.size = control_rect("EscHdr").size
 	var panel := control_rect(MENU)
 	var centre := panel.get_center().x
-	menu.get_node("RemakeSettings").position = Vector2(centre - 195, panel.end.y + 10)
-	menu.get_node("Wiki").position = Vector2(centre + 55, panel.end.y + 10)
+	menu.get_node("Wiki").position = Vector2(centre - 70, panel.end.y + 10)
 	remake_strip.position = Vector2(8, 8)
 	remake_strip.size.x = 0
 	art.queue_redraw()
@@ -571,14 +569,6 @@ func _build_menu() -> void:
 	if menu_buttons.has("EscExitMM"): menu_buttons.EscExitMM.pressed.connect(func(): exit_requested.emit())
 	if menu_buttons.has("EscExitWin"): menu_buttons.EscExitWin.pressed.connect(func(): quit_requested.emit())
 	menu_buttons.EscCancel.pressed.connect(func(): menu_closed.emit())
-	var settings := Button.new()
-	settings.name = "RemakeSettings"
-	settings.text = ELRemakeText.t("Remake settings…", profile)
-	settings.focus_mode = Control.FOCUS_NONE
-	settings.add_theme_font_size_override("font_size", 15)
-	settings.size = Vector2(240, 30)
-	settings.pressed.connect(func(): remake_settings_requested.emit())
-	menu.add_child(settings)
 	# Remake-only: the wiki over the map (also F1).
 	var wiki := Button.new()
 	wiki.name = "Wiki"

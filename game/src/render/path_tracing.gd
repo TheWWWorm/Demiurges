@@ -37,8 +37,12 @@ const SURFACE_PRIMARY_CULL_BACK := 2048
 const SURFACE_PRIMARY_CULL_FRONT := 4096
 ## Unlit adventure-map scenery, which takes the traced sun's shadow.
 const SURFACE_UNLIT_SHADOWED := 8192
-## Metal (ELFigure.metal_material), traced with a glossy reflection.
+## Metal (ELFigure.metal_material), traced with a glossy reflection where
+## its mask (in the emission layer's place) says.
 const SURFACE_METAL := 16384
+## A figure's feather, hair or cloth card (ELFigure.is_soft_part, cut out):
+## thin, so it passes some sun to its far side and some through its cuts.
+const SURFACE_THIN := 32768
 const SURFACE_CLAMP_UV := 32
 ## Angular radius of the sun's disc (tangent), which sets shadow softness.
 const SUN_RADIUS := 0.02
@@ -333,6 +337,7 @@ func _snapshot(delta: float) -> void:
 			var node: MeshInstance3D = model.parts[part_name]
 			var look: Dictionary = looks[part_name]
 			if unlit_scenery: look.flags |= SURFACE_UNLIT_SHADOWED
+			if look.has("cutoff") and ELFigure.is_soft_part(part_name): look.flags |= SURFACE_THIN
 			if arena_floor:
 				look.flags |= SURFACE_ARENA_FLOOR
 			elif is_instance_valid(_arena) and _arena.is_normal_secondary_receiver(model, node):
@@ -394,7 +399,9 @@ func _update_slot(ops: Array, id: int, mesh: Mesh, frame: int, look: Dictionary,
 		var flags: int = look.get("flags", 0)
 		if cutoff > 1.0 or (cutoff > 0.0 and layer[1]) or (flags & SURFACE_SOFT_EMITTER) != 0:
 			flags |= SURFACE_ALPHA
-		var record := _material_record(look, layer[0], _layer(look.get("emission_texture"))[0], flags)
+		# Metal has no emission: that layer carries where its texels are metal.
+		var second: Texture2D = look.get("emission_texture") if (flags & SURFACE_EMISSION) != 0 else look.get("metal_texture")
+		var record := _material_record(look, layer[0], _layer(second)[0], flags)
 		var geometry_flags := SURFACE_ARENA_SCENERY
 		if slot.is_empty() or slot.mesh != mesh or (slot.flags & geometry_flags) != (flags & geometry_flags):
 			var normals := PackedByteArray()
@@ -673,7 +680,9 @@ func _surface(node: GeometryInstance3D, effect := false) -> Dictionary:
 		if cutout:
 			look.cutoff = base.alpha_scissor_threshold / maxf(base.albedo_color.a, 0.000001)
 		if fullbright: look.flags |= SURFACE_FULLBRIGHT
-		elif base.metallic > 0.0: look.flags |= SURFACE_METAL
+		elif base.metallic > 0.0:
+			look.flags |= SURFACE_METAL
+			look.metal_texture = base.metallic_texture
 		if soft:
 			if base.albedo_color.a <= 0.0: return {}
 			look.flags |= SURFACE_SOFT_EMITTER
@@ -1205,7 +1214,7 @@ class Effect extends CompositorEffect:
 		var rr := false
 		var rr_reset := history_reset or not _rr_was
 		if bool(frame.get("ray_reconstruction", false)) and buffers.get_view_count() == 1 \
-				and buffers.has_method("set_dlss_ray_reconstruction") and scene.has_method("get_ray_projection") and _rr_ready(size):
+				and buffers.has_method("set_dlss_ray_reconstruction") and _rr_ready(size):
 			rr = bool(buffers.call("set_dlss_ray_reconstruction", _rr_images[0], _rr_images[1], _rr_images[2], _rr_images[3], rr_reset))
 			_mutex.lock()
 			_rr_counts.submitted_frames += 1 if rr else 0
@@ -1215,9 +1224,11 @@ class Effect extends CompositorEffect:
 		_mutex.lock()
 		_rr_counts.requested = bool(frame.get("ray_reconstruction", false))
 		_mutex.unlock()
-		if rr:
-			# The reconstruction works on the jittered picture the raster drew.
-			projection = scene.call("get_ray_projection")
+		# The camera projection already carries the renderer's depth correction
+		# and its jitter (the jittered picture the raster drew, which the
+		# reconstruction works on). get_ray_projection lacks the correction:
+		# every primary ray missed with it, so nothing was traced and the
+		# reconstruction showed the raster without traced shadows.
 		var view_projection := projection * Projection(camera.affine_inverse())
 		var flags := (1 if history_reset else 0) | (2 if frame.lighting_view else 0) | (4 if OS.get_cmdline_user_args().has("--path-tracing-debug") else 0)
 		# Ray Reconstruction gets one fresh sample a pixel (no accumulation),

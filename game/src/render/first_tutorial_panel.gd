@@ -141,6 +141,7 @@ func build(source: ELProfile, shared: ELFirstTutorial, screen: int) -> void:
 	add_child(sound)
 	tutorial.shown.connect(func(shown_category: int): if shown_category == category: present())
 	resized.connect(_layout)
+	set_process(true)
 	hide()
 
 ## Effects volume (0..1) for the opening sound.
@@ -154,6 +155,11 @@ func fire(event_name: String) -> bool:
 ## H: this screen's shown events, or both intro screens when there are none.
 func open_history() -> bool:
 	return tutorial != null and tutorial.open_history(category)
+
+## The option switched back on: this screen's introduction if it was never
+## seen (ELFirstTutorial.resumed); the history stays behind H.
+func resume() -> bool:
+	return tutorial != null and tutorial.resumed(category)
 
 ## Shows the tutorial's current entry, with the original opening sound.
 func present() -> void:
@@ -374,6 +380,9 @@ func map_click(site: Dictionary, ordered: bool) -> void:
 	elif site.get("type") == "fort": fire("FORT_ATTACK_OR_USE")
 
 func _process(_delta: float) -> void:
+	# A shown hint stays over windows opened after it (the battle's loot box,
+	# a message), which would otherwise cover it while it takes the input.
+	if visible and get_parent() != null and get_index() < get_parent().get_child_count() - 1: move_to_front()
 	if _view == null: return
 	# Windows the original reports when they open.
 	var hero_screen: Variant = _view.get("hero_screen")

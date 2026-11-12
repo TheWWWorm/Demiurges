@@ -2,7 +2,6 @@ class_name ELAdventureView
 extends Node3D
 var strategic_session: ELStrategicSession
 signal leave_requested
-signal remake_settings_requested
 signal encounter_requested(hero: int, opponent: int)
 ## F9 / F8: resume the quick save (ELSaveSlots.quick_path).
 signal resume_requested
@@ -122,6 +121,9 @@ const RUNE_SHOP_KEYS := {KEY_LEFT: -1, KEY_UP: -5, KEY_RIGHT: 1, KEY_DOWN: 5}
 var rune_shop: ELRuneShopView
 var first_shop: ELFirstSpellShopView
 var hero_screen: ELHeroScreenView
+## First game: the player's heroes that gained a level, in order; the
+## HeroScreen opens for each once the map is idle (_first_level_up).
+var first_level_ups: Array[int] = []
 var building_screen: ELBuildingScreenView
 var building_message: ELBuildingMessageView
 var building_messages: Array[Dictionary] = []
@@ -440,6 +442,7 @@ func _process(delta: float) -> void:
 		_hud_key = hud_key
 		_refresh_hero_info()
 	_auto_level_up()
+	_first_level_up()
 
 ## The original wait cursor while a map is built, loaded or saved (never while
 ## a battle opponent thinks); the next pick replaces it.
@@ -1641,6 +1644,7 @@ func _state_event(data: Dictionary) -> void:
 		"shop_captured":
 			_first_capture_box(data)
 		"experience_gained":
+			_note_first_level_up(data)
 			if int(state.object(data.id).get("owner", -1)) != state.current_player: return
 			var gained := "%d experience gained" % data.amount
 			if data.levels > 0: gained += " · Reached level %d" % state.object(data.id).level
@@ -1783,7 +1787,6 @@ func _extras_ready() -> bool:
 		extras = null
 		return false
 	extras.hosted_closed.connect(_close_extras)
-	extras.settings_requested.connect(func(): remake_settings_requested.emit())
 	extras.slot_chosen.connect(func(row: Dictionary): slot_requested.emit(row))
 	return true
 
@@ -1811,7 +1814,7 @@ func _original_options_closed(tutorial_was_enabled: bool) -> void:
 		"GOQuit": ELAudio.quiet_quit(get_tree())
 		_:
 			if tutorial_panel != null and not tutorial_was_enabled and bool(settings.values.get("show_tutorial", true)):
-				tutorial_panel.open_history()
+				tutorial_panel.resume()
 
 ## Options changed: the map takes the new values at once.
 func apply_settings() -> void:
@@ -2112,6 +2115,31 @@ func _auto_level_up() -> void:
 	if ELHeroSkills.prepare(state.map.profile, hero).is_empty(): return
 	_open_skills(state.main_hero)
 	if skills != null and audio != null: audio.effect_sound("Adventure/victory.wav")
+
+## First game: a level gained by one of the player's heroes (in a battle, a
+## building or a script). The original only shows the tutorial's LEVEL_UP
+## hint and leaves the choice to the HeroScreen; the remake also opens that
+## screen, with its level-up offers, once the map is idle.
+func _note_first_level_up(data: Dictionary) -> void:
+	if state.map.profile.id != "el1" or hud == null or int(data.get("levels", 0)) <= 0: return
+	var id := int(data.get("id", -1))
+	var owner := int(state.object(id).get("owner", -1))
+	if owner < 0 or not director.is_strategy_human(owner) or first_level_ups.has(id): return
+	first_level_ups.append(id)
+
+## Opens the HeroScreen for the next hero waiting with a skill to choose,
+## after the battle result, messages and tutorial hints over the map. Once
+## per level gained: closing it without a choice keeps the offers for the
+## HeroScreen, as in the original.
+func _first_level_up() -> void:
+	if first_level_ups.is_empty() or hud == null or not _can_act() or _cursor_modal() or not pending_encounter.is_empty() or not building_messages.is_empty(): return
+	if tutorial_panel != null and tutorial_panel.visible: return
+	var id: int = first_level_ups.pop_front()
+	var hero := state.object(id)
+	if hero.is_empty() or not hero.get("alive", false) or int(hero.get("owner", -1)) != state.current_player: return
+	var offers: Array = hero.get("skill_offers", [])
+	if int(hero.get("skill_points", 0)) <= 0 or offers.is_empty(): return
+	open_hero_screen(id)
 
 func _open_skills(for_hero := -1) -> void:
 	if strategic_session != null and not strategic_session.can_plan(): return
@@ -2844,7 +2872,6 @@ func _build_second_controls() -> void:
 	# EscEncyclopaedia (0x636) pushes the Encyclopaedia over the Esc menu; its OK
 	# or Esc (0xef4) closes only the Encyclopaedia, so the paused Esc menu returns.
 	second_hud.original_options_requested.connect(open_original_options)
-	second_hud.remake_settings_requested.connect(func(): remake_settings_requested.emit())
 	second_hud.encyclopaedia_requested.connect(func():
 		if not open_extras("encyclopaedia", true): notice.text = "The Encyclopaedia art is unavailable.")
 	var compact := _style()

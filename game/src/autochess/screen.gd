@@ -9,8 +9,8 @@ extends Control
 ## board stays open: most of the interface is outlined text over the scene.
 
 signal left
-## The remake's settings asked for from the menu.
-signal remake_settings_requested
+## The game's Options screen asked for from the menu.
+signal options_requested
 
 const H := preload("res://src/autochess/hud.gd")
 const DESIGN := Vector2(1440, 900)
@@ -1613,7 +1613,7 @@ func _toggle_menu() -> void:
 	_open_modal(_t("Menu"), "menu", 300.0)
 	H.button(_modal_box, _t("Resume"), _close_modal)
 	# The game stays paused under the settings; the menu returns after them.
-	H.button(_modal_box, ELRemakeText.t("Remake settings…", profile), func(): remake_settings_requested.emit())
+	H.button(_modal_box, ELRemakeText.t("Options…", profile), func(): options_requested.emit())
 	H.button(_modal_box, _t("Leave (the game is saved)") if online == null else _t("Leave the online game"), _leave)
 	H.button(_modal_box, _t("Concede and end the game"), _concede)
 	if online == null: game.paused = true

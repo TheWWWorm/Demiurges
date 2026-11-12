@@ -2,6 +2,16 @@
 
 Versions follow [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html) from 0.3.0 on.
 
+## 0.11.0
+
+- One Options screen: the original Options frame of both games now holds the remake's pages (**Display**, **Graphics**, **Interface**, **Hotkeys** and, where DLSS and FSR are built in, **About**) beside the original General and Combat pages. Path tracing has its own **Path tracing** page under Graphics (renderer, path-traced lighting, sky light, light bounces, DLSS Ray Reconstruction), with **Show light only** under **Debug**. The separate **Remake settings** buttons are gone.
+- **Upscaling** (Off, NVIDIA DLSS, or AMD FSR, which runs as FSR 4 or FSR 3.1 depending on the graphics card) and **Upscale quality** are two lists, and **Frame generation** is one switch. A **?** after each setting explains it in place of the long texts. The remake's settings show their effect at once: **✓** keeps the changes, **✗** or **Esc** puts everything back. A message offers a restart when frame generation or a switch between NVIDIA and AMD needs one. Saved settings carry over.
+- The remake menu (top right) closes with **Esc** and has a close button. The window's close button works while a dialog is open.
+- Path tracing: with DLSS Ray Reconstruction the traced shadows are back (they were lost). Armour plates, helmets and greaves are metal, while plumes, hair, cloth and skin on them are not, also without path tracing. Feathered wings no longer flicker, and ice and snow keep their cool colour. The metal is worked out in the background when a game starts and kept for later starts, so battles do not stutter.
+- The game no longer crashes when quitting after a battle (all builds).
+- Android: choosing Forward+ (Vulkan) on a phone or tablet uses Godot's Mobile renderer. If the game closes while starting on Vulkan, the next start goes back to the Compatibility renderer and says so ([#32](https://github.com/TheWWWorm/Demiurges/issues/32)).
+- Etherlords: switching the tutorial back on no longer shows all its hints at once, and a hint stays on top of windows opened after it. When your hero gains a level, the hero screen opens with the skill upgrades ([#33](https://github.com/TheWWWorm/Demiurges/issues/33)).
+
 ## 0.10.0
 
 - Windows: the game can use **NVIDIA DLSS** and **AMD FSR** with the Forward+ (Vulkan) renderer. The Graphics page of the remake settings has new rows next to Anti-aliasing: **Upscaling** (AMD FSR Upscaling or NVIDIA DLSS), **AMD FSR version** (FSR 4 or FSR 3.1), **Upscale quality** (Native AA, which is DLAA with DLSS, Quality, Balanced, Performance) and **Frame generation** (AMD FSR Frame Generation or NVIDIA DLSS Frame Generation). With path tracing on and DLSS upscaling, **DLSS Ray Reconstruction** removes the traced light's noise in place of the path tracer's own smoothing.

@@ -72,6 +72,14 @@ static func _collect(all := false) -> void:
 			WorkerThreadPool.wait_for_task_completion(old.task)
 			_stale.erase(old)
 
+## Waits for every think still running or unclaimed, for the game's exit: the
+## engine frees a task nobody waited for only after the scripting languages
+## are gone, and freeing a script lambda then crashes on some engines.
+static func finish() -> void:
+	for id: int in _jobs.keys(): _stale.append(_jobs[id])
+	_jobs.clear()
+	_collect(true)
+
 static func _background(duel: ELDuel, restricted := false) -> Variant:
 	_collect()
 	var key := [duel._snapshot(), restricted].hash()

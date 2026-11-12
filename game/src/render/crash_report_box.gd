@@ -1,7 +1,7 @@
 class_name ELCrashReportBox
 extends AcceptDialog
 ## The box that offers a report (ELCrashReport): at start-up after a session
-## that ended unexpectedly, and from Remake settings › "Export log…" at any
+## that ended unexpectedly, and from Options › "Export log…" (the remake pages) at any
 ## time. "Save report" writes a text file to a folder the player can open and
 ## shows where; "Copy to clipboard" copies the system information and the
 ## log's last lines. OK or Esc closes it.
@@ -11,6 +11,7 @@ var prev := {}
 var status: Label
 var save_button: Button
 var copy_button: Button
+var rows: VBoxContainer
 
 ## The box over `parent` when the previous session ended unexpectedly (once).
 static func offer(parent: Node) -> ELCrashReportBox:
@@ -31,12 +32,15 @@ static func open(parent: Node, previous: Dictionary) -> ELCrashReportBox:
 	else:
 		box.title = "The game closed unexpectedly"
 		box._build("The game closed unexpectedly last time. A report with the log of that session helps to find the cause. Save it or copy it, and attach it to a bug report.")
+		if not ELCrashReport.renderer_fell_back.is_empty():
+			box.fallback_note()
+			ELCrashReport.renderer_fell_back = ""
 	parent.add_child(box)
-	box.popup_centered(Vector2i(460, 250))
+	box.popup_centered(Vector2i(460, 320 if box.rows.has_node("RendererFallback") else 250))
 	return box
 
 func _build(message: String) -> void:
-	var rows := VBoxContainer.new()
+	rows = VBoxContainer.new()
 	rows.add_theme_constant_override("separation", 12)
 	add_child(rows)
 	var text := Label.new()
@@ -68,6 +72,17 @@ func _build(message: String) -> void:
 	rows.add_child(status)
 	confirmed.connect(queue_free)
 	canceled.connect(queue_free)
+
+## After a start-up crash on Vulkan (ELCrashReport.renderer_fallback): the
+## line that says the game now runs on Compatibility.
+func fallback_note() -> void:
+	var note := Label.new()
+	note.name = "RendererFallback"
+	note.text = "It closed while starting with the Vulkan renderer, so the game now uses the Compatibility renderer. Forward+ (Vulkan) can be chosen again in Options › Graphics › Path tracing."
+	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	note.custom_minimum_size.x = 420
+	rows.add_child(note)
+	rows.move_child(note, 1)
 
 ## Uses button `index`: the report saved (the box shows where) or copied.
 func act(index: int) -> void:

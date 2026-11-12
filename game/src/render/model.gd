@@ -35,6 +35,10 @@ var _special := false
 ## An idle variant was chosen and waits for the idle cycle to end.
 var _special_waiting := false
 var _rng := RandomNumberGenerator.new()
+## Parts that turn to metal where their skin's mask says: name ->
+## [material, "main" or "second" skin], and the masks' key (ELMetalMasks).
+var _metal_parts := {}
+var _metal_key := ""
 
 ## Reads and parses a model's figures and animation archive once per
 ## profile (shared by every figure of it). Returns "" or the error.
@@ -102,6 +106,8 @@ func build(data: ELProfile, model: String, texture_name: String, secondary_textu
 		if String(pair[1]).to_lower().contains("alpha32") or (skin != null and skin.has_meta("alpha32")):
 			pair[0].transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_DEPTH_PRE_PASS
 	var authored_materials := {}
+	_metal_parts.clear()
+	var separate_second := not secondary_texture.is_empty() and ELArchive.key(secondary_texture) != ELArchive.key(texture_name)
 	for link: Array in links:
 		var name: String = link[0]
 		var node := MeshInstance3D.new()
@@ -130,10 +136,8 @@ func build(data: ELProfile, model: String, texture_name: String, secondary_textu
 					authored_materials[key] = authored
 				part_material = authored_materials[key]
 			# Armour and weapons, which the originals light as matte as cloth.
-			if not fullbright and ELFigure.is_metal_part(name):
-				var key := [part_material, &"metal"]
-				if not authored_materials.has(key): authored_materials[key] = ELFigure.metal_material(part_material)
-				part_material = authored_materials[key]
+			if not fullbright and part_material.albedo_texture != null and not ELFigure.is_cloth(template, name):
+				_metal_parts[name] = [part_material, "second" if int(figures[name].texture_slot) == 2 and separate_second else "main"]
 			node.material_override = part_material
 		# Anchors may parent real geometry (the illusion wall uses "dust" as its
 		# root). Omit only their helper mesh; hiding the node hides descendants too.
@@ -143,9 +147,44 @@ func build(data: ELProfile, model: String, texture_name: String, secondary_textu
 	# the body, and "head"/"dust" roots offset the other parts.
 	for link: Array in links:
 		add_child(parts[link[0]])
+	_dress_metal(texture_name, secondary_texture)
 	if _animations != null and _animations.has("cidle"):
 		play("cidle")
 	return not parts.is_empty()
+
+## Dresses the armour and weapons in metal where their skins' masks
+## (ELMetalMasks) say: now when the masks are ready, else as soon as they are
+## worked out (the figure is drawn without metal until then).
+func _dress_metal(texture_name: String, secondary_texture: String) -> void:
+	if _metal_parts.is_empty(): return
+	if profile.metal_masks == null: profile.metal_masks = ELMetalMasks.new(profile.id)
+	var masks: ELMetalMasks = profile.metal_masks
+	_metal_key = ELMetalMasks.key(template, texture_name, secondary_texture)
+	var found: Variant = masks.lookup(profile, template, texture_name, secondary_texture)
+	if found != null: _wear_metal(found)
+	elif not masks.finished.is_connected(_metal_ready): masks.finished.connect(_metal_ready)
+
+func _metal_ready(key: String) -> void:
+	if key != _metal_key: return
+	profile.metal_masks.finished.disconnect(_metal_ready)
+	var started := Time.get_ticks_usec()
+	var found: Variant = profile.metal_masks.ready_masks(key)
+	if found != null: _wear_metal(found)
+	ELMetalMasks.spent(Time.get_ticks_usec() - started)
+
+## Swaps the parts' materials for metal ones; parts showing another look (a
+## fade, an effect's override) get theirs when they return to their own.
+func _wear_metal(masks: Dictionary) -> void:
+	var made := {}
+	for name: String in _metal_parts:
+		var base: StandardMaterial3D = _metal_parts[name][0]
+		var mask: Texture2D = masks.get(_metal_parts[name][1])
+		if mask == null: continue
+		if not made.has(base): made[base] = ELFigure.metal_material(base, mask)
+		var node: MeshInstance3D = parts[name]
+		if node.material_override == base: node.material_override = made[base]
+		if node.has_meta("opaque") and node.get_meta("opaque") == base: node.set_meta("opaque", made[base])
+	_metal_parts.clear()
 
 ## Fades the whole figure (1 = opaque); used for the pale aspect's pulse.
 ## Fades the whole figure. Per-figure blended copies of its materials are used

@@ -113,6 +113,13 @@ func open_history(current: int) -> bool:
 	fire("ADVENTURE_SCREEN", current, true)
 	return fire("COMBAT_SCREEN", current, true)
 
+## The option switched back on (`current` = the screen's category). The
+## original's checkbox only stores the option, so nothing already seen is
+## replayed: the screen's introduction shows if it was never seen, and every
+## other hint waits for its event.
+func resumed(current: int) -> bool:
+	return fire("ADVENTURE_SCREEN" if current == ADVENTURE else "COMBAT_SCREEN", current)
+
 ## Clear: forget every shown event, then show the intro screens again.
 func clear(current: int) -> bool:
 	history.clear()

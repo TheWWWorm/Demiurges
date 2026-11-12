@@ -54,6 +54,14 @@ static func _report_probe(tree: SceneTree, path: String) -> void:
 		file.close()
 	tree.quit()
 
+## The command-line options that start the game on the chosen renderer.
+## The Vulkan choice is Forward+ on a computer; phones and tablets get the
+## engine's Mobile renderer, its Vulkan renderer for those GPUs (Forward+
+## is not made for them and can end the game at its first battlefield).
+static func renderer_args(vulkan: bool, mobile := OS.has_feature("mobile")) -> PackedStringArray:
+	if not vulkan: return PackedStringArray(["--rendering-method", "gl_compatibility"])
+	return PackedStringArray(["--rendering-method", "mobile" if mobile else "forward_plus", "--rendering-driver", "vulkan"])
+
 ## Whether the check still has work on this start.
 static func pending(preferences: ELSettings) -> bool:
 	# Forced from the command line (checks, or a player redoing it).

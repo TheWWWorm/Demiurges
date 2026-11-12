@@ -22,7 +22,11 @@
  *       a packed animation track in the plain layout, or empty;
  *   morph(base, indices, data, offset, frames, count) -> PackedByteArray
  *       every vertex-animation frame's corner positions (float x, y, z in
- *       Godot axes), then each frame's bounds (low x, y, z, high x, y, z).
+ *       Godot axes), then each frame's bounds (low x, y, z, high x, y, z);
+ *   metal_mask(pixels, parts, side) -> PackedByteArray
+ *       where a figure's skin is painted as metal, one byte per texel, or
+ *       empty when the inputs are invalid (src/render/metal_masks.gd
+ *       describes the inputs and keeps the same classifier in GDScript).
  */
 #include <math.h>
 #include <stdint.h>
@@ -361,6 +365,219 @@ static void morph(const uint8_t *base, int64_t base_n, const uint8_t *indices, i
 	free(frame_out);
 }
 
+/* -------------------------------------------------------------- metal masks */
+
+/* The same arithmetic, step by step and in the same precision, as
+ * ELMetalMasks.classify_script: texel colours in single precision (Godot's
+ * Color), everything else in double, stored back to single where GDScript
+ * stores into a PackedFloat32Array, so both give the same bytes. */
+#pragma STDC FP_CONTRACT OFF
+
+#define METAL_CHROMA 13
+#define METAL_LEVELS 5
+#define METAL_BINS (METAL_CHROMA * METAL_CHROMA * METAL_LEVELS)
+#define METAL_TAU 6.283185307179586
+
+static double smooth(double from, double to, double s) {
+	double t = (s - from) / (to - from);
+	t = t < 0.0 ? 0.0 : (t > 1.0 ? 1.0 : t);
+	return t * t * (3.0 - 2.0 * t);
+}
+
+static double dmax(double a, double b) { return a > b ? a : b; }
+static double dmin(double a, double b) { return a < b ? a : b; }
+
+static int64_t wrapped(int64_t v, int64_t side) {
+	int64_t m = v % side;
+	return m < 0 ? m + side : m;
+}
+
+static int64_t clamp_bin(int64_t v, int64_t top) { return v < 0 ? 0 : (v > top ? top : v); }
+
+static double painted_metal(double v, double s, double h, double tinted, double grey_below) {
+	double grey = smooth(tinted, grey_below, s) * smooth(0.15, 0.35, v);
+	double gold = smooth(0.45, 0.65, v) * (1.0 - smooth(0.02, 0.06, fabs(h - 0.12))) * smooth(0.25, 0.4, s);
+	return dmax(grey, gold);
+}
+
+/* Marks the texels whose centres a UV triangle covers, and its centroid's. */
+static void cover_triangle(uint8_t *cover, int64_t side, const float *uv, const int32_t *corner, uint8_t mark) {
+	float fs = (float)side;
+	float ax = uv[corner[0] * 2] * fs, ay = uv[corner[0] * 2 + 1] * fs;
+	float bx = uv[corner[1] * 2] * fs, by = uv[corner[1] * 2 + 1] * fs;
+	float cx = uv[corner[2] * 2] * fs, cy = uv[corner[2] * 2 + 1] * fs;
+	double top = dmin(ay, dmin(by, cy)), bottom = dmax(ay, dmax(by, cy));
+	double left = dmin(ax, dmin(bx, cx)), right = dmax(ax, dmax(bx, cx));
+	if (bottom - top > (double)(side * 2) || right - left > (double)(side * 2)) return;
+	float mx = (ax + bx + cx) / 3.0f, my = (ay + by + cy) / 3.0f;
+	cover[wrapped((int64_t)floor(my), side) * side + wrapped((int64_t)floor(mx), side)] = mark;
+	const double px[3] = { ax, bx, cx }, py[3] = { ay, by, cy };
+	int64_t y0 = (int64_t)ceil(top - 0.5), y1 = (int64_t)floor(bottom - 0.5);
+	for (int64_t y = y0; y <= y1; y++) {
+		double row = (double)y + 0.5, low = INFINITY, high = -INFINITY;
+		for (int e = 0; e < 3; e++) {
+			int f = (e + 1) % 3;
+			if ((py[e] <= row) != (py[f] <= row)) {
+				double x = px[e] + (row - py[e]) * (px[f] - px[e]) / (py[f] - py[e]);
+				low = dmin(low, x);
+				high = dmax(high, x);
+			}
+		}
+		if (low > high) continue;
+		int64_t at = wrapped(y, side) * side;
+		int64_t x1 = (int64_t)floor(high - 0.5);
+		for (int64_t x = (int64_t)ceil(low - 0.5); x <= x1; x++) cover[at + wrapped(x, side)] = mark;
+	}
+}
+
+/* Spreads a colour histogram to its neighbouring bins, normalised to sum 1. */
+static void blur_bins(const float *hist, float *out) {
+	double total = 0.0;
+	for (int a = 0; a < METAL_CHROMA; a++)
+		for (int b = 0; b < METAL_CHROMA; b++)
+			for (int v = 0; v < METAL_LEVELS; v++) {
+				double sum = 0.0;
+				for (int da = -1; da <= 1; da++)
+					for (int db = -1; db <= 1; db++)
+						for (int dv = -1; dv <= 1; dv++) {
+							int na = a + da, nb = b + db, nv = v + dv;
+							if (na < 0 || nb < 0 || nv < 0 || na >= METAL_CHROMA || nb >= METAL_CHROMA || nv >= METAL_LEVELS) continue;
+							double weight = (da != 0 ? 0.5 : 1.0) * (db != 0 ? 0.5 : 1.0) * (dv != 0 ? 0.5 : 1.0);
+							sum += (double)hist[(na * METAL_CHROMA + nb) * METAL_LEVELS + nv] * weight;
+						}
+				out[(a * METAL_CHROMA + b) * METAL_LEVELS + v] = (float)sum;
+				total += sum;
+			}
+	if (total > 0.0)
+		for (int i = 0; i < METAL_BINS; i++) out[i] = (float)((double)out[i] / total);
+}
+
+/* The mean of each texel's square neighbourhood (`radius` texels out). */
+static void box_mean(const float *values, float *rows, float *out, int64_t side, int64_t radius) {
+	double span = (double)(radius * 2 + 1);
+	for (int64_t y = 0; y < side; y++) {
+		int64_t at = y * side;
+		double sum = 0.0;
+		for (int64_t d = -radius; d <= radius; d++) sum += values[at + clamp_bin(d, side - 1)];
+		for (int64_t x = 0; x < side; x++) {
+			rows[at + x] = (float)(sum / span);
+			sum += (double)values[at + clamp_bin(x + radius + 1, side - 1)] - (double)values[at + clamp_bin(x - radius, side - 1)];
+		}
+	}
+	for (int64_t x = 0; x < side; x++) {
+		double sum = 0.0;
+		for (int64_t d = -radius; d <= radius; d++) sum += rows[clamp_bin(d, side - 1) * side + x];
+		for (int64_t y = 0; y < side; y++) {
+			out[y * side + x] = (float)(sum / span);
+			sum += (double)rows[clamp_bin(y + radius + 1, side - 1) * side + x] - (double)rows[clamp_bin(y - radius, side - 1) * side + x];
+		}
+	}
+}
+
+static int32_t s32_at(const uint8_t *d, int64_t at) {
+	int32_t v;
+	memcpy(&v, d + at, 4);
+	return v;
+}
+
+/* `pixels`: side x side RGBA8. `parts`: per part an s32 mark (1 a figure
+ * part, 2 a named metal one), s32 UV count, s32 index count, then the UVs
+ * (float u, v) and indices (s32). */
+static void metal_mask(const uint8_t *pixels, int64_t pixels_n, const uint8_t *parts, int64_t parts_n, int64_t side, Buffer *out) {
+	if (side <= 0 || side > 4096 || pixels_n != side * side * 4) return;
+	int64_t count = side * side;
+	uint8_t *cover = calloc((size_t)count, 1), *levels = malloc((size_t)count);
+	float *painted = calloc((size_t)count, sizeof(float)), *greyer = calloc((size_t)count, sizeof(float));
+	float *learnt = calloc((size_t)count, sizeof(float)), *rows = calloc((size_t)count, sizeof(float));
+	float *around = calloc((size_t)count, sizeof(float));
+	int32_t *bins = calloc((size_t)count, sizeof(int32_t));
+	float seed_raw[METAL_BINS] = { 0 }, body_raw[METAL_BINS] = { 0 }, seed_hist[METAL_BINS], body_hist[METAL_BINS];
+	if (!cover || !levels || !painted || !greyer || !learnt || !rows || !around || !bins) goto done;
+	/* The figure's parts first, then its metal ones over them. */
+	for (int pass = 0; pass < 2; pass++) {
+		int64_t at = 0;
+		while (at + 12 <= parts_n) {
+			int32_t mark = s32_at(parts, at), uv_count = s32_at(parts, at + 4), index_count = s32_at(parts, at + 8);
+			int64_t next = at + 12 + (int64_t)uv_count * 8 + (int64_t)index_count * 4;
+			if (uv_count < 0 || index_count < 0 || next > parts_n) goto done;
+			if ((pass == 0) == (mark == 1)) {
+				float *uv = malloc((size_t)uv_count * 8 + 8);
+				int32_t *indices = malloc((size_t)index_count * 4 + 4);
+				if (!uv || !indices) {
+					free(uv);
+					free(indices);
+					goto done;
+				}
+				memcpy(uv, parts + at + 12, (size_t)uv_count * 8);
+				memcpy(indices, parts + at + 12 + (int64_t)uv_count * 8, (size_t)index_count * 4);
+				for (int64_t t = 0; t + 2 < index_count; t += 3) {
+					if (indices[t] < 0 || indices[t + 1] < 0 || indices[t + 2] < 0
+							|| indices[t] >= uv_count || indices[t + 1] >= uv_count || indices[t + 2] >= uv_count) continue;
+					cover_triangle(cover, side, uv, indices + t, (uint8_t)mark);
+				}
+				free(uv);
+				free(indices);
+			}
+			at = next;
+		}
+	}
+	for (int64_t i = 0; i < count; i++) {
+		const uint8_t *p = pixels + i * 4;
+		if (p[3] < 128) continue;
+		float r = (float)(p[0] / 255.0), g = (float)(p[1] / 255.0), b = (float)(p[2] / 255.0);
+		float low = r < g ? r : g, high = r > g ? r : g;
+		low = low < b ? low : b;
+		high = high > b ? high : b;
+		float delta = high - low, hue = 0.0f;
+		if (delta != 0.0f) {
+			if (r == high) hue = (g - b) / delta;
+			else if (g == high) hue = 2 + (b - r) / delta;
+			else hue = 4 + (r - g) / delta;
+			hue /= 6.0f;
+			if (hue < 0.0f) hue += 1.0f;
+		}
+		float saturation = high != 0.0f ? delta / high : 0.0f, value = high;
+		double metal = painted_metal(value, saturation, hue, 0.38, 0.18);
+		painted[i] = (float)metal;
+		greyer[i] = (float)painted_metal(value, saturation, hue, 0.32, 0.18);
+		double angle = (double)hue * METAL_TAU;
+		int64_t a = clamp_bin((int64_t)(((double)saturation * cos(angle) + 1.0) * 0.5 * METAL_CHROMA), METAL_CHROMA - 1);
+		int64_t c = clamp_bin((int64_t)(((double)saturation * sin(angle) + 1.0) * 0.5 * METAL_CHROMA), METAL_CHROMA - 1);
+		int64_t v = clamp_bin((int64_t)((double)value * METAL_LEVELS), METAL_LEVELS - 1);
+		int32_t bin = (int32_t)((a * METAL_CHROMA + c) * METAL_LEVELS + v);
+		bins[i] = bin;
+		if (cover[i] == 2) seed_raw[bin] = (float)((double)seed_raw[bin] + metal);
+		else if (cover[i] == 1) body_raw[bin] = (float)((double)body_raw[bin] + metal);
+	}
+	blur_bins(seed_raw, seed_hist);
+	blur_bins(body_raw, body_hist);
+	double peak = 0.0;
+	for (int i = 0; i < METAL_BINS; i++) peak = dmax(peak, seed_hist[i]);
+	if (peak > 0.0)
+		for (int64_t i = 0; i < count; i++) {
+			if (cover[i] == 0 || painted[i] <= 0.0f) continue;
+			double in_seeds = seed_hist[bins[i]];
+			double share = in_seeds / dmax(in_seeds + (double)body_hist[bins[i]], 0.000001);
+			learnt[i] = (float)(smooth(0.1, 0.35, in_seeds / peak) * smooth(0.12, 0.3, share) * smooth(0.15, 0.45, greyer[i]));
+		}
+	/* A lone matching texel amid skin or cloth is paint, not a plate. */
+	box_mean(learnt, rows, around, side, 2);
+	for (int64_t i = 0; i < count; i++) {
+		double value = dmax(cover[i] == 2 ? (double)painted[i] : 0.0, (double)learnt[i] * smooth(0.1, 0.3, around[i]));
+		levels[i] = (uint8_t)(int64_t)(value * 255.0 + 0.5);
+	}
+	put(out, levels, count);
+done:
+	free(cover);
+	free(levels);
+	free(painted);
+	free(greyer);
+	free(learnt);
+	free(rows);
+	free(around);
+	free(bins);
+}
+
 /* ------------------------------------------------------------ Godot binding */
 
 static GDExtensionInterfaceGetProcAddress get_proc;
@@ -407,17 +624,17 @@ static void to_packed(Buffer *b, PackedBytes *result) {
 	if (err == 0) memcpy(pba_index(result, 0), b->data, (size_t)b->size);
 }
 
-enum { M_RAW, M_PNT3, M_FIGURE, M_UNPACK, M_MORPH, M_COUNT };
+enum { M_RAW, M_PNT3, M_FIGURE, M_UNPACK, M_MORPH, M_METAL, M_COUNT };
 #define B GDEXTENSION_VARIANT_TYPE_PACKED_BYTE_ARRAY
 #define I GDEXTENSION_VARIANT_TYPE_INT
 static const GDExtensionVariantType ARGS[M_COUNT][6] = {
-	{ B, I, I, I }, { B, I, I, I }, { B }, { B }, { B, B, B, I, I, I },
+	{ B, I, I, I }, { B, I, I, I }, { B }, { B }, { B, B, B, I, I, I }, { B, B, I },
 };
-static const int ARG_COUNT[M_COUNT] = { 4, 4, 1, 1, 6 };
-static const char *NAMES[M_COUNT] = { "decode_raw", "decode_pnt3", "figure", "unpack_track", "morph" };
+static const int ARG_COUNT[M_COUNT] = { 4, 4, 1, 1, 6, 3 };
+static const char *NAMES[M_COUNT] = { "decode_raw", "decode_pnt3", "figure", "unpack_track", "morph", "metal_mask" };
 static const char *ARG_NAMES[M_COUNT][6] = {
 	{ "data", "width", "height", "offset" }, { "data", "size", "width", "height" }, { "data" }, { "data" },
-	{ "base", "indices", "data", "offset", "frames", "count" },
+	{ "base", "indices", "data", "offset", "frames", "count" }, { "pixels", "parts", "side" },
 };
 
 /* Runs method `m` on arguments already in their own types. */
@@ -442,6 +659,11 @@ static void run(int m, const void *const *args, PackedBytes *result) {
 		const uint8_t *d1 = bytes_of((const PackedBytes *)args[1], &n1);
 		const uint8_t *d2 = bytes_of((const PackedBytes *)args[2], &n2);
 		morph(d0, n0, d1, n1, d2, n2, *(const int64_t *)args[3], *(const int64_t *)args[4], *(const int64_t *)args[5], &b);
+		break;
+	}
+	case M_METAL: {
+		const uint8_t *d1 = bytes_of((const PackedBytes *)args[1], &n1);
+		metal_mask(d0, n0, d1, n1, *(const int64_t *)args[2], &b);
 		break;
 	}
 	}

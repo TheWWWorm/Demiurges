@@ -14,8 +14,6 @@ signal slot_load_requested(row: Dictionary)
 ## Hosted over a running game: the save chosen on the load list (after the
 ## T_MB_LOAD_GAME question); the screen has already closed.
 signal slot_chosen(row: Dictionary)
-## The remake-only settings dialog (the Options screen's remake section).
-signal settings_requested
 ## The Options screen closed: OK (true) or Cancel, and the command button
 ## pressed ("GOSave", "GOLoad", "GOMenu", "GOQuit", "Surrender" or "").
 signal options_closed(applied: bool, command: String)
@@ -686,7 +684,6 @@ func _run(action: String) -> void:
 		"hot_seat": duel_ui.start_hot_seat()
 		"network", "lan": network_requested.emit(action == "lan")
 		"strategy", "strategy_lan": strategy_requested.emit(action == "strategy_lan")
-		"settings": settings_requested.emit()
 		"options": options_ui.open("menu")
 		"quit": quit_requested.emit()
 		"load": load_requested.emit()
@@ -802,6 +799,8 @@ func _input(event: InputEvent) -> void:
 		# Text entry (the preset name) keeps its keys.
 		var focus := get_viewport().gui_get_focus_owner()
 		if focus is LineEdit and focus.is_visible_in_tree() and event.keycode != KEY_ESCAPE: return
+		# A shortcut field of the Options screen's remake pages waits for a key.
+		if focus != null and focus.is_visible_in_tree() and focus.has_method("captures_keys") and focus.captures_keys(): return
 		get_viewport().set_input_as_handled()
 		# Credits take every key (page turns, or any key closes).
 		if screen == "credits":
