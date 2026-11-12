@@ -79,8 +79,8 @@ var yaw_goal := INF
 var zoom_limits := Vector2(16, 100)
 var following := -1
 var script_camera_attached := true
-## The player moved the view away from the hero; new orders leave it there
-## until the player centres the hero again.
+## The player moved the view away from the hero; it stays there until the
+## player centres the hero or orders a move.
 var view_moved := false
 var dragging := false
 var error := ""
@@ -1262,13 +1262,25 @@ func _click_ground(tile: Vector2i, use_id := -1) -> void:
 	if not ordered: _remark(director.notice)
 	else:
 		_remark(director.notice)
-		if not view_moved: following = _hero_id()
+		# A move order brings the view back to the hero unless the player is
+		# moving the view at the same moment.
+		if not _panning_view():
+			following = _hero_id()
+			view_moved = false
 	if tutorial_panel != null and _hero_id() >= 0: tutorial_panel.map_click(site, ordered)
 
 func _cancel_map_order(hero := -1) -> void:
 	var id := _hero_id() if hero < 0 else hero
 	if strategic_session != null: strategic_session.cancel(id)
 	else: director.cancel_order(id)
+
+## The player is panning the view right now: a pan key held or the pointer
+## scrolling at the screen edge.
+func _panning_view() -> bool:
+	if _edge_pan != Vector2.ZERO: return true
+	for key: Key in [KEY_W, KEY_A, KEY_S, KEY_D]:
+		if Input.is_physical_key_pressed(key): return true
+	return false
 
 func _centre_hero() -> void:
 	following = _hero_id()
