@@ -129,6 +129,11 @@ func build(data: ELProfile, model: String, texture_name: String, secondary_textu
 						authored.set_meta(ELFigure.AUTHORED_FULLBRIGHT, true)
 					authored_materials[key] = authored
 				part_material = authored_materials[key]
+			# Armour and weapons, which the originals light as matte as cloth.
+			if not fullbright and ELFigure.is_metal_part(name):
+				var key := [part_material, &"metal"]
+				if not authored_materials.has(key): authored_materials[key] = ELFigure.metal_material(part_material)
+				part_material = authored_materials[key]
 			node.material_override = part_material
 		# Anchors may parent real geometry (the illusion wall uses "dust" as its
 		# root). Omit only their helper mesh; hiding the node hides descendants too.

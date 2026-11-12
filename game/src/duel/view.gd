@@ -5013,6 +5013,32 @@ func _graphics_page(page: VBoxContainer) -> void:
 	light_view.button_pressed = is_instance_valid(path_tracing) and path_tracing.lighting_view
 	light_view.disabled = toggle.disabled or not toggle.button_pressed
 	_settings_row(traced, "Show light only", "Draws the traced light without textures, to see what it does (Shift+F7). Not kept after a restart.", light_view)
+	var sky := HSlider.new()
+	sky.name = "SkyLight"
+	sky.custom_minimum_size.x = 200
+	sky.max_value = 200
+	sky.step = 5
+	sky.value = float(settings.values.sky_light) * 100
+	var sky_number := _label("%d%%" % sky.value, 15)
+	sky_number.custom_minimum_size.x = 44
+	sky_number.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	sky.value_changed.connect(func(value: float):
+		settings.values.sky_light = value / 100.0
+		sky_number.text = "%d%%" % value)
+	_settings_row(traced, "Sky light", "How much the sky lights shade. Lower gives deeper, more contrasting shadows; higher gives softer, brighter shade. Sunlit ground stays the same.", sky, sky_number)
+	var bounces := HSlider.new()
+	bounces.name = "LightBounces"
+	bounces.custom_minimum_size.x = 200
+	bounces.min_value = 1
+	bounces.max_value = 4
+	bounces.value = int(settings.values.light_bounces)
+	var bounce_number := _label(str(int(bounces.value)), 15)
+	bounce_number.custom_minimum_size.x = 44
+	bounce_number.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	bounces.value_changed.connect(func(value: float):
+		settings.values.light_bounces = int(value)
+		bounce_number.text = str(int(value)))
+	_settings_row(traced, "Light bounces", "How many times light bounces between surfaces. More fills in corners and shade with reflected colour and costs more time a frame.", bounces, bounce_number)
 	traced.add_child(status)
 	renderer.item_selected.connect(func(index: int):
 		settings.values.renderer = index

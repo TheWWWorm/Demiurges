@@ -28,6 +28,10 @@ const SURFACE_ARENA_FLOOR := 512
 const SURFACE_ARENA_SCENERY := 1024
 const SURFACE_PRIMARY_CULL_BACK := 2048
 const SURFACE_PRIMARY_CULL_FRONT := 4096
+## Unlit adventure-map scenery, which takes the traced sun's shadow.
+const SURFACE_UNLIT_SHADOWED := 8192
+## Metal (ELFigure.metal_material), traced with a glossy reflection.
+const SURFACE_METAL := 16384
 const SURFACE_CLAMP_UV := 32
 ## Angular radius of the sun's disc (tangent), which sets shadow softness.
 const SUN_RADIUS := 0.02
@@ -301,11 +305,21 @@ func _snapshot(delta: float) -> void:
 		var morphs: Dictionary = model._previous_morphs
 		var effect := model.get_parent() is ELCombatEffects
 		var arena_floor := is_instance_valid(_arena) and _arena.is_surface(model)
+		var looks := {}
+		# A map object drawn entirely unlit is scenery (a figure's unlit parts
+		# are its magic glow, which shadows would dim).
+		var unlit_scenery := model.get_parent() is ELAdventureScene
 		for part_name: String in model.parts:
 			var node: MeshInstance3D = model.parts[part_name]
 			if node.mesh == null or not node.is_visible_in_tree(): continue
 			var look := _surface(node, effect)
 			if look.is_empty(): continue
+			looks[part_name] = look
+			if (int(look.flags) & SURFACE_FULLBRIGHT) == 0: unlit_scenery = false
+		for part_name: String in looks:
+			var node: MeshInstance3D = model.parts[part_name]
+			var look: Dictionary = looks[part_name]
+			if unlit_scenery: look.flags |= SURFACE_UNLIT_SHADOWED
 			if arena_floor:
 				look.flags |= SURFACE_ARENA_FLOOR
 			elif is_instance_valid(_arena) and _arena.is_normal_secondary_receiver(model, node):
@@ -340,7 +354,9 @@ func _snapshot(delta: float) -> void:
 		"sun_direction": Vector4(toward.x, toward.y, toward.z, SUN_RADIUS),
 		"sun_color": Vector4(sun.r, sun.g, sun.b, 1.0 if sun_on else 0.0),
 		"ambient": Vector4(ambient.r, ambient.g, ambient.b, _arena.light_limit if _arena != null else 1000.0),
-		"lighting_view": lighting_view})
+		"lighting_view": lighting_view,
+		"sky_light": float(settings.values.get("sky_light", 1.0)) if settings != null else 1.0,
+		"bounces": clampi(int(settings.values.get("light_bounces", 2)), 1, 4) if settings != null else 2})
 
 ## Defines a slot for a node's mesh (and the morph pose it shows) when new or
 ## changed. False when the mesh has nothing to trace.
@@ -407,6 +423,8 @@ func _scan_statics(ops: Array) -> void:
 	var entries := []
 	for node: GeometryInstance3D in _static_nodes:
 		var look := _surface(node)
+		if not look.is_empty() and (int(look.flags) & SURFACE_FULLBRIGHT) != 0 and node.get_parent() is ELAdventureScene:
+			look.flags |= SURFACE_UNLIT_SHADOWED
 		var id := node.get_instance_id()
 		var mesh: Mesh = node.multimesh.mesh if node is MultiMeshInstance3D else (node as MeshInstance3D).mesh
 		if look.is_empty() or mesh == null or not _update_slot(ops, id, mesh, -1, look): continue
@@ -632,6 +650,7 @@ func _surface(node: GeometryInstance3D, effect := false) -> Dictionary:
 		if cutout:
 			look.cutoff = base.alpha_scissor_threshold / maxf(base.albedo_color.a, 0.000001)
 		if fullbright: look.flags |= SURFACE_FULLBRIGHT
+		elif base.metallic > 0.0: look.flags |= SURFACE_METAL
 		if soft:
 			if base.albedo_color.a <= 0.0: return {}
 			look.flags |= SURFACE_SOFT_EMITTER
@@ -751,7 +770,7 @@ class Effect extends CompositorEffect:
 	const SLOT_CAPACITY := 8192
 	const NORMAL_HEADER_BYTES := SLOT_CAPACITY * 4
 	const SLOT_BYTES := 64
-	const FRAME_BYTES := 304
+	const FRAME_BYTES := 320
 	const DOUBLE_SIDED := RenderingDevice.ACCELERATION_STRUCTURE_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT
 
 	var history_reset := true
@@ -1160,9 +1179,10 @@ class Effect extends CompositorEffect:
 		var secondary_count := secondary.size() / 8
 		if secondary_count > 0: _rd.buffer_update(_light_buffer, lights.size() * 4, secondary.size() * 4, secondary.to_byte_array())
 		# Effect light changes quickly: a shorter history keeps it from smearing.
-		for value in [_frame_number, size.x, size.y, flags, light_count, 12 if light_count > 0 else 48, secondary_count, 0]:
+		for value in [_frame_number, size.x, size.y, flags, light_count, 12 if light_count > 0 else 48, secondary_count, frame.bounces]:
 			data.encode_u32(at, value)
 			at += 4
+		at = _put4(data, at, Vector4(frame.sky_light, 0.0, 0.0, 0.0))
 		_rd.buffer_update(_frame_buffer, 0, FRAME_BYTES, data)
 		_previous_view_projection = view_projection
 		_previous_camera = camera.origin

@@ -746,12 +746,18 @@ func _open_second_precombat(first: int, second: int) -> void:
 		var actor := state.object(id)
 		faces.append(int(_art.resolve(actor).get("row", {}).get("Face", -1)) if not actor.is_empty() else -1)
 	pending_encounter = [first, second]
-	# The camera centres between the two sides while the panel is up.
-	var one := state.object(first)
-	var two := state.object(second)
-	if not one.is_empty() and not two.is_empty():
+	# The camera centres between the two sides while the panel is up. A tunnel
+	# guard waits off the map, so it counts as standing at its tunnel mouth.
+	var spots: Array[Vector3] = []
+	for id: int in [first, second]:
+		var place := state.object(id)
+		if place.has("tunnel_source") and not state.object(place.tunnel_source).is_empty(): place = state.object(place.tunnel_source)
+		if place.is_empty() or int(place.get("x", -1)) < 0 or int(place.get("y", -1)) < 0: continue
+		if int(place.x) >= state.map.width or int(place.y) >= state.map.height: continue
+		spots.append(ELAdventureScene.world_position(place.x, place.y))
+	if not spots.is_empty():
 		following = -1
-		target = (ELAdventureScene.world_position(one.x, one.y) + ELAdventureScene.world_position(two.x, two.y)) * 0.5
+		target = spots[0] if spots.size() == 1 else (spots[0] + spots[1]) * 0.5
 	second_hud.hide()
 	second_precombat.open(state, local, other, faces)
 

@@ -296,6 +296,68 @@ static func _put_float(out: PackedByteArray, value: float) -> void:
 	out.resize(at + 4)
 	out.encode_float(at, value)
 
+## Part names (transliterated Russian in places) of armour and weapons. The
+## FIG files give every part the same material, so the remake names its metal.
+const METAL_PARTS := ["sword", "blade", "axe", "knife", "pike", "shield", "helm", "kirasa",
+	"naplechnik", "noplechnik", "naruch", "plate", "chain", "kreplenie", "armshell",
+	"shouldershell", "legshell", "footshell", "kolenka"]
+## Metal's look: how metallic its grey and gold texels become, its
+## reflectance and its roughness (a broad, soft sheen).
+const METAL_METALLIC := 0.6
+const METAL_SPECULAR := 1.0
+const METAL_ROUGHNESS := 0.28
+const METAL_MASK_SIZE := 128
+static var _metal_masks := {}
+
+static func is_metal_part(part: String) -> bool:
+	var name := part.to_lower()
+	for word: String in METAL_PARTS:
+		if word in name: return true
+	return false
+
+## A part's material as metal. Only its grey (steel, iron) and bright gold
+## texels turn metallic, so straps, cloth and fur painted on the same part
+## stay as they were.
+static func metal_material(base: StandardMaterial3D) -> StandardMaterial3D:
+	var metal := base.duplicate() as StandardMaterial3D
+	metal.specular_mode = BaseMaterial3D.SPECULAR_SCHLICK_GGX
+	metal.metallic = METAL_METALLIC
+	metal.metallic_specular = METAL_SPECULAR
+	metal.roughness = METAL_ROUGHNESS
+	var mask := metal_mask(base.albedo_texture)
+	if mask != null:
+		metal.metallic_texture = mask
+		metal.metallic_texture_channel = BaseMaterial3D.TEXTURE_CHANNEL_RED
+	return metal
+
+## Where a skin is painted as metal: low saturation at a mid to high value,
+## or a bright gold. Built once per texture at a reduced size.
+static func metal_mask(texture: Texture2D) -> Texture2D:
+	if texture == null: return null
+	if _metal_masks.has(texture): return _metal_masks[texture]
+	var image := texture.get_image()
+	var mask: ImageTexture = null
+	if image != null:
+		image = image.duplicate()
+		if image.is_compressed(): image.decompress()
+		image.clear_mipmaps()
+		image.convert(Image.FORMAT_RGBA8)
+		var side := mini(METAL_MASK_SIZE, maxi(image.get_width(), image.get_height()))
+		image.resize(side, side, Image.INTERPOLATE_BILINEAR)
+		var out := Image.create(side, side, false, Image.FORMAT_L8)
+		for y in side:
+			for x in side:
+				var c := image.get_pixel(x, y)
+				var v := maxf(c.r, maxf(c.g, c.b))
+				var s := 0.0 if v <= 0.0 else (v - minf(c.r, minf(c.g, c.b))) / v
+				var grey := smoothstep(0.38, 0.18, s) * smoothstep(0.15, 0.35, v)
+				var gold := smoothstep(0.45, 0.65, v) * (1.0 - smoothstep(0.02, 0.06, absf(c.h - 0.12))) * smoothstep(0.25, 0.4, s)
+				out.set_pixel(x, y, Color(maxf(grey, gold), 0, 0))
+		out.generate_mipmaps()
+		mask = ImageTexture.create_from_image(out)
+	_metal_masks[texture] = mask
+	return mask
+
 static func material(texture: Texture2D, unlit := false) -> StandardMaterial3D:
 	var m := StandardMaterial3D.new()
 	m.albedo_texture = texture

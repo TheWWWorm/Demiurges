@@ -21,6 +21,8 @@ These work as in the games: autosave, faster map movement, animated objects, amb
 | Renderer | **Compatibility** (the default) runs on more computers. **Forward+ (Vulkan)** is needed for path tracing. **Restart now** restarts the game with the chosen renderer. |
 | Path-traced lighting | Real shadows, sky light, light bounced between surfaces, and light from fire and spells, on maps and in battles. Needs Forward+ and a graphics card with ray tracing. It costs about 2–3 ms a frame on a fast card. **F7** switches it during play. The line under it says whether your computer can use it. |
 | Show light only | Shows the traced light without textures (**Shift+F7**). |
+| Sky light | How much the sky lights shade, 0–200%. Lower gives deeper, more contrasting shadows; sunlit ground stays the same. |
+| Light bounces | How many times light bounces between surfaces, 1–4 (2 by default). More fills corners and shade with reflected colour and costs more time a frame. |
 | Anti-aliasing | Smoother edges in 3D: automatic, off, 2× or 4×. |
 | Sharpening | Sharpens 3D textures. Choose off (default), light, or strong. Off matches the soft textures of the original games. |
 | Shadows | Shadows of figures in battles and of trees, rocks and buildings on maps. |

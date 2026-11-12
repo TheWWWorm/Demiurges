@@ -14,7 +14,9 @@ extends RefCounted
 ## software one; 0 off; 1 2x; 2 4x multisampling of the 3D scenes);
 ## "discord_activity" (the game and mode shown in the Discord desktop app);
 ## "renderer" (0 Compatibility, 1 Forward+ on Vulkan; applied at start) and
-## "path_tracing" (traced lighting where the renderer and GPU allow it) and
+## "path_tracing" (traced lighting where the renderer and GPU allow it),
+## "sky_light" (its sky strength, 0..2, 1 the default; lower gives deeper
+## shade) and "light_bounces" (its diffuse rays per pixel, 1..4) and
 ## "show_fps" (a frame rate counter in a corner of the screen) and
 ## "hardware_check" (how far the first start's ELHardwareCheck has got);
 ## the Display page: "window_mode" (0 window, 1 borderless full screen, 2
@@ -38,7 +40,7 @@ extends RefCounted
 ## Version 4: sharpening became Off by default (the original ground is soft);
 ## older files still on the former default (light) move to Off.
 const SETTINGS_VERSION := 4
-const SHARED := {"ambience": 0.55, "shadows": true, "soft_shadows": false, "weather": true, "helper_overlay": false, "antialiasing": -1, "sharpening": 0, "terrain_detail": false, "enhanced_water": false, "discord_activity": true, "renderer": 0, "path_tracing": false, "show_fps": false, "hardware_check": 0, "free_movement": true, "smart_ai": true,
+const SHARED := {"ambience": 0.55, "shadows": true, "soft_shadows": false, "weather": true, "helper_overlay": false, "antialiasing": -1, "sharpening": 0, "terrain_detail": false, "enhanced_water": false, "discord_activity": true, "renderer": 0, "path_tracing": false, "sky_light": 1.0, "light_bounces": 2, "show_fps": false, "hardware_check": 0, "free_movement": true, "smart_ai": true,
 	"window_mode": 0, "window_width": 0, "window_height": 0, "frame_rate": 0}
 const EDITION := {"music": 0.55, "effects": 0.8, "movies": 2, "blood": true, "map_tooltips": true, "autosave": true,
 	"heroes_voices": true, "ambient_sounds": true, "adventure_fast": false, "animated_objects": true,
@@ -53,6 +55,7 @@ const EDITION_DEFAULTS := {"el1": {}, "el2": {"auto_camera_dynamics": 96, "visua
 const RANGES := {"music": [0.0, 1.0], "effects": [0.0, 1.0], "ambience": [0.0, 1.0], "mouse_rotation": [0.0, 2.0],
 	"keyboard_rotation": [0.0, 2.0], "mouse_scroll": [0.0, 2.0], "keyboard_scroll": [0.0, 2.0], "gamma": [-1.0, 1.0],
 	"auto_camera_dynamics": [0, 100], "movies": [0, 2], "antialiasing": [-1, 2], "sharpening": [0, 2], "renderer": [0, 1], "hardware_check": [0, 2],
+	"sky_light": [0.0, 2.0], "light_bounces": [1, 4],
 	"window_mode": [0, 2], "window_width": [0, 16384], "window_height": [0, 16384], "frame_rate": [-1, 1000]}
 
 ## Context, caption, then the default keys for each edition. Empty means the
