@@ -38,6 +38,11 @@ const GUARDIAN_HINTS := {
 
 var profile: ELProfile
 var run: ELExpeditionRun
+## The second game's original menu pieces (ELMenuKit): frames, boxes and
+## button plates in place of the flat panels; null keeps the flat look.
+var _kit: ELMenuKit
+## A battle reward on the spell shop's art (with the kit), over everything.
+var _board: ELExpeditionBoard
 var _russian := false
 var _title: Label
 var _subtitle: Label
@@ -70,7 +75,11 @@ func build(data: ELProfile) -> void:
 	_russian = ELRemakeText.language(profile) == "ru"
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	mouse_filter = Control.MOUSE_FILTER_STOP
+	_kit = ELMenuKit.for_profile(profile)
+	var kit_look: Theme = _kit.theme() if _kit != null else null
+	if kit_look == null: _kit = null
 	var look := Theme.new()
+	if kit_look != null: look.merge_with(kit_look)
 	look.default_font_size = 20
 	look.set_color("font_color", "Label", INK)
 	theme = look
@@ -98,7 +107,7 @@ func build(data: ELProfile) -> void:
 	margin.add_child(layout)
 
 	var header := PanelContainer.new()
-	header.add_theme_stylebox_override("panel", _plate(Color("211a16f4"), Color("967449"), 16))
+	header.add_theme_stylebox_override("panel", _panel("frame", _plate(Color("211a16f4"), Color("967449"), 16)))
 	layout.add_child(header)
 	var heading := HBoxContainer.new()
 	heading.add_theme_constant_override("separation", 16)
@@ -137,7 +146,7 @@ func build(data: ELProfile) -> void:
 	_body.add_child(_map)
 	_journal_panel = PanelContainer.new()
 	_journal_panel.custom_minimum_size.x = 370
-	_journal_panel.add_theme_stylebox_override("panel", _plate(Color("201a16f7"), Color("967449"), 18))
+	_journal_panel.add_theme_stylebox_override("panel", _panel("frame", _plate(Color("201a16f7"), Color("967449"), 18)))
 	_body.add_child(_journal_panel)
 	_scroll = ScrollContainer.new()
 	_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
@@ -205,14 +214,39 @@ func show_run(active: ELExpeditionRun, save_error := "") -> void:
 			button.tooltip_text = title if not title.is_empty() else caption[int(_russian)]
 			if kind == "boss": button.tooltip_text = _guardian_brief()
 			button.disabled = not id in _available or run.phase != "map"
-			if not button.disabled:
+			if not button.disabled and _kit == null:
 				button.add_theme_stylebox_override("normal", _plate(Color("42301eea"), ACCENTS.get(kind, GOLD), 9))
+			elif _kit != null:
+				# Rooms that can be entered wear the lit plate; the rest dim.
+				if button.disabled: button.self_modulate = Color(0.72, 0.72, 0.72)
+				else: button.add_theme_stylebox_override("normal", theme.get_stylebox("hover", "Button"))
 			button.set_meta("selected_node", id == run.current)
 			button.pressed.connect(func(): node_chosen.emit(id))
 			_map.add_child(button)
 			_nodes[id] = button
 	_place_nodes()
 	_draw_journal()
+
+## A fresh reward, a camp or an encounter opens on the spell shop's art
+## (ELExpeditionBoard); the journal keeps its views (deck, scouting, a
+## spell's place after a pending choice) and a failed save.
+func _show_board() -> void:
+	if _board != null:
+		_board.queue_free()
+		_board = null
+	var journal_view := _display_deck or _scout_act > 0 or _scout_rooms or not _scout_room_id.is_empty() \
+		or _journey_open or _retry_confirmation or not _replacement.is_empty()
+	if _kit != null and _choice_pending() and not journal_view and _save_error.is_empty():
+		_board = ELExpeditionBoard.make(_kit, run, _russian)
+	_dialogue.visible = _choice_pending() and _board == null
+	_layout_dialogue()
+	if _board == null: return
+	add_child(_board)
+	_board.chosen.connect(func(ids: Array):
+		for id: String in ids: choice_made.emit(id))
+	_board.aside.connect(func(kind: String):
+		if kind == "scout": _show_room_scout(true)
+		elif kind == "inspect": _show_room_details(run.current))
 
 func message(text: String) -> void:
 	if text.is_empty(): return
@@ -278,6 +312,10 @@ func _draw_routes() -> void:
 		_map.draw_rect(Rect2(button.position - Vector2(5, 5), button.size + Vector2(10, 10)), INK if inspected else GOLD, false, 2.0)
 
 func _draw_journal() -> void:
+	_fill_journal()
+	_show_board()
+
+func _fill_journal() -> void:
 	_scroll.scroll_vertical = 0
 	if _starter_preview != null:
 		_map.remove_child(_starter_preview)
@@ -331,8 +369,9 @@ func _draw_journal() -> void:
 			seed_field.placeholder_text = _text("Random route", "Случайный маршрут")
 			seed_field.tooltip_text = _text("Enter a seed from 0 to 4294967295 to replay a route.", "Введите сид от 0 до 4294967295, чтобы повторить маршрут.")
 			seed_field.accessibility_name = seed_label
-			seed_field.add_theme_stylebox_override("normal", _plate(Color("282019"), Color("7f643e"), 8))
-			seed_field.add_theme_stylebox_override("focus", _plate(Color.TRANSPARENT, GOLD, 8))
+			if _kit == null:
+				seed_field.add_theme_stylebox_override("normal", _plate(Color("282019"), Color("7f643e"), 8))
+				seed_field.add_theme_stylebox_override("focus", _plate(Color.TRANSPARENT, GOLD, 8))
 			seed_field.add_theme_color_override("font_color", INK)
 			seed_field.add_theme_color_override("font_placeholder_color", MUTED)
 			_journal.add_child(seed_field)
@@ -545,7 +584,7 @@ func _show_starter(preset: Dictionary) -> void:
 		_map.remove_child(_starter_preview)
 		_starter_preview.queue_free()
 	_starter_preview = PanelContainer.new()
-	_starter_preview.add_theme_stylebox_override("panel", _plate(Color("211a16ed"), Color("967449"), 18))
+	_starter_preview.add_theme_stylebox_override("panel", _panel("frame", _plate(Color("211a16ed"), Color("967449"), 18)))
 	_map.add_child(_starter_preview)
 	_starter_preview.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_starter_preview.anchor_bottom = 0.7
@@ -837,7 +876,7 @@ func _spell_tile(card: String, tag: String, describe: bool) -> PanelContainer:
 	var tile := PanelContainer.new()
 	tile.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	tile.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
-	tile.add_theme_stylebox_override("panel", _plate(Color("30251be8"), Color("856645"), 8))
+	tile.add_theme_stylebox_override("panel", _panel("box", _plate(Color("30251be8"), Color("856645"), 8)))
 	var contents := VBoxContainer.new()
 	contents.add_theme_constant_override("separation", 4)
 	tile.add_child(contents)
@@ -914,11 +953,22 @@ func _button(caption: String, accent := INK) -> Button:
 	button.add_theme_color_override("font_color", accent)
 	button.add_theme_color_override("font_hover_color", INK)
 	button.add_theme_color_override("font_disabled_color", accent.darkened(0.20))
+	# The kit's theme gives the original plate.
+	if _kit != null: return button
 	button.add_theme_stylebox_override("normal", _plate(Color("31251beb"), accent.darkened(0.35), 9))
 	button.add_theme_stylebox_override("hover", _plate(Color("544028"), accent, 9))
 	button.add_theme_stylebox_override("pressed", _plate(Color("695039"), accent, 9))
 	button.add_theme_stylebox_override("disabled", _plate(Color("201b19e6"), Color("675746"), 9))
 	return button
+
+## The kit's frame or column box (see ELMenuKit.panel_style), padded like the
+## flat `fallback`; the fallback itself without the kit.
+func _panel(kind: String, fallback: StyleBoxFlat) -> StyleBox:
+	if _kit == null: return fallback
+	var pad := fallback.content_margin_left
+	# The frame's border is wider than a flat plate's line.
+	var padding := Vector4(pad + 14, pad + 14, pad + 14, pad + 10) if kind == "frame" else Vector4(pad + 2, pad, pad + 2, pad)
+	return _kit.panel_style(kind, padding)
 
 func _plate(color: Color, border: Color, margin: float) -> StyleBoxFlat:
 	var plate := StyleBoxFlat.new()

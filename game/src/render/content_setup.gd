@@ -13,6 +13,10 @@ signal removed(edition: String)
 ## ({edition: folder}) and the one to show first.
 var mounted: Dictionary = {}
 var selected := "el1"
+## Set before adding: a mounted game's menu kit (null with no game mounted,
+## or a game without its pieces), which frames the page in original art.
+var kit: ELMenuKit
+var _frame: Panel
 var _status: Label
 var _current: Label
 var _choice: ELGameChoice
@@ -40,6 +44,13 @@ func _ready() -> void:
 	background.color = Color(0.06, 0.06, 0.08)
 	background.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	add_child(background)
+	var look: Theme = kit.theme() if kit != null else null
+	if look != null:
+		theme = look
+		_frame = Panel.new()
+		_frame.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_frame.add_theme_stylebox_override("panel", look.get_stylebox("panel", "AcceptDialog"))
+		add_child(_frame)
 	_scroll = ScrollContainer.new()
 	_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	add_child(_scroll)
@@ -50,6 +61,9 @@ func _ready() -> void:
 	var heading := Label.new()
 	heading.text = "Demiurges"
 	heading.add_theme_font_size_override("font_size", 30)
+	if look != null:
+		heading.add_theme_color_override("font_color", ELMenuKit.TITLE_INK)
+		heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	box.add_child(heading)
 	var info := Label.new()
 	info.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -136,6 +150,13 @@ func _layout() -> void:
 	_scroll.offset_right = -side
 	_scroll.offset_top = 24
 	_scroll.offset_bottom = -24
+	if _frame != null:
+		# The frame's border sits round the column, outside the scroll.
+		var edge: StyleBox = _frame.get_theme_stylebox("panel")
+		_scroll.offset_top = 24 + edge.get_margin(SIDE_TOP)
+		_scroll.offset_bottom = -24 - edge.get_margin(SIDE_BOTTOM)
+		_frame.position = Vector2(side - edge.get_margin(SIDE_LEFT), 24)
+		_frame.size = Vector2(size.x - 2.0 * side + edge.get_margin(SIDE_LEFT) + edge.get_margin(SIDE_RIGHT), size.y - 48)
 
 
 func _select(edition: String) -> void:

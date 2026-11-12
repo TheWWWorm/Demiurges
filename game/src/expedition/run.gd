@@ -418,7 +418,9 @@ func _training_choices() -> Array[Dictionary]:
 		if definition.is_empty(): continue
 		var title := profile.text(str(definition.Name)).strip_edges()
 		var description := profile.text(str(definition.get("Description", ""))).strip_edges()
-		result.append(_choice("train:" + code, _text("Train %s · Rank %d") % [title, rank + 1], description))
+		var offer := _choice("train:" + code, _text("Train %s · Rank %d") % [title, rank + 1], description)
+		offer.rank = rank
+		result.append(offer)
 	return result
 
 func _expedition_artifact(name: String) -> Dictionary:

@@ -139,6 +139,9 @@ var selection_ring: MeshInstance3D
 var battle_audio: ELBattleAudio
 var settings := ELSettings.new()
 var settings_dialog: AcceptDialog
+## The original interface pieces the settings dialog is drawn with (null:
+## the game lacks them, and the dialog keeps the remake's flat look).
+var _settings_kit: ELMenuKit
 ## The original Options screen over a battle (its own hosted front-end canvas).
 var options_host: ELFrontMenu
 var options_layer: CanvasLayer
@@ -4814,15 +4817,26 @@ func _open_settings() -> void:
 	settings_dialog.title = _t("Remake settings")
 	settings_dialog.exclusive = true
 	settings_dialog.ok_button_text = _t("Close")
-	settings_dialog.theme = _settings_theme()
+	_settings_kit = ELMenuKit.for_profile(profile)
+	var look: Theme = _settings_kit.theme() if _settings_kit != null else null
+	if look == null: _settings_kit = null
+	settings_dialog.theme = look if look != null else _settings_theme()
 	add_child(settings_dialog)
 	var body := VBoxContainer.new()
 	body.add_theme_constant_override("separation", 10)
 	settings_dialog.add_child(body)
+	if _settings_kit != null:
+		# The Options frame has no title bar: the title heads the panel, and
+		# Close is the original OK button at the right of the tools row.
+		settings_dialog.borderless = true
+		body.add_child(ELMenuKit.heading(settings_dialog.title))
+		settings_dialog.get_ok_button().hide()
 	var tabs := TabContainer.new()
 	tabs.name = "Pages"
 	tabs.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	tabs.custom_minimum_size = Vector2(660, 520)
+	# The original frame is taller round its pages: shorter pages keep the
+	# dialog clear of the game choice under it.
+	tabs.custom_minimum_size = Vector2(660, 480 if _settings_kit != null else 520)
 	body.add_child(tabs)
 	_display_page(_settings_page(tabs, "Display"))
 	_graphics_page(_settings_page(tabs, "Graphics"))
@@ -4849,12 +4863,22 @@ func _open_settings() -> void:
 			settings_dialog.hide()
 			_open_content_setup())
 		tools_row.add_child(game_files)
+	if _settings_kit != null:
+		var gap := Control.new()
+		gap.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		tools_row.add_child(gap)
+		var close := Button.new()
+		close.name = "Close"
+		_settings_kit.icon_button(close, str(_settings_kit.art.get("close", "")), _t("Close"))
+		close.pressed.connect(settings_dialog.hide)
+		tools_row.add_child(close)
 	settings_dialog.visibility_changed.connect(func():
 		if not settings_dialog.visible:
 			ELCrashReport.trace("settings: " + _options_summary())
 			if not settings.save_file(): _notice(_t("Could not save preferences."))
 		_refresh())
-	settings_dialog.popup_centered(Vector2i(720, 660))
+	if _settings_kit != null: ELMenuKit.refit(settings_dialog)
+	settings_dialog.popup_centered(Vector2i(720, 600 if _settings_kit != null else 660))
 	_refresh()
 
 func _hotkeys_page(page: VBoxContainer) -> void:
@@ -5255,6 +5279,7 @@ func _settings_page(tabs: TabContainer, title: String) -> VBoxContainer:
 
 ## A titled group of settings; `featured` frames it in the accent colour.
 func _settings_box(page: VBoxContainer, title: String, featured := false) -> VBoxContainer:
+	if _settings_kit != null: return _settings_kit.section(page, _t(title), featured)
 	var panel := PanelContainer.new()
 	panel.name = title.replace(" ", "")
 	var style := _style(Color("2a2519f0") if featured else Color("1d201ae0"), ACCENT if featured else Color("4a4032"))
@@ -5278,8 +5303,9 @@ func _settings_row(box: VBoxContainer, title: String, description: String, contr
 	text.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	text.add_theme_constant_override("separation", 2)
 	row.add_child(text)
-	text.add_child(_label(_t(title), 16, INK))
-	var note := _label(_t(description), 13, MUTED)
+	var original := _settings_kit != null
+	text.add_child(_label(_t(title), 16, ELMenuKit.BODY_INK if original else INK))
+	var note := _label(_t(description), 13, ELMenuKit.NOTE_INK if original else MUTED)
 	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	note.custom_minimum_size.x = 300
 	text.add_child(note)
@@ -6333,6 +6359,7 @@ func _open_content_setup(edition := "") -> void:
 	add_child(layer)
 	content_setup = ELContentSetup.new()
 	for each: String in profiles: content_setup.mounted[each] = profiles[each].root
+	content_setup.kit = ELMenuKit.for_profile(profile)
 	if edition.is_empty(): edition = profile.id if profile != null else launch_profile
 	content_setup.selected = edition if edition in ELContentLibrary.EDITIONS else "el1"
 	layer.add_child(content_setup)

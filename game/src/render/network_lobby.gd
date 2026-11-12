@@ -43,7 +43,8 @@ func build(profile: ELProfile, lan := false) -> void:
 	_profile = profile
 	title = profile.text("CtrlMSLAN" if lan_mode else "CtrlMSTCPIP")
 	style_dialog(self, profile, "Multiplayer" if lan_mode else "TCPIPDialog")
-	min_size = Vector2i(680, 470 if lan_mode else 360)
+	# The kit's bars keep more room for their arrows.
+	min_size = Vector2i(720 if ELMenuKit.of(self) != null else 680, 470 if lan_mode else 360)
 	size = min_size
 	var fields := VBoxContainer.new()
 	_fields = fields
@@ -334,6 +335,12 @@ static func heading(value: String, centered := true) -> Label:
 	return label
 
 static func group(parent: HBoxContainer, caption: String) -> VBoxContainer:
+	var kit := ELMenuKit.of(parent)
+	if kit != null:
+		var rows := kit.section(parent, caption)
+		# section(): group > margin > rows.
+		rows.get_parent().get_parent().size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		return rows
 	var column := VBoxContainer.new()
 	column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	parent.add_child(column)
@@ -342,7 +349,10 @@ static func group(parent: HBoxContainer, caption: String) -> VBoxContainer:
 
 ## The panel edges and buttons come from the original Cuts tables. The middle
 ## is resized to leave room for the remake's connection and match settings.
+## A game with the menu kit's pieces gets the kit's look instead.
 static func style_dialog(dialog: AcceptDialog, profile: ELProfile, panel: String) -> void:
+	var kit := ELMenuKit.for_profile(profile)
+	if kit != null and kit.dress_dialog(dialog, ELRemakeText.t("Back", profile)): return
 	dialog.exclusive = true
 	dialog.borderless = true
 	dialog.theme = Theme.new()
@@ -431,6 +441,8 @@ static func _texture_paths(profile: ELProfile) -> Dictionary:
 	return paths
 
 static func style_button(button: Button, profile: ELProfile, control: String) -> void:
+	# In a kit dialog every text button wears the kit's plate.
+	if ELMenuKit.of(button) != null: return
 	var paths := _texture_paths(profile)
 	var normal: StyleBoxTexture
 	var cut := Rect2()
