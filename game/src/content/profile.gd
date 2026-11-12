@@ -222,7 +222,7 @@ func finish_textures() -> bool:
 	return true
 
 func text(key: String) -> String:
-	return String(texts.get(key, key)).strip_edges()
+	return ELTextFixes.apply(id, key, String(texts.get(key, key))).strip_edges()
 
 func card_icon(card: String) -> Texture2D:
 	if _icons.has(card):
