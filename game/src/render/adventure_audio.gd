@@ -244,7 +244,8 @@ func start_sound(name: String, entry: Dictionary) -> void:
 	var player := AudioStreamPlayer.new()
 	add_child(player)
 	player.stream = stream
-	var sound := {"player": player, "position": Vector3(float(entry.x), float(entry.z), -float(entry.y)), "near": float(entry.get("near", 0.0)), "far": float(entry.get("far", 0.0))}
+	var sound := {"player": player, "position": Vector3(float(entry.x), float(entry.z), -float(entry.y)), "near": float(entry.get("near", 0.0)), "far": float(entry.get("far", 0.0)),
+		"effects": bool(entry.get("effects", false))}
 	# A sound with a fall-off is placed: it gets a free panned bus.
 	if sound.far > 0.0:
 		var used: Array = sounds.values().map(func(other: Dictionary) -> StringName: return other.player.bus)
@@ -270,9 +271,15 @@ func cancel_sound(name: String) -> void:
 	sounds.erase(name)
 
 ## Linear fall-off on the ground plane; a far distance of 0 means no fall-off.
+## Script sounds use the ambience volume and switch; the map's own effect
+## sounds (`effects` in the entry, such as the battle dome) the effects volume.
 func _sound_db(sound: Dictionary) -> float:
-	if not bool(_volumes.get("ambient_sounds", settings.values.get("ambient_sounds", true))): return -80.0
-	var base := linear_to_db(float(settings.values.get("ambience", 0.55)))
+	var base := 0.0
+	if bool(sound.get("effects", false)):
+		base = linear_to_db(maxf(0.0001, ELAudio.option_gain(float(_volumes.get("effects", settings.values.effects)), profile.id)))
+	else:
+		if not bool(_volumes.get("ambient_sounds", settings.values.get("ambient_sounds", true))): return -80.0
+		base = linear_to_db(float(settings.values.get("ambience", 0.55)))
 	var far: float = sound.far
 	if far <= 0.0: return base
 	var offset: Vector3 = sound.position - listener

@@ -90,6 +90,9 @@ var capture_after := 3.0
 ## (WHERE "menu" over the main menu, "battle" over the battle; "remake" opens
 ## the remake menu instead), for screenshots with --capture.
 var _debug_options := ""
+## Debug: "--campaign-probe=MODE" drives the campaign screens for
+## screenshots (ELCampaignProbe).
+var _campaign_probe := ""
 var elapsed := 0.0
 var content_setup: ELContentSetup
 var arena: ELArena
@@ -249,6 +252,8 @@ var replay_inventory: ELRoundEndDuelView
 var replay_inventory_side := -1
 ## Seconds the finished round stays on screen before its result panel.
 const ROUND_RESULT_DELAY := 1.6
+## Played once as each battle is set up (both games).
+const BATTLE_START_SOUND := "Buttons/Combat02.wav"
 ## Original cursors (ELCursors): the character under the pointer when the
 ## pointer reached the battlefield rather than a panel, and the cursor asked for.
 var combat_hover := -1
@@ -327,6 +332,8 @@ func _ready() -> void:
 			capture_after = float(arg.get_slice("=", 1))
 		elif arg.begins_with("--open-options="):
 			_debug_options = arg.trim_prefix("--open-options=")
+		elif arg.begins_with("--campaign-probe="):
+			_campaign_probe = arg.trim_prefix("--campaign-probe=")
 		elif arg == "--demo":
 			demo = true
 	_load_profiles()
@@ -338,6 +345,11 @@ func _ready() -> void:
 		return
 	_start(launch_profile if profiles.has(launch_profile) else String(profiles.keys()[0]))
 	if not _debug_options.is_empty(): _open_debug_options.call_deferred()
+	if not _campaign_probe.is_empty():
+		var probe := ELCampaignProbe.new()
+		probe.view = self
+		probe.mode = _campaign_probe
+		add_child(probe)
 	# The original front end opens when the game itself is launched, after the
 	# edition's start-up movies; scripted checks that instantiate this scene
 	# keep the direct duel setup.
@@ -667,6 +679,13 @@ func _start(edition: String, options: Dictionary = {}, restored: ELDuel = null, 
 	profile_select.select(0 if edition == "el1" else 1)
 	_notice("Select a spell or a ready creature. Right-drag to orbit · Wheel to zoom · R resets the camera." if helper_overlay() else "")
 	_refresh()
+	# Both games open every battle (map encounters, duels, hot seat, network)
+	# with Buttons/Combat02.wav on the effects volume, once, as the battle is
+	# set up; a loaded or replayed battle does not repeat it, and the menu's
+	# background battle is silent (its audio is paused).
+	if (restored == null or kind == "campaign") and duel.turn_serial <= 1 and duel.phase != ELDuel.Phase.FINISHED and not duel.has_meta("start_sound"):
+		duel.set_meta("start_sound", true)
+		battle_audio.play(BATTLE_START_SOUND)
 	# EL1 resolves global spells before models or the event listener
 	# exist. Replay their original battle-opening effects after the figures
 	# are ready, never on a loaded battle. LGWR strikes the opponent; HSTL
@@ -850,7 +869,8 @@ func _process(delta: float) -> void:
 		if duel != null:
 			var report := FileAccess.open(output.get_basename() + ".json", FileAccess.WRITE)
 			report.store_string(JSON.stringify({"state": duel.snapshot(), "events": duel.history,
-				"models": models.size(), "profile_assets_read": profile.asset_reads}, "\t"))
+				"models": models.size(), "profile_assets_read": profile.asset_reads,
+				"sounds": battle_audio.requested if is_instance_valid(battle_audio) else []}, "\t"))
 		ELAudio.quiet_quit(get_tree())
 
 func _input(event: InputEvent) -> void:
@@ -1018,15 +1038,8 @@ func _character_at(at: Vector2) -> int:
 func _update_cursor() -> void:
 	if profile == null or (campaign_view != null and campaign_view.visible): return
 	var wanted := "default"
-	if duel != null and profile.id == "el1" and not _overlay_open() and _human_turn():
-		var pending := {}
-		if selection >= 0 and selection < duel.heroes[duel.active_side()].hand.size(): pending = {"card": duel.heroes[duel.active_side()].hand[selection]}
-		elif not ability_selection.is_empty():
-			var definition: Dictionary = {"target": ability_selection.get("target", "")}
-			for item: Dictionary in duel.abilities(int(ability_selection.source)):
-				if item.key == ability_selection.key: definition = item
-			pending = {"ability": definition, "source": int(ability_selection.source)}
-		wanted = ELCursors.first_combat(duel, combat_hover, pending, selected_creature)
+	if duel != null and not _overlay_open() and _human_turn():
+		wanted = ELCursors.combat(duel, combat_hover, ELCursors.combat_pending(duel, selection, ability_selection), selected_creature)
 	# The autochess screen (an Etherlords II mode whichever game is chosen)
 	# asks for its own: the hand over movable creatures.
 	var owner := profile
@@ -1591,6 +1604,9 @@ func _step_arrivals(instant := false) -> void:
 				var caster: ELModel = models.get(int(arrival.side))
 				battle_audio.spell(String(arrival.card), caster, targets[0])
 				if is_instance_valid(effects): effects.cast(String(arrival.card), {"Start": [caster], "Target": targets})
+				# The next action (a cast, an ability, the end of the phase) waits
+				# for the summon's own effect, not only for its creature to appear.
+				if not instant: _cast_until = maxf(_cast_until, elapsed + _summon_effect_seconds(String(arrival.card)))
 			# The creature's close-up starts with its summoning effect, just
 			# before it appears (the original queues it at the figure's creation).
 			if not instant and _auto_camera_on() and auto_camera != null: auto_camera.summoned(_camera_targets(arrival.ids, int(arrival.side)))
@@ -1607,6 +1623,13 @@ func _step_arrivals(instant := false) -> void:
 			_enter(id)
 		for cue: Dictionary in arrival.buffs:
 			_show_aura_cue(cue)
+
+## Seconds a summon card's effects play (the longest of them), at most 2.
+func _summon_effect_seconds(card: String) -> float:
+	var frames := 0
+	for effect: Variant in ELCombatEffects.Table.card_effects(profile, card):
+		frames = maxi(frames, ELCombatEffects.fx_frames(profile, String(effect)))
+	return minf(float(frames) / ELParticleFile.FPS, 2.0)
 
 ## Live rules resolve the summon immediately. Keep the visible stats from
 ## before its buffs until the source is on screen.
@@ -1716,6 +1739,13 @@ func _on_duel_event(data: Dictionary) -> void:
 	if duel != null and data.get("kind") in ["damage", "heal"] and target in [0, 1]:
 		data = data.duplicate()
 		data.shown_health = int(duel.heroes[target].health)
+	# An ability may be shown after the rules have already removed its user
+	# (a creature that dies of its own ability while an earlier action, such as
+	# its summon, is still on screen): note who used it as it happens.
+	if duel != null and data.get("kind") == "ability" and int(data.get("source", -1)) >= 2 and duel.creatures.has(int(data.source)):
+		data = data.duplicate()
+		data.user_card = String(duel.creatures[int(data.source)].card)
+		data.owner_card = _ability_owner_card(int(data.source), String(data.get("ability", "")))
 	_event(data)
 
 func _on_turn_cleanup() -> void:
@@ -2359,7 +2389,7 @@ func _event(data: Dictionary) -> void:
 			# a creature's is its own (T_USE_ABILITY).
 			var source := int(data.get("source", data.side))
 			if source < 2: _announce("T_USE_ENCHANTMENT", [_hero_name(source), String(data.get("name", String(data.ability).capitalize()))], int(data.side))
-			else: _announce("T_USE_ABILITY", [duel.card_name(duel.entity(source).get("card", ""))], int(data.side))
+			else: _announce("T_USE_ABILITY", [duel.card_name(String(data.get("user_card", duel.entity(source).get("card", ""))))], int(data.side))
 			_ability_effects(data)
 			_auto_ability(data)
 			# The next action waits for the creature's own action clip.
@@ -2668,7 +2698,8 @@ func _show_hit(data: Dictionary) -> void:
 		# A hero already lying defeated keeps its death pose (the ending has
 		# begun); earlier blows of the deciding combat still hurt it.
 		if not (id < 2 and not ending.is_empty()):
-			battle_audio.unit(model, "hit")
+			# A death in the same frame replaces the hurt sound (and clip).
+			battle_audio.hurt(model)
 			model.play("uhit")
 			if id < 2: model.flash(HERO_HIT_FLASH, 0.1)
 		_float_number(id, int(data.amount))
@@ -3353,7 +3384,7 @@ func _camera_targets(ids: Array, side: int) -> Array:
 func _auto_ability(data: Dictionary) -> void:
 	var source := int(data.get("source", data.side))
 	if not _auto_camera_on() or not CAMERA_ABILITY.has(profile.id): return
-	var card := _ability_owner_card(source, String(data.ability))
+	var card := _shown_ability_card(data)
 	var kind := ""
 	for k: String in CAMERA_ABILITY[profile.id]:
 		if card in CAMERA_ABILITY[profile.id][k]: kind = k
@@ -3572,6 +3603,11 @@ func _ability_owner_card(source: int, key: String) -> String:
 		if ability.key == key: return "" if ability.get("pale", false) and String(ability.get("name", "")) != duel.ability_name(card) else card
 	return ""
 
+## The card whose ability an ability event shows, as noted when it was used.
+func _shown_ability_card(data: Dictionary) -> String:
+	if data.has("owner_card"): return String(data.owner_card)
+	return _ability_owner_card(int(data.get("source", data.side)), String(data.ability))
+
 ## Abilities every pale creature shares, by remake key.
 const PALE_COMMON_ABILITIES := ["dissipate", "sinister", "cruel", "fiendish", "mystic", "cryptic", "courtesy"]
 
@@ -3605,7 +3641,7 @@ func _ability_effects(data: Dictionary) -> void:
 			battle_audio.effect(name)
 			if is_instance_valid(effects): effects.play(name, binding)
 		return
-	var card := _ability_owner_card(source, String(data.ability))
+	var card := _shown_ability_card(data)
 	if card.is_empty() or not models.has(source): return
 	# The active creature actions listed below have original uinstant clips
 	# and original source figure WAVs. Start only their successful live cues,
@@ -4186,6 +4222,10 @@ func _refresh() -> void:
 			var charges := _list_look().number(uses, false)
 			charges.set_meta("charge_label", true)
 			button.add_child(charges)
+		# Both games' hand list: a card that can be picked plays the list's
+		# card-turn sound (picking a targeted spell to aim, picking it again,
+		# casting an untargeted one), a greyed one the error sound.
+		_bind_list_sound(button)
 		button.pressed.connect(_cast_card.bind(i))
 		button.mouse_entered.connect(_hint.bind(_t(button.tooltip_text).replace("\n", " — ")))
 		if reused == null: hand.add_child(button)
@@ -4372,9 +4412,22 @@ func _fill_artifact_rail(displayed: int) -> void:
 		var charges := _list_look().number(int(item.charges), profile.id == "el1")
 		charges.set_meta("charge_label", true)
 		button.add_child(charges)
+		_bind_list_sound(button)
 		if commands.has(index): button.pressed.connect(_select_ability.bind(displayed, commands[index]))
 		button.mouse_entered.connect(_hint.bind(button.tooltip_text.replace("\n", " — ")))
 		hand.add_child(button)
+
+## The hand/artifact list's item sounds (both games' list control): the
+## card-turn sound for a pick, the error sound for a greyed item. A reused
+## hand button loses its "pressed" connections on every refill, so that one
+## is connected again; the error check is connected once.
+func _bind_list_sound(button: TextureButton) -> void:
+	button.pressed.connect(func(): ELUiSounds.play(profile, ELCombatStrip.SOUND))
+	if button.has_meta("list_error_sound"): return
+	button.set_meta("list_error_sound", true)
+	button.gui_input.connect(func(event: InputEvent):
+		if button.disabled and event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+			ELUiSounds.play(profile, ELUiSounds.ERROR))
 
 func _side_name(side: int) -> String:
 	if duel != null and duel.heroes[side].has("title"): return str(duel.heroes[side].title)
@@ -4980,7 +5033,7 @@ func _leave_settings() -> void:
 ## from Graphics.
 func remake_pages(_menu: ELFrontMenu) -> Array:
 	var pages := []
-	if not (OS.has_feature("web") or OS.has_feature("mobile")): pages.append(["display", _t("Display"), ""])
+	pages.append(["display", _t("Display"), ""])
 	pages.append(["graphics", _t("Graphics"), ""])
 	pages.append(["path_tracing", _t("Path tracing"), "graphics"])
 	pages.append(["interface", _t("Interface"), ""])
@@ -4993,6 +5046,7 @@ func remake_pages(_menu: ELFrontMenu) -> Array:
 func build_remake_page(owner: ELFrontMenu, id: String, column: Control, kit: ELMenuKit) -> void:
 	_settings_menu = owner
 	_settings_kit = kit
+	_page_refreshers = []
 	match id:
 		"display": _display_page(column)
 		"graphics": _graphics_page(column)
@@ -5001,7 +5055,25 @@ func build_remake_page(owner: ELFrontMenu, id: String, column: Control, kit: ELM
 		"hotkeys": _hotkeys_page(column)
 		"about": _about_page(column)
 		"tools": _settings_tools(column)
-	if kit != null: ELMenuKit.refit(column)
+	# Lists no wider than about half the frame, so a page never grows past it.
+	if kit != null: ELMenuKit.refit(column, LIST_WIDEST)
+	# Shown again later (pages are kept while the screen is open): what other
+	# pages may have changed is brought up to date.
+	if not _page_refreshers.is_empty():
+		var refreshers := _page_refreshers
+		column.set_meta("refresh", func():
+			for refresher: Callable in refreshers:
+				if refresher.is_valid(): refresher.call())
+
+## The widest a setting's list gets on the Options screen's remake pages
+## (design pixels; the frame's inside is about 550 wide).
+const LIST_WIDEST := 250.0
+
+## What the page being built updates when it is shown again.
+var _page_refreshers: Array[Callable] = []
+
+func _on_page_shown(refresher: Callable) -> void:
+	_page_refreshers.append(refresher)
 
 ## The Options screen opened ("open"), was left with OK ("apply") or Cancel
 ## ("cancel"): the remake's settings as they were at the start come back.
@@ -5136,8 +5208,40 @@ class HotkeyField extends Button:
 		_finish()
 		chosen.emit(code)
 
-## Window mode, window size and frame rate (desktop only).
+## Display: the game window (computers only: mode, size, frame rate), the
+## picture (upscaling and frame generation where the build has them,
+## anti-aliasing, sharpening) and the frame rate counter.
 func _display_page(page: VBoxContainer) -> void:
+	var desktop := not (OS.has_feature("web") or OS.has_feature("mobile"))
+	var window_box := _window_rows(page) if desktop else null
+	var picture := _settings_box(page, "Picture")
+	# Optional smoothing of 3D edges; automatic keeps it off on software rendering.
+	var smoothing := OptionButton.new()
+	smoothing.name = "Antialiasing"
+	for caption: String in ["Automatic", "Off", "2x", "4x"]: smoothing.add_item(_t(caption))
+	smoothing.select(int(settings.values.antialiasing) + 1)
+	smoothing.item_selected.connect(func(index: int):
+		settings.values.antialiasing = index - 1
+		ELSettings.apply_display(get_viewport(), settings.values)
+		if is_instance_valid(path_tracing): path_tracing.display_applied())
+	_upscaling_rows(picture, smoothing)
+	_settings_row(picture, "Anti-aliasing", "Smooths the edges of the 3D map and battle scenes. Automatic uses 2x unless the graphics are rendered in software. Path tracing uses its own smoothing.", smoothing)
+	var sharpen := OptionButton.new()
+	sharpen.name = "Sharpening"
+	for caption: String in ["Off", "Light", "Strong"]: sharpen.add_item(_t(caption))
+	sharpen.select(int(settings.values.sharpening))
+	sharpen.item_selected.connect(func(index: int): settings.values.sharpening = index)
+	_settings_row(picture, "Sharpening", "Sharpens the textures of the 3D map and battle scenes. The interface is not changed.", sharpen)
+	var fps_toggle := CheckButton.new()
+	fps_toggle.name = "ShowFps"
+	fps_toggle.button_pressed = bool(settings.values.get("show_fps", false))
+	fps_toggle.toggled.connect(func(enabled: bool):
+		settings.values.show_fps = enabled
+		_update_fps_counter())
+	_settings_row(window_box if window_box != null else picture, "Frame rate counter", "Shows frames per second in the top right corner.", fps_toggle)
+
+## The game window's mode, size and frame rate (computers only).
+func _window_rows(page: VBoxContainer) -> VBoxContainer:
 	var box := _settings_box(page, "Game window")
 	var mode := OptionButton.new()
 	mode.name = "WindowMode"
@@ -5160,7 +5264,7 @@ func _display_page(page: VBoxContainer) -> void:
 	rate.name = "FrameRate"
 	for value: int in ELSettings.FRAME_RATES:
 		match value:
-			0: rate.add_item(_t("Display refresh rate (V-Sync)") + (" · %d Hz" % hertz if hertz > 0 else ""))
+			0: rate.add_item(_t("V-Sync (%d Hz)") % hertz if hertz > 0 else _t("Display refresh rate (V-Sync)"))
 			-1: rate.add_item(_t("Unlimited"))
 			_: rate.add_item(_t("%d frames per second") % value)
 	rate.select(maxi(0, ELSettings.FRAME_RATES.find(int(settings.values.frame_rate))))
@@ -5182,28 +5286,10 @@ func _display_page(page: VBoxContainer) -> void:
 	rate.item_selected.connect(func(index: int):
 		settings.values.frame_rate = int(ELSettings.FRAME_RATES[index])
 		ELSettings.apply_window(settings.values))
+	return box
 
-## Graphics: the picture (upscaling and frame generation where the build has
-## them, anti-aliasing, sharpening), the scene, and the way to path tracing.
+## Graphics: the scene, and the way to path tracing.
 func _graphics_page(page: VBoxContainer) -> void:
-	var picture := _settings_box(page, "Picture")
-	# Optional smoothing of 3D edges; automatic keeps it off on software rendering.
-	var smoothing := OptionButton.new()
-	smoothing.name = "Antialiasing"
-	for caption: String in ["Automatic", "Off", "2x", "4x"]: smoothing.add_item(_t(caption))
-	smoothing.select(int(settings.values.antialiasing) + 1)
-	smoothing.item_selected.connect(func(index: int):
-		settings.values.antialiasing = index - 1
-		ELSettings.apply_display(get_viewport(), settings.values)
-		if is_instance_valid(path_tracing): path_tracing.display_applied())
-	_upscaling_rows(picture, smoothing)
-	_settings_row(picture, "Anti-aliasing", "Smooths the edges of the 3D map and battle scenes. Automatic uses 2x unless the graphics are rendered in software. Path tracing uses its own smoothing.", smoothing)
-	var sharpen := OptionButton.new()
-	sharpen.name = "Sharpening"
-	for caption: String in ["Off", "Light", "Strong"]: sharpen.add_item(_t(caption))
-	sharpen.select(int(settings.values.sharpening))
-	sharpen.item_selected.connect(func(index: int): settings.values.sharpening = index)
-	_settings_row(picture, "Sharpening", "Sharpens the textures of the 3D map and battle scenes. The interface is not changed.", sharpen)
 	var scene := _settings_box(page, "Scene")
 	var shadows := CheckButton.new()
 	shadows.name = "Shadows"
@@ -5262,12 +5348,14 @@ func _graphics_page(page: VBoxContainer) -> void:
 		open.focus_mode = Control.FOCUS_NONE
 		var owner := _settings_menu
 		open.pressed.connect(func(): owner.options_ui.show_page("path_tracing"))
-		var state := _t("Path tracing: on") if bool(settings.values.path_tracing) and ELPathTracing.available() else _t("Path tracing: off")
-		_settings_row(traced, state, "The renderer, path-traced lighting, sky light, light bounces and DLSS Ray Reconstruction.", open)
+		var state := func() -> String: return _t("Path tracing: on") if bool(settings.values.path_tracing) and ELPathTracing.available() else _t("Path tracing: off")
+		_settings_row(traced, state.call(), "The renderer, path-traced lighting, sky light, light bounces and DLSS Ray Reconstruction.", open)
+		var caption: Label = open.get_meta("row_caption")
 		var status := _label(_path_tracing_status(), 13, ELMenuKit.NOTE_INK if _settings_kit != null else (ACCENT if ELPathTracing.available() else MUTED))
 		status.name = "PathTracingStatus"
 		status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		traced.add_child(status)
+		_on_page_shown(func(): caption.text = state.call())
 
 ## Path tracing: the renderer, the switch, light view, sky light, bounces,
 ## Ray Reconstruction and what this computer supports.
@@ -5333,6 +5421,11 @@ func _path_tracing_page(page: VBoxContainer) -> void:
 	renderer.item_selected.connect(func(index: int):
 		settings.values.renderer = index
 		restart.visible = index != running)
+	# Choosing DLSS or FSR on the Display page also chooses Forward+.
+	_on_page_shown(func():
+		renderer.select(int(settings.values.renderer))
+		restart.visible = int(settings.values.renderer) != running
+		if _ray_reconstruction_refresh.is_valid(): _ray_reconstruction_refresh.call())
 	restart.pressed.connect(_restart_from_settings)
 	toggle.toggled.connect(func(on: bool):
 		settings.values.path_tracing = on
@@ -5370,13 +5463,7 @@ func _interface_page(page: VBoxContainer) -> void:
 		settings.values.helper_overlay = enabled
 		_apply_settings())
 	_settings_row(screens, "Remake helper overlay", "Remake-only readouts, hints and shortcut buttons over the original screens.", helper_toggle)
-	var fps_toggle := CheckButton.new()
-	fps_toggle.name = "ShowFps"
-	fps_toggle.button_pressed = bool(settings.values.get("show_fps", false))
-	fps_toggle.toggled.connect(func(enabled: bool):
-		settings.values.show_fps = enabled
-		_update_fps_counter())
-	_settings_row(screens, "Frame rate counter", "Shows frames per second in the top right corner.", fps_toggle)
+	_battle_interface_row(screens)
 	# Music and effects are on the original General page.
 	var volumes := _settings_box(page, "Sound")
 	var captions := {"music": ["Music", "The menu, map and battle music."], "ambience": ["Ambience", "Remake-only background sounds of maps and battles."], "effects": ["Effects", "Spells, blows, voices and the interface."]}
@@ -5418,6 +5505,21 @@ func _interface_page(page: VBoxContainer) -> void:
 		settings.values.discord_activity = enabled
 		if is_instance_valid(discord): discord.enabled = enabled)
 	_settings_row(sharing, "Discord activity", "Shows the game and whether you are in the menus, on a map or in a battle in the Discord desktop app. Nothing else is shared; off clears it.", discord_toggle)
+
+## The battle panel's size (setting "battle_interface", ELHudFrame.SIZES),
+## applied at once; sizes too big for the screen are offered disabled.
+func _battle_interface_row(box: Control) -> void:
+	var size_pick := OptionButton.new()
+	size_pick.name = "BattleInterface"
+	for caption: String in ["Automatic", "Small (1×)", "Medium (1.5×)", "Large (2×)", "Largest (3×)"]: size_pick.add_item(_t(caption))
+	var screen := Vector2(get_window().size) if is_inside_tree() else Vector2.ZERO
+	for i in ELHudFrame.SIZES.size():
+		if screen.x > 0.0 and ELHudFrame.interface_scale(i + 1, screen) < float(ELHudFrame.SIZES[i]): size_pick.set_item_disabled(i + 1, true)
+	size_pick.select(clampi(int(settings.values.get("battle_interface", 0)), 0, ELHudFrame.SIZES.size()))
+	size_pick.item_selected.connect(func(index: int):
+		settings.values.battle_interface = index
+		_layout_hud())
+	_settings_row(box, "Battle interface size", "The size of the battle panel at the bottom of the screen. Smaller sizes keep the original art at its own proportions and show more spell slots across the screen. 1×, 2× and 3× draw each original pixel as a sharp square. Automatic picks the sharpest size close to the panel's usual size on this screen. On touch screens the slots never get too small to tap.", size_pick)
 
 ## A restart asked for from the settings: the Options screen closes with OK
 ## first, so its original pages are kept too.
@@ -5600,6 +5702,7 @@ func _upscaling_rows(box: VBoxContainer, smoothing: OptionButton) -> void:
 		changed.call(before))
 	restart.pressed.connect(_restart_from_settings)
 	refresh.call()
+	_on_page_shown(refresh)
 
 ## The message that a choice needs a restart (the vendor's SDK is set up when
 ## the game starts), with Restart now and Later.
@@ -5640,13 +5743,12 @@ func _choice_button(button_name: String, captions: Array) -> OptionButton:
 func _row_note(control: Control) -> Label:
 	return control.get_meta("row_note") as Label
 
-## A row's status line and tooltip: its explanation goes to the tooltip (and
-## the row's (?)); the line under the row shows only `reasons` (why choices
-## are greyed out, what a setting uses now), hidden when there are none.
-func _set_row_note(control: Control, note: Label, description: String, reasons: PackedStringArray) -> void:
+## A row's status line: only `reasons` (why choices are greyed out, what a
+## setting uses now), hidden when there are none. The explanation stays with
+## the row's (?).
+func _set_row_note(_control: Control, note: Label, _description: String, reasons: PackedStringArray) -> void:
 	note.text = "\n".join(reasons)
 	note.visible = not note.text.is_empty()
-	control.tooltip_text = _t(description) + ("\n" + note.text if note.visible else "")
 
 ## About: the credits of the graphics technologies this build includes.
 func _about_page(page: VBoxContainer) -> void:
@@ -5694,15 +5796,15 @@ func _settings_row(box: VBoxContainer, title: String, description: String, contr
 	heading.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	line.add_child(heading)
 	var caption := _label(_t(title), 15 if original else 16, ELMenuKit.BODY_INK if original else INK)
-	caption.mouse_filter = Control.MOUSE_FILTER_PASS
-	caption.tooltip_text = help_text
 	heading.add_child(caption)
+	control.set_meta("row_caption", caption)
+	# Only the (?) explains the setting: hovering the row or its control
+	# shows nothing.
 	if not description.is_empty():
 		var help := _help_button(help_text)
 		help.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 		heading.add_child(help)
 	control.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	control.tooltip_text = help_text
 	line.add_child(control)
 	if extra != null:
 		extra.size_flags_vertical = Control.SIZE_SHRINK_CENTER
@@ -5713,56 +5815,140 @@ func _settings_row(box: VBoxContainer, title: String, description: String, contr
 	row.add_child(note)
 	control.set_meta("row_note", note)
 
-## A small round (?) button: hovering shows `text` as its tooltip; a click or
-## tap shows it in a small box (touch screens have no hover).
+## A small round (?) button: resting the pointer on it shows `text` in a box
+## under its row; a click or tap keeps the box until the next click (touch
+## screens have no hover). The engine's tooltip is not used: it goes where
+## the pointer is and may leave the Options frame.
 func _help_button(text: String) -> Button:
 	var help := Button.new()
 	help.name = "Help"
 	help.text = "?"
-	help.tooltip_text = text
+	help.set_meta("help_text", text)
 	help.focus_mode = Control.FOCUS_NONE
 	help.custom_minimum_size = Vector2(22, 22)
 	help.add_theme_font_size_override("font_size", 13)
-	for state: String in ["normal", "hover", "pressed", "hover_pressed"]:
-		var round := StyleBoxFlat.new()
-		round.bg_color = Color("3a3020") if state.begins_with("hover") else Color("1c1812")
-		round.border_color = Color("c9b07a") if state != "normal" else Color("8a7350")
-		round.set_border_width_all(1)
-		round.set_corner_radius_all(11)
-		round.content_margin_left = 6
-		round.content_margin_right = 6
-		round.content_margin_top = 0
-		round.content_margin_bottom = 0
-		help.add_theme_stylebox_override(state, round)
+	if _help_styles.is_empty():
+		for state: String in ["normal", "hover", "pressed", "hover_pressed"]:
+			var round := StyleBoxFlat.new()
+			round.bg_color = Color("3a3020") if state.begins_with("hover") else Color("1c1812")
+			round.border_color = Color("c9b07a") if state != "normal" else Color("8a7350")
+			round.set_border_width_all(1)
+			round.set_corner_radius_all(11)
+			round.content_margin_left = 6
+			round.content_margin_right = 6
+			round.content_margin_top = 0
+			round.content_margin_bottom = 0
+			_help_styles[state] = round
+	for state: String in _help_styles: help.add_theme_stylebox_override(state, _help_styles[state])
 	for key: String in ["font_color", "font_hover_color", "font_pressed_color", "font_hover_pressed_color"]:
 		help.add_theme_color_override(key, ELMenuKit.TITLE_INK)
 	help.pressed.connect(func(): _show_help(help))
+	help.mouse_entered.connect(func():
+		_help_hovered = help
+		await get_tree().create_timer(0.4).timeout
+		if _help_hovered == help and is_instance_valid(help) and help.is_visible_in_tree(): _hover_help(help))
+	for ended: Signal in [help.mouse_exited, help.visibility_changed, help.tree_exiting]:
+		ended.connect(func():
+			if _help_hovered == help: _help_hovered = null
+			_hide_hover_help())
 	return help
 
-## The (?) text in a small box under the button; a click elsewhere closes it.
-func _show_help(button: Control) -> void:
-	var box := PopupPanel.new()
-	box.name = "HelpPopup"
+## The (?) buttons' looks, shared; the (?) under the pointer; the box shown
+## while it rests there.
+var _help_styles := {}
+var _help_hovered: Control
+var _help_layer: CanvasLayer
+var _help_hover_box: PanelContainer
+
+## Where a setting's help goes (window pixels): under the row of its (?), or
+## above it when there is no room below, from the row's left edge and no
+## wider than the page; always inside the page's visible area, so it never
+## covers the (?) or leaves the Options frame.
+func _help_place(button: Control, text: String) -> Dictionary:
+	var line: Control = button.get_parent().get_parent() if button.get_parent() != null and button.get_parent().get_parent() is Control else button
+	var to_window := line.get_global_transform_with_canvas()
+	var scale := clampf(to_window.get_scale().y, 0.6, 2.0)
+	var row := to_window * Rect2(Vector2.ZERO, line.size)
+	var bounds := get_viewport().get_visible_rect()
+	var area: Node = line.get_parent()
+	while area != null and not area is ScrollContainer: area = area.get_parent()
+	if area is ScrollContainer:
+		bounds = (area as Control).get_global_transform_with_canvas() * Rect2(Vector2.ZERO, (area as Control).size)
+	var margin := 6.0 * scale
+	var pad := 9.0 * scale
+	var font_size := roundi(15.0 * scale)
+	var font := button.get_theme_font("font", "Label")
+	var left := clampf(row.position.x, bounds.position.x + margin, bounds.end.x - margin - 80.0 * scale)
+	var width := bounds.end.x - margin - left
+	# A short text gets a box of its own width.
+	width = minf(width, font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x + 2.0 * pad + 4.0)
+	var height := font.get_multiline_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, width - 2.0 * pad, font_size).y + 2.0 * pad
+	var gap := 3.0 * scale
+	var below := row.end.y + gap
+	var above := row.position.y - gap - height
+	var top := below
+	if below + height > bounds.end.y:
+		top = above if above >= bounds.position.y or row.position.y - bounds.position.y > bounds.end.y - row.end.y else below
+	top = clampf(top, bounds.position.y, maxf(bounds.position.y, bounds.end.y - height))
+	return {"rect": Rect2(left, top, width, height), "font_size": font_size, "pad": pad}
+
+## The help box's look and text for `place` (see _help_place).
+func _help_box(text: String, place: Dictionary) -> PanelContainer:
+	var box := PanelContainer.new()
+	box.name = "HelpBox"
+	box.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var style := StyleBoxFlat.new()
 	style.bg_color = Color("101210f4")
 	style.border_color = Color("8a7350")
 	style.set_border_width_all(1)
-	style.set_content_margin_all(10)
+	style.set_content_margin_all(place.pad)
 	box.add_theme_stylebox_override("panel", style)
-	var text := Label.new()
-	text.text = button.tooltip_text
-	text.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	text.custom_minimum_size.x = 320
-	text.add_theme_font_size_override("font_size", 15)
-	text.add_theme_color_override("font_color", ELMenuKit.BODY_INK)
-	box.add_child(text)
-	add_child(box)
-	box.popup_hide.connect(box.queue_free)
-	var area := get_viewport().get_visible_rect().size
-	var at := button.get_screen_position() + Vector2(0, button.size.y * button.get_global_transform_with_canvas().get_scale().y + 4)
-	var wanted := Vector2(340, text.get_minimum_size().y + 20)
-	at = at.clamp(Vector2.ZERO, (area - wanted).max(Vector2.ZERO))
-	box.popup(Rect2i(Vector2i(at), Vector2i(wanted)))
+	var label := Label.new()
+	label.text = text
+	label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	label.custom_minimum_size.x = place.rect.size.x - 2.0 * place.pad
+	label.add_theme_font_size_override("font_size", place.font_size)
+	label.add_theme_color_override("font_color", ELMenuKit.BODY_INK)
+	box.add_child(label)
+	return box
+
+## The help of the (?) under the pointer, over everything, until it leaves.
+func _hover_help(button: Control) -> void:
+	_hide_hover_help()
+	var text := str(button.get_meta("help_text", ""))
+	if text.is_empty(): return
+	if _help_layer == null:
+		_help_layer = CanvasLayer.new()
+		_help_layer.layer = 126
+		add_child(_help_layer)
+	var place := _help_place(button, text)
+	_help_hover_box = _help_box(text, place)
+	_help_hover_box.position = place.rect.position
+	_help_hover_box.size = place.rect.size
+	_help_layer.add_child(_help_hover_box)
+
+func _hide_hover_help() -> void:
+	if is_instance_valid(_help_hover_box): _help_hover_box.queue_free()
+	_help_hover_box = null
+
+## The help of a clicked or tapped (?), until the next click.
+func _show_help(button: Control) -> void:
+	_hide_hover_help()
+	var text := str(button.get_meta("help_text", ""))
+	if text.is_empty(): return
+	var place := _help_place(button, text)
+	var popup := PopupPanel.new()
+	popup.name = "HelpPopup"
+	var box := _help_box(text, place)
+	popup.add_theme_stylebox_override("panel", box.get_theme_stylebox("panel"))
+	var label := box.get_child(0)
+	box.remove_child(label)
+	box.free()
+	popup.add_child(label)
+	add_child(popup)
+	popup.popup_hide.connect(popup.queue_free)
+	popup.popup(Rect2i(Vector2i(place.rect.position.round()), Vector2i(place.rect.size.ceil())))
 
 ## The settings dialog's look: the game's dark panels and gold accents.
 func _settings_theme() -> Theme:
@@ -5896,6 +6082,7 @@ func _apply_settings() -> void:
 		arena.set_detail(bool(settings.values.terrain_detail))
 		arena.set_water(bool(settings.values.enhanced_water))
 	if is_instance_valid(blood): blood.set_enabled(bool(settings.values.blood))
+	_layout_hud()
 	_preview_volumes(settings.values)
 	if campaign_view != null: campaign_view.apply_settings()
 	_refresh()
@@ -5942,17 +6129,30 @@ func _open_debug_options() -> void:
 		"remake":
 			menu.show()
 	# A third part opens a list of the page ("OptionButtonName"), the first
-	# setting's help ("help") or the restart message ("restart").
+	# setting's help box ("help") or tooltip ("hover"), or the restart message
+	# ("restart").
 	if then.is_empty() or host == null: return
 	await get_tree().create_timer(0.5).timeout
 	if then == "restart":
 		_offer_restart(ELGraphicsSDK.RESTART_FRAME_GENERATION, {"frame_generation": true})
 		return
-	if then == "help":
-		var help := host.canvas.find_child("Help", true, false)
-		if help is Button: help.pressed.emit()
+	# Hidden pages are kept too: the shown page is searched.
+	var shown: Node = host.options_ui.remake_panel if is_instance_valid(host.options_ui.remake_panel) else host.canvas
+	if then in ["help", "hover"]:
+		var help := shown.find_child("Help", true, false)
+		if not help is Button: return
+		if then == "help":
+			help.pressed.emit()
+			return
+		# The pointer rests on the (?): its tooltip shows.
+		var at: Vector2 = help.get_global_transform_with_canvas() * (help.size * 0.5)
+		get_viewport().warp_mouse(at)
+		var motion := InputEventMouseMotion.new()
+		motion.position = at
+		motion.global_position = at
+		Input.parse_input_event(motion)
 		return
-	var found := host.canvas.find_child(then, true, false)
+	var found := shown.find_child(then, true, false)
 	if found is OptionButton: found.show_popup()
 
 ## The original Options screen over the battle, on its combat page; its
@@ -6749,16 +6949,21 @@ func _remove_selected_enchantment(target: int, enchantment_id: int) -> void:
 func _layout_hud() -> void:
 	if hud_root == null:
 		return
-	var factor := clampf(ui.size.x / 1100.0, 1.0, 1.5)
-	# Never below the original's one-to-one pixel size: a 1024x768 window
-	# gets the original 1024 panel (six card slots, full-size digits) and
-	# 800x600 its 800 panel, as the originals draw them.
-	var window := get_window()
-	if window != null and window.size.x > 0 and ui.size.x > 0:
-		factor = maxf(factor, ui.size.x / float(window.size.x))
+	# The panel is drawn at a clean size of the original art in screen pixels
+	# (the Interface page's battle interface size; never below one to one: a
+	# 1024x768 window gets the original 1024 panel, 800x600 its 800 panel).
+	# The panel then spans the screen in whole original pixels, its bottom
+	# edge on the screen's, and a smaller size shows more card slots.
+	var unit := get_viewport().get_final_transform().get_scale().x * ui.get_global_transform_with_canvas().get_scale().x
+	if unit <= 0.0: unit = 1.0
+	var screen := (ui.size * unit).round()
+	var pixels := ELHudFrame.interface_scale(int(settings.values.get("battle_interface", 0)), screen, _touch_dpi())
+	var factor := pixels / unit
 	hud_root.scale = Vector2.ONE * factor
+	hud_root.texture_filter = ELHudFrame.interface_filter(pixels)
 	if notices != null: notices.ui_scale = factor
-	hud_root.size = ui.size / factor
+	hud_root.size = (screen / pixels).ceil()
+	hud_root.position = Vector2(0.0, (screen.y - hud_root.size.y * pixels) / unit)
 	hud.size = hud_root.size
 	hud.queue_redraw()
 	rail.size = hud_root.size
@@ -6773,6 +6978,9 @@ func _layout_hud() -> void:
 		# The panel's portrait window: 75x56, one pixel further out on the mirrored right panel.
 		portraits[side].position = Vector2(x + (3 if side == 0 else 2), h - 112)
 		portraits[side].size = Vector2(75, 56)
+		# A portrait not drawn one to one is filtered smoothly at every size.
+		var picture: Texture2D = portraits[side].texture
+		portraits[side].texture_filter = CanvasItem.TEXTURE_FILTER_PARENT_NODE if picture == null or picture.get_size() == Vector2(75, 56) else CanvasItem.TEXTURE_FILTER_LINEAR
 		hero_buttons[side].position = Vector2(x, h - 115)
 		hero_buttons[side].size = Vector2(80, 115)
 		hero_values[side].position = Vector2(x + 1, h - 20)
@@ -6805,6 +7013,12 @@ func _layout_hud() -> void:
 	hand_frames.position = rail_rect.position
 	hand_frames.size = rail_rect.size
 	hand_frames.queue_redraw()
+
+## A phone's or tablet's screen density, so that the battle panel's slots stay
+## big enough for a finger; 0 elsewhere.
+func _touch_dpi() -> float:
+	if not DisplayServer.is_touchscreen_available() or not (OS.has_feature("mobile") or OS.has_feature("web")): return 0.0
+	return float(DisplayServer.screen_get_dpi())
 
 func _place_end_button() -> void:
 	if hud_root == null or end_button == null: return

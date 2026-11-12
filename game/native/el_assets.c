@@ -394,6 +394,13 @@ static int64_t wrapped(int64_t v, int64_t side) {
 
 static int64_t clamp_bin(int64_t v, int64_t top) { return v < 0 ? 0 : (v > top ? top : v); }
 
+/* How much a texel looks like skin: a faint warm tint (ELMetalMasks._skin_tone). */
+static double skin_tone(double s, double h) {
+	double away = fabs(h - 0.03);
+	away = dmin(away, 1.0 - away);
+	return smooth(0.08, 0.14, s) * (1.0 - smooth(0.05, 0.08, away));
+}
+
 static double painted_metal(double v, double s, double h, double tinted, double grey_below) {
 	double grey = smooth(tinted, grey_below, s) * smooth(0.15, 0.35, v);
 	double gold = smooth(0.45, 0.65, v) * (1.0 - smooth(0.02, 0.06, fabs(h - 0.12))) * smooth(0.25, 0.4, s);
@@ -481,18 +488,19 @@ static int32_t s32_at(const uint8_t *d, int64_t at) {
 }
 
 /* `pixels`: side x side RGBA8. `parts`: per part an s32 mark (1 a figure
- * part, 2 a named metal one), s32 UV count, s32 index count, then the UVs
- * (float u, v) and indices (s32). */
+ * part, 2 a named metal one, 3 one metal all over), s32 UV count, s32 index
+ * count, then the UVs (float u, v) and indices (s32). */
 static void metal_mask(const uint8_t *pixels, int64_t pixels_n, const uint8_t *parts, int64_t parts_n, int64_t side, Buffer *out) {
 	if (side <= 0 || side > 4096 || pixels_n != side * side * 4) return;
 	int64_t count = side * side;
 	uint8_t *cover = calloc((size_t)count, 1), *levels = malloc((size_t)count);
 	float *painted = calloc((size_t)count, sizeof(float)), *greyer = calloc((size_t)count, sizeof(float));
 	float *learnt = calloc((size_t)count, sizeof(float)), *rows = calloc((size_t)count, sizeof(float));
-	float *around = calloc((size_t)count, sizeof(float));
+	float *around = calloc((size_t)count, sizeof(float)), *skin = calloc((size_t)count, sizeof(float));
 	int32_t *bins = calloc((size_t)count, sizeof(int32_t));
+	double seed_weight = 0.0, seed_warmth = 0.0;
 	float seed_raw[METAL_BINS] = { 0 }, body_raw[METAL_BINS] = { 0 }, seed_hist[METAL_BINS], body_hist[METAL_BINS];
-	if (!cover || !levels || !painted || !greyer || !learnt || !rows || !around || !bins) goto done;
+	if (!cover || !levels || !painted || !greyer || !learnt || !rows || !around || !skin || !bins) goto done;
 	/* The figure's parts first, then its metal ones over them. */
 	for (int pass = 0; pass < 2; pass++) {
 		int64_t at = 0;
@@ -540,30 +548,39 @@ static void metal_mask(const uint8_t *pixels, int64_t pixels_n, const uint8_t *p
 		double metal = painted_metal(value, saturation, hue, 0.38, 0.18);
 		painted[i] = (float)metal;
 		greyer[i] = (float)painted_metal(value, saturation, hue, 0.32, 0.18);
+		double tone = skin_tone(saturation, hue);
+		skin[i] = (float)tone;
 		double angle = (double)hue * METAL_TAU;
 		int64_t a = clamp_bin((int64_t)(((double)saturation * cos(angle) + 1.0) * 0.5 * METAL_CHROMA), METAL_CHROMA - 1);
 		int64_t c = clamp_bin((int64_t)(((double)saturation * sin(angle) + 1.0) * 0.5 * METAL_CHROMA), METAL_CHROMA - 1);
 		int64_t v = clamp_bin((int64_t)((double)value * METAL_LEVELS), METAL_LEVELS - 1);
 		int32_t bin = (int32_t)((a * METAL_CHROMA + c) * METAL_LEVELS + v);
 		bins[i] = bin;
-		if (cover[i] == 2) seed_raw[bin] = (float)((double)seed_raw[bin] + metal);
+		if (cover[i] == 2) {
+			seed_raw[bin] = (float)((double)seed_raw[bin] + metal);
+			seed_weight += metal;
+			seed_warmth += metal * tone;
+		}
 		else if (cover[i] == 1) body_raw[bin] = (float)((double)body_raw[bin] + metal);
 	}
 	blur_bins(seed_raw, seed_hist);
 	blur_bins(body_raw, body_hist);
 	double peak = 0.0;
 	for (int i = 0; i < METAL_BINS; i++) peak = dmax(peak, seed_hist[i]);
+	/* Skin-toned texels are learnt only beside warm-painted metal. */
+	double skin_kept = 1.0 - smooth(0.1, 0.3, seed_warmth / dmax(seed_weight, 0.000001));
 	if (peak > 0.0)
 		for (int64_t i = 0; i < count; i++) {
 			if (cover[i] == 0 || painted[i] <= 0.0f) continue;
 			double in_seeds = seed_hist[bins[i]];
 			double share = in_seeds / dmax(in_seeds + (double)body_hist[bins[i]], 0.000001);
-			learnt[i] = (float)(smooth(0.1, 0.35, in_seeds / peak) * smooth(0.12, 0.3, share) * smooth(0.15, 0.45, greyer[i]));
+			learnt[i] = (float)(smooth(0.1, 0.35, in_seeds / peak) * smooth(0.12, 0.3, share) * smooth(0.15, 0.45, greyer[i]) * (1.0 - (double)skin[i] * skin_kept));
 		}
 	/* A lone matching texel amid skin or cloth is paint, not a plate. */
 	box_mean(learnt, rows, around, side, 2);
 	for (int64_t i = 0; i < count; i++) {
-		double value = dmax(cover[i] == 2 ? (double)painted[i] : 0.0, (double)learnt[i] * smooth(0.1, 0.3, around[i]));
+		double named = cover[i] == 2 ? (double)painted[i] : (cover[i] == 3 ? 1.0 : 0.0);
+		double value = dmax(named, (double)learnt[i] * smooth(0.1, 0.3, around[i]));
 		levels[i] = (uint8_t)(int64_t)(value * 255.0 + 0.5);
 	}
 	put(out, levels, count);
@@ -575,6 +592,7 @@ done:
 	free(learnt);
 	free(rows);
 	free(around);
+	free(skin);
 	free(bins);
 }
 

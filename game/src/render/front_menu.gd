@@ -55,8 +55,6 @@ const BODY_INK := Color("d8d2c0")
 ## the darker values of the first game's mission description.
 const GOLD_INK := Color("d6bb88")
 const VALUE_INK := Color("998c68")
-## Second game: campaign-choice caption of a card not chosen.
-const CAPTION_IDLE := Color("70645c")
 const UNAVAILABLE := "Not available in the remake yet."
 ## OK action of the open inform_hosted box (none while a question is open).
 var _inform_ok: Callable
@@ -263,9 +261,12 @@ var settings: ELSettings
 var settings_path := "user://settings.json"
 ## Interface music, credits music and the Hall of Fame fanfare.
 var _audio: AudioStreamPlayer
-## First game: the voiced briefing of the campaign text and campaign info
-## screens, over the interface music.
+## The voiced campaign description and mission briefing (first game: the
+## campaign text and campaign info screens; second game: the campaign
+## description and the campaign map's briefing), over the interface music.
 var briefing: ELBriefingVoice
+## Second game: the voice the next description screen speaks.
+var _legend_voice := ""
 ## First game: the chapter the campaign info screen shows after a chapter
 ## result (empty: the campaign's first chapter).
 var chapter := {}
@@ -440,17 +441,8 @@ func show_screen(target: String) -> void:
 	canvas.add_child(art)
 	var definition: Dictionary = SCREENS[edition][target]
 	_add_wide_frame(target, definition.has("under"))
-	_pieces.clear()
 	hidden_masks = []
-	if definition.has("under"): _add_group(definition.under, [])
-	# Options opened from the front end keeps the main-menu art around its
-	# panel, as the original does (over a running game the game shows instead).
-	# The second game's Encyclopaedia, opened from the main menu, also keeps
-	# the main-menu art and its version line around the panel;
-	# so does the second game's Options.
-	elif target == "options" and not hosted or target == "encyclopaedia" and edition == "el2" and not hosted: _add_group(SCREENS[edition].main.art, [])
-	_frame_after = _pieces.size() if definition.has("under") else -1
-	_add_group(definition.art, definition.get("exclude", []) + (duel_ui.art_exclude(target) if duel_ui != null else []) + (encyclopaedia_ui.art_exclude(target) if encyclopaedia_ui != null else []) + (options_ui.art_exclude(target) if options_ui != null else []))
+	_add_art(target)
 	if not target in ["credits", "hall_of_fame"] and not playing_interface(): stop_audio()
 	if definition.has("buttons"): _build_text_buttons(definition.buttons)
 	_add_version([definition.get("under", ""), definition.art, SCREENS[edition].main.art if target in ["encyclopaedia", "options"] and not hosted else ""])
@@ -490,6 +482,35 @@ func show_screen(target: String) -> void:
 	queue_redraw()
 	sync_music()
 
+## The screen's art pieces (its "under" sheet or the main-menu art around
+## it, then its own sheet less the masks its page hides).
+func _add_art(target: String) -> void:
+	var definition: Dictionary = SCREENS[edition][target]
+	_pieces.clear()
+	if definition.has("under"): _add_group(definition.under, [])
+	# Options opened from the front end keeps the main-menu art around its
+	# panel, as the original does (over a running game the game shows instead).
+	# The second game's Encyclopaedia, opened from the main menu, also keeps
+	# the main-menu art and its version line around the panel;
+	# so does the second game's Options.
+	elif target == "options" and not hosted or target == "encyclopaedia" and edition == "el2" and not hosted: _add_group(SCREENS[edition].main.art, [])
+	_frame_after = _pieces.size() if definition.has("under") else -1
+	_add_group(definition.art, definition.get("exclude", []) + (duel_ui.art_exclude(target) if duel_ui != null else []) + (encyclopaedia_ui.art_exclude(target) if encyclopaedia_ui != null else []) + (options_ui.art_exclude(target) if options_ui != null else []))
+
+## The art again for the shown screen (an Options page switch: the page's
+## panel changes, its controls stay).
+func rebuild_art() -> void:
+	_add_art(screen)
+
+## The art pieces as they are, and back (Options keeps one set per page).
+func art_state() -> Array:
+	return [_pieces.duplicate(), _frame_after]
+
+func restore_art(state: Array) -> void:
+	_pieces = state[0].duplicate()
+	_frame_after = state[1]
+	art.queue_redraw()
+
 ## Screens drawn over the battle (round results) keep it visible around the panel.
 func overlay() -> bool:
 	if hosted and _over_game: return true
@@ -526,9 +547,11 @@ const WIDE_MINIMUM := 48.0
 ## over the running game).
 const WIDE_SCREENS := {
 	"el1": ["main", "new", "load", "campaigns", "duel", "single", "options", "hall_of_fame", "mp_type", "mp_start",
-		"mp_start_strategy", "load_campaign", "load_mission", "load_strategy", "load_game", "save_game"],
+		"mp_start_strategy", "load_campaign", "load_mission", "load_strategy", "load_game", "save_game",
+		"blazon", "blazon_single", "legend", "mission", "branch"],
 	"el2": ["main", "single", "campaign_menu", "mission_menu", "tutorial", "duel_menu", "campaigns", "select_mission",
-		"load_campaign", "load_mission", "replay_load", "hall_of_fame", "duel", "mp_start", "encyclopaedia", "options"],
+		"load_campaign", "load_mission", "replay_load", "hall_of_fame", "duel", "mp_start", "encyclopaedia", "options",
+		"legend", "map"],
 }
 var _wide_frame: Control
 var _wide_texture: Texture2D
@@ -815,6 +838,7 @@ func _input(event: InputEvent) -> void:
 		if screen == "question" and _inform_ok.is_valid() and event.pressed and not event.echo and event.keycode in [KEY_ENTER, KEY_KP_ENTER, KEY_SPACE, KEY_ESCAPE]:
 			_close_inform()
 			return
+		if screen == "campaigns" and event.pressed and not event.echo and campaign_key(event.keycode): return
 		if event.pressed and not event.echo and event.keycode == KEY_ESCAPE:
 			if screen == "encyclopaedia" and encyclopaedia_ui.escape(): return
 			if single_ui != null and single_ui.close_picture(): return
@@ -953,6 +977,7 @@ func _channel_db(values: Dictionary) -> float:
 ## Volume sliders changed while the menu plays.
 func apply_volumes(values: Dictionary) -> void:
 	ELUiSounds.use_volumes(values)
+	if briefing != null and values.has("effects"): briefing.set_volume(float(values.effects))
 	if _audio != null and not _channel.is_empty(): _audio.volume_db = _channel_db(values)
 
 ## Remake setting "helper_overlay": remake-only English explanations.
@@ -1040,25 +1065,27 @@ func _build_campaigns() -> void:
 		button.tooltip_text = data.title
 		canvas.add_child(button)
 		cards.append(button)
+		# Both games play swapcampaign.wav when another card is chosen.
 		button.pressed.connect(func():
-			if edition == "el1" and selected_campaign != card.id: ELUiSounds.play(profile, "Buttons/swapcampaign.wav")
+			if selected_campaign != card.id: ELUiSounds.play(profile, "Buttons/swapcampaign.wav")
 			select_campaign(card.id))
 		button.gui_input.connect(func(event: InputEvent):
 			if event is InputEventMouseButton and event.double_click and event.button_index == MOUSE_BUTTON_LEFT: _confirm_campaign())
 		var title: String = text(card.title) if card.has("title") else data.title
 		_label("card_" + card.id, title, control_rect(card.name), 17)
 		if card.has("caption"):
-			# Regular Arial ~15 px centred under its card, grey until chosen
-			# (measured on the original).
+			# Regular Arial ~15 px centred under its card, gold at its card's
+			# opacity (grey until chosen; measured on the original).
 			var below := control_rect(card.caption)
 			# The original keeps each caption on one line (wider than the 160 px control).
 			below.size.x = maxf(below.size.x, 300.0)
 			below.position.x = card.hole.get_center().x - below.size.x * 0.5
-			var caption := _label("caption_" + card.id, data.title, below, 16, CAPTION_IDLE)
+			var caption := _label("caption_" + card.id, data.title, below, 16, GOLD_INK)
 			caption.add_theme_font_override("font", arial)
 			caption.add_theme_font_size_override("font_size", 15)
 			caption.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 			caption.vertical_alignment = VERTICAL_ALIGNMENT_TOP
+			button.caption = caption
 	var back := _square("SCBack")
 	if back != null: back.pressed.connect(go_back)
 	var start := _square("SCStart")
@@ -1074,23 +1101,40 @@ func _build_campaigns() -> void:
 		# back from the blazon choice keeps the side.
 		blazon_ui.build_campaign()
 		if previous_screen != "blazon": selected_campaign = ""
-		select_campaign(selected_campaign)
+		select_campaign(selected_campaign, true)
 	else:
 		# The original opens with no campaign chosen (Info and Start dimmed);
 		# coming back from the campaign description keeps the choice.
 		if previous_screen != "legend": selected_campaign = ""
-		select_campaign(selected_campaign)
+		select_campaign(selected_campaign, true)
 
-func select_campaign(id: String) -> void:
+## Chooses a campaign card (id "" for none): the chosen card fades up, the
+## others back down (`at_once` skips the fade, when the screen opens).
+func select_campaign(id: String, at_once := false) -> void:
 	var previous := selected_campaign
 	selected_campaign = id
 	if edition == "el1" and blazon_ui != null: blazon_ui.side_chosen(previous, id)
 	for card: CardButton in cards:
 		card.chosen = card.campaign == id
-		card.queue_redraw()
-		if labels.has("caption_" + card.campaign): labels["caption_" + card.campaign].add_theme_color_override("font_color", GOLD_INK if card.chosen else CAPTION_IDLE)
+		card.fade.choose(card.chosen, at_once)
+		card.refresh()
 	for control: String in ["SCStart", "SCInfo"]:
 		if buttons.has(control): buttons[control].disabled = id.is_empty()
+
+## Remake keys on the campaign choice: Left / Right choose the card beside
+## the chosen one (as a click would), Enter starts the chosen campaign.
+func campaign_key(keycode: int) -> bool:
+	if keycode in [KEY_ENTER, KEY_KP_ENTER]:
+		if selected_campaign.is_empty(): return false
+		_confirm_campaign()
+		return true
+	if not keycode in [KEY_LEFT, KEY_RIGHT] or cards.is_empty(): return false
+	var at := -1
+	for index in cards.size():
+		if cards[index].campaign == selected_campaign: at = index
+	var next := (0 if keycode == KEY_RIGHT else cards.size() - 1) if at < 0 else clampi(at + (1 if keycode == KEY_RIGHT else -1), 0, cards.size() - 1)
+	if next != at: cards[next].pressed.emit()
+	return true
 
 func _confirm_campaign() -> void:
 	if selected_campaign.is_empty(): return
@@ -1125,6 +1169,7 @@ func _open_legend(next: String) -> void:
 	if campaign_data == null or campaign_data.id != selected_campaign: campaign_data = _campaign(selected_campaign)
 	if campaign_data == null: return
 	_legend_next = next
+	_legend_voice = ELBriefingVoice.text_file(campaign_data.description_key) if edition == "el2" else ""
 	show_screen("legend")
 
 func _build_legend() -> void:
@@ -1135,6 +1180,9 @@ func _build_legend() -> void:
 		for control: String in ["CTUp", "CTDown"]:
 			var arrow := _square(control)
 			if arrow != null: arrow.pressed.connect(scroll_text.bind(-3 if control == "CTUp" else 3))
+		# The original's text window speaks its text key at once.
+		if briefing != null: briefing.start(profile, _legend_voice, _effects_volume())
+		_legend_voice = ""
 	else:
 		# The original keeps the campaign-choice title over the legend.
 		_label("caption", text("CtrlSCCaption"), control_rect("SCCaption"), 17)
@@ -1365,6 +1413,7 @@ func journey(campaign: String, index: int, row: int, played: Array = []) -> Arra
 
 func _open_briefing() -> void:
 	var scenario := _first_scenario()
+	_legend_voice = ELBriefingVoice.text_file(str(scenario.get("briefing", "")))
 	show_screen("legend")
 	labels.caption.text = text(str(scenario.get("header", "")))
 	text_box.text = text(str(scenario.get("briefing", "")))
@@ -1515,24 +1564,46 @@ class CutButton extends BaseButton:
 			draw_texture_rect_region(piece.texture, Rect2(piece.rect.position - _origin, piece.rect.size), piece.source, tint)
 
 ## Campaign portrait card; the chosen card is shown at full brightness.
+## A campaign card: its picture pieces blended over the panel at the card's
+## opacity (ELCardFade), and the caption under it (second game) at the same
+## opacity.
 class CardButton extends BaseButton:
 	var menu: ELFrontMenu
 	var campaign := ""
 	var pieces: Array = []
 	var chosen := false
+	var fade := ELCardFade.new()
+	var caption: Label
 
 	func _ready() -> void:
 		focus_mode = Control.FOCUS_NONE
-		mouse_entered.connect(queue_redraw)
-		mouse_exited.connect(queue_redraw)
+		# Deferred: the hover state is set after the signal.
+		mouse_entered.connect(refresh, CONNECT_DEFERRED)
+		mouse_exited.connect(refresh, CONNECT_DEFERRED)
+		refresh()
+
+	func hovered() -> bool:
+		return get_draw_mode() == DRAW_HOVER or get_draw_mode() == DRAW_HOVER_PRESSED
+
+	## The opacity drawn now (0..1).
+	func shown() -> float:
+		return fade.shown(hovered() and not disabled)
+
+	func refresh() -> void:
+		if is_instance_valid(caption): caption.modulate.a = shown()
+		set_process(fade.moving())
+		queue_redraw()
+
+	func _process(delta: float) -> void:
+		fade.advance(delta)
+		refresh()
 
 	func _draw() -> void:
 		var picture := Vector2(0, 0)
 		for piece: Dictionary in pieces: picture.x = maxf(picture.x, piece.at.x + piece.source.size.x)
 		for piece: Dictionary in pieces: picture.y = maxf(picture.y, piece.at.y + piece.source.size.y)
 		var origin := ((size - picture) * 0.5).floor()
-		var hover := get_draw_mode() == DRAW_HOVER or get_draw_mode() == DRAW_HOVER_PRESSED
-		var tint := Color.WHITE if chosen or hover else Color(0.55, 0.55, 0.55)
+		var tint := Color(1, 1, 1, shown())
 		for piece: Dictionary in pieces:
 			draw_texture_rect_region(piece.texture, Rect2(origin + piece.at, piece.source.size), piece.source, tint)
 

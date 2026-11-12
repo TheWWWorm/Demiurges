@@ -685,7 +685,9 @@ func section(parent: Control, title: String, featured := false) -> VBoxContainer
 ## Sizes the drop-down lists under `root` to their longest item in the kit's
 ## look. OptionButton's own fitting leaves a gap between the text and the
 ## bar's painted arrow, so the width is measured here and fixed instead.
-static func refit(root: Node) -> void:
+## With `widest_allowed`, a list is no wider than that and its text ends in
+## "…" when it does not fit.
+static func refit(root: Node, widest_allowed := 0.0) -> void:
 	for node: Node in root.find_children("*", "OptionButton", true, false):
 		var list := node as OptionButton
 		if not list.fit_to_longest_item or list.item_count == 0: continue
@@ -698,6 +700,11 @@ static func refit(root: Node) -> void:
 		var arrow := list.get_theme_icon("arrow").get_width() + list.get_theme_constant("h_separation")
 		list.fit_to_longest_item = false
 		list.custom_minimum_size.x = ceilf(widest + frame + arrow)
+		# Narrower than its longest item: the shown text ends in "…".
+		if widest_allowed > 0.0 and list.custom_minimum_size.x > widest_allowed:
+			list.custom_minimum_size.x = widest_allowed
+			list.clip_text = true
+			list.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 
 ## The dialog frame (`kind` "frame") or a column box ("box") as a panel
 ## style with its own padding: left, top, right, bottom. Null without the art.

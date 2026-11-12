@@ -53,7 +53,7 @@ const RAY_RECONSTRUCTION_HELP := "With NVIDIA DLSS upscaling, the path-traced li
 
 const NO_NVIDIA := "This build does not include NVIDIA DLSS."
 const NO_AMD := "This build does not include AMD FSR."
-const NEED_API := "Needs Windows and the Forward+ (Vulkan) renderer: choose it under Path tracing and restart."
+const NEED_API := "Needs Windows and the Forward+ (Vulkan) renderer: choose it on the Graphics page under Path tracing and restart."
 const NEED_DLSS := "NVIDIA DLSS is not available on this GPU or driver, or its runtime could not be loaded."
 const NEED_DLSS_FG := "DLSS Frame Generation is not available: it needs a GeForce RTX 40 series or newer GPU, a current driver and Windows hardware-accelerated GPU scheduling."
 const NEED_FSR := "AMD FSR is not available on this GPU or driver, or its runtime could not be loaded."
@@ -85,12 +85,21 @@ static func fidelityfx() -> Object:
 static func _bridge(vendor: int) -> Object:
 	return streamline() if vendor == NVIDIA else fidelityfx() if vendor == AMD else null
 
-## The SDK's status dictionary, or an empty one.
+## The SDK's status dictionary, or an empty one. Read once a frame: a
+## settings page asks for it many times while it is built.
 static func status(vendor: int) -> Dictionary:
+	var frame := Engine.get_process_frames()
+	if frame != _status_frame:
+		_status_frame = frame
+		_statuses.clear()
+	if _statuses.has(vendor): return _statuses[vendor]
 	var native := _bridge(vendor)
-	if native == null or not native.has_method("get_status"): return {}
-	var value: Variant = native.call("get_status")
-	return value if value is Dictionary else {}
+	var value: Variant = native.call("get_status") if native != null and native.has_method("get_status") else {}
+	_statuses[vendor] = value if value is Dictionary else {}
+	return _statuses[vendor]
+
+static var _statuses := {}
+static var _status_frame := -1
 
 ## The engine has the vendor's SDK compiled in (whatever the GPU).
 static func compiled(vendor: int) -> bool:

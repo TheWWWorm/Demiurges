@@ -275,6 +275,8 @@ func build(profile: ELProfile, scenario: Dictionary, preferences: ELSettings, di
 	if profile.id == "el2":
 		audio.listener = target
 		audio.restore(state)
+		effects.prepare(BATTLE_DOME_EFFECT)
+		ELAudio.sound(profile, BATTLE_DOME_SOUND)
 	elif profile.id == "el1":
 		audio.start_first(state)
 		_build_presentation()
@@ -736,6 +738,7 @@ func decline_encounter() -> void:
 	_refresh_hero_info()
 
 func _close_second_precombat() -> void:
+	_finish_battle_dome()
 	if second_precombat == null or not second_precombat.visible: return
 	second_precombat.close()
 	if second_hud != null: second_hud.show()
@@ -763,6 +766,45 @@ func _open_second_precombat(first: int, second: int) -> void:
 		target = spots[0] if spots.size() == 1 else (spots[0] + spots[1]) * 0.5
 	second_hud.hide()
 	second_precombat.open(state, local, other, faces)
+	_start_battle_dome(first, second)
+
+## Second game: a battle with a local side raises the ether dome as its
+## pre-battle panel opens (the original attack order, for the player's attacks,
+## the computer's and interceptions alike; Remote Use has none). The dome
+## (sphere.pfx, cycling) stands at the midpoint of the two figures, both of
+## which play their Summon clip, and Adventure/CombatDome.wav loops there on
+## the effects volume, full within 0 and silent from 32 units. Both end when
+## the panel closes: the battle opens or is declined. Presentation only.
+const BATTLE_DOME := "battle_dome"
+const BATTLE_DOME_EFFECT := "sphere.pfx"
+const BATTLE_DOME_SOUND := "Adventure/CombatDome.wav"
+const BATTLE_DOME_FAR := 32.0
+const BATTLE_DOME_SUMMON_CODE := 0x018c0000
+
+func _start_battle_dome(first: int, second: int) -> void:
+	_finish_battle_dome()
+	if effects == null or world == null: return
+	var points: Array[Vector3] = []
+	for id: int in [first, second]:
+		var actor: Node3D = world.actors.get(id)
+		if is_instance_valid(actor) and actor.is_visible_in_tree(): points.append(world.to_local(actor.global_position))
+	var at := target
+	if points.size() == 1: at = points[0]
+	elif points.size() == 2: at = (points[0] + points[1]) * 0.5
+	var entry := {"file": BATTLE_DOME_EFFECT, "x": at.x, "y": -at.z, "z": at.y, "story": true}
+	effects.start(BATTLE_DOME, entry, 0.0)
+	if audio != null: audio.start_sound(BATTLE_DOME, {"file": BATTLE_DOME_SOUND, "x": at.x, "y": -at.z, "z": at.y,
+		"near": 0.0, "far": BATTLE_DOME_FAR, "loop": true, "effects": true})
+	# The original asks each figure for its Summon clip by clip code.
+	for id: int in [first, second]:
+		var model: ELModel = world.actors.get(id)
+		if not is_instance_valid(model): continue
+		var clip := model.clip_for_code(BATTLE_DOME_SUMMON_CODE)
+		world.play_actor_clip(id, clip if not clip.is_empty() else "usummon")
+
+func _finish_battle_dome() -> void:
+	if effects != null: effects.finish(BATTLE_DOME)
+	if audio != null: audio.cancel_sound(BATTLE_DOME)
 
 func _open_lose_battle() -> void:
 	if second_hud == null or lose_battle != null: return
@@ -954,6 +996,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		elif event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
 			var hit: Variant = Plane(Vector3.UP, 0).intersects_ray(camera.project_ray_origin(event.position), camera.project_ray_normal(event.position))
 			if hit != null and hud != null and ELHeroExchange.applies(state) and (event.ctrl_pressed or event.double_click) and _hero_click(Vector2i(floori(hit.x / 2.0), floori(-hit.z / 2.0)), event.ctrl_pressed): return
+			if hit != null and hud != null and event.double_click and not event.ctrl_pressed and castle_double_click(event.position, hit): return
 			if hit != null:
 				var corpse := _corpse_under_pointer(event.position) if second_hud != null else -1
 				var body := state.object(corpse)
@@ -2456,6 +2499,18 @@ func _hero_click(tile: Vector2i, exchange: bool) -> bool:
 		return true
 	_open_hero_view([_hero_id(), clicked], true)
 	return true
+
+## First game: a double-click on the player's own castle opens the castle's
+## GlobalSpells screen, like its hotkey (the map's double-click handler opens
+## the castle as well as the selected hero). The click before it only drew
+## the "own castle" notice, which is cleared. Returns true when consumed.
+func castle_double_click(at: Vector2, hit: Vector3) -> bool:
+	if not ELGlobalSpells.applies(state) or _cursor_modal(): return false
+	var item := state.object(_object_at(Vector2(hit.x, -hit.z) / ELAdventureTerrain.CELL, at))
+	if not ELFirstScenario.is_castle(item) or not item.get("alive", false) or int(item.get("owner", -1)) != state.current_player or _fogged(item): return false
+	_remark("")
+	open_global_spells()
+	return global_spells != null
 
 func open_hero_screen(id: int) -> void:
 	if strategic_session != null and not strategic_session.can_plan(): return

@@ -20,6 +20,8 @@ signal rain_changed(areas: PackedVector4Array)
 
 static var _files: Dictionary = {}
 static var _order: Array[String] = []
+## Files decoded ahead of use (keep_file), never evicted.
+static var _kept: Dictionary = {}
 
 var profile: ELProfile
 var enabled := true
@@ -151,6 +153,13 @@ func start(name: String, entry: Dictionary, elapsed: float, draw_current := fals
 	if rain and _rain_on_water and enabled: _publish_rain()
 	if draw_current: _advance(name, 0.0)
 
+## Decodes a particle file and builds its material while the map loads, so
+## its first appearance does not hitch (see keep_file).
+func prepare(path: String) -> void:
+	keep_file(profile, path)
+	var file := particle_file(profile, path)
+	if file != null and file.error.is_empty() and file.frames > 0: _material(file)
+
 func finish(name: String) -> void:
 	var effect: Variant = effects.get(name)
 	if effect == null: return
@@ -259,9 +268,19 @@ func _material(file: ELParticleFile) -> ShaderMaterial:
 	_materials[key] = material
 	return material
 
+## Decodes a particle file ahead of its first use and keeps it out of the
+## cache's eviction (a large effect such as the battle dome would otherwise
+## be decoded on the frame it appears).
+static func keep_file(data: ELProfile, path: String) -> void:
+	var key := data.id + ":" + ELArchive.key(path)
+	if _kept.has(key): return
+	var file := particle_file(data, path)
+	if file != null and file.error.is_empty(): _kept[key] = file
+
 ## Decoded particle files, shared by every view of the same edition.
 static func particle_file(data: ELProfile, path: String) -> ELParticleFile:
 	var key := data.id + ":" + ELArchive.key(path)
+	if _kept.has(key): return _kept[key]
 	if _files.has(key):
 		_order.erase(key)
 		_order.append(key)

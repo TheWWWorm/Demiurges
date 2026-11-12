@@ -103,6 +103,25 @@ var last_command := ""
 var _opened: Dictionary = {}
 ## The panel holding a remake page, over the frame's inside.
 var remake_panel: Control
+## Pages built while the screen is open: id -> {"nodes" on the canvas, the
+## "art" pieces, the remake "panel"}; the art they belong to; the page column.
+var _built := {}
+var _built_art: Control
+var _page_buttons := {}
+## The remake's page rows, read once per build.
+var _remake_rows: Array = []
+var _rows_read := false
+
+## The original menu art for the remake pages, made once per game (reading
+## the registry and building its theme takes most of a page switch).
+var _kit: ELMenuKit
+var _kit_profile: ELProfile
+
+func _menu_kit() -> ELMenuKit:
+	if _kit_profile != menu.profile or _kit == null:
+		_kit_profile = menu.profile
+		_kit = ELMenuKit.for_profile(menu.profile)
+	return _kit
 
 func _init(owner: ELFrontMenu) -> void:
 	menu = owner
@@ -119,6 +138,7 @@ func has_remake_pages() -> bool:
 	return is_instance_valid(remake_host) and not remake_pages().is_empty()
 
 func remake_pages() -> Array:
+	if _rows_read: return _remake_rows
 	return remake_host.call("remake_pages", menu) if is_instance_valid(remake_host) else []
 
 func on_remake_page() -> bool:
@@ -127,6 +147,7 @@ func on_remake_page() -> bool:
 ## Starts editing: a copy of the active edition's values, on `first_page`.
 func open(where := "menu", first_page := "general") -> void:
 	context = where
+	_rows_read = false
 	page = first_page if first_page in ORIGINAL_PAGES or has_remake_pages() else "general"
 	pending = menu.option_settings().values.duplicate(true)
 	_opened = pending.duplicate(true)
@@ -166,22 +187,70 @@ func page_controls(type: String) -> Array[String]:
 		elif not mask.is_empty() and str(row.get("Parent", "")) == "Options" and (masks == mask or (masks is Array and masks.has(mask))): result.append(str(row.Name))
 	return result
 
+## Builds the screen on its shown page. Other pages are built when first
+## shown and then kept (hidden) until the screen closes, so switching pages
+## only shows and hides them.
 func build_screen() -> void:
 	checks.clear()
 	sliders.clear()
 	commands.clear()
 	tabs.clear()
 	remake_panel = null
+	_built.clear()
+	_page_buttons.clear()
+	_rows_read = false
+	_remake_rows = remake_pages()
+	_rows_read = true
 	if pending.is_empty():
 		pending = menu.option_settings().values.duplicate(true)
 		_opened = pending.duplicate(true)
 	if on_remake_page() and not has_remake_pages(): page = "general"
-	if on_remake_page():
+	_ok_cancel()
+	# With the page column beside the frame the original tabs would repeat
+	# it: a title strip covers their row instead (see _title_strip).
+	if not has_remake_pages():
 		for page_id: String in ORIGINAL_PAGES: _tab(page_id)
-		_ok_cancel()
-		_remake_page()
-		_page_list()
-		return
+	_build_page()
+	_page_list()
+	_built_art = menu.art
+	_prebuild.call_deferred(menu.art)
+
+## The pages not shown yet, built hidden one a frame after the screen opens,
+## so that showing them later is instant. Stops when the screen is rebuilt
+## or closed.
+func _prebuild(art: Control) -> void:
+	var ids: Array = ORIGINAL_PAGES.duplicate()
+	if has_remake_pages():
+		for row: Array in remake_pages(): ids.append(str(row[0]))
+	for id: String in ids:
+		if not menu.is_inside_tree(): return
+		await menu.get_tree().process_frame
+		if _built_art != art or not is_instance_valid(art) or menu.screen != "options": return
+		if _built.has(id): continue
+		var shown := page
+		var shown_art := menu.art_state()
+		var shown_panel := remake_panel
+		page = id
+		menu.rebuild_art()
+		_build_page()
+		for node: CanvasItem in _built[id].nodes: node.visible = false
+		page = shown
+		remake_panel = shown_panel
+		menu.restore_art(shown_art)
+
+## Builds the shown page; what it adds to the canvas is kept as that page's.
+func _build_page() -> void:
+	var first := menu.canvas.get_child_count()
+	if on_remake_page(): _remake_page()
+	else: _original_page()
+	var nodes: Array[CanvasItem] = []
+	for index in range(first, menu.canvas.get_child_count()):
+		var node := menu.canvas.get_child(index)
+		if node is CanvasItem: nodes.append(node)
+	_built[page] = {"nodes": nodes, "art": menu.art_state(), "panel": remake_panel}
+
+## The general or combat page: its captions, boxes, sliders and commands.
+func _original_page() -> void:
 	# The first game's slider tracks are pieces of the page panels.
 	if spec().has("panels"):
 		menu._add_group(spec().panels[page], [])
@@ -198,12 +267,35 @@ func build_screen() -> void:
 		while font_size > 12 and font.get_string_size(label.text, HORIZONTAL_ALIGNMENT_CENTER, -1, font_size).x > area.size.x - 2.0:
 			font_size -= 1
 		label.add_theme_font_size_override("font_size", font_size)
-	for page_id: String in ["general", "combat"]: _tab(page_id)
+	if has_remake_pages(): _title_strip()
 	for control: String in page_controls("CheckButton"): _check(control)
 	for item: Array in spec().sliders[page]: _slider(item)
 	for control: String in spec().commands[page]: _command(control)
-	_ok_cancel()
-	_page_list()
+
+## Over the original tab row (when the page column replaces it): the page's
+## title, as the remake's pages have it.
+func _title_strip() -> void:
+	var first := rect(spec().tabs.general)
+	var last := rect(spec().tabs.combat)
+	var area := Rect2(first.position, Vector2(last.end.x - first.position.x, maxf(first.size.y, last.size.y)))
+	var kit := _menu_kit()
+	var look := kit.theme() if kit != null else null
+	var strip := PanelContainer.new()
+	strip.name = "PageTitle"
+	strip.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	strip.position = area.position
+	strip.size = area.size
+	var style: StyleBox = kit.panel_style("box", Vector4(10, 2, 6, 2)) if look != null else null
+	if style == null:
+		var plain := StyleBoxFlat.new()
+		plain.bg_color = Color("161410")
+		style = plain
+	strip.add_theme_stylebox_override("panel", style)
+	if look != null: strip.theme = look
+	var title := ELMenuKit.heading(_sentence(menu._caption(spec().tabs[page])), 19)
+	title.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	strip.add_child(title)
+	menu.canvas.add_child(strip)
 
 func _ok_cancel() -> void:
 	var ok := ELFrontMenu.CutButton.make(menu, spec().ok, shift(spec().ok))
@@ -232,7 +324,7 @@ func inside_rect() -> Rect2:
 ## with the page's title (and the way back from a sub-page), the page in a
 ## scrolling column, and the tools row beside OK / Cancel.
 func _remake_page() -> void:
-	var kit := ELMenuKit.for_profile(menu.profile)
+	var kit := _menu_kit()
 	var look := kit.theme() if kit != null else null
 	if look == null: kit = null
 	var area := inside_rect()
@@ -272,7 +364,8 @@ func _remake_page() -> void:
 		header.add_child(spacer)
 	var scroll := ScrollContainer.new()
 	scroll.name = "Scroll"
-	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	# Never wider than the frame: a wide row is cut, not the panel widened.
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_SHOW_NEVER
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	scroll.follow_focus = true
 	column.add_child(scroll)
@@ -314,7 +407,7 @@ func _page_row(id: String) -> Array:
 ## remake's (a sub-page lights its parent).
 func _page_list() -> void:
 	if not has_remake_pages(): return
-	var kit := ELMenuKit.for_profile(menu.profile)
+	var kit := _menu_kit()
 	var look := kit.theme() if kit != null else null
 	var list := VBoxContainer.new()
 	list.name = "Pages"
@@ -344,10 +437,19 @@ func _page_list() -> void:
 			button.button_pressed = true
 			show_page(str(entry[0])))
 		list.add_child(button)
+		_page_buttons[str(entry[0])] = button
 	menu.canvas.add_child(list)
 	var frame := inside_rect()
 	list.size = list.get_combined_minimum_size()
 	list.position = Vector2(frame.position.x - PAGE_LIST_GAP - 13.0 - list.size.x, frame.position.y)
+
+## The page column lights the shown page (a sub-page lights its parent).
+func _mark_page_list() -> void:
+	var shown := page
+	var row := _page_row(page)
+	if row.size() > 2 and not str(row[2]).is_empty(): shown = str(row[2])
+	for id: String in _page_buttons:
+		if is_instance_valid(_page_buttons[id]): _page_buttons[id].set_pressed_no_signal(id == shown)
 
 func _tip(control: String) -> String:
 	var key := str(menu._controls.get(control, {}).get("ToolTip", ""))
@@ -379,8 +481,31 @@ func _tab(page_id: String) -> void:
 
 func show_page(page_id: String) -> void:
 	if page_id == page: return
+	# Built this session: only the shown page changes.
+	if not _built.is_empty() and menu.screen == "options" and is_instance_valid(_built_art) and _built_art == menu.art:
+		_switch_page(page_id)
+		return
 	page = page_id
 	menu.show_screen("options")
+
+## Hides the shown page and shows `page_id` (built now if it is new).
+func _switch_page(page_id: String) -> void:
+	for node: CanvasItem in _built[page].nodes:
+		if is_instance_valid(node): node.visible = false
+	page = page_id
+	if _built.has(page):
+		for node: CanvasItem in _built[page].nodes:
+			if is_instance_valid(node): node.visible = true
+		menu.restore_art(_built[page].art)
+		remake_panel = _built[page].panel
+		# The page may show what another page changed (path tracing on or off).
+		var content: Node = remake_panel.find_child("Content", true, false) if remake_panel != null else null
+		if content != null and content.has_meta("refresh"): (content.get_meta("refresh") as Callable).call()
+	else:
+		menu.rebuild_art()
+		_build_page()
+		menu.art.queue_redraw()
+	_mark_page_list()
 
 func _check(control: String) -> void:
 	var key: String = spec().checks.get(control, "")

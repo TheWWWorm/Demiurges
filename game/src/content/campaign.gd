@@ -5,6 +5,8 @@ var id := ""
 var guid := ""
 var title := ""
 var description := ""
+## The description's text key (the second game voices it as MissionVoices\<key>.mp3).
+var description_key := ""
 var scenarios: Array[Dictionary] = []
 var error := ""
 
@@ -38,7 +40,8 @@ func load_campaign(profile: ELProfile, campaign_id: String) -> bool:
 		return false
 	guid = String(document.attrs.get("id", ""))
 	title = profile.text(String(document.attrs.get("name", id)))
-	description = profile.text(String(document.attrs.get("description", "")))
+	description_key = String(document.attrs.get("description", ""))
+	description = profile.text(description_key)
 	for scenario: Dictionary in ELXml.children(ELXml.child(document, "scenarios"), "scenario"):
 		var row: Dictionary = scenario.attrs.duplicate()
 		if not row.has("file_name") or profile.file("Maps/" + String(row.file_name) + ".map").is_empty():

@@ -298,9 +298,14 @@ static func _put_float(out: PackedByteArray, value: float) -> void:
 
 ## Part names (transliterated Russian in places) of armour and weapons. The
 ## FIG files give every part the same material, so the remake names its metal.
+## The Synthets' machine parts too: shoulder shells, arm plates, heels, spine
+## plates, needles, the box on their backs, the jet pack and (named exactly,
+## as insects' claws share the word) their claws.
 const METAL_PARTS := ["sword", "blade", "axe", "knife", "pike", "shield", "helm", "kirasa",
 	"naplechnik", "noplechnik", "naruch", "plate", "chain", "kreplenie", "armshell",
-	"shouldershell", "legshell", "footshell", "kolenka"]
+	"shouldershell", "legshell", "footshell", "kolenka", "l_shell", "r_shell", "armplane",
+	"kabluk", "spinepart", "igles", "box25", "jetpak"]
+const METAL_NAMES := ["kogot1", "kogot2", "kogot3", "r_kogot"]
 ## Parts that are feathers, hair, fur, tails or cloth: never metal, whatever
 ## colour they are painted.
 const SOFT_PARTS := ["wing", "l_w_", "r_w_", "feather", "pero", "hair", "fur", "xvost", "tail",
@@ -319,11 +324,23 @@ const METAL_SPECULAR := 0.0
 const METAL_ROUGHNESS := 0.28
 
 static func is_metal_part(part: String) -> bool:
-	return _named(part, METAL_PARTS)
+	return _named(part, METAL_PARTS) or part.to_lower() in METAL_NAMES
 
 ## Parts never metal: soft ones and the figure's named cloth.
+## Figures whose wings are machines, not feathers or skin: blade wings of
+## riveted plate (the Synthets' warriors and their winged machine, and the
+## plated hero he512). Their wings are metal all over, whatever the paint.
+const MACHINE_WINGS := ["he103", "he104", "he105", "he106", "he913", "he915", "he512", "cr111", "ad111"]
+
 static func is_cloth(template: String, part: String) -> bool:
+	if is_machine_wing(template, part): return false
 	return is_soft_part(part) or part.to_lower() in CLOTH_PARTS.get(template.to_lower(), [])
+
+## A wing of a figure in MACHINE_WINGS.
+static func is_machine_wing(template: String, part: String) -> bool:
+	if template.to_lower() not in MACHINE_WINGS: return false
+	var name := part.to_lower()
+	return "wing" in name or name.begins_with("l_w_") or name.begins_with("r_w_")
 
 static func is_soft_part(part: String) -> bool:
 	return _named(part, SOFT_PARTS)

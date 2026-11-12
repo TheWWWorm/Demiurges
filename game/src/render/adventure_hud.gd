@@ -391,7 +391,7 @@ func _draw_minimap() -> void:
 
 ## Marker order and rules of the original: every living
 ## player's castle, then citadels, mana nodes, mines, NewBuildings and forts
-## (owner colour, unowned black), then heroes on tiles the local
+## (owner colour, unowned black), each only once explored, then heroes on tiles the local
 ## player sees (the neutral player's creatures as white crosses),
 ## then the camera marker at the view target, turned to the view direction.
 func _draw_minimap_marks() -> void:
@@ -402,12 +402,12 @@ func _draw_minimap_marks() -> void:
 	var size_index := 0 if map.width < 100 else (1 if map.width < 140 else 2)
 	var footprints: Dictionary = state.grid.footprints if state.grid != null else {}
 	for item: Dictionary in state.objects.values():
-		if not item.get("alive", false) or not ELFirstScenario.is_castle(item) or not state.players.has(int(item.get("owner", 0))): continue
+		if not item.get("alive", false) or not ELFirstScenario.is_castle(item) or not state.players.has(int(item.get("owner", 0))) or not minimap_known(item): continue
 		_draw_mark(1, int(item.owner), item, footprints, area, cell, size_index)
 	for item: Dictionary in state.objects.values():
 		if not item.get("alive", false) or not item.get("visible", true) or not item.get("placed", true): continue
 		var group := str(item.get("group", ""))
-		if group in ["mana_nodes", "mines", "laboratories", "factories", "forts"] or (group == "additional_buildings" and str(item.get("name", "")).ends_with("Citadel")):
+		if (group in ["mana_nodes", "mines", "laboratories", "factories", "forts"] or (group == "additional_buildings" and str(item.get("name", "")).ends_with("Citadel"))) and minimap_known(item):
 			var owner := int(item.get("owner", 0))
 			_draw_mark(2, owner if state.players.has(owner) else 7, item, footprints, area, cell, size_index)
 	for item: Dictionary in state.objects.values():
@@ -415,6 +415,12 @@ func _draw_minimap_marks() -> void:
 		if not ELFog.visible(state, state.current_player, Vector2i(item.x, item.y)): continue
 		var owner := int(item.get("owner", 0))
 		_draw_mark(0, owner if state.players.has(owner) else 0, item, footprints, area, cell, size_index)
+
+## A castle or site marker shows once the local player has explored any cell
+## of the building, as the map draws it; the black unexplored overlay never
+## gives away what stands under it. The console's open_fog shows them all.
+func minimap_known(item: Dictionary) -> bool:
+	return ELFog.object_state(state, state.current_player, item) != ELFog.UNEXPLORED
 
 func _draw_minimap_view() -> void:
 	if _view_sheet == null: return

@@ -5,7 +5,8 @@ extends RefCounted
 ## T_SELECT_CAMPAIGN_BRANCH_2 when the first candidate's human race is Chaos or
 ## Synthet, else _1; under it the two candidates' races (T_RACE_NAME_n) and
 ## their 223x226 race pictures, dim until one is clicked (swapcampaign.wav),
-## which enables OK. OK opens the campaign info for that chapter. There is no
+## which enables OK. The pictures fade and light under the pointer as the
+## campaign choice's cards do (ELCardFade). OK opens the campaign info for that chapter. There is no
 ## cancel.
 
 ## Race pictures per map colour (Chaos, Vital, Kinet, Synthet).
@@ -15,8 +16,6 @@ const RACE_NUMBER := {"Red": 1, "Green": 2, "Blue": 3, "Black": 4}
 ## the panel shift).
 const PICTURE_AT := [Vector2(265, 312), Vector2(535, 312)]
 const PICTURE_SIZE := Vector2(223, 226)
-const DIM := 0x76 / 255.0
-const LIT := 0xe6 / 255.0
 
 var menu: ELFrontMenu
 var choices: Array = []
@@ -60,7 +59,6 @@ func build() -> void:
 		picture.texture = menu.texture_named(PICTURES.get(race, ""))
 		picture.position = PICTURE_AT[index]
 		picture.size = PICTURE_SIZE
-		picture.lit = false
 		picture.pressed_call = pick.bind(index)
 		menu.canvas.add_child(picture)
 		menu.labels["branch_picture%d" % (index + 1)] = picture
@@ -75,8 +73,8 @@ func pick(index: int) -> void:
 	if picked != index: ELUiSounds.play(menu.profile, "Buttons/swapcampaign.wav")
 	picked = index
 	for i in pictures.size():
-		pictures[i].lit = i == index
-		pictures[i].queue_redraw()
+		pictures[i].fade.choose(i == index)
+		pictures[i].refresh()
 	if menu.buttons.has("SCBOK"): menu.buttons.SCBOK.disabled = false
 
 func accept() -> void:
@@ -85,11 +83,27 @@ func accept() -> void:
 
 class Picture extends Control:
 	var texture: Texture2D
-	var lit := false
+	var fade := ELCardFade.new()
 	var pressed_call: Callable
+	var _hovered := false
 
 	func _ready() -> void:
 		mouse_filter = Control.MOUSE_FILTER_STOP
+		mouse_entered.connect(func():
+			_hovered = true
+			refresh())
+		mouse_exited.connect(func():
+			_hovered = false
+			refresh())
+		refresh()
+
+	func refresh() -> void:
+		set_process(fade.moving())
+		queue_redraw()
+
+	func _process(delta: float) -> void:
+		fade.advance(delta)
+		refresh()
 
 	func _gui_input(event: InputEvent) -> void:
 		if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
@@ -98,4 +112,4 @@ class Picture extends Control:
 
 	func _draw() -> void:
 		if texture == null: return
-		draw_texture_rect_region(texture, Rect2(Vector2.ZERO, size), Rect2(Vector2.ZERO, size), Color(1, 1, 1, ELBranchScreen.LIT if lit else ELBranchScreen.DIM))
+		draw_texture_rect_region(texture, Rect2(Vector2.ZERO, size), Rect2(Vector2.ZERO, size), Color(1, 1, 1, fade.shown(_hovered)))

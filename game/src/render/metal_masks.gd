@@ -14,13 +14,15 @@ extends RefCounted
 signal finished(key: String)
 
 ## Bump when the classifier changes: masks kept on disk are then rebuilt.
-const VERSION := 2
+const VERSION := 4
 const SIDE := 128
 const FOLDER := "user://metal_masks"
 const MAGIC := 0x4d4d4c45
-## Marks of a skin's texels: under a figure part, under a named metal one.
+## Marks of a skin's texels: under a figure part, under a named metal one,
+## under a part that is metal all over (machine wings).
 const MARK_PART := 1
 const MARK_METAL := 2
+const MARK_SOLID := 3
 ## Masks worked out at once (the rest of the pool stays free for loading).
 const WORKERS := 2
 ## Requests located per frame while the precompute list is read.
@@ -281,7 +283,7 @@ static func _work(job: Dictionary) -> void:
 	if mod.is_empty() or main.is_empty(): return
 	var hashing := HashingContext.new()
 	hashing.start(HashingContext.HASH_MD5)
-	hashing.update(var_to_bytes([VERSION, SIDE, ELFigure.METAL_PARTS, ELFigure.SOFT_PARTS, ELFigure.CLOTH_PARTS, job.has_second, job.second.is_empty()]))
+	hashing.update(var_to_bytes([VERSION, SIDE, ELFigure.METAL_PARTS, ELFigure.METAL_NAMES, ELFigure.SOFT_PARTS, ELFigure.MACHINE_WINGS, ELFigure.CLOTH_PARTS, job.has_second, job.second.is_empty()]))
 	for bytes: PackedByteArray in [mod, main, second]:
 		hashing.update(var_to_bytes(bytes.size()))
 		if not bytes.is_empty(): hashing.update(bytes)
@@ -361,7 +363,8 @@ static func inputs(job: Dictionary, mod: PackedByteArray, main: PackedByteArray,
 		var uvs: PackedVector2Array = arrays[Mesh.ARRAY_TEX_UV]
 		var indices: PackedInt32Array = arrays[Mesh.ARRAY_INDEX]
 		parts[role].append(part_bytes(MARK_PART, uvs, indices))
-		if ELFigure.is_metal_part(name): metal[role].append(part_bytes(MARK_METAL, uvs, indices))
+		if ELFigure.is_machine_wing(job.template, name): metal[role].append(part_bytes(MARK_SOLID, uvs, indices))
+		elif ELFigure.is_metal_part(name): metal[role].append(part_bytes(MARK_METAL, uvs, indices))
 	var inputs := {}
 	for role: String in metal:
 		if metal[role].is_empty(): continue
@@ -395,7 +398,8 @@ static func part_bytes(mark: int, uvs: PackedVector2Array, indices: PackedInt32A
 ## figure (every part but feathers, hair and cloth) a texel is metal when it
 ## is painted in those colours too, so a chest plate or greave on the body
 ## shines like the pauldrons it matches, while skin, hair and leather of a
-## similar hue stay matte (common on the body, rare on the armour).
+## similar hue stay matte (common on the body, rare on the armour). Parts
+## marked MARK_SOLID (machine wings) are metal all over.
 ## Compiled (native/el_assets.c) where the platform has the library.
 static func classify(pixels: PackedByteArray, parts: PackedByteArray, side: int) -> PackedByteArray:
 	if OS.get_thread_caller_id() == OS.get_main_thread_id(): main_thread_classified += 1
@@ -421,13 +425,17 @@ static func classify_script(pixels: PackedByteArray, parts: PackedByteArray, sid
 			at = next
 	var painted := PackedFloat32Array()
 	var greyer := PackedFloat32Array()
+	var skin := PackedFloat32Array()
 	var bins := PackedInt32Array()
 	painted.resize(count)
 	greyer.resize(count)
+	skin.resize(count)
 	bins.resize(count)
 	var chroma := CHROMA_BINS
 	var seed_hist := PackedFloat32Array()
 	var body_hist := PackedFloat32Array()
+	var seed_weight := 0.0
+	var seed_warmth := 0.0
 	seed_hist.resize(chroma * chroma * VALUE_BINS)
 	body_hist.resize(seed_hist.size())
 	for i in count:
@@ -439,18 +447,26 @@ static func classify_script(pixels: PackedByteArray, parts: PackedByteArray, sid
 		var p := _painted_metal(value, saturation, hue)
 		painted[i] = p
 		greyer[i] = _painted_metal(value, saturation, hue, 0.32, 0.18)
+		var tone := _skin_tone(saturation, hue)
+		skin[i] = tone
 		var angle := hue * TAU
 		var a := clampi(int((saturation * cos(angle) + 1.0) * 0.5 * chroma), 0, chroma - 1)
 		var b := clampi(int((saturation * sin(angle) + 1.0) * 0.5 * chroma), 0, chroma - 1)
 		var v := clampi(int(value * VALUE_BINS), 0, VALUE_BINS - 1)
 		var bin := (a * chroma + b) * VALUE_BINS + v
 		bins[i] = bin
-		if cover[i] == MARK_METAL: seed_hist[bin] += p
+		if cover[i] == MARK_METAL:
+			seed_hist[bin] += p
+			seed_weight += p
+			seed_warmth += p * tone
 		elif cover[i] == MARK_PART: body_hist[bin] += p
 	seed_hist = _blur_bins(seed_hist)
 	body_hist = _blur_bins(body_hist)
 	var peak := 0.0
 	for value in seed_hist: peak = maxf(peak, value)
+	# Skin-toned texels are learnt only when the named metal itself is painted
+	# that warm (bronze, brass), never beside plain steel.
+	var skin_kept := 1.0 - smoothstep(0.1, 0.3, seed_warmth / maxf(seed_weight, 0.000001))
 	var learnt := PackedFloat32Array()
 	learnt.resize(count)
 	if peak > 0.0:
@@ -458,13 +474,14 @@ static func classify_script(pixels: PackedByteArray, parts: PackedByteArray, sid
 			if cover[i] == 0 or painted[i] <= 0.0: continue
 			var in_seeds := seed_hist[bins[i]]
 			var share := in_seeds / maxf(in_seeds + body_hist[bins[i]], 0.000001)
-			learnt[i] = smoothstep(0.1, 0.35, in_seeds / peak) * smoothstep(0.12, 0.3, share) * smoothstep(0.15, 0.45, greyer[i])
+			learnt[i] = smoothstep(0.1, 0.35, in_seeds / peak) * smoothstep(0.12, 0.3, share) * smoothstep(0.15, 0.45, greyer[i]) * (1.0 - skin[i] * skin_kept)
 	# A lone matching texel amid skin or cloth is paint, not a plate.
 	var around := _box(learnt, side, 2)
 	var levels := PackedByteArray()
 	levels.resize(count)
 	for i in count:
-		var value := maxf(painted[i] if cover[i] == MARK_METAL else 0.0, learnt[i] * smoothstep(0.1, 0.3, around[i]))
+		var named := painted[i] if cover[i] == MARK_METAL else (1.0 if cover[i] == MARK_SOLID else 0.0)
+		var value := maxf(named, learnt[i] * smoothstep(0.1, 0.3, around[i]))
 		levels[i] = int(value * 255.0 + 0.5)
 	return levels
 
@@ -476,6 +493,14 @@ static func _painted_metal(v: float, s: float, h: float, tinted := 0.38, grey_be
 	var grey := smoothstep(tinted, grey_below, s) * smoothstep(0.15, 0.35, v)
 	var gold := smoothstep(0.45, 0.65, v) * (1.0 - smoothstep(0.02, 0.06, absf(h - 0.12))) * smoothstep(0.25, 0.4, s)
 	return maxf(grey, gold)
+
+## How much a texel looks like skin (faces, arms): a faint warm tint, which
+## shaded skin keeps where it greys towards steel (gold sits further round
+## the colour wheel).
+static func _skin_tone(s: float, h: float) -> float:
+	var away := absf(h - 0.03)
+	away = minf(away, 1.0 - away)
+	return smoothstep(0.08, 0.14, s) * (1.0 - smoothstep(0.05, 0.08, away))
 
 ## Texels (of a `side` square) under the triangles (`uvs` as u, v pairs and
 ## `indices`) get `mark`, row span by row span (texel centres inside).

@@ -1869,8 +1869,26 @@ func unit_path(model: Node, action: String) -> String:
 	return "Creatures/" + directory + "/" + action + ".wav"
 
 func unit(model: Node, action: String) -> void:
+	if action == "death": _hurts.erase(model)
 	var path := unit_path(model, action)
 	if not path.is_empty(): play(path)
+
+## A figure's own hurt sound waits for the end of the frame, and a death of
+## the same figure in that frame takes its place: both originals start one
+## clip, with its sound, per figure, so a lethal blow is heard as the death
+## alone. The blow's material hit (HitTable) is the strike's and still plays.
+var _hurts: Array = []
+
+func hurt(model: Node) -> void:
+	if not is_instance_valid(model) or _hurts.has(model): return
+	if _hurts.is_empty(): _play_hurts.call_deferred()
+	_hurts.append(model)
+
+func _play_hurts() -> void:
+	var pending := _hurts
+	_hurts = []
+	for model: Variant in pending:
+		if is_instance_valid(model) and not model.get_meta("dying", false): unit(model, "hit")
 
 ## A moving figure's ground sounds: Creatures/<SndDir>/steps/<TerrainType>/.
 ## Original EL1 / EL2 play one numbered step at each event

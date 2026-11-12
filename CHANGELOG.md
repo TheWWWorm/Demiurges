@@ -2,6 +2,17 @@
 
 Versions follow [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html) from 0.3.0 on.
 
+## 0.11.1
+
+- Campaign choice: the cards fade as in the originals (the chosen card brightens, the others dim, the card under the pointer lights up) with the card-switch sound, in both games. **Left**, **Right** and **Enter** choose and start a campaign. Etherlords II reads the campaign description (Info) and the chapter briefing aloud, as the original does. The campaign screens of both games (the Etherlords II campaign map and legend, the Etherlords mission, branch and blazon screens) fill wide screens like the main menu.
+- Etherlords II: the ether dome and its sound rise between your hero and the enemy while the **Accept battle?** panel is shown. Both games play the battle-start sound at the start of each new battle.
+- Battles: Etherlords II changes the cursor while you aim a spell or ability (the spell cursor over valid targets), as Etherlords already did. Picking a card in your hand or an artifact plays the original card sound, and a greyed card the error sound. A creature killed by a blow plays only its death sound, not its hurt sound as well.
+- New **Battle interface size** option on the Interface page (**Automatic**, 1×, 1.5×, 2×, 3×): a sharper battle panel that fills the width of the screen and shows more spell slots at smaller sizes.
+- Options: a setting's help appears only on its **?**, in a compact box under its row. The original General and Combat pages no longer repeat their own tabs beside the page buttons. All the remake's options are translated into Russian (such as **Free movement** and **Smarter computer players**). The frame rate counter, **Upscaling**, **Upscale quality**, **Frame generation**, **Anti-aliasing** and **Sharpening** are on the **Display** page, which now opens on phones and in the browser too. Switching pages no longer stutters, and pages stay inside the Options frame.
+- Battles: a creature used right after it is summoned (such as Spitting Fingus) now shows its summon, its ability and its death one after another, instead of dying at once without its spit.
+- Figures: no dark patch on faces (such as the winged heroine). The Synthet heroes' plates, claws, blades and blade wings shine as metal.
+- Etherlords: double-clicking your castle opens the castle (global spells) screen ([#34](https://github.com/TheWWWorm/Demiurges/issues/34)). The minimap no longer shows enemy castles and buildings under unexplored fog ([#35](https://github.com/TheWWWorm/Demiurges/issues/35)). Global spells have the original detailed tooltip ([#36](https://github.com/TheWWWorm/Demiurges/issues/36)).
+
 ## 0.11.0
 
 - One Options screen: the original Options frame of both games now holds the remake's pages (**Display**, **Graphics**, **Interface**, **Hotkeys** and, where DLSS and FSR are built in, **About**) beside the original General and Combat pages. Path tracing has its own **Path tracing** page under Graphics (renderer, path-traced lighting, sky light, light bounces, DLSS Ray Reconstruction), with **Show light only** under **Debug**. The separate **Remake settings** buttons are gone.

@@ -13,10 +13,11 @@ extends RefCounted
 ##   at the edge they name, the second game's default gauntlet at (2, 0), every
 ##   other cursor at its top-left corner.
 ## - Menus and windows use the default cursor. The adventure map picks an
-##   action cursor for the object or cell under the pointer; the first game's
-##   combat shows the spell cursor over a valid target and the attack cursor
-##   where a selected creature can attack the enemy hero or block an attacker.
-##   The second game's combat keeps the default cursor.
+##   action cursor for the object or cell under the pointer. Combat (both
+##   games, the same rule) shows the spell cursor over a valid target of the
+##   spell or ability being aimed, the default cursor over an invalid target
+##   or empty ground, and the attack cursor where a selected creature can
+##   attack the enemy hero or block an attacker.
 
 const FRAME_TIME := 0.125
 ## Second game: a script that has held the map this long shows the script
@@ -198,13 +199,13 @@ static func _first_object(state: ELAdventureSession, hero: Dictionary, item: Dic
 static func _first_building(item: Dictionary) -> bool:
 	return str(item.get("group", "")) in ["buildings", "mines", "mana_nodes", "laboratories", "factories", "forts", "additional_buildings"]
 
-# --- Combat (first game) -----------------------------------------------------
+# --- Combat (both games) -----------------------------------------------------
 
-## The first game's combat cursor over `hovered` (-1 for none). `pending` is
-## the targeting in progress: {} or {"card": code} for a hand spell,
-## {"ability": definition, "source": id} for an ability or artifact. The
-## second game's combat always keeps the default cursor.
-static func first_combat(duel: ELDuel, hovered: int, pending: Dictionary, selected: int) -> String:
+## The combat cursor over `hovered` (-1 for none). `pending` is the targeting
+## in progress: {} or {"card": code} for a hand spell, {"ability": definition,
+## "source": id} for an ability or artifact. Both games pick it again on every
+## pointer move and click over the battlefield.
+static func combat(duel: ELDuel, hovered: int, pending: Dictionary, selected: int) -> String:
 	if duel == null or hovered < 0 or duel.entity(hovered).is_empty(): return "default"
 	if not pending.is_empty():
 		return "spell" if _valid_target(duel, hovered, pending) else "default"
@@ -214,6 +215,18 @@ static func first_combat(duel: ELDuel, hovered: int, pending: Dictionary, select
 	elif duel.phase == ELDuel.Phase.DEFENCE and duel.attacks.has(hovered):
 		if duel.creatures[selected].owner == 1 - duel.attacker and duel.block_problem(selected, hovered).is_empty(): return "attack"
 	return "default"
+
+## The targeting in progress for `combat`: the hand card at `selection` (-1
+## for none) or the ability chosen on the rail ({"source", "key", "target"}).
+static func combat_pending(duel: ELDuel, selection: int, ability_selection: Dictionary) -> Dictionary:
+	if duel == null: return {}
+	var hand: Array = duel.heroes[duel.active_side()].hand
+	if selection >= 0 and selection < hand.size(): return {"card": hand[selection]}
+	if ability_selection.is_empty(): return {}
+	var definition: Dictionary = {"target": ability_selection.get("target", "")}
+	for item: Dictionary in duel.abilities(int(ability_selection.get("source", 0))):
+		if item.get("key") == ability_selection.get("key"): definition = item
+	return {"ability": definition, "source": int(ability_selection.get("source", 0))}
 
 static func _valid_target(duel: ELDuel, hovered: int, pending: Dictionary) -> bool:
 	if pending.has("card"): return duel._target_error(str(pending.card), hovered).is_empty()
