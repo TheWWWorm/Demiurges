@@ -701,7 +701,10 @@ func _process(delta: float) -> void:
 			var auto := auto_combat and _human_side() and not demo
 			# Remake option "smarter computer players": the first game's computer
 			# opponent judges steadily and searches wider (ELCombatSearch).
-			duel.smart_sides = [duel.active_side()] if profile.id == "el1" and not demo and not _human_side() and bool(settings.values.get("smart_ai", true)) else []
+			# (Built as a typed array: an untyped literal cannot be assigned to it.)
+			var smart: Array[int] = []
+			if profile.id == "el1" and not demo and not _human_side() and bool(settings.values.get("smart_ai", true)): smart.append(duel.active_side())
+			duel.smart_sides = smart
 			ELPracticeAI.step(duel, auto and not bool(settings.values.get("use_spells", true)))
 		_step_auto_camera(delta)
 		_step_keyboard_camera(delta)
@@ -2407,12 +2410,13 @@ func _cast_notice(side: int, card: String) -> void:
 	_announce("T_CASTING", [_hero_name(side), duel.card_name(card)], side)
 
 ## The hero's name in the original messages: its own title, the hot-seat
-## player's name, else the first game's duel captions «Ваш герой» /
-## «Герой противника».
+## player's name, else the edition's duel captions («Ваш герой» /
+## «Герой противника» in the first game, «Мой герой» / «Противник» in the second).
 func _hero_name(side: int) -> String:
 	if duel != null and duel.heroes[side].has("title"): return str(duel.heroes[side].title)
 	if _hot_seat() and not String(duel_match.names[side]).is_empty(): return String(duel_match.names[side])
-	var caption := _original_text("CtrlDUMyHero" if side == 0 else "CtrlDUEnemyHero", "")
+	var keys := ["CtrlDUMyHero", "CtrlDUEnemyHero"] if profile.id == "el1" else ["CtrlDuMyHero", "CtrlDuEnemyHero"]
+	var caption := _original_text(keys[0] if side == 0 else keys[1], "")
 	return caption if not caption.is_empty() else _side_name(side)
 
 ## An original message text with its %s / %d fields filled in order.
@@ -4309,7 +4313,7 @@ func helper_overlay() -> bool:
 ## winner's name, or the edition's draw text.
 func phase_caption() -> String:
 	if duel.phase == ELDuel.Phase.FINISHED:
-		if duel.winner >= 0: return _original_text("T_WINNER", "%s wins").replace("%s", _side_name(duel.winner))
+		if duel.winner >= 0: return _original_text("T_WINNER", "%s wins").replace("%s", _hero_name(duel.winner))
 		return _original_text("T_RR_DUEL_DRAW" if profile.id == "el2" else "T_VL_MATCH_DRAW", "Draw")
 	if hot_pending: return _original_text("T_WAIT", "Wait")
 	# While a fight plays out the original oval reads T_WAIT («Подождите…»).

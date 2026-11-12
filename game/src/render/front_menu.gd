@@ -222,6 +222,9 @@ var _paths: Dictionary = {}
 var _rows: Dictionary = {}
 var _controls: Dictionary = {}
 var _pieces: Array[Dictionary] = []
+## Art masks left undrawn for now (the duel setup shows only the chosen hero
+## slot's frame, Type3 or Type4).
+var hidden_masks: Array = []
 var _legend_next := ""
 ## Second game: the adventure tutorial returns to the Tutorial screen (
 ## reopens it when mission is set); the host's next "main" becomes it.
@@ -440,6 +443,7 @@ func show_screen(target: String) -> void:
 	var definition: Dictionary = SCREENS[edition][target]
 	_add_wide_frame(target, definition.has("under"))
 	_pieces.clear()
+	hidden_masks = []
 	if definition.has("under"): _add_group(definition.under, [])
 	# Options opened from the front end keeps the main-menu art around its
 	# panel, as the original does (over a running game the game shows instead).
@@ -499,7 +503,9 @@ func _add_group(group: String, excluded: Array) -> void:
 	list.sort_custom(func(a: Dictionary, b: Dictionary): return _layer(a) < _layer(b))
 	for row: Dictionary in list:
 		var piece := cut(row, offset)
-		if not piece.is_empty(): _pieces.append(piece)
+		if piece.is_empty(): continue
+		piece.masks = row.masks
+		_pieces.append(piece)
 
 static func _layer(row: Dictionary) -> int:
 	for index in [3, 2, 1]:
@@ -568,6 +574,7 @@ func _draw_art() -> void:
 	for index in _pieces.size():
 		if _frame_in_art and index == _frame_after: _draw_wide_frame(art)
 		var piece: Dictionary = _pieces[index]
+		if not hidden_masks.is_empty() and hidden_masks.any(func(mask: String): return piece.get("masks", []).has(mask)): continue
 		art.draw_texture_rect_region(piece.texture, piece.rect, piece.source)
 
 func _layout() -> void:

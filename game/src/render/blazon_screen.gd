@@ -79,10 +79,17 @@ func build_campaign() -> void:
 	name_edit.text = ELPlayerProfile.current_name(profile())
 	name_edit.flat = true
 	name_edit.context_menu_enabled = false
-	name_edit.add_theme_font_override("font", menu.arial)
+	name_edit.add_theme_font_override("font", menu.face_for("SCName"))
 	name_edit.add_theme_font_size_override("font_size", 15)
-	name_edit.add_theme_color_override("font_color", ELFrontMenu.INK)
+	# Gold, as the original draws it; the whole-name selection (the first key
+	# typed replaces it) is not highlighted.
+	name_edit.add_theme_color_override("font_color", ELFrontMenu.GOLD_INK)
+	name_edit.add_theme_color_override("font_selected_color", ELFrontMenu.GOLD_INK)
+	name_edit.add_theme_color_override("selection_color", Color(0, 0, 0, 0))
 	name_edit.add_theme_constant_override("minimum_character_width", 0)
+	# The name sits centred on the frame art, with no box or focus outline.
+	name_edit.alignment = HORIZONTAL_ALIGNMENT_CENTER
+	for style: String in ["normal", "focus", "read_only"]: name_edit.add_theme_stylebox_override(style, StyleBoxEmpty.new())
 	name_edit.text_changed.connect(func(value: String) -> void: ELPlayerProfile.choose_name(value))
 	name_edit.visible = false
 	menu.canvas.add_child(name_edit)

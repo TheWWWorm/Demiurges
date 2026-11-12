@@ -407,7 +407,8 @@ func build_screen() -> void:
 			if hero_caption != null: hero_caption.text = hot_name(hot_stage if side == 0 else 1 - hot_stage)
 	_text("DuResLevelText", null, ELFrontMenu.TITLE_INK, HORIZONTAL_ALIGNMENT_RIGHT)
 	_text("DuRoundsText", null, ELFrontMenu.TITLE_INK, HORIZONTAL_ALIGNMENT_RIGHT)
-	for control: String in ["DuText1", "DuText2"]: _text(control, null, ELFrontMenu.TITLE_INK, HORIZONTAL_ALIGNMENT_LEFT)
+	# Centred: their FontType names no side (as Right does for the level and rounds captions).
+	for control: String in ["DuText1", "DuText2"]: _text(control, null, ELFrontMenu.TITLE_INK)
 	# Side frames: a click makes that side the list's target.
 	for side in 2:
 		var frame := _art_rect("Duel", "Type3" if side == 0 else "Type4")
@@ -441,7 +442,8 @@ func build_screen() -> void:
 		picture.position = area.position
 		picture.size = area.size
 		picture.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-		picture.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		picture.stretch_mode = TextureRect.STRETCH_KEEP_CENTERED
+		picture.clip_contents = true
 		picture.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		menu.canvas.add_child(picture)
 		menu.labels["portrait%d" % side] = picture
@@ -496,6 +498,11 @@ func build_screen() -> void:
 func update_screen() -> void:
 	if menu.screen != "duel": return
 	var s := state()
+	# Only the chosen side's hero frame is drawn (Type3 yours, Type4 the opponent's).
+	var hidden := ["Type4"] if int(s.target) == 0 else ["Type3"]
+	if menu.hidden_masks != hidden:
+		menu.hidden_masks = hidden
+		menu.art.queue_redraw()
 	var levels := ELDuelCosts.resource_levels(profile())
 	menu.labels.level.text = str(s.level)
 	menu.labels.rounds.text = str(s.rounds)
@@ -516,8 +523,8 @@ func update_screen() -> void:
 			name_label.add_theme_color_override("font_color", GREY if not ELDuelMatch.side_valid(pool, preset, int(s.level), profile().id) else ELFrontMenu.INK_HOVER)
 		var picture: TextureRect = menu.labels["portrait%d" % side]
 		picture.texture = random_portrait() if preset.is_empty() else null
-		# The "?" art is drawn 1:1 (70x50) centred on the slot, as the original does.
-		picture.stretch_mode = TextureRect.STRETCH_KEEP_CENTERED if preset.is_empty() else TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		# Portraits (100x70) and the "?" art (70x50) are drawn 1:1 centred on
+		# the slot and clipped by it, as both originals do.
 		if not preset.is_empty():
 			var name := template(side)
 			if name.is_empty(): name = ELDuelPresets.default_template(profile(), String(preset.faction))
@@ -1904,17 +1911,13 @@ class FlatText extends BaseButton:
 		draw_string(menu.arial, at + Vector2(1, 1), caption, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, Color(0, 0, 0, 0.8))
 		draw_string(menu.arial, at, caption, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, color)
 
-## Clickable hero frame; the list's target side is outlined.
+## Clickable hero frame; the list's target side shows its frame art.
 class SideFrame extends BaseButton:
 	var screen: ELDuelScreen
 	var side := 0
 
 	func _ready() -> void:
 		focus_mode = Control.FOCUS_NONE
-
-	func _draw() -> void:
-		if int(screen.state().target) == side:
-			draw_rect(Rect2(Vector2(3, 3), size - Vector2(6, 6)), Color(1.0, 0.85, 0.5, 0.55), false, 1.5)
 
 ## Preset list: Random first, then race marker, resource level and name. Rows
 ## above the current level are grey; the rows chosen for the two
@@ -1927,12 +1930,13 @@ class PresetList extends Control:
 	## lines and a race tile per deck; Random shows "-" in both columns.
 	const ROW := 26.0
 	## Grid and row inks sampled from both originals' lists at 1024x768:
-	## available decks white, unavailable grey, Random gold; the grid is
-	## (90,85,74) in Etherlords I and (99,89,82) in Etherlords II.
+	## available decks white, unavailable grey, the chosen side's pick gold
+	## (Random too, while it is the pick); the grid is (90,85,74) in
+	## Etherlords I and (99,89,82) in Etherlords II.
 	const GRID := Color8(90, 85, 74)
 	const GRID_SECOND := Color8(99, 89, 82)
 	const INK := Color.WHITE
-	const RANDOM_INK := Color8(214, 187, 136)
+	const PICK_INK := Color8(214, 187, 136)
 	var splits: Array = []
 
 	func _ready() -> void:
@@ -1974,14 +1978,14 @@ class PresetList extends Control:
 			var preset: Dictionary = shown[index]
 			var y := at * ROW
 			var id := String(preset.get("id", ""))
-			if String(s.picks[int(s.target)]) == id: draw_rect(Rect2(0, y, size.x, ROW), Color(0.85, 0.7, 0.4, 0.2))
 			var grey := not preset.is_empty() and int(preset.resource_level) > int(s.level)
-			var ink := ELDuelScreen.GREY if grey else INK
+			# The chosen side's current pick is written in gold (no row fill).
+			var ink := PICK_INK if String(s.picks[int(s.target)]) == id else ELDuelScreen.GREY if grey else INK
 			var baseline := y + (ROW - font.get_height(15)) * 0.5 + font.get_ascent(15)
 			if preset.is_empty():
 				for x: float in [float(columns[0]), float(columns[1])]:
 					draw_string(font, Vector2(x - font.get_string_size("-", HORIZONTAL_ALIGNMENT_LEFT, -1, 15).x * 0.5, baseline), "-", HORIZONTAL_ALIGNMENT_LEFT, -1, 15, ink)
-				draw_string(font, Vector2(columns[2], baseline), screen.profile().text(ELDuelScreen.RANDOM_KEY), HORIZONTAL_ALIGNMENT_LEFT, size.x - columns[2] - 4, 15, RANDOM_INK)
+				draw_string(font, Vector2(columns[2], baseline), screen.profile().text(ELDuelScreen.RANDOM_KEY), HORIZONTAL_ALIGNMENT_LEFT, size.x - columns[2] - 4, 15, ink)
 			else:
 				var tile: Rect2 = ELDuelScreen.RACE_TILES.get(String(preset.faction), Rect2())
 				if tiles != null and tile.size.x > 0:

@@ -98,7 +98,9 @@ static func _compiled() -> Array:
 	if not _patterns.is_empty(): return _patterns
 	for key: String in RU:
 		if _placeholder.search(key) == null: continue
-		var expression := "(?s)^"
+		# A one-line entry never spans lines: "%s" would otherwise swallow a
+		# whole first line of a multi-line text (console "view players").
+		var expression := "(?s)^" if key.contains("\n") else "^"
 		var kinds := ""
 		var fixed := 0
 		var at := 0
