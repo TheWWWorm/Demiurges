@@ -6,6 +6,11 @@ signal preset_confirmed(deck: String)
 signal edit_requested(preset: Dictionary, cap: int)
 
 var lan_mode := false
+## Through the online relay with a room code instead of an address and port.
+var relay_mode := false
+var _way := OptionButton.new()
+var _address_label: Label
+var _port_row: Control
 var _address := LineEdit.new()
 var _port := SpinBox.new()
 var _decks := OptionButton.new()
@@ -95,8 +100,21 @@ func build(profile: ELProfile, lan := false) -> void:
 		_turn_limit = _time_field(setup, "Turn limit (s)")
 		_deck_limit = _time_field(setup, "Deck change (s)")
 	_field(setup, "Host arena", _arenas)
-	_field(connection, profile.text("CtrlTCPStatic2"), _address)
-	_field(connection, "UDP port", _port)
+	if not lan_mode:
+		_way.add_item(ELRemakeText.t("Direct address", profile))
+		_way.add_item(ELRemakeText.t("Online room", profile))
+		_way.tooltip_text = ELRemakeText.t("An online room meets through the Demiurges server with a room code: no ports to open.", profile)
+		# Browsers can only use the relay.
+		relay_mode = OS.has_feature("web")
+		_way.select(1 if relay_mode else 0)
+		_way.disabled = OS.has_feature("web")
+		_way.item_selected.connect(func(index: int):
+			relay_mode = index == 1
+			_show_way()
+			set_status("Host a duel, or enter the host’s room code to join." if relay_mode else "Host a duel, or enter the host’s address to join."))
+		_field(connection, "Connection", _way)
+	_address_label = _field(connection, profile.text("CtrlTCPStatic2"), _address)
+	_port_row = _field(connection, "UDP port", _port).get_parent()
 	# The same selection is used when creating the duel or accepting an offer.
 	_field(connection, "Hero preset", _decks)
 	if profile.id == "el2":
@@ -114,6 +132,7 @@ func build(profile: ELProfile, lan := false) -> void:
 	_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_status.custom_minimum_size.y = 38
 	_status.size.x = min_size.x - 64
+	_show_way()
 	set_status("Select a LAN duel or enter the host’s address." if lan_mode else "Host a duel, or enter the host’s address to join.")
 	fields.add_child(_status)
 	_join_caption = profile.text("CtrlMuJoin" if lan_mode else "CtrlTCPJoin")
@@ -126,7 +145,7 @@ func build(profile: ELProfile, lan := false) -> void:
 	custom_action.connect(_request)
 	set_waiting(false)
 
-func _field(fields: VBoxContainer, caption: String, input: Control) -> void:
+func _field(fields: VBoxContainer, caption: String, input: Control) -> Label:
 	var row := HBoxContainer.new()
 	var label := Label.new()
 	label.text = ELRemakeText.t(caption, _profile)
@@ -135,6 +154,14 @@ func _field(fields: VBoxContainer, caption: String, input: Control) -> void:
 	input.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	row.add_child(input)
 	fields.add_child(row)
+	return label
+
+## The address field doubles as the room code field.
+func _show_way() -> void:
+	if _address_label == null: return
+	_address_label.text = ELRemakeText.t("Room code", _profile) if relay_mode else _profile.text("CtrlTCPStatic2")
+	_address.placeholder_text = "ABC234" if relay_mode else "IP / DNS"
+	_port_row.visible = not relay_mode
 
 func _time_field(fields: VBoxContainer, caption: String) -> SpinBox:
 	var limit := SpinBox.new()
@@ -151,6 +178,12 @@ func _request(action: StringName) -> void:
 		return
 	if (_host.disabled if hosting else _join.disabled): return
 	var address := _address.text.strip_edges()
+	if relay_mode and not hosting:
+		address = ELRelayPeer.clean_code(address)
+		if address.is_empty():
+			set_status("Enter the 6-letter room code.")
+			_address.grab_focus()
+			return
 	if not hosting and address.is_empty():
 		set_status("Enter the host’s address.")
 		_address.grab_focus()
@@ -192,6 +225,7 @@ func set_waiting(waiting: bool) -> void:
 	_arenas.disabled = waiting
 	_address.editable = not waiting
 	_port.editable = not waiting
+	_way.disabled = waiting or OS.has_feature("web")
 	if _discovery == null: return
 	if waiting:
 		_discovery.close()

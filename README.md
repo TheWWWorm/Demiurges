@@ -53,7 +53,7 @@ With Etherlords II installed, select **Expedition** on the main menu for a three
 
 ## Autochess
 
-With Etherlords II installed, select **Autochess** on the main menu. Nine heroes recruit Etherlords II creatures from one shared pool, evolve three copies into stronger forms, combine faction alliances and fight real-time battles on the game's battlefields; the last hero standing wins. Creature stats come from the originals' Power and Toughness, their abilities are adapted to real time, and rewards after neutral rounds are the game's own enchantments and artifacts. Play against eight computer heroes or online by address. See [Autochess](https://demiurges.wwworm.com/wiki/?page=autochess) in the wiki.
+With Etherlords II installed, select **Autochess** on the main menu. Nine heroes recruit Etherlords II creatures from one shared pool, evolve three copies into stronger forms, combine faction alliances and fight real-time battles on the game's battlefields; the last hero standing wins. Creature stats come from the originals' Power and Toughness, their abilities are adapted to real time, and rewards after neutral rounds are the game's own enchantments and artifacts. Play against eight computer heroes or online with a room code or by address. See [Autochess](https://demiurges.wwworm.com/wiki/?page=autochess) in the wiki.
 
 ## Getting started (desktop)
 
@@ -97,7 +97,7 @@ The engine is still in development. Things you may notice:
 - Computer opponents follow the original's approach but are not an exact copy of its decisions. As in the original, they never answer alliance or trade offers.
 - Etherlords II map particle effects use approximate sizes and blending.
 - The campaigns are tested screen by screen and system by system, not yet by playing every chapter from start to finish. Please report anything that blocks progress.
-- Native builds support LAN and direct-IP duels in both games. Etherlords I also has a strategic preview for two human commanders. See the [multiplayer guide](https://demiurges.wwworm.com/wiki/?page=duel) for supported map actions and connection details.
+- Duels in both games, the Etherlords I strategic preview for two human commanders and online autochess can be played through an online room code (no ports to open, also in the browser) or, in native builds, over LAN and direct IP. A duel or autochess player whose connection drops can join again and take their seat back. See the [multiplayer guide](https://demiurges.wwworm.com/wiki/?page=duel) for supported map actions and connection details.
 - Saves and replays of the original games cannot be loaded; the engine keeps its own.
 - Touch controls have not yet been tried on real phones and tablets, only in testing. The interface keeps the original layout, so on a small phone screen text and buttons are small.
 

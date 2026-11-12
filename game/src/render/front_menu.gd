@@ -660,13 +660,14 @@ func _wire(button: BaseButton, control: String) -> void:
 		button.disabled = true
 		button.tooltip_text = "The combat tutorial replay is missing from the game content."
 		return
-	if action in ["network", "lan"] and OS.has_feature("web"):
+	# Browsers play online through room codes only; LAN games need the desktop or mobile game.
+	if action == "lan" and OS.has_feature("web"):
 		button.disabled = true
-		button.tooltip_text = "Network duels require the desktop or mobile game."
+		button.tooltip_text = "LAN duels require the desktop or mobile game. Use TCP/IP with an online room code."
 		return
-	if action in ["strategy", "strategy_lan", "screen:mp_start_strategy"] and OS.has_feature("web"):
+	if action == "strategy_lan" and OS.has_feature("web"):
 		button.disabled = true
-		button.tooltip_text = "Strategic multiplayer requires the desktop or mobile game."
+		button.tooltip_text = "LAN strategic games require the desktop or mobile game. Use TCP/IP with an online room code."
 		return
 	if action.is_empty():
 		button.disabled = true

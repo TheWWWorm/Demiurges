@@ -9,6 +9,15 @@ compatibility_date = "2026-10-09"
 workers_dev = false
 routes = [{ pattern = "demiurges.wwworm.com", custom_domain = true }]
 
+# Online play relay rooms (see RelayRoom in worker.js).
+[[durable_objects.bindings]]
+name = "RELAY"
+class_name = "RelayRoom"
+
+[[migrations]]
+tag = "relay-v1"
+new_sqlite_classes = ["RelayRoom"]
+
 [assets]
 directory = "./public"
 binding = "ASSETS"

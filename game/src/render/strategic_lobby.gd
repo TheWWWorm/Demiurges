@@ -7,6 +7,7 @@ signal load_requested
 const DEFAULT_DIFFICULTY := 2
 const MINIMUM_SIZE := Vector2i(740, 370)
 const INSTRUCTIONS := "Host a map for one guest, or enter the host’s address to join."
+const ROOM_INSTRUCTIONS := "Host a map for one guest, or enter the host’s room code to join."
 const LAN_INSTRUCTIONS := "Host a map, select a waiting LAN game, or enter the host’s address."
 
 var _maps := OptionButton.new()
@@ -29,6 +30,11 @@ var _seats := Vector2i.ZERO
 var _waiting := false
 var _profile: ELProfile
 var save_path := ""
+## Through the online relay with a room code instead of an address and port.
+var relay_mode := false
+var _way := OptionButton.new()
+var _address_row: Control
+var _port_row: Control
 var pending_save := {}
 
 func _exit_tree() -> void:
@@ -112,8 +118,24 @@ func build(profile: ELProfile, saved_path := "", saved_details := "", lan := fal
 	_port.text = str(ELNetworkStrategy.PORT)
 	_port.max_length = 5
 	_port.virtual_keyboard_type = LineEdit.KEYBOARD_TYPE_NUMBER
+	var link_fields: VBoxContainer = fields if not save_path.is_empty() else connection
+	if not lan:
+		_way.add_item(ELRemakeText.t("Direct address", profile))
+		_way.add_item(ELRemakeText.t("Online room", profile))
+		_way.tooltip_text = ELRemakeText.t("An online room meets through the Demiurges server with a room code: no ports to open.", profile)
+		# Browsers can only use the relay.
+		relay_mode = OS.has_feature("web")
+		_way.select(1 if relay_mode else 0)
+		_way.item_selected.connect(func(index: int):
+			relay_mode = index == 1
+			_show_way()
+			if save_path.is_empty(): set_status(ROOM_INSTRUCTIONS if relay_mode else INSTRUCTIONS))
+		_field(link_fields, "Connection", _way)
 	_field(connection, profile.text("CtrlTCPStatic2"), _address)
-	_field(fields if not save_path.is_empty() else connection, "UDP port", _port)
+	_address_row = _address.get_parent()
+	_field(link_fields, "UDP port", _port)
+	_port_row = _port.get_parent()
+	_show_way()
 
 	_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_status.custom_minimum_size.y = 40
@@ -134,7 +156,7 @@ func build(profile: ELProfile, saved_path := "", saved_details := "", lan := fal
 		set_status("Host the saved match, then have the guest join again.")
 	elif _maps.item_count > 0:
 		_select_map(0)
-		set_status(LAN_INSTRUCTIONS if lan else INSTRUCTIONS)
+		set_status(LAN_INSTRUCTIONS if lan else (ROOM_INSTRUCTIONS if relay_mode else INSTRUCTIONS))
 	else:
 		set_status("No installed maps have two strategic seats. You can still join by address.")
 	set_waiting(false)
@@ -157,6 +179,13 @@ static func catalogue(profile: ELProfile) -> Array[Dictionary]:
 		if seats.size() >= 2:
 			result.append({"id": entry.id, "title": ELSingleScenario.title(profile, entry), "seats": seats, "size": Vector2i(map.width, map.height), "seat_count": map.players.size()})
 	return result
+
+## The address field doubles as the room code field.
+func _show_way() -> void:
+	if _address_row == null: return
+	(_address_row.get_child(0) as Label).text = ELRemakeText.t("Room code", _profile) if relay_mode else _profile.text("CtrlTCPStatic2")
+	_address.placeholder_text = "ABC234" if relay_mode else "IP / DNS"
+	_port_row.visible = not relay_mode
 
 func _field(fields: VBoxContainer, caption: String, input: Control) -> void:
 	var row := HBoxContainer.new()
@@ -197,12 +226,18 @@ func _request(action: StringName) -> void:
 	if action not in [&"host", &"join"] or (action == &"join" and not save_path.is_empty()): return
 	var hosting := action == &"host"
 	var address := _address.text.strip_edges()
+	if relay_mode and not hosting:
+		address = ELRelayPeer.clean_code(address)
+		if address.is_empty():
+			set_status("Enter the 6-letter room code.")
+			_address.grab_focus()
+			return
 	if not hosting and address.is_empty():
 		set_status("Enter the host’s address.")
 		_address.grab_focus()
 		return
-	var port := int(_port.text)
-	if not _port.text.is_valid_int() or port < 1024 or port > 65535:
+	var port := int(_port.text) if not relay_mode else ELNetworkStrategy.PORT
+	if not relay_mode and (not _port.text.is_valid_int() or port < 1024 or port > 65535):
 		set_status("Enter a UDP port from 1024 to 65535.")
 		_port.grab_focus()
 		return
@@ -229,6 +264,7 @@ func set_waiting(waiting: bool) -> void:
 		control.disabled = waiting or no_maps
 	_address.editable = not waiting
 	_port.editable = not waiting
+	_way.disabled = waiting or OS.has_feature("web")
 	_turn_seconds.editable = not waiting and not no_maps
 	_combat_seconds.editable = not waiting and not no_maps
 	if _discovery == null: return

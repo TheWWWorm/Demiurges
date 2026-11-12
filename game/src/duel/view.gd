@@ -6487,13 +6487,18 @@ func _connect_network_duel(hosting: bool, address: String, port: int, deck: Stri
 	network_duel.started.connect(_begin_network_duel)
 	network_duel.round_ready.connect(_wait_for_network_round)
 	network_duel.closed.connect(_network_closed)
+	network_duel.connection_notice.connect(func(text: String): _notice(ELRemakeText.t(text, network_duel.profile)))
 	var data := front_menu.profile
+	if _network_lobby.relay_mode: network_duel.relay_room = ELRelayPeer.new_code() if hosting else address
 	var result := network_duel.host(data, port, deck, battlefield, resource_level, rounds, _network_lobby.lan_mode, turn_seconds, deck_seconds) if hosting else network_duel.join(data, address, port)
 	if result != OK:
 		_network_lobby.set_status("Could not open the connection. %s" % error_string(result))
 		network_duel = null
 		return
 	_network_lobby.set_waiting(true)
+	if hosting and _network_lobby.relay_mode:
+		DisplayServer.clipboard_set(network_duel.relay_room)
+		_network_lobby.set_status("Room code: %s (copied). Waiting for a player." % network_duel.relay_room)
 
 func _confirm_network_preset(deck: String) -> void:
 	if network_duel == null: return
@@ -6681,6 +6686,8 @@ func _connect_strategic(hosting: bool, address: String, port: int, map_id: Strin
 			return
 	_strategic_lobby.pending_save = {}
 	var session := _new_strategic_session()
+	var relay := _strategic_lobby.relay_mode
+	if relay: session.link.relay_room = ELRelayPeer.new_code() if hosting else address
 	var result: Error
 	if not restored.is_empty(): result = session.host_saved(restored, port, _strategic_lan)
 	elif hosting: result = session.link.host(session.profile, map_id, port, players, difficulty, randi() & 0x7fffffff, 1,
@@ -6691,6 +6698,9 @@ func _connect_strategic(hosting: bool, address: String, port: int, map_id: Strin
 		_strategic_lobby.set_status("Could not open the connection. %s" % error_string(result))
 		return
 	_strategic_lobby.set_waiting(true)
+	if hosting and relay:
+		DisplayServer.clipboard_set(session.link.relay_room)
+		_strategic_lobby.set_status("Room code: %s (copied). Waiting for a strategic player." % session.link.relay_room)
 
 func _new_strategic_session() -> ELStrategicSession:
 	var session := ELStrategicSession.new()

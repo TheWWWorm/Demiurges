@@ -9,10 +9,16 @@ signal round_ready()
 signal chat_opened()
 signal chat_posted(side: int, text: String)
 signal closed(reason: String)
+## Shown over a running duel: the guest dropped, or came back.
+signal connection_notice(text: String)
 
 const PORT := 27184
-const VERSION := 9
+const VERSION := 10
 const MAX_PACKET := 4096
+## A rejoining guest receives the whole match in one message.
+const MAX_RESUME := 512 * 1024
+const REJOIN_SECONDS := 120
+const TOKEN_PATH := "user://network_token.txt"
 const MAX_PENDING := 128
 const MAX_CHAT_LENGTH := 240
 const MAX_CHAT_HISTORY := 50
@@ -38,7 +44,9 @@ var local_side := 0
 var live := false
 var chat_history: Array[Dictionary] = []
 var _chat_enabled := false
-var _peer: ENetMultiplayerPeer
+var _peer: MultiplayerPeer
+## A room code: play through the online relay instead of a direct address.
+var relay_room := ""
 var _remote := 0
 var _selection: Variant
 var _arena := ""
@@ -63,6 +71,26 @@ var _pending: Array[Array] = []
 var _failure := ""
 var _departure := ""
 var _discovery: ELNetworkDiscovery
+var _guest_token := ""
+## While above zero the host keeps the duel for a guest whose connection dropped.
+var _rejoin_deadline := 0
+var _resume_due := false
+var _resuming := false
+var _resume_digest := ""
+var _turning_away := false
+static var _token := ""
+
+## Identifies this player to a host across a dropped connection or a restart.
+static func player_token() -> String:
+	if not _token.is_empty(): return _token
+	if FileAccess.file_exists(TOKEN_PATH):
+		var saved := FileAccess.get_file_as_string(TOKEN_PATH).strip_edges()
+		if saved.length() == 32 and saved.is_valid_hex_number(): _token = saved
+	if _token.is_empty():
+		_token = Crypto.new().generate_random_bytes(16).hex_encode()
+		var file := FileAccess.open(TOKEN_PATH, FileAccess.WRITE)
+		if file != null: file.store_string(_token)
+	return _token
 
 func host(data: ELProfile, port: int, deck: String, arena: String, resource_level: int, rounds: int, advertise := false, turn_seconds := 0, deck_seconds := 0) -> Error:
 	if _peer != null: return ERR_ALREADY_IN_USE
@@ -79,12 +107,12 @@ func host(data: ELProfile, port: int, deck: String, arena: String, resource_leve
 	_rounds = rounds
 	_turn_seconds = turn_seconds
 	_deck_seconds = deck_seconds
-	var result := _peer.create_server(port, 1)
+	var result := (_peer as ELRelayPeer).host_room(relay_room, 1) if _peer is ELRelayPeer else (_peer as ENetMultiplayerPeer).create_server(port, 1)
 	if result != OK:
 		close()
 		return result
-	var status := "Waiting for a player on UDP port %d." % port
-	if advertise:
+	var status := "Room code: %s. Waiting for a player." % relay_room if _peer is ELRelayPeer else "Waiting for a player on UDP port %d." % port
+	if advertise and _peer is not ELRelayPeer:
 		_discovery = ELNetworkDiscovery.new()
 		if _discovery.listen(VERSION, data.id, port, arena, resource_level) != OK:
 			_discovery = null
@@ -94,13 +122,16 @@ func host(data: ELProfile, port: int, deck: String, arena: String, resource_leve
 
 func join(data: ELProfile, address: String, port: int) -> Error:
 	if _peer != null: return ERR_ALREADY_IN_USE
-	if address.is_empty() or address.length() > 253 or port < 1024 or port > 65535: return ERR_INVALID_PARAMETER
+	if not relay_room.is_empty():
+		if ELRelayPeer.clean_code(relay_room) != relay_room: return ERR_INVALID_PARAMETER
+	elif address.is_empty() or address.length() > 253 or port < 1024 or port > 65535: return ERR_INVALID_PARAMETER
 	_open(data, 1)
-	var result := _peer.create_client(address, port)
+	var result := (_peer as ELRelayPeer).join_room(relay_room) if _peer is ELRelayPeer else (_peer as ENetMultiplayerPeer).create_client(address, port)
 	if result != OK: close()
 	else:
 		_remote = MultiplayerPeer.TARGET_PEER_SERVER
 		_joining = true
+		_resuming = true
 		_ready_deadline = Time.get_ticks_msec() + 15000
 		message.emit("Connecting to the host…")
 	return result
@@ -140,7 +171,7 @@ func _open(data: ELProfile, side: int) -> void:
 	local_side = side
 	recording = ELDuelRecording.new() if data.id == "el2" else null
 	if recording != null: recording.local_side = side
-	_peer = ENetMultiplayerPeer.new()
+	_peer = ELRelayPeer.new() if not relay_room.is_empty() else ENetMultiplayerPeer.new()
 	_peer.transfer_mode = MultiplayerPeer.TRANSFER_MODE_RELIABLE
 	_peer.peer_connected.connect(_connected)
 	_peer.peer_disconnected.connect(_disconnected)
@@ -153,7 +184,18 @@ func _connected(id: int) -> void:
 	message.emit("Player connected. Checking game data…")
 
 func _disconnected(id: int) -> void:
-	if id == _remote and _departure.is_empty(): _departure = "The other player disconnected."
+	if id != _remote or not _departure.is_empty(): return
+	if local_side == 0 and _rejoin_deadline > 0:
+		# A rejoin attempt that dropped before finishing; keep waiting.
+		_remote = 0
+		_ready_deadline = 0
+		_resume_due = false
+		_turning_away = false
+	elif local_side == 0 and live and not _guest_token.is_empty() and not match_state.finished():
+		_remote = 0
+		_rejoin_deadline = Time.get_ticks_msec() + REJOIN_SECONDS * 1000
+		connection_notice.emit("The other player lost the connection. Waiting up to %d minutes for them to rejoin." % (REJOIN_SECONDS / 60))
+	else: _departure = "The other player disconnected."
 
 func poll(allow_action: bool, advance_phase := Callable()) -> void:
 	if _peer == null: return
@@ -162,19 +204,27 @@ func poll(allow_action: bool, advance_phase := Callable()) -> void:
 	var connection := _peer.get_connection_status()
 	if _joining and connection == MultiplayerPeer.CONNECTION_CONNECTED:
 		_joining = false
-		_send(["hello", VERSION, profile.id])
+		_send(["hello", VERSION, profile.id, player_token()])
 	if connection == MultiplayerPeer.CONNECTION_DISCONNECTED and _departure.is_empty():
-		_departure = "The connection to the other player closed."
+		var reason: String = (_peer as ELRelayPeer).close_reason if _peer is ELRelayPeer else ""
+		if local_side == 1 and live: reason = "The connection to the other player closed. Join the host again to continue the duel."
+		_departure = reason if not reason.is_empty() else "The connection to the other player closed."
 	for packet in mini(64, _peer.get_available_packet_count()):
 		var sender := _peer.get_packet_peer()
 		var bytes := _peer.get_packet()
 		if sender != _remote: continue
-		var value: Variant = JSON.parse_string(bytes.get_string_from_utf8()) if bytes.size() <= MAX_PACKET else null
+		var limit := MAX_RESUME if _resuming else MAX_PACKET
+		var value: Variant = JSON.parse_string(bytes.get_string_from_utf8()) if bytes.size() <= limit else null
 		if value is Array and not value.is_empty(): _receive(value)
+		elif _rejoin_deadline > 0: _drop_rejoiner()
 		else: _failure = "Invalid network message."
-		if not _failure.is_empty(): break
+		if not _failure.is_empty() or _peer == null: break
 	if _ready_deadline > 0 and Time.get_ticks_msec() > _ready_deadline:
-		_failure = "The other player did not finish connecting."
+		if _rejoin_deadline > 0: _drop_rejoiner()
+		else: _failure = "The other player did not finish connecting."
+	if _rejoin_deadline > 0 and _failure.is_empty():
+		if _resume_due and _pending.is_empty(): _send_resume()
+		elif Time.get_ticks_msec() > _rejoin_deadline: _failure = "The other player did not rejoin."
 	if _failure.is_empty() and live and allow_action:
 		if not _pending.is_empty():
 			var command: Array = _pending.pop_front()
@@ -197,14 +247,30 @@ func poll(allow_action: bool, advance_phase := Callable()) -> void:
 		closed.emit(reason)
 
 func _receive(packet: Array) -> void:
+	# Until a returning guest has the duel again, it may only say who it is.
+	if local_side == 0 and _rejoin_deadline > 0 and packet[0] not in ["hello", "resumed"]: return _drop_rejoiner()
 	match packet[0]:
 		"hello":
-			if local_side != 0 or duel != null or _awaiting_pick or packet.size() < 3: return _invalid()
+			if local_side != 0 or packet.size() < 3: return _invalid()
+			if _rejoin_deadline > 0:
+				# Only the player who dropped may take the seat back.
+				if _turning_away: return
+				if packet.size() == 4 and packet[1] == VERSION and packet[2] == profile.id and packet[3] == _guest_token:
+					_ready_deadline = Time.get_ticks_msec() + 15000
+					_resume_due = true
+				else:
+					# Give the reason a moment to arrive before the connection is dropped.
+					_send(["reject", "busy"])
+					_turning_away = true
+					_ready_deadline = Time.get_ticks_msec() + 1000
+				return
+			if duel != null or _awaiting_pick: return _invalid()
 			if packet[1] != VERSION or packet[2] != profile.id:
 				_send(["reject", "version"])
 				_ready_deadline = Time.get_ticks_msec() + 1000
 				return
-			if packet.size() != 3: return _invalid()
+			if packet.size() != 4 or not packet[3] is String or packet[3].length() != 32: return _invalid()
+			_guest_token = packet[3]
 			_awaiting_pick = true
 			_ready_deadline = 0
 			_send(["offer", _resource_level, _arena, _rounds, _turn_seconds, _deck_seconds])
@@ -222,9 +288,26 @@ func _receive(packet: Array) -> void:
 			_turn_seconds = int(packet[4])
 			_deck_seconds = int(packet[5])
 			_awaiting_pick = true
+			_resuming = false
 			_ready_deadline = 0
 			offer_received.emit(_resource_level, _arena, _rounds, _turn_seconds, _deck_seconds)
 			_enable_chat()
+		"resume":
+			if local_side != 1 or not _resuming or duel != null or packet.size() != 2 or not packet[1] is Dictionary: return _invalid()
+			_resuming = false
+			if not _restore(packet[1]):
+				_failure = "Could not continue the duel. Use the same Demiurges version and game edition."
+				return
+			_send(["resumed", _digest()])
+			_enable_chat()
+			_start()
+		"resumed":
+			if local_side != 0 or _rejoin_deadline == 0: return _invalid()
+			if _resume_due or packet.size() != 2 or packet[1] != _resume_digest: return _drop_rejoiner()
+			_rejoin_deadline = 0
+			_ready_deadline = 0
+			_enable_chat()
+			connection_notice.emit("The other player rejoined.")
 		"pick":
 			if local_side != 0 or not _awaiting_pick or packet.size() != 2: return _invalid()
 			_awaiting_pick = false
@@ -259,7 +342,10 @@ func _receive(packet: Array) -> void:
 			if can_chat() and packet.size() == 2 and packet[1] is String and packet[1].length() <= MAX_CHAT_LENGTH:
 				_post_chat(1 - local_side, _clean_chat(packet[1]))
 		"reject":
-			_failure = "A hero preset does not meet the match rules." if packet.size() == 2 and packet[1] == "preset" else "Use the same Demiurges version and game edition."
+			var code: Variant = packet[1] if packet.size() == 2 else ""
+			if code == "preset": _failure = "A hero preset does not meet the match rules."
+			elif code == "busy": _failure = "This duel is waiting for its own player to return."
+			else: _failure = "Use the same Demiurges version and game edition."
 		"leave":
 			_departure = "The other player left the duel."
 		_:
@@ -267,6 +353,73 @@ func _receive(packet: Array) -> void:
 
 func _invalid() -> void:
 	_failure = "Invalid or out-of-order network message."
+
+## Sends the returning guest everything needed to continue: both presets,
+## the round, the duel itself and the shared command count.
+func _send_resume() -> void:
+	_resume_due = false
+	var next := []
+	for side in 2: next.append(_next_presets[side].get("cards"))
+	_resume_digest = _digest()
+	var state := {"match": match_state.snapshot(), "duel": duel.snapshot(), "sequence": _sequence, "round_index": _round_index,
+		"first_attacker": _first_attacker, "settings": [_resource_level, _arena, _rounds, _turn_seconds, _deck_seconds],
+		"ready": [_local_ready, _remote_ready], "next": next, "digest": _resume_digest}
+	var bytes := JSON.stringify(["resume", state]).to_utf8_buffer()
+	if bytes.size() > MAX_RESUME:
+		_failure = "The duel is too large to send to the returning player."
+		return
+	_peer.set_target_peer(_remote)
+	if _peer.put_packet(bytes) != OK: _drop_rejoiner()
+
+func _restore(state: Dictionary) -> bool:
+	for key in ["match", "duel", "sequence", "round_index", "first_attacker", "settings", "ready", "next", "digest"]:
+		if not state.has(key): return false
+	var settings: Variant = state.settings
+	if not settings is Array or settings.size() != 5 or not _valid_level(profile, settings[0]) or not settings[1] is String or not ELDuelMatch.arenas(profile).has(settings[1]): return false
+	if not ELLuaSave._integer(settings[2], 1, ELDuelMatch.MAX_ROUNDS) or not valid_time_limit(profile, settings[3]) or not valid_time_limit(profile, settings[4]): return false
+	if not ELLuaSave._integer(state.sequence, 0, 0x7fffffff) or not ELLuaSave._integer(state.first_attacker, 0, 1) or not ELLuaSave._integer(state.round_index, 0, ELDuelMatch.MAX_ROUNDS): return false
+	if not state.ready is Array or state.ready.size() != 2 or not state.ready[0] is bool or not state.ready[1] is bool: return false
+	if not state.next is Array or state.next.size() != 2 or not state.match is Dictionary or not state.duel is Dictionary: return false
+	var restored_match := ELDuelMatch.new()
+	if not restored_match.restore(profile, state.match): return false
+	var battle := ELDuel.new()
+	if not battle.restore(profile, {"format": "etherlords-duel", "version": 1, "state": state.duel}): return false
+	match_state = restored_match
+	duel = battle
+	duel.gate = self
+	# A recording needs the duel from its first command.
+	recording = null
+	_resource_level = int(settings[0])
+	_arena = settings[1]
+	_rounds = int(settings[2])
+	_turn_seconds = int(settings[3])
+	_deck_seconds = int(settings[4])
+	_sequence = int(state.sequence)
+	_round_index = int(state.round_index)
+	_first_attacker = int(state.first_attacker)
+	_remote_ready = state.ready[0]
+	_local_ready = state.ready[1]
+	_next_presets.assign([{}, {}])
+	for side in 2:
+		if state.next[side] == null: continue
+		if not state.next[side] is Array: return false
+		var preset := ELDuelPresets.with_reserve_deck(match_state.presets[side], state.next[side])
+		if preset.is_empty(): return false
+		_next_presets[side] = preset
+	_clock_phase = Vector2i(-1, -1)
+	_clock_deadline = 0
+	_deck_deadline = 0
+	_awaiting_pick = false
+	return _digest() == state.digest
+
+## Turns away a connection that is not the guest who dropped, or that failed
+## while rejoining, and keeps waiting for the right one.
+func _drop_rejoiner() -> void:
+	if _peer != null and _remote != 0: _peer.disconnect_peer(_remote)
+	_remote = 0
+	_ready_deadline = 0
+	_resume_due = false
+	_turning_away = false
 
 func _enable_chat() -> void:
 	_chat_enabled = true
@@ -494,7 +647,7 @@ func close() -> void:
 	if _peer != null:
 		if _failure.is_empty() and _remote != 0 and _peer.get_connection_status() == MultiplayerPeer.CONNECTION_CONNECTED:
 			_send(["leave"])
-			_peer.get_host().flush()
+			_flush()
 		_peer.close()
 	_peer = null
 	_chat_enabled = false
@@ -518,6 +671,16 @@ func close() -> void:
 	_joining = false
 	_failure = ""
 	_departure = ""
+	_guest_token = ""
+	_rejoin_deadline = 0
+	_resume_due = false
+	_resuming = false
+	_resume_digest = ""
+	_turning_away = false
+
+func _flush() -> void:
+	if _peer is ENetMultiplayerPeer: (_peer as ENetMultiplayerPeer).get_host().flush()
+	elif _peer is ELRelayPeer: (_peer as ELRelayPeer).flush()
 
 func _stop_discovery() -> void:
 	if _discovery == null: return

@@ -10,6 +10,8 @@ The browser version is a static site: the files in `public/` (or in the `…-web
 
 This repository deploys with `wrangler.toml`: Workers static assets serve `public/`, and `worker.js` adds the isolation headers. Cloudflare rejects single files over 25 MiB, so the engine binary is stored as `index.wasm.part0`, `index.wasm.part1`, … and listed in `parts.json`; `worker.js` streams the parts back together as `index.wasm` with its full size.
 
+`worker.js` also runs the online play relay at `/relay`. A host opens a room with a six-letter code and guests join it by that code, so nobody has to open a port and the browser build can play online. Each room is a Durable Object (`RelayRoom`, bound as `RELAY` with a SQLite-backed migration in `wrangler.toml`) that only passes messages between the players in it. A self-hosted copy of the game can point at another relay with the `DEMIURGES_RELAY` environment variable, for example `ws://127.0.0.1:8787/relay` while `npx wrangler dev` runs. `tools/network_check.gd -- --relay=ws://127.0.0.1:8787/relay` tests every online mode through such a relay.
+
 ## Testing on your computer
 
 ```sh

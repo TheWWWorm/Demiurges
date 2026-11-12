@@ -525,7 +525,7 @@ func show_match(value: ELAutochessMatch, seat := 0, link: ELAutochessOnline = nu
 		online.message.connect(func(text: String): _say(text, 4.0))
 		online.closed.connect(func(reason: String):
 			_say(_t(reason), 6.0)
-			_show_end(_t("The connection was lost.")))
+			_show_end(_t("The connection was lost.") if online == null or online.is_host else _t("The connection was lost. Join the host again to take your hero back.")))
 	_close_modal()
 	_overview.hide()
 	hud.show()

@@ -53,7 +53,9 @@ var remote_player := 0
 var current_day := 1
 var snapshot_revision := 0
 var _profile: ELProfile
-var _peer: ENetMultiplayerPeer
+var _peer: MultiplayerPeer
+## A room code: play through the online relay instead of a direct address.
+var relay_room := ""
 var _state := State.CLOSED
 var _remote := 0
 var _setup: Dictionary = {}
@@ -83,8 +85,14 @@ func host(profile: ELProfile, map_id: String, port: int, players: Vector2i, diff
 	if not map.load_map(profile, map_id) or not _valid_players(map, players): return ERR_INVALID_PARAMETER
 	var map_hash := _map_hash(profile, map_id)
 	if not _valid_hash(map_hash): return ERR_INVALID_DATA
-	var peer := ENetMultiplayerPeer.new()
-	var result := peer.create_server(port, 1, BATTLE)
+	var peer: MultiplayerPeer
+	var result: Error
+	if not relay_room.is_empty():
+		peer = ELRelayPeer.new()
+		result = (peer as ELRelayPeer).host_room(relay_room, 1)
+	else:
+		peer = ENetMultiplayerPeer.new()
+		result = (peer as ENetMultiplayerPeer).create_server(port, 1, BATTLE)
 	if result != OK: return result
 	_open(profile, peer, true, State.WAIT_GUEST)
 	_bounds = Vector2i(map.width, map.height)
@@ -92,8 +100,8 @@ func host(profile: ELProfile, map_id: String, port: int, players: Vector2i, diff
 	remote_player = players.y
 	_setup = {"map": map_id, "map_hash": map_hash, "players": [players.x, players.y], "difficulty": difficulty,
 		"seed": seed, "day": day, "turn_seconds": turn_seconds, "combat_seconds": combat_seconds}
-	var status := "Waiting for a strategic player on UDP port %d." % port
-	if advertise:
+	var status := "Room code: %s. Waiting for a strategic player." % relay_room if not relay_room.is_empty() else "Waiting for a strategic player on UDP port %d." % port
+	if advertise and relay_room.is_empty():
 		_discovery = ELNetworkDiscovery.new(DISCOVERY_PORT, PROTOCOL)
 		if _discovery.listen(VERSION, EDITION, port, map_id, day) != OK:
 			_stop_discovery()
@@ -103,10 +111,17 @@ func host(profile: ELProfile, map_id: String, port: int, players: Vector2i, diff
 
 func join(profile: ELProfile, address: String, port: int) -> Error:
 	if _peer != null or live: return ERR_ALREADY_IN_USE
-	if not _valid_profile(profile, port) or address.is_empty() or address.length() > 253 or address != address.strip_edges():
-		return ERR_INVALID_PARAMETER
-	var peer := ENetMultiplayerPeer.new()
-	var result := peer.create_client(address, port, BATTLE)
+	if not _valid_profile(profile, port): return ERR_INVALID_PARAMETER
+	var peer: MultiplayerPeer
+	var result: Error
+	if not relay_room.is_empty():
+		if ELRelayPeer.clean_code(relay_room) != relay_room: return ERR_INVALID_PARAMETER
+		peer = ELRelayPeer.new()
+		result = (peer as ELRelayPeer).join_room(relay_room)
+	else:
+		if address.is_empty() or address.length() > 253 or address != address.strip_edges(): return ERR_INVALID_PARAMETER
+		peer = ENetMultiplayerPeer.new()
+		result = (peer as ENetMultiplayerPeer).create_client(address, port, BATTLE)
 	if result != OK: return result
 	_open(profile, peer, false, State.WAIT_SETUP)
 	_remote = MultiplayerPeer.TARGET_PEER_SERVER
@@ -114,7 +129,7 @@ func join(profile: ELProfile, address: String, port: int) -> Error:
 	message.emit("Connecting to the strategic host…")
 	return OK
 
-func _open(profile: ELProfile, peer: ENetMultiplayerPeer, host_side: bool, state: State) -> void:
+func _open(profile: ELProfile, peer: MultiplayerPeer, host_side: bool, state: State) -> void:
 	_profile = profile
 	_peer = peer
 	is_host = host_side
@@ -124,9 +139,9 @@ func _open(profile: ELProfile, peer: ENetMultiplayerPeer, host_side: bool, state
 	_peer.peer_disconnected.connect(_disconnected)
 
 func _connected(id: int) -> void:
-	var link := _peer.get_peer(id)
 	# The first map builds synchronously on each peer. It can suspend ENet
 	# polling while the other peer already has a live connection.
+	var link := (_peer as ENetMultiplayerPeer).get_peer(id) if _peer is ENetMultiplayerPeer else null
 	if link != null: link.set_timeout(32, STARTUP_TRANSPORT_TIMEOUT, STARTUP_TRANSPORT_TIMEOUT)
 	if _state != State.WAIT_GUEST: return
 	_stop_discovery()
@@ -149,7 +164,7 @@ func poll() -> void:
 	var connection := peer.get_connection_status()
 	if _departure == Departure.NONE and connection == MultiplayerPeer.CONNECTION_CONNECTED and _startup_transport_until > 0 and Time.get_ticks_msec() >= _startup_transport_until:
 		_startup_transport_until = 0
-		var transport := peer.get_peer(_remote)
+		var transport := (peer as ENetMultiplayerPeer).get_peer(_remote) if peer is ENetMultiplayerPeer else null
 		if transport != null: transport.set_timeout(32, 5000, CONNECT_TIMEOUT)
 	if _state == State.WAIT_SETUP and not _hello_sent and connection == MultiplayerPeer.CONNECTION_CONNECTED:
 		_hello_sent = _send(["hello", PROTOCOL, VERSION, EDITION])
@@ -170,7 +185,8 @@ func poll() -> void:
 			_failure = _rejection if not _rejection.is_empty() else "The other player disconnected."
 		elif connection == MultiplayerPeer.CONNECTION_DISCONNECTED:
 			_departure = Departure.LOST
-			_failure = "The strategic connection closed."
+			var reason: String = (peer as ELRelayPeer).close_reason if peer is ELRelayPeer else ""
+			_failure = reason if not reason.is_empty() else "The strategic connection closed."
 	elif _departure == Departure.LOST:
 		_departure = Departure.NONE
 	if _deadline > 0 and Time.get_ticks_msec() >= _deadline and _failure.is_empty():
@@ -400,7 +416,7 @@ func set_ready(day: int, ready: bool) -> bool:
 	return live and _failure.is_empty()
 
 func send_leave() -> void:
-	if live and _send(["leave"]): _peer.get_host().flush()
+	if live and _send(["leave"]): _flush()
 
 func open_local(map: ELAdventureMap, players: Array[int], day: int) -> void:
 	local_authority = true
@@ -527,7 +543,7 @@ func close() -> void:
 	_stop_discovery()
 	if _peer != null:
 		if _state != State.REJECTED and _remote != 0 and _peer.get_connection_status() == MultiplayerPeer.CONNECTION_CONNECTED:
-			if _send(["leave"]): _peer.get_host().flush()
+			if _send(["leave"]): _flush()
 		_peer.close()
 	_peer = null
 	_profile = null
@@ -553,6 +569,10 @@ func close() -> void:
 	remote_player = 0
 	current_day = 1
 	snapshot_revision = 0
+
+func _flush() -> void:
+	if _peer is ENetMultiplayerPeer: (_peer as ENetMultiplayerPeer).get_host().flush()
+	elif _peer is ELRelayPeer: (_peer as ELRelayPeer).flush()
 
 func _stop_discovery() -> void:
 	if _discovery == null: return

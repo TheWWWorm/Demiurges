@@ -18,8 +18,8 @@
   "translation_keys": 16,
   "files": {
     "data/en/index.json": {
-      "bytes": 247771,
-      "sha256": "d829bc85a0f5305239c4645ecf231c43f70dde1bdb52b1b1a960a8118a00c63b"
+      "bytes": 248580,
+      "sha256": "a325117a6b852cd9568f22b42ce504577e0aed0bf3e43d6a6e15a0cb009a12b9"
     },
     "data/en/pages/abilities.json": {
       "bytes": 2238,
@@ -58,8 +58,8 @@
       "sha256": "ca198b0e201008b44aa46c2ee5f16280cd4729d9c9b0fe2c0ee476e537cdbc60"
     },
     "data/en/pages/autochess.json": {
-      "bytes": 5164,
-      "sha256": "95494a569ac24fb94cef28b2389f17a350f047fabbe50b4f414a425e75d21a8a"
+      "bytes": 5475,
+      "sha256": "82ca9d34076273bf8abb02f52c2d5f95b29c99cf71f36e6380b18b6ef05f956e"
     },
     "data/en/pages/automatic-combat.json": {
       "bytes": 1277,
@@ -1526,8 +1526,8 @@
       "sha256": "27b950c3d446217683197f782226393a7bc655a19cf8716d3678024ce608677c"
     },
     "data/en/pages/duel.json": {
-      "bytes": 15143,
-      "sha256": "375980da549d5b51686691e2e19b153f0bae2048647e38201564aee25d1a6d16"
+      "bytes": 15760,
+      "sha256": "a90fa62992856802601b29e5bb3447516690b070ca4d6273a8f9022edd87fbb9"
     },
     "data/en/pages/heroes.json": {
       "bytes": 2076,
@@ -1854,8 +1854,8 @@
       "sha256": "1b067870a7a8e91c2adbf015259678dbca8ab20167f1730e52cd34fee0d24934"
     },
     "data/ru/index.json": {
-      "bytes": 438137,
-      "sha256": "7e8cad82903e04b0516eb5c6989dad96a5251cac830d02f2950cccd2739e54b3"
+      "bytes": 439691,
+      "sha256": "b03207ded31d1e407c1290068da3045168ed27a055742d1859ca65ec517fd28b"
     },
     "data/ru/pages/abilities.json": {
       "bytes": 3685,
@@ -1894,8 +1894,8 @@
       "sha256": "466b14f6e844d1ff61e563ece68a00ae5b338184f83b1466655b2c3bc9aed07e"
     },
     "data/ru/pages/autochess.json": {
-      "bytes": 8518,
-      "sha256": "2f37f6fe95a520806aaddb1365432eec26fd87c56dfa057383d7acfd439a9774"
+      "bytes": 9093,
+      "sha256": "e60b7cf4aca43f2ebbc75bd2257a848e881db2c73f19d69792fc2927193c6f37"
     },
     "data/ru/pages/automatic-combat.json": {
       "bytes": 2308,
@@ -3362,8 +3362,8 @@
       "sha256": "f5e413b6aef4e1c755bdeb42e1a8896d3c534657441fa34a065e343ee9db7578"
     },
     "data/ru/pages/duel.json": {
-      "bytes": 28287,
-      "sha256": "1d6935b3d28e5cf7dea6c4786d4ca3ba0ffef0a230ceefea47761dea844fa19c"
+      "bytes": 29385,
+      "sha256": "b57ba600ed3341c8e7235de9cee733215117ee629d39f9a63c00dfaea05d262b"
     },
     "data/ru/pages/heroes.json": {
       "bytes": 3175,
@@ -5138,5 +5138,5 @@
       "sha256": "aabab5bcfce15545227916db3d8f7e6c353fbf93c2b073e25dec7262d79874ed"
     }
   },
-  "bytes": 5678083
+  "bytes": 5683047
 }

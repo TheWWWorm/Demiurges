@@ -26,6 +26,9 @@ var _seed: LineEdit
 var _name: LineEdit
 var _address: LineEdit
 var _port: LineEdit
+var _room: LineEdit
+## Through the online relay with a room code, or straight to an address.
+var _relay := true
 var _status: Label
 var _roster: VBoxContainer
 var _online_page := false
@@ -68,6 +71,10 @@ func build(data: ELProfile) -> void:
 	_address = _edit(String(config.get_value("autochess", "address", "")), 120)
 	_address.placeholder_text = _t("e.g. 192.168.1.20:%d") % ELAutochessOnline.PORT
 	_port = _edit(str(config.get_value("autochess", "port", ELAutochessOnline.PORT)), 5)
+	_room = _edit("", 8)
+	_room.placeholder_text = "ABC234"
+	# Browsers can only use the relay.
+	_relay = OS.has_feature("web") or bool(config.get_value("autochess", "relay", true))
 	_seed = _edit("", 12)
 	_seed.placeholder_text = _t("Random seed")
 	_seed.tooltip_text = _t("Optional: enter a whole number to replay the same shops and opponents.")
@@ -118,6 +125,7 @@ func _remember() -> void:
 	config.set_value("autochess", "name", _player_name())
 	config.set_value("autochess", "address", _address.text.strip_edges())
 	config.set_value("autochess", "port", _port_number())
+	config.set_value("autochess", "relay", _relay)
 	config.save(SETTINGS)
 
 func _player_name() -> String:
@@ -132,7 +140,7 @@ func _port_number() -> int:
 
 ## Detaches the shared widgets, then frees the rest of the page.
 func _clear() -> void:
-	for keep: Control in [_seed, _name, _address, _port, _status, _bust, _picker, _faction, _roster]:
+	for keep: Control in [_seed, _name, _address, _port, _room, _status, _bust, _picker, _faction, _roster]:
 		if keep.get_parent() != null: keep.get_parent().remove_child(keep)
 	for child: Node in _body.get_children():
 		_body.remove_child(child)
@@ -214,17 +222,44 @@ func _build_online(column: VBoxContainer) -> void:
 		tab.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		tab.add_theme_stylebox_override("pressed", H.style(Color("424033"), H.GOLD, Vector2(8, 4)))
 		tab.add_theme_stylebox_override("normal", H.style(Color("202726"), Color("4b5143"), Vector2(8, 4)))
-	H.wrap(column, _t("Enter a friend's address and compete with your own army.") if _join_mode else _t("Create a tournament and share your address with friends."), 15, H.PAPER)
+	if not OS.has_feature("web"):
+		var ways := HBoxContainer.new()
+		ways.add_theme_constant_override("separation", 8)
+		column.add_child(ways)
+		for index in 2:
+			var way := H.button(ways, _t("Online room") if index == 0 else _t("Direct address"), func():
+				if connected: return
+				_relay = index == 0
+				_rebuild())
+			way.toggle_mode = true
+			way.set_pressed_no_signal(_relay == (index == 0))
+			way.disabled = connected and _relay != (index == 0)
+			way.tooltip_text = _t("Meet through the Demiurges server with a room code. No ports to open.") if index == 0 else _t("Connect straight to the host's address. The host may need to open a UDP port.")
+			way.custom_minimum_size = Vector2(140, 34)
+			way.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			way.add_theme_stylebox_override("pressed", H.style(Color("33403f"), H.GOLD, Vector2(8, 3)))
+			way.add_theme_stylebox_override("normal", H.style(Color("1b2221"), Color("3d4339"), Vector2(8, 3)))
+	if _relay:
+		H.wrap(column, _t("Enter the room code your host shared.") if _join_mode else _t("Create a tournament and share its room code with friends."), 15, H.PAPER)
+	else:
+		H.wrap(column, _t("Enter a friend's address and compete with your own army.") if _join_mode else _t("Create a tournament and share your address with friends."), 15, H.PAPER)
 	_field(column, _t("Your name"), _name)
-	if _join_mode: _field(column, _t("Host's address"), _address)
-	else: _field(column, _t("Port"), _port)
-	for edit: LineEdit in [_name, _address, _port]: edit.editable = not connected
+	if _join_mode: _field(column, _t("Room code") if _relay else _t("Host's address"), _room if _relay else _address)
+	elif not _relay: _field(column, _t("Port"), _port)
+	for edit: LineEdit in [_name, _address, _port, _room]: edit.editable = not connected
 	if not connected:
 		var action := H.button(column, _t("Join") if _join_mode else _t("Start hosting"), _join if _join_mode else _host, true)
 		action.custom_minimum_size.y = 48
 		action.add_theme_font_size_override("font_size", 19)
 	else:
-		if online.is_host:
+		if online.is_host and not online.relay_room.is_empty():
+			var code := online.relay_room
+			H.wrap(column, _t("Room code:") + "  " + code, 22, H.GOLD)
+			H.button(column, _t("Copy code"), func(): DisplayServer.clipboard_set(code))
+			var start := H.button(column, _t("Start game"), _start_hosted, true)
+			start.custom_minimum_size.y = 52
+			start.add_theme_font_size_override("font_size", 20)
+		elif online.is_host:
 			var addresses := PackedStringArray()
 			for address: String in IP.get_local_addresses():
 				if address.count(".") == 3 and not address.begins_with("127.") and not address.begins_with("169.254."): addresses.append("%s:%d" % [address, _port_number()])
@@ -349,24 +384,29 @@ func _host() -> void:
 	_close_online()
 	_remember()
 	online = ELAutochessOnline.new()
+	if _relay: online.relay_room = ELRelayPeer.new_code()
 	_connect_online()
 	if online.host(profile, _port_number(), _player_name(), hero) != OK:
-		_status.text = _t("Could not host on port %d.") % _port_number()
+		_status.text = _t("Could not open the room.") if _relay else _t("Could not host on port %d.") % _port_number()
 		online = null
 	_rebuild()
 
 func _join() -> void:
 	var address := _address.text.strip_edges()
-	if address.is_empty():
+	var room := ELRelayPeer.clean_code(_room.text)
+	if _relay and room.is_empty():
+		_status.text = _t("Enter the 6-letter room code.")
+		return
+	if not _relay and address.is_empty():
 		_status.text = _t("Enter the host's address.")
 		return
 	_close_online()
 	_remember()
-	var port := ELAutochessOnline.PORT
-	if address.contains(":") and address.get_slice(":", 1).is_valid_int():
-		port = int(address.get_slice(":", 1))
-		address = address.get_slice(":", 0)
+	var target := ELAutochessOnline.parse_address(address)
+	address = String(target[0])
+	var port := int(target[1])
 	online = ELAutochessOnline.new()
+	if _relay: online.relay_room = room
 	_connect_online()
 	if online.join(profile, address, port, _player_name(), hero) != OK:
 		_status.text = _t("Could not connect.")

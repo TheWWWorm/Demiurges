@@ -5,9 +5,14 @@ extends SceneTree
 ## messages and confirm both sides stay in sync. Folders default to the ones
 ## saved in the game's settings:
 ##
-##   godot --headless --path game --script ../tools/network_check.gd -- [--el1="C:/Games/Etherlords"] [--el2="C:/Games/Etherlords II"]
+##   godot --headless --path game --script ../tools/network_check.gd -- [--el1="C:/Games/Etherlords"] [--el2="C:/Games/Etherlords II"] [--relay=ws://127.0.0.1:8787/relay]
+##
+## With --relay every test runs a second time through that online relay
+## (`npx wrangler dev` serves one locally from worker.js).
 
 var failures: Array[String] = []
+## The room code of the current test when it runs through the relay.
+var _room := ""
 
 func check(ok: bool, what: String) -> void:
 	print(("PASS: " if ok else "FAIL: ") + what)
@@ -30,6 +35,10 @@ func _profile(id: String) -> ELProfile:
 	if folder.is_empty() or not p.mount(id, folder): return null
 	return p
 
+## A relay room exists once the host is connected; guests join after that.
+func _hosted(host: Object) -> void:
+	await _wait(func(): return host._peer != null and host._peer.get_connection_status() == MultiplayerPeer.CONNECTION_CONNECTED, [func(): if host._peer != null: host._peer.poll()], 10.0)
+
 func _wait(cond: Callable, polls: Array[Callable], seconds := 20.0) -> bool:
 	var deadline := Time.get_ticks_msec() + int(seconds * 1000)
 	while Time.get_ticks_msec() < deadline:
@@ -44,10 +53,35 @@ func _run() -> void:
 	var el2 := _profile("el2")
 	check(el1 != null, "EL1 data mounted (pass --el1=<folder>)")
 	check(el2 != null, "EL2 data mounted (pass --el2=<folder>)")
-	if el2 != null: await _autochess(el2)
-	if el1 != null: await _duel(el1, 27284)
-	if el2 != null: await _duel(el2, 27285)
-	if el1 != null: await _strategic(el1)
+	var modes := [""]
+	var relay := _arg("relay", "")
+	if not relay.is_empty():
+		OS.set_environment("DEMIURGES_RELAY", relay)
+		modes.append(relay)
+	for mode: String in modes:
+		print("#### %s" % ("relay " + mode if not mode.is_empty() else "direct (ENet)"))
+		if el2 != null:
+			_room = ELRelayPeer.new_code() if not mode.is_empty() else ""
+			await _autochess(el2)
+		if el1 != null:
+			_room = ELRelayPeer.new_code() if not mode.is_empty() else ""
+			await _duel(el1, 27284)
+		if el2 != null:
+			_room = ELRelayPeer.new_code() if not mode.is_empty() else ""
+			await _duel(el2, 27285)
+		if el1 != null:
+			_room = ELRelayPeer.new_code() if not mode.is_empty() else ""
+			await _strategic(el1)
+		if not mode.is_empty():
+			# A room nobody hosts fails quickly with a reason.
+			var lost := ELNetworkDuel.new()
+			lost.relay_room = ELRelayPeer.new_code()
+			var reason := [""]
+			lost.closed.connect(func(r): reason[0] = r)
+			lost.join(el1 if el1 != null else el2, "", ELNetworkDuel.PORT)
+			await _wait(func(): return not reason[0].is_empty(), [func(): lost.poll(true)], 10.0)
+			check(not reason[0].is_empty(), "relay: joining an empty room fails (%s)" % reason[0])
+			lost.close()
 	print("network check: %d failures" % failures.size())
 	quit(1 if not failures.is_empty() else 0)
 
@@ -55,13 +89,16 @@ func _run() -> void:
 func _autochess(profile: ELProfile) -> void:
 	print("== Autochess (EL2) ==")
 	var host := ELAutochessOnline.new()
+	host.relay_room = _room
 	var guest := ELAutochessOnline.new()
+	guest.relay_room = _room
 	var log := []
 	host.closed.connect(func(r): log.append("host closed: " + r))
 	guest.closed.connect(func(r): log.append("guest closed: " + r))
 	var guest_started := [false]
 	guest.started.connect(func(_g, s): guest_started[0] = true; print("  guest seat ", s))
 	check(host.host(profile, 27290, "Host", "") == OK, "autochess host opens port")
+	await _hosted(host)
 	check(guest.join(profile, "127.0.0.1", 27290, "Guest", "") == OK, "autochess guest starts connecting")
 	var polls: Array[Callable] = [func(): host.poll(0.016), func(): guest.poll(0.016)]
 	check(await _wait(func(): return host.lobby.size() == 2 and guest.lobby.size() == 2, polls), "autochess guest joins lobby (host sees %d, guest sees %d)" % [host.lobby.size(), guest.lobby.size()])
@@ -76,7 +113,38 @@ func _autochess(profile: ELProfile) -> void:
 		check(host.game.ready[1], "autochess guest 'ready' command reaches host")
 	for l in log: print("  ", l)
 	check(log.is_empty(), "autochess no disconnects")
+	if guest_started[0]:
+		# The guest drops; the computer takes the hero until the guest rejoins.
+		guest.close()
+		await _wait(func(): return host.game.controllers[1] == "computer", [func(): host.poll(0.016)], 10.0)
+		check(host.game.controllers[1] == "computer", "autochess computer takes a dropped guest's hero")
+		# A stranger cannot take the seat.
+		var own_token := ELAutochessOnline.token()
+		ELAutochessOnline._token = "stranger"
+		var stranger := ELAutochessOnline.new()
+		stranger.relay_room = _room
+		var refused := [""]
+		stranger.closed.connect(func(r): refused[0] = r)
+		stranger.join(profile, "127.0.0.1", 27290, "Stranger", "")
+		await _wait(func(): return not refused[0].is_empty(), [func(): host.poll(0.016), func(): stranger.poll(0.016)], 10.0)
+		check(refused[0] == "The game has already started.", "autochess stranger refused after start (%s)" % refused[0])
+		stranger.close()
+		ELAutochessOnline._token = own_token
+		var back := ELAutochessOnline.new()
+		back.relay_room = _room
+		var back_seat := [-1]
+		back.started.connect(func(_g, s): back_seat[0] = s)
+		back.join(profile, "127.0.0.1", 27290, "Guest", "")
+		await _wait(func(): return back_seat[0] >= 0, [func(): host.poll(0.016), func(): back.poll(0.016)], 10.0)
+		check(back_seat[0] == 1 and host.game.controllers[1] == "remote" and not host.game.names[1].ends_with(" (AI)"), "autochess guest rejoins its own seat (seat %d)" % back_seat[0])
+		back.close()
 	guest.close(); host.close()
+	# Join-box addresses.
+	check(ELAutochessOnline.parse_address("example.org") == ["example.org", ELAutochessOnline.PORT], "address without port")
+	check(ELAutochessOnline.parse_address("10.0.0.2:4000") == ["10.0.0.2", 4000], "IPv4 address with port")
+	check(ELAutochessOnline.parse_address("fe80::1") == ["fe80::1", ELAutochessOnline.PORT], "bare IPv6 address")
+	check(ELAutochessOnline.parse_address("[2001:db8::5]:4000") == ["2001:db8::5", 4000], "bracketed IPv6 address with port")
+	check(ELAutochessOnline.parse_address("[::1]") == ["::1", ELAutochessOnline.PORT], "bracketed IPv6 address without port")
 
 # --- Duel (EL1 / EL2) ------------------------------------------------------
 func _duel(profile: ELProfile, port: int) -> void:
@@ -92,7 +160,9 @@ func _duel(profile: ELProfile, port: int) -> void:
 			deck = String(p.id); break
 	check(not deck.is_empty() and not arenas.is_empty(), "%s duel has a preset (%s) and arena (%s)" % [tag, deck, arenas[0] if not arenas.is_empty() else "-"])
 	var host := ELNetworkDuel.new()
+	host.relay_room = _room
 	var guest := ELNetworkDuel.new()
+	guest.relay_room = _room
 	var log := []
 	host.closed.connect(func(r): log.append("host closed: " + r))
 	guest.closed.connect(func(r): log.append("guest closed: " + r))
@@ -101,6 +171,7 @@ func _duel(profile: ELProfile, port: int) -> void:
 	var offered := [false]
 	guest.offer_received.connect(func(_a, _b, _c, _d, _e): offered[0] = true)
 	check(host.host(profile, port, deck, arenas[0], level, 1) == OK, "%s duel host opens port" % tag)
+	await _hosted(host)
 	check(guest.join(profile, "127.0.0.1", port) == OK, "%s duel guest starts connecting" % tag)
 	var polls: Array[Callable] = [func(): host.poll(true), func(): guest.poll(true)]
 	check(await _wait(func(): return offered[0], polls), "%s duel guest receives offer" % tag)
@@ -112,24 +183,65 @@ func _duel(profile: ELProfile, port: int) -> void:
 		check(guest.send_chat("hello"), "%s duel chat send" % tag)
 		await _wait(func(): return host.chat_history.size() > 0, polls, 3.0)
 		check(host.chat_history.size() > 0, "%s duel chat received" % tag)
-		# Pass a few phases from whichever side is active; every step must stay in sync.
-		var steps := 0
-		for i in 6:
-			if host.duel == null or guest.duel == null or host.duel.phase == ELDuel.Phase.FINISHED: break
-			var active := host.duel.active_side()
-			var actor := host if active == 0 else guest
-			actor.duel.end_phase()
-			var target := actor._sequence
-			var other := guest if actor == host else host
-			await _wait(func(): return other._sequence == target and other._pending.is_empty(), polls, 5.0)
-			if other._sequence != target: break
-			steps += 1
+		var steps: int = await _phases(host, guest, polls, 6)
 		check(steps >= 3, "%s duel %d phase changes applied on both sides" % [tag, steps])
 		if host.duel != null and guest.duel != null:
 			check(host._digest() == guest._digest(), "%s duel states identical after play" % tag)
 	for l in log: print("  ", l)
 	check(log.is_empty(), "%s duel no disconnects/desync" % tag)
+	if host.live and guest.live:
+		await _duel_rejoin(profile, port, tag, host, guest, log)
 	guest.close(); host.close()
+
+## Ends phases from whichever side is active; returns how many reached both sides.
+func _phases(host: ELNetworkDuel, guest: ELNetworkDuel, polls: Array[Callable], count: int) -> int:
+	var steps := 0
+	for i in count:
+		if host.duel == null or guest.duel == null or host.duel.phase == ELDuel.Phase.FINISHED: break
+		var actor := host if host.duel.active_side() == 0 else guest
+		var other := guest if actor == host else host
+		actor.duel.end_phase()
+		var target := actor._sequence
+		await _wait(func(): return other._sequence == target and other._pending.is_empty(), polls, 5.0)
+		if other._sequence != target: break
+		steps += 1
+	return steps
+
+func _duel_rejoin(profile: ELProfile, port: int, tag: String, host: ELNetworkDuel, guest: ELNetworkDuel, log: Array) -> void:
+	var notices := []
+	host.connection_notice.connect(func(t): notices.append(t))
+	# Drop the guest's connection without a goodbye.
+	guest._remote = 0
+	guest.close()
+	await _wait(func(): return host._rejoin_deadline > 0, [func(): host.poll(true)], 10.0)
+	check(host._rejoin_deadline > 0 and host.live, "%s duel host waits for a dropped guest" % tag)
+	# The host keeps playing its own turn meanwhile.
+	if host.duel.active_side() == 0: host.duel.end_phase()
+	# Somebody else is turned away and the host keeps waiting.
+	var own_token := ELNetworkDuel.player_token()
+	ELNetworkDuel._token = "0".repeat(32)
+	var stranger := ELNetworkDuel.new()
+	stranger.relay_room = _room
+	stranger.join(profile, "127.0.0.1", port)
+	var stranger_closed := [""]
+	stranger.closed.connect(func(r): stranger_closed[0] = r)
+	await _wait(func(): return not stranger_closed[0].is_empty(), [func(): host.poll(true), func(): stranger.poll(true)], 10.0)
+	check(stranger_closed[0] == "This duel is waiting for its own player to return." and host._rejoin_deadline > 0 and host.live, "%s duel stranger cannot take the seat (%s)" % [tag, stranger_closed[0]])
+	stranger.close()
+	ELNetworkDuel._token = own_token
+	var back := ELNetworkDuel.new()
+	back.relay_room = _room
+	back.closed.connect(func(r): log.append("rejoined guest closed: " + r))
+	back.join(profile, "127.0.0.1", port)
+	var polls: Array[Callable] = [func(): host.poll(true), func(): back.poll(true)]
+	check(await _wait(func(): return back.live and host._rejoin_deadline == 0, polls, 20.0), "%s duel guest rejoins" % tag)
+	if back.live:
+		check(back._digest() == host._digest() and back._sequence == host._sequence, "%s duel rejoined state identical" % tag)
+		var steps: int = await _phases(host, back, polls, 4)
+		check(steps >= 2 and back._digest() == host._digest(), "%s duel play continues in sync after rejoin (%d phases)" % [tag, steps])
+	check(notices.size() == 2, "%s duel host told of drop and return (%s)" % [tag, notices])
+	check(log.is_empty(), "%s duel no failures around rejoin %s" % [tag, log])
+	back.close()
 
 # --- Strategic (EL1) -------------------------------------------------------
 func _strategic(profile: ELProfile) -> void:
@@ -140,12 +252,15 @@ func _strategic(profile: ELProfile) -> void:
 	var entry: Dictionary = maps[0]
 	print("  map ", entry.id, " seats ", entry.seats)
 	var host := ELNetworkStrategy.new()
+	host.relay_room = _room
 	var guest := ELNetworkStrategy.new()
+	guest.relay_room = _room
 	var log := []
 	host.closed.connect(func(r): log.append("host closed: " + r))
 	guest.closed.connect(func(r): log.append("guest closed: " + r))
 	var players := Vector2i(entry.seats[0].id, entry.seats[1].id)
 	check(host.host(profile, entry.id, 27296, players, 1, 4242) == OK, "strategic host opens port")
+	await _hosted(host)
 	check(guest.join(profile, "127.0.0.1", 27296) == OK, "strategic guest starts connecting")
 	var polls: Array[Callable] = [func(): host.poll(), func(): guest.poll()]
 	check(await _wait(func(): return host.live and guest.live, polls, 30.0), "strategic both sides live")
