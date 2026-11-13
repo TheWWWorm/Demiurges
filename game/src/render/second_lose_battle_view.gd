@@ -4,11 +4,12 @@ extends Control
 ## that no player-one hero won, the full-screen GOOD_DEFEAT picture (the
 ## 1024x768 Res2 tiles) fades in with "Нажмите любую клавишу" (LoseBattle_Text1);
 ## once it is up, any key or click fades it out over one second and the map
-## resumes. Wider windows centre the picture on black.
+## resumes. Wider windows use the mission defeat picture's extensions.
 
 signal closed
 
 const PANEL := "LoseBattle"
+const DESIGN := ELWinLoseScreen.DESIGN
 const FADE_IN := 1.0
 const FADE_OUT := 1.0
 
@@ -19,6 +20,7 @@ var hint: Label
 ## 0 fading in, 1 waiting for a key, 2 fading out.
 var stage := 0
 var _pieces: Array[Dictionary] = []
+var _wide_picture: Texture2D
 var _clock := 0.0
 
 func build(owner: ELSecondAdventureHud) -> void:
@@ -54,16 +56,17 @@ func build(owner: ELSecondAdventureHud) -> void:
 	for piece_row: Dictionary in hud.rows(PANEL, ["Res2"]):
 		var piece := hud.cut(piece_row)
 		if not piece.is_empty(): _pieces.append(piece)
+	_wide_picture = ELWinLoseScreen.wide_picture(ELWinLoseScreen.compose_picture(_pieces), ELWinLoseScreen.EL2_DEFEAT_OVERLAY)
 	resized.connect(_layout)
 	modulate.a = 0.0
 	_layout()
 
 func _layout() -> void:
-	if size.y <= 0: return
-	var factor := minf(size.y / 768.0, size.x / 1024.0)
+	if size.x <= 0 or size.y <= 0: return
+	var factor := minf(size.y / DESIGN.y, size.x / DESIGN.x)
 	canvas.scale = Vector2(factor, factor)
-	canvas.position = (size - Vector2(1024, 768) * factor) * 0.5
-	canvas.size = Vector2(1024, 768)
+	canvas.position = (size - DESIGN * factor) * 0.5
+	canvas.size = DESIGN
 	art.size = canvas.size
 	var row: Dictionary = hud._controls.get("LoseBattle_Text1", {})
 	hint.position = Vector2(float(row.get("Left", 43)) + float(row.get("ShiftX", 0)), float(row.get("Top", 540)) + float(row.get("ShiftY", 168)))
@@ -71,6 +74,10 @@ func _layout() -> void:
 	art.queue_redraw()
 
 func _draw_art() -> void:
+	var side := (size.x / canvas.scale.x - DESIGN.x) * 0.5
+	if _wide_picture != null and side >= ELFrontMenu.WIDE_MINIMUM:
+		ELWinLoseScreen.draw_wide_picture(art, _wide_picture, side)
+		return
 	for piece: Dictionary in _pieces: art.draw_texture_rect_region(piece.texture, piece.rect, piece.source)
 
 func _process(delta: float) -> void:

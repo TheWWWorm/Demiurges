@@ -14,9 +14,8 @@ extends Control
 ## the 1 s fade-out; "Wait..." (WL_WaitText) shows on black before it closes.
 ## Closing stops its sound and emits `closed` once.
 ##
-## Remake: in a window wider (or taller) than 4:3 the bars beside the picture
-## show the same picture blurred, darkened and stretched to fill the window,
-## with a soft shadow along the picture's edges; at 4:3 nothing changes.
+## The widescreen extensions use the installed edition's picture and caption.
+## The blurred backdrop remains available for tall windows and missing overlays.
 signal closed
 
 const DESIGN := Vector2(1024, 768)
@@ -25,9 +24,8 @@ const FADE := 1.0
 const WAIT_TEXT := "WL_WaitText"
 const WAIT_INK := Color8(0xd6, 0xbb, 0x88)
 const GOOD_COLOURS := ["green", "blue"]
-## Bars narrower than this (design pixels) stay black, as the front end's
-## widescreen frame does (ELFrontMenu.WIDE_MINIMUM).
-const WIDE_MINIMUM := 48.0
+const WIDE_ART := "res://assets/widescreen/"
+const EL2_DEFEAT_OVERLAY := WIDE_ART + "etherlords-ii-defeat-overlay.png"
 ## The blurred copy: its size before it is smoothed back up, and its brightness.
 const BLUR_SIZE := Vector2i(32, 24)
 const BLUR_SHADE := 0.42
@@ -51,6 +49,7 @@ var wait_label: Label
 var _art: Control
 var _backdrop: Control
 var _blurred: Texture2D
+var _wide_picture: Texture2D
 var _player: AudioStreamPlayer
 
 ## The screen's mask for one outcome; `colour` is the local player's colour.
@@ -80,7 +79,9 @@ func setup(source: ELProfile, victory: bool, colour: String) -> bool:
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	focus_mode = Control.FOCUS_ALL
 	if source != null: _collect()
-	_blurred = _blur()
+	var picture := compose_picture(pieces)
+	_wide_picture = wide_picture(picture, _overlay_path())
+	_blurred = _blur(picture)
 	_backdrop = Control.new()
 	_backdrop.name = "WideBackdrop"
 	_backdrop.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -126,20 +127,39 @@ func _collect() -> void:
 		var source := Rect2(float(row.get("TxtL", 0)), float(row.get("TxtT", 0)), float(row.get("TxtW", 0)), float(row.get("TxtH", 0)))
 		pieces.append({"texture": texture, "source": source, "rect": Rect2(Vector2(float(row.get("ScrL", 0)), float(row.get("ScrT", 0))), source.size)})
 
-## The picture shrunk to a few pixels and smoothed back up: a soft copy for
-## the bars of wider windows (no new art, only the shown picture).
-func _blur() -> Texture2D:
-	if pieces.is_empty(): return null
-	var whole := Image.create(int(DESIGN.x), int(DESIGN.y), false, Image.FORMAT_RGBA8)
+func _overlay_path() -> String:
+	if first:
+		return WIDE_ART + ("etherlords-good-result-overlay.png" if mask.has("Type1") else "etherlords-evil-result-overlay.png")
+	return WIDE_ART + "etherlords-ii-victory-overlay.png" if won else EL2_DEFEAT_OVERLAY
+
+static func compose_picture(tiles: Array[Dictionary]) -> Image:
+	if tiles.is_empty(): return null
+	var whole := Image.create_empty(int(DESIGN.x), int(DESIGN.y), false, Image.FORMAT_RGBA8)
 	whole.fill(Color.BLACK)
-	for piece: Dictionary in pieces:
-		var image: Image = piece.texture.get_image()
+	for piece: Dictionary in tiles:
+		var image := ELTexture.readable(piece.texture.get_image())
 		if image == null: continue
-		if image.is_compressed() and image.decompress() != OK: continue
-		image.convert(Image.FORMAT_RGBA8)
 		var source: Rect2 = piece.source
 		var rect: Rect2 = piece.rect
 		whole.blend_rect(image, Rect2i(source), Vector2i(rect.position))
+	return whole
+
+## Composite once so the extended scene and the original fade as one image.
+static func wide_picture(picture: Image, path: String) -> Texture2D:
+	if picture == null or not ResourceLoader.exists(path): return null
+	var texture := load(path) as Texture2D
+	if texture == null: return null
+	var overlay := ELTexture.readable(texture.get_image())
+	if overlay == null or overlay.get_width() <= picture.get_width() or overlay.get_height() < picture.get_height(): return null
+	var margin := (overlay.get_size() - picture.get_size()) / 2
+	var whole := Image.create_empty(overlay.get_width(), overlay.get_height(), false, Image.FORMAT_RGBA8)
+	whole.blit_rect(picture, Rect2i(Vector2i.ZERO, picture.get_size()), margin)
+	whole.blend_rect(overlay, Rect2i(Vector2i.ZERO, overlay.get_size()), Vector2i.ZERO)
+	return ImageTexture.create_from_image(whole)
+
+## A soft copy for the bars when the widescreen art cannot be drawn.
+func _blur(whole: Image) -> Texture2D:
+	if whole == null: return null
 	# Halving steps average neighbouring pixels; one large step would alias.
 	while whole.get_width() > BLUR_SIZE.x * 2:
 		whole.resize(maxi(BLUR_SIZE.x, whole.get_width() / 2), maxi(BLUR_SIZE.y, whole.get_height() / 2), Image.INTERPOLATE_BILINEAR)
@@ -171,6 +191,7 @@ func _layout() -> void:
 	_art.scale = Vector2(factor, factor)
 	_art.position = ((size - DESIGN * factor) * 0.5).round()
 	queue_redraw()
+	_art.queue_redraw()
 	if _backdrop != null: _backdrop.queue_redraw()
 
 ## Black under the art: always in the first game; in the second only from the
@@ -185,7 +206,8 @@ func _draw_backdrop() -> void:
 	var factor := _art.scale.x
 	if factor <= 0.0: return
 	var gap := (size / factor - DESIGN) * 0.5
-	if maxf(gap.x, gap.y) < WIDE_MINIMUM: return
+	if _wide_picture != null and gap.x >= ELFrontMenu.WIDE_MINIMUM: return
+	if maxf(gap.x, gap.y) < ELFrontMenu.WIDE_MINIMUM: return
 	var cover := maxf(size.x / DESIGN.x, size.y / DESIGN.y)
 	var extent := DESIGN * cover
 	_backdrop.draw_texture_rect(_blurred, Rect2((size - extent) * 0.5, extent), false, Color(BLUR_SHADE, BLUR_SHADE, BLUR_SHADE, alpha))
@@ -194,10 +216,10 @@ func _draw_backdrop() -> void:
 	var reach := EDGE_SHADOW * factor
 	var dark := Color(0, 0, 0, 0.75 * alpha)
 	var clear := Color(0, 0, 0, 0)
-	if gap.x >= WIDE_MINIMUM:
+	if gap.x >= ELFrontMenu.WIDE_MINIMUM:
 		_edge(Rect2(picture.position.x - reach, picture.position.y, reach, picture.size.y), clear, dark, true)
 		_edge(Rect2(picture.end.x, picture.position.y, reach, picture.size.y), dark, clear, true)
-	if gap.y >= WIDE_MINIMUM:
+	if gap.y >= ELFrontMenu.WIDE_MINIMUM:
 		_edge(Rect2(picture.position.x, picture.position.y - reach, picture.size.x, reach), clear, dark, false)
 		_edge(Rect2(picture.position.x, picture.end.y, picture.size.x, reach), dark, clear, false)
 
@@ -209,8 +231,24 @@ func _edge(rect: Rect2, from: Color, to: Color, across: bool) -> void:
 
 func _draw_art() -> void:
 	var tint := Color(1, 1, 1, alpha)
+	var side := (size.x / _art.scale.x - DESIGN.x) * 0.5
+	if _wide_picture != null and side >= ELFrontMenu.WIDE_MINIMUM:
+		draw_wide_picture(_art, _wide_picture, side, tint)
+		return
 	for piece: Dictionary in pieces:
 		_art.draw_texture_rect_region(piece.texture, piece.rect, piece.source, tint)
+
+## At widescreen sizes, draw in one rectangle so filtering crosses the joins.
+## Narrower windows compress the extensions to keep the outer frame visible.
+static func draw_wide_picture(target: CanvasItem, picture: Texture2D, side: float, tint := Color.WHITE) -> void:
+	if side < DESIGN.y * (16.0 / 9.0) * 0.5 - DESIGN.x * 0.5 - 0.01:
+		ELFrontMenu.draw_wide_texture(target, picture, side, tint)
+		return
+	var margin := (Vector2(picture.get_size()) - DESIGN) * 0.5
+	var outer := minf(side, margin.x)
+	var extent := DESIGN + Vector2(outer * 2.0, 0)
+	target.draw_texture_rect_region(picture, Rect2(Vector2(-outer, 0), extent),
+		Rect2(Vector2(margin.x - outer, margin.y), extent), tint)
 
 func _process(delta: float) -> void:
 	if stage >= 3: return

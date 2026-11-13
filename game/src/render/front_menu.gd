@@ -582,16 +582,18 @@ func _add_wide_frame(target: String, under_panel := false) -> void:
 
 func _draw_wide_frame(target: CanvasItem = null) -> void:
 	if target == null: target = _wide_frame
-	if _wide_texture == null or scale_factor <= 0.0 or target == null: return
-	var side := (size.x / scale_factor - DESIGN.x) * 0.5
-	if side < WIDE_MINIMUM: return
-	var source := Vector2(_wide_texture.get_size())
+	if scale_factor <= 0.0 or target == null: return
+	draw_wide_texture(target, _wide_texture, (size.x / scale_factor - DESIGN.x) * 0.5)
+
+static func draw_wide_texture(target: CanvasItem, texture: Texture2D, side: float, tint := Color.WHITE) -> void:
+	if texture == null or side < WIDE_MINIMUM: return
+	var source := Vector2(texture.get_size())
 	var margin := ((source - DESIGN) * 0.5).floor()
 	var outer := minf(side, margin.x)
-	target.draw_texture_rect_region(_wide_texture, Rect2(Vector2.ZERO, DESIGN), Rect2(margin, DESIGN))
+	target.draw_texture_rect_region(texture, Rect2(Vector2.ZERO, DESIGN), Rect2(margin, DESIGN), tint, false, false)
 	# Between 4:3 and 16:9 the outer columns are narrowed to the side bars.
-	target.draw_texture_rect_region(_wide_texture, Rect2(-outer, 0, outer, DESIGN.y), Rect2(0, margin.y, margin.x, DESIGN.y))
-	target.draw_texture_rect_region(_wide_texture, Rect2(DESIGN.x, 0, outer, DESIGN.y), Rect2(source.x - margin.x, margin.y, margin.x, DESIGN.y))
+	target.draw_texture_rect_region(texture, Rect2(-outer, 0, outer, DESIGN.y), Rect2(0, margin.y, margin.x, DESIGN.y), tint, false, false)
+	target.draw_texture_rect_region(texture, Rect2(DESIGN.x, 0, outer, DESIGN.y), Rect2(source.x - margin.x, margin.y, margin.x, DESIGN.y), tint, false, false)
 
 func _draw_art() -> void:
 	# Over a battle the dim covers the whole window (see _draw), not only the 4:3 art.
