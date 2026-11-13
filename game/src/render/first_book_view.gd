@@ -6,8 +6,9 @@ extends ELHeroScreenView
 ## one cell per spell and rune count ("×n" for several copies). The price
 ## table shows the selected spell's rune price and the owner's resources.
 ##
-## A click selects a spell; a double or right click moves it at once between
-## the book and the reserve, as do the two arrow buttons. OK, Cancel and
+## A click selects a spell; a double or right click, or dragging it onto the
+## other side, moves it at once between the book and the reserve, as do the
+## two arrow buttons. OK, Cancel and
 ## Escape close the screen. The moves go through ELAdventureSession.move_spell
 ## (or the network order in a strategic session).
 ## The laboratory panel's places (as in ELFirstSpellShopView).
@@ -138,14 +139,36 @@ func press(point: Vector2) -> void:
 		book_pick = book
 		reserve_pick = -1
 		if double_click: unequip()
-		else: refresh()
+		else:
+			held = {"kind": "book", "index": book, "icon": profile.card_icon(str(book_cards(0)[book]))}
+			refresh()
 		return
 	var index := reserve_at(point)
 	if index >= 0:
 		reserve_pick = index
 		book_pick = -1
 		if double_click: equip()
-		else: refresh()
+		else:
+			held = {"kind": "reserve", "index": index, "icon": profile.card_icon(str(entries[index].card))}
+			refresh()
+
+## A spell dragged from the book onto the reserve, or from the reserve onto
+## the book, moves as with a double click; dropped elsewhere it stays.
+func drop_held(item: Dictionary, point: Vector2) -> void:
+	var book_area := Rect2(Vector2(24, 384), Vector2(53 * 5 + 10, 52 * 3 + 10))
+	var reserve_area := Rect2(RESERVE_CELL - Vector2(5, 5), Vector2(STEP * RESERVE_COLUMNS + 10, 52 * RESERVE_ROWS + 10))
+	if item.kind == "book" and reserve_area.has_point(point) and int(item.index) < book_cards(0).size():
+		book_pick = int(item.index)
+		reserve_pick = -1
+		unequip()
+	elif item.kind == "reserve" and book_area.has_point(point) and int(item.index) < entries.size():
+		reserve_pick = int(item.index)
+		book_pick = -1
+		var problem := equip_problem()
+		if problem.is_empty(): equip()
+		else:
+			_say(problem)
+			refresh()
 
 func right_press(point: Vector2) -> bool:
 	var book := book_at(point)

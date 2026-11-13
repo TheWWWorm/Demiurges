@@ -100,8 +100,6 @@ func _compose() -> void:
 
 func _label(rect: Rect2, size: int, color: Color, font: Font) -> Label:
 	var label := Label.new()
-	label.position = rect.position + sheet_offset()
-	label.size = rect.size
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	label.clip_text = true
@@ -113,6 +111,7 @@ func _label(rect: Rect2, size: int, color: Color, font: Font) -> Label:
 	label.add_theme_constant_override("shadow_offset_y", 1)
 	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	sheet.add_child(label)
+	ELMenuKit.place_text(label, Rect2(rect.position + sheet_offset(), rect.size))
 	return label
 
 func _button(control: String) -> ELAdventureHud.CutButton:

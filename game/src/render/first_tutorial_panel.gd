@@ -184,7 +184,8 @@ func handle_input(event: InputEvent) -> bool:
 	if not visible: return false
 	if event is InputEventKey and event.pressed:
 		match event.keycode:
-			KEY_ESCAPE: close()
+			# Enter presses the check button (TuClose), as Esc does.
+			KEY_ESCAPE, KEY_ENTER, KEY_KP_ENTER: if not event.echo: close()
 			KEY_LEFT: if tutorial.back(): _fill()
 			KEY_RIGHT: if tutorial.forward(): _fill()
 			KEY_UP: scroll(-1)
@@ -226,7 +227,7 @@ func frame_rect() -> Rect2:
 	return screen_rect(FRAME)
 
 func _fill() -> void:
-	var entry := ELFirstTutorial.texts(profile, tutorial.current_id())
+	var entry := ELFirstTutorial.texts(profile, tutorial.current_id(), free_movement())
 	caption.text = entry.caption
 	body.text = no_hyphen_breaks(entry.body)
 	body.scroll_to_line(0)
@@ -346,6 +347,13 @@ func _draw_piece(piece: Dictionary, at: Vector2, s: float) -> void:
 
 ## Connects a first-game map: session events (day start, building use,
 ## captures, heroes lost, levels) and the windows it opens.
+## True on a watched map where the remake's free movement applies (the hero
+## orders hint then explains it).
+func free_movement() -> bool:
+	if _view == null or not is_instance_valid(_view): return false
+	var director: Variant = _view.get("director")
+	return director is ELAdventureDirector and ELStrategy.free_mode(director)
+
 func watch_adventure(view: Node) -> void:
 	_view = view
 	var state: ELAdventureSession = view.state

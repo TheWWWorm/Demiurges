@@ -3,11 +3,17 @@ extends RefCounted
 ## Player actions by name, so the local screen, the host and online guests
 ## change a company through exactly the same validated operations.
 
-const NAMES := ["buy", "refresh", "train", "lock", "sell", "deploy", "bench", "swap", "equip", "choose_item", "undo", "arrange", "ready"]
+const NAMES := ["buy", "refresh", "train", "lock", "sell", "deploy", "bench", "swap", "equip", "choose_item", "undo", "arrange", "ready", "speed"]
 
 ## Applies `op` for `seat`; returns "" or an English error message.
 static func apply(game: ELAutochessMatch, seat: int, op: String, args: Array) -> String:
 	if game == null or seat < 0 or seat >= game.companies.size() or op not in NAMES: return "Unknown action."
+	# The fight speed is shared by the whole table (every machine plays the
+	# battles itself), and anyone, eliminated players watching included, may change it.
+	if op == "speed":
+		game.speed = 2.0 if _float(args, 0) >= 2.0 else 1.0
+		game.changed.emit()
+		return ""
 	var company := game.companies[seat]
 	if company.health <= 0: return "You have left the tournament."
 	if op in ["deploy", "bench", "swap", "equip", "choose_item", "undo", "arrange", "ready"] and game.stage != "prepare":

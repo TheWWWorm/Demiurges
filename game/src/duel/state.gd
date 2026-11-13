@@ -86,6 +86,10 @@ var gate: Object = null
 ## Serial of the next card put into a hand (the original's per-battle card id),
 ## tracked in each hero's `hand_ids` when the start options ask for card ids.
 var next_card := 0
+## Second game (update 1.03): the hero whose spell, strike or creature is
+## making the other hero discard right now (-1: none); the discarded cards
+## that answer it are ELCatalog.DISCARD_SUMMONS and DISCARD_RETORTS.
+var _discard_cause := -1
 
 ## Campaign battles share the mission variables and difficulty with their
 ## adventure session (held weakly; the session owns the encounter).
@@ -554,6 +558,14 @@ func water_links(id: int) -> Array[Dictionary]:
 
 func global_enchantment_count(card: String) -> int:
 	return _enchantment_count(0, card) + _enchantment_count(1, card)
+
+## Copies of a creature enchantment that `side` cast, on creatures of either army.
+func _caster_enchantments(side: int, card: String) -> int:
+	var count := 0
+	for c: Dictionary in creatures.values():
+		for e: Dictionary in c.enchantments:
+			if e.card == card and int(e.owner) == side: count += 1
+	return count
 
 func recovery_blocked(side: int) -> bool:
 	if profile.id == "el2": return global_enchantment_count("FTDS") > 0
@@ -1072,6 +1084,8 @@ func _resolve_spell(side: int, card: String, rule: Dictionary, target: int, grav
 	# Second game: data attraction copies in play when the spell is cast react even if the spell
 	# removes them. The first game counts the copies left after the spell.
 	var attractions := _enchantment_count(side, "TRLB") if profile.id == "el2" else -1
+	var previous_cause := _discard_cause
+	_discard_cause = side
 	match rule.effect:
 		"summon": _summon(side, card)
 		"damage", "wave":
@@ -1317,8 +1331,15 @@ func _resolve_spell(side: int, card: String, rule: Dictionary, target: int, grav
 				var holder := find_enchantment(enchantment_id)
 				if holder >= 0 and dispellable(holder, _enchantment_by_id(holder, enchantment_id), true): _dispel(holder, enchantment_id)
 		"grave_fire":
+			# Since update 1.03 the second game's burning graves hurt 3 per creature
+			# and then empty both graveyards.
+			var per_creature := 3 if profile.id == "el2" else 2
 			for victim in 2:
-				if not heroes[victim].grave.is_empty(): _trigger_damage(card, victim, 2 * heroes[victim].grave.size())
+				if not heroes[victim].grave.is_empty(): _trigger_damage(card, victim, per_creature * heroes[victim].grave.size())
+			if profile.id == "el2":
+				for victim in 2:
+					while not heroes[victim].grave.is_empty():
+						_emit({"kind": "grave_removed", "side": victim, "card": heroes[victim].grave.pop_front()})
 		"unsummon":
 			# The card returns to its original owner's hand.
 			_give_card(origin(target), creatures[target].card)
@@ -1379,8 +1400,11 @@ func _resolve_spell(side: int, card: String, rule: Dictionary, target: int, grav
 		"clone": _summon(side, creatures[target].card)
 		"pale_blast":
 			# The latest enchantment goes if it can; a Pale creature then takes 3.
+			# Since update 1.03 a mark that cannot be removed (a grass snake's
+			# growth) no longer shields the enchantments cast before it.
 			var latest := {}
-			for e: Dictionary in creatures[target].enchantments: latest = e
+			for e: Dictionary in creatures[target].enchantments:
+				if profile.id != "el2" or dispellable(target, e): latest = e
 			if not latest.is_empty() and dispellable(target, latest): _remove_enchantment(target, int(latest.id))
 			if creatures.has(target) and pale(target): _damage(target, 3, false, false, true, true)
 		"pale_cleave":
@@ -1434,8 +1458,9 @@ func _resolve_spell(side: int, card: String, rule: Dictionary, target: int, grav
 			var grave_slot := grave_index % GRAVE_SIDE
 			var revived: String = heroes[grave_side].grave[grave_slot]
 			# The original 1e6 bypass hit; the remaining toughness gives the same result
-			# without an inflated damage figure.
-			_damage(target, maxi(1, int(creatures[target].toughness) - int(creatures[target].damage)), false, false, true, true, true)
+			# without an inflated damage figure. Since update 1.03 regeneration no
+			# longer saves the creature.
+			_damage(target, maxi(1, int(creatures[target].toughness) - int(creatures[target].damage)), false, profile.id == "el2", true, true, true)
 			if army(side).size() < 10:
 				if grave_slot >= heroes[grave_side].grave.size() or heroes[grave_side].grave[grave_slot] != revived: grave_slot = heroes[grave_side].grave.rfind(revived)
 				if grave_slot >= 0:
@@ -1499,8 +1524,11 @@ func _resolve_spell(side: int, card: String, rule: Dictionary, target: int, grav
 						_emit({"kind": "mind_blast_cue", "target": victim})
 					_damage(victim, hurt)
 		"hunger_both":
+			# Since update 1.03 a creature a water link brings back to the other
+			# side is not struck again: the victims are fixed before any dies.
+			var starved: Array = army(0) + army(1)
 			for victim_side in 2:
-				for c: Dictionary in army(victim_side):
+				for c: Dictionary in (army(victim_side) if profile.id != "el2" else starved.filter(func(x: Dictionary) -> bool: return int(x.owner) == victim_side)):
 					if creatures.has(c.id) and c.power > 0:
 						# EL1 RavagingHunger@ and EL2@
 						# register a Target cue before each eligible figure's
@@ -1549,9 +1577,14 @@ func _resolve_spell(side: int, card: String, rule: Dictionary, target: int, grav
 		if attractions < 0: attractions = _enchantment_count(side, "TRLB") - (1 if card == "TRLB" else 0)
 		for copy in attractions:
 			_draw(side)
-			_trigger_damage("TRLB", side, 3)
+			# Since update 1.03 the second game's attraction hurts by 2, and
+			# nothing protects from it.
+			if profile.id == "el2": _hero_damage_kind = 2
+			_trigger_damage("TRLB", side, 2 if profile.id == "el2" else 3)
+			_hero_damage_kind = 0
 		if profile.table("CombatSpells")[card].get("Class") == "Sorcery" and not traps.is_empty(): _spell_traps(side, card, extra_ether, traps)
 	_settle_illusion_health()
+	_discard_cause = previous_cause
 	if not specs: return
 	# Velos and halo specialisations summon a second creature; elixir draws a card.
 	if rule.effect == "summon":
@@ -1788,15 +1821,18 @@ func _pale_ability(id: int, d: Dictionary, target: int, choice: int) -> bool:
 			if d.key == "weave":
 				# Weaving copies without dispelling, so it also reaches pale holders.
 				if chosen.get("fixed", false): return _fail("This enchantment has no caster to copy.")
-				price = printed + 2
+				price = printed + int(d.cost)
 			elif not dispellable(target, chosen): return _fail("This enchantment cannot be removed.")
-			if d.key == "transpose": price = printed + 1
+			# Since update 1.03 the Spellweaver pays 1+X and the Spellshifter 2+X.
+			if d.key == "transpose": price = printed + int(d.cost)
 			if available_mana(side) < price: return _fail("Not enough ether.")
 		"ether_plea":
 			if entity(target).is_empty() or not targetable(target): return _fail("Select a creature or hero.")
 		"pale_devour":
 			if not creatures.has(target) or target == id or not targetable(target): return _fail("Select a creature in the Ether.")
 			var prey: Dictionary = creatures[target]
+			# Since update 1.03 the Pale Scourge cannot devour walls.
+			if c.card == "OUD1" and race(target) == "Wall": return _fail("Walls cannot be devoured.")
 			var weaker: bool = prey.power < c.power if d.measure == "power" else (prey.toughness < c.toughness if d.measure == "toughness" else prey.power < c.power and prey.toughness < c.toughness)
 			if not weaker: return _fail("This creature is too strong to devour.")
 	if d.get("rest", false):
@@ -2170,6 +2206,10 @@ func _first_ability(id: int, definition: Dictionary, target: int, grave_index: i
 			if chosen.is_empty() or not dispellable(target, chosen): return _fail("Select an enchantment that can be removed.")
 			price = enchantment_price(chosen)
 			if available_mana(side) < price: return _fail("Not enough ether to remove this enchantment.")
+		"orc_rite":
+			var chosen := _enchantment_by_id(target, grave_index)
+			if chosen.is_empty() or not dispellable(target, chosen): return _fail("Select an enchantment that can be removed.")
+			if int(heroes[side].channels) < 1: return _fail("The rite needs an ether channel to sacrifice.")
 		"phantasm":
 			if c.get("ability_used", {}).get("phantasm", false): return _fail("This ability has already been used this round.")
 		"slay":
@@ -2277,6 +2317,11 @@ func _first_ability(id: int, definition: Dictionary, target: int, grave_index: i
 			_give_card(side, rat)
 			_emit({"kind": "return_card", "side": side, "card": rat})
 		"dispel": _dispel(target, grave_index)
+		"orc_rite":
+			# The sacrificed channel is the rite's price, so Stasis does not spare it.
+			heroes[side].channels = int(heroes[side].channels) - 1
+			_emit({"kind": "channels", "side": side, "amount": -1})
+			_dispel(target, grave_index)
 		"spirit_flight":
 			# Every warrior spirit flies, later arrivals included, until the end of the
 			# opponent's next turn; the effect outlives the wizard.
@@ -2629,8 +2674,9 @@ func _remove_enchantment(target: int, enchantment_id: int) -> void:
 		if target >= 2 and e.card in ELCatalog.CONTROL and victim.has("origin"):
 			_move_army(victim, int(victim.origin))
 			victim.erase("origin")
-			# Returned control also waits a turn, as on the steal.
-			victim.sick = not (profile.id == "el2" and has_flag(target, "NSS"))
+			# Returned control also waits a turn, as on the steal. Since update 1.03
+			# the second game's sacrificing men come back ready to use their rite.
+			victim.sick = not (profile.id == "el2" and (has_flag(target, "NSS") or victim.card in ["RZMN", "CTMN", "SWMN"]))
 			_unassign(target)
 			_refresh_armies()
 		if e.card == "ERBN":
@@ -2649,7 +2695,11 @@ func _remove_enchantment(target: int, enchantment_id: int) -> void:
 			# once the holder is marked dead; the remake's kill always succeeds).
 			if profile.id in ["el1", "el2"]: _emit({"kind": "alpha_strike_death", "target": target})
 			_kill(target)
-		elif target >= 2 and e.card == "QKFX": _destroy(target, true)
+		elif target >= 2 and e.card == "QKFX":
+			# Since update 1.03 a Pale creature dies too instead of dissipating.
+			_plane_guard = profile.id == "el2"
+			_destroy(target, true)
+			_plane_guard = false
 		elif target >= 2 and victim.damage >= victim.toughness: _lethal(target)
 		elif target < 2:
 			# Losing an army health modifier exposes retained lethal damage.
@@ -2676,6 +2726,7 @@ func _end_phase_now() -> bool:
 		if attacks.is_empty(): return _end_phase_now()
 	else:
 		_resolve_attacks()
+		_discard_cause = -1
 		_settle_illusion_health()
 		_drain_scripts()
 		if phase == Phase.FINISHED:
@@ -2812,6 +2863,10 @@ func _turn_enchantments(at_start: bool) -> void:
 						for c: Dictionary in army(side):
 							if ELSpecs.roll(self, side, "BSGP") == 0: _trigger_damage(e.card, c.id, 2)
 						if ELSpecs.roll(self, side, "BSGP") == 0: _trigger_damage(e.card, side, 2)
+				"MNVR":
+					# Update 1.03: a second-game vortex ends with its caster's next turn.
+					if profile.id == "el2" and target == attacker and int(e.owner) == attacker and turn_serial - int(e.born) >= 2:
+						_remove_enchantment(target, e.id)
 				"RDDF", "FOGG", "FDBK", "FURY", "ASST", "ASLT", "WLDT", "EWLD", "ETCH", "PLSL", "ORPL", "LNRD", "PCDU":
 					# These end with a turn that their caster did not own.
 					if e.owner != attacker: _remove_enchantment(target, e.id)
@@ -3062,8 +3117,20 @@ func _begin_attack(draw_card: bool) -> void:
 	# The final ether-income row is not applied in either edition.
 	var row: Dictionary = income.get(str(hero.turns), {}) if int(hero.turns) < income.size() else {}
 	var stasis := global_enchantment_count("STSI") > 0
-	if not stasis or profile.id == "el1": hero.channels += int(row.get("Level%d" % hero.level, 0))
-	if not stasis: hero.mana = hero.channels * (1 + global_enchantment_count("MNVR"))
+	# Update 1.03 (second game): each ether storm and ether breeze this hero cast
+	# on a creature still in play adds a channel or 3 ether here.
+	var storms := _caster_enchantments(attacker, "MNST") if profile.id == "el2" else 0
+	if not stasis or profile.id == "el1": hero.channels += int(row.get("Level%d" % hero.level, 0)) + storms
+	# Since 1.03 the second game counts only this hero's own vortex.
+	var vortex := _enchantment_count(attacker, "MNVR") if profile.id == "el2" else global_enchantment_count("MNVR")
+	if not stasis: hero.mana = hero.channels * (1 + vortex)
+	if profile.id == "el2" and not stasis:
+		# Update 1.03: the hero moving second gets one more ether on its first
+		# turn (not in the combat tutorial); each orc shaman in its army gives one.
+		if int(hero.turns) == 1 and attacker != first_side() and not setup.get("combat_tutorial", false): hero.mana += 1
+		hero.mana += 3 * _caster_enchantments(attacker, "MNBR")
+		for c: Dictionary in army(attacker):
+			if c.card == "ORSH": hero.mana += 1
 	_sync_attacks()
 	_turn_enchantments(true)
 	_check_winner()
@@ -3184,6 +3251,8 @@ func _summon(side: int, card: String) -> void:
 		# Pale creatures arrive in pale aspect (the first spell-jammer does not);
 		# prime watch sends every other affected arrival there too.
 		if (flags.has("Outerplanar") and card != "OSJ1") or (global_enchantment_count("PRWT") > 0 and not flags.has("NoAffect")): creature.plane = true
+		# Since update 1.03 hostile ambience leaves arrivals in pale aspect ready.
+		if creature.get("plane", false): creature.resting = false
 	creatures[next_id] = creature
 	next_id += 1
 	if scripts != null:
@@ -3408,6 +3477,8 @@ func _strike(source: int, target: int, amount: int, poisoned: Array[int]) -> voi
 		# processes the discard and Target/Discard. Keep EL2's prior order
 		# until its own combat callback is confirmed independently.
 		if profile.id != "el1": _discard_on_hit(source, target, robbed)
+		# Update 1.03: the giant bat's hit on the enemy hero draws its owner a spell.
+		if profile.id == "el2" and card == "GBAT" and dealt > 0: _draw(owner)
 	if target in [0, 1]:
 		# Life drain heals by the damage actually taken, without a maximum.
 		if drains and owner >= 0 and before > 0 and dealt > 0:
@@ -3439,6 +3510,8 @@ func _strike(source: int, target: int, amount: int, poisoned: Array[int]) -> voi
 func _discard_on_hit(source: int, target: int, count: int) -> void:
 	if count <= 0: return
 	_combat_effect("Discard", source, target)
+	var previous_cause := _discard_cause
+	_discard_cause = 1 - target
 	for discard in count:
 		var hero: Dictionary = heroes[target]
 		if hero.hand.is_empty(): break
@@ -3446,6 +3519,7 @@ func _discard_on_hit(source: int, target: int, count: int) -> void:
 		var key := int(_hand_view(hero)[index])
 		var dropped := _take_card(target, index)
 		_emit({"kind": "discard", "side": target, "card": dropped, "hand_key": key})
+	_discard_cause = previous_cause
 
 ## Returns the damage that landed: zero when a hero's feedback redirected it or
 ## an unaffected creature ignored it. Only combat can hurt unaffected creatures.
@@ -3579,15 +3653,19 @@ func _hurt_hero(target: int, amount: int, redirected := false, combat := false) 
 		if heroes[1 - target].health < 1: break
 		# EL2 – starts RedDamage at the opposite hero
 		# before applying Ethereal Chain's mirrored hit.
+		# Since update 1.03 the second game's resonance doubles the mirrored hit.
+		var mirrored := amount * 2 if profile.id == "el2" else amount
 		if profile.id == "el2":
-			_emit({"kind": "chain_mirror", "source": target, "target": 1 - target, "amount": amount})
-		_hurt_hero(1 - target, amount, true)
+			_emit({"kind": "chain_mirror", "source": target, "target": 1 - target, "amount": mirrored})
+		_hurt_hero(1 - target, mirrored, true)
 		_camera_cue("ETCH", target, "sorcery", [target, 1 - target])
 	if copies > 0: return 0
 	heroes[target].health = maxi(0, heroes[target].health - amount)
 	_emit({"kind": "damage", "target": target, "amount": amount})
-	# Revival: a lethal hit halves the maximum health and refills to it (repeatable).
-	if heroes[target].health <= 0 and int(heroes[target].maximum) > 1 and ELSpecs.roll(self, target, "RVVE") > 0:
+	# Revival: a lethal hit halves the maximum health and refills to it
+	# (repeatable in the first game; since update 1.03 once in the second).
+	if heroes[target].health <= 0 and int(heroes[target].maximum) > 1 and not heroes[target].get("revived", false) and ELSpecs.roll(self, target, "RVVE") > 0:
+		if profile.id == "el2": heroes[target].revived = true
 		heroes[target].maximum = int(heroes[target].maximum) / 2
 		heroes[target].health = heroes[target].maximum
 		_emit({"kind": "heal", "target": target, "amount": heroes[target].health, "spec": "RVVE"})
@@ -3629,8 +3707,15 @@ func _kill(id: int) -> void:
 	for e: Dictionary in water_links(id): links.append(int(e.owner))
 	heroes[owner].grave.append(dead.card)
 	_remove_creature(id, "death")
-	# Barbed souls: the dead creature's controller draws once per copy in play.
-	for copy in global_enchantment_count("BASO"):
+	# Barbed souls: the dead creature's controller draws once per copy in play;
+	# since update 1.03 a second-game copy counts only its own caster's creatures.
+	var souls := global_enchantment_count("BASO")
+	if profile.id == "el2":
+		souls = 0
+		for holder: Dictionary in heroes:
+			for e: Dictionary in holder.enchantments:
+				if e.card == "BASO" and int(e.owner) == int(dead.owner): souls += 1
+	for copy in souls:
 		_draw(int(dead.owner))
 		# EL1 BarbedSoulsEnchantment left-play –
 		# registers Target/Draw on this controller after the draw attempt,
@@ -3683,9 +3768,16 @@ func _kill(id: int) -> void:
 		var index: int = heroes[owner].grave.rfind(dead.card)
 		if not returned and index >= 0 and army(caster).size() < 10:
 			returned = true
-			# The original takes the graveyard's first card, whichever it is.
-			heroes[owner].grave.remove_at(0)
+			# The first game takes the graveyard's first card, whichever it is;
+			# since update 1.03 the second takes the creature's own card.
+			heroes[owner].grave.remove_at(index if profile.id == "el2" else 0)
 			_summon(caster, dead.card)
+	# Update 1.03: a dying bat makes its controller's opponent discard a spell.
+	if profile.id == "el2" and dead.card == "BATT":
+		var previous_cause := _discard_cause
+		_discard_cause = int(dead.owner)
+		_discard_random(1 - int(dead.owner), 1)
+		_discard_cause = previous_cause
 
 func _unassign(id: int) -> void:
 	attacks.erase(id)
@@ -3789,6 +3881,7 @@ func _declare_victory(side: int) -> void:
 	_emit({"kind": "victory", "side": winner})
 
 func _finish_action() -> void:
+	_discard_cause = -1
 	_sync_attacks()
 	_check_winner()
 	_drain_scripts()
@@ -3846,6 +3939,26 @@ func _drain_scripts() -> void:
 func _emit(data: Dictionary) -> void:
 	history.append(data)
 	event.emit(data)
+	if data.get("kind") == "discard" and profile.id == "el2" and _discard_cause in [0, 1] and _discard_cause != int(data.side) \
+			and (data.card in ELCatalog.DISCARD_SUMMONS or data.card in ELCatalog.DISCARD_RETORTS):
+		_discard_answer(int(data.side), String(data.card), _discard_cause)
+
+## Update 1.03: a gray ogre or ogre king that the opponent makes its hero
+## discard enters the battlefield; a discarded weakness or lightning makes that
+## opponent discard three random spells, which may answer in turn. As in the
+## original, the answer comes at once, before the next card is discarded.
+func _discard_answer(side: int, card: String, cause: int) -> void:
+	if phase == Phase.FINISHED: return
+	if card in ELCatalog.DISCARD_SUMMONS:
+		if army(side).size() < 10:
+			_emit({"kind": "discard_answer", "side": side, "card": card})
+			_summon(side, card)
+		return
+	_emit({"kind": "discard_answer", "side": side, "card": card})
+	var previous_cause := _discard_cause
+	_discard_cause = side
+	_discard_random(cause, 3)
+	_discard_cause = previous_cause
 
 func _fail(message: String) -> bool:
 	error = message

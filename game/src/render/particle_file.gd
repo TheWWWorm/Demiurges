@@ -8,8 +8,12 @@ extends RefCounted
 ##   u16 length + texture name; u32 atlas columns; u32 atlas rows;
 ##   u16 blend (1 additive, 0 alpha); u32 loop start; u32 loop end
 ## The packed format uses u16 frame and particle counts, omits particle IDs,
-## and stores positions as s16 hundredths and sizes as u16 fiftieths. Its
-## texture-name length is u32 and its loop start is u8.
+## and stores positions as s16 hundredths and sizes as s16 fiftieths. Its
+## texture-name length is u32 and its loop start is u8. Sizes are signed as in
+## the float format: particles shrinking past zero (circle.pfx) and the shrine
+## glow cores (-1.0) store small negatives, which read unsigned would be
+## sprites 1310 units wide covering the whole map view. Renderers draw the
+## magnitude.
 ## Coordinates are relative to the effect origin, z up, two units per map cell.
 ## A non-zero loop end makes the effect cyclic: the emission repeats every
 ## (loop end) frames while earlier cycles play their tail to the last frame.
@@ -97,7 +101,7 @@ func _parse(bytes: PackedByteArray) -> void:
 			at += count * 6
 			sizes.resize(total + count)
 			for i in count:
-				sizes[total + i] = bytes.decode_u16(at + i * 2) * 0.02
+				sizes[total + i] = bytes.decode_s16(at + i * 2) * 0.02
 			at += count * 2
 		else:
 			at += count * 4

@@ -43,7 +43,7 @@ Download the package for your system from the [Releases](https://github.com/TheW
 
 ## Wiki
 
-The [**Demiurges wiki**](https://demiurges.wwworm.com/wiki/) is free to read without game files, an account or the engine. Its encyclopedia has a page for every creature (with a picture), sorcery, enchantment, artifact, skill and specialization of both games. Its guides explain installing, controls, combat rules and phases, spells and creatures, the campaigns, duels, options and the differences from the originals, in English and [Russian](https://demiurges.wwworm.com/wiki/?lang=ru). Good starting points: [installing the game files](https://demiurges.wwworm.com/wiki/?page=installing), [controls](https://demiurges.wwworm.com/wiki/?page=controls), [how a battle works](https://demiurges.wwworm.com/wiki/?page=combat) and [turn and phases](https://demiurges.wwworm.com/wiki/?page=combat-phases). The same articles open in the game: **Wiki** on the main menu or **Shift+F1** on any screen. See [the wiki guide](docs/wiki.md) to edit or rebuild it.
+The [**Demiurges wiki**](https://demiurges.wwworm.com/wiki/) is free to read without game files, an account or the engine. Its encyclopedia has a page for every creature (with a picture), sorcery, enchantment, artifact, skill and specialization of both games. Its guides explain installing, controls, combat rules and phases, spells and creatures, the campaigns, duels, options and the differences from the originals, in English and [Russian](https://demiurges.wwworm.com/wiki/?lang=ru). Good starting points: [installing the game files](https://demiurges.wwworm.com/wiki/?page=installing), [controls](https://demiurges.wwworm.com/wiki/?page=controls), [how a battle works](https://demiurges.wwworm.com/wiki/?page=combat) and [turn and phases](https://demiurges.wwworm.com/wiki/?page=combat-phases). The same articles open in the game: **Wiki** on the main menu or **F6** on any screen. See [the wiki guide](docs/wiki.md) to edit or rebuild it.
 
 Creature pages in the in-game wiki can play the installed game's attack, death, and other available animations with their own sounds.
 
@@ -105,7 +105,7 @@ Please report problems on the [Issues](https://github.com/TheWWWorm/Demiurges/is
 
 ## Controls
 
-The wiki has the [full controls](https://demiurges.wwworm.com/wiki/?page=controls) and [combat rules](https://demiurges.wwworm.com/wiki/?page=combat). **F1** opens the wiki in the game.
+The wiki has the [full controls](https://demiurges.wwworm.com/wiki/?page=controls) and [combat rules](https://demiurges.wwworm.com/wiki/?page=combat). **F6** opens the wiki in the game.
 
 The original controls work as in the games. A few useful keys:
 

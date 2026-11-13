@@ -24,6 +24,9 @@ func build(link: ELNetworkDuel) -> void:
 	body.add_child(columns)
 	_list_column(columns, _active, tr("Active deck"))
 	_list_column(columns, _reserve, tr("Reserve"))
+	# A spell dragged onto one in the other column swaps the two.
+	ELListDrag.enable(_active, "active", ["reserve"], func(_from: String, index: int, to: int): _drag_swap(to, index))
+	ELListDrag.enable(_reserve, "reserve", ["active"], func(_from: String, index: int, to: int): _drag_swap(index, to))
 	_swap.text = tr("Swap selected spells")
 	_swap.pressed.connect(_exchange)
 	body.add_child(_swap)
@@ -72,6 +75,18 @@ func _exchange() -> void:
 		return
 	_message.text = tr("Swap staged for the next round.")
 	_refresh()
+
+## A drop of one column's spell on the other's: the same swap as selecting
+## both and pressing the button. A drop beside the entries swaps with the
+## spell already selected in that column, else does nothing.
+func _drag_swap(active: int, reserve: int) -> void:
+	if active < 0 and _active.is_anything_selected(): active = _active.get_selected_items()[0]
+	if reserve < 0 and _reserve.is_anything_selected(): reserve = _reserve.get_selected_items()[0]
+	if active < 0 or reserve < 0: return
+	_active.select(active)
+	_reserve.select(reserve)
+	_update_swap()
+	_exchange()
 
 func show_time(seconds: int) -> void:
 	_time.visible = seconds >= 0

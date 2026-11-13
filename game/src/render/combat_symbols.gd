@@ -78,8 +78,9 @@ static func digits(value: int) -> Array:
 static func number_row(power: int, toughness: int, damaged: bool, hero: bool) -> Array:
 	var row: Array = []
 	var tail := RED if damaged else WHITE
+	# A hero's health is always white, wounded or not, as in the originals.
 	if hero:
-		for code: int in digits(toughness): row.append([code, tail])
+		for code: int in digits(toughness): row.append([code, WHITE])
 		return row
 	for code: int in digits(power): row.append([code, WHITE])
 	row.append([0, WHITE])
@@ -159,6 +160,38 @@ func figure_rect(figure: Dictionary) -> Rect2:
 		top = rows.order - (size * 0.5 if int(figure.order[0]) == SHIELD else 0.0)
 	var bottom: float = rows.icons + size if not (figure.get("icons", []) as Array).is_empty() else rows.numbers + size
 	return Rect2(rows.anchor.x - width * 0.5, top, width, bottom - top)
+
+## The screen squares of one figure's icon row, left to right:
+## {"id": figure id, "bit": icon bit (T_CREATURE_ICON_<bit+1>), "rect": Rect2}.
+## Empty while the figure is behind the camera or has no icons.
+func icon_rects(figure: Dictionary) -> Array:
+	var result: Array = []
+	var icons: Array = figure.get("icons", [])
+	if icons.is_empty() or camera == null or not is_instance_valid(camera) or not camera.is_inside_tree(): return result
+	if camera.is_position_behind(figure.get("top", Vector3.ZERO)): return result
+	var rows := figure_rows(figure)
+	var size: float = rows.size
+	var x: float = rows.anchor.x - icons.size() * size * 0.5
+	for i in icons.size():
+		result.append({"id": int(figure.get("id", -1)), "bit": ICON_CODES.find(int(icons[i])),
+			"rect": Rect2(x + i * size, rows.icons, size, size)})
+	return result
+
+## The icon under a screen point, as icon_rects gives it, else {}. Like the
+## original, which keeps each icon's screen
+## rect as it draws the row: where rows overlap, the nearest figure's icon.
+func icon_at(point: Vector2) -> Dictionary:
+	var found := {}
+	if not is_visible_in_tree() or camera == null or not is_instance_valid(camera) or not camera.is_inside_tree(): return found
+	var depth := INF
+	for figure: Dictionary in figures:
+		for entry: Dictionary in icon_rects(figure):
+			if int(entry.bit) < 0 or not (entry.rect as Rect2).has_point(point): continue
+			var distance := camera.global_position.distance_to(figure.get("top", Vector3.ZERO))
+			if distance < depth:
+				depth = distance
+				found = entry
+	return found
 
 func _draw() -> void:
 	if sheet == null or camera == null or not is_instance_valid(camera) or not camera.is_inside_tree(): return

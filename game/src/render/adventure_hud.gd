@@ -8,6 +8,8 @@ signal hero_selected(id: int)
 ## Double-click on a portrait opens that hero's HeroScreen (message 0x410).
 signal hero_opened(id: int)
 signal begin_requested
+## The remake's X on the first game's pre-battle panel (neutral creatures only).
+signal cancel_requested
 ## Buildings list (BuildingsMode): a click centres the map, a double click
 ## opens the BuildingScreen (messages 0x40f/0x410).
 signal building_selected(id: int)
@@ -69,6 +71,7 @@ var tooltip_body: Label
 var tooltip_subject := -1
 var precombat: Control
 var begin_button: CutButton
+var cancel_button: CutButton
 var precombat_labels: Dictionary = {}
 var precombat_portraits: Array[TextureRect] = []
 var precombat_pair: Array = []
@@ -749,6 +752,9 @@ func show_tooltip(id: int, content: Dictionary, at: Vector2) -> void:
 	if local.y + extent.y > limit.y: local.y = maxf(0, at.y / scale_factor - extent.y - 12)
 	tooltip.position = local
 
+## The pre-battle panel's Level/Life/Sight lines, as a GDI cell height.
+const STAT_CELL := 15
+
 func _build_precombat() -> void:
 	precombat = Control.new()
 	precombat.mouse_filter = Control.MOUSE_FILTER_STOP
@@ -758,15 +764,16 @@ func _build_precombat() -> void:
 		var piece := cut(row)
 		if not piece.is_empty(): _precombat_pieces.append(piece)
 	precombat.draw.connect(_draw_precombat)
-	var heading := _text_label(Rect2(160, 0, 320, 25), 14, Color("b8b4aa"), ThemeDB.fallback_font)
-	precombat.add_child(heading)
+	# Sizes: BattleNumText and the two names are 20 px GDI cells (Controls
+	# FontSize); the Level/Life/Sight boxes and captions, drawn by the panel
+	# itself, measure as 15 px cells in the original.
+	var heading := _text_label(Rect2(160, 0, 320, 25), ELFrontMenu.cell_em(20), Color("b8b4aa"), _bold)
 	precombat_labels.heading = heading
 	precombat_labels.names = []
 	precombat_labels.values = []
 	precombat_labels.captions = []
 	for side in 2:
-		var name := _text_label(Rect2(12, 32, 320, 21) if side == 0 else Rect2(320, 32, 310, 21), 14, Color("f2eee4"), _bold)
-		precombat.add_child(name)
+		var name := _text_label(Rect2(12, 32, 320, 21) if side == 0 else Rect2(320, 32, 310, 21), ELFrontMenu.cell_em(20), Color("f2eee4"), _bold)
 		precombat_labels.names.append(name)
 		var portrait := TextureRect.new()
 		portrait.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
@@ -779,12 +786,10 @@ func _build_precombat() -> void:
 		var values: Array[Label] = []
 		var captions: Array[Label] = []
 		for line in 3:
-			var value := _text_label(Rect2(0, 0, 33, 17), 11, Color("f2eee4"), _bold)
-			precombat.add_child(value)
+			var value := _text_label(Rect2(0, 0, 33, 17), ELFrontMenu.cell_em(STAT_CELL), Color("f2eee4"), _bold)
 			values.append(value)
-			var caption := _text_label(Rect2(0, 0, 90, 17), 11, Color("f2eee4"), _bold)
+			var caption := _text_label(Rect2(0, 0, 100, 17), ELFrontMenu.cell_em(STAT_CELL), Color("f2eee4"), _bold)
 			caption.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
-			precombat.add_child(caption)
 			captions.append(caption)
 		precombat_labels.values.append(values)
 		precombat_labels.captions.append(captions)
@@ -798,18 +803,29 @@ func _build_precombat() -> void:
 	begin_button.place(Vector2.ZERO)
 	begin_button.pressed.connect(func(): begin_requested.emit())
 	precombat.add_child(begin_button)
+	# Remake addition: the original panel only starts the battle. A fight with
+	# a neutral creature may be left alone with the original X art (SelectCancel)
+	# at the panel's lower right; Esc does the same.
+	cancel_button = CutButton.from_rows(self, "SelectCancel", Vector2.ZERO)
+	cancel_button.tooltip_text = ELRemakeText.t("Leave this creature alone", profile)
+	cancel_button.place(Vector2.ZERO)
+	cancel_button.place(CANCEL_AT - cancel_button.position)
+	cancel_button.pressed.connect(func(): cancel_requested.emit())
+	precombat.add_child(cancel_button)
+	cancel_button.hide()
 	precombat.hide()
 
+## A line of the precombat panel, added to it.
 func _text_label(rect: Rect2, font_size: int, color: Color, font: Font) -> Label:
 	var label := Label.new()
-	label.position = rect.position
-	label.size = rect.size
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	label.add_theme_font_size_override("font_size", font_size)
 	label.add_theme_color_override("font_color", color)
 	label.add_theme_font_override("font", font)
 	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	precombat.add_child(label)
+	ELMenuKit.place_text(label, rect)
 	return label
 
 func _draw_precombat() -> void:
@@ -820,8 +836,12 @@ func _draw_precombat() -> void:
 		if texture != null: precombat.draw_texture_rect_region(texture, Rect2(446, 62, 40, 73), Rect2(90, 62, 40, 73))
 
 ## The "Combat N of M" panel shown before a queued battle starts.
-func show_precombat(hero_id: int, opponent_id: int, number: int, total: int) -> void:
+## Where the remake's X sits on the 614x182 pre-battle panel.
+const CANCEL_AT := Vector2(566, 136)
+
+func show_precombat(hero_id: int, opponent_id: int, number: int, total: int, declinable := false) -> void:
 	tooltip.hide()
+	if cancel_button != null: cancel_button.visible = declinable
 	precombat_pair = [hero_id, opponent_id]
 	var format := profile.text("CtrlBattleNumText")
 	if format == "CtrlBattleNumText": format = "Combat %d of %d"

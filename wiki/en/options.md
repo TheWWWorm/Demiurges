@@ -70,7 +70,7 @@ At the bottom of the Path tracing page.
 | Remake helper overlay | The remake's readouts, hints and shortcut buttons over the original screens. Off at first. |
 | Battle interface size | The size of the battle panel at the bottom of the screen: **Automatic**, **Small (1×)**, **Medium (1.5×)**, **Large (2×)** or **Largest (3×)**. Smaller sizes show more spell slots across the screen; 1×, 2× and 3× keep the original art sharp. |
 | Ambience | The volume of the remake's own background sounds of maps and battles. |
-| Smarter computer players, Free movement | Etherlords single player: the remake's computer players and hero movement. On at first. |
+| Smarter computer players, Free movement | The remake's computer opponent in the battles of both games, and in Etherlords single player its computer players and hero movement. On at first. |
 | Discord activity | Shows in the Discord desktop app which game you play and whether you are in the menus, on a map or in a battle. Nothing else is shared. On at first. |
 
 ## Hotkeys

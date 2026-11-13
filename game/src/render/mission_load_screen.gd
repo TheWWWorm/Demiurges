@@ -25,7 +25,8 @@ const COLUMNS := [Rect2(93, 58, 200, 24), Rect2(296, 58, 79, 24), Rect2(378, 58,
 const SORT_HEADERS := ["CtrlSMSortName", "CtrlSMSortDate", "CtrlSMSortTime"]
 const EN_HEADERS := ["Name", "Date", "Time"]
 const RU_HEADERS := ["Имя", "Дата", "Время"]
-## EL2's scene capture rectangle, relative to SaveMissionScreen.
+## The scene capture rectangle, relative to SaveMissionScreen (the same
+## place in both games' art).
 const PREVIEW := Rect2(481, 60, 256, 192)
 ## Panel-local rectangles of controls the first game takes from CutParts only
 ## (its art is the second game's: the same pieces at the same places).
@@ -101,7 +102,7 @@ func build_screen() -> void:
 	menu.labels["list"] = list
 	_preview = null
 	_previews.clear()
-	if menu.edition == "el2":
+	if menu.edition in ["el1", "el2"]:
 		_preview = TextureRect.new()
 		_preview.name = "SavePreview"
 		_preview.position = menu.shift("SaveMissionScreen") + PREVIEW.position
@@ -153,8 +154,6 @@ func _build_name_field() -> void:
 		menu._label("name_caption", caption, Rect2(rect.position, Vector2(width, rect.size.y)), 16, ELFrontMenu.TITLE_INK, HORIZONTAL_ALIGNMENT_LEFT)
 		rect = Rect2(rect.position.x + width, rect.position.y, maxf(80.0, rect.size.x - width), rect.size.y)
 	name_edit = LineEdit.new()
-	name_edit.position = rect.position
-	name_edit.size = rect.size
 	name_edit.max_length = ELSaveSlots.MAX_NAME
 	name_edit.add_theme_font_override("font", menu.arial)
 	name_edit.add_theme_font_size_override("font_size", 16)
@@ -166,6 +165,7 @@ func _build_name_field() -> void:
 	name_edit.text_changed.connect(func(_text: String): _sync_save())
 	name_edit.text_submitted.connect(func(_text: String): save_chosen())
 	menu.canvas.add_child(name_edit)
+	ELMenuKit.place_text(name_edit, rect)
 	menu.labels["name"] = name_edit
 
 func refresh() -> void:

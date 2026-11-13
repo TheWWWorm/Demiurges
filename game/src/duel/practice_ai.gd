@@ -97,6 +97,7 @@ static func _background(duel: ELDuel, restricted := false) -> Variant:
 	# Rule tables load on first use; load them here so the worker only reads.
 	for table: String in ["CombatSpells", "CombatCreatures", "HeroTemplates", "Artefacts", "HeroesSpecs", "HeroesStats", "CombatManaIncome", "CombatDecks", "GlobalSpells"]:
 		duel.profile.table(table)
+	ELCombatBrain.prepare(duel)
 	job = Job.new()
 	job.key = key
 	job.duel = weakref(duel)
@@ -507,8 +508,9 @@ static func _score(d: ELDuel, card: String, target: int, side: int, allies: Arra
 			return score + _damage_score(d.heroes[1 - side], 1 - side, own_power) - float(their_power) * 0.5
 		"hunger": return _damage_score(e, target, int(e.power)) if not friendly and e.power > 0 else 0.0
 		"grave_fire":
-			var own: int = 2 * d.heroes[side].grave.size()
-			var theirs: int = 2 * d.heroes[1 - side].grave.size()
+			var per_creature := 3 if d.profile.id == "el2" else 2
+			var own: int = per_creature * d.heroes[side].grave.size()
+			var theirs: int = per_creature * d.heroes[1 - side].grave.size()
 			if d.heroes[side].health <= own: return 0.0
 			return 100.0 if d.heroes[1 - side].health <= theirs else float(theirs - own) * 0.5
 		"dispel":
@@ -533,6 +535,9 @@ static func _score(d: ELDuel, card: String, target: int, side: int, allies: Arra
 			if ELCatalog.HERO_ABILITIES.has(card): return 4.0 if d._enchantment_count(side, card) < 2 else 0.0
 			if card == "MNTX": return 4.0 if d._enchantment_count(side, card) < 2 else 0.0
 			if card == "MNVR": return 3.0 if d.heroes[side].channels >= d.heroes[1 - side].channels and d._enchantment_count(side, card) < 2 else 0.0
+			# Second-game ether breeze and storm: a sturdy own creature carries them longest.
+			if card in ["MNBR", "MNST"] and target >= 2:
+				return (5.0 if card == "MNST" else 4.0) + float(e.toughness - e.damage) * 0.3 if friendly and not d.pale(target) else 0.0
 			if card == "DRGS": return _gas_score(d, allies, enemies)
 			if card == "DPGS": return _gas_score(d, allies, enemies, 2)
 			if card == "FRGS":
@@ -859,6 +864,15 @@ static func _first_ability(d: ELDuel, side: int, ally: Dictionary, ability: Dict
 				var friendly: bool = id == side if id < 2 else holder.owner == side
 				for e: Dictionary in holder.enchantments:
 					if d.dispellable(id, e) and _harmful(e.card) == friendly and d.enchantment_price(e) <= d.available_mana(side) and d.use_ability(ally.id, ability.key, id, e.id): return true
+		"orc_rite":
+			# A channel is worth giving up only for a costly enemy enchantment
+			# or one hurting the own side.
+			if d.heroes[side].channels < 3: return false
+			for id: int in [side, 1 - side] + d.creatures.keys():
+				var holder := d.entity(id)
+				var friendly: bool = id == side if id < 2 else holder.owner == side
+				for e: Dictionary in holder.enchantments:
+					if d.dispellable(id, e) and _harmful(e.card) == friendly and d.cost(e.card) >= 3 and d.use_ability(ally.id, ability.key, id, e.id): return true
 		"spirit_flight":
 			if d.phase == ELDuel.Phase.ATTACK:
 				for c: Dictionary in allies:

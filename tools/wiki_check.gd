@@ -177,6 +177,7 @@ func _catalog(screen: ELWikiScreen, shots: String) -> void:
 				if row.games.size() > 1: merged += 1
 				else: single += 1
 			check(merged > 100 and single > 0, "%s: cards of both games share a page, others name their game" % lang)
+	_languages(profiles, folders)
 	screen.set_language("en")
 	# Story pages show their heroes' models from the installed games.
 	for story: String in ["diamanda", "white-lord"]:
@@ -237,6 +238,66 @@ func _catalog(screen: ELWikiScreen, shots: String) -> void:
 	screen.navigate("all-creatures")
 	await _shot(shots, "ru-creature-list")
 	screen.set_language("en")
+
+## Encyclopedia pages are in one language only: the wiki's when the games'
+## texts are in it, otherwise the games' own, with a note in the wiki's
+## language. Checked with the installed games and with a copy of them whose
+## texts are all Latin (standing in for English data). The corrected card
+## texts appear on the pages.
+func _languages(profiles: Dictionary, folders: Dictionary) -> void:
+	var latin := {}
+	var cyrillic := RegEx.create_from_string("[\\x{0400}-\\x{04FF}]")
+	for edition: String in profiles:
+		var copy := ELProfile.new()
+		if not copy.mount(edition, folders[edition]): continue
+		for key: Variant in copy.texts.keys():
+			if cyrillic.search(str(copy.texts[key])) != null: copy.texts[key] = "Text %s" % key
+		latin[edition] = copy
+	var cells := RegEx.create_from_string("<(h1|h2|h3|th|td)[^>]*>(.*?)</\\1>")
+	var markup := RegEx.create_from_string("<code>.*?</code>|<[^>]+>")
+	# Russian pages may still show the edition numerals I and II.
+	var foreign := {"en": cyrillic, "ru": RegEx.create_from_string("\\b(?!II\\b)[A-Za-z]{2,}")}
+	for setup: Array in [["installed", profiles], ["latin", latin]]:
+		var games: Dictionary = setup[1]
+		var spoken := {}
+		for edition: String in games: spoken[ELWikiCatalog.text_language(games[edition])] = true
+		for lang: String in ELWikiData.LANGUAGES:
+			var catalog := ELWikiCatalog.build(games, lang)
+			var expected: String = spoken.keys()[0] if spoken.size() == 1 else lang
+			check(catalog.language == expected, "%s games, %s wiki: pages in %s" % [setup[0], lang, expected])
+			var note := ELWikiCatalog._e(str(ELWikiCatalog.LABELS[lang].data_note))
+			var mixed: Array[String] = []
+			var noted := 0
+			for row: Dictionary in catalog.pages:
+				var shown: Array = [str(row.title)]
+				for cell: RegExMatch in cells.search_all(row.html): shown.append(markup.sub(cell.get_string(2), "", true))
+				for text: String in shown:
+					if foreign[catalog.language].search(text) != null: mixed.append("%s: %s" % [row.key, text.left(50)])
+				if note in row.html: noted += 1
+			check(mixed.is_empty(), "%s games, %s wiki: titles, headings and tables are all in %s%s" % [setup[0], lang, catalog.language, "" if mixed.is_empty() else " (%s)" % mixed[0]])
+			if catalog.language != lang: check(noted == catalog.pages.size(), "%s games, %s wiki: every page says it is in the games' language" % [setup[0], lang])
+			else: check(noted == 0, "%s games, %s wiki: no language note" % [setup[0], lang])
+			if setup[0] != "installed": continue
+			var pages := {}
+			for row: Dictionary in catalog.pages: pages[row.key] = row.html
+			var fixed := {"en": {"card-twst": "Regeneration cannot save the creature", "card-frnt": "The caster takes no damage",
+				"card-oue2": "Rest, pay 1+X ether: gain copy", "card-oue3": "Rest, pay 2+X ether: destroy target"},
+				"ru": {"card-twst": "Регенерация не спасает создание", "card-frnt": "Сотворивший заклинание урона не получает",
+				"card-oue2": "Отдых, 1 + X квантов эфира", "card-oue3": "Отдых, 2+X квантов эфира"}}
+			for key: String in fixed[catalog.language]:
+				if key != "card-twst" and not games.has("el2"): continue
+				check(fixed[catalog.language][key] in str(pages.get(key, "")), "%s wiki: %s shows its corrected text" % [lang, key])
+			if games.has("el2"):
+				check(not "Rest, pay 2+X" in str(pages.get("card-oue2", "")) and not "2 + X квантов" in str(pages.get("card-oue2", "")), "%s wiki: the Spellweaver's old price is gone" % lang)
+	# English originals, whichever language is installed.
+	check(ELTextFixes.apply("el1", "TWSTTt", "Destroy target creature, where X is the power of the destroyed creature").ends_with("Regeneration cannot save the creature"), "Twister's English text is completed")
+	check("The caster takes no damage" in ELTextFixes.apply("el2", "FRNTTt", "Destroy all creatures, where X is the number of destroyed creatures"), "Fury of Nature's English text is completed")
+	check(not "takes no damage" in ELTextFixes.apply("el1", "FRNTTt", "Destroy all creatures, where X - number of destroyed creatures"), "the first game's Fury of Nature keeps its own correction")
+	for key: String in ["OUE2Tt", "Ab337"]:
+		check(ELTextFixes.apply("el2", key, "Rest, pay 2+X ether: gain copy of target enchantment") == "Rest, pay 1+X ether: gain copy of target enchantment", "%s: the Spellweaver copies for 1+X" % key)
+	for key: String in ["OUE3Tt", "Ab338"]:
+		check(ELTextFixes.apply("el2", key, "Rest, pay 1+X ether: destroy target enchantment") == "Rest, pay 2+X ether: destroy target enchantment", "%s: the Spellshifter copies for 2+X" % key)
+	check(ELTextFixes.apply("el2", "OUE2Tt", "Rest, pay 1+X ether: gain copy") == "Rest, pay 1+X ether: gain copy", "the 1.03 Spellweaver text stays as it is")
 
 func _check_animations(screen: ELWikiScreen) -> void:
 	var preview := screen._preview

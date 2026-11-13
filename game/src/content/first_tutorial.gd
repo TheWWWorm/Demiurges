@@ -68,13 +68,22 @@ static func id_of(event_name: String) -> int:
 static func category_of(id: int) -> int:
 	return int(EVENTS[id][1]) if id >= 0 and id < EVENTS.size() else 0
 
-## The caption and body of an event from the edition's texts.
-static func texts(profile: ELProfile, id: int) -> Dictionary:
+## Remake notes added to an event's body where the remake plays differently
+## (ELRemakeText translates them). "Управление героями" describes the original
+## orders carried out at night; the remake's free movement moves at once.
+const FREE_MOVEMENT_NOTE := "Remake: free movement is on. A hero sets off as soon as you choose its destination a second time and can move several times a day while it has movement points left; computer players move their heroes when you end the day. For orders carried out together at night, as in the original, turn off Free movement in Options, Interface page."
+
+## The caption and body of an event from the edition's texts. With
+## `free_movement` (the remake's free movement applies on this map), the hero
+## orders event ends with the remake's note about it.
+static func texts(profile: ELProfile, id: int, free_movement := false) -> Dictionary:
 	if id < 0 or id >= EVENTS.size() or profile == null: return {"caption": "", "body": ""}
 	var key := "TUT_" + str(EVENTS[id][0])
 	var caption := profile.text(key + "_C")
-	var body := profile.text(key)
-	return {"caption": "" if caption == key + "_C" else caption, "body": "" if body == key else body}
+	var body := "" if profile.text(key) == key else profile.text(key)
+	if free_movement and EVENTS[id][0] == "HERO_CLICK" and not body.is_empty():
+		body += "\n\n" + ELRemakeText.t(FREE_MOVEMENT_NOTE, profile)
+	return {"caption": "" if caption == key + "_C" else caption, "body": body}
 
 ## Rebuilds the history from the stored seen string, in id order, as the
 ## original does when the game starts.

@@ -1,6 +1,10 @@
 class_name ELFirstMapPresentation
 extends Node3D
-## First game: map presentation that does not change the simulation.
+## Map presentation that does not change the simulation. The first game
+## uses all of it; the second game (`second`) its sounds only: building
+## sounds, terrain ambience and hero footsteps, which its executable runs by
+## the same rules and from the same sfx folders. Its blazons, building
+## particles and weather belong to its own scripts and effects.
 ##
 ## Ownership blazons. Every owned castle, hero, mine, mana node, fort, shop
 ## and captured shrine or citadel carries its owner's blazon: a 41 px cell of
@@ -30,6 +34,14 @@ extends Node3D
 ## step has a 64 x 0.0003 chance of one random Ambient/<Colour>/<n>.wav: the
 ## colour is chosen in proportion to its percentage among the first four
 ## (no sound for the rest), the file uniformly from 1..count.
+##
+## Second game: map figures (heroes and roaming creatures) take the shape's
+## SndAdvDir as their sound folder, placed full within 30 units and silent at
+## 60. Each footfall (event frame) of the walk or run clip plays
+## Creatures/<SndAdvDir>/steps/sand/<n>.wav, n a random number up to 7, lower
+## again while the file is missing; the map's ground always answers "sand".
+## A figure with steps/sand/walk.wav (run.wav), such as a flying dragon,
+## loops it while it walks (runs). Footsteps use the effects volume.
 const BLAZON_CELL := 41.0
 ## World size of the blazon quad: the original projects it with half-size
 ## 0.8, centred 0.8 + 0.5 above the object's top, so it scales
@@ -54,6 +66,14 @@ const SPEC_EFFECTS := {"Teacher": "Teacher00", "Master": "Master00", "Magister":
 const SPEC_KINDS := {1: "ManaNodeRed", 2: "ManaNodeBlack", 7: "BlueManaNode",
 	3: "Voulcan2x2_1", 4: "Voulcan2x2_2", 5: "Voulcan2x2_3", 6: "Voulcan2x2_4"}
 const OWNED_KINDS := ["hero", "resource_mine", "mana_node", "fort", "rune_shop", "el1_spell_shop"]
+## Second game: placed range of a map figure's own sounds.
+const FIGURE_NEAR := 30.0
+const FIGURE_FAR := 60.0
+## The terrain folder of footsteps on the second game's map.
+const STEP_GROUND := "sand"
+const STEP_TOP := 7
+## Object groups whose rows can name a building sound folder (sound_folder).
+const SOUND_GROUPS := ["mines", "laboratories", "factories", "additional_buildings", "mana_nodes", "buildings"]
 
 var profile: ELProfile
 var settings: ELSettings
@@ -92,6 +112,15 @@ var ambient_players: Array[AudioStreamPlayer] = []
 ## Started sound paths (latest 40), for checks.
 var played: Array[String] = []
 var _view_key := ""
+## Second game: sounds only (no blazons or building particles).
+var second := false
+## uid -> {model, folder, glide (player or null), glide_name, and the bound
+## signal callables}: map figures with footsteps.
+var walkers: Dictionary = {}
+var _candidates: Array = []
+var _candidates_size := -1
+## uid -> [fields that choose its art, definition].
+var _second_rows: Dictionary = {}
 
 func build(data: ELProfile, preferences: ELSettings, session: ELAdventureSession, scene: ELAdventureScene, view_camera: Camera3D) -> void:
 	profile = data
@@ -99,14 +128,16 @@ func build(data: ELProfile, preferences: ELSettings, session: ELAdventureSession
 	state = session
 	world = scene
 	camera = view_camera
+	second = profile.id == "el2"
 	random.randomize()
 	_art = ELAdventureArt.new(state.map)
 	_blazon_layer = Node3D.new()
 	add_child(_blazon_layer)
-	effects = ELAdventureEffects.new()
-	add_child(effects)
-	effects.build(profile, settings, state)
-	for name: String in ["color", "logo00", "logo01"]: _textures[name] = profile.texture("Interface/Blazon/" + name)
+	if not second:
+		effects = ELAdventureEffects.new()
+		add_child(effects)
+		effects.build(profile, settings, state)
+		for name: String in ["color", "logo00", "logo01"]: _textures[name] = profile.texture("Interface/Blazon/" + name)
 	for i in 4: _ambient_counts[i] = ambient_count(profile, AMBIENT_FOLDERS[i])
 	if not state.event.is_connected(_state_event): state.event.connect(_state_event)
 	apply(settings.values if settings != null else {})
@@ -179,6 +210,9 @@ static func player_blazon(session: ELAdventureSession, owner: int) -> Vector2i:
 
 ## Sound folder of a building, "" for none.
 static func sound_folder(data: ELProfile, item: Dictionary, row: Dictionary) -> String:
+	# Second-game bodies take their row from the creature shapes, whose SndDir
+	# is a creature's folder, not a building's.
+	if item.get("type") == "corpse": return ""
 	match str(item.get("group", "")):
 		"mines", "laboratories", "factories": return str(row.get("SoundDir", ""))
 		"additional_buildings": return str(row.get("SndDir", ""))
@@ -207,6 +241,8 @@ func _placed_bus() -> StringName:
 	for player: AudioStreamPlayer in _one_shots: used.append(player.bus)
 	for uid: int in sounding:
 		if sounding[uid].cycle is AudioStreamPlayer: used.append(sounding[uid].cycle.bus)
+	for uid: int in walkers:
+		if walkers[uid].glide is AudioStreamPlayer: used.append(walkers[uid].glide.bus)
 	var slot := 0
 	while used.has(StringName("Positional Map %d" % slot)): slot += 1
 	return ELAudio.pan_bus("Map %d" % slot, bool(settings.values.get("audio_reverse", false)) if settings != null else false)
@@ -214,7 +250,7 @@ func _placed_bus() -> StringName:
 func _place(player: AudioStreamPlayer, at: Vector3) -> void:
 	var pan := ELAudio.stereo_pan(listener, listener_forward, at)
 	player.set_meta("pan", pan)
-	ELAudio.set_pan(player.bus, pan)
+	ELAudio.set_pan(player.bus, pan, profile.id)
 
 func _object_position(item: Dictionary, row: Dictionary) -> Vector3:
 	var uid := int(item.uid)
@@ -226,19 +262,21 @@ func _object_position(item: Dictionary, row: Dictionary) -> Vector3:
 func sync() -> void:
 	_dirty = false
 	var seen := {}
-	for item: Dictionary in state.objects.values():
+	for item: Dictionary in (_second_objects() if second else state.objects.values()):
 		var uid := int(item.get("uid", -1))
-		var definition := _art.resolve(item)
+		var definition := _definition(item)
 		if definition.is_empty() or definition.get("hidden", false): continue
 		var row: Dictionary = definition.get("row", {})
 		seen[uid] = true
-		_sync_blazon(item, row)
+		if second:
+			_sync_walker(uid, row)
+		else: _sync_blazon(item, row)
 		var alive: bool = item.get("alive", true) and item.get("visible", true) and not item.get("opened", false)
 		var folder := sound_folder(profile, item, row) if alive else ""
 		if folder.is_empty(): _drop_sound(uid)
 		elif not sounding.has(uid): sounding[uid] = {"folder": folder, "position": _object_position(item, row), "cycle": null}
 		else: sounding[uid].folder = folder
-		var file := spec_effect(item, row) if alive else ""
+		var file := spec_effect(item, row) if alive and not second else ""
 		if file.is_empty():
 			if spec_effects.has(uid):
 				effects.finish("spec:%d" % uid)
@@ -251,6 +289,8 @@ func sync() -> void:
 		if not seen.has(uid): _drop_blazon(uid)
 	for uid: int in sounding.keys():
 		if not seen.has(uid): _drop_sound(uid)
+	for uid: int in walkers.keys():
+		if not seen.has(uid): _drop_walker(uid)
 	for uid: int in spec_effects.keys():
 		if not seen.has(uid):
 			effects.finish("spec:%d" % uid)
@@ -316,8 +356,140 @@ func _drop_sound(uid: int) -> void:
 		entry.cycle.queue_free()
 	sounding.erase(uid)
 
+## Second game: only buildings that can sound and map figures matter; its
+## maps carry a thousand or more scenery objects, and sync runs on every map
+## event. The list is rebuilt when objects come or go.
+func _second_objects() -> Array:
+	if state.objects.size() != _candidates_size:
+		_candidates_size = state.objects.size()
+		_candidates = state.objects.keys().filter(func(id: int) -> bool:
+			var item: Dictionary = state.objects[id]
+			return str(item.get("group", "")) in SOUND_GROUPS or str(item.get("group", "")) in ["heroes", "np_heroes"])
+	var result := []
+	for id: int in _candidates:
+		var item: Dictionary = state.objects.get(id, {})
+		if not item.is_empty(): result.append(item)
+	return result
+
+## The object's art; the second game keeps it per object while the fields
+## that choose it stay the same.
+func _definition(item: Dictionary) -> Dictionary:
+	if not second: return _art.resolve(item)
+	var signature := [item.get("owner"), item.get("shape"), item.get("level"), item.get("type"), item.get("visible", true), item.get("name")]
+	var cached: Array = _second_rows.get(item.get("uid"), [])
+	if not cached.is_empty() and cached[0] == signature: return cached[1]
+	var definition := _art.resolve(item)
+	_second_rows[item.get("uid")] = [signature, definition]
+	return definition
+
+## Second game: a map figure with a SndAdvDir hears its footfalls.
+func _sync_walker(uid: int, row: Dictionary) -> void:
+	var model: ELModel = world.actors.get(uid)
+	var folder := str(row.get("SndAdvDir", ""))
+	if model == null or folder.is_empty():
+		_drop_walker(uid)
+		return
+	var steps := "Creatures/%s/steps/%s/" % [folder, STEP_GROUND]
+	var entry: Dictionary = walkers.get(uid, {})
+	if entry.get("model") == model and entry.get("folder") == steps: return
+	_drop_walker(uid)
+	entry = {"model": model, "folder": steps, "glide": null, "glide_name": "",
+		"footfall": _footfall.bind(uid), "started": _walk_started.bind(uid)}
+	walkers[uid] = entry
+	model.frame_event.connect(entry.footfall)
+	model.animation_started.connect(entry.started)
+	# Decoded now, so a figure's first steps do not stall the map.
+	for n in range(1, STEP_TOP + 1): ELAudio.sound(profile, steps + "%d.wav" % n)
+	if _moving_clip(model, model.base_clip()): _walk_started(model.base_clip(), uid)
+
+func _drop_walker(uid: int) -> void:
+	var entry: Dictionary = walkers.get(uid, {})
+	if entry.is_empty(): return
+	_stop_glide(entry)
+	if is_instance_valid(entry.model):
+		if entry.model.frame_event.is_connected(entry.footfall): entry.model.frame_event.disconnect(entry.footfall)
+		if entry.model.animation_started.is_connected(entry.started): entry.model.animation_started.disconnect(entry.started)
+	walkers.erase(uid)
+
+## The clips a map figure moves with (ELAdventureScene.move_actor).
+static func _moving_clip(model: ELModel, clip: String) -> bool:
+	if clip.is_empty() or clip == "cidle": return false
+	return clip in ["cwalk", "crun"] or clip == ELAdventureScene.walk_clip(model) or clip == model.clip_for_code(ELAdventureScene.RUN_CODE)
+
+static func _run_clip(model: ELModel, clip: String) -> bool:
+	return clip == "crun" or (clip == model.clip_for_code(ELAdventureScene.RUN_CODE) and clip != ELAdventureScene.walk_clip(model))
+
+## A footfall of the walk or run clip: one numbered step at the figure.
+func _footfall(clip: String, uid: int) -> void:
+	var entry: Dictionary = walkers.get(uid, {})
+	if entry.is_empty() or not is_instance_valid(entry.model): return
+	var model: ELModel = entry.model
+	if not _moving_clip(model, clip) or not model.is_visible_in_tree(): return
+	var at := model.position
+	if _ground_distance(at) >= FIGURE_FAR: return
+	var top := STEP_TOP
+	while top >= 1:
+		var n := random.randi_range(1, top)
+		var path: String = entry.folder + "%d.wav" % n
+		if ELAudio.sound(profile, path) != null:
+			_play_one_shot(path, at, FIGURE_NEAR, FIGURE_FAR)
+			return
+		top = n - 1
+
+## A figure starting its walk (run) clip loops steps/<ground>/walk.wav
+## (run.wav) when it has one; any other clip stops it.
+func _walk_started(clip: String, uid: int) -> void:
+	var entry: Dictionary = walkers.get(uid, {})
+	if entry.is_empty() or not is_instance_valid(entry.model): return
+	var model: ELModel = entry.model
+	var name := ""
+	if _moving_clip(model, clip): name = "run.wav" if _run_clip(model, clip) else "walk.wav"
+	if name == entry.glide_name and (name.is_empty() or entry.glide is AudioStreamPlayer): return
+	_stop_glide(entry)
+	if name.is_empty(): return
+	var source := ELAudio.sound(profile, entry.folder + name)
+	if source == null: return
+	var loop: AudioStreamWAV = source.duplicate()
+	loop.loop_mode = AudioStreamWAV.LOOP_FORWARD
+	loop.loop_begin = 0
+	loop.loop_end = int(loop.get_length() * loop.mix_rate)
+	var player := AudioStreamPlayer.new()
+	add_child(player)
+	player.bus = _placed_bus()
+	player.stream = loop
+	entry.glide = player
+	entry.glide_name = name
+	_update_glide(entry)
+	player.play()
+	_note(entry.folder + name)
+
+func _stop_glide(entry: Dictionary) -> void:
+	if entry.get("glide") is AudioStreamPlayer and is_instance_valid(entry.glide):
+		entry.glide.stop()
+		entry.glide.queue_free()
+	entry.glide = null
+	entry.glide_name = ""
+
+func _update_glide(entry: Dictionary) -> void:
+	var at: Vector3 = entry.model.position
+	entry.glide.volume_db = _placed_db(_ground_distance(at), FIGURE_NEAR, FIGURE_FAR) if entry.model.is_visible_in_tree() else -80.0
+	_place(entry.glide, at)
+
+func _update_glides() -> void:
+	for uid: int in walkers:
+		var entry: Dictionary = walkers[uid]
+		if not is_instance_valid(entry.model):
+			_dirty = true
+		elif entry.glide is AudioStreamPlayer: _update_glide(entry)
+
 func _effects_db() -> float:
-	return linear_to_db(maxf(0.0001, float(_volumes.get("effects", 0.8))))
+	return linear_to_db(maxf(0.0001, ELAudio.option_gain(float(_volumes.get("effects", 0.8)), profile.id)))
+
+## Effects volume of a placed sound at a ground distance (first game: the
+## building fall-off; second game: its mixer's law on the same fade).
+func _placed_db(distance: float, near := SOUND_NEAR, far := SOUND_FAR) -> float:
+	var fade := 1.0 if distance <= near else clampf(1.0 - (distance - near) / (far - near), 0.0, 1.0)
+	return _effects_db() + linear_to_db(maxf(0.0001, ELAudio.placed_gain(fade, profile.id)))
 
 func _ambience_db() -> float:
 	return linear_to_db(maxf(0.0001, float(_volumes.get("ambience", 0.55))))
@@ -344,12 +516,12 @@ func _idle_round(clip: String, uid: int) -> void:
 	var model := str(definition.get("model", ""))
 	var file := "BuildingsPFX/%s/Idle.pfx" % model
 	var archive: ELArchive = profile.archives.get("pfx")
-	if not model.is_empty() and archive != null and archive.has(file) and _near_view(_object_position(item, definition.get("row", {}))) and _in_sight(uid):
+	if effects != null and not model.is_empty() and archive != null and archive.has(file) and _near_view(_object_position(item, definition.get("row", {}))) and _in_sight(uid):
 		var at := _object_position(item, definition.get("row", {}))
 		effects.start("idle:%d" % uid, {"file": file, "x": at.x, "y": -at.z, "z": at.y, "loops": 1}, 0.0)
 		effects.orient("idle:%d" % uid, world.object_yaw(item))
 
-func _play_one_shot(path: String, at: Vector3) -> void:
+func _play_one_shot(path: String, at: Vector3, near := SOUND_NEAR, far := SOUND_FAR) -> void:
 	var stream := ELAudio.sound(profile, path)
 	if stream == null: return
 	var player: AudioStreamPlayer = null
@@ -365,7 +537,8 @@ func _play_one_shot(path: String, at: Vector3) -> void:
 		_one_shots.append(player)
 	player.stream = stream
 	player.set_meta("at", at)
-	player.volume_db = _effects_db() + linear_to_db(maxf(0.0001, distance_gain(_ground_distance(at))))
+	player.set_meta("range", Vector2(near, far))
+	player.volume_db = _placed_db(_ground_distance(at), near, far)
 	_place(player, at)
 	player.play()
 	_note(path)
@@ -390,8 +563,10 @@ func _process(delta: float) -> void:
 		_update_spec_effects()
 	for player: AudioStreamPlayer in _one_shots:
 		if player.playing:
-			player.volume_db = _effects_db() + linear_to_db(maxf(0.0001, distance_gain(_ground_distance(player.get_meta("at", listener)))))
+			var reach: Vector2 = player.get_meta("range", Vector2(SOUND_NEAR, SOUND_FAR))
+			player.volume_db = _placed_db(_ground_distance(player.get_meta("at", listener)), reach.x, reach.y)
 			_place(player, player.get_meta("at", listener))
+	_update_glides()
 	_clock += delta
 	while _clock >= STEP:
 		_clock -= STEP
@@ -414,7 +589,7 @@ func _update_cycles() -> void:
 			add_child(player)
 			player.bus = _placed_bus()
 			player.stream = loop
-			player.volume_db = _effects_db() + linear_to_db(maxf(0.0001, distance_gain(distance)))
+			player.volume_db = _placed_db(distance)
 			_place(player, entry.position)
 			player.play()
 			entry.cycle = player
@@ -425,7 +600,7 @@ func _update_cycles() -> void:
 				entry.cycle.queue_free()
 				entry.cycle = null
 			else:
-				entry.cycle.volume_db = _effects_db() + linear_to_db(maxf(0.0001, distance_gain(distance)))
+				entry.cycle.volume_db = _placed_db(distance)
 				_place(entry.cycle, entry.position)
 
 ## An object the local player sees now: effects never play under the fog.
@@ -498,7 +673,7 @@ func _ambient_step() -> void:
 				player.bus = ELAudio.pan_bus("Ambience %d" % slot, bool(_volumes.get("audio_reverse", false)))
 				var pan := (random.randi_range(0, 200) - 100) / 100.0
 				player.set_meta("pan", pan)
-				ELAudio.set_pan(player.bus, pan)
+				ELAudio.set_pan(player.bus, pan, profile.id)
 				player.stream = stream
 				player.volume_db = _ambience_db()
 				player.finished.connect(_ambient_finished.bind(player))
@@ -527,7 +702,7 @@ func _ambient_step() -> void:
 			player.play()
 			ambient_loops[folder] = player
 			_note("Ambient/%s/circle.wav" % folder)
-		player.volume_db = _ambience_db() + linear_to_db(percentages[i] / 100.0)
+		player.volume_db = _ambience_db() + linear_to_db(maxf(0.0001, ELAudio.placed_gain(percentages[i] / 100.0, profile.id)))
 
 func _ambient_finished(player: AudioStreamPlayer) -> void:
 	ambient_players.erase(player)

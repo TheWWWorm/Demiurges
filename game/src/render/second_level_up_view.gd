@@ -9,7 +9,7 @@ extends ELHeroSkillsView
 ##
 ## Choosing an offer previews it in the skill rows (a new skill appended, a
 ## known one raised). Rank dots show the offered and previewed skill levels.
-## LUOk learns the chosen offer and closes the dialog once no
+## An offer dragged onto the skill rows is learned as with LUOk. LUOk learns the chosen offer and closes the dialog once no
 ## choice is left. The remake keeps LUOk disabled while offers wait without a
 ## selection, so a pending choice is never lost; Escape closes the dialog and
 ## keeps it. The active specialisation is chosen on the inventory screen, as in
@@ -289,13 +289,43 @@ class OfferStrip extends Control:
 		var index := int(at.x) / CELL
 		return index if index < _items.size() and int(at.x) % CELL < ICON else -1
 
+	## The offer a left press took hold of (-1 for none), the press point,
+	## the pointer and whether it has moved far enough to drag the offer.
+	var held := -1
+	var press_at := Vector2.ZERO
+	var held_at := Vector2.ZERO
+	var dragging := false
+
 	func _gui_input(event: InputEvent) -> void:
-		if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+		if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+			if not event.pressed:
+				_release(event.position)
+				return
 			var index := item_at(event.position)
 			if index >= 0:
 				select(index)
 				item_selected.emit(index)
+				held = index
+				press_at = event.position
+				held_at = event.position
+				dragging = false
 				accept_event()
+		elif event is InputEventMouseMotion and held >= 0 and event.button_mask & MOUSE_BUTTON_MASK_LEFT:
+			held_at = event.position
+			if event.position.distance_to(press_at) > 6.0: dragging = true
+			if dragging: queue_redraw()
+
+	## An offer dragged onto the hero's skill rows is learned, as with LUOk;
+	## released anywhere else it just stays chosen.
+	func _release(at: Vector2) -> void:
+		var index := held
+		var moved := dragging
+		held = -1
+		dragging = false
+		if index < 0: return
+		queue_redraw()
+		if not moved or not view.learned.get_rect().has_point(position + at) or index != _selected: return
+		view.press_ok()
 
 	func _get_tooltip(at: Vector2) -> String:
 		var index := item_at(at)
@@ -315,6 +345,10 @@ class OfferStrip extends Control:
 			var badge := Vector2(RANK_WIDTH, 9)
 			draw_rect(Rect2(center - badge * 0.5, badge), Color(DOT_EDGE, 0.9))
 			ELSecondLevelUpView._draw_rank(self, center, rank)
+		# A dragged offer follows the pointer.
+		if dragging and held >= 0 and held < _items.size() and view._skills_sheet != null:
+			var icon := view._icon_index(str(_items[held][0]), int(_items[held][1]))
+			if icon >= 0: draw_texture_rect_region(view._skills_sheet, Rect2(held_at - Vector2(ICON, ICON) * 0.5, Vector2(ICON, ICON)), ELSecondLevelUpView._cell(icon))
 
 ## The hero's skill rows (drawn by the dialog surface); a list interface only.
 class SkillRows extends Control:

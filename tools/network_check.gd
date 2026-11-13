@@ -111,6 +111,23 @@ func _autochess(profile: ELProfile) -> void:
 		guest.send_command("ready", [])
 		await _wait(func(): return host.game.ready[1], polls, 3.0)
 		check(host.game.ready[1], "autochess guest 'ready' command reaches host")
+		# During a battle (no states are sent then) a guest's refresh still
+		# comes back to it, and the battle speed is shared by the table.
+		host.game.companies[1].ether = 50
+		host.game.start_fight()
+		check(await _wait(func(): return guest.game.stage == "fight", polls), "autochess guest enters the battle")
+		var shop_before: Array = guest.game.companies[1].shop.duplicate(true)
+		guest.send_command("refresh", [])
+		var refreshed := func() -> bool: return guest.game.companies[1].shop != shop_before and guest.game.companies[1].shop == host.game.companies[1].shop
+		check(await _wait(refreshed, polls, 5.0), "autochess guest refresh during a battle reaches the guest")
+		check(guest.game.stage == "fight", "autochess guest stays in its battle after shopping")
+		guest.send_command("speed", [2.0])
+		check(await _wait(func(): return host.game.speed == 2.0 and guest.game.speed == 2.0, polls, 5.0), "autochess guest's ×2 reaches the whole table")
+		# The host settles the battle, so the rejoin below seats at once.
+		var guard := 0
+		while host.game.stage == "fight" and guard < 2000:
+			host.game.process(0.5)
+			guard += 1
 	for l in log: print("  ", l)
 	check(log.is_empty(), "autochess no disconnects")
 	if guest_started[0]:

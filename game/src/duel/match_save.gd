@@ -40,6 +40,8 @@ static func decode(profile: ELProfile, raw: Dictionary) -> Dictionary:
 		for key in ["luck", "suppression"]:
 			if h.get(key) is not int or h[key] < 0 or h[key] > 3: return _bad("Invalid hero specialization.")
 		if not ELHeroSkills.valid_ranks(profile, h.skills): return _bad("Invalid hero skills.")
+		# Second game (update 1.03): a used revival.
+		if h.has("revived") and (h.revived is not bool or profile.id != "el2"): return _bad("Invalid hero revival.")
 		for field in ["hand", "deck", "grave"]:
 			if h.get(field) is not Array: return _bad("Invalid spell list.")
 			for card: Variant in h[field]:

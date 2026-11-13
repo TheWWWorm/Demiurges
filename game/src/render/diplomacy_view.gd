@@ -43,6 +43,8 @@ const HUMAN_SOURCE := Rect2(225, 23, 31, 23)
 const ASPECT_AT := Vector2(169, -1)
 const ASPECT_SOURCES := [Rect2(163, 99, 33, 25), Rect2(163, 124, 33, 25), Rect2(196, 99, 33, 25), Rect2(196, 124, 33, 25)]
 const NAME_RECT := Rect2(133, 145, 103, 15)
+## D_PlayerName, POName1 and POName2 FontSize: a 15 px GDI cell, a 13 px em.
+const NAME_SIZE := 13
 const ROW_BUTTONS := ["Break", "OfferPeace", "OfferTrade", "InBoxPeace", "InBoxTrade", "OutBoxPeace", "OutBoxTrade", "Bane"]
 const TIPS := {"D_CaptionTt1": Rect2(71, 64, 169, 43), "D_CaptionTt2": Rect2(244, 64, 65, 43), "D_CaptionTt3": Rect2(311, 66, 43, 43),
 	"D_CaptionTt4": Rect2(371, 66, 62, 43), "D_CaptionTt5": Rect2(432, 66, 45, 43), "D_CaptionTt6": Rect2(476, 65, 44, 44), "D_CaptionTt7": Rect2(520, 65, 42, 44)}
@@ -111,7 +113,7 @@ func build(session: ELAdventureSession, owner: int) -> void:
 			var button := _button(sheet, control, shift)
 			row.buttons[control] = button
 			button.visible = row.player >= 0
-		row.name = _label(sheet, Rect2(NAME_RECT.position + shift, NAME_RECT.size), ELFirstScenario.player_name(state, row.player) if row.player >= 0 else "", 15, TEXT, hud._bold)
+		row.name = _label(sheet, Rect2(NAME_RECT.position + shift, NAME_RECT.size), ELFirstScenario.player_name(state, row.player) if row.player >= 0 else "", NAME_SIZE, TEXT, hud._bold)
 		row.name.visible = row.player >= 0
 		var other: int = row.player
 		row.buttons.Break.pressed.connect(func(): _ask_break(other))
@@ -290,8 +292,8 @@ func _build_dialog() -> void:
 	dialog.visible = false
 	add_child(dialog)
 	_dialog_pieces = ELGlobalSpellsView.compose(hud, [DIALOG])
-	dialog_names.append(_label(dialog, Rect2(203, 186, 94, 17), "", 15, TEXT, hud._bold))
-	dialog_names.append(_label(dialog, Rect2(326, 186, 94, 17), "", 15, TEXT, hud._bold))
+	dialog_names.append(_label(dialog, Rect2(203, 186, 94, 17), "", NAME_SIZE, TEXT, hud._bold))
+	dialog_names.append(_label(dialog, Rect2(326, 186, 94, 17), "", NAME_SIZE, TEXT, hud._bold))
 	var body := _label(dialog, Rect2(145, 215, 360, 50), profile.text("CtrlPOText1"), 15, CAPTION, hud._italic)
 	body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	body.clip_text = false
@@ -417,8 +419,6 @@ func _dialog_tooltip(point: Vector2) -> String:
 
 func _label(canvas: Control, rect: Rect2, text: String, size: int, color: Color, font: Font) -> Label:
 	var label := Label.new()
-	label.position = rect.position
-	label.size = rect.size
 	label.text = text
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
@@ -432,6 +432,7 @@ func _label(canvas: Control, rect: Rect2, text: String, size: int, color: Color,
 	label.add_theme_constant_override("line_spacing", 0)
 	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	canvas.add_child(label)
+	ELMenuKit.place_text(label, rect)
 	return label
 
 ## A CutParts button; pieces masked "Light" alone give the hover picture.

@@ -45,8 +45,22 @@ var _metal_key := ""
 static func prepare(profile: ELProfile, model: String) -> String:
 	var template := ELArchive.key(model)
 	if profile.model_resources.has(template): return ""
-	var package := ELArchive.from_bytes(profile.figure(template + ".mod"))
-	if not package.error.is_empty(): return template + ": " + package.error
+	var resources := parse_resources(template, read_resources(profile, template))
+	if resources.has("error"): return String(resources.error)
+	profile.model_resources[template] = resources
+	return ""
+
+## The stored files of a model (figures, animations, clip table), read on
+## the main thread for parse_resources.
+static func read_resources(profile: ELProfile, template: String) -> Dictionary:
+	return {"figures": profile.figure(template + ".mod"), "animations": profile.figure(template + ".anm"),
+		"timing": profile.read("animdb", template + ".adb")}
+
+## Parses a model's files (read_resources) into its shared resources, or
+## {"error": ...}. Touches nothing shared, so worker threads may run it.
+static func parse_resources(template: String, files: Dictionary) -> Dictionary:
+	var package := ELArchive.from_bytes(files.figures)
+	if not package.error.is_empty(): return {"error": template + ": " + package.error}
 	var hierarchy := ELFigure.hierarchy(package.read(template))
 	var parsed_figures := {}
 	var meshes := {}
@@ -56,13 +70,20 @@ static func prepare(profile: ELProfile, model: String) -> String:
 			parsed_figures[link[0]] = parsed
 			meshes["base/" + link[0]] = ELFigure.mesh(parsed)
 	var animations: ELArchive
-	var animation_bytes := profile.figure(template + ".anm")
-	if ELArchive.is_archive(animation_bytes):
-		animations = ELArchive.from_bytes(animation_bytes)
-	profile.model_resources[template] = {"links": hierarchy, "figures": parsed_figures,
+	if ELArchive.is_archive(files.animations):
+		animations = ELArchive.from_bytes(files.animations)
+	return {"links": hierarchy, "figures": parsed_figures,
 		"meshes": meshes, "animations": animations, "clips": {},
-		"timing": animation_table(profile.read("animdb", template + ".adb"))}
-	return ""
+		"timing": animation_table(files.timing)}
+
+## A decoded clip's part meshes (keys as the figure's mesh cache), for
+## worker threads like decode_clip.
+static func clip_meshes(figures: Dictionary, name: String, tracks: Dictionary) -> Dictionary:
+	var meshes := {}
+	for part: String in figures:
+		if part in EFFECT_ANCHORS: continue
+		meshes[name + "/" + part] = ELFigure.mesh(figures[part], tracks.get(part, {}))
+	return meshes
 
 ## Decodes a clip's tracks for the parts named in `links` (pure data work:
 ## a loading screen runs it on worker threads).

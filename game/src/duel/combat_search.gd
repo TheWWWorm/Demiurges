@@ -13,18 +13,92 @@ extends RefCounted
 
 const THRESHOLD := 0.01
 const BUDGET := 1000
-## Remake option (ELDuel.smart_sides): the middle of each weight's range
-## instead of a random draw (no misjudged position on an unlucky roll), and a
-## wider search with the budget to fill it. A further phase of lookahead and
-## casting replies are available but measured no stronger in computer-vs-
-## computer duels for their extra thinking time, so they are off.
-static var smart_budget := 3000
+## Remake option (ELDuel.smart_sides), for both games: the middle of each
+## weight's range instead of a random draw (no misjudged position on an
+## unlucky roll), more replies per position, the compiled combat lookahead
+## and the fixes for plainly poor plays below (`smart_order` and after).
+## Measured in computer-vs-computer duels (tools/duel_ai_bench.gd) against
+## the original opponent it wins about 59 duels in 100, and of the pairings
+## that play, not the cards, decides some 43 against 10. A larger budget, a
+## further phase of lookahead and casting replies measured no stronger for
+## their thinking time, so they are off. tools/duel_ai_audit.gd counts the
+## poor plays and tools/duel_ai_check.gd replays the positions they were
+## found in.
+static var smart_budget := 1500
 static var smart_phases := 0
 static var smart_steady := true
 static var smart_replies := false
 ## Replies tried per position (the original stops after three, two past depth
 ## four and one past depth nine).
 static var smart_width := 6
+## The opponent's coming attack counts against a line that ends the computer's
+## own turn: each point of damage its ready creatures cannot stop costs this
+## share of a health point, and damage that would finish the hero costs
+## `smart_lethal`. 0 leaves the attack out, as the original does.
+static var smart_threat := 0.0
+static var smart_lethal := 0.0
+const FALLBACK_THREAT := 0.5
+const FALLBACK_LETHAL := 300.0
+## The compiled combat lookahead (ELCombatBrain), where the library is present.
+## A line that ends a turn is scored by `smart_brain_turns` further turns of
+## fighting (0 = off), within `smart_brain_budget` fights; the attackers and
+## blocks it finds best join the moves tried (`smart_brain_moves`), looked for
+## `smart_brain_move_turns` turns ahead within `smart_brain_move_budget`
+## fights for the move being chosen. Looking further than this measured no
+## stronger.
+static var smart_brain_turns := 2
+static var smart_brain_budget := 4000
+static var smart_brain_moves := true
+static var smart_brain_move_turns := 3
+static var smart_brain_move_budget := 200000
+## The lookahead can also have its sides play cards in the turns it looks at
+## (`smart_brain_cards`): the computer's own creature cards
+## (`smart_brain_own`), the typical creatures expected from cards it cannot
+## see (`smart_brain_typical`), and waking enfeebled creatures; a creature
+## still to be played counts for `smart_brain_discount` of one in play. Off:
+## over some 2500 duels in both games, with either part, both, a zero
+## discount and a deeper search, it won 48 to 50 in 100 against the armies
+## alone.
+static var smart_brain_cards := false
+static var smart_brain_discount := 0.7
+static var smart_brain_own := true
+static var smart_brain_typical := true
+## The order moves are tried in (`smart_order`). The original tries every
+## spell and ability of a position before any attack or block, and its budget
+## often ends there: with a handful of spells or one ability that can be used
+## many ways, attacking or blocking was never looked at (in about one think in
+## seven, measured), so the computer let a won fight go or died without
+## blocking. With this on, ending the phase, the lookahead's attackers or
+## blocks and the whole-army plans come first, then spells and abilities, then
+## lone attackers; and each further form of a spell or ability already tried
+## counts for `smart_family` of its priority, so that one spell with many
+## targets or amounts does not crowd out the others.
+static var smart_order := true
+static var smart_family := 0.8
+## A plan of several attackers or blocks, once chosen, is carried out without
+## thinking again between its commands (`smart_follow`): thought over anew
+## after each one, the computer would at times change its mind half way, send
+## one of the two attackers a win needed or pile its blockers on one attacker.
+static var smart_follow := true
+## A spell or ability that would change nothing (every creature raised when
+## none rests, ether taken from a hero that has none) is not played, nor a
+## spell that only gives ether when the plays after it need no more ether than
+## the hero already holds and no creature of its army can regenerate.
+static var smart_idle := true
+## Hero entries a spell spends or reorders without having done anything.
+const IDLE_KEYS := ["hand", "hand_slots", "hand_view", "hand_ids", "mana", "grave", "spell_uses", "drawn"]
+## A win or loss the lookahead foresees is worth `smart_forced`, less
+## `smart_forced_step` for every turn it is away, on top of the line's own
+## worth: far below a duel really won, so winning now beats expecting to, and
+## among lost lines the one that holds out and keeps the most still wins.
+static var smart_forced := 300.0
+static var smart_forced_step := 20.0
+## A point of the other hero's health counts for `smart_foe_health` of one of
+## the computer's own (1 = the same, as the original).
+static var smart_foe_health := 1.0
+## A gain the lookahead only foresees counts for `smart_later` of one already
+## made, so that the computer does not put a good attack off turn after turn.
+static var smart_later := 0.9
 
 ## Move flags.
 const MOVE_FAILED := 1
@@ -35,9 +109,11 @@ const MOVE_CAST := 0x10
 const MOVE_ABILITY := 0x20
 const MOVE_ATTACK_PLAN := 0x40
 const MOVE_UNLIKELY := 0x80
-const MOVE_BLOCK_PLANS := 0x1e00
+## The compiled lookahead's block plan (remake option).
+const MOVE_BRAIN_BLOCKS := 0x2000
+const MOVE_BLOCK_PLANS := 0x3e00
 ## Moves tried only after the plain ones of a position.
-const MOVE_SECOND_PASS := 0x1e4c
+const MOVE_SECOND_PASS := 0x3e4c
 ## Line flags: a block plan allows only the next phase after it; one attack
 ## move per line.
 const LINE_ONLY_NEXT := 2
@@ -56,7 +132,7 @@ const SPELL_SIDES := {
 		"UPGD": 1, "WEAK": 2, "WHAS": 64, "WNBL": 1, "ZAPP": 10},
 	"el2": {"AILK": 1, "ALNS": 1, "BLSS": 1, "BNSH": 2, "BRRD": 10, "CLFR": 1, "CLIG": 10, "CLNP": 16, "DISM": 2, "DSIG": 2,
 		"DWND": 2, "ENBR": 5, "ENFL": 2, "ERBN": 2, "ETAM": 1, "ETTD": 64, "EXIL": 2, "FAIL": 2, "FLIC": 16, "IMMB": 2,
-		"IRRT": 2, "LFGR": 5, "LSST": 1, "MDNS": 2, "MGHT": 1, "OBLS": 2, "OCLV": 2, "OCRP": 2, "ORFT": 2, "OVRL": 1,
+		"IRRT": 2, "LFGR": 5, "LSST": 1, "MDNS": 2, "MGHT": 1, "MNBR": 1, "MNST": 1, "OBLS": 2, "OCLV": 2, "OCRP": 2, "ORFT": 2, "OVRL": 1,
 		"PALN": 2, "PRFY": 16, "PRGD": 1, "PRWR": 10, "RDCL": 10, "RDIS": 10, "RDLG": 10, "RIFT": 10, "SCSK": 1, "SGHT": 1,
 		"SHCL": 1, "SHSK": 1, "SLRP": 1, "SPBA": 1, "SPBR": 16, "SPRG": 2, "SPWR": 1, "STAT": 1, "STRG": 1, "STSK": 5,
 		"TGSK": 1, "THIF": 1, "UPGD": 1, "WEAK": 2, "WHAS": 64, "WNBL": 1, "ZAPP": 10},
@@ -94,8 +170,10 @@ class Line:
 	var depth := 0
 	var phases := 0
 	var command := {}
-	## The command actually sent: a plan's first successful attack or block.
+	## The command actually sent: a plan's first successful attack or block;
+	## and all of the plan's commands in order.
 	var sent := {}
+	var steps: Array = []
 	var budget := -1
 	var used := 0
 	var prior := -1e6
@@ -106,6 +184,11 @@ class Line:
 	var flags := 0
 	var explored := 0
 	var children: Array[Line] = []
+	## Remake option: spells and abilities already tried here, by kind.
+	var families := {}
+	## Remake option: for a first move that only gains ether, the ether the
+	## hero held before it (see `smart_idle`).
+	var without := -1
 
 class Context:
 	var ai := 0
@@ -121,9 +204,35 @@ class Context:
 	## Auto-combat without "use spells": no artifacts and no spellbook copies
 	## that spend charges (the hero's enchantment abilities stay).
 	var restricted := false
+	## Remake option: see `smart_threat` and `smart_lethal`.
+	var threat := 0.0
+	var lethal := 0.0
+	## Remake option: the compiled lookahead (see `smart_brain_turns`), its
+	## creature records and answers of this think, and the fights it played.
+	var brain_turns := 0
+	var brain_moves := false
+	var units := {}
+	var asked := {}
+	var fights := 0
+	var brain_cards := false
+	var cards := {}
+	## Remake option: see `smart_order` and `smart_foe_health`.
+	var orderly := false
+	var foe_health := 1.0
+	## Remake option: creature worths of this think (see `side_value`).
+	var remember := false
+	var worths := {}
+	## For tools: the first moves tried, with their worth (see `think`).
+	var tracing := false
+	var trace: Array = []
+	var offered := 0
+	var untried: Array = []
 
 ## The opponent's next command for the acting side, as a command dictionary
-## (see `apply`). `stats`, when given, receives the number of positions.
+## (see `apply`). `stats`, when given, receives the number of positions; with
+## a "trace" entry it also receives every first move tried, as {command,
+## prior, value, positions}, the number of first moves there were ("offered")
+## and the commands of those the budget did not reach ("untried").
 static func think(duel: ELDuel, stats: Dictionary = {}, restricted := false) -> Dictionary:
 	if duel.phase == ELDuel.Phase.FINISHED:
 		if duel.scripts != null and duel.scripts.search_only: duel.scripts.close()
@@ -134,25 +243,88 @@ static func think(duel: ELDuel, stats: Dictionary = {}, restricted := false) -> 
 	ctx.edition = duel.profile.id
 	ctx.second = ctx.edition == "el2"
 	var smart := duel.smart_sides.has(ctx.ai)
+	if smart and smart_follow and not stats.has("trace"):
+		var planned := _recall(duel)
+		if not planned.is_empty():
+			stats.positions = 0
+			stats.fights = 0
+			return planned
 	ctx.w = steady_weights(ctx.second) if smart and smart_steady else weights(duel.rng_state, ctx.second)
 	ctx.limit = (1 if duel.phase == ELDuel.Phase.ATTACK else 0) + (smart_phases if smart else 0)
 	var root := Line.new()
 	root.budget = smart_budget if smart else BUDGET
 	ctx.replies = smart and smart_replies
 	ctx.width = smart_width if smart else 0
+	if smart:
+		ctx.remember = true
+		ctx.orderly = smart_order
+		ctx.foe_health = smart_foe_health
+		ctx.threat = smart_threat
+		ctx.lethal = smart_lethal
+		if ELCombatBrain.available:
+			ctx.brain_turns = smart_brain_turns
+			ctx.brain_moves = smart_brain_moves
+			ctx.brain_cards = smart_brain_cards
+		elif smart_threat <= 0.0 and smart_lethal <= 0.0:
+			# Without the library (the browser version) the coming attack is
+			# estimated from the armies as they stand.
+			ctx.threat = FALLBACK_THREAT
+			ctx.lethal = FALLBACK_LETHAL
+	ctx.tracing = stats.has("trace")
 	var start := duel.search_copy(ctx.second)
 	if ctx.second: start.spec_expect = ELSpecs.sample_expectation(duel)
 	_search(ctx, root, start)
+	if ctx.tracing:
+		stats.trace = ctx.trace
+		stats.offered = ctx.offered
+		stats.untried = ctx.untried
 	# The lookahead script layer lives for one think.
 	if start.scripts != null and start.scripts.search_only: start.scripts.close()
 	stats.positions = ctx.positions
+	stats.fights = ctx.fights
 	var best: Line = null
-	for line: Line in ctx.registered:
-		if best == null or line.value > best.value: best = line
-	if best == null: return {"kind": "end_phase"}
-	while best.parent != null and best.parent.parent != null: best = best.parent
+	# An ether spell whose line never uses the ether is set aside, once. A
+	# hand over five loses the card at the end of the turn anyway.
+	var spare: Line = null
+	for attempt in 2:
+		best = null
+		for line: Line in ctx.registered:
+			var first := line
+			while first.parent != null and first.parent.parent != null: first = first.parent
+			if first == spare: continue
+			if best == null or line.value > best.value: best = line
+		if best == null: return {"kind": "end_phase"}
+		var leaf := best
+		while best.parent != null and best.parent.parent != null: best = best.parent
+		if attempt == 0 and best.without >= 0 and duel.heroes[ctx.ai].hand.size() <= 5 and not _needs(duel, leaf, best): spare = best
+		else: break
 	stats.value = best.value
+	if smart and smart_follow and best.steps.size() > 1: _remember(duel, best.steps)
 	return best.sent if not best.sent.is_empty() else best.command
+
+## Remake option (`smart_follow`): the commands that follow a chosen plan, by
+## the position each is to be sent from.
+static var _plans := {}
+static var _plans_lock := Mutex.new()
+
+static func _position(d: ELDuel) -> int:
+	return hash([d.phase, d.attacker, d.round_number, d.attacks, d.blocks, d.creatures, d.heroes])
+
+static func _remember(duel: ELDuel, steps: Array) -> void:
+	var copy := duel.search_copy()
+	_plans_lock.lock()
+	if _plans.size() > 256: _plans.clear()
+	for i in steps.size() - 1:
+		if not apply(copy, steps[i]): break
+		_plans[_position(copy)] = steps[i + 1]
+	_plans_lock.unlock()
+	if copy.scripts != null and copy.scripts.search_only: copy.scripts.close()
+
+static func _recall(duel: ELDuel) -> Dictionary:
+	_plans_lock.lock()
+	var planned: Dictionary = _plans.get(_position(duel), {})
+	_plans_lock.unlock()
+	return planned
 
 ## Sends a command to the duel; false when the rules refuse it.
 static func apply(d: ELDuel, command: Dictionary) -> bool:
@@ -195,6 +367,10 @@ static func _search(ctx: Context, line: Line, before: ELDuel) -> bool:
 	if line.parent != null:
 		s = before.search_copy()
 		if not _execute(ctx, line, s): return false
+		if ctx.orderly and smart_idle and line.depth == 1 and line.move & (MOVE_CAST | MOVE_ABILITY):
+			var spent := _spent(before, s, line)
+			if spent == 1: return _fail(line)
+			if spent == 2: line.without = int(before.heroes[before.active_side()].mana)
 	ctx.positions += 1
 	var finished := s.phase == ELDuel.Phase.FINISHED
 	var maximise := s.active_side() == ctx.ai
@@ -205,14 +381,20 @@ static func _search(ctx: Context, line: Line, before: ELDuel) -> bool:
 		return true
 	_generate(ctx, line, s)
 	while true:
-		var child := _pick(line)
+		var child := _pick_orderly(line) if ctx.orderly else _pick(line)
 		if child == null: break
 		if not _allot(line, child, ctx.width): break
 		var ok := _search(ctx, child, s)
 		line.used += child.used
+		if ctx.tracing and line.parent == null and ok:
+			ctx.trace.append({"command": child.sent if not child.sent.is_empty() else child.command, "plan": child.command, "prior": child.prior, "value": child.value, "positions": child.used})
 		if ok:
 			line.explored += 1
 			line.value = maxf(line.value, child.value) if maximise else minf(line.value, child.value)
+	if ctx.tracing and line.parent == null:
+		ctx.offered = line.children.size()
+		for c: Line in line.children:
+			if not c.picked and c.prior >= THRESHOLD: ctx.untried.append(c.command)
 	# Lines keep only their parent link once searched (no reference cycles).
 	line.children.clear()
 	return true
@@ -221,10 +403,13 @@ static func _execute(ctx: Context, line: Line, s: ELDuel) -> bool:
 	if line.move & (MOVE_ATTACK | MOVE_ATTACK_PLAN):
 		if line.flags & LINE_ATTACKED: return _fail(line)
 		line.flags |= LINE_ATTACKED
-		if line.move & MOVE_ATTACK_PLAN: return _attack_plan(ctx, line, s) or _fail(line)
+		if line.move & MOVE_ATTACK_PLAN:
+			if line.command.kind == "attack_set": return _attack_set(line, s) or _fail(line)
+			return _attack_plan(ctx, line, s) or _fail(line)
 	elif line.move & MOVE_BLOCK_PLANS:
 		if line.flags & LINE_ONLY_NEXT: return _fail(line)
 		line.flags |= LINE_ONLY_NEXT
+		if line.move & MOVE_BRAIN_BLOCKS: return _block_set(line, s) or _fail(line)
 		return _block_plan(ctx, line, s) or _fail(line)
 	if line.move & MOVE_NEXT and s.phase == ELDuel.Phase.ATTACK and s.attacks.is_empty(): line.phases += 1
 	line.used += 1
@@ -251,6 +436,87 @@ static func _pick(line: Line) -> Line:
 			return best
 		line.second_pass = true
 	return null
+
+## Remake option (`smart_order`): the highest rank first among the untried
+## moves. Ending the phase, then the plans, then spells and abilities, then
+## lone attackers; within a group the higher priority, a spell or ability
+## already tried in other forms giving way.
+static func _pick_orderly(line: Line) -> Line:
+	var best: Line = null
+	var top := -1.0
+	var kind := ""
+	for c: Line in line.children:
+		if c.picked or c.move & MOVE_FAILED or c.prior < THRESHOLD: continue
+		if line.flags & LINE_ONLY_NEXT and not c.move & MOVE_NEXT: continue
+		if line.flags & LINE_ATTACKED and c.move & (MOVE_ATTACK | MOVE_ATTACK_PLAN): continue
+		var rank := c.prior
+		var family := ""
+		if c.move & MOVE_NEXT: rank += 6.0
+		elif c.move & (MOVE_ATTACK_PLAN | MOVE_BLOCK_PLANS): rank += 4.0
+		elif c.move & MOVE_ATTACK: rank = minf(rank, 0.99)
+		else:
+			family = "%s %s %s" % [c.command.kind, c.command.get("card", c.command.get("key", "")), c.command.get("id", "")]
+			rank = 2.0 + rank * pow(smart_family, float(line.families.get(family, 0)))
+		if rank > top:
+			best = c
+			top = rank
+			kind = family
+	if best == null: return null
+	best.picked = true
+	if not kind.is_empty(): line.families[kind] = int(line.families.get(kind, 0)) + 1
+	return best
+
+## Remake option (`smart_idle`): what the spell or ability of `line` did from
+## `before` to `after` beyond spending the caster's card and ether: 0
+## something, 1 nothing, 2 nothing but ether gained.
+static func _spent(before: ELDuel, after: ELDuel, line: Line) -> int:
+	if after.phase != before.phase or after.creatures.hash() != before.creatures.hash() or after.attacks != before.attacks or after.blocks.hash() != before.blocks.hash(): return 0
+	var side := before.active_side()
+	if after.heroes[1 - side].hash() != before.heroes[1 - side].hash(): return 0
+	var was: Dictionary = before.heroes[side]
+	var now: Dictionary = after.heroes[side]
+	var card := String(line.command.get("card", "")) if line.command.kind == "cast" else ""
+	for key: String in ["hand", "grave"]:
+		var held: Array = now[key].duplicate()
+		var had: Array = was[key].duplicate()
+		if not card.is_empty():
+			if key == "hand": held.append(card)
+			elif held.size() > had.size(): had.append(card)
+		held.sort()
+		had.sort()
+		if held != had: return 0
+	for key: String in was:
+		if key in IDLE_KEYS: continue
+		if not now.has(key) or hash(now[key]) != hash(was[key]): return 0
+	return 2 if int(now.mana) > int(was.mana) else 1
+
+## Remake option (`smart_idle`): whether the line ending in `leaf` goes on,
+## after the ether spell `top`, to a play that the ether there was before the
+## spell would not have paid for. Refunds are left out, and an ability, whose
+## price is not known here, counts as needing it. So does an army that can
+## regenerate: ether left over pays for that through the other hero's turn.
+static func _needs(duel: ELDuel, leaf: Line, top: Line) -> bool:
+	for c: Dictionary in duel.army(duel.active_side()):
+		if duel.regeneration_cost(c.id) > 0: return true
+	var plays: Array[Line] = []
+	var at := leaf
+	while at != null and at != top:
+		plays.push_front(at)
+		at = at.parent
+	var left := top.without
+	var tax := duel.global_enchantment_count("LSDS")
+	for play: Line in plays:
+		var price := 0
+		match String(play.command.get("kind", "")):
+			"cast":
+				var card := String(play.command.card)
+				price = duel.cost(card) + (int(play.command.power) if ELCatalog.rule(duel.profile, card).get("x_source", "") != "health" else 0)
+			"attack": price = tax
+			"attack_set", "attack_plan": price = tax * play.steps.size()
+			"ability": return true
+		if price > left: return true
+		left -= price
+	return false
 
 ## Shares the position budget: up to a fifth per root move, then half for the
 ## first reply and a third for later ones; deeper positions try fewer replies.
@@ -296,12 +562,45 @@ static func _generate(ctx: Context, line: Line, s: ELDuel) -> void:
 				break
 	elif not s.attacks.is_empty() and not army.is_empty():
 		for plan: Array in BLOCK_PLANS: _add(line, {"kind": "block_plan", "plan": plan[0]}, plan[1], plan[0])
+	if ctx.brain_moves and not army.is_empty() and not (line.flags & (LINE_ATTACKED | LINE_ONLY_NEXT)): _brain_moves(ctx, line, s)
 	for c: Dictionary in army:
 		if not s.creatures.has(c.id): continue
 		for ability: Dictionary in s.abilities(c.id):
 			if s.can_use_ability(c.id, ability.key): _ability_moves(ctx, line, s, side, c.id, ability)
 		if s.phase == ELDuel.Phase.ATTACK and _free(s, c) and int(c.power) > 0:
 			_add(line, {"kind": "attack", "id": c.id}, _attack_prior(s, c), MOVE_ATTACK)
+
+## Remake option: the attackers or the blocks the compiled lookahead finds best
+## join the moves; the move being chosen is looked for deeper than the replies.
+static func _brain_moves(ctx: Context, line: Line, s: ELDuel) -> void:
+	var attacking := s.phase == ELDuel.Phase.ATTACK
+	if not attacking and s.attacks.is_empty(): return
+	var root := line.depth == 0
+	var answer := ELCombatBrain.ask(ctx, s, smart_brain_move_turns if root else maxi(1, ctx.brain_turns), smart_brain_move_budget if root else smart_brain_budget, root)
+	if answer.is_empty(): return
+	if attacking:
+		var ids: Array[int] = []
+		for id: int in answer.ids:
+			if not s.attacks.has(id): ids.append(id)
+		if not ids.is_empty(): _add(line, {"kind": "attack_set", "ids": ids}, 1.05, MOVE_ATTACK_PLAN)
+	elif not answer.ids.is_empty():
+		_add(line, {"kind": "block_set", "pairs": answer.ids}, 0.9995, MOVE_BRAIN_BLOCKS)
+
+static func _attack_set(line: Line, s: ELDuel) -> bool:
+	for id: int in line.command.ids:
+		line.used += 1
+		if s.creatures.has(id) and not s.attacks.has(id) and s.toggle_attack(id):
+			line.steps.append({"kind": "attack", "id": id})
+			if line.sent.is_empty(): line.sent = line.steps[0]
+	return not line.sent.is_empty()
+
+static func _block_set(line: Line, s: ELDuel) -> bool:
+	var pairs: Array = line.command.pairs
+	line.used += 2
+	for i in range(0, pairs.size() - 1, 2):
+		if s.blocks.get(int(pairs[i]), -1) == int(pairs[i + 1]): continue
+		_block_now(line, s, int(pairs[i]), int(pairs[i + 1]))
+	return not line.sent.is_empty()
 
 ## Ready, rested and not yet in combat.
 static func _free(s: ELDuel, c: Dictionary) -> bool:
@@ -445,6 +744,10 @@ static func _ability_prior(ctx: Context, s: ELDuel, side: int, id: int, card: St
 			return _side_check(s, side, 5, target, -1)
 		"dispel", "disenchant":
 			return _side_check(s, side, 0x10, target, int(args[1]))
+		"orc_rite":
+			# Update 1.03's rite costs a channel: kept for a hero with channels to spare.
+			if int(s.heroes[side].channels) < 3: return 0.0
+			return _side_check(s, side, 0x10, target, int(args[1])) * 0.5
 		"siphon":
 			var c: Dictionary = s.creatures[id]
 			return 0.5 if not c.resting and not c.sick and not s.attacks.has(id) and int(s.heroes[1 - side].mana) > 0 else 0.0
@@ -659,8 +962,9 @@ static func _attack_plan(ctx: Context, line: Line, s: ELDuel) -> bool:
 			order.push_front(int(c.id))
 		else: order.append(int(c.id))
 	for id: int in order:
-		if s.creatures.has(id) and not s.attacks.has(id) and s.toggle_attack(id) and line.sent.is_empty():
-			line.sent = {"kind": "attack", "id": id}
+		if s.creatures.has(id) and not s.attacks.has(id) and s.toggle_attack(id):
+			line.steps.append({"kind": "attack", "id": id})
+			if line.sent.is_empty(): line.sent = line.steps[0]
 	return not line.sent.is_empty()
 
 static func _block_plan(ctx: Context, line: Line, s: ELDuel) -> bool:
@@ -676,7 +980,9 @@ static func _block_plan(ctx: Context, line: Line, s: ELDuel) -> bool:
 static func _block_now(line: Line, s: ELDuel, blocker: int, attacker: int) -> bool:
 	line.used += 1
 	var ok := s.assign_block(blocker, attacker)
-	if ok and line.sent.is_empty(): line.sent = {"kind": "block", "id": blocker, "target": attacker}
+	if ok:
+		line.steps.append({"kind": "block", "id": blocker, "target": attacker})
+		if line.sent.is_empty(): line.sent = line.steps[0]
 	return ok
 
 static func _can_block(s: ELDuel, attacker: int, blocker: int) -> bool:
@@ -797,7 +1103,73 @@ static func _leaf(ctx: Context, line: Line, s: ELDuel) -> float:
 	ctx.positions += 1
 	var later := side_value(ctx, after, ctx.ai) - side_value(ctx, after, 1 - ctx.ai)
 	var blend := 0.001 if after.phase == ELDuel.Phase.FINISHED else ctx.w[0]
-	return blend * later + (1.0 - blend) * now
+	var value := blend * later + (1.0 - blend) * now - _threat(ctx, s)
+	if ctx.brain_turns > 0 and s.phase == ELDuel.Phase.ATTACK:
+		# What the fighting of the coming turns adds to or takes from the line.
+		var answer := ELCombatBrain.ask(ctx, s, ctx.brain_turns, smart_brain_budget, false)
+		if not answer.is_empty():
+			if answer.status != 0: value += float(answer.status) * maxf(smart_forced - smart_forced_step * float(int(answer.turns) - 1), smart_forced * 0.5)
+			elif answer.value > 0.0: value += float(answer.value) * smart_later
+			else: value += float(answer.value)
+	return value
+
+## Remake option: what the opponent's attack would cost when the computer has
+## just ended its own turn. Every creature that can attack does; the
+## computer's ready creatures each stop one attacker, the strongest first.
+static func _threat(ctx: Context, s: ELDuel) -> float:
+	if ctx.threat <= 0.0 and ctx.lethal <= 0.0: return 0.0
+	if s.phase != ELDuel.Phase.ATTACK or s.attacker == ctx.ai: return 0.0
+	var through := incoming(s)
+	if through <= 0: return 0.0
+	if through >= int(s.heroes[ctx.ai].health): return ctx.lethal + float(through) * ctx.threat * ctx.w[2]
+	return float(through) * ctx.threat * ctx.w[2]
+
+## Damage the defending hero would take from an attack by every creature of
+## the side to move, after the defender's ready creatures block to spare it.
+static func incoming(s: ELDuel) -> int:
+	var foe := s.attacker
+	var attackers: Array[Dictionary] = []
+	for c: Dictionary in s.army(foe):
+		if int(c.power) > 0 and s.can_attack(c.id): attackers.append(c)
+	if attackers.is_empty(): return 0
+	attackers.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return int(a.power) > int(b.power))
+	# An attack tax leaves only the attackers the hero's ether pays for.
+	var tax := s.attack_cost(int(attackers[0].id))
+	if tax > 0: attackers.resize(mini(attackers.size(), s.available_mana(foe) / tax))
+	# Ground creatures block first, keeping flyers and walls for what only they stop.
+	var ground: Array[Dictionary] = []
+	var flying: Array[Dictionary] = []
+	var walls: Array[Dictionary] = []
+	for c: Dictionary in s.army(1 - foe):
+		if c.resting or c.sick or s.in_plane(c.id): continue
+		if s.race(c.id) == "Wall": walls.append(c)
+		elif s.has_flag(c.id, "Fly"): flying.append(c)
+		else: ground.append(c)
+	var through := 0
+	for a: Dictionary in attackers:
+		var power := int(a.power)
+		if s.has_flag(a.id, "UB"):
+			through += power
+			continue
+		var pools: Array = [walls] if _elusive(s, a) else ([flying] if s.has_flag(a.id, "Fly") else [ground, walls, flying])
+		var blocker := {}
+		for pool: Array in pools:
+			if pool.is_empty(): continue
+			if not s.has_flag(a.id, "Trample"):
+				blocker = pool.pop_back()
+				break
+			# The toughest blocker soaks up the most of a trampler.
+			var at := 0
+			for i in pool.size():
+				if int(pool[i].toughness) > int(pool[at].toughness): at = i
+			if blocker.is_empty() or int(pool[at].toughness) > int(blocker.toughness):
+				blocker = pool[at]
+		if blocker.is_empty():
+			through += power
+		elif s.has_flag(a.id, "Trample"):
+			for pool: Array in pools: pool.erase(blocker)
+			through += maxi(0, power - int(blocker.toughness))
+	return through
 
 ## One side's position worth: army, health, hand, channels and enchantments.
 static func side_value(ctx: Context, s: ELDuel, side: int) -> float:
@@ -808,10 +1180,25 @@ static func side_value(ctx: Context, s: ELDuel, side: int) -> float:
 	var w := ctx.w
 	var hero: Dictionary = s.heroes[side]
 	var value := 0.0
-	for c: Dictionary in s.army(side): value += creature_value(ctx, s, c)
+	if ctx.remember:
+		# A creature's worth does not change while it stands as it is under the
+		# same hero enchantments; the remake option keeps it for the think.
+		var cards: Array = []
+		for e: Dictionary in hero.enchantments: cards.append(e.card)
+		var auras := cards.hash()
+		for c: Dictionary in s.creatures.values():
+			if int(c.owner) != side: continue
+			var key := [c.hash(), auras].hash()
+			var worth: Variant = ctx.worths.get(key)
+			if worth == null:
+				worth = creature_value(ctx, s, c)
+				ctx.worths[key] = worth
+			value += float(worth)
+	else:
+		for c: Dictionary in s.army(side): value += creature_value(ctx, s, c)
 	var health := float(hero.health)
 	var channels := float(hero.channels)
-	value += health * w[2] + float(hero.hand.size()) * w[4]
+	value += health * w[2] * (1.0 if side == ctx.ai else ctx.foe_health) + float(hero.hand.size()) * w[4]
 	if ctx.second:
 		var term := channels * w[3]
 		if channels > 9.0: term = (channels - 9.0) * 0.5 + 5.0 * w[3] + 3.0

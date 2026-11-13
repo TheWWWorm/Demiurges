@@ -29,7 +29,8 @@ const EFFECTS := {
 	"MNTP": {"effect": "mana", "target": "none", "amount": 3},
 	"MNDW": {"effect": "mana", "target": "none", "amount": 4},
 	"GEYS": {"effect": "channels", "target": "none", "amount": 1},
-	"VOLC": {"effect": "channels", "target": "none", "amount": 3, "amount_el2": 2},
+	# Volcano gave two channels in the second game until update 1.03.
+	"VOLC": {"effect": "channels", "target": "none", "amount": 3},
 	"MNBR": {"effect": "channels", "target": "none", "amount": 2, "scope": "both"},
 	"MNST": {"effect": "channels", "target": "none", "amount": 4, "scope": "both"},
 	"SNRG": {"effect": "channels", "target": "none", "amount": 1},
@@ -83,8 +84,9 @@ const HERO_ABILITIES := {
 	# Sacrifice needs 1 ether but settles it with the gain instead of paying it.
 	"SACR": {"key": "sacrifice", "target": "creature", "cost": 1, "unpaid": true},
 }
-## Second-game values for hero abilities.
-const SECOND_HERO_ABILITIES := {"SPLK": {"cost": 2, "amount": 2}}
+## Second-game values for hero abilities. Since update 1.03 Dissolution
+## works with an empty ether pool.
+const SECOND_HERO_ABILITIES := {"SPLK": {"cost": 2, "amount": 2}, "SACR": {"cost": 0}}
 ## Hero enchantments that modify every friendly creature, including later arrivals.
 ## `lethal` lowers toughness past the usual minimum of one, killing weak creatures.
 const ARMY_AURAS := {"RDDF": {"toughness": 3}, "DMRD": {"power": 1, "toughness": 1}, "STWO": {"power": 2}, "ENWO": {"toughness": 2}, "DOMN": {"power": 1, "toughness": 1}, "JYHD": {"power": 1}, "CRBL": {"flags": ["FS"]},
@@ -355,6 +357,11 @@ const SECOND_EFFECTS := {
 	"BNSH": {"effect": "banish", "target": "creature", "pale": true},
 	"PRBN": {"effect": "enchant", "target": "creature"},
 	"ORFT": {"effect": "pale_revival", "target": "creature", "plane": "in"},
+	# Update 1.03: Ether Breeze and Ether Storm became creature enchantments
+	# that feed their caster each turn. Ether Vortex keeps its hero
+	# enchantment, which now lasts until the end of the caster's next turn.
+	"MNBR": {"effect": "enchant", "target": "creature"},
+	"MNST": {"effect": "enchant", "target": "creature"},
 	"FTCH": {"effect": "draw", "target": "none", "self": true, "amount": 2, "channels_el2": 1},
 	"GBNS": {"effect": "vaporize", "target": "none"},
 	"PRWR": {"effect": "enchant", "target": "hero"},
@@ -385,8 +392,9 @@ const PALE_ABILITIES := {
 	"OUS2": {"key": "ether_plea", "target": "any", "cost": 0},
 	"OUS3": {"key": "pale_heal", "target": "none", "cost": 0},
 	"OUE1": {"key": "absorb", "target": "enchantment", "cost": 1},
-	"OUE2": {"key": "weave", "target": "enchantment", "cost": 2},
-	"OUE3": {"key": "transpose", "target": "enchantment", "cost": 1},
+	# Update 1.03 swapped the two copy prices: Weave 1+X, Transpose 2+X.
+	"OUE2": {"key": "weave", "target": "enchantment", "cost": 1},
+	"OUE3": {"key": "transpose", "target": "enchantment", "cost": 2},
 	"OUD1": {"key": "pale_devour", "target": "creature", "cost": 2, "measure": "power"},
 	"OUD2": {"key": "pale_devour", "target": "creature", "cost": 2, "measure": "toughness"},
 	"OUD3": {"key": "pale_devour", "target": "creature", "cost": 3, "measure": "both"},
@@ -396,8 +404,13 @@ const OUTER_SPELLS := ["OFLX", "ORPL", "ORFT", "OBLS", "OCRP", "OST1", "OST2", "
 ## Wardings raise the cost of one spell class for both heroes: lesser +2, greater +printed cost.
 const WARDINGS := {"LCWR": ["Creature", false], "GCWR": ["Creature", true], "LSWR": ["Sorcery", false],
 	"GSWR": ["Sorcery", true], "LEWR": ["Enchantment", false], "GEWR": ["Enchantment", true]}
-## Second-game values that replace the first game's for shared rules.
-const SECOND_ABILITIES := {"MOTI": {"cost": 2}, "AVMK": {"amount": 2}}
+## Second-game values that replace the first game's for shared rules. Since
+## update 1.03 the orc shaman's rite gives up an ether channel to remove an
+## enchantment (its ether now comes at each turn start, see ELDuel).
+const SECOND_ABILITIES := {"MOTI": {"cost": 2}, "AVMK": {"amount": 2}, "ORSH": {"key": "orc_rite", "target": "enchantment", "cost": 0}}
+## Update 1.03: cards that act when the opponent makes their holder discard them.
+const DISCARD_SUMMONS := ["GROG", "OGKN"]
+const DISCARD_RETORTS := ["WEAK", "CLIG"]
 const SECOND_AURAS := {"TIWK": {"race": "Tick", "power": 1}, "TIQN": {"race": "Tick", "toughness": 1}}
 const SECOND_DISCARD := {"THIF": 2}
 ## Only Wall-race creatures may block these attackers (after the flying check).

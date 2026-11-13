@@ -1028,7 +1028,8 @@ func finish_encounter() -> bool:
 	if not interrupted: ELFirstScenario.evaluate(self, battle)
 	return true
 
-## Second game: the pre-battle panel's Cancel declines the prepared battle.
+## The pre-battle panel's Cancel declines the prepared battle (second game;
+## first game against a neutral creature).
 func decline_encounter() -> bool:
 	if encounter == null: return false
 	if not encounter.decline(): return _fail(encounter.error)

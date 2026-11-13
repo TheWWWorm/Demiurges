@@ -123,7 +123,13 @@ static func placed_gain(fade: float, edition := "") -> float:
 static func sound(profile: ELProfile, path: String) -> AudioStreamWAV:
 	var key := ELArchive.key(path)
 	if profile.sound_cache.has(key): return profile.sound_cache[key]
-	var stream := decode_wav(profile.read("sfx", key))
+	return store_sound(profile, key, decode_wav(profile.read("sfx", key)))
+
+## Keeps a decoded sound (null: none there) under its archive key, the
+## oldest sounds giving way past the budget. A battle's warm-up decodes its
+## sounds on worker threads and files them here.
+static func store_sound(profile: ELProfile, key: String, stream: AudioStreamWAV) -> AudioStreamWAV:
+	if profile.sound_cache.has(key): return profile.sound_cache[key]
 	if stream != null:
 		while profile.sound_bytes + stream.data.size() > 32 * 1024 * 1024 and not profile.sound_cache.is_empty():
 			var oldest: String = profile.sound_cache.keys()[0]

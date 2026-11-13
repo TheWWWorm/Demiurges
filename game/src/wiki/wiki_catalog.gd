@@ -7,8 +7,11 @@ extends RefCounted
 ## editions side by side, with the values Etherlords II changed highlighted; a
 ## card only one game has says so. Names, descriptions and statistics come from
 ## the installed games' own tables and texts, so the in-game wiki follows the
-## player's copies and their language; the page labels follow the wiki
-## language. tools/export_wiki.gd runs the same builder for the hosted wiki.
+## player's copies and their language. The page labels follow the wiki
+## language when the games' texts are in it; when the installed games speak
+## the other language, the pages are written wholly in the games' language
+## (no half-translated pages) with a note in the wiki language saying so.
+## tools/export_wiki.gd runs the same builder for the hosted wiki.
 ##
 ## Pages: {key, title, category, summary, html, search, games, card, kind,
 ## models}. Card pages carry `<figure data-card="CODE" data-kind="creature|card"
@@ -59,7 +62,7 @@ const LABELS := {
 		"resource": "Resource", "shop": "Price in shops and the duel editor", "rune": "Price of a rune", "ability": "Ability",
 		"Cantrip": "Cantrip", "Common": "Common", "Rare": "Rare", "Unique": "Unique", "NoAffect": "Unaffected",
 		"level": "Rank", "effect": "Effect", "duel_price": "Duel editor price", "chance": "Chance", "colors": "Factions",
-		"Ulow": "very low", "Low": "low", "Med": "medium", "High": "high", "other": "Other",
+		"Ulow": "very low", "ULow": "very low", "Low": "low", "Med": "medium", "High": "high", "other": "Other",
 		"both": "In Etherlords and Etherlords II", "only": "Only in %s",
 		"changes": "Changes in Etherlords II", "changed_from": "%s: %s → %s", "old_text": "%s in Etherlords:",
 		"same": "Etherlords II keeps this card unchanged.",
@@ -70,7 +73,8 @@ const LABELS := {
 		"intro_artifacts": "Every artifact of both games. Artifacts are used during battle a limited number of times; some of them summon a creature.",
 		"intro_skills": "Hero skills of both games. A hero learns at most five, each up to rank 3.",
 		"intro_specializations": "Hero specializations of both games: chance-based talents in battle.",
-		"source": "Names, descriptions and values come from the games' own data."},
+		"source": "Names, descriptions and values come from the games' own data.",
+		"data_note": "Your installed games are in Russian, so the encyclopedia pages are in Russian too: names, descriptions and values come from the games' own texts. The English encyclopedia is online at demiurges.wwworm.com/wiki."},
 	"ru": {"el1": "Демиурги", "el2": "Демиурги II", "el1_short": "I", "el2_short": "II",
 		"creatures": "создания", "spells": "заклинания", "artifacts": "артефакты", "skills": "навыки", "specializations": "специализации",
 		"creatures_title": "Все создания", "spells_title": "Всё колдовство и чары", "artifacts_title": "Все артефакты",
@@ -81,7 +85,7 @@ const LABELS := {
 		"resource": "Ресурс", "shop": "Цена в лавках и редакторе дуэли", "rune": "Цена руны", "ability": "Способность",
 		"Cantrip": "Примитив", "Common": "Обычное", "Rare": "Редкое", "Unique": "Тайное", "NoAffect": "Невосприимчивость",
 		"level": "Ступень", "effect": "Действие", "duel_price": "Цена в редакторе дуэли", "chance": "Шанс", "colors": "Фракции",
-		"Ulow": "очень низкий", "Low": "низкий", "Med": "средний", "High": "высокий", "other": "Прочие",
+		"Ulow": "очень низкий", "ULow": "очень низкий", "Low": "низкий", "Med": "средний", "High": "высокий", "other": "Прочие",
 		"both": "Есть в «Демиургах» и «Демиургах II»", "only": "Только в игре «%s»",
 		"changes": "Изменения в «Демиургах II»", "changed_from": "%s: %s → %s", "old_text": "%s в «Демиургах»:",
 		"same": "В «Демиургах II» эта карта не изменилась.",
@@ -92,12 +96,16 @@ const LABELS := {
 		"intro_artifacts": "Все артефакты обеих игр. Артефакты применяются в бою ограниченное число раз; некоторые призывают создание.",
 		"intro_skills": "Навыки героев обеих игр. Герой знает не больше пяти навыков, каждый до 3-й ступени.",
 		"intro_specializations": "Специализации героев обеих игр — случайные таланты в бою.",
-		"source": "Названия, описания и значения взяты из данных самих игр."},
+		"source": "Названия, описания и значения взяты из данных самих игр.",
+		"data_note": "Установленные игры на английском языке, поэтому и страницы энциклопедии на английском: названия, описания и значения взяты из текстов самих игр. Энциклопедия на русском есть в Интернете: demiurges.wwworm.com/wiki."},
 }
 
 ## The loaded games: {edition: ELProfile}.
 var sources: Dictionary = {}
+## The language the pages are written in: the games' own when it differs from
+## the requested wiki language (`wiki_language`).
 var language := "en"
+var wiki_language := "en"
 var pages: Array[Dictionary] = []
 ## When not empty, only these card, skill and specialisation pages are built
 ## (the exporter keeps two language editions to the same set of pages).
@@ -111,9 +119,30 @@ static func build(from: Dictionary, lang: String, only: Dictionary = {}) -> ELWi
 		var profile: ELProfile = from.get(edition)
 		if profile != null and not profile.archives.is_empty(): catalog.sources[edition] = profile
 	catalog.language = lang if LABELS.has(lang) else "en"
+	catalog.wiki_language = catalog.language
+	# Names and descriptions can only be in the games' language: when every
+	# installed game speaks the other one, its labels are used as well.
+	var spoken := {}
+	for edition: String in catalog.sources: spoken[text_language(catalog.sources[edition])] = true
+	if spoken.size() == 1 and LABELS.has(spoken.keys()[0]): catalog.language = spoken.keys()[0]
 	catalog.allowed = only
 	if not catalog.sources.is_empty(): catalog._build()
 	return catalog
+
+## "ru" when the card names of `profile` are mostly Cyrillic, otherwise "en".
+static func text_language(profile: ELProfile) -> String:
+	var cyrillic := RegEx.create_from_string("[\\x{0400}-\\x{04FF}]")
+	var russian := 0
+	var seen := 0
+	for value: Variant in profile.table("CombatSpells").values():
+		if not value is Dictionary: continue
+		var key := str(value.get("Name", ""))
+		var name := profile.text(key)
+		if name.length() < 3 or name == key: continue
+		seen += 1
+		if cyrillic.search(name) != null: russian += 1
+		if seen >= 100: break
+	return "ru" if russian * 2 > seen else "en"
 
 static func card_key(code: String) -> String:
 	return "card-" + _slug(code)
@@ -296,6 +325,13 @@ func _build() -> void:
 		entries.sort_custom(func(a, b): return str(a.page.title).naturalnocasecmp_to(str(b.page.title)) < 0)
 		pages.append(_list_page(kind, entries))
 	for page: Dictionary in pages: page.erase("list")
+	if language != wiki_language:
+		# The pages are in the games' language; say why, in the wiki's.
+		var note := "<p class=\"note\">%s</p>" % _e(str(LABELS[wiki_language].data_note))
+		for page: Dictionary in pages:
+			var html: String = page.html
+			var at := html.find("</h1>")
+			page.html = html.insert(at + 5, note) if at >= 0 else note + html
 
 ## Whether two editions draw a creature differently (another model or skin;
 ## the first game has no sizes).

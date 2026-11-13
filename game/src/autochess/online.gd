@@ -12,7 +12,7 @@ signal started(game: ELAutochessMatch, seat: int)
 signal closed(reason: String)
 
 const PORT := 27190
-const VERSION := 2
+const VERSION := 3
 const MAX_PACKET := 262144
 const MAX_GUESTS := ELAutochessRules.PLAYER_COUNT - 1
 const STATE_INTERVAL := 0.25
@@ -32,6 +32,7 @@ var _deadline := 0
 var _dirty := false
 var _since_state := 0.0
 var _since_heartbeat := 0.0
+var _sent_speed := 1.0
 var _seats := {}
 var _last_stage := ""
 var _closed := false
@@ -212,6 +213,9 @@ func _host_receive(sender: int, packet: Array) -> void:
 				return
 			var error := ELAutochessCommands.apply(game, who, op, packet[2])
 			if not error.is_empty(): _send(sender, ["error", error])
+			# No states go out during a fight, so a guest shopping then (a
+			# refresh, a purchase, training) gets just its own company back.
+			if game.stage == "fight" and op != "speed": _send(sender, ["company", game.companies[who].snapshot()])
 			_dirty = true
 
 ## A guest that dropped out takes its hero back from the computer. During a
@@ -290,6 +294,7 @@ func _state() -> Dictionary:
 	state["prepare_left"] = game.prepare_left
 	state["ready"] = game.ready.duplicate()
 	state["controllers"] = game.controllers.duplicate()
+	state["speed"] = game.speed
 	var results := {}
 	for player: int in game.round_results:
 		var row: Dictionary = game.round_results[player].duplicate(true)
@@ -302,6 +307,9 @@ func _host_step(delta: float) -> void:
 	_since_heartbeat += delta
 	# Fights are announced with their own packet; states sent during a fight
 	# would rewind the guests' boards.
+	if game.speed != _sent_speed:
+		_sent_speed = game.speed
+		for peer: int in _seats: _send(peer, ["speed", game.speed])
 	if game.stage == "fight": return
 	if not _returning.is_empty(): _seat_returning()
 	if (_dirty and _since_state >= STATE_INTERVAL) or _since_heartbeat >= HEARTBEAT or game.stage != _last_stage:
@@ -355,6 +363,21 @@ func _guest_receive(packet: Array) -> void:
 		"fight":
 			if game == null or packet.size() < 2 or not packet[1] is Dictionary: return
 			if _apply_state(packet[1]): game.start_fight()
+		"company":
+			# Its own shop and purse changed during a battle: everything but the
+			# health and stage this machine's battle is still deciding.
+			if game == null or game.stage != "fight" or packet.size() < 2 or not packet[1] is Dictionary: return
+			var own := game.companies[seat]
+			var health := own.health
+			var stage := own.stage
+			if own.restore(profile, packet[1]):
+				own.health = health
+				own.stage = stage
+				game.changed.emit()
+		"speed":
+			if game != null and packet.size() > 1 and (packet[1] is float or packet[1] is int):
+				game.speed = 2.0 if float(packet[1]) >= 2.0 else 1.0
+				game.changed.emit()
 		"error":
 			if packet.size() > 1: message.emit(ELAutochessText.t(profile, String(packet[1])))
 
@@ -371,6 +394,7 @@ func _apply_state(state: Dictionary) -> bool:
 	var ready: Variant = state.get("ready", [])
 	if ready is Array and ready.size() == ELAutochessRules.PLAYER_COUNT:
 		for player in ELAutochessRules.PLAYER_COUNT: game.ready[player] = bool(ready[player])
+	game.speed = 2.0 if float(state.get("speed", 1.0)) >= 2.0 else 1.0
 	game.prepare_left = clampf(float(state.get("prepare_left", 0.0)), 0.0, ELAutochessRules.PREPARATION_SECONDS)
 	var live := String(state.get("live_stage", game.stage))
 	if live in ["prepare", "result", "over"]: game.stage = live

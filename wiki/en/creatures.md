@@ -26,7 +26,7 @@ All creatures of both games: [the list of creatures](all-creatures).
 
 ## Preview animations and sounds
 
-Press **F1** in the game and open a page from the [creature list](all-creatures). Use the menu below the 3D model to choose an animation, then press **Play**. Depending on the creature, you can preview attacks, ranged attacks, hit reactions, deaths, and other actions. To return to the idle pose, select **Idle** and press **Play** again.
+Press **F6** in the game and open a page from the [creature list](all-creatures). Use the menu below the 3D model to choose an animation, then press **Play**. Depending on the creature, you can preview attacks, ranged attacks, hit reactions, deaths, and other actions. To return to the idle pose, select **Idle** and press **Play** again.
 
 Drag the model to turn it and scroll to zoom. When the page offers models for both games, choose **Etherlords I** or **Etherlords II** to see the animations available in that edition.
 

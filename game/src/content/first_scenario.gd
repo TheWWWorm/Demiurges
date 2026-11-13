@@ -118,8 +118,10 @@ static func show_stage(state: ELAdventureSession, player: int) -> void:
 	var castle: Dictionary = state.scenario.get("castles", {}).get(player, {})
 	if item.is_empty() or castle.is_empty(): return
 	var shown := stage(castle)
-	if int(item.get("castle_stage", -1)) == shown: return
+	var was: Variant = item.get("castle_stage")
+	# A loaded save brings the stage back as a float; keep it an integer.
 	item.castle_stage = shown
+	if was != null and int(was) == shown: return
 	state.event.emit({"kind": "object_changed", "id": int(item.uid)})
 
 static func assault_problem(state: ELAdventureSession, hero: Dictionary, target: Dictionary) -> String:
@@ -181,7 +183,9 @@ static func end_night(director: ELAdventureDirector) -> void:
 		var castle: Dictionary = state.scenario.castles[player]
 		if not castle.alive or player < 1 or castle_object(state, player).is_empty(): continue
 		var before := stage(castle)
-		castle.health = maxi(0, int(castle.health) - int(castle.pending))
+		# Repairs make the pending damage negative; they never lift a castle
+		# above its maximum.
+		castle.health = clampi(int(castle.health) - int(castle.pending), 0, int(castle.max))
 		castle.pending = 0
 		if stage(castle) != before or castle.health <= 0: state.event.emit({"kind": "castle_changed", "player": player, "stage": stage(castle)})
 		show_stage(state, player)

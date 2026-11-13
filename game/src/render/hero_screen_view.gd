@@ -46,6 +46,18 @@ var drag: Dictionary = {}
 var confirm: ELFirstMessageBox
 ## True while the press being handled is a double click.
 var double_click := false
+## Pointer travel (panel pixels) that turns a left press into a drag.
+const DRAG_SLOP := 6.0
+## The skill area of the hero panel (icon boxes and names): a level-up offer
+## dropped on it is learned.
+const SKILLS_AREA := Rect2(8, 258, 300, 86)
+## What a left press took hold of besides the equipment bar ({kind, index,
+## icon}), where the pointer is, where the press was and whether the pointer
+## has since moved far enough to drag it; released elsewhere, drop_held acts.
+var held: Dictionary = {}
+var held_at := Vector2.ZERO
+var press_at := Vector2.ZERO
+var dragging := false
 var _pieces: Array[Dictionary] = []
 var _labels: Array[Dictionary] = []
 
@@ -122,8 +134,6 @@ func _caption(rect: Rect2, key: String, size: int) -> Label:
 
 func _label(rect: Rect2, text: String, size: int, color: Color, font: Font, align := HORIZONTAL_ALIGNMENT_CENTER) -> Label:
 	var label := Label.new()
-	label.position = rect.position
-	label.size = rect.size
 	label.text = text
 	label.horizontal_alignment = align
 	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
@@ -136,6 +146,7 @@ func _label(rect: Rect2, text: String, size: int, color: Color, font: Font, alig
 	label.add_theme_constant_override("shadow_offset_y", 1)
 	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	sheet.add_child(label)
+	ELMenuKit.place_text(label, rect)
 	return label
 
 func _layout() -> void:
@@ -294,12 +305,42 @@ func press(point: Vector2) -> void:
 			gs_pick = gs_scroll + slot
 			refresh()
 			return
-	var offers: Array = state.object(heroes[0]).get("skill_offers", [])
+	var hero := state.object(heroes[0])
+	var offers: Array = hero.get("skill_offers", [])
 	for slot in mini(3, offers.size()):
 		if Rect2(362 + STEP * slot, 233, 50, 50).has_point(point):
 			offer_pick = slot
+			if int(hero.get("skill_points", 0)) > 0:
+				held = {"kind": "offer", "index": slot, "icon": ELBuildingMessageView.skill_icon(profile, str(offers[slot]), int(hero.get("skills", {}).get(offers[slot], -1)) + 1)}
 			refresh()
 			return
+
+## Left release: the equipment bar's drag ends in drop(); anything else held
+## since the press goes to drop_held once the pointer has dragged it.
+func release(point: Vector2) -> void:
+	if not drag.is_empty(): drop(point)
+	var item := held
+	var moved := dragging
+	held = {}
+	dragging = false
+	if item.is_empty(): return
+	if moved: drop_held(item, point)
+	sheet.queue_redraw()
+
+## A held item dropped at a point: a level-up offer on the skills is learned,
+## as with AcceptLevelUp; anywhere else nothing happens.
+func drop_held(item: Dictionary, point: Vector2) -> void:
+	if item.kind != "offer" or exchange or not SKILLS_AREA.has_point(point): return
+	offer_pick = int(item.index)
+	refresh()
+	if not buttons.AcceptLevelUp.disabled: _accept_skill()
+
+## The held item's icon under the pointer while it is dragged.
+func _draw_held() -> void:
+	if not dragging or held.get("icon") == null: return
+	var rect := Rect2(held_at - ICON * 0.5, ICON)
+	sheet.draw_texture_rect(held.icon, rect, false)
+	sheet.draw_rect(rect, Color("e8e0cc"), false, 1.5)
 
 func _dispel() -> void:
 	var spells := attached(heroes[0])
@@ -481,18 +522,28 @@ class Sheet extends Control:
 
 	func _draw() -> void:
 		view._draw_sheet()
+		view._draw_held()
 
 	func _gui_input(event: InputEvent) -> void:
 		if event is InputEventMouseButton and event.pressed and event.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN]:
 			if view.wheel(event.position, -1 if event.button_index == MOUSE_BUTTON_WHEEL_UP else 1): accept_event()
 		elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 			view.double_click = event.double_click
-			if event.pressed: view.press(event.position)
-			elif not view.drag.is_empty(): view.drop(event.position)
+			if event.pressed:
+				view.held = {}
+				view.dragging = false
+				view.press_at = event.position
+				view.held_at = event.position
+				view.press(event.position)
+			else: view.release(event.position)
 			accept_event()
 		elif event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_RIGHT:
 			if view.right_press(event.position): accept_event()
 		elif event is InputEventMouseMotion:
+			if not view.held.is_empty() and event.button_mask & MOUSE_BUTTON_MASK_LEFT:
+				view.held_at = event.position
+				if event.position.distance_to(view.press_at) > DRAG_SLOP: view.dragging = true
+				if view.dragging: queue_redraw()
 			view.pointer(event.position)
 
 	func _get_tooltip(at_position: Vector2) -> String:

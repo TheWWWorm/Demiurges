@@ -19,7 +19,6 @@ const CELL := Vector2(168, 52)
 const ROWS := 4
 const SLOTS := 8
 const NAME_RECT := Rect2(58, 31, 103, 15)
-const NAME_EDIT_HEIGHT := 23.0
 const BLAZON_AT := Vector2(6, 4)
 const BLAZON_FRAME_AT := Vector2(7, 4)
 const RACE_AT := Vector2(58, 3)
@@ -58,15 +57,14 @@ func setup(owner: ELFrontMenu) -> void:
 	for slot in SLOTS:
 		var edit := LineEdit.new()
 		edit.name = "SlotName%d" % slot
-		# The edit is taller than the 15 px well; it is centred on it.
-		edit.size = Vector2(NAME_RECT.size.x, NAME_EDIT_HEIGHT)
-		edit.position = cell_origin(slot) + NAME_RECT.position - Vector2(0, (NAME_EDIT_HEIGHT - NAME_RECT.size.y) * 0.5)
 		edit.flat = true
 		edit.context_menu_enabled = false
 		edit.alignment = HORIZONTAL_ALIGNMENT_CENTER
 		edit.max_length = ELPlayerProfile.SLOT_NAME_LIMIT
 		edit.add_theme_font_override("font", menu.arial)
-		edit.add_theme_font_size_override("font_size", 16)
+		# As the diplomacy rows' name in the same 15 px well (D_PlayerName:
+		# a 15 px GDI cell, a 13 px em).
+		edit.add_theme_font_size_override("font_size", ELFrontMenu.cell_em(15))
 		edit.add_theme_color_override("font_color", NAME_INK)
 		edit.add_theme_color_override("font_uneditable_color", NAME_INK)
 		edit.add_theme_constant_override("minimum_character_width", 0)
@@ -74,6 +72,8 @@ func setup(owner: ELFrontMenu) -> void:
 		for style: String in ["normal", "focus", "read_only"]: edit.add_theme_stylebox_override(style, empty)
 		edit.text_changed.connect(func(value: String) -> void: if slot == human: ELPlayerProfile.choose_name(value))
 		add_child(edit)
+		# A line is taller than the 15 px well; the edit is centred on it.
+		ELMenuKit.place_text(edit, Rect2(cell_origin(slot) + NAME_RECT.position, NAME_RECT.size))
 		edits.append(edit)
 
 func cell_origin(slot: int) -> Vector2:

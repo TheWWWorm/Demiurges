@@ -90,7 +90,8 @@ var _art: ELAdventureArt
 var audio: ELAdventureAudio
 ## Second game: script particle effects (weather, scenery and cutscene effects).
 var effects: ELAdventureEffects
-## First game: blazons, building sounds and effects, terrain ambience.
+## Building sounds and terrain ambience; first game also blazons and building
+## effects, second game also map figures' footsteps.
 var presentation: ELFirstMapPresentation
 ## ELSpellbookView, or (first game) ELFirstBookView.
 var spellbook: Control
@@ -277,6 +278,8 @@ func build(profile: ELProfile, scenario: Dictionary, preferences: ELSettings, di
 		audio.restore(state)
 		effects.prepare(BATTLE_DOME_EFFECT)
 		ELAudio.sound(profile, BATTLE_DOME_SOUND)
+		# Building sounds, terrain ambience and footsteps (no blazons).
+		_build_presentation()
 	elif profile.id == "el1":
 		audio.start_first(state)
 		_build_presentation()
@@ -330,6 +333,7 @@ func build(profile: ELProfile, scenario: Dictionary, preferences: ELSettings, di
 			wait_cursor(profile)
 			var failed := ELSaveSlots.write_auto("T_AUTOSAVE_START_MISSION", director, camera_state())
 			if not failed.is_empty(): push_warning(failed)
+			else: _attach_start_preview.call_deferred()
 	if profile.id == "el1": _build_first_tutorial()
 	for pickup: Dictionary in restored.get("pickup_notices", []): _present(pickup)
 	for message: Dictionary in restored.get("site_notices", []):
@@ -729,10 +733,13 @@ func begin_encounter() -> void:
 	_close_second_precombat()
 	encounter_requested.emit(pair[0], pair[1])
 
-## Second game: PreCombatCancel declines the battle shown in the panel.
+## PreCombatCancel (second game) or the remake's X for a neutral creature
+## (first game) declines the battle shown in the panel.
 func decline_encounter() -> void:
 	if pending_encounter.is_empty(): return
+	if director.encounter == null or not director.encounter.declinable(): return
 	pending_encounter = []
+	if hud != null: hud.hide_precombat()
 	_close_second_precombat()
 	if not director.decline_encounter(): notice.text = director.error
 	_refresh_hero_info()
@@ -816,7 +823,7 @@ func _open_lose_battle() -> void:
 var _end_day_queued := false
 
 func _end_day() -> void:
-	if paused: return
+	if paused or _save_preview_pending: return
 	if strategic_session == null and ELStrategy.free_mode(director) and director.strategy.get("free", "") == "act":
 		_end_day_queued = true
 		_remark("The day ends when this move is over.")
@@ -828,7 +835,10 @@ func _end_day() -> void:
 	# First game: the Autosave option saves before the turn ends.
 	if state.map.profile.id == "el1" and (settings == null or bool(settings.values.get("autosave", true))) and director.can_move() and director.movement.is_empty():
 		wait_cursor(state.map.profile)
-		var failed := ELSaveSlots.write_auto("T_AUTOSAVE_EOT", director, camera_state())
+		# The map is held still for the capture's frame.
+		var preview: Image = null
+		if not state.tutorial: preview = await _capture_save_preview()
+		var failed := ELSaveSlots.write_auto("T_AUTOSAVE_EOT", director, camera_state(), preview)
 		if not failed.is_empty() and not state.tutorial: notice.text = failed
 	if not director.end_day(): _remark(director.notice)
 	_refresh_hero_info()
@@ -859,6 +869,10 @@ func _unhandled_input(event: InputEvent) -> void:
 		if event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE:
 			hero_screen.cancel()
 			get_viewport().set_input_as_handled()
+		# Enter presses the check button (an open question answers it itself).
+		elif _enter(event) and hero_screen.confirm == null:
+			_press_check(hero_screen.buttons, ["HeroScrOk", "ExchOK"])
+			get_viewport().set_input_as_handled()
 		return
 	if building_screen != null:
 		if event is InputEventKey and event.pressed and event.keycode in [KEY_ESCAPE, KEY_ENTER, KEY_KP_ENTER]:
@@ -875,10 +889,17 @@ func _unhandled_input(event: InputEvent) -> void:
 		if event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE:
 			global_spells.cancel()
 			get_viewport().set_input_as_handled()
+		elif _enter(event):
+			if global_spells.prompt != null and global_spells.prompt.visible: _press_check(global_spells.prompt_buttons, ["SelectOK"])
+			else: _press_check(global_spells.buttons, ["GSOK"])
+			get_viewport().set_input_as_handled()
 		return
 	if diplomacy != null:
 		if event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE:
 			diplomacy.cancel()
+			get_viewport().set_input_as_handled()
+		elif _enter(event) and diplomacy.confirm == null and not (diplomacy.trade != null and diplomacy.trade.visible) and not (diplomacy.dialog != null and diplomacy.dialog.visible):
+			_press_check(diplomacy.buttons, ["D_OK"])
 			get_viewport().set_input_as_handled()
 		return
 	if first_shop != null or rune_shop != null or shop != null:
@@ -926,6 +947,9 @@ func _unhandled_input(event: InputEvent) -> void:
 	if hud != null and hud.precombat.visible:
 		if event is InputEventKey and event.pressed and event.keycode in [KEY_ENTER, KEY_KP_ENTER, KEY_SPACE]:
 			begin_encounter()
+			get_viewport().set_input_as_handled()
+		elif event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_ESCAPE and hud.cancel_button != null and hud.cancel_button.visible:
+			decline_encounter()
 			get_viewport().set_input_as_handled()
 		return
 	# Second game: the open script box takes its keys first (Enter/Esc/Space).
@@ -1028,6 +1052,17 @@ func _unhandled_input(event: InputEvent) -> void:
 			if event.position.distance_to(_right_origin) <= ELSecondMapTooltips.DRAG_THRESHOLD: hover(event.position)
 			else: hud.show_tooltip(-1, {}, Vector2.ZERO)
 	elif event is InputEventMouseMotion and hud != null and hud.tooltip.visible: hud.show_tooltip(-1, {}, Vector2.ZERO)
+
+static func _enter(event: InputEvent) -> bool:
+	return event is InputEventKey and event.pressed and not event.echo and event.keycode in [KEY_ENTER, KEY_KP_ENTER]
+
+## Enter on a first-game panel: its check button, when shown and enabled.
+static func _press_check(buttons: Dictionary, controls: Array) -> void:
+	for control: String in controls:
+		var button: BaseButton = buttons.get(control)
+		if button == null or not is_instance_valid(button) or not button.is_visible_in_tree(): continue
+		if not button.disabled: button.pressed.emit()
+		return
 
 func _shop_hotkey(key: InputEventKey) -> void:
 	if key.keycode == KEY_ESCAPE:
@@ -1528,7 +1563,7 @@ func _present(data: Dictionary) -> void:
 				if not ends.is_empty() and not state.camera_locked:
 					following = -1
 					target = (ends[0] + ends[-1]) * 0.5
-				hud.show_precombat(data.hero, data.opponent, number, total)
+				hud.show_precombat(data.hero, data.opponent, number, total, director.encounter != null and director.encounter.declinable())
 			elif second_precombat != null and precombat_preview and not data.get("remote_use", false): _open_second_precombat(data.hero, data.opponent)
 			else: encounter_requested.emit(data.hero, data.opponent)
 		"lose_battle": _open_lose_battle()
@@ -2808,6 +2843,7 @@ func _build_first_controls() -> void:
 	hud.spells_opened.connect(func(): open_global_spells())
 	hud.diplomacy_opened.connect(open_diplomacy)
 	hud.begin_requested.connect(begin_encounter)
+	hud.cancel_requested.connect(decline_encounter)
 	hud.minimap_clicked.connect(func(cell: Vector2):
 		following = -1
 		view_moved = true
@@ -3260,7 +3296,7 @@ func _save_named(name: String, preview: Image = null) -> String:
 
 ## Render the current map without its panels before opening the save screen.
 func _capture_save_preview() -> Image:
-	if state.map.profile.id != "el2" or DisplayServer.get_name() == "headless" or not is_visible_in_tree(): return null
+	if DisplayServer.get_name() == "headless" or not is_visible_in_tree(): return null
 	if not RenderingServer.is_render_loop_enabled(): return null
 	var viewport := get_viewport()
 	if viewport.get_camera_3d() != camera: return null
@@ -3278,9 +3314,25 @@ func _capture_save_preview() -> Image:
 	paused = was_paused
 	_save_preview_pending = false
 	if image == null or image.is_empty(): return null
+	# The centre of a wide window, at the picture's 4:3 shape.
+	var shape := float(ELSaveSlots.PREVIEW_SIZE.x) / ELSaveSlots.PREVIEW_SIZE.y
+	var full := image.get_size()
+	var cut := Vector2i(mini(full.x, roundi(full.y * shape)), mini(full.y, roundi(full.x / shape)))
+	if cut != full: image = image.get_region(Rect2i((full - cut) / 2, cut))
 	image.resize(ELSaveSlots.PREVIEW_SIZE.x, ELSaveSlots.PREVIEW_SIZE.y, Image.INTERPOLATE_LANCZOS)
 	image.convert(Image.FORMAT_RGB8)
 	return image
+
+## The mission-start autosave is written before the map is drawn; its picture
+## is added once the opening view is on screen (the saved game is unchanged).
+func _attach_start_preview() -> void:
+	if DisplayServer.get_name() == "headless": return
+	var path := ELSaveSlots.auto_path(state.map.profile.id, ELSaveSlots.kind_of(state), "T_AUTOSAVE_START_MISSION")
+	var written := FileAccess.get_modified_time(path)
+	for i in 3: await RenderingServer.frame_post_draw
+	if not is_inside_tree() or _save_preview_pending: return
+	var preview := await _capture_save_preview()
+	if preview != null and is_inside_tree() and FileAccess.get_modified_time(path) == written: ELSaveSlots.attach_preview(path, preview)
 
 func _open_save_list(target: String, preview: Image = null) -> bool:
 	if not _extras_ready(): return false

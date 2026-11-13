@@ -60,6 +60,9 @@ func build(session: ELAdventureSession, id: int) -> void:
 		else:
 			offers = list
 			list.item_selected.connect(func(_index: int): learned.deselect_all(); _select())
+	# An offer dragged onto the learned skills is learned, as with the button.
+	offers.set_drag_forwarding(_offer_drag, Callable(), Callable())
+	learned.set_drag_forwarding(Callable(), _can_learn_drop, _learn_drop)
 	details = RichTextLabel.new()
 	details.custom_minimum_size.y = 130
 	details.add_theme_font_size_override("normal_font_size", 18)
@@ -143,6 +146,22 @@ func _select() -> void:
 		return
 	var row := ELHeroSkills.definition(state.map.profile, code, rank)
 	details.text = _label(code, rank) + "\n\n" + state.map.profile.text(str(row.get("Description", "")))
+
+func _offer_drag(at: Vector2) -> Variant:
+	var index: int = offers.get_item_at_position(at, true)
+	if index < 0: return null
+	offers.set_drag_preview(ELSpellbookView.drag_preview(offers.get_item_icon(index), Vector2(offers.fixed_icon_size)))
+	return {"skills": self, "index": index}
+
+func _can_learn_drop(_at: Vector2, data: Variant) -> bool:
+	return data is Dictionary and data.get("skills") == self
+
+func _learn_drop(at: Vector2, data: Variant) -> void:
+	if not _can_learn_drop(at, data) or int(data.index) >= offers.item_count: return
+	learned.deselect_all()
+	offers.select(int(data.index))
+	_select()
+	_choose()
 
 func _choose() -> void:
 	var selected: PackedInt32Array = offers.get_selected_items()

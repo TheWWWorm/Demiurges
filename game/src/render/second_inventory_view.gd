@@ -5,7 +5,8 @@ extends ELSpellbookView
 ## skills and two rows of five artifacts on the left; the reserve ("bag", 8x5
 ## cells, scrolled by row) and the 16-slot active deck on the right; OK and
 ## Cancel. Cards are picked with a click (the icon follows the cursor) and
-## placed with a second click; the right button puts a carried card back.
+## placed with a second click, or dragged with the button held and dropped on
+## their place; the right button, or a drop elsewhere, puts a carried card back.
 ## Layout from Controls/CutParts (panel "InventoryScreen", shift 112,14 at
 ## 1024x768); behaviour in ELSecondInventory.
 const PANEL := "InventoryScreen"
@@ -45,6 +46,13 @@ var _offset := Vector2.ZERO
 var _specs: Array[String] = []
 var _mouse := Vector2(-1000, -1000)
 var hotkey_settings: ELSettings
+## Pointer travel (design pixels) that turns a press on a card into a drag.
+const DRAG_SLOP := 6.0
+## The card a left press picked up ([zone, index]), the press point and
+## whether the pointer has since moved far enough to drag it.
+var _drag_from: Array = []
+var _press_at := Vector2.ZERO
+var _dragging := false
 
 static func make(source_hud: ELSecondAdventureHud) -> ELSecondInventoryView:
 	var view := ELSecondInventoryView.new()
@@ -275,35 +283,66 @@ func cell_rect(zone: String, index: int) -> Rect2:
 func surface_input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion:
 		_mouse = event.position
+		if not _drag_from.is_empty() and event.button_mask & MOUSE_BUTTON_MASK_LEFT and event.position.distance_to(_press_at) > DRAG_SLOP: _dragging = true
 		if not model.carried().is_empty(): cursor.queue_redraw()
 		return
-	if not event is InputEventMouseButton or not event.pressed or message_box.visible: return
+	if not event is InputEventMouseButton or message_box.visible: return
+	if not event.pressed:
+		if event.button_index == MOUSE_BUTTON_LEFT: _release(event.position)
+		return
 	_mouse = event.position
 	match event.button_index:
 		MOUSE_BUTTON_WHEEL_UP: scroll_bag(-1)
 		MOUSE_BUTTON_WHEEL_DOWN: scroll_bag(1)
 		MOUSE_BUTTON_RIGHT:
+			_drag_from = []
 			if model.right_click(): _changed()
 		MOUSE_BUTTON_LEFT:
 			show_specs(false)
 			var target := hit(event.position)
-			var result := ""
-			var returning := model.picked_zone == "deck"
 			var quick: bool = event.double_click and target[0] == model.picked_zone and target[1] == model.picked
-			if quick and target[0] == "bag":
-				result = model.click_deck(model.deck.find(""))
-			elif quick and target[0] == "deck":
-				result = model.click_bag(-1)
-			else:
-				match target[0]:
-					"bag": result = model.click_bag(target[1])
-					"deck": result = model.click_deck(target[1])
-					_: return
-			if returning and (target[0] == "bag" or quick):
-				# A card returned to the bag is appended and scrolled into view.
-				top_row = maxi(top_row, (model.bag.size() - 1) / BAG_COLUMNS - BAG_ROWS + 1)
-			_play(result)
-			_changed()
+			var carrying := not model.carried().is_empty()
+			if not _click(target, quick): return
+			# A press that picks a card up may also drag it: releasing it over
+			# another place drops it there as a second click would.
+			_drag_from = [model.picked_zone, model.picked] if not carrying and not model.carried().is_empty() else []
+			_press_at = event.position
+			_dragging = false
+
+## One left click on `target` (the double-click shortcut when `quick`);
+## false when the point is outside the bag and the deck.
+func _click(target: Array, quick := false) -> bool:
+	var result := ""
+	var returning := model.picked_zone == "deck"
+	if quick and target[0] == "bag":
+		result = model.click_deck(model.deck.find(""))
+	elif quick and target[0] == "deck":
+		result = model.click_bag(-1)
+	else:
+		match target[0]:
+			"bag": result = model.click_bag(target[1])
+			"deck": result = model.click_deck(target[1])
+			_: return false
+	if returning and (target[0] == "bag" or quick):
+		# A card returned to the bag is appended and scrolled into view.
+		top_row = maxi(top_row, (model.bag.size() - 1) / BAG_COLUMNS - BAG_ROWS + 1)
+	_play(result)
+	_changed()
+	return true
+
+## Left release: a card dragged out of its cell is dropped on the place under
+## the pointer by the click rules (a bag card onto a deck slot, a deck card
+## into the bag or onto another slot); anywhere else it goes back.
+func _release(at: Vector2) -> void:
+	var source := _drag_from
+	var dragged := _dragging
+	_drag_from = []
+	_dragging = false
+	_mouse = at
+	if source.is_empty() or not dragged or model.picked_zone != source[0] or model.picked != source[1]: return
+	var target := hit(at)
+	if target[0] == "deck" or target[0] == "bag" and source[0] != "bag": _click(target)
+	if not model.carried().is_empty() and model.right_click(): _changed()
 
 func _changed() -> void:
 	_refresh_scroll()

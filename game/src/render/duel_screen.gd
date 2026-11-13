@@ -31,6 +31,29 @@ const SORT_LEVEL := 2
 const SORT_NAME := 3
 ## EL1 editor tabs (right panel) in EHRightCaption1..5 order.
 const EL1_TABS := ["EHTabSpells", "EHTabSkills", "EHTabRunes", "EHTabArtifacts", "EHTabSpec"]
+## EL1 tabs whose right panel is the 4x7 grid of 53 px cells (CSpellsView,
+## CSkillsView and CArtefactsView: rows of 4, 7 shown, cells hit-tested at
+## (548,140) + 53 px in EditHero).
+const EL1_GRID_TABS := [0, 1, 3]
+## EL1 right-panel geometry in EditHero coordinates (shifted by the panel):
+## the Type7 grid's cell lines start at (547,138); the Type8 rows are the
+## CSpecsView box (548,146)-(758,508) at 26 px per row (14 rows between the
+## art's row lines).
+const EL1_GRID_ORIGIN := Vector2(547, 138)
+const EL1_GRID_CELL := 53.0
+const EL1_GRID_SIZE := Vector2i(4, 7)
+const EL1_ROWS_BOX := Rect2(548, 146, 210, 364)
+const EL1_ROW := 26.0
+## EL1 resource table: the art's black number boxes (selected item, preset
+## cost, budget) in EditHero coordinates, one row of seven every 35 px (the
+## original text columns' row step, 0x23).
+const EL1_RESOURCE_BOXES := [Rect2(387, 148, 30, 18), Rect2(439, 148, 30, 18), Rect2(500, 148, 30, 18)]
+const EL1_RESOURCE_STEP := 35.0
+## EL2 list grids: the art's cell height (cells are 53 x 52 in
+## EPAllSpellsBounds, EPAllSkillsBounds and EPAllArtifactsBounds).
+const EL2_GRID_ROW := 52.0
+## Pointer travel (design pixels) that turns a left press into a drag.
+const DRAG_SLOP := 6.0
 
 var menu: ELFrontMenu
 ## Duel screen settings per edition (kept while the game runs).
@@ -43,7 +66,16 @@ var list: PresetList
 ## artifact in the hero's strip (index into preset.artifacts).
 var edit: Dictionary = {}
 var right_items: Array = []
+## The second game's right-panel lists (ItemList grids over the panel art).
 var right_list: ItemList
+## The first game's right panel (ChoiceView over the Type7 grid or Type8 rows).
+var choice_view: ChoiceView
+## Remake drag and drop between the editor's panels: the carried item
+## ({source, value, icon, text, press, at, moving}), the panels that take a
+## drop ({control, zone}) and the icon under the pointer.
+var carry: Dictionary = {}
+var drop_zones: Array = []
+var _ghost: DragGhost
 var book_view: Control
 var name_edit: LineEdit
 var message: Control
@@ -119,7 +151,11 @@ func art_exclude(target: String) -> Array:
 	var result: Array = []
 	# The race picture (Phase1..4 pieces) is drawn above the frame by the editor.
 	for index in 4: result.append("Phase%d" % (index + 1))
-	if el1(): result.append("Type8" if edit.tab in [0, 2] else "Type7")
+	# The original EL1 editor shows the Type7 cell grid with the
+	# Spells, Skills and Artifacts views and the Type8 rows with the
+	# Specialisations view; its Runes tab has no list (runes are bought on the
+	# spellbook's selected spell), the remake's rune list uses the rows.
+	if el1(): result.append("Type8" if int(edit.tab) in EL1_GRID_TABS else "Type7")
 	else: result.append("Type1" if edit.tab == 0 else "Type2")
 	return result
 
@@ -194,6 +230,9 @@ func _caption_on(button: Control, value: String, size_px := 18, color := ELFront
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	label.add_theme_font_override("font", menu.arial)
+	# A caption wider than its button (a long translation) is shrunk to fit.
+	var width := menu.arial.get_string_size(value, HORIZONTAL_ALIGNMENT_LEFT, -1, size_px).x
+	if width > button.size.x - 8.0 and width > 0.0: size_px = maxi(9, floori(size_px * (button.size.x - 8.0) / width))
 	label.add_theme_font_size_override("font_size", size_px)
 	label.add_theme_color_override("font_color", color)
 	label.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.8))
@@ -237,7 +276,173 @@ func _transparent(item_list: ItemList) -> void:
 func _scroll(item_list: ItemList, rows: int) -> void:
 	if item_list == null: return
 	var bar := item_list.get_v_scroll_bar()
-	bar.value = clampf(bar.value + rows * 24.0, bar.min_value, bar.max_value)
+	bar.value = clampf(bar.value + rows * float(item_list.get_meta("row_height", 24.0)), bar.min_value, bar.max_value)
+
+# --- Drag and drop (remake) ----------------------------------------------------
+# The originals move items by click and Buy/Back or by double-click. The remake
+# also carries them: a left press on an item that travels more than DRAG_SLOP
+# design pixels drags it; released over another panel it does what that
+# panel's click rule does with it, released anywhere else it goes back. Touch
+# drags arrive as the same left drag (ELTouchInput).
+
+## A transparent control covering a design rectangle, for a drop zone or drag
+## source without its own control.
+func _zone_control(rect: Rect2) -> Control:
+	var zone := Control.new()
+	zone.mouse_filter = Control.MOUSE_FILTER_PASS
+	zone.position = rect.position
+	zone.size = rect.size
+	menu.canvas.add_child(zone)
+	return zone
+
+func _drop_zone(control: Control, zone: String) -> void:
+	if control != null: drop_zones.append({"control": control, "zone": zone})
+
+## Items under a press in `control` can be carried; `pick` returns the item
+## at a local point ({value, icon, text}) or {} for none.
+func _drag_source(control: Control, source: String, pick: Callable) -> void:
+	if control == null: return
+	control.gui_input.connect(func(event: InputEvent): _drag_input(control, source, pick, event))
+
+func canvas_point(control: Control, local: Vector2) -> Vector2:
+	return menu.canvas.get_global_transform().affine_inverse() * (control.get_global_transform() * local)
+
+func _drag_input(control: Control, source: String, pick: Callable, event: InputEvent) -> void:
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+		if event.pressed:
+			carry = {}
+			if event.double_click or edit.is_empty() or edit.view_only: return
+			var item: Dictionary = pick.call(event.position)
+			if item.is_empty(): return
+			carry = item.duplicate()
+			carry.source = source
+			carry.press = canvas_point(control, event.position)
+			carry.at = carry.press
+			carry.moving = false
+		elif not carry.is_empty():
+			var item := carry
+			carry = {}
+			_show_ghost()
+			if bool(item.moving): drop_carried(item, canvas_point(control, event.position))
+	elif event is InputEventMouseMotion and not carry.is_empty():
+		if not (event.button_mask & MOUSE_BUTTON_MASK_LEFT):
+			carry = {}
+			_show_ghost()
+			return
+		carry.at = canvas_point(control, event.position)
+		if not bool(carry.moving) and carry.at.distance_to(carry.press) > DRAG_SLOP: carry.moving = true
+		if bool(carry.moving): _show_ghost()
+
+func _show_ghost() -> void:
+	if _ghost == null or not is_instance_valid(_ghost):
+		if carry.is_empty(): return
+		_ghost = DragGhost.new()
+		_ghost.screen = self
+		_ghost.size = ELFrontMenu.DESIGN
+		menu.canvas.add_child(_ghost)
+	_ghost.move_to_front()
+	_ghost.queue_redraw()
+
+## The drop zone under a design point: {zone, control, local} or {}.
+func zone_at(point: Vector2) -> Dictionary:
+	var global := menu.canvas.get_global_transform() * point
+	for at in range(drop_zones.size() - 1, -1, -1):
+		var control: Control = drop_zones[at].control
+		if not is_instance_valid(control) or not control.is_visible_in_tree(): continue
+		var local := control.get_global_transform().affine_inverse() * global
+		if Rect2(Vector2.ZERO, control.size).has_point(local): return {"zone": drop_zones[at].zone, "control": control, "local": local}
+	return {}
+
+## A carried item released at a design point: the target panel's click rule
+## applies; on its own panel or outside every panel nothing changes.
+func drop_carried(item: Dictionary, point: Vector2) -> bool:
+	var hit := zone_at(point)
+	if hit.is_empty() or hit.zone == item.source or edit.is_empty() or edit.view_only: return false
+	var zone: String = hit.zone
+	var tab := int(edit.tab)
+	var done := false
+	match String(item.source):
+		"choice":
+			var index := int(item.value)
+			if index < 0 or index >= right_items.size(): return false
+			var entry: Dictionary = right_items[index]
+			match "%s>%s" % [entry.action, zone]:
+				"add_spell>book": done = act("place_spell", [entry.value, hit.control.slot_at(hit.local)])
+				"add_spell>reserve": done = act("spell_to_reserve", entry.value)
+				"add_rune>book":
+					var slot: int = hit.control.slot_at(hit.local)
+					done = act("add_rune", slot if slot >= 0 else entry.value)
+				"add_skill>skills", "set_spec>skills": done = act(entry.action, entry.value)
+				"add_artifact>strip": done = buy_artifact(entry.value)
+		"artifacts":
+			var choices := artifact_choices()
+			if zone == "strip" and int(item.value) >= 0 and int(item.value) < choices.size(): done = buy_artifact(choices[int(item.value)])
+		"book":
+			if zone == "reserve": done = act("deck_to_reserve", int(item.value))
+			elif zone == "choice" and tab == 2 and el1(): done = act("remove_rune", int(item.value))
+			elif zone == "choice" and tab == 0: done = act("remove_slot", int(item.value))
+		"reserve":
+			if zone == "book": done = act("reserve_to_deck", item.value)
+			elif zone == "choice": done = act("remove_reserve", item.value)
+		"strip":
+			if (el1() and zone == "choice" and tab == 3) or (not el1() and zone == "artifacts"):
+				edit.owned = int(item.value)
+				done = return_artifact()
+		"skills":
+			if zone == "choice" and tab == 1: done = act("remove_skill", item.value)
+	if done:
+		edit.item = -1
+		edit.slot = -1
+		edit.art = -1
+		clear_choice()
+		update_editor()
+	return done
+
+## The picked right-panel item is let go (after a drop or a book placement).
+func clear_choice() -> void:
+	if right_list != null and is_instance_valid(right_list): right_list.deselect_all()
+	if choice_view != null and is_instance_valid(choice_view): choice_view.queue_redraw()
+	var all: Variant = menu.labels.get("all_artifacts")
+	if all is ItemList and is_instance_valid(all): all.deselect_all()
+
+## The item of an ItemList at a local point.
+func _list_item(item_list: ItemList, local: Vector2) -> Dictionary:
+	var index := item_list.get_item_at_position(local, true)
+	if index < 0: return {}
+	return {"value": index, "icon": item_list.get_item_icon(index)}
+
+## An owned skill under a local point of the skills zone (EL1: the EHSkill
+## rows with their icons; EL2: the 26 px rows of EPSkillsBounds).
+func _carried_skill(control: Control, local: Vector2) -> Dictionary:
+	var p := editor_preset()
+	var codes: Array = p.get("skills", {}).keys()
+	codes.sort()
+	var row := -1
+	if el1():
+		var point := canvas_point(control, local)
+		for i in 5:
+			if _rect("EHSkill%d" % (i + 1)).grow_individual(28, 5, 4, 5).has_point(point): row = i
+	else:
+		row = int(local.y / 26.0)
+	if row < 0 or row >= codes.size(): return {}
+	var code: String = codes[row]
+	return {"value": code, "icon": ELBuildingMessageView.skill_icon(profile(), code, int(p.skills[code])), "text": skill_name(code, int(p.skills[code]))}
+
+## EL1 right panel: a click picks, a double click buys (runes: the clicked
+## book slot's row).
+func choice_selected(index: int) -> void:
+	if int(edit.tab) == 2: edit.slot = index
+	edit.item = index
+	update_editor()
+	if choice_view != null: choice_view.queue_redraw()
+
+func choice_activated(index: int) -> void:
+	edit.item = index
+	if int(edit.tab) == 2: edit.slot = index
+	buy()
+
+static func _roman(value: int) -> String:
+	return ["", "I", "II", "III", "IV", "V"][clampi(value, 0, 5)]
 
 func preset_name(preset: Dictionary) -> String:
 	return String(preset.get("name", "")) if not preset.is_empty() else profile().text(RANDOM_KEY)
@@ -805,6 +1010,11 @@ func errors() -> Array[String]:
 	return ELDuelCosts.errors(profile(), editor_preset())
 
 func build_editor() -> void:
+	carry = {}
+	drop_zones.clear()
+	_ghost = null
+	choice_view = null
+	right_list = null
 	if edit.is_empty():
 		menu.show_screen("duel")
 		return
@@ -974,7 +1184,31 @@ func spell_choices() -> Array[String]:
 	var result: Array[String] = []
 	for colour in colours:
 		result.append_array(ELCatalog.available_cards(profile(), colour))
-	return result.filter(func(card: String): return ELDuelCosts.spell_allowed(profile(), card, faction, resource_level))
+	result.assign(result.filter(func(card: String): return ELDuelCosts.spell_allowed(profile(), card, faction, resource_level)))
+	if not el1(): result.sort_custom(classic_less.bind(profile()))
+	return result
+
+## The second game's "Available spells" order: by colour (Red, Green, Blue,
+## Black, then the neutral White), rarity (Cantrip, Common, Rare, Unique),
+## class (Creature, Sorcery, Enchantment), then by code read from its last
+## letter back (the original compares the four letters as a little-endian
+## number).
+const CLASSIC_COLOURS := ["Red", "Green", "Blue", "Black", "White"]
+const CLASSIC_RARITIES := ["Cantrip", "Common", "Rare", "Unique"]
+const CLASSIC_CLASSES := ["Creature", "Sorcery", "Enchantment"]
+
+static func classic_key(source: ELProfile, card: String) -> Array:
+	var row: Dictionary = source.table("CombatSpells").get(card, {})
+	var code := card.left(4)
+	return [CLASSIC_COLOURS.find(str(row.get("Color", ""))), CLASSIC_RARITIES.find(str(row.get("Rarity", ""))),
+		CLASSIC_CLASSES.find(str(row.get("Class", ""))), code.reverse()]
+
+static func classic_less(a: String, b: String, source: ELProfile) -> bool:
+	var left := classic_key(source, a)
+	var right := classic_key(source, b)
+	for i in left.size():
+		if left[i] != right[i]: return left[i] < right[i]
+	return a < b
 
 func spec_choices() -> Array[String]:
 	var result: Array[String] = ["NONE"]
@@ -1278,7 +1512,7 @@ func artifact_list_clicked(index: int) -> void:
 		return
 	edit.art = index
 	edit.item = -1
-	if right_list != null and is_instance_valid(right_list): right_list.deselect_all()
+	clear_choice()
 	update_editor()
 
 func save_editor() -> void:
@@ -1315,15 +1549,27 @@ func _right_list(rect: Rect2, icons: bool, grid := 0) -> ItemList:
 	_transparent(item_list)
 	if icons: item_list.fixed_icon_size = Vector2i(32, 32)
 	if grid > 0:
-		# Icon grid over the original cells (EL2 panels).
+		# Icon grid over the original cells (EL2 panels): the art's cells are
+		# 53 px wide and EL2_GRID_ROW high from the bounds' top left; each
+		# picture sits 3 px inside its cell, one row per scroll step.
 		var cell := floorf(rect.size.x / grid)
+		var side := int(EL2_GRID_ROW) - 6
 		item_list.max_columns = grid
 		item_list.icon_mode = ItemList.ICON_MODE_TOP
 		item_list.same_column_width = true
 		item_list.fixed_column_width = int(cell)
-		item_list.fixed_icon_size = Vector2i(int(cell) - 6, int(cell) - 6)
+		item_list.fixed_icon_size = Vector2i(side, side)
+		item_list.set_meta("row_height", EL2_GRID_ROW)
+		var inset := StyleBoxEmpty.new()
+		inset.content_margin_top = 3
+		item_list.add_theme_stylebox_override("panel", inset)
 		item_list.add_theme_constant_override("h_separation", 0)
-		item_list.add_theme_constant_override("v_separation", 0)
+		item_list.add_theme_constant_override("v_separation", int(EL2_GRID_ROW) - side)
+		# The wheel scrolls whole rows, keeping the pictures in the cells.
+		item_list.gui_input.connect(func(event: InputEvent):
+			if event is InputEventMouseButton and event.pressed and event.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN]:
+				_scroll(item_list, -1 if event.button_index == MOUSE_BUTTON_WHEEL_UP else 1)
+				item_list.accept_event())
 		item_list.add_theme_constant_override("icon_margin", 0)
 		item_list.add_theme_constant_override("line_separation", 0)
 		var empty := StyleBoxEmpty.new()
@@ -1355,22 +1601,24 @@ func _build_el1_editor() -> void:
 	var rdec := _auto("EHDecResLevel", change_resource_level.bind(-1))
 	var rinc := _auto("EHIncResLevel", change_resource_level.bind(1))
 	_value("resource_level", "", _between(rdec, rinc))
-	# Resource table: one row per resource; columns follow the EHTt1..3 tooltip
-	# cells (selected item, preset cost, budget).
-	var columns := [_rect("EHTt1"), _rect("EHTt2"), _rect("EHTt3")]
+	# Resource table: one row per resource, each number centred in its box of
+	# the art (selected item, preset cost, budget).
+	var panel := menu.shift("EditHero")
 	var resources := ELDuelCosts.resources(profile())
 	for i in resources.size():
-		var y: float = columns[0].position.y + 31 + i * 35
 		var r: String = resources[i]
+		var step := Vector2(0, EL1_RESOURCE_STEP * i)
+		var boxes: Array[Rect2] = []
+		for box: Rect2 in EL1_RESOURCE_BOXES: boxes.append(Rect2(box.position + panel + step, box.size).grow_individual(2, 1, 2, 1))
 		# The resource icons are part of the art; their names are tooltips.
 		var hint := Control.new()
-		hint.position = Vector2(columns[0].position.x - 40, y - 6)
+		hint.position = Vector2(boxes[0].position.x - 46, boxes[0].get_center().y - 15)
 		hint.size = Vector2(30, 30)
 		hint.tooltip_text = resource_title(i)
 		menu.canvas.add_child(hint)
-		_resource_cell("item_" + r, Rect2(Vector2(columns[0].position.x, y), Vector2(columns[0].size.x, 18)))
-		_resource_cell("cost_" + r, Rect2(Vector2(columns[1].position.x, y), Vector2(columns[1].size.x, 18)))
-		_resource_cell("budget_" + r, Rect2(Vector2(columns[2].position.x, y), Vector2(columns[2].size.x, 18)))
+		_resource_cell("item_" + r, boxes[0])
+		_resource_cell("cost_" + r, boxes[1])
+		_resource_cell("budget_" + r, boxes[2])
 	_button("EHBuy", buy)
 	_button("EHBack", give_back)
 	# Left: artifacts, specialisation and skills, the spellbook.
@@ -1394,6 +1642,10 @@ func _build_el1_editor() -> void:
 	book_view.slots = ELDuelCosts.EL1_BOOK
 	menu.canvas.add_child(book_view)
 	menu.labels["book"] = book_view
+	_drag_source(book_view, "book", book_view.carried)
+	_drop_zone(book_view, "book")
+	_drag_source(strip, "strip", strip.carried)
+	_drop_zone(strip, "strip")
 	# Right: five tabs over one list.
 	for index in EL1_TABS.size():
 		var tab := _button(EL1_TABS[index], select_tab.bind(index))
@@ -1401,18 +1653,31 @@ func _build_el1_editor() -> void:
 			tab.active = index == int(edit.tab)
 			_caption_on(tab, menu._caption(EL1_TABS[index]), 15)
 	_text("EHRightCaption%d" % (int(edit.tab) + 1))
-	var area := Rect2(Vector2(548, 143) + menu.shift("EditHero"), Vector2(210, 352))
-	right_list = _right_list(area, int(edit.tab) in [0, 3])
-	right_list.item_selected.connect(func(index: int):
-		if int(edit.tab) == 2: edit.slot = index
-		edit.item = index
-		update_editor())
-	right_list.item_activated.connect(func(index: int):
-		edit.item = index
-		if int(edit.tab) == 2: edit.slot = index
-		buy())
-	var up_down := [["EHScrollU1", -3], ["EHScrollD1", 3]] if int(edit.tab) in [0, 2] else [["EHScrollU3", -3], ["EHScrollD3", 3]]
-	for pair: Array in up_down: _button(pair[0], func(): _scroll(right_list, pair[1]))
+	choice_view = ChoiceView.new()
+	choice_view.screen = self
+	choice_view.grid = int(edit.tab) in EL1_GRID_TABS
+	var panel_shift := menu.shift("EditHero")
+	if choice_view.grid:
+		choice_view.position = EL1_GRID_ORIGIN + panel_shift
+		choice_view.size = Vector2(EL1_GRID_SIZE) * EL1_GRID_CELL
+	else:
+		choice_view.position = EL1_ROWS_BOX.position + panel_shift
+		choice_view.size = EL1_ROWS_BOX.size
+	menu.canvas.add_child(choice_view)
+	menu.labels["choices"] = choice_view
+	_drag_source(choice_view, "choice", choice_view.carried)
+	_drop_zone(choice_view, "choice")
+	# The views' own scroll arrows: EHScrollU2/D2 (CSpellsView) and U1/D1
+	# (CSkillsView, the artifacts) at the grid, U3/D3 (CSpecsView) at the rows.
+	var arrows := "3"
+	if choice_view.grid: arrows = "2" if int(edit.tab) == 0 else "1"
+	_button("EHScrollU" + arrows, func(): choice_view.scroll(-1))
+	_button("EHScrollD" + arrows, func(): choice_view.scroll(1))
+	# The specialisation and skills block takes dropped skills and
+	# specialisations; its owned skills drag back to the list.
+	var skills := _zone_control(Rect2(Vector2(13, 206) + panel_shift, Vector2(310, 128)))
+	_drop_zone(skills, "skills")
+	_drag_source(skills, "skills", func(local: Vector2): return _carried_skill(skills, local))
 	refresh_editor_lists()
 
 func select_tab(index: int) -> void:
@@ -1423,42 +1688,36 @@ func select_tab(index: int) -> void:
 	menu.show_screen("duel_editor")
 
 func refresh_editor_lists() -> void:
-	if right_list == null or not is_instance_valid(right_list): return
 	if not el1():
-		_refresh_el2_lists()
+		if right_list != null and is_instance_valid(right_list): _refresh_el2_lists()
 		return
+	if choice_view == null or not is_instance_valid(choice_view): return
 	var p := editor_preset()
-	var keep := right_list.get_v_scroll_bar().value
-	right_list.clear()
 	right_items.clear()
 	if el1():
 		match int(edit.tab):
 			0:
 				for card: String in spell_choices():
 					var copies := Array(p.cards).count(card)
-					right_items.append({"action": "add_spell", "value": card, "label": "%s%s" % [spell_name(card), "  ×%d" % copies if copies > 0 else ""], "icon": profile().card_icon(card), "tooltip": spell_tooltip(card, true)})
+					right_items.append({"action": "add_spell", "value": card, "label": "%s%s" % [spell_name(card), "  ×%d" % copies if copies > 0 else ""], "count": copies, "icon": profile().card_icon(card), "tooltip": spell_tooltip(card, true)})
 			1:
 				for code: String in ELDuelCosts.duel_skills(profile()):
 					var rank := int(p.skills.get(code, -1))
-					right_items.append({"action": "add_skill", "value": code, "label": skill_name(code, maxi(rank, 0)) if rank >= 0 else skill_name(code, 0).trim_suffix(" I"), "owned": rank >= 0})
+					right_items.append({"action": "add_skill", "value": code, "label": skill_name(code, maxi(rank, 0)) if rank >= 0 else skill_name(code, 0).trim_suffix(" I"), "owned": rank >= 0,
+						"rank": rank, "icon": ELBuildingMessageView.skill_icon(profile(), code, maxi(rank, 0))})
 			2:
 				var capacity := ELDuelCosts.rune_capacity(p.skills)
 				for i in p.cards.size():
 					var runes := int(p.runes[i]) if i < p.runes.size() else 0
-					right_items.append({"action": "add_rune", "value": i, "label": "%d. %s  %s" % [i + 1, spell_name(p.cards[i]), "∞" if _cantrip(p.cards[i]) else "%d/%d" % [runes, capacity]], "tooltip": spell_tooltip(p.cards[i])})
+					right_items.append({"action": "add_rune", "value": i, "label": "%d. %s" % [i + 1, spell_name(p.cards[i])], "count_text": "∞" if _cantrip(p.cards[i]) else "%d/%d" % [runes, capacity], "tooltip": spell_tooltip(p.cards[i])})
 			3:
 				for code: String in artifact_choices():
 					var count := Array(p.artifacts).count(code)
-					right_items.append({"action": "add_artifact", "value": code, "label": "%s%s" % [spell_name(code), "  ×%d" % count if count > 0 else ""], "icon": profile().card_icon(code), "tooltip": artifact_tooltip(code, true)})
+					right_items.append({"action": "add_artifact", "value": code, "label": "%s%s" % [spell_name(code), "  ×%d" % count if count > 0 else ""], "count": count, "icon": profile().card_icon(code), "tooltip": artifact_tooltip(code, true)})
 			4:
 				for code: String in spec_choices():
 					right_items.append({"action": "set_spec", "value": code, "label": spec_name(code), "owned": p.specialization == code})
-	for entry: Dictionary in right_items:
-		var index := right_list.add_item(entry.label, entry.get("icon"))
-		if entry.has("tooltip"): right_list.set_item_tooltip(index, entry.tooltip)
-		if entry.get("owned", false): right_list.set_item_custom_fg_color(index, ELFrontMenu.INK_HOVER)
-	if int(edit.item) >= 0 and int(edit.item) < right_items.size(): right_list.select(int(edit.item))
-	right_list.get_v_scroll_bar().value = keep
+	choice_view.scroll(0)
 	if book_view != null: book_view.queue_redraw()
 
 func _skill_icon_slot(control: String, offset: Vector2, side: float) -> void:
@@ -1586,14 +1845,19 @@ func _build_el2_spells() -> void:
 	menu.canvas.add_child(book_view)
 	menu.labels["book"] = book_view
 	right_list = _right_list(_rect("EPAllSpellsBounds"), true, 5)
+	for pair: Array in [[reserve, "reserve"], [book_view, "book"]]:
+		_drag_source(pair[0], pair[1], pair[0].carried)
+		_drop_zone(pair[0], pair[1])
+	_drag_source(right_list, "choice", func(local: Vector2): return _list_item(right_list, local))
+	_drop_zone(right_list, "choice")
 	right_list.item_selected.connect(func(index: int):
 		edit.item = index
 		update_editor())
 	right_list.item_activated.connect(func(index: int):
 		edit.item = index
 		buy())
-	_button("EPScrollUp2", func(): _scroll(right_list, -3))
-	_button("EPScrollDown2", func(): _scroll(right_list, 3))
+	_button("EPScrollUp2", func(): _scroll(right_list, -1))
+	_button("EPScrollDown2", func(): _scroll(right_list, 1))
 	_button("EPScrollUp1", func(): reserve.scroll(-1))
 	_button("EPScrollDown1", func(): reserve.scroll(1))
 	_refresh_el2_lists()
@@ -1648,9 +1912,17 @@ func _build_el2_misc() -> void:
 	artifacts.gui_input.connect(func(event: InputEvent):
 		if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT and artifacts.get_item_at_position(event.position, true) < 0 and int(edit.owned) >= 0:
 			return_artifact())
-	_button("EPScrollUp3", func(): _scroll(artifacts, -2))
-	_button("EPScrollDown3", func(): _scroll(artifacts, 2))
-	_artifact_strip(_rect("EPArtifactsBounds"))
+	_button("EPScrollUp3", func(): _scroll(artifacts, -1))
+	_button("EPScrollDown3", func(): _scroll(artifacts, 1))
+	var strip := _artifact_strip(_rect("EPArtifactsBounds"))
+	_drag_source(right_list, "choice", func(local: Vector2): return _list_item(right_list, local))
+	_drop_zone(right_list, "choice")
+	_drag_source(artifacts, "artifacts", func(local: Vector2): return _list_item(artifacts, local))
+	_drop_zone(artifacts, "artifacts")
+	_drag_source(own, "skills", func(local: Vector2): return _carried_skill(own, local))
+	_drop_zone(own, "skills")
+	_drag_source(strip, "strip", strip.carried)
+	_drop_zone(strip, "strip")
 	_refresh_el2_lists()
 
 ## EPDropDown1 under EPDrop1Btn, on its own cut parts and arrows; a click
@@ -2053,6 +2325,14 @@ class BookView extends Control:
 		var index := slot_at(at)
 		return screen.spell_tooltip(entries()[index].card) if index >= 0 else ""
 
+	## The slot under a local point for dragging: its index (the reserve: its
+	## spell) and picture.
+	func carried(at: Vector2) -> Dictionary:
+		var index := slot_at(at)
+		if index < 0: return {}
+		var entry: Dictionary = entries()[index]
+		return {"value": entry.card if reserve else index, "icon": screen.profile().card_icon(entry.card)}
+
 	func _gui_input(event: InputEvent) -> void:
 		if not (event is InputEventMouseButton and event.pressed): return
 		var index := slot_at(event.position)
@@ -2065,7 +2345,7 @@ class BookView extends Control:
 			if placed:
 				screen.edit.item = -1
 				screen.edit.slot = -1
-				if screen.right_list != null and is_instance_valid(screen.right_list): screen.right_list.deselect_all()
+				screen.clear_choice()
 				screen.update_editor()
 				queue_redraw()
 				return
@@ -2138,6 +2418,11 @@ class ArtifactStrip extends Control:
 		var index := index_at(at)
 		return screen.artifact_tooltip(screen.editor_preset().artifacts[index]) if index >= 0 else ""
 
+	func carried(at: Vector2) -> Dictionary:
+		var index := index_at(at)
+		if index < 0: return {}
+		return {"value": index, "icon": screen.profile().card_icon(screen.editor_preset().artifacts[index])}
+
 	func _gui_input(event: InputEvent) -> void:
 		if not (event is InputEventMouseButton and event.pressed): return
 		accept_event()
@@ -2191,3 +2476,145 @@ class MessageShade extends Control:
 			draw_rect(box, Color("8a6d45"), false, 2)
 		elif first: ELFirstMessageBox.draw_frame(self, frame, shadow, box)
 		else: ELSecondDialogueBox.draw_world_frame(self, frame, box)
+
+## First-game editor right panel over the original art: the Spells, Skills and
+## Artifacts tabs fill the Type7 grid's 53 px cells, four to a row and seven
+## rows shown (CSpellsView, CSkillsView, CArtefactsView); the Specialisations
+## (and the remake's rune list) fill the Type8 art's 26 px rows (CSpecsView).
+## Names and prices are the tooltips of the grid cells. Click picks, double
+## click buys, the wheel and the arrows scroll a row at a time.
+class ChoiceView extends Control:
+	var screen: ELDuelScreen
+	var grid := true
+	## First row shown.
+	var offset := 0
+	var _hover := -1
+
+	func _ready() -> void:
+		mouse_filter = Control.MOUSE_FILTER_STOP
+		clip_contents = true
+		tooltip_text = " "
+		mouse_exited.connect(func():
+			_hover = -1
+			queue_redraw())
+
+	func columns() -> int:
+		return ELDuelScreen.EL1_GRID_SIZE.x if grid else 1
+
+	func row_height() -> float:
+		return ELDuelScreen.EL1_GRID_CELL if grid else ELDuelScreen.EL1_ROW
+
+	func visible_rows() -> int:
+		return int(size.y / row_height() + 0.01)
+
+	func total_rows() -> int:
+		return ceili(float(screen.right_items.size()) / columns())
+
+	func scroll(step: int) -> void:
+		offset = clampi(offset + step, 0, maxi(0, total_rows() - visible_rows()))
+		queue_redraw()
+
+	func item_rect(index: int) -> Rect2:
+		var row := index / columns() - offset
+		if grid: return Rect2(Vector2((index % columns()) * row_height(), row * row_height()), Vector2(row_height(), row_height()))
+		return Rect2(Vector2(0, row * row_height()), Vector2(size.x, row_height()))
+
+	func index_at(point: Vector2) -> int:
+		if not Rect2(Vector2.ZERO, size).has_point(point): return -1
+		var row := int(point.y / row_height())
+		if row >= visible_rows(): return -1
+		var column := int(point.x / row_height()) if grid else 0
+		if column >= columns(): return -1
+		var index := (row + offset) * columns() + column
+		return index if index < screen.right_items.size() else -1
+
+	func carried(at: Vector2) -> Dictionary:
+		var index := index_at(at)
+		if index < 0: return {}
+		var entry: Dictionary = screen.right_items[index]
+		return {"value": index, "icon": entry.get("icon"), "text": String(entry.label)}
+
+	func _get_tooltip(at: Vector2) -> String:
+		var index := index_at(at)
+		if index < 0: return ""
+		var entry: Dictionary = screen.right_items[index]
+		return String(entry.get("tooltip", entry.label))
+
+	func _gui_input(event: InputEvent) -> void:
+		if event is InputEventMouseMotion:
+			var hover := index_at(event.position)
+			if hover != _hover:
+				_hover = hover
+				queue_redraw()
+			return
+		if not (event is InputEventMouseButton and event.pressed): return
+		if event.button_index == MOUSE_BUTTON_WHEEL_UP: scroll(-1)
+		elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN: scroll(1)
+		elif event.button_index == MOUSE_BUTTON_LEFT:
+			var index := index_at(event.position)
+			if index >= 0:
+				if event.double_click: screen.choice_activated(index)
+				else: screen.choice_selected(index)
+		else: return
+		accept_event()
+
+	func _draw() -> void:
+		offset = clampi(offset, 0, maxi(0, total_rows() - visible_rows()))
+		var items: Array = screen.right_items
+		var chosen := int(screen.edit.get("item", -1))
+		var font := screen.menu.arial
+		var first := offset * columns()
+		for index in range(first, mini(items.size(), first + visible_rows() * columns())):
+			var entry: Dictionary = items[index]
+			var rect := item_rect(index)
+			# Inside the art's cell lines (one pixel at each edge).
+			var inner := rect.grow_individual(-1, -1, -1, -1)
+			if index == _hover and index != chosen: draw_rect(inner, Color(1, 1, 1, 0.06))
+			if grid:
+				var icon: Texture2D = entry.get("icon")
+				var picture := inner.grow(-2)
+				if icon != null: draw_texture_rect(icon, picture, false)
+				var badge := ""
+				if int(entry.get("count", 0)) > 0: badge = "×%d" % int(entry.count)
+				elif int(entry.get("rank", -1)) >= 0: badge = ELDuelScreen._roman(int(entry.rank) + 1)
+				if not badge.is_empty():
+					var at := picture.position + Vector2(3, picture.size.y - 4)
+					draw_string_outline(font, at, badge, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, 3, Color.BLACK)
+					draw_string(font, at, badge, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color("9de2d8"))
+				if index == chosen: draw_rect(picture, ELFrontMenu.INK_HOVER, false, 2)
+			else:
+				if index == chosen: draw_rect(inner, Color(0.85, 0.7, 0.4, 0.22))
+				var ink := ELFrontMenu.INK_HOVER if entry.get("owned", false) or index == chosen else ELFrontMenu.BODY_INK
+				var baseline := rect.position.y + (rect.size.y - font.get_height(15)) * 0.5 + font.get_ascent(15)
+				# A rune row's count keeps to the right edge; the name is cut before it.
+				var count := String(entry.get("count_text", ""))
+				var count_width := font.get_string_size(count, HORIZONTAL_ALIGNMENT_LEFT, -1, 15).x if not count.is_empty() else 0.0
+				if not count.is_empty(): draw_string(font, Vector2(rect.end.x - 6 - count_width, baseline), count, HORIZONTAL_ALIGNMENT_LEFT, -1, 15, ink)
+				draw_string(font, Vector2(rect.position.x + 6, baseline), String(entry.label), HORIZONTAL_ALIGNMENT_LEFT, rect.size.x - 18 - count_width, 15, ink)
+
+## The carried item's picture (or its name) under the pointer while it is
+## dragged between the editor's panels.
+class DragGhost extends Control:
+	var screen: ELDuelScreen
+	const SIDE := 44.0
+
+	func _ready() -> void:
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	func _draw() -> void:
+		var item: Dictionary = screen.carry
+		if item.is_empty() or not bool(item.get("moving", false)): return
+		var at: Vector2 = item.at
+		var icon: Variant = item.get("icon")
+		if icon is Texture2D:
+			var rect := Rect2(at - Vector2(SIDE, SIDE) * 0.5, Vector2(SIDE, SIDE))
+			draw_texture_rect(icon, rect, false, Color(1, 1, 1, 0.85))
+			draw_rect(rect, Color("e8e0cc"), false, 1.5)
+			return
+		var font := screen.menu.arial
+		var text := String(item.get("text", ""))
+		var width := font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, 15).x + 12
+		var box := Rect2(at - Vector2(width * 0.5, 12), Vector2(width, 24))
+		draw_rect(box, Color(0, 0, 0, 0.7))
+		draw_rect(box, Color("e8e0cc"), false, 1.0)
+		draw_string(font, box.position + Vector2(6, 12 - font.get_height(15) * 0.5 + font.get_ascent(15)), text, HORIZONTAL_ALIGNMENT_LEFT, -1, 15, ELFrontMenu.INK_HOVER)

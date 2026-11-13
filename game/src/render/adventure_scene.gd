@@ -43,6 +43,14 @@ var mist: ELFogMist
 var _fog_apron: MeshInstance3D
 ## Options "fog animations": false keeps the mist's first frame.
 var animate_fog := true
+## Object brightness under the fog, as the original's object fade: each map
+## object's brightness moves toward its fog target (visible 1, remembered
+## FOG_DIM) at FOG_RATE / 255 a second, with the ground's mist, so a revealed
+## object comes up out of the dark instead of appearing at full brightness
+## over the still fogged ground. Objects the fog hides go at once.
+## {uid: brightness}; `_fading` holds {uid: target} until it is reached.
+var _fog_level: Dictionary = {}
+var _fading: Dictionary = {}
 var _look_materials: Dictionary = {}
 var _grey_textures: Dictionary = {}
 var _pick_images: Dictionary = {}
@@ -254,7 +262,10 @@ func enable_fog(session: ELAdventureSession) -> void:
 		material.set_shader_parameter("fog_fade", 1.0)
 		material.set_shader_parameter("fog_mist", mist.get_texture())
 	_fog_revision = ELFog.revision(fog_session)
-	for item: Dictionary in fog_session.objects.values(): fog_object(item)
+	# The fog as loaded shows at once.
+	_fog_level.clear()
+	_fading.clear()
+	for item: Dictionary in fog_session.objects.values(): fog_object(item, Vector2i(-1, -1), true)
 	_sync_mist()
 
 func _make_fog_apron() -> MeshInstance3D:
@@ -356,6 +367,7 @@ func _process(delta: float) -> void:
 		fog_since += delta
 		sync_fog()
 		_sync_mist()
+		if not _fading.is_empty(): _fade_objects(delta)
 	if colorless_session != null and colorless_session.colorless_level != colorless_shown: sync_colorless()
 
 ## Colourless zones: terrain corners touching a colourless cell are grey and
@@ -386,7 +398,7 @@ func sync_colorless() -> void:
 			material.set_shader_parameter("clrless_enabled", true)
 	for entry: Dictionary in _grey_groups:
 		var node: MultiMeshInstance3D = entry.node
-		node.material_override = _look_material(entry.material, false, ((int(entry.bits) >> colorless_shown) & 1) == 1)
+		node.material_override = _look_material(entry.material, 1.0, ((int(entry.bits) >> colorless_shown) & 1) == 1)
 	for uid: int in object_models: grey_object(uid)
 
 ## Whether a map object is currently drawn grey (its footprint centre cell).
@@ -430,54 +442,80 @@ func sync_fog() -> void:
 
 ## Unexplored objects and remembered heroes, monsters, castles and forts are
 ## hidden; other remembered objects are dimmed. A moving actor also counts the
-## tile it is passing through.
-func fog_object(item: Dictionary, passing := Vector2i(-1, -1)) -> void:
+## tile it is passing through. Brightening fades (see `_fog_level`) unless
+## `instant`.
+func fog_object(item: Dictionary, passing := Vector2i(-1, -1), instant := false) -> void:
 	if fog_session == null or item.is_empty(): return
 	var uid := int(item.uid)
 	if not object_models.has(uid) and not _instances.has(uid): return
 	var mode := ELFog.object_state(fog_session, fog_player, item)
 	if passing.x >= 0 and mode != ELFog.VISIBLE: mode = maxi(mode, ELFog.object_state(fog_session, fog_player, item, passing))
 	var present := _game_visible(item) and (mode == ELFog.VISIBLE or (mode == ELFog.REMEMBERED and not ELFog.dynamic(item)))
-	var dim := mode != ELFog.VISIBLE
+	var target := 0.0 if not present else (1.0 if mode == ELFog.VISIBLE else FOG_DIM)
+	var level: float = _fog_level.get(uid, 0.0)
+	if instant or target <= level: level = target
+	_fog_level[uid] = level
+	if level != target: _fading[uid] = target
+	else: _fading.erase(uid)
+	_show_fogged(uid, present, level)
+
+## Steps the fading objects toward their fog brightness.
+func _fade_objects(delta: float) -> void:
+	var step := FOG_RATE / 255.0 * delta
+	for uid: int in _fading.keys():
+		if not object_models.has(uid) and not _instances.has(uid):
+			_fading.erase(uid)
+			continue
+		var target: float = _fading[uid]
+		var level := move_toward(float(_fog_level.get(uid, target)), target, step)
+		_fog_level[uid] = level
+		if level == target: _fading.erase(uid)
+		_show_fogged(uid, true, level)
+
+func _show_fogged(uid: int, present: bool, level: float) -> void:
 	if object_models.has(uid):
 		var model: ELModel = object_models[uid]
 		model.visible = present and not model.get_meta("portal_hidden", false)
-		_dim_model(model, present and dim)
+		_dim_model(model, level if present else 1.0)
 	for entry: Dictionary in _instances.get(uid, []):
 		var multimesh: MultiMesh = entry.node.multimesh
 		multimesh.set_instance_transform(entry.index, entry.transform if present else Transform3D(Basis.from_scale(Vector3.ZERO), Vector3.ZERO))
-		if multimesh.use_colors: multimesh.set_instance_color(entry.index, Color(FOG_DIM, FOG_DIM, FOG_DIM) if dim else Color.WHITE)
+		if multimesh.use_colors: multimesh.set_instance_color(entry.index, Color(level, level, level) if present else Color.WHITE)
 	_sync_blob(uid, present)
 
 func _game_visible(item: Dictionary) -> bool:
 	return item.get("visible", true) and item.get("placed", true) and not item.get("fortified", false) and (not item.get("opened", false) or first_barrier(item)) \
 		and (item.get("alive", true) or item.get("type") not in ["hero", "monster"])
 
-func _dim_model(model: ELModel, dim: bool) -> void:
-	if model.get_meta("look_dim", false) == dim: return
-	model.set_meta("look_dim", dim)
+## Figure brightness under the fog (1 undimmed), in steps of 1/32 so fading
+## figures share a few material copies.
+func _dim_model(model: ELModel, level: float) -> void:
+	level = roundf(clampf(level, 0.0, 1.0) * 32.0) / 32.0
+	if float(model.get_meta("look_dim", 1.0)) == level: return
+	model.set_meta("look_dim", level)
 	_model_look(model)
 
 ## Applies a figure's fog dimming and colourless grey together; each part keeps
 ## its own material while neither applies.
 func _model_look(model: ELModel) -> void:
-	var dim: bool = model.get_meta("look_dim", false)
+	var dim: float = model.get_meta("look_dim", 1.0)
 	var grey: bool = model.get_meta("look_grey", false)
 	for node: MeshInstance3D in model.parts.values():
 		if not node.has_meta("look_base"):
-			if (not dim and not grey) or not node.material_override is StandardMaterial3D: continue
+			if (dim >= 1.0 and not grey) or not node.material_override is StandardMaterial3D: continue
 			node.set_meta("look_base", node.material_override)
 		var base: StandardMaterial3D = node.get_meta("look_base")
 		node.material_override = _look_material(base, dim, grey)
-		if not dim and not grey: node.remove_meta("look_base")
+		if dim >= 1.0 and not grey: node.remove_meta("look_base")
 
-func _look_material(base: Material, dim: bool, grey: bool) -> Material:
+## A figure material at a fog brightness (1 undimmed), grey or not.
+func _look_material(base: Material, dim: float, grey: bool) -> Material:
 	var lit := base as StandardMaterial3D
-	if lit == null or (not dim and not grey): return base
+	if lit == null or (dim >= 1.0 and not grey): return base
 	var key := [lit, dim, grey]
 	if not _look_materials.has(key):
 		var copy: StandardMaterial3D = lit.duplicate()
-		if dim: copy.albedo_color = Color(lit.albedo_color.r * FOG_DIM, lit.albedo_color.g * FOG_DIM, lit.albedo_color.b * FOG_DIM, lit.albedo_color.a)
+		if dim < 1.0: copy.albedo_color = Color(lit.albedo_color.r * dim, lit.albedo_color.g * dim, lit.albedo_color.b * dim, lit.albedo_color.a)
 		if grey and lit.albedo_texture != null: copy.albedo_texture = _grey_texture(lit.albedo_texture)
 		_look_materials[key] = copy
 	return _look_materials[key]

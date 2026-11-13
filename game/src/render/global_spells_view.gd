@@ -384,7 +384,10 @@ func _draw_sheet() -> void:
 		if _states == null: continue
 		var bar := Rect2(at + CASTLE_BAR.position, CASTLE_BAR.size)
 		sheet.draw_texture_rect_region(_states, bar, Rect2(0x72, 1, 9, 1))
-		var energy := clampf(int(state.scenario.castles.get(id, {}).get("health", 0)) / CASTLE_FULL, 0, 1)
+		# The bar measures the castle's own maximum: a map may give castles more
+		# or less than the usual 30 energy, and a whole castle reads full.
+		var castle: Dictionary = state.scenario.castles.get(id, {})
+		var energy := clampf(int(castle.get("health", 0)) / maxf(1.0, float(castle.get("max", CASTLE_FULL))), 0, 1)
 		var filled := floorf((bar.size.y - 2) * energy)
 		if filled > 0: sheet.draw_texture_rect_region(_states, Rect2(bar.position.x, bar.end.y - 1 - filled, bar.size.x, filled), Rect2(0x72, 0, 9, 1))
 		if not ELGlobalSpells.defender(state, id).is_empty(): sheet.draw_texture_rect_region(_states, Rect2(at + Vector2(107, 7), Vector2(14, 14)), Rect2(56, 0, 14, 14))
@@ -653,8 +656,6 @@ func _text(key: String) -> String:
 
 func _label(canvas: Canvas, rect: Rect2, key: String, size: int, align := HORIZONTAL_ALIGNMENT_CENTER) -> Label:
 	var label := Label.new()
-	label.position = rect.position
-	label.size = rect.size
 	label.text = profile.text(key) if not key.is_empty() else ""
 	label.horizontal_alignment = align
 	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
@@ -667,6 +668,7 @@ func _label(canvas: Canvas, rect: Rect2, key: String, size: int, align := HORIZO
 	label.add_theme_constant_override("shadow_offset_y", 1)
 	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	canvas.add_child(label)
+	ELMenuKit.place_text(label, rect)
 	return label
 
 func _button(canvas: Canvas, into: Dictionary, control: String) -> ELAdventureHud.CutButton:

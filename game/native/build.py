@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Build the native libraries for every exported platform: the installer
 decoder (el_lzma.c), the asset decoders (el_assets.c), the Lua 4.0 compiler
-for custom maps' scripts (el_lua.c, with the Lua 4.0.1 core in lua40/) and,
-on desktop, the local Discord activity link (el_discord.c).
+for custom maps' scripts (el_lua.c, with the Lua 4.0.1 core in lua40/), the
+computer opponent's combat lookahead (el_duel_brain.c) and, on desktop, the
+local Discord activity link (el_discord.c).
 
   python3 native/build.py [--zig ZIG] [--ndk NDK] [linux windows macos android]
 
@@ -24,7 +25,7 @@ import tempfile
 HERE = Path(__file__).resolve().parent
 BIN = HERE / "bin"
 # Each library and the platforms it is built for.
-LIBRARIES = {"el_lzma": ("linux", "windows", "macos", "android"), "el_assets": ("linux", "windows", "macos", "android"), "el_lua": ("linux", "windows", "macos", "android"), "el_discord": ("linux", "windows", "macos")}
+LIBRARIES = {"el_lzma": ("linux", "windows", "macos", "android"), "el_assets": ("linux", "windows", "macos", "android"), "el_lua": ("linux", "windows", "macos", "android"), "el_duel_brain": ("linux", "windows", "macos", "android"), "el_discord": ("linux", "windows", "macos")}
 # Paths of the build machine are kept out of the libraries.
 FLAGS = ["-std=c11", "-O2", "-Wall", "-Wextra", "-Wno-cast-function-type", "-fvisibility=hidden", "-shared",
          f"-ffile-prefix-map={HERE}=native", "-g0"]

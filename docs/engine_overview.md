@@ -11,7 +11,7 @@ The game is recognised from its files: both need `Resources/figures.res`, `crfig
 ## Code layout
 
 - `src/content/` reads the original formats (resource archives, textures, models, animations, sound, Bink movies, tile sets, maps, campaign files and the second game's Lua 4 scripts) and holds the campaign logic: map sessions, encounters, shops, buildings, resources, heroes and saves.
-- `src/duel/` is the battle engine. `ELDuel` (`state.gd`) holds the rules and state without depending on the scene tree, so battles can be saved, replayed and checked headlessly. The computer opponent issues the same commands as the player.
+- `src/duel/` is the battle engine. `ELDuel` (`state.gd`) holds the rules and state without depending on the scene tree, so battles can be saved, replayed and checked headlessly. The computer opponent issues the same commands as the player: it searches copies of the duel with the real rules (`combat_search.gd`) and, with the **Smarter computer players** option, also reads the fighting of the next turns in a compiled model of the armies (`combat_brain.gd`, `native/el_duel_brain.c`). `tools/duel_ai_bench.gd` plays opponent settings against each other to measure a change, `tools/duel_ai_audit.gd` counts plainly poor plays (a win not taken, a hero left unblocked, a spell that did nothing), `tools/duel_ai_regret.gd` finds moves that lose more often than another when played out, and `tools/duel_ai_check.gd` replays the positions in `tools/duel_ai_positions` that were once misplayed.
 - `src/render/` draws the battlefield, the adventure map, the original interface screens and menus, and plays movies.
 - `web/` holds the browser page and its local-file support (see below).
 - `scenes/duel.tscn` is the main scene.

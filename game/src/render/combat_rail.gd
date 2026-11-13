@@ -179,6 +179,8 @@ func layout() -> void:
 		strip.layout()
 	for arrow in spell_arrows:
 		var rect := _place(arrow.get_meta("rect"))
+		# The right arrow closes the rail right after its last whole bay.
+		if int(arrow.get_meta("spell_arrow")) > 0: rect.position.x -= ELHudFrame.rail_trim(_profile, size.x)
 		arrow.position = rect.position
 		arrow.size = rect.size
 	queue_redraw()
@@ -186,7 +188,8 @@ func layout() -> void:
 ## The card rail's place between its arrows: x 151 to 467 of the original
 ## layout (both widths), its right end following the window edge.
 func hand_rect() -> Rect2:
-	return Rect2(ELHudFrame.RAIL_LEFT, size.y - 56, maxf(0.0, size.x - _base()) + ELHudFrame.RAIL_RIGHT - ELHudFrame.RAIL_LEFT, ELListLook.ITEM_SIZE)
+	# It ends with the last whole bay (ELHudFrame.rail_trim).
+	return Rect2(ELHudFrame.RAIL_LEFT, size.y - 56, maxf(0.0, size.x - _base()) + ELHudFrame.RAIL_RIGHT - ELHudFrame.RAIL_LEFT - ELHudFrame.rail_trim(_profile, size.x), ELListLook.ITEM_SIZE)
 
 ## 1024 when the panel uses the original's wide layout, else 800.
 func _base() -> float:

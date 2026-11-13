@@ -75,6 +75,8 @@ func build(session: ELAdventureSession, id: int) -> void:
 			button.pressed.connect(_equip)
 			list.item_selected.connect(func(_index: int): book.deselect_all(); _deselect_artifacts(); _select())
 			list.item_activated.connect(func(_index: int): _equip())
+		# A spell dragged to the other list moves as with a double click.
+		list.set_drag_forwarding(_list_drag.bind(list), _list_can_drop.bind(list), _list_drop.bind(list))
 	if ELSecondArtifacts.applies(state.map.profile):
 		var caption := Label.new()
 		caption.text = "Artifacts"
@@ -171,6 +173,41 @@ func _select() -> void:
 	if strategic_session != null and not strategic_session.can_plan():
 		equip.disabled = true
 		unequip.disabled = true
+
+## Drag data of the list item under the pointer, with its icon as preview.
+func _list_drag(at: Vector2, list: ItemList) -> Variant:
+	var index := list.get_item_at_position(at, true)
+	if index < 0: return null
+	list.set_drag_preview(drag_preview(list.get_item_icon(index), Vector2(list.fixed_icon_size)))
+	return {"spellbook": self, "from": list, "index": index}
+
+func _list_can_drop(_at: Vector2, data: Variant, list: ItemList) -> bool:
+	return data is Dictionary and data.get("spellbook") == self and data.get("from") != list
+
+func _list_drop(_at: Vector2, data: Variant, list: ItemList) -> void:
+	if not _list_can_drop(_at, data, list): return
+	var source: ItemList = data.from
+	if int(data.index) >= source.item_count: return
+	list.deselect_all()
+	_deselect_artifacts()
+	source.select(int(data.index))
+	_select()
+	if source == book: _unequip()
+	else: _equip()
+
+## An icon centred under the pointer while it is dragged.
+static func drag_preview(icon: Texture2D, size: Vector2) -> Control:
+	var holder := Control.new()
+	holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var picture := TextureRect.new()
+	picture.texture = icon
+	picture.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	picture.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	picture.size = size
+	picture.position = -size * 0.5
+	picture.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	holder.add_child(picture)
+	return holder
 
 func _deselect_artifacts() -> void:
 	if artifacts != null: artifacts.deselect_all()

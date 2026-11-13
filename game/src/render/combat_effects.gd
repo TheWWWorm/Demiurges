@@ -59,6 +59,9 @@ static var _files: Dictionary = {}
 static var _order: Array[String] = []
 static var _cached_bytes := 0
 static var _materials: Dictionary = {}
+## The two particle shaders (blended, additive) every particle material
+## shares: one compile each, instead of one per sprite sheet.
+static var _shaders: Dictionary = {}
 ## Brightness of glowing (additive) particles: above 1 they reach past white,
 ## for bloom to pick up (path-traced lighting turns this on).
 static var glow_level := 1.0
@@ -301,9 +304,13 @@ func attach(model: ELModel) -> void:
 
 ## Path of a figure's particles for a clip ("cidle" -> CreaturesPFX/<model>/idle.pfx), or "".
 func animation_file(model: ELModel, clip: String) -> String:
-	var key := model.template + "/" + clip
+	return figure_particles(model.template, clip)
+
+## Path of a figure model's particles for a clip (see animation_file), or "".
+func figure_particles(template: String, clip: String) -> String:
+	var key := template + "/" + clip
 	if _animation_files.has(key): return _animation_files[key]
-	var path := "CreaturesPFX/%s/%s.pfx" % [model.template, clip.substr(1) if clip.length() > 1 and clip[0] in ["c", "u"] else clip]
+	var path := "CreaturesPFX/%s/%s.pfx" % [template, clip.substr(1) if clip.length() > 1 and clip[0] in ["c", "u"] else clip]
 	var archive: ELArchive = profile.archives.get("pfx")
 	var found := path if archive != null and archive.has(ELArchive.key(path)) else ""
 	_animation_files[key] = found
@@ -386,6 +393,7 @@ func _start_arena() -> void:
 	var links: Array = row.get("ParticlesObjectLinks", [])
 	var times: Array = row.get("ParticlesRandomPlayTime", [])
 	var sounds: Array = row.get("ParticlesSnd", [])
+	var looped := 0
 	for i in paths.size():
 		var path := ELArchive.key(String(paths[i]))
 		var where := Transform3D.IDENTITY
@@ -405,8 +413,24 @@ func _start_arena() -> void:
 			var emitter := _spawn(path, false, 0, where, null, true)
 			if emitter.is_empty(): continue
 			emitter.loop = true
+			_stagger_arena_loop(emitter, looped)
+			looped += 1
 			if i < links.size() and int(links[i]) >= 0:
 				emitter.visibility_link = _arena.scenery(int(links[i]))
+
+## An arena's looping scenery particles (the Circle of Time's five fires,
+## the Dungeon's torches) share a few files and so one cycle. Started in the
+## same frame, they breathe in step and all restart at once: their large glow
+## cores shrink together at each cycle's start, so the whole battlefield's
+## glow dimmed and flared every few seconds. Each starts at its own point of
+## the cycle instead (golden-ratio steps spread any number evenly), a cyclic
+## file already past its first pass so the earlier cycle's tail is drawn too.
+func _stagger_arena_loop(emitter: Dictionary, index: int) -> void:
+	var file: ELParticleFile = emitter.entry.file
+	var period := file.loop_end if file.loop_end > 0 else file.frames
+	var start := (file.loop_end if file.loop_end > 0 else 0) + int(fposmod(index * 0.618034, 1.0) * period)
+	emitter.elapsed = (start + 0.5) / ELParticleFile.FPS
+	_draw(emitter, start)
 
 func _step_arena_weather(delta: float) -> void:
 	if _arena_random.is_empty(): return
@@ -1291,8 +1315,14 @@ static func _atlas_cell_tints(atlas: Texture2D, grid: Vector2i) -> PackedVector3
 	if atlas == null: return PackedVector3Array()
 	var key := [atlas, grid]
 	if _atlas_tints.has(key): return _atlas_tints[key]
+	var tints := cell_tints(atlas.get_image(), grid)
+	_atlas_tints[key] = tints
+	return tints
+
+## The cell tints of a sprite sheet's image (see _atlas_cell_tints). Changes
+## only `image` (pass a copy), so worker threads may run it.
+static func cell_tints(image: Image, grid: Vector2i) -> PackedVector3Array:
 	var tints := PackedVector3Array()
-	var image := atlas.get_image()
 	if image != null and grid.x <= image.get_width() and grid.y <= image.get_height():
 		if image.is_compressed(): image.decompress()
 		image.clear_mipmaps()
@@ -1316,7 +1346,6 @@ static func _atlas_cell_tints(atlas: Texture2D, grid: Vector2i) -> PackedVector3
 					sum += Vector3(linear[pixels[i]], linear[pixels[i + 1]], linear[pixels[i + 2]]) * pixels[i + 3]
 			var peak := maxf(sum.x, maxf(sum.y, sum.z))
 			if peak > 0.0: tints[cell] = sum / peak
-	_atlas_tints[key] = tints
 	return tints
 
 static func _count(file: ELParticleFile, frame: int) -> int:
@@ -1332,7 +1361,16 @@ static func _frame(cached: Dictionary, frame: int) -> PackedFloat32Array:
 	var frames: Dictionary = cached.frames
 	var stored: Variant = frames.get(frame)
 	if stored != null: return stored
-	var file: ELParticleFile = cached.file
+	var buffer := _frame_buffer(cached.file, frame)
+	frames[frame] = buffer
+	var bytes := buffer.size() * 4
+	cached.bytes = int(cached.bytes) + bytes
+	_cached_bytes += bytes
+	_trim(cached)
+	return buffer
+
+## A frame's instance data (see _frame). Pure: worker threads may run it.
+static func _frame_buffer(file: ELParticleFile, frame: int) -> PackedFloat32Array:
 	var first: int = file.starts[frame]
 	var count := _count(file, frame)
 	var buffer := PackedFloat32Array()
@@ -1351,11 +1389,6 @@ static func _frame(cached: Dictionary, frame: int) -> PackedFloat32Array:
 		buffer[o + 13] = file.rgb[i * 3 + 1] / 255.0
 		buffer[o + 14] = file.rgb[i * 3 + 2] / 255.0
 		buffer[o + 15] = file.alpha[i] / 255.0
-	frames[frame] = buffer
-	var bytes := buffer.size() * 4
-	cached.bytes = int(cached.bytes) + bytes
-	_cached_bytes += bytes
-	_trim(cached)
 	return buffer
 
 ## Decoded file of an edition (shared by every battle of that edition).
@@ -1376,6 +1409,116 @@ static func _file(data: ELProfile, path: String) -> Dictionary:
 	_cached_bytes += bytes.size()
 	_trim(cached)
 	return cached
+
+## The battlefield's weather that comes and goes (ELBattleWarmup):
+## {"particles": [path, ...], "sounds": [path, ...]}.
+func arena_parts() -> Dictionary:
+	var paths: Array[String] = []
+	var sounds: Array[String] = []
+	for cue: Dictionary in _arena_random:
+		if not paths.has(String(cue.path)): paths.append(String(cue.path))
+		if not String(cue.sound).is_empty() and not sounds.has(String(cue.sound)): sounds.append(String(cue.sound))
+	return {"particles": paths, "sounds": sounds}
+
+## Battle warm-up (ELBattleWarmup): the particle files and effect models
+## an effect starts, without starting it: {"particles": [path, ...],
+## "objects": [object entry, ...]}.
+func effect_parts(effect: String) -> Dictionary:
+	var entry := definition(effect)
+	var paths: Array[String] = []
+	for particle: Dictionary in entry.get("particles", []):
+		if not paths.has(String(particle.file)): paths.append(String(particle.file))
+	return {"particles": paths, "objects": entry.get("objects", [])}
+
+## Largest instance data baked ahead for one file; longer effects build
+## their frames as they play, as before.
+const BAKE_BYTES := 8 * 1024 * 1024
+
+## Decodes a particle file and builds every frame's instance data (a cache
+## entry as _file makes, frames filled). Touches nothing shared, so worker
+## threads run it. {} when unreadable.
+static func bake_file(bytes: PackedByteArray) -> Dictionary:
+	var file := ELParticleFile.decode(bytes)
+	if not file.error.is_empty() or file.frames < 1: return {}
+	var baked := {"file": file, "frames": {}, "bytes": bytes.size()}
+	var size := 0
+	for frame in file.frames: size += _bucket(_count(file, frame)) * 64
+	if size > BAKE_BYTES: return baked
+	for frame in file.frames: baked.frames[frame] = _frame_buffer(file, frame)
+	baked.bytes = bytes.size() + size
+	return baked
+
+## Glow patches of every baked frame (see _glow), for worker threads.
+static func bake_glows(file: ELParticleFile, frames: Dictionary, tints: PackedVector3Array) -> Dictionary:
+	var scratch := {"glow_tints": tints, "glows": {}}
+	for frame: int in frames:
+		_glow(scratch, "f%d" % frame, frames[frame], _count(file, frame))
+	return scratch.glows
+
+## Files a baked particle file (unless a cast decoded it meanwhile) and
+## returns its cache entry.
+static func store_file(data: ELProfile, path: String, baked: Dictionary) -> Dictionary:
+	var key := data.id + ":" + ELArchive.key(path)
+	if _files.has(key): return _files[key]
+	_files[key] = baked
+	_order.append(key)
+	_cached_bytes += int(baked.bytes)
+	_trim(baked)
+	return baked
+
+## The cache entry of a particle file, or {} (no decoding).
+static func cached_file(data: ELProfile, path: String) -> Dictionary:
+	return _files.get(data.id + ":" + ELArchive.key(path), {})
+
+## The sprite sheet a particle file draws with (a ELProfile.texture name).
+static func sheet_name(file: ELParticleFile) -> String:
+	return "Effects/" + (file.texture.get_basename() if file.texture.to_lower().ends_with(".bmp") else file.texture)
+
+## Readies a cached particle file to draw: its material, and for a glowing
+## file its sheet's cell colours (`tints`, worked out by a warm-up) and the
+## glow patches baked with them.
+static func ready_file(data: ELProfile, cached: Dictionary, tints: Variant, glows: Dictionary, ambient := false) -> void:
+	var file: ELParticleFile = cached.file
+	var material := _material(data, file, ambient)
+	if material == null: return
+	if file.additive and not cached.has("glow_tints") and tints is PackedVector3Array:
+		var atlas := material.get_shader_parameter("atlas") as Texture2D
+		var key := [atlas, Vector2i(file.columns, file.rows)]
+		if not _atlas_tints.has(key): _atlas_tints[key] = tints
+		cached.glow_tints = _atlas_tints[key]
+	if not glows.is_empty() and (not file.additive or cached.has("glow_tints")):
+		var kept: Dictionary = cached.get("glows", {})
+		for key: String in glows:
+			if not kept.has(key): kept[key] = glows[key]
+		cached.glows = kept
+
+## A sprite sheet's cell colours when already worked out, else null.
+static func known_tints(atlas: Texture2D, grid: Vector2i) -> Variant:
+	return _atlas_tints.get([atlas, grid])
+
+## Every look the pooled effect models and the particle shaders draw with
+## (ELBattleWarmup draws each once, out of sight, so their shaders compile
+## before the first cast shows them): materials for plain meshes, and for
+## particle-style MultiMeshes.
+func warm_materials() -> Dictionary:
+	var meshes: Array[Material] = []
+	for item: Dictionary in objects:
+		for material: Variant in [item.opaque, item.faded] + Array(item.additive_materials):
+			if material is Material and not meshes.has(material): meshes.append(material)
+		for variants: Array in item.magic_materials.values():
+			for material: Material in variants:
+				if not meshes.has(material): meshes.append(material)
+	var particles: Array[Material] = []
+	for additive: bool in [false, true]:
+		var material := ShaderMaterial.new()
+		material.shader = _shader(additive)
+		material.render_priority = 10
+		particles.append(material)
+	return {"meshes": meshes, "particles": particles}
+
+## Builds an effect model ahead of its first use and keeps it in the pool.
+func prebuild_object(object: Dictionary) -> void:
+	_free_object(object, objects, OBJECT_POOL)
 
 ## Drops the least recently used files over the budget (never `keep`; a
 ## running emitter keeps its own reference).
@@ -1406,10 +1549,8 @@ static func _material(data: ELProfile, file: ELParticleFile, ambient: bool) -> S
 	if texture == null:
 		_materials[key] = null
 		return null
-	var shader := Shader.new()
-	shader.code = ELParticleFile.sprite_shader(SHADER.replace("BLEND", "blend_add" if file.additive else "blend_mix"))
 	var material := ShaderMaterial.new()
-	material.shader = shader
+	material.shader = _shader(file.additive)
 	material.set_shader_parameter("atlas", texture)
 	material.set_shader_parameter("grid", Vector2(file.columns, file.rows))
 	material.render_priority = 10
@@ -1417,6 +1558,13 @@ static func _material(data: ELProfile, file: ELParticleFile, ambient: bool) -> S
 	material.set_shader_parameter("glow", glow if file.additive else 1.0)
 	_materials[key] = material
 	return material
+
+static func _shader(additive: bool) -> Shader:
+	if not _shaders.has(additive):
+		var shader := Shader.new()
+		shader.code = ELParticleFile.sprite_shader(SHADER.replace("BLEND", "blend_add" if additive else "blend_mix"))
+		_shaders[additive] = shader
+	return _shaders[additive]
 
 ## Sets how bright glowing particles draw (see glow_level), running ones too.
 func set_glow(value: float) -> void:

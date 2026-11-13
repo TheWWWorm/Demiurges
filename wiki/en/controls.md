@@ -18,8 +18,8 @@ The original controls work as in the games. These keys are the most useful.
 | A / H (EL2) | show artifacts / spells in hand | — |
 | E / G (EL2) | show enchantments / graveyard | — |
 | Esc | cancel targeting, or open the game menu | close a window, or open the game menu |
-| Shift+F1 | open this wiki | open this wiki (F1 also works) |
-| F1–F4 | choose an automatic camera view | — |
+| F6 | open this wiki | open this wiki |
+| F1–F4 | choose an automatic camera view (automatic camera on) | — |
 | F5 / F9 | quick save / quick load | quick save / quick load (F8 also loads) |
 | Right drag, wheel | turn and zoom the camera | turn and zoom the camera |
 | R | reset the camera | — |
@@ -46,7 +46,7 @@ A small bar at the top of the screen gives **Back** (Esc) everywhere, **Camera**
 
 ## In the wiki
 
-**Alt+Left** and **Alt+Right** go back and forward, **Ctrl+F** searches, and **Esc** or **F1** closes the wiki. The game waits while the wiki is open.
+**Alt+Left** and **Alt+Right** go back and forward, **Ctrl+F** searches, and **Esc** or **F6** closes the wiki. The game waits while the wiki is open.
 
 On a [creature page](creatures), choose an action under the 3D model and press **Play** to preview it with its original sound when available.
 

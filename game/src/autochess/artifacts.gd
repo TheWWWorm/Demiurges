@@ -105,6 +105,43 @@ static func _elk(profile: ELProfile, key: String) -> String:
 		return String(value[0]) if not value.is_empty() else ""
 	return String(value)
 
+static var _sized := {}
+
+## The icon resampled once to `pixels` on screen (Lanczos), so a badge
+## smaller or larger than the original 50-pixel cell stays sharp instead of
+## being filtered on every draw. `round` cuts it to a soft-edged circle inside
+## the cell's painted frame.
+static func sized_icon(profile: ELProfile, kind: String, pixels: int, round := false) -> Texture2D:
+	pixels = clampi(pixels, 8, 256)
+	var key := "%s|%s|%d|%s" % [profile.root, kind, pixels, round]
+	if _sized.has(key): return _sized[key]
+	var source := icon(profile, kind)
+	var image: Image = null
+	if source is AtlasTexture and (source as AtlasTexture).atlas != null:
+		var whole := (source as AtlasTexture).atlas.get_image()
+		if whole != null: image = whole.get_region(Rect2i((source as AtlasTexture).region))
+	elif source != null: image = source.get_image()
+	if image == null: return source
+	if image.is_compressed(): image.decompress()
+	image.convert(Image.FORMAT_RGBA8)
+	if round:
+		# The frame's inner 80%, as the circles have always sampled it.
+		var side := image.get_width()
+		var inset := roundi(side * 0.1)
+		image = image.get_region(Rect2i(inset, inset, side - inset * 2, side - inset * 2))
+	image.resize(pixels, pixels, Image.INTERPOLATE_LANCZOS)
+	if round:
+		var centre := (pixels - 1) * 0.5
+		for y in pixels:
+			for x in pixels:
+				var edge := clampf(pixels * 0.5 - Vector2(x - centre, y - centre).length(), 0.0, 1.0)
+				var colour := image.get_pixel(x, y)
+				colour.a *= edge
+				image.set_pixel(x, y, colour)
+	var result := ImageTexture.create_from_image(image)
+	_sized[key] = result
+	return result
+
 static func icon(profile: ELProfile, kind: String) -> Texture2D:
 	var rule: Dictionary = RULES.get(kind, {})
 	if rule.has("artifact"):

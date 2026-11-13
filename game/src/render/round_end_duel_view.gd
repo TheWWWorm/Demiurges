@@ -152,9 +152,8 @@ func _label(control: String, value: String, font_size: int, align: HorizontalAli
 	label.add_theme_constant_override("shadow_offset_y", 1)
 	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var rect := design(control)
-	label.position = rect.position
-	label.size = rect.size
 	canvas.add_child(label)
+	ELMenuKit.place_text(label, rect)
 	labels[control] = label
 	return label
 

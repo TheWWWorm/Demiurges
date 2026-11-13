@@ -72,15 +72,13 @@ func side_offset() -> Vector2:
 
 func build_campaign() -> void:
 	name_edit = LineEdit.new()
-	var rect := menu.control_rect("SCName")
-	name_edit.position = rect.position
-	name_edit.size = Vector2(rect.size.x, rect.size.y + 6)
 	name_edit.max_length = ELPlayerProfile.NAME_LIMIT
 	name_edit.text = ELPlayerProfile.current_name(profile())
 	name_edit.flat = true
 	name_edit.context_menu_enabled = false
 	name_edit.add_theme_font_override("font", menu.face_for("SCName"))
-	name_edit.add_theme_font_size_override("font_size", 15)
+	# Controls FontSize is the GDI cell height (15: a 13 px em).
+	name_edit.add_theme_font_size_override("font_size", ELFrontMenu.cell_em(int(menu._controls.get("SCName", {}).get("FontSize", 15))))
 	# Gold, as the original draws it; the whole-name selection (the first key
 	# typed replaces it) is not highlighted.
 	name_edit.add_theme_color_override("font_color", ELFrontMenu.GOLD_INK)
@@ -93,6 +91,8 @@ func build_campaign() -> void:
 	name_edit.text_changed.connect(func(value: String) -> void: ELPlayerProfile.choose_name(value))
 	name_edit.visible = false
 	menu.canvas.add_child(name_edit)
+	# Centred on the frame's 16 px strip (SCName).
+	ELMenuKit.place_text(name_edit, menu.control_rect("SCName"))
 	box = Canvas.new()
 	box.size = Vector2(BLAZON, BLAZON)
 	box.draw_call = _draw_box
@@ -120,7 +120,7 @@ func side_chosen(previous: String, side: String) -> void:
 	var shown := not side.is_empty()
 	var offset := side_offset()
 	var rect := menu.control_rect("SCName")
-	name_edit.position = rect.position + offset
+	ELMenuKit.place_text(name_edit, Rect2(rect.position + offset, rect.size))
 	name_edit.visible = shown
 	box.position = PANEL + BOX_AT + offset
 	box.visible = shown

@@ -19,9 +19,15 @@ const META_FORMAT := "etherlords-save-slot"
 const META_LIMIT := 8192
 const META_PREFIX := '{"_slot":"'
 const STRATEGY_FORMAT := "etherlords-strategic-save"
-## The second game's SaveMissionScreen uses a 256×192 scene capture.
+## Both games' SaveMissionScreen shows a 256×192 scene capture of the saved
+## map. The remake stores it as a JPEG inside the save (earlier second-game
+## saves hold raw RGB8 pixels, still read).
 const PREVIEW_SIZE := Vector2i(256, 192)
 const PREVIEW_BYTES := 256 * 192 * 3
+const PREVIEW_QUALITY := 0.85
+## Largest stored JPEG accepted (base64 characters); a 256×192 picture is
+## usually 15–30 KB.
+const PREVIEW_JPEG_LIMIT := 200000
 ## Characters the second game refuses in a save name (T_MB_WRONG_SAVE_NAME);
 ## the remake refuses them in both editions because the file name is derived
 ## from the save name.
@@ -216,12 +222,31 @@ static func auto_path(edition: String, kind: String, key: String) -> String:
 
 ## Writes the automatic save `key` (one of AUTOSAVES) of the running game's
 ## kind, replacing the previous one. Returns "" or the error text.
-static func write_auto(key: String, director: ELAdventureDirector, camera: Dictionary = {}) -> String:
+static func write_auto(key: String, director: ELAdventureDirector, camera: Dictionary = {}, preview: Image = null) -> String:
 	var state := director.state
 	var profile := state.map.profile
 	if state.tutorial: return "The tutorial is not saved."
 	var path := auto_path(profile.id, kind_of(state), key)
-	return _write(path, path.get_basename() + ".meta.json", profile.text(key).strip_edges(), AUTO, director, camera)
+	return _write(path, path.get_basename() + ".meta.json", profile.text(key).strip_edges(), AUTO, director, camera, preview)
+
+## The stored form of a scene capture: base64 JPEG, or "" when `preview` is
+## not a 256×192 RGB8 picture.
+static func encode_preview(preview: Image) -> String:
+	if preview == null or preview.get_size() != PREVIEW_SIZE or preview.get_format() != Image.FORMAT_RGB8 or preview.has_mipmaps(): return ""
+	var jpeg := preview.save_jpg_to_buffer(PREVIEW_QUALITY)
+	return Marshalls.raw_to_base64(jpeg) if not jpeg.is_empty() else ""
+
+## Adds a scene capture to a save written before the map was drawn (the first
+## game's mission-start autosave). The saved world is left as it is.
+static func attach_preview(path: String, preview: Image) -> bool:
+	var stored := encode_preview(preview)
+	if stored.is_empty() or not FileAccess.file_exists(path): return false
+	var codec := ELAdventureSave.new()
+	var document: Variant = codec.read_document(path)
+	if not codec.error.is_empty() or not document is Dictionary or document.get("format") != ELAdventureSave.FORMAT: return false
+	document.preview_jpg = stored
+	document.erase("preview_rgb")
+	return codec.write_document(path, document)
 
 static func _write(path: String, entry: String, name: String, type: String, director: ELAdventureDirector, camera: Dictionary, preview: Image = null) -> String:
 	var state := director.state
@@ -231,10 +256,10 @@ static func _write(path: String, entry: String, name: String, type: String, dire
 	var codec := ELAdventureSave.new()
 	var document := codec.encode(director, camera)
 	if document.is_empty(): return codec.error
-	if profile.id == "el2" and preview != null and preview.get_size() == PREVIEW_SIZE and preview.get_format() == Image.FORMAT_RGB8 and not preview.has_mipmaps():
-		# Store the picture in the atomic world save so an overwrite always
-		# pairs the preview with the state it depicts.
-		document.preview_rgb = Marshalls.raw_to_base64(preview.get_data())
+	# Store the picture in the atomic world save so an overwrite always pairs
+	# the preview with the state it depicts.
+	var stored := encode_preview(preview)
+	if not stored.is_empty(): document.preview_jpg = stored
 	var meta := {"format": META_FORMAT, "version": 1, "name": name, "type": type, "file": path.get_file(), "edition": profile.id, "kind": kind_of(state), "map": state.map.id,
 		"title": map_title(profile, state.map.id), "campaign": campaign_title(state), "day": state.day, "players": player_count(state), "created": int(Time.get_unix_time_from_system())}
 	# Sorted checkpoint JSON puts this bounded string first. Listings can
@@ -248,8 +273,15 @@ static func _write(path: String, entry: String, name: String, type: String, dire
 ## Read only the chosen row's optional picture. Fixed dimensions keep preview
 ## decoding bounded independently of the rest of the saved game.
 static func preview_image(row: Dictionary) -> Image:
-	if row.get("edition") != "el2" or row.get("type") not in [SLOT, RECOVERED]: return null
+	if row.get("edition") not in ["el1", "el2"] or row.get("type") not in [SLOT, RECOVERED, AUTO]: return null
 	var raw := _header(str(row.get("path", "")))
+	if raw.get("edition") != row.get("edition"): return null
+	var jpeg: Variant = raw.get("preview_jpg")
+	if jpeg is String and not jpeg.is_empty() and jpeg.length() <= PREVIEW_JPEG_LIMIT:
+		var picture := Image.new()
+		if picture.load_jpg_from_buffer(Marshalls.base64_to_raw(jpeg)) != OK or picture.get_size() != PREVIEW_SIZE: return null
+		picture.convert(Image.FORMAT_RGB8)
+		return picture
 	var preview: Variant = raw.get("preview_rgb")
 	if raw.get("edition") != "el2" or not preview is String or preview.length() != PREVIEW_BYTES / 3 * 4: return null
 	var pixels := Marshalls.base64_to_raw(preview)

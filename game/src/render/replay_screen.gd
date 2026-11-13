@@ -102,8 +102,6 @@ func _button(control: String, action: Callable) -> ELFrontMenu.CutButton:
 func _build_name_field() -> void:
 	var rect := menu.control_rect("ReplayScrEdit")
 	name_edit = LineEdit.new()
-	name_edit.position = rect.position
-	name_edit.size = rect.size
 	name_edit.max_length = ELDuelRecording.MAX_NAME
 	name_edit.add_theme_font_override("font", menu.arial)
 	name_edit.add_theme_font_size_override("font_size", 16)
@@ -114,6 +112,7 @@ func _build_name_field() -> void:
 	for style in ["normal", "focus", "read_only"]: name_edit.add_theme_stylebox_override(style, field)
 	name_edit.text_submitted.connect(func(_text: String): save_chosen())
 	menu.canvas.add_child(name_edit)
+	ELMenuKit.place_text(name_edit, rect)
 	menu.labels["name"] = name_edit
 
 func refresh() -> void:

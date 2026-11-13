@@ -367,16 +367,31 @@ func finish() -> bool:
 	state.event.emit({"kind": "battle_finished", "hero": attacker(), "opponent": target(), "winner": winner_id})
 	return true
 
+## Whether this prepared battle may be declined: in the second game every
+## local battle (PreCombatCancel); in the first game, a remake addition, a
+## local hero's battle with a neutral creature.
+func declinable() -> bool:
+	if resolved or auto or battle == null: return false
+	if state.map.profile.id == "el2": return true
+	if state.map.profile.id != "el1": return false
+	var first := state.object(hero_id)
+	var second := state.object(opponent_id)
+	for pair: Array in [[first, second], [second, first]]:
+		if pair[0].get("type") == "hero" and int(pair[0].get("owner", -1)) == state.current_player and pair[1].get("type") == "monster" and int(pair[1].get("owner", 0)) <= 0: return true
+	return false
+
 ## Second game: PreCombatCancel declines a prepared local battle.
 ## Both sides are marked as ended without a duel; Hook_OnBattleFinishing runs
 ## with the local side's opponent as the winner and its result is ignored.
 ## Nobody dies, no experience is given and no charges are written back. The
 ## shipped default hook returns the main hero to its last legal position.
+## First game (remake addition): the hero leaves a neutral creature alone and
+## stays where it stands; nothing is written and no script hook runs.
 func decline() -> bool:
-	if resolved or auto or battle == null or state.map.profile.id != "el2": return _fail("This battle cannot be declined.")
+	if not declinable(): return _fail("This battle cannot be declined.")
 	var local := hero_id if int(state.object(hero_id).get("owner", -1)) == 1 else opponent_id
 	var other := opponent_id if local == hero_id else hero_id
-	if state.vm != null:
+	if state.map.profile.id == "el2" and state.vm != null:
 		state.vm.invoke("Hook_OnBattleFinishing", [float(attacker()), float(target()), float(other)])
 		if not state.vm.error.is_empty(): return _fail(state.vm.error)
 	resolved = true

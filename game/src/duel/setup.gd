@@ -178,6 +178,9 @@ func _edit_deck(side: int) -> void:
 	book.item_selected.connect(func(index: int): description.text = _profile().card_description(working_cards[index]))
 	library.item_activated.connect(_add_card)
 	book.item_activated.connect(_remove_card)
+	# A spell dragged into the book is added, one dragged out of it removed.
+	ELListDrag.enable(library, "library", ["book"], func(_from: String, index: int, _to: int): _remove_card(index))
+	ELListDrag.enable(book, "book", ["library"], func(_from: String, index: int, _to: int): _add_card(index))
 	var controls := HBoxContainer.new()
 	rows.add_child(controls)
 	controls.add_child(_button("Add →", func():
@@ -214,7 +217,9 @@ func _refresh_book() -> void:
 		book.add_item("%d  %s" % [int(_profile().table("CombatSpells")[card].Cost), _profile().text(card + "Nm")], _profile().card_icon(card))
 	var required := 15 if _profile().id == "el1" else 16
 	count.text = "%d / %d spells" % [working_cards.size(), required]
-	save_deck_button.disabled = working_cards.size() != required
+	# A first-game book may hold fewer than its 15 spells; a second-game deck
+	# is always 16.
+	save_deck_button.disabled = working_cards.is_empty() or working_cards.size() > required if _profile().id == "el1" else working_cards.size() != required
 
 func _label(text: String, size: int) -> Label:
 	var result := Label.new()

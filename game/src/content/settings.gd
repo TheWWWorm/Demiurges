@@ -248,7 +248,7 @@ static func hotkey_action(preferences: ELSettings, id: String, group: String, ev
 func set_hotkey(id: String, action: String, code: int) -> String:
 	var group: String = HOTKEYS[action][0]
 	var key := code & ~HOTKEY_MODIFIERS
-	if key in [0, KEY_SHIFT, KEY_CTRL, KEY_ALT, KEY_META, KEY_ESCAPE, KEY_F1, KEY_F2, KEY_F3, KEY_F4, KEY_F7, KEY_F10, KEY_QUOTELEFT,
+	if key in [0, KEY_SHIFT, KEY_CTRL, KEY_ALT, KEY_META, KEY_ESCAPE, KEY_F1, KEY_F2, KEY_F3, KEY_F4, KEY_F6, KEY_F7, KEY_F10, KEY_QUOTELEFT,
 			KEY_UP, KEY_DOWN, KEY_LEFT, KEY_RIGHT, KEY_PAGEUP, KEY_PAGEDOWN] or (group == "Map" and (key in [KEY_W, KEY_A, KEY_S, KEY_D] or (id == "el1" and key == KEY_H))):
 		return "This key is reserved."
 	if (group != "Battle" and key == KEY_TAB) or (group == "Battle" and key in [KEY_ENTER, KEY_KP_ENTER]): return "This key is reserved."

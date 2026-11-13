@@ -16,6 +16,10 @@ const PROJECTILE_SPEED := 22.0
 
 class Fighter:
 	var id := 0
+	## The side (+1 / -1) it is walking round a body in its way, and for how
+	## long it keeps that side, so it never wavers between the two.
+	var detour := 0
+	var detour_left := 0.0
 	var team := 0
 	var code := ""
 	var family := -1
@@ -90,6 +94,8 @@ var profile: ELProfile
 var units: Array[Fighter] = []
 var events: Array[Dictionary] = []
 const ITEM_GAP := 0.8
+## Poisonous creatures: poison as a share of each blow (over 3 s).
+const POISONOUS_SHARE := 0.33
 var _item_marks := {}
 var time := 0.0
 var quiet := 0.0
@@ -427,11 +433,52 @@ func _move_toward(u: Fighter, other: Fighter) -> void:
 	var length := direction.length()
 	if length < 0.001: return
 	var step := minf(u.speed * TICK, maxf(0.0, length - _contact(u, other) + 0.05))
-	u.pos += direction / length * step
+	u.pos += _steer(u, other, direction / length, length) * step
 	u.pos.x = clampf(u.pos.x, ELAutochessRules.FIELD.position.x, ELAutochessRules.FIELD.end.x)
 	u.pos.y = clampf(u.pos.y, ELAutochessRules.FIELD.position.y, ELAutochessRules.FIELD.end.y)
 	u.facing = _angle(u.pos, other.pos)
 	u.moving = step > 0.0001
+
+## How far ahead a walker looks for bodies in its way (metres).
+const LOOKAHEAD := 3.5
+
+## The walking direction: straight at `other`, or bent round the nearest
+## ground body standing in the way (friend or foe), towards the side the
+## body leaves more room on. Flyers pass over everything.
+func _steer(u: Fighter, other: Fighter, straight: Vector2, length: float) -> Vector2:
+	u.detour_left = maxf(0.0, u.detour_left - TICK)
+	if "Fly" in u.flags: return straight
+	var blocker: Fighter = null
+	var nearest := INF
+	var lateral := 0.0
+	for b: Fighter in units:
+		if b == u or b == other or b.dead or "Fly" in b.flags: continue
+		var offset := b.pos - u.pos
+		var along := offset.dot(straight)
+		if along <= 0.0 or along > minf(length, LOOKAHEAD): continue
+		var side := straight.cross(offset)
+		if absf(side) >= (u.radius + b.radius) * 0.95: continue
+		if along < nearest:
+			nearest = along
+			blocker = b
+			lateral = side
+	if blocker == null:
+		if u.detour_left <= 0.0: u.detour = 0
+		return straight
+	if u.detour == 0 or u.detour_left <= 0.0:
+		# Pass on the side away from the body; dead centre, the side with
+		# more open field.
+		if absf(lateral) > 0.05: u.detour = 1 if lateral > 0.0 else -1
+		else:
+			var left := u.pos + straight.orthogonal() * 2.0
+			var field := ELAutochessRules.FIELD
+			u.detour = 1 if field.has_point(left) else -1
+		u.detour_left = 1.0
+	var clearance := u.radius + blocker.radius
+	var push := clampf((clearance - absf(lateral)) / clearance, 0.0, 1.0)
+	# The nearer the body, the harder the turn (up to sideways).
+	var close := clampf(1.0 - (nearest - clearance) / LOOKAHEAD, 0.2, 1.0)
+	return (straight + straight.orthogonal() * float(u.detour) * (0.6 + 1.4 * push) * close).normalized()
 
 ## Bodies keep apart: ground creatures from each other, flyers from other
 ## flyers (they pass over the ground). Two passes, so a crowd settles too.
@@ -478,6 +525,14 @@ func _choose_target(u: Fighter) -> void:
 			score -= (o.pos.x if u.team == 0 else -o.pos.x) * 1.5
 			if o.ranged: score -= 4.0
 		if o.id == u.target: score -= 1.5
+		elif not u.ranged and not elusive:
+			# An enemy already ringed by friends is worth less than a free one
+			# a little further away, so melee creatures spread out instead of
+			# queueing behind each other.
+			var ringed := 0
+			for f: Fighter in units:
+				if f != u and not f.dead and f.team == u.team and not f.ranged and f.target == o.id and f.pos.distance_to(o.pos) <= _contact(f, o) + 0.3: ringed += 1
+			if ringed >= 2: score += 1.5 * (ringed - 1)
 		if score < best_score:
 			best_score = score
 			best = o
@@ -589,6 +644,12 @@ func _strike(u: Fighter, target: Fighter) -> void:
 			"burn": target.burn_left = maxf(target.burn_left, float(a.seconds))
 			"silence_hit": target.silenced = maxf(target.silenced, float(a.seconds))
 	if String(a.get("kind", "")) == "grow": u.growth = mini(int(a.limit), u.growth + 1)
+	# Poisonous: the original's end-of-turn kill becomes poison here, a
+	# third of the blow again over 3 s (ether-protected creatures are immune).
+	# A creature whose own ability already poisons (snakes, hornets) keeps
+	# just that, so the two never stack.
+	if not target.dead and "Destroy" in u.flags and not _immune(target) and not String(u.ability.get("kind", "")) in ["poison", "venom"]:
+		_poison(target, raw * POISONOUS_SHARE, 3.0, u.id)
 	if not target.dead and u.gear.has("poison"):
 		_poison(target, raw * float(u.gear.poison), 3.0, u.id)
 		_item_used(u)
@@ -936,8 +997,9 @@ func _finish() -> void:
 func survivor_damage(team: int) -> int:
 	var total := 0
 	for u: Fighter in _alive(team):
-		if u.creep or u.echo or u.family < 0: continue
-		total += ELAutochessRules.survivor_damage(u.family, u.rank)
+		if u.echo: continue
+		if u.creep: total += 1 + (u.tier + 2 * clampi(u.rank, 0, 2)) / 3
+		elif u.family >= 0: total += ELAutochessRules.survivor_damage(u.family, u.rank)
 	return total
 
 ## Damage dealt by each recruit uid of `team` (the damage panel).

@@ -121,11 +121,11 @@ func build(source: ELProfile) -> bool:
 	remake_button.custom_minimum_size = Vector2(140, 30)
 	remake_button.pressed.connect(func(): remake_menu_requested.emit())
 	_footer.add_child(remake_button)
-	# Remake-only: the wiki over the battle (also F1).
+	# Remake-only: the wiki over the battle (also F6).
 	var wiki := Button.new()
 	wiki.name = "Wiki"
 	var russian := ELWikiScreen.remembered_language(header.text) == "ru"
-	wiki.text = "Вики (F1)" if russian else "Wiki (F1)"
+	wiki.text = "Вики (F6)" if russian else "Wiki (F6)"
 	wiki.tooltip_text = "Правила боя и управление" if russian else "Combat rules and controls."
 	wiki.focus_mode = Control.FOCUS_NONE
 	wiki.add_theme_font_size_override("font_size", 15)

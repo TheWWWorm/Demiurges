@@ -188,11 +188,58 @@ static func normalize(value: Variant) -> Dictionary:
 		"faction": p.faction, "resource_level": int(p.resource_level), "level": int(p.level), "specialization": p.specialization,
 		"skills": skills, "cards": cards, "runes": runes, "reserve": reserve, "artifacts": artifacts, "deck": String(p.get("deck", ""))}
 
+## The first game's preset loader keeps every preset it can read: the book
+## stops at the first spell the game does not know, and the spending, book
+## size, spell colours and runes are left to the editor (its OK checks the
+## budget). Unknown skills, specialisations and artifacts are dropped and the
+## levels are kept in range. Returns {} for a preset no battle can use.
+static func readable(profile: ELProfile, value: Variant) -> Dictionary:
+	var p := normalize(value)
+	if p.is_empty() or not ELCatalog.FACTIONS.has(String(p.faction)): return {}
+	var levels := ELDuelCosts.resource_levels(profile)
+	p.resource_level = clampi(int(p.resource_level), levels.x, levels.y)
+	var heroes := ELDuelCosts.hero_levels(profile)
+	p.level = clampi(int(p.level), heroes.x, heroes.y)
+	var spells := profile.table("CombatSpells")
+	var cards: Array[String] = []
+	var runes: Array[int] = []
+	for i in p.cards.size():
+		var card: String = p.cards[i]
+		if not spells.has(card) or cards.size() >= ELDuelCosts.EL1_BOOK: break
+		# A battle refuses another race's spell or one it cannot play.
+		if ELCatalog.rule(profile, card).is_empty() or not ELDuelCosts.spell_allowed(profile, card, String(p.faction), int(p.resource_level)): continue
+		cards.append(card)
+		runes.append(maxi(0, int(p.runes[i])) if i < p.runes.size() else 0)
+	if cards.is_empty(): return {}
+	p.cards = cards
+	p.runes = runes
+	var skills := {}
+	for code: String in p.skills:
+		if skills.size() < ELDuelCosts.MAX_SKILLS and not ELHeroSkills.definition(profile, code, int(p.skills[code])).is_empty(): skills[code] = int(p.skills[code])
+	p.skills = skills
+	if p.specialization != "NONE" and not profile.table("HeroesSpecs").has(p.specialization): p.specialization = "NONE"
+	var artifacts: Array[String] = []
+	for code: String in p.artifacts:
+		if ELDuelCosts.artifact(profile, code) and not artifact_name(profile, code).is_empty(): artifacts.append(code)
+	p.artifacts = artifacts
+	p.reserve = {}
+	return p
+
+## The first game plays any readable preset; the second checks its rules
+## when it loads one.
+static func lenient(profile: ELProfile) -> bool:
+	return profile.id == "el1"
+
 # --- User presets ------------------------------------------------------------
 # User presets are normalized JSON in the edition's user folder. Original
-# .prs files copied there are converted once and kept as backups.
+# .prs files copied there are converted once and kept as backups; those in
+# the game's own Duel folder are read once (and again when the file changes)
+# without touching them.
 
 const USER_FORMAT := 1
+## Names and modification times of the game folder's .prs files already
+## read (a name no preset can take: names have no dots).
+const IMPORTED_INDEX := ".prs_imported.json"
 const MAX_ORIGINAL_PRESET_BYTES := 256 * 1024
 ## Characters the second game rejects in a preset name (T_MB_WRONG_PRESET_NAME);
 ## also applied to the first game, whose rule is unconfirmed, because the name
@@ -255,14 +302,20 @@ static func _original_preset(profile: ELProfile, path: String) -> Dictionary:
 		preset.reserve[code] = int(count)
 	return preset
 
+## Converts an original .prs into a user preset named after its file;
+## returns false when the file cannot be read or saved.
+static func _import_preset(profile: ELProfile, source: String, name: String) -> bool:
+	var preset := _original_preset(profile, source)
+	if lenient(profile): preset = readable(profile, preset)
+	return not preset.is_empty() and save_user(profile, preset, name, false, not lenient(profile)).is_empty()
+
 static func _import_original(profile: ELProfile, directory: String, files: Array, rejected: Array) -> void:
 	for file: String in files:
 		if file.get_extension().to_lower() != "prs": continue
 		var name := file.get_basename().strip_edges()
 		if user_exists(profile, name): continue
 		var source := directory.path_join(file)
-		var preset := _original_preset(profile, source)
-		if preset.is_empty() or not save_user(profile, preset, name, false).is_empty():
+		if not _import_preset(profile, source, name):
 			rejected.append(file)
 			continue
 		var backup := source + ".imported"
@@ -270,11 +323,42 @@ static func _import_original(profile: ELProfile, directory: String, files: Array
 			backup = "%s.%d.imported" % [source, Time.get_ticks_usec()]
 		DirAccess.rename_absolute(source, backup)
 
+## The presets the original saved in its own `Duel` folder (`Duel\*.prs`).
+## The game folder is never written: each file is read into a user preset
+## of the same name once, and again only when the file changes, so a
+## converted preset can be edited or deleted like any other. A user preset
+## of the same name is kept.
+static func _import_game_folder(profile: ELProfile, rejected: Array) -> void:
+	var sources: Array[String] = []
+	for key: String in profile.files_under("Duel/"):
+		if key.get_extension().to_lower() == "prs": sources.append(profile.file(key))
+	if sources.is_empty(): return
+	var index_path := user_dir(profile).path_join(IMPORTED_INDEX)
+	var read: Variant = JSON.parse_string(FileAccess.get_file_as_string(index_path)) if FileAccess.file_exists(index_path) else null
+	var index: Dictionary = read if read is Dictionary else {}
+	var changed := false
+	for source: String in sources:
+		var name := source.get_file().get_basename().strip_edges()
+		var stamp := str(FileAccess.get_modified_time(source))
+		if not valid_name(name) or String(index.get(name, "")) == stamp: continue
+		index[name] = stamp
+		changed = true
+		if user_exists(profile, name): continue
+		if not _import_preset(profile, source, name): rejected.append(source.get_file())
+	if not changed: return
+	DirAccess.make_dir_recursive_absolute(user_dir(profile))
+	var file := FileAccess.open(index_path, FileAccess.WRITE)
+	if file != null: file.store_string(JSON.stringify(index, "\t"))
+
 ## Readable user presets of this edition, sorted by name; files that fail the
-## shape check or the edition's rules (ELDuelCosts.errors) are skipped.
+## shape check are skipped, and in the second game also those that break its
+## rules (ELDuelCosts.errors). The first game keeps every readable preset
+## (`readable`), as its own loader does, so presets saved under other rules
+## (earlier versions or patches) still load.
 static func load_user(profile: ELProfile, rejected: Array = []) -> Array[Dictionary]:
 	var result: Array[Dictionary] = []
 	var dir := user_dir(profile)
+	_import_game_folder(profile, rejected)
 	if not DirAccess.dir_exists_absolute(dir): return result
 	var files := Array(DirAccess.get_files_at(dir))
 	if files.any(func(file: String): return file.get_extension().to_lower() == "prs"):
@@ -283,10 +367,11 @@ static func load_user(profile: ELProfile, rejected: Array = []) -> Array[Diction
 	files.sort()
 	for file: String in files:
 		if not file.ends_with(".json"): continue
+		if file == IMPORTED_INDEX: continue
 		var data: Variant = JSON.parse_string(FileAccess.get_file_as_string(dir.path_join(file)))
-		var preset := normalize(data)
+		var preset := readable(profile, data) if lenient(profile) else normalize(data)
 		var name := file.trim_suffix(".json")
-		if preset.is_empty() or data.get("format") != USER_FORMAT or data.get("edition") != profile.id or not ELDuelCosts.errors(profile, preset).is_empty():
+		if preset.is_empty() or data.get("format") != USER_FORMAT or data.get("edition") != profile.id or (not lenient(profile) and not ELDuelCosts.errors(profile, preset).is_empty()):
 			rejected.append(file)
 			continue
 		preset.name = name
@@ -299,12 +384,13 @@ static func load_user(profile: ELProfile, rejected: Array = []) -> Array[Diction
 static func user_exists(profile: ELProfile, name: String) -> bool:
 	return FileAccess.file_exists(_user_path(profile, name))
 
-## Writes a user preset under `name`; returns "" or an error.
-static func save_user(profile: ELProfile, preset: Dictionary, name: String, replace := true) -> String:
+## Writes a user preset under `name`; returns "" or an error. An imported
+## original preset is written unchecked (`checked` false).
+static func save_user(profile: ELProfile, preset: Dictionary, name: String, replace := true, checked := true) -> String:
 	if not valid_name(name): return "name"
 	var copy := normalize(preset)
 	if copy.is_empty(): return "shape"
-	if not ELDuelCosts.errors(profile, copy).is_empty(): return "rules"
+	if checked and not ELDuelCosts.errors(profile, copy).is_empty(): return "rules"
 	copy.name = name.strip_edges()
 	copy.id = "user:" + copy.name
 	copy.builtin = false

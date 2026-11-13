@@ -94,6 +94,7 @@ func _map_part() -> void:
 	window.queue_free()
 	panel.close()
 	await frames(2)
+	await _free_movement_note(view, profile)
 
 	var state := view.state
 	var hero := state.object(view._hero_id())
@@ -133,6 +134,46 @@ func _map_part() -> void:
 	view.queue_free()
 	await frames(2)
 	ELFirstTutorial.automatic = false
+
+## The hero orders hint («Управление героями», GitHub #42) ends with the
+## remake's note on free movement only where free movement applies.
+func _free_movement_note(view: ELAdventureView, profile: ELProfile) -> void:
+	var id := ELFirstTutorial.id_of("HERO_CLICK")
+	var plain: Dictionary = ELFirstTutorial.texts(profile, id)
+	var noted: Dictionary = ELFirstTutorial.texts(profile, id, true)
+	var note := ELRemakeText.t(ELFirstTutorial.FREE_MOVEMENT_NOTE, profile)
+	check(not plain.body.is_empty() and not plain.body.contains(note), "the hero orders hint has the original text alone without free movement")
+	check(noted.body == plain.body + "\n\n" + note, "with free movement it ends with the remake's note")
+	var level_up := ELFirstTutorial.id_of("LEVEL_UP")
+	check(ELFirstTutorial.texts(profile, level_up, true) == ELFirstTutorial.texts(profile, level_up), "other hints get no note")
+	var russian := ELRemakeText.russian(ELFirstTutorial.FREE_MOVEMENT_NOTE)
+	check(russian != ELFirstTutorial.FREE_MOVEMENT_NOTE and russian.contains("«Свободное перемещение»") and russian.contains("«Интерфейс»"), "the note has its Russian text, naming the option and its page")
+	var panel := view.tutorial_panel
+	var kept := [view.director.free_movement, view.state.tutorial]
+	# Free movement applies with the option on, outside the tutorial map.
+	for case: Array in [[true, false], [false, false], [true, true]]:
+		view.director.free_movement = case[0]
+		view.state.tutorial = case[1]
+		var expected := ELStrategy.free_mode(view.director)
+		var shown := panel.tutorial.fire("HERO_CLICK", ELFirstTutorial.ADVENTURE, true)
+		if shown: panel.present()
+		await frames(1)
+		var text := panel.shown_text()
+		check(shown and text.ends_with(note) == expected and text.begins_with(plain.body.substr(0, 40)),
+			"the map's hint %s the note (option %s%s)" % ["shows" if expected else "leaves out", "on" if case[0] else "off", ", tutorial map" if case[1] else ""])
+		panel.close()
+		await frames(1)
+	view.director.free_movement = kept[0]
+	view.state.tutorial = kept[1]
+	# Enter presses the panel's check button (GitHub #47).
+	if panel.tutorial.fire("HERO_CLICK", ELFirstTutorial.ADVENTURE, true): panel.present()
+	await frames(1)
+	var enter := InputEventKey.new()
+	enter.keycode = KEY_ENTER
+	enter.pressed = true
+	check(panel.visible and panel.handle_input(enter) and not panel.visible, "Enter closes the hint (its check button)")
+	if panel.visible: panel.close()
+	await frames(1)
 
 ## The mission-start autosave the map writes: kept as it was.
 func _backup(folder: String) -> Dictionary:

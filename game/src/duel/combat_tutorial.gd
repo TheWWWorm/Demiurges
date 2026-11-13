@@ -90,7 +90,7 @@ func start_options() -> Dictionary:
 			"level": int(hero.level), "skills": hero.skills.duplicate(), "specialization": hero.specialization,
 			"artifacts": artifacts, "title": hero_title(side ^ flip), "reserve": reserve})
 	return {"players": players, "arena": replay.arena, "adventure": true, "first_side": side_of(replay.seed_value & 1),
-		"opening_interleave": side_of(0), "card_ids": true, "combat_tutorial": true}
+		"opening_interleave": side_of(0), "card_ids": true, "combat_tutorial": label == "Combat tutorial"}
 
 func begin(target: ELDuel) -> bool:
 	duel = target

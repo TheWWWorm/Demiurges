@@ -128,6 +128,20 @@ static func for_profile(source: ELProfile, art_override := {}) -> ELMenuKit:
 		kit._rows[control].append(entry)
 	return kit
 
+## Places a line of text (a Label or LineEdit) on a box of the original
+## layout. A control sized before it is in the tree measures its minimum
+## height with the default font and keeps that taller size, so its centred
+## text hangs below the box; it is sized here once in the tree (when it
+## enters it, if it is not there yet). A line taller than the box is centred
+## on it, as the originals centre their text.
+static func place_text(control: Control, rect: Rect2) -> void:
+	control.position = rect.position
+	if not control.is_inside_tree():
+		control.tree_entered.connect(func() -> void: place_text(control, rect), CONNECT_ONE_SHOT)
+		return
+	control.size = rect.size
+	control.position.y = rect.position.y + (rect.size.y - control.size.y) * 0.5
+
 static func masks_of(row: Dictionary) -> Array:
 	var raw: Variant = row.get("Msk", [])
 	if raw is Array: return raw

@@ -600,6 +600,9 @@ class Path extends HBoxContainer:
 ## cropped away) inside a thin ring in its tier colour; gold when chosen.
 class ItemCircle extends Button:
 	var picture: Texture2D
+	## With both set, the icon is resampled for its size on screen.
+	var profile: ELProfile
+	var kind := ""
 	var accent := ELAutochessHud.PAPER
 	var chosen := false
 	var spare := false
@@ -615,11 +618,15 @@ class ItemCircle extends Button:
 		var radius := minf(size.x, size.y) * 0.5 - 1.0
 		draw_circle(center + Vector2(0, 2), radius, Color(0, 0, 0, 0.35))
 		draw_circle(center, radius, Color("10161a"))
-		if picture != null:
+		var inner := radius - 3.0
+		if profile != null and not kind.is_empty():
+			# Cut to the circle inside its painted frame, at the pixels it covers.
+			var pixels := ceili(inner * 2.0 * get_global_transform_with_canvas().get_scale().x)
+			draw_texture_rect(ELAutochessArtifacts.sized_icon(profile, kind, pixels, true), Rect2(center - Vector2.ONE * inner, Vector2.ONE * inner * 2.0), false)
+		elif picture != null:
 			# The icons carry their own square frame: sample inside it.
 			var points := PackedVector2Array()
 			var uvs := PackedVector2Array()
-			var inner := radius - 3.0
 			for i in 40:
 				var direction := Vector2.from_angle(TAU * i / 40)
 				points.append(center + direction * inner)

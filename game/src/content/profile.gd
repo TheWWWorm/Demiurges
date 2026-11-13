@@ -32,6 +32,9 @@ var _prefetch_task := -1
 var button_sounds: Dictionary = {}
 ## Where figures' skins are painted as metal (worked out on worker threads).
 var metal_masks: ELMetalMasks
+## Second game: the release the installed card tables come from
+## (ELPatch103.RELEASE_OLD or RELEASE_CURRENT; empty until read).
+var second_release := ""
 
 func mount(edition: String, folder: String) -> bool:
 	error = ""
@@ -50,6 +53,7 @@ func mount(edition: String, folder: String) -> bool:
 	_files.clear()
 	model_resources.clear()
 	mounted_layers.clear()
+	second_release = ""
 	asset_reads = 0
 	if edition not in ["el1", "el2"]:
 		error = "Unknown game edition: " + edition
@@ -102,6 +106,8 @@ func mount(edition: String, folder: String) -> bool:
 	var ta: ELArchive = archives.text
 	for name: String in ta.entries:
 		texts.merge(ELText.parse(ta.read(name)), true)
+	# The second game is played by its 1.03 rules; older texts describe them too.
+	if id == "el2": ELPatch103.upgrade_texts(texts, release_is_old())
 	if metal_masks != null: metal_masks.stop()
 	metal_masks = ELMetalMasks.new(id)
 	# Headless runs (checks, exports) build figures without drawing them.
@@ -110,8 +116,19 @@ func mount(edition: String, folder: String) -> bool:
 
 func table(name: String) -> Dictionary:
 	if not tables.has(name):
-		tables[name] = ELRegistry.parse(read("regs", name + ".reg"))
+		var parsed := ELRegistry.parse(read("regs", name + ".reg"))
+		if id == "el2":
+			# Release 1.01 tables are brought up to the 1.03 values (ELPatch103).
+			if name.to_lower() == "combatspells" and second_release.is_empty(): second_release = ELPatch103.release(parsed)
+			if ELPatch103.TABLES.has(name.to_lower()): ELPatch103.upgrade_table(name, parsed, release_is_old())
+		tables[name] = parsed
 	return tables[name]
+
+## Second game: whether the installed card tables are from release 1.01.
+func release_is_old() -> bool:
+	if id != "el2": return false
+	if second_release.is_empty(): table("CombatSpells")
+	return second_release == ELPatch103.RELEASE_OLD
 
 func read(archive: String, entry: String) -> PackedByteArray:
 	var a: ELArchive = archives.get(archive)

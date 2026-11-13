@@ -46,7 +46,7 @@ func _ready() -> void:
 		button.pressed.connect(_chosen.bind(edition))
 		add_child(button)
 		buttons[edition] = button
-	# The remake's wiki (also F1 anywhere).
+	# The remake's wiki (also F6 anywhere).
 	wiki_button = Button.new()
 	wiki_button.name = "Wiki"
 	wiki_button.focus_mode = Control.FOCUS_NONE
@@ -117,7 +117,7 @@ func _refresh() -> void:
 	if wiki_button != null:
 		var russian := ELWikiScreen.remembered_language(wiki_hint) == "ru"
 		wiki_button.text = "Вики" if russian else "Wiki"
-		wiki_button.tooltip_text = "Справка по игре на движке Demiurges (F1)" if russian else "How to play on the Demiurges engine (F1)"
+		wiki_button.tooltip_text = "Справка по игре на движке Demiurges (F6)" if russian else "How to play on the Demiurges engine (F6)"
 		if _expedition_button != null:
 			_expedition_button.text = "Экспедиция" if russian else "Expedition"
 		if _autochess_button != null:

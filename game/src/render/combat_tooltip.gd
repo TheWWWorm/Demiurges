@@ -28,6 +28,8 @@ const PLACEMENT := {
 	"el1": {"below": Vector2(45, -8), "above": Vector2(-35, -25), "margin": Vector2(38, 28.5), "right": 24.0, "left": 12.0},
 }
 const PORTRAIT := Vector2(84, 59)
+## The first game's battle hero card shows a whole 100 x 70 photo cell.
+const FIRST_PORTRAIT := Vector2(100, 70)
 const HERO_TEXT_WIDTH := 360.0
 ## Limit tooltip text to 20 pixels through 1440p, then grow with the viewport.
 const STANDARD_PIXEL_SCALE := 1.25
@@ -109,22 +111,32 @@ static func spell_text(source: ELProfile, card: String, ether_cost := -1, card_t
 		title += " %d/%d" % [int(creature.Power), int(creature.get("Toughness", 0))]
 	var kind := source.text(key)
 	if not key.is_empty(): title = "%s: %s" % [spell_class if kind == key else kind, title]
-	var cost := source.text("T_COST")
-	var mana := source.text("T_MANA")
-	var lines := [title, "%s %d %s" % ["Cost:" if cost == "T_COST" else cost, int(row.get("Cost", 0)) if ether_cost < 0 else ether_cost, "ether" if mana == "T_MANA" else mana]]
+	var lines := [title, cost_line(source, int(row.get("Cost", 0)), ether_cost)]
 	var description := source.card_description(card)
 	if not description.is_empty() and description != str(row.get("ToolTip", card)): lines.append(description)
 	return "\n".join(lines)
+
+## The cost line of a hand card, both games: T_COST, the printed cost and
+## T_MANA; a cost changed in battle (a warding's surcharge, a Lamia
+## summoner's discount) shows as the printed cost, "+" or "-" and the
+## difference ("Цена: 1 + 2 ед. эфира").
+static func cost_line(source: ELProfile, printed: int, ether_cost := -1) -> String:
+	var cost := source.text("T_COST")
+	var mana := source.text("T_MANA")
+	cost = "Cost:" if cost == "T_COST" else cost
+	mana = "ether" if mana == "T_MANA" else mana
+	if ether_cost < 0 or ether_cost == printed: return "%s %d %s" % [cost, printed, mana]
+	return "%s %d %s %d %s" % [cost, printed, "+" if ether_cost > printed else "-", absi(ether_cost - printed), mana]
 
 ## A hero card: the portrait and lines beside it (second game), or a centred
 ## title over the portrait and lines (first game).
 static func hero_content(edition: String, picture: Texture2D, title: String, lines: Array) -> Dictionary:
 	var labels: Array = []
 	if edition == "el1":
-		labels.append({"text": title, "at": Vector2(PORTRAIT.x * 0.5 + 20, 0), "centre": true})
-		for i in lines.size(): labels.append({"text": str(lines[i]), "at": Vector2(PORTRAIT.x + 16, 20 + i * LINE)})
-		# The card sits closer to its frame than text lines do.
-		return {"labels": labels, "picture": {"texture": picture, "at": Vector2(0, 20), "size": PORTRAIT},
+		labels.append({"text": title, "at": Vector2(FIRST_PORTRAIT.x * 0.5 + 20, 0), "centre": true})
+		for i in lines.size(): labels.append({"text": str(lines[i]), "at": Vector2(FIRST_PORTRAIT.x + 16, 20 + i * LINE)})
+		# The portrait sits closer to its frame than text lines do.
+		return {"labels": labels, "picture": {"texture": picture, "at": Vector2(0, 20), "size": FIRST_PORTRAIT},
 			"margin": Vector2(20, 9), "flow": true, "max_label_width": HERO_TEXT_WIDTH}
 	labels.append({"text": title, "at": Vector2(PORTRAIT.x + 16, 9)})
 	for i in lines.size(): labels.append({"text": str(lines[i]), "at": Vector2(PORTRAIT.x + 16, 9 + (i + 1) * LINE)})

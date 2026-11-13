@@ -15,6 +15,10 @@ extends Control
 ## removes the marked card at a camp. Cancel is the room's way out (skip the
 ## reward, leave the encounter) and is hidden where there is none; Esc does
 ## nothing. Double-clicking an offer takes it at once when it needs no mark.
+## An offer can also be dragged (after DRAG_SLOP design pixels, its icon under
+## the pointer) onto the spellbook: onto a card to take it in that card's
+## place, onto a free place to add it; a drop anywhere else, or one OK could
+## not take, leaves the choice as it was before the press.
 
 ## The run's choice ids to apply in order (ELExpeditionRun.choose).
 signal chosen(ids: Array)
@@ -75,6 +79,15 @@ var picked := -1
 var marked := -1
 ## ["shop" / "bag", index], or ["deal", index into plain + card_actions].
 var _hover := ["", -1]
+## Pointer travel (design pixels) that turns a press on an offer into a drag.
+const DRAG_SLOP := 6.0
+## The offer pressed (-1 none), the choice before that press, where the
+## press was, whether it is being dragged and the pointer (design pixels).
+var _drag_offer := -1
+var _drag_before := [-1, -1]
+var _press_at := Vector2.ZERO
+var _dragging := false
+var _pointer := Vector2.ZERO
 var _canvas: Control
 var _surface: Surface
 var _offset := Vector2.ZERO
@@ -487,20 +500,54 @@ func cell_rect(which: String, index: int) -> Rect2:
 
 func surface_input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion:
+		_pointer = event.position
+		if _drag_offer >= 0 and event.button_mask & MOUSE_BUTTON_MASK_LEFT and not _dragging and event.position.distance_to(_press_at) > DRAG_SLOP:
+			_dragging = true
+			picked = _drag_offer
 		var target := hit(event.position)
 		if target != _hover:
 			_hover = target
 			_refresh()
+		elif _dragging: _surface.queue_redraw()
+	elif event is InputEventMouseButton and not event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+		_release(event.position)
 	elif event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+		_drag_offer = -1
+		_dragging = false
 		var target := hit(event.position)
 		if target[1] < 0: return
 		if target[0] == "shop":
+			_drag_before = [picked, marked]
 			picked = -1 if picked == target[1] and not event.double_click else target[1]
 			if event.double_click and str(offers[picked].needs) != "mark" and can_take(): take()
+			elif not event.double_click:
+				_drag_offer = target[1]
+				_press_at = event.position
 		else:
 			marked = -1 if marked == target[1] else target[1]
 		_refresh()
 		accept_event()
+
+## Left release: a dragged offer dropped on the spellbook is taken there (in
+## place of the card under it, else into a free place); otherwise the choice
+## goes back to what it was before the press.
+func _release(at: Vector2) -> void:
+	var offer := _drag_offer
+	var dragged := _dragging
+	_drag_offer = -1
+	_dragging = false
+	if offer < 0 or not dragged: return
+	var target := hit(at)
+	if target[0] == "bag" and offer < offers.size():
+		picked = offer
+		marked = target[1]
+		if can_take():
+			_surface.queue_redraw()
+			take()
+			return
+	picked = _drag_before[0]
+	marked = _drag_before[1]
+	_refresh()
 
 func _gui_input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion and _hover[0] in ["shop", "bag"]:
@@ -533,6 +580,9 @@ func draw_surface(target: Control) -> void:
 		if icon != null: target.draw_texture_rect(icon, rect, false)
 		if index == picked: target.draw_rect(rect, PICK_TINT)
 		if _hover[0] == "shop" and _hover[1] == index: target.draw_rect(rect, HOVER_INK)
+	# A dragged offer's icon under the pointer.
+	if _dragging and _drag_offer >= 0 and _drag_offer < offers.size() and offers[_drag_offer].icon != null:
+		target.draw_texture_rect(offers[_drag_offer].icon, Rect2(_pointer - ICON * 0.5, ICON), false, Color(1, 1, 1, 0.85))
 
 class Surface extends Control:
 	var board: ELExpeditionBoard

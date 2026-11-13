@@ -53,6 +53,9 @@ const SHARED := {
 	"EWLDTt": [["Prevent all combat damage dealt this turn", "Creatures cannot attack until the end of the enemy hero's turn"], ["До конца хода создания", "До конца хода противника создания"]],
 	# The returned creature must cost exactly X.
 	"SCBRTt": [["casting cost X or less", "casting cost X"], ["стоимостью вызова X или меньше", "стоимостью вызова X"]],
+	# The target gets a permanent "no regeneration" mark first, so regenerating never saves it.
+	"TWSTTt": [["where X is the power of the destroyed creature", "where X is the power of the destroyed creature. Regeneration cannot save the creature"],
+		["где X – сила уничтоженного создания", "где X – сила уничтоженного создания. Регенерация не спасает создание"]],
 
 	# --- Creatures ---
 	# The bat flies (its table says so), but its text never mentions it.
@@ -105,13 +108,10 @@ const EDITIONS := {
 		# Counts the caster's creatures that are not Pale, in either aspect.
 		"OFLXTt": [["number of bright aspect creatures under control", "number of non-Pale creatures under the caster's control"],
 			["сколько эфирных созданий находится под контролем героя", "сколько не бесцветных созданий находится под контролем героя"]],
-		# It can only be used with ether in the pool, though none is spent.
-		"SACRTt": [["Sacrifice creature: draw 2 spells", "Sacrifice creature: draw 2 spells. Needs at least 1 ether, which is not spent"],
-			["За принесение в жертву создания дает 2 заклинания", "За принесение в жертву создания дает 2 заклинания. Требует хотя бы 1 ед. эфира, которая не тратится"]],
-		# Pale Devourers: Walls are valid prey, the life is the prey's remaining
-		# toughness, and every reward needs the prey to die.
-		"OUD1Tt": [["target non-Wall bright aspect creature", "target bright aspect creature"], ["equal to destroyed creature's toughness", "equal to destroyed creature's remaining toughness"],
-			["которое не является телохранителем и его сила меньше", "если его сила меньше"],
+		# Pale Devourers: the life is the prey's remaining toughness, and every
+		# reward needs the prey to die. (Since 1.03 the Pale Scourge spares walls,
+		# as its 1.03 text says.)
+		"OUD1Tt": [["equal to destroyed creature's toughness", "equal to destroyed creature's remaining toughness"],
 			["Владелец получает столько здоровья, сколько здоровья было у уничтоженного создания", "Если создание погибло, владелец получает столько здоровья, сколько здоровья у него оставалось"]],
 		"OUD2Tt": [["Владелец получает столько здоровья", "Если создание погибло, владелец получает столько здоровья"]],
 		"OUD3Tt": [["Владелец получает 1 эфирный канал", "Если создание погибло, владелец получает 1 эфирный канал"]],
@@ -119,6 +119,16 @@ const EDITIONS := {
 		"OSJ1Tt": [["Sacrifice spell from hand", "Discard a random spell from hand"], ["жертвой заклинания с руки", "жертвой случайного заклинания с руки"]],
 		"OSJ2Tt": [["Sacrifice spell from hand", "Discard a random spell from hand"], ["жертвой заклинания с руки", "жертвой случайного заклинания с руки"]],
 		"OSJ3Tt": [["Sacrifice spell from hand", "Discard a random spell from hand"], ["жертвой заклинания с руки", "жертвой случайного заклинания с руки"]],
+		# Only creatures that really die are counted, and nobody takes damage
+		# (the first game hurt the attacking hero instead).
+		"FRNTTt": [["where X is the number of destroyed creatures", "where X is the number of creatures that actually die (those that survive, for example by regenerating, are not counted). The caster takes no damage"],
+			["за каждое уничтоженное создание", "за каждое погибшее создание (выжившие, например благодаря регенерации, не в счёт). Сотворивший заклинание урона не получает"]],
+		# Update 1.03 swapped the copy prices (its English creature texts say so):
+		# the Spellweaver pays 1+X, the Spellshifter 2+X.
+		"OUE2Tt": [["Rest, pay 2+X ether: gain copy", "Rest, pay 1+X ether: gain copy"], ["Отдых, 2 + X квантов эфира: герой получает копию", "Отдых, 1 + X квантов эфира: герой получает копию"]],
+		"Ab337": [["Rest, pay 2+X ether: gain copy", "Rest, pay 1+X ether: gain copy"], ["Отдых, 2 + X квантов эфира: герой получает копию", "Отдых, 1 + X квантов эфира: герой получает копию"]],
+		"OUE3Tt": [["Rest, pay 1+X ether: destroy target", "Rest, pay 2+X ether: destroy target"], ["Отдых, 1+X квантов эфира: уничтожает", "Отдых, 2+X квантов эфира: уничтожает"]],
+		"Ab338": [["Rest, pay 1+X ether: destroy target", "Rest, pay 2+X ether: destroy target"], ["Отдых, 1+X квантов эфира: уничтожает", "Отдых, 2+X квантов эфира: уничтожает"]],
 	},
 }
 

@@ -278,6 +278,10 @@ var chapter := {}
 ## (a battle or the map takes over) cuts it. Every switch is a cut, no fade.
 ## Round results over the battle leave the battle's music alone.
 var interface_music := false
+## Hidden for a chapter's loading screen: the interface music keeps playing
+## (and keeps the battle's music paused) until the host lets it go with
+## release_music(), once the map plays its own. Showing the menu again ends it.
+var hold_music := false
 ## File playing as music ("" for none or a sound) and its volume channel.
 var _music_path := ""
 var _channel := ""
@@ -548,10 +552,10 @@ const WIDE_MINIMUM := 48.0
 const WIDE_SCREENS := {
 	"el1": ["main", "new", "load", "campaigns", "duel", "single", "options", "hall_of_fame", "mp_type", "mp_start",
 		"mp_start_strategy", "load_campaign", "load_mission", "load_strategy", "load_game", "save_game",
-		"blazon", "blazon_single", "legend", "mission", "branch"],
+		"blazon", "blazon_single", "legend", "mission", "branch", "duel_editor"],
 	"el2": ["main", "single", "campaign_menu", "mission_menu", "tutorial", "duel_menu", "campaigns", "select_mission",
 		"load_campaign", "load_mission", "replay_load", "hall_of_fame", "duel", "mp_start", "encyclopaedia", "options",
-		"legend", "map"],
+		"legend", "map", "duel_editor"],
 }
 var _wide_frame: Control
 var _wide_texture: Texture2D
@@ -598,6 +602,65 @@ func _draw_art() -> void:
 		if not hidden_masks.is_empty() and hidden_masks.any(func(mask: String): return piece.get("masks", []).has(mask)): continue
 		art.draw_texture_rect_region(piece.texture, piece.rect, piece.source)
 
+## Remake: the edition's main-menu picture without its buttons (the art and the
+## widescreen frame, scaled and centred as the menu fills the window), for the
+## chapter loading screen. Null when the edition has no front-end art.
+static func backdrop(source: ELProfile) -> Backdrop:
+	if source == null or not supports(source): return null
+	var result := Backdrop.new()
+	result.build(source, SCREENS[source.id].main.art)
+	return result
+
+class Backdrop extends Control:
+	var pieces: Array[Dictionary] = []
+	var wide: Texture2D
+
+	func build(source: ELProfile, group: String) -> void:
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+		var paths := {}
+		for definition: Dictionary in source.table("InterfaceTextures").values():
+			paths[definition.get("Name", "")] = "Interface/" + str(definition.get("Path", "")).replace("\\", "/")
+		var controls := {}
+		for row: Dictionary in source.table("Controls").values():
+			controls[str(row.get("Name", ""))] = row
+		var offset := Vector2.ZERO
+		var name_at := group
+		for depth in 2:
+			var row: Dictionary = controls.get(name_at, {})
+			offset += Vector2(float(row.get("ShiftX", 0)), float(row.get("ShiftY", 0)))
+			name_at = str(row.get("Parent", ""))
+		var rows: Array[Dictionary] = []
+		for row: Dictionary in source.table("CutParts").values():
+			if row.get("Ctrl", "") != group: continue
+			var masks: Variant = row.get("Msk", [])
+			var copy := row.duplicate()
+			copy.masks = masks if masks is Array else [masks]
+			if copy.masks.has("Res1") or not paths.has(str(row.get("Txt", ""))): continue
+			rows.append(copy)
+		rows.sort_custom(func(a: Dictionary, b: Dictionary): return ELFrontMenu._layer(a) < ELFrontMenu._layer(b))
+		for row: Dictionary in rows:
+			var texture := source.texture(paths[str(row.Txt)])
+			if texture == null: continue
+			pieces.append({"texture": texture, "source": Rect2(row.TxtL, row.TxtT, row.TxtW, row.TxtH), "rect": Rect2(Vector2(row.ScrL, row.ScrT) + offset, Vector2(row.TxtW, row.TxtH))})
+		if WIDE_FRAMES.has(source.id) and ResourceLoader.exists(WIDE_FRAMES[source.id]): wide = load(WIDE_FRAMES[source.id])
+		resized.connect(queue_redraw)
+
+	func _draw() -> void:
+		draw_rect(Rect2(Vector2.ZERO, size), Color.BLACK)
+		var factor := minf(size.x / DESIGN.x, size.y / DESIGN.y)
+		if factor <= 0.0: return
+		draw_set_transform(((size - DESIGN * factor) * 0.5).floor(), 0.0, Vector2(factor, factor))
+		for piece: Dictionary in pieces:
+			draw_texture_rect_region(piece.texture, piece.rect, piece.source)
+		var side := (size.x / factor - DESIGN.x) * 0.5
+		if wide == null or side < WIDE_MINIMUM: return
+		var source := Vector2(wide.get_size())
+		var margin := ((source - DESIGN) * 0.5).floor()
+		var outer := minf(side, margin.x)
+		draw_texture_rect_region(wide, Rect2(Vector2.ZERO, DESIGN), Rect2(margin, DESIGN))
+		draw_texture_rect_region(wide, Rect2(-outer, 0, outer, DESIGN.y), Rect2(0, margin.y, margin.x, DESIGN.y))
+		draw_texture_rect_region(wide, Rect2(DESIGN.x, 0, outer, DESIGN.y), Rect2(source.x - margin.x, margin.y, margin.x, DESIGN.y))
+
 func _layout() -> void:
 	if canvas == null or size.x <= 0 or size.y <= 0: return
 	scale_factor = minf(size.x / DESIGN.x, size.y / DESIGN.y)
@@ -605,6 +668,7 @@ func _layout() -> void:
 	canvas.position = ((size - DESIGN * scale_factor) * 0.5).floor()
 	if is_instance_valid(_wide_frame): _wide_frame.queue_redraw()
 	if _frame_in_art and is_instance_valid(art): art.queue_redraw()
+	_place_version()
 	if _choice != null:
 		_choice.size = _choice.get_combined_minimum_size()
 		_choice.scale = Vector2(scale_factor, scale_factor)
@@ -648,18 +712,40 @@ func _build_text_buttons(names: Array) -> void:
 ## MM_Version's text from T_MAIN_MENU_VERSION; every other page pairs its
 ## control name with the same key). Pages drawn over another page (the campaign
 ## map over the Campaign page) keep the lower page's line, as the original does.
+## Remake: the line sits in the frame's bottom-right corner (see
+## _place_version), below the remake's game choice row and every button,
+## instead of the control's place beside the stacked buttons.
 const VERSION_KEY := "T_MAIN_MENU_VERSION"
+## Gap between the version line and the frame's outer edges (1024 layout).
+const VERSION_MARGIN := Vector2(10, 4)
+var _version_label: Label
 
 func _add_version(groups: Array) -> void:
+	_version_label = null
 	var value := text(VERSION_KEY)
 	if value == VERSION_KEY or value.strip_edges().is_empty(): return
 	for control: String in _controls:
 		var row: Dictionary = _controls[control]
 		if not control.ends_with("Version") or str(row.get("Type", "")) != "Text" or not groups.has(str(row.get("Parent", ""))): continue
 		var label := _label("version", value.strip_edges(), control_rect(control), int(row.get("FontSize", 16)), GOLD_INK, HORIZONTAL_ALIGNMENT_RIGHT)
-		# Drawn from the rectangle's top (capture: cap top 3 px under it).
-		label.vertical_alignment = VERTICAL_ALIGNMENT_TOP
+		label.vertical_alignment = VERTICAL_ALIGNMENT_BOTTOM
+		_version_label = label
+		_place_version()
 		return
+
+## The version line in the bottom-right corner of the frame shown: the
+## widescreen frame's outer columns when they are drawn, otherwise the 4:3
+## art's own corner. The frame's lower edge is the art's (taller windows add
+## black bars under it).
+func _place_version() -> void:
+	if not is_instance_valid(_version_label) or scale_factor <= 0.0: return
+	var right := DESIGN.x
+	if _wide_texture != null and (is_instance_valid(_wide_frame) or _frame_in_art):
+		var side := (size.x / scale_factor - DESIGN.x) * 0.5
+		if side >= WIDE_MINIMUM: right += minf(side, floorf((_wide_texture.get_size().x - DESIGN.x) * 0.5))
+	var extent := _version_label.get_combined_minimum_size()
+	_version_label.size = extent
+	_version_label.position = Vector2(right, DESIGN.y) - VERSION_MARGIN - extent
 
 func _caption(control: String) -> String:
 	var row: Dictionary = _controls.get(control, {})
@@ -832,6 +918,7 @@ func _input(event: InputEvent) -> void:
 		if screen == "hall_of_fame":
 			hall_ui.key(event)
 			return
+		if event.pressed and not event.echo and event.keycode in [KEY_ENTER, KEY_KP_ENTER] and press_default(): return
 		if screen in ["blazon", "blazon_single"] and event.pressed and event.keycode != KEY_ESCAPE:
 			blazon_ui.key(event.keycode)
 			return
@@ -852,6 +939,23 @@ func _input(event: InputEvent) -> void:
 				leave_screen()
 				return
 			go_back()
+
+## The check (OK) button of each screen, which Enter presses as the original
+## dialogs' default button does (Esc stays the X / back button).
+const DEFAULT_BUTTONS := ["SBOK", "SCBOK", "CTOK", "CIStart", "SMStart", "MOOK", "OptionsOK", "OP_OK", "EHOK"]
+
+## Enter: the save list's Load or Save, or the screen's check button when it
+## is shown and enabled. False when the screen has none.
+func press_default() -> bool:
+	if screen in SAVE_SCREENS and mission_load_ui != null:
+		mission_load_ui.confirm()
+		return true
+	for control: String in DEFAULT_BUTTONS:
+		var button: BaseButton = buttons.get(control)
+		if button == null or not is_instance_valid(button) or not button.is_visible_in_tree(): continue
+		if not button.disabled: button.pressed.emit()
+		return true
+	return false
 
 # --- Shared panel helpers ----------------------------------------------------
 
@@ -886,8 +990,6 @@ static func cell_em(cell: int) -> int:
 func _label(key: String, value: String, rect: Rect2, size_px: int, color := TITLE_INK, align := HORIZONTAL_ALIGNMENT_CENTER) -> Label:
 	var label := Label.new()
 	label.text = value
-	label.position = rect.position
-	label.size = rect.size
 	label.horizontal_alignment = align
 	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	label.clip_text = false
@@ -899,6 +1001,7 @@ func _label(key: String, value: String, rect: Rect2, size_px: int, color := TITL
 	label.add_theme_constant_override("shadow_offset_y", 1)
 	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	canvas.add_child(label)
+	ELMenuKit.place_text(label, rect)
 	labels[key] = label
 	return label
 
@@ -1020,19 +1123,27 @@ func music_owned() -> bool:
 
 ## Applies the interface-music contract to the screen now shown.
 func sync_music() -> void:
-	var owned := interface_music and not hosted and is_visible_in_tree() and not overlay()
+	if is_visible_in_tree(): hold_music = false
+	var held := hold_music and interface_music and not hosted and playing_interface()
+	var owned := interface_music and not hosted and (is_visible_in_tree() or held) and not overlay()
 	if owned != _music_owned:
 		_music_owned = owned
 		music_owner_changed.emit(owned)
 	if not interface_music or hosted: return
 	if not is_visible_in_tree():
-		stop_audio()
+		if not held: stop_audio()
 		return
 	if not owned:
 		if playing_interface(): stop_audio()
 		return
 	if screen in ["credits", "hall_of_fame"] or playing_interface(): return
 	play_music("interface")
+
+## Ends hold_music: a hidden menu stops the interface music.
+func release_music() -> void:
+	if not hold_music: return
+	hold_music = false
+	if _audio != null: sync_music()
 
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_VISIBILITY_CHANGED and _audio != null:
@@ -1176,7 +1287,7 @@ func _build_legend() -> void:
 	var body := campaign_data.description if campaign_data != null else ""
 	if edition == "el2":
 		_label("caption", text("CtrlCTHdr"), control_rect("CTHdr"), 17)
-		_text_box(control_rect("CTScrollBounds"), body)
+		_story_box(_story_column(control_rect("CTScrollBounds")), body, STORY_INK_SECOND)
 		for control: String in ["CTUp", "CTDown"]:
 			var arrow := _square(control)
 			if arrow != null: arrow.pressed.connect(scroll_text.bind(-3 if control == "CTUp" else 3))
@@ -1189,7 +1300,7 @@ func _build_legend() -> void:
 		# The first-game CTText control carries no rectangle; column, size and
 		# colour measured on the original (Arial-like
 		# 19 px, 22 px pitch, cream-gold, left ~240, wrapping at ~780).
-		_text_box(Rect2(240, 149, 532, 460), body, 19, GOLD_INK)
+		_story_box(STORY_COLUMN_FIRST, body, GOLD_INK)
 		if campaign_data != null and briefing != null:
 			briefing.start(profile, ELBriefingVoice.campaign_file(campaign_data.guid), _effects_volume())
 	var back := _square("CTBack")
@@ -1198,6 +1309,44 @@ func _build_legend() -> void:
 	if ok != null: ok.pressed.connect(func():
 		if _legend_next == "mission": show_screen("mission")
 		else: show_screen(_legend_next))
+
+## Remake: the campaign description (and the second game's chapter briefing on
+## the same panel) is set alike in both games, after the first game's measured
+## page: a 532 px column of 19 px text at a 22 px pitch, paragraphs apart,
+## scrolling when longer than the panel. The second game's own CTScrollBounds
+## rectangle filled the dark panel edge to edge in small type; its column is
+## now the first game's width, centred in that rectangle, with the same top
+## and bottom margins, in the second game's grey-parchment header ink.
+const STORY_SIZE := 19
+const STORY_PITCH := 22.0
+const STORY_COLUMN_FIRST := Rect2(240, 149, 532, 460)
+const STORY_MARGIN := Vector2(24, 20)
+const STORY_INK_SECOND := TITLE_INK
+
+## The column inside the second game's text bounds: at most the first game's
+## width, centred, never wider than the bounds less the side margins.
+static func _story_column(bounds: Rect2) -> Rect2:
+	var width := minf(STORY_COLUMN_FIRST.size.x, bounds.size.x - 2.0 * STORY_MARGIN.x)
+	var height := bounds.size.y - 2.0 * STORY_MARGIN.y
+	if width <= 0.0 or height <= 0.0: return bounds
+	return Rect2(Vector2(floorf(bounds.get_center().x - width * 0.5), bounds.position.y + STORY_MARGIN.y), Vector2(width, height))
+
+func _story_box(rect: Rect2, value: String, ink: Color) -> RichTextLabel:
+	var box := _text_box(rect, _story_text(value), STORY_SIZE, ink)
+	box.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	box.clip_contents = true
+	# Arial's 19 px line is about 21.8 px; the original pitch is 22.
+	box.add_theme_constant_override("line_separation", maxi(0, roundi(STORY_PITCH - arial.get_height(STORY_SIZE))))
+	return box
+
+## Story text as the column shows it: Windows line ends and stray edges
+## removed, each paragraph followed by a blank line.
+static func _story_text(value: String) -> String:
+	var paragraphs := PackedStringArray()
+	for paragraph: String in value.replace("\r\n", "\n").replace("\r", "\n").split("\n\n"):
+		var line := paragraph.strip_edges()
+		if not line.is_empty(): paragraphs.append(line)
+	return "\n\n".join(paragraphs)
 
 # --- First game: mission description ----------------------------------------
 
@@ -1416,7 +1565,7 @@ func _open_briefing() -> void:
 	_legend_voice = ELBriefingVoice.text_file(str(scenario.get("briefing", "")))
 	show_screen("legend")
 	labels.caption.text = text(str(scenario.get("header", "")))
-	text_box.text = text(str(scenario.get("briefing", "")))
+	text_box.text = _story_text(text(str(scenario.get("briefing", ""))))
 	_legend_next = "map"
 
 ## Original multi-part text button: left cap, stretched middle, right cap,

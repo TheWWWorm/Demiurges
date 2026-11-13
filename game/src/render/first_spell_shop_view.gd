@@ -9,7 +9,8 @@ extends ELHeroScreenView
 ## price of the selected spell.
 ##
 ## As in the second game's shop, a shop spell is picked up with a click and
-## put on a book slot with a second click (the right button lets it go); a
+## put on a book slot with a second click or dragged onto it (the right
+## button, or a drop away from the book, lets it go); a
 ## right click on a shop spell buys it into the selected slot, one on a bought
 ## slot gives it back. A book click alone selects the slot to replace, a
 ## double click on a shop spell buys it. Each purchase moves the selection on
@@ -185,6 +186,20 @@ func press(point: Vector2) -> void:
 		buy()
 		return
 	carry = trade.stock[index] if not _purchase_pending else ""
+	# The carried spell may also be dragged onto a book slot (drawn as carried).
+	if not carry.is_empty(): held = {"kind": "shop", "index": index}
+	refresh()
+
+## A shop spell dragged onto a book slot is staged there as with the second
+## click; released anywhere else it is let go.
+func drop_held(item: Dictionary, point: Vector2) -> void:
+	if item.kind != "shop" or carry.is_empty(): return
+	var card := carry
+	carry = ""
+	var book := book_at(point)
+	if book >= 0:
+		slot = book
+		_stage(book, card)
 	refresh()
 
 ## Right button: lets a carried spell go, gives back a bought slot, or buys

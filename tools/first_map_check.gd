@@ -89,6 +89,7 @@ func _map_part() -> void:
 	# Castle double-click.
 	check(not own.is_empty(), "the player has a castle")
 	if own.is_empty(): return
+	_castle_stage_part(view, profile)
 	var size: Vector2i = view.director.grid.footprints.get(int(own.uid), {}).get("size", Vector2i.ONE)
 	var centre := Vector3((float(own.x) + size.x * 0.5) * ELAdventureTerrain.CELL, 0, -(float(own.y) + size.y * 0.5) * ELAdventureTerrain.CELL)
 	view.following = -1
@@ -118,14 +119,45 @@ func _map_part() -> void:
 		check(not screen.picture_tip.visible, "leaving the cell hides it")
 	else:
 		print("NOTE: no spell is available on this map; the tooltip is checked on its content alone")
-	screen.closed.emit()
+	# Enter presses the screen's check button (GitHub #47).
+	var enter := InputEventKey.new()
+	enter.keycode = KEY_ENTER
+	enter.pressed = true
+	view._unhandled_input(enter)
 	await frames(3)
-	check(view.global_spells == null, "the screen closes")
+	check(view.global_spells == null, "Enter presses the check button and the screen closes")
+	if view.global_spells != null:
+		screen.closed.emit()
+		await frames(3)
 	# A double-click on bare ground beside the castle opens nothing.
 	var ground := Vector3(centre.x + (size.x * 0.5 + 6) * ELAdventureTerrain.CELL, 0, centre.z)
 	check(not view.castle_double_click(view.camera.unproject_position(ground), ground) and view.global_spells == null, "a double-click away from the castle opens nothing")
 	view.queue_free()
 	await frames(2)
+
+## Castle damage stage (GitHub #48): a saved and loaded castle keeps the model
+## of its stage (the save brings the stage back as a float).
+func _castle_stage_part(view: ELAdventureView, profile: ELProfile) -> void:
+	var codec := ELAdventureSave.new()
+	var castles: Dictionary = view.state.scenario.castles
+	var player := view.state.current_player
+	var saved: Dictionary = castles[player].duplicate()
+	for health: int in [int(saved.max), 1]:
+		castles[player].health = health
+		ELFirstScenario.show_stage(view.state, player)
+		var raw: Variant = JSON.parse_string(JSON.stringify(codec.encode(view.director)))
+		var back := codec.decode(raw, {"el1": profile})
+		check(not back.is_empty(), "a castle save loads: " + codec.error)
+		if back.is_empty(): continue
+		var castle := ELFirstScenario.castle_object(back.state, player)
+		var stage := ELFirstScenario.stage(back.state.scenario.castles[player])
+		var art := ELAdventureArt.new(back.state.map)
+		var row: Dictionary = art.resolve(castle).get("row", {})
+		check(castle.get("castle_stage") is int and int(castle.castle_stage) == stage and int(row.get("Level", -1)) == stage,
+			"a loaded castle at %d/%d energy shows its stage %d model (row level %s)" % [health, int(saved.max), stage, row.get("Level")])
+		check(ELFirstMapPresentation.spec_effect(castle, row).ends_with(["Castle", "CastleD1", "CastleD2", "CastleD3"][stage]), "its castle effect is the stage %d one" % stage)
+	castles[player] = saved
+	ELFirstScenario.show_stage(view.state, player)
 
 func _click(at: Vector2, double: bool) -> InputEventMouseButton:
 	var event := InputEventMouseButton.new()

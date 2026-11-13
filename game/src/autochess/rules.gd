@@ -156,17 +156,18 @@ static func is_creep_round(round_number: int) -> bool:
 	return round_number <= 3 or round_number % 5 == 0
 
 ## Underlords player damage: floor(round / 10) plus, per surviving recruit,
-## 1 + floor((tier + 2 * zero-based star) / 3). Creeps never damage players.
+## 1 + floor((tier + 2 * zero-based star) / 3). Neutral creatures that
+## survive count the same way by their tier and stars, so losing a neutral
+## round costs health too.
 static func survivor_damage(index: int, rank: int) -> int:
 	if index < 0: return 0
 	return 1 + (tier(index) + 2 * clampi(rank, 0, 2)) / 3
 
 static func defeat_damage(round_number: int, survivors: int) -> int:
-	if is_creep_round(round_number): return 0
 	return round_number / 10 + maxi(0, survivors)
 
-static func draw_damage(round_number: int) -> int:
-	return 0 if is_creep_round(round_number) else DRAW_DAMAGE
+static func draw_damage(_round_number: int) -> int:
+	return DRAW_DAMAGE
 
 static func creeps(round_number: int, seed_value: int) -> Array[Dictionary]:
 	var index := 0

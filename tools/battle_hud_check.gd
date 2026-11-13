@@ -4,7 +4,8 @@ extends SceneTree
 ## - each battle interface size (and Automatic) gives a clean scale for common
 ##   screens, never too big for the panel to fit, never too small to tap on a
 ##   touch screen; whole sizes are drawn with nearest sampling;
-## - a smaller size shows more card slots across the same screen;
+## - the card rail keeps the original six slots at every size; the extra
+##   width is left as an empty gap;
 ## - the setting is stored with the shared remake settings and kept in range;
 ## - a lethal hit plays only the figure's death sound, a non-lethal hit its
 ##   hurt sound (in the battle audio and through the battle view).
@@ -57,16 +58,12 @@ func _sizes() -> void:
 
 func _slots() -> void:
 	for screen: Vector2 in [Vector2(1280, 720), Vector2(1920, 1080), Vector2(2560, 1440)]:
-		var last := -1
-		var shown := PackedStringArray()
 		for choice in range(ELHudFrame.SIZES.size(), 0, -1):
 			var size := ELHudFrame.interface_scale(choice, screen)
-			var slots := ELHudFrame.rail_slots(null, ceilf(screen.x / size))
-			shown.append("%s×: %d" % [size, slots])
-			check(slots >= last, "%dx%d: %s× shows at least as many slots as the next size up" % [screen.x, screen.y, size])
-			last = slots
-		print("  %dx%d slots: %s" % [screen.x, screen.y, ", ".join(shown)])
-	check(ELHudFrame.rail_slots(null, 800) == 6, "the 800 panel's rail holds its original six slots")
+			var width := ceilf(screen.x / size)
+			check(ELHudFrame.rail_slots(null, width) == 6, "%dx%d at %s× shows the original six slots" % [screen.x, screen.y, size])
+			check(is_equal_approx(ELHudFrame.rail_trim(null, width), maxf(0.0, width - 800.0)), "%dx%d at %s× leaves the extra width as a gap" % [screen.x, screen.y, size])
+	check(ELHudFrame.rail_slots(null, 800) == 6 and is_zero_approx(ELHudFrame.rail_trim(null, 800)), "the 800 panel's rail holds its original six slots with no gap")
 
 func _setting() -> void:
 	var settings := ELSettings.new()

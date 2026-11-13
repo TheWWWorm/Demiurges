@@ -24,7 +24,7 @@ func resolve(object: Dictionary) -> Dictionary:
 		level = str(object.fort_level) if object.has("fort_level") else str(ELXml.child(node, "upgrade").get("attrs", {}).get("level", 0))
 	if object.get("type") in ["rune_shop", "el1_spell_shop", "resource_mine"]: level = str(object.level)
 	# A first-game castle shows the MainTower row of its damage stage.
-	if object.has("castle_stage") and ELFirstScenario.is_castle(object): level = str(object.castle_stage)
+	if object.has("castle_stage") and ELFirstScenario.is_castle(object): level = str(int(object.castle_stage))
 	var key := "%s/%s/%s/%s/%s/%s/%s" % [object.group, object.name, color, level, shape, object.get("monster_difficulty", 0), corpse]
 	if cache.has(key): return cache[key]
 	var row := {}

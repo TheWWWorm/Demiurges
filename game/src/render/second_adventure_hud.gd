@@ -569,11 +569,11 @@ func _build_menu() -> void:
 	if menu_buttons.has("EscExitMM"): menu_buttons.EscExitMM.pressed.connect(func(): exit_requested.emit())
 	if menu_buttons.has("EscExitWin"): menu_buttons.EscExitWin.pressed.connect(func(): quit_requested.emit())
 	menu_buttons.EscCancel.pressed.connect(func(): menu_closed.emit())
-	# Remake-only: the wiki over the map (also F1).
+	# Remake-only: the wiki over the map (also F6).
 	var wiki := Button.new()
 	wiki.name = "Wiki"
 	var russian := ELWikiScreen.remembered_language(header.text) == "ru"
-	wiki.text = "Вики (F1)" if russian else "Wiki (F1)"
+	wiki.text = "Вики (F6)" if russian else "Wiki (F6)"
 	wiki.tooltip_text = "Справка по игре на движке Demiurges" if russian else "How to play on the Demiurges engine."
 	wiki.focus_mode = Control.FOCUS_NONE
 	wiki.add_theme_font_size_override("font_size", 15)

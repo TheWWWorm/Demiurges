@@ -9,10 +9,10 @@ Autochess is a remake addition for Etherlords II. Nine heroes recruit creatures 
 ## A round
 
 1. **Preparation (45 s).** Spend ether in the shop, place creatures, then press **Start battle** (or **Ready** online).
-2. **Battle (up to 90 s).** Creatures fight by themselves. A battle with ten seconds in which no one is hurt ends in a draw.
+2. **Battle (up to 90 s).** Creatures fight by themselves; **×2** speeds the battle up (online, for the whole table). A battle with ten seconds in which no one is hurt ends in a draw.
 3. **Result.** The loser loses health: the round number divided by ten, plus a share for each surviving enemy creature by its price and stars. Then everyone earns ether.
 
-Rounds 1–3 and every fifth round are **neutral rounds** against wild creatures. After round 3 and after every fifth round you choose one of three spells or artifacts.
+Rounds 1–3 and every fifth round are **neutral rounds** against wild creatures; losing one costs health like any other defeat, counted by the wild creatures left standing. After round 3 and after every fifth round you choose one of three spells or artifacts.
 
 ## Ether
 
@@ -30,7 +30,7 @@ Every original creature ability works in real time, adapted so that it is fair a
 
 - **First strike** opens each fight with a stronger blow and delays the enemy's swing.
 - **Regeneration** heals only after two seconds without taking damage.
-- **Poison** of snakes deals extra damage over time instead of killing outright. **Deadly venom** of hornets and Mechanoids finishes an enemy that is still badly wounded a few seconds later, but never a three-star or 5-cost creature.
+- **Poison** of snakes deals extra damage over time instead of killing outright. **Deadly venom** of hornets and Mechanoids finishes an enemy that is still badly wounded a few seconds later, but never a three-star or 5-cost creature. Other **Poisonous** creatures poison with every blow: a third of its damage again over 3 seconds.
 - **Flying**, **Trample**, **Vampire**, **Bloodthirsty**, **Unblockable** and **Breaks enchantments** keep their meaning.
 - Active abilities (dragon breath, the Cyclops' strike, mantis fright, revivals and auras) recharge during battle.
 

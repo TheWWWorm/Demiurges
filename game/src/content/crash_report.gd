@@ -12,6 +12,10 @@ extends Node
 ## report to save or copy (ELCrashReportBox). On Android and iOS a session
 ## closed by the system while in the background, or after losing the focus
 ## (closed from the recent apps), is not a crash and is only noted in the log.
+## On Android 11 and later the system keeps a record of how each process
+## ended (a native crash and its signal, low memory, not responding …); the
+## previous session's record goes into the report as "exit". Every session
+## also keeps the device's total and free memory and the game's own.
 ## Reports go where the player can find them: Android → the shared Download
 ## folder, else the app's Documents folder; a computer → Downloads, else
 ## Documents; user://reports last; the web → a browser download.
@@ -31,6 +35,22 @@ static var enabled := not OS.has_feature("web")
 ## Android / iOS: a marker left without the focus is a close from the recent
 ## apps, not a crash. Checks set it on a computer.
 static var handheld := OS.has_feature("mobile")
+## Checks: stands in for the system's exit record of a process (see exit_record).
+static var exit_source: Callable
+
+## Android's exit reasons (ApplicationExitInfo), by their number.
+const EXIT_REASONS := ["unknown", "the game exited by itself", "killed by a signal", "killed by the system: low memory",
+	"crash in Java code", "native crash", "not responding (ANR)", "start-up failure", "a permission changed",
+	"excessive resource use", "closed by a user request", "stopped by the user", "a dependency died",
+	"killed by the system (other)", "killed while frozen", "package state changed", "package updated",
+	"memory limit", "anomaly"]
+const EXIT_SELF := 1
+const EXIT_SIGNALED := 2
+const EXIT_NATIVE_CRASH := 5
+## Ends that are not a fault of the game: a force stop or a close asked for
+## by the user, a package change or update.
+const EXIT_BY_REQUEST := [10, 11, 15, 16]
+const SIGNALS := {4: "SIGILL", 5: "SIGTRAP", 6: "SIGABRT", 7: "SIGBUS", 8: "SIGFPE", 9: "SIGKILL", 11: "SIGSEGV", 13: "SIGPIPE", 15: "SIGTERM"}
 
 ## The previous session that ended unexpectedly ({} = none), with "log" = its
 ## log file. Offered once.
@@ -54,7 +74,7 @@ func _ready() -> void:
 	if not enabled: return
 	var sid := "%08x%04x" % [randi(), Time.get_ticks_usec() & 0xffff]
 	info = {"session": sid, "pid": OS.get_process_id(), "started": Time.get_datetime_string_from_system(false, true),
-		"state": "foreground", "focus": "in", "where": "(start)", "last": ""}
+		"started_unix": int(Time.get_unix_time_from_system()), "state": "foreground", "focus": "in", "where": "(start)", "last": ""}
 	_collect()
 	trace("session %s: Demiurges %s, %s, %s, %s" % [sid, info.version, info.os, info.gpu, info.renderer])
 	previous = scan(OS.get_process_id())
@@ -71,8 +91,7 @@ func _collect() -> void:
 		info.os += " (%s)" % OS.get_distribution_name()
 	info.device = OS.get_model_name()
 	info.cpu = "%s × %d" % [OS.get_processor_name(), OS.get_processor_count()]
-	var memory := int(OS.get_memory_info().get("physical", -1))
-	info.memory_mb = memory >> 20 if memory > 0 else -1
+	_memory()
 	info.gpu = "%s %s" % [RenderingServer.get_video_adapter_vendor(), RenderingServer.get_video_adapter_name()]
 	info.gpu_api = RenderingServer.get_video_adapter_api_version()
 	info.renderer = "%s / %s" % [RenderingServer.get_current_rendering_method(), RenderingServer.get_current_rendering_driver_name()]
@@ -81,16 +100,127 @@ func _collect() -> void:
 	info.locale = OS.get_locale()
 	if options_summary.is_valid(): info.options = String(options_summary.call())
 
+## Total, free and used memory go into the session: the device's, and the
+## game's own. A number the system does not give is -1 (total) or left out.
+func _memory() -> void:
+	var now := memory()
+	info.memory_mb = int(now.get("physical_mb", -1))
+	if now.has("available_mb"): info.memory_free_mb = int(now.available_mb)
+	if now.has("used_mb"): info.memory_used_mb = int(now.used_mb)
+
+## The device's total ("physical_mb") and free ("available_mb") memory and the
+## game's own ("used_mb"), in MB; a number that is not known is left out. Where
+## the engine has no numbers (Android) the system's memory table gives them.
+static func memory() -> Dictionary:
+	var out := {}
+	var system := OS.get_memory_info()
+	if int(system.get("physical", -1)) > 0: out.physical_mb = int(system.physical) >> 20
+	# Windows: "available" is the commit left (page file included), "free" the memory itself.
+	var free := int(system.get("free" if OS.has_feature("windows") else "available", -1))
+	if free > 0: out.available_mb = free >> 20
+	if not (out.has("physical_mb") and out.has("available_mb")):
+		var table := meminfo(_memory_table())
+		for key: String in table:
+			if not out.has(key): out[key] = table[key]
+	# The engine counts its own memory in debug builds only; Android counts the native heap in every build.
+	var used := _android_heap() if OS.has_feature("android") else int(OS.get_static_memory_usage())
+	if used > 0: out.used_mb = used >> 20
+	return out
+
+## "physical_mb" and "available_mb" from the text of /proc/meminfo.
+static func meminfo(text: String) -> Dictionary:
+	var out := {}
+	for line: String in text.split("\n"):
+		var key := "physical_mb" if line.begins_with("MemTotal:") else ("available_mb" if line.begins_with("MemAvailable:") else "")
+		if key.is_empty(): continue
+		var amount := int(line.get_slice(":", 1).strip_edges().get_slice(" ", 0))
+		if amount > 0: out[key] = amount >> 10
+	return out
+
+## The first lines of /proc/meminfo ("" where there is none). The engine's
+## file access does not reach it on Android; Java's does.
+static func _memory_table() -> String:
+	var text := ""
+	if OS.has_feature("android"):
+		var reader: Variant = JavaClassWrapper.wrap("java.io.RandomAccessFile")
+		var table: Variant = reader.RandomAccessFile("/proc/meminfo", "r") if reader != null else null
+		if table == null: return ""
+		for i in 4:
+			var line: Variant = table.readLine()
+			if line == null: break
+			text += str(line) + "\n"
+		table.close()
+	elif OS.has_feature("linuxbsd"):
+		var table := FileAccess.open("/proc/meminfo", FileAccess.READ)
+		if table == null: return ""
+		for i in 4: text += table.get_line() + "\n"
+	return text
+
+## Android: bytes the game's native heap holds.
+static func _android_heap() -> int:
+	var debug: Variant = JavaClassWrapper.wrap("android.os.Debug")
+	return int(debug.getNativeHeapAllocatedSize()) if debug != null else 0
+
+## The system's record of how process `pid` ended, {} when there is none:
+## "reason" and "status" (ApplicationExitInfo), "description", "pss_kb" and
+## "rss_kb" (the process memory at its end), "time_ms". Android 11 and later.
+static func exit_record(pid: int) -> Dictionary:
+	if exit_source.is_valid(): return exit_source.call(pid)
+	if pid <= 0 or not OS.has_feature("android") or not Engine.has_singleton("AndroidRuntime"): return {}
+	var version: Variant = JavaClassWrapper.wrap("android.os.Build$VERSION")
+	if version == null or int(version.SDK_INT) < 30: return {}
+	var context: Variant = Engine.get_singleton("AndroidRuntime").getApplicationContext()
+	var manager: Variant = context.getSystemService("activity") if context != null else null
+	if manager == null: return {}
+	var records: Variant = manager.getHistoricalProcessExitReasons(context.getPackageName(), pid, 1)
+	if records == null or int(records.size()) < 1: return {}
+	# Not records.get(0): the engine's own Object.get() would answer first.
+	var record: Variant = records.iterator().next()
+	if record == null: return {}
+	var description: Variant = record.getDescription()
+	return {"reason": int(record.getReason()), "status": int(record.getStatus()), "description": "" if description == null else str(description),
+		"pss_kb": int(record.getPss()), "rss_kb": int(record.getRss()), "time_ms": int(record.getTimestamp())}
+
+## An exit record as report lines: "exit" (the reason, with the signal of a
+## crash or kill, or the code of an exit), "exit_detail" (the system's
+## description) and "exit_memory" (the process memory at its end).
+static func exit_lines(raw: Dictionary) -> Dictionary:
+	if not raw.has("reason"): return {}
+	var reason := int(raw.reason)
+	var status := int(raw.get("status", 0))
+	var text: String = EXIT_REASONS[reason] if reason >= 0 and reason < EXIT_REASONS.size() else "reason %d" % reason
+	if reason == EXIT_SIGNALED or (reason == EXIT_NATIVE_CRASH and status > 0):
+		text += " (signal %d%s)" % [status, (" " + str(SIGNALS[status])) if SIGNALS.has(status) else ""]
+	elif reason == EXIT_SELF: text += " (code %d)" % status
+	var out := {"exit": text, "exit_reason": reason}
+	var detail := str(raw.get("description", "")).strip_edges()
+	if not detail.is_empty(): out.exit_detail = detail
+	var parts := PackedStringArray()
+	if int(raw.get("pss_kb", 0)) > 0: parts.append("pss %d MB" % (int(raw.pss_kb) >> 10))
+	if int(raw.get("rss_kb", 0)) > 0: parts.append("rss %d MB" % (int(raw.rss_kb) >> 10))
+	if not parts.is_empty(): out.exit_memory = ", ".join(parts)
+	return out
+
+## The report lines for how a left `session` ended. A record from before the
+## session started belongs to an earlier process with the same number.
+static func _exit_of(session: Dictionary) -> Dictionary:
+	var raw := exit_record(int(session.get("pid", -1)))
+	var since := int(session.get("started_unix", 0))
+	if raw.is_empty() or (since > 0 and int(raw.get("time_ms", 0)) / 1000 < since): return {}
+	return exit_lines(raw)
+
 ## Markers left by sessions that did not quit cleanly (not `own_pid`, not a
 ## game still running) are removed; returns the newest one that was in the
-## foreground (a crash), with "log" = its log file, or {}.
-static func scan(own_pid: int) -> Dictionary:
+## foreground (a crash), with "log" = its log file and how the system says
+## it ended ("exit" …, see exit_lines), or {}. A session the system closed on
+## the user's request or for an update is not a crash.
+static func scan(own_pid: int, folder := DIR) -> Dictionary:
 	var best := {}
-	if not DirAccess.dir_exists_absolute(DIR): return best
-	for file in DirAccess.get_files_at(DIR):
+	if not DirAccess.dir_exists_absolute(folder): return best
+	for file in DirAccess.get_files_at(folder):
 		if not (file.begins_with(MARK_PREFIX) and file.ends_with(".cfg")): continue
 		var config := ConfigFile.new()
-		var path := DIR.path_join(file)
+		var path := folder.path_join(file)
 		if config.load(path) != OK:
 			DirAccess.remove_absolute(path)
 			continue
@@ -101,17 +231,23 @@ static func scan(own_pid: int) -> Dictionary:
 		for key in config.get_section_keys("session"):
 			session[key] = config.get_value("session", key)
 		DirAccess.remove_absolute(path)
+		session.merge(_exit_of(session))
+		var ended := (" (system: %s)" % session.exit) if session.has("exit") else ""
+		if int(session.get("exit_reason", -1)) in EXIT_BY_REQUEST:
+			trace("previous session %s was closed on request (not a crash)%s" % [session.get("session", "?"), ended])
+			continue
 		if String(session.get("state", "")) != "foreground":
-			trace("previous session %s was closed by the system in the background (not a crash)" % session.get("session", "?"))
+			trace("previous session %s was closed by the system in the background (not a crash)%s" % [session.get("session", "?"), ended])
 			continue
 		if handheld and String(session.get("focus", "")) == "out":
-			trace("previous session %s was closed without the focus, from the recent apps (not a crash)" % session.get("session", "?"))
+			trace("previous session %s was closed without the focus, from the recent apps (not a crash)%s" % [session.get("session", "?"), ended])
 			continue
 		if best.is_empty() or String(session.get("updated", "")) > String(best.get("updated", "")):
 			best = session
 	if not best.is_empty():
 		best.log = find_log(String(best.get("session", "")))
-		trace("previous session %s ended unexpectedly in %s; its log: %s" % [best.get("session", "?"), best.get("where", "?"), best.log])
+		trace("previous session %s ended unexpectedly in %s%s; its log: %s" % [best.get("session", "?"), best.get("where", "?"),
+			(" (system: %s)" % best.exit) if best.has("exit") else "", best.log])
 	return best
 
 ## Seconds within which an unexpected end counts as a start-up crash.
@@ -216,6 +352,7 @@ func _write() -> void:
 	if _marker.is_empty() or _done: return
 	info.updated = Time.get_datetime_string_from_system(false, true)
 	info.uptime_s = Time.get_ticks_msec() / 1000
+	_memory()
 	var config := ConfigFile.new()
 	for key: String in info:
 		config.set_value("session", key, info[key])
@@ -260,8 +397,8 @@ func simulate_kill(paused: bool, focus_out := false) -> void:
 
 static func _info_text(title: String, session: Dictionary) -> String:
 	var text := "== %s ==\n" % title
-	for key in ["session", "version", "engine", "os", "device", "cpu", "memory_mb", "gpu", "gpu_api", "renderer",
-			"screen", "locale", "options", "started", "updated", "uptime_s", "where", "last", "state", "focus"]:
+	for key in ["session", "version", "engine", "os", "device", "cpu", "memory_mb", "memory_free_mb", "memory_used_mb", "gpu", "gpu_api", "renderer",
+			"screen", "locale", "options", "started", "updated", "uptime_s", "where", "last", "state", "focus", "exit", "exit_detail", "exit_memory"]:
 		if session.has(key): text += "%s: %s\n" % [key, session[key]]
 	return text
 

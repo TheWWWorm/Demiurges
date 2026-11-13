@@ -30,6 +30,7 @@ var stage: Node3D
 var board: ELAutochessBoardView
 var camera: Camera3D
 var overlay: Control
+var _symbols: Texture2D
 var hud: Control
 var portraits: ELAutochessPortraits
 var ui_scale := 1.0
@@ -397,6 +398,12 @@ func _build_rail() -> void:
 	_rail_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_rail_box.add_theme_constant_override("separation", 5)
 	scroll.add_child(_rail_box)
+	# Wrapped lines only learn their height once the card has its width: the
+	# card is measured again then, so its last rows are never cut off.
+	_rail_box.minimum_size_changed.connect(func():
+		if _rail.visible and not _rail_relayout:
+			_rail_relayout = true
+			_relayout_rail.call_deferred())
 	_rail.hide()
 	_notice = H.Notice.new()
 	_notice.profile = profile
@@ -486,6 +493,12 @@ func _layout() -> void:
 	_notice.size = Vector2(300, 0)
 	_notice.position = Vector2(_sidebar.position.x + _sidebar.size.x + 12, _sidebar.position.y)
 
+var _rail_relayout := false
+
+func _relayout_rail() -> void:
+	_rail_relayout = false
+	if _rail.visible: _layout_rail()
+
 func _layout_rail() -> void:
 	# The sell area stays above the inspector (and under the dialogs).
 	hud.move_child(_sell_target, _rail.get_index() + 1)
@@ -512,6 +525,7 @@ func show_match(value: ELAutochessMatch, seat := 0, link: ELAutochessOnline = nu
 	online = link
 	_selected.clear()
 	_shown_board = -1
+	_last_damage.clear()
 	_last_stage = ""
 	_last_round = -1
 	_reward_shown = ""
@@ -907,6 +921,7 @@ func _update_cursor() -> void:
 		if _drag_from != Vector2.INF and Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
 			var held := board.pick(camera, _drag_from)
 			if not held.is_empty() and str(held.key).begins_with("p"): wanted = "grap2"
+		if bool(_carry.get("started", false)): wanted = "grap2"
 		if wanted == "default":
 			var control := get_viewport().gui_get_hovered_control()
 			var node: Node = control
@@ -1117,7 +1132,7 @@ func _refresh() -> void:
 	_start.text = (_t("Waiting…") if game.ready[me] else _t("Ready")) if multi else _t("Start battle")
 	H.fit(_start, _start.text, 196 - 28, 21, 14)
 	_start.disabled = own.deployed_count() == 0 and not own.army.is_empty()
-	_speed.visible = game.stage == "fight" and online == null
+	_speed.visible = game.stage == "fight"
 	_speed.text = "×%d" % int(game.speed)
 	_round_title.text = _round_name()
 	if game.is_creep_round(): _encounter.text = _t("Neutral round")
@@ -1246,7 +1261,8 @@ func _refresh_items() -> void:
 	for item: Dictionary in own.items:
 		var kind := String(item.kind)
 		var circle := H.ItemCircle.new()
-		circle.picture = ELAutochessArtifacts.icon(profile, kind)
+		circle.profile = profile
+		circle.kind = kind
 		circle.accent = H.cost_accent(ELAutochessArtifacts.tier(kind))
 		var chosen := String(_selected.get("kind", "")) == "item" and int(_selected.uid) == int(item.uid)
 		circle.chosen = chosen
@@ -1258,6 +1274,11 @@ func _refresh_items() -> void:
 			_selected = {} if chosen else {"kind": "item", "uid": int(item.uid)}
 			_say("" if chosen else _t("Choose a creature to carry %s.") % ELAutochessArtifacts.title(profile, kind))
 			_refresh())
+		var item_uid := int(item.uid)
+		circle.gui_input.connect(func(event: InputEvent):
+			if _carry_input(event, circle): return
+			if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT and watched == me:
+				_carry_hold({"kind": "item", "uid": item_uid, "item": kind}, circle, event))
 		_items.add_child(circle)
 
 func _item_text(kind: String) -> String:
@@ -1336,13 +1357,22 @@ func _refresh_bench() -> void:
 
 ## Damage dealt this round by the watched hero's creatures: model portrait,
 ## name, stars, amount and a bar against the best of them.
+## Player -> the damage by creature uid of their last finished battle.
+var _last_damage := {}
+
 func _refresh_damage() -> void:
 	var own := viewed()
 	var damage := {}
 	if game.stage == "fight":
 		var info := game.board_of(watched)
 		if not info.is_empty(): damage = (game.boards[int(info.index)].battle as ELAutochessBattle).damage_by_uid(int(info.team))
-	else: damage = game.round_results.get(watched, {}).get("damage", {})
+	else:
+		# The last battle's damage stays up through the next preparation (as
+		# in other autochess games); the results are cleared by then.
+		for player: Variant in game.round_results:
+			var dealt: Variant = game.round_results[player].get("damage", {})
+			if dealt is Dictionary and not (dealt as Dictionary).is_empty(): _last_damage[int(player)] = dealt
+		damage = _last_damage.get(watched, {})
 	var entries := own.army.filter(func(e: Dictionary) -> bool: return bool(e.deployed))
 	var amounts := {}
 	for key: Variant in damage: amounts[int(key)] = float(damage[key])
@@ -1419,7 +1449,18 @@ func _inspect(line: int, rank: int, entry: Dictionary, offer := -1) -> void:
 	names.add_theme_constant_override("h_separation", 8)
 	details.add_child(names)
 	for key: String in ELAutochessAlliances.traits(profile, line):
-		H.label(names, _t(String(ELAutochessAlliances.RULES[key].name)), 13, H.ALLIANCE[key])
+		# Each alliance with its icon, as on the alliances panel.
+		var tag := HBoxContainer.new()
+		tag.add_theme_constant_override("separation", 3)
+		names.add_child(tag)
+		var emblem := TextureRect.new()
+		emblem.texture = ELAutochessAlliances.icon(profile, key)
+		emblem.custom_minimum_size = Vector2(17, 17)
+		emblem.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		emblem.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		emblem.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		tag.add_child(emblem)
+		H.label(tag, _t(String(ELAutochessAlliances.RULES[key].name)), 13, H.ALLIANCE[key])
 	H.wrap(details, _t("Tier %d · ◈ %d") % [ELAutochessRules.tier(line), int(ELAutochessRules.family(line).cost)], 12, H.MUTED)
 	var left: Dictionary = company().pool_left()
 	if left.has(line): H.wrap(details, _t("Shared pool: %d/%d left") % [maxi(0, int(left[line])), ELAutochessRules.pool_size(line)], 12, H.MUTED)
@@ -1440,7 +1481,11 @@ func _inspect(line: int, rank: int, entry: Dictionary, offer := -1) -> void:
 	# Each keyword with what it does in these battles, in brackets.
 	var flags: Array[String] = []
 	for flag: String in values.flags: flags.append(flag)
-	if int(values.regen) > 0: flags.append("Regeneration")
+	# The data's own "Regen" flag is the same ability, described once.
+	flags.erase("Regen")
+	if int(values.regen) > 0 and not flags.has("Regeneration"): flags.append("Regeneration")
+	# Its own poisoning ability, described below, takes Poisonous's place.
+	if String((values.ability as Dictionary).get("kind", "")) in ["poison", "venom"]: flags.erase("Destroy")
 	for flag: String in flags:
 		var help := String(FLAG_HELP.get(flag, ""))
 		H.wrap(_rail_box, _t(_flag_name(flag)) + (" (%s)" % _t(help) if not help.is_empty() else ""), 13, H.GOLD)
@@ -1454,8 +1499,8 @@ func _inspect(line: int, rank: int, entry: Dictionary, offer := -1) -> void:
 		_rail_box.add_child(row)
 		if not kind.is_empty():
 			var icon := TextureRect.new()
-			icon.texture = ELAutochessArtifacts.icon(profile, kind)
-			icon.custom_minimum_size = Vector2(32, 32)
+			icon.texture = ELAutochessArtifacts.sized_icon(profile, kind, ceili(36 * ui_scale))
+			icon.custom_minimum_size = Vector2(36, 36)
 			icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 			icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 			row.add_child(icon)
@@ -1528,7 +1573,7 @@ const FLAG_HELP := {
 	"Disenchant": "each blow removes the target's enchantments",
 	"TeamAttack": "+15% damage for each ally attacking the same enemy, up to two",
 	"NoUntap": "attacks 45% slower but hits 45% harder",
-	"Destroy": "no effect in autochess battles",
+	"Destroy": "hits poison the target for a third of the blow again over 3 s",
 	"NSS": "moves faster and uses its first ability sooner",
 	"NoTarget": "enemy abilities and poisons do not affect it",
 	"NoAffect": "enemy abilities and poisons do not affect it",
@@ -1630,6 +1675,11 @@ func _buy(index: int) -> void:
 	_act("buy", [index])
 
 func _offer_input(event: InputEvent, index: int) -> void:
+	if _carry_input(event, _offers[index]): return
+	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT and not _offers[index].disabled and watched == me:
+		var shop := company().shop
+		if index < shop.size() and int(shop[index].family) >= 0:
+			_carry_hold({"kind": "offer", "index": index, "code": ELAutochessRules.form(int(shop[index].family), int(shop[index].get("rank", 0)))}, _offers[index], event)
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_RIGHT:
 		var own := company()
 		if index < own.shop.size() and int(own.shop[index].family) >= 0:
@@ -1647,8 +1697,12 @@ func _start_pressed() -> void:
 	game.start_fight()
 
 func _toggle_speed() -> void:
-	var index := SPEEDS.find(game.speed)
-	game.speed = SPEEDS[(index + 1) % SPEEDS.size()]
+	var next: float = SPEEDS[(SPEEDS.find(game.speed) + 1) % SPEEDS.size()]
+	if online != null:
+		# Shared by the table: the host sets it and tells every guest.
+		_act("speed", [next])
+		return
+	game.speed = next
 	_refresh()
 
 func _sell_selected() -> void:
@@ -1690,6 +1744,11 @@ func _reserve_pressed(slot: int) -> void:
 	_refresh()
 
 func _reserve_input(event: InputEvent, slot: int) -> void:
+	if _carry_input(event, _reserves[slot]): return
+	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT and watched == me:
+		var own := company().reserve_slots()
+		if slot < own.size() and not own[slot].is_empty():
+			_carry_hold({"kind": "reserve", "uid": int(own[slot].uid), "slot": slot, "code": String(own[slot].get("code", ""))}, _reserves[slot], event)
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_RIGHT:
 		var slots := viewed().reserve_slots()
 		if slot < slots.size() and not slots[slot].is_empty():
@@ -1714,6 +1773,18 @@ func _input(event: InputEvent) -> void:
 	# takes reaches _unhandled_input and marks the battlefield.
 	if event is InputEventMouseMotion: _on_board = false
 	if event is InputEventMouse: _touch_pointer = event.device == InputEvent.DEVICE_ID_EMULATION
+	if not _carry.is_empty(): _carry_track(event)
+	# A creature dragged off the board onto a reserve slot goes to that slot.
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and not event.pressed and _drag_from != Vector2.INF and _drag_from.distance_to(event.position) > 10.0:
+		var slot := _reserve_at(event.position)
+		if slot >= 0 and watched == me and game != null and game.stage == "prepare":
+			var hit := board.pick(camera, _drag_from)
+			_drag_from = Vector2.INF
+			if not hit.is_empty() and str(hit.key).begins_with("p"):
+				_act("bench", [int(hit.uid), slot])
+				_selected.clear()
+				_hide_rail()
+				_refresh()
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion:
@@ -1769,6 +1840,130 @@ func _unhandled_input(event: InputEvent) -> void:
 		if _orbit_moved:
 			_camera_yaw -= event.relative.x * 0.006
 			_camera_pitch = clampf(_camera_pitch + event.relative.y * 0.004, 0.25, 1.35)
+
+# --- Dragging from the interface (remake addition) --------------------------------
+# A reserve creature, an artifact or spell, or a shop offer can be dragged
+# where a click would take it: a reserve creature onto another reserve slot,
+# onto a creature on the board (they change places) or onto the ground (it is
+# deployed there); an artifact or spell onto a creature (it carries it); an
+# offer onto the reserves or the board (it is bought). It starts after
+# CARRY_SLOP pixels of travel with its picture under the pointer; a drop
+# anywhere else does nothing.
+
+const CARRY_SLOP := 6.0
+## {} or the held thing: kind ("reserve", "item", "offer"), its uid, slot or
+## index, code or item, from (viewport point), started.
+var _carry: Dictionary = {}
+## Set while the release that ended a drag goes on to the control it started
+## on, so that control does not take it as a click.
+var _carry_swallow := false
+var _carry_icon: Control
+
+func _carry_hold(what: Dictionary, control: Control, event: InputEvent) -> void:
+	_carry_end()
+	_carry = what
+	_carry.from = control.get_global_transform_with_canvas() * event.position
+	_carry.started = false
+
+## The release that ended a drag, as seen by the control it started on: taken
+## so that it does not click. True when the event is used up.
+func _carry_input(event: InputEvent, control: Control) -> bool:
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+		if event.pressed: _carry_swallow = false
+		elif _carry_swallow:
+			_carry_swallow = false
+			control.accept_event()
+			return true
+	return false
+
+func _carry_track(event: InputEvent) -> void:
+	if event is InputEventMouseMotion:
+		if not _carry.started:
+			if not event.button_mask & MOUSE_BUTTON_MASK_LEFT or Vector2(_carry.from).distance_to(event.position) <= CARRY_SLOP: return
+			_carry.started = true
+			_carry_picture()
+		if is_instance_valid(_carry_icon):
+			_carry_icon.position = hud.get_global_transform_with_canvas().affine_inverse() * event.position - _carry_icon.size * 0.5
+		return
+	if not event is InputEventMouseButton or event.button_index != MOUSE_BUTTON_LEFT or event.pressed: return
+	var held := _carry
+	_carry_end()
+	if not held.started: return
+	_carry_swallow = true
+	_carry_drop(held, event.position)
+
+func _carry_picture() -> void:
+	_carry_icon = Control.new()
+	_carry_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_carry_icon.modulate.a = 0.85
+	hud.add_child(_carry_icon)
+	if _carry.kind == "item":
+		_carry_icon.size = Vector2(48, 48)
+		var picture := TextureRect.new()
+		picture.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		picture.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		picture.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		picture.texture = ELAutochessArtifacts.icon(profile, String(_carry.item))
+		_carry_icon.add_child(picture)
+		picture.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	else:
+		_carry_icon.size = Vector2(80, 100)
+		var figure := ELAutochessFigure.new()
+		figure.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_carry_icon.add_child(figure)
+		figure.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		figure.show_code(profile, String(_carry.get("code", "")))
+
+func _carry_end() -> void:
+	_carry = {}
+	if is_instance_valid(_carry_icon):
+		for child: Node in _carry_icon.get_children():
+			if child is ELAutochessFigure: child.release()
+		_carry_icon.queue_free()
+	_carry_icon = null
+
+## The reserve slot under viewport point `at`, or -1.
+func _reserve_at(at: Vector2) -> int:
+	for slot in _reserves.size():
+		var reserve: Control = _reserves[slot]
+		if reserve.is_visible_in_tree() and (reserve.get_global_transform_with_canvas() * Rect2(Vector2.ZERO, reserve.size)).has_point(at): return slot
+	return -1
+
+## True when viewport point `at` is over one of the interface's panels.
+func _over_interface(at: Vector2) -> bool:
+	for control: Control in [_bench, _shop_panel, _rail, _items, _sell_target, _modal, _overview]:
+		if is_instance_valid(control) and control.is_visible_in_tree() and (control.get_global_transform_with_canvas() * Rect2(Vector2.ZERO, control.size)).has_point(at): return true
+	return false
+
+func _carry_drop(held: Dictionary, at: Vector2) -> void:
+	if game == null or watched != me: return
+	var slot := _reserve_at(at)
+	var hit := {}
+	var ground := Vector2.INF
+	if slot < 0 and not _over_interface(at):
+		hit = board.pick(camera, at)
+		if not hit.is_empty() and not str(hit.key).begins_with("p"): hit = {}
+		if hit.is_empty(): ground = board.ground_point(camera, at)
+	var slots := company().reserve_slots()
+	var resting: Dictionary = slots[slot] if slot >= 0 and slot < slots.size() else {}
+	match String(held.kind):
+		"reserve":
+			if slot >= 0 and slot != int(held.slot): _act("bench", [int(held.uid), slot])
+			elif not hit.is_empty() and int(hit.uid) != int(held.uid): _act("swap", [int(held.uid), int(hit.uid)])
+			elif ground != Vector2.INF: _act("deploy", [int(held.uid), ground.x, ground.y])
+			else: return
+		"item":
+			var carrier := int(resting.get("uid", -1)) if slot >= 0 else (int(hit.uid) if not hit.is_empty() else -1)
+			if carrier < 0: return
+			_act("equip", [int(held.uid), carrier])
+			_message.text = ""
+		"offer":
+			if slot < 0 and hit.is_empty() and ground == Vector2.INF: return
+			_buy(int(held.index))
+		_: return
+	_selected.clear()
+	_hide_rail()
+	_refresh()
 
 func _left_click(at: Vector2) -> void:
 	var hit := board.pick(camera, at)
@@ -1884,7 +2079,7 @@ func _draw_overlay() -> void:
 	var font := get_theme_default_font()
 	var s := ui_scale
 	if board.battle == null:
-		var prepared := _placed(board.preparation_rows(viewed().army), s)
+		var prepared := _placed(board.preparation_rows(viewed().army), s, FLAG_ROW)
 		for row: Dictionary in prepared:
 			# A creature being summoned is labelled once it has appeared.
 			if not row.model.visible: continue
@@ -1892,6 +2087,7 @@ func _draw_overlay() -> void:
 			var values := _stats(String(row.code), int(row.family), int(row.rank))
 			_draw_head(font, at, int(row.rank), H.line_accent(int(row.family)), "%d/%d" % [int(values.health), int(values.health)], 1.0, Color("5aa6c8"), s)
 			_draw_item(at, viewed().item_for(int(row.uid)), s)
+			_draw_flags(at, values, viewed().item_for(int(row.uid)), s)
 			var outline := board.screen_rect(camera, row.model)
 			if String(_selected.get("kind", "")) == "field" and int(_selected.uid) == int(row.uid): _draw_frame(outline, 0.0, H.GOLD, s)
 			if _pulses.has(int(row.uid)): _draw_pulse(outline, float(_pulses[int(row.uid)]), s)
@@ -1927,7 +2123,7 @@ func _draw_overlay() -> void:
 
 ## Rows with their head marks' screen points ("screen"), the nearer
 ## figures' first; a mark that would cover another is lifted above it.
-func _placed(rows: Array, s: float) -> Array:
+func _placed(rows: Array, s: float, below := 0.0) -> Array:
 	var result := []
 	for row: Dictionary in rows:
 		if camera.is_position_behind(row.at): continue
@@ -1935,7 +2131,7 @@ func _placed(rows: Array, s: float) -> Array:
 		result.append(row)
 	result.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return a.screen.y > b.screen.y)
 	var taken: Array[Rect2] = []
-	var size := Vector2(58, 42) * s
+	var size := Vector2(58, 42 + below) * s
 	var anchor := Vector2(29, 38) * s
 	# Beside the figure first, then above it: a mark stays close to its owner.
 	var moves := [Vector2.ZERO, Vector2(-0.55, 0), Vector2(0.55, 0), Vector2(0, -1), Vector2(-0.55, -1), Vector2(0.55, -1)]
@@ -1966,13 +2162,47 @@ func _draw_head(font: Font, at: Vector2, rank: int, star_color: Color, text: Str
 	var count := clampi(rank + 1, 1, 3)
 	H.draw_stars(overlay, at + Vector2(-count * 7.0 * s - 6 * s, -38 * s), count, star_color, s)
 
+## Height of the ability icon row under the bar while preparing.
+const FLAG_ROW := 17.0
+## Ability flags with the duel's state icon bit for each (ELCombatSymbols
+## ICON_CODES, as the duel's creature_icons orders them). Flags with no
+## no original icon are left out.
+const FLAG_ICONS := {"Fly": 3, "FS": 4, "Trample": 5, "Restless": 6, "Lifetap": 7, "Regeneration": 8, "Regen": 8,
+	"Disenchant": 10, "Destroy": 11, "UB": 13, "NSS": 14, "Berserk": 15, "TeamAttack": 16, "Elusive": 17, "Outerplanar": 18}
+
+## Under a preparing creature's bar: its abilities in the duel's original
+## state icons (Interface/CombatSymbols), so a lineup reads at a glance as in
+## the regular game. Hovering the creature shows what each one does.
+func _draw_flags(at: Vector2, values: Dictionary, item: String, s: float) -> void:
+	if _symbols == null: _symbols = profile.texture("Interface/combatsymbols")
+	if _symbols == null: return
+	var owned: Array = (values.flags as Array).duplicate()
+	if int(values.get("regen", 0)) > 0: owned.append("Regeneration")
+	var rule: Dictionary = ELAutochessArtifacts.RULES.get(item, {})
+	if rule.get("first_strike", false): owned.append("FS")
+	if rule.get("elusive", false): owned.append("UB")
+	var cells: Array[int] = []
+	for flag: String in FLAG_ICONS:
+		if owned.has(flag):
+			var code: int = ELCombatSymbols.ICON_CODES[int(FLAG_ICONS[flag])]
+			if not cells.has(code): cells.append(code)
+	if cells.is_empty(): return
+	var size := 15.0 * s
+	var step := size + 1.0 * s
+	var left := at.x - (cells.size() * step - 1.0 * s) * 0.5
+	var top := at.y + 6.0 * s
+	overlay.draw_rect(Rect2(left - 2 * s, top - 1 * s, cells.size() * step + 3 * s, size + 2 * s), Color(0.03, 0.04, 0.05, 0.55))
+	for i in cells.size():
+		var code := cells[i]
+		overlay.draw_texture_rect_region(_symbols, Rect2(left + i * step, top, size, size), Rect2((code % 16) * 16, (code / 16) * 16, 16, 16))
+
 ## The carried artifact or spell: its icon in a small ring right of the bar.
 ## `pop` (1 down to 0) flashes it as just used: the ring swells and glows
 ## and a larger copy of the icon rises from it and fades.
 func _draw_item(at: Vector2, kind: String, s: float, pop := 0.0) -> void:
 	if kind.is_empty(): return
-	var center := at + Vector2(23 * s + 13 * s, -2 * s)
-	var radius := 12.0 * s
+	var center := at + Vector2(44 * s, -2 * s)
+	var radius := 14.0 * s
 	var accent := H.cost_accent(ELAutochessArtifacts.tier(kind))
 	var icon := ELAutochessArtifacts.icon(profile, kind)
 	var swell := 1.0 + 0.35 * sin(clampf(pop, 0.0, 1.0) * PI) if pop > 0.0 else 1.0
@@ -1982,7 +2212,10 @@ func _draw_item(at: Vector2, kind: String, s: float, pop := 0.0) -> void:
 		overlay.draw_arc(center, radius * (1.1 + age * 1.8), 0, TAU, 32, Color(accent, pop), 2.5 * s, true)
 	var r := radius * swell
 	overlay.draw_circle(center, r + 1.5 * s, Color(0.03, 0.04, 0.05, 0.9))
-	if icon != null: overlay.draw_texture_rect(icon, Rect2(center - Vector2.ONE * r * 0.78, Vector2.ONE * r * 1.56), false)
+	# Resampled for the pixels it covers and cut to the ring (the painted
+	# square frame no longer shows inside it); the swell reuses the resting size.
+	var inner := radius - 1.0 * s
+	if icon != null: overlay.draw_texture_rect(ELAutochessArtifacts.sized_icon(profile, kind, ceili(inner * 2.0), true), Rect2(center - Vector2.ONE * inner * swell, Vector2.ONE * inner * 2.0 * swell), false)
 	overlay.draw_arc(center, r, 0, TAU, 24, accent.lightened(0.5 * pop), 2.0 * s, true)
 	if pop > 0.0 and icon != null:
 		var age := 1.0 - pop
@@ -1990,7 +2223,7 @@ func _draw_item(at: Vector2, kind: String, s: float, pop := 0.0) -> void:
 		var rise := at + Vector2(0, -58 * s - age * 34 * s)
 		var alpha := clampf(pop * 1.6, 0.0, 1.0)
 		overlay.draw_circle(rise, size * 0.62, Color(0.03, 0.04, 0.05, 0.75 * alpha))
-		overlay.draw_texture_rect(icon, Rect2(rise - Vector2.ONE * size * 0.5, Vector2.ONE * size), false, Color(1, 1, 1, alpha))
+		overlay.draw_texture_rect(ELAutochessArtifacts.sized_icon(profile, kind, ceili(size)), Rect2(rise - Vector2.ONE * size * 0.5, Vector2.ONE * size), false, Color(1, 1, 1, alpha))
 		overlay.draw_arc(rise, size * 0.62, 0, TAU, 32, Color(accent, alpha), 2.0 * s, true)
 
 ## Corner brackets around a figure's outline on screen, `grow` pixels out.
