@@ -40,7 +40,14 @@ The DLSS and FSR vendors set up when the game starts, so switching between NVIDI
 | Soft shadows | Softer shadow edges. Off at first. |
 | Terrain detail | Subtle texture and relief on map ground and fine grain on battle ground. Off at first. |
 | Enhanced water | Reflected scenery, animated ripples, and soft shoreline foam on the adventure map. Bog water has gentler ripples. In Etherlords II, rain adds rings to the water while Map weather is enabled. Off at first. |
+| Bloom | Fire, lightning, auras and other glowing effects shine with a soft halo. Only what is drawn brighter than white blooms, so daylit scenery and even snowfields are left as they were. Off at first; always on while path tracing. |
+| Soft particles | Smoke, fire and magic fade where they meet the ground, walls and figures instead of ending in a hard line. Off at first. |
+| Spell light | In battles, glowing effects light the figures and scenery around them, so a wall of fire or a brazier really casts light. Adventure maps have none: their ground and scenery are drawn unlit. On at first on computers, off in the browser and on phones. Path tracing traces this light itself. |
 | Map weather | Rain, snow and other weather on adventure maps. |
+
+The first start weighs this computer and switches on the Graphics settings it can hold at 60 frames a second, so a fast machine is set up without your looking for anything. A version that adds a setting of this kind weighs the computer once more, for that setting alone, and leaves everything you have chosen since as it is.
+
+If the game closes unexpectedly while a battle or a map is on screen, the settings it was drawing with out of Bloom, Soft particles and Spell light go off at the next start, and the report box names them. A session that ends in the menus says nothing about them and leaves them on.
 
 ### Path tracing
 
@@ -79,4 +86,4 @@ Choose a game and select a shortcut to change it. Press a key or key combination
 
 On the remake's pages, **Export log…** saves a log with system information for a [problem report](troubleshooting), and **Game files…** adds, switches or removes a game: see [Installing the game files](installing). In builds with DLSS and FSR an **About** page lists their credits.
 
-Choices this computer cannot use are greyed out, and the line under the setting says why. Leave the heavier settings (path tracing, soft shadows, terrain detail, 4× anti-aliasing) off on devices where they slow the game down.
+Choices this computer cannot use are greyed out, and the line under the setting says why. Leave the heavier settings (path tracing, soft shadows, terrain detail, spell light, 4× anti-aliasing) off on devices where they slow the game down.

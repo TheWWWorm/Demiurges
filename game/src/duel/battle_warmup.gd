@@ -439,8 +439,9 @@ func _ready_particles(cached: Dictionary, ambient: bool) -> void:
 			var texture := profile.texture(sheet)
 			tints = ELCombatEffects.known_tints(texture, grid)
 			if tints == null and texture != null:
-				# A sheet loaded before: its colours from a copy of its image.
-				var image := texture.get_image()
+				# A sheet loaded before: its colours from a copy of its image,
+				# which a worker thread then has to itself.
+				var image: Image = texture.get_image().duplicate()
 				_run(func(result: Dictionary): result.tints = ELCombatEffects.cell_tints(image, grid),
 					func(result: Dictionary): _bake_glows(cached, result.tints, ambient), "Battle sheet")
 				return

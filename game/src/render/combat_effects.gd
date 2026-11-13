@@ -63,9 +63,10 @@ static var _materials: Dictionary = {}
 ## shares: one compile each, instead of one per sprite sheet.
 static var _shaders: Dictionary = {}
 ## Brightness of glowing (additive) particles: above 1 they reach past white,
-## for bloom to pick up (path-traced lighting turns this on).
+## for bloom to pick up (ELEffectLook: the bloom preference and path-traced
+## lighting turn this on).
 static var glow_level := 1.0
-const ARENA_HDR_LIMIT := 1.12
+const ARENA_HDR_LIMIT := 1.4
 
 var profile: ELProfile
 var edition := ""
@@ -91,6 +92,7 @@ var lights_enabled := true:
 		if lights_enabled == value: return
 		lights_enabled = value
 		_sync_arena_secondary()
+var _glow_lights: ELGlowLights
 var _fader_shaders: Dictionary = {}
 var _fader_layer: CanvasLayer
 ## Figure (instance id) -> its running animation emitter.
@@ -363,6 +365,16 @@ func finish_transients() -> void:
 			if item.active: _hide(item, false)
 	_sync_arena_secondary()
 	_end_scene_light(lights_enabled)
+
+## Lamps for the glowing effects now showing (the "spell_light" preference,
+## ELGlowLights), made on first use; they fade out once it is off.
+func _step_glow_lights(delta: float) -> void:
+	var on := ELEffectLook.lights(sky) and is_visible_in_tree()
+	if _glow_lights == null:
+		if not on: return
+		_glow_lights = ELGlowLights.new()
+		add_child(_glow_lights)
+	if on or _glow_lights.lit() > 0: _glow_lights.show_sources(glow_sources() if on else [], delta)
 
 ## The arena's sun and ambient light that scene-light effects dim.
 func set_scene(light: DirectionalLight3D, environment: Environment) -> void:
@@ -681,6 +693,7 @@ func _process(delta: float) -> void:
 	for item in faders:
 		if item.active: _step_fader(item, delta)
 	if scene_light.active: _step_scene_light(delta)
+	_step_glow_lights(delta)
 	last_cost_usec = Time.get_ticks_usec() - clock
 	peak_cost_usec = maxi(peak_cost_usec, last_cost_usec)
 
@@ -1159,10 +1172,15 @@ static func _glow(cached: Dictionary, key: String, buffer: PackedFloat32Array, c
 	return result
 
 ## Glowing particle systems now showing, for traced lighting:
-## [world centre, extent, summed colour times opacity] per patch.
+## [world centre, extent, summed colour times opacity, steady] per patch.
+## `steady` marks the arena's own fires and glows: lamps that stand there
+## for the whole battle, not a spell passing by.
 func glow_sources() -> Array:
 	var result := []
-	for emitter: Dictionary in emitters + arena_emitters:
+	var spells := emitters.size()
+	var all := emitters + arena_emitters
+	for at in all.size():
+		var emitter: Dictionary = all[at]
 		if not emitter.active or not emitter.node.is_visible_in_tree(): continue
 		var glow: Array = emitter.glow
 		if glow.is_empty(): continue
@@ -1186,14 +1204,16 @@ func glow_sources() -> Array:
 		for patch: Array in glow:
 			var colour := _saturate(patch[2] * tint) * opacity
 			total += maxf(colour.x, maxf(colour.y, colour.z))
-			lit.append([placement * patch[0], patch[1] * size, colour])
+			lit.append([placement * patch[0], patch[1] * size, colour, at >= spells])
 		var share := minf(1.0, EMITTER_GLOW / maxf(total, 0.0001))
 		for light: Array in lit:
 			light[2] *= share
 			result.append(light)
 	# Transparent additive emitters stay outside the traced mesh pass. Use
 	# their bounds only when the active material actually emits light.
-	for item: Dictionary in objects + arena_objects:
+	var models := objects + arena_objects
+	for at in models.size():
+		var item: Dictionary = models[at]
 		if not item.active or not item.add: continue
 		var model: ELModel = item.node
 		if not model.is_visible_in_tree(): continue
@@ -1215,7 +1235,7 @@ func glow_sources() -> Array:
 			var peak := maxf(piece.x, maxf(piece.y, piece.z)) * pieces
 			if peak > EMITTER_GLOW: piece *= EMITTER_GLOW / peak
 			for i in pieces:
-				result.append([box.position + step * (i + 0.5) + Vector3(s.x if axis != 0 else 0.0, s.y if axis != 1 else 0.0, s.z if axis != 2 else 0.0) * 0.5, extent, piece])
+				result.append([box.position + step * (i + 0.5) + Vector3(s.x if axis != 0 else 0.0, s.y if axis != 1 else 0.0, s.z if axis != 2 else 0.0) * 0.5, extent, piece, at >= objects.size()])
 	return result
 
 static func _additive_model_glow(material: StandardMaterial3D) -> Vector3:
@@ -1241,8 +1261,10 @@ static func _additive_model_glow(material: StandardMaterial3D) -> Vector3:
 static var _flames: Dictionary = {}
 
 ## The colour a blended sprite sheet glows with, or zero when it does not
-## look like flame (dim, or grey like smoke and dust): its average colour
-## where it is opaque.
+## look like flame: its average colour where it is opaque. A flame is bright,
+## strongly coloured, and red, orange or yellow; smoke and dust are grey, and
+## the leaves falling through the forest arena are green, which lit the
+## ground under them and took the lamps a spell needed.
 static func _flame_colour(atlas: Texture2D) -> Vector3:
 	if atlas == null: return Vector3.ZERO
 	if _flames.has(atlas): return _flames[atlas]
@@ -1265,7 +1287,7 @@ static func _flame_colour(atlas: Texture2D) -> Vector3:
 			var average := sum / cover
 			var peak := maxf(average.x, maxf(average.y, average.z))
 			var low := minf(average.x, minf(average.y, average.z))
-			if peak > 0.45 and (peak - low) / peak > 0.4:
+			if peak > 0.45 and (peak - low) / peak > 0.4 and average.x >= peak * 0.9:
 				var linear := Color(average.x, average.y, average.z).srgb_to_linear()
 				result = Vector3(linear.r, linear.g, linear.b)
 	_flames[atlas] = result
@@ -1299,13 +1321,17 @@ static func _texture_glow(texture: Texture2D, weight_alpha := true) -> Vector4:
 	return sum
 
 ## Glow colours lean towards white where many bright sprites overlap; the
-## light they cast reads as the flame's colour, so its hue is deepened
-## (keeping its brightest channel).
+## light they cast reads as the glow's colour, so a pale hue is deepened,
+## keeping its brightest channel: squared where it has gone nearly white,
+## and left as it stands (a touch fuller) where it is already deep. A
+## flame's summed colour is a deep orange as it stands, and squaring that
+## lit everything around it pure red.
 static func _saturate(colour: Vector3) -> Vector3:
 	var peak := maxf(colour.x, maxf(colour.y, colour.z))
 	if peak <= 0.0: return colour
 	var hue := colour / peak
-	return Vector3(hue.x * hue.x, hue.y * hue.y, hue.z * hue.z) * peak
+	var power := 0.75 + 1.25 * minf(hue.x, minf(hue.y, hue.z))
+	return Vector3(pow(hue.x, power), pow(hue.y, power), pow(hue.z, power)) * peak
 
 static var _atlas_tints: Dictionary = {}
 
@@ -1315,7 +1341,10 @@ static func _atlas_cell_tints(atlas: Texture2D, grid: Vector2i) -> PackedVector3
 	if atlas == null: return PackedVector3Array()
 	var key := [atlas, grid]
 	if _atlas_tints.has(key): return _atlas_tints[key]
-	var tints := cell_tints(atlas.get_image(), grid)
+	# On a copy: cell_tints decompresses and converts what it is given, and
+	# an ImageTexture hands out its own image, whose sprites then lost their
+	# transparency and drew as white squares.
+	var tints := cell_tints(atlas.get_image().duplicate(), grid)
 	_atlas_tints[key] = tints
 	return tints
 
@@ -1561,23 +1590,26 @@ static func _material(data: ELProfile, file: ELParticleFile, ambient: bool) -> S
 
 static func _shader(additive: bool) -> Shader:
 	if not _shaders.has(additive):
-		var shader := Shader.new()
-		shader.code = ELParticleFile.sprite_shader(SHADER.replace("BLEND", "blend_add" if additive else "blend_mix"))
-		_shaders[additive] = shader
+		_shaders[additive] = ELParticleFile.make_sprite_shader(SHADER.replace("BLEND", "blend_add" if additive else "blend_mix").replace("SPRITE_ADD", "sprite_add" if additive else ""))
 	return _shaders[additive]
 
 ## Sets how bright glowing particles draw (see glow_level), running ones too.
 func set_glow(value: float) -> void:
-	glow_level = value
-	for key: String in _materials:
-		var material: ShaderMaterial = _materials[key]
-		if material != null and key.ends_with("|true"):
-			material.set_shader_parameter("glow", minf(value, ARENA_HDR_LIMIT) if key.ends_with("|arena|true") else value)
+	set_glow_level(value)
 	for emitter in emitters:
 		var own: ShaderMaterial = emitter.own
 		if own != null and not emitter.entry.is_empty() and emitter.entry.file.additive: own.set_shader_parameter("glow", value)
 	for item: Dictionary in arena_objects:
 		if item.active and item.ether_vent: _set_vent_glow(item)
+
+## The shared part of set_glow: the level and every sprite sheet's material.
+static func set_glow_level(value: float) -> void:
+	if glow_level == value: return
+	glow_level = value
+	for key: String in _materials:
+		var material: ShaderMaterial = _materials[key]
+		if material != null and key.ends_with("|true"):
+			material.set_shader_parameter("glow", minf(value, ARENA_HDR_LIMIT) if key.ends_with("|arena|true") else value)
 
 ## Only the hottest part of the flame crosses the bloom threshold.
 func _set_vent_glow(item: Dictionary) -> void:
@@ -1597,11 +1629,15 @@ uniform vec2 grid = vec2(1.0);
 uniform float opacity = 1.0;
 uniform float glow = 1.0;
 varying vec4 tint;
+varying float sprite_extent;
 SPRITE_SIZE_FUNCTION
+SOFT_FUNCTION
+ADD_FUNCTION
 void vertex() {
 	float stretch = max(length(MODEL_MATRIX[0].xyz), 0.0001);
 	float cell = floor(length(MODEL_MATRIX[1].xyz) / stretch - 0.5);
 	float size = sprite_half_extent(length(MODEL_MATRIX[2].xyz), PROJECTION_MATRIX);
+	sprite_extent = size;
 	MODELVIEW_MATRIX = VIEW_MATRIX * mat4(INV_VIEW_MATRIX[0], INV_VIEW_MATRIX[1], INV_VIEW_MATRIX[2], MODEL_MATRIX[3]);
 	MODELVIEW_MATRIX = MODELVIEW_MATRIX * mat4(vec4(size, 0.0, 0.0, 0.0), vec4(0.0, size, 0.0, 0.0), vec4(0.0, 0.0, size, 0.0), vec4(0.0, 0.0, 0.0, 1.0));
 	vec2 slot = vec2(mod(cell, grid.x), floor(cell / grid.x));
@@ -1612,7 +1648,7 @@ void vertex() {
 void fragment() {
 	vec4 texel = texture(atlas, UV);
 	ALBEDO = texel.rgb * tint.rgb * glow;
-	ALPHA = texel.a * tint.a * opacity;
+	ALPHA = SPRITE_ADD(texel.a * tint.a * opacity * sprite_soft(SCREEN_UV, VERTEX.z, INV_PROJECTION_MATRIX, sprite_extent));
 }
 """
 

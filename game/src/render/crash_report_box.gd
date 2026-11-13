@@ -35,6 +35,9 @@ static func open(parent: Node, previous: Dictionary) -> ELCrashReportBox:
 		if not ELCrashReport.renderer_fell_back.is_empty():
 			box.fallback_note()
 			ELCrashReport.renderer_fell_back = ""
+		if not ELCrashReport.effects_fell_back.is_empty():
+			box.effects_note(ELCrashReport.effects_fell_back)
+			ELCrashReport.effects_fell_back = PackedStringArray()
 	parent.add_child(box)
 	box.popup_centered(Vector2i(460, 320 if box.rows.has_node("RendererFallback") else 250))
 	return box
@@ -79,6 +82,19 @@ func fallback_note() -> void:
 	var note := Label.new()
 	note.name = "RendererFallback"
 	note.text = "It closed while starting with the Vulkan renderer, so the game now uses the Compatibility renderer. Forward+ (Vulkan) can be chosen again in Options › Graphics › Path tracing."
+	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	note.custom_minimum_size.x = 420
+	rows.add_child(note)
+	rows.move_child(note, 1)
+
+## After a session that ended while playing (ELCrashReport.effects_fallback):
+## the line that says the optional effect extras are off.
+func effects_note(reset: PackedStringArray) -> void:
+	var note := Label.new()
+	note.name = "EffectsFallback"
+	var names := ELEffectLook.names(reset)
+	note.text = "It closed while a battle or a map was on screen, so %s %s now off. %s can be turned on again in Options, Graphics." % [
+		names, "is" if reset.size() == 1 else "are", "It" if reset.size() == 1 else "They"]
 	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	note.custom_minimum_size.x = 420
 	rows.add_child(note)

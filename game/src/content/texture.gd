@@ -12,6 +12,31 @@ const AUTHORED_MASK_MIPS := &"authored_mask_mips"
 static var native := ClassDB.class_exists(&"ELNativeAssets")
 
 
+## A texture's image ready to read in `format`. An ImageTexture hands out
+## the very image it was made from, so decompressing or converting what
+## get_image() returns changes the texture everything else draws with: the
+## particle sheets lost their transparency that way and drew as white
+## squares. This copies first, and only when something has to change, so a
+## texture already in the wanted format is shared as before.
+static func readable(image: Image, format := Image.FORMAT_RGBA8) -> Image:
+	if image == null: return null
+	var copied := false
+	if image.is_compressed():
+		image = image.duplicate()
+		copied = true
+		if image.decompress() != OK: return null
+	if image.get_format() != format:
+		if not copied: image = image.duplicate()
+		image.convert(format)
+	return image
+
+## The same, in whatever format the image already has: for a reader that
+## only needs the pixels, and keeps them.
+static func uncompressed(image: Image) -> Image:
+	if image == null or not image.is_compressed(): return image
+	image = image.duplicate()
+	return null if image.decompress() != OK else image
+
 static func decode(data: PackedByteArray) -> Image:
 	if data.size() < DATA_OFFSET or data.decode_u32(0) != MAGIC:
 		return null

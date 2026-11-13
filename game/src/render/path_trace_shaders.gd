@@ -20,7 +20,7 @@ layout(set = 0, binding = 0, std430) readonly buffer Frame {
 	vec4 ambient;           // linear ambient; w = scenery light limit
 	uvec4 info;             // frame, width, height, flags
 	uvec4 counts;           // diffuse lights, longest history, secondary lights, diffuse rays
-	vec4 tuning;            // x = sky strength (1 the default; settings "sky_light")
+	vec4 tuning;            // x = sky strength (1 the default; settings "sky_light"); yzw = an arena's backdrop colour
 } frame;
 
 // Raster-equivalent sun term: Lambert without the 1/pi Godot removes from
@@ -219,6 +219,19 @@ vec3 sky(vec3 direction) {
 	if (direction.y <= 0.0) return frame.ambient.rgb * GROUND * SKY_SHARE;
 	float h = sqrt(direction.y);
 	return frame.ambient.rgb * SKY_SHARE * mix(HORIZON, ZENITH, h) * mix(vec3(1.0), SKY_TINT / dot(SKY_TINT, LUMINANCE), h);
+}
+
+// What a mirror sees past the scene. An arena stands inside a painted
+// backdrop ring (not traced): low, a reflection shows the backdrop's own
+// colour, and above the ring a sky of the backdrop's hue, so armour under a
+// sea of lava shines orange, not daylight white. Elsewhere, the sky.
+vec3 surroundings(vec3 direction) {
+	vec3 backdrop = frame.tuning.yzw;
+	float bright = dot(backdrop, LUMINANCE);
+	if (bright <= 1e-4 || direction.y <= 0.0) return sky(direction);
+	// A backdrop painted nearly black has no hue to speak of.
+	vec3 above = mix(sky(direction), backdrop / bright * dot(sky(direction), LUMINANCE), smoothstep(0.005, 0.03, bright));
+	return mix(backdrop, above, smoothstep(0.35, 0.7, direction.y));
 }
 
 // What the sky gives open, level ground: sky() over the cosine-weighted
@@ -511,7 +524,7 @@ vec3 metal_shine(vec3 origin, vec3 normal, vec3 geometric_normal, vec3 view_dire
 	if (n_dot_r <= 0.0 || dot(geometric_normal, r) <= 0.0) return shine;
 	float weight = min(smith_g1(n_dot_v, METAL_A2) * smith_g1(n_dot_r, METAL_A2) * max(dot(v, h), 1e-3) / (n_dot_v * max(dot(normal, h), 1e-3)), 2.0);
 	Payload seen = closest(origin, r, 60.0, RAY_SOLID | RAY_SOFT_EMITTER, state, false, gl_RayFlagsNoneEXT, false);
-	if (seen.found == 0u) return shine + sky(r) * weight;
+	if (seen.found == 0u) return shine + surroundings(r) * weight;
 	Slot look = slots[instance_slot(seen.instance)];
 	vec3 colour = look.tint.rgb * surface_albedo(look, seen.uv, 2.0).rgb * instance_tint(seen.instance);
 	if ((look.geometry.z & SLOT_FULLBRIGHT) != 0u) return shine + colour * weight;

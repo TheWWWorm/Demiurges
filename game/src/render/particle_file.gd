@@ -17,6 +17,11 @@ extends RefCounted
 ## Coordinates are relative to the effect origin, z up, two units per map cell.
 ## A non-zero loop end makes the effect cyclic: the emission repeats every
 ## (loop end) frames while earlier cycles play their tail to the last frame.
+## Most of the cyclic files end one frame past their loop. That frame closes
+## the loop rather than playing anything out: drawn beside the new cycle, as
+## a tail would be, it put 1.9 to 2.1 times the particles on screen for one
+## frame in all but five of the shipped files, which flashed the picture
+## every time round (closing_frame). A longer tail is a real one and plays.
 const MAGIC := 0x1468fcca
 const PACKED_MAGIC := 0x1478fcca
 const FPS := 30.0
@@ -42,10 +47,98 @@ const SPRITE_SIZE_FUNCTION := """float sprite_half_extent(float size, mat4 proje
 	return size * 0.5 * sqrt(1.0 + t * t);
 }"""
 
+## Optional soft particles (the "soft_particles" preference; a remake
+## addition, after Cursed Lands' particle shader): a sprite fades out where
+## it meets the ground, walls and figures behind it, instead of ending in a
+## hard line. The fade runs over SOFT_RANGE of view depth, or the sprite's own
+## half-size if that is smaller, so small sparks lying on the ground stay
+## visible. Shaders name SOFT_FUNCTION on its own line and multiply their
+## ALPHA by sprite_soft(SCREEN_UV, VERTEX.z, INV_PROJECTION_MATRIX, the
+## sprite's view-space half-extent). With the preference off the function is
+## a constant and the shader reads no scene depth (a depth read makes the
+## renderer copy its depth buffer).
+const SOFT_RANGE := 0.45
+const SOFT_FUNCTION := """uniform sampler2D sprite_scene_depth : hint_depth_texture, filter_nearest, repeat_disable;
+float sprite_soft(vec2 screen_uv, float view_z, mat4 inverse_projection, float extent) {
+	float depth = texture(sprite_scene_depth, screen_uv).r;
+#if CURRENT_RENDERER == RENDERER_COMPATIBILITY
+	depth = depth * 2.0 - 1.0;
+#endif
+	vec4 scene = inverse_projection * vec4(screen_uv * 2.0 - 1.0, depth, 1.0);
+	float gap = view_z - scene.z / scene.w;
+	float soft = clamp(gap / max(min(SOFT_RANGE, extent), 0.02), 0.0, 1.0);
+	return soft * soft * (3.0 - 2.0 * soft);
+}"""
+const HARD_FUNCTION := """float sprite_soft(vec2 screen_uv, float view_z, mat4 inverse_projection, float extent) {
+	return 1.0;
+}"""
+static var soft := false
+
+## Glowing (additive) sprites were authored for a picture that adds colours
+## as they are displayed. A scene that adds them as light instead (the
+## Forward+ renderer, path tracing, and the Compatibility renderer while it
+## blooms) shows the faint outer skirt of a sprite several times stronger, so
+## a flame's soft halo turns into a flat pale slab with the sprite's own edge
+## showing. There an additive sprite's opacity passes through a knee that
+## takes that skirt down (about four times at a tenth of opacity) and leaves
+## the flame itself nearly as it was (a twentieth off where it is opaque), so
+## fire keeps its body and loses only the glare around it. Shaders name
+## ADD_FUNCTION on its own line and pass an additive sprite's ALPHA through
+## sprite_add.
+const ADD_KNEE := 0.3
+const ADD_FUNCTION := """float sprite_add(float alpha) {
+	alpha = clamp(alpha, 0.0, 1.0);
+	return alpha * (alpha + ADD_KNEE) / (1.0 + ADD_KNEE);
+}"""
+const ADD_PLAIN_FUNCTION := """float sprite_add(float alpha) {
+	return alpha;
+}"""
+static var add_knee := 0.0
+## Shaders made by make_sprite_shader: [WeakRef, source], rebuilt by set_soft
+## and set_add_knee.
+static var _sprite_shaders: Array = []
+
 static func sprite_shader(code: String) -> String:
-	return code.replace("SPRITE_SIZE_FUNCTION", SPRITE_SIZE_FUNCTION)
+	var function := SOFT_FUNCTION.replace("SOFT_RANGE", str(SOFT_RANGE)) if soft else HARD_FUNCTION
+	var add := ADD_FUNCTION.replace("ADD_KNEE", str(add_knee)) if add_knee > 0.0 else ADD_PLAIN_FUNCTION
+	return code.replace("SPRITE_SIZE_FUNCTION", SPRITE_SIZE_FUNCTION).replace("SOFT_FUNCTION", function).replace("ADD_FUNCTION", add)
+
+## A sprite shader that follows the soft particles preference while it lives.
+static func make_sprite_shader(code: String) -> Shader:
+	var shader := Shader.new()
+	shader.code = sprite_shader(code)
+	_sprite_shaders.append([weakref(shader), code])
+	return shader
+
+## Switches soft particles for every sprite shader, running ones too.
+static func set_soft(on: bool) -> void:
+	if soft == on: return
+	soft = on
+	_rebuild()
+
+## Tells the sprite shaders whether the scene adds colours as light (see
+## ADD_KNEE), running ones too.
+static func set_linear_blend(on: bool) -> void:
+	set_add_knee(ADD_KNEE if on else 0.0)
+
+static func set_add_knee(value: float) -> void:
+	if add_knee == value: return
+	add_knee = value
+	_rebuild()
+
+static func _rebuild() -> void:
+	var live := []
+	for entry: Array in _sprite_shaders:
+		var shader := entry[0].get_ref() as Shader
+		if shader == null: continue
+		shader.code = sprite_shader(entry[1])
+		live.append(entry)
+	_sprite_shaders = live
 
 var frames := 0
+## Set while the file ends one frame past its loop, which makes that frame
+## the loop's closing frame rather than a tail (see visible_frames).
+var closing_frame := false
 ## First particle of each frame (frames + 1 entries).
 var starts := PackedInt32Array()
 var positions := PackedFloat32Array()
@@ -129,6 +222,7 @@ func _parse(bytes: PackedByteArray) -> void:
 	loop_start = bytes[at + 10] if packed else bytes.decode_u32(at + 10)
 	loop_end = bytes.decode_u32(at + (11 if packed else 14))
 	if loop_end >= frames or loop_start > loop_end: loop_end = 0
+	closing_frame = loop_end > 0 and frames - loop_end == 1
 
 func _bad() -> void:
 	error = "Truncated particle file"
@@ -146,9 +240,12 @@ func visible_frames(frame: int, loops := -1) -> PackedInt32Array:
 	var cycle := frame / period
 	var phase := frame % period
 	var newest := cycle if loops < 0 else mini(cycle, loops)
+	# The loop's closing frame is not drawn over the new cycle, which showed
+	# every particle twice for one frame.
+	var last := loop_end if closing_frame else frames
 	for back in range(0, cycle + 1):
 		var at := phase + back * period
-		if at >= frames: break
+		if at >= last: break
 		# Cycles past the loop count are not started again.
 		if cycle - back > newest: continue
 		result.append(at)

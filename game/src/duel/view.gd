@@ -289,8 +289,13 @@ func _ready() -> void:
 		report.options_summary = _options_summary
 		get_tree().root.add_child.call_deferred(report)
 	settings.load_file()
-	# After a start that ended unexpectedly on Vulkan, Compatibility again (said once).
-	if get_tree().current_scene == self and ELCrashReport.renderer_fallback(settings.values): settings.save_file()
+	if get_tree().current_scene == self:
+		# After a start that ended unexpectedly on Vulkan, Compatibility again
+		# (said once), and after one that ended in play, the effect extras off.
+		var stepped_back := ELCrashReport.renderer_fallback(settings.values)
+		stepped_back = ELCrashReport.effects_fallback(settings.values) or stepped_back
+		if stepped_back: settings.save_file()
+	ELEffectLook.use(settings.values)
 	# The chosen renderer needs the game started with it.
 	if _ensure_renderer(): return
 	ELSettings.apply_display(get_viewport(), settings.values)
@@ -386,7 +391,7 @@ func _offer_crash_report() -> void:
 ## The player's options in a report: the remake settings that change drawing.
 func _options_summary() -> String:
 	var parts := PackedStringArray()
-	for key: String in ["renderer", "path_tracing", "antialiasing", "upscaler", "fsr_version", "upscale_quality", "frame_generation", "ray_reconstruction", "sharpening", "terrain_detail", "enhanced_water", "shadows", "soft_shadows", "weather", "auto_camera", "helper_overlay"]:
+	for key: String in ["renderer", "path_tracing", "antialiasing", "upscaler", "fsr_version", "upscale_quality", "frame_generation", "ray_reconstruction", "sharpening", "terrain_detail", "enhanced_water", "bloom", "soft_particles", "spell_light", "shadows", "soft_shadows", "weather", "auto_camera", "helper_overlay"]:
 		if settings.values.has(key): parts.append("%s=%s" % [key, settings.values[key]])
 	return " ".join(parts)
 
@@ -575,6 +580,8 @@ func _start(edition: String, options: Dictionary = {}, restored: ELDuel = null, 
 	arena.light.shadow_blur = 2.0 if settings.values.soft_shadows else 1.0
 	arena.set_detail(bool(settings.values.terrain_detail))
 	arena.set_water(bool(settings.values.enhanced_water))
+	ELEffectLook.use(settings.values)
+	ELEffectLook.sync(arena.environment_settings)
 	blood = ELCombatBlood.new()
 	stage.add_child(blood)
 	blood.build(profile, arena, battle_seed, edition)
@@ -5621,6 +5628,19 @@ func _graphics_page(page: VBoxContainer) -> void:
 		if is_instance_valid(arena): arena.set_water(enabled)
 		if campaign_view != null: campaign_view.apply_settings())
 	_settings_row(scene, "Enhanced water", "Adds reflections, ripples, shoreline foam and rain rings to map water, and animated waves to the Ship arena.", enhanced_water)
+	# How effects look (ELEffectLook), in battles and on maps.
+	for row: Array in [
+			["bloom", "Bloom", "Bloom", "Fire, lightning, auras and other glowing effects shine with a soft glow."],
+			["soft_particles", "SoftParticles", "Soft particles", "Smoke, fire and magic fade softly where they meet the ground and figures instead of ending in a hard line."],
+			["spell_light", "SpellLight", "Spell light", "In battles, glowing effects light the figures and scenery near them. May reduce performance on slower devices."]]:
+		var key: String = row[0]
+		var toggle := CheckButton.new()
+		toggle.name = row[1]
+		toggle.button_pressed = bool(settings.values[key])
+		toggle.toggled.connect(func(enabled: bool):
+			settings.values[key] = enabled
+			_apply_settings())
+		_settings_row(scene, row[2], row[3], toggle)
 	var weather := CheckButton.new()
 	weather.name = "Weather"
 	weather.button_pressed = settings.values.weather
@@ -6379,6 +6399,8 @@ func _apply_settings() -> void:
 		arena.light.shadow_blur = 2.0 if settings.values.soft_shadows else 1.0
 		arena.set_detail(bool(settings.values.terrain_detail))
 		arena.set_water(bool(settings.values.enhanced_water))
+	ELEffectLook.use(settings.values)
+	if is_instance_valid(arena): ELEffectLook.sync(arena.environment_settings, effects)
 	if is_instance_valid(blood): blood.set_enabled(bool(settings.values.blood))
 	_layout_hud()
 	_preview_volumes(settings.values)
@@ -6731,10 +6753,8 @@ class LoadingPanel extends Control:
 			picture.fill(Color.BLACK)
 			for piece: Dictionary in pieces:
 				if int(piece.step) > stage: break
-				var source: Image = piece.texture.get_image()
+				var source := ELTexture.readable(piece.texture.get_image())
 				if source == null: continue
-				if source.is_compressed(): source.decompress()
-				source.convert(Image.FORMAT_RGBA8)
 				var part := source.get_region(Rect2i(piece.cut))
 				var bounds: Rect2 = piece.bounds
 				if Vector2i(bounds.size) != part.get_size() and bounds.size.x >= 1 and bounds.size.y >= 1: part.resize(int(bounds.size.x), int(bounds.size.y))

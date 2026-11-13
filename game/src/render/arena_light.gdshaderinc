@@ -18,8 +18,16 @@ vec3 arena_to_linear(vec3 c) {
 	return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), step(vec3(0.04045), c));
 }
 
-vec3 arena_sun(vec3 light_color, float attenuation, vec3 normal, vec3 light_dir, vec3 albedo) {
+// `directional`: only the sun has that pass; lamps (effect lights) are lit
+// in the base pass with the ambient light, in linear terms on every
+// renderer. The texture's own brightness limits the daylight, which the
+// painting already carries, but not a lamp: a fire or a spell is a light of
+// its own, and a dark arena has no daylight headroom to spare, so clamping
+// it there left the scenery as black as before. A lamp may add as much as
+// the texture holds on top of what it already has.
+vec3 arena_sun(vec3 light_color, float attenuation, vec3 normal, vec3 light_dir, vec3 albedo, bool directional) {
 	vec3 sun = light_color / PI * attenuation * max(dot(normal, light_dir), 0.0);
+	if (!directional) return min(sun, vec3(light_limit));
 	sun = min(sun, max(vec3(light_limit) - ambient_light, vec3(0.0)));
 	if (!encoded_sun_pass) return sun;
 	vec3 base = clamp(albedo * ambient_light, 0.0, 1.0);

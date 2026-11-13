@@ -9,8 +9,16 @@ extends Node
 ##    shadows and terrain detail, and the optional extras the GPU can keep
 ##    at 60 frames per second are switched on.
 ## The settings' "hardware_check" records the stage reached (0 none, 1
-## renderer chosen, 2 done), so a player's own later choices are never
+## renderer chosen, DONE finished), so a player's own later choices are never
 ## overridden.
+##
+## A device is weighed again when DONE rises: that is how a feature added
+## after a player installed the game reaches them without their having to
+## find it in the options, on the hardware that can afford it and nowhere
+## else. Adding one means listing its setting in REVISIT_KEYS and raising
+## DONE; a repeat check settles those keys alone and leaves everything the
+## player has since set (shadows, terrain detail, water) as it is. DONE is 3
+## for spell light, the first to go this way.
 
 signal finished(restart: bool)
 
@@ -20,6 +28,13 @@ const PROBE_SECONDS := 15.0
 ## size) under which the extras are switched on.
 const FULL_BUDGET_MS := 7.0
 const BASIC_BUDGET_MS := 11.0
+## The "hardware_check" value of a device that has had the current check.
+const DONE := 3
+## What a first check settles, and what a repeat one does (the features that
+## have appeared since; ELCrashReport.EFFECT_EXTRAS, which a crash in play
+## turns off again).
+const FIRST_KEYS := ["shadows", "soft_shadows", "terrain_detail", "enhanced_water"]
+const REVISIT_KEYS := ["bloom", "soft_particles", "spell_light"]
 
 var settings: ELSettings
 var profile: ELProfile
@@ -27,6 +42,9 @@ var _probe_file := ""
 var _probe_pid := -1
 var _probe_started := 0.0
 var _bench: SubViewport
+## Set while this device has had the check before and is only weighing the
+## effect extras again.
+var _revisit := false
 var _bench_frames := 0
 var _gpu_times: PackedFloat32Array = []
 var _frame_times: PackedFloat32Array = []
@@ -65,13 +83,14 @@ static func renderer_args(vulkan: bool, mobile := OS.has_feature("mobile")) -> P
 ## Whether the check still has work on this start.
 static func pending(preferences: ELSettings) -> bool:
 	# Forced from the command line (checks, or a player redoing it).
-	if OS.get_cmdline_user_args().has("--hardware-check"): return int(preferences.values.get("hardware_check", 0)) < 2 or not OS.get_cmdline_user_args().has("--renderer-restarted")
+	if OS.get_cmdline_user_args().has("--hardware-check"): return int(preferences.values.get("hardware_check", 0)) < DONE or not OS.get_cmdline_user_args().has("--renderer-restarted")
 	if OS.has_feature("web") or OS.has_feature("mobile") or OS.has_feature("editor"): return false
 	if OS.get_cmdline_args().has("--rendering-method") and not OS.get_cmdline_user_args().has("--renderer-restarted"): return false
-	return int(preferences.values.get("hardware_check", 0)) < 2
+	return int(preferences.values.get("hardware_check", 0)) < DONE
 
 ## Starts the stage this start needs; `finished` follows.
 func begin(args_for_restart: Callable) -> void:
+	_revisit = int(settings.values.get("hardware_check", 0)) >= 2
 	if int(settings.values.get("hardware_check", 0)) == 0:
 		if RenderingServer.get_current_rendering_method() == "forward_plus":
 			_renderer_chosen()
@@ -174,13 +193,23 @@ func _done(result: Dictionary) -> void:
 	# Without GPU timing (some drivers), the whole frame stands in for it;
 	# it includes the rest of the game, so the budget is looser.
 	var cost := gpu if gpu > 0.0 else maxf(0.0, float(result.get("frame", 0.0)) - 6.0)
-	if not result.is_empty() and cost > 0.0:
+	# A session that ended while playing has just turned the extras off
+	# (ELCrashReport.effects_fallback). Whatever this device benches at, they
+	# stay off: switching them on again would walk it back into the same end.
+	var crashed_in_play := not ELCrashReport.crashed_in_play().is_empty()
+	if not result.is_empty() and cost > 0.0 and not crashed_in_play:
 		if cost <= FULL_BUDGET_MS:
-			for key: String in ["shadows", "soft_shadows", "terrain_detail", "enhanced_water"]: settings.values[key] = true
-		elif cost <= BASIC_BUDGET_MS:
-			for key: String in ["shadows", "terrain_detail", "enhanced_water"]: settings.values[key] = true
+			for key: String in (REVISIT_KEYS if _revisit else FIRST_KEYS + REVISIT_KEYS): settings.values[key] = true
+		else:
+			# Spell light is on by default; a device that cannot afford the
+			# extras does without it.
+			settings.values.spell_light = false
+			if cost <= BASIC_BUDGET_MS and not _revisit:
+				for key: String in ["shadows", "terrain_detail", "enhanced_water"]: settings.values[key] = true
 		print("Hardware check: %.1f ms per frame (GPU %.1f ms); extras %s" % [float(result.frame), gpu,
-			"all on" if cost <= FULL_BUDGET_MS else ("partly on" if cost <= BASIC_BUDGET_MS else "unchanged")])
-	settings.values.hardware_check = 2
+			"all on" if cost <= FULL_BUDGET_MS else ("partly on, spell light off" if cost <= BASIC_BUDGET_MS else "off, spell light with them")])
+	elif crashed_in_play:
+		print("Hardware check: the previous session ended while playing, so the extras stay off")
+	settings.values.hardware_check = DONE
 	settings.save_file()
 	finished.emit(false)

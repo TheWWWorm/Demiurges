@@ -86,6 +86,8 @@ func _build_arena(scene_id: String) -> bool:
 	audio.process_mode = Node.PROCESS_MODE_DISABLED if _muted else Node.PROCESS_MODE_INHERIT
 	audio.paused = _muted
 	effects.set_arena(arena, audio.play)
+	ELEffectLook.use(settings)
+	ELEffectLook.sync(arena.environment_settings, effects)
 	if not is_instance_valid(fire): _build_fire()
 	_place_fire()
 	for side: int in heroes:

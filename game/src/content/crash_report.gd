@@ -256,13 +256,12 @@ const EARLY_CRASH_S := 60
 ## the choice back to Compatibility ("" = no fallback); the crash box says so.
 static var renderer_fell_back := ""
 
-## The rendering method ("forward_plus", "mobile") of the newest session that
-## ended unexpectedly while starting (still at its start, or in its first
-## minute) on a Vulkan renderer; "" when there is none. Unlike scan(), the
+## The newest session that ended unexpectedly in the foreground: {updated,
+## renderer, where, uptime}, or {} when there is none. Unlike scan(), the
 ## markers stay for the report.
-static func early_vulkan_crash(own_pid: int, folder := DIR) -> String:
+static func newest_ended(own_pid: int, folder := DIR) -> Dictionary:
 	var best := {}
-	if not DirAccess.dir_exists_absolute(folder): return ""
+	if not DirAccess.dir_exists_absolute(folder): return best
 	for file in DirAccess.get_files_at(folder):
 		if not (file.begins_with(MARK_PREFIX) and file.ends_with(".cfg")): continue
 		var config := ConfigFile.new()
@@ -271,10 +270,22 @@ static func early_vulkan_crash(own_pid: int, folder := DIR) -> String:
 		if pid == own_pid or alive(pid): continue
 		if String(config.get_value("session", "state", "")) != "foreground": continue
 		if handheld and String(config.get_value("session", "focus", "")) == "out": continue
+		var session := {"pid": pid, "started_unix": int(config.get_value("session", "started_unix", 0))}
+		# As scan() has it: an end the system asked for is not the game failing.
+		if int(_exit_of(session).get("exit_reason", -1)) in EXIT_BY_REQUEST: continue
 		var updated := String(config.get_value("session", "updated", ""))
 		if best.is_empty() or updated > String(best.updated):
 			best = {"updated": updated, "renderer": String(config.get_value("session", "renderer", "")),
-				"where": String(config.get_value("session", "where", "")), "uptime": int(config.get_value("session", "uptime_s", 0))}
+				"where": String(config.get_value("session", "where", "")), "uptime": int(config.get_value("session", "uptime_s", 0)),
+				"effects": String(config.get_value("session", "effects", "?"))}
+	return best
+
+## The rendering method ("forward_plus", "mobile") of the newest session that
+## ended unexpectedly while starting (still at its start, or in its first
+## minute) on a Vulkan renderer; "" when there is none. Unlike scan(), the
+## markers stay for the report.
+static func early_vulkan_crash(own_pid: int, folder := DIR) -> String:
+	var best := newest_ended(own_pid, folder)
 	if best.is_empty(): return ""
 	if not (best.where == "(start)" or int(best.uptime) < EARLY_CRASH_S): return ""
 	var method := String(best.renderer).get_slice(" / ", 0).strip_edges()
@@ -299,6 +310,73 @@ static func renderer_fallback(values: Dictionary, own_pid := OS.get_process_id()
 	renderer_fell_back = method
 	print("Previous start ended unexpectedly on %s: renderer back to Compatibility" % method)
 	return true
+
+## The optional extras ELEffectLook draws effects with, which ask more of a
+## device than the picture the originals had.
+const EFFECT_EXTRAS := ["bloom", "soft_particles", "spell_light"]
+## The extras effects_fallback() has just turned off, for the crash box to
+## name once; empty when none were.
+static var effects_fell_back := PackedStringArray()
+
+## The extras this session is drawing with, kept in its marker so that a
+## session which ends unexpectedly says what it was using: one that was not
+## using an extra cannot have been brought down by it. ELEffectLook calls
+## this whenever the preferences are applied.
+static func effects_in_use(keys: PackedStringArray) -> void:
+	if instance == null or not enabled: return
+	var text := ",".join(keys)
+	if String(instance.info.get("effects", "")) == text: return
+	instance.info.effects = text
+	instance._write()
+
+## At start: when the previous session ended unexpectedly while it was
+## drawing a battle or a map, the optional effect extras (ELEffectLook) go
+## off, so a device their lighting overwhelms keeps playing. A session that
+## ended in a menu says nothing about them and leaves them alone. The player
+## may turn them on again in Options, Graphics.
+## True when `values` changed (the caller saves them).
+static func effects_fallback(values: Dictionary, own_pid := OS.get_process_id(), folder := DIR) -> bool:
+	if not enabled: return false
+	var best := _ended_in_play(own_pid, folder)
+	if best.is_empty(): return false
+	var reset := PackedStringArray()
+	for key: String in suspect_effects(best):
+		if bool(values.get(key, false)):
+			values[key] = false
+			reset.append(key)
+	if reset.is_empty(): return false
+	effects_fell_back = reset
+	print("Previous session ended unexpectedly in %s with %s: turned off" % [best.where, ", ".join(reset)])
+	return true
+
+## The extras a session that ended unexpectedly could have been brought down
+## by: the ones it was drawing with. A marker from a version that did not
+## record them says "?", and then every extra is suspect.
+static func suspect_effects(session: Dictionary) -> PackedStringArray:
+	var listed := String(session.get("effects", "?"))
+	if listed == "?": return PackedStringArray(EFFECT_EXTRAS)
+	var was := listed.split(",", false)
+	var out := PackedStringArray()
+	for key: String in EFFECT_EXTRAS:
+		if key in was: out.append(key)
+	return out
+
+## The previous session when it ended unexpectedly while a battle or a map
+## was drawn, else {}.
+static func _ended_in_play(own_pid: int, folder: String) -> Dictionary:
+	var best := newest_ended(own_pid, folder)
+	if best.is_empty(): return {}
+	var where := String(best.get("where", ""))
+	return best if where.begins_with("battle") or where.begins_with("map") else {}
+
+## Whether the previous session ended unexpectedly while playing with an
+## extra in use, which stops ELHardwareCheck switching the extras on again in
+## the same start. It cannot go by effects_fell_back, which the crash box
+## clears as soon as it has said it.
+static func crashed_in_play(own_pid := OS.get_process_id(), folder := DIR) -> String:
+	var best := _ended_in_play(own_pid, folder)
+	if best.is_empty() or suspect_effects(best).is_empty(): return ""
+	return String(best.where)
 
 ## A process `pid` runs (Linux / Android: /proc). Elsewhere a second game
 ## window's marker counts as left.

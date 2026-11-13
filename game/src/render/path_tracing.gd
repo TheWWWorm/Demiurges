@@ -54,15 +54,13 @@ const GLOW_STRENGTH := 1.0
 ## to a very bright source (a hero's glowing weapon passes 8), which bleached
 ## the ground around it; capped, it still lights its surroundings.
 const GLOW_LIMIT := 2.5
-const GLOW_REACH := 4.0
-## Bloom while tracing: glowing particles draw this much brighter, and only
-## what passes white blooms, so daylit scenery stays as it was. Kept close
-## and soft: a hero's aura or a glowing weapon shines without washing out
-## the ground around it (bright snow passes white under traced light too).
-const EFFECT_HDR := 1.3
-const BLOOM_THRESHOLD := 1.25
-const BLOOM_INTENSITY := 0.3
-const BLOOM_LEVELS := [0.0, 0.7, 0.2, 0.0, 0.0, 0.0, 0.0]
+## How far an effect's light carries, before its own size: two units are a
+## metre, and a wall of fire lights the ground several metres around it, so
+## a figure beside one stands in its light and throws a shadow from it.
+const GLOW_REACH := 9.0
+## The arena's own fires and glows (steady sources) are its lamps, hung high
+## and far apart: their light carries across the ring.
+const ARENA_GLOW_REACH := 14.0
 ## Scene membership is re-read this often (seconds).
 const SCAN_INTERVAL := 0.5
 
@@ -374,6 +372,7 @@ func _snapshot(delta: float) -> void:
 		"ambient": Vector4(ambient.r, ambient.g, ambient.b, _arena.light_limit if _arena != null else 1000.0),
 		"lighting_view": lighting_view,
 		"sky_light": float(settings.values.get("sky_light", 1.0)) if settings != null else 1.0,
+		"backdrop": _arena.backdrop_colour if _arena != null else Color.BLACK,
 		"bounces": clampi(int(settings.values.get("light_bounces", 2)), 1, 4) if settings != null else 2,
 		"ray_reconstruction": _ray_reconstruction()})
 	ray_reconstruction_report = _effect.reconstruction_report()
@@ -566,12 +565,17 @@ func _effect_lights() -> PackedFloat32Array:
 	var found := []
 	var glows := _effects.glow_sources() if is_instance_valid(_effects) else []
 	if is_instance_valid(_adventure_effects): glows.append_array(_adventure_effects.glow_sources())
+	# One effect splits into patches; close ones are one source of light, as
+	# the raster lamps already see them. Fewer, stronger lights make the one
+	# shadow ray a pixel spends on them land on the light that matters.
+	glows = ELGlowLights.merged(glows)
 	for glow: Array in glows:
 		var colour: Vector3 = glow[2] * GLOW_STRENGTH
 		var peak := maxf(colour.x, maxf(colour.y, colour.z))
 		if peak > GLOW_LIMIT: colour *= GLOW_LIMIT / peak
 		var extent := clampf(glow[1], 0.1, 3.0)
-		found.append([glow[0], extent, colour, GLOW_REACH + extent * 3.0])
+		var steady: bool = glow.size() > 3 and glow[3]
+		found.append([glow[0], extent, colour, (ARENA_GLOW_REACH if steady else GLOW_REACH) + extent * 3.0])
 	var authored := []
 	if is_instance_valid(_effects):
 		for item: Dictionary in _effects.lights:
@@ -598,32 +602,15 @@ func _effect_lights() -> PackedFloat32Array:
 func _secondary_lights() -> PackedFloat32Array:
 	return _effects.secondary_light_sources() if is_instance_valid(_effects) else PackedFloat32Array()
 
-## Bloom on the scene's environment and HDR glowing particles while tracing;
-## the previous settings return when it stops.
+## Bloom on the scene's environment and HDR glowing particles while tracing
+## (ELEffectLook); the bloom preference decides again when it stops.
 func _bloom(on: bool) -> void:
-	if is_instance_valid(_effects): _effects.set_glow(EFFECT_HDR if on else 1.0)
-	if _env == null: return
-	var env := _env
-	if on:
-		if not env.has_meta("bloom_saved"):
-			var levels := PackedFloat32Array()
-			for level in BLOOM_LEVELS.size(): levels.append(env.get_glow_level(level))
-			env.set_meta("bloom_saved", [env.glow_enabled, env.glow_hdr_threshold, env.glow_intensity, env.glow_blend_mode, env.glow_bloom, levels])
-		env.glow_enabled = true
-		env.glow_hdr_threshold = BLOOM_THRESHOLD
-		env.glow_intensity = BLOOM_INTENSITY
-		env.glow_bloom = 0.0
-		env.glow_blend_mode = Environment.GLOW_BLEND_MODE_ADDITIVE
-		for level in BLOOM_LEVELS.size(): env.set_glow_level(level, BLOOM_LEVELS[level])
-	elif env.has_meta("bloom_saved"):
-		var saved: Array = env.get_meta("bloom_saved")
-		env.glow_enabled = saved[0]
-		env.glow_hdr_threshold = saved[1]
-		env.glow_intensity = saved[2]
-		env.glow_blend_mode = saved[3]
-		env.glow_bloom = saved[4]
-		for level in BLOOM_LEVELS.size(): env.set_glow_level(level, saved[5][level])
-		env.remove_meta("bloom_saved")
+	if _env == null:
+		if is_instance_valid(_effects): _effects.set_glow(ELEffectLook.EFFECT_HDR if on or ELEffectLook.bloom else 1.0)
+		return
+	if on: _env.set_meta(ELEffectLook.TRACED, true)
+	elif _env.has_meta(ELEffectLook.TRACED): _env.remove_meta(ELEffectLook.TRACED)
+	ELEffectLook.sync(_env, _effects)
 
 func _restore_effect_lights() -> void:
 	if not is_instance_valid(_effects): return
@@ -1255,7 +1242,8 @@ class Effect extends CompositorEffect:
 		for value in [_frame_number, size.x, size.y, flags, light_count, 12 if light_count > 0 else 48, secondary_count, frame.bounces]:
 			data.encode_u32(at, value)
 			at += 4
-		at = _put4(data, at, Vector4(frame.sky_light, 0.0, 0.0, 0.0))
+		var backdrop: Color = frame.backdrop
+		at = _put4(data, at, Vector4(frame.sky_light, backdrop.r, backdrop.g, backdrop.b))
 		_rd.buffer_update(_frame_buffer, 0, FRAME_BYTES, data)
 		_previous_view_projection = view_projection
 		_previous_camera = camera.origin

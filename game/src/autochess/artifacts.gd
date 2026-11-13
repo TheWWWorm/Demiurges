@@ -121,9 +121,8 @@ static func sized_icon(profile: ELProfile, kind: String, pixels: int, round := f
 		var whole := (source as AtlasTexture).atlas.get_image()
 		if whole != null: image = whole.get_region(Rect2i((source as AtlasTexture).region))
 	elif source != null: image = source.get_image()
+	image = ELTexture.readable(image)
 	if image == null: return source
-	if image.is_compressed(): image.decompress()
-	image.convert(Image.FORMAT_RGBA8)
 	if round:
 		# The frame's inner 80%, as the circles have always sampled it.
 		var side := image.get_width()

@@ -428,8 +428,8 @@ static func _panel_image(profile: ELProfile, panel: String) -> Image:
 		if row.get("Ctrl") != panel or str(row.Txt).begins_with("_MAIN_PANEL_"): continue
 		var texture := profile.texture(str(paths.get(row.Txt, "")))
 		if texture == null: continue
-		var sheet := texture.get_image()
-		sheet.convert(Image.FORMAT_RGBA8)
+		var sheet := ELTexture.readable(texture.get_image())
+		if sheet == null: continue
 		picture.blit_rect(sheet, Rect2i(row.TxtL, row.TxtT, row.TxtW, row.TxtH), Vector2i(row.ScrL, row.ScrT) - bounds.position)
 		pieces += 1
 	return picture if pieces > 0 else null
@@ -479,10 +479,10 @@ static func style_button(button: Button, profile: ELProfile, control: String) ->
 	if not glow.is_empty():
 		var texture := profile.texture(str(paths.get(glow.Txt, "")))
 		if texture != null:
+			# get_region already copies; the sheet is the texture's own image.
 			var blended := normal.texture.get_image().get_region(Rect2i(normal.region_rect))
-			var sheet := texture.get_image()
+			var sheet := ELTexture.readable(texture.get_image())
 			blended.convert(Image.FORMAT_RGBA8)
-			sheet.convert(Image.FORMAT_RGBA8)
 			blended.blend_rect(sheet, Rect2i(glow.TxtL, glow.TxtT, glow.TxtW, glow.TxtH), Vector2i(Vector2(glow.ScrL, glow.ScrT) - cut.position))
 			highlight = normal.duplicate()
 			highlight.texture = ImageTexture.create_from_image(blended)

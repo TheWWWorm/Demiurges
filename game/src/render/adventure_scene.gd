@@ -711,8 +711,7 @@ func _pick_opaque(material: BaseMaterial3D, point: Vector3, a: Vector3, b: Vecto
 	var texture := material.albedo_texture
 	if texture != null:
 		if not _pick_images.has(texture):
-			var image := texture.get_image()
-			if image != null and image.is_compressed(): image.decompress()
+			var image := ELTexture.uncompressed(texture.get_image())
 			_pick_images[texture] = image if image != null and image.detect_alpha() != Image.ALPHA_NONE else null
 		var image: Image = _pick_images[texture]
 		if image != null:
@@ -902,7 +901,7 @@ func set_blob_shadows(on: bool) -> void:
 	if sun != null:
 		sun.shadow_enabled = silhouettes
 		# Only the compatibility renderer's encoded sun pass needs the lower energy.
-		var encoded := silhouettes and RenderingServer.get_current_rendering_method() == "gl_compatibility"
+		var encoded := silhouettes and ELEffectLook.encoded_sun_pass(environment)
 		sun.light_energy = SHADOW_SUN_ENERGY if encoded else SUN_ENERGY
 	var material := map.profile.adventure_terrain_cache.get("material") as ShaderMaterial if map != null and map.profile.adventure_terrain_cache.get("map") == map.id else null
 	if material != null: material.set_shader_parameter("shadow_strength", SILHOUETTE_STRENGTH if silhouettes else 0.0)

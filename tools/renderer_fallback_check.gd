@@ -1,10 +1,13 @@
 extends SceneTree
-## Headless check of the start-up renderer fallback (ELCrashReport) and the
-## renderer command line (ELHardwareCheck.renderer_args): a session that
-## ended unexpectedly while starting on Vulkan moves the player's Vulkan
-## choice back to Compatibility once, says so in the crash box, and leaves
-## the markers for the report; other unexpected ends change nothing. Phones
-## and tablets start the Vulkan choice on the Mobile renderer.
+## Headless check of the start-up fallbacks (ELCrashReport) and the renderer
+## command line (ELHardwareCheck.renderer_args): a session that ended
+## unexpectedly while starting on Vulkan moves the player's Vulkan choice
+## back to Compatibility once, says so in the crash box, and leaves the
+## markers for the report; other unexpected ends change nothing. One that
+## ended while a battle or a map was drawn turns off the optional effect
+## extras it was drawing with, and only those, naming them for the box; one
+## that ended in a menu, or with those extras already off, leaves them alone.
+## Phones and tablets start the Vulkan choice on the Mobile renderer.
 ##
 ##   godot --headless --path game --script ../tools/renderer_fallback_check.gd
 ##
@@ -27,11 +30,11 @@ func _clear() -> void:
 	for file in DirAccess.get_files_at(FOLDER): DirAccess.remove_absolute(FOLDER.path_join(file))
 
 ## A marker as a killed session leaves it.
-func _marker(pid: int, renderer: String, where: String, uptime: int, state := "foreground", focus := "in") -> void:
+func _marker(pid: int, renderer: String, where: String, uptime: int, state := "foreground", focus := "in", effects := "?") -> void:
 	DirAccess.make_dir_recursive_absolute(FOLDER)
 	var config := ConfigFile.new()
 	for pair: Array in [["session", "%012x" % pid], ["pid", pid], ["renderer", renderer], ["where", where], ["uptime_s", uptime],
-			["state", state], ["focus", focus], ["updated", "2026-11-12T11:08:53"]]:
+			["state", state], ["focus", focus], ["updated", "2026-11-12T11:08:53"], ["effects", effects]]:
 		config.set_value("session", pair[0], pair[1])
 	config.save(FOLDER.path_join("%s%d.cfg" % [ELCrashReport.MARK_PREFIX, pid]))
 
@@ -97,6 +100,54 @@ func _run() -> void:
 	check(Array(ELHardwareCheck.renderer_args(true, false)) == ["--rendering-method", "forward_plus", "--rendering-driver", "vulkan"], "a computer starts the Vulkan choice on Forward+")
 	check(Array(ELHardwareCheck.renderer_args(true, true)) == ["--rendering-method", "mobile", "--rendering-driver", "vulkan"], "a phone starts the Vulkan choice on the Mobile renderer")
 	check(Array(ELHardwareCheck.renderer_args(false, true)) == ["--rendering-method", "gl_compatibility"], "Compatibility stays Compatibility")
+
+	# The effect extras after a session that ended while playing.
+	var extras := func() -> Dictionary: return {"bloom": true, "soft_particles": true, "spell_light": true}
+	_clear()
+	_marker(dead, "gl_compatibility / opengl3", "battle el2 duel", 240)
+	var look: Dictionary = extras.call()
+	check(ELCrashReport.effects_fallback(look, own, FOLDER), "an end during a battle turns the effect extras off")
+	check(look.bloom == false and look.soft_particles == false and look.spell_light == false, "a marker that does not say what it drew with suspects all three")
+	check(Array(ELCrashReport.effects_fell_back) == ["bloom", "soft_particles", "spell_light"], "the box is told which were turned off")
+	check(FileAccess.file_exists(FOLDER.path_join("%s%d.cfg" % [ELCrashReport.MARK_PREFIX, dead])), "the marker stays for the report after it")
+	check(not ELCrashReport.effects_fallback(look, own, FOLDER), "a second start does not step back again (already off)")
+	var effects_box := ELCrashReportBox.open(root, {"session": "c08f218300cf", "where": "battle el2 duel"})
+	check(effects_box.rows.has_node("EffectsFallback"), "the crash box carries the effects note")
+	check(ELCrashReport.effects_fell_back.is_empty(), "the effects note is shown once")
+	effects_box.free()
+	check(ELCrashReport.crashed_in_play(own, FOLDER) == "battle el2 duel", "the hardware check can still see it after the box cleared the note")
+	_clear()
+	_marker(dead, "gl_compatibility / opengl3", "map el2 e2mission11", 300)
+	look = extras.call()
+	check(ELCrashReport.effects_fallback(look, own, FOLDER) and look.spell_light == false, "an end on a map turns them off too")
+	ELCrashReport.effects_fell_back = PackedStringArray()
+	for place: String in ["menu", "(start)"]:
+		_clear()
+		_marker(dead, "gl_compatibility / opengl3", place, 30)
+		look = extras.call()
+		check(not ELCrashReport.effects_fallback(look, own, FOLDER) and look.spell_light == true, "an end in %s leaves the extras alone" % place)
+	_clear()
+	_marker(own, "gl_compatibility / opengl3", "battle el2 duel", 240)
+	look = extras.call()
+	check(not ELCrashReport.effects_fallback(look, own, FOLDER), "this session's own marker is not a crash")
+
+	# Only what that session was drawing with is suspected.
+	ELCrashReport.effects_fell_back = PackedStringArray()
+	_clear()
+	_marker(dead, "gl_compatibility / opengl3", "battle el2 duel", 240, "foreground", "in", "spell_light")
+	look = extras.call()
+	check(ELCrashReport.effects_fallback(look, own, FOLDER), "an end with one extra in use steps that one back")
+	check(look.spell_light == false and look.bloom == true and look.soft_particles == true, "the extras it was not drawing with are left on")
+	check(Array(ELCrashReport.effects_fell_back) == ["spell_light"], "the box names only the one turned off")
+	check(ELCrashReport.crashed_in_play(own, FOLDER) == "battle el2 duel", "the hardware check holds off while one was in use")
+	ELCrashReport.effects_fell_back = PackedStringArray()
+	_clear()
+	_marker(dead, "gl_compatibility / opengl3", "battle el2 duel", 240, "foreground", "in", "")
+	look = extras.call()
+	check(not ELCrashReport.effects_fallback(look, own, FOLDER) and look.spell_light == true, "an end with none of them in use blames none of them")
+	check(ELCrashReport.crashed_in_play(own, FOLDER) == "", "and the hardware check may switch them on")
+	_clear()
+	DirAccess.remove_absolute(FOLDER)
 
 	print("RENDERER FALLBACK: %d failure(s)" % failures.size())
 	quit(0 if failures.is_empty() else 1)

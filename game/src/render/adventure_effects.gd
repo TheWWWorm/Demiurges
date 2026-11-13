@@ -20,6 +20,12 @@ signal rain_changed(areas: PackedVector4Array)
 
 static var _files: Dictionary = {}
 static var _order: Array[String] = []
+## The two particle shaders (blended, additive) every sprite sheet shares.
+static var _shaders: Dictionary = {}
+## Brightness of glowing (additive) particles (see ELCombatEffects.glow_level)
+## and the additive materials that take it.
+static var glow_level := 1.0
+static var _glowing: Array = []
 ## Files decoded ahead of use (keep_file), never evicted.
 static var _kept: Dictionary = {}
 
@@ -258,15 +264,33 @@ func _material(file: ELParticleFile) -> ShaderMaterial:
 	if texture == null:
 		_materials[key] = null
 		return null
-	var shader := Shader.new()
-	shader.code = ELParticleFile.sprite_shader(SHADER.replace("BLEND", "blend_add" if file.additive else "blend_mix"))
 	var material := ShaderMaterial.new()
-	material.shader = shader
+	material.shader = _shader(file.additive)
 	material.set_shader_parameter("atlas", texture)
 	material.set_shader_parameter("grid", Vector2(file.columns, file.rows))
 	material.render_priority = 10
+	if file.additive:
+		material.set_shader_parameter("glow", glow_level)
+		_glowing.append(weakref(material))
 	_materials[key] = material
 	return material
+
+static func _shader(additive: bool) -> Shader:
+	if not _shaders.has(additive):
+		_shaders[additive] = ELParticleFile.make_sprite_shader(SHADER.replace("BLEND", "blend_add" if additive else "blend_mix").replace("SPRITE_ADD", "sprite_add" if additive else ""))
+	return _shaders[additive]
+
+## Sets how bright glowing particles draw, running ones too.
+static func set_glow_level(value: float) -> void:
+	if glow_level == value: return
+	glow_level = value
+	var live := []
+	for reference: WeakRef in _glowing:
+		var material := reference.get_ref() as ShaderMaterial
+		if material == null: continue
+		material.set_shader_parameter("glow", value)
+		live.append(reference)
+	_glowing = live
 
 ## Decodes a particle file ahead of its first use and keeps it out of the
 ## cache's eviction (a large effect such as the battle dome would otherwise
@@ -296,10 +320,15 @@ shader_type spatial;
 render_mode unshaded, cull_disabled, depth_draw_never, shadows_disabled, BLEND;
 uniform sampler2D atlas : source_color, filter_linear_mipmap;
 uniform vec2 grid = vec2(1.0);
+uniform float glow = 1.0;
 varying vec4 tint;
+varying float sprite_extent;
 SPRITE_SIZE_FUNCTION
+SOFT_FUNCTION
+ADD_FUNCTION
 void vertex() {
 	float size = sprite_half_extent(length(MODEL_MATRIX[0].xyz), PROJECTION_MATRIX);
+	sprite_extent = size;
 	float cell = floor(length(MODEL_MATRIX[1].xyz) - 0.5);
 	MODELVIEW_MATRIX = VIEW_MATRIX * mat4(INV_VIEW_MATRIX[0], INV_VIEW_MATRIX[1], INV_VIEW_MATRIX[2], MODEL_MATRIX[3]);
 	MODELVIEW_MATRIX = MODELVIEW_MATRIX * mat4(vec4(size, 0.0, 0.0, 0.0), vec4(0.0, size, 0.0, 0.0), vec4(0.0, 0.0, size, 0.0), vec4(0.0, 0.0, 0.0, 1.0));
@@ -312,7 +341,7 @@ void vertex() {
 }
 void fragment() {
 	vec4 texel = texture(atlas, UV);
-	ALBEDO = texel.rgb * tint.rgb;
-	ALPHA = texel.a * tint.a;
+	ALBEDO = texel.rgb * tint.rgb * glow;
+	ALPHA = SPRITE_ADD(texel.a * tint.a * sprite_soft(SCREEN_UV, VERTEX.z, INV_PROJECTION_MATRIX, sprite_extent));
 }
 """

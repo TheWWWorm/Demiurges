@@ -7,7 +7,9 @@ extends RefCounted
 ##
 ## Shared remake settings: "ambience" volume, "shadows", optional "soft_shadows",
 ## optional "terrain_detail" on maps and in battles, optional "enhanced_water"
-## on adventure maps, second-game
+## on adventure maps, optional "bloom" and "soft_particles" and "spell_light"
+## (ELEffectLook: how effects look in battles and on maps; spell light is on
+## by default and ELHardwareCheck turns it off on a slow device), second-game
 ## adventure "weather" particles, "helper_overlay" (remake-only English readouts,
 ## hints and shortcut buttons over the original screens; off by default),
 ## "antialiasing" (-1 automatic: 2x multisampling unless the renderer is a
@@ -55,7 +57,7 @@ extends RefCounted
 ## Version 6: the upscaler and its quality are separate choices again
 ## ("upscaler", "upscale_quality"); version 5 kept them in one "upscaling".
 const SETTINGS_VERSION := 6
-const SHARED := {"ambience": 0.55, "shadows": true, "soft_shadows": false, "weather": true, "helper_overlay": false, "antialiasing": -1, "sharpening": 0, "terrain_detail": false, "enhanced_water": false, "discord_activity": true, "renderer": 0, "path_tracing": false, "sky_light": 1.0, "light_bounces": 2, "show_fps": false, "hardware_check": 0, "free_movement": true, "smart_ai": true,
+const SHARED := {"ambience": 0.55, "shadows": true, "soft_shadows": false, "weather": true, "helper_overlay": false, "antialiasing": -1, "sharpening": 0, "terrain_detail": false, "enhanced_water": false, "bloom": false, "soft_particles": false, "spell_light": true, "discord_activity": true, "renderer": 0, "path_tracing": false, "sky_light": 1.0, "light_bounces": 2, "show_fps": false, "hardware_check": 0, "free_movement": true, "smart_ai": true,
 	"window_mode": 0, "window_width": 0, "window_height": 0, "frame_rate": 0,
 	"upscaler": 0, "upscale_quality": 1, "frame_generation": false, "ray_reconstruction": false, "battle_interface": 0}
 const EDITION := {"music": 0.55, "effects": 0.8, "movies": 2, "blood": true, "map_tooltips": true, "autosave": true,
@@ -121,6 +123,9 @@ var _editions := {}
 func _init() -> void:
 	values = SHARED.duplicate()
 	values.merge(EDITION, true)
+	# ELHardwareCheck never runs on the web or a handheld, so there is nothing
+	# there to weigh spell light against the device: it starts off instead.
+	if OS.has_feature("web") or OS.has_feature("mobile"): values.spell_light = false
 
 static func defaults(id: String) -> Dictionary:
 	var result := EDITION.duplicate()

@@ -33,6 +33,9 @@ var _lit_materials: Array[ShaderMaterial] = []
 var _ambient_seen := Color(-1, -1, -1)
 ## Upper bound of ambient plus sun on scenery (1 = the originals' full brightness).
 var light_limit := 1.0
+## The painted backdrop's average (linear) colour, its cloud and overlay
+## layers included: what a mirror in the ring sees of it (ELPathTracing).
+var backdrop_colour := Color.BLACK
 const LIT_SHADER := preload("res://src/render/arena_lit.gdshader")
 const LIT_BLEND_SHADER := preload("res://src/render/arena_lit_blend.gdshader")
 const SECONDARY_SHADER := preload("res://src/render/arena_secondary.gdshader")
@@ -236,7 +239,7 @@ func _sync_light() -> void:
 	if environment_settings == null: return
 	var ambient := environment_settings.ambient_light_color * environment_settings.ambient_light_energy
 	# Only the Compatibility renderer adds a shadowed sun in a display-encoded pass.
-	var encoded := light != null and light.visible and light.shadow_enabled 		and RenderingServer.get_current_rendering_method() == "gl_compatibility"
+	var encoded := light != null and light.visible and light.shadow_enabled and ELEffectLook.encoded_sun_pass(environment_settings)
 	ambient.a = light_limit + (1000.0 if encoded else 0.0)
 	if ambient == _ambient_seen: return
 	_ambient_seen = ambient
@@ -260,7 +263,9 @@ func set_detail(enabled: bool) -> void:
 		if texture == null: return
 		# These original maps are dark grain, not neutral-grey detail maps.
 		# Centre their signal so the option preserves the arena's brightness.
-		var average := texture.get_image()
+		# On a copy: resizing the texture's own image would leave the detail
+		# sheet one pixel wide for everything that reads it later.
+		var average: Image = texture.get_image().duplicate()
 		average.clear_mipmaps()
 		average.resize(1, 1, Image.INTERPOLATE_LANCZOS)
 		var neutral := average.get_pixel(0, 0)
@@ -426,6 +431,8 @@ func _build_background(profile: ELProfile) -> void:
 	backdrop.material_override.cull_mode = BaseMaterial3D.CULL_BACK
 	backdrop.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(backdrop)
+	var seen := ELCombatEffects._texture_glow(profile.texture("CombatScenes/" + definition.Background))
+	var average := Vector3(seen.x, seen.y, seen.z)
 	# Original backdrop draw order: atlas, two independently scrolling halves
 	# of BackGroundLayer (the cloud layer), then BackGroundOverlay, which uses
 	# the backdrop's atlas UVs. All use this same ring. From the ring's foot to
@@ -444,12 +451,19 @@ func _build_background(profile: ELProfile) -> void:
 				var layer_arrays := arrays.duplicate()
 				layer_arrays[Mesh.ARRAY_TEX_UV] = moving_uvs
 				var material := _background_layer(layer_arrays, clouds, layer + 1)
+				if layer == 0:
+					var over := ELCombatEffects._texture_glow(clouds)
+					average = Vector3(over.x, over.y, over.z) + average * (1.0 - over.w)
 				moving_layers.append(material)
 				layer_speeds.append(float(definition.get("RotSpeed%d" % (layer + 1), 0.0)) * 2.0 / PI)
 	var front_name := String(definition.get("BackGroundOverlay", ""))
 	if not front_name.is_empty():
 		var front := profile.texture("CombatScenes/" + front_name)
-		if front != null: _background_layer(arrays, front, 3)
+		if front != null:
+			_background_layer(arrays, front, 3)
+			var over := ELCombatEffects._texture_glow(front)
+			average = Vector3(over.x, over.y, over.z) + average * (1.0 - over.w)
+	backdrop_colour = Color(average.x, average.y, average.z)
 
 func _background_layer(arrays: Array, texture: Texture2D, order: int) -> StandardMaterial3D:
 	var mesh := ArrayMesh.new()
