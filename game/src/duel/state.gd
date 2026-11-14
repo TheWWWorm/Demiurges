@@ -13,6 +13,9 @@ var creatures: Dictionary = {}
 var attacks: Array[int] = []
 var blocks: Dictionary = {}
 var history: Array[Dictionary] = []
+## A lookahead copy: what happens is neither recorded nor announced, since
+## nothing watches it and the search plays many thousands of commands.
+var searching := false
 var phase := Phase.ATTACK
 var attacker := 0
 var round_number := 1
@@ -2005,7 +2008,9 @@ func _use_ability(id: int, ability: String, target := -1, enchantment_id := -1, 
 	if definition.get("resting", false) and not c.resting: return _fail("This creature is already awake.")
 	if definition.get("tapped", false) and (not c.resting or c.sick): return _fail("This creature must be resting to use its ability.")
 	if definition.get("phase") == "attack" and phase != Phase.ATTACK: return _fail("This ability can be used only while attacking.")
-	if id >= 2 and not ELCatalog.first_ability(profile, c.card).is_empty(): return _first_ability(id, definition, target, enchantment_id, amount)
+	# Only the creature's own ability: breaking enfeeblement or paralysis on a
+	# creature that has one is handled below like on any other.
+	if id >= 2 and ELCatalog.first_ability(profile, c.card).get("key", "") == ability: return _first_ability(id, definition, target, enchantment_id, amount)
 	if id < 2 and definition.has("enchantment"):
 		if available_mana(side) < int(definition.cost): return _fail("This ability costs %d ether." % definition.cost)
 		if definition.target == "any" and entity(target).is_empty(): return _fail("Select a creature or hero.")
@@ -3937,8 +3942,9 @@ func _drain_scripts() -> void:
 	_check_winner()
 
 func _emit(data: Dictionary) -> void:
-	history.append(data)
-	event.emit(data)
+	if not searching:
+		history.append(data)
+		event.emit(data)
 	if data.get("kind") == "discard" and profile.id == "el2" and _discard_cause in [0, 1] and _discard_cause != int(data.side) \
 			and (data.card in ELCatalog.DISCARD_SUMMONS or data.card in ELCatalog.DISCARD_RETORTS):
 		_discard_answer(int(data.side), String(data.card), _discard_cause)
@@ -3997,6 +4003,7 @@ func search_copy(expected_specs_on := false) -> ELDuel:
 	d.rng_state = rng_state
 	d.setup = setup
 	d.next_card = next_card
+	d.searching = true
 	d.expected_specs = expected_specs_on or self.expected_specs
 	d.spec_expect = spec_expect
 	if scripts != null: d.scripts = scripts.search_layer(d)

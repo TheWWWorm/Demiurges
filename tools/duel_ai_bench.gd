@@ -6,9 +6,11 @@ extends SceneTree
 ##   godot --headless --path game --script ../tools/duel_ai_bench.gd -- \
 ##       [--game=el1|el2] [--a=<settings>] [--b=<settings>] [--pairs=N] \
 ##       [--seed=N] [--shard=I/N] [--books=starter|preset] [--verbose]
+##       [--force=CARD,...] [--factions=Red,...]
 ##
 ## Settings: "orig" (the original opponent), "smart" (the remake option as
-## shipped), or "smart:name=value,..." overriding ELCombatSearch's `smart_*`
+## shipped), "search" (the remake option's own search, without the compiled
+## engine), or "smart:name=value,..." overriding ELCombatSearch's `smart_*`
 ## variables (the `smart_` prefix is left out), e.g. "smart:budget=6000,phases=1".
 ##
 ## Prints one GAME line per duel, then the wins of each side and its thinking
@@ -24,8 +26,9 @@ const LETTER := {"Red": "R", "Green": "G", "Black": "B", "Blue": "U"}
 ## Longest duel in rounds, and commands one side may send in one phase.
 const ROUND_CAP := 30
 const PHASE_CAP := 80
-## Longest duel in seconds; a longer one (two large armies facing each other
-## down) counts as a draw.
+## Longest duel in seconds (--seconds=N for a slower setting or a busy
+## machine); a longer one (two large armies facing each other down) counts
+## as a draw.
 const TIME_CAP := 150.0
 
 var profile: ELProfile
@@ -64,7 +67,7 @@ func _initialize() -> void:
 	var shard := _arg("shard", "0/1")
 	var books := _books(_arg("books", "preset"))
 	var tally := {"a": 0, "b": 0, "draw": 0}
-	var clock := {"a": [0, 0, 0, 0], "b": [0, 0, 0, 0]}
+	var clock := {"a": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], "b": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]}
 	var random := RandomNumberGenerator.new()
 	for pair in pairs:
 		# The same pairings for every shard; each shard plays its share.
@@ -75,6 +78,7 @@ func _initialize() -> void:
 		var second: Dictionary = matching[random.randi() % matching.size()]
 		var seed_value := int(random.randi() & 0x7fffffff)
 		if pair % int(shard.get_slice("/", 1)) != int(shard.get_slice("/", 0)): continue
+		if not _arg("only", "").is_empty() and pair != int(_arg("only", "")): continue
 		for swap in 2:
 			var sides := [a, b] if swap == 0 else [b, a]
 			var names := ["a", "b"] if swap == 0 else ["b", "a"]
@@ -86,10 +90,12 @@ func _initialize() -> void:
 	for name: String in ["a", "b"]:
 		var c: Array = clock[name]
 		print("THINK %s count=%d ms=%.1f positions=%.0f worst_ms=%d" % [name, c[0], float(c[1]) / 1000.0 / maxf(1.0, float(c[0])), float(c[2]) / maxf(1.0, float(c[0])), int(c[3]) / 1000])
+		if c[4] > 0: print("REACH %s engine=%d phases=%.2f cut=%d proven=%d commands_to_3=%d to_6=%d to_10=%d more=%d guarded=%d doomed=%d" % [name, c[4], float(c[5]) / float(c[4]), c[6], c[7], c[8], c[9], c[10], c[11], c[12], c[13]])
 	quit(0)
 
 func _settings(text: String) -> Dictionary:
 	var result := {"smart": text.get_slice(":", 0) != "orig", "set": {}}
+	if text.get_slice(":", 0) == "search": result.set["smart_engine"] = false
 	for item: String in (text.get_slice(":", 1) if text.contains(":") else "").split(",", false):
 		var name := "smart_" + item.get_slice("=", 0)
 		if not defaults.has(name):
@@ -111,6 +117,19 @@ func _books(kind: String) -> Array[Dictionary]:
 			if cards.is_empty(): continue
 			var probe := ELDuel.new()
 			var player := {"faction": faction, "deck": entry[0], "level": entry[1]}
+			# --force adds the cards to the books whose colour allows them;
+			# --factions keeps only those factions' books.
+			if not _arg("factions", "").is_empty() and faction not in _arg("factions", "").split(","): continue
+			var forced := player.duplicate()
+			var extended: Array = []
+			extended.append_array(cards)
+			extended.append_array(Array(_arg("force", "").split(",", false)))
+			forced.cards = extended
+			var trial := ELDuel.new()
+			if verbose: print("book %s: %d cards, %d with --force" % [entry[0], cards.size(), extended.size()])
+			if extended.size() > cards.size():
+				if trial.start(profile, 1, {"players": [forced, forced]}): player = forced
+				elif verbose: print("not forced in %s: %s" % [entry[0], trial.error])
 			if probe.start(profile, 1, {"players": [player, player]}): result.append(player)
 			elif verbose: print("skipped %s: %s" % [entry[0], probe.error])
 	return result
@@ -124,7 +143,7 @@ func _play(books: Array, sides: Array, names: Array, seed_value: int, clock: Dic
 	var mark := [-1, -1, -1]
 	if verbose: print(_legend(duel))
 	var began := Time.get_ticks_msec()
-	while duel.phase != ELDuel.Phase.FINISHED and duel.round_number <= ROUND_CAP and float(Time.get_ticks_msec() - began) < TIME_CAP * 1000.0:
+	while duel.phase != ELDuel.Phase.FINISHED and duel.round_number <= ROUND_CAP and float(Time.get_ticks_msec() - began) < float(_arg("seconds", str(TIME_CAP))) * 1000.0:
 		var side := duel.active_side()
 		var here := [duel.round_number, duel.attacker, duel.phase]
 		if here != mark:
@@ -147,6 +166,15 @@ func _play(books: Array, sides: Array, names: Array, seed_value: int, clock: Dic
 		c[1] += spent
 		c[2] += int(stats.get("positions", 0))
 		c[3] = maxi(c[3], spent)
+		if stats.has("far"):
+			c[4] += 1
+			c[5] += int(stats.far)
+			c[6] += 1 if stats.cut else 0
+			c[7] += 1 if int(stats.get("proven", 0)) > 0 else 0
+			if int(stats.get("guarded", 0)) == 15: c[13] += 1
+			elif int(stats.get("guarded", 0)) > 0: c[12] += 1
+			var deep := int(stats.get("depth", 0))
+			c[8 + (0 if deep <= 3 else 1 if deep <= 6 else 2 if deep <= 10 else 3)] += 1
 		if verbose:
 			print("    side%d %s: %s" % [side, names[side], _describe(duel, command)])
 			var tried: Array = stats.get("trace", [])

@@ -13,7 +13,9 @@ extends SceneTree
 ##   own Monsters `Icon` photo on the battle panel, and its battle tooltip is
 ##   the name, that photo and the Level and Health lines only;
 ## - the first game's pre-battle map panel uses the original text sizes
-##   (BattleNumText and the names 20 px cells, the stat lines 15 px cells).
+##   (BattleNumText and the names 20 px cells, the stat lines 15 px cells);
+## - a creature with an ability of its own breaks enfeeblement and both
+##   paralyses like any other: the price is paid and it rises.
 ##
 ##   godot --headless --path game --script ../tools/player_reports_check.gd
 ##
@@ -53,6 +55,7 @@ func _run() -> void:
 		if profile.mount(edition, str(paths[edition])): profiles[edition] = profile
 		else: print("SKIP: %s files could not be mounted" % edition)
 	for edition: String in profiles: _cost_lines(profiles[edition])
+	for edition: String in profiles: _status_breaks(profiles[edition])
 	if profiles.has("el2"):
 		_classic_order(profiles.el2)
 		_strict_second_game(profiles.el2)
@@ -84,6 +87,38 @@ func _cost_lines(profile: ELProfile) -> void:
 	if not card.is_empty():
 		var text := ELCombatTooltip.spell_text(profile, card, 3)
 		check(text.get_slice("\n", 1) == raised, "%s: the hand tooltip of %s at 3 ether reads \"%s\"" % [profile.id, card, text.get_slice("\n", 1)])
+
+# --- Breaking a status on a creature with its own ability -----------------------
+
+func _status_breaks(profile: ELProfile) -> void:
+	var card := ""
+	for code: String in profile.table("CombatCreatures"):
+		if not ELCatalog.first_ability(profile, code).is_empty() and not ELCatalog.rule(profile, code).is_empty():
+			card = code
+			break
+	var duel := ELDuel.new()
+	if card.is_empty() or not duel.start(profile, 7, {}):
+		check(false, "%s: a duel with a creature that has an ability starts" % profile.id)
+		return
+	var side := duel.active_side()
+	for status: Array in [["ENFL", "wake", 0], ["IMMB", "awaken", 1], ["WNPZ", "unparalyze", 1]]:
+		var known := duel.creatures.keys()
+		duel._summon(side, card)
+		var id := -1
+		for key: int in duel.creatures:
+			if not known.has(key): id = key
+		duel.creatures[id].sick = false
+		duel.heroes[side].mana = 10
+		duel._enchant(status[0], 1 - side, id, ELCatalog.rule(profile, status[0]))
+		var price := 0
+		for ability: Dictionary in duel.abilities(id):
+			if ability.key == status[1]: price = int(ability.cost)
+		var health := int(duel.heroes[side].health)
+		var held: bool = duel.creatures[id].resting and duel.can_use_ability(id, status[1])
+		var used := duel.use_ability(id, status[1])
+		var paid := 10 - int(duel.heroes[side].mana) == price and health - int(duel.heroes[side].health) == price * int(status[2])
+		check(held and used and paid and price > 0 and not duel.creatures[id].resting and not duel.enfeebled(id),
+			"%s: %s under %s pays %d and rises with \"%s\"" % [profile.id, card, status[0], price, status[1]])
 
 # --- Second game: available spells order ----------------------------------------
 

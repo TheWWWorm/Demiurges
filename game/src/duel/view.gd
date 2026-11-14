@@ -237,6 +237,11 @@ var match_result_shown := false
 var _match_starting := false
 ## Second-game combat tutorial (ELCombatTutorial) while its battle is shown.
 var combat_tutorial: ELCombatTutorial
+## Battle puzzles (remake): the list, the strip over a puzzle's battle and
+## its result (ELPuzzleMode); "--puzzle=N" opens puzzle N ("Nh" with its
+## hint, "Nr" with the result of an attempt out of turns), "--puzzle=list" the list.
+var puzzle_mode: ELPuzzleMode
+var _debug_puzzle := ""
 var tutorial_panel: ELCombatTutorialPanel
 var tutorial_quit: ConfirmationDialog
 ## First game: the contextual tutorial panel over battles.
@@ -341,6 +346,8 @@ func _ready() -> void:
 			_debug_options = arg.trim_prefix("--open-options=")
 		elif arg.begins_with("--campaign-probe="):
 			_campaign_probe = arg.trim_prefix("--campaign-probe=")
+		elif arg.begins_with("--puzzle="):
+			_debug_puzzle = arg.trim_prefix("--puzzle=")
 		elif arg == "--demo":
 			demo = true
 	_load_profiles()
@@ -352,6 +359,7 @@ func _ready() -> void:
 		return
 	_start(launch_profile if profiles.has(launch_profile) else String(profiles.keys()[0]))
 	if not _debug_options.is_empty(): _open_debug_options.call_deferred()
+	if not _debug_puzzle.is_empty(): _open_debug_puzzle.call_deferred()
 	if not _campaign_probe.is_empty():
 		var probe := ELCampaignProbe.new()
 		probe.view = self
@@ -536,6 +544,7 @@ func _start(edition: String, options: Dictionary = {}, restored: ELDuel = null, 
 		duel_match = null
 		_drop_duel_report()
 	if combat_tutorial != null and (restored == null or restored != combat_tutorial.duel): _close_combat_tutorial()
+	if puzzle_mode != null and (restored == null or restored != puzzle_mode.duel()): puzzle_mode.close()
 	if replay_player != null and (restored == null or restored != replay_player.duel): _close_replay()
 	if esc_menu != null: esc_menu.hide()
 	var next_duel := restored if restored != null else ELDuel.new()
@@ -794,6 +803,7 @@ func _process(delta: float) -> void:
 				_tutorial_end_clock = 0.0
 				_leave_combat_tutorial()
 		else: _tutorial_end_clock = 0.0
+		if _in_puzzle(): puzzle_mode.step(delta, ending_over() and not _presentation_held() and not _cast_busy())
 		if replay_player != null:
 			# A duel replay plays its recorded actions at the battle's pace.
 			if replay_player.playing and duel == replay_player.duel and not _overlay_open() and not _melee_busy() and ai_clock >= 0.85:
@@ -817,7 +827,8 @@ func _process(delta: float) -> void:
 			# the coming turns (ELCombatSearch, ELCombatBrain).
 			# (Built as a typed array: an untyped literal cannot be assigned to it.)
 			var smart: Array[int] = []
-			if not demo and not _human_side() and bool(settings.values.get("smart_ai", true)): smart.append(duel.active_side())
+			# A puzzle is always defended by the smarter player.
+			if not demo and not _human_side() and (bool(settings.values.get("smart_ai", true)) or _in_puzzle()): smart.append(duel.active_side())
 			duel.smart_sides = smart
 			ELPracticeAI.step(duel, auto and not bool(settings.values.get("use_spells", true)))
 		_step_auto_camera(delta)
@@ -915,7 +926,7 @@ func _input(event: InputEvent) -> void:
 			if not event.pressed or (event.echo and action != "skip"): return
 			match action:
 				"end_phase":
-					if _human_turn() or ((_campaign_battle() != null or duel_match != null or combat_tutorial != null or network_duel != null or _expedition_battle != null) and duel.phase == ELDuel.Phase.FINISHED): _end_phase()
+					if _human_turn() or ((_campaign_battle() != null or duel_match != null or combat_tutorial != null or network_duel != null or _expedition_battle != null or _in_puzzle()) and duel.phase == ELDuel.Phase.FINISHED): _end_phase()
 				"attack_all": _attack_all()
 				"auto_combat": _toggle_auto()
 				"skip": _skip_battle_presentation()
@@ -1608,7 +1619,7 @@ func _toggle_auto() -> void:
 	if network_duel != null or strategic_session != null: return
 	if auto_combat:
 		_set_auto(false)
-	elif _human_turn() and combat_tutorial == null and not _hot_seat():
+	elif _human_turn() and combat_tutorial == null and not _hot_seat() and not _in_puzzle():
 		selection = -1
 		selection_power = 0
 		exchange_target = -1
@@ -1636,6 +1647,9 @@ func _end_phase() -> void:
 		return
 	if combat_tutorial != null and duel.phase == ELDuel.Phase.FINISHED:
 		_leave_combat_tutorial()
+		return
+	if _in_puzzle() and duel.phase == ELDuel.Phase.FINISHED:
+		puzzle_mode.show_result()
 		return
 	selection = -1
 	selection_power = 0
@@ -4550,7 +4564,7 @@ func _refresh() -> void:
 		auto_combat = false
 		auto_off_button.visible = false
 	# Hot seat has no auto combat (unavailable in HotSeat in the original).
-	auto_button.disabled = network_duel != null or strategic_session != null or (not auto_combat and (not _human_turn() or combat_tutorial != null or _hot_seat()))
+	auto_button.disabled = network_duel != null or strategic_session != null or (not auto_combat and (not _human_turn() or combat_tutorial != null or _hot_seat() or _in_puzzle()))
 	for id: int in models:
 		# Fighters the combat playback is still moving or holding at their
 		# fight point keep their clip until they are home.
@@ -5227,6 +5241,7 @@ func _overlay_open() -> bool:
 	if game_console != null and game_console.visible: return true
 	if _network_battle_chat != null and _network_battle_chat.visible: return true
 	if ELWikiScreen.is_open(): return true
+	if puzzle_mode != null and puzzle_mode.blocking(): return true
 	if _expedition_screen != null and _expedition_screen.visible: return true
 	return (first_tutorial != null and first_tutorial.visible) or (options_host != null and options_host.is_visible_in_tree()) or movie_player != null or (front_menu != null and front_menu.is_visible_in_tree()) or (setup_panel != null and setup_panel.visible) or (menu != null and menu.visible) or (settings_dialog != null and settings_dialog.visible) or (campaign_setup != null and campaign_setup.visible) or (power_dialog != null and power_dialog.visible) or (tutorial_quit != null and tutorial_quit.visible) or (esc_menu != null and esc_menu.visible) or (replay_quit != null and replay_quit.visible) or replay_inventory != null
 
@@ -6988,6 +7003,9 @@ func _save_duel() -> void:
 	if combat_tutorial != null:
 		_notice("The combat tutorial cannot be saved.")
 		return
+	if _in_puzzle():
+		_notice("A puzzle cannot be saved.")
+		return
 	var session := {"mode": mode_select.selected, "camera": [camera_yaw, camera_pitch, camera_distance]}
 	if duel_match != null: session.duel_match = duel_match.snapshot()
 	_notice("Duel saved. Press F9 to resume." if duel.save_file("user://duel-save.json", session) else duel.error)
@@ -7567,6 +7585,7 @@ func _show_front_menu() -> bool:
 		front_menu.duel_match_requested.connect(_begin_duel_match)
 		front_menu.expedition_requested.connect(_open_expedition)
 		front_menu.autochess_requested.connect(_open_autochess)
+		front_menu.puzzles_requested.connect(_open_puzzles)
 		front_menu.network_requested.connect(_open_network_lobby)
 		front_menu.strategy_requested.connect(func(lan: bool): _open_strategic_lobby("", "", {}, lan))
 		front_menu.combat_tutorial_requested.connect(_begin_combat_tutorial)
@@ -8312,6 +8331,68 @@ func _surrender_round() -> void:
 	duel._check_winner()
 	_refresh()
 
+# --- Battle puzzles (remake) ----------------------------------------------------
+
+func _in_puzzle() -> bool:
+	return puzzle_mode != null and puzzle_mode.active()
+
+func _puzzle_mode_ready() -> void:
+	if puzzle_mode != null: return
+	puzzle_mode = ELPuzzleMode.new()
+	add_child(puzzle_mode)
+	puzzle_mode.play_requested.connect(_begin_puzzle)
+	puzzle_mode.left.connect(_leave_puzzles)
+
+## Main menu -> Puzzles: the list of the shown game's puzzles, over the menu.
+func _open_puzzles() -> void:
+	var edition := front_menu.edition if front_menu != null else (profile.id if profile != null else "")
+	if not profiles.has(edition): return
+	_puzzle_mode_ready()
+	puzzle_mode.open_list(profiles[edition])
+
+## A puzzle's position as a battle of its own: the player has the first
+## hero, the computer defends, and ELPuzzleMode follows the turns.
+func _begin_puzzle(index: int) -> void:
+	if puzzle_mode == null or puzzle_mode.profile == null: return
+	if _campaign_battle() != null:
+		_notice("Finish or surrender the campaign battle first.")
+		return
+	var source := puzzle_mode.profile
+	var attempt := ELPuzzles.Run.new()
+	if not attempt.begin(source, index):
+		_notice(attempt.error)
+		return
+	_hide_front_menu()
+	demo = false
+	mode_select.select(0)
+	# The mode holds the attempt already, so the battle start keeps it.
+	puzzle_mode.run = attempt
+	_start(source.id, {}, attempt.duel)
+	if duel != attempt.duel:
+		puzzle_mode.close()
+		return
+	puzzle_mode.begin(source, attempt)
+	_refresh()
+
+## Leave on the strip, or Back on the list opened from the main menu.
+func _leave_puzzles() -> void:
+	if front_menu != null and front_menu.is_visible_in_tree(): return
+	if not _show_front_menu(): _open_setup()
+
+## See `_debug_puzzle`.
+func _open_debug_puzzle() -> void:
+	await get_tree().create_timer(0.5).timeout
+	if profile == null: return
+	_puzzle_mode_ready()
+	puzzle_mode.profile = profile
+	if _debug_puzzle == "list": puzzle_mode.open_list(profile)
+	else:
+		_begin_puzzle(int(_debug_puzzle) - 1)
+		if _debug_puzzle.ends_with("r") and _in_puzzle():
+			puzzle_mode.run.outcome = "failed"
+			puzzle_mode.run.reason = "turns"
+		elif _debug_puzzle.ends_with("h") and _in_puzzle(): puzzle_mode.show_hint()
+
 # --- Second-game combat tutorial ------------------------------------------------
 
 ## Tutorial screen -> Combat: the recorded battle in tutorial mode.
@@ -8622,6 +8703,7 @@ func _esc_exit_to_menu() -> void:
 		return
 	_close_combat_tutorial()
 	_close_replay()
+	if puzzle_mode != null: puzzle_mode.close()
 	duel_match = null
 	# Which original quit paths write the result block is unconfirmed: the report stops.
 	_drop_duel_report()

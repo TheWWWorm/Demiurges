@@ -13,6 +13,8 @@ extends SceneTree
 ##     attack   it sends at least one creature to attack this turn
 ##     spare    it does not cast the named card this phase
 ##     keep     it does not lose a creature in a fight that hurts nobody
+##     use      it uses the named ability this phase
+##     cast     it casts the named card this phase
 ##   Both sides are played by the option as shipped, with no thinking between
 ##   the commands of a chosen plan, as in the game.
 ##
@@ -29,8 +31,14 @@ const RESTING := 8192
 const SICK := 16384
 const ATTACKING := 65536
 const NO_UNTAP := 256
-const HEADER := 15
-const FIXED := HEADER + 2 * (16 + 32 + 48)
+## The state the library reads (see ELCombatBrain, which packs a real duel).
+const HEADER := ELCombatBrain.HEADER
+const HERO := ELCombatBrain.HERO_FIELDS
+const TYPICAL := ELCombatBrain.COSTS * ELCombatBrain.TYPICAL_FIELDS
+const CARD := ELCombatBrain.CARD_FIELDS
+const HAND := ELCombatBrain.HAND * CARD
+const UNIT := ELCombatBrain.UNIT_FIELDS
+const FIXED := ELCombatBrain.FIXED
 
 var failures: Array[String] = []
 var profiles := {}
@@ -46,6 +54,9 @@ func _arg(name: String, fallback: String) -> String:
 
 func _initialize() -> void:
 	var only := _arg("only", "")
+	# --engine=true puts the positions to the compiled engine instead of the
+	# search, to see which kinds of position it gets wrong.
+	ELCombatSearch.smart_engine = _arg("engine", "false") == "true"
 	if only.is_empty() or "lookahead".contains(only): _lookahead()
 	_positions(only)
 	print("%d failures" % failures.size())
@@ -58,8 +69,8 @@ func _initialize() -> void:
 ## hand: the computer's creature cards as [cost, power, toughness].
 func _ask(ai: int, attacker: int, phase: int, turns: int, heroes: Array, units: Array, cards := false, hand: Array = []) -> Dictionary:
 	var state := PackedInt32Array()
-	state.resize(FIXED + units.size() * 13)
-	state[0] = 3
+	state.resize(FIXED + units.size() * UNIT)
+	state[0] = ELCombatBrain.VERSION
 	state[1] = ai
 	state[2] = attacker
 	state[3] = phase
@@ -71,21 +82,22 @@ func _ask(ai: int, attacker: int, phase: int, turns: int, heroes: Array, units: 
 	state[12] = 1 if cards else 0
 	state[13] = 1 if phase == 0 else 0
 	for side in 2:
-		var at := HEADER + side * 16
+		var at := HEADER + side * HERO
 		var hero: Array = heroes[side]
 		state[at] = hero[0]
 		state[at + 1] = hero[1] if hero.size() > 1 else 5
 		state[at + 2] = hero[2] if hero.size() > 2 else 5
-	var hands := HEADER + 32 + 64
-	for i in 12: state[hands + i * 8] = -1
+	var hands := HEADER + 2 * HERO + 2 * TYPICAL
+	for i in 16: state[hands + i * CARD] = -1
 	for i in hand.size():
-		var slot := hands + ai * 48 + i * 8
+		var slot := hands + ai * HAND + i * CARD
 		state[slot] = hand[i][0]
 		state[slot + 1] = hand[i][1]
 		state[slot + 2] = hand[i][2]
 		state[slot + 3] = SICK
 		state[slot + 5] = int((600 + 800 * int(hand[i][2]) + 1200 * int(hand[i][1])) * 0.7) - 800
 		state[slot + 6] = state[slot + 5] - 350
+		state[slot + 8] = 1
 	var u := FIXED
 	for unit: Array in units:
 		for i in 5: state[u + i] = unit[i]
@@ -93,7 +105,7 @@ func _ask(ai: int, attacker: int, phase: int, turns: int, heroes: Array, units: 
 		state[u + 9] = state[u + 8] - 500
 		state[u + 11] = unit[5] if unit.size() > 5 else -1
 		state[u + 12] = unit[6] if unit.size() > 6 else 0
-		u += 13
+		u += UNIT
 	var out: PackedInt32Array = (ClassDB.class_call_static(&"ELNativeDuelBrain", &"search", state.to_byte_array()) as PackedByteArray).to_int32_array()
 	if out.size() < 5: return {"status": 0, "value": 0, "choice": [], "searched": 0}
 	return {"status": out[0], "value": out[1], "searched": out[3], "choice": Array(out.slice(5, 5 + out[4]))}
@@ -180,13 +192,25 @@ func _play(duel: ELDuel, expect: Dictionary) -> String:
 	var foes := duel.army(1 - side).size()
 	var health := int(duel.heroes[1 - side].health)
 	var said: Array[String] = []
-	for step in 80:
+	# An ability may be given turns of its hero to be used in (`within`): one
+	# that costs health is as well used a turn later as at once.
+	var within := int(expect.get("within", 1))
+	var own_turns := 1
+	var last := turn
+	for step in 80 * within:
 		if duel.phase == ELDuel.Phase.FINISHED: break
 		var over := [duel.round_number, duel.attacker] != turn
+		if [duel.round_number, duel.attacker] != last:
+			last = [duel.round_number, duel.attacker]
+			if duel.attacker == side: own_turns += 1
 		match kind:
 			"win", "keep": if over: break
 			"survive": if over or duel.phase != ELDuel.Phase.DEFENCE: break
-			"attack", "spare": if over or duel.phase != phase: break
+			"attack", "spare", "cast": if over or duel.phase != phase: break
+			"use":
+				if within > 1:
+					if own_turns > within: break
+				elif over or duel.phase != phase: break
 		var acting := duel.active_side()
 		var smart: Array[int] = [acting]
 		duel.smart_sides = smart
@@ -195,6 +219,8 @@ func _play(duel: ELDuel, expect: Dictionary) -> String:
 			said.append(_describe(command))
 			if command.get("kind", "") == "attack": attacked = true
 			if kind == "spare" and command.get("kind", "") == "cast" and command.get("card", "") == expect.card: return "cast it: " + ", ".join(said)
+			if kind == "use" and command.get("kind", "") == "ability" and command.get("key", "") == expect.ability: return ""
+			if kind == "cast" and command.get("kind", "") == "cast" and command.get("card", "") == expect.card: return ""
 		if command.is_empty() or not ELCombatSearch.apply(duel, command): duel.end_phase()
 	var finished := duel.phase == ELDuel.Phase.FINISHED
 	var line := ", ".join(said)
@@ -202,6 +228,8 @@ func _play(duel: ELDuel, expect: Dictionary) -> String:
 		"win": return "" if finished and duel.winner == side else "no win: " + line
 		"survive": return "" if not finished or duel.winner == side else "the hero died: " + line
 		"attack": return "" if attacked or (finished and duel.winner == side) else "no attack: " + line
+		"use": return "not used: " + line
+		"cast": return "not cast: " + line
 		"keep":
 			if finished: return ""
 			var lost := duel.army(side).size() < army

@@ -7,6 +7,8 @@ signal selected(edition: String)
 signal missing(edition: String)
 signal expedition_requested
 signal autochess_requested
+## Battle puzzles of the chosen game (ELPuzzles).
+signal puzzles_requested
 
 const INK := Color("d6bb88")
 var current := ""
@@ -19,6 +21,9 @@ var wiki_button: Button
 var expedition_available := false
 var _expedition_button: Button
 var _autochess_button: Button
+## Offered on the main menu, for a game that has puzzles.
+var puzzles_available := false
+var _puzzles_button: Button
 ## A caption in the current game's language: Russian game texts open the wiki
 ## in Russian until the player picks a language there.
 var wiki_hint := ""
@@ -57,6 +62,14 @@ func _ready() -> void:
 		var wiki := ELWikiScreen.open(self, "", wiki_hint)
 		if not wiki.closed.is_connected(_refresh): wiki.closed.connect(_refresh))
 	add_child(wiki_button)
+	if puzzles_available:
+		_puzzles_button = Button.new()
+		_puzzles_button.name = "Puzzles"
+		_puzzles_button.custom_minimum_size = Vector2(124, 46)
+		_puzzles_button.add_theme_font_size_override("font_size", font_size)
+		_plain(_puzzles_button)
+		_puzzles_button.pressed.connect(func(): puzzles_requested.emit())
+		add_child(_puzzles_button)
 	if expedition_available:
 		_expedition_button = Button.new()
 		_expedition_button.name = "Expedition"
@@ -75,7 +88,7 @@ func _ready() -> void:
 	_refresh()
 
 
-## The look shared by the wiki, Expedition and Autochess buttons (the same
+## The look shared by the wiki, Puzzles, Expedition and Autochess buttons (the same
 ## plate as an edition that is not chosen).
 func _plain(button: Button) -> void:
 	button.focus_mode = Control.FOCUS_NONE
@@ -118,6 +131,10 @@ func _refresh() -> void:
 		var russian := ELWikiScreen.remembered_language(wiki_hint) == "ru"
 		wiki_button.text = "Вики" if russian else "Wiki"
 		wiki_button.tooltip_text = "Справка по игре на движке Demiurges (F6)" if russian else "How to play on the Demiurges engine (F6)"
+		if _puzzles_button != null:
+			_puzzles_button.visible = ELPuzzles.available(current)
+			_puzzles_button.text = "Головоломки" if russian else "Puzzles"
+			_puzzles_button.tooltip_text = "Бои, которые можно выиграть за несколько ходов. Найдите как" if russian else "Battles that can be won within a few turns. Find the way"
 		if _expedition_button != null:
 			_expedition_button.text = "Экспедиция" if russian else "Expedition"
 		if _autochess_button != null:

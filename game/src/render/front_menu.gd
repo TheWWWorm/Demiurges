@@ -28,6 +28,8 @@ signal content_requested(edition: String)
 signal duel_match_requested(match: ELDuelMatch)
 signal expedition_requested
 signal autochess_requested
+## Remake: the battle puzzles of the shown game (ELPuzzleMode).
+signal puzzles_requested
 signal network_requested(lan: bool)
 signal strategy_requested(lan: bool)
 ## Round-result / duel-summary OK and Cancel.
@@ -317,6 +319,8 @@ func build(available: Dictionary, initial: String) -> bool:
 	_choice.expedition_available = available.has("el2")
 	_choice.expedition_requested.connect(func(): expedition_requested.emit())
 	_choice.autochess_requested.connect(func(): autochess_requested.emit())
+	_choice.puzzles_available = true
+	_choice.puzzles_requested.connect(func(): puzzles_requested.emit())
 	_choice.selected.connect(func(chosen: String):
 		edition_requested.emit(chosen)
 		use_edition(chosen))

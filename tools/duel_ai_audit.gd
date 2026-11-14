@@ -14,10 +14,16 @@ extends SceneTree
 ##   futile    an attack that dealt no damage and killed nothing, and lost a
 ##             creature to a blocker that stood ready when it was sent, with
 ##             no spell or ability played in between
+##   trade     an attack that lost creatures worth 3 ether or more above
+##             what it killed and took no more than 2 health from the hero
+##             (the position is the attack as declared; listed, not judged)
 ##   chump     a blocker thrown away under an attacker that survived, when
 ##             the whole attack was less than half the hero's health (listed,
 ##             not judged: played out, these blocks won a little more often
 ##             than not blocking)
+##   asleep    a turn ended with a creature held down by enfeeblement,
+##             paralysis or immobility that the hero could have paid to
+##             free ("broke" counts the times it did)
 ##   idle      a turn ended with a creature card in hand that the ether left
 ##             would have paid for (not always a mistake; counted for scale)
 ##
@@ -34,6 +40,8 @@ extends SceneTree
 const FACTIONS := ["Red", "Green", "Black", "Blue"]
 const LETTER := {"Red": "R", "Green": "G", "Black": "B", "Blue": "U"}
 const ROUND_CAP := 30
+## Abilities that free a creature from a status.
+const BREAKS := ["wake", "unparalyze", "awaken"]
 const PHASE_CAP := 80
 ## Hero entries a spell may change without having done anything.
 const SPENT := ["hand", "hand_slots", "hand_view", "hand_ids", "mana", "grave", "spell_uses", "drawn"]
@@ -43,7 +51,7 @@ var defaults := {}
 var settings := {}
 var save := ""
 var quiet := false
-var totals := {"wasted": 0, "surplus": 0, "missed": 0, "unblocked": 0, "futile": 0, "chump": 0, "idle": 0, "turns": 0, "duels": 0, "commands": 0}
+var totals := {"wasted": 0, "surplus": 0, "missed": 0, "unblocked": 0, "futile": 0, "trade": 0, "chump": 0, "asleep": 0, "broke": 0, "idle": 0, "turns": 0, "duels": 0, "commands": 0}
 var saved := 0
 
 func _arg(name: String, fallback: String) -> String:
@@ -135,6 +143,8 @@ func _play(game: String, books: Array, seed_value: int) -> void:
 	var sent := {}
 	var played_since := false
 	var block_start: Dictionary = {}
+	# The attack as it stood when the attacker ended its phase.
+	var declared: Dictionary = {}
 	while duel.phase != ELDuel.Phase.FINISHED and duel.round_number <= ROUND_CAP:
 		var side := duel.active_side()
 		var here := [duel.round_number, duel.attacker, duel.phase]
@@ -157,12 +167,14 @@ func _play(game: String, books: Array, seed_value: int) -> void:
 		totals.commands += 1
 		var command := _think(duel) if commands <= PHASE_CAP else {}
 		var kind := String(command.get("kind", "end_phase"))
+		if kind == "ability" and String(command.key) in BREAKS: totals.broke += 1
 		var before := {"state": duel.snapshot(), "board": _board(duel)} if kind in ["cast", "ability"] or duel.phase == ELDuel.Phase.DEFENCE else {}
 		var fight := _fight(duel) if duel.phase == ELDuel.Phase.DEFENCE and kind == "end_phase" else {}
 		var trace := _mark(duel, side) if kind in ["cast", "ability"] else []
 		var spent := _price(duel, side, command) if kind == "cast" else 0
 		if kind == "end_phase" and duel.phase == ELDuel.Phase.ATTACK:
 			_idle(game, duel, side)
+			_asleep(game, duel, side)
 			var banks := duel.army(side).any(func(c: Dictionary) -> bool: return duel.regeneration_cost(c.id) > 0)
 			for gain: Dictionary in gains:
 				if not gain.needed and not banks: _found("surplus", game, gain.position, side, "%s was not needed, %d ether left unspent" % [gain.text, duel.available_mana(side)])
@@ -173,6 +185,7 @@ func _play(game: String, books: Array, seed_value: int) -> void:
 			sent[int(command.id)] = ready
 		elif kind in ["cast", "ability"] and not sent.is_empty(): played_since = true
 		var ended_turn := kind == "end_phase" and duel.phase == ELDuel.Phase.ATTACK
+		if ended_turn: declared = {"state": duel.snapshot(), "board": _board(duel)} if not duel.attacks.is_empty() else {}
 		var ether := int(duel.heroes[side].mana)
 		var price := spent if kind == "cast" else (duel.attack_cost(int(command.id)) if kind == "attack" else -1)
 		if command.is_empty() or not ELCombatSearch.apply(duel, command):
@@ -200,7 +213,7 @@ func _play(game: String, books: Array, seed_value: int) -> void:
 				if int(gain.without) < (price if price >= 0 else maxi(0, -change)): gain.needed = true
 				gain.without = int(gain.without) + change
 		if not fight.is_empty():
-			_after_fight(game, duel, fight, before, sent, played_since, block_start, turn_start)
+			_after_fight(game, duel, fight, before, sent, played_since, block_start, turn_start, declared)
 	if not quiet: print("END %s winner=%d rounds=%d" % [game, duel.winner if duel.phase == ELDuel.Phase.FINISHED else -1, duel.round_number])
 
 func _context(d: ELDuel, side: int) -> ELCombatSearch.Context:
@@ -258,9 +271,11 @@ func _fight(d: ELDuel) -> Dictionary:
 		if d.creatures.has(id): power += int(d.creatures[id].power)
 	var foes := 0
 	for c: Dictionary in d.army(1 - d.attacker): foes += 1
-	return {"attacks": d.attacks.duplicate(), "blocks": d.blocks.duplicate(), "defender": 1 - d.attacker, "health": int(d.heroes[1 - d.attacker].health), "power": power, "foes": foes, "board": _board(d)}
+	var cards := {}
+	for c: Dictionary in d.creatures.values(): cards[int(c.id)] = String(c.card)
+	return {"cards": cards, "attacks": d.attacks.duplicate(), "blocks": d.blocks.duplicate(), "defender": 1 - d.attacker, "health": int(d.heroes[1 - d.attacker].health), "power": power, "foes": foes, "board": _board(d)}
 
-func _after_fight(game: String, d: ELDuel, fight: Dictionary, before: Dictionary, sent: Dictionary, played_since: bool, block_start: Dictionary, turn_start: Dictionary) -> void:
+func _after_fight(game: String, d: ELDuel, fight: Dictionary, before: Dictionary, sent: Dictionary, played_since: bool, block_start: Dictionary, turn_start: Dictionary, declared: Dictionary) -> void:
 	var defender := int(fight.defender)
 	var finished := d.phase == ELDuel.Phase.FINISHED
 	if finished and d.winner != defender and not block_start.get("saving", []).is_empty():
@@ -278,6 +293,15 @@ func _after_fight(game: String, d: ELDuel, fight: Dictionary, before: Dictionary
 		if foreseen: lost.append(id)
 	if not lost.is_empty() and hurt <= 0 and foes >= int(fight.foes) and not played_since:
 		_found("futile", game, turn_start, 1 - defender, "lost %s for nothing to blocks %s" % [str(lost), str(fight.blocks)])
+	# Worth lost by the attack against worth killed (blockers and others).
+	var given := 0
+	var taken := 0
+	for id: int in fight.cards:
+		if d.creatures.has(id): continue
+		if fight.attacks.has(id): given += ELCombatSearch._worth(d, fight.cards[id])
+		elif fight.blocks.has(id): taken += ELCombatSearch._worth(d, fight.cards[id])
+	if given - taken >= 3 and hurt <= 2 and not declared.is_empty():
+		_found("trade", game, {"state": declared.state, "board": declared.board, "start": turn_start.get("state", {})}, 1 - defender, "attack %s lost %d of worth, killed %d, hurt %d, blocks %s" % [str(fight.attacks), given, taken, hurt, str(fight.blocks)])
 	var thrown: Array = []
 	for blocker: int in fight.blocks:
 		if not d.creatures.has(blocker) and d.creatures.has(int(fight.blocks[blocker])): thrown.append(blocker)
@@ -312,6 +336,13 @@ func _idle(game: String, d: ELDuel, side: int) -> void:
 			totals.idle += 1
 			return
 
+func _asleep(game: String, d: ELDuel, side: int) -> void:
+	for c: Dictionary in d.army(side):
+		for ability: Dictionary in d.abilities(c.id):
+			if ability.key in BREAKS and d.can_use_ability(c.id, ability.key):
+				_found("asleep", game, {"board": _board(d), "state": d.snapshot()}, side, "#%d %s could %s for %d with %d ether" % [c.id, c.card, ability.key, int(ability.cost), d.available_mana(side)])
+				return
+
 func _found(kind: String, game: String, position: Dictionary, side: int, note: String) -> void:
 	totals[kind] += 1
 	print("AUDIT %s %s side%d: %s" % [kind, game, side, note])
@@ -321,7 +352,10 @@ func _found(kind: String, game: String, position: Dictionary, side: int, note: S
 	var path := "%s/%s-%s-%s-%d.json" % [save, profile.id, kind, game, saved]
 	var file := FileAccess.open(path, FileAccess.WRITE)
 	if file == null: return
-	file.store_string(JSON.stringify({"format": "etherlords-duel", "version": 1, "state": position.state, "found": {"kind": kind, "side": side, "note": note}}, "", true, true))
+	var document := {"format": "etherlords-duel", "version": 1, "state": position.state, "found": {"kind": kind, "side": side, "note": note}}
+	# A trade also keeps the position its turn began from.
+	if position.has("start"): document.start = position.start
+	file.store_string(JSON.stringify(document, "", true, true))
 	file.close()
 	print("   saved %s" % path)
 
