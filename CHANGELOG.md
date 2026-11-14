@@ -2,6 +2,10 @@
 
 Versions follow [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html) from 0.3.0 on.
 
+## 0.14.1
+
+- Etherlords: a campaign or mission saved after a beaten lair had taken in a new creature loads again; such saves were refused with "Invalid saved lair creature". Saves already made load too.
+
 ## 0.14.0
 
 - **Puzzles:** harder easy puzzles. None can now be won by casting the obvious spell and attacking with everything, by the plain computer player or by doing nothing; the packs were rebuilt from many more battles (24 for Etherlords, 20 for Etherlords II). A switch at the top of the list shows either game's puzzles.

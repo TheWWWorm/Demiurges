@@ -118,8 +118,10 @@ static func valid_links(objects: Dictionary) -> bool:
 			if item.camp >= 0 and (int(objects.get(item.camp, {}).get("guest", -1)) != int(item.uid) or item.placed): return false
 			if item.camp < 0 and not item.placed: return false
 		elif item.has("dungeon"):
-			if not ELLuaSave._integer(item.dungeon, 0, 0x7fffffff) or int(objects.get(int(item.dungeon), {}).get("monster", -1)) != int(item.uid): return false
+			if not ELLuaSave._integer(item.dungeon, 0, 0x7fffffff): return false
 			item.dungeon = int(item.dungeon)
+			# A beaten creature stays in the world after its lair restocks with a new one.
+			if item.get("alive", false) and int(objects.get(item.dungeon, {}).get("monster", -1)) != int(item.uid): return false
 	return true
 
 static func restore_hero(hero: Dictionary) -> bool:
