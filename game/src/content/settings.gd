@@ -35,6 +35,10 @@ extends RefCounted
 ## "battle_interface": the battle panel's size (0 automatic, the sharpest
 ## size near the panel's former one; 1..4 one, one and a half, two or three
 ## screen pixels per original pixel; ELHudFrame.SIZES).
+## "battle_gap", "battle_gap_2", "battle_gap_3": what the battle panel's
+## readout panels show on a wide screen, first to third (each the slide of
+## ELCombatGapPanel.SLIDES last chosen with its arrows; at first the
+## spellbook, the heroes' graveyards and the adviser).
 ## Per edition (original Options screen order):
 ## "music"/"effects" volumes 0..1; "movies" the originals' Video key (0 none,
 ## 1 own size, 2 fitted); "blood"; "map_tooltips" (second game
@@ -59,7 +63,7 @@ extends RefCounted
 const SETTINGS_VERSION := 6
 const SHARED := {"ambience": 0.55, "shadows": true, "soft_shadows": false, "weather": true, "helper_overlay": false, "antialiasing": -1, "sharpening": 0, "terrain_detail": false, "enhanced_water": false, "bloom": false, "soft_particles": false, "spell_light": true, "discord_activity": true, "renderer": 0, "path_tracing": false, "sky_light": 1.0, "light_bounces": 2, "show_fps": false, "hardware_check": 0, "free_movement": true, "smart_ai": true, "cast_icons": true, "first_battle_dome": true,
 	"window_mode": 0, "window_width": 0, "window_height": 0, "frame_rate": 0,
-	"upscaler": 0, "upscale_quality": 1, "frame_generation": false, "ray_reconstruction": false, "battle_interface": 0}
+	"upscaler": 0, "upscale_quality": 1, "frame_generation": false, "ray_reconstruction": false, "battle_interface": 0, "battle_gap": 0, "battle_gap_2": 2, "battle_gap_3": 1}
 const EDITION := {"music": 0.55, "effects": 0.8, "movies": 2, "blood": true, "map_tooltips": true, "autosave": true,
 	"heroes_voices": true, "ambient_sounds": true, "adventure_fast": false, "animated_objects": true,
 	"mouse_rotation": 1.0, "keyboard_rotation": 1.0, "mouse_scroll": 1.0, "keyboard_scroll": 1.0,
@@ -75,7 +79,7 @@ const RANGES := {"music": [0.0, 1.0], "effects": [0.0, 1.0], "ambience": [0.0, 1
 	"auto_camera_dynamics": [0, 100], "movies": [0, 2], "antialiasing": [-1, 2], "sharpening": [0, 2], "renderer": [0, 1], "hardware_check": [0, 2],
 	"sky_light": [0.0, 2.0], "light_bounces": [1, 4],
 	"window_mode": [0, 2], "window_width": [0, 16384], "window_height": [0, 16384], "frame_rate": [-1, 1000], "upscale_quality": [0, 3],
-	"battle_interface": [0, 4]}
+	"battle_interface": [0, 4], "battle_gap": [0, 4], "battle_gap_2": [0, 4], "battle_gap_3": [0, 4]}
 
 ## Context, caption, then the default keys for each edition. Empty means the
 ## action is unavailable in that edition.

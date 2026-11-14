@@ -1728,9 +1728,42 @@ static func incoming(s: ELDuel) -> int:
 const ODDS := {"el1": [0.0368, -2.25], "el2": [0.0404, -1.83]}
 
 static func win_chance(ctx: Context, s: ELDuel, side: int) -> float:
-	var odds: Array = ODDS.get(ctx.edition, ODDS.el1)
-	var worth := side_value(ctx, s, side) - side_value(ctx, s, 1 - side)
+	return worth_chance(ctx.edition, side_value(ctx, s, side) - side_value(ctx, s, 1 - side))
+
+## The chance to win of a side that stands `worth` ahead.
+static func worth_chance(edition: String, worth: float) -> float:
+	var odds: Array = ODDS.get(edition, ODDS.el1)
 	return 1.0 / (1.0 + exp(clampf(-float(odds[0]) * (worth - float(odds[1])), -30.0, 30.0)))
+
+## A context that reads positions for `side` with the steady weights and
+## nothing else of the remake's options.
+static func plain_context(duel: ELDuel, side: int) -> Context:
+	var ctx := Context.new()
+	ctx.ai = side
+	ctx.edition = duel.profile.id
+	ctx.second = ctx.edition == "el2"
+	ctx.w = steady_weights(ctx.second)
+	return ctx
+
+## The battle adviser's reading of `position` for the side to act: the
+## original lookahead with the steady weights, every first move it tried and
+## what each is worth. It sees what the player sees: the other side's lines
+## never cast, the compiled engine (which knows both hands and the cards to
+## come) is not asked, and no plan is kept for the computer to follow.
+## Returns {"side", "value", "moves": [{command, plan, prior, value}]}; the
+## best move is the one worth most.
+static func study(position: ELDuel) -> Dictionary:
+	if position.phase == ELDuel.Phase.FINISHED: return {}
+	var ctx := plain_context(position, position.active_side())
+	ctx.limit = 1 if position.phase == ELDuel.Phase.ATTACK else 0
+	ctx.tracing = true
+	var root := Line.new()
+	root.budget = BUDGET
+	var start := position.search_copy(ctx.second)
+	if ctx.second: start.spec_expect = ELSpecs.sample_expectation(position)
+	_search(ctx, root, start)
+	if start.scripts != null and start.scripts.search_only: start.scripts.close()
+	return {"side": ctx.ai, "value": root.value, "moves": ctx.trace}
 
 static func side_value(ctx: Context, s: ELDuel, side: int) -> float:
 	if s.phase == ELDuel.Phase.FINISHED:

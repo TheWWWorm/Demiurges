@@ -5,7 +5,9 @@ extends SceneTree
 ##   screens, never too big for the panel to fit, never too small to tap on a
 ##   touch screen; whole sizes are drawn with nearest sampling;
 ## - the card rail keeps the original six slots at every size; the extra
-##   width is left as an empty gap;
+##   width, from the rail's arrow housing to the caption, is the readout
+##   panel's (ELCombatGapPanel), whose spellbook icons fill a rail item's
+##   height on a 16:9 screen and whose slide is a stored setting;
 ## - the setting is stored with the shared remake settings and kept in range;
 ## - a lethal hit plays only the figure's death sound, a non-lethal hit its
 ##   hurt sound (in the battle audio and through the battle view).
@@ -26,6 +28,7 @@ func _initialize() -> void:
 func _run() -> void:
 	_sizes()
 	_slots()
+	_gap()
 	_setting()
 	await _sounds()
 	await _view_sounds()
@@ -64,6 +67,25 @@ func _slots() -> void:
 			check(ELHudFrame.rail_slots(null, width) == 6, "%dx%d at %s× shows the original six slots" % [screen.x, screen.y, size])
 			check(is_equal_approx(ELHudFrame.rail_trim(null, width), maxf(0.0, width - 800.0)), "%dx%d at %s× leaves the extra width as a gap" % [screen.x, screen.y, size])
 	check(ELHudFrame.rail_slots(null, 800) == 6 and is_zero_approx(ELHudFrame.rail_trim(null, 800)), "the 800 panel's rail holds its original six slots with no gap")
+
+func _gap() -> void:
+	# 1920x1080 at the automatic 1.5: a 1280 panel, 256 past the wide layout.
+	var gap := ELHudFrame.gap_rect(null, Vector2(1280, 720))
+	check(gap == Rect2(ELHudFrame.RAIL_CLOSE + 480.0 - 480.0, 720.0 - 61.0, 480.0, 61.0), "a 1280 panel without the wide layout leaves 480 px from the rail's end")
+	check(is_zero_approx(ELHudFrame.gap_rect(null, Vector2(800, 600)).size.x), "the 800 panel has no extra width")
+	var panel := ELCombatGapPanel.new()
+	panel.size = Vector2(256, 61)
+	var room := panel.area()
+	var fit := ELCombatGapPanel.cell_size(16, room.size, 2)
+	check(fit.x == 24 and fit.y == 2 and is_equal_approx(room.size.y, ELListLook.ITEM_SIZE), "sixteen spellbook slots in a 256 px gap: two rows of 24 px icons, a rail item high (%s in %s)" % [fit, room.size])
+	check(ELCombatGapPanel.cell_size(16, Vector2(641, 50), 2).y == 1, "a wide gap shows the spellbook in one row")
+	check(panel.roomy() and ELCombatGapPanel.MIN_WIDTH > ELCombatGapPanel.LEFT_END.size.x + ELCombatGapPanel.RIGHT_END.size.x, "256 px holds the arrows and a readout")
+	panel.size.x = 43
+	check(not panel.roomy(), "a 43 px gap shows the plain strip")
+	panel.free()
+	var settings := ELSettings.new()
+	check(int(settings.values.get("battle_gap", -1)) == 0 and ELSettings.SHARED.has("battle_gap"), "the slide is a shared remake setting, the spellbook by default")
+	check(ELSettings._clean("battle_gap", 9, 0) == ELCombatGapPanel.SLIDES.size() - 1 and ELSettings._clean("battle_gap", -3, 0) == 0, "a stored slide is kept in range")
 
 func _setting() -> void:
 	var settings := ELSettings.new()

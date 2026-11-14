@@ -110,6 +110,17 @@ var discord: ELDiscordPresence
 var hud: ELHudFrame
 ## Original Hand / Artifacts radio pair and the side counters (ELCombatRail).
 var rail: ELCombatRail
+## The battle panel's extra width on wide screens: one readout panel
+## (ELCombatGapPanel) for every GAP_PANEL_WIDTH of it, side by side, each
+## with its own remembered slide (GAP_KEYS); and the adviser one of the
+## slides shows. `gap_panel` is the first.
+const GAP_KEYS := ["battle_gap", "battle_gap_2", "battle_gap_3"]
+const GAP_PANEL_WIDTH := 256.0
+var gap_panels: Array[ELCombatGapPanel] = []
+## The second camera the panels' "watch" readout shows (ELCombatWatch).
+var combat_watch: ELCombatWatch
+var gap_panel: ELCombatGapPanel
+var advisor := ELCombatAdvisor.new()
 var hud_root: Control
 var hero_values: Array[Label] = []
 var hero_names: Array[Label] = []
@@ -438,6 +449,7 @@ func _exit_tree() -> void:
 	if network_duel != null: network_duel.close()
 	ELMoviePlayer.shutdown()
 	ELPracticeAI.finish()
+	advisor.finish()
 
 ## The engine drops the window's close request while the window has an
 ## exclusive dialog, so the close button did nothing while one was open. A
@@ -628,6 +640,7 @@ func _start(edition: String, options: Dictionary = {}, restored: ELDuel = null, 
 	if path_tracing != null: path_tracing.attach(stage, arena, camera, effects)
 	auto_camera = ELAutoCamera.new(profile, battle_seed)
 	_default_view()
+	combat_watch.attach(get_viewport().find_world_3d(), camera)
 	fight_shot = false
 	ending = {}
 	for side in 2:
@@ -677,6 +690,10 @@ func _start(edition: String, options: Dictionary = {}, restored: ELDuel = null, 
 	if power_dialog != null: power_dialog.build(profile)
 	_layout_hud()
 	for c: Dictionary in duel.creatures.values(): _spawn_creature(c)
+	advisor.reset()
+	for i in gap_panels.size():
+		gap_panels[i].build(profile)
+		gap_panels[i].show_slide(int(settings.values.get(GAP_KEYS[i], 0)))
 	# What either side may cast is decoded in the background while the
 	# battle opens, so first casts do not stall (ELBattleWarmup).
 	battle_warmup = ELBattleWarmup.new()
@@ -699,6 +716,7 @@ func _start(edition: String, options: Dictionary = {}, restored: ELDuel = null, 
 	stage.add_child(selection_ring)
 	selection_ring.hide()
 	front_line = []
+	selection_ring.layers = 1 << (ELCombatWatch.HIDDEN_LAYER - 1)
 	front_faces = {}
 	melee = ELMeleePlayback.new()
 	melee.view = self
@@ -754,6 +772,8 @@ func _process(delta: float) -> void:
 	_update_strategic_clock()
 	if _strategic_battle():
 		var playable := strategic_session.battle_started and strategic_session.relay.can_play()
+	if gap_panel != null and advisor.tick(): _show_advice()
+	if combat_watch != null and combat_watch.step(delta): _show_watch()
 		if playable != _strategic_playable:
 			_strategic_playable = playable
 			_refresh()
@@ -1989,6 +2009,7 @@ func _presentation_held() -> bool:
 	return _melee_busy() or not _cast_queue.is_empty()
 
 ## The shown health and wounds lag the rules: as above, or a figure's hit
+	advisor.note(data)
 ## still waits for the cue frame of the effect that deals it.
 func _shown_held() -> bool:
 	return _presentation_held() or not _hits_waiting.is_empty() or not _ending_waiting.is_empty()
@@ -4352,6 +4373,8 @@ func _remove_model(id: int) -> void:
 	homes.erase(id)
 
 func _add_label(id: int) -> void:
+	# For the main view alone (the battle camera readout leaves it out).
+	label.layers = 1 << (ELCombatWatch.HIDDEN_LAYER - 1)
 	var label := Label3D.new()
 	label.font_size = 28
 	label.outline_size = 9
@@ -4420,6 +4443,7 @@ func _float_text(id: int, text: String, color: Color, remake_only := false) -> v
 		return
 	var live: Array = _floating.get(id, []).filter(func(node) -> bool: return is_instance_valid(node) and not node.is_queued_for_deletion())
 	var label := Label3D.new()
+	label.layers = 1 << (ELCombatWatch.HIDDEN_LAYER - 1)
 	label.text = text
 	label.font_size = 52
 	label.pixel_size = 0.01
@@ -4649,6 +4673,7 @@ func _refresh() -> void:
 	if showing_artifacts and not concealed: _fill_artifact_rail(displayed)
 	if hand_frames != null: hand_frames.queue_redraw()
 	if rail != null:
+	_fill_gap(concealed)
 		var tallies: Array = []
 		for side in 2:
 			var h: Dictionary = duel.heroes[side]
@@ -5217,6 +5242,14 @@ func _build_ui() -> void:
 	hud = ELHudFrame.new()
 	hud_root.add_child(hud)
 	rail = ELCombatRail.new()
+	for key: String in GAP_KEYS:
+		var panel := ELCombatGapPanel.new()
+		hud_root.add_child(panel)
+		gap_panels.append(panel)
+		panel.slide_changed.connect(_gap_slide_chosen.bind(key))
+	gap_panel = gap_panels[0]
+	combat_watch = ELCombatWatch.new()
+	add_child(combat_watch)
 	hud_root.add_child(rail)
 	rail.tab_selected.connect(func(_artifacts: bool): _refresh())
 	rail.strip_selected.connect(func(graveyard: bool):
@@ -7482,6 +7515,120 @@ func _fill_strip() -> void:
 	for item: Dictionary in list: signature += str(item.meta.get("card", "")) + ","
 	rail.strip.set_items(list, signature)
 
+## A readout panel's slide chosen with its arrows: kept for the next battle.
+func _gap_slide_chosen(index: int, key: String) -> void:
+	settings.values[key] = index
+	if not settings.save_file(): _notice("Could not save preferences.")
+	_refresh()
+
+## The readout panels' slides (ELCombatGapPanel): the shown hero's spellbook,
+## both graveyards, both heroes' enchantments and the adviser.
+func _fill_gap(concealed: bool) -> void:
+	if gap_panel == null or duel == null or profile == null: return
+	var own := _displayed_side()
+	var book: Array = []
+	var hero: Dictionary = duel.heroes[own]
+	if not concealed and hero.get("spell_uses", []).size() == hero.deck.size():
+		var left := ELSpellCharges.available(hero)
+		var total := 0
+		for charges: int in left: total += maxi(0, charges)
+		for slot in hero.deck.size():
+			var card: String = hero.deck[slot]
+			var uses := int(hero.spell_uses[slot])
+			var tip := card_tooltip(card)
+			if uses >= 0: tip += "\n" + ELRemakeText.t("Charges left: %d", profile) % uses
+			var held: int = hero.hand_slots.count(slot)
+			if held > 0: tip += "\n" + ELRemakeText.t("In hand: %d", profile) % held
+			# The second game draws a slot as often as it has charges to give.
+			if profile.id == "el2" and total > 0 and left[slot] > 0: tip += "\n" + ELRemakeText.t("Chance to be drawn next: %d%%", profile) % roundi(100.0 * left[slot] / total)
+			book.append({"icon": profile.card_icon(card), "tooltip": tip, "count": left[slot] if uses >= 0 else -1, "dim": left[slot] == 0})
+	for panel in gap_panels: panel.set_content("book", book)
+	var graves: Array = []
+	var auras: Array = []
+	for side: int in [own, 1 - own]:
+		var h: Dictionary = duel.heroes[side]
+		var buried: Array = []
+		for i in range(h.grave.size() - 1, -1, -1):
+			var card: String = h.grave[i]
+			buried.append({"icon": profile.card_icon(card), "tooltip": "%s\n%s" % [duel.card_name(card), profile.card_description(card)], "count": -1, "dim": false})
+		var worn: Array = []
+		for i in range(h.enchantments.size() - 1, -1, -1):
+			var card: String = h.enchantments[i].card
+			worn.append({"icon": profile.card_icon(card), "tooltip": "%s\n%s" % [duel.card_name(card), profile.card_description(card)], "count": -1, "dim": false})
+		var face: Texture2D = portraits[side].texture if side < portraits.size() else null
+		graves.append({"face": face, "name": _side_name(side), "cells": buried})
+		auras.append({"face": face, "name": _side_name(side), "cells": worn})
+	for panel in gap_panels:
+		panel.set_content("graves", graves)
+		panel.set_content("auras", auras)
+	# The adviser reads the battle only while its slide is shown somewhere.
+	var advised := gap_panels.any(func(panel: ELCombatGapPanel) -> bool: return panel.visible and panel.roomy() and ELCombatGapPanel.SLIDES[panel.slide] == "advice")
+	if _advice_refusal().is_empty() and advised:
+		var by_hand := not demo and not auto_combat and replay_player == null and not concealed and duel.phase != ELDuel.Phase.FINISHED and _local_side(duel.active_side())
+		advisor.observe(duel, by_hand, own)
+	else: advisor.reset()
+	_show_advice()
+	_fill_watch(own)
+
+## The battle camera readout (ELCombatWatch): the figures it visits, the
+## local side's hero and creatures first, and the size of its picture. It
+## renders only while a panel shows it.
+func _fill_watch(own: int) -> void:
+	var showing: ELCombatGapPanel = null
+	for panel in gap_panels:
+		if panel.visible and panel.roomy() and ELCombatGapPanel.SLIDES[panel.slide] == "watch": showing = panel
+	combat_watch.active = showing != null
+	if showing == null: return
+	var pixels: Vector2 = showing.get_global_transform_with_canvas().get_scale() * get_viewport().get_final_transform().get_scale()
+	combat_watch.set_pixels(showing.watch_rect().size * pixels)
+	var list: Array = []
+	for side: int in [own, 1 - own]:
+		if not models.has(side) or not models.has(1 - side) or not is_instance_valid(models[side]) or not is_instance_valid(models[1 - side]): continue
+		var facing: Vector3 = models[1 - side].position - models[side].position
+		list.append({"id": side, "node": models[side], "facing": facing})
+		for c: Dictionary in duel.army(side):
+			if models.has(c.id) and is_instance_valid(models[c.id]): list.append({"id": int(c.id), "node": models[c.id], "facing": facing})
+	combat_watch.set_subjects(list)
+	_show_watch()
+
+func _show_watch() -> void:
+	if combat_watch == null: return
+	var watch := {"texture": combat_watch.viewport.get_texture()}
+	for panel in gap_panels: panel.set_content("watch", watch)
+
+func _advice_refusal() -> String:
+	if network_duel != null or strategic_session != null: return "Not offered in network battles"
+	if _in_puzzle(): return "Not offered in puzzles"
+	if combat_tutorial != null: return "Not offered in the tutorial"
+	return ""
+
+func _show_advice() -> void:
+	if gap_panel == null or duel == null or profile == null: return
+	var refusal := _advice_refusal()
+	var lines := PackedStringArray([ELRemakeText.t("Your chance to win and the opponent's, in percent,\nas the computer opponent judges what both players can see.", profile)])
+	var last := advisor.last
+	if refusal.is_empty() and not last.is_empty():
+		lines.append(ELRemakeText.t("Your last move: %s (%s)", profile) % [_advice_words(last.move), ELRemakeText.t(ELCombatGapPanel.GRADE_NAMES[int(last.grade)], profile)])
+		if int(last.grade) != ELCombatAdvisor.Grade.BEST:
+			if roundi(float(last.loss)) > 0: lines.append(ELRemakeText.t("It gave away %d%% of the chance to win against the best move.", profile) % roundi(float(last.loss)))
+			lines.append(ELRemakeText.t("The adviser preferred: %s", profile) % _advice_words(last.best))
+	var own := _displayed_side()
+	var advice := {"available": refusal.is_empty(), "faces": [portraits[own].texture, portraits[1 - own].texture], "names": [_side_name(own), _side_name(1 - own)], "reason": ELRemakeText.t(refusal, profile), "chance": advisor.chance,
+		"grade": int(last.get("grade", -1)) if refusal.is_empty() else -1, "loss": float(last.get("loss", 0.0)), "pending": advisor.pending, "tooltip": "\n".join(lines)}
+	for panel in gap_panels: panel.set_content("advice", advice)
+
+## A move as the adviser describes it (ELCombatAdvisor._describe), in words.
+func _advice_words(about: Dictionary) -> String:
+	var who := ""
+	if about.has("creature"): who = duel.card_name(String(about.creature))
+	elif about.has("hero"): who = _side_name(int(about.hero))
+	var kind := String(about.get("kind", ""))
+	if kind == "cast": return duel.card_name(String(about.get("card", "")))
+	if kind == "end_phase": return ELRemakeText.t("ending the phase", profile)
+	var words := "an ability" if kind == "ability" else ("blocking" if kind.begins_with("block") else "attacking")
+	if who.is_empty(): return ELRemakeText.t(words, profile)
+	return "%s (%s)" % [ELRemakeText.t(words, profile), who]
+
 func _strip_pressed(index: int) -> void:
 	var subject := _strip_subject()
 	var entity := duel.entity(subject) if subject >= 0 else {}
@@ -7641,6 +7788,17 @@ func _layout_hud() -> void:
 	hand_frames.position = rail_rect.position
 	hand_frames.size = rail_rect.size
 	hand_frames.queue_redraw()
+	# The extra width between the rail and the caption holds the readouts.
+	var gap := ELHudFrame.gap_rect(profile, hud_root.size)
+	var shown := clampi(int(gap.size.x / GAP_PANEL_WIDTH), 1, gap_panels.size())
+	var share := floorf(gap.size.x / shown)
+	for i in gap_panels.size():
+		var panel := gap_panels[i]
+		panel.visible = i < shown and gap.size.x > 0.0
+		panel.position = gap.position + Vector2(i * share, 0)
+		# The last one takes the odd pixels.
+		panel.size = Vector2(gap.size.x - share * (shown - 1) if i == shown - 1 else share, gap.size.y)
+		panel.layout()
 
 ## A phone's or tablet's screen density, so that the battle panel's slots stay
 ## big enough for a finger; 0 elsewhere.

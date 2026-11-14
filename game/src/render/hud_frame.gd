@@ -15,13 +15,16 @@ const RAIL_TILE := Rect2(31, 0, ELListLook.PITCH, 61)
 ## (the arrow housings and the left half of the knot after the arrow); the
 ## caption and buttons start here. A piece crossing it is drawn in two parts.
 const RAIL_END_CAP := 499.0
+## The card rail's own end: its right arrow housing closes here, and the knot
+## after it belongs to the caption.
+const RAIL_CLOSE := 488.0
 
 ## Battle interface sizes (setting "battle_interface": 0 automatic, then
 ## these in order): screen pixels per pixel of the original art. Whole sizes
 ## draw each original pixel as a sharp square; 1.5 is the one in-between size.
 ## A smaller size keeps the panel's pieces at their own size; the card rail
-## keeps the original's slots and the extra width is left as an empty gap
-## between the rail and the caption.
+## keeps the original's slots and the extra width between the rail and the
+## caption holds the remake's readouts (ELCombatGapPanel).
 const SIZES := [1.0, 1.5, 2.0, 3.0]
 ## The original's narrowest panel layout has to fit across the screen.
 const NARROWEST := 800.0
@@ -66,12 +69,18 @@ static func rail_slots(_profile: ELProfile, _width: float) -> int:
 	return int((RAIL_RIGHT - RAIL_LEFT + ELListLook.ITEM_GAP) / ELListLook.PITCH)
 
 ## Extra panel width past the original layout. The rail keeps its original
-## length and its right arrow follows it; this much is left as an empty gap
-## (no interface) before the caption and buttons (0 at 800 and 1024).
+## length and its right arrow follows it; this much is left before the
+## caption and buttons for ELCombatGapPanel (0 at 800 and 1024).
 static func rail_trim(profile: ELProfile, width: float) -> float:
 	var rail := maxf(0.0, width - base_width(profile, width)) + RAIL_RIGHT - RAIL_LEFT
 	return maxf(0.0, rail + ELListLook.ITEM_GAP - rail_slots(profile, width) * ELListLook.PITCH - 1.0)
 
+## The gap's place on a panel of `size` (empty at the original widths): from
+## the rail's closed right end to the caption's frame, as tall as the rail.
+static func gap_rect(profile: ELProfile, size: Vector2) -> Rect2:
+	var trim := rail_trim(profile, size.x)
+	var right := RAIL_CLOSE + size.x - base_width(profile, size.x)
+	return Rect2(right - trim, size.y - RAIL_TILE.size.y, trim, RAIL_TILE.size.y)
 
 var pieces: Array[Dictionary] = []
 var panel_texture: Texture2D
@@ -133,7 +142,7 @@ func _draw() -> void:
 	var extra := size.x - (WIDE if wide else 800.0)
 	# Only whole bays: the rails' right ends (their arrow housings, the pieces
 	# starting between x 374 and the arrow) close right after the last whole
-	# bay, and the leftover is left as an empty gap before the next part.
+	# bay, and the leftover is ELCombatGapPanel's.
 	var trim := rail_trim(_profile, size.x) if _profile != null else 0.0
 	for piece: Dictionary in pieces:
 		if piece.layout == (1 if wide else 2):
@@ -146,65 +155,23 @@ func _draw() -> void:
 			continue
 		destination.position.x += extra
 		var left: float = piece.destination.position.x
-		var right: float = left + piece.destination.size.x
-		# Only the bottom row (the card rail and the caption) gets a gap.
-		var gapped: bool = trim > 0.0 and piece.destination.position.y > -70.0
-		if left < RAIL_END_CAP and trim > 0.0:
-			# The part left of the cut follows the rail; the rest stays.
-			var cut := minf(RAIL_END_CAP - left, destination.size.x)
+		# The rail's part of a piece follows the rail; the rest stays with the
+		# caption. In the bottom row the rail ends with its arrow housing, and
+		# what stands taller than the rail is the caption's.
+		var bottom: bool = piece.destination.position.y > -70.0
+		var cap := RAIL_CLOSE if bottom else RAIL_END_CAP
+		if left < cap and trim > 0.0 and not (bottom and piece.destination.position.y < -RAIL_TILE.size.y):
+			var cut := minf(cap - left, destination.size.x)
 			var scale_x := source.size.x / destination.size.x
-			var part := Rect2(destination.position - Vector2(trim, 0), Vector2(cut, destination.size.y))
-			var part_source := Rect2(source.position, Vector2(cut * scale_x, source.size.y))
-			if gapped:
-				# The caption frame stands taller than the rail; the rail's half
-				# of the knot keeps to the rail's own height.
-				var over := (size.y - RAIL_TILE.size.y) - part.position.y
-				if over >= part.size.y: over = 0.0 if cut < destination.size.x else part.size.y
-				if over > 0.0:
-					var scale_y := source.size.y / destination.size.y
-					part = Rect2(part.position + Vector2(0, over), part.size - Vector2(0, over))
-					part_source = Rect2(part_source.position + Vector2(0, over * scale_y), part_source.size - Vector2(0, over * scale_y))
-			if part.size.y > 0.0:
-				_draw_piece(piece.texture, part, part_source, false, gapped and right >= RAIL_END_CAP)
+			draw_texture_rect_region(piece.texture, Rect2(destination.position - Vector2(trim, 0), Vector2(cut, destination.size.y)), Rect2(source.position, Vector2(cut * scale_x, source.size.y)))
 			if cut >= destination.size.x: continue
 			destination = Rect2(destination.position + Vector2(cut, 0), destination.size - Vector2(cut, 0))
 			source = Rect2(source.position + Vector2(cut * scale_x, 0), source.size - Vector2(cut * scale_x, 0))
-			left = RAIL_END_CAP
-		_draw_piece(piece.texture, destination, source, gapped and is_equal_approx(left, RAIL_END_CAP), false)
+		draw_texture_rect_region(piece.texture, destination, source)
 	# Continue the original bays at their own pitch between the fixed end caps.
 	var at := Vector2(RAIL_LEFT - 2, size.y - RAIL_TILE.size.y)
 	var bays := RAIL_RIGHT - RAIL_LEFT + maxf(0.0, extra) + 4.0 - trim
 	draw_rail_backing(self, panel_texture, at, bays, RAIL_TILE)
-
-## Corner radius where the panel is cut open for the gap (original pixels).
-const GAP_ROUNDING := 9.0
-
-## Draws a piece of panel art; the sides facing the gap get rounded corners.
-func _draw_piece(texture: Texture2D, destination: Rect2, source: Rect2, round_left: bool, round_right: bool) -> void:
-	if not round_left and not round_right:
-		draw_texture_rect_region(texture, destination, source)
-		return
-	var radius := minf(GAP_ROUNDING, minf(destination.size.x, destination.size.y * 0.5))
-	var corners := [
-		[destination.position, round_left, Vector2(1, 1), PI],
-		[Vector2(destination.end.x, destination.position.y), round_right, Vector2(-1, 1), PI * 1.5],
-		[destination.end, round_right, Vector2(-1, -1), 0.0],
-		[Vector2(destination.position.x, destination.end.y), round_left, Vector2(1, -1), PI * 0.5]]
-	var points := PackedVector2Array()
-	for corner: Array in corners:
-		var at: Vector2 = corner[0]
-		if not corner[1]:
-			points.append(at)
-			continue
-		var centre: Vector2 = at + corner[2] * radius
-		for step in 7:
-			var angle: float = corner[3] + PI * 0.5 * step / 6.0
-			points.append(centre + Vector2(cos(angle), sin(angle)) * radius)
-	var texture_size := texture.get_size()
-	var uvs := PackedVector2Array()
-	for point in points:
-		uvs.append((source.position + (point - destination.position) / destination.size * source.size) / texture_size)
-	draw_colored_polygon(points, Color.WHITE, uvs, texture)
 
 static func draw_rail_backing(canvas: CanvasItem, texture: Texture2D, at: Vector2, width: float, tile: Rect2) -> void:
 	if texture == null: return
