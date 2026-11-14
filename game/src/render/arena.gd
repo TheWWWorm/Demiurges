@@ -23,6 +23,10 @@ var _secondary_sources := PackedFloat32Array()
 var _secondary_traced := false
 var _secondary_scenery: Array[ELModel] = []
 var _camera_obstacles: Array[ELModel] = []
+## An enclosed hall's tall shell (the Dungeon's outer wall and its pillars),
+## hidden while the camera stands beyond the ring; made on first use.
+var _hall_shell: Array[ELModel] = []
+var _hall_shell_found := false
 var _scenery: Dictionary = {}
 ## Scenery standing in the ring (not the backdrop), and its triangles in
 ## arena space once asked for: [{"box": Rect2 (x, z), "triangles": PackedVector3Array}].
@@ -43,10 +47,16 @@ const BACKDROP_SHADER :=preload("res://src/render/arena_backdrop.gdshader")
 const SEA_SHADER := preload("res://src/render/arena_sea.gdshader")
 ## The original cutout pass accepts alpha bytes greater than 200.
 const MASKED_ALPHA_CUTOFF := 201.0 / 255.0
-## Enclosed halls: how far from the centre the battle camera may stand. The
-## Dungeon hall's ring of arches starts 18.7 from the centre and its outer wall
-## at 28; further out the camera looks back through the walls (player report #71).
+## Enclosed halls: how far from the centre their ring of tall scenery starts.
+## The Dungeon hall's arches stand 18.7 from the centre and its outer wall at
+## 28. The camera zooms as far as anywhere else; once it stands beyond the
+## ring, the arches on its side of the hall are hidden, since from there it
+## sees their backs and cut pillars across the front of the picture (player
+## report #71).
 const CAMERA_RADIUS := {"Dungeon.001": 18.0}
+## Beyond the ring, an arch is hidden while its bearing from the hall's centre
+## lies within this angle of the camera's (radians).
+const NEAR_SIDE_ANGLE := deg_to_rad(75.0)
 var _lit: Dictionary = {}
 var _unlit: Dictionary = {}
 
@@ -490,15 +500,29 @@ func _process(delta: float) -> void:
 		var material := moving_layers[i]
 		material.uv1_offset.x = fposmod(material.uv1_offset.x + delta * layer_speeds[i], 1.0)
 
-## The farthest the battle camera may stand from the arena's centre (INF: anywhere).
+## Where an enclosed hall's ring of tall scenery starts (INF: no hall).
 func camera_radius() -> float:
 	return float(CAMERA_RADIUS.get(scene_id, INF))
 
 func clear_camera_view(camera_position: Vector3, target: Vector3) -> void:
 	# Hide tall scenery between the camera and the central play area. Terrain
 	# and small scenery stay visible, including the ground under distant trees.
+	var ring := camera_radius()
+	var outside := Vector2(camera_position.x, camera_position.z)
+	var beyond := is_finite(ring) and outside.length() > ring
+	for shell: ELModel in _hall_shell_models(): shell.visible = not beyond
 	for child: ELModel in _camera_obstacles:
 		var obscures := false
+		if beyond:
+			var bearing := Vector2(child.global_position.x, child.global_position.z)
+			var centre := Vector3.ZERO
+			var pieces := 0
+			for part: MeshInstance3D in child.parts.values():
+				if part.mesh == null: continue
+				centre += (part.global_transform * part.mesh.get_aabb()).get_center()
+				pieces += 1
+			if pieces > 0: bearing = Vector2(centre.x, centre.z) / pieces
+			if bearing.length() > 0.01 and absf(bearing.angle_to(outside)) < NEAR_SIDE_ANGLE: obscures = true
 		for part: MeshInstance3D in child.parts.values():
 			if part.mesh == null:
 				continue
@@ -506,6 +530,20 @@ func clear_camera_view(camera_position: Vector3, target: Vector3) -> void:
 			if box.size.y > 2.0 and box.intersects_segment(camera_position, target + Vector3(0, 1.5, 0)) != null:
 				obscures = true
 		child.visible = not obscures
+
+## The tall pieces of an enclosed hall that are not its arches: from beyond
+## the ring their pillars stand across the picture.
+func _hall_shell_models() -> Array[ELModel]:
+	if _hall_shell_found: return _hall_shell
+	_hall_shell_found = true
+	if not is_finite(camera_radius()): return _hall_shell
+	for model: ELModel in _solid_models:
+		if model in _camera_obstacles or model == _ground or not is_instance_valid(model): continue
+		for part: MeshInstance3D in model.parts.values():
+			if part.mesh != null and (part.global_transform * part.mesh.get_aabb()).size.y > 2.0:
+				_hall_shell.append(model)
+				break
+	return _hall_shell
 
 func _add_model(profile: ELProfile, model_name: String, texture_name: String, backdrop := false) -> ELModel:
 	var model := ELModel.new()

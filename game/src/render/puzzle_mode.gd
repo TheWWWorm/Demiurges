@@ -20,6 +20,10 @@ const LEVELS := ["Easy puzzles", "Medium puzzles", "Hard puzzles"]
 const RESULT_DELAY := 1.2
 
 var profile: ELProfile
+## The installed games by id, for the switch over the list (set by the host).
+var games: Dictionary = {}
+## The game names on the switch.
+const GAME_NAMES := {"el1": "Etherlords", "el2": "Etherlords II"}
 ## The attempt being played (null outside a puzzle).
 var run: ELPuzzles.Run
 var _kit: ELMenuKit
@@ -31,6 +35,7 @@ var _under: Control
 var _shade: ColorRect
 var _list: PanelContainer
 var _list_note: Label
+var _switch: HBoxContainer
 var _groups: VBoxContainer
 var _bar: PanelContainer
 var _bar_text: Label
@@ -171,6 +176,12 @@ func _build_list() -> void:
 	column.add_theme_constant_override("separation", 10)
 	_list.add_child(column)
 	column.add_child(ELMenuKit.heading("Puzzles", 22))
+	# Either game's puzzles, whichever game the main menu shows.
+	_switch = HBoxContainer.new()
+	_switch.name = "GameSwitch"
+	_switch.alignment = BoxContainer.ALIGNMENT_CENTER
+	_switch.add_theme_constant_override("separation", 8)
+	column.add_child(_switch)
 	_list_note = _text(15, ELMenuKit.BODY_INK)
 	_list_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_list_note.custom_minimum_size.x = 560
@@ -198,6 +209,7 @@ func _build_list() -> void:
 func open_list(source: ELProfile) -> void:
 	_use(source)
 	var entries := ELPuzzles.list(profile.id)
+	_fill_switch()
 	_list_note.text = "Each battle can be won within the turns given, whatever the enemy does. Find the way.\nSolved: %d of %d" % [ELPuzzles.solved_count(profile.id), entries.size()]
 	for child: Node in _groups.get_children():
 		_groups.remove_child(child)
@@ -232,6 +244,34 @@ func open_list(source: ELProfile) -> void:
 	_shade.show()
 	_list.show()
 	_result.hide()
+
+## The switch between the games whose puzzles can be played; hidden with
+## only one. The shown game's button stays pressed.
+func _fill_switch() -> void:
+	for child: Node in _switch.get_children():
+		_switch.remove_child(child)
+		child.queue_free()
+	var shown := 0
+	for id: String in GAME_NAMES:
+		if not games.has(id) or ELPuzzles.list(id).is_empty(): continue
+		shown += 1
+		var button := _button(GAME_NAMES[id], 180, 34)
+		button.name = "Game_" + id
+		button.toggle_mode = true
+		button.button_pressed = id == profile.id
+		# The game shown reads as chosen: gold, the other dimmed.
+		if id == profile.id:
+			for state: String in ["font_color", "font_hover_color", "font_pressed_color", "font_hover_pressed_color"]: button.add_theme_color_override(state, ELMenuKit.TITLE_INK)
+		else:
+			button.self_modulate = Color(0.6, 0.6, 0.6)
+			button.add_theme_color_override("font_color", Color(ELMenuKit.BODY_INK, 0.7))
+		button.pressed.connect(func():
+			if id == profile.id:
+				button.set_pressed_no_signal(true)
+				return
+			open_list(games[id]))
+		_switch.add_child(button)
+	_switch.visible = shown > 1
 
 func _close_list() -> void:
 	_list.hide()

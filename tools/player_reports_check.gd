@@ -17,7 +17,8 @@ extends SceneTree
 ## - a creature with an ability of its own breaks enfeeblement and both
 ##   paralyses like any other: the price is paid and it rises;
 ## - first game, option "cast_icons": the opponent's casts show as framed
-##   spell icons with their tooltip instead of red lines, own casts stay lines;
+##   spell icons with their tooltip instead of red lines, and own casts show
+##   no line either;
 ## - first game, with the second game installed: the pre-battle panel raises
 ##   the borrowed battle dome, and declining the battle ends it;
 ## - second game: a battle between two computer figures (chapter 11's Synth
@@ -99,6 +100,8 @@ func _run() -> void:
 		await _precombat(profiles.el1)
 		await _cast_icons()
 		await _camera_keys_and_hall()
+	await _tooltip_width()
+	for edition: String in profiles: await _fresh_draws(edition)
 	_save_name_symbols()
 	for edition: String in profiles: await _hot_seat_rounds(edition)
 	if profiles.has("el1") and profiles.has("el2"): await _first_dome()
@@ -109,6 +112,50 @@ func _run() -> void:
 	if not profiles.is_empty(): await _refused_load()
 	print("PLAYER REPORTS: %d failure(s)" % failures.size())
 	quit(0 if failures.is_empty() else 1)
+
+# --- Card draws differ each battle -------------------------------------------------
+
+## Outside --demo every battle started gets its own seed, and a loaded one
+## draws afresh from where it was saved.
+func _fresh_draws(edition: String) -> void:
+	var view: Node = load("res://scenes/duel.tscn").instantiate()
+	root.add_child(view)
+	await frames(2)
+	view.demo = false
+	var states := []
+	for i in 3:
+		view._start(edition)
+		states.append(view.duel.rng_state)
+	check(states[0] != states[1] or states[1] != states[2], "%s: each new battle draws from its own seed" % edition)
+	var saved: Dictionary = view.duel.snapshot()
+	var reloaded := []
+	for i in 2:
+		var loaded := ELDuel.new()
+		loaded.restore(view.profile, {"format": "etherlords-duel", "version": 1, "state": saved})
+		loaded.reseed()
+		reloaded.append(loaded.rng_state)
+	check(reloaded[0] != reloaded[1], "%s: a loaded battle draws afresh" % edition)
+	view.queue_free()
+	await frames(2)
+
+# --- Tooltip width ---------------------------------------------------------------
+
+## Godot's own tooltip label wraps at ELTooltipWidth.MAX_WIDTH; short ones keep their width.
+func _tooltip_width() -> void:
+	var widths := []
+	for text: String in ["Short tip", "A long description ".repeat(20)]:
+		var popup := PopupPanel.new()
+		var label := Label.new()
+		label.theme_type_variation = &"TooltipLabel"
+		label.text = text
+		popup.add_child(label)
+		root.add_child(popup)
+		await frames(1)
+		widths.append([label.get_combined_minimum_size().x, label.autowrap_mode])
+		popup.queue_free()
+	await frames(1)
+	check(widths[0][1] == TextServer.AUTOWRAP_OFF and widths[0][0] < ELTooltipWidth.MAX_WIDTH, "tooltips: a short tooltip keeps its own width")
+	check(widths[1][1] != TextServer.AUTOWRAP_OFF and widths[1][0] <= ELTooltipWidth.MAX_WIDTH + 0.5, "tooltips: a long tooltip wraps at the greatest width (%.0f)" % widths[1][0])
 
 # --- Hand card cost -------------------------------------------------------------
 
@@ -786,7 +833,7 @@ func _cast_icons() -> void:
 	view.settings.values.cast_icons = true
 	for card: String in cards: view._cast_notice(1, card)
 	view._cast_notice(0, cards[0])
-	check(notices.icons.size() == cards.size() and notices.lines.size() == 1, "el1: with icons on the opponent's casts are icons, own casts a line")
+	check(notices.icons.size() == cards.size() and notices.lines.is_empty(), "el1: with icons on the opponent's casts are icons, and no cast is a line")
 	check(notices.frame != null, "el1: the cast icons have a frame (the first game's list border)")
 	check(notices.icon_rect(5).position.y > notices.icon_rect(4).position.y, "el1: the icons wrap after five a row")
 	var tip: String = notices._get_tooltip(notices.icon_rect(0).get_center())
@@ -834,7 +881,16 @@ func _camera_keys_and_hall() -> void:
 	view.camera_distance = view.DISTANCE_LIMITS.y
 	view._update_camera()
 	var flat := Vector2(view.camera.position.x, view.camera.position.z).length()
-	check(flat <= 18.01, "Dungeon arena: zoomed all the way out the camera stays inside the hall (%.1f from the centre)" % flat)
+	check(is_equal_approx(view.camera.position.distance_to(view.camera_target), view.DISTANCE_LIMITS.y), "Dungeon arena: the camera zooms all the way out (%.1f from the centre)" % flat)
+	var shown := 0
+	for arch: ELModel in view.arena._camera_obstacles:
+		if not arch.visible: continue
+		shown += 1
+	var shell_hidden: bool = view.arena._hall_shell_models().all(func(m: ELModel) -> bool: return not m.visible)
+	check(shown > 0 and shell_hidden and not view.arena._hall_shell_models().is_empty(), "Dungeon arena: beyond the arches the near side of the hall is hidden and the far arches stay (%d shown)" % shown)
+	view.camera_distance = view.DISTANCE_LIMITS.x
+	view._update_camera()
+	check(view.arena._hall_shell_models().all(func(m: ELModel) -> bool: return m.visible), "Dungeon arena: zoomed in, the hall's walls show again")
 	if kept == null: view.settings.values.erase("auto_camera")
 	else: view.settings.values.auto_camera = kept
 	view.queue_free()
@@ -908,13 +964,23 @@ func _first_dome() -> void:
 	for item: Dictionary in state.objects.values():
 		if not item.get("alive", false): continue
 		if item.get("type") == "hero" and int(item.get("owner", -1)) == state.current_player and hero.is_empty(): hero = item
-		if item.get("type") == "monster" and monster.is_empty(): monster = item
+	# The nearest creature, as a real fight would have it.
+	for item: Dictionary in state.objects.values():
+		if not item.get("alive", false) or item.get("type") != "monster" or int(item.get("x", -1)) < 0 or hero.is_empty(): continue
+		var reach := Vector2(item.x, item.y).distance_to(Vector2(hero.x, hero.y))
+		if monster.is_empty() or reach < Vector2(monster.x, monster.y).distance_to(Vector2(hero.x, hero.y)): monster = item
 	map.director._begin_encounter(hero, monster)
 	await frames(3)
 	check(map.hud.precombat.visible and map.effects.effects.has(ELAdventureView.BATTLE_DOME) and map.audio.sounds.has(ELAdventureView.BATTLE_DOME), "el1: the pre-battle panel raises the dome and its sound")
+	check(map.hud.precombat.position.y + map.hud.precombat.size.y <= 740 and map.hud.precombat.position.y > 400, "el1: with the dome up the panel stands at the foot of the map, clear of it")
+	if not shots.is_empty():
+		await frames(90)
+		await RenderingServer.frame_post_draw
+		root.get_texture().get_image().save_png(shots.path_join("dome_el1.png"))
 	map.decline_encounter()
 	await frames(2)
 	check(not map.effects.effects.has(ELAdventureView.BATTLE_DOME) and not map.audio.sounds.has(ELAdventureView.BATTLE_DOME), "el1: declining the battle ends the dome")
+	check(is_equal_approx(map.hud.precombat.position.y, 286.0), "el1: the panel goes back to its original place for the next battle")
 	view.queue_free()
 	await frames(2)
 

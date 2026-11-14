@@ -550,7 +550,10 @@ func _load_profiles() -> void:
 				profiles[edition] = data
 				ELContentLibrary.link_folder(edition, found[edition])
 
-func _start(edition: String, options: Dictionary = {}, restored: ELDuel = null, battle_seed := 212) -> void:
+## `battle_seed` < 0: a new seed each battle, except in --demo (and the
+## checks that run it), which keep the fixed one so a battle can be repeated.
+func _start(edition: String, options: Dictionary = {}, restored: ELDuel = null, battle_seed := -1) -> void:
+	if battle_seed < 0: battle_seed = 212 if demo else randi() & 0x7fffffff
 	if _campaign_battle() != null and restored != _campaign_battle():
 		_notice("Finish or surrender the campaign battle first.")
 		return
@@ -637,10 +640,10 @@ func _start(edition: String, options: Dictionary = {}, restored: ELDuel = null, 
 	camera.fov = auto_camera_angle()
 	camera.current = true
 	battle_audio.listener = camera
+	combat_watch.attach(get_viewport().find_world_3d(), camera)
 	if path_tracing != null: path_tracing.attach(stage, arena, camera, effects)
 	auto_camera = ELAutoCamera.new(profile, battle_seed)
 	_default_view()
-	combat_watch.attach(get_viewport().find_world_3d(), camera)
 	fight_shot = false
 	ending = {}
 	for side in 2:
@@ -687,13 +690,13 @@ func _start(edition: String, options: Dictionary = {}, restored: ELDuel = null, 
 	game_menu_button.visible = not art.is_empty() and game_menu_button.has_art()
 	menu_button.visible = not game_menu_button.visible
 	rail.build(profile)
-	if power_dialog != null: power_dialog.build(profile)
-	_layout_hud()
-	for c: Dictionary in duel.creatures.values(): _spawn_creature(c)
 	advisor.reset()
 	for i in gap_panels.size():
 		gap_panels[i].build(profile)
 		gap_panels[i].show_slide(int(settings.values.get(GAP_KEYS[i], 0)))
+	if power_dialog != null: power_dialog.build(profile)
+	_layout_hud()
+	for c: Dictionary in duel.creatures.values(): _spawn_creature(c)
 	# What either side may cast is decoded in the background while the
 	# battle opens, so first casts do not stall (ELBattleWarmup).
 	battle_warmup = ELBattleWarmup.new()
@@ -713,10 +716,10 @@ func _start(edition: String, options: Dictionary = {}, restored: ELDuel = null, 
 	ring_material.albedo_color = ACCENT
 	selection_ring.material_override = ring_material
 	selection_ring.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	selection_ring.layers = 1 << (ELCombatWatch.HIDDEN_LAYER - 1)
 	stage.add_child(selection_ring)
 	selection_ring.hide()
 	front_line = []
-	selection_ring.layers = 1 << (ELCombatWatch.HIDDEN_LAYER - 1)
 	front_faces = {}
 	melee = ELMeleePlayback.new()
 	melee.view = self
@@ -769,11 +772,11 @@ var _tutorial_end_clock := 0.0
 
 func _process(delta: float) -> void:
 	elapsed += delta
+	if gap_panel != null and advisor.tick(): _show_advice()
+	if combat_watch != null and combat_watch.step(delta): _show_watch()
 	_update_strategic_clock()
 	if _strategic_battle():
 		var playable := strategic_session.battle_started and strategic_session.relay.can_play()
-	if gap_panel != null and advisor.tick(): _show_advice()
-	if combat_watch != null and combat_watch.step(delta): _show_watch()
 		if playable != _strategic_playable:
 			_strategic_playable = playable
 			_refresh()
@@ -1189,21 +1192,11 @@ func _restore_orbit(saved: Array) -> void:
 func _place_orbit() -> void:
 	var target := camera_target
 	var offset := Vector3(sin(camera_yaw) * cos(camera_pitch), sin(camera_pitch), cos(camera_yaw) * cos(camera_pitch)) * camera_distance
-	camera.position = target + offset * _camera_reach(target, offset)
+	camera.position = target + offset
 	camera.look_at(target)
+	# The zoom stays free everywhere; an enclosed hall hides what stands
+	# between the camera and the fight instead (ELArena.clear_camera_view).
 	arena.clear_camera_view(camera.position, target)
-
-## In an enclosed hall the camera comes in along its line of sight to stay
-## inside the walls: the fraction of the offset it may use (1 elsewhere).
-func _camera_reach(target: Vector3, offset: Vector3) -> float:
-	var limit := arena.camera_radius() if arena != null else INF
-	var flat := Vector2(offset.x, offset.z)
-	if not is_finite(limit) or flat.is_zero_approx(): return 1.0
-	var origin := Vector2(target.x, target.z)
-	var direction := flat.normalized()
-	var along := origin.dot(direction)
-	var reach := -along + sqrt(maxf(along * along - origin.length_squared() + limit * limit, 0.0))
-	return clampf(reach / flat.length(), 0.0, 1.0)
 
 ## The size a hero-slot figure is drawn at (EL1, EL2): the
 ## second game draws every hero half as large again, and a figure that is not
@@ -2009,7 +2002,6 @@ func _presentation_held() -> bool:
 	return _melee_busy() or not _cast_queue.is_empty()
 
 ## The shown health and wounds lag the rules: as above, or a figure's hit
-	advisor.note(data)
 ## still waits for the cue frame of the effect that deals it.
 func _shown_held() -> bool:
 	return _presentation_held() or not _hits_waiting.is_empty() or not _ending_waiting.is_empty()
@@ -2017,6 +2009,7 @@ func _shown_held() -> bool:
 ## The rules' event, stamped with the hero health it leaves (the screen shows
 ## that value only when the event itself is shown).
 func _on_duel_event(data: Dictionary) -> void:
+	advisor.note(data)
 	if data.get("kind") == "phase":
 		# Clear input as the rules change phase. The queued phase notice may
 		# play after the player has already picked a spell in the new phase.
@@ -2851,10 +2844,11 @@ func _local_side(side: int) -> bool:
 
 ## A hero's cast: T_CASTING in the log; the first game also lists it on screen,
 ## the second shows the opponent's spell icon at the top left. The remake's
-## "cast_icons" setting gives the first game the second game's icons for the
-## opponent's casts in place of its red lines.
+## "cast_icons" setting gives the first game the second game's way: an icon
+## for each of the opponent's casts and no cast lines on screen, the player's
+## own included (they stood under the icons as text beside them).
 func _cast_notice(side: int, card: String) -> void:
-	if profile.id == "el2" or (profile.id == "el1" and not _local_side(side) and bool(settings.values.get("cast_icons", true))):
+	if profile.id == "el2" or (profile.id == "el1" and bool(settings.values.get("cast_icons", true))):
 		_log(_format_text("T_CASTING", [_hero_name(side), duel.card_name(card)]))
 		if not _local_side(side) and is_instance_valid(notices): notices.add_icon(profile.card_icon(card), card)
 		return
@@ -4373,14 +4367,14 @@ func _remove_model(id: int) -> void:
 	homes.erase(id)
 
 func _add_label(id: int) -> void:
-	# For the main view alone (the battle camera readout leaves it out).
-	label.layers = 1 << (ELCombatWatch.HIDDEN_LAYER - 1)
 	var label := Label3D.new()
 	label.font_size = 28
 	label.outline_size = 9
 	label.pixel_size = 0.008
 	label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 	label.no_depth_test = true
+	# For the main view alone (the battle camera readout leaves it out).
+	label.layers = 1 << (ELCombatWatch.HIDDEN_LAYER - 1)
 	stage.add_child(label)
 	labels[id] = label
 
@@ -4443,13 +4437,13 @@ func _float_text(id: int, text: String, color: Color, remake_only := false) -> v
 		return
 	var live: Array = _floating.get(id, []).filter(func(node) -> bool: return is_instance_valid(node) and not node.is_queued_for_deletion())
 	var label := Label3D.new()
-	label.layers = 1 << (ELCombatWatch.HIDDEN_LAYER - 1)
 	label.text = text
 	label.font_size = 52
 	label.pixel_size = 0.01
 	label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 	label.modulate = color
 	label.no_depth_test = true
+	label.layers = 1 << (ELCombatWatch.HIDDEN_LAYER - 1)
 	stage.add_child(label)
 	label.position = models[id].position + Vector3(0, 2 + 0.7 * live.size(), 0)
 	live.append(label)
@@ -4673,13 +4667,13 @@ func _refresh() -> void:
 	if showing_artifacts and not concealed: _fill_artifact_rail(displayed)
 	if hand_frames != null: hand_frames.queue_redraw()
 	if rail != null:
-	_fill_gap(concealed)
 		var tallies: Array = []
 		for side in 2:
 			var h: Dictionary = duel.heroes[side]
 			var shown: Dictionary = melee.shown_hand(side) if is_instance_valid(melee) else h
 			tallies.append([h.grave.size(), h.enchantments.size(), shown.hand.size(), h.get("artifacts", []).size()])
 		rail.set_counts(tallies[0], tallies[1])
+	_fill_gap(concealed)
 	_show_hero_stats()
 	for side in 2:
 		var h: Dictionary = duel.heroes[side]
@@ -5242,6 +5236,12 @@ func _build_ui() -> void:
 	hud = ELHudFrame.new()
 	hud_root.add_child(hud)
 	rail = ELCombatRail.new()
+	hud_root.add_child(rail)
+	rail.tab_selected.connect(func(_artifacts: bool): _refresh())
+	rail.strip_selected.connect(func(graveyard: bool):
+		inspect_graveyard = graveyard
+		_refresh())
+	rail.strip_item.connect(_strip_pressed)
 	for key: String in GAP_KEYS:
 		var panel := ELCombatGapPanel.new()
 		hud_root.add_child(panel)
@@ -5250,12 +5250,6 @@ func _build_ui() -> void:
 	gap_panel = gap_panels[0]
 	combat_watch = ELCombatWatch.new()
 	add_child(combat_watch)
-	hud_root.add_child(rail)
-	rail.tab_selected.connect(func(_artifacts: bool): _refresh())
-	rail.strip_selected.connect(func(graveyard: bool):
-		inspect_graveyard = graveyard
-		_refresh())
-	rail.strip_item.connect(_strip_pressed)
 	for side in 2:
 		var portrait := TextureRect.new()
 		portrait.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
@@ -6006,7 +6000,7 @@ func _interface_page(page: VBoxContainer) -> void:
 	icons_toggle.name = "CastIcons"
 	icons_toggle.button_pressed = bool(settings.values.get("cast_icons", true))
 	icons_toggle.toggled.connect(func(enabled: bool): settings.values.cast_icons = enabled)
-	_settings_row(gameplay, "Opponent's spells as icons", "First game, in battle: the opponent's spells show as icons at the top left, as in the second game, instead of red messages. Point at an icon for the spell's description. Off: the original messages.", icons_toggle)
+	_settings_row(gameplay, "Opponent's spells as icons", "First game, in battle: the opponent's spells show as icons at the top left, as in the second game, instead of red messages, and your own spells are not listed. Point at an icon for the spell's description. Off: the original messages.", icons_toggle)
 	var dome_toggle := CheckButton.new()
 	dome_toggle.name = "FirstBattleDome"
 	dome_toggle.button_pressed = bool(settings.values.get("first_battle_dome", true))
@@ -7038,6 +7032,9 @@ func _begin_encounter(_hero: int, _opponent: int) -> void:
 	mode_select.select(0)
 	mode_select.disabled = true
 	profile_select.disabled = true
+	# A map battle, new or loaded from a save, draws afresh from here (an
+	# online map keeps the shared random state).
+	if strategic_session == null: battle.reseed()
 	_start(battle.profile.id, battle.setup, battle)
 	ui.show()
 	_first_tutorial_battle()
@@ -7259,6 +7256,9 @@ func _load_duel() -> void:
 		restored_match = ELDuelMatch.new()
 		if not restored_match.restore(profiles[edition], saved_match) or restored_match.finished(): restored_match = null
 	_match_starting = restored_match != null
+	# A loaded battle draws afresh, save a Duel mode match, whose recording
+	# replays its rounds from their seeds.
+	if restored_match == null: restored.reseed()
 	_start(edition, restored.setup, restored)
 	_restore_orbit(session.camera)
 	_match_starting = false
@@ -8692,6 +8692,7 @@ func _in_puzzle() -> bool:
 func _puzzle_mode_ready() -> void:
 	if puzzle_mode != null: return
 	puzzle_mode = ELPuzzleMode.new()
+	puzzle_mode.games = profiles
 	add_child(puzzle_mode)
 	puzzle_mode.play_requested.connect(_begin_puzzle)
 	puzzle_mode.left.connect(_leave_puzzles)

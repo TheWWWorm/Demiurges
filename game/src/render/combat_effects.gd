@@ -67,6 +67,12 @@ static var _shaders: Dictionary = {}
 ## lighting turn this on).
 static var glow_level := 1.0
 const ARENA_HDR_LIMIT := 1.4
+## A figure's own glowing particles (a hero's glowing blade, the sparkles on
+## a Kinet hero's wings) reach just past the bloom threshold
+## (ELEffectLook.BLOOM_THRESHOLD), so they bloom only where many stack. At a
+## spell's brightness the wing sparkles haloed the wings whenever a clip
+## brought them out.
+const FIGURE_HDR_LIMIT := 1.3
 
 var profile: ELProfile
 var edition := ""
@@ -602,7 +608,7 @@ func _spawn(path: String, reverse: bool, effect_frames: int, where: Transform3D,
 	var cached := _file(profile, path)
 	if cached.is_empty(): return {}
 	var file: ELParticleFile = cached.file
-	var material := _material(profile, file, ambient)
+	var material := _material(profile, file, ambient, follow != null)
 	if material == null: return {}
 	if file.additive and not cached.has("glow_tints"):
 		var atlas := material.get_shader_parameter("atlas") as Texture2D
@@ -1129,7 +1135,10 @@ const EMITTER_GLOW := 12.0
 ## The light a glowing (additive) frame gives off, for traced lighting: a
 ## soft source per patch of its particles, so a wall of fire lights along
 ## its length: [[centre, extent, summed colour], ...], brightest first.
-## Kept per frame.
+## Kept per frame. Each particle gives light by its colour and its area on
+## screen (the frame's total stays its summed colour): a hero's glowing
+## blade is a few large sprites among a hundred small sparkles on the body
+## and wings, and counted alike the sparkles drew the light to the chest.
 static func _glow(cached: Dictionary, key: String, buffer: PackedFloat32Array, count: int) -> Array:
 	if count == 0: return []
 	var glows: Dictionary = cached.get("glows", {})
@@ -1137,6 +1146,8 @@ static func _glow(cached: Dictionary, key: String, buffer: PackedFloat32Array, c
 	if glows.has(key): return glows[key]
 	var patches := {}
 	var glow_tints: PackedVector3Array = cached.get("glow_tints", PackedVector3Array())
+	var plain := 0.0
+	var weighted := 0.0
 	for n in count:
 		var o := n * 16
 		# Some authored tails keep particle colour after the billboard collapses.
@@ -1146,6 +1157,11 @@ static func _glow(cached: Dictionary, key: String, buffer: PackedFloat32Array, c
 		if atlas_cell >= 0 and atlas_cell < glow_tints.size(): rgb *= glow_tints[atlas_cell]
 		var w := rgb.x + rgb.y + rgb.z
 		if w <= 0.0001: continue
+		var area := buffer[o + 10] * buffer[o + 10]
+		plain += w
+		weighted += w * area
+		rgb *= area
+		w *= area
 		var p := Vector3(buffer[o + 3], buffer[o + 7], buffer[o + 11])
 		var cell := Vector3i((p / GLOW_PATCH).floor())
 		var patch: Array = patches.get(cell, [Vector3.ZERO, Vector3.ZERO, 0.0, 0.0])
@@ -1155,10 +1171,11 @@ static func _glow(cached: Dictionary, key: String, buffer: PackedFloat32Array, c
 		patch[3] += p.length_squared() * w
 		patches[cell] = patch
 	var result := []
+	var back := plain / weighted if weighted > 0.0 else 0.0
 	for patch: Array in patches.values():
 		var centre: Vector3 = patch[0] / patch[2]
 		var spread := sqrt(maxf(patch[3] / patch[2] - centre.length_squared(), 0.0))
-		result.append([centre, spread, patch[1]])
+		result.append([centre, spread, patch[1] * back])
 	result.sort_custom(func(a, b): return a[2].length_squared() > b[2].length_squared())
 	if result.size() > GLOW_PATCHES:
 		# Light of the patches left out goes to the ones kept, nearest first.
@@ -1172,9 +1189,11 @@ static func _glow(cached: Dictionary, key: String, buffer: PackedFloat32Array, c
 	return result
 
 ## Glowing particle systems now showing, for traced lighting:
-## [world centre, extent, summed colour times opacity, steady] per patch.
-## `steady` marks the arena's own fires and glows: lamps that stand there
-## for the whole battle, not a spell passing by.
+## [world centre, extent, summed colour times opacity, steady, figure] per
+## patch. `steady` marks the arena's own fires and glows: lamps that stand
+## there for the whole battle, not a spell passing by. `figure` marks a
+## figure's own glow (1 its weapon, 2 the glow spread over it, 0 neither),
+## which ELGlowLights lights faintly and never lets cast a shadow.
 func glow_sources() -> Array:
 	var result := []
 	var spells := emitters.size()
@@ -1204,7 +1223,19 @@ func glow_sources() -> Array:
 		for patch: Array in glow:
 			var colour := _saturate(patch[2] * tint) * opacity
 			total += maxf(colour.x, maxf(colour.y, colour.z))
-			lit.append([placement * patch[0], patch[1] * size, colour, at >= spells])
+			lit.append([placement * patch[0], patch[1] * size, colour, at >= spells, 0])
+		# A figure's own glow is a light at its brightest patch (a hero's
+		# glowing blade or axe) and, for glow spread over the figure (the
+		# sparkles on a Kinet hero's wings), a gentler one where that stands:
+		# lamps merged from the two stood at the chest and hopped between
+		# them. Every glowing weapon lights alike, whatever its particle
+		# count: a Chaot's axe is four large sprites, a Kinet's glaive a
+		# hundred, and counted by their colour the axe gave no light at all.
+		# ELGlowLights lights them at ATTACHED_SHARE and AURA_SHARE.
+		if emitter.following and not lit.is_empty():
+			lit = _figure_lights(lit)
+			if lit.is_empty(): continue
+			total = EMITTER_GLOW
 		var share := minf(1.0, EMITTER_GLOW / maxf(total, 0.0001))
 		for light: Array in lit:
 			light[2] *= share
@@ -1235,7 +1266,34 @@ func glow_sources() -> Array:
 			var peak := maxf(piece.x, maxf(piece.y, piece.z)) * pieces
 			if peak > EMITTER_GLOW: piece *= EMITTER_GLOW / peak
 			for i in pieces:
-				result.append([box.position + step * (i + 0.5) + Vector3(s.x if axis != 0 else 0.0, s.y if axis != 1 else 0.0, s.z if axis != 2 else 0.0) * 0.5, extent, piece, at >= objects.size()])
+				result.append([box.position + step * (i + 0.5) + Vector3(s.x if axis != 0 else 0.0, s.y if axis != 1 else 0.0, s.z if axis != 2 else 0.0) * 0.5, extent, piece, at >= objects.size(), 0])
+	return result
+
+## A figure's glow patches as its weapon light (kind 1, at the brightest
+## patch) and, from the patches standing apart from it, its aura light (kind
+## 2, at their brightest), coloured by what each gathers, at full and
+## AURA_GLOW strength.
+const WEAPON_REACH := 1.5
+const AURA_GLOW := 0.6
+static func _figure_lights(lit: Array) -> Array:
+	var brightest: Array = lit[0]
+	for light: Array in lit:
+		if light[2].length_squared() > brightest[2].length_squared(): brightest = light
+	var weapon := Vector3.ZERO
+	var aura := Vector3.ZERO
+	var aura_at: Array = []
+	for light: Array in lit:
+		if light[0].distance_to(brightest[0]) <= WEAPON_REACH:
+			weapon += light[2]
+			continue
+		aura += light[2]
+		if aura_at.is_empty() or light[2].length_squared() > aura_at[2].length_squared(): aura_at = light
+	var result := []
+	var peak := maxf(weapon.x, maxf(weapon.y, weapon.z))
+	if peak > 0.0001: result.append([brightest[0], brightest[1], weapon * (EMITTER_GLOW / peak), brightest[3], 1])
+	peak = maxf(aura.x, maxf(aura.y, aura.z))
+	if peak > 0.0001 and not aura_at.is_empty():
+		result.append([aura_at[0], aura_at[1], aura * (EMITTER_GLOW * AURA_GLOW / peak), aura_at[3], 2])
 	return result
 
 static func _additive_model_glow(material: StandardMaterial3D) -> Vector3:
@@ -1569,9 +1627,10 @@ static func cached_files(data: ELProfile) -> int:
 		if key.begins_with(data.id + ":"): count += 1
 	return count
 
-static func _material(data: ELProfile, file: ELParticleFile, ambient: bool) -> ShaderMaterial:
+static func _material(data: ELProfile, file: ELParticleFile, ambient: bool, figure := false) -> ShaderMaterial:
 	var capped := ambient and file.additive
-	var key := "%s|%s|%s|%s" % [data.id, file.texture.to_lower(), "arena" if capped else "effect", file.additive]
+	var held := figure and file.additive and not capped
+	var key := "%s|%s|%s|%s" % [data.id, file.texture.to_lower(), "arena" if capped else ("figure" if held else "effect"), file.additive]
 	if _materials.has(key): return _materials[key]
 	var name := file.texture.get_basename() if file.texture.to_lower().ends_with(".bmp") else file.texture
 	var texture := data.texture("Effects/" + name)
@@ -1583,7 +1642,7 @@ static func _material(data: ELProfile, file: ELParticleFile, ambient: bool) -> S
 	material.set_shader_parameter("atlas", texture)
 	material.set_shader_parameter("grid", Vector2(file.columns, file.rows))
 	material.render_priority = 10
-	var glow := minf(glow_level, ARENA_HDR_LIMIT) if capped else glow_level
+	var glow := minf(glow_level, ARENA_HDR_LIMIT) if capped else (minf(glow_level, FIGURE_HDR_LIMIT) if held else glow_level)
 	material.set_shader_parameter("glow", glow if file.additive else 1.0)
 	_materials[key] = material
 	return material
@@ -1598,7 +1657,7 @@ func set_glow(value: float) -> void:
 	set_glow_level(value)
 	for emitter in emitters:
 		var own: ShaderMaterial = emitter.own
-		if own != null and not emitter.entry.is_empty() and emitter.entry.file.additive: own.set_shader_parameter("glow", value)
+		if own != null and not emitter.entry.is_empty() and emitter.entry.file.additive: own.set_shader_parameter("glow", minf(value, FIGURE_HDR_LIMIT) if emitter.following else value)
 	for item: Dictionary in arena_objects:
 		if item.active and item.ether_vent: _set_vent_glow(item)
 
@@ -1609,7 +1668,8 @@ static func set_glow_level(value: float) -> void:
 	for key: String in _materials:
 		var material: ShaderMaterial = _materials[key]
 		if material != null and key.ends_with("|true"):
-			material.set_shader_parameter("glow", minf(value, ARENA_HDR_LIMIT) if key.ends_with("|arena|true") else value)
+			var limit := ARENA_HDR_LIMIT if key.ends_with("|arena|true") else (FIGURE_HDR_LIMIT if key.ends_with("|figure|true") else INF)
+			material.set_shader_parameter("glow", minf(value, limit))
 
 ## Only the hottest part of the flame crosses the bloom threshold.
 func _set_vent_glow(item: Dictionary) -> void:

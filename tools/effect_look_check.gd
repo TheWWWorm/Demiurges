@@ -162,6 +162,25 @@ void fragment() { ALPHA = sprite_add(1.0); }
 	for lamp: OmniLight3D in lights.get_children():
 		check(not lamp.shadow_enabled, "a lamp that has gone out casts no shadow")
 		break
+	# A figure's own glow (a Kinet hero's blade) and the arena's standing
+	# fires light, but never cast the shadow; a figure's glow lights faintly.
+	var figure := [Vector3(0, 2, 0), 0.5, Vector3(20, 20, 20), false, 1]
+	var spell := [figure[0], figure[1], figure[2]]
+	var torch := [Vector3(30, 2, 0), 0.5, Vector3(40, 30, 10), true, false]
+	lights.show_sources([figure, torch], 0.0)
+	var cast := 0
+	var faint := INF
+	for lamp: OmniLight3D in lights.get_children():
+		if not lamp.visible: continue
+		if lamp.shadow_enabled: cast += 1
+		if lamp.global_position.distance_to(figure[0]) < 0.1: faint = lamp.light_energy
+	check(cast == 0, "neither a figure's own glow nor the arena's fires cast a shadow")
+	for i in 120: lights.show_sources([], 1.0 / 60.0)
+	lights.show_sources([spell], 0.0)
+	var full := 0.0
+	for lamp: OmniLight3D in lights.get_children():
+		if lamp.visible: full = lamp.light_energy
+	check(faint < full * (ELGlowLights.ATTACHED_SHARE + 0.01), "a figure's own glow lights at a share of a spell's (%.2f of %.2f)" % [faint, full])
 	lights.queue_free()
 	print("EFFECT LOOK: %d failure(s)" % failures.size())
 	quit(0 if failures.is_empty() else 1)

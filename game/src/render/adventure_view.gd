@@ -1636,7 +1636,11 @@ func _present(data: Dictionary) -> void:
 					following = -1
 					target = (ends[0] + ends[-1]) * 0.5
 				hud.show_precombat(data.hero, data.opponent, number, total, director.encounter != null and director.encounter.declinable())
-				if dome_source != null: _start_battle_dome(int(data.hero), int(data.opponent))
+				if dome_source != null:
+					_start_battle_dome(int(data.hero), int(data.opponent))
+					# The dome rises at the centre of the view; the panel moves
+					# down out of its way.
+					if effects != null and effects.effects.has(BATTLE_DOME): hud.lower_precombat()
 			elif second_precombat != null and precombat_preview and not data.get("remote_use", false): _open_second_precombat(data.hero, data.opponent)
 			else: encounter_requested.emit(data.hero, data.opponent)
 		"lose_battle": _open_lose_battle()

@@ -3258,6 +3258,12 @@ static func hand_copy_uses(hero: Dictionary, index: int) -> int:
 	var slot: int = hero.hand_slots[index]
 	return int(hero.spell_uses[slot]) if slot >= 0 else -1
 
+## A fresh, unpredictable random state: the draws and random effects from
+## here on differ each time a battle is started or loaded (the remake's
+## choice; the original drew the same cards again after a reload).
+func reseed() -> void:
+	rng_state = randi() & 0xffffffff
+
 func random_index(count: int) -> int:
 	rng_state = (rng_state * 0x343fd + 0x269ec3) & 0xffffffff
 	return ((rng_state >> 16) & 0x7fff) % maxi(1, count)

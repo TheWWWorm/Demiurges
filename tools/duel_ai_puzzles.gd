@@ -11,7 +11,8 @@ extends SceneTree
 ##
 ##   Finding them (each shard writes its own files into the folder):
 ##   godot --headless --path game --script ../tools/duel_ai_puzzles.gd --
-##       --mine=<folder> [--game=el1|el2] [--duels=N] [--shard=I/N]
+##       --mine=<folder> [--game=el1|el2] [--duels=N] [--from=N] [--shard=I/N]
+##   `--from` starts at that duel, to look past the duels already mined.
 ##
 ##   Solving them with an opponent setting (as tools/duel_ai_bench.gd names one):
 ##   godot --headless --path game --script ../tools/duel_ai_puzzles.gd --
@@ -104,13 +105,13 @@ func _initialize() -> void:
 		quit(1)
 		return
 	var shard := _arg("shard", "0/1")
-	if not _arg("mine", "").is_empty(): _mine(_arg("mine", ""), game, int(_arg("duels", "16")), shard)
+	if not _arg("mine", "").is_empty(): _mine(_arg("mine", ""), game, int(_arg("duels", "16")), shard, int(_arg("from", "0")))
 	elif not _arg("solve", "").is_empty(): _solve(_arg("solve", ""), game, _arg("a", "smart"), shard)
 	elif not _arg("prove", "").is_empty(): _prove(_arg("prove", ""), game, shard)
 	print("DONE")
 	quit(0)
 
-func _mine(folder: String, game: String, duels: int, shard: String) -> void:
+func _mine(folder: String, game: String, duels: int, shard: String, from := 0) -> void:
 	DirAccess.make_dir_recursive_absolute(folder)
 	var letters := {"Red": "R", "Green": "G", "Blue": "U", "Black": "B"}
 	var books: Array = []
@@ -121,7 +122,7 @@ func _mine(folder: String, game: String, duels: int, shard: String) -> void:
 			if not ELCatalog.deck(profile, name).is_empty(): books.append({"faction": faction, "deck": name, "level": level * 2})
 	var random := RandomNumberGenerator.new()
 	var found := 0
-	for n in duels:
+	for n in range(from, from + duels):
 		if n % int(shard.get_slice("/", 1)) != int(shard.get_slice("/", 0)): continue
 		random.seed = hash([53, n])
 		var first: Dictionary = books[random.randi() % books.size()]

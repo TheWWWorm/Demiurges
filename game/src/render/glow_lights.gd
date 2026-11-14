@@ -31,6 +31,18 @@ const REACH := 8.0
 ## Forward+; a device that cannot afford that has no spell light at all, as
 ## ELHardwareCheck turns the preference off below its full budget.
 const SHADOW_LAMPS := 1
+## A figure's own glowing particles (a Kinet hero's blade, which glows the
+## whole battle) light only this share of what a spell would, and never cast
+## a shadow. At full strength and casting, the lamp stood inside the figure:
+## it threw the wings' shadow across the hero's own body and the ground,
+## jumping as the clip changed, and it lifted the snow of the Kinet arenas
+## past the bloom threshold, so the hero stood in a white haze.
+const ATTACHED_SHARE := 0.25
+const ATTACHED_REACH := 0.5
+## The glow spread over a figure (the sparkles on a Kinet hero's wings): a
+## soft light that keeps the wings lit from within, as the old lamp at the
+## chest did, without its shadows or its hopping.
+const AURA_SHARE := 0.35
 
 ## Whether a lamp may cast one. The Compatibility renderer draws the glowing
 ## sprites beside a shadowing omni light as opaque white squares, and a
@@ -44,28 +56,43 @@ const FALLOFF := 0.35
 ## Sudden changes are spread over about this long (seconds): the glowing
 ## patches of a particle system regroup from frame to frame.
 const SMOOTHING := 0.08
+## A figure's lamp fades this slowly (seconds) when its glow is gone, and
+## keeps its place among the LIMIT meanwhile: a Kinet hero's wing sparkles
+## leave a gap of a few frames each time the idle clip starts over, and the
+## lamp went out and came back with it.
+const FIGURE_FADE := 0.5
 
 var _pool: Array[OmniLight3D] = []
 
-## Shows `sources` ([[world centre, extent, summed linear colour, steady],
-## ...], as the effects' glow_sources give them), merged into lamps,
-## brightest first up to LIMIT. A spell comes before the arena's own standing
-## fires: their light is painted into the scenery already, while a spell's is
-## the light the picture is missing, and they would otherwise take the whole
-## budget in an arena ringed with braziers.
+## Shows `sources` ([[world centre, extent, summed linear colour, steady,
+## attached], ...], as the effects' glow_sources give them), merged into
+## lamps, brightest first up to LIMIT. A spell comes before the arena's own
+## standing fires and the figures' own glow: their light is painted into the
+## scenery already, or stands there all battle, while a spell's is the light
+## the picture is missing, and they would otherwise take the whole budget in
+## an arena ringed with braziers.
 func show_sources(sources: Array, delta: float) -> void:
 	sources = merged(sources)
+	# Spells first, then the figures' own glow (light the scenery does not
+	# have painted in), then the arena's standing fires.
 	sources.sort_custom(func(a: Array, b: Array) -> bool:
-		var a_steady: bool = a.size() > 3 and a[3]
-		var b_steady: bool = b.size() > 3 and b[3]
-		if a_steady != b_steady: return b_steady
+		var a_rank := _rank(a)
+		var b_rank := _rank(b)
+		if a_rank != b_rank: return a_rank < b_rank
 		return a[2].length_squared() > b[2].length_squared())
-	if sources.size() > LIMIT: sources.resize(LIMIT)
+	# Places kept for figure lamps whose glow is gone for the moment.
+	var held := 0
+	for lamp: OmniLight3D in _pool:
+		if lamp.visible and lamp.get_meta(&"figure", false): held += 1
+	var incoming := sources.filter(func(source: Array) -> bool: return _attached(source)).size()
+	var room := LIMIT - maxi(0, held - incoming)
+	if sources.size() > room: sources.resize(maxi(room, 0))
 	var blend := 1.0 - exp(-delta / SMOOTHING) if delta > 0.0 else 1.0
+	var slow := 1.0 - exp(-delta / FIGURE_FADE) if delta > 0.0 else 1.0
 	var free: Array[OmniLight3D] = _pool.duplicate()
-	var result_index := -1
+	var shadows_left := SHADOW_LAMPS if shadows_available() else 0
 	for source: Array in sources:
-		result_index += 1
+		var attached := _attached(source)
 		var colour: Vector3 = source[2]
 		var peak := maxf(colour.x, maxf(colour.y, colour.z))
 		if peak <= 0.001: continue
@@ -93,12 +120,19 @@ func show_sources(sources: Array, delta: float) -> void:
 			_pool.append(lamp)
 		else:
 			free.erase(lamp)
-		var wants_shadow := result_index < SHADOW_LAMPS and shadows_available()
+		# Only a spell's lamp casts: the arena's flickering fires traded the
+		# one shadow between them frame by frame, so it jumped about the room.
+		var wants_shadow := shadows_left > 0 and not _steady(source)
+		if wants_shadow: shadows_left -= 1
 		if lamp.shadow_enabled != wants_shadow: lamp.shadow_enabled = wants_shadow
 		var tint := colour / peak
 		var wanted := Color(tint.x, tint.y, tint.z).linear_to_srgb()
 		var energy := ENERGY_LIMIT * (1.0 - exp(-peak * ENERGY_RISE))
 		var reach := REACH + clampf(float(source[1]), 0.1, 3.0) * 3.0
+		if attached:
+			energy *= AURA_SHARE if int(source[4]) == 2 else ATTACHED_SHARE
+			reach *= ATTACHED_REACH
+		lamp.set_meta(&"figure", attached)
 		if fresh:
 			lamp.global_position = centre
 			lamp.light_color = wanted
@@ -118,15 +152,34 @@ func show_sources(sources: Array, delta: float) -> void:
 	for lamp: OmniLight3D in free:
 		if not lamp.visible: continue
 		lamp.shadow_enabled = false
-		lamp.light_energy = lerpf(lamp.light_energy, 0.0, blend)
-		if lamp.light_energy < 0.01: lamp.visible = false
+		var figure: bool = lamp.get_meta(&"figure", false)
+		lamp.light_energy = lerpf(lamp.light_energy, 0.0, slow if figure else blend)
+		if lamp.light_energy < 0.01:
+			lamp.visible = false
+			lamp.set_meta(&"figure", false)
 		else: fading.append(lamp)
 	var over := lit() - LIMIT
 	if over > 0:
-		fading.sort_custom(func(a: OmniLight3D, b: OmniLight3D) -> bool: return a.light_energy < b.light_energy)
+		# Figure lamps are the last to give up their place.
+		fading.sort_custom(func(a: OmniLight3D, b: OmniLight3D) -> bool:
+			var a_figure: bool = a.get_meta(&"figure", false)
+			var b_figure: bool = b.get_meta(&"figure", false)
+			if a_figure != b_figure: return b_figure
+			return a.light_energy < b.light_energy)
 		for i in mini(over, fading.size()):
 			fading[i].light_energy = 0.0
 			fading[i].visible = false
+			fading[i].set_meta(&"figure", false)
+
+static func _rank(source: Array) -> int:
+	if _attached(source): return 1
+	return 2 if source.size() > 3 and source[3] else 0
+
+static func _steady(source: Array) -> bool:
+	return (source.size() > 3 and source[3]) or _attached(source)
+
+static func _attached(source: Array) -> bool:
+	return source.size() > 4 and int(source[4]) > 0
 
 ## Sources within MERGE of a brighter one joined to it (colours summed, the
 ## centre weighted by brightness, the wider extent kept), brightest first.
@@ -145,6 +198,8 @@ static func merged(sources: Array) -> Array:
 		for i in result.size():
 			var lamp: Array = result[i]
 			if lamp[0].distance_squared_to(source[0]) > MERGE * MERGE: continue
+			# A figure's lights stand where they are (its weapon, its wings).
+			if _attached(lamp) or _attached(source): continue
 			lamp[0] = (lamp[0] * weights[i] + source[0] * weight) / (weights[i] + weight)
 			lamp[1] = maxf(lamp[1], source[1])
 			lamp[2] += colour

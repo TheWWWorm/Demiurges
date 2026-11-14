@@ -2,6 +2,16 @@
 
 Versions follow [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html) from 0.3.0 on.
 
+## 0.14.0
+
+- **Puzzles:** harder easy puzzles. None can now be won by casting the obvious spell and attacking with everything, by the plain computer player or by doing nothing; the packs were rebuilt from many more battles (24 for Etherlords, 20 for Etherlords II). A switch at the top of the list shows either game's puzzles.
+- **Battle panel on wide screens:** the free stretch beside the hand holds a readout, switched with the panel's arrows and remembered between battles: the cards left in the spellbook, a battle adviser (chance to win and a verdict on the last move), both heroes' graveyards and enchantments, and a live camera that goes from figure to figure. Very wide screens show two or three side by side.
+- Battles draw different cards each time one starts or is loaded: quick and hot-seat battles no longer repeat the same draws, and reloading a save no longer brings the same cards back. Online play, replays, the tutorial and puzzles keep theirs.
+- Glow and light: a hero's glowing weapon lights from the weapon itself, Chaot axes included, and a Kinet hero's wings keep a soft, steady glow; the light no longer bleaches the snow of the Kinet arenas, throws wing shadows across the hero or jumps about as the hero moves. The arena's torches no longer trade a shadow between them.
+- Etherlords: with **Opponent's spells as icons** on, your own spells are no longer listed as text under the icons. With the battle dome, the pre-battle panel moves to the foot of the map so the dome shows.
+- Dungeon of Death: the camera zooms out freely again; the arches and the wall between the camera and the fight are hidden instead ([#71](https://github.com/TheWWWorm/Demiurges/issues/71)).
+- Every tooltip has a greatest width and wraps longer text.
+
 ## 0.13.0
 
 - **Puzzles:** a new main-menu entry with battles that can be won in two to four turns whatever the defender does (24 for Etherlords, 21 for Etherlords II, in three levels). A hint names the first command, and solved puzzles are ticked.

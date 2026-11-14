@@ -267,7 +267,9 @@ func build_battle() -> ELDuel:
 	for key: String in ["scripts", "script_variables", "script_difficulty"]:
 		if opponent.has(key): options[key] = opponent[key]
 	var duel := ELDuel.new()
-	if not duel.start(profile, int(room.seed), options):
+	# The room's seed sets the opponent and who moves first; the cards are
+	# drawn afresh each time the room's battle starts.
+	if not duel.start(profile, randi() & 0x7fffffff, options):
 		_fail(duel.error)
 		return null
 	duel.heroes[0].maximum = max_health
@@ -325,6 +327,8 @@ func _restore_battle(saved: Dictionary) -> ELDuel:
 			if duel.heroes[0].skills.get(code) != trained[code]:
 				_fail("This battle does not match the expedition's trained skills.")
 				return null
+		# A battle loaded from its checkpoint draws afresh.
+		duel.reseed()
 		return duel
 	_fail(duel.error)
 	return null

@@ -4,10 +4,10 @@ extends SceneTree
 ## tools/duel_ai_puzzles.gd finds positions with a forced win a few turns
 ## off. This tool takes those of the first hero, has the compiled engine
 ## prove each win and the fewest turns it takes, plays it through against
-## every defence the game can put up, sets aside the ones that are won by
-## sending every creature forward or by doing nothing, counts how many first
-## commands keep the win, and writes the best, easiest first, where the game
-## reads them (game/puzzles/<game>.json).
+## every defence the game can put up, sets aside the ones a player wins
+## without having to think (see OBVIOUS), counts how many first commands keep
+## the win, and writes the best, easiest first, where the game reads them
+## (game/puzzles/<game>.json).
 ##
 ##   Rating (each shard writes <out>.<shard>):
 ##   godot --headless --path game --script ../tools/duel_puzzle_pack.gd --
@@ -30,6 +30,12 @@ const PLAIN := {"plain": true}
 const BLUNT := {"blunt": true}
 ## Nothing at all: every phase is ended as it stands.
 const IDLE := {"idle": true}
+## The first thing a player tries: what the plain computer player would cast
+## or use, then every creature sent forward. Players found the easiest level
+## too easy when it was the one the plain computer player won by itself, and
+## a puzzle this solves is just "cast the obvious spell and attack with
+## everything": none of them is offered.
+const OBVIOUS := {"obvious": true}
 ## Positions a proof may read, and the most turns a puzzle may take.
 const PROOF := 20000000
 const LONGEST := 4
@@ -52,18 +58,27 @@ func _use(setting: Dictionary) -> void:
 
 func _think(duel: ELDuel, setting: Dictionary) -> Dictionary:
 	if setting.has("idle"): return {}
-	if setting.has("blunt"):
-		if duel.phase != ELDuel.Phase.ATTACK: return {}
-		for creature: Dictionary in duel.army(duel.active_side()):
-			if duel.attacks.has(int(creature.id)): continue
-			var command := {"kind": "attack", "id": int(creature.id)}
-			if ELCombatSearch.apply(duel.search_copy(), command): return command
-		return {}
+	if setting.has("blunt"): return _charge(duel)
+	if setting.has("obvious"):
+		# Casts and abilities as the plain player chooses them; its attacks
+		# (and its ending of the attack phase) become a charge of everything.
+		var plain := _think(duel, PLAIN)
+		if duel.phase != ELDuel.Phase.ATTACK or String(plain.get("kind", "end_phase")) in ["cast", "ability"]: return plain
+		return _charge(duel)
 	_use(setting)
 	var smart: Array[int] = []
 	if not setting.has("plain"): smart.append(duel.active_side())
 	duel.smart_sides = smart
 	return ELCombatSearch.think(duel, {})
+
+## The next creature sent forward in the attack phase, or {} when all are.
+func _charge(duel: ELDuel) -> Dictionary:
+	if duel.phase != ELDuel.Phase.ATTACK: return {}
+	for creature: Dictionary in duel.army(duel.active_side()):
+		if duel.attacks.has(int(creature.id)): continue
+		var command := {"kind": "attack", "id": int(creature.id)}
+		if ELCombatSearch.apply(duel.search_copy(), command): return command
+	return {}
 
 ## A command in a few words: what the hint shows and what the log lists.
 func _said(duel: ELDuel, command: Dictionary) -> Dictionary:
@@ -183,11 +198,12 @@ func _rate(folder: String, game: String, out: String, shard: String) -> void:
 		# position the game's own computer player loses by itself is no puzzle.
 		row.blunt = bool(row.sound) and (_win_in(duel, side, BLUNT, DEEP, turns) > 0 or _win_in(duel, side, BLUNT, PLAIN, turns) > 0)
 		row.idle = bool(row.sound) and (_win_in(duel, side, IDLE, DEEP, turns) > 0 or _win_in(duel, side, IDLE, PLAIN, turns) > 0)
+		row.obvious = bool(row.sound) and (_win_in(duel, side, OBVIOUS, DEEP, turns) > 0 or _win_in(duel, side, OBVIOUS, PLAIN, turns) > 0)
 		# How many of the first commands keep the win: each is played, and
 		# the win proved again from where it leaves the duel.
 		var seen := {}
 		var keys := 0
-		if bool(row.sound) and not bool(row.blunt) and not bool(row.idle):
+		if bool(row.sound) and not _thoughtless(row):
 			for item: Dictionary in ELCombatBrain.weigh(_context(side), duel, 2, 200000, 10):
 				var command: Dictionary = item.command
 				if command.is_empty(): continue
@@ -208,18 +224,29 @@ func _rate(folder: String, game: String, out: String, shard: String) -> void:
 		row.keys = keys
 		file.store_line(JSON.stringify(row))
 		file.flush()
-		print("RATED %s turns=%d sound=%s plain=%s blunt=%s idle=%s casts=%d moves=%d keys=%d" % [row.id, turns, str(row.sound), str(row.plain), str(row.blunt), str(row.idle), int(row.casts), int(row.moves), int(row.keys)])
+		print("RATED %s turns=%d sound=%s plain=%s blunt=%s obvious=%s idle=%s casts=%d moves=%d keys=%d" % [row.id, turns, str(row.sound), str(row.plain), str(row.blunt), str(row.obvious), str(row.idle), int(row.casts), int(row.moves), int(row.keys)])
 
-## How hard a rated puzzle is: 1 the plain computer player has it, 3 one
-## first command alone wins and the plain player misses it, 2 the rest.
+## Won without thought: by the plain computer player, by sending everything
+## forward, by the obvious cast and a charge, or by doing nothing.
+func _thoughtless(row: Dictionary) -> bool:
+	return bool(row.plain) or bool(row.blunt) or bool(row.obvious) or bool(row.idle)
+
+## Share of the first commands that keep the win.
+func _key_share(row: Dictionary) -> float:
+	return float(row.keys) / float(row.moves) if int(row.moves) > 0 else 1.0
+
+## How hard a rated puzzle is, none of them won without thought: 3 one first
+## command alone wins out of many, 1 a two-turn win that several first
+## commands keep, 2 the rest.
 func _level(row: Dictionary) -> int:
-	if bool(row.plain): return 1
-	return 3 if int(row.keys) == 1 and int(row.moves) >= 4 else 2
+	if int(row.keys) == 1 and int(row.moves) >= 4: return 3
+	if int(row.turns) == 2 and _key_share(row) >= 0.25: return 1
+	return 2
 
-## What makes one worth playing: it does not solve itself, spells and
-## abilities take part, and few first commands keep the win.
+## What makes one worth playing: spells and abilities take part, and few
+## first commands keep the win.
 func _worth(row: Dictionary) -> float:
-	var worth := 0.0 if bool(row.plain) else 3.0
+	var worth := 3.0
 	worth += minf(float(row.casts) + float(row.abilities), 3.0)
 	if int(row.moves) > 0 and int(row.keys) > 0:
 		worth += 4.0 * (1.0 - float(row.keys) / float(row.moves))
@@ -234,10 +261,11 @@ func _pack(folder: String, game: String, ratings: String, count: int, skipped: A
 		for text: String in FileAccess.get_file_as_string(base.path_join(name)).split("\n", false):
 			var row: Variant = JSON.parse_string(text)
 			if row is Dictionary and String(row.get("id", "")).begins_with(game + "_"): rows.append(row)
-	# Sound ones only, none won by sending everything forward or by doing
-	# nothing, and none in which every first command wins.
+	# Sound ones only, none won without thought (ratings from before the
+	# obvious player count as won by it), and none in which every first
+	# command wins.
 	rows = rows.filter(func(row: Dictionary) -> bool:
-		return bool(row.sound) and not bool(row.blunt) and not bool(row.idle) and int(row.keys) >= 1 and int(row.keys) < int(row.moves) and not skipped.has(String(row.id)))
+		return bool(row.sound) and row.has("obvious") and not _thoughtless(row) and int(row.keys) >= 1 and int(row.keys) < int(row.moves) and not skipped.has(String(row.id)))
 	# One position out of each duel: the best of its turns.
 	rows.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
 		return _worth(a) > _worth(b) if _worth(a) != _worth(b) else String(a.id) < String(b.id))

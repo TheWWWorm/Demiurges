@@ -274,7 +274,7 @@ func _layout() -> void:
 	# DayText control: Left 646 + 224, Top 585 + 168, 150 x 15.
 	day_label.size = Vector2(150, 15)
 	day_label.position = Vector2(870 + right_shift, 753)
-	precombat.position = Vector2(116 + right_shift * 0.5, 286)
+	_place_precombat()
 	remake_strip.position = Vector2(8, 8)
 	remake_strip.size.x = 0
 	art.queue_redraw()
@@ -741,6 +741,7 @@ func show_tooltip(id: int, content: Dictionary, at: Vector2) -> void:
 	tooltip_title.text = content.title
 	tooltip_title.visible = not str(content.title).is_empty()
 	tooltip_body.text = content.text
+	ELTooltipWidth.fit(tooltip_body)
 	tooltip_picture.texture = content.picture
 	tooltip_picture.custom_minimum_size = content.picture_size
 	tooltip.reset_size()
@@ -874,6 +875,23 @@ func show_precombat(hero_id: int, opponent_id: int, number: int, total: int, dec
 func hide_precombat() -> void:
 	precombat.hide()
 	precombat_pair.clear()
+	precombat_low = false
+	_place_precombat()
+
+## Whether the pre-battle panel stands at the foot of the map area instead of
+## its original place in the middle: the remake's borrowed battle dome rises
+## at the centre of the view, where the panel would cover it.
+var precombat_low := false
+
+## The pre-battle panel's place: its original one, or above the bottom bar.
+func _place_precombat() -> void:
+	if precombat == null: return
+	precombat.position = Vector2(116 + right_shift * 0.5, 740 - precombat.size.y - 10 if precombat_low else 286)
+
+## Moves the open pre-battle panel to the foot of the map area (see precombat_low).
+func lower_precombat() -> void:
+	precombat_low = true
+	_place_precombat()
 
 ## The map tooltip belongs to the world: leaving the map area hides it.
 func _input(event: InputEvent) -> void:
