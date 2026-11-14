@@ -78,6 +78,13 @@ static func choose_el1(hero: Dictionary, spells: Dictionary, random_index: Calla
 		var candidate: Dictionary = spells[code]
 		if candidate.get("Rarity") == "Cantrip" and candidate.get("Color") == spell.get("Color") and candidate.get("Class") == spell.get("Class"):
 			substitutes.append(code)
+	# A spent bought spell gives way to the cantrip it was bought over
+	# (ELRunes.under); the draw still takes its fallback step.
+	var under: Variant = hero.get("rune_under", [])
+	var waiting := str(under[slot]) if under is Array and slot < under.size() else ""
+	if not waiting.is_empty() and spells.get(waiting, {}).get("Rarity") == "Cantrip":
+		if not substitutes.is_empty(): random_index.call(substitutes.size())
+		return {"card": waiting, "slot": -1}
 	if substitutes.is_empty(): return {}
 	return {"card": substitutes[random_index.call(substitutes.size())], "slot": -1}
 

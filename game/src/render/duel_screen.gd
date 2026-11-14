@@ -951,7 +951,8 @@ func show_message(text: String, on_ok: Callable = Callable(), ask := false, _wid
 func close_message() -> void:
 	if message != null and is_instance_valid(message):
 		message.queue_free()
-		menu.canvas.remove_child(message)
+		# A screen rebuilt since (a hosted box over the battle) has a new canvas.
+		if message.get_parent() != null: message.get_parent().remove_child(message)
 	message = null
 	menu.buttons.erase("MBOK")
 	menu.buttons.erase("MBCancel")
@@ -1229,6 +1230,12 @@ func _purchase_price(row: Dictionary) -> String:
 		if amount > 0: price.append("%s %d" % [resource_title(i), amount])
 	return ", ".join(price)
 
+## A preset artifact's charges: its template's MaxCharges, as each duel
+## round starts with (-1 when no template carries the spell).
+func artifact_charges(code: String) -> int:
+	var name := ELDuelPresets.artifact_name(profile(), code)
+	return -1 if name.is_empty() else int(profile().table("Artefacts")[name].get("MaxCharges", 0))
+
 func artifact_tooltip(code: String, for_sale := false) -> String:
 	var source := profile()
 	var text := ELCombatRail.preset_artifact_tooltip(source, code)
@@ -1274,10 +1281,13 @@ func apply(preset: Dictionary, action: String, value: Variant) -> Variant:
 		"place_spell":
 			# [card, slot]: a picked spell put on a book slot. An occupied slot
 			# takes the new spell (its runes go back), an empty one adds it.
+			# The second game moves the displaced spell to the reserve (EL2
+			# manual, as the adventure inventory does).
 			var card: String = value[0]
 			var slot := int(value[1])
 			if slot >= 0 and slot < p.cards.size():
 				if p.cards[slot] == card: return null
+				if not el1(): p.reserve[p.cards[slot]] = int(p.reserve.get(p.cards[slot], 0)) + 1
 				p.cards[slot] = card
 				if slot < p.runes.size(): p.runes[slot] = 0
 			else:
@@ -2394,6 +2404,31 @@ class ArtifactStrip extends Control:
 	var screen: ELDuelScreen
 	const CELLS := 5
 	var offset := 0
+	var _look: ELListLook
+	var _look_profile: ELProfile
+
+	## The charge count at the icon's lower right in the battle rail's glyph
+	## digits (ELListLook.number), scaled with the icon.
+	func _draw_charges(icon: Rect2, value: int) -> void:
+		if value < 0: return
+		var source := screen.profile()
+		if _look == null or _look_profile != source:
+			_look = ELListLook.load(source)
+			_look_profile = source
+		var sheet: Texture2D = _look.hover.atlas if _look != null and _look.hover != null else null
+		if sheet == null: return
+		var first := screen.el1()
+		var scale := icon.size.x / 50.0
+		var step := (10.0 if first else 8.0) * scale
+		var last := (Vector2(40, 40) if first else Vector2(39, 39)) * scale
+		var text := str(value)
+		for k in text.length():
+			var code := text.unicode_at(text.length() - 1 - k) - 0x2d
+			if code < 0 or code > 12: continue
+			var at := icon.position + last - Vector2(k * step, 0)
+			var glyph := Rect2(code * 10, 246, 10, 10)
+			draw_texture_rect_region(sheet, Rect2(at + Vector2.ONE * scale, Vector2(10, 10) * scale), glyph, Color.BLACK)
+			draw_texture_rect_region(sheet, Rect2(at, Vector2(10, 10) * scale), glyph)
 
 	func _ready() -> void:
 		mouse_filter = Control.MOUSE_FILTER_STOP
@@ -2447,6 +2482,7 @@ class ArtifactStrip extends Control:
 			var rect := cell_rect(index)
 			var icon := Rect2(rect.get_center() - Vector2(side, side) * 0.5, Vector2(side, side))
 			draw_texture_rect(screen.profile().card_icon(list[index]), icon, false)
+			_draw_charges(icon, screen.artifact_charges(list[index]))
 			if int(screen.edit.get("owned", -1)) == index: draw_rect(icon, ELFrontMenu.INK_HOVER, false, 2)
 		if list.size() > CELLS:
 			var count := "%d" % list.size()

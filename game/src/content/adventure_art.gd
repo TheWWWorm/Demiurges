@@ -76,7 +76,9 @@ func resolve(object: Dictionary) -> Dictionary:
 					best_score = score
 	var model := String(row.get("AdvMod", row.get("Model", ""))) if adventure else String(row.get("Model", ""))
 	var texture := String(row.get("AdvTex1", row.get("Texture", ""))) if adventure else String(row.get("TextureName", row.get("Texture", "")))
-	var secondary := String(row.get("AdvTex2", "")) if adventure else String(row.get("SecTexture", ""))
+	# Monster rows name their second skin (a sword, a mask, wings) SecondaryTexture;
+	# without it those parts wear the first skin (the Aviak Assassin).
+	var secondary := String(row.get("AdvTex2", row.get("SecondaryTexture", ""))) if adventure else String(row.get("SecTexture", ""))
 	var wave := String(row.get("AnimatedTextureName", row.get("AnimTexture", "")))
 	if corpse:
 		if not str(row.get("CorpseMod", "")).is_empty(): model = str(row.CorpseMod)

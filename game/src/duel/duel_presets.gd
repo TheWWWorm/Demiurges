@@ -283,6 +283,14 @@ static func _original_preset(profile: ELProfile, path: String) -> Dictionary:
 	for entry in ELXml.children(ELXml.child(root, "skills"), "skill"):
 		var code := String(entry.attrs.get("type", ""))
 		var level := String(entry.attrs.get("level", ""))
+		if el1:
+			# The first game's loader takes level as a count
+			# rank-ups: a new skill starts at rank 0, each further step (and a
+			# repeated entry) adds one, up to rank 2; 0 adds nothing.
+			for step in clampi(level.to_int(), 0, ELHeroSkills.MAX_RANK + 1):
+				if preset.skills.has(code): preset.skills[code] = mini(int(preset.skills[code]) + 1, ELHeroSkills.MAX_RANK)
+				else: preset.skills[code] = 0
+			continue
 		if not level.is_valid_int() or preset.skills.has(code): return {}
 		preset.skills[code] = int(level) - 1
 	for entry in ELXml.children(ELXml.child(root, "deck"), "spell"):

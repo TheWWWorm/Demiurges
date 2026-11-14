@@ -231,9 +231,10 @@ func _fade_gain(time: float, duration: float) -> float:
 func _gain_db(fraction: float) -> float:
 	return music_db() + linear_to_db(clampf(fraction, 0.0001, 1.0))
 
-func start_sound(name: String, entry: Dictionary) -> void:
+## `data`: the edition whose files hold the sound, when it is not this map's own.
+func start_sound(name: String, entry: Dictionary, data: ELProfile = null) -> void:
 	cancel_sound(name)
-	var source := ELAudio.sound(profile, str(entry.file))
+	var source := ELAudio.sound(data if data != null else profile, str(entry.file))
 	if source == null: return
 	var stream: AudioStreamWAV = source
 	if bool(entry.get("loop", false)):

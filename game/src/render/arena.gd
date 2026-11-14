@@ -43,6 +43,10 @@ const BACKDROP_SHADER :=preload("res://src/render/arena_backdrop.gdshader")
 const SEA_SHADER := preload("res://src/render/arena_sea.gdshader")
 ## The original cutout pass accepts alpha bytes greater than 200.
 const MASKED_ALPHA_CUTOFF := 201.0 / 255.0
+## Enclosed halls: how far from the centre the battle camera may stand. The
+## Dungeon hall's ring of arches starts 18.7 from the centre and its outer wall
+## at 28; further out the camera looks back through the walls (player report #71).
+const CAMERA_RADIUS := {"Dungeon.001": 18.0}
 var _lit: Dictionary = {}
 var _unlit: Dictionary = {}
 
@@ -485,6 +489,10 @@ func _process(delta: float) -> void:
 	for i in moving_layers.size():
 		var material := moving_layers[i]
 		material.uv1_offset.x = fposmod(material.uv1_offset.x + delta * layer_speeds[i], 1.0)
+
+## The farthest the battle camera may stand from the arena's centre (INF: anywhere).
+func camera_radius() -> float:
+	return float(CAMERA_RADIUS.get(scene_id, INF))
 
 func clear_camera_view(camera_position: Vector3, target: Vector3) -> void:
 	# Hide tall scenery between the camera and the central play area. Terrain

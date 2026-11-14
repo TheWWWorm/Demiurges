@@ -23,7 +23,7 @@ Open a creature's page in the game to rotate and zoom its 3D model. Choose an ac
 ## Game mechanics
 
 - [The four races](races) · [How a battle works](combat) · [Turn and phases](combat-phases) · [Attack and defence](attack-defence)
-- [Creature abilities](abilities) · [Automatic combat and the camera](automatic-combat) · [The adventure map](adventure-map)
+- [Creature abilities](abilities) · [Automatic combat and the camera](automatic-combat) · [The adventure map](adventure-map) · [Map objects](map-objects)
 - [About creatures](creatures) · [About spells](spells) · [Runes and artifacts](runes-artifacts) · [Heroes and levels](heroes)
 
 ## Story and world

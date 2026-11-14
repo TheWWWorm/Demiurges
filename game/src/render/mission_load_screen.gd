@@ -10,9 +10,9 @@ extends RefCounted
 ## name; Save asks T_MB_OVERWRITE when the name is taken and then closes the
 ## screen. Delete asks T_MB_DELETE_SAVE; Load inside a running game asks
 ## T_MB_LOAD_GAME. A double click is Enter (Load or Save); Back and Esc close
-## the screen. The second game cleans the typed name and refuses forbidden
-## characters with T_MB_WRONG_SAVE_NAME; the first keeps Save disabled while
-## the name is blank. Approximations: rows follow name order (the original
+## the screen. The second game cleans the typed name and refuses a blank one
+## with T_MB_WRONG_SAVE_NAME; the first keeps Save disabled while the name is
+## blank. The originals' forbidden file-name characters are allowed (#114). Approximations: rows follow name order (the original
 ## lists its folder order), the date is dd.mm.yyyy and the time hh:mm (the
 ## original uses the Windows short date).
 

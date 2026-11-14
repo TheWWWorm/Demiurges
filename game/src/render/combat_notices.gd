@@ -13,7 +13,10 @@ extends Control
 ##   slides up.
 ## - second game: the opponent's cast spells as icons, top left. There are 5
 ##   per row at a 53 px step. The list is cleared when the
-##   opponent's next turn starts.
+##   opponent's next turn starts. The remake's "cast_icons" setting shows
+##   them in the first game too, framed with its own list border (ADV_SCREEN_2
+##   206,155 50x50, ELListLook.HOVER; the first game has no WORLD_SYMBOLS_MAP),
+##   with the message lines under the icon rows.
 ## Approximations: list and icon origins, and the line font.
 
 const BAND := 85.0
@@ -41,8 +44,10 @@ var _sounded := false
 var lines: Array = []
 ## Second game enemy cast icons: {"texture", "card"}.
 var icons: Array = []
-## The icons' frame: WORLD_SYMBOLS_MAP (140,0)-(190,50), drawn over each icon.
+## The icons' frame drawn over each icon: WORLD_SYMBOLS_MAP (140,0)-(190,50),
+## or, in the first game, its list border (already cut to 50x50).
 var frame: Texture2D
+var _frame_region := Rect2(140, 0, 50, 50)
 ## Tooltip text for a cast card (the hand's card tooltip).
 var describe_card: Callable
 var _font: SystemFont
@@ -68,6 +73,12 @@ func build(source: ELProfile) -> void:
 		for row: Dictionary in profile.table("InterfaceTextures").values():
 			if row.get("Name", "") == "WORLD_SYMBOLS_MAP":
 				frame = profile.texture("Interface/" + str(row.get("Path", "")).replace("\\", "/"))
+		_frame_region = Rect2(140, 0, 50, 50)
+		if frame == null:
+			var border := ELListLook.load(profile).hover
+			if border != null:
+				frame = border.atlas
+				_frame_region = border.region
 	clear()
 
 func clear() -> void:
@@ -131,6 +142,7 @@ func _draw() -> void:
 	if banner >= 0 and halves.size() >= 2: _draw_banner()
 	var k := maxf(ui_scale, 0.5)
 	var y := ORIGIN.y * k
+	if not icons.is_empty(): y = icon_rect(icons.size() - 1).end.y + (ICON_STEP - ICON) * k
 	for line: Dictionary in lines:
 		var age := float(line.age)
 		var fade := clampf((age - HOLD_LINE) / FADE_LINE, 0.0, 1.0)
@@ -145,7 +157,7 @@ func _draw() -> void:
 		var icon: Dictionary = icons[index]
 		var cell := icon_rect(index)
 		draw_texture_rect(icon.texture, cell, false)
-		if frame != null: draw_texture_rect_region(frame, cell, Rect2(140, 0, 50, 50))
+		if frame != null: draw_texture_rect_region(frame, cell, _frame_region)
 
 ## Icon `index`'s place: rows of five; past five rows the list moves up a row
 ## per extra row, as in the original.

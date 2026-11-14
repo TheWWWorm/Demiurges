@@ -229,7 +229,14 @@ static func combat_pending(duel: ELDuel, selection: int, ability_selection: Dict
 	return {"ability": definition, "source": int(ability_selection.get("source", 0))}
 
 static func _valid_target(duel: ELDuel, hovered: int, pending: Dictionary) -> bool:
-	if pending.has("card"): return duel._target_error(str(pending.card), hovered).is_empty()
+	if pending.has("card"):
+		var card := str(pending.card)
+		if not duel._target_error(card, hovered).is_empty(): return false
+		# Disintegration also pays its target's printed cost: a creature the
+		# hero cannot afford is no target (player report #109).
+		if ELCatalog.rule(duel.profile, card).get("priced_target", false) and duel.creatures.has(hovered):
+			return duel.available_mana(duel.active_side()) >= duel.cost(card) + duel.second_surcharge(card) + int(duel.profile.table("CombatSpells").get(duel.creatures[hovered].card, {}).get("Cost", 0))
+		return true
 	var ability: Dictionary = pending.get("ability", {})
 	if ability.get("effect") == "artifact":
 		return duel.artifact_target_error(int(pending.get("source", 0)), str(ability.get("card", "")), hovered).is_empty()

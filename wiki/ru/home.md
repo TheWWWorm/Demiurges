@@ -23,7 +23,7 @@ summary: Содержание вики
 ## Правила игры
 
 - [Четыре расы](races) · [Как устроен бой](combat) · [Ход и фазы](combat-phases) · [Атака и защита](attack-defence)
-- [Способности существ](abilities) · [Автоматический бой и камера](automatic-combat) · [Карта приключений](adventure-map)
+- [Способности существ](abilities) · [Автоматический бой и камера](automatic-combat) · [Карта приключений](adventure-map) · [Объекты карты](map-objects)
 - [О созданиях](creatures) · [О заклинаниях](spells) · [Руны и артефакты](runes-artifacts) · [Герои и уровни](heroes)
 
 ## Сюжет и мир

@@ -117,7 +117,10 @@ func _map_part() -> void:
 	await frames(2)
 	check(sounds.ambient_loops.is_empty(), "ambient sounds off stops the terrain loops")
 	view.preview_volumes(settings.values)
-	await frames(3)
+	# The ambience restarts on its next update step, a few frames later.
+	for i in 30:
+		if not sounds.ambient_loops.is_empty(): break
+		await frames(1)
 	check(not sounds.ambient_loops.is_empty(), "and on starts them again")
 
 	# Footsteps.

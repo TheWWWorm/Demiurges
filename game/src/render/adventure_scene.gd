@@ -796,6 +796,16 @@ func play_actor_clip(uid: int, clip: String) -> void:
 	model.animation_finished.connect(func(finished: String) -> void:
 		if is_instance_valid(model) and finished == clip and model.clip == clip: model.play("cidle"), CONNECT_ONE_SHOT)
 
+## The figure's clip with animation code `code` (either form of the high
+## bit), played once like play_actor_clip; "" when it has none.
+func play_actor_code(uid: int, code: int) -> String:
+	var model: ELModel = actors.get(uid)
+	if model == null: return ""
+	var clip := model.clip_for_code(code)
+	if clip.is_empty(): clip = model.clip_for_code(code | 0x80000000)
+	if not clip.is_empty(): play_actor_clip(uid, clip)
+	return clip
+
 func orient_actor(uid: int, direction: Vector2) -> void:
 	if actors.has(uid) and direction.length_squared() > 0.0001:
 		actors[uid].rotation.y = atan2(direction.x, -direction.y)

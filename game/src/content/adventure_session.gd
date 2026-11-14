@@ -723,6 +723,7 @@ func _native(args: Array, name: String) -> Array:
 			if not item.is_empty():
 				item.cards.clear()
 				if item.has("rune_uses"): item.rune_uses.clear()
+				item.erase("rune_under")
 		"ExAddSpellToHand":
 			if not item.is_empty() and args.size() > 1 and item.cards.size() < ELSpellInventory.book_size(map.profile) and ELSpellInventory.is_spell(map.profile, str(args[1])):
 				if map.profile.id == "el1":
@@ -730,6 +731,7 @@ func _native(args: Array, name: String) -> Array:
 						_fail("Invalid rune inventory.")
 						return []
 					item.rune_uses.append(-1 if ELRunes.unlimited(map.profile, item, str(args[1])) else 0)
+					if item.has("rune_under"): item.rune_under.append("")
 				item.cards.append(str(args[1]))
 		"ExAddSpell", "ExRemoveSpell":
 			if not item.is_empty() and args.size() > 1:

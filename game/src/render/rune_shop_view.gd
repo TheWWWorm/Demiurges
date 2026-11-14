@@ -12,6 +12,15 @@ extends ELHeroScreenView
 ## fill every spell; CompBack1/2/3 return one rune, the selected spell's runes,
 ## all runes. CompOK pays and closes, CompCancel or Escape closes without
 ## buying. ELRuneShop keeps the pricing and draft rules.
+##
+## Runes are also bought as the laboratory buys spells (ELFirstSpellShopView,
+## issue #78): the rune over the unit price column is the portal's stock. A
+## click picks a rune up and a second click on a book spell, or a drag onto
+## it, adds it there (the right button, or a click away from the book, lets
+## it go); a double or right click on that rune adds one to the selected
+## spell. A double click on a book spell adds one rune to it, a right click
+## gives one back. The shop hotkeys buy (shop_buy: one rune for the selected
+## spell) and undo (shop_undo: give one back) as in the laboratory.
 const PANEL := "ComponentShop"
 ## The panel's buttons and tooltips carry ShiftX/ShiftY 4/-9 in the registry.
 const SHIFT := Vector2(4, -9)
@@ -29,6 +38,11 @@ const COMMANDS := ["CompBuy1", "CompBuy2", "CompBuy3", "CompBack1", "CompBack2",
 var trade: ELRuneShop
 ## Selected book slot.
 var slot := 0
+## A rune carried on the cursor (picked up from the price table) and where it
+## is drawn.
+var carry := false
+var carry_at := Vector2.ZERO
+var _rune_icon: Texture2D
 
 func build_shop(owner: ELAdventureDirector, panel: ELAdventureHud, exchange_trade: ELRuneShop) -> void:
 	director = owner
@@ -45,6 +59,7 @@ func build_shop(owner: ELAdventureDirector, panel: ELAdventureHud, exchange_trad
 	sheet.view = self
 	sheet.size = Vector2(660, 600)
 	sheet.mouse_filter = Control.MOUSE_FILTER_STOP
+	sheet.tooltip_text = " "
 	add_child(sheet)
 	_compose()
 	_build_side(0)
@@ -91,6 +106,25 @@ func _compose() -> void:
 	generic.append_array(_pieces)
 	generic.append_array(last)
 	_pieces = generic
+	_rune_icon = _cut_rune()
+
+## The rune over the unit price column: the topmost panel piece no larger
+## than its tooltip box that lies on it (null when none does).
+func _cut_rune() -> Texture2D:
+	var area := rune_rect()
+	for index in range(_pieces.size() - 1, -1, -1):
+		var piece: Dictionary = _pieces[index]
+		var rect: Rect2 = piece.rect
+		if not rect.intersects(area) or rect.size.x > area.size.x or rect.size.y > area.size.y or piece.texture == null: continue
+		var atlas := AtlasTexture.new()
+		atlas.atlas = piece.texture
+		atlas.region = piece.source
+		return atlas
+	return null
+
+## The portal's rune: the CompTt2 icon (the price of one rune).
+func rune_rect() -> Rect2:
+	return Rect2(TIPS.CompTt2.position + SHIFT, TIPS.CompTt2.size)
 
 ## Header text, reduced until it fits its original box.
 func _header(rect: Rect2, text: String, size: int) -> Label:
@@ -118,11 +152,79 @@ func book_at(point: Vector2) -> int:
 		if book_rect(index).has_point(point): return index
 	return -1
 
+## A book click selects the spell, adds the carried rune to it, or with a
+## double click adds one; a click on the price table's rune picks it up (a
+## double click adds one to the selected spell); elsewhere the rune is let go.
 func press(point: Vector2) -> void:
+	carry_at = point
 	var index := book_at(point)
-	if index < 0: return
-	slot = index
+	if index >= 0:
+		slot = index
+		if carry or double_click:
+			carry = false
+			buy()
+			return
+		refresh()
+		return
+	if not rune_rect().has_point(point):
+		carry = false
+		refresh()
+		return
+	if double_click:
+		carry = false
+		buy()
+		return
+	carry = not _purchase_pending and _any_addable()
+	# The carried rune may also be dragged onto a book spell.
+	if carry: held = {"kind": "rune"}
 	refresh()
+
+## A rune dragged onto a book spell is added there as with the second click;
+## released anywhere else it is let go.
+func drop_held(item: Dictionary, point: Vector2) -> void:
+	if item.kind != "rune" or not carry: return
+	carry = false
+	var book := book_at(point)
+	if book >= 0:
+		slot = book
+		buy()
+		return
+	refresh()
+
+## Right button: lets a carried rune go, gives a rune of a book spell back,
+## or on the price table's rune buys one for the selected spell.
+func right_press(point: Vector2) -> bool:
+	if carry:
+		carry = false
+		refresh()
+		return true
+	var book := book_at(point)
+	if book >= 0:
+		slot = book
+		retrieve()
+		return true
+	if rune_rect().has_point(point):
+		buy()
+		return true
+	return super.right_press(point)
+
+func pointer(point: Vector2) -> void:
+	super.pointer(point)
+	carry_at = point
+	if carry: sheet.queue_redraw()
+
+## One rune for the selected spell (CompBuy1, the shop_buy hotkey).
+func buy() -> void:
+	if not _purchase_pending and trade.can_add(slot): trade.change(slot, 1)
+	refresh()
+
+## Gives one rune of the selected spell back (CompBack1, shop_undo).
+func retrieve() -> void:
+	if not _purchase_pending and slot < trade.pending.size() and trade.pending[slot] > 0: trade.change(slot, -1)
+	refresh()
+
+func _any_addable() -> bool:
+	return range(trade.pending.size()).any(func(index: int): return trade.can_add(index))
 
 ## Arrow keys: -1/+1 sideways, -5/+5 for a row, kept within the book.
 func move_selection(delta: int) -> void:
@@ -171,7 +273,7 @@ func refresh() -> void:
 	var selected_pending := slot < trade.pending.size() and trade.pending[slot] > 0
 	buttons.CompBuy1.disabled = not trade.can_add(slot)
 	buttons.CompBuy2.disabled = not trade.can_add(slot)
-	buttons.CompBuy3.disabled = not range(trade.pending.size()).any(func(index: int): return trade.can_add(index))
+	buttons.CompBuy3.disabled = not _any_addable()
 	buttons.CompBack1.disabled = not selected_pending
 	buttons.CompBack2.disabled = not selected_pending
 	buttons.CompBack3.disabled = not has_pending()
@@ -209,13 +311,27 @@ func _draw_sheet() -> void:
 			var at := Vector2(box.get_center().x - width * 0.5, box.position.y + 14)
 			sheet.draw_string(font, at + Vector2(1, 1), text, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color(0, 0, 0, 0.9))
 			sheet.draw_string(font, at, text, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, RED if not values.is_empty() and price_red(column, kinds[row]) else WHITE)
+	# Book spells with runes bought carry a gold frame; the carried rune
+	# follows the cursor.
+	for index in mini(15, trade.pending.size()):
+		if trade.pending[index] > 0: sheet.draw_rect(book_rect(index).grow(-1), Color(0.95, 0.8, 0.35, 0.8), false, 1.5)
+	if carry:
+		var size := _rune_icon.get_size() if _rune_icon != null else rune_rect().size
+		var rect := Rect2(carry_at - size * 0.5, size)
+		if _rune_icon != null: sheet.draw_texture_rect(_rune_icon, rect, false, Color(1, 1, 1, 0.9))
+		sheet.draw_rect(rect.grow(2), PICK, false, 1.5)
 
 func price_rect(column: int, row: int) -> Rect2:
 	return Rect2(Vector2(PRICE_COLUMNS[column], PRICE_TOP + PRICE_STEP * row), PRICE_BOX)
 
 func tooltip_at(point: Vector2) -> String:
+	if rune_rect().has_point(point):
+		return profile.text("CtrlTtCompTt2") + "\n\n" + ELRemakeText.t("Click to pick a rune up, then click a spell in the book. Right click: buy one for the selected spell.", profile)
 	for name: String in TIPS:
 		if Rect2(TIPS[name].position + SHIFT, TIPS[name].size).has_point(point): return profile.text("CtrlTt" + name)
+	var book := book_at(point)
+	if book >= 0 and int(hero().get("rune_uses", [])[book]) >= 0:
+		return super.tooltip_at(point) + "\n" + ELRemakeText.t("Double click: buy a rune. Right click: give one back.", profile)
 	var kinds := ELResources.types("el1")
 	for row in kinds.size():
 		if Rect2(Vector2(415, PRICE_TOP + PRICE_STEP * row - 4), Vector2(26, 26)).has_point(point): return profile.text("T_RESOURCE_NAME_%d" % (row + 1))

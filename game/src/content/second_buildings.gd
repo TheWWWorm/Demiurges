@@ -163,6 +163,10 @@ static func use(director: ELAdventureDirector, actor: Dictionary, item: Dictiona
 			item.enabled = false
 			state.event.emit({"kind": "object_killed", "id": item.uid})
 			text = first_placeholder(profile.text(key), prisoner_name(state, item))
+	# The shrine (either message) and the beacon end with
+	# Bereserk.pfx and Adventure\stars1.wav
+	# on the hero.
+	if what in ["beacon", "specialization"]: state.event.emit({"kind": "hero_change_effect", "id": actor.uid})
 	state.event.emit({"kind": "building_used", "id": item.uid, "hero": actor.uid, "player": actor.owner, "message": key})
 	if int(actor.owner) == 1:
 		director.notice = text

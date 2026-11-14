@@ -149,6 +149,8 @@ func start(data: ELProfile, seed_value := 212, options: Dictionary = {}) -> bool
 			prepared[-1].shape = shape
 			prepared[-1].kind = choice.get("kind", "hero")
 			prepared[-1].title = choice.get("title", name)
+			# First game: the hero's own level when difficulty moved the battle level.
+			if choice.get("map_level") is int: prepared[-1].map_level = int(choice.map_level)
 			if choice.has("monster_name"):
 				if choice.monster_name is not String or not ELLuaSave._integer(choice.get("monster_difficulty"), 0, 4) or choice.get("kind") != "monster" or ELFirstMonsters.appearance(profile, choice.monster_name, int(choice.monster_difficulty)).is_empty(): return _fail("Missing neutral creature appearance.")
 				prepared[-1].monster_name = choice.monster_name
@@ -156,6 +158,9 @@ func start(data: ELProfile, seed_value := 212, options: Dictionary = {}) -> bool
 		if not ELSpecs.valid(profile, choice.get("specialization", "NONE")): return _fail("Unknown hero specialization.")
 		ELSpecs.prepare(prepared[-1], choice)
 		prepared[-1].spell_uses = ELSpellCharges.initial(profile, prepared[-1], bool(options.get("adventure", false)), choice)
+		# First game: cantrips waiting under bought spells (ELRunes.under).
+		var under: Variant = choice.get("rune_under", [])
+		if profile.id == "el1" and under is Array and under.size() == cards.size(): prepared[-1].rune_under = under.duplicate()
 		if not ELSpellCharges.valid(profile, prepared[-1]): return _fail("Invalid starting spell charges.")
 		prepared[-1].artifacts = []
 		prepared[-1].artifact_uses = 0
@@ -890,6 +895,8 @@ func can_cast_from_hand(index: int) -> bool:
 		if not _target_error(card, target).is_empty(): continue
 		var choices: Array = [-1]
 		if kind == "grave" or rule.effect == "exchange": choices = valid_grave_targets(card, target)
+		# Pale Revival: a creature in the plane, then an entry of either graveyard.
+		elif rule.effect == "pale_revival": choices = valid_grave_targets(card)
 		elif rule.effect == "swap": choices = swap_targets(card, target)
 		elif rule.effect in ["dispel", "trade"]: choices = valid_enchantment_targets(card, target)
 		for choice: int in choices:
@@ -1572,9 +1579,9 @@ func _resolve_spell(side: int, card: String, rule: Dictionary, target: int, grav
 			for e: Dictionary in heroes[recipient].enchantments:
 				if e.card == "MNTX":
 					_change_ether(recipient, 2)
-					# EL1 Mana Vortex registers GainMana
+					# Mana Vortex (both games) registers GainMana at
 					# its enchanted hero for every successful creature spell.
-					if profile.id == "el1": _emit({"kind": "mana_vortex_cue", "side": recipient})
+					_emit({"kind": "mana_vortex_cue", "side": recipient})
 	elif profile.table("CombatSpells")[card].get("Class") != "Creature":
 		# Data attraction: each earlier copy draws a spell, then hurts its holder.
 		if attractions < 0: attractions = _enchantment_count(side, "TRLB") - (1 if card == "TRLB" else 0)
@@ -1794,6 +1801,9 @@ func _pale_error(id: int, d: Dictionary) -> String:
 			if d.key == "fiendish" and heroes[side].channels < 1: return "This needs an ether channel."
 			if d.key == "fiendish" and sealed: return "A planar seal blocks every change of aspect."
 			if d.key == "cryptic" and heroes[side].hand.is_empty(): return "This needs a card in hand."
+			# Mystic manifestation dispels an enchantment its hero cast: with none
+			# in play the command is unavailable (player report #96).
+			if d.key == "mystic" and not _has_own_dispellable(side): return "There is no enchantment cast by your hero to remove."
 		"cruel":
 			if in_plane(id) and sealed: return "A planar seal blocks every change of aspect."
 		"courtesy":
@@ -1803,6 +1813,13 @@ func _pale_error(id: int, d: Dictionary) -> String:
 		"ether_plea":
 			if int(heroes[1 - side].mana) <= 0: return "Your opponent has no ether."
 	return ""
+
+## Whether some character holds an enchantment hero `side` cast that may be removed.
+func _has_own_dispellable(side: int) -> bool:
+	for holder: int in [0, 1] + creatures.keys():
+		for e: Dictionary in entity(holder).enchantments:
+			if int(e.get("owner", -1)) == side and dispellable(holder, e): return true
+	return false
 
 func _pale_ability(id: int, d: Dictionary, target: int, choice: int) -> bool:
 	var invalid := _pale_error(id, d)
@@ -3389,10 +3406,11 @@ func _resolve_attacks() -> void:
 		if creatures.has(id) and not (creatures[id].regenerated and not regenerated_before.has(id)): _ability_lethal(id)
 	if scripts != null and not poisoned.is_empty(): scripts.dispatch("CHook_OnVisualFinishMeleeDestroyFlag", [])
 
-## Presentation of a combat strike's creature power (first game): `key` names
-## the power (a mastery code or a strike property), drawn from `source` to `target`.
+## Presentation of a combat strike's creature power (first game; in the
+## second only the life drain of a hero hit): `key` names the power
+## (a mastery code or a strike property), drawn from `source` to `target`.
 func _combat_effect(key: String, source: int, target: int) -> void:
-	if profile.id != "el1": return
+	if profile.id != "el1" and key != "Lifetap": return
 	var side := source if source < 2 else int(entity(source).get("owner", -1))
 	_emit({"kind": "combat_ability", "key": key, "source": source, "target": target, "side": side})
 

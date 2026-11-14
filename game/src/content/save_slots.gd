@@ -28,10 +28,10 @@ const PREVIEW_QUALITY := 0.85
 ## Largest stored JPEG accepted (base64 characters); a 256×192 picture is
 ## usually 15–30 KB.
 const PREVIEW_JPEG_LIMIT := 200000
-## Characters the second game refuses in a save name (T_MB_WRONG_SAVE_NAME);
-## the remake refuses them in both editions because the file name is derived
-## from the save name.
-const FORBIDDEN := "\\/:*?\"<>|.[],;="
+## The originals refuse \ / : * ? " < > | . [ ] , ; = in a save name
+## (T_MB_WRONG_SAVE_NAME) because the name was the file name. The remake's
+## file name is a hash of the save name, so it accepts them (player report
+## #114) and refuses only control characters.
 const MAX_NAME := 60
 ## RECOVERED rows have no name from a current or legacy index. Their labels
 ## are for display, so selecting one in Save leaves the name field alone.
@@ -70,8 +70,8 @@ static func kind_of(state: ELAdventureSession) -> String:
 static func clean_name(edition: String, name: String) -> String:
 	var cleaned := name.strip_edges() if edition == "el2" else name
 	if cleaned.strip_edges().is_empty() or cleaned.length() > MAX_NAME: return ""
-	for character in FORBIDDEN:
-		if cleaned.contains(character): return ""
+	for character in cleaned:
+		if character.unicode_at(0) < 32 or character.unicode_at(0) == 127: return ""
 	return cleaned
 
 ## File stem of a name: a hash of the lower-case name, so any name the rules

@@ -1,7 +1,9 @@
 class_name ELProfile
 extends RefCounted
 ## Each edition owns its archives and caches. Identical card/asset names never
-## resolve through another edition's mounted content.
+## resolve through another edition's mounted content. The one deliberate
+## exception is chosen by the caller, never by a lookup: the first game's map
+## borrows the second game's battle dome (ELAdventureView.dome_source).
 ## Original FIG material table. Magic has its own full-bright override.
 const FIGURE_MATERIALS := {17: "leather.mat", 18: "wood.mat", 19: "metal.mat", 20: "cloth.mat", 21: "skin.mat", 22: "stone.mat", 25: "metal.mat"}
 var id := ""

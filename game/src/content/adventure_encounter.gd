@@ -13,7 +13,8 @@ var error := ""
 var resolved := false
 var scripted_winner := -1
 ## Second game: a battle with no side of the local player (player 1) is never
-## played; it resolves at once, possibly with no winner.
+## played; it resolves without a duel, possibly with no winner (then both
+## sides die unless Hook_OnBattleFinishing vetoes).
 var auto := false
 var winner := -1
 ## Side whose duel health can end the chapter mid-battle, or -1.
@@ -76,7 +77,8 @@ func prepare(session: ELAdventureSession, first: int, second: int, defender := -
 
 ## Hook_OnBattleResult for a non-local pair: a participant's id wins; −2 (no
 ## chapter handler) or a script error falls back to the higher level (equal:
-## none); any other value means no winner.
+## none); any other value means no winner, and a battle with no winner kills
+## both sides (see finish).
 static func second_result(state: ELAdventureSession, first: int, second: int) -> int:
 	var verdict := -2
 	if state.vm != null and state.vm.has_function("Hook_OnBattleResult"):
@@ -128,6 +130,8 @@ func _prepare_duel(state: ELAdventureSession, defender: int) -> bool:
 			ELGlobalSpells.battle_choice(state, actor, options.players[-1])
 			if not ELRunes.restore(profile, actor): return _fail("Invalid encounter rune inventory.")
 			options.players[-1].rune_uses = actor.rune_uses.duplicate()
+			# The cantrips waiting under bought spells (ELRunes.under).
+			if actor.has("rune_under"): options.players[-1].rune_under = ELRunes.under(actor)
 		elif actor.type == "hero":
 			# Second game: artifacts enter with their current charges (generated
 			# ones with their definition); a fort garrison of level one or more
@@ -148,7 +152,11 @@ func _prepare_duel(state: ELAdventureSession, defender: int) -> bool:
 			for side in 2: options.players[side].global_effects = ELGlobalSpells.battle_effects(state, owners[side])
 		options.arena = FIRST_ARENAS[4] if ethereal_defender >= 0 else first_arena(state, hero_id, opponent_id, defender if defender >= 0 else opponent_id)
 		var levels := first_levels(state, hero_id, opponent_id)
-		for side in 2: options.players[side].level = levels[side]
+		for side in 2:
+			# The battle tooltip names the hero's own level, not the one the
+			# difficulty and a fort give it for this battle (player report #110).
+			options.players[side].map_level = int(state.object(hero_id if side == 0 else opponent_id).level)
+			options.players[side].level = levels[side]
 	else:
 		# Second-game difficulty moves only the specialisation level.
 		var levels: Array[int] = [int(options.players[0].level), int(options.players[1].level)]
@@ -206,12 +214,14 @@ static func first_arena(state: ELAdventureSession, first: int, second: int, defe
 		at = Vector2i(int(other.get("x", 0)), int(other.get("y", 0)))
 	return FIRST_ARENAS[terrain_class(map, at)]
 
-## In the second game, a tunnel or dungeon guard uses the Ether arena.
+## In the second game, a tunnel or dungeon guard uses the Dungeon arena
+## («Подземелья смерти»): the guard actions set the battle's arena to the
+## Dungeon one (index 6; the next one down is the Ether arena).
 ## Ordinary battles use the second actor's tile unless that actor is unplaced.
 static func second_arena(state: ELAdventureSession, first: int, second: int, roll: int) -> String:
 	var a := state.object(first)
 	var b := state.object(second)
-	if a.has("tunnel_source") or b.has("tunnel_source"): return "Ether.001"
+	if a.has("tunnel_source") or b.has("tunnel_source"): return "Dungeon.001"
 	if state.map.id.contains("mission17") or state.map.id.contains("mission27"): return "White.001"
 	if not ELForts.garrison_of(state, a).is_empty() or not ELForts.garrison_of(state, b).is_empty(): return "Fort.001"
 	if a.get("ship", false) or b.get("ship", false): return "Ship.001"
@@ -288,12 +298,9 @@ func finish() -> bool:
 		resolved = true
 		return true
 	if resolved or (not auto and scripted_winner < 0 and (battle == null or battle.phase != ELDuel.Phase.FINISHED)): return _fail("The encounter has not ended.")
-	if auto and scripted_winner < 0:
-		# No winner: nobody dies and no finishing hook runs.
-		resolved = true
-		winner = -1
-		state.event.emit({"kind": "battle_finished", "hero": attacker(), "opponent": target(), "winner": -1})
-		return true
+	# Second game, a battle with no local side and no winner: the original
+	# still runs Hook_OnBattleFinishing with winner -1 and,
+	# unless it vetoes, kills both sides; nobody gains experience.
 	var winner_id := scripted_winner
 	if scripted_winner < 0 and battle != null and battle.winner >= 0: winner_id = hero_id if battle.winner == 0 else opponent_id
 	var defeated: Array[int] = [hero_id, opponent_id]
@@ -312,7 +319,7 @@ func finish() -> bool:
 	if state.vm != null:
 		var finishing := state.vm.invoke("Hook_OnBattleFinishing", [float(attacker()), float(target()), float(winner_id)])
 		if not state.vm.error.is_empty(): return _fail(state.vm.error)
-		# The EL2 native reads a numeric zero as a veto, as in chapter 54's retry.
+		# The EL2 original reads a numeric zero as a veto, as in chapter 54's retry.
 		if state.map.profile.id == "el2": kill_loser = finishing.is_empty() or ELAdventureSession._truthy_flag(finishing[0])
 		else: kill_loser = finishing.is_empty() or finishing[0] != null
 	if state.map.profile.id == "el2" and scripted_winner < 0 and battle != null and kill_loser:
@@ -326,7 +333,11 @@ func finish() -> bool:
 	if state.map.profile.id == "el1" and scripted_winner < 0:
 		for side in 2:
 			var actor := state.object(hero_id if side == 0 else opponent_id)
-			if actor.type == "hero": actor.rune_uses = battle.heroes[side].spell_uses.duplicate()
+			if actor.type == "hero":
+				actor.rune_uses = battle.heroes[side].spell_uses.duplicate()
+				var players: Variant = battle.setup.get("players", [])
+				var before: Variant = players[side].get("rune_uses", []) if players is Array and players.size() == 2 and players[side] is Dictionary else []
+				ELRunes.return_cantrips(actor, before if before is Array else [])
 	if kill_loser:
 		if winner_id >= 0:
 			var reward := ELHeroProgression.battle_reward(state.map.profile, int(state.object(defeated[0]).get("level", 1)))

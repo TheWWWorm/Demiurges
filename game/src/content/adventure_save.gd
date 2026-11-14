@@ -10,6 +10,8 @@ var error := ""
 func encode(director: ELAdventureDirector, camera: Dictionary = {}) -> Dictionary:
 	error = ""
 	var state := director.state
+	# A shown battle with no local side is not saved half-way: it ends first.
+	director.resolve_auto_fight()
 	if director._shopping():
 		error = "Close the shop or resource site before saving the campaign."
 		return {}

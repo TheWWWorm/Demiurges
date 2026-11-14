@@ -53,6 +53,9 @@ var auto_combat := false
 ## and whether a hand-over box is waiting.
 var hot_side := -1
 var hot_pending := false
+## Hot seat: each side's own camera [target, yaw, pitch, distance] ([] before
+## that player's first turn of the round).
+var hot_views := [[], []]
 var auto_button: ELCutPartButton
 ## The original game-menu button, top right: the first game's Options wrench
 ## (DisconnectButton art) or the second game's Esc-menu button. Right-click
@@ -864,7 +867,8 @@ func _process(delta: float) -> void:
 				label.text = "  •  ".join(parts)
 				label.modulate = ACCENT if not c.enchantments.is_empty() else INK
 				# Pale aspect: the figure's opacity pulses 0.2-0.6 (1.8 s triangle wave).
-				if duel.in_plane(id):
+				# A creature killed in the plane stays pale until its death is shown.
+				if duel.in_plane(id) if duel.creatures.has(id) else bool(c.get("plane", false)):
 					if helper_overlay(): label.text += ("  •  " if not label.text.is_empty() else "") + "PALE"
 					model.set_opacity(0.2 + 0.4 * (1.0 - absf(fmod(elapsed, 1.8) / 0.9 - 1.0)))
 					model.set_meta("pale", true)
@@ -1016,6 +1020,11 @@ func _unhandled_input(event: InputEvent) -> void:
 			_target(nearest)
 			if event.double_click and _human_turn() and nearest >= 2 and duel.phase == ELDuel.Phase.ATTACK and selection < 0 and ability_selection.is_empty():
 				if not duel.toggle_attack(nearest): _hint(duel.error)
+			# A double click on a defending creature withdraws it from its block
+			# (player report #84).
+			elif event.double_click and _human_turn() and duel.phase == ELDuel.Phase.DEFENCE and selection < 0 and ability_selection.is_empty() and duel.blocks.has(nearest):
+				if not duel.assign_block(nearest, int(duel.blocks[nearest])): _hint(duel.error)
+				_refresh()
 
 ## Actions, hover and inspection share the visible figure's posed part bounds.
 ## A small screen-space margin helps with narrow limbs at distant zooms;
@@ -1104,21 +1113,19 @@ func touch_bar_keys() -> Array:
 	if profile != null and profile.id == "el1": keys.append(["Tutorial", KEY_H])
 	return keys
 
-## F1-F4 choose the original camera presets while the battle is in automatic mode.
+## F1-F4 choose the original camera presets. The original offers them only with the
+## automatic camera; the remake keeps them for the free camera too (player report #64).
 func battle_camera_presets_active() -> bool:
-	return is_processing_unhandled_input() and _auto_camera_on() and touch_camera_ready() and ending.is_empty()
+	return is_processing_unhandled_input() and auto_camera != null and camera != null and touch_camera_ready() and ending.is_empty()
 
 func _step_keyboard_camera(delta: float) -> void:
 	if not is_processing_unhandled_input() or not touch_camera_ready() or not ending.is_empty(): return
-	var automatic := _auto_camera_on()
-	if automatic and profile.id == "el2": return
+	# The original turns the camera by keys only with the automatic camera off;
+	# the remake lets the arrows turn it either way, like the mouse (report #64).
 	var zoom := float(Input.is_physical_key_pressed(KEY_PAGEDOWN)) - float(Input.is_physical_key_pressed(KEY_PAGEUP))
-	var turn := 0.0
-	var tilt := 0.0
-	if not automatic:
-		turn = float(Input.is_physical_key_pressed(KEY_LEFT)) - float(Input.is_physical_key_pressed(KEY_RIGHT))
-		tilt = float(Input.is_physical_key_pressed(KEY_UP)) - float(Input.is_physical_key_pressed(KEY_DOWN))
-		if profile.id == "el2": tilt = -tilt
+	var turn := float(Input.is_physical_key_pressed(KEY_LEFT)) - float(Input.is_physical_key_pressed(KEY_RIGHT))
+	var tilt := float(Input.is_physical_key_pressed(KEY_UP)) - float(Input.is_physical_key_pressed(KEY_DOWN))
+	if profile.id == "el2": tilt = -tilt
 	if zoom == 0.0 and turn == 0.0 and tilt == 0.0: return
 	var rotation_speed := float(settings.values.get("keyboard_rotation", 1.0)) * delta
 	camera_yaw += turn * rotation_speed
@@ -1142,6 +1149,11 @@ func _default_view() -> void:
 	if original.is_empty(): original = {"target": Vector3(0, 0.6, -0.5), "yaw": -0.38, "pitch": 0.7, "distance": 24.0}
 	camera_target = original.target
 	camera_yaw = original.yaw
+	# Hot seat, second player: the same view from the other end (the first
+	# game's combat yaw is 80 or 260 degrees by side).
+	if _hot_seat() and hot_side == 1:
+		camera_target = Vector3(-camera_target.x, camera_target.y, -camera_target.z)
+		camera_yaw += PI
 	camera_pitch = clampf(original.pitch, PITCH_LIMITS.x, PITCH_LIMITS.y)
 	camera_distance = clampf(original.distance, DISTANCE_LIMITS.x, DISTANCE_LIMITS.y)
 	_update_camera()
@@ -1156,9 +1168,22 @@ func _restore_orbit(saved: Array) -> void:
 
 func _place_orbit() -> void:
 	var target := camera_target
-	camera.position = target + Vector3(sin(camera_yaw) * cos(camera_pitch), sin(camera_pitch), cos(camera_yaw) * cos(camera_pitch)) * camera_distance
+	var offset := Vector3(sin(camera_yaw) * cos(camera_pitch), sin(camera_pitch), cos(camera_yaw) * cos(camera_pitch)) * camera_distance
+	camera.position = target + offset * _camera_reach(target, offset)
 	camera.look_at(target)
 	arena.clear_camera_view(camera.position, target)
+
+## In an enclosed hall the camera comes in along its line of sight to stay
+## inside the walls: the fraction of the offset it may use (1 elsewhere).
+func _camera_reach(target: Vector3, offset: Vector3) -> float:
+	var limit := arena.camera_radius() if arena != null else INF
+	var flat := Vector2(offset.x, offset.z)
+	if not is_finite(limit) or flat.is_zero_approx(): return 1.0
+	var origin := Vector2(target.x, target.z)
+	var direction := flat.normalized()
+	var along := origin.dot(direction)
+	var reach := -along + sqrt(maxf(along * along - origin.length_squared() + limit * limit, 0.0))
+	return clampf(reach / flat.length(), 0.0, 1.0)
 
 ## The size a hero-slot figure is drawn at (EL1, EL2): the
 ## second game draws every hero half as large again, and a figure that is not
@@ -1261,6 +1286,14 @@ func _target(id: int) -> void:
 				selected_creature = duel.active_side()
 				inspect_graveyard = true
 				_hint("Choose the creature to return from your graveyard. Esc cancels.")
+		elif duel.variable_power(card) and _target_before_power(card):
+			# Shield of Force, Ether Power, Fresh Wind: the target, then X.
+			var invalid := duel._target_error(card, id)
+			if not invalid.is_empty(): _hint(invalid)
+			else:
+				var index := selection
+				selection = -1
+				_open_power(index, id)
 		elif duel.cast(selection, id, -1, selection_power):
 			selection = -1
 			selection_power = 0
@@ -1283,7 +1316,7 @@ func _cast_card(index: int) -> void:
 	ability_selection.clear()
 	exchange_target = -1
 	selection_power = 0
-	if duel.variable_power(card):
+	if duel.variable_power(card) and not _target_before_power(card):
 		selection = -1
 		_open_power(index)
 		_refresh()
@@ -1462,14 +1495,23 @@ func _hand_drag_cancel() -> void:
 	_hand_drag = {}
 	if _hand_drag_icon != null: _hand_drag_icon.hide()
 
-func _open_power(index: int) -> void:
+## Whether a pay-X spell takes its target before X. The original asks in
+## the order of the spell's target kinds: PSBR and SHFR [1, 5], FRWN
+## [0, 5] name the target first, Comet (FireBall class) [5, 4] asks X first.
+func _target_before_power(card: String) -> bool:
+	return str(ELCatalog.rule(profile, card).get("target", "")) in ["creature", "hero"]
+
+## `target` >= 0: the target was chosen already, confirming X casts the spell.
+func _open_power(index: int, target := -1) -> void:
 	var card: String = duel.heroes[duel.active_side()].hand[index]
-	pending_power = {"duel": duel, "side": duel.active_side(), "turn": duel.turn_serial, "index": index, "card": card}
+	pending_power = {"duel": duel, "side": duel.active_side(), "turn": duel.turn_serial, "index": index, "card": card, "target": target}
 	power_heading.text = duel.card_name(card) + (" · health to pay (X)" if ELCatalog.rule(profile, card).get("x_source") == "health" else " · extra ether (X)")
 	# Both games open the choice at the most the hero can pay (ether after
 	# the card's cost); Channel, paid in health, opens at 1.
 	var health: bool = ELCatalog.rule(profile, card).get("x_source") == "health"
-	power_dialog.open(0, duel.maximum_power(card), 1 if health else duel.maximum_power(card))
+	# With the value the box names what is chosen (T_SPELL_PARAM11/12 ether,
+	# 23/24 health; player report #104).
+	power_dialog.open(0, duel.maximum_power(card), 1 if health else duel.maximum_power(card), param_prompt(11 if health else 5, " "))
 	_preview_power()
 	_show_power_panel()
 
@@ -1505,7 +1547,7 @@ func _open_ability_power(source: int, ability: Dictionary) -> void:
 	pending_power = {"duel": duel, "side": duel.active_side(), "turn": duel.turn_serial, "source": source, "ability": ability}
 	power_heading.text = str(ability.name) + " · ether to pay (X)"
 	var available := duel.available_mana(duel.active_side())
-	power_dialog.open(int(ability.get("minimum", 0)), available, available)
+	power_dialog.open(int(ability.get("minimum", 0)), available, available, param_prompt(5, " "))
 	_preview_power()
 	_show_power_panel()
 
@@ -1543,8 +1585,8 @@ func _confirm_power() -> void:
 		_refresh()
 		return
 	selection_power = int(power_amount.value)
-	if duel.target_kind(choice.card) == "none":
-		if not duel.cast(choice.index, -1, -1, selection_power): _hint(duel.error)
+	if duel.target_kind(choice.card) == "none" or int(choice.get("target", -1)) >= 0:
+		if not duel.cast(choice.index, int(choice.get("target", -1)), -1, selection_power): _hint(duel.error)
 		selection_power = 0
 	else:
 		selection = choice.index
@@ -1606,8 +1648,29 @@ func _show_handover() -> void:
 func _confirm_handover() -> void:
 	if not hot_pending: return
 	hot_pending = false
+	var leaving := hot_side
 	hot_side = duel.active_side() if duel != null else -1
+	_hand_camera_over(leaving, hot_side)
 	_refresh()
+
+## Hot seat: each player keeps their own camera. The view of the player
+## leaving is kept and the new player's own comes back; a player's first
+## view is the standing view from their end (EL1: per-side
+## view records saved and restored).
+func _hand_camera_over(leaving: int, arriving: int) -> void:
+	if camera == null or arriving < 0 or leaving == arriving: return
+	if leaving >= 0: hot_views[leaving] = [camera_target, camera_yaw, camera_pitch, camera_distance]
+	var saved: Array = hot_views[arriving]
+	if saved.is_empty():
+		# The first player of a round (or of a loaded save) keeps the view
+		# the battle opened with.
+		if leaving >= 0 or arriving != 0: _default_view()
+		return
+	camera_target = saved[0]
+	camera_yaw = saved[1]
+	camera_pitch = saved[2]
+	camera_distance = saved[3]
+	_update_camera()
 
 ## The acting side is played from this screen (not by the practice opponent).
 func _human_side() -> bool:
@@ -2072,6 +2135,8 @@ func _event(data: Dictionary) -> void:
 			_effect_cast.annihilation_sites.append(int(data.target))
 		if profile.id in ["el1", "el2"] and _effect_cast.card in ["CRHG", "RVHG"] and data.kind == "hunger_victim_cue":
 			_effect_cast.hunger_sites.append(int(data.target))
+		if _effect_cast.has("cleanse_holders") and data.kind == "disenchant" and not _effect_cast.cleanse_holders.has(int(data.target)):
+			_effect_cast.cleanse_holders.append(int(data.target))
 		# Both original Tap Life callbacks (EL1, EL2)
 		# skip their life-line/rune cues if damage failed, e.g. Feedback.
 		# The untagged caster heal occurs only after successful damage;
@@ -2218,6 +2283,12 @@ func _event(data: Dictionary) -> void:
 				# Both originals queue one Hunger effect/sound per positive-power
 				# victim, not one unconditional caster sound.
 				pass
+			elif profile.id in ["el1", "el2"] and data.card in ["DECN", "CLSN"]:
+				# Disenchant sounds come with each holder's effect at release.
+				pass
+			elif profile.id == "el2" and data.card in WARD_CARDS:
+				for name: String in _ward_effects(String(data.card), int(data.get("target", -1))):
+					battle_audio.effect(name)
 			elif profile.id in ["el1", "el2"] and data.card == "GRUN":
 				# Both original GreaterUnsummon callbacks queue BlueDeath/Draw
 				# separately for EACH creature it actually returns, not once
@@ -2458,9 +2529,9 @@ func _event(data: Dictionary) -> void:
 				battle_audio.effect("Draw")
 				_figure_effect("Draw", int(data.side))
 		"mana_vortex_cue":
-			# EL1 original MNTX creature-spell callback emits
-			# Target/GainMana on the enchanted hero, not the summoner.
-			if profile.id == "el1" and models.has(int(data.side)):
+			# The original MNTX creature-spell callback (both games)
+			# emits Target/GainMana on the enchanted hero, not the summoner.
+			if profile.id in ["el1", "el2"] and models.has(int(data.side)):
 				battle_audio.effect("GainMana")
 				_figure_effect("GainMana", int(data.side))
 		"sacr_mana_gain_cue":
@@ -2506,16 +2577,30 @@ func _event(data: Dictionary) -> void:
 			# affected victim. Other trigger sounds remain unbound.
 			if profile.id in ["el1", "el2"] and String(data.card) == "SFGS":
 				battle_audio.trigger(data.card, models.get(int(data.target)))
+			elif profile.id == "el2" and String(data.card) == "PLWP":
+				battle_audio.effect("PlaneWarp")
 			else:
 				battle_audio.trigger(data.card)
 			if is_instance_valid(effects) and models.has(data.target):
 				var owner := int(data.target) if int(data.target) < 2 else int(duel.entity(data.target).get("owner", 0))
 				if profile.id == "el2" and String(data.card) == "PLWP":
+					# The warp links a second event to PlaneWarp's end
+					# (link mode 1) and hangs OutplaneSpellDeath and the kill on
+					# it: the burst and its sound come when the skull arrives,
+					# with the death, not when it sets off.
 					var delay := ELCombatEffects.effect_hit_delay(profile, "PlaneWarp")
-					if delay > 0.0:
+					var victim: ELModel = models[data.target]
+					if models.has(int(data.get("source", -1))):
+						effects.play("PlaneWarp", {"Start": [models[int(data.source)]], "Finish": [victim], "Target": [victim]})
+					var burst := func() -> void:
+						battle_audio.effect("OutplaneSpellDeath")
+						if is_instance_valid(effects) and is_instance_valid(victim): effects.play("OutplaneSpellDeath", {"Finish": [victim], "Target": [victim]})
+					if delay > 0.0 and is_inside_tree():
 						_trigger_hit = {"target": int(data.target), "hit": delay}
 						call_deferred("_clear_trigger_hit")
-				if data.has("source") and models.has(int(data.source)):
+						_schedule_battle_cue(delay, burst)
+					else: burst.call()
+				elif data.has("source") and models.has(int(data.source)):
 					# A drawn-from figure (Mechozaurus drain): Start there, Finish at the target.
 					effects.trigger(data.card, {"Start": [models[int(data.source)]], "Finish": [models[data.target]], "Target": [models[data.target]]})
 				else:
@@ -2605,6 +2690,14 @@ func _event(data: Dictionary) -> void:
 			var source := int(data.get("source", data.side))
 			if source < 2: _announce("T_USE_ENCHANTMENT", [_hero_name(source), String(data.get("name", String(data.ability).capitalize()))], int(data.side))
 			else: _announce("T_USE_ABILITY", [duel.card_name(String(data.get("user_card", duel.entity(source).get("card", ""))))], int(data.side))
+			# Both originals' hero ability command (both games)
+			# queues the hero's PlayAnimation 7, its instant gesture, ahead of
+			# the ability's own effects (Healing's GainLife, Fireball...).
+			if source < 2 and models.has(source) and not String(data.ability).begins_with("artifact:") and not bool(settings.values.get("hide_cast", false)):
+				var hero: ELModel = models[source]
+				if hero.has_clip("uinstant") and hero.play("uinstant"):
+					battle_audio.unit(hero, "instant")
+					_cast_until = maxf(_cast_until, elapsed + clampf(hero.clip_seconds("uinstant"), 0.0, 4.0))
 			_ability_effects(data)
 			_auto_ability(data)
 			# The next action waits for the creature's own action clip.
@@ -2736,9 +2829,11 @@ func _local_side(side: int) -> bool:
 	return side == local or _hot_seat() or (mode_select != null and mode_select.selected == 1 and combat_tutorial == null)
 
 ## A hero's cast: T_CASTING in the log; the first game also lists it on screen,
-## the second shows the opponent's spell icon at the top left.
+## the second shows the opponent's spell icon at the top left. The remake's
+## "cast_icons" setting gives the first game the second game's icons for the
+## opponent's casts in place of its red lines.
 func _cast_notice(side: int, card: String) -> void:
-	if profile.id == "el2":
+	if profile.id == "el2" or (profile.id == "el1" and not _local_side(side) and bool(settings.values.get("cast_icons", true))):
 		_log(_format_text("T_CASTING", [_hero_name(side), duel.card_name(card)]))
 		if not _local_side(side) and is_instance_valid(notices): notices.add_icon(profile.card_icon(card), card)
 		return
@@ -2822,6 +2917,8 @@ func _pend_cast_effects(data: Dictionary, artifact: bool) -> void:
 		_effect_cast.annihilation_sites = []
 	if profile.id in ["el1", "el2"] and card in ["CRHG", "RVHG"]:
 		_effect_cast.hunger_sites = []
+	if profile.id in ["el1", "el2"] and card in ["DECN", "CLSN"]:
+		_effect_cast.cleanse_holders = []
 	if profile.id == "el1" and card == "FRNT":
 		_effect_cast.fury_attempts = 0
 		_effect_cast.fury_attacker = int(duel.attacker)
@@ -2885,7 +2982,7 @@ func _run_battle_cue(id: int) -> void:
 	_battle_cues.erase(id)
 	action.call()
 
-## The native effect manager delivers any remaining markers before release.
+## The original effect manager delivers any remaining markers before release.
 func _finish_battle_cues() -> void:
 	var ids := _battle_cues.keys()
 	ids.sort_custom(func(a: int, b: int) -> bool:
@@ -3171,6 +3268,15 @@ func _start_cast_effects() -> void:
 	# at positive-power creatures before dealing damage.
 	# A generic cast otherwise requests one Hunger sound and leaves
 	# an incorrect caster-bound effect on an empty battlefield.
+	# Decontamination and Cleansing (both games) collect
+	# the holders of the enchantments they removed and queue one
+	# Target/Disenchant at each; nothing at all when nothing was removed.
+	if profile.id in ["el1", "el2"] and pending.card in ["DECN", "CLSN"]:
+		for id: int in pending.get("cleanse_holders", []):
+			if not models.has(id): continue
+			effects.play("Disenchant", {"Target": [models[id]]})
+			battle_audio.effect("Disenchant", models[id])
+		return
 	if profile.id in ["el1", "el2"] and pending.card in ["CRHG", "RVHG"]:
 		for id: int in pending.get("hunger_sites", []):
 			if not models.has(id): continue
@@ -3578,6 +3684,15 @@ func _start_cast_effects() -> void:
 			effects.play("LoseMana", {"Target": [models[caster]]})
 			battle_audio.effect("LoseMana")
 		return
+	# EL2 Stone Skin, Energy Barrier and Lifeguard: the creature enchantment's
+	# apply (STSK) queues Target/PosRune and the card's own effect,
+	# the hero enchantment's attach (STSK) only Target/PosEnchantment.
+	if profile.id == "el2" and pending.card in WARD_CARDS:
+		var holder := int(pending.target)
+		if models.has(holder):
+			for name: String in _ward_effects(String(pending.card), holder):
+				effects.play(name, {"Target": [models[holder]]})
+		return
 	# The original callbacks visit both heroes for Ether Breeze and Ether Storm
 	# (until the second game's update 1.03 made them creature enchantments).
 	if pending.card in ["MNBR", "MNST"] and profile.id != "el2":
@@ -3596,6 +3711,14 @@ func _start_cast_effects() -> void:
 	# its point unbound, so its effect cannot jump to another figure.
 	if recipients.is_empty() and models.has(pending.side): targets.append(models[pending.side])
 	effects.cast(String(pending.card), {"Start": [models.get(pending.side)], "Target": targets})
+
+## EL2 enchantments with a creature and a hero form (Stone Skin, Energy
+## Barrier, Lifeguard) and the effects each form starts on its holder.
+const WARD_CARDS := {"STSK": "StoneSkin", "ENBR": "EnergyBarrier", "LFGR": "Lifeguard"}
+
+static func _ward_effects(card: String, holder: int) -> Array[String]:
+	if holder < 2: return ["PosEnchantment"]
+	return ["PosRune", String(WARD_CARDS[card])]
 
 func _auto_camera_on() -> bool:
 	return auto_camera != null and camera != null and bool(settings.values.get("auto_camera", true))
@@ -3915,7 +4038,9 @@ func _ability_effects(data: Dictionary) -> void:
 		or (profile.id == "el2" and card == "MTSC" and data.ability == "tap_walls")
 		or (profile.id in ["el1", "el2"] and card == "MTPT" and data.ability == "tap_race")
 		or (profile.id == "el1" and card == "ORSH" and data.ability == "ether")
-		or (profile.id == "el2" and card == "ORSH" and data.ability == "ether")
+		# Update 1.03 OrcShamanAbility also queues the
+		# shaman's PlayAnimation 7 before its dispel.
+		or (profile.id == "el2" and card == "ORSH" and data.ability in ["ether", "orc_rite"])
 		or (profile.id == "el2" and card == "OUS1" and data.ability == "channel_ether")
 		or (profile.id == "el2" and card == "OUS2" and data.ability == "ether_plea")
 		or (profile.id == "el2" and card == "OUS3" and data.ability == "pale_heal")
@@ -4623,9 +4748,13 @@ func _refresh_hand_buttons() -> void:
 func _attack_all() -> void:
 	if not _human_turn() or duel.phase != ELDuel.Phase.ATTACK: return
 	var army := duel.army(duel.active_side())
+	# The second game's Attack all passes over creatures whose
+	# current power is 0 or less; they can still be sent alone.
+	var powerless: bool = profile.id == "el2"
 	# Declare ordinary attackers first so their guards can follow.
 	for guards: bool in [false, true]:
 		for c: Dictionary in army:
+			if powerless and int(c.power) <= 0: continue
 			if duel.has_flag(c.id, "TeamAttack") == guards and duel.can_declare_attack(c.id): duel.toggle_attack(c.id)
 
 ## A creature put to rest by an action, or rising from rest, plays the figure's own tap
@@ -4737,12 +4866,17 @@ func phase_caption() -> String:
 	# While a fight plays out the original oval reads T_WAIT («Подождите…»).
 	if _melee_busy(): return _original_text("T_WAIT", "Wait")
 	var kind := target_prompt_kind()
-	if kind >= 0:
-		var first := _original_text("T_SPELL_PARAM" if kind == 0 else "T_SPELL_PARAM%02d" % (2 * kind + 1), "")
-		var second := _original_text("T_SPELL_PARAM%02d" % (2 * kind + 2), "")
-		return first if second.is_empty() else first + "\n" + second
+	if kind >= 0: return param_prompt(kind, "\n")
 	if not _local_side(duel.active_side()): return _original_text("T_ENEMY_TURN", "Enemy turn")
 	return _original_text("T_ATTACK_CAST_PHASE" if duel.phase == ELDuel.Phase.ATTACK else "T_BLOCK_PHASE", "Attack" if duel.phase == ELDuel.Phase.ATTACK else "Defence")
+
+## The original two-part prompt of a target or X step (EL2 numeric text ids
+## 2k+9 and 2k+10): T_SPELL_PARAM, T_SPELL_PARAM02.. by kind;
+## 5 is X in ether, 11 X in health.
+func param_prompt(kind: int, separator: String) -> String:
+	var first := _original_text("T_SPELL_PARAM" if kind == 0 else "T_SPELL_PARAM%02d" % (2 * kind + 1), "")
+	var second := _original_text("T_SPELL_PARAM%02d" % (2 * kind + 2), "")
+	return first if second.is_empty() else first + separator + second
 
 ## The original target parameter kind of the pending spell or ability, or -1:
 ## 0 hero, 1 creature, 2 own creature, 3 enemy creature, 4 creature or hero,
@@ -4816,7 +4950,9 @@ func _hero_tip(side: int, control: Control = null) -> Dictionary:
 	var role := ("CtrlDUMyHero" if own else "CtrlDUEnemyHero") if profile.id == "el1" else ("CtrlDuMyHero" if own else "CtrlDuEnemyHero")
 	var title := _original_text(role, _side_name(side)) if control != null else _side_name(side)
 	var health := "%s: %d" % [_original_text("CtrlTTCombatTt1" if profile.id == "el2" else "CtrlTtCombatTt1", "Health"), int(hero.health)]
-	var level := "%s: %d" % [_original_text("T_LEVEL", "Level"), int(hero.get("level", 1))]
+	# A first-game map battle names the hero's own level, not the one
+	# difficulty gave it for the battle (player report #110).
+	var level := "%s: %d" % [_original_text("T_LEVEL", "Level"), int(hero.get("map_level", hero.get("level", 1)))]
 	# First game: the name over the portrait, then Level and Health on lines
 	# of their own, and nothing else (a monster's skills and pack bonus are
 	# not listed).
@@ -4875,6 +5011,11 @@ func _figure_tip(at: Vector2) -> Dictionary:
 		var card := str(creature.card)
 		var stats := _shown_creature_stats(id, creature)
 		var label := "%s %d/%d" % [duel.card_name(card), int(stats.power), maxi(0, int(stats.toughness) - shown_damage(id))]
+		# The second game titles a figure like its hand card: "Создание:"
+		# and the name, then the printed cost line (player report #100).
+		if profile.id == "el2":
+			var kind := _original_text("T_SPELL_TYPE", "Creature")
+			label = "%s: %s\n%s" % [kind, label, ELCombatTooltip.cost_line(profile, int(profile.table("CombatSpells").get(card, {}).get("Cost", 0)))]
 		var description := profile.card_description(card)
 		if not description.is_empty() and description != card: label += "\n" + description
 		content = ELCombatTooltip.text_content(label)
@@ -5828,6 +5969,17 @@ func _interface_page(page: VBoxContainer) -> void:
 	smart_toggle.button_pressed = bool(settings.values.get("smart_ai", true))
 	smart_toggle.toggled.connect(func(enabled: bool): settings.values.smart_ai = enabled)
 	_settings_row(gameplay, "Smarter computer players", "In battle, in both games, the computer judges positions steadily, looks at more replies and reads the fighting of the coming turns before it attacks or blocks. First game, single player: computer heroes also pick skills as they level up, buy spells and runes at shops, and the computer players cast global spells. Off: the original computer players.", smart_toggle)
+	var icons_toggle := CheckButton.new()
+	icons_toggle.name = "CastIcons"
+	icons_toggle.button_pressed = bool(settings.values.get("cast_icons", true))
+	icons_toggle.toggled.connect(func(enabled: bool): settings.values.cast_icons = enabled)
+	_settings_row(gameplay, "Opponent's spells as icons", "First game, in battle: the opponent's spells show as icons at the top left, as in the second game, instead of red messages. Point at an icon for the spell's description. Off: the original messages.", icons_toggle)
+	var dome_toggle := CheckButton.new()
+	dome_toggle.name = "FirstBattleDome"
+	dome_toggle.button_pressed = bool(settings.values.get("first_battle_dome", true))
+	dome_toggle.disabled = not profiles.has("el2")
+	dome_toggle.toggled.connect(func(enabled: bool): settings.values.first_battle_dome = enabled)
+	_settings_row(gameplay, "Battle dome in the first game", "First game: when a battle is about to start on the map, the second game's ether dome rises over both sides, with its sound. Needs Etherlords II installed; applies from the next map loaded.", dome_toggle)
 	_settings_row(gameplay, "Free movement", "First game, single player: heroes move as soon as you confirm a route and may move several times a day until their movement points run out; computer players move their heroes the same way when you end the day. Off: the original orders, carried out together at night.", free_toggle)
 	var sharing := _settings_box(page, "Sharing")
 	var discord_toggle := CheckButton.new()
@@ -6528,7 +6680,13 @@ func _battle_host() -> ELFrontMenu:
 			_apply_settings()
 			var command := options_host.options_ui.last_command
 			options_host.options_ui.last_command = ""
-			if command == "Surrender": _surrender_battle()
+			# First game: the general page's Load, Main menu and Quit work in a
+			# battle as on the map (player report #65).
+			match command:
+				"Surrender": _surrender_battle()
+				"GOLoad": _esc_load()
+				"GOMenu": _esc_exit_to_menu()
+				"GOQuit": ELAudio.quiet_quit(get_tree())
 			# Another box replaced a waiting hand-over: show it again.
 			if hot_pending: call_deferred("_show_handover"))
 		options_host.slot_chosen.connect(_load_slot)
@@ -6623,6 +6781,8 @@ func _begin_campaign(edition: String, scenario: Dictionary, difficulty: int, res
 		return
 	campaign_view = ELAdventureView.new()
 	campaign_view.strategic_session = online
+	# First game: the second game's battle dome, borrowed when it is installed.
+	if edition == "el1" and profiles.has("el2") and bool(settings.values.get("first_battle_dome", true)): campaign_view.dome_source = profiles["el2"]
 	add_child(campaign_view)
 	_use_edition(edition)
 	if not campaign_view.build(profiles[edition], scenario, settings, difficulty, restored):
@@ -6904,6 +7064,14 @@ func _resume_campaign(newest := false, manual := "", edition := "") -> void:
 	var codec := ELAdventureSave.new()
 	var restored := codec.read(manual, profiles)
 	if restored.is_empty():
+		ELCrashReport.trace("load refused: " + codec.error)
+		# Loading from the menus, which hid themselves: a refused save brings
+		# them back with the reason instead of leaving the player on the duel
+		# behind them (#73).
+		if campaign_view == null and front_menu != null and front_layer != null and not front_layer.visible and front_menu.duel_ui != null:
+			_show_front_menu_layer()
+			front_menu.duel_ui.show_message(codec.error)
+			return
 		_release_menu_music()
 		if campaign_view != null: campaign_view.notice.text = codec.error
 		else: _notice(codec.error)
@@ -6922,6 +7090,13 @@ func _load_slot(row: Dictionary) -> void:
 		var progress := ELSecondCampaign.read(str(row.path))
 		if not progress.is_empty():
 			_show_campaign_map(progress)
+			return
+		ELCrashReport.trace("load refused: the campaign autosave could not be read")
+		# As for a refused map save (#73): the hidden menus come back with the
+		# reason instead of leaving the player on the duel behind them.
+		if campaign_view == null and front_menu != null and front_layer != null and not front_layer.visible and front_menu.duel_ui != null:
+			_show_front_menu_layer()
+			front_menu.duel_ui.show_message(_t("The campaign autosave could not be read."))
 			return
 		if campaign_view != null: campaign_view.notice.text = "The campaign autosave could not be read."
 		else: _notice("The campaign autosave could not be read.")
@@ -7060,6 +7235,7 @@ func _load_duel() -> void:
 	# Hot seat: a load always hands the screen over again (the box first).
 	hot_side = -1
 	hot_pending = false
+	hot_views = [[], []]
 	_refresh()
 	# A round that had already ended was recorded before the save.
 	match_round_recorded = restored.phase == ELDuel.Phase.FINISHED
@@ -7232,9 +7408,19 @@ func _strip_subject() -> int:
 ## the adventure map; the original turns the battle camera at the edges).
 func _right_button(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT:
+		# A right click (no camera drag) drops the spell or ability waiting for
+		# its target, as Esc does (player report #81).
+		var clicked: bool = not event.pressed and right_down and not orbiting
 		right_down = event.pressed
 		right_from = event.position
 		orbiting = false
+		if clicked and _human_turn() and (selection >= 0 or not ability_selection.is_empty()) and not (power_dialog != null and power_dialog.visible):
+			selection = -1
+			selection_power = 0
+			exchange_target = -1
+			ability_selection.clear()
+			_hint("Selection cancelled.")
+			_refresh()
 		_set_strip_preview(_strip_preview_at(event.position) if event.pressed else -1)
 	elif event is InputEventMouseMotion and right_down:
 		if not orbiting and event.position.distance_to(right_from) > 6.0:
@@ -7268,6 +7454,22 @@ func _fill_strip() -> void:
 				"enabled": choice.get("enabled", false), "meta": {"grave_index": index, "card": card}})
 	elif shown >= 0:
 		var pending := selection >= 0 or not ability_selection.is_empty()
+		# A creature's own abilities come first and its enchantments follow on
+		# their right, as in the original (player report #103).
+		var owned: bool = subject >= 2 and int(entity.get("owner", -1)) == duel.active_side()
+		for ability: Dictionary in _strip_abilities():
+			var card := _ability_card(ability)
+			var tip := String(ability.name)
+			var about := profile.text(str(profile.table("CombatSpells").get(card, {}).get("AbilityText", "")))
+			if profile.id == "el2" and int(ability.get("cost", -1)) >= 0 and profile.text("T_ENCHANTMENT_COST_TT").count("%") == 2:
+				tip = profile.text("T_ENCHANTMENT_COST_TT") % [tip, int(ability.cost)]
+			# The second game shows a free ability's text alone, with no name
+			# or cost line (player report #90).
+			if profile.id == "el2" and int(ability.get("cost", -1)) == 0 and not about.is_empty(): tip = about
+			elif not about.is_empty() and about != tip: tip += "\n" + about
+			var icon := int(profile.table("CombatSpells").get(card, {}).get("AbilityIcon", 0))
+			list.append({"icon": profile.icon_at(icon) if icon > 0 else profile.card_icon(card), "tooltip": tip,
+				"enabled": not pending and owned and _human_turn() and duel.can_use_ability(subject, ability.key), "meta": {"ability": ability.key, "card": card}})
 		for enchantment: Dictionary in entity.enchantments:
 			var ability := _enchantment_ability(enchantment)
 			var tip := duel.card_name(enchantment.card)
@@ -7276,17 +7478,6 @@ func _fill_strip() -> void:
 			var own: bool = subject == duel.active_side() or (subject >= 2 and int(entity.get("owner", -1)) == duel.active_side())
 			var enabled: bool = _removal_allowed(enchantment) if pending else (not ability.is_empty() and own and _human_turn() and duel.can_use_ability(subject, ability.key))
 			list.append({"icon": profile.card_icon(enchantment.card), "tooltip": tip, "enabled": enabled, "meta": {"enchantment": int(enchantment.id), "card": enchantment.card}})
-		var owned: bool = subject >= 2 and int(entity.get("owner", -1)) == duel.active_side()
-		for ability: Dictionary in _strip_abilities():
-			var card := _ability_card(ability)
-			var tip := String(ability.name)
-			var about := profile.text(str(profile.table("CombatSpells").get(card, {}).get("AbilityText", "")))
-			if profile.id == "el2" and int(ability.get("cost", -1)) >= 0 and profile.text("T_ENCHANTMENT_COST_TT").count("%") == 2:
-				tip = profile.text("T_ENCHANTMENT_COST_TT") % [tip, int(ability.cost)]
-			if not about.is_empty() and about != tip: tip += "\n" + about
-			var icon := int(profile.table("CombatSpells").get(card, {}).get("AbilityIcon", 0))
-			list.append({"icon": profile.icon_at(icon) if icon > 0 else profile.card_icon(card), "tooltip": tip,
-				"enabled": not pending and owned and _human_turn() and duel.can_use_ability(subject, ability.key), "meta": {"ability": ability.key, "card": card}})
 	var signature := "%d:%s:" % [shown, inspect_graveyard]
 	for item: Dictionary in list: signature += str(item.meta.get("card", "")) + ","
 	rail.strip.set_items(list, signature)
@@ -7300,12 +7491,15 @@ func _strip_pressed(index: int) -> void:
 		var choice := _grave_choice(index)
 		if not choice.is_empty() and choice.enabled: choice.action.call()
 		return
-	if index >= entity.enchantments.size():
-		var own := _strip_abilities()
-		if index - entity.enchantments.size() >= own.size() or selection >= 0 or not ability_selection.is_empty(): return
-		var chosen: Dictionary = own[index - entity.enchantments.size()]
+	# Own abilities first, then the enchantments (see _fill_strip).
+	var own := _strip_abilities()
+	if index < own.size():
+		if selection >= 0 or not ability_selection.is_empty(): return
+		var chosen: Dictionary = own[index]
 		if subject >= 2 and int(entity.owner) == duel.active_side() and _human_turn() and duel.can_use_ability(subject, chosen.key): _select_ability(subject, chosen)
 		return
+	index -= own.size()
+	if index >= entity.enchantments.size(): return
 	var enchantment: Dictionary = entity.enchantments[index]
 	if selection >= 0 or not ability_selection.is_empty():
 		if _removal_allowed(enchantment): _remove_selected_enchantment(subject, int(enchantment.id))
@@ -8213,6 +8407,7 @@ func _play_match_round() -> void:
 	var edition := duel_match.edition
 	hot_side = -1
 	hot_pending = false
+	hot_views = [[], []]
 	match_round_recorded = false
 	match_clock = 0.0
 	match_result_shown = false

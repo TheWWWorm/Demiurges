@@ -276,6 +276,9 @@ func _shader_figures() -> Array[Node3D]:
 	label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 	label.no_depth_test = true
 	label.modulate = Color(1, 1, 1, 0)
+	# Its outline too: an opaque default outline drew the digits as black
+	# text on the battlefield while the warm-up ran (player report #107).
+	label.outline_modulate = Color(0, 0, 0, 0)
 	figures.append(label)
 	for material in particles:
 		var multimesh := MultiMesh.new()

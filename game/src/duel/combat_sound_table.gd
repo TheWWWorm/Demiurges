@@ -164,8 +164,10 @@ const CAST := {
 		"LSWR": ["NegEnchantment", "LesserSorceryWarding"], "MAHO": ["GreenSummon"], "MALS": ["Discard"],
 		"MCWO": ["BlackSummon"], "MCWU": ["BlackSummon"], "MCWY": ["BlackSummon"], "MDBL": ["BlueMindBlast"],
 		"MDNS": ["NegEnchantment"], "MDWP": ["Discard"], "MGHT": ["PosAttack", "PosRune"], "MLFI": ["BlackSummon"],
-		"MNBN": ["NegEnchantment"], "MNBR": ["GainMana"], "MNDP": ["GainMana"], "MNDW": ["GainMana"],
-		"MNHP": ["BlackSummon"], "MNST": ["GainMana"], "MNTH": ["NegEnchantment"], "MNTP": ["GainMana"],
+		# Update 1.03 Ether Breeze and Ether Storm attach
+		# queue one Target/PosRune at the enchanted creature, no GainMana.
+		"MNBN": ["NegEnchantment"], "MNBR": ["PosRune"], "MNDP": ["GainMana"], "MNDW": ["GainMana"],
+		"MNHP": ["BlackSummon"], "MNST": ["PosRune"], "MNTH": ["NegEnchantment"], "MNTP": ["GainMana"],
 		"MNTS": ["GreenSummon"], "MNTX": ["PosEnchantment"], "MNVR": ["GainMana"], "MOBE": ["GreenSummon"],
 		"MOTI": ["GreenSummon"], "MTPT": ["GreenSummon"], "MTSC": ["GreenSummon"], "MXHP": ["BlackSummon"],
 		"MYHO": ["GreenSummon"], "NOIS": ["Discard"], "NWLF": ["RedSummon"], "OBLS": ["Disenchant", "OuterBlast"],
@@ -293,7 +295,10 @@ const ABILITY := {
 		"GIFG": [["FingusSpit", "line"]], "GRDG": [["GreenDragonInstant", "line"]], "GRFG": [["FingusSpit", "line"]],
 		"IMMB": [["LoseLife", "at"]], "KBEL": [["PosSorcery", "at"]], "KBSH": [["RedZap", "line"]], "LMMN": [["Draw", "at"]],
 		"LMWK": [["Draw", "at"]], "LSHE": [["GainLife", "at"]], "MNTS": [["NegSorcery", "at"]], "MTPT": [["NegSorcery", "at"]],
-		"MTSC": [["NegSorcery", "at"]], "OEXC": [["OuterExchange", "line"]], "ORSH": [["GainMana", "at"]],
+		# Update 1.03 OrcShamanAbility rests the shaman, takes a
+		# channel and dispels: Target/Disenchant at the enchantment's holder,
+		# then Target/LoseMana at the shaman's hero.
+		"MTSC": [["NegSorcery", "at"]], "OEXC": [["OuterExchange", "line"]], "ORSH": [["Disenchant", "at"], ["LoseMana", "at"]],
 		"OUD1": [["PaleDrainLife", "line"], ["GainLife", "at"]], "OUD2": [["PaleDrainLife", "line"], ["GainLife", "at"]],
 		"OUD3": [["PaleDrainLife", "line"], ["GainMana", "at"]],
 		"OUE1": [["PaleDrainEncantment", "to_user"], ["Disenchant", "at"], ["GainMana", "at"]],
@@ -314,14 +319,15 @@ const ABILITY := {
 ## COMBAT: effects of a creature power that acts during combat damage, keyed by
 ## the power (a mastery code or a strike property), each drawn at the affected
 ## figure ("at") or from the first figure to the second ("line"). The second
-## game adds none here.
+## game has only the life drain: after a hero hit heals the attacker's hero it
+## queues DrainLife, Start at the hit hero, Finish at the healed one.
 const COMBAT := {
 	"el1": {
 		"GBHD": [["GreenDamage", "at"]], "BWIT": [["CantUntap", "at"], ["NegRune", "at"]], "BPTD": [["Disenchant", "at"]],
 		"Disenchant": [["Disenchant", "at"]], "Lifetap": [["DrainLife", "line"]], "Discard": [["Discard", "at"]],
 		"ENLH": [["Draw", "at"]]
 	},
-	"el2": {},
+	"el2": {"Lifetap": [["DrainLife", "line"]]},
 }
 ## Effects about a hero's own life, ether or cards.
 ## Creature auras: the effects each original aura callback starts on a

@@ -126,11 +126,14 @@ func _sync_shrine(item: Dictionary) -> void:
 func orient(name: String, yaw: float) -> void:
 	if effects.has(name): effects[name].node.rotation.y = yaw
 
-func start(name: String, entry: Dictionary, elapsed: float, draw_current := false) -> void:
+## `source`: the edition whose files hold the effect, when it is not this map's
+## own (the first game's battle dome borrows the second game's).
+func start(name: String, entry: Dictionary, elapsed: float, draw_current := false, source: ELProfile = null) -> void:
 	finish(name)
-	var file := particle_file(profile, str(entry.file))
+	var data := source if source != null else profile
+	var file := particle_file(data, str(entry.file))
 	if file == null or not file.error.is_empty() or file.frames < 1: return
-	var material := _material(file)
+	var material := _material(file, data)
 	if material == null: return
 	var copies := 1 if file.loop_end <= 0 else ceili(float(file.frames) / file.loop_end)
 	var mesh := MultiMesh.new()
@@ -161,10 +164,11 @@ func start(name: String, entry: Dictionary, elapsed: float, draw_current := fals
 
 ## Decodes a particle file and builds its material while the map loads, so
 ## its first appearance does not hitch (see keep_file).
-func prepare(path: String) -> void:
-	keep_file(profile, path)
-	var file := particle_file(profile, path)
-	if file != null and file.error.is_empty() and file.frames > 0: _material(file)
+func prepare(path: String, source: ELProfile = null) -> void:
+	var data := source if source != null else profile
+	keep_file(data, path)
+	var file := particle_file(data, path)
+	if file != null and file.error.is_empty() and file.frames > 0: _material(file, data)
 
 func finish(name: String) -> void:
 	var effect: Variant = effects.get(name)
@@ -256,11 +260,12 @@ func glow_sources() -> Array:
 			result.append([node.global_transform * glow[0], glow[1], glow[2]])
 	return result
 
-func _material(file: ELParticleFile) -> ShaderMaterial:
-	var key := "%s|%d|%d|%s" % [file.texture, file.columns, file.rows, file.additive]
+func _material(file: ELParticleFile, data: ELProfile = null) -> ShaderMaterial:
+	if data == null: data = profile
+	var key := "%s|%s|%d|%d|%s" % [data.id, file.texture, file.columns, file.rows, file.additive]
 	if _materials.has(key): return _materials[key]
 	var name := file.texture.get_basename() if file.texture.to_lower().ends_with(".bmp") else file.texture
-	var texture := profile.texture("Effects/" + name)
+	var texture := data.texture("Effects/" + name)
 	if texture == null:
 		_materials[key] = null
 		return null

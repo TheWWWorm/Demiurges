@@ -21,6 +21,8 @@ var fps := 30.0
 var speed := 1.0
 var playing := false
 var _faded: Dictionary = {}
+## Made wholly of the Magic material: the second game's colourless creatures.
+var colourless := false
 var error := ""
 var sample_count := 0
 var _animations: ELArchive
@@ -129,6 +131,18 @@ func build(data: ELProfile, model: String, texture_name: String, secondary_textu
 	var authored_materials := {}
 	_metal_parts.clear()
 	var separate_second := not secondary_texture.is_empty() and ELArchive.key(secondary_texture) != ELArchive.key(texture_name)
+	# The original lights Magic parts at full brightness (emissive 1.0). The
+	# colourless creatures are made wholly of them, and drawn so they looked
+	# overlit beside shaded figures (player report #98): the remake shades
+	# them once materialised and keeps the glow for their pale aspect
+	# (set_opacity). Glowing parts of other figures stay as the original.
+	colourless = false
+	for link: Array in links:
+		if figures.has(link[0]) and link[0] not in EFFECT_ANCHORS:
+			if int(figures[link[0]].material_id) != ELFigure.MATERIAL_MAGIC:
+				colourless = false
+				break
+			colourless = true
 	for link: Array in links:
 		var name: String = link[0]
 		var node := MeshInstance3D.new()
@@ -144,7 +158,7 @@ func build(data: ELProfile, model: String, texture_name: String, secondary_textu
 				node.material_override = wave_material
 				continue
 			var material_id := int(figures[name].material_id)
-			var fullbright := material_id == ELFigure.MATERIAL_MAGIC
+			var fullbright := material_id == ELFigure.MATERIAL_MAGIC and not colourless
 			var diffuse := profile.figure_diffuse(material_id)
 			if fullbright or diffuse != Color.WHITE:
 				var key := [part_material, material_id]
@@ -157,7 +171,7 @@ func build(data: ELProfile, model: String, texture_name: String, secondary_textu
 					authored_materials[key] = authored
 				part_material = authored_materials[key]
 			# Armour and weapons, which the originals light as matte as cloth.
-			if not fullbright and part_material.albedo_texture != null and not ELFigure.is_cloth(template, name):
+			if material_id != ELFigure.MATERIAL_MAGIC and part_material.albedo_texture != null and not ELFigure.is_cloth(template, name):
 				_metal_parts[name] = [part_material, "second" if int(figures[name].texture_slot) == 2 and separate_second else "main"]
 			node.material_override = part_material
 		# Anchors may parent real geometry (the illusion wall uses "dust" as its
@@ -208,6 +222,8 @@ func _wear_metal(masks: Dictionary) -> void:
 	_metal_parts.clear()
 
 ## Fades the whole figure (1 = opaque); used for the pale aspect's pulse.
+## A colourless creature's faded copies glow at full brightness, as the
+## original draws its Magic material; opaque, it is shaded (#98).
 ## Fades the whole figure. Per-figure blended copies of its materials are used
 ## because instance transparency does not apply to the compatibility renderer.
 func set_opacity(alpha: float) -> void:
@@ -223,6 +239,9 @@ func set_opacity(alpha: float) -> void:
 		if not _faded.has(opaque):
 			var faded: StandardMaterial3D = opaque.duplicate()
 			faded.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+			if colourless:
+				faded.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+				faded.set_meta(ELFigure.AUTHORED_FULLBRIGHT, true)
 			_faded[opaque] = faded
 		var material: StandardMaterial3D = _faded[opaque]
 		material.albedo_color.a = alpha

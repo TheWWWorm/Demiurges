@@ -43,7 +43,41 @@ static func restore(profile: ELProfile, hero: Dictionary) -> bool:
 		for index in hero.rune_stock[card].size():
 			if not valid_count(profile, hero, card, hero.rune_stock[card][index]): return false
 			hero.rune_stock[card][index] = int(hero.rune_stock[card][index])
+	if hero.has("rune_under"):
+		if hero.rune_under is not Array: return false
+		for code: Variant in hero.rune_under:
+			if code is not String or (not code.is_empty() and not unlimited(profile, hero, code)): return false
+		# A book changed by a path that does not keep the list loses it.
+		if hero.rune_under.size() != hero.cards.size() or hero.rune_under.all(func(code: String): return code.is_empty()): hero.erase("rune_under")
 	return true
+
+## The cantrip waiting under each book slot ("" for none), one per slot.
+## Bought over a cantrip, a laboratory spell keeps it underneath; when that
+## spell's runes are spent in a battle, the cantrip takes the slot back.
+static func under(hero: Dictionary) -> Array[String]:
+	var result: Array[String] = []
+	var kept: Variant = hero.get("rune_under", [])
+	if kept is Array and kept.size() == hero.get("cards", []).size(): result.assign(kept)
+	else:
+		result.resize(hero.get("cards", []).size())
+		result.fill("")
+	return result
+
+static func set_under(hero: Dictionary, codes: Array) -> void:
+	if codes.any(func(code: String): return not code.is_empty()): hero.rune_under = codes.duplicate()
+	else: hero.erase("rune_under")
+
+## After a battle (`before`: the book's runes when it began): a slot whose
+## spell spent its last rune gives the slot back to the cantrip under it.
+static func return_cantrips(hero: Dictionary, before: Array) -> void:
+	if not hero.has("rune_under"): return
+	var codes := under(hero)
+	for slot in mini(codes.size(), hero.get("rune_uses", []).size()):
+		if codes[slot].is_empty() or slot >= before.size() or int(before[slot]) <= 0 or int(hero.rune_uses[slot]) != 0: continue
+		hero.cards[slot] = codes[slot]
+		hero.rune_uses[slot] = -1
+		codes[slot] = ""
+	set_under(hero, codes)
 
 static func valid_count(profile: ELProfile, hero: Dictionary, card: String, value: Variant) -> bool:
 	if unlimited(profile, hero, card): return ELLuaSave._integer(value, -1, -1)

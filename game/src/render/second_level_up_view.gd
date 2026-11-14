@@ -4,11 +4,12 @@ extends ELHeroSkillsView
 ## A6-Int-Upgrade artwork: the 256x380 panel centred on the screen, the
 ## "UPGRADE" header, three offered skills as 50x50 icons (LUBounds, one cell
 ## every 69 pixels; the chosen one is covered by the translucent white swatch of
-## the SYMBOLS sheet), the hero's five skill rows (LUSkill1..5, a 20x20 icon
+## the SYMBOLS sheet), the hero's five skill rows (LUSkill1..5, a 20x20 rank badge
 ## and the name, rows 26 pixels apart) and the LUOk button.
 ##
 ## Choosing an offer previews it in the skill rows (a new skill appended, a
-## known one raised). Rank dots show the offered and previewed skill levels.
+## known one raised). The rows show each rank as the original's star badge;
+## rank dots under the offers are a remake addition.
 ## An offer dragged onto the skill rows is learned as with LUOk. LUOk learns the chosen offer and closes the dialog once no
 ## choice is left. The remake keeps LUOk disabled while offers wait without a
 ## selection, so a pending choice is never lost; Escape closes the dialog and
@@ -140,7 +141,6 @@ func _layout() -> void:
 		# evenly to both sides instead of being cut.
 		var wide := label.get_minimum_size().x if control.begins_with("LUHeader") else 0.0
 		if wide > box.size.x: box = box.grow_individual((wide - box.size.x) * 0.5, 0, (wide - box.size.x) * 0.5, 0)
-		if control.begins_with("LUSkill"): box.size.x -= RANK_WIDTH
 		label.position = box.position
 		label.size = box.size
 	offers.position = design("LUBounds").position
@@ -157,14 +157,19 @@ func _draw_surface() -> void:
 	for index in mini(5, _rows.size()):
 		var row := design("LUSkill%d" % (index + 1))
 		var rank := int(_rows[index][1])
-		var icon := _icon_index(str(_rows[index][0]), rank)
-		if icon >= 0 and _skills_sheet != null:
-			surface.draw_texture_rect_region(_skills_sheet, Rect2(Vector2(left, row.position.y - origin.y + 3), Vector2(20, 20)), _cell(icon))
-		var center := Vector2(row.end.x - RANK_WIDTH * 0.5, row.get_center().y) - origin
-		_draw_rank(surface, center, rank)
+		# The original row shows the rank as a star badge from the SKILLS
+		# sheet, not the skill's icon (player report #74).
+		if _skills_sheet != null:
+			surface.draw_texture_rect_region(_skills_sheet, Rect2(Vector2(left, row.position.y - origin.y + 3), Vector2(20, 20)), rank_badge(rank))
 
 func _icon_index(code: String, rank: int) -> int:
 	return int(ELHeroSkills.definition(state.map.profile, code, rank).get("Icon", -1))
+
+## A skill rank's badge on the SKILLS sheet (Skills\icon_1): one, two or
+## three stars in 20x20 cells, (100,200), (120,200) and (100,220). Ranks
+## are zero-based.
+static func rank_badge(rank: int) -> Rect2:
+	return [Rect2(100, 200, 20, 20), Rect2(120, 200, 20, 20), Rect2(100, 220, 20, 20)][clampi(rank, 0, 2)]
 
 static func _cell(icon: int) -> Rect2:
 	return Rect2((icon / 5) * 50, (icon % 5) * 50, 50, 50)
@@ -216,7 +221,8 @@ func _select() -> void:
 		label.text = ""
 		if index < _rows.size():
 			label.text = state.map.profile.text(str(ELHeroSkills.definition(state.map.profile, str(_rows[index][0]), int(_rows[index][1])).get("Name", _rows[index][0])))
-			label.add_theme_color_override("font_color", TAN if _rows[index][2] else WHITE)
+			# The original writes the skills already learned in gold; the previewed one stands apart.
+			label.add_theme_color_override("font_color", WHITE if _rows[index][2] else TAN)
 		label.tooltip_text = ""
 	# LUOk learns a chosen offer; with no offer waiting it simply closes.
 	accept.disabled = chosen.is_empty() and offers.item_count > 0

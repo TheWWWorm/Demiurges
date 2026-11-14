@@ -15,7 +15,33 @@ extends SceneTree
 ## - the first game's pre-battle map panel uses the original text sizes
 ##   (BattleNumText and the names 20 px cells, the stat lines 15 px cells);
 ## - a creature with an ability of its own breaks enfeeblement and both
-##   paralyses like any other: the price is paid and it rises.
+##   paralyses like any other: the price is paid and it rises;
+## - first game, option "cast_icons": the opponent's casts show as framed
+##   spell icons with their tooltip instead of red lines, own casts stay lines;
+## - first game, with the second game installed: the pre-battle panel raises
+##   the borrowed battle dome, and declining the battle ends it;
+## - second game: a battle between two computer figures (chapter 11's Synth
+##   Soldier on its guard) is shown before it resolves: dome and Summon,
+##   BattleDefeat at the loser, then the loser dies and the dome ends; the
+##   map waits meanwhile, and a save made then resolves the battle first;
+##   with no winner both sides take the defeat and die;
+## - battle controls (reports #81 #90 #95 #96 #101 #103 #104 #108 #110):
+##   Pale Revival is castable with a plane creature and a graveyard creature,
+##   Mystic manifestation needs an enchantment its hero cast, second-game
+##   Attack all passes over 0-power creatures, a creature's own ability sits
+##   left of its enchantments (a free one's tooltip is its text alone), the X
+##   choice names what it counts and repeats while + or − is held, Fresh Wind
+##   takes its target before X (Comet X first), a right click drops a
+##   pending spell, and a first-game map battle names the hero's own level;
+## - map reports: first game, a declined creature battle puts the hero back
+##   outside the guard zone so it can walk on (#62), a second F8 answers the
+##   quick-load question (#67), an object on the cell behind the hero is
+##   picked rather than the hero (#79), a right click on a skill holds its
+##   description up (#80), and a castle assault plays the attack clip and
+##   damage effect (#111); second game, a tunnel guard fights on the Dungeon
+##   arena and shows its portrait (#70, #72) and a specialization shrine plays
+##   the hero's change effect (#75); a save the loader refuses brings the
+##   menus back with the reason (#73).
 ##
 ##   godot --headless --path game --script ../tools/player_reports_check.gd
 ##
@@ -56,13 +82,31 @@ func _run() -> void:
 		else: print("SKIP: %s files could not be mounted" % edition)
 	for edition: String in profiles: _cost_lines(profiles[edition])
 	for edition: String in profiles: _status_breaks(profiles[edition])
+	if profiles.has("el2"): _pale_commands(profiles.el2)
+	for edition: String in profiles: await _battle_controls(edition)
 	if profiles.has("el2"):
 		_classic_order(profiles.el2)
 		_strict_second_game(profiles.el2)
+		_second_game_prs(profiles.el2)
+		_displaced_to_reserve(profiles.el2)
+	for edition: String in profiles: _editor_artifact_charges(profiles[edition])
 	if profiles.has("el1"):
 		_original_presets(profiles.el1)
+		_wrapped_shop_tooltip(profiles.el1)
+		_first_shop_reserve(profiles.el1)
+		await _first_rune_buying(profiles.el1)
 		await _monster_battle()
 		await _precombat(profiles.el1)
+		await _cast_icons()
+		await _camera_keys_and_hall()
+	_save_name_symbols()
+	for edition: String in profiles: await _hot_seat_rounds(edition)
+	if profiles.has("el1") and profiles.has("el2"): await _first_dome()
+	if profiles.has("el2"): await _computer_fight()
+	if profiles.has("el2"): _shaded_colourless(profiles.el2)
+	if profiles.has("el1"): await _first_map_reports()
+	if profiles.has("el2"): await _second_map_reports()
+	if not profiles.is_empty(): await _refused_load()
 	print("PLAYER REPORTS: %d failure(s)" % failures.size())
 	quit(0 if failures.is_empty() else 1)
 
@@ -149,6 +193,331 @@ func _strict_second_game(profile: ELProfile) -> void:
 	check(not ELDuelCosts.errors(profile, preset).is_empty(), "el2: the test preset breaks the rules")
 	check(not ELDuelPresets.lenient(profile), "el2: presets that break the rules are still refused on load")
 
+## The second game's writer: deck/spell@code,components,
+## bag_spells/spell@type,count and artefacts/artefact@name (a template name).
+func _second_game_prs(profile: ELProfile) -> void:
+	var preset: Dictionary = ELDuelPresets.shipped(profile)[0]
+	var template := ""
+	var artifact := ""
+	for key: String in profile.table("Artefacts"):
+		var code := str(profile.table("Artefacts")[key].get("SpellType", ""))
+		if ELDuelCosts.duel_artifacts(profile).has(code):
+			template = key
+			artifact = code
+			break
+	var reserve: String = preset.cards[0]
+	var lines := PackedStringArray(["<?xml version=\"1.0\"?>", "<duel_preset name=\"x\" magic=\"%s\" resource_level=\"%d\" hero_level=\"%d\" specialization=\"NONE\">" % [preset.faction, preset.resource_level, preset.level]])
+	lines.append("<artefacts><artefact name=\"%s\"/></artefacts><skills/><deck>" % template)
+	for i in preset.cards.size(): lines.append("<spell code=\"%s\" components=\"%d\"/>" % [preset.cards[i], preset.runes[i] if i < preset.runes.size() else 0])
+	lines.append("</deck><bag_spells><spell type=\"%s\" count=\"1\"/></bag_spells></duel_preset>" % reserve)
+	var path := OS.get_user_data_dir().path_join("player_reports_check_el2.prs")
+	var file := FileAccess.open(path, FileAccess.WRITE)
+	file.store_string("\r\n".join(lines))
+	file.close()
+	var parsed := ELDuelPresets._original_preset(profile, path)
+	DirAccess.remove_absolute(path)
+	check(not parsed.is_empty() and parsed.cards == preset.cards and parsed.reserve == {reserve: 1} and parsed.artifacts == [artifact] and not template.is_empty(), "el2: the .prs layout reads (deck, bag_spells@type,count, artefact@name -> its spell)")
+	check(not ELDuelPresets.normalize(parsed).is_empty(), "el2: a read .prs is a well-formed preset")
+
+## Deck editors, both games: a hero artifact shows its charges (the
+## template's MaxCharges, each round's start) in the rail's glyph digits.
+func _editor_artifact_charges(profile: ELProfile) -> void:
+	var menu := ELFrontMenu.new()
+	menu.edition = profile.id
+	menu.profile = profile
+	var screen := ELDuelScreen.new(menu)
+	var code: String = ELDuelCosts.duel_artifacts(profile)[0]
+	var name := ELDuelPresets.artifact_name(profile, code)
+	var look := ELListLook.load(profile)
+	check(not name.is_empty() and screen.artifact_charges(code) == int(profile.table("Artefacts")[name].MaxCharges) and screen.artifact_charges(code) > 0 and look.hover != null, "%s deck editor: an artifact's charge count is drawn (%s: %d)" % [profile.id, code, screen.artifact_charges(code)])
+	menu.free()
+
+## First game laboratory (#69): bought over a cantrip, the cantrip waits
+## under the spell and comes back when its runes are spent in battle; bought
+## over another spell, that spell goes to the reserve with its runes.
+func _first_shop_reserve(profile: ELProfile) -> void:
+	var ids := ELCampaign.available(profile)
+	var trade := ELFirstSpellShop.new()
+	var state: ELAdventureSession
+	var hero := {}
+	for mission in 8:
+		var campaign := ELCampaign.new()
+		if ids.is_empty() or not campaign.load_campaign(profile, ids[0]) or campaign.scenarios.size() <= mission: break
+		var map := ELAdventureMap.new()
+		if not map.load_map(profile, str(campaign.scenarios[mission].file_name)): continue
+		state = ELAdventureSession.new()
+		if not state.start(map, 1, 212, "", 1, false): continue
+		for item: Dictionary in state.objects.values():
+			if item.get("type") == "hero" and item.get("alive", false) and int(item.get("owner", -1)) == state.current_player: hero = item
+		if hero.is_empty(): continue
+		var colour := ELFirstSpellShop.hero_color(profile, hero)
+		var cantrip := ""
+		var spell := ""
+		for code: String in profile.table("CombatSpells"):
+			var row: Dictionary = profile.table("CombatSpells")[code]
+			if row.get("Color") != colour or not ELSpellInventory.is_spell(profile, code): continue
+			if row.get("Rarity") == "Cantrip" and cantrip.is_empty(): cantrip = code
+			elif row.get("Rarity") == "Common" and spell.is_empty(): spell = code
+		hero.cards.assign([cantrip, spell])
+		hero.rune_uses.assign([-1, 3])
+		hero.erase("rune_under")
+		for item: Dictionary in state.objects.values():
+			if item.get("group") == "laboratories" and trade.open(state, int(hero.uid), int(item.uid), true) and trade.stock.any(func(code: String): return not ELRunes.unlimited(profile, hero, code)): break
+			trade = ELFirstSpellShop.new()
+		if not trade.stock.is_empty():
+			var bought: String = trade.stock.filter(func(code: String): return not ELRunes.unlimited(profile, hero, code))[0]
+			for kind: String in state.players[hero.owner].resources: state.players[hero.owner].resources[kind] = 1000000
+			var reserve_before := int(hero.spell_stock.get(spell, 0))
+			check(trade.replace(0, bought) and trade.replace(1, bought) and trade.commit(), "el1 laboratory: two purchases commit (%s)" % trade.error)
+			check(hero.cards == [bought, bought] and ELRunes.under(hero) == [cantrip, ""], "el1 laboratory: a spell bought over a cantrip keeps it underneath")
+			check(int(hero.spell_stock.get(spell, 0)) == reserve_before + 1 and int(hero.rune_stock[spell][-1]) == 3, "el1 laboratory: a spell bought over another sends it to the reserve with its runes")
+			var copy: Variant = JSON.parse_string(JSON.stringify(hero))
+			check(copy is Dictionary and ELRunes.restore(profile, copy) and ELRunes.under(copy) == [cantrip, ""], "el1 laboratory: the cantrip underneath survives a save round trip")
+			var old := hero.duplicate(true)
+			old.erase("rune_under")
+			check(ELRunes.restore(profile, old) and ELRunes.under(old) == ["", ""], "el1: a book saved without cantrips underneath still loads")
+			# In battle: the spent slot draws the cantrip it was bought over.
+			var fighter := {"deck": [bought], "spell_uses": [0], "hand_slots": [], "drawn": [], "rune_under": [cantrip], "kind": "hero"}
+			var drawn := ELSpellCharges.choose_el1(fighter, profile.table("CombatSpells"), func(n: int): return 0)
+			check(drawn.get("card") == cantrip and int(drawn.get("slot", 0)) == -1, "el1 battle: a spent bought spell draws its cantrip")
+			# After the battle: spent runes give the slot back; unspent ones keep it.
+			hero.rune_uses.assign([0, 0])
+			ELRunes.return_cantrips(hero, [2, 0])
+			check(hero.cards == [cantrip, bought] and hero.rune_uses[0] == -1 and not hero.has("rune_under"), "el1: once its runes are spent in battle, the cantrip takes its slot back")
+			break
+		hero = {}
+	if trade.stock.is_empty(): print("NOTE: no early first-game mission has a usable laboratory; the purchase rules are not checked")
+
+## First game component portal (#78): runes are bought as the laboratory buys
+## spells. The price table's rune is picked up with a click and put on a book
+## spell with a second click or a drag; a double click on a book spell or a
+## right click on the rune adds one to it, a right click on the spell gives
+## one back; the shop hotkeys (B, U, Enter) buy, give back and pay. The
+## prices and the rune limit stay those of ELRuneShop.
+func _first_rune_buying(profile: ELProfile) -> void:
+	var ids := ELCampaign.available(profile)
+	var trade := ELRuneShop.new()
+	var state: ELAdventureSession
+	var director: ELAdventureDirector
+	var hero := {}
+	for mission in 8:
+		var campaign := ELCampaign.new()
+		if ids.is_empty() or not campaign.load_campaign(profile, ids[0]) or campaign.scenarios.size() <= mission: break
+		var map := ELAdventureMap.new()
+		if not map.load_map(profile, str(campaign.scenarios[mission].file_name)): continue
+		state = ELAdventureSession.new()
+		if not state.start(map, 1, 212, "", 1, false): continue
+		hero = {}
+		for item: Dictionary in state.objects.values():
+			if item.get("type") == "hero" and item.get("alive", false) and int(item.get("owner", -1)) == state.current_player: hero = item
+		if hero.is_empty(): continue
+		var colour := ELFirstSpellShop.hero_color(profile, hero)
+		var cantrip := ""
+		var spell := ""
+		for code: String in profile.table("CombatSpells"):
+			var row: Dictionary = profile.table("CombatSpells")[code]
+			if row.get("Color") != colour or not ELSpellInventory.is_spell(profile, code): continue
+			if row.get("Rarity") == "Cantrip" and cantrip.is_empty(): cantrip = code
+			elif row.get("Rarity") == "Common" and spell.is_empty(): spell = code
+		if cantrip.is_empty() or spell.is_empty(): continue
+		hero.cards.assign([cantrip, spell, spell])
+		hero.rune_uses.assign([-1, 1, ELRunes.capacity(hero) - 1])
+		hero.erase("rune_under")
+		var found := false
+		for item: Dictionary in state.objects.values():
+			if item.get("group") == "factories" and trade.open(state, int(hero.uid), int(item.uid), true):
+				found = true
+				break
+			trade = ELRuneShop.new()
+		if not found: continue
+		director = ELAdventureDirector.new()
+		if director.build(state): break
+		director = null
+	if director == null:
+		print("NOTE: no early first-game mission has a component portal; rune buying is not checked")
+		return
+	for kind: String in state.players[hero.owner].resources: state.players[hero.owner].resources[kind] = 1000000
+	var hud := ELAdventureHud.new()
+	root.add_child(hud)
+	hud.build(state)
+	var view := ELRuneShopView.new()
+	root.add_child(view)
+	view.build_shop(director, hud, trade)
+	await frames(2)
+	var input: Callable = view.sheet._gui_input
+	var mouse := func(at: Vector2, button: MouseButton, pressed: bool, double := false) -> void:
+		var event := InputEventMouseButton.new()
+		event.button_index = button
+		event.pressed = pressed
+		event.double_click = double
+		event.button_mask = MOUSE_BUTTON_MASK_LEFT if pressed and button == MOUSE_BUTTON_LEFT else 0
+		event.position = at
+		event.global_position = at
+		input.call(event)
+	var moving := func(at: Vector2) -> void:
+		var event := InputEventMouseMotion.new()
+		event.button_mask = MOUSE_BUTTON_MASK_LEFT
+		event.position = at
+		event.global_position = at
+		input.call(event)
+	var rune := view.rune_rect().get_center()
+	var spell_one := view.book_rect(1).get_center()
+	var spell_two := view.book_rect(2).get_center()
+	# A double click on a book spell buys one rune for it.
+	mouse.call(spell_one, MOUSE_BUTTON_LEFT, true)
+	mouse.call(spell_one, MOUSE_BUTTON_LEFT, false)
+	mouse.call(spell_one, MOUSE_BUTTON_LEFT, true, true)
+	mouse.call(spell_one, MOUSE_BUTTON_LEFT, false)
+	check(view.slot == 1 and trade.pending == [0, 1, 0], "el1 portal: a double click on a book spell buys one rune for it")
+	# Click the rune, click a spell.
+	mouse.call(rune, MOUSE_BUTTON_LEFT, true)
+	mouse.call(rune, MOUSE_BUTTON_LEFT, false)
+	check(view.carry, "el1 portal: a click on the price table's rune picks it up")
+	mouse.call(spell_two, MOUSE_BUTTON_LEFT, true)
+	mouse.call(spell_two, MOUSE_BUTTON_LEFT, false)
+	check(not view.carry and view.slot == 2 and trade.pending == [0, 1, 1], "el1 portal: the second click on a book spell adds the rune there")
+	# Drag the rune onto a spell; dropped elsewhere it is let go.
+	mouse.call(rune, MOUSE_BUTTON_LEFT, true)
+	for step in 4: moving.call(rune.lerp(spell_one, (step + 1) / 4.0))
+	mouse.call(spell_one, MOUSE_BUTTON_LEFT, false)
+	check(not view.carry and trade.pending == [0, 2, 1], "el1 portal: a rune dragged onto a book spell is added there")
+	mouse.call(rune, MOUSE_BUTTON_LEFT, true)
+	for step in 4: moving.call(rune.lerp(Vector2(200, 20), (step + 1) / 4.0))
+	mouse.call(Vector2(200, 20), MOUSE_BUTTON_LEFT, false)
+	check(not view.carry and trade.pending == [0, 2, 1], "el1 portal: a rune dropped away from the book is let go")
+	# Right button: gives one back on a spell, buys one on the rune.
+	mouse.call(spell_one, MOUSE_BUTTON_RIGHT, true)
+	mouse.call(spell_one, MOUSE_BUTTON_RIGHT, false)
+	check(view.slot == 1 and trade.pending == [0, 1, 1], "el1 portal: a right click on a book spell gives one rune back")
+	mouse.call(rune, MOUSE_BUTTON_RIGHT, true)
+	mouse.call(rune, MOUSE_BUTTON_RIGHT, false)
+	check(trade.pending == [0, 2, 1], "el1 portal: a right click on the rune buys one for the selected spell")
+	# The limits stay: a full spell and a cantrip take no rune.
+	mouse.call(spell_two, MOUSE_BUTTON_LEFT, true, true)
+	mouse.call(spell_two, MOUSE_BUTTON_LEFT, false)
+	var cantrip_slot := view.book_rect(0).get_center()
+	mouse.call(cantrip_slot, MOUSE_BUTTON_LEFT, true, true)
+	mouse.call(cantrip_slot, MOUSE_BUTTON_LEFT, false)
+	check(trade.pending == [0, 2, 1], "el1 portal: a full spell or a cantrip takes no more runes (limit %d)" % ELRunes.capacity(hero))
+	check(view.tooltip_at(rune).contains(ELRemakeText.t("Click to pick a rune up, then click a spell in the book. Right click: buy one for the selected spell.", profile)), "el1 portal: the rune's tooltip says how to buy it")
+	# Shop hotkeys on the map: B buys, U gives back, Enter pays.
+	var map := ELAdventureView.new()
+	root.add_child(map)
+	map.state = state
+	map.rune_shop = view
+	view.slot = 1
+	var key := func(code: Key) -> void:
+		var event := InputEventKey.new()
+		event.keycode = code
+		event.physical_keycode = code
+		event.pressed = true
+		map._shop_hotkey(event)
+	key.call(KEY_B)
+	key.call(KEY_B)
+	check(trade.pending == [0, 4, 1], "el1 portal: the shop_buy hotkey (B) buys a rune for the selected spell")
+	key.call(KEY_U)
+	check(trade.pending == [0, 3, 1], "el1 portal: the shop_undo hotkey (U) gives one back")
+	var expected := ELResources.empty("el1")
+	for kind: String in expected: expected[kind] = int(ELRuneShop.price(profile, hero, state.object(trade.shop_id), hero.cards[1])[kind]) * 3 + int(ELRuneShop.price(profile, hero, state.object(trade.shop_id), hero.cards[2])[kind])
+	check(trade.bill() == expected, "el1 portal: the bill is the portal's own rune prices")
+	var before: Dictionary = state.players[hero.owner].resources.duplicate()
+	var closed := [false]
+	view.closed.connect(func(): closed[0] = true)
+	key.call(KEY_ENTER)
+	var paid := true
+	for kind: String in expected: paid = paid and int(state.players[hero.owner].resources[kind]) == int(before[kind]) - int(expected[kind])
+	check(closed[0] and trade.finished and hero.rune_uses == [-1, 4, ELRunes.capacity(hero)] and paid, "el1 portal: Enter pays and the runes are on the spells (%s)" % [hero.rune_uses])
+	map.rune_shop = null
+	map.queue_free()
+	view.queue_free()
+	hud.queue_free()
+	await frames(2)
+
+## EL2 Duel deck editor: a spell put on an occupied active-deck slot sends
+## the displaced one to the reserve (manual: "the displaced spell moves to
+## reserve"); the first game's book slot just takes the new spell.
+func _displaced_to_reserve(profile: ELProfile) -> void:
+	var screen := ELDuelScreen.new(ELFrontMenu.new())
+	screen.menu.edition = "el2"
+	screen.menu.profile = profile
+	var preset: Dictionary = ELDuelPresets.shipped(profile)[0].duplicate(true)
+	var old: String = preset.cards[3]
+	var other := ""
+	for card: String in preset.cards:
+		if card != old: other = card
+	var placed: Variant = screen.apply(preset, "place_spell", [other, 3])
+	check(placed is Dictionary and placed.cards[3] == other and int(placed.reserve.get(old, 0)) == int(preset.reserve.get(old, 0)) + 1 and placed.cards.size() == preset.cards.size(), "el2 deck editor: the spell displaced from an active-deck slot goes to the reserve")
+	screen.menu.free()
+
+## EL1 laboratory: a stock spell's tooltip wraps its description instead of
+## one line several screens wide (CMBN «Самопожертвование»).
+func _wrapped_shop_tooltip(profile: ELProfile) -> void:
+	var text := profile.text(str(profile.table("CombatSpells").get("CMBN", {}).get("Name", "CMBN"))) + "\n" + profile.card_description("CMBN")
+	var label := ELHeroScreenView.wrapped_tooltip(text)
+	root.add_child(label)
+	var wide := Label.new()
+	wide.text = text
+	root.add_child(wide)
+	check(wide.get_minimum_size().x > 1440.0 and label.get_combined_minimum_size().x <= ELSecondMapTooltip.MAX_LABEL_WIDTH + 1.0 and label.autowrap_mode != TextServer.AUTOWRAP_OFF, "el1 shop: a long card tooltip wraps (%d px unwrapped, %d px wrapped)" % [wide.get_minimum_size().x, label.get_combined_minimum_size().x])
+	label.free()
+	wide.free()
+
+## Hot seat: each round deals each player their own preset, and the camera
+## turns to the acting player's end, keeping each player's own view
+## (EL1: per-side view records, default yaw 80/260 degrees).
+func _hot_seat_rounds(edition: String) -> void:
+	var view: Node = load("res://scenes/duel.tscn").instantiate()
+	root.add_child(view)
+	await frames(3)
+	var profile: ELProfile = view.profiles.get(edition)
+	if profile == null:
+		view.queue_free()
+		return
+	var pool := ELDuelPresets.shipped(profile)
+	var first: Dictionary = pool[0]
+	var second := {}
+	for row: Dictionary in pool:
+		if row.faction != first.faction and int(row.resource_level) == int(first.resource_level):
+			second = row
+			break
+	var hot_match := ELDuelMatch.new()
+	hot_match.begin(profile, pool, [first, second], int(first.resource_level), 2, ELDuelMatch.RANDOM, 77)
+	hot_match.hot_seat = true
+	hot_match.names = ["P1", "P2"]
+	view._begin_duel_match(hot_match)
+	for round in 2:
+		await frames(5)
+		var yaws := [INF, INF]
+		var own_hands := true
+		var kept_view := false
+		for turn in 3:
+			for i in 50:
+				if view.hot_pending: break
+				await process_frame
+			var side: int = view.duel.active_side()
+			view._confirm_handover()
+			await frames(2)
+			if turn == 2: kept_view = is_equal_approx(view.camera_yaw, yaws[side] + 0.25)
+			else: yaws[side] = view.camera_yaw
+			for button in view.hand.get_children():
+				if button.has_meta("card") and str(profile.table("CombatSpells")[button.get_meta("card")].get("Color", "")) != String(hot_match.presets[side].faction): own_hands = false
+			# The player turns their camera a little: it is theirs to keep.
+			view.camera_yaw += 0.25
+			var guard := 0
+			while view.duel.active_side() == side and guard < 8 and view.duel.phase != ELDuel.Phase.FINISHED:
+				view._end_phase()
+				await frames(3)
+				guard += 1
+		check(own_hands, "%s hot seat round %d: each player's hand comes from their own preset" % [edition, round + 1])
+		check(absf(absf(wrapf(yaws[1] - yaws[0], -PI, PI)) - PI) < 0.001, "%s hot seat round %d: player 2's camera looks from the other end" % [edition, round + 1])
+		check(kept_view, "%s hot seat round %d: a player's own camera comes back on their next turn" % [edition, round + 1])
+		view._surrender_round()
+		await frames(5)
+		if round == 0: view._duel_round_closed(true)
+	view.duel_match = null
+	view.queue_free()
+	await frames(2)
+
 # --- First game: .prs presets and lenient loading -------------------------------
 
 ## A preset of `faction` with its first `count` spells at resource level 1
@@ -201,6 +570,15 @@ func _original_presets(profile: ELProfile) -> void:
 	file.close()
 	var parsed := ELDuelPresets._original_preset(profile, source)
 	check(parsed.get("faction") == "Black" and parsed.get("cards", []).size() == preset.cards.size() + 1 and int(parsed.skills.get("MSTR", -1)) == 1 and int(parsed.level) == int(preset.level), "el1: the .prs layout reads (magic, levels, skills/skill@type,level, deck/spell@code,components)")
+	# The first game's loader counts rank-ups: capped at rank 2, a repeat adds, 0 adds nothing.
+	var odd := FileAccess.open(source, FileAccess.WRITE)
+	odd.store_string(text.replace("<skill type=\"MSTR\" level=\"2\"/>", "<skill type=\"MSTR\" level=\"9\"/><skill type=\"HEAL\" level=\"1\"/><skill type=\"HEAL\" level=\"1\"/><skill type=\"BARG\" level=\"0\"/>"))
+	odd.close()
+	var odd_skills: Dictionary = ELDuelPresets._original_preset(profile, source).get("skills", {})
+	check(odd_skills == {"MSTR": 2, "HEAL": 1}, "el1: .prs skill levels read as the original's rank-ups (%s)" % odd_skills)
+	file = FileAccess.open(source, FileAccess.WRITE)
+	file.store_string(text)
+	file.close()
 	var index_path := ELDuelPresets.user_dir(profile).path_join(ELDuelPresets.IMPORTED_INDEX)
 	var index_before := FileAccess.get_file_as_string(index_path) if FileAccess.file_exists(index_path) else ""
 	var key := "duel/" + name + ".prs"
@@ -387,6 +765,231 @@ func _precombat(profile: ELProfile) -> void:
 	view.queue_free()
 	await frames(2)
 
+# --- First game: the opponent's casts as icons ------------------------------------
+
+func _cast_icons() -> void:
+	var view: Node = load("res://scenes/duel.tscn").instantiate()
+	view.demo = true
+	root.add_child(view)
+	await process_frame
+	var profile: ELProfile = view.profiles.el1
+	var cards := ELCatalog.available_cards(profile, "Red").slice(0, 6)
+	view._start("el1", {"arena": ELDuelMatch.arenas(profile)[0], "players": [{"faction": "Green", "level": 1, "cards": ELCatalog.available_cards(profile, "Green").slice(0, 5)}, {"faction": "Red", "level": 1, "cards": cards}]})
+	view.demo = false
+	await frames(5)
+	var kept: Variant = view.settings.values.get("cast_icons")
+	var notices: ELCombatNotices = view.notices
+	view.settings.values.cast_icons = false
+	view._cast_notice(1, cards[0])
+	check(notices.icons.is_empty() and notices.lines.size() == 1, "el1: with icons off the opponent's cast is a message line")
+	notices.clear()
+	view.settings.values.cast_icons = true
+	for card: String in cards: view._cast_notice(1, card)
+	view._cast_notice(0, cards[0])
+	check(notices.icons.size() == cards.size() and notices.lines.size() == 1, "el1: with icons on the opponent's casts are icons, own casts a line")
+	check(notices.frame != null, "el1: the cast icons have a frame (the first game's list border)")
+	check(notices.icon_rect(5).position.y > notices.icon_rect(4).position.y, "el1: the icons wrap after five a row")
+	var tip: String = notices._get_tooltip(notices.icon_rect(0).get_center())
+	check(tip.contains(view.duel.card_name(cards[0])), "el1: an icon's tooltip describes its spell")
+	view._phase_notice(1, false, 2)
+	check(notices.icons.is_empty(), "el1: the icons clear when the opponent's next turn starts")
+	if kept == null: view.settings.values.erase("cast_icons")
+	else: view.settings.values.cast_icons = kept
+	view.queue_free()
+	await frames(2)
+
+# --- Battle camera keys (#64) and the Dungeon hall (#71) ---------------------------
+
+func _camera_keys_and_hall() -> void:
+	var view: Node = load("res://scenes/duel.tscn").instantiate()
+	view.demo = true
+	root.add_child(view)
+	await process_frame
+	var profile: ELProfile = view.profiles.el1
+	view._start("el1", {"arena": "Dungeon.001", "players": [{"faction": "Green", "level": 1, "cards": ELCatalog.available_cards(profile, "Green").slice(0, 5)}, {"faction": "Red", "level": 1, "cards": ELCatalog.available_cards(profile, "Red").slice(0, 5)}]})
+	view.demo = false
+	await frames(5)
+	var kept: Variant = view.settings.values.get("auto_camera")
+	view.settings.values.auto_camera = false
+	check(view.battle_camera_presets_active(), "battle: F1-F4 pick a camera view with the automatic camera off")
+	var key := InputEventKey.new()
+	key.keycode = KEY_F3
+	key.pressed = true
+	view._input(key)
+	check(view.auto_camera.view_index == 2, "battle: F3 picks the third view with the free camera")
+	view.settings.values.auto_camera = true
+	var yaw: float = view.camera_yaw
+	var arrow := InputEventKey.new()
+	arrow.physical_keycode = KEY_LEFT
+	arrow.keycode = KEY_LEFT
+	arrow.pressed = true
+	Input.parse_input_event(arrow)
+	Input.flush_buffered_events()
+	view._step_keyboard_camera(0.5)
+	arrow.pressed = false
+	Input.parse_input_event(arrow)
+	Input.flush_buffered_events()
+	check(not is_equal_approx(view.camera_yaw, yaw), "battle: the arrow keys turn the camera with the automatic camera on")
+	view.camera_pitch = view.PITCH_LIMITS.x
+	view.camera_distance = view.DISTANCE_LIMITS.y
+	view._update_camera()
+	var flat := Vector2(view.camera.position.x, view.camera.position.z).length()
+	check(flat <= 18.01, "Dungeon arena: zoomed all the way out the camera stays inside the hall (%.1f from the centre)" % flat)
+	if kept == null: view.settings.values.erase("auto_camera")
+	else: view.settings.values.auto_camera = kept
+	view.queue_free()
+	await frames(2)
+
+# --- Second game: shaded colourless creatures (#98) ---------------------------------
+
+func _unlit(model: ELModel) -> Array[int]:
+	var counts: Array[int] = [0, 0]
+	for part: MeshInstance3D in model.parts.values():
+		var material := part.material_override as StandardMaterial3D
+		if material == null: continue
+		counts[1] += 1
+		if material.shading_mode == BaseMaterial3D.SHADING_MODE_UNSHADED: counts[0] += 1
+	return counts
+
+func _shaded_colourless(profile: ELProfile) -> void:
+	var reaper := ELModel.new()
+	root.add_child(reaper)
+	var hero := ELModel.new()
+	root.add_child(hero)
+	if not reaper.build(profile, "cr707", "Alpha\\HinduTwoHands") or not hero.build(profile, "he705", ""):
+		check(false, "el2: the Reaper and hero models build")
+	else:
+		var shaded := _unlit(reaper)
+		check(reaper.colourless and shaded[1] > 0 and shaded[0] == 0, "el2: a materialised colourless Reaper takes light and shadow (%d/%d unlit)" % shaded)
+		reaper.set_opacity(0.4)
+		var pale := _unlit(reaper)
+		check(pale[0] == pale[1], "el2: in the pale aspect the Reaper glows, as the original draws it (%d/%d unlit)" % pale)
+		reaper.set_opacity(1.0)
+		var back := _unlit(reaper)
+		check(back[0] == 0, "el2: materialised again it is shaded again (%d/%d unlit)" % back)
+		var lit := _unlit(hero)
+		check(not hero.colourless and lit[0] > 0, "el2: a hero's glowing parts still glow (%d/%d unlit)" % lit)
+	reaper.free()
+	hero.free()
+
+# --- Save names keep the symbols the originals refused (#114) -------------------------
+
+func _save_name_symbols() -> void:
+	check(ELSaveSlots.clean_name("el2", " a\\b/c:d*e?f\"g<h>i|j.k[l]m,n;o= ") == "a\\b/c:d*e?f\"g<h>i|j.k[l]m,n;o=", "saves: a name may use the symbols the originals refused")
+	check(ELSaveSlots.clean_name("el1", "   ").is_empty() and ELSaveSlots.clean_name("el2", "").is_empty(), "saves: a blank name is still refused")
+	check(ELSaveSlots.clean_name("el1", "a\tb").is_empty(), "saves: control characters are refused")
+	check(ELSaveSlots.save_path("el1", "x:y").get_file().begins_with("slot-"), "saves: the file name stays a hash of the save name")
+
+# --- First game: the borrowed battle dome --------------------------------------------
+
+func _first_dome() -> void:
+	var view: Node = load("res://scenes/duel.tscn").instantiate()
+	root.add_child(view)
+	await frames(3)
+	var campaign := ELCampaign.new()
+	campaign.load_campaign(view.profiles.el1, "Good")
+	var row: Dictionary = campaign.scenarios[0].duplicate()
+	row.campaign = "Good"
+	var saves := _backup(ELSaveSlots.folder("el1"))
+	view.settings.values.show_tutorial = false
+	ELFirstTutorial.for_settings(view.settings).persist = false
+	await view._begin_campaign("el1", row, 1)
+	_restore(ELSaveSlots.folder("el1"), saves)
+	var map: ELAdventureView = view.campaign_view
+	check(map != null and map.dome_source == view.profiles.el2, "el1: the map borrows the second game's dome")
+	if map == null:
+		view.queue_free()
+		return
+	await frames(5)
+	if map.tutorial_panel != null and map.tutorial_panel.visible: map.tutorial_panel.close()
+	var state := map.state
+	var hero := {}
+	var monster := {}
+	for item: Dictionary in state.objects.values():
+		if not item.get("alive", false): continue
+		if item.get("type") == "hero" and int(item.get("owner", -1)) == state.current_player and hero.is_empty(): hero = item
+		if item.get("type") == "monster" and monster.is_empty(): monster = item
+	map.director._begin_encounter(hero, monster)
+	await frames(3)
+	check(map.hud.precombat.visible and map.effects.effects.has(ELAdventureView.BATTLE_DOME) and map.audio.sounds.has(ELAdventureView.BATTLE_DOME), "el1: the pre-battle panel raises the dome and its sound")
+	map.decline_encounter()
+	await frames(2)
+	check(not map.effects.effects.has(ELAdventureView.BATTLE_DOME) and not map.audio.sounds.has(ELAdventureView.BATTLE_DOME), "el1: declining the battle ends the dome")
+	view.queue_free()
+	await frames(2)
+
+# --- Second game: a battle between computer figures -----------------------------------
+
+func _computer_fight() -> void:
+	var view: Node = load("res://scenes/duel.tscn").instantiate()
+	root.add_child(view)
+	await frames(3)
+	var entry := {}
+	for found: Dictionary in ELSingleScenario.maps(view.profiles.el2):
+		if str(found.id).to_lower().ends_with("e2mission11"): entry = found
+	var saves := _backup(ELSaveSlots.folder("el2"))
+	await view._begin_campaign("el2", ELSingleScenario.scenario(entry), 1)
+	var map: ELAdventureView = view.campaign_view
+	check(map != null, "el2: chapter 11 opens")
+	if map == null:
+		_restore(ELSaveSlots.folder("el2"), saves)
+		view.queue_free()
+		return
+	var state := map.state
+	var director := map.director
+	for i in 40:
+		if director.dialogue.is_empty(): break
+		director.acknowledge("OK")
+		await frames(3)
+	ELFog.reveal_for_console(state, 1, true)
+	ELFog.refresh(state)
+	# The chapter's guard (its battle hook names it the winner) and a Synth
+	# Soldier, as the chapter's dock attack creates one.
+	var guard := state.object(int(state.vm.globals.get("ID_H_EGUARD", -1)))
+	var soldier := state.object(state.create_hero(3, "m11 - Synth Soldier", int(guard.x) + 1, int(guard.y)))
+	await frames(5)
+	var seen: Array[String] = []
+	director.presentation.connect(func(data: Dictionary): if str(data.kind).begins_with("auto_fight"): seen.append(str(data.kind)))
+	director._begin_encounter(soldier, guard)
+	await frames(2)
+	check(director.auto_fight.get("phase") == "summon" and soldier.alive and guard.alive and not director._map_idle(), "el2: a computer battle first holds the map with both figures alive")
+	check(map.effects.effects.has(ELAdventureView.BATTLE_DOME) and map.audio.sounds.has(ELAdventureView.BATTLE_DOME), "el2: the dome and its sound rise over the computer battle")
+	var start := Time.get_ticks_msec()
+	while not director.auto_fight.is_empty() and Time.get_ticks_msec() - start < 10000:
+		if not director.dialogue.is_empty(): director.acknowledge("OK")
+		await process_frame
+	check(seen == ["auto_fight", "auto_fight_defeat", "auto_fight_end"], "el2: the battle shows Summon, then the loser's defeat, then ends (%s)" % ", ".join(seen))
+	check(not soldier.alive and guard.alive, "el2: the chapter's hook decides it: the Synth Soldier dies, the guard lives")
+	check(not map.effects.effects.has(ELAdventureView.BATTLE_DOME), "el2: the dome ends with the battle")
+	# A save made during the presentation resolves the battle first.
+	var second := state.object(state.create_hero(3, "m11 - Synth Soldier", int(guard.x) + 1, int(guard.y)))
+	await frames(2)
+	director._begin_encounter(second, guard)
+	check(not director.auto_fight.is_empty(), "el2: a second computer battle is being shown")
+	var codec := ELAdventureSave.new()
+	var document := codec.encode(director)
+	check(not document.is_empty() and director.auto_fight.is_empty() and not second.alive and guard.alive, "el2: saving meanwhile resolves the battle before writing")
+	# No winner (the chapter's hook names neither side): both take the defeat
+	# and both die, as in the original.
+	var other := {}
+	for item: Dictionary in state.objects.values():
+		if item.get("alive", false) and str(item.get("name", "")) == "m11 - Guard" and int(item.uid) != int(guard.uid): other = item
+	check(not other.is_empty() and ELAdventureEncounter.second_result(state, int(state.create_hero(3, "m11 - Synth Soldier", 0, 0)), int(other.uid)) == -1, "el2: chapter 11's hook names no winner against its other guard")
+	var third := state.object(state.create_hero(3, "m11 - Synth Soldier", int(other.x) + 1, int(other.y)))
+	await frames(2)
+	var losers: Array = []
+	director.presentation.connect(func(data: Dictionary): if data.kind == "auto_fight_defeat": losers.assign(data.losers))
+	director._begin_encounter(third, other)
+	start = Time.get_ticks_msec()
+	while not director.auto_fight.is_empty() and Time.get_ticks_msec() - start < 10000:
+		if not director.dialogue.is_empty(): director.acknowledge("OK")
+		await process_frame
+	check(losers.size() == 2, "el2: with no winner both sides take the defeat")
+	check(not third.alive and not other.alive, "el2: with no winner both sides die")
+	_restore(ELSaveSlots.folder("el2"), saves)
+	view.queue_free()
+	await frames(2)
+
 func _backup(folder: String) -> Dictionary:
 	var files := {}
 	if DirAccess.dir_exists_absolute(folder):
@@ -400,3 +1003,319 @@ func _restore(folder: String, files: Dictionary) -> void:
 	for file: String in files:
 		var out := FileAccess.open(folder.path_join(file), FileAccess.WRITE)
 		if out != null: out.store_buffer(files[file])
+
+# --- Battle rules and controls (reports #81 #90 #95 #96 #101 #103 #104 #108 #110) --
+
+## The new creature of `side` summoned from `card`.
+func _summoned(duel: ELDuel, side: int, card: String) -> int:
+	var known := duel.creatures.keys()
+	duel._summon(side, card)
+	for key: int in duel.creatures:
+		if not known.has(key): return key
+	return -1
+
+func _pale_commands(profile: ELProfile) -> void:
+	var duel := ELDuel.new()
+	if not duel.start(profile, 11, {}):
+		check(false, "el2: a duel for the pale commands starts")
+		return
+	var side := duel.active_side()
+	duel.heroes[side].mana = 10
+	var pale := _summoned(duel, side, "OUE1")
+	duel.creatures[pale].sick = false
+	duel.plane_change(pale, true)
+	# #96: Mystic manifestation needs an enchantment its hero cast.
+	check(duel.in_plane(pale) and not duel.can_use_ability(pale, "mystic"), "el2: a Pale Enchanter cannot manifest with no enchantment of its hero in play")
+	var other := _summoned(duel, 1 - side, "ORSH")
+	duel._enchant("ENFL", 1 - side, other, ELCatalog.rule(profile, "ENFL"))
+	check(not duel.can_use_ability(pale, "mystic"), "el2: the opponent's enchantment does not open Mystic manifestation")
+	duel._enchant("ENFL", side, other, ELCatalog.rule(profile, "ENFL"))
+	check(duel.can_use_ability(pale, "mystic"), "el2: an enchantment its hero cast opens Mystic manifestation")
+	# #95: Pale Revival with a plane creature and a creature in a graveyard.
+	duel._give_card(side, "ORFT")
+	var index: int = duel.heroes[side].hand.size() - 1
+	check(not duel.can_cast_from_hand(index), "el2: Pale Revival waits for a creature in a graveyard")
+	duel.heroes[1 - side].grave.append("ORSH")
+	check(duel.can_cast_from_hand(index), "el2: Pale Revival is castable with a plane creature and a creature in a graveyard")
+
+func _battle_controls(edition: String) -> void:
+	var view: Node = load("res://scenes/duel.tscn").instantiate()
+	view.demo = true
+	root.add_child(view)
+	await process_frame
+	if not view.profiles.has(edition):
+		view.queue_free()
+		return
+	var profile: ELProfile = view.profiles[edition]
+	var players := [{"faction": "Blue", "level": 3, "map_level": 2, "cards": ELCatalog.available_cards(profile, "Blue").slice(0, 8)},
+		{"faction": "Red", "level": 5, "cards": ELCatalog.available_cards(profile, "Red").slice(0, 8)}]
+	view._start(edition, {"arena": ELDuelMatch.arenas(profile)[0], "adventure": true, "players": players})
+	view.demo = false
+	await frames(10)
+	var duel: ELDuel = view.duel
+	if duel == null or not view._human_turn():
+		check(false, "%s: a battle for the control checks starts on the player's turn" % edition)
+		view.queue_free()
+		return
+	var side := duel.active_side()
+	duel.heroes[side].mana = 9
+	# #110: the tooltip names the hero's own level.
+	var level_line := "%s: %d" % [view._original_text("T_LEVEL", "Level"), 2 if side == 0 else 5]
+	check(view._hero_tip(side).labels.any(func(label: Dictionary) -> bool: return str(label.text).contains(level_line)), "%s: the hero tooltip names the hero's own level (%s)" % [edition, level_line])
+	# #108 / #104: Fresh Wind asks for its hero, then X; Comet X first.
+	duel._give_card(side, "FRWN")
+	var wind: int = duel.heroes[side].hand.size() - 1
+	view._cast_card(wind)
+	check(not view.power_dialog.visible and view.selection == wind, "%s: Fresh Wind first asks for its target" % edition)
+	view._target(side)
+	check(view.power_dialog.visible and int(view.pending_power.get("target", -1)) == side, "%s: after the hero Fresh Wind asks for X" % edition)
+	var prompt: String = view.param_prompt(5, " ")
+	check(not prompt.is_empty() and view.power_dialog.readout.text.begins_with(prompt), "%s: the X choice names what it counts (%s)" % [edition, view.power_dialog.readout.text])
+	var before: int = view.power_dialog.value()
+	view.power_dialog._hold(-1)
+	view.power_dialog._process(0.6)
+	view.power_dialog._hold(0)
+	check(view.power_dialog.value() <= before - 2, "%s: holding Decrease repeats it (%d -> %d)" % [edition, before, view.power_dialog.value()])
+	view._cancel_power()
+	duel._give_card(side, "COMT")
+	view._cast_card(duel.heroes[side].hand.size() - 1)
+	check(view.power_dialog.visible and view.selection < 0, "%s: Comet asks for X first" % edition)
+	view._cancel_power()
+	# #81: a right click drops the pending target choice.
+	view._cast_card(wind)
+	var press := InputEventMouseButton.new()
+	press.button_index = MOUSE_BUTTON_RIGHT
+	press.pressed = true
+	press.position = Vector2(5, 5)
+	view._right_button(press)
+	var release: InputEventMouseButton = press.duplicate()
+	release.pressed = false
+	view._right_button(release)
+	check(view.selection < 0, "%s: a right click cancels the spell waiting for its target" % edition)
+	# #103 / #90: own ability first, then the enchantments.
+	var shaman := _summoned(duel, side, "ORSH")
+	duel._enchant("ENFL" if edition == "el2" else "IMMB", 1 - side, shaman, ELCatalog.rule(profile, "ENFL" if edition == "el2" else "IMMB"))
+	view.selected_creature = shaman
+	view._fill_strip()
+	var items: Array = view.rail.strip.items
+	check(items.size() >= 2 and items[0].meta.has("ability") and items[1].meta.has("enchantment"), "%s: a creature's own ability sits left of its enchantments" % edition)
+	if edition == "el2" and not items.is_empty():
+		var about := profile.text(str(profile.table("CombatSpells").ORSH.AbilityText))
+		check(str(items[0].tooltip) == about, "el2: a free ability's tooltip is its text alone")
+	# #101: second-game Attack all leaves a 0-power creature home.
+	var strong := _summoned(duel, side, "ORSH")
+	var weak := _summoned(duel, side, "ORSH")
+	for id: int in [strong, weak]:
+		duel.creatures[id].sick = false
+		duel.creatures[id].resting = false
+	duel.creatures[weak].power = 0
+	view._attack_all()
+	check(duel.attacks.has(strong) and duel.attacks.has(weak) == (edition == "el1"), "%s: Attack all %s a 0-power creature" % [edition, "sends" if edition == "el1" else "leaves out"])
+	view.queue_free()
+	await frames(2)
+
+# --- Map reports: zones, quick load, picking, skills, castles, tunnels --------------
+
+## First game (#62, #67, #79, #80, #111) on the first Good mission.
+func _first_map_reports() -> void:
+	var view: Node = load("res://scenes/duel.tscn").instantiate()
+	root.add_child(view)
+	await frames(3)
+	var campaign := ELCampaign.new()
+	campaign.load_campaign(view.profiles.el1, "Good")
+	var row: Dictionary = campaign.scenarios[0].duplicate()
+	row.campaign = "Good"
+	var saves := _backup(ELSaveSlots.folder("el1"))
+	view.settings.values.show_tutorial = false
+	ELFirstTutorial.for_settings(view.settings).persist = false
+	await view._begin_campaign("el1", row, 1)
+	var map: ELAdventureView = view.campaign_view
+	if map == null:
+		_restore(ELSaveSlots.folder("el1"), saves)
+		check(false, "el1: the first mission opens for the map reports")
+		view.queue_free()
+		return
+	await frames(5)
+	if map.tutorial_panel != null and map.tutorial_panel.visible: map.tutorial_panel.close()
+	var state := map.state
+	var director := map.director
+	var hero := {}
+	var monster := {}
+	for item: Dictionary in state.objects.values():
+		if item.get("alive", false) and item.get("type") == "hero" and int(item.get("owner", -1)) == state.current_player and hero.is_empty(): hero = item
+	for item: Dictionary in state.objects.values():
+		if not item.get("alive", false) or item.get("type") != "monster" or not monster.is_empty(): continue
+		var open := true
+		for dx in [-4, -3, -2, -1]: if director.grid.passability(Vector2i(int(item.x) + dx, int(item.y))) < 0: open = false
+		if open: monster = item
+	# #62: a declined creature battle (free movement) puts the hero back on the
+	# cell it entered the guard zone from, and it can walk on.
+	if not monster.is_empty():
+		director.free_movement = true
+		var start := Vector2i(int(monster.x) - 4, int(monster.y))
+		hero.x = start.x
+		hero.y = start.y
+		director.grid.update_actor(hero)
+		hero.ap = 30
+		var enter := start
+		for dx in [1, 2, 3]:
+			if not director.interception.enemies(state, hero, start + Vector2i(dx, 0)).is_empty():
+				enter = start + Vector2i(dx, 0)
+				break
+		director.request_move(int(hero.uid), enter)
+		director.request_move(int(hero.uid), enter)
+		var t := Time.get_ticks_msec()
+		while director.encounter == null and Time.get_ticks_msec() - t < 8000: await process_frame
+		check(director.encounter != null and Vector2i(int(hero.x), int(hero.y)) == enter, "el1: stepping into a creature's zone opens its battle")
+		if director.encounter != null:
+			map.decline_encounter()
+			await frames(3)
+			var back := Vector2i(int(hero.x), int(hero.y))
+			check(back == enter - Vector2i(1, 0) and not hero.intercepted and director.interception.enemies(state, hero, back).is_empty(), "el1: declining puts the hero back where it entered the zone (%s)" % back)
+			director.request_move(int(hero.uid), start)
+			director.request_move(int(hero.uid), start)
+			t = Time.get_ticks_msec()
+			while Vector2i(int(hero.x), int(hero.y)) != start and Time.get_ticks_msec() - t < 6000: await process_frame
+			check(Vector2i(int(hero.x), int(hero.y)) == start and director.encounter == null, "el1: after declining the hero walks away the same day")
+	# #79: an object (a pickup, site or building) on the cell behind the hero is picked,
+	# not the hero.
+	var pickup := {}
+	for item: Dictionary in state.objects.values():
+		if item.get("alive", false) and item.get("visible", false) and (ELMapPickups.is_pickup(item) or str(item.get("group", "")) in ELAdventureView.FIRST_SITE_GROUPS or (item.get("group") == "additional_buildings" and not ELAdditionalBuildings.title(state.map.profile, item).is_empty())) and director.grid.passability(Vector2i(int(item.x), int(item.y) - 1)) >= 0:
+			pickup = item
+			break
+	if not pickup.is_empty():
+		ELFog.reveal_for_console(state, state.current_player, true)
+		hero.x = int(pickup.x)
+		hero.y = int(pickup.y) - 1
+		director.grid.update_actor(hero)
+		await frames(2)
+		check(map._object_at(Vector2(float(pickup.x) + 0.5, float(pickup.y) + 0.5)) == int(pickup.uid), "el1: an object on the cell behind the hero is picked, not the hero (%s)" % pickup.name)
+		check(map._object_at(Vector2(float(hero.x) + 0.5, float(hero.y) + 0.5)) == int(hero.uid), "el1: the hero's own cell still picks the hero")
+	# #80: a right press on a learned skill holds its description up.
+	hero.skills = {"MOBL": 1}
+	map.open_hero_screen(int(hero.uid))
+	await frames(3)
+	var screen: ELHeroScreenView = map.hero_screen
+	if screen != null:
+		var point: Vector2 = ELHeroScreenView.SKILL_BOXES[0] + Vector2(30, 6)
+		var expected := screen.skill_tip_at(point)
+		check(screen.right_press(point) and screen.skill_tip != null and expected.contains(screen._skill_name("MOBL", 1)) and expected.contains("\n"), "el1: right-clicking a skill shows its name and description")
+		screen.right_release()
+		check(screen.skill_tip == null, "el1: letting the right button go closes the skill tooltip")
+		check(not screen.right_press(Vector2(200, 30)), "el1: a right click elsewhere on the hero screen shows no skill tooltip")
+		screen.cancel()
+		await frames(2)
+	# #111: a castle assault turns the hero, plays its attack clip and the
+	# colour's damage effect at the castle.
+	var castle := ELFirstScenario.castle_object(state, state.current_player)
+	if not castle.is_empty():
+		map.present_castle_assault(int(hero.uid), state.current_player)
+		var model: ELModel = map.world.actors.get(int(hero.uid))
+		var clip := model.clip_for_code(ELAdventureView.CASTLE_ATTACK_CODE) if model != null else ""
+		if model != null and clip.is_empty(): clip = model.clip_for_code(ELAdventureView.CASTLE_ATTACK_CODE | 0x80000000)
+		check(model != null and not clip.is_empty() and model.clip == clip, "el1: attacking a castle plays the hero's attack clip (%s)" % clip)
+		check(map.effects.effects.has("castle_assault:%d" % int(hero.uid)), "el1: attacking a castle shows the damage effect at the castle")
+	# #67: a second F8 answers the quick-load question with OK.
+	var written := ELSaveSlots.write(ELSaveSlots.quick_name(state.map.profile), director, map.camera_state())
+	if written.is_empty():
+		var resumed := [false]
+		map.resume_requested.connect(func(): resumed[0] = true)
+		var f8 := InputEventKey.new()
+		f8.keycode = KEY_F8
+		f8.pressed = true
+		map.ask_quick_load()
+		await frames(2)
+		check(map.extras != null and map.extras.duel_ui.message_open() and not resumed[0], "el1: F8 asks before loading the quick save")
+		if map.extras != null: map.extras._input(f8.duplicate())
+		await frames(2)
+		check(resumed[0], "el1: a second F8 confirms the quick load")
+	else: check(false, "el1: the quick save is written: " + written)
+	_restore(ELSaveSlots.folder("el1"), saves)
+	view.queue_free()
+	await frames(2)
+
+## Second game (#70, #72, #75) on chapter 23: a tunnel guard is fought on the
+## Dungeon arena and shows its portrait; a specialization shrine plays the
+## hero's change effect.
+func _second_map_reports() -> void:
+	var view: Node = load("res://scenes/duel.tscn").instantiate()
+	root.add_child(view)
+	await frames(3)
+	var entry := {}
+	for found: Dictionary in ELSingleScenario.maps(view.profiles.el2):
+		if str(found.id).to_lower().ends_with("e2mission23"): entry = found
+	var saves := _backup(ELSaveSlots.folder("el2"))
+	await view._begin_campaign("el2", ELSingleScenario.scenario(entry), 1)
+	var map: ELAdventureView = view.campaign_view
+	if map == null:
+		_restore(ELSaveSlots.folder("el2"), saves)
+		check(false, "el2: chapter 23 opens for the map reports")
+		view.queue_free()
+		return
+	var state := map.state
+	var director := map.director
+	for i in 40:
+		if director.dialogue.is_empty(): break
+		director.acknowledge("OK")
+		await frames(3)
+	ELFog.reveal_for_console(state, 1, true)
+	ELFog.refresh(state)
+	var hero := state.object(state.main_hero)
+	var guard := {}
+	var mouth := {}
+	for item: Dictionary in state.objects.values():
+		if ELSecondBuildings.is_tunnel(item) and state.object(item.get("guard", -1)).get("alive", false):
+			mouth = item
+			guard = state.object(item.guard)
+			break
+	check(not guard.is_empty(), "el2: chapter 23 has a guarded tunnel")
+	if not guard.is_empty():
+		guard.tunnel_source = int(mouth.uid)
+		check(ELAdventureEncounter.second_arena(state, int(hero.uid), int(guard.uid), 0) == "Dungeon.001", "el2: a tunnel guard is fought on the Dungeon arena")
+		map._open_second_precombat(int(hero.uid), int(guard.uid))
+		check(int(map.second_precombat._faces[1]) >= 0, "el2: the pre-battle panel shows the tunnel guard's portrait")
+		map._close_second_precombat()
+		guard.erase("tunnel_source")
+	var shrine := {}
+	for item: Dictionary in state.objects.values():
+		if ELSecondBuildings.kind(item) == "specialization" and not item.get("used", false) and not ELSecondBuildings.shrine_code(state.map.profile, item).is_empty():
+			shrine = item
+			break
+	if not shrine.is_empty():
+		hero.travel_day = state.day
+		var seen := [false]
+		state.event.connect(func(data: Dictionary): if data.kind == "hero_change_effect" and int(data.id) == int(hero.uid): seen[0] = true)
+		check(ELSecondBuildings.use(director, hero, shrine) and seen[0], "el2: using a specialization shrine plays the hero's change effect")
+		check(map.effects.effects.has("hero_change:%d" % int(hero.uid)), "el2: the change effect (Bereserk.pfx) shows on the hero")
+		for i in 10:
+			if director.dialogue.is_empty(): break
+			director.acknowledge("OK")
+			await frames(2)
+	_restore(ELSaveSlots.folder("el2"), saves)
+	view.queue_free()
+	await frames(2)
+
+## #73: a save the codec refuses, loaded from the menus, brings the menus
+## back with the reason (not the duel behind them).
+func _refused_load() -> void:
+	var view: Node = load("res://scenes/duel.tscn").instantiate()
+	root.add_child(view)
+	await frames(5)
+	if view.front_menu == null: view._show_front_menu()
+	await frames(2)
+	if view.front_menu == null:
+		print("SKIP: no front menu for the refused-load check")
+		view.queue_free()
+		return
+	var path := "user://refused-load-check.json"
+	var out := FileAccess.open(path, FileAccess.WRITE)
+	out.store_string(JSON.stringify({"format": ELAdventureSave.FORMAT, "version": 1, "edition": "el1", "map": "no-such-map"}))
+	out.close()
+	view._hide_front_menu(true)
+	view._resume_campaign(false, path, "el1")
+	await frames(2)
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
+	check(view.campaign_view == null and view.front_layer.visible and view.front_menu.duel_ui.message_open(), "a refused save returns to the menu with its reason")
+	view.queue_free()
+	await frames(2)

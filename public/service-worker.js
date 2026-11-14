@@ -1,6 +1,6 @@
 'use strict';
 // Filled in with content hashes and the engine files by the Web build tool.
-const ENGINE_CACHE = 'demiurges-engine-240ea6c7ba0378d7bdba';
+const ENGINE_CACHE = 'demiurges-engine-653234edaca46c087c45';
 // Hosts may redirect /index.html to / (Cloudflare Workers assets do). A
 // redirected response must never answer a navigation (the browser fails it
 // with ERR_FAILED), so the shell is fetched and stored as "./".
@@ -8,16 +8,16 @@ const SHELL = new URL('./', self.registration.scope).href;
 const HASHES = {
 "data-worker.js": "12d7e9d71fb7aac25c4bd9979ec5be964a62367254a9165d95c9faf1177a7210",
 "files.js": "24beb83161a5a2579d031b630e6bcf5a9942054e0fae0eca3db17a4598c5d44e",
-"icon-192.png": "3ac5b2fe3fd5547db61061621d6f5e200cd82cb076a3224a365afa1da4f7da21",
-"icon-512.png": "269c806a4b1a8c6fda9925e55b89e0ed8ca141e9c4118855ca173402a5985f28",
-"index.apple-touch-icon.png": "cef81f26cf5f646c5b7055baec701fa586d6b42ebab11b9645b99c016c5111f5",
+"icon-192.png": "62440aed6b7263fa98d316db93423a69b5e3d127844872384e02925b36a801d0",
+"icon-512.png": "9ffa86720b0997856478278990e0395a61b9aca5fbcf9a8402b9ed31ef25d6df",
+"index.apple-touch-icon.png": "440793e743834e2364f1919a43961fd4fea426e4fa6ce83290b38394507bc9bb",
 "index.audio.position.worklet.js": "be33985bc7160d6bf9646f259cd86b259cd67b02ccb297ee5c44f8ac84327bc8",
 "index.audio.worklet.js": "5b476a9c9ce642c0ee4256436d1bc31d9c38f868aca0f9a8e2a57c18d2dec2a3",
-"index.html": "8eea8a9e411b5ee2a117da74b6c9224a8a4ba1bf3eedbf404d0bd0981249fb42",
-"index.icon.png": "269c806a4b1a8c6fda9925e55b89e0ed8ca141e9c4118855ca173402a5985f28",
+"index.html": "9754c068451e1aad0dd936b7091b6cf8ce4008f8a9feb1ec39d6b41685bfbe02",
+"index.icon.png": "06769b275998dd9bca332d7694dd8a951c8df213156af045567598f55de3b1dc",
 "index.js": "63795a00d4edd57a3896618ade5b12d063684a41c1e39ee3ade00de7362d9da5",
-"index.pck": "e073a4f0a9f84a38ace72d23354c752001e6a32aaf4dc421c0b530393c98e15c",
-"index.png": "fc096c7d3ffeacc264a32f166a3ef9c52543d11e4460e81a18b3100c5d958d66",
+"index.pck": "114c1eff43e872acdbcd9112b7ffa80a946090b9a659da1e9f4f0cb906ce81f1",
+"index.png": "fe70f220ab59b7a0bbbb3128edf94d6676254762eec168899b1c4de8f6e76ea5",
 "index.wasm": "7eda98958eb09135a1acb54a4323a00b1a55af1997f15fa1cdc2b93e3df46656",
 "installer-worker.js": "8bc8a5ab27aaa5389bfc9dc83484c5e7682ddf4e693aac23836f0689f35783f6",
 "manifest.webmanifest": "91bb1425a9391403fbded910f0f2899bd8e440a804e14590775a806235093b01",

@@ -19,12 +19,12 @@ The original controls work as in the games. These keys are the most useful.
 | E / G (EL2) | show enchantments / graveyard | — |
 | Esc | cancel targeting, or open the game menu | close a window, or open the game menu |
 | F6 | open this wiki | open this wiki |
-| F1–F4 | choose an automatic camera view (automatic camera on) | — |
+| F1–F4 | choose one of the four camera views | — |
 | F5 / F9 | quick save / quick load | quick save / quick load (F8 also loads) |
 | Right drag, wheel | turn and zoom the camera | turn and zoom the camera |
 | R | reset the camera | — |
-| Page Up / Page Down | zoom in or out (EL2 in manual camera mode) | zoom in or out |
-| Arrows | orbit or tilt in manual camera mode | EL1 pans, Ctrl+arrows rotate or tilt. EL2 Left/Right rotate and Up/Down zoom |
+| Page Up / Page Down | zoom in or out | zoom in or out |
+| Arrows | orbit or tilt the camera | EL1 pans, Ctrl+arrows rotate or tilt. EL2 Left/Right rotate and Up/Down zoom |
 | W A S D | — | move the camera |
 | H or Home | — | follow the selected hero |
 | I / K | — | spellbook / skills in EL1. I opens inventory in EL2 |

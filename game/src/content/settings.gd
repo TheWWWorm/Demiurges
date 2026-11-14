@@ -57,7 +57,7 @@ extends RefCounted
 ## Version 6: the upscaler and its quality are separate choices again
 ## ("upscaler", "upscale_quality"); version 5 kept them in one "upscaling".
 const SETTINGS_VERSION := 6
-const SHARED := {"ambience": 0.55, "shadows": true, "soft_shadows": false, "weather": true, "helper_overlay": false, "antialiasing": -1, "sharpening": 0, "terrain_detail": false, "enhanced_water": false, "bloom": false, "soft_particles": false, "spell_light": true, "discord_activity": true, "renderer": 0, "path_tracing": false, "sky_light": 1.0, "light_bounces": 2, "show_fps": false, "hardware_check": 0, "free_movement": true, "smart_ai": true,
+const SHARED := {"ambience": 0.55, "shadows": true, "soft_shadows": false, "weather": true, "helper_overlay": false, "antialiasing": -1, "sharpening": 0, "terrain_detail": false, "enhanced_water": false, "bloom": false, "soft_particles": false, "spell_light": true, "discord_activity": true, "renderer": 0, "path_tracing": false, "sky_light": 1.0, "light_bounces": 2, "show_fps": false, "hardware_check": 0, "free_movement": true, "smart_ai": true, "cast_icons": true, "first_battle_dome": true,
 	"window_mode": 0, "window_width": 0, "window_height": 0, "frame_rate": 0,
 	"upscaler": 0, "upscale_quality": 1, "frame_generation": false, "ray_reconstruction": false, "battle_interface": 0}
 const EDITION := {"music": 0.55, "effects": 0.8, "movies": 2, "blood": true, "map_tooltips": true, "autosave": true,

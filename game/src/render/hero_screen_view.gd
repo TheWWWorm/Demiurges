@@ -41,6 +41,8 @@ var gs_scroll := 0
 var gs_pick := 0
 var offer_pick := -1
 var sheet: Sheet
+## The skill tooltip held up by the right button (see right_press).
+var skill_tip: PanelContainer
 var buttons: Dictionary = {}
 var drag: Dictionary = {}
 var confirm: ELFirstMessageBox
@@ -279,7 +281,12 @@ func tooltip_at(point: Vector2) -> String:
 	for side in heroes.size():
 		var cards := book_cards(side)
 		for index in mini(15, cards.size()):
-			if Rect2(Vector2(29 + 53 * (index % 5), 389 + 52 * (index / 5)) + RIGHT * side, ICON).has_point(point): return profile.text(str(profile.table("CombatSpells").get(str(cards[index]), {}).get("Name", cards[index])))
+			if Rect2(Vector2(29 + 53 * (index % 5), 389 + 52 * (index / 5)) + RIGHT * side, ICON).has_point(point):
+				var title := profile.text(str(profile.table("CombatSpells").get(str(cards[index]), {}).get("Name", cards[index])))
+				var under := book_under(side)
+				if index < under.size() and not under[index].is_empty():
+					title += "\n" + ELRemakeText.t("Under it: %s (returns when its runes are spent in battle).", profile) % profile.text(str(profile.table("CombatSpells").get(under[index], {}).get("Name", under[index])))
+				return title
 	if not exchange:
 		var spells := attached(heroes[0])
 		for slot in 3:
@@ -475,9 +482,43 @@ func _draw_sheet() -> void:
 			if icon != null: sheet.draw_texture_rect(icon, rect, false)
 			sheet.draw_rect(rect, Color("e8e0cc"), false, 1.5)
 
-## A right click on the sheet; true when consumed.
-func right_press(_point: Vector2) -> bool:
-	return false
+## A right click on the sheet; true when consumed. On a learned skill (icon
+## or name) it holds the skill's name and description up until the button is
+## let go, as the original's skill tooltip (type 7).
+func right_press(point: Vector2) -> bool:
+	var text := skill_tip_at(point)
+	if text.is_empty(): return false
+	right_release()
+	skill_tip = PanelContainer.new()
+	skill_tip.theme_type_variation = &"TooltipPanel"
+	skill_tip.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var label := Label.new()
+	label.theme_type_variation = &"TooltipLabel"
+	label.text = text
+	label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	label.custom_minimum_size.x = 260
+	skill_tip.add_child(label)
+	sheet.add_child(skill_tip)
+	skill_tip.reset_size()
+	skill_tip.position = (point + Vector2(12, 12)).clamp(Vector2.ZERO, (sheet.size - skill_tip.size).max(Vector2.ZERO))
+	return true
+
+## The right button is let go: the held skill tooltip closes.
+func right_release() -> void:
+	if skill_tip != null and is_instance_valid(skill_tip): skill_tip.queue_free()
+	skill_tip = null
+
+## The name and description of the learned skill under `point`, or "".
+func skill_tip_at(point: Vector2) -> String:
+	for side in heroes.size():
+		var hero := state.object(heroes[side])
+		var codes: Array = hero.get("skills", {}).keys()
+		for index in mini(SKILL_BOXES.size(), codes.size()):
+			if not Rect2(SKILL_BOXES[index] + RIGHT * side + Vector2(0, -3), Vector2(SKILL_BOX.x + 4 + 120, 20)).has_point(point): continue
+			var code := str(codes[index])
+			var rank := int(hero.skills[codes[index]])
+			return _skill_name(code, rank) + "\n" + profile.text(str(ELHeroSkills.definition(profile, code, rank).get("Description", "")))
+	return ""
 
 ## Cursor moves over the sheet: a dragged entry follows it.
 func pointer(point: Vector2) -> void:
@@ -492,6 +533,10 @@ func wheel(_point: Vector2, _direction: int) -> bool:
 ## The spellbook a side shows; the laboratory shows its draft instead.
 func book_cards(side: int) -> Array:
 	return state.object(heroes[side]).get("cards", [])
+
+## The cantrip under each book slot ("" for none; ELRunes.under).
+func book_under(side: int) -> Array[String]:
+	return ELRunes.under(state.object(heroes[side])) if side < heroes.size() else ELRunes.under({})
 
 func book_uses(side: int) -> Array:
 	return state.object(heroes[side]).get("rune_uses", [])
@@ -539,6 +584,8 @@ class Sheet extends Control:
 			accept_event()
 		elif event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_RIGHT:
 			if view.right_press(event.position): accept_event()
+		elif event is InputEventMouseButton and not event.pressed and event.button_index == MOUSE_BUTTON_RIGHT:
+			view.right_release()
 		elif event is InputEventMouseMotion:
 			if not view.held.is_empty() and event.button_mask & MOUSE_BUTTON_MASK_LEFT:
 				view.held_at = event.position
@@ -548,3 +595,19 @@ class Sheet extends Control:
 
 	func _get_tooltip(at_position: Vector2) -> String:
 		return view.tooltip_at(at_position)
+
+	## Godot's tooltip label never wraps, and some first-game card
+	## descriptions are one line several screens wide (the laboratory's stock
+	## tooltips): longer lines wrap at the battle tooltip's width.
+	func _make_custom_tooltip(for_text: String) -> Object:
+		return ELHeroScreenView.wrapped_tooltip(for_text)
+
+## A tooltip label styled as TooltipLabel whose lines wrap past `width`.
+static func wrapped_tooltip(text: String, width := ELSecondMapTooltip.MAX_LABEL_WIDTH) -> Label:
+	var label := Label.new()
+	label.theme_type_variation = &"TooltipLabel"
+	label.text = text
+	if label.get_minimum_size().x > width:
+		label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		label.custom_minimum_size.x = width
+	return label

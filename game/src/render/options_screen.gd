@@ -606,13 +606,14 @@ func _command(control: String) -> void:
 	commands[control] = button
 	button.tooltip_text = _tip(control)
 	# Main menu: as the original, only Quit is available; on the map Save,
-	# Load, Main menu and the mission objectives work; in a battle only
-	# Surrender.
+	# Load, Main menu and the mission objectives work; in a battle Load,
+	# Main menu and Surrender (player report #65).
 	var enabled := false
 	match control:
 		"GOQuit": enabled = true
-		"GOMenu", "GOSave": enabled = context == "adventure"
-		"GOLoad": enabled = context == "adventure" and adventure_load_allowed
+		"GOMenu": enabled = context in ["adventure", "combat"]
+		"GOSave": enabled = context == "adventure"
+		"GOLoad": enabled = context == "combat" or (context == "adventure" and adventure_load_allowed)
 		"GOInfo": enabled = context == "adventure" and not menu.mission_texts.is_empty()
 		"Surrender": enabled = context == "combat"
 	button.disabled = not enabled

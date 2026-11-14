@@ -30,6 +30,8 @@ const COUNT_SIZE := 15
 ## opponent's column follows the right edge (x 720 of 800).
 const OWN_STATS := [Vector2(15.5, 589), Vector2(40.5, 589), Vector2(65.5, 589)]
 const ENEMY_STATS := [Vector2(734.5, 589), Vector2(759, 589), Vector2(784, 589)]
+## The original's recorded 15 px step per update; a click now moves a whole
+## spell (see _step_hand).
 const SCROLL_STEP := 15
 ## 3 px per frame of the original's 60 Hz update.
 const SCROLL_SPEED := 180.0
@@ -203,7 +205,11 @@ func _press_spell_arrow(direction: int) -> void:
 func _step_hand(direction: int) -> void:
 	if hand_scroll == null: return
 	var base := _scroll_target if _animating else float(hand_scroll.scroll_horizontal)
-	_scroll_target = clampf(base + direction * SCROLL_STEP, 0.0, _hand_limit())
+	# One click moves one whole spell: to the next slot edge in that direction
+	# (player report #82; the 15 px step left the rail between two spells).
+	var pitch := float(ELListLook.PITCH)
+	var slot := floorf(base / pitch + 0.01) + 1.0 if direction > 0 else ceilf(base / pitch - 0.01) - 1.0
+	_scroll_target = clampf(slot * pitch, 0.0, _hand_limit())
 	_animating = true
 
 ## A card joining the hand scrolls the rail like its arrows do: a drawn card

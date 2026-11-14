@@ -2,6 +2,10 @@ class_name ELFirstSpellShop
 extends RefCounted
 ## EL1 purchases replace equipped slots. Rebuilding the draft in slot order
 ## retains the original escalating duplicate prices and exact undo behavior.
+## As players report the original (the trace shows a plain
+## overwrite of the slot): a spell bought over a cantrip keeps that cantrip
+## under it (ELRunes.under), and one bought over another spell sends that
+## spell, with its runes, to the reserve.
 const COPY_MULTIPLIERS := [1, 2, 3, 5, 10, 20, 40, 80, 160, 320, 640, 1280, 2560, 5120, 10240]
 var state: ELAdventureSession
 var hero_id := -1
@@ -10,6 +14,10 @@ var stock: Array[String] = []
 var pending: Array[String] = []
 var cards: Array[String] = []
 var uses: Array[int] = []
+## The cantrip under each slot after the draft, and the spells it sends to
+## the reserve: [{card, uses}].
+var unders: Array[String] = []
+var to_reserve: Array[Dictionary] = []
 var error := ""
 var finished := false
 var _commander := -1
@@ -110,11 +118,17 @@ func _rebuild() -> void:
 	uses.assign(_before.uses)
 	_bill = ELResources.empty("el1")
 	var hero := state.object(hero_id)
+	unders = ELRunes.under(hero)
+	to_reserve.clear()
 	for slot in pending.size():
 		var card := pending[slot]
 		if card.is_empty(): continue
 		var cost := price(state.map.profile, hero, cards, card, slot, free_exchange())
 		for kind: String in _bill: _bill[kind] += int(cost[kind])
+		var old := cards[slot]
+		if ELRunes.unlimited(state.map.profile, hero, old):
+			if not ELRunes.unlimited(state.map.profile, hero, card): unders[slot] = old
+		else: to_reserve.append({"card": old, "uses": uses[slot]})
 		cards[slot] = card
 		uses[slot] = -1 if ELRunes.unlimited(state.map.profile, hero, card) else (100000 if free_exchange() else 0)
 
@@ -134,6 +148,9 @@ func commit() -> bool:
 	if not ELResources.pay("el1", state.players[hero.owner].resources, _bill): return _fail("Not enough resources for these spells.")
 	hero.cards.assign(cards)
 	hero.rune_uses.assign(uses)
+	ELRunes.set_under(hero, unders)
+	for entry: Dictionary in to_reserve:
+		if ELSpellInventory.add(state.map.profile, hero, entry.card): hero.rune_stock[entry.card][-1] = int(entry.uses)
 	finished = true
 	state.event.emit({"kind": "resources_changed", "player": hero.owner})
 	state.event.emit({"kind": "inventory_changed", "id": hero_id})

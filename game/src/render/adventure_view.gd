@@ -277,11 +277,15 @@ func build(profile: ELProfile, scenario: Dictionary, preferences: ELSettings, di
 		audio.listener = target
 		audio.restore(state)
 		effects.prepare(BATTLE_DOME_EFFECT)
+		effects.prepare(BATTLE_DEFEAT_EFFECT)
 		ELAudio.sound(profile, BATTLE_DOME_SOUND)
 		# Building sounds, terrain ambience and footsteps (no blazons).
 		_build_presentation()
 	elif profile.id == "el1":
 		audio.start_first(state)
+		if dome_source != null:
+			effects.prepare(BATTLE_DOME_EFFECT, dome_source)
+			ELAudio.sound(dome_source, BATTLE_DOME_SOUND)
 		_build_presentation()
 	route = MeshInstance3D.new()
 	add_child(route)
@@ -757,7 +761,10 @@ func _open_second_precombat(first: int, second: int) -> void:
 	var faces: Array = []
 	for id: int in [local, other]:
 		var actor := state.object(id)
-		faces.append(int(_art.resolve(actor).get("row", {}).get("Face", -1)) if not actor.is_empty() else -1)
+		# A tunnel guard waits off the map, hidden; its portrait still shows.
+		var shown := actor.duplicate()
+		shown.visible = true
+		faces.append(int(_art.resolve(shown).get("row", {}).get("Face", -1)) if not actor.is_empty() else -1)
 	pending_encounter = [first, second]
 	# The camera centres between the two sides while the panel is up. A tunnel
 	# guard waits off the map, so it counts as standing at its tunnel mouth.
@@ -782,15 +789,24 @@ func _open_second_precombat(first: int, second: int) -> void:
 ## which play their Summon clip, and Adventure/CombatDome.wav loops there on
 ## the effects volume, full within 0 and silent from 32 units. Both end when
 ## the panel closes: the battle opens or is declined. Presentation only.
+## The first game has no dome of its own: with the second game installed and
+## the remake's "first_battle_dome" setting on, its pre-battle panel raises
+## the second game's dome the same way (`dome_source`, set by the host).
 const BATTLE_DOME := "battle_dome"
 const BATTLE_DOME_EFFECT := "sphere.pfx"
 const BATTLE_DOME_SOUND := "Adventure/CombatDome.wav"
 const BATTLE_DOME_FAR := 32.0
 const BATTLE_DOME_SUMMON_CODE := 0x018c0000
 
+## First game: the second game's files the borrowed battle dome comes from,
+## or null for none.
+var dome_source: ELProfile
+
 func _start_battle_dome(first: int, second: int) -> void:
 	_finish_battle_dome()
 	if effects == null or world == null: return
+	var source: ELProfile = dome_source if state.map.profile.id == "el1" else null
+	if state.map.profile.id == "el1" and source == null: return
 	var points: Array[Vector3] = []
 	for id: int in [first, second]:
 		var actor: Node3D = world.actors.get(id)
@@ -799,15 +815,63 @@ func _start_battle_dome(first: int, second: int) -> void:
 	if points.size() == 1: at = points[0]
 	elif points.size() == 2: at = (points[0] + points[1]) * 0.5
 	var entry := {"file": BATTLE_DOME_EFFECT, "x": at.x, "y": -at.z, "z": at.y, "story": true}
-	effects.start(BATTLE_DOME, entry, 0.0)
+	effects.start(BATTLE_DOME, entry, 0.0, false, source)
 	if audio != null: audio.start_sound(BATTLE_DOME, {"file": BATTLE_DOME_SOUND, "x": at.x, "y": -at.z, "z": at.y,
-		"near": 0.0, "far": BATTLE_DOME_FAR, "loop": true, "effects": true})
+		"near": 0.0, "far": BATTLE_DOME_FAR, "loop": true, "effects": true}, source)
 	# The original asks each figure for its Summon clip by clip code.
 	for id: int in [first, second]:
 		var model: ELModel = world.actors.get(id)
 		if not is_instance_valid(model): continue
 		var clip := model.clip_for_code(BATTLE_DOME_SUMMON_CODE)
 		world.play_actor_clip(id, clip if not clip.is_empty() else "usummon")
+
+## Second game: a battle with no local side (ELAdventureDirector.auto_fight).
+## The two figures turn to each other, the dome rises between them and both
+## play Summon; the director waits for the longer clip. The original shows
+## no duel and no death clip: the loser takes BattleDefeat.pfx and
+## Adventure/BattleDefeat.wav (one shot, silent from 32 units) and its corpse
+## replaces it 7 ticks later.
+const BATTLE_DEFEAT_EFFECT := "BattleDefeat.pfx"
+const BATTLE_DEFEAT_SOUND := "Adventure/BattleDefeat.wav"
+
+func _show_auto_fight(first: int, second: int) -> void:
+	if world == null: return
+	# A fight the local player cannot see is not shown (it still takes its time).
+	if not _fight_seen(first, second): return
+	var ends: Array[Node3D] = []
+	for id: int in [first, second]:
+		var actor: Node3D = world.actors.get(id)
+		if is_instance_valid(actor): ends.append(actor)
+	if ends.size() == 2:
+		var a := Vector2(ends[0].global_position.x, -ends[0].global_position.z)
+		var b := Vector2(ends[1].global_position.x, -ends[1].global_position.z)
+		world.orient_actor(first, b - a)
+		world.orient_actor(second, a - b)
+	_start_battle_dome(first, second)
+	# The fight lasts as long as the longer Summon clip of a shown figure.
+	var longest := 0.0
+	for id: int in [first, second]:
+		var model: ELModel = world.actors.get(id)
+		if not is_instance_valid(model) or not model.is_visible_in_tree(): continue
+		var clip := model.clip_for_code(BATTLE_DOME_SUMMON_CODE)
+		if clip.is_empty(): clip = "usummon"
+		if model.has_clip(clip): longest = maxf(longest, model.clip_seconds(clip))
+	if longest > 0.0 and not director.auto_fight.is_empty(): director.auto_fight.remaining = longest
+
+func _fight_seen(first: int, second: int) -> bool:
+	for id: int in [first, second]:
+		var item := state.object(id)
+		if not item.is_empty() and ELFog.object_state(state, 1, item) == ELFog.VISIBLE: return true
+	return false
+
+func _auto_fight_defeat(loser: int) -> void:
+	if not effects.effects.has(BATTLE_DOME): return
+	var actor: Node3D = world.actors.get(loser) if world != null else null
+	if not is_instance_valid(actor) or not actor.is_visible_in_tree(): return
+	var at := world.to_local(actor.global_position)
+	if effects != null: effects.start("battle_defeat:%d" % loser, {"file": BATTLE_DEFEAT_EFFECT, "x": at.x, "y": -at.z, "z": at.y, "loops": 0, "story": true}, 0.0)
+	if audio != null: audio.start_sound("battle_defeat:%d" % loser, {"file": BATTLE_DEFEAT_SOUND, "x": at.x, "y": -at.z, "z": at.y,
+		"near": 0.0, "far": BATTLE_DOME_FAR, "loop": false, "effects": true})
 
 func _finish_battle_dome() -> void:
 	if effects != null: effects.finish(BATTLE_DOME)
@@ -1079,10 +1143,10 @@ func _shop_hotkey(key: InputEventKey) -> void:
 				else: rune_shop.accept()
 			"shop_buy":
 				if first_shop != null: first_shop.buy()
-				elif rune_shop != null and not rune_shop.buttons.CompBuy1.disabled: rune_shop.buttons.CompBuy1.pressed.emit()
+				elif rune_shop != null: rune_shop.buy()
 			"shop_undo":
 				if first_shop != null: first_shop.retrieve()
-				elif rune_shop != null and not rune_shop.buttons.CompBack1.disabled: rune_shop.buttons.CompBack1.pressed.emit()
+				elif rune_shop != null: rune_shop.retrieve()
 			_: return
 	else: return
 	get_viewport().set_input_as_handled()
@@ -1272,6 +1336,10 @@ func _object_at(point: Vector2, screen := Vector2(-1, -1)) -> int:
 	# the fog and kind lookups only for objects under the pointer.
 	var first := state.map.profile.id == "el1"
 	var footprints: Dictionary = director.grid.footprints
+	# First game: the figure's wide reach (its body above neighbouring
+	# cells) gives way to an object whose own cell is under the pointer, so
+	# a pickup next to the hero can still be clicked (#79).
+	var own_cell := false
 	for id: int in state.objects:
 		var item: Dictionary = state.objects[id]
 		if not item.alive or not item.visible or not item.get("placed", true) or item.get("fortified", false): continue
@@ -1285,9 +1353,12 @@ func _object_at(point: Vector2, screen := Vector2(-1, -1)) -> int:
 			if hit and not _fogged(item):
 				best = id
 				distance = near
-		elif best < 0:
+				own_cell = Rect2(item.x, item.y, 1, 1).has_point(point)
+		elif best < 0 or (first and not own_cell and building_depth >= 0.0):
 			var size: Vector2i = footprints.get(id, {}).get("size", Vector2i.ONE)
 			var cells := Rect2(item.x, item.y, size.x, size.y)
+			# With a figure already found, only an object's own cells count.
+			if best >= 0 and not cells.has_point(point): continue
 			# The footprint under the pointer wins; otherwise the nearest
 			# building body the camera ray passes through.
 			var depth := INF
@@ -1301,6 +1372,7 @@ func _object_at(point: Vector2, screen := Vector2(-1, -1)) -> int:
 			if _fogged(item): continue
 			building = id
 			building_depth = depth
+	if first and best >= 0 and not own_cell and building >= 0 and building_depth < 0.0: return building
 	return best if best >= 0 else building
 
 ## Box the camera ray tests for an object: its footprint `cells` (map
@@ -1564,9 +1636,14 @@ func _present(data: Dictionary) -> void:
 					following = -1
 					target = (ends[0] + ends[-1]) * 0.5
 				hud.show_precombat(data.hero, data.opponent, number, total, director.encounter != null and director.encounter.declinable())
+				if dome_source != null: _start_battle_dome(int(data.hero), int(data.opponent))
 			elif second_precombat != null and precombat_preview and not data.get("remote_use", false): _open_second_precombat(data.hero, data.opponent)
 			else: encounter_requested.emit(data.hero, data.opponent)
 		"lose_battle": _open_lose_battle()
+		"auto_fight": _show_auto_fight(int(data.hero), int(data.opponent))
+		"auto_fight_defeat":
+			for loser: int in data.losers: _auto_fight_defeat(loser)
+		"auto_fight_end": _finish_battle_dome()
 		"travel_phase": _travel_phase()
 		"travel_finished":
 			if effects != null: effects.finish("portal_travel")
@@ -1648,11 +1725,48 @@ func colorless_drain(uid: int) -> void:
 	if effects != null: effects.start(name, entry, 0.0)
 	if audio != null: audio.start_sound(name, entry.merged({"file": "Adventure/whitezonehb.wav", "near": 8.0, "far": 16.0, "loop": false}, true))
 
+## Second game, after a specialization
+## shrine or a beacon: Bereserk.pfx once where the hero stands and
+## Adventure\stars1.wav placed there (near 1, far 32). Not saved.
+func hero_change_effect(uid: int) -> void:
+	var hero := state.object(uid)
+	if hero.is_empty() or world == null or not ELFog.shown(state, 1, hero): return
+	var at := ELAdventureScene.world_position(float(hero.get("x", 0)), float(hero.get("y", 0)))
+	var actor: Variant = world.actors.get(uid)
+	if actor is Node3D and is_instance_valid(actor): at = world.to_local((actor as Node3D).global_position)
+	var entry := {"file": "Bereserk.pfx", "x": at.x, "y": -at.z, "z": at.y, "loops": 0}
+	var name := "hero_change:%d" % uid
+	if effects != null: effects.start(name, entry, 0.0)
+	if audio != null: audio.start_sound(name, entry.merged({"file": "Adventure/stars1.wav", "near": 1.0, "far": 32.0, "loop": false, "effects": true}, true))
+
+## First game, CDestroyMainTower start: the hero turns to the
+## castle and plays its attack clip (code); the
+## hero colour's GlobalXDMG.pfx and magic\GlobalXDamage.wav play at the castle
+## (black for any other colour). Not saved.
+const CASTLE_ATTACK_CODE := 0x1cc0000
+func present_castle_assault(hero_id: int, player: int) -> void:
+	var hero := state.object(hero_id)
+	var castle := ELFirstScenario.castle_object(state, player)
+	if hero.is_empty() or castle.is_empty() or world == null or (_fogged(hero) and _fogged(castle)): return
+	var size: Vector2i = director.grid.footprints.get(int(castle.uid), {}).get("size", Vector2i.ONE)
+	var middle := Vector2(float(castle.x) + size.x * 0.5, float(castle.y) + size.y * 0.5)
+	world.orient_actor(hero_id, middle - Vector2(float(hero.x) + 0.5, float(hero.y) + 0.5))
+	world.play_actor_code(hero_id, CASTLE_ATTACK_CODE)
+	var colour := ELFirstSpellShop.hero_color(state.map.profile, hero)
+	if colour not in ["Red", "Green", "Blue"]: colour = "Black"
+	var at := ELAdventureScene.world_position(middle.x - 0.5, middle.y - 0.5)
+	var entry := {"file": "Global%sDMG.pfx" % colour, "x": at.x, "y": -at.z, "z": at.y, "loops": 0}
+	var name := "castle_assault:%d" % hero_id
+	if effects != null: effects.start(name, entry, 0.0)
+	if audio != null: audio.effect_sound("Magic/Global%sDamage.wav" % colour)
+
 func _state_event(data: Dictionary) -> void:
 	if data.kind in ["day_changed", "site_captured", "object_changed", "object_killed", "object_created", "skill_learned", "experience_gained"]: mana_readout = {}
 	if world == null: return
 	if audio != null: audio.script_event(data)
 	if data.kind == "colorless_drain": colorless_drain(int(data.id))
+	if data.kind == "hero_change_effect": hero_change_effect(int(data.id))
+	if data.kind == "castle_assaulted": present_castle_assault(int(data.hero), int(data.player))
 	if effects != null:
 		effects.script_event(data)
 		if data.kind == "script_effect_orient": effects.orient(str(data.name), world.object_yaw(state.object(int(data.id))))
@@ -1866,6 +1980,21 @@ func _extras_ready() -> bool:
 		return false
 	extras.hosted_closed.connect(_close_extras)
 	extras.slot_chosen.connect(func(row: Dictionary): slot_requested.emit(row))
+	extras.console_captures = _quick_load_again
+	return true
+
+## The quick-load question takes a second F8 (or F9) as OK, as the
+## original's T_MB_LOAD_GAME box does.
+func _quick_load_again(event: InputEvent) -> bool:
+	var key := event as InputEventKey
+	if key == null or not key.pressed or key.echo or extras == null or extras.duel_ui == null or not extras.duel_ui.message_open() or extras.duel_ui.message != _quick_load_box:
+		return false
+	if ELSettings.hotkey_action(settings, state.map.profile.id, "Map", key) != "map_load": return false
+	var ok: BaseButton = extras.buttons.get("MBOK")
+	if ok == null or not is_instance_valid(ok): return false
+	_quick_load_box = null
+	get_viewport().set_input_as_handled()
+	ok.pressed.emit()
 	return true
 
 ## The original Options screen over the map (EL1 Options column wrench, EL2
@@ -3240,6 +3369,9 @@ func quick_save() -> void:
 	var error_text := _save_named(ELSaveSlots.quick_name(state.map.profile), preview)
 	notice.text = state.map.profile.text("T_GAME_SAVED").strip_edges() if error_text.is_empty() else error_text
 
+## The open quick-load question (a second F8 answers it).
+var _quick_load_box: Control
+
 ## F8 / F9: the quick load asks T_MB_LOAD_GAME first; OK resumes the quick
 ## save, Cancel or Esc keeps playing. Nothing happens without a quick save
 ## (or an old single-slot file) to load.
@@ -3260,6 +3392,7 @@ func ask_quick_load() -> void:
 	_after_extras = Callable()
 	dragging = false
 	extras.ask_hosted(state.map.profile.text("T_MB_LOAD_GAME").strip_edges(), load_save)
+	_quick_load_box = extras.duel_ui.message
 	extras_layer.show()
 	extras.show()
 

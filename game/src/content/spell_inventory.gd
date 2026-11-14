@@ -52,7 +52,9 @@ static func equip(profile: ELProfile, hero: Dictionary, card: String, reserve_in
 		uses = hero.rune_stock[card][reserve_index]
 	remove(hero, card, 1, reserve_index)
 	hero.cards.append(card)
-	if profile.id == "el1": hero.rune_uses.append(uses)
+	if profile.id == "el1":
+		hero.rune_uses.append(uses)
+		if hero.has("rune_under"): hero.rune_under.append("")
 	return ""
 
 static func unequip(profile: ELProfile, hero: Dictionary, index: int) -> String:
@@ -61,6 +63,16 @@ static func unequip(profile: ELProfile, hero: Dictionary, index: int) -> String:
 	if not add(profile, hero, str(hero.cards[index])): return "That spell cannot be moved to reserve."
 	if profile.id == "el1":
 		hero.rune_stock[hero.cards[index]][-1] = hero.rune_uses[index]
+		var codes := ELRunes.under(hero)
+		# A cantrip waiting under the spell takes the slot back.
+		if not codes[index].is_empty():
+			hero.cards[index] = codes[index]
+			hero.rune_uses[index] = -1
+			codes[index] = ""
+			ELRunes.set_under(hero, codes)
+			return ""
 		hero.rune_uses.remove_at(index)
+		codes.remove_at(index)
+		if hero.has("rune_under"): ELRunes.set_under(hero, codes)
 	hero.cards.remove_at(index)
 	return ""

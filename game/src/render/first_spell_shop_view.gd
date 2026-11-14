@@ -140,6 +140,9 @@ func book_cards(_side: int) -> Array:
 func book_uses(_side: int) -> Array:
 	return trade.uses
 
+func book_under(_side: int) -> Array[String]:
+	return trade.unders
+
 func shop_rect(index: int) -> Rect2:
 	var visible := index - shop_scroll * SHOP_COLUMNS
 	return Rect2(SHOP_CELL + Vector2(STEP * (visible % SHOP_COLUMNS), 52 * (visible / SHOP_COLUMNS)), ICON)

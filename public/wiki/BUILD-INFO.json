@@ -1,15 +1,15 @@
 {
-  "version": "0.12.0",
+  "version": "0.13.0",
   "languages": {
     "en": {
-      "pages": 471,
+      "pages": 472,
       "catalog_pages": 433,
-      "links": 1094
+      "links": 1101
     },
     "ru": {
-      "pages": 471,
+      "pages": 472,
       "catalog_pages": 433,
-      "links": 1094
+      "links": 1101
     }
   },
   "requires_game_files": false,
@@ -18,8 +18,8 @@
   "translation_keys": 16,
   "files": {
     "data/en/index.json": {
-      "bytes": 312338,
-      "sha256": "8f9f2dd9c2c6b1625bdcf1882ada8fdc1ccba8f4119e24510935489e3463db47"
+      "bytes": 326221,
+      "sha256": "c5569092c49bfbe2b10670adc586b45daff41fe2321e4cb7ab97cc55dce2c149"
     },
     "data/en/pages/abilities.json": {
       "bytes": 2238,
@@ -30,8 +30,8 @@
       "sha256": "e96fa8bf9ce2d0cbc68ef1f3746658ac86acfb156a552dbffde69a813bc16612"
     },
     "data/en/pages/adventure-map.json": {
-      "bytes": 1983,
-      "sha256": "8e68573b694d32265d52136ed2750ed76dc350f06ed4351a8e70a6d25b292233"
+      "bytes": 2104,
+      "sha256": "d73215bb95786143a8d30b395164b1482151473a5d6c9682eb8da5b21f2bfd4a"
     },
     "data/en/pages/all-artifacts.json": {
       "bytes": 3484,
@@ -1514,8 +1514,8 @@
       "sha256": "2835691aad23ffe54e349c8ea5a3d94b4e49ecff8684cd2c59986451bd05768b"
     },
     "data/en/pages/controls.json": {
-      "bytes": 5091,
-      "sha256": "759bf88580ab75049fad5a8d1458fe11465f62a719ea15ec2f2afe9e8c80742d"
+      "bytes": 5034,
+      "sha256": "8ea1d37b5ae8b99450f0f275676924c7ddbc4dfb0fbd8fc6be6e748d208bc7d2"
     },
     "data/en/pages/creatures.json": {
       "bytes": 2138,
@@ -1542,8 +1542,8 @@
       "sha256": "4bc835997c8ef73d15dc4eb58c6cf86ab878d3c055262995f04a2e2ae28d7588"
     },
     "data/en/pages/home.json": {
-      "bytes": 3934,
-      "sha256": "1fc2ff48fb6e6edd602aba4d42259d508b246f854fe6e3bcba4a31ce798d1a11"
+      "bytes": 3984,
+      "sha256": "9f7a8349bcbe72e99a4fd885d52f903941e3718436a76819cdd1a546eb013c5d"
     },
     "data/en/pages/installing.json": {
       "bytes": 3215,
@@ -1557,9 +1557,13 @@
       "bytes": 2464,
       "sha256": "d276f1beaf7a04c87a15a6b9f94f26d83ff93bb50acc5c11cf7270a7f456cb21"
     },
+    "data/en/pages/map-objects.json": {
+      "bytes": 15812,
+      "sha256": "3be7664a1b457687a28d0c4735c95a2f7d8081a18b7ab973ec14a236a6670768"
+    },
     "data/en/pages/options.json": {
-      "bytes": 9085,
-      "sha256": "cf1735fc5340cabe739dbb1c1dfe0ac1764e8ab4984fe62b58d57790aedb7372"
+      "bytes": 10911,
+      "sha256": "35701c45ea0fe9843b742934f7887e332be732c7f7064334c1fb7dc3093de99b"
     },
     "data/en/pages/pale.json": {
       "bytes": 4811,
@@ -1906,8 +1910,8 @@
       "sha256": "d18c0bf1a09af1788f0ca5427f86b6ecbb3cc60bc9a08d9da6d1b068de46ddaa"
     },
     "data/ru/index.json": {
-      "bytes": 549525,
-      "sha256": "bfabdf619651265cb39621e607016839dc0aabd32a35eb7e1d1ec8bcca4674a9"
+      "bytes": 574947,
+      "sha256": "aea01e55096e4e63a8b41fbb0216cdb67eaa078387ace3a101ad4d1a6997b3b0"
     },
     "data/ru/pages/abilities.json": {
       "bytes": 3685,
@@ -1918,8 +1922,8 @@
       "sha256": "5ce30297d063051d6ec183d37a95e9ee461765a97bcb35284e6406e93cfb828e"
     },
     "data/ru/pages/adventure-map.json": {
-      "bytes": 3108,
-      "sha256": "3a1683320aa71f2ad1cc69b0c17fde3920fa1a9a8f15ab0d5ea54c78d8229396"
+      "bytes": 3268,
+      "sha256": "26a9c0ee6dbbe044afbcde97eed58e6a41957c2b9f4b243e7c2b474ea22f72a8"
     },
     "data/ru/pages/all-artifacts.json": {
       "bytes": 4380,
@@ -3402,8 +3406,8 @@
       "sha256": "597e40d1c330b2faa80fb5b6b8554fa3dd1732b13ffeae4c1a3821ee4755105a"
     },
     "data/ru/pages/controls.json": {
-      "bytes": 8336,
-      "sha256": "cf1d0653795dafe4dbed54111a5c8b4ef88900556930a818a6ed6d1be3b7adfe"
+      "bytes": 8177,
+      "sha256": "1459bd11ae9503440ec6935be41d01c50a2264bd7dba1fef5396d66a3ca13d7c"
     },
     "data/ru/pages/creatures.json": {
       "bytes": 3555,
@@ -3430,8 +3434,8 @@
       "sha256": "139375cc49eba811d4cd45cc6bebeba7acdab03f51337013b86eb479d7416212"
     },
     "data/ru/pages/home.json": {
-      "bytes": 5545,
-      "sha256": "add0cf218a62b25ea5f36149ff7c27bc9b0a6b7ace70b445e0f87e5603ee70e8"
+      "bytes": 5609,
+      "sha256": "2ecabbf52df4f77e64c88e9fb42d5bc95424b5a9de9b95fff54cf24d81ed1699"
     },
     "data/ru/pages/installing.json": {
       "bytes": 5015,
@@ -3445,9 +3449,13 @@
       "bytes": 3648,
       "sha256": "4e3239ac3d748c2488a721c5b97e0e0e3ee634413d7bd68a9127fa4eda7196a1"
     },
+    "data/ru/pages/map-objects.json": {
+      "bytes": 26063,
+      "sha256": "48d2a94f993b67c9a7545ff9cb98b6d610234b039b9ef3478318434e63eba162"
+    },
     "data/ru/pages/options.json": {
-      "bytes": 15076,
-      "sha256": "a42bab07d533a58362f6d9eb2f9ebb09918ba65dab9f7507b769dc69320aae9c"
+      "bytes": 18481,
+      "sha256": "4b74715c47756a770e2a750e1f3b329423ec6e78b9f52011d15531c44fc11b59"
     },
     "data/ru/pages/pale.json": {
       "bytes": 7741,
@@ -5251,7 +5259,7 @@
     },
     "index.html": {
       "bytes": 2445,
-      "sha256": "067bf4d686368e00faaf6d022bf34f5c00e0c3386000960913e99ef4b2ab379d"
+      "sha256": "2eea4a2f80afcc102691067a8d876b7ac524df646bc2ad08962f6f27acbecdeb"
     },
     "wiki.css": {
       "bytes": 7648,
@@ -5262,5 +5270,5 @@
       "sha256": "aabab5bcfce15545227916db3d8f7e6c353fbf93c2b073e25dec7262d79874ed"
     }
   },
-  "bytes": 6109962
+  "bytes": 6196552
 }

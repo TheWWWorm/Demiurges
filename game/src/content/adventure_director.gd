@@ -9,6 +9,18 @@ var dialogue: Dictionary = {}
 var boxes: Array[Dictionary] = []
 ## Script waits on the mission's action list, in seconds.
 var action_wait := 0.0
+## Second game: a battle with no local side being shown before it resolves
+## (the original MoveAndUse command): the ether dome
+## rises and both figures play their Summon clip ("summon", as long as the
+## longer clip; the view sets "remaining" from the figures); then the loser
+## (both sides when there is no winner) takes BattleDefeat ("defeat", 7
+## adventure ticks of 64 ms) and only then is the battle resolved and the
+## loser killed. Map, commands and script steps
+## wait meanwhile, as the original command queue does. {"encounter", "phase",
+## "remaining"}; empty when none. Not saved: a save made meanwhile resolves it.
+var auto_fight := {}
+const AUTO_FIGHT_SUMMON := 1.5
+const AUTO_FIGHT_DEFEAT := 7.0 * 0.064
 var movement: Dictionary = {}
 ## Second-game portal and dock use, which hold the next order until arrival.
 var travel: Dictionary = {}
@@ -48,6 +60,9 @@ const BATTLE_REFUSED := "This battle cannot be fought in the remake yet."
 ## Played when player 1's hero is stopped by a hostile zone.
 const ENEMY_SOUND := "Buttons/Enemy.wav"
 var encounter: ELAdventureEncounter
+## First game: the cell each actor last stepped from (not saved). A declined
+## neutral-creature battle (the remake's X) puts the hero back there.
+var _stepped_from := {}
 var shop: ELSpellShop
 var rune_shop: ELRuneShop
 var first_shop: ELFirstSpellShop
@@ -199,6 +214,9 @@ func _advance_remote_order() -> void:
 func advance(delta: float) -> void:
 	if not error.is_empty() or not state.outcome.is_empty() or encounter != null or _shopping(): return
 	if not dialogue.is_empty(): return
+	if not auto_fight.is_empty():
+		_advance_auto_fight(delta)
+		return
 	var action_held := action_wait > 0.0
 	if not action_held and not movement.is_empty(): _advance_movement(delta)
 	if not travel.is_empty():
@@ -277,7 +295,7 @@ func can_move() -> bool:
 	return not strategy_ready(state.current_player) and _map_idle()
 
 func _map_idle() -> bool:
-	return error.is_empty() and state.outcome.is_empty() and dialogue.is_empty() and state.commands.is_empty() and action_wait <= 0.0 and not state.exclusive and encounter == null and not _shopping() and strategy.is_empty() and travel.is_empty()
+	return error.is_empty() and state.outcome.is_empty() and dialogue.is_empty() and state.commands.is_empty() and action_wait <= 0.0 and not state.exclusive and encounter == null and auto_fight.is_empty() and not _shopping() and strategy.is_empty() and travel.is_empty()
 
 ## Hook_OnHeroCommandRun: a missing hook or a script error lets the
 ## order run; otherwise the native boolean of the result (nil and 0 false).
@@ -695,6 +713,7 @@ func _advance_movement(delta: float) -> void:
 		travel -= remaining
 		movement.progress = 0.0
 		movement.index += 1
+		if not second: _stepped_from[int(actor.uid)] = Vector2i(from)
 		actor.x = int(to.x)
 		actor.y = int(to.y)
 		grid.update_actor(actor)
@@ -810,6 +829,10 @@ func _begin_encounter(actor: Dictionary, target: Dictionary, defender := -1, ass
 		_refuse_battle(next.error)
 		return
 	next.assault_fort = assault_fort
+	if next.auto and state.map.profile.id == "el2":
+		auto_fight = {"encounter": next, "phase": "summon", "remaining": AUTO_FIGHT_SUMMON}
+		presentation.emit({"kind": "auto_fight", "hero": next.attacker(), "opponent": next.target()})
+		return
 	encounter = next
 	if not next.unsupported_artifacts.is_empty() and state.current_player in [int(actor.owner), int(target.owner)]:
 		var names: Array[String] = []
@@ -820,6 +843,28 @@ func _begin_encounter(actor: Dictionary, target: Dictionary, defender := -1, ass
 		finish_encounter()
 		return
 	presentation.emit({"kind": "encounter", "hero": actor.uid, "opponent": target.uid, "remote_use": remote_use})
+
+func _advance_auto_fight(delta: float) -> void:
+	auto_fight.remaining = float(auto_fight.remaining) - delta
+	if float(auto_fight.remaining) > 0.0: return
+	var next: ELAdventureEncounter = auto_fight.encounter
+	if auto_fight.phase == "summon":
+		auto_fight.phase = "defeat"
+		auto_fight.remaining = AUTO_FIGHT_DEFEAT
+		# With no winner both sides take the defeat.
+		var losers: Array[int] = [next.hero_id, next.opponent_id]
+		if next.scripted_winner >= 0: losers.erase(next.scripted_winner)
+		presentation.emit({"kind": "auto_fight_defeat", "losers": losers})
+		return
+	resolve_auto_fight()
+
+## Ends a shown battle with no local side at once (also before a save).
+func resolve_auto_fight() -> void:
+	if auto_fight.is_empty(): return
+	encounter = auto_fight.encounter
+	auto_fight = {}
+	presentation.emit({"kind": "auto_fight_end"})
+	finish_encounter()
 
 ## EL2 Lake: scry the matching ReflectingEyes and show the visitor's local
 ## owner the Lake message every time.
@@ -1033,8 +1078,39 @@ func finish_encounter() -> bool:
 func decline_encounter() -> bool:
 	if encounter == null: return false
 	if not encounter.decline(): return _fail(encounter.error)
+	var sides := [encounter.hero_id, encounter.opponent_id]
 	encounter = null
+	if state.map.profile.id == "el1":
+		for id: int in sides:
+			var hero := state.object(id)
+			if hero.get("type") == "hero" and int(hero.get("owner", -1)) == state.current_player: _step_out_of_zone(hero)
 	return true
+
+## First game, after the remake's X: a hero inside a creature's guard zone
+## cannot step (the original has no way to refuse that battle), so it goes
+## back to the cell it entered from, as the second game's library returns
+## its main hero to its last legal place. Failing that, to a free
+## neighbouring cell no hostile zone covers.
+func _step_out_of_zone(hero: Dictionary) -> void:
+	var here := Vector2i(int(hero.x), int(hero.y))
+	if interception.enemies(state, hero, here).is_empty():
+		hero.intercepted = false
+		return
+	var candidates: Array[Vector2i] = []
+	if _stepped_from.has(int(hero.uid)): candidates.append(_stepped_from[int(hero.uid)])
+	for offset: Vector2i in [Vector2i(-1, 0), Vector2i(1, 0), Vector2i(0, -1), Vector2i(0, 1), Vector2i(-1, -1), Vector2i(1, -1), Vector2i(-1, 1), Vector2i(1, 1)]:
+		candidates.append(here + offset)
+	for cell: Vector2i in candidates:
+		if (cell - here).abs().x > 1 or (cell - here).abs().y > 1 or cell == here: continue
+		if grid.passability(cell) < 0 or not interception.enemies(state, hero, cell).is_empty(): continue
+		hero.x = cell.x
+		hero.y = cell.y
+		hero.intercepted = false
+		_stepped_from.erase(int(hero.uid))
+		grid.update_actor(hero)
+		presentation.emit({"kind": "actor_moving", "id": hero.uid, "position": Vector2(cell), "moving": false})
+		state.event.emit({"kind": "object_changed", "id": hero.uid})
+		return
 
 ## Mid-duel chapter checks; the duel view leaves the battle once an outcome is set.
 func watch_encounter() -> String:

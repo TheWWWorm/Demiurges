@@ -1647,6 +1647,15 @@ func play(path: String, spatial_gain := 1.0, loop := false) -> bool:
 			return true
 	return false
 
+## Like play(), but `gain` (which may set the pan source) is asked for when
+## the sound actually starts, after any hold for the hero's gesture.
+func play_released(path: String, gain: Callable) -> void:
+	var wait := (_held_until - Time.get_ticks_msec()) / 1000.0
+	if wait > 0.0 and is_inside_tree():
+		get_tree().create_timer(wait).timeout.connect(func() -> void: play(path, float(gain.call())))
+		return
+	play(path, float(gain.call()))
+
 ## The original's stereo placement (ELAudio.stereo_pan) heard from where the
 ## camera's view meets the ground, facing the camera's level direction.
 func stereo_pan(source: Vector3) -> float:
@@ -1748,7 +1757,10 @@ func spell(card: String, caster: Node3D = null, target: Node3D = null) -> void:
 		elif edition == "el1" and card == "TWST" and path == effect_sound("GreenHurricane"):
 			play(path, _twister_gain(target))
 		elif edition == "el2" and card == "COMT" and path == effect_sound("RedComet"):
-			play(path, _comet_gain(target))
+			# Its 10/20 radii are short: the level is taken when the gesture
+			# releases the comet, once the camera has moved to the cast, not
+			# at the cast event (the battle overview, where it was 0).
+			play_released(path, _comet_gain.bind(target))
 		elif edition in ["el1", "el2"] and card == "SPBA" and path == effect_sound("GreenBasilisk"):
 			play(path, _basilisk_gain(target))
 		elif edition in ["el1", "el2"] and card == "SNRG" and path == effect_sound("GreenStoneRing"):

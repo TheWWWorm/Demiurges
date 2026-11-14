@@ -21,8 +21,17 @@ var buttons: Dictionary = {}
 ## The chosen value and its bounds.
 var amount := Range.new()
 var readout: Label
+## What the value counts (the original T_SPELL_PARAM prompt), shown before it.
+var prompt := ""
 var _rects: Dictionary = {}
 var _profile: ELProfile
+## Holding Increase or Decrease repeats it: after HOLD_DELAY, every
+## HOLD_STEP seconds. `_held` is the held direction (0 none).
+const HOLD_DELAY := 0.4
+const HOLD_STEP := 0.07
+var _held := 0
+var _held_time := 0.0
+var _repeated := false
 
 func _init() -> void:
 	# Keep the nonvisual value owned by the panel across art rebuilds.
@@ -52,8 +61,12 @@ func build(profile: ELProfile) -> void:
 		button.build(profile, control, _rects[control])
 		add_child(button)
 		buttons[control] = button
-	if buttons.has("IncreaseMana"): buttons.IncreaseMana.pressed.connect(step.bind(1))
-	if buttons.has("DecreaseMana"): buttons.DecreaseMana.pressed.connect(step.bind(-1))
+	for control: String in ["IncreaseMana", "DecreaseMana"]:
+		if not buttons.has(control): continue
+		var direction := 1 if control == "IncreaseMana" else -1
+		buttons[control].pressed.connect(_click.bind(direction))
+		buttons[control].button_down.connect(_hold.bind(direction))
+		buttons[control].button_up.connect(_hold.bind(0))
 	if buttons.has("ManaOk"): buttons.ManaOk.pressed.connect(func(): confirmed.emit())
 	if buttons.has("ManaCancel"): buttons.ManaCancel.pressed.connect(func(): cancelled.emit())
 	readout = Label.new()
@@ -73,7 +86,9 @@ func has_art() -> bool:
 	return buttons.size() == CONTROLS.size()
 
 ## Shows the choice with `initial` clamped to [minimum, limit].
-func open(minimum: int, limit: int, initial: int) -> void:
+func open(minimum: int, limit: int, initial: int, caption := "") -> void:
+	prompt = caption
+	_hold(0)
 	amount.min_value = minimum
 	amount.max_value = maxi(minimum, limit)
 	amount.value = clampi(initial, minimum, maxi(minimum, limit))
@@ -81,7 +96,28 @@ func open(minimum: int, limit: int, initial: int) -> void:
 	show()
 
 func close() -> void:
+	_hold(0)
 	hide()
+
+## A click steps once, unless the hold that ended in it repeated already.
+func _click(direction: int) -> void:
+	if _repeated:
+		_repeated = false
+		return
+	step(direction)
+
+func _hold(direction: int) -> void:
+	_held = direction
+	_held_time = 0.0
+	if direction != 0: _repeated = false
+
+func _process(delta: float) -> void:
+	if _held == 0 or not visible: return
+	_held_time += delta
+	while _held_time >= HOLD_DELAY:
+		_repeated = true
+		step(_held)
+		_held_time -= HOLD_STEP
 
 func value() -> int:
 	return int(amount.value)
@@ -102,8 +138,17 @@ func get_ok_button() -> BaseButton:
 func get_cancel_button() -> BaseButton:
 	return buttons.get("ManaCancel")
 
+## The original draws the value ("%d/%d" in the second game) and the step's
+## prompt together; here they share the upper line, the prompt shrunk to fit.
 func _show_value() -> void:
-	if readout != null: readout.text = "%d/%d" % [int(amount.value), int(amount.max_value)]
+	if readout == null: return
+	var value := "%d/%d" % [int(amount.value), int(amount.max_value)]
+	readout.text = value if prompt.is_empty() else "%s %s" % [prompt, value]
+	var font := readout.get_theme_font("font")
+	var font_size := 15
+	while font_size > 9 and font != null and readout.size.x > 0 and font.get_string_size(readout.text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x > readout.size.x:
+		font_size -= 1
+	readout.add_theme_font_size_override("font_size", font_size)
 
 func layout() -> void:
 	for control: String in buttons:
@@ -114,6 +159,7 @@ func layout() -> void:
 		var rect := _place(READOUT)
 		readout.position = rect.position
 		readout.size = rect.size
+		_show_value()
 
 ## In the original's 1024 layout the controls sit in the phase oval beside
 ## the buttons (their ShiftX 22 / ShiftY 224 against the panel's 168).
