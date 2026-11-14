@@ -429,6 +429,45 @@ static func castle_spot(state: ELAdventureSession, player: int) -> Vector2i:
 		if grid.contains(point) and _free(state, point): return point
 	return NO_SPOT
 
+## The free tile nearest the player's castle that its heroes can walk to
+## (any free one when it has none), within NEARBY tiles: for castles whose
+## front lies off the map.
+const NEARBY := 40
+
+static func near_castle(state: ELAdventureSession, player: int) -> Vector2i:
+	var castle := ELFirstScenario.castle_object(state, player)
+	var grid := state.grid
+	if castle.is_empty() or grid == null or not castle.get("placed", true): return NO_SPOT
+	var home := Vector2i(int(castle.x), int(castle.y))
+	var width: int = state.map.width
+	var reached := PackedByteArray()
+	reached.resize(width * state.map.height)
+	var queue: Array[Vector2i] = []
+	for hero: Dictionary in _heroes(state, player):
+		var start := Vector2i(hero.x, hero.y)
+		if hero.get("visible", false) and hero.get("placed", true) and grid.contains(start) and reached[start.y * width + start.x] == 0:
+			reached[start.y * width + start.x] = 1
+			queue.append(start)
+	var roaming := not queue.is_empty()
+	var head := 0
+	while head < queue.size():
+		var at := queue[head]
+		head += 1
+		for dy in range(-1, 2):
+			for dx in range(-1, 2):
+				var next := at + Vector2i(dx, dy)
+				if not grid.contains(next) or reached[next.y * width + next.x] != 0 or grid.land.is_point_solid(next): continue
+				reached[next.y * width + next.x] = 1
+				queue.append(next)
+	var tiles: Array[Vector2i] = []
+	for y in range(maxi(0, home.y - NEARBY), mini(state.map.height, home.y + NEARBY + 1)):
+		for x in range(maxi(0, home.x - NEARBY), mini(width, home.x + NEARBY + 1)):
+			if (not roaming or reached[y * width + x] != 0) and grid.passability(Vector2i(x, y)) >= 0: tiles.append(Vector2i(x, y))
+	tiles.sort_custom(func(a: Vector2i, b: Vector2i): return (a - home).length_squared() < (b - home).length_squared())
+	for tile: Vector2i in tiles:
+		if _free(state, tile): return tile
+	return NO_SPOT
+
 static func _free(state: ELAdventureSession, point: Vector2i) -> bool:
 	if state.grid.passability(point) < 0: return false
 	for item: Dictionary in state.objects.values():
@@ -438,7 +477,8 @@ static func _free(state: ELAdventureSession, point: Vector2i) -> bool:
 ## A new hero of the caster's colour beside its castle: a random non-quest
 ## level-one template, a name of its race and gender, and a specialisation of
 ## its colour, then experience up to the spell's level. Returns the hero, or -1.
-static func summon(state: ELAdventureSession, player: int, level: int) -> int:
+## `nearby` falls back to the nearest free tile when the castle's front has none.
+static func summon(state: ELAdventureSession, player: int, level: int, nearby := false) -> int:
 	var profile := state.map.profile
 	var colour := str(state.players.get(player, {}).get("color", ""))
 	var templates: Array[String] = []
@@ -458,6 +498,7 @@ static func summon(state: ELAdventureSession, player: int, level: int) -> int:
 		if (colours is Array and colours.has(colour)) or str(colours) == colour: specs.append(code)
 	var spec := specs[ELAdditionalBuildings._random(state) % specs.size()] if not specs.is_empty() else "NONE"
 	var spot := castle_spot(state, player)
+	if spot == NO_SPOT and nearby: spot = near_castle(state, player)
 	if spot == NO_SPOT: return -1
 	var id := ELAdditionalBuildings.spawn_hero(state, template, player, spot.x, spot.y)
 	var hero := state.object(id)

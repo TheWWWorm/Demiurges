@@ -43,11 +43,12 @@ static func upgrade_price(profile: ELProfile, building: Dictionary, color: Strin
 		if result.has(kind): result[kind] += int(entry.get_slice("(", 1).trim_suffix(")"))
 	return result
 
-static func upgrade_problem(state: ELAdventureSession, actor: int, id: int) -> String:
+## `commander`: the player giving the order (the local one by default).
+static func upgrade_problem(state: ELAdventureSession, actor: int, id: int, commander := -1) -> String:
 	if state.map.profile.id != "el1": return "This building cannot be upgraded."
 	var hero := state.object(actor)
 	var building := state.object(id)
-	if hero.is_empty() or hero.type != "hero" or not hero.alive or hero.owner != state.current_player: return "This hero cannot upgrade a building."
+	if hero.is_empty() or hero.type != "hero" or not hero.alive or hero.owner != (state.current_player if commander < 0 else commander): return "This hero cannot upgrade a building."
 	if building.is_empty() or building.type not in TYPES.values() or not building.alive or not building.visible or not building.enabled or building.owner != hero.owner: return "Visit this building to capture it before upgrading."
 	if building.level >= 2: return "This building is fully upgraded."
 	var player: Dictionary = state.players.get(hero.owner, {})
@@ -59,8 +60,8 @@ static func upgrade_problem(state: ELAdventureSession, actor: int, id: int) -> S
 	if not ELResources.can_pay("el1", player.get("resources", {}), upgrade_price(state.map.profile, building, player.color)): return "Not enough resources to upgrade this building."
 	return ""
 
-static func upgrade(state: ELAdventureSession, actor: int, id: int) -> bool:
-	if not upgrade_problem(state, actor, id).is_empty(): return false
+static func upgrade(state: ELAdventureSession, actor: int, id: int, commander := -1) -> bool:
+	if not upgrade_problem(state, actor, id, commander).is_empty(): return false
 	var building := state.object(id)
 	var player: Dictionary = state.players[building.owner]
 	if not ELResources.pay("el1", player.resources, upgrade_price(state.map.profile, building, player.color)): return false

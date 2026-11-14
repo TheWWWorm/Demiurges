@@ -99,7 +99,7 @@ static func plan_player(director: ELAdventureDirector, player: int, daily := tru
 	ai.champion = int(champion.get("uid", -1))
 	# Fewer than two heroes: a free level-one recruit joins beside the castle.
 	# It first receives orders on the next day.
-	if daily and heroes.size() < 2: ELGlobalSpells.summon(state, player, 1)
+	if daily and heroes.size() < 2: ELGlobalSpells.summon(state, player, 1, ELFirstAIEconomy.applies(director))
 	# Remake option: skills, global spells (ELFirstAIEconomy).
 	if daily: ELFirstAIEconomy.daily(director, player)
 	# mission13: after day ten the Kinet leader may send an ethereal attack on
@@ -116,6 +116,11 @@ static func plan_player(director: ELAdventureDirector, player: int, daily := tru
 		var role := 0 if hero == champion else 1
 		var task: Dictionary = assigned.get(int(hero.uid), {})
 		if not task.is_empty() and finished(director, hero, task): task = {}
+		# Remake option: spells bought without runes are dead cards until a
+		# component portal fills them; the errand goes back on the list.
+		if not task.is_empty() and task.kind != "shop" and not (task.kind == "tower" and ELStrategy.adjacent(director, hero, state.object(task.target))) and ELFirstAIEconomy.urgent(director, hero):
+			if task.kind not in ["explore", "hero"]: ai.tasks.append(task)
+			task = {}
 		if task.is_empty():
 			var best := NONE
 			for candidate: Dictionary in ai.tasks:
@@ -190,11 +195,15 @@ static func candidates(state: ELAdventureSession, player: int) -> Array:
 static func refresh(director: ELAdventureDirector, player: int) -> void:
 	var state := director.state
 	var ai := data(state, player)
+	var smart := ELFirstAIEconomy.applies(director)
 	var kept: Array = []
 	for task: Dictionary in ai.tasks:
 		var item := state.object(task.get("target", -1))
 		match task.kind:
-			"mine", "node": if int(item.get("owner", -1)) >= 0: continue
+			"mine", "node":
+				# Remake option: a site an enemy holds stays worth taking.
+				var holder := int(item.get("owner", -1))
+				if holder >= 0 and (holder == player or not smart or ELGlobalSpells._allied(state, player, holder)): continue
 			"cut", "monster": if not item.get("alive", false): continue
 			"explore", "hero", "shop": continue
 		if task.kind != "explore" and item.is_empty(): continue
@@ -206,10 +215,20 @@ static func refresh(director: ELAdventureDirector, player: int) -> void:
 		var item := state.object(id)
 		if item.type == "hero" and int(item.owner) >= 1 and int(item.owner) != player and item.alive and item.visible and item.get("placed", true): kept.append({"kind": "hero", "target": id})
 	# Remake option: spell shops and component portals the player has seen.
-	if ELFirstAIEconomy.applies(director):
+	if smart:
 		var taken := {}
+		var listed := {}
 		for pair: Array in ai.assigned:
 			if pair[1].get("kind") == "shop": taken[int(pair[1].target)] = true
+			listed[int(pair[1].get("target", -1))] = true
+		for task: Dictionary in kept: listed[int(task.get("target", -1))] = true
+		# Mines and ether nodes an enemy has taken since the list was built.
+		for id: int in ids:
+			var item := state.object(id)
+			var kind: String = {"mines": "mine", "mana_nodes": "node"}.get(item.get("group", ""), "")
+			var holder := int(item.get("owner", -1))
+			if kind.is_empty() or listed.has(id) or not item.alive or holder < 1 or holder == player or ELGlobalSpells._allied(state, player, holder): continue
+			if ELFog.explored(state, player, Vector2i(item.x, item.y)): kept.append({"kind": kind, "target": id})
 		for id: int in ids:
 			var item := state.object(id)
 			if ELFirstAIEconomy.is_shop(item) and not taken.has(id) and ELFog.explored(state, player, Vector2i(item.x, item.y)): kept.append({"kind": "shop", "target": id})
@@ -295,6 +314,8 @@ static func cost(director: ELAdventureDirector, hero: Dictionary, role: int, tas
 			return _route_cost(director, hero, item, true)
 		"tower":
 			if role != 0 or level < 6 or not ELFirstScenario.assault_problem(state, hero, item).is_empty(): return NONE
+			# Remake option: no siege is begun with spells that still wait for runes.
+			if ELFirstAIEconomy.urgent(director, hero) and not ELStrategy.adjacent(director, hero, item): return NONE
 			if limit <= 0: return NONE
 			if _route_cost(director, hero, item, true) != NONE: return 0
 			return AVOIDED if limit > AVOIDED and _route_cost(director, hero, item, false) != NONE else NONE
@@ -304,15 +325,22 @@ static func cost(director: ELAdventureDirector, hero: Dictionary, role: int, tas
 			if task.kind == "cut" and not item.get("alive", false): return NONE
 			var square := _distance(Vector2i(hero.x, hero.y), item)
 			var value := square / 2 if task.kind == "node" else square / 3
+			# Remake option: ether nodes come first, since ether pays for heroes and global spells.
+			if task.kind == "node" and ELFirstAIEconomy.applies(director): value = square / 8
 			if value >= limit or _route_cost(director, hero, item, false) == NONE: return NONE
 			return value
 		"shop":
 			# Worth a detour when there is something to buy; a hero short of
-			# runes goes sooner. Champions shop too, since they do the fighting.
-			if ELFirstAIEconomy.wants(director, hero, item) == 0: return NONE
+			# runes goes sooner, one with empty spells at once. Champions shop
+			# too, since they do the fighting.
+			var count := ELFirstAIEconomy.wants(director, hero, item)
+			if count == 0: return NONE
 			var route := _route_cost(director, hero, item, true)
-			if route == NONE or route > ELFirstAIEconomy.SHOP_DAYS * maxi(1, int(hero.get("strategy_capacity", 1))): return NONE
-			return route / 2 if ELFirstAIEconomy.rune_health(state, hero) < 0.5 else route
+			# Remake option: the leading hero fights its way to a guarded shop.
+			if route == NONE and role == 0 and ELFirstAIEconomy.applies(director): route = _fought_cost(director, hero, item)
+			if route == NONE: return NONE
+			var trip := ELFirstAIEconomy.trip_cost(state, hero, item, route, count)
+			return NONE if trip < 0 else trip
 		"explore":
 			if role != 1: return NONE
 			var path := director.grid.path(Vector2i(hero.x, hero.y), Vector2i(task.tile[0], task.tile[1]))
@@ -355,12 +383,25 @@ static func _route_cost(director: ELAdventureDirector, hero: Dictionary, item: D
 	for point: Vector2i in closed: grid._update_cell(point)
 	return NONE if path.is_empty() else grid.path_cost(path)
 
+## Cost of the way to an object past guards, when the hero may fight every
+## one of them (the rule of the "monster" task); NONE otherwise.
+static func _fought_cost(director: ELAdventureDirector, hero: Dictionary, item: Dictionary) -> int:
+	var grid := director.grid
+	var path := grid.approach(Vector2i(hero.x, hero.y), item)
+	if path.is_empty(): return NONE
+	var level := int(hero.get("level", 1))
+	for point: Vector2i in path:
+		if not director.interception.cells.has(point): continue
+		for uid: int in director.interception.enemies(director.state, hero, point):
+			if int(director.state.object(uid).get("level", 1)) - level >= 2: return NONE
+	return grid.path_cost(path)
+
 static func restore(state: ELAdventureSession) -> String:
 	for player: int in state.players:
 		var raw: Variant = state.players[player].get("ai")
 		if raw == null: continue
 		if not raw is Dictionary or raw.get("version") != VERSION or not raw.get("built") is bool or not raw.get("tasks") is Array or not raw.get("assigned") is Array or raw.tasks.size() > 100000: return "Invalid saved computer plans."
-		if not ELLuaSave._integer(raw.get("champion"), -1, 0x7fffffff): return "Invalid saved computer plans."
+		if not ELLuaSave._integer(raw.get("champion"), -1, 0x7fffffff) or not ELLuaSave._integer(raw.get("hired", 0), -1000, 0x7fffffff): return "Invalid saved computer plans."
 		var tasks: Array = []
 		for task: Variant in raw.tasks:
 			var clean := _task(state, task)
@@ -373,6 +414,7 @@ static func restore(state: ELAdventureSession) -> String:
 			if clean.is_empty(): return "Invalid saved computer task."
 			assigned.append([int(pair[0]), clean])
 		state.players[player].ai = {"version": VERSION, "built": raw.built, "tasks": tasks, "assigned": assigned, "champion": int(raw.champion)}
+		if raw.has("hired"): state.players[player].ai.hired = int(raw.hired)
 	return ""
 
 static func _task(state: ELAdventureSession, raw: Variant) -> Dictionary:
