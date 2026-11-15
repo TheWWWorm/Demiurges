@@ -1,6 +1,6 @@
 'use strict';
 // Filled in with content hashes and the engine files by the Web build tool.
-const ENGINE_CACHE = 'demiurges-engine-d3b4134a999796577681';
+const ENGINE_CACHE = 'demiurges-engine-4774bb50b960caa86dcd';
 // Hosts may redirect /index.html to / (Cloudflare Workers assets do). A
 // redirected response must never answer a navigation (the browser fails it
 // with ERR_FAILED), so the shell is fetched and stored as "./".
@@ -13,10 +13,10 @@ const HASHES = {
 "index.apple-touch-icon.png": "440793e743834e2364f1919a43961fd4fea426e4fa6ce83290b38394507bc9bb",
 "index.audio.position.worklet.js": "be33985bc7160d6bf9646f259cd86b259cd67b02ccb297ee5c44f8ac84327bc8",
 "index.audio.worklet.js": "5b476a9c9ce642c0ee4256436d1bc31d9c38f868aca0f9a8e2a57c18d2dec2a3",
-"index.html": "4b55fece59b125b3b34d5ae1a75ac674ee6a17d394f5f8bf32f92a02e177c38a",
+"index.html": "81f961a13cdf34a6cd5f29f81f25467d25eecf9527a823c3df0b1d13fdae0ad6",
 "index.icon.png": "06769b275998dd9bca332d7694dd8a951c8df213156af045567598f55de3b1dc",
 "index.js": "63795a00d4edd57a3896618ade5b12d063684a41c1e39ee3ade00de7362d9da5",
-"index.pck": "1a4ab2f4e26b181e827320f2240f094e44308c9b5d680d9e79e31fc5b507c96d",
+"index.pck": "2b3970fcb02bd1982c754a0de124e5dd32b402b60cca96a96729b4ef764959bc",
 "index.png": "fe70f220ab59b7a0bbbb3128edf94d6676254762eec168899b1c4de8f6e76ea5",
 "index.wasm": "7eda98958eb09135a1acb54a4323a00b1a55af1997f15fa1cdc2b93e3df46656",
 "installer-worker.js": "8bc8a5ab27aaa5389bfc9dc83484c5e7682ddf4e693aac23836f0689f35783f6",

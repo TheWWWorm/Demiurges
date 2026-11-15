@@ -412,7 +412,7 @@ static func ask(ctx: ELCombatSearch.Context, s: ELDuel, turns: int, budget: int,
 		# still in play is one more channel every turn.
 		for turn in INCOME_TURNS:
 			var number := int(hero.turns) + 1 + turn
-			if number < income.size(): state[at + 10 + turn] = int(income.get(str(number), {}).get("Level%d" % int(hero.level), 0))
+			if not s.setup.get("puzzle_fixed_channels", false) and number < income.size(): state[at + 10 + turn] = int(income.get(str(number), {}).get("Level%d" % int(hero.level), 0))
 		if not ctx.brain_cards: continue
 		var typical := _typical_of(s.profile, String(hero.faction))
 		var share := int(typical.share) if ELCombatSearch.smart_brain_typical else 0

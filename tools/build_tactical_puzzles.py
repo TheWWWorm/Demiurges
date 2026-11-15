@@ -1,0 +1,123 @@
+#!/usr/bin/env python3
+"""Build and validate the authored puzzle packs; run from any directory."""
+from __future__ import annotations
+
+import argparse
+from collections import Counter
+from pathlib import Path
+import json
+import shutil
+import subprocess
+import sys
+import tempfile
+
+from puzzle_authoring import ROOT
+from puzzle_designs_el1 import puzzles as first_puzzles
+from puzzle_designs_el1_advanced import puzzles as first_advanced
+from puzzle_designs_el1_master import puzzles as first_master
+from puzzle_designs_el1_legends import puzzles as first_legends
+from puzzle_designs_el1_legends_extra import puzzles as first_legends_extra
+from puzzle_designs_el1_legends_crowd import puzzles as first_legends_crowd
+from puzzle_designs_el2 import puzzles as second_puzzles
+from puzzle_designs_el2_advanced import puzzles as second_advanced
+from puzzle_designs_el2_master import puzzles as second_master
+from puzzle_designs_el2_legends import puzzles as second_legends
+from puzzle_designs_pale import puzzles as pale_puzzles
+
+# These are role labels for the existing studies, not invented campaign names.
+# New authored matchups supply their own bilingual presentation names.
+HERO_LABELS = {
+    "GreenMale1": ("Vital warrior", "Воин виталов"),
+    "RedMaleWarrior2": ("Chaot warrior", "Воин хаотов"),
+    "RedMale4": ("Chaot warrior", "Воин хаотов"),
+    "BlueWingedMale1": ("Kinet adept", "Адепт кинетов"),
+    "BlackMale1": ("Synthet adept", "Адепт синтетов"),
+    "White Lord I": ("White Lord", "Белый Лорд"),
+}
+
+
+def entries(edition):
+    result = (first_puzzles() + first_advanced() + first_master() + first_legends() + first_legends_extra() + first_legends_crowd()) if edition == "el1" else (second_puzzles() + pale_puzzles() + second_advanced() + second_master() + second_legends())
+    module = __import__("puzzle_translations_" + edition)
+    translations = module.TRANSLATIONS
+    for entry in result:
+        # Translation modules may use either localized keys or bare field
+        # names. Always preserve the English authoring text when merging.
+        for key, value in translations.get(entry["id"], {}).items():
+            entry[key if key.endswith("_ru") else key + "_ru"] = value
+        for language, suffix in enumerate(("", "_ru")):
+            entry.setdefault("hero_names" + suffix, [HERO_LABELS.get(h["template"], (h["template"], h["template"]))[language] for h in entry["state"]["heroes"]])
+    # Stable authored ordering within each difficulty. Do not infer human
+    # difficulty from the number of winning opening commands.
+    result.sort(key=lambda p: p["level"])
+    ids = set()
+    for entry in result:
+        if entry["id"] in ids:
+            raise ValueError("Repeated puzzle ID: " + entry["id"])
+        ids.add(entry["id"])
+        for key in ("title", "category", "briefing", "explanation", "title_ru", "category_ru", "briefing_ru", "explanation_ru"):
+            if not isinstance(entry.get(key), str) or not entry[key].strip():
+                raise ValueError(f"{entry['id']}: missing {key}")
+        if len(entry.get("hints", [])) != 3 or len(entry.get("hints_ru", [])) != 3:
+            raise ValueError(entry["id"] + ": exactly three hints per language are required")
+        if not entry.get("solution") or not entry.get("refutations"):
+            raise ValueError(entry["id"] + ": reference solution and a tested tempting alternative are required")
+        for key in ("hero_names", "hero_names_ru"):
+            names = entry.get(key)
+            if not isinstance(names, list) or len(names) != 2 or any(not isinstance(name, str) or not name.strip() for name in names):
+                raise ValueError(entry["id"] + ": two nonempty combatant names per language are required")
+    return result
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--edition", choices=("el1", "el2", "both"), default="both")
+    parser.add_argument("--godot", default=shutil.which("godot") or shutil.which("godot4") or shutil.which("godot-4") or "godot")
+    parser.add_argument("--report-dir", type=Path, default=ROOT / "build/puzzle-validation")
+    parser.add_argument("--output-dir", type=Path, default=ROOT / "game/puzzles")
+    parser.add_argument("--prove", action="store_true", help="Also run the bounded adversarial search")
+    parser.add_argument("--reference-order", action="store_true", help="Try reference moves first at exact matching search states")
+    parser.add_argument("--reference-policy", action="store_true", help="Also try reference moves at matching own-resource/army contexts; legal moves and full-state search are unchanged")
+    parser.add_argument("--depth", type=int, default=32)
+    parser.add_argument("--budget", type=int, default=80000)
+    args = parser.parse_args()
+    editions = ("el1", "el2") if args.edition == "both" else (args.edition,)
+    args.report_dir.mkdir(parents=True, exist_ok=True)
+    validated = {}
+    with tempfile.TemporaryDirectory(prefix="demiurges-puzzles-") as folder:
+        temp = Path(folder)
+        for edition in editions:
+            pack = {"format": "etherlords-puzzles", "version": 2, "game": edition,
+                    "collection": "Tactical Studies", "collection_id": "tactical-studies-v2", "content_revision": 4,
+                    "puzzles": entries(edition)}
+            path = temp / (edition + ".json")
+            path.write_text(json.dumps(pack, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            command = [sys.executable, str(ROOT / "tools/puzzle_lab.py"), "--godot", args.godot,
+                       "--workspace", str(temp / (edition + "-lab")), "--file=" + str(path),
+                       "--normalize", "--report=" + str(args.report_dir.resolve() / (edition + ".json"))]
+            if args.prove:
+                command += ["--search", "--depth=" + str(args.depth), "--budget=" + str(args.budget)]
+                if args.reference_policy:
+                    command.append("--reference-policy")
+                elif args.reference_order:
+                    command.append("--reference-order")
+            subprocess.run(command, check=True)
+            if args.prove:
+                report = json.loads((args.report_dir.resolve() / (edition + ".json")).read_text(encoding="utf-8"))
+                incomplete = [item["id"] for item in report["results"]
+                              if item.get("proof", {}).get("result") != "forced"
+                              or any(branch.get("proof", {}).get("result") != "refuted"
+                                     for branch in item.get("refutations", []))]
+                if incomplete:
+                    raise RuntimeError("Incomplete adversarial validation; packs were not replaced: " + ", ".join(incomplete))
+            validated[edition] = json.loads(path.read_text(encoding="utf-8"))
+        args.output_dir.mkdir(parents=True, exist_ok=True)
+        for edition, document in validated.items():
+            destination = args.output_dir / (edition + ".json")
+            destination.write_text(json.dumps(document, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            counts = Counter(p["level"] for p in document["puzzles"])
+            print(f"Wrote {destination}: {len(document['puzzles'])} studies; Easy {counts[1]}, Medium {counts[2]}, Hard {counts[3]}, Expert {counts[4]}")
+
+
+if __name__ == "__main__":
+    main()

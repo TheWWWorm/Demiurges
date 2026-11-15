@@ -640,7 +640,7 @@ func _start(edition: String, options: Dictionary = {}, restored: ELDuel = null, 
 	camera.fov = auto_camera_angle()
 	camera.current = true
 	battle_audio.listener = camera
-	combat_watch.attach(get_viewport().find_world_3d(), camera)
+	combat_watch.attach(get_viewport().find_world_3d(), camera, arena.ground_height)
 	if path_tracing != null: path_tracing.attach(stage, arena, camera, effects)
 	auto_camera = ELAutoCamera.new(profile, battle_seed)
 	_default_view()

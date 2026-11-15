@@ -182,5 +182,19 @@ void fragment() { ALPHA = sprite_add(1.0); }
 		if lamp.visible: full = lamp.light_energy
 	check(faint < full * (ELGlowLights.ATTACHED_SHARE + 0.01), "a figure's own glow lights at a share of a spell's (%.2f of %.2f)" % [faint, full])
 	lights.queue_free()
+	# Path tracing steadies a figure's own lights as the lamps are: one that
+	# moves eases there, and one whose glow leaves a gap of a few frames
+	# stays lit through it, fading only over a longer gap.
+	var tracer := ELPathTracing.new()
+	var wing := [Vector3(0, 2, 0), 0.5, Vector3(1, 1, 1), 4.0]
+	tracer._steady_figure_lights([wing], 0.0)
+	var eased: Array = tracer._steady_figure_lights([[Vector3(0.8, 2, 0), 0.5, Vector3(1, 1, 1), 4.0]], 1.0 / 60.0)
+	check(eased.size() == 1 and eased[0][0].x > 0.0 and eased[0][0].x < 0.4, "a traced figure light eases towards where its glow moved")
+	var through := []
+	for i in 6: through = tracer._steady_figure_lights([], 1.0 / 60.0)
+	check(through.size() == 1 and through[0][2].x > 0.7, "a traced figure light stays lit through a gap of a few frames")
+	for i in 180: through = tracer._steady_figure_lights([], 1.0 / 60.0)
+	check(through.is_empty(), "a traced figure light goes out when its glow is gone")
+	tracer.free()
 	print("EFFECT LOOK: %d failure(s)" % failures.size())
 	quit(0 if failures.is_empty() else 1)

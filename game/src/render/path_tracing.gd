@@ -87,6 +87,8 @@ var _static_entries := []
 var _static_cache := {}   # node id -> [global transform, instance count, entries]
 var _static_version := 0
 var _scan := 0.0
+## The figures' own lights as last traced: [place, extent, colour, reach].
+var _figure_lights := []
 var _label: Label
 var _label_time := 0.0
 # Main-thread snapshot state, cleared together with the GPU side on a reset.
@@ -365,7 +367,7 @@ func _snapshot(delta: float) -> void:
 	_effect.submit(ops, instances, {
 		"statics": _static_entries,
 		"static_version": _static_version,
-		"lights": _effect_lights(),
+		"lights": _effect_lights(delta),
 		"secondary_lights": _secondary_lights(),
 		"sun_direction": Vector4(toward.x, toward.y, toward.z, SUN_RADIUS),
 		"sun_color": Vector4(sun.r, sun.g, sun.b, 1.0 if sun_on else 0.0),
@@ -561,8 +563,9 @@ func _benchmark(window_size: String) -> void:
 ## The effects' light: each glowing particle system as one soft source, and
 ## the effects' own point lights. Only transparent additive models keep their
 ## raster light while the opaque pass traces it. Returns packed place/colour pairs.
-func _effect_lights() -> PackedFloat32Array:
+func _effect_lights(delta := 0.0) -> PackedFloat32Array:
 	var found := []
+	var figure := []
 	var glows := _effects.glow_sources() if is_instance_valid(_effects) else []
 	if is_instance_valid(_adventure_effects): glows.append_array(_adventure_effects.glow_sources())
 	# One effect splits into patches; close ones are one source of light, as
@@ -575,7 +578,18 @@ func _effect_lights() -> PackedFloat32Array:
 		if peak > GLOW_LIMIT: colour *= GLOW_LIMIT / peak
 		var extent := clampf(glow[1], 0.1, 3.0)
 		var steady: bool = glow.size() > 3 and glow[3]
-		found.append([glow[0], extent, colour, (ARENA_GLOW_REACH if steady else GLOW_REACH) + extent * 3.0])
+		var reach := (ARENA_GLOW_REACH if steady else GLOW_REACH) + extent * 3.0
+		# A figure's own glow (a Kinet hero's blade and wings) lights at the
+		# raster lamps' share and reach: at a spell's strength it lifted the
+		# snow of the Kinet arenas into a white haze around the hero.
+		var kind := int(glow[4]) if glow.size() > 4 else 0
+		if kind > 0:
+			colour *= ELGlowLights.AURA_SHARE if kind == 2 else ELGlowLights.ATTACHED_SHARE
+			reach *= ELGlowLights.ATTACHED_REACH
+			figure.append([glow[0], extent, colour, reach])
+			continue
+		found.append([glow[0], extent, colour, reach])
+	found.append_array(_steady_figure_lights(figure, delta))
 	var authored := []
 	if is_instance_valid(_effects):
 		for item: Dictionary in _effects.lights:
@@ -598,6 +612,33 @@ func _effect_lights() -> PackedFloat32Array:
 		var c: Vector3 = light[2]
 		data.append_array([p.x, p.y, p.z, light[1], c.x, c.y, c.z, light[3]])
 	return data
+
+## A figure's own lights, steadied as the raster lamps are (ELGlowLights): a
+## Kinet hero's wing sparkles regroup from frame to frame and leave a gap of a
+## few frames each time the idle clip starts over, and traced as they came,
+## the wings' light hopped about and blinked out. Each light eases towards
+## where its glow now stands, and fades over FIGURE_FADE when it is gone.
+const FIGURE_MATCH := 1.5
+func _steady_figure_lights(lights: Array, delta: float) -> Array:
+	var blend := 1.0 - exp(-delta / ELGlowLights.SMOOTHING) if delta > 0.0 else 1.0
+	var slow := 1.0 - exp(-delta / ELGlowLights.FIGURE_FADE) if delta > 0.0 else 1.0
+	var left := _figure_lights.duplicate()
+	var result := []
+	for light: Array in lights:
+		var nearest := -1
+		for i in left.size():
+			var d: float = left[i][0].distance_to(light[0])
+			if d < FIGURE_MATCH and (nearest < 0 or d < left[nearest][0].distance_to(light[0])): nearest = i
+		if nearest >= 0:
+			var held: Array = left[nearest]
+			left.remove_at(nearest)
+			light = [held[0].lerp(light[0], blend), lerpf(held[1], light[1], blend), held[2].lerp(light[2], blend), lerpf(held[3], light[3], blend)]
+		result.append(light)
+	for held: Array in left:
+		var colour: Vector3 = held[2].lerp(Vector3.ZERO, slow)
+		if maxf(colour.x, maxf(colour.y, colour.z)) > 0.01: result.append([held[0], held[1], colour, held[3]])
+	_figure_lights = result
+	return result
 
 func _secondary_lights() -> PackedFloat32Array:
 	return _effects.secondary_light_sources() if is_instance_valid(_effects) else PackedFloat32Array()
@@ -768,6 +809,7 @@ static func _authored_layer(texture: Texture2D, image: Image) -> Image:
 	return null
 
 func _reset() -> void:
+	_figure_lights.clear()
 	_slots.clear()
 	_layers.clear()
 	_next_layer = 0

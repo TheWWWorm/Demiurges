@@ -2,6 +2,12 @@
 
 Versions follow [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html) from 0.3.0 on.
 
+## 0.15.0
+
+- **Puzzles redesigned:** 57 authored studies (29 for Etherlords, 28 for Etherlords II) replace the mined puzzles. Each has a title, a briefing, a named hero on each side at a real level from 1 to 20, and three optional hints, all in English and Russian. Goals go beyond winning: clear the enemy army, survive a number of enemy turns, or take over named enemy creatures, sometimes with a health, ether or army requirement or an ally to keep alive. Most studies have a fixed hand and fixed channels, stated in the briefing. The list can be searched and filtered by goal, difficulty and progress, **Continue** opens the next matching unsolved study, and a study solved without hints is marked. Records for the old puzzles stay in the save but no longer show.
+- Battle camera readout: creatures are shown whole instead of by a raised sword or a snout filling the picture, the camera looks down on them from a little higher and closer with a wider view, and it no longer sinks into sloping ground or looks through a rise.
+- Path tracing: a hero's or creature's own glow lights the scene at the same strength as without path tracing, so a Kinet hero or a crowd of pale creatures no longer turns the snow of the Kinet arenas white, and a Kinet hero's wing light no longer flickers.
+
 ## 0.14.1
 
 - Etherlords: a campaign or mission saved after a beaten lair had taken in a new creature loads again; such saves were refused with "Invalid saved lair creature". Saves already made load too.

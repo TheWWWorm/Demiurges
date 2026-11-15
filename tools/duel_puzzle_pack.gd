@@ -1,13 +1,14 @@
 extends SceneTree
-## Chooses the battle puzzles the game offers its players.
+## Rates generated battle-puzzle candidates for review.
 ##
 ## tools/duel_ai_puzzles.gd finds positions with a forced win a few turns
 ## off. This tool takes those of the first hero, has the compiled engine
 ## prove each win and the fewest turns it takes, plays it through against
 ## every defence the game can put up, sets aside the ones a player wins
 ## without having to think (see OBVIOUS), counts how many first commands keep
-## the win, and writes the best, easiest first, where the game reads them
-## (game/puzzles/<game>.json).
+## the win, and writes a separate candidate pack, easiest tier first. The
+## authored collection is maintained separately; generated output does not
+## replace it without an explicit --out-pack destination.
 ##
 ##   Rating (each shard writes <out>.<shard>):
 ##   godot --headless --path game --script ../tools/duel_puzzle_pack.gd --
@@ -17,6 +18,11 @@ extends SceneTree
 ##   failed when it played them through the battle screen):
 ##   godot --headless --path game --script ../tools/duel_puzzle_pack.gd --
 ##       --pack=<folder> --ratings=<file> [--game=el1|el2] [--count=N] [--skip=<id>,...]
+##       [--out-pack=<path>]
+##
+## Generated candidates go to res://puzzles/generated/<game>.json by default.
+## The authored collection is never replaced implicitly. Installing a generated
+## pack over it requires an explicit --out-pack=res://puzzles/<game>.json.
 
 ## How the engine reads when it solves a puzzle and when it defends one.
 const DEEP := {"engine": true, "engine_phases": 6, "engine_steps": 24, "engine_budget": 3000000, "engine_table": true, "engine_ms": 0, "engine_prove_share": 50}
@@ -149,7 +155,10 @@ func _initialize() -> void:
 			quit(1)
 			return
 		_rate(_arg("rate", ""), game, _arg("out", "ratings"), _arg("shard", "0/1"))
-	elif not _arg("pack", "").is_empty(): _pack(_arg("pack", ""), game, _arg("ratings", "ratings"), int(_arg("count", "30")), Array(_arg("skip", "").split(",", false)))
+	elif not _arg("pack", "").is_empty():
+		if not _pack(_arg("pack", ""), game, _arg("ratings", "ratings"), int(_arg("count", "30")), Array(_arg("skip", "").split(",", false)), _arg("out-pack", "")):
+			quit(1)
+			return
 	print("DONE")
 	quit(0)
 
@@ -173,12 +182,16 @@ func _rate(folder: String, game: String, out: String, shard: String) -> void:
 		var duel := ELDuel.new()
 		if not duel.restore(profile, document): continue
 		# The win must be one no defence stops, and not one of this very turn.
-		var turns := int(ELCombatBrain.prove(_context(side), duel, LONGEST, PROOF).get("turns", 0))
+		var proof := ELCombatBrain.prove(_context(side), duel, LONGEST, PROOF)
+		if not _completed(proof):
+			print("UNRATED %s: win proof unavailable or budget exhausted" % String(names[i]))
+			continue
+		var turns := int(proof.turns)
 		if turns < 2:
 			print("PASSED %s proven=%d" % [String(names[i]), turns])
 			continue
 		var line: Array = []
-		var row := {"id": String(names[i]).get_basename(), "turns": turns, "found_by": document.expect.get("found_by", [])}
+		var row := {"id": String(names[i]).get_basename(), "turns": turns, "found_by": document.expect.get("found_by", []), "proof_complete": true}
 		# The proof holds in the game itself: won in time whoever defends,
 		# by the deep engine and by the computer player as it ships.
 		row.against = {"deep": _win_in(duel, side, DEEP, DEEP, turns, line), "search": _win_in(duel, side, DEEP, SEARCH, turns),
@@ -203,6 +216,7 @@ func _rate(folder: String, game: String, out: String, shard: String) -> void:
 		# the win proved again from where it leaves the duel.
 		var seen := {}
 		var keys := 0
+		var unknown := 0
 		if bool(row.sound) and not _thoughtless(row):
 			for item: Dictionary in ELCombatBrain.weigh(_context(side), duel, 2, 200000, 10):
 				var command: Dictionary = item.command
@@ -218,16 +232,31 @@ func _rate(folder: String, game: String, out: String, shard: String) -> void:
 				if after.phase == ELDuel.Phase.FINISHED:
 					if after.winner == side: keys += 1
 				elif left >= 1:
-					var again := int(ELCombatBrain.prove(_context(side), after, left, PROOF / 4).get("turns", 0))
-					if again > 0 and again <= left: keys += 1
+					var again := ELCombatBrain.prove(_context(side), after, left, PROOF / 4)
+					if not _completed(again):
+						# Unknown is not losing: counting a budget cutoff as a loss
+						# can turn an ordinary position into a false unique opening.
+						unknown += 1
+					elif int(again.turns) > 0 and int(again.turns) <= left: keys += 1
 		row.moves = seen.size()
 		row.keys = keys
+		row.unknown_openings = unknown
+		row.openings_complete = unknown == 0 and not seen.is_empty()
 		file.store_line(JSON.stringify(row))
 		file.flush()
-		print("RATED %s turns=%d sound=%s plain=%s blunt=%s obvious=%s idle=%s casts=%d moves=%d keys=%d" % [row.id, turns, str(row.sound), str(row.plain), str(row.blunt), str(row.obvious), str(row.idle), int(row.casts), int(row.moves), int(row.keys)])
+		print("RATED %s turns=%d sound=%s plain=%s blunt=%s obvious=%s idle=%s casts=%d moves=%d keys=%d unknown=%d" % [row.id, turns, str(row.sound), str(row.plain), str(row.blunt), str(row.obvious), str(row.idle), int(row.casts), int(row.moves), int(row.keys), unknown])
 
-## Won without thought: by the plain computer player, by sending everything
-## forward, by the obvious cast and a charge, or by doing nothing.
+## Missing or exhausted proofs establish neither a win nor a loss.
+func _completed(proof: Dictionary) -> bool:
+	return proof.has("turns") and proof.has("aborted") and not bool(proof.aborted)
+
+## Old rating rows did not distinguish losses from exhausted opening searches.
+## They must be rated again before their opening selectivity can be trusted.
+func _complete_rating(row: Dictionary) -> bool:
+	return bool(row.get("proof_complete", false)) and bool(row.get("openings_complete", false)) and int(row.get("unknown_openings", -1)) == 0
+
+## Solved by a simple baseline: the plain computer player, sending everything
+## forward, the plain cast and a charge, or doing nothing.
 func _thoughtless(row: Dictionary) -> bool:
 	return bool(row.plain) or bool(row.blunt) or bool(row.obvious) or bool(row.idle)
 
@@ -235,10 +264,11 @@ func _thoughtless(row: Dictionary) -> bool:
 func _key_share(row: Dictionary) -> float:
 	return float(row.keys) / float(row.moves) if int(row.moves) > 0 else 1.0
 
-## How hard a rated puzzle is, none of them won without thought: 3 one first
-## command alone wins out of many, 1 a two-turn win that several first
-## commands keep, 2 the rest.
+## A generated candidate's opening-selectivity tier, not a human difficulty
+## proof: 3 one tested command keeps the win, 1 several do in a two-turn
+## position, 2 the rest. Unknown proofs have no tier and cannot be packed.
 func _level(row: Dictionary) -> int:
+	if not _complete_rating(row): return 0
 	if int(row.keys) == 1 and int(row.moves) >= 4: return 3
 	if int(row.turns) == 2 and _key_share(row) >= 0.25: return 1
 	return 2
@@ -253,7 +283,22 @@ func _worth(row: Dictionary) -> float:
 	worth += 0.25 * minf(float(row.mine) + float(row.theirs), 8.0)
 	return worth
 
-func _pack(folder: String, game: String, ratings: String, count: int, skipped: Array) -> void:
+func _authored_pack(path: String) -> bool:
+	if not FileAccess.file_exists(path): return false
+	var document: Variant = JSON.parse_string(FileAccess.get_file_as_string(path))
+	if document is not Dictionary or document.get("puzzles") is not Array: return false
+	if int(document.get("version", 0)) >= 2: return true
+	return (document.puzzles as Array).any(func(entry: Variant) -> bool: return entry is Dictionary and bool(entry.get("authored", false)))
+
+func _pack(folder: String, game: String, ratings: String, count: int, skipped: Array, output_path := "") -> bool:
+	var explicit_output := not output_path.is_empty()
+	var target := output_path if explicit_output else "res://puzzles/generated/%s.json" % game
+	if _authored_pack(target) and not explicit_output:
+		printerr("Refusing to replace an authored pack at %s. Choose --out-pack=<path> explicitly." % target)
+		return false
+	if explicit_output and _authored_pack(target): print("Explicit --out-pack replaces authored pack: %s" % target)
+	else: print("Generated puzzle output: %s" % target)
+	if not explicit_output: print("The playable authored collection is unchanged; --out-pack selects a replacement destination explicitly.")
 	var rows: Array = []
 	var base := ratings.get_base_dir()
 	for name: String in DirAccess.get_files_at(base):
@@ -264,8 +309,10 @@ func _pack(folder: String, game: String, ratings: String, count: int, skipped: A
 	# Sound ones only, none won without thought (ratings from before the
 	# obvious player count as won by it), and none in which every first
 	# command wins.
+	var incomplete := rows.filter(func(row: Dictionary) -> bool: return not _complete_rating(row)).size()
+	if incomplete > 0: print("SKIPPED %d incomplete or legacy ratings; rerun --rate to finish their opening proofs." % incomplete)
 	rows = rows.filter(func(row: Dictionary) -> bool:
-		return bool(row.sound) and row.has("obvious") and not _thoughtless(row) and int(row.keys) >= 1 and int(row.keys) < int(row.moves) and not skipped.has(String(row.id)))
+		return _complete_rating(row) and bool(row.sound) and row.has("obvious") and not _thoughtless(row) and int(row.keys) >= 1 and int(row.keys) < int(row.moves) and not skipped.has(String(row.id)))
 	# One position out of each duel: the best of its turns.
 	rows.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
 		return _worth(a) > _worth(b) if _worth(a) != _worth(b) else String(a.id) < String(b.id))
@@ -286,7 +333,17 @@ func _pack(folder: String, game: String, ratings: String, count: int, skipped: A
 		var document: Dictionary = JSON.parse_string(FileAccess.get_file_as_string(folder.path_join(String(row.id) + ".json")))
 		puzzles.append({"id": String(row.id), "turns": int(row.turns), "level": _level(row), "hint": (row.line as Array)[0] if not (row.line as Array).is_empty() else {}, "state": document.state})
 		print("PACKED %s turns=%d level=%d worth=%.2f keys=%d of %d" % [String(row.id), int(row.turns), _level(row), _worth(row), int(row.keys), int(row.moves)])
-	DirAccess.make_dir_recursive_absolute("res://puzzles")
-	var file := FileAccess.open("res://puzzles/%s.json" % game, FileAccess.WRITE)
+	if puzzles.is_empty():
+		printerr("No eligible puzzles with completed proofs; no output file was changed.")
+		return false
+	var parent := target.get_base_dir()
+	if not parent.is_empty() and DirAccess.make_dir_recursive_absolute(parent) != OK:
+		printerr("Cannot create puzzle output directory: %s" % parent)
+		return false
+	var file := FileAccess.open(target, FileAccess.WRITE)
+	if file == null:
+		printerr("Cannot write generated puzzle pack: %s" % target)
+		return false
 	file.store_string(JSON.stringify({"format": "etherlords-puzzles", "version": 1, "game": game, "puzzles": puzzles}, "", true, true))
-	print("PACKED %d of %d rated" % [puzzles.size(), rows.size()])
+	print("PACKED %d of %d rated into %s" % [puzzles.size(), rows.size(), target])
+	return true

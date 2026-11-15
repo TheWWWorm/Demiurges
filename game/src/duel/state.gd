@@ -3138,6 +3138,10 @@ func _begin_attack(draw_card: bool) -> void:
 	var income: Dictionary = profile.table("CombatManaIncome")
 	# The final ether-income row is not applied in either edition.
 	var row: Dictionary = income.get(str(hero.turns), {}) if int(hero.turns) < income.size() else {}
+	# Authored tactical puzzles disclose a fixed supply of channels. Existing
+	# channels still refill and card effects still work; ordinary duels do not
+	# carry this option and keep their original income schedule.
+	if setup.get("puzzle_fixed_channels", false) == true: row = {}
 	var stasis := global_enchantment_count("STSI") > 0
 	# Update 1.03 (second game): each ether storm and ether breeze this hero cast
 	# on a creature still in play adds a channel or 3 ether here.
@@ -3180,6 +3184,9 @@ func gift_turns(side: int) -> int:
 
 ## `reject` ("creatures" or "spells") picks normally but keeps nothing of that class.
 func _draw(side: int, reject := "") -> bool:
+	# A fixed-hand study has no deck draws. Returning or creating a card uses
+	# _give_card directly and remains available as part of its combination.
+	if setup.get("puzzle_fixed_hands", false) == true: return false
 	var hero: Dictionary = heroes[side]
 	var slot := -1
 	var card := ""

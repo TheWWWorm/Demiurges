@@ -15,7 +15,10 @@ signal left
 
 const SOLVED_INK := Color("9fc98a")
 const FAILED_INK := Color("d99a86")
-const LEVELS := ["Easy puzzles", "Medium puzzles", "Hard puzzles"]
+const LEVELS := ["Easy puzzles", "Medium puzzles", "Hard puzzles", "Expert puzzles"]
+const GOALS := ["", "win", "clear", "survive", "control"]
+const GOAL_NAMES := {"win": "Win", "clear": "Clear army", "survive": "Survive", "control": "Control"}
+const HINTLESS_DESCRIPTION := "Completed in an attempt without revealing hints. You can earn this on a replay."
 ## The result follows the end of the battle by this long.
 const RESULT_DELAY := 1.2
 
@@ -37,13 +40,35 @@ var _list: PanelContainer
 var _list_note: Label
 var _switch: HBoxContainer
 var _groups: VBoxContainer
+var _list_scroll: ScrollContainer
+var _goal_choice: OptionButton
+var _difficulty_choice: OptionButton
+var _progress_choice: OptionButton
+var _search: LineEdit
+var _continue: Button
+## Filters survive opening the list and switching editions.
+var _goal_filter := 0
+var _difficulty_filter := 0
+var _progress_filter := 0
+var _search_query := ""
+var _continue_index := -1
 var _bar: PanelContainer
 var _bar_text: Label
+var _objective_text: Label
+var _rules_text: Label
+var _briefing_text: Label
+var _briefing_button: Button
 var _hint_text: Label
+var _hint_button: Button
+var _hide_hint: Button
+## Hiding a hint does not reveal the next one when it is reopened.
+var _hint_index := -1
 var _result: PanelContainer
 var _result_title: Label
 var _result_text: Label
+var _result_explanation: Label
 var _next: Button
+var _next_index := -1
 var _again: Button
 var _result_clock := 0.0
 var _result_shown := false
@@ -123,9 +148,13 @@ func _button(text: String, width := 120.0, height := 34.0) -> Button:
 	button.text = text
 	button.focus_mode = Control.FOCUS_NONE
 	button.custom_minimum_size = Vector2(width, height)
+	_dress_button(button)
+	return button
+
+func _dress_button(button: Button) -> void:
 	if _kit != null:
 		ELUiSounds.bind(button, profile, str(_kit.art.get("button", "")))
-		return button
+		return
 	for state: String in ["font_color", "font_focus_color", "font_pressed_color"]:
 		button.add_theme_color_override(state, ELMenuKit.TITLE_INK)
 	button.add_theme_color_override("font_hover_color", ELMenuKit.HOVER_INK)
@@ -134,7 +163,15 @@ func _button(text: String, width := 120.0, height := 34.0) -> Button:
 		style.border_color = Color(ELMenuKit.TITLE_INK, float(state[1]))
 		button.add_theme_stylebox_override(String(state[0]), style)
 	button.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
-	return button
+
+func _choice(labels: Array, width: float) -> OptionButton:
+	var choice := OptionButton.new()
+	choice.focus_mode = Control.FOCUS_NONE
+	choice.custom_minimum_size = Vector2(width, 32)
+	choice.add_theme_font_size_override("font_size", 14)
+	for label: String in labels: choice.add_item(ELRemakeText.t(label, profile))
+	_dress_button(choice)
+	return choice
 
 static func _text(size: int, ink: Color) -> Label:
 	var label := Label.new()
@@ -168,7 +205,7 @@ func _centred(panel: PanelContainer) -> void:
 func _build_list() -> void:
 	_list = PanelContainer.new()
 	_list.name = "PuzzleList"
-	_list.add_theme_stylebox_override("panel", _panel("frame", Vector4(34, 30, 34, 30)))
+	_list.add_theme_stylebox_override("panel", _panel("frame", Vector4(24, 20, 24, 20)))
 	_centred(_list)
 	_list.hide()
 	_over.add_child(_list)
@@ -186,14 +223,64 @@ func _build_list() -> void:
 	_list_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_list_note.custom_minimum_size.x = 560
 	column.add_child(_list_note)
-	var scroll := ScrollContainer.new()
-	scroll.custom_minimum_size = Vector2(600, 400)
-	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	column.add_child(scroll)
+	_search = LineEdit.new()
+	_search.name = "PuzzleSearch"
+	_search.custom_minimum_size = Vector2(600, 32)
+	_search.add_theme_font_size_override("font_size", 14)
+	_search.placeholder_text = ELRemakeText.t("Search titles, heroes and briefings", profile)
+	_search.tooltip_text = ELRemakeText.t("Match all words in titles, categories, briefings or hero names and levels, in English or Russian.", profile)
+	_search.clear_button_enabled = true
+	if _kit == null:
+		_search.add_theme_stylebox_override("normal", _panel("box", Vector4(10, 5, 10, 5)))
+		_search.add_theme_color_override("font_color", ELMenuKit.BODY_INK)
+	_search.text = _search_query
+	_search.text_changed.connect(func(value: String):
+		_search_query = value
+		_fill_list())
+	column.add_child(_search)
+	var filters := HBoxContainer.new()
+	filters.name = "PuzzleFilters"
+	filters.alignment = BoxContainer.ALIGNMENT_CENTER
+	filters.add_theme_constant_override("separation", 8)
+	column.add_child(filters)
+	_goal_choice = _choice(["Goal: All", "Goal: Win", "Goal: Clear", "Goal: Survive", "Goal: Control"], 170)
+	_goal_choice.name = "ObjectiveFilter"
+	_goal_choice.tooltip_text = ELRemakeText.t("Filter by objective", profile)
+	_goal_choice.select(_goal_filter)
+	_goal_choice.item_selected.connect(func(at: int):
+		_goal_filter = at
+		_fill_list())
+	filters.add_child(_goal_choice)
+	_difficulty_choice = _choice(["All difficulties", "Easy", "Medium", "Hard", "Expert"], 140)
+	_difficulty_choice.name = "DifficultyFilter"
+	_difficulty_choice.tooltip_text = ELRemakeText.t("Puzzle difficulty is separate from the heroes' levels.", profile)
+	_difficulty_choice.select(_difficulty_filter)
+	_difficulty_choice.item_selected.connect(func(at: int):
+		_difficulty_filter = at
+		_fill_list())
+	filters.add_child(_difficulty_choice)
+	_progress_choice = _choice(["All puzzles", "Unsolved", "Solved puzzles", "Needs practice", "Hintless"], 140)
+	_progress_choice.name = "ProgressFilter"
+	_progress_choice.tooltip_text = ELRemakeText.t("Filter by completion", profile)
+	_progress_choice.select(_progress_filter)
+	_progress_choice.item_selected.connect(func(at: int):
+		_progress_filter = at
+		_fill_list())
+	filters.add_child(_progress_choice)
+	_continue = _button("Continue", 110, 32)
+	_continue.name = "ContinuePuzzle"
+	_continue.pressed.connect(func():
+		if _continue_index >= 0: _choose_puzzle(_continue_index))
+	filters.add_child(_continue)
+	_list_scroll = ScrollContainer.new()
+	# Fits the game's 800 x 600 minimum window, including both game tabs.
+	_list_scroll.custom_minimum_size = Vector2(600, 248)
+	_list_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	column.add_child(_list_scroll)
 	_groups = VBoxContainer.new()
 	_groups.add_theme_constant_override("separation", 14)
 	_groups.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	scroll.add_child(_groups)
+	_list_scroll.add_child(_groups)
 	var back := Button.new()
 	back.focus_mode = Control.FOCUS_NONE
 	back.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
@@ -205,45 +292,150 @@ func _build_list() -> void:
 	back.pressed.connect(_close_list)
 	column.add_child(back)
 
+## Authored text is localised in the pack; legacy entries need no metadata.
+func _entry_text(entry: Dictionary, key: String, fallback := "") -> String:
+	if ELRemakeText.language(profile) == "ru":
+		var translated := String(entry.get(key + "_ru", ""))
+		if not translated.is_empty(): return translated
+	return String(entry.get(key, fallback))
+
 ## Opens the list of `source`'s puzzles.
 func open_list(source: ELProfile) -> void:
 	_use(source)
-	var entries := ELPuzzles.list(profile.id)
 	_fill_switch()
-	_list_note.text = "Each battle can be won within the turns given, whatever the enemy does. Find the way.\nSolved: %d of %d" % [ELPuzzles.solved_count(profile.id), entries.size()]
+	_fill_list()
+	_shade.show()
+	_list.show()
+	_result.hide()
+
+func _choose_puzzle(index: int) -> void:
+	_list.hide()
+	_shade.hide()
+	play_requested.emit(index)
+
+func _goal_name(entry: Dictionary) -> String:
+	var goal := String(entry.get("objective", {}).get("type", "win"))
+	return ELRemakeText.t(String(GOAL_NAMES.get(goal, "Win")), profile)
+
+## A matchup describes the starting heroes, without borrowing puzzle difficulty.
+## Card rows put the level first so a long name cannot hide an asymmetric match.
+func _matchup_lines(entry: Dictionary, compact := false) -> PackedStringArray:
+	var lines := PackedStringArray()
+	var heroes := ELPuzzles.combatants(entry, profile)
+	for side in mini(heroes.size(), 2):
+		var who := ELRemakeText.t("You" if side == 0 else "Opponent", profile)
+		var hero: Dictionary = heroes[side]
+		if compact:
+			lines.append(ELRemakeText.t("%s · Lv. %d · %s", profile) % [who, int(hero.level), String(hero.name)])
+		else:
+			lines.append(ELRemakeText.t("%s: %s · Hero level %d", profile) % [who, String(hero.name), int(hero.level)])
+	return lines
+
+## Search only descriptions visible before play, in either supported language.
+func _matches_search(entry: Dictionary) -> bool:
+	var words := _search_query.strip_edges().to_lower().split(" ", false)
+	if words.is_empty(): return true
+	var fields := PackedStringArray()
+	for key: String in ["title", "category", "briefing", "title_ru", "category_ru", "briefing_ru"]:
+		fields.append(String(entry.get(key, "")))
+	for language: String in ["en", "ru"]:
+		for hero: Dictionary in ELPuzzles.combatants(entry, profile, language):
+			fields.append(String(hero.name))
+			fields.append(("Hero level %d · Lv. %d" if language == "en" else "Уровень героя %d · ур. %d") % [int(hero.level), int(hero.level)])
+	var searchable := "\n".join(fields).to_lower()
+	for word: String in words:
+		if not searchable.contains(word): return false
+	return true
+
+func _matches_filter(entry: Dictionary, solved: bool, mastered: bool) -> bool:
+	if _goal_filter > 0 and entry.get("objective", {}).get("type", "win") != GOALS[_goal_filter]: return false
+	if _difficulty_filter > 0 and clampi(int(entry.get("level", 2)), 1, LEVELS.size()) != _difficulty_filter: return false
+	if not _matches_search(entry): return false
+	match _progress_filter:
+		1: return not solved
+		2: return solved
+		3: return solved and not mastered
+		4: return mastered
+	return true
+
+## Filtering keeps each puzzle's original index, difficulty group and progress.
+func _fill_list() -> void:
+	var entries := ELPuzzles.list(profile.id)
 	for child: Node in _groups.get_children():
 		_groups.remove_child(child)
 		child.queue_free()
+	_list_scroll.scroll_vertical = 0
+	_continue_index = -1
+	var shown := 0
+	var hintless := 0
 	var grids := {}
 	for i in entries.size():
 		var entry: Dictionary = entries[i]
-		var level := clampi(int(entry.get("level", 2)), 1, 3)
+		var taken := ELPuzzles.solved_in(profile.id, String(entry.id))
+		var mastered := ELPuzzles.mastered(profile.id, String(entry.id))
+		if mastered: hintless += 1
+		if not _matches_filter(entry, taken > 0, mastered): continue
+		shown += 1
+		if (taken == 0 or _progress_filter == 3) and _continue_index < 0: _continue_index = i
+		var level := clampi(int(entry.get("level", 2)), 1, LEVELS.size())
 		if not grids.has(level):
 			var grid := GridContainer.new()
-			grid.columns = 4
+			grid.columns = 2
+			grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 			grid.add_theme_constant_override("h_separation", 8)
 			grid.add_theme_constant_override("v_separation", 8)
 			_group(_groups, LEVELS[level - 1]).add_child(grid)
 			grids[level] = grid
-		var taken := ELPuzzles.solved_in(profile.id, String(entry.id))
-		var button := _button("%d  ·  %d turns" % [i + 1, int(entry.turns)], 140, 36)
-		# A solved puzzle is ticked, in the Options check box.
+		var title := _entry_text(entry, "title", "Puzzle %d" % [i + 1])
+		var category := _entry_text(entry, "category")
+		var details := ELRemakeText.t("1 turn", profile) if int(entry.turns) == 1 else ELRemakeText.t("%d turns", profile) % int(entry.turns)
+		# Budget and goal get their own line; a long category cannot hide them.
+		details += " · " + _goal_name(entry)
+		var caption := "%d. %s" % [i + 1, title] if entry.has("title") else title
+		if mastered: caption = "★ " + caption
 		var box: Texture2D = _over.theme.get_icon("checked" if taken > 0 else "unchecked", "CheckBox") if _over.theme != null and _over.theme.has_icon("checked", "CheckBox") else null
+		if taken > 0 and box == null: caption += " · " + ELRemakeText.t("Solved", profile)
+		var card_text := "%s\n%s" % [caption, details]
+		if not category.is_empty(): card_text += "\n" + category
+		var matchup := _matchup_lines(entry, true)
+		if not matchup.is_empty(): card_text += "\n" + "\n".join(matchup)
+		var button := _button(card_text, 282, 62 if matchup.is_empty() else 98)
+		button.name = "Puzzle_%d" % (i + 1)
+		button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		button.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		button.clip_text = true
+		button.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+		button.add_theme_font_size_override("font_size", 14)
+		button.tooltip_text = title + "\n" + details
+		if not category.is_empty(): button.tooltip_text += "\n" + category
+		if not matchup.is_empty(): button.tooltip_text += "\n" + "\n".join(_matchup_lines(entry))
+		var briefing := _entry_text(entry, "briefing")
+		if not briefing.is_empty(): button.tooltip_text += "\n" + briefing
+		# A solved puzzle is ticked, in the Options check box.
 		if box != null:
 			button.icon = box
 			button.add_theme_constant_override("h_separation", 8)
-		elif taken > 0: button.text = "%d  ·  %d turns  ·  Solved" % [i + 1, int(entry.turns)]
 		if taken > 0:
-			button.tooltip_text = "Solved in turn %d" % taken
+			button.tooltip_text += "\n" + ELRemakeText.t("Solved in turn %d", profile) % taken
 			for state: String in ["font_color", "font_focus_color"]: button.add_theme_color_override(state, SOLVED_INK)
-		button.pressed.connect(func():
-			_list.hide()
-			_shade.hide()
-			play_requested.emit(i))
+		if mastered: button.tooltip_text += "\n★ " + ELRemakeText.t(HINTLESS_DESCRIPTION, profile)
+		button.pressed.connect(func(): _choose_puzzle(i))
 		(grids[level] as GridContainer).add_child(button)
-	_shade.show()
-	_list.show()
-	_result.hide()
+	if shown == 0:
+		var empty := _text(15, ELMenuKit.BODY_INK)
+		empty.name = "EmptyPuzzleList"
+		empty.text = "No puzzles match these filters."
+		empty.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		_groups.add_child(empty)
+	_list_note.text = (ELRemakeText.t("Solved: %d of %d · Without hints: %d", profile) % [ELPuzzles.solved_count(profile.id), entries.size(), hintless]) + "\n" + (ELRemakeText.t("Shown: %d of %d", profile) % [shown, entries.size()])
+	_list_note.tooltip_text = "★ " + ELRemakeText.t(HINTLESS_DESCRIPTION, profile)
+	_continue.disabled = _continue_index < 0
+	if _progress_filter == 3:
+		_continue.tooltip_text = ELRemakeText.t("Practise the first matching puzzle without a hintless completion." if _continue_index >= 0 else "No puzzles needing practice match these filters.", profile)
+	elif _progress_filter in [2, 4]:
+		_continue.tooltip_text = ELRemakeText.t("Choose a completed puzzle to replay.", profile)
+	else:
+		_continue.tooltip_text = ELRemakeText.t("Start the first unsolved puzzle matching these filters." if _continue_index >= 0 else "No unsolved puzzles match these filters.", profile)
 
 ## The switch between the games whose puzzles can be played; hidden with
 ## only one. The shown game's button stays pressed.
@@ -276,6 +468,10 @@ func _fill_switch() -> void:
 func _close_list() -> void:
 	_list.hide()
 	_shade.hide()
+	# Browsing the other edition rebuilt these controls. Back still returns
+	# to the running puzzle, with its own language, rules and visible strip.
+	if run != null and profile != null and profile.id != run.edition:
+		begin(run.duel.profile, run)
 	# Over a puzzle's battle the list closes back to it; an ended attempt
 	# shows its result again.
 	if run == null: left.emit()
@@ -295,40 +491,73 @@ func _build_bar() -> void:
 	var column := VBoxContainer.new()
 	column.add_theme_constant_override("separation", 4)
 	_bar.add_child(column)
+	_bar_text = _text(16, ELMenuKit.TITLE_INK)
+	_bar_text.custom_minimum_size.x = 660
+	_bar_text.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	column.add_child(_bar_text)
+	_objective_text = _text(14, ELMenuKit.BODY_INK)
+	_objective_text.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	column.add_child(_objective_text)
+	_rules_text = _text(12, ELMenuKit.BODY_INK)
+	_rules_text.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_rules_text.hide()
+	column.add_child(_rules_text)
 	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 8)
+	row.add_theme_constant_override("separation", 6)
 	row.alignment = BoxContainer.ALIGNMENT_CENTER
 	column.add_child(row)
-	_bar_text = _text(16, ELMenuKit.TITLE_INK)
-	row.add_child(_bar_text)
-	var gap := Control.new()
-	gap.custom_minimum_size.x = 6
-	row.add_child(gap)
-	var hint := _button("Hint", 76, 30)
-	hint.pressed.connect(func():
-		if _hint_text.visible: _hint_text.hide()
-		else: show_hint())
-	row.add_child(hint)
-	var again := _button("Restart", 96, 30)
+	_briefing_button = _button("Briefing", 86, 28)
+	_briefing_button.toggle_mode = true
+	_briefing_button.pressed.connect(func():
+		_briefing_text.visible = _briefing_button.button_pressed)
+	row.add_child(_briefing_button)
+	_hint_button = _button("Hint", 115, 28)
+	_hint_button.pressed.connect(show_hint)
+	row.add_child(_hint_button)
+	_hide_hint = _button("Hide hint", 90, 28)
+	_hide_hint.pressed.connect(func():
+		_hint_text.hide()
+		_update_hint_buttons())
+	_hide_hint.hide()
+	row.add_child(_hide_hint)
+	var again := _button("Restart", 88, 28)
 	again.pressed.connect(func():
 		if run != null: play_requested.emit(run.index))
 	row.add_child(again)
-	var others := _button("Puzzles", 96, 30)
+	var others := _button("Puzzles", 88, 28)
 	others.pressed.connect(func():
 		if profile != null: open_list(profile))
 	row.add_child(others)
-	var leave := _button("Leave", 86, 30)
+	var leave := _button("Leave", 78, 28)
 	leave.pressed.connect(leave_puzzles)
 	row.add_child(leave)
-	_hint_text = _text(15, ELMenuKit.BODY_INK)
+	_briefing_text = _text(14, ELMenuKit.BODY_INK)
+	_briefing_text.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_briefing_text.hide()
+	column.add_child(_briefing_text)
+	_hint_text = _text(14, ELMenuKit.BODY_INK)
+	_hint_text.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_hint_text.hide()
 	column.add_child(_hint_text)
 
-## The first command of a winning line, under the strip.
+## Reveal one hint per deliberate click, from a nudge to the concrete idea.
+## Reopening a hidden hint keeps its level; legacy command hints still work.
 func show_hint() -> void:
-	if run == null: return
-	_hint_text.text = run.hint()
+	if run == null or run.hint_count() <= 0: return
+	var previous := _hint_index
+	if _hint_index < 0: _hint_index = 0
+	elif _hint_text.visible: _hint_index = mini(_hint_index + 1, run.hint_count() - 1)
+	if _hint_index != previous: run.note_hint(_hint_index)
+	_hint_text.text = "%s\n%s" % [ELRemakeText.t("Hint %d of %d", profile) % [_hint_index + 1, run.hint_count()], run.hint(_hint_index)]
 	_hint_text.show()
+	_update_hint_buttons()
+
+func _update_hint_buttons() -> void:
+	var count := run.hint_count() if run != null else 0
+	_hide_hint.visible = _hint_text.visible
+	_hint_button.text = "Next hint" if _hint_text.visible else "Hint"
+	_hint_button.disabled = count <= 0 or (_hint_text.visible and _hint_index + 1 >= count)
+	_hint_button.tooltip_text = "Reveal one more hint" if _hint_text.visible else "Hints start with a nudge. Each further hint reveals more."
 
 ## The host has started `attempt`'s duel: the strip shows over it.
 func begin(source: ELProfile, attempt: ELPuzzles.Run) -> void:
@@ -337,7 +566,14 @@ func begin(source: ELProfile, attempt: ELPuzzles.Run) -> void:
 	_result_clock = 0.0
 	_result_shown = false
 	_shown_turn = -1
+	_hint_index = clampi(run.hints_used - 1, -1, run.hint_count() - 1)
 	_hint_text.hide()
+	_update_hint_buttons()
+	var matchup := "\n".join(_matchup_lines(run.entry))
+	_briefing_text.text = matchup + ("\n\n" if not matchup.is_empty() else "") + run.briefing()
+	_briefing_text.hide()
+	_briefing_button.set_pressed_no_signal(false)
+	_briefing_button.visible = not _briefing_text.text.is_empty()
 	_list.hide()
 	_shade.hide()
 	_result.hide()
@@ -347,8 +583,24 @@ func begin(source: ELProfile, attempt: ELPuzzles.Run) -> void:
 func _refresh_bar() -> void:
 	if run == null: return
 	_shown_turn = run.turn
-	_bar_text.text = "Puzzle %d  ·  Win in %d turns  ·  Turn %d of %d" % [run.index + 1, run.allowed, clampi(run.turn, 1, run.allowed), run.allowed]
-	if ELPuzzles.solved_in(run.edition, String(run.entry.id)) > 0: _bar_text.text += "  ·  Solved"
+	_bar_text.text = "%s  ·  %s" % [run.title(), ELRemakeText.t("Turn %d of %d", profile) % [clampi(run.turn, 1, run.allowed), run.allowed]]
+	if ELPuzzles.mastered(run.edition, String(run.entry.id)): _bar_text.text += "  ·  ★"
+	elif ELPuzzles.solved_in(run.edition, String(run.entry.id)) > 0: _bar_text.text += "  ·  " + ELRemakeText.t("Solved", profile)
+	_bar_text.tooltip_text = run.title() + ("\n" + run.category() if not run.category().is_empty() else "")
+	if ELPuzzles.mastered(run.edition, String(run.entry.id)): _bar_text.tooltip_text += "\n★ " + ELRemakeText.t(HINTLESS_DESCRIPTION, profile)
+	_objective_text.text = run.objective_text()
+	var rules := PackedStringArray()
+	var details := PackedStringArray()
+	if run.duel != null and bool(run.duel.setup.get("puzzle_fixed_hands", false)):
+		rules.append(ELRemakeText.t("Fixed hands", profile))
+		details.append(ELRemakeText.t("Neither hero draws from a deck.", profile))
+	if run.duel != null and bool(run.duel.setup.get("puzzle_fixed_channels", false)):
+		rules.append(ELRemakeText.t("Fixed channels", profile))
+		details.append(ELRemakeText.t("Existing channels refill normally; natural channel growth is disabled.", profile))
+	_rules_text.text = " · ".join(rules)
+	_rules_text.visible = not rules.is_empty()
+	if not details.is_empty(): details.append(ELRemakeText.t("Card effects and abilities still work.", profile))
+	_rules_text.tooltip_text = "\n".join(details)
 
 ## Follows the attempt each frame; `idle` once nothing of the battle is
 ## still being shown (a fight, a spell, the winner's clip).
@@ -378,15 +630,20 @@ func _build_result() -> void:
 	_result_title = ELMenuKit.heading("", 22)
 	column.add_child(_result_title)
 	_result_text = _text(15, ELMenuKit.BODY_INK)
-	_result_text.custom_minimum_size.x = 380
+	_result_text.custom_minimum_size.x = 540
+	_result_text.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	column.add_child(_result_text)
+	_result_explanation = _text(14, ELMenuKit.BODY_INK)
+	_result_explanation.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_result_explanation.hide()
+	column.add_child(_result_explanation)
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 10)
 	row.alignment = BoxContainer.ALIGNMENT_CENTER
 	column.add_child(row)
-	_next = _button("Next puzzle", 140)
+	_next = _button("Next challenge", 140)
 	_next.pressed.connect(func():
-		if run != null and profile != null: play_requested.emit(mini(run.index + 1, ELPuzzles.list(profile.id).size() - 1)))
+		if run != null and _next_index >= 0: play_requested.emit(_next_index))
 	row.add_child(_next)
 	_again = _button("Try again", 130)
 	_again.pressed.connect(func():
@@ -396,10 +653,39 @@ func _build_result() -> void:
 	others.pressed.connect(func():
 		if profile != null: open_list(profile))
 	row.add_child(others)
+	# The modal shade covers the strip's Leave button. Results need their
+	# own exit, including a failed attempt and the last puzzle in a set.
+	var leave := _button("Leave", 90)
+	leave.name = "PuzzleLeave"
+	leave.pressed.connect(leave_puzzles)
+	row.add_child(leave)
 
 ## The attempt's result (also on the end-of-phase control once it is over).
 func show_result() -> void:
 	if run != null and not run.outcome.is_empty() and not _list.visible: _show_result()
+
+## The completed entry may have disappeared from Unsolved or Needs practice.
+## Scan original indices, exclude Retry's current entry, and wrap only once.
+func _refresh_next() -> void:
+	_next_index = -1
+	_next.visible = run != null and run.outcome == "solved"
+	_next.disabled = true
+	_next.text = ELRemakeText.t("Next challenge", profile)
+	_next.tooltip_text = ELRemakeText.t("No other puzzles match these filters.", profile)
+	if not _next.visible: return
+	var entries := ELPuzzles.list(run.edition)
+	for step in range(1, entries.size()):
+		var index := (run.index + step) % entries.size()
+		var entry: Dictionary = entries[index]
+		var solved := ELPuzzles.solved_in(run.edition, String(entry.id)) > 0
+		var mastered := ELPuzzles.mastered(run.edition, String(entry.id))
+		if not _matches_filter(entry, solved, mastered): continue
+		_next_index = index
+		var wrapped := index < run.index
+		_next.text = ELRemakeText.t("First matching" if wrapped else "Next challenge", profile)
+		_next.tooltip_text = ELRemakeText.t("Wrap to: %s" if wrapped else "Next: %s", profile) % _entry_text(entry, "title", ELRemakeText.t("Puzzle %d", profile) % (index + 1))
+		_next.disabled = false
+		return
 
 func _show_result() -> void:
 	if run == null: return
@@ -407,13 +693,20 @@ func _show_result() -> void:
 	var solved := run.outcome == "solved"
 	_result_title.text = "Puzzle solved" if solved else "Not solved"
 	_result_title.add_theme_color_override("font_color", SOLVED_INK if solved else FAILED_INK)
+	_result_explanation.hide()
+	_result_text.tooltip_text = ""
 	if solved:
 		var count := ELPuzzles.list(profile.id).size()
-		_result_text.text = "Won in turn %d of %d.\nSolved: %d of %d" % [clampi(run.turn, 1, run.allowed), run.allowed, ELPuzzles.solved_count(profile.id), count]
-		_next.visible = run.index + 1 < count
+		_result_text.text = "Completed in turn %d of %d.\nSolved: %d of %d" % [clampi(run.turn, 1, run.allowed), run.allowed, ELPuzzles.solved_count(profile.id), count]
+		if run.hints_used == 0:
+			_result_text.text += "\n★ " + ELRemakeText.t("Solved without hints", profile)
+			_result_text.tooltip_text = ELRemakeText.t(HINTLESS_DESCRIPTION, profile)
+		else: _result_text.text += "\n" + ELRemakeText.t("Hints revealed: %d", profile) % run.hints_used
+		_result_explanation.text = run.explanation()
+		_result_explanation.visible = not _result_explanation.text.is_empty()
 	else:
-		_result_text.text = "Your hero has fallen." if run.reason == "lost" else "The turns have run out: the win was there within %d turns." % run.allowed
-		_next.hide()
+		_result_text.text = run.failure_text()
+	_refresh_next()
 	_again.text = "Play again" if solved else "Try again"
 	_shade.show()
 	_result.show()

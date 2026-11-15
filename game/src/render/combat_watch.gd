@@ -12,9 +12,9 @@ extends Node
 ## - one with shoulder parts and no head part (the second game's heroes,
 ##   whose head belongs to the body mesh: "l_plecho", "r_plecho") is framed
 ##   a little above the middle of the shoulders, the same way;
-## - any other by its posed meshes' bounds: head and chest when it stands
-##   clearly taller than it is wide (UPRIGHT_FROM), whole when it is low or
-##   long (a rat, a worm).
+## - a hero with neither by its posed meshes' bounds: head and chest when it
+##   stands clearly taller than it is wide (UPRIGHT_FROM), else whole;
+## - a creature whole, by its posed meshes' bounds (WHOLE_AIR).
 ## The aim follows the figure as its animation moves it (a hero bending to
 ## cast, a creature running to its fight), smoothly, so that the picture
 ## does not shake with every step of the animation. Bounds are those of the
@@ -37,7 +37,14 @@ extends Node
 ## rendered while no panel shows the readout (`active`).
 
 const DWELL := 4.5
-const FOV := 26.0
+## Wide enough that the camera stands close to its figure: at 26 degrees it
+## stood so far out that on a sloping arena it was often inside the ground.
+const FOV := 38.0
+## How far above the ground the camera keeps, and above the ground between
+## it and its aim (world units), checked every RECHECK seconds.
+const CLEARANCE := 0.45
+const SIGHT_CLEARANCE := 0.15
+const SIGHT_SAMPLES := [0.25, 0.5, 0.75]
 const HIDDEN_LAYER := 2
 ## Aiming at a part: the names looked for (lower case, as a part of the
 ## node's name), how far above the part the aim is and how much is framed,
@@ -56,8 +63,11 @@ const SIDES := [22.0, -22.0, 48.0, -48.0, 75.0, -75.0, 105.0, -105.0]
 const DRIFT := 12.0
 ## How far above its aim the camera stands (a share of the distance), and
 ## when no side is clear.
-const RAISE := 0.13
+const RAISE := 0.32
 const RAISE_OVER := 0.7
+## A creature is framed whole, this much taller than its posed bounds.
+const WHOLE_AIR := 1.2
+const WHOLE_DEPTH := 0.8
 ## How fast the aim follows a moving part (per second).
 const FOLLOW := 5.0
 const RECHECK := 0.4
@@ -87,6 +97,11 @@ var _checked := 0.0
 var _side := 22.0
 var _raise := RAISE
 var _aim := Vector3.INF
+## The arena's ground height at (x, z), or none; and the lowest the camera
+## may stand now (eased so that a change does not jump).
+var ground := Callable()
+var _floor := -INF
+var _floor_wanted := -INF
 
 func _init() -> void:
 	viewport = SubViewport.new()
@@ -101,10 +116,11 @@ func _init() -> void:
 	camera.current = true
 
 ## Shows `world` (the battle's) with the main camera's environment.
-func attach(world: World3D, main: Camera3D) -> void:
+func attach(world: World3D, main: Camera3D, ground_height := Callable()) -> void:
 	viewport.world_3d = world
 	camera.environment = main.environment if main != null else null
 	camera.attributes = main.attributes if main != null else null
+	ground = ground_height
 	subject = -1
 	subjects = []
 
@@ -179,6 +195,14 @@ static func framing(box: AABB, aspect: float) -> Dictionary:
 		return {"middle": middle, "span": span}
 	return {"middle": middle, "span": maxf(box.size.y, across / maxf(aspect, 0.1)) * 1.12}
 
+## The height to frame for the whole of a figure with these bounds, with a
+## little air round it. Its length counts as well as its width: a long
+## creature turned towards the camera (a rat) stood so close that its
+## snout filled the picture.
+static func whole_span(box: AABB, aspect: float) -> float:
+	var across := maxf(box.size.x, box.size.z)
+	return maxf(box.size.y, maxf(across / maxf(aspect, 0.1), across * WHOLE_DEPTH)) * WHOLE_AIR
+
 ## The figure's parts of one kind (HEAD, SHOULDERS) that stand off the ground.
 static func parts_named(node: Node3D, kind: Dictionary) -> Array:
 	var found: Array = []
@@ -205,7 +229,9 @@ func _frame(entry: Dictionary) -> void:
 	var node: Node3D = entry.node
 	_parts = []
 	_aim = Vector3.INF
-	for kind: Dictionary in [HEAD, SHOULDERS]:
+	# Heroes (ids 0 and 1) only: a creature framed on its head part or by the
+	# top of its bounds showed little but a raised sword, or an ogre's chin.
+	for kind: Dictionary in ([HEAD, SHOULDERS] if int(entry.id) < 2 else []):
 		var found := parts_named(node, kind)
 		if found.is_empty(): continue
 		var height := _middle(found).y - node.global_position.y
@@ -215,9 +241,12 @@ func _frame(entry: Dictionary) -> void:
 		break
 	if _parts.is_empty():
 		var box := bounds(node)
-		_upright = box.size.y >= maxf(box.size.x, box.size.z) * UPRIGHT_FROM
-		_span = framing(box, float(viewport.size.x) / float(viewport.size.y)).span
+		_upright = int(entry.id) < 2 and box.size.y >= maxf(box.size.x, box.size.z) * UPRIGHT_FROM
+		var aspect := float(viewport.size.x) / float(viewport.size.y)
+		_span = framing(box, aspect).span if _upright else whole_span(box, aspect)
 	_checked = 0.0
+	_floor = -INF
+	_floor_wanted = -INF
 	_choose_side(entry, _target(node))
 
 ## The other figures as [centre, radius] each, for the line of sight.
@@ -277,5 +306,21 @@ func _place(entry: Dictionary, delta: float) -> void:
 		_checked = 0.0
 		if _blocked(_stand(entry, _aim, _side + drift, _raise), _aim, _others()): _choose_side(entry, _aim)
 	var from := _stand(entry, _aim, _side + drift, _raise)
+	if _floor_wanted == -INF or _checked == 0.0: _floor_wanted = lowest_stand(from, _aim, ground)
+	_floor = _floor_wanted if _floor == -INF else lerpf(_floor, _floor_wanted, 1.0 - exp(-FOLLOW * delta))
+	from.y = maxf(from.y, _floor)
 	camera.global_position = from
 	if not from.is_equal_approx(_aim): camera.look_at(_aim, Vector3.UP)
+
+## The lowest the camera at `from` may stand to keep CLEARANCE over the
+## ground under it and SIGHT_CLEARANCE over the ground between it and `aim`
+## (-INF when the arena's ground is not known).
+static func lowest_stand(from: Vector3, aim: Vector3, ground_at: Callable) -> float:
+	if not ground_at.is_valid(): return -INF
+	var lowest := float(ground_at.call(from.x, from.z)) + CLEARANCE
+	for t: float in SIGHT_SAMPLES:
+		var point := from.lerp(aim, t)
+		var needed := float(ground_at.call(point.x, point.z)) + SIGHT_CLEARANCE
+		# The sight line at t is from.y + (aim.y - from.y) * t; solve for from.y.
+		lowest = maxf(lowest, (needed - aim.y * t) / (1.0 - t))
+	return lowest
