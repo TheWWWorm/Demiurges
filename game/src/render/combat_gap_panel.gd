@@ -22,11 +22,13 @@ extends Control
 ## - "book": the shown hero's spellbook, one icon per book slot with the
 ##   charges still to be drawn from it; a slot with none is veiled.
 ## - "advice": the battle adviser (ELCombatAdvisor): both heroes' portraits
-##   with their chances to win in percent and a gauge between them, and
+##   with the position estimate for each (out of 100, to the nearest
+##   ESTIMATE_STEP: an uncalibrated reading, not a measured chance to win)
+##   and a gauge between them, and
 ##   (it flashes green when the chance rises and red when it falls, whoever
 ##   moved, see FLASH_TIME); under them, in a caption box, the verdict on the player's last move
-##   with the winning chance it gave away ("Your move: mistake, −14% of the
-##   chance").
+##   with the points of the estimate it gave away ("Your move: mistake, −14
+##   of the estimate").
 ## - "graves" and "auras": both heroes side by side in two rows, each led by
 ##   its hero's portrait, showing their graveyards or the enchantments on
 ##   them, the newest first. The two are one stop of the arrows: which list
@@ -43,6 +45,8 @@ extends Control
 signal slide_changed(index: int)
 
 const SLIDES := ["book", "advice", "graves", "auras", "watch"]
+## The adviser's estimate is shown rounded to this many points.
+const ESTIMATE_STEP := 5
 const TITLES := ["Spellbook", "Battle adviser", "Graveyards", "Hero enchantments", "Battle camera"]
 const MIN_WIDTH := 150.0
 const INK := ELCombatRail.COUNT_COLOR
@@ -170,9 +174,13 @@ func _arrow(direction: int) -> ELCutPartButton:
 	add_child(arrow)
 	return arrow
 
-## Whether the width holds the arrows and a readout between them.
+## Off (setting "battle_readouts") the panel is only the plain strip.
+var readouts := true
+
+## Whether the readouts are on and the width holds the arrows and a readout
+## between them.
 func roomy() -> bool:
-	return size.x >= MIN_WIDTH
+	return readouts and size.x >= MIN_WIDTH
 
 func layout() -> void:
 	if _left == null: return
@@ -443,9 +451,10 @@ func _draw_advice(advice: Dictionary, room: Rect2) -> void:
 		if _pass == 1: _canvas.draw_rect(face.grow(-0.5), RIM, false, 1.0)
 		if i < names.size(): _spots.append({"rect": face, "tooltip": names[i]})
 	var middle := room.position.y + SMALL * 0.5
-	var share := roundi(chance * 100.0)
-	_text("%d%%" % share, Vector2(own.end.x + 18, middle), 13, INK, 0)
-	_text("%d%%" % (100 - share), Vector2(foe.position.x - 18, middle), 13, INK, 0)
+	# An estimate, not a measured chance: shown to the nearest ESTIMATE_STEP.
+	var share := ESTIMATE_STEP * roundi(chance * 100.0 / ESTIMATE_STEP)
+	_text("≈%d" % share, Vector2(own.end.x + 18, middle), 13, INK, 0)
+	_text("≈%d" % (100 - share), Vector2(foe.position.x - 18, middle), 13, INK, 0)
 	if _pass == 1: _gauge(Rect2(own.end.x + 36, middle - 5, foe.position.x - own.end.x - 72, 10), chance, _flash_from, clampf(1.0 - _flash_age / FLASH_TIME, 0.0, 1.0))
 	var grade := int(advice.get("grade", -1))
 	if grade < 0:
@@ -454,7 +463,7 @@ func _draw_advice(advice: Dictionary, room: Rect2) -> void:
 	# What the move was, and the winning chance it gave away against the best.
 	var words := _t(VERDICTS[grade])
 	var loss := roundi(float(advice.get("loss", 0.0)))
-	if grade > 0 and loss > 0: words += ", −%d%% %s" % [loss, _t("of the chance")]
+	if grade > 0 and loss > 0: words += ", −%d %s" % [loss, _t("of the estimate")]
 	_text(words, caption.get_center(), 11, GRADE_COLOURS[grade], 0)
 	if advice.get("pending", false): _text("…", Vector2(caption.end.x - 4, caption.get_center().y), 13, DIM, 1)
 

@@ -4,8 +4,8 @@ extends Control
 ## the tutorial text in TP_TextBounds with its scroll arrows, and the Show and
 ## Close buttons drawn from the original CutParts art. Design coordinates are
 ## the 1024x768 Controls rows; the panel keeps its distance from the right edge
-## on wider windows. In tutorial mode only Show (text on/off) and Close are
-## offered. In replay player mode (Duel -> Replay) the panel carries the
+## on wider windows. In tutorial mode the text fills a tall column along the
+## right edge and only Close is offered, as in the original. In replay player mode (Duel -> Replay) the panel carries the
 ## original player controls: Rewind, Play/Pause, Pause at comment, editor mode
 ## (Show) and Close; editor mode adds Next command / Next phase / Next turn and
 ## Player mode (HideE). Until the first recorded command plays, Inventory
@@ -30,7 +30,17 @@ signal step_requested(mode: int)
 const DESIGN := Vector2(1024, 768)
 const BUTTONS := ["TP_Show", "TP_Close", "TP_ScrollUp", "TP_ScrollDown", "TP_Back", "TP_Inventory", "TP_Play", "TP_TextPause",
 	"TP_Pause1E", "TP_Pause2E", "TP_Pause3E", "TP_HideE", "TP_CloseE", "TP_SaveE", "TP_PointerE"]
-const TUTORIAL_BUTTONS := ["TP_Show", "TP_Close"]
+## Tutorial mode: the original shows only the close cross over a tall text
+## column along the right edge (measured on the original at 1024x768: the
+## dimmed column x 686..1024, y 0..552; text from x 696, y 44, 298 wide; the
+## cross at 987,10; the scroll track at x 1000..1017 with its arrows at
+## its ends), in bold Arial with 16 px lines.
+const TUTORIAL_BUTTONS := ["TP_Close"]
+const TUTORIAL_BOUNDS := Rect2(696, 44, 298, 498)
+const TUTORIAL_BACK := Rect2(686, 0, 338, 552)
+const TUTORIAL_TRACK := Rect2(1000, 44, 17, 498)
+const TUTORIAL_PLACES := {"TP_Close": Vector2(987, 10), "TP_ScrollUp": Vector2(1001, 45), "TP_ScrollDown": Vector2(1001, 529)}
+const TUTORIAL_FONT_SIZE := 14
 const PLAYER_BUTTONS := ["TP_Back", "TP_Play", "TP_TextPause", "TP_Show", "TP_Close"]
 const EDITOR_BUTTONS := ["TP_Back", "TP_Play", "TP_Pause1E", "TP_Pause2E", "TP_Pause3E", "TP_TextPause", "TP_HideE", "TP_CloseE", "TP_SaveE", "TP_PointerE"]
 ## Buttons with a caption drawn over their art (Controls Text, FontSize 14).
@@ -58,6 +68,7 @@ var _art: Dictionary = {}
 var _bounds := Rect2(472, 46, 301, 177)
 var _left := 472.0
 var _font_size := 15
+var _tutorial_font: SystemFont
 
 func build(profile: ELProfile, player_mode := false) -> void:
 	player = player_mode
@@ -118,6 +129,10 @@ func build(profile: ELProfile, player_mode := false) -> void:
 	system.font_names = PackedStringArray(["Times New Roman", "Liberation Serif", "DejaVu Serif", "Noto Serif", "serif"])
 	system.font_weight = 700
 	_font = system
+	_tutorial_font = SystemFont.new()
+	_tutorial_font.font_names = PackedStringArray(["Arial", "Liberation Sans", "Arimo", "DejaVu Sans"])
+	_tutorial_font.font_weight = 700
+	if not player: text_box.add_theme_font_override("normal_font", _tutorial_font)
 	for control: String in CAPTIONED:
 		var key := str(controls.get(control, {}).get("Text", "Ctrl" + control))
 		captions[control] = profile.text(key).strip_edges() if not profile.text(key).strip_edges().is_empty() else key
@@ -156,6 +171,8 @@ func build(profile: ELProfile, player_mode := false) -> void:
 	buttons.TP_ScrollUp.pressed.connect(_scroll.bind(-1))
 	buttons.TP_ScrollDown.pressed.connect(_scroll.bind(1))
 	resized.connect(_layout)
+	text_box.get_v_scroll_bar().value_changed.connect(func(_value: float): queue_redraw())
+	text_box.get_v_scroll_bar().changed.connect(queue_redraw)
 	_layout()
 
 func set_checked(control: String, on: bool) -> void:
@@ -197,19 +214,29 @@ func to_screen(point: Vector2) -> Vector2:
 func _rect(control: String) -> Rect2:
 	var piece: Dictionary = _art.get(control + ":free", _art.get(control + ":hover", {}))
 	if piece.is_empty(): return Rect2()
+	if not player and TUTORIAL_PLACES.has(control): return Rect2(TUTORIAL_PLACES[control], piece.rect.size)
 	return piece.rect
+
+## The text area in design coordinates: the replay player's TP_TextBounds,
+## the tutorial's right-hand column.
+func text_bounds() -> Rect2:
+	return _bounds if player else TUTORIAL_BOUNDS
+
+func _text_size() -> int:
+	return _font_size if player else TUTORIAL_FONT_SIZE
 
 func _layout() -> void:
 	if text_box == null: return
 	var s := design_scale()
-	text_box.position = to_screen(_bounds.position)
-	text_box.size = _bounds.size * s
-	text_box.add_theme_font_size_override("normal_font_size", roundi(_font_size * s))
+	var bounds := text_bounds()
+	text_box.position = to_screen(bounds.position)
+	text_box.size = bounds.size * s
+	text_box.add_theme_font_size_override("normal_font_size", roundi(_text_size() * s))
 	text_box.visible = text_shown and not (player and editor)
 	edit_box.visible = player and editor
 	edit_box.position = text_box.position
 	edit_box.size = text_box.size
-	edit_box.add_theme_font_size_override("font_size", roundi(_font_size * s))
+	edit_box.add_theme_font_size_override("font_size", roundi(_text_size() * s))
 	if not edit_box.visible and edit_box.has_focus(): edit_box.release_focus()
 	for control: String in buttons:
 		var rect := _rect(control)
@@ -224,12 +251,25 @@ func _layout() -> void:
 
 func _scroll(step: int) -> void:
 	var bar := text_box.get_v_scroll_bar()
-	bar.value = clampf(bar.value + step * _font_size * 3, 0, bar.max_value)
+	bar.value = clampf(bar.value + step * _text_size() * 3 * design_scale(), 0, bar.max_value)
+	queue_redraw()
 
 func _draw() -> void:
 	if text_box == null: return
 	var s := design_scale()
-	if text_shown and not text_box.text.strip_edges().is_empty():
+	if not player and text_shown and not text_box.text.strip_edges().is_empty():
+		draw_rect(Rect2(to_screen(TUTORIAL_BACK.position), TUTORIAL_BACK.size * s), Color(0.0, 0.02, 0.0, 0.5))
+		# The scroll track between the arrows and its thumb.
+		var track := Rect2(to_screen(TUTORIAL_TRACK.position), TUTORIAL_TRACK.size * s)
+		draw_rect(track, Color(0.02, 0.02, 0.02, 0.6))
+		draw_rect(track, Color(0.55, 0.47, 0.35, 0.8), false, 1.0)
+		var bar := text_box.get_v_scroll_bar()
+		var inner := track.grow_individual(-2.0 * s, -14.0 * s, -2.0 * s, -14.0 * s)
+		var span := maxf(bar.max_value, 1.0)
+		var length := clampf(bar.page / span, 0.05, 1.0) * inner.size.y
+		var top := inner.position.y + (inner.size.y - length) * (bar.value / maxf(span - bar.page, 1.0) if span > bar.page else 0.0)
+		draw_rect(Rect2(inner.position.x, top, inner.size.x, length), Color(0.62, 0.6, 0.55, 0.85))
+	elif text_shown and not text_box.text.strip_edges().is_empty():
 		# Backing behind the text so it stays readable over the arena (remake);
 		# blank notes leave the area clear as in the original.
 		var back := Rect2(to_screen(_bounds.position - Vector2(6, 4)), (_bounds.size + Vector2(30, 8)) * s)
@@ -244,7 +284,8 @@ func _draw() -> void:
 			BaseButton.DRAW_HOVER: state = "hover"
 		var piece: Dictionary = _art.get(control + ":" + state, _art.get(control + ":free", {}))
 		if piece.is_empty(): continue
-		var area := Rect2(to_screen(piece.rect.position), piece.rect.size * s)
+		var at: Vector2 = TUTORIAL_PLACES[control] if not player and TUTORIAL_PLACES.has(control) else piece.rect.position
+		var area := Rect2(to_screen(at), piece.rect.size * s)
 		draw_texture_rect_region(piece.texture, area, piece.source)
 		if captions.has(control):
 			# FontSize 14 in the registry; a longer caption is set smaller to fit.

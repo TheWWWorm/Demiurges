@@ -948,7 +948,9 @@ func _input(event: InputEvent) -> void:
 
 ## The check (OK) button of each screen, which Enter presses as the original
 ## dialogs' default button does (Esc stays the X / back button).
-const DEFAULT_BUTTONS := ["SBOK", "SCBOK", "CTOK", "CIStart", "SMStart", "MOOK", "OptionsOK", "OP_OK", "EHOK"]
+## The duel setup (DuStart) and the second game's chapter map (GMA6Start)
+## take Enter too (player report #133).
+const DEFAULT_BUTTONS := ["SBOK", "SCBOK", "CTOK", "CIStart", "SMStart", "MOOK", "OptionsOK", "OP_OK", "EHOK", "DuStart", "GMA6Start"]
 
 ## Enter: the save list's Load or Save, or the screen's check button when it
 ## is shown and enabled. False when the screen has none.
@@ -1010,6 +1012,42 @@ func _label(key: String, value: String, rect: Rect2, size_px: int, color := TITL
 	ELMenuKit.place_text(label, rect)
 	labels[key] = label
 	return label
+
+## Remake addition to the screens with a difficulty choice: the computer
+## players' strength (ELAIChoice) as a strip of captioned dropdowns under the
+## dialog, at the main menu's extra-mode row (`top`, CHOICE_TOP) and in its plates,
+## leaving the original dialog as it is. Only the keys that matter in this
+## game are shown (the second game has no map computer players to choose for).
+func add_ai_choices(top := CHOICE_TOP) -> Control:
+	if option_settings() == null: return null
+	var strip := HBoxContainer.new()
+	strip.name = "AiChoices"
+	strip.add_theme_constant_override("separation", 18)
+	for key: String in ["duel_ai", "world_ai"]:
+		if not ELAIChoice.applies(key, edition): continue
+		var pair := HBoxContainer.new()
+		pair.add_theme_constant_override("separation", 8)
+		strip.add_child(pair)
+		var caption := Label.new()
+		caption.text = ELRemakeText.t(ELAIChoice.caption(key), profile)
+		caption.add_theme_font_size_override("font_size", 16)
+		caption.add_theme_color_override("font_color", ELGameChoice.INK)
+		caption.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.9))
+		caption.add_theme_constant_override("shadow_offset_x", 1)
+		caption.add_theme_constant_override("shadow_offset_y", 1)
+		caption.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		pair.add_child(caption)
+		var pick := ELAIChoice.picker(settings, key, profile, settings_path)
+		pick.custom_minimum_size = Vector2(170, 40)
+		pick.add_theme_font_size_override("font_size", 16)
+		ELGameChoice.plain(pick)
+		pair.add_child(pick)
+	canvas.add_child(strip)
+	var size := strip.get_combined_minimum_size()
+	strip.size = size
+	strip.position = Vector2(roundf(DESIGN.x * 0.5 - size.x * 0.5), top)
+	labels["ai_choices"] = strip
+	return strip
 
 ## Text control rectangle from the Controls registry, in the 1024 layout.
 func control_rect(control: String) -> Rect2:
@@ -1381,6 +1419,7 @@ func _build_mission() -> void:
 		if radio == null: continue
 		radio.active = index == difficulty
 		radio.pressed.connect(func(): set_difficulty(index))
+	add_ai_choices()
 	var start := _square("CIStart")
 	if start != null: start.pressed.connect(start_campaign)
 	if edition == "el1":
@@ -1533,6 +1572,8 @@ func _build_map() -> void:
 		if radio == null: continue
 		radio.active = index == difficulty
 		radio.pressed.connect(func(): set_difficulty(index))
+	# The campaign map's dialog reaches lower than the others.
+	add_ai_choices(CHOICE_TOP + 14.0)
 	var briefing := _square("GMA6Briefing")
 	if briefing != null: briefing.pressed.connect(_open_briefing)
 	var start := _square("GMA6Start")

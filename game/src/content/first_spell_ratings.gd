@@ -1,10 +1,14 @@
 class_name ELFirstSpellRatings
 extends RefCounted
-## What a shop spell adds to a computer hero's starting book: the change in
-## its chance to win a duel, in tenths of a percentage point, when the card
-## replaces one of the book's cheapest spells. Measured over 2242
-## computer-vs-computer duels; written by tools/first_spell_rating.py from
-## the output of tools/first_spell_rating.gd. Do not edit by hand.
+## Relative worth of each first-game shop spell to a computer hero, in
+## tenths of a point: 25 times the card's logistic-regression coefficient
+## over 2242 decided computer-vs-computer duels between random books
+## (starting books with several random shop spells), which approximates the
+## change in win chance in percentage points near an even duel only. The
+## cards are measured against the other shop spells, so the numbers rank
+## them; they are not what a card adds to a bare starting book. Written by
+## tools/first_spell_rating.py from the output of tools/first_spell_rating.gd
+## (its paired mode measures single replacements). Do not edit by hand.
 const POINTS := {
 	# Black
 	"ALST": 6, "BDEX": -63, "BGVL": 92, "BRAB": 115, "BRMC": 120, "BRMZ": 64, "BRRL": -75, "CLFR": 41, "CLON": 20, "CTMN": 247, "DELS": 2, "DISM": -17, "DPGS": 1, "DRGS": -51, "DWND": -25, "ENAL": -82, "ENRG": -10, "EXIL": 93, "FMFI": 257, "FRGS": -33, "HOPR": 67, "IMMB": -36, "INCR": 17, "IRAB": 76, "IRMC": 133, "IRMZ": 32, "IRRT": 29, "LQRL": -46, "LSPC": 4, "MCWU": 38, "MCWY": 120, "MDNS": 62, "MDWP": 36, "MLFI": 192, "MNHP": 179, "MXHP": 177, "NOIS": 9, "OVRL": -10, "PALN": 14, "PHWL": -8, "PRFY": -13, "PTRS": 113, "PWTP": -76, "QKFX": -6, "RBRT": 4, "RECL": -14, "REDR": 3, "REPR": -81, "RFPT": 174, "RPST": -19, "RZMN": 181, "SCBR": -53, "SFGS": 25, "SLRP": -22, "SMVL": -45, "STAB": 143, "STMC": 101, "STMZ": 125, "STTX": 126, "SWMN": 147, "TPLF": 87, "TRLB": -57, "WETX": 25, "WKHR": 192, "WLBL": 136, "WLDG": 117, "WLDT": 52, "WLIL": -2, "WNHR": 253, "WNMG": 206,

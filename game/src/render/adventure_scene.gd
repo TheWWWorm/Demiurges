@@ -100,13 +100,14 @@ func build(source: ELAdventureMap, session: ELAdventureSession = null) -> bool:
 	# Instances are grouped by their colourless cell value so a level switch
 	# can grey whole groups.
 	var zoned := session != null and map.profile.id == "el2" and map.colorless.size() == map.width * map.height
+	var definitions := _prepare_art(objects)
 	for index in objects.size():
 		var object: Dictionary = objects[index]
 		var uid := int(object.get("uid", int(object.permanent_id) - 1))
 		# Defeated units leave the map. Script-created corpses are separate
 		# objects, with their own appearance and lifetime.
 		if object.get("type") in ["hero", "monster"] and not object.get("alive", true): continue
-		var definition := _art.resolve(object)
+		var definition: Dictionary = definitions[index]
 		if definition.get("hidden", false): continue
 		if not object.get("visible", true): continue
 		if definition.is_empty():
@@ -135,7 +136,8 @@ func build(source: ELAdventureMap, session: ELAdventureSession = null) -> bool:
 			_blob_slots[uid] = {"index": -1, "local": blob_local(prototype, footprint), "base": transform,
 				"footprint": footprint, "opacity": FOLIAGE_BLOB_ALPHA if foliage else BLOB_ALPHA}
 		var casts := silhouette(map.profile.id, object, definition)
-		if definition.unit or prototype.clip_frames() > 1 or first_barrier(object) or _movable_portal(object):
+		# A fort is its own figure so its flag can rise when it is owned.
+		if definition.unit or prototype.clip_frames() > 1 or first_barrier(object) or _movable_portal(object) or object.get("type") == "fort":
 			var model := ELModel.new()
 			add_child(model)
 			if not model.build(map.profile, definition.model, definition.texture, definition.secondary, definition.get("wave", "")):
@@ -149,6 +151,7 @@ func build(source: ELAdventureMap, session: ELAdventureSession = null) -> bool:
 			if first_barrier(object): barrier_pose(model, bool(object.get("opened", false)), false)
 			# A garrison hero is inside its fort; its own figure is not drawn.
 			if object.get("fortified", false): model.hide()
+			if object.get("type") == "fort": fort_flag(model, int(object.get("owner", -1)) >= 1)
 			object_models[uid] = model
 			if definition.unit:
 				units[index] = model
@@ -225,6 +228,62 @@ func build(source: ELAdventureMap, session: ELAdventureSession = null) -> bool:
 	enable_colorless(session)
 	build_usec = Time.get_ticks_usec() - started
 	return errors.is_empty()
+
+## Resolves each object's art (the build loop's `definitions`, by index) and
+## reads what it needs on worker threads first: the figures, their idle
+## clips and meshes, and the skins, as ELModel.build would read them one
+## figure at a time. Everything lands in the profile's shared caches, so the
+## figures built after are the same ones.
+func _prepare_art(objects: Array) -> Array:
+	var definitions := []
+	definitions.resize(objects.size())
+	var profile := map.profile
+	var templates := {}
+	var skins := {}
+	for index in objects.size():
+		var object: Dictionary = objects[index]
+		if object.get("type") in ["hero", "monster"] and not object.get("alive", true): continue
+		var definition := _art.resolve(object)
+		definitions[index] = definition
+		if definition.is_empty() or definition.get("hidden", false) or not object.get("visible", true): continue
+		templates[ELArchive.key(str(definition.model))] = true
+		for name: Variant in [definition.texture, definition.secondary, definition.get("wave", "")]:
+			if not str(name).is_empty(): skins[str(name)] = true
+	profile.prefetch_textures(skins.keys())
+	var parsing: Array[Dictionary] = []
+	for template: String in templates:
+		if not profile.model_resources.has(template):
+			parsing.append({"template": template, "files": ELModel.read_resources(profile, template)})
+	_on_workers(parsing, func(job: Dictionary) -> void: job.resources = ELModel.parse_resources(job.template, job.files))
+	for job: Dictionary in parsing:
+		if not job.resources.has("error"): profile.model_resources[job.template] = job.resources
+	var clips: Array[Dictionary] = []
+	for template: String in templates:
+		var resources: Dictionary = profile.model_resources.get(template, {})
+		var animations: ELArchive = resources.get("animations")
+		if animations != null and animations.has("cidle") and not resources.clips.has("cidle"): clips.append({"resources": resources})
+	_on_workers(clips, func(job: Dictionary) -> void:
+		var resources: Dictionary = job.resources
+		job.tracks = ELModel.decode_clip(resources.animations, "cidle", resources.links)
+		job.meshes = ELModel.clip_meshes(resources.figures, "cidle", job.tracks))
+	for job: Dictionary in clips:
+		var resources: Dictionary = job.resources
+		resources.clips["cidle"] = job.tracks
+		for key: String in job.meshes:
+			if not resources.meshes.has(key): resources.meshes[key] = job.meshes[key]
+	while not profile.finish_textures(): OS.delay_usec(200)
+	return definitions
+
+## Runs `work` for each job on worker threads. Without a display the
+## placeholder renderer makes meshes, whose ids it does not hand out safely
+## across threads, so the jobs run here one by one.
+static func _on_workers(jobs: Array[Dictionary], work: Callable) -> void:
+	if jobs.is_empty(): return
+	if DisplayServer.get_name() == "headless":
+		for job: Dictionary in jobs: work.call(job)
+		return
+	var task := WorkerThreadPool.add_group_task(func(index: int) -> void: work.call(jobs[index]), jobs.size(), -1, true, "Map art")
+	WorkerThreadPool.wait_for_group_task_completion(task)
 
 ## EL2 always displays the human side. EL1 follows the strategic seat.
 static func _fog_viewer(session: ELAdventureSession) -> int:
@@ -588,6 +647,7 @@ func update_object(item: Dictionary) -> void:
 		model.position = Vector3(center.x * ELAdventureTerrain.CELL, 0, -center.y * ELAdventureTerrain.CELL)
 		if item.get("type") == "corpse" or not item.get("alive", true): _corpse_pose(model)
 		if first_barrier(item): barrier_pose(model, bool(item.get("opened", false)), true)
+		if item.get("type") == "fort": fort_flag(model, int(item.get("owner", -1)) >= 1)
 		grey_object(uid)
 		_sync_blob(uid, visible)
 		return
@@ -819,6 +879,25 @@ func object_yaw(item: Dictionary) -> float:
 
 static func world_position(x: float, y: float) -> Vector3:
 	return Vector3((x + 0.5) * ELAdventureTerrain.CELL, 0, -(y + 0.5) * ELAdventureTerrain.CELL)
+
+## Second-game forts carry a flag their own clips raise ("utap"), wave
+## ("cidleintap") and lower ("uuntap"). An owned fort flies it; a new figure
+## of an owned fort starts with it already up, a fort taken while shown
+## raises it, and one that loses its owner lowers it.
+func fort_flag(model: ELModel, owned: bool) -> void:
+	if model == null or model._animations == null or not model._animations.has("utap"): return
+	var up := bool(model.get_meta("flag_up", false))
+	if owned == up and model.has_meta("flag_up"): return
+	model.set_meta("flag_up", owned)
+	if owned:
+		if not model.has_meta("flag_seen"):
+			model.play("cidleintap")
+		elif model.play("utap"):
+			model.animation_finished.connect(func(clip: String):
+				if clip == "utap" and is_instance_valid(model) and bool(model.get_meta("flag_up", false)): model.play("cidleintap"), CONNECT_ONE_SHOT)
+	elif model.has_meta("flag_seen"):
+		model.play("uuntap")
+	model.set_meta("flag_seen", true)
 
 func _add_animated(model: ELModel) -> void:
 	animated.append(model)

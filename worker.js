@@ -11,6 +11,7 @@
 // cross-origin isolated page, so every response gets the isolation headers.
 import { DurableObject } from 'cloudflare:workers';
 import parts from './parts.json';
+import { admit, newBudget } from './relay_limits.js';
 
 // Online play relay: /relay?room=CODE&role=host|guest lets players meet
 // without opening ports. One Durable Object per room passes binary frames
@@ -19,11 +20,21 @@ import parts from './parts.json';
 // the sender's id when delivered. Guests may only reach the host; the host
 // reaches one guest, or all of them with id 0. Text frames are control
 // messages: welcome/join/leave from the relay, refuse/kick from the host.
+// Every connection may send frames up to one game frame in size, within a
+// budget of frames and bytes per second (relay_limits.js); beyond that it
+// is closed.
 const ROOM_CODE = /^[A-Z2-9]{6}$/;
 const RELAY_VERSION = '1';
 const MAX_GUESTS = 8;
 
 export class RelayRoom extends DurableObject {
+  constructor(ctx, env) {
+    super(ctx, env);
+    // Per-connection send budgets; they start full again after the room
+    // wakes from hibernation.
+    this.budgets = new Map();
+  }
+
   async fetch(request) {
     const url = new URL(request.url);
     const role = url.searchParams.get('role');
@@ -58,7 +69,19 @@ export class RelayRoom extends DurableObject {
   async webSocketMessage(ws, message) {
     const from = ws.deserializeAttachment()?.id;
     if (!from) return;
-    if (typeof message === 'string') {
+    const text = typeof message === 'string';
+    let budget = this.budgets.get(ws);
+    if (!budget) {
+      budget = newBudget(Date.now());
+      this.budgets.set(ws, budget);
+    }
+    const refused = admit(budget, text ? message.length : message.byteLength ?? 0, text, Date.now());
+    if (refused) {
+      ws.close(refused.code, refused.reason);
+      this._left(ws);
+      return;
+    }
+    if (text) {
       if (from !== 1) return;
       let control;
       try { control = JSON.parse(message); } catch { return; }
@@ -88,6 +111,7 @@ export class RelayRoom extends DurableObject {
   }
 
   _left(ws) {
+    this.budgets.delete(ws);
     const id = ws.deserializeAttachment()?.id;
     if (!id) return;
     ws.serializeAttachment({ id: 0 });

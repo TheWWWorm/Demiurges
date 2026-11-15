@@ -13,7 +13,7 @@ signal closed(reason: String)
 signal connection_notice(text: String)
 
 const PORT := 27184
-const VERSION := 10
+const VERSION := 11
 const MAX_PACKET := 4096
 ## A rejoining guest receives the whole match in one message.
 const MAX_RESUME := 512 * 1024
@@ -24,6 +24,9 @@ const MAX_CHAT_LENGTH := 240
 const MAX_CHAT_HISTORY := 50
 const MIN_TURN_SECONDS := 10
 const MAX_TURN_SECONDS := 3600
+## The host ends a guest's timed-out phase itself this long after the
+## deadline, when the guest has not ended it (a slow or modified client).
+const CLOCK_GRACE_MSEC := 3000
 const CUSTOM_FIELDS := ["faction", "resource_level", "level", "specialization", "skills", "cards", "runes", "reserve", "artifacts"]
 const FIELDS := {
 	"cast": ["hand_index", "target", "grave", "power", "card"],
@@ -67,6 +70,11 @@ var _joining := false
 var _ready_deadline := 0
 var _sequence := 0
 var _applying := false
+## The side a command applied by this machine for someone else acts for.
+var _applying_side := -1
+## The host's last forced phase end: guest commands numbered up to it crossed
+## it on the way and are dropped.
+var _timeout_fence := 0
 var _pending: Array[Array] = []
 var _failure := ""
 var _departure := ""
@@ -88,8 +96,7 @@ static func player_token() -> String:
 		if saved.length() == 32 and saved.is_valid_hex_number(): _token = saved
 	if _token.is_empty():
 		_token = Crypto.new().generate_random_bytes(16).hex_encode()
-		var file := FileAccess.open(TOKEN_PATH, FileAccess.WRITE)
-		if file != null: file.store_string(_token)
+		ELSafeFile.write_text(TOKEN_PATH, _token)
 	return _token
 
 func host(data: ELProfile, port: int, deck: String, arena: String, resource_level: int, rounds: int, advertise := false, turn_seconds := 0, deck_seconds := 0) -> Error:
@@ -229,6 +236,7 @@ func poll(allow_action: bool, advance_phase := Callable()) -> void:
 		if not _pending.is_empty():
 			var command: Array = _pending.pop_front()
 			if command[0] == "next": _receive_round_ready(command)
+			elif command[0] == "timeout": _apply_timeout(command)
 			else: _apply_remote(command)
 		elif _departure.is_empty(): _tick_turn_clock(advance_phase)
 		if _failure.is_empty() and _deck_deadline > 0 and Time.get_ticks_msec() >= _deck_deadline:
@@ -337,6 +345,9 @@ func _receive(packet: Array) -> void:
 			_pending.append(packet)
 		"next":
 			if not live or packet.size() != 5 or _pending.size() >= MAX_PENDING: return _invalid()
+			_pending.append(packet)
+		"timeout":
+			if local_side != 1 or not live or packet.size() != 5 or _pending.size() >= MAX_PENDING: return _invalid()
 			_pending.append(packet)
 		"chat":
 			if can_chat() and packet.size() == 2 and packet[1] is String and packet[1].length() <= MAX_CHAT_LENGTH:
@@ -512,6 +523,47 @@ func _tick_turn_clock(advance_phase: Callable) -> void:
 	if now >= _clock_deadline and duel.active_side() == local_side:
 		if advance_phase.is_valid(): advance_phase.call()
 		else: duel.end_phase()
+	elif local_side == 0 and duel.active_side() == 1 and now >= _clock_deadline + CLOCK_GRACE_MSEC and _rejoin_deadline == 0 and _remote != 0:
+		_force_phase_end()
+
+## The host owns the clock: a guest phase past its deadline (and the grace
+## for the guest's own end to arrive) ends here, and the guest is told.
+func _force_phase_end() -> void:
+	var serial := duel.turn_serial
+	var phase := duel.phase
+	_applying = true
+	_applying_side = 1
+	var ok := ELDuelReplayPlayer.apply_command(duel, {"kind": "end_phase", "side": 1})
+	_applying = false
+	_applying_side = -1
+	if not ok:
+		_failure = "The duel went out of sync."
+		return
+	_sequence += 1
+	_timeout_fence = _sequence
+	if recording != null: recording.gate_done(duel, {"kind": "end_phase", "side": 1}, true)
+	_send(["timeout", _sequence, serial, phase, _digest()])
+	_record_round()
+
+## The guest's side of a phase the host ended on the clock. When the
+## guest's own end of that phase crossed it, both already agree.
+func _apply_timeout(packet: Array) -> void:
+	if not ELLuaSave._integer(packet[1], 1, 0x7fffffff) or not packet[4] is String: return _invalid()
+	if int(packet[1]) == _sequence and packet[4] == _digest(): return
+	if int(packet[1]) != _sequence + 1 or packet[2] != duel.turn_serial or packet[3] != duel.phase or duel.active_side() != local_side:
+		_failure = "The duel went out of sync."
+		return
+	_applying = true
+	_applying_side = local_side
+	var ok := ELDuelReplayPlayer.apply_command(duel, {"kind": "end_phase", "side": local_side})
+	_applying = false
+	_applying_side = -1
+	if not ok or packet[4] != _digest():
+		_failure = "The duel went out of sync."
+		return
+	_sequence += 1
+	if recording != null: recording.gate_done(duel, {"kind": "end_phase", "side": local_side}, true)
+	_record_round()
 
 func _record_round() -> void:
 	if duel.phase == ELDuel.Phase.FINISHED and match_state.played == _round_index:
@@ -584,7 +636,7 @@ func _send(packet: Array) -> void:
 ## Rule calls from the UI use the same gate as commands received from the
 ## other peer. Neither peer can apply a command on behalf of the other.
 func gate_check(target: ELDuel, action: Dictionary) -> bool:
-	var side := 1 - local_side if _applying else local_side
+	var side := (_applying_side if _applying_side >= 0 else 1 - local_side) if _applying else local_side
 	return live and (_applying or _departure.is_empty()) and target == duel and action.get("side") == side and FIELDS.has(action.get("kind")) and duel.active_side() == side
 
 func gate_done(target: ELDuel, action: Dictionary, ok: bool) -> void:
@@ -597,6 +649,9 @@ func gate_done(target: ELDuel, action: Dictionary, ok: bool) -> void:
 	_record_round()
 
 func _apply_remote(packet: Array) -> void:
+	# A guest command sent before the guest heard of a forced phase end; the
+	# guest notices the difference itself when the forced end reaches it.
+	if local_side == 0 and ELLuaSave._integer(packet[1], 1, 0x7fffffff) and int(packet[1]) <= _timeout_fence and int(packet[1]) <= _sequence: return
 	if packet[1] != _sequence + 1 or not packet[2] is String or packet[3] != 1 - local_side or not packet[4] is Array or not packet[5] is String or packet[5].length() != 64:
 		return _invalid()
 	var kind: String = packet[2]
@@ -677,6 +732,8 @@ func close() -> void:
 	_resuming = false
 	_resume_digest = ""
 	_turning_away = false
+	_timeout_fence = 0
+	_applying_side = -1
 
 func _flush() -> void:
 	if _peer is ENetMultiplayerPeer: (_peer as ENetMultiplayerPeer).get_host().flush()

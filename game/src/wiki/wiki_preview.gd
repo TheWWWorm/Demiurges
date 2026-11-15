@@ -1,7 +1,8 @@
 class_name ELWikiPreview
 extends SubViewportContainer
 ## The live creature beside a wiki card page (as the EI remake's WikiPreview),
-## or a story hero beside a guide that lists `heroes` (Diamanda, the White Lord):
+## or a story hero beside a guide that lists `heroes` (Diamanda, the White Lord),
+## or a map object (a mine, a shop, a shrine) beside a guide that shows `!objects`:
 ## the creature's own model and textures from the installed game, playing its
 ## idle animation with its own particles (the whirlwind of an air wall, a
 ## spirit's trail: CreaturesPFX/<model>/idle.pfx, as in battle) in a small
@@ -12,6 +13,12 @@ extends SubViewportContainer
 const BACKGROUND := Color("120e0b")
 const YAW := deg_to_rad(-28.0)
 const PITCH := deg_to_rad(14.0)
+## Map objects are seen from above on the map: a steeper opening view.
+const OBJECT_PITCH := deg_to_rad(30.0)
+## The tables a map object (`!objects` marker) may name, as the adventure map
+## resolves them (ELAdventureArt): their models wear TerrainObjects skins.
+const OBJECT_TABLES := ["ResourceMine", "ResourceCut", "ManaNodes", "Buildings", "AdditionalBuildings",
+	"NewBuildings", "GlobalSpellCut", "Artefacts", "TerrObj"]
 ## The bounding-sphere framing leaves wide margins; the reader starts closer.
 const OPENING_ZOOM := 0.72
 const ANIMATIONS := ["cidle", "uattack", "ushot", "uhit", "udeath", "usummon", "utap", "uuntap", "uinstant"]
@@ -24,6 +31,7 @@ var model: ELModel
 var _distance := 4.0
 var _yaw := YAW
 var _pitch := PITCH
+var _opening_pitch := PITCH
 var _zoom := OPENING_ZOOM
 var _dragging := false
 var _sound: AudioStreamPlayer
@@ -54,7 +62,32 @@ static func stage_hero(profile: ELProfile, template: String, size: Vector2i, tra
 	var secondary := "Heroes/" + str(row.Texture2).replace("\\", "/") if row.has("Texture2") else ""
 	return _stage(profile, str(row.get("Model", "")), skin, secondary, 1.0, size, transparent)
 
-static func _stage(profile: ELProfile, model_name: String, skin: String, secondary: String, scale: float, size: Vector2i, transparent: bool) -> SubViewport:
+## The table row of map object `id` ("<Table>/<row>", or "<Table>/<Name>@<Level>"
+## and "<Table>/<Name>" for tables keyed by number); empty when the game has none.
+static func object_row(profile: ELProfile, id: String) -> Dictionary:
+	var table_name := id.get_slice("/", 0)
+	var key := id.substr(table_name.length() + 1)
+	if not table_name in OBJECT_TABLES or key.is_empty(): return {}
+	var table := profile.table(table_name)
+	if table.has(key): return table[key]
+	var name := key.get_slice("@", 0)
+	var level := key.get_slice("@", 1) if "@" in key else ""
+	for row: Dictionary in table.values():
+		if str(row.get("Name", "")) == name and (level.is_empty() or str(row.get("Level", "")) == level): return row
+	return {}
+
+## A viewport holding map object `id` (see object_row) with its adventure-map
+## model and skins; null when the game has no such object.
+static func stage_object(profile: ELProfile, id: String, size: Vector2i, transparent := false) -> SubViewport:
+	var row := object_row(profile, id)
+	var model_name := str(row.get("Model", ""))
+	if model_name.is_empty(): return null
+	var skin := "TerrainObjects/" + str(row.get("TextureName", row.get("Texture", "")))
+	var secondary := "TerrainObjects/" + str(row.SecTexture) if not str(row.get("SecTexture", "")).is_empty() else ""
+	var wave := ELAdventureArt.animated_texture(row)
+	return _stage(profile, model_name, skin, secondary, 1.0, size, transparent, "TerrainObjects/" + wave if not wave.is_empty() else "")
+
+static func _stage(profile: ELProfile, model_name: String, skin: String, secondary: String, scale: float, size: Vector2i, transparent: bool, wave := "") -> SubViewport:
 	var view := SubViewport.new()
 	view.size = size
 	view.own_world_3d = true
@@ -80,14 +113,14 @@ static func _stage(profile: ELProfile, model_name: String, skin: String, seconda
 	var figure := ELModel.new()
 	figure.name = "Model"
 	view.add_child(figure)
-	if not figure.build(profile, model_name, skin, secondary):
+	if not figure.build(profile, model_name, skin, secondary, wave):
 		view.free()
 		return null
 	figure.scale = Vector3.ONE * scale
 	# Alpha32 skins (air walls, spirits) fade out in soft alpha: the wall's
 	# lower half is a wisp of see-through cloth. Blend them instead of the
 	# figure material's alpha cut-off, which drops everything below half.
-	if skin.to_lower().trim_prefix("creatures/").trim_prefix("heroes/").begins_with("alpha32"):
+	if skin.to_lower().trim_prefix("creatures/").trim_prefix("heroes/").trim_prefix("terrainobjects/").begins_with("alpha32"):
 		for part: Node in figure.get_children():
 			var mesh := part as MeshInstance3D
 			if mesh != null and mesh.material_override is StandardMaterial3D:
@@ -159,7 +192,11 @@ func show_creature(profile: ELProfile, code: String) -> bool:
 func show_hero(profile: ELProfile, template: String) -> bool:
 	return _show(profile, stage_hero(profile, template, Vector2i(512, 512)), "")
 
-func _show(profile: ELProfile, staged: SubViewport, sounds: String) -> bool:
+## Shows map object `id` (see object_row); false when the game has none.
+func show_object(profile: ELProfile, id: String) -> bool:
+	return _show(profile, stage_object(profile, id, Vector2i(512, 512)), "", OBJECT_PITCH)
+
+func _show(profile: ELProfile, staged: SubViewport, sounds: String, pitch := PITCH) -> bool:
 	# Switching editions (or heroes) replaces the figure shown.
 	if viewport != null:
 		remove_child(viewport)
@@ -173,6 +210,7 @@ func _show(profile: ELProfile, staged: SubViewport, sounds: String) -> bool:
 		return false
 	_profile = profile
 	_sound_directory = sounds
+	_opening_pitch = pitch
 	stretch = true
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	custom_minimum_size = Vector2(320, 320)
@@ -212,7 +250,7 @@ func _settle() -> void:
 func reset_view() -> void:
 	if viewport == null: return
 	_yaw = YAW
-	_pitch = PITCH
+	_pitch = _opening_pitch
 	_zoom = OPENING_ZOOM
 	_refit()
 

@@ -382,7 +382,12 @@ func drop_carried(item: Dictionary, point: Vector2) -> bool:
 			elif zone == "choice" and tab == 2 and el1(): done = act("remove_rune", int(item.value))
 			elif zone == "choice" and tab == 0: done = act("remove_slot", int(item.value))
 		"reserve":
-			if zone == "book": done = act("reserve_to_deck", item.value)
+			# On an occupied deck slot the two spells change places (the
+			# slot's spell goes to the reserve); elsewhere on the deck the
+			# spell is added.
+			if zone == "book":
+				var slot: int = hit.control.slot_at(hit.local)
+				done = act("reserve_to_slot", [item.value, slot]) if slot >= 0 else act("reserve_to_deck", item.value)
 			elif zone == "choice": done = act("remove_reserve", item.value)
 		"strip":
 			if (el1() and zone == "choice" and tab == 3) or (not el1() and zone == "artifacts"):
@@ -1230,6 +1235,34 @@ func _purchase_price(row: Dictionary) -> String:
 		if amount > 0: price.append("%s %d" % [resource_title(i), amount])
 	return ", ".join(price)
 
+## An artifact's charge count at the icon's lower right in the battle rail's
+## glyph digits (ELListLook.number), scaled with the icon; nothing below 0.
+static func draw_charge_digits(canvas: CanvasItem, look: ELListLook, icon: Rect2, value: int, first: bool) -> void:
+	if value < 0: return
+	var sheet: Texture2D = look.hover.atlas if look != null and look.hover != null else null
+	if sheet == null: return
+	var scale := icon.size.x / 50.0
+	var step := (10.0 if first else 8.0) * scale
+	var last := (Vector2(40, 40) if first else Vector2(39, 39)) * scale
+	var text := str(value)
+	for k in text.length():
+		var code := text.unicode_at(text.length() - 1 - k) - 0x2d
+		if code < 0 or code > 12: continue
+		var at := icon.position + last - Vector2(k * step, 0)
+		var glyph := Rect2(code * 10, 246, 10, 10)
+		canvas.draw_texture_rect_region(sheet, Rect2(at + Vector2.ONE * scale, Vector2(10, 10) * scale), glyph, Color.BLACK)
+		canvas.draw_texture_rect_region(sheet, Rect2(at, Vector2(10, 10) * scale), glyph)
+
+var _charge_look: ELListLook
+var _charge_look_profile: ELProfile
+
+## The list look whose digits draw artifact charges, for the current edition.
+func charge_look() -> ELListLook:
+	if _charge_look == null or _charge_look_profile != profile():
+		_charge_look = ELListLook.load(profile())
+		_charge_look_profile = profile()
+	return _charge_look
+
 ## A preset artifact's charges: its template's MaxCharges, as each duel
 ## round starts with (-1 when no template carries the spell).
 func artifact_charges(code: String) -> int:
@@ -1308,6 +1341,20 @@ func apply(preset: Dictionary, action: String, value: Variant) -> Variant:
 			p.cards.append(value)
 			p.reserve[value] = int(p.reserve[value]) - 1
 			if int(p.reserve[value]) <= 0: p.reserve.erase(value)
+		"reserve_to_slot":
+			# [card, slot]: a reserve spell put on an active deck slot; the
+			# slot's spell takes its place in the reserve.
+			var card: String = value[0]
+			var slot := int(value[1])
+			if not p.reserve.has(card): return null
+			if slot < 0 or slot >= p.cards.size(): return apply(preset, "reserve_to_deck", card)
+			var displaced: String = p.cards[slot]
+			if displaced == card: return null
+			p.cards[slot] = card
+			if slot < p.runes.size(): p.runes[slot] = 0
+			p.reserve[card] = int(p.reserve[card]) - 1
+			if int(p.reserve[card]) <= 0: p.reserve.erase(card)
+			p.reserve[displaced] = int(p.reserve.get(displaced, 0)) + 1
 		"remove_reserve":
 			if not p.reserve.has(value): return null
 			p.reserve[value] = int(p.reserve[value]) - 1
@@ -1901,6 +1948,11 @@ func _build_el2_misc() -> void:
 	# right-click or double-click on the hero's cell returns).
 	var artifacts := _right_list(_rect("EPAllArtifactsBounds"), true, 8)
 	menu.labels["all_artifacts"] = artifacts
+	# The artifacts for sale show their charges, as in the original (#122).
+	var charges := ChargeOverlay.new()
+	charges.screen = self
+	charges.list = artifacts
+	artifacts.add_child(charges)
 	right_list = _right_list(_rect("EPAllSkillsBounds"), true, 8)
 	right_list.item_selected.connect(func(index: int):
 		edit.item = index
@@ -2308,9 +2360,13 @@ class BookView extends Control:
 			var result: Array = []
 			for i in p.cards.size(): result.append({"card": p.cards[i], "count": int(p.runes[i]) if i < p.runes.size() else 0})
 			return result
+		# One cell per reserve copy, as in the original (no stacked counts).
 		var codes: Array = p.reserve.keys()
 		codes.sort()
-		return codes.map(func(code: String): return {"card": code, "count": int(p.reserve[code])})
+		var cells: Array = []
+		for code: String in codes:
+			for copy in int(p.reserve[code]): cells.append({"card": code, "count": 1})
+		return cells
 
 	func scroll(step: int) -> void:
 		var rows := ceili(float(entries().size()) / columns)
@@ -2388,8 +2444,7 @@ class BookView extends Control:
 			draw_texture_rect(screen.profile().card_icon(list[index].card), icon_rect, false)
 			if not reserve and int(screen.edit.get("slot", -1)) == index: draw_rect(icon_rect, ELFrontMenu.INK_HOVER, false, 2)
 			var count: int = list[index].count
-			var label := "" if (not reserve and not screen.el1()) else (str(count) if not (screen.el1() and screen._cantrip(list[index].card)) else "∞")
-			if reserve: label = "×%d" % count
+			var label := "" if (reserve or not screen.el1()) else (str(count) if not (screen.el1() and screen._cantrip(list[index].card)) else "∞")
 			if not label.is_empty():
 				draw_string_outline(font, icon_rect.position + Vector2(3, icon_rect.size.y - 4), label, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, 3, Color.BLACK)
 				draw_string(font, icon_rect.position + Vector2(3, icon_rect.size.y - 4), label, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color("9de2d8"))
@@ -2410,25 +2465,11 @@ class ArtifactStrip extends Control:
 	## The charge count at the icon's lower right in the battle rail's glyph
 	## digits (ELListLook.number), scaled with the icon.
 	func _draw_charges(icon: Rect2, value: int) -> void:
-		if value < 0: return
 		var source := screen.profile()
 		if _look == null or _look_profile != source:
 			_look = ELListLook.load(source)
 			_look_profile = source
-		var sheet: Texture2D = _look.hover.atlas if _look != null and _look.hover != null else null
-		if sheet == null: return
-		var first := screen.el1()
-		var scale := icon.size.x / 50.0
-		var step := (10.0 if first else 8.0) * scale
-		var last := (Vector2(40, 40) if first else Vector2(39, 39)) * scale
-		var text := str(value)
-		for k in text.length():
-			var code := text.unicode_at(text.length() - 1 - k) - 0x2d
-			if code < 0 or code > 12: continue
-			var at := icon.position + last - Vector2(k * step, 0)
-			var glyph := Rect2(code * 10, 246, 10, 10)
-			draw_texture_rect_region(sheet, Rect2(at + Vector2.ONE * scale, Vector2(10, 10) * scale), glyph, Color.BLACK)
-			draw_texture_rect_region(sheet, Rect2(at, Vector2(10, 10) * scale), glyph)
+		ELDuelScreen.draw_charge_digits(self, _look, icon, value, screen.el1())
 
 	func _ready() -> void:
 		mouse_filter = Control.MOUSE_FILTER_STOP
@@ -2487,6 +2528,29 @@ class ArtifactStrip extends Control:
 		if list.size() > CELLS:
 			var count := "%d" % list.size()
 			draw_string(screen.menu.arial, Vector2(size.x - 14, size.y - 3), count, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, ELFrontMenu.BODY_INK)
+
+## Charge digits over the second game's list of artifacts for sale.
+class ChargeOverlay extends Control:
+	var screen: ELDuelScreen
+	var list: ItemList
+
+	func _ready() -> void:
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+		set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		list.get_v_scroll_bar().value_changed.connect(func(_value: float): queue_redraw())
+		# Redrawn with the list (layout, scrolling, items filled in).
+		list.draw.connect(queue_redraw)
+
+	func _draw() -> void:
+		var choices := screen.artifact_choices()
+		var scroll := list.get_v_scroll_bar().value
+		for index in mini(list.item_count, choices.size()):
+			var rect := list.get_item_rect(index, false)
+			rect.position.y -= scroll
+			if rect.end.y <= 0 or rect.position.y >= list.size.y: continue
+			var side := float(list.fixed_icon_size.x)
+			var icon := Rect2(rect.position + (rect.size - Vector2(side, side)) * 0.5, Vector2(side, side))
+			ELDuelScreen.draw_charge_digits(self, screen.charge_look(), icon, screen.artifact_charges(choices[index]), false)
 
 ## Texture pieces drawn above the panel art (the editor's race picture).
 class PieceView extends Control:
@@ -2610,6 +2674,8 @@ class ChoiceView extends Control:
 				var icon: Texture2D = entry.get("icon")
 				var picture := inner.grow(-2)
 				if icon != null: draw_texture_rect(icon, picture, false)
+				# An artifact for sale shows its charges, as in the original (#122).
+				if entry.get("action") == "add_artifact": ELDuelScreen.draw_charge_digits(self, screen.charge_look(), picture, screen.artifact_charges(String(entry.value)), screen.el1())
 				var badge := ""
 				if int(entry.get("count", 0)) > 0: badge = "×%d" % int(entry.count)
 				elif int(entry.get("rank", -1)) >= 0: badge = ELDuelScreen._roman(int(entry.rank) + 1)

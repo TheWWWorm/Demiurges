@@ -12,11 +12,12 @@ signal started(game: ELAutochessMatch, seat: int)
 signal closed(reason: String)
 
 const PORT := 27190
-const VERSION := 3
+const VERSION := 4
 const MAX_PACKET := 262144
 const MAX_GUESTS := ELAutochessRules.PLAYER_COUNT - 1
 const STATE_INTERVAL := 0.25
 const HEARTBEAT := 1.0
+const TOKEN_PATH := "user://autochess_token.txt"
 
 var profile: ELProfile
 var is_host := true
@@ -40,22 +41,87 @@ var _closed := false
 var _departed := {}
 ## Seat by peer for returning guests waiting for the current battle to end.
 var _returning := {}
-## Kept for the whole run, so a guest that drops can take its seat back.
+## The signature this machine sends or checks, worked out once per session.
+var _signature := ""
+## Rounds whose battles ended differently here than on the host (guests).
+var divergences := 0
+var _checked_round := 0
+## Identifies this player to the host across a dropped connection or a
+## restart, so a guest that drops can take its seat back.
 static var _token := ""
 
 static func token() -> String:
-	if _token.is_empty(): _token = "%08x%08x" % [randi(), randi()]
+	if not _token.is_empty(): return _token
+	if FileAccess.file_exists(TOKEN_PATH):
+		var saved := FileAccess.get_file_as_string(TOKEN_PATH).strip_edges()
+		if saved.length() == 32 and saved.is_valid_hex_number(): _token = saved
+	if _token.is_empty():
+		_token = Crypto.new().generate_random_bytes(16).hex_encode()
+		var file := FileAccess.open(TOKEN_PATH, FileAccess.WRITE)
+		if file != null: file.store_string(_token)
 	return _token
 
-## A fingerprint of the creature data, so both sides fight identical lines.
+## A fingerprint of everything the battles depend on, so every machine of
+## the table fights identical battles: the game version, the rule tables
+## (lines, prices, pool, alliances, abilities, artifacts, creeps), every
+## form's full combat values with its flags, ability and animation timing,
+## and the outcome of a few fixed test battles, which also changes when the
+## battle code does.
 static func signature(data: ELProfile) -> String:
-	var parts := PackedStringArray()
+	var parts := {"game": str(ProjectSettings.get_setting("application/config/version", "")), "rules": ELAutochessRules.VERSION}
+	for script: Script in [ELAutochessRules, ELAutochessAbilities, ELAutochessAlliances, ELAutochessArtifacts]:
+		var constants := {}
+		var table := script.get_script_constant_map()
+		for key: String in table:
+			if typeof(table[key]) in [TYPE_BOOL, TYPE_INT, TYPE_FLOAT, TYPE_STRING, TYPE_ARRAY, TYPE_DICTIONARY, TYPE_RECT2, TYPE_VECTOR2]:
+				constants[key] = var_to_str(table[key])
+		parts[script.get_global_name()] = constants
+	var forms := {}
 	for line in ELAutochessRules.FAMILIES.size():
 		for rank in 3:
 			var code := ELAutochessRules.form(line, rank)
-			var row := ELAutochessRules.stats(data, code, ELAutochessRules.tier(line), rank, line)
-			parts.append("%s:%d:%d:%d:%.2f" % [code, int(row.health), roundi(float(row.damage) * 10), roundi(float(row.defense) * 10), float(row.interval)])
-	return str(",".join(parts).hash())
+			var row := ELAutochessRules.original(data, code)
+			forms["%d:%d" % [line, rank]] = [code, ELAutochessRules.stats(data, code, ELAutochessRules.tier(line), rank, line),
+				ELAutochessAbilities.clip_info(data, code), ELAutochessAlliances.traits(data, line),
+				String(row.get("Race", "")), row.get("AtRange", 1.5), row.get("Scale", 1.0), row.get("Flags", [])]
+	parts["forms"] = forms
+	var creeps := []
+	for round_number in range(1, 41):
+		if not ELAutochessRules.is_creep_round(round_number): continue
+		for placement: Dictionary in ELAutochessRules.creeps(round_number, 1):
+			var code := String(placement.get("code", ""))
+			creeps.append([round_number, placement, ELAutochessRules.stats(data, code, int(placement.get("tier", 1)), int(placement.get("rank", 0)), int(placement.get("family", -1))),
+				ELAutochessAbilities.clip_info(data, code)])
+	parts["creeps"] = creeps
+	var fights := []
+	for test in 3:
+		var home := []
+		var visitor := []
+		for i in 4:
+			var a := (test * 7 + i * 5) % ELAutochessRules.FAMILIES.size()
+			var b := (test * 11 + i * 3 + 4) % ELAutochessRules.FAMILIES.size()
+			home.append({"code": ELAutochessRules.form(a, test % 3), "family": a, "rank": test % 3, "tier": ELAutochessRules.tier(a), "point": [-5.0 - (i % 2) * 5.0, -6.0 + i * 4.0], "uid": i + 1, "item": ""})
+			visitor.append({"code": ELAutochessRules.form(b, test % 3), "family": b, "rank": test % 3, "tier": ELAutochessRules.tier(b), "point": [5.0 + (i % 2) * 5.0, 6.0 - i * 4.0], "uid": 101 + i, "item": ""})
+		home[0].item = ELAutochessArtifacts.RULES.keys()[test % ELAutochessArtifacts.RULES.size()]
+		var battle := ELAutochessBattle.new()
+		battle.setup(data, home, visitor, 4242 + test, 1 + test * 4)
+		battle.run_to_end()
+		fights.append([battle.winner, snappedf(battle.time, 0.001), battle.damage_by_uid(0), battle.damage_by_uid(1)])
+	parts["fights"] = fights
+	return JSON.stringify(parts, "", true, true).sha256_text()
+
+## The part of a round's results every machine settles alike: who won each
+## battle and the health it cost.
+static func results_digest(results: Dictionary) -> String:
+	var players := []
+	for key: Variant in results:
+		if str(key).is_valid_int(): players.append(int(key))
+	players.sort()
+	var rows := PackedStringArray()
+	for player: int in players:
+		var row: Variant = results.get(player, results.get(str(player), {}))
+		if row is Dictionary: rows.append("%d:%d:%d" % [player, int(row.get("winner", -1)), int(row.get("health_lost", 0))])
+	return ",".join(rows)
 
 ## Splits "host", "host:port", "[ipv6]" or "[ipv6]:port" into [address, port].
 ## A bare IPv6 address has several colons and never carries a port.
@@ -78,6 +144,7 @@ func host(data: ELProfile, port: int, name: String, character: String) -> Error:
 	is_host = true
 	seat = 0
 	lobby = [{"peer": 1, "name": name, "character": character}]
+	_signature = signature(profile)
 	_open()
 	var result := (_peer as ELRelayPeer).host_room(relay_room, MAX_GUESTS) if _peer is ELRelayPeer else (_peer as ENetMultiplayerPeer).create_server(port, MAX_GUESTS)
 	if result != OK:
@@ -92,6 +159,7 @@ func join(data: ELProfile, address: String, port: int, name: String, character: 
 	lobby = [{"peer": 0, "name": name, "character": character}]
 	if relay_room.is_empty() and (address.is_empty() or address.length() > 253): return ERR_INVALID_PARAMETER
 	if not relay_room.is_empty() and ELRelayPeer.clean_code(relay_room) != relay_room: return ERR_INVALID_PARAMETER
+	_signature = signature(profile)
 	_open()
 	var result := (_peer as ELRelayPeer).join_room(relay_room) if _peer is ELRelayPeer else (_peer as ENetMultiplayerPeer).create_client(address, port)
 	if result != OK:
@@ -157,7 +225,7 @@ func poll(delta: float) -> void:
 	if _peer == null: return
 	if _joining and _peer.get_connection_status() == MultiplayerPeer.CONNECTION_CONNECTED:
 		_joining = false
-		_send(1, ["hello", VERSION, signature(profile), String(lobby[0].name), String(lobby[0].character), token()])
+		_send(1, ["hello", VERSION, _signature, String(lobby[0].name), String(lobby[0].character), token()])
 	if is_host and _peer is ELRelayPeer and _peer.get_connection_status() == MultiplayerPeer.CONNECTION_DISCONNECTED:
 		var lost: String = (_peer as ELRelayPeer).close_reason
 		_fail(lost if not lost.is_empty() else "Lost the connection to the online room.")
@@ -184,12 +252,19 @@ func poll(delta: float) -> void:
 func _host_receive(sender: int, packet: Array) -> void:
 	match String(packet[0]):
 		"hello":
-			if packet.size() < 6 or int(packet[1]) != VERSION or String(packet[2]) != signature(profile):
+			if _signature.is_empty(): _signature = signature(profile)
+			if packet.size() < 6 or not (packet[1] is int or packet[1] is float) or int(packet[1]) != VERSION or String(packet[2]) != _signature:
 				_send(sender, ["refused", "The game differs from the host's. Use the same Etherlords II installation."])
 				return
 			var token := String(packet[5]).left(32)
+			# A repeated hello from a connection already in the lobby or seated changes nothing.
+			if _seats.has(sender) or _returning.has(sender): return
+			if lobby.any(func(row: Dictionary) -> bool: return int(row.peer) == sender): return
 			if game != null:
 				_rejoin(sender, token)
+				return
+			if not token.is_empty() and lobby.any(func(row: Dictionary) -> bool: return String(row.get("token", "")) == token):
+				_send(sender, ["refused", "This player has already joined the tournament."])
 				return
 			if lobby.size() > MAX_GUESTS:
 				_send(sender, ["refused", "The tournament is full."])
@@ -225,7 +300,16 @@ func _rejoin(sender: int, token: String) -> void:
 		_send(sender, ["refused", "The game has already started."])
 		return
 	var seat_index := int(_departed[token])
-	_departed.erase(token)
+	# The seat stays reserved for the token until the guest is seated, so a
+	# return that drops while it waits for a battle can be tried again. A
+	# newer connection with the same token replaces one still waiting.
+	for peer: int in _returning.keys():
+		if int(_returning[peer]) != seat_index: continue
+		_returning.erase(peer)
+		for index in range(lobby.size() - 1, 0, -1):
+			if int(lobby[index].peer) == peer: lobby.remove_at(index)
+		_send(peer, ["refused", "This player has joined again from another connection."])
+		if _peer != null and _peer.get_connection_status() == MultiplayerPeer.CONNECTION_CONNECTED: _peer.disconnect_peer(peer)
 	lobby.append({"peer": sender, "name": game.names[seat_index].trim_suffix(" (AI)"), "character": "", "token": token})
 	_returning[sender] = seat_index
 	if game.stage != "fight": _seat_returning()
@@ -233,6 +317,8 @@ func _rejoin(sender: int, token: String) -> void:
 func _seat_returning() -> void:
 	for peer: int in _returning:
 		var seat_index := int(_returning[peer])
+		for key: String in _departed.keys():
+			if int(_departed[key]) == seat_index: _departed.erase(key)
 		_seats[peer] = seat_index
 		game.controllers[seat_index] = "remote"
 		game.names[seat_index] = game.names[seat_index].trim_suffix(" (AI)")
@@ -359,6 +445,7 @@ func _guest_receive(packet: Array) -> void:
 			if game == null or packet.size() < 2 or not packet[1] is Dictionary: return
 			# A guest finishing its own copy of the battles keeps them until the host settles too.
 			if game.stage == "fight": return
+			_compare_results(packet[1])
 			_apply_state(packet[1])
 		"fight":
 			if game == null or packet.size() < 2 or not packet[1] is Dictionary: return
@@ -380,6 +467,21 @@ func _guest_receive(packet: Array) -> void:
 				game.changed.emit()
 		"error":
 			if packet.size() > 1: message.emit(ELAutochessText.t(profile, String(packet[1])))
+
+## Once per round, the battles this machine played against the host's
+## settled results. The host's results count either way; a difference means
+## the two machines do not run identical battles.
+func _compare_results(state: Dictionary) -> void:
+	if game == null or game.stage not in ["result", "over"] or game.round_results.is_empty(): return
+	if not String(state.get("live_stage", "")) in ["result", "over"] or int(state.get("round", 0)) != game.round_number: return
+	if _checked_round == game.round_number: return
+	var results: Variant = state.get("results", {})
+	if not results is Dictionary or results.is_empty(): return
+	_checked_round = game.round_number
+	if results_digest(results) == results_digest(game.round_results): return
+	divergences += 1
+	push_warning("Autochess round %d: local battle results %s, host %s" % [game.round_number, results_digest(game.round_results), results_digest(results)])
+	message.emit(ELAutochessText.t(profile, "The battles on this machine ended differently from the host's. The host's results count."))
 
 func _apply_state(state: Dictionary) -> bool:
 	var before := game.round_results.duplicate(true) if game != null else {}

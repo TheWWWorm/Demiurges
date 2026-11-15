@@ -10,6 +10,8 @@ extends RefCounted
 ## `error` names it; nothing is substituted. An original .rpl file (the
 ## original's own Duel replays) plays through the same command mapping as the
 ## combat tutorial, with its recorded comments shown and paused at.
+## A remake replay that recorded how its battle ended is checked against it
+## when playback ends; a different end is reported like a divergence.
 
 signal changed
 signal diverged(message: String)
@@ -30,6 +32,9 @@ var playing := false
 var pause_at_comment := false
 ## The pending step of editor mode (COMMAND, PHASE or TURN), or NONE.
 var step_mode := NONE
+## The end check: null until playback ends (or for a replay with no recorded
+## end), then true when the battle ended as recorded, false when not.
+var verified: Variant = null
 var _running := false
 ## Original .rpl playback: its decoder and command driver.
 var original: ELCombatTutorial
@@ -63,6 +68,7 @@ func begin(target: ELDuel) -> bool:
 	error = ""
 	playing = false
 	step_mode = NONE
+	verified = null
 	if original != null:
 		original.error = ""
 		if not original.begin(duel): return _fail(original.error)
@@ -136,6 +142,9 @@ func to_recording() -> ELDuelRecording:
 		recording.rounds = [{"seed": int(data.seed), "options": data.options, "actions": [], "winner": -1, "complete": true}]
 		return recording
 	recording.rounds = [{"seed": int(data.seed), "options": data.options, "actions": actions().duplicate(true), "winner": int(data.get("winner", -1)), "complete": true}]
+	if data.get("terminal") is Dictionary:
+		recording.rounds[0].terminal = data.terminal.duplicate(true)
+		recording.rounds[0].rules = String(data.get("rules", ""))
 	return recording
 
 func done() -> bool:
@@ -196,9 +205,30 @@ func step() -> bool:
 	# Pause at comment: stop where the next command carries one (it is shown
 	# while that command waits).
 	if pause_at_comment and not comment().is_empty(): _pause()
-	if done(): playing = false
+	if done():
+		playing = false
+		if not _verify_end():
+			diverged.emit(error)
+			changed.emit()
+			return false
 	changed.emit()
 	return true
+
+## Compares the battle's end with the recorded one; false on a difference.
+func _verify_end() -> bool:
+	var recorded: Variant = data.get("terminal")
+	if original != null or recorded is not Dictionary or verified != null: return true
+	var now := ELDuelRecording.terminal_state(duel)
+	verified = String(recorded.get("digest", "")) == String(now.digest) and int(recorded.get("winner", -2)) == int(now.winner) \
+		and [int(recorded.health[0]), int(recorded.health[1])] == now.health
+	if verified: return true
+	var message := "This replay ended differently from when it was recorded: winner %d, health %d/%d (recorded: winner %d, health %d/%d)." % [
+		int(now.winner), int(now.health[0]), int(now.health[1]), int(recorded.get("winner", -1)), int(recorded.health[0]), int(recorded.health[1])]
+	var rules := String(data.get("rules", ""))
+	if not rules.is_empty() and rules != ELDuelRecording.rules_identity(profile):
+		message += " It was recorded with Demiurges %s; this is %s." % [rules, ELDuelRecording.rules_identity(profile)]
+	_fail(message)
+	return false
 
 func _pause() -> void:
 	playing = false

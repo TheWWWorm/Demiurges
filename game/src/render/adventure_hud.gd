@@ -72,6 +72,9 @@ var tooltip_subject := -1
 var precombat: Control
 var begin_button: CutButton
 var cancel_button: CutButton
+## The check mark (SelectOK) that starts the battle in place of the wide
+## BeginCombat strip under the remake's free movement.
+var accept_button: CutButton
 var precombat_labels: Dictionary = {}
 var precombat_portraits: Array[TextureRect] = []
 var precombat_pair: Array = []
@@ -755,6 +758,12 @@ func show_tooltip(id: int, content: Dictionary, at: Vector2) -> void:
 
 ## The pre-battle panel's Level/Life/Sight lines, as a GDI cell height.
 const STAT_CELL := 15
+## The portraits: the black window inside each ornate frame of the panel art
+## (measured on the 1024 layout), filled as the panel's stats view does, with
+## a 94x50 cut at (3, 9) of the 100x70 photo cell. The whole cell drawn over
+## the frame hid it (player report on the "Accept battle?" panel).
+const PRECOMBAT_PORTRAITS := [Rect2(40, 73, 94, 50), Rect2(335, 73, 94, 50)]
+const PRECOMBAT_PORTRAIT_CUT := Vector2(3, 9)
 
 func _build_precombat() -> void:
 	precombat = Control.new()
@@ -778,9 +787,9 @@ func _build_precombat() -> void:
 		precombat_labels.names.append(name)
 		var portrait := TextureRect.new()
 		portrait.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-		portrait.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-		portrait.position = Vector2(39 if side == 0 else 334, 66)
-		portrait.size = Vector2(100, 67)
+		portrait.stretch_mode = TextureRect.STRETCH_SCALE
+		portrait.position = PRECOMBAT_PORTRAITS[side].position
+		portrait.size = PRECOMBAT_PORTRAITS[side].size
 		portrait.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		precombat.add_child(portrait)
 		precombat_portraits.append(portrait)
@@ -804,9 +813,18 @@ func _build_precombat() -> void:
 	begin_button.place(Vector2.ZERO)
 	begin_button.pressed.connect(func(): begin_requested.emit())
 	precombat.add_child(begin_button)
-	# Remake addition: the original panel only starts the battle. A fight with
-	# a neutral creature may be left alone with the original X art (SelectCancel)
-	# at the panel's lower right; Esc does the same.
+	# Remake addition, with free movement only: the second game's pair of a
+	# check mark (SelectOK art) and a cross (SelectCancel art) at the panel's
+	# lower right instead of the wide strip; the cross (or Esc) leaves a
+	# neutral creature alone. The original orders keep the original panel,
+	# whose battle cannot be declined (player report #137).
+	accept_button = CutButton.from_rows(self, "SelectOK", Vector2.ZERO)
+	accept_button.tooltip_text = profile.text("CtrlTtBeginCombat")
+	accept_button.place(Vector2.ZERO)
+	accept_button.place(ACCEPT_AT - accept_button.position)
+	accept_button.pressed.connect(func(): begin_requested.emit())
+	precombat.add_child(accept_button)
+	accept_button.hide()
 	cancel_button = CutButton.from_rows(self, "SelectCancel", Vector2.ZERO)
 	cancel_button.tooltip_text = ELRemakeText.t("Leave this creature alone", profile)
 	cancel_button.place(Vector2.ZERO)
@@ -837,23 +855,36 @@ func _draw_precombat() -> void:
 		if texture != null: precombat.draw_texture_rect_region(texture, Rect2(446, 62, 40, 73), Rect2(90, 62, 40, 73))
 
 ## The "Combat N of M" panel shown before a queued battle starts.
-## Where the remake's X sits on the 614x182 pre-battle panel.
-const CANCEL_AT := Vector2(566, 136)
+## Where the remake's X sits on the 614x182 pre-battle panel: at the lower
+## right, just inside the frame (its inner edges are x 37 and 601).
+const CANCEL_AT := Vector2(558, 136)
+## The check mark at the lower left, mirroring the X about the panel art's
+## middle (x 319), as the second game's panel has PreCombatBegin and
+## PreCombatCancel at its two ends.
+const ACCEPT_AT := Vector2(40, 136)
 
-func show_precombat(hero_id: int, opponent_id: int, number: int, total: int, declinable := false) -> void:
+## `choice`: the check mark (and the cross when `declinable`) instead of the
+## original wide strip, for the remake's free movement.
+func show_precombat(hero_id: int, opponent_id: int, number: int, total: int, declinable := false, choice := false) -> void:
 	tooltip.hide()
-	if cancel_button != null: cancel_button.visible = declinable
+	if begin_button != null: begin_button.visible = not choice
+	if accept_button != null: accept_button.visible = choice
+	if cancel_button != null: cancel_button.visible = choice and declinable
 	precombat_pair = [hero_id, opponent_id]
 	var format := profile.text("CtrlBattleNumText")
 	if format == "CtrlBattleNumText": format = "Combat %d of %d"
-	precombat_labels.heading.text = format % [number, total]
+	# The check mark and cross ask the second game's question (its BattleNumText).
+	precombat_labels.heading.text = ELRemakeText.t("Accept battle?", profile) if choice else format % [number, total]
 	for side in 2:
 		var actor := state.object(precombat_pair[side])
 		var row: Dictionary = _art.resolve(actor).get("row", {})
 		# A lair creature is off the map, so its picture comes from its template.
 		if row.is_empty() and actor.get("type") == "monster": row = ELFirstMonsters.definition(profile, str(actor.get("name", "")), int(actor.get("monster_difficulty", 0)))
 		precombat_labels.names[side].text = str(actor.get("title", actor.get("name", "")))
-		precombat_portraits[side].texture = profile.portrait(int(row.get("Face" if actor.get("type") == "hero" else "Icon", 0)))
+		var photo := profile.portrait(int(row.get("Face" if actor.get("type") == "hero" else "Icon", 0))) as AtlasTexture
+		if photo != null:
+			photo.region = Rect2(photo.region.position + PRECOMBAT_PORTRAIT_CUT, PRECOMBAT_PORTRAITS[side].size)
+		precombat_portraits[side].texture = photo
 		var hero: bool = actor.get("type") == "hero"
 		var entries: Array = [["T_LEVEL", int(actor.get("level", 1))], ["T_LIFE", int(actor.get("health", 0))]]
 		if hero: entries.append(["T_SIGHT", int(actor.get("base_ap", 0))])

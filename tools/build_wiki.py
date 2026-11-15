@@ -14,7 +14,9 @@ see docs/wiki.md). This tool validates them and writes both readers' data:
 Both readers receive the same escaped HTML subset (h1-h3, p, ul/ol/li, table,
 strong, em, code, a). Internal links are `wiki://<page>`; the website rewrites
 them to `?page=<page>`. The encyclopedia comes from `wiki/catalog/` (exported by
-tools/export_wiki.gd); only its pictures that pages show are published.
+tools/export_wiki.gd); only its pictures that pages show are published. A guide
+line `!objects el1/<Table>/<row> = Caption | ...` shows map objects: the website
+the pictures export_wiki.gd rendered of them, the game their live models.
 
     python3 tools/build_wiki.py            # rebuild both outputs
     python3 tools/build_wiki.py --check    # fail if either output is stale
@@ -105,8 +107,32 @@ def hero_image(game, template):
     return f'{game}/hero-' + re.sub(r'[^a-z0-9]+', '-', template.lower()).strip('-') + '.webp'
 
 
+OBJECT = re.compile(r'(el1|el2)/([A-Za-z]+/[A-Za-z0-9_.@-]+)\s*=\s*([^|]+)')
+
+
+def objects(value, name):
+    """Map objects of an `!objects` line: `el1/<Table>/<row> = Caption | ...`,
+    each a table row of a game's adventure-map objects (ELWikiPreview.object_row)
+    and its caption -> [[game, "Table/row", caption], ...]."""
+    out = []
+    for item in filter(None, (part.strip() for part in value.split('|'))):
+        m = OBJECT.fullmatch(item)
+        if not m:
+            raise WikiError(f'{name}: !objects entries are "el1|el2/<Table>/<row> = <caption>", not {item!r}')
+        out.append([m[1], m[2], m[3].strip()])
+    if not out:
+        raise WikiError(f'{name}: an !objects line lists no objects')
+    return out
+
+
+def object_image(game, ident):
+    """The exported picture of a map object (tools/export_wiki.gd names it so)."""
+    return f'{game}/object-' + re.sub(r'[^a-z0-9]+', '-', ident.lower()).strip('-') + '.webp'
+
+
 def parse(path):
-    """Returns (meta, html, plain text, h2 count, links) for one source file."""
+    """Returns (meta, html, plain text, h2 count, links) for one source file;
+    meta['objects'] lists the page's map objects in order."""
     text = path.read_text(encoding='utf-8').replace('\r\n', '\n')
     name = f'{path.parent.name}/{path.name}'
     m = re.match(r'---\n(.*?)\n---\n', text, re.S)
@@ -120,6 +146,7 @@ def parse(path):
         raise WikiError(f'{name}: front matter needs title and category')
     meta['order'] = int(meta.get('order', 100))
     meta['heroes'] = heroes(meta.get('heroes', ''), name)
+    meta['objects'] = []
     body = text[m.end():].strip('\n').split('\n')
     links, out, plain, sections = set(), [f'<h1>{html.escape(meta["title"], quote=False)}</h1>'], [meta['title']], 0
     i = 0
@@ -127,7 +154,7 @@ def parse(path):
     def para_lines(start):
         rows = []
         j = start
-        while j < len(body) and body[j].strip() and not re.match(r'(#{2,3} |- |\d+\. |\||> )', body[j]):
+        while j < len(body) and body[j].strip() and not re.match(r'(#{2,3} |- |\d+\. |\||> |!objects )', body[j]):
             rows.append(body[j].strip())
             j += 1
         return rows, j
@@ -173,6 +200,13 @@ def parse(path):
                 cells.append('<tr>' + ''.join(f'<td>{inline(c, name, links)}</td>' for c in row) + '</tr>')
                 plain.extend(row)
             out.append(f'<table data-columns="{columns}">{"".join(cells)}</table>')
+        elif line.startswith('!objects '):
+            shown = objects(line[len('!objects '):], name)
+            meta['objects'].extend(shown)
+            figures = ''.join(f'<figure data-object="{game}/{html.escape(ident)}"><figcaption>{html.escape(caption, quote=False)}</figcaption></figure>'
+                              for game, ident, caption in shown)
+            out.append(f'<div class="objects">{figures}</div>')
+            i += 1
         elif line.startswith('> '):
             rows = []
             while i < len(body) and body[i].startswith('> '):
@@ -208,6 +242,7 @@ def load():
                 raise WikiError(f'ru/{path.name}: the Russian article is mostly not in Russian')
             rows.append({'key': key, 'title': meta['title'], 'category': meta['category'],
                          'order': meta['order'], 'summary': meta.get('summary', ''), 'heroes': meta['heroes'],
+                         'objects': meta['objects'],
                          'html': body, 'search': words.lower(), 'sections': sections, 'links': sorted(links)})
         pages[lang] = rows
     catalog_pages = load_catalog(known)
@@ -228,6 +263,8 @@ def load():
             raise WikiError(f'{key}: category and order must match in every language')
         if len({tuple((h[0], h[1]) for h in r['heroes']) for r in rows}) != 1:
             raise WikiError(f'{key}: the translations list different heroes')
+        if len({tuple((o[0], o[1]) for o in r['objects']) for r in rows}) != 1:
+            raise WikiError(f'{key}: the translations show different map objects (!objects lines)')
         if len({r['sections'] for r in rows}) != 1:
             raise WikiError(f'{key}: the translations have different numbers of "## " sections')
         if len({tuple(r['links']) for r in rows}) != 1:
@@ -307,6 +344,23 @@ def web_figures(html, images, used):
     return FIGURE.sub(figure, html)
 
 
+OBJECT_FIGURE = re.compile(r'<figure data-object="(el1|el2)/([^"]+)"><figcaption>(.*?)</figcaption></figure>')
+
+
+def web_objects(page, images, used):
+    """The map objects of `!objects` lines as captioned galleries of their
+    exported pictures; objects without a picture (and empty galleries) go."""
+    def figure(m):
+        name = object_image(m[1], html.unescape(m[2]))
+        if name not in images:
+            return ''
+        used.add(name)
+        return (f'<figure class="model"><img src="/wiki/images/{name}" alt="{html.escape(html.unescape(m[3]))}" loading="lazy">'
+                f'<figcaption>{m[3]}</figcaption></figure>')
+    page = OBJECT_FIGURE.sub(figure, page)
+    return page.replace('<div class="objects"></div>', '')
+
+
 def web_heroes(page, heroes, images, used):
     """A story page's heroes as a captioned gallery under its heading, for the
     heroes whose pictures were exported."""
@@ -354,7 +408,7 @@ def write_public(output, cats, pages):
         entries = []
         for row in pages[lang]:
             page = {'key': row['key'], 'title': row['title'], 'category': row['category'],
-                    'html': web_heroes(web_figures(row['html'], images, used), row.get('heroes', []), images, used)}
+                    'html': web_heroes(web_objects(web_figures(row['html'], images, used), images, used), row.get('heroes', []), images, used)}
             (folder / f'{row["key"]}.json').write_text(json.dumps(page, ensure_ascii=False, sort_keys=True) + '\n', encoding='utf-8', newline='\n')
             entry = {'key': row['key'], 'title': row['title'], 'category': row['category'],
                      'summary': row['summary'], 'search': row['search']}
@@ -392,7 +446,8 @@ def game_script(cats, pages):
         'class_name ELWikiData',
         'extends RefCounted',
         '## The wiki articles for the in-game reader (ELWikiScreen), in every',
-        '## language. Each page: key, title, category, html (escaped subset), search.',
+        '## language. Each page: key, title, category, html (escaped subset), search',
+        '## and, when it has them, heroes and map objects ([game, id, caption]).',
         '',
         f'const VERSION := {gd_string(game_version())}',
         f'const LANGUAGES: Array[String] = {gd_string(LANGUAGES)}',
@@ -410,6 +465,8 @@ def game_script(cats, pages):
             fields = {k: row[k] for k in ['key', 'title', 'category', 'html', 'search']}
             if row.get('heroes'):
                 fields['heroes'] = row['heroes']
+            if row.get('objects'):
+                fields['objects'] = row['objects']
             lines.append('\t\t{' + ', '.join(f'{gd_string(k)}: {gd_string(v)}' for k, v in fields.items()) + '},')
         lines.append('\t],')
     lines.append('}')

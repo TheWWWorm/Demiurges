@@ -10,7 +10,7 @@ The **Auto Combat** button lets the computer play your side. It uses the same pl
 
 ## The battle camera
 
-Drag with the right mouse button to turn the camera and use the wheel to zoom; **R** resets the view. On touch screens, drag with one finger and pinch to zoom.
+With the automatic camera off, drag with the right mouse button to turn the camera and use the wheel to zoom; **R** resets the view. On touch screens, drag with one finger and pinch to zoom.
 
 The **Automatic camera** shows spells, the first blow of a fight and the winner in close-ups along the games' own camera tracks before returning to your view. **Automatic camera dynamics** in [Options](options) sets how often close-ups happen. Moving the camera yourself ends a close-up at once. The numbers over creatures can be hidden during close-ups.
 

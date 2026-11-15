@@ -22,9 +22,15 @@ In Etherlords a hero uses an object from a tile next to it: order the hero to it
 | Diamond Mine | 6 / 8 / 10 Smoke Diamond | 20 Root, 20 Lotus, 20 Diamond, 5 Frozen Flames | 40 Diamond, 15 Ruby, 15 Sapphire, 10 Frozen Flames |
 | Fire Glacier | 2 / 3 / 4 Frozen Flames | 25 each of Ruby, Emerald, Sapphire and Diamond | 50 each of Ruby, Emerald, Sapphire and Diamond |
 
+!objects el1/ResourceMine/RTM@0 = Mandrake Garden | el1/ResourceMine/LTM@0 = Lotus Garden | el1/ResourceMine/RM-Red@0 = Ruby Mine | el1/ResourceMine/EM-Green@0 = Emerald Mine | el1/ResourceMine/SM-Blue@0 = Sapphire Mine | el1/ResourceMine/DM-Black@0 = Diamond Mine | el1/ResourceMine/FFM@0 = Fire Glacier
+
 **Ether nodes** (Red, Green, Blue and Black Ether node) are captured the same way. A node gives its owner 30 ether per turn when it has the owner's colour and 15 when it has another colour. They cannot be upgraded. Ether pays the upkeep of heroes and the global spells.
 
+!objects el1/ManaNodes/ManaNode.Red = Red Ether node | el1/ManaNodes/ManaNode.Green = Green Ether node | el1/ManaNodes/ManaNode.Blue = Blue Ether node | el1/ManaNodes/ManaNode.Black = Black Ether node
+
 **Resource piles** of one resource lie on the map. A hero who takes one gets the whole pile once and the pile is gone. Each map sets the amount of every pile.
+
+!objects el1/ResourceCut/BigRoot = Mandrake Root | el1/ResourceCut/BigLotus = Black Lotus | el1/ResourceCut/BigRuby = Bloody Ruby | el1/ResourceCut/BigFFlame = Frozen Flames
 
 ## Shops (Etherlords)
 
@@ -42,6 +48,8 @@ Shops come in three kinds and three ranks. A hero who opens a shop captures it f
 | Granite Portal | Runes, cheapest for rare spells | 30 Root, 30 Lotus, 10 of your gem, 5 Frozen Flames | 40 of your gem, 15 + 15 other gems, 10 Frozen Flames |
 | Obsidian Portal | Runes, cheapest for unique spells | 50 Root, 50 Lotus, 15 of your gem, 10 Frozen Flames | 50 of your gem, 25 + 25 other gems, 15 Frozen Flames |
 
+!objects el1/NewBuildings/CommonLab@0 = Apprentice's Lab | el1/NewBuildings/RareLab@0 = Sorcerer's Lab | el1/NewBuildings/UniqueLab@0 = Wizard's Lab | el1/NewBuildings/CommonZoo@0 = Summoner's Hut | el1/NewBuildings/RareZoo@0 = Summoner's Tower | el1/NewBuildings/UniqueZoo@0 = Summoner's Guild | el1/NewBuildings/CommonPortal@0 = Stone Portal | el1/NewBuildings/RarePortal@0 = Granite Portal | el1/NewBuildings/UniquePortal@0 = Obsidian Portal
+
 - **Labs and summoner's buildings** sell only spells of the hero's colour, from the list the map gives the shop. That list has three tiers: an unupgraded shop sells the first, each upgrade adds the next. A bought spell takes a place in the spell book. The price is the spell's cost; for every copy of that spell already in the book it rises: ×2 for the second copy, ×3, ×5, ×10, ×20 and so on.
 - **Portals** sell runes for the spells in the hero's book (cantrips need none). A rune costs the spell's rune price times a factor: in a Stone Portal ×1 for common, ×5 for rare and ×25 for unique spells; in a Granite Portal ×2, ×1 and ×5; in an Obsidian Portal ×4, ×2 and ×1. An upgraded portal sells 15% cheaper, and 40% cheaper after the second upgrade.
 - The **Bargain** skill lowers both kinds of prices. See [Heroes and levels](heroes) and [Runes and artifacts](runes-artifacts).
@@ -56,6 +64,8 @@ Shops come in three kinds and three ranks. A hero who opens a shop captures it f
 | Training Camp | The hero leaves the map and gains 50 experience every day until he is ordered out; he then returns to the tile he entered from. One hero at a time | While he stays |
 | Spring of Life | Health +¼ of the hero's health, until the end of the week | Once per hero per week |
 | Spring of Movement | Movement and sight +¼ of the hero's movement, until the end of the week | Once per hero per week |
+
+!objects el1/AdditionalBuildings/Teacher = Teacher | el1/AdditionalBuildings/Magister = Mentor | el1/AdditionalBuildings/Master = Master | el1/AdditionalBuildings/TrainingCamp = Training Camp | el1/AdditionalBuildings/SpringOfStrength = Spring of Life | el1/AdditionalBuildings/SpringOfDexterity = Spring of Movement
 
 The amounts of the Teacher and the Mentor are before the **Learning** skill, which adds 25, 50 or 100% to them. Experience stops at level 20.
 
@@ -79,6 +89,8 @@ These are captured by a visit and help their owner while he holds them. Any othe
 
 A **Fort** holds one hero. The hero who enters captures it and guards the area within three tiles: an enemy who walks into it is stopped for a battle. The owner can upgrade a fort twice: 25 Ruby, 25 Diamond and 10 Frozen Flames, then 25 Emerald, 40 Sapphire and 15 Frozen Flames. In an upgraded fort the hero in it fights with a fully charged [Rod of Defense](card-rddf); in a fully upgraded fort the hero's level in battle is also one higher. Many maps place their forts already upgraded.
 
+!objects el1/AdditionalBuildings/ShrineMagic = Altar | el1/AdditionalBuildings/HealersCitadel = Healer's Citadel | el1/AdditionalBuildings/WanderersCitadel = Wanderer's Citadel | el1/Buildings/Fortress.0.Red = Fort
+
 ## Gnomes and wagons (Etherlords)
 
 | Object | What a visit gives | How often |
@@ -89,6 +101,8 @@ A **Fort** holds one hero. The hero who enters captures it and guards the area w
 | Gnome-Alchemist | 1 rune for every spell in the hero's book (not cantrips) | Once a week, for the first visitor of any player |
 | Gnome-Artificer | Shows its message that artifacts are recharged, but changes no artifact, as in the original game | Once a week, for the first visitor of any player |
 
+!objects el1/AdditionalBuildings/TraderWagon = Trader's Wagon | el1/AdditionalBuildings/MageWagon = Magician's Wagon | el1/AdditionalBuildings/GnomeMerchant = Gnome-Merchant | el1/AdditionalBuildings/GnomeAlchemist = Gnome-Alchemist | el1/AdditionalBuildings/GnomeTinkerer = Gnome-Artificer
+
 Artifacts carried by a hero of Etherlords start every battle fully charged anyway.
 
 ## Lairs and guards (Etherlords)
@@ -98,6 +112,8 @@ Artifacts carried by a hero of Etherlords start every battle fully charged anywa
 | Dungeon | One creature of level 2 to 4 |
 | Labyrinth | One creature of level 5 to 7 |
 | Crypt | One creature of level 8 to 10 |
+
+!objects el1/AdditionalBuildings/Dungeon1 = Dungeon | el1/AdditionalBuildings/Dungeon2 = Labyrinth | el1/AdditionalBuildings/Dungeon3 = Crypt
 
 A hero who enters a lair fights the creature inside. Each week an empty lair gets a new creature, drawn at random from all neutral creatures of its levels at the chosen difficulty. Neutral creatures standing on the map guard the area within two tiles: a hero who walks into it is stopped for a battle.
 
@@ -110,6 +126,8 @@ A hero who enters a lair fights the creature inside. Each week an empty lair get
 - An **Observation Point** shows its visitor's player the land around every **Observation Device** that belongs to it. It can be used again and again.
 - The **Altars of War** of the Wild Wasteland can be destroyed by a visit, once each; every one destroyed makes the Fire Konung one step weaker (IV, III, II, I).
 - The **Town Center** of the Lost City gives the key to the Temple of Time and wins the chapter. In the chapters of the **Temple of Time**, rocks bar the way to it until the rival's castle is destroyed, and a hero who reaches the temple wins.
+
+!objects el1/Artefacts/RodOfFire = Artifact (rod) | el1/Artefacts/RingOfHealing = Artifact (ring) | el1/Artefacts/EtherAmulet = Artifact (amulet) | el1/Artefacts/ScrollOfBless = Artifact (scroll) | el1/GlobalSpellCut/FullSpell = Global spell | el1/GlobalSpellCut/PartSpell = Global spell part | el1/AdditionalBuildings/Prison = Prison | el1/AdditionalBuildings/WardingStone = Warding Stone | el1/AdditionalBuildings/Runestone1 = Rune Stone | el1/AdditionalBuildings/Runestone2 = Greater Rune Stone | el1/AdditionalBuildings/Lake = Observation Point | el1/AdditionalBuildings/ReflectingBowl = Observation Device | el1/AdditionalBuildings/AltarOfWar = Altar of War | el1/AdditionalBuildings/TownBunker = Town Center | el1/AdditionalBuildings/WhiteCastle = Temple of Time
 
 ## Etherlords II
 
@@ -135,10 +153,16 @@ In Etherlords II using a building takes 2 of the hero's travel points for the da
 | Tunnel | Moves the hero to another mouth of the same tunnel. A creature may wait inside; it must be beaten first, and the victory clears every mouth of that tunnel |
 | Corpse | Searched by the main hero; what it holds depends on the chapter |
 
+!objects el2/ResourceMine/Mine.Root.Green = Mandrake Garden | el2/ResourceMine/Mine.Ruby.Red = Ruby Mine | el2/ResourceMine/Mine.FF = Fire Glacier | el2/ResourceCut/Res.Root.3 = Plants | el2/ResourceCut/Res.Ruby.3 = Stones | el2/ResourceCut/Res.FF.3 = Frozen Flames | el2/NewBuildings/CommonLab@0 = Apprentice's Lab | el2/NewBuildings/RareLab@0 = Sorcerer's Lab | el2/NewBuildings/UniqueLab@0 = Wizard's Lab | el2/NewBuildings/CommonZoo@0 = Summoner's Hut | el2/NewBuildings/RareZoo@0 = Summoner's Tower | el2/NewBuildings/UniqueZoo@0 = Summoner's Guild | el2/Buildings/Fortress.0.Blue = Fort | el2/AdditionalBuildings/BeaconBlue = Beacon
+
+!objects el2/AdditionalBuildings/PowerNodeBlack = Ether Node of Synthesis | el2/AdditionalBuildings/PowerNodeBlue = Ether Node of Ordering | el2/AdditionalBuildings/PowerNodeGreen = Ether Node of Life | el2/AdditionalBuildings/PowerNodeRed = Ether Node of Chaos | el2/AdditionalBuildings/Specialization = Shrine of Knowledge | el2/AdditionalBuildings/Prison = Prison | el2/AdditionalBuildings/Sign = Sign | el2/AdditionalBuildings/StoneSign = Stone Sign | el2/AdditionalBuildings/Lake = Magic Font | el2/AdditionalBuildings/ReflectingEye = Ocularis Orb | el2/AdditionalBuildings/Runestone1Green = Rune Stone | el2/AdditionalBuildings/WardingStoneGreen = Warding Stone | el2/AdditionalBuildings/ArtefactRecharger = Artifact Recharger | el2/AdditionalBuildings/ArtefactRecipe = Artifact Recipe | el2/AdditionalBuildings/Dock = Jetty | el2/AdditionalBuildings/Teleport = Teleporter | el2/AdditionalBuildings/TeleportReceiver = Teleport receiver | el2/AdditionalBuildings/TunnelGreen = Tunnel
+
 **Battleground buildings** change battles. There are three kinds:
 
 - **Activated for 10 days**: the effect goes with the hero for 10 days, and the building can then be used by nobody for 10 days. Reality Convertor, Mech Worms Production Facility, Temple of Frost Wind, Source of Oblivion, Ticks Breeding Grounds, Shrine of Nature, Wolves dens, Stone plate.
 - **Activated once per hero**: the effect stays with the hero. Magneto, Purify Station, Contagious Fingus, Hermit's Hut, Altar of Storms, Rat Holes, Lightning Generator.
 - **Working by distance**, without a visit: they affect the battles of every hero or creature within 10 tiles of them. Disturbance Generator, Data Flow, Gravity Anomaly Site, Ether Stir, Monument of Peace, Aviak's Sacred Place, Ancestral Tomb, Resonating caves, Balance Grounds, Protector of Life, Toxic Wastes, Cursed Spring, Active Volcano, Shaking grounds, Links of Pain.
+
+!objects el2/AdditionalBuildings/E2Black1 = Reality Convertor | el2/AdditionalBuildings/E2Black5 = Mech Worms Production Facility | el2/AdditionalBuildings/E2Blue3 = Temple of Frost Wind | el2/AdditionalBuildings/E2Blue8 = Source of Oblivion | el2/AdditionalBuildings/E2Green3 = Ticks Breeding Grounds | el2/AdditionalBuildings/E2Green8 = Shrine of Nature | el2/AdditionalBuildings/E2Red2 = Wolves dens | el2/AdditionalBuildings/E2Red7 = Stone plate | el2/AdditionalBuildings/E2Black4 = Magneto | el2/AdditionalBuildings/E2Black6 = Purify Station | el2/AdditionalBuildings/E2Green1 = Contagious Fingus | el2/AdditionalBuildings/E2Green2 = Hermit's Hut | el2/AdditionalBuildings/E2Red5 = Altar of Storms | el2/AdditionalBuildings/E2Red6 = Rat Holes | el2/AdditionalBuildings/E2Red9 = Lightning Generator | el2/AdditionalBuildings/E2Black2 = Disturbance Generator | el2/AdditionalBuildings/E2Black3 = Data Flow | el2/AdditionalBuildings/E2Black7 = Gravity Anomaly Site | el2/AdditionalBuildings/E2Blue1 = Ether Stir | el2/AdditionalBuildings/E2Blue2 = Monument of Peace | el2/AdditionalBuildings/E2Blue4 = Aviak's Sacred Place | el2/AdditionalBuildings/E2Blue5 = Ancestral Tomb | el2/AdditionalBuildings/E2Blue6 = Resonating caves | el2/AdditionalBuildings/E2Blue7 = Balance Grounds | el2/AdditionalBuildings/E2Green5 = Protector of Life | el2/AdditionalBuildings/E2Green6 = Toxic Wastes | el2/AdditionalBuildings/E2Green7 = Cursed Spring | el2/AdditionalBuildings/E2Red1 = Active Volcano | el2/AdditionalBuildings/E2Red4 = Shaking grounds | el2/AdditionalBuildings/E2Red8 = Links of Pain
 
 Each building's tooltip on the map describes its battle effect.

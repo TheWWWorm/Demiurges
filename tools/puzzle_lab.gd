@@ -156,11 +156,12 @@ func _legal_moves(duel: ELDuel) -> Array:
 	var commands: Array = []
 	var side := duel.active_side()
 	var hero: Dictionary = duel.heroes[side]
-	var seen := {}
+	# Every card of the hand is a decision of its own, copies of one card
+	# included: each spends its own book place (its uses left) and leaves the
+	# rest of the hand in its own order.
 	for i in hero.hand.size():
 		var card: String = hero.hand[i]
-		if seen.has(card) or duel.cost(card) > duel.available_mana(side) or not duel.phase_allows(card): continue
-		seen[card] = true
+		if duel.cost(card) > duel.available_mana(side) or not duel.phase_allows(card): continue
 		var rule := ELCatalog.rule(duel.profile, card)
 		var powers: Array = [0]
 		if duel.variable_power(card): powers = range(duel.maximum_power(card), -1, -1)
@@ -342,6 +343,20 @@ func _run() -> void:
 	ELPuzzles._lists[edition] = document.puzzles
 	if _arg("regression") == "true":
 		var checks := RuntimeChecks.run(profile, document.puzzles[0])
+		# The search's own move list names every card of the hand, two
+		# copies of one card each with its own casts.
+		var twin := RuntimeChecks._entry(profile, document.puzzles[0])
+		for hero: Dictionary in twin.state.heroes:
+			hero.hand = ["ZAPP", "ZAPP"]
+			hero.hand_slots = [-1, -1]
+		var twin_duel := _restore(profile, twin)
+		var copies := {}
+		if twin_duel != null:
+			for command: Dictionary in _legal_moves(twin_duel):
+				if String(command.get("kind", "")) == "cast": copies[int(command.index)] = int(copies.get(int(command.index), 0)) + 1
+		var both: bool = copies.size() == 2 and copies.values()[0] == copies.values()[1]
+		print(("OK " if both else "FAILED ") + "search lists both copies of a card in hand (%s)" % str(copies))
+		if not both: checks.failures = int(checks.failures) + 1
 		if not _arg("report").is_empty():
 			var file := FileAccess.open(_arg("report"), FileAccess.WRITE)
 			file.store_string(JSON.stringify(checks, "\t"))

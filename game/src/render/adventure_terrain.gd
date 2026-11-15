@@ -68,7 +68,8 @@ func build(map: ELAdventureMap) -> bool:
 			# Cosmetic variation is deterministic and separate from game state.
 			var seed_value := (x * 73856093 ^ y * 19349663) & 0x7fffffff
 			var variation := seed_value % 3
-			var key := "%s/%d" % [corners, variation]
+			# The turned corners (each a byte) and the variation name the cell's tile.
+			var key := highest * 4 + variation
 			if not keys.has(key):
 				var plan := tiles.plan(corners, variation)
 				if plan.is_empty(): plan = tiles.plan(corners, 0)
@@ -96,13 +97,27 @@ func build(map: ELAdventureMap) -> bool:
 	if columns * pitch > 8192 or rows * pitch > 8192:
 		errors.append("Terrain atlas exceeds the texture limit.")
 		return false
-	var image := Image.create(columns * pitch, rows * pitch, false, Image.FORMAT_RGB8)
+	var image := Image.create(columns * pitch, rows * pitch, false, atlas_format())
+	# Slots no tile fills stay opaque black, as an RGB atlas widened.
+	if image.get_format() == Image.FORMAT_RGBA8: image.fill(Color.BLACK)
 	var margin := ELTileSet.BORDER - GUTTER
-	for plan: Dictionary in compositions:
-		for frame in plan.frames:
-			var tile := tiles.compose(plan, frame)
-			var index: int = plan.offset + frame
-			image.blit_rect(tile, Rect2i(margin, margin, pitch, pitch), Vector2i((index % columns) * pitch, (index / columns) * pitch))
+	# Composing is pure pixel work per atlas slot: worker threads share it
+	# and each places its tile at the slot's fixed spot.
+	var slots := PackedInt32Array()
+	for p in compositions.size():
+		for frame in compositions[p].frames: slots.append_array([p, frame])
+	var lock := Mutex.new()
+	var compose_slot := func(slot: int) -> void:
+		var plan: Dictionary = compositions[slots[slot * 2]]
+		var frame := slots[slot * 2 + 1]
+		var tile := tiles.compose(plan, frame)
+		if tile.get_format() != image.get_format(): tile.convert(image.get_format())
+		var index: int = plan.offset + frame
+		lock.lock()
+		image.blit_rect(tile, Rect2i(margin, margin, pitch, pitch), Vector2i((index % columns) * pitch, (index / columns) * pitch))
+		lock.unlock()
+	var task := WorkerThreadPool.add_group_task(compose_slot, slots.size() / 2, -1, true, "Terrain atlas")
+	WorkerThreadPool.wait_for_group_task_completion(task)
 	image.generate_mipmaps()
 	atlas = ImageTexture.create_from_image(image)
 	material = ShaderMaterial.new()
@@ -124,6 +139,13 @@ func build(map: ELAdventureMap) -> bool:
 	build_usec = Time.get_ticks_usec() - started
 	return true
 
+## The atlas's pixel format. The Vulkan and D3D12 renderers sample no
+## three-channel textures and would widen an RGB atlas on upload, on the main
+## thread; the tiles are widened on the workers instead (an opaque alpha, the
+## same colours and mipmaps). The compatibility renderer keeps RGB.
+static func atlas_format() -> Image.Format:
+	return Image.FORMAT_RGB8 if RenderingServer.get_current_rendering_method() == "gl_compatibility" else Image.FORMAT_RGBA8
+
 func set_detail(enabled: bool) -> void:
 	if material != null: material.set_shader_parameter("detail_enabled", enabled)
 
@@ -138,8 +160,13 @@ func set_water(enabled: bool) -> void:
 			var rows := ceili(animation_frames / float(columns))
 			# Red is all liquid coverage. Green is the bog share of that coverage.
 			var weights := Image.create(columns * WEIGHT_PITCH, rows * WEIGHT_PITCH, false, _cache.water_format)
+			var liquid: Array[Dictionary] = []
 			for plan: Dictionary in _cache.plans:
-				if not plan.layers.any(func(layer: Dictionary) -> bool: return layer.water): continue
+				if plan.layers.any(func(layer: Dictionary) -> bool: return layer.water): liquid.append(plan)
+			# Each liquid plan's tiles are worked out on a worker thread.
+			var lock := Mutex.new()
+			var weigh := func(index: int) -> void:
+				var plan := liquid[index]
 				var has_bog: bool = plan.layers.any(func(layer: Dictionary) -> bool: return layer.bog)
 				# EL1's shore overlays animate their colours with fixed coverage.
 				var animated: bool = _cache.water_masks_animate and plan.layers.any(func(layer: Dictionary) -> bool:
@@ -147,7 +174,11 @@ func set_water(enabled: bool) -> void:
 				var tile := _liquid_weight_tile(plan, has_bog, 0)
 				for frame: int in plan.frames:
 					if frame > 0 and animated: tile = _liquid_weight_tile(plan, has_bog, frame)
+					lock.lock()
 					_blit_weights(weights, tile, int(plan.offset) + frame, columns)
+					lock.unlock()
+			var task := WorkerThreadPool.add_group_task(weigh, liquid.size(), -1, true, "Terrain water")
+			WorkerThreadPool.wait_for_group_task_completion(task)
 			_cache.water_weights = ImageTexture.create_from_image(weights)
 		material.set_shader_parameter("water_weights", _cache.water_weights)
 		material.set_shader_parameter("water_atlas_size", Vector2(_cache.water_weights.get_size()))

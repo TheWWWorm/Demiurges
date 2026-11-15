@@ -22,6 +22,10 @@ var types: Dictionary = {}
 var pixels: Array[PackedByteArray] = []
 var error := ""
 var _rotations: Dictionary = {}
+var _cache_lock := Mutex.new()
+var _red_tiles: Dictionary = {}
+var _tile_runs: Dictionary = {}
+var _pick_cache: Dictionary = {}
 
 func load_file(path: String) -> bool:
 	return parse(FileAccess.get_file_as_bytes(path)) if not path.is_empty() else _fail("Missing tileset.")
@@ -30,6 +34,9 @@ func parse(bytes: PackedByteArray) -> bool:
 	types.clear()
 	pixels.clear()
 	_rotations.clear()
+	_red_tiles.clear()
+	_tile_runs.clear()
+	_pick_cache.clear()
 	error = ""
 	if bytes.size() < HEADER or bytes.decode_u32(0) != 0x5fe634b1: return _fail("Invalid tileset header.")
 	var count := bytes.decode_u32(4)
@@ -122,30 +129,93 @@ func plan(corners: Array[int], variation := 0, base_rotation := 0) -> Dictionary
 
 func compose(composition: Dictionary, frame := 0) -> Image:
 	if composition.is_empty(): return null
+	# Works on red-first copies of the stored blue-first tiles: every step
+	# treats the channels alike (the overlay key, magenta, reads the same
+	# either way), so the result needs no final swap.
 	var output := PackedByteArray()
 	for layer: Dictionary in composition.layers:
 		var grey: bool = layer.get("grey", false)
-		var source: PackedByteArray = pixels[layer.source.ids[frame % layer.source.ids.size()]]
-		if grey: source = _grey(source)
+		var source_id: int = layer.source.ids[frame % layer.source.ids.size()]
 		if layer.mask.is_empty():
-			var base := _rotated(layer.source.ids[frame % layer.source.ids.size()], layer.rotation)
-			output = _grey(base) if grey else base.duplicate()
+			var base := _red_first(source_id, layer.rotation)
+			output = _grey(base) if grey else base
 			continue
-		var mask := _rotated(layer.mask.ids[frame % layer.mask.ids.size()], layer.rotation)
-		for i in output.size(): output[i] = ((255 - int(mask[i])) * int(output[i]) + int(source[i]) * int(mask[i])) / 255
+		var source := _red_first(source_id, 0)
+		if grey: source = _grey(source)
+		var mask_id: int = layer.mask.ids[frame % layer.mask.ids.size()]
+		output = _blend(output, source, _red_first(mask_id, layer.rotation), _runs(mask_id, layer.rotation, false))
 		if not layer.overlay.is_empty():
-			var overlay := _rotated(layer.overlay.ids[frame % layer.overlay.ids.size()], layer.rotation)
-			for i in range(0, output.size(), 3):
-				if overlay[i] != 255 or overlay[i + 1] != 0 or overlay[i + 2] != 255:
-					var value := (int(overlay[i]) + int(overlay[i + 1]) + int(overlay[i + 2])) / 3 if grey else -1
-					output[i] = overlay[i] if value < 0 else value
-					output[i + 1] = overlay[i + 1] if value < 0 else value
-					output[i + 2] = overlay[i + 2] if value < 0 else value
-	for i in range(0, output.size(), 3):
-		var blue := output[i]
-		output[i] = output[i + 2]
-		output[i + 2] = blue
+			var overlay_id: int = layer.overlay.ids[frame % layer.overlay.ids.size()]
+			var overlay := _red_first(overlay_id, layer.rotation)
+			# A grey layer's overlay texels take their channel average.
+			if grey: overlay = _grey(overlay)
+			output = _blend(output, overlay, PackedByteArray(), _runs(overlay_id, layer.rotation, true))
 	return Image.create_from_data(side, side, false, Image.FORMAT_RGB8, output)
+
+## Mixes `source` over `below` by `mask` (out = ((255 - m) * below + m *
+## source) / 255 per byte), along runs of [kind, start, end]: kind 0 keeps
+## `below`, 1 takes `source` (a clear or full mask gives those exactly) and 2
+## mixes byte by byte. The division by 255 is done as
+## (x + 1 + (x >> 8)) >> 8, equal for every x up to 255 * 255; GDScript's
+## integer division does not scale across worker threads.
+static func _blend(below: PackedByteArray, source: PackedByteArray, mask: PackedByteArray, runs: PackedInt32Array) -> PackedByteArray:
+	if runs.size() == 3 and runs[0] == 0: return below
+	var result := below.duplicate()
+	for r in range(0, runs.size(), 3):
+		match runs[r]:
+			0: pass
+			1:
+				for i in range(runs[r + 1], runs[r + 2]): result[i] = source[i]
+			_:
+				for i in range(runs[r + 1], runs[r + 2]):
+					var weight := mask[i]
+					var mixed := (255 - weight) * result[i] + source[i] * weight
+					result[i] = (mixed + 1 + (mixed >> 8)) >> 8
+	return result
+
+## A stored tile (turned `turns` quarters) with red first. compose() may run
+## on worker threads (ELAdventureTerrain), which share these caches.
+func _red_first(id: int, turns: int) -> PackedByteArray:
+	var key := id * 4 + turns
+	_cache_lock.lock()
+	var found: Variant = _red_tiles.get(key)
+	_cache_lock.unlock()
+	if found != null: return found
+	var swapped := _rotated(id, turns).duplicate()
+	for i in range(0, swapped.size(), 3):
+		var blue := swapped[i]
+		swapped[i] = swapped[i + 2]
+		swapped[i + 2] = blue
+	_cache_lock.lock()
+	_red_tiles[key] = swapped
+	_cache_lock.unlock()
+	return swapped
+
+## Runs of a red-first tile for _blend: a mask's bytes by weight (0, 255 or
+## between), or an overlay's texels by its magenta key (kept 0, drawn 1).
+func _runs(id: int, turns: int, overlay: bool) -> PackedInt32Array:
+	var key := (id * 4 + turns) * 2 + int(overlay)
+	_cache_lock.lock()
+	var found: Variant = _tile_runs.get(key)
+	_cache_lock.unlock()
+	if found != null: return found
+	var bytes := _red_first(id, turns)
+	var runs := PackedInt32Array()
+	var step := 3 if overlay else 1
+	var kind := -1
+	for i in range(0, bytes.size(), step):
+		var here: int
+		if overlay: here = 0 if bytes[i] == 255 and bytes[i + 1] == 0 and bytes[i + 2] == 255 else 1
+		else: here = 0 if bytes[i] == 0 else (1 if bytes[i] == 255 else 2)
+		if here != kind:
+			if kind >= 0: runs.append(i)
+			runs.append_array([here, i])
+			kind = here
+	runs.append(bytes.size())
+	_cache_lock.lock()
+	_tile_runs[key] = runs
+	_cache_lock.unlock()
+	return runs
 
 ## How grey each texel of a composition is (0..255), at `out_side` square:
 ## the same layers and masks as compose(), carrying 255 for a grey layer and
@@ -161,12 +231,7 @@ func layer_weights(composition: Dictionary, out_side: int, flag: String, frame :
 	var output := PackedByteArray()
 	output.resize(out_side * out_side)
 	if composition.is_empty() or side < 1: return output
-	var picks := PackedInt32Array()
-	picks.resize(out_side * out_side)
-	for y in out_side:
-		for x in out_side:
-			var inner := side - 2 * BORDER
-			picks[y * out_side + x] = ((BORDER + (y * inner) / out_side + inner / (2 * out_side)) * side + BORDER + (x * inner) / out_side + inner / (2 * out_side)) * 3
+	var picks := _picks(out_side)
 	for layer: Dictionary in composition.layers:
 		var value := 255 if layer.get(flag, false) else 0
 		if layer.mask.is_empty():
@@ -176,10 +241,29 @@ func layer_weights(composition: Dictionary, out_side: int, flag: String, frame :
 		var overlay := _rotated(layer.overlay.ids[frame % layer.overlay.ids.size()], layer.rotation) if not layer.overlay.is_empty() else PackedByteArray()
 		for i in picks.size():
 			var at := picks[i]
-			var m := int(mask[at])
-			output[i] = ((255 - m) * int(output[i]) + value * m) / 255
+			var m := mask[at]
+			var mixed := (255 - m) * output[i] + value * m
+			output[i] = (mixed + 1 + (mixed >> 8)) >> 8
 			if not overlay.is_empty() and (overlay[at] != 255 or overlay[at + 1] != 0 or overlay[at + 2] != 255): output[i] = value
 	return output
+
+## The stored texel each output texel of layer_weights reads (shared by
+## every call at that size; worker threads may ask for them).
+func _picks(out_side: int) -> PackedInt32Array:
+	_cache_lock.lock()
+	var found: Variant = _pick_cache.get(out_side)
+	_cache_lock.unlock()
+	if found != null: return found
+	var picks := PackedInt32Array()
+	picks.resize(out_side * out_side)
+	for y in out_side:
+		for x in out_side:
+			var inner := side - 2 * BORDER
+			picks[y * out_side + x] = ((BORDER + (y * inner) / out_side + inner / (2 * out_side)) * side + BORDER + (x * inner) / out_side + inner / (2 * out_side)) * 3
+	_cache_lock.lock()
+	_pick_cache[out_side] = picks
+	_cache_lock.unlock()
+	return picks
 
 static func _grey(source: PackedByteArray) -> PackedByteArray:
 	var result := source.duplicate()
@@ -190,14 +274,20 @@ static func _grey(source: PackedByteArray) -> PackedByteArray:
 		result[i + 2] = value
 	return result
 
+## compose() and layer_weights() may run on worker threads (ELAdventureTerrain),
+## which share the rotated tile cache.
 func _rotated(id: int, turns: int) -> PackedByteArray:
 	if turns == 0: return pixels[id]
 	var key := id * 4 + turns
-	if _rotations.has(key): return _rotations[key]
-	var image := Image.create_from_data(side, side, false, Image.FORMAT_RGB8, pixels[id])
-	for i in turns: image.rotate_90(CLOCKWISE)
-	_rotations[key] = image.get_data()
-	return _rotations[key]
+	_cache_lock.lock()
+	var found: Variant = _rotations.get(key)
+	if found == null:
+		var image := Image.create_from_data(side, side, false, Image.FORMAT_RGB8, pixels[id])
+		for i in turns: image.rotate_90(CLOCKWISE)
+		found = image.get_data()
+		_rotations[key] = found
+	_cache_lock.unlock()
+	return found
 
 func _lowest(corners: Array[int]) -> int:
 	var first := -1

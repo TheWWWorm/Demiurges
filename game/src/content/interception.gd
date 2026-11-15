@@ -1,11 +1,18 @@
 class_name ELInterception
 extends RefCounted
 ## EL1 registered guard areas. Ordinary moving heroes do not create zones.
-## Neutral creatures guard radius two; a fort garrison guards radius three
-## around the fort rectangle, which stays inside its own area although blocked.
+## Neutral creatures guard radius two (the ring around them); a fort garrison
+## guards radius four (three tiles out, FIRST_FORT_RADIUS) around the fort,
+## which stays inside its own area although blocked.
 ## Covered cells persist across movement; recomputing on each step would erase
 ## the destination zone as soon as the moving hero occupies it.
 const DIRECTIONS := [Vector2i(1, 0), Vector2i(1, -1), Vector2i(0, -1), Vector2i(-1, -1), Vector2i(-1, 0), Vector2i(-1, 1), Vector2i(0, 1), Vector2i(1, 1)]
+## First game: the radius a fort garrison (or a hero under a fortification
+## spell) guards with. A zone of radius r reaches r - 1 tiles straight out, so a
+## creature's 2 is the ring around it and a fort's 4 reaches three tiles past
+## the fort, as the game describes forts (player report #97; it had been 3,
+## two tiles).
+const FIRST_FORT_RADIUS := 4
 const ROUTE_NOTICE := "This route enters a guarded area. The hero will stop for combat."
 var zones: Dictionary = {}
 var cells: Dictionary = {}
@@ -52,12 +59,12 @@ func rebuild(state: ELAdventureSession, grid: ELAdventureGrid) -> void:
 			var area := fort_area(grid, fort)
 			var footprint := {}
 			for cell: Vector2i in grid.footprints.get(int(fort.uid), {}).get("cells", []): footprint[area.position + cell] = true
-			if grid.contains(area.position): register(actor.uid, area.position, flood(grid, area.position, ELForts.RADIUS, footprint), area)
+			if grid.contains(area.position): register(actor.uid, area.position, flood(grid, area.position, FIRST_FORT_RADIUS, footprint), area)
 			continue
 		if spell_fort(actor):
 			# A fortification spell guards like a one-tile fort on the hero's tile.
 			var at := Vector2i(actor.x, actor.y)
-			if grid.contains(at): register(actor.uid, at, flood(grid, at, ELForts.RADIUS, {at: true}))
+			if grid.contains(at): register(actor.uid, at, flood(grid, at, FIRST_FORT_RADIUS, {at: true}))
 			continue
 		if not guards(actor): continue
 		var origin := Vector2i(actor.x, actor.y)
@@ -128,10 +135,10 @@ func restore(raw: Variant, state: ELAdventureSession, grid: ELAdventureGrid) -> 
 		if not row is Dictionary or not ELLuaSave._integer(row.get("id"), 0, 0x7fffffff) or not zones.has(int(row.id)) or ids.has(int(row.id)) or not row.get("cells") is Array or row.cells.is_empty(): return false
 		var id := int(row.id)
 		# Cached geometry must match the current guard kind: radius two for a
-		# neutral creature, radius three from the fort origin for a garrison.
+		# neutral creature, FIRST_FORT_RADIUS from the fort origin for a garrison.
 		var origin: Vector2i = zones[id].origin
 		var area: Rect2i = zones[id].area
-		var radius := 2 if area.size == Vector2i.ONE and ELForts.garrison_of(state, state.object(id)).is_empty() and not spell_fort(state.object(id)) else ELForts.RADIUS
+		var radius := 2 if area.size == Vector2i.ONE and ELForts.garrison_of(state, state.object(id)).is_empty() and not spell_fort(state.object(id)) else FIRST_FORT_RADIUS
 		var limit := (2 * radius + area.size.x) * (2 * radius + area.size.y)
 		if row.cells.size() > limit: return false
 		var covered: Array[Vector2i] = []

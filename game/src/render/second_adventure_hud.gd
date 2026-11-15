@@ -146,6 +146,11 @@ func build(source: ELAdventureSession) -> bool:
 	_build_minimap()
 	_build_hero_panel()
 	_build_right_panel()
+	_build_messages()
+	# Top-right affect icons, over the map like the message line.
+	affect_strip = ELAffectStrip.new()
+	affect_strip.setup(profile)
+	canvas.add_child(affect_strip)
 	_build_menu()
 	map_tooltip = ELSecondMapTooltip.new()
 	map_tooltip.setup(profile, face)
@@ -252,6 +257,8 @@ func _layout() -> void:
 	for control: String in buttons: buttons[control].place(shift(control))
 	menu.size = canvas.size
 	menu_art.size = canvas.size
+	message_layer.size = canvas.size
+	affect_strip.size = canvas.size
 	for control: String in menu_buttons: menu_buttons[control].place(shift(control))
 	var header: Label = menu.get_node("EscHdr")
 	header.position = control_rect("EscHdr").position
@@ -436,9 +443,22 @@ func level_tooltip(hero: Dictionary) -> String:
 	if format == "T_ADV_PANEL_TT_LEVEL" or format.count("%d") != 5: return "Experience %d / %d" % [values[2], values[4]]
 	return format % values
 
+## The hero's affect icons at the top right (ELAffectStrip), worked out again
+## only when the hero, its place or its affects change.
+var affect_strip: ELAffectStrip
+var _affect_key := ""
+
+func refresh_affects(hero: Dictionary) -> void:
+	if affect_strip == null: return
+	var key := "%d/%s,%s/%s/%s" % [hero_id, hero.get("x", -1), hero.get("y", -1), hero.get("alive", false), str(hero.get("affects", []))]
+	if key == _affect_key: return
+	_affect_key = key
+	affect_strip.show_hero(state, hero_id)
+
 func refresh(hero_uid: int, can_act: bool) -> void:
 	hero_id = hero_uid
 	var hero := state.object(hero_id)
+	refresh_affects(hero)
 	var level := int(hero.get("level", 1))
 	labels.AdvPanelLifeDig.text = str(int(hero.get("health", 0)))
 	labels.AdvPanelLevelDig.text = str(level)
@@ -509,11 +529,12 @@ func sync_script_tint() -> void:
 	if busy == script_tinted: return
 	script_tinted = busy
 	for child: Node in canvas.get_children():
-		if child == menu or child == map_tooltip or child == remake_strip or not child is CanvasItem: continue
+		if child == menu or child == map_tooltip or child == remake_strip or child == message_layer or child == affect_strip or not child is CanvasItem: continue
 		(child as CanvasItem).modulate = script_tint if busy else Color.WHITE
 
 func _process(delta: float) -> void:
 	if canvas != null: sync_script_tint()
+	if not messages.is_empty(): advance_messages(delta)
 	if blinking.is_empty(): return
 	_blink_clock += delta
 	if _blink_clock < BLINK_PERIOD: return
@@ -528,6 +549,83 @@ func _apply_blink() -> void:
 		buttons.AdvPanelHandBagBtn.blink = blink_lit and blinking.has("E_ADV_INVENTORY_BTN")
 		buttons.AdvPanelHandBagBtn.queue_redraw()
 	if experience_bar != null: experience_bar.queue_redraw()
+
+# --- Message line -------------------------------------------------------------
+
+## The original adventure message list at the top left of the map: the first
+## line at (10, 5), each next one 3 px below the one before. A collected
+## resource pile adds T_TAKE_PLUHA with the amount and the resource icon (a
+## 23 px cell of BUILDING_SCREEN_1, row 233, column 3 x the resource, on the
+## TOOLTIP frame (9, 20) 27 px, 7 px right of the text). Lines are white; the
+## oldest stays 5 s, then fades out over 0.5 s while the lines below rise by
+## its height, and goes. The next one ages only once it is the oldest.
+const MESSAGE_ORIGIN := Vector2(10, 5)
+const MESSAGE_GAP := 3.0
+const MESSAGE_LIFE := 5.0
+const MESSAGE_FADE := 0.5
+const MESSAGE_FONT_SIZE := 18
+const MESSAGE_ICON := 23.0
+const MESSAGE_ICON_GAP := 7.0
+const MESSAGE_ICON_ROW := 233.0
+const MESSAGE_FRAME := Rect2(9, 20, 27, 27)
+var message_layer: Control
+## {text, resource ("" for none), age (s), fade (s, -1 before it starts)}
+var messages: Array[Dictionary] = []
+
+func _build_messages() -> void:
+	message_layer = Control.new()
+	message_layer.name = "MessageLine"
+	message_layer.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	canvas.add_child(message_layer)
+	message_layer.draw.connect(_draw_messages)
+
+## Adds a line; `resource` (an ELResources.SEQUEL kind) draws its icon after it.
+func add_message(line: String, resource := "") -> void:
+	messages.append({"text": line.strip_edges(), "resource": resource, "age": 0.0, "fade": -1.0})
+	message_layer.queue_redraw()
+
+func message_texts() -> Array[String]:
+	var result: Array[String] = []
+	for message: Dictionary in messages: result.append(str(message.text))
+	return result
+
+## The text height of one line (the icon may reach below it).
+func message_height() -> float:
+	return face_bold.get_height(MESSAGE_FONT_SIZE)
+
+func advance_messages(delta: float) -> void:
+	if messages.is_empty(): return
+	var first: Dictionary = messages[0]
+	if first.fade < 0.0:
+		first.age += delta
+		if first.age >= MESSAGE_LIFE: first.fade = 0.0
+	else:
+		first.fade += delta
+		if first.fade >= MESSAGE_FADE: messages.pop_front()
+	message_layer.queue_redraw()
+
+func _draw_messages() -> void:
+	if messages.is_empty(): return
+	var font := face_bold
+	var height := message_height()
+	var top := MESSAGE_ORIGIN.y
+	var first: Dictionary = messages[0]
+	if first.fade > 0.0: top -= minf(1.0, first.fade / MESSAGE_FADE) * (height + MESSAGE_GAP)
+	var sheet := profile.texture(_paths.get("BUILDING_SCREEN_1", ""))
+	var frame := profile.texture(_paths.get("TOOLTIP", ""))
+	for index in messages.size():
+		var message: Dictionary = messages[index]
+		var alpha := 1.0 - minf(1.0, message.fade / MESSAGE_FADE) if index == 0 and message.fade > 0.0 else 1.0
+		var line := str(message.text)
+		var at := Vector2(MESSAGE_ORIGIN.x, top + font.get_ascent(MESSAGE_FONT_SIZE))
+		message_layer.draw_string_outline(font, at, line, HORIZONTAL_ALIGNMENT_LEFT, -1, MESSAGE_FONT_SIZE, 3, Color(0, 0, 0, alpha))
+		message_layer.draw_string(font, at, line, HORIZONTAL_ALIGNMENT_LEFT, -1, MESSAGE_FONT_SIZE, Color(1, 1, 1, alpha))
+		var kind := ELResources.SEQUEL.find(str(message.resource))
+		if kind >= 0 and sheet != null:
+			var icon := Vector2(MESSAGE_ORIGIN.x + font.get_string_size(line, HORIZONTAL_ALIGNMENT_LEFT, -1, MESSAGE_FONT_SIZE).x + MESSAGE_ICON_GAP, top)
+			if frame != null: message_layer.draw_texture_rect_region(frame, Rect2(icon - Vector2(2, 2), MESSAGE_FRAME.size), MESSAGE_FRAME, Color(1, 1, 1, alpha))
+			message_layer.draw_texture_rect_region(sheet, Rect2(icon, Vector2(MESSAGE_ICON, MESSAGE_ICON)), Rect2(kind * 3 * MESSAGE_ICON, MESSAGE_ICON_ROW, MESSAGE_ICON, MESSAGE_ICON), Color(1, 1, 1, alpha))
+		top += height + MESSAGE_GAP
 
 # --- Esc menu -----------------------------------------------------------------
 

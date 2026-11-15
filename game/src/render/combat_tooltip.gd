@@ -108,7 +108,7 @@ static func spell_text(source: ELProfile, card: String, ether_cost := -1, card_t
 	var title := card_title if not card_title.is_empty() else source.text(str(row.get("Name", card)))
 	var creature: Dictionary = source.table("CombatCreatures").get(card, {})
 	if spell_class == "Creature" and creature.has("Power"):
-		title += " %d/%d" % [int(creature.Power), int(creature.get("Toughness", 0))]
+		title += " %s/%s" % [ELEncyclopaedia.stat_text(creature.Power), ELEncyclopaedia.stat_text(creature.get("Toughness", 0))]
 	var kind := source.text(key)
 	if not key.is_empty(): title = "%s: %s" % [spell_class if kind == key else kind, title]
 	var lines := [title, cost_line(source, int(row.get("Cost", 0)), ether_cost)]

@@ -374,7 +374,14 @@ func _first_book(session: Dictionary) -> void:
 	var codes := spells(profile, 2, allowed)
 	check(codes.size() == 2, "first game: spells the hero may use")
 	if codes.size() < 2: return
-	while hero.cards.size() > 4: ELSpellInventory.unequip(profile, hero, hero.cards.size() - 1)
+	# A starting book is all cantrips, which cannot go to the reserve (#126):
+	# the check's setup trims the book to four of them directly.
+	var under := ELRunes.under(hero)
+	hero.cards.resize(4)
+	hero.rune_uses.resize(4)
+	if hero.has("rune_under"):
+		under.resize(4)
+		ELRunes.set_under(hero, under)
 	ELSpellInventory.add(profile, hero, codes[0], 1)
 	ELSpellInventory.add(profile, hero, codes[1], 20)
 	var view := ELFirstBookView.new()
@@ -387,9 +394,11 @@ func _first_book(session: Dictionary) -> void:
 	var size := int(hero.cards.size())
 	drag(input, view.reserve_rect(index).get_center(), book_end)
 	check(hero.cards.size() == size + 1 and hero.cards[-1] == codes[0] and int(hero.spell_stock.get(codes[0], 0)) == 0, "first game book: a reserve spell dragged onto the book is equipped")
-	var card := str(hero.cards[0])
+	# The spell just equipped; the cantrips before it stay in the book.
+	var last := int(hero.cards.size()) - 1
+	var card := str(hero.cards[last])
 	var stock := int(hero.spell_stock.get(card, 0))
-	drag(input, view.book_rect(0).get_center(), view.reserve_rect(0).get_center())
+	drag(input, view.book_rect(last).get_center(), view.reserve_rect(0).get_center())
 	check(hero.cards.size() == size and int(hero.spell_stock.get(card, 0)) == stock + 1, "first game book: a book spell dragged onto the reserve is stored")
 	var cards: Array = hero.cards.duplicate()
 	drag(input, view.book_rect(0).get_center(), Vector2(200, 20))
@@ -403,9 +412,13 @@ func _first_book(session: Dictionary) -> void:
 	var left := int(hero.spell_stock.get(codes[1], 0))
 	drag(input, view.reserve_rect(index).get_center(), book_end)
 	check(hero.cards.size() == ELSpellInventory.book_size(profile) and int(hero.spell_stock.get(codes[1], 0)) == left, "first game book: a full book refuses a dragged spell")
+	var movable := int(hero.cards.size()) - 1
+	click(input, view.book_rect(movable).get_center())
+	click(input, view.book_rect(movable).get_center(), true)
+	check(hero.cards.size() == ELSpellInventory.book_size(profile) - 1, "first game book: a double click still moves a spell")
 	click(input, view.book_rect(0).get_center())
 	click(input, view.book_rect(0).get_center(), true)
-	check(hero.cards.size() == ELSpellInventory.book_size(profile) - 1, "first game book: a double click still moves a spell")
+	check(hero.cards.size() == ELSpellInventory.book_size(profile) - 1, "first game book: a double click leaves a cantrip in the book (#126)")
 	view.queue_free()
 	await frames(2)
 

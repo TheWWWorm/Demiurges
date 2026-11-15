@@ -236,7 +236,8 @@ static func write(path: String, data: Dictionary) -> bool:
 static func read(path: String) -> Dictionary:
 	if not FileAccess.file_exists(path): return {}
 	var file := FileAccess.open(path, FileAccess.READ)
-	if file == null or file.get_length() > 4 * 1024 * 1024: return {}
+	# The writer's own limit (ELAdventureSave.write_document): a file it wrote reads back.
+	if file == null or file.get_length() > ELAdventureSave.MAX_BYTES: return {}
 	var raw: Variant = JSON.parse_string(file.get_as_text())
 	if not raw is Dictionary or raw.get("format") != AUTOSAVE_FORMAT or not valid(raw.get("campaign")): return {}
 	if raw.campaign.finished or str(raw.campaign.current).is_empty(): return {}

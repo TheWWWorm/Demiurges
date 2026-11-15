@@ -2,6 +2,28 @@ class_name ELMatchSave
 extends RefCounted
 ## Validate once at the save-file boundary; restore never partially changes a match.
 
+## Quick saves of standalone duels, one file per edition, so a duel of one
+## game never replaces the other's. LEGACY_QUICK_SAVE is the shared file
+## older builds wrote for both editions.
+const LEGACY_QUICK_SAVE := "user://duel-save.json"
+const QUICK_SAVES := {"el1": "user://duel-save-el1.json", "el2": "user://duel-save-el2.json"}
+
+static func quick_save_path(edition: String) -> String:
+	return String(QUICK_SAVES.get(edition, ""))
+
+## Moves the old shared quick save to the file of the edition it holds. A
+## file that names no known edition, or whose edition already has its own
+## quick save, is kept unchanged. Returns the edition it now belongs to, or "".
+static func migrate_quick_save(legacy := LEGACY_QUICK_SAVE, targets: Dictionary = QUICK_SAVES) -> String:
+	if not FileAccess.file_exists(legacy): return ""
+	var json := JSON.new()
+	var edition := ""
+	if json.parse(FileAccess.get_file_as_string(legacy)) == OK and json.data is Dictionary and json.data.get("state") is Dictionary:
+		edition = str(json.data.state.get("profile", ""))
+	if not targets.has(edition) or FileAccess.file_exists(targets[edition]): return ""
+	if DirAccess.rename_absolute(ProjectSettings.globalize_path(legacy), ProjectSettings.globalize_path(targets[edition])) != OK: return ""
+	return edition
+
 static func decode(profile: ELProfile, raw: Dictionary) -> Dictionary:
 	var s: Dictionary = _integers(raw)
 	if s.has("charge_version") and s.charge_version != 2: return _bad("Unsupported spell charge version.")

@@ -33,7 +33,8 @@ static func definition(profile: ELProfile, code: String, rank: int) -> Dictionar
 ## Every registered skill not marked out of use. The first game also offers
 ## Ethereal Attack (ETAT) and Counterstrike (ETDF); the original applies neither,
 ## so they only occupy a skill slot. Their descriptions promise castle damage, but
-## castle damage stays the hero's value (see ELFirstScenario.hero_value).
+## castle damage stays the hero's value (see ELFirstScenario.hero_value); the
+## remake adds a no-effect note to those texts (ELTextFixes.NO_EFFECT_SKILLS).
 static func available(profile: ELProfile) -> Array[String]:
 	var result: Array[String] = []
 	for row: Dictionary in profile.table("HeroesSkills").values():

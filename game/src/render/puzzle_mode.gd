@@ -388,27 +388,27 @@ func _fill_list() -> void:
 			grids[level] = grid
 		var title := _entry_text(entry, "title", "Puzzle %d" % [i + 1])
 		var category := _entry_text(entry, "category")
-		var details := ELRemakeText.t("1 turn", profile) if int(entry.turns) == 1 else ELRemakeText.t("%d turns", profile) % int(entry.turns)
-		# Budget and goal get their own line; a long category cannot hide them.
-		details += " · " + _goal_name(entry)
+		# The card shows only the name and the topic; the goal and the
+		# briefing are in its tooltip.
 		var caption := "%d. %s" % [i + 1, title] if entry.has("title") else title
 		if mastered: caption = "★ " + caption
 		var box: Texture2D = _over.theme.get_icon("checked" if taken > 0 else "unchecked", "CheckBox") if _over.theme != null and _over.theme.has_icon("checked", "CheckBox") else null
 		if taken > 0 and box == null: caption += " · " + ELRemakeText.t("Solved", profile)
-		var card_text := "%s\n%s" % [caption, details]
-		if not category.is_empty(): card_text += "\n" + category
-		var matchup := _matchup_lines(entry, true)
-		if not matchup.is_empty(): card_text += "\n" + "\n".join(matchup)
-		var button := _button(card_text, 282, 62 if matchup.is_empty() else 98)
+		var card_text := caption
+		if not category.is_empty(): card_text += "
+" + category
+		var button := _button(card_text, 282, 62)
 		button.name = "Puzzle_%d" % (i + 1)
 		button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		button.alignment = HORIZONTAL_ALIGNMENT_LEFT
 		button.clip_text = true
 		button.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 		button.add_theme_font_size_override("font_size", 14)
-		button.tooltip_text = title + "\n" + details
-		if not category.is_empty(): button.tooltip_text += "\n" + category
-		if not matchup.is_empty(): button.tooltip_text += "\n" + "\n".join(_matchup_lines(entry))
+		button.tooltip_text = title
+		if not category.is_empty(): button.tooltip_text += "
+" + category
+		button.tooltip_text += "
+" + _goal_name(entry)
 		var briefing := _entry_text(entry, "briefing")
 		if not briefing.is_empty(): button.tooltip_text += "\n" + briefing
 		# A solved puzzle is ticked, in the Options check box.
@@ -569,8 +569,7 @@ func begin(source: ELProfile, attempt: ELPuzzles.Run) -> void:
 	_hint_index = clampi(run.hints_used - 1, -1, run.hint_count() - 1)
 	_hint_text.hide()
 	_update_hint_buttons()
-	var matchup := "\n".join(_matchup_lines(run.entry))
-	_briefing_text.text = matchup + ("\n\n" if not matchup.is_empty() else "") + run.briefing()
+	_briefing_text.text = run.briefing()
 	_briefing_text.hide()
 	_briefing_button.set_pressed_no_signal(false)
 	_briefing_button.visible = not _briefing_text.text.is_empty()

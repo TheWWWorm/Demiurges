@@ -75,8 +75,17 @@ func load_all(entries: Array) -> void:
 ## position; the casts, cards and ether it would queue are dropped. The layer
 ## holds private copies of the states that have that hook, built from their
 ## current globals; null when no state has it.
+## Every lookahead copy has a layer of its own: a hook that counts summons in
+## one line read ahead must not count those of another. A copy's layer is
+## only a record of the states until a hook first runs in it (`_wake`), so
+## that the many copies in which nothing is summoned cost nothing to make.
 func search_layer(copy: ELDuel) -> ELBattleScripts:
-	if search_only: return self
+	if search_only:
+		var layer := ELBattleScripts.new(copy)
+		layer.search_only = true
+		layer._seed = _seed if _resting else _record()
+		layer.in_combat = in_combat
+		return layer
 	var saved: Array = []
 	for state: Dictionary in states:
 		if state.hooks.has("CHook_OnLogicSummon"): saved.append({"name": state.name, "side": state.side, "globals": ELLuaSave.new().encode(state.vm)})
@@ -87,11 +96,45 @@ func search_layer(copy: ELDuel) -> ELBattleScripts:
 	if session != null and session.variables != null: variables = session.variables.values.duplicate()
 	var level := clampi(int(session.difficulty) if session != null else difficulty, 0, 2)
 	var layer := ELBattleScripts.new(copy)
-	if not layer.restore({"states": saved, "queue": [], "in_combat": in_combat, "difficulty": level, "variables": variables}).is_empty(): return null
+	var seed := {"states": saved, "queue": [], "in_combat": in_combat, "difficulty": level, "variables": variables}
+	if not layer.restore(seed).is_empty(): return null
 	layer.search_only = true
+	layer._seed = seed
+	layer._resting = true
 	return layer
 
-## Lookahead copies share one layer; summons rebind it to the acting copy.
+## A lookahead layer's states as `restore` reads them: the record it was made
+## from while no hook has run in it, else its states as they stand. Shared
+## between layers and never changed once made.
+var _seed: Dictionary = {}
+## Whether the loaded states still match `_seed` (false also while none are
+## loaded: see `_wake`).
+var _resting := false
+
+func _record() -> Dictionary:
+	if states.is_empty() and not _seed.is_empty(): return _seed
+	var saved: Array = []
+	for state: Dictionary in states: saved.append({"name": state.name, "side": state.side, "globals": ELLuaSave.new().encode(state.vm)})
+	return {"states": saved, "queue": [], "in_combat": in_combat, "difficulty": difficulty, "variables": local_variables.duplicate()}
+
+## Loads a lookahead layer's states from its record before a hook runs in it.
+func _wake() -> bool:
+	if not search_only or not states.is_empty() or _seed.is_empty(): return true
+	var started := in_combat
+	if not restore(_seed).is_empty():
+		_seed = {}
+		return false
+	in_combat = in_combat or started
+	return true
+
+## A lookahead layer goes with its copy, often without being closed: its
+## states' tables are freed with it.
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_PREDELETE and search_only:
+		for state: Dictionary in states: state.vm.clear()
+
+## A lookahead layer follows the copy it belongs to (kept for callers that
+## bind it before a summon).
 func bind(owner: ELDuel) -> void:
 	_duel = weakref(owner)
 
@@ -160,6 +203,10 @@ func turn_start(side: int, turn: int) -> void:
 
 ## Logic then visual summon hooks, with the new creature's base stats open.
 func summoned(side: int, card: String, id: int) -> void:
+	if search_only:
+		if not _wake(): return
+		# What the hook changes is this layer's own from here on.
+		_resting = false
 	if states.is_empty(): return
 	var previous := new_creature
 	new_creature = id
@@ -291,6 +338,8 @@ func _native(args: Array, name: String) -> Array:
 				"ExGetPlayerMana": return [float(hero.mana)]
 				"ExGetGraveyardSize": return [float(hero.grave.size())]
 				"ExGetPlayerArmySize": return [float(d.army(side).size())]
+				# The battle level (difficulty and a fort included) and the hero's own.
+				"ExGetPlayerOriginalLevel": return [float(hero.get("map_level", hero.level))]
 				_: return [float(hero.level)]
 		"ExGetGraveyardCode":
 			var side := _player(first)

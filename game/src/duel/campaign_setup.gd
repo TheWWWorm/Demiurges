@@ -10,6 +10,10 @@ var chapter: OptionButton
 var difficulty: OptionButton
 var description: RichTextLabel
 var campaign_description := ""
+## The player's preferences: the computer players' strength is chosen
+## beside the difficulty (ELAIChoice), saved at once.
+var settings: ELSettings
+var _world_ai: Control
 var entries: Array[Dictionary] = []
 
 func build(available: Dictionary, initial: String) -> void:
@@ -35,6 +39,22 @@ func build(available: Dictionary, initial: String) -> void:
 	rows.add_child(chapter)
 	difficulty = OptionButton.new()
 	rows.add_child(difficulty)
+	if settings != null:
+		var ai_row := HBoxContainer.new()
+		ai_row.add_theme_constant_override("separation", 8)
+		rows.add_child(ai_row)
+		for key: String in ["duel_ai", "world_ai"]:
+			var pair := HBoxContainer.new()
+			pair.add_theme_constant_override("separation", 6)
+			pair.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			ai_row.add_child(pair)
+			var caption := Label.new()
+			caption.text = ELAIChoice.caption(key)
+			pair.add_child(caption)
+			var pick := ELAIChoice.picker(settings, key, profiles.get(initial), "user://settings.json")
+			pick.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			pair.add_child(pick)
+			if key == "world_ai": _world_ai = pair
 	description = RichTextLabel.new()
 	description.custom_minimum_size = Vector2(510, 230)
 	rows.add_child(description)
@@ -77,7 +97,8 @@ func chosen_edition() -> String:
 	return str(edition.get_selected_metadata()) if edition != null and edition.selected >= 0 else ""
 
 func _difficulties(id: String) -> void:
-	var chosen := maxi(difficulty.selected, 0)
+	# Normal until the player picks another, as on the front menu.
+	var chosen := difficulty.selected if difficulty.selected >= 0 else 1
 	difficulty.clear()
 	var names: Array = DIFFICULTY_NAMES.get(id, DIFFICULTY_NAMES.el1)
 	for name: String in names: difficulty.add_item(name)
@@ -87,6 +108,8 @@ func _campaigns() -> void:
 	campaign.clear()
 	var profile: ELProfile = profiles[edition.get_selected_metadata()]
 	_difficulties(profile.id)
+	# The map's computer players are the first game's only.
+	if _world_ai != null: _world_ai.visible = ELAIChoice.applies("world_ai", profile.id)
 	for id: String in ELCampaign.available(profile):
 		var data := ELCampaign.new()
 		if data.load_campaign(profile, id):

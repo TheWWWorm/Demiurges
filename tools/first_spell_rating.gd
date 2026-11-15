@@ -12,10 +12,26 @@ extends SceneTree
 ##   CARD <card> <colour> <rarity> <ether cost> <1 for a creature> <name>
 ##
 ## tools/first_spell_rating.py turns many such lines into the ratings table
-## of game/src/content/first_spell_ratings.gd.
+## of game/src/content/first_spell_ratings.gd. A drawn duel (no winner by the
+## round cap) is printed with winner=-1 and kept.
 ##
 ##   godot --headless --path game --script ../tools/first_spell_rating.gd -- \
 ##       [--duels=N] [--seed=N] [--shard=I/N] [--bought=6] [--level=8] [--ai=smart]
+##       [--paired=<card>,...|all] [--levels=3,5,7,9]
+##
+## `--paired` is the before/after experiment: each trial draws a hero book
+## (a starting book with `--bought` shop spells, as above), an opponent book
+## and a level from `--levels` for both sides, then plays the hero's book and
+## the same book with one copy replaced by the card (its weakest bought or
+## starting copy by the shop's rating, never the card itself) against the
+## same opponent, with the same duel seeds, from both seats. One line per
+## trial:
+##
+##   PAIR <card> level=<n> before=<w>,<d>,<l> after=<w>,<d>,<l> | <colour> <book change>
+##
+## counting the hero's wins, draws and losses over the two seats, so the
+## difference is the card's worth against that one replacement; the .py
+## script averages it with its uncertainty.
 ##
 ## Settings are those of duel_ai_bench.gd ("orig", "smart", "smart:...").
 ## Needs the first game's files (user://profiles.json or --el1=<folder>).
@@ -57,6 +73,11 @@ func _initialize() -> void:
 			var row: Dictionary = profile.table("CombatSpells")[card]
 			print("CARD %s %s %s %d %d %s" % [card, faction, row.Rarity, int(row.get("Cost", 0)), 1 if profile.table("CombatCreatures").has(card) else 0, profile.text(str(row.get("Name", card))).replace(" ", "_")])
 	var random := RandomNumberGenerator.new()
+	if not _arg("paired", "").is_empty():
+		_paired(starts, pools, bought, random, shard)
+		print("DONE")
+		quit(0)
+		return
 	for index in int(_arg("duels", "8")):
 		random.seed = hash([int(_arg("seed", "1")), index])
 		var players: Array = []
@@ -81,6 +102,63 @@ func _initialize() -> void:
 		print("DUEL winner=%d rounds=%d | %s | %s" % [result.winner, result.rounds, labels[0], labels[1]])
 	print("DONE")
 	quit(0)
+
+## A random book of `faction`: a starting book with `bought` of its cheapest
+## copies replaced by random shop spells. Returns [book, bought cards].
+func _book(starts: Dictionary, pools: Dictionary, faction: String, bought: int, random: RandomNumberGenerator) -> Array:
+	var book: Array = starts[faction][random.randi() % starts[faction].size()].duplicate()
+	var slots: Array = range(book.size())
+	slots.sort_custom(func(a: int, b: int): return ELFirstAIEconomy.base_value(profile, book[a]) < ELFirstAIEconomy.base_value(profile, book[b]))
+	var left: Array = pools[faction].duplicate()
+	var added: Array = []
+	for pick in mini(bought, mini(left.size(), slots.size())):
+		var card: String = left.pop_at(random.randi() % left.size())
+		book[slots[pick]] = card
+		added.append(card)
+	return [book, added]
+
+## The before/after experiment (see the header).
+func _paired(starts: Dictionary, pools: Dictionary, bought: int, random: RandomNumberGenerator, shard: String) -> void:
+	var wanted: Array = []
+	var listed := _arg("paired", "")
+	for faction: String in FACTIONS:
+		for card: String in pools[faction]:
+			if listed == "all" or listed.split(",").has(card): wanted.append(card)
+	var levels: Array = []
+	for text: String in _arg("levels", "3,5,7,9").split(",", false): levels.append(int(text))
+	var trials := int(_arg("duels", "8"))
+	var serial := 0
+	for card: String in wanted:
+		var faction := str(profile.table("CombatSpells")[card].Color)
+		for trial in trials:
+			random.seed = hash([int(_arg("seed", "1")), card, trial])
+			var hero := _book(starts, pools, faction, bought, random)
+			var rival_faction: String = FACTIONS[random.randi() % FACTIONS.size()]
+			var rival := _book(starts, pools, rival_faction, bought, random)
+			var level: int = levels[random.randi() % levels.size()]
+			var seeds := [int(random.randi() & 0x7fffffff), int(random.randi() & 0x7fffffff)]
+			serial += 1
+			if serial % int(shard.get_slice("/", 1)) != int(shard.get_slice("/", 0)): continue
+			# The copy to replace: the weakest by the shop's rating, never the card.
+			var book: Array = hero[0]
+			var slot := -1
+			for index in book.size():
+				if book[index] == card: continue
+				if slot < 0 or ELFirstAIEconomy.spell_value(profile, book[index]) < ELFirstAIEconomy.spell_value(profile, book[slot]): slot = index
+			if slot < 0: continue
+			var after := book.duplicate()
+			after[slot] = card
+			var counts: Array = []
+			for variant: Array in [book, after]:
+				var tally := [0, 0, 0]
+				for seat in 2:
+					var players: Array = [{"faction": faction, "level": level, "cards": variant}, {"faction": rival_faction, "level": level, "cards": rival[0]}]
+					if seat == 1: players.reverse()
+					var result := _play(players, seeds[seat])
+					var won: int = result.winner
+					tally[1 if won < 0 else (0 if won == seat else 2)] += 1
+				counts.append(tally)
+			print("PAIR %s level=%d before=%d,%d,%d after=%d,%d,%d | %s %s->%s vs %s" % [card, level, counts[0][0], counts[0][1], counts[0][2], counts[1][0], counts[1][1], counts[1][2], faction, book[slot], card, rival_faction])
 
 ## The books computer heroes start with: the level-one, non-quest templates.
 func _starts() -> Dictionary:

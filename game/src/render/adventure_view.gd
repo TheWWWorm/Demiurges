@@ -1,6 +1,8 @@
 class_name ELAdventureView
 extends Node3D
 var strategic_session: ELStrategicSession
+## Called with 0..1 as `build` goes on (the chapter loading screen's bar).
+var loading_progress := Callable()
 signal leave_requested
 signal encounter_requested(hero: int, opponent: int)
 ## F9 / F8: resume the quick save (ELSaveSlots.quick_path).
@@ -217,11 +219,14 @@ func build(profile: ELProfile, scenario: Dictionary, preferences: ELSettings, di
 	var map := ELAdventureMap.new()
 	if restored.is_empty():
 		if not map.load_map(profile, str(scenario.file_name)): return _fail(map.error)
+		_loading(0.15)
 		state = ELAdventureSession.new()
 		if not state.start(map, difficulty, 212, str(scenario.get("script", "")), int(str(scenario.get("player", "1"))), scenario.has("number")): return _fail(state.error)
+		_loading(0.25)
 		state.tutorial = bool(scenario.get("tutorial", false))
 		director = ELAdventureDirector.new()
 		if not director.build(state): return _fail(director.error)
+		_loading(0.4)
 	else:
 		state = restored.state
 		director = restored.director
@@ -238,6 +243,7 @@ func build(profile: ELProfile, scenario: Dictionary, preferences: ELSettings, di
 	world = ELAdventureScene.new()
 	add_child(world)
 	if not world.build(map, state): return _fail("; ".join(world.errors))
+	_loading(0.75)
 	rings = ELSelectionRing.new()
 	world.add_child(rings)
 	if not rings.setup(profile): rings.textures.clear()
@@ -269,11 +275,13 @@ func build(profile: ELProfile, scenario: Dictionary, preferences: ELSettings, di
 	add_child(audio)
 	audio.build(profile, preferences)
 	apply_settings()
+	_loading(0.85)
 	effects = ELAdventureEffects.new()
 	world.add_child(effects)
 	if profile.id == "el2": effects.rain_changed.connect(world.terrain.set_water_rain)
 	effects.build(profile, preferences, state)
 	if profile.id == "el2":
+		scroll_rate = SCROLL_RATE * scroll_acceleration(profile)
 		audio.listener = target
 		audio.restore(state)
 		effects.prepare(BATTLE_DOME_EFFECT)
@@ -352,6 +360,7 @@ func build(profile: ELProfile, scenario: Dictionary, preferences: ELSettings, di
 	if ELGlobalSpells.applies(state):
 		global_spell_waiting = ELGlobalSpells.data(state, state.current_player).get("production", {}).get("state", 0) == 2
 	if not state.outcome.is_empty(): _show_result()
+	_loading(1.0)
 	return true
 
 func _exit_tree() -> void:
@@ -389,9 +398,15 @@ func _process(delta: float) -> void:
 	state.view_point = Vector2(target.x, -target.z) / ELAdventureTerrain.CELL
 	# Options "Accelerated mode": map movement at four times its normal rate.
 	director.fast_mode = bool(settings.values.get("adventure_fast", false)) if settings != null else false
-	# Remake option: first-game heroes move at once, several times a day.
-	director.free_movement = bool(settings.values.get("free_movement", true)) if settings != null else false
-	director.smart_ai = bool(settings.values.get("smart_ai", true)) if settings != null else false
+	# Remake option: first-game heroes move at once, several times a day (a
+	# network game keeps simultaneous orders).
+	director.free_movement = bool(settings.values.get("free_movement", true)) if settings != null and strategic_session == null else false
+	# Setting "world_ai": 0 Original, 1 Smarter, 2 Living world (ELAIChoice).
+	var world_ai := int(settings.values.get("world_ai", 1)) if settings != null else 0
+	director.smart_ai = world_ai >= 1
+	# Remake switch (settings only, off by default): estimated off-screen battles.
+	director.battle_estimate = bool(settings.values.get("battle_estimate", false)) if settings != null else false
+	director.living_world = world_ai >= 2
 	if hud != null: hud.free_steps = ELStrategy.free_mode(director)
 	if strategic_session == null or strategic_session.link.is_host: director.advance(delta)
 	# Free movement: End Day pressed while a hero was still walking ends the
@@ -428,11 +443,14 @@ func _process(delta: float) -> void:
 			pitch = view_goal.y
 			view_goal = Vector2(-1, -1)
 	if following >= 0 and world.actors.has(following):
+		scroll_gliding = false
 		target = target.lerp(world.actors[following].position, minf(1, delta * 6.0))
 	elif not state.camera_locked:
 		var direction := Vector2(float(Input.is_physical_key_pressed(KEY_D)) - float(Input.is_physical_key_pressed(KEY_A)), float(Input.is_physical_key_pressed(KEY_S)) - float(Input.is_physical_key_pressed(KEY_W)))
+		if direction != Vector2.ZERO: scroll_gliding = false
 		var flat := Vector3(direction.x, 0, direction.y).rotated(Vector3.UP, yaw)
 		target += flat * delta * zoom * 0.8 * (float(settings.values.get("keyboard_scroll", 1.0)) if settings != null else 1.0)
+	if scroll_gliding: _glide(delta)
 	if view_moved and following < 0: _clamp_target()
 	_update_camera()
 	_update_rings(delta)
@@ -522,6 +540,7 @@ func _update_edge(delta: float) -> void:
 	_edge_tilt += (tilt_target - _edge_tilt) * (1.0 - pow(1.0 - 1.0 / 6.0, steps))
 	if _edge_pan != Vector2.ZERO:
 		following = -1
+		scroll_gliding = false
 		view_moved = true
 		target += Vector3(_edge_pan.x, 0, _edge_pan.y).rotated(Vector3.UP, yaw) * delta
 	# The same turn as dragging towards that edge.
@@ -650,7 +669,7 @@ func present_summon(id: int, code: String) -> void:
 		target = ELAdventureScene.world_position(hero.x, hero.y)
 	else:
 		_focus_object(id)
-	var at := target
+	var at := camera_goal()
 	var actor: Node3D = world.actors.get(id)
 	if is_instance_valid(actor): at = world.to_local(actor.global_position)
 	effects.start("summon:%d" % id, {"file": "GlobalSummon%s.pfx" % colour, "x": at.x, "y": -at.z, "z": at.y,
@@ -777,6 +796,7 @@ func _open_second_precombat(first: int, second: int) -> void:
 		spots.append(ELAdventureScene.world_position(place.x, place.y))
 	if not spots.is_empty():
 		following = -1
+		scroll_gliding = false
 		target = spots[0] if spots.size() == 1 else (spots[0] + spots[1]) * 0.5
 	second_hud.hide()
 	second_precombat.open(state, local, other, faces)
@@ -1340,6 +1360,13 @@ func _object_at(point: Vector2, screen := Vector2(-1, -1)) -> int:
 	# cells) gives way to an object whose own cell is under the pointer, so
 	# a pickup next to the hero can still be clicked (#79).
 	var own_cell := false
+	# A figure's reach runs away from the camera (its body is drawn over the
+	# ground behind it), whichever way the view is turned.
+	var behind := Vector2(0.0, 1.0)
+	if normal != Vector3.ZERO and Vector2(normal.x, -normal.z).length() > 0.01: behind = Vector2(normal.x, -normal.z).normalized()
+	# Depth along the camera ray to the picked figure's drawn body, when the
+	# pointer is over it (INF when only its reach on the ground matched).
+	var body_depth := INF
 	for id: int in state.objects:
 		var item: Dictionary = state.objects[id]
 		if not item.alive or not item.visible or not item.get("placed", true) or item.get("fortified", false): continue
@@ -1348,11 +1375,18 @@ func _object_at(point: Vector2, screen := Vector2(-1, -1)) -> int:
 			var offset := point - Vector2(float(item.x) + 0.5, float(item.y) + 0.5)
 			var near := offset.length()
 			if near >= distance: continue
-			var hit := absf(offset.x) < 0.9 and offset.y > -0.9 and offset.y < 2.2
-			if not hit and normal != Vector3.ZERO and near < 12.0: hit = _pick_box(id, Rect2(float(item.x) + 0.15, float(item.y) + 0.15, 0.7, 0.7), 1.6).intersects_ray(origin, normal) != null
-			if hit and not _fogged(item):
+			var along := offset.dot(behind)
+			var hit := absf(offset.cross(behind)) < 0.9 and along > -0.9 and along < 2.2
+			# The drawn body, with some slack, so a figure takes a click
+			# anywhere on it, not only near its middle.
+			var depth := INF
+			if normal != Vector3.ZERO and near < 16.0:
+				var crossing: Variant = _pick_box(id, Rect2(float(item.x) + 0.15, float(item.y) + 0.15, 0.7, 0.7), 1.6).grow(FIGURE_SLACK).intersects_ray(origin, normal)
+				if crossing != null: depth = origin.distance_to(crossing)
+			if (hit or depth < INF) and not _fogged(item):
 				best = id
 				distance = near
+				body_depth = depth
 				own_cell = Rect2(item.x, item.y, 1, 1).has_point(point)
 		elif best < 0 or (first and not own_cell and building_depth >= 0.0):
 			var size: Vector2i = footprints.get(id, {}).get("size", Vector2i.ONE)
@@ -1372,8 +1406,18 @@ func _object_at(point: Vector2, screen := Vector2(-1, -1)) -> int:
 			if _fogged(item): continue
 			building = id
 			building_depth = depth
-	if first and best >= 0 and not own_cell and building >= 0 and building_depth < 0.0: return building
+	# The object on the ground behind a figure wins (#79), unless the pointer
+	# is over the figure's body and that body is drawn in front of it.
+	if first and best >= 0 and not own_cell and building >= 0 and building_depth < 0.0:
+		if body_depth == INF: return building
+		var size: Vector2i = footprints.get(building, {}).get("size", Vector2i.ONE)
+		var item: Dictionary = state.objects[building]
+		var crossing: Variant = _pick_box(building, Rect2(item.x, item.y, size.x, size.y), 0.0).intersects_ray(origin, normal)
+		if crossing != null and origin.distance_to(crossing) < body_depth: return building
 	return best if best >= 0 else building
+
+## Slack (world units) around a figure's drawn body for picking it.
+const FIGURE_SLACK := 0.35
 
 ## Box the camera ray tests for an object: its footprint `cells` (map
 ## cells), `fallback` cells tall, merged with its drawn figure. Buildings keep
@@ -1458,6 +1502,7 @@ func touch_pan(from: Vector2, to: Vector2) -> void:
 	var b: Variant = ground.intersects_ray(camera.project_ray_origin(to), camera.project_ray_normal(to))
 	if a == null or b == null: return
 	following = -1
+	scroll_gliding = false
 	view_moved = true
 	target += (a as Vector3) - (b as Vector3)
 	_clamp_target()
@@ -1586,9 +1631,7 @@ func _present(data: Dictionary) -> void:
 			if script_camera_attached and id >= 0 and id == state.main_hero:
 				following = id
 				view_moved = false
-		"CameraToPos":
-			following = -1
-			target = ELAdventureScene.world_position(float(data.arguments[0]), float(data.arguments[1]))
+		"CameraToPos": _scroll_to(ELAdventureScene.world_position(float(data.arguments[0]), float(data.arguments[1])))
 		"CameraAttach":
 			var was_attached := script_camera_attached
 			script_camera_attached = ELAdventureSession._truthy_flag(data.arguments[0])
@@ -1597,7 +1640,7 @@ func _present(data: Dictionary) -> void:
 			elif not was_attached and world.actors.has(state.main_hero):
 				# The tutorial mirror focuses the hero before attaching the camera.
 				var hero := state.object(state.main_hero)
-				if not hero.is_empty() and target == ELAdventureScene.world_position(hero.x, hero.y):
+				if not hero.is_empty() and camera_goal() == ELAdventureScene.world_position(hero.x, hero.y):
 					following = state.main_hero
 					view_moved = false
 		"CameraRotate": yaw_goal = deg_to_rad(float(data.arguments[0]))
@@ -1635,7 +1678,11 @@ func _present(data: Dictionary) -> void:
 				if not ends.is_empty() and not state.camera_locked:
 					following = -1
 					target = (ends[0] + ends[-1]) * 0.5
-				hud.show_precombat(data.hero, data.opponent, number, total, director.encounter != null and director.encounter.declinable())
+				# First game: the original orders show the original panel alone,
+				# whose battle cannot be declined; free movement shows the
+				# check mark and the cross (player report #137).
+				var choice := ELStrategy.free_mode(director)
+				hud.show_precombat(data.hero, data.opponent, number, total, choice and director.encounter != null and director.encounter.declinable(), choice)
 				if dome_source != null:
 					_start_battle_dome(int(data.hero), int(data.opponent))
 					# The dome rises at the centre of the view; the panel moves
@@ -1813,14 +1860,12 @@ func _state_event(data: Dictionary) -> void:
 		"barrier_changed":
 			# A first-game runestone sounds as its stones move away (instant.wav).
 			if data.opened and presentation != null and world.first_barrier(state.object(data.id)): presentation.building_used(int(data.id), "instant")
-		"object_changed", "object_killed", "object_created", "shape_changed":
+		"object_changed", "object_killed", "object_created", "shape_changed", "fort_captured":
 			world.update_object(state.object(data.id))
 			world.fog_object(state.object(data.id))
 			_refresh_roster()
-		"ExCameraScrollToObject": _focus_object(int(data.arguments[0]))
-		"ExCameraScrollToPos":
-			following = -1
-			target = ELAdventureScene.world_position(float(data.arguments[0]), float(data.arguments[1]))
+		"ExCameraScrollToObject": _focus_object(int(data.arguments[0]), data.get("instant", false))
+		"ExCameraScrollToPos": _scroll_to(ELAdventureScene.world_position(float(data.arguments[0]), float(data.arguments[1])), data.get("instant", false))
 		"ExCameraRotate": yaw_goal = deg_to_rad(float(data.arguments[0]))
 		"hero_animation": world.play_actor_clip(int(data.id), str(data.clip))
 		"ExCameraZoom":
@@ -1837,6 +1882,7 @@ func _state_event(data: Dictionary) -> void:
 			if state.map.profile.id == "el1" and int(data.player) != state.current_player: return
 			_remark("Collected " + ELResources.describe(state.map.profile.id, data.amounts, false))
 			_first_pickup_box(data)
+			_second_pickup_line(data)
 		"shop_captured":
 			_first_capture_box(data)
 		"experience_gained":
@@ -2158,11 +2204,53 @@ func _second_chapter_end() -> void:
 		return
 	campaign_map_requested.emit(progress)
 
-func _focus_object(id: int) -> void:
+func _focus_object(id: int, instant := false) -> void:
 	var item := state.object(id)
 	if item.is_empty(): return
+	_scroll_to(ELAdventureScene.world_position(item.x, item.y), instant)
+
+## Second game: the camera's look-at point flies to a new point. Every 64 ms
+## it covers SCROLL_RATE x AutoScrollAcceleration (settings.ini, shipped 0.5)
+## of the way left, and it stops when that step is shorter than 0.001; the
+## "Instant" script commands jump. The first game's views jump.
+const SCROLL_TICK := 0.064
+const SCROLL_RATE := 0.25
+const SCROLL_STOP := 0.001
+var scroll_goal := Vector3.ZERO
+var scroll_gliding := false
+var scroll_rate := SCROLL_RATE * 0.5
+
+func _scroll_to(point: Vector3, instant := false) -> void:
 	following = -1
-	target = ELAdventureScene.world_position(item.x, item.y)
+	scroll_gliding = false
+	if instant or state == null or state.map.profile.id != "el2": target = point
+	else:
+		scroll_goal = point
+		scroll_gliding = true
+
+## Where the camera is going (its look-at point once a flight ends).
+func camera_goal() -> Vector3:
+	return scroll_goal if scroll_gliding else target
+
+func _glide(delta: float) -> void:
+	var rest := scroll_goal - target
+	if rest.length() * scroll_rate < SCROLL_STOP:
+		target = scroll_goal
+		scroll_gliding = false
+		return
+	target += rest * (1.0 - pow(1.0 - scroll_rate, delta / SCROLL_TICK))
+
+## AutoScrollAcceleration from the game's settings.ini ([Camera Settings]);
+## the shipped 0.5 when it is missing, and the original ignores values <= 0.
+static func scroll_acceleration(source: ELProfile) -> float:
+	var path := source.file("settings.ini") if source != null else ""
+	if path.is_empty() or not FileAccess.file_exists(path): return 0.5
+	for raw: String in FileAccess.get_file_as_string(path).split("\n"):
+		var line := raw.strip_edges()
+		if not line.begins_with("AutoScrollAcceleration="): continue
+		var value := line.get_slice("=", 1).strip_edges()
+		return value.to_float() if value.is_valid_float() and value.to_float() > 0.0 else 1.0
+	return 0.5
 
 ## Guard zones end a drawn route in the first game, and for player 1's heroes
 ## in the second (route preview).
@@ -2540,6 +2628,17 @@ func _first_pickup_box(data: Dictionary) -> void:
 	if rows.is_empty(): return
 	building_messages.append({"kind": "building_message", "hero": -1, "building": -1, "title": "", "text": state.map.profile.text("T_MB_TAKE_PLUHA_1"), "resources": [], "skill": "", "key": "T_MB_TAKE_PLUHA_1", "box": "first", "rows": rows, "site_notice": true})
 	_show_building_message()
+
+## Second game: a resource pile taken by a hero of the local (human) player
+## adds T_TAKE_PLUHA with the amount and the resource icon to the message line
+## at the top left; there is no message box.
+func _second_pickup_line(data: Dictionary) -> void:
+	if state.map.profile.id != "el2" or second_hud == null or world == null or int(data.get("player", -1)) != world.fog_player: return
+	var format := state.map.profile.text("T_TAKE_PLUHA").strip_edges()
+	if format == "T_TAKE_PLUHA" or not format.contains("%d"): format = "Collected: %d"
+	for kind: String in ELResources.SEQUEL:
+		var amount := int(data.amounts.get(kind, 0))
+		if amount > 0: second_hud.add_message(format.replace("%d", str(amount)), kind)
 
 ## First game: a mine, ether node or shop taken by or from the local player,
 ## in the original MessageBox with the object's picture. Mines and nodes add
@@ -3078,6 +3177,7 @@ func _build_second_controls() -> void:
 	second_hud.minimap_clicked.connect(func(cell: Vector2):
 		if state.camera_locked: return
 		following = -1
+		scroll_gliding = false
 		view_moved = true
 		target = ELAdventureScene.world_position(cell.x - 0.5, cell.y - 0.5))
 	# The tutorial cannot be saved, so its Save menu button is disabled.
@@ -3343,7 +3443,7 @@ func camera_state() -> Dictionary:
 	var standing := Vector2(zoom, pitch)
 	if not text_view.is_empty(): standing = Vector2(float(text_view.zoom), float(text_view.pitch))
 	elif view_goal.x > 0: standing = view_goal
-	return {"yaw": yaw, "pitch": standing.y, "zoom": standing.x, "perspective": camera != null and camera.projection == Camera3D.PROJECTION_PERSPECTIVE, "target": [target.x, target.y, target.z], "following": following, "script_camera_attached": script_camera_attached, "selected_hero": _hero_id(), "voice_position": audio.voice.get_playback_position() if audio != null and audio.voice.playing else 0.0}
+	return {"yaw": yaw, "pitch": standing.y, "zoom": standing.x, "perspective": camera != null and camera.projection == Camera3D.PROJECTION_PERSPECTIVE, "target": [camera_goal().x, camera_goal().y, camera_goal().z], "following": following, "script_camera_attached": script_camera_attached, "selected_hero": _hero_id(), "voice_position": audio.voice.get_playback_position() if audio != null and audio.voice.playing else 0.0}
 
 func set_suspended(value: bool) -> void:
 	# A message shown while the battle was open keeps the map paused.
@@ -3371,7 +3471,9 @@ func quick_save() -> void:
 	wait_cursor(state.map.profile)
 	var preview := await _capture_save_preview()
 	var error_text := _save_named(ELSaveSlots.quick_name(state.map.profile), preview)
-	notice.text = state.map.profile.text("T_GAME_SAVED").strip_edges() if error_text.is_empty() else error_text
+	# The second game prints the confirmation on its message line.
+	if error_text.is_empty() and second_hud != null: second_hud.add_message(state.map.profile.text("T_GAME_SAVED"))
+	else: notice.text = state.map.profile.text("T_GAME_SAVED").strip_edges() if error_text.is_empty() else error_text
 
 ## The open quick-load question (a second F8 answers it).
 var _quick_load_box: Control
@@ -3500,6 +3602,9 @@ func _build_first_tutorial() -> void:
 ## A tutorial event of the map by name (windows ported later report here).
 func tutorial_event(event_name: String) -> void:
 	if tutorial_panel != null: tutorial_panel.fire(event_name)
+
+func _loading(fraction: float) -> void:
+	if loading_progress.is_valid(): loading_progress.call(fraction)
 
 func _fail(message: String) -> bool:
 	error = message

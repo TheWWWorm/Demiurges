@@ -1,0 +1,1593 @@
+extends SceneTree
+## Headless check of the strategic computer players: small situations built
+## on a cleared first-game map (open grass, the authored castles, objects
+## copied from the map's own) and, for movement and fog, a second-game map.
+## Each case names the planning or movement rule it guards.
+##
+##   godot --headless --path game --script ../tools/first_ai_check.gd -- [--smart=both|true|false] [--only=<case>]
+##
+## It needs the games' files (user://profiles.json, as set up by the game);
+## without them the cases are skipped. Nothing is saved.
+
+const MAP := "mmission01"
+## Open ground: terrain kind 4 costs two points a tile, kind 17 is impassable.
+const GRASS := 4
+const WALL := 17
+
+var failures: Array[String] = []
+var profile: ELProfile
+var protos := {}
+var smart := false
+var only := ""
+
+func check(ok: bool, what: String) -> void:
+	var label := "[smart=%s] %s" % [smart, what]
+	print(("PASS: " if ok else "FAIL: ") + label)
+	if not ok: failures.append(label)
+
+func _arg(name: String, fallback: String) -> String:
+	for arg in OS.get_cmdline_user_args():
+		if arg.begins_with("--%s=" % name): return arg.trim_prefix("--%s=" % name)
+	return fallback
+
+func _initialize() -> void:
+	_run.call_deferred()
+
+func _run() -> void:
+	var paths: Variant = JSON.parse_string(FileAccess.get_file_as_string("user://profiles.json")) if FileAccess.file_exists("user://profiles.json") else null
+	if paths is not Dictionary or not paths.has("el1"):
+		print("SKIP: no first-game files configured (user://profiles.json)")
+		quit(0)
+		return
+	profile = ELProfile.new()
+	if not profile.mount("el1", str(paths.el1)):
+		print("SKIP: the first game's files could not be mounted")
+		quit(0)
+		return
+	only = _arg("only", "")
+	var modes: Array[bool] = [false, true]
+	match _arg("smart", "both"):
+		"true": modes = [true]
+		"false": modes = [false]
+	for mode: bool in modes:
+		smart = mode
+		for case: String in CASES:
+			if not only.is_empty() and not case.begins_with(only): continue
+			call("_case_" + case)
+	if paths.has("el2") and (only.is_empty() or only.begins_with("g") or only.begins_with("i")):
+		var second := ELProfile.new()
+		if second.mount("el2", str(paths.el2)):
+			smart = false
+			_second_cases(second)
+		else: print("SKIP: the second game's files could not be mounted")
+	print("FIRST AI: %d failure(s)" % failures.size())
+	quit(0 if failures.is_empty() else 1)
+
+const CASES := ["a_castle", "a_mine", "b_teacher", "b_gnome", "b_spawn", "c_blocked", "d_unexplored", "d_guarded",
+	"e_unseen", "e_unreachable", "f_upgrade", "f_refill", "f_portal", "h_meteor", "j_free", "k_holds", "k_defend", "m_roles", "n_joint", "p_resolver", "q_lookahead",
+	"s_saved", "t_patrol", "t_raid", "t_escort", "t_retreat", "t_doctrine", "t_story", "t_off",
+	"v_cast", "v_income", "v_runes", "v_portal", "v_upkeep", "v_mine",
+	"w_pickup", "w_commander", "w_promotion", "w_hidden", "w_pile", "w_peace", "w_scouts", "w_tinkerer", "w_siege", "w_scrolls", "w_unfound", "w_human",
+	"x_arrival", "x_placed", "x_chase", "x_sight", "x_rounds"]
+
+# --- World -------------------------------------------------------------------
+
+## The map with open grass everywhere, its castles and one copy of each kind
+## of object the cases use; every other object is removed.
+func _world(free := false) -> ELAdventureDirector:
+	var map := ELAdventureMap.new()
+	if not map.load_map(profile, MAP): return null
+	map.terrain.fill(GRASS)
+	map.roads.fill(0)
+	var state := ELAdventureSession.new()
+	if not state.start(map, 1, 212, "", 1, false): return null
+	protos = {}
+	var kept := {}
+	for id: int in state.objects.keys():
+		var item := state.object(id)
+		if ELFirstScenario.is_castle(item):
+			kept[id] = item
+			continue
+		var kind := ""
+		if item.type == "monster" and int(item.owner) <= 0: kind = "monster"
+		elif item.get("group") == "mines": kind = "mine"
+		elif item.get("group") == "mana_nodes": kind = "node"
+		elif item.get("type") == "el1_spell_shop": kind = "shop"
+		elif item.get("type") == "rune_shop": kind = "portal"
+		elif item.get("group") == "additional_buildings" and item.name in ["Teacher", "GnomeMerchant"]: kind = item.name
+		if not kind.is_empty() and not protos.has(kind): protos[kind] = item.duplicate(true)
+		if kind == "shop": protos.get_or_add("shops", []).append(item.duplicate(true))
+		if kind == "portal": protos.get_or_add("portals", []).append(item.duplicate(true))
+	state.objects = kept
+	var director := ELAdventureDirector.new()
+	if not director.build(state): return null
+	director.smart_ai = smart
+	director.free_movement = free
+	# Switches a case may turn on; every case starts from the defaults.
+	if "living_world" in director: director.set("living_world", false)
+	_planner_set("lookahead", true)
+	director.fast_mode = true
+	state.explored.fill(0xff)
+	ELFog.refresh(state)
+	return director
+
+## A copy of a prototype object at (x, y).
+func _place(director: ELAdventureDirector, kind: String, x: int, y: int, extra := {}) -> Dictionary:
+	var state := director.state
+	var item: Dictionary = protos[kind].duplicate(true) if protos.get(kind) is Dictionary else kind_item(kind)
+	item.uid = state._next_object
+	state._next_object += 1
+	item.x = x
+	item.y = y
+	item.merge(extra, true)
+	state.objects[int(item.uid)] = item
+	state.event.emit({"kind": "object_created", "id": item.uid})
+	return item
+
+func kind_item(_kind: String) -> Dictionary:
+	return {}
+
+## A hero of `player` at (x, y) raised to `level`.
+func _hero(director: ELAdventureDirector, player: int, x: int, y: int, level := 1) -> Dictionary:
+	var state := director.state
+	var colour := str(state.players[player].color)
+	var rows: Dictionary = profile.table("HeroTemplates")
+	var template := ""
+	for key: String in rows:
+		if str(rows[key].get("Quest", "")) != "Yes" and int(rows[key].get("Level", 1)) == 1 and str(rows[key].get("Color", "")) == colour:
+			template = key
+			break
+	var id := ELAdditionalBuildings.spawn_hero(state, template, player, x, y)
+	if level > 1: state.add_experience(id, ELHeroProgression.threshold(profile, level))
+	var hero := state.object(id)
+	hero.ap = int(hero.strategy_capacity)
+	return hero
+
+func _kill(director: ELAdventureDirector, item: Dictionary) -> void:
+	item.alive = false
+	director.state.event.emit({"kind": "object_killed", "id": item.uid})
+
+## Impassable terrain on `cell` (its four terrain corners).
+func _wall(director: ELAdventureDirector, cell: Vector2i, open := false) -> void:
+	var map := director.state.map
+	for corner: Vector2i in [cell, cell + Vector2i(1, 0), cell + Vector2i(0, 1), cell + Vector2i(1, 1)]:
+		map.terrain[corner.y * (map.width + 1) + corner.x] = GRASS if open else WALL
+	for dy in range(-1, 2):
+		for dx in range(-1, 2):
+			if director.grid.contains(cell + Vector2i(dx, dy)): director.grid._update_cell(cell + Vector2i(dx, dy))
+
+## A square ring of walls `radius` cells around `item`'s footprint, leaving
+## the cells of `gaps` (and their neighbours along the ring) open.
+func _pen(director: ELAdventureDirector, item: Dictionary, radius: int, gaps: Array = []) -> void:
+	var size: Vector2i = director.grid.footprints.get(int(item.uid), {}).get("size", Vector2i.ONE)
+	var area := Rect2i(int(item.x) - radius, int(item.y) - radius, size.x + 2 * radius, size.y + 2 * radius)
+	for y in range(area.position.y, area.end.y):
+		for x in range(area.position.x, area.end.x):
+			if x != area.position.x and x != area.end.x - 1 and y != area.position.y and y != area.end.y - 1: continue
+			var open := false
+			for gap: Vector2i in gaps:
+				if maxi(absi(gap.x - x), absi(gap.y - y)) <= 1: open = true
+			if not open: _wall(director, Vector2i(x, y))
+
+func _unexplore(director: ELAdventureDirector, player: int, area: Rect2i) -> void:
+	var state := director.state
+	for y in range(area.position.y, area.end.y):
+		for x in range(area.position.x, area.end.x):
+			state.explored[y * state.map.width + x] &= ~ELFog.bit(player)
+
+func _pass(director: ELAdventureDirector, player := 2) -> void:
+	ELFirstAI.plan_player(director, player, false)
+
+func _task_of(director: ELAdventureDirector, hero: Dictionary, player := 2) -> Dictionary:
+	for pair: Array in ELFirstAI.data(director.state, player).assigned:
+		if int(pair[0]) == int(hero.uid): return pair[1]
+	return {}
+
+## Whether an objective on `target` is still known: open or held by a hero.
+func _known(director: ELAdventureDirector, target: Dictionary, player := 2) -> bool:
+	var ai := ELFirstAI.data(director.state, player)
+	for task: Dictionary in ai.tasks:
+		if int(task.get("target", -1)) == int(target.uid): return true
+	for pair: Array in ai.assigned:
+		if int(pair[1].get("target", -1)) == int(target.uid) and director.state.object(pair[0]).get("alive", false): return true
+	return false
+
+func _castle(director: ELAdventureDirector, player: int) -> Dictionary:
+	return ELFirstScenario.castle_object(director.state, player)
+
+## The planner script, called by name so that this file also loads where a
+## switch is missing (null then).
+func _planner() -> Script:
+	return load("res://src/content/first_ai_planner.gd") if ResourceLoader.exists("res://src/content/first_ai_planner.gd") else null
+
+func _planner_set(name: String, value: Variant) -> void:
+	var planner := _planner()
+	if planner != null and name in planner: planner.set(name, value)
+
+## The living-world switch; false where it is missing.
+func _living(director: ELAdventureDirector, on: bool) -> bool:
+	if not "living_world" in director: return false
+	director.set("living_world", on)
+	return true
+# --- A: objectives survive their hero ----------------------------------------
+
+func _case_a_castle() -> void:
+	var director := _world()
+	var home := _castle(director, 2)
+	var first := _hero(director, 2, int(home.x) - 6, int(home.y), 7)
+	var second := _hero(director, 2, int(home.x) - 8, int(home.y) + 4, 6)
+	_pass(director)
+	var task := _task_of(director, first)
+	check(task.get("kind") == "tower", "A: the leading hero sets out to besiege an enemy castle")
+	var castle := director.state.object(int(task.get("target", -1)))
+	_kill(director, first)
+	_pass(director)
+	_pass(director)
+	check(_known(director, castle), "A: the castle its fallen hero was besieging is still an objective")
+	check(_task_of(director, second).get("kind") == "tower", "A: the new leading hero takes up a siege")
+
+func _case_a_mine() -> void:
+	var director := _world()
+	var home := _castle(director, 2)
+	var lead := _hero(director, 2, int(home.x) - 6, int(home.y), 7)
+	var side := _hero(director, 2, 40, 90, 2)
+	var mine := _place(director, "mine", 46, 92, {"owner": -1})
+	var far := _hero(director, 2, 20, 100, 2)
+	_pass(director)
+	check(int(_task_of(director, side).get("target", -1)) == int(mine.uid), "A: the nearest supporter is sent to the mine")
+	_kill(director, side)
+	_pass(director)
+	check(_known(director, mine), "A: the mine its fallen hero was sent to is still an objective")
+	check(int(_task_of(director, far).get("target", -1)) == int(mine.uid), "A: another supporter takes over the mine")
+	check(not lead.is_empty(), "A: the leader stays")
+
+# --- B: reusable buildings and new targets ----------------------------------
+
+func _case_b_teacher() -> void:
+	var director := _world()
+	var home := _castle(director, 2)
+	_hero(director, 2, int(home.x) - 6, int(home.y), 7)
+	var first := _hero(director, 2, 40, 90, 2)
+	var teacher := _place(director, "Teacher", 44, 90)
+	var second := _hero(director, 2, 20, 60, 2)
+	_pass(director)
+	check(int(_task_of(director, first).get("target", -1)) == int(teacher.uid), "B: the nearest hero goes to the Teacher")
+	teacher.visited.append(int(first.uid))
+	_pass(director)
+	check(_known(director, teacher), "B: a Teacher another hero may still use stays an objective")
+	check(int(_task_of(director, second).get("target", -1)) == int(teacher.uid), "B: the second hero goes to the Teacher")
+
+func _case_b_gnome() -> void:
+	var director := _world()
+	var home := _castle(director, 2)
+	_hero(director, 2, int(home.x) - 6, int(home.y), 7)
+	var first := _hero(director, 2, 40, 90, 2)
+	var gnome := _place(director, "GnomeMerchant", 44, 90)
+	_pass(director)
+	check(int(_task_of(director, first).get("target", -1)) == int(gnome.uid), "B: a hero goes to the Gnome Merchant")
+	gnome.used = true
+	_pass(director)
+	ELAdditionalBuildings.new_day(director.state, 7)
+	_pass(director)
+	check(_known(director, gnome), "B: the Gnome Merchant is an objective again after its weekly reset")
+
+func _case_b_spawn() -> void:
+	var director := _world()
+	var home := _castle(director, 2)
+	_hero(director, 2, int(home.x) - 6, int(home.y), 7)
+	_hero(director, 2, 40, 90, 2)
+	_pass(director)
+	var monster := _place(director, "monster", 50, 96, {"owner": 0})
+	_pass(director)
+	check(_known(director, monster), "B: a creature that appears later becomes an objective")
+
+# --- C: blocked assignments ---------------------------------------------------
+
+func _case_c_blocked() -> void:
+	var director := _world()
+	var home := _castle(director, 2)
+	_hero(director, 2, int(home.x) - 6, int(home.y), 7)
+	var side := _hero(director, 2, 30, 90, 2)
+	var mine := _place(director, "mine", 50, 90, {"owner": -1})
+	var gap := Vector2i(int(mine.x) - 4, int(mine.y))
+	_pen(director, mine, 4, [gap])
+	_pass(director)
+	check(int(_task_of(director, side).get("target", -1)) == int(mine.uid), "C: the supporter is sent to the mine through the gap")
+	_wall(director, gap)
+	var stuck := 0
+	for round in 4:
+		_pass(director)
+		var task := _task_of(director, side)
+		if int(task.get("target", -1)) == int(mine.uid) and side.get("strategy_order", {}).is_empty(): stuck += 1
+	check(stuck < 3, "C: an assignment that produces no order is given up after a few passes (stuck %d of 4)" % stuck)
+	_wall(director, gap, true)
+	_wall(director, gap + Vector2i(0, -1), true)
+	_wall(director, gap + Vector2i(0, 1), true)
+	for round in 4: _pass(director)
+	check(_known(director, mine), "C: the mine is an objective again once the way opens")
+
+# --- D: the executed route keeps the planned route's rules ------------------
+
+## A wall down column `x` from `top` to `bottom`, with a one-cell passage
+## at each row of `gaps`.
+func _wall_line(director: ELAdventureDirector, x: int, top: int, bottom: int, gaps: Array) -> void:
+	for y in range(top, bottom + 1):
+		var open := false
+		for gap: int in gaps:
+			if absi(gap - y) <= 1: open = true
+		if not open: _wall(director, Vector2i(x, y))
+
+func _case_d_unexplored() -> void:
+	# The leader (below siege level) hunts a creature beyond a wall: the near
+	# passage is unexplored, the far one explored.
+	var director := _world()
+	var lead := _hero(director, 2, 30, 60, 5)
+	var prey := _place(director, "monster", 52, 60, {"owner": 0, "level": 1})
+	_wall_line(director, 40, 30, 100, [60, 76])
+	_unexplore(director, 2, Rect2i(38, 56, 5, 9))
+	_pass(director)
+	# The smarter planner may weigh a look at the unexplored passage higher;
+	# whatever it chose, the walk must keep to explored ground.
+	if smart: check(not _task_of(director, lead).is_empty(), "D: the leader has an objective (%s)" % str(_task_of(director, lead)))
+	else: check(int(_task_of(director, lead).get("target", -1)) == int(prey.uid), "D: the leader is sent after the creature")
+	var path := ELStrategy.order_path(director, lead)
+	var unknown := 0
+	for point: Vector2i in path:
+		if not ELFog.explored(director.state, 2, point): unknown += 1
+	check(not path.is_empty() and unknown == 0, "D: the route walked keeps to explored ground (%d unexplored cells)" % unknown)
+
+func _case_d_guarded() -> void:
+	# A supporter goes for a mine beyond a wall: the near passage leads into a
+	# creature's guard area, the far one is clear.
+	var director := _world()
+	var home := _castle(director, 2)
+	_hero(director, 2, int(home.x) - 6, int(home.y), 7)
+	var side := _hero(director, 2, 30, 60, 2)
+	var mine := _place(director, "mine", 52, 60, {"owner": -1})
+	var guard := _place(director, "monster", 43, 60, {"owner": 0, "level": 9})
+	_wall_line(director, 40, 30, 100, [60, 76])
+	_pass(director)
+	check(int(_task_of(director, side).get("target", -1)) == int(mine.uid), "D: the supporter is sent to the mine")
+	var path := ELStrategy.order_path(director, side)
+	var guarded := 0
+	for point: Vector2i in path:
+		if not director.interception.enemies(director.state, side, point).is_empty(): guarded += 1
+	check(not path.is_empty() and guarded == 0, "D: the route walked keeps out of the guard's area like the planned one (%d guarded cells)" % guarded)
+	check(guard.alive, "D: the guard stays")
+
+# --- E: enemies the player does not see -------------------------------------
+
+func _case_e_unseen() -> void:
+	var director := _world()
+	var home := _castle(director, 2)
+	_hero(director, 2, int(home.x) - 6, int(home.y), 7)
+	_hero(director, 2, 40, 90, 2)
+	var enemy := _hero(director, 3, 20, 20, 1)
+	_pass(director)
+	check(not ELFog.visible(director.state, 2, Vector2i(enemy.x, enemy.y)), "E: the enemy hero stands out of sight")
+	check(not _known(director, enemy), "E: an enemy hero out of sight is not a target")
+	var scout := _hero(director, 2, 24, 22, 2)
+	_pass(director)
+	check(_known(director, enemy), "E: the same hero becomes a target once seen")
+	check(not scout.is_empty(), "E: the scout stays")
+
+func _case_e_unreachable() -> void:
+	var director := _world()
+	var home := _castle(director, 2)
+	_hero(director, 2, int(home.x) - 6, int(home.y), 7)
+	var side := _hero(director, 2, 30, 90, 3)
+	var enemy := _hero(director, 3, 38, 90, 1)
+	_pen(director, enemy, 3)
+	ELFog.refresh(director.state)
+	_pass(director)
+	check(int(_task_of(director, side).get("target", -1)) != int(enemy.uid), "E: a supporter is not sent after an enemy it cannot reach")
+
+# --- F: shops and portals ---------------------------------------------------
+
+func _case_f_upgrade() -> void:
+	var director := _world()
+	var state := director.state
+	var home := _castle(director, 2)
+	_hero(director, 2, int(home.x) - 6, int(home.y), 7)
+	var side := _hero(director, 2, 30, 90, 3)
+	for kind: String in state.players[2].resources: state.players[2].resources[kind] = 5000
+	_place(director, "portal", 20, 80)
+	var found := {}
+	for proto: Dictionary in protos.get("shops", []):
+		var shop := _place(director, "shop", 36, 90, {"name": proto.name, "node": proto.node, "level": 0, "owner": 0})
+		# A book of the shop's own stock: nothing here is worth buying.
+		var stock := ELFirstSpellShop.authored_stock(profile, shop, ELFirstSpellShop.hero_color(profile, side))
+		if stock.is_empty(): continue
+		for slot in side.cards.size(): side.cards[slot] = stock[slot % stock.size()]
+		ELRunes.initialize(profile, side)
+		for slot in side.rune_uses.size():
+			if int(side.rune_uses[slot]) >= 0: side.rune_uses[slot] = ELRunes.capacity(side)
+		if ELFirstAIEconomy._shop(state, side, shop, false) == 0 and int(ELFirstAIEconomy._next_stock_helps(state, side, shop)) > 0:
+			found = shop
+			break
+		_kill(director, shop)
+		state.objects.erase(int(shop.uid))
+	if not smart:
+		check(ELFirstAI.cost(director, side, 1, {"kind": "shop", "target": int(found.get("uid", -1))}) == ELFirstAI.NONE, "F: without the option shops are never visited")
+		return
+	check(not found.is_empty(), "F: a spell shop whose next level helps while its stock does not")
+	if found.is_empty(): return
+	check(ELFirstAI.cost(director, side, 1, {"kind": "shop", "target": int(found.uid)}) != ELFirstAI.NONE, "F: a visit that upgrades the shop and buys is planned")
+
+func _case_f_refill() -> void:
+	var director := _world()
+	var state := director.state
+	var side := _hero(director, 2, 30, 90, 3)
+	var portal := _place(director, "portal", 32, 90)
+	var slot := _rune_slot(side)
+	check(slot >= 0, "F: the hero has a spell that uses runes")
+	if slot < 0: return
+	side.rune_uses[slot] = 0
+	check(ELFirstAIEconomy.trip_cost(state, side, portal, 0, 1) >= 0, "F: one rune for an empty spell at an adjacent portal is worth the stop")
+	check(ELFirstAIEconomy.trip_cost(state, side, portal, 40, 1) < 0, "F: one rune is not worth a long trip")
+
+## A book slot holding a spell that uses runes (one of the hero's colour is
+## put in the first slot when the book has none); -1 if there is none.
+func _rune_slot(hero: Dictionary) -> int:
+	for index in hero.rune_uses.size():
+		if int(hero.rune_uses[index]) >= 0: return index
+	var colour := ELFirstSpellShop.hero_color(profile, hero)
+	var spells: Dictionary = profile.table("CombatSpells")
+	for code: String in spells:
+		if spells[code].get("Color") == colour and spells[code].get("Rarity") in ["Common", "Rare"]:
+			hero.cards[0] = code
+			ELRunes.initialize(profile, hero)
+			for index in hero.rune_uses.size():
+				if int(hero.rune_uses[index]) >= 0: return index
+	return -1
+
+func _case_f_portal() -> void:
+	if not smart: return
+	var director := _world()
+	var state := director.state
+	var side := _hero(director, 2, 30, 90, 3)
+	for kind: String in state.players[2].resources: state.players[2].resources[kind] = 5000
+	var portal := _place(director, "portal", 60, 60)
+	# A spell that waits for runes: the hero is drawn to a portal it can reach,
+	# and its purchases are priced with that portal's runes.
+	var slot := _rune_slot(side)
+	check(slot >= 0, "F: the hero has a spell that uses runes")
+	if slot < 0: return
+	side.rune_uses[slot] = 0
+	check(ELFirstAIEconomy.urgent(director, side), "F: an empty spell sends the hero to the portal it can reach")
+	_pen(director, portal, 3)
+	check(not ELFirstAIEconomy.urgent(director, side), "F: a portal that cannot be reached does not")
+
+# --- H: offensive global spells ---------------------------------------------
+
+func _case_h_meteor() -> void:
+	var director := _world()
+	var state := director.state
+	var castles: Dictionary = state.scenario.castles
+	for id: int in castles:
+		if id != 2: castles[id].alive = false
+	var record := ELGlobalSpells.data(state, 2)
+	record.production = {"code": "METR", "state": 2, "cost": 10}
+	var before := int(castles[2].pending)
+	ELFirstAIEconomy._cast(director, 2)
+	state.error = ""
+	check(int(castles[2].pending) <= before, "H: a meteor with no enemy castle left does not strike its own castle (%d -> %d)" % [before, int(castles[2].pending)])
+
+# --- J: free movement plans again after an action ---------------------------
+
+func _case_j_free() -> void:
+	var director := _world(true)
+	var state := director.state
+	var home := _castle(director, 2)
+	var lead := _hero(director, 2, int(home.x) - 6, int(home.y), 7)
+	lead.ap = 0
+	var side := _hero(director, 2, 40, 90, 2)
+	var first := _place(director, "mine", 41, 91, {"owner": -1})
+	var second := _place(director, "mine", 52, 91, {"owner": -1})
+	var start := Vector2i(side.x, side.y)
+	if not ELStrategy.free_mode(director):
+		check(false, "J: free movement applies on this map")
+		return
+	# Only player 2 moves.
+	director.free_queue = [{"kind": "ai", "player": 2, "round": 0, "pending": [], "planned": false, "positions": {}}]
+	ELStrategy.free_next(director)
+	for step in 20000:
+		if not director.error.is_empty(): break
+		if director.strategy.is_empty() and director.movement.is_empty() and director.free_queue.is_empty(): break
+		if not director.strategy.is_empty() and director.strategy.get("free", "") == "night": break
+		director.advance(0.1)
+	check(int(first.owner) == 2, "J: the adjacent mine is taken")
+	check(Vector2i(side.x, side.y) != start or int(second.owner) == 2, "J: with movement left the hero goes on to the next mine the same day")
+
+# --- K, M, N: smarter computer players ----------------------------------------
+
+## A raider near the castle; the castle's energy decides whether it holds.
+func _k_world(energy: int) -> Array:
+	var director := _world()
+	var state := director.state
+	var home := _castle(director, 2)
+	if energy > 0: state.scenario.castles[2].health = energy
+	var lead := _hero(director, 2, 20, 100, 8)
+	var side := _hero(director, 2, int(home.x) - 8, int(home.y) + 2, 4)
+	var mine := _place(director, "mine", int(home.x) - 14, int(home.y) + 6, {"owner": -1})
+	var raider := _hero(director, 3, int(home.x) - 6, int(home.y) - 8, 5)
+	ELFog.refresh(state)
+	return [director, lead, side, mine, raider]
+
+func _case_k_holds() -> void:
+	# A castle at full energy outlasts one level-five raider for days: its
+	# heroes stay on their tasks.
+	var world := _k_world(0)
+	var director: ELAdventureDirector = world[0]
+	var side: Dictionary = world[2]
+	var raider: Dictionary = world[4]
+	_pass(director)
+	var task := _task_of(director, side)
+	var lead_task := _task_of(director, world[1])
+	if smart:
+		var planner := _planner()
+		var holds: Dictionary = planner.call("defence", director, 2, planner.call("threats", director, 2)) if planner != null else {"x": 1}
+		check(holds.is_empty(), "K: the castle at full energy holds on its own (%s)" % str(holds))
+		check(int(task.get("target", -1)) == int(world[3].uid) and lead_task.get("kind") == "tower", "K: a castle that holds keeps its heroes on task (%s / %s)" % [str(lead_task), str(task)])
+	else: check(task.get("kind") != "defend", "K: without the option no defence task is made")
+	check(raider.alive, "K: the raider stays")
+
+func _case_k_defend() -> void:
+	# The same raider before a castle with little energy left: the castle
+	# would fall within a night or two, so a hero that can reach the raider
+	# in time is sent; the far leader stays at its siege.
+	var world := _k_world(6)
+	var director: ELAdventureDirector = world[0]
+	var lead: Dictionary = world[1]
+	var side: Dictionary = world[2]
+	var raider: Dictionary = world[4]
+	_pass(director)
+	if not smart:
+		check(_task_of(director, side).get("kind") != "defend", "K: without the option no defence task is made")
+		return
+	var planner := _planner()
+	var falls: Dictionary = planner.call("defence", director, 2, planner.call("threats", director, 2)) if planner != null else {}
+	check(falls.has(int(raider.uid)), "K: the castle with little energy would fall (%s)" % str(falls))
+	var deadline := float(falls.get(int(raider.uid), 0.0))
+	var defender := {}
+	for hero: Dictionary in [lead, side]:
+		if int(_task_of(director, hero).get("target", -1)) == int(raider.uid): defender = hero
+	check(not defender.is_empty(), "K: a hero turns back to meet the raider (%s / %s)" % [str(_task_of(director, lead)), str(_task_of(director, side))])
+	if defender.is_empty(): return
+	var days := float(ELFirstAI._route_cost(director, defender, raider, false)) / maxf(1.0, float(defender.strategy_capacity))
+	check(days <= deadline, "K: the defender arrives in time (%.1f days, the castle falls in %.0f)" % [days, deadline])
+	var far := float(ELFirstAI._route_cost(director, lead, raider, false)) / maxf(1.0, float(lead.strategy_capacity))
+	if far > deadline: check(_task_of(director, lead).get("kind") == "tower", "K: the leader, too far to arrive in time (%.1f days), keeps its siege" % far)
+func _case_m_roles() -> void:
+	var director := _world()
+	var home := _castle(director, 2)
+	_hero(director, 2, int(home.x) - 6, int(home.y), 9)
+	var side := _hero(director, 2, 30, 90, 7)
+	var weak := _place(director, "monster", 34, 90, {"owner": 0, "level": 1})
+	_pass(director)
+	var task := _task_of(director, side)
+	if smart: check(int(task.get("target", -1)) == int(weak.uid), "M: a strong supporter clears a weak creature beside it (%s)" % str(task))
+	else: check(task.get("kind") != "monster", "M: without the option supporters leave creatures to the leader")
+
+func _case_n_joint() -> void:
+	var director := _world()
+	var home := _castle(director, 2)
+	_hero(director, 2, int(home.x) - 6, int(home.y), 8)
+	# The first supporter is a little nearer the near mine; the second can
+	# reach only that mine soon. Taking turns sends the second far away.
+	var first := _hero(director, 2, 40, 90, 2)
+	var second := _hero(director, 2, 40, 80, 2)
+	var near := _place(director, "mine", 42, 86, {"owner": -1})
+	var far := _place(director, "mine", 40, 108, {"owner": -1})
+	_pass(director)
+	var total := 0
+	for hero: Dictionary in [first, second]:
+		var target := director.state.object(int(_task_of(director, hero).get("target", -1)))
+		if not target.is_empty(): total += ELFirstAI._route_cost(director, hero, target, false)
+	var greedy := ELFirstAI._route_cost(director, first, near, false) + ELFirstAI._route_cost(director, second, far, false)
+	var joint := ELFirstAI._route_cost(director, first, far, false) + ELFirstAI._route_cost(director, second, near, false)
+	if smart: check(total <= mini(greedy, joint), "N: the two supporters split the mines for the least walking (%d, best %d)" % [total, mini(greedy, joint)])
+	else: check(total == greedy, "N: without the option heroes choose in turn (%d)" % total)
+
+# --- P: strategic battles -----------------------------------------------------
+
+func _case_p_resolver() -> void:
+	var director := _world()
+	var state := director.state
+	var strong := _hero(director, 2, 30, 90, 1)
+	var weak := _hero(director, 3, 32, 90, 1)
+	var wins := 0
+	var trials := 600
+	for trial in trials:
+		if ELFirstAI.winner(state, strong, weak) == strong: wins += 1
+	var share := float(wins) / trials
+	check(absf(share - 2.0 / 3.0) < 0.06, "P: equal levels give the first side two chances in three (%.2f)" % share)
+	var neutral := _place(director, "monster", 34, 90, {"owner": 0, "level": 9})
+	check(ELFirstAI.winner(state, neutral, weak) == weak, "P: a player's hero always beats a neutral creature")
+	# The estimate switch (off by default) weighs the sides instead.
+	# (Called by name so that this file also loads where the switch is missing.)
+	var planner: Script = load("res://src/content/first_ai_planner.gd") if ResourceLoader.exists("res://src/content/first_ai_planner.gd") else null
+	check(planner != null, "P: the strength estimate exists")
+	if planner == null: return
+	weak.health = 1
+	weak.cards = []
+	var estimated := 0
+	for trial in trials:
+		if (ELFirstAI as Script).call("winner", state, strong, weak, true) == strong: estimated += 1
+	check(estimated > trials * 0.8, "P: with the estimate a far stronger side wins nearly always (%d of %d)" % [estimated, trials])
+	check(float(planner.call("win_chance", director, strong, neutral)) == 1.0, "P: the planner's risk follows the original rule while the switch is off")
+	director.set("battle_estimate", true)
+	check(float(planner.call("win_chance", director, strong, neutral)) < 1.0, "P: and the estimate while it is on")
+
+# --- Q: short strategic lookahead --------------------------------------------
+
+## A leader below siege level; a mine penned in with its one gap guarded by a
+## weak creature, and a Teacher a little nearer the other way (alone, the
+## Teacher is worth a little more than the creature).
+func _q_world() -> Array:
+	var director := _world()
+	var lead := _hero(director, 2, 30, 60, 5)
+	var mine := _place(director, "mine", 50, 60, {"owner": -1})
+	var gap := Vector2i(int(mine.x) - 2, int(mine.y))
+	_pen(director, mine, 2, [gap])
+	# The gap is one cell wide (walls take the terrain corners beside it);
+	# the guard stands two cells out, its area covering the cell before it.
+	var guard := _place(director, "monster", gap.x - 2, gap.y, {"owner": 0, "level": 1})
+	var teacher := _place(director, "Teacher", 12, 60)
+	director.interception.rebuild(director.state, director.grid)
+	return [director, lead, mine, guard, teacher]
+
+func _case_q_lookahead() -> void:
+	var plain := _q_world()
+	_planner_set("lookahead", false)
+	_pass(plain[0])
+	var single := _task_of(plain[0], plain[1])
+	_planner_set("lookahead", true)
+	var looked := _q_world()
+	_pass(looked[0])
+	var chosen := _task_of(looked[0], looked[1])
+	if not smart:
+		check(single.hash() == chosen.hash(), "Q: without the option the lookahead changes nothing (%s / %s)" % [str(single), str(chosen)])
+		return
+	var director: ELAdventureDirector = looked[0]
+	var guard: Dictionary = looked[3]
+	check(ELFirstAI._route_cost(director, looked[1], looked[2], true) == ELFirstAI.NONE, "Q: the mine has no way in but past its guard")
+	check(int(single.get("target", -1)) == int(plain[4].uid), "Q: plain smarter planning takes the best single objective, the Teacher (%s)" % str(single))
+	check(int(chosen.get("target", -1)) == int(guard.uid), "Q: the lookahead clears the guard first, which opens the mine behind it (%s)" % str(chosen))
+
+# --- T: living world ------------------------------------------------------------
+
+## A level-two hero with nothing to do and two mines of its own.
+func _t_idle() -> Array:
+	var director := _world()
+	var home := _castle(director, 2)
+	var hero := _hero(director, 2, int(home.x) - 10, int(home.y) + 10, 2)
+	var first := _place(director, "mine", int(home.x) - 16, int(home.y) + 4, {"owner": 2})
+	var second := _place(director, "mine", int(home.x) - 4, int(home.y) + 18, {"owner": 2})
+	return [director, hero, first, second]
+
+func _case_t_patrol() -> void:
+	var world := _t_idle()
+	var director: ELAdventureDirector = world[0]
+	var hero: Dictionary = world[1]
+	_pass(director)
+	check(_task_of(director, hero).is_empty(), "T: without the switch an idle hero stays idle (%s)" % str(_task_of(director, hero)))
+	if not _living(director, true): return
+	_pass(director)
+	var task := _task_of(director, hero)
+	if not smart:
+		check(task.is_empty(), "T: without smarter players the switch changes nothing (%s)" % str(task))
+		return
+	check(task.get("kind") == "patrol" and not hero.strategy_order.is_empty(), "T: an idle hero sets out on a patrol of its sites (%s)" % str(task))
+	var stop := director.state.object(int(task.get("target", -1)))
+	if stop.is_empty(): return
+	# Beside that stop, the patrol goes on to the next one.
+	hero.x = int(stop.x) - 1
+	hero.y = int(stop.y)
+	director.grid.update_actor(hero)
+	_pass(director)
+	var next := _task_of(director, hero)
+	check(next.get("kind") == "patrol" and int(next.get("target", -1)) != int(stop.uid), "T: beside one stop the patrol walks on to the next (%s)" % str(next))
+	# Work comes first: a free mine nearby ends the patrol.
+	var mine := _place(director, "mine", int(hero.x) - 3, int(hero.y) + 3, {"owner": -1})
+	_pass(director)
+	check(int(_task_of(director, hero).get("target", -1)) == int(mine.uid), "T: a patrolling hero takes up real work when it appears (%s)" % str(_task_of(director, hero)))
+
+func _case_t_raid() -> void:
+	var director := _world()
+	var state := director.state
+	var home := _castle(director, 2)
+	_hero(director, 2, int(home.x) - 6, int(home.y), 7)
+	var side := _hero(director, 2, 30, 90, 3)
+	var site := _place(director, "mine", 38, 90, {"owner": 3})
+	ELFog.refresh(state)
+	var planner := _planner()
+	if planner == null: return
+	var task := {"kind": "mine", "target": int(site.uid)}
+	var before: float = planner.call("utility", director, side, 1, task, {}, true)
+	if not _living(director, true): return
+	var raid: float = planner.call("utility", director, side, 1, task, {}, true)
+	if not smart:
+		check(before == raid, "T: without smarter players there is no raid weighing")
+		return
+	check(raid > before + 10.0, "T: an undefended enemy mine is worth a raid (%.0f -> %.0f)" % [before, raid])
+	var keeper := _hero(director, 3, 39, 92, 3)
+	ELFog.refresh(state)
+	var guarded: float = planner.call("utility", director, side, 1, task, {}, true)
+	check(guarded < raid, "T: not when a hero of its owner stands by (%.0f)" % guarded)
+	check(keeper.alive, "T: the keeper stays")
+
+func _case_t_escort() -> void:
+	var director := _world()
+	var home := _castle(director, 2)
+	var lead := _hero(director, 2, int(home.x) - 6, int(home.y), 6)
+	var side := _hero(director, 2, int(home.x) - 8, int(home.y) + 4, 3)
+	_living(director, true)
+	_pass(director)
+	_pass(director)
+	var siege := _task_of(director, lead)
+	var task := _task_of(director, side)
+	if not smart:
+		check(task.get("kind") != "escort", "T: without smarter players no escort is made")
+		return
+	check(siege.get("kind") == "tower", "T: the level-six leader besieges a castle (%s)" % str(siege))
+	check(task.get("kind") == "escort" and int(task.get("target", -1)) == int(lead.uid), "T: a supporter escorts the weak besieger (%s)" % str(task))
+	_living(director, false)
+	_pass(director)
+	check(_task_of(director, side).get("kind") != "escort", "T: without the switch the escort is given up (%s)" % str(_task_of(director, side)))
+
+func _case_t_retreat() -> void:
+	var director := _world()
+	var state := director.state
+	var home := _castle(director, 2)
+	_hero(director, 2, int(home.x) - 6, int(home.y), 7)
+	var side := _hero(director, 2, 30, 90, 3)
+	for kind: String in state.players[2].resources: state.players[2].resources[kind] = 5000
+	var portal := _place(director, "portal", 34, 90)
+	var mine := _place(director, "mine", 26, 90, {"owner": -1})
+	var slot := _rune_slot(side)
+	if slot < 0:
+		check(false, "T: the hero has a spell that uses runes")
+		return
+	# Every rune-using copy down to one rune: low, but none empty.
+	for index in side.rune_uses.size():
+		if int(side.rune_uses[index]) >= 0: side.rune_uses[index] = 1
+	_pass(director)
+	var plain := _task_of(director, side)
+	ELFirstAI.data(state, 2).assigned = []
+	_living(director, true)
+	_pass(director)
+	var task := _task_of(director, side)
+	if not smart:
+		check(plain.get("kind") == task.get("kind") and plain.get("target") == task.get("target"), "T: without smarter players the switch changes nothing")
+		return
+	check(int(plain.get("target", -1)) == int(mine.uid), "T: without the switch the hero takes the mine (%s)" % str(plain))
+	check(int(task.get("target", -1)) == int(portal.uid), "T: low on runes, the hero turns back to the portal (%s)" % str(task))
+
+func _case_t_doctrine() -> void:
+	var director := _world()
+	var state := director.state
+	var planner := _planner()
+	if planner == null or not "living_world" in director: return
+	var chosen := {}
+	var repeat := true
+	for seed in range(1, 13):
+		state.seed_value = seed
+		var name: String = planner.call("doctrine", state, 2)
+		if name != planner.call("doctrine", state, 2): repeat = false
+		chosen[name] = true
+	check(repeat, "T: the doctrine follows the seed")
+	check(chosen.size() >= 2 and not chosen.has(""), "T: seeds give players different doctrines (%s)" % str(chosen.keys()))
+	state.seed_value = 212
+	var hero := _hero(director, 2, 30, 90, 3)
+	var name: String = planner.call("doctrine", state, 2)
+	check(float(planner.call("weight", director, hero, "tower")) == 1.0, "T: without the switch every weight is one")
+	_living(director, true)
+	var expected := float(planner.DOCTRINES[name].get("tower", 1.0)) if smart else 1.0
+	check(float(planner.call("weight", director, hero, "tower")) == expected, "T: with it the %s doctrine weighs sieges %.2f" % [name, expected])
+	# A chapter that names this player's castle keeps the plain weights.
+	var id := state.map.id
+	state.map.id = "mission12"
+	check(planner.call("doctrine", state, 4) == "" and planner.call("doctrine", state, 2) != "", "T: no doctrine for a player whose castle the chapter names, one for the others")
+	var named := _hero(director, 4, 40, 90, 3)
+	check(float(planner.call("weight", director, named, "tower")) == 1.0, "T: its heroes keep the plain weights")
+	state.map.id = id
+
+func _case_t_story() -> void:
+	# The idle-hero fixture, with the switch on: a map's own hero in a
+	# campaign chapter and a hero a queued script command names stay idle.
+	var world := _t_idle()
+	var director: ELAdventureDirector = world[0]
+	var state := director.state
+	var hero: Dictionary = world[1]
+	if not _living(director, true): return
+	state.scenario.campaign = true
+	hero.source_index = 3
+	_pass(director)
+	check(_task_of(director, hero).is_empty(), "T: a map's own hero in a campaign chapter is left to the plain planning (%s)" % str(_task_of(director, hero)))
+	hero.source_index = -1
+	state.commands.append({"kind": "Moving", "arguments": [hero.uid, 10, 10]})
+	_pass(director)
+	check(_task_of(director, hero).is_empty(), "T: so is a hero a script command names (%s)" % str(_task_of(director, hero)))
+	state.commands.clear()
+	# Neutral creatures keep their places and get no orders.
+	var creature := _place(director, "monster", 60, 60, {"owner": 0, "level": 2})
+	for round in 3: _pass(director)
+	check(Vector2i(creature.x, creature.y) == Vector2i(60, 60) and creature.get("strategy_order", {}).is_empty(), "T: neutral creatures stay home")
+
+func _case_t_off() -> void:
+	# A busy little world planned with the switch off twice and on once: the
+	# planning repeats, and without smarter players the switch changes nothing.
+	var plans: Array = []
+	for on: bool in [false, false, true]:
+		var director := _world()
+		var home := _castle(director, 2)
+		_hero(director, 2, int(home.x) - 6, int(home.y), 7)
+		_hero(director, 2, 30, 90, 3)
+		_hero(director, 2, 40, 80, 2)
+		_place(director, "mine", 36, 92, {"owner": 3})
+		_place(director, "mine", 46, 84, {"owner": -1})
+		_place(director, "monster", 50, 96, {"owner": 0, "level": 1})
+		_place(director, "Teacher", 34, 70)
+		_living(director, on)
+		for round in 3: _pass(director)
+		plans.append(var_to_str(ELFirstAI.data(director.state, 2).assigned))
+	check(plans[0] == plans[1], "T: planning is repeatable")
+	if not smart: check(plans[0] == plans[2], "T: without smarter players the switch changes nothing")
+
+# --- V: economy -------------------------------------------------------------------
+
+## The first of `codes` that a global-spell scroll gives `player` (its colour
+## or colourless); "" if none.
+func _spell_code(state: ELAdventureSession, player: int, codes: Array) -> String:
+	var colour := str(state.players[player].get("color", ""))
+	for code: Variant in codes:
+		if ELMapPickups.resolve(profile, [str(code)], colour) == str(code): return str(code)
+	return ""
+
+func _rich(state: ELAdventureSession, player: int, amount := 5000) -> void:
+	for kind: String in state.players[player].resources: state.players[player].resources[kind] = amount
+
+## The ether income of `player`'s castle (its MainTower).
+func _tower_income(state: ELAdventureSession, player: int, amount: int) -> void:
+	for item: Dictionary in state.objects.values():
+		if item.get("group") == "buildings" and item.get("name") == "MainTower" and int(item.get("owner", -1)) == player:
+			if not item.node.has("attrs"): item.node.attrs = {}
+			item.node.attrs.mana_income = amount
+
+func _case_v_cast() -> void:
+	# Castle 7 energy, 7 damage pending, a repair that today's ether finishes:
+	# cast today it saves the castle; left until tomorrow the castle falls.
+	if not smart: return
+	var director := _world()
+	var state := director.state
+	# A computer player whose colour has a repair spell.
+	var player := -1
+	var code := ""
+	for id: int in ELFirstAI.computer_players(state):
+		code = _spell_code(state, id, ELGlobalSpells.REPAIRS.keys())
+		if not code.is_empty():
+			player = id
+			break
+	check(not code.is_empty(), "V: a repair spell for a computer player's colour")
+	if code.is_empty(): return
+	var hero := _hero(director, player, 30, 90, 3)
+	_rich(state, player)
+	hero.gs_items = [{"kind": ELMapPickups.FULL, "spells": [code]}]
+	var cost := ELGlobalSpells.ether_cost(state, player, code)
+	var castle: Dictionary = state.scenario.castles[player]
+	castle.health = 7
+	castle.pending = 7
+	state.players[player].free_ether = cost
+	var repair := int(ELGlobalSpells.REPAIRS[code])
+	var expected := maxi(repair, ELFirstScenario.regeneration(cost))
+	ELFirstAIEconomy.global_spells(director, player)
+	ELFirstScenario.regenerate(state)
+	ELFirstScenario.end_night(director)
+	check(castle.alive and int(castle.health) == expected, "V: a repair finished today is cast at once (%s costs %d ether: energy %d after the night, best %d)" % [code, cost, int(castle.health), expected])
+
+func _case_v_income() -> void:
+	# No ether income tomorrow, but ether in hand today: a spell it pays for is begun.
+	if not smart: return
+	var director := _world()
+	var state := director.state
+	var hero := _hero(director, 2, 30, 90, 3)
+	_rich(state, 2)
+	var code := ""
+	for candidate: String in ELGlobalSpells.CASTLE_DAMAGE:
+		if _spell_code(state, 2, [candidate]) == candidate and ELGlobalSpells.upkeep(profile, candidate) == 0:
+			code = candidate
+			break
+	check(not code.is_empty(), "V: a castle-damage spell for this colour")
+	if code.is_empty(): return
+	hero.gs_items = [{"kind": ELMapPickups.FULL, "spells": [code]}]
+	_tower_income(state, 2, 0)
+	check(ELResourceSites.mana_income(state, 2) == 0, "V: the player has no ether income")
+	state.players[2].free_ether = ELGlobalSpells.ether_cost(state, 2, code)
+	var record := ELGlobalSpells.data(state, 2)
+	var serial := int(record.serial)
+	ELFirstAIEconomy.global_spells(director, 2)
+	check(not record.production.is_empty() or int(record.serial) > serial, "V: today's ether is spent though tomorrow brings none (%s)" % str(record.production))
+
+func _case_v_runes() -> void:
+	# The least resources that buy a spell with a full load of five runes:
+	# with room for fifteen, the spell is still bought, with fewer runes.
+	if not smart: return
+	var director := _world()
+	var state := director.state
+	var side := _hero(director, 2, 30, 90, 3)
+	_place(director, "portal", 20, 80)
+	_rich(state, 2)
+	var shop := {}
+	for proto: Dictionary in protos.get("shops", []):
+		var candidate := _place(director, "shop", 32, 90, {"name": proto.name, "node": proto.node, "level": 0, "owner": 0})
+		if ELFirstAIEconomy.wants(director, side, candidate) > 0:
+			shop = candidate
+			break
+		_kill(director, candidate)
+		state.objects.erase(int(candidate.uid))
+	check(not shop.is_empty(), "V: a spell shop that sells this hero something")
+	if shop.is_empty(): return
+	# Over a sweep of the resources held, room for fifteen runes (Provision)
+	# never buys fewer spells that need runes than room for five.
+	var worst := ""
+	var bought := 0
+	var amount := 4
+	while amount <= 3000:
+		var five := _rune_buys(state, side, shop, amount, false)
+		var fifteen := _rune_buys(state, side, shop, amount, true)
+		bought = maxi(bought, five)
+		if fifteen < five and worst.is_empty(): worst = "%d resources: %d with room for 5, %d with room for 15" % [amount, five, fifteen]
+		amount += 3 if amount < 300 else 50
+	check(bought > 0, "V: the shop sells spells that need runes")
+	check(worst.is_empty(), "V: more rune room does not stop a purchase that fits (%s)" % worst)
+
+## Spells needing runes a visit to `shop` buys with `amount` of each resource
+## (with or without Provision's room for fifteen); everything is put back.
+func _rune_buys(state: ELAdventureSession, hero: Dictionary, shop: Dictionary, amount: int, provision: bool) -> int:
+	var hero_copy := hero.duplicate(true)
+	var shop_copy := shop.duplicate(true)
+	var wallet: Dictionary = state.players[2].resources.duplicate()
+	_rich(state, 2, amount)
+	if provision: hero.skills.PRVD = 2
+	else: hero.skills.erase("PRVD")
+	var before := ELFirstAIEconomy.empty_copies(hero)
+	ELFirstAIEconomy._shop(state, hero, shop, true)
+	var result := ELFirstAIEconomy.empty_copies(hero) - before
+	hero.clear()
+	hero.merge(hero_copy)
+	shop.clear()
+	shop.merge(shop_copy)
+	state.players[2].resources = wallet
+	return result
+
+func _case_v_portal() -> void:
+	# A visit that upgrades the portal anyway upgrades it before buying, so its
+	# runes come at the next level's price.
+	if not smart: return
+	var director := _world()
+	var state := director.state
+	var side := _hero(director, 2, 30, 90, 3)
+	_rich(state, 2)
+	# A spell of the hero's colour and a portal whose runes for it are dear
+	# enough that the upgrade's discount shows.
+	var colour_name := ELFirstSpellShop.hero_color(profile, side)
+	var spells: Dictionary = profile.table("CombatSpells")
+	var portal := {}
+	for proto: Dictionary in protos.get("portals", []):
+		for code: String in spells:
+			if spells[code].get("Color") != colour_name or spells[code].get("Rarity") not in ["Common", "Rare", "Unique"]: continue
+			var low := proto.duplicate()
+			low.level = 0
+			var high := proto.duplicate()
+			high.level = 1
+			if ELRuneShop.price(profile, side, low, code) == ELRuneShop.price(profile, side, high, code): continue
+			side.cards[0] = code
+			ELRunes.initialize(profile, side)
+			portal = _place(director, "portal", 31, 90, {"name": proto.name, "node": proto.node, "level": 0, "owner": 0})
+			break
+		if not portal.is_empty(): break
+	var slot := _rune_slot(side)
+	check(not portal.is_empty() and slot >= 0 and ELStrategy.adjacent(director, side, portal), "V: the hero has a rune spell (%d) whose runes the upgrade makes cheaper, and stands by the portal" % slot)
+	if portal.is_empty() or slot < 0: return
+	for index in side.rune_uses.size():
+		if int(side.rune_uses[index]) >= 0: side.rune_uses[index] = 0
+	var colour := str(state.players[2].color)
+	var upgrade := ELBuildings.upgrade_price(profile, portal, colour)
+	var before: Dictionary = state.players[2].resources.duplicate()
+	var uses: Array = side.rune_uses.duplicate()
+	ELFirstAIEconomy.visit(director, side, portal)
+	check(int(portal.level) == 1, "V: the portal is upgraded (level %d)" % int(portal.level))
+	var expected := {}
+	for kind: String in before: expected[kind] = int(upgrade.get(kind, 0))
+	var bought := 0
+	for index in uses.size():
+		var count := int(side.rune_uses[index]) - int(uses[index])
+		bought += count
+		var unit := ELRuneShop.price(profile, side, portal, side.cards[index])
+		for kind: String in expected: expected[kind] += int(unit.get(kind, 0)) * count
+	var spent := {}
+	for kind: String in before: spent[kind] = int(before[kind]) - int(state.players[2].resources[kind])
+	check(bought > 0 and spent == expected, "V: the runes were bought after the upgrade, at its price (%d runes, spent %s, upgrade first %s)" % [bought, str(spent), str(expected)])
+
+func _case_v_upkeep() -> void:
+	# All ether goes to hero upkeep: a recruit's upkeep would not fit, so it is
+	# not paid, which costs nothing; a summoning spell is still worth casting.
+	if not smart: return
+	var director := _world()
+	var state := director.state
+	var hero := _hero(director, 2, 30, 90, 3)
+	_tower_income(state, 2, ELStrategy.upkeep(profile, hero))
+	var prefix: String = ELFirstAIEconomy.SUMMON_PREFIX.get(str(state.players[2].color), "")
+	var code := prefix + "WR"
+	var recruit := int(profile.table("HeroesStats").get("ManaUpkeep", {}).get("Level1", 0))
+	check(ELGlobalSpells.SUMMONS.has(code) and recruit > 0 and ELFirstAIEconomy._daily_ether(state, 2) == 0, "V: income %d all spent on upkeep, a recruit costs %d" % [ELResourceSites.mana_income(state, 2), recruit])
+	check(ELFirstAIEconomy._score(director, 2, code) > 0.0, "V: an unpaid recruit costs nothing, so the summoning is worth it (%.0f)" % ELFirstAIEconomy._score(director, 2, code))
+
+func _case_v_mine() -> void:
+	# A held mine whose upgrade soon repays itself is upgraded from the
+	# player's screen, with no hero beside it.
+	if not smart: return
+	var director := _world()
+	var state := director.state
+	_hero(director, 2, 30, 90, 3)
+	_rich(state, 2)
+	var rows: Dictionary = profile.table("ResourceMine")
+	var chosen := {}
+	var best := -INF
+	for row: Dictionary in rows.values():
+		if int(row.get("Level", -1)) != 0 or not row.has("UpgradeCost"): continue
+		var mine := {"group": "mines", "name": row.Name, "level": 0}
+		var next := {"group": "mines", "name": row.Name, "level": 1}
+		var cost := ELFirstAIEconomy._total(ELResourceSites.upgrade_price(profile, mine))
+		var gain := ELFirstAIEconomy._total(ELResourceSites.production(profile, next)) - ELFirstAIEconomy._total(ELResourceSites.production(profile, mine))
+		if ELResourceSites.definition(profile, next).is_empty() or cost <= 0: continue
+		var score := float(gain * 30 - cost)
+		if score > best:
+			best = score
+			chosen = row
+	check(not chosen.is_empty() and best >= 0.0, "V: a mine whose upgrade repays itself (%s, %.0f)" % [str(chosen.get("Name", "")), best])
+	if chosen.is_empty(): return
+	var site := _place(director, "mine", 60, 60, {"owner": 2, "name": chosen.Name, "level": 0})
+	ELFirstAIEconomy.daily(director, 2)
+	check(int(site.level) == 1, "V: the held mine is upgraded without a hero beside it (level %d)" % int(site.level))
+
+# --- W: goals and roles ------------------------------------------------------------
+
+## A map pickup at (x, y): a battle artifact, or a global-spell scroll.
+func _pickup(director: ELAdventureDirector, x: int, y: int, group: String, name: String, spells: Array = []) -> Dictionary:
+	var node := {"tag": "object", "attrs": {}, "children": []}
+	if not spells.is_empty():
+		var list := {"tag": "spells", "attrs": {}, "children": []}
+		for code: String in spells: list.children.append({"tag": "spell", "attrs": {"code": code}, "children": []})
+		node.children.append(list)
+	return _place(director, "pickup", x, y, {"group": group, "name": name, "type": "object", "owner": -1, "alive": true, "visible": true, "enabled": true, "placed": true, "rotation": 0, "node": node})
+
+func _case_w_pickup() -> void:
+	var director := _world()
+	var state := director.state
+	var home := _castle(director, 2)
+	_hero(director, 2, int(home.x) - 6, int(home.y), 7)
+	var side := _hero(director, 2, 30, 90, 2)
+	var artifact := _pickup(director, 35, 90, "artefacts", str(profile.table("Artefacts").keys()[0]))
+	_pass(director)
+	var task := _task_of(director, side)
+	if not smart:
+		check(task.get("kind") != "pickup", "W: without the option nobody sets out for a pickup")
+		return
+	check(task.get("kind") == "pickup" and int(task.get("target", -1)) == int(artifact.uid), "W: a supporter sets out for a battle artifact (%s)" % str(task))
+	# Parts of a global spell complete it on one hero only: the hero already
+	# holding two parts goes for the third, though another is nearer.
+	var colour := str(state.players[2].color)
+	var code := ""
+	for candidate: String in profile.table("GlobalSpells"):
+		if _spell_code(state, 2, [candidate]) == candidate and not ELMapPickups.available_codes(state, 2).has(candidate) and _castable(candidate):
+			code = candidate
+			break
+	check(not code.is_empty(), "W: a global spell this player lacks")
+	if code.is_empty(): return
+	var other := _world()
+	var holder := _hero(other, 2, 30, 90, 2)
+	var near := _hero(other, 2, 30, 100, 2)
+	var leader_home := _castle(other, 2)
+	_hero(other, 2, int(leader_home.x) - 6, int(leader_home.y), 7)
+	holder.gs_items = [{"kind": ELMapPickups.PART, "spells": [code]}, {"kind": ELMapPickups.PART, "spells": [code]}]
+	var part := _pickup(other, 34, 97, "global_spells", ELMapPickups.PART, [code])
+	_pass(other)
+	check(int(_task_of(other, holder).get("target", -1)) == int(part.uid), "W: the third part goes to the hero holding two (%s / nearer %s)" % [str(_task_of(other, holder)), str(_task_of(other, near))])
+	check(colour != "", "W: the player has a colour")
+
+func _case_w_commander() -> void:
+	# The most experienced hero holds a fortification: it still meets ethereal
+	# attacks, while the next hero leads in the field.
+	if not smart: return
+	var director := _world()
+	var state := director.state
+	var home := _castle(director, 2)
+	var keeper := _hero(director, 2, int(home.x) - 6, int(home.y), 9)
+	keeper.spell_fort = 1
+	var field := _hero(director, 2, int(home.x) - 8, int(home.y) + 4, 7)
+	_pass(director)
+	check(_task_of(director, field).get("kind") == "tower", "W: the field commander besieges while the champion holds its fort (%s)" % str(_task_of(director, field)))
+	check(ELGlobalSpells.defender(state, 2) == keeper, "W: the champion stays the realm's ethereal defender")
+
+func _case_w_promotion() -> void:
+	# A supporter sent to a far mine becomes the leader when the leader falls;
+	# a leader takes only sites on its way, so the far mine is given up.
+	var director := _world()
+	var home := _castle(director, 2)
+	var lead := _hero(director, 2, int(home.x) - 6, int(home.y), 7)
+	var side := _hero(director, 2, 30, 90, 5)
+	var mine := _place(director, "mine", 56, 90, {"owner": -1})
+	_pass(director)
+	check(int(_task_of(director, side).get("target", -1)) == int(mine.uid), "W: the supporter is sent to the far mine (%s)" % str(_task_of(director, side)))
+	_kill(director, lead)
+	_pass(director)
+	check(int(_task_of(director, side).get("target", -1)) != int(mine.uid), "W: promoted to leader, it gives up the far mine (%s)" % str(_task_of(director, side)))
+
+func _case_w_hidden() -> void:
+	var director := _world()
+	var home := _castle(director, 2)
+	_hero(director, 2, int(home.x) - 6, int(home.y), 7)
+	var side := _hero(director, 2, 40, 90, 2)
+	var mine := _place(director, "mine", 46, 92, {"owner": -1})
+	var far := _hero(director, 2, 20, 100, 2)
+	_pass(director)
+	check(int(_task_of(director, side).get("target", -1)) == int(mine.uid), "W: the nearest supporter is sent to the mine")
+	# A script takes the hero off the map: its reservation lapses.
+	side.visible = false
+	_pass(director)
+	check(int(_task_of(director, far).get("target", -1)) == int(mine.uid), "W: another supporter takes the mine a hidden hero held (%s)" % str(_task_of(director, far)))
+
+func _case_w_pile() -> void:
+	var director := _world()
+	var home := _castle(director, 2)
+	_hero(director, 2, int(home.x) - 6, int(home.y), 7)
+	var side := _hero(director, 2, 40, 90, 2)
+	var mine := _place(director, "mine", 46, 92, {"owner": -1, "visible": false})
+	_pass(director)
+	check(int(_task_of(director, side).get("target", -1)) != int(mine.uid), "W: a hidden site is not an objective (%s)" % str(_task_of(director, side)))
+	mine.visible = true
+	mine.enabled = false
+	_pass(director)
+	check(int(_task_of(director, side).get("target", -1)) != int(mine.uid), "W: nor a disabled one (%s)" % str(_task_of(director, side)))
+	mine.enabled = true
+	_pass(director)
+	check(int(_task_of(director, side).get("target", -1)) == int(mine.uid), "W: once usable it is (%s)" % str(_task_of(director, side)))
+
+func _case_w_peace() -> void:
+	var director := _world()
+	var state := director.state
+	var home := _castle(director, 2)
+	var lead := _hero(director, 2, int(home.x) - 6, int(home.y), 7)
+	_hero(director, 2, int(home.x) - 8, int(home.y) + 4, 6)
+	_pass(director)
+	var task := _task_of(director, lead)
+	check(task.get("kind") == "tower", "W: the leader besieges a castle")
+	var castle := state.object(int(task.get("target", -1)))
+	if castle.is_empty(): return
+	# A scripted peace with the castle's owner.
+	var owner := int(castle.owner)
+	var lower: Dictionary = state.players[mini(2, owner)]
+	var upper: Dictionary = state.players[maxi(2, owner)]
+	if not lower.has("relations"): lower.relations = {}
+	var value := int(lower.relations.get(maxi(2, owner), upper.get("relations", {}).get(mini(2, owner), 0)))
+	lower.relations[maxi(2, owner)] = value | 4
+	check(not state.hostile(lead, castle), "W: the castle's owner is at peace now")
+	_pass(director)
+	check(int(_task_of(director, lead).get("target", -1)) != int(castle.uid), "W: a siege of a castle at peace ends (%s)" % str(_task_of(director, lead)))
+
+func _case_w_scouts() -> void:
+	if not smart: return
+	var director := _world()
+	var state := director.state
+	var home := _castle(director, 2)
+	_hero(director, 2, int(home.x) - 6, int(home.y), 7)
+	var first := _hero(director, 2, 58, 60, 2)
+	var second := _hero(director, 2, 58, 62, 2)
+	_unexplore(director, 2, Rect2i(64, 0, state.map.width - 64, state.map.height))
+	_pass(director)
+	var tiles: Array[Vector2i] = []
+	for hero: Dictionary in [first, second]:
+		var task := _task_of(director, hero)
+		if task.get("kind") == "explore": tiles.append(Vector2i(int(task.tile[0]), int(task.tile[1])))
+	check(tiles.size() == 2, "W: both scouts explore (%s / %s)" % [str(_task_of(director, first)), str(_task_of(director, second))])
+	if tiles.size() < 2: return
+	var gap := maxi(absi(tiles[0].x - tiles[1].x), absi(tiles[0].y - tiles[1].y))
+	check(gap >= 2 * ELFirstAIPlanner.REVEAL_RADIUS, "W: two scouts take different stretches of frontier (%s, %s: %d apart)" % [str(tiles[0]), str(tiles[1]), gap])
+
+func _case_w_tinkerer() -> void:
+	if not smart: return
+	var director := _world()
+	var home := _castle(director, 2)
+	_hero(director, 2, int(home.x) - 6, int(home.y), 7)
+	var side := _hero(director, 2, 40, 90, 2)
+	var tinkerer := _place(director, "GnomeMerchant", 44, 90, {"name": "GnomeTinkerer", "used": false})
+	_pass(director)
+	check(int(_task_of(director, side).get("target", -1)) != int(tinkerer.uid), "W: nobody walks to the Gnome Tinkerer, whose visit changes nothing (%s)" % str(_task_of(director, side)))
+
+func _case_w_siege() -> void:
+	# A level-six besieger (6 damage a night) at a full castle whose owner
+	# leaves 216 ether unused (6 energy back each night) makes no progress:
+	# it turns to a mine beside it.
+	if not smart: return
+	var director := _world()
+	var state := director.state
+	var target := _castle(director, 3)
+	var lead := _hero(director, 2, int(target.x) - 1, int(target.y), 6)
+	_pass(director)
+	check(_task_of(director, lead).get("kind") == "tower", "W: the leader besieges the castle beside it (%s)" % str(_task_of(director, lead)))
+	var castle: Dictionary = state.scenario.castles[int(target.owner)]
+	castle.max = 24
+	castle.health = 24
+	castle.pending = 0
+	state.players[int(target.owner)].free_ether = 216
+	var mine := _place(director, "mine", int(lead.x) - 3, int(lead.y) + 1, {"owner": -1})
+	_pass(director)
+	var task := _task_of(director, lead)
+	check(int(task.get("target", -1)) != int(target.uid), "W: a siege the castle regenerates away is given up (%s)" % str(task))
+	var other := director.state.object(int(task.get("target", -1)))
+	var planner := _planner()
+	var known: bool = planner != null and planner.get_script_method_list().any(func(entry: Dictionary): return entry.name == "siege_net")
+	var onward: bool = int(task.get("target", -1)) == int(mine.uid) or (task.get("kind") == "tower" and other != target and known and int(planner.call("siege_net", director, lead, other)) > 0)
+	check(onward, "W: for the mine beside it or a siege that gains (%s)" % str(task))
+
+func _case_w_unfound() -> void:
+	# A leader ready for a siege whose player has found no enemy castle yet
+	# looks for the way to one (it used to roam after creatures and never
+	# meet the idle human's castle); once it is found, the siege begins.
+	if not smart: return
+	var director := _world()
+	var state := director.state
+	var home := _castle(director, 2)
+	var lead := _hero(director, 2, int(home.x) - 6, int(home.y), 7)
+	var bit := ELFog.bit(2)
+	var keep := Rect2i(int(home.x) - 14, int(home.y) - 14, 28, 28)
+	for y in state.map.height:
+		for x in state.map.width:
+			if not keep.has_point(Vector2i(x, y)): state.explored[y * state.map.width + x] &= ~bit
+	var castles := {}
+	for item: Dictionary in state.objects.values():
+		if ELFirstScenario.is_castle(item) and int(item.owner) >= 1 and int(item.owner) != 2 and not keep.has_point(Vector2i(int(item.x), int(item.y))): castles[int(item.uid)] = true
+	check(not castles.is_empty(), "W: enemy castles lie outside the explored ground")
+	_pass(director)
+	var task := _task_of(director, lead)
+	check(task.get("kind") == "explore" and castles.has(int(task.get("toward", -1))), "W: the leader seeks the way to an unfound enemy castle (%s)" % str(task))
+	state.explored.fill(0xff)
+	_pass(director)
+	_pass(director)
+	check(_task_of(director, lead).get("kind") == "tower", "W: with the castle found it besieges it (%s)" % str(_task_of(director, lead)))
+
+func _case_w_human() -> void:
+	# The human's castle is the main objective: a leader between it and a
+	# computer's castle a little nearer besieges the human's.
+	if not smart: return
+	var director := _world()
+	var state := director.state
+	var human := _castle(director, 1)
+	var rival := _castle(director, 3)
+	check(not human.is_empty() and not rival.is_empty(), "W: a human and a computer castle")
+	if human.is_empty() or rival.is_empty(): return
+	# Halfway between them, two tiles nearer the computer's castle.
+	var from := Vector2i(int(human.x), int(human.y))
+	var to := Vector2i(int(rival.x), int(rival.y))
+	var spot := from + (to - from) / 2
+	var step := Vector2i(signi(to.x - from.x), signi(to.y - from.y))
+	spot += step * 2
+	var lead := _hero(director, 2, spot.x, spot.y, 7)
+	_pass(director)
+	var task := _task_of(director, lead)
+	check(task.get("kind") == "tower" and int(task.get("target", -1)) == int(human.uid), "W: the leader besieges the human's castle before a nearer computer's (%s)" % str(task))
+
+func _castable(code: String) -> bool:
+	return ELFirstAIEconomy._usable(code)
+
+## A global spell `player` lacks whose casting the computer does (`castable`)
+## or does not consider, or "".
+func _lacking(state: ELAdventureSession, player: int, castable: bool) -> String:
+	for candidate: String in profile.table("GlobalSpells"):
+		if _spell_code(state, player, [candidate]) != candidate or ELMapPickups.available_codes(state, player).has(candidate): continue
+		if ELFirstAIEconomy._usable(candidate) == castable: return candidate
+	return ""
+
+func _case_w_scrolls() -> void:
+	# A scroll of a global spell the computer never casts is not worth the
+	# trip (a leader chasing such scrolls reached the enemy castles days
+	# later); a scroll it would cast still is.
+	if not smart: return
+	var director := _world()
+	var state := director.state
+	var home := _castle(director, 2)
+	_hero(director, 2, int(home.x) - 6, int(home.y), 7)
+	var side := _hero(director, 2, 30, 90, 2)
+	var idle := _lacking(state, 2, false)
+	var useful := _lacking(state, 2, true)
+	check(not idle.is_empty() and not useful.is_empty(), "W: global spells the computer does and does not cast (%s, %s)" % [idle, useful])
+	if idle.is_empty() or useful.is_empty(): return
+	var junk := _pickup(director, 34, 90, "global_spells", ELMapPickups.FULL, [idle])
+	_pass(director)
+	check(int(_task_of(director, side).get("target", -1)) != int(junk.uid), "W: nobody fetches a scroll of %s, which the computer never casts (%s)" % [idle, str(_task_of(director, side))])
+	var other := _world()
+	var leader_home := _castle(other, 2)
+	_hero(other, 2, int(leader_home.x) - 6, int(leader_home.y), 7)
+	var fetcher := _hero(other, 2, 30, 90, 2)
+	var scroll := _pickup(other, 34, 90, "global_spells", ELMapPickups.FULL, [useful])
+	_pass(other)
+	check(int(_task_of(other, fetcher).get("target", -1)) == int(scroll.uid), "W: a scroll of %s, which it casts, is fetched (%s)" % [useful, str(_task_of(other, fetcher))])
+	# The leader takes only a pickup on its way: one days off is left to
+	# the supporters, one beside it is taken.
+	var third := _world()
+	var third_home := _castle(third, 2)
+	var lead := _hero(third, 2, int(third_home.x) - 6, int(third_home.y), 4)
+	var far := _pickup(third, int(lead.x) - 40, int(lead.y), "global_spells", ELMapPickups.FULL, [useful])
+	_pass(third)
+	check(int(_task_of(third, lead).get("target", -1)) != int(far.uid), "W: the leader leaves a scroll days away (%s)" % str(_task_of(third, lead)))
+	var fourth := _world()
+	var fourth_home := _castle(fourth, 2)
+	var near_lead := _hero(fourth, 2, int(fourth_home.x) - 6, int(fourth_home.y), 4)
+	var close := _pickup(fourth, int(near_lead.x) - 3, int(near_lead.y), "global_spells", ELMapPickups.FULL, [useful])
+	_pass(fourth)
+	check(int(_task_of(fourth, near_lead).get("target", -1)) == int(close.uid), "W: and takes one beside it (%s)" % str(_task_of(fourth, near_lead)))
+
+# --- X: navigation and information --------------------------------------------------
+
+func _case_x_arrival() -> void:
+	# Two arrival cells beside a site cost the same; the one inside an avoided
+	# (guarded) area is not chosen.
+	var director := _world()
+	var grid := director.grid
+	var site := _place(director, "mine", 50, 60, {"owner": -1})
+	var from := Vector2i(36, 61)
+	var size: Vector2i = grid.footprints.get(int(site.uid), {}).get("size", Vector2i.ONE)
+	var cells: Array = []
+	var cheapest := 0x7fffffff
+	for y in range(-1, size.y + 1):
+		for x in range(-1, size.x + 1):
+			if x >= 0 and x < size.x and y >= 0 and y < size.y: continue
+			var point := Vector2i(int(site.x) + x, int(site.y) + y)
+			var path := grid.path(from, point)
+			if path.is_empty(): continue
+			var cost := grid.path_cost(path)
+			if cost < cheapest:
+				cheapest = cost
+				cells = []
+			if cost == cheapest: cells.append(point)
+	check(cells.size() >= 2, "W: two arrival cells cost the same (%s)" % str(cells))
+	if cells.size() < 2: return
+	var avoid: Array[Vector2i] = [cells[0]]
+	var route := grid.approach(from, site, false, avoid)
+	check(not route.is_empty() and route[-1] != cells[0] and grid.path_cost(route) == cheapest, "X: the route arrives on the unguarded cell (%s, guarded %s)" % [str(route.back() if not route.is_empty() else null), str(cells[0])])
+
+func _case_x_placed() -> void:
+	# A hero set down inside a creature's guard area stays there that night.
+	var director := _world()
+	var state := director.state
+	var guard := _place(director, "monster", 60, 60, {"owner": 0, "level": 3})
+	var hero := _hero(director, 2, 61, 60, 2)
+	check(director.interception.zones.has(int(guard.uid)), "X: the creature guards an area")
+	state.event.emit({"kind": "hero_placed", "id": hero.uid})
+	check(hero.get("intercepted", false), "X: the hero set down in the guard area is stopped")
+	check(not director.interception.can_step(state, director.grid, hero, Vector2i(62, 60)), "X: and cannot step out")
+
+func _case_x_chase() -> void:
+	# The leader goes after an enemy hero; the enemy moves out of sight. The
+	# route leads to where it was seen, not where it is.
+	var director := _world()
+	var state := director.state
+	var lead := _hero(director, 2, 30, 60, 5)
+	var enemy := _hero(director, 3, 34, 60, 1)
+	ELFog.refresh(state)
+	_pass(director)
+	var task := _task_of(director, lead)
+	check(int(task.get("target", -1)) == int(enemy.uid), "X: the leader goes after the enemy hero (%s)" % str(task))
+	if lead.strategy_order.is_empty(): return
+	var seen := Vector2i(int(enemy.x), int(enemy.y))
+	var away := Vector2i(-1, -1)
+	for spot: Vector2i in [Vector2i(30, 15), Vector2i(90, 20), Vector2i(90, 110), Vector2i(10, 120)]:
+		if director.grid.passability(spot) >= 0 and not ELFog.visible(state, 2, spot):
+			away = spot
+			break
+	check(away.x >= 0, "X: a tile out of the player's sight")
+	if away.x < 0: return
+	_take(director, enemy, away)
+	ELFog.refresh(state)
+	var path := ELStrategy.order_path(director, lead)
+	check(not path.is_empty() and maxi(absi(path[-1].x - seen.x), absi(path[-1].y - seen.y)) <= 1, "X: the route ends where the enemy was last seen (%s, seen %s, now %s)" % [str(path.back() if not path.is_empty() else null), str(seen), str(away)])
+
+func _case_x_sight() -> void:
+	# mission23: a neutral hero of the shared-sight colour shows every player
+	# its surroundings, also right after it steps.
+	var director := _world()
+	var state := director.state
+	var template := ""
+	var rows: Dictionary = profile.table("HeroTemplates")
+	for key: String in rows:
+		if str(rows[key].get("Color", "")) == ELFog.SHARED_SIGHT_COLOR:
+			template = key
+			break
+	check(not template.is_empty(), "X: a template of the shared-sight colour")
+	if template.is_empty(): return
+	var id := state.map.id
+	state.map.id = ELFog.SHARED_SIGHT_MAP
+	var walker := state.object(ELAdditionalBuildings.spawn_hero(state, template, 0, 20, 20))
+	ELFog.refresh(state)
+	var spot := Vector2i(-1, -1)
+	for candidate: Vector2i in [Vector2i(20, 50), Vector2i(50, 20), Vector2i(60, 60)]:
+		if director.grid.passability(candidate) >= 0 and not ELFog.visible(state, 2, candidate):
+			spot = candidate
+			break
+	check(ELFog.visible(state, 2, Vector2i(20, 20)) and spot.x >= 0, "X: the neutral hero's surroundings are seen, a far tile is not")
+	if spot.x >= 0:
+		walker.x = spot.x
+		walker.y = spot.y
+		ELFog.moved(state, walker)
+		check(ELFog.visible(state, 2, spot), "X: after its step the new surroundings are seen at once")
+	state.map.id = id
+
+func _case_x_rounds() -> void:
+	# Free movement: a hero that steps out of the only gap in a wall and spends
+	# its movement opens the way for a hero waiting behind it the same day.
+	var director := _world(true)
+	var home := _castle(director, 2)
+	var lead := _hero(director, 2, int(home.x) - 6, int(home.y), 7)
+	lead.ap = 0
+	_wall_line(director, 40, 0, director.state.map.height - 1, [60])
+	var plug := _hero(director, 2, 40, 60, 2)
+	var waiting := _hero(director, 2, 43, 60, 2)
+	var near := _place(director, "mine", 30, 50, {"owner": -1})
+	var beyond := _place(director, "mine", 26, 66, {"owner": -1})
+	# Two steps take the hero in the gap clear of it, toward its mine, with
+	# nothing left.
+	plug.ap = director.grid.passability(Vector2i(39, 60)) + director.grid.passability(Vector2i(38, 59))
+	if not ELStrategy.free_mode(director):
+		check(false, "X: free movement applies on this map")
+		return
+	director.free_queue = [{"kind": "ai", "player": 2, "round": 0, "pending": [], "planned": false, "positions": {}}]
+	ELStrategy.free_next(director)
+	for step in 20000:
+		if not director.error.is_empty(): break
+		if director.strategy.is_empty() and director.movement.is_empty() and director.free_queue.is_empty(): break
+		if not director.strategy.is_empty() and director.strategy.get("free", "") == "night": break
+		director.advance(0.1)
+	check(int(near.owner) == 2 or (int(plug.x) < 39 and int(plug.ap) == 0), "X: the hero in the gap steps clear of it and spends its movement (%s, %d left)" % [str(Vector2i(plug.x, plug.y)), int(plug.ap)])
+	check(int(waiting.x) < 40 or int(beyond.owner) == 2, "X: the waiting hero goes through the gap the same day (%s)" % str(Vector2i(waiting.x, waiting.y)))
+
+# --- S: saved plans -------------------------------------------------------------
+
+func _case_s_saved() -> void:
+	# Plans, assignment progress and route rules survive a save (JSON numbers
+	# come back as floats).
+	var director := _world()
+	var state := director.state
+	var home := _castle(director, 2)
+	_hero(director, 2, int(home.x) - 6, int(home.y), 7)
+	var side := _hero(director, 2, 30, 60, 2)
+	_place(director, "mine", 52, 60, {"owner": -1})
+	_place(director, "Teacher", 34, 64)
+	_pass(director)
+	_pass(director)
+	var before: Dictionary = ELFirstAI.data(state, 2).duplicate(true)
+	state.players[2].ai = JSON.parse_string(JSON.stringify(before))
+	check(ELFirstAI.restore(state).is_empty(), "S: saved plans restore")
+	check(ELFirstAI.data(state, 2).assigned.size() == before.assigned.size(), "S: the assignments come back")
+	var order: Dictionary = JSON.parse_string(JSON.stringify(side.strategy_order))
+	var copy := side.duplicate(true)
+	copy.strategy_order = order
+	check(ELStrategy.restore(profile, copy, state.map), "S: an order with its route rules restores")
+	check(copy.strategy_order.get("route", {}).hash() == side.strategy_order.get("route", {}).hash(), "S: the route rules are kept (%s)" % str(copy.strategy_order.get("route")))
+
+# --- G, I: second-game movement and fog ---------------------------------------
+
+func _second_cases(second: ELProfile) -> void:
+	var catalog := ELSingleScenario.catalog(second)
+	var director: ELAdventureDirector = null
+	for entry: Dictionary in catalog:
+		var map := ELAdventureMap.new()
+		if not map.load_map(second, str(entry.id)): continue
+		var state := ELAdventureSession.new()
+		if not state.start(map, 1, 212, str(entry.get("script", "")), 1, false): continue
+		director = ELAdventureDirector.new()
+		if not director.build(state):
+			director = null
+			continue
+		director.fast_mode = true
+		break
+	check(director != null, "G: a second-game map starts")
+	if director == null: return
+	var state := director.state
+	# A guard with open ground beside it.
+	var guard := {}
+	var step := Vector2i.ZERO
+	for item: Dictionary in state.objects.values():
+		if not ELInterception.second_guard(item) or item.get("type") != "monster" or not director.interception.zones.has(int(item.uid)): continue
+		for direction: Vector2i in ELInterception.DIRECTIONS:
+			var to := Vector2i(item.x, item.y) + direction
+			if director.grid.passability(to) >= 0:
+				guard = item
+				step = to
+				break
+		if not guard.is_empty(): break
+	check(not guard.is_empty(), "G: the map has a guard that can step")
+	if not guard.is_empty():
+		director._begin_move(guard, step, false)
+		_drive(director)
+		check(Vector2i(guard.x, guard.y) == step, "G: the guard stepped")
+		var live: Dictionary = director.interception.zones.get(int(guard.uid), {})
+		var fresh := ELInterception.new()
+		fresh.rebuild(state, director.grid)
+		var rebuilt: Dictionary = fresh.zones.get(int(guard.uid), {})
+		check(live.get("origin") == step, "G: the moving guard's area follows it (%s)" % str(live.get("origin")))
+		check(live.get("cells", []).size() == rebuilt.get("cells", []).size() and live.get("origin") == rebuilt.get("origin"), "G: the live area matches a rebuilt one")
+	# Two heroes of the first player; the second steps onto the first one's
+	# destination after its route is made.
+	var walker := {}
+	for item: Dictionary in state.objects.values():
+		if item.get("type") == "hero" and int(item.get("owner", -1)) == 1 and item.alive and item.visible:
+			walker = item
+			break
+	check(not walker.is_empty(), "G: the map has a hero of the first player")
+	if walker.is_empty(): return
+	var goal := Vector2i(-1, -1)
+	for distance in range(3, 7):
+		for direction: Vector2i in ELInterception.DIRECTIONS:
+			var to := Vector2i(walker.x, walker.y) + direction * distance
+			var path := director.grid.path(Vector2i(walker.x, walker.y), to)
+			if path.size() < 3: continue
+			var safe := true
+			for point: Vector2i in path:
+				if director.interception.cells.has(point): safe = false
+			if safe:
+				goal = to
+				break
+		if goal.x >= 0: break
+	check(goal.x >= 0, "G: there is open, unguarded ground near the hero")
+	if goal.x < 0: return
+	var other: Dictionary = walker.duplicate(true)
+	other.uid = state._next_object
+	state._next_object += 1
+	other.x = 0
+	other.y = 0
+	other.visible = false
+	state.objects[int(other.uid)] = other
+	var start := Vector2i(walker.x, walker.y)
+	director._begin_move(walker, goal, false)
+	_take(director, other, goal)
+	var before := int(state.fog.get("refreshes", 0))
+	var steps := _drive(director, walker)
+	check(Vector2i(walker.x, walker.y) != Vector2i(other.x, other.y), "G: a hero does not walk onto a tile taken after its route was made")
+	var refreshes := int(state.fog.get("refreshes", -1)) - before
+	check(steps > 0 and refreshes == steps, "I: one fog refresh per step (%d refreshes, %d steps)" % [refreshes, steps])
+	# A scripted move meets the same taken tile: the hero stops short and the
+	# command still completes, so the queue goes on.
+	_take(director, other, Vector2i(0, 0), false)
+	walker.x = start.x
+	walker.y = start.y
+	director.grid.update_actor(walker)
+	state.commands.clear()
+	var command := {"kind": "Moving", "arguments": [walker.uid, goal.x, goal.y]}
+	state.commands.append(command)
+	director._running = command
+	director._begin_move(walker, goal, true)
+	_take(director, other, goal)
+	_drive(director, walker)
+	check(Vector2i(walker.x, walker.y) != Vector2i(other.x, other.y), "G: a scripted move does not walk onto a taken tile either")
+	check(state.commands.is_empty(), "G: the scripted move still completes its command")
+
+## Puts `actor` on `tile` (shown) or takes it off the map.
+func _take(director: ELAdventureDirector, actor: Dictionary, tile: Vector2i, shown := true) -> void:
+	actor.visible = shown
+	actor.x = tile.x
+	actor.y = tile.y
+	director.grid.update_actor(actor)
+
+## Runs the current move to its end; returns the tiles `actor` entered.
+func _drive(director: ELAdventureDirector, actor := {}) -> int:
+	var steps := 0
+	var at := Vector2i(int(actor.get("x", 0)), int(actor.get("y", 0)))
+	for step in 2000:
+		if director.movement.is_empty() or not director.error.is_empty(): break
+		director._advance_movement(0.02)
+		if not actor.is_empty() and Vector2i(actor.x, actor.y) != at:
+			at = Vector2i(actor.x, actor.y)
+			steps += 1
+	return steps

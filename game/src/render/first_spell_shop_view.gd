@@ -355,8 +355,9 @@ func tooltip_at(point: Vector2) -> String:
 	var index := shop_at(point)
 	if index >= 0:
 		var card: String = trade.stock[index]
-		var row: Dictionary = profile.table("CombatSpells").get(card, {})
-		return profile.text(str(row.get("Name", card))) + "\n" + profile.card_description(card) + "\n" + ELResources.price_tooltip(profile, trade.quote(card, slot)) \
+		# Type, name, ether cost and description as the original shows them,
+		# then the price in resources (player report #125).
+		return ELCombatTooltip.spell_text(profile, card) + "\n" + ELResources.price_tooltip(profile, trade.quote(card, slot)) \
 			+ "\n\n" + ELRemakeText.t("Click to pick it up, then click a book slot. Right click: buy into the selected slot.", profile)
 	var book := book_at(point)
 	if book >= 0 and book < trade.pending.size() and not trade.pending[book].is_empty():

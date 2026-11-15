@@ -122,6 +122,11 @@ func build(data: ELProfile, model: String, texture_name: String, secondary_textu
 	if wave != null:
 		wave_material = ELFigure.material(wave, true)
 		wave_material.set_meta("water_surface", true)
+	# A map object's animated texture (AnimTexture, AnimatedTexture) dresses its
+	# parts outside slot 2, which wear the row's Texture: the second game's
+	# posts stand on the race pedestal sheet (S_VPedestal, C_KPedestal) and the
+	# mana nodes' flames are the Mana sheets. Slot 14 is the water collar.
+	var animated := ELFigure.material(wave) if wave != null else null
 	# Alpha32 skins (air walls, spirits) fade out in soft alpha, such as a wall's
 	# wispy lower dress: blend them instead of the half-alpha cut-off.
 	for pair: Array in [[material, texture_name], [secondary, secondary_texture]]:
@@ -136,13 +141,18 @@ func build(data: ELProfile, model: String, texture_name: String, secondary_textu
 	# overlit beside shaded figures (player report #98): the remake shades
 	# them once materialised and keeps the glow for their pale aspect
 	# (set_opacity). Glowing parts of other figures stay as the original.
+	# Only creature figures (cr battle, ad map models) count: map objects (the
+	# second game's posts, rocks, beacons, shrines) and the Green Lord are made
+	# wholly of Magic too and keep the original's full brightness, else their
+	# faceted shapes broke into dark stripes.
 	colourless = false
-	for link: Array in links:
+	for link: Array in (links if is_creature_template(template) else []):
 		if figures.has(link[0]) and link[0] not in EFFECT_ANCHORS:
 			if int(figures[link[0]].material_id) != ELFigure.MATERIAL_MAGIC:
 				colourless = false
 				break
 			colourless = true
+	var figure_metal := has_metal(template)
 	for link: Array in links:
 		var name: String = link[0]
 		var node := MeshInstance3D.new()
@@ -152,11 +162,13 @@ func build(data: ELProfile, model: String, texture_name: String, secondary_textu
 			node.mesh = _mesh_cache["base/" + name]
 			# Slot 2 parts wear the second texture (mounts, staffs, wings: the
 			# Add/Transport sheets); slot 1 and 8 parts the first.
-			var part_material := secondary if int(figures[name].texture_slot) == 2 else material
+			var slot := int(figures[name].texture_slot)
+			var part_material := secondary if slot == 2 else material
 			# The FIG's animated texture slot carries the wave collar at the waterline.
-			if int(figures[name].texture_slot) == 14 and wave_material != null:
+			if slot == 14 and wave_material != null:
 				node.material_override = wave_material
 				continue
+			if slot != 2 and animated != null: part_material = animated
 			var material_id := int(figures[name].material_id)
 			var fullbright := material_id == ELFigure.MATERIAL_MAGIC and not colourless
 			var diffuse := profile.figure_diffuse(material_id)
@@ -171,8 +183,10 @@ func build(data: ELProfile, model: String, texture_name: String, secondary_textu
 					authored_materials[key] = authored
 				part_material = authored_materials[key]
 			# Armour and weapons, which the originals light as matte as cloth.
-			if material_id != ELFigure.MATERIAL_MAGIC and part_material.albedo_texture != null and not ELFigure.is_cloth(template, name):
-				_metal_parts[name] = [part_material, "second" if int(figures[name].texture_slot) == 2 and separate_second else "main"]
+			# Figures only: map objects' "plate" and "chain" parts are rock slabs
+			# and shop signs, which turned to shiny metal.
+			if figure_metal and material_id != ELFigure.MATERIAL_MAGIC and part_material.albedo_texture != null and not ELFigure.is_cloth(template, name):
+				_metal_parts[name] = [part_material, "second" if slot == 2 and separate_second else "main"]
 			node.material_override = part_material
 		# Anchors may parent real geometry (the illusion wall uses "dust" as its
 		# root). Omit only their helper mesh; hiding the node hides descendants too.
@@ -186,6 +200,15 @@ func build(data: ELProfile, model: String, texture_name: String, secondary_textu
 	if _animations != null and _animations.has("cidle"):
 		play("cidle")
 	return not parts.is_empty()
+
+## A creature figure: a battle (cr) or map (ad) model.
+static func is_creature_template(name: String) -> bool:
+	var key := ELArchive.key(name)
+	return key.begins_with("cr") or key.begins_with("ad")
+
+## A hero or creature figure, whose armour and weapons may turn to metal.
+static func has_metal(name: String) -> bool:
+	return is_creature_template(name) or ELArchive.key(name).begins_with("he")
 
 ## Dresses the armour and weapons in metal where their skins' masks
 ## (ELMetalMasks) say: now when the masks are ready, else as soon as they are

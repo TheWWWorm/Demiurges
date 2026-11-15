@@ -3,8 +3,10 @@ extends Control
 ## Second-game LoseBattle screen (CLoseBattle). After a played adventure battle
 ## that no player-one hero won, the full-screen GOOD_DEFEAT picture (the
 ## 1024x768 Res2 tiles) fades in with "Нажмите любую клавишу" (LoseBattle_Text1);
-## once it is up, any key or click fades it out over one second and the map
-## resumes. Wider windows use the mission defeat picture's extensions.
+## once it is up, any key or click fades it out to black over one second, and
+## the map fades in from the black. The screen is black from its first frame,
+## so the map never shows between the battle and the picture (player report
+## #139). Wider windows use the mission defeat picture's extensions.
 
 signal closed
 
@@ -12,13 +14,16 @@ const PANEL := "LoseBattle"
 const DESIGN := ELWinLoseScreen.DESIGN
 const FADE_IN := 1.0
 const FADE_OUT := 1.0
+const FADE_BACK := 1.0
 
 var hud: ELSecondAdventureHud
 var canvas: Control
 var art: Control
 var hint: Label
-## 0 fading in, 1 waiting for a key, 2 fading out.
+## 0 fading in, 1 waiting for a key, 2 fading out to black, 3 the map
+## fading in.
 var stage := 0
+var black: ColorRect
 var _pieces: Array[Dictionary] = []
 var _wide_picture: Texture2D
 var _clock := 0.0
@@ -28,7 +33,7 @@ func build(owner: ELSecondAdventureHud) -> void:
 	name = "LoseBattle"
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	mouse_filter = Control.MOUSE_FILTER_STOP
-	var black := ColorRect.new()
+	black = ColorRect.new()
 	black.color = Color.BLACK
 	black.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(black)
@@ -58,7 +63,7 @@ func build(owner: ELSecondAdventureHud) -> void:
 		if not piece.is_empty(): _pieces.append(piece)
 	_wide_picture = ELWinLoseScreen.wide_picture(ELWinLoseScreen.compose_picture(_pieces), ELWinLoseScreen.EL2_DEFEAT_OVERLAY)
 	resized.connect(_layout)
-	modulate.a = 0.0
+	canvas.modulate.a = 0.0
 	_layout()
 
 func _layout() -> void:
@@ -84,15 +89,21 @@ func _process(delta: float) -> void:
 	_clock += delta
 	match stage:
 		0:
-			modulate.a = clampf(_clock / FADE_IN, 0.0, 1.0)
+			canvas.modulate.a = clampf(_clock / FADE_IN, 0.0, 1.0)
 			if _clock >= FADE_IN:
 				stage = 1
 				_clock = 0.0
 		2:
-			modulate.a = clampf(1.0 - _clock / FADE_OUT, 0.0, 1.0)
+			canvas.modulate.a = clampf(1.0 - _clock / FADE_OUT, 0.0, 1.0)
 			if _clock >= FADE_OUT:
+				stage = 3
+				_clock = 0.0
+				# The map takes the keys and clicks again while it fades in.
+				mouse_filter = Control.MOUSE_FILTER_IGNORE
 				closed.emit()
-				queue_free()
+		3:
+			black.modulate.a = clampf(1.0 - _clock / FADE_BACK, 0.0, 1.0)
+			if _clock >= FADE_BACK: queue_free()
 
 ## Any key or click once the picture is up starts the fade out.
 func dismiss() -> bool:

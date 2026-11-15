@@ -291,12 +291,19 @@ func tooltip_at(point: Vector2) -> String:
 		var spells := attached(heroes[0])
 		for slot in 3:
 			if Rect2(362 + STEP * slot, 138, 50, 50).has_point(point) and gs_scroll + slot < spells.size(): return ELGlobalSpells.title(profile, spells[gs_scroll + slot].code)
-		var offers: Array = state.object(heroes[0]).get("skill_offers", [])
-		for slot in mini(3, offers.size()):
-			if Rect2(362 + STEP * slot, 233, 50, 50).has_point(point):
-				var hero := state.object(heroes[0])
-				var rank := int(hero.get("skills", {}).get(offers[slot], -1)) + 1
-				return _skill_name(str(offers[slot]), rank) + "\n" + profile.text(str(ELHeroSkills.definition(profile, str(offers[slot]), rank).get("Description", "")))
+		var offer := offer_tip_at(point)
+		if not offer.is_empty(): return offer
+	return ""
+
+## The name and description of the level-up offer under `point`, or "".
+func offer_tip_at(point: Vector2) -> String:
+	if exchange or heroes.is_empty(): return ""
+	var offers: Array = state.object(heroes[0]).get("skill_offers", []) if int(state.object(heroes[0]).get("skill_points", 0)) > 0 else []
+	for slot in mini(3, offers.size()):
+		if Rect2(362 + STEP * slot, 233, 50, 50).has_point(point):
+			var hero := state.object(heroes[0])
+			var rank := int(hero.get("skills", {}).get(offers[slot], -1)) + 1
+			return _skill_name(str(offers[slot]), rank) + "\n" + profile.text(str(ELHeroSkills.definition(profile, str(offers[slot]), rank).get("Description", "")))
 	return ""
 
 func press(point: Vector2) -> void:
@@ -508,8 +515,11 @@ func right_release() -> void:
 	if skill_tip != null and is_instance_valid(skill_tip): skill_tip.queue_free()
 	skill_tip = null
 
-## The name and description of the learned skill under `point`, or "".
+## The name and description of the learned skill, or of the level-up offer
+## (player report #132), under `point`, or "".
 func skill_tip_at(point: Vector2) -> String:
+	var offer := offer_tip_at(point)
+	if not offer.is_empty(): return offer
 	for side in heroes.size():
 		var hero := state.object(heroes[side])
 		var codes: Array = hero.get("skills", {}).keys()

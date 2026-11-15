@@ -21,6 +21,7 @@ var editing_side := 0
 var working_cards: Array[String] = []
 var library_cards: Array[String] = []
 var save_deck_button: Button
+var resume_button: Button
 
 func build(available: Dictionary, initial_edition: String, previous: Dictionary = {}) -> void:
 	profiles = available
@@ -90,16 +91,18 @@ func build(available: Dictionary, initial_edition: String, previous: Dictionary 
 	campaign.text = "Campaigns…"
 	campaign.pressed.connect(func(): campaign_requested.emit())
 	rows.add_child(campaign)
-	var resume := Button.new()
-	resume.text = "Resume saved duel"
-	resume.disabled = not FileAccess.file_exists("user://duel-save.json")
-	resume.pressed.connect(func(): resume_requested.emit())
-	rows.add_child(resume)
+	resume_button = Button.new()
+	resume_button.text = "Resume saved duel"
+	resume_button.pressed.connect(func(): resume_requested.emit())
+	rows.add_child(resume_button)
+	ELMatchSave.migrate_quick_save()
+	_update_resume()
 	var cancel := Button.new()
 	cancel.text = "Return to current duel"
 	cancel.pressed.connect(hide)
 	rows.add_child(cancel)
 	edition.item_selected.connect(func(_index: int):
+		_update_resume()
 		_reset_arenas()
 		for side in 2: _reset_deck(side))
 	for side in 2:
@@ -115,6 +118,14 @@ func build(available: Dictionary, initial_edition: String, previous: Dictionary 
 
 func _profile() -> ELProfile:
 	return profiles[edition.get_selected_metadata()]
+
+## The edition the panel shows ("el1"/"el2").
+func chosen_edition() -> String:
+	return String(edition.get_selected_metadata())
+
+## Each edition has its own quick save (ELMatchSave.quick_save_path).
+func _update_resume() -> void:
+	resume_button.disabled = not FileAccess.file_exists(ELMatchSave.quick_save_path(chosen_edition()))
 
 func _reset_arenas(wanted := "Green.001") -> void:
 	battlefield.clear()

@@ -72,10 +72,11 @@ func occupies(actor: Dictionary) -> bool:
 	# A garrison leaves map occupancy; the fort keeps its own footprint.
 	return actor.get("type") in ["hero", "monster"] and actor.get("alive", false) and actor.get("visible", false) and actor.get("placed", true) and not actor.get("fortified", false) and contains(Vector2i(actor.x, actor.y))
 
-func update_actor(actor: Dictionary) -> void:
+## Returns whether the actor's cell changed (actor_moved was emitted).
+func update_actor(actor: Dictionary) -> bool:
 	var before: Vector2i = occupied.get(int(actor.uid), Vector2i(-1, -1))
 	var after := Vector2i(actor.x, actor.y) if occupies(actor) else Vector2i(-1, -1)
-	if before == after: return
+	if before == after: return false
 	if contains(before):
 		actor_blockers[before.y * map.width + before.x] -= 1
 		occupied.erase(int(actor.uid))
@@ -85,6 +86,7 @@ func update_actor(actor: Dictionary) -> void:
 		occupied[int(actor.uid)] = after
 		_update_cell(after)
 	actor_moved.emit(actor)
+	return true
 
 func _update_cell(pos: Vector2i) -> void:
 	var land_cost := passability(pos, false)
@@ -160,6 +162,11 @@ func approach(from: Vector2i, target: Dictionary, ship := false, avoid: Array[Ve
 	var size: Vector2i = footprints.get(int(target.uid), {}).get("size", Vector2i.ONE)
 	var best: Array[Vector2i] = []
 	var best_cost := 0x7fffffff
+	var best_guarded := true
+	# An arrival cell outside the avoided cells beats a guarded one: path()
+	# never closes its own end cell, so a guarded end is otherwise as good.
+	var guarded := {}
+	for point: Vector2i in avoid: guarded[point] = true
 	for y in range(-1, size.y + 1):
 		for x in range(-1, size.x + 1):
 			if x >= 0 and x < size.x and y >= 0 and y < size.y: continue
@@ -169,9 +176,11 @@ func approach(from: Vector2i, target: Dictionary, ship := false, avoid: Array[Ve
 			var candidate := path(from, point, ship, avoid)
 			if not candidate.is_empty():
 				var cost := path_cost(candidate, ship)
-				if cost < best_cost:
+				var risky := guarded.has(point)
+				if (best.is_empty() or (best_guarded and not risky)) or (risky == best_guarded and cost < best_cost):
 					best = candidate
 					best_cost = cost
+					best_guarded = risky
 	return best
 
 ## The two-cell strip outside a tunnel mouth and its preferred exit cell.

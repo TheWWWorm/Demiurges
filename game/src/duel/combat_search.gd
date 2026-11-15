@@ -13,6 +13,11 @@ extends RefCounted
 
 const THRESHOLD := 0.01
 const BUDGET := 1000
+## The positions the original opponent reads per decision: BUDGET, or
+## EASY_BUDGET for the "Easy" duel opponent (setting "duel_ai" 0), which
+## then settles on its first ideas instead of weighing them out.
+const EASY_BUDGET := 40
+static var original_budget := BUDGET
 ## Remake option (ELDuel.smart_sides), for both games: the middle of each
 ## weight's range instead of a random draw (no misjudged position on an
 ## unlucky roll), more replies per position, the compiled combat lookahead
@@ -485,7 +490,7 @@ static func think(duel: ELDuel, stats: Dictionary = {}, restricted := false) -> 
 	ctx.w = chosen_weights(ctx.second) if smart and smart_steady else weights(duel.rng_state, ctx.second)
 	ctx.limit = (1 if duel.phase == ELDuel.Phase.ATTACK else 0) + (smart_phases if smart else 0)
 	var root := Line.new()
-	root.budget = smart_budget if smart else BUDGET
+	root.budget = smart_budget if smart else original_budget
 	ctx.replies = smart and smart_replies
 	ctx.width = smart_width if smart else 0
 	if smart:
@@ -833,6 +838,13 @@ static func _beyond(ctx: Context, duel: ELDuel, found: Dictionary) -> Dictionary
 ## the position each is to be sent from.
 static var _plans := {}
 static var _plans_lock := Mutex.new()
+
+## Forgets every kept plan and proof, for a fresh attempt (a puzzle, a check).
+static func reset_caches() -> void:
+	_plans_lock.lock()
+	_proofs.clear()
+	_plans.clear()
+	_plans_lock.unlock()
 
 static func _position(d: ELDuel) -> int:
 	return hash([d.phase, d.attacker, d.round_number, d.attacks, d.blocks, d.creatures, d.heroes])

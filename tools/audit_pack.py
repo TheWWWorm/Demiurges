@@ -42,6 +42,38 @@ def entries(path):
         yield name, payload
 
 
+# Files the game reads at run time from res:// outside the script and scene
+# folders (ELPuzzles reads res://puzzles/<edition>.json). The allowlist above
+# only permits them; this list makes their absence an error.
+REQUIRED = ("project.binary", "puzzles/el1.json", "puzzles/el2.json")
+
+
+def _name(entry):
+    return entry[len("res://"):] if entry.startswith("res://") else entry
+
+
+def missing(path, required=REQUIRED):
+    """Required files that the pack lacks."""
+    names = {_name(name) for name, _ in entries(path)}
+    return [name for name in required if name not in names]
+
+
+def missing_in_apk(path, required=REQUIRED):
+    """Required files an Android package lacks: Godot keeps them under
+    assets/, or in an embedded pack."""
+    import tempfile
+    import zipfile
+    with zipfile.ZipFile(path) as package:
+        names = set(package.namelist())
+        packs = [name for name in names if name.startswith("assets/") and name.endswith(".pck")]
+        if packs:
+            with tempfile.TemporaryDirectory() as folder:
+                target = Path(folder) / "game.pck"
+                target.write_bytes(package.read(packs[0]))
+                return missing(target, required)
+    return [name for name in required if "assets/" + name not in names]
+
+
 def audit(path):
     problems, count = [], 0
     for name, payload in entries(path):
@@ -57,6 +89,7 @@ def audit(path):
             payload = payload.replace(b"\0", b"") + bytes(b ^ 0xb6 for b in payload).replace(b"\0", b"")
         if PRIVATE.search(payload):
             problems.append(f"Private research/path marker: {name}")
+    problems += [f"Missing required entry: {name}" for name in missing(path)]
     return count, problems
 
 

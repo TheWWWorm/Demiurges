@@ -65,6 +65,11 @@ var _serif: Font
 ## The side panel: the live creature (ELWikiPreview) or the card's icon.
 var _visual: VBoxContainer
 var _preview: ELWikiPreview
+## The map objects of the page shown ([game, id, caption], installed games
+## only) and the choice between them; the article's object links pick one.
+var _objects: Array = []
+var _object_choice: OptionButton
+var _object_caption: Label
 ## Pages, categories and an index per language (authored + encyclopedia).
 var _content: Dictionary = {}
 var _notice := ""
@@ -401,6 +406,9 @@ func _show_visual(row: Dictionary) -> void:
 		_visual.remove_child(child)
 		child.queue_free()
 	_preview = null
+	_objects = []
+	_object_choice = null
+	_object_caption = null
 	# Story pages list heroes to show (from the installed games only).
 	var heroes: Array = []
 	for hero: Variant in row.get("heroes", []):
@@ -409,6 +417,14 @@ func _show_visual(row: Dictionary) -> void:
 	if not heroes.is_empty():
 		_visual.visible = true
 		_show_heroes(heroes)
+		return
+	# Guides with `!objects` lines show those map objects' models.
+	for object: Variant in row.get("objects", []):
+		var profile: ELProfile = profiles.get(object[0])
+		if profile != null and not ELWikiPreview.object_row(profile, object[1]).is_empty(): _objects.append(object)
+	if not _objects.is_empty():
+		_visual.visible = true
+		_show_objects()
 		return
 	var card := str(row.get("card", ""))
 	# The editions to show, newest first, among the installed games.
@@ -488,6 +504,39 @@ func _show_heroes(heroes: Array) -> void:
 	var reset := _button(_text("reset"))
 	reset.pressed.connect(preview.reset_view)
 	_visual.add_child(reset)
+
+## The map objects of a guide, one at a time, with a choice between them.
+func _show_objects() -> void:
+	var preview := ELWikiPreview.new()
+	if _objects.size() > 1:
+		_object_choice = OptionButton.new()
+		_object_choice.fit_to_longest_item = false
+		for object: Array in _objects: _object_choice.add_item(str(object[2]))
+		_object_choice.item_selected.connect(show_object)
+		_visual.add_child(_object_choice)
+	preview.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	preview.custom_minimum_size = Vector2(0, 320)
+	_visual.add_child(preview)
+	_preview = preview
+	_add_animation_controls(preview)
+	_object_caption = Label.new()
+	_object_caption.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_object_caption.add_theme_font_override("font", _sans)
+	_object_caption.add_theme_font_size_override("font_size", 14)
+	_object_caption.add_theme_color_override("font_color", MUTED)
+	_visual.add_child(_object_caption)
+	var reset := _button(_text("reset"))
+	reset.pressed.connect(preview.reset_view)
+	_visual.add_child(reset)
+	show_object(0)
+
+## Shows the page's map object number `index` beside the article.
+func show_object(index: int) -> void:
+	if _preview == null or index < 0 or index >= _objects.size(): return
+	var object: Array = _objects[index]
+	_preview.show_object(profiles[object[0]], object[1])
+	if _object_choice != null: _object_choice.select(index)
+	_object_caption.text = (str(object[2]) + "\n" if _object_choice == null else "") + _text("turn")
 
 func _add_animation_controls(preview: ELWikiPreview) -> void:
 	var controls := HBoxContainer.new()
@@ -571,6 +620,11 @@ func _link(meta: Variant) -> void:
 	var url := str(meta)
 	var key := ELWikiHtml.key_from_url(url)
 	if not key.is_empty(): navigate(key)
+	elif url.begins_with("object:") and not ELWikiHtml.object_id(url).is_empty():
+		# A map object of the page: show its model beside the article.
+		var id := ELWikiHtml.object_id(url)
+		for index in _objects.size():
+			if "%s/%s" % [_objects[index][0], _objects[index][1]] == id: show_object(index)
 	elif url.begins_with("https://"): OS.shell_open(url)
 
 # --- Keys ---------------------------------------------------------------------

@@ -312,6 +312,22 @@ func _first_shop_reserve(profile: ELProfile) -> void:
 			if item.get("group") == "laboratories" and trade.open(state, int(hero.uid), int(item.uid), true) and trade.stock.any(func(code: String): return not ELRunes.unlimited(profile, hero, code)): break
 			trade = ELFirstSpellShop.new()
 		if not trade.stock.is_empty():
+			# #125: a stock spell's tooltip has its type and ether cost.
+			var director := ELAdventureDirector.new()
+			if director.build(state):
+				var hud := ELAdventureHud.new()
+				root.add_child(hud)
+				hud.build(state)
+				var view := ELFirstSpellShopView.new()
+				root.add_child(view)
+				view.build_shop(director, hud, trade)
+				var shown: String = trade.stock[0]
+				var tip: String = view.tooltip_at(view.shop_rect(0).get_center())
+				var cost := ELCombatTooltip.cost_line(profile, int(profile.table("CombatSpells")[shown].get("Cost", 0)))
+				check(tip.contains(cost) and tip.contains(profile.text(str(profile.table("CombatSpells")[shown].Name))), "el1 laboratory: a spell for sale names its ether cost (#125): %s" % tip.get_slice("
+", 1))
+				view.free()
+				hud.free()
 			var bought: String = trade.stock.filter(func(code: String): return not ELRunes.unlimited(profile, hero, code))[0]
 			for kind: String in state.players[hero.owner].resources: state.players[hero.owner].resources[kind] = 1000000
 			var reserve_before := int(hero.spell_stock.get(spell, 0))
@@ -803,6 +819,27 @@ func _precombat(profile: ELProfile) -> void:
 				if shown.visible: widest = maxf(widest, font.get_string_size(shown.text, HORIZONTAL_ALIGNMENT_LEFT, -1, size_of.call(shown)).x)
 		check(widest <= caption.size.x, "el1: the stat captions fit their boxes (%.0f of %.0f)" % [widest, caption.size.x])
 		check(font.get_string_size(name.text, HORIZONTAL_ALIGNMENT_LEFT, -1, size_of.call(name)).x <= name.size.x, "el1: the opponent's name fits its box")
+		# The portraits sit inside the panel art's frames (94x50 at (3, 9) of
+		# the photo cell), not over them.
+		for side in 2:
+			var shown: TextureRect = hud.precombat_portraits[side]
+			var photo := shown.texture as AtlasTexture
+			var actor := state.object([hero, monster][side])
+			var shown_row: Dictionary = hud._art.resolve(actor).get("row", {})
+			var cell := profile.portrait(int(shown_row.get("Face" if side == 0 else "Icon", 0))) as AtlasTexture
+			check(Rect2(shown.position, shown.size) == ELAdventureHud.PRECOMBAT_PORTRAITS[side] and shown.size == Vector2(94, 50), "el1: portrait %d fills the frame's window, 94 x 50 (%s)" % [side, Rect2(shown.position, shown.size)])
+			check(photo != null and cell != null and photo.atlas == cell.atlas and photo.region == Rect2(cell.region.position + Vector2(3, 9), Vector2(94, 50)), "el1: portrait %d is the 94 x 50 cut at (3, 9) of its photo cell" % side)
+		# Free movement: the second game's question, the check mark at the
+		# lower left and the cross at the lower right.
+		hud.show_precombat(hero, monster, 1, 1, true, true)
+		await frames(2)
+		check(heading.text == ELRemakeText.t("Accept battle?", profile) and heading.text != profile.text("CtrlBattleNumText") % [1, 1], "el1: with the check mark the panel asks \"%s\"" % heading.text)
+		var accept: Rect2 = hud.accept_button.get_rect()
+		var cancel: Rect2 = hud.cancel_button.get_rect()
+		check(accept.end.x < 160 and cancel.position.x > 460 and absf(accept.position.x + cancel.end.x - 638.0) <= 2.0 and is_equal_approx(accept.position.y, cancel.position.y), "el1: the check mark and the cross stand at the panel's two lower corners (%s, %s)" % [accept, cancel])
+		hud.show_precombat(hero, monster, 1, 1, true)
+		await frames(2)
+		check(heading.text == profile.text("CtrlBattleNumText") % [1, 1], "el1: the original orders keep the numbered heading")
 		if not shots.is_empty() and DisplayServer.get_name() != "headless":
 			await frames(30)
 			await RenderingServer.frame_post_draw
@@ -833,7 +870,7 @@ func _cast_icons() -> void:
 	view.settings.values.cast_icons = true
 	for card: String in cards: view._cast_notice(1, card)
 	view._cast_notice(0, cards[0])
-	check(notices.icons.size() == cards.size() and notices.lines.is_empty(), "el1: with icons on the opponent's casts are icons, and no cast is a line")
+	check(notices.icons.size() == cards.size() + 1 and notices.lines.is_empty(), "el1: with icons on every cast is an icon, the player's own too (#124), and no cast is a line")
 	check(notices.frame != null, "el1: the cast icons have a frame (the first game's list border)")
 	check(notices.icon_rect(5).position.y > notices.icon_rect(4).position.y, "el1: the icons wrap after five a row")
 	var tip: String = notices._get_tooltip(notices.icon_rect(0).get_center())
@@ -1168,6 +1205,22 @@ func _battle_controls(edition: String) -> void:
 	if edition == "el2" and not items.is_empty():
 		var about := profile.text(str(profile.table("CombatSpells").ORSH.AbilityText))
 		check(str(items[0].tooltip) == about, "el2: a free ability's tooltip is its text alone")
+	# Player suggestion: on the strip, an enchantment whose ability was used
+	# this round moves to the right end; unused ones come first.
+	duel._enchant("LSHE", side, side, ELCatalog.rule(profile, "LSHE"))
+	duel._enchant("FRBL", side, side, ELCatalog.rule(profile, "FRBL"))
+	for e: Dictionary in duel.heroes[side].enchantments:
+		if e.card == "LSHE": e.used = true
+	view.selected_creature = side
+	view._fill_strip()
+	var cards: Array = view.rail.strip.items.map(func(item: Dictionary) -> String: return str(item.meta.get("card", "")))
+	check(cards.find("FRBL") >= 0 and cards.find("LSHE") > cards.find("FRBL") and cards.find("LSHE") == cards.size() - 1, "%s: an enchantment ability used this round moves to the end of the strip (%s)" % [edition, cards])
+	for e: Dictionary in duel.heroes[side].enchantments:
+		if e.card == "LSHE": e.used = false
+	view._fill_strip()
+	cards = view.rail.strip.items.map(func(item: Dictionary) -> String: return str(item.meta.get("card", "")))
+	check(cards.find("LSHE") >= 0 and cards.find("LSHE") < cards.find("FRBL"), "%s: unused, the strip keeps the oldest first" % edition)
+	duel.heroes[side].enchantments = duel.heroes[side].enchantments.filter(func(e: Dictionary) -> bool: return not e.card in ["LSHE", "FRBL"])
 	# #101: second-game Attack all leaves a 0-power creature home.
 	var strong := _summoned(duel, side, "ORSH")
 	var weak := _summoned(duel, side, "ORSH")
@@ -1258,6 +1311,12 @@ func _first_map_reports() -> void:
 		await frames(2)
 		check(map._object_at(Vector2(float(pickup.x) + 0.5, float(pickup.y) + 0.5)) == int(pickup.uid), "el1: an object on the cell behind the hero is picked, not the hero (%s)" % pickup.name)
 		check(map._object_at(Vector2(float(hero.x) + 0.5, float(hero.y) + 0.5)) == int(hero.uid), "el1: the hero's own cell still picks the hero")
+		# The same with the camera ray: pointing at the pickup's drawn middle.
+		var drawn: AABB = map.world.object_bounds(int(pickup.uid))
+		if drawn.has_volume():
+			var at := map.camera.unproject_position(map.world.to_global(drawn.get_center()))
+			var ground: Variant = Plane(Vector3.UP, 0).intersects_ray(map.camera.project_ray_origin(at), map.camera.project_ray_normal(at))
+			check(ground != null and map._object_at(Vector2(ground.x, -ground.z) / ELAdventureTerrain.CELL, at) == int(pickup.uid), "el1: pointing at the object behind the hero picks it")
 	# #80: a right press on a learned skill holds its description up.
 	hero.skills = {"MOBL": 1}
 	map.open_hero_screen(int(hero.uid))
@@ -1270,6 +1329,15 @@ func _first_map_reports() -> void:
 		screen.right_release()
 		check(screen.skill_tip == null, "el1: letting the right button go closes the skill tooltip")
 		check(not screen.right_press(Vector2(200, 30)), "el1: a right click elsewhere on the hero screen shows no skill tooltip")
+		# #132: the level-up offers hold their description up too.
+		hero.skill_offers = ["HEAL", "BARG", "MSTR"]
+		hero.skill_points = 1
+		screen.refresh()
+		var offer_point := Vector2(362 + ELHeroScreenView.STEP * 1 + 25, 233 + 25)
+		check(screen.right_press(offer_point) and screen.skill_tip != null and screen.skill_tip_at(offer_point).contains(screen._skill_name("BARG", 0)), "el1: right-clicking a level-up offer shows its name and description (#132)")
+		screen.right_release()
+		hero.erase("skill_offers")
+		hero.skill_points = 0
 		screen.cancel()
 		await frames(2)
 	# #111: a castle assault turns the hero, plays its attack clip and the
@@ -1325,6 +1393,27 @@ func _second_map_reports() -> void:
 		if director.dialogue.is_empty(): break
 		director.acknowledge("OK")
 		await frames(3)
+	# Light fog: a tile explored before but out of sight now takes an order;
+	# never-explored ground does not.
+	var bit := ELFog.bit(1)
+	var sight: PackedByteArray = state.fog.get("visible", PackedByteArray())
+	var light := Vector2i(-1, -1)
+	var dark := Vector2i(-1, -1)
+	for index in state.explored.size():
+		var tile := Vector2i(index % int(state.map.width), index / int(state.map.width))
+		var shown := index < sight.size() and (sight[index] & bit) != 0
+		if light.x < 0 and (state.explored[index] & bit) != 0 and not shown: light = tile
+		if dark.x < 0 and (state.explored[index] & bit) == 0: dark = tile
+	if light.x < 0:
+		# Mark a sighted tile as no longer in view.
+		for index in sight.size():
+			if (sight[index] & bit) != 0 and (state.explored[index] & bit) != 0:
+				sight[index] &= ~bit
+				state.fog.visible = sight
+				light = Vector2i(index % int(state.map.width), index / int(state.map.width))
+				break
+	check(light.x >= 0 and ELFog.tile_state(state, 1, light) == ELFog.REMEMBERED and ELFog.targetable(state, 1, light), "el2: a tile under light fog (explored, out of sight) can be targeted")
+	check(dark.x < 0 or not ELFog.targetable(state, 1, dark), "el2: never-explored ground still refuses an order")
 	ELFog.reveal_for_console(state, 1, true)
 	ELFog.refresh(state)
 	var hero := state.object(state.main_hero)

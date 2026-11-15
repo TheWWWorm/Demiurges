@@ -79,7 +79,7 @@ func resolve(object: Dictionary) -> Dictionary:
 	# Monster rows name their second skin (a sword, a mask, wings) SecondaryTexture;
 	# without it those parts wear the first skin (the Aviak Assassin).
 	var secondary := String(row.get("AdvTex2", row.get("SecondaryTexture", ""))) if adventure else String(row.get("SecTexture", ""))
-	var wave := String(row.get("AnimatedTextureName", row.get("AnimTexture", "")))
+	var wave := animated_texture(row)
 	if corpse:
 		if not str(row.get("CorpseMod", "")).is_empty(): model = str(row.CorpseMod)
 		if not str(row.get("CorpseTex1", "")).is_empty(): texture = str(row.CorpseTex1)
@@ -97,6 +97,12 @@ func resolve(object: Dictionary) -> Dictionary:
 		"scale": float(row.get("AdvScale", 1.0)) if adventure else 1.0, "row": row, "unit": adventure}
 	cache[key] = result
 	return result
+
+## A map object row's animated texture (ELModel.build's last skin): terrain
+## objects name their water collar AnimatedTextureName, buildings their
+## pedestal or flame sheet AnimTexture, mana nodes AnimatedTexture.
+static func animated_texture(row: Dictionary) -> String:
+	return String(row.get("AnimatedTextureName", row.get("AnimTexture", row.get("AnimatedTexture", ""))))
 
 static func terrain_color(kind: int) -> String:
 	if kind >= 0 and (kind < 4 or kind == 6): return "Green"

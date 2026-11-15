@@ -1,17 +1,22 @@
 class_name ELNetworkDeck
 extends AcceptDialog
 ## A round draft exchanges an active slot with one of the preset's owned spells.
+## `_link` is the online duel (ELNetworkDuel) or a local match's player
+## (ELLocalRoundDeck): round_preset, swap_round_spell, deck_time_remaining,
+## profile and duel.
 
-var _link: ELNetworkDuel
+var _link: Object
 var _active := ItemList.new()
 var _reserve := ItemList.new()
 var _swap := Button.new()
 var _message := Label.new()
 var _time := Label.new()
 
-func build(link: ELNetworkDuel) -> void:
+func build(link: Object) -> void:
 	_link = link
 	title = ELRemakeText.t("Change deck", link.profile)
+	var player: Variant = link.get("player")
+	if player is String and not player.is_empty(): title += ": " + player
 	ELNetworkLobby.style_dialog(self, link.profile, "TCPIPDialog")
 	min_size = Vector2i(620, 440)
 	size = min_size
@@ -52,7 +57,7 @@ func _list_column(parent: Control, list: ItemList, caption: String) -> void:
 	column.add_child(list)
 
 func _refresh() -> void:
-	var preset := _link.round_preset()
+	var preset: Dictionary = _link.round_preset()
 	_active.clear()
 	_reserve.clear()
 	for code: String in preset.cards:

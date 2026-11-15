@@ -221,7 +221,9 @@ func _rate(folder: String, game: String, out: String, shard: String) -> void:
 			for item: Dictionary in ELCombatBrain.weigh(_context(side), duel, 2, 200000, 10):
 				var command: Dictionary = item.command
 				if command.is_empty(): continue
-				var text := JSON.stringify(_said(duel, command)) + str(command.get("id", ""))
+				# Keyed by the command itself, not by its words: two creatures
+				# alike in name are two different targets.
+				var text := JSON.stringify(_said(duel, command)) + JSON.stringify(command)
 				if seen.has(text): continue
 				var after := duel.search_copy()
 				var played: bool = after.end_phase() if String(command.get("kind", "end_phase")) == "end_phase" else ELCombatSearch.apply(after, command)

@@ -134,6 +134,12 @@ const EDITIONS := {
 
 const _NO_EFFECT_EN := " (This spell has no effect.)"
 const _NO_EFFECT_RU := " (Это заклинание ничего не делает.)"
+## The first game's Ethereal Attack (ETAT) and Counterstrike (ETDF) skills
+## promise castle damage, but the original applies neither (castle damage
+## stays the hero's value, ELFirstScenario.hero_value); their texts say so.
+const NO_EFFECT_SKILLS := ["SkTtETAT1", "SkTtETAT2", "SkTtETAT3", "SkTtETDF1", "SkTtETDF2", "SkTtETDF3"]
+const _NO_SKILL_EFFECT_EN := " (This skill has no effect.)"
+const _NO_SKILL_EFFECT_RU := " (Этот навык ничего не делает.)"
 
 ## `value`, the text `key` of `edition`, with its corrections applied.
 static func apply(edition: String, key: String, value: String) -> String:
@@ -142,6 +148,8 @@ static func apply(edition: String, key: String, value: String) -> String:
 		var code := key.trim_prefix("GlSpTt")
 		if code in ELGlobalSpells.UPKEEP_ONLY or code in ELGlobalSpells.CONSUMED:
 			fixes = fixes + [["", _NO_EFFECT_RU if RegEx.create_from_string("[\\x{0400}-\\x{04FF}]").search(value) != null else _NO_EFFECT_EN]]
+	if edition == "el1" and key in NO_EFFECT_SKILLS:
+		fixes = fixes + [["", _NO_SKILL_EFFECT_RU if RegEx.create_from_string("[\\x{0400}-\\x{04FF}]").search(value) != null else _NO_SKILL_EFFECT_EN]]
 	for fix: Array in fixes:
 		var old: String = fix[0]
 		var new: String = fix[1]

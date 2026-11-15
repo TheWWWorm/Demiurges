@@ -368,15 +368,13 @@ static func has_save() -> bool:
 static func delete_save() -> void:
 	if FileAccess.file_exists(SAVE_PATH): DirAccess.remove_absolute(SAVE_PATH)
 
-func save() -> bool:
+func save(path := SAVE_PATH) -> bool:
 	if stage == "over":
-		delete_save()
+		if path == SAVE_PATH: delete_save()
+		elif FileAccess.file_exists(path): DirAccess.remove_absolute(path)
 		return true
-	var file := FileAccess.open(SAVE_PATH + ".tmp", FileAccess.WRITE)
-	if file == null: return false
-	file.store_string(JSON.stringify(snapshot()))
-	file.close()
-	return DirAccess.rename_absolute(ProjectSettings.globalize_path(SAVE_PATH + ".tmp"), ProjectSettings.globalize_path(SAVE_PATH)) == OK
+	# A failed write keeps the previous save.
+	return ELSafeFile.write_text(path, JSON.stringify(snapshot()))
 
 func _touch(persist := true) -> void:
 	if persist and auto_save and controllers.has("human") and not controllers.has("remote"): save_error = not save()

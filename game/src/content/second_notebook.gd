@@ -19,6 +19,9 @@ const UNKNOWN_NAME := "T_UNKNOWN_HERO_NAME"
 const UNKNOWN_FACE := 0xcd
 const MAX_ENTRIES := 20000
 const MAX_TEXT := 8192
+## The largest number a battle entry keeps (health, level, experience).
+const MAX_NUMBER := 10000000
+const MAX_FACE := 0xffff
 
 static func applies(state: ELAdventureSession) -> bool:
 	return state != null and state.map != null and state.map.profile.id == "el2"
@@ -56,6 +59,9 @@ static func _point(state: ELAdventureSession, hero: Dictionary) -> Array:
 	return [float(anchor.x) + 0.5, float(anchor.y) + 0.5]
 
 static func _base(state: ELAdventureSession, kind: String, hero: Dictionary) -> Dictionary:
+	# The journal keeps within what a save reads back (decode): the oldest
+	# entries give way.
+	while state.notebook.size() >= MAX_ENTRIES: state.notebook.pop_front()
 	var entry := {"id": state.notebook_next, "kind": kind, "day": state.day, "current": true, "mission": state.map.id, "point": _point(state, hero)}
 	state.notebook_next += 1
 	return entry
@@ -75,7 +81,7 @@ static func add_phrase(state: ELAdventureSession, text: Variant, speaker_id: Var
 			entry.face = UNKNOWN_FACE
 		else:
 			entry.speaker = str(hero.get("title", hero.get("name", "")))
-			entry.face = face_of(state, hero)
+			entry.face = clampi(face_of(state, hero), -1, MAX_FACE)
 	state.notebook.append(entry)
 	state.event.emit({"kind": "notebook_entry", "id": entry.id, "entry": PHRASE})
 	return entry
@@ -86,15 +92,15 @@ static func add_battle(state: ELAdventureSession, winner: Dictionary, loser: Dic
 	if not applies(state) or winner.is_empty() or loser.is_empty(): return {}
 	var entry := _base(state, BATTLE, winner)
 	entry.opponent = str(loser.get("title", loser.get("name", "")))
-	entry.opponent_face = face_of(state, loser)
-	entry.opponent_level = int(loser.get("level", 1))
-	entry.opponent_life = int(loser.get("health", 0))
+	entry.opponent_face = _bounded(face_of(state, loser))
+	entry.opponent_level = _bounded(int(loser.get("level", 1)))
+	entry.opponent_life = _bounded(int(loser.get("health", 0)))
 	entry.hero = str(winner.get("title", winner.get("name", "")))
-	entry.life_before = int(before.get("health", winner.get("health", 0)))
-	entry.life_after = int(winner.get("health", 0))
-	entry.level_before = int(before.get("level", winner.get("level", 1)))
-	entry.level_after = int(winner.get("level", 1))
-	entry.experience = experience
+	entry.life_before = _bounded(int(before.get("health", winner.get("health", 0))))
+	entry.life_after = _bounded(int(winner.get("health", 0)))
+	entry.level_before = _bounded(int(before.get("level", winner.get("level", 1))))
+	entry.level_after = _bounded(int(winner.get("level", 1)))
+	entry.experience = _bounded(experience)
 	entry.loot = loot.duplicate(true)
 	state.notebook.append(entry)
 	state.event.emit({"kind": "notebook_entry", "id": entry.id, "entry": BATTLE})
@@ -151,19 +157,23 @@ static func decode(raw: Variant) -> Variant:
 		entry.id = int(entry.id)
 		entry.day = int(entry.day)
 		if entry.kind == PHRASE:
-			if not entry.get("text") is String or not entry.get("speaker") is String or not _integer(entry.get("face"), -1, 0xffff): return null
+			if not entry.get("text") is String or not entry.get("speaker") is String or not _integer(entry.get("face"), -1, MAX_FACE): return null
 			if entry.text.length() > MAX_TEXT: return null
 			entry.face = int(entry.face)
 		else:
 			for key: String in ["opponent", "hero"]:
 				if not entry.get(key) is String: return null
 			for key: String in ["opponent_face", "opponent_level", "opponent_life", "life_before", "life_after", "level_before", "level_after", "experience"]:
-				if not _integer(entry.get(key), -1, 10000000): return null
+				if not _integer(entry.get(key), -1, MAX_NUMBER): return null
 				entry[key] = int(entry[key])
 			if not ELSecondLoot.valid(entry.get("loot")): return null
 			entry.loot = entry.loot.map(func(item: Array) -> Array: return [str(item[0]), int(item[1])])
 		result.append(entry)
 	return result
+
+## A battle entry's number within the range decode accepts.
+static func _bounded(value: int) -> int:
+	return clampi(value, -1, MAX_NUMBER)
 
 static func _integer(value: Variant, low: int, high: int) -> bool:
 	return (value is int or (value is float and value == floorf(value))) and value >= low and value <= high

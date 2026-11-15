@@ -122,7 +122,9 @@ func _list(table: Dictionary) -> bool:
 	var spec: Array = table.spec
 	var profile: ELProfile = table.profile
 	if not table.has("left"):
-		if not profile.tables.has(spec[0]): profile.tables[spec[0]] = table.rows
+		# The profile owns its tables: rows parsed here are normalised there
+		# (the second game's 1.03 values) before anything reads them.
+		table.rows = profile.adopt_table(spec[0], table.rows)
 		table.left = Dictionary(table.rows).values()
 	var left: Array = table.left
 	for i in mini(ROWS_PER_FRAME, left.size()):

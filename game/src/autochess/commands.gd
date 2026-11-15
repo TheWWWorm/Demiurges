@@ -30,7 +30,7 @@ static func apply(game: ELAutochessMatch, seat: int, op: String, args: Array) ->
 		"swap": error = company.swap_from_bench(_int(args, 0), _int(args, 1))
 		"equip": error = company.equip_item(_int(args, 0), _int(args, 1))
 		"choose_item": error = company.choose_item(_int(args, 0))
-		"undo": company.undo()
+		"undo": error = company.undo()
 		"arrange": company.arrange()
 		"ready": game.set_ready(seat, bool(args[0]) if not args.is_empty() else true)
 	if error.is_empty(): game.changed.emit()

@@ -3,6 +3,9 @@ extends RefCounted
 ## A campaign checkpoint includes the script graph, mutable world, and the
 ## in-flight command. Restoration creates a fresh session before it is committed.
 const FORMAT := "etherlords-adventure"
+## The one size limit of adventure saves, strategic slots and the second
+## game's between-chapter autosave, for writing and reading alike. A larger
+## document is refused before anything is written, so the previous file stays.
 const MAX_BYTES := 32 * 1024 * 1024
 const STATE_FIELDS := ["main_hero", "current_player", "day", "difficulty", "seed_value", "camera_zoom", "camera_rotation", "camera_locked", "exclusive", "outcome", "colorless_level", "_next_effect", "_next_object"]
 var error := ""
@@ -66,16 +69,8 @@ func write_document(path: String, document: Dictionary) -> bool:
 	# survive the round trip exactly.
 	var data := JSON.stringify(document, "", true, true).to_utf8_buffer()
 	if data.size() > MAX_BYTES: return _fail("The save exceeds its size limit.")
-	var temporary := "%s.%d-%d.tmp" % [path, OS.get_process_id(), Time.get_ticks_usec()]
-	var file := FileAccess.open(temporary, FileAccess.WRITE)
-	if file == null: return _fail("Could not write the save.")
-	file.store_buffer(data)
-	file.flush()
-	var written := file.get_error()
-	file.close()
-	if written != OK or DirAccess.rename_absolute(temporary, path) != OK:
-		DirAccess.remove_absolute(temporary)
-		return _fail("Could not replace the save.")
+	# A failed write keeps the previous save.
+	if not ELSafeFile.write_bytes(path, data): return _fail("Could not write the save.")
 	return true
 
 func read(path: String, profiles: Dictionary) -> Dictionary:
@@ -335,6 +330,10 @@ func decode(raw: Variant, profiles: Dictionary) -> Dictionary:
 		movement.id = int(movement.id)
 		movement.index = int(movement.index)
 		movement.use = int(movement.use)
+		# The object the move heads for (second game, for a new route).
+		if movement.has("target"):
+			if not ELLuaSave._integer(movement.target, -1, 0x7fffffff): return _reject(next, "Invalid active movement.")
+			movement.target = int(movement.target)
 		if movement.has("strategic"):
 			if not movement.strategic is bool: return _reject(next, "Invalid movement mode.")
 			if movement.strategic and (director.strategy.get("phase") != "movement" or director.strategy.index < 1 or director.strategy.actors[director.strategy.index - 1] != movement.id or movement.queued or movement.use != -1): return _reject(next, "Missing strategic movement phase.")
@@ -433,6 +432,9 @@ func decode(raw: Variant, profiles: Dictionary) -> Dictionary:
 				return _reject(next, "Invalid encounter fort.")
 			director.encounter.assault_fort = int(assault_fort)
 		director.encounter.battle = battle
+		# Not saved: worked out from the participants as when the duel began
+		# (the capture chapter's watch on Diamanda's health).
+		director.encounter.watch_side = ELFirstScenario.duel_watch(next, int(combat.hero), int(combat.opponent))
 	return {"state": next, "director": director, "camera": raw.camera.duplicate(true)}
 
 const EXPERIENCE_LIMIT := 1000000000

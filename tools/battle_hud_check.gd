@@ -82,10 +82,14 @@ func _gap() -> void:
 	check(panel.roomy() and ELCombatGapPanel.MIN_WIDTH > ELCombatGapPanel.LEFT_END.size.x + ELCombatGapPanel.RIGHT_END.size.x, "256 px holds the arrows and a readout")
 	panel.size.x = 43
 	check(not panel.roomy(), "a 43 px gap shows the plain strip")
+	panel.size.x = 256
+	panel.readouts = false
+	check(not panel.roomy(), "with the readouts setting off a wide gap shows the plain strip")
 	panel.free()
 	var settings := ELSettings.new()
 	check(int(settings.values.get("battle_gap", -1)) == 0 and ELSettings.SHARED.has("battle_gap"), "the slide is a shared remake setting, the spellbook by default")
 	check(ELSettings._clean("battle_gap", 9, 0) == ELCombatGapPanel.SLIDES.size() - 1 and ELSettings._clean("battle_gap", -3, 0) == 0, "a stored slide is kept in range")
+	check(bool(settings.values.get("battle_readouts", false)) and ELSettings.SHARED.has("battle_readouts"), "the readouts are a shared remake setting, on by default")
 
 func _setting() -> void:
 	var settings := ELSettings.new()

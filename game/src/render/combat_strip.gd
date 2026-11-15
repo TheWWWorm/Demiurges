@@ -107,6 +107,7 @@ func _arrow(control: String, direction: int) -> ELCutPartButton:
 	button.set_meta("origin", bounds.position)
 	button.pressed.connect(_press_arrow.bind(direction))
 	button.button_up.connect(func(): _held = 0)
+	button.gui_input.connect(_wheel)
 	button.mouse_entered.connect(button.queue_redraw)
 	button.mouse_exited.connect(button.queue_redraw)
 	add_child(button)
@@ -124,7 +125,11 @@ func layout() -> void:
 		_frames.size = _view.size
 	first = mini(first, maxi(0, items.size() - visible_count()))
 	offset = minf(offset, first * PITCH)
-	var extra := size.x - CLIP.size.x
+	# The right arrow follows the end of the icon row, where _draw puts its
+	# end cap: the row is as wide as the hand rail, not the whole panel (on
+	# a wide screen the readout gap follows it, and the button was left
+	# there, out of reach of the arrow drawn at the row's end).
+	var extra := row_width - (ELHudFrame.RAIL_RIGHT - ELHudFrame.RAIL_LEFT)
 	if left != null: left.position = left.get_meta("origin") - CLIP.position
 	if right != null: right.position = right.get_meta("origin") - CLIP.position + Vector2(extra, 0)
 	_place_row()
@@ -159,6 +164,7 @@ func set_items(list: Array[Dictionary], key: String) -> void:
 		for key_name: String in item.get("meta", {}): button.set_meta(key_name, item.meta[key_name])
 		ELUiSounds.bind_path(button, profile, SOUND)
 		button.pressed.connect(func(): item_pressed.emit(i))
+		button.gui_input.connect(_wheel)
 		_row.add_child(button)
 		buttons.append(button)
 	_place_row()
@@ -173,6 +179,19 @@ func scroll(direction: int) -> void:
 	_update_arrows()
 	if _frames != null: _frames.queue_redraw()
 	set_process(true)
+
+## Remake convenience: the mouse wheel over the icons or the arrows moves the
+## strip one icon a notch (down and right go forward), and keeps the wheel
+## from zooming the battle camera.
+func _wheel(event: InputEvent) -> void:
+	if not event is InputEventMouseButton or not event.pressed: return
+	var step := 0
+	match event.button_index:
+		MOUSE_BUTTON_WHEEL_DOWN, MOUSE_BUTTON_WHEEL_RIGHT: step = 1
+		MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_LEFT: step = -1
+	if step == 0 or items.size() <= visible_count(): return
+	scroll(step)
+	get_viewport().set_input_as_handled()
 
 func _press_arrow(direction: int) -> void:
 	scroll(direction)

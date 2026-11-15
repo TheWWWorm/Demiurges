@@ -19,9 +19,12 @@ const SIDE_SHARE := 0.3
 ## away, runes at a portal.
 const MIN_SPELLS := 2
 const MIN_RUNES := 3
+## Runes a new spell is priced with at most (the capacity without Provision).
+const RUNE_LOAD := 5
 const RARITY_WEIGHT := {"Cantrip": 0.8, "Common": 1.0, "Rare": 1.6, "Unique": 2.4}
-## Spells are weighed in points: percentage points of a duel's outcome that
-## the spell adds to a starting book (ELFirstSpellRatings). A purchase must
+## Spells are weighed in points: their relative worth among shop spells
+## (ELFirstSpellRatings, roughly percentage points of win chance near an
+## even duel; a ranking more than an absolute measure). A purchase must
 ## add at least MIN_GAIN over the copy it replaces. A bought copy that still
 ## has runes is worth KEEP more than its rating, since replacing it throws
 ## the runes away; a copy without runes EMPTY less; a second copy of a spell
@@ -78,6 +81,44 @@ static func daily(director: ELAdventureDirector, player: int) -> void:
 	for hero: Dictionary in ELFirstAI.heroes_of(state, player): learn_skills(state, hero)
 	reinforce(director, player)
 	global_spells(director, player)
+	upgrade_mines(director, player)
+
+# --- Investment ----------------------------------------------------------------
+
+## Mine upgrades pay back within this many days of the extra output (a first
+## upgrade of a root or lotus mine takes about three weeks), and may cost this
+## share of each resource held.
+const PAYBACK_DAYS := 30
+const MINE_SHARE := 0.4
+
+## A held mine is upgraded from the player's own screen (no hero goes there,
+## as ELBuildingScreen allows) when the extra output repays the price soon:
+## the price over the daily gain, counting only the payments a mine with a
+## limited number of them has left.
+static func upgrade_mines(director: ELAdventureDirector, player: int) -> void:
+	var state := director.state
+	var profile := state.map.profile
+	var ids: Array = state.objects.keys()
+	ids.sort()
+	for id: int in ids:
+		var site := state.object(id)
+		if site.get("group") != "mines" or int(site.get("owner", -1)) != player or not site.get("alive", false): continue
+		if not ELBuildingScreen.upgrade_problem(state, player, id, true).is_empty(): continue
+		var price := ELBuildingScreen.upgrade_price(state, site)
+		var cost := _total(price)
+		if cost <= 0: continue
+		var next := site.duplicate()
+		next.level = int(site.level) + 1
+		var gain := _total(ELResourceSites.production(profile, next)) - _total(ELResourceSites.production(profile, site))
+		if gain <= 0: continue
+		var days := PAYBACK_DAYS
+		if site.has("mine_remaining"): days = mini(days, int(site.mine_remaining))
+		if gain * days < cost: continue
+		var stock: Dictionary = state.players[player].resources
+		var spare := {}
+		for kind: String in stock: spare[kind] = int(floor(int(stock[kind]) * MINE_SHARE))
+		if not ELResources.can_pay("el1", spare, price): continue
+		ELBuildingScreen.upgrade(state, player, id, true)
 
 # --- Reinforcements ----------------------------------------------------------
 
@@ -144,7 +185,7 @@ static func spell_value(profile: ELProfile, card: String) -> float:
 static func _budget(state: ELAdventureSession, hero: Dictionary) -> Dictionary:
 	var result := {}
 	var player := int(hero.owner)
-	var share := SPEND_SHARE if int(ELFirstAI.data(state, player).get("champion", -1)) == int(hero.uid) else SIDE_SHARE
+	var share := SPEND_SHARE if ELFirstAI.commander_id(state, player) == int(hero.uid) else SIDE_SHARE
 	var stock: Dictionary = state.players[player].resources
 	for kind: String in stock: result[kind] = int(floor(int(stock[kind]) * share))
 	return result
@@ -155,9 +196,29 @@ static func _total(bill: Dictionary) -> int:
 	return result
 
 ## How many purchases a visit to `shop` would make now (0: no reason to go).
+## A spell shop whose stock offers nothing is still worth a visit when the
+## visit can upgrade it to stock that helps (see visit).
 static func wants(director: ELAdventureDirector, hero: Dictionary, shop: Dictionary) -> int:
 	if not applies(director) or not is_shop(shop): return 0
-	return _shop(director.state, hero, shop, false)
+	var count := _shop(director.state, hero, shop, false)
+	if count == 0 and shop.type == "el1_spell_shop" and _upgrade_affordable(director.state, hero, shop): count = mini(SPELLS_PER_VISIT, _next_stock_helps(director.state, hero, shop))
+	return count
+
+## Whether a visit could pay for this shop's next level once it has captured
+## it (the visit captures before it upgrades).
+static func _upgrade_affordable(state: ELAdventureSession, hero: Dictionary, shop: Dictionary) -> bool:
+	var player := int(hero.owner)
+	if int(shop.get("level", 0)) >= 2 or not state.players.has(player): return false
+	var colour := str(state.players[player].get("color", ""))
+	var row := ELBuildings.definition(state.map.profile, shop)
+	if row.is_empty() or not row.has(colour + "UpgradeCost"): return false
+	var next := shop.duplicate()
+	next.level = int(shop.level) + 1
+	if ELBuildings.definition(state.map.profile, next).is_empty(): return false
+	var spare := {}
+	var stock: Dictionary = state.players[player].resources
+	for kind: String in stock: spare[kind] = int(floor(int(stock[kind]) * UPGRADE_SHARE))
+	return ELResources.can_pay("el1", spare, ELBuildings.upgrade_price(state.map.profile, shop, colour))
 
 ## The hero stands beside the shop: buy, as the player's screen would. A
 ## player with resources to spare then upgrades the shop.
@@ -166,18 +227,56 @@ static func visit(director: ELAdventureDirector, hero: Dictionary, shop: Diction
 	if not applies(director):
 		ELBuildings.capture(state, shop, int(hero.owner))
 		return
+	# A portal whose upgrade the visit would pay anyway is upgraded first when
+	# its cheaper runes buy at least as many.
+	if shop.type == "rune_shop" and _upgrade_first(state, hero, shop):
+		ELBuildings.capture(state, shop, int(hero.owner))
+		if _upgrade(state, hero, shop):
+			_shop(state, hero, shop, true)
+			return
 	var bought := _shop(state, hero, shop, true)
 	ELBuildings.capture(state, shop, int(hero.owner))
 	# A spell shop is upgraded for what its next level sells this hero, a
 	# portal once it has sold runes (its next level sells them cheaper).
 	if shop.type == "el1_spell_shop":
-		if _next_stock_helps(state, hero, shop) and _upgrade(state, hero, shop): _shop(state, hero, shop, true)
+		if _next_stock_helps(state, hero, shop) > 0 and _upgrade(state, hero, shop): _shop(state, hero, shop, true)
 	elif bought > 0: _upgrade(state, hero, shop)
 
-## Whether the shop's next level stocks a spell worth buying for this hero.
-static func _next_stock_helps(state: ELAdventureSession, hero: Dictionary, shop: Dictionary) -> bool:
+## Whether upgrading the portal before buying its runes does better than
+## buying first: both orders are priced (the second on the portal one level
+## up, with the upgrade's price already paid), and the upgrade comes first
+## when it is affordable now and its runes are at least as many.
+static func _upgrade_first(state: ELAdventureSession, hero: Dictionary, portal: Dictionary) -> bool:
+	var player := int(hero.owner)
+	if int(portal.get("level", 0)) >= 2 or not state.players.has(player): return false
+	var colour := str(state.players[player].get("color", ""))
+	var row := ELBuildings.definition(state.map.profile, portal)
+	if row.is_empty() or not row.has(colour + "UpgradeCost"): return false
+	var next := portal.duplicate()
+	next.level = int(portal.level) + 1
+	if ELBuildings.definition(state.map.profile, next).is_empty(): return false
+	var price := ELBuildings.upgrade_price(state.map.profile, portal, colour)
+	var stock: Dictionary = state.players[player].resources
+	var spare := {}
+	for kind: String in stock: spare[kind] = int(floor(int(stock[kind]) * UPGRADE_SHARE))
+	if not ELResources.can_pay("el1", spare, price): return false
+	var now := _runes(state, hero, portal, false)
+	if now <= 0: return false
+	# The other order, priced on plain data: the portal a level up and the
+	# purchase budget after the upgrade (restored at once; no script runs).
+	var saved := stock.duplicate()
+	var level := int(portal.level)
+	ELResources.pay("el1", stock, price)
+	portal.level = level + 1
+	var later := _runes(state, hero, portal, false)
+	portal.level = level
+	for kind: String in saved: stock[kind] = saved[kind]
+	return later >= now
+
+## How many spells the shop's next level adds that are worth buying for this hero.
+static func _next_stock_helps(state: ELAdventureSession, hero: Dictionary, shop: Dictionary) -> int:
 	var profile := state.map.profile
-	if int(shop.level) >= 2 or hero.get("cards", []).is_empty(): return false
+	if int(shop.level) >= 2 or hero.get("cards", []).is_empty(): return 0
 	var weakest := INF
 	for slot in hero.cards.size():
 		var points := spell_value(profile, hero.cards[slot])
@@ -187,9 +286,10 @@ static func _next_stock_helps(state: ELAdventureSession, hero: Dictionary, shop:
 	next.level = int(shop.level) + 1
 	var colour := ELFirstSpellShop.hero_color(profile, hero)
 	var now := ELFirstSpellShop.authored_stock(profile, shop, colour)
+	var count := 0
 	for card: String in ELFirstSpellShop.authored_stock(profile, next, colour):
-		if not now.has(card) and spell_value(profile, card) >= weakest + MIN_GAIN: return true
-	return false
+		if not now.has(card) and spell_value(profile, card) >= weakest + MIN_GAIN: count += 1
+	return count
 
 static func _upgrade(state: ELAdventureSession, hero: Dictionary, shop: Dictionary) -> bool:
 	var player := int(hero.owner)
@@ -214,7 +314,7 @@ static func _spells(state: ELAdventureSession, hero: Dictionary, shop: Dictionar
 	var player := int(hero.owner)
 	var trade := ELFirstSpellShop.new()
 	if not trade.open(state, int(hero.uid), int(shop.uid), not commit, player): return 0
-	var portals := _portals(state, player)
+	var portals := _portals(state, player, hero)
 	var budget := _budget(state, hero)
 	var spells: Dictionary = profile.table("CombatSpells")
 	var stock: Array[String] = []
@@ -254,13 +354,22 @@ static func _spells(state: ELAdventureSession, hero: Dictionary, shop: Dictionar
 		# The new copy takes the place of a working one: one more waits for runes.
 		if not cantrip and loaded[weakest] and empty >= MAX_EMPTY: continue
 		if not trade.replace(weakest, card): continue
-		var total := trade.bill()
+		var bill := trade.bill()
 		var runes := ELResources.empty("el1")
-		if not cantrip:
-			var unit := _rune_price(state, hero, portals, card)
-			for kind: String in runes: runes[kind] = int(unit[kind]) * ELRunes.capacity(hero)
-		for kind: String in total: total[kind] = int(total[kind]) + int(refill[kind]) + int(runes[kind])
-		if not ELResources.can_pay("el1", budget, total):
+		var total := {}
+		# A spell that needs runes is priced with as many as the budget allows
+		# beside it: a base load at most (more room for runes never makes a
+		# purchase dearer) and one at least. The portal visit buys the rest.
+		var unit := _rune_price(state, hero, portals, card) if not cantrip else ELResources.empty("el1")
+		var fits := false
+		for count in range(mini(ELRunes.capacity(hero), RUNE_LOAD) if not cantrip else 0, -1 if cantrip else 0, -1):
+			total = {}
+			for kind: String in bill: total[kind] = int(bill[kind]) + int(refill.get(kind, 0)) + int(unit.get(kind, 0)) * count
+			if ELResources.can_pay("el1", budget, total):
+				for kind: String in runes: runes[kind] = int(unit[kind]) * count
+				fits = true
+				break
+		if not fits:
 			trade.clear(weakest)
 			continue
 		for kind: String in refill: refill[kind] = int(refill[kind]) + int(runes[kind])
@@ -280,7 +389,7 @@ static func _runes(state: ELAdventureSession, hero: Dictionary, portal: Dictiona
 	var player := int(hero.owner)
 	var trade := ELRuneShop.new()
 	if not trade.open(state, int(hero.uid), int(portal.uid), not commit, player): return 0
-	var portals := _portals(state, player)
+	var portals := _portals(state, player, hero)
 	var budget := _budget(state, hero)
 	var slots: Array = range(hero.cards.size())
 	slots.sort_custom(func(a: int, b: int): return spell_value(profile, hero.cards[a]) > spell_value(profile, hero.cards[b]))
@@ -302,12 +411,35 @@ static func _runes(state: ELAdventureSession, hero: Dictionary, portal: Dictiona
 	if not commit: trade.cancel()
 	return total
 
-## Component portals the player has seen.
-static func _portals(state: ELAdventureSession, player: int) -> Array[Dictionary]:
+## Component portals the player has seen and, with `hero`, that the hero can
+## walk to: a spell priced with its runes is no use if no portal is reachable.
+static func _portals(state: ELAdventureSession, player: int, hero := {}) -> Array[Dictionary]:
 	var result: Array[Dictionary] = []
 	for item: Dictionary in state.objects.values():
-		if item.get("type") == "rune_shop" and is_shop(item) and ELFog.explored(state, player, Vector2i(item.x, item.y)): result.append(item)
+		if item.get("type") == "rune_shop" and is_shop(item) and ELFog.explored(state, player, Vector2i(item.x, item.y)):
+			if hero.is_empty() or reachable(state, hero, item): result.append(item)
 	return result
+
+## Reachability answers of the current planning pass (ELFirstAI.plan_player
+## opens and closes it); outside a pass every question walks the grid.
+static var _reach: Variant = null
+
+static func begin_pass() -> void:
+	_reach = {}
+
+static func end_pass() -> void:
+	_reach = null
+
+## Whether `hero` has a route beside `item` (over the tiles open now).
+static func reachable(state: ELAdventureSession, hero: Dictionary, item: Dictionary) -> bool:
+	if state.grid == null: return true
+	var from := Vector2i(int(hero.x), int(hero.y))
+	var key := "%d:%d:%d" % [int(item.uid), from.x, from.y]
+	if _reach is Dictionary and _reach.has(key): return _reach[key]
+	var size: Vector2i = state.grid.footprints.get(int(item.uid), {}).get("size", Vector2i.ONE)
+	var found := Rect2i(int(item.x) - 1, int(item.y) - 1, size.x + 2, size.y + 2).has_point(from) or not state.grid.approach(from, item).is_empty()
+	if _reach is Dictionary: _reach[key] = found
+	return found
 
 ## The lowest price of one rune of `card` among `portals`.
 static func _rune_price(state: ELAdventureSession, hero: Dictionary, portals: Array[Dictionary], card: String) -> Dictionary:
@@ -346,13 +478,20 @@ static func rune_health(state: ELAdventureSession, hero: Dictionary) -> float:
 ## Planning cost of a trip `route` movement points long to a shop that would
 ## sell `count` spells or runes (-1: not worth it). A hero whose new spells
 ## wait for runes goes to a portal before anything else and from further
-## away; otherwise runes are topped up once half are gone. A spell shop is
+## away; otherwise runes are topped up once half are gone, or on the way
+## (within half a day) whenever any are missing. A spell shop is
 ## worth a detour for several spells, or for one when it is close by.
 static func trip_cost(state: ELAdventureSession, hero: Dictionary, shop: Dictionary, route: int, count: int) -> int:
 	var day := maxi(1, int(hero.get("strategy_capacity", 1)))
 	if shop.get("type") == "rune_shop":
+		# A few runes are worth a stop on the spot or close by, and within a
+		# day when they bring an empty spell back.
+		if count <= 0: return -1
+		if empty_copies(hero) > 0:
+			if count < MIN_RUNES and route > day: return -1
+			return route / 8 if route <= URGENT_DAYS * day else -1
+		if route <= day / 2: return route / 4
 		if count < MIN_RUNES: return -1
-		if empty_copies(hero) > 0: return route / 8 if route <= URGENT_DAYS * day else -1
 		return route / 4 if rune_health(state, hero) < 0.5 and route <= SHOP_DAYS * day else -1
 	# A hero that has never shopped goes further for its first spells.
 	if count >= MIN_SPELLS and starting_book(hero): return route / 4 if route <= URGENT_DAYS * day else -1
@@ -361,7 +500,7 @@ static func trip_cost(state: ELAdventureSession, hero: Dictionary, shop: Diction
 
 ## A hero with spells waiting for runes leaves its errand for a portal.
 static func urgent(director: ELAdventureDirector, hero: Dictionary) -> bool:
-	return applies(director) and empty_copies(hero) > 0 and not _portals(director.state, int(hero.owner)).is_empty()
+	return applies(director) and empty_copies(hero) > 0 and not _portals(director.state, int(hero.owner), hero).is_empty()
 
 # --- Global spells -------------------------------------------------------------
 
@@ -370,35 +509,98 @@ static func urgent(director: ELAdventureDirector, hero: Dictionary) -> bool:
 static func _usable(code: String) -> bool:
 	return ELGlobalSpells.REPAIRS.has(code) or ELGlobalSpells.CASTLE_DAMAGE.has(code) or ELGlobalSpells.RITUALS.has(code) or ELGlobalSpells.SUMMONS.has(code) or ELGlobalSpells.HERO_BUFFS.has(code) or ELGlobalSpells.BATTLE_EFFECTS.has(code)
 
-## Ether a player gains each day after hero and spell upkeep.
-static func _daily_ether(state: ELAdventureSession, player: int) -> int:
-	var budget := ELStrategy.mana_budget(state, player)
-	return int(budget.income) - int(budget.spent) - ELGlobalSpells.spell_upkeep(state, player)
+## Whether the computer ever casts the global spell `code` (global_spells).
+static func castable(code: String) -> bool:
+	return _usable(code)
 
+## Ether a player keeps each day after hero and spell upkeep (see forecast).
+static func _daily_ether(state: ELAdventureSession, player: int) -> int:
+	return forecast(state, player)
+
+## The free ether of the next settlement, as the rules will pay it: hero
+## upkeep in the owned-hero order of ELStrategy.allocation (a hero whose upkeep
+## no longer fits is skipped and costs nothing), then the upkeep of active
+## spells in cast order as ELGlobalSpells.settle keeps them (a spell that no
+## longer fits is dropped). `extra` heroes ({level, skills}) join at the end
+## of the hero order, as a recruit does; `extra_spell` is the upkeep of one
+## more spell cast last.
+static func forecast(state: ELAdventureSession, player: int, extra: Array = [], extra_spell := 0) -> int:
+	if not state.players.has(player): return 0
+	var heroes: Array = []
+	for actor: Dictionary in state.objects.values():
+		if actor.get("type") == "hero" and actor.get("alive", false) and int(actor.get("owner", -1)) == player: heroes.append(actor)
+	heroes.append_array(extra)
+	var budget := ELStrategy.allocation(state.map.profile, ELResourceSites.mana_income(state, player), heroes)
+	var income := int(budget.income)
+	var used := int(budget.spent)
+	for spell: Dictionary in ELGlobalSpells.data(state, player).get("active", []):
+		var hero := state.object(int(spell.get("hero", -1)))
+		if int(spell.get("hero", -1)) >= 0 and not hero.get("alive", false): continue
+		if spell.get("code") == ELGlobalSpells.WARRIOR: continue
+		var cost := ELGlobalSpells.upkeep(state.map.profile, str(spell.code))
+		if income >= used + cost: used += cost
+	if extra_spell > 0 and income >= used + extra_spell: used += extra_spell
+	return maxi(0, income - used)
+
+## The player's castle energy after tonight when `spend` of today's free
+## ether goes elsewhere (the rest regenerates the castle before the night) and
+## a cast lowers the pending damage by `repair` (ELFirstScenario.regenerate,
+## then end_night). A large number when the player has no castle record.
+static func night_health(state: ELAdventureSession, player: int, spend := 0, repair := 0) -> int:
+	var castle: Dictionary = state.scenario.get("castles", {}).get(player, {})
+	if castle.is_empty() or not castle.get("alive", false): return 1 << 20
+	var free := ELGlobalSpells.free_ether(state, player)
+	var regenerated := mini(int(castle.max), int(castle.health) + ELFirstScenario.regeneration(maxi(0, free - spend)))
+	return clampi(regenerated - (int(castle.pending) - repair), 0, int(castle.max))
+
+## Once a day: a finished spell is cast, then the next one is chosen and, when
+## today's ether completes it, cast at once (a few rounds at most).
 static func global_spells(director: ELAdventureDirector, player: int) -> void:
 	var state := director.state
 	if not ELGlobalSpells.applies(state): return
 	var record := ELGlobalSpells.data(state, player)
 	if record.is_empty(): return
-	if not record.production.is_empty():
-		if int(record.production.get("state", 0)) == 2:
-			_cast(director, player)
-			return
-		# A spell the ether income can no longer finish gives its resources back.
-		if ELGlobalSpells.turns_left(state, player) <= STALL_DAYS or not ELGlobalSpells.cancel(state, player): return
-	var daily := _daily_ether(state, player)
-	if daily <= 0: return
+	for round in 3:
+		if not record.production.is_empty():
+			if int(record.production.get("state", 0)) == 2:
+				_cast(director, player)
+				continue
+			# A spell the ether income can no longer finish gives its resources back.
+			if ELGlobalSpells.turns_left(state, player) <= STALL_DAYS or not ELGlobalSpells.cancel(state, player): return
+		var best := _choose(director, player)
+		if best.is_empty() or not ELGlobalSpells.produce(state, player, best): return
+		if int(record.production.get("state", 0)) != 2: return
+
+## The spell to produce now, or "". Today's free ether (what is left to invest
+## now) and the daily forecast are weighed apart: a day without income can
+## still finish a spell with the ether in hand. Spending must not cost the
+## castle the night when keeping the ether for regeneration would save it.
+static func _choose(director: ELAdventureDirector, player: int) -> String:
+	var state := director.state
+	var daily := forecast(state, player)
+	var free := ELGlobalSpells.free_ether(state, player)
+	if daily <= 0 and free <= 0: return ""
+	var keep := night_health(state, player)
 	var best := ""
 	var best_score := 0.0
 	for code: String in ELMapPickups.available_codes(state, player):
 		if not _usable(code) or not ELGlobalSpells.produce_problem(state, player, code).is_empty(): continue
+		var cost := ELGlobalSpells.ether_cost(state, player, code)
 		# Upkeep must leave most of the income, and the ether must come within about a week.
-		if ELGlobalSpells.upkeep(state.map.profile, code) * 2 > daily or ELGlobalSpells.ether_cost(state, player, code) > daily * 8: continue
+		var upkeep := ELGlobalSpells.upkeep(state.map.profile, code)
+		if upkeep > 0 and upkeep * 2 > daily: continue
+		if cost - free > daily * 8: continue
+		var spend := mini(free, cost)
+		var repair := int(ELGlobalSpells.REPAIRS.get(code, 0)) if cost <= free else 0
+		var after := night_health(state, player, spend, repair)
+		if after <= 0 and keep > 0: continue
 		var score := _score(director, player, code)
+		# A repair finished today must beat the energy the ether would regenerate.
+		if repair > 0 and after <= keep: score = 0.0
 		if score > best_score:
 			best_score = score
 			best = code
-	if not best.is_empty(): ELGlobalSpells.produce(state, player, best)
+	return best
 
 static func _score(director: ELAdventureDirector, player: int, code: String) -> float:
 	var state := director.state
@@ -413,14 +615,16 @@ static func _score(director: ELAdventureDirector, player: int, code: String) -> 
 		# income, and a hero beyond the usual number must leave ether to spare.
 		var count := ELFirstAI.heroes_of(state, player).size()
 		var level := int(ELGlobalSpells.SUMMON_LEVELS.get(code.right(2), 1))
-		var left := _daily_ether(state, player) - int(state.map.profile.table("HeroesStats").get("ManaUpkeep", {}).get("Level%d" % level, 0))
-		if count >= MORE_HEROES or left < 0 or (count >= HEROES and left < SPARE_ETHER): return 0.0
+		# The recruit joins at the end of the upkeep order: when its upkeep no
+		# longer fits it goes unpaid, which costs nothing (ELStrategy.allocation).
+		var left := forecast(state, player, [{"type": "hero", "level": level, "skills": {}}])
+		if count >= MORE_HEROES or (count >= HEROES and left < SPARE_ETHER): return 0.0
 		return (90.0 if count < 2 else 50.0) + level
 	if ELGlobalSpells.RITUALS.has(code):
 		for spell: Dictionary in active: if spell.code == code: return 0.0
 		return 40.0 if int(state.day) < 25 else 10.0
 	if ELGlobalSpells.HERO_BUFFS.has(code):
-		var champion := state.object(int(ELFirstAI.data(state, player).get("champion", -1)))
+		var champion := state.object(ELFirstAI.commander_id(state, player))
 		return 30.0 if not champion.is_empty() and not ELGlobalSpells.hero_has(champion, code) else 0.0
 	if ELGlobalSpells.BATTLE_EFFECTS.has(code):
 		for spell: Dictionary in active: if spell.code == code: return 0.0
@@ -451,12 +655,18 @@ static func _cast(director: ELAdventureDirector, player: int) -> void:
 		var kind: String = params[index] if params is Array else str(params)
 		var pick: int = options[0]
 		if kind == "Hero":
-			var champion := int(ELFirstAI.data(state, player).get("champion", -1))
+			var champion := ELFirstAI.commander_id(state, player)
 			if options.has(champion): pick = champion
-		elif kind == "Castle":
+		elif kind == "Castle" and ELGlobalSpells.CASTLE_DAMAGE.has(code):
+			# An attack is aimed at enemies only: with no enemy castle left
+			# (ruined or allied since the spell was begun) it is dispelled.
 			var enemy := _weakest_enemy(state, player)
-			if ELGlobalSpells.CASTLE_DAMAGE.has(code) and options.has(enemy): pick = enemy
-			elif options.has(player): pick = player
+			if not options.has(enemy):
+				ELGlobalSpells.cancel(state, player)
+				return
+			pick = enemy
+		elif kind == "Castle":
+			if options.has(player): pick = player
 		chosen.append(pick)
 	if not ELGlobalSpells.cast(state, player, chosen):
 		state.error = ""

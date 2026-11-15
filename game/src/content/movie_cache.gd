@@ -329,7 +329,7 @@ func decode_audio_part(src: String, first: int, end: int) -> PackedByteArray:
 ## A finished cache file opened for playback, or {} when `file` is missing,
 ## incomplete, not a cache or made from a source of another size (`source_size`
 ## < 0 skips that check). Returns {file, width, height, frames, fps_num,
-## fps_den, offsets, pcm, audio_rate, audio_channels}.
+## fps_den, source_size, offsets, pcm, audio_rate, audio_channels}.
 static func open_cache(file: String, source_size := -1) -> Dictionary:
 	var f := FileAccess.open(file, FileAccess.READ)
 	if f == null or f.get_length() < HEADER or f.get_32() != MAGIC or f.get_32() != 1:
@@ -337,7 +337,11 @@ static func open_cache(file: String, source_size := -1) -> Dictionary:
 	var r := {"file": f}
 	for k in ["width", "height", "frames", "fps_num", "fps_den", "audio_rate", "audio_channels"]:
 		r[k] = f.get_32()
-	if source_size >= 0 and f.get_32() != source_size & 0xFFFFFFFF:
+	# The stored source size is always read (the fields after it follow it),
+	# and compared only when the caller knows the source's size.
+	var stored_size := f.get_32()
+	r.source_size = stored_size
+	if source_size >= 0 and stored_size != source_size & 0xFFFFFFFF:
 		return {}
 	var audio_off := f.get_64()
 	var audio_size := f.get_64()

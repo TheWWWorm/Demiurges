@@ -91,6 +91,11 @@ func _ready() -> void:
 ## The look shared by the wiki, Puzzles, Expedition and Autochess buttons (the same
 ## plate as an edition that is not chosen).
 func _plain(button: Button) -> void:
+	plain(button)
+
+## That look for any button (the AI dropdowns under the campaign dialogs use
+## it too, ELFrontMenu.add_ai_choices).
+static func plain(button: Button) -> void:
 	button.focus_mode = Control.FOCUS_NONE
 	for state: String in ["font_color", "font_focus_color", "font_pressed_color"]:
 		button.add_theme_color_override(state, Color(INK, 0.85))
@@ -100,7 +105,7 @@ func _plain(button: Button) -> void:
 	button.add_theme_stylebox_override("pressed", _plate(0.88, INK))
 	button.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
 
-func _plate(alpha: float, border: Color) -> StyleBoxFlat:
+static func _plate(alpha: float, border: Color) -> StyleBoxFlat:
 	var style := StyleBoxFlat.new()
 	style.bg_color = Color(0.06, 0.05, 0.04, alpha)
 	style.border_color = border

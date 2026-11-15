@@ -83,6 +83,8 @@ var power_preview: Label
 var pending_power: Dictionary = {}
 var exchange_target := -1
 var selected_creature := -1
+## The phase the selection was clicked in (_phase_mark); see _target.
+var selection_phase := ""
 var ai_clock := 0.0
 var demo := false
 var updating := false
@@ -184,6 +186,9 @@ var _effect_cast: Dictionary = {}
 ## {card, side, ids, since, camera, gesture, shown_at (-1 until the card's
 ## effect starts at them)}.
 var _arrivals: Array[Dictionary] = []
+## A battle script's summon being shown ({card, side}), or empty: its creature
+## rises in the card's summon effect like a cast one, without a hero gesture.
+var _script_summon: Dictionary = {}
 ## An ability's hit can wait for its own MonstersHit cue. RNST affects the
 ## opposing army, so the scope may hold several creature ids. The action's
 ## events remain synchronous; deferred hit timers retain their own data.
@@ -282,6 +287,8 @@ var combat_hover := -1
 ## banners and cast messages.
 var symbols: ELCombatSymbols
 var notices: ELCombatNotices
+## Second-game map battles: the map hero's affect icons, top right.
+var affect_strip: ELAffectStrip
 ## The opponent-turn banner shows once per opponent turn.
 var _enemy_banner_shown := false
 var _control_tips: Dictionary = {}
@@ -618,6 +625,7 @@ func _start(edition: String, options: Dictionary = {}, restored: ELDuel = null, 
 	effects.build(profile)
 	_effect_cast = {}
 	_arrivals.clear()
+	_script_summon = {}
 	_feedback_hit.clear()
 	_redirect_hit.clear()
 	_hits_waiting.clear()
@@ -626,9 +634,10 @@ func _start(edition: String, options: Dictionary = {}, restored: ELDuel = null, 
 	_last_creature.clear()
 	_before_turn_cleanup.clear()
 	_cast_until = 0.0
-	_hero_shown = [-1, -1]
-	_wound_shown.clear()
-	_notes_after_hit.clear()
+	_shown = {}
+	_display_queue.clear()
+	_display_waits.clear()
+	_drain_started = false
 	_ending_waiting = {}
 	battle_audio = ELBattleAudio.new()
 	stage.add_child(battle_audio)
@@ -653,7 +662,11 @@ func _start(edition: String, options: Dictionary = {}, restored: ELDuel = null, 
 		var hero: Dictionary = profile.table("Shapes")[combatant.shape] if not String(combatant.get("shape", "")).is_empty() else profile.table("HeroTemplates")[combatant.template]
 		if combatant.has("monster_name"): hero = ELFirstMonsters.appearance(profile, combatant.monster_name, combatant.monster_difficulty)
 		var directory := "Creatures/" if combatant.get("kind", "hero") == "monster" else "Heroes/"
-		if not model.build(profile, hero.Model, directory + hero.Texture, directory + hero.Texture2 if hero.has("Texture2") else ""):
+		# A combat creature row names its second texture SecTexture, a hero
+		# row Texture2; without it a monster standing as the opposing side had
+		# its second material painted with the first texture (#118).
+		var second := String(hero.get("Texture2", hero.get("SecTexture", "")))
+		if not model.build(profile, hero.Model, directory + hero.Texture, directory + second if not second.is_empty() else ""):
 			push_error(model.error)
 		model.position = ELMeleePlayback.hero_position(side)
 		model.scale = Vector3.ONE * hero_figure_scale(profile.id, String(hero.get("Model", "")))
@@ -694,6 +707,7 @@ func _start(edition: String, options: Dictionary = {}, restored: ELDuel = null, 
 	for i in gap_panels.size():
 		gap_panels[i].build(profile)
 		gap_panels[i].show_slide(int(settings.values.get(GAP_KEYS[i], 0)))
+		gap_panels[i].readouts = bool(settings.values.get("battle_readouts", true))
 	if power_dialog != null: power_dialog.build(profile)
 	_layout_hud()
 	for c: Dictionary in duel.creatures.values(): _spawn_creature(c)
@@ -737,6 +751,7 @@ func _start(edition: String, options: Dictionary = {}, restored: ELDuel = null, 
 	if (restored == null or kind == "campaign") and duel.turn_serial <= 1 and duel.phase != ELDuel.Phase.FINISHED and not duel.has_meta("start_sound"):
 		duel.set_meta("start_sound", true)
 		battle_audio.play(BATTLE_START_SOUND)
+		_opening_script_summons()
 	# EL1 resolves global spells before models or the event listener
 	# exist. Replay their original battle-opening effects after the figures
 	# are ready, never on a loaded battle. LGWR strikes the opponent; HSTL
@@ -854,7 +869,10 @@ func _process(delta: float) -> void:
 			# (Built as a typed array: an untyped literal cannot be assigned to it.)
 			var smart: Array[int] = []
 			# A puzzle is always defended by the smarter player.
-			if not demo and not _human_side() and (bool(settings.values.get("smart_ai", true)) or _in_puzzle()): smart.append(duel.active_side())
+			# Setting "duel_ai": 0 Easy, 1 Original, 2 Smarter (ELAIChoice).
+			var level := int(settings.values.get("duel_ai", 2))
+			if not demo and not _human_side() and (level >= 2 or _in_puzzle()): smart.append(duel.active_side())
+			ELCombatSearch.original_budget = ELCombatSearch.EASY_BUDGET if level == 0 and not demo and not _human_side() and not _in_puzzle() else ELCombatSearch.BUDGET
 			duel.smart_sides = smart
 			ELPracticeAI.step(duel, auto and not bool(settings.values.get("use_spells", true)))
 		_step_auto_camera(delta)
@@ -890,8 +908,9 @@ func _process(delta: float) -> void:
 				label.text = "  •  ".join(parts)
 				label.modulate = ACCENT if not c.enchantments.is_empty() else INK
 				# Pale aspect: the figure's opacity pulses 0.2-0.6 (1.8 s triangle wave).
-				# A creature killed in the plane stays pale until its death is shown.
-				if duel.in_plane(id) if duel.creatures.has(id) else bool(c.get("plane", false)):
+				# A creature killed in the plane stays pale until its death is shown;
+				# one the rules have sent there fades when that is shown.
+				if shown_plane(id):
 					if helper_overlay(): label.text += ("  •  " if not label.text.is_empty() else "") + "PALE"
 					model.set_opacity(0.2 + 0.4 * (1.0 - absf(fmod(elapsed, 1.8) / 0.9 - 1.0)))
 					model.set_meta("pale", true)
@@ -1220,6 +1239,12 @@ func _target(id: int) -> void:
 			inspect_graveyard = false
 			_refresh()
 		return
+	# The original takes no command while a hit or effect is still to land:
+	# a figure's shown values may not be the rules' yet.
+	if _display_lagging() or not _hits_waiting.is_empty(): return
+	# A creature still waiting for its arrival (a cast or script summon) is
+	# not on screen yet.
+	if id >= 2 and models.has(id) and bool(models[id].get_meta("arriving", false)): return
 	if not ability_selection.is_empty():
 		if ability_selection.target == "enchantment":
 			selected_creature = id
@@ -1284,6 +1309,11 @@ func _target(id: int) -> void:
 			else:
 				exchange_target = id
 				_hint("Now click a hero portrait and choose a creature in that graveyard. Esc cancels.")
+				# The own graveyard opens when it holds a creature (#123).
+				var own := duel.active_side()
+				var opened := own if not duel.valid_grave_targets(card, own).is_empty() else 1 - own
+				selected_creature = opened
+				inspect_graveyard = true
 		elif effect in ["reanimate", "repair", "pale_revival"]:
 			if id >= 2: _hint("Click a hero portrait to open that graveyard.")
 			else:
@@ -1313,14 +1343,21 @@ func _target(id: int) -> void:
 			_hint("Spell cast.")
 		else:
 			_hint(duel.error)
-	elif duel.phase == ELDuel.Phase.DEFENCE and selected_creature >= 2 and duel.creatures.has(selected_creature) and duel.creatures[selected_creature].owner == duel.active_side() and duel.attacks.has(id):
+	elif duel.phase == ELDuel.Phase.DEFENCE and selected_creature >= 2 and selection_phase == _phase_mark() and duel.creatures.has(selected_creature) and duel.creatures[selected_creature].owner == duel.active_side() and duel.attacks.has(id):
 		if not duel.assign_block(selected_creature, id): _hint(duel.error)
-	elif duel.phase == ELDuel.Phase.ATTACK and id == 1 - duel.attacker and selected_creature >= 2:
+	elif duel.phase == ELDuel.Phase.ATTACK and id == 1 - duel.attacker and selected_creature >= 2 and selection_phase == _phase_mark():
 		if not duel.toggle_attack(selected_creature): _hint(duel.error)
 	else:
 		selected_creature = id
+		selection_phase = _phase_mark()
 		inspect_graveyard = false
 	_refresh()
+
+## The phase a click selection was made in ("round:attacker:phase"): a
+## creature still selected from an earlier phase stays shown but is not
+## taken as the blocker or attacker of this one.
+func _phase_mark() -> String:
+	return "%d:%d:%d" % [duel.round_number, duel.attacker, duel.phase] if duel != null else ""
 
 func _cast_card(index: int) -> void:
 	if not _human_turn() or (game_console != null and game_console.enemy_hand(duel)) or not duel.can_cast_from_hand(index):
@@ -1338,6 +1375,16 @@ func _cast_card(index: int) -> void:
 		selection = -1 if selection == index else index
 		var wanted := "hero portrait to open its graveyard" if duel.target_kind(card) == "grave" else duel.target_kind(card)
 		_hint("Select a %s for %s. Esc cancels." % [wanted, duel.card_name(card)])
+		# A spell that takes a creature straight from a graveyard opens the
+		# one it can use, the own first (player report #123).
+		var effect: String = ELCatalog.rule(profile, card).get("effect", "")
+		if selection == index and duel.target_kind(card) == "grave" and effect in ["reanimate", "repair"]:
+			var side := duel.active_side()
+			var opened := side if not duel.valid_grave_targets(card, side).is_empty() else (1 - side if not duel.valid_grave_targets(card, 1 - side).is_empty() else -1)
+			if opened >= 0:
+				selected_creature = opened
+				inspect_graveyard = true
+				_hint("Choose a creature in this graveyard. Esc cancels.")
 	else:
 		if not duel.cast(index):
 			_hint(duel.error)
@@ -1664,6 +1711,7 @@ func _confirm_handover() -> void:
 	var leaving := hot_side
 	hot_side = duel.active_side() if duel != null else -1
 	_hand_camera_over(leaving, hot_side)
+	_place_hero_boxes()
 	_refresh()
 
 ## Hot seat: each player keeps their own camera. The view of the player
@@ -1690,7 +1738,8 @@ func _human_side() -> bool:
 	return _local_side(duel.active_side())
 
 ## Starts auto combat on the player's turn, or stops it at any time; starting
-## cancels any half-made selection. Not offered in the recorded tutorial.
+## cancels any half-made selection and the attackers or blockers chosen so far
+## (ELPracticeAI.release_assignments). Not offered in the recorded tutorial.
 func _toggle_auto() -> void:
 	if network_duel != null or strategic_session != null: return
 	if auto_combat:
@@ -1701,6 +1750,10 @@ func _toggle_auto() -> void:
 		exchange_target = -1
 		selected_creature = -1
 		ability_selection.clear()
+		# The computer takes the phase over from scratch: attackers sent
+		# without a tax and blockers assigned by hand are taken back, so that
+		# its lookahead chooses them again.
+		ELPracticeAI.release_assignments(duel)
 		_set_auto(true)
 
 func _set_auto(on: bool) -> void:
@@ -1730,7 +1783,6 @@ func _end_phase() -> void:
 	selection = -1
 	selection_power = 0
 	exchange_target = -1
-	selected_creature = -1
 	ai_clock = 0.0
 	ability_selection.clear()
 	# Both original editions have separate own-attack declaration shots for
@@ -1752,6 +1804,12 @@ func _skip_battle_presentation() -> void:
 	if (_melee_busy() or _cast_busy() or not _arrivals.is_empty() or not _effect_cast.is_empty()
 		or not _battle_cues.is_empty() or (auto_camera != null and auto_camera.active())):
 		_skipping_presentation = true
+		# The skipped events' sounds are dropped, not left to play long after
+		# them (player report #141).
+		var audio_on := is_instance_valid(battle_audio)
+		if audio_on:
+			battle_audio.cut()
+			battle_audio.silenced = true
 		var remaining := _cast_queue.size() + 1
 		for _step in remaining:
 			if _melee_busy(): melee.finish()
@@ -1766,6 +1824,9 @@ func _skip_battle_presentation() -> void:
 			var clip: String = models[id].clip
 			if clip in ["uattack", "uhit", "utap", "uuntap", "usummon", "uenchantment", "uinstant"]:
 				_animation_done(clip, id)
+		if audio_on:
+			battle_audio.silenced = false
+			battle_audio.cut()
 		_skipping_presentation = false
 		_sync_shown()
 		_refresh()
@@ -1856,6 +1917,34 @@ func _hold_arrival(pending: Dictionary) -> bool:
 		"shown_at": -1.0})
 	return true
 
+## A side that opens the battle may have its script summon creatures (the
+## Musician's four dragons) before the view listens: they rise one after
+## another in their summon effects as the battle opens, not stand there already.
+func _opening_script_summons() -> void:
+	var wait := 0.0
+	var scripted := ""
+	for entry: Dictionary in duel.history:
+		if entry.get("kind") == "script_cast":
+			scripted = String(entry.get("card", "")) if duel.is_summon(String(entry.get("card", ""))) else ""
+		elif entry.get("kind") == "summon" and not scripted.is_empty() and String(entry.creature.get("card", "")) == scripted:
+			scripted = ""
+			var id := int(entry.creature.get("id", -1))
+			if not models.has(id) or not duel.creatures.has(id): continue
+			_script_arrival(id, wait)
+			wait += maxf(_summon_effect_seconds(String(entry.creature.card)), ELCombatEffects.summon_delay(profile, String(entry.creature.card))) + 0.2
+
+## A creature a battle script summoned (the Musician's four dragons): hidden,
+## then shown in its card's summon effect after `wait` seconds, with its own
+## entrance, as a cast summon is but without the hero's gesture.
+func _script_arrival(id: int, wait: float) -> void:
+	var c: Dictionary = duel.creatures.get(id, {})
+	if c.is_empty() or not models.has(id): return
+	models[id].visible = false
+	models[id].set_meta("arriving", true)
+	if labels.has(id): labels[id].hide()
+	_arrivals.append({"card": String(c.card), "side": int(c.owner), "ids": [id], "since": elapsed, "camera": false,
+		"gesture": wait, "buffs": [], "stats": {}, "shown_at": -1.0})
+
 ## Seconds from the start of a hero's summoning gesture to its mark frame,
 ## where the first game starts the summoned creature's effect.
 func _summon_mark(side: int, card: String) -> float:
@@ -1908,10 +1997,13 @@ func _summon_effect_seconds(card: String) -> float:
 	return minf(float(frames) / ELParticleFile.FPS, 2.0)
 
 ## Live rules resolve the summon immediately. Keep the visible stats from
-## before its buffs until the source is on screen.
+## before its buffs until the source is on screen. Otherwise the stats of
+## the displayed state: a growth, a buff or a curse shows when the blow or
+## spell that makes it does (_note_shown).
 func _shown_creature_stats(id: int, creature: Dictionary) -> Dictionary:
 	for arrival: Dictionary in _arrivals:
 		if arrival.stats.has(id): return arrival.stats[id]
+	if _display_active() and _shown.creatures.has(id): return _shown.creatures[id]
 	return _before_turn_cleanup.get(id, creature)
 
 func _show_aura_cue(cue: Dictionary) -> void:
@@ -1968,19 +2060,31 @@ const CAST_KINDS := ["cast", "artifact"]
 ## Events that start a new action (a cast, a creature's ability, the end of a
 ## phase): like the original's input gate, each waits until the previous
 ## action has been shown, its summoned creatures included.
-const SEQUENCED_KINDS := ["cast", "artifact", "ability", "phase"]
+const SEQUENCED_KINDS := ["cast", "artifact", "ability", "phase", "script_cast"]
 ## Set while Space skips the presentation: nothing waits then.
 var _skipping_presentation := false
 var _cast_queue: Array[Dictionary] = []
 ## `elapsed` when the cast being shown has played.
 var _cast_until := 0.0
 var _cast_dispatching := false
-## Hero health as last shown (stamped on its damage and heal events), and each
-## creature's damage as last shown, while a fight or queued casts still play.
-var _hero_shown: Array[int] = [-1, -1]
-var _wound_shown: Dictionary = {}
-## Figure -> shown-value events that came after its waiting hit.
-var _notes_after_hit: Dictionary = {}
+## The displayed state. The rules settle an action at once; the screen shows
+## each value (hero health, ether and channels; creature power, toughness,
+## damage, granted abilities and pale aspect) as of the last event it has
+## presented, as the original shows each change when the animation or effect
+## that makes it gets there. Every rules event is stamped with the values it
+## leaves (_display_stamp); presenting the event shows its stamp, and a stamp
+## waits behind an earlier hit or effect cue that has not landed yet.
+## {serial, heroes: [[health, mana, channels], [..]], creatures: {id: {power,
+## toughness, damage, plane, granted}}}; empty before the first battle.
+var _shown: Dictionary = {}
+## Serial of the last stamp handed out (stamps only move the display forward).
+var _stamp_serial := 0
+## Presented stamps waiting for an earlier hit or cue.
+var _display_queue: Array[Dictionary] = []
+## Stamp serial -> hits and effect cues of that event still to land.
+var _display_waits: Dictionary = {}
+## A life drain's effect has just started: the next heal shows when it arrives.
+var _drain_started := false
 ## The duel's result event while a loser's hit still waits for its cue.
 var _ending_waiting: Dictionary = {}
 
@@ -2004,27 +2108,40 @@ func _presentation_held() -> bool:
 ## The shown health and wounds lag the rules: as above, or a figure's hit
 ## still waits for the cue frame of the effect that deals it.
 func _shown_held() -> bool:
-	return _presentation_held() or not _hits_waiting.is_empty() or not _ending_waiting.is_empty()
+	return _presentation_held() or not _hits_waiting.is_empty() or not _ending_waiting.is_empty() or _display_lagging()
+
+## A presented change still waits for its hit or effect cue.
+func _display_lagging() -> bool:
+	return not _display_waits.is_empty() or not _display_queue.is_empty()
 
 ## The rules' event, stamped with the hero health it leaves (the screen shows
 ## that value only when the event itself is shown).
 func _on_duel_event(data: Dictionary) -> void:
-	advisor.note(data)
 	if data.get("kind") == "phase":
 		# Clear input as the rules change phase. The queued phase notice may
 		# play after the player has already picked a spell in the new phase.
+		# The selected creature or hero stays selected (a figure that left
+		# play is dropped in _refresh); only a selection made in this phase
+		# assigns a block or an attack (selection_phase).
 		selection = -1
 		selection_power = 0
 		exchange_target = -1
-		selected_creature = -1
 		ability_selection.clear()
 		if not pending_power.is_empty():
 			pending_power.clear()
 			_hide_power_panel()
-	var target := int(data.get("target", -1))
-	if duel != null and data.get("kind") in ["damage", "heal"] and target in [0, 1]:
+	if duel != null:
 		data = data.duplicate()
-		data.shown_health = int(duel.heroes[target].health)
+		# A presentation cue (a combat power's effect, a camera request) shows
+		# no values of its own: what the rules change around it shows with
+		# the event that reports the change (a drain's heal after its effect).
+		var kind := String(data.get("kind", ""))
+		if not (kind.ends_with("_cue") or kind in ["combat_ability", "camera_cue", "combat_event", "attack_tax_effect"]):
+			data.shown = _display_stamp()
+		# A life drain heals when its DrainLife effect reaches the hero.
+		if data.get("kind") == "heal" and _drain_started: data.drain = true
+		_drain_started = (data.get("kind") == "combat_ability" and data.get("key") == "Lifetap") or data.get("kind") == "bat_drain_cue" \
+			or (_drain_started and not data.get("kind") in ["heal", "strike", "phase", "cast", "artifact", "ability"])
 	# An ability may be shown after the rules have already removed its user
 	# (a creature that dies of its own ability while an earlier action, such as
 	# its summon, is still on screen): note who used it as it happens.
@@ -2078,36 +2195,117 @@ func _cast_seconds(data: Dictionary) -> float:
 	var cue := ELCombatEffects.summon_delay(profile, card) if duel.is_summon(card) else (_cast_release(side, card) if data.kind == "cast" else 0.0) + ELCombatEffects.hit_delay(profile, card)
 	return clampf(maxf(seconds, cue + 0.3), 0.8, 6.0)
 
-## Keeps the shown values equal to the rules' while nothing waits.
+## The rules' values now, as a display stamp. `advance` hands out a new serial
+## (a rules event); without it the stamp keeps the last one (a resync).
+func _display_stamp(advance := true) -> Dictionary:
+	if advance: _stamp_serial += 1
+	var heroes: Array = []
+	for hero: Dictionary in duel.heroes:
+		heroes.append([int(hero.get("health", 0)), int(hero.get("mana", 0)), int(hero.get("channels", 0))])
+	var creatures := {}
+	for id: int in duel.creatures:
+		var c: Dictionary = duel.creatures[id]
+		creatures[id] = {"power": int(c.power), "toughness": int(c.toughness), "damage": int(c.damage),
+			"plane": bool(c.get("plane", false)), "granted": c.get("granted", []).duplicate()}
+	return {"serial": _stamp_serial, "heroes": heroes, "creatures": creatures}
+
+## Keeps the shown values equal to the rules' while nothing waits, and jumps
+## to them when the presentation is skipped.
 func _sync_shown() -> void:
 	if duel == null: return
-	_hero_shown = [int(duel.heroes[0].health), int(duel.heroes[1].health)]
-	_wound_shown.clear()
-	for id: int in duel.creatures: _wound_shown[id] = int(duel.creatures[id].damage)
+	_display_queue.clear()
+	_display_waits.clear()
+	_shown = _display_stamp(false)
+
+## Whether the screen shows the displayed state rather than the rules'.
+func _display_active() -> bool:
+	return not _shown.is_empty() and _shown_held()
 
 ## Hero health as the screen shows it: it drops with each blow and spell as
 ## they land, not when the rules settle the whole fight.
 func shown_health(side: int) -> int:
-	if _shown_held() and _hero_shown[side] >= 0: return _hero_shown[side]
+	if _display_active(): return int(_shown.heroes[side][0])
 	return int(duel.heroes[side].health)
+
+## A hero's ether as the screen shows it (see shown_health).
+func shown_ether(side: int) -> int:
+	if _display_active(): return int(_shown.heroes[side][1])
+	return int(duel.heroes[side].mana)
+
+## A hero's ether channels as the screen shows them (see shown_health).
+func shown_channels(side: int) -> int:
+	if _display_active(): return int(_shown.heroes[side][2])
+	return int(duel.heroes[side].channels)
 
 ## A creature's damage as the screen shows it (see shown_health).
 func shown_damage(id: int) -> int:
-	if _shown_held() and _wound_shown.has(id): return int(_wound_shown[id])
+	if _display_active() and _shown.creatures.has(id): return int(_shown.creatures[id].damage)
 	return int(duel.creatures[id].damage) if duel.creatures.has(id) else 0
 
-## Notes what a shown event changes in the shown values. Damage counts when
-## its hit is shown (_show_hit); a later change to a figure whose hit still
-## waits counts after that hit.
+## Whether a creature shows in pale aspect (the Colourless Plane): it fades
+## when the event that sends it there is shown, not when the rules settle it.
+func shown_plane(id: int) -> bool:
+	if _display_active() and _shown.creatures.has(id): return bool(_shown.creatures[id].plane)
+	if duel.creatures.has(id): return duel.in_plane(id)
+	return bool(_last_creature.get(id, {}).get("plane", false))
+
+## Notes that a presented event's values are on screen. Damage and deaths
+## count when their hit is shown (_show_hit, `landed`); any other change waits
+## for the cue of the cast, ability or drain effect that makes it. A stamp
+## never shows ahead of an earlier one still waiting (_flush_display).
 func _note_shown(data: Dictionary, landed := false) -> void:
-	var target := int(data.get("target", -1))
+	var stamp: Dictionary = data.get("shown", {})
+	if stamp.is_empty(): return
 	if not landed and data.get("kind") in ["damage", "death"]: return
-	if not landed and _hits_waiting.has(target) and data.has("shown_health"):
-		if not _notes_after_hit.has(target): _notes_after_hit[target] = []
-		_notes_after_hit[target].append(data)
-		return
-	if data.has("shown_health") and target in [0, 1]: _hero_shown[target] = int(data.shown_health)
-	elif data.get("kind") == "damage" and target >= 2: _wound_shown[target] = int(_wound_shown.get(target, 0)) + int(data.get("amount", 0))
+	if not landed:
+		var delay := _display_delay(data)
+		if delay > 0.0 and is_inside_tree() and not _skipping_presentation:
+			_wait_display(int(stamp.serial))
+			_schedule_battle_cue(delay, _release_display.bind(stamp))
+			return
+	_display_queue.append(stamp)
+	_flush_display()
+
+## Seconds until a presented non-damage change shows: the cue of the cast or
+## ability effect that makes it, or a life drain's arrival at its hero.
+func _display_delay(data: Dictionary) -> float:
+	if data.get("kind") in ["cast", "artifact", "ability", "summon", "strike", "phase", "combat_event", "camera_cue"]: return 0.0
+	var delay := _hit_delay(data)
+	if bool(data.get("drain", false)): delay = maxf(delay, _drain_seconds())
+	return delay
+
+## Seconds the DrainLife effect takes to reach the healed hero: its hit cue,
+## else its length (at most 2 s).
+func _drain_seconds() -> float:
+	var cue := ELCombatEffects.effect_hit_delay(profile, "DrainLife")
+	if cue > 0.0: return cue
+	return minf(float(ELCombatEffects.fx_frames(profile, "DrainLife")) / ELParticleFile.FPS, 2.0)
+
+func _wait_display(serial: int) -> void:
+	_display_waits[serial] = int(_display_waits.get(serial, 0)) + 1
+
+func _unwait_display(serial: int) -> void:
+	if not _display_waits.has(serial): return
+	_display_waits[serial] = int(_display_waits[serial]) - 1
+	if int(_display_waits[serial]) <= 0: _display_waits.erase(serial)
+
+## A waiting change's cue has come.
+func _release_display(stamp: Dictionary) -> void:
+	_unwait_display(int(stamp.serial))
+	_display_queue.append(stamp)
+	_flush_display()
+
+## Shows the newest presented stamp that no earlier waiting hit or cue holds back.
+func _flush_display() -> void:
+	var bar := -1
+	for serial: int in _display_waits: bar = serial if bar < 0 else mini(bar, serial)
+	var best := {}
+	var kept: Array[Dictionary] = []
+	for stamp: Dictionary in _display_queue:
+		if bar >= 0 and int(stamp.serial) > bar: kept.append(stamp)
+		elif best.is_empty() or int(stamp.serial) > int(best.serial): best = stamp
+	_display_queue = kept
+	if not best.is_empty() and (_shown.is_empty() or int(best.serial) > int(_shown.serial)): _shown = best
 
 func _event(data: Dictionary) -> void:
 	if _hold_cast(data): return
@@ -2190,6 +2388,9 @@ func _event(data: Dictionary) -> void:
 				models[c.id].visible = false
 				models[c.id].set_meta("arriving", true)
 				labels[c.id].hide()
+			elif models.has(c.id) and String(_script_summon.get("card", "")) == String(c.card) and int(_script_summon.side) == int(c.owner):
+				_script_summon = {}
+				_script_arrival(int(c.id), 0.0)
 			elif profile.id in ["el1", "el2"] and models.has(c.id):
 				_enter(c.id)
 			_log("%s summons %s." % [_side_name(c.owner), duel.card_name(c.card)])
@@ -2575,6 +2776,7 @@ func _event(data: Dictionary) -> void:
 		"script_cast":
 			# Battle scripts cast silently and for free; name the spell so the effect reads.
 			_float_text(data.side, duel.card_name(data.card), Color("c9a6ff"), true)
+			_script_summon = {"card": String(data.card), "side": int(data.side)} if duel.is_summon(String(data.card)) else {}
 			_log("A battlefield power casts %s for %s." % [duel.card_name(data.card), _side_name(data.side)])
 		"script_card":
 			_log("A battlefield power gives %s to %s." % [duel.card_name(data.card), _side_name(data.side)])
@@ -2702,7 +2904,19 @@ func _event(data: Dictionary) -> void:
 			# A hero's ability comes from an enchantment on it (T_USE_ENCHANTMENT);
 			# a creature's is its own (T_USE_ABILITY).
 			var source := int(data.get("source", data.side))
-			if source < 2: _announce("T_USE_ENCHANTMENT", [_hero_name(source), String(data.get("name", String(data.ability).capitalize()))], int(data.side))
+			var told := ""
+			if source < 2: told = _format_text("T_USE_ENCHANTMENT", [_hero_name(source), String(data.get("name", String(data.ability).capitalize()))])
+			else: told = _format_text("T_USE_ABILITY", [duel.card_name(String(data.get("user_card", duel.entity(source).get("card", ""))))])
+			# First game with cast icons: an ability shows as its icon in the
+			# cast list, either side's (player report #124).
+			if profile.id == "el1" and bool(settings.values.get("cast_icons", true)) and is_instance_valid(notices) and not String(data.ability).begins_with("artifact:"):
+				_log(told)
+				var card := _ability_card_of(source, String(data.ability))
+				# A creature gone with its ability (a sacrifice) still names its card.
+				if card.is_empty() and source >= 2: card = String(data.get("user_card", ""))
+				var texture := _ability_icon(card)
+				if texture != null: notices.add_icon(texture, card)
+			elif source < 2: _announce("T_USE_ENCHANTMENT", [_hero_name(source), String(data.get("name", String(data.ability).capitalize()))], int(data.side))
 			else: _announce("T_USE_ABILITY", [duel.card_name(String(data.get("user_card", duel.entity(source).get("card", ""))))], int(data.side))
 			# Both originals' hero ability command (both games)
 			# queues the hero's PlayAnimation 7, its instant gesture, ahead of
@@ -2795,6 +3009,7 @@ func _show_ending(data: Dictionary) -> void:
 		# creature death, so _show_hit does not start this figure sound.
 		if profile.id in ["el1", "el2"]: battle_audio.unit(models[1 - int(data.side)], "death")
 		models[1 - data.side].play("udeath")
+		_hero_death_effect(1 - int(data.side))
 		# The winner's clip, camera and fanfare follow once the death
 		# clip ends (_step_ending).
 		_begin_ending(int(data.side))
@@ -2808,11 +3023,26 @@ func _show_ending(data: Dictionary) -> void:
 		# a mutual lethal result does not emit creature death events.
 		if profile.id in ["el1", "el2"]: battle_audio.unit(models[side], "death")
 		models[side].play("udeath")
+		_hero_death_effect(side)
 	_begin_ending(-1)
 	selection = -1
 	selection_power = 0
 	_hint("Both heroes have fallen. The duel is a draw.")
 	_log("The duel ends in a draw.")
+
+## Second game: a fallen hero goes up in the burst of its own colour's
+## death effect (RedDeath, BlackDeath, BlueDeath, GreenDeath of Effects.xml,
+## with its sound), over its death clip (player report #140).
+func hero_death_effect_name(side: int) -> String:
+	if profile == null or profile.id != "el2" or duel == null or side < 0 or side > 1: return ""
+	var name := "%sDeath" % String(duel.heroes[side].get("faction", "")).capitalize()
+	return name if is_instance_valid(effects) and not effects.definition(name).is_empty() else ""
+
+func _hero_death_effect(side: int) -> void:
+	var name := hero_death_effect_name(side)
+	if name.is_empty() or not models.has(side): return
+	battle_audio.effect(name, models[side])
+	_figure_effect(name, side)
 
 ## The original phase notices (EL1, EL2): the local side's
 ## attack shows the attack banner and announces the turn number; its defence
@@ -2845,12 +3075,14 @@ func _local_side(side: int) -> bool:
 ## A hero's cast: T_CASTING in the log; the first game also lists it on screen,
 ## the second shows the opponent's spell icon at the top left. The remake's
 ## "cast_icons" setting gives the first game the second game's way: an icon
-## for each of the opponent's casts and no cast lines on screen, the player's
-## own included (they stood under the icons as text beside them).
+## for each cast, the player's own included, and for each ability used, with
+## no cast lines on screen (player report #124).
 func _cast_notice(side: int, card: String) -> void:
 	if profile.id == "el2" or (profile.id == "el1" and bool(settings.values.get("cast_icons", true))):
 		_log(_format_text("T_CASTING", [_hero_name(side), duel.card_name(card)]))
-		if not _local_side(side) and is_instance_valid(notices): notices.add_icon(profile.card_icon(card), card)
+		# The first game's list shows the player's own casts as well (#124);
+		# the second game, as in the original, only the opponent's.
+		if (profile.id == "el1" or not _local_side(side)) and is_instance_valid(notices): notices.add_icon(profile.card_icon(card), card)
 		return
 	_announce("T_CASTING", [_hero_name(side), duel.card_name(card)], side)
 
@@ -2959,6 +3191,23 @@ func _pend_cast_effects(data: Dictionary, artifact: bool) -> void:
 ## A damaged or dying figure's reaction during a cast whose effect marks a cue
 ## frame waits for that frame. False when it shows at once.
 func _hit_later(data: Dictionary) -> bool:
+	var delay := _hit_delay(data)
+	var id := int(data.get("target", -1))
+	# A creature that falls to its own ability (Fingus spores, Final Courtesy)
+	# finishes the action the original queues before its death.
+	if data.kind == "death" and models.has(id) and models[id].clip == "uinstant" and models[id].playing:
+		var actor: ELModel = models[id]
+		delay = maxf(delay, (actor.clip_frames() - actor.frame) / (actor.fps * actor.speed))
+	if delay <= 0.0 or not models.has(id) or not is_inside_tree(): return false
+	_hits_waiting[id] = int(_hits_waiting.get(id, 0)) + 1
+	if data.has("shown"): _wait_display(int(data.shown.serial))
+	_schedule_battle_cue(delay, _late_hit.bind(data))
+	return true
+
+## Seconds from now until the effect that reaches `data`'s target hits it:
+## the pending cast's cue, or the ability, feedback, redirect or trigger
+## effect aimed at that figure.
+func _hit_delay(data: Dictionary) -> float:
 	var delay := float(_effect_cast.get("hit", 0.0))
 	var id := int(data.get("target", -1))
 	# EL2 RodofColossus@- applies nine damage to its
@@ -2976,15 +3225,7 @@ func _hit_later(data: Dictionary) -> bool:
 		delay = float(_redirect_hit.get("hit", 0.0))
 	if int(_trigger_hit.get("target", -1)) == id:
 		delay = float(_trigger_hit.get("hit", 0.0))
-	# A creature that falls to its own ability (Fingus spores, Final Courtesy)
-	# finishes the action the original queues before its death.
-	if data.kind == "death" and models.has(id) and models[id].clip == "uinstant" and models[id].playing:
-		var actor: ELModel = models[id]
-		delay = maxf(delay, (actor.clip_frames() - actor.frame) / (actor.fps * actor.speed))
-	if delay <= 0.0 or not models.has(id) or not is_inside_tree(): return false
-	_hits_waiting[id] = int(_hits_waiting.get(id, 0)) + 1
-	_schedule_battle_cue(delay, _late_hit.bind(data))
-	return true
+	return delay
 
 func _schedule_battle_cue(delay: float, action: Callable) -> void:
 	_next_battle_cue += 1
@@ -3019,10 +3260,9 @@ func _late_hit(data: Dictionary) -> void:
 	var id := int(data.target)
 	_hits_waiting[id] = int(_hits_waiting.get(id, 0)) - 1
 	if int(_hits_waiting[id]) <= 0: _hits_waiting.erase(id)
+	if data.has("shown"): _unwait_display(int(data.shown.serial))
 	_show_hit(data)
 	if _hits_waiting.has(id): return
-	for later: Dictionary in _notes_after_hit.get(id, []): _note_shown(later, true)
-	_notes_after_hit.erase(id)
 	_show_waiting_ending()
 
 ## The duel's result shows once no loser's hit waits any longer: the loser
@@ -4407,7 +4647,7 @@ func creature_icons(id: int) -> Array:
 		owned.has("Trample"), owned.has("Restless"), owned.has("Lifetap"), duel.regeneration_cost(id) > 0,
 		owned.any(func(flag: Variant) -> bool: return String(flag).begins_with("Discard(")), owned.has("Disenchant"), owned.has("Destroy"),
 		duel.cannot_rise(id), owned.has("UB"), owned.has("NSS"), owned.has("Berserk"), owned.has("TeamAttack"), owned.has("Elusive")]
-	if profile.id == "el2": marks.append_array([duel.pale(id), duel.in_plane(id), duel.race(id) == "OutSpellJammer"])
+	if profile.id == "el2": marks.append_array([duel.pale(id), shown_plane(id), duel.race(id) == "OutSpellJammer"])
 	var result: Array = []
 	for bit in marks.size():
 		if marks[bit]: result.append(ELCombatSymbols.ICON_CODES[bit])
@@ -4540,6 +4780,8 @@ func _rail_leave(card: Dictionary) -> void:
 func _refresh() -> void:
 	if duel == null or updating:
 		return
+	# A selected creature that left play is no longer selected.
+	if selected_creature >= 2 and not duel.creatures.has(selected_creature): selected_creature = -1
 	_check_handover()
 	_step_front_line()
 	updating = true
@@ -4578,6 +4820,8 @@ func _refresh() -> void:
 	var old_min := INF
 	for id: String in _rail_seen: old_min = minf(old_min, float(id.get_slice(":", 0)))
 	var place := 0
+	# Combat tutorial: the spell the script awaits blinks in the hand.
+	var blink_index := combat_tutorial.awaited_hand_index() if combat_tutorial != null and duel == combat_tutorial.duel and hand_side == 0 and not concealed else -1
 	for i: int in order:
 		var card: String = hero.hand[i]
 		var uses := ELDuel.hand_copy_uses(hero, i)
@@ -4615,6 +4859,7 @@ func _refresh() -> void:
 		button.disabled = peek or not _human_turn() or not duel.can_cast_from_hand(i)
 		_list_look().dress(button)
 		if not peek and i == selection: _selection_outline(button)
+		if not peek and i == blink_index: _tutorial_blink(button)
 		# Remake readout: the cost, only with the helper overlay.
 		if helper_overlay():
 			var mana := _label(price.replace(" ", ""), 13, ACCENT)
@@ -4672,7 +4917,8 @@ func _refresh() -> void:
 			var h: Dictionary = duel.heroes[side]
 			var shown: Dictionary = melee.shown_hand(side) if is_instance_valid(melee) else h
 			tallies.append([h.grave.size(), h.enchantments.size(), shown.hand.size(), h.get("artifacts", []).size()])
-		rail.set_counts(tallies[0], tallies[1])
+		var left := _hud_left_side()
+		rail.set_counts(tallies[left], tallies[1 - left])
 	_fill_gap(concealed)
 	_show_hero_stats()
 	for side in 2:
@@ -4685,7 +4931,7 @@ func _refresh() -> void:
 		var tips: Array[String] = []
 		for index: int in ([1, 3, 5] if side == displayed else [2, 4, 6]): tips.append(_control_tip("CombatTt%d" % index))
 		hero_buttons[side].tooltip_text = "\n".join(tips)
-		if helper_overlay(): hero_buttons[side].tooltip_text += "\n%s\n%d / %d health · %d ether · %d channels\n%d cards in hand · %d creatures in the graveyard\nClick this portrait to target the hero." % [_side_name(side), h.health, h.maximum, h.mana, h.channels, h.hand.size(), h.grave.size()]
+		if helper_overlay(): hero_buttons[side].tooltip_text += "\n%s\n%d / %d health · %d ether · %d channels\n%d cards in hand · %d creatures in the graveyard\nClick this portrait to target the hero." % [_side_name(side), shown_health(side), h.maximum, shown_ether(side), shown_channels(side), h.hand.size(), h.grave.size()]
 	# The battle title line is a remake readout (helper overlay only).
 	status.text = "%s · %s vs %s" % [profile.title, ELCatalog.faction_name(duel.heroes[0].faction), ELCatalog.faction_name(duel.heroes[1].faction)] if helper_overlay() else ""
 	phase_label.text = phase_caption()
@@ -4727,10 +4973,12 @@ func _show_hero_stats() -> void:
 	var stats: Array = []
 	for side in 2:
 		var h: Dictionary = duel.heroes[side]
-		stats.append([shown_health(side), int(h.mana), int(h.channels)])
+		stats.append([shown_health(side), shown_ether(side), shown_channels(side)])
 		var text := "%d   %d   %d" % stats[side]
 		if hero_values[side].text != text: hero_values[side].text = text
-	if rail != null: rail.set_stats(stats[0], stats[1])
+	var left := _hud_left_side()
+	if left != _placed_left: _place_hero_boxes()
+	if rail != null: rail.set_stats(stats[left], stats[1 - left])
 
 ## The panel buttons' availability (their shutters close when unavailable).
 ## Attack with all is open only while one of the side's creatures can still
@@ -4738,7 +4986,10 @@ func _show_hero_stats() -> void:
 func _refresh_buttons() -> void:
 	if duel == null or attack_button == null: return
 	end_button.disabled = not (_human_turn() or (network_duel != null and network_duel.live and duel.phase == ELDuel.Phase.FINISHED and ending_over() and not _overlay_open()))
-	var available := duel.phase == ELDuel.Phase.ATTACK and duel.army(duel.active_side()).any(func(c: Dictionary) -> bool: return duel.can_declare_attack(c.id))
+	# The second game's Attack all passes over creatures with no power, so
+	# those alone leave it shut (player report #128).
+	var powerless_skipped: bool = profile.id == "el2"
+	var available := duel.phase == ELDuel.Phase.ATTACK and duel.army(duel.active_side()).any(func(c: Dictionary) -> bool: return duel.can_declare_attack(c.id) and not (powerless_skipped and int(c.power) <= 0))
 	attack_button.disabled = not _human_turn() or not available
 	# Keep the original shutter where available. Without its art, hide the
 	# inactive control rather than leaving the swords exposed.
@@ -4806,6 +5057,33 @@ func _selection_outline(button: Control) -> void:
 	outline.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	button.add_child(outline)
 	outline.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+
+## Combat tutorial: the awaited spell's hand card blinks, lit in one half of
+## each 500 ms period (the period of the second game's blinking elements).
+const TUTORIAL_BLINK_PERIOD := 0.5
+
+func _tutorial_blink(button: Control) -> void:
+	var blink := Control.new()
+	blink.name = "TutorialBlink"
+	blink.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	# The phase follows the clock, so a rebuilt hand keeps the same rhythm.
+	blink.draw.connect(func():
+		if tutorial_blink_lit(): _draw_blink_cell(blink, Rect2(Vector2.ZERO, blink.size)))
+	# A timer (the button may join the hand only after this) redraws it.
+	var clock := Timer.new()
+	clock.wait_time = TUTORIAL_BLINK_PERIOD * 0.1
+	clock.autostart = true
+	clock.timeout.connect(blink.queue_redraw)
+	blink.add_child(clock)
+	button.add_child(blink)
+	blink.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+
+static func tutorial_blink_lit() -> bool:
+	return Time.get_ticks_msec() % int(TUTORIAL_BLINK_PERIOD * 1000.0) < int(TUTORIAL_BLINK_PERIOD * 500.0)
+
+func _draw_blink_cell(target: CanvasItem, area: Rect2) -> void:
+	target.draw_rect(area, Color(1.0, 0.95, 0.7, 0.3))
+	target.draw_rect(area.grow(-1.0), Color8(0xf2, 0xc9, 0x4c), false, 2.0)
 
 ## The frame tile in every card-rail slot past the last card or artifact
 ## (the original hand slots show their Type1 HERO_PANEL_3 layer when empty).
@@ -4968,8 +5246,8 @@ func _hero_tip(side: int, control: Control = null) -> Dictionary:
 	var own := side == _displayed_side()
 	var role := ("CtrlDUMyHero" if own else "CtrlDUEnemyHero") if profile.id == "el1" else ("CtrlDuMyHero" if own else "CtrlDuEnemyHero")
 	var title := _original_text(role, _side_name(side)) if control != null else _side_name(side)
-	var health := "%s: %d" % [_original_text("CtrlTTCombatTt1" if profile.id == "el2" else "CtrlTtCombatTt1", "Health"), int(hero.health)]
-	# A first-game map battle names the hero's own level, not the one
+	var health := "%s: %d" % [_original_text("CtrlTTCombatTt1" if profile.id == "el2" else "CtrlTtCombatTt1", "Health"), shown_health(side)]
+	# A map battle names the hero's own level, not the one
 	# difficulty gave it for the battle (player report #110).
 	var level := "%s: %d" % [_original_text("T_LEVEL", "Level"), int(hero.get("map_level", hero.get("level", 1)))]
 	# First game: the name over the portrait, then Level and Health on lines
@@ -4978,11 +5256,16 @@ func _hero_tip(side: int, control: Control = null) -> Dictionary:
 	if profile.id == "el1":
 		var first_lines: Array = [level, health]
 		if control != null and helper_overlay(): first_lines.append_array(control.atr(control.tooltip_text).split("\n"))
+		first_lines.append_array(_enchantment_lines(hero))
 		return ELCombatTooltip.hero_content(profile.id, portraits[side].texture, title, first_lines)
 	var lines: Array = [" · ".join([health, level])]
 	if control != null and helper_overlay(): lines.append_array(control.atr(control.tooltip_text).split("\n"))
+	# The opposing hero's skills stay hidden while a player sits at the
+	# screen, as in the original (player report #136): only a match watched
+	# without a player lists both sides'.
 	var skills := PackedStringArray()
-	for code: String in hero.get("skills", {}):
+	var shown: Dictionary = hero.get("skills", {}) if own or demo or replay_player != null else {}
+	for code: String in shown:
 		var rank := int(hero.skills[code])
 		var skill := ELHeroSkills.definition(profile, code, rank)
 		var name := _original_text(str(skill.get("Name", "")), "")
@@ -4994,6 +5277,7 @@ func _hero_tip(side: int, control: Control = null) -> Dictionary:
 		if not name.is_empty(): lines.append(name)
 		var description := _spec_text(code, "Desc", "")
 		if not description.is_empty(): lines.append(description)
+	lines.append_array(_enchantment_lines(hero))
 	return ELCombatTooltip.hero_content(profile.id, portraits[side].texture, title, lines)
 
 ## The tooltip of a state or ability icon over a figure, both games: the
@@ -5025,21 +5309,40 @@ func _figure_tip(at: Vector2) -> Dictionary:
 	var content: Dictionary
 	if id < 2:
 		content = _hero_tip(id)
-	else:
-		var creature := duel.entity(id)
-		var card := str(creature.card)
-		var stats := _shown_creature_stats(id, creature)
-		var label := "%s %d/%d" % [duel.card_name(card), int(stats.power), maxi(0, int(stats.toughness) - shown_damage(id))]
-		# The second game titles a figure like its hand card: "Создание:"
-		# and the name, then the printed cost line (player report #100).
-		if profile.id == "el2":
-			var kind := _original_text("T_SPELL_TYPE", "Creature")
-			label = "%s: %s\n%s" % [kind, label, ELCombatTooltip.cost_line(profile, int(profile.table("CombatSpells").get(card, {}).get("Cost", 0)))]
-		var description := profile.card_description(card)
-		if not description.is_empty() and description != card: label += "\n" + description
-		content = ELCombatTooltip.text_content(label)
+	else: content = ELCombatTooltip.text_content(_creature_tip_text(id))
 	content.figure_id = id
 	return content
+
+## A creature figure's tooltip text: name and stats, cost line, description.
+func _creature_tip_text(id: int) -> String:
+	var creature := duel.entity(id)
+	var card := str(creature.card)
+	var stats := _shown_creature_stats(id, creature)
+	var label := "%s %d/%d" % [duel.card_name(card), int(stats.power), maxi(0, int(stats.toughness) - shown_damage(id))]
+	# The second game titles a figure like its hand card: "Создание:"
+	# and the name, then the printed cost line (player report #100); the
+	# first game adds the cost line under its name (#121).
+	var printed := ELCombatTooltip.cost_line(profile, int(profile.table("CombatSpells").get(card, {}).get("Cost", 0)))
+	if profile.id == "el2":
+		var kind := _original_text("T_SPELL_TYPE", "Creature")
+		label = "%s: %s\n%s" % [kind, label, printed]
+	else: label += "\n" + printed
+	var description := profile.card_description(card)
+	if not description.is_empty() and description != card: label += "\n" + description
+	var worn := _enchantment_lines(creature)
+	if not worn.is_empty(): label += "\n\n" + "\n".join(worn)
+	return label
+
+## A remake addition to a figure's tooltip: each enchantment on it, by name
+## with its card text, so spells cast on a creature or hero can be read
+## without selecting it.
+func _enchantment_lines(entity: Dictionary) -> PackedStringArray:
+	var lines := PackedStringArray()
+	for enchantment: Dictionary in entity.get("enchantments", []):
+		var card := String(enchantment.card)
+		var about := profile.card_description(card)
+		lines.append(duel.card_name(card) + (": " + about if not about.is_empty() and about != card else ""))
+	return lines
 
 ## An original control's tooltip text from the Controls table, else "".
 func _control_tip(control: String) -> String:
@@ -5074,9 +5377,14 @@ func _spec_text(code: String, field: String, fallback: String) -> String:
 		value = _original_text(str(specs.get("DRSK", {}).get(field, "")), "")
 	return fallback if value.is_empty() else value
 
+## The battle log (L) keeps the whole battle, up to LOG_LINES lines, and
+## scrolls with the wheel or its bar; it follows the newest line unless the
+## player has scrolled up to read.
+const LOG_LINES := 500
+
 func _log(text: String) -> void:
 	logs.append(text)
-	if logs.size() > 6:
+	if logs.size() > LOG_LINES:
 		logs.pop_front()
 	log_text.text = "\n".join(logs)
 
@@ -5129,6 +5437,8 @@ func _build_ui() -> void:
 	# Its tooltips are drawn by the battle overlay, like the panel's.
 	notices.theme = ELCombatTooltip.hidden_theme()
 	ui.add_child(notices)
+	affect_strip = ELAffectStrip.new()
+	ui.add_child(affect_strip)
 	status = _label("Choose your original game content from Menu.", 14, Color("e9e4d4"))
 	status.position = Vector2(20, 16)
 	status.add_theme_color_override("font_shadow_color", Color.BLACK)
@@ -5228,7 +5538,15 @@ func _build_ui() -> void:
 	log_text.add_theme_color_override("font_shadow_color", Color.BLACK)
 	log_text.add_theme_constant_override("shadow_offset_x", 1)
 	log_text.add_theme_constant_override("shadow_offset_y", 1)
-	log_text.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	# Scrollable (wheel and bar); while shown it takes the pointer over its
+	# own corner only.
+	log_text.scroll_active = true
+	log_text.scroll_following = true
+	log_text.mouse_filter = Control.MOUSE_FILTER_STOP
+	var shade := StyleBoxFlat.new()
+	shade.bg_color = Color(0, 0, 0, 0.35)
+	shade.set_content_margin_all(4)
+	log_text.add_theme_stylebox_override("normal", shade)
 	log_text.visible = false
 	hud_root = Control.new()
 	hud_root.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -5289,6 +5607,12 @@ func _build_ui() -> void:
 	var phase_font := SystemFont.new()
 	phase_font.font_names = PackedStringArray(["Arial", "Liberation Sans", "Arimo", "DejaVu Sans"])
 	phase_font.font_weight = 700
+	# A distance field, drawn smooth: sharp at every battle interface size
+	# (the panel is enlarged in whole pixels).
+	phase_font.multichannel_signed_distance_field = true
+	phase_font.msdf_pixel_range = 16
+	phase_font.msdf_size = 48
+	phase_label.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR
 	phase_label.add_theme_font_override("font", phase_font)
 	phase_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	phase_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -5991,11 +6315,8 @@ func _interface_page(page: VBoxContainer) -> void:
 	free_toggle.button_pressed = bool(settings.values.get("free_movement", true))
 	free_toggle.toggled.connect(func(enabled: bool):
 		settings.values.free_movement = enabled)
-	var smart_toggle := CheckButton.new()
-	smart_toggle.name = "SmartAi"
-	smart_toggle.button_pressed = bool(settings.values.get("smart_ai", true))
-	smart_toggle.toggled.connect(func(enabled: bool): settings.values.smart_ai = enabled)
-	_settings_row(gameplay, "Smarter computer players", "In battle, in both games, the computer judges positions steadily, looks at more replies and reads the fighting of the coming turns before it attacks or blocks. First game, single player: computer heroes also pick skills as they level up, buy spells and runes at shops, and the computer players cast global spells. Off: the original computer players.", smart_toggle)
+	_settings_row(gameplay, "Duel AI", "How strong the computer opponent is in battle, in both games. Easy: the original opponent thinking less. Original: as in the original games. Smarter: judges positions steadily, looks at more replies and reads the fighting of the coming turns before it attacks or blocks. Puzzles are always defended by the smarter opponent.", ELAIChoice.picker(settings, "duel_ai", profile))
+	_settings_row(gameplay, "World AI", "First game, single player: how the computer players act on the map. Original: as in the original game. Smarter: computer heroes also pick skills as they level up, buy spells and runes at shops, and computer players cast global spells. Living world: smarter, and idle computer heroes patrol their lands, raid weakly held sites, escort a weaker hero to a siege and go back for runes; each computer player keeps its own temperament (story heroes and neutral creatures act as before). Takes effect on the next map.", ELAIChoice.picker(settings, "world_ai", profile))
 	var icons_toggle := CheckButton.new()
 	icons_toggle.name = "CastIcons"
 	icons_toggle.button_pressed = bool(settings.values.get("cast_icons", true))
@@ -6032,6 +6353,16 @@ func _battle_interface_row(box: Control) -> void:
 		settings.values.battle_interface = index
 		_layout_hud())
 	_settings_row(box, "Battle interface size", "The size of the battle panel at the bottom of the screen. Smaller sizes keep the original art at its own proportions and show more spell slots across the screen. 1×, 2× and 3× draw each original pixel as a sharp square. Automatic picks the sharpest size close to the panel's usual size on this screen. On touch screens the slots never get too small to tap.", size_pick)
+	var readouts_toggle := CheckButton.new()
+	readouts_toggle.name = "BattleReadouts"
+	readouts_toggle.button_pressed = bool(settings.values.get("battle_readouts", true))
+	readouts_toggle.toggled.connect(func(enabled: bool):
+		settings.values.battle_readouts = enabled
+		for panel in gap_panels:
+			panel.readouts = enabled
+			panel.layout()
+		if duel != null: _refresh())
+	_settings_row(box, "Battle panel readouts", "On a wide screen, the free width of the battle panel beside the spells shows readouts switched with its arrows: the spellbook, the battle adviser with the chances to win, both heroes' graveyards and enchantments, and the battle camera. Off: that width stays an empty strip.", readouts_toggle)
 
 ## A restart asked for from the settings: the Options screen closes with OK
 ## first, so its original pages are kept too.
@@ -6754,7 +7085,7 @@ func _open_setup() -> void:
 		mode_select.select(0)
 		_start(edition, options)
 		_first_tutorial_battle())
-	setup_panel.resume_requested.connect(_load_duel)
+	setup_panel.resume_requested.connect(func(): _load_duel(setup_panel.chosen_edition()))
 	setup_panel.campaign_requested.connect(_open_campaigns)
 	setup_panel.visibility_changed.connect(_refresh)
 	_refresh()
@@ -6769,6 +7100,7 @@ func _open_campaigns() -> void:
 	if campaign_setup != null: campaign_setup.queue_free()
 	campaign_setup = ELCampaignSetup.new()
 	ui.add_child(campaign_setup)
+	campaign_setup.settings = settings
 	campaign_setup.build(profiles, profile.id if profile != null else launch_profile)
 	campaign_setup.set_anchors_and_offsets_preset(Control.PRESET_CENTER)
 	campaign_setup.grow_horizontal = Control.GROW_DIRECTION_BOTH
@@ -6808,6 +7140,7 @@ func _begin_campaign(edition: String, scenario: Dictionary, difficulty: int, res
 		return
 	campaign_view = ELAdventureView.new()
 	campaign_view.strategic_session = online
+	campaign_view.loading_progress = cover.panel.show_progress
 	# First game: the second game's battle dome, borrowed when it is installed.
 	if edition == "el1" and profiles.has("el2") and bool(settings.values.get("first_battle_dome", true)): campaign_view.dome_source = profiles["el2"]
 	add_child(campaign_view)
@@ -6892,6 +7225,17 @@ class LoadingPanel extends Control:
 	const DESIGN := Vector2(1024, 768)
 	var pieces: Array[Dictionary] = []
 	var stage := 1
+
+	## Fills the bar to `fraction` (0..1) of its pieces and shows it at once:
+	## the chapter is built in one long call, so the frame is drawn here.
+	func show_progress(fraction: float) -> void:
+		var last := 1
+		for piece: Dictionary in pieces: last = maxi(last, int(piece.step))
+		var next := clampi(1 + roundi(clampf(fraction, 0.0, 1.0) * (last - 1)), 1, last)
+		if next <= stage: return
+		stage = next
+		queue_redraw()
+		if DisplayServer.get_name() != "headless": RenderingServer.force_draw(false)
 
 	func build(source: ELProfile) -> void:
 		mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -7037,12 +7381,22 @@ func _begin_encounter(_hero: int, _opponent: int) -> void:
 	if strategic_session == null: battle.reseed()
 	_start(battle.profile.id, battle.setup, battle)
 	ui.show()
+	_show_map_affects()
 	_first_tutorial_battle()
 	set_process(true)
 	set_process_unhandled_input(true)
 	if _strategic_battle(): strategic_session.view_opened()
 	_notice("Defeat %s to continue. F5 saves both the battle and campaign." % _side_name(1 - _battle_player_side(battle)) if helper_overlay() else "")
 	if not battle.load_note.is_empty(): _notice(battle.load_note)
+
+## Second game: the map hero's affect icons stay at the top right over its
+## battles, as on the map (ELAffectStrip).
+func _show_map_affects() -> void:
+	if campaign_view == null or campaign_view.state.map.profile.id != "el2":
+		affect_strip.clear()
+		return
+	if affect_strip.profile != campaign_view.state.map.profile: affect_strip.setup(campaign_view.state.map.profile)
+	affect_strip.show_hero(campaign_view.state, campaign_view.state.main_hero)
 
 func _return_from_encounter() -> void:
 	if _campaign_battle() == null or (duel.phase != ELDuel.Phase.FINISHED and campaign_view.state.outcome.is_empty()): return
@@ -7058,6 +7412,7 @@ func _return_from_encounter() -> void:
 		if player is AudioStreamPlayer or player is AudioStreamPlayer3D: player.stream_paused = true
 	battle_audio.paused = true
 	ui.hide()
+	affect_strip.clear()
 	mode_select.disabled = false
 	profile_select.disabled = false
 	set_process(false)
@@ -7075,6 +7430,12 @@ func _surrender_encounter() -> void:
 	if duel.phase != ELDuel.Phase.FINISHED:
 		duel.heroes[_battle_player_side(duel)].health = 0
 		duel._check_winner()
+		# The surrendering hero falls first: the ending (death clip, the
+		# winner's clip) returns to the map when it is over, as after a
+		# battle lost by blows (player report #139).
+		if models.has(_battle_player_side(duel)):
+			_refresh()
+			return
 	_return_from_encounter()
 
 ## `newest` (the front menu's Load) also considers the second game's
@@ -7164,6 +7525,7 @@ func _show_front_menu_layer() -> void:
 	ELCrashReport.where("menu")
 
 func _leave_campaign() -> void:
+	if affect_strip != null: affect_strip.clear()
 	if strategic_session != null and strategic_session.link.live and not strategic_session.link.is_host:
 		if strategic_session._leaving: return
 		campaign_view.paused = true
@@ -7189,7 +7551,7 @@ func _save_duel() -> void:
 		_notice("Network matches cannot be saved here.")
 		return
 	if _expedition_battle != null:
-		_notice("The expedition is saved at room boundaries.")
+		_notice("The expedition saves itself at every room and during battles.")
 		return
 	if network_duel != null:
 		_notice("Network duels cannot be saved.")
@@ -7213,10 +7575,14 @@ func _save_duel() -> void:
 		return
 	var session := {"mode": mode_select.selected, "camera": [camera_yaw, camera_pitch, camera_distance]}
 	if duel_match != null: session.duel_match = duel_match.snapshot()
-	_notice("Duel saved. Press F9 to resume." if duel.save_file("user://duel-save.json", session) else duel.error)
+	# Each edition has its own quick save; an older shared one first goes to
+	# the edition it holds, so it is not overwritten by the other game's duel.
+	ELMatchSave.migrate_quick_save()
+	_notice("Duel saved. Press F9 to resume." if duel.save_file(ELMatchSave.quick_save_path(duel.profile.id), session) else duel.error)
 	_refresh()
 
-func _load_duel() -> void:
+## Loads the quick save of `wanted`, or of the edition being played.
+func _load_duel(wanted := "") -> void:
 	if strategic_session != null:
 		_notice("Leave the network match before loading.")
 		return
@@ -7231,7 +7597,10 @@ func _load_duel() -> void:
 	if _campaign_battle() != null:
 		_resume_campaign(false, ELSaveSlots.quick_load_path(campaign_view.state), campaign_view.state.map.profile.id)
 		return
-	var document: Variant = JSON.parse_string(FileAccess.get_file_as_string("user://duel-save.json")) if FileAccess.file_exists("user://duel-save.json") else null
+	if wanted.is_empty(): wanted = duel.profile.id if duel != null and duel.profile != null else (profile.id if profile != null else launch_profile)
+	ELMatchSave.migrate_quick_save()
+	var path := ELMatchSave.quick_save_path(wanted)
+	var document: Variant = JSON.parse_string(FileAccess.get_file_as_string(path)) if not path.is_empty() and FileAccess.file_exists(path) else null
 	if document is not Dictionary:
 		_notice("No readable duel save was found.")
 		return
@@ -7298,8 +7667,9 @@ func _refresh_inspector() -> void:
 	if selected_creature >= 2:
 		var flags: Array[String] = []
 		for flag: String in entity.flags: flags.append(_t(ELCatalog.flag_name(flag)))
-		var stats := "%d / %d · %s" % [entity.power, entity.toughness - entity.damage, ", ".join(flags)]
-		if duel.in_plane(selected_creature): stats += "\nPale aspect: common magic cannot affect it; it cannot attack or block."
+		var shown := _shown_creature_stats(selected_creature, entity)
+		var stats := "%d / %d · %s" % [int(shown.power), int(shown.toughness) - shown_damage(selected_creature), ", ".join(flags)]
+		if shown_plane(selected_creature): stats += "\nPale aspect: common magic cannot affect it; it cannot attack or block."
 		var line := _label(stats, 13)
 		line.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		line.custom_minimum_size.x = 290
@@ -7395,11 +7765,34 @@ func _removal_allowed(enchantment: Dictionary) -> bool:
 const ENCHANTMENT_ABILITIES := {"ENFL": "wake", "WNPZ": "unparalyze", "IMMB": "awaken"}
 
 ## The ability an enchantment of the selected character grants, or {}.
-func _enchantment_ability(enchantment: Dictionary) -> Dictionary:
-	for ability: Dictionary in duel.abilities(selected_creature):
-		if selected_creature < 2 and int(ability.get("enchantment", -1)) == int(enchantment.id): return ability
-		if selected_creature >= 2 and ability.key == ENCHANTMENT_ABILITIES.get(enchantment.card, ""): return ability
+func _enchantment_ability(enchantment: Dictionary, subject := -2) -> Dictionary:
+	if subject == -2: subject = selected_creature
+	for ability: Dictionary in duel.abilities(subject):
+		if subject < 2 and int(ability.get("enchantment", -1)) == int(enchantment.id): return ability
+		if subject >= 2 and ability.key == ENCHANTMENT_ABILITIES.get(enchantment.card, ""): return ability
 	return {}
+
+## A character's enchantments in strip order (remake convenience, a player's
+## suggestion): those still to act on come first, an ability not yet used
+## this round or an enemy's enchantment to be dispelled; then the rest; the
+## abilities already used this round go to the right end. Within each group
+## the oldest stays first.
+func _strip_enchantments(subject: int) -> Array[Dictionary]:
+	var entity := duel.entity(subject) if subject >= 0 else {}
+	var result: Array[Dictionary] = []
+	if entity.is_empty(): return result
+	var holder := subject if subject < 2 else int(entity.get("owner", -1))
+	var ranked: Array = []
+	for index in entity.enchantments.size():
+		var enchantment: Dictionary = entity.enchantments[index]
+		var ability := _enchantment_ability(enchantment, subject)
+		var used: bool = not ability.is_empty() and bool(ability.get("used", false))
+		var hostile := int(enchantment.get("owner", holder)) != holder
+		var rank := 2 if used else (0 if hostile or not ability.is_empty() else 1)
+		ranked.append([rank, index, enchantment])
+	ranked.sort_custom(func(a: Array, b: Array) -> bool: return a[0] < b[0] or (a[0] == b[0] and a[1] < b[1]))
+	for entry: Array in ranked: result.append(entry[2])
+	return result
 
 ## A selected creature's own abilities, shown on the upper strip after its
 ## enchantments with the card's AbilityIcon; those an enchantment grants are
@@ -7417,13 +7810,30 @@ func _strip_abilities() -> Array[Dictionary]:
 
 ## The CombatSpells row whose ability icon and text stand for `ability`.
 func _ability_card(ability: Dictionary) -> String:
-	var subject := _strip_subject()
+	return _ability_card_of(_strip_subject(), String(ability.key))
+
+## The card whose icon and text stand for ability `key` of character `subject`.
+func _ability_card_of(subject: int, key: String) -> String:
+	var ability := {"key": key}
+	if subject in [0, 1]:
+		# A hero's ability is "<effect>:<enchantment id>": the enchantment's card.
+		var enchantment := int(key.get_slice(":", 1)) if key.contains(":") else -1
+		for e: Dictionary in duel.heroes[subject].enchantments:
+			if int(e.id) == enchantment: return String(e.card)
+		return ""
 	if ability.key == "dissipate": return "AOUP"
 	if ability.key == "courtesy": return "AOLS"
 	if ENCHANTMENT_ABILITIES.values().has(ability.key): return String(ENCHANTMENT_ABILITIES.find_key(ability.key))
+	if not duel.creatures.has(subject): return ""
 	var manifest: Dictionary = ELCatalog.PALE_RACE_ABILITIES.get(duel.race(subject), {})
 	if manifest.get("key", "") == ability.key: return String(manifest.text)
 	return String(duel.creatures[subject].card)
+
+## The icon of an ability: its AbilityIcon, else its card's icon; null for none.
+func _ability_icon(card: String) -> Texture2D:
+	if card.is_empty(): return null
+	var icon := int(profile.table("CombatSpells").get(card, {}).get("AbilityIcon", 0))
+	return profile.icon_at(icon) if icon > 0 else profile.card_icon(card)
 
 ## The upper icon strip: the selected character's enchantments, or the
 ## selected hero's graveyard, oldest first. An entry is offered while the
@@ -7454,9 +7864,18 @@ func _right_button(event: InputEvent) -> void:
 			ability_selection.clear()
 			_hint("Selection cancelled.")
 			_refresh()
+		# With nothing waiting for a target, a right click on the arena clears
+		# the selected creature or hero (player report #142).
+		elif clicked and selected_creature >= 0 and not _overlay_open() and not (power_dialog != null and power_dialog.visible) and not (_hot_seat() and hot_pending):
+			selected_creature = -1
+			inspect_graveyard = false
+			_refresh()
 		_set_strip_preview(_strip_preview_at(event.position) if event.pressed else -1)
 	elif event is InputEventMouseMotion and right_down:
-		if not orbiting and event.position.distance_to(right_from) > 6.0:
+		# With the automatic camera on (its F1-F4 views) the right button does
+		# not turn the camera; with it off the camera is free to turn and the
+		# F1-F4 views still answer (player report #117).
+		if not orbiting and event.position.distance_to(right_from) > 6.0 and not _auto_camera_on():
 			orbiting = true
 			_set_strip_preview(-1)
 		elif not orbiting:
@@ -7503,11 +7922,14 @@ func _fill_strip() -> void:
 			var icon := int(profile.table("CombatSpells").get(card, {}).get("AbilityIcon", 0))
 			list.append({"icon": profile.icon_at(icon) if icon > 0 else profile.card_icon(card), "tooltip": tip,
 				"enabled": not pending and owned and _human_turn() and duel.can_use_ability(subject, ability.key), "meta": {"ability": ability.key, "card": card}})
-		for enchantment: Dictionary in entity.enchantments:
-			var ability := _enchantment_ability(enchantment)
+		for enchantment: Dictionary in _strip_enchantments(subject):
+			var ability := _enchantment_ability(enchantment, subject)
 			var tip := duel.card_name(enchantment.card)
 			if profile.id == "el2" and not ability.is_empty() and int(ability.get("cost", -1)) >= 0 and profile.text("T_ENCHANTMENT_COST_TT").count("%") == 2:
 				tip = profile.text("T_ENCHANTMENT_COST_TT") % [tip, int(ability.cost)]
+			# The card's text too, so a spell on a character can be read.
+			var about := profile.card_description(enchantment.card)
+			if not about.is_empty() and about != enchantment.card: tip += "\n" + about
 			var own: bool = subject == duel.active_side() or (subject >= 2 and int(entity.get("owner", -1)) == duel.active_side())
 			var enabled: bool = _removal_allowed(enchantment) if pending else (not ability.is_empty() and own and _human_turn() and duel.can_use_ability(subject, ability.key))
 			list.append({"icon": profile.card_icon(enchantment.card), "tooltip": tip, "enabled": enabled, "meta": {"enchantment": int(enchantment.id), "card": enchantment.card}})
@@ -7605,12 +8027,12 @@ func _advice_refusal() -> String:
 func _show_advice() -> void:
 	if gap_panel == null or duel == null or profile == null: return
 	var refusal := _advice_refusal()
-	var lines := PackedStringArray([ELRemakeText.t("Your chance to win and the opponent's, in percent,\nas the computer opponent judges what both players can see.", profile)])
+	var lines := PackedStringArray([ELRemakeText.t("An estimate of the position for you and the opponent,\nas the computer opponent judges what both players can see.\nA rough guide, not a measured chance to win.", profile)])
 	var last := advisor.last
 	if refusal.is_empty() and not last.is_empty():
 		lines.append(ELRemakeText.t("Your last move: %s (%s)", profile) % [_advice_words(last.move), ELRemakeText.t(ELCombatGapPanel.GRADE_NAMES[int(last.grade)], profile)])
 		if int(last.grade) != ELCombatAdvisor.Grade.BEST:
-			if roundi(float(last.loss)) > 0: lines.append(ELRemakeText.t("It gave away %d%% of the chance to win against the best move.", profile) % roundi(float(last.loss)))
+			if roundi(float(last.loss)) > 0: lines.append(ELRemakeText.t("It lowered the estimate by %d points against the best move.", profile) % roundi(float(last.loss)))
 			lines.append(ELRemakeText.t("The adviser preferred: %s", profile) % _advice_words(last.best))
 	var own := _displayed_side()
 	var advice := {"available": refusal.is_empty(), "faces": [portraits[own].texture, portraits[1 - own].texture], "names": [_side_name(own), _side_name(1 - own)], "reason": ELRemakeText.t(refusal, profile), "chance": advisor.chance,
@@ -7646,12 +8068,13 @@ func _strip_pressed(index: int) -> void:
 		if subject >= 2 and int(entity.owner) == duel.active_side() and _human_turn() and duel.can_use_ability(subject, chosen.key): _select_ability(subject, chosen)
 		return
 	index -= own.size()
-	if index >= entity.enchantments.size(): return
-	var enchantment: Dictionary = entity.enchantments[index]
+	var ordered := _strip_enchantments(subject)
+	if index >= ordered.size(): return
+	var enchantment: Dictionary = ordered[index]
 	if selection >= 0 or not ability_selection.is_empty():
 		if _removal_allowed(enchantment): _remove_selected_enchantment(subject, int(enchantment.id))
 		return
-	var ability := _enchantment_ability(enchantment)
+	var ability := _enchantment_ability(enchantment, subject)
 	if not ability.is_empty() and _human_turn() and duel.can_use_ability(subject, ability.key): _select_ability(subject, ability)
 
 func _select_ability(source: int, ability: Dictionary) -> void:
@@ -7668,6 +8091,15 @@ func _select_ability(source: int, ability: Dictionary) -> void:
 		ability_selection = {"source": source, "key": ability.key, "target": ability.target, "second": ability.get("second", "")}
 		var wanted := "a creature or hero" if ability.target == "any" else ("a hero's graveyard" if ability.target == "grave" else "a " + str(ability.target))
 		_hint("%s: choose %s. Esc cancels." % [ability.name, wanted])
+		# A graveyard ability opens the graveyard it can use, the own first
+		# (player report #123).
+		if ability.target == "grave":
+			var side := duel.active_side()
+			var opened := side if not duel.grave_ability_targets(source, ability.key, side).is_empty() else (1 - side if not duel.grave_ability_targets(source, ability.key, 1 - side).is_empty() else -1)
+			if opened >= 0:
+				selected_creature = opened
+				inspect_graveyard = true
+				_hint("%s: choose a creature in this graveyard. Esc cancels." % ability.name)
 	_refresh()
 
 func _select_grave_entry(index: int) -> void:
@@ -7721,6 +8153,38 @@ func _remove_selected_enchantment(target: int, enchantment_id: int) -> void:
 	else: _hint(duel.error)
 	_refresh()
 
+## The hero panels' places: the left (displayed) panel holds the hero whose
+## turn the screen shows, the mirrored right one the opponent. In a hot-seat
+## duel they change places with the player at the screen, as the camera does.
+func _place_hero_boxes() -> void:
+	if hud_root == null or portraits.size() < 2: return
+	var w := hud_root.size.x
+	var h := hud_root.size.y
+	var left := _hud_left_side()
+	_placed_left = left
+	for side in 2:
+		var x := 0.0 if side == left else w - 80
+		# The panel's portrait window: 75x56, one pixel further out on the mirrored right panel.
+		portraits[side].position = Vector2(x + (3 if side == left else 2), h - 112)
+		portraits[side].size = Vector2(75, 56)
+		# A portrait not drawn one to one is filtered smoothly at every size.
+		var picture: Texture2D = portraits[side].texture
+		portraits[side].texture_filter = CanvasItem.TEXTURE_FILTER_PARENT_NODE if picture == null or picture.get_size() == Vector2(75, 56) else CanvasItem.TEXTURE_FILTER_LINEAR
+		hero_buttons[side].position = Vector2(x, h - 115)
+		hero_buttons[side].size = Vector2(80, 115)
+		hero_values[side].position = Vector2(x + 1, h - 20)
+		hero_values[side].size = Vector2(77, 20)
+		hero_names[side].position = Vector2(x - 5, h - 137)
+		hero_names[side].size = Vector2(90, 20)
+
+## The side whose hero panel stands on the left now.
+var _placed_left := 0
+
+## The side whose hero fills the panel's left (own) column: the first side,
+## or in a hot-seat duel the player now at the screen.
+func _hud_left_side() -> int:
+	return 1 if _hot_seat() and hot_side == 1 else 0
+
 func _layout_hud() -> void:
 	if hud_root == null:
 		return
@@ -7737,6 +8201,7 @@ func _layout_hud() -> void:
 	hud_root.scale = Vector2.ONE * factor
 	hud_root.texture_filter = ELHudFrame.interface_filter(pixels)
 	if notices != null: notices.ui_scale = factor
+	if affect_strip != null: affect_strip.ui_scale = factor
 	hud_root.size = (screen / pixels).ceil()
 	hud_root.position = Vector2(0.0, (screen.y - hud_root.size.y * pixels) / unit)
 	hud.size = hud_root.size
@@ -7746,22 +8211,9 @@ func _layout_hud() -> void:
 	if power_dialog != null:
 		power_dialog.size = hud_root.size
 		power_dialog.layout()
+	_place_hero_boxes()
 	var w := hud_root.size.x
 	var h := hud_root.size.y
-	for side in 2:
-		var x := 0.0 if side == 0 else w - 80
-		# The panel's portrait window: 75x56, one pixel further out on the mirrored right panel.
-		portraits[side].position = Vector2(x + (3 if side == 0 else 2), h - 112)
-		portraits[side].size = Vector2(75, 56)
-		# A portrait not drawn one to one is filtered smoothly at every size.
-		var picture: Texture2D = portraits[side].texture
-		portraits[side].texture_filter = CanvasItem.TEXTURE_FILTER_PARENT_NODE if picture == null or picture.get_size() == Vector2(75, 56) else CanvasItem.TEXTURE_FILTER_LINEAR
-		hero_buttons[side].position = Vector2(x, h - 115)
-		hero_buttons[side].size = Vector2(80, 115)
-		hero_values[side].position = Vector2(x + 1, h - 20)
-		hero_values[side].size = Vector2(77, 20)
-		hero_names[side].position = Vector2(x - 5, h - 137)
-		hero_names[side].size = Vector2(90, 20)
 	if ELHudFrame.wide_layout(profile, w):
 		# The original's 1024 layout: the oval (488,535)-(729,600) beside the buttons.
 		phase_label.position = Vector2(w - 524, h - 57)
@@ -8622,10 +9074,41 @@ func _show_round_result() -> void:
 	var last := 0 if duel.winner < 0 else (1 if duel.winner == 0 else -1)
 	if duel_match.edition == "el2":
 		front_menu.replay_ui.recording = match_recording
-		front_menu.duel_ui.show_round(duel_match, _match_names(), last, duel_match.finished())
+		# Between rounds the local players may change their decks (in hot seat
+		# each in turn; player report #77).
+		var edit_deck := Callable()
+		if not duel_match.finished() and _local_deck_sides().size() > 0: edit_deck = _open_local_decks.bind(_local_deck_sides())
+		front_menu.duel_ui.show_round(duel_match, _match_names(), last, duel_match.finished(), 0, edit_deck)
 	elif duel_match.finished(): front_menu.duel_ui.show_result(duel_match, _match_names())
 	else: front_menu.duel_ui.show_round(duel_match, _match_names(), last)
 	_show_front_menu_layer()
+
+## The sides of a local match whose players may change their deck between
+## rounds: both in hot seat, else the player's; those with a reserve spell.
+func _local_deck_sides() -> Array[int]:
+	var sides: Array[int] = []
+	if duel_match == null: return sides
+	for side: int in ([0, 1] if duel_match.hot_seat else [0]):
+		if ELLocalRoundDeck.available(duel_match, side): sides.append(side)
+	return sides
+
+var _local_deck: ELNetworkDeck
+
+## Opens the deck change of the first of `sides`; closing it opens the next.
+func _open_local_decks(sides: Array[int]) -> void:
+	if sides.is_empty() or duel_match == null or (_local_deck != null and is_instance_valid(_local_deck)): return
+	var side := sides[0]
+	var name := String(duel_match.names[side]) if duel_match.hot_seat else ""
+	var panel := ELNetworkDeck.new()
+	_local_deck = panel
+	add_child(panel)
+	panel.build(ELLocalRoundDeck.new(profile, duel, duel_match, side, name))
+	panel.popup_centered(panel.min_size)
+	panel.visibility_changed.connect(func():
+		if panel.visible: return
+		panel.queue_free()
+		_local_deck = null
+		if sides.size() > 1: _open_local_decks.call_deferred(sides.slice(1)))
 
 ## Continue after a finished round (end button / Space): the result panel for
 ## a multi-round match, the Duel screen after a single-round duel.

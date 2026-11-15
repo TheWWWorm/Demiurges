@@ -22,9 +22,15 @@ summary: Что дают герою строения, копи, лавки и н
 | Алмазные копи | 6 / 8 / 10 Дымчатых Алмазов | 20 Корней, 20 Лотоса, 20 Алмазов, 5 Замёрзшего Пламени | 40 Алмазов, 15 Рубинов, 15 Сапфиров, 10 Замёрзшего Пламени |
 | Огненный ледник | 2 / 3 / 4 Замёрзшего Пламени | По 25 Рубинов, Изумрудов, Сапфиров и Алмазов | По 50 Рубинов, Изумрудов, Сапфиров и Алмазов |
 
+!objects el1/ResourceMine/RTM@0 = Поляна мандрагоры | el1/ResourceMine/LTM@0 = Поляна лотосов | el1/ResourceMine/RM-Red@0 = Рубиновые копи | el1/ResourceMine/EM-Green@0 = Изумрудные копи | el1/ResourceMine/SM-Blue@0 = Сапфировые копи | el1/ResourceMine/DM-Black@0 = Алмазные копи | el1/ResourceMine/FFM@0 = Огненный ледник
+
 **Источники эфира** (красного, зелёного, синего и чёрного) захватываются так же. Источник даёт владельцу 30 эфира за ход, если он цвета владельца, и 15, если другого цвета. Улучшить их нельзя. Эфир оплачивает содержание героев и глобальные заклинания.
 
+!objects el1/ManaNodes/ManaNode.Red = Источник красного эфира | el1/ManaNodes/ManaNode.Green = Источник зелёного эфира | el1/ManaNodes/ManaNode.Blue = Источник синего эфира | el1/ManaNodes/ManaNode.Black = Источник чёрного эфира
+
 **Кучи ресурсов** одного вида лежат на карте. Герой забирает кучу целиком один раз, и она исчезает. Количество в каждой куче задаёт карта.
+
+!objects el1/ResourceCut/BigRoot = Корень Мандрагоры | el1/ResourceCut/BigLotus = Чёрный Лотос | el1/ResourceCut/BigRuby = Кровавый Рубин | el1/ResourceCut/BigFFlame = Замёрзшее Пламя
 
 ## Лавки («Демиурги»)
 
@@ -42,6 +48,8 @@ summary: Что дают герою строения, копи, лавки и н
 | Гранитный портал | Руны, дешевле всего к редким заклинаниям | 30 Корней, 30 Лотоса, 10 вашего камня, 5 Замёрзшего Пламени | 40 вашего камня, 15 + 15 других камней, 10 Замёрзшего Пламени |
 | Обсидиановый портал | Руны, дешевле всего к тайным заклинаниям | 50 Корней, 50 Лотоса, 15 вашего камня, 10 Замёрзшего Пламени | 50 вашего камня, 25 + 25 других камней, 15 Замёрзшего Пламени |
 
+!objects el1/NewBuildings/CommonLab@0 = Лаборатория алхимика | el1/NewBuildings/RareLab@0 = Магическая лаборатория | el1/NewBuildings/UniqueLab@0 = Эфирная лаборатория | el1/NewBuildings/CommonZoo@0 = Звериная башня | el1/NewBuildings/RareZoo@0 = Великанская башня | el1/NewBuildings/UniqueZoo@0 = Драконья башня | el1/NewBuildings/CommonPortal@0 = Каменный портал | el1/NewBuildings/RarePortal@0 = Гранитный портал | el1/NewBuildings/UniquePortal@0 = Обсидиановый портал
+
 - **Лаборатории и башни** продают только заклинания цвета героя из списка, который карта задаёт лавке. В списке три ступени: неулучшенная лавка продаёт первую, каждое улучшение добавляет следующую. Купленное заклинание занимает место в Книге. Цена — стоимость заклинания; за каждую его копию, уже лежащую в Книге, она растёт: ×2 за вторую копию, затем ×3, ×5, ×10, ×20 и так далее.
 - **Порталы** продают руны к заклинаниям из Книги героя (примитивным заклинаниям руны не нужны). Руна стоит рунную цену заклинания, умноженную на множитель: в Каменном портале ×1 для обычных, ×5 для редких и ×25 для тайных заклинаний; в Гранитном ×2, ×1 и ×5; в Обсидиановом ×4, ×2 и ×1. Улучшенный портал продаёт на 15% дешевле, после второго улучшения — на 40%.
 - Навык **Торговля** снижает обе цены. См. [Герои и уровни](heroes) и [Руны и артефакты](runes-artifacts).
@@ -56,6 +64,8 @@ summary: Что дают герою строения, копи, лавки и н
 | Академия | Герой уходит с карты и каждый день получает 50 опыта, пока ему не прикажут выйти; тогда он возвращается на клетку, с которой вошёл. Одновременно — один герой | Пока герой там |
 | Источник жизни | Здоровье +¼ здоровья героя до конца недели | Раз в неделю для каждого героя |
 | Источник движения | Скорость передвижения и обзор +¼ скорости героя до конца недели | Раз в неделю для каждого героя |
+
+!objects el1/AdditionalBuildings/Teacher = Учитель | el1/AdditionalBuildings/Magister = Магистр | el1/AdditionalBuildings/Master = Наставник | el1/AdditionalBuildings/TrainingCamp = Академия | el1/AdditionalBuildings/SpringOfStrength = Источник жизни | el1/AdditionalBuildings/SpringOfDexterity = Источник движения
 
 Опыт Учителя и Магистра указан без навыка **Обучаемость**, который добавляет к нему 25, 50 или 100%. Выше 20-го уровня опыт не растёт.
 
@@ -79,6 +89,8 @@ summary: Что дают герою строения, копи, лавки и н
 
 **Форт** вмещает одного героя. Вошедший герой захватывает форт и охраняет область в три клетки вокруг: враг, вошедший в неё, останавливается для боя. Владелец может дважды улучшить форт: 25 Рубинов, 25 Алмазов и 10 Замёрзшего Пламени, затем 25 Изумрудов, 40 Сапфиров и 15 Замёрзшего Пламени. Герой в улучшенном форте сражается с полностью заряженным [Жезлом защиты](card-rddf); в полностью улучшенном форте его уровень в бою ещё и на единицу выше. Многие карты ставят форты уже улучшенными.
 
+!objects el1/AdditionalBuildings/ShrineMagic = Алтарь | el1/AdditionalBuildings/HealersCitadel = Орден лекарей | el1/AdditionalBuildings/WanderersCitadel = Орден странников | el1/Buildings/Fortress.0.Red = Форт
+
 ## Гномы и повозки («Демиурги»)
 
 | Объект | Что даёт посещение | Как часто |
@@ -89,6 +101,8 @@ summary: Что дают герою строения, копи, лавки и н
 | Гном-алхимик | По 1 руне к каждому заклинанию из Книги героя (кроме примитивных) | Раз в неделю, первому посетителю любого игрока |
 | Гном-антиквар | Показывает сообщение о перезарядке артефактов, но не меняет ни одного артефакта, как и в оригинальной игре | Раз в неделю, первому посетителю любого игрока |
 
+!objects el1/AdditionalBuildings/TraderWagon = Бродячий торговец | el1/AdditionalBuildings/MageWagon = Бродячий алхимик | el1/AdditionalBuildings/GnomeMerchant = Гном-торговец | el1/AdditionalBuildings/GnomeAlchemist = Гном-алхимик | el1/AdditionalBuildings/GnomeTinkerer = Гном-антиквар
+
 Артефакты героя «Демиургов» и так начинают каждый бой полностью заряженными.
 
 ## Логова и охрана («Демиурги»)
@@ -98,6 +112,8 @@ summary: Что дают герою строения, копи, лавки и н
 | Пещера | Одно создание 2–4 уровня |
 | Лабиринт | Одно создание 5–7 уровня |
 | Склеп | Одно создание 8–10 уровня |
+
+!objects el1/AdditionalBuildings/Dungeon1 = Пещера | el1/AdditionalBuildings/Dungeon2 = Лабиринт | el1/AdditionalBuildings/Dungeon3 = Склеп
 
 Герой, вошедший в логово, сражается с созданием внутри. Каждую неделю в опустевшее логово приходит новое создание, выбранное случайно из всех нейтральных созданий его уровней на выбранной сложности. Нейтральные создания на карте охраняют область в две клетки вокруг: герой, вошедший в неё, останавливается для боя.
 
@@ -110,6 +126,8 @@ summary: Что дают герою строения, копи, лавки и н
 - **Провидец** показывает игроку посетителя местность вокруг каждого своего **Хрустального шара**. Им можно пользоваться снова и снова.
 - **Алтари войны** Дикой Пустоши можно разрушить посещением, каждый один раз; каждый разрушенный ослабляет Конунга Огня на ступень (IV, III, II, I).
 - **Канцелярия** Затерянного города даёт ключ к Храму Времени и приносит победу в главе. В главах **Храма Времени** путь к нему преграждают скалы, пока не разрушен замок соперника, а дошедший до храма герой побеждает.
+
+!objects el1/Artefacts/RodOfFire = Артефакт (жезл) | el1/Artefacts/RingOfHealing = Артефакт (кольцо) | el1/Artefacts/EtherAmulet = Артефакт (амулет) | el1/Artefacts/ScrollOfBless = Артефакт (свиток) | el1/GlobalSpellCut/FullSpell = Глобальное заклинание | el1/GlobalSpellCut/PartSpell = Часть глобального заклинания | el1/AdditionalBuildings/Prison = Клетка | el1/AdditionalBuildings/WardingStone = Ключ-камень | el1/AdditionalBuildings/Runestone1 = Рунная преграда | el1/AdditionalBuildings/Runestone2 = Большая рунная преграда | el1/AdditionalBuildings/Lake = Провидец | el1/AdditionalBuildings/ReflectingBowl = Хрустальный шар | el1/AdditionalBuildings/AltarOfWar = Алтарь войны | el1/AdditionalBuildings/TownBunker = Канцелярия | el1/AdditionalBuildings/WhiteCastle = Храм Времени
 
 ## «Демиурги II»
 
@@ -135,10 +153,16 @@ summary: Что дают герою строения, копи, лавки и н
 | Туннель | Переносит героя к другому входу того же туннеля. Внутри может ждать создание; его нужно победить, и победа очищает все входы этого туннеля |
 | Труп | Его обыскивает главный герой; что в нём лежит, зависит от главы |
 
+!objects el2/ResourceMine/Mine.Root.Green = Сад мандрагоры | el2/ResourceMine/Mine.Ruby.Red = Рубиновые копи | el2/ResourceMine/Mine.FF = Огненный ледник | el2/ResourceCut/Res.Root.3 = Растения | el2/ResourceCut/Res.Ruby.3 = Камни | el2/ResourceCut/Res.FF.3 = Замерзшее пламя | el2/NewBuildings/CommonLab@0 = Лаборатория алхимика | el2/NewBuildings/RareLab@0 = Магическая лаборатория | el2/NewBuildings/UniqueLab@0 = Эфирная лаборатория | el2/NewBuildings/CommonZoo@0 = Звериная башня | el2/NewBuildings/RareZoo@0 = Великанская башня | el2/NewBuildings/UniqueZoo@0 = Драконья башня | el2/Buildings/Fortress.0.Blue = Форт | el2/AdditionalBuildings/BeaconBlue = Маяк
+
+!objects el2/AdditionalBuildings/PowerNodeBlack = Эфирный Источник Синтеза | el2/AdditionalBuildings/PowerNodeBlue = Эфирный Источник Порядка | el2/AdditionalBuildings/PowerNodeGreen = Эфирный Источник Жизни | el2/AdditionalBuildings/PowerNodeRed = Эфирный Источник Хаоса | el2/AdditionalBuildings/Specialization = Святыня Знания | el2/AdditionalBuildings/Prison = Тюрьма | el2/AdditionalBuildings/Sign = Придорожный знак | el2/AdditionalBuildings/StoneSign = Каменный указатель | el2/AdditionalBuildings/Lake = Магический Источник | el2/AdditionalBuildings/ReflectingEye = Магический Глаз | el2/AdditionalBuildings/Runestone1Green = Рунная преграда | el2/AdditionalBuildings/WardingStoneGreen = Ключ-камень | el2/AdditionalBuildings/ArtefactRecharger = Реконструктор Артефактов | el2/AdditionalBuildings/ArtefactRecipe = Рецепт артефакта | el2/AdditionalBuildings/Dock = Пристань | el2/AdditionalBuildings/Teleport = Телепорт | el2/AdditionalBuildings/TeleportReceiver = Приёмная часть телепорта | el2/AdditionalBuildings/TunnelGreen = Туннель
+
 **Строения полей боя** меняют сражения. Они бывают трёх видов:
 
 - **Действуют 10 дней**: действие сопровождает героя 10 дней, а строением потом 10 дней не может воспользоваться никто. Преобразователь Реальности, Генератор Механических Червяков, Храм Леденящего Ветра, Источник Забвения, Рассадник Клещей, Святыня Природы, Логово Волков, Каменная Плита.
 - **Действуют один раз для каждого героя**: действие остаётся с героем. Притягивание, Очистная Станция, Больной Фингус, Хижина Лесника-отшельника, Алтарь Гроз, Крысиное Гнездо, Генератор Молний.
 - **Действуют на расстоянии**, без посещения: влияют на бои каждого героя или создания в 10 клетках от них. Генератор Возмущений, Поток Данных, Гравитационная Аномалия, Эфирный Переполох, Монумент Мира, Священное Место Авиаков, Родовая Гробница, Резонирующие Пещеры, Балансирующие Земли, Защитник Жизни, Токсичные Отходы, Проклятый Источник, Действующий Вулкан, Нестабильные Земли, Болевая Связь.
+
+!objects el2/AdditionalBuildings/E2Black1 = Преобразователь Реальности | el2/AdditionalBuildings/E2Black5 = Генератор Механических Червяков | el2/AdditionalBuildings/E2Blue3 = Храм Леденящего Ветра | el2/AdditionalBuildings/E2Blue8 = Источник Забвения | el2/AdditionalBuildings/E2Green3 = Рассадник Клещей | el2/AdditionalBuildings/E2Green8 = Святыня Природы | el2/AdditionalBuildings/E2Red2 = Логово Волков | el2/AdditionalBuildings/E2Red7 = Каменная Плита | el2/AdditionalBuildings/E2Black4 = Притягивание | el2/AdditionalBuildings/E2Black6 = Очистная Станция | el2/AdditionalBuildings/E2Green1 = Больной Фингус | el2/AdditionalBuildings/E2Green2 = Хижина Лесника-отшельника | el2/AdditionalBuildings/E2Red5 = Алтарь Гроз | el2/AdditionalBuildings/E2Red6 = Крысиное Гнездо | el2/AdditionalBuildings/E2Red9 = Генератор Молний | el2/AdditionalBuildings/E2Black2 = Генератор Возмущений | el2/AdditionalBuildings/E2Black3 = Поток Данных | el2/AdditionalBuildings/E2Black7 = Гравитационная Аномалия | el2/AdditionalBuildings/E2Blue1 = Эфирный Переполох | el2/AdditionalBuildings/E2Blue2 = Монумент Мира | el2/AdditionalBuildings/E2Blue4 = Священное Место Авиаков | el2/AdditionalBuildings/E2Blue5 = Родовая Гробница | el2/AdditionalBuildings/E2Blue6 = Резонирующие Пещеры | el2/AdditionalBuildings/E2Blue7 = Балансирующие Земли | el2/AdditionalBuildings/E2Green5 = Защитник Жизни | el2/AdditionalBuildings/E2Green6 = Токсичные Отходы | el2/AdditionalBuildings/E2Green7 = Проклятый Источник | el2/AdditionalBuildings/E2Red1 = Действующий Вулкан | el2/AdditionalBuildings/E2Red4 = Нестабильные Земли | el2/AdditionalBuildings/E2Red8 = Болевая Связь
 
 Подсказка каждого строения на карте описывает его действие в бою.

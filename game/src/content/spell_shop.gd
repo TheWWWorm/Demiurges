@@ -76,6 +76,14 @@ func bill() -> Dictionary:
 			for kind: String in result: result[kind] += int(price[kind]) * sign_value * int(entry.count)
 	return result
 
+## Whether the trade takes any spell from the shop into the book or reserve.
+func bought() -> bool:
+	for zone: String in zones:
+		if zone == "shop": continue
+		for entry: Dictionary in zones[zone]:
+			if entry.origin == "shop" and int(entry.count) > 0: return true
+	return false
+
 func problem() -> String:
 	if finished: return "This trade has already closed."
 	var hero := state.object(hero_id)
@@ -105,10 +113,9 @@ func commit() -> bool:
 	error = problem()
 	if not error.is_empty(): return false
 	var total := bill()
-	var purchase := false
-	for amount: int in total.values():
-		if amount > 0: purchase = true
-	if purchase and not state.hook("Hook_OnSpellShopSpellBuyed"): return _fail(state.error)
+	# A purchase is a spell taken from the shop, whatever the trade costs on
+	# balance (spells sold in the same trade can pay for it, or it is free).
+	if bought() and not state.hook("Hook_OnSpellShopSpellBuyed"): return _fail(state.error)
 	if not _close_hook(): return false
 	# A scenario hook can mutate balances; recheck before changing any inventory.
 	error = problem()

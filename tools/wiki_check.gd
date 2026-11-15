@@ -183,6 +183,7 @@ func _catalog(screen: ELWikiScreen, shots: String) -> void:
 	for story: String in ["diamanda", "white-lord"]:
 		screen.navigate(story)
 		check(screen._preview != null and screen._preview.model != null, "the %s page shows its hero" % story)
+	await _map_objects(screen, profiles, shots)
 	var creature := ""
 	var sorcery := ""
 	var artifact_creature := ""
@@ -237,6 +238,36 @@ func _catalog(screen: ELWikiScreen, shots: String) -> void:
 	screen.set_language("ru")
 	screen.navigate("all-creatures")
 	await _shot(shots, "ru-creature-list")
+	screen.set_language("en")
+
+## Guides with `!objects` lines: every map object they name has a model in
+## its installed game, the page shows them beside the article (one at a time,
+## with a choice), and an object link in the article picks that one.
+func _map_objects(screen: ELWikiScreen, profiles: Dictionary, shots: String) -> void:
+	var named := 0
+	for lang: String in ELWikiData.LANGUAGES:
+		for row: Dictionary in ELWikiData.PAGES[lang]:
+			for object: Array in row.get("objects", []):
+				named += 1
+				check(ELWikiHtml.object_id("%s/%s" % [object[0], object[1]]) != "", "%s/%s: %s/%s is a valid object" % [lang, row.key, object[0], object[1]])
+				if not profiles.has(object[0]) or lang != "en": continue
+				var model := str(ELWikiPreview.object_row(profiles[object[0]], object[1]).get("Model", ""))
+				check(not model.is_empty() and ELModel.prepare(profiles[object[0]], model).is_empty(), "%s: map object %s/%s has a model" % [row.key, object[0], object[1]])
+	check(named > 0, "guides show map objects")
+	for lang: String in ELWikiData.LANGUAGES:
+		screen.set_language(lang)
+		screen.navigate("map-objects")
+		await process_frame
+		check(screen._preview != null and screen._preview.model != null, "%s: map-objects shows a map object's model" % lang)
+		check("[url=object:" in ELWikiHtml.to_bbcode(str(screen._entry("map-objects").html)), "%s: map-objects links its objects" % lang)
+		if screen._objects.size() < 2: continue
+		check(screen._object_choice != null and screen._object_choice.item_count == screen._objects.size(), "%s: every map object can be chosen" % lang)
+		var last: Array = screen._objects.back()
+		var before: ELModel = screen._preview.model
+		screen._link("object:%s/%s" % [last[0], last[1]])
+		await process_frame
+		check(screen._object_choice.selected == screen._objects.size() - 1 and screen._preview.model != before, "%s: an object link shows that object" % lang)
+		await _shot(shots, "%s-map-objects" % lang)
 	screen.set_language("en")
 
 ## Encyclopedia pages are in one language only: the wiki's when the games'

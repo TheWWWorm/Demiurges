@@ -2,8 +2,10 @@ class_name ELWikiHtml
 extends RefCounted
 ## Small offline HTML reader for wiki articles (as the EI remake's WikiHtml):
 ## the escaped subset written by tools/build_wiki.py and ELWikiCatalog (h1-h3,
-## p, ul/ol/li, table, th/td, strong/b, em/i, code, a; `p.note`, `p.games` and
-## `td.changed`) becomes RichTextLabel BBCode. Nothing is
+## p, ul/ol/li, table, th/td, strong/b, em/i, code, a; `p.note`, `p.games`,
+## `td.changed` and the map-object galleries `div.objects` of
+## `figure data-object` with a figcaption) becomes RichTextLabel BBCode. An
+## object becomes an `object:<game>/<id>` link that shows its model. Nothing is
 ## executed or fetched. Text brackets are escaped, so article text can never
 ## open a BBCode tag. Internal links stay `wiki://<page>`; https:// links are
 ## kept for the reader to open in the system browser.
@@ -16,6 +18,8 @@ const HEAD_CELL := "2f261d"
 const CHANGED_CELL := "4a3516"
 const CHANGED := "ffd88a"
 const GAMES := "9fc3a0"
+## The map-object links of a gallery line.
+const OBJECTS := "9fc3a0"
 
 static func to_bbcode(html: String, scale := 1.0) -> String:
 	var parser := XMLParser.new()
@@ -28,6 +32,9 @@ static func to_bbcode(html: String, scale := 1.0) -> String:
 	var games := false
 	var changed := false
 	var first_cell := false
+	var objects := false
+	var object_count := 0
+	var object_link := false
 	while parser.read() == OK:
 		var type := parser.get_node_type()
 		if type == XMLParser.NODE_ELEMENT:
@@ -52,6 +59,17 @@ static func to_bbcode(html: String, scale := 1.0) -> String:
 					lists.append("ol")
 					out += "[ol type=1]"
 				"li": first_cell = false
+				"div":
+					objects = parser.get_named_attribute_value_safe("class") == "objects"
+					object_count = 0
+					if objects: out += "[color=#%s]▸ [/color]" % OBJECTS
+				"figure":
+					var object := parser.get_named_attribute_value_safe("data-object")
+					object_link = objects and not object_id(object).is_empty()
+					if object_link:
+						if object_count > 0: out += "[color=#%s]  ·  [/color]" % OBJECTS
+						out += "[url=object:%s]" % object
+						object_count += 1
 				"table":
 					var columns := clampi(parser.get_named_attribute_value_safe("data-columns").to_int(), 1, 8)
 					out += "[table=%d]" % columns
@@ -79,6 +97,12 @@ static func to_bbcode(html: String, scale := 1.0) -> String:
 				"em", "i": out += "[/i]"
 				"code": out += "[/code]"
 				"li": out += "\n"
+				"figure":
+					if object_link: out += "[/url]"
+					object_link = false
+				"div":
+					if objects: out += "\n\n"
+					objects = false
 				"ul", "ol":
 					if not lists.is_empty(): lists.pop_back()
 					out = out.trim_suffix("\n") + ("[/ul]" if parser.get_node_name() == "ul" else "[/ol]") + "\n\n"
@@ -101,6 +125,13 @@ static func key_from_url(url: String) -> String:
 	# break out of the RichTextLabel url tag.
 	var check := RegEx.create_from_string("^[a-z0-9]+(-[a-z0-9]+)*$")
 	return key if check.search(key) != null else ""
+
+## The map object ("<game>/<Table>/<row>") of an `object:` link or a
+## `data-object` value, or "" for anything else.
+static func object_id(url: String) -> String:
+	var id := url.trim_prefix("object:")
+	var check := RegEx.create_from_string("^el[12]/[A-Za-z]+/[A-Za-z0-9_.@-]+$")
+	return id if check.search(id) != null else ""
 
 static func _external(url: String) -> bool:
 	if not url.begins_with("https://"): return false

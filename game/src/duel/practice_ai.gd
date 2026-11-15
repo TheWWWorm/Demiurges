@@ -41,6 +41,30 @@ class Job:
 static var _jobs := {}
 static var _stale: Array[Job] = []
 
+## Takes back what the side to act has chosen so far in the phase, as the
+## player could, before the computer plays the phase for it (auto combat
+## taken up halfway): its blockers in the defence phase; in the attack phase
+## its attackers that may be recalled (none that had to attack, and none that
+## paid an attack tax, which recalling does not give back), guards first.
+## The lookahead then chooses them again from a clean phase; a command the
+## rules refuse is left as it was. Returns how many were taken back.
+static func release_assignments(duel: ELDuel) -> int:
+	if duel.phase == ELDuel.Phase.FINISHED: return 0
+	var side := duel.active_side()
+	var released := 0
+	if duel.phase == ELDuel.Phase.ATTACK:
+		var sent: Array[int] = duel.attacks.duplicate()
+		sent.sort_custom(func(a: int, b: int) -> bool: return duel.has_flag(a, "TeamAttack") and not duel.has_flag(b, "TeamAttack"))
+		for id: int in sent:
+			if not duel.creatures.has(id) or int(duel.creatures[id].owner) != side: continue
+			if duel.has_flag(id, "Berserk") or duel.attack_cost(id) > 0: continue
+			if duel.toggle_attack(id): released += 1
+		return released
+	for blocker: int in duel.blocks.keys():
+		if not duel.creatures.has(blocker) or int(duel.creatures[blocker].owner) != side: continue
+		if duel.assign_block(blocker, int(duel.blocks[blocker])): released += 1
+	return released
+
 static func _displayed(duel: ELDuel) -> bool:
 	return _display(duel) != null
 

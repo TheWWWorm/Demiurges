@@ -538,6 +538,9 @@ func _choose_target(u: Fighter) -> void:
 			best = o
 	u.target = best.id if best != null else -1
 
+## Temporary attack speed (a rally) shortens the gesture once, when it
+## starts: its duration and impact are fixed then and count down in battle
+## time, so a rally ending mid-swing does not change that swing.
 func _start_attack(u: Fighter, other: Fighter) -> void:
 	var speed := (1.0 + u.haste)
 	var total := u.interval / speed
@@ -570,11 +573,12 @@ func _can_cast(u: Fighter) -> bool:
 func _start_cast(u: Fighter, current: Fighter) -> void:
 	var frames := u.cast_frames if u.cast_frames > 0 else u.attack_frames
 	var impact := u.cast_impact if u.cast_frames > 0 else u.attack_impact
-	var total := maxf(0.6, float(frames) / 30.0)
+	var speed := (1.0 + u.haste)
+	var total := maxf(0.6, float(frames) / 30.0) / speed
 	var target := _ability_target(u)
 	u.action = "cast"
 	u.action_left = total
-	u.impact_left = float(impact) / 30.0
+	u.impact_left = float(impact) / 30.0 / speed
 	u.action_target = target.id if target != null else current.id
 	if target != null: u.facing = _angle(u.pos, target.pos)
 	u.cooldown = float(u.ability.get("cooldown", 8.0))
@@ -593,9 +597,9 @@ func _continue_action(u: Fighter) -> void:
 			u.impact_left = -1.0
 			_emit("interrupt", {"u": u.id})
 			return
-	u.action_left -= TICK * (1.0 + u.haste)
+	u.action_left -= TICK
 	if u.impact_left > 0.0:
-		u.impact_left -= TICK * (1.0 + u.haste)
+		u.impact_left -= TICK
 		if u.impact_left <= 0.0:
 			var target := unit(u.action_target)
 			if u.action == "attack":

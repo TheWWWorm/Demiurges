@@ -158,14 +158,20 @@ func _prepare_duel(state: ELAdventureSession, defender: int) -> bool:
 			options.players[side].map_level = int(state.object(hero_id if side == 0 else opponent_id).level)
 			options.players[side].level = levels[side]
 	else:
-		# Second-game difficulty moves only the specialisation level.
+		# Second-game difficulty moves the battle level, as in the first game:
+		# it sets the ether income column, the disturbance delay, the
+		# specialisation chance and the scripts' player level. The hero keeps
+		# its own level on the map and in the battle tooltip.
 		var levels: Array[int] = [int(options.players[0].level), int(options.players[1].level)]
 		# A tier-two garrison adds one before the final level clamp.
 		for side in 2:
 			if int(ELForts.garrison_of(state, state.object(hero_id if side == 0 else opponent_id)).get("fort_level", 0)) == ELForts.MAX_LEVEL: levels[side] += 1
 		var local_side := 0 if int(state.object(hero_id).owner) == 1 else 1
 		levels = ELSpecs.second_levels(levels, state.difficulty, local_side)
-		for side in 2: options.players[side].spec_level = levels[side]
+		for side in 2:
+			options.players[side].map_level = int(options.players[side].level)
+			options.players[side].level = levels[side]
+			options.players[side].spec_level = levels[side]
 		# Mob `Script=` chunks and battleground buildings (ELBattleScripts.select).
 		var scripts := ELBattleScripts.select(state, [hero_id, opponent_id])
 		if not scripts.is_empty(): options.scripts = scripts
@@ -283,12 +289,17 @@ static func coin_flip(battle_seed: int) -> int:
 ## Campaign difficulty adjusts temporary battle levels: the local side gains two
 ## (Easy) or one (Normal); the opponent loses one on Easy and gains one or two on
 ## Expert/Master. A garrison in a tier-two fort gains one. Results stay 1-20.
-static func first_levels(state: ELAdventureSession, local: int, opponent: int) -> Array[int]:
-	var levels: Array[int] = [int(state.object(local).level), int(state.object(opponent).level)]
+## The levels come back in side order. The local side is the one the local
+## player owns, whichever side it fights on; with neither (a guest's battle
+## prepared by the host), the first side, where the battle seats the human.
+static func first_levels(state: ELAdventureSession, first: int, second: int) -> Array[int]:
+	var ids: Array[int] = [first, second]
+	var levels: Array[int] = [int(state.object(first).level), int(state.object(second).level)]
+	var local := 1 if int(state.object(second).get("owner", -1)) == state.current_player and int(state.object(first).get("owner", -1)) != state.current_player else 0
 	var change: Array = [[2, -1], [1, 0], [0, 0], [0, 1], [0, 2]][clampi(state.difficulty, 0, 4)]
 	for side in 2:
-		levels[side] += int(change[side])
-		if int(ELForts.garrison_of(state, state.object(local if side == 0 else opponent)).get("fort_level", 0)) == ELForts.MAX_LEVEL: levels[side] += 1
+		levels[side] += int(change[0 if side == local else 1])
+		if int(ELForts.garrison_of(state, state.object(ids[side])).get("fort_level", 0)) == ELForts.MAX_LEVEL: levels[side] += 1
 		levels[side] = clampi(levels[side], 1, 20)
 	return levels
 

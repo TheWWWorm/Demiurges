@@ -42,6 +42,9 @@ func _run() -> void:
 	_check_mirror(profile)
 	_check_lines(profile)
 	_check_items(profile)
+	_check_combat_purchases(profile)
+	_check_undo_pool(profile)
+	_check_haste(profile)
 	_check_matches(profile, int(_arg("matches", "3")))
 	_check_save(profile)
 	var path := _arg("report", "")
@@ -193,3 +196,121 @@ func _check_save(profile: ELProfile) -> void:
   vs: ", again.substr(maxi(0, i - 80), 160))
 				break
 	check(again == before, "a restored match saves identically")
+
+func _pool_match(profile: ELProfile, seed_value: int) -> ELAutochessMatch:
+	var game_match := ELAutochessMatch.new()
+	game_match.auto_save = false
+	game_match.begin(profile, seed_value, ELAutochessCharacters.choices(profile)[0])
+	return game_match
+
+## Every company of a match together never holds more copies than the pool.
+func _pool_ok(game_match: ELAutochessMatch) -> bool:
+	var left := game_match.companies[0].pool_left()
+	for line: int in left:
+		if int(left[line]) < 0: return false
+	return true
+
+## A purchase during a battle never overfills the reserves, and copies that
+## could not combine then (a deployed copy was fighting) combine when the
+## next preparation begins.
+func _check_combat_purchases(profile: ELProfile) -> void:
+	var game_match := _pool_match(profile, 91)
+	var company := game_match.companies[0]
+	company.round_number = 3
+	company.army.clear()
+	for i in 2:
+		var kobold := company._recruit(0, 0, 1)
+		kobold.deployed = true
+		kobold.point = [-5.0, -3.0 + 6.0 * i]
+	for line in range(1, 9): company._recruit(line, 0, ELAutochessRules.tier(line))
+	company.ether = 100
+	company.start_battle()
+	company.shop.clear()
+	for i in 5: company.shop.append({"family": 0, "rank": 0, "locked": false})
+	var bought := 0
+	for i in 5:
+		if company.buy(i).is_empty(): bought += 1
+	check(company.bench_count() <= company.bench_limit(), "combat purchases keep the reserves within their limit (%d bought, %d reserves)" % [bought, company.bench_count()])
+	# Room on the bench: two copies wait for the deployed pair.
+	var other := _pool_match(profile, 92)
+	company = other.companies[0]
+	company.round_number = 3
+	company.army.clear()
+	for i in 2:
+		var kobold := company._recruit(0, 0, 1)
+		kobold.deployed = true
+		kobold.point = [-5.0, -3.0 + 6.0 * i]
+	for line in range(1, 5): company._recruit(line, 0, ELAutochessRules.tier(line))
+	company.ether = 100
+	company.start_battle()
+	company.shop.clear()
+	for i in 2: company.shop.append({"family": 0, "rank": 0, "locked": false})
+	check(company.buy(0).is_empty() and company.buy(1).is_empty(), "combat purchases with room on the bench succeed")
+	check(company.owned_counts(0) == [4, 0, 0], "a combat purchase does not combine with a fighting copy (%s)" % str(company.owned_counts(0)))
+	company.stage = "result"
+	company.next_round(4)
+	check(company.owned_counts(0) == [1, 1, 0], "deferred copies combine when preparation begins (%s)" % str(company.owned_counts(0)))
+	check(company.bench_count() <= company.bench_limit(), "reserves within their limit after the deferred combination")
+	# Three reserve copies combine during a battle without touching the army.
+	var third := _pool_match(profile, 93)
+	company = third.companies[0]
+	company.round_number = 3
+	company.army.clear()
+	for i in 2: company._recruit(0, 0, 1)
+	for line in range(1, 7): company._recruit(line, 0, ELAutochessRules.tier(line))
+	company.ether = 100
+	company.start_battle()
+	company.shop.clear()
+	company.shop.append({"family": 0, "rank": 0, "locked": false})
+	check(company.buy(0).is_empty() and company.owned_counts(0) == [0, 1, 0], "three reserve copies combine during a battle on a full bench")
+
+## Undoing a sale cannot take back a copy another company has since claimed.
+func _check_undo_pool(profile: ELProfile) -> void:
+	var game_match := _pool_match(profile, 94)
+	var line := -1
+	for index in ELAutochessRules.FAMILIES.size():
+		if ELAutochessRules.tier(index) == 5:
+			line = index
+			break
+	for company in game_match.companies:
+		company.army.clear()
+		company.shop.clear()
+		company.items.clear()
+	var seller := game_match.companies[0]
+	var unit := seller._recruit(line, 0, 5)
+	var holder := game_match.companies[1]
+	for i in ELAutochessRules.pool_size(line) - 1: holder._recruit(line, 0, 5)
+	check(int(seller.pool_left()[line]) == 0, "the whole pool of the line is owned")
+	check(seller.sell(int(unit.uid)).is_empty(), "the seller sells its copy")
+	seller.undo()
+	check(seller.owned_counts(line)[0] == 1 and _pool_ok(game_match), "undo of a sale nobody claimed restores the copy")
+	seller.sell(int(seller.army[0].uid))
+	game_match.companies[2].shop.append({"family": line, "rank": 0, "locked": false})
+	check(_pool_ok(game_match), "another company claims the released copy")
+	var error := seller.undo()
+	check(_pool_ok(game_match) and seller.owned_counts(line)[0] == 0, "undo cannot duplicate a claimed copy (pool left %d)" % int(seller.pool_left()[line]))
+	check(not error.is_empty() and not seller.can_undo(), "the refused undo explains itself and clears the history (%s)" % error)
+	# Formation changes still undo.
+	var mover := game_match.companies[3]
+	mover.round_number = 3
+	var piece := mover._recruit(0, 0, 1)
+	check(mover.deploy(int(piece.uid), Vector2(-5.0, 0.0)).is_empty(), "a reserve deploys")
+	mover.undo()
+	check(not mover.unit(int(piece.uid)).deployed, "a deployment undoes")
+
+## Temporary attack speed shortens the attack once, not twice.
+func _check_haste(profile: ELProfile) -> void:
+	for case: Array in [[0.35, 1.4 / 1.35], [0.4, 1.0]]:
+		var battle := ELAutochessBattle.new()
+		battle.setup(profile, _place(0, 0, 1, 0), _place(0, 0, 1, 1), 5)
+		var u: ELAutochessBattle.Fighter = battle.units[0]
+		var other: ELAutochessBattle.Fighter = battle.units[1]
+		u.interval = 1.4
+		u.haste = float(case[0])
+		u.haste_left = 100.0
+		battle._start_attack(u, other)
+		var seconds := 0.0
+		while u.action != "" and seconds < 5.0:
+			battle._continue_action(u)
+			seconds += ELAutochessBattle.TICK
+		check(absf(seconds - float(case[1])) <= ELAutochessBattle.TICK + 0.001, "%d%% haste attacks every %.2f s (expected %.2f)" % [roundi(float(case[0]) * 100), seconds, float(case[1])])

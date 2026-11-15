@@ -5,8 +5,11 @@ const ENGINE_CACHE = 'demiurges-engine-@BUILD@';
 // redirected response must never answer a navigation (the browser fails it
 // with ERR_FAILED), so the shell is fetched and stored as "./".
 const SHELL = new URL('./', self.registration.scope).href;
-const HASHES = @FILES@;   // file name → SHA-256
-const ENGINE_FILES = Object.keys(HASHES).map(name => name === 'index.html' ? SHELL : new URL(name, SHELL).href);
+// File name → {sha256, size} of the file as served, after any Content-Encoding
+// is undone. Every copy is checked against it before it is kept.
+const FILES = @FILES@;
+const NAMES = Object.keys(FILES);
+const ENGINE_FILES = NAMES.map(name => name === 'index.html' ? SHELL : new URL(name, SHELL).href);
 let progress = {type: 'progress', loaded: 0, total: 0};
 let lastBroadcast = 0;
 
@@ -42,13 +45,14 @@ async function reuse(url, hash) {
 // A plain stored copy: never marked redirected, body already decoded, with
 // the real Content-Length so the engine's loader shows true progress.
 async function request(url, i) {
-  const kept = await reuse(url, HASHES[Object.keys(HASHES)[i]]).catch(() => null);
+  const file = FILES[NAMES[i]];
+  const kept = await reuse(url, file.sha256).catch(() => null);
   if (kept) return {kept};
   const response = await fetch(new Request(url, {cache: 'no-cache', credentials: 'same-origin'}));
   if (!response.ok || response.type !== 'basic') throw new Error('Could not download ' + url + ' (' + response.status + ')');
-  return {response, length: Number(response.headers.get('Content-Length')) || 0};
+  return {response, file, length: file.size};
 }
-async function receive({kept, response, length}) {
+async function receive({kept, response, file}) {
   if (kept) return kept;
   const reader = response.body.getReader(), parts = [];
   let size = 0;
@@ -56,14 +60,19 @@ async function receive({kept, response, length}) {
     const {done, value} = await reader.read();
     if (done) break;
     parts.push(value); size += value.length; progress.loaded += value.length;
-    if (!length) progress.total += value.length;
     broadcast(false);
   }
-  if (length && size !== length) throw new Error('Incomplete download: ' + response.url);
+  // The body arrives decoded, so a Content-Length describes it only when no
+  // Content-Encoding was applied; the manifest has the decoded size and hash.
+  const sent = Number(response.headers.get('Content-Length')) || 0;
+  if (size !== file.size || !response.headers.has('Content-Encoding') && sent && sent !== size)
+    throw new Error('Incomplete download: ' + response.url);
+  const blob = new Blob(parts);
+  if (await sha256(blob) !== file.sha256) throw new Error('Damaged or outdated download: ' + response.url);
   const headers = new Headers(response.headers);
   headers.delete('Content-Encoding');
   headers.set('Content-Length', String(size));
-  return new Response(new Blob(parts), {status: 200, statusText: 'OK', headers});
+  return new Response(blob, {status: 200, statusText: 'OK', headers});
 }
 
 self.addEventListener('install', event => event.waitUntil((async () => {

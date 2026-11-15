@@ -155,6 +155,8 @@ func build_screen() -> void:
 	backing.content_margin_top = 6.0
 	box.add_theme_stylebox_override("normal", backing)
 	box.meta_clicked.connect(_on_description_meta)
+	# Remake: the computer players' strength, under the dialog.
+	menu.add_ai_choices()
 	slots = null
 	if not second():
 		slots = ELSingleSlots.new()

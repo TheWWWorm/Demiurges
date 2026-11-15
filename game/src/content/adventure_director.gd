@@ -32,6 +32,10 @@ var strategy_shop_wait: Callable
 ## Empty in local play. Network planning keeps the map's viewing player and
 ## the set of human commanders separate.
 var _strategic_players: Array[int] = []
+## A network strategic game's director, on the host or a guest. Such a game
+## never takes the single-player free movement (ELStrategy.free_mode), even
+## on a guest whose restored checkpoint carries no commander binding.
+var network_session := false
 ## Remake option: first-game heroes move at once, several times a day
 ## (ELStrategy.free_mode). The queue holds the rest of the computer players'
 ## day while it runs.
@@ -39,6 +43,14 @@ var free_movement := false
 ## Remake option: computer players pick skills, shop and cast global spells
 ## (ELFirstAIEconomy).
 var smart_ai := false
+## Remake switch (off by default): battles between computer and neutral sides
+## are decided by an estimate of both sides' strength instead of the
+## original's level rule (ELFirstAI.winner).
+var battle_estimate := false
+## Remake switch (off by default, smarter computer players only): computer
+## heroes patrol, raid, escort, turn back to resupply and follow faction
+## doctrines (ELFirstAIPlanner.living). A mission or the settings turn it on.
+var living_world := false
 var free_queue: Array = []
 var _strategic_ai := -1
 var _strategic_handoff_day := -1
@@ -131,7 +143,7 @@ func _world_changed(data: Dictionary) -> void:
 		interception.rebuild(state, grid)
 		# Second game: only player 1's heroes get the stop flag.
 		var stoppable: bool = state.map.profile.id != "el2" or placed.get("type") == "hero" and int(placed.get("owner", -1)) == 1
-		if stoppable and not interception.enemies(state, placed, Vector2i(placed.x, placed.y)).is_empty():
+		if stoppable and guarded_tile(placed):
 			placed.intercepted = true
 			warn_danger(placed)
 		return
@@ -150,6 +162,24 @@ func _world_changed(data: Dictionary) -> void:
 	else:
 		grid.rebuild(state.objects)
 		interception.rebuild(state, grid)
+
+## Whether a hostile guard area covers the tile `actor` stands on. First
+## game: a standing hero blocks an area's spread, so a rebuilt area leaves out
+## the tile of a hero set down inside it; the tile is measured as if the hero
+## were not there (the areas are rebuilt as they were afterwards).
+func guarded_tile(actor: Dictionary) -> bool:
+	var at := Vector2i(int(actor.get("x", -1)), int(actor.get("y", -1)))
+	if not interception.enemies(state, actor, at).is_empty(): return true
+	if state.map.profile.id != "el1" or not grid.contains(at) or grid.occupied.get(int(actor.get("uid", -1)), Vector2i(-1, -1)) != at: return false
+	var index := at.y * state.map.width + at.x
+	grid.actor_blockers[index] -= 1
+	grid._update_cell(at)
+	interception.rebuild(state, grid)
+	var guarded := not interception.enemies(state, actor, at).is_empty()
+	grid.actor_blockers[index] += 1
+	grid._update_cell(at)
+	interception.rebuild(state, grid)
+	return guarded
 
 ## Second game: a script end of turn passes the turn to each later living
 ## player in index order (each gets only Hook_Wake, then ends); after the last
@@ -362,8 +392,8 @@ func request_move(id: int, destination: Vector2i, use_id := -1) -> bool:
 			return true
 		notice = "Use the fort again to leave it."
 		return false
-	# EL2: the local player may only target a tile it sees now; the route
-	# itself is not limited by fog.
+	# EL2: the local player may target any explored tile, also one under
+	# light fog; the route itself is not limited by fog.
 	if not ELFog.targetable(state, state.current_player, destination):
 		notice = "That place is not in sight."
 		return false
@@ -406,7 +436,22 @@ func bind_strategy_players(players: Array[int], local_authority := false) -> boo
 		if not ELFirstScenario.alive(state, player) and (not local_authority or player != players[1]): return false
 		unique[player] = true
 	_strategic_players.assign(players)
+	network_session = true
 	if local_authority: _strategic_ai = players[1]
+	return true
+
+## A guest's director restored from the host's checkpoint: the seats of the
+## network game, without bind_strategy_players' start-of-game conditions (a
+## checkpoint may come mid-battle, at night or after an elimination). The
+## guest only previews routes; the host decides every move.
+func restore_network_seats(players: Array[int]) -> bool:
+	if not ELFirstScenario.applies(state) or players.size() < 2: return false
+	var unique := {}
+	for player: int in players:
+		if unique.has(player) or not state.players.has(player): return false
+		unique[player] = true
+	_strategic_players.assign(players)
+	network_session = true
 	return true
 
 func is_strategy_human(player: int) -> bool:
@@ -672,6 +717,7 @@ func _begin_move(actor: Dictionary, destination: Vector2i, queued: bool, use_id 
 		return false
 	if not movement.is_empty(): state.object(movement.id).orders.clear()
 	movement = {"id": actor.uid, "path": path, "index": 0, "progress": progress, "queued": queued, "use": use_id if use_at_end else -1}
+	if state.map.profile.id == "el2" and use_id >= 0: movement.target = use_id
 	actor.orders.assign(["move"])
 	presentation.emit({"kind": "route", "id": actor.uid, "path": path})
 	if path.size() == 1: _complete_movement()
@@ -700,6 +746,14 @@ func _advance_movement(delta: float) -> void:
 		if movement.get("strategic", false) and not interception.can_step(state, grid, actor, Vector2i(to)):
 			_complete_movement(false)
 			return
+		# Second game: the next tile was taken after the route was made (another
+		# figure stepped there). Go round it from here, or stop; a scripted
+		# move that stops still completes its command.
+		if second and cost < 0:
+			if not _reroute(actor):
+				_complete_movement(false)
+				return
+			continue
 		var distance := from.distance_to(to)
 		var remaining: float = distance * (1.0 - movement.progress)
 		# Hidden EL2 steps spend no animation time, including on AI turns.
@@ -713,13 +767,17 @@ func _advance_movement(delta: float) -> void:
 		travel -= remaining
 		movement.progress = 0.0
 		movement.index += 1
-		if not second: _stepped_from[int(actor.uid)] = Vector2i(from)
+		_stepped_from[int(actor.uid)] = Vector2i(from)
 		actor.x = int(to.x)
 		actor.y = int(to.y)
-		grid.update_actor(actor)
+		var moved := grid.update_actor(actor)
 		if state.map.profile.id == "el2":
-			# Each step refreshes the owner's sight.
-			ELFog.moved(state, actor)
+			# Each step refreshes the owner's sight once: a step that changed
+			# the occupied cell already did so through the grid's signal.
+			if not moved: ELFog.moved(state, actor)
+			# A guard's area moves with it (and widens once it has moved), as
+			# a rebuild or a load would place it.
+			if interception.zones.has(int(actor.uid)) or ELInterception.second_guard(actor): interception.rebuild(state, grid)
 			ELAdventureClock.use_points(state, actor, 1)
 		elif movement.get("strategic", false):
 			actor.ap -= cost
@@ -728,6 +786,22 @@ func _advance_movement(delta: float) -> void:
 		if actor.get("intercepted", false) or int(movement.index) >= movement.path.size() - 1:
 			_complete_movement()
 			return
+
+## Second game: a new route from the moving figure's tile to the same goal
+## (beside its target object, or the last tile of the old route). False when
+## there is none or its first step is taken too.
+func _reroute(actor: Dictionary) -> bool:
+	var here := Vector2i(actor.x, actor.y)
+	var ship: bool = actor.get("ship", false)
+	var target := state.object(int(movement.get("target", -1)))
+	var avoid := interception.hostile_cells(state, actor)
+	var path := grid.approach(here, target, ship, avoid) if not target.is_empty() else grid.path(here, movement.path[-1], ship, avoid)
+	if path.size() < 2 or path[0] != here or grid.passability(path[1], ship) < 0: return false
+	movement.path = path
+	movement.index = 0
+	movement.progress = 0.0
+	presentation.emit({"kind": "route", "id": actor.uid, "path": path})
+	return true
 
 func _complete_movement(use := true) -> void:
 	if movement.is_empty(): return
@@ -842,7 +916,21 @@ func _begin_encounter(actor: Dictionary, target: Dictionary, defender := -1, ass
 	if next.scripted_winner >= 0 or next.auto:
 		finish_encounter()
 		return
+	_face_opponents(actor, target)
 	presentation.emit({"kind": "encounter", "hero": actor.uid, "opponent": target.uid, "remote_use": remote_use})
+
+## A hero about to fight turns to its opponent: a guard's zone stops the hero
+## on whatever tile the route reached, facing along the route, not at the
+## creature (player report #138). Only heroes turn; a creature keeps its own
+## facing.
+func _face_opponents(first: Dictionary, second: Dictionary) -> void:
+	for pair: Array in [[first, second], [second, first]]:
+		var actor: Dictionary = pair[0]
+		var other: Dictionary = pair[1]
+		if actor.get("type") != "hero" or not actor.get("placed", true) or not other.get("placed", true): continue
+		if int(actor.get("x", -1)) < 0 or int(other.get("x", -1)) < 0: continue
+		var direction := Vector2(float(other.x) - float(actor.x), float(other.y) - float(actor.y))
+		if direction.length_squared() > 0.0: presentation.emit({"kind": "orient", "id": int(actor.uid), "direction": direction})
 
 func _advance_auto_fight(delta: float) -> void:
 	auto_fight.remaining = float(auto_fight.remaining) - delta
@@ -1015,6 +1103,7 @@ func start_ethereal(attacker: int, defender: int) -> void:
 		_refuse_battle(next.error)
 		return
 	encounter = next
+	_face_opponents(state.object(attacker), state.object(defender))
 	presentation.emit({"kind": "encounter", "hero": next.hero_id, "opponent": next.opponent_id})
 
 ## A battle the remake cannot prepare (missing content or an unported rule)
@@ -1077,37 +1166,86 @@ func finish_encounter() -> bool:
 ## first game against a neutral creature).
 func decline_encounter() -> bool:
 	if encounter == null: return false
-	if not encounter.decline(): return _fail(encounter.error)
 	var sides := [encounter.hero_id, encounter.opponent_id]
+	var stood := {}
+	for id: int in sides: stood[id] = Vector2i(int(state.object(id).get("x", -1)), int(state.object(id).get("y", -1)))
+	if not encounter.decline(): return _fail(encounter.error)
 	encounter = null
-	if state.map.profile.id == "el1":
-		for id: int in sides:
-			var hero := state.object(id)
-			if hero.get("type") == "hero" and int(hero.get("owner", -1)) == state.current_player: _step_out_of_zone(hero)
+	# Second game: the campaign's Hook_OnBattleFinishing returns the main hero
+	# to its last legal place, but many custom maps have no such hook and left
+	# the hero in the zone, where the next step started the battle again
+	# (player report #61). A hero still inside a hostile zone steps back too.
+	for id: int in sides:
+		var hero := state.object(id)
+		if hero.get("type") == "hero" and int(hero.get("owner", -1)) == state.current_player:
+			# A last legal place never recorded (-1, -1) or taken since (the guard
+			# that walked up stands there) is no place: the hero stays where it
+			# fought and steps out from there.
+			if _misplaced(hero) and grid.contains(stood[id]): _place_back(hero, stood[id])
+			_step_out_of_zone(hero)
 	return true
 
-## First game, after the remake's X: a hero inside a creature's guard zone
-## cannot step (the original has no way to refuse that battle), so it goes
+## Off the map, or on a tile another living figure holds.
+func _misplaced(hero: Dictionary) -> bool:
+	var at := Vector2i(int(hero.get("x", -1)), int(hero.get("y", -1)))
+	if not grid.contains(at): return true
+	for other: Dictionary in state.objects.values():
+		if other.get("uid") != hero.get("uid") and other.get("type") in ["hero", "monster"] and other.get("alive", false) and other.get("placed", true) \
+				and not other.get("fortified", false) and Vector2i(int(other.get("x", -2)), int(other.get("y", -2))) == at: return true
+	return false
+
+func _place_back(hero: Dictionary, cell: Vector2i) -> void:
+	hero.x = cell.x
+	hero.y = cell.y
+	grid.update_actor(hero)
+	state.event.emit({"kind": "object_changed", "id": hero.uid})
+
+## After the remake's X (first game) or a declined battle the map's script
+## did not undo (second game, #61): a hero inside a hostile guard zone goes
 ## back to the cell it entered from, as the second game's library returns
-## its main hero to its last legal place. Failing that, to a free
-## neighbouring cell no hostile zone covers.
+## its main hero to its last legal place. Failing that, to the nearest free
+## tile no hostile zone covers that it can walk to: a guard that walked up
+## (its zone reaches three tiles), a fort garrison, a portal exit, a bridge or
+## a corner may leave no such tile next to the hero, and a hero kept in the
+## zone had to fight (the next step or tick intercepted it again).
+const STEP_OUT_REACH := 8
 func _step_out_of_zone(hero: Dictionary) -> void:
 	var here := Vector2i(int(hero.x), int(hero.y))
-	if interception.enemies(state, hero, here).is_empty():
+	if interception.enemies(state, hero, here).is_empty() or hero.get("fortified", false):
 		hero.intercepted = false
 		return
+	var ship: bool = hero.get("ship", false)
+	var from: Vector2i = _stepped_from.get(int(hero.uid), Vector2i(-1, -1))
 	var candidates: Array[Vector2i] = []
-	if _stepped_from.has(int(hero.uid)): candidates.append(_stepped_from[int(hero.uid)])
-	for offset: Vector2i in [Vector2i(-1, 0), Vector2i(1, 0), Vector2i(0, -1), Vector2i(0, 1), Vector2i(-1, -1), Vector2i(1, -1), Vector2i(-1, 1), Vector2i(1, 1)]:
-		candidates.append(here + offset)
+	if (from - here).abs().x <= 1 and (from - here).abs().y <= 1 and from != here: candidates.append(from)
+	# Breadth first over walkable tiles: the nearest ring with a free tile wins;
+	# within it, the tile nearest the one the hero came from.
+	var visited := {here: true}
+	var ring: Array[Vector2i] = [here]
+	for depth in STEP_OUT_REACH:
+		var next: Array[Vector2i] = []
+		var free: Array[Vector2i] = []
+		for cell: Vector2i in ring:
+			for offset: Vector2i in ELInterception.DIRECTIONS:
+				var point := cell + offset
+				if visited.has(point) or not grid.contains(point) or grid.passability(point, ship) < 0: continue
+				visited[point] = true
+				next.append(point)
+				if interception.enemies(state, hero, point).is_empty(): free.append(point)
+		if not free.is_empty():
+			if from.x >= 0: free.sort_custom(func(a: Vector2i, b: Vector2i) -> bool: return a.distance_squared_to(from) < b.distance_squared_to(from))
+			candidates.append(free[0])
+			break
+		ring = next
+		if ring.is_empty(): break
 	for cell: Vector2i in candidates:
-		if (cell - here).abs().x > 1 or (cell - here).abs().y > 1 or cell == here: continue
-		if grid.passability(cell) < 0 or not interception.enemies(state, hero, cell).is_empty(): continue
+		if grid.passability(cell, ship) < 0 or not interception.enemies(state, hero, cell).is_empty(): continue
 		hero.x = cell.x
 		hero.y = cell.y
 		hero.intercepted = false
 		_stepped_from.erase(int(hero.uid))
 		grid.update_actor(hero)
+		if state.map.profile.id == "el2": ELFog.moved(state, hero)
 		presentation.emit({"kind": "actor_moving", "id": hero.uid, "position": Vector2(cell), "moving": false})
 		state.event.emit({"kind": "object_changed", "id": hero.uid})
 		return

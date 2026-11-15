@@ -174,6 +174,13 @@ func preselected_index() -> int:
 	if c.is_empty() or c.kind != "cast" or note_slot() < 0: return -1
 	return (duel.heroes[side_of(int(c.side))].hand_ids as Array).find(int(c.id))
 
+## Hand index of the spell the player must cast next (the card the tutorial
+## makes blink in the hand), or -1 while no cast of the player is awaited.
+func awaited_hand_index() -> int:
+	var c := current()
+	if c.is_empty() or not error.is_empty() or String(c.kind) != "cast" or side_of(int(c.side)) != 0: return -1
+	return (duel.heroes[0].hand_ids as Array).find(int(c.id))
+
 ## Runs the next computer command through the rules. Returns false when none
 ## is due or the rules refused it (then `error` holds the divergence).
 func step_opponent() -> bool:

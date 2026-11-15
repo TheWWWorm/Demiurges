@@ -6,17 +6,24 @@ extends RefCounted
 ## levels (with their health) but never spend skill picks: in both games only
 ## the human's level-up dialog chooses skills, so they keep their authored ones.
 ## The remake option "smarter computer players" adds skills, shopping and
-## global spells (ELFirstAIEconomy).
+## global spells (ELFirstAIEconomy) and plans with ELFirstAIPlanner.
 
 ## Winner of a strategic battle that the local player takes no part in. The
-## pair keeps its queue order (guard or interceptor first).
-static func winner(state: ELAdventureSession, first: Dictionary, second: Dictionary) -> Dictionary:
+## pair keeps its queue order (guard or interceptor first). The original
+## rule: a player's side always beats a neutral one, and between players the
+## first side wins with chance (L1 + 1) / (L1 + L2 + 1). `estimate` (a remake
+## switch, off by default) weighs the two sides' books, health, skills and
+## artifacts instead (ELFirstAIPlanner.win_chance).
+static func winner(state: ELAdventureSession, first: Dictionary, second: Dictionary, estimate := false) -> Dictionary:
 	var first_neutral := int(first.get("owner", 0)) <= 0
 	var second_neutral := int(second.get("owner", 0)) <= 0
 	if state.map.id == "mission23" and (first_neutral or second_neutral):
 		# Roaming neutral heroes are this chapter's hunters; its creatures are prey.
 		if first_neutral: return first if first.type == "hero" else second
 		return first if second.type == "monster" else second
+	if estimate:
+		var chance := ELFirstAIPlanner.estimate(state, first, second)
+		return first if ELAdditionalBuildings._random(state) % 10000 < int(chance * 10000.0) else second
 	if first_neutral or second_neutral: return second if first_neutral else first
 	# Weighted by level: the first side wins with chance (L1 + 1) / (L1 + L2 + 1).
 	var level := int(first.get("level", 1))
@@ -26,7 +33,7 @@ static func winner(state: ELAdventureSession, first: Dictionary, second: Diction
 ## Decides the battle and applies its result. Returns false on a script failure.
 static func resolve(director: ELAdventureDirector, first: Dictionary, second: Dictionary, forfeit_winner := -1) -> bool:
 	var state := director.state
-	var victor := state.object(forfeit_winner) if forfeit_winner >= 0 else winner(state, first, second)
+	var victor := state.object(forfeit_winner) if forfeit_winner >= 0 else winner(state, first, second, director.battle_estimate)
 	var loser := second if victor == first else first
 	if state.players.has(int(victor.owner)) and int(victor.owner) >= 1:
 		state.add_experience(victor.uid, ELHeroProgression.battle_reward(state.map.profile, int(loser.get("level", 1))))
@@ -51,11 +58,17 @@ static func take_artifacts(victor: Dictionary, loser: Dictionary) -> Array:
 const VERSION := 1
 ## Buildings the computer never sets out to use.
 const SKIPPED_BUILDINGS := ["Lake", "WhiteCastle", "AncientTomb", "AltarOfWar", "TownBunker", "MoveableRock", "TrainingCamp", "ReflectingBowl", "WardingStone", "Runestone1", "Runestone2"]
-const KINDS := ["monster", "mine", "cut", "node", "tower", "building", "explore", "hero", "shop"]
+## "patrol" and "escort" come only from the living-world switch.
+const KINDS := ["monster", "mine", "cut", "node", "tower", "building", "explore", "hero", "shop", "patrol", "escort", "pickup"]
 const AVOIDED := 10000
 const NONE := 0x7fffffff
 const EXPLORE_LIMIT := 9
 const EXPLORE_SPACING := 200
+## An assignment that gives no order, or no step on a new day, for this many
+## planning passes running is given up; that hero then leaves the objective
+## alone for RETRY_DAYS days (other heroes may take it at once).
+const BLOCKED_PASSES := 2
+const RETRY_DAYS := 2
 
 ## Computer players in planning order: after the local player's End Turn, in
 ## index order. Neutral creatures and roaming heroes keep their places.
@@ -69,6 +82,12 @@ static func computer_players(state: ELAdventureSession) -> Array[int]:
 	result.sort()
 	return result
 
+## The player's plans: `tasks` the open objectives of the last planning pass,
+## `assigned` [hero, task] pairs (a task's `tries` counts passes without
+## progress, `mark` the hero's tile and day at its last step), `retry`
+## objectives a hero gave up and the day it may try again, `seen` where and
+## when enemy heroes were last seen (smarter players), `threats` the enemy
+## heroes that were within reach of a castle on the last pass.
 static func data(state: ELAdventureSession, player: int) -> Dictionary:
 	var record: Dictionary = state.players[player]
 	if not record.get("ai") is Dictionary: record.ai = {"version": VERSION, "built": false, "tasks": [], "assigned": [], "champion": -1}
@@ -84,19 +103,27 @@ static func plan(director: ELAdventureDirector) -> void:
 
 ## With free movement a player plans again after each round of moves; the
 ## daily events (a recruit, a scripted ethereal attack) happen once a day.
+##
+## Each pass rebuilds the player's objectives from the world, keeps the
+## objectives living heroes hold (a fallen hero's lapse and are open again),
+## drops held objectives that are finished, no longer valid or make no
+## progress, then gives each free hero the best open one.
 static func plan_player(director: ELAdventureDirector, player: int, daily := true) -> void:
 	var state := director.state
+	var started := Time.get_ticks_usec()
 	var ai := data(state, player)
-	if not ai.built:
-		ai.tasks = candidates(state, player)
-		ai.built = true
-	refresh(director, player)
+	ai.built = true
 	var heroes := heroes_of(state, player)
 	# The most experienced hero (first on ties) leads and defends the realm.
 	var champion := {}
 	for hero: Dictionary in heroes:
 		if champion.is_empty() or int(hero.experience) > int(champion.experience): champion = hero
 	ai.champion = int(champion.get("uid", -1))
+	# Remake option: a champion held in a fort still meets ethereal attacks,
+	# while the most experienced hero free to move leads in the field.
+	var leader := commander(state, player) if ELFirstAIEconomy.applies(director) else champion
+	if leader.is_empty(): ai.erase("commander")
+	else: ai.commander = int(leader.uid)
 	# Fewer than two heroes: a free level-one recruit joins beside the castle.
 	# It first receives orders on the next day.
 	if daily and heroes.size() < 2: ELGlobalSpells.summon(state, player, 1, ELFirstAIEconomy.applies(director))
@@ -106,38 +133,187 @@ static func plan_player(director: ELAdventureDirector, player: int, daily := tru
 	# the first player's castle (one chance in three each day).
 	if daily and state.map.id == "mission13" and player == 2 and state.day > 10 and not champion.is_empty() and ELAdditionalBuildings._random(state) % 3 == 1:
 		ELGlobalSpells.script_attack(state, player, champion, 1)
+	var smart := ELFirstAIEconomy.applies(director)
+	if smart: ELFirstAIPlanner.observe(director, player)
 	# Route costs only cross tiles this player has explored.
 	var closed := _close_unexplored(director, player)
+	ELFirstAIEconomy.begin_pass()
+	_guard_cells = {}
+	var lap := Time.get_ticks_usec()
+	var pool := objectives(director, player)
+	lap = _lap(director, "objectives", lap)
+	var open := {}
+	for task: Dictionary in pool: open[_identity(task)] = true
+	var retry: Dictionary = ai.get("retry", {})
+	for key: String in retry.keys():
+		if int(retry[key]) <= int(state.day): retry.erase(key)
+	# Living heroes keep what they hold; a fallen hero's objective is open again.
 	var assigned := {}
+	var reserved := {}
+	var listed_heroes := {}
+	for hero: Dictionary in heroes: listed_heroes[int(hero.uid)] = true
 	for pair: Array in ai.assigned:
-		if state.object(pair[0]).get("alive", false): assigned[int(pair[0])] = pair[1]
+		# A hero a script took off the map keeps no reservation either.
+		if listed_heroes.has(int(pair[0])):
+			assigned[int(pair[0])] = pair[1]
+			reserved[_key(pair[1], int(pair[0]))] = int(pair[0])
+	var free: Array[Dictionary] = []
+	var roles := {}
 	for hero: Dictionary in heroes:
 		if ELGlobalSpells.held(hero): continue
-		var role := 0 if hero == champion else 1
+		var role := 0 if hero == leader else 1
+		roles[int(hero.uid)] = role
 		var task: Dictionary = assigned.get(int(hero.uid), {})
-		if not task.is_empty() and finished(director, hero, task): task = {}
+		var drop := false
+		if not task.is_empty() and (finished(director, hero, task) or not _valid(task, open, smart)): drop = true
+		# A promotion or demotion since the task was given: it must still suit the role.
+		elif not task.is_empty() and not _role_allows(director, hero, role, task, smart): drop = true
+		# Remake option: a siege whose damage the castle's regeneration undoes
+		# is reconsidered (other heroes may join it, or another goal is better).
+		elif smart and task.get("kind") == "tower" and ELFirstAIPlanner.siege_net(director, hero, state.object(task.target)) <= 0: drop = true
+		# Living world: a patrol is what an idle hero does; it looks for work every pass.
+		elif task.get("kind") == "patrol": drop = true
 		# Remake option: spells bought without runes are dead cards until a
-		# component portal fills them; the errand goes back on the list.
-		if not task.is_empty() and task.kind != "shop" and not (task.kind == "tower" and ELStrategy.adjacent(director, hero, state.object(task.target))) and ELFirstAIEconomy.urgent(director, hero):
-			if task.kind not in ["explore", "hero"]: ai.tasks.append(task)
+		# component portal fills them; the errand waits.
+		elif not task.is_empty() and task.kind != "shop" and not (task.kind == "tower" and ELStrategy.adjacent(director, hero, state.object(task.target))) and ELFirstAIEconomy.urgent(director, hero): drop = true
+		elif not task.is_empty() and int(task.get("tries", 0)) >= BLOCKED_PASSES:
+			retry[_key(task, int(hero.uid)) + "@" + str(hero.uid)] = int(state.day) + RETRY_DAYS
+			drop = true
+		if drop:
+			reserved.erase(_key(task, int(hero.uid)))
+			assigned.erase(int(hero.uid))
 			task = {}
-		if task.is_empty():
+		hero.strategy_order = {}
+		if task.is_empty(): free.append(hero)
+	ai.retry = retry
+	if smart:
+		ELFirstAIPlanner.assign(director, player, heroes, roles, pool, assigned, reserved, free)
+		ELFirstAIPlanner.patrols(director, player, heroes, assigned)
+		lap = _lap(director, "assign", lap)
+	else:
+		for hero: Dictionary in free:
 			var best := NONE
-			for candidate: Dictionary in ai.tasks:
-				var cost := cost(director, hero, role, candidate, best)
+			var task := {}
+			for candidate: Dictionary in pool:
+				if not _available(candidate, hero, reserved, retry): continue
+				var cost := cost(director, hero, int(roles[int(hero.uid)]), candidate, best)
 				if cost < best:
 					best = cost
 					task = candidate
-			if not task.is_empty(): ai.tasks.erase(task)
-		hero.strategy_order = {}
-		if task.is_empty():
-			assigned.erase(int(hero.uid))
-			continue
-		assigned[int(hero.uid)] = task
+			if task.is_empty(): continue
+			task = task.duplicate()
+			assigned[int(hero.uid)] = task
+			reserved[_key(task, int(hero.uid))] = int(hero.uid)
+	for hero: Dictionary in heroes:
+		var task: Dictionary = assigned.get(int(hero.uid), {})
+		if task.is_empty() or ELGlobalSpells.held(hero): continue
+		if not task.has("since"): task.since = int(state.day)
 		command(director, hero, task)
+		_progress(director, hero, task)
+	ELFirstAIEconomy.end_pass()
+	_guard_cells = null
+	lap = _lap(director, "command", lap)
 	for point: Vector2i in closed: director.grid._update_cell(point)
 	ai.assigned = []
 	for id: int in assigned: ai.assigned.append([id, assigned[id]])
+	# The open objectives, for the next pass's checks and the simulator.
+	var listed: Array = []
+	for task: Dictionary in pool:
+		if not reserved.has(_key(task, -1)): listed.append(task)
+	ai.tasks = listed
+	if director.has_meta("first_ai_stats"):
+		var stats: Dictionary = director.get_meta("first_ai_stats")
+		stats.passes = int(stats.get("passes", 0)) + 1
+		stats.usec = int(stats.get("usec", 0)) + Time.get_ticks_usec() - started
+		stats.slowest = maxi(int(stats.get("slowest", 0)), Time.get_ticks_usec() - started)
+
+## Planning time by stage, when the simulator asks for it (tools/first_ai_sim.gd).
+static func _lap(director: ELAdventureDirector, stage: String, since: int) -> int:
+	var now := Time.get_ticks_usec()
+	if director.has_meta("first_ai_stats"):
+		var stats: Dictionary = director.get_meta("first_ai_stats")
+		stats[stage] = int(stats.get(stage, 0)) + now - since
+	return now
+
+## The objective a task stands for: a site, a creature or a castle by its id,
+## an exploration target by its tile. A learning building is one objective
+## per hero (each may learn there once); see _key.
+static func _identity(task: Dictionary) -> String:
+	if task.get("kind") == "explore": return "explore:%d:%d" % [int(task.tile[0]), int(task.tile[1])]
+	return "%s:%d" % [task.kind, int(task.target)]
+
+## The reservation a hero holds: a personal objective (a learning building,
+## which each hero may use once; with the remake option a castle, which
+## heroes may besiege together) is per hero, everything else is shared by
+## the whole player.
+static func _key(task: Dictionary, hero: int) -> String:
+	if hero >= 0 and bool(task.get("personal", false)): return _identity(task) + "@" + str(hero)
+	return _identity(task)
+
+static func _valid(task: Dictionary, open: Dictionary, smart: bool) -> bool:
+	# Explore targets are sampled afresh each pass; one being walked to stays
+	# until it is reached (finished). In the original a site stays the hero's
+	# errand until it is held, so an enemy that took it meanwhile loses it
+	# again; with the remake option a site an ally took is given up.
+	if task.get("kind") in ["explore", "hero", "patrol"] or (not smart and task.get("kind") in ["mine", "node"]): return true
+	return open.has(_identity(task))
+
+## The leader in the field: the most experienced hero (first on ties) that is
+## free to move, not held in a fort, a training camp or a fortification spell.
+static func commander(state: ELAdventureSession, player: int) -> Dictionary:
+	var best := {}
+	for hero: Dictionary in heroes_of(state, player):
+		if ELGlobalSpells.held(hero): continue
+		if best.is_empty() or int(hero.experience) > int(best.experience): best = hero
+	return best
+
+## The field commander of the last planning pass (the champion before one).
+static func commander_id(state: ELAdventureSession, player: int) -> int:
+	var ai := data(state, player)
+	return int(ai.get("commander", ai.get("champion", -1)))
+
+## Whether a held objective still suits the hero's role (the role may have
+## changed since it was given): the rules that give objectives, without their
+## route searches.
+static func _role_allows(director: ELAdventureDirector, hero: Dictionary, role: int, task: Dictionary, smart: bool) -> bool:
+	if smart: return ELFirstAIPlanner.legal(director, hero, role, task)
+	match task.get("kind"):
+		"monster", "tower": return role == 0
+		"mine", "cut", "node", "explore": return role == 1
+	return true
+
+## Whether the target of an objective can be used now: the test the executed
+## order makes (ELStrategy.order_path), so nothing planned is refused later.
+static func usable(item: Dictionary) -> bool:
+	return not item.is_empty() and item.get("alive", false) and item.get("visible", true) and item.get("enabled", true) and item.get("placed", true)
+
+static func _available(candidate: Dictionary, hero: Dictionary, reserved: Dictionary, retry: Dictionary) -> bool:
+	var key := _key(candidate, int(hero.uid))
+	return not reserved.has(key) and not retry.has(key + "@" + str(hero.uid))
+
+## Assignment bookkeeping after the order: no order counts as a pass without
+## progress, and so does a new day that found the hero on the same tile with
+## an order that did not move it (a siege or a use beside the target is
+## progress of its own).
+static func _progress(director: ELAdventureDirector, hero: Dictionary, task: Dictionary) -> void:
+	var state := director.state
+	var here := [int(hero.x), int(hero.y)]
+	var mark: Array = task.get("mark", [])
+	if mark.size() != 3 or [int(mark[0]), int(mark[1])] != here:
+		task.mark = here + [int(state.day)]
+		if not hero.strategy_order.is_empty():
+			task.tries = 0
+			return
+	if hero.strategy_order.is_empty():
+		# An escort beside its besieger is where it should be.
+		if task.kind == "escort" and ELStrategy.adjacent(director, hero, state.object(task.get("target", -1))): return
+		task.tries = int(task.get("tries", 0)) + 1
+		return
+	var target := state.object(task.get("target", -1))
+	if not target.is_empty() and ELStrategy.adjacent(director, hero, target): return
+	if int(task.mark[2]) < int(state.day) and int(hero.ap) > 0:
+		task.tries = int(task.get("tries", 0)) + 1
+		task.mark = here + [int(state.day)]
 
 ## Closes the unexplored tiles in the land graph for one planning pass and
 ## returns them so they can be reopened.
@@ -164,7 +340,7 @@ static func heroes_of(state: ELAdventureSession, player: int) -> Array[Dictionar
 		if item.type == "hero" and int(item.owner) == player and item.alive and item.visible and item.get("placed", true): result.append(item)
 	return result
 
-## The persistent list, built once: neutral creatures nearest the castle
+## The original's objective list: neutral creatures nearest the castle
 ## first, then sites, enemy castles and buildings.
 static func candidates(state: ELAdventureSession, player: int) -> Array:
 	var castle := ELFirstScenario.castle_object(state, player)
@@ -175,64 +351,69 @@ static func candidates(state: ELAdventureSession, player: int) -> Array:
 	var tasks: Array = []
 	for id: int in ids:
 		var item := state.object(id)
-		if item.type == "monster" and int(item.owner) <= 0 and item.alive and item.visible and item.get("placed", true): monsters.append(item)
+		if item.type == "monster" and int(item.owner) <= 0 and usable(item): monsters.append(item)
 	monsters.sort_custom(func(a: Dictionary, b: Dictionary): return _distance(home, a) < _distance(home, b))
 	for item: Dictionary in monsters: tasks.append({"kind": "monster", "target": item.uid})
 	for group: String in ["mines", "resource_cuts", "mana_nodes"]:
 		for id: int in ids:
 			var item := state.object(id)
-			if item.get("group") == group and item.alive: tasks.append({"kind": {"mines": "mine", "resource_cuts": "cut", "mana_nodes": "node"}[group], "target": id})
+			if item.get("group") == group and usable(item): tasks.append({"kind": {"mines": "mine", "resource_cuts": "cut", "mana_nodes": "node"}[group], "target": id})
 	for id: int in ids:
 		var item := state.object(id)
 		if ELFirstScenario.is_castle(item) and int(item.owner) >= 1 and int(item.owner) != player and item.get("placed", true): tasks.append({"kind": "tower", "target": id})
 	for id: int in ids:
 		var item := state.object(id)
-		if item.get("group") == "additional_buildings" and not SKIPPED_BUILDINGS.has(item.get("name")) and ELAdditionalBuildings.supported(item): tasks.append({"kind": "building", "target": id})
+		if item.get("group") == "additional_buildings" and usable(item) and not SKIPPED_BUILDINGS.has(item.get("name")) and ELAdditionalBuildings.supported(item):
+			var task := {"kind": "building", "target": id}
+			if ELAdditionalBuildings.VISITED.has(str(item.name)): task.personal = true
+			tasks.append(task)
 	return tasks
 
-## Each turn: drop unclaimed tasks that no longer apply, then add this turn's
-## exploration targets and enemy heroes.
-static func refresh(director: ELAdventureDirector, player: int) -> void:
+## This pass's open objectives, rebuilt from the world each time so that
+## nothing is lost when a hero falls, a building resets or a creature
+## appears: the original list (creatures, sites not yet held, castles of
+## living enemies, buildings), then exploration targets and the enemy heroes
+## the player sees now. With the remake option sites an enemy holds stay worth
+## taking, and the spell shops and component portals the player has seen are
+## added.
+static func objectives(director: ELAdventureDirector, player: int) -> Array:
 	var state := director.state
-	var ai := data(state, player)
 	var smart := ELFirstAIEconomy.applies(director)
 	var kept: Array = []
-	for task: Dictionary in ai.tasks:
-		var item := state.object(task.get("target", -1))
+	for task: Dictionary in candidates(state, player):
+		var item := state.object(task.target)
 		match task.kind:
 			"mine", "node":
-				# Remake option: a site an enemy holds stays worth taking.
 				var holder := int(item.get("owner", -1))
 				if holder >= 0 and (holder == player or not smart or ELGlobalSpells._allied(state, player, holder)): continue
-			"cut", "monster": if not item.get("alive", false): continue
-			"explore", "hero", "shop": continue
-		if task.kind != "explore" and item.is_empty(): continue
+			"tower":
+				# A castle at peace (a scripted or agreed alliance) is no target.
+				if not ELFirstScenario.alive(state, int(item.owner)) or not state.hostile({"owner": player}, item): continue
+				# Remake option: several heroes may besiege one castle together.
+				if smart: task.personal = true
 		kept.append(task)
-	for tile: Vector2i in frontier(director, player): kept.append({"kind": "explore", "target": -1, "tile": [tile.x, tile.y]})
+	if smart: kept.append_array(ELFirstAIPlanner.exploration(director, player))
+	else:
+		for tile: Vector2i in frontier(director, player): kept.append({"kind": "explore", "target": -1, "tile": [tile.x, tile.y]})
 	var ids: Array = state.objects.keys()
 	ids.sort()
 	for id: int in ids:
 		var item := state.object(id)
-		if item.type == "hero" and int(item.owner) >= 1 and int(item.owner) != player and item.alive and item.visible and item.get("placed", true): kept.append({"kind": "hero", "target": id})
-	# Remake option: spell shops and component portals the player has seen.
+		if item.type == "hero" and int(item.owner) >= 1 and int(item.owner) != player and item.alive and observed(state, player, item): kept.append({"kind": "hero", "target": id})
 	if smart:
-		var taken := {}
-		var listed := {}
-		for pair: Array in ai.assigned:
-			if pair[1].get("kind") == "shop": taken[int(pair[1].target)] = true
-			listed[int(pair[1].get("target", -1))] = true
-		for task: Dictionary in kept: listed[int(task.get("target", -1))] = true
-		# Mines and ether nodes an enemy has taken since the list was built.
+		kept.append_array(ELFirstAIPlanner.scouting(director, player))
+		if ELFirstAIPlanner.living(director): kept.append_array(ELFirstAIPlanner.escorts(director, player))
 		for id: int in ids:
 			var item := state.object(id)
-			var kind: String = {"mines": "mine", "mana_nodes": "node"}.get(item.get("group", ""), "")
-			var holder := int(item.get("owner", -1))
-			if kind.is_empty() or listed.has(id) or not item.alive or holder < 1 or holder == player or ELGlobalSpells._allied(state, player, holder): continue
-			if ELFog.explored(state, player, Vector2i(item.x, item.y)): kept.append({"kind": kind, "target": id})
-		for id: int in ids:
-			var item := state.object(id)
-			if ELFirstAIEconomy.is_shop(item) and not taken.has(id) and ELFog.explored(state, player, Vector2i(item.x, item.y)): kept.append({"kind": "shop", "target": id})
-	ai.tasks = kept
+			if ELFirstAIEconomy.is_shop(item) and ELFog.explored(state, player, Vector2i(item.x, item.y)): kept.append({"kind": "shop", "target": id})
+			# Artifacts and global-spell scrolls the player has seen.
+			elif ELMapPickups.is_pickup(item) and usable(item) and ELFog.explored(state, player, Vector2i(item.x, item.y)): kept.append({"kind": "pickup", "target": id})
+	return kept
+
+## An enemy hero is a target only while the player sees it: its authored
+## visibility and the player's (or an ally's) sight of its tile now.
+static func observed(state: ELAdventureSession, player: int, item: Dictionary) -> bool:
+	return item.get("visible", false) and item.get("placed", true) and ELFog.visible(state, player, Vector2i(int(item.x), int(item.y)))
 
 ## Explored, unoccupied tiles beside unexplored ones, nearest the castle first
 ## and spread apart. Players without fog (EL2, neutrals) have nothing unknown.
@@ -240,12 +421,23 @@ static func refresh(director: ELAdventureDirector, player: int) -> void:
 ## so walled-off edges seen across obstacles do not crowd out reachable ones.
 static func frontier(director: ELAdventureDirector, player: int) -> Array[Vector2i]:
 	var result: Array[Vector2i] = []
+	var tiles := frontier_tiles(director, player)
+	var castle := ELFirstScenario.castle_object(director.state, player)
+	var home := Vector2i(castle.get("x", 0), castle.get("y", 0))
+	tiles.sort_custom(func(a: Vector2i, b: Vector2i): return (a - home).length_squared() < (b - home).length_squared())
+	for tile: Vector2i in tiles:
+		if result.size() >= EXPLORE_LIMIT: break
+		if result.all(func(other: Vector2i): return (other - tile).length_squared() > EXPLORE_SPACING): result.append(tile)
+	return result
+
+## Every explored, passable tile beside an unexplored one that the player's
+## heroes reach over explored ground, in row order.
+static func frontier_tiles(director: ELAdventureDirector, player: int) -> Array[Vector2i]:
 	var state := director.state
-	if not ELFog.active(state, player) or state.explored.size() != state.map.width * state.map.height: return result
+	var tiles: Array[Vector2i] = []
+	if not ELFog.active(state, player) or state.explored.size() != state.map.width * state.map.height: return tiles
 	var mask := ELFog.bit(player)
 	var seen := state.explored
-	var castle := ELFirstScenario.castle_object(state, player)
-	var home := Vector2i(castle.get("x", 0), castle.get("y", 0))
 	var width := state.map.width
 	var reached := PackedByteArray()
 	reached.resize(seen.size())
@@ -267,7 +459,6 @@ static func frontier(director: ELAdventureDirector, player: int) -> Array[Vector
 				if reached[index] != 0 or seen[index] & mask == 0 or director.grid.land.is_point_solid(next): continue
 				reached[index] = 1
 				queue.append(next)
-	var tiles: Array[Vector2i] = []
 	for y in state.map.height:
 		for x in state.map.width:
 			if reached[y * width + x] == 0 or seen[y * width + x] & mask == 0 or director.grid.passability(Vector2i(x, y)) < 0: continue
@@ -277,11 +468,7 @@ static func frontier(director: ELAdventureDirector, player: int) -> Array[Vector
 					var point := Vector2i(x + dx, y + dy)
 					if director.grid.contains(point) and seen[point.y * state.map.width + point.x] & mask == 0: edge = true
 			if edge: tiles.append(Vector2i(x, y))
-	tiles.sort_custom(func(a: Vector2i, b: Vector2i): return (a - home).length_squared() < (b - home).length_squared())
-	for tile: Vector2i in tiles:
-		if result.size() >= EXPLORE_LIMIT: break
-		if result.all(func(other: Vector2i): return (other - tile).length_squared() > EXPLORE_SPACING): result.append(tile)
-	return result
+	return tiles
 
 static func finished(director: ELAdventureDirector, hero: Dictionary, task: Dictionary) -> bool:
 	var state := director.state
@@ -289,14 +476,27 @@ static func finished(director: ELAdventureDirector, hero: Dictionary, task: Dict
 	match task.kind:
 		"monster", "cut": return not item.get("alive", false)
 		"hero": return true
-		"mine", "node": return int(item.get("owner", -1)) == int(hero.owner)
-		"tower": return not ELFirstScenario.alive(state, int(item.get("owner", -1)))
+		"mine", "node": return int(item.get("owner", -1)) == int(hero.owner) or not item.get("alive", false)
+		"tower": return not ELFirstScenario.alive(state, int(item.get("owner", -1))) or not ELFirstScenario.assault_problem(state, hero, item).is_empty()
+		"pickup": return not usable(item)
 		"building": return not ELAdditionalBuildings.visit_problem(state, hero, item).is_empty()
 		"shop": return ELFirstAIEconomy.wants(director, hero, item) == 0
 		"explore":
 			var tile := Vector2i(task.tile[0], task.tile[1])
+			# The way to a castle is sought until the castle is found.
+			var castle := state.object(int(task.get("toward", -1)))
+			if not castle.is_empty() and ELFog.explored(state, int(hero.owner), Vector2i(int(castle.x), int(castle.y))): return true
 			return Vector2i(hero.x, hero.y) == tile or director.grid.path(Vector2i(hero.x, hero.y), tile).is_empty()
+		"patrol": return not item.get("alive", false) or int(item.get("owner", -1)) != int(hero.owner) or ELStrategy.adjacent(director, hero, item)
+		"escort": return not item.get("alive", false) or not besieging(state, item)
 	return true
+
+## Whether a hero holds a siege objective of its player.
+static func besieging(state: ELAdventureSession, hero: Dictionary) -> bool:
+	if not state.players.has(int(hero.get("owner", -1))): return false
+	for pair: Array in data(state, int(hero.owner)).assigned:
+		if int(pair[0]) == int(hero.uid) and pair[1].get("kind") == "tower": return true
+	return false
 
 ## Lower is better; NONE means the task does not apply to this hero.
 ## `limit` skips route searches that cannot beat the best cost so far.
@@ -310,7 +510,9 @@ static func cost(director: ELAdventureDirector, hero: Dictionary, role: int, tas
 			return _route_cost(director, hero, item, false)
 		"hero":
 			if not item.get("alive", false) or int(item.get("level", 1)) - level >= 2 or not state.hostile(hero, item): return NONE
-			if role == 1: return AVOIDED
+			# A supporter attacks only when nothing else is left to do, and
+			# only an enemy it can reach.
+			if role == 1: return AVOIDED if limit > AVOIDED and _route_cost(director, hero, item, false) != NONE else NONE
 			return _route_cost(director, hero, item, true)
 		"tower":
 			if role != 0 or level < 6 or not ELFirstScenario.assault_problem(state, hero, item).is_empty(): return NONE
@@ -347,41 +549,99 @@ static func cost(director: ELAdventureDirector, hero: Dictionary, role: int, tas
 			return NONE if path.is_empty() else director.grid.path_cost(path)
 	return NONE
 
-## Issues the day's order: the same orders a player's clicks produce.
+## Issues the day's order: the same orders a player's clicks produce. The
+## order carries the rules its route was planned under (ELStrategy.order_path
+## keeps to them when the hero walks): this player's explored ground, and
+## outside guard areas other than the target's own when the plan found a
+## clean way.
 static func command(director: ELAdventureDirector, hero: Dictionary, task: Dictionary) -> void:
 	var item := director.state.object(task.get("target", -1))
+	var player := int(hero.owner)
 	if task.kind == "explore":
-		hero.strategy_order = {"destination": [int(task.tile[0]), int(task.tile[1])], "use": -1}
+		hero.strategy_order = {"destination": [int(task.tile[0]), int(task.tile[1])], "use": -1, "route": route_rules(director, player, false)}
+		return
+	if task.kind in ["patrol", "escort"]:
+		# Walks beside its own site or its besieger without using it.
+		var way := director.grid.approach(Vector2i(hero.x, hero.y), item)
+		if way.size() < 2: return
+		hero.strategy_order = {"destination": [way[-1].x, way[-1].y], "use": -1, "route": route_rules(director, player, false)}
 		return
 	var use := int(item.uid)
-	if task.kind in ["mine", "cut", "node"] and _route_cost(director, hero, item, true) == NONE:
+	var clean := _route_cost(director, hero, item, true) != NONE
+	if task.kind in ["mine", "cut", "node"] and not clean:
 		# Without a safe route the hero walks the plain route and may be stopped.
 		var path := director.grid.approach(Vector2i(hero.x, hero.y), item)
 		if path.size() < 2: return
-		hero.strategy_order = {"destination": [path[-1].x, path[-1].y], "use": -1}
+		hero.strategy_order = {"destination": [path[-1].x, path[-1].y], "use": -1, "route": route_rules(director, player, false)}
 		return
-	hero.strategy_order = {"destination": [int(item.x), int(item.y)], "use": use}
+	# Creatures and buildings were planned along the plain route; the rest
+	# along a clean one when there is one.
+	var guarded: bool = task.kind in ["monster", "building"] or not clean
+	hero.strategy_order = {"destination": [int(item.x), int(item.y)], "use": use, "route": route_rules(director, player, not guarded, use)}
+
+## The rules of a planned route: whose explored ground it keeps to (-1: any
+## tile) and whether it keeps out of hostile guard areas other than that of
+## `target`.
+static func route_rules(director: ELAdventureDirector, player: int, avoid_guards: bool, target := -1) -> Dictionary:
+	var state := director.state
+	var known := player if ELFog.active(state, player) and state.explored.size() == state.map.width * state.map.height else -1
+	return {"known": known, "guards": avoid_guards, "target": target}
 
 static func _distance(from: Vector2i, item: Dictionary) -> int:
 	return (Vector2i(int(item.get("x", 0)), int(item.get("y", 0))) - from).length_squared()
 
 ## Movement cost of the best route beside the target. A clean route keeps out
 ## of every hostile interception zone other than the target's own.
-static func _route_cost(director: ELAdventureDirector, hero: Dictionary, item: Dictionary, clean: bool) -> int:
+## `quick` searches only toward the two open cells beside the target nearest
+## the hero (falling back to every cell), for estimates.
+static func _route_cost(director: ELAdventureDirector, hero: Dictionary, item: Dictionary, clean: bool, quick := false) -> int:
 	var grid := director.grid
 	var from := Vector2i(hero.x, hero.y)
 	if ELStrategy.adjacent(director, hero, item): return 0
-	var closed: Array[Vector2i] = []
-	if clean:
-		for point: Vector2i in director.interception.cells:
-			if point == from or not grid.contains(point) or grid.land.is_point_solid(point): continue
-			var guards := director.interception.enemies(director.state, hero, point)
-			if guards.is_empty() or guards == [int(item.uid)]: continue
-			grid.land.set_point_solid(point, true)
-			closed.append(point)
-	var path := grid.approach(from, item)
+	var closed := close_guards(director, hero, int(item.get("uid", -1))) if clean else ([] as Array[Vector2i])
+	var path: Array[Vector2i] = []
+	if quick:
+		var size: Vector2i = grid.footprints.get(int(item.uid), {}).get("size", Vector2i.ONE)
+		var cells: Array[Vector2i] = []
+		for y in range(-1, size.y + 1):
+			for x in range(-1, size.x + 1):
+				var point := Vector2i(int(item.x) + x, int(item.y) + y)
+				if (x < 0 or x >= size.x or y < 0 or y >= size.y) and grid.contains(point) and not grid.land.is_point_solid(point): cells.append(point)
+		cells.sort_custom(func(a: Vector2i, b: Vector2i): return a.distance_squared_to(from) < b.distance_squared_to(from))
+		for point: Vector2i in cells.slice(0, 2):
+			path = grid.path(from, point)
+			if not path.is_empty(): break
+	if path.is_empty(): path = grid.approach(from, item)
 	for point: Vector2i in closed: grid._update_cell(point)
 	return NONE if path.is_empty() else grid.path_cost(path)
+
+## Closes the cells of hostile guard areas other than `target`'s own (and the
+## hero's tile) in the land graph; reopen them with grid._update_cell.
+static func close_guards(director: ELAdventureDirector, hero: Dictionary, target: int) -> Array[Vector2i]:
+	var grid := director.grid
+	var from := Vector2i(hero.x, hero.y)
+	var closed: Array[Vector2i] = []
+	for entry: Array in _hostile_cells(director, hero):
+		var point: Vector2i = entry[0]
+		if point == from or grid.land.is_point_solid(point) or entry[1] == [target]: continue
+		grid.land.set_point_solid(point, true)
+		closed.append(point)
+	return closed
+
+## Hostile guard cells for this hero: [cell, guards]. Kept for one planning
+## pass (the zones and the hero's side do not change while it plans).
+static var _guard_cells: Variant = null
+
+static func _hostile_cells(director: ELAdventureDirector, hero: Dictionary) -> Array:
+	var key := "%d:%d" % [int(hero.get("uid", -1)), int(hero.get("owner", -1))]
+	if _guard_cells is Dictionary and _guard_cells.has(key): return _guard_cells[key]
+	var result: Array = []
+	for point: Vector2i in director.interception.cells:
+		if not director.grid.contains(point): continue
+		var guards := director.interception.enemies(director.state, hero, point)
+		if not guards.is_empty(): result.append([point, guards])
+	if _guard_cells is Dictionary: _guard_cells[key] = result
+	return result
 
 ## Cost of the way to an object past guards, when the hero may fight every
 ## one of them (the rule of the "monster" task); NONE otherwise.
@@ -413,8 +673,30 @@ static func restore(state: ELAdventureSession) -> String:
 			var clean := _task(state, pair[1])
 			if clean.is_empty(): return "Invalid saved computer task."
 			assigned.append([int(pair[0]), clean])
-		state.players[player].ai = {"version": VERSION, "built": raw.built, "tasks": tasks, "assigned": assigned, "champion": int(raw.champion)}
-		if raw.has("hired"): state.players[player].ai.hired = int(raw.hired)
+		var record := {"version": VERSION, "built": raw.built, "tasks": tasks, "assigned": assigned, "champion": int(raw.champion)}
+		if raw.has("hired"): record.hired = int(raw.hired)
+		# Later additions; older saves have none of them.
+		for field: String in ["retry", "seen"]:
+			var table: Variant = raw.get(field, {})
+			if not table is Dictionary or table.size() > 10000: return "Invalid saved computer plans."
+			var copy := {}
+			for key: Variant in table:
+				var value: Variant = table[key]
+				if field == "retry":
+					if not key is String or not ELLuaSave._integer(value, 0, 0x7fffffff): return "Invalid saved computer plans."
+					copy[key] = int(value)
+				else:
+					if not value is Array or value.size() != 3 or not ELLuaSave._integer(value[0], 0, state.map.width - 1) or not ELLuaSave._integer(value[1], 0, state.map.height - 1) or not ELLuaSave._integer(value[2], 0, 0x7fffffff): return "Invalid saved computer plans."
+					copy[str(key)] = [int(value[0]), int(value[1]), int(value[2])]
+			if not copy.is_empty(): record[field] = copy
+		var threats: Variant = raw.get("threats", [])
+		if not threats is Array or threats.size() > 1000: return "Invalid saved computer plans."
+		var list: Array = []
+		for id: Variant in threats:
+			if not ELLuaSave._integer(id, 0, 0x7fffffff): return "Invalid saved computer plans."
+			list.append(int(id))
+		if not list.is_empty(): record.threats = list
+		state.players[player].ai = record
 	return ""
 
 static func _task(state: ELAdventureSession, raw: Variant) -> Dictionary:
@@ -424,7 +706,23 @@ static func _task(state: ELAdventureSession, raw: Variant) -> Dictionary:
 		var tile: Variant = raw.get("tile")
 		if not tile is Array or tile.size() != 2 or not ELLuaSave._integer(tile[0], 0, state.map.width - 1) or not ELLuaSave._integer(tile[1], 0, state.map.height - 1): return {}
 		task.tile = [int(tile[0]), int(tile[1])]
+		# The castle whose way the exploration seeks (absent in older saves).
+		if raw.has("toward"):
+			if not ELLuaSave._integer(raw.toward, 0, 0x7fffffff) or not state.objects.has(int(raw.toward)): return {}
+			task.toward = int(raw.toward)
 	elif not state.objects.has(task.target): return {}
+	# Assignment progress (absent in older saves).
+	if raw.has("personal"):
+		if not raw.personal is bool: return {}
+		task.personal = raw.personal
+	for field: String in ["tries", "since"]:
+		if raw.has(field):
+			if not ELLuaSave._integer(raw[field], 0, 0x7fffffff): return {}
+			task[field] = int(raw[field])
+	if raw.has("mark"):
+		var mark: Variant = raw.mark
+		if not mark is Array or mark.size() != 3 or not ELLuaSave._integer(mark[0], 0, state.map.width - 1) or not ELLuaSave._integer(mark[1], 0, state.map.height - 1) or not ELLuaSave._integer(mark[2], 0, 0x7fffffff): return {}
+		task.mark = [int(mark[0]), int(mark[1]), int(mark[2])]
 	return task
 
 ## Hardcoded chapter heroes of the neutral side; every other neutral hero and

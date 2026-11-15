@@ -113,7 +113,13 @@ static func cost(profile: ELProfile, code: String) -> int:
 static func strength(profile: ELProfile, code: String) -> String:
 	var creature: Dictionary = profile.table("CombatCreatures").get(code, {})
 	if creature.is_empty(): return ""
-	return "%s/%s" % [str(creature.get("Power", "X")), str(creature.get("Toughness", "X"))]
+	return "%s/%s" % [stat_text(creature.get("Power", -1)), stat_text(creature.get("Toughness", -1))]
+
+## A creature's printed power or toughness; the pale manifestations' X (their
+## strength set when they enter play) is stored as a negative value and reads
+## "X", as in the original encyclopaedia.
+static func stat_text(value: Variant) -> String:
+	return "X" if int(value) < 0 else str(int(value))
 
 ## The three 256x256 parts of a creature's encyclopaedia picture, or [] when absent.
 static func picture(profile: ELProfile, code: String) -> Array:

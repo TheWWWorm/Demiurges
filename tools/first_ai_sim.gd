@@ -1,16 +1,39 @@
 extends SceneTree
-## Plays a first-game single map with the local player standing still and
-## prints what the computer players do with their days: tasks, purchases at
-## spell shops and component portals, skills, recruits and global spells.
+## Plays a first-game single map with the local player standing still (or
+## played by the original computer rules) and prints what the computer
+## players do with their days: tasks, purchases at spell shops and component
+## portals, skills, recruits and global spells, and how well they plan.
 ##
 ##   godot --headless --path game --script ../tools/first_ai_sim.gd -- [--map=<id>|all] [--days=40]
-##         [--campaign=Good|Evil] [--smart=true] [--free=true] [--difficulty=1]
+##         [--campaign=Good|Evil] [--smart=true] [--free=true] [--difficulty=1] [--seed=212]
+##         [--opponent=still|active] [--estimate=false] [--lookahead=true] [--living=false]
 ##         [--list] [--quiet] [--dump]
 ##
 ## `--list` prints the single map ids. Without `--map` the first catalogue map
 ## with a spell shop is played; `--campaign` plays that campaign's chapters
-## (all of them, or the one named by `--map`) from the human's seat. `--dump`
-## adds each player's ether, global spells, books and known shops at the end.
+## (all of them, or the one named by `--map`) from the human's seat. `--seed`
+## seeds the session's random numbers. `--opponent=active` has the human's
+## seat planned by the original computer rules (without the remake option),
+## as a baseline opponent; by default it stands still and its battles go to
+## the attacker. `--estimate` decides strategic battles by the strength
+## estimate instead of the original level rule. `--lookahead=false` turns
+## off the smarter planner's short lookahead, `--living=true` turns on the
+## living-world switch (patrols, raids, escorts, retreats, doctrines). `--dump` adds each player's
+## ether, global spells, books and known shops at the end.
+##
+## Each computer player's summary counts, per hero and day:
+##   idle         no objective at the end of the day;
+##   no progress  idle, or an objective but neither a step nor anything done
+##                on the spot (a capture, a purchase, a visit, a battle won);
+##   stalled      an objective, no step, and not beside its target;
+## and also unused movement (points left at night, share of the day's
+## movement), lost objectives (objective-days: valid castles, sites,
+## creatures and usable buildings neither open nor held), route-rule
+## breaches (steps onto tiles the player had not explored, steps into a guard
+## area other than the order's target), castle threats (an enemy hero
+## within 12 tiles of the castle) and the days until a hero of the player
+## came within 4 tiles of it, income, and planning passes and time.
+##
 ## The run ends with a summary per computer player and exits 1 when a map
 ## stops with an error or a turn never settles.
 ##
@@ -22,6 +45,9 @@ var state: ELAdventureSession
 var quiet := false
 var stats := {}
 var stuck := false
+var active := false
+var explored_before := PackedByteArray()
+var threats := {}
 
 func _arg(name: String, fallback: String) -> String:
 	for arg in OS.get_cmdline_user_args():
@@ -44,6 +70,7 @@ func _run() -> void:
 		quit(0)
 		return
 	quiet = _arg("quiet", "false") == "true"
+	active = _arg("opponent", "still") == "active"
 	var catalog := ELSingleScenario.catalog(profile)
 	if _arg("list", "false") == "true":
 		for entry: Dictionary in catalog: print("%s  %s  players=%s" % [entry.id, ELSingleScenario.title(profile, entry), str(entry.get("players", []).size())])
@@ -74,7 +101,8 @@ func _run() -> void:
 	quit(1 if failed else 0)
 
 func _stat(player: int) -> Dictionary:
-	if not stats.has(player): stats[player] = {"spells": 0, "runes": 0, "skills": 0, "recruits": 0, "globals": 0, "visits": 0, "idle": 0, "hero_days": 0, "kills": 0}
+	if not stats.has(player): stats[player] = {"spells": 0, "runes": 0, "skills": 0, "recruits": 0, "globals": 0, "visits": 0, "idle": 0, "hero_days": 0, "kills": 0,
+		"no_progress": 0, "stalled": 0, "ap_left": 0, "ap_total": 0, "lost": 0, "unexplored_steps": 0, "guard_steps": 0, "threats": 0, "answered": 0, "response_days": 0, "castles": 0}
 	return stats[player]
 
 func _play(profile: ELProfile, entry: Dictionary, days: int, need_shop: bool) -> String:
@@ -83,7 +111,7 @@ func _play(profile: ELProfile, entry: Dictionary, days: int, need_shop: bool) ->
 		print("SKIP %s: %s" % [entry.id, map.error])
 		return "skip"
 	state = ELAdventureSession.new()
-	if not state.start(map, int(_arg("difficulty", "1")), 212, str(entry.get("script", "")), int(entry.get("player", 1)), bool(entry.get("campaign", false))):
+	if not state.start(map, int(_arg("difficulty", "1")), int(_arg("seed", "212")), str(entry.get("script", "")), int(entry.get("player", 1)), bool(entry.get("campaign", false))):
 		print("SKIP %s: %s" % [entry.id, state.error])
 		return "skip"
 	director = ELAdventureDirector.new()
@@ -98,10 +126,17 @@ func _play(profile: ELProfile, entry: Dictionary, days: int, need_shop: bool) ->
 	if need_shop and shops == 0: return "skip"
 	director.smart_ai = _arg("smart", "true") == "true"
 	director.free_movement = _arg("free", "true") == "true"
+	if "battle_estimate" in director: director.set("battle_estimate", _arg("estimate", "false") == "true")
+	if "living_world" in director: director.set("living_world", _arg("living", "false") == "true")
+	var planner: Script = load("res://src/content/first_ai_planner.gd") if ResourceLoader.exists("res://src/content/first_ai_planner.gd") else null
+	if planner != null and "lookahead" in planner: planner.set("lookahead", _arg("lookahead", "true") == "true")
 	director.fast_mode = true
+	director.set_meta("first_ai_stats", {})
 	stats = {}
+	threats = {}
 	stuck = false
 	var books := {}
+	var fell := {}
 	state.event.connect(func(data: Dictionary):
 		match data.get("kind"):
 			"skill_learned":
@@ -128,48 +163,81 @@ func _play(profile: ELProfile, entry: Dictionary, days: int, need_shop: bool) ->
 					_stat(int(hero.owner)).runes += runes
 					_say("day %d  P%d %s buys %d runes" % [state.day, hero.owner, hero.name, runes])
 				books[int(hero.uid)] = {"cards": hero.cards.duplicate(), "uses": hero.rune_uses.duplicate()}
+			"player_eliminated":
+				fell[int(data.get("player", -1))] = int(state.day)
+				_say("day %d  P%s is out" % [state.day, str(data.get("player", "?"))])
 	)
-	print("=== %s (%s): %d spell shops, %d component portals, smart=%s free=%s, human P%d" % [entry.id, ELSingleScenario.title(profile, entry), shops, portals, director.smart_ai, director.free_movement, state.current_player])
+	director.presentation.connect(func(data: Dictionary):
+		# Movement left when the night's actions begin, before it is restored.
+		if data.get("kind") == "strategy_phase" and data.get("phase") == "use" and director.strategy.get("free", "night") == "night":
+			for player: int in ELFirstAI.computer_players(state):
+				for hero: Dictionary in ELFirstAI.heroes_of(state, player):
+					_stat(player).ap_left += maxi(0, int(hero.ap))
+					_stat(player).ap_total += maxi(1, int(hero.strategy_capacity))
+	)
+	explored_before = state.explored.duplicate()
+	director.grid.actor_moved.connect(_stepped)
+	print("=== %s (%s): %d spell shops, %d component portals, smart=%s free=%s seed=%s opponent=%s lookahead=%s living=%s, human P%d" % [entry.id, ELSingleScenario.title(profile, entry), shops, portals, director.smart_ai, director.free_movement, _arg("seed", "212"), "active" if active else "still", _arg("lookahead", "true"), _arg("living", "false"), state.current_player])
+	var income := {}
 	for player: int in state.players:
 		if player == state.current_player: continue
 		var castle := ELFirstScenario.castle_object(state, player)
 		var own := 0
 		for item: Dictionary in state.objects.values():
 			if item.get("type") == "hero" and int(item.get("owner", -1)) == player and item.get("alive", false): own += 1
+		income[player] = int(ELStrategy.mana_budget(state, player).income)
 		print("    P%d %s: castle %s, heroes at start %d, relation to human %s, computer %s" % [player, state.players[player].color, "none" if castle.is_empty() else "(%d,%d)" % [castle.x, castle.y], own, str(state.players[player].get("relations", {}).get(state.current_player, "-")), ELFirstAI.computer_players(state).has(player)])
+	var alive_at_start := {}
+	for player: int in state.players: alive_at_start[player] = ELFirstScenario.alive(state, player)
 	var last_globals := {}
+	var outcome_day := -1
 	for day in days:
 		for item: Dictionary in state.objects.values():
 			if item.get("type") == "hero" and item.get("alive", false) and item.has("cards") and item.has("rune_uses"): books[int(item.uid)] = {"cards": item.cards.duplicate(), "uses": item.rune_uses.duplicate()}
+		var before := _snapshot()
 		if not _settle(): break
+		if active and not _human_day(): break
 		if not director.end_day():
 			print("day %d: the day cannot end: %s %s" % [state.day, director.notice, director.error])
 			break
 		if not _settle(): break
 		for player: int in ELFirstAI.computer_players(state):
 			var record := ELGlobalSpells.data(state, player)
-			var active: Array = []
-			for spell: Dictionary in record.get("active", []): active.append(str(spell.code))
+			var actives: Array = []
+			for spell: Dictionary in record.get("active", []): actives.append(str(spell.code))
 			var seen: Array = last_globals.get(player, [])
-			for code: String in active:
+			for code: String in actives:
 				if not seen.has(code):
 					_stat(player).globals += 1
 					_say("day %d  P%d casts %s" % [state.day, player, code])
-			last_globals[player] = active
+			last_globals[player] = actives
 			var tasks := {}
 			for pair: Array in ELFirstAI.data(state, player).assigned: tasks[int(pair[0])] = pair[1]
 			var lines: Array = []
 			for hero: Dictionary in ELFirstAI.heroes_of(state, player):
 				var task: Dictionary = tasks.get(int(hero.uid), {})
-				_stat(player).hero_days += 1
-				if task.is_empty(): _stat(player).idle += 1
+				var s := _stat(player)
+				s.hero_days += 1
 				var target := state.object(int(task.get("target", -1)))
+				var was: Array = before.get(int(hero.uid), [])
+				var moved: bool = was.is_empty() or was[0] != Vector2i(hero.x, hero.y)
+				var acted: bool = not was.is_empty() and was[1] != _deeds(hero)
+				if task.is_empty(): s.idle += 1
+				if task.is_empty() or (not moved and not acted): s.no_progress += 1
+				if not task.is_empty() and not moved and not (not target.is_empty() and ELStrategy.adjacent(director, hero, target)): s.stalled += 1
 				lines.append("%s L%d (%d,%d) %s%s runes %d%%" % [hero.name, hero.level, hero.x, hero.y, task.get("kind", "idle"), (":" + str(target.get("name", ""))) if not target.is_empty() else "", int(ELFirstAIEconomy.rune_health(state, hero) * 100)])
+			_stat(player).lost += _lost(player)
+			_threats(player)
 			if not quiet: print("day %d  P%d %s | %s | making %s" % [state.day, player, _resources(player), "; ".join(lines), str(record.get("production", {}).get("code", "-"))])
 		if not state.outcome.is_empty():
+			outcome_day = int(state.day)
 			print("day %d: outcome %s" % [state.day, state.outcome])
 			break
 	var failed := false
+	var timing: Dictionary = director.get_meta("first_ai_stats", {})
+	var fallen: Array = []
+	for player: int in state.players:
+		if alive_at_start.get(player, false) and not ELFirstScenario.alive(state, player): fallen.append("P%d@%s" % [player, str(fell.get(player, "?"))])
 	for player: int in ELFirstAI.computer_players(state):
 		var s := _stat(player)
 		var known := 0
@@ -177,13 +245,126 @@ func _play(profile: ELProfile, entry: Dictionary, days: int, need_shop: bool) ->
 			if ELFirstAIEconomy.is_shop(item) and ELFog.explored(state, player, Vector2i(item.x, item.y)): known += 1
 		var levels: Array = []
 		for hero: Dictionary in ELFirstAI.heroes_of(state, player): levels.append(int(hero.level))
+		var sites := 0
+		for item: Dictionary in state.objects.values():
+			if item.get("group") in ["mines", "mana_nodes"] and int(item.get("owner", -1)) == player: sites += 1
 		print("SUMMARY P%d: heroes %s, spells bought %d, runes bought %d, skills %d, recruits %d, global spells %d, idle hero-days %d/%d, shops known %d, %s" % [player, str(levels), s.spells, s.runes, s.skills, s.recruits, s.globals, s.idle, s.hero_days, known, _resources(player)])
+		print("METRICS P%d: no-progress %d/%d, stalled %d, unused movement %d%%, lost objective-days %d, unexplored steps %d, guard steps %d, threats %d answered %d (avg %.1f days), sites held %d, ether income %d -> %d" % [player, s.no_progress, s.hero_days, s.stalled, int(100.0 * s.ap_left / maxi(1, s.ap_total)), s.lost, s.unexplored_steps, s.guard_steps, s.threats, s.answered, float(s.response_days) / maxi(1, s.answered), sites, int(income.get(player, 0)), int(ELStrategy.mana_budget(state, player).income)])
+	var passes := maxi(1, int(timing.get("passes", 0)))
+	print("RESULT: outcome %s day %d, castles fallen %s, planning passes %d, %.1f ms per pass (objectives %.1f, matching %.1f of which lookahead %.1f, orders %.1f), slowest pass %.1f ms" % [state.outcome if not state.outcome.is_empty() else "-", outcome_day if outcome_day >= 0 else int(state.day), str(fallen), int(timing.get("passes", 0)), float(timing.get("usec", 0)) / 1000.0 / passes, float(timing.get("objectives", 0)) / 1000.0 / passes, float(timing.get("assign", 0)) / 1000.0 / passes, float(timing.get("lookahead", 0)) / 1000.0 / passes, float(timing.get("command", 0)) / 1000.0 / passes, float(timing.get("slowest", 0)) / 1000.0])
 	if not director.error.is_empty():
 		print("ERROR: " + director.error)
 		failed = true
 	if stuck: failed = true
 	if _arg("dump", "false") == "true": _dump(profile)
+	if _arg("explain", "false") == "true": _explain()
 	return "fail" if failed else "ok"
+
+## The smarter planner's best options for every computer hero at the end.
+func _explain() -> void:
+	var planner: Script = load("res://src/content/first_ai_planner.gd") if ResourceLoader.exists("res://src/content/first_ai_planner.gd") else null
+	if planner == null or not ELFirstAIEconomy.applies(director): return
+	for player: int in ELFirstAI.computer_players(state):
+		var ai := ELFirstAI.data(state, player)
+		var closed: Array[Vector2i] = ELFirstAI._close_unexplored(director, player)
+		var pool: Array = (ELFirstAI as Script).call("objectives", director, player)
+		var danger: Dictionary = planner.call("threats", director, player)
+		for hero: Dictionary in ELFirstAI.heroes_of(state, player):
+			var role := 0 if int(ai.champion) == int(hero.uid) else 1
+			var rows: Array = []
+			for task: Dictionary in pool:
+				var points: float = planner.call("utility", director, hero, role, task, danger, true)
+				if points > -INF: rows.append([points, "%s:%s" % [task.kind, str(state.object(int(task.get("target", -1))).get("name", task.get("tile", "")))]])
+			rows.sort_custom(func(a: Array, b: Array): return a[0] > b[0])
+			print("EXPLAIN P%d %s L%d role %d: %s" % [player, hero.name, hero.level, role, ", ".join(rows.slice(0, 8).map(func(r: Array): return "%s %.0f" % [r[1], r[0]]))])
+		for point: Vector2i in closed: director.grid._update_cell(point)
+
+## The human's seat as a baseline opponent: the original rules plan its
+## heroes, which then move as the player's would.
+func _human_day() -> bool:
+	var player := state.current_player
+	var smart := director.smart_ai
+	director.smart_ai = false
+	ELFirstAI.plan_player(director, player)
+	director.smart_ai = smart
+	if not ELStrategy.free_mode(director): return true
+	for hero: Dictionary in ELFirstAI.heroes_of(state, player):
+		if hero.get("strategy_order", {}).is_empty() or int(hero.ap) <= 0: continue
+		if ELStrategy.act(director, hero) and not _settle(): return false
+	return true
+
+## Each computer hero's tile and what it has done (experience, book, skills,
+## resources and holdings of its player), at the start of a day.
+func _snapshot() -> Dictionary:
+	var result := {}
+	for player: int in ELFirstAI.computer_players(state):
+		for hero: Dictionary in ELFirstAI.heroes_of(state, player): result[int(hero.uid)] = [Vector2i(hero.x, hero.y), _deeds(hero)]
+	return result
+
+func _deeds(hero: Dictionary) -> String:
+	var held := 0
+	for item: Dictionary in state.objects.values():
+		if int(item.get("owner", -1)) == int(hero.owner) and item.get("type") != "hero": held += 1
+	return var_to_str([int(hero.experience), hero.get("cards", []), hero.get("rune_uses", []), hero.get("skills", {}), held, state.players[int(hero.owner)].resources])
+
+## Objectives a player could pursue that its plans have lost track of.
+func _lost(player: int) -> int:
+	var ai := ELFirstAI.data(state, player)
+	var known := {}
+	for task: Dictionary in ai.tasks: known[int(task.get("target", -1))] = true
+	for pair: Array in ai.assigned:
+		if state.object(pair[0]).get("alive", false): known[int(pair[1].get("target", -1))] = true
+	var heroes := ELFirstAI.heroes_of(state, player)
+	if heroes.is_empty(): return 0
+	var count := 0
+	for item: Dictionary in state.objects.values():
+		if known.has(int(item.uid)) or not item.get("alive", false): continue
+		var valid := false
+		if ELFirstScenario.is_castle(item): valid = int(item.owner) >= 1 and int(item.owner) != player and ELFirstScenario.alive(state, int(item.owner))
+		elif item.get("group") in ["mines", "mana_nodes"]: valid = int(item.get("owner", -1)) < 0
+		elif item.get("group") == "resource_cuts": valid = true
+		elif item.get("type") == "monster" and int(item.get("owner", 0)) <= 0: valid = item.get("visible", false) and item.get("placed", true)
+		elif item.get("group") == "additional_buildings" and not ELFirstAI.SKIPPED_BUILDINGS.has(item.get("name")) and ELAdditionalBuildings.supported(item):
+			for hero: Dictionary in heroes:
+				if ELAdditionalBuildings.visit_problem(state, hero, item).is_empty(): valid = true
+		if valid: count += 1
+	return count
+
+## Castle threats and how long until a hero of the player comes near.
+func _threats(player: int) -> void:
+	var castle := ELFirstScenario.castle_object(state, player)
+	if castle.is_empty(): return
+	var at := Vector2i(castle.x, castle.y)
+	var own := ELFirstAI.heroes_of(state, player)
+	for item: Dictionary in state.objects.values():
+		var key := "%d:%d" % [player, int(item.get("uid", -1))]
+		var near: bool = item.get("type") == "hero" and item.get("alive", false) and int(item.get("owner", -1)) >= 1 and int(item.owner) != player and state.hostile(item, castle) and maxi(absi(int(item.x) - at.x), absi(int(item.y) - at.y)) <= 12
+		if not near:
+			threats.erase(key)
+			continue
+		if not threats.has(key):
+			threats[key] = {"day": int(state.day), "answered": false}
+			_stat(player).threats += 1
+		var threat: Dictionary = threats[key]
+		if threat.answered: continue
+		for hero: Dictionary in own:
+			if maxi(absi(int(hero.x) - int(item.x)), absi(int(hero.y) - int(item.y))) <= 4:
+				threat.answered = true
+				_stat(player).answered += 1
+				_stat(player).response_days += int(state.day) - int(threat.day)
+				break
+
+## A computer hero's step: onto ground its player had not explored, or into
+## a guard area that is not its order's target.
+func _stepped(actor: Dictionary) -> void:
+	var player := int(actor.get("owner", -1))
+	if actor.get("type") == "hero" and ELFirstAI.computer_players(state).has(player) and director.grid.contains(Vector2i(actor.x, actor.y)):
+		var index := int(actor.y) * state.map.width + int(actor.x)
+		if ELFog.active(state, player) and index < explored_before.size() and explored_before[index] & ELFog.bit(player) == 0: _stat(player).unexplored_steps += 1
+		var guards := director.interception.enemies(state, actor, Vector2i(actor.x, actor.y))
+		var target := int(actor.get("strategy_order", {}).get("use", -1))
+		if not guards.is_empty() and not guards.has(target): _stat(player).guard_steps += 1
+	explored_before = state.explored.duplicate()
 
 ## Books, known shops with their stock and prices, and the global spells on offer.
 func _dump(profile: ELProfile) -> void:
@@ -214,7 +395,7 @@ func _dump(profile: ELProfile) -> void:
 			break
 
 func _say(text: String) -> void:
-	print("  * " + text)
+	if not quiet: print("  * " + text)
 
 func _resources(player: int) -> String:
 	var parts: Array = []
@@ -231,10 +412,14 @@ func _settle() -> bool:
 			director.acknowledge("OK")
 			continue
 		if director.encounter != null:
-			# The local player's heroes never fight here: the attacker wins.
 			var first := state.object(director.encounter.attacker())
 			var second := state.object(director.encounter.target())
 			director.encounter = null
+			if active:
+				# A baseline opponent fights by the same rule as the computer.
+				ELFirstAI.resolve(director, first, second)
+				continue
+			# The local player's heroes never fight here: the attacker wins.
 			var mine := first if int(first.owner) == state.current_player else second
 			var other := second if mine == first else first
 			ELFirstAI.resolve(director, first, second, int(other.uid))

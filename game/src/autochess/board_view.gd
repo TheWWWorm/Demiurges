@@ -216,7 +216,8 @@ func set_hero(side: int, id: String) -> void:
 	if row.is_empty(): return
 	var model := ELModel.new()
 	add_child(model)
-	if not model.build(profile, String(row.get("Model", "")), "Heroes/" + String(row.get("Texture", "")).replace("\\", "/")):
+	var second := String(row.get("Texture2", row.get("SecTexture", ""))).replace("\\", "/")
+	if not model.build(profile, String(row.get("Model", "")), "Heroes/" + String(row.get("Texture", "")).replace("\\", "/"), "Heroes/" + second if not second.is_empty() else ""):
 		model.queue_free()
 		return
 	var hero_model := String(row.get("Model", "")).to_lower().begins_with("he")

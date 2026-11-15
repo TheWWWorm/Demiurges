@@ -18,7 +18,7 @@ layout(set = 0, binding = 0, std430) readonly buffer Frame {
 	vec4 sun_direction;     // towards the sun; w = tan of the sun's angular radius
 	vec4 sun_color;         // linear colour times energy; w = 1 while the sun shines
 	vec4 ambient;           // linear ambient; w = scenery light limit
-	uvec4 info;             // frame, width, height, flags
+	uvec4 info;             // frame, width, height, flags (1 history reset, 2 light view, 4 debug, 8 Ray Reconstruction guides)
 	uvec4 counts;           // diffuse lights, longest history, secondary lights, diffuse rays
 	vec4 tuning;            // x = sky strength (1 the default; settings "sky_light"); yzw = an arena's backdrop colour
 } frame;
@@ -194,10 +194,21 @@ layout(set = 1, binding = 4, rgba16f) uniform writeonly image2D light_out;   // 
 layout(set = 1, binding = 5, rgba16f) uniform writeonly image2D guide_out;   // world normal, signed distance (0 = not traced)
 layout(set = 1, binding = 6, rgba16f) uniform writeonly image2D primary_out; // raster emission, ground flag
 layout(set = 1, binding = 7, rgba16f) uniform writeonly image2D secondary_out;
+// The sun's visibility over recent frames (r) and how many (g). Where it
+// changes (a shadow passing over), the lighting history is cut short, so a
+// fast figure's shadow is not averaged away into the sunlit ground.
+layout(set = 1, binding = 8, rgba16f) uniform readonly image2D previous_sun;
+layout(set = 1, binding = 9, rgba16f) uniform writeonly image2D sun_out;
 
 
 // Diffuse rays per pixel path (settings "light_bounces", 1 to 4).
 #define BOUNCES int(frame.counts.w)
+// Sun visibility: frames remembered, the change that counts as a shadow
+// arriving or leaving (a penumbra's coin-flip samples stay under it), and the
+// lighting history kept then.
+#define SUN_HISTORY 8.0
+#define SUN_CHANGE 0.7
+#define SUN_CHANGE_HISTORY 1.0
 const float SCENERY_HEADROOM = 1.1;
 // The flat raster ambient becomes a sky: blue overhead and brightest low
 // around the horizon, as hazy daylight is, so upright figures and walls
@@ -508,7 +519,9 @@ vec3 ggx_half(vec3 n, float a2, inout uint state) {
 // Metal's glossy light: the sun's highlight and one reflection of the sky or
 // the scene, each hit lit by the sun. The composite multiplies by the raster
 // colour, which stands in for metal's albedo-tinted reflectance.
-vec3 metal_shine(vec3 origin, vec3 normal, vec3 geometric_normal, vec3 view_direction, bool sun_visible, inout uint state) {
+// `hit_distance` becomes the reflection ray's length (the ray's reach when it
+// escapes; left as it was when no ray is cast).
+vec3 metal_shine(vec3 origin, vec3 normal, vec3 geometric_normal, vec3 view_direction, bool sun_visible, inout uint state, inout float hit_distance) {
 	vec3 v = -view_direction;
 	float n_dot_v = max(dot(normal, v), 1e-3);
 	vec3 sun = frame.sun_direction.xyz;
@@ -524,6 +537,7 @@ vec3 metal_shine(vec3 origin, vec3 normal, vec3 geometric_normal, vec3 view_dire
 	if (n_dot_r <= 0.0 || dot(geometric_normal, r) <= 0.0) return shine;
 	float weight = min(smith_g1(n_dot_v, METAL_A2) * smith_g1(n_dot_r, METAL_A2) * max(dot(v, h), 1e-3) / (n_dot_v * max(dot(normal, h), 1e-3)), 2.0);
 	Payload seen = closest(origin, r, 60.0, RAY_SOLID | RAY_SOFT_EMITTER, state, false, gl_RayFlagsNoneEXT, false);
+	hit_distance = seen.found == 0u ? 60.0 : seen.distance;
 	if (seen.found == 0u) return shine + surroundings(r) * weight;
 	Slot look = slots[instance_slot(seen.instance)];
 	vec3 colour = look.tint.rgb * surface_albedo(look, seen.uv, 2.0).rgb * instance_tint(seen.instance);
@@ -591,11 +605,13 @@ void main() {
 		imageStore(light_out, pixel, vec4(float(primary.found), primary.found != 0u ? primary.distance / max(distance_to_eye, 0.001) * 0.5 : 0.0, distance_to_eye / 50.0, 1.0));
 		imageStore(guide_out, pixel, vec4(0.0, 0.0, 1.0, 1.0));
 		imageStore(primary_out, pixel, vec4(0.0));
+		imageStore(sun_out, pixel, vec4(0.0));
 		return;
 	}
 	if (primary.found == 0u) {
 		imageStore(light_out, pixel, vec4(0.0));
 		imageStore(guide_out, pixel, vec4(0.0));
+		imageStore(sun_out, pixel, vec4(0.0));
 		return;
 	}
 	Slot primary_look = slots[instance_slot(primary.instance)];
@@ -605,6 +621,7 @@ void main() {
 	if (unlit && (primary_look.geometry.z & SLOT_UNLIT_SHADOWED) == 0u) {
 		imageStore(light_out, pixel, vec4(0.0));
 		imageStore(guide_out, pixel, vec4(0.0));
+		imageStore(sun_out, pixel, vec4(0.0));
 		return;
 	}
 	bool scenery = (primary_look.geometry.z & SLOT_SCENERY) != 0u;
@@ -621,8 +638,16 @@ void main() {
 
 	vec3 lighting = vec3(0.0);
 	vec3 effects = vec3(0.0);
+	// The metal reflection's share of this pixel's light and its ray length,
+	// for the Ray Reconstruction guides.
+	float specular_share = 0.0;
+	float specular_distance = 0.0;
+	// This frame's sun sample (0 shadowed, 1 lit; below 0 where the sun does
+	// not reach the surface anyway).
+	float sun_now = -1.0;
 	if (unlit) {
 		lighting = vec3(unlit_shadow(eye + view_direction * primary.distance, 0.02 + distance_to_eye * 0.001, state));
+		if (frame.sun_color.w > 0.5) sun_now = lighting.r >= 0.999 ? 1.0 : 0.0;
 	} else {
 		// Sun: soft shadow through a cone of the sun's angular size.
 		vec3 sun = frame.sun_direction.xyz;
@@ -646,6 +671,7 @@ void main() {
 			vec3 towards = normalize(sun + (t * cos(phi) + b * sin(phi)) * r);
 			float sun_seen = sun_transmission(sun_origin, towards, 200.0) * sun_share;
 			sun_visible = sun_seen > 0.5;
+			sun_now = sun_seen / max(sun_share, 1e-4);
 			lighting += sunlight(n_dot_l, scenery) * sun_seen;
 		}
 
@@ -692,7 +718,8 @@ void main() {
 			float raster_mask = metal_texels(primary_look, primary.uv);
 			float metal = raster_mask * METALNESS;
 			if (metal > 0.0) {
-				vec3 shine = metal_shine(origin, normal, geometric_normal, view_direction, sun_visible, state);
+				vec3 shine = metal_shine(origin, normal, geometric_normal, view_direction, sun_visible, state, specular_distance);
+				specular_share = metal;
 				// The raster drew this texel's diffuse partly metallic, so darker:
 				// undo that before the composite multiplies by its colour.
 				lighting = mix(lighting, shine, metal) / max(1.0 - RASTER_METALLIC * raster_mask, 0.25);
@@ -713,6 +740,7 @@ void main() {
 	vec4 clip = frame.previous_view_projection * vec4(world, 1.0);
 	float history = 0.0;
 	vec3 previous = vec3(0.0);
+	vec4 sun_sum = vec4(0.0);
 	if (clip.w > 0.0 && (frame.info.w & 1u) == 0u) {
 		vec2 at = (clip.xy / clip.w * 0.5 + 0.5) * vec2(size) - 0.5;
 		ivec2 base = ivec2(floor(at));
@@ -728,18 +756,38 @@ void main() {
 			if (abs(abs(guide.w) - expected) > 0.03 * expected + 0.05 || dot(guide.xyz, normal) < 0.85) continue;
 			float w = ((i & 1) == 1 ? f.x : 1.0 - f.x) * ((i >> 1) == 1 ? f.y : 1.0 - f.y);
 			sum += imageLoad(previous_light, q) * w;
+			sun_sum += imageLoad(previous_sun, q) * w;
 			total += w;
 		}
 		if (total > 0.05) {
 			sum /= total;
 			previous = sum.rgb;
 			history = sum.a;
+			sun_sum /= total;
 		}
+	}
+	// A shadow arrived or left: the old light no longer holds here.
+	float sun_seen_before = sun_sum.r, sun_frames = sun_sum.g;
+	if (sun_now >= 0.0 && sun_frames >= 1.0 && abs(sun_now - sun_seen_before) > SUN_CHANGE) {
+		history = min(history, SUN_CHANGE_HISTORY);
+		sun_frames = min(sun_frames, 1.0);
+	}
+	if (sun_now >= 0.0) {
+		sun_frames = min(sun_frames + 1.0, SUN_HISTORY);
+		imageStore(sun_out, pixel, vec4(mix(sun_seen_before, sun_now, 1.0 / sun_frames), sun_frames, 0.0, 0.0));
+	} else {
+		imageStore(sun_out, pixel, vec4(0.0));
 	}
 	history = min(history + 1.0, float(frame.counts.y));
 	vec3 result = mix(previous, lighting, 1.0 / history);
 	imageStore(light_out, pixel, vec4(result, history));
 	imageStore(guide_out, pixel, vec4(normal, scenery ? -distance_to_eye : distance_to_eye));
+	if ((frame.info.w & 8u) != 0u) {
+		// For the guides: the metal share as a negative surface flag (ground,
+		// flagged 1, is never metal) and the reflection's length.
+		imageStore(primary_out, pixel, vec4(unlit ? vec3(0.0) : surface_emission(primary_look, primary.uv, 0.0), ground ? 1.0 : -specular_share));
+		imageStore(secondary_out, pixel, vec4(frame.counts.z > 0u ? primary.secondary : vec3(0.0), specular_distance));
+	}
 }
 """
 
@@ -763,9 +811,13 @@ layout(push_constant, std430) uniform Push {
 #ifdef RAY_RECONSTRUCTION
 // Compiled only for DLSS Ray Reconstruction (ELPathTracing adds the define):
 // one composing pass of the unsmoothed light, which also writes the guides.
-// The composed colour is diffuse albedo times light plus emission, so the
-// raster colour before relighting is the albedo guide. All traced light is
-// treated as diffuse: no specular albedo and no specular hit distance.
+// The composed colour is albedo times light plus emission, so the raster
+// colour before relighting is the albedo guide. On metal, the ray program's
+// shine takes `metal` of that light (with the raster's darkening undone):
+// that share of the albedo is specular, weighted by the GGX lobe's
+// directional albedo. The shine uses the colour as a constant reflectance
+// (no Fresnel), so the environment term is taken at F0 = 1 and scaled by the
+// colour. The hit distance is the reflection ray's length.
 layout(set = 1, binding = 6, rgba16f) uniform writeonly image2D rr_diffuse_albedo;
 layout(set = 1, binding = 7, rgba16f) uniform writeonly image2D rr_specular_albedo;
 layout(set = 1, binding = 8, rgba16f) uniform writeonly image2D rr_normal_roughness;
@@ -773,22 +825,54 @@ layout(set = 1, binding = 9, r16f) uniform writeonly image2D rr_hit_distance;
 layout(set = 1, binding = 10) uniform sampler2D rr_depth;
 layout(set = 1, binding = 11) uniform sampler2D rr_raster_normal;
 
-// `normal` is the traced world normal, or zero to use the raster's.
-void store_guides(ivec2 pixel, vec3 albedo, vec3 normal) {
+// As the ray program's metal: METALNESS, RASTER_METALLIC and the roughness
+// of its GGX width.
+const float RR_METALNESS = 0.85;
+const float RR_RASTER_METALLIC = 0.6;
+const float RR_METAL_ROUGHNESS = 0.4;
+
+// The split-sum environment term (an analytic fit): scale and bias of F0.
+vec2 environment_brdf(float n_dot_v, float roughness) {
+	const vec4 c0 = vec4(-1.0, -0.0275, -0.572, 0.022);
+	const vec4 c1 = vec4(1.0, 0.0425, 1.04, -0.04);
+	vec4 r = roughness * c0 + c1;
+	float a004 = min(r.x * r.x, exp2(-9.28 * n_dot_v)) * r.x + r.y;
+	return vec2(-1.04, 1.04) * a004 + r.zw;
+}
+
+// `normal` is the traced world normal, or zero to use the raster's. `metal`
+// is the shine's share of the light, `hit_distance` its ray length.
+void store_guides(ivec2 pixel, vec3 albedo, vec3 normal, float metal, float hit_distance) {
 	float roughness = 1.0;
-	if (texelFetch(rr_depth, pixel, 0).r <= 0.0) {
+	vec3 specular = vec3(0.0);
+	float depth = texelFetch(rr_depth, pixel, 0).r;
+	if (depth <= 0.0) {
 		// The sky is drawn after this pass.
 		albedo = vec3(1.0);
 		normal = vec3(0.0);
+		metal = 0.0;
 	} else {
 		vec4 raster = texelFetch(rr_raster_normal, pixel, 0);
 		roughness = clamp(min(raster.a, 1.0 - raster.a) * (255.0 / 127.0), 0.0, 1.0);
 		if (dot(normal, normal) == 0.0) normal = normalize(mat3(frame.camera) * normalize(raster.xyz * 2.0 - 1.0));
+		if (metal > 0.0) {
+			vec2 uv = (vec2(pixel) + 0.5) / vec2(frame.info.yz);
+			vec4 view = frame.inv_projection * vec4(uv * 2.0 - 1.0, depth, 1.0);
+			vec3 world = (frame.camera * vec4(view.xyz / view.w, 1.0)).xyz;
+			float n_dot_v = max(dot(normal, normalize(frame.camera_position.xyz - world)), 1e-3);
+			float mask = metal / RR_METALNESS;
+			// The colour before the raster darkened it for being metallic.
+			vec3 base = albedo / max(1.0 - RR_RASTER_METALLIC * mask, 0.25);
+			vec2 lobe = environment_brdf(n_dot_v, RR_METAL_ROUGHNESS);
+			specular = base * metal * (lobe.x + lobe.y);
+			albedo = base * (1.0 - metal);
+			roughness = mix(roughness, RR_METAL_ROUGHNESS, clamp(mask, 0.0, 1.0));
+		}
 	}
 	imageStore(rr_diffuse_albedo, pixel, vec4(clamp(albedo, vec3(0.0), vec3(1.0)), 1.0));
-	imageStore(rr_specular_albedo, pixel, vec4(0.0));
+	imageStore(rr_specular_albedo, pixel, vec4(clamp(specular, vec3(0.0), vec3(1.0)), 1.0));
 	imageStore(rr_normal_roughness, pixel, vec4(normal, roughness));
-	imageStore(rr_hit_distance, pixel, vec4(0.0));
+	imageStore(rr_hit_distance, pixel, vec4(metal > 0.0 ? hit_distance : 0.0));
 }
 #endif
 
@@ -825,7 +909,7 @@ void main() {
 		else if ((frame.info.w & 2u) != 0u) imageStore(color, pixel, vec4(0.02, 0.02, 0.03, 1.0));  // untraced
 #ifdef RAY_RECONSTRUCTION
 		// Untraced (unlit scenery): its raster colour is all albedo.
-		else store_guides(pixel, imageLoad(color, pixel).rgb, vec3(0.0));
+		else store_guides(pixel, imageLoad(color, pixel).rgb, vec3(0.0), 0.0, 0.0);
 #endif
 		return;
 	}
@@ -869,7 +953,7 @@ void main() {
 		vec3 raster = surface.a > 0.5 ? vec3(1.0) : frame.ambient.rgb + sun_term(dot(g.xyz, frame.sun_direction.xyz), scenery);
 		vec3 emission = min(surface.rgb, c.rgb);
 #ifdef RAY_RECONSTRUCTION
-		store_guides(pixel, c.rgb - emission, g.xyz);
+		store_guides(pixel, c.rgb - emission, g.xyz, max(-surface.a, 0.0), imageLoad(secondary_light, pixel).a);
 #endif
 		c.rgb = (c.rgb - emission) * exposed(filtered / max(raster, vec3(0.02))) + emission;
 		if (frame.counts.z > 0u && (frame.info.w & 4u) == 0u) {

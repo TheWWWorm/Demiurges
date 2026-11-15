@@ -258,31 +258,57 @@ static func valid_name(name: String) -> bool:
 static func _user_path(profile: ELProfile, name: String) -> String:
 	return user_dir(profile).path_join(name.strip_edges() + ".json")
 
-## MSXML writes the preset header as root attributes and preserves deck order.
+## MSXML documents rooted at `duel_preset`; deck order is preserved. The
+## writers' exact attribute-or-element layout is not pinned down, so every
+## field is read from an attribute of that name or, failing that, from a child
+## element's text (names compared without case), and a spell's code from its
+## `code`/`type`/`name` attribute or its own text.
 static func _original_preset(profile: ELProfile, path: String) -> Dictionary:
 	var file := FileAccess.open(path, FileAccess.READ)
 	if file == null or file.get_length() > MAX_ORIGINAL_PRESET_BYTES: return {}
 	var bytes := file.get_buffer(file.get_length())
 	file.close()
+	return _parse_original(profile, bytes)
+
+static func _parse_original(profile: ELProfile, bytes: PackedByteArray) -> Dictionary:
 	if bytes.size() < 2: return {}
-	if (bytes[0] == 255 and bytes[1] == 254) or (bytes[0] == 254 and bytes[1] == 255):
+	if (bytes[0] == 255 and bytes[1] == 254):
+		bytes = bytes.slice(2).get_string_from_utf16().to_utf8_buffer()
+	elif bytes[0] == 254 and bytes[1] == 255:
+		var swapped := PackedByteArray()
+		swapped.resize(bytes.size() - 2)
+		for i in range(2, bytes.size() - 1, 2):
+			swapped[i - 2] = bytes[i + 1]
+			swapped[i - 1] = bytes[i]
+		bytes = swapped.get_string_from_utf16().to_utf8_buffer()
+	elif bytes.size() >= 3 and bytes[0] == 239 and bytes[1] == 187 and bytes[2] == 191:
+		bytes = bytes.slice(3)
+	elif bytes.size() >= 4 and bytes[1] == 0 and bytes[3] == 0:
+		# UTF-16 without a byte order mark.
 		bytes = bytes.get_string_from_utf16().to_utf8_buffer()
-	var root := ELXml.parse(bytes)
-	if root.get("tag") != "duel_preset": return {}
-	var header: Dictionary = root.attrs
-	var resource := String(header.get("resource_level", ""))
-	var hero := String(header.get("hero_level", ""))
+	# A declared UTF-16 or code-page encoding no longer matches the bytes.
+	var text := bytes.get_string_from_utf8()
+	if text.is_empty() and not bytes.is_empty(): text = bytes.get_string_from_ascii()
+	if text.begins_with("<?xml"):
+		var close := text.find("?>")
+		if close >= 0: text = text.substr(close + 2)
+	var root := ELXml.parse(text.strip_edges().to_utf8_buffer())
+	if String(root.get("tag", "")).to_lower() != "duel_preset": return {}
+	var resource := _field(root, "resource_level")
+	var hero := _field(root, "hero_level")
 	if not resource.is_valid_int() or not hero.is_valid_int(): return {}
-	var preset := blank(String(header.get("magic", "")).capitalize(), int(resource))
+	var preset := blank(_field(root, "magic").capitalize(), int(resource))
 	preset.level = int(hero)
-	preset.specialization = String(header.get("specialization", "NONE"))
+	preset.specialization = _field(root, "specialization", "NONE")
 	if preset.specialization.is_empty(): preset.specialization = "NONE"
 	var el1 := profile.id == "el1"
-	var bag := ELXml.child(root, "bag_spells")
-	if el1 and not bag.is_empty(): return {}
-	for entry in ELXml.children(ELXml.child(root, "skills"), "skill"):
-		var code := String(entry.attrs.get("type", ""))
-		var level := String(entry.attrs.get("level", ""))
+	var bag := _node(root, "bag_spells")
+	if el1 and not _nodes(bag, "spell").is_empty(): return {}
+	for entry in _nodes(_node(root, "skills"), "skill"):
+		var code := _field(entry, "type")
+		if code.is_empty(): code = _field(entry, "code")
+		if code.is_empty(): code = String(entry.get("text", "")).strip_edges()
+		var level := _field(entry, "level")
 		if el1:
 			# The first game's loader takes level as a count
 			# rank-ups: a new skill starts at rank 0, each further step (and a
@@ -293,22 +319,55 @@ static func _original_preset(profile: ELProfile, path: String) -> Dictionary:
 			continue
 		if not level.is_valid_int() or preset.skills.has(code): return {}
 		preset.skills[code] = int(level) - 1
-	for entry in ELXml.children(ELXml.child(root, "deck"), "spell"):
-		var uses := String(entry.attrs.get("components", "0"))
+	for entry in _nodes(_node(root, "deck"), "spell"):
+		var uses := _field(entry, "components", "0")
+		if uses.is_empty(): uses = "0"
 		if not uses.is_valid_int(): return {}
-		preset.cards.append(String(entry.attrs.get("code", "")))
+		preset.cards.append(_code(entry))
 		preset.runes.append(int(uses))
-	for entry in ELXml.children(ELXml.child(root, "artefacts"), "artefact"):
-		var code := String(entry.attrs.get("code", ""))
-		if not el1 and entry.attrs.has("name"):
-			code = String(profile.table("Artefacts").get(entry.attrs.name, {}).get("SpellType", ""))
+	for entry in _nodes(_node(root, "artefacts"), "artefact"):
+		var code := _field(entry, "code")
+		var name := _field(entry, "name")
+		if not el1 and not name.is_empty():
+			code = String(profile.table("Artefacts").get(name, {}).get("SpellType", code))
+		if code.is_empty(): code = _code(entry)
 		preset.artifacts.append(code)
-	for entry in ELXml.children(bag, "spell"):
-		var code := String(entry.attrs.get("type", ""))
-		var count := String(entry.attrs.get("count", ""))
+	for entry in _nodes(bag, "spell"):
+		var code := _code(entry)
+		var count := _field(entry, "count")
 		if not count.is_valid_int() or int(count) < 0 or preset.reserve.has(code): return {}
 		preset.reserve[code] = int(count)
 	return preset
+
+static func _field(node: Dictionary, name: String, fallback := "") -> String:
+	for key: String in node.get("attrs", {}):
+		if key.to_lower() == name: return String(node.attrs[key]).strip_edges()
+	var element := _node(node, name)
+	if not element.is_empty() and element.get("children", []).is_empty(): return String(element.get("text", "")).strip_edges()
+	return fallback
+
+static func _node(node: Dictionary, name: String) -> Dictionary:
+	for element: Dictionary in node.get("children", []):
+		if String(element.tag).to_lower() == name: return element
+	return {}
+
+static func _nodes(node: Dictionary, name: String) -> Array[Dictionary]:
+	var result: Array[Dictionary] = []
+	for element: Dictionary in node.get("children", []):
+		if String(element.tag).to_lower() == name: result.append(element)
+	return result
+
+static func _code(entry: Dictionary) -> String:
+	for name in ["code", "type", "name"]:
+		var value := _field(entry, name)
+		if not value.is_empty(): return value
+	return String(entry.get("text", "")).strip_edges()
+
+## A preset name from a file name: characters a name cannot hold become `_`.
+static func _import_name(file: String) -> String:
+	var name := file.get_basename().strip_edges()
+	for c in FORBIDDEN_NAME: name = name.replace(c, "_")
+	return name
 
 ## Converts an original .prs into a user preset named after its file;
 ## returns false when the file cannot be read or saved.
@@ -320,8 +379,8 @@ static func _import_preset(profile: ELProfile, source: String, name: String) -> 
 static func _import_original(profile: ELProfile, directory: String, files: Array, rejected: Array) -> void:
 	for file: String in files:
 		if file.get_extension().to_lower() != "prs": continue
-		var name := file.get_basename().strip_edges()
-		if user_exists(profile, name): continue
+		var name := _import_name(file)
+		if name.is_empty() or user_exists(profile, name): continue
 		var source := directory.path_join(file)
 		if not _import_preset(profile, source, name):
 			rejected.append(file)
@@ -340,23 +399,36 @@ static func _import_game_folder(profile: ELProfile, rejected: Array) -> void:
 	var sources: Array[String] = []
 	for key: String in profile.files_under("Duel/"):
 		if key.get_extension().to_lower() == "prs": sources.append(profile.file(key))
+	# Files copied into the folder after the game data was indexed.
+	var folder := profile.root.path_join("Duel") if not profile.root.is_empty() else ""
+	if not folder.is_empty() and DirAccess.dir_exists_absolute(folder):
+		for file in DirAccess.get_files_at(folder):
+			var path := folder.path_join(file)
+			if file.get_extension().to_lower() == "prs" and not sources.any(func(known: String): return known.simplify_path().to_lower() == path.simplify_path().to_lower()):
+				sources.append(path)
 	if sources.is_empty(): return
 	var index_path := user_dir(profile).path_join(IMPORTED_INDEX)
 	var read: Variant = JSON.parse_string(FileAccess.get_file_as_string(index_path)) if FileAccess.file_exists(index_path) else null
 	var index: Dictionary = read if read is Dictionary else {}
 	var changed := false
 	for source: String in sources:
-		var name := source.get_file().get_basename().strip_edges()
+		var name := _import_name(source.get_file())
 		var stamp := str(FileAccess.get_modified_time(source))
-		if not valid_name(name) or String(index.get(name, "")) == stamp: continue
-		index[name] = stamp
+		# Entries are "2:<stamp>" for a file read successfully (or shadowed by
+		# a user preset). A failed read is not recorded, so it is tried again
+		# by later versions; older bare stamps, written even for files the
+		# earlier reader failed on, are retried once when no preset came of them.
+		var seen := String(index.get(name, ""))
+		if not valid_name(name) or seen == "2:" + stamp or (seen == stamp and user_exists(profile, name)): continue
+		if user_exists(profile, name) or _import_preset(profile, source, name):
+			index[name] = "2:" + stamp
+		else:
+			index.erase(name)
+			rejected.append(source.get_file())
 		changed = true
-		if user_exists(profile, name): continue
-		if not _import_preset(profile, source, name): rejected.append(source.get_file())
 	if not changed: return
 	DirAccess.make_dir_recursive_absolute(user_dir(profile))
-	var file := FileAccess.open(index_path, FileAccess.WRITE)
-	if file != null: file.store_string(JSON.stringify(index, "\t"))
+	ELSafeFile.write_text(index_path, JSON.stringify(index, "\t"))
 
 ## Readable user presets of this edition, sorted by name; files that fail the
 ## shape check are skipped, and in the second game also those that break its

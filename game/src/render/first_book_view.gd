@@ -244,7 +244,7 @@ func refresh() -> void:
 	if book_pick >= book_cards(0).size(): book_pick = -1
 	if reserve_pick >= entries.size(): reserve_pick = -1
 	buttons.BuySpell.disabled = not _can_act() or not equip_problem().is_empty()
-	buttons.RetrieveSpell.disabled = not _can_act() or book_pick < 0
+	buttons.RetrieveSpell.disabled = not _can_act() or book_pick < 0 or ELRunes.unlimited(profile, hero(), str(book_cards(0)[book_pick]))
 	buttons.SShopUp.disabled = reserve_scroll <= 0
 	buttons.SShopDown.disabled = reserve_scroll >= max_scroll()
 	sheet.queue_redraw()
@@ -294,7 +294,8 @@ func _draw_sheet() -> void:
 
 func _spell_tip(card: String, uses: int) -> String:
 	var runes := _t("Unlimited cantrip.") if uses < 0 else (_t("Runes left: %d") % uses)
-	return _name(card) + "\n" + profile.card_description(card) + "\n" + runes
+	# Type, name, ether cost and description, as in the shop (#125).
+	return ELCombatTooltip.spell_text(profile, card) + "\n" + runes
 
 func tooltip_at(point: Vector2) -> String:
 	var book := book_at(point)

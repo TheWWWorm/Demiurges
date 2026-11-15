@@ -124,10 +124,17 @@ func _autochess(profile: ELProfile) -> void:
 		guest.send_command("speed", [2.0])
 		check(await _wait(func(): return host.game.speed == 2.0 and guest.game.speed == 2.0, polls, 5.0), "autochess guest's ×2 reaches the whole table")
 		# The host settles the battle, so the rejoin below seats at once.
+		# Both machines play the round's battles themselves; the guest
+		# compares its results with the host's settled ones.
 		var guard := 0
-		while host.game.stage == "fight" and guard < 2000:
-			host.game.process(0.5)
+		while (host.game.stage == "fight" or guest.game.stage == "fight") and guard < 2000:
+			if host.game.stage == "fight": host.game.process(0.5)
+			if guest.game.stage == "fight": guest.process_guest(0.5)
 			guard += 1
+		var heard := []
+		guest.message.connect(func(t): heard.append(t))
+		await _wait(func(): return guest._checked_round == guest.game.round_number, polls, 5.0)
+		check(guest._checked_round == host.game.round_number and guest.divergences == 0, "autochess guest's own battles match the host's results (%s)" % str(heard))
 	for l in log: print("  ", l)
 	check(log.is_empty(), "autochess no disconnects")
 	if guest_started[0]:
@@ -204,11 +211,48 @@ func _duel(profile: ELProfile, port: int) -> void:
 		check(steps >= 3, "%s duel %d phase changes applied on both sides" % [tag, steps])
 		if host.duel != null and guest.duel != null:
 			check(host._digest() == guest._digest(), "%s duel states identical after play" % tag)
+		await _clock_authority(host, guest, polls, tag)
 	for l in log: print("  ", l)
 	check(log.is_empty(), "%s duel no disconnects/desync" % tag)
 	if host.live and guest.live:
 		await _duel_rejoin(profile, port, tag, host, guest, log)
 	guest.close(); host.close()
+
+## The host owns the turn clock: a guest that never ends its timed-out
+## phase (here it keeps no clock at all) has it ended by the host.
+func _clock_authority(host: ELNetworkDuel, guest: ELNetworkDuel, polls: Array[Callable], tag: String) -> void:
+	var guard := 0
+	while host.duel != null and host.duel.phase != ELDuel.Phase.FINISHED and host.duel.active_side() == 0 and guard < 6:
+		guard += 1
+		host.duel.end_phase()
+		var target := host._sequence
+		await _wait(func(): return guest._sequence == target and guest._pending.is_empty(), polls, 5.0)
+	if host.duel == null or host.duel.phase == ELDuel.Phase.FINISHED or host.duel.active_side() != 1:
+		check(false, "%s duel reaches a guest phase for the clock check" % tag)
+		return
+	var before := Vector2i(host.duel.turn_serial, host.duel.phase)
+	host._turn_seconds = 10
+	host.poll(true)
+	host._clock_deadline = Time.get_ticks_msec() - 4000
+	var moved := func() -> bool: return Vector2i(guest.duel.turn_serial, guest.duel.phase) != before and guest._sequence == host._sequence and guest._pending.is_empty()
+	var ok: bool = await _wait(moved, polls, 5.0)
+	host._turn_seconds = 0
+	check(ok and host._digest() == guest._digest(), "%s duel host ends a guest's expired phase (%s -> %s)" % [tag, before, Vector2i(guest.duel.turn_serial, guest.duel.phase)])
+	# The guest's own end of the phase crosses the host's forced end.
+	guard = 0
+	while host.duel.phase != ELDuel.Phase.FINISHED and host.duel.active_side() == 0 and guard < 6:
+		guard += 1
+		host.duel.end_phase()
+		var target := host._sequence
+		await _wait(func(): return guest._sequence == target and guest._pending.is_empty(), polls, 5.0)
+	if host.duel.phase == ELDuel.Phase.FINISHED or host.duel.active_side() != 1: return
+	before = Vector2i(host.duel.turn_serial, host.duel.phase)
+	guest.duel.end_phase()
+	host._force_phase_end()
+	var settled := func() -> bool: return guest._sequence == host._sequence and guest._pending.is_empty() and host._pending.is_empty()
+	await _wait(settled, polls, 3.0)
+	await _wait(func(): return false, polls, 0.3)
+	check(host.live and guest.live and host._digest() == guest._digest() and guest._sequence == host._sequence, "%s duel a guest's own phase end crossing the host's forced end stays in sync" % tag)
 
 ## Ends phases from whichever side is active; returns how many reached both sides.
 func _phases(host: ELNetworkDuel, guest: ELNetworkDuel, polls: Array[Callable], count: int) -> int:

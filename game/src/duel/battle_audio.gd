@@ -47,6 +47,23 @@ var _held_until := 0
 ## sounds play from its gesture's release frame, with its effects.
 func hold(seconds: float) -> void:
 	_held_until = maxi(_held_until, Time.get_ticks_msec() + int(seconds * 1000.0))
+
+## While set, no effect sound starts (the presentation being skipped).
+var silenced := false
+## Bumped by cut(): a held sound whose wait began before it is dropped.
+var _generation := 0
+
+## Drops the presentation's sounds when it is skipped (player report #141):
+## the sounds still held for a gesture never start, the hurts waiting for
+## the frame are forgotten and the effect voices playing now stop. Music,
+## ambience and the arena's loops go on.
+func cut() -> void:
+	_generation += 1
+	_held_until = 0
+	_hurts.clear()
+	for voice in voices:
+		if voice.playing: voice.stop()
+	_glides.clear()
 var tracks: Array[String] = []
 var track_index := 0
 var ambient_sounds: Array[String] = []
@@ -1617,14 +1634,17 @@ func play(path: String, spatial_gain := 1.0, loop := false) -> bool:
 	# A spell's sounds wait for its hero's gesture to release it, as its
 	# effects do (see hold()).
 	var wait := (_held_until - Time.get_ticks_msec()) / 1000.0
+	if silenced and not loop: return false
 	if wait > 0.0 and not loop and is_inside_tree():
+		var generation := _generation
 		get_tree().create_timer(wait).timeout.connect(func() -> void:
+			if generation != _generation: return
 			_pan_source = source
 			play(path, spatial_gain))
 		return true
 	requested.append(path)
 	if requested.size() > 80: requested.pop_front()
-	if paused: return false
+	if paused or silenced: return false
 	var stream := ELAudio.sound(profile, path)
 	if stream == null: return false
 	if loop:
@@ -1651,8 +1671,11 @@ func play(path: String, spatial_gain := 1.0, loop := false) -> bool:
 ## the sound actually starts, after any hold for the hero's gesture.
 func play_released(path: String, gain: Callable) -> void:
 	var wait := (_held_until - Time.get_ticks_msec()) / 1000.0
+	if silenced: return
 	if wait > 0.0 and is_inside_tree():
-		get_tree().create_timer(wait).timeout.connect(func() -> void: play(path, float(gain.call())))
+		var generation := _generation
+		get_tree().create_timer(wait).timeout.connect(func() -> void:
+			if generation == _generation: play(path, float(gain.call())))
 		return
 	play(path, float(gain.call()))
 

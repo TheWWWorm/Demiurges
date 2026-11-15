@@ -16,9 +16,29 @@ extends SceneTree
 ##
 ## Prints one DIFF line per case that differs, naming the creatures involved,
 ## then a tally by card and the totals. Heroes are left without skills, so no
-## mastery of theirs can roll and the fight is the plain rules alone.
+## mastery of theirs can roll and the fight is the plain rules alone. Beside
+## damage, rest, health and ether, a library that tells them is held to each
+## creature's power, health, spent ability and worn enchantments, the cards of
+## each hand by name, and what each hero wears and has used this turn.
+##
+## With --parity a fixed set of hand-made positions is played instead, each
+## for a rule the model once got wrong (tools/duel_fixtures.gd).
+##
+## With --puzzles every reference solution of the authored puzzles
+## (game/puzzles/<game>.json) is replayed: before each of its commands the
+## engine's own list of commands at that position, as its plain reading and
+## as a proof list them, must hold the command, and the position the model
+## reaches by it must be the one the game reaches ([--only=<puzzle id>]).
+## The refutations are replayed too (their commands need only be in the
+## proof's list: the plain reading leaves out casts that only spend their
+## card), and every line goes on for --onward=N (24) commands of the
+## engine's own, each held to the game's rules the same way.
+##
+## Exits 1 when any case differed, and when no case was compared at all.
 ##
 ## Needs the player's game files (user://profiles.json or --el1=/--el2=).
+
+const Fixtures := preload("res://../tools/duel_fixtures.gd")
 
 const ARMY := 4
 const MAX_UNITS := 32
@@ -38,6 +58,10 @@ var cast_total := {}
 var standing_blame := {}
 var cast_blame := {}
 var line_blame := {}
+## Whether the run being compared dealt hands again or threw cards out at
+## random: which cards those were is the duel's chance, which the model
+## does not follow card by card.
+var dealt_again := false
 
 ## A name the game gives a thing a hero carries, by the spell it works.
 var artifact_names := {}
@@ -111,7 +135,7 @@ func _initialize() -> void:
 		_lines(int(_arg("cases", "20")), shard)
 		for what: String in line_blame: print("PARTS %s %d" % [what, line_blame[what]])
 		print("TOTAL cases=%d fights=%d differed=%d" % [cases, cases, differed])
-		quit(0)
+		_finish(cases)
 		return
 	if _arg("real", "") == "1":
 		_real(random, int(_arg("cases", "20")), shard)
@@ -119,7 +143,17 @@ func _initialize() -> void:
 		for card: String in standing_blame: print("STANDING %s %d" % [card, standing_blame[card]])
 		for card: String in cast_blame: print("CAST %s %d" % [card, cast_blame[card]])
 		print("TOTAL cases=%d fights=%d differed=%d" % [cases, fights, differed])
-		quit(0)
+		_finish(fights)
+		return
+	if _arg("puzzles", "") == "1":
+		_puzzles()
+		print("TOTAL cases=%d fights=%d differed=%d" % [cases, fights, differed])
+		_finish(fights)
+		return
+	if _arg("parity", "") == "1":
+		_parity()
+		print("TOTAL cases=%d fights=%d differed=%d" % [cases, fights, differed])
+		_finish(fights)
 		return
 	for index in int(_arg("cases", "200")):
 		if index % int(shard.get_slice("/", 1)) != int(shard.get_slice("/", 0)): continue
@@ -134,7 +168,13 @@ func _initialize() -> void:
 	# that came out differently.
 	for card: String in cast_total: print("PLAYED %s %d %d" % [card, cast_total[card], int(cast_blame.get(card, 0))])
 	print("TOTAL cases=%d fights=%d differed=%d" % [cases, fights, differed])
-	quit(0)
+	_finish(fights)
+
+## Exits 1 when any case differed, or when nothing was compared at all (a run
+## that held nothing against anything shows nothing).
+func _finish(compared: int) -> void:
+	if compared == 0: print("INCOMPLETE: no case was compared")
+	quit(1 if differed > 0 or compared == 0 else 0)
 
 ## --real=1: positions out of duels the opponents actually play, with the
 ## enchantments, abilities and hero skills that stand in them, instead of
@@ -265,7 +305,13 @@ func _case(index: int, random: RandomNumberGenerator, pool: Array[String], army:
 		for c: Dictionary in duel.army(1 - attacker):
 			if random.randi() % 3 == 0: continue
 			var choice: Array = duel.attacks.duplicate()
-			choice.shuffle()
+			# Shuffled from the case's own generator, so a case is the same
+			# board on every run (Array.shuffle draws from the global one).
+			for i in range(choice.size() - 1, 0, -1):
+				var j := random.randi_range(0, i)
+				var held: Variant = choice[i]
+				choice[i] = choice[j]
+				choice[j] = held
 			for target: int in choice:
 				if duel.assign_block(int(c.id), target): break
 	# The board as both sets of rules will find it.
@@ -537,7 +583,74 @@ func _compare(duel: ELDuel, model: Dictionary, before: Dictionary, whole_turn: b
 			said.append("hero %d: the game leaves %d health, the model %d" % [side, int(duel.heroes[side].health), int(model.health[side])])
 		if int(duel.heroes[side].mana) != int(model.ether[side]):
 			said.append("hero %d: the game leaves %d ether, the model %d" % [side, int(duel.heroes[side].mana), int(model.ether[side])])
+	if model.has("stats") and duel.phase != ELDuel.Phase.FINISHED: said.append_array(_compare_rest(duel, model, before, whole_turn))
 	return said
+
+## The rest of what the two sets of rules leave, where the library tells it.
+func _compare_rest(duel: ELDuel, model: Dictionary, before: Dictionary, whole_turn: bool) -> Array[String]:
+	var said: Array[String] = []
+	var stats: Dictionary = model.stats
+	for id: int in before.units:
+		if not duel.creatures.has(id) or int(model.units.get(id, -2)) < 0 or not stats.has(id): continue
+		var c: Dictionary = duel.creatures[id]
+		var told: Dictionary = stats[id]
+		var card: String = before.units[id].card
+		if int(c.power) != int(told.power) or int(c.toughness) != int(told.toughness):
+			said.append("#%d %s: the game makes it %d/%d, the model %d/%d" % [id, card, int(c.power), int(c.toughness), int(told.power), int(told.toughness)])
+			blamed[card] = int(blamed.get(card, 0)) + 1
+		var done: Dictionary = c.get("ability_used", {})
+		var spent: bool = done.get("rouse", false) or done.get("illusion", false)
+		if spent != bool(told.spent):
+			said.append("#%d %s: the game has its ability %s, the model %s" % [id, card, "spent" if spent else "ready", "spent" if told.spent else "ready"])
+			blamed[card] = int(blamed.get(card, 0)) + 1
+		# Marks fixed for good (a snake's bite) the model folds into the
+		# creature's points, which are held above; the rest it keeps as laid.
+		var laid := 0
+		for e: Dictionary in c.enchantments:
+			if not e.get("fixed", false): laid += 1
+		var told_laid := int(told.worn)
+		if laid != told_laid and not (laid < told_laid and (c.enchantments as Array).size() == told_laid):
+			said.append("#%d %s: the game has it wear %d enchantments, the model %d" % [id, card, laid, told_laid])
+			blamed[card] = int(blamed.get(card, 0)) + 1
+	for side in 2:
+		var hero: Dictionary = duel.heroes[side]
+		# Cards by name, where the model names every card it counts.
+		var counts: Dictionary = model.get("counts", {})
+		var named: Array = model.named[side]
+		if whole_turn and not dealt_again and not counts.is_empty() and named.size() == int(counts.hands[side]) and hero.hand.size() <= ELCombatBrain.HAND:
+			var ours: Array = []
+			for card: String in hero.hand: ours.append(ELCombatBrain._code(profile, card))
+			ours.sort()
+			var theirs := named.duplicate()
+			theirs.sort()
+			if ours != theirs: said.append("hero %d: the game's hand is %s, the model's %s" % [side, ",".join(hero.hand), _card_names(theirs)])
+		var worn: Array = model.hero_worn[side]
+		var used: Array = model.hero_used[side]
+		for k in ELCombatBrain.CHARMS.size():
+			var charm: String = ELCombatBrain.CHARMS[k]
+			var count := 0
+			var spent := 0
+			for e: Dictionary in hero.enchantments:
+				# Twins are told as the one they work like.
+				if String(ELCombatBrain.CHARM_TWINS.get(String(e.card), String(e.card))) != charm: continue
+				count += 1
+				if e.get("used", false): spent += 1
+			if k < worn.size() and count != int(worn[k]):
+				said.append("hero %d: the game has it wear %d %s, the model %d" % [side, count, charm, int(worn[k])])
+			if k < used.size() and k < ELCombatBrain.HERO_KEYS.size() and spent != int(used[k]):
+				said.append("hero %d: the game has %d %s used, the model %d" % [side, spent, charm, int(used[k])])
+	return said
+
+func _card_names(codes: Array) -> String:
+	var names: Array = []
+	for code: int in codes:
+		var name := "?"
+		for card: String in profile.table("CombatSpells"):
+			if ELCombatBrain._code(profile, card) == code:
+				name = card
+				break
+		names.append(name)
+	return ",".join(names)
 
 ## A short run of commands through both sets of rules. The model is handed the
 ## board as it stood, then the same commands, and must arrive where the game
@@ -852,9 +965,12 @@ func _play_case(index: int, duel: ELDuel, random: RandomNumberGenerator, attacke
 	var ctx := _context(attacker)
 	var model := ELCombatBrain.fight(ctx, start, 4, commands)
 	if model.is_empty(): return
+	dealt_again = false
 	for line: String in said:
 		if line.begins_with("cast "): cast_total[line.substr(5)] = int(cast_total.get(line.substr(5), 0)) + 1
+		if line.begins_with("cast ") and String(ELCatalog.rule(profile, line.substr(5)).get("effect", "")) in ["redraw", "amnesia", "pale_theft", "pale_calamity", "ban"]: dealt_again = true
 	var trouble := _compare(duel, model, before, true)
+	dealt_again = false
 	if int(model.played) != commands.size():
 		# Which command the model turned down.
 		var refused := commands.size()
@@ -913,3 +1029,512 @@ func _board(duel: ELDuel) -> Dictionary:
 			units[int(c.id)] = {"card": String(c.card), "stats": stats}
 			text += "\n         #%d %s %s%s" % [int(c.id), c.card, stats, "r" if c.resting else ""]
 	return {"units": units, "text": text}
+
+# --- Hand-made positions -----------------------------------------------------------
+
+## --parity=1: each position below is one where the model once parted from
+## the game's rules. The game plays `steps` (each [kind, ...] as the model is
+## told commands), the model is handed the position as it stood and the same
+## commands, and the two must agree on everything compared, and on `expect`
+## (a value read off the game's duel after the steps).
+func _parity() -> void:
+	var game := profile.id
+	var level := _surest_level("RKBC")
+	var surest := ELSpecs.chance(profile, "RKBC", level)
+	var many: Array = []
+	for i in 3: many.append("MGHT" if game == "el1" else "PRFY")
+	_discard_pick()
+	_won_in_the_fight()
+	_wounded_blockers()
+	_revised_block()
+	# A lamia warlord in play makes every lamia two cheaper, to no less than 1.
+	_fixture("lamia discount", {"heroes": [{"health": 20, "mana": 50, "hand": ["LMWD", "LMMN"]}, {"health": 20, "mana": 0}], "creatures": []},
+		[["cast", 0], ["cast", 1]], func(d: ELDuel) -> bool: return int(d.heroes[0].mana) == 38)
+	# Kobold mastery that nearly always works (and here, by the duel's chance,
+	# does) doubles a kobold's blow; the model counts on one that sure.
+	if roundi(surest * 100.0) >= 90:
+		_fixture("kobold mastery at %d%%" % roundi(surest * 100.0), {"rng": 0, "heroes": [{"health": 20, "mana": 0, "spec": "RKBC", "spec_level": level}, {"health": 10, "mana": 0}],
+			"creatures": [{"card": "KBEL", "owner": 0, "power": 3, "toughness": 2}]},
+			[["attack", 0], ["end"], ["end"]], func(d: ELDuel) -> bool: return int(d.heroes[1].health) == 4)
+	else:
+		_missing("kobold mastery: no hero level makes the mastery nine times in ten sure (%.2f)" % surest)
+	# A robber's lent discards go with the enchantment a stripping blow takes
+	# off it: blocking the disenchanter strips the Thief, so the 6/5 then takes
+	# no card from the hand it reaches.
+	if game == "el1":
+		_fixture("stripped robber", {"heroes": [{"health": 20, "mana": 0, "hand": many}, {"health": 20, "mana": 0}],
+			"creatures": [{"card": "IRAB", "owner": 0, "power": 3, "toughness": 5, "flags": ["Disenchant"]},
+				{"card": "GROG", "owner": 1, "power": 6, "toughness": 5, "enchantments": ["THIF"]}]},
+			[["attack", 0], ["end"], ["block", 1, 0], ["end"], ["attack", 1], ["end"], ["end"]], func(d: ELDuel) -> bool: return d.heroes[0].hand.size() == 3)
+	# A hero with Regeneration that survives its ether disturbance heals after it.
+	_fixture("regeneration after disturbance", {"attacker": 1, "heroes": [{"health": 2, "mana": 0, "maximum": 20, "turns": 15, "level": 4, "skills": {"REGN": 2}},
+		{"health": 20, "mana": 0, "turns": 15, "level": 4}], "creatures": []},
+		[["end"]], func(d: ELDuel) -> bool: return d.attacker == 0 and int(d.heroes[0].health) == 2)
+	# One the disturbance kills is not saved by its Regeneration.
+	_fixture("disturbance kills before regeneration", {"attacker": 1, "heroes": [{"health": 1, "mana": 0, "maximum": 20, "turns": 15, "level": 4, "skills": {"REGN": 2}},
+		{"health": 20, "mana": 0, "turns": 15, "level": 4}], "creatures": []},
+		[["end"]], func(d: ELDuel) -> bool: return d.phase == ELDuel.Phase.FINISHED and d.winner == 1)
+	# The ether disturbance keeps growing past the turns the model is told
+	# of (it once stood still at the sixth).
+	var long_ends: Array = []
+	for i in 18: long_ends.append(["end"])
+	_fixture("disturbance past the told turns", {"heroes": [{"health": 300, "maximum": 300, "mana": 0, "turns": 15, "level": 4},
+		{"health": 300, "maximum": 300, "mana": 0, "turns": 15, "level": 4}], "creatures": []},
+		long_ends, func(d: ELDuel) -> bool: return int(d.heroes[0].health) < 300 - 40)
+	# A puzzle's fixed hands draw nothing at the turn's start.
+	_fixture("fixed hands draw nothing", {"attacker": 1, "heroes": [{"health": 20, "mana": 0, "hand": ["PRFY" if game == "el2" else "MGHT"]},
+		{"health": 20, "mana": 0}], "creatures": []},
+		[["end"]], func(d: ELDuel) -> bool: return d.attacker == 0 and d.heroes[0].hand.size() == 1)
+	# A grass snake grows a point of each for good with each blow on a hero.
+	_fixture("grass snake grows", {"heroes": [{"health": 20, "mana": 0}, {"health": 20, "mana": 0}], "creatures": [{"card": "GRSN", "owner": 0}]},
+		[["attack", 0], ["end"], ["end"]], func(d: ELDuel) -> bool: return int(d.creatures[2].power) == int(Fixtures.build(profile, {"creatures": [{"card": "GRSN", "owner": 0}]}).creatures[2].power) + 1)
+	# A destroying blow does not destroy a creature nothing may affect: it lives
+	# through the fight (the model once killed it).
+	_fixture("destroy against no-affect", {"heroes": [{"health": 20, "mana": 0}, {"health": 20, "mana": 0}],
+		"creatures": [{"card": "GROG", "owner": 0, "power": 6, "toughness": 5, "flags": ["NoAffect"]},
+			{"card": "GROG", "owner": 1, "power": 2, "toughness": 2, "flags": ["Destroy", "FS"]}]},
+		[["attack", 0], ["end"], ["block", 1, 0], ["end"]], func(d: ELDuel) -> bool: return d.creatures.has(2))
+	# Blows that destroy kill in the order they landed, and the one ether of
+	# regeneration goes to the first: the steam machine's victim (the Iron
+	# Golem, met first) regenerates, the destroying warrior's (the Stone
+	# Golem) dies. The model once took them in board order.
+	if game == "el2":
+		# (A position taken from an authored puzzle: {"puzzle": id}. There the
+		# creatures are #2, #3, ... in order, so a creature's place is its id
+		# less two.)
+		_fixture("destroyed in the order struck", {"puzzle": "el2_tactical_v2_behind_magic_screen"},
+			[["cast", 0], ["end"], ["end"], ["block", 0, 3], ["block", 1, 2], ["end"]],
+			func(d: ELDuel) -> bool: return not d.creatures.has(2) and d.creatures.has(3))
+		# A mother bee's death sends its hero's bees into a frenzy: berserk,
+		# they go into the attack beside the fire fighter and hurt the hero by
+		# four while the fighter is blocked (Cannibalism took two).
+		_fixture("mother bee's frenzy", {"puzzle": "el2_tactical_v2_queens_shadow"},
+			[["cast", 1, 2], ["attack", 3], ["end"], ["block", 4, 3], ["end"]],
+			func(d: ELDuel) -> bool: return int(d.heroes[1].health) == 4)
+		# A beacon brings its bearer's race out of the plane with it: the
+		# Spellshifter comes out beside the Spellbinder, and the Flux that
+		# follows keeps all five allies (the model once left it in the plane).
+		_fixture("beacon out of the plane", {"puzzle": "el2_tactical_v2_airlock_census"},
+			[["cast", 0], ["do", {"choice": 3, "id": 2, "key": "mystic", "kind": "ability", "target": 4}], ["cast", 1]],
+			func(d: ELDuel) -> bool: return d.army(0).size() == 5)
+		# A creature given away waits for its new hero's turn, and is ready
+		# then: the ogre attacks its old hero at once (the model once kept it
+		# waiting a whole turn more).
+		_fixture("gift ready on the new hero's turn", {"heroes": [{"health": 20, "mana": 10, "hand": ["GIFT"]}, {"health": 20, "mana": 0}],
+			"creatures": [{"card": "GROG", "owner": 0}]},
+			[["cast", 0, 2], ["end"], ["attack", 0], ["end"], ["end"]],
+			func(d: ELDuel) -> bool: return int(d.heroes[0].health) < 20)
+		# A gray ogre the other hero's blow throws out of a hand comes into
+		# play, whichever of three alike is taken (the model once had a
+		# partial discard answer nothing).
+		_fixture("ogre thrown out of a hand", {"heroes": [{"health": 20, "mana": 0}, {"health": 20, "mana": 0, "hand": ["GROG", "GROG", "GROG"]}],
+			"creatures": [{"card": "ORWR", "owner": 0, "flags": ["Discard(1)"]}]},
+			[["attack", 0], ["end"], ["end"]], func(d: ELDuel) -> bool: return d.army(1).size() == 1 and d.heroes[1].hand.size() == 2)
+		# A creature that changes sides keeps the army enchantments that
+		# covered it as it went: the Cutter, freed of the other hero's
+		# Change of Command, still has that hero's Strength of Woods, and
+		# loses its two power when that is taken off the other hero (the
+		# model once left it 9/6, as if no longer under it).
+		_fixture("army enchantments kept across sides", {"puzzle": "el2_tactical_v2_chain_of_custody"},
+			[["do", {"choice": 1, "id": 2, "key": "absorb", "kind": "ability", "target": 4}],
+				["do", {"choice": 3, "id": 3, "key": "transpose", "kind": "ability", "target": 1}]],
+			func(d: ELDuel) -> bool: return d.creatures.has(4) and int(d.creatures[4].owner) == 0 and int(d.creatures[4].power) == 7 and int(d.creatures[4].toughness) == 6)
+		# The ether disturbance hurts a hero as a spell does: an energy barrier
+		# takes three off it (the model once took it off the health directly).
+		_fixture("disturbance against a barrier", {"puzzle": "el2_tactical_v2_behind_magic_screen"},
+			[["cast", 2, 0], ["end"], ["end"], ["block", 1, 2], ["block", 0, 3], ["end"]],
+			func(d: ELDuel) -> bool: return d.attacker == 0 and int(d.heroes[0].health) == 4)
+	# The Wall of Unreality's phantasm may be bought again: two uses, +4.
+	_fixture("phantasm twice", {"heroes": [{"health": 20, "mana": 10}, {"health": 20, "mana": 0}], "creatures": [{"card": "PHWL", "owner": 0}]},
+		[["use", 0, "phantasm"], ["use", 0, "phantasm"]], func(d: ELDuel) -> bool: return int(d.creatures[2].power) == int(Fixtures.build(profile, {"creatures": [{"card": "PHWL", "owner": 0}]}).creatures[2].power) + 4)
+
+## The lowest hero level at which a mastery works most surely.
+func _surest_level(code: String) -> int:
+	var best := 1
+	for level in range(1, 21):
+		if ELSpecs.chance(profile, code, level) > ELSpecs.chance(profile, code, best): best = level
+	return best
+
+## Which card a random discard takes is the duel's chance, which the model is
+## not told; it must not take it by the heroes' health or ether, or a line
+## could choose the discard by the damage it deals first. The same hand hit
+## by the same robber, the hero at 20 health or at 19, must lose the same card
+## in the model.
+func _discard_pick() -> void:
+	var probe := Fixtures.build(profile, {})
+	var cards: Array = []
+	for card: String in profile.table("CombatSpells"):
+		if cards.size() >= 3: break
+		if String(profile.table("CombatSpells")[card].get("Class", "")) == "Creature" or card in ELCatalog.DISCARD_RETORTS: continue
+		if probe == null or ELCombatBrain._card(_context(0), probe, card).is_empty(): continue
+		cards.append(card)
+	var kept: Array = []
+	for health: int in [20, 19]:
+		var spec := {"heroes": [{"health": 20, "mana": 0}, {"health": health, "mana": 0, "hand": cards}],
+			"creatures": [{"card": "GROG", "owner": 0, "power": 2, "toughness": 2, "flags": ["Discard(1)"]}]}
+		var start := Fixtures.build(profile, spec)
+		if start == null or cards.size() < 3:
+			_missing("random discard pick: the position does not restore")
+			return
+		fights += 1
+		cases += 1
+		var model := ELCombatBrain.fight(_context(0), start, 4, [[1, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]])
+		var named: Array = (model.get("named", [[], []]) as Array)[1]
+		named.sort()
+		kept.append(named)
+	if kept[0].size() != 2 or kept[0] != kept[1]:
+		_missing("random discard pick: the model keeps %s at 20 health and %s at 19" % [_card_names(kept[0]), _card_names(kept[1])])
+	else: print("SAME parity random discard pick")
+
+## A fight that kills the other hero wins the duel, though the turn's end
+## would then have drained the attacker's own last health too: the model's
+## weighing of a whole defence once played the turn's end regardless and
+## called it a draw. The attacker's parasite is sent against a hero with no
+## blocker and one health; the engine, reading the defence for the attacker,
+## must call it won.
+func _won_in_the_fight() -> void:
+	var card := ""
+	for name: String in ELCatalog.PARASITES:
+		if profile.table("CombatCreatures").has(name) and int(ELCatalog.PARASITES[name]) > 0:
+			card = name
+			break
+	if card.is_empty():
+		_missing("won in the fight: no parasite in this game")
+		return
+	var drain := int(ELCatalog.PARASITES[card])
+	var duel := Fixtures.build(profile, {"phase": "defence", "attacks": [2], "heroes": [{"health": drain, "mana": 0}, {"health": 1, "mana": 0}],
+		"creatures": [{"card": card, "owner": 0, "flags": []}]})
+	if duel == null:
+		_missing("won in the fight: the position does not restore")
+		return
+	var real := duel.search_copy()
+	real.end_phase()
+	cases += 1
+	fights += 1
+	var answer := ELCombatBrain.ask(_context(0), duel, 1, 100000, false)
+	if real.phase != ELDuel.Phase.FINISHED or real.winner != 0: _missing("won in the fight: the game itself does not come out as expected")
+	elif int(answer.get("status", 0)) != 1: _missing("won in the fight: the engine reads the defence as %s, not a win" % str(answer))
+	else: print("SAME parity won in the fight %s" % str(answer))
+
+## Two blockers alike but for their wounds are not one choice: the hero at
+## one health lives only if the whole 0/4 takes the trampling 3 and the
+## wounded one (one health left) the trampling 1. The engine once took the
+## two for interchangeable and lost the only safe defence.
+func _wounded_blockers() -> void:
+	var duel := Fixtures.build(profile, {"phase": "defence", "attacks": [2, 3], "heroes": [{"health": 20, "mana": 0}, {"health": 1, "mana": 0}],
+		"creatures": [{"card": "GROG", "owner": 0, "power": 1, "toughness": 4, "flags": ["Trample"]},
+			{"card": "GROG", "owner": 0, "power": 3, "toughness": 4, "flags": ["Trample"]},
+			{"card": "GROG", "owner": 1, "power": 0, "toughness": 4, "flags": []},
+			{"card": "GROG", "owner": 1, "power": 0, "toughness": 4, "flags": [], "damage": 3}]})
+	if duel == null:
+		_missing("wounded blockers: the position does not restore")
+		return
+	cases += 1
+	fights += 1
+	var answer := ELCombatBrain.ask(_context(1), duel, 1, 100000, false)
+	if int(answer.get("status", -1)) == -1: _missing("wounded blockers: the engine finds no defence (%s)" % str(answer))
+	else: print("SAME parity wounded blockers")
+
+## A block already set may be set again elsewhere: the hero at five health,
+## its 1/1 set against the other 1/1 while a 5/5 attacks, lives only by
+## moving the block onto the 5/5. The engine once never went back on a block.
+## The rules side too: setting a blocker against the attacker it blocks takes
+## the block back, against another moves it, in both sets of rules.
+func _revised_block() -> void:
+	var spec := {"phase": "defence", "attacks": [2, 3], "heroes": [{"health": 20, "mana": 0}, {"health": 5, "mana": 0}],
+		"creatures": [{"card": "GROG", "owner": 0, "power": 1, "toughness": 1, "flags": []},
+			{"card": "GROG", "owner": 0, "power": 5, "toughness": 5, "flags": []},
+			{"card": "GROG", "owner": 1, "power": 1, "toughness": 1, "flags": []}]}
+	var duel := Fixtures.build(profile, spec)
+	if duel == null or not duel.assign_block(4, 2):
+		_missing("revised block: the position does not restore")
+		return
+	cases += 1
+	fights += 1
+	var smart: Array[int] = [1]
+	duel.smart_sides = smart
+	var command := ELCombatSearch.think(duel.search_copy())
+	if String(command.get("kind", "")) != "block" or int(command.get("id", -1)) != 4 or int(command.get("target", -1)) != 3:
+		_missing("revised block: the engine plays %s, not the block of the 5/5" % str(command))
+	else: print("SAME parity revised block")
+	# Taken back, then set against the 5/5, by commands to both rules.
+	var start := duel.search_copy()
+	var before := _board(start)
+	var played := duel.assign_block(4, 2) and not duel.blocks.has(4) and duel.assign_block(4, 3) and duel.end_phase()
+	fights += 1
+	var model := ELCombatBrain.fight(_context(1), start, 4, [[2, 2, 0, 0], [2, 2, 1, 0], [0, 0, 0, 0]])
+	var trouble := _compare(duel, model, before, true) if not model.is_empty() else ["the model gave no answer"]
+	if not played: trouble.append("the game refused the commands (%s)" % duel.error)
+	if int(model.get("played", 0)) != 3: trouble.append("the model played %d of 3 commands" % int(model.get("played", 0)))
+	if trouble.is_empty(): print("SAME parity block taken back and moved")
+	else: _missing("block taken back and moved: " + " | ".join(trouble))
+
+## An authored puzzle's position, as its runner sets it up (objective and all).
+func _puzzle_position(id: String) -> ELDuel:
+	var entries := ELPuzzles.list(profile.id)
+	for at in entries.size():
+		if String(entries[at].id) != id: continue
+		var run := ELPuzzles.Run.new()
+		if run.begin(profile, at): return run.duel
+	return null
+
+func _missing(what: String) -> void:
+	print("DIFF parity %s" % what)
+	differed += 1
+
+func _fixture(name: String, spec: Dictionary, steps: Array, expect: Callable) -> void:
+	var duel := _puzzle_position(String(spec.puzzle)) if spec.has("puzzle") else Fixtures.build(profile, spec)
+	var start := _puzzle_position(String(spec.puzzle)) if spec.has("puzzle") else Fixtures.build(profile, spec)
+	if duel == null or start == null:
+		_missing(name + ": the position does not restore")
+		return
+	cases += 1
+	var before := _board(duel)
+	var attacker := duel.attacker
+	var ids: Array = duel.creatures.keys()
+	var commands: Array = []
+	for step: Array in steps:
+		var done := false
+		match String(step[0]):
+			"cast":
+				# Places as the model was told them; the game's hand closes up.
+				var place := int(step[1])
+				var earlier := 0
+				for command: Array in commands:
+					if int(command[0]) == 3 and int(command[1]) < place: earlier += 1
+				# And what it is aimed at, by the game's id: a hero or a creature.
+				var aim := -99
+				if step.size() > 2: aim = -1 - int(step[2]) if int(step[2]) < 2 else ids.find(int(step[2]))
+				done = duel.cast(place - earlier, int(step[2]) if step.size() > 2 else -1)
+				commands.append([3, place, aim, 0])
+			"attack":
+				done = duel.toggle_attack(int(ids[int(step[1])]))
+				commands.append([1, int(step[1]), 0, 0])
+			"block":
+				done = duel.assign_block(int(ids[int(step[1])]), int(ids[int(step[2])]))
+				commands.append([2, int(step[1]), int(step[2]), 0])
+			"use":
+				done = duel.use_ability(int(ids[int(step[1])]), String(step[2]))
+				commands.append([7, int(step[1]), -99, 0])
+			"end":
+				done = duel.end_phase()
+				commands.append([0, 0, 0, 0])
+			"do":
+				# Any other command, as a puzzle's solution writes it, in the
+				# form the engine itself lists it (no card or creature may have
+				# left before it, or the places it names have moved).
+				var command := _reference_command(duel, step[1])
+				var named: Array = []
+				for move: Array in _native_moves(duel, duel.active_side(), false):
+					if _same_command(duel, ELCombatBrain._command_of(duel, duel.creatures.keys(), int(move[0]), int(move[1]), int(move[2]), int(move[3])), command):
+						named = move
+						break
+				if named.is_empty():
+					_missing("%s: the engine does not list %s" % [name, str(step[1])])
+					return
+				done = ELCombatSearch.apply(duel, command)
+				commands.append(named)
+		if not done:
+			_missing("%s: the game refused %s (%s)" % [name, str(step), duel.error])
+			return
+	fights += 1
+	var model := ELCombatBrain.fight(_context(attacker), start, 4, commands)
+	if model.is_empty():
+		_missing(name + ": the model gave no answer")
+		return
+	var trouble := _compare(duel, model, before, true)
+	if int(model.played) != commands.size(): trouble.append("the model played %d of %d commands" % [int(model.played), commands.size()])
+	if not expect.call(duel): trouble.append("the game itself does not come out as expected")
+	if trouble.is_empty():
+		print("SAME parity %s" % name)
+		return
+	differed += 1
+	print("DIFF parity %s: %s" % [name, " | ".join(trouble)])
+	print("   " + before.text)
+
+# --- The authored puzzles' reference solutions -------------------------------------
+
+## --puzzles=1: each authored puzzle's reference line, a command at a time.
+## Before each command the engine lists what it would weigh there (as its
+## plain reading and as a proof), and the command must be among them; the
+## model then plays its own copy of that command from the same position, and
+## must leave what the game leaves.
+func _puzzles() -> void:
+	var entries := ELPuzzles.list(profile.id)
+	# The lines go on past their authored end as the engine plays both sides,
+	# so that what follows a refutation is held too.
+	var onward := int(_arg("onward", "24"))
+	ELCombatSearch.smart_engine_ms = 0
+	ELCombatSearch.smart_engine_budget = int(_arg("budget", "100000"))
+	var tally := {"actions": 0, "plain": 0, "proof": 0}
+	for at in entries.size():
+		var entry: Dictionary = entries[at]
+		if not _arg("only", "").is_empty() and String(entry.id) != _arg("only", ""): continue
+		var lines: Array = [["solution", entry.get("solution", [])]]
+		for refutation: Dictionary in entry.get("refutations", []): lines.append(["refutation \"%s\"" % String(refutation.get("label", "")), refutation.get("commands", [])])
+		for line: Array in lines: _puzzle_line(at, entry, String(line[0]), line[1], onward, tally)
+	print("PUZZLES actions=%d missing plain=%d proof=%d" % [int(tally.actions), int(tally.plain), int(tally.proof)])
+
+## One authored line of a puzzle and `onward` commands of the engine's after
+## it. Only the authored commands must be in the engine's lists; every
+## command, the engine's too, must leave the same position in both rules.
+func _puzzle_line(at: int, entry: Dictionary, label: String, solution: Array, onward: int, tally: Dictionary) -> ELDuel:
+	var run := ELPuzzles.Run.new()
+	if not run.begin(profile, at):
+		_missing("%s: the puzzle does not begin (%s)" % [entry.id, run.error])
+		return null
+	var duel: ELDuel = run.duel
+	for step in solution.size() + onward:
+		if duel.phase == ELDuel.Phase.FINISHED: break
+		var authored := step < solution.size()
+		var side := duel.active_side()
+		var command := {}
+		if authored: command = _reference_command(duel, solution[step])
+		else:
+			var smart: Array[int] = [side]
+			duel.smart_sides = smart
+			command = ELCombatSearch.think(duel.search_copy())
+			if command.is_empty(): command = {"kind": "end_phase"}
+		var said := "%s %s step %d%s (%s)" % [entry.id, label, step + 1, "" if authored else " (engine)", _said(duel, command)]
+		var found: Array = []
+		var lists := [_native_moves(duel, side, false), _native_moves(duel, side, true)]
+		# A library that lists nothing (one built before it could) is still
+		# held to the rules, by the command as the model would be told it.
+		if (lists[0] as Array).is_empty() and (lists[1] as Array).is_empty():
+			found = _native_command(duel, command)
+			if not found.is_empty(): lists = [[found], [found]]
+		for proof in 2:
+			var hit: Array = []
+			for move: Array in lists[proof]:
+				# A command of its own kind (a whole attack) or one the game
+				# cannot name reads as an end of the phase: only the end is one.
+				if String(command.kind) == "end_phase" and int(move[0]) != 0: continue
+				if _same_command(duel, ELCombatBrain._command_of(duel, duel.creatures.keys(), int(move[0]), int(move[1]), int(move[2]), int(move[3])), command):
+					hit = move
+					break
+			# The plain reading leaves out casts that only spend their card;
+			# a refutation may play one, so it must be in the proof's list,
+			# and the solutions' commands in both.
+			if hit.is_empty() and authored and (proof == 1 or label == "solution" or label.begins_with("(")):
+				tally[("proof" if proof == 1 else "plain")] += 1
+				_missing("%s: the engine's %s list does not hold it" % [said, "proof" if proof == 1 else "plain"])
+			elif found.is_empty(): found = hit
+		if authored: tally.actions += 1
+		var before := _board(duel)
+		var start := duel.search_copy()
+		if not ELCombatSearch.apply(duel, command):
+			if authored: _missing("%s: the game refused it (%s)" % [said, duel.error])
+			break
+		run.watch()
+		if found.is_empty(): continue
+		cases += 1
+		fights += 1
+		var model := ELCombatBrain.fight(_context(side), start, 4, [found])
+		if model.is_empty():
+			_missing(said + ": the model gave no answer")
+			continue
+		var trouble := _compare(duel, model, before, true)
+		if int(model.played) != 1: trouble.append("the model turned the command down")
+		var phase_now := 0 if duel.phase == ELDuel.Phase.ATTACK else 1
+		if duel.phase != ELDuel.Phase.FINISHED and int(model.phase) != phase_now:
+			trouble.append("the game stands in phase %d, the model in %d" % [phase_now, int(model.phase)])
+		if trouble.is_empty():
+			if verbose: print("SAME puzzle %s" % said)
+			continue
+		differed += 1
+		print("DIFF puzzle %s: %s" % [said, " | ".join(trouble)])
+		if verbose: print("   %s\n   the model played %s and leaves blocks %s, units %s, stats %s" % [before.text, str(found), str(model.blocks), str(model.units), str(model.get("stats", {}))])
+		# What follows a parting is the parting's own doing.
+		break
+	return duel
+
+## The model's own form of a plain command (an end, a creature sent or set
+## to block, a card cast with no further choice); empty for the rest.
+func _native_command(duel: ELDuel, command: Dictionary) -> Array:
+	var ids: Array = duel.creatures.keys()
+	match String(command.get("kind", "")):
+		"end_phase": return [0, 0, 0, 0]
+		"attack": return [1, ids.find(int(command.id)), 0, 0]
+		"block": return [2, ids.find(int(command.id)), ids.find(int(command.target)), 0]
+		"cast":
+			if int(command.get("grave", -1)) >= 0: return []
+			var target := int(command.get("target", -1))
+			var card := String(duel.heroes[duel.active_side()].hand[int(command.index)])
+			var aim := -99 if duel.target_kind(card) == "none" or target < 0 else (-1 - target if target < 2 else ids.find(target))
+			return [3, int(command.index), aim, int(command.get("power", 0))]
+	return []
+
+## A reference command as ELCombatSearch.apply takes it.
+func _reference_command(duel: ELDuel, raw: Dictionary) -> Dictionary:
+	var command := {}
+	for key: String in raw: command[key] = int(raw[key]) if raw[key] is float else raw[key]
+	match String(command.get("kind", "")):
+		"cast":
+			if command.has("card"): command.index = duel.heroes[duel.active_side()].hand.find(String(command.card))
+			command.target = int(command.get("target", -1))
+			command.grave = int(command.get("grave", -1))
+			command.power = int(command.get("power", 0))
+		"ability":
+			command.target = int(command.get("target", -1))
+			command.choice = int(command.get("choice", -1))
+			command.amount = int(command.get("amount", -1))
+	return command
+
+func _said(duel: ELDuel, command: Dictionary) -> String:
+	match String(command.get("kind", "")):
+		"cast": return "cast %s at %d grave %d power %d" % [String(command.get("card", "?")), int(command.target), int(command.grave), int(command.power)]
+		"ability": return "#%d %s at %d choice %d amount %d" % [int(command.id), String(command.key), int(command.target), int(command.choice), int(command.amount)]
+		"attack": return "attack #%d" % int(command.id)
+		"block": return "block #%d with #%d" % [int(command.target), int(command.id)]
+	return String(command.get("kind", "?"))
+
+## The commands the engine lists at its first command here, [kind, a, b, c].
+func _native_moves(duel: ELDuel, side: int, proof: bool) -> Array:
+	var raw: PackedInt32Array = ELCombatBrain.ask(_context(side), duel, 1, 1, true, 11 if proof else 10).get("raw", PackedInt32Array())
+	var out: Array = []
+	# A library that does not list answers something else, of another length.
+	if raw.size() < 1 or raw.size() != 1 + 4 * int(raw[0]): return out
+	for i in int(raw[0]):
+		var at := 1 + i * 4
+		if at + 3 >= raw.size(): break
+		out.append([int(raw[at]), int(raw[at + 1]), int(raw[at + 2]), int(raw[at + 3])])
+	return out
+
+## Whether two commands do the same: the same card (any copy of it), the same
+## aim and choices; a hero's ability by any copy of it; no aim where the
+## rule has none.
+func _same_command(duel: ELDuel, ours: Dictionary, wanted: Dictionary) -> bool:
+	var kind := String(wanted.get("kind", ""))
+	if String(ours.get("kind", "")) != kind: return false
+	var side := duel.active_side()
+	match kind:
+		"end_phase": return true
+		"attack": return int(ours.id) == int(wanted.id)
+		"block": return int(ours.id) == int(wanted.id) and int(ours.target) == int(wanted.target)
+		"cast":
+			var hand: Array = duel.heroes[side].hand
+			if int(ours.index) < 0 or int(ours.index) >= hand.size() or int(wanted.index) < 0: return false
+			var card := String(hand[int(wanted.index)])
+			if String(hand[int(ours.index)]) != card: return false
+			var aimed := duel.target_kind(card) != "none"
+			if aimed and int(ours.target) != int(wanted.target): return false
+			if int(ours.get("grave", -1)) != int(wanted.get("grave", -1)) and (int(ours.get("grave", -1)) >= 0 or int(wanted.get("grave", -1)) >= 0): return false
+			if duel.variable_power(card) and int(ours.get("power", 0)) != int(wanted.get("power", 0)): return false
+			return true
+		"ability":
+			var id := int(wanted.id)
+			if int(ours.id) != id: return false
+			var key := String(wanted.key)
+			var theirs := String(ours.key)
+			if id < 2:
+				key = key.get_slice(":", 0)
+				theirs = theirs.get_slice(":", 0)
+			if key != theirs: return false
+			var aimed := true
+			for definition: Dictionary in duel.abilities(id):
+				if String(definition.get("key", "")) == String(wanted.key) and String(definition.get("target", "none")) == "none": aimed = false
+			if aimed and int(ours.target) != int(wanted.target): return false
+			if int(ours.choice) != int(wanted.choice) and (int(ours.choice) >= 0 or int(wanted.choice) >= 0): return false
+			if int(ours.amount) != int(wanted.amount) and (int(ours.amount) >= 0 or int(wanted.amount) >= 0): return false
+			return true
+	return false

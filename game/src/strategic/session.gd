@@ -469,7 +469,16 @@ func _submit(hero: int, destination: Vector2i, target: int) -> bool:
 	# every order against the authoritative map and the sender's sight.
 	var actor := director.state.object(hero)
 	var previous: Dictionary = actor.get("strategy_order", {})
+	if not director.network_session: return false
+	var idle := director.strategy.is_empty() and director.movement.is_empty()
 	var planned := director.cancel_order(hero) if destination.x < 0 else director.request_move(hero, destination, target)
+	# A preview only draws the route: movement is the host's to resolve.
+	if idle and (not director.strategy.is_empty() or not director.movement.is_empty()):
+		director.strategy = {}
+		director.movement = {}
+		actor.strategy_order = previous
+		director.presentation.emit({"kind": "route", "id": hero, "path": ELStrategy.order_path(director, actor)})
+		return false
 	if not planned: return false
 	if link.submit_plan(day, row): return true
 	actor.strategy_order = previous
@@ -694,6 +703,14 @@ func _open_snapshot() -> void:
 	_clear_battle()
 	var same_planning: bool = (director != null and director.state.day == _receiving_day
 		and director.strategy.is_empty() and restored.director.strategy.is_empty())
+	# The host's checkpoint carries no commander binding: the guest's
+	# director is a network game's all the same (never free movement).
+	var seats: Array[int] = []
+	seats.assign(_setup.get("players", []))
+	if not restored.director.restore_network_seats(seats):
+		restored.state.close()
+		link.abort("The strategic checkpoint does not match this game's commanders.")
+		return
 	restored.strategic_refresh = same_planning
 	if same_planning: _keep_planning_routes(restored.state)
 	director = restored.director

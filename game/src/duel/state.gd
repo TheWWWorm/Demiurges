@@ -149,7 +149,7 @@ func start(data: ELProfile, seed_value := 212, options: Dictionary = {}) -> bool
 			prepared[-1].shape = shape
 			prepared[-1].kind = choice.get("kind", "hero")
 			prepared[-1].title = choice.get("title", name)
-			# First game: the hero's own level when difficulty moved the battle level.
+			# The hero's own level when difficulty or a fort moved the battle level.
 			if choice.get("map_level") is int: prepared[-1].map_level = int(choice.map_level)
 			if choice.has("monster_name"):
 				if choice.monster_name is not String or not ELLuaSave._integer(choice.get("monster_difficulty"), 0, 4) or choice.get("kind") != "monster" or ELFirstMonsters.appearance(profile, choice.monster_name, int(choice.monster_difficulty)).is_empty(): return _fail("Missing neutral creature appearance.")
@@ -387,6 +387,10 @@ func artifact_target_error(side: int, spell: String, target: int, choice := -1) 
 	return ""
 
 func use_artifact(side: int, index: int, target := -1, choice := -1) -> bool:
+	if searching: return _use_artifact_now(side, index, target, choice)
+	return _accept({"kind": "ability", "id": side, "key": "artifact:%d" % index, "target": target, "choice": choice, "amount": -1}, _use_artifact_gated.bind(side, index, target, choice))
+
+func _use_artifact_gated(side: int, index: int, target: int, choice: int) -> bool:
 	if gate == null: return _use_artifact_now(side, index, target, choice)
 	var action := {"kind": "artifact", "side": side, "index": index, "target": target, "choice": choice}
 	if not gate.gate_check(self, action): return _refused()
@@ -850,6 +854,12 @@ func valid_grave_targets(card: String, side := -1) -> Array[int]:
 	return result
 
 func cast(hand_index: int, target := -1, grave_index := -1, extra_ether := 0) -> bool:
+	if searching: return _cast_now(hand_index, target, grave_index, extra_ether)
+	var held: Array = heroes[active_side()].hand
+	var card: String = held[hand_index] if hand_index >= 0 and hand_index < held.size() else ""
+	return _accept({"kind": "cast", "index": hand_index, "card": card, "target": target, "grave": grave_index, "power": extra_ether}, _cast_gated.bind(hand_index, target, grave_index, extra_ether))
+
+func _cast_gated(hand_index: int, target: int, grave_index: int, extra_ether: int) -> bool:
 	if gate == null: return _cast_now(hand_index, target, grave_index, extra_ether)
 	var hero: Dictionary = heroes[active_side()]
 	var action := {"kind": "cast", "side": active_side(), "hand_index": hand_index, "target": target, "grave": grave_index, "power": extra_ether,
@@ -1658,6 +1668,10 @@ func _forest_holds(id: int, side: int) -> bool:
 	return false
 
 func toggle_attack(id: int) -> bool:
+	if searching: return _toggle_attack_now(id)
+	return _accept({"kind": "attack", "id": id}, _toggle_attack_gated.bind(id))
+
+func _toggle_attack_gated(id: int) -> bool:
 	if gate == null: return _toggle_attack_now(id)
 	var action := {"kind": "retreat" if attacks.has(id) else "attack", "side": attacker, "id": id}
 	if not gate.gate_check(self, action): return _refused()
@@ -1694,6 +1708,10 @@ func available_mana(side: int) -> int:
 	return maxi(0, int(heroes[side].mana))
 
 func assign_block(blocker: int, target: int) -> bool:
+	if searching: return _assign_block_now(blocker, target)
+	return _accept({"kind": "block", "id": blocker, "target": target}, _assign_block_gated.bind(blocker, target))
+
+func _assign_block_gated(blocker: int, target: int) -> bool:
 	if gate == null: return _assign_block_now(blocker, target)
 	var action := {"kind": "block", "side": 1 - attacker, "id": blocker, "target": target}
 	if not gate.gate_check(self, action): return _refused()
@@ -1750,7 +1768,9 @@ func abilities(id: int) -> Array[Dictionary]:
 		var ability: Dictionary = ELCatalog.first_ability(profile, creatures[id].card)
 		ability.name = ability_name(creatures[id].card)
 		if ability.key == "tap_walls": ability.cost = _resting_walls(1 - int(creatures[id].owner)).size()
-		if ability.key in ["rouse", "phantasm"]: ability.used = creatures[id].get("ability_used", {}).get(ability.key, false)
+		# The Wall of Unreality's suggestion may be bought again and again while
+		# there is ether (player report #130); only Rouse is once a round.
+		if ability.key == "rouse": ability.used = creatures[id].get("ability_used", {}).get(ability.key, false)
 		result.append(ability)
 	if profile.id == "el2" and pale(id): result.append_array(_pale_abilities(id))
 	# Spores need neither a ready nor a settled fingus.
@@ -1812,7 +1832,26 @@ func _pale_error(id: int, d: Dictionary) -> String:
 			if heroes[side].channels < 1: return "This needs an ether channel."
 		"ether_plea":
 			if int(heroes[1 - side].mana) <= 0: return "Your opponent has no ether."
+		"absorb", "weave", "transpose":
+			# With no enchantment it could take, the command is unavailable
+			# (player report #120), as for Mystic manifestation.
+			if not _has_pale_enchantment_target(side, d): return "There is no enchantment this ability can take."
 	return ""
+
+## Whether some enchantment in play suits Absorption, Weaving or
+## Transposition for hero `side`, at a price it can pay.
+func _has_pale_enchantment_target(side: int, d: Dictionary) -> bool:
+	for holder: int in [0, 1] + creatures.keys():
+		for e: Dictionary in entity(holder).enchantments:
+			var printed := int(profile.table("CombatSpells").get(e.card, {}).get("Cost", 0))
+			match d.key:
+				"weave":
+					if not e.get("fixed", false) and available_mana(side) >= printed + int(d.cost): return true
+				"transpose":
+					if dispellable(holder, e) and available_mana(side) >= printed + int(d.cost): return true
+				_:
+					if dispellable(holder, e): return true
+	return false
 
 ## Whether some character holds an enchantment hero `side` cast that may be removed.
 func _has_own_dispellable(side: int) -> bool:
@@ -1981,6 +2020,10 @@ func can_use_ability(id: int, key: String) -> bool:
 ## `enchantment_id` is the chosen enchantment, graveyard index or, for Combine,
 ## the creature receiving the sacrifice. `amount` is the X of pay-X abilities.
 func use_ability(id: int, ability: String, target := -1, enchantment_id := -1, amount := -1) -> bool:
+	if searching: return _use_ability_hooked(id, ability, target, enchantment_id, amount)
+	return _accept({"kind": "ability", "id": id, "key": ability, "target": target, "choice": enchantment_id, "amount": amount}, _use_ability_gated.bind(id, ability, target, enchantment_id, amount))
+
+func _use_ability_gated(id: int, ability: String, target: int, enchantment_id: int, amount: int) -> bool:
 	if gate == null: return _use_ability_hooked(id, ability, target, enchantment_id, amount)
 	var action := {"kind": "ability", "side": int(entity(id).get("owner", id)) if not entity(id).is_empty() else -1, "id": id, "ability": ability,
 		"target": target, "enchantment": enchantment_id, "amount": amount}
@@ -2232,8 +2275,6 @@ func _first_ability(id: int, definition: Dictionary, target: int, grave_index: i
 			var chosen := _enchantment_by_id(target, grave_index)
 			if chosen.is_empty() or not dispellable(target, chosen): return _fail("Select an enchantment that can be removed.")
 			if int(heroes[side].channels) < 1: return _fail("The rite needs an ether channel to sacrifice.")
-		"phantasm":
-			if c.get("ability_used", {}).get("phantasm", false): return _fail("This ability has already been used this round.")
 		"slay":
 			if not creatures.has(target) or target == id: return _fail("Select another creature.")
 			if not creatures[target].resting or attacks.has(target) or blocks.has(target): return _fail("Select a resting creature that is not in combat.")
@@ -2353,9 +2394,6 @@ func _first_ability(id: int, definition: Dictionary, target: int, grave_index: i
 			next_enchantment += 1
 			for spirit: Dictionary in creatures.values(): _refresh_stats(spirit)
 		"phantasm", "lava_power", "hellfire_health":
-			if definition.key == "phantasm":
-				if not c.has("ability_used"): c.ability_used = {}
-				c.ability_used.phantasm = true
 			if not c.has("temporary"): c.temporary = []
 			var boost := {"id": next_enchantment, "kind": definition.key}
 			if definition.key == "hellfire_health": boost.toughness = amount
@@ -2730,6 +2768,10 @@ func _remove_enchantment(target: int, enchantment_id: int) -> void:
 		return
 
 func end_phase() -> bool:
+	if searching: return _end_phase_now()
+	return _accept({"kind": "end_phase"}, _end_phase_gated)
+
+func _end_phase_gated() -> bool:
 	if gate == null: return _end_phase_now()
 	var action := {"kind": "end_phase", "side": active_side()}
 	if not gate.gate_check(self, action): return _refused()
@@ -3972,6 +4014,36 @@ func _drain_scripts() -> void:
 	_sync_attacks()
 	_check_winner()
 
+## The commands the rules took on this duel (never on a lookahead copy), in
+## order, each whole as ELCombatSearch.apply takes it ("kind" and every
+## argument as it was given: hand index and card, target, graveyard or
+## enchantment choice, power, ability amount), with the "side" that acted,
+## the "before" position it was made from (ELCombatSearch._position) and its
+## "serial" (counting from 1). This is the action's identity for the battle
+## adviser (ELCombatAdvisor); the presentation events say what came of it.
+## A command another one makes on the way (an artifact used as an ability)
+## is part of the outer one. The oldest are let go past COMMAND_LOG.
+var accepted: Array[Dictionary] = []
+var accepted_serial := 0
+const COMMAND_LOG := 256
+var _accepting := 0
+
+func _accept(command: Dictionary, run: Callable) -> bool:
+	if _accepting > 0: return run.call()
+	var before := ELCombatSearch._position(self)
+	var side := active_side()
+	_accepting += 1
+	var ok: bool = run.call()
+	_accepting -= 1
+	if ok:
+		accepted_serial += 1
+		command["side"] = side
+		command["before"] = before
+		command["serial"] = accepted_serial
+		accepted.append(command)
+		if accepted.size() > COMMAND_LOG * 2: accepted = accepted.slice(accepted.size() - COMMAND_LOG)
+	return ok
+
 func _emit(data: Dictionary) -> void:
 	if not searching:
 		history.append(data)
@@ -4013,13 +4085,19 @@ func first_side() -> int:
 
 ## An independent copy for the combat opponent's lookahead: the same rules and
 ## random sequence, no replay gate, event listeners or history. Battle scripts
-## are reduced to the lookahead layer (`ELBattleScripts.search_layer`), shared
-## by every copy made from it.
+## are reduced to the lookahead layer (`ELBattleScripts.search_layer`); each
+## copy holds its own script state, so one line read ahead does not change
+## what a script remembers in another.
+## The copy keeps the smarter-player sides and the identity of the duel it
+## was made from, so that a think on a copy (on a worker thread) is the same
+## think as on the duel itself.
 ## `expected_specs_on` makes specialisation rolls use their expected outcome.
 func search_copy(expected_specs_on := false) -> ELDuel:
 	var d := ELDuel.new()
 	d.profile = profile
 	d.hero_template = hero_template
+	d.smart_sides.assign(smart_sides)
+	d.search_identity = identity()
 	d.heroes.assign(heroes.duplicate(true))
 	d.creatures = creatures.duplicate(true)
 	d.attacks.assign(attacks)
@@ -4037,14 +4115,35 @@ func search_copy(expected_specs_on := false) -> ELDuel:
 	d.searching = true
 	d.expected_specs = expected_specs_on or self.expected_specs
 	d.spec_expect = spec_expect
+	if fair_specs:
+		d.fair_specs = true
+		d.spec_credit = spec_credit.duplicate()
 	if scripts != null: d.scripts = scripts.search_layer(d)
 	return d
+
+## The duel a lookahead copy was made from (0 on the duel itself; see
+## `identity`).
+var search_identity := 0
+
+## A number that tells this duel from every other one in play, the same on
+## all its lookahead copies: what the combat opponent remembers between
+## thinks (ELCombatSearch) belongs to one duel. A restored save or a puzzle
+## attempt is a duel of its own.
+func identity() -> int:
+	return search_identity if search_identity != 0 else get_instance_id()
 
 ## Lookahead copies whose specialisation rolls use their expected outcome.
 var expected_specs := false
 ## Sampled successes per hundred for each hero (ELSpecs.sample_expectation),
 ## set on a think's root copy; empty means the table chance.
 var spec_expect: Array[int] = []
+## With `expected_specs`: the rolls keep each trial's probability instead of
+## the second game's think's rounding (ELSpecs.roll). For the adviser's reading;
+## the copies of a copy keep it.
+var fair_specs := false
+## The expectation each hero's specialisation has built up but not yet spent
+## on this line ("side:code" -> fraction), under `fair_specs`.
+var spec_credit := {}
 
 func snapshot() -> Dictionary:
 	var result := _snapshot()
@@ -4059,11 +4158,9 @@ func _snapshot() -> Dictionary:
 		"turn_serial": turn_serial, "setup": setup.duplicate(true)}
 
 func save_file(path: String, session: Dictionary = {}) -> bool:
-	var file := FileAccess.open(path + ".tmp", FileAccess.WRITE)
-	if file == null: return _fail("Cannot write the duel save.")
-	file.store_string(JSON.stringify({"format": "etherlords-duel", "version": 1, "state": snapshot(), "session": session}, "", true, true))
-	file.close()
-	if DirAccess.rename_absolute(path + ".tmp", path) != OK: return _fail("Cannot replace the duel save.")
+	# A failed write keeps the previous save.
+	if not ELSafeFile.write_text(path, JSON.stringify({"format": "etherlords-duel", "version": 1, "state": snapshot(), "session": session}, "", true, true)):
+		return _fail("Cannot write the duel save.")
 	return true
 
 func restore(data: ELProfile, document: Dictionary) -> bool:

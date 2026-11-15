@@ -15,6 +15,19 @@ const FRAME := 256 * 1024
 const BUFFER := 8 * 1024 * 1024
 const MAX_PACKET := 16 * 1024 * 1024
 const HEADER := 6
+## Channels the games use; frames on any other are dropped.
+const CHANNELS := [0]
+## What the other side may leave waiting here: completed packets per peer
+## and in all, and bytes of completed and unfinished packets in all. A
+## sender beyond them is removed (a guest) or the room left (the host), as
+## dropping part of a reliable stream would break the game anyway.
+const MAX_QUEUED_PER_PEER := 512
+const MAX_QUEUED := 2048
+const MAX_BUFFERED := 48 * 1024 * 1024
+## An unfinished packet with no new frame for this long is dropped.
+const PARTIAL_MSEC := 60000
+## Frames read per poll; the rest wait for the next one.
+const FRAMES_PER_POLL := 512
 
 var close_reason := ""
 var _socket := WebSocketPeer.new()
@@ -27,7 +40,10 @@ var _mode := TRANSFER_MODE_RELIABLE
 var _refuse := false
 var _peers := {}
 var _incoming: Array[Array] = []
+## Unfinished packets by peer and channel: {"data", "at"}.
 var _partial := {}
+var _buffered := 0
+var _queued_by := {}
 
 ## The relay address; DEMIURGES_RELAY overrides it for a local test server.
 static func relay_url() -> String:
@@ -73,11 +89,15 @@ func _poll() -> void:
 	_socket.poll()
 	# Frames that arrived just before the room closed (such as the reason a
 	# host turned this player away) are still read.
-	while _socket.get_available_packet_count() > 0:
+	var read := 0
+	while _socket.get_available_packet_count() > 0 and read < FRAMES_PER_POLL and _status != CONNECTION_DISCONNECTED:
+		read += 1
 		var bytes := _socket.get_packet()
 		if _socket.was_string_packet(): _control(bytes.get_string_from_utf8())
 		else: _frame(bytes)
-	if _socket.get_ready_state() == WebSocketPeer.STATE_CLOSED:
+	_expire(Time.get_ticks_msec())
+	if _socket.get_available_packet_count() > 0 and _status != CONNECTION_DISCONNECTED: return
+	if _socket.get_ready_state() == WebSocketPeer.STATE_CLOSED and _status != CONNECTION_DISCONNECTED:
 		close_reason = _socket.get_close_reason()
 		if close_reason.is_empty() and _id == 0: close_reason = "Could not reach the room. Check the code."
 		_drop_all()
@@ -98,28 +118,70 @@ func _control(text: String) -> void:
 				_peers[id] = true
 				peer_connected.emit(id)
 		"leave":
-			if _peers.erase(id): peer_disconnected.emit(id)
+			if _peers.erase(id):
+				_forget(id)
+				peer_disconnected.emit(id)
 
 func _frame(bytes: PackedByteArray) -> void:
 	if bytes.size() < HEADER: return
 	var from := bytes.decode_u32(0)
-	if not _peers.has(from): return
+	if not _peers.has(from) or (not _server and from != 1): return
+	if bytes[4] not in CHANNELS or bytes[5] > 1: return
 	var key := from * 256 + bytes[4]
-	var data: PackedByteArray = _partial.get(key, PackedByteArray())
+	var entry: Dictionary = _partial.get(key, {"data": PackedByteArray(), "at": 0})
+	var data: PackedByteArray = entry.data
+	var piece := bytes.size() - HEADER
+	if data.size() + piece > MAX_PACKET or _buffered + piece > MAX_BUFFERED:
+		return _overflow(from)
 	data.append_array(bytes.slice(HEADER))
-	if data.size() > MAX_PACKET:
-		_partial.erase(key)
-		return
+	_buffered += piece
 	if bytes[5] & 1:
-		_partial[key] = data
+		_partial[key] = {"data": data, "at": Time.get_ticks_msec()}
 		return
 	_partial.erase(key)
+	if _incoming.size() >= MAX_QUEUED or int(_queued_by.get(from, 0)) >= MAX_QUEUED_PER_PEER:
+		_buffered -= data.size()
+		return _overflow(from)
+	_queued_by[from] = int(_queued_by.get(from, 0)) + 1
 	_incoming.append([from, bytes[4], data])
+
+## A sender that exceeded what may wait here: a guest is removed from the
+## room, the host's room is left.
+func _overflow(from: int) -> void:
+	if _server and from != 1:
+		_disconnect_peer(from, true)
+		return
+	close_reason = "The other player sent more data than the game can take."
+	_drop_all()
+	_close()
+
+## Unfinished packets that stopped arriving are dropped.
+func _expire(now: int) -> void:
+	for key: int in _partial.keys():
+		var entry: Dictionary = _partial[key]
+		if now - int(entry.at) < PARTIAL_MSEC: continue
+		_buffered -= entry.data.size()
+		_partial.erase(key)
+
+## Everything a departed peer left here: its unfinished and queued packets.
+func _forget(id: int) -> void:
+	for key: int in _partial.keys():
+		if key / 256 != id: continue
+		_buffered -= _partial[key].data.size()
+		_partial.erase(key)
+	var kept: Array[Array] = []
+	for packet: Array in _incoming:
+		if int(packet[0]) == id: _buffered -= packet[2].size()
+		else: kept.append(packet)
+	_incoming = kept
+	_queued_by.erase(id)
 
 func _drop_all() -> void:
 	_status = CONNECTION_DISCONNECTED
 	var lost := _peers.keys()
 	_peers.clear()
+	# Completed packets stay readable (a host's last reason); unfinished ones go.
+	for key: int in _partial.keys(): _buffered -= _partial[key].data.size()
 	_partial.clear()
 	for id: int in lost: peer_disconnected.emit(id)
 
@@ -128,7 +190,15 @@ func _get_available_packet_count() -> int:
 
 func _get_packet_script() -> PackedByteArray:
 	if _incoming.is_empty(): return PackedByteArray()
-	return _incoming.pop_front()[2]
+	var packet: Array = _incoming.pop_front()
+	_buffered -= packet[2].size()
+	var from := int(packet[0])
+	_queued_by[from] = int(_queued_by.get(from, 1)) - 1
+	if int(_queued_by[from]) <= 0: _queued_by.erase(from)
+	return packet[2]
+
+func buffered_bytes() -> int:
+	return _buffered
 
 func _get_packet_peer() -> int:
 	return _incoming[0][0] if not _incoming.is_empty() else 0
@@ -179,10 +249,13 @@ func _close() -> void:
 	_peers.clear()
 	_incoming.clear()
 	_partial.clear()
+	_queued_by.clear()
+	_buffered = 0
 
 func _disconnect_peer(peer: int, _force: bool) -> void:
 	if not _server or not _peers.erase(peer): return
-	_socket.send_text(JSON.stringify({"t": "kick", "id": peer}))
+	_forget(peer)
+	if _socket.get_ready_state() == WebSocketPeer.STATE_OPEN: _socket.send_text(JSON.stringify({"t": "kick", "id": peer}))
 	peer_disconnected.emit(peer)
 
 func _set_refuse_new_connections(enable: bool) -> void:

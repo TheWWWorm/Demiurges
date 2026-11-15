@@ -409,6 +409,7 @@ static func status_report(values: Dictionary) -> Dictionary:
 		"ray_reconstruction_reason": ray_reconstruction_reason(values, bool(values.get("path_tracing", false))),
 		"ray_reconstruction_active": ray_reconstruction_active(values),
 		"path_tracing_ray_reconstruction": ELPathTracing.ray_reconstruction_report,
+		"path_tracing_limits": ELPathTracing.limits_report,
 		"max_fps": Engine.max_fps,
 		"nvidia": status(NVIDIA), "amd": status(AMD)}
 

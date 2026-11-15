@@ -124,7 +124,9 @@ func build_screen() -> void:
 	_button("SMDelete", ask_delete)
 	_button("SaveMissionBack", close)
 	entries = saves(profile(), kind)
-	selected = 0 if mode == "load" and not entries.is_empty() else -1
+	selected = _first_selection()
+	# The chosen row is scrolled into sight.
+	if selected >= list.visible_rows(): list.scroll(selected - list.visible_rows() + 1)
 	refresh()
 	if mode == "save" and name_edit != null:
 		_focus_name.call_deferred(name_edit.get_instance_id())
@@ -218,6 +220,7 @@ func load_chosen() -> void:
 	_load(row)
 
 func _load(row: Dictionary) -> void:
+	ELSaveSlots.remember(menu.edition, str(row.get("path", "")))
 	if in_game:
 		menu.leave_screen()
 		menu.slot_chosen.emit(row)
@@ -251,13 +254,23 @@ func _save(cleaned: String) -> void:
 		return
 	menu.leave_screen()
 
+## The row a load list opens on: the save last made or loaded (player report
+## #127), else the first; a save list opens with none chosen.
+func _first_selection() -> int:
+	if mode != "load" or entries.is_empty(): return -1
+	var last := ELSaveSlots.last_used(menu.edition)
+	if not last.is_empty():
+		for index in entries.size():
+			if str(entries[index].get("path", "")).simplify_path() == last.simplify_path(): return index
+	return 0
+
 func ask_delete() -> void:
 	if selected < 0 or selected >= entries.size(): return
 	var row := entries[selected]
 	menu.duel_ui.show_message(menu.text("T_MB_DELETE_SAVE").strip_edges(), func():
 		ELSaveSlots.remove(row)
 		entries = saves(profile(), kind)
-		selected = 0 if mode == "load" and not entries.is_empty() else -1
+		selected = _first_selection()
 		refresh(), true)
 
 func close() -> void:

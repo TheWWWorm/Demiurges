@@ -13,6 +13,9 @@ const MASTERY := "user://puzzle_mastery.json"
 ## Off for checks that play the puzzles through: what they solve is not
 ## written to the player's list.
 static var remember := true
+## Where the lists are read from: FOLDER, or another folder for checks
+## (tools/puzzles_check.gd --folder=, e.g. an earlier release's puzzles).
+static var folder := FOLDER
 static var _lists: Dictionary = {}
 static var _solved: Dictionary = {}
 static var _solved_read := false
@@ -23,7 +26,7 @@ static var _mastery_read := false
 static func list(edition: String) -> Array:
 	if _lists.has(edition): return _lists[edition]
 	var out: Array = []
-	var path := FOLDER + edition + ".json"
+	var path := folder.path_join(edition + ".json")
 	if FileAccess.file_exists(path):
 		var document: Variant = JSON.parse_string(FileAccess.get_file_as_string(path))
 		if document is Dictionary and document.get("format") == "etherlords-puzzles" and document.get("puzzles") is Array:
@@ -125,8 +128,7 @@ static func mark(edition: String, id: String, turns: int, hints_used := -1) -> v
 		if not _solved.has(edition): _solved[edition] = {}
 		_solved[edition][id] = maxi(turns, 1)
 		if remember:
-			var file := FileAccess.open(SOLVED, FileAccess.WRITE)
-			if file != null: file.store_string(JSON.stringify(_solved, "\t"))
+			ELSafeFile.write_text(SOLVED, JSON.stringify(_solved, "\t"))
 	# A slower unassisted replay can improve mastery independently of best turns.
 	# Old callers supply no hint information and cannot manufacture a badge.
 	if hints_used < 0: return
@@ -136,8 +138,7 @@ static func mark(edition: String, id: String, turns: int, hints_used := -1) -> v
 	if not _mastery.has(edition): _mastery[edition] = {}
 	_mastery[edition][id] = hints_used
 	if remember:
-		var file := FileAccess.open(MASTERY, FileAccess.WRITE)
-		if file != null: file.store_string(JSON.stringify(_mastery, "\t"))
+		ELSafeFile.write_text(MASTERY, JSON.stringify(_mastery, "\t"))
 
 static func _read_mastery() -> void:
 	if _mastery_read: return
@@ -202,6 +203,9 @@ class Run:
 			return false
 		edition = profile.id
 		index = at
+		# A fresh attempt reads with no plan or proof kept from another duel
+		# (the duel identity already keeps them apart; this frees them too).
+		ELCombatSearch.reset_caches()
 		entry = entries[at]
 		allowed = int(entry.turns)
 		duel = ELDuel.new()
@@ -216,6 +220,17 @@ class Run:
 		_enemy_first = 1 if duel.attacker != SIDE else 0
 		_enemy_begun = int(duel.heroes[1 - SIDE].turns)
 		turn = _first
+		# The objective goes with the duel, so that the computer's readings
+		# of it (ELCombatBrain) judge it as `watch` does: the defender plays to
+		# stop it, and a solving tool to meet it.
+		var goal: Dictionary = entry.get("objective", {"type": "win"})
+		var told := {"type": String(goal.get("type", "win")), "side": SIDE, "allowed": allowed, "first": _first, "begun": _begun,
+			"enemy_first": _enemy_first, "enemy_begun": _enemy_begun, "min_health": int(goal.get("min_health", 1)),
+			"finish_health": int(goal.get("finish_health", 1)), "finish_mana": int(goal.get("finish_mana", 0)),
+			"min_allies": int(goal.get("min_allies", 0)), "targets": goal.get("targets", []).map(func(id: Variant) -> int: return int(id)),
+			"protect": goal.get("protect", []).map(func(id: Variant) -> int: return int(id))}
+		if goal.has("enemy_turns"): told.enemy_turns = int(goal.enemy_turns)
+		duel.setup["puzzle_goal"] = told
 		outcome = ""
 		reason = ""
 		failed_target = -1

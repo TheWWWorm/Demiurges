@@ -52,13 +52,17 @@ const PARTICLE_BOUNDS := AABB(Vector3(-64, -16, -64), Vector3(128, 96, 128))
 ## Decoded particle files (with frame instance data) kept per edition.
 const CACHE_BYTES := 96 * 1024 * 1024
 
-## Edition id -> {effect name (lower) -> definition}.
+## "edition#generation" (cache_space) -> {effect name (lower) -> definition}.
 static var _catalogues: Dictionary = {}
-## "edition:file" -> {file: ELParticleFile, frames: {frame -> PackedFloat32Array}, bytes}.
+## "edition#generation:file" -> {file: ELParticleFile, frames: {frame -> PackedFloat32Array}, bytes}.
 static var _files: Dictionary = {}
 static var _order: Array[String] = []
 static var _cached_bytes := 0
 static var _materials: Dictionary = {}
+## Edition id -> the newest content generation (ELProfile.generation) the
+## caches above were asked for. Entries are kept under "edition#generation";
+## an older generation's (a replaced profile's background work) are not kept.
+static var _generations: Dictionary = {}
 ## The two particle shaders (blended, additive) every particle material
 ## shares: one compile each, instead of one per sprite sheet.
 static var _shaders: Dictionary = {}
@@ -128,12 +132,13 @@ func build(data: ELProfile) -> void:
 
 ## Effects.xml of the edition: per effect its particles, points and length.
 static func load_catalogue(data: ELProfile) -> Dictionary:
-	if _catalogues.has(data.id): return _catalogues[data.id]
+	var space := cache_space(data)
+	if _catalogues.has(space): return _catalogues[space]
 	var result := {}
 	var path := data.file("Resources/Effects.xml")
 	var parser := XMLParser.new()
 	if path.is_empty() or parser.open(path) != OK:
-		_catalogues[data.id] = result
+		if not stale(data): _catalogues[space] = result
 		return result
 	var current: Dictionary = {}
 	var point := ""
@@ -198,8 +203,35 @@ static func load_catalogue(data: ELProfile) -> Dictionary:
 	for key: String in result:
 		result[key].tracks = fx_tracks(data, String(result[key].name))
 		result[key].frames = fx_frames(data, String(result[key].name))
-	_catalogues[data.id] = result
+	if not stale(data): _catalogues[space] = result
 	return result
+
+## The cache namespace of a profile's content: "edition#generation". The
+## first request from a newer generation of an edition drops the older
+## generation's entries.
+static func cache_space(data: ELProfile) -> String:
+	var latest := int(_generations.get(data.id, -1))
+	if data.generation > latest:
+		_generations[data.id] = data.generation
+		if latest >= 0: _forget_edition(data.id)
+	return "%s#%d" % [data.id, data.generation]
+
+## Whether a profile's content has been replaced by a newer one of its
+## edition: work for it (a warm-up still running) is no longer kept.
+static func stale(data: ELProfile) -> bool:
+	return data.generation < int(_generations.get(data.id, -1))
+
+static func _forget_edition(edition: String) -> void:
+	var prefix := edition + "#"
+	for key: String in _catalogues.keys():
+		if key.begins_with(prefix): _catalogues.erase(key)
+	for key: String in _materials.keys():
+		if key.begins_with(prefix): _materials.erase(key)
+	for key: String in _files.keys():
+		if key.begins_with(prefix):
+			_cached_bytes -= int(_files[key].bytes)
+			_files.erase(key)
+			_order.erase(key)
 
 ## Delay of a named effect's authored MonstersHit/Popadanie callback. This
 ## also covers effects triggered directly by damage, not by a cast/ability.
@@ -1480,7 +1512,7 @@ static func _frame_buffer(file: ELParticleFile, frame: int) -> PackedFloat32Arra
 
 ## Decoded file of an edition (shared by every battle of that edition).
 static func _file(data: ELProfile, path: String) -> Dictionary:
-	var key := data.id + ":" + ELArchive.key(path)
+	var key := cache_space(data) + ":" + ELArchive.key(path)
 	if _files.has(key):
 		_order.erase(key)
 		_order.append(key)
@@ -1491,6 +1523,7 @@ static func _file(data: ELProfile, path: String) -> Dictionary:
 		push_warning("Combat effect particles unreadable: " + path)
 		return {}
 	var cached := {"file": file, "frames": {}, "bytes": bytes.size()}
+	if stale(data): return cached
 	_files[key] = cached
 	_order.append(key)
 	_cached_bytes += bytes.size()
@@ -1545,8 +1578,10 @@ static func bake_glows(file: ELParticleFile, frames: Dictionary, tints: PackedVe
 ## Files a baked particle file (unless a cast decoded it meanwhile) and
 ## returns its cache entry.
 static func store_file(data: ELProfile, path: String, baked: Dictionary) -> Dictionary:
-	var key := data.id + ":" + ELArchive.key(path)
+	var key := cache_space(data) + ":" + ELArchive.key(path)
 	if _files.has(key): return _files[key]
+	# A warm-up of replaced content finishing late keeps its result to itself.
+	if stale(data): return baked
 	_files[key] = baked
 	_order.append(key)
 	_cached_bytes += int(baked.bytes)
@@ -1555,7 +1590,7 @@ static func store_file(data: ELProfile, path: String, baked: Dictionary) -> Dict
 
 ## The cache entry of a particle file, or {} (no decoding).
 static func cached_file(data: ELProfile, path: String) -> Dictionary:
-	return _files.get(data.id + ":" + ELArchive.key(path), {})
+	return _files.get(cache_space(data) + ":" + ELArchive.key(path), {})
 
 ## The sprite sheet a particle file draws with (a ELProfile.texture name).
 static func sheet_name(file: ELParticleFile) -> String:
@@ -1624,18 +1659,18 @@ static func _trim(keep: Dictionary) -> void:
 static func cached_files(data: ELProfile) -> int:
 	var count := 0
 	for key: String in _files:
-		if key.begins_with(data.id + ":"): count += 1
+		if key.begins_with(cache_space(data) + ":"): count += 1
 	return count
 
 static func _material(data: ELProfile, file: ELParticleFile, ambient: bool, figure := false) -> ShaderMaterial:
 	var capped := ambient and file.additive
 	var held := figure and file.additive and not capped
-	var key := "%s|%s|%s|%s" % [data.id, file.texture.to_lower(), "arena" if capped else ("figure" if held else "effect"), file.additive]
+	var key := "%s|%s|%s|%s" % [cache_space(data), file.texture.to_lower(), "arena" if capped else ("figure" if held else "effect"), file.additive]
 	if _materials.has(key): return _materials[key]
 	var name := file.texture.get_basename() if file.texture.to_lower().ends_with(".bmp") else file.texture
 	var texture := data.texture("Effects/" + name)
 	if texture == null:
-		_materials[key] = null
+		if not stale(data): _materials[key] = null
 		return null
 	var material := ShaderMaterial.new()
 	material.shader = _shader(file.additive)
@@ -1644,7 +1679,7 @@ static func _material(data: ELProfile, file: ELParticleFile, ambient: bool, figu
 	material.render_priority = 10
 	var glow := minf(glow_level, ARENA_HDR_LIMIT) if capped else (minf(glow_level, FIGURE_HDR_LIMIT) if held else glow_level)
 	material.set_shader_parameter("glow", glow if file.additive else 1.0)
-	_materials[key] = material
+	if not stale(data): _materials[key] = material
 	return material
 
 static func _shader(additive: bool) -> Shader:

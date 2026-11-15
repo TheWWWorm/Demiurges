@@ -59,6 +59,8 @@ static func equip(profile: ELProfile, hero: Dictionary, card: String, reserve_in
 
 static func unequip(profile: ELProfile, hero: Dictionary, index: int) -> String:
 	if index < 0 or index >= hero.cards.size(): return "That spellbook slot is empty."
+	# First game: a cantrip stays in the book, as in the original.
+	if profile.id == "el1" and ELRunes.unlimited(profile, hero, str(hero.cards[index])): return "Cantrips cannot be moved to reserve."
 	if profile.id == "el1" and not ELRunes.restore(profile, hero): return "Invalid rune inventory."
 	if not add(profile, hero, str(hero.cards[index])): return "That spell cannot be moved to reserve."
 	if profile.id == "el1":

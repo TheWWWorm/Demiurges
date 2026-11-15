@@ -97,7 +97,25 @@ static func write(name: String, director: ELAdventureDirector, camera: Dictionar
 	var profile := director.state.map.profile
 	var cleaned := clean_name(profile.id, name)
 	if cleaned.is_empty(): return "Invalid save name."
-	return _write(save_path(profile.id, cleaned), meta_path(profile.id, cleaned), cleaned, SLOT, director, camera, preview)
+	var error := _write(save_path(profile.id, cleaned), meta_path(profile.id, cleaned), cleaned, SLOT, director, camera, preview)
+	if error.is_empty(): remember(profile.id, save_path(profile.id, cleaned))
+	return error
+
+const LAST_USED := "user://saves_last_used.json"
+
+## Records the save last made or loaded in `edition`, so the save lists open
+## on it (player report #127).
+static func remember(edition: String, path: String) -> void:
+	var read: Variant = JSON.parse_string(FileAccess.get_file_as_string(LAST_USED)) if FileAccess.file_exists(LAST_USED) else null
+	var known: Dictionary = read if read is Dictionary else {}
+	known[edition] = path
+	var file := FileAccess.open(LAST_USED, FileAccess.WRITE)
+	if file != null: file.store_string(JSON.stringify(known))
+
+## The save last made or loaded in `edition`, or "".
+static func last_used(edition: String) -> String:
+	var read: Variant = JSON.parse_string(FileAccess.get_file_as_string(LAST_USED)) if FileAccess.file_exists(LAST_USED) else null
+	return String(read.get(edition, "")) if read is Dictionary else ""
 
 ## A strategic slot is one file so the row and world change together. The
 ## ordered seat IDs survive reconnecting; readiness belongs to the live match.
@@ -123,7 +141,9 @@ static func write_strategy(name: String, director: ELAdventureDirector, players:
 	elif turn_seconds > 0:
 		document.version = 2
 		document.turn_seconds = turn_seconds
-	return "" if codec.write_document(save_path("el1", cleaned, KIND_STRATEGIC), document) else codec.error
+	if not codec.write_document(save_path("el1", cleaned, KIND_STRATEGIC), document): return codec.error
+	remember("el1", save_path("el1", cleaned, KIND_STRATEGIC))
+	return ""
 
 ## Returns the decoded world with host/guest seat IDs, or an error. The caller
 ## binds the seats after setting up the new connection.

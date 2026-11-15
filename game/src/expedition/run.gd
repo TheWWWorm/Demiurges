@@ -669,16 +669,7 @@ func persist() -> bool:
 	if profile == null or preset.is_empty(): return _fail("There is no expedition to save.")
 	var bytes := JSON.stringify(snapshot(), "", true, true).to_utf8_buffer()
 	if bytes.size() > MAX_SAVE_BYTES: return _fail("The expedition checkpoint is too large.")
-	var temporary := SAVE_PATH + ".%d.tmp" % OS.get_process_id()
-	var file := FileAccess.open(temporary, FileAccess.WRITE)
-	if file == null: return _fail("Could not write the expedition checkpoint.")
-	file.store_buffer(bytes)
-	file.flush()
-	var write_error := file.get_error()
-	file.close()
-	if write_error != OK or DirAccess.rename_absolute(temporary, SAVE_PATH) != OK:
-		DirAccess.remove_absolute(temporary)
-		return _fail("Could not replace the expedition checkpoint.")
+	if not ELSafeFile.write_bytes(SAVE_PATH, bytes): return _fail("Could not write the expedition checkpoint.")
 	return true
 
 func restore(source: ELProfile) -> bool:

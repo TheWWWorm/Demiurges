@@ -98,7 +98,9 @@ func _fog_moved(actor: Dictionary) -> void:
 func start(source: ELAdventureMap, level := 0, seed_number := 212, scenario_script := "", human := 1, campaign := false) -> bool:
 	close()
 	map = source
-	difficulty = clampi(level, 0, 4)
+	# The first game has five difficulties, the second three (its maps author
+	# DifLvl 0-2; a higher value would fall back to the easiest variant).
+	difficulty = clampi(level, 0, 4 if map.profile.id == "el1" else 2)
 	seed_value = seed_number
 	script_name = scenario_script if not scenario_script.is_empty() else ELSingleScenario.map_path(map.id)
 	error = ""

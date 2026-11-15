@@ -152,10 +152,8 @@ static func scenario_from_binary(source: String) -> String:
 		push_warning("Custom map %s: %s" % [source.get_file(), result.error])
 		return ""
 	DirAccess.make_dir_recursive_absolute(folder)
-	var file := FileAccess.open(path, FileAccess.WRITE)
-	if file == null: return ""
-	file.store_string(result.text)
-	file.close()
+	# A short cache file would be taken as complete next time.
+	if not ELSafeFile.write_text(path, result.text): return ""
 	return path
 
 ## Whether a map id names a custom map ("Maps/Custom/<name>").
@@ -324,12 +322,9 @@ static func import_zip(path: String) -> Dictionary:
 		if DirAccess.make_dir_recursive_absolute(target.get_base_dir()) != OK:
 			reader.close()
 			return {"maps": [], "error": "The maps folder could not be created."}
-		var file := FileAccess.open(target, FileAccess.WRITE)
-		if file == null:
+		if not ELSafeFile.write_bytes(target, data):
 			reader.close()
 			return {"maps": [], "error": "A map file could not be written."}
-		file.store_buffer(data)
-		file.close()
 	reader.close()
 	# The ids the index gives these files (pairs share the map file's name).
 	var found: Dictionary = {}

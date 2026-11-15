@@ -15,9 +15,11 @@ extends SceneTree
 ## rendering, so omit --headless) and saves the card icons of each game into
 ## <images>/<game>/; pictures already there are kept unless --wiki-images-all.
 ## It also renders the story heroes that guide pages list (`heroes:` front
-## matter, ELWikiData) as <images>/<game>/hero-<row>.webp. Without
+## matter, ELWikiData) as <images>/<game>/hero-<row>.webp, and the map objects
+## of their `!objects` lines (ELWikiPreview.stage_object) as
+## <images>/<game>/object-<table>-<row>.webp (360 px). Without
 ## --wiki-output only the pictures are made and no export is written;
-## --wiki-heroes-only skips the cards.
+## --wiki-heroes-only skips the cards, --wiki-objects-only the cards and heroes.
 
 func _initialize() -> void:
 	_run.call_deferred()
@@ -108,7 +110,8 @@ func _images(profile: ELProfile, catalog: ELWikiCatalog, folder: String) -> void
 	var icons := 0
 	var models := 0
 	# --wiki-heroes-only renders just the story heroes.
-	for page: Dictionary in [] if _flag("wiki-heroes-only") else catalog.pages:
+	var guides_only := _flag("wiki-heroes-only") or _flag("wiki-objects-only")
+	for page: Dictionary in [] if guides_only else catalog.pages:
 		var code := str(page.get("card", ""))
 		if code.is_empty() or not profile.id in page.get("games", []): continue
 		var icon_path := folder.path_join("icon-%s.png" % code)
@@ -126,27 +129,41 @@ func _images(profile: ELProfile, catalog: ELWikiCatalog, folder: String) -> void
 	# The story heroes of the guide pages.
 	var heroes := 0
 	var seen := {}
-	for row: Dictionary in ELWikiData.PAGES.get("en", []):
+	for row: Dictionary in [] if _flag("wiki-objects-only") else ELWikiData.PAGES.get("en", []):
 		for hero: Array in row.get("heroes", []):
 			if hero[0] != profile.id or seen.has(hero[1]): continue
 			seen[hero[1]] = true
-			var name := RegEx.create_from_string("[^a-z0-9]+").sub(str(hero[1]).to_lower(), "-", true).strip_edges().trim_prefix("-").trim_suffix("-")
-			var hero_path := folder.path_join("hero-%s.webp" % name)
+			var hero_path := folder.path_join("hero-%s.webp" % _slug(hero[1]))
 			if not redo and FileAccess.file_exists(hero_path): continue
 			# Heroes carry faint glows; a firmer threshold frames the figure itself.
 			if await _render(ELWikiPreview.stage_hero(profile, hero[1], Vector2i(960, 960)), hero_path, 0.12): heroes += 1
 			else: printerr("export_wiki: no hero ", hero[1])
-	print("export_wiki: %d icons, %d creature and %d hero pictures -> %s" % [icons, models, heroes, folder])
+	# The map objects of the guides' `!objects` lines, seen from above as on the map.
+	var objects := 0
+	for row: Dictionary in ELWikiData.PAGES.get("en", []):
+		for object: Array in row.get("objects", []):
+			if object[0] != profile.id or seen.has("object:" + object[1]): continue
+			seen["object:" + object[1]] = true
+			var object_path := folder.path_join("object-%s.webp" % _slug(object[1]))
+			if not redo and FileAccess.file_exists(object_path): continue
+			if await _render(ELWikiPreview.stage_object(profile, object[1], Vector2i(960, 960)), object_path, 0.05, 360, ELWikiPreview.OBJECT_PITCH): objects += 1
+			else: printerr("export_wiki: no map object ", object[1])
+	print("export_wiki: %d icons, %d creature, %d hero and %d map object pictures -> %s" % [icons, models, heroes, objects, folder])
 
-## Renders a staged figure into `path` (480 px WebP); false without a stage.
-func _render(view: SubViewport, path: String, threshold := 0.025) -> bool:
+## The file-name form of a table row ("NewBuildings/CommonLab@0" ->
+## "newbuildings-commonlab-0"), as tools/build_wiki.py names the pictures.
+func _slug(value: String) -> String:
+	return RegEx.create_from_string("[^a-z0-9]+").sub(value.to_lower(), "-", true).trim_prefix("-").trim_suffix("-")
+
+## Renders a staged figure into `path` (`size` px WebP); false without a stage.
+func _render(view: SubViewport, path: String, threshold := 0.025, size := 480, pitch := ELWikiPreview.PITCH) -> bool:
 	if view == null: return false
 	root.add_child(view)
 	# Let the idle clip and its particles run for a moment.
 	for i in 12: await process_frame
-	ELWikiPreview.frame(view, ELWikiPreview.YAW, ELWikiPreview.PITCH)
+	ELWikiPreview.frame(view, ELWikiPreview.YAW, pitch)
 	for i in 3: await process_frame
-	var shot := _cropped(view.get_texture().get_image(), 480, threshold)
+	var shot := _cropped(view.get_texture().get_image(), size, threshold)
 	shot.save_webp(path, true, 0.86)
 	view.queue_free()
 	return true

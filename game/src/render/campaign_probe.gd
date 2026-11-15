@@ -23,6 +23,9 @@ extends Node
 ##   (briefing-longest[-end].png).
 ## - "duel": the Duel screen (duel.png), then the preset editor on a built-in
 ##   preset, one frame per right-panel tab (duel-editor-<tab>.png).
+## - "ai": the screens with a difficulty choice and the computer players'
+##   strength beside it (ELAIChoice), movies stopped: ai-mission.png (first
+##   game) or ai-map.png (second game), then ai-single.png.
 ## "--probe-size=WxH" sets a borderless window of that size first.
 
 var view: Node
@@ -103,6 +106,7 @@ func _run() -> void:
 		"legends": await _legends(menu)
 		"winlose": await _win_lose(menu)
 		"duel": await _duel(menu)
+		"ai": await _ai_choices(menu)
 		_: log_line("unknown mode " + mode)
 	ELBriefingVoice.log_events = false
 	log_line("done")
@@ -153,6 +157,31 @@ func _cards(menu: ELFrontMenu) -> void:
 	await wait(0.2)
 	log_line("back on the choice, voice: '%s', %s" % [menu.briefing.current(), card_state(menu)])
 	await shot("cards-04-back")
+
+func _stop_movies() -> void:
+	for player: Node in get_tree().root.find_children("*", "ELMoviePlayer", true, false): player.queue_free()
+	await wait(0.3)
+
+func _ai_choices(menu: ELFrontMenu) -> void:
+	await _open_campaigns(menu)
+	menu.select_campaign(menu.cards[0].campaign if not menu.cards.is_empty() else "", true)
+	await wait(0.2)
+	if menu.edition == "el2":
+		menu._confirm_campaign()
+		await wait(1.5)
+		await _stop_movies()
+		await shot("ai-map")
+	else:
+		menu._confirm_campaign()
+		await wait(0.5)
+		menu.show_screen("mission")
+		await wait(1.0)
+		await _stop_movies()
+		await shot("ai-mission")
+	menu.show_screen("select_mission" if menu.edition == "el2" else "single")
+	await wait(1.0)
+	await _stop_movies()
+	await shot("ai-single")
 
 func _screens(menu: ELFrontMenu) -> void:
 	await _open_campaigns(menu)

@@ -74,6 +74,10 @@ func build(profile: ELProfile) -> void:
 	readout.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	readout.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	readout.mouse_filter = Control.MOUSE_FILTER_PASS
+	readout.add_theme_font_override("font", sharp_font())
+	# The panel is enlarged in whole pixels (nearest filtering); the text is a
+	# distance field drawn smooth, so it stays sharp at every interface size.
+	readout.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR
 	readout.add_theme_font_size_override("font_size", 15)
 	readout.add_theme_color_override("font_color", INK)
 	readout.add_theme_color_override("font_outline_color", Color.BLACK)
@@ -81,6 +85,17 @@ func build(profile: ELProfile) -> void:
 	add_child(readout)
 	hide()
 	layout()
+
+## Arial-like text as a multichannel distance field: it is drawn from its
+## outlines at whatever size the battle panel is scaled to, instead of being
+## enlarged from 15 px.
+static func sharp_font() -> SystemFont:
+	var font := SystemFont.new()
+	font.font_names = PackedStringArray(["Arial", "Liberation Sans", "Arimo", "DejaVu Sans"])
+	font.multichannel_signed_distance_field = true
+	font.msdf_pixel_range = 16
+	font.msdf_size = 48
+	return font
 
 func has_art() -> bool:
 	return buttons.size() == CONTROLS.size()

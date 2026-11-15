@@ -37,8 +37,19 @@ var metal_masks: ELMetalMasks
 ## Second game: the release the installed card tables come from
 ## (ELPatch103.RELEASE_OLD or RELEASE_CURRENT; empty until read).
 var second_release := ""
+## Which content this profile holds: every new profile and every mount gets
+## a newer one, so caches kept across profiles (ELCombatEffects) never serve
+## an edition's replaced content.
+var generation := 0
+static var _last_generation := 0
+
+func _init() -> void:
+	_last_generation += 1
+	generation = _last_generation
 
 func mount(edition: String, folder: String) -> bool:
+	_last_generation += 1
+	generation = _last_generation
 	error = ""
 	archives.clear()
 	tables.clear()
@@ -117,14 +128,22 @@ func mount(edition: String, folder: String) -> bool:
 	return true
 
 func table(name: String) -> Dictionary:
-	if not tables.has(name):
-		var parsed := ELRegistry.parse(read("regs", name + ".reg"))
-		if id == "el2":
-			# Release 1.01 tables are brought up to the 1.03 values (ELPatch103).
-			if name.to_lower() == "combatspells" and second_release.is_empty(): second_release = ELPatch103.release(parsed)
-			if ELPatch103.TABLES.has(name.to_lower()): ELPatch103.upgrade_table(name, parsed, release_is_old())
-		tables[name] = parsed
+	if not tables.has(name): return adopt_table(name, ELRegistry.parse(read("regs", name + ".reg")))
 	return tables[name]
+
+## Publishes a table parsed elsewhere (a worker thread) from this profile's
+## own data, normalised the way table() normalises it, and returns the kept
+## table: the one already kept when there is one. Every table in `tables`
+## goes through here, so a table reads the same whoever parsed it first.
+## Main thread only.
+func adopt_table(name: String, parsed: Dictionary) -> Dictionary:
+	if tables.has(name): return tables[name]
+	if id == "el2":
+		# Release 1.01 tables are brought up to the 1.03 values (ELPatch103).
+		if name.to_lower() == "combatspells" and second_release.is_empty(): second_release = ELPatch103.release(parsed)
+		if ELPatch103.TABLES.has(name.to_lower()): ELPatch103.upgrade_table(name, parsed, release_is_old())
+	tables[name] = parsed
+	return parsed
 
 ## Second game: whether the installed card tables are from release 1.01.
 func release_is_old() -> bool:
@@ -216,9 +235,19 @@ func _texture_candidates(file: String) -> Array:
 		var names := [base]
 		if base.begins_with("sm"): names.append(base.substr(2))
 		for stem: String in names.duplicate(): names.append_array([stem + "_00", stem + "main"])
-		for stem: String in names:
-			for sub in ["", "alpha", "alpha32"]:
-				candidates.append(["textures", folder.path_join(sub).path_join(stem + ".mmp"), sub == "alpha32"])
+		# Hero rows may wear creature skins (the second game's Konung of Fire,
+		# the elemental and spirit heroes, creature shapes) and creature rows
+		# hero ones: the skin is in the other figure folder. The exact name in
+		# either folder comes before the closest variants.
+		var folders := [folder]
+		var top := folder.get_slice("/", 0)
+		var other: String = {"heroes": "creatures", "creatures": "heroes"}.get(top, "")
+		if not other.is_empty(): folders.append(other + folder.substr(top.length()))
+		for stems: Array in [[base], names.slice(1)]:
+			for place: String in folders:
+				for stem: String in stems:
+					for sub in ["", "alpha", "alpha32"]:
+						candidates.append(["textures", place.path_join(sub).path_join(stem + ".mmp"), sub == "alpha32"])
 	return candidates
 
 ## Decodes a texture's bytes into its image and mipmaps: {image, one_bit,

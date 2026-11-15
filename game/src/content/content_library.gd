@@ -108,10 +108,7 @@ static func link_folder(edition: String, folder: String) -> bool:
 	var links := linked_folders()
 	if folder.is_empty(): links.erase(edition)
 	else: links[edition] = folder
-	var file := FileAccess.open(LINKS, FileAccess.WRITE)
-	if file == null: return false
-	file.store_string(JSON.stringify(links, "\t"))
-	return true
+	return ELSafeFile.write_text(LINKS, JSON.stringify(links, "\t"))
 
 
 ## Remove an imported edition. Saves and settings are kept.

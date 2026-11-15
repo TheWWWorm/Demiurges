@@ -11,6 +11,8 @@ extends RefCounted
 ## in order. Playing it back (ELDuelReplayPlayer) starts the same battle and
 ## runs the same actions through the rules, so the battle unfolds as it was
 ## played. Files live in user://duel/<edition>/Replays/<name>.json.
+## Newer files also note the rules they were played under and the state the
+## battle ended in, so playback can confirm it ends the same way.
 
 const FORMAT := "etherlords-remake-duel-replay"
 const VERSION := 2
@@ -27,7 +29,8 @@ var local_side := 0
 var labels: Array[String] = ["", "", "", ""]
 ## Hero portrait (face) indices of the two sides.
 var faces: Array[int] = [-1, -1]
-## Per round: {seed, options, actions, winner, complete}.
+## Per round: {seed, options, actions, winner, complete}, and once the
+## round ended, its {terminal} state and the {rules} it was played under.
 var rounds: Array[Dictionary] = []
 ## Set when this saves an original replay again (with its edited comments):
 ## it is written as .rpl, one file, keeping every other recorded byte.
@@ -83,7 +86,24 @@ func finish_round(duel: ELDuel) -> void:
 	if rounds.is_empty(): return
 	rounds[-1].winner = duel.winner
 	rounds[-1].complete = tracking(duel) and duel.phase == ELDuel.Phase.FINISHED
+	if rounds[-1].complete:
+		rounds[-1].terminal = terminal_state(duel)
+		rounds[-1].rules = rules_identity(duel.profile)
 	untrack()
+
+## How a battle ended: the winner, both heroes' health, the turn, and a
+## digest of the whole battle state.
+static func terminal_state(duel: ELDuel) -> Dictionary:
+	var state := duel.snapshot()
+	for hero: Dictionary in state.heroes:
+		hero.erase("title")
+		hero.erase("name")
+	return {"winner": duel.winner, "health": [int(duel.heroes[0].health), int(duel.heroes[1].health)],
+		"turn": duel.turn_serial, "digest": JSON.stringify(state).sha256_text()}
+
+## The game version and edition a battle was played under.
+static func rules_identity(profile: ELProfile) -> String:
+	return "%s %s" % [str(ProjectSettings.get_setting("application/config/version", "")), profile.id if profile != null else ""]
 
 func complete() -> bool:
 	return not rounds.is_empty() and rounds.all(func(r: Dictionary): return bool(r.complete))
@@ -137,6 +157,9 @@ func save(name: String) -> String:
 		var data := {"format": FORMAT, "version": VERSION, "edition": edition, "name": names[index], "labels": labels.duplicate(),
 			"faces": faces.duplicate(), "local_side": local_side, "round": index + 1, "rounds": rounds.size(), "seed": int(round.seed),
 			"options": round.options, "actions": round.actions, "winner": int(round.winner)}
+		if round.get("terminal") is Dictionary:
+			data.terminal = round.terminal
+			data.rules = String(round.get("rules", ""))
 		var file := FileAccess.open(folder.path_join(names[index] + EXTENSION), FileAccess.WRITE)
 		if file == null: return "The replay cannot be written."
 		file.store_string(JSON.stringify(JSON.from_native(data)))
@@ -159,6 +182,11 @@ static func read(path: String, edition_id: String) -> Dictionary:
 		if action is not Dictionary or not KINDS.has(action.get("kind")) or action.get("side") not in [0, 1]: return {}
 		# A comment written in the replay editor.
 		if action.has("note") and action.note is not String: return {}
+	# A recorded end is optional (older files have none).
+	if data.has("terminal"):
+		var end: Variant = data.terminal
+		if end is not Dictionary or end.get("health") is not Array or end.health.size() != 2 or end.get("digest") is not String: return {}
+		if data.get("rules", "") is not String: return {}
 	# Version 1 recordings never drew an Expert Artificer roll.
 	if data.version == 1: data.options.expert_artificer = false
 	return data

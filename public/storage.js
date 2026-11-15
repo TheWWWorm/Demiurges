@@ -1,7 +1,10 @@
 'use strict';
 // Shared by the page (files.js) and its workers. The player's game files live
 // in IndexedDB: "files" holds their contents under "<import id>/<path>" (or
-// "<import id>/pack" for a data pack), "meta" holds one index per edition.
+// "<import id>/pack" for a data pack), "meta" holds one index per edition
+// ("edition:<id>"). Each tab also records there what it still needs, with a
+// heartbeat: "import:<import id>" for an import it is writing, and
+// "mount:<tab>" for the stored copies it has mounted.
 const DATA_DB = 'demiurges-data-v1';
 const EDITIONS = ['el1', 'el2'];
 // Files every edition needs; the campaign file tells the editions apart.
@@ -44,6 +47,35 @@ async function putData(store, key, value) {
       transaction.onerror = () => reject(transaction.error);
     });
   } finally { db.close(); }
+}
+// Runs change(store) in one read-write transaction on "meta"; resolves once
+// it is committed.
+async function updateMeta(change) {
+  const db = await openData();
+  try {
+    await new Promise((resolve, reject) => {
+      const transaction = db.transaction('meta', 'readwrite');
+      transaction.oncomplete = resolve;
+      transaction.onabort = () => reject(transaction.error || new Error('Storage write aborted.'));
+      change(transaction.objectStore('meta'), transaction);
+    });
+  } finally { db.close(); }
+}
+// Which stored copies a cleanup may delete: those that no edition index, no
+// running import and no open tab refers to. Import and tab records whose
+// heartbeat stopped more than `stale` ms ago no longer count, and are dropped.
+// `records` are the [key, value] pairs of "meta", `fileKeys` the keys of "files".
+function cleanupPlan(records, fileKeys, now, stale) {
+  const keep = new Set(), drop = [];
+  for (const [key, value] of records) {
+    if (key.startsWith('edition:')) { if (value && value.id) keep.add(value.id); continue; }
+    const importing = key.startsWith('import:');
+    if (!importing && !key.startsWith('mount:')) continue;
+    if (!(value && now - value.heartbeat <= stale)) { drop.push(key); continue; }
+    for (const id of importing ? [key.slice('import:'.length)] : value.ids || []) keep.add(id);
+  }
+  const generations = [...new Set(fileKeys.map(key => String(key).split('/')[0]))].filter(id => !keep.has(id));
+  return {generations, records: drop};
 }
 function cleanPath(name) {
   const path = name.replaceAll('\\', '/').toLowerCase();

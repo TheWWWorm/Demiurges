@@ -17,6 +17,11 @@ extends Node
 ## with the renderer's jittered camera, and the relit colour handed over with
 ## four guides at the internal size (diffuse albedo, specular albedo, world
 ## normal and roughness, specular hit distance).
+##
+## The traced scene has fixed budgets (geometry ranges, objects, texture
+## layers). Freed geometry is reused, a fragmented budget is packed by a
+## rebuild, and what cannot fit at all keeps its raster light (warned once).
+## limits_report holds the counts; --path-tracing-stats prints them.
 
 signal changed(active: bool)
 
@@ -93,8 +98,21 @@ var _label: Label
 var _label_time := 0.0
 # Main-thread snapshot state, cleared together with the GPU side on a reset.
 var _slots := {}          # node id -> {mesh, pose, look, flags}
-var _layers := {}         # [texture, solid] -> [layer, has alpha]
+var _layers := {}         # [texture, solid] -> [layer (-1 none), has alpha]
 var _next_layer := 0
+var _layer_keys := []     # layer -> its [texture, solid] key (null when free)
+var _free_layers: Array[int] = []
+var _averages := {}       # [texture, solid] -> linear average colour
+# Layers handed out during the current snapshot, which no slot holds yet.
+var _pinned := {}
+# Material records re-sent because their texture gave its layer up.
+var _layer_ops := []
+var _layer_counts := {"textures": 0, "evicted": 0, "given_up": 0, "without_layer": 0}
+var _stats_clock := 0.0
+static var _layers_warned := false
+## The traced scene's budget as last read (geometry ranges, objects, texture
+## layers, rebuilds), for the status file and --path-tracing-stats.
+static var limits_report := {}
 var _mesh_data := {}      # Mesh -> {vertex, index, uv}
 var _benchmarking := false
 # Development check (--path-tracing-fx=Effect): repeats an effect from the
@@ -304,8 +322,14 @@ func _process(delta: float) -> void:
 func _snapshot(delta: float) -> void:
 	# Options or scene effects may turn the shadow map back on.
 	if is_instance_valid(_sun) and _sun.shadow_enabled: _sun.shadow_enabled = false
-	if _effect.take_overflow(): _reset()
+	if _effect.take_overflow():
+		# The render thread's ranges are fragmented: every object is sent anew
+		# (the textures stay), packed, in this frame's batch.
+		_slots.clear()
+		_effect.queue_reset(false)
+		_scan = 0.0
 	_scan -= delta
+	_pinned.clear()
 	var ops := []
 	if _scan <= 0.0:
 		_scan = SCAN_INTERVAL
@@ -378,6 +402,29 @@ func _snapshot(delta: float) -> void:
 		"bounces": clampi(int(settings.values.get("light_bounces", 2)), 1, 4) if settings != null else 2,
 		"ray_reconstruction": _ray_reconstruction()})
 	ray_reconstruction_report = _effect.reconstruction_report()
+	_stats_clock -= delta
+	if _stats_clock <= 0.0:
+		_stats_clock = 2.0
+		_update_limits()
+
+## Reads the budget (limits_report) and, with --path-tracing-stats, prints it.
+func _update_limits() -> void:
+	var report := _effect.limits()
+	var held := {}
+	for slot: Dictionary in _slots.values():
+		for layer: int in slot.get("layers", []):
+			if layer >= 0: held[layer] = true
+	report.layers = {"used": held.size(), "allocated": _next_layer - _free_layers.size(), "capacity": LAYERS}
+	report.textures = _layer_counts.duplicate()
+	limits_report = report
+	if not OS.get_cmdline_user_args().has("--path-tracing-stats") or report.is_empty() or not report.has("vertices"): return
+	var line := "PTLIMITS"
+	for name: String in ["vertices", "corners", "normals", "objects", "layers"]:
+		var part: Dictionary = report[name]
+		line += " %s=%d/%d/%d" % [name, part.used, part.allocated, part.capacity]
+	line += " rebuilds=%d skipped=%d over_budget=%d textures=%d evicted=%d given_up=%d without_layer=%d" % [report.rebuilds, report.skipped,
+		report.skipped_over_budget, report.textures.textures, report.textures.evicted, report.textures.given_up, report.textures.without_layer]
+	print(line)
 
 ## DLSS Ray Reconstruction replaces the tracer's own smoothing: chosen, with
 ## DLSS upscaling rendering on an engine that takes the guides, and the
@@ -395,14 +442,12 @@ func _update_slot(ops: Array, id: int, mesh: Mesh, frame: int, look: Dictionary,
 	var vertices: PackedVector3Array = data.vertex
 	var slot: Dictionary = _slots.get(id, {})
 	if slot.is_empty() or slot.mesh != mesh or slot.look != look:
-		var layer := _layer(look.texture, look.get("solid", false))
-		var cutoff: float = look.get("cutoff", 0.0)
-		var flags: int = look.get("flags", 0)
-		if cutoff > 1.0 or (cutoff > 0.0 and layer[1]) or (flags & SURFACE_SOFT_EMITTER) != 0:
-			flags |= SURFACE_ALPHA
-		# Metal has no emission: that layer carries where its texels are metal.
-		var second: Texture2D = look.get("emission_texture") if (flags & SURFACE_EMISSION) != 0 else look.get("metal_texture")
-		var record := _material_record(look, layer[0], _layer(second)[0], flags)
+		var material := _material(look)
+		# Records of slots whose texture gave its layer up here, in order.
+		ops.append_array(_layer_ops)
+		_layer_ops.clear()
+		var record: PackedByteArray = material[0]
+		var flags: int = material[1]
 		var geometry_flags := SURFACE_ARENA_SCENERY
 		if slot.is_empty() or slot.mesh != mesh or (slot.flags & geometry_flags) != (flags & geometry_flags):
 			var normals := PackedByteArray()
@@ -413,6 +458,7 @@ func _update_slot(ops: Array, id: int, mesh: Mesh, frame: int, look: Dictionary,
 		ops.append(["material", id, record])
 		slot.look = look
 		slot.flags = flags
+		slot.layers = material[2]
 		slot.mesh = mesh
 		_slots[id] = slot
 	var pose := Vector3(frame, next_frame, weight)
@@ -434,6 +480,38 @@ static func _secondary_corner_normals(mesh: Mesh, indices: PackedInt32Array) -> 
 	for corner in indices.size():
 		corners[corner] = normals[indices[corner]]
 	return corners.to_byte_array()
+
+## A surface's material record, its flags (with SURFACE_ALPHA where its
+## texture's alpha cuts) and the two layers it samples: [record, flags, layers].
+## A texture left without a layer (the array is full) is traced in its
+## average colour and keeps its alpha classification, though without texels
+## to test its cut is traced solid (cutouts take layers first, see _layer).
+func _material(look: Dictionary) -> Array:
+	var flags: int = look.get("flags", 0)
+	var texture: Texture2D = look.texture
+	var albedo := _layer(texture, look.get("solid", false))
+	var cutoff: float = look.get("cutoff", 0.0)
+	if cutoff > 1.0 or (cutoff > 0.0 and albedo[1]) or (flags & SURFACE_SOFT_EMITTER) != 0:
+		flags |= SURFACE_ALPHA
+	# Metal has no emission: that layer carries where its texels are metal.
+	var second_texture: Texture2D = look.get("emission_texture") if (flags & SURFACE_EMISSION) != 0 else look.get("metal_texture")
+	var second := _layer(second_texture)
+	var shown := look.duplicate()
+	if albedo[0] < 0 and texture != null:
+		var average := _average(texture, look.get("solid", false))
+		var tint: Color = look.get("tint", Color.WHITE)
+		shown.tint = Color(tint.r * average.r, tint.g * average.g, tint.b * average.b, tint.a)
+		# Metal judged from texel colours has none to judge: diffuse instead.
+		if (flags & SURFACE_METAL) != 0 and second[0] < 0: flags &= ~SURFACE_METAL
+	if second[0] < 0 and second_texture != null and (flags & SURFACE_EMISSION) != 0:
+		var average := _average(second_texture, false)
+		var emission: Color = look.get("emission", Color.BLACK)
+		if (flags & SURFACE_EMISSION_MULTIPLY) != 0:
+			shown.emission = Color(emission.r * average.r, emission.g * average.g, emission.b * average.b)
+			flags &= ~SURFACE_EMISSION_MULTIPLY
+		else:
+			shown.emission = Color(emission.r + average.r, emission.g + average.g, emission.b + average.b)
+	return [_material_record(shown, albedo[0], second[0], flags), flags, [albedo[0], second[0]]]
 
 static func _material_record(look: Dictionary, layer: int, emission_layer: int, flags: int) -> PackedByteArray:
 	var tint: Color = look.get("tint", Color.WHITE)
@@ -765,38 +843,123 @@ func _arrays(mesh: Mesh) -> Dictionary:
 
 ## The texture-array layer holding a texture (uploaded on first use), and
 ## whether its alpha cuts anything out. `solid` stores its average colour only.
+##
+## Past LAYERS textures, a layer no slot uses any more is taken over. When
+## every layer is in use, a texture whose alpha cuts takes the layer of one
+## that does not (that one is traced in its average colour from then on, and
+## its slots' records are sent again), so cutout shadows stay right. A
+## texture left without a layer keeps its alpha classification.
 func _layer(texture: Texture2D, solid := false) -> Array:
 	if texture == null: return [-1, false]
 	var key := [texture, solid]
-	if _layers.has(key): return _layers[key]
+	if _layers.has(key):
+		var known: Array = _layers[key]
+		if known[0] >= 0: _pinned[known[0]] = true
+		return known
+	_layer_counts.textures += 1
 	var entry := [-1, false]
-	if _next_layer < LAYERS:
-		var image := texture.get_image()
-		if image != null:
-			var authored := _authored_layer(texture, image) if not solid else null
-			if authored != null:
-				image = authored
-			else:
-				image = image.duplicate()
-				if image.is_compressed(): image.decompress()
-				image.clear_mipmaps()
-				image.convert(Image.FORMAT_RGBA8)
-				if solid:
-					image.resize(16, 16, Image.INTERPOLATE_BILINEAR)
-					image.resize(1, 1, Image.INTERPOLATE_BILINEAR)
-					var average := image.get_pixel(0, 0)
-					average.a = 1.0
-					image = Image.create(LAYER_SIZE, LAYER_SIZE, false, Image.FORMAT_RGBA8)
-					image.fill(average)
-				else:
-					image.resize(LAYER_SIZE, LAYER_SIZE, Image.INTERPOLATE_BILINEAR)
-			var alpha := image.detect_alpha() != Image.ALPHA_NONE
-			if authored == null: image.generate_mipmaps()
-			entry = [_next_layer, alpha]
-			_next_layer += 1
-			_effect.queue_layer(entry[0], image.get_data())
+	var image := _layer_image(texture, solid)
+	if image != null:
+		var alpha := image.detect_alpha() != Image.ALPHA_NONE
+		var layer := _free_layer(alpha)
+		entry = [layer, alpha]
+		if layer >= 0:
+			if not image.has_mipmaps(): image.generate_mipmaps()
+			_layer_keys[layer] = key
+			_pinned[layer] = true
+			_effect.queue_layer(layer, image.get_data())
+		else:
+			_layer_counts.without_layer += 1
+			if not _layers_warned:
+				_layers_warned = true
+				push_warning("Path tracing: more than %d textures in view; the rest are traced in their average colour" % LAYERS)
 	_layers[key] = entry
 	return entry
+
+## A texture as one RGBA8 layer (mipmaps not yet made, unless authored).
+## `solid` fills the layer with its average colour.
+func _layer_image(texture: Texture2D, solid: bool) -> Image:
+	var image := texture.get_image()
+	if image == null: return null
+	var authored := _authored_layer(texture, image) if not solid else null
+	if authored != null: return authored
+	image = image.duplicate()
+	if image.is_compressed(): image.decompress()
+	image.clear_mipmaps()
+	image.convert(Image.FORMAT_RGBA8)
+	if solid:
+		var average := _average_of(image)
+		image = Image.create(LAYER_SIZE, LAYER_SIZE, false, Image.FORMAT_RGBA8)
+		image.fill(average)
+	else:
+		image.resize(LAYER_SIZE, LAYER_SIZE, Image.INTERPOLATE_BILINEAR)
+	return image
+
+## An RGBA8 image's average colour (as stored, opaque).
+static func _average_of(image: Image) -> Color:
+	var small := image.duplicate() as Image
+	if small.has_mipmaps(): small.clear_mipmaps()
+	small.resize(16, 16, Image.INTERPOLATE_BILINEAR)
+	small.resize(1, 1, Image.INTERPOLATE_BILINEAR)
+	var average := small.get_pixel(0, 0)
+	average.a = 1.0
+	return average
+
+## A texture's average colour in linear light, for tracing it without a layer.
+func _average(texture: Texture2D, solid: bool) -> Color:
+	var key := [texture, solid]
+	if not _averages.has(key):
+		var image := _layer_image(texture, solid)
+		_averages[key] = _average_of(image).srgb_to_linear() if image != null else Color.WHITE
+	return _averages[key]
+
+## A layer for a new texture: unused, else one no slot holds any more, else
+## (for a texture whose alpha cuts) one holding a texture that does not cut.
+## -1 when there is none.
+func _free_layer(alpha: bool) -> int:
+	if _next_layer < LAYERS:
+		_next_layer += 1
+		_layer_keys.resize(LAYERS)
+		return _next_layer - 1
+	if not _free_layers.is_empty(): return _free_layers.pop_back()
+	var held := _pinned.duplicate()
+	for slot: Dictionary in _slots.values():
+		for layer: int in slot.get("layers", []):
+			if layer >= 0: held[layer] = true
+	for layer in LAYERS:
+		if held.has(layer): continue
+		_layers.erase(_layer_keys[layer])
+		_layer_keys[layer] = null
+		_layer_counts.evicted += 1
+		# Any other unheld layer is free as well.
+		for other in range(layer + 1, LAYERS):
+			if held.has(other) or _layer_keys[other] == null: continue
+			_layers.erase(_layer_keys[other])
+			_layer_keys[other] = null
+			_free_layers.append(other)
+			_layer_counts.evicted += 1
+		return layer
+	if not alpha: return -1
+	# Prefer a ground's single colour, then any texture without a cut.
+	var chosen := -1
+	for layer in LAYERS:
+		var key: Variant = _layer_keys[layer]
+		if _pinned.has(layer) or key == null or bool(_layers[key][1]): continue
+		if chosen < 0 or bool(key[1]): chosen = layer
+		if bool(key[1]): break
+	if chosen < 0: return -1
+	var given: Array = _layer_keys[chosen]
+	_layers[given] = [-1, false]
+	_layer_keys[chosen] = null
+	_layer_counts.given_up += 1
+	_layer_counts.without_layer += 1
+	for id: int in _slots:
+		var slot: Dictionary = _slots[id]
+		if not (slot.get("layers", []) as Array).has(chosen): continue
+		var material := _material(slot.look)
+		slot.layers = material[2]
+		_layer_ops.append(["material", id, material[0]])
+	return chosen
 
 ## Keep the original mask at the ray atlas's resolution when the asset has it.
 static func _authored_layer(texture: Texture2D, image: Image) -> Image:
@@ -813,6 +976,12 @@ func _reset() -> void:
 	_slots.clear()
 	_layers.clear()
 	_next_layer = 0
+	_layer_keys.clear()
+	_free_layers.clear()
+	_averages.clear()
+	_pinned.clear()
+	_layer_ops.clear()
+	for key: String in _layer_counts: _layer_counts[key] = 0
 	_mesh_data.clear()
 	_static_entries = []
 	_static_cache.clear()
@@ -821,6 +990,71 @@ func _reset() -> void:
 
 func _exit_tree() -> void:
 	if _effect != null: _effect.release()
+
+
+## First-fit ranges of a fixed-size buffer (vertices, corners). Freed ranges
+## merge with their free neighbours, and a range ending at the top lowers it,
+## so a scene whose objects come and go keeps reusing the same space.
+class Ranges extends RefCounted:
+	var capacity := 0
+	## Units held by live ranges.
+	var used := 0
+	## The end of the highest live range.
+	var high := 0
+	var _holes: Array[Vector2i] = []   # free [start, size] below `high`, by start
+
+	func _init(units: int) -> void:
+		capacity = units
+
+	func clear() -> void:
+		used = 0
+		high = 0
+		_holes.clear()
+
+	## The start of `size` free units, or -1 when no free run is that long.
+	func allocate(size: int) -> int:
+		if size <= 0: return 0
+		for i in _holes.size():
+			var hole := _holes[i]
+			if hole.y < size: continue
+			if hole.y == size: _holes.remove_at(i)
+			else: _holes[i] = Vector2i(hole.x + size, hole.y - size)
+			used += size
+			return hole.x
+		if high + size > capacity: return -1
+		var start := high
+		high += size
+		used += size
+		return start
+
+	func release(start: int, size: int) -> void:
+		if size <= 0: return
+		used -= size
+		var at := 0
+		while at < _holes.size() and _holes[at].x < start: at += 1
+		var hole := Vector2i(start, size)
+		# Merge with the free run after it, then the one before it.
+		if at < _holes.size() and hole.x + hole.y == _holes[at].x:
+			hole.y += _holes[at].y
+			_holes.remove_at(at)
+		if at > 0 and _holes[at - 1].x + _holes[at - 1].y == hole.x:
+			at -= 1
+			hole = Vector2i(_holes[at].x, _holes[at].y + hole.y)
+			_holes.remove_at(at)
+		if hole.x + hole.y >= high: high = hole.x
+		else: _holes.insert(at, hole)
+
+	## Whether `size` more units would fit once the live ranges were packed.
+	func fits_packed(size: int) -> bool:
+		return used + size <= capacity
+
+	func largest_free() -> int:
+		var best := capacity - high
+		for hole in _holes: best = maxi(best, hole.y)
+		return best
+
+	func report() -> Dictionary:
+		return {"used": used, "allocated": high, "capacity": capacity, "holes": _holes.size()}
 
 
 ## The render-thread half: owns every GPU resource and runs the passes.
@@ -833,13 +1067,16 @@ class Effect extends CompositorEffect:
 	const SLOT_BYTES := 64
 	const FRAME_BYTES := 320
 	const DOUBLE_SIDED := RenderingDevice.ACCELERATION_STRUCTURE_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT
+	const REBUILD_INTERVAL := 120
 
 	var history_reset := true
 	var _mutex := Mutex.new()
 	var _ops := []
 	var _instances := []
 	var _frame := {}
+	# A geometry rebuild asked of the main thread (take_overflow).
 	var _overflow := false
+	var _stats := {}
 
 	var _rd: RenderingDevice
 	var _ready_state := 0   # 0 untried, 1 ready, -1 failed
@@ -855,7 +1092,6 @@ class Effect extends CompositorEffect:
 	var _corners := RID()
 	var _corner_uv := RID()
 	var _corner_normals := RID()
-	var _normal_bytes_used := 0
 	var _normal_capacity := 0
 	var _slot_buffer := RID()
 	var _frame_buffer := RID()
@@ -867,17 +1103,30 @@ class Effect extends CompositorEffect:
 	var _sbt := RID()
 	var _hit_range := 0
 	var _tlas_capacity := 0
-	var _images: Array[RID] = []   # light 0/1, guide 0/1, filter 0/1, primary surface, secondary
+	var _images: Array[RID] = []   # light 0/1, guide 0/1, filter 0/1, primary surface, secondary, sun 0/1
 	var _size := Vector2i.ZERO
 	var _parity := 0
 	var _frame_number := 0
 	var _previous_view_projection := Projection.IDENTITY
 	var _previous_camera := Vector3.ZERO
-	# Allocation state.
-	var _next_vertex := 0
-	var _next_index := 0
-	var _next_corner := 0
-	var _slots := {}   # id -> {index, vertex, first_index, corner, corners, vertices, blas, geometry}
+	# Allocation state. Corners index the index, corner, corner UV and corner
+	# normal buffers alike (one entry per triangle corner).
+	var _vertex_ranges := ELPathTracing.Ranges.new(VERTEX_CAPACITY)
+	var _corner_ranges := ELPathTracing.Ranges.new(CORNER_CAPACITY)
+	var _normal_ranges := ELPathTracing.Ranges.new(CORNER_CAPACITY)
+	var _slots := {}   # id -> {index, vertex, first_index, corner, corners, vertices, normal, normals, blas, geometry}
+	# Objects left out because the scene does not fit even packed: they keep
+	# their raster light until the next rebuild. Warned about once a run.
+	var _skipped := {}
+	var _skipped_total := 0
+	var _warned := false
+	# A rebuild packs the ranges again (the main thread sends every object
+	# anew). Asked for when a define fits only once packed, at most once per
+	# REBUILD_INTERVAL callbacks; one wanted sooner waits for it.
+	var _rebuilds := 0
+	var _rebuild_wanted := false
+	var _callbacks := 0
+	var _last_rebuild := -REBUILD_INTERVAL
 	var _free_indices: Array[int] = []
 	var _next_slot := 0
 	var _dirty: Array[int] = []
@@ -914,9 +1163,11 @@ class Effect extends CompositorEffect:
 		_ops.append(["layer", layer, data])
 		_mutex.unlock()
 
-	func queue_reset() -> void:
+	## `full`: everything, history included; otherwise the geometry only (the
+	## objects are sent again right after it).
+	func queue_reset(full := true) -> void:
 		_mutex.lock()
-		_ops.append(["reset"])
+		_ops.append(["reset", full])
 		_mutex.unlock()
 
 	func take_overflow() -> bool:
@@ -1051,7 +1302,7 @@ class Effect extends CompositorEffect:
 		format.height = size.y
 		format.format = RenderingDevice.DATA_FORMAT_R16G16B16A16_SFLOAT
 		format.usage_bits = RenderingDevice.TEXTURE_USAGE_STORAGE_BIT | RenderingDevice.TEXTURE_USAGE_SAMPLING_BIT | RenderingDevice.TEXTURE_USAGE_CAN_COPY_TO_BIT
-		for i in 8:
+		for i in 10:
 			var image := _rd.texture_create(format, RDTextureView.new())
 			_rd.texture_clear(image, Color(0, 0, 0, 0), 0, 1, 0, 1)
 			_images.append(image)
@@ -1063,55 +1314,79 @@ class Effect extends CompositorEffect:
 	func _apply_ops(ops: Array) -> bool:
 		for op: Array in ops:
 			match op[0]:
-				"reset": _clear_scene()
+				"reset": _clear_scene(op[1])
 				"layer":
 					if _rd.texture_update(_albedo, op[1], op[2]) != OK: push_warning("Path tracing: texture layer upload failed")
-				"define": if not _define(op): return _overflowed()
+				"define": _define(op)
 				"material": _update_material(op[1], op[2])
 				"pose": _pose(op[1], op[2])
-				"free": _free_slot(op[1])
+				"free":
+					_free_slot(op[1])
+					_skipped.erase(op[1])
+		_callbacks += 1
+		if _rebuild_wanted and _callbacks - _last_rebuild >= REBUILD_INTERVAL:
+			_rebuild_wanted = false
+			_last_rebuild = _callbacks
+			_rebuilds += 1
+			_mutex.lock()
+			_overflow = true
+			_mutex.unlock()
+		if not ops.is_empty(): _publish_stats()
 		return true
 
-	func _overflowed() -> bool:
-		_clear_scene()
-		_mutex.lock()
-		_overflow = true
-		_ops.clear()
-		_mutex.unlock()
-		return false
-
-	func _clear_scene() -> void:
+	## `full`: the whole traced scene starts again (its history too). Otherwise
+	## only the geometry, which the main thread sends again in the same batch.
+	func _clear_scene(full := true) -> void:
 		for id: int in _slots.keys(): _free_slot(id)
-		_next_vertex = 0
-		_next_index = 0
-		_next_corner = 0
+		_vertex_ranges.clear()
+		_corner_ranges.clear()
+		_normal_ranges.clear()
 		_next_slot = 0
-		_normal_bytes_used = 0
 		_free_indices.clear()
 		_dirty.clear()
-		history_reset = true
+		_skipped.clear()
+		if full: history_reset = true
 
-	func _define(op: Array) -> bool:
+	func _define(op: Array) -> void:
 		var id: int = op[1]
 		_free_slot(id)
+		_skipped.erase(id)
 		var vertices: int = op[2]
 		var index_bytes: PackedByteArray = op[3]
 		var uv_bytes: PackedByteArray = op[4]
+		var normals: PackedByteArray = op[5]
 		var corners := index_bytes.size() / 4
-		if corners == 0 or corners % 3 != 0: return true
-		if _next_vertex + vertices > VERTEX_CAPACITY or _next_corner + corners > CORNER_CAPACITY: return false
+		if corners == 0 or corners % 3 != 0: return
+		var normal_corners := normals.size() / 12
+		var slot_room := not _free_indices.is_empty() or _next_slot < SLOT_CAPACITY
+		var vertex := _vertex_ranges.allocate(vertices) if slot_room else -1
+		var corner := _corner_ranges.allocate(corners) if vertex >= 0 else -1
+		var normal := _normal_ranges.allocate(normal_corners) if corner >= 0 else -1
+		if normal < 0 or not _grow_normals():
+			if normal >= 0: _normal_ranges.release(normal, normal_corners)
+			if corner >= 0: _corner_ranges.release(corner, corners)
+			if vertex >= 0: _vertex_ranges.release(vertex, vertices)
+			# Space that packing would free: a rebuild is asked for, and the
+			# object waits for it untraced while the rest goes on as it was.
+			var packed := slot_room and _vertex_ranges.fits_packed(vertices) and _corner_ranges.fits_packed(corners) and _normal_ranges.fits_packed(normal_corners)
+			if packed and normal >= 0:
+				# Packed ranges fit but the normals buffer could not grow.
+				packed = false
+			if packed: _rebuild_wanted = true
+			_skip(id, not packed)
+			return
 		var slot_index: int = _free_indices.pop_back() if not _free_indices.is_empty() else _next_slot
-		if slot_index == _next_slot:
-			if _next_slot >= SLOT_CAPACITY: return false
-			_next_slot += 1
-		var slot := {"index": slot_index, "vertex": _next_vertex, "first_index": _next_corner, "corner": _next_corner,
-			"corners": corners, "vertices": vertices, "uv": true, "posed": false}
-		_next_vertex += vertices
-		_next_corner += corners
+		if slot_index == _next_slot: _next_slot += 1
+		var slot := {"index": slot_index, "vertex": vertex, "first_index": corner, "corner": corner,
+			"corners": corners, "vertices": vertices, "normal": normal, "normals": normal_corners, "uv": true, "posed": false, "blas": RID()}
+		_slots[id] = slot
 		_rd.buffer_update(_indices, slot.first_index * 4, index_bytes.size(), index_bytes)
 		_rd.buffer_update(_source_uv, slot.vertex * 8, mini(uv_bytes.size(), vertices * 8), uv_bytes)
-		var normals: PackedByteArray = op[5]
-		if not normals.is_empty() and not _store_corner_normals(slot_index, normals): return false
+		if normal_corners > 0:
+			var start := NORMAL_HEADER_BYTES + normal * 12
+			var offset := PackedInt32Array([start / 4]).to_byte_array()
+			_rd.buffer_update(_corner_normals, start, normals.size(), normals)
+			_rd.buffer_update(_corner_normals, slot_index * 4, offset.size(), offset)
 		var geometry := RDAccelerationStructureGeometry.new()
 		geometry.flags = RenderingDevice.ACCELERATION_STRUCTURE_GEOMETRY_OPAQUE_BIT
 		geometry.vertex_buffer = _corners
@@ -1121,31 +1396,54 @@ class Effect extends CompositorEffect:
 		geometry.vertex_format = RenderingDevice.DATA_FORMAT_R32G32B32_SFLOAT
 		var geometries: Array[RDAccelerationStructureGeometry] = [geometry]
 		slot.blas = _rd.blas_create(geometries, RenderingDevice.ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT)
-		if not slot.blas.is_valid(): return false
-		_slots[id] = slot
+		if not slot.blas.is_valid():
+			_free_slot(id)
+			_skip(id, true)
+
+	## Leaves an object out of the traced scene (it keeps its raster light).
+	## `for_good`: it cannot fit even packed, said once a run.
+	func _skip(id: int, for_good: bool) -> void:
+		if not _skipped.has(id): _skipped_total += 1
+		_skipped[id] = for_good
+		if for_good and not _warned:
+			_warned = true
+			push_warning("Path tracing: the scene is larger than the traced geometry budget (vertices %d/%d, corners %d/%d, objects %d/%d); what does not fit keeps its raster light" % [
+				_vertex_ranges.used, _vertex_ranges.capacity, _corner_ranges.used, _corner_ranges.capacity, _slots.size(), SLOT_CAPACITY])
+
+	## Binding 7 starts with a word offset for every slot, followed by the
+	## normal-aware receivers' corner normals (each in the order of its
+	## expanded triangles). It grows to hold the highest allocated range.
+	func _grow_normals() -> bool:
+		var required := _normal_ranges.high * 12
+		if required <= _normal_capacity: return true
+		var capacity := mini(maxi(required, _normal_capacity * 2), CORNER_CAPACITY * 12)
+		var grown := _rd.storage_buffer_create(NORMAL_HEADER_BYTES + capacity)
+		if not grown.is_valid(): return false
+		if _rd.buffer_copy(_corner_normals, grown, 0, 0, NORMAL_HEADER_BYTES + _normal_capacity) != OK:
+			_rd.free_rid(grown)
+			return false
+		_rd.free_rid(_corner_normals)
+		_corner_normals = grown
+		_normal_capacity = capacity
 		return true
 
-	## Binding 7 starts with a word offset for every slot. Only normal-aware
-	## receivers append data, in the same order as their expanded triangles.
-	func _store_corner_normals(slot_index: int, normals: PackedByteArray) -> bool:
-		var required := _normal_bytes_used + normals.size()
-		if required > CORNER_CAPACITY * 12: return false
-		if required > _normal_capacity:
-			var capacity := mini(maxi(required, _normal_capacity * 2), CORNER_CAPACITY * 12)
-			var grown := _rd.storage_buffer_create(NORMAL_HEADER_BYTES + capacity)
-			if not grown.is_valid(): return false
-			if _normal_bytes_used > 0 and _rd.buffer_copy(_corner_normals, grown, 0, 0, NORMAL_HEADER_BYTES + _normal_bytes_used) != OK:
-				_rd.free_rid(grown)
-				return false
-			_rd.free_rid(_corner_normals)
-			_corner_normals = grown
-			_normal_capacity = capacity
-		var start := NORMAL_HEADER_BYTES + _normal_bytes_used
-		var offset := PackedInt32Array([start / 4]).to_byte_array()
-		if _rd.buffer_update(_corner_normals, start, normals.size(), normals) != OK: return false
-		if _rd.buffer_update(_corner_normals, slot_index * 4, offset.size(), offset) != OK: return false
-		_normal_bytes_used = required
-		return true
+	## The budget for ELPathTracing.limits_report.
+	func _publish_stats() -> void:
+		var over := 0
+		for value: bool in _skipped.values(): over += 1 if value else 0
+		var stats := {"vertices": _vertex_ranges.report(), "corners": _corner_ranges.report(), "normals": _normal_ranges.report(),
+			"objects": {"used": _slots.size(), "allocated": _next_slot, "capacity": SLOT_CAPACITY},
+			"rebuilds": _rebuilds, "skipped": _skipped.size(), "skipped_over_budget": over, "skipped_total": _skipped_total}
+		_mutex.lock()
+		_stats = stats
+		_mutex.unlock()
+
+	## A copy of the geometry budget (main thread).
+	func limits() -> Dictionary:
+		_mutex.lock()
+		var result := _stats.duplicate(true)
+		_mutex.unlock()
+		return result
 
 	func _update_material(id: int, record: PackedByteArray) -> void:
 		var slot: Dictionary = _slots.get(id, {})
@@ -1175,6 +1473,9 @@ class Effect extends CompositorEffect:
 		if slot.is_empty(): return
 		_static_dirty = true
 		if slot.blas.is_valid(): _rd.free_rid(slot.blas)
+		_vertex_ranges.release(slot.vertex, slot.vertices)
+		_corner_ranges.release(slot.corner, slot.corners)
+		_normal_ranges.release(slot.normal, slot.normals)
 		_free_indices.append(slot.index)
 		_slots.erase(id)
 		_dirty.erase(id)
@@ -1263,6 +1564,8 @@ class Effect extends CompositorEffect:
 		# Ray Reconstruction gets one fresh sample a pixel (no accumulation),
 		# and the tracer's history starts again when it stops.
 		if rr or _rr_was: flags |= 1
+		# The ray program keeps the metal share and reflection length for the guides.
+		if rr: flags |= 8
 		_rr_was = rr
 		history_reset = false
 		var data := PackedByteArray()
@@ -1322,7 +1625,8 @@ class Effect extends CompositorEffect:
 		normal.add_id(_nearest)
 		normal.add_id(buffers.get_texture("forward_clustered", "normal_roughness"))
 		var trace_set: Array[RDUniform] = [depth, normal, _image(2, light[previous]), _image(3, guide[previous]),
-			_image(4, light[current]), _image(5, guide[current]), _image(6, _images[6]), _image(7, _images[7])]
+			_image(4, light[current]), _image(5, guide[current]), _image(6, _images[6]), _image(7, _images[7]),
+			_image(8, _images[8 + previous]), _image(9, _images[8 + current])]
 		var groups := Vector3i((size.x + 7) / 8, (size.y + 7) / 8, 1)
 		var rays := _rd.raytracing_list_begin()
 		_rd.raytracing_list_bind_raytracing_pipeline(rays, _trace_pipeline)

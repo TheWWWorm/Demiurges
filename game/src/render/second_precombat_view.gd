@@ -7,10 +7,12 @@ extends Control
 ## each with a 94x50 portrait cut from the 100x70 cell at (3, 9), the level and
 ## life values in the 41-pixel boxes and their captions beside them.
 ##
-## PreCombatBegin (Enter, Space) starts the battle; PreCombatCancel (Escape)
-## declines it. BeginCombat is drawn and shows its tooltip, but the original
-## handler gives its click no action, so it has none here either. The side
-## panels (AdvPanelLB/RB) are hidden while the panel is up.
+## PreCombatBegin (the check mark; Enter, Space) starts the battle;
+## PreCombatCancel (the cross; Escape) declines it. The panel's table still
+## lists the first game's wide BeginCombat strip, which the original handler
+## gives no action; players of the original see only the check mark and the
+## cross, so the strip is kept hidden (player report #137). The side panels
+## (AdvPanelLB/RB) are hidden while the panel is up.
 
 signal accepted
 signal declined
@@ -72,6 +74,7 @@ func build(owner: ELSecondAdventureHud) -> void:
 	decoration.view = self
 	decoration.tooltip_text = hud.tooltip_of("BeginCombat")
 	canvas.add_child(decoration)
+	decoration.hide()
 	resized.connect(_layout)
 	_layout()
 	hide()

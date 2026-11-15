@@ -75,6 +75,11 @@ static func restore(profile: ELProfile, actor: Dictionary, map: ELAdventureMap) 
 		if not ELLuaSave._integer(order.destination[0], 0, map.width - 1) or not ELLuaSave._integer(order.destination[1], 0, map.height - 1): return false
 		order.destination = [int(order.destination[0]), int(order.destination[1])]
 		order.use = int(order.use)
+		# A computer order's route rules (ELFirstAI.route_rules).
+		if order.has("route"):
+			var rules: Variant = order.route
+			if not rules is Dictionary or not ELLuaSave._integer(rules.get("known"), -1, 64) or not rules.get("guards") is bool or not ELLuaSave._integer(rules.get("target"), -1, 0x7fffffff): return false
+			order.route = {"known": int(rules.known), "guards": rules.guards, "target": int(rules.target)}
 	actor.strategy_capacity = int(actor.strategy_capacity)
 	return true
 
@@ -86,12 +91,35 @@ static func order_path(director: ELAdventureDirector, actor: Dictionary) -> Arra
 	if int(order.use) >= 0:
 		target = director.state.object(order.use)
 		if target.is_empty() or not target.alive or not target.visible or not target.enabled: return []
-	# EL1: a player's hero is routed only across tiles that player sees now
-	# (the computer's own planning uses its explored tiles instead).
+	var rules: Dictionary = order.get("route", {})
+	# A computer hero chasing an enemy hero it no longer sees heads for where
+	# it was last seen (the order's destination), not where it is now.
+	if not rules.is_empty() and target.get("type") == "hero" and int(target.get("owner", -1)) != int(actor.get("owner", -1)) and not ELFirstAI.observed(director.state, int(actor.get("owner", -1)), target): target = {}
+	# EL1: a player's hero is routed only across tiles that player sees now;
+	# a computer order keeps to the rules its route was planned under.
 	var closed := _close_unseen(director, actor)
+	if not rules.is_empty():
+		closed.append_array(_close_unknown(director, int(rules.get("known", -1))))
+		if rules.get("guards", false): closed.append_array(ELFirstAI.close_guards(director, actor, int(rules.get("target", -1))))
 	var path := director.grid.approach(from, target) if not target.is_empty() else director.grid.path(from, Vector2i(order.destination[0], order.destination[1]))
-	for point: Vector2i in closed: director.grid.land.set_point_solid(point, false)
+	for point: Vector2i in closed: director.grid._update_cell(point)
 	return path
+
+## Closes the tiles `player` has not explored (none for -1).
+static func _close_unknown(director: ELAdventureDirector, player: int) -> Array[Vector2i]:
+	var closed: Array[Vector2i] = []
+	var state := director.state
+	var size := state.map.width * state.map.height
+	if player < 1 or not ELFog.active(state, player) or state.explored.size() != size: return closed
+	var mask := ELFog.bit(player)
+	var land := director.grid.land
+	for index in size:
+		if state.explored[index] & mask != 0: continue
+		var point := Vector2i(index % state.map.width, index / state.map.width)
+		if land.is_point_solid(point): continue
+		land.set_point_solid(point, true)
+		closed.append(point)
+	return closed
 
 static func _close_unseen(director: ELAdventureDirector, actor: Dictionary) -> Array[Vector2i]:
 	var closed: Array[Vector2i] = []
@@ -252,7 +280,7 @@ static func advance(director: ELAdventureDirector) -> void:
 				if not first.alive or not second.alive: continue
 				if director.is_strategy_human(first.owner) or director.is_strategy_human(second.owner): director.start_ethereal(first.uid, second.uid)
 				elif forfeit_winner >= 0: ELGlobalSpells.ethereal_result(state, second.uid, forfeit_winner)
-				else: ELGlobalSpells.ethereal_result(state, second.uid, ELFirstAI.winner(state, first, second).uid)
+				else: ELGlobalSpells.ethereal_result(state, second.uid, ELFirstAI.winner(state, first, second, director.battle_estimate).uid)
 				continue
 			if not first.alive or not second.alive or not (state.hostile(first, second) or ELFirstAI.hunts(state, first, second)): continue
 			# Preserve the host's usual seat order when present. A guest's
@@ -354,7 +382,8 @@ static func restore_turn(raw: Variant, state: ELAdventureSession) -> Dictionary:
 ## and hot-seat games and the tutorial keep simultaneous orders.
 static func free_mode(director: ELAdventureDirector) -> bool:
 	var state := director.state
-	return director.free_movement and state.map.profile.id == "el1" and director._strategic_players.is_empty() and not state.tutorial
+	return (director.free_movement and state.map.profile.id == "el1" and director._strategic_players.is_empty()
+		and not director.network_session and not state.tutorial)
 
 ## Moves `actor` along its order now.
 static func act(director: ELAdventureDirector, actor: Dictionary, kind := "act") -> bool:
@@ -371,7 +400,7 @@ static func _finish_act(director: ELAdventureDirector, turn: Dictionary) -> void
 	director.strategy = {}
 	for id: int in turn.actors:
 		var actor := state.object(id)
-		if actor.get("alive", false) and actor.get("intercepted", false) and director.interception.enemies(state, actor, Vector2i(actor.x, actor.y)).is_empty(): actor.intercepted = false
+		if actor.get("alive", false) and actor.get("intercepted", false) and not director.guarded_tile(actor): actor.intercepted = false
 	ELFirstScenario.evaluate(director)
 	if not director.free_queue.is_empty():
 		free_next(director)
@@ -411,18 +440,28 @@ static func free_next(director: ELAdventureDirector) -> void:
 					continue
 				if not entry.planned:
 					# Plan again only while the last round moved a hero that
-					# still has points left.
+					# still has points left, or did something on the spot (a
+					# capture, a purchase, a visit, a battle) and a hero still
+					# has points; never into a state already planned from.
 					if int(entry.round) > 0:
 						var progress := false
+						var spare := false
 						for hero: Dictionary in ELFirstAI.heroes_of(state, player):
 							var before: Variant = entry.positions.get(str(hero.uid))
+							if int(hero.ap) > 0: spare = true
 							if before != null and before != [int(hero.x), int(hero.y)] and int(hero.ap) > 0: progress = true
+						var mark := _free_mark(state, player)
+						if spare and entry.has("mark") and mark != int(entry.mark): progress = true
+						if entry.get("seen", []).has(mark): progress = false
 						if not progress or int(entry.round) >= FREE_AI_ROUNDS:
 							director.free_queue.pop_front()
 							continue
 					ELFirstAI.plan_player(director, player, int(entry.round) == 0)
 					entry.planned = true
 					entry.round = int(entry.round) + 1
+					entry.mark = _free_mark(state, player)
+					if not entry.has("seen"): entry.seen = []
+					entry.seen.append(entry.mark)
 					entry.positions = {}
 					entry.pending = []
 					for hero: Dictionary in ELFirstAI.heroes_of(state, player):
@@ -441,6 +480,19 @@ static func free_next(director: ELAdventureDirector) -> void:
 				director.free_queue.pop_front()
 				_begin_night(director)
 				return
+
+## A fingerprint of what a computer player's round can change: its heroes'
+## tiles, experience, books and skills, its resources and the sites and
+## buildings it holds (31 bits, so it survives a save).
+static func _free_mark(state: ELAdventureSession, player: int) -> int:
+	var parts: Array = [state.players.get(player, {}).get("resources", {})]
+	for hero: Dictionary in ELFirstAI.heroes_of(state, player):
+		parts.append([int(hero.uid), int(hero.x), int(hero.y), int(hero.experience), hero.get("cards", []), hero.get("rune_uses", []), hero.get("skills", {})])
+	var held := 0
+	for item: Dictionary in state.objects.values():
+		if int(item.get("owner", -1)) == player and item.get("type") != "hero": held += int(item.uid) * 31 + 1
+	parts.append(held)
+	return hash(var_to_str(parts)) & 0x7fffffff
 
 ## The night of a free-movement day: heroes beside an enemy castle strike it,
 ## ethereal attacks are planned and fought, then income and the new day.
@@ -473,6 +525,11 @@ static func restore_queue(raw: Variant, state: ELAdventureSession) -> Array:
 			entry.player = int(item.player)
 			entry.round = int(item.round)
 			entry.planned = bool(item.get("planned", false))
+			if ELLuaSave._integer(item.get("mark"), 0, 0x7fffffff): entry.mark = int(item.mark)
+			if item.get("seen") is Array and item.seen.size() <= FREE_AI_ROUNDS + 1:
+				entry.seen = []
+				for mark: Variant in item.seen:
+					if ELLuaSave._integer(mark, 0, 0x7fffffff): entry.seen.append(int(mark))
 			entry.positions = {}
 			if item.get("positions") is Dictionary:
 				for key: Variant in item.positions:

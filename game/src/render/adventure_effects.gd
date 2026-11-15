@@ -14,7 +14,25 @@ extends Node3D
 ## object's facing (OrientEffectByObject).
 const CACHE_LIMIT := 6
 const RAIN_FILES := ["terrainpfx/rain.pfx", "terrainpfx/rainnocycle.pfx"]
-const SHRINE_EFFECTS := [ELSecondBuildings.SHRINE, "AltarOfChaos", "ShrineOfOrdering", "ShrineOfSynthesis", "SourceOfLife"]
+## Second game: every additional building whose AdditionalBuildings row names
+## an Effect runs it from the moment the building is made, whoever owns it
+## and whether or not it was visited (sacred places, battleground altars,
+## the White Lord's portals). Only the Specialization shrine lets it go once
+## used.
+static func building_effect(profile: ELProfile, item: Dictionary) -> String:
+	if item.get("group") != "additional_buildings": return ""
+	return str(ELSecondBuildings.definition(profile, item).get("Effect", "")).strip_edges()
+## Second game: the looping effect a terrain object's table SpecEffect kind
+## starts with its figure, at the figure's place and turned with it. Kinds
+## 111-118 are the magic bridges' piers and abutments, by colour.
+const SPEC_EFFECTS := {111: "GreenBridgePier", 112: "GreenBridgeAbutment", 113: "BlackBridgePier", 114: "BlackBridgeAbutment",
+	115: "RedBridgePier", 116: "RedBridgeAbutment", 117: "BlueBridgePier", 118: "BlueBridgeAbutment"}
+## Second game: an occupied fort's guard zone is ringed by twelve looping
+## pieces, Intercept5x5_NN.pfx, one on each zone cell two cells from the
+## fort that is not a corner of the 5 x 5 square (only zones of a fort
+## garrison mark their cells for it). Rows run north to south from the
+## garrison's row + 2; -1 is no piece.
+const RING_PIECES := [-1, 11, 0, 1, -1, 10, -1, -1, -1, 2, 9, -1, -1, -1, 3, 8, -1, -1, -1, 4, -1, 7, 6, 5, -1]
 
 signal rain_changed(areas: PackedVector4Array)
 
@@ -42,6 +60,11 @@ var _rain_on_water := false
 var _shrine_session: ELAdventureSession
 var _shrines: Dictionary = {}
 var _shrine_fog_revision := -1
+## Terrain objects with a SpecEffect (uid -> {item, file}).
+var _spec_objects: Dictionary = {}
+## Effect names of the garrisons shown now; rebuilt after fort changes.
+var _garrisons: Dictionary = {}
+var _garrisons_dirty := false
 
 func build(data: ELProfile, settings: ELSettings, state: ELAdventureSession) -> void:
 	profile = data
@@ -56,9 +79,14 @@ func build(data: ELProfile, settings: ELSettings, state: ELAdventureSession) -> 
 		_light(name, state.ambience.lights[name])
 	if data.id == "el2":
 		_shrine_session = state
+		var terrain_rows := data.table("TerrObj")
 		for item: Dictionary in state.objects.values():
-			if item.get("group") == "additional_buildings" and item.get("name") in SHRINE_EFFECTS:
+			if not building_effect(data, item).is_empty():
 				_shrines[int(item.uid)] = item
+			elif item.get("group") == "terrain_objects":
+				var kind := int(terrain_rows.get(item.get("name", ""), {}).get("SpecEffect", 0))
+				if SPEC_EFFECTS.has(kind): _spec_objects[int(item.uid)] = {"item": item, "file": str(SPEC_EFFECTS[kind]) + ".pfx"}
+		_garrisons_dirty = true
 		_sync_shrines()
 
 func set_enabled(value: bool) -> void:
@@ -79,8 +107,16 @@ static func optional(entry: Dictionary) -> bool:
 ## Applies scripted particles and changes to placed shrine effects.
 func script_event(data: Dictionary) -> void:
 	# The shrine use changes its saved used flag before notifying the map.
-	if data.kind in ["object_changed", "object_killed"] and _shrines.has(int(data.id)):
+	# A building a script makes (a portal swapped in) starts its effect too.
+	if data.kind == "object_created" and _shrine_session != null and not _shrines.has(int(data.get("id", -1))):
+		var made := _shrine_session.object(int(data.get("id", -1)))
+		if not made.is_empty() and not building_effect(profile, made).is_empty(): _shrines[int(made.uid)] = made
+	if data.kind in ["object_changed", "object_killed", "object_created"] and _shrines.has(int(data.get("id", -1))):
 		_sync_shrine(_shrines[int(data.id)])
+	if data.kind in ["object_changed", "object_killed", "object_created"] and _spec_objects.has(int(data.get("id", -1))):
+		_sync_spec(int(data.id))
+	if _shrine_session != null and data.kind in ["fort_entered", "fort_left", "fort_captured", "object_changed", "object_killed", "object_created"]:
+		_garrisons_dirty = true
 	if data.kind == "script_effect":
 		finish(str(data.name))
 		if not data.entry.is_empty(): start(str(data.name), data.entry, 0.0)
@@ -106,10 +142,56 @@ func _light(name: String, entry: Dictionary) -> void:
 func _sync_shrines() -> void:
 	_shrine_fog_revision = ELFog.revision(_shrine_session)
 	for item: Dictionary in _shrines.values(): _sync_shrine(item)
+	for uid: int in _spec_objects: _sync_spec(uid)
+	_sync_garrisons()
+
+## A terrain object's SpecEffect runs wherever the figure is drawn for the
+## local player, in sight or in explored fog (a destroyed bridge, hidden by
+## its script, has none). Building effects follow the same rule.
+func _sync_spec(uid: int) -> void:
+	var entry: Dictionary = _spec_objects[uid]
+	var item: Dictionary = entry.item
+	var name := "spec:%d" % uid
+	if not item.get("alive", true) or not item.get("visible", true) or not item.get("placed", true) or not ELFog.shown(_shrine_session, 1, item):
+		finish(name)
+		return
+	if effects.has(name): return
+	var row: Dictionary = profile.table("TerrObj").get(item.get("name", ""), {})
+	var center := ELAdventureGrid.center(item, row) * ELAdventureTerrain.CELL
+	keep_file(profile, entry.file)
+	start(name, {"file": entry.file, "x": center.x, "y": center.y, "z": 0.0, "story": true}, 0.0)
+	orient(name, -float((int(item.get("rotation", 0)) >> 2) & 3) * PI / 2.0)
+
+## The guard-zone ring of every occupied fort in sight (RING_PIECES), each
+## piece at its cell's centre on the ground.
+func _sync_garrisons() -> void:
+	_garrisons_dirty = false
+	var wanted := {}
+	var map := _shrine_session.map
+	for fort: Dictionary in _shrine_session.objects.values():
+		if fort.get("type") != "fort" or not fort.get("alive", true) or not fort.get("placed", true): continue
+		var garrison := _shrine_session.object(int(fort.get("garrison", -1)))
+		if garrison.is_empty() or not garrison.get("alive", false) or not garrison.get("fortified", false): continue
+		if ELFog.object_state(_shrine_session, 1, fort) != ELFog.VISIBLE: continue
+		var origin := Vector2i(int(fort.x), int(fort.y))
+		for index in RING_PIECES.size():
+			var piece: int = RING_PIECES[index]
+			if piece < 0: continue
+			var cell := origin + Vector2i(index % 5 - 2, 2 - index / 5)
+			if cell.x < 0 or cell.y < 0 or cell.x >= map.width or cell.y >= map.height: continue
+			var name := "ring:%d:%d" % [int(fort.uid), piece]
+			wanted[name] = true
+			if effects.has(name): continue
+			var at := ELAdventureScene.world_position(float(cell.x), float(cell.y))
+			keep_file(profile, "Intercept5x5_%02d.pfx" % piece)
+			start(name, {"file": "Intercept5x5_%02d.pfx" % piece, "x": at.x, "y": -at.z, "z": 0.0, "story": true}, 0.0)
+	for name: String in _garrisons:
+		if not wanted.has(name): finish(name)
+	_garrisons = wanted
 
 func _sync_shrine(item: Dictionary) -> void:
 	var name := "shrine:%d" % int(item.uid)
-	if item.get("used", false) or not item.get("alive", true) or not item.get("visible", true) or not item.get("placed", true) or ELFog.object_state(_shrine_session, 1, item) != ELFog.VISIBLE:
+	if (item.get("used", false) and item.get("name") == ELSecondBuildings.SHRINE) or not item.get("alive", true) or not item.get("visible", true) or not item.get("placed", true) or not ELFog.shown(_shrine_session, 1, item):
 		finish(name)
 		return
 	var row := ELSecondBuildings.definition(profile, item)
@@ -203,7 +285,8 @@ static func _rain_bounds(file: ELParticleFile) -> Rect2:
 	return bounds
 
 func _process(delta: float) -> void:
-	if not _shrines.is_empty() and _shrine_fog_revision != ELFog.revision(_shrine_session): _sync_shrines()
+	if _shrine_session != null and _shrine_fog_revision != ELFog.revision(_shrine_session): _sync_shrines()
+	elif _garrisons_dirty: _sync_garrisons()
 	for name: String in effects.keys():
 		_advance(name, delta)
 

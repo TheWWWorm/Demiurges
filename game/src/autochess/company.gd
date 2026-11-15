@@ -169,11 +169,24 @@ func purchase_error(index: int) -> String:
 	var line := int(shop[index].family)
 	var rank := int(shop[index].get("rank", 0))
 	if ether < offer_cost(shop[index]): return "Not enough ether."
-	var matching := army.filter(func(e: Dictionary) -> bool: return int(e.family) == line and int(e.rank) == rank).size()
-	var needed := ELAutochessRules.evolution_copies(line, rank)
-	if bench_count() >= bench_limit() and (needed == 0 or matching + 1 < needed) and recruit_point(line) == Vector2.INF:
+	# The same combination plan as the purchase itself decides whether the
+	# new copy still fits among the reserves.
+	if bench_count() >= bench_limit() and recruit_point(line) == Vector2.INF and _reserves_after_recruit(line, rank) > bench_limit():
 		return "Reserves full. Deploy or sell a creature first."
 	return ""
+
+## Reserves once a new copy of `line` joined them and every combination the
+## current stage allows has run.
+func _reserves_after_recruit(line: int, rank: int) -> int:
+	var units: Array = []
+	for entry: Dictionary in army: units.append({"uid": int(entry.uid), "family": int(entry.family), "rank": int(entry.rank), "deployed": bool(entry.deployed)})
+	units.append({"uid": -1, "family": line, "rank": rank, "deployed": false})
+	while true:
+		var step := _next_merge(units)
+		if step.is_empty(): break
+		for other: Dictionary in step.consumed: units.erase(other)
+		step.kept.rank = int(step.kept.rank) + 1
+	return units.filter(func(u: Dictionary) -> bool: return not u.deployed).size()
 
 func buy(index: int) -> String:
 	var error := purchase_error(index)
@@ -223,30 +236,38 @@ func _auto_deploy(entry: Dictionary) -> void:
 func combine_ready() -> void:
 	last_evolutions.clear()
 	if not can_shop(): return
+	while true:
+		var step := _next_merge(army)
+		if step.is_empty(): break
+		_merge(step.kept, step.consumed)
+		last_evolutions.append(int(step.kept.uid))
+
+## The next combination among `units`: the copy kept and the two consumed,
+## or {}. During a battle the fighting army does not change, so only reserve
+## copies combine then; copies waiting for a deployed one combine when the
+## next preparation begins.
+func _next_merge(units: Array) -> Dictionary:
 	for line in ELAutochessRules.FAMILIES.size():
 		for rank in 2:
-			while true:
-				var matching := army.filter(func(e: Dictionary) -> bool: return int(e.family) == line and int(e.rank) == rank)
-				if matching.size() < 3: break
-				# Combat purchases do not change the fighting army.
-				if stage == "fight" and matching.any(func(e: Dictionary) -> bool: return e.deployed): break
-				var kept: Dictionary = matching[0]
-				for entry: Dictionary in matching:
-					if entry.deployed:
-						kept = entry
-						break
-				_merge(kept)
-				last_evolutions.append(int(kept.uid))
+			var matching := units.filter(func(e: Dictionary) -> bool:
+				return int(e.family) == line and int(e.rank) == rank and (stage != "fight" or not e.deployed))
+			if matching.size() < ELAutochessRules.evolution_copies(line, rank): continue
+			var kept: Dictionary = matching[0]
+			for entry: Dictionary in matching:
+				if entry.deployed:
+					kept = entry
+					break
+			var consumed: Array = []
+			for entry: Dictionary in matching:
+				if entry != kept and consumed.size() < 2: consumed.append(entry)
+			return {"kept": kept, "consumed": consumed}
+	return {}
 
-func _merge(entry: Dictionary) -> void:
-	var consumed := 0
-	for other: Dictionary in army.duplicate():
-		if other.uid == entry.uid or int(other.family) != int(entry.family) or int(other.rank) != int(entry.rank): continue
+func _merge(entry: Dictionary, consumed: Array) -> void:
+	for other: Dictionary in consumed:
 		entry.investment = int(entry.investment) + int(other.investment)
 		_return_item(int(other.uid))
 		army.erase(other)
-		consumed += 1
-		if consumed == 2: break
 	entry.rank = int(entry.rank) + 1
 	entry.code = ELAutochessRules.form(int(entry.family), int(entry.rank))
 
@@ -510,6 +531,8 @@ func next_round(number: int) -> void:
 	round_number = number
 	stage = "prepare"
 	_undo.clear()
+	# Copies bought during the battle that waited for a fighting copy.
+	combine_ready()
 	roll_shop(true)
 	_touch()
 
@@ -519,13 +542,39 @@ func _checkpoint() -> void:
 		"items": items.duplicate(true), "item_offers": item_offers.duplicate(), "next_item_uid": next_item_uid})
 	if _undo.size() > 30: _undo.pop_front()
 
-func undo() -> void:
-	if stage != "prepare" or _undo.is_empty(): return
+## Returns "" or why the last step cannot be undone. A sale gives its copies
+## back to the shared pool at once; once another company has recruited or
+## been offered them, undoing the sale would create copies the pool does not
+## have, so the history is dropped instead.
+func undo() -> String:
+	if stage != "prepare" or _undo.is_empty(): return ""
+	if not _undo_fits(_undo.back()):
+		_undo.clear()
+		_touch()
+		return "Another player has taken that creature. It cannot be brought back."
 	var previous: Dictionary = _undo.pop_back()
 	army.assign(previous.army); shop.assign(previous.shop)
 	ether = int(previous.ether); next_uid = int(previous.next_uid); training = int(previous.training)
 	items.assign(previous.items); item_offers.assign(previous.item_offers); next_item_uid = int(previous.next_item_uid)
 	_touch()
+	return ""
+
+## Whether the pool still has the copies a restored step would hold.
+func _undo_fits(previous: Dictionary) -> bool:
+	var left := pool_left()
+	if left.is_empty(): return true
+	var held := _held_copies(army, shop)
+	var restored := _held_copies(previous.army, previous.shop)
+	for line: int in restored:
+		if int(restored[line]) - int(held.get(line, 0)) > int(left.get(line, 0)): return false
+	return true
+
+static func _held_copies(units: Array, offers: Array) -> Dictionary:
+	var copies := {}
+	for row: Dictionary in units + offers:
+		var line := int(row.family)
+		if line >= 0: copies[line] = int(copies.get(line, 0)) + ELAutochessRules.rank_copies(line, int(row.get("rank", 0)))
+	return copies
 
 func can_undo() -> bool:
 	return stage == "prepare" and not _undo.is_empty()

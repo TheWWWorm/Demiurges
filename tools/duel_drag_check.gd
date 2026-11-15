@@ -178,6 +178,25 @@ func _second(menu: ELFrontMenu) -> void:
 	check(not preset(duel).reserve.has(card), "second game: a reserve spell dragged onto the list is removed")
 	await drag(list, list.get_item_rect(1).get_center(), menu.canvas, Vector2(4, 4))
 	check(preset(duel).cards == [card] and preset(duel).reserve.is_empty(), "second game: a spell dropped outside the panels goes back")
+	# #150: one reserve cell per copy, no stacked counts.
+	var other: String = duel.right_items[1].value
+	duel.act("spell_to_reserve", other)
+	duel.act("spell_to_reserve", other)
+	await frames(1)
+	var cells: Array = reserve.entries()
+	check(cells.size() == 2 and cells.all(func(c: Dictionary): return c.card == other and int(c.count) == 1), "second game: two reserve copies take two cells (#150)")
+	# #151: a reserve spell dropped on an occupied deck slot takes it; the
+	# slot's spell goes to the reserve. Nothing stays picked in the list (a
+	# press on the reserve would store the picked spell).
+	duel.edit.item = -1
+	duel.clear_choice()
+	await drag(reserve, reserve.slot_rect(0).get_center(), duel.book_view, duel.book_view.slot_rect(0).get_center())
+	check(preset(duel).cards == [other] and int(preset(duel).reserve.get(card, 0)) == 1 and int(preset(duel).reserve.get(other, 0)) == 1, "second game: a reserve spell dropped on a deck slot swaps with it (#151)")
+	duel.act("remove_reserve", card)
+	duel.act("remove_reserve", other)
+	duel.act("remove_slot", 0)
+	duel.act("add_spell", card)
+	check(preset(duel).cards == [card] and preset(duel).reserve.is_empty(), "second game: the swap test leaves the preset as before")
 	await _tab(duel, 1)
 	list = duel.right_list
 	var skills := _zone(duel, "skills")

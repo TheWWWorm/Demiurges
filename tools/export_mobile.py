@@ -24,7 +24,12 @@ import pathlib
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import audit_pack  # noqa: E402
+import prepare_web_host  # noqa: E402
 
 LICENSE_SCRIPT = '''extends SceneTree
 func _initialize():
@@ -89,13 +94,27 @@ def run_checked(command, **kwargs):
     return result.stdout
 
 
+# Folders the game reads at run time; puzzles/ holds the puzzle catalogs
+# (ELPuzzles reads res://puzzles/<edition>.json).
+STAGED_DIRS = ('src', 'scenes', 'web', 'native', 'assets', 'puzzles')
+STAGED_FILES = ('project.godot', 'export_presets.cfg', 'icon.png')
+# Text the page loads. A Windows checkout may hold it with CRLF line endings,
+# which git turns back into LF on commit: the published bytes would then
+# differ from the hashed ones. Staged copies are written with LF.
+TEXT_SUFFIXES = {'.html', '.js', '.webmanifest'}
+
+
 def stage_project(project, stage):
     stage.mkdir()
-    for name in ('src', 'scenes', 'web', 'native', 'assets'):
-        if (project / name).is_dir():
-            shutil.copytree(project / name, stage / name, ignore=shutil.ignore_patterns('*.import', '__pycache__'))
-    for name in ('project.godot', 'export_presets.cfg', 'icon.png'):
+    for name in STAGED_DIRS:
+        if not (project / name).is_dir():
+            raise SystemExit(f'{project / name} is missing; the export needs it.')
+        shutil.copytree(project / name, stage / name, ignore=shutil.ignore_patterns('*.import', '__pycache__'))
+    for name in STAGED_FILES:
         shutil.copyfile(project / name, stage / name)
+    for path in (stage / 'web').rglob('*'):
+        if path.is_file() and path.suffix in TEXT_SUFFIXES:
+            path.write_bytes(path.read_bytes().replace(b'\r\n', b'\n'))
 
 
 def notices_dir(project):
@@ -178,19 +197,40 @@ def finish_web(stage, output, notices, godot, env):
         if source.name != 'GODOT_LICENSES.txt':
             shutil.copyfile(source, output / 'licenses' / source.name)
     godot_licenses(godot, output / 'GODOT_LICENSES.txt', env)
+    (output / '_headers').write_text(HEADERS)
+    # Hashed last, once every file is final.
+    write_service_worker((stage / 'web/service-worker.js').read_text(), output)
+    check_pack(output / 'index.pck')
+
+
+def write_service_worker(template, output):
+    """Write service-worker.js with the hash and size of every file it caches,
+    then check the written folder against it."""
     # The service worker caches exactly these files and reuses unchanged ones
     # (same SHA-256) from the previous version.
+    for path in output.iterdir():
+        if path.is_file() and path.suffix in TEXT_SUFFIXES:
+            path.write_bytes(path.read_bytes().replace(b'\r\n', b'\n'))
     files = sorted(p.name for p in output.iterdir() if p.is_file() and p.suffix in
-                   {'.html', '.js', '.wasm', '.pck', '.png', '.webmanifest'} and p.name != 'service-worker.js')
-    digest, hashes = hashlib.sha256(), {}
+                   prepare_web_host.CACHED_SUFFIXES and p.name != 'service-worker.js')
+    digest, manifest = hashlib.sha256(), {}
     for name in files:
         data = (output / name).read_bytes()
         digest.update(data)
-        hashes[name] = hashlib.sha256(data).hexdigest()
-    worker = (stage / 'web/service-worker.js').read_text()
-    worker = worker.replace('@BUILD@', digest.hexdigest()[:20]).replace('@FILES@', json.dumps(hashes, indent=0))
-    (output / 'service-worker.js').write_text(worker)
-    (output / '_headers').write_text(HEADERS)
+        manifest[name] = {'sha256': hashlib.sha256(data).hexdigest(), 'size': len(data)}
+    worker = template.replace('\r\n', '\n').replace('@BUILD@', digest.hexdigest()[:20]).replace('@FILES@', json.dumps(manifest, indent=0))
+    (output / 'service-worker.js').write_bytes(worker.encode())
+    problems = prepare_web_host.verify_manifest(output)
+    if problems:
+        raise SystemExit('The service worker manifest does not match the export:\n  ' + '\n  '.join(problems))
+    return manifest
+
+
+def check_pack(pack):
+    """Fail when the exported pack lacks a file the game needs at run time."""
+    missing = audit_pack.missing(pack)
+    if missing:
+        raise SystemExit(f'{pack} lacks required files: ' + ', '.join(missing))
 
 
 def main():
@@ -231,6 +271,10 @@ def main():
                      'Web' if args.platform == 'web' else 'Android', output / name], env=env)
         if args.platform == 'web':
             finish_web(stage, output, notices, args.godot, env)
+        else:
+            missing = audit_pack.missing_in_apk(output / name)
+            if missing:
+                raise SystemExit(f'{output / name} lacks required files: ' + ', '.join(missing))
     print(output / name)
 
 

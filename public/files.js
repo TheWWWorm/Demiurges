@@ -7,11 +7,21 @@
 // The engine reads files synchronously, so reads go through a small shared
 // mailbox to data-worker.js, which owns IndexedDB access. Recently read blocks
 // are kept so small sequential reads stay cheap.
+//
+// Several tabs may share the stored files. Imports, removals and cleanups take
+// one lock (Web Locks, or a lease record where those are missing), and a
+// cleanup decides from the stored records, never from this tab's view: it
+// keeps every committed edition, every running import and every copy another
+// open tab has mounted (see cleanupPlan in storage.js).
 // Adapted from the Cursed Lands engine (TheWWWorm, Apache-2.0).
 window.EtherFiles = {
   editions: {}, busy: false, generation: 0, fs: null, FS: null,
-  cache: new Map(), cacheBytes: 0,
+  cache: new Map(), cacheBytes: 0, lastBlock: new Map(),
   BLOCK: 1024 * 1024, CACHE_LIMIT: 48 * 1024 * 1024, MOUNT: '/gamedata',
+  // Blocks fetched in one round trip once a file is read front to back.
+  READ_AHEAD: 4,
+  tab: crypto.randomUUID(), importing: new Set(), heartbeat: null,
+  LOCK: 'demiurges-data', HEARTBEAT: 15000, STALE: 10 * 60 * 1000, LEASE: 60000,
   // Resolves once the service worker holds the engine (onProgress(loaded,
   // total) follows its download) and the local data store is open.
   async initialize(onProgress) {
@@ -44,7 +54,7 @@ window.EtherFiles = {
       await Promise.race([new Promise(resolve => container.addEventListener('controllerchange', resolve, {once: true})),
         new Promise(resolve => setTimeout(resolve, 3000))]);
     }
-    await this.loadEditions();
+    await this.startStorage();
     this.signal = new Int32Array(new SharedArrayBuffer(8));
     this.transfer = new Uint8Array(new SharedArrayBuffer(4 * 1024 * 1024));
     this.worker = new Worker('data-worker.js');
@@ -55,11 +65,65 @@ window.EtherFiles = {
     });
   },
   async loadEditions() {
-    this.editions = {};
+    // Built aside: the engine may read through this.editions meanwhile.
+    const editions = {};
     for (const edition of EDITIONS) {
       const meta = await getMeta('edition:' + edition);
-      try { if (meta) { validateIndex(meta.files); this.editions[edition] = meta; } }
+      try { if (meta) { validateIndex(meta.files); editions[edition] = meta; } }
       catch (error) { console.warn('Ignoring stored ' + edition + ' files: ' + error.message); }
+    }
+    this.editions = editions;
+  },
+  // Reads the stored editions, starts this tab's heartbeat and drops what no
+  // tab needs any more (an import that was interrupted, a replaced copy).
+  async startStorage() {
+    await this.loadEditions();
+    await this.beat();
+    if (!this.heartbeat) this.heartbeat = setInterval(() => this.beat().catch(() => {}), this.HEARTBEAT);
+    if (typeof addEventListener === 'function')
+      addEventListener('pagehide', () => updateMeta(store => store.delete('mount:' + this.tab)).catch(() => {}));
+    await this.exclusive(() => this.cleanup()).catch(() => {});
+  },
+  // Refreshes this tab's records: the copies it has mounted and the imports
+  // it is still writing. An import whose record was dropped as stale is not
+  // brought back; its commit fails instead.
+  beat() {
+    const now = Date.now(), ids = Object.values(this.editions).map(meta => meta.id);
+    return updateMeta(store => {
+      store.put({heartbeat: now, ids}, 'mount:' + this.tab);
+      for (const id of this.importing) {
+        const request = store.get('import:' + id);
+        request.onsuccess = () => { if (request.result) store.put({...request.result, heartbeat: now}, 'import:' + id); };
+      }
+    });
+  },
+  // Runs task() while no other tab of this site changes the stored files.
+  exclusive(task) {
+    if (navigator.locks?.request) return navigator.locks.request(this.LOCK, () => task());
+    return this.leased(task);
+  },
+  // Without Web Locks: a lease record in "meta" stands in for the lock. A
+  // holder that disappears loses it once the lease runs out.
+  async leased(task) {
+    const owner = crypto.randomUUID();
+    for (let wait = 25; ; wait = Math.min(wait * 2, 1000)) {
+      let held = false;
+      await updateMeta(store => {
+        const request = store.get('lock');
+        request.onsuccess = () => {
+          if (request.result && request.result.until > Date.now()) return;
+          store.put({owner, until: Date.now() + this.LEASE}, 'lock'); held = true;
+        };
+      });
+      if (held) break;
+      await new Promise(resolve => setTimeout(resolve, wait));
+    }
+    try { return await task(); }
+    finally {
+      await updateMeta(store => {
+        const request = store.get('lock');
+        request.onsuccess = () => { if (request.result?.owner === owner) store.delete('lock'); };
+      }).catch(() => {});
     }
   },
   // Called with the engine's file system after Engine.init(), before start.
@@ -71,7 +135,7 @@ window.EtherFiles = {
   },
   // After an import or removal: the folders show the stored editions again.
   remount() {
-    this.cache.clear(); this.cacheBytes = 0;
+    this.cache.clear(); this.cacheBytes = 0; this.lastBlock.clear();
     this.worker?.postMessage({type: 'reset'});
     if (!this.FS) return;
     try { this.FS.unmount(this.MOUNT); } catch (error) { /* not mounted */ }
@@ -164,21 +228,35 @@ window.EtherFiles = {
     }
   },
   block(edition, path, index, size) {
-    const key = edition + '/' + path + ':' + index;
+    const file = edition + '/' + path, key = file + ':' + index;
     let block = this.cache.get(key);
+    const sequential = this.lastBlock.get(file) === index - 1;
+    this.lastBlock.set(file, index);
     if (block) { this.cache.delete(key); this.cache.set(key, block); return block; }
+    // Each fetch blocks the page until the worker answers, so a file read
+    // front to back gets its next blocks in the same round trip.
+    let count = 1;
+    if (sequential)
+      while (count < this.READ_AHEAD && (index + count) * this.BLOCK < size && !this.cache.has(file + ':' + (index + count))) count++;
     const start = index * this.BLOCK;
-    block = this.fetch(edition, path, start, Math.min(this.BLOCK, size - start));
-    while (this.cacheBytes + block.length > this.CACHE_LIMIT && this.cache.size) {
-      const oldest = this.cache.keys().next().value;
-      this.cacheBytes -= this.cache.get(oldest).length; this.cache.delete(oldest);
+    const bytes = this.fetch(edition, path, start, Math.min(count * this.BLOCK, size - start));
+    for (let i = 0; i < count; i++) {
+      const part = bytes.slice(i * this.BLOCK, (i + 1) * this.BLOCK);
+      if (i === 0) block = part;
+      while (this.cacheBytes + part.length > this.CACHE_LIMIT && this.cache.size) {
+        const oldest = this.cache.keys().next().value;
+        this.cacheBytes -= this.cache.get(oldest).length; this.cache.delete(oldest);
+      }
+      this.cache.set(file + ':' + (index + i), part); this.cacheBytes += part.length;
     }
-    this.cache.set(key, block); this.cacheBytes += block.length;
     return block;
   },
   fetch(edition, path, offset, length) {
-    // Atomics.wait is unavailable on the browser main thread. The wait is
-    // bounded: on timeout the mailbox is retired, never reused with a late answer.
+    // The engine's file system calls are synchronous and run on the page's
+    // main thread, where Atomics.wait is unavailable, so the page spins until
+    // the worker answers; blocks are cached and read ahead to keep such waits
+    // rare. The wait is bounded: on timeout the mailbox is retired, never
+    // reused with a late answer.
     if (this.failed) throw new Error('The local data reader stopped.');
     const bytes = new Uint8Array(length);
     for (let done = 0; done < length;) {
@@ -245,6 +323,9 @@ window.EtherFiles = {
     const id = crypto.randomUUID();
     const current = () => { if (generation !== this.generation) throw new Error('Import cancelled.'); };
     try {
+      // Recorded before any file is stored, so other tabs' cleanups keep them.
+      this.importing.add(id);
+      await updateMeta(store => store.put({owner: this.tab, heartbeat: Date.now()}, 'import:' + id));
       callback('progress', 'Checking your game files…');
       let files = {}, pack = false, payload = 0, unpacked = false;
       const single = selected.length === 1 ? selected[0] : null;
@@ -280,18 +361,36 @@ window.EtherFiles = {
       current();
       // Commit last. Cancelling or running out of space keeps the previous files.
       const meta = {id, edition, files, pack, payload};
-      await putData('meta', 'edition:' + edition, meta);
-      committed = true;
-      this.editions[edition] = meta;
-      this.remount();
+      await this.exclusive(async () => {
+        await updateMeta((store, transaction) => {
+          // A record dropped as stale means another tab may have removed
+          // some of these files: the import is not committed.
+          const request = store.get('import:' + id);
+          request.onsuccess = () => {
+            if (!request.result) { transaction.abort(); return; }
+            store.put(meta, 'edition:' + edition); store.delete('import:' + id);
+          };
+        }).catch(() => { throw new Error('The import was interrupted. Try again.'); });
+        committed = true; this.importing.delete(id);
+        // Other tabs may have changed the other edition meanwhile.
+        await this.loadEditions();
+        this.remount();
+        await this.beat().catch(() => {});
+        // Cleanup is best effort after commit.
+        await this.cleanup().catch(() => {});
+      });
       await Promise.resolve(navigator.storage?.persist?.()).catch(() => false);
-      // Cleanup is best effort after commit.
-      await this.cleanup().catch(() => {});
       callback('complete', edition);
     } catch (error) {
-      if (!committed) await this.removeGeneration(id).catch(() => {});
+      if (!committed) await this.exclusive(() => this.abandon(id)).catch(() => {});
       callback('error', error.name === 'QuotaExceededError' ? 'Browser storage is full. Free space and try again.' : String(error.message || error), error.arg);
-    } finally { this.busy = false; }
+    } finally { this.importing.delete(id); this.busy = false; }
+  },
+  // Drops the files and the record of an import that was not committed.
+  async abandon(id) {
+    this.importing.delete(id);
+    await this.removeGeneration(id);
+    await updateMeta(store => store.delete('import:' + id));
   },
   // Removes one edition's stored files. Saves live in the engine's own
   // storage and are kept.
@@ -302,13 +401,13 @@ window.EtherFiles = {
     delete this.editions[edition];
     this.remount();
     try {
-      const db = await openData();
-      await new Promise((resolve, reject) => {
-        const tx = db.transaction('meta', 'readwrite');
-        tx.objectStore('meta').delete('edition:' + edition);
-        tx.oncomplete = resolve; tx.onabort = () => reject(tx.error);
-      }); db.close();
-      await this.cleanup();
+      await this.exclusive(async () => {
+        await updateMeta(store => store.delete('edition:' + edition));
+        await this.loadEditions();
+        this.remount();
+        await this.beat();
+        await this.cleanup();
+      });
     } finally { this.busy = false; }
   },
   async removeGeneration(id) {
@@ -319,12 +418,20 @@ window.EtherFiles = {
       tx.oncomplete = resolve; tx.onabort = () => reject(tx.error);
     }); db.close();
   },
-  // Drops stored files that no edition's index refers to any more.
+  // Drops stored files that nothing refers to any more (cleanupPlan). Run
+  // inside exclusive(); the records and file keys are read in one transaction.
   async cleanup() {
-    const keep = new Set(Object.values(this.editions).map(meta => meta.id));
     const db = await openData();
-    const keys = await requestResult(db.transaction('files').objectStore('files').getAllKeys()); db.close();
-    for (const id of new Set(keys.map(key => key.split('/')[0]))) if (!keep.has(id)) await this.removeGeneration(id);
+    let records, keys;
+    try {
+      const transaction = db.transaction(['meta', 'files']), meta = transaction.objectStore('meta');
+      const [names, values, files] = await Promise.all([requestResult(meta.getAllKeys()), requestResult(meta.getAll()),
+        requestResult(transaction.objectStore('files').getAllKeys())]);
+      records = names.map((name, i) => [String(name), values[i]]); keys = files;
+    } finally { db.close(); }
+    const plan = cleanupPlan(records, keys, Date.now(), this.STALE);
+    for (const id of plan.generations) await this.removeGeneration(id);
+    if (plan.records.length) await updateMeta(store => plan.records.forEach(key => store.delete(key)));
   },
   fullscreen() {
     const page = document.documentElement;

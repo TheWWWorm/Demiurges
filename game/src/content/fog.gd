@@ -76,6 +76,8 @@ static func group_mask(state: ELAdventureSession, player: int) -> int:
 ## any event that moves or changes a sight source.
 static func refresh(state: ELAdventureSession) -> void:
 	if not applies(state) or state.grid == null or state.grid.map != state.map: return
+	# How many rebuilds ran (for the checks; never saved like the rest of `fog`).
+	state.fog.refreshes = int(state.fog.get("refreshes", 0)) + 1
 	var width := state.map.width
 	var size := width * state.map.height
 	if state.explored.size() != size:
@@ -120,8 +122,7 @@ static func refresh(state: ELAdventureSession) -> void:
 			_rect(state, seen, mask, _bounds(state, item), MINE_RADIUS, true)
 	if not el2 and state.map.id == SHARED_SIGHT_MAP:
 		for item: Dictionary in state.objects.values():
-			if item.get("type") == "hero" and int(item.get("owner", -1)) == 0 and item.get("alive", false) and hero_sees(state, item) \
-				and str(state.map.profile.table("HeroTemplates").get(str(item.name), {}).get("Color", "")) == SHARED_SIGHT_COLOR: _disc(state, seen, everyone, Vector2i(item.x, item.y), sight_radius(item))
+			if shared_sight(state, item) and hero_sees(state, item): _disc(state, seen, everyone, Vector2i(item.x, item.y), sight_radius(item))
 	# Crystal balls a Seer (EL2: eyes a Lake) has shown give their player's
 	# vision group live sight.
 	for player: int in masks:
@@ -166,8 +167,16 @@ static func hero_sees(state: ELAdventureSession, hero: Dictionary) -> bool:
 	if not (hero.get("visible", true) or int(hero.get("camp", -1)) >= 0): return false
 	return state.grid.contains(Vector2i(hero.x, hero.y))
 
+## mission23: a neutral hero of the shared-sight colour, whose surroundings
+## every player sees.
+static func shared_sight(state: ELAdventureSession, item: Dictionary) -> bool:
+	return not second(state) and state.map.id == SHARED_SIGHT_MAP and item.get("type") == "hero" and int(item.get("owner", -1)) == 0 and item.get("alive", false) \
+		and str(state.map.profile.table("HeroTemplates").get(str(item.get("name", "")), {}).get("Color", "")) == SHARED_SIGHT_COLOR
+
+## A step of a sight source: a player's hero (EL2 also mobs), or a neutral
+## hero that shows its surroundings to every player.
 static func moved(state: ELAdventureSession, actor: Dictionary) -> void:
-	if source(state, actor) and int(actor.get("owner", 0)) >= 1: refresh(state)
+	if source(state, actor) and (int(actor.get("owner", 0)) >= 1 or shared_sight(state, actor)): refresh(state)
 
 static func on_event(state: ELAdventureSession, data: Dictionary) -> void:
 	if REFRESH_EVENTS.has(data.get("kind")): refresh(state)
@@ -325,7 +334,8 @@ static func restore_eyes(state: ELAdventureSession) -> String:
 		state.players[player].scry = clean
 	return ""
 
-## Whether the local player may target this tile (EL2 local orders:
-## only a currently visible tile; the route itself may cross fog).
+## Whether the local player may target this tile (EL2 local orders): any
+## explored tile, also one under the light fog of a place seen before; only
+## the dark of never-explored ground refuses. The route may cross fog.
 static func targetable(state: ELAdventureSession, player: int, point: Vector2i) -> bool:
-	return not active(state, player) or visible(state, player, point)
+	return not active(state, player) or explored(state, player, point)

@@ -34,15 +34,18 @@ static func roll(d: ELDuel, side: int, code: String, trials := 1, announce := tr
 	var hero: Dictionary = d.heroes[side]
 	if hero.get("spec", "NONE") != code or not d.setup.get("specs", true) or trials <= 0: return 0
 	var threshold := chance(d.profile, code, int(hero.get("spec_level", hero.level)))
+	var difference := int(hero.get("luck", 0)) - int(d.heroes[1 - side].get("suppression", 0))
 	# Second-game lookahead copies take the expected count without drawing,
 	# from the hero's sampled successes per hundred (`sample_expectation`); a
 	# success counts once the expectation reaches nine tenths. Five
-	# specialisations are never expected.
+	# specialisations are never expected. This is the second game's own think
+	# (the computer opponent keeps it); the adviser's readings (`fair_specs`)
+	# keep each trial's probability instead (`_fair`).
 	if d.expected_specs:
+		if d.fair_specs: return _fair(d, side, code, trials, trial_chance(threshold, difference))
 		if code in UNEXPECTED: return 0
 		var percent := int(d.spec_expect[side]) if d.spec_expect.size() == 2 else int(threshold * 100.0)
 		return (percent * trials + 10) / 100
-	var difference := int(hero.get("luck", 0)) - int(d.heroes[1 - side].get("suppression", 0))
 	var hits := 0
 	for trial in trials:
 		var r := _next(d)
@@ -51,6 +54,31 @@ static func roll(d: ELDuel, side: int, code: String, trials := 1, announce := tr
 			r = minf(r, other) if difference > 0 else maxf(r, other)
 		if r < threshold: hits += 1
 	if hits > 0 and announce: d._emit({"kind": "spec", "side": side, "spec": code, "count": hits})
+	return hits
+
+## The chance one trial succeeds: a single draw under `threshold`, or with
+## luck the best of 1 + `difference` draws (1 - (1 - p)^k), with suppression
+## the worst of them (p^k).
+static func trial_chance(threshold: float, difference: int) -> float:
+	var p := clampf(threshold, 0.0, 1.0)
+	var draws := 1 + absi(difference)
+	if difference > 0: return 1.0 - pow(1.0 - p, draws)
+	if difference < 0: return pow(p, draws)
+	return p
+
+## Successes a lookahead line counts for `trials` trials of chance `p` without
+## drawing: the expectation is added to what the hero's specialisation has
+## built up on this line (starting at one half) and each whole success it
+## reaches is taken. A single trial thus succeeds from even odds up, and over
+## a line the count follows p times the trials (a 30% roll succeeds about
+## three times in ten), where the second game's rounding never lets a single
+## trial under nine tenths succeed. Every specialisation counts, the
+## protective and reviving ones too. Nothing is drawn or announced.
+static func _fair(d: ELDuel, side: int, code: String, trials: int, p: float) -> int:
+	var key := "%d:%s" % [side, code]
+	var credit := float(d.spec_credit.get(key, 0.5)) + p * float(trials)
+	var hits := clampi(floori(credit + 1e-9), 0, trials)
+	d.spec_credit[key] = clampf(credit - float(hits), 0.0, 1.0)
 	return hits
 
 static func _next(d: ELDuel) -> float:
@@ -83,11 +111,13 @@ static func sample_expectation(d: ELDuel) -> Array[int]:
 			if r < threshold: result[side] += 1
 	return result
 
-## The AI's expectation, without touching the duel's random sequence.
+## The chance one trial of `code` succeeds for the side's hero, luck and the
+## opponent's suppression counted, without touching the random sequence.
 static func expected(d: ELDuel, side: int, code: String) -> float:
 	var hero: Dictionary = d.heroes[side]
-	if hero.get("spec", "NONE") != code: return 0.0
-	return chance(d.profile, code, int(hero.get("spec_level", hero.level)))
+	if hero.get("spec", "NONE") != code or not d.setup.get("specs", true): return 0.0
+	var difference := int(hero.get("luck", 0)) - int(d.heroes[1 - side].get("suppression", 0))
+	return trial_chance(chance(d.profile, code, int(hero.get("spec_level", hero.level))), difference)
 
 ## Dragon skin is remapped by campaign difficulty when a hero is created:
 ## Ancient magic on the two easiest settings, Lord skin on the next two.
@@ -97,8 +127,9 @@ static func remap(code: String, difficulty: int) -> String:
 	if difficulty <= 3: return "DRSL"
 	return code
 
-## Second-game difficulty moves specialisation levels: the local side +2 and
-## the opponent -1 on the easiest setting, the opponent +2 on the hardest.
+## Second-game difficulty moves battle levels (ether income, specialisation
+## chance): the local side +2 and the opponent -1 on the easiest setting, the
+## opponent +2 on the hardest.
 static func second_levels(levels: Array[int], difficulty: int, local_side := 0) -> Array[int]:
 	var change: Array = [[2, -1], [0, 0], [0, 2]][clampi(difficulty, 0, 2)]
 	var result: Array[int] = []
