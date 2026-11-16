@@ -45,6 +45,8 @@ var _pieces: Array[Dictionary] = []
 var _offset := Vector2.ZERO
 var _specs: Array[String] = []
 var _mouse := Vector2(-1000, -1000)
+## The list look whose digits show artifact charges (ELDuelScreen.draw_charge_digits).
+var _charge_look: ELListLook
 var hotkey_settings: ELSettings
 ## Pointer travel (design pixels) that turns a press on a card into a drag.
 const DRAG_SLOP := 6.0
@@ -407,7 +409,13 @@ func draw_surface(target: Control) -> void:
 	var items: Array = hero.get("artifacts", [])
 	for index in mini(items.size(), 2 * ARTIFACT_COLUMNS):
 		var icon := profile.card_icon(ELSecondArtifacts.spell(profile, items[index]))
-		if icon != null: target.draw_texture_rect(icon, cell_rect("artifact", index), false)
+		if icon == null: continue
+		var rect := cell_rect("artifact", index)
+		target.draw_texture_rect(icon, rect, false)
+		# Its charges left, in the battle rail's digits at the lower right (#160).
+		if items[index] is Dictionary:
+			if _charge_look == null: _charge_look = ELListLook.load(profile)
+			ELDuelScreen.draw_charge_digits(target, _charge_look, rect, int(items[index].get("charges", 0)), false)
 
 func _draw_card(target: Control, card: String, rect: Rect2, hero: Dictionary) -> void:
 	var icon := profile.card_icon(card)
