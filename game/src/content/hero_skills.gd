@@ -25,6 +25,20 @@ static func valid_ranks(profile: ELProfile, value: Variant) -> bool:
 		if definition(profile, code, int(value[code])).is_empty(): return false
 	return true
 
+## A skill's tooltip at `rank` (zero-based): its name, in the second game the
+## rank's title (T_BASIC, T_ADVANCED, T_EXPERT), and its description, as the
+## original's skill tooltip has them (#158).
+static func tooltip(profile: ELProfile, code: String, rank: int) -> String:
+	var row := definition(profile, code, rank)
+	var lines: Array[String] = [profile.text(str(row.get("Name", code)))]
+	if profile.id == "el2":
+		var key: String = ["T_BASIC", "T_ADVANCED", "T_EXPERT"][clampi(rank, 0, 2)]
+		var title := profile.text(key)
+		if not title.is_empty() and title != key: lines.append(title)
+	var description := str(row.get("Description", row.get("Desc", "")))
+	if not description.is_empty(): lines.append(profile.text(description))
+	return "\n".join(lines)
+
 static func definition(profile: ELProfile, code: String, rank: int) -> Dictionary:
 	for row: Dictionary in profile.table("HeroesSkills").values():
 		if row.get("Code") == code and int(row.get("Level", 0)) == rank + 1: return row

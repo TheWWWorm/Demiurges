@@ -442,13 +442,14 @@ func _draw_bar(target: Control, hero: Dictionary) -> void:
 func _draw_skills(target: Control, hero: Dictionary) -> void:
 	var skills: Array = hero.get("skills", {}).keys()
 	var origin := design("InvScrSkill1").position
+	var sheet := profile.texture("Interface/Skills/icon_1")
+	if sheet == null: return
 	for index in mini(5, skills.size()):
 		var code := str(skills[index])
-		var icon_index := int(ELHeroSkills.definition(profile, code, int(hero.skills[code])).get("Icon", -1))
-		var sheet := profile.texture("Interface/Skills/icon_1")
-		if icon_index < 0 or sheet == null: continue
+		# The original row shows the rank as the star badge of the SKILLS
+		# sheet, as the level-up dialog's rows do, not the skill's icon (#158).
 		var box := Rect2(Vector2(design("InvScrSkillsBounds").position.x + 4, origin.y + 3 + index * 26), Vector2(20, 20))
-		target.draw_texture_rect_region(sheet, box, Rect2((icon_index / 5) * 50, (icon_index % 5) * 50, 50, 50))
+		target.draw_texture_rect_region(sheet, box, ELSecondLevelUpView.rank_badge(int(hero.skills[code])))
 
 func _draw_cursor() -> void:
 	var card := model.carried()
@@ -473,14 +474,22 @@ func tooltip_at(at: Vector2) -> String:
 			if target[1] < items.size(): return ELSecondArtifacts.tooltip(profile, items[target[1]])
 	if design("InvScrBarBounds").grow(2).has_point(at) or design("InvScrLevelText").has_point(at): return hud.level_tooltip(hero)
 	if design("InvScrLifeText").has_point(at): return hud.tooltip_of("InvScrLifeText")
-	for index in 5:
-		if design("InvScrSkill%d" % (index + 1)).has_point(at):
-			var skills: Array = hero.get("skills", {}).keys()
-			if index < skills.size():
-				var code := str(skills[index])
-				return profile.text(str(ELHeroSkills.definition(profile, code, int(hero.skills[code])).get("Desc", "")))
+	var skill := skill_tip_at(at)
+	if not skill.is_empty(): return skill
 	if design("InvScrActiveSpec").has_point(at) and model.specialization != "NONE":
 		return profile.text(str(profile.table("HeroesSpecs").get(model.specialization, {}).get("Desc", "")))
+	return ""
+
+## The tooltip of the skill whose row (badge or name) is under `at`, or "".
+func skill_tip_at(at: Vector2) -> String:
+	var hero := state.object(hero_id)
+	var skills: Array = hero.get("skills", {}).keys()
+	var left := design("InvScrSkillsBounds").position.x
+	for index in mini(5, skills.size()):
+		var row := design("InvScrSkill%d" % (index + 1))
+		if row.merge(Rect2(left, row.position.y, 1, row.size.y)).has_point(at):
+			var code := str(skills[index])
+			return ELHeroSkills.tooltip(profile, code, int(hero.skills[code]))
 	return ""
 
 func card_tooltip(card: String) -> String:

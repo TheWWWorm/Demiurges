@@ -8,8 +8,11 @@ extends ELHeroSkillsView
 ## and the name, rows 26 pixels apart) and the LUOk button.
 ##
 ## Choosing an offer previews it in the skill rows (a new skill appended, a
-## known one raised). The rows show each rank as the original's star badge;
-## rank dots under the offers are a remake addition.
+## known one raised). The rows show each rank as the original's star badge
+## (the remake's rank dots under the offers repeated it and are gone, #158).
+## Offers and rows show the skill's tooltip (name, rank, description) in the
+## original's frame (ELCombatTooltip) when the pointer rests on them or on a
+## right click, as the inventory screen does.
 ## An offer dragged onto the skill rows is learned as with LUOk. LUOk learns the chosen offer and closes the dialog once no
 ## choice is left. The remake keeps LUOk disabled while offers wait without a
 ## selection, so a pending choice is never lost; Escape closes the dialog and
@@ -22,12 +25,11 @@ const ICON := 50
 const TAN := Color("d6bb88")
 const WHITE := Color("f2ead8")
 const MARK := Rect2(0, 60, 4, 4)
-const RANK_WIDTH := 24.0
-const DOT_STEP := 7.0
-const DOT_EDGE := Color("21180e")
 
 var hud: ELSecondAdventureHud
 var root_control: Control
+## The skill tooltips (ELCombatTooltip).
+var tips: ELCombatTooltip
 var canvas: Control
 var surface: Control
 var labels: Dictionary = {}
@@ -71,7 +73,9 @@ func build(session: ELAdventureSession, id: int) -> void:
 	canvas.add_child(offers)
 	learned = SkillRows.new()
 	learned.name = "LUSkillsBounds"
-	learned.mouse_filter = Control.MOUSE_FILTER_PASS
+	# The rows' area only marks where an offer is dropped (by its rectangle):
+	# the pointer goes through to the row names and their tooltips.
+	learned.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	canvas.add_child(learned)
 	var ok := ELSecondNotebookView.ArtButton.make(hud, "LUOk")
 	ok.tooltip_text = hud.tooltip_of("LUOk")
@@ -93,6 +97,12 @@ func build(session: ELAdventureSession, id: int) -> void:
 	spec_row.add_child(spec_pick)
 	root_control.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	root_control.resized.connect(_layout)
+	# The original's tooltip frame, on a rest of the pointer or a right
+	# click; Godot's own tooltip stays hidden (#158).
+	tips = ELCombatTooltip.new()
+	root_control.theme = ELCombatTooltip.hidden_theme()
+	root_control.add_child(tips)
+	tips.setup(state.map.profile)
 	refresh()
 	_layout()
 
@@ -174,14 +184,6 @@ static func rank_badge(rank: int) -> Rect2:
 static func _cell(icon: int) -> Rect2:
 	return Rect2((icon / 5) * 50, (icon % 5) * 50, 50, 50)
 
-## Skills use zero-based ranks, so rank zero is shown as one dot.
-static func _draw_rank(target: Control, center: Vector2, rank: int) -> void:
-	var start := center - Vector2(DOT_STEP * rank * 0.5, 0)
-	for index in rank + 1:
-		var dot := start + Vector2(DOT_STEP * index, 0)
-		target.draw_circle(dot, 3.0, DOT_EDGE, true, -1, true)
-		target.draw_circle(dot, 2.0, TAN, true, -1, true)
-
 # --- State --------------------------------------------------------------------
 
 func refresh() -> void:
@@ -224,15 +226,18 @@ func _select() -> void:
 			# The original writes the skills already learned in gold; the previewed one stands apart.
 			label.add_theme_color_override("font_color", WHITE if _rows[index][2] else TAN)
 		label.tooltip_text = ""
+		if index < _rows.size(): label.tooltip_text = ELHeroSkills.tooltip(state.map.profile, str(_rows[index][0]), int(_rows[index][1]))
+		# Labels take the pointer only to show their tooltip.
+		label.mouse_filter = Control.MOUSE_FILTER_PASS if not label.tooltip_text.is_empty() else Control.MOUSE_FILTER_IGNORE
 	# LUOk learns a chosen offer; with no offer waiting it simply closes.
 	accept.disabled = chosen.is_empty() and offers.item_count > 0
 	details.text = "" if code.is_empty() else describe(code, rank)
 	surface.queue_redraw()
 
 func describe(code: String, rank: int) -> String:
-	var row := ELHeroSkills.definition(state.map.profile, code, rank)
-	var text := str(row.get("Desc", row.get("Description", "")))
-	return state.map.profile.text(str(row.get("Name", code))) + ("" if text.is_empty() else "\n" + state.map.profile.text(text))
+	return ELHeroSkills.tooltip(state.map.profile, code, rank)
+
+
 
 func _choose() -> void:
 	if accept.disabled: return
@@ -347,10 +352,6 @@ class OfferStrip extends Control:
 			var box := get_item_rect(index)
 			if icon >= 0 and view._skills_sheet != null: draw_texture_rect_region(view._skills_sheet, box, ELSecondLevelUpView._cell(icon))
 			if index == _selected and view._mark_sheet != null: draw_texture_rect_region(view._mark_sheet, box, MARK)
-			var center := Vector2(box.get_center().x, box.end.y - 7.0)
-			var badge := Vector2(RANK_WIDTH, 9)
-			draw_rect(Rect2(center - badge * 0.5, badge), Color(DOT_EDGE, 0.9))
-			ELSecondLevelUpView._draw_rank(self, center, rank)
 		# A dragged offer follows the pointer.
 		if dragging and held >= 0 and held < _items.size() and view._skills_sheet != null:
 			var icon := view._icon_index(str(_items[held][0]), int(_items[held][1]))
