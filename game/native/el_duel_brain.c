@@ -131,6 +131,9 @@
 #include <stdlib.h>
 
 #include "include/gdextension_interface.h"
+#if !defined(_WIN32)
+#include <pthread.h>
+#endif
 
 #if defined(_WIN32)
 #define EL_EXPORT __declspec(dllexport)
@@ -9446,6 +9449,42 @@ typedef struct { _Alignas(8) uint8_t data[16]; } PackedBytes;
 typedef struct { _Alignas(8) uint8_t data[8]; } Name;
 typedef struct { _Alignas(8) uint8_t data[8]; } Text;
 
+/* The search reads deep lines, a frame of some kilobytes each: up to about
+ * 1.3 MB of stack in campaign battles (0.16.0 took 1.9 MB in one frame).
+ * The game asks from a worker thread, whose stack is the platform's default:
+ * 8 MB on Windows (the executable's own) and desktop Linux, but about 1 MB
+ * on Android and 512 KB on macOS, where a deep reading overflowed it and the
+ * game crashed as the computer began to think (#156). Elsewhere than on
+ * Windows it reads on a thread of its own with room enough; should that
+ * thread not start, on the caller's. */
+#define SEARCH_STACK ((size_t)16 << 20)
+#if !defined(_WIN32)
+typedef struct { const int32_t *in; int64_t length; int32_t *out; int count; } SearchCall;
+
+static void *search_thread(void *data) {
+	SearchCall *call = (SearchCall *)data;
+	call->count = run_search(call->in, call->length, call->out);
+	return NULL;
+}
+#endif
+
+static int run_search_roomy(const int32_t *in, int64_t length, int32_t *out) {
+#if !defined(_WIN32)
+	SearchCall call = { in, length, out, 5 };
+	pthread_attr_t attr;
+	if (pthread_attr_init(&attr) == 0) {
+		pthread_t thread;
+		int started = pthread_attr_setstacksize(&attr, SEARCH_STACK) == 0 && pthread_create(&thread, &attr, search_thread, &call) == 0;
+		pthread_attr_destroy(&attr);
+		if (started) {
+			pthread_join(thread, NULL);
+			return call.count;
+		}
+	}
+#endif
+	return run_search(in, length, out);
+}
+
 /* Replaces `result` (uninitialised) with the search's answer for `state`. */
 static void native_search(PackedBytes *state, PackedBytes *result) {
 	int32_t out[1 + 40 * 6 + 8 * MAX_UNITS + 2 * (HE_COUNT + HERO_ABILITIES + HAND + BACK + 1) + 16 + 4 * MAX_MOVES];
@@ -9460,7 +9499,7 @@ static void native_search(PackedBytes *state, PackedBytes *result) {
 		in = (int32_t *)malloc((size_t)length * 4);
 		if (in) {
 			memcpy(in, pba_index_const(state, 0), (size_t)length * 4);
-			count = run_search(in, length, out);
+			count = run_search_roomy(in, length, out);
 			free(in);
 		}
 	}
