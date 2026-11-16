@@ -107,7 +107,7 @@ func _run() -> void:
 	# The Ray Reconstruction guide program: only the define differs from the
 	# ordinary smoothing program, which keeps its exact source.
 	var shaders := preload("res://src/render/path_trace_shaders.gd")
-	var guides: String = shaders.FILTER.replace("#version 460\n", "#version 460\n#define RAY_RECONSTRUCTION\n")
+	var guides: String = shaders.reconstruction_filter()
 	check(guides != shaders.FILTER and guides.count("#define RAY_RECONSTRUCTION") == 1, "the guide program adds its define once")
 	check(not shaders.FILTER.contains("#define RAY_RECONSTRUCTION") and shaders.FILTER.count("#ifdef RAY_RECONSTRUCTION") == 4, "the ordinary smoothing program leaves every guide block out")
 	var rd := RenderingServer.get_rendering_device()

@@ -968,3 +968,7 @@ void main() {
 	imageStore(color, pixel, c);
 }
 """
+
+## The guide pass enables its extra output bindings in the filter shader.
+static func reconstruction_filter() -> String:
+	return FILTER.replace("#version 460", "#version 460\n#define RAY_RECONSTRUCTION")

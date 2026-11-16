@@ -6012,6 +6012,7 @@ func _show_hotkeys(rows: VBoxContainer, status: Label, id: String) -> void:
 			box.add_child(row)
 			var caption := _label(_t(ELSettings.HOTKEYS[action][1]), 15 if _settings_kit != null else 16, ELMenuKit.BODY_INK if _settings_kit != null else INK)
 			caption.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			caption.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 			row.add_child(caption)
 			var field := HotkeyField.new()
 			field.name = action
@@ -6100,9 +6101,12 @@ func _display_page(page: VBoxContainer) -> void:
 ## "Sharper icons" and "Sharper interface" (ELIconUpscale), the state of the
 ## prepared art and the buttons to prepare or clear it.
 func _sharper_art_rows(box: VBoxContainer) -> void:
-	var status := _label("", 13, ELMenuKit.BODY_INK if _settings_kit != null else INK)
-	status.name = "SharperArtStatus"
-	var refresh := func(): status.text = _sharper_art_status()
+	var buttons := HBoxContainer.new()
+	buttons.add_theme_constant_override("separation", 8)
+	var refresh := func():
+		var status := _row_note(buttons)
+		status.text = _sharper_art_status()
+		status.show()
 	for key: String in ["sharper_icons", "sharper_interface"]:
 		var toggle := CheckButton.new()
 		toggle.name = "SharperIcons" if key == "sharper_icons" else "SharperInterface"
@@ -6118,8 +6122,6 @@ func _sharper_art_rows(box: VBoxContainer) -> void:
 			_settings_row(box, "Sharper icons", "Spell icons, portraits, skills and other icons, enlarged once on this computer by a small AI model (Real-ESRGAN) and drawn with more pixels at the same size. Seen on screens larger than 1440 × 900. The art is prepared in one step with a progress bar, never during play; until then the original icons show.", toggle)
 		else:
 			_settings_row(box, "Sharper interface", "The same for the rest of the interface art: screens, panels, frames and buttons.", toggle)
-	var buttons := HBoxContainer.new()
-	buttons.add_theme_constant_override("separation", 8)
 	var prepare := Button.new()
 	prepare.name = "PrepareSharperArt"
 	prepare.text = _t("Prepare now")
@@ -6132,7 +6134,8 @@ func _sharper_art_rows(box: VBoxContainer) -> void:
 		for upscaler: ELIconUpscale in _upscalers(): upscaler.clear()
 		refresh.call())
 	buttons.add_child(clear)
-	_settings_row(box, "Prepared sharper art", "The enlarged art kept on this computer for this screen's size, and the disk space it takes. Prepare now enlarges what is missing (it can be cancelled; what is done is kept); Clear removes it all.", buttons, status)
+	_settings_row(box, "Prepared sharper art", "The enlarged art kept on this computer for this screen's size, and the disk space it takes. Prepare now enlarges what is missing (it can be cancelled; what is done is kept); Clear removes it all.", buttons)
+	_row_note(buttons).name = "SharperArtStatus"
 	refresh.call()
 
 ## Every mounted game's ELIconUpscale.
@@ -6793,6 +6796,8 @@ func _settings_row(box: VBoxContainer, title: String, description: String, contr
 	heading.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	line.add_child(heading)
 	var caption := _label(_t(title), 15 if original else 16, ELMenuKit.BODY_INK if original else INK)
+	caption.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	caption.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	heading.add_child(caption)
 	control.set_meta("row_caption", caption)
 	# Only the (?) explains the setting: hovering the row or its control

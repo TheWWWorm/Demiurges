@@ -2,6 +2,11 @@
 
 Versions follow [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html) from 0.3.0 on.
 
+## 0.17.1
+
+- Options: the sharper-art preparation status wraps below its buttons so Display controls stay visible. Long setting and hotkey labels also wrap, keeping controls visible in both games.
+- Windows: the Ray Reconstruction shader compiles with either Windows or Unix source line endings.
+
 ## 0.17.0
 
 - **Smarter duel AI:** the native search models more of both games' combat rules, including all 57 specialisation codes and more effects that return cards to hand. It reads both hands and forecasts draws. It treats forced wins as uncertain when scripted battle actions could change the outcome. Smarter also powers auto battle at that level, including with book spells disabled, and uses a 5-second desktop search budget (2.5 seconds on handhelds).

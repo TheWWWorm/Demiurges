@@ -1766,7 +1766,7 @@ class Effect extends CompositorEffect:
 			_rr_state = -1
 			var source := RDShaderSource.new()
 			source.language = RenderingDevice.SHADER_LANGUAGE_GLSL
-			source.source_compute = SHADERS.FILTER.replace("#version 460\n", "#version 460\n#define RAY_RECONSTRUCTION\n")
+			source.source_compute = SHADERS.reconstruction_filter()
 			_rr_shader = _compile(source, [RenderingDevice.SHADER_STAGE_COMPUTE], "Path trace reconstruction guides")
 			if _rr_shader.is_valid(): _rr_pipeline = _rd.compute_pipeline_create(_rr_shader)
 			if _rr_pipeline.is_valid(): _rr_state = 1
