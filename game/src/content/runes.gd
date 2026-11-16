@@ -9,6 +9,8 @@ static func capacity(hero: Dictionary) -> int:
 	return [5, 7, 10, 15][int(hero.get("skills", {}).get("PRVD", -1)) + 1]
 
 static func initialize(profile: ELProfile, hero: Dictionary, authored: Array = []) -> void:
+	# A new book has nothing waiting under its slots.
+	hero.erase("rune_under")
 	hero.rune_uses = []
 	hero.rune_stock = {}
 	var starting := {}
@@ -66,6 +68,47 @@ static func under(hero: Dictionary) -> Array[String]:
 static func set_under(hero: Dictionary, codes: Array) -> void:
 	if codes.any(func(code: String): return not code.is_empty()): hero.rune_under = codes.duplicate()
 	else: hero.erase("rune_under")
+
+## Saves from before the book kept its cantrips (a laboratory spell simply
+## overwrote one, before 0.13.0) lost the cantrip under a bought spell, so
+## storing that spell took the slot away. `start` is the book the hero began
+## the mission with: a cantrip it began with and no longer has, in the book
+## or under a spell, goes back under a spell that is not one of the starting
+## book's own; first the spell in that cantrip's starting slot, then a spell
+## of its colour and class (the cantrip a spent spell falls back to), then
+## any. No other cantrip is given and the book keeps its size.
+static func adopt_lost_cantrips(profile: ELProfile, hero: Dictionary, start: Array) -> void:
+	if hero.get("type", "hero") != "hero" or not hero.has("rune_uses"): return
+	var cards: Array = hero.get("cards", [])
+	var codes := under(hero)
+	var missing := {}
+	for card: Variant in start:
+		if card is String and unlimited(profile, hero, card): missing[card] = int(missing.get(card, 0)) + 1
+	for card: Variant in cards + codes:
+		if missing.has(card): missing[card] = int(missing[card]) - 1
+	var open: Array[int] = []
+	for slot in cards.size():
+		if codes[slot].is_empty() and not unlimited(profile, hero, str(cards[slot])) and not (slot < start.size() and start[slot] == cards[slot]): open.append(slot)
+	var spells := profile.table("CombatSpells")
+	var same_kind := func(cantrip: String, card: String) -> bool:
+		var a: Dictionary = spells.get(cantrip, {})
+		var b: Dictionary = spells.get(card, {})
+		return a.get("Color") == b.get("Color") and a.get("Class") == b.get("Class")
+	for step in 3:
+		for slot: int in open.duplicate():
+			var choice := ""
+			if step == 0:
+				if slot < start.size() and int(missing.get(start[slot], 0)) > 0: choice = str(start[slot])
+			else:
+				for card: Variant in start:
+					if int(missing.get(card, 0)) > 0 and (step == 2 or same_kind.call(card, str(cards[slot]))):
+						choice = str(card)
+						break
+			if choice.is_empty(): continue
+			codes[slot] = choice
+			missing[choice] = int(missing[choice]) - 1
+			open.erase(slot)
+	set_under(hero, codes)
 
 ## After a battle (`before`: the book's runes when it began): a slot whose
 ## spell spent its last rune gives the slot back to the cantrip under it.

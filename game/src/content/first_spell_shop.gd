@@ -129,6 +129,8 @@ func _rebuild() -> void:
 		if ELRunes.unlimited(state.map.profile, hero, old):
 			if not ELRunes.unlimited(state.map.profile, hero, card): unders[slot] = old
 		else: to_reserve.append({"card": old, "uses": uses[slot]})
+		# A cantrip bought over a spell takes the slot itself.
+		if ELRunes.unlimited(state.map.profile, hero, card): unders[slot] = ""
 		cards[slot] = card
 		uses[slot] = -1 if ELRunes.unlimited(state.map.profile, hero, card) else (100000 if free_exchange() else 0)
 

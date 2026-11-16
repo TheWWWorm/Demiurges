@@ -53,7 +53,7 @@ func encode(director: ELAdventureDirector, camera: Dictionary = {}) -> Dictionar
 	if director.encounter != null:
 		encounter = {"hero": director.encounter.hero_id, "opponent": director.encounter.opponent_id, "ethereal": director.encounter.ethereal_defender, "swapped": director.encounter.swapped, "battle": {"format": "etherlords-duel", "version": 1, "state": director.encounter.battle.snapshot()}}
 		if director.encounter.assault_fort >= 0: encounter.fort = director.encounter.assault_fort
-	return {"format": FORMAT, "version": 1, "edition": state.map.profile.id, "map": state.map.id, "map_hash": _map_hash(state.map), "script_name": state.script_name, "encounter": encounter,
+	return {"format": FORMAT, "version": 1, "under_version": UNDER_VERSION, "edition": state.map.profile.id, "map": state.map.id, "map_hash": _map_hash(state.map), "script_name": state.script_name, "encounter": encounter,
 		"world": world, "scenario": state.scenario.duplicate(true), "objects": objects, "players": players, "explored": Marshalls.raw_to_base64(state.explored), "notebook": ELSecondNotebook.encode(state), "observations": state.observations.duplicate(true), "ambience": ELSecondAmbience.encode(state), "script": script, "artifact_templates": state.artifact_templates.duplicate(true),
 		"commands": state.commands.duplicate(true), "director": {"movement": movement, "travel": director.travel.duplicate(), "strategy": director.strategy.duplicate(true), "free_queue": director.free_queue.duplicate(true), "guard_zones": director.interception.snapshot(), "dialogue": director.dialogue.duplicate(true), "boxes": director.boxes.duplicate(true), "action_wait": director.action_wait, "player_round": director.player_round, "woken": director._woken, "waiting": director._waiting, "wait_remaining": director.wait_remaining, "clock": director._clock, "commands_pending": director._commands_pending, "running": director.running_command()}, "camera": camera.duplicate(true)}
 
@@ -208,6 +208,7 @@ func decode(raw: Variant, profiles: Dictionary) -> Dictionary:
 				if not ELSpecs.valid(map.profile, code) or code == "NONE": return _reject(next, "Invalid saved specializations.")
 		if map.profile.id == "el2" and item.type in ["hero", "monster"] and not ELAdventureClock.restore(item, int(world.day)): return _reject(next, "Invalid saved travel clock.")
 		if map.profile.id == "el1" and item.type in ["hero", "monster"] and not ELRunes.restore(map.profile, item): return _reject(next, "Invalid saved rune inventory.")
+		if map.profile.id == "el1" and item.type == "hero" and raw.get("under_version") != UNDER_VERSION: ELRunes.adopt_lost_cantrips(map.profile, item, _start_book(next, item))
 		if map.profile.id == "el1" and item.type in ["hero", "monster"] and not ELStrategy.restore(map.profile, item, map): return _reject(next, "Invalid saved strategic movement.")
 		if map.profile.id == "el1" and item.type == "hero" and not ELAdditionalBuildings.restore_hero(item): return _reject(next, "Invalid saved building bonus.")
 		if map.profile.id == "el1" and item.type == "hero" and not ELMapPickups.restore_hero(map.profile, item): return _reject(next, "Invalid saved hero items.")
@@ -451,6 +452,23 @@ func decode(raw: Variant, profiles: Dictionary) -> Dictionary:
 	return {"state": next, "director": director, "camera": raw.camera.duplicate(true)}
 
 const EXPERIENCE_LIMIT := 1000000000
+## Saves with this mark keep every cantrip under a bought spell (ELRunes.under);
+## older ones get back the cantrips their heroes lost (adopt_lost_cantrips).
+const UNDER_VERSION := 1
+
+## The book a saved first-game hero began the mission with: the map's own
+## hero, or the mob or hero template a script or building made it from.
+static func _start_book(next: ELAdventureSession, item: Dictionary) -> Array:
+	var fresh := next.object(int(item.uid))
+	if fresh.get("type") == "hero" and fresh.get("name") == item.get("name"): return fresh.get("cards", []).duplicate()
+	var map := next.map
+	if map.mobs.has(item.get("name")):
+		var variants: Dictionary = map.mobs[item.name]
+		var mob: Dictionary = variants.get(next.difficulty, variants.get(0, variants.values()[0]))
+		var cards: Array = []
+		for spell: Dictionary in ELXml.children(ELXml.child(mob, "deck"), "spell"): cards.append(str(spell.attrs.get("code", "")))
+		return cards
+	return ELCatalog.deck(map.profile, str(map.profile.table("HeroTemplates").get(str(item.get("name", "")), {}).get("StartDeck", "")))
 
 func _restore_progression(profile: ELProfile, hero: Dictionary) -> bool:
 	# Authored bosses can exceed the last threshold (EL2 chapter 13's dragon has 2,000,000).
