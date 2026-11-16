@@ -606,9 +606,11 @@ static func draw_wide_texture(target: CanvasItem, texture: Texture2D, side: floa
 	var margin := ((source - DESIGN) * 0.5).floor()
 	var outer := minf(side, margin.x)
 	target.draw_texture_rect_region(texture, Rect2(Vector2.ZERO, DESIGN), Rect2(margin, DESIGN), tint, false, false)
-	# Between 4:3 and 16:9 the outer columns are narrowed to the side bars.
-	target.draw_texture_rect_region(texture, Rect2(-outer, 0, outer, DESIGN.y), Rect2(0, margin.y, margin.x, DESIGN.y), tint, false, false)
-	target.draw_texture_rect_region(texture, Rect2(DESIGN.x, 0, outer, DESIGN.y), Rect2(source.x - margin.x, margin.y, margin.x, DESIGN.y), tint, false, false)
+	# Between 4:3 and 16:9 the side bars show the outer part of each column
+	# at its own scale: the corner gargoyles stand at the outer edges, and
+	# narrowing the whole column squeezed them and cut their heads (#154).
+	target.draw_texture_rect_region(texture, Rect2(-outer, 0, outer, DESIGN.y), Rect2(0, margin.y, outer, DESIGN.y), tint, false, false)
+	target.draw_texture_rect_region(texture, Rect2(DESIGN.x, 0, outer, DESIGN.y), Rect2(source.x - outer, margin.y, outer, DESIGN.y), tint, false, false)
 
 func _draw_art() -> void:
 	# Over a battle the dim covers the whole window (see _draw), not only the 4:3 art.
