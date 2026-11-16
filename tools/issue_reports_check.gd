@@ -43,6 +43,8 @@ extends SceneTree
 ##   first game, the wide strip alone with the original orders, the check
 ##   mark and the cross with free movement; second game, no wide strip;
 ##   #163 chapter 11's fighting figures all have a battle-dome clip;
+##   #155 a click off a creature's tile acts on the creature the cursor
+##   shows, and a one-way teleport's exit shows the cancel cursor;
 ##   #138 the hero turns to face the creature it fights (#165: in the
 ##   second game the creature turns to the hero too); #139 second game:
 ##   the defeat picture is black from its first frame, fades to black and
@@ -961,6 +963,20 @@ func _second_prompt() -> void:
 	if monster.is_empty():
 		print("SKIP: el2 #137 #138 #139: no creature to fight on chapter 11")
 	else:
+		# #155: a click on a creature's body off its own tile acts on the
+		# creature (as the cursor shows), not on the ground tile under it.
+		var off := Vector2(float(monster.x) + 0.5, float(monster.y) + 0.5) + Vector2(0.55, 1.4)
+		var cursor_pick := ELSecondMapTooltips.object_at(state, off, true)
+		check(Vector2i(floori(off.x), floori(off.y)) != Vector2i(monster.x, monster.y) and cursor_pick == int(monster.uid) and map.second_click_figure(off) == int(monster.uid),
+			"el2 #155: a click on a creature's body off its tile acts on the creature the cursor shows")
+		# #155: a one-way teleport's exit shows the cancel cursor.
+		var receiver := {}
+		for item: Dictionary in state.objects.values():
+			if item.get("type") == "teleportreceiver" and item.get("alive", false): receiver = item
+		if receiver.is_empty(): print("SKIP: el2 #155: no teleport exit on chapter 11")
+		else:
+			var context := {"hero": int(hero.uid), "picked": int(receiver.uid), "tile": Vector2i(receiver.x, receiver.y), "on_map": true, "in_bounds": true, "modal": false, "local_turn": true}
+			check(ELCursors.second_adventure(state, director, context) == "cancel", "el2 #155: a one-way teleport's exit shows the cancel cursor")
 		await _faces(map, hero, monster, "el2")
 		var panel := map.second_precombat
 		check(panel != null and panel.visible and panel.begin_button.visible and panel.cancel_button.visible and not panel.decoration.visible,

@@ -1129,6 +1129,12 @@ func _unhandled_input(event: InputEvent) -> void:
 				# First game: the click uses what the cursor shows, also a
 				# castle tower or figure drawn over the ground behind it.
 				var shown := _object_at(Vector2(hit.x, -hit.z) / ELAdventureTerrain.CELL, event.position) if hud != null else -1
+				# Second game: the click uses the figure the cursor shows (its
+				# reach around the figure, ELSecondMapTooltips.object_at), not
+				# the ground tile under the pointer: a click off a creature's
+				# middle walked to that tile instead of attacking, by a route
+				# that depended on the side clicked (#155).
+				if second_hud != null and corpse < 0: shown = second_click_figure(Vector2(hit.x, -hit.z) / ELAdventureTerrain.CELL)
 				var picked := state.object(shown)
 				if body.get("enabled", false):
 					_click_ground(Vector2i(body.x, body.y), corpse)
@@ -1433,6 +1439,13 @@ func _object_at(point: Vector2, screen := Vector2(-1, -1)) -> int:
 		var crossing: Variant = _pick_box(building, Rect2(item.x, item.y, size.x, size.y), 0.0).intersects_ray(origin, normal)
 		if crossing != null and origin.distance_to(crossing) < body_depth: return building
 	return best if best >= 0 else building
+
+## Second game: the hero or creature a left click at `point` (map cells)
+## acts on, the one the cursor shows (ELSecondMapTooltips.object_at, the
+## figure's reach); -1 for none or the hero giving the order (#155).
+func second_click_figure(point: Vector2) -> int:
+	var figure := ELSecondMapTooltips.object_at(state, point, true)
+	return figure if state.object(figure).get("type") in ["hero", "monster"] and figure != _hero_id() else -1
 
 ## Slack (world units) around a figure's drawn body for picking it.
 const FIGURE_SLACK := 0.35

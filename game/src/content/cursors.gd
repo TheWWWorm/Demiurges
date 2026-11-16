@@ -157,6 +157,12 @@ static func _second_object(state: ELAdventureSession, hero: Dictionary, item: Di
 			if ELSecondGates.is_gate(item): return "use" if ELSecondGates.usable(hero, item) else "cancel"
 			if ELSecondGates.is_warding(item): return "use" if not item.get("used", false) else "cancel"
 			if ELSecondBuildings.applies(state, item): return "use" if ELSecondBuildings.usable(state, hero, item) else "cancel"
+			# Nothing to use, as the original's cancel cursor shows (#155): a
+			# one-way teleport's exit, and the posts that only work on the
+			# battles in their reach (CombatRange, such as the life-protecting
+			# statue of the Vitals' first chapter).
+			if item.get("type") == "teleportreceiver": return "cancel"
+			if str(state.map.profile.table("AdditionalBuildings").get(str(item.get("name", "")), {}).get("Class", "")) == "CombatRange": return "cancel"
 			return "use"
 	if item.get("type") in ["teleport", "dock"]: return "use" if item.get("enabled", true) else "cancel"
 	return "cancel"
