@@ -37,8 +37,12 @@ static func build(profile: ELProfile, spec: Dictionary) -> ELDuel:
 		hero.hand = hand.duplicate()
 		hero.hand_slots = []
 		hero.hand_view = []
+		# "pages": the place of each card of the hand in the hero's book (told
+		# with "deck" and "spell_uses"); without it no card is of the book.
+		var pages: Array = told.get("pages", [])
+		hero.erase("pages")
 		for i in hand.size():
-			hero.hand_slots.append(-1)
+			hero.hand_slots.append(int(pages[i]) if i < pages.size() else -1)
 			hero.hand_view.append(i)
 		hero.enchantments = []
 		for card: String in told.get("enchantments", []):
@@ -57,6 +61,8 @@ static func build(profile: ELProfile, spec: Dictionary) -> ELDuel:
 			"id": id, "owner": int(c.owner), "power": int(c.get("power", profile.table("CombatCreatures")[String(c.card)].Power)),
 			"regenerated": false, "resting": bool(c.get("resting", false)), "sick": bool(c.get("sick", false)),
 			"toughness": int(c.get("toughness", profile.table("CombatCreatures")[String(c.card)].Toughness))}
+		# "base": the strength a creature was made with, where its card has none.
+		if c.has("base"): row.base = c.base
 		creatures[str(id)] = row
 		id += 1
 	state.creatures = creatures
@@ -66,6 +72,24 @@ static func build(profile: ELProfile, spec: Dictionary) -> ELDuel:
 	if not duel.restore(profile, {"format": "etherlords-duel", "version": 1, "state": state}):
 		push_error("fixture: " + duel.error)
 		return null
+	return duel
+
+## A duel with books that deal (no fixed hands, so no puzzle): hero 0 holds a
+## Might it drew, hero 1 the cards of `other`, drawn as well unless `open`
+## (then they came into its hand in the open, as a returned card does); `rng`
+## sets the duel's run of chance apart. For the checks of what the smarter
+## player may know.
+static func drawn_hands(profile: ELProfile, other: Array, rng := 0, open := false) -> ELDuel:
+	var duel := build(profile, {"fixed": false, "rng": 4711 + rng, "heroes": [{"health": 20, "mana": 3, "hand": ["MGHT"]}, {"health": 20, "mana": 3, "hand": other}],
+		"creatures": [{"card": "GROG", "owner": 0}, {"card": "KBWR", "owner": 1}]})
+	if duel == null: return null
+	for side in 2:
+		duel.heroes[side].deck = ["STRT", "KBWR", "GROG", "MGHT"]
+		duel.heroes[side].spell_uses = [-1, -1, -1, -1]
+	duel.heroes[0].hand_slots = [3]
+	var slots: Array = []
+	for card: String in other: slots.append(-1 if open else 0)
+	duel.heroes[1].hand_slots = slots
 	return duel
 
 ## A context for asking the compiled engine about `side`, as the tools ask it.

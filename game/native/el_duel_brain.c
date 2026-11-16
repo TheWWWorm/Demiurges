@@ -140,7 +140,7 @@
 
 /* --------------------------------------------------------------------- model */
 
-#define HEADER 32
+#define HEADER 40
 /* Enchantments a hero lays on itself, by the game's own names for them. Each
  * is a rule of its own further down; what one lends the hero's army, what it
  * is worth and whether it ends with the other hero's turn the caller says. */
@@ -172,35 +172,54 @@ enum { HE_LSHE, HE_FRBL, HE_RNST, HE_ENRG, HE_RPST, HE_CMBN, HE_RBRT, HE_SCBR, H
 #define MAX_ENCH 48
 #define ENCH_FIELDS 13
 /* The plain numbers told of each hero, before its enchantments. */
-#define HERO_SCALARS 40
+#define HERO_SCALARS 80
+/* The turns of its own each hero is told ahead: the channels each opens and
+ * what the ether disturbance takes at its start. Its skills' turns repeat
+ * every CYCLE turns. */
+#define AHEAD 16
+#define CYCLE 12
 /* The first of them give their hero an ability, each copy once a turn. */
 #define HERO_ABILITIES 12
 /* The creature cards the engine knows by kind, so that one that leaves the
  * board can be played again; the newest cards of a graveyard it is told;
  * and the cards come back into a hand that it may hold at once. */
-#define POOL 32
+#define POOL 48
 #define GRAVES 12
-#define BACK 4
+#define BACK 8
 #define HERO_FIELDS (HERO_SCALARS + HE_COUNT + HERO_ABILITIES + 1 + GRAVES)
 #define COSTS 8
 #define TYPICAL_FIELDS 4
-#define HAND 8
+#define HAND 16
 /* Cards each hero is about to draw, which the engine is told in full. */
-#define DRAWS 6
+#define DRAWS 10
 #define SLOTS (HAND + DRAWS)
 #define CARD_FIELDS 25
-#define UNIT_FIELDS 66
+#define UNIT_FIELDS 75
 /* What a hero carries into the duel beside its book: each thing is told as
  * the card it stands for, with the uses it has left, the round it may next
  * be used in, the rounds it then waits, and how it is used. Before them, the
  * turns the duel has seen begin and what ether to come is worth (below); and
  * for each hero, the uses the duel allows
  * it and those it has had. They are played as cards from places of their own. */
-#define MAX_ART 8
+#define MAX_ART 16
 #define ART_FIELDS (CARD_FIELDS + 5)
 #define ART_BASE (SLOTS + BACK)
 #define ARTS (2 + 2 * (2 + MAX_ART * ART_FIELDS))
-#define FIXED (HEADER + 2 * (HERO_FIELDS + COSTS * TYPICAL_FIELDS + SLOTS * CARD_FIELDS) + HE_COUNT * HE_FIELDS + POOL * CARD_FIELDS + ARTS)
+/* What the battle's scripts make of each hero's creature of a kind as it is
+ * summoned: power | health << 16, flags given, flags taken. */
+#define SHAPES (2 * POOL * 3)
+#define FIXED (HEADER + 2 * (HERO_FIELDS + COSTS * TYPICAL_FIELDS + SLOTS * CARD_FIELDS) + HE_COUNT * HE_FIELDS + POOL * CARD_FIELDS + ARTS + SHAPES)
+/* The heroes' specialisations, by the game's own names for them, in the
+ * order the caller numbers them (from 1). Each is a rule of its own further
+ * down, and works by chance: see spec_roll. */
+enum { SPEC_NONE, SPEC_RKBC, SPEC_UAVC, SPEC_ARTF, SPEC_GMTM, SPEC_RSFN, SPEC_STHN, SPEC_MNCH, SPEC_RLSS, SPEC_BMWM, SPEC_RMBD, SPEC_UHGW, SPEC_BPRC, SPEC_RPLO, SPEC_GFNS,
+	SPEC_UGUS, SPEC_UMBD, SPEC_BVLD, SPEC_GHLD, SPEC_CEXC, SPEC_GHRI, SPEC_RBNO, SPEC_GSLO, SPEC_BENG, SPEC_BRST, SPEC_GFNR, SPEC_MSEN, SPEC_ETEN, SPEC_BMZP, SPEC_BSGP,
+	SPEC_GBLP, SPEC_ETTI, SPEC_UFLP, SPEC_RSMP, SPEC_QIHN, SPEC_GBHD, SPEC_RWSW, SPEC_UWAW, SPEC_BCTR, SPEC_UOCR, SPEC_BWIT, SPEC_UMTD, SPEC_RORT, SPEC_GSNV, SPEC_BFGL,
+	SPEC_GTRL, SPEC_RBTD, SPEC_BPTD, SPEC_RRTR, SPEC_IRSK, SPEC_ATMF, SPEC_DRSK, SPEC_DRSL, SPEC_FRBD, SPEC_WRBD, SPEC_RVVE, SPEC_GSWS, SPEC_UWLS };
+/* How many rolls of chance one command of a proof may hold, and how many
+ * ways they may fall out together, before the proof gives the line up. */
+#define ROLLS 4
+#define CHANCES 12
 #define ARMY 10
 #define MAX_UNITS 32
 #define MAX_SETS 96
@@ -212,12 +231,27 @@ enum { HE_LSHE, HE_FRBL, HE_RNST, HE_ENRG, HE_RPST, HE_CMBN, HE_RBRT, HE_SCBR, H
 #define MAX_LINE 12
 /* First commands a choice may have set aside before it is made again. */
 #define MAX_BANS 6
+/* A puzzle's objective, told after everything else (header 31, bit 27). */
+#define GOAL_FIELDS 24
 /* A command that names nothing; heroes are -1 and -2, creatures their place. */
 #define NO_TARGET (-99)
 #define WIN 100000000
 #define LETHAL 30000
 /* What a win or loss the leaf forecast sees is worth beside the board. */
 #define FORECAST 300000
+/* What a choice of command (mode 5) says of itself, told after its line: one
+ * of the first five, then the flags. */
+#define RESULT_PROVEN 1
+#define RESULT_NO_WIN 2
+#define RESULT_HEURISTIC 3
+#define RESULT_UNKNOWN 4
+#define RESULT_UNSUPPORTED 5
+#define RESULT_TERMINAL 16
+#define RESULT_COVERED 32
+#define RESULT_EXACT 64
+#define RESULT_REFUTED 128
+#define RESULT_UNVERIFIED 256
+#define RESULT_ABORTED 512
 
 enum {
 	F_FLY = 1, F_FIRST = 2, F_TRAMPLE = 4, F_UNBLOCKABLE = 8, F_ELUSIVE = 16, F_WALL = 32, F_NO_ATTACK = 64,
@@ -278,7 +312,11 @@ enum { PA_NONE, PA_DISSIPATE, PA_SINISTER, PA_CRUEL, PA_FIENDISH, PA_MYSTIC, PA_
 enum { AT_TAPS = 1, AT_ATTACK = 2, AT_TAPPED = 4,
 	/* Not a way of using it: while it lives its hero opens each turn with
 	 * one ether more. */
-	AT_INCOME = 8 };
+	AT_INCOME = 8,
+	/* Nor this: its death sends its hero's creatures of its race (a mother
+	 * bee's bees) into a frenzy, berserk until that hero's turn ends; and
+	 * one in such a frenzy now, berserk only until then. */
+	AT_FRENZY = 16, AT_FRENZIED = 32 };
 
 typedef struct {
 	int32_t id, ready_worth, resting_worth;
@@ -290,6 +328,9 @@ typedef struct {
 	/* Health its owner pays at the end of each of its turns. */
 	int16_t upkeep;
 	int8_t owner, regeneration, skins, guards, race, blocks, wake;
+	/* The specialisation that works for a creature of its race or of its
+	 * card (SPEC_*, 0 for none), when its hero has that one. */
+	int8_t mastery;
 	/* Nothing may be aimed at this creature (its own ether shield), and
 	 * whether freeing it costs its hero health as well as ether. */
 	int8_t shielded, wake_hurts;
@@ -301,6 +342,9 @@ typedef struct {
 	/* A walking horror: its arrival, and its leaving play by any road,
 	 * hurts every other creature by three. */
 	int8_t horror;
+	/* A beholder, and a beholder mother: while a mother is in play no wall
+	 * may block a beholder. */
+	int8_t beholder, mother;
 	/* The second game's bat, whose death costs the other hero a card, and
 	 * its giant bat, whose blow on a hero draws its own hero one. */
 	int8_t mourned, feeds;
@@ -378,6 +422,15 @@ typedef struct {
 	/* It has used, since its hero's turn began, an ability that may be used
 	 * once a round. */
 	int8_t spent;
+	/* A lamia warlord: every lamia card costs its hero two less while it
+	 * stands, to no less than one. */
+	int8_t summoner;
+	/* A grass snake: every blow of its that reaches a hero makes it a point
+	 * of each stronger for good. */
+	int8_t grows;
+	/* A frenzy (AT_FRENZY) on it until its hero's turn ends: 1 made it
+	 * berserk, 2 found it berserk already. */
+	int8_t frenzy;
 } Unit;
 
 enum { FATE_DIES = 1, FATE_DESTROYED = 2, FATE_READY = 8 };
@@ -442,11 +495,17 @@ typedef struct {
 	uint32_t flags, lends;
 	int16_t cost, power, toughness, gives_power, gives_toughness;
 	int32_t amount;
-	int8_t regeneration, race, effect, scope, variable;
+	int8_t regeneration, race, effect, scope, variable, mastery;
+	/* A card of a hand: its place in its hero's book (one more; 0 for a card
+	 * that is not of the book) and the uses that place has left (-1 for no
+	 * end of them). */
+	int8_t page, uses;
 	/* An enchantment that holds its target down, and the ether that frees it. */
 	int8_t holds, wake;
-	/* What it may be aimed at (AIM_*), and whether only at its caster's own. */
-	int8_t aim, own;
+	/* What it may be aimed at (AIM_*), and whether only at its caster's own:
+	 * by the rules, or (`habit`) only because it is seldom worth more, which
+	 * a list of every command the rules allow does not go by. */
+	int8_t aim, own, habit;
 	/* It may also be cast by the hero that defends. */
 	int8_t defence;
 	/* A creature's aura beyond `gives_power` and `gives_toughness`, as a
@@ -488,6 +547,9 @@ typedef struct {
 	 * it does, 2 it casts its spell, and either way it costs nothing. And
 	 * what it deals everything else on the side of what it hurts. */
 	int8_t free, splash;
+	/* A lamia, whose cost the warlords in play cut; and a warlord itself.
+	 * A lamia's `cost` is then told before that cut. */
+	int8_t lamia, summoner;
 } Card;
 /* It gives its X as power, or as health; a point of each for every pale
  * creature of the other army; the creature's printed power for a turn, which
@@ -498,7 +560,10 @@ typedef struct {
 enum { SP_NONE, SP_X_POWER, SP_X_HEALTH, SP_MARK, SP_ALPHA, SP_REDIRECT, SP_BONDS, SP_LOCK, SP_CRIPPLE, SP_STORM, SP_BREEZE, SP_RIOT,
 	/* Its caster holds it: as the creature dies it heals that hero by the
 	 * creature's health and brings the creature back under it. */
-	SP_WATER };
+	SP_WATER,
+	/* A beacon: as the creature comes out of the plane, the creatures of its
+	 * race in its army that are there come out with it. */
+	SP_BEACON };
 
 /* What an enchantment on a hero is worth (each copy, and once for the kind,
  * in thousandths), what it lends that hero's creatures and whether it ends
@@ -522,7 +587,7 @@ typedef struct {
 
 /* What makes an enchantment on a creature more than the points it gives. */
 enum { EN_PLAIN, EN_HOLD, EN_TWIST, EN_OVERLOAD, EN_LINK, EN_SKIN, EN_GUARD, EN_BARRIER, EN_CONTROL, EN_DELUSION, EN_ALPHA, EN_QUICK,
-	EN_HURTS, EN_REDIRECT, EN_BONDS, EN_WATER, EN_LOCK, EN_CRIPPLE, EN_STORM, EN_BREEZE, EN_RIOT, EN_GIFT };
+	EN_HURTS, EN_REDIRECT, EN_BONDS, EN_WATER, EN_LOCK, EN_CRIPPLE, EN_STORM, EN_BREEZE, EN_RIOT, EN_GIFT, EN_BEACON };
 /* One enchantment on one creature: who laid it, what it is, what it costs
  * to remove (-1 where nothing removes it), and what it gave. */
 typedef struct {
@@ -537,10 +602,26 @@ typedef struct {
 	/* What it takes from the health of its creature's hero as each of that
 	 * hero's turns ends. */
 	int8_t tick;
+	/* A water link that the game keeps on the creature itself (an older
+	 * position) and not with the hero that laid it. */
+	int8_t kept;
 	int16_t code, price, power, health, lethal;
 	uint32_t flags;
 	int32_t ready, resting;
 } Ench;
+
+/* The enchantments a hero lays on its own army (`HE_STWO` to `HE_ORPL`): a
+ * creature that changes sides keeps those that covered it as it went, and
+ * gains only those its new hero lays after. Of each kind on each hero, a
+ * bit for every copy that still covers it, by its place among the copies
+ * of that kind on that hero, oldest first. */
+#define ARMY_FIRST HE_STWO
+#define ARMY_KINDS (HE_ORPL - HE_STWO + 1)
+#define MAX_CARRY 8
+typedef struct {
+	int8_t unit;
+	uint8_t held[2][ARMY_KINDS];
+} Carry;
 
 typedef struct {
 	Unit u[MAX_UNITS];
@@ -600,6 +681,36 @@ typedef struct {
 	 * from one; and whether they are being reckoned just now. */
 	int8_t banner[2], kinned, in_banner;
 	int16_t art_ready[2][MAX_ART];
+	/* The model can no longer follow the duel exactly from here: something
+	 * went past what it has room for (creatures, cards come back, a draw past
+	 * those it was told of, a graveyard's oldest cards), or the caller said
+	 * so of the position itself. A proof claims nothing past such a point. */
+	int8_t limit;
+	/* The creatures that have changed sides, each with what of the army
+	 * enchantments still covers it. */
+	int8_t carries;
+	Carry carry[MAX_CARRY];
+	/* The creatures whose block a command took back in this defence: a
+	 * reading that weighs its lines does not set them again. A block taken
+	 * back and set again leaves the position as it was two commands sooner,
+	 * and a line cut short by its count of commands would be weighed two
+	 * commands short of what was coming - a loss put off past the end of
+	 * the reading looks like one escaped, and the opponent takes the block
+	 * back, sets it again at its next command, and so on for ever. */
+	uint32_t freed;
+	/* What each hero's specialisation has built up towards its next success
+	 * on this line, less the half it starts with (see spec_roll). */
+	double credit[2];
+	/* In a proof, the rolls the command just played held: how many, the
+	 * successes each was given (`want`) and the most it could have had; and
+	 * whether there were more of them than there is room for. */
+	uint8_t rolled, luck, want[ROLLS], most[ROLLS];
+	/* How often each hero has come back from a blow that would have ended
+	 * it: every time halves the health it may have. */
+	int8_t revived[2];
+	/* How often each card of a hand has been cast, for a hero whose
+	 * specialisation may keep a card in the hand it was cast from. */
+	uint8_t casts[2][SLOTS];
 } State;
 
 /* One position the search has already read: what it was worth with so many
@@ -625,8 +736,17 @@ typedef struct {
 	int opening[2]; /* ether a hero gets once, at the start of its next turn */
 	/* The ether disturbance: what each of a hero's next turns costs it in
 	 * health as it begins, once a duel has run long. */
-	int disturbance[2][MAX_TURNS];
-	int chance_step[2], income[2][MAX_TURNS];
+	int disturbance[2][AHEAD];
+	/* How many turns the disturbance has run at the first turn told (it
+	 * takes nothing until that is more than none), so that the turns past
+	 * those told follow by the rule; and whether it is told at all. */
+	int wear_base[2], wear_told[2];
+	/* Whether the table of channels has no row left past those told. */
+	int income_over[2];
+	/* Whether any of those turns costs either hero anything: only then is
+	 * the race against the disturbance weighed where a line stops. */
+	int wears;
+	int chance_step[2], income[2][AHEAD];
 	Charm charm[HE_COUNT];
 	Card hand[2][SLOTS], typical[2][COSTS], pool[POOL];
 	/* Positions already read (none when the search runs without them), and
@@ -634,8 +754,14 @@ typedef struct {
 	Entry *table;
 	uint64_t mask;
 	int64_t met;
-	/* When the search must stop, by the clock (0 for never). */
+	/* When the reading in hand must stop, by the clock (0 for never), and
+	 * whether it has (`timed`): the reading then unwinds with what it has,
+	 * reading nothing more on the way out. `ticks` counts the looks at it
+	 * (see `on_clock`). A call's readings each have their part of the time
+	 * the caller allows it, and the last of them ends with that time. */
 	double deadline;
+	int timed;
+	unsigned ticks;
 	/* How many phases ahead the answer was read, when further than asked. */
 	int far;
 	/* Whether a draw out of turn or a card lost to chance ends the engine's
@@ -655,7 +781,7 @@ typedef struct {
 	int sets, plans;
 	/* The order in which each hero's hand as it stands is given up when it
 	 * holds too many: a place for every four bits, the first to go lowest. */
-	uint32_t trim[2];
+	uint64_t trim[2];
 	/* A hero whose book is spent: no draw brings it a card any more. */
 	int dry[2];
 	/* The most cards a hand given up and dealt again can come to, by what
@@ -670,6 +796,11 @@ typedef struct {
 	 * cards known by kind, by the trap that lets each out (0 for none). */
 	int wards[4][2];
 	int8_t jammers[3];
+	/* What the battle's scripts make of each hero's creature of a kind as it
+	 * is summoned: points of power and of health on what its card says, and
+	 * the flags it gains and loses. */
+	int16_t shape[2][POOL][2];
+	uint32_t shape_given[2][POOL], shape_taken[2][POOL];
 	/* What a copy of the attack tax costs to remove, and what it is worth. */
 	int tax_price, tax_worth;
 	/* What each hero carries, as cards; the rounds each waits after a use,
@@ -691,9 +822,20 @@ typedef struct {
 	 * `prove_share` the part of the budget, in hundredths, it may take; turns
 	 * fewer than `prove_from` were read before, and held no such win. */
 	int proof, prove, prove_share, prove_from;
-	/* How much of the damage in sight a turn of that reading may be thought
-	 * to deal, in hundredths; 0 gives no line up on that count. */
-	int sight;
+	/* In that reading, the hero whose win is looked for is given the
+	 * commands the usual reading lists, not every one the rules allow: a win
+	 * found among fewer of its own commands is a win all the same, so long
+	 * as every command of the other hero is read, and it is found many times
+	 * sooner. Finding none this way settles nothing (see prove_first). */
+	int narrow;
+	/* Set while the first command of a reading is listed: every command the
+	 * rules allow is listed then, as for a proof, the unlikely ones last. */
+	int every;
+	/* The blocks set in the position given may be gone back on at the first
+	 * command (see generate_list). Not so in a reading begun from a position
+	 * a command of this reading's own led to: a block weighed there as one
+	 * that can be taken back at once is never weighed for what it does. */
+	int revise;
 	/* The command chosen is held against the same kind of reading for the
 	 * other hero: `guard` of that hero's turns, `guard_share` hundredths of
 	 * the budget for each such reading. First commands found to lose that
@@ -705,7 +847,60 @@ typedef struct {
 	 * cannot name might turn up. */
 	int guarding;
 	int32_t banned[MAX_BANS][4];
+	/* Set by a proof that met something it cannot read to its end: chance, a
+	 * position past the model's room, or a choice it could not list whole.
+	 * A win it finds still stands; its finding none does not. */
+	int unknown;
+	/* The hero whose cards the reading is not told (-1: none): cards sampled
+	 * out of its book stand in the places of those it drew (`hidden_mask`,
+	 * a bit for each such place of the hand), and what it draws is not
+	 * known either. And the least ether a card of its book costs while it
+	 * attacks ([0]) and while it defends ([1]).
+	 * The usual reading plays the sampled cards as a guess. A proof does
+	 * not: with ether enough for a card of its book that hero may do what
+	 * nobody can tell, so that no win over it is proved past its move; its
+	 * own win is proved only by what it is known to have. */
+	int hidden, hidden_mask, hidden_floor[2];
+	/* No draw from a book brings a card (the puzzles' fixed hands); cards
+	 * come back into a hand and are made all the same. */
+	int no_draws;
+	/* The cards to come are no real foresight but cards sampled from the
+	 * book: every draw is chance to a proof. */
+	int fair;
+	/* Something that may be played reads a graveyard card by card. */
+	int graves_matter;
+	/* Whether each hero regains a point of health as each of its next turns
+	 * begins (its Regeneration), after the ether disturbance. */
+	int8_t regen[2][AHEAD];
+	/* Whether each hero draws a card more as each of its next turns begins
+	 * (its Concentration). */
+	int8_t extra_draw[2][AHEAD];
+	/* Each hero's specialisation (SPEC_*, 0 for none or one that cannot
+	 * work), the chance one trial of it succeeds, and whether the hero came
+	 * back from a deadly blow before the reading began (the second game
+	 * allows that once). */
+	int spec[2];
+	double spec_p[2];
+	int8_t revived[2];
+	/* The card of the enfeeblement a shadow wall's mastery lays in the
+	 * second game, by kind (0 when the caller did not tell it). */
+	int enfeeble;
+	/* The caller's numbers for the cards three specialisations go by: the
+	 * blessing, the lightning storm and the purification; and for the mark
+	 * a storm's mastery leaves, with what that costs to remove. */
+	int bless, storm, purify, storm_mark, storm_price;
+	/* A puzzle's objective, judged as the game's puzzle runner judges it. */
+	struct {
+		int active, type, side, allowed, turn, enemy_turns, completed, min_health, finish_health, finish_mana, min_allies;
+		int targets, target[4], protects, protect[4];
+	} goal;
 } Search;
+
+/* Whether every command the rules allow is to be listed: in a proof, and at
+ * the first command of any reading. */
+static inline int lists_all(const Search *x) {
+	return x && (x->proof || x->every);
+}
 
 /* The time, in thousandths of a second, from a clock that only runs on. */
 #if defined(_WIN32)
@@ -725,6 +920,29 @@ static double now_ms(void) {
 }
 #endif
 
+/* Whether the reading is out of time. Every position read, every fight
+ * played out and every step of a played-out duel looks here, and one look in
+ * eight reads the clock: a crowded board makes a single position slow, and
+ * counting positions alone would let many of them pass between two readings
+ * of it. Out of time, the budget is taken to be spent, which every reading
+ * already heeds, and `timed` has the commands still waiting at each level
+ * of the line left unread. */
+static inline int on_clock(Search *x) {
+	if (x->timed) return 1;
+	if (x->deadline <= 0 || (++x->ticks & 7) != 0) return 0;
+	if (now_ms() <= x->deadline) return 0;
+	x->timed = 1;
+	x->budget = x->nodes;
+	return 1;
+}
+
+/* A new part of the call's time for the reading that follows. */
+static inline void set_clock(Search *x, double deadline) {
+	x->deadline = deadline;
+	x->timed = 0;
+	x->ticks = 7;
+}
+
 typedef struct { int8_t target[MAX_UNITS]; int score; } Plan;
 typedef struct { uint32_t mask; int score; } Set;
 
@@ -732,10 +950,48 @@ static inline int imin(int a, int b) { return a < b ? a : b; }
 static inline int64_t imin64(int64_t a, int64_t b) { return a < b ? a : b; }
 static inline int imax(int a, int b) { return a > b ? a : b; }
 
+/* The successes a hero has out of `trials` trials of the specialisation
+ * `code`: none for a hero that does not hold it. A reading that weighs its
+ * lines takes what is to be expected without drawing, as the game's own
+ * adviser does: the chance times the trials is added to what the hero's
+ * specialisation has built up on this line, beginning at one half, and
+ * every whole success that comes to is taken - so that a single trial
+ * succeeds from even odds up, and over a line the successes follow the
+ * chance. A proof counts on none of that: it is told how the roll falls
+ * (`want`), and its reading tries every way it can (see search_chance). */
+static int spec_roll(State *s, int side, int code, int trials) {
+	const Search *x = (const Search *)s->rules;
+	if (!x || x->spec[side] != code || trials <= 0) return 0;
+	double p = x->spec_p[side];
+	if (p >= 1.0) return trials;
+	if (x->proof && !x->guarding) {
+		if (s->rolled >= ROLLS) {
+			s->luck = 1;
+			return 0;
+		}
+		int i = s->rolled++;
+		s->most[i] = (uint8_t)imin(trials, 250);
+		return imin(s->want[i], trials);
+	}
+	double credit = 0.5 + s->credit[side] + p * (double)trials;
+	int hits = imax(0, imin((int)(credit + 1e-9), trials));
+	credit -= (double)hits;
+	s->credit[side] = (credit < 0.0 ? 0.0 : credit > 1.0 ? 1.0 : credit) - 0.5;
+	return hits;
+}
+
+/* The most health a hero may have: what it began the duel with, halved for
+ * every time it came back from a deadly blow. */
+static inline int hero_max(const Search *x, const State *s, int side) {
+	return x->maximum[side] >> s->revived[side];
+}
+
 /* A hero spends ether: on a card, an ability, an attacker sent under a tax,
  * a creature brought back from its wounds. */
 static void hurt_hero(State *s, int side, int amount, int source);
+static int spec_roll(State *s, int side, int code, int trials);
 static int army_size(const State *s, int side);
+static inline int charm_caster(int k, int holder);
 /* How many enchantments of one kind a creature wears. */
 static int worn_kind(const State *s, int unit, int kind) {
 	int count = 0;
@@ -773,8 +1029,12 @@ static int dispel_choices(const Search *x, const State *s, int side, Dispel *out
 static void pay(State *s, int side, int amount) {
 	if (amount <= 0) return;
 	s->ether[side] -= amount;
-	/* Ether thorns in play hurt whoever spends, once for each. */
-	for (int copies = s->he[0][HE_MNTH] + s->he[1][HE_MNTH]; copies > 0; copies--) hurt_hero(s, side, amount, -1);
+	/* Ether thorns in play hurt whoever spends, once for each; the thorns'
+	 * mastery may spare each ether spent, once for all of them. */
+	int copies = s->he[0][HE_MNTH] + s->he[1][HE_MNTH];
+	if (copies <= 0) return;
+	amount -= spec_roll(s, side, SPEC_GMTM, amount);
+	for (; copies > 0 && amount > 0; copies--) hurt_hero(s, side, amount, -1);
 }
 
 /* A stasis in play: no hero's ether is filled again, and in the second game
@@ -807,10 +1067,21 @@ static inline int vortices(const State *s, int side) {
 static const int8_t WARD_LESSER[4] = { 0, HE_LCWR, HE_LSWR, HE_LEWR }, WARD_GREATER[4] = { 0, HE_GCWR, HE_GSWR, HE_GEWR };
 static int card_cost(const Search *x, const State *s, const Card *c) {
 	if (c->free) return 0;
-	if (!s->second || c->klass <= 0 || c->cost < 0) return c->cost;
-	int lesser = s->he[0][WARD_LESSER[c->klass]] + s->he[1][WARD_LESSER[c->klass]] - x->wards[c->klass][0];
-	int greater = s->he[0][WARD_GREATER[c->klass]] + s->he[1][WARD_GREATER[c->klass]] - x->wards[c->klass][1];
-	return imax(0, c->cost + 2 * lesser + c->printed * greater);
+	int cost = c->cost;
+	if (cost < 0) return cost;
+	if (s->second && c->klass > 0) {
+		int lesser = s->he[0][WARD_LESSER[c->klass]] + s->he[1][WARD_LESSER[c->klass]] - x->wards[c->klass][0];
+		int greater = s->he[0][WARD_GREATER[c->klass]] + s->he[1][WARD_GREATER[c->klass]] - x->wards[c->klass][1];
+		cost = imax(0, cost + 2 * lesser + c->printed * greater);
+	}
+	/* Each lamia warlord in play, whoever's, makes every lamia two cheaper,
+	 * to no less than one: counted as the card is cast, not as it was told. */
+	if (c->lamia) {
+		int warlords = 0;
+		for (int i = 0; i < s->n; i++) warlords += s->u[i].summoner && !(s->u[i].flags & F_DEAD);
+		if (warlords > 0) cost = imax(1, cost - 2 * warlords);
+	}
+	return cost;
 }
 
 /* A fatal disease keeps creatures from regenerating and from healing: in the
@@ -854,10 +1125,21 @@ static int team_fits(const State *s, uint32_t mask) {
 	return 1;
 }
 
-static int same_kind(const Unit *a, const Unit *b) {
-	return a->owner == b->owner && a->power == b->power && a->toughness == b->toughness && a->flags == b->flags
-		&& a->regeneration == b->regeneration && a->skins == b->skins && a->guards == b->guards
-		&& a->ready_worth == b->ready_worth && a->resting_worth == b->resting_worth && a->race == b->race;
+/* Whether two creatures are alike in everything that can make them act or
+ * fare differently: everything the model holds of them but which one each
+ * is and when it was sent. Wounds, what they wear, what they can do and
+ * what has been done to them all count; and a creature an enchantment of
+ * the list stands on is like no other. */
+static int same_kind(const State *s, int i, int j) {
+	Unit a, b;
+	memcpy(&a, &s->u[i], sizeof(Unit));
+	memcpy(&b, &s->u[j], sizeof(Unit));
+	a.id = b.id = 0;
+	a.rank = b.rank = 0;
+	if (memcmp(&a, &b, sizeof(Unit)) != 0) return 0;
+	for (int r = 0; r < s->enchs; r++)
+		if (s->ench[r].unit == i || s->ench[r].unit == j) return 0;
+	return 1;
 }
 
 /* Moves creatures that are alike in every way next to each other. */
@@ -865,7 +1147,7 @@ static void group_alike(const State *s, int *list, int count) {
 	for (int i = 1; i < count; i++) {
 		int unit = list[i], at = -1;
 		for (int j = i - 1; j >= 0 && at < 0; j--)
-			if (same_kind(&s->u[list[j]], &s->u[unit])) at = j;
+			if (same_kind(s, list[j], unit)) at = j;
 		if (at < 0 || at == i - 1) continue;
 		for (int k = i; k > at + 1; k--) list[k] = list[k - 1];
 		list[at + 1] = unit;
@@ -887,6 +1169,25 @@ static inline void add_power(Unit *u, int change) {
 	u->under = (int16_t)imax(0, -real);
 }
 
+/* A creature's power, health and what of its health kills change by so
+ * much. Under a delusion the two have changed places, and the change is to
+ * what they were before: power given shows as health (which then has no
+ * floor of one), health as power. */
+static void shift_stats(const State *s, Unit *u, int power, int health, int lethal) {
+	if (s->enchs > 0 && (worn_kind(s, (int)(u - s->u), EN_DELUSION) & 1)) {
+		int shown = u->toughness + power;
+		add_power(u, health - lethal);
+		u->raw = (int16_t)imax(1, shown);
+		u->lethal = (int16_t)(u->raw - shown);
+		u->toughness = (int16_t)shown;
+		return;
+	}
+	add_power(u, power);
+	u->raw = (int16_t)(u->raw + health);
+	u->lethal = (int16_t)(u->lethal + lethal);
+	settle_health(u);
+}
+
 static inline int ready(const Unit *u) {
 	return !(u->flags & (F_DEAD | F_RESTING | F_SICK | F_PLANE));
 }
@@ -902,10 +1203,13 @@ static int can_attack(const State *s, const Unit *u) {
 	return can_declare(s, u) && u->power > 0;
 }
 
-static int can_block(const Unit *attacker, const Unit *blocker) {
+static int can_block(const State *s, const Unit *attacker, const Unit *blocker) {
 	if (attacker->flags & F_UNBLOCKABLE) return 0;
 	if ((attacker->flags & F_FLY) && !(blocker->flags & F_FLY)) return 0;
 	if ((attacker->flags & F_ELUSIVE) && !(blocker->flags & F_WALL)) return 0;
+	if (attacker->beholder && (blocker->flags & F_WALL))
+		for (int i = 0; i < s->n; i++)
+			if (s->u[i].mother && !(s->u[i].flags & F_DEAD)) return 0;
 	return 1;
 }
 
@@ -929,8 +1233,10 @@ static int channel_worth(const Search *x, int channels) {
 
 /* Cards still in this hero's hand. */
 static int cards_held(const State *s, int side) {
-	int played = 0;
-	for (int i = 0; i < SLOTS; i++) played += (s->played[side] >> i) & 1;
+	uint32_t gone = (uint32_t)s->played[side];
+	gone = gone - ((gone >> 1) & 0x55555555u);
+	gone = (gone & 0x33333333u) + ((gone >> 2) & 0x33333333u);
+	int played = (int)((((gone + (gone >> 4)) & 0x0f0f0f0fu) * 0x01010101u) >> 24);
 	for (int j = 0; j < BACK; j++) played -= s->back[side][j] != 0;
 	return imax(0, s->held[side] + s->drawn[side] + s->more[side] - played);
 }
@@ -943,12 +1249,68 @@ static int uses_left(const Search *x, const State *s, int side) {
 	return imax(0, imin(left, x->art_limit[side] - s->art_used[side]));
 }
 
+/* The ether disturbance at a hero's `k`-th turn from now, as the turn's
+ * start would take it (see wear_at), for weighing only: past the turns told
+ * it grows as it does in each game. */
+/* The gifts a hero's creatures wear: each brings its ether disturbance two
+ * turns nearer for as long as the creature stands on its side. */
+static int gifts_on(const State *s, int side) {
+	int count = 0;
+	for (int r = 0; r < s->enchs; r++)
+		if (s->ench[r].kind == EN_GIFT && s->u[s->ench[r].unit].owner == side && !(s->u[s->ench[r].unit].flags & F_DEAD)) count++;
+	return count;
+}
+
+static int wear_ahead(const Search *x, const State *s, int side, int k) {
+	if (k < AHEAD) return x->disturbance[side][k];
+	/* Past the turns told it follows the rule: a point for every turn it
+	 * has run in the first game, one and a half to that power in the second. */
+	int run = x->wear_base[side] + k;
+	if (!x->wear_told[side] || run <= 0) return 0;
+	if (!s->second) return imin(run, 100000);
+	double v = 1.0;
+	for (int i = 0; i < run && v < 100000.0; i++) v *= 1.5;
+	return v >= 100000.0 ? 100000 : (int)v;
+}
+
+/* The race against the ether disturbance, once the duel has run long enough
+ * for it: the health each hero has left after its next two turns' share,
+ * and, when the disturbance alone ends one of them within the turns looked
+ * at, which hero it ends first. `*mine` and `*theirs` are brought down to
+ * the health that is really left to fight with; the worth returned is the
+ * clock's, for the computer. */
+#define CLOCK_TURNS 6
+static int clock_worth(const Search *x, const State *s, int *mine, int *theirs) {
+	int next = 1 - s->attacker, end[2] = { 0, 0 }, soon[2] = { 0, 0 };
+	for (int side = 0; side < 2; side++) {
+		int left = s->health[side];
+		for (int j = 0; j < CLOCK_TURNS; j++) {
+			int wear = wear_ahead(x, s, side, s->turns[side] + 2 * gifts_on(s, side) + j);
+			if (j < 2) soon[side] += wear;
+			left -= wear;
+			if (left <= 0) {
+				/* The moment its turn begins, counted in turns of either hero. */
+				end[side] = 2 * j + (side == next ? 1 : 2);
+				break;
+			}
+		}
+	}
+	*mine = imax(1, *mine - soon[x->ai]);
+	*theirs = imax(1, *theirs - soon[1 - x->ai]);
+	int me = end[x->ai], foe = end[1 - x->ai];
+	if (!me && !foe) return 0;
+	/* The sooner it comes, the less there is left to change it. */
+	if (foe && (!me || foe < me)) return LETHAL * 3 / (2 + foe);
+	return -(LETHAL * 3 / (2 + me));
+}
+
 /* The position's worth for the computer; `turns` left makes a sooner end count more. */
 static int evaluate(const Search *x, const State *s, int turns) {
 	int mine = s->health[x->ai], theirs = s->health[1 - x->ai];
 	if (mine <= 0) return theirs <= 0 ? 0 : -(WIN + turns * 1000);
 	if (theirs <= 0) return WIN + turns * 1000;
-	int v = health_worth(x, mine) - health_worth(x, theirs) / 100 * x->foe_worth;
+	int clock = x->wears ? clock_worth(x, s, &mine, &theirs) : 0;
+	int v = clock + health_worth(x, mine) - health_worth(x, theirs) / 100 * x->foe_worth;
 	/* A card in hand, an ether channel and the hero's own enchantments count
 	 * as they do in the search this engine stands in for. */
 	v += (cards_held(s, x->ai) - cards_held(s, 1 - x->ai)) * x->card_worth;
@@ -1029,10 +1391,12 @@ static int evaluate_leaf(const Search *x, const State *s, int turns) {
 /* ------------------------------------------------------------------- combat */
 
 static void strip_hero(State *s, int side);
+static void strip_hero_own(State *s, int side, int own);
 static void discard_cards(State *s, int side, int count, int spells, int cause);
 static void draw_cards(State *s, int side, int count);
 
 static void lend_army(const Search *x, State *s, int side, int k, int copies);
+static void change_sides(const Search *x, State *s, int i, int side);
 
 /* An enchantment comes to stand on a hero, or `copies` of it go. */
 static void lay_charm(const Search *x, State *s, int holder, int k) {
@@ -1057,22 +1421,29 @@ static void drop_charm(const Search *x, State *s, int holder, int k, int copies)
  * only so many uses, and deals no card whose uses are all in the hand
  * already - but one given up may be dealt again. */
 static int book_room(const Search *x, const State *s, int side) {
+	if (x->no_draws) return 0;
 	if (!s->second) return x->dry[side] ? 0 : 100;
 	return imax(0, x->deals[side][0] + x->deals[side][1] + x->loose[side] - s->cast[side] - cards_held(s, side));
 }
 
 static void deal(const Search *x, State *s, int who, int count) {
-	if (count <= 0) return;
-	if (x->blinds) {
+	/* A book that deals nothing deals nothing by any road. */
+	if (count <= 0 || x->no_draws) return;
+	if (x->blinds || x->fair) {
 		s->more[who] += imin(count, book_room(x, s, who));
-		s->blind = 1;
+		/* (A proof told only what a hero could know holds such a card as
+		 * one nobody can name or play, and goes on: see draw_cards.) */
+		if (!(x->fair && x->proof)) s->blind = 1;
 	} else draw_cards(s, who, count);
 }
 
 /* Hurts a hero. `source` is the creature whose blow it is (-1 for anything
  * else); `passed` marks what a feedback, a chain or a pain link sends on,
- * which nothing sends on again. */
+ * which nothing sends on again (bit 0), and what no specialisation answers:
+ * the ether disturbance, and a backlash (bit 1). */
 static void spell_damage(State *s, int who, int amount);
+static void wears(Unit *t, const Unit *before, int fresh, uint32_t flags);
+static Ench *note_ench(State *s, int unit, const Unit *was, int caster, int kind, int code, int price, int brief, int comes_back, int robs);
 static void hurt_hero_by(State *s, int side, int amount, int source, int passed) {
 	if (amount <= 0) return;
 	const Search *x = (const Search *)s->rules;
@@ -1083,9 +1454,26 @@ static void hurt_hero_by(State *s, int side, int amount, int source, int passed)
 	/* An energy barrier takes three off whatever is no blow; a lifeguard
 	 * turns one hurt aside whole, and is gone. */
 	if (source < 0) amount -= 3 * s->he[side][HE_ENBR];
-	int turned = 0, guarded = amount > 0 && s->he[side][HE_LFGR] > 0;
+	int turned = 0, guarded = amount > 0 && s->he[side][HE_LFGR] > 0, spared = 0;
 	if (guarded) drop_charm(x, s, side, HE_LFGR, 1);
-	else if (amount > 0 && !passed && s->enchs > 0) {
+	else if (amount > 0 && x->spec[side] && !(passed & 2)) {
+		/* The hero's specialisation, a roll each in this order: an iron skin
+		 * (against a blow) or ancient magic (against anything else), then a
+		 * dragon's or a lord's skin, turn the hurt aside whole; a backlash
+		 * answers it with one to the other hero and to each creature of the
+		 * other army, and the hurt lands all the same. */
+		int blow = source >= 0;
+		if (spec_roll(s, side, blow ? SPEC_IRSK : SPEC_ATMF, 1)) spared = 1;
+		else if (spec_roll(s, side, SPEC_DRSK, 1) + spec_roll(s, side, SPEC_DRSL, 1) > 0) spared = 1;
+		else if (spec_roll(s, side, blow ? SPEC_FRBD : SPEC_WRBD, 1)) {
+			if (s->health[1 - side] > 0) hurt_hero_by(s, 1 - side, 1, -1, 3);
+			int n = s->n;
+			for (int i = 0; i < n; i++)
+				if (s->u[i].owner == 1 - side && !(s->u[i].flags & F_DEAD)) spell_damage(s, i, 1);
+			before = s->health[side];
+		}
+	}
+	if (!guarded && !spared && amount > 0 && !(passed & 1) && s->enchs > 0) {
 		/* A redirection on creatures of its army sends the hurt to them,
 		 * once for each copy, and the hero takes nothing; a pain link on
 		 * one of them does not send it back. */
@@ -1103,33 +1491,62 @@ static void hurt_hero_by(State *s, int side, int amount, int source, int passed)
 			s->u[i].linked = linked;
 		}
 	}
-	if (amount > 0 && !turned && !guarded) {
+	if (amount > 0 && !turned && !guarded && !spared) {
 		/* A feedback sends it all to the other hero, once for each copy,
 		 * and its own hero takes nothing; an ethereal chain sends the same
 		 * again beside: once for each in the first game, once in all and
 		 * doubled in the second. */
-		int copies = passed ? 0 : s->he[side][HE_FDBK] + s->he[side][HE_LNRD];
+		int copies = (passed & 1) ? 0 : s->he[side][HE_FDBK] + s->he[side][HE_LNRD];
 		for (int i = 0; i < copies && s->health[1 - side] >= 1; i++) hurt_hero_by(s, 1 - side, amount, -1, 1);
-		int mirrors = passed ? 0 : s->he[side][HE_ETCH];
+		int mirrors = (passed & 1) ? 0 : s->he[side][HE_ETCH];
 		if (s->second) mirrors = imin(mirrors, 1);
 		for (int i = 0; i < mirrors && s->health[1 - side] >= 1; i++) hurt_hero_by(s, 1 - side, s->second ? amount * 2 : amount, -1, 1);
 		if (copies == 0) {
 			s->health[side] = imax(0, before - amount);
 			landed = amount;
+			/* A revival: the blow that would have ended the hero halves the
+			 * health it may have and leaves it with all of that (once only
+			 * in the second game). */
+			if (s->health[side] <= 0 && x->spec[side] == SPEC_RVVE && hero_max(x, s, side) > 1
+				&& !(s->second && (s->revived[side] || x->revived[side])) && spec_roll(s, side, SPEC_RVVE, 1)) {
+				s->health[side] = hero_max(x, s, side) / 2;
+				if (s->revived[side] < 30) s->revived[side]++;
+			}
 		}
 	}
 	if (source < 0) return;
 	Unit *a = &s->u[source];
 	if (landed) {
 		if (a->flags & F_LIFETAP) s->health[a->owner] += imin(landed, before);
-		if (a->feeds) draw_cards(s, a->owner, 1);
+		/* A fighter's, a treant's or a bat's mastery heals its hero by the
+		 * blow an attacker of that race lands on the other hero. */
+		else if ((a->mastery == SPEC_BFGL || a->mastery == SPEC_GTRL || a->mastery == SPEC_RBTD) && (a->flags & F_ATTACKING)
+			&& spec_roll(s, a->owner, a->mastery, 1)) s->health[a->owner] += landed;
+		if (a->feeds) deal((const Search *)s->rules, s, a->owner, 1);
 	}
 	if (a->flags & F_STINGER) a->flags |= F_POISONED;
+	if (a->grows && !(a->flags & (F_DEAD | F_GONE))) {
+		Unit was = *a;
+		add_power(a, 1);
+		a->raw++;
+		settle_health(a);
+		a->ready_worth += x->power_worth + x->tough_worth;
+		a->resting_worth += x->power_worth + x->tough_worth;
+		wears(a, &was, 1, 0);
+		note_ench(s, source, &was, a->owner, EN_PLAIN, 0, -1, 0, 0, 0);
+	}
 	/* A snake's blow leaves its venom in the hero. */
 	if (a->envenoms) lay_charm(x, s, side, HE_ESWS);
+	/* A snake's mastery envenoms the hero its blow lands on. */
+	if (landed && a->mastery == SPEC_GSNV && spec_roll(s, a->owner, SPEC_GSNV, 1)) lay_charm(x, s, side, HE_ENVM);
 	/* A blow that robs takes cards out of the hand of the hero it reaches,
-	 * unless a creature took the blow for it. */
-	if (a->discards > 0 && !turned) discard_cards(s, side, a->discards, 0, 1 - side);
+	 * unless a creature took the blow for it; a lamia's or an orc's mastery
+	 * takes one more with a blow that lands. */
+	int robs = a->discards;
+	if (landed && (a->mastery == SPEC_UMTD || a->mastery == SPEC_RORT) && spec_roll(s, a->owner, a->mastery, 1)) robs++;
+	if (robs > 0 && !turned) discard_cards(s, side, robs, 0, 1 - side);
+	/* A pteros' mastery strips the hero of what it laid on itself. */
+	if (a->mastery == SPEC_BPTD && spec_roll(s, a->owner, SPEC_BPTD, 1)) strip_hero_own(s, side, 1);
 	/* A stripping strike leaves the hero it reaches with nothing laid on it. */
 	if (a->flags & F_DISENCHANT) strip_hero(s, side);
 }
@@ -1164,6 +1581,7 @@ static void finish_unit(State *s, int index);
 static void perish_unit(State *s, int index);
 static void spell_damage(State *s, int who, int amount);
 static void lost_leader(State *s, int dead);
+static void unlend(State *s, int i);
 
 /* What a creature's leaving play sets off, whichever way it left. */
 static void summon(const Search *x, State *s, int side, const Card *c);
@@ -1191,9 +1609,7 @@ static void banners(State *s) {
 			int want = imin(100, kin * reach), change = want - u->kin;
 			if (want) s->kinned = 1;
 			if (!change) continue;
-			add_power(u, change);
-			u->raw = (int16_t)(u->raw + change);
-			settle_health(u);
+			shift_stats(s, u, change, change, 0);
 			u->kin = (int8_t)want;
 			if (x) {
 				int gain = change * (((u->flags & F_NO_ATTACK) ? x->guard_worth : x->power_worth) + x->tough_worth);
@@ -1212,6 +1628,19 @@ static void banners(State *s) {
 	s->in_banner = 0;
 }
 
+static void take_back(State *s, int side, int kind);
+
+/* The place among the cards told by kind of an enchantment's card, by the
+ * caller's number for it: 0 for one that was not told. */
+static int kind_of_code(const Search *x, int code) {
+	if (!x || code <= 0) return 0;
+	for (int k = 0; k < POOL; k++) {
+		const Card *c = &x->pool[k];
+		if (c->cost >= 0 && c->effect != EFF_SUMMON && c->effect != EFF_NONE && c->code == code) return k + 1;
+	}
+	return 0;
+}
+
 /* `how`: 0 it died, 1 it was exiled, 2 it went back to a hand. */
 static void left_play(State *s, int index, int how) {
 	/* The water links on it, in the order they were laid. */
@@ -1224,7 +1653,10 @@ static void left_play(State *s, int index, int how) {
 	for (int r = s->enchs - 1; r >= 0; r--) {
 		const Ench *e = &s->ench[r];
 		if (e->unit != index) continue;
-		if (e->comes_back == 1 || (e->comes_back == 2 && how != 2)) s->more[e->caster]++;
+		/* Its card goes back to its caster's hand, to be cast again where
+		 * the model was told the card (one it cannot name is held but cannot
+		 * be played, and the model no longer follows that hand). */
+		if (e->comes_back == 1 || (e->comes_back == 2 && how != 2)) take_back(s, e->caster, kind_of_code((const Search *)s->rules, e->code));
 		/* A lock on a pale creature costs the hero it came with its printed
 		 * power as it leaves. */
 		if (e->kind == EN_LOCK && s->u[index].pale && s->rules) {
@@ -1234,6 +1666,7 @@ static void left_play(State *s, int index, int how) {
 		}
 		memmove(&s->ench[r], &s->ench[r + 1], (size_t)(s->enchs - r - 1) * sizeof(Ench));
 		s->enchs--;
+		memset(&s->ench[s->enchs], 0, sizeof(Ench));
 	}
 	if (linked && how == 0 && s->rules) {
 		/* Each link heals its caster by the dead creature's health (as
@@ -1245,7 +1678,8 @@ static void left_play(State *s, int index, int how) {
 		int health = s->second && kind > 0 ? x->pool[kind - 1].toughness : dead->toughness;
 		for (int k = 0; k < linked; k++) {
 			int caster = links[k];
-			s->health[caster] += imax(0, health);
+			/* The link's mastery adds the creature's power. */
+			s->health[caster] += imax(0, health) + (spec_roll(s, caster, SPEC_UWLS, 1) ? imax(0, dead->power) : 0);
 			int lies = s->known[owner] > 0 && s->graves[owner][s->known[owner] - 1] == kind;
 			if (back || kind <= 0 || !lies || army_size(s, caster) >= ARMY || s->n >= MAX_UNITS) continue;
 			back = 1;
@@ -1258,6 +1692,16 @@ static void left_play(State *s, int index, int how) {
 	}
 	lost_leader(s, index);
 	banners(s);
+	/* A mother bee that dies sends its hero's bees into a frenzy. */
+	if (how == 0 && (s->u[index].ability_traits & AT_FRENZY)) {
+		const Unit *mother = &s->u[index];
+		for (int i = 0; i < s->n; i++) {
+			Unit *u = &s->u[i];
+			if (i == index || (u->flags & F_DEAD) || u->owner != mother->owner || u->race != mother->race) continue;
+			if (!u->frenzy) u->frenzy = (u->flags & F_BERSERK) ? 2 : 1;
+			u->flags |= F_BERSERK;
+		}
+	}
 	/* A walking horror's last wave goes out as it dies or is exiled, not as
 	 * it goes back to a hand. */
 	if (s->u[index].horror && how != 2) {
@@ -1282,9 +1726,7 @@ static void lost_leader(State *s, int dead) {
 			if ((u->leaders >> j & 1) && !(s->u[j].flags & F_DEAD)) gone &= ~s->u[j].gives_flags;
 		u->flags &= ~gone;
 		u->aura_flags &= ~gone;
-		add_power(u, -l->gives_power);
-		u->raw = (int16_t)(u->raw - l->gives_toughness);
-		settle_health(u);
+		shift_stats(s, u, -l->gives_power, -l->gives_toughness, 0);
 		/* Wounds that this leaves fatal kill outright: nothing regenerates. */
 		if (!(u->flags & (F_DEAD | F_GONE)) && u->damage >= u->toughness) perish_unit(s, i);
 	}
@@ -1295,6 +1737,10 @@ static void bury(State *s, const Unit *t) {
 	int side = t->home ? t->home - 1 : t->owner;
 	s->grave[side]++;
 	if (s->known[side] >= GRAVES) {
+		/* The oldest card listed is no longer told apart, which matters only
+		 * where something reads a graveyard card by card. */
+		const Search *rules = (const Search *)s->rules;
+		if (rules && rules->graves_matter) s->limit = 1;
 		memmove(s->graves[side], s->graves[side] + 1, GRAVES - 1);
 		s->known[side] = GRAVES - 1;
 	}
@@ -1304,7 +1750,11 @@ static void bury(State *s, const Unit *t) {
 	 * copy in play in the first game, that hero's own in the second. */
 	if (x) deal(x, s, t->owner, s->second ? s->he[t->owner][HE_BASO] : s->he[0][HE_BASO] + s->he[1][HE_BASO]);
 	/* A spiritual web heals its hero for every creature buried. */
-	for (int side = 0; side < 2; side++) s->health[side] += s->he[side][HE_SPWB];
+	for (int side = 0; side < 2; side++) {
+		/* A spiritual web heals by one; its mastery may make that two. */
+		int webs = s->he[side][HE_SPWB];
+		if (webs > 0) s->health[side] += webs + spec_roll(s, side, SPEC_GSWS, webs);
+	}
 	/* A dying bat takes a card out of the other hero's hand. */
 	if (t->mourned) discard_cards(s, 1 - t->owner, 1, 0, t->owner);
 }
@@ -1319,6 +1769,8 @@ static int unbury(State *s, int side, int place) {
 	}
 	if (s->grave[side] > 0) s->grave[side]--;
 	if (s->known[side] > s->grave[side]) s->known[side] = (int8_t)s->grave[side];
+	/* What lies past the cards listed is no part of the position. */
+	for (int k = s->known[side]; k < GRAVES; k++) s->graves[side][k] = 0;
 	return kind;
 }
 
@@ -1331,21 +1783,32 @@ static void take_back(State *s, int side, int kind) {
 				s->back[side][j] = (int8_t)kind;
 				return;
 			}
+	/* With no room left to hold it apart, the card is still held but can no
+	 * longer be played: the model no longer follows that hand. */
 	s->more[side]++;
+	s->limit = 1;
 }
 
 static void finish_unit(State *s, int index) {
 	Unit *t = &s->u[index];
+	/* A rat's or a fingus' mastery regenerates it for nothing, whether or
+	 * not it could regenerate at all. */
+	int regeneration = t->regeneration, saved = 0;
+	if (t->flags & F_NO_REGEN) regeneration = 0;
+	else if ((t->mastery == SPEC_RRTR || t->mastery == SPEC_GFNR) && spec_roll(s, t->owner, t->mastery, 1)) {
+		saved = 1;
+		regeneration = 0;
+	}
 	if (t->toughness <= 0) {
 		t->flags |= F_DEAD;
 		bury(s, t);
 		left_play(s, index, 0);
 		return;
 	}
-	if (t->regeneration > 0 && !(t->flags & F_NO_REGEN) && !diseased(s, t->owner) && s->ether[t->owner] >= t->regeneration) {
+	if ((saved || regeneration > 0) && !diseased(s, t->owner) && s->ether[t->owner] >= regeneration) {
 		/* A complicity heals its hero by five whenever anything regenerates. */
 		for (int side = 0; side < 2; side++) s->health[side] += 5 * s->he[side][HE_COPL];
-		pay(s, t->owner, t->regeneration);
+		pay(s, t->owner, regeneration);
 		t->damage = 0;
 		t->flags |= F_REGENERATED;
 		/* The second game takes a creature that regenerates outside a fight
@@ -1358,6 +1821,7 @@ static void finish_unit(State *s, int index) {
 		shift_toll(s, t->owner);
 		t->damage = 0;
 		t->pale_used = (int8_t)((t->pale_used & ~4) | ((t->flags & F_RESTING) ? 4 : 0));
+		unlend(s, index);
 		t->flags |= F_RESTING | F_GONE;
 		t->flags &= ~(uint32_t)F_ATTACKING;
 		banners(s);
@@ -1397,6 +1861,7 @@ static void perish_unit(State *s, int index) {
 	if ((t->flags & F_DISSIPATES) && t->toughness > 0) {
 		/* It passes into the plane as it stands, not laid to rest by a blow. */
 		t->damage = 0;
+		unlend(s, index);
 		t->flags |= F_GONE;
 		t->flags &= ~(uint32_t)F_ATTACKING;
 		banners(s);
@@ -1411,14 +1876,11 @@ static int charm_reaches(const Search *x, int k, int holder, int side) {
 
 /* `copies` of an enchantment on its hero come to cover one creature, or,
  * when negative, leave it. */
-static void lend_unit(const Search *x, Unit *u, int k, int copies) {
+static void lend_unit(const Search *x, const State *s, Unit *u, int k, int copies) {
 	const Charm *c = &x->charm[k];
 	if (u->flags & (F_NO_AFFECT | F_PLANE)) return;
 	int had = u->power, before = u->toughness;
-	add_power(u, c->power * copies);
-	u->raw = (int16_t)(u->raw + c->toughness * copies);
-	u->lethal = (int16_t)(u->lethal + c->lethal * copies);
-	settle_health(u);
+	shift_stats(s, u, c->power * copies, c->toughness * copies, c->lethal * copies);
 	int gain = (u->power - had) * ((u->flags & F_NO_ATTACK) ? x->guard_worth : x->power_worth)
 		+ (u->toughness - before) * x->tough_worth;
 	u->ready_worth += gain;
@@ -1434,15 +1896,77 @@ static void lend_unit(const Search *x, Unit *u, int k, int copies) {
 	}
 }
 
-/* The same for every creature the enchantment on `side`'s hero reaches. */
+/* What a creature that has changed sides keeps of the army enchantments
+ * (NULL for one that has not). */
+static Carry *carried(const State *s, int i) {
+	for (int r = 0; r < s->carries; r++)
+		if (s->carry[r].unit == i) return (Carry *)&s->carry[r];
+	return NULL;
+}
+
+/* Whether an enchantment of this kind stays with a creature that changes
+ * sides rather than follow the army it stands in. */
+static inline int kept_kind(const Search *x, int k) {
+	return k >= ARMY_FIRST && k < ARMY_FIRST + ARMY_KINDS && x->charm[k].reach == 0;
+}
+
+static inline int bits8(unsigned v) {
+	int n = 0;
+	for (; v; v &= v - 1) n++;
+	return n;
+}
+
+/* The copies of an enchantment on `holder`'s hero that cover creature `i`. */
+static int under_charm(const Search *x, const State *s, int i, int holder, int k) {
+	if (kept_kind(x, k)) {
+		const Carry *c = carried(s, i);
+		if (c) return bits8(c->held[holder][k - ARMY_FIRST]);
+	}
+	return charm_reaches(x, k, holder, s->u[i].owner) ? s->he[holder][k] : 0;
+}
+
+/* What stands on the heroes leaves a creature that passes into the
+ * Colourless Plane: it covers none there. */
+static void unlend(State *s, int i) {
+	const Search *x = (const Search *)s->rules;
+	if (!x) return;
+	for (int k = 0; k < HE_COUNT; k++) {
+		int copies = 0;
+		for (int holder = 0; holder < 2; holder++) copies += under_charm(x, s, i, holder, k);
+		if (copies > 0) lend_unit(x, s, &s->u[i], k, -copies);
+	}
+}
+
+/* The same for every creature the enchantment on `side`'s hero reaches. A
+ * copy laid covers one that changed sides into that army; the copies that
+ * go are the oldest, and leave whoever they covered. */
 static void lend_army(const Search *x, State *s, int side, int k, int copies) {
 	const Charm *c = &x->charm[k];
 	if (!c->power && !c->toughness && !c->lethal && !c->flags && !c->regeneration) return;
-	int n = s->n;
+	int n = s->n, kept = s->carries > 0 && kept_kind(x, k);
 	for (int i = 0; i < n; i++) {
 		Unit *u = &s->u[i];
+		Carry *moved = kept ? carried(s, i) : NULL;
+		if (moved) {
+			uint8_t *held = &moved->held[side][k - ARMY_FIRST];
+			int count = 0;
+			if (copies > 0) {
+				if (u->owner != side) continue;
+				for (int place = s->he[side][k] - copies; place < s->he[side][k]; place++)
+					if (place >= 0 && place < 8 && !(*held >> place & 1)) {
+						*held = (uint8_t)(*held | 1u << place);
+						count++;
+					}
+			} else {
+				for (int place = 0; place < -copies && place < 8; place++) count += *held >> place & 1;
+				*held = -copies >= 8 ? 0 : (uint8_t)(*held >> -copies);
+				count = -count;
+			}
+			if (count && !(u->flags & (F_DEAD | F_GONE))) lend_unit(x, s, u, k, count);
+			continue;
+		}
 		if ((u->flags & (F_DEAD | F_GONE)) || !charm_reaches(x, k, side, u->owner)) continue;
-		lend_unit(x, u, k, copies);
+		lend_unit(x, s, u, k, copies);
 	}
 	for (int i = 0; i < n; i++)
 		if (!(s->u[i].flags & (F_DEAD | F_GONE)) && s->u[i].damage >= s->u[i].toughness) perish_unit(s, i);
@@ -1456,7 +1980,7 @@ static int manifest(const Search *x, State *s, int i) {
 	if ((u->flags & F_DEAD) || !(u->flags & (F_PLANE | F_GONE))) return 1;
 	if (!may_shift(s, u)) return 0;
 	shift_toll(s, u->owner);
-	int plane = (u->flags & F_PLANE) != 0;
+	int plane = (u->flags & (F_PLANE | F_GONE)) != 0;
 	/* One that dissipated comes back as it was when it did. */
 	if ((u->flags & F_GONE) && !(u->pale_used & 4)) u->flags &= ~(uint32_t)F_RESTING;
 	u->flags &= ~(uint32_t)(F_PLANE | F_GONE);
@@ -1464,12 +1988,19 @@ static int manifest(const Search *x, State *s, int i) {
 	if (s->second && u->pale) u->flags |= F_DISSIPATES;
 	for (int k = 0; plane && k < HE_COUNT; k++) {
 		int copies = 0;
-		for (int holder = 0; holder < 2; holder++)
-			if (charm_reaches(x, k, holder, u->owner)) copies += s->he[holder][k];
-		if (copies > 0) lend_unit(x, u, k, copies);
+		for (int holder = 0; holder < 2; holder++) copies += under_charm(x, s, i, holder, k);
+		if (copies > 0) lend_unit(x, s, u, k, copies);
 	}
 	banners(s);
 	if (!(u->flags & (F_DEAD | F_GONE)) && u->damage >= u->toughness) perish_unit(s, i);
+	/* A beacon on it brings the rest of its race in its army along, each of
+	 * those with a beacon of its own bringing theirs. */
+	if (s->enchs > 0 && worn_kind(s, i, EN_BEACON))
+		for (int j = 0; j < s->n; j++) {
+			const Unit *o = &s->u[j];
+			if (j == i || (o->flags & F_DEAD) || !(o->flags & (F_PLANE | F_GONE)) || o->owner != s->u[i].owner || o->race != s->u[i].race) continue;
+			manifest(x, s, j);
+		}
 	return 1;
 }
 
@@ -1480,9 +2011,8 @@ static int banish(const Search *x, State *s, int i) {
 	shift_toll(s, u->owner);
 	for (int k = 0; k < HE_COUNT; k++) {
 		int copies = 0;
-		for (int holder = 0; holder < 2; holder++)
-			if (charm_reaches(x, k, holder, u->owner)) copies += s->he[holder][k];
-		if (copies > 0) lend_unit(x, u, k, -copies);
+		for (int holder = 0; holder < 2; holder++) copies += under_charm(x, s, i, holder, k);
+		if (copies > 0) lend_unit(x, s, u, k, -copies);
 	}
 	u->flags |= F_PLANE;
 	u->flags &= ~(uint32_t)F_ATTACKING;
@@ -1553,6 +2083,8 @@ static Ench *note_ench(State *s, int unit, const Unit *was, int caster, int kind
 static void forget_ench(State *s, int r) {
 	memmove(&s->ench[r], &s->ench[r + 1], (size_t)(s->enchs - r - 1) * sizeof(Ench));
 	s->enchs--;
+	/* What lies past the last row is no part of the position. */
+	memset(&s->ench[s->enchs], 0, sizeof(Ench));
 }
 
 /* A lifeguard on a creature has turned one hurt aside, and is gone. */
@@ -1666,10 +2198,10 @@ static void unwear(State *s, int r) {
 	case EN_CONTROL:
 		/* It goes home as it stands, out of the fight, to wait a turn. */
 		if (!controls && u->home > 0) {
-			int home = u->home - 1;
+			int home = u->home - 1, away = home != u->owner;
 			u->home = 0;
-			if (home != u->owner) {
-				u->owner = (int8_t)home;
+			change_sides((const Search *)s->rules, s, e.unit, home);
+			if (away) {
 				if (u->fate & FATE_READY) u->flags &= ~(uint32_t)F_SICK;
 				else u->flags |= F_SICK;
 				u->flags &= ~(uint32_t)F_ATTACKING;
@@ -1725,9 +2257,10 @@ static void strip_unit(State *s, int index) {
 	u->worn_flags = 0;
 	u->worn_ready = u->worn_resting = 0;
 	u->home = 0;
-	if (home > 0 && home - 1 != u->owner) {
+	int away = home > 0 && home - 1 != u->owner;
+	if (home > 0) change_sides((const Search *)s->rules, s, index, home - 1);
+	if (away) {
 		/* It goes back as it stands, out of the fight, to wait a turn. */
-		u->owner = (int8_t)(home - 1);
 		if (fate & FATE_READY) u->flags &= ~(uint32_t)F_SICK;
 		else u->flags |= F_SICK;
 		u->flags &= ~(uint32_t)F_ATTACKING;
@@ -1739,11 +2272,17 @@ static void strip_unit(State *s, int index) {
 
 /* The same for a hero: everything laid on it goes, and with that whatever it
  * lent the creatures. */
-static void strip_hero(State *s, int side) {
+static void strip_hero_own(State *s, int side, int own) {
 	const Search *x = (const Search *)s->rules;
+	int kept = 0;
 	for (int k = 0; k < HE_COUNT; k++) {
 		int copies = s->he[side][k];
 		if (copies <= 0) continue;
+		/* What the other hero laid on it stays, where only its own goes. */
+		if (own && k >= HE_WETX && k < HE_STSK) {
+			if (x) kept += x->charm[k].each * copies + x->charm[k].kind;
+			continue;
+		}
 		s->he[side][k] = 0;
 		if (x) lend_army(x, s, side, k, -copies);
 	}
@@ -1755,17 +2294,36 @@ static void strip_hero(State *s, int side) {
 	s->forest[side] = -1;
 	s->forest_worth[side] = 0;
 	s->young[side] = s->stasis_age[side] = 0;
-	s->aura_worth[side] = 0;
+	s->aura_worth[side] = kept;
 	if (s->banner[side]) {
 		s->banner[side] = 0;
 		banners(s);
 	}
 }
 
+static void strip_hero(State *s, int side) {
+	strip_hero_own(s, side, 0);
+}
+
 /* A hero draws: the cards it is known to draw next, and past those a card
  * the engine cannot name. */
 static void draw_cards(State *s, int side, int count) {
 	const Search *x = (const Search *)s->rules;
+	if (x->no_draws) return;
+	/* Cards sampled out of the book are no knowledge of what will come. The
+	 * usual reading stops counting on the cards it was told from there. A
+	 * proof holds each card drawn as one nobody can name or play and goes
+	 * on: a win its hero has without that card it has with it, and the
+	 * other hero, holding one, is not read past a move it could make with
+	 * a card of its book (see `hidden`). */
+	if (x->fair && count > 0) {
+		if (x->proof) {
+			for (int i = 0; i < count; i++)
+				if (book_room(x, s, side) > 0) s->more[side]++;
+			return;
+		}
+		s->blind = 1;
+	}
 	for (int i = 0; i < count; i++) {
 		if (!s->blind && s->drawn[side] < DRAWS) {
 			/* A draw the engine was told will fail brings nothing: its place
@@ -1775,8 +2333,15 @@ static void draw_cards(State *s, int side, int count) {
 			s->drawn[side]++;
 			/* The second game's book may by now have a card to give after
 			 * all: one that was given up since. Which, nobody knows. */
-			if (none && s->second && book_room(x, s, side) > 0) s->more[side]++;
-		} else if (book_room(x, s, side) > 0) s->more[side]++;
+			if (none && s->second && book_room(x, s, side) > 0) {
+				s->more[side]++;
+				s->limit = 1;
+			}
+		} else if (book_room(x, s, side) > 0) {
+			/* A card past those the engine was told of: one it cannot name. */
+			s->more[side]++;
+			if (!s->blind) s->limit = 1;
+		}
 	}
 }
 
@@ -1792,6 +2357,20 @@ static void discard_answer(const Search *x, State *s, int holder, const Card *c,
 	else discard_cards(s, cause, 3, 0, holder);
 }
 
+/* Whether the card at a place of a hand is one the reading was not told,
+ * with a sampled card standing in for it. */
+static inline int veiled(const Search *x, int side, int slot) {
+	return x && side == x->hidden && slot >= 0 && slot < HAND && (x->hidden_mask >> slot & 1);
+}
+
+/* How many cards a hero holds that the reading cannot name: those sampled
+ * cards stand in for, and those that came to it since. */
+static int unknown_held(const Search *x, const State *s, int side) {
+	int count = imax(0, s->more[side]);
+	for (int i = 0; i < HAND; i++) count += (x->hidden_mask >> i & 1) && !(s->played[side] >> i & 1);
+	return count;
+}
+
 /* A hero gives up every card it holds; how many that was. */
 static int empty_hand(const Search *x, State *s, int hero, int cause) {
 	int count = cards_held(s, hero);
@@ -1799,7 +2378,9 @@ static int empty_hand(const Search *x, State *s, int hero, int cause) {
 		/* A place that holds no card is not one given up. */
 		if ((s->played[hero] >> i & 1) || (i < HAND ? i >= s->held[hero] : x->hand[hero][i].none)) continue;
 		s->played[hero] |= 1u << i;
-		if (x->hand[hero][i].cost >= 0) discard_answer(x, s, hero, &x->hand[hero][i], cause);
+		/* What a card nobody was told answers with is not known. */
+		if (veiled(x, hero, i)) s->blind = 1;
+		else if (x->hand[hero][i].cost >= 0) discard_answer(x, s, hero, &x->hand[hero][i], cause);
 	}
 	for (int j = 0; j < BACK; j++) {
 		int kind = s->back[hero][j];
@@ -1823,7 +2404,20 @@ static void discard_cards(State *s, int side, int count, int spells, int cause) 
 			if (c->cost < 0 ? i >= imin(s->held[side], HAND) : c->effect == EFF_SUMMON) continue;
 			open++;
 		}
+		/* And the cards that came back to the hand which are no creatures. */
+		for (int j = 0; x && j < BACK; j++) {
+			int kind = s->back[side][j];
+			if (kind > 0 && kind <= POOL && x->pool[kind - 1].effect != EFF_SUMMON) open++;
+		}
 		int every = open <= count, gone = 0;
+		for (int j = BACK - 1; x && j >= 0 && count > 0; j--) {
+			int kind = s->back[side][j];
+			if (kind <= 0 || kind > POOL || x->pool[kind - 1].effect == EFF_SUMMON) continue;
+			s->back[side][j] = 0;
+			count--;
+			gone++;
+			if (every) discard_answer(x, s, side, &x->pool[kind - 1], cause);
+		}
 		for (int i = 0; x && i < imin(SLOTS, HAND + s->drawn[side]) && count > 0; i++) {
 			const Card *c = &x->hand[side][i];
 			if ((s->played[side] >> i & 1) || c->none) continue;
@@ -1831,7 +2425,8 @@ static void discard_cards(State *s, int side, int count, int spells, int cause) 
 			s->played[side] |= 1u << i;
 			count--;
 			gone++;
-			if (every && c->cost >= 0) discard_answer(x, s, side, c, cause);
+			if (veiled(x, side, i)) s->blind = 1;
+			else if (every && c->cost >= 0) discard_answer(x, s, side, c, cause);
 		}
 		/* Chance is asked only where there is a card to take. */
 		if (x && x->blinds && gone > 0) s->blind = 1;
@@ -1848,25 +2443,70 @@ static void discard_cards(State *s, int side, int count, int spells, int cause) 
 	for (int k = 0; k < count; k++) {
 		int held = cards_held(s, side);
 		if (held <= 0) break;
-		int pick = (int)((unsigned)(s->health[0] * 7 + s->health[1] * 13 + s->ether[side] * 3 + k) % (unsigned)held);
+		/* Which card goes is the duel's chance, which the engine is not told:
+		 * it takes one by what the hand itself holds, never by the heroes'
+		 * health or ether, so that no line can steer the pick by them. */
+		uint32_t mix = (s->played[side] * 2654435761u) ^ ((uint32_t)s->drawn[side] << 8) ^ ((uint32_t)s->more[side] << 16) ^ (uint32_t)(k * 40503 + side * 977);
+		mix ^= mix >> 15;
+		mix *= 0x2C1B3C6Du;
+		mix ^= mix >> 12;
+		int pick = (int)(mix % (unsigned)held);
 		int gone = -1;
 		for (int i = 0; x && i < imin(SLOTS, HAND + s->drawn[side]) && gone < 0; i++) {
 			if ((s->played[side] >> i & 1) || x->hand[side][i].cost < 0) continue;
 			if (pick-- == 0) gone = i;
 		}
-		if (gone >= 0) s->played[side] |= 1u << gone;
-		else {
+		if (gone >= 0) {
+			s->played[side] |= 1u << gone;
+			/* A card that answers being thrown out (an ogre that comes into
+			 * play, a retort) answers here too. */
+			if (veiled(x, side, gone)) s->blind = 1;
+			else discard_answer(x, s, side, &x->hand[side][gone], cause);
+		} else {
 			int back = -1;
 			for (int j = 0; j < BACK; j++)
 				if (s->back[side][j]) back = j;
-			if (back >= 0) s->back[side][back] = 0;
-			else s->more[side]--;
+			if (back >= 0) {
+				int kind = s->back[side][back];
+				s->back[side][back] = 0;
+				if (x && kind > 0 && kind <= POOL) discard_answer(x, s, side, &x->pool[kind - 1], cause);
+			} else s->more[side]--;
 		}
+		if (s->health[0] <= 0 || s->health[1] <= 0) break;
 	}
 	if (x && x->blinds) s->blind = 1;
 }
 
+static void strike_unit(State *s, int source, int target, int amount);
 static void hurt_unit(State *s, int source, int target, int amount) {
+	Unit *t = &s->u[target];
+	if ((t->flags & (F_DEAD | F_GONE)) || amount - 2 * t->skins <= 0) return;
+	strike_unit(s, source, target, amount);
+	/* A pteros' mastery: its strike takes off the creature what that
+	 * creature's own hero laid on it. Where that is all it wears, it is
+	 * stripped as by a stripping strike. */
+	const Unit *a = &s->u[source];
+	if (a->mastery != SPEC_BPTD || (t->flags & F_DEAD) || !spec_roll(s, a->owner, SPEC_BPTD, 1)) return;
+	int own = 0, other = 0;
+	for (int r = 0; r < s->enchs; r++)
+		if (s->ench[r].unit == target && s->ench[r].kind != EN_WATER) {
+			if (s->ench[r].caster == t->owner) own++;
+			else other++;
+		}
+	if (!other) {
+		strip_unit(s, target);
+		return;
+	}
+	for (int left = own; left > 0 && !(t->flags & F_DEAD); left--) {
+		int found = -1;
+		for (int r = 0; r < s->enchs && found < 0; r++)
+			if (s->ench[r].unit == target && s->ench[r].kind != EN_WATER && s->ench[r].caster == t->owner) found = r;
+		if (found < 0) break;
+		unwear(s, found);
+	}
+}
+
+static void strike_unit(State *s, int source, int target, int amount) {
 	Unit *t = &s->u[target];
 	if (t->flags & (F_DEAD | F_GONE)) return;
 	amount -= 2 * t->skins;
@@ -1879,21 +2519,46 @@ static void hurt_unit(State *s, int source, int target, int amount) {
 		strip_unit(s, target);
 		if (t->flags & (F_DEAD | F_GONE)) return;
 	}
-	if (t->guards > 0) {
-		spend_guard(s, (int)(t - s->u));
-		if (strips) strip_unit(s, target);
-		return;
-	}
-	/* A lake snake's bite takes 1 of power and 1 of health from whatever it
-	 * hits: in the second game before the lethal check, in the first after it,
-	 * and there it kills on its own when it leaves too little health. */
+	/* A fire elemental's burn lands before the blow does, and so does the
+	 * bite of the second game's lake snake, which takes 1 of power and 1 of
+	 * health from whatever it hits (the first game's bites after the blow,
+	 * and kills on its own when it leaves too little health). A lifeguard
+	 * turns the blow itself away and nothing else of the strike: the burn,
+	 * the bite and a destroying strike's mark stay. */
 	int venom = (a->flags & F_VENOM) && !(t->flags & F_NO_AFFECT);
+	int marks = (a->flags & F_DESTROY) || ((a->flags & F_DESTROY_UNWALLED) && !(t->flags & F_WALL))
+		|| ((a->flags & F_DESTROY_FLYER) && (t->flags & F_FLY));
+	if ((a->flags & F_BURN) && !(t->flags & F_NO_REGEN)) {
+		Unit was = *t;
+		t->flags |= F_NO_REGEN;
+		wears(t, &was, 1, F_NO_REGEN);
+	}
 	if (venom && s->second) {
 		Unit was = *t;
 		add_power(t, -1);
 		t->lethal++;
 		settle_health(t);
 		wears(t, &was, 1, 0);
+	}
+	if (t->guards > 0) {
+		spend_guard(s, target);
+		t->flags |= F_HIT;
+		if (marks) t->flags |= F_POISONED;
+		if (venom && !s->second) {
+			Unit was = *t;
+			add_power(t, -1);
+			t->lethal++;
+			settle_health(t);
+			wears(t, &was, 1, 0);
+		}
+		/* A bite that leaves it no health kills where the blow did not: that
+		 * is a hit of its own, which another lifeguard turns away. */
+		if (venom && t->damage >= t->toughness) {
+			if (t->guards > 0) spend_guard(s, target);
+			else finish_unit(s, target);
+		}
+		if (strips && !(t->flags & F_DEAD)) strip_unit(s, target);
+		return;
 	}
 	{
 		/* A pain link passes on no more than the creature had left to lose. */
@@ -1902,14 +2567,7 @@ static void hurt_unit(State *s, int source, int target, int amount) {
 	}
 	t->damage = (int16_t)(t->damage + amount);
 	t->flags |= F_HIT;
-	if ((a->flags & F_DESTROY) || ((a->flags & F_DESTROY_UNWALLED) && !(t->flags & F_WALL))
-		|| ((a->flags & F_DESTROY_FLYER) && (t->flags & F_FLY))) t->flags |= F_POISONED;
-	/* A fire elemental's burn lands before the lethal check. */
-	if ((a->flags & F_BURN) && !(t->flags & F_NO_REGEN)) {
-		Unit was = *t;
-		t->flags |= F_NO_REGEN;
-		wears(t, &was, 1, F_NO_REGEN);
-	}
+	if (marks) t->flags |= F_POISONED;
 	if (t->damage >= t->toughness) finish_unit(s, target);
 	if (venom && !s->second && !(t->flags & (F_DEAD | F_GONE))) {
 		Unit was = *t;
@@ -1922,14 +2580,65 @@ static void hurt_unit(State *s, int source, int target, int amount) {
 	if (strips && !(t->flags & F_DEAD)) strip_unit(s, target);
 }
 
+/* What a creature deals in a fight: its power, doubled where its hero's
+ * mastery of kobolds or of aviaks works for it. */
+static int fight_damage(State *s, const Unit *u) {
+	int power = imax(0, u->power);
+	if ((u->mastery == SPEC_RKBC || u->mastery == SPEC_UAVC) && spec_roll(s, u->owner, u->mastery, 1)) power *= 2;
+	return power;
+}
+
+/* A hornet's mastery: its hero may take the first strike from what blocks
+ * it, or win one for a hornet that blocks. */
+static int stings_first(State *s, const Unit *u) {
+	return u->mastery == SPEC_GHRI && spec_roll(s, u->owner, SPEC_GHRI, 1);
+}
+
+static void enchant_unit(const Search *x, State *s, int side, const Card *c, int target, int amount);
+static void bless_as(const Search *x, State *s, int target, int power, int health, uint32_t flags, int code, int price);
+
+/* A witch's mastery, as a shadow wall has struck: the second game
+ * enfeebles the attacker and ends its fight (1); the first lays it to rest
+ * for good, and the fight goes on. */
+static int witch_wall(State *s, int blocker, int attacker) {
+	const Search *x = (const Search *)s->rules;
+	Unit *b = &s->u[blocker], *a = &s->u[attacker];
+	if (b->mastery != SPEC_BWIT || (b->flags & F_DEAD) || (a->flags & F_DEAD)) return 0;
+	if (!spec_roll(s, b->owner, SPEC_BWIT, 1)) return 0;
+	if (s->second) {
+		if (x->enfeeble > 0) enchant_unit(x, s, b->owner, &x->pool[x->enfeeble - 1], attacker, 0);
+		else s->limit = 1;
+		return 1;
+	}
+	Unit was = *a;
+	a->flags |= F_RESTING | F_NO_UNTAP;
+	wears(a, &was, 1, F_NO_UNTAP);
+	note_ench(s, attacker, &was, a->owner, EN_PLAIN, 0, -1, 0, 0, 0);
+	return 0;
+}
+
+/* The creatures a fight's blows have marked for destruction, in the order the
+ * blows marked them: the kills come in that order, and so do the
+ * regenerations that answer them while their hero's ether lasts. */
+static void note_poisoned(const State *s, uint32_t *seen, int8_t *order, int *count) {
+	for (int i = 0; i < s->n; i++)
+		if ((s->u[i].flags & F_POISONED) && !(*seen >> i & 1)) {
+			*seen |= 1u << i;
+			order[(*count)++] = (int8_t)i;
+		}
+}
+
 /* Plays the declared attack against the blocks in `target` (the index of the
  * attacker each creature blocks, or -1). */
 static void resolve(State *s, const int8_t *target) {
 	int defender = 1 - s->attacker;
-	uint32_t before = 0;
+	uint32_t before = 0, marked = 0;
+	int8_t poisoned[MAX_UNITS];
+	int poisons = 0;
 	for (int i = 0; i < s->n; i++)
 		if (s->u[i].flags & F_REGENERATED) before |= 1u << i;
 	s->in_fight = 1;
+	note_poisoned(s, &marked, poisoned, &poisons);
 	/* The attackers fight in the order they were sent, and each meets its
 	 * blockers in the order they were set against it; what the search only
 	 * supposes comes after what has been said, as it stands on the board. */
@@ -1952,8 +2661,8 @@ static void resolve(State *s, const int8_t *target) {
 		 * moved stays sent, but neither fights nor rests. */
 		if (!s->second && (before >> i & 1)) continue;
 		if (!(a->flags & F_RESTLESS)) a->flags |= F_RESTING;
-		int remaining = imax(0, a->power);
-		int blocked = 0, meets = 0;
+		int remaining = fight_damage(s, a);
+		int blocked = 0, meets = 0, walled = 0, gazed = 0, faced = 0;
 		for (int j = 0; j < s->n; j++) {
 			if (target[j] != i) continue;
 			int key = s->u[j].rank && s->u[j].blocks == i ? s->u[j].rank : 256 + j, at = meets++;
@@ -1963,33 +2672,82 @@ static void resolve(State *s, const int8_t *target) {
 			}
 			met[at] = (int8_t)j;
 		}
+		for (int m = 0; m < meets; m++) faced += !(s->u[met[m]].flags & (F_DEAD | F_GONE));
 		for (int m = 0; m < meets; m++) {
 			int j = met[m];
 			Unit *b = &s->u[j];
 			if (b->flags & (F_DEAD | F_GONE)) continue;
 			blocked = 1;
 			if (a->flags & (F_DEAD | F_REGENERATED | F_GONE)) break;
+			/* A beholder's mastery: its gaze destroys what it fights before a
+			 * blow is struck. (Nothing in the second game's reaches a
+			 * creature nothing may affect.) */
+			if (a->mastery == SPEC_GBHD && !(s->second && (b->flags & F_NO_AFFECT)) && spec_roll(s, a->owner, SPEC_GBHD, 1)) {
+				destroy_unit(s, j, 0);
+				gazed++;
+				continue;
+			}
+			if (b->mastery == SPEC_GBHD && !(s->second && (a->flags & F_NO_AFFECT)) && spec_roll(s, b->owner, SPEC_GBHD, 1)) {
+				destroy_unit(s, i, 0);
+				remaining = 0;
+				break;
+			}
+			/* The walls' masteries: a wall of stone dooms an attacker on the
+			 * ground, a wall of air one that flies. */
+			if (b->mastery == SPEC_RWSW && !(a->flags & F_FLY) && spec_roll(s, b->owner, SPEC_RWSW, 1)) walled = 1;
+			else if (b->mastery == SPEC_UWAW && (a->flags & F_FLY) && spec_roll(s, b->owner, SPEC_UWAW, 1)) walled = 1;
+			/* A blocker that strikes first strikes once. A hornet's mastery
+			 * may take that from it, or give it to a hornet that blocks:
+			 * the blocker's hero rolls before the attacker's. */
 			int first = (b->flags & F_FIRST) && !(a->flags & F_FIRST);
-			if (first) {
-				hurt_unit(s, j, i, imax(0, b->power));
+			int sooner = first ? !stings_first(s, a) : stings_first(s, b) && !stings_first(s, a);
+			if (sooner) {
+				hurt_unit(s, j, i, fight_damage(s, b));
+				note_poisoned(s, &marked, poisoned, &poisons);
 				if (a->flags & (F_DEAD | F_REGENERATED | F_GONE)) break;
+				if (witch_wall(s, j, i)) {
+					remaining = 0;
+					break;
+				}
 			}
 			int dealt = imin(remaining, imax(0, b->toughness - b->damage) + 2 * b->skins);
 			remaining -= dealt;
 			hurt_unit(s, i, j, dealt);
-			if (!first && !(b->flags & (F_DEAD | F_REGENERATED | F_GONE))) hurt_unit(s, j, i, imax(0, b->power));
+			note_poisoned(s, &marked, poisoned, &poisons);
+			if (!first && !(b->flags & (F_DEAD | F_REGENERATED | F_GONE))) {
+				hurt_unit(s, j, i, fight_damage(s, b));
+				if (witch_wall(s, j, i)) {
+					remaining = 0;
+					note_poisoned(s, &marked, poisoned, &poisons);
+					break;
+				}
+			}
+			note_poisoned(s, &marked, poisoned, &poisons);
 		}
 		if (!blocked) hurt_hero(s, defender, remaining, i);
-		else if (!(a->flags & (F_DEAD | F_REGENERATED | F_GONE)) && (a->flags & F_TRAMPLE) && remaining > 0) hurt_hero(s, defender, remaining, i);
+		/* A beholder whose gaze destroyed all that blocked it reaches the
+		 * hero with its whole blow; so does what tramples, with what is left. */
+		else if (!(a->flags & (F_DEAD | F_REGENERATED | F_GONE)) && remaining > 0 && ((gazed > 0 && gazed == faced) || (a->flags & F_TRAMPLE)))
+			hurt_hero(s, defender, remaining, i);
+		if (walled && !(a->flags & F_DEAD)) spell_damage(s, i, 20000);
+		note_poisoned(s, &marked, poisoned, &poisons);
 		/* What kept it from resting may have died in this very fight. */
 		if (!(a->flags & (F_DEAD | F_GONE | F_RESTLESS))) a->flags |= F_RESTING;
+		/* A cutter's or a gibberling's mastery leaves an attacker that
+		 * lived through its fight ready. */
+		if ((a->mastery == SPEC_BCTR || a->mastery == SPEC_UOCR) && !(a->flags & F_DEAD) && (a->flags & F_RESTING)
+			&& spec_roll(s, a->owner, a->mastery, 1)) a->flags &= ~(uint32_t)F_RESTING;
 		if (s->health[0] <= 0 || s->health[1] <= 0) break;
 	}
 	/* A destroying strike kills what it marked, unless that creature already
-	 * regenerated in this fight; regeneration and dissipation still answer. */
-	for (int i = 0; i < s->n; i++) {
+	 * regenerated in this fight; regeneration and dissipation still answer.
+	 * The kill is not combat damage, so a creature nothing may affect keeps
+	 * only the damage of the blow itself, as in the game. */
+	note_poisoned(s, &marked, poisoned, &poisons);
+	for (int k = 0; k < poisons; k++) {
+		int i = poisoned[k];
 		Unit *u = &s->u[i];
-		if (!(u->flags & F_POISONED) || (u->flags & (F_DEAD | F_GONE))) continue;
+		if (!(u->flags & F_POISONED) || (u->flags & (F_DEAD | F_GONE | F_NO_AFFECT))) continue;
 		if ((u->flags & F_REGENERATED) && !(before >> i & 1)) continue;
 		u->damage = (int16_t)imax(u->damage, u->toughness);
 		finish_unit(s, i);
@@ -2006,12 +2764,10 @@ static int covers(const Unit *l, const Unit *u) {
 }
 
 /* A leader's aura comes over a creature. */
-static void led(const Search *x, Unit *u, const Unit *l) {
+static void led(const Search *x, const State *s, Unit *u, const Unit *l) {
 	int before = u->toughness;
 	uint32_t added = l->gives_flags & ~u->flags;
-	add_power(u, l->gives_power);
-	u->raw = (int16_t)(u->raw + l->gives_toughness);
-	settle_health(u);
+	shift_stats(s, u, l->gives_power, l->gives_toughness, 0);
 	u->flags |= added;
 	u->aura_flags |= added;
 	int gain = l->gives_power * ((u->flags & F_NO_ATTACK) ? x->guard_worth : x->power_worth) + (u->toughness - before) * x->tough_worth;
@@ -2019,8 +2775,86 @@ static void led(const Search *x, Unit *u, const Unit *l) {
 	u->resting_worth += gain;
 }
 
+/* A leader's aura leaves a creature it covered. */
+static void unled(const Search *x, const State *s, Unit *u, int j) {
+	const Unit *l = &s->u[j];
+	u->leaders &= ~(1u << j);
+	/* What it had from this aura alone goes with it. */
+	uint32_t gone = l->gives_flags & u->aura_flags;
+	for (int k = 0; k < s->n && gone; k++)
+		if ((u->leaders >> k & 1) && !(s->u[k].flags & F_DEAD)) gone &= ~s->u[k].gives_flags;
+	u->flags &= ~gone;
+	u->aura_flags &= ~gone;
+	int before = u->toughness;
+	shift_stats(s, u, -l->gives_power, -l->gives_toughness, 0);
+	int loss = l->gives_power * ((u->flags & F_NO_ATTACK) ? x->guard_worth : x->power_worth) + (before - u->toughness) * x->tough_worth;
+	u->ready_worth -= loss;
+	u->resting_worth -= loss;
+}
+
+/* A creature goes over to `side`'s army. The army enchantments that cover
+ * it as it goes are noted, and stay with it whichever army it is in; the
+ * game notes them even where it stays where it is. What a hero lays on the
+ * other army, and the auras of creatures that reach only their own army,
+ * are those of the army it is in now. */
+static void change_sides(const Search *x, State *s, int i, int side) {
+	Unit *u = &s->u[i];
+	int was = u->owner;
+	if (!x) {
+		u->owner = (int8_t)side;
+		return;
+	}
+	if (!carried(s, i)) {
+		Carry *c = NULL;
+		if (s->carries < MAX_CARRY) c = &s->carry[s->carries++];
+		else
+			for (int r = 0; r < MAX_CARRY && !c; r++)
+				if (s->u[s->carry[r].unit].flags & F_DEAD) c = &s->carry[r];
+		/* No room to keep count: what follows is no longer the duel. */
+		if (!c) s->limit = 1;
+		else {
+			memset(c, 0, sizeof(*c));
+			c->unit = (int8_t)i;
+			if (!(u->flags & (F_NO_AFFECT | F_PLANE | F_GONE)))
+				for (int k = 0; k < ARMY_KINDS; k++) {
+					int copies = kept_kind(x, ARMY_FIRST + k) ? s->he[was][ARMY_FIRST + k] : 0;
+					c->held[was][k] = (uint8_t)(copies >= 8 ? 0xff : (1u << copies) - 1);
+				}
+		}
+	}
+	if (was == side) return;
+	for (int k = 0; k < HE_COUNT; k++)
+		if (x->charm[k].reach == 2 && s->he[1 - was][k] > 0) lend_unit(x, s, u, k, -s->he[1 - was][k]);
+	for (int j = 0; j < s->n; j++) {
+		if (j == i || (s->u[j].flags & F_DEAD)) continue;
+		if (s->u[j].gives_own && (u->leaders >> j & 1)) unled(x, s, u, j);
+		if (u->gives_own && (s->u[j].leaders >> i & 1)) unled(x, s, &s->u[j], i);
+	}
+	u->owner = (int8_t)side;
+	for (int k = 0; k < HE_COUNT; k++)
+		if (x->charm[k].reach == 2 && s->he[1 - side][k] > 0) lend_unit(x, s, u, k, s->he[1 - side][k]);
+	for (int j = 0; j < s->n; j++) {
+		Unit *v = &s->u[j];
+		if (j == i || (v->flags & F_DEAD)) continue;
+		if (v->gives_own && !(u->leaders >> j & 1) && covers(v, u)) {
+			u->leaders |= 1u << j;
+			led(x, s, u, v);
+		}
+		if (u->gives_own && !(v->leaders >> i & 1) && covers(u, v)) {
+			v->leaders |= 1u << i;
+			led(x, s, v, u);
+		}
+	}
+	for (int j = 0; j < s->n; j++)
+		if (j != i && !(s->u[j].flags & (F_DEAD | F_GONE)) && s->u[j].damage >= s->u[j].toughness) perish_unit(s, j);
+}
+
 static void summon(const Search *x, State *s, int side, const Card *c) {
-	if (s->n >= MAX_UNITS) return;
+	/* No room for another creature: what follows is no longer the duel. */
+	if (s->n >= MAX_UNITS) {
+		s->limit = 1;
+		return;
+	}
 	int army = 0;
 	for (int i = 0; i < s->n; i++) army += s->u[i].owner == side && !(s->u[i].flags & F_DEAD);
 	if (army >= ARMY) return;
@@ -2033,10 +2867,13 @@ static void summon(const Search *x, State *s, int side, const Card *c) {
 	u->toughness = c->toughness;
 	u->raw = c->toughness;
 	u->flags = c->flags;
+	/* The battle's scripts may give it flags or take them as it comes. */
+	if (c->kind > 0 && c->kind <= POOL) u->flags = (u->flags | x->shape_given[side][c->kind - 1]) & ~x->shape_taken[side][c->kind - 1];
 	/* A prime watch in play sends whatever arrives into the Colourless Plane. */
 	if (s->second && s->he[0][HE_PRWT] + s->he[1][HE_PRWT] > 0 && !(u->flags & F_NO_AFFECT)) u->flags |= F_PLANE;
 	u->regeneration = c->regeneration;
 	u->race = c->race;
+	u->mastery = c->mastery;
 	u->ready_worth = c->ready_worth;
 	u->resting_worth = c->resting_worth;
 	u->cost = c->cost;
@@ -2048,13 +2885,15 @@ static void summon(const Search *x, State *s, int side, const Card *c) {
 	u->upkeep = c->amount;
 	u->shielded = (int8_t)(c->lends & 1);
 	u->horror = (int8_t)((c->lends & 2) != 0);
+	u->mother = (int8_t)((c->lends >> 27) & 1);
+	u->beholder = (int8_t)((c->lends >> 28) & 1);
 	u->mourned = (int8_t)((c->lends >> 23) & 1);
 	u->feeds = (int8_t)((c->lends >> 24) & 1);
 	u->envenoms = (int8_t)((c->lends >> 25) & 1);
 	u->ability = (int8_t)((c->lends >> 2) & 63);
 	u->ability_cost = (int8_t)((c->lends >> 8) & 15);
 	u->ability_amount = (int8_t)((c->lends >> 12) & 127);
-	u->ability_traits = (int8_t)((c->lends >> 19) & 15);
+	u->ability_traits = (int8_t)(((c->lends >> 19) & 15) | ((c->lends >> 26) & 1 ? AT_FRENZY : 0));
 	/* It comes under the auras of the creatures in play, and brings its own
 	 * to them and to itself. */
 	u->gives_power = c->gives_power;
@@ -2063,25 +2902,31 @@ static void summon(const Search *x, State *s, int side, const Card *c) {
 	u->gives_to = c->aura_to;
 	u->gives_own = c->aura_own;
 	u->tribe = c->tribe;
+	u->summoner = c->summoner;
 	u->pale = c->pale;
 	u->pale_bits = c->pale_bits;
 	if (s->second && u->pale && !(u->flags & F_PLANE)) u->flags |= F_DISSIPATES;
 	u->discards = c->discards;
 	u->kind = c->kind;
+	/* The battle's scripts shape it as it comes. */
+	if (c->kind > 0 && c->kind <= POOL) {
+		add_power(u, x->shape[side][c->kind - 1][0]);
+		u->raw = (int16_t)(u->raw + x->shape[side][c->kind - 1][1]);
+	}
 	/* Health shows no less than one, whatever the card says. */
 	settle_health(u);
 	if (c->tribe == 1 && (s->flight[0] || s->flight[1])) u->flags |= F_FLY;
 	for (int i = 0; i < s->n; i++) {
 		if ((s->u[i].flags & F_DEAD) || !covers(&s->u[i], u)) continue;
 		u->leaders |= 1u << i;
-		led(x, u, &s->u[i]);
+		led(x, s, u, &s->u[i]);
 	}
 	if (u->gives_to)
 		for (int i = 0; i <= s->n; i++) {
 			Unit *v = &s->u[i];
 			if ((i < s->n && (v->flags & F_DEAD)) || !covers(u, v)) continue;
 			v->leaders |= 1u << s->n;
-			led(x, v, u);
+			led(x, s, v, u);
 		}
 	/* It comes under what stands on its hero and under the gases, and
 	 * arrives resting where the other hero keeps newcomers down. */
@@ -2089,7 +2934,7 @@ static void summon(const Search *x, State *s, int side, const Card *c) {
 		int copies = 0;
 		for (int holder = 0; holder < 2; holder++)
 			if (charm_reaches(x, k, holder, side)) copies += s->he[holder][k];
-		if (copies > 0) lend_unit(x, u, k, copies);
+		if (copies > 0) lend_unit(x, s, u, k, copies);
 	}
 	if (s->he[1 - side][HE_HOAM] > 0 && !(s->second && (u->flags & (F_NO_AFFECT | F_PLANE)))) u->flags |= F_RESTING;
 	s->n++;
@@ -2145,6 +2990,27 @@ static void develop(const Search *x, State *s, int side) {
  * and plays its cards. */
 static void settle_illusions(State *s);
 
+/* The ether disturbance at a hero's `k`-th turn from now. The engine is told
+ * the next ones; past those it follows the rule from the turns it is told
+ * the disturbance has run (see wear_ahead). A position that tells nothing
+ * of that (one made by hand) leaves the later turns unknown. */
+static int wear_at(const Search *x, State *s, int side, int k) {
+	if (k >= AHEAD && !x->wear_told[side] && x->disturbance[side][AHEAD - 1] > 0) s->limit = 1;
+	return wear_ahead(x, s, side, k);
+}
+
+/* The channels a hero opens at its `k`-th turn from now, by the table the
+ * engine is told the next few rows of. Past those nobody knows (a puzzle's
+ * fixed channels open none): the last row stands in, and a proof does not
+ * stand on it. */
+static int income_at(const Search *x, State *s, int side, int k) {
+	if (k < AHEAD) return x->income[side][k];
+	/* The table has no row past those told: no more channels open. */
+	if (x->goal.active || x->income_over[side]) return 0;
+	s->limit = 1;
+	return x->income[side][AHEAD - 1];
+}
+
 static void end_turn(const Search *x, State *s) {
 	int next = 1 - s->attacker;
 	s->ranks = 0;
@@ -2161,8 +3027,8 @@ static void end_turn(const Search *x, State *s) {
 			s->back[a][returned] = 0;
 			continue;
 		}
-		for (int k = 0; k < 8 && gone < 0; k++) {
-			int place = (int)(x->trim[a] >> (4 * k)) & 15;
+		for (int k = 0; k < 12 && gone < 0; k++) {
+			int place = (int)(x->trim[a] >> (5 * k)) & 31;
 			if (place < HAND && !(s->played[a] >> place & 1)) gone = place;
 		}
 		for (int i = HAND; gone < 0 && i < imin(SLOTS, HAND + s->drawn[a]); i++)
@@ -2189,13 +3055,15 @@ static void end_turn(const Search *x, State *s) {
 	}
 	for (int i = 0; i < s->n; i++) {
 		const Unit *u = &s->u[i];
-		if (u->owner == s->attacker && !(u->flags & F_DEAD) && u->upkeep > 0) hurt_hero(s, u->owner, u->upkeep, -1);
+		/* The parasites' mastery may spare each point of the drain. */
+		if (u->owner == s->attacker && !(u->flags & F_DEAD) && u->upkeep > 0) hurt_hero(s, u->owner, u->upkeep - spec_roll(s, u->owner, SPEC_BMZP, u->upkeep), -1);
 	}
 	for (int i = 0; i < s->n; i++) {
 		Unit *u = &s->u[i];
 		/* The fight is over, and no block of it stands into the next: a
 		 * creature that blocked is free to be set against another. */
 		u->blocks = -1;
+		s->freed = 0;
 		if (u->flags & F_DEAD) continue;
 		u->flags &= ~(uint32_t)(F_ATTACKING | F_REGENERATED | F_POISONED);
 		/* The mark of a blow lasts until its own hero's turn has ended. */
@@ -2204,14 +3072,25 @@ static void end_turn(const Search *x, State *s) {
 		/* Thick air and a flood keep what they hold as it is, and smoke keeps
 		 * the resting at rest; none of them reaches into the plane. */
 		int apart = (u->flags & (F_PLANE | F_GONE | F_NO_AFFECT)) != 0;
-		if (!(u->flags & (F_PLANE | F_GONE)) && held_down(s, u)) continue;
+		/* A creature waits out a turn of its hero's: what came in during that
+		 * turn is ready as it ends, held down or not; what came in while the
+		 * other hero moved (a creature given or thrown in) is ready as its
+		 * own hero's turn begins, unless held down. */
 		if (u->owner == s->attacker) u->flags &= ~(uint32_t)F_SICK;
-		else {
+		if (!(u->flags & (F_PLANE | F_GONE)) && held_down(s, u)) {
+			/* The flood's mastery lets a creature it holds recover all the
+			 * same as its own hero's turn begins; thick air holds fast. */
+			if (u->owner == s->attacker || s->he[0][HE_CNAR] + s->he[1][HE_CNAR] > 0 || !spec_roll(s, u->owner, SPEC_UFLP, 1)) continue;
+		}
+		if (u->owner != s->attacker) {
+			u->flags &= ~(uint32_t)F_SICK;
 			/* What it may do once a round, it may do again. */
 			u->spent = 0;
 			u->pale_used &= 4;
-			if (!(u->flags & F_NO_UNTAP) && !(s->enchs > 0 && bound(s, u)) && (apart || s->he[0][HE_SMOK] + s->he[1][HE_SMOK] == 0))
-				u->flags &= ~(uint32_t)F_RESTING;
+			/* The smoke's mastery lets a creature at rest recover through it. */
+			int smoked = !apart && s->he[0][HE_SMOK] + s->he[1][HE_SMOK] > 0;
+			if (smoked && (u->flags & F_RESTING) && spec_roll(s, u->owner, SPEC_RSMP, 1)) smoked = 0;
+			if (!(u->flags & F_NO_UNTAP) && !(s->enchs > 0 && bound(s, u)) && !smoked) u->flags &= ~(uint32_t)F_RESTING;
 		}
 	}
 	/* A hopper lying under three cards or more climbs back out of the grave
@@ -2275,9 +3154,10 @@ static void end_turn(const Search *x, State *s) {
 	for (int copy = 0; copy < s->he[s->attacker][HE_SFGS]; copy++)
 		for (int side = 0; side < 2; side++) {
 			int n = s->n;
+			/* The gas' mastery may spare each creature of a side, and its hero. */
 			for (int i = 0; i < n; i++)
-				if (s->u[i].owner == side) spell_damage(s, i, 2);
-			hurt_hero(s, side, 2, -1);
+				if (s->u[i].owner == side && !(s->u[i].flags & F_DEAD) && !spec_roll(s, side, SPEC_BSGP, 1)) spell_damage(s, i, 2);
+			if (!spec_roll(s, side, SPEC_BSGP, 1)) hurt_hero(s, side, 2, -1);
 		}
 	/* What stands on the heroes and bites as a turn ends: an ether burn
 	 * gives the hero whose turn it was the ether it has left as damage; the
@@ -2285,7 +3165,9 @@ static void end_turn(const Search *x, State *s) {
 	 * hurts its hero after its own. */
 	{
 		int a = s->attacker;
-		for (int copy = s->he[0][HE_MNBN] + s->he[1][HE_MNBN]; copy > 0 && s->ether[a] > 0; copy--) hurt_hero(s, a, s->ether[a], -1);
+		/* (A resistance to the burn may spare each ether.) */
+		for (int copy = s->he[0][HE_MNBN] + s->he[1][HE_MNBN]; copy > 0 && s->ether[a] > 0; copy--)
+			hurt_hero(s, a, s->ether[a] - spec_roll(s, a, SPEC_RMBD, s->ether[a]), -1);
 		for (int copy = s->he[next][HE_WETX] + s->he[next][HE_WTX2]; copy > 0; copy--) hurt_hero(s, next, 1, -1);
 		for (int copy = s->he[next][HE_STTX]; copy > 0; copy--) hurt_hero(s, next, 3, -1);
 		for (int copy = s->he[a][HE_ENVM]; copy > 0; copy--) hurt_hero(s, a, 2, -1);
@@ -2313,6 +3195,28 @@ static void end_turn(const Search *x, State *s) {
 	for (int i = 0; i < s->n; i++) {
 		Unit *u = &s->u[i];
 		if (!u->brief || (u->flags & F_DEAD) || (u->home ? u->home - 1 : u->owner) == s->attacker) continue;
+		if (x->spec[u->home ? u->home - 1 : u->owner] == SPEC_GBLP && x->bless > 0) {
+			/* The blessing's mastery may keep each blessing a turn more:
+			 * those kept stay as they are, and the rest come off one by one. */
+			int kept = 0;
+			for (int r = 0; r < s->enchs; r++)
+				if (s->ench[r].unit == i && s->ench[r].brief && s->ench[r].code == x->bless && spec_roll(s, u->home ? u->home - 1 : u->owner, SPEC_GBLP, 1)) {
+					s->ench[r].brief = 2;
+					kept++;
+				}
+			if (kept) {
+				for (;;) {
+					int found = -1;
+					for (int r = 0; r < s->enchs && found < 0; r++)
+						if (s->ench[r].unit == i && s->ench[r].brief == 1) found = r;
+					if (found < 0 || (u->flags & F_DEAD)) break;
+					unwear(s, found);
+				}
+				for (int r = 0; r < s->enchs; r++)
+					if (s->ench[r].unit == i && s->ench[r].brief == 2) s->ench[r].brief = 1;
+				continue;
+			}
+		}
 		int health = u->toughness - u->brief_health;
 		add_power(u, -u->brief_power);
 		if (s->enchs > 0 && (worn_kind(s, i, EN_DELUSION) & 1)) {
@@ -2347,13 +3251,18 @@ static void end_turn(const Search *x, State *s) {
 		if (dies) kill_unit(s, i);
 		else if (!(u->flags & F_GONE) && u->damage >= u->toughness) perish_unit(s, i);
 	}
+	/* A frenzy ends with its hero's own turn. */
+	for (int i = 0; i < s->n; i++) {
+		Unit *u = &s->u[i];
+		if (!u->frenzy || (u->flags & F_DEAD) || u->owner != s->attacker) continue;
+		if (u->frenzy == 1) u->flags &= ~(uint32_t)F_BERSERK;
+		u->frenzy = 0;
+	}
 	/* What a creature gave itself for the turn goes the same way. */
 	for (int i = 0; i < s->n; i++) {
 		Unit *u = &s->u[i];
 		if (!u->passing || (u->flags & F_DEAD) || u->owner == s->attacker) continue;
-		add_power(u, -u->passing_power);
-		u->raw = (int16_t)(u->raw - u->passing_health);
-		settle_health(u);
+		shift_stats(s, u, -u->passing_power, -u->passing_health, 0);
 		u->flags &= ~u->passing_flags;
 		u->ready_worth -= u->passing_ready;
 		u->resting_worth -= u->passing_resting;
@@ -2380,13 +3289,28 @@ static void end_turn(const Search *x, State *s) {
 	}
 	/* A hero that fell to any of that never hands the turn on. */
 	if (s->health[0] <= 0 || s->health[1] <= 0) return;
+	/* A creature that what ends the turn sent into the plane at rest rises
+	 * with the rest of its army as its hero's turn begins. */
+	if (s->second)
+		for (int i = 0; i < s->n; i++) {
+			Unit *u = &s->u[i];
+			if (u->owner != next || (u->flags & F_DEAD) || !(u->flags & F_GONE) || !(u->flags & F_RESTING)) continue;
+			if (!(u->flags & F_NO_UNTAP) && !(s->enchs > 0 && bound(s, u))) u->flags &= ~(uint32_t)F_RESTING;
+		}
 	s->attacker = next;
 	/* A long duel wears on the hero whose turn begins, and that can end it. */
 	{
-		int wear = x->disturbance[next][imin(s->turns[next] + 2 * s->gifted[next], MAX_TURNS - 1)];
-		if (wear > 0) s->health[next] = imax(0, s->health[next] - wear);
+		int wear = wear_at(x, s, next, s->turns[next] + 2 * gifts_on(s, next));
+		/* It is hurt as by any spell: a barrier softens it, a lifeguard
+		 * turns it aside, a redirection or a feedback sends it on. */
+		if (wear > 0) hurt_hero_by(s, next, wear, -1, 2);
 		/* Its turn never begins if that was the end of it. */
-		if (s->health[next] <= 0) return;
+		if (s->health[0] <= 0 || s->health[1] <= 0) return;
+		/* A hero that survived it regenerates, on the turns its skill says,
+		 * up to the health it began the duel with. */
+		/* Its skill gives the point back every turn, or every second or third:
+		 * the turns told repeat. */
+		if (x->regen[next][s->turns[next] % CYCLE] && s->health[next] < hero_max(x, s, next)) s->health[next]++;
 	}
 	/* What its enchantments let it do once a turn, it may do again. */
 	memset(s->used[next], 0, sizeof(s->used[next]));
@@ -2396,6 +3320,13 @@ static void end_turn(const Search *x, State *s) {
 		int kind = s->graves[next][i];
 		if (kind > 0 && x->pool[kind - 1].returns) take_back(s, next, unbury(s, next, i));
 		else i++;
+	}
+	/* An eternal tide brings a card of the graveyard back into the hand.
+	 * Which, where there is more than one, chance says: the newest stands
+	 * for it, and what the hero holds is no longer what the engine was told. */
+	if (s->grave[next] > 0 && spec_roll(s, next, SPEC_ETTI, 1)) {
+		if (s->grave[next] > 1) s->blind = 1;
+		take_back(s, next, unbury(s, next, s->known[next] - 1));
 	}
 	/* What was sent into the Colourless Plane and is no pale creature comes
 	 * back as its own hero's turn begins. */
@@ -2410,7 +3341,7 @@ static void end_turn(const Search *x, State *s) {
 	int still = stasis(s);
 	/* The second game: an ether storm the hero laid on a creature still in
 	 * play is one more channel each turn, and an ether breeze three ether. */
-	if (!still || !s->second) s->channels[next] += x->income[next][imin(s->turns[next], MAX_TURNS - 1)] + (s->second ? cast_kind(s, next, EN_STORM) : 0);
+	if (!still || !s->second) s->channels[next] += income_at(x, s, next, s->turns[next]) + (s->second ? cast_kind(s, next, EN_STORM) : 0);
 	s->turns[next]++;
 	if (!still) {
 		s->ether[next] = s->channels[next] * (1 + vortices(s, next)) + s->extra[next];
@@ -2449,7 +3380,9 @@ static void end_turn(const Search *x, State *s) {
 	}
 	/* The hero to move draws, and the engine knows what; every enlightenment
 	 * in play is one card more. */
-	draw_cards(s, next, 1 + s->he[0][HE_ENLH] + s->he[1][HE_ENLH]);
+	draw_cards(s, next, 1 + x->extra_draw[next][(s->turns[next] + CYCLE - 1) % CYCLE] + s->he[0][HE_ENLH] + s->he[1][HE_ENLH]);
+	/* An intuition draws one more. */
+	if (spec_roll(s, next, SPEC_QIHN, 1)) draw_cards(s, next, 1);
 	if (x->cards) s->unknown[next]++;
 	s->calm = 0;
 	/* A stasis is paid for by the hero that laid it as each of its turns
@@ -2491,10 +3424,21 @@ static int add_plan(Plan *plans, int count, int limit, const int8_t *target, int
 	return count + 1;
 }
 
+/* The defence ends: the fight is played with these blocks, and the turn
+ * passes unless the fight decided the duel. Ending the defence by command
+ * and weighing a whole defence both come here, so both stop where the duel
+ * does: a hero that won in the fight cannot lose to what the turn's end
+ * would still have done. */
+static void fight_and_pass(const Search *x, State *s, const int8_t *target) {
+	resolve(s, target);
+	s->phase = 0;
+	if (s->health[0] > 0 && s->health[1] > 0) end_turn(x, s);
+}
+
 static int score_plan(Search *x, const State *declared, const int8_t *target, int turns) {
 	State t = *declared;
-	resolve(&t, target);
-	end_turn(x, &t);
+	on_clock(x);
+	fight_and_pass(x, &t, target);
 	x->nodes++;
 	return evaluate_leaf(x, &t, turns);
 }
@@ -2520,7 +3464,7 @@ static void every_plan(Blocks *b, int at) {
 	/* Creatures alike in every way are interchangeable: the later one never
 	 * takes an earlier option than the one before it. */
 	int from = 0;
-	if (at > 0 && same_kind(&b->s->u[unit], &b->s->u[b->blockers[at - 1]])) from = b->choice[at - 1];
+	if (at > 0 && same_kind(b->s, unit, b->blockers[at - 1])) from = b->choice[at - 1];
 	for (int c = from; c < b->option_count[at]; c++) {
 		b->choice[at] = c;
 		b->target[unit] = b->options[at][c];
@@ -2546,7 +3490,7 @@ static int block_plans(Search *x, const State *s, const int8_t *base, Plan *plan
 		int able = 0;
 		for (int j = 0; j < s->n && !able; j++) {
 			const Unit *a = &s->u[j];
-			able = (a->flags & F_ATTACKING) && !(a->flags & F_DEAD) && can_block(a, u);
+			able = (a->flags & F_ATTACKING) && !(a->flags & F_DEAD) && can_block(s, a, u);
 		}
 		if (able) b.blockers[b.count++] = i;
 	}
@@ -2563,7 +3507,7 @@ static int block_plans(Search *x, const State *s, const int8_t *base, Plan *plan
 		b.options[i][k++] = -1;
 		for (int j = 0; j < s->n; j++) {
 			const Unit *a = &s->u[j];
-			if ((a->flags & F_ATTACKING) && !(a->flags & F_DEAD) && can_block(a, u)) b.options[i][k++] = (int8_t)j;
+			if ((a->flags & F_ATTACKING) && !(a->flags & F_DEAD) && can_block(s, a, u)) b.options[i][k++] = (int8_t)j;
 		}
 		b.option_count[i] = k;
 		total *= k;
@@ -2612,7 +3556,7 @@ static int block_plans(Search *x, const State *s, const int8_t *base, Plan *plan
 				for (int i = 0; i < b.count; i++) {
 					int unit = b.blockers[i];
 					const Unit *u = &s->u[unit];
-					if (t[unit] >= 0 || !can_block(a, u)) continue;
+					if (t[unit] >= 0 || !can_block(s, a, u)) continue;
 					int score;
 					if (style == 0) score = -u->ready_worth;
 					else {
@@ -2645,7 +3589,7 @@ static int block_plans(Search *x, const State *s, const int8_t *base, Plan *plan
 				for (int i = 0; i < b.count; i++) {
 					int unit = b.blockers[i];
 					const Unit *u = &s->u[unit];
-					if (t[unit] >= 0 || u->power <= 0 || !can_block(a, u)) continue;
+					if (t[unit] >= 0 || u->power <= 0 || !can_block(s, a, u)) continue;
 					if (pick < 0 || u->power > s->u[pick].power) pick = unit;
 				}
 				if (pick < 0) break;
@@ -2754,7 +3698,7 @@ static int score_set(Search *x, const State *s, uint32_t mask, int turns) {
 			int pick = -1, pick_score = -1000000;
 			for (int i = 0; i < d.n; i++) {
 				const Unit *u = &d.u[i];
-				if (u->owner == d.attacker || !ready(u) || t[i] >= 0 || !can_block(a, u)) continue;
+				if (u->owner == d.attacker || !ready(u) || t[i] >= 0 || !can_block(s, a, u)) continue;
 				int score;
 				if (style == 0) score = -u->ready_worth;
 				else {
@@ -2792,7 +3736,7 @@ static int attack_sets(Search *x, const State *s, Set *sets, int limit, int turn
 	double total = 1.0;
 	for (int i = 0; i < free_count; ) {
 		int j = i + 1;
-		while (j < free_count && same_kind(&s->u[free_units[i]], &s->u[free_units[j]])) j++;
+		while (j < free_count && same_kind(s, free_units[i], free_units[j])) j++;
 		total *= j - i + 1;
 		i = j;
 	}
@@ -2800,7 +3744,7 @@ static int attack_sets(Search *x, const State *s, Set *sets, int limit, int turn
 		for (uint32_t bits = 0; bits < (1u << free_count) && count < MAX_SETS; bits++) {
 			int canonical = 1;
 			for (int i = 1; i < free_count && canonical; i++)
-				if ((bits >> i & 1) && !(bits >> (i - 1) & 1) && same_kind(&s->u[free_units[i]], &s->u[free_units[i - 1]])) canonical = 0;
+				if ((bits >> i & 1) && !(bits >> (i - 1) & 1) && same_kind(s, free_units[i], free_units[i - 1])) canonical = 0;
 			if (!canonical) continue;
 			uint32_t mask = forced;
 			for (int i = 0; i < free_count; i++)
@@ -2827,7 +3771,7 @@ static int attack_sets(Search *x, const State *s, Set *sets, int limit, int turn
 			int stoppable = 0;
 			for (int j = 0; j < s->n && !stoppable; j++) {
 				const Unit *u = &s->u[j];
-				stoppable = u->owner != s->attacker && ready(u) && can_block(a, u);
+				stoppable = u->owner != s->attacker && ready(u) && can_block(s, a, u);
 			}
 			if (!stoppable) evasive |= 1u << free_units[i];
 		}
@@ -2879,7 +3823,8 @@ static int search_blocks(Search *x, const State *d, const int8_t *base, int turn
 	int best = maximise ? -2 * WIN : 2 * WIN;
 	for (int i = 0; i < count; i++) {
 		int v;
-		if (turns <= 1 || x->nodes >= x->budget) {
+		/* Out of time, the plans not yet read further stay as scored. */
+		if (turns <= 1 || x->nodes >= x->budget || on_clock(x)) {
 			if (turns > 1) x->aborted = 1;
 			v = plans[i].score;
 		} else {
@@ -2909,7 +3854,7 @@ static int search_blocks(Search *x, const State *d, const int8_t *base, int turn
 static int search_turn(Search *x, const State *s, int turns, int level, int alpha, int beta, uint32_t *best_set) {
 	if (s->health[0] <= 0 || s->health[1] <= 0) return evaluate(x, s, turns);
 	if (turns <= 0) return evaluate_leaf(x, s, turns);
-	if (x->nodes >= x->budget) {
+	if (on_clock(x) || x->nodes >= x->budget) {
 		x->aborted = 1;
 		return evaluate_leaf(x, s, turns);
 	}
@@ -2921,6 +3866,12 @@ static int search_turn(Search *x, const State *s, int turns, int level, int alph
 	memset(base, -1, sizeof(base));
 	for (int i = 0; i < count; i++) {
 		int v;
+		/* Out of time, the best set read so far stands: each further one
+		 * would have every defence to it listed and scored. */
+		if (i > 0 && x->timed) {
+			x->aborted = 1;
+			break;
+		}
 		State d = *s;
 		declare(x, &d, sets[i].mask);
 		if (sets[i].mask == 0) {
@@ -3030,6 +3981,129 @@ static void plane_damage(State *s, int who, int amount) {
 	}
 }
 
+/* An enchantment is laid on a creature by the hero `side`: `amount` is the
+ * X poured into one that takes it. */
+static void enchant_unit(const Search *x, State *s, int side, const Card *c, int target, int amount) {
+	Unit *t = &s->u[target];
+	Unit was = *t;
+	if (c->special == SP_WATER) {
+		note_ench(s, target, &was, side, EN_WATER, c->code, c->printed, 0, 0, 0);
+		return;
+	}
+	int gives_power = c->gives_power, gives_toughness = c->gives_toughness;
+	switch (c->special) {
+	case SP_X_POWER:
+		gives_power += amount;
+		break;
+	case SP_X_HEALTH:
+		gives_toughness += amount;
+		break;
+	case SP_MARK:
+		for (int i = 0; i < s->n; i++)
+			if (s->u[i].owner != side && s->u[i].pale && !(s->u[i].flags & F_DEAD)) {
+				gives_power++;
+				gives_toughness++;
+			}
+		break;
+	case SP_ALPHA:
+		/* It is healed, and strikes with its printed power on top. */
+		t->damage = 0;
+		gives_power += t->kind > 0 ? x->pool[t->kind - 1].power : t->power;
+		break;
+	default:
+		break;
+	}
+	/* Under a delusion the swap of power and health comes last: what is
+	 * given to the one shows as the other. */
+	if (s->enchs > 0 && (worn_kind(s, target, EN_DELUSION) & 1) && c->special != SP_ALPHA) {
+		int given = gives_power;
+		gives_power = gives_toughness;
+		gives_toughness = given;
+	}
+	add_power(t, gives_power);
+	/* What an enchantment takes leaves a creature at least one point of
+	 * health, unless it is of the kind that kills (`amount` bit 0). */
+	if (c->amount & 1) t->lethal = (int16_t)(t->lethal - gives_toughness);
+	else t->raw = (int16_t)(t->raw + gives_toughness);
+	settle_health(t);
+	/* An alpha strike leaves it one point of health. */
+	if (c->special == SP_ALPHA) {
+		t->alpha++;
+		settle_health(t);
+	}
+	/* One that lets it regenerate, for the least it then may pay. */
+	int regrows = (c->amount >> 11) & 15, regen_was = -1;
+	if (regrows > 0 && (t->regeneration == 0 || t->regeneration > regrows)) {
+		regen_was = t->regeneration;
+		t->regeneration = (int8_t)regrows;
+	}
+	/* One nothing can be aimed past, and one that keeps it from what it
+	 * can do. */
+	if (c->amount & 128) t->shielded = 1;
+	if ((c->amount & 64) && t->ability) {
+		t->bare_ability = t->ability;
+		t->ability = 0;
+	}
+	if (c->amount & 2) t->twisted++;
+	if (c->amount & 4) t->overload++;
+	/* One that makes its creature a robber. */
+	if ((c->amount >> 8) & 7) {
+		int robs = (c->amount >> 8) & 7;
+		t->discards = (int8_t)imin(100, t->discards + robs);
+		t->worn_discards = (int8_t)imin(100, t->worn_discards + robs);
+	}
+	if (c->amount & 8) t->linked++;
+	/* One that stirs its creature at once. */
+	if (c->amount & 32) t->flags &= ~(uint32_t)F_RESTING;
+	t->flags |= c->lends;
+	/* What it lends is worth what the same points are worth on any
+	 * creature; without this an enchantment only ever costs its card. */
+	{
+		int gain = gives_power * ((t->flags & F_NO_ATTACK) ? x->guard_worth : x->power_worth)
+			+ gives_toughness * x->tough_worth;
+		/* What lasts a turn is worth half of what lasts. */
+		if (c->amount & 16) gain /= 2;
+		t->ready_worth += gain;
+		t->resting_worth += gain;
+	}
+	if (c->holds) {
+		/* It taps at once; the second game also calls back an attacker. */
+		t->flags |= F_RESTING | F_NO_UNTAP;
+		if (s->second) t->flags &= ~(uint32_t)F_ATTACKING;
+		if (c->wake > 0) {
+			t->wake = c->wake;
+			/* Paralysis and immobility are broken for a turn at the cost
+			 * of health as well; enfeeblement is thrown off for good. */
+			t->wake_hurts = (int8_t)(c->holds == 2);
+		}
+	}
+	wears(t, &was, 1, c->lends | (c->holds ? F_NO_UNTAP : 0));
+	if (!(c->holds && c->fixed)) {
+		static const int8_t KINDS[] = { EN_PLAIN, EN_PLAIN, EN_PLAIN, EN_PLAIN, EN_ALPHA, EN_REDIRECT, EN_BONDS, EN_LOCK, EN_CRIPPLE, EN_STORM, EN_BREEZE, EN_RIOT };
+		int kind = c->holds ? EN_HOLD : ((c->amount & 2) ? EN_TWIST : ((c->amount & 4) ? EN_OVERLOAD : ((c->amount & 8) ? EN_LINK : EN_PLAIN)));
+		if (c->special > 0 && c->special <= SP_RIOT) kind = KINDS[c->special];
+		if (c->special == SP_BEACON) kind = EN_BEACON;
+		int tick = (c->amount >> 15) & 3;
+		if (tick && kind == EN_PLAIN) kind = EN_HURTS;
+		Ench *e = note_ench(s, target, &was, side, kind, c->code, c->fixed ? -1 - c->printed : c->printed, (c->amount & 16) != 0, c->comes_back, (c->amount >> 8) & 7);
+		if (e) {
+			e->tick = (int8_t)tick;
+			e->mutes = (int8_t)((c->amount & 64) != 0);
+			e->shields = (int8_t)((c->amount & 128) && !was.shielded);
+			if (regen_was >= 0) e->regen = (int8_t)(regen_was + 1);
+		}
+	}
+	if (c->amount & 16) {
+		if (t->brief < 100) t->brief++;
+		t->brief_power = (int16_t)(t->brief_power + (t->power - t->under) - (was.power - was.under));
+		t->brief_health = (int16_t)(t->brief_health + t->toughness - was.toughness);
+		t->brief_flags |= c->lends & ~was.flags;
+		t->brief_ready += t->ready_worth - was.ready_worth;
+		t->brief_resting += t->resting_worth - was.resting_worth;
+	}
+	if (t->damage >= t->toughness) perish_unit(s, target);
+}
+
 /* The side to move plays the card in `slot` of its hand. 0 when the rules
  * refuse it: an unknown spell, one already played, or ether it cannot pay. */
 /* The card at a place of a hero's hand: one it was dealt or will draw, or
@@ -3101,10 +4175,47 @@ static int ench_price(const Search *x, const State *s, int holder, int what, int
 	return -1;
 }
 
+/* The first game's specialisations of the hero whose enchantment is being
+ * dispelled: a sentinel keeps it where it is (1), and an eternal enchantment
+ * comes back into its caster's hand as a card once it is off. `code` is the
+ * caller's number for the card, -1 for one the engine cannot name, and 0
+ * for what is no card at all. */
+static int sentinel(State *s, int caster) {
+	return !s->second && caster >= 0 && caster < 2 && spec_roll(s, caster, SPEC_MSEN, 1);
+}
+
+static void eternal(const Search *x, State *s, int caster, int code) {
+	if (s->second || caster < 0 || caster > 1 || code == 0 || !spec_roll(s, caster, SPEC_ETEN, 1)) return;
+	take_back(s, caster, kind_of_code(x, code));
+}
+
+/* One enchantment on a creature is dispelled. */
+static void dispel_ench(const Search *x, State *s, int r) {
+	Ench e = s->ench[r];
+	if (sentinel(s, e.caster)) return;
+	unwear(s, r);
+	/* A mark that is no card (it costs what no card costs) is not one to hold. */
+	eternal(x, s, e.caster, e.price >= 999 ? 0 : e.code);
+}
+
 /* It goes; with `any`, even one that is there for good. */
 static void dispel(const Search *x, State *s, int holder, int what, int any) {
 	if (holder == -1 || holder == -2) {
 		int side = -holder - 1;
+		if (what == HE_WATER) {
+			for (int r = 0; r < s->enchs; r++)
+				if (s->ench[r].kind == EN_WATER && s->ench[r].caster == side) {
+					dispel_ench(x, s, r);
+					break;
+				}
+			return;
+		}
+		int there = what == HE_TAX ? s->taxes[side] > 0 : what == HE_FOREST ? s->forest[side] >= 0 : what == HE_BANNER ? s->banner[side] > 0
+			: what >= 0 && what < HE_COUNT && s->he[side][what] > 0;
+		if (!there) return;
+		int caster = what >= 0 && what < HE_COUNT ? charm_caster(what, side) : side;
+		if (sentinel(s, caster)) return;
+		eternal(x, s, caster, what >= 0 && what < HE_COUNT ? (x->charm[what].price >= 999 ? 0 : x->charm[what].code) : -1);
 		if (what == HE_TAX) {
 			if (s->taxes[side] > 0) {
 				s->taxes[side]--;
@@ -3131,9 +4242,37 @@ static void dispel(const Search *x, State *s, int holder, int what, int any) {
 	}
 	for (int r = 0; r < s->enchs; r++)
 		if (s->ench[r].unit == holder && s->ench[r].code == what && s->ench[r].kind != EN_WATER && (any || !s->ench[r].fixed)) {
-			unwear(s, r);
+			dispel_ench(x, s, r);
 			return;
 		}
+}
+
+/* Everything that may be dispelled comes off a hero, a copy at a time. */
+static void purge_hero(const Search *x, State *s, int holder) {
+	for (int k = 0; k < HE_COUNT; k++)
+		if (!x->charm[k].fixed)
+			for (int copies = s->he[holder][k]; copies > 0; copies--) dispel(x, s, -1 - holder, k, 0);
+	for (int copies = s->taxes[holder]; copies > 0; copies--) dispel(x, s, -1 - holder, HE_TAX, 0);
+	if (s->forest[holder] >= 0) dispel(x, s, -1 - holder, HE_FOREST, 0);
+	for (int copies = s->banner[holder]; copies > 0; copies--) dispel(x, s, -1 - holder, HE_BANNER, 0);
+}
+
+/* And off a creature (every creature, for -1), each once: one its caster's
+ * specialisation keeps is not tried again. `water`: the water links too. */
+static void purge_units(const Search *x, State *s, int unit, int aimed, int water) {
+	int r = 0;
+	for (int left = s->enchs; left > 0 && r < s->enchs; left--) {
+		const Ench *e = &s->ench[r];
+		int goes = unit < 0 || e->unit == unit;
+		if (goes) goes = e->kind == EN_WATER ? water : !e->fixed && ench_price(x, s, e->unit, e->code, aimed) >= 0;
+		if (!goes) {
+			r++;
+			continue;
+		}
+		int before = s->enchs;
+		dispel_ench(x, s, r);
+		if (s->enchs >= before) r++;
+	}
 }
 
 /* The holder an enchantment anywhere is named with, out of its number. */
@@ -3302,13 +4441,38 @@ static int cast_card(const Search *x, State *s, int side, int slot, int target, 
 	if (slot >= ART_BASE) {
 		/* One use the fewer, and it waits its rounds. */
 		int k = slot - ART_BASE;
-		s->art_left[side][k]--;
+		/* An artificer's mastery may spare the use. */
+		if (!spec_roll(s, side, SPEC_ARTF, 1)) s->art_left[side][k]--;
 		s->art_ready[side][k] = (int16_t)((x->serial + s->turns[0] + s->turns[1]) / 2 + 1 + x->art_gap[side][k]);
 		s->art_used[side]++;
-	} else if (slot >= SLOTS) s->back[side][slot - SLOTS] = 0;
-	else {
-		s->played[side] |= 1u << slot;
-		if (s->cast[side] < 100) s->cast[side]++;
+	} else {
+		/* The specialisations of the book, a roll each in this order: one
+		 * spares the use the card would spend; one leaves the card in the
+		 * hand (only while the uses its place has left cover the copies
+		 * held); one makes the cast free of the card's own price. */
+		int book = slot < SLOTS && c->page > 0, stays = 0;
+		int spared = book && spec_roll(s, side, SPEC_RSFN, 1);
+		if (x->spec[side] == SPEC_STHN) {
+			int covered = !book || c->uses < 0;
+			if (!covered) {
+				int copies = 0, left = c->uses - 1;
+				for (int i = 0; i < SLOTS && i < HAND + s->drawn[side]; i++) {
+					if (x->hand[side][i].page != c->page || x->hand[side][i].cost < 0) continue;
+					left -= s->casts[side][i];
+					if (!(s->played[side] >> i & 1) && (i >= HAND || i < s->held[side])) copies++;
+				}
+				covered = copies < left;
+			}
+			if (covered) stays = spec_roll(s, side, SPEC_STHN, 1);
+			if (book && s->casts[side][slot] < 250) s->casts[side][slot]++;
+		}
+		if (spec_roll(s, side, SPEC_MNCH, 1)) price -= card_cost(x, s, c);
+		if (slot >= SLOTS) {
+			if (!stays) s->back[side][slot - SLOTS] = 0;
+		} else {
+			if (!stays) s->played[side] |= 1u << slot;
+			if (!spared && s->cast[side] < 100) s->cast[side]++;
+		}
 	}
 	/* The spell traps that stand as it is cast are the ones it springs. */
 	int8_t set[2][3];
@@ -3336,7 +4500,17 @@ static int cast_card(const Search *x, State *s, int side, int slot, int target, 
 			for (int i = 0; i < s->n; i++)
 				if (i != who[0] && s->u[i].owner == victims && !(s->u[i].flags & F_DEAD)) also[others++] = i;
 		}
-		for (int i = 0; i < count; i++) spell_damage(s, who[i], amount);
+		for (int i = 0; i < count; i++) {
+			/* The storm's mastery: a creature of the caster's own that a
+			 * lightning storm would strike gains three and three for the
+			 * turn instead. */
+			if (c->code == x->storm && x->storm > 0 && amount > 0 && who[i] >= 0 && s->u[who[i]].owner == side && !(s->u[who[i]].flags & F_DEAD)
+				&& spec_roll(s, side, SPEC_RLSS, 1)) {
+				bless_as(x, s, who[i], 3, 3, 0, x->storm_mark, x->storm_price);
+				continue;
+			}
+			spell_damage(s, who[i], amount);
+		}
 		for (int i = 0; i < others; i++) {
 			if (also[i] >= 0 && (s->u[also[i]].flags & F_DEAD)) continue;
 			spell_damage(s, also[i], c->splash);
@@ -3355,9 +4529,7 @@ static int cast_card(const Search *x, State *s, int side, int slot, int target, 
 		break;
 	case EFF_BLESS: {
 		Unit *t = &s->u[target];
-		add_power(t, c->gives_power);
-		t->raw = (int16_t)(t->raw + c->gives_toughness);
-		settle_health(t);
+		shift_stats(s, t, c->gives_power, c->gives_toughness, 0);
 		int gain = (c->gives_power * ((t->flags & F_NO_ATTACK) ? x->guard_worth : x->power_worth) + c->gives_toughness * x->tough_worth) / 2;
 		t->ready_worth += gain;
 		t->resting_worth += gain;
@@ -3374,119 +4546,9 @@ static int cast_card(const Search *x, State *s, int side, int slot, int target, 
 		else if (target < 0) s->health[-target - 1] += amount;
 		else if (target < s->n) s->u[target].damage = (int16_t)imax(0, s->u[target].damage - amount);
 		break;
-	case EFF_ENCHANT: {
-		Unit *t = &s->u[target];
-		Unit was = *t;
-		if (c->special == SP_WATER) {
-			note_ench(s, target, &was, side, EN_WATER, c->code, c->printed, 0, 0, 0);
-			break;
-		}
-		int gives_power = c->gives_power, gives_toughness = c->gives_toughness;
-		switch (c->special) {
-		case SP_X_POWER:
-			gives_power += amount;
-			break;
-		case SP_X_HEALTH:
-			gives_toughness += amount;
-			break;
-		case SP_MARK:
-			for (int i = 0; i < s->n; i++)
-				if (s->u[i].owner != side && s->u[i].pale && !(s->u[i].flags & F_DEAD)) {
-					gives_power++;
-					gives_toughness++;
-				}
-			break;
-		case SP_ALPHA:
-			/* It is healed, and strikes with its printed power on top. */
-			t->damage = 0;
-			gives_power += t->kind > 0 ? x->pool[t->kind - 1].power : t->power;
-			break;
-		default:
-			break;
-		}
-		add_power(t, gives_power);
-		/* What an enchantment takes leaves a creature at least one point of
-		 * health, unless it is of the kind that kills (`amount` bit 0). */
-		if (c->amount & 1) t->lethal = (int16_t)(t->lethal - gives_toughness);
-		else t->raw = (int16_t)(t->raw + gives_toughness);
-		settle_health(t);
-		/* An alpha strike leaves it one point of health. */
-		if (c->special == SP_ALPHA) {
-			t->alpha++;
-			settle_health(t);
-		}
-		/* One that lets it regenerate, for the least it then may pay. */
-		int regrows = (c->amount >> 11) & 15, regen_was = -1;
-		if (regrows > 0 && (t->regeneration == 0 || t->regeneration > regrows)) {
-			regen_was = t->regeneration;
-			t->regeneration = (int8_t)regrows;
-		}
-		/* One nothing can be aimed past, and one that keeps it from what it
-		 * can do. */
-		if (c->amount & 128) t->shielded = 1;
-		if ((c->amount & 64) && t->ability) {
-			t->bare_ability = t->ability;
-			t->ability = 0;
-		}
-		if (c->amount & 2) t->twisted++;
-		if (c->amount & 4) t->overload++;
-		/* One that makes its creature a robber. */
-		if ((c->amount >> 8) & 7) {
-			int robs = (c->amount >> 8) & 7;
-			t->discards = (int8_t)imin(100, t->discards + robs);
-			t->worn_discards = (int8_t)imin(100, t->worn_discards + robs);
-		}
-		if (c->amount & 8) t->linked++;
-		/* One that stirs its creature at once. */
-		if (c->amount & 32) t->flags &= ~(uint32_t)F_RESTING;
-		t->flags |= c->lends;
-		/* What it lends is worth what the same points are worth on any
-		 * creature; without this an enchantment only ever costs its card. */
-		{
-			int gain = gives_power * ((t->flags & F_NO_ATTACK) ? x->guard_worth : x->power_worth)
-				+ gives_toughness * x->tough_worth;
-			/* What lasts a turn is worth half of what lasts. */
-			if (c->amount & 16) gain /= 2;
-			t->ready_worth += gain;
-			t->resting_worth += gain;
-		}
-		if (c->holds) {
-			/* It taps at once; the second game also calls back an attacker. */
-			t->flags |= F_RESTING | F_NO_UNTAP;
-			if (s->second) t->flags &= ~(uint32_t)F_ATTACKING;
-			if (c->wake > 0) {
-				t->wake = c->wake;
-				/* Paralysis and immobility are broken for a turn at the cost
-				 * of health as well; enfeeblement is thrown off for good. */
-				t->wake_hurts = (int8_t)(c->holds == 2);
-			}
-		}
-		wears(t, &was, 1, c->lends | (c->holds ? F_NO_UNTAP : 0));
-		if (!(c->holds && c->fixed)) {
-			static const int8_t KINDS[] = { EN_PLAIN, EN_PLAIN, EN_PLAIN, EN_PLAIN, EN_ALPHA, EN_REDIRECT, EN_BONDS, EN_LOCK, EN_CRIPPLE, EN_STORM, EN_BREEZE, EN_RIOT };
-			int kind = c->holds ? EN_HOLD : ((c->amount & 2) ? EN_TWIST : ((c->amount & 4) ? EN_OVERLOAD : ((c->amount & 8) ? EN_LINK : EN_PLAIN)));
-			if (c->special > 0 && c->special <= SP_RIOT) kind = KINDS[c->special];
-			int tick = (c->amount >> 15) & 3;
-			if (tick && kind == EN_PLAIN) kind = EN_HURTS;
-			Ench *e = note_ench(s, target, &was, side, kind, c->code, c->fixed ? -1 - c->printed : c->printed, (c->amount & 16) != 0, c->comes_back, (c->amount >> 8) & 7);
-			if (e) {
-				e->tick = (int8_t)tick;
-				e->mutes = (int8_t)((c->amount & 64) != 0);
-				e->shields = (int8_t)((c->amount & 128) && !was.shielded);
-				if (regen_was >= 0) e->regen = (int8_t)(regen_was + 1);
-			}
-		}
-		if (c->amount & 16) {
-			if (t->brief < 100) t->brief++;
-			t->brief_power = (int16_t)(t->brief_power + (t->power - t->under) - (was.power - was.under));
-			t->brief_health = (int16_t)(t->brief_health + t->toughness - was.toughness);
-			t->brief_flags |= c->lends & ~was.flags;
-			t->brief_ready += t->ready_worth - was.ready_worth;
-			t->brief_resting += t->resting_worth - was.resting_worth;
-		}
-		if (t->damage >= t->toughness) perish_unit(s, target);
+	case EFF_ENCHANT:
+		enchant_unit(x, s, side, c, target, amount);
 		break;
-	}
 	case EFF_MANA:
 		gain_ether(s, side, amount);
 		break;
@@ -3520,19 +4582,15 @@ static int cast_card(const Search *x, State *s, int side, int slot, int target, 
 	}
 	case EFF_FULL_HEAL:
 		/* The first game also lowers a surplus to the starting health. */
-		if (!s->second || s->health[side] < x->maximum[side]) s->health[side] = x->maximum[side];
+		if (!s->second || s->health[side] < hero_max(x, s, side)) s->health[side] = hero_max(x, s, side);
 		break;
 	case EFF_HALF_HEAL:
-		if (s->health[side] < x->maximum[side] / 2) s->health[side] = x->maximum[side] / 2;
+		if (s->health[side] < hero_max(x, s, side) / 2) s->health[side] = hero_max(x, s, side) / 2;
 		break;
 	case EFF_DRAW:
 		/* Cards drawn out of turn are not the ones the engine was told of,
 		 * and they change every draw that follows. */
-		if (x->blinds) {
-			int who = target == -1 || target == -2 ? -target - 1 : side;
-			s->more[who] += imin(amount, book_room(x, s, who));
-			s->blind = 1;
-		} else draw_cards(s, target == -1 || target == -2 ? -target - 1 : side, amount);
+		deal(x, s, target == -1 || target == -2 ? -target - 1 : side, amount);
 		break;
 	case EFF_REST_ENEMIES:
 		/* `amount` bit 0: walls are spared rather than the restless; bit 1:
@@ -3557,6 +4615,8 @@ static int cast_card(const Search *x, State *s, int side, int slot, int target, 
 	case EFF_BURN_MANA: {
 		int hero = -target - 1, burnt = s->ether[hero];
 		s->ether[hero] = 0;
+		/* A resistance to the burn may spare each ether. */
+		burnt -= spec_roll(s, hero, SPEC_RMBD, burnt);
 		hurt_hero(s, hero, burnt, -1);
 		break;
 	}
@@ -3580,7 +4640,14 @@ static int cast_card(const Search *x, State *s, int side, int slot, int target, 
 		if (amount > 0) s->health[1 - side] += amount;
 		break;
 	case EFF_HUNGER:
-		if (s->u[target].power > 0) spell_damage(s, target, s->u[target].power);
+		if (s->u[target].power > 0) {
+			/* The hunger's mastery: nothing regenerates from it. */
+			Unit *t = &s->u[target];
+			int dry = spec_roll(s, side, SPEC_UHGW, 1) && !(t->flags & F_NO_REGEN);
+			if (dry) t->flags |= F_NO_REGEN;
+			spell_damage(s, target, t->power);
+			if (dry) t->flags &= ~(uint32_t)F_NO_REGEN;
+		}
 		break;
 	case EFF_HUNGER_ALL:
 	case EFF_HUNGER_BOTH: {
@@ -3595,7 +4662,8 @@ static int cast_card(const Search *x, State *s, int side, int slot, int target, 
 	}
 	case EFF_SACRIFICE_HEAL: {
 		int gain = s->u[target].toughness;
-		kill_unit(s, target);
+		/* The cannibal's mastery spares what was given up. */
+		if (!spec_roll(s, side, SPEC_RPLO, 1)) kill_unit(s, target);
 		s->health[side] += gain;
 		break;
 	}
@@ -3604,7 +4672,7 @@ static int cast_card(const Search *x, State *s, int side, int slot, int target, 
 		kill_unit(s, target);
 		s->health[side] += gain;
 		hurt_hero(s, 1 - side, strength, -1);
-		if (s->second) draw_cards(s, side, 1);
+		if (s->second) deal(x, s, side, 1);
 		break;
 	}
 	case EFF_POLYMORPH: {
@@ -3637,10 +4705,14 @@ static int cast_card(const Search *x, State *s, int side, int slot, int target, 
 	}
 	case EFF_BOUNCE_ALL: {
 		int n = s->n;
-		for (int i = 0; i < n; i++) {
-			if (s->u[i].flags & (F_DEAD | F_GONE | F_NO_AFFECT | F_PLANE)) continue;
-			remove_unit(s, i, 1);
-		}
+		for (int owner = 0; owner < 2; owner++)
+			for (int i = 0; i < n; i++) {
+				if (s->u[i].owner != owner || (s->u[i].flags & F_DEAD)) continue;
+				/* The unsummoning's mastery may keep each creature in play. */
+				if (spec_roll(s, owner, SPEC_UGUS, 1)) continue;
+				if (s->u[i].flags & (F_GONE | F_NO_AFFECT | F_PLANE)) continue;
+				remove_unit(s, i, 1);
+			}
 		break;
 	}
 	case EFF_DISCARD:
@@ -3648,12 +4720,19 @@ static int cast_card(const Search *x, State *s, int side, int slot, int target, 
 		break;
 	case EFF_MIND_BLAST:
 		/* Every card a hero holds over five hurts it. */
-		for (int victim = 0; victim < 2; victim++)
-			hurt_hero(s, victim, (s->second ? 3 : 2) * (cards_held(s, victim) - 5), -1);
+		for (int victim = 0; victim < 2; victim++) {
+			int hurt = (s->second ? 3 : 2) * (cards_held(s, victim) - 5);
+			/* A mind shield may spare each point. */
+			if (hurt > 0) hurt -= spec_roll(s, victim, SPEC_UMBD, hurt);
+			hurt_hero(s, victim, hurt, -1);
+		}
 		break;
-	case EFF_DISCARD_ALL:
-		empty_hand(x, s, -target - 1, side);
+	case EFF_DISCARD_ALL: {
+		/* The mind wipe's mastery: three for each card given up whose roll succeeds. */
+		int wiped = empty_hand(x, s, -target - 1, side);
+		hurt_hero(s, -target - 1, 3 * spec_roll(s, side, SPEC_BMWM, wiped), -1);
 		break;
+	}
 	case EFF_REPAIR: {
 		/* The card comes back to the hand, and the other hero takes its
 		 * printed power in the second game and one point in the first. */
@@ -3692,17 +4771,18 @@ static int cast_card(const Search *x, State *s, int side, int slot, int target, 
 				if (s->u[k].blocks == target) s->u[k].blocks = -1;
 		t->flags &= ~(uint32_t)F_ATTACKING;
 		t->blocks = -1;
-		t->owner = (int8_t)(1 - side);
 		t->home = 0;
 		if (t->kind <= 0 || (x->pool[t->kind - 1].flags & F_SICK)) t->flags |= F_SICK;
 		wears(t, &was, 1, 0);
 		note_ench(s, target, &was, side, EN_GIFT, c->code, -1 - c->printed, 0, 0, 0);
-		if (s->gifted[1 - side] < 50) s->gifted[1 - side]++;
+		change_sides(x, s, target, 1 - side);
+		if (!(t->flags & (F_DEAD | F_GONE)) && t->damage >= t->toughness) perish_unit(s, target);
 		break;
 	}
 	case EFF_AMNESIA:
-		empty_hand(x, s, 0, side);
-		empty_hand(x, s, 1, side);
+		/* Every card goes, each taken by the duel's chance: the same chance
+		 * deals the cards to come, so none the engine was told of holds. */
+		if (empty_hand(x, s, 0, side) + empty_hand(x, s, 1, side) > 0 && x->blinds) s->blind = 1;
 		if (s->second) deal(x, s, side, 1);
 		break;
 	case EFF_BAN:
@@ -3744,6 +4824,22 @@ static int cast_card(const Search *x, State *s, int side, int slot, int target, 
 	}
 	case EFF_DISPEL:
 		dispel(x, s, target, choice, 0);
+		/* The purification's mastery takes everything else that may be
+		 * dispelled off the same holder. */
+		if (c->code == x->purify && x->purify > 0 && spec_roll(s, side, SPEC_BPRC, 1)) {
+			if (target < 0) {
+				purge_hero(x, s, -target - 1);
+				for (int left = s->enchs, r = 0; left > 0 && r < s->enchs; left--) {
+					if (s->ench[r].kind != EN_WATER || s->ench[r].caster != -target - 1) {
+						r++;
+						continue;
+					}
+					int before = s->enchs;
+					dispel_ench(x, s, r);
+					if (s->enchs >= before) r++;
+				}
+			} else if (!(s->u[target].flags & F_DEAD)) purge_units(x, s, target, 1, 0);
+		}
 		break;
 	case EFF_TRADE:
 		/* The creature given dies first. */
@@ -3751,20 +4847,8 @@ static int cast_card(const Search *x, State *s, int side, int slot, int target, 
 		if (ench_price(x, s, ench_holder(choice), choice % 4096, 1) >= 0) dispel(x, s, ench_holder(choice), choice % 4096, 0);
 		break;
 	case EFF_CLEANSE:
-		for (int holder = 0; holder < 2; holder++) {
-			for (int k = 0; k < HE_COUNT; k++)
-				if (!x->charm[k].fixed) drop_charm(x, s, holder, k, s->he[holder][k]);
-			while (s->taxes[holder] > 0) dispel(x, s, -1 - holder, HE_TAX, 0);
-			if (s->forest[holder] >= 0) dispel(x, s, -1 - holder, HE_FOREST, 0);
-			while (s->banner[holder] > 0) dispel(x, s, -1 - holder, HE_BANNER, 0);
-		}
-		for (;;) {
-			int found = -1;
-			for (int r = 0; r < s->enchs && found < 0; r++)
-				if (s->ench[r].kind == EN_WATER || (!s->ench[r].fixed && ench_price(x, s, s->ench[r].unit, s->ench[r].code, 0) >= 0)) found = r;
-			if (found < 0) break;
-			unwear(s, found);
-		}
+		for (int holder = 0; holder < 2; holder++) purge_hero(x, s, holder);
+		purge_units(x, s, -1, 0, 1);
 		break;
 	case EFF_BANISH:
 		/* A pale creature sent into the plane is a card for the caster. */
@@ -3873,32 +4957,55 @@ static int cast_card(const Search *x, State *s, int side, int slot, int target, 
 		for (int victim = 0; victim < 2; victim++) {
 			if (c->scope != SCOPE_BOTH && victim != side) continue;
 			int count = empty_hand(x, s, victim, side);
+			/* The cards go and come by the duel's chance, which deals the
+			 * cards to come as well: none the engine was told of holds after. */
+			if (count > 0 && x->blinds && !x->no_draws && !(x->fair && x->proof)) s->blind = 1;
 			/* No more than the hero's book still holds of the kind. */
 			if (c->amount & 1) count = imin(count, x->deals[victim][1]);
 			else if (c->amount & 2) count = imin(count, x->deals[victim][0]);
 			else count = imin(count, x->deals[victim][0] + x->deals[victim][1]);
-			if (x->blinds || !(c->amount & 4)) {
+			if (x->no_draws) count = 0;
+			if (x->blinds || x->fair || !(c->amount & 4)) {
 				s->more[victim] += count;
-				if (x->blinds) s->blind = 1;
+				if ((x->blinds || x->fair) && count > 0 && !(x->fair && x->proof)) s->blind = 1;
+				else if (count > 0) s->limit = 1;
 			} else draw_cards(s, victim, count);
 		}
 		break;
 	case EFF_DISCARD_CREATURES: {
-		/* The newest creature cards go first. */
-		int hero = -target - 1, left = amount;
-		for (int j = BACK - 1; j >= 0 && left > 0; j--)
-			if (s->back[hero][j]) {
+		/* The creature cards go from the near end of the row: the cards
+		 * drawn since the position stood, the latest first; then the cards
+		 * it held, in the order of the row; then those that came back. */
+		int hero = -target - 1, left = amount, order[SLOTS], n = 0;
+		uint32_t placed = 0;
+		for (int i = imin(SLOTS, HAND + s->drawn[hero]) - 1; i >= HAND; i--) order[n++] = i;
+		for (int k = 0; k < 12; k++) {
+			int place = (int)(x->trim[hero] >> (5 * k)) & 31;
+			if (place < HAND) placed |= 1u << place;
+		}
+		/* (A row longer than the engine was told the order of begins with
+		 * the cards it was not.) */
+		for (int i = 0; i < HAND; i++)
+			if (!(placed >> i & 1)) order[n++] = i;
+		for (int k = 11; k >= 0; k--) {
+			int place = (int)(x->trim[hero] >> (5 * k)) & 31;
+			if (place < HAND) order[n++] = place;
+		}
+		for (int at = 0; at < n && left > 0; at++) {
+			int i = order[at];
+			if ((s->played[hero] >> i & 1) || x->hand[hero][i].effect != EFF_SUMMON || x->hand[hero][i].cost < 0) continue;
+			s->played[hero] |= 1u << i;
+			left--;
+			if (veiled(x, hero, i)) s->blind = 1;
+			else discard_answer(x, s, hero, &x->hand[hero][i], side);
+		}
+		for (int j = 0; j < BACK && left > 0; j++)
+			if (s->back[hero][j] > 0 && s->back[hero][j] <= POOL && x->pool[s->back[hero][j] - 1].effect == EFF_SUMMON) {
 				int kind = s->back[hero][j];
 				s->back[hero][j] = 0;
 				left--;
 				discard_answer(x, s, hero, &x->pool[kind - 1], side);
 			}
-		for (int i = imin(SLOTS, HAND + s->drawn[hero]) - 1; i >= 0 && left > 0; i--) {
-			if ((s->played[hero] >> i & 1) || x->hand[hero][i].effect != EFF_SUMMON || x->hand[hero][i].cost < 0) continue;
-			s->played[hero] |= 1u << i;
-			left--;
-			discard_answer(x, s, hero, &x->hand[hero][i], side);
-		}
 		break;
 	}
 	case EFF_CHARM: {
@@ -3938,7 +5045,7 @@ static int cast_card(const Search *x, State *s, int side, int slot, int target, 
 		if (!t->home) t->home = (int8_t)(t->owner + 1);
 		wears(t, &was, 1, 0);
 		note_ench(s, target, &was, side, EN_CONTROL, c->code, c->fixed ? -1 - c->printed : c->printed, 0, c->comes_back, 0);
-		t->owner = (int8_t)side;
+		change_sides(x, s, target, side);
 		/* The second game's creatures that need no rest act at once, and
 		 * go home as ready. */
 		if (s->second && t->kind > 0 && !(x->pool[t->kind - 1].flags & F_SICK)) {
@@ -3947,6 +5054,8 @@ static int cast_card(const Search *x, State *s, int side, int slot, int target, 
 		} else t->flags |= F_SICK;
 		t->flags &= ~(uint32_t)F_ATTACKING;
 		t->blocks = -1;
+		/* An aura of its old army's it no longer has can leave it dead. */
+		if (!(t->flags & (F_DEAD | F_GONE)) && t->damage >= t->toughness) perish_unit(s, target);
 		break;
 	}
 	case EFF_DELUSION: {
@@ -3995,6 +5104,8 @@ static int cast_card(const Search *x, State *s, int side, int slot, int target, 
 		for (int i = 0; i < n; i++) {
 			Unit *u = &s->u[i];
 			if (u->flags & (F_DEAD | F_GONE)) continue;
+			/* Nature's friend: each creature's hero may spare it. */
+			if (spec_roll(s, u->owner, SPEC_GFNS, 1)) continue;
 			tried++;
 			/* Counted as struck, but nothing reaches these. */
 			if (u->flags & (F_NO_AFFECT | F_PLANE)) continue;
@@ -4009,7 +5120,7 @@ static int cast_card(const Search *x, State *s, int side, int slot, int target, 
 		/* The second game deals the other hero a card for each death; the
 		 * first hurts the hero whose turn it is by one for each creature
 		 * struck, whether or not it lived. */
-		if (s->second) draw_cards(s, 1 - side, deaths);
+		if (s->second) deal(x, s, 1 - side, deaths);
 		else hurt_hero(s, s->attacker, tried, -1);
 		break;
 	}
@@ -4048,13 +5159,16 @@ static int cast_card(const Search *x, State *s, int side, int slot, int target, 
 	/* What it costs in ether channels: a wave nothing was poured into costs none. */
 	if (c->channels && !(c->effect == EFF_WAVE && amount <= 0)) change_channels(s, side, -c->channels);
 	for (int i = 0; i < pulls; i++) {
-		if (x->blinds) {
-			if (book_room(x, s, side) > 0) s->more[side]++;
-			s->blind = 1;
-		} else draw_cards(s, side, 1);
-		/* Nothing protects from the second game's. */
-		if (s->second) s->health[side] = imax(0, s->health[side] - 2);
-		else hurt_hero(s, side, 3, -1);
+		deal(x, s, side, 1);
+		/* Nothing protects from the second game's, but a revival answers it. */
+		if (s->second) {
+			s->health[side] = imax(0, s->health[side] - 2);
+			if (s->health[side] <= 0 && x->spec[side] == SPEC_RVVE && hero_max(x, s, side) > 1 && !s->revived[side] && !x->revived[side]
+				&& spec_roll(s, side, SPEC_RVVE, 1)) {
+				s->health[side] = hero_max(x, s, side) / 2;
+				s->revived[side]++;
+			}
+		} else hurt_hero(s, side, 3, -1);
 	}
 	/* The second game's spell traps: after a sorcery each lets its jammer
 	 * out for its own hero and is gone. The third answers only the other
@@ -4070,8 +5184,9 @@ static int cast_card(const Search *x, State *s, int side, int slot, int target, 
 				if (s->n > before && j > 0) {
 					Unit *u = &s->u[before];
 					int strength = c->printed + (j == 2 ? power : 0);
-					add_power(u, strength - x->pool[kind - 1].power);
-					u->raw = (int16_t)(u->raw + strength - x->pool[kind - 1].toughness);
+					/* (Its strength is the trap's, whatever the scripts made of it.) */
+					add_power(u, strength - x->pool[kind - 1].power - x->shape[owner][kind - 1][0]);
+					u->raw = (int16_t)(u->raw + strength - x->pool[kind - 1].toughness - x->shape[owner][kind - 1][1]);
 					settle_health(u);
 					if (strength <= 0 && !(u->flags & F_DEAD)) kill_unit(s, before);
 				}
@@ -4079,6 +5194,15 @@ static int cast_card(const Search *x, State *s, int side, int slot, int target, 
 			}
 	banners(s);
 	settle_illusions(s);
+	if (slot < ART_BASE) {
+		/* A card cast out of the hand: the velos' and the halos' masteries
+		 * bring a second creature of the card, and the elixir's a card. */
+		if (c->effect == EFF_SUMMON && (c->mastery == SPEC_BVLD || c->mastery == SPEC_GHLD) && spec_roll(s, side, c->mastery, 1)) {
+			summon(x, s, side, c);
+			banners(s);
+		}
+		if (spec_roll(s, side, SPEC_CEXC, 1)) deal(x, s, side, 1);
+	}
 	return 1;
 }
 
@@ -4099,11 +5223,12 @@ static int may_aim(const State *s, int side, const Card *c, int i) {
 	if (c->effect == EFF_PALE_BLAST && !u->pale && !u->worn) return 0;
 	if (c->effect == EFF_BANISH && (!u->pale || !may_shift(s, u) || worn_kind(s, i, EN_LOCK))) return 0;
 	if (u->shielded || (u->flags & F_NO_AFFECT)) return 0;
-	if (c->own && u->owner != side) return 0;
+	if (c->own && u->owner != side && !(c->habit && lists_all((const Search *)s->rules))) return 0;
 	if (((c->only & 1) && !(u->flags & F_WALL)) || ((c->only & 2) && !(u->flags & F_FLY)) || ((c->only & 4) && !(u->flags & F_ATTACKING))) return 0;
 	/* What pays its caster while the creature lives is laid on a creature
 	 * of the caster's own, whose fate it has in hand, where it has one. */
-	if (c->effect == EFF_ENCHANT && (c->special == SP_STORM || c->special == SP_BREEZE) && u->owner != side && army_size(s, side) > 0) return 0;
+	if (c->effect == EFF_ENCHANT && (c->special == SP_STORM || c->special == SP_BREEZE) && u->owner != side && army_size(s, side) > 0
+		&& !lists_all((const Search *)s->rules)) return 0;
 	if (c->effect == EFF_UNSUMMON && u->cost > c->amount) return 0;
 	if (c->effect == EFF_CONTROL && (u->owner == side || (u->flags & F_ATTACKING) || u->blocks >= 0)) return 0;
 	if (c->effect == EFF_EXILE && (c->amount & 1) && card_cost((const Search *)s->rules, s, c) + printed_cost((const Search *)s->rules, u) > s->ether[side]) return 0;
@@ -4114,7 +5239,8 @@ static int may_aim(const State *s, int side, const Card *c, int i) {
 
 /* Whether the spell, cast now at `target` (NO_TARGET for one aimed at
  * nothing), would find nothing to work on. The rules allow such a cast, but
- * it only spends the card, so it is never offered. */
+ * it only spends the card, so the usual reading never offers it. A proof
+ * does: a hand one card smaller can still matter to what follows. */
 static int idle_cast(const Search *x, const State *s, int side, const Card *c, int target) {
 	int living = 0, mine_resting = 0, theirs_ready = 0;
 	for (int i = 0; i < s->n; i++) {
@@ -4129,8 +5255,8 @@ static int idle_cast(const Search *x, const State *s, int side, const Card *c, i
 	case EFF_BURN_MANA: return target == NO_TARGET || s->ether[-target - 1] <= 0;
 	case EFF_RALLY_ALL: return mine_resting == 0;
 	case EFF_REST_ENEMIES: return theirs_ready == 0;
-	case EFF_FULL_HEAL: return s->health[side] >= x->maximum[side];
-	case EFF_HALF_HEAL: return s->health[side] >= x->maximum[side] / 2;
+	case EFF_FULL_HEAL: return s->health[side] >= hero_max(x, s, side);
+	case EFF_HALF_HEAL: return s->health[side] >= hero_max(x, s, side) / 2;
 	case EFF_GRAVE_FIRE: return s->grave[0] + s->grave[1] <= 0;
 	case EFF_FOREST: return c->amount <= s->forest[side];
 	case EFF_CHARM:
@@ -4316,7 +5442,7 @@ static int ability_fits(const State *s, int i, int target, int extra, int *price
 		if (extra < 1) return 0;
 		*price = extra;
 		break;
-	case AB_PHANTASM:
+	/* A phantasm may be bought again and again while the ether lasts. */
 	case AB_ROUSE:
 	case AB_ILLUSION:
 		if (u->spent) return 0;
@@ -4440,8 +5566,12 @@ static int use_ability(State *s, int i, int target, int extra) {
 	case AB_SPORES:
 	case AB_SPORES_POWER:
 		/* Its spores hurt what it names, and it dies of them. */
-		if (target != i) spell_damage(s, target, u->ability == AB_SPORES_POWER ? imax(0, u->power) : 1);
-		kill_unit(s, i);
+		{
+			/* The fingus' mastery: three successes out of three, and it lives. */
+			int saved = spec_roll(s, side, SPEC_GFNR, 3) == 3;
+			if (target != i) spell_damage(s, target, u->ability == AB_SPORES_POWER ? imax(0, u->power) : 1);
+			if (!saved) kill_unit(s, i);
+		}
 		break;
 	case AB_STING:
 	case AB_SHOOT:
@@ -4511,7 +5641,7 @@ static int use_ability(State *s, int i, int target, int extra) {
 		gain_ether(s, side, 1);
 		break;
 	case AB_DRAW:
-		draw_cards(s, side, 1);
+		deal(x, s, side, 1);
 		break;
 	case AB_SACRIFICE:
 		kill_unit(s, target);
@@ -4558,10 +5688,9 @@ static int use_ability(State *s, int i, int target, int extra) {
 	case AB_POWER_X:
 	case AB_PHANTASM: {
 		int gain = u->ability == AB_PHANTASM ? 2 : extra;
-		add_power(u, gain);
+		shift_stats(s, u, gain, 0, 0);
 		if (u->passing < 100) u->passing++;
 		u->passing_power = (int16_t)(u->passing_power + gain);
-		if (u->ability == AB_PHANTASM) u->spent = 1;
 		break;
 	}
 	case AB_HEALTH_X:
@@ -4656,17 +5785,20 @@ static int best_buried(const Search *x, const State *s, int whose);
 /* What an enchantment that outlasts only the turn gives a creature: power,
  * health and flags, until a turn that is not its own hero's has ended. */
 static void bless_unit(const Search *x, State *s, int target, int power, int health, uint32_t flags) {
+	bless_as(x, s, target, power, health, flags, x->charm[HE_CMBN].code, x->charm[HE_CMBN].fixed ? -1 - x->charm[HE_CMBN].price : x->charm[HE_CMBN].price);
+}
+
+/* The same under the name `code`, which costs `price` to remove. */
+static void bless_as(const Search *x, State *s, int target, int power, int health, uint32_t flags, int code, int price) {
 	Unit *t = &s->u[target];
 	Unit was = *t;
-	add_power(t, power);
-	t->raw = (int16_t)(t->raw + health);
-	settle_health(t);
+	shift_stats(s, t, power, health, 0);
 	t->flags |= flags;
 	int gain = (power * ((t->flags & F_NO_ATTACK) ? x->guard_worth : x->power_worth) + health * x->tough_worth) / 2;
 	t->ready_worth += gain;
 	t->resting_worth += gain;
 	wears(t, &was, 1, flags);
-	note_ench(s, target, &was, t->owner, EN_PLAIN, x->charm[HE_CMBN].code, x->charm[HE_CMBN].fixed ? -1 - x->charm[HE_CMBN].price : x->charm[HE_CMBN].price, 1, 0, 0);
+	note_ench(s, target, &was, t->owner, EN_PLAIN, code, price, 1, 0, 0);
 	if (t->brief < 100) t->brief++;
 	t->brief_power = (int16_t)(t->brief_power + (t->power - t->under) - (was.power - was.under));
 	t->brief_health = (int16_t)(t->brief_health + t->toughness - was.toughness);
@@ -4759,12 +5891,14 @@ static int use_hero_ability(const Search *x, State *s, int k, int target, int ex
 	case HE_BROT: {
 		/* Its power burns whatever was named. */
 		int power = imax(0, s->u[target].power);
-		kill_unit(s, target);
+		/* The burnout's mastery spares what was given up. */
+		if (!spec_roll(s, side, SPEC_RBNO, 1)) kill_unit(s, target);
 		spell_damage(s, extra, power);
 		break;
 	}
 	case HE_SPLK:
-		kill_unit(s, target);
+		/* And so does the spirit lock's. */
+		if (!spec_roll(s, side, SPEC_GSLO, 1)) kill_unit(s, target);
 		change_channels(s, side, amount);
 		break;
 	case HE_SACR: {
@@ -4823,6 +5957,9 @@ static int use_hero_ability(const Search *x, State *s, int k, int target, int ex
 	default:
 		break;
 	}
+	/* The masteries of the energy and of the repair leave what they are of
+	 * unused for the turn. */
+	if (((k == HE_ENRG && spec_roll(s, side, SPEC_BENG, 1)) || (k == HE_RPST && spec_roll(s, side, SPEC_BRST, 1))) && s->used[side][k] > 0) s->used[side][k]--;
 	drop_blocks(s);
 	return 1;
 }
@@ -5017,13 +6154,15 @@ static int use_pale(const Search *x, State *s, int i, int target, int packed) {
 		gain_ether(s, side, worth);
 		break;
 	}
+	/* The enchantment's card comes into the hand: by name where the model
+	 * was told the card, and otherwise as one it cannot play. */
 	case PA_WEAVE:
-		s->more[side]++;
+	case PA_TRANSPOSE: {
+		int code = target >= 0 ? extra : (extra < HE_COUNT ? x->charm[extra].code : 0);
+		if (key == PA_TRANSPOSE) dispel(x, s, target, extra, 0);
+		take_back(s, side, kind_of_code(x, code));
 		break;
-	case PA_TRANSPOSE:
-		dispel(x, s, target, extra, 0);
-		s->more[side]++;
-		break;
+	}
 	case PA_DEVOUR: {
 		Unit *t = &s->u[target];
 		int left = t->toughness - t->damage, strength = t->power, measure = (u->pale_bits >> 13) & 3;
@@ -5064,6 +6203,36 @@ static int pale_moves(const Search *x, const State *s, Move *out, int count, int
 	for (int i = 0; i < s->n && count < MAX_MOVES - 4; i++) {
 		const Unit *u = &s->u[i];
 		if (u->owner != side || !u->pale || (u->flags & F_DEAD)) continue;
+		if (lists_all(x)) {
+			/* A proof is told every use the rules allow. */
+			int keys[4], wide = 0;
+			if (u->flags & (F_PLANE | F_GONE)) keys[wide++] = u->pale_bits & 15;
+			if ((u->pale_bits >> 4) & 1) keys[wide++] = PA_COURTESY;
+			keys[wide++] = (u->pale_bits >> 5) & 15;
+			keys[wide++] = PA_DISSIPATE;
+			for (int w = 0; w < wide; w++) {
+				int key = keys[w];
+				if (key == PA_NONE) continue;
+				int aimed = key == PA_SINISTER || key == PA_CRUEL || key == PA_MYSTIC || key == PA_ABSORB || key == PA_WEAVE
+					|| key == PA_TRANSPOSE || key == PA_PLEA || key == PA_DEVOUR;
+				for (int t = aimed ? -2 : -3; t < (aimed ? s->n : -2) && count < MAX_MOVES - 4; t++) {
+					int target = t == -3 ? NO_TARGET : t;
+					if (key == PA_SINISTER) {
+						for (int p = 0; p < GRAVES; p++) count = add_pale(x, s, out, count, i, key, target, p);
+					} else if (key == PA_MYSTIC || key == PA_ABSORB || key == PA_TRANSPOSE || key == PA_WEAVE) {
+						if (target == -1 || target == -2)
+							for (int k = 0; k < HE_COUNT + 4; k++) count = add_pale(x, s, out, count, i, key, target, k);
+						else if (target >= 0)
+							for (int r = 0; r < s->enchs; r++) {
+								int seen = 0;
+								for (int q = 0; q < r && !seen; q++) seen = s->ench[q].unit == s->ench[r].unit && s->ench[q].code == s->ench[r].code;
+								if (!seen && s->ench[r].unit == target) count = add_pale(x, s, out, count, i, key, target, s->ench[r].code);
+							}
+					} else count = add_pale(x, s, out, count, i, key, target, 0);
+				}
+			}
+			continue;
+		}
 		int away = (u->flags & (F_PLANE | F_GONE)) != 0;
 		switch (away ? u->pale_bits & 15 : PA_NONE) {
 		case PA_SINISTER: {
@@ -5187,6 +6356,36 @@ static int hero_ability_moves(const Search *x, const State *s, Move *out, int co
 	int side = s->phase == 0 ? s->attacker : 1 - s->attacker;
 	for (int k = 0; k < HERO_ABILITIES; k++) {
 		if (s->he[side][k] - s->used[side][k] <= 0 || s->ether[side] < x->charm[k].cost) continue;
+		if (lists_all(x)) {
+			/* A proof is told every use the rules allow: each creature, each
+			 * second creature or hero, each card of the graveyard. The rules
+			 * themselves turn down whatever does not fit. */
+			int seconds = 0;
+			switch (k) {
+			case HE_CMBN: case HE_OEXC: seconds = 1; break;
+			case HE_BROT: seconds = 2; break;
+			default: break;
+			}
+			if (k == HE_RBRT || k == HE_SCBR) {
+				for (int p = 0; p < s->known[side]; p++)
+					if (hero_ability_fits(x, s, k, -1 - side, p)) count = add_hero_ability(out, count, k, -1 - side, p);
+			} else if (k == HE_RPST) {
+				for (int p = 0; p < s->known[side]; p++)
+					if (s->graves[side][p] > 0 && s->graves[side][p] <= POOL && hero_ability_fits(x, s, k, NO_TARGET, p)) count = add_hero_ability(out, count, k, NO_TARGET, p);
+			} else if (k == HE_FRBL || k == HE_ENRG || k == HE_SPLK || k == HE_SACR || seconds) {
+				for (int j = -2; j < s->n; j++) {
+					if (j < 0 && k != HE_FRBL) continue;
+					if (j >= 0 && k == HE_FRBL && (s->u[j].shielded || (s->u[j].flags & F_NO_AFFECT))) continue;
+					if (seconds == 0) {
+						if (hero_ability_fits(x, s, k, j, 0)) count = add_hero_ability(out, count, k, j, 0);
+						continue;
+					}
+					for (int e = seconds == 2 ? -2 : 0; e < s->n; e++)
+						if (hero_ability_fits(x, s, k, j, e)) count = add_hero_ability(out, count, k, j, e);
+				}
+			} else if (hero_ability_fits(x, s, k, NO_TARGET, 0)) count = add_hero_ability(out, count, k, NO_TARGET, 0);
+			continue;
+		}
 		switch (k) {
 		case HE_FRBL:
 			count = add_hero_ability(out, count, k, -1 - (1 - side), 0);
@@ -5237,14 +6436,14 @@ static int hero_ability_moves(const Search *x, const State *s, Move *out, int co
 			int place = best_buried(x, s, side);
 			if (place >= 0 && hero_ability_fits(x, s, k, -1 - side, place)) count = add_hero_ability(out, count, k, -1 - side, place);
 			/* A search for a certain win is told of every other kind buried. */
-			for (int p = 0; x->proof && p < s->known[side]; p++)
+			for (int p = 0; lists_all(x) && p < s->known[side]; p++)
 				if (p != place && fresh_kind(s, side, p) && hero_ability_fits(x, s, k, -1 - side, p)) count = add_hero_ability(out, count, k, -1 - side, p);
 			break;
 		}
 		case HE_RPST:
 			if (!hero_ability_fits(x, s, k, NO_TARGET, -1)) break;
 			count = add_hero_ability(out, count, k, NO_TARGET, -1);
-			for (int p = 0; x->proof && p < s->known[side]; p++)
+			for (int p = 0; lists_all(x) && p < s->known[side]; p++)
 				if (fresh_kind(s, side, p) && s->graves[side][p] <= POOL) count = add_hero_ability(out, count, k, NO_TARGET, p);
 			break;
 		case HE_OEXC: {
@@ -5285,9 +6484,66 @@ static int hero_ability_moves(const Search *x, const State *s, Move *out, int co
  * the rules allow far more than is ever of use. */
 static int ability_moves(const State *s, Move *out, int count, int light) {
 	int side = s->phase == 0 ? s->attacker : 1 - s->attacker, price = 0;
+	const Search *rules = (const Search *)s->rules;
 	for (int i = 0; i < s->n && count < MAX_MOVES - 2; i++) {
 		const Unit *u = &s->u[i];
 		if (u->owner != side || !u->ability) continue;
+		if (lists_all(rules)) {
+			/* A proof is told every use the rules allow, whatever looks worth
+			 * little: each target, each card of each graveyard, each X, each
+			 * enchantment. The rules turn down what does not fit. */
+			switch (u->ability) {
+			case AB_DISPEL:
+			case AB_DISENCHANT:
+			case AB_ORC_RITE:
+				for (int h = 0; h < 2; h++)
+					for (int k = 0; k < HE_COUNT + 4; k++)
+						if (ability_fits(s, i, -1 - h, k, &price)) count = add_ability(out, count, i, -1 - h, k);
+				for (int r = 0; r < s->enchs; r++) {
+					int seen = 0;
+					for (int q = 0; q < r && !seen; q++) seen = s->ench[q].unit == s->ench[r].unit && s->ench[q].code == s->ench[r].code;
+					if (!seen && ability_fits(s, i, s->ench[r].unit, s->ench[r].code, &price)) count = add_ability(out, count, i, s->ench[r].unit, s->ench[r].code);
+				}
+				break;
+			case AB_GNAW:
+			case AB_NECROMANCY:
+			case AB_RECALL:
+			case AB_RAISE_OWN:
+				for (int h = 0; h < 2; h++)
+					for (int p = 0; p < s->known[h]; p++)
+						if (ability_fits(s, i, -1 - h, p, &price)) count = add_ability(out, count, i, -1 - h, p);
+				break;
+			case AB_PLAGUE:
+				for (int h = 0; h < 2; h++)
+					for (int amount = 1; amount <= imin(s->ether[side], s->grave[h]); amount++)
+						if (ability_fits(s, i, -1 - h, amount, &price)) count = add_ability(out, count, i, -1 - h, amount);
+				break;
+			case AB_POWER_X:
+			case AB_HEALTH_X:
+				for (int amount = 1; amount <= s->ether[side]; amount++)
+					if (ability_fits(s, i, NO_TARGET, amount, &price)) count = add_ability(out, count, i, NO_TARGET, amount);
+				break;
+			case AB_SPORES:
+			case AB_SPORES_POWER:
+			case AB_STING:
+			case AB_SHOOT:
+			case AB_SLAY:
+			case AB_GAZE_TOUGHNESS:
+			case AB_GAZE_POWER:
+			case AB_HUNT:
+			case AB_WALL_BREAK:
+			case AB_TAP_TARGET:
+			case AB_TAP_RACE:
+			case AB_SACRIFICE:
+				for (int j = -2; j < s->n; j++)
+					if (ability_fits(s, i, j, 0, &price)) count = add_ability(out, count, i, j, 0);
+				break;
+			default:
+				if (ability_fits(s, i, NO_TARGET, 0, &price)) count = add_ability(out, count, i, NO_TARGET, 0);
+				break;
+			}
+			continue;
+		}
 		switch (u->ability) {
 		case AB_DISPEL:
 		case AB_DISENCHANT:
@@ -5395,7 +6651,8 @@ static int ability_moves(const State *s, Move *out, int count, int light) {
 				: (a->toughness - a->damage) - imax(0, u->power);
 			if (need <= 0) break;
 			if (u->ability == AB_PHANTASM) {
-				if (need <= 2 && ability_fits(s, i, NO_TARGET, 0, &price)) count = add_ability(out, count, i, NO_TARGET, 0);
+				/* Each use gives two more, as often as there is ether for it. */
+				if (ability_fits(s, i, NO_TARGET, 0, &price)) count = add_ability(out, count, i, NO_TARGET, 0);
 			} else if (ability_fits(s, i, NO_TARGET, need, &price)) count = add_ability(out, count, i, NO_TARGET, need);
 			break;
 		}
@@ -5488,7 +6745,77 @@ static int best_buried(const Search *x, const State *s, int whose) {
 /* The casts of a card that names a second thing beside its target. Of a
  * graveyard only the dearest creature is offered, and to be given up only
  * the two creatures worth least. */
+/* Every enchantment that stands anywhere, as a holder and what names it
+ * there: what a proof is told it may take off. */
+static int every_ench(const State *s, Dispel *out, int limit) {
+	int count = 0;
+	for (int h = 0; h < 2; h++)
+		for (int k = 0; k < HE_COUNT + 4 && count < limit; k++) {
+			int there = k < HE_COUNT ? s->he[h][k] > 0 : (k == HE_TAX ? s->taxes[h] > 0 : k == HE_FOREST ? s->forest[h] >= 0 : k == HE_BANNER ? s->banner[h] > 0 : 1);
+			if (there) out[count++] = (Dispel){ -1 - h, k, 0 };
+		}
+	for (int r = 0; r < s->enchs && count < limit; r++) {
+		int seen = 0;
+		for (int q = 0; q < r && !seen; q++) seen = s->ench[q].unit == s->ench[r].unit && s->ench[q].code == s->ench[r].code;
+		if (!seen && !(s->u[s->ench[r].unit].flags & F_DEAD)) out[count++] = (Dispel){ s->ench[r].unit, s->ench[r].code, 0 };
+	}
+	return count;
+}
+
 static int choice_moves(const Search *x, const State *s, int side, const Card *c, int h, Move *out, int count, int light) {
+	if (lists_all(x)) {
+		/* A proof is told every choice the rules allow; they turn down the rest. */
+		if (c->effect == EFF_DISPEL || c->effect == EFF_TRADE) {
+			Dispel found[MAX_ENCH + 2 * (HE_COUNT + 4)];
+			int wide = every_ench(s, found, (int)(sizeof(found) / sizeof(found[0])));
+			for (int k = 0; k < wide && count < MAX_MOVES - 2; k++) {
+				if (c->effect == EFF_DISPEL) {
+					if (card_cost(x, s, c) + ((c->amount & 1) ? imax(0, ench_price(x, s, found[k].holder, found[k].what, 1)) : 0) <= s->ether[side])
+						out[count++] = (Move){ 3, h, found[k].holder, found[k].what };
+					continue;
+				}
+				for (int g = 0; g < s->n && count < MAX_MOVES - 2; g++) {
+					if (s->u[g].owner != side || g == found[k].holder || !may_aim(s, side, c, g)) continue;
+					out[count++] = (Move){ 3, h, g, (found[k].holder < 0 ? -found[k].holder - 1 : found[k].holder + 2) * 4096 + found[k].what };
+				}
+			}
+			return count;
+		}
+		if (c->effect == EFF_PALE_REVIVAL) {
+			/* (A creature of the caster's own in the plane may be given up
+			 * for it too.) */
+			for (int i = 0; i < s->n && count < MAX_MOVES - 2; i++) {
+				const Unit *v = &s->u[i];
+				if ((v->flags & F_DEAD) || !(v->flags & (F_PLANE | F_GONE)) || v->shielded) continue;
+				for (int g = 0; g < 2; g++)
+					for (int p = 0; p < s->known[g] && count < MAX_MOVES - 2; p++)
+						if (s->graves[g][p] > 0) out[count++] = (Move){ 3, h, i, g * 64 + p };
+			}
+			return count;
+		}
+		if (c->effect == EFF_REPAIR || c->effect == EFF_REANIMATE) {
+			for (int whose = 0; whose < 2; whose++) {
+				if ((c->effect == EFF_REPAIR || c->own) && whose != side) continue;
+				for (int p = 0; p < s->known[whose] && count < MAX_MOVES - 2; p++)
+					if (s->graves[whose][p] > 0) out[count++] = (Move){ 3, h, -1 - whose, p };
+			}
+			return count;
+		}
+		for (int g = 0; g < s->n && count < MAX_MOVES - 2; g++) {
+			if (s->u[g].owner != side || !may_aim(s, side, c, g)) continue;
+			if (c->effect == EFF_EXCHANGE) {
+				for (int p = 0; p < s->known[side] && count < MAX_MOVES - 2; p++)
+					if (s->graves[side][p] > 0) out[count++] = (Move){ 3, h, g, p };
+				continue;
+			}
+			for (int i = 0; i < s->n && count < MAX_MOVES - 2; i++) {
+				const Unit *v = &s->u[i];
+				if (i == g || (v->flags & (F_DEAD | F_GONE | F_PLANE)) || v->shielded) continue;
+				out[count++] = (Move){ 3, h, g, i };
+			}
+		}
+		return count;
+	}
 	if (c->effect == EFF_DISPEL || c->effect == EFF_TRADE) {
 		/* The enchantments best rid of; for a trade, at the price of the
 		 * creature worth least. */
@@ -5532,7 +6859,7 @@ static int choice_moves(const Search *x, const State *s, int side, const Card *c
 			if (c->effect == EFF_REANIMATE && (army_size(s, side) >= ARMY || ((c->amount & 1) && army_size(s, whose) >= ARMY))) continue;
 			out[count++] = (Move){ 3, h, -1 - whose, place };
 			/* A search for a certain win is told of every other kind buried. */
-			for (int p = 0; x->proof && p < s->known[whose] && count < MAX_MOVES - 2; p++)
+			for (int p = 0; lists_all(x) && p < s->known[whose] && count < MAX_MOVES - 2; p++)
 				if (p != place && fresh_kind(s, whose, p)) out[count++] = (Move){ 3, h, -1 - whose, p };
 		}
 		return count;
@@ -5581,29 +6908,60 @@ static int card_moves(const Search *x, const State *s, int side, Move *out, int 
 			for (int j = SLOTS; j < h; j++) twin |= s->back[side][j - SLOTS] == s->back[side][h - SLOTS];
 			if (twin) continue;
 		}
-		/* A wave with nothing in its reach is not worth its card. */
-		if (c->effect == EFF_WAVE) {
+		/* A wave with nothing in its reach is not worth its card (but for a
+		 * proof, as an idle cast above). */
+		if (c->effect == EFF_WAVE && !x->proof) {
 			int who[MAX_UNITS + 2];
 			if (spell_targets(s, side, c, NO_TARGET, who) == 0) continue;
 		}
-		/* How much ether to pour into an X: all of it, half, or none. */
-		int powers[3], wide = 0;
+		/* How much ether to pour into an X. A proof is told every amount the
+		 * rules allow; the usual reading all of it, half, one, and the amounts
+		 * that are just enough for something: the other hero's whole health,
+		 * or what leaves the ether for another card of the hand. */
+		int powers[MAX_MOVES], wide = 0;
 		if (c->effect == EFF_REVIVE && s->grave[side] <= 0) continue;
 		if (c->effect == EFF_CHANNEL) {
-			/* Health for ether: none of it, a little, or a good deal. */
-			int most = imin(s->health[side] - 1, 6);
-			powers[wide++] = 0;
-			if (most >= 2) powers[wide++] = imin(most, 3);
-			if (!light && most > 3) powers[wide++] = most;
+			/* Health for ether: a whole health is the hero's life. */
+			int most = s->health[side] - 1;
+			if (lists_all(x)) {
+				for (int p = 0; p <= most && wide < MAX_MOVES; p++) powers[wide++] = p;
+			} else {
+				most = imin(most, 6);
+				powers[wide++] = 0;
+				if (most >= 2) powers[wide++] = imin(most, 3);
+				if (!light && most > 3) powers[wide++] = most;
+				/* Just enough ether for a dearer card of the hand. */
+				for (int k = 0; !light && k < SLOTS && wide < 8; k++) {
+					const Card *o = &x->hand[side][k];
+					if (o == c || o->cost < 0 || (s->played[side] >> k & 1) || o->effect == EFF_NONE) continue;
+					int need = card_cost(x, s, o) - (s->ether[side] - card_cost(x, s, c));
+					if (need > 0 && need <= s->health[side] - 1 && need != imin(most, 3) && need != most) powers[wide++] = need;
+				}
+			}
 		} else if (c->variable) {
-			int most = s->ether[side] - c->cost;
-			powers[wide++] = most;
-			if (!light && most / 2 > 0 && most / 2 != most) powers[wide++] = most / 2;
-			if (!light && most > 1) powers[wide++] = 1;
+			int most = s->ether[side] - card_cost(x, s, c);
+			if (lists_all(x)) {
+				for (int p = most; p >= 0 && wide < MAX_MOVES; p--) powers[wide++] = p;
+			} else {
+				powers[wide++] = most;
+				if (!light && most / 2 > 0 && most / 2 != most) powers[wide++] = most / 2;
+				if (!light && most > 1) powers[wide++] = 1;
+				/* The other hero's whole health, and what leaves room for the
+				 * cheapest other card of the hand. */
+				int foe = s->health[1 - side], room = -1;
+				if (!light && foe > 1 && foe < most && foe != most / 2) powers[wide++] = foe;
+				for (int k = 0; !light && k < SLOTS; k++) {
+					const Card *o = &x->hand[side][k];
+					if (o == c || o->cost < 0 || (s->played[side] >> k & 1) || o->effect == EFF_NONE) continue;
+					int left = most - card_cost(x, s, o);
+					if (left > 0 && left > room) room = left;
+				}
+				if (room > 1 && room != most / 2 && room != most && room != foe) powers[wide++] = room;
+			}
 		} else powers[wide++] = 0;
 		for (int p = 0; p < wide && count < MAX_MOVES - 2; p++) {
 			if (c->aim == AIM_NONE) {
-				if (idle_cast(x, s, side, c, NO_TARGET)) continue;
+				if (!x->proof && idle_cast(x, s, side, c, NO_TARGET)) continue;
 				out[count].kind = 3;
 				out[count].a = h;
 				out[count].b = NO_TARGET;
@@ -5613,8 +6971,8 @@ static int card_moves(const Search *x, const State *s, int side, Move *out, int 
 			}
 			if (c->aim != AIM_CREATURE)
 				for (int side_at = 0; side_at < 2 && count < MAX_MOVES - 2; side_at++) {
-					if (c->own && side_at != side) continue;
-					if (idle_cast(x, s, side, c, -1 - side_at)) continue;
+					if (c->own && side_at != side && !(c->habit && lists_all(x))) continue;
+					if (!x->proof && idle_cast(x, s, side, c, -1 - side_at)) continue;
 					out[count].kind = 3;
 					out[count].a = h;
 					out[count].b = -1 - side_at;
@@ -5637,9 +6995,38 @@ static int card_moves(const Search *x, const State *s, int side, Move *out, int 
 	return count;
 }
 
+/* Whether the attackers' fights can be played in any order and leave the
+ * same duel: none of them changes what a later fight finds. A stripping or
+ * stinging strike, a blow that heals, robs, feeds or poisons a hero, a
+ * lifeguard or a feedback on the defender, a creature whose death or
+ * regeneration does more than bury it, and anything that reads the order of
+ * a graveyard all break that. A proof may then send attackers in one order
+ * only; otherwise it must read every order. */
+static int attacks_commute(const Search *x, const State *s) {
+	int defender = 1 - s->attacker;
+	if (s->he[defender][HE_LFGR] || s->he[defender][HE_FDBK] || s->he[defender][HE_LNRD] || s->he[defender][HE_ETCH]) return 0;
+	if (s->banner[0] || s->banner[1] || s->kinned) return 0;
+	if (x->goal.active && (x->goal.type != 0 || x->goal.protects || x->goal.min_allies || x->goal.finish_health > 1 || x->goal.finish_mana)) return 0;
+	for (int k = 0; k < POOL; k++)
+		if (x->pool[k].cost >= 0 && x->pool[k].rises) return 0;
+	for (int i = 0; i < s->n; i++) {
+		const Unit *u = &s->u[i];
+		if (u->flags & F_DEAD) continue;
+		if (u->flags & (F_DISENCHANT | F_LIFETAP | F_STINGER | F_DISSIPATES)) return 0;
+		if (u->discards || u->feeds || u->envenoms || u->mourned || u->horror || u->linked || u->gives_to || u->leaders) return 0;
+		if (u->regeneration > 0 || u->ability == AB_PLAGUE || u->home) return 0;
+	}
+	for (int r = 0; r < s->enchs; r++) {
+		const Ench *e = &s->ench[r];
+		if (s->u[e->unit].flags & F_DEAD) continue;
+		if (e->comes_back || e->kind == EN_LINK || e->kind == EN_REDIRECT || e->kind == EN_WATER || e->kind == EN_CONTROL || e->kind == EN_GIFT) return 0;
+	}
+	return 1;
+}
+
 /* `sorted` orders the commands for the search; `light` keeps the list short
  * for a play-out, where one target and the whole X will do. */
-static int generate(const Search *x, const State *s, Move *out, int sorted, int light, int whole, Plan *kept) {
+static int generate_list(const Search *x, const State *s, Move *out, int sorted, int light, int whole, Plan *kept) {
 	int count = 0;
 	/* Whole attacks and whole defences in place of single creatures. */
 	int grouped = kept != NULL && !light && x->sets > 0 && x->plans > 0;
@@ -5660,14 +7047,22 @@ static int generate(const Search *x, const State *s, Move *out, int sorted, int 
 			}
 		}
 	}
+	/* A proof sends attackers in one order only where the order cannot
+	 * matter. Blocks it sets in one order of the attackers they stand
+	 * against, and against one attacker in every order: the fight takes each
+	 * attacker's blockers in the order they were set, and nothing else of it. */
+	int one_order = !x->proof || (s->phase == 0 && attacks_commute(x, s));
+	int last_attacker = after >= 0 && s->phase != 0 ? s->u[after].blocks : -1;
 	if (s->phase == 0) {
 		int side = s->attacker;
 		for (int i = 0; i < s->n && count < MAX_MOVES - 2 && !grouped; i++) {
 			const Unit *u = &s->u[i];
-			if ((u->flags & F_ATTACKING) || !can_attack(s, u)) continue;
+			/* A proof sends a creature with no power too: it can still be the
+			 * one a guard goes beside, or the one a blocker is spent on. */
+			if ((u->flags & F_ATTACKING) || !(lists_all(x) ? can_declare(s, u) : can_attack(s, u))) continue;
 			if ((u->flags & F_TEAM) && !team_partner(s, i)) continue;
 			/* A guard waits on its partner, wherever that one stands. */
-			if (i < after && !(u->flags & F_TEAM)) continue;
+			if (one_order && i < after && !(u->flags & F_TEAM)) continue;
 			out[count].kind = 1;
 			out[count].a = i;
 			out[count].b = 0;
@@ -5679,11 +7074,31 @@ static int generate(const Search *x, const State *s, Move *out, int sorted, int 
 		count = card_moves(x, s, 1 - s->attacker, out, count, light);
 		for (int i = 0; i < s->n && count < MAX_MOVES - 2 && !grouped; i++) {
 			const Unit *u = &s->u[i];
-			if (u->owner == s->attacker || (u->flags & (F_DEAD | F_GONE)) || !ready(u) || u->blocks >= 0) continue;
-			if (i < after) continue;
+			if (u->owner == s->attacker || (u->flags & (F_DEAD | F_GONE)) || !ready(u)) continue;
+			if (u->blocks >= 0) {
+				/* A block already set may be set against another attacker, or
+				 * taken back (set against the same one again), as the rules
+				 * allow: at the first command only, where the blocks set
+				 * stand as the position gave them. Further in, any defence
+				 * can be set without going back on a block, so none is
+				 * revised there and a line cannot go round in circles. */
+				if (!whole || !x->revise) continue;
+				for (int a = 0; a < s->n && count < MAX_MOVES - 2; a++) {
+					const Unit *t = &s->u[a];
+					if (!(t->flags & F_ATTACKING) || (t->flags & (F_DEAD | F_GONE)) || !can_block(s, t, u)) continue;
+					out[count++] = (Move){ 2, i, a, 0 };
+				}
+				continue;
+			}
+			/* A block taken back is not set again in a line that is weighed
+			 * where it stops (see `freed`); a proof, which weighs nothing,
+			 * reads the blocks set again in another order too. */
+			if (!x->proof && (s->freed >> i & 1)) continue;
+			if (!x->proof && i < after) continue;
 			for (int a = 0; a < s->n && count < MAX_MOVES - 2; a++) {
 				const Unit *t = &s->u[a];
-				if (!(t->flags & F_ATTACKING) || (t->flags & (F_DEAD | F_GONE)) || !can_block(t, u)) continue;
+				if (!(t->flags & F_ATTACKING) || (t->flags & (F_DEAD | F_GONE)) || !can_block(s, t, u)) continue;
+				if (x->proof && a < last_attacker) continue;
 				out[count].kind = 2;
 				out[count].a = i;
 				out[count].b = a;
@@ -5714,7 +7129,7 @@ static int generate(const Search *x, const State *s, Move *out, int sorted, int 
 	/* At the first command, the attack that the lookahead — which reads the
 	 * defender's blocks properly — finds best is offered whole. Building an
 	 * attack one creature at a time is how the engine walks into blocks. */
-	if (whole && !grouped && s->phase == 0 && count < MAX_MOVES - 2) {
+	if (whole && !grouped && !x->every && s->phase == 0 && count < MAX_MOVES - 2) {
 		Set sets[MAX_SETS];
 		int found = attack_sets((Search *)x, s, sets, 1, 1);
 		if (found > 0 && sets[0].mask) {
@@ -5783,6 +7198,27 @@ static int generate(const Search *x, const State *s, Move *out, int sorted, int 
 		}
 		out[j + 1] = m;
 		score[j + 1] = v;
+	}
+	return count;
+}
+
+/* The commands to weigh. At the first command of a reading (`whole`) the
+ * usual list is followed by every other command the rules allow, so that an
+ * unlikely command - a card that seems to do nothing, a second choice of
+ * graveyard or of enchantment, an X of an odd size - is still read there;
+ * a proof lists all of them anyway. */
+static int generate(const Search *x, const State *s, Move *out, int sorted, int light, int whole, Plan *kept) {
+	int count = generate_list(x, s, out, sorted, light, whole, kept);
+	if (!whole || light || lists_all(x) || count >= MAX_MOVES - 2) return count;
+	Move rest[MAX_MOVES];
+	Search *w = (Search *)x;
+	w->every = 1;
+	int more = generate_list(x, s, rest, sorted, light, whole, NULL);
+	w->every = 0;
+	for (int i = 0; i < more && count < MAX_MOVES - 2; i++) {
+		int known = 0;
+		for (int j = 0; j < count && !known; j++) known = same_move(&rest[i], &out[j]);
+		if (!known) out[count++] = rest[i];
 	}
 	return count;
 }
@@ -5868,9 +7304,7 @@ static int apply_inner(const Search *x, State *s, const int32_t *cmd) {
 		} else {
 			int8_t t[MAX_UNITS];
 			for (int i = 0; i < s->n; i++) t[i] = s->u[i].blocks;
-			resolve(s, t);
-			s->phase = 0;
-			if (s->health[0] > 0 && s->health[1] > 0) end_turn(x, s);
+			fight_and_pass(x, s, t);
 			return 1;
 		}
 	case 1: {
@@ -5910,8 +7344,16 @@ static int apply_inner(const Search *x, State *s, const int32_t *cmd) {
 		int i = cmd[1], a = cmd[2];
 		if (s->phase != 1 || i < 0 || i >= s->n || a < 0 || a >= s->n) return 0;
 		Unit *u = &s->u[i];
-		if (u->owner == s->attacker || (u->flags & (F_DEAD | F_GONE)) || !ready(u) || u->blocks >= 0) return 0;
-		if (!(s->u[a].flags & F_ATTACKING) || (s->u[a].flags & (F_DEAD | F_GONE)) || !can_block(&s->u[a], u)) return 0;
+		if (u->owner == s->attacker || (u->flags & (F_DEAD | F_GONE)) || !ready(u)) return 0;
+		if (!(s->u[a].flags & F_ATTACKING) || (s->u[a].flags & (F_DEAD | F_GONE)) || !can_block(s, &s->u[a], u)) return 0;
+		/* Set against the attacker it already blocks, the block is taken
+		 * back; against another, it moves there and is set last. */
+		if (u->blocks == a) {
+			u->blocks = -1;
+			u->rank = 0;
+			s->freed |= 1u << i;
+			return 1;
+		}
 		u->blocks = (int8_t)a;
 		ranked(s, u);
 		return 1;
@@ -5919,7 +7361,10 @@ static int apply_inner(const Search *x, State *s, const int32_t *cmd) {
 	case 3: {
 		/* The defender has only the few cards that may be cast in defence. */
 		int side = s->phase == 0 ? s->attacker : 1 - s->attacker;
-		if (s->phase != 0 && cmd[1] < ART_BASE && (cmd[1] < 0 || cmd[1] >= SLOTS || !x->hand[side][cmd[1]].defence)) return 0;
+		if (s->phase != 0 && cmd[1] < ART_BASE) {
+			const Card *held = card_at(x, s, side, cmd[1]);
+			if (!held || !held->defence) return 0;
+		}
 		if (!cast_card(x, s, side, cmd[1], cmd[2], cmd[3])) return 0;
 		drop_blocks(s);
 		return 1;
@@ -6127,7 +7572,7 @@ static void pick_command(const Search *x, const State *s, uint32_t *seed, Move *
 			if (u->owner == s->attacker || (u->flags & (F_DEAD | F_GONE)) || !ready(u) || u->blocks >= 0) continue;
 			for (int a = 0; a < s->n; a++) {
 				const Unit *t = &s->u[a];
-				if (!(t->flags & F_ATTACKING) || (t->flags & (F_DEAD | F_GONE)) || !can_block(t, u)) continue;
+				if (!(t->flags & F_ATTACKING) || (t->flags & (F_DEAD | F_GONE)) || !can_block(s, t, u)) continue;
 				candidate.kind = 2;
 				candidate.a = i;
 				candidate.b = a;
@@ -6157,6 +7602,7 @@ static int play_out(Search *x, const State *start, uint32_t *seed, int rounds) {
 	for (int step = 0; step < 160; step++) {
 		if (s.health[0] <= 0 || s.health[1] <= 0) break;
 		if (ends >= rounds * 2) break;
+		if (on_clock(x)) break;
 		Move step_move;
 		pick_command(x, &s, seed, &step_move);
 		if (step_move.kind == 0) ends++;
@@ -6183,6 +7629,17 @@ static int play_out(Search *x, const State *start, uint32_t *seed, int rounds) {
  * to: the defender blocks as well as it can and the fight is played out.
  * Without this, sending a creature looks free and the search sends them all. */
 static int settle_whole(Search *x, const State *s, int phases);
+static int goal_status(const Search *x, const State *s);
+
+/* A puzzle's objective met or failed where a line stops: worth that and
+ * nothing else, as at any position read (see search_moves); 0 while it is
+ * still to play for, or with no puzzle. No material outweighs a failure. */
+static int goal_value(const Search *x, const State *s, int phases) {
+	if (!x->goal.active) return 0;
+	int status = goal_status(x, s);
+	if (!status) return 0;
+	return (status > 0) == (x->ai == x->goal.side) ? WIN + phases * 1000 : -(WIN + phases * 1000);
+}
 
 /* The worth of a line where it stops. What the fighting still to come is
  * read to bring is only as sure as the reading, so it is weighed against the
@@ -6227,6 +7684,8 @@ static int settle_whole(Search *x, const State *s, int phases) {
 		search_blocks(x, &d, base, 1, 2, -2 * WIN, 2 * WIN, plan);
 		resolve(&d, plan);
 		d.phase = 0;
+		int decided = goal_value(x, &d, phases);
+		if (decided) return decided;
 		if (d.health[0] <= 0 || d.health[1] <= 0) return evaluate(x, &d, phases);
 	}
 	/* The turn always passes before the line is weighed, whether it ended in
@@ -6234,6 +7693,8 @@ static int settle_whole(Search *x, const State *s, int phases) {
 	 * would count the hero's own coming attack as a gain in the first and the
 	 * other hero's as a loss in the second, and nothing would ever attack. */
 	end_turn(x, &d);
+	int decided = goal_value(x, &d, phases);
+	if (decided) return decided;
 	int base = evaluate_leaf(x, &d, phases);
 	/* A duel the turn's passing itself decided is worth just that. */
 	if (x->leaf_turns <= 0 || base >= WIN || base <= -WIN) return base;
@@ -6287,45 +7748,214 @@ static uint64_t state_key(const State *s) {
  * phase changes still allowed and `steps` the commands left in this line, so
  * that a line cannot wander for ever; `x->budget` caps the whole search.
  * Returns the worth of the line and, in `best`, the command to give now. */
-/* The most a hero could take off the other in one turn, counted with an
- * open hand: all its creatures' power, that of every creature card it
- * holds or is to draw, and what its spells deal or lend. A search for a
- * certain win gives up a line whose turns left cannot reach the other
- * hero's health even at half as much again: such a line is not read to
- * its end only to find the hero standing. */
-static int damage_in_sight(const Search *x, const State *s, int side) {
-	int sum = 0;
+/* A proof no longer gives a line up on the damage its hero seems to have in
+ * sight: a bound that holds for every way of dealing damage there is (hero
+ * abilities used again and again, creatures raised or returned, poisons,
+ * the disturbance, ether turned into harm) is no cheaper than reading the
+ * line, and a bound that misses one of them proves a win absent. */
+
+/* Where a puzzle's objective stands, judged as the game's puzzle runner
+ * judges it after every action: 1 met, -1 failed, 0 still to play for. */
+static int goal_status(const Search *x, const State *s) {
+	const int side = x->goal.side, foe = 1 - side;
+	for (int k = 0; k < x->goal.protects; k++) {
+		int i = x->goal.protect[k];
+		if (i < 0 || i >= s->n || (s->u[i].flags & F_DEAD) || s->u[i].owner != side) return -1;
+	}
+	if (s->health[side] < imax(1, x->goal.min_health)) return -1;
+	if (x->goal.type == 3)
+		for (int k = 0; k < x->goal.targets; k++) {
+			int i = x->goal.target[k];
+			if (i < 0 || i >= s->n || (s->u[i].flags & F_DEAD)) return -1;
+		}
+	int finished = s->health[0] <= 0 || s->health[1] <= 0;
+	int won = s->health[foe] <= 0 && s->health[side] > 0;
+	int turn = x->goal.turn + s->turns[side];
+	int completed = x->goal.completed + s->turns[foe] - (s->attacker == foe ? 1 : 0);
+	int primary = 0;
+	switch (x->goal.type) {
+	case 1:
+		primary = army_size(s, foe) == 0;
+		break;
+	case 2:
+		primary = won || completed >= x->goal.enemy_turns;
+		break;
+	case 3:
+		primary = x->goal.targets > 0 && completed >= x->goal.enemy_turns;
+		for (int k = 0; k < x->goal.targets && primary; k++) primary = s->u[x->goal.target[k]].owner == side;
+		break;
+	default:
+		primary = won;
+		break;
+	}
+	int army = 0;
+	for (int i = 0; i < s->n; i++) army += s->u[i].owner == side && !(s->u[i].flags & F_DEAD);
+	int missing = s->health[side] < imax(1, x->goal.finish_health) || s->ether[side] < x->goal.finish_mana || army < x->goal.min_allies;
+	int complete = primary && !missing;
+	int boundary = x->goal.type == 2 || (x->goal.type == 3 && x->goal.enemy_turns > 0);
+	if (turn > x->goal.allowed && !(boundary && complete)) return -1;
+	if (complete) return 1;
+	if (finished) return -1;
+	return 0;
+}
+
+/* The phases a command took the reading on by: one for a phase it ended, two
+ * for a turn passed with nobody sent where such a turn counts for both, and
+ * none for a command within its phase. Read off what the command did, not off
+ * its kind: a whole attack or a whole defence ends its phase as well. */
+static int phases_spent(const Search *x, const State *before, const State *after, int kind) {
+	if (after->phase == before->phase && after->attacker == before->attacker) return kind == 0 ? 1 : 0;
+	return (before->phase == 0 && after->phase == 0 && x->even) ? 2 : 1;
+}
+
+/* What the attack under way will deal the defending hero as the blocks stand:
+ * the power of every attacker nobody blocks. */
+static int incoming_power(const State *s) {
+	uint32_t blocked = 0;
+	for (int i = 0; i < s->n; i++)
+		if (s->u[i].blocks >= 0 && !(s->u[i].flags & (F_DEAD | F_GONE))) blocked |= 1u << s->u[i].blocks;
+	int total = 0;
 	for (int i = 0; i < s->n; i++) {
 		const Unit *u = &s->u[i];
-		if (u->owner != side || (u->flags & (F_DEAD | F_GONE))) continue;
-		sum += imax(0, u->power);
+		if (!(u->flags & F_ATTACKING) || (u->flags & (F_DEAD | F_GONE)) || (blocked >> i & 1)) continue;
+		total += imax(0, u->power);
 	}
-	for (int i = 0; i < SLOTS; i++) {
-		const Card *c = &x->hand[side][i];
-		if ((s->played[side] >> i & 1) || c->none || c->cost < 0) continue;
-		/* A spell as strong as the ether poured into it. */
-		if (c->variable || c->effect == EFF_WAVE) sum += imax(1, s->ether[side] + s->channels[side]);
-		else if (c->effect == EFF_SUMMON) sum += imax(0, c->power);
-		else if (c->effect == EFF_DAMAGE) sum += imax(1, c->amount);
-		else sum += 1 + imax(0, c->power);
+	return total;
+}
+
+/* What a command does, for keeping commands of every kind among those read:
+ * its kind, and for a card the effect, for an ability the ability. */
+static int move_function(const Search *x, const State *s, const Move *m, int side) {
+	if (m->kind == 3) {
+		const Card *c = card_at(x, s, side, m->a);
+		return 32 + (c ? c->effect : 0);
 	}
-	for (int j = 0; j < BACK; j++)
-		if (s->back[side][j] > 0) sum += imax(0, x->pool[s->back[side][j] - 1].power);
-	return sum;
+	if (m->kind == 7 && m->a >= 0 && m->a < s->n) return 160 + s->u[m->a].ability;
+	if (m->kind == 8) return 240 + m->a;
+	return m->kind;
+}
+
+/* The commands of a crowded position that are read, at most about `width` of
+ * them, in the order given. The ranking keeps the strongest, but nothing
+ * decides a position that a ranking may drop: ending the phase, the command
+ * held best from an earlier reading, any command that wins outright or meets
+ * the objective there and then, any that saves the hero to move health or
+ * takes from the blow about to fall on it, and the best of each kind of
+ * command (each card effect, each ability) are kept before the rest are cut. */
+static int keep_width(const Search *x, const State *s, Move *moves, int count, const Move *first, int side) {
+	int width = x->width;
+	if (count <= width) return count;
+	unsigned char keep[MAX_MOVES];
+	memset(keep, 0, sizeof(keep));
+	int reserved = 1;
+	keep[count - 1] = 1;
+	if (first)
+		for (int i = 0; i < count - 1; i++)
+			if (same_move(&moves[i], first)) {
+				keep[i] = 1;
+				reserved++;
+				break;
+			}
+	int incoming = s->phase == 1 && side != s->attacker ? incoming_power(s) : -1;
+	for (int i = width - 1; i < count - 1; i++) {
+		int k = moves[i].kind;
+		if (keep[i] || (k != 3 && k != 4 && k != 7 && k != 8 && k != 11)) continue;
+		State t = *s;
+		if (!apply_command(x, &t, (const int32_t *)&moves[i])) continue;
+		int decisive;
+		if (x->goal.active) {
+			int g = goal_status(x, &t);
+			decisive = g != 0 && (g > 0) == (side == x->goal.side);
+		} else decisive = t.health[1 - side] <= 0 && t.health[side] > 0;
+		int saves = t.health[side] > s->health[side] || (incoming > 0 && incoming_power(&t) < incoming);
+		if (decisive || saves) {
+			keep[i] = 1;
+			reserved++;
+		}
+	}
+	int functions[MAX_MOVES], known = 0, extras = 0, room = imax(2, width / 4);
+	for (int i = 0; i < count - 1; i++) {
+		int f = move_function(x, s, &moves[i], side), seen = 0;
+		for (int k = 0; k < known && !seen; k++) seen = functions[k] == f;
+		if (seen) continue;
+		functions[known++] = f;
+		if (i >= width - 1 && !keep[i] && extras < room) {
+			keep[i] = 1;
+			reserved++;
+			extras++;
+		}
+	}
+	int left = imax(0, width - reserved), n = 0;
+	for (int i = 0; i < count; i++) {
+		if (!keep[i]) {
+			if (left <= 0) continue;
+			left--;
+		}
+		moves[n++] = moves[i];
+	}
+	return n;
+}
+
+static int search_moves(Search *x, State *s, int phases, int steps, int alpha, int beta, Move *best, const Move *first, Move *line, int *line_length);
+static int block_whole(const Search *x, State *s, const Plan *plan);
+
+/* A command of a proof that chance had a part in, played into `t` with
+ * every roll failed: the line is read for every way the rolls can fall, and
+ * is worth the worst of them to the hero whose win is looked for - a win
+ * only where it is one however they fall. More ways than may be read, or
+ * more rolls than there is room for, and nothing is known of the line. */
+static int search_chance(Search *x, const State *s, State *t, const Move *m, const Plan *plans, int phases, int steps, int alpha, int beta, Move *below, int *below_length) {
+	int worst = 2 * WIN;
+	for (int tried = 0; ; tried++) {
+		if (t->luck || tried >= CHANCES) {
+			x->unknown = 1;
+			return 0;
+		}
+		uint8_t want[ROLLS], most[ROLLS];
+		int rolled = t->rolled;
+		memcpy(want, t->want, ROLLS);
+		memcpy(most, t->most, ROLLS);
+		t->rolled = 0;
+		memset(t->want, 0, ROLLS);
+		memset(t->most, 0, ROLLS);
+		int spent = phases_spent(x, s, t, m->kind);
+		int v = search_moves(x, t, imax(0, phases - spent), steps - 1, alpha, beta, NULL, NULL, below, below_length);
+		if (v < worst) worst = v;
+		if (worst <= alpha || x->aborted) break;
+		/* The next way: one success more for the last roll that can have
+		 * one, and none for those after it. */
+		int k = rolled - 1;
+		while (k >= 0 && want[k] >= most[k]) k--;
+		if (k < 0) break;
+		want[k]++;
+		for (int j = k + 1; j < ROLLS; j++) want[j] = 0;
+		*t = *s;
+		memcpy(t->want, want, ROLLS);
+		if (!(m->kind == 10 ? block_whole(x, t, &plans[m->a]) : apply_command(x, t, (const int32_t *)m))) {
+			x->unknown = 1;
+			return 0;
+		}
+		x->nodes++;
+	}
+	return worst;
 }
 
 static int search_moves(Search *x, State *s, int phases, int steps, int alpha, int beta, Move *best, const Move *first, Move *line, int *line_length) {
 	Move below[MAX_LINE];
 	int below_length = 0;
 	if (line_length) *line_length = 0;
-	if (s->health[0] <= 0 || s->health[1] <= 0) return evaluate(x, s, phases);
-	/* Nothing is proved past a card that chance took or dealt. */
-	if (x->proof && s->blind) return 0;
-	if (x->proof && x->sight) {
-		/* Its own turns among the phases left, this one counted. */
-		int mine = s->attacker == x->ai;
-		int turns = (phases + (mine ? (s->phase != 0 ? 3 : 2) : (s->phase != 0 ? 1 : 0))) / 4;
-		if (s->health[1 - x->ai] > turns * (damage_in_sight(x, s, x->ai) * x->sight / 100 + 2)) return 0;
+	if (x->goal.active) {
+		/* A puzzle ends where its objective is met or failed, and nowhere else. */
+		int status = goal_status(x, s);
+		if (status) return (status > 0) == (x->ai == x->goal.side) ? WIN + phases * 1000 : -(WIN + phases * 1000);
+	} else if (s->health[0] <= 0 || s->health[1] <= 0) return evaluate(x, s, phases);
+	/* Nothing is proved past a card that chance took or dealt, nor past what
+	 * the model has no room for. (Where the reading ends anyway, a card
+	 * dealt as the turn changed leaves nothing unread: the duel was not
+	 * decided by then, which is all that is asked there.) */
+	if (x->proof && (s->limit || s->n >= MAX_UNITS || (s->blind && phases > 0 && steps > 0))) {
+		x->unknown = 1;
+		return 0;
 	}
 	/* A position read before, to at least this depth, is not read again;
 	 * one read less deeply still says which command to try first. */
@@ -6354,7 +7984,11 @@ static int search_moves(Search *x, State *s, int phases, int steps, int alpha, i
 		}
 	}
 	if (phases <= 0 || steps <= 0) {
-		int v = x->proof ? 0 : settle(x, s, phases);
+		/* A line cut short by its count of commands, with turns still to
+		 * read, is not one read to its end. */
+		if (x->proof && phases > 0) x->unknown = 1;
+		int v = x->proof ? 0 : on_clock(x) ? evaluate(x, s, phases) : settle(x, s, phases);
+		if (x->timed) x->aborted = 1;
 		if (entry && !x->aborted) {
 			entry->key = key;
 			entry->value = v;
@@ -6366,21 +8000,51 @@ static int search_moves(Search *x, State *s, int phases, int steps, int alpha, i
 		}
 		return v;
 	}
-	if (x->deadline > 0 && (x->nodes & 255) == 0 && now_ms() > x->deadline) x->budget = x->nodes;
-	if (x->nodes >= x->budget) {
+	if (on_clock(x) || x->nodes >= x->budget) {
 		x->aborted = 1;
-		return x->proof ? 0 : settle(x, s, phases);
+		/* Out of time the position is weighed as it stands: what the
+		 * fighting to come would add is a reading of its own. */
+		return x->proof ? 0 : x->timed ? evaluate(x, s, phases) : settle(x, s, phases);
 	}
 	Move moves[MAX_MOVES];
 	Plan plans[MAX_PLANS];
-	int count = generate(x, s, moves, 1, 0, best != NULL, plans);
+	int side = s->phase == 0 ? s->attacker : 1 - s->attacker;
+	int maximise = side == x->ai;
+	int count;
+	/* A hero that holds cards the reading was not told, with ether for a
+	 * card of its book: what it may do now nobody knows. No win over it is
+	 * proved past this move, and where its own win is looked for, finding
+	 * none settles nothing (but in a reading that guards against a loss,
+	 * which holds a hero to the wins the other is known to have). */
+	int veil = x->proof && side == x->hidden && unknown_held(x, s, side) > 0;
+	if (veil && s->ether[side] >= x->hidden_floor[s->phase != 0]) {
+		x->unknown |= !maximise || !x->guarding;
+		if (!maximise) return 0;
+	}
+	if (x->proof && x->narrow && maximise) {
+		/* The hero whose win is looked for: the commands the usual reading
+		 * would list (see `narrow`). */
+		x->proof = 0;
+		count = generate(x, s, moves, 1, 0, best != NULL, plans);
+		x->proof = 1;
+	} else count = generate(x, s, moves, 1, 0, best != NULL, plans);
+	if (x->proof && count >= MAX_MOVES - 3) {
+		/* More commands than there is room to list: some were left out. A
+		 * defence that may lie among them is no defence ruled out. */
+		x->unknown = 1;
+		if (!maximise) return 0;
+	}
+	/* A proof plays none of the sampled cards: they are a guess. */
+	if (veil) {
+		int kept_moves = 0;
+		for (int i = 0; i < count; i++)
+			if (moves[i].kind != 3 || !veiled(x, side, moves[i].a)) moves[kept_moves++] = moves[i];
+		count = kept_moves;
+	}
 	/* Deeper in, only the most promising commands are played through, so that
 	 * the search reaches far enough to see a whole turn. Ending the phase is
 	 * always among them. */
-	if (best == NULL && count > x->width) {
-		moves[x->width - 1] = moves[count - 1];
-		count = x->width;
-	}
+	if (best == NULL && count > x->width) count = keep_width(x, s, moves, count, first, side);
 	/* What was best last time is tried first. */
 	if (first)
 		for (int i = 1; i < count; i++)
@@ -6390,8 +8054,22 @@ static int search_moves(Search *x, State *s, int phases, int steps, int alpha, i
 				moves[0] = m;
 				break;
 			}
-	int side = s->phase == 0 ? s->attacker : 1 - s->attacker;
-	int maximise = side == x->ai;
+	/* At the first command a block already set may be moved or taken back
+	 * (see generate_list). Such a command is read after every other, the
+	 * phase's end among them, and a later command is chosen only when it is
+	 * worth more than all before it: a block is gone back on only where that
+	 * gains something. Read in its turn, a proof - to which every command of a
+	 * won position is as good as another - would take a block back, set it
+	 * again with the next command, and so go round for ever. */
+	if (best != NULL && s->phase != 0) {
+		Move late[MAX_MOVES];
+		int kept = 0, held = 0;
+		for (int i = 0; i < count; i++) {
+			if (moves[i].kind == 2 && moves[i].a >= 0 && moves[i].a < s->n && s->u[moves[i].a].blocks >= 0) late[held++] = moves[i];
+			else moves[kept++] = moves[i];
+		}
+		for (int k = 0; k < held; k++) moves[kept + k] = late[k];
+	}
 	/* Commands that already leave the board far worse than the best of them
 	 * are not read at all. With hundreds to choose from, reading every one
 	 * shallowly is worth less than reading the few that can matter deeply.
@@ -6419,6 +8097,12 @@ static int search_moves(Search *x, State *s, int phases, int steps, int alpha, i
 	int value = maximise ? -2 * WIN : 2 * WIN;
 	int played = 0, chosen = -1;
 	for (int i = 0; i < count; i++) {
+		/* Out of time, the commands not yet read stay unread, at every
+		 * level of the line: the best of those read is what there is. */
+		if (played > 0 && x->timed) {
+			x->aborted = 1;
+			break;
+		}
 		State t = *s;
 		if (best && x->bans) {
 			int set_aside = 0;
@@ -6433,9 +8117,16 @@ static int search_moves(Search *x, State *s, int phases, int steps, int alpha, i
 		/* A turn ended with nobody sent has no defence to it, and counts for
 		 * both of its phases: every line is read the same number of turns
 		 * ahead, whether it attacks or not. */
-		int spent = moves[i].kind != 0 ? 0 : (s->phase == 0 && t.phase == 0 && x->even) ? 2 : 1;
-		int v = search_moves(x, &t, imax(0, phases - spent), steps - 1, alpha, beta, NULL, NULL,
-			line ? below : NULL, line ? &below_length : NULL);
+		int spent = phases_spent(x, s, &t, moves[i].kind);
+		int v = x->proof && (t.rolled || t.luck)
+			? search_chance(x, s, &t, &moves[i], plans, phases, steps, alpha, beta, line ? below : NULL, line ? &below_length : NULL)
+			: search_moves(x, &t, imax(0, phases - spent), steps - 1, alpha, beta, NULL, NULL, line ? below : NULL, line ? &below_length : NULL);
+		/* A command whose reading the clock cut short is not held against
+		 * those read whole, unless it is the only one read at all. */
+		if (x->timed && played > 1) {
+			x->aborted = 1;
+			break;
+		}
 		if (maximise ? v > value : v < value) {
 			value = v;
 			chosen = i;
@@ -6484,8 +8175,16 @@ static int search_moves(Search *x, State *s, int phases, int steps, int alpha, i
  * shorter could not. `settled` is the most turns read whole without a win,
  * and `cut` says whether a longer reading ran out. Where the other hero is
  * the one to move and no win is found, `best` is a command of that hero's
- * that holds out for the turns settled. */
-static int prove_win(const Search *x, const State *s, int from, int turns, int64_t nodes, double deadline, Move *best, Move *line, int *line_length, int64_t *read, int *settled, int *cut) {
+ * that holds out for the turns settled.
+ *
+ * The answer has three values. A win (the turns it takes) is proved: every
+ * command the defender has was read and none stops it. No win with the
+ * turns settled read whole is a proof that there is none within them. Past
+ * those, nothing is known: the budget ran out (`cut`), or the reading met
+ * what it cannot follow (`unknown`: chance, more than the model has room
+ * for, a line longer than it may read, or more commands than it may list),
+ * and a number of turns met that way is never counted settled. */
+static int prove_win(const Search *x, const State *s, int from, int turns, int64_t nodes, double deadline, Move *best, Move *line, int *line_length, int64_t *read, int *settled, int *cut, int *unknown) {
 	Search p = *x;
 	p.proof = 1;
 	p.width = MAX_MOVES;
@@ -6498,23 +8197,28 @@ static int prove_win(const Search *x, const State *s, int from, int turns, int64
 	/* Chance ends what is known of the cards to come, and with it the proof
 	 * of any line that passes through it. */
 	p.blinds = x->guarding ? x->blinds : 1;
-	p.sight = x->sight;
 	p.nodes = 0;
+	p.unknown = 0;
 	nodes = imax(8, (int)imin64(nodes, 2000000000));
-	p.deadline = deadline;
+	set_clock(&p, deadline);
 	p.met = 0;
 	uint64_t size = 1u << 12;
 	while (size < (uint64_t)nodes && size < (1u << 21)) size <<= 1;
 	p.table = (Entry *)calloc((size_t)size, sizeof(Entry));
 	p.mask = size - 1;
-	int won = 0;
+	int won = 0, tainted = 0;
 	*cut = 0;
+	*unknown = 0;
 	*settled = imax(0, from - 1);
+	/* What the position itself holds beyond the model's room. */
+	if (s->limit) *unknown = p.unknown = 1;
 	for (int n = imax(1, from); n <= turns && !won; n++) {
 		/* Its own attack and the defence to it, and both phases of each of
 		 * the other hero's turns between; from the other hero's turn, the
-		 * rest of that one first. */
-		int phases = (s->attacker == x->ai ? 4 * n - 2 : 4 * n) - (s->phase != 0 ? 1 : 0);
+		 * rest of that one first. A puzzle is read on through the other
+		 * hero's turn after the last: its objective may be met there, and it
+		 * is judged as the next turn begins. */
+		int phases = (s->attacker == x->ai ? 4 * n - 2 : 4 * n) - (s->phase != 0 ? 1 : 0) + (x->goal.active ? 2 : 0);
 		State t = *s;
 		t.rules = &p;
 		if (p.nodes >= nodes || (deadline > 0 && now_ms() > deadline)) {
@@ -6529,11 +8233,24 @@ static int prove_win(const Search *x, const State *s, int from, int turns, int64
 		int v = search_moves(&p, &t, phases, MAX_COMMANDS, WIN - 1, WIN, &found, NULL, read_line, &length);
 		if (p.aborted) {
 			*cut = 1;
+			tainted = 1;
 			continue;
 		}
-		/* Read whole: whatever was cut before it is settled with it. */
-		*settled = n;
+		/* A reading cut short leaves in the table values that stand for no
+		 * win where none was looked for: a later reading may still find a
+		 * win past them, but its finding none settles nothing. */
+		if (tainted && v < WIN) {
+			*cut = 1;
+			continue;
+		}
+		/* Read whole: whatever was cut before it is settled with it, unless
+		 * the reading met something it could not follow. */
 		*cut = 0;
+		if (p.unknown && v < WIN) {
+			*unknown = 1;
+			continue;
+		}
+		*settled = n;
 		if (v >= WIN) {
 			won = n;
 			*best = found;
@@ -6550,6 +8267,36 @@ static int prove_win(const Search *x, const State *s, int from, int turns, int64
 	return won;
 }
 
+/* The same, looked for the quick way first: with half of what may be read,
+ * the engine's hero is given only the commands the usual reading lists
+ * (`narrow`), against every command of the other hero - most wins there are
+ * lie among those, and are found for a fraction of the reading. A win found
+ * so is proved. None found so says nothing, and the rest is spent reading
+ * every command of both: only that settles a number of turns as holding no
+ * win. Without this a win three or four turns off that the plain reading
+ * finds in time is one the whole reading runs out of budget on. */
+static int prove_first(const Search *x, const State *s, int from, int turns, int64_t nodes, double deadline, Move *best, Move *line, int *line_length, int64_t *read, int *settled, int *cut, int *unknown) {
+	Search quick = *x;
+	quick.narrow = 1;
+	int quick_settled = 0, quick_cut = 0, quick_unknown = 0;
+	int64_t part = 0, rest = 0;
+	double began = deadline > 0 ? now_ms() : 0;
+	Move held = *best;
+	int won = prove_win(&quick, s, from, turns, nodes / 2, deadline > 0 ? began + (deadline - began) / 2 : 0, best, line, line_length, &part,
+		&quick_settled, &quick_cut, &quick_unknown);
+	if (won) {
+		*read = part;
+		*settled = imax(0, imin(from, won) - 1);
+		*cut = 0;
+		*unknown = 0;
+		return won;
+	}
+	*best = held;
+	won = prove_win(x, s, from, turns, nodes - part, deadline, best, line, line_length, &rest, settled, cut, unknown);
+	*read = part + rest;
+	return won;
+}
+
 static void read_card(const int32_t *r, Card *c) {
 	c->cost = (int16_t)imax(-1, imin(r[0], 1000));
 	c->none = (int8_t)(r[0] == -2);
@@ -6560,6 +8307,7 @@ static void read_card(const int32_t *r, Card *c) {
 	c->ready_worth = r[5];
 	c->resting_worth = r[6];
 	c->race = (int8_t)(r[7] & 0x7f);
+	c->mastery = (int8_t)((r[7] >> 8) & 0x7f);
 	c->effect = (int8_t)r[8];
 	c->scope = (int8_t)r[9];
 	c->amount = r[10];
@@ -6571,6 +8319,7 @@ static void read_card(const int32_t *r, Card *c) {
 	c->wake = (int8_t)(imax(0, r[15]) & 255);
 	c->aim = (int8_t)r[16];
 	c->own = (int8_t)((r[17] & 1) != 0);
+	c->habit = (int8_t)((r[17] & 4) != 0);
 	c->defence = (int8_t)((r[17] & 2) != 0);
 	c->aura_flags = (uint32_t)r[18] & 0x07ffffff;
 	c->aura_to = (uint8_t)(r[19] & 255);
@@ -6580,6 +8329,8 @@ static void read_card(const int32_t *r, Card *c) {
 	c->discards = (int8_t)((r[19] >> 12) & 7);
 	c->rises = (int8_t)((r[19] >> 15) & 1);
 	c->returns = (int8_t)((r[19] >> 16) & 1);
+	c->lamia = (int8_t)((r[19] >> 17) & 1);
+	c->summoner = (int8_t)((r[19] >> 18) & 1);
 	c->kind = (int8_t)imax(0, imin(r[20], POOL));
 	c->printed = (int16_t)imax(0, imin(r[21], 1000));
 	c->channels = (int8_t)(r[22] & 15);
@@ -6593,16 +8344,29 @@ static void read_card(const int32_t *r, Card *c) {
 	c->only = (int8_t)((r[22] >> 21) & 7);
 	c->free = c->splash = 0;
 	c->pale_bits = r[24] & 0xffff;
-	c->code = (int16_t)imax(0, imin(r[23], 30000));
+	c->code = (int16_t)imin(r[23] & 0xffff, 30000);
+	c->page = (int8_t)((r[23] >> 16) & 63);
+	c->uses = (int8_t)(((r[23] >> 22) & 127) - 1);
 }
 
 static int read_state(const int32_t *in, int64_t length, Search *x, State *s, int *phase, int *turns, int *develop_now) {
-	if (length < FIXED || in[0] != 9) return 0;
+	if (length < FIXED || in[0] != 11) return 0;
 	int n = in[11];
 	if (n < 0 || n > MAX_UNITS || length < FIXED + (int64_t)n * UNIT_FIELDS) return 0;
 	memset(s, 0, sizeof(*s));
 	memset(x, 0, sizeof(*x));
 	x->ai = in[1] & 1;
+	x->hidden = ((in[1] >> 1) & 3) - 1;
+	if (x->hidden > 1) x->hidden = -1;
+	x->hidden_mask = x->hidden >= 0 ? in[36] & 0xffff : 0;
+	x->hidden_floor[1] = (in[1] >> 16) & 255;
+	x->enfeeble = imax(0, imin(in[37], POOL));
+	x->bless = in[38] & 1023;
+	x->storm = (in[38] >> 10) & 1023;
+	x->purify = (in[38] >> 20) & 1023;
+	x->storm_mark = in[39] & 1023;
+	x->storm_price = (in[39] >> 10) & 1023;
+	x->hidden_floor[0] = (in[1] >> 24) & 127;
 	s->attacker = in[2] & 1;
 	*phase = in[3];
 	*turns = imax(1, imin(in[4], MAX_TURNS));
@@ -6618,14 +8382,39 @@ static int read_state(const int32_t *in, int64_t length, Search *x, State *s, in
 	x->blinds = (in[22] & 2) != 0;
 	x->even = (in[22] & 4) != 0;
 	x->ordered = (in[22] & 8) != 0;
+	x->revise = (in[22] & 16) != 0;
 	x->sets = (in[22] >> 8) & 15;
 	x->plans = (in[22] >> 12) & 15;
 	x->prove = (in[22] >> 16) & 15;
 	x->prove_share = (in[22] >> 20) & 127;
 	x->prove_from = (in[22] >> 27) & 15;
-	x->sight = ((in[22] >> 4) & 15) * 25;
 	x->guard = (in[31] >> 16) & 15;
 	x->guard_share = (in[31] >> 20) & 127;
+	/* Told in any phase: no draw brings a card (a puzzle's fixed hands); the
+	 * cards to come are sampled, not foreseen; the position already holds
+	 * more than the model has room for. */
+	x->no_draws = (in[31] >> 28) & 1;
+	x->fair = (in[31] >> 29) & 1;
+	x->graves_matter = ((uint32_t)in[31] >> 31) & 1;
+	if ((in[31] >> 27) & 1 && length >= FIXED + GOAL_FIELDS) {
+		/* A puzzle's objective, in the last integers of the state. */
+		const int32_t *g = in + length - GOAL_FIELDS;
+		x->goal.active = 1;
+		x->goal.type = imax(0, imin(g[0], 3));
+		x->goal.side = g[1] & 1;
+		x->goal.allowed = g[2];
+		x->goal.turn = g[3];
+		x->goal.enemy_turns = g[4];
+		x->goal.completed = g[5];
+		x->goal.min_health = g[6];
+		x->goal.finish_health = g[7];
+		x->goal.finish_mana = g[8];
+		x->goal.min_allies = g[9];
+		x->goal.targets = imax(0, imin(g[10], 4));
+		for (int k = 0; k < 4; k++) x->goal.target[k] = g[11 + k];
+		x->goal.protects = imax(0, imin(g[15], 4));
+		for (int k = 0; k < 4; k++) x->goal.protect[k] = g[16 + k];
+	}
 	x->bans = 0;
 	x->guarding = 0;
 	x->power_worth = in[23];
@@ -6633,8 +8422,9 @@ static int read_state(const int32_t *in, int64_t length, Search *x, State *s, in
 	x->tough_worth = in[25];
 	x->leaf_attack = in[26] != 0;
 	x->blend = imax(0, imin(in[27], 100));
-	x->trim[0] = (uint32_t)in[29];
-	x->trim[1] = (uint32_t)in[30];
+	/* Twelve places of each hand, five bits a place, six to a field. */
+	for (int side = 0; side < 2; side++)
+		x->trim[side] = (uint64_t)((uint32_t)in[32 + 2 * side] & 0x3fffffffu) | ((uint64_t)((uint32_t)in[33 + 2 * side] & 0x3fffffffu) << 30);
 	x->card_worth = in[18];
 	x->channel_worth = in[19];
 	s->phase = in[17] != 0;
@@ -6645,6 +8435,7 @@ static int read_state(const int32_t *in, int64_t length, Search *x, State *s, in
 	x->cards = in[12] != 0;
 	*develop_now = in[13] != 0;
 	s->n = n;
+	s->limit = (int8_t)((in[31] >> 30) & 1);
 	const int32_t *at = in + HEADER;
 	for (int side = 0; side < 2; side++, at += HERO_FIELDS) {
 		s->health[side] = at[0];
@@ -6653,7 +8444,8 @@ static int read_state(const int32_t *in, int64_t length, Search *x, State *s, in
 		s->unknown[side] = imax(0, at[7]);
 		x->chance_step[side] = imax(0, imin(at[8], 1000));
 		s->chance[side] = imax(0, imin(at[9], 1000));
-		for (int i = 0; i < MAX_TURNS; i++) x->income[side][i] = imax(0, at[10 + i]);
+		for (int i = 0; i < AHEAD; i++) x->income[side][i] = imax(0, at[40 + i]);
+		x->income_over[side] = at[73] & 1;
 		s->extra[side] = imax(0, at[16]);
 		s->held[side] = imax(0, at[17]);
 		s->aura_worth[side] = at[18];
@@ -6663,7 +8455,24 @@ static int read_state(const int32_t *in, int64_t length, Search *x, State *s, in
 		for (int i = 0; i < s->known[side]; i++)
 			s->graves[side][i] = (int8_t)imax(0, imin(at[HERO_SCALARS + HE_COUNT + HERO_ABILITIES + 1 + i], POOL));
 		x->opening[side] = imax(0, at[21]);
-		for (int i = 0; i < MAX_TURNS; i++) x->disturbance[side][i] = imax(0, at[23 + i]);
+		for (int i = 0; i < AHEAD; i++) {
+			x->disturbance[side][i] = imax(0, at[56 + i] & 0xfffff);
+			if (x->disturbance[side][i] > 0 && i < MAX_TURNS) x->wears = 1;
+			x->regen[side][i] = (int8_t)((at[56 + i] >> 20) & 1);
+			x->extra_draw[side][i] = (int8_t)((at[56 + i] >> 21) & 1);
+		}
+		x->wear_told[side] = (at[72] >> 30) & 1;
+		x->wear_base[side] = (at[72] & 0xfffff) - 100000;
+		/* Its specialisation, by number (0 for none, or one that cannot
+		 * work); the chance a trial of it succeeds, a double in two words;
+		 * and whether the hero has been revived already. */
+		x->spec[side] = at[3] & 255;
+		{
+			int32_t words[2] = { at[74], at[75] };
+			memcpy(&x->spec_p[side], words, sizeof(double));
+			if (!(x->spec_p[side] > 0.0)) x->spec[side] = 0;
+		}
+		x->revived[side] = (int8_t)(at[77] & 1);
 		s->forest[side] = imax(0, at[29]) - 1;
 		s->forest_worth[side] = at[30];
 		s->flight[side] = (int8_t)(at[31] != 0);
@@ -6744,6 +8553,15 @@ static int read_state(const int32_t *in, int64_t length, Search *x, State *s, in
 			if (c->variable) c->free = 0;
 		}
 	}
+	/* What the battle's scripts make of a creature as it is summoned. */
+	for (int side = 0; side < 2; side++)
+		for (int k = 0; k < POOL; k++, at += 3) {
+			const uint32_t plain = 0x0fffffffu & ~(uint32_t)(F_RESTING | F_SICK | F_PLANE | F_ATTACKING | F_HIT | F_DISSIPATES | F_NO_AFFECT);
+			x->shape[side][k][0] = (int16_t)((uint32_t)at[0] & 0xffffu);
+			x->shape[side][k][1] = (int16_t)((uint32_t)at[0] >> 16);
+			x->shape_given[side][k] = (uint32_t)at[1] & plain;
+			x->shape_taken[side][k] = (uint32_t)at[2] & plain;
+		}
 	for (int klass = 1; klass < 4; klass++) {
 		x->wards[klass][0] = s->he[0][WARD_LESSER[klass]] + s->he[1][WARD_LESSER[klass]];
 		x->wards[klass][1] = s->he[0][WARD_GREATER[klass]] + s->he[1][WARD_GREATER[klass]];
@@ -6762,6 +8580,7 @@ static int read_state(const int32_t *in, int64_t length, Search *x, State *s, in
 		u->ready_worth = r[8];
 		u->resting_worth = r[9];
 		u->race = (int8_t)(r[10] & 0x7f);
+		u->mastery = (int8_t)((r[10] >> 8) & 0x7f);
 		u->blocks = -1;
 		u->wake = (int8_t)imax(0, imin(r[12], 100));
 		u->damage = (int16_t)imax(0, r[13]);
@@ -6774,6 +8593,8 @@ static int read_state(const int32_t *in, int64_t length, Search *x, State *s, in
 		u->cost = (int16_t)imax(0, imin(r[19], 1000));
 		u->twisted = (int8_t)imax(0, imin(r[20], 100));
 		u->horror = (int8_t)(r[21] & 1);
+		u->mother = (int8_t)((r[21] >> 4) & 1);
+		u->beholder = (int8_t)((r[21] >> 5) & 1);
 		u->mourned = (int8_t)((r[21] >> 1) & 1);
 		u->feeds = (int8_t)((r[21] >> 2) & 1);
 		u->envenoms = (int8_t)((r[21] >> 3) & 1);
@@ -6787,7 +8608,8 @@ static int read_state(const int32_t *in, int64_t length, Search *x, State *s, in
 		u->ability = (int8_t)imax(0, imin(r[22], 63));
 		u->ability_cost = (int8_t)imax(0, imin(r[23], 100));
 		u->ability_amount = (int8_t)imax(0, imin(r[24], 127));
-		u->ability_traits = (int8_t)(r[25] & 15);
+		u->ability_traits = (int8_t)(r[25] & (15 | AT_FRENZY));
+		if (r[25] & AT_FRENZIED) u->frenzy = 1;
 		u->lent = (uint32_t)r[26] & 0x00ffffffu;
 		u->overload = (int8_t)imax(0, imin(r[27], 100));
 		u->worn = (int8_t)imax(0, imin(r[28], 100));
@@ -6807,13 +8629,14 @@ static int read_state(const int32_t *in, int64_t length, Search *x, State *s, in
 		u->gives_own = (int8_t)((r[39] >> 8) & 1);
 		u->aura_flags = (uint32_t)r[40] & 0x07ffffff;
 		u->tribe = (int8_t)(r[41] & 3);
+		u->summoner = (int8_t)((r[41] >> 2) & 1);
+		u->grows = (int8_t)((r[41] >> 3) & 1);
 		u->linked = (int8_t)imax(0, imin(r[42], 100));
 		u->pale = (int8_t)(r[43] & 1);
 		/* One that regenerated while the other hero moved. */
 		if (r[43] & 2) u->flags |= F_REGENERATED;
 		u->under = (int16_t)imax(0, imin(r[51], 100));
 		u->kind = (int8_t)imax(0, imin(r[59], POOL));
-		u->worn_discards = (int8_t)imax(0, imin(r[60], u->discards));
 		u->passing = (int8_t)imax(0, imin(r[53], 100));
 		u->passing_power = (int16_t)r[54];
 		u->passing_health = (int16_t)r[55];
@@ -6821,6 +8644,8 @@ static int read_state(const int32_t *in, int64_t length, Search *x, State *s, in
 		u->passing_ready = r[57];
 		u->passing_resting = r[58];
 		u->discards = (int8_t)imax(0, imin(r[50], 100));
+		/* Of those, the ones its enchantments lend it: told after the whole. */
+		u->worn_discards = (int8_t)imax(0, imin(r[60], u->discards));
 		u->spent = (int8_t)(r[61] != 0);
 		u->brief = (int8_t)imax(0, imin(r[44], 100));
 		u->brief_power = (int16_t)r[45];
@@ -6835,9 +8660,20 @@ static int read_state(const int32_t *in, int64_t length, Search *x, State *s, in
 		u->worn_resting -= r[49] / 2;
 		u->rank = (uint8_t)imax(0, imin(r[37], 250));
 		if (u->rank > s->ranks) s->ranks = u->rank;
+		/* One that changed sides: what it keeps of the army enchantments. */
+		if ((r[66] & 1) && s->carries < MAX_CARRY) {
+			Carry *c = &s->carry[s->carries++];
+			c->unit = (int8_t)i;
+			for (int side = 0; side < 2; side++)
+				for (int k = 0; k < ARMY_KINDS; k++) c->held[side][k] = (uint8_t)((uint32_t)r[67 + side * 4 + k / 4] >> (8 * (k % 4)));
+		} else if (r[66] & 1) s->limit = 1;
 		/* What stands on its hero has already taken its points past the floor. */
 		if (!(u->flags & (F_NO_AFFECT | F_PLANE)))
-			for (int k = 0; k < HE_COUNT; k++) u->lethal = (int16_t)(u->lethal + s->he[u->owner][k] * x->charm[k].lethal);
+			for (int k = 0; k < HE_COUNT; k++) {
+				const Carry *c = kept_kind(x, k) ? carried(s, i) : NULL;
+				int copies = c ? bits8(c->held[0][k - ARMY_FIRST]) + bits8(c->held[1][k - ARMY_FIRST]) : s->he[u->owner][k];
+				u->lethal = (int16_t)(u->lethal + copies * x->charm[k].lethal);
+			}
 		/* Health shows no less than one: what is added counts from where it really is. */
 		u->raw = (int16_t)(u->toughness + u->lethal - imax(0, imin(r[52], 100)));
 		/* Under an alpha strike its health is told as it would be without. */
@@ -6860,7 +8696,7 @@ static int read_state(const int32_t *in, int64_t length, Search *x, State *s, in
 		Ench *e = &s->ench[s->enchs++];
 		e->unit = (int8_t)r[0];
 		e->caster = (int8_t)(r[1] & 1);
-		e->kind = (int8_t)imax(0, imin(r[2], EN_GIFT));
+		e->kind = (int8_t)imax(0, imin(r[2], EN_BEACON));
 		e->code = (int16_t)imax(0, imin(r[3], 30000));
 		e->price = (int16_t)imax(0, imin(r[4], 1000));
 		e->power = (int16_t)r[5];
@@ -6876,6 +8712,7 @@ static int read_state(const int32_t *in, int64_t length, Search *x, State *s, in
 		e->shields = (int8_t)((r[11] >> 7) & 1);
 		e->mutes = (int8_t)((r[11] >> 8) & 1);
 		e->tick = (int8_t)((r[11] >> 9) & 3);
+		e->kept = (int8_t)((r[11] >> 11) & 1);
 		e->regen = (int8_t)imax(0, imin(r[12], 101));
 	}
 	return 1;
@@ -6905,9 +8742,14 @@ static int run_search(const int32_t *in, int64_t length, int32_t *out) {
 			tactical.a = 0;
 			tactical.b = 0;
 			tactical.c = 0;
+			/* On the clock like the games after it: a tenth of the time. */
+			double began = in[28] > 0 ? now_ms() : 0;
+			if (in[28] > 0) set_clock(&x, began + (double)in[28] / 10.0);
 			x.budget = x.nodes + whole / 10;
 			int v = search_moves(&x, &s, 2, 8, -2 * WIN, 2 * WIN, &tactical, NULL, NULL, NULL);
 			x.budget = whole;
+			x.aborted = 0;
+			if (in[28] > 0) set_clock(&x, began + (double)in[28]);
 			if (v >= WIN) {
 				out[0] = 1;
 				out[1] = tactical.kind;
@@ -6920,9 +8762,15 @@ static int run_search(const int32_t *in, int64_t length, int32_t *out) {
 			}
 		}
 		uint32_t seed = (uint32_t)(in[5] * 2654435761u + 1u);
+		/* The clock ends the games as it ends any reading: the budget is
+		 * taken to be spent when it runs out. */
+		double until = x.deadline;
 		int said = 0;
 		int32_t score[MAX_MOVES], played[MAX_MOVES];
-		State after[MAX_MOVES];
+		/* A position for each command played out: far too many to keep on
+		 * the stack of a thread. */
+		State *after = (State *)malloc(sizeof(State) * MAX_MOVES);
+		if (!after) return 5;
 		int kinds[MAX_MOVES];
 		/* Only the most promising commands are played out: the budget buys far
 		 * more games each, and a game tells little until there are many. */
@@ -6950,6 +8798,7 @@ static int run_search(const int32_t *in, int64_t length, int32_t *out) {
 			int each = imax(4, (int)((x.budget - x.nodes) / (int64_t)imax(1, living * passes * 160)));
 			while (x.nodes < x.budget) {
 				for (int k = 0; k < living && x.nodes < x.budget; k++) {
+					if (x.timed || (until > 0 && now_ms() > until)) x.budget = x.nodes;
 					int i = alive[k];
 					for (int g = 0; g < each && x.nodes < x.budget; g++) {
 						score[i] += play_out(&x, &after[i], &seed, rounds);
@@ -6980,21 +8829,28 @@ static int run_search(const int32_t *in, int64_t length, int32_t *out) {
 			out[1 + i * 6 + 4] = score[i];
 			out[1 + i * 6 + 5] = played[i];
 		}
+		free(after);
 		return 1 + said * 6;
 	}
 	if (phase == 9) {
 		/* Only whether the engine's hero wins whatever the other does, within
 		 * so many of its own turns. */
 		Move best = { 0, 0, 0, 0 }, line[MAX_LINE];
-		int line_length = 0, cut = 0, settled = 0;
+		int line_length = 0, cut = 0, settled = 0, unknown = 0, whole = 0;
 		int64_t read = 0;
 		/* Each number of turns may take the whole budget here, and the first
-		 * left unsettled ends it: the answer is the fewest turns. */
+		 * left unsettled ends it: the answer is the fewest turns. One that met
+		 * what the model cannot follow is not settled either, but a longer
+		 * reading may still find a win. */
 		int won = 0;
+		double until = in[28] > 0 ? now_ms() + (double)in[28] : 0;
 		for (int n = 1; n <= imin(turns, 15) && !won && !cut; n++) {
 			int64_t part = 0;
-			won = prove_win(&x, &s, n, n, x.budget, 0, &best, line, &line_length, &part, &settled, &cut);
+			int here = 0;
+			won = prove_first(&x, &s, n, n, x.budget, until, &best, line, &line_length, &part, &settled, &cut, &here);
 			read += part;
+			unknown |= here;
+			if (!won && !here && !cut && !unknown) whole = n;
 		}
 		out[0] = won;
 		out[1] = best.kind;
@@ -7011,28 +8867,88 @@ static int run_search(const int32_t *in, int64_t length, int32_t *out) {
 			out[10 + k * 4] = line[k].b;
 			out[11 + k * 4] = line[k].c;
 		}
-		return 8 + out[7] * 4;
+		/* Last, whether something was met that the reading cannot follow, and
+		 * the most turns read whole and found without a win. */
+		/* And the answer in one word (bits 16-19): 1 a win proved, 2 none
+		 * within the turns asked, all of them read whole, 4 unknown (the
+		 * budget, the clock or something the reading cannot follow ended it
+		 * first), 5 the position is more than the model holds. */
+		int status = won ? 1 : s.limit ? 5 : (whole >= imin(turns, 15) ? 2 : 4);
+		out[8 + out[7] * 4] = (unknown ? 1 : 0) | (s.limit ? 2 : 0) | (imin(whole, 255) << 8) | (status << 16);
+		return 9 + out[7] * 4;
+	}
+	if (phase == 10 || phase == 11) {
+		/* Every command the engine lists at its first command, as its plain
+		 * reading (10) or a proof (11) lists them, for holding the list
+		 * against what the game's rules allow. */
+		if (phase == 11) {
+			x.proof = 1;
+			x.width = MAX_MOVES;
+			x.margin = 0;
+			x.sets = 0;
+			x.plans = 0;
+			x.ordered = 1;
+			x.even = 1;
+			x.blend = 0;
+			x.blinds = 1;
+		}
+		Move moves[MAX_MOVES];
+		int count = generate(&x, &s, moves, 1, 0, 1, NULL);
+		out[0] = count;
+		for (int i = 0; i < count; i++) {
+			out[1 + i * 4] = moves[i].kind;
+			out[2 + i * 4] = moves[i].a;
+			out[3 + i * 4] = moves[i].b;
+			out[4 + i * 4] = moves[i].c;
+		}
+		return 1 + count * 4;
 	}
 	if (phase == 7) {
 		/* Every command the side to move may give, with what this engine
 		 * makes of it: for holding its reckoning against the search's. */
+		/* Each is read as the usual search reads a first command: the phases
+		 * it ends are taken from the reading, the budget and the time are
+		 * shared out among the commands still to read, and a command whose
+		 * reading the clock cut short is told as such. */
 		Move moves[MAX_MOVES];
 		int count = generate(&x, &s, moves, 1, 0, 1, NULL);
 		int steps = imax(2, imin(in[16], MAX_COMMANDS));
-		int said = 0;
+		double until = in[28] > 0 ? now_ms() + (double)in[28] : 0;
+		if (in[22] & 1) {
+			uint64_t size = 1u << 12;
+			while (size < (uint64_t)x.budget && size < (1u << 20)) size <<= 1;
+			x.table = (Entry *)calloc((size_t)size, sizeof(Entry));
+			x.mask = size - 1;
+		}
+		int64_t whole = x.budget;
+		int said = 0, playable = 0;
+		for (int i = 0; i < count; i++) {
+			State t = s;
+			playable += apply_command(&x, &t, (const int32_t *)&moves[i]);
+		}
+		playable = imin(playable, 40);
 		for (int i = 0; i < count && said < 40; i++) {
+			if (until > 0 && now_ms() > until) break;
 			State t = s;
 			if (!apply_command(&x, &t, (const int32_t *)&moves[i])) continue;
-			int v = search_moves(&x, &t, imax(1, turns), steps - 1, -2 * WIN, 2 * WIN, NULL, NULL, NULL, NULL);
-			out[1 + said * 5] = moves[i].kind;
-			out[1 + said * 5 + 1] = moves[i].a;
-			out[1 + said * 5 + 2] = moves[i].b;
-			out[1 + said * 5 + 3] = moves[i].c;
-			out[1 + said * 5 + 4] = v;
+			x.aborted = 0;
+			set_clock(&x, until);
+			x.budget = x.nodes + imax(1, (int)imin64((whole - x.nodes) / imax(1, playable - said), 2000000000));
+			int spent = phases_spent(&x, &s, &t, moves[i].kind);
+			int v = search_moves(&x, &t, imax(0, imax(1, turns) - spent), steps - 1, -2 * WIN, 2 * WIN, NULL, NULL, NULL, NULL);
+			out[1 + said * 6] = moves[i].kind;
+			out[1 + said * 6 + 1] = moves[i].a;
+			out[1 + said * 6 + 2] = moves[i].b;
+			out[1 + said * 6 + 3] = moves[i].c;
+			out[1 + said * 6 + 4] = v;
+			out[1 + said * 6 + 5] = x.aborted ? 0 : 1;
 			said++;
 		}
+		x.budget = whole;
+		free(x.table);
+		x.table = NULL;
 		out[0] = said;
-		return 1 + said * 5;
+		return 1 + said * 6;
 	}
 	if (phase == 6) {
 		/* What this engine makes of the position, for holding its reckoning
@@ -7052,15 +8968,19 @@ static int run_search(const int32_t *in, int64_t length, int32_t *out) {
 		best.c = 0;
 		int steps = imax(2, imin(in[16], MAX_COMMANDS));
 		double began = in[28] > 0 ? now_ms() : 0;
+		/* The moment the whole call ends, whatever it is reading by then:
+		 * the proof, the choice, the readings that check it and the guard's
+		 * each have a part of the time up to it and none runs past it. */
+		double until = in[28] > 0 ? began + (double)in[28] : 0;
 		/* A win that cannot be stopped is looked for first, and taken. */
-		int settled = 0, cut = 0;
+		int settled = 0, cut = 0, unknown = 0;
 		if (x.prove > 0 && x.prove_from <= x.prove) {
 			Move line[MAX_LINE];
 			int line_length = 0;
 			int64_t read = 0;
 			int share = x.prove_share > 0 ? x.prove_share : 50;
-			double until = in[28] > 0 ? began + (double)in[28] * share / 100.0 : 0;
-			int won = prove_win(&x, &s, x.prove_from, x.prove, x.budget * share / 100, until, &best, line, &line_length, &read, &settled, &cut);
+			double part_end = in[28] > 0 ? began + (double)in[28] * share / 100.0 : 0;
+			int won = prove_first(&x, &s, x.prove_from, x.prove, x.budget * share / 100, part_end, &best, line, &line_length, &read, &settled, &cut, &unknown);
 			if (won) {
 				out[0] = WIN / 1000 * 1000 + (MAX_TURNS - imin(won, MAX_TURNS)) * 1000;
 				out[1] = best.kind;
@@ -7077,13 +8997,16 @@ static int run_search(const int32_t *in, int64_t length, int32_t *out) {
 					out[9 + k * 4 + 2] = line[k].b;
 					out[9 + k * 4 + 3] = line[k].c;
 				}
-				return 9 + line_length * 4;
+				out[9 + line_length * 4] = RESULT_PROVEN | RESULT_TERMINAL | RESULT_COVERED | RESULT_EXACT;
+				return 10 + line_length * 4;
 			}
 			proved = read;
 		}
 		/* Positions already read are kept through the whole search, a table
-		 * about as large as the search is allowed to grow. */
-		if (in[28] > 0) x.deadline = began + (double)in[28];
+		 * about as large as the search is allowed to grow. The time allowed
+		 * is a hard limit for the whole of it: the guard's readings after the
+		 * choice keep within it too, so the choice leaves them a part. */
+		if (in[28] > 0) set_clock(&x, began + (double)in[28] * (x.guard > 0 ? 0.85 : 1.0));
 		if (in[22] & 1) {
 			uint64_t size = 1u << 12;
 			while (size < (uint64_t)x.budget && size < (1u << 20)) size <<= 1;
@@ -7112,26 +9035,68 @@ static int run_search(const int32_t *in, int64_t length, int32_t *out) {
 		 * a win or a loss that lies past the usual reach is found this way.
 		 * A further reading counts only when it was read whole. */
 		int spare = imax(1, (in[31] >> 8) & 127);
-		for (int phases = imax(1, turns) + 2; phases <= imin(in[31] & 255, 12); phases += 2) {
-			if (reached < steps || x.aborted || x.nodes * spare >= x.budget || value >= WIN || value <= -WIN) break;
-			Move found = best;
-			Move line[MAX_LINE];
-			int line_length = 0;
-			/* As many commands to a phase as the first reading had: a line cut
-			 * short by its count of commands, not by its phases, ends in the
-			 * middle of a turn, and lines of unlike length are then weighed
-			 * at unlike moments. */
-			int further = imin(MAX_COMMANDS, steps * phases / imax(1, turns));
-			int v = search_moves(&x, &s, phases, further, -2 * WIN, 2 * WIN, &found, &best, line, &line_length);
-			if (x.aborted) {
-				x.aborted = 0;
-				break;
+		/* A further reading may find a win the usual reading cannot prove;
+		 * that win, shown to be none, leaves room for one more pass. */
+		int verdict = 0, exact = 0;
+		for (int pass = 0; pass < 2; pass++) {
+			for (int phases = imax(imax(1, turns), x.far) + 2; phases <= imin(in[31] & 255, 12); phases += 2) {
+				if (reached < steps || x.aborted || x.nodes * spare >= x.budget || value >= WIN || value <= -WIN) break;
+				Move found = best;
+				Move line[MAX_LINE];
+				int line_length = 0;
+				/* As many commands to a phase as the first reading had: a line cut
+				 * short by its count of commands, not by its phases, ends in the
+				 * middle of a turn, and lines of unlike length are then weighed
+				 * at unlike moments. */
+				int further = imin(MAX_COMMANDS, steps * phases / imax(1, turns));
+				int v = search_moves(&x, &s, phases, further, -2 * WIN, 2 * WIN, &found, &best, line, &line_length);
+				if (x.aborted) {
+					x.aborted = 0;
+					break;
+				}
+				best = found;
+				value = v;
+				kept_length = imin(line_length, MAX_LINE);
+				for (int k = 0; k < kept_length; k++) kept[k] = line[k];
+				x.far = phases;
 			}
-			best = found;
-			value = v;
-			kept_length = imin(line_length, MAX_LINE);
-			for (int k = 0; k < kept_length; k++) kept[k] = line[k];
-			x.far = phases;
+			/* A win the usual reading foresees is no fact: it keeps to the
+			 * likeliest commands of a crowded board, and the other hero's way out
+			 * may be among those it left unread. It is read again with every
+			 * command of both heroes, for as many of the engine's turns as the
+			 * line took. Proved, it is played as a proof; shown absent, or not
+			 * settled either way, it is worth no more than a win foreseen, and the
+			 * guard below holds the command against the other hero's replies. */
+			if (value < WIN || exact) break;
+			{
+				int root_phases = x.far > 0 ? x.far : imax(1, turns);
+				int used = root_phases - (value - WIN) / 1000;
+				int n = 1;
+				while (n < MAX_TURNS && (s.attacker == x.ai ? 4 * n - 2 : 4 * n) - (s.phase != 0 ? 1 : 0) + (x.goal.active ? 2 : 0) < used) n++;
+				if (x.prove > 0 && settled >= n) verdict = RESULT_REFUTED;
+				else {
+					Move proof_best = { 0, 0, 0, 0 }, proof_line[MAX_LINE];
+					int proof_length = 0, proof_settled = 0, proof_cut = 0, proof_unknown = 0;
+					int64_t read = 0;
+					int64_t part = imax(1000, (int)(x.budget * imax(1, x.guard_share > 0 ? x.guard_share : 10) / 100));
+					int won = prove_first(&x, &s, imax(1, settled + 1), n, part, until, &proof_best, proof_line, &proof_length, &read,
+						&proof_settled, &proof_cut, &proof_unknown);
+					proved += read;
+					if (won) {
+						best = proof_best;
+						value = WIN / 1000 * 1000 + (MAX_TURNS - imin(won, MAX_TURNS)) * 1000;
+						kept_length = imin(proof_length, MAX_LINE);
+						for (int k = 0; k < kept_length; k++) kept[k] = proof_line[k];
+						settled = imax(settled, won - 1);
+						exact = won;
+					} else {
+						verdict = proof_settled >= n ? RESULT_REFUTED : RESULT_UNVERIFIED;
+						settled = imax(settled, proof_settled);
+					}
+				}
+				if (!exact) value = verdict == RESULT_REFUTED ? FORECAST / 2 : FORECAST;
+			}
+			if (exact) break;
 		}
 		/* The command chosen is held against a reading of every command of
 		 * both heroes: one after which the other hero wins whatever is done,
@@ -7151,13 +9116,16 @@ static int run_search(const int32_t *in, int64_t length, int32_t *out) {
 			int64_t part = imax(1000, (int)(x.budget * imax(1, x.guard_share) / 100));
 			int read_phases = x.far > 0 ? x.far : imax(1, turns);
 			int read_steps = x.far > 0 ? imin(MAX_COMMANDS, steps * x.far / imax(1, turns)) : imax(1, reached);
-			double until = in[28] > 0 ? began + (double)in[28] * 3 / 2 : 0;
 			Move answer = { 0, 0, 0, 0 }, answers[MAX_LINE];
-			int answers_length = 0, whole = 0, ran_out = 0, lost = 0;
+			int answers_length = 0, whole = 0, ran_out = 0, lost = 0, unread = 0;
 			int64_t read = 0;
 			State t = s;
 			if (apply_command(&x, &t, (const int32_t *)&best) && t.health[0] > 0 && t.health[1] > 0) {
-				lost = prove_win(&g, &t, 1, x.guard, part, until, &answer, answers, &answers_length, &read, &whole, &ran_out);
+				/* From the position the command leads to, no block is gone
+				 * back on: what the command sets is held to what it does. */
+				g.revise = 0;
+				lost = prove_win(&g, &t, 1, x.guard, part, until, &answer, answers, &answers_length, &read, &whole, &ran_out, &unread);
+				g.revise = x.revise;
 				proved += read;
 			}
 			if (lost) {
@@ -7165,12 +9133,12 @@ static int run_search(const int32_t *in, int64_t length, int32_t *out) {
 				 * command that holds out: for good, as far as was read, or
 				 * at least longer than the one chosen. */
 				Move escape = { -1, 0, 0, 0 };
-				int doomed = prove_win(&g, &s, 1, x.guard, part * 2, until, &escape, answers, &answers_length, &read, &whole, &ran_out);
+				int doomed = prove_win(&g, &s, 1, x.guard, part * 2, until, &escape, answers, &answers_length, &read, &whole, &ran_out, &unread);
 				proved += read;
 				int holds = doomed ? 0 : whole;
 				if (doomed > lost) {
 					escape.kind = -1;
-					int sooner = prove_win(&g, &s, 1, doomed - 1, part, until, &escape, answers, &answers_length, &read, &whole, &ran_out);
+					int sooner = prove_win(&g, &s, 1, doomed - 1, part, until, &escape, answers, &answers_length, &read, &whole, &ran_out, &unread);
 					proved += read;
 					holds = sooner ? 0 : whole;
 				}
@@ -7189,7 +9157,7 @@ static int run_search(const int32_t *in, int64_t length, int32_t *out) {
 						int64_t allowed = x.budget;
 						x.aborted = 0;
 						x.budget = x.nodes + part;
-						x.deadline = until;
+						set_clock(&x, until);
 						int v = search_moves(&x, &s, read_phases, read_steps, -2 * WIN, 2 * WIN, &found, NULL, line, &line_length);
 						x.budget = allowed;
 						x.aborted = 0;
@@ -7199,7 +9167,9 @@ static int run_search(const int32_t *in, int64_t length, int32_t *out) {
 						if (!apply_command(&x, &u, (const int32_t *)&found)) continue;
 						int bad = u.health[x.ai] <= 0;
 						if (!bad && u.health[1 - x.ai] > 0) {
-							bad = prove_win(&g, &u, 1, holds, part, until, &answer, answers, &answers_length, &read, &whole, &ran_out) > 0 || ran_out;
+							g.revise = 0;
+							bad = prove_win(&g, &u, 1, holds, part, until, &answer, answers, &answers_length, &read, &whole, &ran_out, &unread) > 0 || ran_out || unread;
+							g.revise = x.revise;
 							proved += read;
 						}
 						if (bad) continue;
@@ -7211,10 +9181,32 @@ static int run_search(const int32_t *in, int64_t length, int32_t *out) {
 					}
 					x.bans = 0;
 					if (guarded == 14) {
+						/* The command that holds out is given with its own worth
+						 * and line, read as any first command is. */
 						best = escape;
 						kept[0] = escape;
 						kept_length = 1;
+						State u = s;
+						value = -(WIN / 1000 * 1000 + (MAX_TURNS - imin(lost, MAX_TURNS)) * 1000);
+						if (apply_command(&x, &u, (const int32_t *)&escape)) {
+							Move below[MAX_LINE];
+							int below_length = 0;
+							int64_t allowed = x.budget;
+							x.aborted = 0;
+							x.budget = x.nodes + part;
+							set_clock(&x, until);
+							int spent = phases_spent(&x, &s, &u, escape.kind);
+							value = search_moves(&x, &u, imax(0, read_phases - spent), imax(1, read_steps - 1), -2 * WIN, 2 * WIN, NULL, NULL, below, &below_length);
+							x.budget = allowed;
+							x.aborted = 0;
+							for (int k = 0; k < below_length && kept_length < MAX_LINE; k++) kept[kept_length++] = below[k];
+						}
 					}
+				}
+				if (guarded == 15) {
+					/* Nothing found holds out: the command chosen loses within
+					 * the turns read, and is worth that loss. */
+					value = -(WIN / 1000 * 1000 + (MAX_TURNS - imin(lost, MAX_TURNS)) * 1000);
 				}
 			}
 		}
@@ -7271,7 +9263,7 @@ static int run_search(const int32_t *in, int64_t length, int32_t *out) {
 		out[4] = best.c;
 		out[5] = (int32_t)imin64(x.nodes + proved, 2000000000);
 		out[6] = x.aborted;
-		out[7] = reached + (x.far << 8) + (settled << 20) + (cut << 24) + (guarded << 25);
+		out[7] = reached + (x.far << 8) + (imin(exact, 15) << 16) + (imin(settled, 15) << 20) + (cut << 24) + (guarded << 25) + (unknown << 29);
 		out[8] = kept_length;
 		for (int k = 0; k < kept_length; k++) {
 			out[9 + k * 4] = kept[k].kind;
@@ -7279,7 +9271,18 @@ static int run_search(const int32_t *in, int64_t length, int32_t *out) {
 			out[9 + k * 4 + 2] = kept[k].b;
 			out[9 + k * 4 + 3] = kept[k].c;
 		}
-		return 9 + kept_length * 4;
+		/* Last, what the answer is: a proof, no win within the turns the
+		 * proof read whole, a judgement, unknown, or past the model; and
+		 * apart from that whether its worth is a decided duel, whether every
+		 * reply was read, whether the worth is exact, and how a win the
+		 * usual reading foresaw fared. */
+		int result = exact ? RESULT_PROVEN : s.limit ? RESULT_UNSUPPORTED
+			: (x.prove > 0 && (cut || unknown)) ? RESULT_UNKNOWN : (x.prove > 0 && settled >= x.prove) ? RESULT_NO_WIN : RESULT_HEURISTIC;
+		if (exact) result |= RESULT_COVERED | RESULT_EXACT;
+		if (value >= WIN || value <= -WIN) result |= RESULT_TERMINAL;
+		if (x.aborted) result |= RESULT_ABORTED;
+		out[9 + kept_length * 4] = result | verdict;
+		return 10 + kept_length * 4;
 	}
 	if (phase == 2 || phase == 3 || phase == 4) {
 		/* The fight, the turn's end, or a list of commands played out: all
@@ -7324,6 +9327,44 @@ static int run_search(const int32_t *in, int64_t length, int32_t *out) {
 				if (!(s.u[i].flags & F_DEAD)) armies[s.u[i].owner]++;
 			out[9 + said++] = armies[0] | (armies[1] << 8);
 		}
+		/* And the rest the rules can be held to: each creature's power,
+		 * health, whether its once-a-round ability is spent and what it
+		 * wears; each hand's cards by name (those the model knows by name);
+		 * and what each hero wears, and the copies of it used this turn. */
+		out[9 + said++] = -2000000;
+		for (int i = 0; i < s.n; i++) {
+			int worn = 0;
+			/* A water link is its caster's, as the game keeps it (but for
+			 * one an older position left on the creature). */
+			for (int r = 0; r < s.enchs; r++) worn += s.ench[r].unit == i && (s.ench[r].kind != EN_WATER || s.ench[r].kept);
+			out[9 + said++] = s.u[i].power;
+			out[9 + said++] = s.u[i].toughness;
+			out[9 + said++] = s.u[i].spent;
+			out[9 + said++] = worn;
+		}
+		for (int side = 0; side < 2; side++) {
+			int at = 9 + said++, named = 0;
+			for (int i = 0; i < imin(SLOTS, HAND + s.drawn[side]) && named < HAND + BACK; i++) {
+				if ((s.played[side] >> i & 1) || (i < HAND ? i >= s.held[side] : x.hand[side][i].none)) continue;
+				out[9 + said++] = x.hand[side][i].code;
+				named++;
+			}
+			for (int j = 0; j < BACK && named < HAND + BACK; j++)
+				if (s.back[side][j] > 0 && s.back[side][j] <= POOL) {
+					out[9 + said++] = x.pool[s.back[side][j] - 1].code;
+					named++;
+				}
+			out[at] = named;
+		}
+		for (int side = 0; side < 2; side++)
+			for (int k = 0; k < HE_COUNT; k++) out[9 + said++] = s.he[side][k];
+		for (int side = 0; side < 2; side++)
+			for (int k = 0; k < HERO_ABILITIES; k++) out[9 + said++] = s.used[side][k];
+		/* And whether the model could follow the line to its end: something
+		 * went past what it has room for, or chance took or dealt a card. */
+		out[9 + said++] = -3000000;
+		out[9 + said++] = s.limit;
+		out[9 + said++] = s.blind;
 		return 9 + said;
 	}
 	int root = evaluate(&x, &s, 0);
@@ -7337,6 +9378,9 @@ static int run_search(const int32_t *in, int64_t length, int32_t *out) {
 	for (int i = 0; i < s.n; i++)
 		if (s.u[i].flags & F_ATTACKING) kept_set |= 1u << i;
 	int value = root, searched = 0;
+	/* A lookahead asked for within a decision keeps to what that decision
+	 * has left of its time. */
+	if (in[28] > 0) set_clock(&x, now_ms() + (double)in[28]);
 	/* Deeper each time while the budget lasts; a cut-short pass is dropped. */
 	for (int depth = x.wide ? 1 : turns; depth <= turns; depth++) {
 		x.aborted = 0;
@@ -7404,7 +9448,7 @@ typedef struct { _Alignas(8) uint8_t data[8]; } Text;
 
 /* Replaces `result` (uninitialised) with the search's answer for `state`. */
 static void native_search(PackedBytes *state, PackedBytes *result) {
-	int32_t out[1 + 40 * 6 + 4 * MAX_UNITS + 16];
+	int32_t out[1 + 40 * 6 + 8 * MAX_UNITS + 2 * (HE_COUNT + HERO_ABILITIES + HAND + BACK + 1) + 16 + 4 * MAX_MOVES];
 	int64_t bytes = 0;
 	pba_size(state, NULL, &bytes, 0);
 	int32_t *in = NULL;

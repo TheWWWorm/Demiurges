@@ -79,6 +79,22 @@ func load_all(entries: Array) -> void:
 ## one line read ahead must not count those of another. A copy's layer is
 ## only a record of the states until a hook first runs in it (`_wake`), so
 ## that the many copies in which nothing is summoned cost nothing to make.
+## Hooks through which a script acts on a duel outside of a summon.
+const TURN_HOOKS := ["CHook_BeginMyTurn", "CHook_BeginEnemyTurn", "CHook_OnVisualCreatureDeath", "CHook_OnVisualPostSpellCast",
+	"CHook_OnVisualHeroDeath", "CHook_OnVisualSummon", "CHook_OnVisualRemoveEnchantment", "CHook_OnVisualStartMeleeDestroyFlag",
+	"CHook_OnVisualFinishMeleeDestroyFlag", "CHook_OnVisualStartEnchantmentEndOfTurn", "CHook_OnVisualFinishEnchantmentEndOfTurn",
+	"CHook_OnVisualCreatureUseAbility"]
+
+## Whether a script in play answers a turn or an event of the duel, other
+## than the artifact tracker every second-game battle loads (it acts only for
+## artifacts that have scripts; ELDuel.scripted_turns notes it once it has).
+func acts_on_turns() -> bool:
+	for state: Dictionary in states:
+		if str(state.name).get_file().to_lower().begins_with("artifacttracker"): continue
+		for hook: String in TURN_HOOKS:
+			if (state.hooks as Dictionary).has(hook): return true
+	return false
+
 func search_layer(copy: ELDuel) -> ELBattleScripts:
 	if search_only:
 		var layer := ELBattleScripts.new(copy)

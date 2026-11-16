@@ -19,7 +19,9 @@ extends SceneTree
 ## also writes that position as a duel save (ELDuel.restore reads it).
 ## --every=N analyses every Nth decision that has a choice. --fast overrides
 ## ELCombatSearch's `smart_*` variables for the play-outs, as in
-## duel_ai_bench.gd.
+## duel_ai_bench.gd; by default it lightens the compiled engine as well as
+## the search (`engine_budget`, `engine_ms`), which does nearly all of
+## the thinking.
 ##
 ## Needs the player's game files (user://profiles.json or --el1=/--el2=).
 
@@ -60,10 +62,11 @@ func _initialize() -> void:
 		return
 	for line: String in (ELCombatSearch as Script).source_code.split("
 "):
+		line = line.strip_edges(false, true)
 		if not line.begins_with("static var smart_"): continue
 		var name := line.trim_prefix("static var ").get_slice(" ", 0).get_slice(":", 0)
 		defaults[name] = (ELCombatSearch as Script).get(name)
-	for item: String in _arg("fast", "budget=150,brain_budget=800,brain_move_budget=8000,brain_move_turns=2").split(",", false):
+	for item: String in _arg("fast", "budget=150,brain_budget=800,brain_move_budget=8000,brain_move_turns=2,engine_budget=200000,engine_ms=200").split(",", false):
 		var name := "smart_" + item.get_slice("=", 0)
 		if not defaults.has(name):
 			printerr("Unknown setting: " + name)

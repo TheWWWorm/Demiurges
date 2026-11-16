@@ -2,7 +2,7 @@ class_name ELPracticeAI
 extends RefCounted
 ## The computer opponent. Each step sends one command chosen by the combat
 ## lookahead (ELCombatSearch) with the same legal commands as the player; a
-## refused command ends the phase instead.
+## refused command is reported and thought over again (see `send`).
 
 ##
 ## A duel shown on screen (a scene node listens to its `changed` signal) thinks
@@ -10,36 +10,39 @@ extends RefCounted
 ## finished think for the current position starts one and returns; a later step
 ## sends its command and starts thinking about the next position while the
 ## same side keeps acting. Other callers think and act within the call. Both
-## give the same command for the same position. `restricted` is auto-combat
-## without "use spells" (see ELCombatSearch.Context.restricted).
+## give the same command for the same position: the worker is handed the
+## decision's whole request (ELCombatSearch.request) with a copy of the duel.
+## `restricted` is auto-combat without "use spells" (see
+## ELCombatSearch.Context.restricted).
+## One decision has one time to be made in (ELCombatSearch.request): the
+## think and whatever second thought the command needs before it is sent
+## (`send`) share it, so that a step answers within the think limit and a
+## little more (ELCombatSearch.AGAIN_OVER_MS).
 static func step(duel: ELDuel, restricted := false) -> void:
 	if duel.phase == ELDuel.Phase.FINISHED:
 		var job: Job = _jobs.get(duel.get_instance_id())
 		if job != null:
 			_jobs.erase(duel.get_instance_id())
-			_stale.append(job)
+			_drop(job)
 		_collect(true)
 		return
 	var command := {}
-	if _displayed(duel):
+	var stats := {}
+	var asked := {}
+	var worker := _displayed(duel)
+	if worker:
 		var ready: Variant = _background(duel, restricted)
 		if ready == null: return
-		command = ready
+		command = ready.command
+		stats = ready.stats
+		asked = ready.asked
 	else:
-		command = ELCombatSearch.think(duel, {}, restricted)
+		asked = ELCombatSearch.request(duel, restricted)
+		command = ELCombatSearch.think(duel, stats, restricted, asked)
 	var side := duel.active_side()
-	if command.is_empty() or not ELCombatSearch.apply(duel, command): duel.end_phase()
+	last_decision = {"command": command, "engine": String(stats.get("engine", "")), "worker": worker, "positions": int(stats.get("positions", 0))}
+	send(duel, command, restricted, asked)
 	if _displayed(duel) and duel.phase != ELDuel.Phase.FINISHED and duel.active_side() == side: _background(duel, restricted)
-
-class Job:
-	var task := -1
-	var key := 0
-	var result := {}
-	var duel: WeakRef
-
-## Background thinks per duel instance, and superseded ones still running.
-static var _jobs := {}
-static var _stale: Array[Job] = []
 
 ## Takes back what the side to act has chosen so far in the phase, as the
 ## player could, before the computer plays the phase for it (auto combat
@@ -65,6 +68,117 @@ static func release_assignments(duel: ELDuel) -> int:
 		if duel.assign_block(blocker, int(duel.blocks[blocker])): released += 1
 	return released
 
+## The last command a step chose, how it was found (ELCombatSearch.think's
+## "engine") and whether a worker thought it out. For checks.
+static var last_decision := {}
+## Commands the duel refused from the computer opponent since the game began,
+## and those it took only after thinking again.
+static var refused := 0
+static var recovered := 0
+## Steps that were handed no command at all (see `send`).
+static var empty := 0
+## Commands that went back on a block only to return to a position the same
+## hero had already stood in during the phase (see `send`): each was thought
+## over again with the blocks left as they stood.
+static var cycles := 0
+## The positions the hero to act has stood in during the phase being played,
+## per duel: {duel identity: {phase (the turn, the phase and the hero), seen}}.
+static var _stood := {}
+
+## Sends the opponent's command. One the rules refuse is a fault of the
+## opponent: it is reported, any plan it came from is dropped, and the
+## position is thought over without one; failing that, the first command
+## the search offers that the rules take on a copy is sent. Only when none
+## is found does the phase end. True when a command other than the phase's
+## end was taken, or the end was what was chosen.
+## `asked` is the request the command was thought out with: a second thought
+## is given what that decision has left of its time, and a short while at
+## the least (ELCombatSearch.again), so the decision as a whole keeps to the
+## think limit. Without it the first thought is taken to have used most of
+## the time.
+static func send(duel: ELDuel, command: Dictionary, restricted := false, asked: Dictionary = {}) -> bool:
+	# Going back on a block is a command like any other, but one that only
+	# leads back to where the hero has stood in this phase gets nowhere, and
+	# the same thinking would send it round again (two positions it holds
+	# equal, each a block apart): the position is thought over with the
+	# blocks left as they stand, and failing that the phase ends.
+	_stand(duel)
+	if _leads_back(duel, command):
+		cycles += 1
+		ELCombatSearch.forget(duel)
+		# The second thought has what the first left of the decision's time.
+		asked = ELCombatSearch.again(duel, asked, restricted)
+		command = ELCombatSearch.think(duel, {"fresh": true, "keep_blocks": true}, restricted, asked)
+		if command.is_empty() or _leads_back(duel, command): command = {"kind": "end_phase"}
+	if not command.is_empty() and ELCombatSearch.apply(duel, command): return true
+	if duel.phase == ELDuel.Phase.FINISHED: return false
+	# No command at all is an error of the opponent's of its own kind, told
+	# apart from one the rules refused; neither passes for the phase's end.
+	if command.is_empty():
+		empty += 1
+		push_warning("Computer opponent: no command was chosen.")
+	else:
+		refused += 1
+		push_warning("Computer opponent: the duel refused %s (%s)." % [str(command), duel.error])
+		# The same refused command a second time in one phase: thinking it
+		# over again would only bring it back, so the phase ends here.
+		var kept: Dictionary = _stood.get(duel.identity(), {})
+		var again_refused: bool = kept.get("refused", {}).has(hash(command))
+		if not kept.is_empty():
+			if not kept.has("refused"): kept.refused = {}
+			kept.refused[hash(command)] = true
+		if again_refused:
+			duel.end_phase()
+			return false
+	ELCombatSearch.forget(duel)
+	# Thought over in what is left of the decision's time.
+	var again := ELCombatSearch.think(duel, {"fresh": true}, restricted, ELCombatSearch.again(duel, asked, restricted))
+	if not again.is_empty() and again != command and ELCombatSearch.apply(duel, again):
+		recovered += 1
+		return true
+	for other: Dictionary in ELCombatSearch.legal(duel, restricted):
+		if other == command or other == again or _leads_back(duel, other): continue
+		if ELCombatSearch.apply(duel, other):
+			recovered += 1
+			return true
+	duel.end_phase()
+	return false
+
+## Notes the position the hero to act stands in, among those of the phase
+## being played (begun afresh when the turn, the phase or the hero changes).
+static func _stand(duel: ELDuel) -> void:
+	if duel.phase == ELDuel.Phase.FINISHED: return
+	var phase := hash([duel.turn_serial, duel.phase, duel.attacker, duel.active_side()])
+	var id := duel.identity()
+	var kept: Dictionary = _stood.get(id, {})
+	if kept.is_empty() or int(kept.phase) != phase:
+		if _stood.size() > 64: _stood.clear()
+		kept = {"phase": phase, "seen": {}}
+		_stood[id] = kept
+	kept.seen[ELCombatSearch._position(duel)] = true
+
+## Whether `command` moves or takes back a block already set and so returns
+## the duel to a position noted by `_stand` in this phase.
+static func _leads_back(duel: ELDuel, command: Dictionary) -> bool:
+	if String(command.get("kind", "")) != "block" or not duel.blocks.has(int(command.get("id", -1))): return false
+	var kept: Dictionary = _stood.get(duel.identity(), {})
+	if kept.is_empty(): return false
+	var trial := duel.search_copy()
+	var back: bool = ELCombatSearch.apply(trial, command) and trial.phase == duel.phase and kept.seen.has(ELCombatSearch._position(trial))
+	if trial.scripts != null and trial.scripts.search_only: trial.scripts.close()
+	return back
+
+class Job:
+	var task := -1
+	var key := 0
+	var result := {}
+	var duel: WeakRef
+	var request := {}
+
+## Background thinks per duel instance, and superseded ones still running.
+static var _jobs := {}
+static var _stale: Array[Job] = []
+
 static func _displayed(duel: ELDuel) -> bool:
 	return _display(duel) != null
 
@@ -74,12 +188,18 @@ static func _display(duel: ELDuel) -> Node:
 		if node is Node: return node
 	return null
 
+## A think nobody waits for any more: it is told so and awaited later.
+static func _drop(job: Job) -> void:
+	var cancel: Variant = job.request.get("cancel")
+	if cancel != null: cancel.cancelled = true
+	_stale.append(job)
+
 ## Waits for the duel's thinks once its display closes, releasing the copies.
 static func _release(id: int) -> void:
 	var job: Job = _jobs.get(id)
 	if job != null:
 		_jobs.erase(id)
-		_stale.append(job)
+		_drop(job)
 	_collect(true)
 
 ## The finished think for the duel's current position, or null while it runs.
@@ -90,7 +210,7 @@ static func _collect(all := false) -> void:
 		var job: Job = _jobs[id]
 		if job.duel.get_ref() == null:
 			_jobs.erase(id)
-			_stale.append(job)
+			_drop(job)
 	for old: Job in _stale.duplicate():
 		if all or WorkerThreadPool.is_task_completed(old.task):
 			WorkerThreadPool.wait_for_task_completion(old.task)
@@ -100,13 +220,17 @@ static func _collect(all := false) -> void:
 ## engine frees a task nobody waited for only after the scripting languages
 ## are gone, and freeing a script lambda then crashes on some engines.
 static func finish() -> void:
-	for id: int in _jobs.keys(): _stale.append(_jobs[id])
+	for id: int in _jobs.keys(): _drop(_jobs[id])
 	_jobs.clear()
 	_collect(true)
 
+## {command, stats, asked} of the finished think for the duel's position
+## (`asked` the request it was thought out with), or null while it runs. The think is keyed on the position, the restriction and the
+## opponent's whole policy, so a change of settings starts a new one.
 static func _background(duel: ELDuel, restricted := false) -> Variant:
 	_collect()
-	var key := [duel._snapshot(), restricted].hash()
+	var asked := ELCombatSearch.request(duel, restricted)
+	var key := [duel._snapshot(), restricted, asked.policy, asked.identity].hash()
 	var id := duel.get_instance_id()
 	var job: Job = _jobs.get(id)
 	if job != null and job.key == key:
@@ -117,7 +241,7 @@ static func _background(duel: ELDuel, restricted := false) -> Variant:
 	if job != null:
 		_jobs.erase(id)
 		if WorkerThreadPool.is_task_completed(job.task): WorkerThreadPool.wait_for_task_completion(job.task)
-		else: _stale.append(job)
+		else: _drop(job)
 	# Rule tables load on first use; load them here so the worker only reads.
 	for table: String in ["CombatSpells", "CombatCreatures", "HeroTemplates", "Artefacts", "HeroesSpecs", "HeroesStats", "CombatManaIncome", "CombatDecks", "GlobalSpells"]:
 		duel.profile.table(table)
@@ -125,8 +249,12 @@ static func _background(duel: ELDuel, restricted := false) -> Variant:
 	job = Job.new()
 	job.key = key
 	job.duel = weakref(duel)
+	job.request = asked
 	var position := duel.search_copy()
-	var think := func() -> void: job.result = ELCombatSearch.think(position, {}, restricted)
+	var think := func() -> void:
+		var stats := {}
+		var command := ELCombatSearch.think(position, stats, restricted, asked)
+		job.result = {"command": command, "stats": stats, "asked": asked}
 	job.task = WorkerThreadPool.add_task(think, false, "Combat opponent")
 	_jobs[id] = job
 	var display := _display(duel)

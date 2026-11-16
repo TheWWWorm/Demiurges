@@ -73,6 +73,7 @@ func _initialize() -> void:
 		return
 	for line: String in (ELCombatSearch as Script).source_code.split("
 "):
+		line = line.strip_edges(false, true)
 		if not line.begins_with("static var smart_"): continue
 		var name := line.trim_prefix("static var ").get_slice(" ", 0).get_slice(":", 0)
 		defaults[name] = (ELCombatSearch as Script).get(name)

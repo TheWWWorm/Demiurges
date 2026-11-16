@@ -44,14 +44,19 @@ func _play(solve: bool) -> String:
 		if duel.phase == ELDuel.Phase.FINISHED or duel.active_side() != 0: continue
 		if view._melee_busy() or view._cast_busy() or view._overlay_open(): continue
 		var command := {}
+		var asked := {}
 		if solve:
 			var smart: Array[int] = [0]
 			duel.smart_sides = smart
 			var stats := {}
-			command = ELCombatSearch.think(duel, stats)
+			asked = ELCombatSearch.request(duel)
+			command = ELCombatSearch.think(duel, stats, false, asked)
 			var engine := String(stats.get("engine", "?"))
 			engines[engine] = int(engines.get(engine, 0)) + 1
-		if command.is_empty() or not ELCombatSearch.apply(duel, command): duel.end_phase()
+		# The solver's commands are sent as the computer opponent's are, and
+		# a pass ends the phase.
+		if solve: ELPracticeAI.send(duel, command, false, asked)
+		else: duel.end_phase()
 	# The result box follows once the battle has been shown to its end.
 	began = Time.get_ticks_msec()
 	while mode.run != null and not mode._result.visible and Time.get_ticks_msec() - began < 60000:

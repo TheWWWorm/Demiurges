@@ -77,7 +77,12 @@ static func _russian(text: String, depth: int) -> String:
 		if stripped.is_empty(): return text
 		var lead := text.find(stripped)
 		return text.left(lead) + _russian(stripped, depth + 1) + text.substr(lead + stripped.length())
+	# A one-line entry cannot match a text of several lines ("." stops at a
+	# line end), so a long text (the battle log) tries only the entries that
+	# span lines, and its lines are looked up one by one, each remembered.
+	var lines := text.contains("\n")
 	for pattern: Array in _compiled():
+		if lines and not pattern[4]: continue
 		var found: RegExMatch = pattern[0].search(text)
 		if found == null: continue
 		var values: Array[String] = []
@@ -88,7 +93,7 @@ static func _russian(text: String, depth: int) -> String:
 	for separator: String in ["\n", "  ·  ", " · ", "   "]:
 		if not text.contains(separator): continue
 		var parts := PackedStringArray()
-		for part: String in text.split(separator): parts.append(_russian(part, depth + 1))
+		for part: String in text.split(separator): parts.append(russian(part) if separator == "\n" else _russian(part, depth + 1))
 		return separator.join(parts)
 	return text
 
@@ -116,7 +121,7 @@ static func _compiled() -> Array:
 			at = found.get_end()
 		expression += _escape(key.substr(at)) + "$"
 		fixed += key.length() - at
-		_patterns.append([RegEx.create_from_string(expression), RU[key], kinds, fixed])
+		_patterns.append([RegEx.create_from_string(expression), RU[key], kinds, fixed, key.contains("\n")])
 	_patterns.sort_custom(func(a: Array, b: Array) -> bool: return a[3] > b[3])
 	return _patterns
 

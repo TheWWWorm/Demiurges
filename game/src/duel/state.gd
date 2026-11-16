@@ -77,6 +77,15 @@ var _plane_guard := false
 var _raw_hero_damage := false
 ## Second-game battle scripts (ELBattleScripts), or null.
 var scripts: ELBattleScripts
+## On a lookahead copy that carries no scripts of its own: whether the duel
+## it was made from had its scripts in combat (see scripts_in_combat).
+var scripts_began := false
+## Whether battle scripts act on this duel at turns or after its events
+## (scripted casts, cards, ether): set when a script with such hooks is in
+## play beyond the artifact tracker (ELBattleScripts.acts_on_turns), and the
+## first time any script acts on the duel; kept by every lookahead copy.
+## The compiled model has no such turns: a reading is then told incomplete.
+var scripted_turns := false
 ## The caster of a script cast while its legality and effect resolve, or -1.
 var _acting := -1
 ## Script hero damage kind: 1 skips redirection and feedback, 2 is raw.
@@ -1999,12 +2008,15 @@ func grave_ability_targets(id: int, key: String, side: int) -> Array[int]:
 				if profile.table("CombatCreatures").has(card) and int(profile.table("CombatSpells")[card].Cost) <= int(ELCatalog.FIRST_ABILITIES[creatures[id].card].maximum): result.append(index)
 	return result
 
-func can_use_ability(id: int, key: String) -> bool:
+## `listed` is abilities(id) when the caller already has it, so a panel
+## asking about every ability of a hero with many enchantments builds the
+## list once rather than once per ability.
+func can_use_ability(id: int, key: String, listed: Variant = null) -> bool:
 	var c := entity(id)
 	if phase == Phase.FINISHED or c.is_empty() or int(c.get("owner", id)) != active_side(): return false
 	if id >= 2 and _enchantment_count(id, "IRRT") + _enchantment_count(id, "MDNS") + _enchantment_count(id, "RDIS") > 0: return false
 	if id < 2 and key.begins_with("artifact:"): return artifact_error(id, int(key.get_slice(":", 1))).is_empty()
-	for ability: Dictionary in abilities(id):
+	for ability: Dictionary in (listed if listed is Array else abilities(id)):
 		if ability.key != key: continue
 		if id >= 2 and in_plane(id) and not ability.get("pale", false): return false
 		if ability.get("pale", false): return _pale_error(id, ability).is_empty()
@@ -4048,6 +4060,7 @@ func _emit(data: Dictionary) -> void:
 	if not searching:
 		history.append(data)
 		event.emit(data)
+		if not scripted_turns and (bool(data.get("script", false)) or str(data.get("kind", "")).begins_with("script_")): scripted_turns = true
 	if data.get("kind") == "discard" and profile.id == "el2" and _discard_cause in [0, 1] and _discard_cause != int(data.side) \
 			and (data.card in ELCatalog.DISCARD_SUMMONS or data.card in ELCatalog.DISCARD_RETORTS):
 		_discard_answer(int(data.side), String(data.card), _discard_cause)
@@ -4118,8 +4131,15 @@ func search_copy(expected_specs_on := false) -> ELDuel:
 	if fair_specs:
 		d.fair_specs = true
 		d.spec_credit = spec_credit.duplicate()
+	d.scripts_began = scripts_in_combat()
+	d.scripted_turns = scripted_turns or (scripts != null and not scripts.search_only and scripts.acts_on_turns())
 	if scripts != null: d.scripts = scripts.search_layer(d)
 	return d
+
+## Whether battle scripts are in play in this duel: the same on a duel and on
+## every lookahead copy of it, which may carry none of the scripts itself.
+func scripts_in_combat() -> bool:
+	return scripts.in_combat if scripts != null else scripts_began
 
 ## The duel a lookahead copy was made from (0 on the duel itself; see
 ## `identity`).

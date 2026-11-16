@@ -58,6 +58,9 @@ var cast_total := {}
 var standing_blame := {}
 var cast_blame := {}
 var line_blame := {}
+## --line=1: lines whose only fault is a card the game turned down after
+## chance had a hand in what was there to cast (see _line_case).
+var line_chance := 0
 ## Whether the run being compared dealt hands again or threw cards out at
 ## random: which cards those were is the duel's chance, which the model
 ## does not follow card by card.
@@ -65,6 +68,10 @@ var dealt_again := false
 
 ## A name the game gives a thing a hero carries, by the spell it works.
 var artifact_names := {}
+## Set by tools/duel_model_coverage.gd: the run is the coverage of the model.
+var coverage_only := false
+## --coverage=1: what was tried of each thing, by its kind and name.
+var cover := {}
 
 func _arg(name: String, fallback: String) -> String:
 	for arg: String in OS.get_cmdline_user_args():
@@ -131,9 +138,13 @@ func _initialize() -> void:
 		var now: Variant = (ELCombatSearch as Script).get(name)
 		var text := item.get_slice("=", 1)
 		(ELCombatSearch as Script).set(name, (text == "true") if now is bool else (float(text) if now is float else int(text)))
+	if coverage_only or _arg("coverage", "") == "1":
+		_coverage(shard)
+		return
 	if _arg("line", "") == "1":
 		_lines(int(_arg("cases", "20")), shard)
 		for what: String in line_blame: print("PARTS %s %d" % [what, line_blame[what]])
+		print("CHANCE lines=%d" % line_chance)
 		print("TOTAL cases=%d fights=%d differed=%d" % [cases, cases, differed])
 		_finish(cases)
 		return
@@ -409,6 +420,13 @@ func _line_case(index: int, duel: ELDuel, raw: PackedInt32Array) -> void:
 	var trouble: Array[String] = []
 	var walked: Array[String] = []
 	var refused := ""
+	var refused_side := -1
+	# Per hero: whether a card came that was not the next one the engine was
+	# told of (the deal went its own way: the duel's chance, or a second-game
+	# book that deals by the uses left, which what was cast since changes).
+	var deal_parted := [false, false]
+	# Whether the deal had parted for either hero after each command.
+	var parted_at: Array[bool] = []
 	for i in int(raw[8]):
 		var at := 9 + i * 4
 		if at + 3 >= raw.size() or copy.phase == ELDuel.Phase.FINISHED: break
@@ -445,6 +463,10 @@ func _line_case(index: int, duel: ELDuel, raw: PackedInt32Array) -> void:
 					var back: Array = []
 					for k in (places[side] as Array).size():
 						if int(places[side][k]) == -1 and String(copy.profile.table("CombatSpells").get(String(copy.heroes[side].hand[k]), {}).get("Class", "")) == "Creature": back.append(k)
+					# (Or the card of an enchantment that came back off a creature.)
+					if back.is_empty():
+						for k in (places[side] as Array).size():
+							if int(places[side][k]) == -1: back.append(k)
 					if not back.is_empty(): place = int(back[mini(int(cmd[1]) - ELCombatBrain.SLOTS, back.size() - 1)])
 				if place < 0:
 					# Two cards alike may have been taken one for the other.
@@ -475,6 +497,7 @@ func _line_case(index: int, duel: ELDuel, raw: PackedInt32Array) -> void:
 				ok = String(step.kind) != "end_phase" and ELCombatSearch.apply(copy, step)
 		if not ok:
 			refused = what
+			refused_side = side
 			break
 		# A hand keeps its cards in the order they came: what has left it is
 		# struck out, and what has come into it are the next cards the engine
@@ -489,6 +512,27 @@ func _line_case(index: int, duel: ELDuel, raw: PackedInt32Array) -> void:
 					slots.append(int((places[hero] as Array)[k]))
 					at_now += 1
 			for extra in now.size() - at_now:
+				# A card that came to the far end of the row was not drawn (a
+				# drawn one comes to the near end): it came back from the board
+				# or a graveyard, and the engine holds it apart.
+				var keys: Array = ELDuel._hand_view(copy.heroes[hero])
+				var came_back := false
+				for earlier in at_now + extra:
+					if int(keys[earlier]) < int(keys[at_now + extra]): came_back = true
+				# (A first-game revival comes to the near end like a draw, but
+				# a card from the book is the only kind with a place in it.)
+				var book_slots: Array = copy.heroes[hero].get("hand_slots", [])
+				if what == "cast JRRG" and at_now + extra < book_slots.size() and int(book_slots[at_now + extra]) < 0: came_back = true
+				if came_back:
+					# The engine holds it in its first free place for cards that
+					# came back (a place frees when its card leaves the hand).
+					var free := -1
+					for j in ELCombatBrain.BACK:
+						if not slots.has(ELCombatBrain.SLOTS + j):
+							free = ELCombatBrain.SLOTS + j
+							break
+					slots.append(free)
+					continue
 				# The next card the engine was told of that is this one.
 				var named := -1
 				var listed: Array = coming[hero]
@@ -497,6 +541,7 @@ func _line_case(index: int, duel: ELDuel, raw: PackedInt32Array) -> void:
 						named = k
 						break
 				slots.append(ELCombatBrain.HAND + named if named >= 0 else -1)
+				if named != int(drawn[hero]): deal_parted[hero] = true
 				if named >= 0: drawn[hero] = named + 1
 			places[hero] = slots
 		for id: int in copy.creatures:
@@ -504,13 +549,23 @@ func _line_case(index: int, duel: ELDuel, raw: PackedInt32Array) -> void:
 		commands.append(cmd)
 		said.append(what)
 		after.append(copy.search_copy())
+		parted_at.append(bool(deal_parted[0]) or bool(deal_parted[1]))
 	if commands.is_empty() and refused.is_empty(): return
 	# The first command after which the two no longer agree: a command the
 	# game turns down later is often only what that parting led to.
 	for i in said.size():
 		var part := ELCombatBrain.fight(ctx, start, 4, commands.slice(0, i + 1), 200000)
 		if part.is_empty(): return
+		# Whether the game drew on chance along the line so far (which card
+		# a robber took, a hand dealt again): the engine reads on with the
+		# cards it was told of, and says which lines those are when asked to
+		# tell. The hands are then held by number, not by name.
+		var reading := ELCombatBrain.fight_blind
+		ELCombatBrain.fight_blind = true
+		dealt_again = int(ELCombatBrain.fight(ctx, start, 4, commands.slice(0, i + 1), 200000).get("blind", 0)) != 0
+		ELCombatBrain.fight_blind = reading
 		var parting := _compare(after[i], part, before, true)
+		dealt_again = false
 		var phase_now := 0 if (after[i] as ELDuel).phase == ELDuel.Phase.ATTACK else 1
 		if (after[i] as ELDuel).phase != ELDuel.Phase.FINISHED and int(part.phase) != phase_now:
 			parting.append("the game stands in phase %d, the model in %d" % [phase_now, int(part.phase)])
@@ -520,11 +575,30 @@ func _line_case(index: int, duel: ELDuel, raw: PackedInt32Array) -> void:
 			int(game.heroes[0].health), int(game.heroes[1].health), int(game.heroes[0].mana), int(game.heroes[1].mana),
 			int(part.health[0]), int(part.health[1]), int(part.ether[0]), int(part.ether[1])])
 		if parting.is_empty(): continue
+		if parted_at[i]:
+			# The cards dealt since are not the ones the engine was told of:
+			# what it cast by its places is then another card, by chance.
+			line_chance += 1
+			if not quiet: print("CHANCE case %d (%s): %s | first after \"%s\" (the deal parted)" % [index, ", ".join(said), " | ".join(parting), said[i]])
+			return
 		trouble = parting
 		var name: String = String(said[i]).get_slice(" #", 0)
 		line_blame[name] = int(line_blame.get(name, 0)) + 1
 		trouble.append("first after \"%s\"" % said[i])
 		break
+	if trouble.is_empty() and not refused.is_empty() and refused.begins_with("cast"):
+		# A card cast that the game does not have where the engine counted on
+		# it, after the deal parted from what the engine was told or after a
+		# card was taken or dealt by chance (the engine marks such lines blind):
+		# chance, which the model is not to follow card by card.
+		var reading := ELCombatBrain.fight_blind
+		ELCombatBrain.fight_blind = true
+		var blind_now := not commands.is_empty() and int(ELCombatBrain.fight(ctx, start, 4, commands, 200000).get("blind", 0)) != 0
+		ELCombatBrain.fight_blind = reading
+		if blind_now or bool(deal_parted[refused_side]):
+			line_chance += 1
+			if not quiet: print("CHANCE case %d (%s): the game turned down \"%s\" (%s)" % [index, ", ".join(said), refused, "blind line" if blind_now else "the deal parted"])
+			return
 	if trouble.is_empty() and not refused.is_empty():
 		trouble.append("the game turned down \"%s\"" % refused)
 		var blamed_for := "refused: " + refused.get_slice(" #", 0).get_slice(" (", 0)
@@ -661,7 +735,7 @@ func _play_case(index: int, duel: ELDuel, random: RandomNumberGenerator, attacke
 	# Where each card of a hand stood when the model was told the board.
 	var hands: Array = [[], []]
 	for side in 2:
-		for i in mini(duel.heroes[side].hand.size(), 8): hands[side].append(i)
+		for i in mini(duel.heroes[side].hand.size(), ELCombatBrain.HAND): hands[side].append(i)
 	var spots := {}
 	var order: Array = duel.creatures.keys()
 	for i in order.size(): spots[int(order[i])] = i
@@ -969,6 +1043,9 @@ func _play_case(index: int, duel: ELDuel, random: RandomNumberGenerator, attacke
 	for line: String in said:
 		if line.begins_with("cast "): cast_total[line.substr(5)] = int(cast_total.get(line.substr(5), 0)) + 1
 		if line.begins_with("cast ") and String(ELCatalog.rule(profile, line.substr(5)).get("effect", "")) in ["redraw", "amnesia", "pale_theft", "pale_calamity", "ban"]: dealt_again = true
+	# So is any card taken or dealt by the duel's chance, which the model says
+	# of its own line (it holds the cards by number from there, not by name).
+	if int(model.get("blind", 0)) != 0: dealt_again = true
 	var trouble := _compare(duel, model, before, true)
 	dealt_again = false
 	if int(model.played) != commands.size():
@@ -1085,6 +1162,13 @@ func _parity() -> void:
 	_fixture("fixed hands draw nothing", {"attacker": 1, "heroes": [{"health": 20, "mana": 0, "hand": ["PRFY" if game == "el2" else "MGHT"]},
 		{"health": 20, "mana": 0}], "creatures": []},
 		[["end"]], func(d: ELDuel) -> bool: return d.attacker == 0 and d.heroes[0].hand.size() == 1)
+	# A hero's Concentration at its best draws a card more every second turn
+	# of its own: two cards as its sixteenth begins (the first game's book of
+	# these positions has the cards for it).
+	if game == "el1":
+		_fixture("concentration draws two", {"attacker": 1, "fixed": false, "heroes": [{"health": 20, "mana": 0, "turns": 15, "level": 4, "skills": {"CONC": 2}},
+			{"health": 20, "mana": 0, "turns": 15, "level": 4}], "creatures": []},
+			[["end"]], func(d: ELDuel) -> bool: return d.attacker == 0 and d.heroes[0].hand.size() == 2)
 	# A grass snake grows a point of each for good with each blow on a hero.
 	_fixture("grass snake grows", {"heroes": [{"health": 20, "mana": 0}, {"health": 20, "mana": 0}], "creatures": [{"card": "GRSN", "owner": 0}]},
 		[["attack", 0], ["end"], ["end"]], func(d: ELDuel) -> bool: return int(d.creatures[2].power) == int(Fixtures.build(profile, {"creatures": [{"card": "GRSN", "owner": 0}]}).creatures[2].power) + 1)
@@ -1144,9 +1228,380 @@ func _parity() -> void:
 		_fixture("disturbance against a barrier", {"puzzle": "el2_tactical_v2_behind_magic_screen"},
 			[["cast", 2, 0], ["end"], ["end"], ["block", 1, 2], ["block", 0, 3], ["end"]],
 			func(d: ELDuel) -> bool: return d.attacker == 0 and int(d.heroes[0].health) == 4)
+	var spells: Dictionary = profile.table("CombatSpells")
+	# Bloodlessness goes back to its caster's hand as its creature leaves
+	# play, and is cast again on the next one (the model once held the card
+	# without a name, and could not play it).
+	if spells.has("RIOT") and spells.has("CLIG"):
+		_fixture("bloodlessness comes back and is cast again", {"heroes": [{"health": 20, "mana": 10, "hand": ["RIOT", "CLIG"]}, {"health": 20, "mana": 0}],
+			"creatures": [{"card": "STRT", "owner": 1}, {"card": "STRT", "owner": 1}]},
+			[["cast", 0, 2], ["cast", 1, 2], ["back", 0, 0, 3]],
+			func(d: ELDuel) -> bool: return not d.creatures.has(2) and d.creatures.has(3) and d._enchantment_count(3, "RIOT") == 1 and d.heroes[0].hand.is_empty())
+	# A water link an older position keeps on the creature itself works as
+	# one its caster holds: the dead rat heals its hero and comes back.
+	if spells.has("WTLK") and spells.has("CLIG"):
+		_fixture("water link kept on the creature", {"heroes": [{"health": 10, "mana": 10, "hand": ["CLIG"]}, {"health": 20, "mana": 0}],
+			"creatures": [{"card": "STRT", "owner": 0, "enchantments": ["WTLK"]}]},
+			[["cast", 0, 2]], func(d: ELDuel) -> bool: return d.army(0).size() == 1 and int(d.heroes[0].health) > 10 and d.heroes[0].grave.is_empty())
+	# A lifeguard turns the blow away, not the destroying strike's mark: the
+	# guarded blocker is destroyed after the fight all the same.
+	if spells.has("LFGR"):
+		_fixture("destroying strike through a lifeguard", {"heroes": [{"health": 20, "mana": 0}, {"health": 20, "mana": 0}],
+			"creatures": [{"card": "GROG", "owner": 0, "power": 2, "toughness": 9, "flags": ["Destroy"]},
+				{"card": "GROG", "owner": 1, "power": 1, "toughness": 9, "flags": [], "enchantments": ["LFGR"]}]},
+			[["attack", 0], ["end"], ["block", 1, 0], ["end"]], func(d: ELDuel) -> bool: return not d.creatures.has(3))
+	if game == "el2":
+		# A lifeguard laid on the other hero's creature in defence turns the
+		# first snake's blow away but not its bite: the treant neither
+		# regenerates nor leaves the fight, its own blow is lost on the stone
+		# skin, and the second bite leaves it no health to regenerate with.
+		_fixture("lifeguard on the attacker keeps it in the fight", {"puzzle": "el2_tactical_v2_crossroads_last_reprieve"},
+			[["cast", 0, 4], ["block", 0, 2], ["block", 1, 2], ["end"]],
+			func(d: ELDuel) -> bool: return not d.creatures.has(4) and d.creatures.has(2) and d.creatures.has(3) and int(d.heroes[1].mana) == 1)
+		# Weaving gives its hero the enchantment's card by name, to be laid
+		# again: the other creature's Energy Barrier on the weaver's own hero.
+		_fixture("weaving gives a card to cast", {"puzzle": "el2_tactical_v2_curiosity_glass"},
+			[["do", {"choice": 2, "id": 2, "key": "weave", "kind": "ability", "target": 3}], ["back", 0, 2, 0]],
+			func(d: ELDuel) -> bool: return d._enchantment_count(0, "ENBR") == 1 and d.heroes[0].hand.size() == 2)
+	_specs()
+	_specs_cast()
+	_swapped()
 	# The Wall of Unreality's phantasm may be bought again: two uses, +4.
 	_fixture("phantasm twice", {"heroes": [{"health": 20, "mana": 10}, {"health": 20, "mana": 0}], "creatures": [{"card": "PHWL", "owner": 0}]},
 		[["use", 0, "phantasm"], ["use", 0, "phantasm"]], func(d: ELDuel) -> bool: return int(d.creatures[2].power) == int(Fixtures.build(profile, {"creatures": [{"card": "PHWL", "owner": 0}]}).creatures[2].power) + 4)
+
+## What a delusion does to gains that come and go while it is worn, and an
+## enchantment on a hero that was laid before the position and ends in it.
+func _swapped() -> void:
+	var spells: Dictionary = profile.table("CombatSpells")
+	var beasts: Dictionary = profile.table("CombatCreatures")
+	var fresh := func(d: ELDuel) -> void:
+		for c: Dictionary in d.creatures.values(): d._refresh_stats(c)
+	var rich := [{"health": 20, "mana": 20}, {"health": 20, "mana": 0}]
+	if spells.has("DELS") and beasts.has("KBWR"):
+		# The other kobold's gift of power shows as health; it goes with the kobold.
+		_fixture("delusion: a leader's gift lost", {"heroes": rich, "after": fresh,
+			"creatures": [{"card": "KBWR", "owner": 0, "enchantments": ["DELS"]}, {"card": "KBWR", "owner": 1}, {"card": "STRT", "owner": 0}]},
+			[["attack", 2], ["end"], ["block", 1, 2], ["end"]],
+			func(d: ELDuel) -> bool: return not d.creatures.has(3) and int(d.creatures[2].power) == 1 and int(d.creatures[2].toughness) == 2)
+		if spells.has("STWO"):
+			_fixture("delusion: an army's gift of power", {"heroes": [{"health": 20, "mana": 20, "hand": ["STWO"]}, {"health": 20, "mana": 0}], "after": fresh,
+				"creatures": [{"card": "KBWR", "owner": 0, "enchantments": ["DELS"]}]}, [["cast", 0]],
+				func(d: ELDuel) -> bool: return int(d.creatures[2].power) == 1 and int(d.creatures[2].toughness) == 4)
+		if spells.has("BLSS"):
+			_fixture("delusion: a blessing", {"heroes": [{"health": 20, "mana": 20, "hand": ["BLSS"]}, {"health": 20, "mana": 0}], "after": fresh,
+				"creatures": [{"card": "KBWR", "owner": 0, "enchantments": ["DELS"]}]}, [["cast", 0, 2], ["end"], ["end"]],
+				func(d: ELDuel) -> bool: return int(d.creatures[2].power) == 1 and int(d.creatures[2].toughness) == 2)
+	if profile.id == "el2" and beasts.has("OUS1") and spells.has("STWO") and beasts.has("GROG"):
+		# What stands on its hero covers a pale creature no longer once a
+		# blow has sent it into the plane.
+		_fixture("a pale creature dissipates from under its army's gift", {"heroes": [{"health": 20, "mana": 0}, {"health": 20, "mana": 0, "enchantments": ["STWO"]}],
+			"after": fresh, "creatures": [{"card": "GROG", "owner": 0}, {"card": "OUS1", "owner": 1}]}, [["attack", 0], ["end"], ["block", 1, 0], ["end"]],
+			func(d: ELDuel) -> bool: return d.creatures.has(3) and d.in_plane(3) and int(d.creatures[3].power) == int(beasts.OUS1.Power))
+	if spells.has("FURY"):
+		# The artificer's mastery: a thing with one charge left works twice.
+		var made := ELDuel.artifact_entry(profile, {"name": "made", "custom": {"elk_name": "", "spell": "FURY", "first": 0, "gap": 0, "max": 3}})
+		var wait := 0
+		# The first game has only the things of its table: the one aimed at
+		# nothing that works again soonest.
+		if made.is_empty():
+			var probe := Fixtures.build(profile, {})
+			for name: String in profile.table("Artefacts"):
+				var entry := ELDuel.artifact_entry(profile, {"name": name})
+				if entry.is_empty() or String(probe.artifact_rule(entry).get("target", "none")) != "none": continue
+				# (And that works in a turn of its hero's own.)
+				var trial := Fixtures.build(profile, {"heroes": [{"health": 20, "mana": 20}, {"health": 20, "mana": 0}]})
+				var held := entry.duplicate(true)
+				held.charges = 1
+				held.ready_round = 0
+				trial.heroes[0].artifacts = [held]
+				trial.heroes[0].artifact_uses = 0
+				if not trial.artifact_error(0, 0).is_empty(): continue
+				if made.is_empty() or probe._artifact_gap(entry) < wait:
+					made = entry
+					wait = probe._artifact_gap(entry)
+		var carry := func(d: ELDuel) -> void:
+			var thing := made.duplicate(true)
+			if thing.is_empty(): return
+			thing.charges = 1
+			thing.ready_round = 0
+			d.heroes[0].artifacts = [thing]
+			d.heroes[0].artifact_uses = 0
+			# (Skilled enough to use two things in a turn.)
+			d.heroes[0].skills = {"ARTF": 0}
+		var work := {"kind": "ability", "id": 0, "key": "artifact:0"}
+		_spec("ARTF", 0, "spares the charge", {"heroes": [{"health": 20, "mana": 20}, {"health": 20, "mana": 0}], "after": carry,
+			"creatures": [{"card": "STRT", "owner": 1, "resting": true}]}, [["do", work]] + range(2 * wait).map(func(_i: int) -> Array: return ["end"]) + [["do", work]],
+			func(d: ELDuel) -> bool: return int(d.heroes[0].artifacts[0].charges) == 1)
+	if spells.has("CURS") and beasts.has("WLBR") and beasts.has("KBWR"):
+		# A curse takes the creature cards from the near end of the row.
+		_fixture("a curse takes the first creature cards of the row", {"heroes": [{"health": 20, "mana": 20, "hand": ["CURS"]},
+			{"health": 20, "mana": 0, "hand": ["STRT", "MGHT", "KBWR", "GROG", "WLBR"]}], "creatures": [{"card": "STRT", "owner": 0}]}, [["cast", 0, 1]],
+			func(d: ELDuel) -> bool: return d.heroes[1].hand == ["MGHT", "WLBR"])
+	if profile.id == "el2" and beasts.has("GROG"):
+		# A battle script that shapes its own hero's creatures as they are
+		# summoned: the model is told what it gives each kind.
+		ELBattleScripts.fixtures[ELBattleScripts.chunk_path("rules_shape")] = ("function CHook_OnLogicSummon(side, card, id)\n  if side == exMe then\n" \
+			+ "    ExSetNewCreatureBaseStat(0, ExGetNewCreatureBaseStat(0) + 2)\n    ExSetNewCreatureBaseStat(1, ExGetNewCreatureBaseStat(1) + 1)\n  end\nend\n").to_utf8_buffer()
+		ELBattleScripts.fixtures[ELBattleScripts.chunk_path("rules_count")] = "counter = 0\nfunction CHook_OnLogicSummon(side, card, id)\n  counter = counter + 1\n  ExSetNewCreatureBaseStat(0, counter)\nend\n".to_utf8_buffer()
+		var scripted := func(name: String) -> Callable:
+			return func(d: ELDuel) -> void:
+				d.scripts = ELBattleScripts.new(d)
+				d.scripts.load_all([{"name": name, "side": 0}])
+				d.scripts.in_combat = true
+		var summons := {"heroes": [{"health": 20, "mana": 20, "hand": ["GROG"]}, {"health": 20, "mana": 20, "hand": ["GROG"]}], "creatures": [{"card": "STRT", "owner": 1}]}
+		var mine := summons.duplicate(true)
+		mine.after = scripted.call("rules_shape")
+		_fixture("a battle script shapes its hero's summons", mine, [["cast", 0]],
+			func(d: ELDuel) -> bool: return int(d.creatures[3].power) == int(beasts.GROG.Power) + 2 and int(d.creatures[3].toughness) == int(beasts.GROG.Toughness) + 1)
+		var theirs := summons.duplicate(true)
+		theirs.after = scripted.call("rules_shape")
+		theirs.attacker = 1
+		_fixture("a battle script leaves the other hero's summons alone", theirs, [["cast", 0]],
+			func(d: ELDuel) -> bool: return int(d.creatures[3].power) == int(beasts.GROG.Power))
+		# The game's own battlegrounds that shape a summons (where its files
+		# have them): the aviaks' place makes its hero's aviaks stronger,
+		# restless and bound to attack; the gravity anomaly grounds a flyer.
+		if beasts.has("AVAS") and not profile.script_bytes("AviakPlace").is_empty() and not profile.script_bytes("GravityAnomaly").is_empty():
+			var flyer := {"heroes": [{"health": 20, "mana": 20, "hand": ["AVAS"]}, {"health": 20, "mana": 20}], "creatures": [{"card": "STRT", "owner": 1}]}
+			var place := flyer.duplicate(true)
+			place.after = scripted.call("AviakPlace")
+			_fixture("the aviaks' place: stronger, and it must attack", place, [["cast", 0], ["end"], ["end"], ["end"], ["end"]],
+				func(d: ELDuel) -> bool: return d.has_flag(3, "Berserk") and d.has_flag(3, "Restless") and int(d.heroes[1].health) == 20 - int(beasts.AVAS.Power) - 2)
+			var anomaly := flyer.duplicate(true)
+			anomaly.after = scripted.call("GravityAnomaly")
+			_fixture("the gravity anomaly grounds a flyer", anomaly, [["cast", 0], ["end"], ["end"]],
+				func(d: ELDuel) -> bool: return not d.has_flag(3, "Fly") and int(d.creatures[3].power) == int(beasts.AVAS.Power) - 1)
+		# One that counts its summons is past what the model holds: the
+		# position is told crowded, by name.
+		var counted := Fixtures.build(profile, summons)
+		cases += 1
+		if counted == null: _missing("a counting battle script: the position does not restore")
+		else:
+			(scripted.call("rules_count") as Callable).call(counted)
+			ELCombatBrain.fight(_context(0), counted, 4, [])
+			if ELCombatBrain.last_crowding.has("scripts"): print("SAME parity a counting battle script is told as left out")
+			else:
+				differed += 1
+				print("DIFF parity a counting battle script is told as left out: %s" % str(ELCombatBrain.last_crowding))
+		ELBattleScripts.fixtures.clear()
+	if spells.has("FURY") and beasts.has("GROG"):
+		# Laid in its hero's turn before: the other hero's creatures must
+		# attack this turn, and need not the next.
+		var power := int(beasts.GROG.Power)
+		_fixture("fury laid before ends with the turn", {"attacker": 1, "heroes": [{"health": 30, "mana": 0, "enchantments": ["FURY"]}, {"health": 20, "mana": 0}],
+			"after": fresh, "creatures": [{"card": "GROG", "owner": 1}]}, [["end"], ["end"], ["end"], ["end"]],
+			func(d: ELDuel) -> bool: return int(d.heroes[0].health) == 30 - power and d.attacker == 0)
+
+## A creature of a fixture, with nothing of its card's own but its race.
+func _cr(card: String, owner: int, power: int, toughness: int, flags: Array = [], worn: Array = []) -> Dictionary:
+	return {"card": card, "owner": owner, "power": power, "toughness": toughness, "flags": flags, "enchantments": worn}
+
+## One specialisation at work: the hero `side` holds `code` as surely as a
+## hero can (level 20 and all the luck there is), and both sets of rules
+## count on what is to be expected of it.
+func _spec(code: String, side: int, name: String, spec: Dictionary, steps: Array, expect: Callable, level := 20, luck := 3) -> void:
+	if not profile.table("HeroesSpecs").has(code): return
+	for c: Dictionary in spec.get("creatures", []):
+		if not profile.table("CombatCreatures").has(String(c.card)):
+			_missing("%s %s: no card %s" % [code, name, String(c.card)])
+			return
+	for hero: Dictionary in spec.heroes:
+		for card: String in hero.get("hand", []) + hero.get("enchantments", []):
+			if not profile.table("CombatSpells").has(card):
+				_missing("%s %s: no card %s" % [code, name, card])
+				return
+	var told := spec.duplicate(true)
+	told.fair = true
+	told.heroes[side].spec = code
+	told.heroes[side].spec_level = level
+	told.heroes[side].luck = luck
+	_fixture("%s %s" % [code, name], told, steps, expect)
+
+## The heroes' specialisations, each in the smallest position that shows it.
+func _specs() -> void:
+	var fight := [["attack", 0], ["end"], ["end"]]
+	var blocked := [["attack", 0], ["end"], ["block", 1, 0], ["end"]]
+	var plain := func(a: int, b: int) -> Array: return [{"health": a, "mana": 0, "maximum": 20}, {"health": b, "mana": 0, "maximum": 20}]
+	# The masteries that double a blow.
+	for pair: Array in [["RKBC", "KBEL"], ["UAVC", "AVEL"]]:
+		_spec(pair[0], 0, "doubles an attacker's blow", {"heroes": plain.call(20, 20), "creatures": [_cr(pair[1], 0, 3, 2)]}, fight,
+			func(d: ELDuel) -> bool: return int(d.heroes[1].health) == 14)
+		_spec(pair[0], 1, "doubles a blocker's blow", {"heroes": plain.call(20, 20), "creatures": [_cr("GROG", 0, 2, 5), _cr(pair[1], 1, 3, 9)]}, blocked,
+			func(d: ELDuel) -> bool: return not d.creatures.has(2))
+		# At odds of one in six to one in two, one blow in three is doubled.
+		var level := 0
+		for l in range(1, 21):
+			var p := ELSpecs.chance(profile, String(pair[0]), l)
+			if p >= 1.0 / 6.0 and p < 0.5: level = l
+		if level > 0:
+			_spec(pair[0], 0, "doubles one blow in three at level %d" % level, {"heroes": plain.call(20, 20),
+				"creatures": [_cr(pair[1], 0, 3, 2), _cr(pair[1], 0, 3, 2), _cr(pair[1], 0, 3, 2)]},
+				[["attack", 0], ["attack", 1], ["attack", 2], ["end"], ["end"]], func(d: ELDuel) -> bool: return int(d.heroes[1].health) == 8, level, 0)
+		else: _missing("%s: no level gives odds between one in six and one in two" % String(pair[0]))
+	# A beholder's gaze, attacking and blocking.
+	_spec("GBHD", 0, "destroys the blocker and reaches the hero", {"heroes": plain.call(20, 20), "creatures": [_cr("BEHD", 0, 3, 3), _cr("GROG", 1, 1, 9)]}, blocked,
+		func(d: ELDuel) -> bool: return not d.creatures.has(3) and int(d.heroes[1].health) == 17)
+	_spec("GBHD", 1, "destroys the attacker", {"heroes": plain.call(20, 20), "creatures": [_cr("GROG", 0, 3, 9), _cr("BEHD", 1, 1, 3)]}, blocked,
+		func(d: ELDuel) -> bool: return not d.creatures.has(2) and d.creatures.has(3))
+	# The walls that doom what they block.
+	_spec("RWSW", 1, "dooms a ground attacker", {"heroes": plain.call(20, 20), "creatures": [_cr("GROG", 0, 1, 9), {"card": "WLBR", "owner": 1}]}, blocked,
+		func(d: ELDuel) -> bool: return not d.creatures.has(2))
+	_spec("UWAW", 1, "dooms a flying attacker", {"heroes": plain.call(20, 20), "creatures": [_cr("GROG", 0, 1, 9, ["Fly"]), {"card": "WLAR", "owner": 1}]}, blocked,
+		func(d: ELDuel) -> bool: return not d.creatures.has(2))
+	# A hornet takes the first strike from its blocker, and wins one when it blocks.
+	_spec("GHRI", 0, "takes the blocker's first strike", {"heroes": plain.call(20, 20), "creatures": [_cr("MYHO", 0, 3, 1), _cr("GROG", 1, 3, 3, ["FS"])]}, blocked,
+		func(d: ELDuel) -> bool: return d.creatures.has(2) and not d.creatures.has(3))
+	_spec("GHRI", 1, "strikes first as a blocker", {"heroes": plain.call(20, 20), "creatures": [_cr("GROG", 0, 3, 3), _cr("MYHO", 1, 3, 1)]}, blocked,
+		func(d: ELDuel) -> bool: return not d.creatures.has(2) and d.creatures.has(3))
+	# A shadow wall lays its attacker low.
+	_spec("BWIT", 1, "holds the attacker down", {"heroes": plain.call(20, 20), "creatures": [{"card": "TIWR", "owner": 0}, {"card": "WLIL", "owner": 1}]},
+		blocked + [["end"], ["end"]], func(d: ELDuel) -> bool: return d.creatures.has(2) and bool(d.creatures[2].resting))
+	# Cutters and gibberlings stay ready.
+	for pair: Array in [["BCTR", "RZMN"], ["UOCR", "GBBR"]]:
+		_spec(pair[0], 0, "leaves the attacker ready", {"heroes": plain.call(20, 20), "creatures": [_cr(pair[1], 0, 2, 2)]}, fight,
+			func(d: ELDuel) -> bool: return not bool(d.creatures[2].resting) and int(d.heroes[1].health) == 18)
+	# Lamias and orcs rob a card.
+	for pair: Array in [["UMTD", "LMMN"], ["RORT", "ORWR"]]:
+		_spec(pair[0], 0, "robs a card", {"heroes": [{"health": 20, "mana": 0}, {"health": 20, "mana": 0, "hand": ["GROG", "GROG"]}], "creatures": [_cr(pair[1], 0, 2, 2)]},
+			fight, func(d: ELDuel) -> bool: return d.heroes[1].hand.size() == 1)
+	# A snake envenoms the hero, and the venom bites as that hero's turn ends.
+	_spec("GSNV", 0, "envenoms the hero", {"heroes": plain.call(20, 20), "creatures": [_cr("LASN", 0, 2, 2)]}, fight + [["end"]],
+		func(d: ELDuel) -> bool: return d._enchantment_count(1, "ENVM") == 1 and int(d.heroes[1].health) == 16)
+	# Fighters, treants and bats heal their hero.
+	for pair: Array in [["BFGL", "MLFI"], ["GTRL", "TNSA"], ["RBTD", "BATT"]]:
+		_spec(pair[0], 0, "heals its hero", {"heroes": plain.call(10, 20), "creatures": [_cr(pair[1], 0, 3, 3)]}, fight,
+			func(d: ELDuel) -> bool: return int(d.heroes[0].health) == 13)
+	# A pteros strips what the other hero laid on its own.
+	_spec("BPTD", 0, "strips a creature", {"heroes": plain.call(20, 20), "creatures": [_cr("PTRS", 0, 1, 9), {"card": "TIWK", "owner": 1, "enchantments": ["STRG"]}]}, blocked,
+		func(d: ELDuel) -> bool: return d.creatures.has(3) and (d.creatures[3].enchantments as Array).is_empty())
+	_spec("BPTD", 0, "strips a hero", {"heroes": [{"health": 20, "mana": 0}, {"health": 20, "mana": 0, "enchantments": ["STWO"]}], "creatures": [{"card": "PTRS", "owner": 0}]},
+		fight, func(d: ELDuel) -> bool: return d._enchantment_count(1, "STWO") == 0 and int(d.heroes[1].health) < 20)
+	# Rats and fingi regenerate for nothing.
+	for pair: Array in [["RRTR", "STRT"], ["GFNR", "SPFG"]]:
+		_spec(pair[0], 1, "regenerates for nothing", {"heroes": plain.call(20, 20), "creatures": [_cr("GROG", 0, 3, 9), _cr(pair[1], 1, 1, 1)]}, blocked,
+			func(d: ELDuel) -> bool: return d.creatures.has(3))
+	# The skins: a blow, and a spell, turned aside whole.
+	for code: String in ["IRSK", "DRSK", "DRSL"]:
+		_spec(code, 1, "turns a blow aside", {"heroes": plain.call(20, 20), "creatures": [_cr("GROG", 0, 3, 3)]}, fight,
+			func(d: ELDuel) -> bool: return int(d.heroes[1].health) == 20)
+	for code: String in ["ATMF", "DRSK", "DRSL"]:
+		_spec(code, 1, "turns a spell aside", {"heroes": [{"health": 20, "mana": 10, "hand": ["ZAPP"]}, {"health": 20, "mana": 0}], "creatures": []}, [["cast", 0, 1]],
+			func(d: ELDuel) -> bool: return int(d.heroes[1].health) == 20)
+	# The backlashes: one to the other hero and to each of its creatures.
+	_spec("FRBD", 1, "answers a blow", {"heroes": plain.call(20, 20), "creatures": [_cr("GROG", 0, 3, 1), _cr("GROG", 0, 1, 2)]}, fight,
+		func(d: ELDuel) -> bool: return int(d.heroes[0].health) == 19 and int(d.heroes[1].health) == 17 and not d.creatures.has(2) and d.creatures.has(3))
+	_spec("WRBD", 1, "answers a spell", {"heroes": [{"health": 20, "mana": 10, "hand": ["ZAPP"]}, {"health": 20, "mana": 0}], "creatures": [_cr("GROG", 0, 3, 1)]}, [["cast", 0, 1]],
+		func(d: ELDuel) -> bool: return int(d.heroes[0].health) == 19 and int(d.heroes[1].health) == 19 and not d.creatures.has(2))
+	# A revival: the deadly blow halves the hero's health and fills it.
+	_spec("RVVE", 1, "comes back from a deadly blow", {"heroes": plain.call(20, 2), "creatures": [_cr("GROG", 0, 3, 3)]}, fight,
+		func(d: ELDuel) -> bool: return int(d.heroes[1].health) == 10 and d.phase != ELDuel.Phase.FINISHED)
+
+## The specialisations of spells, of abilities and of the turn.
+func _specs_cast() -> void:
+	var game := profile.id
+	var zap := func(extra: Dictionary = {}) -> Dictionary:
+		var hero := {"health": 20, "mana": 10, "maximum": 20, "hand": ["ZAPP"]}
+		hero.merge(extra, true)
+		return hero
+	var bare := {"health": 20, "mana": 0, "maximum": 20}
+	# A book for the hero `side` once the position stands: its cards, the uses
+	# each has left, and the place in it of each card of the hand.
+	var book := func(d: ELDuel, side: int, deck: Array, uses: Array, pages: Array) -> void:
+		d.heroes[side].deck = deck.duplicate()
+		d.heroes[side].spell_uses = uses.duplicate()
+		d.heroes[side].hand_slots = pages.duplicate()
+	# The thorns' mastery spares the ether a spell costs.
+	_spec("GMTM", 0, "spares the thorns", {"heroes": [zap.call(), {"health": 20, "mana": 0, "enchantments": ["MNTH"]}], "creatures": []}, [["cast", 0, 1]],
+		func(d: ELDuel) -> bool: return int(d.heroes[0].health) == 20 and int(d.heroes[1].health) == 19)
+	# The book's: a use spared, a card kept, a cast for nothing.
+	_spec("RSFN", 0, "spares the use", {"heroes": [zap.call(), bare], "creatures": [], "after": book.bind(0, ["ZAPP"], [2], [0])}, [["cast", 0, 1]],
+		func(d: ELDuel) -> bool: return int(d.heroes[0].spell_uses[0]) == 2)
+	_spec("STHN", 0, "keeps the second card in the hand", {"heroes": [zap.call({"mana": 20, "hand": ["ZAPP", "ZAPP"]}), bare],
+		"creatures": [], "after": book.bind(0, ["ZAPP"], [9], [0, 0])}, [["cast", 0, 1], ["cast", 1, 1]], func(d: ELDuel) -> bool: return d.heroes[0].hand.size() == 1 and int(d.heroes[1].health) == 18)
+	_spec("STHN", 0, "keeps no card past its uses", {"heroes": [zap.call({"mana": 20, "hand": ["ZAPP", "ZAPP"]}), bare],
+		"creatures": [], "after": book.bind(0, ["ZAPP"], [2], [0, 0])}, [["cast", 0, 1], ["cast", 1, 1]], func(d: ELDuel) -> bool: return d.heroes[0].hand.is_empty())
+	_spec("MNCH", 0, "casts for nothing", {"heroes": [zap.call(), bare], "creatures": []}, [["cast", 0, 1]],
+		func(d: ELDuel) -> bool: return int(d.heroes[0].mana) == 10 and int(d.heroes[1].health) == 19)
+	# A second creature of the card.
+	for pair: Array in [["BVLD", "SMVL"], ["GHLD", "SWHL"]]:
+		_spec(pair[0], 0, "summons a second", {"heroes": [zap.call({"mana": 20, "hand": [pair[1]]}), bare], "creatures": []}, [["cast", 0]],
+			func(d: ELDuel) -> bool: return d.army(0).size() == 2)
+	# The elixir's card, with books that deal: the second cast draws.
+	_spec("CEXC", 0, "draws a card", {"fixed": false, "rng": 77, "heroes": [zap.call({"mana": 20, "hand": ["ZAPP", "ZAPP"]}), bare],
+		"creatures": [], "after": book.bind(0, ["GROG", "ZAPP"], [9, 9], [1, 1])}, [["cast", 0, 1], ["cast", 1, 1]],
+		func(d: ELDuel) -> bool: return d.heroes[0].hand.size() == 1)
+	# The storm's mastery blesses the caster's own where the storm would strike.
+	_spec("RLSS", 0, "blesses its own in the storm", {"heroes": [zap.call({"mana": 20, "hand": ["LGST"]}), bare], "creatures": [{"card": "STRT", "owner": 0}, {"card": "STRT", "owner": 1}]},
+		[["cast", 0]], func(d: ELDuel) -> bool: return d.creatures.has(2) and int(d.creatures[2].power) == 4 and not d.creatures.has(3))
+	_spec("RLSS", 0, "and the blessing ends", {"heroes": [zap.call({"mana": 20, "hand": ["LGST"]}), bare], "creatures": [{"card": "STRT", "owner": 0}, {"card": "STRT", "owner": 1}]},
+		[["cast", 0], ["end"], ["end"]], func(d: ELDuel) -> bool: return d.creatures.has(2) and int(d.creatures[2].power) == 1)
+	# Three for each card wiped.
+	_spec("BMWM", 0, "hurts for each card wiped", {"heroes": [zap.call({"mana": 20, "hand": ["MDWP"]}), {"health": 20, "mana": 0, "hand": ["GROG", "GROG"]}], "creatures": []},
+		[["cast", 0, 1]], func(d: ELDuel) -> bool: return int(d.heroes[1].health) == 14 and d.heroes[1].hand.is_empty())
+	# A resistance to the burn, of a spell and of the enchantment.
+	_spec("RMBD", 1, "spares the burnt ether", {"heroes": [zap.call({"mana": 20, "hand": ["BRRL"]}), {"health": 20, "mana": 5}], "creatures": []}, [["cast", 0, 1]],
+		func(d: ELDuel) -> bool: return int(d.heroes[1].health) == 20 and int(d.heroes[1].mana) == 0)
+	_spec("RMBD", 0, "spares the ether burn", {"heroes": [{"health": 20, "mana": 5, "enchantments": ["MNBN"]}, bare], "creatures": []}, [["end"]],
+		func(d: ELDuel) -> bool: return int(d.heroes[0].health) == 20 and d.attacker == 1)
+	# Nothing regenerates from the hunger.
+	_spec("UHGW", 0, "starves past regeneration", {"heroes": [zap.call({"hand": ["HUNG"]}), {"health": 20, "mana": 5}], "creatures": [_cr("GROG", 1, 2, 2, ["Regen(1)"])]},
+		[["cast", 0, 2]], func(d: ELDuel) -> bool: return not d.creatures.has(2))
+	# The purification takes everything off.
+	_spec("BPRC", 0, "purifies the creature whole", {"heroes": [zap.call({"mana": 20, "hand": ["PRFY"]}), bare], "creatures": [{"card": "STRT", "owner": 1, "enchantments": ["STRG", "STRG"]}]},
+		[["do", {"kind": "cast", "card": "PRFY", "target": 2, "grave": 1}]], func(d: ELDuel) -> bool: return d.creatures.has(2) and (d.creatures[2].enchantments as Array).is_empty())
+	# The cannibal keeps its meal.
+	_spec("RPLO", 0, "spares the sacrifice", {"heroes": [zap.call({"hand": ["CNBL"]}), bare], "creatures": [{"card": "KBWR", "owner": 0}]}, [["cast", 0, 2]],
+		func(d: ELDuel) -> bool: return d.creatures.has(2) and int(d.heroes[0].health) == 21)
+	# Nature's friend, and the unsummoning's mastery, keep their hero's own.
+	_spec("GFNS", 0, "spares its own from the fury", {"heroes": [zap.call({"mana": 30, "hand": ["FRNT"]}), bare], "creatures": [{"card": "KBWR", "owner": 0}, {"card": "STRT", "owner": 1}]},
+		[["cast", 0]], func(d: ELDuel) -> bool: return d.creatures.has(2) and not d.creatures.has(3))
+	_spec("UGUS", 0, "keeps its own in play", {"heroes": [zap.call({"mana": 30, "hand": ["GRUN"]}), bare], "creatures": [{"card": "KBWR", "owner": 0}, {"card": "STRT", "owner": 1}]},
+		[["cast", 0]], func(d: ELDuel) -> bool: return d.creatures.has(2) and not d.creatures.has(3) and d.heroes[1].hand.size() == 1)
+	# A mind shield.
+	_spec("UMBD", 1, "shields the mind", {"heroes": [zap.call({"mana": 30, "hand": ["MDBL"]}), {"health": 20, "mana": 0, "hand": ["GROG", "GROG", "GROG", "GROG", "GROG", "GROG", "GROG"]}],
+		"creatures": []}, [["cast", 0]], func(d: ELDuel) -> bool: return int(d.heroes[1].health) == 20)
+	# The heroes' own abilities.
+	_spec("RBNO", 0, "spares what burns out", {"heroes": [{"health": 20, "mana": 5, "enchantments": ["BROT"]}, bare], "creatures": [{"card": "KBWR", "owner": 0}, {"card": "STRT", "owner": 1}]},
+		[["do", {"kind": "ability", "id": 0, "key": "burnout:1", "target": 2, "choice": 3}]], func(d: ELDuel) -> bool: return d.creatures.has(2) and not d.creatures.has(3))
+	_spec("GSLO", 0, "spares what is locked", {"heroes": [{"health": 20, "mana": 5, "enchantments": ["SPLK"]}, bare], "creatures": [{"card": "KBWR", "owner": 0}]},
+		[["do", {"kind": "ability", "id": 0, "key": "spirit_lock:1", "target": 2}]], func(d: ELDuel) -> bool: return d.creatures.has(2))
+	_spec("BENG", 0, "leaves the energy unused", {"heroes": [{"health": 20, "mana": 5, "enchantments": ["ENRG"]}, bare], "creatures": [{"card": "KBWR", "owner": 0, "resting": true}]},
+		[["do", {"kind": "ability", "id": 0, "key": "energize:1", "target": 2}]],
+		func(d: ELDuel) -> bool: return not bool(d.creatures[2].resting) and not bool(d.heroes[0].enchantments[0].get("used", false)))
+	_spec("BRST", 0, "leaves the repair unused", {"heroes": [{"health": 20, "mana": 5, "enchantments": ["RPST"], "grave": ["TIWR"]}, bare], "creatures": []},
+		[["do", {"kind": "ability", "id": 0, "key": "repair:1", "target": 0, "choice": 0}]],
+		func(d: ELDuel) -> bool: return d.heroes[0].hand == ["TIWR"] and not bool(d.heroes[0].enchantments[0].get("used", false)))
+	# A fingus lives through its own spores.
+	_spec("GFNR", 0, "lives through its spores", {"heroes": [bare, bare], "creatures": [{"card": "SPFG", "owner": 0}, {"card": "STRT", "owner": 1}]},
+		[["do", {"kind": "ability", "id": 2, "key": "spores", "target": 3}]], func(d: ELDuel) -> bool: return d.creatures.has(2))
+	# The first game's: an enchantment kept, and one that comes back as a card.
+	_spec("MSEN", 1, "keeps its enchantment", {"heroes": [zap.call({"mana": 20, "hand": ["PRFY"]}), bare], "creatures": [{"card": "STRT", "owner": 1, "enchantments": ["STRG"]}]},
+		[["do", {"kind": "cast", "card": "PRFY", "target": 2, "grave": 1}]], func(d: ELDuel) -> bool: return d._enchantment_count(2, "STRG") == 1)
+	_spec("ETEN", 1, "takes its enchantment back", {"heroes": [zap.call({"mana": 20, "hand": ["PRFY"]}), bare], "creatures": [{"card": "STRT", "owner": 1, "enchantments": ["STRG"]}]},
+		[["do", {"kind": "cast", "card": "PRFY", "target": 2, "grave": 1}]], func(d: ELDuel) -> bool: return d._enchantment_count(2, "STRG") == 0 and d.heroes[1].hand == ["STRG"])
+	# The turn's: a parasite, the gas, a blessing kept, the tide, the flood, the smoke, the intuition.
+	if not ELCatalog.PARASITES.is_empty():
+		_spec("BMZP", 0, "spares the drain", {"heroes": [bare, bare], "creatures": [{"card": String(ELCatalog.PARASITES.keys()[0]), "owner": 0}]}, [["end"]],
+			func(d: ELDuel) -> bool: return int(d.heroes[0].health) == 20 and d.attacker == 1)
+	_spec("BSGP", 0, "spares its side from the gas", {"heroes": [{"health": 20, "mana": 0, "enchantments": ["SFGS"]}, bare], "creatures": [{"card": "KBWR", "owner": 0}, {"card": "STRT", "owner": 1}]},
+		[["end"]], func(d: ELDuel) -> bool: return d.creatures.has(2) and not d.creatures.has(3) and int(d.heroes[0].health) == 20 and int(d.heroes[1].health) == 18)
+	_spec("GBLP", 0, "keeps a blessing a turn more", {"heroes": [bare, bare], "creatures": [{"card": "KBWR", "owner": 0, "enchantments": ["BLSS"]}]}, [["end"], ["end"]],
+		func(d: ELDuel) -> bool: return d._enchantment_count(2, "BLSS") == 1 and d.attacker == 0)
+	_spec("ETTI", 1, "brings a card back", {"heroes": [bare, {"health": 20, "mana": 0, "grave": ["TIWR"]}], "creatures": []}, [["end"]],
+		func(d: ELDuel) -> bool: return d.heroes[1].hand == ["TIWR"] and d.heroes[1].grave.is_empty())
+	_spec("UFLP", 1, "recovers through the flood", {"heroes": [{"health": 20, "mana": 0, "enchantments": ["FLOD"]}, bare], "creatures": [{"card": "STRT", "owner": 1, "resting": true}]}, [["end"]],
+		func(d: ELDuel) -> bool: return not bool(d.creatures[2].resting))
+	_spec("RSMP", 1, "recovers through the smoke", {"heroes": [{"health": 20, "mana": 0, "enchantments": ["SMOK"]}, bare], "creatures": [{"card": "STRT", "owner": 1, "resting": true}]}, [["end"]],
+		func(d: ELDuel) -> bool: return not bool(d.creatures[2].resting))
+	_spec("QIHN", 1, "draws one more", {"fixed": false, "rng": 78, "heroes": [bare, bare], "creatures": [],
+		"after": book.bind(1, ["GROG", "KBWR"], [9, 9], [])}, [["end"]],
+		func(d: ELDuel) -> bool: return d.heroes[1].hand.size() == 2)
+	# What a death gives: the web's two, and the link's power.
+	_spec("GSWS", 0, "heals two by the web", {"heroes": [zap.call({"enchantments": ["SPWB"]}), bare], "creatures": [{"card": "STRT", "owner": 1}]}, [["cast", 0, 2]],
+		func(d: ELDuel) -> bool: return int(d.heroes[0].health) == 22)
+	_spec("UWLS", 0, "heals by the power too", {"heroes": [zap.call({"hand": ["CLIG"]}), bare], "creatures": [{"card": "KBWR", "owner": 0, "enchantments": ["WTLK"]}]}, [["cast", 0, 2]],
+		func(d: ELDuel) -> bool: return int(d.heroes[0].health) == 22)
 
 ## The lowest hero level at which a mastery works most surely.
 func _surest_level(code: String) -> int:
@@ -1289,6 +1744,15 @@ func _fixture(name: String, spec: Dictionary, steps: Array, expect: Callable) ->
 		_missing(name + ": the position does not restore")
 		return
 	cases += 1
+	# Specialisations as a reading counts on them: what is to be expected of
+	# each roll, with nothing drawn (the model is told no more than the odds).
+	if spec.get("fair", false):
+		duel.expected_specs = true
+		duel.fair_specs = true
+	# "after": what a fixture changes in the position once it stands.
+	if spec.has("after"):
+		(spec.after as Callable).call(duel)
+		(spec.after as Callable).call(start)
 	var before := _board(duel)
 	var attacker := duel.attacker
 	var ids: Array = duel.creatures.keys()
@@ -1307,6 +1771,14 @@ func _fixture(name: String, spec: Dictionary, steps: Array, expect: Callable) ->
 				if step.size() > 2: aim = -1 - int(step[2]) if int(step[2]) < 2 else ids.find(int(step[2]))
 				done = duel.cast(place - earlier, int(step[2]) if step.size() > 2 else -1)
 				commands.append([3, place, aim, 0])
+			"back":
+				# A card that came back into the hand in the middle of the line:
+				# ["back", its place among those that came back, its place in
+				# the game's hand now, what it is aimed at].
+				var aim := -99
+				if step.size() > 3: aim = -1 - int(step[3]) if int(step[3]) < 2 else ids.find(int(step[3]))
+				done = duel.cast(int(step[2]), int(step[3]) if step.size() > 3 else -1)
+				commands.append([3, ELCombatBrain.SLOTS + int(step[1]), aim, 0])
 			"attack":
 				done = duel.toggle_attack(int(ids[int(step[1])]))
 				commands.append([1, int(step[1]), 0, 0])
@@ -1325,12 +1797,14 @@ func _fixture(name: String, spec: Dictionary, steps: Array, expect: Callable) ->
 				# left before it, or the places it names have moved).
 				var command := _reference_command(duel, step[1])
 				var named: Array = []
-				for move: Array in _native_moves(duel, duel.active_side(), false):
+				# (As its plain reading lists them, or else as a proof does.)
+				for move: Array in _native_moves(duel, duel.active_side(), false) + _native_moves(duel, duel.active_side(), true):
 					if _same_command(duel, ELCombatBrain._command_of(duel, duel.creatures.keys(), int(move[0]), int(move[1]), int(move[2]), int(move[3])), command):
 						named = move
 						break
 				if named.is_empty():
-					_missing("%s: the engine does not list %s" % [name, str(step[1])])
+					_missing("%s: the engine does not list %s at command %d (the game: %s)" % [name, str(step[1]), commands.size() + 1,
+						"allows it" if ELCombatSearch.apply(duel, command) else duel.error])
 					return
 				done = ELCombatSearch.apply(duel, command)
 				commands.append(named)
@@ -1487,6 +1961,337 @@ func _said(duel: ELDuel, command: Dictionary) -> String:
 		"attack": return "attack #%d" % int(command.id)
 		"block": return "block #%d with #%d" % [int(command.target), int(command.id)]
 	return String(command.get("kind", "?"))
+
+# --- Coverage of the model -------------------------------------------------------------
+
+## --coverage=1 (or tools/duel_model_coverage.gd): every card with a rule,
+## every creature, every enchantment that stands and every thing a hero may
+## carry, each on its own in a few small positions. Whatever the engine lists
+## for it there is played through both sets of rules, alone and followed by
+## three turn ends, and the two must leave the same. Each is then told as
+##   agrees      every line came out the same;
+##   differs     a line came out differently, or the game refused what the engine listed;
+##   chance      the only differences are in lines where the game drew on chance
+##               the model cannot be told (which card a discard takes);
+##   unlisted    the game allows a use the engine lists none of;
+##   incomplete  the lines agree, but in some the model went past what it has room for;
+##   unexercised nothing could be done with it in any of the positions.
+## `--shard=k/n` takes every n-th thing; `--kinds=card,creature,...` those kinds alone.
+func _coverage(shard: String) -> void:
+	var kinds := Array(_arg("kinds", "card,creature,worn,laid,carried").split(",", false))
+	var only := Array(_arg("names", "").split(",", false))
+	var part := int(shard.get_slice("/", 0))
+	var parts := maxi(1, int(shard.get_slice("/", 1)))
+	var index := 0
+	var spell_table: Dictionary = profile.table("CombatSpells")
+	for card: String in spell_table:
+		var rule := ELCatalog.rule(profile, card)
+		if rule.is_empty(): continue
+		index += 1
+		if index % parts != part or (not only.is_empty() and not only.has(card)): continue
+		var effect := String(rule.get("effect", ""))
+		if kinds.has("card"): _cover_card(card)
+		if kinds.has("creature") and effect == "summon" and profile.table("CombatCreatures").has(card): _cover_creature(card)
+		if effect == "enchant":
+			var aim := String(rule.get("target", "none"))
+			if kinds.has("worn") and aim in ["creature", "any"]: _cover_worn(card)
+			if kinds.has("laid") and aim in ["none", "hero", "any"]: _cover_laid(card)
+	if kinds.has("carried"):
+		var seen := {}
+		for name: String in profile.table("Artefacts"):
+			var entry := ELDuel.artifact_entry(profile, {"name": name})
+			if entry.is_empty() or seen.has(String(entry.spell)): continue
+			seen[String(entry.spell)] = true
+			index += 1
+			if index % parts != part or (not only.is_empty() and not only.has(String(entry.spell))): continue
+			_cover_carried(String(entry.spell), entry)
+	var totals := {}
+	for key: String in cover:
+		var t: Dictionary = cover[key]
+		var status := "agrees"
+		if int(t.differ) > 0: status = "differs"
+		elif int(t.unlisted) > 0 and int(t.agree) == 0: status = "unlisted"
+		elif int(t.lines) == 0: status = "unexercised"
+		elif int(t.chance) > 0: status = "chance"
+		elif int(t.incomplete) > 0: status = "incomplete"
+		totals["%s %s" % [String(t.kind), status]] = int(totals.get("%s %s" % [String(t.kind), status], 0)) + 1
+		print("COVER %s %s %s lines=%d agree=%d differ=%d chance=%d unlisted=%d incomplete=%d reasons=%s%s" % [String(t.kind), String(t.code), status, int(t.lines), int(t.agree),
+			int(t.differ), int(t.chance), int(t.unlisted), int(t.incomplete), str(t.reasons), "" if (t.notes as Array).is_empty() else " | " + " || ".join(t.notes)])
+	# And each one's name, for the table.
+	var named := {}
+	for t: Dictionary in cover.values():
+		if named.has(t.code): continue
+		named[t.code] = true
+		print("NAMED %s %s" % [String(t.code), profile.text(String(profile.table("CombatSpells").get(t.code, {}).get("Name", t.code)))])
+	for key: String in totals: print("COVERED %s %d" % [key, int(totals[key])])
+	print("TOTAL cases=%d fights=%d differed=%d" % [cover.size(), fights, differed])
+	quit(0)
+
+func _tally(kind: String, code: String) -> Dictionary:
+	var key := kind + " " + code
+	if not cover.has(key): cover[key] = {"kind": kind, "code": code, "lines": 0, "agree": 0, "differ": 0, "chance": 0, "unlisted": 0, "incomplete": 0, "notes": [], "reasons": {}}
+	return cover[key]
+
+const END := [0, 0, 0, 0]
+
+## A small position for hero 0 to act in: its own creatures are `own` (ids
+## from 2), then the other hero's - a kobold, an ogre wearing a Strength of
+## its hero's, a rat at rest, a wall and a flyer. `variant` 0: hero 0's
+## attack; 1: its defence against the kobold; 2: its attack, with books that
+## deal and channels that grow. `change` then alters the position, and every
+## creature's points are settled as the game settles them.
+func _cover_board(variant: int, hand: Array, own: Array, change: Callable, other: Array = ["STWO"]) -> ELDuel:
+	var creatures: Array = own.duplicate(true)
+	creatures.append_array([{"card": "KBWR", "owner": 1}, {"card": "GROG", "owner": 1, "enchantments": ["STRG"]}, {"card": "STRT", "owner": 1, "resting": true},
+		{"card": "WLBR", "owner": 1}, {"card": "AVEL", "owner": 1}])
+	# The second game: a pale creature of each hero's too, hero 0's in the
+	# Colourless Plane.
+	var pale := profile.id == "el2" and profile.table("CombatCreatures").has("OUS1")
+	if pale: creatures.append_array([{"card": "OUS1", "owner": 1}, {"card": "OUS1", "owner": 0}])
+	var spec := {"fixed": variant != 2, "rng": 5,
+		"heroes": [{"health": 15, "maximum": 20, "mana": 40, "channels": 8, "hand": hand, "grave": ["STRT", "KBWR", "GROG"]},
+			{"health": 15, "maximum": 20, "mana": 6, "channels": 5, "hand": ["GROG", "GROG"], "grave": ["KBWR", "STRT", "GROG"], "enchantments": other}],
+		"creatures": creatures}
+	if variant == 1:
+		spec.attacker = 1
+		spec.phase = "defence"
+		spec.attacks = [2 + own.size()]
+	var duel := Fixtures.build(profile, spec)
+	if duel == null: return null
+	if variant == 2:
+		for side in 2:
+			duel.heroes[side].deck = ["GROG", "KBWR", "STRT"]
+			duel.heroes[side].spell_uses = [9, 9, 9]
+	if pale: duel.creatures[duel.creatures.keys()[-1]].plane = true
+	if change.is_valid(): change.call(duel)
+	for c: Dictionary in duel.creatures.values(): duel._refresh_stats(c)
+	return duel
+
+## The commands the engine lists for the hero to move, each with what it
+## means to the game: [[kind, a, b, c], command].
+func _cover_moves(duel: ELDuel) -> Array:
+	var out: Array = []
+	var ids: Array = duel.creatures.keys()
+	for move: Array in _native_moves(duel, duel.active_side(), true):
+		out.append([move, ELCombatBrain._command_of(duel, ids, int(move[0]), int(move[1]), int(move[2]), int(move[3]))])
+	return out
+
+## No more than `most` of `moves`, spread over them all.
+func _spread(moves: Array, most: int) -> Array:
+	if moves.size() <= most: return moves
+	var out: Array = []
+	for k in most: out.append(moves[k * moves.size() / most])
+	return out
+
+## One line through both sets of rules, from the position `build` makes.
+func _cover_line(tally: Dictionary, build: Callable, commands: Array, label: String) -> void:
+	var duel: ELDuel = build.call()
+	var start: ELDuel = build.call()
+	if duel == null or start == null: return
+	var before := _board(duel)
+	var side := duel.active_side()
+	var ids: Array = duel.creatures.keys()
+	var played: Array = []
+	for command: Array in commands:
+		if duel.phase == ELDuel.Phase.FINISHED: break
+		var done := false
+		if int(command[0]) == 0: done = duel.end_phase()
+		else:
+			var said := ELCombatBrain._command_of(duel, ids, int(command[0]), int(command[1]), int(command[2]), int(command[3]))
+			done = String(said.get("kind", "")) != "end_phase" and ELCombatSearch.apply(duel, said)
+		if not done:
+			if played.is_empty():
+				# What the engine lists but will not play itself is no line at
+				# all (it lists some casts without trying them); what the model
+				# plays and the game refuses is a difference.
+				if int(ELCombatBrain.fight(_context(side), start, 4, [command]).get("played", 0)) == 0: return
+				tally.lines += 1
+				tally.differ += 1
+				differed += 1
+				if (tally.notes as Array).size() < 3: tally.notes.append("%s: the game refuses %s (%s)" % [label, str(command), duel.error])
+				return
+			break
+		played.append(command)
+	tally.lines += 1
+	fights += 1
+	var model := ELCombatBrain.fight(_context(side), start, 4, played)
+	var reasons: Array = ELCombatBrain.last_crowding.duplicate()
+	if model.is_empty():
+		tally.differ += 1
+		differed += 1
+		if (tally.notes as Array).size() < 3: tally.notes.append("%s: the model gave no answer to %s" % [label, str(played)])
+		return
+	var trouble := _compare(duel, model, before, true)
+	if int(model.played) != played.size(): trouble.append("the model played %d of %d commands" % [int(model.played), played.size()])
+	if int(model.get("limit", 0)) != 0: reasons.append("room")
+	var chance := int(model.get("blind", 0)) != 0
+	if not reasons.is_empty():
+		tally.incomplete += 1
+		for reason: String in reasons: tally.reasons[reason] = int(tally.reasons.get(reason, 0)) + 1
+	if trouble.is_empty(): tally.agree += 1
+	elif chance: tally.chance += 1
+	else:
+		tally.differ += 1
+		differed += 1
+		if (tally.notes as Array).size() < 3: tally.notes.append("%s %s: %s" % [label, str(played), " | ".join(trouble)])
+		# --trace=1: where along the line the two part, a command at a time.
+		if _arg("trace", "") == "1":
+			print("TRACE %s %s %s\n   %s" % [String(tally.kind), String(tally.code), label, before.text])
+			for upto in range(1, played.size() + 1):
+				var again: ELDuel = build.call()
+				for command: Array in played.slice(0, upto):
+					if int(command[0]) == 0: again.end_phase()
+					else: ELCombatSearch.apply(again, ELCombatBrain._command_of(again, ids, int(command[0]), int(command[1]), int(command[2]), int(command[3])))
+				var told := ELCombatBrain.fight(_context(side), start, 4, played.slice(0, upto))
+				print("   after %d %s: %s\n   %s" % [upto, str(played[upto - 1]), " | ".join(_compare(again, told, before, true)), _board(again).text])
+
+## A line alone, and the same followed by three turn ends.
+func _cover_both(tally: Dictionary, build: Callable, commands: Array, label: String) -> void:
+	_cover_line(tally, build, commands, label)
+	_cover_line(tally, build, commands + [END, END, END], label + "+turns")
+
+## Whether the game lets the hero to move cast the first card of its hand at anything.
+func _cover_castable(duel: ELDuel) -> bool:
+	var aims: Array = [-1, 0, 1]
+	aims.append_array(duel.creatures.keys())
+	var names: Array = [-1, 0, 1, 2]
+	for holder: int in [0, 1] + duel.creatures.keys():
+		for e: Dictionary in duel.entity(holder).enchantments: names.append(int(e.id))
+	names.append_array(duel.creatures.keys())
+	var card := String(duel.heroes[duel.active_side()].hand[0])
+	for aim: int in aims:
+		for named: int in names:
+			var copy := duel.search_copy()
+			if copy.cast(0, aim, named, 1 if copy.variable_power(card) else 0): return true
+	return false
+
+const OWN := [{"card": "KBWR", "owner": 0}, {"card": "STRT", "owner": 0, "resting": true}]
+
+## A card cast out of the hand.
+func _cover_card(card: String) -> void:
+	var tally := _tally("card", card)
+	var allowed := false
+	for variant in 4:
+		# 3: the caster has the fewer channels, for what evens them out.
+		var behind := func(d: ELDuel) -> void:
+			d.heroes[0].channels = 3
+			d.heroes[1].channels = 6
+		var build := func() -> ELDuel: return _cover_board(variant % 3, [card, "GROG"], OWN, behind if variant == 3 else Callable())
+		var probe: ELDuel = build.call()
+		if probe == null: continue
+		var mine: Array = []
+		for pair: Array in _cover_moves(probe):
+			if String(pair[1].get("kind", "")) == "cast" and int(pair[1].get("index", -1)) == 0: mine.append(pair[0])
+		if mine.is_empty():
+			if not allowed and _cover_castable(probe):
+				allowed = true
+				tally.unlisted += 1
+				if (tally.notes as Array).size() < 3: tally.notes.append("v%d: the game allows a cast the engine does not list" % variant)
+			continue
+		for move: Array in _spread(mine, 6): _cover_both(tally, build, [move], "v%d" % variant)
+
+## The commands the engine lists for the creature or the hero `id`: its abilities.
+func _cover_abilities(probe: ELDuel, id: int, carried := false) -> Array:
+	var mine: Array = []
+	for pair: Array in _cover_moves(probe):
+		if String(pair[1].get("kind", "")) != "ability" or int(pair[1].get("id", -1)) != id: continue
+		if String(pair[1].get("key", "")).begins_with("artifact:") != carried: continue
+		mine.append(pair[0])
+	return mine
+
+## A creature in play: its fights, its abilities and its turns.
+func _cover_creature(card: String) -> void:
+	var tally := _tally("creature", card)
+	for variant in 4:
+		# 3: the creature at rest, for what it does resting.
+		var own := [{"card": card, "owner": 0, "resting": variant == 3}, {"card": "STRT", "owner": 0}]
+		# One whose card gives it no health of its own was made with some.
+		if int(profile.table("CombatCreatures")[card].Toughness) <= 0: own[0].merge({"base": [2, 2], "power": 2, "toughness": 2})
+		var build := func() -> ELDuel: return _cover_board(variant % 3, ["GROG"], own, Callable())
+		var probe: ELDuel = build.call()
+		if probe == null: continue
+		var moves := _cover_moves(probe)
+		var listed := moves.map(func(pair: Array) -> Array: return pair[0])
+		if variant == 0 and listed.has([1, 0, 0, 0]):
+			_cover_line(tally, build, [[1, 0, 0, 0], END, END], "attack")
+			_cover_line(tally, build, [[1, 0, 0, 0], END, [2, 2, 0, 0], END], "blocked")
+			_cover_line(tally, build, [[1, 0, 0, 0], END, [2, 3, 0, 0], END, END, END], "blocked by the ogre")
+			_cover_line(tally, build, [[1, 0, 0, 0], END, [2, 6, 0, 0], END], "blocked by the flyer")
+		if variant == 1 and listed.has([2, 0, 2, 0]): _cover_line(tally, build, [[2, 0, 2, 0], END, END, END], "blocks")
+		if variant != 1 and variant != 3: _cover_line(tally, build, [END, END, END], "turns v%d" % variant)
+		var able := _cover_abilities(probe, 2)
+		for move: Array in _spread(able, 5): _cover_both(tally, build, [move], "ability v%d" % variant)
+		if able.is_empty():
+			for ability: Dictionary in probe.abilities(2):
+				if probe.can_use_ability(2, String(ability.key)):
+					tally.unlisted += 1
+					if (tally.notes as Array).size() < 3: tally.notes.append("v%d: the game allows %s, which the engine does not list" % [variant, String(ability.key)])
+
+## An enchantment standing on a creature: its own hero's, the other's, and
+## one the other hero laid.
+func _cover_worn(card: String) -> void:
+	var tally := _tally("worn", card)
+	for where in 3:
+		var own := [{"card": "KBWR", "owner": 0}, {"card": "STRT", "owner": 0}]
+		# Laid as the game lays it: on the hero's own kobold, on the other
+		# hero's, and on its own by the other hero.
+		var change := func(d: ELDuel) -> void: d._enchant(card, 1 if where == 2 else 0, 4 if where == 1 else 2, ELCatalog.rule(profile, card))
+		for variant in 2:
+			var build := func() -> ELDuel: return _cover_board(variant, ["GROG"], own, change)
+			var probe: ELDuel = build.call()
+			if probe == null: continue
+			var listed := _cover_moves(probe).map(func(pair: Array) -> Array: return pair[0])
+			if variant == 0:
+				if listed.has([1, 0, 0, 0]):
+					_cover_line(tally, build, [[1, 0, 0, 0], END, END], "attack w%d" % where)
+					_cover_line(tally, build, [[1, 0, 0, 0], END, [2, 2, 0, 0], END, END, END], "blocked w%d" % where)
+				_cover_line(tally, build, [END, END, END], "turns w%d" % where)
+			elif listed.has([2, 0, 2, 0]): _cover_line(tally, build, [[2, 0, 2, 0], END, END, END], "blocks w%d" % where)
+			for move: Array in _spread(_cover_abilities(probe, 2), 3): _cover_both(tally, build, [move], "ability w%d v%d" % [where, variant])
+
+## An enchantment standing on a hero: the one to move, and the other.
+func _cover_laid(card: String) -> void:
+	var tally := _tally("laid", card)
+	for where in 2:
+		for variant in 3:
+			# Laid as the game lays it, in its hero's own turn: this one, or the one before.
+			var change := func(d: ELDuel) -> void:
+				d._enchant(card, where, where, ELCatalog.rule(profile, card))
+				if where != d.attacker and not d.heroes[where].enchantments.is_empty(): d.heroes[where].enchantments[-1].born = d.turn_serial - 1
+			var build := func() -> ELDuel: return _cover_board(variant, ["GROG"], OWN, change)
+			var probe: ELDuel = build.call()
+			if probe == null or probe._enchantment_count(where, card) == 0: continue
+			var listed := _cover_moves(probe).map(func(pair: Array) -> Array: return pair[0])
+			if variant != 1:
+				if listed.has([1, 0, 0, 0]): _cover_line(tally, build, [[1, 0, 0, 0], END, [2, 2, 0, 0], END, END, END], "attack h%d v%d" % [where, variant])
+				_cover_line(tally, build, [END, END, END], "turns h%d v%d" % [where, variant])
+			elif listed.has([2, 0, 2, 0]): _cover_line(tally, build, [[2, 0, 2, 0], END, END, END], "blocks h%d" % where)
+			var able := _cover_abilities(probe, 0)
+			for move: Array in _spread(able, 4): _cover_both(tally, build, [move], "ability h%d v%d" % [where, variant])
+			if able.is_empty() and where == 0:
+				for ability: Dictionary in probe.abilities(0):
+					if probe.can_use_ability(0, String(ability.key)):
+						tally.unlisted += 1
+						if (tally.notes as Array).size() < 3: tally.notes.append("v%d: the game allows %s, which the engine does not list" % [variant, String(ability.key)])
+
+## A thing a hero carries.
+func _cover_carried(spell: String, entry: Dictionary) -> void:
+	var tally := _tally("carried", spell)
+	for variant in 3:
+		var change := func(d: ELDuel) -> void:
+			var thing := entry.duplicate(true)
+			thing.charges = 2
+			thing.ready_round = 0
+			d.heroes[0].artifacts = [thing]
+			d.heroes[0].artifact_uses = 0
+		var build := func() -> ELDuel: return _cover_board(variant, ["GROG"], OWN, change)
+		var probe: ELDuel = build.call()
+		if probe == null: continue
+		var able := _cover_abilities(probe, 0, true)
+		for move: Array in _spread(able, 6): _cover_both(tally, build, [move], "v%d" % variant)
+		if able.is_empty() and probe.artifact_error(0, 0).is_empty():
+			tally.unlisted += 1
+			if (tally.notes as Array).size() < 3: tally.notes.append("v%d: the game allows its use, which the engine does not list" % variant)
 
 ## The commands the engine lists at its first command here, [kind, a, b, c].
 func _native_moves(duel: ELDuel, side: int, proof: bool) -> Array:

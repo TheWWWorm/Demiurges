@@ -88,6 +88,14 @@ var selection_phase := ""
 var ai_clock := 0.0
 var demo := false
 var updating := false
+## Full panel rebuilds (_refresh) and strip rebuilds (_fill_strip) so far,
+## read by the many-enchantments check to keep per-frame work bounded.
+var refresh_count := 0
+var strip_fill_count := 0
+## Figure effects started this frame, by effect and figure (_figure_effect).
+const SAME_FRAME_EFFECTS := 3
+var _figure_effect_frame := -1
+var _figure_effects_now := {}
 var launch_profile := "el1"
 var capture_path := ""
 var capture_after := 3.0
@@ -590,6 +598,7 @@ func _start(edition: String, options: Dictionary = {}, restored: ELDuel = null, 
 	labels.clear()
 	homes.clear()
 	logs.clear()
+	_log_stale = true
 	selection = -1
 	selection_power = 0
 	pending_power.clear()
@@ -787,6 +796,7 @@ var _tutorial_end_clock := 0.0
 
 func _process(delta: float) -> void:
 	elapsed += delta
+	_show_log()
 	if gap_panel != null and advisor.tick(): _show_advice()
 	if combat_watch != null and combat_watch.step(delta): _show_watch()
 	_update_strategic_clock()
@@ -871,7 +881,9 @@ func _process(delta: float) -> void:
 			# A puzzle is always defended by the smarter player.
 			# Setting "duel_ai": 0 Easy, 1 Original, 2 Smarter (ELAIChoice).
 			var level := int(settings.values.get("duel_ai", 2))
-			if not demo and not _human_side() and (level >= 2 or _in_puzzle()): smart.append(duel.active_side())
+			# Auto combat plays the player's side with the same planning as
+			# the computer opponent: the smarter one at that level too.
+			if not demo and ((not _human_side() and (level >= 2 or _in_puzzle())) or (auto and level >= 2)): smart.append(duel.active_side())
 			ELCombatSearch.original_budget = ELCombatSearch.EASY_BUDGET if level == 0 and not demo and not _human_side() and not _in_puzzle() else ELCombatSearch.BUDGET
 			duel.smart_sides = smart
 			ELPracticeAI.step(duel, auto and not bool(settings.values.get("use_spells", true)))
@@ -4538,7 +4550,19 @@ func _play_ability(items: Array, source: int, side: int, target: int, hero_effec
 			_: if at != null: effects.play(effect, {"Target": [at]})
 
 func _figure_effect(effect: String, id: int) -> void:
-	if is_instance_valid(effects) and models.has(id): effects.play(effect, {"Target": [models[id]]})
+	if not is_instance_valid(effects) or not models.has(id): return
+	# Many copies of one enchantment answer one event together (a dozen Mana
+	# Vortexes on a summon): copies of one effect on one figure in the same
+	# frame draw over each other, so only the first few are played.
+	var key := "%s|%d" % [effect, id]
+	var frame := Engine.get_process_frames()
+	if _figure_effect_frame != frame:
+		_figure_effect_frame = frame
+		_figure_effects_now.clear()
+	var started := int(_figure_effects_now.get(key, 0))
+	if started >= SAME_FRAME_EFFECTS: return
+	_figure_effects_now[key] = started + 1
+	effects.play(effect, {"Target": [models[id]]})
 
 ## A figure's idle sounds (original EL1/EL2 figure sound loader, EL2
 ## ): idle00.wav with every cycle of the plain idle, as it
@@ -4780,6 +4804,7 @@ func _rail_leave(card: Dictionary) -> void:
 func _refresh() -> void:
 	if duel == null or updating:
 		return
+	refresh_count += 1
 	# A selected creature that left play is no longer selected.
 	if selected_creature >= 2 and not duel.creatures.has(selected_creature): selected_creature = -1
 	_check_handover()
@@ -5335,13 +5360,19 @@ func _creature_tip_text(id: int) -> String:
 
 ## A remake addition to a figure's tooltip: each enchantment on it, by name
 ## with its card text, so spells cast on a creature or hero can be read
-## without selecting it.
+## without selecting it. Copies of one card share a line with their count
+## ("Name ×12: text"), in the order the first copy came, so a dozen copies
+## do not fill the screen (player report).
 func _enchantment_lines(entity: Dictionary) -> PackedStringArray:
-	var lines := PackedStringArray()
+	var counts := {}
 	for enchantment: Dictionary in entity.get("enchantments", []):
 		var card := String(enchantment.card)
+		counts[card] = int(counts.get(card, 0)) + 1
+	var lines := PackedStringArray()
+	for card: String in counts:
 		var about := profile.card_description(card)
-		lines.append(duel.card_name(card) + (": " + about if not about.is_empty() and about != card else ""))
+		var copies := int(counts[card])
+		lines.append(duel.card_name(card) + (" ×%d" % copies if copies > 1 else "") + (": " + about if not about.is_empty() and about != card else ""))
 	return lines
 
 ## An original control's tooltip text from the Controls table, else "".
@@ -5381,11 +5412,22 @@ func _spec_text(code: String, field: String, fallback: String) -> String:
 ## scrolls with the wheel or its bar; it follows the newest line unless the
 ## player has scrolled up to read.
 const LOG_LINES := 500
+## Lines were logged that the log's text box does not hold yet (_show_log).
+var _log_stale := false
 
 func _log(text: String) -> void:
 	logs.append(text)
 	if logs.size() > LOG_LINES:
 		logs.pop_front()
+	_log_stale = true
+
+## Brings the log's text box up to date, while it is shown and at most once a
+## frame (_process): setting its text lays out every kept line again, which
+## took tens of milliseconds for each logged line of a long battle, and many
+## copies of one enchantment log a line each for one event.
+func _show_log() -> void:
+	if not _log_stale or log_text == null or not log_text.visible: return
+	_log_stale = false
 	log_text.text = "\n".join(logs)
 
 func _style(fill: Color, border := Color("344441")) -> StyleBoxFlat:
@@ -7654,7 +7696,9 @@ func _refresh_inspector() -> void:
 	var entity := duel.entity(selected_creature)
 	# Remake readout: every command it offers is also on the strip, rails or field.
 	inspector.visible = not entity.is_empty() and not _overlay_open() and helper_overlay()
-	if entity.is_empty(): return
+	# A hidden readout is not built: with dozens of enchantments its rows
+	# cost more than the rest of the refresh.
+	if entity.is_empty() or not inspector.visible: return
 	var title := _side_name(selected_creature) if selected_creature < 2 else duel.card_name(entity.card)
 	inspector_rows.add_child(_label(title, 18, ACCENT))
 	if selected_creature < 2 and entity.get("spec", "NONE") != "NONE":
@@ -7697,12 +7741,13 @@ func _refresh_inspector() -> void:
 		# While a graveyard entry or enchantment is being chosen here, the hero's
 		# commands are hidden so the choices stay in view on compact screens.
 		var choosing: bool = (inspect_graveyard and (not ability_selection.is_empty() or selection >= 0)) or ability_selection.get("target") == "enchantment"
-		for ability: Dictionary in ([] if choosing else duel.abilities(selected_creature)):
+		var listed: Array[Dictionary] = [] if choosing else duel.abilities(selected_creature)
+		for ability: Dictionary in listed:
 			var text := "%s · %d ether" % [ability.name, ability.cost]
 			if ability.effect == "artifact": text = "%s · artifact · %d charges" % [ability.name, ability.charges]
 			var button := _button(text, _select_ability.bind(selected_creature, ability))
 			button.set_meta("ability", ability.key)
-			button.disabled = not _human_turn() or not duel.can_use_ability(selected_creature, ability.key)
+			button.disabled = not _human_turn() or not duel.can_use_ability(selected_creature, ability.key, listed)
 			if ability.effect == "artifact":
 				var reason := duel.artifact_error(selected_creature, int(ability.artifact))
 				button.tooltip_text = duel.profile.text(String(duel.profile.table("CombatSpells")[ability.card].get("ToolTip", ""))) + ("\n" + reason if not reason.is_empty() else "")
@@ -7765,9 +7810,11 @@ func _removal_allowed(enchantment: Dictionary) -> bool:
 const ENCHANTMENT_ABILITIES := {"ENFL": "wake", "WNPZ": "unparalyze", "IMMB": "awaken"}
 
 ## The ability an enchantment of the selected character grants, or {}.
-func _enchantment_ability(enchantment: Dictionary, subject := -2) -> Dictionary:
+## `listed` is the character's duel.abilities when the caller already has
+## them (one list for a whole strip, not one per enchantment).
+func _enchantment_ability(enchantment: Dictionary, subject := -2, listed: Variant = null) -> Dictionary:
 	if subject == -2: subject = selected_creature
-	for ability: Dictionary in duel.abilities(subject):
+	for ability: Dictionary in (listed if listed is Array else duel.abilities(subject)):
 		if subject < 2 and int(ability.get("enchantment", -1)) == int(enchantment.id): return ability
 		if subject >= 2 and ability.key == ENCHANTMENT_ABILITIES.get(enchantment.card, ""): return ability
 	return {}
@@ -7783,9 +7830,10 @@ func _strip_enchantments(subject: int) -> Array[Dictionary]:
 	if entity.is_empty(): return result
 	var holder := subject if subject < 2 else int(entity.get("owner", -1))
 	var ranked: Array = []
+	var listed := duel.abilities(subject)
 	for index in entity.enchantments.size():
 		var enchantment: Dictionary = entity.enchantments[index]
-		var ability := _enchantment_ability(enchantment, subject)
+		var ability := _enchantment_ability(enchantment, subject, listed)
 		var used: bool = not ability.is_empty() and bool(ability.get("used", false))
 		var hostile := int(enchantment.get("owner", holder)) != holder
 		var rank := 2 if used else (0 if hostile or not ability.is_empty() else 1)
@@ -7894,6 +7942,7 @@ func _set_strip_preview(id: int) -> void:
 func _fill_strip() -> void:
 	var subject := _strip_subject()
 	if rail == null or rail.strip == null or duel == null: return
+	strip_fill_count += 1
 	rail.show_strip(inspect_graveyard)
 	var list: Array[Dictionary] = []
 	var entity := duel.entity(subject) if subject >= 0 else {}
@@ -7922,8 +7971,9 @@ func _fill_strip() -> void:
 			var icon := int(profile.table("CombatSpells").get(card, {}).get("AbilityIcon", 0))
 			list.append({"icon": profile.icon_at(icon) if icon > 0 else profile.card_icon(card), "tooltip": tip,
 				"enabled": not pending and owned and _human_turn() and duel.can_use_ability(subject, ability.key), "meta": {"ability": ability.key, "card": card}})
+		var listed := duel.abilities(subject)
 		for enchantment: Dictionary in _strip_enchantments(subject):
-			var ability := _enchantment_ability(enchantment, subject)
+			var ability := _enchantment_ability(enchantment, subject, listed)
 			var tip := duel.card_name(enchantment.card)
 			if profile.id == "el2" and not ability.is_empty() and int(ability.get("cost", -1)) >= 0 and profile.text("T_ENCHANTMENT_COST_TT").count("%") == 2:
 				tip = profile.text("T_ENCHANTMENT_COST_TT") % [tip, int(ability.cost)]
@@ -7931,7 +7981,7 @@ func _fill_strip() -> void:
 			var about := profile.card_description(enchantment.card)
 			if not about.is_empty() and about != enchantment.card: tip += "\n" + about
 			var own: bool = subject == duel.active_side() or (subject >= 2 and int(entity.get("owner", -1)) == duel.active_side())
-			var enabled: bool = _removal_allowed(enchantment) if pending else (not ability.is_empty() and own and _human_turn() and duel.can_use_ability(subject, ability.key))
+			var enabled: bool = _removal_allowed(enchantment) if pending else (not ability.is_empty() and own and _human_turn() and duel.can_use_ability(subject, ability.key, listed))
 			list.append({"icon": profile.card_icon(enchantment.card), "tooltip": tip, "enabled": enabled, "meta": {"enchantment": int(enchantment.id), "card": enchantment.card}})
 	var signature := "%d:%s:" % [shown, inspect_graveyard]
 	for item: Dictionary in list: signature += str(item.meta.get("card", "")) + ","
