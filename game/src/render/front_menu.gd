@@ -452,7 +452,9 @@ func show_screen(target: String) -> void:
 	for child in canvas.get_children():
 		canvas.remove_child(child)
 		child.queue_free()
-	canvas.theme = ELCombatTooltip.hidden_theme() if target == "duel_editor" else null
+	# These screens show their tooltips in the original's frame (ELCombatTooltip),
+	# on a rest of the pointer or a right click.
+	canvas.theme = ELCombatTooltip.hidden_theme() if target == "duel_editor" or (target == "map" and edition == "el2") else null
 	art = Control.new()
 	art.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	art.size = DESIGN
@@ -1606,7 +1608,9 @@ func _build_map() -> void:
 		if symbols != null and MAP_FIGURES.has(campaign_data.id):
 			map.figure = symbols
 			map.figure_rect = MAP_FIGURES[campaign_data.id]
-		map.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		# The towns and places named on the map (#153).
+		map.locations = map_locations(profile)
+		map.mouse_filter = Control.MOUSE_FILTER_PASS if not map.locations.is_empty() else Control.MOUSE_FILTER_IGNORE
 		canvas.add_child(map)
 		labels["map"] = map
 	var back := _square("GMA6Back")
@@ -1622,6 +1626,37 @@ func _build_map() -> void:
 	if briefing != null: briefing.pressed.connect(_open_briefing)
 	var start := _square("GMA6Start")
 	if start != null: start.pressed.connect(start_campaign)
+	# The buttons' and places' tooltips in the original frame, also on a right
+	# click (#153).
+	var tips := ELCombatTooltip.new()
+	canvas.add_child(tips)
+	tips.setup(profile)
+
+## Second game: the places named on the campaign map, from regs
+## GlobalMap\GlobalMap.reg: an int count, then per place its rectangle (left,
+## top, right, bottom, ints in map clip pixels) and its tooltip key
+## (MT_GMAP_TT_*), zero-terminated. [{rect, text}]; empty when unreadable.
+static func map_locations(source: ELProfile) -> Array[Dictionary]:
+	var result: Array[Dictionary] = []
+	var bytes := source.read("regs", "globalmap/globalmap.reg")
+	if bytes.size() < 4: return result
+	var count := bytes.decode_u32(0)
+	var at := 4
+	for index in mini(count, 256):
+		if at + 16 > bytes.size(): break
+		var left := bytes.decode_s32(at)
+		var top := bytes.decode_s32(at + 4)
+		var right := bytes.decode_s32(at + 8)
+		var bottom := bytes.decode_s32(at + 12)
+		at += 16
+		var end := bytes.find(0, at)
+		if end < 0: break
+		var key := bytes.slice(at, end).get_string_from_ascii()
+		at = end + 1
+		var label := source.text(key)
+		if right > left and bottom > top and not label.is_empty() and label != key:
+			result.append({"rect": Rect2(left, top, right - left, bottom - top), "text": label})
+	return result
 
 ## Second game: the journey on the campaign map. Each chapter has a point list
 ## in regs `GlobalMap\<campaign><n>.reg` (int count, then x, y pairs in map
@@ -1866,6 +1901,20 @@ class MapView extends Control:
 	var figure_rect := Rect2()
 	## The hero's point (map clip pixels).
 	var marker := Vector2.ZERO
+	## The named places (map_locations), for their tooltips.
+	var locations: Array[Dictionary] = []
+
+	## The smallest place under `at` (places overlap: the valleys of fire lie
+	## inside larger lands).
+	func _get_tooltip(at: Vector2) -> String:
+		var found := ""
+		var least := INF
+		for place: Dictionary in locations:
+			var rect: Rect2 = place.rect
+			if rect.has_point(at) and rect.get_area() < least:
+				least = rect.get_area()
+				found = str(place.text)
+		return found
 	## Journey dots: earlier chapters' (all shown) and the current chapter's
 	## (one more every 1/3 s, `> 0x14d` ms; the hero appears with the last).
 	var past: Array[Vector2] = []

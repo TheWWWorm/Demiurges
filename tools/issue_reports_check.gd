@@ -21,6 +21,8 @@ extends SceneTree
 ##   game: Attack all stays shut when only powerless creatures could attack.
 ## - #133 Enter presses the check button of the duel setup (both games) and
 ##   of the second game's chapter map.
+## - #153 second game: the campaign map's places have tooltips (GlobalMap.reg),
+##   shown with the buttons' in the original frame, also on a right click.
 ## - #127 the load list opens on the save last made or loaded, not the top one.
 ## - #77 second game, a local match between rounds: each hot-seat player (or
 ##   the player against the computer) can exchange a reserve spell, and the
@@ -472,6 +474,23 @@ func _enter_starts(edition: String, profile: ELProfile) -> void:
 				go.pressed.connect(func(): pressed.append(true))
 			_enter(menu)
 			check(menu.screen == "map" and go != null and pressed.size() == 1, "el2 #133: Enter presses the chapter map's check button (screen %s)" % menu.screen)
+			# #153: the towns and places of the map have their tooltips, and
+			# the screen shows tooltips in the original frame, also on a right
+			# click (its buttons' as well).
+			var places := ELFrontMenu.map_locations(profile)
+			var view: Control = menu.labels.get("map")
+			var named := 0
+			if view != null:
+				for place: Dictionary in places:
+					# The place under its own centre, or a smaller one inside it.
+					var shown: String = view._get_tooltip((place.rect as Rect2).get_center())
+					var inner := places.any(func(other: Dictionary) -> bool: return other.text == shown and (other.rect as Rect2).get_area() <= (place.rect as Rect2).get_area())
+					if shown == place.text or inner: named += 1
+			check(places.size() >= 20 and named == places.size() and view != null and view.mouse_filter != Control.MOUSE_FILTER_IGNORE, "el2 #153: the campaign map names its %d places in tooltips (%d shown)" % [places.size(), named])
+			var framed := false
+			for child in menu.canvas.get_children(): framed = framed or child is ELCombatTooltip
+			var back: Control = menu.buttons.get("GMA6Back")
+			check(framed and menu.canvas.theme != null and back != null and not back.tooltip_text.is_empty(), "el2 #153: the map's tooltips (buttons included) show in the original frame on a rest or a right click")
 		else: check(false, "el2 #133: the campaign list has cards")
 	menu.queue_free()
 	if FileAccess.file_exists(menu.settings_path): DirAccess.remove_absolute(menu.settings_path)
