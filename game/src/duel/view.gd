@@ -3313,6 +3313,9 @@ func _show_hit(data: Dictionary) -> void:
 		return
 	_bleed(id)
 	model.set_meta("dying", true)
+	# A figure that dies on its way (a blocker the beholder mastery destroys
+	# while it steps out) falls where it stands.
+	if is_instance_valid(melee): melee.halt(id)
 	battle_audio.unit(model, "death")
 	if labels.has(id): labels[id].hide()
 	if not model.play("udeath"): _remove_model(id)
@@ -4591,6 +4594,12 @@ func _animation_done(clip: String, id: int) -> void:
 		return
 	if is_instance_valid(melee) and melee.moving(id): return
 	if id >= 2 and not duel.creatures.has(id):
+		# Its death is shown: it lies down and goes, whatever the playback
+		# still holds (#162: a dead Pteros stood on in its idle).
+		if models[id].get_meta("dying", false):
+			if clip != "udeath" and models[id].clip == "udeath" and models[id].playing: return
+			_remove_model(id)
+			return
 		# During combat playback a creature that falls to a later blow fights on until then.
 		if _presentation_held() and clip != "udeath":
 			models[id].play("cidle")

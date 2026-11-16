@@ -476,6 +476,15 @@ func _set_off(id: int) -> void:
 	if not str(move.clip).is_empty() and model.clip != move.clip: model.play(move.clip)
 	view.battle_audio.glide(model, bool(move.run))
 
+## Stops a figure's move where it stands, without its arrival (a figure
+## whose death is being shown).
+func halt(id: int) -> void:
+	if not _moves.has(id): return
+	_moves.erase(id)
+	if view.models.has(id) and is_instance_valid(view.models[id]):
+		view.models[id].speed = 1.0
+		view.battle_audio.stop_glide(view.models[id])
+
 ## Whether the figure is moving with this clip (its footfalls sound).
 func stepping(id: int, clip: String) -> bool:
 	return _moves.has(id) and float(_moves[id].delay) <= 0.0 and str(_moves[id].clip) == clip

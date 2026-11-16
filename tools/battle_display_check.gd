@@ -64,6 +64,7 @@ func _edition(edition: String) -> void:
 	await _regeneration(view, edition)
 	await _turn_end(view, edition)
 	if edition == "el2": await _pale(view, edition)
+	await _gazed_blocker(view, edition)
 	await _spell_stats(view, edition)
 	await _skip(view, edition)
 	view.queue_free()
@@ -377,3 +378,48 @@ func _skip(view: Node, edition: String) -> void:
 	view._skip_battle_presentation()
 	check(_shown(view, [attacker]) == _live(view, [attacker]), "%s skip: Space jumps to the rules' values at once" % edition)
 	await _idle(view)
+
+## Beholder mastery (GBHD): an attacking beholder destroys its blocker before
+## any blow, while the blocker may still be stepping out to the front line.
+## Its figure dies and goes, with or without time to arrive first (#162: the
+## dead Pteros stood on beside its hero in its idle).
+func _gazed_blocker(view: Node, edition: String) -> void:
+	var duel: ELDuel = view.duel
+	var table: Dictionary = view.profile.table("CombatCreatures")
+	var beholder := ""
+	for card: String in table:
+		if str(table[card].get("Race", "")) == "Beholder" and duel.is_summon(card) and str(table[card].get("Model", "")) != "":
+			beholder = card
+			break
+	if beholder.is_empty():
+		print("SKIP: %s has no beholder" % edition)
+		return
+	for settled: bool in [false, true]:
+		var what := "%s beholder mastery, blocker %s" % [edition, "at the front line" if settled else "still stepping out"]
+		await _clear(view)
+		await _attack_turn(view, duel.attacker)
+		var side: int = duel.attacker
+		var attacker := await _creature(view, side, beholder, 2, 5)
+		var blocker := await _creature(view, 1 - side, _card(view, ["PTRS"]), 2, 4)
+		duel.heroes[side].spec = "GBHD"
+		duel.heroes[side].luck = 40
+		if attacker < 2 or blocker < 2 or not duel.toggle_attack(attacker):
+			check(false, "%s: attacker and blocker stand (%s)" % [what, duel.error])
+			continue
+		duel.end_phase()
+		await _idle(view)
+		if not duel.assign_block(blocker, attacker):
+			check(false, "%s: the block is assigned (%s)" % [what, duel.error])
+			continue
+		if settled:
+			for i in 300:
+				await process_frame
+				if not view.melee.moving(blocker): break
+		var moving: bool = view.melee.moving(blocker)
+		duel.end_phase()
+		check(not duel.creatures.has(blocker), "%s: the rules destroy the blocker (moving: %s)" % [what, moving])
+		await _watch(view, [attacker, blocker], Time.get_ticks_usec())
+		for i in 120: await process_frame
+		check(not view.models.has(blocker), "%s: the dead blocker's figure is gone (%s)" % [what, str(view.models[blocker].clip) if view.models.has(blocker) else "-"])
+		duel.heroes[side].spec = "NONE"
+		duel.heroes[side].luck = 0
