@@ -1660,6 +1660,10 @@ func _open_briefing() -> void:
 ## Original multi-part text button: left cap, stretched middle, right cap,
 ## pressed variant and lit overlay, with the caption from the text tables.
 class TextButton extends BaseButton:
+	# The pressed atlas separates its pieces with blank columns. Sharpening
+	# bleeds those edges into the face, so trim the joins before repeating it.
+	const SHARP_PRESSED_INSET := 4.0
+
 	var menu: ELFrontMenu
 	var caption := ""
 	var font_size := 24
@@ -1698,9 +1702,9 @@ class TextButton extends BaseButton:
 		var mode := get_draw_mode()
 		var pushed := mode == DRAW_PRESSED or mode == DRAW_HOVER_PRESSED
 		var tint := Color(0.6, 0.6, 0.6) if disabled else Color.WHITE
-		_draw_parts(states.get("pressed" if pushed else "normal", []), tint)
+		_draw_parts(states.get("pressed" if pushed else "normal", []), tint, pushed)
 		if not disabled and (mode == DRAW_HOVER or mode == DRAW_HOVER_PRESSED):
-			_draw_parts(states.get("hover_pressed" if pushed else "hover", []), Color.WHITE)
+			_draw_parts(states.get("hover_pressed" if pushed else "hover", []), Color.WHITE, pushed)
 		# The original keeps the caption colour on hover (the Light overlay lights the slab).
 		var color := INK_DISABLED if disabled else BUTTON_INK
 		var font := menu.face_for(name)
@@ -1711,26 +1715,34 @@ class TextButton extends BaseButton:
 		draw_string(font, at, caption, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, color)
 
 	## Caps keep their size and distance from the edges; the middle stretches.
-	func _draw_parts(parts: Array, tint: Color) -> void:
+	func _draw_parts(parts: Array, tint: Color, pushed: bool) -> void:
 		var right_edge := design_left + 140.0
 		for part: Dictionary in parts:
 			var rect: Rect2 = part.rect
+			var source: Rect2 = part.source
 			var x: float = rect.position.x - design_left
 			var width: float = rect.size.x
 			var y: float = rect.position.y - position.y + _top_shift()
+			var inset := SHARP_PRESSED_INSET if pushed and part.texture.has_meta(ELIconUpscale.ORIGINAL) else 0.0
 			if part.type == "Type6":
 				# The middle piece repeats (the last copy cut to fit).
-				var span: float = width + size.x - 140.0
+				x -= inset
+				source.position.x += inset
+				source.size.x -= inset * 2.0
+				var span := width + size.x - 140.0 + inset * 2.0
 				var done := 0.0
 				while done < span - 0.01:
 					var piece := minf(width, span - done)
-					var source: Rect2 = part.source
-					source.size.x = piece
-					draw_texture_rect_region(part.texture, Rect2(Vector2(x + done, y), Vector2(piece, rect.size.y)), source, tint)
+					var sample := source
+					sample.size.x *= piece / width
+					draw_texture_rect_region(part.texture, Rect2(Vector2(x + done, y), Vector2(piece, rect.size.y)), sample, tint)
 					done += piece
 				continue
-			elif part.type == "Type7": x = size.x - (right_edge - rect.position.x)
-			draw_texture_rect_region(part.texture, Rect2(Vector2(x, y), Vector2(width, rect.size.y)), part.source, tint)
+			if part.type == "Type7":
+				x = size.x - (right_edge - rect.position.x) + inset
+				source.position.x += inset
+			source.size.x -= inset
+			draw_texture_rect_region(part.texture, Rect2(Vector2(x, y), Vector2(width - inset, rect.size.y)), source, tint)
 
 	func _top_shift() -> float:
 		return menu.shift(name).y
