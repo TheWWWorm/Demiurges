@@ -848,8 +848,21 @@ func _start_battle_dome(first: int, second: int) -> void:
 	for id: int in [first, second]:
 		var model: ELModel = world.actors.get(id)
 		if not is_instance_valid(model): continue
-		var clip := model.clip_for_code(BATTLE_DOME_SUMMON_CODE)
-		world.play_actor_clip(id, clip if not clip.is_empty() else "usummon")
+		var clip := auto_fight_clip(model)
+		if not clip.is_empty(): world.play_actor_clip(id, clip)
+
+## The clip a figure fights with under the battle dome: its Summon clip (by
+## the original's clip code, else "usummon"), else its instant cast clip,
+## else its attack clip, the order a hero's gestures fall back in during a
+## battle (ELDuel view _cast_clip). Many hero figures have no Summon clip
+## (the Vital guards of chapter 11): without the fallback they stood still
+## through their fight (#163). "" when the figure has none of them.
+static func auto_fight_clip(model: ELModel) -> String:
+	var clip := model.clip_for_code(BATTLE_DOME_SUMMON_CODE)
+	if not clip.is_empty(): return clip
+	for name: String in ["usummon", "uinstant", "uattack"]:
+		if model.has_clip(name): return name
+	return ""
 
 ## Second game: a battle with no local side (ELAdventureDirector.auto_fight).
 ## The two figures turn to each other, the dome rises between them and both
@@ -879,9 +892,8 @@ func _show_auto_fight(first: int, second: int) -> void:
 	for id: int in [first, second]:
 		var model: ELModel = world.actors.get(id)
 		if not is_instance_valid(model) or not model.is_visible_in_tree(): continue
-		var clip := model.clip_for_code(BATTLE_DOME_SUMMON_CODE)
-		if clip.is_empty(): clip = "usummon"
-		if model.has_clip(clip): longest = maxf(longest, model.clip_seconds(clip))
+		var clip := auto_fight_clip(model)
+		if not clip.is_empty(): longest = maxf(longest, model.clip_seconds(clip))
 	if longest > 0.0 and not director.auto_fight.is_empty(): director.auto_fight.remaining = longest
 
 func _fight_seen(first: int, second: int) -> bool:

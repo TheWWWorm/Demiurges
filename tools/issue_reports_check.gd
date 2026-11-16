@@ -40,6 +40,7 @@ extends SceneTree
 ##   hero goes up in its colour's death effect; #137 the pre-battle panel:
 ##   first game, the wide strip alone with the original orders, the check
 ##   mark and the cross with free movement; second game, no wide strip;
+##   #163 chapter 11's fighting figures all have a battle-dome clip;
 ##   #138 the hero turns to face the creature it fights (#165: in the
 ##   second game the creature turns to the hero too); #139 second game:
 ##   the defeat picture is black from its first frame, fades to black and
@@ -925,6 +926,17 @@ func _second_prompt() -> void:
 		await _wait(3)
 	ELFog.reveal_for_console(state, 1, true)
 	ELFog.refresh(state)
+	# #163: every figure of the chapter's own fights (its guards, defenders
+	# and the Synthet boss) has a clip to fight with under the battle dome.
+	var fighters := 0
+	var still: Array[String] = []
+	for item: Dictionary in state.objects.values():
+		if not item.get("alive", false) or str(item.get("name", "")).find("Guard") < 0 and str(item.get("name", "")).find("Defender") < 0 and str(item.get("name", "")).find("Boss") < 0: continue
+		var figure: Variant = map.world.actors.get(int(item.uid))
+		if not figure is ELModel: continue
+		fighters += 1
+		if ELAdventureView.auto_fight_clip(figure).is_empty(): still.append(str(item.name))
+	check(fighters >= 3 and still.is_empty(), "el2 #163: the chapter's fighting figures (%d) each have a clip for the battle dome (none: %s)" % [fighters, still])
 	var hero := state.object(state.main_hero)
 	var monster := _hostile_monster(state, hero)
 	if monster.is_empty():
