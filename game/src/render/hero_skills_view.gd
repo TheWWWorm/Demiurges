@@ -101,7 +101,7 @@ func refresh() -> void:
 		offers.add_item(_label(code, rank), _icon(code, rank))
 	message.text = "Choose carefully: learning a skill spends one level-up choice." if pending > 0 else "Gain a level to learn or improve a skill."
 	_specs.clear()
-	if state.map.profile.id == "el2": _specs.assign(state.specializations(hero))
+	if state.map.profile.id == "el2": _specs.assign(state.specialization_choices(hero))
 	spec_row.visible = not _specs.is_empty()
 	spec_pick.clear()
 	for code: String in _specs:

@@ -1,5 +1,7 @@
 # Tactical Studies — 57 solutions and teaching notes
 
+> Curiosities + Paradoxes + Crossroads: **48 additions, 105 total puzzles.** This page documents the preserved original 57. See [Curiosities](puzzle_curiosities.md), [Paradoxes](puzzle_paradoxes.md), [Crossroads](puzzle_crossroads.md), and [the newest solutions](puzzle_crossroads_solutions.md).
+
 **Spoilers for the complete collection, including Heroes and Creatures.** In the game, hints require deliberate requests; this guide reveals the combinations.
 
 Each reference is a legal demonstration. Opponent actions illustrate one reply; separate adversarial checks examine other choices. Independent preparations and alternative legal winning plans are allowed.
@@ -5336,4 +5338,3 @@ ID: `el2_tactical_v2_keep_gift_alive`. Creature targets are snapshot IDs; heroes
 ```
 
 </details>
-

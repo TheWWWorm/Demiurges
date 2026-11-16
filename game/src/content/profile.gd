@@ -34,6 +34,8 @@ var _prefetch_task := -1
 var button_sounds: Dictionary = {}
 ## Where figures' skins are painted as metal (worked out on worker threads).
 var metal_masks: ELMetalMasks
+## Sharper icons and interface art (pictures prepared beforehand).
+var icon_upscale: ELIconUpscale
 ## Second game: the release the installed card tables come from
 ## (ELPatch103.RELEASE_OLD or RELEASE_CURRENT; empty until read).
 var second_release := ""
@@ -125,6 +127,8 @@ func mount(edition: String, folder: String) -> bool:
 	metal_masks = ELMetalMasks.new(id)
 	# Headless runs (checks, exports) build figures without drawing them.
 	if DisplayServer.get_name() != "headless": metal_masks.precompute(self)
+	icon_upscale = ELIconUpscale.new(id)
+	icon_upscale.mount(self)
 	return true
 
 func table(name: String) -> Dictionary:
@@ -204,8 +208,11 @@ func _texture_source(key: String) -> Dictionary:
 	var file := key if key.ends_with(".mmp") else key + ".mmp"
 	for candidate: Array in _texture_candidates(file):
 		var bytes := read(candidate[0], candidate[1])
-		if not bytes.is_empty(): return {"file": file, "bytes": bytes, "soft": candidate[2]}
-	return {"file": file, "bytes": PackedByteArray(), "soft": false}
+		if not bytes.is_empty():
+			# A finished sharp picture of the sheet, read with it (ELIconUpscale).
+			var sharp := icon_upscale.sharp_path(candidate[1]) if icon_upscale != null and candidate[0] == "textures" else ""
+			return {"file": file, "bytes": bytes, "soft": candidate[2], "entry": candidate[1], "sharp": sharp}
+	return {"file": file, "bytes": PackedByteArray(), "soft": false, "entry": ""}
 
 ## Where a texture is stored, {location (ELArchive.locate), soft}, or {}.
 func texture_location(name: String) -> Dictionary:
@@ -263,7 +270,9 @@ static func _texture_decode(source: Dictionary) -> Dictionary:
 		authored = ELTexture.authored_mask_mipmaps(bytes, img)
 	if authored != null: img = authored
 	else: img.generate_mipmaps()
-	return {"image": img, "one_bit": one_bit_alpha, "authored": authored != null, "levels": bytes.decode_u32(12), "soft": bool(source.soft)}
+	var sharp: Image = null
+	if authored == null and not String(source.get("sharp", "")).is_empty(): sharp = ELIconUpscale.load_sharp(source.sharp, bytes, img.get_size())
+	return {"image": img, "one_bit": one_bit_alpha, "authored": authored != null, "levels": bytes.decode_u32(12), "soft": bool(source.soft), "entry": String(source.get("entry", "")), "sharp": sharp}
 
 func _texture_store(key: String, decoded: Dictionary) -> Texture2D:
 	var tex := ImageTexture.create_from_image(decoded.image)
@@ -272,6 +281,8 @@ func _texture_store(key: String, decoded: Dictionary) -> Texture2D:
 	# Found in Alpha32: a soft-alpha skin (see ELModel.build).
 	if decoded.soft: tex.set_meta("alpha32", true)
 	_textures[key] = tex
+	# Icons and interface art with a finished sharp picture draw it (ELIconUpscale).
+	if icon_upscale != null and not decoded.authored: icon_upscale.adopt(String(decoded.get("entry", "")), tex, decoded.image, decoded.get("sharp"))
 	return tex
 
 ## Starts decoding `names` on worker threads (a loading screen's batch);

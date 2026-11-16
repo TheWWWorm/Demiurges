@@ -17,6 +17,8 @@ const MARKERS := {"el1": "campaigns/good.cpg", "el2": "campaigns/white.cpg"}
 const FOLDERS := ["resources", "campaigns", "maps", "duel", "tutorial", "replays"]
 const TOP_FILES := ["res", "ini", "hl"]
 const PACK_MAGIC := "ELPACK01"
+## The archives (and their numbered patch packs) mounting a profile must open.
+const MOUNTED := ["figures", "crfigures", "textures", "regs", "text", "animdb", "sfx", "camera", "pfx", "fx", "scripts"]
 
 
 static func title(edition: String) -> String:
@@ -34,6 +36,70 @@ static func wanted(name: String) -> bool:
 	if path.contains("/"):
 		return path.get_slice("/", 0) in FOLDERS and not path.get_extension() in ["exe", "dll", "asi"]
 	return path.get_extension() in TOP_FILES
+
+
+## Windows device names, which name no file in any folder.
+const DEVICES := ["con", "prn", "aux", "nul", "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8", "com9",
+	"lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9"]
+
+
+## A path an import is about to write, checked: relative, "/"-separated, with
+## no empty, "." or ".." part, no drive letter, backslash, control or
+## reserved character, no part ending in a dot or space (Windows drops
+## those, so "..." could lead out of the folder) and no device name. Returns
+## "" for a path that could land outside the import's folder. Every import
+## format (installer, data pack, custom map archive) names its files
+## through this.
+static func safe_relative(name: String) -> String:
+	if name.is_empty() or name.length() > 1024 or name.begins_with("/"): return ""
+	var parts := name.split("/")
+	for part: String in parts:
+		if part.is_empty() or part == "." or part == ".." or part.ends_with(".") or part.ends_with(" "): return ""
+		if part.get_basename().to_lower() in DEVICES: return ""
+		for i in part.length():
+			var c := part.unicode_at(i)
+			if c < 32 or c == 127 or "\\:*?\"<>|".contains(String.chr(c)): return ""
+	return name
+
+
+## `relative` (checked by safe_relative) under `folder`, or "" when the
+## joined path would not stay inside it.
+static func inside(folder: String, relative: String) -> String:
+	if safe_relative(relative).is_empty(): return ""
+	var base := folder.replace("\\", "/").simplify_path().trim_suffix("/")
+	var target := base.path_join(relative).simplify_path()
+	return target if target.begins_with(base + "/") else ""
+
+
+## Whether the folder holds a usable copy of `edition`, read as mounting it
+## would: each required archive and the campaign file are there and not
+## empty, the required archives hold files, and every archive the game
+## opens (in Resources and the top folder) has a sound directory. Returns ""
+## or what is wrong.
+static func validate(folder: String, edition: String) -> String:
+	if detect(folder) != edition: return "These files are not a complete copy of Etherlords or Etherlords II."
+	var paths: Array = REQUIRED.duplicate()
+	paths.append(MARKERS[edition])
+	for path: String in paths:
+		var actual := _child(folder, path.get_slice("/", 0))
+		var file := ""
+		for name in DirAccess.get_files_at(folder.path_join(actual)):
+			if name.to_lower() == path.get_file(): file = folder.path_join(actual).path_join(name)
+		var handle := FileAccess.open(file, FileAccess.READ) if not file.is_empty() else null
+		if handle == null or handle.get_length() <= 0: return "%s is missing or empty." % path
+		handle.close()
+		if path.get_extension() == "res" and ELArchive.open(file).entries.is_empty(): return "%s is damaged." % path
+	# Every other archive mounting opens (patch packs, root packs).
+	for directory: String in [_child(folder, "resources"), ""]:
+		var at := folder.path_join(directory) if not directory.is_empty() else folder
+		for name in DirAccess.get_files_at(at):
+			var lower := name.to_lower()
+			var base := lower.get_basename()
+			while not base.is_empty() and base.right(1).is_valid_int(): base = base.left(-1)
+			if lower.get_extension() != "res" or not base in MOUNTED: continue
+			var archive := ELArchive.open(at.path_join(name))
+			if not archive.error.is_empty(): return "%s is damaged (%s)." % [name, archive.error]
+	return ""
 
 
 ## The edition whose required files are all in `names` (lower-case keys), or "".

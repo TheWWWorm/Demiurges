@@ -402,14 +402,14 @@ func start() -> void:
 	if entry.is_empty(): return
 	if second():
 		# The second game has three difficulties (Diff1..3).
-		menu.campaign_requested.emit(menu.edition, ELSingleScenario.scenario(entry), mini(menu.difficulty, 2))
+		menu.campaign_requested.emit(menu.edition, menu.with_ai(ELSingleScenario.scenario(entry)), mini(menu.difficulty, 2))
 		return
 	# First game: the human plays the chosen slot with the typed name and blazon.
 	var row := ELSingleScenario.scenario(entry, slots.human_player() if slots != null else 1)
 	row.player_name = slots.human_name() if slots != null else ELPlayerProfile.current_name(profile())
 	row.logo = ELPlayerProfile.blazon.x
 	row.colour = ELPlayerProfile.blazon.y
-	menu.campaign_requested.emit(menu.edition, row, menu.difficulty)
+	menu.campaign_requested.emit(menu.edition, menu.with_ai(row), menu.difficulty)
 
 ## Mission list: size icon, number of sides, race marks and the mission name.
 class MissionList extends Control:

@@ -186,13 +186,16 @@ func _draw_banner() -> void:
 	var half := Rect2(rect.position, Vector2(rect.size.x * 0.5, rect.size.y))
 	var first := profile != null and profile.id == "el1"
 	var alpha := banner_frame(banner_age).y if first else 1.0
-	for index in 2:
-		var target := Rect2(half.position + Vector2(half.size.x * index, 0), half.size)
-		var source := Rect2(0, source_y, 256, BAND)
-		if first:
-			var outline := Color(OUTLINE, alpha)
+	var source := Rect2(0, source_y, 256, BAND)
+	# Both halves' outlines go down before either fill: the right half's outline
+	# shifted one pixel left would otherwise draw a dark line over the left
+	# half's fill where the halves meet.
+	if first:
+		var outline := Color(OUTLINE, alpha)
+		for index in 2:
+			var target := Rect2(half.position + Vector2(half.size.x * index, 0), half.size)
 			for offset: Vector2 in [Vector2(-1, -1), Vector2(0, -1), Vector2(1, -1), Vector2(-1, 0), Vector2(1, 0), Vector2(-1, 1), Vector2(0, 1), Vector2(1, 1)]:
 				draw_texture_rect_region(halves[index], Rect2(target.position + offset, target.size), source, outline)
-			draw_texture_rect_region(halves[index], target, source, Color(FILL, alpha))
-		else:
-			draw_texture_rect_region(halves[index], target, source)
+	for index in 2:
+		var target := Rect2(half.position + Vector2(half.size.x * index, 0), half.size)
+		draw_texture_rect_region(halves[index], target, source, Color(FILL, alpha) if first else Color.WHITE)

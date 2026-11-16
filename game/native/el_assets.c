@@ -10,7 +10,9 @@
  *
  * Exposed as static methods of the class ELNativeAssets:
  *   decode_raw(data, width, height, offset) -> PackedByteArray
- *       a 16- or 32-bit masked texture level as RGBA8;
+ *       a 16- or 32-bit masked texture level as RGBA8, or empty when the
+ *       header's size, masks or shifts are invalid or the level runs past
+ *       the data;
  *   decode_pnt3(data, size, width, height) -> PackedByteArray
  *       a run-length texture as RGBA8;
  *   figure(data) -> PackedByteArray
@@ -26,12 +28,28 @@
  *   metal_mask(pixels, parts, side) -> PackedByteArray
  *       where a figure's skin is painted as metal, one byte per texel, or
  *       empty when the inputs are invalid (src/render/metal_masks.gd
- *       describes the inputs and keeps the same classifier in GDScript).
+ *       describes the inputs and keeps the same classifier in GDScript);
+ *   upscale(weights, pixels, width, height, threads) -> PackedByteArray
+ *       an RGBA8 picture four times as wide and high, worked out by the
+ *       Real-ESRGAN realesr-general-x4v3 network whose weights are given
+ *       (native/models/), on up to `threads` threads; empty when the
+ *       weights or the picture are invalid (src/content/icon_upscale.gd).
  */
 #include <math.h>
+#include <stdatomic.h>
 #include <stdint.h>
 #include <string.h>
 #include <stdlib.h>
+
+#if defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#else
+#include <pthread.h>
+#if defined(__linux__)
+#include <sys/resource.h>
+#endif
+#endif
 
 #include "include/gdextension_interface.h"
 
@@ -91,7 +109,8 @@ static float f32(const uint8_t *d, int64_t n, int64_t at) {
 
 /* ------------------------------------------------------------------- textures */
 
-/* One channel as the GDScript reader rounds it (alpha without bits is opaque). */
+/* One channel as the GDScript reader rounds it (alpha without bits is opaque).
+ * The mask, shift and bit count were checked by raw_format(). */
 static int channel(int64_t px, int64_t mask, int64_t shift, int64_t bits, int alpha) {
 	if (alpha && bits == 0) return 255;
 	int64_t full = mask >> shift;
@@ -99,15 +118,44 @@ static int channel(int64_t px, int64_t mask, int64_t shift, int64_t bits, int al
 	return (int)(0.5 + 255.0 * (double)((px & mask) >> shift) / (double)full);
 }
 
-static void decode_raw(const uint8_t *d, int64_t n, int64_t w, int64_t h, int64_t src, Buffer *out) {
-	if (w <= 0 || h <= 0 || w * h > (1 << 26)) return;
-	int64_t bpp = u32(d, n, 20) / 8;
-	int64_t mask[4], shift[4], bits[4];
+#define DATA_OFFSET 76
+/* Largest side and pixel count of a texture level. */
+#define MAX_SIDE 16384
+#define MAX_PIXELS (1 << 26)
+
+static int dimensions_ok(int64_t w, int64_t h) {
+	return w > 0 && h > 0 && w <= MAX_SIDE && h <= MAX_SIDE && w * h <= MAX_PIXELS;
+}
+
+/* Reads and checks a masked level's format, by the same rules as
+ * ELTexture.raw_format: 16 or 32 bits a pixel; each channel's shift below
+ * the pixel's width and its mask exactly `bits` ones from `shift` up (a
+ * channel the format lacks has neither mask nor bits); the whole level
+ * inside the data. Returns the bytes per pixel, or 0 when anything is off. */
+static int64_t raw_format(const uint8_t *d, int64_t n, int64_t w, int64_t h, int64_t src, int64_t mask[4], int64_t shift[4], int64_t bits[4]) {
+	if (!dimensions_ok(w, h) || n < DATA_OFFSET || src < DATA_OFFSET || src > n) return 0;
+	int64_t depth = u32(d, n, 20);
+	if (depth != 16 && depth != 32) return 0;
 	for (int c = 0; c < 4; c++) { /* a, r, g, b */
 		mask[c] = u32(d, n, 24 + c * 12);
 		shift[c] = u32(d, n, 28 + c * 12);
 		bits[c] = u32(d, n, 32 + c * 12);
+		if (shift[c] >= depth || bits[c] > depth) return 0;
+		if (mask[c] == 0) {
+			if (bits[c] != 0) return 0;
+		} else if (bits[c] == 0 || shift[c] + bits[c] > depth || mask[c] != ((((int64_t)1 << bits[c]) - 1) << shift[c])) {
+			return 0;
+		}
 	}
+	int64_t bpp = depth / 8;
+	if (w * h * bpp > n - src) return 0;
+	return bpp;
+}
+
+static void decode_raw(const uint8_t *d, int64_t n, int64_t w, int64_t h, int64_t src, Buffer *out) {
+	int64_t mask[4], shift[4], bits[4];
+	int64_t bpp = raw_format(d, n, w, h, src, mask, shift, bits);
+	if (!bpp) return;
 	uint32_t *pixels = (uint32_t *)calloc((size_t)(w * h), 4);
 	if (!pixels) {
 		out->failed = 1;
@@ -124,9 +172,7 @@ static void decode_raw(const uint8_t *d, int64_t n, int64_t w, int64_t h, int64_
 		for (int64_t px = 0; px < 65536; px++)
 			table[px] = (uint32_t)channel(px, mask[1], shift[1], bits[1], 0) | ((uint32_t)channel(px, mask[2], shift[2], bits[2], 0) << 8)
 				| ((uint32_t)channel(px, mask[3], shift[3], bits[3], 0) << 16) | ((uint32_t)channel(px, mask[0], shift[0], bits[0], 1) << 24);
-		int64_t end = (n - src) / 2;
-		if (end > w * h) end = w * h;
-		for (int64_t i = 0; i < end; i++) pixels[i] = table[u16(d, n, src + i * 2)];
+		for (int64_t i = 0; i < w * h; i++) pixels[i] = table[u16(d, n, src + i * 2)];
 		free(table);
 	} else {
 		for (int64_t i = 0; i < w * h; i++) {
@@ -140,10 +186,8 @@ static void decode_raw(const uint8_t *d, int64_t n, int64_t w, int64_t h, int64_
 	free(pixels);
 }
 
-#define DATA_OFFSET 76
-
 static void decode_pnt3(const uint8_t *d, int64_t n, int64_t size, int64_t w, int64_t h, Buffer *out) {
-	if (w <= 0 || h <= 0 || w * h > (1 << 26)) return;
+	if (!dimensions_ok(w, h) || size < 0 || n < DATA_OFFSET) return;
 	int64_t total = w * h * 4;
 	uint8_t *o = (uint8_t *)calloc((size_t)total, 1);
 	if (!o) {
@@ -596,6 +640,577 @@ done:
 	free(bins);
 }
 
+/* ---------------------------------------------------------- super resolution */
+
+/* SRVGGNetCompact as Real-ESRGAN's realesr-general-x4v3 uses it: a 3x3
+ * convolution from RGB to 64 features, 32 more 3x3 convolutions of 64
+ * features, each followed by a per-channel PReLU, then a 3x3 convolution to
+ * 48 channels that a pixel shuffle turns into a 4x picture, to which the
+ * nearest-neighbour enlargement of the input is added.
+ *
+ * The weights blob: "ELSR", then u32 version, input channels, features,
+ * body convolutions, last convolution's channels, scale and number type
+ * (1: float16), then per convolution its weights (out, in, 3, 3), biases and
+ * (all but the last) PReLU slopes. */
+#pragma STDC FP_CONTRACT ON
+/* The vector helpers below are always inlined: no vector crosses a call. */
+#if defined(__clang__)
+#pragma clang diagnostic ignored "-Wpsabi"
+#endif
+
+#define SR_FEAT 64
+#define SR_CONVS 34
+#define SR_LAST 48
+#define SR_SCALE 4
+#define SR_FLOATS 1213296
+/* The picture is first widened by this many repeated border pixels, so the
+ * network's zero padding does not darken its edges. */
+#define SR_PRE_PAD 8
+/* Worked out in tiles of this many pixels, each read with this much more
+ * picture around it (so tiles meet without seams). */
+#define SR_TILE 192
+#define SR_TILE_PAD 24
+#define SR_WINDOW (SR_TILE + 2 * SR_TILE_PAD)
+#define SR_MAX_THREADS 64
+/* Largest picture side and pixel count (the result is 16 times as many). */
+#define SR_MAX_SIDE 4096
+#define SR_MAX_PIXELS (1 << 22)
+
+typedef struct {
+	/* Per convolution: weights as [ky * 3 + kx][in][out], biases, slopes. */
+	float *w[SR_CONVS], *b[SR_CONVS], *s[SR_CONVS];
+	float *storage;
+} SrNet;
+
+static float half_to_float(uint16_t h) {
+	uint32_t sign = (uint32_t)(h & 0x8000) << 16, exp = (h >> 10) & 0x1f, man = h & 0x3ff, bits;
+	if (exp == 0) {
+		if (man == 0) bits = sign;
+		else {
+			/* Subnormal: normalise it. */
+			int e = -1;
+			do {
+				e++;
+				man <<= 1;
+			} while (!(man & 0x400));
+			bits = sign | ((uint32_t)(127 - 15 - e) << 23) | ((man & 0x3ff) << 13);
+		}
+	} else if (exp == 31) bits = sign | 0x7f800000 | (man << 13);
+	else bits = sign | ((exp + 127 - 15) << 23) | (man << 13);
+	float f;
+	memcpy(&f, &bits, 4);
+	return f;
+}
+
+static int sr_load(const uint8_t *d, int64_t n, SrNet *net) {
+	memset(net, 0, sizeof(*net));
+	if (n != 32 + (int64_t)SR_FLOATS * 2 || memcmp(d, "ELSR", 4) != 0) return 0;
+	static const uint32_t header[7] = { 1, 3, SR_FEAT, SR_CONVS - 2, SR_LAST, SR_SCALE, 1 };
+	for (int i = 0; i < 7; i++)
+		if (u32(d, n, 4 + i * 4) != header[i]) return 0;
+	net->storage = (float *)malloc((size_t)SR_FLOATS * sizeof(float));
+	if (!net->storage) return 0;
+	int64_t at = 32;
+	float *put_at = net->storage;
+	for (int layer = 0; layer < SR_CONVS; layer++) {
+		int ci = layer == 0 ? 3 : SR_FEAT, co = layer == SR_CONVS - 1 ? SR_LAST : SR_FEAT;
+		net->w[layer] = put_at;
+		for (int o = 0; o < co; o++)
+			for (int i = 0; i < ci; i++)
+				for (int k = 0; k < 9; k++) {
+					net->w[layer][(k * ci + i) * co + o] = half_to_float(u16(d, n, at));
+					at += 2;
+				}
+		put_at += 9 * ci * co;
+		net->b[layer] = put_at;
+		for (int o = 0; o < co; o++, at += 2) net->b[layer][o] = half_to_float(u16(d, n, at));
+		put_at += co;
+		if (layer < SR_CONVS - 1) {
+			net->s[layer] = put_at;
+			for (int o = 0; o < co; o++, at += 2) net->s[layer][o] = half_to_float(u16(d, n, at));
+			put_at += co;
+		}
+	}
+	return at == n;
+}
+
+typedef float SrV8 __attribute__((vector_size(32)));
+
+static inline __attribute__((always_inline)) SrV8 sr_ld(const float *p) {
+	SrV8 v;
+	memcpy(&v, p, sizeof(v));
+	return v;
+}
+
+static inline __attribute__((always_inline)) void sr_st(float *p, SrV8 v) { memcpy(p, &v, sizeof(v)); }
+
+static inline __attribute__((always_inline)) SrV8 sr_act(SrV8 a, const float *slope) {
+	if (!slope) return a;
+	SrV8 zero = { 0 };
+	return __builtin_elementwise_max(a, zero) + sr_ld(slope) * __builtin_elementwise_min(a, zero);
+}
+
+/* One output row `y` of a 3x3 convolution. `in` has a border of zeros one
+ * pixel wide: row stride (width + 2) * ci; `out` points at the row's first
+ * pixel, `co` floats a pixel. Six pixels and 16 channels at a time. */
+static inline __attribute__((always_inline)) void sr_conv_row_body(const float *in, int ci, float *out, int co, const float *w,
+		const float *bias, const float *slope, int width, int y) {
+	int64_t row = (int64_t)(width + 2) * ci;
+	for (int c0 = 0; c0 < co; c0 += 16) {
+		int x = 0;
+		for (; x + 6 <= width; x += 6) {
+			SrV8 lo[6], hi[6];
+			for (int p = 0; p < 6; p++) {
+				lo[p] = sr_ld(bias + c0);
+				hi[p] = sr_ld(bias + c0 + 8);
+			}
+			for (int k = 0; k < 9; k++) {
+				const float *ip = in + (y + k / 3) * row + (int64_t)(x + k % 3) * ci;
+				const float *wp = w + (int64_t)k * ci * co + c0;
+				for (int c = 0; c < ci; c++) {
+					SrV8 w0 = sr_ld(wp + (int64_t)c * co), w1 = sr_ld(wp + (int64_t)c * co + 8);
+					for (int p = 0; p < 6; p++) {
+						float v = ip[p * ci + c];
+						lo[p] += w0 * v;
+						hi[p] += w1 * v;
+					}
+				}
+			}
+			float *op = out + (int64_t)x * co + c0;
+			for (int p = 0; p < 6; p++) {
+				sr_st(op + p * co, sr_act(lo[p], slope ? slope + c0 : NULL));
+				sr_st(op + p * co + 8, sr_act(hi[p], slope ? slope + c0 + 8 : NULL));
+			}
+		}
+		for (; x < width; x++) {
+			SrV8 a0 = sr_ld(bias + c0), a1 = sr_ld(bias + c0 + 8);
+			for (int k = 0; k < 9; k++) {
+				const float *ip = in + (y + k / 3) * row + (int64_t)(x + k % 3) * ci;
+				const float *wp = w + (int64_t)k * ci * co + c0;
+				for (int c = 0; c < ci; c++) {
+					a0 += sr_ld(wp + (int64_t)c * co) * ip[c];
+					a1 += sr_ld(wp + (int64_t)c * co + 8) * ip[c];
+				}
+			}
+			float *op = out + (int64_t)x * co + c0;
+			sr_st(op, sr_act(a0, slope ? slope + c0 : NULL));
+			sr_st(op + 8, sr_act(a1, slope ? slope + c0 + 8 : NULL));
+		}
+	}
+}
+
+static void sr_conv_row_plain(const float *in, int ci, float *out, int co, const float *w, const float *bias, const float *slope, int width, int y) {
+	sr_conv_row_body(in, ci, out, co, w, bias, slope, width, y);
+}
+
+#if defined(__x86_64__) || defined(__i386__)
+__attribute__((target("avx2,fma"))) static void sr_conv_row_avx2(const float *in, int ci, float *out, int co, const float *w,
+		const float *bias, const float *slope, int width, int y) {
+	sr_conv_row_body(in, ci, out, co, w, bias, slope, width, y);
+}
+
+/* Whether the processor and the system allow AVX2 and FMA. */
+static int sr_has_avx2(void) {
+	uint32_t a, b, c, d;
+	__asm__ volatile("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d) : "a"(0), "c"(0));
+	if (a < 7) return 0;
+	__asm__ volatile("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d) : "a"(1), "c"(0));
+	int fma = (c >> 12) & 1, osxsave = (c >> 27) & 1, avx = (c >> 28) & 1;
+	if (!fma || !osxsave || !avx) return 0;
+	uint32_t lo, hi;
+	__asm__ volatile("xgetbv" : "=a"(lo), "=d"(hi) : "c"(0));
+	if ((lo & 6) != 6) return 0;
+	__asm__ volatile("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d) : "a"(7), "c"(0));
+	return (b >> 5) & 1;
+}
+#endif
+
+typedef void (*SrConvRow)(const float *, int, float *, int, const float *, const float *, const float *, int, int);
+
+typedef struct {
+	const SrNet *net;
+	SrConvRow conv_row;
+	int width, height, threads, binary_alpha, has_alpha;
+	/* The picture widened by SR_PRE_PAD on every side, RGB floats. */
+	const float *padded;
+	int padded_width, padded_height;
+	const uint8_t *alpha;
+	uint8_t *out;
+	/* The tile in work: its window in the padded picture, its core. */
+	int wx, wy, ww, wh, cx, cy, cw, ch;
+	float *input, *a, *b, *last;
+	atomic_int counters[2];
+	atomic_int arrived, generation;
+	/* Set once every helper thread has been started (or failed to). */
+	atomic_int go;
+	/* Threads that wait longer than a short spin sleep on these. */
+#if defined(_WIN32)
+	SRWLOCK lock;
+	CONDITION_VARIABLE wake;
+#else
+	pthread_mutex_t lock;
+	pthread_cond_t wake;
+#endif
+} SrJob;
+
+/* Waits until `value` no longer holds `seen`: a short spin, then asleep
+ * (a busy machine must not have waiting threads burn the time the late
+ * ones need). */
+static void sr_wait_change(SrJob *job, atomic_int *value, int seen) {
+	for (int spins = 0; spins < 4000; spins++)
+		if (atomic_load(value) != seen) return;
+#if defined(_WIN32)
+	AcquireSRWLockExclusive(&job->lock);
+	while (atomic_load(value) == seen) SleepConditionVariableSRW(&job->wake, &job->lock, INFINITE, 0);
+	ReleaseSRWLockExclusive(&job->lock);
+#else
+	pthread_mutex_lock(&job->lock);
+	while (atomic_load(value) == seen) pthread_cond_wait(&job->wake, &job->lock);
+	pthread_mutex_unlock(&job->lock);
+#endif
+}
+
+/* Changes `value` and wakes the threads waiting for it. */
+static void sr_signal(SrJob *job, atomic_int *value, int to) {
+#if defined(_WIN32)
+	AcquireSRWLockExclusive(&job->lock);
+	atomic_store(value, to);
+	ReleaseSRWLockExclusive(&job->lock);
+	WakeAllConditionVariable(&job->wake);
+#else
+	pthread_mutex_lock(&job->lock);
+	atomic_store(value, to);
+	pthread_cond_broadcast(&job->wake);
+	pthread_mutex_unlock(&job->lock);
+#endif
+}
+
+/* Waits until every thread has reached it. The last to arrive clears the
+ * row counter of the phase just finished. */
+static void sr_barrier(SrJob *job, int phase) {
+	int generation = atomic_load(&job->generation);
+	if (atomic_fetch_add(&job->arrived, 1) == job->threads - 1) {
+		atomic_store(&job->counters[phase & 1], 0);
+		atomic_store(&job->arrived, 0);
+		sr_signal(job, &job->generation, generation + 1);
+		return;
+	}
+	sr_wait_change(job, &job->generation, generation);
+}
+
+/* Copies a tile's window of the padded picture into the first layer's input. */
+static void sr_prepare_tile(SrJob *job) {
+	int row = job->ww + 2;
+	memset(job->input, 0, (size_t)(row * (job->wh + 2) * 3) * sizeof(float));
+	for (int y = 0; y < job->wh; y++)
+		memcpy(job->input + ((int64_t)(y + 1) * row + 1) * 3, job->padded + ((int64_t)(job->wy + y) * job->padded_width + job->wx) * 3,
+			(size_t)job->ww * 3 * sizeof(float));
+	/* The feature maps' zero borders. */
+	memset(job->a, 0, (size_t)(row * (job->wh + 2) * SR_FEAT) * sizeof(float));
+	memset(job->b, 0, (size_t)(row * (job->wh + 2) * SR_FEAT) * sizeof(float));
+}
+
+static float sr_cubic(float t) {
+	/* Catmull-Rom. */
+	t = fabsf(t);
+	if (t < 1.0f) return 1.5f * t * t * t - 2.5f * t * t + 1.0f;
+	if (t < 2.0f) return -0.5f * t * t * t + 2.5f * t * t - 4.0f * t + 2.0f;
+	return 0.0f;
+}
+
+/* One output row of the alpha channel: bicubic, made sharp again for
+ * pictures whose alpha is only on or off. */
+static void sr_alpha_row(SrJob *job, int oy) {
+	int w = job->width, h = job->height, ow = w * SR_SCALE;
+	uint8_t *o = job->out + (int64_t)oy * ow * 4;
+	if (!job->has_alpha) {
+		for (int ox = 0; ox < ow; ox++) o[ox * 4 + 3] = 255;
+		return;
+	}
+	float sy = (oy + 0.5f) / SR_SCALE - 0.5f;
+	int y0 = (int)floorf(sy);
+	float wy[4];
+	for (int i = 0; i < 4; i++) wy[i] = sr_cubic(sy - (float)(y0 - 1 + i));
+	for (int ox = 0; ox < ow; ox++) {
+		float sx = (ox + 0.5f) / SR_SCALE - 0.5f;
+		int x0 = (int)floorf(sx);
+		float sum = 0.0f;
+		for (int j = 0; j < 4; j++) {
+			int yy = y0 - 1 + j;
+			yy = yy < 0 ? 0 : (yy >= h ? h - 1 : yy);
+			float line = 0.0f;
+			for (int i = 0; i < 4; i++) {
+				int xx = x0 - 1 + i;
+				float weight = sr_cubic(sx - (float)xx);
+				xx = xx < 0 ? 0 : (xx >= w ? w - 1 : xx);
+				line += weight * (float)job->alpha[(int64_t)yy * w + xx];
+			}
+			sum += wy[j] * line;
+		}
+		if (job->binary_alpha) o[ox * 4 + 3] = sum >= 127.5f ? 255 : 0;
+		else o[ox * 4 + 3] = (uint8_t)(sum <= 0.0f ? 0 : (sum >= 255.0f ? 255 : (int)(sum + 0.5f)));
+	}
+}
+
+static void sr_worker(SrJob *job, int id) {
+	sr_wait_change(job, &job->go, 0);
+	const SrNet *net = job->net;
+	int phase = 0;
+	int core_w = job->width, core_h = job->height;
+	for (int ty = 0; ty < core_h; ty += SR_TILE)
+		for (int tx = 0; tx < core_w; tx += SR_TILE) {
+			if (id == 0) {
+				job->cx = SR_PRE_PAD + tx;
+				job->cy = SR_PRE_PAD + ty;
+				job->cw = core_w - tx < SR_TILE ? core_w - tx : SR_TILE;
+				job->ch = core_h - ty < SR_TILE ? core_h - ty : SR_TILE;
+				job->wx = job->cx - SR_TILE_PAD < 0 ? 0 : job->cx - SR_TILE_PAD;
+				job->wy = job->cy - SR_TILE_PAD < 0 ? 0 : job->cy - SR_TILE_PAD;
+				int right = job->cx + job->cw + SR_TILE_PAD, bottom = job->cy + job->ch + SR_TILE_PAD;
+				if (right > job->padded_width) right = job->padded_width;
+				if (bottom > job->padded_height) bottom = job->padded_height;
+				job->ww = right - job->wx;
+				job->wh = bottom - job->wy;
+				sr_prepare_tile(job);
+			}
+			sr_barrier(job, phase++);
+			int row = job->ww + 2;
+			const float *in = job->input;
+			for (int layer = 0; layer < SR_CONVS; layer++) {
+				int ci = layer == 0 ? 3 : SR_FEAT, last = layer == SR_CONVS - 1;
+				float *dst = last ? job->last : (layer & 1 ? job->b : job->a);
+				for (int y; (y = atomic_fetch_add(&job->counters[phase & 1], 1)) < job->wh;) {
+					float *o = last ? dst + (int64_t)y * job->ww * SR_LAST : dst + ((int64_t)(y + 1) * row + 1) * SR_FEAT;
+					job->conv_row(in, ci, o, last ? SR_LAST : SR_FEAT, net->w[layer], net->b[layer], last ? NULL : net->s[layer], job->ww, y);
+				}
+				sr_barrier(job, phase++);
+				in = dst;
+			}
+			/* Pixel shuffle, plus the input enlarged, into the tile's core. */
+			for (int y; (y = atomic_fetch_add(&job->counters[phase & 1], 1)) < job->ch;) {
+				int ly = job->cy - job->wy + y, py = job->cy + y;
+				for (int x = 0; x < job->cw; x++) {
+					int lx = job->cx - job->wx + x, px = job->cx + x;
+					const float *f = job->last + ((int64_t)ly * job->ww + lx) * SR_LAST;
+					const float *base = job->padded + ((int64_t)py * job->padded_width + px) * 3;
+					for (int i = 0; i < SR_SCALE; i++) {
+						uint8_t *o = job->out + (((int64_t)(py - SR_PRE_PAD) * SR_SCALE + i) * job->width * SR_SCALE + (int64_t)(px - SR_PRE_PAD) * SR_SCALE) * 4;
+						for (int j = 0; j < SR_SCALE; j++)
+							for (int c = 0; c < 3; c++) {
+								float v = (f[c * 16 + i * 4 + j] + base[c]) * 255.0f;
+								o[j * 4 + c] = (uint8_t)(v <= 0.0f ? 0 : (v >= 255.0f ? 255 : (int)(v + 0.5f)));
+							}
+					}
+				}
+			}
+			sr_barrier(job, phase++);
+		}
+	for (int y; (y = atomic_fetch_add(&job->counters[phase & 1], 1)) < core_h * SR_SCALE;) sr_alpha_row(job, y);
+	sr_barrier(job, phase++);
+}
+
+typedef struct {
+	SrJob *job;
+	int id;
+} SrStart;
+
+#if defined(_WIN32)
+static DWORD WINAPI sr_thread(LPVOID arg) {
+	SrStart *start = (SrStart *)arg;
+	SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+	sr_worker(start->job, start->id);
+	return 0;
+}
+#else
+static void *sr_thread(void *arg) {
+	SrStart *start = (SrStart *)arg;
+#if defined(__linux__)
+	/* Linux nice values are per thread: helpers yield to the game's own. */
+	setpriority(PRIO_PROCESS, 0, 5);
+#endif
+	sr_worker(start->job, start->id);
+	return NULL;
+}
+#endif
+
+/* Gives fully transparent pixels the colour of their nearest visible
+ * neighbours, so the network does not pull dark fringes into edges. */
+static void sr_fill_hidden(float *rgb, const uint8_t *alpha, int w, int h) {
+	int64_t count = (int64_t)w * h;
+	uint8_t *known = (uint8_t *)malloc((size_t)count), *next = (uint8_t *)malloc((size_t)count);
+	if (!known || !next) {
+		free(known);
+		free(next);
+		return;
+	}
+	double sum[3] = { 0 };
+	int64_t seen = 0;
+	for (int64_t i = 0; i < count; i++) {
+		known[i] = alpha[i] != 0;
+		if (known[i]) {
+			for (int c = 0; c < 3; c++) sum[c] += rgb[i * 3 + c];
+			seen++;
+		}
+	}
+	if (seen == 0 || seen == count) {
+		free(known);
+		free(next);
+		return;
+	}
+	for (int pass = 0; pass < 24; pass++) {
+		int changed = 0;
+		memcpy(next, known, (size_t)count);
+		for (int y = 0; y < h; y++)
+			for (int x = 0; x < w; x++) {
+				int64_t i = (int64_t)y * w + x;
+				if (known[i]) continue;
+				float acc[3] = { 0 };
+				int n = 0;
+				for (int dy = -1; dy <= 1; dy++)
+					for (int dx = -1; dx <= 1; dx++) {
+						int nx = x + dx, ny = y + dy;
+						if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+						int64_t j = (int64_t)ny * w + nx;
+						if (!known[j]) continue;
+						for (int c = 0; c < 3; c++) acc[c] += rgb[j * 3 + c];
+						n++;
+					}
+				if (n) {
+					for (int c = 0; c < 3; c++) rgb[i * 3 + c] = acc[c] / (float)n;
+					next[i] = 1;
+					changed = 1;
+				}
+			}
+		memcpy(known, next, (size_t)count);
+		if (!changed) break;
+	}
+	for (int64_t i = 0; i < count; i++)
+		if (!known[i])
+			for (int c = 0; c < 3; c++) rgb[i * 3 + c] = (float)(sum[c] / (double)seen);
+	free(known);
+	free(next);
+}
+
+static void upscale(const uint8_t *weights, int64_t weights_n, const uint8_t *pixels, int64_t pixels_n, int64_t width, int64_t height,
+		int64_t threads, Buffer *out) {
+	if (width <= 0 || height <= 0 || width > SR_MAX_SIDE || height > SR_MAX_SIDE || width * height > SR_MAX_PIXELS || pixels_n != width * height * 4) return;
+	SrNet net;
+	if (!sr_load(weights, weights_n, &net)) {
+		free(net.storage);
+		return;
+	}
+	int w = (int)width, h = (int)height;
+	int pw = w + 2 * SR_PRE_PAD, ph = h + 2 * SR_PRE_PAD;
+	int64_t count = (int64_t)w * h;
+	float *rgb = (float *)malloc((size_t)count * 3 * sizeof(float));
+	float *padded = (float *)malloc((size_t)pw * ph * 3 * sizeof(float));
+	uint8_t *alpha = (uint8_t *)malloc((size_t)count);
+	size_t feature = (size_t)(SR_WINDOW + 2) * (SR_WINDOW + 2) * SR_FEAT;
+	float *input = (float *)malloc((size_t)(SR_WINDOW + 2) * (SR_WINDOW + 2) * 3 * sizeof(float));
+	float *a = (float *)malloc(feature * sizeof(float)), *b = (float *)malloc(feature * sizeof(float));
+	float *last = (float *)malloc((size_t)SR_WINDOW * SR_WINDOW * SR_LAST * sizeof(float));
+	uint8_t *result = (uint8_t *)malloc((size_t)count * SR_SCALE * SR_SCALE * 4);
+	if (!rgb || !padded || !alpha || !input || !a || !b || !last || !result) {
+		out->failed = 1;
+		goto done;
+	}
+	int has_alpha = 0, binary = 1;
+	for (int64_t i = 0; i < count; i++) {
+		for (int c = 0; c < 3; c++) rgb[i * 3 + c] = pixels[i * 4 + c] / 255.0f;
+		alpha[i] = pixels[i * 4 + 3];
+		if (alpha[i] != 255) has_alpha = 1;
+		if (alpha[i] != 0 && alpha[i] != 255) binary = 0;
+	}
+	if (has_alpha) sr_fill_hidden(rgb, alpha, w, h);
+	for (int y = 0; y < ph; y++) {
+		int sy = y - SR_PRE_PAD;
+		sy = sy < 0 ? 0 : (sy >= h ? h - 1 : sy);
+		for (int x = 0; x < pw; x++) {
+			int sx = x - SR_PRE_PAD;
+			sx = sx < 0 ? 0 : (sx >= w ? w - 1 : sx);
+			memcpy(padded + ((int64_t)y * pw + x) * 3, rgb + ((int64_t)sy * w + sx) * 3, 3 * sizeof(float));
+		}
+	}
+	SrJob job;
+	memset(&job, 0, sizeof(job));
+	job.net = &net;
+	job.conv_row = sr_conv_row_plain;
+#if defined(__x86_64__) || defined(__i386__)
+	if (sr_has_avx2()) job.conv_row = sr_conv_row_avx2;
+#endif
+	job.width = w;
+	job.height = h;
+	job.threads = threads < 1 ? 1 : (threads > SR_MAX_THREADS ? SR_MAX_THREADS : (int)threads);
+	job.has_alpha = has_alpha;
+	job.binary_alpha = binary;
+	job.padded = padded;
+	job.padded_width = pw;
+	job.padded_height = ph;
+	job.alpha = alpha;
+	job.out = result;
+	job.input = input;
+	job.a = a;
+	job.b = b;
+	job.last = last;
+	atomic_init(&job.counters[0], 0);
+	atomic_init(&job.counters[1], 0);
+	atomic_init(&job.arrived, 0);
+	atomic_init(&job.generation, 0);
+	atomic_init(&job.go, 0);
+#if defined(_WIN32)
+	InitializeSRWLock(&job.lock);
+	InitializeConditionVariable(&job.wake);
+#else
+	pthread_mutex_init(&job.lock, NULL);
+	pthread_cond_init(&job.wake, NULL);
+#endif
+	SrStart starts[SR_MAX_THREADS];
+#if defined(_WIN32)
+	HANDLE handles[SR_MAX_THREADS];
+#else
+	pthread_t handles[SR_MAX_THREADS];
+#endif
+	int started = 1;
+	for (int i = 1; i < job.threads; i++) {
+		starts[i].job = &job;
+		starts[i].id = i;
+#if defined(_WIN32)
+		handles[i] = CreateThread(NULL, 0, sr_thread, &starts[i], 0, NULL);
+		if (!handles[i]) break;
+#else
+		if (pthread_create(&handles[i], NULL, sr_thread, &starts[i]) != 0) break;
+#endif
+		started++;
+	}
+	/* Threads that could not start leave the barrier to fewer. */
+	job.threads = started;
+	sr_signal(&job, &job.go, 1);
+	sr_worker(&job, 0);
+	for (int i = 1; i < started; i++) {
+#if defined(_WIN32)
+		WaitForSingleObject(handles[i], INFINITE);
+		CloseHandle(handles[i]);
+#else
+		pthread_join(handles[i], NULL);
+#endif
+	}
+#if !defined(_WIN32)
+	pthread_mutex_destroy(&job.lock);
+	pthread_cond_destroy(&job.wake);
+#endif
+	put(out, result, count * SR_SCALE * SR_SCALE * 4);
+done:
+	free(net.storage);
+	free(rgb);
+	free(padded);
+	free(alpha);
+	free(input);
+	free(a);
+	free(b);
+	free(last);
+	free(result);
+}
+
 /* ------------------------------------------------------------ Godot binding */
 
 static GDExtensionInterfaceGetProcAddress get_proc;
@@ -642,17 +1257,18 @@ static void to_packed(Buffer *b, PackedBytes *result) {
 	if (err == 0) memcpy(pba_index(result, 0), b->data, (size_t)b->size);
 }
 
-enum { M_RAW, M_PNT3, M_FIGURE, M_UNPACK, M_MORPH, M_METAL, M_COUNT };
+enum { M_RAW, M_PNT3, M_FIGURE, M_UNPACK, M_MORPH, M_METAL, M_UPSCALE, M_COUNT };
 #define B GDEXTENSION_VARIANT_TYPE_PACKED_BYTE_ARRAY
 #define I GDEXTENSION_VARIANT_TYPE_INT
 static const GDExtensionVariantType ARGS[M_COUNT][6] = {
-	{ B, I, I, I }, { B, I, I, I }, { B }, { B }, { B, B, B, I, I, I }, { B, B, I },
+	{ B, I, I, I }, { B, I, I, I }, { B }, { B }, { B, B, B, I, I, I }, { B, B, I }, { B, B, I, I, I },
 };
-static const int ARG_COUNT[M_COUNT] = { 4, 4, 1, 1, 6, 3 };
-static const char *NAMES[M_COUNT] = { "decode_raw", "decode_pnt3", "figure", "unpack_track", "morph", "metal_mask" };
+static const int ARG_COUNT[M_COUNT] = { 4, 4, 1, 1, 6, 3, 5 };
+static const char *NAMES[M_COUNT] = { "decode_raw", "decode_pnt3", "figure", "unpack_track", "morph", "metal_mask", "upscale" };
 static const char *ARG_NAMES[M_COUNT][6] = {
 	{ "data", "width", "height", "offset" }, { "data", "size", "width", "height" }, { "data" }, { "data" },
 	{ "base", "indices", "data", "offset", "frames", "count" }, { "pixels", "parts", "side" },
+	{ "weights", "pixels", "width", "height", "threads" },
 };
 
 /* Runs method `m` on arguments already in their own types. */
@@ -682,6 +1298,11 @@ static void run(int m, const void *const *args, PackedBytes *result) {
 	case M_METAL: {
 		const uint8_t *d1 = bytes_of((const PackedBytes *)args[1], &n1);
 		metal_mask(d0, n0, d1, n1, *(const int64_t *)args[2], &b);
+		break;
+	}
+	case M_UPSCALE: {
+		const uint8_t *d1 = bytes_of((const PackedBytes *)args[1], &n1);
+		upscale(d0, n0, d1, n1, *(const int64_t *)args[2], *(const int64_t *)args[3], *(const int64_t *)args[4], &b);
 		break;
 	}
 	}

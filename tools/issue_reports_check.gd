@@ -16,7 +16,8 @@ extends SceneTree
 ##   #123 a spell or hero ability that takes a creature from the graveyard
 ##   opens the own graveyard at once; #124 first game with cast icons: the
 ##   player's own casts get an icon too, and an ability has one; #117 a right
-##   drag turns the camera only with the automatic camera off; #128 second
+##   drag always turns the camera, unless "camera_drag_lock" is on and the
+##   automatic camera too; #128 second
 ##   game: Attack all stays shut when only powerless creatures could attack.
 ## - #133 Enter presses the check button of the duel setup (both games) and
 ##   of the second game's chapter map.
@@ -42,8 +43,10 @@ extends SceneTree
 ##   #138 the hero turns to face the creature it fights; #139 second game:
 ##   the defeat picture is black from its first frame, fades to black and
 ##   back to the map, and a surrender shows the hero's death first.
-## - #152 first game: Ethereal Attack and Counterstrike add no castle damage,
-##   as in the original, and their skill texts now say they have no effect.
+## - #152 first game: Ethereal Attack adds 1/3/5 castle damage and a defender
+##   with Counterstrike that wins an ethereal battle strikes the attacker's
+##   castle (2/4/6), as their texts promise (the original applied neither);
+##   their texts carry no "no effect" note.
 ##
 ##   godot --headless --path game --script ../tools/issue_reports_check.gd
 ##
@@ -349,8 +352,12 @@ func _battle_view(edition: String) -> void:
 		check(not view.attack_button.disabled, "el2 #128: a creature with power opens Attack all")
 	# #117
 	var kept_auto: Variant = view.settings.values.get("auto_camera")
-	for automatic: bool in [true, false]:
+	var kept_lock: Variant = view.settings.values.get("camera_drag_lock")
+	for case: Array in [[true, false], [false, false], [true, true], [false, true]]:
+		var automatic: bool = case[0]
+		var locked: bool = case[1]
 		view.settings.values.auto_camera = automatic
+		view.settings.values.camera_drag_lock = locked
 		var press := InputEventMouseButton.new()
 		press.button_index = MOUSE_BUTTON_RIGHT
 		press.pressed = true
@@ -359,12 +366,15 @@ func _battle_view(edition: String) -> void:
 		var motion := InputEventMouseMotion.new()
 		motion.position = Vector2(460, 300)
 		view._right_button(motion)
-		check(view.orbiting == not automatic, "%s #117: with the automatic camera %s a right drag %s the camera" % [edition, "on" if automatic else "off", "does not turn" if automatic else "turns"])
+		var turns := not (automatic and locked)
+		check(view.orbiting == turns, "%s #117: automatic camera %s, keep the view %s: a right drag %s the camera" % [edition, "on" if automatic else "off", "on" if locked else "off", "turns" if turns else "does not turn"])
 		var release: InputEventMouseButton = press.duplicate()
 		release.pressed = false
 		view._right_button(release)
 	if kept_auto == null: view.settings.values.erase("auto_camera")
 	else: view.settings.values.auto_camera = kept_auto
+	if kept_lock == null: view.settings.values.erase("camera_drag_lock")
+	else: view.settings.values.camera_drag_lock = kept_lock
 	# A selected creature stays selected when the phase changes, but a
 	# selection from an earlier phase does not assign a block or an attack.
 	var kept := _summon(duel, side, "ORSH")
@@ -951,19 +961,29 @@ func _second_prompt() -> void:
 
 # --- #152 Ethereal Attack -----------------------------------------------------
 
-## The original never reads ETAT or ETDF: castle damage is the hero's level
-## (one and a half times under Castle Bane) whatever skills it has. The skill
-## texts promise more, so the remake says they have no effect.
+## The original never reads ETAT or ETDF; the remake makes them do what their
+## texts promise.
 func _castle_skills(profile: ELProfile) -> void:
 	for code: String in ["ETAT", "ETDF"]:
 		for rank in 3:
 			var row := ELHeroSkills.definition(profile, code, rank)
 			var key := str(row.get("Description", ""))
 			var shown := profile.text(key)
-			check(not row.is_empty() and shown != key and (shown.ends_with("(This skill has no effect.)") or shown.ends_with("(Этот навык ничего не делает.)")), "el1 #152: %s %d says it has no effect: %s" % [code, rank + 1, shown])
-	check(ELTextFixes.apply("el2", "SkTtETAT3", "Hero's damage to enemy castle +5") == "Hero's damage to enemy castle +5", "el1 #152: the second game's texts are left alone")
-	var hero := {"level": 5, "skills": {"ETAT": 2, "ETDF": 2}}
-	check(ELFirstScenario.hero_value(hero) == 5, "el1 #152: a level 5 hero with Ethereal Attack III still deals 5 to a castle, as in the original")
+			check(not row.is_empty() and shown != key and not shown.contains("no effect") and not shown.contains("ничего не делает"), "el1 #152: %s %d is described as working: %s" % [code, rank + 1, shown])
+	for rank in 3:
+		var hero := {"level": 5, "skills": {"ETAT": rank}}
+		check(ELFirstScenario.hero_value(hero) == 5 + [1, 3, 5][rank], "el1 #152: a level 5 hero with Ethereal Attack %d deals %d to a castle" % [rank + 1, 5 + [1, 3, 5][rank]])
+	check(ELFirstScenario.hero_value({"level": 5, "skills": {}}) == 5, "el1 #152: without the skill a hero deals its level")
+	# Counterstrike: a defender that wins an ethereal battle strikes back.
+	var state := ELAdventureSession.new()
+	state.objects = {10: {"uid": 10, "owner": 1, "level": 4, "skills": {}}, 20: {"uid": 20, "owner": 2, "level": 3, "skills": {"ETDF": 1}}, 30: {"uid": 30, "owner": 2, "level": 3, "skills": {}}}
+	state.scenario = {"castles": {1: {"alive": true, "pending": 0}, 2: {"alive": true, "pending": 0}}}
+	ELGlobalSpells.ethereal_result(state, 20, 20, 10)
+	check(int(state.scenario.castles[1].pending) == 4 and int(state.scenario.castles[2].pending) == 0, "el1 #152: a defender with Counterstrike II that wins deals 4 to the attacker's castle (got %s)" % [state.scenario.castles])
+	ELGlobalSpells.ethereal_result(state, 30, 30, 10)
+	check(int(state.scenario.castles[1].pending) == 4, "el1 #152: a winning defender without Counterstrike deals nothing")
+	ELGlobalSpells.ethereal_result(state, 20, 10, 10)
+	check(int(state.scenario.castles[2].pending) == 4, "el1 #152: a beaten defender's castle takes the winner's value (got %s)" % [state.scenario.castles])
 
 func _backup(folder: String) -> Dictionary:
 	var files := {}

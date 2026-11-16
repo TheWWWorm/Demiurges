@@ -1,5 +1,5 @@
 {
-  "version": "0.16.0",
+  "version": "0.17.0",
   "languages": {
     "en": {
       "pages": 472,
@@ -18,8 +18,8 @@
   "translation_keys": 16,
   "files": {
     "data/en/index.json": {
-      "bytes": 326387,
-      "sha256": "86f3abf8cdac94aeccdff03e557bc6a53dfe6a24f1c9d62c6b515fb2a42fe117"
+      "bytes": 330711,
+      "sha256": "6f86eeeb4e6f3a92b8d471cd1c7b96481232aeb6c8735bc11c162dc198453b39"
     },
     "data/en/pages/abilities.json": {
       "bytes": 2238,
@@ -62,8 +62,8 @@
       "sha256": "41501a7ca7f2ffd6bc49fcbe4a8eaa342f99cd7c8b1f6fc811ed4922461c2f1d"
     },
     "data/en/pages/automatic-combat.json": {
-      "bytes": 1308,
-      "sha256": "221389f014cffa5034c894a4750866c27550e1d3e2cccda4da657fc6767ca677"
+      "bytes": 1412,
+      "sha256": "6ce71b1a8d224c344716543905b0865d2bac1c45c9cc3d9b627d54528973168b"
     },
     "data/en/pages/browser.json": {
       "bytes": 1667,
@@ -1530,16 +1530,16 @@
       "sha256": "72dc65a9bd7c594b24b6d7879f80c5fbb6087360a0a7db9fd4e325e5d7e0a32b"
     },
     "data/en/pages/differences.json": {
-      "bytes": 5588,
-      "sha256": "63e704e41864038f657b7a75f23adc6fbfa7c849090c326843af7e73556abeca"
+      "bytes": 7418,
+      "sha256": "4f1826a98536beb4270567db456cc9ecf35f92ac0aae494d4917ca518ec03d03"
     },
     "data/en/pages/duel.json": {
       "bytes": 15760,
       "sha256": "a90fa62992856802601b29e5bb3447516690b070ca4d6273a8f9022edd87fbb9"
     },
     "data/en/pages/heroes.json": {
-      "bytes": 2076,
-      "sha256": "4bc835997c8ef73d15dc4eb58c6cf86ab878d3c055262995f04a2e2ae28d7588"
+      "bytes": 2219,
+      "sha256": "366e1576150e65800250ff1a7ac2d6d9bdccf592d934cb323daebc7d00f00881"
     },
     "data/en/pages/home.json": {
       "bytes": 3984,
@@ -1562,8 +1562,8 @@
       "sha256": "67aaa265cd8e5dcc343d055cd0d724e554e793fce4206a0f2b15e55d48873171"
     },
     "data/en/pages/options.json": {
-      "bytes": 10947,
-      "sha256": "72d78ac908208ccb5d32a92c1ee8b5d3b2e7a4de05d981ddf553d5b2c43c0bb6"
+      "bytes": 14128,
+      "sha256": "7d7743672d167741c3f375261c440a8569697c301376e3235429acf957b6bdff"
     },
     "data/en/pages/pale.json": {
       "bytes": 4811,
@@ -1910,8 +1910,8 @@
       "sha256": "d18c0bf1a09af1788f0ca5427f86b6ecbb3cc60bc9a08d9da6d1b068de46ddaa"
     },
     "data/ru/index.json": {
-      "bytes": 575313,
-      "sha256": "bf87d0adcc6cd62c9d8f3d8236d472a89b35bb920a65fb7fdeb41de17bc587b7"
+      "bytes": 583439,
+      "sha256": "ebc472f8db5651b47c9962ccc4886be00c66b286cd1f2ead5194be2f2e08dba7"
     },
     "data/ru/pages/abilities.json": {
       "bytes": 3685,
@@ -1954,8 +1954,8 @@
       "sha256": "0ad59324554fad4e24634e3938bbe3ffc3d85550bf133c7812a2ecb80cb4aa52"
     },
     "data/ru/pages/automatic-combat.json": {
-      "bytes": 2381,
-      "sha256": "80812e13f532fea17469b10a603c296529ff196bc59d1f0937f3a62f6d569a0b"
+      "bytes": 2538,
+      "sha256": "bab4a3b47cee0f9c3e699390ff9c2694c2f7ec0d52d72cb4a39fa9fbcd91c65f"
     },
     "data/ru/pages/browser.json": {
       "bytes": 2659,
@@ -3422,16 +3422,16 @@
       "sha256": "3c9369d7aa813fa967968521f3e2130097449768ceec74ca71ee30e10dcfcc47"
     },
     "data/ru/pages/differences.json": {
-      "bytes": 9544,
-      "sha256": "d41bf146c85b647f6d9a8b2d34dd9559fa2911a2fed8623812f0c63030b2868a"
+      "bytes": 12607,
+      "sha256": "05319236e261f0b3445334e207f30b5a06291d21780ea68d4740ad8f0ce4ce42"
     },
     "data/ru/pages/duel.json": {
       "bytes": 29385,
       "sha256": "b57ba600ed3341c8e7235de9cee733215117ee629d39f9a63c00dfaea05d262b"
     },
     "data/ru/pages/heroes.json": {
-      "bytes": 3175,
-      "sha256": "139375cc49eba811d4cd45cc6bebeba7acdab03f51337013b86eb479d7416212"
+      "bytes": 3376,
+      "sha256": "af0b6dccb683b2a38d41c8f1d3ec6709c8fb754b2e25535116bd10a197eccd85"
     },
     "data/ru/pages/home.json": {
       "bytes": 5609,
@@ -3454,8 +3454,8 @@
       "sha256": "0d1cf41a1d7f17979939f1a7274b9644903cc131ff04f95bb25593261d2536dc"
     },
     "data/ru/pages/options.json": {
-      "bytes": 18570,
-      "sha256": "6d8fab8f35b718587b2d0308ede50ec70eb04f083bc489df669fe6a765978803"
+      "bytes": 24192,
+      "sha256": "f41fb8915f6d937167e8417bdb70d4db6db07793e64f8793e30cc9e67d3e8dd4"
     },
     "data/ru/pages/pale.json": {
       "bytes": 7741,
@@ -3802,8 +3802,8 @@
       "sha256": "838d61a3a9f77583762672b49490d1ddd71bda24d0ee738023127e375400f687"
     },
     "i18n.json": {
-      "bytes": 1917,
-      "sha256": "e8ea1273d286143f7291cab5976bdd0b546e07ee1661138bbd47c083514fa7c6"
+      "bytes": 1955,
+      "sha256": "c0c2fe7ea7e8b3125aba4d4660fa3d49e79ed43e17e044a84ad59f8c16595412"
     },
     "images/el1/hero-diamanda.webp": {
       "bytes": 5028,
@@ -5734,17 +5734,17 @@
       "sha256": "bda3fbaadb28f3376ae5d5606df4fe492746778e04352fd4d5d899d8e4d9e539"
     },
     "index.html": {
-      "bytes": 2445,
-      "sha256": "2eea4a2f80afcc102691067a8d876b7ac524df646bc2ad08962f6f27acbecdeb"
+      "bytes": 2488,
+      "sha256": "0af699a0765b5b31a3567caa9070ecefe1d62c691903beea83ed1f6215d0b328"
     },
     "wiki.css": {
-      "bytes": 7834,
-      "sha256": "4938106d5da82383b2d85d1a7923a9e91e6e585563a42e614b2b943f71461c2d"
+      "bytes": 7950,
+      "sha256": "b9785acd482bd464943f74afb90511f66671e1a3e61b621c1ed344f44bdd43cb"
     },
     "wiki.js": {
-      "bytes": 8424,
-      "sha256": "aabab5bcfce15545227916db3d8f7e6c353fbf93c2b073e25dec7262d79874ed"
+      "bytes": 8640,
+      "sha256": "f1ca10fe6ee26dfebb9874946e68af19933a07440d488f879dd85ba44f991925"
     }
   },
-  "bytes": 7829236
+  "bytes": 7856400
 }

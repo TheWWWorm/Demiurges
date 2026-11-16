@@ -131,6 +131,12 @@ static func reinforce(director: ELAdventureDirector, player: int) -> void:
 	if ELFirstAI.heroes_of(state, player).size() >= HEROES or int(state.day) - int(ai.get("hired", -HIRE_DAYS)) < HIRE_DAYS: return
 	var record := ELGlobalSpells.data(state, player)
 	if record.is_empty() or ELGlobalSpells.SUMMONS.has(str(record.production.get("code", ""))): return
+	# Only when the ether does not reach a summoning spell: one the player
+	# knows and can pay for, whose ether today's and HIRE_DAYS days' income
+	# cover, is cast instead (global_spells).
+	var reach := ELGlobalSpells.free_ether(state, player) + forecast(state, player) * HIRE_DAYS
+	for code: String in ELMapPickups.available_codes(state, player):
+		if ELGlobalSpells.SUMMONS.has(code) and ELGlobalSpells.produce_problem(state, player, code).is_empty() and ELGlobalSpells.ether_cost(state, player, code) <= reach: return
 	var profile := state.map.profile
 	var prefix: String = SUMMON_PREFIX.get(str(state.players[player].get("color", "")), "")
 	var lead := int(state.object(int(ai.get("champion", -1))).get("level", 1))
@@ -158,7 +164,11 @@ static func learn_skills(state: ELAdventureSession, hero: Dictionary) -> void:
 		var best := ""
 		var best_rank := 1 << 30
 		for code: String in offers:
-			var rank := SKILL_PRIORITY.find(code)
+			var rank := SKILL_PRIORITY.find(code) * 2
+			# Ethereal Attack raises the castle damage every siege counts on;
+			# Counterstrike only pays when the castle is attacked ethereally.
+			if code == "ETAT": rank = SKILL_PRIORITY.find("MOBL") * 2 + 1
+			elif code == "ETDF": rank = SKILL_PRIORITY.size() * 2
 			if rank < 0: rank = 1000
 			if rank < best_rank:
 				best_rank = rank
@@ -273,22 +283,27 @@ static func _upgrade_first(state: ELAdventureSession, hero: Dictionary, portal: 
 	for kind: String in saved: stock[kind] = saved[kind]
 	return later >= now
 
-## How many spells the shop's next level adds that are worth buying for this hero.
+## How many spells this hero would buy at the shop's next level: the
+## purchase rules of _spells (a spell that needs runes only with a reachable
+## portal, the budget, the copy limits), priced on plain data with the shop a
+## level up and the upgrade's price already paid (restored at once; no
+## script runs).
 static func _next_stock_helps(state: ELAdventureSession, hero: Dictionary, shop: Dictionary) -> int:
-	var profile := state.map.profile
-	if int(shop.level) >= 2 or hero.get("cards", []).is_empty(): return 0
-	var weakest := INF
-	for slot in hero.cards.size():
-		var points := spell_value(profile, hero.cards[slot])
-		if slot < hero.get("rune_uses", []).size() and int(hero.rune_uses[slot]) > 0: points += KEEP
-		weakest = minf(weakest, points)
+	var player := int(hero.get("owner", -1))
+	if int(shop.get("level", 0)) >= 2 or hero.get("cards", []).is_empty() or not state.players.has(player): return 0
 	var next := shop.duplicate()
 	next.level = int(shop.level) + 1
-	var colour := ELFirstSpellShop.hero_color(profile, hero)
-	var now := ELFirstSpellShop.authored_stock(profile, shop, colour)
-	var count := 0
-	for card: String in ELFirstSpellShop.authored_stock(profile, next, colour):
-		if not now.has(card) and spell_value(profile, card) >= weakest + MIN_GAIN: count += 1
+	if ELBuildings.definition(state.map.profile, next).is_empty(): return 0
+	var price := ELBuildings.upgrade_price(state.map.profile, shop, str(state.players[player].get("color", "")))
+	var stock: Dictionary = state.players[player].resources
+	if not ELResources.can_pay("el1", stock, price): return 0
+	var saved := stock.duplicate()
+	var level := int(shop.level)
+	ELResources.pay("el1", stock, price)
+	shop.level = level + 1
+	var count := _spells(state, hero, shop, false)
+	shop.level = level
+	for kind: String in saved: stock[kind] = saved[kind]
 	return count
 
 static func _upgrade(state: ELAdventureSession, hero: Dictionary, shop: Dictionary) -> bool:
@@ -498,16 +513,38 @@ static func trip_cost(state: ELAdventureSession, hero: Dictionary, shop: Diction
 	if route > SHOP_DAYS * day or (count < MIN_SPELLS and route > day): return -1
 	return route
 
-## A hero with spells waiting for runes leaves its errand for a portal.
+## A hero with spells waiting for runes leaves its errand for a portal, when
+## a portal it can reach would refill one of them within its budget. An
+## empty copy is not a dead card (an EL1 draw of it gives a cantrip instead,
+## ELSpellCharges.choose_el1), so a refill that cannot happen yet changes no
+## errand.
 static func urgent(director: ELAdventureDirector, hero: Dictionary) -> bool:
-	return applies(director) and empty_copies(hero) > 0 and not _portals(director.state, int(hero.owner), hero).is_empty()
+	if not applies(director) or empty_copies(hero) == 0: return false
+	var state := director.state
+	var portals := _portals(state, int(hero.owner), hero)
+	if portals.is_empty(): return false
+	var budget := _budget(state, hero)
+	for slot in hero.get("cards", []).size():
+		if slot >= hero.rune_uses.size() or int(hero.rune_uses[slot]) != 0: continue
+		var price := _rune_price(state, hero, portals, str(hero.cards[slot]))
+		if _total(price) > 0 and ELResources.can_pay("el1", budget, price): return true
+	return false
 
 # --- Global spells -------------------------------------------------------------
 
 ## Spells the computer leaves alone: forts, ethereal duels, remote shops,
-## recalls and the rest whose use needs a player's judgement.
+## recalls and the rest whose use needs a player's judgement. Of the castle
+## enchantments it casts the shields, the regeneration boosts, Decay, Erosion,
+## Terminal Discharge, Disenchant and Disjunction; it leaves Shock Resonance
+## (which strikes its own castle too), Ether Calm (which would also stop the
+## Warriors it leaves to the players, and the tomb), Visions, Ether Leak
+## (worthless without extra ether), Spell Blast (it would need Visions to
+## aim) and the ethereal-battle rewards (it makes no ethereal attacks, and
+## an attack on it is seen only the night it comes).
+const ENCHANTMENTS := ["ERBR", "SHIC", "ICBR", "AURP", "WTWL", "MSRP", "BLED", "FRGT", "CLPS", "DSLC", "DSGB"]
+
 static func _usable(code: String) -> bool:
-	return ELGlobalSpells.REPAIRS.has(code) or ELGlobalSpells.CASTLE_DAMAGE.has(code) or ELGlobalSpells.RITUALS.has(code) or ELGlobalSpells.SUMMONS.has(code) or ELGlobalSpells.HERO_BUFFS.has(code) or ELGlobalSpells.BATTLE_EFFECTS.has(code)
+	return ELGlobalSpells.REPAIRS.has(code) or ELGlobalSpells.CASTLE_DAMAGE.has(code) or ELGlobalSpells.RITUALS.has(code) or ELGlobalSpells.SUMMONS.has(code) or ELGlobalSpells.HERO_BUFFS.has(code) or ELGlobalSpells.BATTLE_EFFECTS.has(code) or ENCHANTMENTS.has(code)
 
 ## Whether the computer ever casts the global spell `code` (global_spells).
 static func castable(code: String) -> bool:
@@ -545,31 +582,69 @@ static func forecast(state: ELAdventureSession, player: int, extra: Array = [], 
 ## The player's castle energy after tonight when `spend` of today's free
 ## ether goes elsewhere (the rest regenerates the castle before the night) and
 ## a cast lowers the pending damage by `repair` (ELFirstScenario.regenerate,
-## then end_night). A large number when the player has no castle record.
+## then end_night). The assaults that may still come tonight count as well
+## (impending). A large number when the player has no castle record.
 static func night_health(state: ELAdventureSession, player: int, spend := 0, repair := 0) -> int:
 	var castle: Dictionary = state.scenario.get("castles", {}).get(player, {})
 	if castle.is_empty() or not castle.get("alive", false): return 1 << 20
 	var free := ELGlobalSpells.free_ether(state, player)
-	var regenerated := mini(int(castle.max), int(castle.health) + ELFirstScenario.regeneration(maxi(0, free - spend)))
-	return clampi(regenerated - (int(castle.pending) - repair), 0, int(castle.max))
+	var regenerated := mini(int(castle.max), int(castle.health) + ELFirstScenario.regained(state, player, maxi(0, free - spend)))
+	return clampi(regenerated - (int(castle.pending) + impending(state, player) - repair), 0, int(castle.max))
+
+## Castle damage the enemy heroes the player sees may still deal tonight: each
+## one beside its castle, or within its movement left of it (a point a tile
+## at least), strikes once with its value (ELFirstScenario.assault).
+static func impending(state: ELAdventureSession, player: int) -> int:
+	var castle := ELFirstScenario.castle_object(state, player)
+	if castle.is_empty(): return 0
+	var size: Vector2i = state.grid.footprints.get(int(castle.uid), {}).get("size", Vector2i.ONE) if state.grid != null else Vector2i.ONE
+	var area := Rect2i(int(castle.x), int(castle.y), size.x, size.y)
+	var total := 0
+	for item: Dictionary in state.objects.values():
+		if item.get("type") != "hero" or not item.get("alive", false) or int(item.get("owner", -1)) < 1 or int(item.owner) == player: continue
+		if not ELFirstAI.observed(state, player, item) or not state.hostile(item, castle) or ELGlobalSpells.held(item): continue
+		if ELFirstAIPlanner._lower_bound(item, area) <= maxi(0, int(item.get("ap", 0))): total += ELFirstScenario.taken(state, player, ELFirstScenario.hero_value(item))
+	return total
 
 ## Once a day: a finished spell is cast, then the next one is chosen and, when
-## today's ether completes it, cast at once (a few rounds at most).
+## today's ether completes it, cast at once. Each production is followed by
+## its cast, so a spell finished today (an emergency repair) is never left
+## waiting; SPELL_ROUNDS bounds the day's productions.
+const SPELL_ROUNDS := 4
+
 static func global_spells(director: ELAdventureDirector, player: int) -> void:
 	var state := director.state
 	if not ELGlobalSpells.applies(state): return
 	var record := ELGlobalSpells.data(state, player)
 	if record.is_empty(): return
-	for round in 3:
+	_prune(state, player)
+	var produced := 0
+	for step in 2 * SPELL_ROUNDS + 1:
 		if not record.production.is_empty():
 			if int(record.production.get("state", 0)) == 2:
-				_cast(director, player)
+				# A spell that cannot act now (a summons with no room by the
+				# castle) waits, finished, for another day.
+				if not _cast(director, player): return
 				continue
-			# A spell the ether income can no longer finish gives its resources back.
-			if ELGlobalSpells.turns_left(state, player) <= STALL_DAYS or not ELGlobalSpells.cancel(state, player): return
+			# A spell the ether income can no longer finish gives its resources
+			# back (the ether invested is lost).
+			if turns_left(state, player) <= STALL_DAYS or not ELGlobalSpells.cancel(state, player): return
+		if produced >= SPELL_ROUNDS: return
 		var best := _choose(director, player)
 		if best.is_empty() or not ELGlobalSpells.produce(state, player, best): return
+		produced += 1
 		if int(record.production.get("state", 0)) != 2: return
+
+## Days until the production is finished, with the ether forecast() expects
+## each day (the spells whose upkeep no longer fits are dropped, as the
+## settlement drops them); TURNS_UNKNOWN when no ether comes.
+static func turns_left(state: ELAdventureSession, player: int) -> int:
+	var production: Dictionary = ELGlobalSpells.data(state, player).get("production", {})
+	if production.is_empty(): return 0
+	var remaining := int(production.cost) - int(production.spent)
+	if remaining <= 0: return 0
+	var daily := forecast(state, player)
+	return ELGlobalSpells.TURNS_UNKNOWN if daily <= 0 else ceili(float(remaining) / daily)
 
 ## The spell to produce now, or "". Today's free ether (what is left to invest
 ## now) and the daily forecast are weighed apart: a day without income can
@@ -615,6 +690,9 @@ static func _score(director: ELAdventureDirector, player: int, code: String) -> 
 		# income, and a hero beyond the usual number must leave ether to spare.
 		var count := ELFirstAI.heroes_of(state, player).size()
 		var level := int(ELGlobalSpells.SUMMON_LEVELS.get(code.right(2), 1))
+		# The recruit needs a free tile beside the castle (or the spell is
+		# used up with no hero).
+		if ELGlobalSpells.castle_spot(state, player) == ELGlobalSpells.NO_SPOT: return 0.0
 		# The recruit joins at the end of the upkeep order: when its upkeep no
 		# longer fits it goes unpaid, which costs nothing (ELStrategy.allocation).
 		var left := forecast(state, player, [{"type": "hero", "level": level, "skills": {}}])
@@ -624,12 +702,69 @@ static func _score(director: ELAdventureDirector, player: int, code: String) -> 
 		for spell: Dictionary in active: if spell.code == code: return 0.0
 		return 40.0 if int(state.day) < 25 else 10.0
 	if ELGlobalSpells.HERO_BUFFS.has(code):
+		# None for a commander whose own skill already gives what the spell
+		# would (ELGlobalSpells.battle_choice).
 		var champion := state.object(ELFirstAI.commander_id(state, player))
-		return 30.0 if not champion.is_empty() and not ELGlobalSpells.hero_has(champion, code) else 0.0
+		return 30.0 if not champion.is_empty() and not ELGlobalSpells.hero_has(champion, code) and ELGlobalSpells.buff_works(champion, code) else 0.0
 	if ELGlobalSpells.BATTLE_EFFECTS.has(code):
 		for spell: Dictionary in active: if spell.code == code: return 0.0
 		return 25.0
+	if not ENCHANTMENTS.has(code) or own.is_empty(): return 0.0
+	for spell: Dictionary in active:
+		# One of each on the own castle is enough.
+		if spell.code == code and not ELGlobalSpells.HOSTILE_CASTLE.has(code): return 0.0
+	if ELGlobalSpells.SHIELDS.has(code) or ELGlobalSpells.FRIENDLY_SHIELDS.has(code):
+		return 35.0 + int(ELGlobalSpells.SHIELDS.get(code, ELGlobalSpells.FRIENDLY_SHIELDS.get(code, 0))) if _threatened(state, player) else 0.0
+	if ELGlobalSpells.REGEN_BOOSTS.has(code) or ELGlobalSpells.FRIENDLY_REGEN.has(code):
+		# The upkeep comes out of the very ether that regenerates the castle:
+		# only a boost that still regains more than today's rate is worth it.
+		if int(own.health) - int(own.pending) >= int(own.max): return 0.0
+		var now := ELFirstScenario.regained(state, player, forecast(state, player))
+		var boosted := ELFirstScenario.regained(state, player, forecast(state, player, [], ELGlobalSpells.upkeep(state.map.profile, code)), code)
+		return 20.0 if boosted > now else 0.0
+	if code == ELGlobalSpells.DECAY or code == ELGlobalSpells.EROSION:
+		# On the weakest enemy castle, once it is damaged and not already cursed so.
+		var enemy := _weakest_enemy(state, player)
+		if enemy < 0 or ELGlobalSpells.on_castle(state, enemy, code): return 0.0
+		var castle: Dictionary = castles[enemy]
+		return (30.0 if code == ELGlobalSpells.DECAY else 28.0) if int(castle.health) - int(castle.pending) < int(castle.max) else 0.0
+	if code == ELGlobalSpells.DISCHARGE:
+		# Half the own energy goes: only from a castle well out of danger.
+		var paid := int(own.health) / 2
+		if _weakest_enemy(state, player) < 0 or paid < 3 or _threatened(state, player): return 0.0
+		return 55.0 if night_health(state, player) - paid > int(own.max) / 2 else 0.0
+	if code == ELGlobalSpells.DISENCHANT:
+		for entry: Dictionary in ELGlobalSpells.acting_on(state, player):
+			if int(entry.owner) != player and entry.spell.code != ELGlobalSpells.WARRIOR and int(entry.spell.get("protection", 0)) <= 0: return 70.0
+		return 0.0
+	if code == ELGlobalSpells.DISJUNCTION:
+		var target := ELGlobalSpells.disjunction_target(state, player, 0)
+		return 30.0 + int(target.cost) / 10.0 if not target.is_empty() and int(target.cost) >= 75 else 0.0
 	return 0.0
+
+## The castle is damaged, or an attack on it is on its way: pending damage,
+## an enemy hero within reach, a Warrior of the Realm aimed at it.
+static func _threatened(state: ELAdventureSession, player: int) -> bool:
+	var own: Dictionary = state.scenario.get("castles", {}).get(player, {})
+	if own.is_empty(): return false
+	if int(own.pending) > 0 or impending(state, player) > 0: return true
+	for entry: Dictionary in ELGlobalSpells.acting_on(state, player):
+		if entry.spell.code == ELGlobalSpells.WARRIOR and int(entry.owner) != player: return true
+	return false
+
+## Own castle enchantments with nothing left to do are dispelled, so their
+## upkeep stops: a regeneration boost once the castle is whole, a shield once
+## it is whole and no attack is in sight.
+static func _prune(state: ELAdventureSession, player: int) -> void:
+	var own: Dictionary = state.scenario.get("castles", {}).get(player, {})
+	if own.is_empty() or not own.get("alive", false): return
+	var whole := int(own.health) >= int(own.max) and int(own.pending) <= 0
+	if not whole: return
+	var quiet := not _threatened(state, player)
+	for spell: Dictionary in ELGlobalSpells.data(state, player).get("active", []).duplicate():
+		var boost := ELGlobalSpells.REGEN_BOOSTS.has(spell.code) or ELGlobalSpells.FRIENDLY_REGEN.has(spell.code)
+		var shield := ELGlobalSpells.SHIELDS.has(spell.code) or ELGlobalSpells.FRIENDLY_SHIELDS.has(spell.code)
+		if boost or (shield and quiet): ELGlobalSpells.dispel(state, player, int(spell.serial))
 
 ## The living, unallied enemy castle with the least energy left.
 static func _weakest_enemy(state: ELAdventureSession, player: int) -> int:
@@ -640,10 +775,14 @@ static func _weakest_enemy(state: ELAdventureSession, player: int) -> int:
 		if best < 0 or int(castles[id].health) - int(castles[id].pending) < int(castles[best].health) - int(castles[best].pending): best = id
 	return best
 
-static func _cast(director: ELAdventureDirector, player: int) -> void:
+## Casts the finished spell, or dispels one with no target left. False when
+## it waits instead: a summons with no free tile beside the castle would be
+## used up with no hero (ELGlobalSpells.summon).
+static func _cast(director: ELAdventureDirector, player: int) -> bool:
 	var state := director.state
 	var record := ELGlobalSpells.data(state, player)
 	var code := str(record.production.code)
+	if ELGlobalSpells.SUMMONS.has(code) and ELGlobalSpells.castle_spot(state, player) == ELGlobalSpells.NO_SPOT: return false
 	var lists := ELGlobalSpells.targets(state, player, code)
 	var params: Variant = ELGlobalSpells.row(state.map.profile, code).get("Params", [])
 	var chosen: Array = []
@@ -651,19 +790,19 @@ static func _cast(director: ELAdventureDirector, player: int) -> void:
 		var options: Array = lists[index]
 		if options.is_empty():
 			ELGlobalSpells.cancel(state, player)
-			return
+			return true
 		var kind: String = params[index] if params is Array else str(params)
 		var pick: int = options[0]
 		if kind == "Hero":
 			var champion := ELFirstAI.commander_id(state, player)
 			if options.has(champion): pick = champion
-		elif kind == "Castle" and ELGlobalSpells.CASTLE_DAMAGE.has(code):
+		elif kind == "Castle" and (ELGlobalSpells.CASTLE_DAMAGE.has(code) or ELGlobalSpells.HOSTILE_CASTLE.has(code)):
 			# An attack is aimed at enemies only: with no enemy castle left
 			# (ruined or allied since the spell was begun) it is dispelled.
 			var enemy := _weakest_enemy(state, player)
 			if not options.has(enemy):
 				ELGlobalSpells.cancel(state, player)
-				return
+				return true
 			pick = enemy
 		elif kind == "Castle":
 			if options.has(player): pick = player
@@ -671,3 +810,4 @@ static func _cast(director: ELAdventureDirector, player: int) -> void:
 	if not ELGlobalSpells.cast(state, player, chosen):
 		state.error = ""
 		ELGlobalSpells.cancel(state, player)
+	return true

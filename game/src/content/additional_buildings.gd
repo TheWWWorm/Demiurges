@@ -116,7 +116,10 @@ static func valid_links(objects: Dictionary) -> bool:
 			if not ELLuaSave._integer(item.camp, -1, 0x7fffffff) or not item.get("placed", true) is bool: return false
 			item.camp = int(item.camp)
 			if item.camp >= 0 and (int(objects.get(item.camp, {}).get("guest", -1)) != int(item.uid) or item.placed): return false
-			if item.camp < 0 and not item.placed: return false
+			# Outside a camp a hero is placed, except one a script took off the
+			# map; a fallen one is accepted too (saves from before the camp's
+			# release restored its placement).
+			if item.camp < 0 and not item.placed and item.get("alive", false) and item.get("visible", true): return false
 		elif item.has("dungeon"):
 			if not ELLuaSave._integer(item.dungeon, 0, 0x7fffffff): return false
 			item.dungeon = int(item.dungeon)
@@ -421,11 +424,16 @@ static func leave_camp(state: ELAdventureSession, hero_id: int) -> bool:
 	state.event.emit({"kind": "object_changed", "id": hero_id})
 	return true
 
+## Every way out of a training camp (the leave control, death, dismissal,
+## resurrection) frees the camp and puts the hero back among the placed
+## figures, on the tile it entered from (a fallen one stays fallen there):
+## a hero outside a camp is never left held off the map.
 static func release_camp(state: ELAdventureSession, hero: Dictionary) -> void:
 	var camp := state.object(hero.get("camp", -1))
 	if int(camp.get("guest", -1)) == int(hero.uid):
 		camp.guest = -1
 		camp.guest_entry = []
+	if int(hero.get("camp", -1)) >= 0: hero.placed = true
 	hero.camp = -1
 
 static func prisoner(item: Dictionary) -> String:

@@ -14,7 +14,9 @@ extends SceneTree
 ## battle (needs the second game's files) traces with a shrunken geometry
 ## budget: an over-budget scene leaves objects out once and settles, and
 ## objects shown and hidden over and over under a tight budget all end up
-## traced, with few rebuilds.
+## traced, with few rebuilds. A forced GPU set-up failure (while preparing,
+## and when the full-size images are made) leaves the battle's raster
+## lighting as it was, stops the updates and frees what was made.
 
 var failures: Array[String] = []
 
@@ -32,6 +34,7 @@ func _run() -> void:
 	if ELPathTracing.available():
 		_compile_programs()
 		await _battle_budget()
+		await _forced_failures()
 	else:
 		print("No ray-tracing device: the GPU checks are skipped.")
 	print("%d failure(s)" % failures.size())
@@ -341,6 +344,50 @@ func _battle_budget() -> void:
 		"fragmented: one rebuild packs the scene and traces all of it again")
 	view.queue_free()
 	await process_frame
+
+## A GPU that cannot set the tracer up (forced with
+## ELPathTracing.Effect.test_failure): the battle keeps its raster shadows and
+## anti-aliasing, tracing turns itself off and refuses to come back, no update
+## waits for the render thread, and what was made is freed. Once while
+## preparing (before the lighting switches over) and once when the
+## full-size images are made (after it did).
+func _forced_failures() -> void:
+	for step: String in ["prepare", "resize"]:
+		var view: Node = load("res://scenes/duel.tscn").instantiate()
+		view.demo = true
+		root.add_child(view)
+		await process_frame
+		if not view.profiles.has("el2"):
+			view.queue_free()
+			return
+		view.settings.values.auto_camera = false
+		view._start("el2", {})
+		await _settle(view, 1.0)
+		var tracer: ELPathTracing = view.path_tracing
+		var viewport: Viewport = tracer.get_viewport()
+		var before := [viewport.msaa_3d, viewport.screen_space_aa, tracer._sun.shadow_enabled if is_instance_valid(tracer._sun) else null]
+		ELPathTracing.Effect.test_failure = step
+		var switched := [false]
+		tracer.changed.connect(func(on: bool): if on: switched[0] = true)
+		tracer.set_enabled(true)
+		await _settle(view, 1.5)
+		var effect := tracer._effect
+		var after := [viewport.msaa_3d, viewport.screen_space_aa, tracer._sun.shadow_enabled if is_instance_valid(tracer._sun) else null]
+		check(effect.state() == ELPathTracing.Effect.FAILED and not tracer.enabled and not effect.enabled, "%s fails: tracing turns itself off (%s)" % [step, effect.failure()])
+		check(after == before, "%s fails: the raster shadows and anti-aliasing are as before (%s, was %s)" % [step, after, before])
+		check(switched[0] == (step == "resize"), "%s fails: the lighting switched over only %s" % [step, "after a ready set-up" if step == "resize" else "never"])
+		await _settle(view, 0.5)
+		effect._mutex.lock()
+		var queued: int = effect._ops.size() + effect._instances.size() + effect._frame.size()
+		effect._mutex.unlock()
+		check(queued == 0, "%s fails: nothing more is queued for the render thread (%d left)" % [step, queued])
+		check(effect._images.is_empty() and not effect._albedo.is_valid() and not effect._source.is_valid() and not effect._trace_pipeline.is_valid(), "%s fails: the GPU resources made are freed" % step)
+		tracer.set_enabled(true)
+		await _settle(view, 0.3)
+		check(not tracer.enabled and viewport.msaa_3d == before[0], "%s fails: switching tracing on again is refused" % step)
+		ELPathTracing.Effect.test_failure = ""
+		view.queue_free()
+		await process_frame
 
 func _fake_define(id: int, count: int) -> Array:
 	var indices := PackedInt32Array([0, 0, 0])

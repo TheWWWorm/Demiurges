@@ -98,11 +98,13 @@ func _prepare_duel(state: ELAdventureSession, defender: int) -> bool:
 	for id: int in [hero_id, opponent_id]:
 		var actor := state.object(id)
 		if actor.is_empty() or not actor.alive: return _fail("The encounter character is unavailable.")
-		var row: Dictionary = profile.table("Shapes").get(actor.shape, {}) if not actor.shape.is_empty() else profile.table("HeroTemplates").get(actor.name, {})
+		# A campaign lord fights in the look of its level step (ELHeroLooks).
+		var shape := ELHeroLooks.worn(profile, actor)
+		var row: Dictionary = profile.table("Shapes").get(shape, {}) if not shape.is_empty() else profile.table("HeroTemplates").get(actor.name, {})
 		if profile.id == "el1" and actor.type == "monster": row = ELFirstMonsters.definition(profile, actor.name, int(actor.get("monster_difficulty", state.difficulty)))
 		if row.is_empty(): return _fail("The encounter appearance is missing: " + actor.name)
 		var color := String(row.get("Color", ""))
-		options.players.append({"faction": color, "shape": actor.shape, "kind": actor.type, "title": actor.get("title", actor.name), "level": actor.level, "health": actor.health, "cards": actor.cards.duplicate(), "skills": actor.get("skills", {}).duplicate()})
+		options.players.append({"faction": color, "shape": shape, "kind": actor.type, "title": actor.get("title", actor.name), "level": actor.level, "health": actor.health, "cards": actor.cards.duplicate(), "skills": actor.get("skills", {}).duplicate()})
 		# The battle shows the map hero's own template (figure, face): without
 		# it every hero fought as its faction's default hero, and heroes drawn
 		# as creatures on the map (Fire Elemental X, Walking Horror X) turned
@@ -318,7 +320,6 @@ func finish() -> bool:
 	if winner_id >= 0: defeated.erase(winner_id)
 	# Nobody dies in an ethereal battle and nobody gains experience.
 	var kill_loser := ethereal_defender < 0
-	if ethereal_defender >= 0: ELGlobalSpells.ethereal_result(state, ethereal_defender, winner_id)
 	if state.map.profile.id == "el2" and battle != null:
 		# An opposing specialisation that worked may be learned by a winning main hero.
 		var main_side := 0 if hero_id == state.main_hero else (1 if opponent_id == state.main_hero else -1)
@@ -349,6 +350,9 @@ func finish() -> bool:
 				var players: Variant = battle.setup.get("players", [])
 				var before: Variant = players[side].get("rune_uses", []) if players is Array and players.size() == 2 and players[side] is Dictionary else []
 				ELRunes.return_cantrips(actor, before if before is Array else [])
+	# After the runes are written back: Retaliation takes runes from the book
+	# the battle left, and the attacker rewards read the finished duel.
+	if ethereal_defender >= 0: ELGlobalSpells.ethereal_result(state, ethereal_defender, winner_id, opponent_id if ethereal_defender == hero_id else hero_id, ELGlobalSpells.battle_report(battle) if scripted_winner < 0 else {})
 	if kill_loser:
 		if winner_id >= 0:
 			var reward := ELHeroProgression.battle_reward(state.map.profile, int(state.object(defeated[0]).get("level", 1)))

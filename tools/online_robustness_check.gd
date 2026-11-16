@@ -39,6 +39,8 @@ func _run() -> void:
 		_rejoin_token(el2)
 		_signature(el2)
 		_result_digests(el2)
+		_concede(el2)
+		_silent_host(el2)
 		_replay_terminal(el2)
 	_persisted_token()
 	_relay_limits()
@@ -150,6 +152,52 @@ func _result_digests(profile: ELProfile) -> void:
 	guest._guest_receive(["state", JSON.parse_string(JSON.stringify(state))])
 	check(guest.get("divergences") != null and int(guest.get("divergences")) == 1 and not heard.is_empty(), "a different battle result is reported (%s)" % str(heard))
 
+## A guest that concedes during a battle stays out: the battle's settlement
+## does not give its health back, and it cannot take the seat again.
+func _concede(profile: ELProfile) -> void:
+	print("== Autochess concession ==")
+	var host := _offline_host(profile)
+	var token := "e".repeat(32)
+	host._host_receive(42, _hello(host, profile, token))
+	var game := host.start_match(555)
+	game.finish_bots()
+	game.start_fight()
+	host._host_receive(42, ["cmd", "concede", []])
+	var guard := 0
+	while game.stage == "fight" and guard < 5000:
+		game.process(0.5)
+		guard += 1
+	check(game.companies[1].health == 0 and game.placements[1] == ELAutochessRules.PLAYER_COUNT and game.controllers[1] == "computer",
+		"a guest who conceded during a battle is out after it (health %d, place %d)" % [game.companies[1].health, game.placements[1]])
+	host._disconnected(42)
+	host._host_receive(43, _hello(host, profile, token))
+	check(not host._departed.has(token) and not host._returning.has(43) and not host._seats.has(43), "the conceded guest cannot take its seat back")
+
+## A guest whose connection opens but whose host never answers the hello
+## still gives up when the connection time runs out.
+func _silent_host(profile: ELProfile) -> void:
+	print("== Autochess join timeout ==")
+	var server := ENetMultiplayerPeer.new()
+	var port := 27291
+	while server.create_server(port, 2) != OK and port < 27299: port += 1
+	var guest := ELAutochessOnline.new()
+	var reason := [""]
+	guest.closed.connect(func(r: String): reason[0] = r)
+	var connected := false
+	check(guest.join(profile, "127.0.0.1", port, "Guest", "") == OK, "the guest starts connecting")
+	var deadline := Time.get_ticks_msec() + 10000
+	while reason[0].is_empty() and Time.get_ticks_msec() < deadline:
+		server.poll()
+		while server.get_available_packet_count() > 0: server.get_packet()
+		guest.poll(0.016)
+		if not connected and guest._peer != null and guest._peer.get_connection_status() == MultiplayerPeer.CONNECTION_CONNECTED:
+			connected = true
+			guest._deadline = Time.get_ticks_msec() + 1000
+		OS.delay_msec(10)
+	check(connected and reason[0] == "Could not connect.", "a connected guest without an answer gives up (%s)" % reason[0])
+	guest.close()
+	server.close()
+
 func _persisted_token() -> void:
 	print("== Autochess reconnect identity ==")
 	var held := ELAutochessOnline._token
@@ -182,6 +230,15 @@ func _relay_limits() -> void:
 	check(relay._partial.is_empty(), "an unfinished packet goes when its sender leaves")
 	relay._frame(_frame(4, 7, false, 10))
 	check(relay.get_available_packet_count() == 0, "a frame on a channel the games do not use is dropped")
+	# The strategic game's control and battle channels pass, each kept apart.
+	relay._frame(_frame(4, 1, false, 12))
+	relay._frame(_frame(4, 2, true, 5))
+	relay._frame(_frame(4, 2, false, 6))
+	var channels := []
+	while relay.get_available_packet_count() > 0:
+		channels.append([relay.get_packet_channel(), relay.get_packet_peer()])
+		channels[-1].append(relay.get_packet().size())
+	check(channels == [[1, 4, 12], [2, 4, 11]], "frames on the strategic control and battle channels arrive (%s)" % str(channels))
 	for i in 10000: relay._frame(_frame(3, 0, false, 10))
 	check(relay.get_available_packet_count() < 10000 and not relay._peers.has(3) and left.has(3), "a guest flooding completed packets is removed (%d queued)" % relay.get_available_packet_count())
 	check(relay.get_available_packet_count() == 0, "a removed guest's queued packets are dropped")

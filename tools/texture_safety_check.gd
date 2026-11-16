@@ -41,12 +41,114 @@ func _profile(edition: String) -> ELProfile:
 	var data := ELProfile.new()
 	return data if not folder.is_empty() and data.mount(edition, folder) else null
 
+## A masked texture as the games store one: `depth` bits a pixel, channels
+## a, r, g, b as [mask, shift, bits], then `payload` bytes of pixels.
+static func _masked(w: int, h: int, depth: int, channels: Array, payload: int) -> PackedByteArray:
+	var data := PackedByteArray()
+	data.resize(ELTexture.DATA_OFFSET + payload)
+	for i in payload: data[ELTexture.DATA_OFFSET + i] = (i * 37 + 11) & 0xff
+	data.encode_u32(0, ELTexture.MAGIC)
+	data.encode_u32(4, w)
+	data.encode_u32(8, h)
+	data.encode_u32(12, 1)
+	data.encode_u32(16, 0x5650)
+	data.encode_u32(20, depth)
+	for c in 4:
+		for k in 3: data.encode_u32(24 + c * 12 + k * 4, int(channels[c][k]))
+	return data
+
+## Decodes with the compiled reader where there is one, then with the
+## GDScript one: [native image, GDScript image].
+static func _both(data: PackedByteArray) -> Array:
+	var had := ELTexture.native
+	var compiled: Image = ELTexture.decode(data) if had else null
+	ELTexture.native = false
+	var script := ELTexture.decode(data)
+	ELTexture.native = had
+	return [compiled, script]
+
+## Damaged texture headers are refused by both readers (the compiled one
+## used a header's shift directly, and a shift of 64 is undefined in C);
+## sound ones decode alike in both.
+func _damaged_headers() -> void:
+	var c565 := [[0, 0, 0], [0xf800, 11, 5], [0x7e0, 5, 6], [0x1f, 0, 5]]
+	var c4444 := [[0xf000, 12, 4], [0xf00, 8, 4], [0xf0, 4, 4], [0xf, 0, 4]]
+	var c8888 := [[0xff000000, 24, 8], [0xff0000, 16, 8], [0xff00, 8, 8], [0xff, 0, 8]]
+	var native := ELTexture.native
+	for sound: Array in [["565", _masked(16, 8, 16, c565, 256)], ["4444", _masked(16, 8, 16, c4444, 256)], ["8888", _masked(16, 8, 32, c8888, 512)]]:
+		var images := _both(sound[1])
+		check(images[1] != null and images[1].get_size() == Vector2i(16, 8), "a sound %s texture decodes" % sound[0])
+		if native: check(images[0] != null and images[1] != null and images[0].get_data() == images[1].get_data(), "the compiled and GDScript readers agree on a %s texture" % sound[0])
+	var shifted := c565.duplicate(true)
+	shifted[1] = [0xf800, 64, 5]
+	var wide_bits := c565.duplicate(true)
+	wide_bits[2] = [0x7e0, 5, 40]
+	var stray := c565.duplicate(true)
+	stray[3] = [0x1f, 3, 5]
+	var outside := c565.duplicate(true)
+	outside[1] = [0x1f800, 11, 6]
+	var ghost := c565.duplicate(true)
+	ghost[0] = [0, 0, 3]
+	var damaged := {
+		"a channel shifted by 64": _masked(16, 8, 16, shifted, 256),
+		"a channel shifted past a 16-bit pixel": _masked(16, 8, 16, [[0, 0, 0], [0xf800, 16, 5], [0x7e0, 5, 6], [0x1f, 0, 5]], 256),
+		"a channel of 40 bits": _masked(16, 8, 16, wide_bits, 256),
+		"a mask that does not match its shift": _masked(16, 8, 16, stray, 256),
+		"a mask wider than the pixel": _masked(16, 8, 16, outside, 256),
+		"bits without a mask": _masked(16, 8, 16, ghost, 256),
+		"24 bits a pixel": _masked(16, 8, 24, c565, 384),
+		"no bits a pixel": _masked(16, 8, 0, c565, 256),
+		"no width": _masked(0, 8, 16, c565, 256),
+		"a width of 2^31": _masked(0x80000000, 8, 16, c565, 256),
+		"a huge size": _masked(65536, 65536, 16, c565, 256),
+		"pixels short of the size": _masked(16, 8, 16, c565, 255),
+		"8888 pixels short of the size": _masked(16, 8, 32, c8888, 300)}
+	var dxt := _masked(16, 16, 0, c565, 64)
+	dxt.encode_u32(16, 0x31545844)   # "DXT1", whose 16×16 level needs 128 bytes
+	damaged["a DXT1 level short of its size"] = dxt
+	var odd := _masked(6, 6, 0, c565, 64)
+	odd.encode_u32(16, 0x31545844)
+	damaged["a DXT1 level of part blocks"] = odd
+	for what: String in damaged:
+		var images := _both(damaged[what])
+		check(images[0] == null and images[1] == null, "a texture with %s is refused by both readers" % what)
+	# Arena cutouts' later levels go through the same reader.
+	var cutout := _masked(8, 8, 16, [[0x8000, 15, 1], [0x7c00, 10, 5], [0x3e0, 5, 5], [0x1f, 0, 5]], 8 * 8 * 2 + 4 * 4 * 2 + 2 * 2 * 2 + 2)
+	cutout.encode_u32(12, 4)
+	cutout.encode_u32(16, 0x5551)
+	cutout.encode_u32(20, 16)
+	var base := ELTexture.decode(cutout)
+	check(base != null and ELTexture.authored_mask_mipmaps(cutout, base) != null, "a sound cutout's levels decode")
+	if base != null:
+		cutout.encode_u32(28, 64)
+		check(ELTexture.authored_mask_mipmaps(cutout, base) == null, "a cutout with a damaged header gives no levels")
+
+## The compiled and GDScript readers give the same bytes for every masked
+## and run-length texture of a few of the game's folders.
+func _readers_agree(data: ELProfile) -> void:
+	if not ELTexture.native: return
+	var archive: ELArchive = data.archives.get("textures")
+	if archive == null: return
+	var compared := 0
+	var differ := 0
+	for name: String in archive.entries:
+		if name.get_extension() != "mmp" or not (name.begins_with("heroes/") or name.begins_with("effects/") or name.begins_with("interface/")): continue
+		var bytes := archive.read(name)
+		if bytes.size() < 20 or bytes.slice(16, 19) == "DXT".to_ascii_buffer(): continue
+		var images := _both(bytes)
+		compared += 1
+		if (images[0] == null) != (images[1] == null) or (images[0] != null and images[0].get_data() != images[1].get_data()): differ += 1
+	check(compared > 100 and differ == 0, "the compiled and GDScript readers agree on %d of the game's textures (%d differ)" % [compared, differ])
+
 func _run() -> void:
+	_damaged_headers()
 	var data := _profile("el2")
 	if data == null:
-		print("texture safety check: the second game is not imported here; nothing to read")
-		quit(0)
+		print("SKIP: the second game is not imported here; its textures are not read")
+		print("TEXTURE SAFETY: %d failure(s)" % failures.size())
+		quit(0 if failures.is_empty() else 1)
 		return
+	_readers_agree(data)
 
 	# The sheets the effects read every frame while spell light or path
 	# tracing is on, an arena's detail grain, and a figure's skin.

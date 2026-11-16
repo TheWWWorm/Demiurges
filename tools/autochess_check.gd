@@ -45,6 +45,10 @@ func _run() -> void:
 	_check_combat_purchases(profile)
 	_check_undo_pool(profile)
 	_check_haste(profile)
+	_check_lives(profile)
+	_check_command(profile)
+	_check_forfeit(profile)
+	_check_fight_save_pool(profile)
 	_check_matches(profile, int(_arg("matches", "3")))
 	_check_save(profile)
 	var path := _arg("report", "")
@@ -314,3 +318,152 @@ func _check_haste(profile: ELProfile) -> void:
 			battle._continue_action(u)
 			seconds += ELAutochessBattle.TICK
 		check(absf(seconds - float(case[1])) <= ELAutochessBattle.TICK + 0.001, "%d%% haste attacks every %.2f s (expected %.2f)" % [roundi(float(case[0]) * 100), seconds, float(case[1])])
+
+func _line(key: String) -> int:
+	for index in ELAutochessRules.FAMILIES.size():
+		if ELAutochessRules.FAMILIES[index].key == key: return index
+	return -1
+
+func _unit_at(line: int, rank: int, point: Vector2, uid: int) -> Dictionary:
+	return {"code": ELAutochessRules.form(line, rank), "family": line, "rank": rank, "tier": ELAutochessRules.tier(line), "point": [point.x, point.y], "uid": uid, "item": ""}
+
+func _deaths_of(battle: ELAutochessBattle, u: ELAutochessBattle.Fighter) -> int:
+	return battle.events.filter(func(e: Dictionary) -> bool: return e.k == "death" and int(e.u) == u.id).size()
+
+## One death per life: damage that sets off more damage (a reflected Rod of
+## Fire killing a Walking Horror, whose dying aura kills the rod's target)
+## kills each creature once, so a fallen Hopper still waits for three deaths.
+## A lethal poison tick on a creature its item brings back does not kill
+## the new life with the old poison.
+func _check_lives(profile: ELProfile) -> void:
+	var horrors := _line("horrors")
+	var hoppers := _line("hoppers")
+	var kobolds := 0
+	var battle := ELAutochessBattle.new()
+	battle.setup(profile, [_unit_at(horrors, 0, Vector2(-3, 0), 1), _unit_at(hoppers, 0, Vector2(-8, 4), 2)],
+		[_unit_at(kobolds, 0, Vector2(3, 0), 101), _unit_at(kobolds, 0, Vector2(8, 4), 102)], 11)
+	var horror: ELAutochessBattle.Fighter = battle.units[0]
+	var hopper: ELAutochessBattle.Fighter = battle.units[1]
+	var target: ELAutochessBattle.Fighter = battle.units[2]
+	var other: ELAutochessBattle.Fighter = battle.units[3]
+	check(String(horror.ability.get("kind", "")) == "death_aura" and String(hopper.ability.get("kind", "")) == "rise", "the test has a Walking Horror and a Hopper (%s, %s)" % [horror.code, hopper.code])
+	horror.gear = ELAutochessArtifacts.RULES.RodOfFire.duplicate()
+	target.gear = ELAutochessArtifacts.RULES.RodOfReflection.duplicate()
+	battle._die(hopper, -1)
+	var counted := battle.deaths
+	for u: ELAutochessBattle.Fighter in [horror, target, other]: u.shield = 0.0
+	horror.hp = 1.0
+	target.hp = 0.5
+	battle._harm(target, 60.0, horror.id, "rod")
+	check(horror.dead and target.dead and _deaths_of(battle, target) == 1 and battle.deaths - counted == 2,
+		"a rod reflected into a dying Walking Horror kills its target once (%d deaths, %d of the target)" % [battle.deaths - counted, _deaths_of(battle, target)])
+	check(hopper.dead, "a Hopper does not rise after two creatures fell")
+	battle._die(other, -1)
+	check(not hopper.dead, "the Hopper rises after the third")
+	battle._die(target, -1)
+	check(_deaths_of(battle, target) == 1, "a dead creature is not killed again")
+	# Poison and a revive item.
+	battle = ELAutochessBattle.new()
+	battle.setup(profile, [_unit_at(kobolds, 0, Vector2(-3, 0), 1)], [_unit_at(kobolds, 0, Vector2(3, 0), 101)], 12)
+	var carrier: ELAutochessBattle.Fighter = battle.units[0]
+	carrier.gear = ELAutochessArtifacts.RULES.RodOfRessurection.duplicate()
+	carrier.shield = 0.0
+	carrier.hp = 1.0
+	carrier.poisons = [{"dps": 1000.0, "left": 3.0, "source": battle.units[1].id}, {"dps": 1000.0, "left": 3.0, "source": battle.units[1].id}]
+	battle._status(carrier)
+	check(not carrier.dead and carrier.revived and carrier.poisons.is_empty(), "a creature revived by a lethal poison tick comes back without the poison (%d left)" % carrier.poisons.size())
+	for i in 10: battle._status(carrier)
+	check(not carrier.dead and _deaths_of(battle, carrier) == 1, "the revived creature does not die again of the cleared poison")
+
+## A creature that changes sides under the Ring of Command is not hit by
+## a blow its new ally had already begun.
+func _check_command(profile: ELProfile) -> void:
+	var battle := ELAutochessBattle.new()
+	battle.setup(profile, [_unit_at(0, 0, Vector2(-0.6, 0), 1), _unit_at(0, 0, Vector2(-8, 4), 2)], [_unit_at(0, 0, Vector2(0.6, 0), 101)], 13)
+	var attacker: ELAutochessBattle.Fighter = battle.units[0]
+	var holder: ELAutochessBattle.Fighter = battle.units[1]
+	var victim: ELAutochessBattle.Fighter = battle.units[2]
+	holder.gear = ELAutochessArtifacts.RULES.RingOfCommand.duplicate()
+	battle._start_attack(attacker, victim)
+	victim.shield = 0.0
+	battle._harm(victim, victim.hp - victim.max_hp * 0.25, -1, "ability")
+	check(victim.team == 0, "the Ring of Command takes the wounded enemy")
+	var hp := victim.hp
+	var seconds := 0.0
+	while attacker.action != "" and seconds < 5.0:
+		battle._continue_action(attacker)
+		seconds += ELAutochessBattle.TICK
+	check(victim.hp == hp, "an attack begun before the change of sides does not land on the new ally (%.1f -> %.1f)" % [hp, victim.hp])
+
+func _finish_boards(game_match: ELAutochessMatch, losers: Array[int] = []) -> void:
+	for index in game_match.boards.size():
+		var board: Dictionary = game_match.boards[index]
+		if board.done: continue
+		var battle: ELAutochessBattle = board.battle
+		battle.finished = true
+		battle.winner = 1 if int(board.home) in losers else 0
+		game_match._record_board(index)
+
+## A conceded player stays out: settled during a battle, restored from a
+## save made during it, and when it concedes between battles.
+func _check_forfeit(profile: ELProfile) -> void:
+	var game_match := _pool_match(profile, 95)
+	game_match.start_fight()
+	game_match.forfeit(4)
+	var saved: Dictionary = JSON.parse_string(JSON.stringify(game_match.snapshot()))
+	_finish_boards(game_match)
+	check(game_match.companies[4].health == 0 and game_match.placements[4] == 9 and game_match.companies[4].stage == "lost",
+		"a player who conceded during a battle is settled out (health %d, place %d)" % [game_match.companies[4].health, game_match.placements[4]])
+	var copy := ELAutochessMatch.new()
+	copy.auto_save = false
+	var restored := copy.restore(profile, saved)
+	var paired_after := copy.pairings.any(func(p: Dictionary) -> bool: return int(p.a) == 4 or int(p.b) == 4)
+	check(restored and copy.companies[4].health == 0 and copy.companies[4].forfeited and copy.placements[4] == 9 and not paired_after,
+		"a save made during that battle keeps the player out (health %d, place %d)" % [copy.companies[4].health, copy.placements[4]])
+	var again := ELAutochessMatch.new()
+	again.auto_save = false
+	check(again.restore(profile, JSON.parse_string(JSON.stringify(game_match.snapshot()))) and again.companies[4].health == 0 and again.placements[4] == 9, "a later save keeps the place")
+	game_match.next_round()
+	game_match.forfeit(5)
+	var paired := game_match.pairings.any(func(p: Dictionary) -> bool: return int(p.a) == 5 or int(p.b) == 5)
+	check(game_match.placements[5] == 8 and not paired and game_match.alive_players().size() == 7, "a player who concedes in preparation takes the lowest open place and leaves the pairings")
+	game_match.start_fight()
+	_finish_boards(game_match)
+	check(game_match.companies[5].health == 0 and game_match.placements[5] == 8, "the next battle does not bring it back")
+
+## A company that falls during a battle keeps its creatures out of the pool
+## until the round is settled, so a save made during the battle (which
+## restarts the round from the health before it) is never short of copies.
+func _check_fight_save_pool(profile: ELProfile) -> void:
+	var game_match := _pool_match(profile, 96)
+	var line := -1
+	for index in ELAutochessRules.FAMILIES.size():
+		if ELAutochessRules.tier(index) == 5:
+			line = index
+			break
+	for company in game_match.companies:
+		company.army.assign(company.army.filter(func(e: Dictionary) -> bool: return int(e.family) != line))
+		company.shop.assign(company.shop.filter(func(o: Dictionary) -> bool: return int(o.family) != line))
+	var fallen := game_match.companies[3]
+	for i in ELAutochessRules.pool_size(line): fallen._recruit(line, 0, 5)
+	fallen.health = 1
+	game_match.start_fight()
+	var board := game_match.board_of(3)
+	var battle: ELAutochessBattle = game_match.boards[int(board.index)].battle
+	battle.finished = true
+	battle.winner = 1
+	game_match._record_board(int(board.index))
+	var human := game_match.companies[0]
+	check(fallen.health == 0 and int(human.pool_left()[line]) == 0, "a company that fell during the battle keeps its creatures until the round settles (%d left)" % int(human.pool_left()[line]))
+	# A top-level company whose shop could offer the released copies.
+	human.training = ELAutochessRules.MAX_TRAINING
+	human.ether = 5000
+	for i in 300:
+		if human.shop.any(func(o: Dictionary) -> bool: return int(o.family) == line): break
+		human.refresh()
+	var copy := ELAutochessMatch.new()
+	copy.auto_save = false
+	check(copy.restore(profile, JSON.parse_string(JSON.stringify(game_match.snapshot()))) and _pool_ok(copy) and copy.companies[3].health == 1,
+		"a save made during the battle restores within the pool (%s left)" % str(copy.companies[0].pool_left().get(line)))
+	_finish_boards(game_match)
+	check(int(human.pool_left()[line]) > 0, "the fallen company's creatures return to the pool once the round settles")

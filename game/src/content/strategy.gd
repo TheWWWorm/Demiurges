@@ -197,12 +197,18 @@ static func adjacent(director: ELAdventureDirector, actor: Dictionary, target: D
 	var size: Vector2i = director.grid.footprints.get(int(target.uid), {}).get("size", Vector2i.ONE)
 	return Rect2i(int(target.x) - 1, int(target.y) - 1, size.x + 2, size.y + 2).has_point(Vector2i(actor.x, actor.y))
 
-## An ethereal battle (Warrior of the Realm) is marked with a third entry.
+## An ethereal battle (Warrior of the Realm) is marked with a third entry;
+## only the first two entries name the sides.
 static func queue_combat(director: ELAdventureDirector, first: int, second: int, ethereal := false) -> void:
 	if director.strategy.is_empty() or first == second: return
 	for pair: Array in director.strategy.combats:
-		if pair.has(first) and pair.has(second): return
+		if _pairs(pair, first, second): return
 	director.strategy.combats.append([first, second, 1] if ethereal else [first, second])
+
+## Whether a queued battle (its first two entries) is between `first` and `second`.
+static func _pairs(pair: Array, first: int, second: int) -> bool:
+	var sides := pair.slice(0, 2)
+	return sides.has(first) and sides.has(second)
 
 static func entered(director: ELAdventureDirector, actor: Dictionary) -> void:
 	var enemies := director.interception.enemies(director.state, actor, Vector2i(actor.x, actor.y))
@@ -279,8 +285,8 @@ static func advance(director: ELAdventureDirector) -> void:
 			if pair.size() > 2:
 				if not first.alive or not second.alive: continue
 				if director.is_strategy_human(first.owner) or director.is_strategy_human(second.owner): director.start_ethereal(first.uid, second.uid)
-				elif forfeit_winner >= 0: ELGlobalSpells.ethereal_result(state, second.uid, forfeit_winner)
-				else: ELGlobalSpells.ethereal_result(state, second.uid, ELFirstAI.winner(state, first, second, director.battle_estimate).uid)
+				elif forfeit_winner >= 0: ELGlobalSpells.ethereal_result(state, second.uid, forfeit_winner, first.uid)
+				else: ELGlobalSpells.ethereal_result(state, second.uid, ELFirstAI.winner(state, first, second, director.battle_estimate).uid, first.uid)
 				continue
 			if not first.alive or not second.alive or not (state.hostile(first, second) or ELFirstAI.hunts(state, first, second)): continue
 			# Preserve the host's usual seat order when present. A guest's
@@ -363,7 +369,7 @@ static func restore_turn(raw: Variant, state: ELAdventureSession) -> Dictionary:
 		var normalized := [int(pair[0]), int(pair[1])]
 		if normalized[0] == normalized[1]: return {"error": "Duplicate strategic combat."}
 		for other: Array in combats:
-			if other.has(normalized[0]) and other.has(normalized[1]): return {"error": "Duplicate strategic combat."}
+			if _pairs(other, normalized[0], normalized[1]): return {"error": "Duplicate strategic combat."}
 		combats.append(normalized + [1] if pair.size() == 3 else normalized)
 	var legacy: bool = raw.get("legacy_orders", not raw.has("combats"))
 	var limit: int = combats.size() if raw.phase == "combat" and not legacy else ids.size()
@@ -482,16 +488,22 @@ static func free_next(director: ELAdventureDirector) -> void:
 				return
 
 ## A fingerprint of what a computer player's round can change: its heroes'
-## tiles, experience, books and skills, its resources and the sites and
-## buildings it holds (31 bits, so it survives a save).
+## tiles, experience, books, skills, battle artifacts, scrolls and items, its
+## resources, the sites and buildings it holds, and which objects of the map
+## are still there (a pickup taken, a creature beaten, a building used up)
+## (31 bits, so it survives a save).
 static func _free_mark(state: ELAdventureSession, player: int) -> int:
 	var parts: Array = [state.players.get(player, {}).get("resources", {})]
 	for hero: Dictionary in ELFirstAI.heroes_of(state, player):
-		parts.append([int(hero.uid), int(hero.x), int(hero.y), int(hero.experience), hero.get("cards", []), hero.get("rune_uses", []), hero.get("skills", {})])
+		parts.append([int(hero.uid), int(hero.x), int(hero.y), int(hero.experience), hero.get("cards", []), hero.get("rune_uses", []), hero.get("skills", {}),
+			hero.get("artifacts", []), hero.get("gs_items", []), hero.get("inventory", [])])
 	var held := 0
+	var present := 0
 	for item: Dictionary in state.objects.values():
 		if int(item.get("owner", -1)) == player and item.get("type") != "hero": held += int(item.uid) * 31 + 1
+		if item.get("type") != "hero" and item.get("alive", false) and item.get("visible", true) and item.get("enabled", true): present = (present * 31 + int(item.uid)) & 0x7fffffff
 	parts.append(held)
+	parts.append(present)
 	return hash(var_to_str(parts)) & 0x7fffffff
 
 ## The night of a free-movement day: heroes beside an enemy castle strike it,

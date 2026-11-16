@@ -23,7 +23,12 @@ var instructions := 0
 var instruction_limit := 500000
 var rng_state := 212
 var _depth := 0
-var _tables: Array[Table] = []
+## Every table the VM made, weakly: a table nothing holds any more is freed
+## at once, and clear() can still break the cycles of the rest (Godot counts
+## references, so tables that hold each other stay alive until then).
+var _tables: Array[WeakRef] = []
+## The size _tables is pruned of freed tables at next.
+var _prune_at := 1024
 var _context := ""
 
 func _init() -> void:
@@ -95,13 +100,33 @@ func has_function(name: String) -> bool:
 
 func table() -> Table:
 	var result := Table.new()
-	_tables.append(result)
+	track(result)
 	return result
+
+## Registers a table made outside table() (a restored save's).
+func track(value: Table) -> void:
+	_tables.append(weakref(value))
+	if _tables.size() >= _prune_at:
+		_tables.assign(_tables.filter(func(entry: WeakRef) -> bool: return entry.get_ref() != null))
+		_prune_at = maxi(1024, _tables.size() * 2)
+
+## The tables still alive (held by the script state, the engine or a cycle).
+func live_tables() -> Array[Table]:
+	var result: Array[Table] = []
+	for entry: WeakRef in _tables:
+		var value: Variant = entry.get_ref()
+		if value != null: result.append(value)
+	return result
+
+## Empties every table still alive, which breaks the cycles among them.
+func release_tables() -> void:
+	for value: Table in live_tables(): value.values.clear()
+	_tables.clear()
+	_prune_at = 1024
 
 func clear() -> void:
 	# Break script-created table cycles explicitly; Godot uses reference counting.
-	for value: Table in _tables: value.values.clear()
-	_tables.clear()
+	release_tables()
 	globals.clear()
 	bindings.clear()
 	natives.clear()
@@ -420,6 +445,7 @@ func _builtin(name: String, args: Array) -> Array:
 			if args.size() < 2 or position < 1 or position > count + 1:
 				_fail("Invalid table insertion.")
 				return []
+			if not _charge(count - position + 1): return []
 			for i in range(count, position - 1, -1): _table_set(first, i + 1, _table_get(first, i))
 			_table_set(first, position, args[-1])
 			_table_set(first, "n", float(count + 1))
@@ -428,6 +454,7 @@ func _builtin(name: String, args: Array) -> Array:
 			var count := _length(first)
 			var position := int(_number(args[1])) if args.size() > 1 else count
 			if position < 1 or position > count: return []
+			if not _charge(count - position): return []
 			var value: Variant = _table_get(first, position)
 			for i in range(position, count): _table_set(first, i, _table_get(first, i + 1))
 			_table_set(first, count, null)
@@ -436,7 +463,9 @@ func _builtin(name: String, args: Array) -> Array:
 		"call":
 			var values: Array = []
 			if args.size() > 1:
-				for i in _length(args[1]): values.append(_table_get(args[1], i + 1))
+				var count := _length(args[1])
+				if not _charge(count): return []
+				for i in count: values.append(_table_get(args[1], i + 1))
 			return _invoke(first, values)
 		"randomseed":
 			rng_state = int(_number(first)) & 0xffffffff
@@ -492,10 +521,20 @@ func _length(value: Variant) -> int:
 		_fail("Expected a table.")
 		return 0
 	if value.values.has("n"): return int(_number(value.values.n))
+	if not _charge(value.values.size()): return 0
 	var highest := 0
 	for key: Variant in value.values:
 		if _type(key) == "number" and float(key) == floorf(float(key)): highest = maxi(highest, int(key))
 	return highest
+
+## Built-in work counts against the instruction budget: a loop whose length
+## the script supplies (a table's n) costs one instruction per step, so a
+## huge n fails the call instead of stalling the game.
+func _charge(cost: int) -> bool:
+	instructions += maxi(0, cost)
+	if instructions <= instruction_limit: return true
+	_fail("Script instruction budget exceeded.")
+	return false
 
 func _fail(message: String) -> void:
 	if error.is_empty(): error = message + (" (" + _context + ")" if not _context.is_empty() else "")

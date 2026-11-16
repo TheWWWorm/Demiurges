@@ -118,9 +118,9 @@ static func sized_icon(profile: ELProfile, kind: String, pixels: int, round := f
 	var source := icon(profile, kind)
 	var image: Image = null
 	if source is AtlasTexture and (source as AtlasTexture).atlas != null:
-		var whole := (source as AtlasTexture).atlas.get_image()
+		var whole := ELIconUpscale.image_of((source as AtlasTexture).atlas)
 		if whole != null: image = whole.get_region(Rect2i((source as AtlasTexture).region))
-	elif source != null: image = source.get_image()
+	elif source != null: image = ELIconUpscale.image_of(source)
 	image = ELTexture.readable(image)
 	if image == null: return source
 	if round:

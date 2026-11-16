@@ -43,6 +43,8 @@ var offset1 := 0
 var chunks: Array = []
 ## Files to write: {name (relative, "/"-separated), chunk}.
 var files: Array = []
+## The first file name that would lead out of the destination, if any.
+var unsafe := ""
 
 
 static func open(file: String) -> ELInnoSetup:
@@ -80,6 +82,8 @@ func _read_header() -> String:
 			"size": data.decode_u64(e + 20), "packed": data.decode_u64(e + 28),
 			"sha1": data.slice(e + 36, e + 56), "flags": data.decode_u16(e + 72)})
 	_find_files(header)
+	if not unsafe.is_empty():
+		return "The installer names a file outside the game folder (%s)." % unsafe
 	if files.is_empty():
 		return "No game files found in the installer."
 	var names := {}
@@ -145,6 +149,12 @@ func _find_files(h: PackedByteArray) -> void:
 			continue
 		if int(chunks[r.loc].flags) & FLAG_CALL_FILTER or not ELContentLibrary.wanted(name):
 			continue   # executables, documents and editors are never read
+		if ELContentLibrary.safe_relative(name.to_lower()).is_empty():
+			# A name that could lead out of the import's folder ("..", a
+			# drive): the installer is not the game's, and nothing is written.
+			unsafe = name
+			files.clear()
+			return
 		seen[name.to_lower()] = true
 		# Lower case: Windows paths are case-insensitive; the engine indexes
 		# lower-case paths.
@@ -302,13 +312,15 @@ func _unpack(f: FileAccess, c: int) -> String:
 		out = out.slice(int(ch.sub), size)
 	var sha := HashingContext.new()
 	sha.start(HashingContext.HASH_SHA1)
-	sha.update(out)
+	if not out.is_empty(): sha.update(out)   # the installer holds a few empty files
 	if sha.finish() != ch.sha1:
 		return "Checksum mismatch in the installer (chunk %d)." % c
 	for fl: Dictionary in files:
 		if fl.chunk != c:
 			continue
-		var target := _dest.path_join(fl.name)
+		var target := ELContentLibrary.inside(_dest, fl.name)
+		if target.is_empty():
+			return "The installer names a file outside the game folder (%s)." % fl.name
 		DirAccess.make_dir_recursive_absolute(target.get_base_dir())
 		var w := FileAccess.open(target, FileAccess.WRITE)
 		if w == null:

@@ -197,7 +197,7 @@ func accept() -> String:
 		if not card.is_empty(): hero.cards.append(card)
 	hero.spell_stock.clear()
 	for card: String in bag: hero.spell_stock[card] = int(hero.spell_stock.get(card, 0)) + 1
-	if specialization != str(hero.get("specialization", "NONE")) and state.specializations(hero).has(specialization):
+	if specialization != str(hero.get("specialization", "NONE")) and state.specialization_choices(hero).has(specialization):
 		state.choose_specialization(hero_id, specialization)
 	state.event.emit({"kind": "inventory_changed", "id": hero_id})
 	return ""

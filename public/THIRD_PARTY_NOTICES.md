@@ -94,3 +94,15 @@ Advanced Micro Devices, Inc. The official AMD FSR Upscaling and AMD FSR Frame
 Generation lockups in `game/assets/branding/vendors/` and the splash variants
 made from them (`splash-graphics.png`, `splash-fsr.png`) retain AMD's
 trademark rights and are not covered by the project's Apache-2.0 license.
+
+## Real-ESRGAN weights (sharper icons)
+
+`game/native/models/realesr-general-x4v3.bin` holds the weights of the
+realesr-general-x4v3 model of Real-ESRGAN by Xintao Wang et al.
+(https://github.com/xinntao/Real-ESRGAN, release v0.2.5.0), converted to
+16-bit floats without other changes. They are licensed under the BSD 3-Clause
+License; its text is in `licenses/Real-ESRGAN.txt`. The network that runs them
+(SRVGGNetCompact, in `game/native/el_assets.c`) is a new C implementation.
+The game uses them only on the player's own computer, to enlarge the
+original games' icons and interface art that the player supplies; no
+enlarged art is distributed.

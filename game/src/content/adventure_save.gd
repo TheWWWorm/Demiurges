@@ -24,6 +24,9 @@ func encode(director: ELAdventureDirector, camera: Dictionary = {}) -> Dictionar
 	var world := {}
 	for key: String in STATE_FIELDS: world[key] = state.get(key)
 	world.income_day = state.income_day
+	# The game's own computer players' strength (ELAIChoice).
+	var levels := ELAIChoice.of(state)
+	if not levels.is_empty(): world.ai = levels
 	var objects: Array[Dictionary] = []
 	for item: Dictionary in state.objects.values():
 		var copy := item.duplicate(true)
@@ -52,7 +55,7 @@ func encode(director: ELAdventureDirector, camera: Dictionary = {}) -> Dictionar
 		if director.encounter.assault_fort >= 0: encounter.fort = director.encounter.assault_fort
 	return {"format": FORMAT, "version": 1, "edition": state.map.profile.id, "map": state.map.id, "map_hash": _map_hash(state.map), "script_name": state.script_name, "encounter": encounter,
 		"world": world, "scenario": state.scenario.duplicate(true), "objects": objects, "players": players, "explored": Marshalls.raw_to_base64(state.explored), "notebook": ELSecondNotebook.encode(state), "observations": state.observations.duplicate(true), "ambience": ELSecondAmbience.encode(state), "script": script, "artifact_templates": state.artifact_templates.duplicate(true),
-		"commands": state.commands.duplicate(true), "director": {"movement": movement, "travel": director.travel.duplicate(), "strategy": director.strategy.duplicate(true), "free_queue": director.free_queue.duplicate(true), "guard_zones": director.interception.snapshot(), "dialogue": director.dialogue.duplicate(true), "boxes": director.boxes.duplicate(true), "action_wait": director.action_wait, "player_round": director.player_round, "woken": director._woken, "waiting": director._waiting, "wait_remaining": director.wait_remaining, "clock": director._clock, "commands_pending": director._commands_pending}, "camera": camera.duplicate(true)}
+		"commands": state.commands.duplicate(true), "director": {"movement": movement, "travel": director.travel.duplicate(), "strategy": director.strategy.duplicate(true), "free_queue": director.free_queue.duplicate(true), "guard_zones": director.interception.snapshot(), "dialogue": director.dialogue.duplicate(true), "boxes": director.boxes.duplicate(true), "action_wait": director.action_wait, "player_round": director.player_round, "woken": director._woken, "waiting": director._waiting, "wait_remaining": director.wait_remaining, "clock": director._clock, "commands_pending": director._commands_pending, "running": director.running_command()}, "camera": camera.duplicate(true)}
 
 func write(path: String, director: ELAdventureDirector, camera: Dictionary = {}) -> bool:
 	# The remake keeps fixed campaign/mission slots; the tutorial is not saved
@@ -114,13 +117,18 @@ func decode(raw: Variant, profiles: Dictionary) -> Dictionary:
 		if not ELLuaSave._integer(world[key], -1 if key == "main_hero" else 0, 0xffffffff):
 			_fail("Invalid campaign world value: " + key)
 			return {}
-	if world.difficulty > 4 or not world.camera_locked is bool or not world.exclusive is bool or world.outcome not in ["", "win", "lose"] or not _number(world.camera_zoom, 1, 1000) or not _number(world.camera_rotation, -100000, 100000):
+	if world.difficulty > 4 or not world.camera_locked is bool or not world.exclusive is bool or world.outcome not in ["", "win", "lose"] or not _number(world.camera_zoom, 1, 1000) or not _number(world.camera_rotation, -INF, INF):
 		_fail("Invalid campaign options.")
 		return {}
 	var next := ELAdventureSession.new()
 	if not next.start(map, int(world.difficulty), int(world.seed_value), raw.script_name): return _reject(next, next.error)
 	if not ELLuaSave._integer(world.get("income_day", 0), 0, 0xffffffff): return _reject(next, "Invalid saved income day.")
 	next.income_day = int(world.get("income_day", 0))
+	# Saves from before games kept their own computer players' strength carry
+	# none: the view gives them their difficulty's (ELAIChoice.adopt).
+	if world.has("ai"):
+		if not ELAIChoice.valid(world.ai): return _reject(next, "Invalid campaign options.")
+		ELAIChoice.store(next, world.ai)
 	# Saves from before the Notebook carry no entries.
 	var notes: Variant = ELSecondNotebook.decode(raw.get("notebook", []))
 	if notes == null: return _reject(next, "Invalid saved notebook.")
@@ -270,6 +278,8 @@ func decode(raw: Variant, profiles: Dictionary) -> Dictionary:
 	next.observations = observations
 	next.commands.assign(raw.commands)
 	for key: String in STATE_FIELDS: next.set(key, world[key])
+	# Older builds let the angle grow with every turn of the camera.
+	next.camera_rotation = normal_degrees(float(world.camera_rotation))
 	# Earlier builds saved the sole shipped remote order as a walking plan.
 	if next.vm != null and next.script_name.replace("\\", "/").get_file().to_lower() == "e2mission54" and next.variables.values.get("ScriptSpecialState") == "WhiteLord54":
 		var hero := next.object(next.main_hero)
@@ -367,7 +377,7 @@ func decode(raw: Variant, profiles: Dictionary) -> Dictionary:
 				return _reject(next, "Invalid saved portal.")
 		director.travel = travel.duplicate()
 	director.dialogue = playback.dialogue.duplicate(true)
-	if not director.dialogue.is_empty() and (not director.dialogue.get("question") is bool or not director.dialogue.get("text_id") is String or not ELLuaSave._integer(director.dialogue.get("actor"), -1, 0x7fffffff)): return _reject(next, "Invalid saved conversation.")
+	if not director.dialogue.is_empty() and (not director.dialogue.get("question") is bool or not director.dialogue.get("text_id") is String or not ELLuaSave._integer(director.dialogue.get("actor"), -1, 0x7fffffff) or not director.dialogue.get("direct", false) is bool or not director.dialogue.get("hook", true) is bool): return _reject(next, "Invalid saved conversation.")
 	if not director.dialogue.is_empty(): director.dialogue.actor = int(director.dialogue.actor)
 	# Older saves have no pending script boxes or action waits.
 	for box: Variant in playback.get("boxes", []):
@@ -394,7 +404,10 @@ func decode(raw: Variant, profiles: Dictionary) -> Dictionary:
 	director._clock = float(playback.clock)
 	if not playback.get("commands_pending", false) is bool: return _reject(next, "Invalid saved command queue flag.")
 	director._commands_pending = playback.get("commands_pending", false)
-	if (director._waiting or not director.dialogue.is_empty() or movement.get("queued", false)) and next.commands.is_empty(): return _reject(next, "The active command is missing.")
+	# A direct script box is no command, so it may be open with an empty
+	# queue; a wait, queued message or scripted move names the command it
+	# runs (older saves do not: their queue's head is the one in flight).
+	if not director.restore_running(playback.get("running")): return _reject(next, "The active command is missing.")
 	var combat: Variant = raw.get("encounter", {})
 	if not combat is Dictionary: return _reject(next, "Invalid saved encounter.")
 	if not combat.is_empty():
@@ -493,6 +506,10 @@ func _plain(value: Variant, depth: int) -> bool:
 			if not _plain(child, depth + 1): return false
 		return true
 	return false
+
+## A camera angle in degrees within [0, 360).
+static func normal_degrees(angle: float) -> float:
+	return fposmod(angle, 360.0) if is_finite(angle) else 0.0
 
 func _number(value: Variant, low: float, high: float) -> bool:
 	return typeof(value) in [TYPE_INT, TYPE_FLOAT] and is_finite(float(value)) and value >= low and value <= high

@@ -12,6 +12,9 @@ var run_seed := 1
 var round_number := 1
 var ether := ELAutochessRules.OPENING_ETHER
 var health := ELAutochessRules.START_HEALTH
+## The player conceded: out of the tournament for good, whatever a battle
+## still running or a restored round start says about its health.
+var forfeited := false
 var stage := "prepare"
 var army: Array[Dictionary] = []
 var shop: Array[Dictionary] = []
@@ -37,6 +40,7 @@ func begin(data: ELProfile, seed_value: int, who: String) -> void:
 	round_number = 1
 	ether = ELAutochessRules.OPENING_ETHER
 	health = ELAutochessRules.START_HEALTH
+	forfeited = false
 	stage = "prepare"
 	army.clear(); shop.clear(); items.clear(); item_offers.clear(); history.clear(); _undo.clear()
 	next_item_uid = 1; item_reward_round = 0; training = 0; battle_savings = 0; next_uid = 1
@@ -589,7 +593,7 @@ func snapshot() -> Dictionary:
 		"shop": shop.duplicate(true), "items": items.duplicate(true), "item_offers": item_offers.duplicate(),
 		"next_item_uid": next_item_uid, "item_reward_round": item_reward_round, "training": training,
 		"battle_savings": battle_savings, "history": history.duplicate(true), "last_result": last_result.duplicate(true),
-		"next_uid": next_uid}
+		"next_uid": next_uid, "forfeited": forfeited}
 
 ## Restores a validated snapshot; false leaves the company unchanged.
 func restore(data: ELProfile, saved: Dictionary) -> bool:
@@ -621,6 +625,8 @@ func restore(data: ELProfile, saved: Dictionary) -> bool:
 	run_seed = int(saved.seed); rng.seed = run_seed; rng.state = int(saved.rng)
 	character = String(saved.get("character", ""))
 	round_number = int(saved.round); ether = int(saved.ether); health = int(saved.health)
+	forfeited = saved.get("forfeited", false) == true
+	if forfeited: health = 0
 	stage = "prepare" if saved.stage == "fight" else String(saved.stage)
 	army.assign(saved.army.duplicate(true))
 	for entry: Dictionary in army:

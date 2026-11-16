@@ -164,8 +164,11 @@ func drop_held(item: Dictionary, point: Vector2) -> void:
 	elif item.kind == "reserve" and book_area.has_point(point) and int(item.index) < entries.size():
 		reserve_pick = int(item.index)
 		book_pick = -1
-		var problem := equip_problem()
-		if problem.is_empty(): equip()
+		# Onto an occupied slot it goes over that slot, as a laboratory
+		# purchase does; elsewhere on the book it joins the end.
+		var slot := book_at(point)
+		var problem := equip_problem(slot)
+		if problem.is_empty(): equip(slot)
 		else:
 			_say(problem)
 			refresh()
@@ -194,22 +197,23 @@ func _can_act() -> bool:
 	return strategic_session.can_plan() if strategic_session != null else true
 
 ## Why the selected reserve spell cannot join the book ("" when it can).
-func equip_problem() -> String:
+## With `slot`, the selected spell goes over that occupied book slot.
+func equip_problem(slot := -1) -> String:
 	if reserve_pick < 0 or reserve_pick >= entries.size(): return "Select a reserve spell."
-	if book_cards(0).size() >= ELSpellInventory.book_size(profile): return "Move a spell to reserve to make room."
+	if slot < 0 and book_cards(0).size() >= ELSpellInventory.book_size(profile): return "Move a spell to reserve or drop it onto a book slot."
 	if not ELSpellInventory.allows(profile, hero(), str(entries[reserve_pick].card)): return "This hero cannot use that spell's magic color."
 	return ""
 
-func equip() -> void:
-	if not _can_act() or not equip_problem().is_empty(): return
+func equip(slot := -1) -> void:
+	if not _can_act() or not equip_problem(slot).is_empty(): return
 	var entry := entries[reserve_pick]
 	if strategic_session != null:
-		_manage_online(["equip", hero_id, entry.card, int(entry.index)])
+		_manage_online(["equip", hero_id, entry.card, int(entry.index)] + ([slot] if slot >= 0 else []))
 		return
-	if not state.move_spell(hero_id, str(entry.card), -1, int(entry.index)):
+	if not state.move_spell(hero_id, str(entry.card), -1, int(entry.index), -1, slot):
 		_say(state.error)
 		return
-	book_pick = book_cards(0).size() - 1
+	book_pick = slot if slot >= 0 else book_cards(0).size() - 1
 	reserve_pick = -1
 	refresh()
 

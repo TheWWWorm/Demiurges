@@ -99,8 +99,6 @@ const EDITIONS := {
 		# Every creature it strikes counts, including those that survive.
 		"FRNTTt": [["where X - number of destroyed creatures", "where X is the number of creatures it strikes, including those that survive"],
 			["где X – число уничтоженных созданий", "где X – число созданий, которые оно поразило, включая выживших"]],
-		# Only the caster's own castle is repaired.
-		"GlSpTtBNNT": [["Heal 4 Damage to all friendly castles", "Heal 4 damage to your castle"], ["энергию всех дружественных Замков", "энергию вашего Замка"]],
 	},
 	"el2": {
 		# Unsummoned creatures return to their original owner; Lock Aspect hurts the owner.
@@ -129,27 +127,38 @@ const EDITIONS := {
 		"Ab337": [["Rest, pay 2+X ether: gain copy", "Rest, pay 1+X ether: gain copy"], ["Отдых, 2 + X квантов эфира: герой получает копию", "Отдых, 1 + X квантов эфира: герой получает копию"]],
 		"OUE3Tt": [["Rest, pay 1+X ether: destroy target", "Rest, pay 2+X ether: destroy target"], ["Отдых, 1+X квантов эфира: уничтожает", "Отдых, 2+X квантов эфира: уничтожает"]],
 		"Ab338": [["Rest, pay 1+X ether: destroy target", "Rest, pay 2+X ether: destroy target"], ["Отдых, 1+X квантов эфира: уничтожает", "Отдых, 2+X квантов эфира: уничтожает"]],
+		# Recipe texts name the artifacts the battle tracker really creates
+		# (T_CUSTOM_ARTEFACT_* names).
+		"MT_E2_ARTEFACT_RECIPE_5": [["Амулет Голода", "Кольцо Голода"]],
+		"MT_E2_ARTEFACT_RECIPE_8": [["Ring of Venom", "Rod of Venom"], ["Кольцо Ядов", "Скипетр Отравления"]],
 	},
 }
 
-const _NO_EFFECT_EN := " (This spell has no effect.)"
-const _NO_EFFECT_RU := " (Это заклинание ничего не делает.)"
-## The first game's Ethereal Attack (ETAT) and Counterstrike (ETDF) skills
-## promise castle damage, but the original applies neither (castle damage
-## stays the hero's value, ELFirstScenario.hero_value); their texts say so.
-const NO_EFFECT_SKILLS := ["SkTtETAT1", "SkTtETAT2", "SkTtETAT3", "SkTtETDF1", "SkTtETDF2", "SkTtETDF3"]
-const _NO_SKILL_EFFECT_EN := " (This skill has no effect.)"
-const _NO_SKILL_EFFECT_RU := " (Этот навык ничего не делает.)"
+## Texts replaced whole when they contain the first string. The English
+## Wand of Hunger recipe repeats the Wand of Curses one; the replacement
+## follows the tracker's conditions: at most one creature summoned, which must
+## not die, exactly one Hunger spell, and five or more creatures in the enemy's
+## graveyard at the end (more make a stronger wand).
+const WHOLE := {
+	"el2": {
+		"MT_E2_ARTEFACT_RECIPE_5": [["Wand of Malisons", "During a combat the hero must do the following:\n" +
+			"\n" +
+			"1. Summon no more than one creature. A creature that was summoned must survive until the end of the combat.\n" +
+			"2. Cast one (and only one) of the spells Hunger, Ravaging Hunger, or Curse of Hunger.\n" +
+			"3. By the end of the combat, the enemy's graveyard must hold at least 5 creatures.\n" +
+			"\n" +
+			"Result:\n" +
+			"\n" +
+			"1. The artifact Wand of Hunger is created, containing charges of the Hunger spell that was cast.\n" +
+			"2. The more creatures in the enemy's graveyard at the end of the combat, the more powerful the artifact created."]],
+	},
+}
 
 ## `value`, the text `key` of `edition`, with its corrections applied.
 static func apply(edition: String, key: String, value: String) -> String:
 	var fixes: Array = SHARED.get(key, []) + Dictionary(EDITIONS.get(edition, {})).get(key, [])
-	if edition == "el1" and key.begins_with("GlSpTt"):
-		var code := key.trim_prefix("GlSpTt")
-		if code in ELGlobalSpells.UPKEEP_ONLY or code in ELGlobalSpells.CONSUMED:
-			fixes = fixes + [["", _NO_EFFECT_RU if RegEx.create_from_string("[\\x{0400}-\\x{04FF}]").search(value) != null else _NO_EFFECT_EN]]
-	if edition == "el1" and key in NO_EFFECT_SKILLS:
-		fixes = fixes + [["", _NO_SKILL_EFFECT_RU if RegEx.create_from_string("[\\x{0400}-\\x{04FF}]").search(value) != null else _NO_SKILL_EFFECT_EN]]
+	for whole: Array in Dictionary(WHOLE.get(edition, {})).get(key, []):
+		if value.contains(whole[0]): value = whole[1]
 	for fix: Array in fixes:
 		var old: String = fix[0]
 		var new: String = fix[1]

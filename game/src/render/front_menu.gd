@@ -261,6 +261,15 @@ var mission_texts: Dictionary = {}
 ## the menu reads and writes `settings_path`.
 var settings: ELSettings
 var settings_path := "user://settings.json"
+## The computer players' strength for the game being set up on the screens
+## with a difficulty choice (ELAIChoice): the chapter before's levels, else
+## the difficulty's when the dropdowns first show; a difficulty change puts
+## that difficulty's back. It goes with the chapter row ("ai"); the Options
+## choices are not changed here. Forgotten on leaving those screens.
+var ai_levels: Dictionary = {}
+var _ai_picks: Dictionary = {}
+## Screens a game is set up on, which keep `ai_levels`.
+const AI_SCREENS := ["campaigns", "legend", "mission", "map", "branch", "blazon", "blazon_single", "single", "select_mission"]
 ## Interface music, credits music and the Hall of Fame fanfare.
 var _audio: AudioStreamPlayer
 ## The voiced campaign description and mission briefing (first game: the
@@ -431,6 +440,8 @@ func show_screen(target: String) -> void:
 	_choice.visible = target == "main" and not hosted
 	if briefing != null: briefing.stop_voice()
 	if target != "mission": chapter = {}
+	if not target in AI_SCREENS: ai_levels.clear()
+	_ai_picks.clear()
 	previous_screen = screen
 	screen = target
 	if single_ui != null: single_ui.close_picture()
@@ -1018,8 +1029,10 @@ func _label(key: String, value: String, rect: Rect2, size_px: int, color := TITL
 ## dialog, at the main menu's extra-mode row (`top`, CHOICE_TOP) and in its plates,
 ## leaving the original dialog as it is. Only the keys that matter in this
 ## game are shown (the second game has no map computer players to choose for).
+## They show and change `ai_levels`.
 func add_ai_choices(top := CHOICE_TOP) -> Control:
 	if option_settings() == null: return null
+	if not ELAIChoice.valid(ai_levels): reset_ai()
 	var strip := HBoxContainer.new()
 	strip.name = "AiChoices"
 	strip.add_theme_constant_override("separation", 18)
@@ -1037,7 +1050,8 @@ func add_ai_choices(top := CHOICE_TOP) -> Control:
 		caption.add_theme_constant_override("shadow_offset_y", 1)
 		caption.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 		pair.add_child(caption)
-		var pick := ELAIChoice.picker(settings, key, profile, settings_path)
+		var pick := ELAIChoice.values_picker(ai_levels, key, profile)
+		_ai_picks[key] = pick
 		pick.custom_minimum_size = Vector2(170, 40)
 		pick.add_theme_font_size_override("font_size", 16)
 		ELGameChoice.plain(pick)
@@ -1296,6 +1310,7 @@ func _confirm_campaign() -> void:
 	campaign_data = _campaign(selected_campaign)
 	if campaign_data == null: return
 	difficulty = 1
+	ai_levels.clear()
 	if edition == "el1": _open_legend("mission")
 	else:
 		second = ELSecondCampaign.new_game(difficulty)
@@ -1313,6 +1328,7 @@ func show_campaign_map(progress: Dictionary) -> bool:
 	campaign_data = data
 	selected_campaign = data.id
 	difficulty = int(second.difficulty)
+	use_ai(ELAIChoice.from_scenario({ELSecondCampaign.KEY: second}))
 	show_screen("map")
 	return true
 
@@ -1513,6 +1529,7 @@ func show_chapter_info(scenario: Dictionary, chosen_difficulty: int) -> bool:
 	selected_campaign = campaign_data.id
 	difficulty = clampi(chosen_difficulty, 0, 4)
 	chapter = scenario.duplicate()
+	use_ai(ELAIChoice.from_scenario(scenario))
 	show_screen("mission")
 	return true
 
@@ -1525,6 +1542,7 @@ func _effects_volume() -> float:
 
 func set_difficulty(index: int) -> void:
 	difficulty = index
+	reset_ai()
 	for control: String in buttons:
 		if control.begins_with("CIDiff") or control.begins_with("GMA6Diff"):
 			buttons[control].active = int(control.right(1)) - 1 == index
@@ -1532,7 +1550,31 @@ func set_difficulty(index: int) -> void:
 func start_campaign() -> void:
 	var scenario := _first_scenario()
 	if scenario.is_empty(): return
-	campaign_requested.emit(edition, scenario, difficulty)
+	campaign_requested.emit(edition, with_ai(scenario), difficulty)
+
+## The difficulty's computer players' strength (ELAIChoice.defaults) in
+## `ai_levels`, shown on the dropdowns.
+func reset_ai() -> void:
+	ai_levels.merge(ELAIChoice.defaults(difficulty, option_settings()), true)
+	_show_ai()
+
+## `levels` (a chapter's carried ones) in `ai_levels`, else the difficulty's.
+func use_ai(levels: Dictionary) -> void:
+	if ELAIChoice.valid(levels):
+		ai_levels.merge(ELAIChoice.normalized(levels), true)
+		_show_ai()
+	else: reset_ai()
+
+func _show_ai() -> void:
+	for key: String in _ai_picks:
+		if is_instance_valid(_ai_picks[key]) and ai_levels.has(key): ELAIChoice.display(_ai_picks[key], int(ai_levels[key]))
+
+## A chapter row being begun with the levels shown (`ai_levels`).
+func with_ai(row: Dictionary) -> Dictionary:
+	if not ELAIChoice.valid(ai_levels): reset_ai()
+	var result := row.duplicate()
+	result.ai = ELAIChoice.normalized(ai_levels)
+	return result
 
 # --- Second game: campaign map -------------------------------------------------
 

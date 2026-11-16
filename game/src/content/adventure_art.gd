@@ -11,6 +11,8 @@ func resolve(object: Dictionary) -> Dictionary:
 	if not object.get("visible", ELXml.child(node, "hidden").is_empty()): return {"hidden": true}
 	var corpse: bool = map.profile.id == "el2" and object.get("type") == "corpse"
 	var shape := str(object.get("shape", ""))
+	# A campaign lord wears the shape of its level step (ELHeroLooks).
+	if object.get("group") in ["heroes", "np_heroes"]: shape = ELHeroLooks.worn(map.profile, object)
 	if corpse and shape.is_empty(): shape = ELXml.value(node, "params")
 	if object.get("ship", false) or (corpse and shape.to_lower() == "ship"):
 		return {"model": "tebuad552" if corpse else "he551", "texture": "Heroes/Boat00", "secondary": "", "scale": 1.0, "row": {"TileSize": [1, 1]}, "unit": true}
@@ -39,12 +41,12 @@ func resolve(object: Dictionary) -> Dictionary:
 		adventure = true
 		var hero: bool = ELXml.child(node, "monster").is_empty()
 		if not String(object.get("shape", "")).is_empty():
-			row = map.profile.table("Shapes").get(object.shape, {})
+			row = map.profile.table("Shapes").get(shape, {})
 			hero = object.get("appearance_type", object.get("type", "hero")) == "hero"
 		elif map.profile.id == "el2" and map.mobs.has(object.name):
 			var variants: Dictionary = map.mobs[object.name]
 			var mob: Dictionary = variants.get(0, variants.values()[0])
-			row = map.profile.table("Shapes").get(mob.attrs.get("shape", ""), {})
+			row = map.profile.table("Shapes").get(ELHeroLooks.shape_at(map.profile, str(mob.attrs.get("shape", "")), int(mob.attrs.get("Lvl", 1))), {})
 			hero = mob.attrs.get("IsHero", "0") == "1"
 		elif hero:
 			row = map.profile.table("HeroTemplates").get(object.name, {})

@@ -104,6 +104,8 @@ static func plain(button: Button) -> void:
 	button.add_theme_stylebox_override("hover", _plate(0.8, Color(INK, 0.6)))
 	button.add_theme_stylebox_override("pressed", _plate(0.88, INK))
 	button.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
+	# A dropdown's arrow keeps the plate's own inner margin from the border.
+	if button is OptionButton: button.add_theme_constant_override("arrow_margin", 14)
 
 static func _plate(alpha: float, border: Color) -> StyleBoxFlat:
 	var style := StyleBoxFlat.new()

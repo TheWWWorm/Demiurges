@@ -179,7 +179,7 @@ func image(texture_name: String) -> Image:
 	var picture: Image = null
 	var texture := profile.texture(str(_paths.get(texture_name, ""))) if _paths.has(texture_name) else null
 	if texture != null:
-		picture = texture.get_image()
+		picture = ELIconUpscale.image_of(texture)
 		if picture != null:
 			picture = picture.duplicate()
 			if picture.is_compressed(): picture.decompress()

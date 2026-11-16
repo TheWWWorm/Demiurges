@@ -8,9 +8,15 @@ extends SceneTree
 ##   godot --headless --path game --script ../tools/network_check.gd -- [--el1="C:/Games/Etherlords"] [--el2="C:/Games/Etherlords II"] [--relay=ws://127.0.0.1:8787/relay]
 ##
 ## With --relay every test runs a second time through that online relay
-## (`npx wrangler dev` serves one locally from worker.js).
+## (`npx wrangler dev` serves one locally from worker.js). --relay=local runs
+## them through a stand-in for the relay in this process (LocalRelay below,
+## the same rooms and routing as RelayRoom in worker.js), so the relay path
+## is checked without the internet. Without --relay, the strategic game still
+## plays once through the local stand-in, as it is the one that uses more
+## than one channel.
 
 var failures: Array[String] = []
+var _local_relay: LocalRelay
 ## The room code of the current test when it runs through the relay.
 var _room := ""
 
@@ -42,6 +48,7 @@ func _hosted(host: Object) -> void:
 func _wait(cond: Callable, polls: Array[Callable], seconds := 20.0) -> bool:
 	var deadline := Time.get_ticks_msec() + int(seconds * 1000)
 	while Time.get_ticks_msec() < deadline:
+		if _local_relay != null: _local_relay.poll()
 		for p in polls: p.call()
 		if cond.call(): return true
 		await process_frame
@@ -55,18 +62,24 @@ func _run() -> void:
 	check(el2 != null, "EL2 data mounted (pass --el2=<folder>)")
 	var modes := [""]
 	var relay := _arg("relay", "")
-	if not relay.is_empty():
-		OS.set_environment("DEMIURGES_RELAY", relay)
-		modes.append(relay)
+	var strategic_only := relay.is_empty()
+	if relay.is_empty() or relay == "local":
+		_local_relay = LocalRelay.new()
+		var port := 27380
+		while _local_relay.start(port) != OK and port < 27400: port += 1
+		relay = "ws://127.0.0.1:%d/relay" % port
+	OS.set_environment("DEMIURGES_RELAY", relay)
+	modes.append(relay)
 	for mode: String in modes:
 		print("#### %s" % ("relay " + mode if not mode.is_empty() else "direct (ENet)"))
-		if el2 != null:
+		var all := mode.is_empty() or not strategic_only
+		if el2 != null and all:
 			_room = ELRelayPeer.new_code() if not mode.is_empty() else ""
 			await _autochess(el2)
-		if el1 != null:
+		if el1 != null and all:
 			_room = ELRelayPeer.new_code() if not mode.is_empty() else ""
 			await _duel(el1, 27284)
-		if el2 != null:
+		if el2 != null and all:
 			_room = ELRelayPeer.new_code() if not mode.is_empty() else ""
 			await _duel(el2, 27285)
 		if el1 != null:
@@ -82,6 +95,7 @@ func _run() -> void:
 			await _wait(func(): return not reason[0].is_empty(), [func(): lost.poll(true)], 10.0)
 			check(not reason[0].is_empty(), "relay: joining an empty room fails (%s)" % reason[0])
 			lost.close()
+	if _local_relay != null: _local_relay.stop()
 	print("network check: %d failures" % failures.size())
 	quit(1 if not failures.is_empty() else 0)
 
@@ -278,6 +292,18 @@ func _duel_rejoin(profile: ELProfile, port: int, tag: String, host: ELNetworkDue
 	check(host._rejoin_deadline > 0 and host.live, "%s duel host waits for a dropped guest" % tag)
 	# The host keeps playing its own turn meanwhile.
 	if host.duel.active_side() == 0: host.duel.end_phase()
+	# The clock of the guest's phase (Etherlords II duels have one) stands
+	# still while the guest is away: here
+	# 1.5 s are left when it drops, and it stays away for 5 s.
+	var held := host.duel.phase != ELDuel.Phase.FINISHED and host.duel.active_side() == 1 and ELNetworkDuel.valid_time_limit(profile, 10)
+	if held:
+		host._turn_seconds = 10
+		host.poll(true)
+		host._clock_deadline = Time.get_ticks_msec() + 1500
+		await _wait(func(): return false, [func(): host.poll(true)], 5.0)
+		var left := host._clock_deadline - Time.get_ticks_msec()
+		check(left > 1000, "%s duel a guest's phase clock stands still while it is away (%d ms left)" % [tag, left])
+	elif ELNetworkDuel.valid_time_limit(profile, 10): check(false, "%s duel reaches a guest phase for the away clock check" % tag)
 	# Somebody else is turned away and the host keeps waiting.
 	var own_token := ELNetworkDuel.player_token()
 	ELNetworkDuel._token = "0".repeat(32)
@@ -296,6 +322,14 @@ func _duel_rejoin(profile: ELProfile, port: int, tag: String, host: ELNetworkDue
 	back.join(profile, "127.0.0.1", port)
 	var polls: Array[Callable] = [func(): host.poll(true), func(): back.poll(true)]
 	check(await _wait(func(): return back.live and host._rejoin_deadline == 0, polls, 20.0), "%s duel guest rejoins" % tag)
+	if back.live and held:
+		var phase := Vector2i(host.duel.turn_serial, host.duel.phase)
+		var remaining := back.clock_remaining()
+		await _wait(func(): return false, polls, 0.3)
+		check(remaining >= 1 and remaining <= 2 and Vector2i(host.duel.turn_serial, host.duel.phase) == phase and host.duel.active_side() == 1,
+			"%s duel the returning guest gets the time it had left (%d s) and keeps its phase" % [tag, remaining])
+		host._turn_seconds = 0
+		back._turn_seconds = 0
 	if back.live:
 		check(back._digest() == host._digest() and back._sequence == host._sequence, "%s duel rejoined state identical" % tag)
 		var steps: int = await _phases(host, back, polls, 4)
@@ -337,6 +371,133 @@ func _strategic(profile: ELProfile) -> void:
 		check(guest.submit_plan(guest.current_day, [[0, -1, -1, -1]]), "strategic guest submits plan")
 		await _wait(func(): return not plans.is_empty(), polls, 5.0)
 		check(plans == [players.y], "strategic host receives guest plan")
+		# Battle frames travel on their own channel.
+		var battles := []
+		guest.battle_received.connect(func(id, payload): battles.append([id, payload]))
+		check(host.send_battle(3, ["probe", "seven"]), "strategic host sends a battle frame")
+		await _wait(func(): return not battles.is_empty(), polls, 5.0)
+		check(battles.size() == 1 and int(battles[0][0]) == 3 and battles[0][1] == ["probe", "seven"], "strategic guest receives the battle frame (%s)" % str(battles))
 	for l in log: print("  ", l)
 	check(log.is_empty(), "strategic no disconnects")
 	guest.close(); host.close()
+
+# --- Local relay ------------------------------------------------------------
+## A stand-in for the online relay (RelayRoom in worker.js) on 127.0.0.1:
+## the same rooms, ids and routing, without the rate limits. The host is
+## peer 1; each binary frame's leading u32 is the target when sent and the
+## sender when delivered; guests reach only the host, the host one guest or
+## all of them with 0. Text frames are welcome/join/leave from the relay
+## and refuse/kick from the host.
+class LocalRelay:
+	var _server := TCPServer.new()
+	## Connections: {"ws", "room", "id", "open"}; id 0 until admitted.
+	var _sockets: Array[Dictionary] = []
+	## Rooms by code: {"max", "refuse", "next"}.
+	var _rooms := {}
+
+	func start(port: int) -> Error:
+		return _server.listen(port, "127.0.0.1")
+
+	func stop() -> void:
+		for s: Dictionary in _sockets: s.ws.close()
+		_sockets.clear()
+		_server.stop()
+
+	func poll() -> void:
+		while _server.is_connection_available():
+			var ws := WebSocketPeer.new()
+			ws.inbound_buffer_size = ELRelayPeer.BUFFER
+			ws.outbound_buffer_size = ELRelayPeer.BUFFER
+			ws.max_queued_packets = 8192
+			if ws.accept_stream(_server.take_connection()) == OK: _sockets.append({"ws": ws, "room": "", "id": 0, "open": false})
+		for s: Dictionary in _sockets.duplicate():
+			var ws: WebSocketPeer = s.ws
+			ws.poll()
+			var state := ws.get_ready_state()
+			if state == WebSocketPeer.STATE_OPEN and not s.open:
+				s.open = true
+				_admit(s)
+			while ws.get_ready_state() == WebSocketPeer.STATE_OPEN and int(s.id) > 0 and ws.get_available_packet_count() > 0:
+				var bytes := ws.get_packet()
+				if ws.was_string_packet(): _control(s, bytes.get_string_from_utf8())
+				else: _route(s, bytes)
+			if state == WebSocketPeer.STATE_CLOSED:
+				_sockets.erase(s)
+				_left(s)
+
+	func _query(url: String) -> Dictionary:
+		var values := {}
+		var at := url.find("?")
+		if at < 0: return values
+		for pair: String in url.substr(at + 1).split("&"):
+			values[pair.get_slice("=", 0)] = pair.get_slice("=", 1).uri_decode()
+		return values
+
+	func _in_room(room: String) -> Array[Dictionary]:
+		var found: Array[Dictionary] = []
+		for s: Dictionary in _sockets:
+			if s.room == room and int(s.id) > 0: found.append(s)
+		return found
+
+	func _peer(room: String, id: int) -> Dictionary:
+		for s: Dictionary in _in_room(room):
+			if int(s.id) == id: return s
+		return {}
+
+	func _admit(s: Dictionary) -> void:
+		var ws: WebSocketPeer = s.ws
+		var query := _query(ws.get_requested_url())
+		var room := String(query.get("room", "")).to_upper()
+		var role := String(query.get("role", ""))
+		if ELRelayPeer.clean_code(room) != room or role not in ["host", "guest"] or String(query.get("v", "")) != str(ELRelayPeer.VERSION):
+			ws.close(4400, "Invalid room.")
+			return
+		var host := _peer(room, 1)
+		var id := 1
+		if role == "host":
+			if not host.is_empty():
+				ws.close(4409, "This room is already hosted.")
+				return
+			_rooms[room] = {"max": clampi(int(query.get("max", "1")), 1, 8), "refuse": false, "next": 2}
+		else:
+			if host.is_empty():
+				ws.close(4404, "No game is hosted in this room.")
+				return
+			var settings: Dictionary = _rooms[room]
+			if settings.refuse or _in_room(room).size() - 1 >= int(settings.max):
+				ws.close(4403, "This room is full.")
+				return
+			id = int(settings.next)
+			settings.next = id + 1
+		s.room = room
+		s.id = id
+		ws.send_text(JSON.stringify({"t": "welcome", "id": id}))
+		if id != 1: host.ws.send_text(JSON.stringify({"t": "join", "id": id}))
+
+	func _control(s: Dictionary, text: String) -> void:
+		if int(s.id) != 1: return
+		var control: Variant = JSON.parse_string(text)
+		if not control is Dictionary: return
+		if control.get("t") == "refuse": _rooms[s.room].refuse = bool(control.get("on", false))
+		elif control.get("t") == "kick":
+			var guest := _peer(s.room, int(control.get("id", 0)))
+			if not guest.is_empty() and int(guest.id) > 1: guest.ws.close(4000, "Removed by the host.")
+
+	func _route(s: Dictionary, bytes: PackedByteArray) -> void:
+		if bytes.size() < ELRelayPeer.HEADER: return
+		var target := bytes.decode_u32(0)
+		var from := int(s.id)
+		bytes.encode_u32(0, from)
+		for other: Dictionary in _in_room(s.room):
+			if other == s: continue
+			var to := int(other.id)
+			if (from != 1 and to == 1 and target == 1) or (from == 1 and (target == 0 or target == to)):
+				other.ws.put_packet(bytes)
+
+	func _left(s: Dictionary) -> void:
+		var id := int(s.id)
+		if id == 0: return
+		s.id = 0
+		for other: Dictionary in _in_room(s.room):
+			if id == 1: other.ws.close(4001, "The host left.")
+			elif int(other.id) == 1: other.ws.send_text(JSON.stringify({"t": "leave", "id": id}))

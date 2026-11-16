@@ -135,6 +135,149 @@ static func _rebuild() -> void:
 		live.append(entry)
 	_sprite_shaders = live
 
+## Particle shadows (a remake addition: both original games drew every
+## particle effect without a shadow, so a spring's water or a volcano's smoke
+## stood unshadowed beside its stone building). The renderer has no
+## translucent shadows, so a blended sprite sheet of matter that stops light
+## (smoke, gas, mist, water spray, falling rubble and dust) gets a shadow-only
+## twin of its quads (shadow_twin) that draws into the sun's shadow map only.
+## It keeps a share of the sprite's pixels by a dither against the
+## sprite's opacity times the sheet's strength below, and the shadow filter
+## blurs that pattern into a soft, partial shadow. The twin's quads face the
+## sun, as the visible ones face the camera, so the shadow is the puff's
+## round outline thrown along the light. Glowing (additive) sheets give light
+## and cast none, and nor do the other blended sheets, which are glows drawn
+## with plain blending (mana, shrine and portal lights, lightning balls,
+## magma glow, fire) or weather (rain, snow, leaves, sand storms; the callers
+## also leave out every weather layer). Sheets are matched by name; the
+## strength is the most of the light a fully opaque part of the sprite stops.
+const SHADOW_SHEETS := {"smoke": 0.6, "gas": 0.5, "fog": 0.35, "water": 0.7, "destr": 0.6, "hurricane": 0.5}
+## Effects shorter than this many frames cast none (a flash of a shadow
+## reads as a flicker, and is not worth its shadow draw).
+const SHADOW_MIN_FRAMES := 20
+## The sprite size factor on an orthographic camera (see
+## SPRITE_SIZE_FUNCTION). The shadow pass draws through the sun's own camera,
+## so a twin is told the factor of the camera its sprite is seen through
+## (camera_extent).
+const ORTHO_EXTENT := 0.5549581
+const SHADOW_GROUP := &"particle_shadows"
+## Whether twins cast: the "shadows" preference (set_shadows).
+static var shadows := false
+static var _shadow_shader: Shader
+
+## The share of the light a sheet's opaque parts stop in its shadow; 0 for
+## a sheet that casts none (see SHADOW_SHEETS).
+static func shadow_strength(file: ELParticleFile) -> float:
+	if file == null or file.additive or file.frames < SHADOW_MIN_FRAMES: return 0.0
+	var sheet := file.texture.to_lower()
+	for word: String in SHADOW_SHEETS:
+		if sheet.contains(word): return SHADOW_SHEETS[word]
+	return 0.0
+
+## Switches particle shadows for every twin, running ones too. They follow
+## the "shadows" preference in every renderer: the Compatibility renderer
+## (phones, and the default desktop renderer) blurs the dither as smoothly
+## as Forward+, and a twin costs one more draw of its quads per shadow split.
+static func set_shadows(on: bool) -> void:
+	if shadows == on: return
+	shadows = on
+	var tree := Engine.get_main_loop() as SceneTree
+	if tree == null: return
+	for node: Node in tree.get_nodes_in_group(SHADOW_GROUP): (node as GeometryInstance3D).visible = on
+
+## A shadow-only copy of `node`'s quads (the same MultiMesh, so it follows
+## every redraw), added as its child so it moves and hides with it. It casts
+## nothing until shade_twin gives it a sheet. `cells_scaled`: the instance
+## layout's atlas cell is scaled by its basis x (the battle effects' layout)
+## rather than stored plain (the map's).
+static func shadow_twin(node: MultiMeshInstance3D, cells_scaled: bool) -> MultiMeshInstance3D:
+	var twin := MultiMeshInstance3D.new()
+	twin.name = "Shadow"
+	twin.multimesh = node.multimesh
+	twin.custom_aabb = node.custom_aabb
+	twin.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_SHADOWS_ONLY
+	var material := ShaderMaterial.new()
+	material.shader = shadow_shader()
+	material.set_shader_parameter("cells_scaled", cells_scaled)
+	twin.material_override = material
+	twin.visible = false
+	node.add_child(twin)
+	return twin
+
+## Points a twin at a sprite sheet: its atlas and grid, the strength
+## (shadow_strength; 0 casts nothing) and the camera's sprite size factor
+## (camera_extent).
+static func shade_twin(twin: MultiMeshInstance3D, atlas: Texture2D, grid: Vector2, strength: float, extent: float) -> void:
+	var casts := strength > 0.0 and atlas != null
+	if casts:
+		var material := twin.material_override as ShaderMaterial
+		material.set_shader_parameter("atlas", atlas)
+		material.set_shader_parameter("grid", grid)
+		material.set_shader_parameter("strength", strength)
+		material.set_shader_parameter("extent", extent)
+		if not twin.is_in_group(SHADOW_GROUP): twin.add_to_group(SHADOW_GROUP)
+	elif twin.is_in_group(SHADOW_GROUP):
+		twin.remove_from_group(SHADOW_GROUP)
+	twin.visible = casts and shadows
+
+## Whether a twin is set to cast (shade_twin), whatever the preference.
+static func twin_casts(twin: MultiMeshInstance3D) -> bool:
+	return twin != null and twin.is_in_group(SHADOW_GROUP)
+
+## The sprite size factor of the camera `camera` (SPRITE_SIZE_FUNCTION).
+static func camera_extent(camera: Camera3D) -> float:
+	if camera == null or camera.projection == Camera3D.PROJECTION_ORTHOGONAL: return ORTHO_EXTENT
+	var t := 4.0 / (3.0 * camera.get_camera_projection().y.y)
+	return 0.5 * sqrt(1.0 + t * t)
+
+static func shadow_shader() -> Shader:
+	if _shadow_shader == null:
+		_shadow_shader = Shader.new()
+		_shadow_shader.code = SHADOW_SHADER
+	return _shadow_shader
+
+## Drawn in the shadow pass only. The quads face the pass's camera (the
+## sun's). Each shadow map pixel is kept where the sprite's opacity beats a
+## hashed threshold of that pixel: a regular dither (a Bayer matrix, or
+## interleaved gradient noise) left stripes and hatching on the ground
+## through the sun's few filter taps, where plain noise blurs into an even
+## grain. The threshold is shifted per puff, so overlapping puffs stop light
+## together as the drawn smoke thickens.
+const SHADOW_SHADER := """
+shader_type spatial;
+render_mode unshaded, cull_disabled, shadows_disabled, depth_draw_opaque;
+uniform sampler2D atlas : filter_linear_mipmap;
+uniform vec2 grid = vec2(1.0);
+uniform float strength = 0.5;
+uniform float opacity = 1.0;
+uniform float extent = 0.5549581;
+uniform bool cells_scaled = false;
+varying float fade;
+varying flat float seed;
+void vertex() {
+	float stretch = max(length(MODEL_MATRIX[0].xyz), 0.0001);
+	float cell = floor(length(MODEL_MATRIX[1].xyz) / (cells_scaled ? stretch : 1.0) - 0.5);
+	float size = length(MODEL_MATRIX[2].xyz) * extent;
+	MODELVIEW_MATRIX = VIEW_MATRIX * mat4(INV_VIEW_MATRIX[0], INV_VIEW_MATRIX[1], INV_VIEW_MATRIX[2], MODEL_MATRIX[3]);
+	MODELVIEW_MATRIX = MODELVIEW_MATRIX * mat4(vec4(size, 0.0, 0.0, 0.0), vec4(0.0, size, 0.0, 0.0), vec4(0.0, 0.0, size, 0.0), vec4(0.0, 0.0, 0.0, 1.0));
+	vec2 slot = vec2(mod(cell, grid.x), floor(cell / grid.x));
+	UV = (UV + slot) / grid;
+	UV.y = 1.0 - UV.y;
+	fade = INSTANCE_CUSTOM.a * opacity * strength;
+	seed = fract(float(INSTANCE_ID) * 0.618034);
+}
+void fragment() {
+	float cover = texture(atlas, UV).a * fade;
+	// A hashed threshold per shadow map pixel, shifted per puff.
+	uvec2 q = uvec2(FRAGCOORD.xy);
+	uint h = q.x * 1664525u + q.y * 1013904223u;
+	h ^= h >> 16u; h *= 2246822519u; h ^= h >> 13u; h *= 3266489917u; h ^= h >> 16u;
+	float noise = fract(float(h & 65535u) / 65536.0 + seed);
+	if (cover <= noise) discard;
+	ALBEDO = vec3(0.0);
+}
+"""
+
 var frames := 0
 ## Set while the file ends one frame past its loop, which makes that frame
 ## the loop's closing frame rather than a tail (see visible_frames).

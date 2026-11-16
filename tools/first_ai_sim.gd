@@ -102,7 +102,7 @@ func _run() -> void:
 
 func _stat(player: int) -> Dictionary:
 	if not stats.has(player): stats[player] = {"spells": 0, "runes": 0, "skills": 0, "recruits": 0, "globals": 0, "visits": 0, "idle": 0, "hero_days": 0, "kills": 0,
-		"no_progress": 0, "stalled": 0, "ap_left": 0, "ap_total": 0, "lost": 0, "unexplored_steps": 0, "guard_steps": 0, "threats": 0, "answered": 0, "response_days": 0, "castles": 0}
+		"no_progress": 0, "stalled": 0, "ap_left": 0, "ap_total": 0, "lost": 0, "unexplored_steps": 0, "guard_steps": 0, "threats": 0, "answered": 0, "response_days": 0, "castles": 0, "duplicates": 0}
 	return stats[player]
 
 func _play(profile: ELProfile, entry: Dictionary, days: int, need_shop: bool) -> String:
@@ -227,6 +227,7 @@ func _play(profile: ELProfile, entry: Dictionary, days: int, need_shop: bool) ->
 				if not task.is_empty() and not moved and not (not target.is_empty() and ELStrategy.adjacent(director, hero, target)): s.stalled += 1
 				lines.append("%s L%d (%d,%d) %s%s runes %d%%" % [hero.name, hero.level, hero.x, hero.y, task.get("kind", "idle"), (":" + str(target.get("name", ""))) if not target.is_empty() else "", int(ELFirstAIEconomy.rune_health(state, hero) * 100)])
 			_stat(player).lost += _lost(player)
+			_stat(player).duplicates += _duplicates(player)
 			_threats(player)
 			if not quiet: print("day %d  P%d %s | %s | making %s" % [state.day, player, _resources(player), "; ".join(lines), str(record.get("production", {}).get("code", "-"))])
 		if not state.outcome.is_empty():
@@ -249,9 +250,9 @@ func _play(profile: ELProfile, entry: Dictionary, days: int, need_shop: bool) ->
 		for item: Dictionary in state.objects.values():
 			if item.get("group") in ["mines", "mana_nodes"] and int(item.get("owner", -1)) == player: sites += 1
 		print("SUMMARY P%d: heroes %s, spells bought %d, runes bought %d, skills %d, recruits %d, global spells %d, idle hero-days %d/%d, shops known %d, %s" % [player, str(levels), s.spells, s.runes, s.skills, s.recruits, s.globals, s.idle, s.hero_days, known, _resources(player)])
-		print("METRICS P%d: no-progress %d/%d, stalled %d, unused movement %d%%, lost objective-days %d, unexplored steps %d, guard steps %d, threats %d answered %d (avg %.1f days), sites held %d, ether income %d -> %d" % [player, s.no_progress, s.hero_days, s.stalled, int(100.0 * s.ap_left / maxi(1, s.ap_total)), s.lost, s.unexplored_steps, s.guard_steps, s.threats, s.answered, float(s.response_days) / maxi(1, s.answered), sites, int(income.get(player, 0)), int(ELStrategy.mana_budget(state, player).income)])
+		print("METRICS P%d: no-progress %d/%d, stalled %d, unused movement %d%%, lost objective-days %d, unexplored steps %d, guard steps %d, threats %d answered %d (avg %.1f days), sites held %d, duplicate assignments %d, ether income %d -> %d" % [player, s.no_progress, s.hero_days, s.stalled, int(100.0 * s.ap_left / maxi(1, s.ap_total)), s.lost, s.unexplored_steps, s.guard_steps, s.threats, s.answered, float(s.response_days) / maxi(1, s.answered), sites, s.duplicates, int(income.get(player, 0)), int(ELStrategy.mana_budget(state, player).income)])
 	var passes := maxi(1, int(timing.get("passes", 0)))
-	print("RESULT: outcome %s day %d, castles fallen %s, planning passes %d, %.1f ms per pass (objectives %.1f, matching %.1f of which lookahead %.1f, orders %.1f), slowest pass %.1f ms" % [state.outcome if not state.outcome.is_empty() else "-", outcome_day if outcome_day >= 0 else int(state.day), str(fallen), int(timing.get("passes", 0)), float(timing.get("usec", 0)) / 1000.0 / passes, float(timing.get("objectives", 0)) / 1000.0 / passes, float(timing.get("assign", 0)) / 1000.0 / passes, float(timing.get("lookahead", 0)) / 1000.0 / passes, float(timing.get("command", 0)) / 1000.0 / passes, float(timing.get("slowest", 0)) / 1000.0])
+	print("RESULT: outcome %s day %d, castles fallen %s, duplicate assignments after passes %d, planning passes %d, %.1f ms per pass (objectives %.1f, matching %.1f of which lookahead %.1f, orders %.1f), slowest pass %.1f ms" % [state.outcome if not state.outcome.is_empty() else "-", outcome_day if outcome_day >= 0 else int(state.day), str(fallen), int(timing.get("duplicates", 0)), int(timing.get("passes", 0)), float(timing.get("usec", 0)) / 1000.0 / passes, float(timing.get("objectives", 0)) / 1000.0 / passes, float(timing.get("assign", 0)) / 1000.0 / passes, float(timing.get("lookahead", 0)) / 1000.0 / passes, float(timing.get("command", 0)) / 1000.0 / passes, float(timing.get("slowest", 0)) / 1000.0])
 	if not director.error.is_empty():
 		print("ERROR: " + director.error)
 		failed = true
@@ -328,6 +329,19 @@ func _lost(player: int) -> int:
 			for hero: Dictionary in heroes:
 				if ELAdditionalBuildings.visit_problem(state, hero, item).is_empty(): valid = true
 		if valid: count += 1
+	return count
+
+## Shared objectives (everything but a learning building or a siege) held
+## by more than one living hero of the player at the end of the day.
+func _duplicates(player: int) -> int:
+	var holders := {}
+	for pair: Array in ELFirstAI.data(state, player).assigned:
+		if not state.object(pair[0]).get("alive", false): continue
+		var key := ELFirstAI._key(pair[1], -1)
+		if bool(pair[1].get("personal", false)) or pair[1].get("kind") in ["patrol", "escort"]: continue
+		holders[key] = int(holders.get(key, 0)) + 1
+	var count := 0
+	for key: String in holders: if int(holders[key]) > 1: count += 1
 	return count
 
 ## Castle threats and how long until a hero of the player comes near.

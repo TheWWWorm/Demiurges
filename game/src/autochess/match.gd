@@ -63,10 +63,16 @@ func begin(data: ELProfile, seed_value: int, character: String, seats: Array[Str
 	_prepare_round()
 	_touch()
 
+## Companies whose creatures are out of the shared pool. A company that
+## falls during a battle keeps its creatures until the round is settled, so
+## a save made during the battle (which restarts the round from the health
+## before it) never holds more copies than the pool has.
 func _pool_holders() -> Array[ELAutochessCompany]:
 	var holders: Array[ELAutochessCompany] = []
-	for company in companies:
-		if company.health > 0: holders.append(company)
+	for player in companies.size():
+		var company := companies[player]
+		var fighting := stage == "fight" and player < round_health.size() and int(round_health[player]) > 0
+		if company.health > 0 or fighting: holders.append(company)
 	return holders
 
 func health(player: int) -> int:
@@ -238,7 +244,7 @@ func _record_board(index: int) -> void:
 
 func _apply_loss(player: int, loss: int) -> void:
 	var company := companies[player]
-	company.health = maxi(0, int(round_health[player]) - loss)
+	company.health = 0 if company.forfeited else maxi(0, int(round_health[player]) - loss)
 
 func _settle_round() -> void:
 	var entered: Array[int] = []
@@ -246,9 +252,12 @@ func _settle_round() -> void:
 		if int(round_health[player]) > 0: entered.append(player)
 	var remaining := {}
 	for player in entered: remaining[player] = int(round_health[player]) - int(round_results.get(player, {}).get("health_lost", 0))
+	# A player who conceded during the battle places below everyone it fell with.
+	for player in entered:
+		if companies[player].forfeited: remaining[player] = -ELAutochessRules.START_HEALTH * 1000
 	var eliminated := entered.filter(func(p: int) -> bool: return companies[p].health <= 0)
 	eliminated.sort_custom(func(x: int, y: int) -> bool: return remaining[x] < remaining[y] if remaining[x] != remaining[y] else x > y)
-	if eliminated.size() == entered.size() and not eliminated.is_empty():
+	if eliminated.size() == entered.size() and not eliminated.is_empty() and not companies[eliminated.back()].forfeited:
 		# A final simultaneous defeat: highest remaining health, then lowest seat.
 		var champion: int = eliminated.pop_back()
 		companies[champion].health = 1
@@ -282,6 +291,36 @@ func _settle_round() -> void:
 		stage = "result"
 		result_left = RESULT_SECONDS
 	round_settled.emit()
+	_touch()
+
+## A player concedes: out for good, its hero no longer played by anyone.
+## During a battle the round's settlement places it below everyone who fell
+## that round; otherwise it takes the lowest place still open at once, and a
+## preparation already announced is paired again without it.
+func forfeit(player: int) -> void:
+	if player < 0 or player >= companies.size() or stage == "over": return
+	var company := companies[player]
+	if company.forfeited or company.health <= 0: return
+	var place := alive_players().size()
+	company.forfeited = true
+	company.health = 0
+	controllers[player] = "computer"
+	bot_plans[player].done = true
+	if stage == "fight":
+		_touch()
+		return
+	placements[player] = place
+	company.stage = "lost"
+	player_eliminated.emit(player, place)
+	var survivors := alive_players()
+	if survivors.size() <= 1:
+		if survivors.size() == 1:
+			placements[survivors[0]] = 1
+			companies[survivors[0]].stage = "won"
+		stage = "over"
+		round_settled.emit()
+	elif stage == "prepare":
+		_choose_pairings()
 	_touch()
 
 func next_round() -> void:
@@ -344,7 +383,16 @@ func restore(data: ELProfile, saved: Dictionary) -> bool:
 	# An interrupted fight restarts from preparation with the health before it.
 	var before: Variant = saved.get("health", [])
 	if before is Array and before.size() == ELAutochessRules.PLAYER_COUNT:
-		for player in companies.size(): companies[player].health = int(before[player])
+		for player in companies.size():
+			if not companies[player].forfeited: companies[player].health = int(before[player])
+	# A player who conceded during that battle was to be placed when it
+	# ended: it takes the lowest open place now and leaves the pairings.
+	var unplaced := range(companies.size()).filter(func(p: int) -> bool: return companies[p].forfeited and placements[p] == 0)
+	var open_place := alive_players().size()
+	for player: int in unplaced:
+		open_place += 1
+		placements[player] = open_place
+		companies[player].stage = "lost"
 	pairings.clear()
 	for pair: Variant in saved.pairings:
 		if pair is Dictionary: pairings.append({"a": int(pair.a), "b": int(pair.b), "ghost": bool(pair.ghost)})
@@ -354,7 +402,7 @@ func restore(data: ELProfile, saved: Dictionary) -> bool:
 	round_results.clear()
 	round_health.clear()
 	if stage == "result": result_left = 0.5
-	if pairings.is_empty() and stage == "prepare": _choose_pairings()
+	if (pairings.is_empty() or not unplaced.is_empty()) and stage == "prepare": _choose_pairings()
 	return true
 
 func load_saved(data: ELProfile) -> bool:

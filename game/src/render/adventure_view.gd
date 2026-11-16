@@ -231,6 +231,9 @@ func build(profile: ELProfile, scenario: Dictionary, preferences: ELSettings, di
 		state = restored.state
 		director = restored.director
 		map = state.map
+	# The game's computer players' strength: kept by a save, brought by the
+	# chapter row, or the difficulty's (ELAIChoice).
+	ELAIChoice.adopt(state, scenario, settings)
 	if scenario.has("header"): map.title = profile.text(str(scenario.header))
 	elif profile.id == "el2":
 		var metadata := ELCampaign.find_scenario(profile, map.id, state.script_name)
@@ -302,7 +305,8 @@ func build(profile: ELProfile, scenario: Dictionary, preferences: ELSettings, di
 		# A view saved for the other projection (an earlier orthographic map)
 		# keeps the standing view instead.
 		if bool(saved.get("perspective", false)) == (camera.projection == Camera3D.PROJECTION_PERSPECTIVE):
-			yaw = float(saved.get("yaw", yaw))
+			var turned := float(saved.get("yaw", yaw))
+			if is_finite(turned): yaw = fposmod(turned, TAU)
 			pitch = clampf(float(saved.get("pitch", pitch)), pitch_limits.x, pitch_limits.y)
 			zoom = clampf(float(saved.get("zoom", zoom)), zoom_limits.x, zoom_limits.y)
 		following = int(saved.get("following", following))
@@ -401,12 +405,14 @@ func _process(delta: float) -> void:
 	# Remake option: first-game heroes move at once, several times a day (a
 	# network game keeps simultaneous orders).
 	director.free_movement = bool(settings.values.get("free_movement", true)) if settings != null and strategic_session == null else false
-	# Setting "world_ai": 0 Original, 1 Smarter, 2 Living world (ELAIChoice).
-	var world_ai := int(settings.values.get("world_ai", 1)) if settings != null else 0
-	director.smart_ai = world_ai >= 1
+	# The game's "world_ai": 0 Original, 1 Smarter, 2 Living world (ELAIChoice;
+	# a network game uses the Options choice).
+	if settings != null: ELAIChoice.apply_world(director, settings, strategic_session != null)
+	else:
+		director.smart_ai = false
+		director.living_world = false
 	# Remake switch (settings only, off by default): estimated off-screen battles.
 	director.battle_estimate = bool(settings.values.get("battle_estimate", false)) if settings != null else false
-	director.living_world = world_ai >= 2
 	if hud != null: hud.free_steps = ELStrategy.free_mode(director)
 	if strategic_session == null or strategic_session.link.is_host: director.advance(delta)
 	# Free movement: End Day pressed while a hero was still walking ends the
@@ -1544,6 +1550,8 @@ func _hide_touch_tip() -> void:
 
 func _update_camera() -> void:
 	if camera == null: return
+	# Kept within one turn: endless turning must not grow the saved angle.
+	yaw = fposmod(yaw, TAU)
 	camera.size = zoom
 	# Orthographic: far back, `zoom` units tall; perspective: `zoom` away.
 	var reach := zoom if camera.projection == Camera3D.PROJECTION_PERSPECTIVE else 80.0
@@ -1945,6 +1953,8 @@ func _close_result() -> void:
 	var result := ELFirstScenario.chapter_result(state) if state.map.profile.id == "el1" else {}
 	if not result.is_empty() and not (bool(result.get("won", false)) and bool(result.get("final", false))):
 		var next: Array = result.get("next", [])
+		# The game's computer players' strength goes on with it (ELAIChoice).
+		next = ELAIChoice.carry_rows(state, next)
 		if next.size() == 2:
 			chapter_requested.emit({"campaign": str(next[0].get("campaign", "")), "branch_choices": next})
 			return
@@ -2181,6 +2191,8 @@ func _close_extras() -> void:
 ## progress still starts that chapter.
 func _second_chapter_end() -> void:
 	var progress := ELSecondCampaign.progress(state).duplicate(true)
+	# The game's computer players' strength goes on with it (ELAIChoice).
+	ELAIChoice.carry_progress(state, progress)
 	var profile := state.map.profile
 	result_kind = "lost"
 	if state.outcome == "win":

@@ -29,9 +29,21 @@ const STICK := 15.0
 ## promising objectives are known (at most SEARCHES searches).
 const SHORTLIST := 4
 const SEARCHES := 14
-## Matching costs: an objective a hero cannot take, and staying idle.
+## Matching costs: an objective a hero cannot take, and staying idle. Waiting
+## is worth -IDLE: an errand that costs only walking beats it up to ten days
+## away, while one whose expected losses outweigh its worth by more is left.
+## A battle the hero is expected to lose (its chance times the prize below
+## its chance of losing times the hero's worth) is not taken at all, unless
+## it is the last chance to save the castle (see utility).
 const BARRED := 1.0e7
-const IDLE := 500.0
+const IDLE := 100.0
+## Runes a portal visit is worth at most (3 points each) in utility().
+const RUNE_COUNT := 10
+## Rounds of widening the shortlists of heroes the matching left idle, and
+## how many more exact searches each round may make for each of them.
+const WIDEN_ROUNDS := 3
+## Nights a siege is followed for its worth (siege_nights).
+const SIEGE_NIGHTS := 20
 ## An enemy hero this many days from a castle threatens it.
 const THREAT_DAYS := 2.0
 ## Where an enemy hero was seen is worth a look for this many days.
@@ -104,8 +116,11 @@ static var lookahead := true
 
 ## Each hero's ELFirstAIEconomy.urgent for the current matching.
 static var _urgent := {}
-## Route cost of the last utility() (movement points).
+## Route cost of the last utility() (movement points) and the cell its route
+## ends on (-1, -1 when only estimated); the route of the last _walk().
 static var _walked := -1.0
+static var _walked_end := Vector2i(-1, -1)
+static var _path: Array[Vector2i] = []
 ## Lookahead route searches made in this pass and their results.
 static var _legs := 0
 static var _leg_cache := {}
@@ -122,18 +137,35 @@ static func assign(director: ELAdventureDirector, player: int, heroes: Array[Dic
 	_legs = 0
 	_leg_cache = {}
 	_living_cache = {}
-	_assign(director, player, heroes, roles, pool, assigned, reserved, free)
+	var seen := threats(director, player)
+	_assign(director, player, heroes, roles, pool, assigned, reserved, free, seen)
+	# The castle's safety with the heroes now sent to meet its threats: the
+	# next pass reconsiders every errand when it has become worse.
+	var ai := ELFirstAI.data(director.state, player)
+	var after := defence(director, player, seen, interceptors(director.state, player, seen, assigned))
+	if after.is_empty(): ai.erase("alarm")
+	else: ai.alarm = _deadline(after)
 	_living_cache = null
 
-static func _assign(director: ELAdventureDirector, player: int, heroes: Array[Dictionary], roles: Dictionary, pool: Array, assigned: Dictionary, reserved: Dictionary, free: Array[Dictionary]) -> void:
+static func _assign(director: ELAdventureDirector, player: int, heroes: Array[Dictionary], roles: Dictionary, pool: Array, assigned: Dictionary, reserved: Dictionary, free: Array[Dictionary], seen: Dictionary) -> void:
 	var state := director.state
 	var ai := ELFirstAI.data(state, player)
-	# Only the threats to a castle that would not hold on its own count.
-	var danger := defence(director, player, threats(director, player))
+	# The threats to a castle that would fall if no hero met them; meeting
+	# one in time is worth more (utility).
+	var danger := defence(director, player, seen)
+	# Every hero reconsiders its errand when a new enemy threatens the castle,
+	# or when the castle would fall despite the heroes the last pass sent to
+	# meet its threats, and sooner than that pass found (an enemy closer, the
+	# castle weaker, a defender fallen). The bonus for a held errand (STICK)
+	# keeps small changes from moving heroes about.
 	var previous: Array = ai.get("threats", [])
 	var fresh := false
 	for id: int in danger:
 		if not previous.has(id): fresh = true
+	var last := {}
+	for pair: Array in ai.get("assigned", []): last[int(pair[0])] = pair[1]
+	var covered := defence(director, player, seen, interceptors(state, player, seen, last))
+	if not covered.is_empty() and (not ai.has("alarm") or _deadline(covered) < int(ai.alarm)): fresh = true
 	if danger.is_empty(): ai.erase("threats")
 	else: ai.threats = danger.keys()
 	var rows: Array[Dictionary] = free.duplicate()
@@ -155,6 +187,8 @@ static func _assign(director: ELAdventureDirector, player: int, heroes: Array[Di
 	# Columns: objective key -> task; utilities[row][key] = points.
 	var columns := {}
 	var utilities: Array[Dictionary] = []
+	# Each row's options not priced yet, best bound first.
+	var rest: Array = []
 	var looked := 0
 	for hero: Dictionary in rows:
 		var role := int(roles.get(int(hero.uid), 1))
@@ -169,25 +203,21 @@ static func _assign(director: ELAdventureDirector, player: int, heroes: Array[Di
 		# Exact values, best first; the search stops once no bound can beat
 		# the SHORTLIST-th of them, or after SEARCHES route searches.
 		var kept: Array[float] = []
-		var searched := 0
 		var walks := {}
-		for option: Array in options:
+		var ends := {}
+		var next := 0
+		while next < options.size() and next < SEARCHES:
+			var option: Array = options[next]
 			if kept.size() >= SHORTLIST and option[0] < kept[SHORTLIST - 1]: break
-			if searched >= SEARCHES: break
-			searched += 1
-			var task: Dictionary = option[1]
-			var points := utility(director, hero, role, task, danger, true)
-			if points == -INF: continue
-			var key := ELFirstAI._key(task, int(hero.uid))
-			row[key] = points
-			walks[key] = _walked
-			columns[key] = task
-			kept.append(points)
+			next += 1
+			if not _price(director, hero, role, option[1], danger, row, columns, walks, ends): continue
+			kept.append(float(row[ELFirstAI._key(option[1], int(hero.uid))]))
 			kept.sort()
 			kept.reverse()
+		rest.append(options.slice(next))
 		if lookahead and not row.is_empty():
 			var started := Time.get_ticks_usec()
-			_look(director, hero, role, pool, others, retry, danger, row, columns, walks)
+			_look(director, hero, role, pool, others, retry, danger, row, columns, walks, ends)
 			looked += Time.get_ticks_usec() - started
 		var held: Dictionary = current.get(int(hero.uid), {})
 		if not held.is_empty():
@@ -201,17 +231,38 @@ static func _assign(director: ELAdventureDirector, player: int, heroes: Array[Di
 		var stats: Dictionary = director.get_meta("first_ai_stats")
 		stats.lookahead = int(stats.get("lookahead", 0)) + looked
 	var keys: Array = columns.keys()
-	var matrix: Array = []
-	for index in rows.size():
-		var line := PackedFloat64Array()
-		for key: String in keys: line.append(-float(utilities[index][key]) if utilities[index].has(key) else BARRED)
-		for other in rows.size(): line.append(IDLE if other == index else BARRED)
-		matrix.append(line)
+	var matrix := _matrix(rows.size(), keys, utilities)
 	var choice := hungarian(matrix)
+	# A hero the matching left idle while others took its shortlist looks
+	# further down its own list (objectives no other hero took), and the
+	# matching is made again.
+	for round in WIDEN_ROUNDS:
+		var taken := {}
+		for index in rows.size():
+			if _matched(choice, index, keys, utilities): taken[keys[choice[index]]] = true
+		var widened := false
+		for index in rows.size():
+			if _matched(choice, index, keys, utilities): continue
+			var hero := rows[index]
+			var role := int(roles.get(int(hero.uid), 1))
+			var left: Array = rest[index]
+			var found := 0
+			var searched := 0
+			while not left.is_empty() and found < SHORTLIST and searched < SEARCHES:
+				var task: Dictionary = left.pop_front()[1]
+				if taken.has(ELFirstAI._key(task, int(hero.uid))): continue
+				searched += 1
+				if _price(director, hero, role, task, danger, utilities[index], columns, {}, {}): found += 1
+			if found > 0: widened = true
+		if not widened: break
+		keys = columns.keys()
+		matrix = _matrix(rows.size(), keys, utilities)
+		choice = hungarian(matrix)
 	# Two scouts are not sent to the same stretch of frontier: of two
 	# exploration targets within FRONTIER_GAP, the one worth less to its hero
-	# is barred for it and the matching is made again.
-	for attempt in rows.size():
+	# is barred for it and the matching is made again, until no two clash
+	# (each round bars one more pair, so this ends).
+	for attempt in rows.size() * keys.size() + 1:
 		var clash := _frontier_clash(rows, choice, keys, columns, utilities)
 		if clash.is_empty(): break
 		var line: PackedFloat64Array = matrix[clash[0]]
@@ -219,24 +270,62 @@ static func _assign(director: ELAdventureDirector, player: int, heroes: Array[Di
 		matrix[clash[0]] = line
 		utilities[clash[0]].erase(keys[clash[1]])
 		choice = hungarian(matrix)
+	# The result is applied at once: each row's new objective first (a hero
+	# left idle keeps its errand only when it was not priced at all, so that
+	# nothing else fitted, and no other hero took it), then the reservations,
+	# so every shared objective has one holder.
+	var given := {}
 	for index in rows.size():
-		var hero := rows[index]
-		var uid := int(hero.uid)
+		if _matched(choice, index, keys, utilities): given[keys[choice[index]]] = true
+	var chosen := {}
+	for index in rows.size():
+		var uid := int(rows[index].uid)
 		var held: Dictionary = current.get(uid, {})
-		var column: int = choice[index]
-		if column < 0 or column >= keys.size() or not utilities[index].has(keys[column]):
-			if held.is_empty(): continue
-			# A hero reconsidering keeps its errand when nothing else fits.
-			continue
-		var task: Dictionary = columns[keys[column]]
-		if not held.is_empty():
-			if ELFirstAI._key(held, uid) == keys[column]: continue
-			reserved.erase(ELFirstAI._key(held, uid))
-		task = task.duplicate()
-		task.erase("tries")
-		task.erase("mark")
+		if _matched(choice, index, keys, utilities): chosen[uid] = columns[keys[choice[index]]]
+		elif not held.is_empty() and not utilities[index].has(ELFirstAI._key(held, uid)) and not given.has(ELFirstAI._key(held, uid)): chosen[uid] = held
+		else: chosen[uid] = {}
+	for uid: int in current:
+		reserved.erase(ELFirstAI._key(current[uid], uid))
+		assigned.erase(uid)
+	for uid: int in chosen:
+		var task: Dictionary = chosen[uid]
+		if task.is_empty(): continue
+		var key := ELFirstAI._key(task, uid)
+		var held: Dictionary = current.get(uid, {})
+		if held.is_empty() or ELFirstAI._key(held, uid) != key:
+			task = task.duplicate()
+			task.erase("tries")
+			task.erase("mark")
+		else: task = held
 		assigned[uid] = task
-		reserved[keys[column]] = uid
+		reserved[key] = uid
+
+## Prices `task` exactly into the row of `hero`; false when it does not suit the hero.
+static func _price(director: ELAdventureDirector, hero: Dictionary, role: int, task: Dictionary, danger: Dictionary, row: Dictionary, columns: Dictionary, walks: Dictionary, ends: Dictionary) -> bool:
+	var points := utility(director, hero, role, task, danger, true)
+	if points == -INF: return false
+	var key := ELFirstAI._key(task, int(hero.uid))
+	row[key] = points
+	walks[key] = _walked
+	ends[key] = _walked_end
+	columns[key] = task
+	return true
+
+## The matching's cost matrix: each row's objectives (negated points), then one
+## idle column per row.
+static func _matrix(count: int, keys: Array, utilities: Array[Dictionary]) -> Array:
+	var matrix: Array = []
+	for index in count:
+		var line := PackedFloat64Array()
+		for key: String in keys: line.append(-float(utilities[index][key]) if utilities[index].has(key) else BARRED)
+		for other in count: line.append(IDLE if other == index else BARRED)
+		matrix.append(line)
+	return matrix
+
+## Whether the matching gave row `index` an objective (not an idle column).
+static func _matched(choice: Array[int], index: int, keys: Array, utilities: Array[Dictionary]) -> bool:
+	var column: int = choice[index]
+	return column >= 0 and column < keys.size() and utilities[index].has(keys[column])
 
 ## Two rows of the matching whose exploration targets lie within FRONTIER_GAP:
 ## [row, column] of the one worth less to its hero, or [] when none clash.
@@ -267,30 +356,46 @@ static func legal(director: ELAdventureDirector, hero: Dictionary, role: int, ta
 	_urgent.erase(int(hero.get("uid", -1)))
 	return utility(director, hero, role, task, {}, false) > -INF
 
-## Net castle damage a night of the siege of `castle` with `hero` in it: the
-## castle damage of this hero and of the player's other heroes besieging it,
-## less the energy the castle regains from its owner's unused ether
-## (ELFirstScenario.regenerate).
-static func siege_net(director: ELAdventureDirector, hero: Dictionary, castle: Dictionary) -> int:
+## Nights the siege of `castle` takes to ruin it from the night `hero` is
+## there, or -1 when it would not within SIEGE_NIGHTS. Each night the castle
+## regains the energy its owner's unused ether gives (ELFirstScenario.regenerate,
+## up to its maximum) and takes the damage of this hero and of the player's
+## other heroes besieging it that have arrived by then: a partner further
+## away joins only on the night its walk (a straight-line estimate, like this
+## hero's) brings it there.
+static func siege_nights(director: ELAdventureDirector, hero: Dictionary, castle: Dictionary) -> int:
 	var state := director.state
+	var owner := int(castle.get("owner", -1))
+	var record: Dictionary = state.scenario.get("castles", {}).get(owner, {})
+	var top := int(record.get("max", record.get("health", 1)))
+	var energy := maxi(1, int(record.get("health", 1)) - int(record.get("pending", 0)))
 	var damage := ELFirstScenario.hero_value(hero)
+	var joins := {}
 	if state.players.has(player_of(hero)):
+		var own := _arrival(director, hero, castle)
 		for pair: Array in ELFirstAI.data(state, player_of(hero)).assigned:
 			if int(pair[0]) == int(hero.get("uid", -1)) or pair[1].get("kind") != "tower" or int(pair[1].get("target", -1)) != int(castle.get("uid", -2)): continue
 			var other := state.object(pair[0])
-			if other.get("alive", false): damage += ELFirstScenario.hero_value(other)
-	var owner := int(castle.get("owner", -1))
+			if not other.get("alive", false): continue
+			var night := maxi(0, ceili(_arrival(director, other, castle) - own))
+			joins[night] = int(joins.get(night, 0)) + ELFirstScenario.hero_value(other)
 	var regen := ELFirstScenario.regeneration(ELGlobalSpells.free_ether(state, owner)) if state.players.has(owner) else 0
-	return damage - regen
+	for night in SIEGE_NIGHTS:
+		damage += int(joins.get(night, 0))
+		energy = mini(top, energy + regen) - damage
+		if energy <= 0: return night + 1
+	return -1
 
-## Worth of besieging `castle`: more the fewer nights the siege's net damage
-## (siege_net) needs to ruin it; one that cannot out-damage the castle's
-## regeneration is barely worth holding. A supporter's second attack counts less.
+## Days of walking before `hero` stands beside `item` (straight-line estimate).
+static func _arrival(director: ELAdventureDirector, hero: Dictionary, item: Dictionary) -> float:
+	return _lower_bound(hero, _area(director, item)) / maxf(1.0, float(hero.get("strategy_capacity", 1)))
+
+## Worth of besieging `castle`: more the fewer nights the siege needs to ruin
+## it (siege_nights); one that cannot out-damage the castle's regeneration is
+## barely worth holding. A supporter's second attack counts less.
 static func siege_gain(director: ELAdventureDirector, hero: Dictionary, role: int, castle: Dictionary) -> float:
-	var record: Dictionary = director.state.scenario.get("castles", {}).get(int(castle.get("owner", -1)), {})
-	var left := maxi(1, int(record.get("health", 1)) - int(record.get("pending", 0)))
-	var net := siege_net(director, hero, castle)
-	var gain := 10.0 if net <= 0 else 100.0 + 400.0 / maxi(1, ceili(float(left) / net))
+	var nights := siege_nights(director, hero, castle)
+	var gain := 10.0 if nights < 0 else 100.0 + 400.0 / maxi(1, nights)
 	# The human player's castle is the computers' main objective, ahead of
 	# one another's.
 	if director.is_strategy_human(int(castle.get("owner", -1))): gain *= HUMAN_SIEGE
@@ -395,6 +500,9 @@ static func utility(director: ELAdventureDirector, hero: Dictionary, role: int, 
 	var urgent: bool = _urgent[int(hero.uid)]
 	var gain := 0.0
 	var walk := -1.0
+	# Meeting a threat in time to save the castle (see "hero").
+	var last := false
+	_path = []
 	match task.kind:
 		"monster":
 			if not item.get("alive", false): return -INF
@@ -404,6 +512,9 @@ static func utility(director: ELAdventureDirector, hero: Dictionary, role: int, 
 			walk = _walk(director, hero, item, false, exact)
 			var chance := win_chance(director, hero, item)
 			gain = chance * (10.0 + 5.0 * int(item.get("level", 1))) - (1.0 - chance) * worth(hero)
+			# A creature is never a castle's last chance: a fight expected to
+			# cost more than it brings is left.
+			if gain < 0.0: return -INF
 			if role == 1: gain *= 0.8
 		"hero":
 			if not item.get("alive", false) or int(item.get("level", 1)) - level >= 2 or not state.hostile(hero, item): return -INF
@@ -412,9 +523,13 @@ static func utility(director: ELAdventureDirector, hero: Dictionary, role: int, 
 			var prize := 20.0 + 8.0 * int(item.get("level", 1))
 			# A castle that would fall: worth meeting its threat only for a
 			# hero that arrives before it falls.
-			if danger.has(int(item.uid)) and walk >= 0.0 and walk / day <= float(danger[int(item.uid)]): prize += (80.0 + 20.0 * int(item.get("level", 1))) * weight(director, hero, "defend")
+			last = danger.has(int(item.uid)) and walk >= 0.0 and walk / day <= float(danger[int(item.uid)])
+			if last: prize += (80.0 + 20.0 * int(item.get("level", 1))) * weight(director, hero, "defend")
 			elif role == 1: prize *= 0.7
 			gain = chance * prize - (1.0 - chance) * worth(hero)
+			# A fight expected to cost more than it brings is taken only as
+			# the castle's last chance.
+			if gain < 0.0 and not last: return -INF
 		"tower":
 			if level < 6 or not ELFirstScenario.assault_problem(state, hero, item).is_empty(): return -INF
 			# A strong supporter may make a second attack.
@@ -447,17 +562,19 @@ static func utility(director: ELAdventureDirector, hero: Dictionary, role: int, 
 			if role == 0: gain *= 0.7
 			walk = _walk(director, hero, item, false, exact)
 		"shop":
-			# The bound assumes a full visit; only shortlisted shops are priced.
-			var count := ELFirstAIEconomy.wants(director, hero, item) if exact else ELFirstAIEconomy.SPELLS_PER_VISIT
+			# The bound assumes a full visit (as many purchases as its worth
+			# counts); only shortlisted shops are priced.
+			var count := ELFirstAIEconomy.wants(director, hero, item) if exact else (ELFirstAIEconomy.SPELLS_PER_VISIT if item.get("type") == "el1_spell_shop" else RUNE_COUNT)
 			if count == 0 or not ELFirstAIEconomy.is_shop(item): return -INF
 			walk = _walk(director, hero, item, true, exact)
 			if walk < 0.0 and role == 0 and exact:
 				var fought := ELFirstAI._fought_cost(director, hero, item)
 				walk = -1.0 if fought == ELFirstAI.NONE else float(fought)
+				_path = ELFirstAI.last_path
 			elif walk < 0.0 and not exact: walk = _walk(director, hero, item, false, false)
 			if walk < 0.0: return -INF
 			if exact and ELFirstAIEconomy.trip_cost(state, hero, item, int(walk), count) < 0: return -INF
-			gain = 12.0 * count if item.get("type") == "el1_spell_shop" else 3.0 * mini(count, 10)
+			gain = 12.0 * count if item.get("type") == "el1_spell_shop" else 3.0 * mini(count, RUNE_COUNT)
 			if item.get("type") == "rune_shop" and ELFirstAIEconomy.empty_copies(hero) > 0: gain += 60.0
 		"explore":
 			var tile := Vector2i(int(task.tile[0]), int(task.tile[1]))
@@ -467,6 +584,7 @@ static func utility(director: ELAdventureDirector, hero: Dictionary, role: int, 
 			else:
 				var path := director.grid.path(Vector2i(hero.x, hero.y), tile)
 				walk = -1.0 if path.is_empty() else float(director.grid.path_cost(path))
+				_path = path
 			# A hero ready for a siege looks for the way to an enemy castle it
 			# has not found: a share of that siege's worth, the rest of the
 			# way (at least the straight line from the frontier) counted in.
@@ -491,6 +609,13 @@ static func utility(director: ELAdventureDirector, hero: Dictionary, role: int, 
 		_:
 			return -INF
 	if walk < 0.0: return -INF
+	# Battles the route forces on the way: movement stops in each other
+	# hostile guard area it enters, and its guard strikes first.
+	if exact:
+		var through := _route_survival(director, hero, _path, int(task.get("target", -1)))
+		if through < 1.0:
+			gain = through * gain - (1.0 - through) * worth(hero)
+			if gain < 0.0 and not last: return -INF
 	if living(director) and not story_actor(state, hero):
 		# Low on runes: back to a portal, and no new fights meanwhile.
 		if low_charges(state, hero):
@@ -500,6 +625,7 @@ static func utility(director: ELAdventureDirector, hero: Dictionary, role: int, 
 	# A hero whose new spells wait for runes goes to a portal first.
 	if urgent and task.kind != "shop": gain -= 40.0
 	_walked = walk
+	_walked_end = _path[-1] if exact and not _path.is_empty() else Vector2i(-1, -1)
 	return gain - TURN * walk / day
 
 ## Route cost beside `item` (-1: none), or its lower bound without `exact`.
@@ -508,7 +634,26 @@ static func _walk(director: ELAdventureDirector, hero: Dictionary, item: Diction
 		var size: Vector2i = director.grid.footprints.get(int(item.uid), {}).get("size", Vector2i.ONE)
 		return _lower_bound(hero, Rect2i(int(item.x), int(item.y), size.x, size.y))
 	var cost := ELFirstAI._route_cost(director, hero, item, clean, true)
+	_path = ELFirstAI.last_path
 	return -1.0 if cost == ELFirstAI.NONE else float(cost)
+
+## The chance `hero` comes through the battles that `path` forces on it: in
+## each hostile guard area it enters (other than its target's), movement
+## stops and every guard there fights it, guard first (ELStrategy.entered).
+## Only creatures and the enemy heroes the player sees count.
+static func _route_survival(director: ELAdventureDirector, hero: Dictionary, path: Array[Vector2i], target: int) -> float:
+	var state := director.state
+	var chance := 1.0
+	var met := {}
+	for index in range(1, path.size()):
+		if not director.interception.cells.has(path[index]): continue
+		for guard: int in director.interception.enemies(state, hero, path[index]):
+			if guard == target or met.has(guard): continue
+			met[guard] = true
+			var item := state.object(guard)
+			if item.get("type") == "hero" and not ELFirstAI.observed(state, player_of(hero), item): continue
+			chance *= win_chance(director, hero, item)
+	return chance
 
 ## The fewest movement points that can reach beside `area` (a point a tile).
 static func _lower_bound(hero: Dictionary, area: Rect2i) -> float:
@@ -544,16 +689,19 @@ static func threats(director: ELAdventureDirector, player: int) -> Dictionary:
 		result[int(item.uid)] = route / day
 	return result
 
-## Whether the player's castle holds on its own against `seen` (threats():
-## enemy id -> days to the castle). Each threat strikes every night from its
-## arrival with its castle damage (ELFirstScenario.hero_value), weighed by the
-## chance it gets past the heroes already standing by the castle (the battle
-## risk of win_chance); the castle regains its daily regeneration. A castle
-## whose expected loss within HOLD_DAYS (more under a defensive doctrine)
-## reaches SAFETY of its energy left would fall. Returns, for a castle that
-## would fall, its threats: enemy id -> days until the fall (a defender must
-## meet the enemy within them); empty when the castle holds.
-static func defence(director: ELAdventureDirector, player: int, seen: Dictionary) -> Dictionary:
+## Whether the player's castle holds against `seen` (threats(): enemy id ->
+## days to the castle). Each threat strikes every night from its arrival with
+## its castle damage (ELFirstScenario.hero_value); the castle regains its
+## daily regeneration. Heroes standing by the castle do not protect it (in
+## the first game a hero has no guard area, so an enemy walks past it): only
+## the heroes of `guards` (enemy id -> heroes sent to attack it, see
+## interceptors) do, each from the night it can reach the enemy, by the
+## chance it wins that battle (win_chance). A castle whose expected loss
+## within HOLD_DAYS (more under a defensive doctrine) reaches SAFETY of its
+## energy left would fall. Returns, for a castle that would fall, its
+## threats: enemy id -> days until the fall (a defender must meet the enemy
+## within them); empty when the castle holds.
+static func defence(director: ELAdventureDirector, player: int, seen: Dictionary, guards := {}) -> Dictionary:
 	var result := {}
 	if seen.is_empty(): return result
 	var state := director.state
@@ -563,14 +711,22 @@ static func defence(director: ELAdventureDirector, player: int, seen: Dictionary
 	var left := float(int(record.get("health", 0)) - int(record.get("pending", 0)))
 	var regen := float(ELFirstScenario.regeneration(maxi(0, ELFirstAIEconomy._daily_ether(state, player))))
 	var horizon := HOLD_DAYS + int(_doctrine_table(director, player).get("hold", 0))
-	var garrison := _garrison(director, player, castle)
 	var nights := PackedFloat64Array()
 	nights.resize(horizon)
 	for id: int in seen:
 		var enemy := state.object(id)
-		var through := 1.0
-		for guard: Dictionary in garrison: through *= 1.0 - win_chance(director, guard, enemy)
-		for night in range(maxi(0, ceili(float(seen[id])) - 1), horizon): nights[night] += through * ELFirstScenario.hero_value(enemy)
+		# The chance the enemy still stands on each night: a defender's battle
+		# comes before the night's assaults.
+		var through := PackedFloat64Array()
+		through.resize(horizon)
+		through.fill(1.0)
+		for guard: Dictionary in guards.get(id, []):
+			var route := ELFirstAI._route_cost(director, guard, enemy, false, true)
+			if route == ELFirstAI.NONE: continue
+			var met := maxi(0, ceili(float(route) / maxf(1.0, float(guard.get("strategy_capacity", 1)))) - 1)
+			var lost := 1.0 - win_chance(director, guard, enemy)
+			for night in range(met, horizon): through[night] *= lost
+		for night in range(maxi(0, ceili(float(seen[id])) - 1), horizon): nights[night] += through[night] * ELFirstScenario.hero_value(enemy)
 	var loss := 0.0
 	for night in horizon:
 		loss = maxf(0.0, loss + nights[night] - (regen if night > 0 else 0.0))
@@ -579,24 +735,25 @@ static func defence(director: ELAdventureDirector, player: int, seen: Dictionary
 			return result
 	return result
 
-## The player's heroes standing within a day of its castle whose errands keep
-## them there.
-static func _garrison(director: ELAdventureDirector, player: int, castle: Dictionary) -> Array[Dictionary]:
-	var state := director.state
-	var area := _area(director, castle)
-	var tasks := {}
-	for pair: Array in ELFirstAI.data(state, player).assigned: tasks[int(pair[0])] = pair[1]
-	var result: Array[Dictionary] = []
-	for hero: Dictionary in ELFirstAI.heroes_of(state, player):
-		var day := maxf(1.0, float(hero.get("strategy_capacity", 1)))
-		if _lower_bound(hero, area) > day: continue
-		var task: Dictionary = tasks.get(int(hero.uid), {})
-		var goal := {}
-		if task.get("kind") == "explore": goal = {"x": int(task.tile[0]), "y": int(task.tile[1])}
-		elif not task.is_empty(): goal = state.object(task.get("target", -1))
-		if not goal.is_empty() and _lower_bound(goal, area) > day: continue
-		result.append(hero)
+## The heroes of `tasks` (hero id -> objective) sent to attack one of the
+## threats `seen`: enemy id -> those heroes.
+static func interceptors(state: ELAdventureSession, player: int, seen: Dictionary, tasks: Dictionary) -> Dictionary:
+	var result := {}
+	for uid: int in tasks:
+		var task: Dictionary = tasks[uid]
+		var target := int(task.get("target", -1))
+		if task.get("kind") != "hero" or not seen.has(target): continue
+		var hero := state.object(uid)
+		if not hero.get("alive", false) or int(hero.get("owner", -1)) != player: continue
+		if not result.has(target): result[target] = []
+		result[target].append(hero)
 	return result
+
+## The soonest fall of a defence() result, in days.
+static func _deadline(falls: Dictionary) -> int:
+	var soonest := 1 << 20
+	for id: int in falls: soonest = mini(soonest, int(falls[id]))
+	return soonest
 
 static func _area(director: ELAdventureDirector, item: Dictionary) -> Rect2i:
 	var size: Vector2i = director.grid.footprints.get(int(item.get("uid", -1)), {}).get("size", Vector2i.ONE)
@@ -617,7 +774,7 @@ static func _area(director: ELAdventureDirector, item: Dictionary) -> Rect2i:
 ## objective's worth in `row` is raised so the matching prefers it. Only the
 ## world the player sees or remembers is used (the objectives, explored
 ## ground, guards on explored routes).
-static func _look(director: ELAdventureDirector, hero: Dictionary, role: int, pool: Array, others: Dictionary, retry: Dictionary, danger: Dictionary, row: Dictionary, columns: Dictionary, walks: Dictionary) -> void:
+static func _look(director: ELAdventureDirector, hero: Dictionary, role: int, pool: Array, others: Dictionary, retry: Dictionary, danger: Dictionary, row: Dictionary, columns: Dictionary, walks: Dictionary, ends: Dictionary) -> void:
 	var state := director.state
 	var player := player_of(hero)
 	var uid := int(hero.uid)
@@ -628,7 +785,7 @@ static func _look(director: ELAdventureDirector, hero: Dictionary, role: int, po
 	var ratio := 0.0
 	var samples := 0
 	for key: String in row:
-		var act := _act(director, hero, columns[key], key, float(row[key]), float(walks.get(key, -1.0)))
+		var act := _act(director, hero, columns[key], key, float(row[key]), float(walks.get(key, -1.0)), ends.get(key, Vector2i(-1, -1)))
 		if act.is_empty(): continue
 		acts.append(act)
 		by_key[key] = act
@@ -651,12 +808,20 @@ static func _look(director: ELAdventureDirector, hero: Dictionary, role: int, po
 		if bound * per_tile > LOOK_DAYS * day: continue
 		sites.append([bound, int(task.target), task])
 	sites.sort_custom(func(a: Array, b: Array): return a[0] < b[0] if a[0] != b[0] else a[1] < b[1])
+	# The way to a site may lead over a guard's own cell (a creature standing
+	# in a passage): it is open once the creature is beaten.
+	var bodies: Array = []
+	for id: int in director.interception.zones:
+		var guard := state.object(id)
+		if guard.get("type") == "monster" and state.hostile(guard, hero) and ELFog.explored(state, player, Vector2i(int(guard.x), int(guard.y))): bodies.append(id)
 	for entry: Array in sites.slice(0, LOOK_SITES):
 		if _legs >= LOOK_LEGS: break
 		var task: Dictionary = entry[2]
 		var item := state.object(task.target)
 		_legs += 1
+		var opened := _open_bodies(director, bodies)
 		var path := director.grid.approach(here, item)
+		_close_bodies(director, opened)
 		if path.is_empty(): continue
 		var guards := {}
 		for cell: Vector2i in path:
@@ -674,7 +839,7 @@ static func _look(director: ELAdventureDirector, hero: Dictionary, role: int, po
 				if not listed or not ELFirstAI._available(fight, hero, others, retry) or not ELFog.explored(state, player, Vector2i(int(creature.x), int(creature.y))): break
 				var points := utility(director, hero, role, fight, danger, true)
 				if points == -INF: break
-				var act := _act(director, hero, fight, key, points, _walked)
+				var act := _act(director, hero, fight, key, points, _walked, _walked_end)
 				if act.is_empty(): break
 				acts.append(act)
 				by_key[key] = act
@@ -685,7 +850,7 @@ static func _look(director: ELAdventureDirector, hero: Dictionary, role: int, po
 		if role == 0: base *= 0.5
 		if living(director) and not story_actor(state, hero): base *= weight(director, hero, task.kind)
 		var key := ELFirstAI._key(task, uid)
-		var site := {"key": key, "kind": task.kind, "area": _area(director, item), "gain": base, "chance": 1.0, "blockers": fights, "walk": -1.0, "end": false, "site": true}
+		var site := {"key": key, "kind": task.kind, "area": _area(director, item), "gain": base, "chance": 1.0, "blockers": fights, "walk": -1.0, "end": false, "site": true, "stand": Vector2i(-1, -1)}
 		acts.append(site)
 		by_key[key] = site
 	# Beam search: LOOK_BEAM sequences per first action and depth.
@@ -708,7 +873,8 @@ static func _look(director: ELAdventureDirector, hero: Dictionary, role: int, po
 			if depth > 0: options = options.slice(0, LOOK_BRANCH)
 			for option: Array in options:
 				var act: Dictionary = option[2]
-				var walk: float = act.walk if depth == 0 else _leg(director, node.stand, act.area, per_tile)
+				var leg: Array = [act.walk, act.stand] if depth == 0 else _leg(director, node.stand, act.area, per_tile, node.cleared)
+				var walk: float = leg[0]
 				if walk < 0.0: continue
 				var days := walk / day
 				if depth > 0 and (node.days + days > LOOK_DAYS or (act.site and role == 0 and walk > day)): continue
@@ -721,7 +887,10 @@ static func _look(director: ELAdventureDirector, hero: Dictionary, role: int, po
 				if act.kind == "monster":
 					cleared = cleared.duplicate()
 					cleared[int(act.target)] = true
-				var child := {"stand": _stand(director, act.area, node.stand), "days": float(node.days) + days, "value": float(node.value) + step, "alive": float(node.alive) * float(act.chance),
+				# The hero stands where the route ended, or (for an estimated
+				# leg) on the open cell beside the target nearest where it was.
+				var stand: Vector2i = leg[1] if leg[1].x >= 0 else _stand(director, act.area, node.stand)
+				var child := {"stand": stand, "days": float(node.days) + days, "value": float(node.value) + step, "alive": float(node.alive) * float(act.chance),
 					"done": done, "cleared": cleared, "first": act.key if depth == 0 else node.first, "end": act.end}
 				children.append(child)
 				if child.value > float(best.get(child.first, -INF)): best[child.first] = child.value
@@ -744,8 +913,9 @@ static func _look(director: ELAdventureDirector, hero: Dictionary, role: int, po
 	row[first] = float(row[single]) + float(best[first]) - float(best[single])
 
 ## One action of the lookahead from a shortlisted objective: its worth before
-## walking (utility() plus the walk it subtracted), its risk and where it is.
-static func _act(director: ELAdventureDirector, hero: Dictionary, task: Dictionary, key: String, points: float, walk: float) -> Dictionary:
+## walking (utility() plus the walk it subtracted), its risk, where it is and
+## where its route ends (`stand`).
+static func _act(director: ELAdventureDirector, hero: Dictionary, task: Dictionary, key: String, points: float, walk: float, stand: Vector2i) -> Dictionary:
 	if walk < 0.0 or points == -INF: return {}
 	var state := director.state
 	var day := maxf(1.0, float(hero.get("strategy_capacity", 1)))
@@ -755,7 +925,7 @@ static func _act(director: ELAdventureDirector, hero: Dictionary, task: Dictiona
 	# Sieges, enemy heroes, exploration and escorts end a sequence: what
 	# follows them cannot be foreseen.
 	return {"key": key, "kind": task.kind, "target": int(task.get("target", -1)), "area": area, "gain": points + TURN * walk / day, "chance": chance, "blockers": [] as Array[int], "walk": walk,
-		"end": task.kind in ["tower", "hero", "explore", "escort"], "site": task.kind in ["mine", "node", "cut"]}
+		"end": task.kind in ["tower", "hero", "explore", "escort"], "site": task.kind in ["mine", "node", "cut"], "stand": stand}
 
 ## The open cell beside `area` nearest `toward`: where a hero stands after an action there.
 static func _stand(director: ELAdventureDirector, area: Rect2i, toward: Vector2i) -> Vector2i:
@@ -768,36 +938,67 @@ static func _stand(director: ELAdventureDirector, area: Rect2i, toward: Vector2i
 			if best.x < 0 or point.distance_squared_to(toward) < best.distance_squared_to(toward): best = point
 	return best if best.x >= 0 else area.position
 
+## Opens the cells the creatures `ids` stand on (as if they were beaten) in
+## the land graph; returns what _close_bodies needs to restore them. The
+## creatures must stand on explored ground (the pass keeps the rest closed).
+static func _open_bodies(director: ELAdventureDirector, ids: Array) -> Array:
+	var grid := director.grid
+	var opened: Array = []
+	for id: Variant in ids:
+		var body := director.state.object(int(id))
+		var at := Vector2i(int(body.get("x", -1)), int(body.get("y", -1)))
+		if not grid.contains(at): continue
+		var index := at.y * grid.map.width + at.x
+		if grid.actor_blockers[index] <= 0: continue
+		opened.append([at, grid.actor_blockers[index]])
+		grid.actor_blockers[index] = 0
+		grid._update_cell(at)
+	return opened
+
+static func _close_bodies(director: ELAdventureDirector, opened: Array) -> void:
+	var grid := director.grid
+	for entry: Array in opened:
+		grid.actor_blockers[entry[0].y * grid.map.width + entry[0].x] = entry[1]
+		grid._update_cell(entry[0])
+
 ## Lower bound of the walk from a tile to beside `area`, in tiles.
 static func _bound_from(from: Vector2i, area: Rect2i) -> float:
 	var dx := maxi(0, maxi(area.position.x - from.x, from.x - (area.end.x - 1)))
 	var dy := maxi(0, maxi(area.position.y - from.y, from.y - (area.end.y - 1)))
 	return float(maxi(0, maxi(dx, dy) - 1))
 
-## Movement cost from `from` to beside `area`: a route search toward the two
-## nearest open cells while the pass's LOOK_LEGS last, an estimate after.
-static func _leg(director: ELAdventureDirector, from: Vector2i, area: Rect2i, per_tile: float) -> float:
-	var key := "%d,%d>%d,%d" % [from.x, from.y, area.position.x, area.position.y]
+## Movement cost from `from` to beside `area` and the cell the route ends on:
+## [cost (-1: no way), cell (-1, -1 when estimated)]. A route search while the
+## pass's LOOK_LEGS last (toward the two nearest open cells, then the others
+## in order), an estimate after. The creatures of `cleared` are gone, so the
+## cells they stood on are open.
+static func _leg(director: ELAdventureDirector, from: Vector2i, area: Rect2i, per_tile: float, cleared: Dictionary = {}) -> Array:
+	var gone: Array = cleared.keys()
+	gone.sort()
+	var key := "%d,%d>%d,%d|%s" % [from.x, from.y, area.position.x, area.position.y, str(gone)]
 	if _leg_cache.has(key): return _leg_cache[key]
 	var bound := _bound_from(from, area)
-	var cost := bound * per_tile
-	if bound > 0.0 and _legs < LOOK_LEGS:
+	var result: Array = [bound * per_tile, Vector2i(-1, -1)]
+	if bound <= 0.0: result = [0.0, from]
+	elif _legs < LOOK_LEGS:
 		_legs += 1
 		var grid := director.grid
+		var opened := _open_bodies(director, gone)
 		var cells: Array[Vector2i] = []
 		for y in range(area.position.y - 1, area.end.y + 1):
 			for x in range(area.position.x - 1, area.end.x + 1):
 				var point := Vector2i(x, y)
 				if not area.has_point(point) and grid.contains(point) and not grid.land.is_point_solid(point): cells.append(point)
 		cells.sort_custom(func(a: Vector2i, b: Vector2i): return a.distance_squared_to(from) < b.distance_squared_to(from) if a.distance_squared_to(from) != b.distance_squared_to(from) else (a.y < b.y if a.y != b.y else a.x < b.x))
-		cost = -1.0
-		for point: Vector2i in cells.slice(0, 2):
+		result = [-1.0, Vector2i(-1, -1)]
+		for point: Vector2i in cells:
 			var path := grid.path(from, point)
 			if not path.is_empty():
-				cost = float(grid.path_cost(path))
+				result = [float(grid.path_cost(path)), point]
 				break
-	_leg_cache[key] = cost
-	return cost
+		_close_bodies(director, opened)
+	_leg_cache[key] = result
+	return result
 
 # --- Living world ----------------------------------------------------------------
 
@@ -840,12 +1041,19 @@ static func _story_actor(state: ELAdventureSession, hero: Dictionary) -> bool:
 	return false
 
 ## The player's doctrine: a map's "doctrine" player attribute when it names
-## one, otherwise chosen from the session's seed (none for story players).
+## one, otherwise chosen once, on first need, from the session's random
+## numbers then, the player and its colour, and kept with the player's plans
+## (ELFirstAI.data), so later random events never change it (none for story
+## players). A save from before has none kept and chooses on load.
 static func doctrine(state: ELAdventureSession, player: int) -> String:
 	if story_player(state, player): return ""
 	for entry: Dictionary in state.map.players:
 		if int(entry.get("attrs", {}).get("id", -1)) == player and DOCTRINES.has(str(entry.attrs.get("doctrine", ""))): return str(entry.attrs.doctrine)
-	return DOCTRINE_NAMES[hash([int(state.seed_value), player, state.map.id]) % DOCTRINE_NAMES.size()]
+	if not state.players.has(player): return ""
+	var ai := ELFirstAI.data(state, player)
+	if not DOCTRINES.has(str(ai.get("doctrine", ""))):
+		ai.doctrine = DOCTRINE_NAMES[hash([int(state.seed_value), player, str(state.players[player].get("color", "")), state.map.id]) % DOCTRINE_NAMES.size()]
+	return str(ai.doctrine)
 
 static func _doctrine_table(director: ELAdventureDirector, player: int) -> Dictionary:
 	if not living(director): return {}
@@ -930,14 +1138,15 @@ static func patrols(director: ELAdventureDirector, player: int, heroes: Array[Di
 
 # --- Knowledge -------------------------------------------------------------------
 
-## Notes where the player sees enemy heroes now; old sightings fade.
+## Notes where the player sees enemy heroes now; old sightings fade. A
+## sighting stays until it fades or the place is seen again (scouting), even
+## when the hero has fallen out of sight: the player learns only what it sees.
 static func observe(director: ELAdventureDirector, player: int) -> void:
 	var state := director.state
 	var ai := ELFirstAI.data(state, player)
 	var seen: Dictionary = ai.get("seen", {})
 	for key: String in seen.keys():
-		var item := state.object(int(key))
-		if not item.get("alive", false) or int(state.day) - int(seen[key][2]) > SCOUT_DAYS: seen.erase(key)
+		if int(state.day) - int(seen[key][2]) > SCOUT_DAYS: seen.erase(key)
 	for item: Dictionary in state.objects.values():
 		if item.get("type") == "hero" and item.get("alive", false) and int(item.get("owner", -1)) >= 1 and int(item.owner) != player and ELFirstAI.observed(state, player, item):
 			seen[str(item.uid)] = [int(item.x), int(item.y), int(state.day)]
@@ -1030,15 +1239,29 @@ static func reveal(state: ELAdventureSession, player: int, tile: Vector2i) -> fl
 
 # --- Battles -------------------------------------------------------------------
 
-## The chance that `hero`, attacking, beats `enemy`, by the rule that will
-## decide the battle.
+## The chance that `hero`, setting out to fight `enemy`, beats it, by the rule
+## that will decide the battle and in the order the battle is queued: an
+## enemy that guards an area (a creature, a fort's garrison, a hero under a
+## fortification spell) stops the hero as it enters and is the first side
+## (ELStrategy.entered); any other enemy is attacked, the hero first
+## (ELStrategy.after_movement).
 static func win_chance(director: ELAdventureDirector, hero: Dictionary, enemy: Dictionary) -> float:
+	if director.interception.zones.has(int(enemy.get("uid", -1))): return 1.0 - first_wins(director, enemy, hero)
+	return first_wins(director, hero, enemy)
+
+## The chance that `first`, the first side of a queued battle, beats `second`
+## (ELFirstAI.winner): the strength estimate when that switch is on or a human
+## player's hero takes part (a real duel), otherwise the original rule.
+static func first_wins(director: ELAdventureDirector, first: Dictionary, second: Dictionary) -> float:
 	var state := director.state
-	var human := int(enemy.get("owner", 0)) >= 1 and director.is_strategy_human(int(enemy.owner))
-	if human or director.battle_estimate: return estimate(state, hero, enemy)
-	if int(enemy.get("owner", 0)) <= 0: return 1.0
-	var level := int(hero.get("level", 1))
-	return float(level + 1) / float(level + int(enemy.get("level", 1)) + 1)
+	for side: Dictionary in [first, second]:
+		if int(side.get("owner", 0)) >= 1 and director.is_strategy_human(int(side.owner)): return estimate(state, first, second)
+	if director.battle_estimate: return estimate(state, first, second)
+	# A player's hero always beats a neutral side.
+	if int(second.get("owner", 0)) <= 0: return 1.0
+	if int(first.get("owner", 0)) <= 0: return 0.0
+	var level := int(first.get("level", 1))
+	return float(level + 1) / float(level + int(second.get("level", 1)) + 1)
 
 static var _strengths := {}
 
@@ -1053,7 +1276,7 @@ static func estimate(state: ELAdventureSession, first: Dictionary, second: Dicti
 static func strength(state: ELAdventureSession, unit: Dictionary) -> float:
 	var cards: Array = unit.get("cards", [])
 	var uses: Array = unit.get("rune_uses", [])
-	var key := "%d|%d|%d|%d|%d|%d|%d" % [int(unit.get("uid", -1)), int(unit.get("level", 1)), int(unit.get("health", 0)), hash(cards), hash(uses), hash(unit.get("skills", {})), unit.get("artifacts", []).size()]
+	var key := "%d|%d|%d|%d|%d|%d|%d|%s" % [int(unit.get("uid", -1)), int(unit.get("level", 1)), int(unit.get("health", 0)), hash(cards), hash(uses), hash(unit.get("skills", {})), unit.get("artifacts", []).size(), str(unit.get("specialization", "NONE"))]
 	if _strengths.has(key): return _strengths[key]
 	var profile := state.map.profile
 	var book := 0.0

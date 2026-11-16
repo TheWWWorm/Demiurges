@@ -61,6 +61,8 @@ var _deck_deadline := 0
 var _next_presets: Array[Dictionary] = [{}, {}]
 var _clock_phase := Vector2i(-1, -1)
 var _clock_deadline := 0
+## When poll last ran, for holding a guest's phase clock while it is away.
+var _clock_polled := 0
 var _round_index := 0
 var _first_attacker := 0
 var _local_ready := false
@@ -208,6 +210,9 @@ func poll(allow_action: bool, advance_phase := Callable()) -> void:
 	if _peer == null: return
 	_peer.poll()
 	if _discovery != null: _discovery.poll()
+	var now := Time.get_ticks_msec()
+	if _guest_clock_held(): _clock_deadline += now - _clock_polled
+	_clock_polled = now
 	var connection := _peer.get_connection_status()
 	if _joining and connection == MultiplayerPeer.CONNECTION_CONNECTED:
 		_joining = false
@@ -374,7 +379,7 @@ func _send_resume() -> void:
 	_resume_digest = _digest()
 	var state := {"match": match_state.snapshot(), "duel": duel.snapshot(), "sequence": _sequence, "round_index": _round_index,
 		"first_attacker": _first_attacker, "settings": [_resource_level, _arena, _rounds, _turn_seconds, _deck_seconds],
-		"ready": [_local_ready, _remote_ready], "next": next, "digest": _resume_digest}
+		"ready": [_local_ready, _remote_ready], "next": next, "digest": _resume_digest, "clock": _clock_left()}
 	var bytes := JSON.stringify(["resume", state]).to_utf8_buffer()
 	if bytes.size() > MAX_RESUME:
 		_failure = "The duel is too large to send to the returning player."
@@ -420,6 +425,12 @@ func _restore(state: Dictionary) -> bool:
 	_clock_phase = Vector2i(-1, -1)
 	_clock_deadline = 0
 	_deck_deadline = 0
+	# The host's time left in the current phase (an older host does not send
+	# it, and the phase then starts a full clock here).
+	var clock: Variant = state.get("clock")
+	if clock is Array and clock.size() == 3 and ELLuaSave._integer(clock[2], 0, MAX_TURN_SECONDS * 1000) and clock[0] == duel.turn_serial and clock[1] == duel.phase:
+		_clock_phase = Vector2i(duel.turn_serial, duel.phase)
+		_clock_deadline = Time.get_ticks_msec() + int(clock[2])
 	_awaiting_pick = false
 	return _digest() == state.digest
 
@@ -512,6 +523,17 @@ func clock_remaining() -> int:
 	if not live or duel == null or duel.phase == ELDuel.Phase.FINISHED or _clock_deadline == 0: return -1
 	if _clock_phase != Vector2i(duel.turn_serial, duel.phase): return -1
 	return maxi(0, ceili(float(_clock_deadline - Time.get_ticks_msec()) / 1000.0))
+
+## The host's clock of a guest phase stands still while the guest is away
+## and rejoining, so a returning guest gets the time it had left.
+func _guest_clock_held() -> bool:
+	if local_side != 0 or not live or duel == null or _rejoin_deadline == 0 or _clock_deadline == 0: return false
+	return duel.phase != ELDuel.Phase.FINISHED and duel.active_side() == 1 and _clock_phase == Vector2i(duel.turn_serial, duel.phase)
+
+## [turn, phase, milliseconds left] of the running phase clock, or null.
+func _clock_left() -> Variant:
+	if _turn_seconds == 0 or duel == null or _clock_deadline == 0 or _clock_phase != Vector2i(duel.turn_serial, duel.phase): return null
+	return [duel.turn_serial, duel.phase, maxi(0, _clock_deadline - Time.get_ticks_msec())]
 
 func _tick_turn_clock(advance_phase: Callable) -> void:
 	if _turn_seconds == 0 or duel == null or duel.phase == ELDuel.Phase.FINISHED: return

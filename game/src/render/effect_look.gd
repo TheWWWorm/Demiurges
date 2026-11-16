@@ -62,6 +62,9 @@ static func use(values: Dictionary) -> void:
 	bloom = bool(values.get("bloom", false))
 	spell_light = bool(values.get("spell_light", false))
 	ELParticleFile.set_soft(bool(values.get("soft_particles", false)))
+	# Blended smoke, mist and water cast soft shadows with the shadows
+	# preference (ELParticleFile.SHADOW_SHEETS).
+	ELParticleFile.set_shadows(bool(values.get("shadows", false)))
 	# A session that ends unexpectedly says what it was drawing with, so only
 	# those are suspected of bringing it down (ELCrashReport.effects_fallback).
 	var in_use := PackedStringArray()

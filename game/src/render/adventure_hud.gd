@@ -1104,7 +1104,7 @@ class CutButton extends BaseButton:
 	## The art's pixels, kept on the texture for the next hit test.
 	static func _image(texture: Texture2D) -> Image:
 		if texture.has_meta("hit_image"): return texture.get_meta("hit_image")
-		var image := ELTexture.uncompressed(texture.get_image())
+		var image := ELTexture.uncompressed(ELIconUpscale.image_of(texture))
 		texture.set_meta("hit_image", image)
 		return image
 

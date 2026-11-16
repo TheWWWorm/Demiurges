@@ -83,7 +83,8 @@ var _waiting := false
 ## Script commands were pending; the original calls Hook_AllCommandsFinished
 ## once the queue drains (EL2 command processor).
 var _commands_pending := false
-## The command being executed (by reference); null after a load.
+## The command being executed (by reference); restored from a save's
+## "running" field (null after a load of an older save).
 var _running: Variant = null
 
 func build(session: ELAdventureSession) -> bool:
@@ -241,6 +242,15 @@ func _advance_remote_order() -> void:
 			state.commands.append(order.duplicate(true))
 		return
 
+## The most script ticks one frame runs to catch up after a long frame
+## (below about 4 frames per second the scripts slow down instead).
+const MAX_CATCH_UP := 4
+
+## Seconds per script tick: the second game's 15 per second, the first
+## game's 10.
+func script_tick() -> float:
+	return 1.0 / 15.0 if state.map.profile.id == "el2" else 0.1
+
 func advance(delta: float) -> void:
 	if not error.is_empty() or not state.outcome.is_empty() or encounter != null or _shopping(): return
 	if not dialogue.is_empty(): return
@@ -264,16 +274,29 @@ func advance(delta: float) -> void:
 		if wait_remaining > 0: return
 		_waiting = false
 		_finish_command()
-	_clock += delta
 	# The second game's mission update runs 15 times per second (
-	# ExWaitCmd and the tutorial's "150 segments = 10 sec").
-	if _clock >= (1.0 / 15.0 if state.map.profile.id == "el2" else 0.1):
-		_clock = 0.0
+	# ExWaitCmd and the tutorial's "150 segments = 10 sec"), at a fixed
+	# rate: a long frame runs the ticks it covers (up to MAX_CATCH_UP; the
+	# rest is dropped), and the remainder carries over to the next frame.
+	var tick := script_tick()
+	_clock += delta
+	var ticks := 0
+	while _clock >= tick:
+		if ticks >= MAX_CATCH_UP:
+			_clock = fmod(_clock, tick)
+			break
+		_clock -= tick
+		ticks += 1
 		var wake := not action_held and movement.is_empty() and not _busy(state.current_player)
 		if not state.step(wake):
 			_fail(state.error)
 			return
 		if wake: _woken = state.current_player
+		# A tick that opened a message, a battle or a shop, or ended the
+		# mission, holds the ticks after it as the next frame would.
+		if not dialogue.is_empty() or encounter != null or not auto_fight.is_empty() or _shopping() or not state.outcome.is_empty() or not travel.is_empty() or not error.is_empty():
+			_clock = fmod(_clock, tick)
+			break
 	# A mission action can start during the step hook or a queued callback.
 	# It suspends the storyboard and commander while step/post-step still tick.
 	if action_held or action_wait > 0.0 or not movement.is_empty(): return
@@ -523,9 +546,13 @@ func manage_strategy_hero(player: int, day: int, order: Array) -> String:
 	var applied := false
 	match order[0]:
 		"equip", "reserve":
-			if order.size() != 4 or not _strategy_code(order[2]) or not _strategy_number(order[3]): return "Invalid spellbook order."
+			# An equip order may name the occupied book slot it goes over.
+			if order.size() not in ([4, 5] if order[0] == "equip" else [4]) or not _strategy_code(order[2]) or not _strategy_number(order[3]) or (order.size() == 5 and not ELLuaSave._integer(order[4], 0, ELSpellInventory.BOOK_SIZE - 1)): return "Invalid spellbook order."
 			var index := int(order[3])
-			if order[0] == "equip": applied = state.move_spell(id, order[2], -1, index, player)
+			if order[0] == "equip":
+				var slot := int(order[4]) if order.size() == 5 else -1
+				if slot >= hero.cards.size(): return "That spellbook slot has changed."
+				applied = state.move_spell(id, order[2], -1, index, player, slot)
 			else:
 				if index >= hero.cards.size() or hero.cards[index] != order[2]: return "That spellbook slot has changed."
 				applied = state.move_spell(id, "", index, 0, player)
@@ -783,6 +810,20 @@ func _advance_movement(delta: float) -> void:
 			actor.ap -= cost
 			ELStrategy.entered(self, actor)
 		presentation.emit({"kind": "actor_moving", "id": actor.uid, "position": to, "moving": true})
+		# Second game: every cell change runs Hook_OnStep at once, whichever
+		# figure moved, as in the original, so the library's interception
+		# and the scripts' position checks see each tile the figure enters,
+		# however long the frame. The hook may stop the move (a soft abort or
+		# a kill), replace it, or open a message or a battle.
+		if second:
+			if not state.hook("Hook_OnStep"):
+				_fail(state.error)
+				return
+			if movement.is_empty() or int(movement.id) != int(actor.uid): return
+			if not actor.get("alive", false) or actor.orders.is_empty():
+				_complete_movement(false)
+				return
+			if int(movement.index) < movement.path.size() - 1 and (not dialogue.is_empty() or encounter != null or not auto_fight.is_empty() or _shopping() or not self.travel.is_empty() or not state.outcome.is_empty() or action_wait > 0.0): return
 		if actor.get("intercepted", false) or int(movement.index) >= movement.path.size() - 1:
 			_complete_movement()
 			return
@@ -816,7 +857,15 @@ func _complete_movement(use := true) -> void:
 			if not order.is_empty() and order.use < 0 and Vector2i(actor.x, actor.y) == Vector2i(order.destination[0], order.destination[1]): actor.strategy_order = {}
 		presentation.emit({"kind": "actor_moving", "id": actor.uid, "position": Vector2(actor.x, actor.y), "moving": false})
 	if finished.queued: _finish_command()
-	if use and int(finished.use) >= 0: use_object(int(finished.id), int(finished.use))
+	if use and int(finished.use) >= 0 and _in_use_range(actor, state.object(int(finished.use))): use_object(int(finished.id), int(finished.use))
+
+## Second game: the use after a move checks the range again, as the
+## original's use action does: a target a script moved meanwhile, or a stop
+## short of it, is not used from afar (the command still completes). A
+## remote use goes through RemoteUseHero, not here.
+func _in_use_range(actor: Dictionary, target: Dictionary) -> bool:
+	if state.map.profile.id != "el2" or actor.is_empty() or target.is_empty(): return true
+	return ELStrategy.adjacent(self, actor, target)
 
 func use_object(hero_id: int, target_id: int, defender := -1) -> void:
 	var actor := state.object(hero_id)
@@ -1372,6 +1421,33 @@ func _execute(command: Dictionary) -> void:
 			state._native(args, "ExFinishAffect")
 			_finish_command()
 		_: _fail("Unsupported scenario command: " + kind)
+
+## Whether a queued command is in flight: a wait, a queued message (a direct
+## script box is no command) or a scripted move.
+func command_in_flight() -> bool:
+	return _waiting or (not dialogue.is_empty() and not dialogue.get("direct", false)) or movement.get("queued", false)
+
+## Which command the one in flight is, for a save: "head" while it is still
+## the queue's first command, "detached" once a script cleared or replaced
+## the queue under it, "" when none is in flight. A director restored from a
+## save without this field finishes the queue's head.
+func running_command() -> String:
+	if not command_in_flight(): return ""
+	if _running == null: return "head" if not state.commands.is_empty() else "detached"
+	return "head" if not state.commands.is_empty() and is_same(state.commands[0], _running) else "detached"
+
+## Restores running_command() after a load; false for an inconsistent save.
+func restore_running(kind: Variant) -> bool:
+	_running = null
+	if kind == null or not command_in_flight(): return kind == null or kind is String
+	match kind:
+		"head":
+			if state.commands.is_empty(): return false
+			_running = state.commands[0]
+		# A stand-in that is never in the queue: finishing it pops nothing.
+		"detached": _running = {"detached": true}
+		_: return false
+	return true
 
 ## Ends the running command. A script that aborted the queue while a move,
 ## wait or message was in flight must not lose the first of its new commands.

@@ -330,6 +330,7 @@ func _ready() -> void:
 		stepped_back = ELCrashReport.effects_fallback(settings.values) or stepped_back
 		if stepped_back: settings.save_file()
 	ELEffectLook.use(settings.values)
+	ELIconUpscale.use(settings.values)
 	# The chosen renderer needs the game started with it.
 	if _ensure_renderer(): return
 	ELSettings.apply_display(get_viewport(), settings.values)
@@ -401,6 +402,7 @@ func _ready() -> void:
 	var launched := get_tree().current_scene == self
 	if launched and ELHardwareCheck.pending(settings): _check_hardware()
 	if launched: _offer_crash_report.call_deferred()
+	if launched: _offer_sharper_art.call_deferred()
 	if launched and _play_startup_movies(): return
 	if not (launched and _show_front_menu()): _open_setup()
 
@@ -879,10 +881,9 @@ func _process(delta: float) -> void:
 			# (Built as a typed array: an untyped literal cannot be assigned to it.)
 			var smart: Array[int] = []
 			# A puzzle is always defended by the smarter player.
-			# Setting "duel_ai": 0 Easy, 1 Original, 2 Smarter (ELAIChoice).
-			var level := int(settings.values.get("duel_ai", 2))
-			# Auto combat plays the player's side with the same planning as
-			# the computer opponent: the smarter one at that level too.
+			# Campaign and scenario battles use their saved AI choice.
+			# Standalone duels use Options, including for the player's auto combat.
+			var level := _duel_ai_level()
 			if not demo and ((not _human_side() and (level >= 2 or _in_puzzle())) or (auto and level >= 2)): smart.append(duel.active_side())
 			ELCombatSearch.original_budget = ELCombatSearch.EASY_BUDGET if level == 0 and not demo and not _human_side() and not _in_puzzle() else ELCombatSearch.BUDGET
 			duel.smart_sides = smart
@@ -5934,7 +5935,7 @@ func _on_page_shown(refresher: Callable) -> void:
 func remake_session(_owner: ELFrontMenu, phase: String) -> void:
 	match phase:
 		"open":
-			_settings_before = {"values": settings.values.duplicate(true), "light_view": is_instance_valid(path_tracing) and path_tracing.lighting_view,
+			_settings_before = {"values": settings.values.duplicate(true), "light_view": is_instance_valid(path_tracing) and path_tracing.lighting_view, "ai": ELAIChoice.of(_ai_game()),
 				"hotkeys": {"el1": settings.hotkey_overrides("el1").duplicate(), "el2": settings.hotkey_overrides("el2").duplicate()}}
 		"apply":
 			ELCrashReport.trace("settings: " + _options_summary())
@@ -5944,6 +5945,7 @@ func remake_session(_owner: ELFrontMenu, phase: String) -> void:
 			if _settings_before.is_empty(): return
 			var before: Dictionary = _settings_before.values
 			for key: String in ELSettings.SHARED: settings.values[key] = before[key]
+			ELAIChoice.store(_ai_game(), Dictionary(_settings_before.get("ai", {})))
 			if before.has("movies"): settings.values.movies = before.movies
 			for id: String in ["el1", "el2"]: settings.set_hotkeys(id, _settings_before.hotkeys[id])
 			ELSettings.apply_window(settings.values)
@@ -6086,6 +6088,7 @@ func _display_page(page: VBoxContainer) -> void:
 	sharpen.select(int(settings.values.sharpening))
 	sharpen.item_selected.connect(func(index: int): settings.values.sharpening = index)
 	_settings_row(picture, "Sharpening", "Sharpens the textures of the 3D map and battle scenes. The interface is not changed.", sharpen)
+	if ELIconUpscale.available(): _sharper_art_rows(picture)
 	var fps_toggle := CheckButton.new()
 	fps_toggle.name = "ShowFps"
 	fps_toggle.button_pressed = bool(settings.values.get("show_fps", false))
@@ -6093,6 +6096,100 @@ func _display_page(page: VBoxContainer) -> void:
 		settings.values.show_fps = enabled
 		_update_fps_counter())
 	_settings_row(window_box if window_box != null else picture, "Frame rate counter", "Shows frames per second in the top right corner.", fps_toggle)
+
+## "Sharper icons" and "Sharper interface" (ELIconUpscale), the state of the
+## prepared art and the buttons to prepare or clear it.
+func _sharper_art_rows(box: VBoxContainer) -> void:
+	var status := _label("", 13, ELMenuKit.BODY_INK if _settings_kit != null else INK)
+	status.name = "SharperArtStatus"
+	var refresh := func(): status.text = _sharper_art_status()
+	for key: String in ["sharper_icons", "sharper_interface"]:
+		var toggle := CheckButton.new()
+		toggle.name = "SharperIcons" if key == "sharper_icons" else "SharperInterface"
+		toggle.button_pressed = bool(settings.values.get(key, true))
+		toggle.toggled.connect(func(enabled: bool):
+			settings.values[key] = enabled
+			ELIconUpscale.use(settings.values)
+			for upscaler: ELIconUpscale in _upscalers(): upscaler.apply_all()
+			refresh.call()
+			# Switched on with art still to prepare: offer the preparation.
+			if enabled and not _sharper_art_complete(): _open_sharper_art(true, refresh))
+		if key == "sharper_icons":
+			_settings_row(box, "Sharper icons", "Spell icons, portraits, skills and other icons, enlarged once on this computer by a small AI model (Real-ESRGAN) and drawn with more pixels at the same size. Seen on screens larger than 1440 × 900. The art is prepared in one step with a progress bar, never during play; until then the original icons show.", toggle)
+		else:
+			_settings_row(box, "Sharper interface", "The same for the rest of the interface art: screens, panels, frames and buttons.", toggle)
+	var buttons := HBoxContainer.new()
+	buttons.add_theme_constant_override("separation", 8)
+	var prepare := Button.new()
+	prepare.name = "PrepareSharperArt"
+	prepare.text = _t("Prepare now")
+	prepare.pressed.connect(func(): _open_sharper_art(false, refresh))
+	buttons.add_child(prepare)
+	var clear := Button.new()
+	clear.name = "ClearSharperArt"
+	clear.text = _t("Clear")
+	clear.pressed.connect(func():
+		for upscaler: ELIconUpscale in _upscalers(): upscaler.clear()
+		refresh.call())
+	buttons.add_child(clear)
+	_settings_row(box, "Prepared sharper art", "The enlarged art kept on this computer for this screen's size, and the disk space it takes. Prepare now enlarges what is missing (it can be cancelled; what is done is kept); Clear removes it all.", buttons, status)
+	refresh.call()
+
+## Every mounted game's ELIconUpscale.
+func _upscalers() -> Array:
+	var result := []
+	for edition: String in profiles:
+		var data: ELProfile = profiles[edition]
+		if data != null and data.icon_upscale != null: result.append(data.icon_upscale)
+	return result
+
+func _sharper_art_complete() -> bool:
+	for upscaler: ELIconUpscale in _upscalers():
+		if not upscaler.complete(): return false
+	return true
+
+## The status line of the prepared art: ready at a factor, or the sheets
+## done of the total, with the disk space taken.
+func _sharper_art_status() -> String:
+	var done := 0
+	var total := 0
+	var bytes := 0
+	var stale := false
+	for upscaler: ELIconUpscale in _upscalers():
+		var state := upscaler.status()
+		done += int(state.done)
+		total += int(state.total)
+		bytes += int(state.bytes)
+		stale = stale or bool(state.stale)
+	var megabytes := _t("%d MB") % roundi(bytes / 1048576.0)
+	if ELIconUpscale.target_factor() < 2: return _t("Not needed at this screen size") + " · " + megabytes
+	if stale: return _t("The games' files changed: prepare again") + " · " + megabytes
+	if total == 0: return _t("Both switches are off") + " · " + megabytes
+	if done >= total: return _t("Ready (%d×)") % ELIconUpscale.target_factor() + " · " + megabytes
+	return _t("%d of %d sheets ready") % [done, total] + " · " + megabytes
+
+## The "Preparing sharper art" screen, as a prompt first when `ask`.
+func _open_sharper_art(ask: bool, then := Callable()) -> void:
+	var screen := ELSharperArtScreen.open(self, _upscalers(), _shown_profile(), ask)
+	screen.on_later = func(_why: String):
+		settings.values.sharper_declined = "%d:%d" % [ELIconUpscale.VERSION, ELIconUpscale.target_factor()]
+		settings.save_file()
+	screen.closed.connect(func(_complete: bool):
+		if then.is_valid(): then.call())
+
+## At start: when the switches ask for art that is not prepared for this
+## screen, the prompt to prepare it (once per screen size and version, until
+## the player starts it from Options).
+func _offer_sharper_art() -> void:
+	if not ELIconUpscale.available() or ELIconUpscale.target_factor() < 2 or not _campaign_probe.is_empty(): return
+	if not (ELIconUpscale.enabled(ELIconUpscale.KIND_ICON) or ELIconUpscale.enabled(ELIconUpscale.KIND_INTERFACE)): return
+	if String(settings.values.get("sharper_declined", "")) == "%d:%d" % [ELIconUpscale.VERSION, ELIconUpscale.target_factor()]: return
+	if _sharper_art_complete(): return
+	# Over the main menu, after the start-up movies.
+	for i in 1200:
+		if front_menu != null and front_menu.is_visible_in_tree() and (movie_layer == null or not is_instance_valid(movie_layer)): break
+		await get_tree().create_timer(0.25).timeout
+	_open_sharper_art(true)
 
 ## The game window's mode, size and frame rate (computers only).
 func _window_rows(page: VBoxContainer) -> VBoxContainer:
@@ -6357,8 +6454,14 @@ func _interface_page(page: VBoxContainer) -> void:
 	free_toggle.button_pressed = bool(settings.values.get("free_movement", true))
 	free_toggle.toggled.connect(func(enabled: bool):
 		settings.values.free_movement = enabled)
-	_settings_row(gameplay, "Duel AI", "How strong the computer opponent is in battle, in both games. Easy: the original opponent thinking less. Original: as in the original games. Smarter: judges positions steadily, looks at more replies and reads the fighting of the coming turns before it attacks or blocks. Puzzles are always defended by the smarter opponent.", ELAIChoice.picker(settings, "duel_ai", profile))
-	_settings_row(gameplay, "World AI", "First game, single player: how the computer players act on the map. Original: as in the original game. Smarter: computer heroes also pick skills as they level up, buy spells and runes at shops, and computer players cast global spells. Living world: smarter, and idle computer heroes patrol their lands, raid weakly held sites, escort a weaker hero to a siege and go back for runes; each computer player keeps its own temperament (story heroes and neutral creatures act as before). Takes effect on the next map.", ELAIChoice.picker(settings, "world_ai", profile))
+	# A campaign or single scenario keeps its own levels: during one these
+	# change that game's (ELAIChoice), otherwise the Options choice.
+	var ai_game := _ai_game()
+	var ai_values: Dictionary = ELAIChoice.of(ai_game) if ai_game != null else settings.values
+	var ai_changed := func(_index: int):
+		if ai_game != null: ELAIChoice.store(ai_game, ai_values)
+	_settings_row(gameplay, "Duel AI", DUEL_AI_HELP, ELAIChoice.values_picker(ai_values, "duel_ai", profile, ai_changed))
+	_settings_row(gameplay, "World AI", WORLD_AI_HELP, ELAIChoice.values_picker(ai_values, "world_ai", profile, ai_changed))
 	var icons_toggle := CheckButton.new()
 	icons_toggle.name = "CastIcons"
 	icons_toggle.button_pressed = bool(settings.values.get("cast_icons", true))
@@ -6405,6 +6508,11 @@ func _battle_interface_row(box: Control) -> void:
 			panel.layout()
 		if duel != null: _refresh())
 	_settings_row(box, "Battle panel readouts", "On a wide screen, the free width of the battle panel beside the spells shows readouts switched with its arrows: the spellbook, the battle adviser with the chances to win, both heroes' graveyards and enchantments, and the battle camera. Off: that width stays an empty strip.", readouts_toggle)
+	var lock_toggle := CheckButton.new()
+	lock_toggle.name = "CameraDragLock"
+	lock_toggle.button_pressed = bool(settings.values.get("camera_drag_lock", false))
+	lock_toggle.toggled.connect(func(enabled: bool): settings.values.camera_drag_lock = enabled)
+	_settings_row(box, "Automatic camera keeps the view", "In battle, with the automatic camera on: dragging with the right mouse button does not turn the camera, so only the automatic camera and its F1–F4 views move it. Off: the right button always turns the camera.", lock_toggle)
 
 ## A restart asked for from the settings: the Options screen closes with OK
 ## first, so its original pages are kept too.
@@ -6667,6 +6775,10 @@ func _settings_box(page: VBoxContainer, title: String, featured := false) -> VBo
 ## One setting: its name and a (?) with its explanation, then its control
 ## (and an optional extra) on one line; under them a status line that stays
 ## hidden until _set_row_note gives it something to say.
+## Options help of the computer players' strength (ELAIChoice).
+const DUEL_AI_HELP := "How strong the computer opponent is in battle, in both games. Easy: the original opponent thinking less. Original: as in the original games. Smarter: judges positions steadily, looks at more replies and reads the fighting of the coming turns before it attacks or blocks. Puzzles are always defended by the smarter opponent. Each campaign and single scenario keeps its own choice: a new game takes it from its difficulty (Original on the lowest, otherwise the choice here), and during a game this changes that game's."
+const WORLD_AI_HELP := "First game, single player: how the computer players act on the map. Original: as in the original game. Smarter: computer heroes also pick skills as they level up, buy spells and runes at shops, and computer players cast global spells. Living world: smarter, and idle computer heroes patrol their lands, raid weakly held sites, escort a weaker hero to a siege and go back for runes; each computer player keeps its own temperament (story heroes and neutral creatures act as before). Each campaign and single scenario keeps its own choice: a new game takes it from its difficulty (Original on the lowest, otherwise the choice here), and during a game this changes that game's at once."
+
 func _settings_row(box: VBoxContainer, title: String, description: String, control: Control, extra: Control = null) -> void:
 	var row := VBoxContainer.new()
 	row.add_theme_constant_override("separation", 2)
@@ -6967,6 +7079,7 @@ func _apply_settings() -> void:
 		arena.set_detail(bool(settings.values.terrain_detail))
 		arena.set_water(bool(settings.values.enhanced_water))
 	ELEffectLook.use(settings.values)
+	ELIconUpscale.use(settings.values)
 	if is_instance_valid(arena): ELEffectLook.sync(arena.environment_settings, effects)
 	if is_instance_valid(blood): blood.set_enabled(bool(settings.values.blood))
 	_layout_hud()
@@ -7168,6 +7281,7 @@ func _begin_campaign(edition: String, scenario: Dictionary, difficulty: int, res
 	if edition == "el2" and restored.is_empty() and not scenario.has(ELSecondCampaign.KEY) and scenario.has("campaign") and profiles.has(edition):
 		var progress := ELSecondCampaign.for_chapter(profiles[edition], str(scenario.campaign), scenario, difficulty)
 		if not progress.is_empty():
+			if ELAIChoice.valid(scenario.get("ai")): progress.ai = ELAIChoice.normalized(scenario.ai)
 			scenario = scenario.duplicate()
 			scenario[ELSecondCampaign.KEY] = progress
 	var previous := campaign_view
@@ -7341,7 +7455,7 @@ class LoadingPanel extends Control:
 			picture.fill(Color.BLACK)
 			for piece: Dictionary in pieces:
 				if int(piece.step) > stage: break
-				var source := ELTexture.readable(piece.texture.get_image())
+				var source := ELTexture.readable(ELIconUpscale.image_of(piece.texture))
 				if source == null: continue
 				var part := source.get_region(Rect2i(piece.cut))
 				var bounds: Rect2 = piece.bounds
@@ -7400,6 +7514,17 @@ func director_battle_open() -> bool:
 
 func _campaign_battle() -> ELDuel:
 	return campaign_view.director.encounter.battle if campaign_view != null and campaign_view.director != null and campaign_view.director.encounter != null else null
+
+## The game being played on the map, whose own computer players' strength
+## Options changes (ELAIChoice); null outside one and in a network game.
+func _ai_game() -> ELAdventureSession:
+	if campaign_view == null or strategic_session != null or campaign_view.state == null: return null
+	return campaign_view.state if not ELAIChoice.of(campaign_view.state).is_empty() else null
+
+## The duel opponent's level: the game's in its battles, else the Options choice.
+func _duel_ai_level() -> int:
+	var game := _ai_game()
+	return ELAIChoice.duel_level(game if game != null and duel != null and duel == _campaign_battle() else null, settings)
 
 func _battle_player_side(battle: ELDuel) -> int:
 	if battle != null and battle == _campaign_battle(): return campaign_view.director.encounter.player_side()
@@ -7920,10 +8045,10 @@ func _right_button(event: InputEvent) -> void:
 			_refresh()
 		_set_strip_preview(_strip_preview_at(event.position) if event.pressed else -1)
 	elif event is InputEventMouseMotion and right_down:
-		# With the automatic camera on (its F1-F4 views) the right button does
-		# not turn the camera; with it off the camera is free to turn and the
-		# F1-F4 views still answer (player report #117).
-		if not orbiting and event.position.distance_to(right_from) > 6.0 and not _auto_camera_on():
+		# The right button always turns the camera, unless the player asked the
+		# automatic camera (its F1-F4 views) to keep the view (setting
+		# "camera_drag_lock", player report #117).
+		if not orbiting and event.position.distance_to(right_from) > 6.0 and not (_auto_camera_on() and bool(settings.values.get("camera_drag_lock", false))):
 			orbiting = true
 			_set_strip_preview(-1)
 		elif not orbiting:

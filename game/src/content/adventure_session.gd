@@ -15,6 +15,12 @@ var current_player := 1
 var day := 1
 var income_day := 0
 var difficulty := 0
+## The computer players' strength chosen for this game (ELAIChoice): the duel
+## opponent (ELSettings.DUEL_AI_LEVELS) and the first game's map players
+## (WORLD_AI_LEVELS); -1 until the view sets them. Saved, carried to the next
+## chapter.
+var duel_ai := -1
+var world_ai := -1
 var script_name := ""
 var seed_value := 212
 var camera_zoom := 40.0
@@ -101,6 +107,8 @@ func start(source: ELAdventureMap, level := 0, seed_number := 212, scenario_scri
 	# The first game has five difficulties, the second three (its maps author
 	# DifLvl 0-2; a higher value would fall back to the easiest variant).
 	difficulty = clampi(level, 0, 4 if map.profile.id == "el1" else 2)
+	duel_ai = -1
+	world_ai = -1
 	seed_value = seed_number
 	script_name = scenario_script if not scenario_script.is_empty() else ELSingleScenario.map_path(map.id)
 	error = ""
@@ -325,17 +333,22 @@ func add_experience(hero_id: int, amount: int) -> int:
 		_fail("Invalid experience reward.")
 		return -1
 	var previous := int(hero.level)
+	var look := ELHeroLooks.worn(map.profile, hero)
 	var granted := ELHeroProgression.award(map.profile, hero, amount)
 	if granted > 0:
 		event.emit({"kind": "experience_gained", "id": hero_id, "amount": granted, "levels": int(hero.level) - previous})
+	# A campaign lord reaching a new level step changes its look on the map.
+	if ELHeroLooks.worn(map.profile, hero) != look: event.emit({"kind": "shape_changed", "id": hero_id})
 	return granted
 
-func move_spell(hero_id: int, card: String, index := -1, reserve_index := 0, commander := -1) -> bool:
+## `index` >= 0 stores that book slot; otherwise reserve copy `reserve_index`
+## of `card` joins the book, at its end or over book slot `slot`.
+func move_spell(hero_id: int, card: String, index := -1, reserve_index := 0, commander := -1, slot := -1) -> bool:
 	error = ""
 	var hero := object(hero_id)
 	var owner := current_player if commander < 0 else commander
 	if hero.is_empty() or not hero.alive or hero.owner != owner or hero.type != "hero": return _fail("This hero's spellbook is unavailable.")
-	var problem := ELSpellInventory.unequip(map.profile, hero, index) if index >= 0 else ELSpellInventory.equip(map.profile, hero, card, reserve_index)
+	var problem := ELSpellInventory.unequip(map.profile, hero, index) if index >= 0 else ELSpellInventory.equip(map.profile, hero, card, reserve_index, slot)
 	if not problem.is_empty(): return _fail(problem)
 	if not hook("Hook_OnInventorySpellMoved"): return false
 	event.emit({"kind": "inventory_changed", "id": hero_id})
@@ -402,6 +415,14 @@ func specializations(hero: Dictionary) -> Array[String]:
 	if active != "NONE" and not result.has(active): result.push_front(active)
 	return result
 
+## What the hero may switch to: its learned specialisations and, once it
+## knows one, none at all ("NONE", the table's own row), as the original's
+## drop-down offers. Empty while it knows none.
+func specialization_choices(hero: Dictionary) -> Array[String]:
+	var result := specializations(hero)
+	if not result.is_empty(): result.push_front("NONE")
+	return result
+
 ## A specialisation is available to heroes of a colour its row lists.
 func specialization_available(hero: Dictionary, code: String) -> bool:
 	if hero.is_empty() or not map.profile.table("HeroesSpecs").has(code): return false
@@ -427,7 +448,7 @@ func learn_specialization(id: int, code: String) -> bool:
 
 func choose_specialization(id: int, code: String) -> bool:
 	var hero := object(id)
-	if hero.is_empty() or not specializations(hero).has(code): return _fail("This hero does not know that specialization.")
+	if hero.is_empty() or not specialization_choices(hero).has(code): return _fail("This hero does not know that specialization.")
 	hero.specialization = code
 	event.emit({"kind": "object_changed", "id": id})
 	return true

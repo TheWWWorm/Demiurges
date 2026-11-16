@@ -15,8 +15,11 @@ const FRAME := 256 * 1024
 const BUFFER := 8 * 1024 * 1024
 const MAX_PACKET := 16 * 1024 * 1024
 const HEADER := 6
-## Channels the games use; frames on any other are dropped.
-const CHANNELS := [0]
+## Channels the games use (0 for autochess and duels; 1 and 2, control and
+## battle, for the strategic game); frames on any other are dropped. The
+## relay passes the channel byte through, and one socket keeps every
+## channel in order.
+const CHANNELS := [0, 1, 2]
 ## What the other side may leave waiting here: completed packets per peer
 ## and in all, and bytes of completed and unfinished packets in all. A
 ## sender beyond them is removed (a guest) or the room left (the host), as

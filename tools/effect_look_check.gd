@@ -18,7 +18,11 @@ extends SceneTree
 ##   draw the frame that closes its loop over the new cycle (which put twice
 ##   the particles on screen for one frame, flashing the picture every time
 ##   round), while a longer tail still plays;
-## - the light a flame casts keeps its own colour instead of turning pure red.
+## - the light a flame casts keeps its own colour instead of turning pure red;
+## - particle shadows: blended smoke, gas and water on the map and in battles
+##   get a shadow-only twin with the shadows preference; glowing sprites,
+##   glows drawn with plain blending, weather and short flashes get none, and
+##   running twins follow the preference.
 ##
 ##   godot --headless --path game --script ../tools/effect_look_check.gd
 ##
@@ -196,5 +200,101 @@ void fragment() { ALPHA = sprite_add(1.0); }
 	for i in 180: through = tracer._steady_figure_lights([], 1.0 / 60.0)
 	check(through.is_empty(), "a traced figure light goes out when its glow is gone")
 	tracer.free()
+
+	# Particle shadows.
+	_particle_shadows()
 	print("EFFECT LOOK: %d failure(s)" % failures.size())
 	quit(0 if failures.is_empty() else 1)
+
+## A small blended or glowing particle file: one sprite a frame.
+func _particle(sheet: String, additive: bool, frames := 60) -> ELParticleFile:
+	var file := ELParticleFile.new()
+	file.frames = frames
+	file.texture = sheet
+	file.additive = additive
+	file.max_count = 1
+	for frame in frames + 1: file.starts.append(mini(frame, frames))
+	for frame in frames:
+		file.positions.append_array(PackedFloat32Array([0.0, 0.0, 1.0 + frame * 0.05]))
+		file.sizes.append(1.5)
+		file.cells.append_array(PackedByteArray([0, 0]))
+		file.rgb.append_array(PackedByteArray([128, 128, 128]))
+		file.alpha.append(200)
+	return file
+
+## Blended smoke, mist and water cast a soft shadow through a shadow-only
+## twin; glowing sprites, glows drawn with plain blending, weather and short
+## flashes do not, and none cast with the shadows preference off.
+func _particle_shadows() -> void:
+	check(ELParticleFile.shadow_strength(_particle("SmokeBlack.bmp", false)) > 0.0 and ELParticleFile.shadow_strength(_particle("water00.bmp", false)) > 0.0 and ELParticleFile.shadow_strength(_particle("BlackGas.bmp", false)) > 0.0, "blended smoke, water and gas sheets cast a shadow")
+	check(ELParticleFile.shadow_strength(_particle("TendriSmoke.bmp", true)) == 0.0 and ELParticleFile.shadow_strength(_particle("Fire.bmp", true)) == 0.0, "glowing (additive) sheets cast none, smoke among them")
+	check(ELParticleFile.shadow_strength(_particle("ManaRed.bmp", false)) == 0.0 and ELParticleFile.shadow_strength(_particle("LightningBallRd.bmp", false)) == 0.0 and ELParticleFile.shadow_strength(_particle("MagmaGlow.bmp", false)) == 0.0, "glows drawn with plain blending cast none")
+	check(ELParticleFile.shadow_strength(_particle("BlueFX.bmp", false)) == 0.0 and ELParticleFile.shadow_strength(_particle("GreenFall.bmp", false)) == 0.0 and ELParticleFile.shadow_strength(_particle("Snow.bmp", false)) == 0.0, "rain, snow and falling leaves cast none")
+	check(ELParticleFile.shadow_strength(_particle("SmokeBlack.bmp", false, ELParticleFile.SHADOW_MIN_FRAMES - 1)) == 0.0, "a flash shorter than %d frames casts none" % ELParticleFile.SHADOW_MIN_FRAMES)
+	var shader := ELParticleFile.shadow_shader()
+	check(shader.code.contains("discard") and not shader.code.contains("blend_") and not shader.code.contains("ALPHA"), "the twin's shader is opaque with a dithered cut-out, so the renderer draws it into the shadow map")
+
+	ELEffectLook.use({"shadows": true})
+	check(ELParticleFile.shadows, "particle shadows follow the shadows preference")
+	var atlas := ImageTexture.create_from_image(Image.create(4, 4, false, Image.FORMAT_RGBA8))
+	# The map's effects.
+	var profile := ELProfile.new()
+	profile.id = "shadow_check"
+	var map := ELAdventureEffects.new()
+	map.profile = profile
+	map.weather_layer = Node3D.new()
+	map.add_child(map.weather_layer)
+	root.add_child(map)
+	var sheets := {"smoke.pfx": _particle("SmokeVoulcan.bmp", false), "fire.pfx": _particle("Fire.bmp", true), "terrainpfx/ash.pfx": _particle("SmokeBlack.bmp", false)}
+	for path: String in sheets:
+		var file: ELParticleFile = sheets[path]
+		ELAdventureEffects._kept[profile.id + ":" + path] = file
+		var material := ShaderMaterial.new()
+		material.set_shader_parameter("atlas", atlas)
+		map._materials["%s|%s|%d|%d|%s" % [profile.id, file.texture, file.columns, file.rows, file.additive]] = material
+		map.start(path, {"file": path, "x": 0.0, "y": 0.0, "z": 0.0}, 0.0, true)
+	var smoke := _twin(map.effects.get("smoke.pfx", {}))
+	check(smoke != null and ELParticleFile.twin_casts(smoke) and smoke.visible and smoke.cast_shadow == GeometryInstance3D.SHADOW_CASTING_SETTING_SHADOWS_ONLY, "map smoke gets a shadow-only twin")
+	check(smoke != null and smoke.multimesh == (map.effects["smoke.pfx"].node as MultiMeshInstance3D).multimesh, "the twin draws the effect's own quads")
+	check(map.effects.has("fire.pfx") and not ELParticleFile.twin_casts(_twin(map.effects["fire.pfx"])), "a glowing map effect casts no shadow")
+	check(map.effects.has("terrainpfx/ash.pfx") and not ELParticleFile.twin_casts(_twin(map.effects["terrainpfx/ash.pfx"])), "the map's weather layer casts no shadow")
+	ELEffectLook.use({"shadows": false})
+	check(not ELParticleFile.shadows and smoke != null and not smoke.visible, "a running twin stops casting when the shadows preference goes off")
+	map.start("late.pfx", {"file": "smoke.pfx", "x": 0.0, "y": 0.0, "z": 0.0}, 0.0, true)
+	var late := _twin(map.effects.get("late.pfx", {}))
+	check(late == null or not late.visible, "an effect started with shadows off casts none")
+	ELEffectLook.use({"shadows": true})
+	check(smoke != null and smoke.visible and late != null and late.visible, "and both cast once the preference is back on")
+
+	# Battle effects: pooled emitters change sheets, and the twin follows.
+	var battle := ELCombatEffects.new()
+	battle.profile = profile
+	root.add_child(battle)
+	var space := ELCombatEffects.cache_space(profile)
+	for path: String in ["gas.pfx", "spark.pfx", "combatarenas/snow.pfx"]:
+		var file: ELParticleFile = _particle("BlackGas.bmp", false) if path == "gas.pfx" else (_particle("Spark.bmp", true) if path == "spark.pfx" else _particle("BlueFX.bmp", false))
+		ELCombatEffects._files[space + ":" + path] = {"file": file, "frames": {}, "bytes": 0}
+		for use: String in ["effect", "arena"]:
+			var material := ShaderMaterial.new()
+			material.set_shader_parameter("atlas", atlas)
+			ELCombatEffects._materials["%s|%s|%s|%s" % [space, file.texture.to_lower(), use, file.additive]] = material
+	var gas := battle._spawn("gas.pfx", false, 30, Transform3D.IDENTITY)
+	check(not gas.is_empty() and ELParticleFile.twin_casts(gas.shadow) and (gas.shadow as MultiMeshInstance3D).visible, "a battle's gas casts a shadow")
+	battle._release(gas)
+	var spark := battle._spawn("spark.pfx", false, 30, Transform3D.IDENTITY)
+	check(not spark.is_empty() and is_same(spark.shadow, gas.shadow) and not ELParticleFile.twin_casts(spark.shadow) and not (spark.shadow as MultiMeshInstance3D).visible, "the same emitter reused for sparks casts none")
+	var snow := battle._spawn("combatarenas/snow.pfx", false, 0, Transform3D.IDENTITY, null, true)
+	var arena_gas := battle._spawn("gas.pfx", false, 0, Transform3D.IDENTITY, null, true)
+	check(not snow.is_empty() and not ELParticleFile.twin_casts(snow.shadow) and not arena_gas.is_empty() and not ELParticleFile.twin_casts(arena_gas.shadow), "the arena's own weather casts none")
+	ELEffectLook.use({"shadows": false})
+	var quiet := battle._spawn("gas.pfx", false, 30, Transform3D.IDENTITY)
+	check(not quiet.is_empty() and not (quiet.shadow as MultiMeshInstance3D).visible, "battle gas casts none with the shadows preference off")
+	ELEffectLook.use({})
+	for path: String in sheets: ELAdventureEffects._kept.erase(profile.id + ":" + path)
+	ELCombatEffects._forget_edition(profile.id)
+	map.queue_free()
+	battle.queue_free()
+
+func _twin(effect: Dictionary) -> MultiMeshInstance3D:
+	if effect.is_empty(): return null
+	return (effect.node as Node).get_node_or_null("Shadow") as MultiMeshInstance3D

@@ -41,8 +41,14 @@ static func color_enabled(hero: Dictionary, color: String) -> bool:
 	# Scenario color bans are independent of the hero's natural magic color.
 	return color in MAGIC_COLORS and hero.get("allowed_colors", {}).get(color, true)
 
-static func equip(profile: ELProfile, hero: Dictionary, card: String, reserve_index := 0) -> String:
-	if hero.cards.size() >= book_size(profile): return "The spellbook already contains %d spells." % book_size(profile)
+## Moves reserve copy `reserve_index` of `card` into the book: onto the end,
+## or with `slot` onto that occupied slot, as a laboratory purchase does (a
+## cantrip there stays under the spell and takes the slot back when it is
+## stored again; another spell goes to the reserve with its runes). A full
+## book of cantrips can therefore still take a spell from the reserve.
+static func equip(profile: ELProfile, hero: Dictionary, card: String, reserve_index := 0, slot := -1) -> String:
+	if slot >= hero.cards.size(): slot = -1
+	if slot < 0 and hero.cards.size() >= book_size(profile): return "The spellbook already contains %d spells." % book_size(profile)
 	if not allows(profile, hero, card): return "This hero cannot use that spell's magic color."
 	if int(hero.spell_stock.get(card, 0)) <= 0: return "There is no copy of that spell in reserve."
 	if reserve_index < 0 or reserve_index >= int(hero.spell_stock[card]): return "That reserve copy is unavailable."
@@ -50,11 +56,30 @@ static func equip(profile: ELProfile, hero: Dictionary, card: String, reserve_in
 	if profile.id == "el1":
 		if not ELRunes.restore(profile, hero): return "Invalid rune inventory."
 		uses = hero.rune_stock[card][reserve_index]
+	if slot >= 0: return _equip_over(profile, hero, card, reserve_index, slot, uses)
 	remove(hero, card, 1, reserve_index)
 	hero.cards.append(card)
 	if profile.id == "el1":
 		hero.rune_uses.append(uses)
 		if hero.has("rune_under"): hero.rune_under.append("")
+	return ""
+
+static func _equip_over(profile: ELProfile, hero: Dictionary, card: String, reserve_index: int, slot: int, uses: int) -> String:
+	var first := profile.id == "el1"
+	var old := str(hero.cards[slot])
+	var old_cantrip := first and ELRunes.unlimited(profile, hero, old)
+	var codes: Array[String] = ELRunes.under(hero) if first else ([] as Array[String])
+	# A cantrip neither goes to the reserve nor waits under another cantrip.
+	if first and ELRunes.unlimited(profile, hero, card) and (old_cantrip or not codes[slot].is_empty()): return "Cantrips cannot be moved to reserve."
+	if not old_cantrip:
+		if not add(profile, hero, old): return "That spell cannot be moved to reserve."
+		if first: hero.rune_stock[old][-1] = hero.rune_uses[slot]
+	remove(hero, card, 1, reserve_index)
+	hero.cards[slot] = card
+	if first:
+		hero.rune_uses[slot] = uses
+		if old_cantrip: codes[slot] = old
+		ELRunes.set_under(hero, codes)
 	return ""
 
 static func unequip(profile: ELProfile, hero: Dictionary, index: int) -> String:

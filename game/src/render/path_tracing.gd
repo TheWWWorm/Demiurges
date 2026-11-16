@@ -78,7 +78,10 @@ var translate: Callable
 var _effect: Effect
 # Registered scenes: {camera, root, sun, environment, effects, arena}.
 var _contexts: Array[Dictionary] = []
-var _active := false     # tracing set up on the current context
+var _active := false     # tracing asked for on the current context
+var _committed := false  # its GPU side is ready and the lighting switched over
+## Why the GPU side could not be set up, once it failed ("" while it has not).
+var failure_report := ""
 var _camera: Camera3D
 var _root: Node3D
 var _sun: DirectionalLight3D
@@ -156,6 +159,7 @@ func _ready() -> void:
 		if arg.begins_with("--path-tracing-fx="): _fx_name = arg.get_slice("=", 1)
 		elif arg.begins_with("--path-tracing-fx-shot="): _fx_shot = arg.get_slice("=", 1)
 		elif arg.begins_with("--path-tracing-fx-delay="): _fx_delay = float(arg.get_slice("=", 1))
+		elif arg.begins_with("--path-tracing-fail="): Effect.test_failure = arg.get_slice("=", 1)
 	# Runs after the scenes' own cameras have moved each frame.
 	process_priority = 1000
 
@@ -223,7 +227,7 @@ func _input(event: InputEvent) -> void:
 
 ## Switches tracing on or off (where the renderer and GPU allow it).
 func set_enabled(on: bool) -> void:
-	on = on and _effect != null
+	on = on and _effect != null and _effect.state() != Effect.FAILED
 	if on == enabled: return
 	enabled = on
 	if not on: lighting_view = false
@@ -239,7 +243,10 @@ func _say(text: String) -> void:
 	_label_time = 3.0
 
 ## Shadow maps and multisampling give way to the traced shadows while on;
-## everything returns to the scene's own settings when tracing stops.
+## everything returns to the scene's own settings when tracing stops. The
+## GPU side is set up on the render thread first (its programs, buffers and
+## images): the lighting switches over only once that has worked (_commit),
+## and a failure leaves the raster lighting as it was (_give_up).
 func _activate() -> void:
 	if _effect == null or _active or not is_instance_valid(_camera): return
 	_active = true
@@ -250,6 +257,11 @@ func _activate() -> void:
 	_scan = 0.0
 	_effect.enabled = true
 	_effect.history_reset = true
+	if _effect.state() == Effect.READY: _commit()
+
+func _commit() -> void:
+	if _committed: return
+	_committed = true
 	var viewport := get_viewport()
 	if _saved_msaa < 0:
 		_saved_msaa = viewport.msaa_3d
@@ -268,7 +280,7 @@ func _activate() -> void:
 ## the one restored when tracing stops, and tracing keeps multisampling off,
 ## which the traced image cannot be composed onto.
 func display_applied() -> void:
-	if not _active: return
+	if not _committed: return
 	var viewport := get_viewport()
 	_saved_msaa = viewport.msaa_3d
 	_saved_aa = viewport.screen_space_aa
@@ -284,10 +296,23 @@ func _traced_antialiasing() -> Viewport.ScreenSpaceAA:
 	if settings != null and ELGraphicsSDK.active_upscaler(settings.values) != ELGraphicsSDK.OFF: return Viewport.SCREEN_SPACE_AA_DISABLED
 	return Viewport.SCREEN_SPACE_AA_FXAA
 
+## The GPU side could not be set up (or lost its images): tracing stops,
+## the raster lighting and anti-aliasing come back, and nothing more is
+## sent to the render thread.
+func _give_up() -> void:
+	_deactivate()
+	enabled = false
+	lighting_view = false
+	failure_report = _effect.failure()
+	push_warning("Path tracing stopped: " + failure_report)
+	_say(_t("Path tracing could not start on this GPU"))
+
 func _deactivate() -> void:
 	if not _active: return
 	_active = false
 	_effect.enabled = false
+	if not _committed: return
+	_committed = false
 	var viewport := get_viewport()
 	if _saved_msaa >= 0:
 		viewport.msaa_3d = _saved_msaa as Viewport.MSAA
@@ -314,7 +339,11 @@ func _process(delta: float) -> void:
 				_switch(context)
 				break
 	if not _fx_name.is_empty(): _effect_check(delta)
-	if not enabled or not _active or not is_instance_valid(_root) or current != _camera: return
+	if _active:
+		match _effect.state():
+			Effect.READY: _commit()
+			Effect.FAILED: _give_up()
+	if not enabled or not _committed or not is_instance_valid(_root) or current != _camera: return
 	var started := Time.get_ticks_usec()
 	_snapshot(delta)
 	_snapshot_us = Time.get_ticks_usec() - started
@@ -1068,6 +1097,13 @@ class Effect extends CompositorEffect:
 	const FRAME_BYTES := 320
 	const DOUBLE_SIDED := RenderingDevice.ACCELERATION_STRUCTURE_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT
 	const REBUILD_INTERVAL := 120
+	## state(): the GPU side not tried yet, set up, or failed for good.
+	const UNTRIED := 0
+	const READY := 1
+	const FAILED := -1
+	## Checks: "prepare" or "resize" makes that step fail as a GPU without
+	## the memory would (--path-tracing-fail=...).
+	static var test_failure := ""
 
 	var history_reset := true
 	var _mutex := Mutex.new()
@@ -1079,7 +1115,8 @@ class Effect extends CompositorEffect:
 	var _stats := {}
 
 	var _rd: RenderingDevice
-	var _ready_state := 0   # 0 untried, 1 ready, -1 failed
+	var _ready_state := UNTRIED   # written on the render thread under _mutex
+	var _failure := ""
 	var _expand_shader := RID()
 	var _expand_pipeline := RID()
 	var _trace_shader := RID()
@@ -1151,23 +1188,52 @@ class Effect extends CompositorEffect:
 		needs_normal_roughness = true
 		enabled = false
 
+	## Whether the GPU side is set up (main thread; UNTRIED, READY or FAILED).
+	func state() -> int:
+		_mutex.lock()
+		var result := _ready_state
+		_mutex.unlock()
+		return result
+
+	## Why the GPU side failed, or "".
+	func failure() -> String:
+		_mutex.lock()
+		var result := _failure
+		_mutex.unlock()
+		return result
+
+	# Updates sent after a failure are dropped: nothing would ever take them.
 	func submit(ops: Array, instances: Array, frame: Dictionary) -> void:
 		_mutex.lock()
-		_ops.append_array(ops)
-		_instances = instances
-		_frame = frame
+		if _ready_state != FAILED:
+			_ops.append_array(ops)
+			_instances = instances
+			_frame = frame
 		_mutex.unlock()
 
 	func queue_layer(layer: int, data: PackedByteArray) -> void:
 		_mutex.lock()
-		_ops.append(["layer", layer, data])
+		if _ready_state != FAILED: _ops.append(["layer", layer, data])
 		_mutex.unlock()
 
 	## `full`: everything, history included; otherwise the geometry only (the
 	## objects are sent again right after it).
 	func queue_reset(full := true) -> void:
 		_mutex.lock()
-		_ops.append(["reset", full])
+		if _ready_state != FAILED: _ops.append(["reset", full])
+		_mutex.unlock()
+
+	## Render thread: frees whatever was made, drops the queued updates and
+	## marks the effect failed for good.
+	func _fail(reason: String) -> void:
+		push_warning("Path tracing: " + reason)
+		_free_all()
+		_mutex.lock()
+		_ready_state = FAILED
+		_failure = reason
+		_ops = []
+		_instances = []
+		_frame = {}
 		_mutex.unlock()
 
 	func take_overflow() -> bool:
@@ -1188,8 +1254,16 @@ class Effect extends CompositorEffect:
 		return result
 
 	func _render_callback(_type: int, render_data: RenderData) -> void:
-		if _ready_state == 0: _ready_state = 1 if _prepare() else -1
-		if _ready_state < 0: return
+		if _ready_state == UNTRIED:
+			# The forced failure comes after everything was made, so that
+			# freeing it is checked too.
+			if _prepare() and test_failure != "prepare":
+				_mutex.lock()
+				_ready_state = READY
+				_mutex.unlock()
+			else:
+				_fail("the GPU resources could not be created")
+		if _ready_state != READY: return
 		_mutex.lock()
 		var ops := _ops
 		_ops = []
@@ -1206,7 +1280,9 @@ class Effect extends CompositorEffect:
 		if buffers == null or scene == null: return
 		var size := buffers.get_internal_size()
 		if size.x <= 0 or size.y <= 0: return
-		if size != _size: _resize(size)
+		if size != _size and not _resize(size):
+			_fail("the %d×%d images could not be created" % [size.x, size.y])
+			return
 		_rd.capture_timestamp("Path trace begin")
 		_run(instances, buffers, scene, frame, size)
 		_rd.capture_timestamp("Path trace end")
@@ -1294,20 +1370,28 @@ class Effect extends CompositorEffect:
 				return RID()
 		return _rd.shader_create_from_spirv(spirv, label)
 
-	func _resize(size: Vector2i) -> void:
+	## The ten full-size images (light, guide and filter pairs, surfaces, sun
+	## pair). False, with none kept, when any could not be made.
+	func _resize(size: Vector2i) -> bool:
 		for rid in _images: if rid.is_valid(): _rd.free_rid(rid)
 		_images.clear()
+		_size = Vector2i.ZERO
 		var format := RDTextureFormat.new()
 		format.width = size.x
 		format.height = size.y
 		format.format = RenderingDevice.DATA_FORMAT_R16G16B16A16_SFLOAT
 		format.usage_bits = RenderingDevice.TEXTURE_USAGE_STORAGE_BIT | RenderingDevice.TEXTURE_USAGE_SAMPLING_BIT | RenderingDevice.TEXTURE_USAGE_CAN_COPY_TO_BIT
 		for i in 10:
-			var image := _rd.texture_create(format, RDTextureView.new())
-			_rd.texture_clear(image, Color(0, 0, 0, 0), 0, 1, 0, 1)
+			var image := RID() if test_failure == "resize" and i == 6 else _rd.texture_create(format, RDTextureView.new())
+			if not image.is_valid() or _rd.texture_clear(image, Color(0, 0, 0, 0), 0, 1, 0, 1) != OK:
+				if image.is_valid(): _rd.free_rid(image)
+				for made in _images: _rd.free_rid(made)
+				_images.clear()
+				return false
 			_images.append(image)
 		_size = size
 		history_reset = true
+		return true
 
 	# -- scene snapshot -----------------------------------------------------
 
@@ -1752,4 +1836,11 @@ class Effect extends CompositorEffect:
 		_sbt = RID()
 		_tlas_capacity = 0
 		_normal_capacity = 0
-		_ready_state = 0
+		_size = Vector2i.ZERO
+		for rid_name: StringName in [&"_expand_shader", &"_expand_pipeline", &"_trace_shader", &"_trace_pipeline", &"_filter_shader", &"_filter_pipeline",
+				&"_source", &"_source_uv", &"_indices", &"_corners", &"_corner_uv", &"_corner_normals", &"_slot_buffer", &"_frame_buffer", &"_light_buffer",
+				&"_albedo", &"_linear", &"_nearest"]:
+			set(rid_name, RID())
+		_mutex.lock()
+		_ready_state = UNTRIED
+		_mutex.unlock()

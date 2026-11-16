@@ -24,6 +24,9 @@ const KEY_PREFIX := "maps/custom/"
 const USER_FOLDER := "user://maps"
 ## Scenarios read from map files that came without one.
 const CACHE_FOLDER := "user://maps-cache"
+## Where an imported archive is unpacked and checked before it replaces the
+## map's folder.
+const STAGING_FOLDER := "user://maps-import"
 ## The files a custom map may bring. An import copies nothing else.
 const EXTENSIONS := ["smp", "sbm", "scp", "bm1", "bm2", "bmp", "png", "jpg", "mp3", "ogg", "txt"]
 ## Custom files that stand in for the shipped extensions the loaders read.
@@ -266,8 +269,11 @@ static func music(profile: ELProfile, id: String) -> AudioStream:
 ## Copies a custom map archive (.zip) into user://maps/<archive name>/. The
 ## archive's map folder is the shallowest folder holding a scenario or map
 ## file; only the custom-map file types under it are copied, keeping
-## sub-folders, each name cleaned. Returns {maps: [ids], error: ""}; nothing
-## is written when the archive holds no map.
+## sub-folders, each name cleaned. The new copy replaces the folder whole
+## (files the archive no longer has go with the old copy), and only once
+## every file is written; a failed import leaves the previous copy as it
+## was. Returns {maps: [ids], error: ""}; nothing is written when the
+## archive holds no map.
 static func import_zip(path: String) -> Dictionary:
 	var reader := ZIPReader.new()
 	if reader.open(path) != OK: return {"maps": [], "error": "The archive could not be opened."}
@@ -303,29 +309,66 @@ static func import_zip(path: String) -> Dictionary:
 			parts.append(cleaned)
 		if parts.is_empty() or parts.size() > MAX_DEPTH + 1: continue
 		var relative := "/".join(parts)
+		if ELContentLibrary.safe_relative(relative).is_empty(): continue
 		if chosen.has(relative.to_lower()): continue
 		chosen[relative.to_lower()] = [entry, relative]
 		if parts.size() == 1 and relative.get_extension().to_lower() in ["smp", "sbm"]: names.append(relative)
 	if chosen.size() > MAX_FILES:
 		reader.close()
 		return {"maps": [], "error": "The archive holds too many files."}
+	if names.is_empty():
+		reader.close()
+		return {"maps": [], "error": "The archive has no custom map: it needs a scenario (.smp) or map file (.sbm)."}
 	var name := clean_name(path.get_file().get_basename()).trim_suffix(".").strip_edges()
-	if name.is_empty(): name = names[0].get_basename().trim_suffix(".")
-	var folder := ProjectSettings.globalize_path(USER_FOLDER).path_join(name)
+	if name.is_empty() or ELContentLibrary.safe_relative(name).is_empty(): name = clean_name(names[0].get_basename()).trim_suffix(".").strip_edges()
+	if name.is_empty() or ELContentLibrary.safe_relative(name).is_empty(): name = "Map"
+	var maps := ProjectSettings.globalize_path(USER_FOLDER)
+	var folder := ELContentLibrary.inside(maps, name)
+	# The package is unpacked beside the maps folder (not in it, where the
+	# index would read a half-written map), checked, and only then put in
+	# place of the previous copy, which is kept until that succeeds.
+	var staging := ProjectSettings.globalize_path(STAGING_FOLDER)
+	var stage := staging.path_join("import-%d" % Time.get_ticks_usec())
+	var previous := staging.path_join("previous-%d" % Time.get_ticks_usec())
+	if folder.is_empty() or DirAccess.make_dir_recursive_absolute(stage) != OK or DirAccess.make_dir_recursive_absolute(maps) != OK:
+		reader.close()
+		ELContentLibrary.remove_tree(stage)
+		return {"maps": [], "error": "The maps folder could not be created."}
 	var total := 0
+	var error := ""
+	var written := {}
 	for key: String in chosen:
 		var data := reader.read_file(chosen[key][0])
 		if data.size() > MAX_FILE_BYTES: continue
 		total += data.size()
-		if total > MAX_IMPORT_BYTES: break
-		var target := folder.path_join(chosen[key][1])
+		if total > MAX_IMPORT_BYTES:
+			error = "The archive is too large."
+			break
+		var target := ELContentLibrary.inside(stage, chosen[key][1])
+		if target.is_empty(): continue
 		if DirAccess.make_dir_recursive_absolute(target.get_base_dir()) != OK:
-			reader.close()
-			return {"maps": [], "error": "The maps folder could not be created."}
+			error = "The maps folder could not be created."
+			break
 		if not ELSafeFile.write_bytes(target, data):
-			reader.close()
-			return {"maps": [], "error": "A map file could not be written."}
+			error = "A map file could not be written."
+			break
+		written[String(chosen[key][1])] = data.size()
 	reader.close()
+	# Every map file at the top must be there, with something in it.
+	if error.is_empty():
+		for file: String in names:
+			if int(written.get(file, 0)) <= 0: error = "The archive's map %s is empty or too large." % file
+	if error.is_empty() and DirAccess.dir_exists_absolute(folder) and DirAccess.rename_absolute(folder, previous) != OK:
+		error = "The previous copy of the map could not be replaced."
+	if error.is_empty() and DirAccess.rename_absolute(stage, folder) != OK:
+		error = "The map could not be stored."
+		# Put the previous copy back; should even that fail, it stays in
+		# the staging folder rather than being lost.
+		if DirAccess.dir_exists_absolute(previous) and DirAccess.rename_absolute(previous, folder) != OK: previous = ""
+	ELContentLibrary.remove_tree(stage)
+	if not previous.is_empty(): ELContentLibrary.remove_tree(previous)
+	DirAccess.remove_absolute(staging)   # only when nothing was left in it
+	if not error.is_empty(): return {"maps": [], "error": error}
 	# The ids the index gives these files (pairs share the map file's name).
 	var found: Dictionary = {}
 	for file: String in names:

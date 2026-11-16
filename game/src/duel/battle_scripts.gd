@@ -187,7 +187,33 @@ func _open(name: String, side: int) -> Dictionary:
 		return {}
 	for hook: String in HOOKS:
 		if vm.globals.get(hook) is ELLuaVM.Closure: state.hooks[hook] = vm.globals[hook]
+	_guard_recipe(state)
 	return state
+
+## The artifact tracker's first recipe (Wand of Purify, or Rod of Pteroses while
+## the Pteros lives) asks for one and only one Pteros or Reinforced Pteros. The
+## tracker clears `ba1_isReceipeValid` when its hero summons a second one, but
+## the original never reads the flag and makes the artifact anyway, although
+## the recipe's text promises the condition. The remake honours the text: the
+## recipe's end-of-battle step (`CHookBA1_OnVisualHeroDeath`) becomes a native
+## that runs the tracker's own function only while the flag is still set. The
+## native is saved by name, so saved script states reload with the check; a
+## state saved before it existed gets it again in `restore`.
+const RECIPE_GRANT := "CHookBA1_OnVisualHeroDeath"
+const RECIPE_VALID := "ba1_isReceipeValid"
+
+func _guard_recipe(state: Dictionary) -> void:
+	if chunk_path(state.name) != chunk_path(ELSecondArtifacts.TRACKER): return
+	var grant: Variant = state.vm.globals.get(RECIPE_GRANT)
+	if grant is not ELLuaVM.Closure: return
+	state.recipe_grant = grant
+	state.vm.bind(RECIPE_GRANT, _recipe_grant)
+
+## Natives run only inside their own state's hooks, so `_running` is the tracker.
+func _recipe_grant(arguments: Array) -> Array:
+	var state := _running
+	if not state.has("recipe_grant") or state.vm.globals.get(RECIPE_VALID) == null: return []
+	return state.vm._invoke(state.recipe_grant, arguments)
 
 func _call(state: Dictionary, function: Variant, arguments: Array) -> void:
 	var vm: ELLuaVM = state.vm
@@ -454,6 +480,7 @@ func restore(raw: Dictionary) -> String:
 			return "Invalid saved battle script %s: %s" % [saved.name, decoder.error]
 		# Library constants come from the engine; JSON keeps only 15 digits.
 		if state.vm.globals.get("PI") is float and absf(float(state.vm.globals.PI) - PI) < 0.000001: state.vm.globals.PI = PI
+		_guard_recipe(state)
 		loaded.append(state)
 	close()
 	states = loaded

@@ -6,7 +6,8 @@ extends SceneTree
 ##   (the click before it orders nothing), a double-click on bare ground
 ##   does not;
 ## - a spell picture on that screen has the picture tooltip with the spell's
-##   name and description from the game's texts, and no plain text tooltip.
+##   name and description from the game's texts, and no plain text tooltip;
+## - a long camera turn keeps the angle (and the saved one) within one turn.
 ##
 ##   godot --headless --path game --script ../tools/first_map_check.gd
 ##
@@ -85,6 +86,15 @@ func _map_part() -> void:
 		state.explored[index] = before
 	var own := ELFirstScenario.castle_object(state, player)
 	check(not own.is_empty() and hud.minimap_known(own), "the player's own castle is on the minimap")
+
+	# Turning the camera for a long time keeps the saved angle within one turn
+	# (an angle past the save's old limit made the save unloadable).
+	var yaw := view.yaw
+	view.yaw += 2000.0 * TAU + 0.5
+	view._update_camera()
+	check(view.yaw >= 0.0 and view.yaw < TAU and is_equal_approx(view.yaw, fposmod(yaw + 0.5, TAU)) and state.camera_rotation >= 0.0 and state.camera_rotation < 360.0, "a long camera turn keeps the angle within one turn (%.3f rad, %.1f degrees)" % [view.yaw, state.camera_rotation])
+	view.yaw = yaw
+	view._update_camera()
 
 	# Castle double-click.
 	check(not own.is_empty(), "the player has a castle")

@@ -193,7 +193,7 @@ func refresh() -> void:
 	labels.InvScrLevelText.text = str(int(hero.get("level", 1)))
 	labels.InvScrLifeText.tooltip_text = hud.tooltip_of("InvScrLifeText")
 	labels.InvScrActiveSpec.text = spec_name(model.specialization)
-	_specs = state.specializations(hero)
+	_specs = state.specialization_choices(hero)
 	# the drop button is enabled when the hero owns a specialisation.
 	buttons.InvScrDropBtn.disabled = _specs.is_empty()
 	var skills: Array = hero.get("skills", {}).keys()
@@ -218,7 +218,7 @@ func show_specs(value: bool) -> void:
 		var names: Array = []
 		var tips: Array = []
 		for code: String in _specs:
-			names.append(spec_name(code))
+			names.append(spec_name(code) if code != "NONE" else profile.text(str(profile.table("HeroesSpecs").get("NONE", {}).get("Name", "No specialization"))))
 			tips.append(profile.text(str(profile.table("HeroesSpecs").get(code, {}).get("Desc", ""))))
 		spec_popup.fill(names, tips, _specs.find(model.specialization))
 	spec_popup.visible = value and not _specs.is_empty()

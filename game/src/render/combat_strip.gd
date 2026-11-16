@@ -139,12 +139,30 @@ func layout() -> void:
 ## Replaces the icons. `key` names the shown list (character, mode and
 ## contents); a different list starts again at the first icon.
 func set_items(list: Array[Dictionary], key: String) -> void:
+	var same_list := key == _key
 	if key != _key:
 		first = 0
 		offset = 0.0
 		_key = key
 	items = list
 	first = clampi(first, 0, maxi(0, items.size() - visible_count()))
+	# The same list again (a refresh with nothing added or removed) keeps its
+	# buttons and only updates them: a character with dozens of enchantments
+	# would otherwise rebuild dozens of buttons on every refresh.
+	if same_list and buttons.size() == items.size() and not buttons.is_empty():
+		for i in items.size():
+			var item: Dictionary = items[i]
+			var kept: TextureButton = buttons[i]
+			kept.texture_normal = item.get("icon")
+			kept.tooltip_text = str(item.get("tooltip", ""))
+			kept.disabled = not item.get("enabled", false)
+			for key_name: String in item.get("meta", {}): kept.set_meta(key_name, item.meta[key_name])
+			for child in kept.get_children():
+				if child is Control: (child as Control).queue_redraw()
+		_place_row()
+		_update_arrows()
+		queue_redraw()
+		return
 	for button in buttons:
 		_row.remove_child(button)
 		button.queue_free()

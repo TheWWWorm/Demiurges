@@ -75,10 +75,10 @@ static func carry_picture(icon: Texture2D) -> Texture2D:
 	if icon is AtlasTexture:
 		var atlas := icon as AtlasTexture
 		if atlas.atlas == null: return null
-		image = atlas.atlas.get_image()
+		image = ELIconUpscale.image_of(atlas.atlas)
 		origin = Vector2i(atlas.region.position)
 	else:
-		image = icon.get_image()
+		image = ELIconUpscale.image_of(icon)
 	if image == null: return null
 	if image.is_compressed():
 		image = image.duplicate()

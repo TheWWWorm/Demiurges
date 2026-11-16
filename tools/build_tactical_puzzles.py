@@ -18,10 +18,16 @@ from puzzle_designs_el1_master import puzzles as first_master
 from puzzle_designs_el1_legends import puzzles as first_legends
 from puzzle_designs_el1_legends_extra import puzzles as first_legends_extra
 from puzzle_designs_el1_legends_crowd import puzzles as first_legends_crowd
+from puzzle_designs_el1_curiosities import puzzles as first_curiosities
+from puzzle_designs_el1_paradoxes import puzzles as first_paradoxes
+from puzzle_designs_el1_crossroads import puzzles as first_crossroads
 from puzzle_designs_el2 import puzzles as second_puzzles
 from puzzle_designs_el2_advanced import puzzles as second_advanced
 from puzzle_designs_el2_master import puzzles as second_master
 from puzzle_designs_el2_legends import puzzles as second_legends
+from puzzle_designs_el2_curiosities import puzzles as second_curiosities
+from puzzle_designs_el2_paradoxes import puzzles as second_paradoxes
+from puzzle_designs_el2_crossroads import puzzles as second_crossroads
 from puzzle_designs_pale import puzzles as pale_puzzles
 
 # These are role labels for the existing studies, not invented campaign names.
@@ -36,8 +42,43 @@ HERO_LABELS = {
 }
 
 
-def entries(edition):
+def entries(edition, collection="all"):
     result = (first_puzzles() + first_advanced() + first_master() + first_legends() + first_legends_extra() + first_legends_crowd()) if edition == "el1" else (second_puzzles() + pale_puzzles() + second_advanced() + second_master() + second_legends())
+    additions = first_curiosities() if edition == "el1" else second_curiosities()
+    paradoxes = first_paradoxes() if edition == "el1" else second_paradoxes()
+    crossroads = first_crossroads() if edition == "el1" else second_crossroads()
+    for entry in additions:
+        entry["expansion"] = "curiosities-v1"
+        # The existing selector searches categories in both languages. A
+        # visible label makes this expansion discoverable without a UI fork.
+        if not entry["category"].startswith("Curiosities · "):
+            entry["category"] = "Curiosities · " + entry["category"]
+        if not entry["category_ru"].startswith("Курьёзы · "):
+            entry["category_ru"] = "Курьёзы · " + entry["category_ru"]
+    for entry in paradoxes:
+        entry["expansion"] = "curiosities-v2"
+        if not entry["category"].startswith("Curiosities · Paradoxes · "):
+            entry["category"] = "Curiosities · Paradoxes · " + entry["category"]
+        if not entry["category_ru"].startswith("Курьёзы · Парадоксы · "):
+            entry["category_ru"] = "Курьёзы · Парадоксы · " + entry["category_ru"]
+    for entry in crossroads:
+        entry["expansion"] = "curiosities-v3"
+        if not entry["category"].startswith("Curiosities · Crossroads · "):
+            entry["category"] = "Curiosities · Crossroads · " + entry["category"]
+        if not entry["category_ru"].startswith("Курьёзы · Развилки · "):
+            entry["category_ru"] = "Курьёзы · Развилки · " + entry["category_ru"]
+    if collection == "curiosities":
+        result = additions + paradoxes + crossroads
+    elif collection == "crossroads":
+        result = crossroads
+    elif collection == "paradoxes":
+        result = paradoxes
+    elif collection == "curiosities-v1":
+        result = additions
+    elif collection == "all":
+        result += additions + paradoxes + crossroads
+    elif collection != "original":
+        raise ValueError("Unknown puzzle collection: " + collection)
     module = __import__("puzzle_translations_" + edition)
     translations = module.TRANSLATIONS
     for entry in result:
@@ -72,24 +113,34 @@ def entries(edition):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--edition", choices=("el1", "el2", "both"), default="both")
+    parser.add_argument("--collection", choices=("all", "curiosities", "crossroads", "paradoxes", "curiosities-v1", "original"), default="all",
+                        help="Build all studies, all Curiosities expansions, one named expansion, or the original studies")
     parser.add_argument("--godot", default=shutil.which("godot") or shutil.which("godot4") or shutil.which("godot-4") or "godot")
     parser.add_argument("--report-dir", type=Path, default=ROOT / "build/puzzle-validation")
-    parser.add_argument("--output-dir", type=Path, default=ROOT / "game/puzzles")
+    parser.add_argument("--output-dir", type=Path,
+                        help="Destination; subsets default to build/puzzle-collections/<collection> so they cannot replace the installed catalog")
     parser.add_argument("--prove", action="store_true", help="Also run the bounded adversarial search")
     parser.add_argument("--reference-order", action="store_true", help="Try reference moves first at exact matching search states")
     parser.add_argument("--reference-policy", action="store_true", help="Also try reference moves at matching own-resource/army contexts; legal moves and full-state search are unchanged")
     parser.add_argument("--depth", type=int, default=32)
     parser.add_argument("--budget", type=int, default=80000)
     args = parser.parse_args()
+    if args.output_dir is None:
+        args.output_dir = ROOT / ("game/puzzles" if args.collection == "all" else "build/puzzle-collections/" + args.collection)
+    if args.collection != "all" and args.output_dir.resolve() == (ROOT / "game/puzzles").resolve():
+        parser.error("A subset cannot replace game/puzzles; choose a separate --output-dir")
     editions = ("el1", "el2") if args.edition == "both" else (args.edition,)
     args.report_dir.mkdir(parents=True, exist_ok=True)
     validated = {}
     with tempfile.TemporaryDirectory(prefix="demiurges-puzzles-") as folder:
         temp = Path(folder)
         for edition in editions:
+            collection_name = {"curiosities": "Curiosities", "curiosities-v1": "Curiosities", "paradoxes": "Curiosities: Paradoxes", "crossroads": "Curiosities: Crossroads"}.get(args.collection, "Tactical Studies")
+            collection_id = {"curiosities": "curiosities-v3", "curiosities-v1": "curiosities-v1", "paradoxes": "curiosities-v2", "crossroads": "curiosities-v3"}.get(args.collection, "tactical-studies-v2")
             pack = {"format": "etherlords-puzzles", "version": 2, "game": edition,
-                    "collection": "Tactical Studies", "collection_id": "tactical-studies-v2", "content_revision": 4,
-                    "puzzles": entries(edition)}
+                    "collection": collection_name, "collection_id": collection_id,
+                    "content_revision": {"original": 4, "curiosities-v1": 5, "paradoxes": 6}.get(args.collection, 7),
+                    "puzzles": entries(edition, args.collection)}
             path = temp / (edition + ".json")
             path.write_text(json.dumps(pack, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
             command = [sys.executable, str(ROOT / "tools/puzzle_lab.py"), "--godot", args.godot,

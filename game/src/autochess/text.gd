@@ -135,7 +135,7 @@ const RU := {
 	"Host online": "Создать сетевую игру", "Join online": "Подключиться", "Back": "Назад", "Address": "Адрес", "Name": "Имя",
 	"Start": "Начать", "Players": "Игроки", "Computer": "Компьютер", "Waiting for players… %d joined.": "Ожидание игроков… подключилось: %d.",
 	"Connecting…": "Подключение…", "The connection was lost.": "Соединение потеряно.", "Could not host on port %d.": "Не удалось открыть порт %d.",
-	"Could not connect.": "Не удалось подключиться.", "Waiting for the host to start.": "Ожидание начала игры.",
+	"Could not connect.": "Не удалось подключиться.", "Waiting for the host to start.": "Ожидание начала игры.", "Waiting for the current battle to end…": "Ожидание конца текущего боя…",
 	"The game differs from the host's. Use the same Etherlords II installation.": "Игра отличается от игры ведущего. Нужна та же установка Etherlords II.",
 	"Empty seats are taken by computer heroes.": "Свободные места займут компьютерные герои.",
 	"Hero": "Герой", "The saved tournament could not be read.": "Не удалось прочитать сохранённый турнир.",

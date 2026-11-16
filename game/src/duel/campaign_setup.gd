@@ -11,8 +11,12 @@ var difficulty: OptionButton
 var description: RichTextLabel
 var campaign_description := ""
 ## The player's preferences: the computer players' strength is chosen
-## beside the difficulty (ELAIChoice), saved at once.
+## beside the difficulty (ELAIChoice) for the game being begun; a difficulty
+## change puts that difficulty's levels back. Begin gives them to the chapter
+## row ("ai"); the Options choices are not changed here.
 var settings: ELSettings
+var ai_levels: Dictionary = {}
+var ai_picks: Dictionary = {}
 var _world_ai: Control
 var entries: Array[Dictionary] = []
 
@@ -51,7 +55,8 @@ func build(available: Dictionary, initial: String) -> void:
 			var caption := Label.new()
 			caption.text = ELAIChoice.caption(key)
 			pair.add_child(caption)
-			var pick := ELAIChoice.picker(settings, key, profiles.get(initial), "user://settings.json")
+			var pick := ELAIChoice.values_picker(ai_levels, key, profiles.get(initial))
+			ai_picks[key] = pick
 			pick.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 			pair.add_child(pick)
 			if key == "world_ai": _world_ai = pair
@@ -67,6 +72,7 @@ func build(available: Dictionary, initial: String) -> void:
 		if chapter.selected >= 0 and not chapter.is_item_disabled(chapter.selected):
 			var row: Dictionary = entries[chapter.selected].duplicate()
 			row.campaign = str(campaign.get_selected_metadata())
+			if not ai_levels.is_empty(): row.ai = ELAIChoice.normalized(ai_levels)
 			begin.emit(str(edition.get_selected_metadata()), row, difficulty.selected))
 	buttons.add_child(start)
 	var back := Button.new()
@@ -86,7 +92,16 @@ func build(available: Dictionary, initial: String) -> void:
 		_campaigns())
 	campaign.item_selected.connect(func(_index: int): _chapters())
 	chapter.item_selected.connect(func(_index: int): _description())
+	difficulty.item_selected.connect(func(_index: int): reset_ai())
 	_campaigns()
+	reset_ai()
+
+## The chosen difficulty's computer players' strength (ELAIChoice.defaults),
+## shown on the dropdowns.
+func reset_ai() -> void:
+	if settings == null: return
+	ai_levels.merge(ELAIChoice.defaults(maxi(difficulty.selected, 0), settings), true)
+	for key: String in ai_picks: ELAIChoice.display(ai_picks[key], int(ai_levels[key]))
 
 ## Difficulty levels per edition: the first game has five, second-game maps
 ## author three variants (DifLvl 0-2, global-map GMA6Diff1-3).

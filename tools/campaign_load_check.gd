@@ -11,9 +11,19 @@ extends SceneTree
 
 var failures: Array[String] = []
 
+## Checks run and maps skipped (no game files), for the totals: skips still
+## exit 0, so CI without the games passes, but are counted apart.
+var checks := 0
+var skipped := 0
+
 func check(ok: bool, what: String) -> void:
+	checks += 1
 	print(("PASS: " if ok else "FAIL: ") + what)
 	if not ok: failures.append(what)
+
+func _skip(reason: String) -> void:
+	skipped += 1
+	print("SKIP: " + reason)
 
 func _initialize() -> void:
 	_run.call_deferred()
@@ -23,20 +33,24 @@ func _run() -> void:
 	_division()
 	for pair: Array in [["el1", "mission20", 1], ["el1", "mission261", 9], ["el2", "e2mission11", 11]]:
 		if paths is not Dictionary or not paths.has(pair[0]):
-			print("SKIP: no %s files configured (user://profiles.json)" % pair[0])
+			_skip("no %s files configured (user://profiles.json): %s" % [pair[0], pair[1]])
 			continue
 		var profile := ELProfile.new()
 		if not profile.mount(pair[0], str(paths[pair[0]])):
-			print("SKIP: %s files could not be mounted" % pair[0])
+			_skip("%s files could not be mounted: %s" % [pair[0], pair[1]])
 			continue
 		await _terrain(profile, pair[1], pair[2])
 	if paths is Dictionary and paths.has("el2"):
 		var profile := ELProfile.new()
 		if profile.mount("el2", str(paths.el2)): await _budget(profile, "e2mission13", 12.0)
 		if profile.mount("el2", str(paths.el2)): await _art(profile, "e2mission23")
+	else: _skip("no el2 files: the time budget and map art are not checked")
 	if paths is Dictionary and paths.has("el1"):
 		var profile := ELProfile.new()
 		if profile.mount("el1", str(paths.el1)): await _art(profile, "mission25")
+	else: _skip("no el1 files: its map art is not checked")
+	print("CAMPAIGN LOAD: %d check(s) run, %d part(s) skipped" % [checks, skipped])
+	if skipped > 0: print("CAMPAIGN LOAD: SKIPPED %d part(s) for want of game files" % skipped)
 	print("CAMPAIGN LOAD: %d failure(s)" % failures.size())
 	quit(0 if failures.is_empty() else 1)
 

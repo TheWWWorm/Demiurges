@@ -96,11 +96,58 @@ static func alive(state: ELAdventureSession, player: int) -> bool:
 	return bool(state.scenario.get("castles", {}).get(player, {}).get("alive", false))
 
 ## Castle damage dealt by one hero: its level, or one and a half times it
-## (rounded down) under Castle Bane. Learned skills, including Ethereal Attack
-## and Counterstrike, do not change it in the original.
+## (rounded down) under Castle Bane, plus what Ethereal Attack's text promises
+## (1, 3 or 5). The original reads no skill here, so Ethereal Attack did
+## nothing there; the remake makes it work (player report #152).
 static func hero_value(hero: Dictionary) -> int:
 	var level := maxi(0, int(hero.get("level", 1)))
-	return level * 3 / 2 if ELGlobalSpells.hero_has(hero, "GRSH") else level
+	var value := level * 3 / 2 if ELGlobalSpells.hero_has(hero, "GRSH") else level
+	return value + ether_attack(hero)
+
+## Ethereal Attack's added castle damage by rank (I, II, III).
+const ETHER_ATTACK := [1, 3, 5]
+## Counterstrike: castle damage a defender deals when it wins an ethereal
+## battle (I, II, III). The text gives no numbers ("some" to "considerable").
+const ETHER_DEFENSE := [2, 4, 6]
+
+static func ether_attack(hero: Dictionary) -> int:
+	var rank := int(hero.get("skills", {}).get("ETAT", -1))
+	return ETHER_ATTACK[mini(rank, 2)] if rank >= 0 else 0
+
+static func ether_defense(hero: Dictionary) -> int:
+	var rank := int(hero.get("skills", {}).get("ETDF", -1))
+	return ETHER_DEFENSE[mini(rank, 2)] if rank >= 0 else 0
+
+## Damage castle `player` takes from one attack of `amount` (an assault, an
+## ethereal strike, a damage spell, a Countdown step): Erosion on it adds half
+## (rounded down), then its shields absorb their share (ELGlobalSpells). The
+## original read none of these spells.
+static func taken(state: ELAdventureSession, player: int, amount: int) -> int:
+	if amount <= 0: return 0
+	var hit := amount
+	if ELGlobalSpells.on_castle(state, player, ELGlobalSpells.EROSION): hit = hit * 3 / 2
+	return maxi(0, hit - ELGlobalSpells.absorption(state, player))
+
+## Adds one attack to a living castle's pending damage and returns what it
+## took. Under Shock Resonance every other living castle takes as much.
+static func damage(state: ELAdventureSession, player: int, amount: int) -> int:
+	var castles: Dictionary = state.scenario.get("castles", {})
+	var castle: Dictionary = castles.get(player, {})
+	if castle.is_empty() or not castle.get("alive", false): return 0
+	var hit := taken(state, player, amount)
+	castle.pending = int(castle.get("pending", 0)) + hit
+	if hit > 0 and ELGlobalSpells.on_castle(state, player, ELGlobalSpells.RESONANCE):
+		var ids: Array = castles.keys()
+		ids.sort()
+		for id: int in ids:
+			if id < 1 or id == player or not castles[id].get("alive", false): continue
+			castles[id].pending = int(castles[id].get("pending", 0)) + hit
+			state.event.emit({"kind": "castle_spell", "player": id, "spell": ELGlobalSpells.RESONANCE, "damage": hit})
+	return hit
+
+## Energy castle `player` regains from `free` unused ether under the spells on it.
+static func regained(state: ELAdventureSession, player: int, free: int, extra := "") -> int:
+	return ELGlobalSpells.regeneration_rate(state, player, regeneration(free), extra)
 
 static func stage(castle: Dictionary) -> int:
 	return clampi(int(3 * (int(castle.max) - int(castle.health)) / int(castle.max)), 0, 3)
@@ -138,10 +185,9 @@ static func assault(director: ELAdventureDirector, hero: Dictionary, target: Dic
 	var state := director.state
 	if not assault_problem(state, hero, target).is_empty(): return false
 	var owner := int(target.owner)
-	var damage := hero_value(hero)
-	state.scenario.castles[owner].pending += damage
-	state.event.emit({"kind": "castle_assaulted", "hero": hero.uid, "player": owner, "damage": damage})
-	if owner == state.current_player: _box(director, text(state, "T_MB_CASTLE_DAMAGED", "Your castle was attacked and lost %d energy.") % damage)
+	var dealt := damage(state, owner, hero_value(hero))
+	state.event.emit({"kind": "castle_assaulted", "hero": hero.uid, "player": owner, "damage": dealt})
+	if owner == state.current_player: _box(director, text(state, "T_MB_CASTLE_DAMAGED", "Your castle was attacked and lost %d energy.") % dealt)
 	return true
 
 ## Energy a castle regains from the ether its player left unused today:
@@ -154,9 +200,9 @@ static func regeneration(free: int) -> int:
 
 ## Day end, once every player has finished and before the night: each living
 ## player's castle regains energy from its unused ether, up to its maximum.
-## Energy that repairs pushed above the maximum falls back to it. Castle spells
-## whose descriptions promise faster, slower or no regeneration, damage
-## absorption or extra damage taken change none of this in the original.
+## Energy that repairs pushed above the maximum falls back to it. Continuous
+## Restoration, Fresh Breeze and Mass Restoration raise the amount and Decay
+## stops it (regained), as their texts promise; the original read none of them.
 static func regenerate(state: ELAdventureSession) -> void:
 	if not applies(state) or state.scenario.is_empty(): return
 	var ids: Array = state.scenario.castles.keys()
@@ -165,7 +211,7 @@ static func regenerate(state: ELAdventureSession) -> void:
 		var castle: Dictionary = state.scenario.castles[player]
 		if not castle.alive or player < 1 or not state.players.has(player) or castle_object(state, player).is_empty(): continue
 		var before := stage(castle)
-		var amount := regeneration(ELGlobalSpells.free_ether(state, player))
+		var amount := regained(state, player, ELGlobalSpells.free_ether(state, player))
 		castle.health = mini(int(castle.max), int(castle.health) + amount)
 		#  spends the rest: the night shows no free ether.
 		state.players[player].free_ether = 0

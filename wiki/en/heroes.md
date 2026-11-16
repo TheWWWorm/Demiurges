@@ -23,7 +23,7 @@ Each new level gives a skill point and an offer of three random skills (in Ether
 | Resources | More runes per spell (Etherlords) or more charges per spell (Etherlords II). |
 | Bargain | Lower shop prices (Etherlords). |
 
-Etherlords also has skills for the map, such as **Mobility**, **Estates** and **Looting**. Its **Ethereal Attack** and **Ethereal Defense** have no effect, exactly as in the original game.
+Etherlords also has skills for the map, such as **Mobility**, **Estates** and **Looting**. Its **Ethereal Attack** (1, 3 or 5 more castle damage) and **Ethereal Defense** (2, 4 or 6 damage to the attacker's castle when its hero wins an ethereal battle as the castle's defender) work in the remake; in the original they did nothing.
 
 ## Specialisation
 

@@ -1,5 +1,7 @@
 # Tactical Studies: puzzle redesign
 
+> Curiosities + Paradoxes + Crossroads: **48 additions, 105 total puzzles.** This page documents the preserved original 57. See [Curiosities](puzzle_curiosities.md), [Paradoxes](puzzle_paradoxes.md), [Crossroads](puzzle_crossroads.md), and [the newest solutions](puzzle_crossroads_solutions.md).
+
 Tactical Studies contains **57 authored positions: 29 for Etherlords I and 28 for Etherlords II**. The Heroes and Creatures expansion adds 12 studies to the previous 45. It covers 33 victory challenges, 12 battlefield-clearance challenges, 8 survival challenges, and 4 capture challenges. The intended progression is 4 Easy, 17 Medium, 30 Hard, and 6 Expert. These labels are editorial judgments about human reasoning, not measured solve rates. All previously delivered IDs and gameplay definitions remain stable. Hero identity labels were added to the older studies for readable browsing.
 
 The pack uses existing cards and combat behavior. Its changes are in the positions, objectives, guidance, and puzzle-specific resource rules. Both editions retain their own card costs and mechanics. The source is based on repository commit `a348000f7dda53ba48e9f6f37d3c07542f26c8cc`.

@@ -200,6 +200,9 @@ static func valid(data: Variant) -> bool:
 		if not CAMPAIGNS.has(id): return false
 	if not data.current.is_empty() and not CAMPAIGNS.has(data.current): return false
 	if not data.prev.is_empty() and not CAMPAIGNS.has(data.prev): return false
+	# Optional (older saves lack it): the game's computer players' strength
+	# (ELAIChoice), carried from chapter to chapter.
+	if data.has("ai") and not ELAIChoice.valid(data.ai): return false
 	# Optional (older saves lack it): rows of the chapters already won.
 	if data.has("played"):
 		if not data.played is Array or data.played.size() > MAX_ROWS: return false
@@ -215,6 +218,7 @@ static func normalized(data: Dictionary) -> Dictionary:
 	result.hall_points = int(result.get("hall_points", previous_points))
 	if not result.has("hall_run"): result.hall_run = JSON.stringify(data).sha256_text().left(32)
 	if result.has("played"): result.played = Array(result.played).map(func(row: Variant) -> int: return int(row))
+	if result.has("ai"): result.ai = ELAIChoice.normalized(result.ai)
 	return result
 
 ## Restores progress saved with a chapter (adventure save `scenario` field).

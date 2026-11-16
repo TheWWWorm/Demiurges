@@ -13,7 +13,11 @@ extends SceneTree
 ## - first game, spellbook on the laboratory panel (ELFirstBookView): a
 ##   reserve spell dragged onto the book is equipped, a book spell dragged
 ##   onto the reserve is stored, a drop elsewhere moves nothing, a full book
-##   refuses the drop; the double click still moves;
+##   takes a dropped spell only over the slot it lands on; the double click
+##   still moves; with the full book of fifteen cantrips a reserve spell
+##   dropped onto a cantrip goes over it (the cantrip waits underneath and
+##   comes back when the spell is stored), can be equipped again after that,
+##   and another spell dropped onto it sends it to the reserve with its runes;
 ## - first game, HeroScreen (ELHeroScreenView): a level-up offer dragged onto
 ##   the skills is learned, one dropped elsewhere is not;
 ## - first game, laboratory (ELFirstSpellShopView): a shop spell dragged onto
@@ -377,6 +381,9 @@ func _first_book(session: Dictionary) -> void:
 	# A starting book is all cantrips, which cannot go to the reserve (#126):
 	# the check's setup trims the book to four of them directly.
 	var under := ELRunes.under(hero)
+	var full_cards: Array = hero.cards.duplicate()
+	var full_uses: Array = hero.rune_uses.duplicate()
+	var full_under: Array[String] = under.duplicate()
 	hero.cards.resize(4)
 	hero.rune_uses.resize(4)
 	if hero.has("rune_under"):
@@ -411,7 +418,10 @@ func _first_book(session: Dictionary) -> void:
 	index = _entry(view, codes[1])
 	var left := int(hero.spell_stock.get(codes[1], 0))
 	drag(input, view.reserve_rect(index).get_center(), book_end)
-	check(hero.cards.size() == ELSpellInventory.book_size(profile) and int(hero.spell_stock.get(codes[1], 0)) == left, "first game book: a full book refuses a dragged spell")
+	check(hero.cards.size() == ELSpellInventory.book_size(profile) and int(hero.spell_stock.get(codes[1], 0)) == left, "first game book: a full book takes a dragged spell only over the slot it lands on")
+	view.reserve_pick = _entry(view, codes[1])
+	view.book_pick = -1
+	check(not view.equip_problem().is_empty(), "first game book: a full book refuses a spell sent with the arrow or a double click")
 	var movable := int(hero.cards.size()) - 1
 	click(input, view.book_rect(movable).get_center())
 	click(input, view.book_rect(movable).get_center(), true)
@@ -419,8 +429,43 @@ func _first_book(session: Dictionary) -> void:
 	click(input, view.book_rect(0).get_center())
 	click(input, view.book_rect(0).get_center(), true)
 	check(hero.cards.size() == ELSpellInventory.book_size(profile) - 1, "first game book: a double click leaves a cantrip in the book (#126)")
+	await _full_cantrip_book(session, view, input, codes, full_cards, full_uses, full_under)
 	view.queue_free()
 	await frames(2)
+
+## The hero's own book of fifteen cantrips, which cannot go to the reserve: a
+## reserve spell dropped onto one goes over it and keeps it underneath.
+func _full_cantrip_book(session: Dictionary, view: ELFirstBookView, input: Callable, codes: Array[String], cards: Array, uses: Array, under: Array[String]) -> void:
+	var profile: ELProfile = session.profile
+	var hero: Dictionary = session.state.object(session.hero)
+	var size := ELSpellInventory.book_size(profile)
+	if cards.size() != size or not cards.all(func(code: String) -> bool: return ELRunes.unlimited(profile, hero, code)):
+		print("NOTE: the hero's starting book is not %d cantrips (%d)" % [size, cards.size()])
+		return
+	hero.cards.assign(cards)
+	hero.rune_uses.assign(uses)
+	ELRunes.set_under(hero, under)
+	# Everything back in the reserve: the spells under test have one copy each.
+	ELSpellInventory.remove(hero, codes[0], int(hero.spell_stock.get(codes[0], 0)))
+	ELSpellInventory.remove(hero, codes[1], int(hero.spell_stock.get(codes[1], 0)))
+	ELSpellInventory.add(profile, hero, codes[0])
+	ELSpellInventory.add(profile, hero, codes[1])
+	hero.rune_stock[codes[0]][0] = 4
+	hero.rune_stock[codes[1]][0] = 6
+	view.refresh()
+	var cantrip := str(hero.cards[3])
+	drag(input, view.reserve_rect(_entry(view, codes[0])).get_center(), view.book_rect(3).get_center())
+	check(hero.cards.size() == size and hero.cards[3] == codes[0] and int(hero.rune_uses[3]) == 4 and ELRunes.under(hero)[3] == cantrip and not hero.spell_stock.has(codes[0]), "first game book: a reserve spell dropped onto a cantrip of a full book goes over it")
+	drag(input, view.book_rect(3).get_center(), view.reserve_rect(0).get_center())
+	check(hero.cards.size() == size and hero.cards[3] == cantrip and int(hero.spell_stock.get(codes[0], 0)) == 1 and int(hero.rune_stock[codes[0]][0]) == 4, "first game book: stored again, the spell gives the slot back to its cantrip")
+	drag(input, view.reserve_rect(_entry(view, codes[0])).get_center(), view.book_rect(3).get_center())
+	check(hero.cards[3] == codes[0] and ELRunes.under(hero)[3] == cantrip and not hero.spell_stock.has(codes[0]), "first game book: the stored spell can be equipped over the cantrip again")
+	drag(input, view.reserve_rect(_entry(view, codes[1])).get_center(), view.book_rect(3).get_center())
+	check(hero.cards[3] == codes[1] and int(hero.rune_uses[3]) == 6 and ELRunes.under(hero)[3] == cantrip and int(hero.spell_stock.get(codes[0], 0)) == 1 and int(hero.rune_stock[codes[0]][0]) == 4, "first game book: another spell dropped onto it sends it to the reserve with its runes; the cantrip stays underneath")
+	var fifth := str(hero.cards[5])
+	drag(input, view.reserve_rect(_entry(view, codes[0])).get_center(), view.book_rect(5).get_center())
+	check(hero.cards.size() == size and hero.cards[5] == codes[0] and ELRunes.under(hero)[5] == fifth and ELRunes.under(hero)[3] == cantrip, "first game book: a second slot takes a spell over its cantrip too")
+	await frames(1)
 
 static func _entry(view: ELFirstBookView, card: String) -> int:
 	for index in view.entries.size():

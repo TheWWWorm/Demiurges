@@ -137,7 +137,7 @@ static func compose_picture(tiles: Array[Dictionary]) -> Image:
 	var whole := Image.create_empty(int(DESIGN.x), int(DESIGN.y), false, Image.FORMAT_RGBA8)
 	whole.fill(Color.BLACK)
 	for piece: Dictionary in tiles:
-		var image := ELTexture.readable(piece.texture.get_image())
+		var image := ELTexture.readable(ELIconUpscale.image_of(piece.texture))
 		if image == null: continue
 		var source: Rect2 = piece.source
 		var rect: Rect2 = piece.rect

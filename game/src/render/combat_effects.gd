@@ -122,6 +122,8 @@ var dropped := 0
 ## Cost of the last _process call and the largest one seen (microseconds).
 var last_cost_usec := 0
 var peak_cost_usec := 0
+## The camera's sprite size factor the shadow twins draw with (_sync_shadow_extent).
+var _shadow_extent := ELParticleFile.ORTHO_EXTENT
 
 func build(data: ELProfile) -> void:
 	profile = data
@@ -656,6 +658,14 @@ func _spawn(path: String, reverse: bool, effect_frames: int, where: Transform3D,
 	node.custom_aabb = PARTICLE_BOUNDS
 	if particle_span:
 		node.custom_aabb = PARTICLE_BOUNDS.merge(Transform3D(where.basis, Vector3.ZERO) * PARTICLE_BOUNDS)
+	# Blended smoke, gas and dust throw a soft shadow (a remake addition, see
+	# ELParticleFile.SHADOW_SHEETS).
+	var shadow: MultiMeshInstance3D = emitter.shadow
+	shadow.custom_aabb = node.custom_aabb
+	(shadow.material_override as ShaderMaterial).set_shader_parameter("opacity", 1.0)
+	# The arena's own blended particles are all weather (snow, rain, leaves).
+	var strength := 0.0 if ambient else ELParticleFile.shadow_strength(file)
+	ELParticleFile.shade_twin(shadow, material.get_shader_parameter("atlas"), Vector2(file.columns, file.rows), strength, _shadow_extent)
 	node.visible = true
 	emitter.track = PackedFloat32Array()
 	emitter.opacity = 1.0
@@ -690,11 +700,13 @@ func _free_emitter(ambient: bool) -> Dictionary:
 	mesh.visible_instance_count = 0
 	var node := MultiMeshInstance3D.new()
 	node.multimesh = mesh
+	# The original drew effects without shadows; the shadow-only twin gives
+	# the blended ones a soft one (ELParticleFile.shadow_twin).
 	node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	node.visible = false
 	add_child(node)
 	var emitter := {"node": node, "mesh": mesh, "entry": {}, "elapsed": 0.0, "frame": -1, "life": 0, "reverse": false, "active": false, "follow": null, "following": false,
-		"track": PackedFloat32Array(), "opacity": 1.0, "own": null, "glow": []}
+		"track": PackedFloat32Array(), "opacity": 1.0, "own": null, "glow": [], "shadow": ELParticleFile.shadow_twin(node, true)}
 	pool.append(emitter)
 	return emitter
 
@@ -708,6 +720,19 @@ func _release(emitter: Dictionary) -> void:
 	emitter.node.visible = false
 	emitter.mesh.visible_instance_count = 0
 
+## The battle camera's sprite size factor for the shadow twins, which the
+## shadow pass cannot read from its own (the sun's) camera; the camera's
+## field of view changes as it moves, and running twins follow it.
+func _sync_shadow_extent() -> void:
+	if not ELParticleFile.shadows: return
+	var extent := ELParticleFile.camera_extent(get_viewport().get_camera_3d())
+	if absf(extent - _shadow_extent) < 0.002: return
+	_shadow_extent = extent
+	for pool: Array[Dictionary] in [emitters, arena_emitters]:
+		for emitter in pool:
+			var shadow: MultiMeshInstance3D = emitter.shadow
+			if ELParticleFile.twin_casts(shadow): (shadow.material_override as ShaderMaterial).set_shader_parameter("extent", extent)
+
 func active_count() -> int:
 	var count := 0
 	for emitter in emitters:
@@ -716,6 +741,7 @@ func active_count() -> int:
 
 func _process(delta: float) -> void:
 	var clock := Time.get_ticks_usec()
+	_sync_shadow_extent()
 	_step_arena_weather(delta)
 	for pool: Array[Dictionary] in [emitters, arena_emitters]:
 		for emitter in pool:
@@ -788,6 +814,8 @@ func _apply_emitter_track(emitter: Dictionary, frame: int) -> void:
 		emitter.opacity = opacity
 		var own: ShaderMaterial = emitter.own
 		if own != null and is_same(emitter.node.material_override, own): own.set_shader_parameter("opacity", opacity)
+		var shadow: MultiMeshInstance3D = emitter.shadow
+		if ELParticleFile.twin_casts(shadow): (shadow.material_override as ShaderMaterial).set_shader_parameter("opacity", opacity)
 	emitter.node.visible = opacity > 0.004
 
 ## Effect-space key transform: place, turn and scale (z up -> y up).

@@ -66,6 +66,9 @@ class Fighter:
 	var retarget := 0.0
 	var moving := false
 	var dead := false
+	## Counts the creature's lives: a death or a return to life starts a new
+	## one, so effects begun in an earlier life stop when it changes.
+	var life := 0
 	var death_time := 0.0
 	var revived := false
 	var stunned := 0.0
@@ -366,12 +369,15 @@ func _status(u: Fighter) -> void:
 	if String(u.ability.get("kind", "")) == "fatalist" and time - maxf(u.last_hurt, 0.0) >= float(u.ability.seconds):
 		_die(u, -1)
 		return
+	var life := u.life
 	var kept: Array = []
 	for poison: Dictionary in u.poisons:
 		var amount := float(poison.dps) * TICK
 		poison.left = float(poison.left) - TICK
 		if amount > 0.0: _harm(u, amount, int(poison.source), "poison")
-		if u.dead: return
+		# A lethal tick may have brought the creature straight back (a revive
+		# item): the new life starts clean, so this pass ends here.
+		if u.dead or u.life != life: return
 		if float(poison.left) > 0.0: kept.append(poison)
 	u.poisons = kept
 	# Original venom killed a creature at the end of the combat phase. Here
@@ -602,6 +608,10 @@ func _continue_action(u: Fighter) -> void:
 		u.impact_left -= TICK
 		if u.impact_left <= 0.0:
 			var target := unit(u.action_target)
+			# A creature that changed sides (Ring of Command) during the
+			# gesture is an ally now: the blow does not land on it, and an
+			# ability picks another target.
+			if target != null and target.team == u.team: target = null
 			if u.action == "attack":
 				if target != null and not target.dead and u.pos.distance_to(target.pos) <= _contact(u, target) + 1.2: _strike(u, target)
 			else:
@@ -628,6 +638,7 @@ func _strike(u: Fighter, target: Fighter) -> void:
 	u.struck[target.id] = true
 	u.hits_dealt += 1
 	var before := target.hp
+	var life := target.life
 	var dealt := _harm(target, maxf(raw * 0.2, raw - target.defense), u.id, "attack", u.ranged)
 	if "Lifetap" in u.flags and dealt > 0.0: _heal(u, dealt * 0.25)
 	if u.gear.has("lifesteal") and dealt > 0.0:
@@ -636,7 +647,7 @@ func _strike(u: Fighter, target: Fighter) -> void:
 	if u.gear.get("dispel_hit", false): _item_used(u)
 	if "Disenchant" in u.flags or u.gear.get("dispel_hit", false): _dispel(target)
 	var a := u.ability
-	if not target.dead and not _immune(target):
+	if _same_life(target, life) and not _immune(target):
 		match String(a.get("kind", "")):
 			"poison": _poison(target, raw * float(a.share), float(a.seconds), u.id)
 			"venom":
@@ -652,15 +663,15 @@ func _strike(u: Fighter, target: Fighter) -> void:
 	# third of the blow again over 3 s (ether-protected creatures are immune).
 	# A creature whose own ability already poisons (snakes, hornets) keeps
 	# just that, so the two never stack.
-	if not target.dead and "Destroy" in u.flags and not _immune(target) and not String(u.ability.get("kind", "")) in ["poison", "venom"]:
+	if _same_life(target, life) and "Destroy" in u.flags and not _immune(target) and not String(u.ability.get("kind", "")) in ["poison", "venom"]:
 		_poison(target, raw * POISONOUS_SHARE, 3.0, u.id)
-	if not target.dead and u.gear.has("poison"):
+	if _same_life(target, life) and u.gear.has("poison"):
 		_poison(target, raw * float(u.gear.poison), 3.0, u.id)
 		_item_used(u)
-	if not target.dead and u.gear.has("venom") and target.venoms.is_empty() and not _immune(target):
+	if _same_life(target, life) and u.gear.has("venom") and target.venoms.is_empty() and not _immune(target):
 		target.venoms.append({"left": 4.0, "threshold": float(u.gear.venom), "source": u.id})
 		_item_used(u)
-	if not target.dead and u.gear.has("paralyze") and rng.randf() < float(u.gear.paralyze):
+	if _same_life(target, life) and u.gear.has("paralyze") and rng.randf() < float(u.gear.paralyze):
 		_stun(target, float(u.gear.paralyze_seconds))
 		_item_used(u)
 	# Thorns: melee hits on a spiked carrier.
@@ -674,10 +685,14 @@ func _strike(u: Fighter, target: Fighter) -> void:
 			_item_used(u)
 			_harm(other, float(u.gear.storm), u.id, "storm")
 	# Trample: a killing blow carries on into the next enemy.
-	if target.dead and "Trample" in u.flags:
+	if target.life != life and "Trample" in u.flags:
 		var excess := maxf(0.0, raw - before) + raw * 0.25
 		var next := _nearest_enemy(target, 2.6, u.team, target)
 		if next != null and excess > 0.0: _harm(next, maxf(excess * 0.2, excess - next.defense), u.id, "trample")
+
+## The creature is still alive in the life it had when an effect began.
+func _same_life(u: Fighter, life: int) -> bool:
+	return not u.dead and u.life == life
 
 func _nearest_enemy(around: Fighter, radius: float, team: int, exclude: Fighter) -> Fighter:
 	var best: Fighter = null
@@ -720,6 +735,7 @@ func _heal(u: Fighter, amount: float) -> void:
 ## Applies damage after shields; returns the health actually lost.
 func _harm(target: Fighter, amount: float, source: int, kind: String, ranged := false) -> float:
 	if target.dead or amount <= 0.0: return 0.0
+	var life := target.life
 	var dealer := unit(source)
 	if kind in ["ability", "storm", "rod"] and "Outerplanar" in target.flags: amount *= 0.75
 	if kind in ["ability", "storm", "rod"] and target.gear.has("spell_guard"):
@@ -728,6 +744,9 @@ func _harm(target: Fighter, amount: float, source: int, kind: String, ranged := 
 	if kind in ["ability", "storm", "rod"] and target.gear.has("reflect") and dealer != null and dealer.team != target.team:
 		_item_used(target)
 		_harm(dealer, amount * float(target.gear.reflect), target.id, "thorns")
+		# The reflected blow can set off more (a dying Walking Horror's
+		# aura); if that already ended this life, this hit has nothing left.
+		if target.dead or target.life != life: return 0.0
 	var absorbed := minf(target.shield, amount)
 	target.shield -= absorbed
 	amount -= absorbed
@@ -773,8 +792,11 @@ func _after_wound(target: Fighter) -> void:
 		_item_used(holder)
 		break
 
+## Once per life: a creature already dead is not killed again.
 func _die(target: Fighter, source: int) -> void:
+	if target.dead: return
 	target.dead = true
+	target.life += 1
 	target.hp = 0.0
 	target.action = ""
 	target.moving = false
@@ -810,6 +832,7 @@ func _die(target: Fighter, source: int) -> void:
 
 func _restore(u: Fighter, share: float) -> void:
 	u.dead = false
+	u.life += 1
 	u.hp = maxf(1.0, ceilf(u.max_hp * share))
 	u.action = ""
 	u.target = -1

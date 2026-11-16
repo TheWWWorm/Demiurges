@@ -20,10 +20,27 @@ var protos := {}
 var smart := false
 var only := ""
 
+## Checks run and parts skipped (no game files), for the totals: a run that
+## skipped everything still exits 0, so CI without the games passes, but
+## says so instead of passing quietly.
+var checks := 0
+var skipped := 0
+
 func check(ok: bool, what: String) -> void:
 	var label := "[smart=%s] %s" % [smart, what]
+	checks += 1
 	print(("PASS: " if ok else "FAIL: ") + label)
 	if not ok: failures.append(label)
+
+func _skip(reason: String) -> void:
+	skipped += 1
+	print("SKIP: " + reason)
+
+func _finish() -> void:
+	print("FIRST AI: %d check(s) run, %d part(s) skipped" % [checks, skipped])
+	if checks == 0: print("FIRST AI: SKIPPED (no case ran)")
+	print("FIRST AI: %d failure(s)" % failures.size())
+	quit(0 if failures.is_empty() else 1)
 
 func _arg(name: String, fallback: String) -> String:
 	for arg in OS.get_cmdline_user_args():
@@ -36,13 +53,13 @@ func _initialize() -> void:
 func _run() -> void:
 	var paths: Variant = JSON.parse_string(FileAccess.get_file_as_string("user://profiles.json")) if FileAccess.file_exists("user://profiles.json") else null
 	if paths is not Dictionary or not paths.has("el1"):
-		print("SKIP: no first-game files configured (user://profiles.json)")
-		quit(0)
+		_skip("no first-game files configured (user://profiles.json)")
+		_finish()
 		return
 	profile = ELProfile.new()
 	if not profile.mount("el1", str(paths.el1)):
-		print("SKIP: the first game's files could not be mounted")
-		quit(0)
+		_skip("the first game's files could not be mounted")
+		_finish()
 		return
 	only = _arg("only", "")
 	var modes: Array[bool] = [false, true]
@@ -59,16 +76,18 @@ func _run() -> void:
 		if second.mount("el2", str(paths.el2)):
 			smart = false
 			_second_cases(second)
-		else: print("SKIP: the second game's files could not be mounted")
-	print("FIRST AI: %d failure(s)" % failures.size())
-	quit(0 if failures.is_empty() else 1)
+		else: _skip("the second game's files could not be mounted")
+	elif not paths.has("el2"): _skip("no second-game files configured: its cases are not run")
+	_finish()
 
 const CASES := ["a_castle", "a_mine", "b_teacher", "b_gnome", "b_spawn", "c_blocked", "d_unexplored", "d_guarded",
 	"e_unseen", "e_unreachable", "f_upgrade", "f_refill", "f_portal", "h_meteor", "j_free", "k_holds", "k_defend", "m_roles", "n_joint", "p_resolver", "q_lookahead",
 	"s_saved", "t_patrol", "t_raid", "t_escort", "t_retreat", "t_doctrine", "t_story", "t_off",
 	"v_cast", "v_income", "v_runes", "v_portal", "v_upkeep", "v_mine",
 	"w_pickup", "w_commander", "w_promotion", "w_hidden", "w_pile", "w_peace", "w_scouts", "w_tinkerer", "w_siege", "w_scrolls", "w_unfound", "w_human",
-	"x_arrival", "x_placed", "x_chase", "x_sight", "x_rounds"]
+	"x_arrival", "x_placed", "x_chase", "x_sight", "x_rounds",
+	"y_garrison", "y_reopen", "y_idle", "y_siege", "y_atomic", "y_order", "y_urgent", "y_turns", "y_stock", "y_restore", "y_strength", "y_sightings",
+	"y_loop", "y_impending", "y_route", "y_bounds", "y_widen", "y_body", "y_leg", "y_resolver", "y_mark", "y_buffs", "y_summon", "y_combats", "y_hire"]
 
 # --- World -------------------------------------------------------------------
 
@@ -536,7 +555,7 @@ func _case_k_defend() -> void:
 	# The same raider before a castle with little energy left: the castle
 	# would fall within a night or two, so a hero that can reach the raider
 	# in time is sent; the far leader stays at its siege.
-	var world := _k_world(6)
+	var world := _k_world(9)
 	var director: ELAdventureDirector = world[0]
 	var lead: Dictionary = world[1]
 	var side: Dictionary = world[2]
@@ -772,13 +791,19 @@ func _case_t_doctrine() -> void:
 	var chosen := {}
 	var repeat := true
 	for seed in range(1, 13):
+		# A new session with this seed chooses afresh.
 		state.seed_value = seed
+		ELFirstAI.data(state, 2).erase("doctrine")
 		var name: String = planner.call("doctrine", state, 2)
 		if name != planner.call("doctrine", state, 2): repeat = false
 		chosen[name] = true
-	check(repeat, "T: the doctrine follows the seed")
+		# Later random events move the seed on; the doctrine stays.
+		state.seed_value = seed * 7919 + 17
+		if name != planner.call("doctrine", state, 2): repeat = false
+	check(repeat, "T: the doctrine is chosen once and kept while the session's random numbers move on")
 	check(chosen.size() >= 2 and not chosen.has(""), "T: seeds give players different doctrines (%s)" % str(chosen.keys()))
 	state.seed_value = 212
+	ELFirstAI.data(state, 2).erase("doctrine")
 	var hero := _hero(director, 2, 30, 90, 3)
 	var name: String = planner.call("doctrine", state, 2)
 	check(float(planner.call("weight", director, hero, "tower")) == 1.0, "T: without the switch every weight is one")
@@ -1228,8 +1253,8 @@ func _case_w_siege() -> void:
 	check(int(task.get("target", -1)) != int(target.uid), "W: a siege the castle regenerates away is given up (%s)" % str(task))
 	var other := director.state.object(int(task.get("target", -1)))
 	var planner := _planner()
-	var known: bool = planner != null and planner.get_script_method_list().any(func(entry: Dictionary): return entry.name == "siege_net")
-	var onward: bool = int(task.get("target", -1)) == int(mine.uid) or (task.get("kind") == "tower" and other != target and known and int(planner.call("siege_net", director, lead, other)) > 0)
+	var known: bool = planner != null and planner.get_script_method_list().any(func(entry: Dictionary): return entry.name == "siege_nights")
+	var onward: bool = int(task.get("target", -1)) == int(mine.uid) or (task.get("kind") == "tower" and other != target and known and int(planner.call("siege_nights", director, lead, other)) > 0)
 	check(onward, "W: for the mine beside it or a siege that gains (%s)" % str(task))
 
 func _case_w_unfound() -> void:
@@ -1451,6 +1476,516 @@ func _case_x_rounds() -> void:
 		director.advance(0.1)
 	check(int(near.owner) == 2 or (int(plug.x) < 39 and int(plug.ap) == 0), "X: the hero in the gap steps clear of it and spends its movement (%s, %d left)" % [str(Vector2i(plug.x, plug.y)), int(plug.ap)])
 	check(int(waiting.x) < 40 or int(beyond.owner) == 2, "X: the waiting hero goes through the gap the same day (%s)" % str(Vector2i(waiting.x, waiting.y)))
+
+# --- Y: audit findings (castle defence, matching, economy, rules) --------------
+
+## The soonest fall of a defence() result (a large number when it holds).
+func _soonest(falls: Dictionary) -> int:
+	var soonest := 1 << 20
+	for id: Variant in falls: soonest = mini(soonest, int(falls[id]))
+	return soonest
+
+## A computer player whose colour has a repair spell (-1 if none).
+func _repairer(state: ELAdventureSession) -> int:
+	for id: int in ELFirstAI.computer_players(state):
+		if not _spell_code(state, id, ELGlobalSpells.REPAIRS.keys()).is_empty(): return id
+	return -1
+
+func _case_y_garrison() -> void:
+	# A hero standing beside the castle with an errand elsewhere does not
+	# stop a raider (first-game heroes have no guard area); only a hero sent
+	# to attack it counts, from when it can reach it.
+	if not smart: return
+	var director := _world()
+	var state := director.state
+	var home := _castle(director, 2)
+	state.scenario.castles[2].health = 9
+	_hero(director, 2, 20, 100, 8)
+	var side := _hero(director, 2, int(home.x) - 1, int(home.y), 6)
+	var raider := _hero(director, 3, int(home.x) - 6, int(home.y) - 8, 5)
+	ELFog.refresh(state)
+	var planner := _planner()
+	var seen: Dictionary = planner.call("threats", director, 2)
+	var falls: Dictionary = planner.call("defence", director, 2, seen)
+	check(falls.has(int(raider.uid)), "Y1: a hero standing by the castle does not hold it (%s)" % str(falls))
+	var guarded: Dictionary = planner.call("defence", director, 2, seen, {int(raider.uid): [side]})
+	check(_soonest(guarded) > _soonest(falls), "Y1: a hero sent to attack the raider does (%s / %s)" % [str(guarded), str(falls)])
+	_pass(director)
+	var defended := false
+	for pair: Array in ELFirstAI.data(state, 2).assigned:
+		if int(pair[1].get("target", -1)) == int(raider.uid): defended = true
+	check(defended, "Y1: so a hero is sent to meet the raider (%s)" % str(ELFirstAI.data(state, 2).assigned))
+
+func _case_y_reopen() -> void:
+	# The same raider grows more dangerous (its defender falls): the hero on
+	# a mine errand turns to meet it, though no new enemy appeared.
+	if not smart: return
+	var director := _world()
+	var state := director.state
+	var home := _castle(director, 2)
+	state.scenario.castles[2].health = 9
+	_hero(director, 2, 20, 100, 8)
+	var first := _hero(director, 2, int(home.x) - 8, int(home.y) + 2, 6)
+	var second := _hero(director, 2, int(home.x) - 9, int(home.y) + 4, 6)
+	_place(director, "mine", int(home.x) - 14, int(home.y) + 6, {"owner": -1})
+	_place(director, "mine", int(home.x) - 16, int(home.y) + 10, {"owner": -1})
+	var raider := _hero(director, 3, int(home.x) - 6, int(home.y) - 8, 5)
+	ELFog.refresh(state)
+	_pass(director)
+	var defender := {}
+	var other := {}
+	for hero: Dictionary in [first, second]:
+		if int(_task_of(director, hero).get("target", -1)) == int(raider.uid): defender = hero
+		else: other = hero
+	check(not defender.is_empty() and not _task_of(director, other).is_empty(), "Y2: one hero meets the raider, the other goes about an errand (%s / %s)" % [str(_task_of(director, first)), str(_task_of(director, second))])
+	if defender.is_empty(): return
+	var alarm: Variant = ELFirstAI.data(state, 2).get("alarm")
+	_kill(director, defender)
+	_pass(director)
+	check(int(_task_of(director, other).get("target", -1)) == int(raider.uid), "Y2: its defender fallen, the other hero leaves its mine for the raider (%s, alarm %s)" % [str(_task_of(director, other)), str(alarm)])
+
+func _case_y_idle() -> void:
+	# A battle the hero is all but sure to lose is not taken for want of
+	# anything better: waiting is worth more.
+	if not smart: return
+	var director := _world()
+	var state := director.state
+	director.set("battle_estimate", true)
+	var home := _castle(director, 2)
+	_hero(director, 2, int(home.x) - 6, int(home.y), 8)
+	var side := _hero(director, 2, 30, 90, 2)
+	var brute := _hero(director, 3, 36, 90, 3)
+	brute.health = 400
+	ELFog.refresh(state)
+	var planner := _planner()
+	var chance := float(planner.call("win_chance", director, side, brute))
+	var points := float(planner.call("utility", director, side, 1, {"kind": "hero", "target": int(brute.uid)}, {}, true))
+	check(chance < 0.01 and points == -INF, "Y3: a hopeless attack is no objective (chance %.4f, %s)" % [chance, str(points)])
+	_pass(director)
+	check(int(_task_of(director, side).get("target", -1)) != int(brute.uid), "Y3: the hero does not attack (%s)" % str(_task_of(director, side)))
+
+func _case_y_siege() -> void:
+	# A partner fourteen days away adds nothing to the first nights of a siege.
+	if not smart: return
+	var director := _world()
+	var state := director.state
+	var target := _castle(director, 3)
+	var near := _hero(director, 2, int(target.x) - 1, int(target.y), 8)
+	var far := _hero(director, 2, int(target.x) - 1, int(target.y), 8)
+	var task := {"kind": "tower", "target": int(target.uid), "personal": true}
+	var ai := ELFirstAI.data(state, 2)
+	var planner := _planner()
+	ai.assigned = [[int(near.uid), task]]
+	var alone := int(planner.call("siege_nights", director, near, target))
+	ai.assigned = [[int(near.uid), task], [int(far.uid), task.duplicate()]]
+	var together := int(planner.call("siege_nights", director, near, target))
+	far.x = int(target.x) - 1 - 14 * int(far.strategy_capacity)
+	var later := int(planner.call("siege_nights", director, near, target))
+	check(together > 0 and (alone < 0 or together < alone), "Y4: a partner beside the castle shortens the siege (%d nights, alone %d)" % [together, alone])
+	check(later == alone or (later > together and alone < 0), "Y4: one fourteen days away counts only from its arrival (%d nights, alone %d)" % [later, alone])
+
+func _case_y_atomic() -> void:
+	# A hero reconsidering (a new threat) that can reach nothing keeps no
+	# objective another hero is given: one holder per objective.
+	if not smart: return
+	var director := _world()
+	var state := director.state
+	var home := _castle(director, 2)
+	state.scenario.castles[2].health = 9
+	_hero(director, 2, 20, 100, 8)
+	var holder := _hero(director, 2, 40, 90, 3)
+	var mine := _place(director, "mine", 46, 92, {"owner": -1})
+	_hero(director, 2, 44, 96, 3)
+	# A hero by the castle sees the raider.
+	_hero(director, 2, int(home.x) - 1, int(home.y), 1)
+	_pen(director, holder, 1)
+	ELFirstAI.data(state, 2).assigned = [[int(holder.uid), {"kind": "mine", "target": int(mine.uid)}]]
+	_hero(director, 3, int(home.x) - 6, int(home.y) - 8, 5)
+	ELFog.refresh(state)
+	_pass(director)
+	var holders := 0
+	for pair: Array in ELFirstAI.data(state, 2).assigned:
+		if pair[1].get("kind") == "mine" and int(pair[1].get("target", -1)) == int(mine.uid): holders += 1
+	check(holders == 1 and int(_task_of(director, holder).get("target", -1)) != int(mine.uid), "Y5: the mine has one holder, a hero that can reach it (%s)" % str(ELFirstAI.data(state, 2).assigned))
+
+func _case_y_order() -> void:
+	# A fortified enemy hero stops an attacker that enters its area and
+	# fights first: at equal level three it wins 4 times in 7.
+	var director := _world()
+	var state := director.state
+	var hero := _hero(director, 2, 30, 90, 3)
+	var enemy := _hero(director, 3, 36, 90, 3)
+	ELFog.refresh(state)
+	var planner := _planner()
+	var open := float(planner.call("win_chance", director, hero, enemy))
+	enemy.spell_fort = 1
+	director.interception.rebuild(state, director.grid)
+	var held := float(planner.call("win_chance", director, hero, enemy))
+	check(absf(open - 4.0 / 7.0) < 1e-6, "Y6: an attacker moving first wins 4 in 7 (%.3f)" % open)
+	check(absf(held - 3.0 / 7.0) < 1e-6, "Y6: against a fortified hero, which fights first, 3 in 7 (%.3f)" % held)
+
+func _case_y_urgent() -> void:
+	# An empty spell sends the hero to a portal only when a refill can be paid.
+	if not smart: return
+	var director := _world()
+	var state := director.state
+	var side := _hero(director, 2, 30, 90, 3)
+	_place(director, "portal", 60, 60)
+	var slot := _rune_slot(side)
+	if slot < 0: return
+	side.rune_uses[slot] = 0
+	_rich(state, 2, 0)
+	check(not ELFirstAIEconomy.urgent(director, side), "Y7: with nothing to pay a rune with, the errand goes on")
+	_rich(state, 2)
+	check(ELFirstAIEconomy.urgent(director, side), "Y7: with resources, the hero goes for its runes")
+
+func _case_y_turns() -> void:
+	# A repair four ether from completion is kept although an active spell's
+	# upkeep no longer fits the income (the settlement will drop that spell).
+	if not smart: return
+	var director := _world()
+	var state := director.state
+	var player := _repairer(state)
+	var code := _spell_code(state, player, ELGlobalSpells.REPAIRS.keys())
+	check(not code.is_empty(), "Y8: a repair spell for a computer player's colour")
+	if code.is_empty(): return
+	var hero := _hero(director, player, 30, 90, 1)
+	hero.gs_items = [{"kind": ELMapPickups.FULL, "spells": [code]}]
+	var dear := ""
+	for candidate: String in ELGlobalSpells.ENCHANTMENTS:
+		if dear.is_empty() or ELGlobalSpells.upkeep(profile, candidate) > ELGlobalSpells.upkeep(profile, dear): dear = candidate
+	var upkeep := ELGlobalSpells.upkeep(profile, dear)
+	var heroes := int(ELStrategy.mana_budget(state, player).spent)
+	check(upkeep > heroes + 1, "Y8: a spell whose upkeep can outgrow the income (%s, %d)" % [dear, upkeep])
+	if upkeep <= heroes + 1: return
+	_tower_income(state, player, upkeep - 1)
+	var record := ELGlobalSpells.data(state, player)
+	record.production = {"code": code, "cost": 40, "spent": 36, "state": 1}
+	record.active = [{"serial": 1, "code": dear, "hero": -1, "castle": player, "protection": 0}]
+	check(ELFirstAIEconomy.turns_left(state, player) <= ELFirstAIEconomy.STALL_DAYS, "Y8: the forecast finishes it soon (%d days)" % ELFirstAIEconomy.turns_left(state, player))
+	ELFirstAIEconomy.global_spells(director, player)
+	check(str(record.production.get("code", "")) == code, "Y8: the repair is not dispelled (%s)" % str(record.production))
+
+func _case_y_stock() -> void:
+	# A shop's next level is worth a visit only for purchases that can happen.
+	if not smart: return
+	var director := _world()
+	var state := director.state
+	var home := _castle(director, 2)
+	_hero(director, 2, int(home.x) - 6, int(home.y), 7)
+	var side := _hero(director, 2, 30, 90, 3)
+	_rich(state, 2)
+	_place(director, "portal", 20, 80)
+	var found := {}
+	for proto: Dictionary in protos.get("shops", []):
+		var shop := _place(director, "shop", 36, 90, {"name": proto.name, "node": proto.node, "level": 0, "owner": 0})
+		var stock := ELFirstSpellShop.authored_stock(profile, shop, ELFirstSpellShop.hero_color(profile, side))
+		if stock.is_empty(): continue
+		for slot in side.cards.size(): side.cards[slot] = stock[slot % stock.size()]
+		ELRunes.initialize(profile, side)
+		for slot in side.rune_uses.size():
+			if int(side.rune_uses[slot]) >= 0: side.rune_uses[slot] = ELRunes.capacity(side)
+		if ELFirstAIEconomy._shop(state, side, shop, false) == 0 and int(ELFirstAIEconomy._next_stock_helps(state, side, shop)) > 0:
+			found = shop
+			break
+		_kill(director, shop)
+		state.objects.erase(int(shop.uid))
+	check(not found.is_empty(), "Y9: a shop whose next level sells this hero something")
+	if found.is_empty(): return
+	_rich(state, 2, 0)
+	check(int(ELFirstAIEconomy._next_stock_helps(state, side, found)) == 0 and ELFirstAIEconomy.wants(director, side, found) == 0, "Y9: with nothing to pay, its next level is no reason to go")
+
+func _case_y_restore() -> void:
+	# A loaded game keeps the field commander (its shopping share), the alarm
+	# and the doctrine.
+	var director := _world()
+	var state := director.state
+	var lead := _hero(director, 2, 30, 90, 3)
+	var other := _hero(director, 2, 34, 90, 5)
+	var ai := ELFirstAI.data(state, 2)
+	ai.champion = int(other.uid)
+	ai.commander = int(lead.uid)
+	ai.alarm = 3
+	ai.doctrine = "economic"
+	var share := ELFirstAIEconomy._budget(state, lead)
+	check(ELFirstAI.restore(state).is_empty(), "Y10: the plans restore")
+	ai = ELFirstAI.data(state, 2)
+	check(int(ai.get("commander", -1)) == int(lead.uid) and int(ai.get("alarm", -1)) == 3 and str(ai.get("doctrine", "")) == "economic", "Y10: with the commander, alarm and doctrine (%s)" % str(ai))
+	check(ELFirstAIEconomy._budget(state, lead) == share, "Y10: the commander's shopping budget is unchanged")
+
+func _case_y_strength() -> void:
+	# The strength estimate tells a specialized hero from the same hero without.
+	var director := _world()
+	var hero := _hero(director, 2, 30, 90, 3)
+	var planner := _planner()
+	hero.specialization = "NONE"
+	var plain := float(planner.call("strength", director.state, hero))
+	hero.specialization = "SPECIAL"
+	check(float(planner.call("strength", director.state, hero)) > plain, "Y11: a specialization counts though the rest is cached")
+
+func _case_y_sightings() -> void:
+	# An enemy that falls out of sight is remembered where it was seen.
+	if not smart: return
+	var director := _world()
+	var state := director.state
+	_hero(director, 2, 30, 90, 3)
+	var enemy := _hero(director, 3, 34, 90, 3)
+	ELFog.refresh(state)
+	var planner := _planner()
+	planner.call("observe", director, 2)
+	var key := str(enemy.uid)
+	check(ELFirstAI.data(state, 2).get("seen", {}).has(key), "Y13: the enemy is seen")
+	enemy.visible = false
+	enemy.alive = false
+	planner.call("observe", director, 2)
+	check(ELFirstAI.data(state, 2).get("seen", {}).has(key), "Y13: its fall out of sight is not known (%s)" % str(ELFirstAI.data(state, 2).get("seen", {})))
+
+func _case_y_loop() -> void:
+	# Two repairs finished the same day are both cast.
+	if not smart: return
+	var director := _world()
+	var state := director.state
+	var player := _repairer(state)
+	var code := _spell_code(state, player, ELGlobalSpells.REPAIRS.keys())
+	check(not code.is_empty(), "Y14: a repair spell for a computer player's colour")
+	if code.is_empty(): return
+	var hero := _hero(director, player, 30, 90, 3)
+	_rich(state, player)
+	hero.gs_items = [{"kind": ELMapPickups.FULL, "spells": [code]}]
+	var castle: Dictionary = state.scenario.castles[player]
+	castle.max = maxi(int(castle.max), 30)
+	castle.health = 7
+	castle.pending = 9
+	var cost := ELGlobalSpells.ether_cost(state, player, code)
+	state.players[player].free_ether = 2 * cost
+	var record := ELGlobalSpells.data(state, player)
+	var serial := int(record.serial)
+	ELFirstAIEconomy.global_spells(director, player)
+	check(int(record.serial) - serial >= 2 and int(record.production.get("state", 0)) != 2, "Y14: a spell finished after a cast is cast too (%s costs %d: %d cast, production %s)" % [code, cost, int(record.serial) - serial, str(record.production)])
+
+func _case_y_impending() -> void:
+	# An enemy beside the castle will strike tonight: the ether that would
+	# keep the castle standing is not spent on an attack.
+	if not smart: return
+	var director := _world()
+	var state := director.state
+	var home := _castle(director, 2)
+	var code := ""
+	for candidate: String in ELGlobalSpells.CASTLE_DAMAGE:
+		if _spell_code(state, 2, [candidate]) == candidate and ELGlobalSpells.upkeep(profile, candidate) == 0: code = candidate
+	if code.is_empty(): return
+	var hero := _hero(director, 2, int(home.x) - 3, int(home.y), 3)
+	_rich(state, 2)
+	hero.gs_items = [{"kind": ELMapPickups.FULL, "spells": [code]}]
+	var castle: Dictionary = state.scenario.castles[2]
+	castle.health = 5
+	castle.pending = 0
+	var cost := ELGlobalSpells.ether_cost(state, 2, code)
+	state.players[2].free_ether = maxi(cost, 6)
+	var before := ELFirstAIEconomy.night_health(state, 2)
+	var raider := _hero(director, 3, int(home.x) - 1, int(home.y) + 1, 5)
+	ELFog.refresh(state)
+	var after := ELFirstAIEconomy.night_health(state, 2)
+	check(before - after == mini(before, ELFirstScenario.hero_value(raider)), "Y15: the raider's coming assault is foreseen (%d -> %d)" % [before, after])
+	check(ELFirstAIEconomy._choose(director, 2) != code or ELFirstAIEconomy.night_health(state, 2, cost) > 0, "Y15: the ether that saves the castle is not spent on an attack")
+
+func _case_y_route() -> void:
+	# A weak creature behind a fortified enemy hero: the route stops at the
+	# fort first, a battle the hero is likely to lose, so the creature is not
+	# worth the trip.
+	if not smart: return
+	var director := _world()
+	var state := director.state
+	var hero := _hero(director, 2, 30, 90, 3)
+	var creature := _place(director, "monster", 42, 90, {"owner": 0, "level": 1})
+	var enemy := _hero(director, 3, 36, 90, 3)
+	ELFog.refresh(state)
+	director.interception.rebuild(state, director.grid)
+	var planner := _planner()
+	var task := {"kind": "monster", "target": int(creature.uid)}
+	var open := float(planner.call("utility", director, hero, 1, task, {}, true))
+	enemy.spell_fort = 1
+	director.interception.rebuild(state, director.grid)
+	var guarded := float(planner.call("utility", director, hero, 1, task, {}, true))
+	check(open > -INF and guarded < open, "Y16: the battle on the way lowers the creature's worth (%.1f -> %s)" % [open, str(guarded)])
+	check(guarded == -INF, "Y16: below waiting, it is left")
+
+func _case_y_bounds() -> void:
+	# The bound that prunes objectives is never below the exact worth: a
+	# portal refilling three empty spells stays on the shortlist.
+	if not smart: return
+	var director := _world()
+	var state := director.state
+	var home := _castle(director, 2)
+	_hero(director, 2, int(home.x) - 6, int(home.y), 7)
+	var side := _hero(director, 2, 30, 90, 3)
+	_rich(state, 2)
+	var colour := ELFirstSpellShop.hero_color(profile, side)
+	var spells: Dictionary = profile.table("CombatSpells")
+	var slot := 0
+	for code: String in spells:
+		if slot >= 3: break
+		if spells[code].get("Color") == colour and spells[code].get("Rarity") == "Common":
+			side.cards[slot] = code
+			slot += 1
+	ELRunes.initialize(profile, side)
+	for index in side.rune_uses.size():
+		if int(side.rune_uses[index]) >= 0: side.rune_uses[index] = 0
+	_place(director, "portal", 36, 92)
+	_place(director, "mine", 40, 96, {"owner": -1})
+	_place(director, "monster", 26, 86, {"owner": 0, "level": 1})
+	_place(director, "Teacher", 24, 96)
+	if protos.has("shop"): _place(director, "shop", 34, 84, {"owner": 0})
+	director.interception.rebuild(state, director.grid)
+	_planner_set("_urgent", {})
+	var planner := _planner()
+	var bad: Array = []
+	var priced := 0
+	for task: Dictionary in ELFirstAI.objectives(director, 2):
+		var bound := float(planner.call("utility", director, side, 1, task, {}, false))
+		var exact := float(planner.call("utility", director, side, 1, task, {}, true))
+		if exact == -INF: continue
+		priced += 1
+		if exact > bound + 1e-6: bad.append("%s %.1f > %.1f" % [task.kind, exact, bound])
+	check(priced >= 3 and bad.is_empty(), "Y17: every exact worth is within its bound (%d priced; %s)" % [priced, str(bad)])
+
+func _case_y_widen() -> void:
+	# Five supporters, four mines near them and one far: all five get a mine.
+	if not smart: return
+	var director := _world()
+	var home := _castle(director, 2)
+	_hero(director, 2, int(home.x) - 6, int(home.y), 7)
+	var sides: Array[Dictionary] = []
+	for at: Vector2i in [Vector2i(30, 90), Vector2i(31, 90), Vector2i(30, 91), Vector2i(31, 91), Vector2i(32, 90)]: sides.append(_hero(director, 2, at.x, at.y, 2))
+	for at: Vector2i in [Vector2i(36, 90), Vector2i(36, 94), Vector2i(36, 86), Vector2i(40, 90), Vector2i(76, 60)]: _place(director, "mine", at.x, at.y, {"owner": -1})
+	_pass(director)
+	var mines := {}
+	for hero: Dictionary in sides:
+		var task := _task_of(director, hero)
+		if task.get("kind") == "mine": mines[int(task.target)] = true
+	check(mines.size() == 5, "Y18: each of the five supporters takes its own mine (%d)" % mines.size())
+
+func _case_y_body() -> void:
+	# A guard standing in the one-cell gap to a mine: the lookahead knows the
+	# gap is open once the guard is beaten.
+	if not smart: return
+	var director := _world()
+	var lead := _hero(director, 2, 30, 60, 5)
+	var mine := _place(director, "mine", 50, 60, {"owner": -1})
+	var gap := Vector2i(int(mine.x) - 2, int(mine.y))
+	_pen(director, mine, 2, [gap])
+	var guard := _place(director, "monster", gap.x, gap.y, {"owner": 0, "level": 1})
+	_place(director, "Teacher", 12, 60)
+	director.interception.rebuild(director.state, director.grid)
+	_pass(director)
+	check(int(_task_of(director, lead).get("target", -1)) == int(guard.uid), "Y20: the guard in the gap is cleared first (%s)" % str(_task_of(director, lead)))
+
+func _case_y_leg() -> void:
+	# The two open cells beside a target nearest the hero lie in a sealed
+	# pocket: the lookahead's leg goes round to the far side.
+	if not smart: return
+	var director := _world()
+	var grid := director.grid
+	var sealed: Array[Vector2i] = [Vector2i(48, 58), Vector2i(49, 58), Vector2i(50, 58), Vector2i(48, 59), Vector2i(50, 59), Vector2i(48, 60), Vector2i(50, 60), Vector2i(48, 61), Vector2i(49, 61), Vector2i(50, 61)]
+	for cell: Vector2i in sealed: grid.land.set_point_solid(cell, true)
+	_planner_set("_legs", 0)
+	_planner_set("_leg_cache", {})
+	var leg: Array = _planner().call("_leg", director, Vector2i(40, 60), Rect2i(50, 60, 1, 1), 2.0)
+	for cell: Vector2i in sealed: grid._update_cell(cell)
+	check(float(leg[0]) > 0.0 and leg[1].x == 51, "Y21: the leg reaches the open side (%s)" % str(leg))
+
+func _case_y_resolver() -> void:
+	# The estimated resolver wins as often as the estimate says.
+	if not smart: return
+	var director := _world()
+	var state := director.state
+	var first := _hero(director, 2, 30, 90, 3)
+	var second := _hero(director, 3, 32, 90, 3)
+	var chance := ELFirstAIPlanner.estimate(state, first, second)
+	var wins := 0
+	var trials := 20000
+	for trial in trials:
+		if ELFirstAI.winner(state, first, second, true) == first: wins += 1
+	var share := float(wins) / trials
+	check(absf(share - chance) < 0.015, "Y23: the first side wins %.3f of estimated battles, as estimated (%.3f)" % [share, chance])
+
+func _case_y_mark() -> void:
+	# Free movement: collecting an artifact is progress (the faction plans again).
+	var director := _world(true)
+	var state := director.state
+	var hero := _hero(director, 2, 30, 90, 3)
+	var item := _pickup(director, 31, 90, "artefacts", "")
+	var before := ELStrategy._free_mark(state, 2)
+	if not hero.has("artifacts"): hero.artifacts = []
+	hero.artifacts.append(str(item.get("name", "artifact")))
+	item.alive = false
+	check(ELStrategy._free_mark(state, 2) != before, "Y24: a taken artifact changes the round's fingerprint")
+
+func _case_y_buffs() -> void:
+	# No Concentration for a commander that has the skill.
+	if not smart: return
+	var director := _world()
+	var state := director.state
+	var lead := _hero(director, 2, 30, 90, 5)
+	ELFirstAI.data(state, 2).commander = int(lead.uid)
+	lead.skills.erase("CONC")
+	var without := ELFirstAIEconomy._score(director, 2, "CNTR")
+	lead.skills["CONC"] = 0
+	check(without > 0.0 and ELFirstAIEconomy._score(director, 2, "CNTR") == 0.0, "Y25: Concentration only for a commander without the skill (%.0f)" % without)
+
+func _case_y_summon() -> void:
+	# No summons while every tile before the castle is taken: the finished
+	# spell waits instead of being used up with no hero.
+	if not smart: return
+	var director := _world()
+	var state := director.state
+	_hero(director, 2, 30, 90, 3)
+	for attempt in 8:
+		var spot := ELGlobalSpells.castle_spot(state, 2)
+		if spot == ELGlobalSpells.NO_SPOT: break
+		_place(director, "monster", spot.x, spot.y, {"owner": 0, "level": 1})
+	check(ELGlobalSpells.castle_spot(state, 2) == ELGlobalSpells.NO_SPOT, "Y26: the castle's front is full")
+	var code := str(ELFirstAIEconomy.SUMMON_PREFIX.get(str(state.players[2].color), "")) + "WR"
+	check(ELFirstAIEconomy._score(director, 2, code) == 0.0, "Y26: a summons is not begun")
+	var record := ELGlobalSpells.data(state, 2)
+	record.production = {"code": code, "cost": 10, "spent": 10, "state": 2}
+	var heroes := ELFirstAI.heroes_of(state, 2).size()
+	check(not ELFirstAIEconomy._cast(director, 2) and str(record.production.get("code", "")) == code and ELFirstAI.heroes_of(state, 2).size() == heroes, "Y26: a finished one waits for room")
+
+func _case_y_combats() -> void:
+	# An ethereal battle's mark is no actor id.
+	var director := _world()
+	var state := director.state
+	director.strategy = {"phase": "combat", "actors": [], "index": 0, "combats": [[5, 7, 1]], "legacy_orders": false}
+	ELStrategy.queue_combat(director, 1, 5)
+	check(director.strategy.combats.size() == 2, "Y27: a battle of actors 1 and 5 is queued beside the ethereal 5 and 7")
+	for id: int in [1, 5, 7]:
+		if not state.objects.has(id): state.objects[id] = {"uid": id, "type": "monster", "owner": 0, "alive": true}
+		check(state.object(id).get("type") in ["hero", "monster"], "Y27: actor %d stands for a fighter" % id)
+	var turn := ELStrategy.restore_turn({"phase": "combat", "actors": [], "index": 0, "combats": [[5, 7, 1], [1, 5]], "legacy_orders": false}, state)
+	check(not turn.has("error"), "Y27: and such a turn loads (%s)" % str(turn.get("error", "")))
+	director.strategy = {}
+
+func _case_y_hire() -> void:
+	# Hiring for resources only when the ether does not reach a summoning spell.
+	if not smart: return
+	var director := _world()
+	var state := director.state
+	var hero := _hero(director, 2, 30, 90, 5)
+	ELFirstAI.data(state, 2).champion = int(hero.uid)
+	_rich(state, 2)
+	var code := _spell_code(state, 2, [str(ELFirstAIEconomy.SUMMON_PREFIX.get(str(state.players[2].color), "")) + "WR"])
+	check(not code.is_empty(), "Y28: a summoning spell of this colour")
+	if code.is_empty(): return
+	hero.gs_items = [{"kind": ELMapPickups.FULL, "spells": [code]}]
+	state.players[2].free_ether = ELGlobalSpells.ether_cost(state, 2, code)
+	var heroes := ELFirstAI.heroes_of(state, 2).size()
+	ELFirstAIEconomy.reinforce(director, 2)
+	check(ELFirstAI.heroes_of(state, 2).size() == heroes, "Y28: with the ether for a summoning spell no hero is hired")
+	state.players[2].free_ether = 0
+	_tower_income(state, 2, 0)
+	ELFirstAIEconomy.reinforce(director, 2)
+	check(ELFirstAI.heroes_of(state, 2).size() == heroes + 1, "Y28: without the ether for one, a hero is hired")
 
 # --- S: saved plans -------------------------------------------------------------
 

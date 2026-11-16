@@ -22,8 +22,10 @@ static func winner(state: ELAdventureSession, first: Dictionary, second: Diction
 		if first_neutral: return first if first.type == "hero" else second
 		return first if second.type == "monster" else second
 	if estimate:
+		# The draw (0..32767) is compared with the chance scaled to its whole
+		# range: a remainder by 10000 would favour the first side.
 		var chance := ELFirstAIPlanner.estimate(state, first, second)
-		return first if ELAdditionalBuildings._random(state) % 10000 < int(chance * 10000.0) else second
+		return first if ELAdditionalBuildings._random(state) < int(chance * 32768.0) else second
 	if first_neutral or second_neutral: return second if first_neutral else first
 	# Weighted by level: the first side wins with chance (L1 + 1) / (L1 + L2 + 1).
 	var level := int(first.get("level", 1))
@@ -87,7 +89,10 @@ static func computer_players(state: ELAdventureSession) -> Array[int]:
 ## progress, `mark` the hero's tile and day at its last step), `retry`
 ## objectives a hero gave up and the day it may try again, `seen` where and
 ## when enemy heroes were last seen (smarter players), `threats` the enemy
-## heroes that were within reach of a castle on the last pass.
+## heroes that were within reach of a castle on the last pass, `alarm` the
+## days until the castle would fall despite the heroes sent to defend it (when
+## it would), `commander` the field commander, `doctrine` the living-world
+## doctrine once chosen.
 static func data(state: ELAdventureSession, player: int) -> Dictionary:
 	var record: Dictionary = state.players[player]
 	if not record.get("ai") is Dictionary: record.ai = {"version": VERSION, "built": false, "tasks": [], "assigned": [], "champion": -1}
@@ -168,13 +173,15 @@ static func plan_player(director: ELAdventureDirector, player: int, daily := tru
 		if not task.is_empty() and (finished(director, hero, task) or not _valid(task, open, smart)): drop = true
 		# A promotion or demotion since the task was given: it must still suit the role.
 		elif not task.is_empty() and not _role_allows(director, hero, role, task, smart): drop = true
-		# Remake option: a siege whose damage the castle's regeneration undoes
-		# is reconsidered (other heroes may join it, or another goal is better).
-		elif smart and task.get("kind") == "tower" and ELFirstAIPlanner.siege_net(director, hero, state.object(task.target)) <= 0: drop = true
+		# Remake option: a siege that would not ruin the castle (its damage
+		# undone by the castle's regeneration) is reconsidered (other heroes
+		# may join it, or another goal is better).
+		elif smart and task.get("kind") == "tower" and ELFirstAIPlanner.siege_nights(director, hero, state.object(task.target)) < 0: drop = true
 		# Living world: a patrol is what an idle hero does; it looks for work every pass.
 		elif task.get("kind") == "patrol": drop = true
-		# Remake option: spells bought without runes are dead cards until a
-		# component portal fills them; the errand waits.
+		# Remake option: spells bought without runes draw only cantrips until
+		# a component portal fills them; while a reachable one can, the
+		# errand waits (ELFirstAIEconomy.urgent).
 		elif not task.is_empty() and task.kind != "shop" and not (task.kind == "tower" and ELStrategy.adjacent(director, hero, state.object(task.target))) and ELFirstAIEconomy.urgent(director, hero): drop = true
 		elif not task.is_empty() and int(task.get("tries", 0)) >= BLOCKED_PASSES:
 			retry[_key(task, int(hero.uid)) + "@" + str(hero.uid)] = int(state.day) + RETRY_DAYS
@@ -226,6 +233,12 @@ static func plan_player(director: ELAdventureDirector, player: int, daily := tru
 		stats.passes = int(stats.get("passes", 0)) + 1
 		stats.usec = int(stats.get("usec", 0)) + Time.get_ticks_usec() - started
 		stats.slowest = maxi(int(stats.get("slowest", 0)), Time.get_ticks_usec() - started)
+		# Shared objectives held by more than one hero after the pass (none expected).
+		var holders := {}
+		for id: int in assigned:
+			if not bool(assigned[id].get("personal", false)) and assigned[id].get("kind") not in ["patrol", "escort"]: holders[_key(assigned[id], -1)] = int(holders.get(_key(assigned[id], -1), 0)) + 1
+		for key: String in holders:
+			if int(holders[key]) > 1: stats.duplicates = int(stats.get("duplicates", 0)) + 1
 
 ## Planning time by stage, when the simulator asks for it (tools/first_ai_sim.gd).
 static func _lap(director: ELAdventureDirector, stage: String, since: int) -> int:
@@ -597,6 +610,7 @@ static func _distance(from: Vector2i, item: Dictionary) -> int:
 static func _route_cost(director: ELAdventureDirector, hero: Dictionary, item: Dictionary, clean: bool, quick := false) -> int:
 	var grid := director.grid
 	var from := Vector2i(hero.x, hero.y)
+	last_path = [from]
 	if ELStrategy.adjacent(director, hero, item): return 0
 	var closed := close_guards(director, hero, int(item.get("uid", -1))) if clean else ([] as Array[Vector2i])
 	var path: Array[Vector2i] = []
@@ -613,7 +627,11 @@ static func _route_cost(director: ELAdventureDirector, hero: Dictionary, item: D
 			if not path.is_empty(): break
 	if path.is_empty(): path = grid.approach(from, item)
 	for point: Vector2i in closed: grid._update_cell(point)
+	last_path = path
 	return NONE if path.is_empty() else grid.path_cost(path)
+
+## The route of the last _route_cost or _fought_cost (empty: none found).
+static var last_path: Array[Vector2i] = []
 
 ## Closes the cells of hostile guard areas other than `target`'s own (and the
 ## hero's tile) in the land graph; reopen them with grid._update_cell.
@@ -648,6 +666,7 @@ static func _hostile_cells(director: ELAdventureDirector, hero: Dictionary) -> A
 static func _fought_cost(director: ELAdventureDirector, hero: Dictionary, item: Dictionary) -> int:
 	var grid := director.grid
 	var path := grid.approach(Vector2i(hero.x, hero.y), item)
+	last_path = path
 	if path.is_empty(): return NONE
 	var level := int(hero.get("level", 1))
 	for point: Vector2i in path:
@@ -696,6 +715,17 @@ static func restore(state: ELAdventureSession) -> String:
 			if not ELLuaSave._integer(id, 0, 0x7fffffff): return "Invalid saved computer plans."
 			list.append(int(id))
 		if not list.is_empty(): record.threats = list
+		# The field commander (whose shopping share is larger), the castle's
+		# soonest foreseen fall and the doctrine (absent in older saves).
+		if raw.has("commander"):
+			if not ELLuaSave._integer(raw.commander, -1, 0x7fffffff): return "Invalid saved computer plans."
+			record.commander = int(raw.commander)
+		if raw.has("alarm"):
+			if not ELLuaSave._integer(raw.alarm, 0, 0x7fffffff): return "Invalid saved computer plans."
+			record.alarm = int(raw.alarm)
+		if raw.has("doctrine"):
+			if not ELFirstAIPlanner.DOCTRINES.has(str(raw.doctrine)): return "Invalid saved computer plans."
+			record.doctrine = str(raw.doctrine)
 		state.players[player].ai = record
 	return ""
 

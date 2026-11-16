@@ -81,12 +81,11 @@ func decode(vm: ELLuaVM, raw: Variant) -> bool:
 		values[name] = _decode(raw.globals[name], vm)
 	if not error.is_empty(): return _fail(error)
 	# Commit only after the entire graph validates.
-	for value: ELLuaVM.Table in vm._tables: value.values.clear()
-	vm._tables.clear()
+	vm.release_tables()
 	vm.globals = values
 	vm.rng_state = int(raw.rng)
 	for value: Variant in _objects:
-		if value is ELLuaVM.Table: vm._tables.append(value)
+		if value is ELLuaVM.Table: vm.track(value)
 	_objects.clear()
 	return true
 

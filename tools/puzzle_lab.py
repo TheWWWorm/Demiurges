@@ -25,7 +25,10 @@ CORE = [
     "duel/specs.gd", "duel/spell_charges.gd", "duel/hero_effects.gd",
     "duel/combat_search.gd", "duel/combat_brain.gd", "duel/puzzles.gd",
     "content/runes.gd", "content/hero_skills.gd", "content/hero_progression.gd",
+    "content/safe_file.gd",
 ]
+CLASS_NAME = re.compile(r"^class_name\s+(\w+)", re.M)
+CLASS_USE = re.compile(r"\bEL[A-Z]\w*")
 FLAGS = {
     "Flying": "Fly", "First Strike": "FS", "Unblockable": "UB",
     "Cannot attack": "NoAttack", "Cannot get up": "NoUntap",
@@ -288,6 +291,32 @@ def typed_array_compat(source: str) -> str:
     return "\n".join(output) + "\n"
 
 
+def _code(source: str) -> str:
+    """GDScript without its comments and string literals (where a class name
+    is only mentioned)."""
+    source = re.sub(r'"""(.|\n)*?"""|\'\'\'(.|\n)*?\'\'\'', "", source)
+    source = re.sub(r'"(\\.|[^"\\\n])*"|\'(\\.|[^\'\\\n])*\'', '""', source)
+    return re.sub(r"#.*", "", source)
+
+
+def missing_classes(destination: Path) -> dict:
+    """Engine classes (EL...) the lab's scripts use but no lab script declares:
+    {class: (the scripts using it, the game file that declares it or None)}."""
+    declared, used = set(), {}
+    for script in sorted(destination.glob("*.gd")):
+        source = script.read_text(encoding="utf-8")
+        declared.update(CLASS_NAME.findall(source))
+        for name in set(CLASS_USE.findall(_code(source))):
+            used.setdefault(name, []).append(script.name)
+    game = {}
+    for script in (ROOT / "game/src").rglob("*.gd"):
+        for name in CLASS_NAME.findall(script.read_text(encoding="utf-8")):
+            game[name] = script.relative_to(ROOT / "game/src").as_posix()
+    # Inner classes and constants (ELPathTracing.Effect) are reached through
+    # their outer class, which is what has to be declared.
+    return {name: (users, game.get(name)) for name, users in used.items() if name not in declared and name in game}
+
+
 def prepare(destination: Path, compatibility: bool = True) -> Path:
     destination.mkdir(parents=True, exist_ok=True)
     (destination / "project.godot").write_text('config_version=5\n[application]\nconfig/name="Demiurges Puzzle Lab"\nrun/flush_stdout_on_print=true\n[rendering]\nrenderer/rendering_method="gl_compatibility"\n')
@@ -329,6 +358,12 @@ static func _lab_native(bytes: PackedByteArray) -> PackedByteArray:
 	return FileAccess.get_file_as_bytes(output)
 '''
         brain.write_text(source)
+    # A battle file that starts using another engine class needs it copied
+    # (CORE) or stubbed (STUBS); say which instead of a parse error later.
+    missing = missing_classes(destination)
+    if missing:
+        lines = [f"  {name} (game/src/{source}), used by {', '.join(users)}" for name, (users, source) in sorted(missing.items())]
+        raise SystemExit("puzzle lab: these classes are not in the lab; add their files to CORE or a stub to STUBS in tools/puzzle_lab.py:\n" + "\n".join(lines))
     return destination
 
 

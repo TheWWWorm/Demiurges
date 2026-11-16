@@ -12,7 +12,8 @@ extends Control
 ## the extra. MoreMana/LessMana change the extra, CastSpell orders the spell,
 ## CancelSpell stops the production, GSDispell dispels the selected controlled
 ## spell and GSOK (or Escape) closes. The right-hand column lists the living
-## players' castles with their energy bar and ethereal defender/attacker marks.
+## players' castles with their energy bar and ethereal defender/attacker marks;
+## under Visions a castle's tooltip names the spell its player is creating.
 ## A spell picture (any list, the production, the prompt header) has the
 ## original picture tooltip: the picture, the spell's name and its description.
 signal closed
@@ -419,7 +420,7 @@ func _tooltip(point: Vector2) -> String:
 	if not spell_tip_at(point).is_empty(): return ""
 	for entry: Dictionary in castles():
 		var at: Vector2 = entry.at
-		if Rect2(at, CELL).has_point(point): return _castle_label(int(entry.player))
+		if Rect2(at, CELL).has_point(point): return _castle_label(int(entry.player)) + _vision(int(entry.player))
 		if entry.has("tomb"): continue
 		if Rect2(at + Vector2(107, 7), Vector2(14, 14)).has_point(point) and not ELGlobalSpells.defender(state, int(entry.player)).is_empty(): return profile.text("T_GS_ETHERIAL_DEFENDER_TT")
 		if Rect2(at + Vector2(107, 30), Vector2(14, 14)).has_point(point) and _attacked(int(entry.player)): return profile.text("T_GS_ETHERIAL_ATTACKER_TT")
@@ -429,6 +430,14 @@ func _target_name(spell: Dictionary) -> String:
 	if int(spell.hero) >= 0: return "\n" + str(state.object(int(spell.hero)).get("title", state.object(int(spell.hero)).get("name", "")))
 	if int(spell.castle) >= 0: return "\n" + _castle_label(int(spell.castle))
 	return ""
+
+## Under Visions, another player's castle names the spell it is creating
+## and the ether invested so far.
+func _vision(id: int) -> String:
+	var seen := ELGlobalSpells.seen_production(state, player, id)
+	if seen.is_empty(): return ""
+	return "
+%s: %d / %d" % [ELGlobalSpells.title(profile, str(seen.code)), int(seen.spent), int(seen.cost)]
 
 func _castle_label(id: int) -> String:
 	if id == ELGlobalSpells.TOMB_TARGET:

@@ -28,7 +28,11 @@ var lobby: Array[Dictionary] = []
 var _peer: MultiplayerPeer
 ## A room code: play through the online relay instead of a direct address.
 var relay_room := ""
+## A guest is joining until the host answers its hello (a lobby, a seat,
+## word that its seat waits for a battle, or a refusal); the connection
+## timeout runs until then, not just until the transport connects.
 var _joining := false
+var _hello_sent := false
 var _deadline := 0
 var _dirty := false
 var _since_state := 0.0
@@ -166,6 +170,7 @@ func join(data: ELProfile, address: String, port: int, name: String, character: 
 		close()
 		return result
 	_joining = true
+	_hello_sent = false
 	_deadline = Time.get_ticks_msec() + 15000
 	message.emit(ELAutochessText.t(profile, "Connecting…"))
 	return OK
@@ -223,8 +228,8 @@ func poll(delta: float) -> void:
 	if _peer == null: return
 	_peer.poll()
 	if _peer == null: return
-	if _joining and _peer.get_connection_status() == MultiplayerPeer.CONNECTION_CONNECTED:
-		_joining = false
+	if _joining and not _hello_sent and _peer.get_connection_status() == MultiplayerPeer.CONNECTION_CONNECTED:
+		_hello_sent = true
 		_send(1, ["hello", VERSION, _signature, String(lobby[0].name), String(lobby[0].character), token()])
 	if is_host and _peer is ELRelayPeer and _peer.get_connection_status() == MultiplayerPeer.CONNECTION_DISCONNECTED:
 		var lost: String = (_peer as ELRelayPeer).close_reason
@@ -281,9 +286,7 @@ func _host_receive(sender: int, packet: Array) -> void:
 			if op == "concede":
 				for key: String in _departed.keys():
 					if int(_departed[key]) == who: _departed.erase(key)
-				game.companies[who].health = 0
-				game.controllers[who] = "computer"
-				game.bot_plans[who].done = true
+				game.forfeit(who)
 				_dirty = true
 				return
 			var error := ELAutochessCommands.apply(game, who, op, packet[2])
@@ -313,6 +316,7 @@ func _rejoin(sender: int, token: String) -> void:
 	lobby.append({"peer": sender, "name": game.names[seat_index].trim_suffix(" (AI)"), "character": "", "token": token})
 	_returning[sender] = seat_index
 	if game.stage != "fight": _seat_returning()
+	else: _send(sender, ["waiting"])
 
 func _seat_returning() -> void:
 	for peer: int in _returning:
@@ -423,8 +427,10 @@ func send_command(op: String, args: Array) -> void:
 	_send(1, ["cmd", op, args])
 
 func _guest_receive(packet: Array) -> void:
+	if String(packet[0]) in ["lobby", "start", "waiting"]: _joining = false
 	match String(packet[0]):
 		"refused": _fail(String(packet[1]) if packet.size() > 1 else "Could not connect.")
+		"waiting": message.emit(ELAutochessText.t(profile, "Waiting for the current battle to end…"))
 		"lobby":
 			if packet.size() < 2 or not packet[1] is Array: return
 			lobby.clear()

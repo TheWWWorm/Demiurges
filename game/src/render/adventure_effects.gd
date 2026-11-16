@@ -22,11 +22,50 @@ const RAIN_FILES := ["terrainpfx/rain.pfx", "terrainpfx/rainnocycle.pfx"]
 static func building_effect(profile: ELProfile, item: Dictionary) -> String:
 	if item.get("group") != "additional_buildings": return ""
 	return str(ELSecondBuildings.definition(profile, item).get("Effect", "")).strip_edges()
-## Second game: the looping effect a terrain object's table SpecEffect kind
-## starts with its figure, at the figure's place and turned with it. Kinds
-## 111-118 are the magic bridges' piers and abutments, by colour.
-const SPEC_EFFECTS := {111: "GreenBridgePier", 112: "GreenBridgeAbutment", 113: "BlackBridgePier", 114: "BlackBridgeAbutment",
-	115: "RedBridgePier", 116: "RedBridgeAbutment", 117: "BlueBridgePier", 118: "BlueBridgeAbutment"}
+## Second game: the looping effect a terrain object's (or mana node's) table
+## SpecEffect kind starts with its figure, at the figure's place and turned
+## with it (pfx file names, from the game's own kind list):
+## - 1, 2, 7: the red, black and blue mana nodes;
+## - 3-6: the Red and Black volcanoes' smoke (Voulcan2x2_1-4, as in the first
+##   game);
+## - 100-106, 110: lighthouses by colour, the dock, the boat (Ship_01), the
+##   teleport and the plain bridge;
+## - 111-118: the magic bridges' piers and abutments, by colour;
+## - 119 and 123: the springs' water (Spring_01 SpringMind, Spring_02
+##   SpringStrength);
+## - 120-122: the dungeon caves' glow (DungeonLvl1-3);
+## - 124: the altar of war;
+## - 125: the volcano ashes' drifting cloud (TerrainPFX ConvulsionOfNature).
+## Only 3-6, 105 and 111-125 have TerrObj rows; the rest are kept for maps
+## of one's own that might use them.
+const SPEC_EFFECTS := {1: "ManaNodeRed", 2: "ManaNodeBlack", 7: "BlueManaNode",
+	3: "Voulcan2x2_1", 4: "Voulcan2x2_2", 5: "Voulcan2x2_3", 6: "Voulcan2x2_4",
+	100: "BlueLightHouse", 101: "GreenLightHouse", 102: "RedLightHouse", 103: "BlackLightHouse",
+	104: "Dock", 105: "Boat", 106: "Teleport", 110: "Bridge",
+	111: "GreenBridgePier", 112: "GreenBridgeAbutment", 113: "BlackBridgePier", 114: "BlackBridgeAbutment",
+	115: "RedBridgePier", 116: "RedBridgeAbutment", 117: "BlueBridgePier", 118: "BlueBridgeAbutment",
+	119: "SpringMind", 120: "DungeonLvl1", 121: "DungeonLvl2", 122: "DungeonLvl3", 123: "SpringStrength",
+	124: "AltarOfWar", 125: "TerrainPFX/ConvulsionOfNature"}
+## The object groups whose table rows carry a SpecEffect kind.
+const SPEC_TABLES := {"terrain_objects": "TerrObj", "mana_nodes": "ManaNodes"}
+## Object effects (SpecEffect) are drawn only while their reach is in the
+## camera's view, checked this often (seconds); a big map has scores of
+## volcanoes, springs and ash clouds.
+const CULL_STEP := 0.2
+## Room (units) added round an effect's own reach before it counts as out
+## of view.
+const CULL_MARGIN := 6.0
+
+## Second game: the table row and SpecEffect file ("" for none) of a map
+## object.
+static func spec_effect(profile: ELProfile, item: Dictionary) -> String:
+	var row := spec_row(profile, item)
+	var kind := int(row.get("SpecEffect", 0))
+	return str(SPEC_EFFECTS[kind]) + ".pfx" if SPEC_EFFECTS.has(kind) else ""
+
+static func spec_row(profile: ELProfile, item: Dictionary) -> Dictionary:
+	var table := str(SPEC_TABLES.get(str(item.get("group", "")), ""))
+	return profile.table(table).get(str(item.get("name", "")), {}) if not table.is_empty() else {}
 ## Second game: an occupied fort's guard zone is ringed by twelve looping
 ## pieces, Intercept5x5_NN.pfx, one on each zone cell two cells from the
 ## fort that is not a corner of the 5 x 5 square (only zones of a fort
@@ -60,8 +99,9 @@ var _rain_on_water := false
 var _shrine_session: ELAdventureSession
 var _shrines: Dictionary = {}
 var _shrine_fog_revision := -1
-## Terrain objects with a SpecEffect (uid -> {item, file}).
+## Terrain objects with a SpecEffect (uid -> {item, row, file}).
 var _spec_objects: Dictionary = {}
+var _cull_clock := 0.0
 ## Effect names of the garrisons shown now; rebuilt after fort changes.
 var _garrisons: Dictionary = {}
 var _garrisons_dirty := false
@@ -79,13 +119,12 @@ func build(data: ELProfile, settings: ELSettings, state: ELAdventureSession) -> 
 		_light(name, state.ambience.lights[name])
 	if data.id == "el2":
 		_shrine_session = state
-		var terrain_rows := data.table("TerrObj")
 		for item: Dictionary in state.objects.values():
 			if not building_effect(data, item).is_empty():
 				_shrines[int(item.uid)] = item
-			elif item.get("group") == "terrain_objects":
-				var kind := int(terrain_rows.get(item.get("name", ""), {}).get("SpecEffect", 0))
-				if SPEC_EFFECTS.has(kind): _spec_objects[int(item.uid)] = {"item": item, "file": str(SPEC_EFFECTS[kind]) + ".pfx"}
+			else:
+				var file := spec_effect(data, item)
+				if not file.is_empty(): _spec_objects[int(item.uid)] = {"item": item, "row": spec_row(data, item), "file": file}
 		_garrisons_dirty = true
 		_sync_shrines()
 
@@ -111,6 +150,8 @@ func script_event(data: Dictionary) -> void:
 	if data.kind == "object_created" and _shrine_session != null and not _shrines.has(int(data.get("id", -1))):
 		var made := _shrine_session.object(int(data.get("id", -1)))
 		if not made.is_empty() and not building_effect(profile, made).is_empty(): _shrines[int(made.uid)] = made
+		elif not made.is_empty() and not _spec_objects.has(int(made.uid)) and not spec_effect(profile, made).is_empty():
+			_spec_objects[int(made.uid)] = {"item": made, "row": spec_row(profile, made), "file": spec_effect(profile, made)}
 	if data.kind in ["object_changed", "object_killed", "object_created"] and _shrines.has(int(data.get("id", -1))):
 		_sync_shrine(_shrines[int(data.id)])
 	if data.kind in ["object_changed", "object_killed", "object_created"] and _spec_objects.has(int(data.get("id", -1))):
@@ -147,7 +188,9 @@ func _sync_shrines() -> void:
 
 ## A terrain object's SpecEffect runs wherever the figure is drawn for the
 ## local player, in sight or in explored fog (a destroyed bridge, hidden by
-## its script, has none). Building effects follow the same rule.
+## its script, has none). Building effects follow the same rule. It is part
+## of the object, not weather: the weather preference keeps it (the ash
+## cloud's file sits among the terrain effects).
 func _sync_spec(uid: int) -> void:
 	var entry: Dictionary = _spec_objects[uid]
 	var item: Dictionary = entry.item
@@ -156,11 +199,51 @@ func _sync_spec(uid: int) -> void:
 		finish(name)
 		return
 	if effects.has(name): return
-	var row: Dictionary = profile.table("TerrObj").get(item.get("name", ""), {})
-	var center := ELAdventureGrid.center(item, row) * ELAdventureTerrain.CELL
+	var center := ELAdventureGrid.center(item, entry.row) * ELAdventureTerrain.CELL
 	keep_file(profile, entry.file)
 	start(name, {"file": entry.file, "x": center.x, "y": center.y, "z": 0.0, "story": true}, 0.0)
+	if not effects.has(name): return
 	orient(name, -float((int(item.get("rotation", 0)) >> 2) & 3) * PI / 2.0)
+	var effect: Dictionary = effects[name]
+	var reach := _reach(effect.file)
+	effect.cull = Vector4(reach.position.x, reach.position.y, reach.position.z, reach.size.length() * 0.5 + CULL_MARGIN)
+	_cull(effect, get_viewport().get_camera_3d() if is_inside_tree() else null)
+
+## The box (effect space: x east, y up, z south) the particles of a file
+## ever reach.
+static func _reach(file: ELParticleFile) -> AABB:
+	if file.has_meta(&"map_reach"): return file.get_meta(&"map_reach")
+	var low := Vector3(INF, INF, INF)
+	var high := -low
+	for i in file.alpha.size():
+		var point := Vector3(file.positions[i * 3], file.positions[i * 3 + 2], -file.positions[i * 3 + 1])
+		low = low.min(point)
+		high = high.max(point)
+	var box := AABB(low, high - low) if low.is_finite() and high.is_finite() else AABB()
+	file.set_meta(&"map_reach", box)
+	return box
+
+## Hides an object effect whose reach (its "cull" sphere: centre in effect
+## space, radius) is out of the camera's view, and shows it again when it
+## comes in; a hidden one keeps its clock but is not redrawn.
+func _cull(effect: Dictionary, camera: Camera3D) -> void:
+	var sphere: Vector4 = effect.cull
+	var node: MultiMeshInstance3D = effect.node
+	var inside := true
+	if camera != null:
+		var center := (node.global_transform if node.is_inside_tree() else node.transform) * Vector3(sphere.x, sphere.y, sphere.z)
+		for plane: Plane in camera.get_frustum():
+			if plane.distance_to(center) > sphere.w:
+				inside = false
+				break
+	if inside == node.visible: return
+	node.visible = inside
+	if inside: effect.frame = -1
+
+func _cull_all() -> void:
+	var camera := get_viewport().get_camera_3d() if is_inside_tree() else null
+	for effect: Dictionary in effects.values():
+		if effect.has("cull"): _cull(effect, camera)
 
 ## The guard-zone ring of every occupied fort in sight (RING_PIECES), each
 ## piece at its cell's centre on the ground.
@@ -232,12 +315,20 @@ func start(name: String, entry: Dictionary, elapsed: float, draw_current := fals
 	var node := MultiMeshInstance3D.new()
 	node.multimesh = mesh
 	node.material_override = material
+	# The original drew effects without shadows; a shadow-only twin below
+	# gives the blended ones a soft one.
 	node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	# Large spells reach about 45 units from their origin.
 	node.custom_aabb = AABB(Vector3(-64, -16, -64), Vector3(128, 96, 128))
 	# Script coordinates: x east, y north, z up, two units per cell.
 	node.position = Vector3(float(entry.x), float(entry.z), -float(entry.y))
 	var hidden := optional(entry)
+	# Smoke, mist and water spray throw a soft shadow (a remake addition, see
+	# ELParticleFile.SHADOW_SHEETS); the weather layers do not.
+	var strength := 0.0 if hidden else ELParticleFile.shadow_strength(file)
+	if strength > 0.0:
+		var camera := get_viewport().get_camera_3d() if is_inside_tree() else null
+		ELParticleFile.shade_twin(ELParticleFile.shadow_twin(node, false), material.get_shader_parameter("atlas"), Vector2(file.columns, file.rows), strength, ELParticleFile.camera_extent(camera))
 	(weather_layer if hidden else self).add_child(node)
 	var rain := hidden and ELArchive.key(str(entry.file)) in RAIN_FILES
 	effects[name] = {"entry": entry.duplicate(), "file": file, "node": node, "elapsed": elapsed, "frame": -1, "optional": hidden, "rain": rain}
@@ -287,6 +378,10 @@ static func _rain_bounds(file: ELParticleFile) -> Rect2:
 func _process(delta: float) -> void:
 	if _shrine_session != null and _shrine_fog_revision != ELFog.revision(_shrine_session): _sync_shrines()
 	elif _garrisons_dirty: _sync_garrisons()
+	_cull_clock += delta
+	if _cull_clock >= CULL_STEP:
+		_cull_clock = 0.0
+		_cull_all()
 	for name: String in effects.keys():
 		_advance(name, delta)
 
@@ -299,8 +394,9 @@ func _advance(name: String, delta: float) -> void:
 	if file.finished(frame, loops):
 		finish(name)
 		return
-	# Hidden ambience keeps its clock but is not redrawn.
-	if frame == effect.frame or (effect.optional and not enabled): return
+	# Hidden ambience and object effects out of view keep their clock but are
+	# not redrawn.
+	if frame == effect.frame or (effect.optional and not enabled) or (effect.has("cull") and not effect.node.visible): return
 	effect.frame = frame
 	_draw(effect, file.visible_frames(frame, loops))
 

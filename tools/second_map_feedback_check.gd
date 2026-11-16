@@ -106,7 +106,7 @@ func _bridges(view: ELAdventureView, profile: ELProfile) -> void:
 		if node.position.distance_to(Vector3(center.x, 0, -center.y)) > 0.01 or not is_equal_approx(node.rotation.y, -float((int(item.rotation) >> 2) & 3) * PI / 2.0):
 			wrong.append("%s placed at %s" % [item.name, node.position])
 	check(wrong.is_empty(), "each bridge piece in sight runs its effect at its figure: %s (%s)" % [str(wrong), ", ".join(names.keys())])
-	check(ELAdventureEffects.SPEC_EFFECTS.values().all(func(file: String) -> bool: return profile.archives.pfx.has(ELArchive.key(file + ".pfx"))), "the eight pier and abutment effects exist")
+	check(range(111, 119).all(func(kind: int) -> bool: return profile.archives.pfx.has(ELArchive.key(str(ELAdventureEffects.SPEC_EFFECTS[kind]) + ".pfx"))), "the eight pier and abutment effects exist")
 	var piece: Dictionary = pieces[0]
 	piece.visible = false
 	state.event.emit({"kind": "object_changed", "id": piece.uid})

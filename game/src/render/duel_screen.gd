@@ -481,7 +481,7 @@ func random_portrait() -> Texture2D:
 	if _random_portrait != null: return _random_portrait
 	var sheet := menu.texture_named("EDIT_HERO_PANEL_12")
 	if sheet == null: return null
-	var source := sheet.get_image()
+	var source := ELIconUpscale.image_of(sheet)
 	if source == null: return null
 	source = source.duplicate()
 	if source.is_compressed(): source.decompress()

@@ -3,8 +3,10 @@ extends Node
 ## Copies the player's GOG installer or data pack (made with
 ## tools/prepare_game_data.py) into app-private storage. The installer is read,
 ## never run. A new import is staged in its own folder and replaces the
-## edition's previous files only once it is complete and recognised, so a
-## cancelled or failed import keeps the old files.
+## edition's previous files only once it is complete, recognised and its
+## archives open (ELContentLibrary.validate), so a cancelled, failed or
+## damaged import keeps the old files. Every file name is checked
+## (ELContentLibrary.safe_relative) before anything is written.
 ##
 ## Adapted from the Cursed Lands engine (TheWWWorm, PrivateDataImport, Apache-2.0).
 signal progress(text: String)
@@ -12,6 +14,9 @@ signal completed(edition: String, folder: String)
 signal failed(message: String)
 var cancelled := false
 var busy := false
+## Tests: the folder that stands in for the imported editions' storage
+## (each edition in a sub-folder, the import staged beside them).
+var content_root := ""
 var _installer: ELInnoSetup
 
 func _exit_tree() -> void:
@@ -26,7 +31,7 @@ func import_file(path: String) -> void:
 	if busy: return
 	busy = true
 	cancelled = false
-	var base := OS.get_user_data_dir().path_join("content")
+	var base := content_root if not content_root.is_empty() else OS.get_user_data_dir().path_join("content")
 	var stage := base.path_join("import-%d" % Time.get_ticks_usec())
 	DirAccess.make_dir_recursive_absolute(stage)
 	var file := FileAccess.open(path, FileAccess.READ)
@@ -99,19 +104,18 @@ func _pack(file: FileAccess, stage: String) -> String:
 		if not key is String or not index[key] is Dictionary:
 			return "Invalid data pack entry."
 		var name: String = key
-		var parts := name.split("/")
 		var entry: Dictionary = index[key]
 		var offset := int(entry.get("offset", -1))
 		var length := int(entry.get("size", -1))
-		if name.is_empty() or name.is_absolute_path() or name.contains("\\") or name.contains(":") or name != name.to_lower() \
-				or ".." in parts or "" in parts or "." in parts or not ELContentLibrary.wanted(name):
+		if name != name.to_lower() or ELContentLibrary.safe_relative(name).is_empty() or ELContentLibrary.inside(stage, name).is_empty() \
+				or not ELContentLibrary.wanted(name):
 			return "Invalid data pack path."
 		if offset < 0 or length < 0 or length > 2147483648 or payload + offset + length > file.get_length():
 			return "Invalid data pack range."
 	for key: String in index:
 		if cancelled: return "Import cancelled."
 		progress.emit("Importing %s" % key)
-		var dest := stage.path_join(key)
+		var dest := ELContentLibrary.inside(stage, key)
 		DirAccess.make_dir_recursive_absolute(dest.get_base_dir())
 		var output := FileAccess.open(dest, FileAccess.WRITE)
 		if output == null: return "Could not write the imported files."
@@ -136,8 +140,11 @@ func _finish(stage: String, error: String) -> void:
 	if error.is_empty():
 		edition = ELContentLibrary.detect(stage)
 		if edition.is_empty(): error = "These files are not a complete copy of Etherlords or Etherlords II."
+		# The archives themselves are opened too: files of the right names
+		# but empty or damaged must not replace a working copy.
+		else: error = ELContentLibrary.validate(stage, edition)
 	if error.is_empty():
-		var target := ELContentLibrary.managed_root(edition)
+		var target := content_root.path_join(edition) if not content_root.is_empty() else ELContentLibrary.managed_root(edition)
 		var previous := target + "-previous"
 		ELContentLibrary.remove_tree(previous)
 		if DirAccess.dir_exists_absolute(target) and DirAccess.rename_absolute(target, previous) != OK:
