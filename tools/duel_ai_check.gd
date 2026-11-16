@@ -15,6 +15,11 @@ extends SceneTree
 ##     keep     it does not lose a creature in a fight that hurts nobody
 ##     use      it uses the named ability this phase
 ##     cast     it casts the named card this phase
+##     aim      it aims no harm at its own side (a damaging or crippling
+##              card, the hero's fireball, a creature's harmful ability on
+##              its own hero or creatures) before the turn passes on; with
+##              "card", that card cast at all goes to the other side; with
+##              "win", it also wins the duel before the turn passes on
 ##   Both sides are played by the option as shipped, with no thinking between
 ##   the commands of a chosen plan, as in the game.
 ##
@@ -214,7 +219,7 @@ func _play(duel: ELDuel, expect: Dictionary) -> String:
 			last = [duel.round_number, duel.attacker]
 			if duel.attacker == side: own_turns += 1
 		match kind:
-			"win", "keep": if over: break
+			"win", "keep", "aim": if over: break
 			"survive": if over or duel.phase != ELDuel.Phase.DEFENCE: break
 			"attack", "spare", "cast": if over or duel.phase != phase: break
 			"use":
@@ -225,6 +230,7 @@ func _play(duel: ELDuel, expect: Dictionary) -> String:
 		var smart: Array[int] = [acting]
 		duel.smart_sides = smart
 		var command := ELCombatSearch.think(duel)
+		var harm := own_harm(duel, acting, command)
 		# A command counts only once the rules have taken it.
 		var applied := not command.is_empty() and ELCombatSearch.apply(duel, command)
 		if acting == side:
@@ -233,6 +239,7 @@ func _play(duel: ELDuel, expect: Dictionary) -> String:
 			if applied and kind == "spare" and command.get("kind", "") == "cast" and command.get("card", "") == expect.card: return "cast it: " + ", ".join(said)
 			if applied and kind == "use" and command.get("kind", "") == "ability" and command.get("key", "") == expect.ability: return ""
 			if applied and kind == "cast" and command.get("kind", "") == "cast" and command.get("card", "") == expect.card: return ""
+			if applied and kind == "aim" and not harm.is_empty(): return "aimed at its own side: " + harm + " (" + ", ".join(said) + ")"
 		if not applied: duel.end_phase()
 	var finished := duel.phase == ELDuel.Phase.FINISHED
 	var line := ", ".join(said)
@@ -242,6 +249,7 @@ func _play(duel: ELDuel, expect: Dictionary) -> String:
 		"attack": return "" if attacked or (finished and duel.winner == side) else "no attack: " + line
 		"use": return "not used: " + line
 		"cast": return "not cast: " + line
+		"aim": return "" if not expect.get("win", false) or (finished and duel.winner == side) else "no win: " + line
 		"keep":
 			if finished: return ""
 			var lost := duel.army(side).size() < army
@@ -249,9 +257,24 @@ func _play(duel: ELDuel, expect: Dictionary) -> String:
 			return "" if not lost or gained else "lost a creature for nothing: " + line
 	return ""
 
+## What a command of `side` aims at its own side that harms it ("" for
+## nothing): the cards the original opponent keeps for the other side
+## (ELCombatSearch.SPELL_SIDES, bit 1 creatures, bit 3 heroes), the hero's
+## fireball and the creatures' harmful abilities.
+static func own_harm(duel: ELDuel, side: int, command: Dictionary) -> String:
+	var target := int(command.get("target", -1))
+	if target < 0 or command.get("kind", "") not in ["cast", "ability"]: return ""
+	var own := target == side if target < 2 else duel.creatures.has(target) and int(duel.creatures[target].owner) == side
+	if not own: return ""
+	var flags := 0
+	if command.kind == "cast": flags = int(ELCombatSearch.SPELL_SIDES.get(duel.profile.id, {}).get(String(command.card), 0))
+	elif String(command.key).get_slice(":", 0) in ["fireball", "sting", "gaze", "hunt", "spores", "tap_target", "tap_race", "pale_devour"]: flags = 0xa
+	if not (flags & (8 if target < 2 else 2)): return ""
+	return "%s at %s" % [command.get("card", command.get("key", "")), "its hero" if target < 2 else String(duel.creatures[target].card)]
+
 func _describe(command: Dictionary) -> String:
 	match String(command.get("kind", "")):
-		"cast": return "cast %s" % command.card
+		"cast": return "cast %s%s" % [command.card, " at #%d" % int(command.target) if int(command.get("target", -1)) >= 0 else ""]
 		"attack": return "attack #%d" % command.id
 		"block": return "#%d blocks #%d" % [command.id, command.target]
 		"ability": return "%s of #%d" % [command.key, command.id]

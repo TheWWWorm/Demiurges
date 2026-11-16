@@ -509,6 +509,11 @@ typedef struct {
 	 * by the rules, or (`habit`) only because it is seldom worth more, which
 	 * a list of every command the rules allow does not go by. */
 	int8_t aim, own, habit;
+	/* What it does to what it is aimed at is harm: to a creature (bit 0)
+	 * and to a hero (bit 1). The engine's hero aims such a card at its own
+	 * side last, and outside a proof only where that is plainly worth more
+	 * (see `harms_own`). */
+	int8_t foe;
 	/* It may also be cast by the hero that defends. */
 	int8_t defence;
 	/* A creature's aura beyond `gives_power` and `gives_toughness`, as a
@@ -6975,6 +6980,8 @@ static int card_moves(const Search *x, const State *s, int side, Move *out, int 
 			if (c->aim != AIM_CREATURE)
 				for (int side_at = 0; side_at < 2 && count < MAX_MOVES - 2; side_at++) {
 					if (c->own && side_at != side && !(c->habit && lists_all(x))) continue;
+					/* Harm goes to the other side, out of habit (`harms_own`). */
+					if ((c->foe & 2) && side_at == side && !lists_all(x)) continue;
 					if (!x->proof && idle_cast(x, s, side, c, -1 - side_at)) continue;
 					out[count].kind = 3;
 					out[count].a = h;
@@ -6985,6 +6992,7 @@ static int card_moves(const Search *x, const State *s, int side, Move *out, int 
 			if (c->aim != AIM_HERO)
 				for (int i = 0; i < s->n && count < MAX_MOVES - 2; i++) {
 					if (!may_aim(s, side, c, i)) continue;
+					if ((c->foe & 1) && s->u[i].owner == side && !lists_all(x)) continue;
 					out[count].kind = 3;
 					out[count].a = h;
 					out[count].b = i;
@@ -7550,7 +7558,7 @@ static void pick_command(const Search *x, const State *s, uint32_t *seed, Move *
 			if (c->aim == AIM_HERO) target = c->own ? -1 - side : -2 + side;
 			else if (c->aim != AIM_NONE) {
 				for (int i = 0; i < s->n; i++)
-					if (may_aim(s, side, c, i)) {
+					if (may_aim(s, side, c, i) && !((c->foe & 1) && s->u[i].owner == side)) {
 						target = i;
 						break;
 					}
@@ -7943,6 +7951,45 @@ static int search_chance(Search *x, const State *s, State *t, const Move *m, con
 	return worst;
 }
 
+/* Whether a command of `side` aims harm at its own side: a card that harms
+ * (Card.foe) at one of its own creatures or at its own hero, the hero's
+ * fireball, or a creature's harmful ability (spores, sting, a shot, a
+ * slaying, a gaze, a hunt, a wall broken, a creature or a race laid to rest,
+ * a pale creature devoured) at its own. The rules allow every one of them;
+ * the original opponent never tries them (ELCombatSearch.SPELL_SIDES), and
+ * a proof, to which every command of a won position is as good as another,
+ * would play them as filler. */
+static int harms_own(const Search *x, const State *s, int side, const Move *m) {
+	int target = m->b, own;
+	if (target >= 0 && target < s->n) own = s->u[target].owner == side;
+	else if (target == -1 - side) own = 2;
+	else return 0;
+	switch (m->kind) {
+	case 3: {
+		const Card *c = card_at(x, s, side, m->a);
+		return c && (c->foe & (own == 2 ? 2 : 1));
+	}
+	case 7:
+		if (m->a < 0 || m->a >= s->n) return 0;
+		switch (s->u[m->a].ability) {
+		case AB_SPORES: case AB_SPORES_POWER: case AB_STING: case AB_SHOOT: case AB_SLAY: case AB_GAZE_TOUGHNESS:
+		case AB_GAZE_POWER: case AB_HUNT: case AB_WALL_BREAK: case AB_TAP_TARGET: case AB_TAP_RACE:
+			return 1;
+		default:
+			return 0;
+		}
+	case 8: return m->a == HE_FRBL;
+	case 11: return own == 1 && (m->c >> 16) == PA_DEVOUR;
+	default: return 0;
+	}
+}
+
+/* How much more than every other a command that harms its own side must be
+ * worth to be chosen outside a proof: one health point. */
+static inline int harm_margin(const Search *x) {
+	return x->proof ? 0 : imax(1, x->health_worth);
+}
+
 static int search_moves(Search *x, State *s, int phases, int steps, int alpha, int beta, Move *best, const Move *first, Move *line, int *line_length) {
 	Move below[MAX_LINE];
 	int below_length = 0;
@@ -8057,6 +8104,18 @@ static int search_moves(Search *x, State *s, int phases, int steps, int alpha, i
 				moves[0] = m;
 				break;
 			}
+	/* The engine's hero tries a command that harms its own side after every
+	 * other, so that a proof finds a win without one where there is such a
+	 * win, and a tie goes to the other command. */
+	if (maximise) {
+		Move late[MAX_MOVES];
+		int kept = 0, held = 0;
+		for (int i = 0; i < count; i++) {
+			if (harms_own(x, s, side, &moves[i])) late[held++] = moves[i];
+			else moves[kept++] = moves[i];
+		}
+		for (int k = 0; k < held; k++) moves[kept + k] = late[k];
+	}
 	/* At the first command a block already set may be moved or taken back
 	 * (see generate_list). Such a command is read after every other, the
 	 * phase's end among them, and a later command is chosen only when it is
@@ -8121,9 +8180,13 @@ static int search_moves(Search *x, State *s, int phases, int steps, int alpha, i
 		 * both of its phases: every line is read the same number of turns
 		 * ahead, whether it attacks or not. */
 		int spent = phases_spent(x, s, &t, moves[i].kind);
+		/* Harm aimed at its own side counts a health point against it
+		 * (`harm_margin`): read with the window moved by as much. */
+		int penalty = maximise && harms_own(x, s, side, &moves[i]) ? harm_margin(x) : 0;
 		int v = x->proof && (t.rolled || t.luck)
-			? search_chance(x, s, &t, &moves[i], plans, phases, steps, alpha, beta, line ? below : NULL, line ? &below_length : NULL)
-			: search_moves(x, &t, imax(0, phases - spent), steps - 1, alpha, beta, NULL, NULL, line ? below : NULL, line ? &below_length : NULL);
+			? search_chance(x, s, &t, &moves[i], plans, phases, steps, alpha + penalty, beta + penalty, line ? below : NULL, line ? &below_length : NULL)
+			: search_moves(x, &t, imax(0, phases - spent), steps - 1, alpha + penalty, beta + penalty, NULL, NULL, line ? below : NULL, line ? &below_length : NULL);
+		v -= penalty;
 		/* A command whose reading the clock cut short is not held against
 		 * those read whole, unless it is the only one read at all. */
 		if (x->timed && played > 1) {
@@ -8323,6 +8386,7 @@ static void read_card(const int32_t *r, Card *c) {
 	c->aim = (int8_t)r[16];
 	c->own = (int8_t)((r[17] & 1) != 0);
 	c->habit = (int8_t)((r[17] & 4) != 0);
+	c->foe = (int8_t)(((r[17] & 8) ? 1 : 0) | ((r[17] & 16) ? 2 : 0));
 	c->defence = (int8_t)((r[17] & 2) != 0);
 	c->aura_flags = (uint32_t)r[18] & 0x07ffffff;
 	c->aura_to = (uint8_t)(r[19] & 255);

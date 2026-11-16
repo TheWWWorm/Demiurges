@@ -1698,6 +1698,11 @@ static func _card(ctx: ELCombatSearch.Context, s: ELDuel, card: String, ruled: D
 	if int(tail[8]) < 0: return []
 	# The few spells the defending hero may cast as well.
 	if card in ELDuel.DEFENCE_SPELLS.get(s.profile.id, []): tail[9] = int(tail[9]) | 2
+	# Harm, which the original opponent never aims at its own side
+	# (ELCombatSearch.SPELL_SIDES): bit 3 at its creatures, bit 4 at its hero.
+	var sides := int(ELCombatSearch.SPELL_SIDES.get(s.profile.id, {}).get(card, 0))
+	if sides & 2: tail[9] = int(tail[9]) | 8
+	if sides & 8: tail[9] = int(tail[9]) | 16
 	match String(rule.get("effect", "")):
 		# Ether channels go to the caster unless the card says otherwise.
 		"channels": tail[1] = int(SCOPES.get(String(rule.get("scope", "self")), 6))
