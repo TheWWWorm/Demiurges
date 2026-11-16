@@ -970,13 +970,16 @@ func _begin_encounter(actor: Dictionary, target: Dictionary, defender := -1, ass
 
 ## A hero about to fight turns to its opponent: a guard's zone stops the hero
 ## on whatever tile the route reached, facing along the route, not at the
-## creature (player report #138). Only heroes turn; a creature keeps its own
-## facing.
+## creature (player report #138). In the second game the creature or hero
+## attacked turns to its attacker too, as the original's guard turns to the
+## hero in its zone (CIntercept, 0x6814da; #165); a first-game creature keeps
+## its own facing.
 func _face_opponents(first: Dictionary, second: Dictionary) -> void:
+	var turning := ["hero", "monster"] if state.map.profile.id == "el2" else ["hero"]
 	for pair: Array in [[first, second], [second, first]]:
 		var actor: Dictionary = pair[0]
 		var other: Dictionary = pair[1]
-		if actor.get("type") != "hero" or not actor.get("placed", true) or not other.get("placed", true): continue
+		if actor.get("type") not in turning or not actor.get("placed", true) or not other.get("placed", true): continue
 		if int(actor.get("x", -1)) < 0 or int(other.get("x", -1)) < 0: continue
 		var direction := Vector2(float(other.x) - float(actor.x), float(other.y) - float(actor.y))
 		if direction.length_squared() > 0.0: presentation.emit({"kind": "orient", "id": int(actor.uid), "direction": direction})

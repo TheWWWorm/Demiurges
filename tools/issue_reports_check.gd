@@ -40,7 +40,8 @@ extends SceneTree
 ##   hero goes up in its colour's death effect; #137 the pre-battle panel:
 ##   first game, the wide strip alone with the original orders, the check
 ##   mark and the cross with free movement; second game, no wide strip;
-##   #138 the hero turns to face the creature it fights; #139 second game:
+##   #138 the hero turns to face the creature it fights (#165: in the
+##   second game the creature turns to the hero too); #139 second game:
 ##   the defeat picture is black from its first frame, fades to black and
 ##   back to the map, and a surrender shows the hero's death first.
 ## - #152 first game: Ethereal Attack adds 1/3/5 castle damage and a defender
@@ -830,9 +831,17 @@ func _faces(map: ELAdventureView, hero: Dictionary, monster: Dictionary, label: 
 	var toward := Vector2(float(monster.x) - float(hero.x), float(monster.y) - float(hero.y))
 	var facing := atan2(toward.x, -toward.y)
 	model.rotation.y = facing + PI
+	# #165: the creature attacked turns to its attacker in the second game;
+	# a first-game creature keeps its facing.
+	var creature: Node3D = map.world.actors.get(int(monster.uid))
+	var away := facing
+	if creature != null: creature.rotation.y = away
 	map.director._begin_encounter(hero, monster)
 	await _wait(3)
 	check(absf(angle_difference(model.rotation.y, facing)) < 0.01, "%s #138: the hero turns to face the creature it fights" % label)
+	if creature == null: print("SKIP: %s #165: the creature has no figure" % label)
+	elif label == "el2": check(absf(angle_difference(creature.rotation.y, facing + PI)) < 0.01, "el2 #165: the creature attacked turns to face the hero")
+	else: check(absf(angle_difference(creature.rotation.y, away)) < 0.01, "el1 #165: a first-game creature keeps its own facing")
 
 func _map_reports(profiles: Dictionary) -> void:
 	if profiles.has("el1"): await _first_prompt(profiles.el1)
