@@ -45,6 +45,13 @@ const LIT_BLEND_SHADER := preload("res://src/render/arena_lit_blend.gdshader")
 const SECONDARY_SHADER := preload("res://src/render/arena_secondary.gdshader")
 const BACKDROP_SHADER :=preload("res://src/render/arena_backdrop.gdshader")
 const SEA_SHADER := preload("res://src/render/arena_sea.gdshader")
+const GroundFog := preload("res://src/render/arena_ground_fog.gd")
+## Per-arena mist colour and opacity limit.
+const GROUND_FOG_TINTS := {
+	"Black.001": Color(0.67, 0.70, 0.69, 0.39), # Black Forest
+	"Black.002": Color(0.65, 0.67, 0.65, 0.34), # Black Tombs
+	"Green.002": Color(0.69, 0.74, 0.70, 0.48), # Lost City
+}
 ## The original cutout pass accepts alpha bytes greater than 200.
 const MASKED_ALPHA_CUTOFF := 201.0 / 255.0
 ## Enclosed halls: how far from the centre their ring of tall scenery starts.
@@ -59,6 +66,7 @@ const CAMERA_RADIUS := {"Dungeon.001": 18.0}
 const NEAR_SIDE_ANGLE := deg_to_rad(75.0)
 var _lit: Dictionary = {}
 var _unlit: Dictionary = {}
+var _ground_fog: GroundFog
 
 static func title(id: String) -> String:
 	var names := {"Green": "Vital forest", "Red": "Chaot desert", "Black": "Synthet wasteland", "Blue": "Kinet mountains",
@@ -127,8 +135,17 @@ func build(profile: ELProfile, arena_id := "Green.001") -> bool:
 	if toward.y > 0.0: toward = -toward
 	light.look_at_from_position(-toward * 10.0, Vector3.ZERO, Vector3.UP if absf(toward.y) < 0.99 else Vector3.FORWARD)
 	if arena_id == "Ship.001": _build_sea(-toward)
+	if _ground != null and GROUND_FOG_TINTS.has(arena_id):
+		_ground_fog = GroundFog.new()
+		_ground_fog.name = "GroundFog"
+		_ground_fog.build(GROUND_FOG_TINTS[arena_id], ground_height(0.0, 0.0))
+		add_child(_ground_fog)
 	_sync_light()
 	return errors.is_empty()
+
+func stir_ground_fog(from: Vector3, to: Vector3, creature_scale: float) -> void:
+	if _ground_fog != null:
+		_ground_fog.stir(Vector2(from.x, from.z), Vector2(to.x, to.z), creature_scale)
 
 ## Ship's flat surface combines the deck with the sea. Most of the sea uses
 ## a planar atlas mapping, while the planks have bespoke UVs.

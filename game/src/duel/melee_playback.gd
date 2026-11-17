@@ -513,6 +513,7 @@ func _process(delta: float) -> void:
 			_set_off(id)
 		var step := float(move.speed) * delta
 		var leave_trail := bool(move.fast) and model.is_visible_in_tree()
+		var from := model.position
 		while step > 0.0 and not move.points.is_empty():
 			var goal: Vector3 = move.points[0]
 			var flat := Vector3(goal.x - model.position.x, 0, goal.z - model.position.z)
@@ -530,6 +531,8 @@ func _process(delta: float) -> void:
 				model.position += flat.normalized() * step
 				step = 0.0
 		model.position.y = view.arena.ground_height(model.position.x, model.position.z)
+		if id >= 2 and model.is_visible_in_tree() and not model.get_meta("pale", false):
+			view.arena.stir_ground_fog(from, model.position, model.scale.x)
 		if move.points.is_empty(): _arrive(id)
 
 func _sample_trail(id: int, model: ELModel) -> void:
