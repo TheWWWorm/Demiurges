@@ -8407,6 +8407,10 @@ func _layout_hud() -> void:
 		# The original's 1024 layout: the oval (488,535)-(729,600) beside the buttons.
 		phase_label.position = Vector2(w - 524, h - 57)
 		phase_label.size = Vector2(217, 46)
+		# A narrow extra width widens the oval instead of a strip (#164).
+		var stretch := ELHudFrame.caption_stretch(profile, w)
+		phase_label.position.x -= stretch
+		phase_label.size.x += stretch
 	else:
 		phase_label.position = Vector2(w - 296, h - 109)
 		phase_label.size = Vector2(118, 43)

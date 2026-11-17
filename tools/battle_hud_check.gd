@@ -8,6 +8,10 @@ extends SceneTree
 ##   width, from the rail's arrow housing to the caption, is the readout
 ##   panel's (ELCombatGapPanel), whose spellbook icons fill a rail item's
 ##   height on a 16:9 screen and whose slide is a stored setting;
+## - #164 (with the game's files): at every common screen and size the extra
+##   width is either a readout panel wide enough for its arrows and a
+##   readout, or none, the phase caption's oval widened by it instead of an
+##   empty strip;
 ## - the setting is stored with the shared remake settings and kept in range;
 ## - a lethal hit plays only the figure's death sound, a non-lethal hit its
 ##   hurt sound (in the battle audio and through the battle view).
@@ -29,6 +33,7 @@ func _run() -> void:
 	_sizes()
 	_slots()
 	_gap()
+	_narrow_gaps()
 	_setting()
 	await _sounds()
 	await _view_sounds()
@@ -90,6 +95,38 @@ func _gap() -> void:
 	check(int(settings.values.get("battle_gap", -1)) == 0 and ELSettings.SHARED.has("battle_gap"), "the slide is a shared remake setting, the spellbook by default")
 	check(ELSettings._clean("battle_gap", 9, 0) == ELCombatGapPanel.SLIDES.size() - 1 and ELSettings._clean("battle_gap", -3, 0) == 0, "a stored slide is kept in range")
 	check(bool(settings.values.get("battle_readouts", false)) and ELSettings.SHARED.has("battle_readouts"), "the readouts are a shared remake setting, on by default")
+
+func _narrow_gaps() -> void:
+	var paths: Variant = JSON.parse_string(FileAccess.get_file_as_string("user://profiles.json")) if FileAccess.file_exists("user://profiles.json") else null
+	for edition: String in ["el1", "el2"]:
+		if paths is not Dictionary or not paths.has(edition):
+			print("SKIP: no %s files for the narrow gaps" % edition)
+			continue
+		var profile := ELProfile.new()
+		if not profile.mount(edition, str(paths[edition])): continue
+		var strips: Array[String] = []
+		var widened: Array[String] = []
+		var narrow_800: Array[String] = []
+		for screen: Vector2 in [Vector2(1024, 768), Vector2(1152, 864), Vector2(1280, 720), Vector2(1280, 800), Vector2(1280, 1024), Vector2(1360, 768), Vector2(1366, 768),
+				Vector2(1440, 900), Vector2(1536, 864), Vector2(1600, 900), Vector2(1600, 1200), Vector2(1680, 1050), Vector2(1920, 1080), Vector2(1920, 1200), Vector2(2048, 1152),
+				Vector2(2560, 1080), Vector2(2560, 1440), Vector2(2560, 1600), Vector2(3440, 1440), Vector2(3840, 2160)]:
+			for choice in ELHudFrame.SIZES.size() + 1:
+				var width := ceilf(screen.x / ELHudFrame.interface_scale(choice, screen))
+				var gap := ELHudFrame.gap_rect(profile, Vector2(width, 600))
+				var stretch := ELHudFrame.caption_stretch(profile, width)
+				var name := "%dx%d/%d" % [screen.x, screen.y, choice]
+				# A chosen size that drops the panel below 1024 keeps the 800
+				# layout, whose caption box stands over the buttons: its narrow
+				# strip stays (noted, not held).
+				if gap.size.x > 0.0 and gap.size.x < ELCombatGapPanel.MIN_WIDTH:
+					if choice == 0 or ELHudFrame.wide_layout(profile, width): strips.append(name)
+					else: narrow_800.append(name)
+				if stretch > 0.0:
+					widened.append("%s +%d" % [name, stretch])
+					if not is_equal_approx(stretch, ELHudFrame.rail_trim(profile, width)): strips.append(name + " (part)")
+		check(strips.is_empty(), "%s: no screen at the automatic size, and no wide panel at any size, leaves an empty strip beside the rail (%s)" % [edition, ", ".join(strips)])
+		print("NOTE: %s: chosen sizes in the 800 layout with a narrow strip: %s" % [edition, ", ".join(narrow_800)])
+		check(widened.has("1600x900/0 +43"), "%s: at 1600x900 the caption's oval takes the 43 px (%s)" % [edition, ", ".join(widened)])
 
 func _setting() -> void:
 	var settings := ELSettings.new()

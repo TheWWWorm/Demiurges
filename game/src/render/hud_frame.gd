@@ -77,10 +77,30 @@ static func rail_trim(profile: ELProfile, width: float) -> float:
 
 ## The gap's place on a panel of `size` (empty at the original widths): from
 ## the rail's closed right end to the caption's frame, as tall as the rail.
+## Empty too when the caption takes the extra width (caption_stretch).
 static func gap_rect(profile: ELProfile, size: Vector2) -> Rect2:
 	var trim := rail_trim(profile, size.x)
 	var right := RAIL_CLOSE + size.x - base_width(profile, size.x)
+	if caption_stretch(profile, size.x) > 0.0: return Rect2(right - trim, size.y - RAIL_TILE.size.y, 0.0, RAIL_TILE.size.y)
 	return Rect2(right - trim, size.y - RAIL_TILE.size.y, trim, RAIL_TILE.size.y)
+
+## The 1024 layout's phase caption oval: its piece and the column at which
+## it is widened (the oval's straight middle, under the caption's centre).
+const CAPTION_LEFT := 488.0
+const CAPTION_RIGHT := 729.0
+const CAPTION_MIDDLE := 120.0
+## The slice of the oval's middle drawn across the added width.
+const CAPTION_SLICE := 8.0
+
+## Extra width too narrow for the readouts (ELCombatGapPanel.MIN_WIDTH: at
+## 1600x900 and 1600x1200 the 1.5 size leaves 42 px, at 1680x1050 96, at
+## 1152x864 128) went to an empty dark strip (#164). It widens the phase
+## caption's oval from its middle instead, so the rail meets the caption as
+## in the original and the caption has room for its longest phase names.
+static func caption_stretch(profile: ELProfile, width: float) -> float:
+	if not wide_layout(profile, width): return 0.0
+	var trim := rail_trim(profile, width)
+	return trim if trim > 0.0 and trim < ELCombatGapPanel.MIN_WIDTH else 0.0
 
 var pieces: Array[Dictionary] = []
 var panel_texture: Texture2D
@@ -144,12 +164,16 @@ func _draw() -> void:
 	# starting between x 374 and the arrow) close right after the last whole
 	# bay, and the leftover is ELCombatGapPanel's.
 	var trim := rail_trim(_profile, size.x) if _profile != null else 0.0
+	var stretch := caption_stretch(_profile, size.x) if _profile != null and wide else 0.0
 	for piece: Dictionary in pieces:
 		if piece.layout == (1 if wide else 2):
 			continue
 		var destination: Rect2 = piece.destination
 		destination.position.y += size.y
 		var source: Rect2 = piece.source
+		if stretch > 0.0 and is_equal_approx(piece.destination.position.x, CAPTION_LEFT) and is_equal_approx(piece.destination.end.x, CAPTION_RIGHT):
+			_draw_caption(piece, destination.position + Vector2(extra - stretch, 0), stretch)
+			continue
 		if destination.position.x < 374:
 			draw_texture_rect_region(piece.texture, destination, source)
 			continue
@@ -172,6 +196,19 @@ func _draw() -> void:
 	var at := Vector2(RAIL_LEFT - 2, size.y - RAIL_TILE.size.y)
 	var bays := RAIL_RIGHT - RAIL_LEFT + maxf(0.0, extra) + 4.0 - trim
 	draw_rail_backing(self, panel_texture, at, bays, RAIL_TILE)
+
+## The caption oval piece at `at`, `stretch` wider: its left part, a slice
+## of its middle drawn across the added width, then its right part.
+func _draw_caption(piece: Dictionary, at: Vector2, stretch: float) -> void:
+	var source: Rect2 = piece.source
+	var height: float = piece.destination.size.y
+	var scale_x: float = source.size.x / piece.destination.size.x
+	var middle := CAPTION_MIDDLE
+	draw_texture_rect_region(piece.texture, Rect2(at, Vector2(middle, height)), Rect2(source.position, Vector2(middle * scale_x, source.size.y)))
+	var slice := Rect2(source.position + Vector2((middle - CAPTION_SLICE * 0.5) * scale_x, 0), Vector2(CAPTION_SLICE * scale_x, source.size.y))
+	draw_texture_rect_region(piece.texture, Rect2(at + Vector2(middle, 0), Vector2(stretch, height)), slice)
+	var rest: float = piece.destination.size.x - middle
+	draw_texture_rect_region(piece.texture, Rect2(at + Vector2(middle + stretch, 0), Vector2(rest, height)), Rect2(source.position + Vector2(middle * scale_x, 0), Vector2(rest * scale_x, source.size.y)))
 
 static func draw_rail_backing(canvas: CanvasItem, texture: Texture2D, at: Vector2, width: float, tile: Rect2) -> void:
 	if texture == null: return
