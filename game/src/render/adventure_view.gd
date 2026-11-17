@@ -2374,7 +2374,10 @@ var scroll_rate := SCROLL_RATE * 0.5
 func _scroll_to(point: Vector3, instant := false) -> void:
 	following = -1
 	scroll_gliding = false
-	if instant or state == null or state.map.profile.id != "el2": target = point
+	if instant or state == null or state.map.profile.id != "el2":
+		target = point
+		# A jump can happen while the map's camera update is paused.
+		if state != null: _update_camera()
 	else:
 		scroll_goal = point
 		scroll_gliding = true
