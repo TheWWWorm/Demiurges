@@ -153,6 +153,7 @@ func build(source: ELAdventureMap, session: ELAdventureSession = null) -> bool:
 				model.queue_free()
 				continue
 			model.transform = transform
+			model.skip_hidden_pose = true
 			model.set_meta("map_object", index)
 			model.set_meta("art_key", key)
 			if object.get("type") == "corpse" or not object.get("alive", true): _corpse_pose(model)
@@ -760,6 +761,7 @@ func update_object(item: Dictionary, apply_facing := false) -> void:
 			errors.append(model.error)
 			model.queue_free()
 			return
+		model.skip_hidden_pose = true
 		if object_models.has(uid):
 			animated.erase(object_models[uid])
 			object_models[uid].queue_free()

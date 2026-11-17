@@ -10,7 +10,8 @@ static func book_size(profile: ELProfile) -> int:
 
 static func is_spell(profile: ELProfile, card: String) -> bool:
 	var row: Dictionary = profile.table("CombatSpells").get(card, {})
-	return not row.is_empty() and str(row.get("IsArtifact", "False")) == "False"
+	if row.is_empty(): return false
+	return str(row.get("IsArtifact", "False")) == "False" or (profile.id == "el2" and ELCatalog.ARTIFACT_EFFECTS.has(card))
 
 static func add(profile: ELProfile, hero: Dictionary, card: String, count := 1) -> bool:
 	if not is_spell(profile, card) or count <= 0 or int(hero.spell_stock.get(card, 0)) + count > MAX_COPIES: return false

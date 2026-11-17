@@ -1466,7 +1466,7 @@ static func artifact_card(ctx: ELCombatSearch.Context, s: ELDuel, item: Dictiona
 	if item.has("custom"):
 		# One made to order casts its spell, and only while its hero attacks.
 		rule = ELCatalog.rule(s.profile, spell)
-		if rule.is_empty() or rule.get("variable", false): return []
+		if rule.is_empty() or rule.get("variable", false) or rule.get("splash_side", 0) > 0: return []
 		phases &= 1
 		free = 2
 	else:
@@ -1665,6 +1665,8 @@ static func _bare(ctx: ELCombatSearch.Context, s: ELDuel, c: Dictionary, unit: A
 ## whose effect the model cannot play, which it then never plays.
 static func _card(ctx: ELCombatSearch.Context, s: ELDuel, card: String, ruled: Dictionary = {}) -> Array:
 	var rule := ruled if not ruled.is_empty() else ELCatalog.rule(s.profile, card)
+	# The compiled model has a splash slot for carried artifacts only.
+	if ruled.is_empty() and rule.get("splash_side", 0) > 0: return []
 	var effect := int(EFFECTS.get(String(rule.get("effect", "")), 0))
 	if effect == 0: return []
 	# Enchantments a hero lays on itself that change who may attack: the
@@ -1713,7 +1715,9 @@ static func _card(ctx: ELCombatSearch.Context, s: ELDuel, card: String, ruled: D
 		# A creature out of a graveyard: bit 0, only while the hero whose
 		# graveyard it is has room too; bit 1, it comes back under the card
 		# itself, laid on it as an enchantment.
-		"reanimate": tail[2] = (1 if rule.get("grave_owner_cap", false) else 0) | (0 if rule.get("plain", false) else 2)
+		"reanimate":
+			tail[2] = (1 if rule.get("grave_owner_cap", false) else 0) | (0 if rule.get("plain", false) else 2)
+			if rule.get("own_grave", false): tail[9] = int(tail[9]) | 1
 		# A creature of the caster's own goes over to the other hero.
 		"gift":
 			tail[2] = 0

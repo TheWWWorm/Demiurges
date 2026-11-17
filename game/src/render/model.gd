@@ -20,6 +20,9 @@ var frame := 0.0
 var fps := 30.0
 var speed := 1.0
 var playing := false
+## Adventure fog can hide a figure without stopping its animation clock or cues.
+var skip_hidden_pose := false
+var _pose_stale := false
 var _faded: Dictionary = {}
 ## Made wholly of the Magic material: the second game's colourless creatures.
 var colourless := false
@@ -352,7 +355,8 @@ func _process(delta: float) -> void:
 			frame = length - 1
 			playing = false
 			animation_finished.emit(clip)
-	apply_frame(frame)
+	if skip_hidden_pose and not is_visible_in_tree(): _pose_stale = true
+	else: apply_frame(frame)
 	set_process(playing)
 	if playing and clip == "cidle" and idle_specials and not _special_waiting and _rng.randf() < 0.04 * delta:
 		_special_waiting = special_count() > 0
@@ -423,7 +427,12 @@ static func animation_table(bytes: PackedByteArray) -> Dictionary:
 			"impact": bytes.decode_u32(at + 0x40) if flags & 4 else -1, "mark": bytes.decode_u32(at + 0x40)}
 	return result
 
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_VISIBILITY_CHANGED and _pose_stale and is_visible_in_tree():
+		apply_frame(frame)
+
 func apply_frame(at: float) -> void:
+	_pose_stale = false
 	sample_count += 1
 	for name: String in clips.get(clip, {}):
 		var track: Dictionary = clips[clip][name]

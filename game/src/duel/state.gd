@@ -137,6 +137,7 @@ func start(data: ELProfile, seed_value := 212, options: Dictionary = {}) -> bool
 		for card: String in cards:
 			if ELCatalog.rule(profile, card).is_empty(): return _fail("Spell is not available yet: " + card)
 			if not options.get("adventure", false):
+				if ELCatalog.adventure_only_card(profile, card): return _fail("This spell is only available in adventure battles: " + card)
 				var colour := String(profile.table("CombatSpells")[card].get("Color", ""))
 				var allowed := ELDuelCosts.spell_allowed(profile, card, faction, resource_level) if sandbox_book else _book_colour(colour, faction)
 				if not allowed: return _fail("Spell belongs to another faction: " + card)
@@ -334,11 +335,7 @@ func artifact_rule(item: Dictionary) -> Dictionary:
 		var target := "none" if spell_rule.get("self", false) or spell_rule.get("opponent", false) else String(spell_rule.get("target", "none"))
 		return {"effect": "spell", "target": target}
 	if not ELCatalog.ARTIFACT_EFFECTS.has(item.spell): return {"effect": "none", "target": "none"}
-	var rule: Dictionary = ELCatalog.ARTIFACT_EFFECTS[item.spell]
-	if item.spell == "RDCL":
-		rule = rule.duplicate()
-		rule.splash_side = 1
-	return rule
+	return ELCatalog.ARTIFACT_EFFECTS[item.spell]
 
 ## The artifact's shown name: the first game names it by its spell.
 func artifact_title(item: Dictionary) -> String:
@@ -425,17 +422,7 @@ func _use_artifact_now(side: int, index: int, target := -1, choice := -1) -> boo
 	_emit(shown)
 	match rule.effect:
 		"enchant": _enchant(item.spell, side, target, rule)
-		"damage":
-			# Splash victims are fixed before the main hit: the rest of the target's side.
-			var splashed: Array[int] = []
-			if rule.get("splash_side", 0) > 0 and not entity(target).is_empty():
-				var victim_side := target if target < 2 else int(creatures[target].owner)
-				if victim_side != target: splashed.append(victim_side)
-				for c: Dictionary in army(victim_side):
-					if int(c.id) != target: splashed.append(int(c.id))
-			_damage(target, int(rule.amount))
-			for id: int in splashed:
-				if phase != Phase.FINISHED and not entity(id).is_empty(): _damage(id, int(rule.splash_side))
+		"damage": _damage_with_splash(target, int(rule.amount), int(rule.get("splash_side", 0)))
 		"destroy": _destroy(target, rule.get("no_regeneration", false))
 		"dispel": _dispel(target, choice)
 		"summon": _summon(side, item.spell)
@@ -447,17 +434,29 @@ func _use_artifact_now(side: int, index: int, target := -1, choice := -1) -> boo
 			heroes[side].grave.remove_at(choice)
 			_summon(side, revived)
 		"bless":
-			# In both games, the blessing ends with the first turn
-			# its holder's controller does not play; the user's own creature
-			# keeps it through the opponent's turn, an enemy creature loses it
-			# when the user's turn ends.
-			var blessed: Dictionary = creatures[target]
-			if not blessed.has("temporary"): blessed.temporary = []
-			blessed.temporary.append({"id": next_enchantment, "kind": "bless", "power": int(rule.power), "toughness": int(rule.toughness)})
-			next_enchantment += 1
-			_refresh_stats(blessed)
+			_bless(target, rule)
 	_finish_action()
 	return true
+
+func _bless(target: int, rule: Dictionary) -> void:
+	# The bonus ends with the first turn its holder's controller does not play.
+	var blessed: Dictionary = creatures[target]
+	if not blessed.has("temporary"): blessed.temporary = []
+	blessed.temporary.append({"id": next_enchantment, "kind": "bless", "power": int(rule.power), "toughness": int(rule.toughness)})
+	next_enchantment += 1
+	_refresh_stats(blessed)
+
+func _damage_with_splash(target: int, amount: int, splash: int) -> void:
+	# The main hit may kill its target, so determine the rest of its side first.
+	var splashed: Array[int] = []
+	if splash > 0 and not entity(target).is_empty():
+		var victim_side := target if target < 2 else int(creatures[target].owner)
+		if victim_side != target: splashed.append(victim_side)
+		for c: Dictionary in army(victim_side):
+			if int(c.id) != target: splashed.append(int(c.id))
+	_damage(target, amount)
+	for id: int in splashed:
+		if phase != Phase.FINISHED and not entity(id).is_empty(): _damage(id, splash)
 
 ## A generated (constructor) artifact casts its spell like a script cast, with
 ## no ether, hand card or caster specialisations, but with the artifact's
@@ -807,6 +806,7 @@ func _target_error(card: String, target: int) -> String:
 			if not creatures.has(target): return "Select a creature."
 		"grave":
 			if target not in [0, 1]: return "Select a graveyard."
+			if rule.get("own_grave", false) and target != _me(): return "Select your graveyard."
 			return ""
 		"enchantment":
 			if entity(target).is_empty(): return "Select a character with an enchantment."
@@ -822,7 +822,8 @@ func _target_error(card: String, target: int) -> String:
 	if rule.effect == "gift" and army(1 - _me()).size() >= 10: return "Your opponent already controls ten creatures."
 	if rule.has("race") and race(target) != rule.race: return "Select a creature of the right kind."
 	if rule.get("flying", false) and not has_flag(target, "Fly"): return "Select a flying creature."
-	if card == "CHCM":
+	if rule.get("attacking", false) and not attacks.has(target): return "Select an attacking creature."
+	if card in ELCatalog.CONTROL:
 		if creatures[target].owner == _me(): return "Select an enemy creature."
 		if attacks.has(target) or blocks.has(target): return "This creature is in combat."
 		if army(_me()).size() >= 10: return "A hero can control at most ten creatures."
@@ -846,19 +847,21 @@ func swap_targets(card: String, sacrifice: int) -> Array[int]:
 
 func valid_grave_targets(card: String, side := -1) -> Array[int]:
 	var result: Array[int] = []
-	if ELCatalog.rule(profile, card).get("effect") == "pale_revival":
+	var rule := ELCatalog.rule(profile, card)
+	var effect := String(rule.get("effect", ""))
+	if effect == "pale_revival":
 		# Either graveyard; entries are encoded as side * GRAVE_SIDE + index.
 		for grave_side: int in ([side] if side in [0, 1] else [0, 1]):
 			for i in heroes[grave_side].grave.size():
 				if profile.table("CombatCreatures").has(heroes[grave_side].grave[i]): result.append(grave_side * GRAVE_SIDE + i)
 		return result
-	if ELCatalog.rule(profile, card).get("effect") in ["reanimate", "repair"]:
-		# Quick fix: a creature card in either hero's graveyard; repair: the caster's own.
-		if side in [0, 1] and (side == _me() or ELCatalog.rule(profile, card).effect == "reanimate"):
+	if effect in ["reanimate", "repair"]:
+		# Quick fix can use either graveyard. Repair and the Rod use the caster's.
+		if side in [0, 1] and (side == _me() or (effect == "reanimate" and not rule.get("own_grave", false))):
 			for i in heroes[side].grave.size():
 				if profile.table("CombatCreatures").has(heroes[side].grave[i]): result.append(i)
 		return result
-	if ELCatalog.rule(profile, card).get("effect") == "exchange":
+	if effect == "exchange":
 		var grave: Array = heroes[_me()].grave
 		for i in grave.size():
 			if is_summon(grave[i]): result.append(i)
@@ -886,7 +889,7 @@ func _cast_gated(hand_index: int, target: int, grave_index: int, extra_ether: in
 ## defence phase only those spells may be cast, as the manual says ("Most
 ## spells cannot be cast during defense phase") and each one's description
 ## states ("Это заклинание может использоваться в фазу защиты").
-const DEFENCE_SPELLS := {"el1": ["PLMR", "FOGG", "ENAL"], "el2": ["PLMR", "FOGG", "ENAL", "CMBN", "LFGR"]}
+const DEFENCE_SPELLS := {"el1": ["PLMR", "FOGG", "ENAL"], "el2": ["PLMR", "FOGG", "ENAL", "CMBN", "LFGR", "RDDF", "SPRG"]}
 
 ## Whether `card` may be cast from the hand in the current phase.
 func phase_allows(card: String) -> bool:
@@ -1128,7 +1131,9 @@ func _apply_spell_effect(side: int, card: String, rule: Dictionary, target: int,
 		"damage", "wave":
 			_spend_ether(side, extra_ether)
 			var amount := extra_ether if variable_power(card) else int(rule.amount)
-			if amount > 0:
+			if int(rule.get("splash_side", 0)) > 0:
+				_damage_with_splash(target, amount, int(rule.splash_side))
+			elif amount > 0:
 				# EL1 Supernova@: the zero-X early exit
 				#  skips its sole RedSuperNova registration.
 				# Positive X registers one global effect before any damage.
@@ -1190,7 +1195,7 @@ func _apply_spell_effect(side: int, card: String, rule: Dictionary, target: int,
 			# Fetch also costs a channel (ether unchanged).
 			if channel_cost(card) > 0: _change_ether(side, 0, -channel_cost(card))
 			for i in (extra_ether if variable_power(card) else int(rule.amount)): _draw(target)
-		"destroy": _destroy(target)
+		"destroy": _destroy(target, rule.get("no_regeneration", false))
 		"exile": _remove_creature(target, "exile")
 		"repair":
 			# The creature card returns to hand; the enemy hero takes its printed
@@ -1248,8 +1253,10 @@ func _apply_spell_effect(side: int, card: String, rule: Dictionary, target: int,
 			_emit({"kind": "heal", "target": side, "amount": 0})
 		"heal":
 			_spend_ether(side, extra_ether)
-			heroes[side].health += extra_ether
-			_emit({"kind": "heal", "target": side, "amount": extra_ether})
+			var amount := extra_ether if variable_power(card) else effect_amount(rule)
+			heroes[side].health += amount
+			_emit({"kind": "heal", "target": side, "amount": amount})
+		"bless": _bless(target, rule)
 		"hunger_all":
 			for c: Dictionary in army(1 - side):
 				if creatures.has(c.id) and c.power > 0:

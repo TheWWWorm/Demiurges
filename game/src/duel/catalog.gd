@@ -426,14 +426,14 @@ const ARTIFACT_EFFECTS := {
 	"RDDF": {"effect": "enchant", "target": "none", "self": true, "phase": "defence"},
 	"SPRG": {"effect": "destroy", "target": "creature", "phase": "both", "attacking": true, "no_regeneration": true},
 	"RDLG": {"effect": "damage", "target": "any", "amount": 3},
-	"RDCL": {"effect": "damage", "target": "any", "amount": 9},
+	"RDCL": {"effect": "damage", "target": "any", "amount": 9, "splash_side": 1},
 	"SPBR": {"effect": "dispel", "target": "enchantment"},
 	"ETAM": {"effect": "enchant", "target": "creature"},
 	"WNMG": {"effect": "summon", "target": "none"},
 	"RDKN": {"effect": "summon", "target": "none"},
 	"WNBL": {"effect": "bless", "target": "creature", "power": 4, "toughness": 4},
 	"RDHL": {"effect": "heal", "target": "none", "amount": 7},
-	"RDRS": {"effect": "reanimate", "target": "grave"},
+	"RDRS": {"effect": "reanimate", "target": "grave", "own_grave": true, "plain": true},
 	"BRRD": {"effect": "destroy", "target": "creature"},
 	"RDCM": {"effect": "enchant", "target": "creature", "control": true},
 	"DMRD": {"effect": "enchant", "target": "none", "self": true},
@@ -445,9 +445,7 @@ const ARTIFACT_EFFECTS := {
 	"WRBN": {"effect": "enchant", "target": "none", "self": true},
 	"WNHR": {"effect": "summon", "target": "none"},
 }
-## Second game: battle-artifact spells some authored books list as ordinary
-## cards. The book enters battle as written, so such a copy is drawn and cast
-## from the hand at its printed cost with the artifact spell's effect.
+## These two artifact effects already have hand rules in regular EL2 duels.
 const BOOK_ARTIFACTS := ["WNPZ", "RDKN"]
 ## Enchantments that pass control of a creature to their caster.
 const CONTROL := ["CHCM", "RDCM"]
@@ -480,7 +478,7 @@ static func rule(profile: ELProfile, card: String) -> Dictionary:
 	if spell.is_empty(): return {}
 	# Second-game rules take precedence over the shared table.
 	if profile.id == "el2" and SECOND_EFFECTS.has(card): return SECOND_EFFECTS[card]
-	if profile.id == "el2" and card in BOOK_ARTIFACTS: return ARTIFACT_EFFECTS[card]
+	if profile.id == "el2" and ARTIFACT_EFFECTS.has(card): return ARTIFACT_EFFECTS[card]
 	if EFFECTS.has(card): return EFFECTS[card]
 	var first := shared(profile, card)
 	if first and FIRST_EFFECTS.has(card): return FIRST_EFFECTS[card]
@@ -544,10 +542,15 @@ static func default_hero(profile: ELProfile, faction: String) -> String:
 	if faction == "White" and profile.id == "el2": return "White Lord I"
 	return "RedMale4" if faction == "Red" and profile.id == "el2" else String(HEROES.get(faction, ""))
 
+## Custom maps can put artifact effects in spellbooks and spell loot.
+static func adventure_only_card(profile: ELProfile, card: String) -> bool:
+	return profile.id == "el2" and ARTIFACT_EFFECTS.has(card) and card not in BOOK_ARTIFACTS
+
 static func available_cards(profile: ELProfile, faction: String) -> Array[String]:
 	var result: Array[String] = []
 	for card: String in profile.table("CombatSpells"):
 		var row: Dictionary = profile.table("CombatSpells")[card]
+		if adventure_only_card(profile, card): continue
 		# `Support=True` rows are internal records (venoms, script-only spells, jammers).
 		if row.get("Color") == faction and row.get("Use", "+") == "+" and str(row.get("Support", "False")).to_lower() != "true" and not rule(profile, card).is_empty():
 			result.append(card)
