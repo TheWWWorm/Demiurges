@@ -58,6 +58,7 @@ var previous := {}
 var info := {}
 ## Returns a short summary of the player's options for the report.
 var options_summary: Callable
+var graphics_diagnostics: Callable
 var _marker := ""
 var _done := false
 
@@ -489,6 +490,9 @@ func report_text(prev: Dictionary, lines: int) -> String:
 		text += _info_text("Previous session (ended unexpectedly)", prev)
 		text += "\n== Log of the previous session: %s ==\n%s\n" % [String(prev.get("log", "")).get_file(), tail(String(prev.get("log", "")), lines)]
 	text += "\n" + _info_text("This session", info)
+	if graphics_diagnostics.is_valid():
+		var graphics: Dictionary = graphics_diagnostics.call()
+		if not graphics.is_empty(): text += "\n== Graphics SDK status ==\n" + JSON.stringify(graphics, "\t") + "\n"
 	if prev.is_empty():
 		var older := older_logs()
 		if not older.is_empty():

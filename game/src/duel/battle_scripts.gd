@@ -524,13 +524,15 @@ static func battle_affects(state: ELAdventureSession, actor: Dictionary) -> Arra
 		if entry.get("kind") == "time" and int(entry.get("ticks", 0)) <= 0: continue
 		if entry.get("kind") in ["time", "mission"]: result.append(entry)
 	if not actor.has("x") or not actor.has("y"): return result
+	var x := int(actor.x)
+	var y := int(actor.y)
 	for building: Dictionary in state.objects.values():
-		if not building.get("alive", true): continue
+		if building.get("group") != "additional_buildings" or not building.get("alive", true): continue
+		var dx := x - int(building.get("x", 0))
+		var dy := y - int(building.get("y", 0))
+		if dx * dx + dy * dy > 100: continue
 		var affect := building_affect(state.map.profile, building)
-		if affect.is_empty() or affect.kind != "range": continue
-		var dx := int(actor.x) - int(building.get("x", 0))
-		var dy := int(actor.y) - int(building.get("y", 0))
-		if dx * dx + dy * dy <= 100: result.append(affect)
+		if not affect.is_empty() and affect.kind == "range": result.append(affect)
 	return result
 
 ## Script load order for a battle: side 0's then side 1's mob script,

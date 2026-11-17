@@ -143,14 +143,16 @@ func problem() -> String:
 	if not ELResources.can_pay("el1", state.players[state.object(hero_id).owner].resources, _bill): return "Not enough resources for these spells."
 	return ""
 
-func commit() -> bool:
+func commit(order: Array = []) -> bool:
 	error = problem()
 	if not error.is_empty(): return false
 	var hero := state.object(hero_id)
+	if not ELSpellInventory.valid_slot_order(order, hero.cards.size()): return _fail("Invalid spellbook order.")
 	if not ELResources.pay("el1", state.players[hero.owner].resources, _bill): return _fail("Not enough resources for these spells.")
 	hero.cards.assign(cards)
 	hero.rune_uses.assign(uses)
 	ELRunes.set_under(hero, unders)
+	ELSpellInventory.apply_slot_order(hero, order)
 	for entry: Dictionary in to_reserve:
 		if ELSpellInventory.add(state.map.profile, hero, entry.card): hero.rune_stock[entry.card][-1] = int(entry.uses)
 	finished = true

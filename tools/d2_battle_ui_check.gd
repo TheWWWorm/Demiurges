@@ -37,6 +37,7 @@ func _run() -> void:
 		if profile.mount("el2", str(paths.el2)): _pale_strength(profile)
 		else: print("SKIP: el2 files could not be mounted")
 	for edition: String in ["el2", "el1"]: await _hot_seat_panels(edition)
+	await _casting_and_retry()
 	await _tutorial()
 	print("D2 BATTLE UI CHECK: %d failure(s)" % failures.size())
 	quit(0 if failures.is_empty() else 1)
@@ -102,6 +103,72 @@ func _hot_seat_panels(edition: String) -> void:
 			guard += 1
 	check(seen.size() == 2, "%s #148 hot seat: both players took the screen" % edition)
 	view.duel_match = null
+	view.queue_free()
+	await frames(2)
+
+func _casting_and_retry() -> void:
+	var view: Node = load("res://scenes/duel.tscn").instantiate()
+	root.add_child(view)
+	await frames(3)
+	if not view.profiles.has("el2"):
+		view.queue_free()
+		return
+	view._hide_front_menu()
+	view._start("el2", {"first_side": 0}, null, 212)
+	var duel: ELDuel = view.duel
+	var opening: Dictionary = duel.snapshot()
+	duel.heroes[0].mana = 20
+	duel.heroes[0].hand = ["FRWA", "FRWA", "ZAPP", "STRT"]
+	duel.heroes[0].hand_slots = [-1, -1, -1, -1]
+	duel._summon(1, "STMC")
+	duel._summon(1, "BATT")
+	view._skip_battle_presentation()
+	var target: int = duel.army(1)[0].id
+	var played: Array[String] = []
+	var discarded: Array[Dictionary] = []
+	duel.event.connect(func(data: Dictionary):
+		if data.kind == "cast": played.append(data.card)
+		if data.kind == "discard": discarded.append(data))
+	view._cast_card(0)
+	check(played == ["FRWA"] and (view._display_lagging() or not view._hits_waiting.is_empty()), "Fire Wave starts and has a hit still being presented")
+	view._cast_card(0)
+	check(discarded.size() == 1 and discarded[0].card == "STRT" and discarded[0].get("source_card") == "BATT", "the dying Bat discards the rat and identifies the cause")
+	view._cast_card(duel.heroes[0].hand.find("ZAPP"))
+	view._target(target)
+	view._end_phase()
+	check(played == ["FRWA", "FRWA", "ZAPP"] and duel.active_side() == 1, "two Fire Waves and Electroshock resolve before the turn passes")
+	view._skip_battle_presentation()
+	var log_key := InputEventKey.new()
+	log_key.keycode = KEY_L
+	log_key.physical_keycode = KEY_L
+	log_key.pressed = true
+	view.log_text.hide()
+	root.push_input(log_key, true)
+	view._show_log()
+	var report: String = view.log_text.text
+	var death: String = view._t("%s dies.") % duel.card_name("BATT")
+	var loss: String = view._t("The dying Bat made you discard %s.") % duel.card_name("STRT")
+	var damage := -1
+	for event: Dictionary in duel.history:
+		if event.kind != "damage" or event.get("source_card") != "FRWA" or event.get("target_card") != "BATT": continue
+		var hit: String = view._t("%s takes %d damage.") % [duel.card_name("BATT"), event.amount]
+		var with_source: String = view._t("%s (during %s)") % [hit, duel.card_name("FRWA")]
+		damage = report.find(with_source)
+		break
+	check(view.log_text.visible and damage >= 0 and report.find(death) > damage and report.find(loss) > report.find(death), "L shows Fire Wave's damage, the Bat's death and the discard in order")
+	duel._emit({"kind": "draw", "side": 1, "card": "PWTP"})
+	var hidden_draw: String = view._t("%s draws a spell.") % view._hero_name(1)
+	check(view.logs.back() == hidden_draw, "the battle log records the opponent's draw without naming the hidden card")
+	view._ask_surrender()
+	var retry: ELFrontMenu.CutButton = view.options_host.buttons.get("MBRetry") if view.options_host != null else null
+	check(retry != null and view.options_host.buttons.has("MBOK") and view.options_host.buttons.has("MBCancel"), "the surrender box has all three choices")
+	if retry != null:
+		var ok: ELFrontMenu.CutButton = view.options_host.buttons.MBOK
+		var cancel: ELFrontMenu.CutButton = view.options_host.buttons.MBCancel
+		check(retry.size == ok.size and retry.size == cancel.size, "the three surrender buttons are the original size")
+		check(retry.position - cancel.position == cancel.position - ok.position, "the three surrender buttons are evenly spaced")
+		retry.pressed.emit()
+		check(view.duel != duel and view.duel.turn_serial == opening.turn_serial and view.duel.heroes[0].hand == opening.heroes[0].hand, "Try again restarts the same duel and opening hand")
 	view.queue_free()
 	await frames(2)
 

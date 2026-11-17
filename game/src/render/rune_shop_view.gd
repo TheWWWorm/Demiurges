@@ -50,6 +50,7 @@ func build_shop(owner: ELAdventureDirector, panel: ELAdventureHud, exchange_trad
 	hud = panel
 	profile = state.map.profile
 	trade = exchange_trade
+	shop_book_order = range(trade.pending.size())
 	heroes = [trade.hero_id]
 	# The HeroScreen's own right-hand parts (global spells, level-up) are absent.
 	exchange = true
@@ -135,21 +136,24 @@ func hero() -> Dictionary:
 	return state.object(trade.hero_id)
 
 func book_cards(_side: int) -> Array:
-	return hero().get("cards", [])
+	return ELSpellInventory.in_slot_order(hero().get("cards", []), shop_book_order)
+
+func book_under(side: int) -> Array[String]:
+	return ELSpellInventory.in_slot_order(super.book_under(side), shop_book_order)
 
 ## Rune counts including the draft; cantrips (-1) keep no count.
 func book_uses(_side: int) -> Array:
 	var uses: Array = hero().get("rune_uses", []).duplicate()
 	for index in mini(uses.size(), trade.pending.size()):
 		if int(uses[index]) >= 0: uses[index] = int(uses[index]) + trade.pending[index]
-	return uses
+	return ELSpellInventory.in_slot_order(uses, shop_book_order)
 
 func book_rect(index: int) -> Rect2:
 	return Rect2(Vector2(29 + 53 * (index % BOOK_COLUMNS), 389 + 52 * (index / BOOK_COLUMNS)), ICON)
 
 func book_at(point: Vector2) -> int:
 	for index in mini(15, book_cards(0).size()):
-		if book_rect(index).has_point(point): return index
+		if book_rect(index).has_point(point): return int(shop_book_order[index])
 	return -1
 
 ## A book click selects the spell, adds the carried rune to it, or with a
@@ -164,6 +168,7 @@ func press(point: Vector2) -> void:
 			carry = false
 			buy()
 			return
+		if not _purchase_pending: held = {"kind": "book", "index": index, "icon": profile.card_icon(hero().cards[index])}
 		refresh()
 		return
 	if not rune_rect().has_point(point):
@@ -182,9 +187,14 @@ func press(point: Vector2) -> void:
 ## A rune dragged onto a book spell is added there as with the second click;
 ## released anywhere else it is let go.
 func drop_held(item: Dictionary, point: Vector2) -> void:
+	var book := book_at(point)
+	if item.kind == "book":
+		if not _purchase_pending and ELSpellInventory.swap_slots(shop_book_order, shop_book_order.find(item.index), shop_book_order.find(book)):
+			slot = int(item.index)
+			refresh()
+		return
 	if item.kind != "rune" or not carry: return
 	carry = false
-	var book := book_at(point)
 	if book >= 0:
 		slot = book
 		buy()
@@ -228,8 +238,8 @@ func _any_addable() -> bool:
 
 ## Arrow keys: -1/+1 sideways, -5/+5 for a row, kept within the book.
 func move_selection(delta: int) -> void:
-	var target := slot + delta
-	if target >= 0 and target < book_cards(0).size(): slot = target
+	var target := shop_book_order.find(slot) + delta
+	if target >= 0 and target < shop_book_order.size(): slot = int(shop_book_order[target])
 	refresh()
 
 func _act(_ok: bool) -> void:
@@ -238,13 +248,15 @@ func _act(_ok: bool) -> void:
 func accept() -> void:
 	if _purchase_pending: return
 	if strategic_session != null:
-		if not has_pending():
+		if not shop_order_changed() and not has_pending():
 			cancel_trade()
 			return
 		var action := "visit_buy_runes" if strategic_shop_visit else "buy_runes"
-		if trade.problem().is_empty(): _manage_online([action, trade.hero_id, trade.shop_id] + trade.pending, true)
+		var order := [action, trade.hero_id, trade.shop_id] + trade.pending
+		if shop_order_changed(): order.append(shop_order_for_network())
+		if trade.problem().is_empty(): _manage_online(order, true)
 		return
-	if not trade.commit():
+	if not trade.commit(shop_book_order):
 		refresh()
 		return
 	closed.emit()
@@ -298,7 +310,7 @@ func price_red(column: int, kind: String) -> bool:
 
 func _draw_sheet() -> void:
 	super._draw_sheet()
-	if slot >= 0 and slot < mini(15, book_cards(0).size()): sheet.draw_rect(book_rect(slot).grow(1), PICK, false, 2.0)
+	if slot >= 0 and slot < mini(15, book_cards(0).size()): sheet.draw_rect(book_rect(shop_book_order.find(slot)).grow(1), PICK, false, 2.0)
 	var font: Font = hud._bold
 	var kinds := ELResources.types("el1")
 	var columns := [unit_price(), trade.bill() if not book_cards(0).is_empty() else {}]
@@ -314,7 +326,7 @@ func _draw_sheet() -> void:
 	# Book spells with runes bought carry a gold frame; the carried rune
 	# follows the cursor.
 	for index in mini(15, trade.pending.size()):
-		if trade.pending[index] > 0: sheet.draw_rect(book_rect(index).grow(-1), Color(0.95, 0.8, 0.35, 0.8), false, 1.5)
+		if trade.pending[index] > 0: sheet.draw_rect(book_rect(shop_book_order.find(index)).grow(-1), Color(0.95, 0.8, 0.35, 0.8), false, 1.5)
 	if carry:
 		var size := _rune_icon.get_size() if _rune_icon != null else rune_rect().size
 		var rect := Rect2(carry_at - size * 0.5, size)

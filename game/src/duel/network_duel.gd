@@ -607,13 +607,23 @@ func round_preset() -> Dictionary:
 	var draft := _next_presets[local_side]
 	return (match_state.presets[local_side] if draft.is_empty() else draft).duplicate(true)
 
+func _can_edit_round_deck() -> bool:
+	return can_continue_round() and profile.id == "el2" and not _local_ready and _departure.is_empty() and deck_time_remaining() != 0
+
 func swap_round_spell(slot: int, code: String) -> bool:
-	if not can_continue_round() or profile.id != "el2" or _local_ready or not _departure.is_empty() or deck_time_remaining() == 0:
-		return false
+	if not _can_edit_round_deck(): return false
 	var draft := round_preset()
 	if slot < 0 or slot >= draft.cards.size() or int(draft.reserve.get(code, 0)) <= 0: return false
 	draft.cards[slot] = code
-	var validated := ELDuelPresets.with_reserve_deck(match_state.presets[local_side], draft.cards)
+	return _stage_round_deck(draft.cards)
+
+func reorder_round_spells(from: int, to: int) -> bool:
+	if not _can_edit_round_deck(): return false
+	var draft := round_preset()
+	return ELSpellInventory.swap_slots(draft.cards, from, to) and _stage_round_deck(draft.cards)
+
+func _stage_round_deck(cards: Array) -> bool:
+	var validated := ELDuelPresets.with_reserve_deck(match_state.presets[local_side], cards)
 	if validated.is_empty(): return false
 	_next_presets[local_side] = validated
 	return true

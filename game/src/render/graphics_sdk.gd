@@ -428,6 +428,7 @@ var _generation := OFF
 var _upscaling := OFF
 var _telemetry := 0.0
 var _blockers: Array = []
+var _last_playing: Dictionary = {}
 var _meter := FrameMeter.new()
 var _capped := false
 
@@ -459,9 +460,10 @@ func _process(delta: float) -> void:
 	_telemetry += delta
 	if _telemetry >= 1.0:
 		_telemetry = 0.0
-		var report := status_report(values)
-		report.frame_generation_blockers = blockers
-		report.rendered_fps = Engine.get_frames_per_second()
+		var report := diagnostic_report()
+		if blockers.all(func(reason: String): return reason in ["option_off", "unavailable"]):
+			report.erase("last_playing")
+			_last_playing = report.duplicate(true)
 		var out := FileAccess.open(STATUS_FILE, FileAccess.WRITE)
 		if out != null: out.store_string(JSON.stringify(report, "\t") + "\n")
 
@@ -518,6 +520,14 @@ func _exit_tree() -> void:
 ## What stops frame generation this frame (empty while it runs).
 func blockers() -> Array:
 	return _blockers
+
+func diagnostic_report() -> Dictionary:
+	var report := status_report(settings.values)
+	report.frame_generation_blockers = _blockers
+	report.requested_for_scene = OWNER_NAMES[_generation]
+	report.rendered_fps = Engine.get_frames_per_second()
+	if not _last_playing.is_empty(): report.last_playing = _last_playing
+	return report
 
 ## The frame rate counter's text: with frame generation running, the frames
 ## shown (measured from the SDK's present counters) and the frames rendered.

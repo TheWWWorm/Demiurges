@@ -109,6 +109,7 @@ func _map_part() -> void:
 	view._update_camera()
 	await _tooltip_part(view)
 	await _route_camera_part(view)
+	_actor_facing(view)
 	await _artifact_tip_part(view, profile)
 
 	# Castle double-click.
@@ -261,6 +262,16 @@ func _route_camera_part(view: ELAdventureView) -> void:
 	view._cancel_map_order()
 	view.following = view._hero_id()
 	await frames(2)
+
+func _actor_facing(view: ELAdventureView) -> void:
+	var hero := view.state.object(view._hero_id())
+	var id := int(hero.uid)
+	var before: ELModel = view.world.actors[id]
+	view.world.orient_actor(id, Vector2.RIGHT)
+	var heading := view.world.object_yaw(hero)
+	view.world._object_keys.erase(id)
+	view.state.event.emit({"kind": "shape_changed", "id": id})
+	check(view.world.actors[id] != before and is_equal_approx(view.world.object_yaw(hero), heading) and is_equal_approx(heading, PI / 2.0), "the first game's hero keeps its facing when its model is rebuilt")
 
 ## #172: the hero screen's artifact tooltip on a right click.
 func _artifact_tip_part(view: ELAdventureView, profile: ELProfile) -> void:

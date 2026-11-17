@@ -152,6 +152,9 @@ func _world_changed(data: Dictionary) -> void:
 	# Second game: a fallen hero's keys return to their warding stones.
 	if data.kind == "object_killed" and ELSecondGates.applies(state) and state.object(data.id).get("type") in ["hero", "monster"]: ELSecondGates.drop_keys(state, state.object(data.id))
 	if data.kind not in ["object_changed", "object_killed", "object_created", "shape_changed"]: return
+	# EL2 guard discs ignore passability. Taking a pile changes only its
+	# footprint, so the grid and interception zones need no full rebuild.
+	if data.get("pickup", false) and state.map.profile.id == "el2" and grid.release_pickup(int(data.id)): return
 	var actor := state.object(data.id)
 	if actor.get("type") in ["hero", "monster"]:
 		# Removing a garrison first leaves its fort; the fort keeps its owner.
@@ -545,6 +548,12 @@ func manage_strategy_hero(player: int, day: int, order: Array) -> String:
 	var previous_error := state.error
 	var applied := false
 	match order[0]:
+		"reorder_spell":
+			if order.size() != 6 or not ELLuaSave._integer(order[2], 0, hero.cards.size() - 1) or not ELLuaSave._integer(order[3], 0, hero.cards.size() - 1): return "Invalid spellbook order."
+			var from := int(order[2])
+			var to := int(order[3])
+			if hero.cards[from] != order[4] or hero.cards[to] != order[5]: return "That spellbook slot has changed."
+			applied = state.reorder_spell(id, from, to, player)
 		"equip", "reserve":
 			# An equip order may name the occupied book slot it goes over.
 			if order.size() not in ([4, 5] if order[0] == "equip" else [4]) or not _strategy_code(order[2]) or not _strategy_number(order[3]) or (order.size() == 5 and not ELLuaSave._integer(order[4], 0, ELSpellInventory.BOOK_SIZE - 1)): return "Invalid spellbook order."
@@ -597,7 +606,15 @@ func strategy_shop_trade(player: int, hero_id: int, shop_id: int, remote := fals
 	return null
 
 func strategy_purchase(player: int, hero: Dictionary, order: Array, remote := false) -> String:
-	if not _strategy_number(order[2]) or order.size() != 3 + hero.cards.size(): return "Invalid shop order."
+	if order.size() < 3 or not _strategy_number(order[2]) or hero.is_empty(): return "Invalid shop order."
+	var plain_size: int = 3 + hero.cards.size()
+	if order.size() not in [plain_size, plain_size + 1]: return "Invalid shop order."
+	var permutation: Array = []
+	if order.size() > plain_size:
+		var encoded: Variant = order.back()
+		if not encoded is String or encoded.length() != hero.cards.size(): return "Invalid spellbook order."
+		for i in encoded.length(): permutation.append("0123456789abcdef".find(encoded.substr(i, 1)))
+		if not ELSpellInventory.valid_slot_order(permutation, hero.cards.size()): return "Invalid spellbook order."
 	var trade := strategy_shop_trade(player, hero.uid, int(order[2]), remote)
 	if order[0] == "buy_runes" and trade is ELRuneShop:
 		for slot in hero.cards.size():
@@ -609,7 +626,7 @@ func strategy_purchase(player: int, hero: Dictionary, order: Array, remote := fa
 			if not card is String or (not card.is_empty() and card.length() != 4): return "Invalid spell purchase."
 			if not card.is_empty() and not trade.replace(slot, card): return trade.error
 	else: return "Move next to a shop you control first."
-	return "" if trade.commit() else trade.error
+	return "" if trade.commit(permutation) else trade.error
 
 static func _strategy_number(value: Variant) -> bool:
 	return ELLuaSave._integer(value, 0, 0x7fffffff)

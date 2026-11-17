@@ -41,6 +41,42 @@ static func color_enabled(hero: Dictionary, color: String) -> bool:
 	# Scenario color bans are independent of the hero's natural magic color.
 	return color in MAGIC_COLORS and hero.get("allowed_colors", {}).get(color, true)
 
+static func swap_slots(entries: Array, from: int, to: int) -> bool:
+	if from == to or mini(from, to) < 0 or maxi(from, to) >= entries.size(): return false
+	var held: Variant = entries[from]
+	entries[from] = entries[to]
+	entries[to] = held
+	return true
+
+## Runes and the cantrip underneath belong to the spell being moved.
+static func reorder_book(profile: ELProfile, hero: Dictionary, from: int, to: int) -> bool:
+	if profile.id == "el1" and not ELRunes.restore(profile, hero): return false
+	if not swap_slots(hero.cards, from, to): return false
+	if profile.id == "el1":
+		swap_slots(hero.rune_uses, from, to)
+		if hero.has("rune_under"): swap_slots(hero.rune_under, from, to)
+	return true
+
+static func valid_slot_order(order: Array, size: int) -> bool:
+	if order.is_empty(): return true
+	if order.size() != size: return false
+	var seen := {}
+	for value: Variant in order:
+		if not ELLuaSave._integer(value, 0, size - 1) or seen.has(int(value)): return false
+		seen[int(value)] = true
+	return true
+
+static func in_slot_order(entries: Array, order: Array) -> Array:
+	var result := entries.duplicate()
+	for i in order.size(): result[i] = entries[int(order[i])]
+	return result
+
+static func apply_slot_order(hero: Dictionary, order: Array) -> void:
+	if order.is_empty(): return
+	hero.cards.assign(in_slot_order(hero.cards, order))
+	hero.rune_uses.assign(in_slot_order(hero.rune_uses, order))
+	if hero.has("rune_under"): hero.rune_under = in_slot_order(hero.rune_under, order)
+
 ## Moves reserve copy `reserve_index` of `card` into the book: onto the end,
 ## or with `slot` onto that occupied slot, as a laboratory purchase does (a
 ## cantrip there stays under the spell and takes the slot back when it is

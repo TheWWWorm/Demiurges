@@ -332,6 +332,33 @@ func _check_real() -> void:
 		print("  %s: %.2f megapixels a second, %.1f s for %d sheets" % [edition, speed / 1000000.0, second.elapsed(), second.computed])
 		var third: ELIconUpscale.Preparation = await _prepare(upscaler, limit)
 		check(third.computed == 0 and third.skipped == limit and third.done == limit, "%s: a further run works nothing out" % edition)
+		var first_sheet: String = sheets[0]
+		var path := upscaler.sharp_path(first_sheet)
+		var header := FileAccess.get_file_as_bytes(path).slice(0, 16)
+		var truncated := FileAccess.open(path, FileAccess.WRITE)
+		truncated.store_buffer(header)
+		truncated.close()
+		check(upscaler.status().done == limit - 1, "%s: a truncated picture is no longer counted as ready" % edition)
+		var repaired := await _prepare(upscaler, limit)
+		check(repaired.complete() and repaired.computed == 1 and repaired.skipped == limit - 1, "%s: preparation replaces only the truncated picture" % edition)
+		if edition == "el1":
+			DirAccess.remove_absolute(path)
+			DirAccess.make_dir_absolute(path)
+			var tasks_before := ELIconUpscale.tasks_started
+			var blocked := await _prepare(upscaler, limit)
+			check(blocked.failed == 1 and not blocked.complete() and ELIconUpscale.tasks_started == tasks_before + 2, "an unwritable picture gets one automatic retry and remains pending")
+			DirAccess.remove_absolute(path)
+			var unblocked := await _prepare(upscaler, limit)
+			check(unblocked.complete() and unblocked.computed == 1, "retrying after a write failure fills in only the missing picture")
+		var manifest_path := upscaler.manifest_path(2)
+		var saved_manifest := FileAccess.get_file_as_bytes(manifest_path)
+		ELSafeFile.test_write_limit = 1
+		var unsaved := await _prepare(upscaler, limit)
+		ELSafeFile.test_write_limit = -1
+		check(unsaved.done == limit and unsaved.save_failed and not unsaved.complete(), "%s: a failed manifest write cannot report completion" % edition)
+		check(FileAccess.get_file_as_bytes(manifest_path) == saved_manifest, "%s: a failed manifest write preserves the previous checkpoint" % edition)
+		var saved_again := await _prepare(upscaler, limit)
+		check(saved_again.complete() and saved_again.computed == 0, "%s: retry saves the manifest without rerunning the network" % edition)
 		# The game's files changed: sheets whose bytes did not are found again.
 		upscaler._identity += "|changed"
 		check(bool(upscaler.status().stale) and not upscaler.complete(), "%s: changed game files make the set stale" % edition)
@@ -395,21 +422,39 @@ func _check_texture_option(profile: ELProfile) -> void:
 	var upscaler := profile.icon_upscale
 	var base := profile.texture(entry)
 	var alias := profile.texture(entry.get_basename())
+	var preview := ELWikiPreview.stage_hero(profile, "Diamanda2Blue", Vector2i(640, 640))
+	var creature := ELWikiPreview.stage(profile, "STMC", Vector2i(640, 640))
+	var arena := ELArena.new()
+	root.add_child(arena)
+	arena.build(profile, "Green.001")
+	var creature_entry := "creatures/blackdestroyerbc01.mmp"
+	var terrain_entry := "combatscenes/greengr00.mmp"
+	var creature_skin := profile.texture(creature_entry.get_basename())
+	var terrain := profile.texture(terrain_entry.get_basename())
 	var source := ELTexture.readable(ELIconUpscale.image_of(base))
 	check(upscaler.eligible().has(entry) and not upscaler.complete() and ELIconUpscale.cache_factor() == 2,
 		"opaque 3D texture is eligible at layout resolution")
-	var bytes := profile.read("textures", entry)
-	var job := _job(entry, bytes, source, 2, upscaler.folder())
-	job.gpu = ClassDB.class_has_method(&"ELNativeAssets", &"upscale_gpu")
-	ELIconUpscale.prepare_sheet(job)
-	upscaler.manifest.sheets[entry] = [job.get("digest", ""), job.get("file", "")]
+	for key: String in [entry, creature_entry, terrain_entry]:
+		var image := ELTexture.readable(ELIconUpscale.image_of(profile.texture(key)))
+		var job := _job(key, profile.read("textures", key), image, 2, upscaler.folder())
+		job.gpu = ClassDB.class_has_method(&"ELNativeAssets", &"upscale_gpu")
+		ELIconUpscale.prepare_sheet(job)
+		if job.has("file"): upscaler.manifest.sheets[key] = [job.digest, job.file]
 	upscaler.write_manifest()
 	upscaler.mount(profile)
+	var revision := ELIconUpscale.texture_revision
 	upscaler.apply_all()
 	var sharp := upscaler.shown(entry)
 	check(sharp != null and sharp.get_size() == source.get_size() * 2 and sharp.has_mipmaps()
 		and base.get_size() == Vector2(source.get_size()) and alias.has_meta(ELIconUpscale.ORIGINAL),
 		"cached 2× texture keeps original dimensions and updates both aliases")
+	check(preview != null and _material_uses_sharp(preview.get_node("Model"), alias), "the wiki hero material uses the prepared skin")
+	check(creature != null and _material_uses_sharp(creature.get_node("Model"), creature_skin), "creature materials use the prepared skin")
+	check(arena._ground != null and _material_uses_sharp(arena._ground, terrain), "the arena floor shader uses the prepared terrain texture")
+	check(ELIconUpscale.texture_revision > revision, "applying prepared 3D textures invalidates the ray tracer's texture snapshot")
+	if preview != null: preview.queue_free()
+	if creature != null: creature.queue_free()
+	arena.queue_free()
 	values.sharper_textures = false
 	upscaler.apply_all()
 	check(not base.has_meta(ELIconUpscale.ORIGINAL) and not alias.has_meta(ELIconUpscale.ORIGINAL),
@@ -420,6 +465,15 @@ func _check_texture_option(profile: ELProfile) -> void:
 	ELIconUpscale.prepare_sheet(cutout)
 	check(cutout.has("file") and cutout.file.is_empty() and not cutout.stats.has("compute_usec"), "3D cutouts keep their original image")
 	upscaler.clear()
+
+func _material_uses_sharp(model: ELModel, texture: Texture2D) -> bool:
+	if texture == null or not texture.has_meta(ELIconUpscale.ORIGINAL): return false
+	if DisplayServer.get_name() != "headless" and texture.get_image().get_size() != Vector2i(texture.get_size()) * 2: return false
+	for part: MeshInstance3D in model.parts.values():
+		var material := part.material_override
+		if material is StandardMaterial3D and material.albedo_texture == texture: return true
+		if material is ShaderMaterial and material.get_shader_parameter("albedo_texture") == texture: return true
+	return false
 
 ## A real sheet of each kind, upscaled and reduced back, stays close.
 func _check_quality(edition: String, profile: ELProfile) -> void:

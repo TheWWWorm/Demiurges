@@ -83,6 +83,8 @@ var _menu_pieces: Array[Dictionary] = []
 var _blockers: Array[Control] = []
 var _fog_texture: ImageTexture
 var _fog_revision := -1
+var _fog_explored := PackedByteArray()
+var _markers: Dictionary = {}
 var _progress := 0.0
 var _signature := ""
 var _marks := ""
@@ -301,6 +303,9 @@ func _build_minimap() -> void:
 	minimap_marks.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	minimap.add_child(minimap_marks)
 	minimap_marks.draw.connect(_draw_minimap_marks)
+	for item: Dictionary in state.objects.values():
+		if _is_marker(item): _markers[int(item.uid)] = item
+	state.event.connect(_marker_event)
 	minimap.gui_input.connect(func(event: InputEvent):
 		if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
 			var cell := minimap_cell(event.position)
@@ -326,6 +331,8 @@ func _sync_minimap_fog() -> void:
 	_fog_revision = ELFog.revision(state)
 	var cells := state.map.width * state.map.height
 	var mask := state.explored
+	if _fog_texture != null and mask == _fog_explored: return
+	_fog_explored = mask.duplicate()
 	if mask.size() != cells:
 		mask = PackedByteArray()
 		mask.resize(cells)
@@ -341,12 +348,24 @@ func _draw_minimap() -> void:
 
 ## Hero and owned-site markers are drawn only on cells the local player sees
 ## (the original second-game markers test the visible bit).
+static func _is_marker(item: Dictionary) -> bool:
+	return item.get("type") == "hero" or ELResourceSites.TYPES.has(str(item.get("group", "")))
+
+func _marker_event(data: Dictionary) -> void:
+	var id := int(data.get("id", -1))
+	if id < 0 or data.kind not in ["object_created", "object_changed", "object_killed", "site_captured", "shape_changed"]: return
+	var item := state.object(id)
+	if _is_marker(item):
+		_markers[id] = item
+		minimap_marks.queue_redraw()
+	elif _markers.erase(id): minimap_marks.queue_redraw()
+
 func _draw_minimap_marks() -> void:
 	if minimap_texture == null: return
 	var area := minimap_area()
 	var map := state.map
 	var cell := area.size / Vector2(maxf(1, map.width), maxf(1, map.height))
-	for item: Dictionary in state.objects.values():
+	for item: Dictionary in _markers.values():
 		if not item.get("alive", false) or not item.get("visible", true) or not item.get("placed", true): continue
 		var at := area.position + Vector2(float(item.x) + 0.5, map.height - float(item.y) - 0.5) * cell
 		var owner := int(item.get("owner", 0))
@@ -488,7 +507,7 @@ func refresh(hero_uid: int, can_act: bool) -> void:
 	buttons.AdvPanelHandBagBtn.disabled = not can_act or hero.is_empty()
 	_sync_minimap_fog()
 	var marks := "%d/%d" % [hero_id, ELFog.revision(state)]
-	for item: Dictionary in state.objects.values():
+	for item: Dictionary in _markers.values():
 		if item.get("type") == "hero": marks += "/%d,%d,%s" % [item.x, item.y, item.alive]
 	if marks != _marks:
 		_marks = marks

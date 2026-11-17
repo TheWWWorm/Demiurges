@@ -68,7 +68,7 @@ func build(owner: ELSecondAdventureHud) -> void:
 
 func _layout() -> void:
 	if size.x <= 0 or size.y <= 0: return
-	var factor := minf(size.y / DESIGN.y, size.x / DESIGN.x)
+	var factor := ELFrontMenu.artwork_scale(size, _wide_picture)
 	canvas.scale = Vector2(factor, factor)
 	canvas.position = (size - DESIGN * factor) * 0.5
 	canvas.size = DESIGN
@@ -79,9 +79,8 @@ func _layout() -> void:
 	art.queue_redraw()
 
 func _draw_art() -> void:
-	var side := (size.x / canvas.scale.x - DESIGN.x) * 0.5
-	if _wide_picture != null and side >= ELFrontMenu.WIDE_MINIMUM:
-		ELWinLoseScreen.draw_wide_picture(art, _wide_picture, side)
+	if ELFrontMenu.use_wide_texture(size, _wide_picture):
+		ELFrontMenu.draw_wide_texture(art, _wide_picture)
 		return
 	for piece: Dictionary in _pieces: art.draw_texture_rect_region(piece.texture, piece.rect, piece.source)
 

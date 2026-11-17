@@ -83,20 +83,26 @@ static func object_at(state: ELAdventureSession, point: Vector2, picking_action 
 	var building_distance := INF
 	for id: int in state.objects:
 		var item: Dictionary = state.objects[id]
-		if item.get("group") == "terrain_objects" or not pickable(state, item): continue
-		if picking_action and item.get("type") == "corpse" and item.get("enabled", false) and Rect2(item.x, item.y, 1, 1).has_point(point): return id
-		if item.get("type") in ["hero", "monster"]:
-			var offset := point - Vector2(float(item.x) + 0.5, float(item.y) + 0.5)
-			if absf(offset.x) < 0.9 and offset.y > -0.9 and offset.y < 2.2 and offset.length() < distance:
+		if item.get("group") == "terrain_objects": continue
+		var kind: String = item.get("type", "")
+		var origin := Vector2(item.x, item.y)
+		# Test the hit before consulting fog and footprints for visibility.
+		if picking_action and kind == "corpse" and item.get("enabled", false) and Rect2(origin, Vector2.ONE).has_point(point) and pickable(state, item): return id
+		if kind == "hero" or kind == "monster":
+			var offset := point - (origin + Vector2(0.5, 0.5))
+			var candidate := offset.length_squared()
+			if absf(offset.x) < 0.9 and offset.y > -0.9 and offset.y < 2.2 and candidate < distance and pickable(state, item):
 				best = id
-				distance = offset.length()
-		elif best < 0:
+				distance = candidate
+		elif best < 0 and point.x >= origin.x and point.y >= origin.y:
 			var size := Vector2i.ONE
-			if item.get("type") != "corpse" and state.grid != null: size = state.grid.footprints.get(id, {}).get("size", Vector2i.ONE)
-			var rect := Rect2(item.x, item.y, size.x, size.y)
-			if rect.has_point(point) and point.distance_to(rect.get_center()) < building_distance:
+			if kind != "corpse" and state.grid != null: size = state.grid.footprints.get(id, {}).get("size", Vector2i.ONE)
+			var rect := Rect2(origin, Vector2(size))
+			if not rect.has_point(point): continue
+			var candidate := point.distance_squared_to(rect.get_center())
+			if candidate < building_distance and pickable(state, item):
 				building = id
-				building_distance = point.distance_to(rect.get_center())
+				building_distance = candidate
 	return best if best >= 0 else building
 
 ## Tooltip content: labels at content positions and an optional picture.

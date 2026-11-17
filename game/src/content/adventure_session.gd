@@ -354,6 +354,15 @@ func move_spell(hero_id: int, card: String, index := -1, reserve_index := 0, com
 	event.emit({"kind": "inventory_changed", "id": hero_id})
 	return true
 
+func reorder_spell(hero_id: int, from: int, to: int, commander := -1) -> bool:
+	error = ""
+	var hero := object(hero_id)
+	var owner := current_player if commander < 0 else commander
+	if hero.is_empty() or not hero.alive or hero.owner != owner or hero.type != "hero": return _fail("This hero's spellbook is unavailable.")
+	if not ELSpellInventory.reorder_book(map.profile, hero, from, to): return _fail("That spellbook slot is unavailable.")
+	event.emit({"kind": "inventory_changed", "id": hero_id})
+	return true
+
 func choose_skill(hero_id: int, code: String, commander := -1) -> bool:
 	error = ""
 	var hero := object(hero_id)
@@ -375,7 +384,7 @@ func collect_resources(hero_id: int, resource_id: int) -> bool:
 	item.alive = false
 	item.visible = false
 	item.enabled = false
-	event.emit({"kind": "object_killed", "id": resource_id})
+	event.emit({"kind": "object_killed", "id": resource_id, "pickup": true})
 	event.emit({"kind": "resources_collected", "id": resource_id, "player": actor.owner, "amounts": amounts})
 	return true
 
@@ -870,7 +879,7 @@ func _native(args: Array, name: String) -> Array:
 		"ExSetRotateMirror":
 			if not item.is_empty() and args.size() > 1:
 				item.rotation = int(args[1])
-				event.emit({"kind": "object_changed", "id": item.uid})
+				event.emit({"kind": "object_changed", "id": item.uid, "apply_facing": true})
 		"ExJumpToPos":
 			if not item.is_empty() and args.size() > 2:
 				item.x = int(args[1])

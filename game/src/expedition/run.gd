@@ -238,12 +238,12 @@ func opponent_at(id: String) -> Dictionary:
 		_opponents[id] = opponent
 	return _opponents[id]
 
-func build_battle() -> ELDuel:
+func build_battle(fresh := false) -> ELDuel:
 	error = ""
 	if phase != "battle":
 		_fail("There is no active expedition battle.")
 		return null
-	if not _battle_checkpoint.is_empty(): return _restore_battle(_battle_checkpoint)
+	if not fresh and not _battle_checkpoint.is_empty(): return _restore_battle(_battle_checkpoint)
 	var room: Dictionary = _nodes[current]
 	var opponent := opponent_at(current).duplicate(true)
 	if opponent.is_empty():

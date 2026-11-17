@@ -75,8 +75,9 @@ func build(session: ELAdventureSession, id: int) -> void:
 			button.pressed.connect(_equip)
 			list.item_selected.connect(func(_index: int): book.deselect_all(); _deselect_artifacts(); _select())
 			list.item_activated.connect(func(_index: int): _equip())
-		# A spell dragged to the other list moves as with a double click.
-		list.set_drag_forwarding(_list_drag.bind(list), _list_can_drop.bind(list), _list_drop.bind(list))
+		var tracker := ELListDrag.track_release(list)
+		list.set_drag_forwarding(_list_drag.bind(list), _list_can_drop.bind(list),
+			func(at: Vector2, data: Variant): _list_drop(tracker.release_position(at), data, list))
 	if ELSecondArtifacts.applies(state.map.profile):
 		var caption := Label.new()
 		caption.text = "Artifacts"
@@ -178,36 +179,36 @@ func _select() -> void:
 func _list_drag(at: Vector2, list: ItemList) -> Variant:
 	var index := list.get_item_at_position(at, true)
 	if index < 0: return null
-	list.set_drag_preview(drag_preview(list.get_item_icon(index), Vector2(list.fixed_icon_size)))
+	list.set_drag_preview(ELListDrag.drag_preview(list.get_item_icon(index), Vector2(list.fixed_icon_size)))
 	return {"spellbook": self, "from": list, "index": index}
 
 func _list_can_drop(_at: Vector2, data: Variant, list: ItemList) -> bool:
-	return data is Dictionary and data.get("spellbook") == self and data.get("from") != list
+	if not data is Dictionary or data.get("spellbook") != self: return false
+	if strategic_session != null and not strategic_session.can_plan(): return false
+	return data.from != list or list == book
 
-func _list_drop(_at: Vector2, data: Variant, list: ItemList) -> void:
-	if not _list_can_drop(_at, data, list): return
+func _list_drop(at: Vector2, data: Variant, list: ItemList) -> void:
+	if not _list_can_drop(at, data, list): return
 	var source: ItemList = data.from
-	if int(data.index) >= source.item_count: return
+	var index := int(data.index)
+	if index < 0 or index >= source.item_count: return
+	var target := list.get_item_at_position(at, true)
+	if source == list:
+		if target < 0 or index == target: return
+		if strategic_session != null:
+			var cards: Array = state.object(hero_id).cards
+			_manage_online(["reorder_spell", hero_id, index, target, cards[index], cards[target]])
+		elif state.reorder_spell(hero_id, index, target):
+			refresh()
+			book.select(target)
+			_select()
+		return
 	list.deselect_all()
 	_deselect_artifacts()
 	source.select(int(data.index))
 	_select()
 	if source == book: _unequip()
-	else: _equip()
-
-## An icon centred under the pointer while it is dragged.
-static func drag_preview(icon: Texture2D, size: Vector2) -> Control:
-	var holder := Control.new()
-	holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var picture := TextureRect.new()
-	picture.texture = icon
-	picture.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	picture.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-	picture.size = size
-	picture.position = -size * 0.5
-	picture.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	holder.add_child(picture)
-	return holder
+	else: _equip(target)
 
 func _deselect_artifacts() -> void:
 	if artifacts != null: artifacts.deselect_all()
@@ -223,18 +224,18 @@ func _select_artifact(index: int) -> void:
 	var code := ELSecondArtifacts.spell(profile, list[index])
 	details.text = ELSecondArtifacts.tooltip(profile, list[index]) + "\n" + profile.text(str(profile.table("CombatSpells").get(code, {}).get("ToolTip", "")))
 
-func _equip() -> void:
+func _equip(slot := -1) -> void:
 	var selected := reserve.get_selected_items()
-	if selected.is_empty() or equip.disabled: return
+	if selected.is_empty() or (slot < 0 and equip.disabled): return
 	var card := _reserve_cards[selected[0]]
 	if strategic_session != null:
-		_manage_online(["equip", hero_id, card, _reserve_indices[selected[0]]])
+		_manage_online(["equip", hero_id, card, _reserve_indices[selected[0]]] + ([slot] if slot >= 0 else []))
 		return
-	if not state.move_spell(hero_id, card, -1, _reserve_indices[selected[0]]):
+	if not state.move_spell(hero_id, card, -1, _reserve_indices[selected[0]], -1, slot):
 		message.text = state.error
 		return
 	refresh()
-	book.select(book.item_count - 1)
+	book.select(slot if slot >= 0 else book.item_count - 1)
 	_select()
 
 func _unequip() -> void:

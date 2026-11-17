@@ -1932,16 +1932,17 @@ func _state_event(data: Dictionary) -> void:
 		"mine_depleted":
 			if state.object(data.id).owner == state.current_player:
 				_remark(ELResourceSites.title(state.map.profile, state.object(data.id)) + " is depleted.")
-				_second_mine_expired()
 		"site_income":
 			if data.player == state.current_player: _remark("Mine production · " + ELResources.describe(state.map.profile.id, data.amounts, false))
 		"barrier_changed":
 			# A first-game runestone sounds as its stones move away (instant.wav).
 			if data.opened and presentation != null and world.first_barrier(state.object(data.id)): presentation.building_used(int(data.id), "instant")
 		"object_changed", "object_killed", "object_created", "shape_changed", "fort_captured":
-			world.update_object(state.object(data.id))
-			world.fog_object(state.object(data.id))
-			_refresh_roster()
+			var item := state.object(data.id)
+			if state.map.profile.id == "el2" and data.get("pickup", false) and world.retire_pickup(int(data.id)): return
+			world.update_object(item, bool(data.get("apply_facing", false)))
+			world.fog_object(item)
+			if state.map.profile.id == "el1" or item.get("type") == "hero": _refresh_roster()
 		"ExCameraScrollToObject": _focus_object(int(data.arguments[0]), data.get("instant", false))
 		"ExCameraScrollToPos": _scroll_to(ELAdventureScene.world_position(float(data.arguments[0]), float(data.arguments[1])), data.get("instant", false))
 		"ExCameraRotate": yaw_goal = deg_to_rad(float(data.arguments[0]))
@@ -2208,14 +2209,6 @@ func _second_loot_box(data: Dictionary) -> void:
 func _queue_building_message(message: Dictionary) -> void:
 	if ui == null: return
 	building_messages.append(message)
-	_show_building_message()
-
-## Second game: a depleted own mine reports T_MB_MINE_EXPIRED in the message
-## box (queues the message action when the counter reaches 0).
-func _second_mine_expired() -> void:
-	if state.map.profile.id != "el2" or second_hud == null: return
-	var text := state.map.profile.text("T_MB_MINE_EXPIRED").strip_edges()
-	building_messages.append({"kind": "building_message", "hero": -1, "building": -1, "title": "", "text": text, "resources": [], "skill": "", "key": "T_MB_MINE_EXPIRED"})
 	_show_building_message()
 
 ## Remake setting "helper_overlay" (default off).
@@ -3635,23 +3628,45 @@ func _save_named(name: String, preview: Image = null) -> String:
 	if strategic_session != null: return strategic_session.save(name, camera_state())
 	return ELSaveSlots.write(name, director, camera_state(), preview)
 
-## Render the current map without its panels before opening the save screen.
+## Render the map from the same camera in a viewport without any HUD layers.
 func _capture_save_preview() -> Image:
 	if DisplayServer.get_name() == "headless" or not is_visible_in_tree(): return null
 	if not RenderingServer.is_render_loop_enabled(): return null
 	var viewport := get_viewport()
 	if viewport.get_camera_3d() != camera: return null
+	var dimensions := viewport.get_texture().get_size()
+	if dimensions.x < 2.0 or dimensions.y < 2.0: return null
 	_save_preview_pending = true
 	var was_paused := paused
-	var ui_shown := ui.visible
-	var extras_shown := extras_layer != null and extras_layer.visible
 	paused = true
-	ui.hide()
-	if extras_shown: extras_layer.hide()
+
+	var preview := SubViewport.new()
+	var scale_factor := minf(1.0, (2.0 * ELSaveSlots.PREVIEW_SIZE.y) / minf(dimensions.x, dimensions.y))
+	scale_factor = minf(scale_factor, 1536.0 / maxf(dimensions.x, dimensions.y))
+	preview.size = Vector2i((dimensions * scale_factor).round()).max(Vector2i(2, 2))
+	preview.gui_disable_input = true
+	preview.world_3d = camera.get_world_3d()
+	add_child(preview)
+
+	var capture_camera := Camera3D.new()
+	capture_camera.keep_aspect = camera.keep_aspect
+	capture_camera.projection = camera.projection
+	capture_camera.fov = camera.fov
+	capture_camera.size = camera.size
+	capture_camera.frustum_offset = camera.frustum_offset
+	capture_camera.near = camera.near
+	capture_camera.far = camera.far
+	capture_camera.cull_mask = camera.cull_mask
+	capture_camera.environment = camera.environment
+	capture_camera.attributes = camera.attributes
+	preview.add_child(capture_camera)
+	capture_camera.global_transform = camera.get_camera_transform()
+	capture_camera.make_current()
+	preview.render_target_update_mode = SubViewport.UPDATE_ONCE
+
 	await RenderingServer.frame_post_draw
-	var image := viewport.get_texture().get_image() if viewport.get_camera_3d() == camera else null
-	ui.visible = ui_shown
-	if extras_shown: extras_layer.show()
+	var image := preview.get_texture().get_image() if viewport.get_camera_3d() == camera else null
+	preview.queue_free()
 	paused = was_paused
 	_save_preview_pending = false
 	if image == null or image.is_empty(): return null

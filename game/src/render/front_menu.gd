@@ -541,11 +541,56 @@ func _add_group(group: String, excluded: Array) -> void:
 	var offset := shift(group)
 	var list := rows(group, [], ["Res1"] + excluded)
 	list.sort_custom(func(a: Dictionary, b: Dictionary): return _layer(a) < _layer(b))
+	var first := _pieces.size()
 	for row: Dictionary in list:
 		var piece := cut(row, offset)
 		if piece.is_empty(): continue
 		piece.masks = row.masks
 		_pieces.append(piece)
+	if edition == "el2" and group in ["SelectCampaign", "GlobalMapA6"] and first < _pieces.size():
+		_mark_panel_joins(first)
+
+## Independently enlarged atlas tiles can ring near their edges. Restore
+## the original color and alpha at joins while keeping the sharp interiors.
+func _mark_panel_joins(first: int) -> void:
+	var bounds: Rect2 = _pieces[first].rect
+	for index in range(first + 1, _pieces.size()): bounds = bounds.merge(_pieces[index].rect)
+	for index in range(first, _pieces.size()):
+		var piece := _pieces[index]
+		var rect: Rect2 = piece.rect
+		piece.joins = [rect.position.x > bounds.position.x, rect.position.y > bounds.position.y,
+			rect.end.x < bounds.end.x, rect.end.y < bounds.end.y]
+		if not piece.texture.changed.is_connected(_forget_joined_tiles):
+			piece.texture.changed.connect(_forget_joined_tiles)
+
+func _forget_joined_tiles() -> void:
+	for piece: Dictionary in _pieces: piece.erase("joined")
+	if is_instance_valid(art): art.queue_redraw()
+
+static func _joined_tile(texture: Texture2D, source: Rect2i, joins: Array) -> ImageTexture:
+	var original: Image = texture.get_meta(ELIconUpscale.ORIGINAL)
+	var sharp := texture.get_image()
+	if sharp == null or original == null or original.is_empty(): return null
+	var factor := sharp.get_width() / original.get_width()
+	if factor < 2: return null
+	var cropped := sharp.get_region(Rect2i(source.position * factor, source.size * factor))
+	cropped.convert(Image.FORMAT_RGBA8)
+	var edge := ELTexture.readable(original).get_region(source)
+	edge.convert(Image.FORMAT_RGBA8)
+	edge.resize(cropped.get_width(), cropped.get_height(), Image.INTERPOLATE_BILINEAR)
+	var band := 6 * factor
+	for side in 4:
+		if not joins[side]: continue
+		var vertical := side % 2 == 0
+		var across := cropped.get_width() if vertical else cropped.get_height()
+		var length := cropped.get_height() if vertical else cropped.get_width()
+		for distance in mini(band, across):
+			var at := distance if side < 2 else across - 1 - distance
+			var amount := 1.0 - smoothstep(0.0, float(band), float(distance))
+			for along in length:
+				var pixel := Vector2i(at, along) if vertical else Vector2i(along, at)
+				cropped.set_pixelv(pixel, cropped.get_pixelv(pixel).lerp(edge.get_pixelv(pixel), amount))
+	return ImageTexture.create_from_image(cropped)
 
 static func _layer(row: Dictionary) -> int:
 	for index in [3, 2, 1]:
@@ -554,8 +599,7 @@ static func _layer(row: Dictionary) -> int:
 
 # --- Widescreen frame -----------------------------------------------------------
 # Remake art: each game's main-menu frame widened to 16:9. The 4:3 design sits
-# in its middle at 1:1 (a margin of 176 columns each side and 3 rows above and
-# below, which stay outside the window); the outer columns fill the side bars.
+# in its middle, with extra artwork around all four sides.
 
 const WIDE_FRAMES := {"el1": "res://assets/widescreen/etherlords-main-menu-frame-overlay.png",
 	"el2": "res://assets/widescreen/etherlords-ii-main-menu-frame-overlay.png"}
@@ -600,19 +644,19 @@ func _add_wide_frame(target: String, under_panel := false) -> void:
 func _draw_wide_frame(target: CanvasItem = null) -> void:
 	if target == null: target = _wide_frame
 	if scale_factor <= 0.0 or target == null: return
-	draw_wide_texture(target, _wide_texture, (size.x / scale_factor - DESIGN.x) * 0.5)
+	if use_wide_texture(size, _wide_texture): draw_wide_texture(target, _wide_texture)
 
-static func draw_wide_texture(target: CanvasItem, texture: Texture2D, side: float, tint := Color.WHITE) -> void:
-	if texture == null or side < WIDE_MINIMUM: return
-	var source := Vector2(texture.get_size())
-	var margin := ((source - DESIGN) * 0.5).floor()
-	var outer := minf(side, margin.x)
-	target.draw_texture_rect_region(texture, Rect2(Vector2.ZERO, DESIGN), Rect2(margin, DESIGN), tint, false, false)
-	# Between 4:3 and 16:9 the side bars show the outer part of each column
-	# at its own scale: the corner gargoyles stand at the outer edges, and
-	# narrowing the whole column squeezed them and cut their heads (#154).
-	target.draw_texture_rect_region(texture, Rect2(-outer, 0, outer, DESIGN.y), Rect2(0, margin.y, outer, DESIGN.y), tint, false, false)
-	target.draw_texture_rect_region(texture, Rect2(DESIGN.x, 0, outer, DESIGN.y), Rect2(source.x - outer, margin.y, outer, DESIGN.y), tint, false, false)
+static func use_wide_texture(window: Vector2, texture: Texture2D) -> bool:
+	var factor := minf(window.x / DESIGN.x, window.y / DESIGN.y)
+	return texture != null and factor > 0.0 and (window.x / factor - DESIGN.x) * 0.5 >= WIDE_MINIMUM
+
+static func artwork_scale(window: Vector2, texture: Texture2D) -> float:
+	var extent := texture.get_size() if use_wide_texture(window, texture) else DESIGN
+	return minf(window.x / extent.x, window.y / extent.y)
+
+static func draw_wide_texture(target: CanvasItem, texture: Texture2D, tint := Color.WHITE) -> void:
+	var extent := texture.get_size()
+	target.draw_texture_rect(texture, Rect2((DESIGN - extent) * 0.5, extent), false, tint)
 
 func _draw_art() -> void:
 	# Over a battle the dim covers the whole window (see _draw), not only the 4:3 art.
@@ -621,6 +665,12 @@ func _draw_art() -> void:
 		if _frame_in_art and index == _frame_after: _draw_wide_frame(art)
 		var piece: Dictionary = _pieces[index]
 		if not hidden_masks.is_empty() and hidden_masks.any(func(mask: String): return piece.get("masks", []).has(mask)): continue
+		if piece.has("joins") and piece.texture.has_meta(ELIconUpscale.ORIGINAL):
+			if not piece.has("joined"): piece.joined = _joined_tile(piece.texture, Rect2i(piece.source), piece.joins)
+			if piece.joined != null:
+				art.draw_texture_rect(piece.joined, piece.rect, false)
+				continue
+		piece.erase("joined")
 		art.draw_texture_rect_region(piece.texture, piece.rect, piece.source)
 
 ## Remake: the edition's main-menu picture without its buttons (the art and the
@@ -668,25 +718,18 @@ class Backdrop extends Control:
 
 	func _draw() -> void:
 		draw_rect(Rect2(Vector2.ZERO, size), Color.BLACK)
-		var factor := minf(size.x / DESIGN.x, size.y / DESIGN.y)
+		var factor := ELFrontMenu.artwork_scale(size, wide)
 		if factor <= 0.0: return
-		draw_set_transform(((size - DESIGN * factor) * 0.5).floor(), 0.0, Vector2(factor, factor))
+		draw_set_transform((size - DESIGN * factor) * 0.5, 0.0, Vector2(factor, factor))
 		for piece: Dictionary in pieces:
 			draw_texture_rect_region(piece.texture, piece.rect, piece.source)
-		var side := (size.x / factor - DESIGN.x) * 0.5
-		if wide == null or side < WIDE_MINIMUM: return
-		var source := Vector2(wide.get_size())
-		var margin := ((source - DESIGN) * 0.5).floor()
-		var outer := minf(side, margin.x)
-		draw_texture_rect_region(wide, Rect2(Vector2.ZERO, DESIGN), Rect2(margin, DESIGN))
-		draw_texture_rect_region(wide, Rect2(-outer, 0, outer, DESIGN.y), Rect2(0, margin.y, margin.x, DESIGN.y))
-		draw_texture_rect_region(wide, Rect2(DESIGN.x, 0, outer, DESIGN.y), Rect2(source.x - margin.x, margin.y, margin.x, DESIGN.y))
+		if ELFrontMenu.use_wide_texture(size, wide): ELFrontMenu.draw_wide_texture(self, wide)
 
 func _layout() -> void:
 	if canvas == null or size.x <= 0 or size.y <= 0: return
-	scale_factor = minf(size.x / DESIGN.x, size.y / DESIGN.y)
+	scale_factor = artwork_scale(size, _wide_texture if _frame_in_art or is_instance_valid(_wide_frame) else null)
 	canvas.scale = Vector2(scale_factor, scale_factor)
-	canvas.position = ((size - DESIGN * scale_factor) * 0.5).floor()
+	canvas.position = (size - DESIGN * scale_factor) * 0.5
 	if is_instance_valid(_wide_frame): _wide_frame.queue_redraw()
 	if _frame_in_art and is_instance_valid(art): art.queue_redraw()
 	_place_version()
@@ -859,15 +902,20 @@ func open_hosted(target: String, over_game: bool, kind := "") -> void:
 
 ## A question box alone over a running game (the quick load's
 ## T_MB_LOAD_GAME): OK leaves and runs `on_ok`; Cancel or Esc only leaves.
-func ask_hosted(question: String, on_ok: Callable) -> void:
+func ask_hosted(question: String, on_ok: Callable, on_retry: Callable = Callable()) -> void:
 	_inform_ok = Callable()
 	hosted = true
 	_over_game = true
 	_choice.hide()
 	show_screen("question")
+	var retry := Callable()
+	if on_retry.is_valid():
+		retry = func():
+			leave_screen()
+			on_retry.call()
 	duel_ui.show_message(question, func():
 		leave_screen()
-		on_ok.call(), true, 200.0, leave_screen)
+		on_ok.call(), true, 200.0, leave_screen, retry)
 
 ## A message box with OK alone over a running game (the hot-seat hand-over
 ## box): OK, Enter, Space or Esc closes it and then runs `on_ok`.

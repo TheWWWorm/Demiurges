@@ -353,11 +353,11 @@ func zone_at(point: Vector2) -> Dictionary:
 		if Rect2(Vector2.ZERO, control.size).has_point(local): return {"zone": drop_zones[at].zone, "control": control, "local": local}
 	return {}
 
-## A carried item released at a design point: the target panel's click rule
-## applies; on its own panel or outside every panel nothing changes.
+## A carried item released at a design point follows the target panel's rules.
 func drop_carried(item: Dictionary, point: Vector2) -> bool:
 	var hit := zone_at(point)
-	if hit.is_empty() or hit.zone == item.source or edit.is_empty() or edit.view_only: return false
+	if hit.is_empty() or edit.is_empty() or edit.view_only: return false
+	if hit.zone == item.source and hit.zone != "book": return false
 	var zone: String = hit.zone
 	var tab := int(edit.tab)
 	var done := false
@@ -378,7 +378,8 @@ func drop_carried(item: Dictionary, point: Vector2) -> bool:
 			var choices := artifact_choices()
 			if zone == "strip" and int(item.value) >= 0 and int(item.value) < choices.size(): done = buy_artifact(choices[int(item.value)])
 		"book":
-			if zone == "reserve": done = act("deck_to_reserve", int(item.value))
+			if zone == "book": done = act("reorder_book", [item.value, hit.control.slot_at(hit.local)])
+			elif zone == "reserve": done = act("deck_to_reserve", int(item.value))
 			elif zone == "choice" and tab == 2 and el1(): done = act("remove_rune", int(item.value))
 			elif zone == "choice" and tab == 0: done = act("remove_slot", int(item.value))
 		"reserve":
@@ -878,7 +879,7 @@ func delete_preset() -> void:
 ## text (17, tan) wraps at 512 px, the buttons 10 px under it, 8 px either side
 ## of the centre; the content grows by 15 px and takes the WORLD_SYMBOLS_MAP
 ## frame. Both are centred and leave the screen undimmed.
-func show_message(text: String, on_ok: Callable = Callable(), ask := false, _width := 200.0, on_cancel: Callable = Callable()) -> void:
+func show_message(text: String, on_ok: Callable = Callable(), ask := false, _width := 200.0, on_cancel: Callable = Callable(), on_retry: Callable = Callable()) -> void:
 	close_message()
 	var shade := MessageShade.new()
 	shade.size = ELFrontMenu.DESIGN
@@ -923,7 +924,12 @@ func show_message(text: String, on_ok: Callable = Callable(), ask := false, _wid
 		button_size = button_size.max(button.size)
 	var spread := 15.0 if shade.first else ELSecondDialogueBox.MESSAGE_SPREAD
 	var inset := ELFirstMessageBox.MARGIN if shade.first else ELSecondDialogueBox.MESSAGE_GROW
-	var content := Vector2(maxf(text_width, (button_size.x + spread) * 2.0 if ask else button_size.x), text_height + 10.0 + button_size.y)
+	var buttons_width := (button_size.x + spread) * 2.0 if ask else button_size.x
+	var retry := _retry_button(shade.first) if on_retry.is_valid() else null
+	var spacing := button_size.x + spread * 2.0
+	if retry != null: buttons_width = button_size.x + spacing * 2.0
+	var row_height := button_size.y
+	var content := Vector2(maxf(text_width, buttons_width), text_height + 10.0 + row_height)
 	var outer := content + Vector2(inset, inset) * 2.0
 	if shade.first: outer.y += ELFirstMessageBox.MARGIN
 	var box := Rect2(((ELFrontMenu.DESIGN - outer) * 0.5).floor(), outer)
@@ -936,9 +942,13 @@ func show_message(text: String, on_ok: Callable = Callable(), ask := false, _wid
 	var row := body.position.y + text_height + 10.0
 	for button: ELFrontMenu.CutButton in made:
 		var control := String(button.name)
-		if not ask: button.position = Vector2(middle - floorf(button.size.x * 0.5), row)
-		elif control == "MBOK": button.position = Vector2(middle - spread - button.size.x, row)
-		else: button.position = Vector2(middle + spread, row)
+		var at_y := row + floorf((row_height - button.size.y) * 0.5)
+		if not ask: button.position = Vector2(middle - floorf(button.size.x * 0.5), at_y)
+		elif retry != null:
+			var center := middle - spacing if control == "MBOK" else middle
+			button.position = Vector2(center - button.size.x * 0.5, at_y)
+		elif control == "MBOK": button.position = Vector2(middle - spread - button.size.x, at_y)
+		else: button.position = Vector2(middle + spread, at_y)
 		shade.add_child(button)
 		menu.buttons[control] = button
 		# The buttons are icon-only in both games: the art carries the tick and
@@ -952,6 +962,79 @@ func show_message(text: String, on_ok: Callable = Callable(), ask := false, _wid
 			close_message()
 			if control == "MBOK" and on_ok.is_valid(): on_ok.call()
 			elif control == "MBCancel" and on_cancel.is_valid(): on_cancel.call())
+	if retry != null:
+		retry.position = Vector2(middle + spacing - retry.size.x * 0.5, row)
+		shade.add_child(retry)
+		menu.buttons[retry.name] = retry
+		retry.pressed.connect(func():
+			close_message()
+			on_retry.call())
+
+## Keep the original plate, bevel and button states from each edition.
+func _retry_button(first: bool) -> ELFrontMenu.CutButton:
+	var button := ELFrontMenu.CutButton.make(menu, "MBOK", Vector2.ZERO)
+	if button == null: return null
+	button.name = "MBRetry"
+	button.tooltip_text = ELRemakeText.t("Try again", menu.profile)
+	button.accessibility_name = button.tooltip_text
+	var normal: Dictionary = button.parts.normal
+	var texture: Texture2D = normal.texture
+	var sheet := ELTexture.readable(texture.get_image())
+	if sheet == null or sheet.is_empty():
+		button.free()
+		return null
+	var sprites: Dictionary = {}
+	for state: String in button.parts:
+		var part: Dictionary = button.parts[state]
+		# The first game's hover pieces are a transparent gold rim.
+		if part.is_empty() or (first and state.begins_with("hover")): continue
+		var region := Rect2i(part.source)
+		if not sprites.has(region): sprites[region] = _retry_sprite(sheet, texture.get_size(), region)
+		part.texture = sprites[region]
+		part.source = Rect2(Vector2.ZERO, part.texture.get_size())
+	return button
+
+# A bronze arrow with the same dark relief and warm edge light as the tick and cross.
+const RETRY_EMBLEM := """
+<svg xmlns="http://www.w3.org/2000/svg" width="50" height="27" viewBox="0 0 50 27">
+  <defs>
+    <linearGradient id="bronze" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop stop-color="#bf9a7d"/>
+      <stop offset=".28" stop-color="#8f6952"/>
+      <stop offset=".8" stop-color="#76523d"/>
+      <stop offset="1" stop-color="#98755e"/>
+    </linearGradient>
+  </defs>
+  <g transform="translate(4.5 2.34) scale(.82)">
+    <path d="M17 4.7l1.1 7.1 6.9-1.9-2.7-1.7a5.4 5.4 0 1 1-2.5 7l-3.6 1.1a9.1 9.1 0 1 0 3.8-11l-3-.6Z"
+          transform="translate(.4 1)" fill="#14100d" stroke="#14100d" stroke-width="2.4" stroke-linejoin="round"/>
+    <path d="M17 4.7l1.1 7.1 6.9-1.9-2.7-1.7a5.4 5.4 0 1 1-2.5 7l-3.6 1.1a9.1 9.1 0 1 0 3.8-11l-3-.6Z"
+          fill="url(#bronze)" stroke="#241a14" stroke-width="1.35" stroke-linejoin="round"/>
+    <path d="M17.6 5.3l.85 5.7M20.5 5.6a8.3 8.3 0 0 1 12.2 3M16.9 16.7a8.4 8.4 0 0 0 6.4 5.1"
+          fill="none" stroke="#c5a98d" stroke-opacity=".7" stroke-width=".65" stroke-linecap="round"/>
+  </g>
+</svg>
+"""
+
+static func _retry_sprite(sheet: Image, logical_size: Vector2, region: Rect2i) -> ImageTexture:
+	# The upscaled sheet keeps its original logical size.
+	var scale_factor := maxi(1, roundi(sheet.get_width() / logical_size.x))
+	var plate := sheet.get_region(Rect2i(region.position * scale_factor, region.size * scale_factor))
+	plate.convert(Image.FORMAT_RGBA8)
+	# Reconstruct the metal only in the centre where the original tick was.
+	var left := 12 * scale_factor
+	var right := 36 * scale_factor
+	for y in range(2 * scale_factor, 25 * scale_factor):
+		var start := plate.get_pixel(left, y)
+		var end := plate.get_pixel(right, y)
+		for x in range(left + 1, right):
+			var across := float(x - left) / float(right - left)
+			plate.set_pixel(x, y, start.lerp(end, across))
+	var emblem := Image.new()
+	if emblem.load_svg_from_string(RETRY_EMBLEM, float(scale_factor)) == OK:
+		var symbol_area := Rect2i(Vector2i.ZERO, emblem.get_size()).intersection(Rect2i(Vector2i.ZERO, plate.get_size()))
+		plate.blend_rect(emblem, symbol_area, Vector2i.ZERO)
+	return ImageTexture.create_from_image(plate)
 
 func close_message() -> void:
 	if message != null and is_instance_valid(message):
@@ -961,6 +1044,7 @@ func close_message() -> void:
 	message = null
 	menu.buttons.erase("MBOK")
 	menu.buttons.erase("MBCancel")
+	menu.buttons.erase("MBRetry")
 
 ## Keys over the message box: Enter answers OK; Escape answers Cancel where it
 ## is shown, else OK; the second game's one-button box also takes Space.
@@ -1302,6 +1386,11 @@ func spec_name(code: String) -> String:
 func apply(preset: Dictionary, action: String, value: Variant) -> Variant:
 	var p := preset.duplicate(true)
 	match action:
+		"reorder_book":
+			var from := int(value[0])
+			var to := int(value[1])
+			if not ELSpellInventory.swap_slots(p.cards, from, to): return null
+			ELSpellInventory.swap_slots(p.runes, from, to)
 		"add_spell":
 			if el1():
 				if p.cards.size() >= ELDuelCosts.EL1_BOOK: return null

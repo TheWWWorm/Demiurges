@@ -38,8 +38,8 @@ static func end_day(state: ELAdventureSession, hero: Dictionary) -> bool:
 		state.day += 1
 		hero.travel_day = state.day
 		for other: Dictionary in state.objects.values():
-			if other.uid == hero.uid or not other.alive or other.get("type") not in ["hero", "monster"]: continue
-			_refill_day(state, other)
+			var kind: String = other.get("type", "")
+			if (kind == "hero" or kind == "monster") and other.alive and other.uid != hero.uid: _refill_day(state, other)
 		ELBattlegrounds.new_day(state)
 		ELResourceSites.settle_income(state, true)
 		# CCloseBowls runs before the begin-of-turn fog recompute.

@@ -48,6 +48,7 @@ func build_shop(owner: ELAdventureDirector, panel: ELAdventureHud, exchange_trad
 	hud = panel
 	profile = state.map.profile
 	trade = exchange_trade
+	shop_book_order = range(trade.pending.size())
 	heroes = [trade.hero_id]
 	# The HeroScreen's own right-hand parts (global spells, level-up) are absent.
 	exchange = true
@@ -135,13 +136,13 @@ func _price_button() -> void:
 	if tip != "CtrlTtComponentPrice": button.tooltip_text = tip
 
 func book_cards(_side: int) -> Array:
-	return trade.cards
+	return ELSpellInventory.in_slot_order(trade.cards, shop_book_order)
 
 func book_uses(_side: int) -> Array:
-	return trade.uses
+	return ELSpellInventory.in_slot_order(trade.uses, shop_book_order)
 
 func book_under(_side: int) -> Array[String]:
-	return trade.unders
+	return ELSpellInventory.in_slot_order(trade.unders, shop_book_order)
 
 func shop_rect(index: int) -> Rect2:
 	var visible := index - shop_scroll * SHOP_COLUMNS
@@ -164,7 +165,7 @@ func shop_at(point: Vector2) -> int:
 
 func book_at(point: Vector2) -> int:
 	for index in mini(15, trade.cards.size()):
-		if book_rect(index).has_point(point): return index
+		if book_rect(index).has_point(point): return int(shop_book_order[index])
 	return -1
 
 func press(point: Vector2) -> void:
@@ -176,6 +177,8 @@ func press(point: Vector2) -> void:
 			var card := carry
 			carry = ""
 			_stage(book, card)
+		elif not _purchase_pending:
+			held = {"kind": "book", "index": book, "icon": profile.card_icon(trade.cards[book])}
 		refresh()
 		return
 	var index := shop_at(point)
@@ -196,10 +199,15 @@ func press(point: Vector2) -> void:
 ## A shop spell dragged onto a book slot is staged there as with the second
 ## click; released anywhere else it is let go.
 func drop_held(item: Dictionary, point: Vector2) -> void:
+	var book := book_at(point)
+	if item.kind == "book":
+		if not _purchase_pending and ELSpellInventory.swap_slots(shop_book_order, shop_book_order.find(item.index), shop_book_order.find(book)):
+			slot = int(item.index)
+			refresh()
+		return
 	if item.kind != "shop" or carry.is_empty(): return
 	var card := carry
 	carry = ""
-	var book := book_at(point)
 	if book >= 0:
 		slot = book
 		_stage(book, card)
@@ -246,7 +254,7 @@ func buy() -> void:
 ## so several copies are bought with repeated clicks.
 func _stage(at: int, card: String) -> void:
 	if _purchase_pending or not trade.replace(at, card): return
-	if trade.cards.size() > 1: slot = (at + 1) % trade.cards.size()
+	if trade.cards.size() > 1: slot = int(shop_book_order[(shop_book_order.find(at) + 1) % trade.cards.size()])
 
 func retrieve() -> void:
 	if _purchase_pending: return
@@ -257,13 +265,15 @@ func retrieve() -> void:
 func accept() -> void:
 	if _purchase_pending: return
 	if strategic_session != null:
-		if not trade.pending.any(func(card: String): return not card.is_empty()):
+		if not shop_order_changed() and not trade.pending.any(func(card: String): return not card.is_empty()):
 			cancel_trade()
 			return
 		var action := "visit_buy_spells" if strategic_shop_visit else "buy_spells"
-		if trade.problem().is_empty(): _manage_online([action, trade.hero_id, trade.shop_id] + trade.pending, true)
+		var order := [action, trade.hero_id, trade.shop_id] + trade.pending
+		if shop_order_changed(): order.append(shop_order_for_network())
+		if trade.problem().is_empty(): _manage_online(order, true)
 		return
-	if not trade.commit():
+	if not trade.commit(shop_book_order):
 		refresh()
 		return
 	closed.emit()
@@ -326,7 +336,7 @@ func refresh() -> void:
 func _draw_sheet() -> void:
 	super._draw_sheet()
 	for piece: Dictionary in _type_pieces["Type2" if rune_price else "Type1"]: sheet.draw_texture_rect_region(piece.texture, piece.rect, piece.source)
-	if slot >= 0 and slot < mini(15, trade.cards.size()): sheet.draw_rect(book_rect(slot).grow(1), PICK, false, 2.0)
+	if slot >= 0 and slot < mini(15, trade.cards.size()): sheet.draw_rect(book_rect(shop_book_order.find(slot)).grow(1), PICK, false, 2.0)
 	for index in range(shop_scroll * SHOP_COLUMNS, mini(trade.stock.size(), (shop_scroll + SHOP_ROWS) * SHOP_COLUMNS)):
 		var rect := shop_rect(index)
 		sheet.draw_texture_rect(profile.card_icon(trade.stock[index]), rect, false)
@@ -345,7 +355,7 @@ func _draw_sheet() -> void:
 			sheet.draw_string(font, at, text, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, RED if not values.is_empty() and price_red(column, kinds[row]) else WHITE)
 	# Bought slots carry a gold frame; the carried spell follows the cursor.
 	for index in mini(15, trade.pending.size()):
-		if not trade.pending[index].is_empty(): sheet.draw_rect(book_rect(index).grow(-1), Color(0.95, 0.8, 0.35, 0.8), false, 1.5)
+		if not trade.pending[index].is_empty(): sheet.draw_rect(book_rect(shop_book_order.find(index)).grow(-1), Color(0.95, 0.8, 0.35, 0.8), false, 1.5)
 	if not carry.is_empty():
 		var rect := Rect2(carry_at - ICON * 0.5, ICON)
 		sheet.draw_texture_rect(profile.card_icon(carry), rect, false, Color(1, 1, 1, 0.85))

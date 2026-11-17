@@ -30,6 +30,7 @@ var book_pick := -1
 var reserve_pick := -1
 var reserve_scroll := 0
 var _type_pieces: Array = []
+var _last_stored := {}
 
 func build_book(owner: ELAdventureDirector, panel: ELAdventureHud, id: int) -> void:
 	director = owner
@@ -152,8 +153,7 @@ func press(point: Vector2) -> void:
 			held = {"kind": "reserve", "index": index, "icon": profile.card_icon(str(entries[index].card))}
 			refresh()
 
-## A spell dragged from the book onto the reserve, or from the reserve onto
-## the book, moves as with a double click; dropped elsewhere it stays.
+## A drop on another book slot swaps it. Across panels it transfers the spell.
 func drop_held(item: Dictionary, point: Vector2) -> void:
 	var book_area := Rect2(Vector2(24, 384), Vector2(53 * 5 + 10, 52 * 3 + 10))
 	var reserve_area := Rect2(RESERVE_CELL - Vector2(5, 5), Vector2(STEP * RESERVE_COLUMNS + 10, 52 * RESERVE_ROWS + 10))
@@ -161,12 +161,16 @@ func drop_held(item: Dictionary, point: Vector2) -> void:
 		book_pick = int(item.index)
 		reserve_pick = -1
 		unequip()
+	elif item.kind == "book":
+		var target := book_at(point)
+		if target >= 0: _reorder(int(item.index), target)
 	elif item.kind == "reserve" and book_area.has_point(point) and int(item.index) < entries.size():
 		reserve_pick = int(item.index)
 		book_pick = -1
 		# Onto an occupied slot it goes over that slot, as a laboratory
 		# purchase does; elsewhere on the book it joins the end.
 		var slot := book_at(point)
+		if slot < 0: slot = _return_slot()
 		var problem := equip_problem(slot)
 		if problem.is_empty(): equip(slot)
 		else:
@@ -196,15 +200,43 @@ func _can_act() -> bool:
 	if _purchase_pending: return false
 	return strategic_session.can_plan() if strategic_session != null else true
 
+func _reorder(from: int, to: int) -> void:
+	var cards := book_cards(0)
+	if not _can_act() or from == to or from >= cards.size(): return
+	if strategic_session != null:
+		_manage_online(["reorder_spell", hero_id, from, to, cards[from], cards[to]])
+		return
+	if state.reorder_spell(hero_id, from, to):
+		if _last_stored.get("slot") == from: _last_stored.slot = to
+		elif _last_stored.get("slot") == to: _last_stored.slot = from
+		book_pick = to
+		refresh()
+
+## A full cantrip book still accepts an advanced spell. If it was just put
+## away, use the cantrip that returned to its former slot.
+func _return_slot() -> int:
+	if reserve_pick < 0 or reserve_pick >= entries.size(): return -1
+	var cards := book_cards(0)
+	if cards.size() < ELSpellInventory.book_size(profile): return -1
+	var entry := entries[reserve_pick]
+	if ELRunes.unlimited(profile, hero(), str(entry.card)): return -1
+	var previous := int(_last_stored.get("slot", -1))
+	if previous >= 0 and previous < cards.size() and entry.card == _last_stored.card and entry.uses == _last_stored.uses and ELRunes.unlimited(profile, hero(), str(cards[previous])):
+		return previous
+	for slot in cards.size():
+		if ELRunes.unlimited(profile, hero(), str(cards[slot])): return slot
+	return -1
+
 ## Why the selected reserve spell cannot join the book ("" when it can).
-## With `slot`, the selected spell goes over that occupied book slot.
+## With an explicit slot, the selected spell goes over that occupied slot.
 func equip_problem(slot := -1) -> String:
 	if reserve_pick < 0 or reserve_pick >= entries.size(): return "Select a reserve spell."
-	if slot < 0 and book_cards(0).size() >= ELSpellInventory.book_size(profile): return "Move a spell to reserve or drop it onto a book slot."
 	if not ELSpellInventory.allows(profile, hero(), str(entries[reserve_pick].card)): return "This hero cannot use that spell's magic color."
+	if slot < 0 and book_cards(0).size() >= ELSpellInventory.book_size(profile) and _return_slot() < 0: return "Move a spell to reserve or drop it onto a book slot."
 	return ""
 
 func equip(slot := -1) -> void:
+	if slot < 0: slot = _return_slot()
 	if not _can_act() or not equip_problem(slot).is_empty(): return
 	var entry := entries[reserve_pick]
 	if strategic_session != null:
@@ -220,19 +252,24 @@ func equip(slot := -1) -> void:
 func unequip() -> void:
 	if not _can_act() or book_pick < 0 or book_pick >= book_cards(0).size(): return
 	var card := str(book_cards(0)[book_pick])
+	var uses := int(book_uses(0)[book_pick]) if book_pick < book_uses(0).size() else -1
+	var restored := not ELRunes.under(hero())[book_pick].is_empty()
 	if strategic_session != null:
+		if restored: _last_stored = {"slot": book_pick, "card": card, "uses": uses}
 		_manage_online(["reserve", hero_id, card, book_pick])
 		return
-	var uses := int(book_uses(0)[book_pick]) if book_pick < book_uses(0).size() else -1
 	if not state.move_spell(hero_id, "", book_pick):
 		_say(state.error)
 		return
+	if restored: _last_stored = {"slot": book_pick, "card": card, "uses": uses}
 	book_pick = -1
 	refresh()
 	# The moved copy stays selected in the reserve.
 	for index in entries.size():
 		if entries[index].card == card and (int(entries[index].uses) == uses or int(entries[index].uses) == -1):
 			reserve_pick = index
+			var row := index / RESERVE_COLUMNS
+			reserve_scroll = clampi(reserve_scroll, maxi(0, row - RESERVE_ROWS + 1), row)
 			break
 	refresh()
 
@@ -312,7 +349,7 @@ func tooltip_at(point: Vector2) -> String:
 		var tip := _spell_tip(str(entry.card), int(entry.uses))
 		if int(entry.count) > 1: tip += "\n" + (_t("Copies: %d") % int(entry.count))
 		var problem := ""
-		if book_cards(0).size() >= ELSpellInventory.book_size(profile): problem = "Move a spell to reserve to make room."
+		if book_cards(0).size() >= ELSpellInventory.book_size(profile) and not book_cards(0).any(func(card: String): return ELRunes.unlimited(profile, hero(), card)): problem = "Move a spell to reserve or drop it onto a book slot."
 		elif not ELSpellInventory.allows(profile, hero(), str(entry.card)): problem = "This hero cannot use that spell's magic color."
 		return tip + "\n\n" + (_t(problem) if not problem.is_empty() else _t("Right click: add to the book."))
 	if TIPS.SpellTt2.has_point(point): return _t("Price of one rune of the selected spell")

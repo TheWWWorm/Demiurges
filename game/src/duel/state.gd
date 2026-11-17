@@ -102,6 +102,8 @@ var next_card := 0
 ## making the other hero discard right now (-1: none); the discarded cards
 ## that answer it are ELCatalog.DISCARD_SUMMONS and DISCARD_RETORTS.
 var _discard_cause := -1
+## The public action being resolved, used only to describe its outcomes.
+var _log_source_card := ""
 
 ## Campaign battles share the mission variables and difficulty with their
 ## adventure session (held weakly; the session owns the encounter).
@@ -1109,6 +1111,12 @@ func _sorcery_traps() -> Array[Dictionary]:
 ## The effect of a resolved spell and its reactions. Caster specialisations
 ## (twin creatures, the elixir draw) roll only when `specs` is set.
 func _resolve_spell(side: int, card: String, rule: Dictionary, target: int, grave_index: int, extra_ether: int, traps: Array[Dictionary], specs: bool) -> void:
+	var previous := _log_source_card
+	if not searching: _log_source_card = card
+	_apply_spell_effect(side, card, rule, target, grave_index, extra_ether, traps, specs)
+	_log_source_card = previous
+
+func _apply_spell_effect(side: int, card: String, rule: Dictionary, target: int, grave_index: int, extra_ether: int, traps: Array[Dictionary], specs: bool) -> void:
 	var hero: Dictionary = heroes[side]
 	# Second game: data attraction copies in play when the spell is cast react even if the spell
 	# removes them. The first game counts the copies left after the spell.
@@ -2052,7 +2060,11 @@ func _use_ability_hooked(id: int, ability: String, target := -1, enchantment_id 
 		for i in listed.size():
 			if listed[i].key == ability: index = i
 	var side := int(entity(id).get("owner", id)) if not entity(id).is_empty() else -1
-	if not _use_ability(id, ability, target, enchantment_id, amount): return false
+	var previous := _log_source_card
+	if not searching: _log_source_card = String(entity(id).get("card", ""))
+	var ok := _use_ability(id, ability, target, enchantment_id, amount)
+	_log_source_card = previous
+	if not ok: return false
 	if index >= 0:
 		var arguments: Array = [float(side), float(id), float(index)]
 		if target >= 0: arguments.append(float(target))
@@ -2812,7 +2824,7 @@ func _end_phase_now() -> bool:
 		# The last card of the hand goes first.
 		while heroes[attacker].hand.size() > 5:
 			var card := _take_card(attacker, hand_display(attacker).back())
-			_emit({"kind": "discard", "side": attacker, "card": card})
+			_emit({"kind": "discard", "side": attacker, "card": card, "hand_limit": true})
 		for c: Dictionary in creatures.values():
 			# Second-game bloodlessness keeps the creature's damage.
 			if not recovery_blocked(c.owner) and not (profile.id == "el2" and _enchantment_count(c.id, "RIOT") > 0): c.damage = 0
@@ -3055,7 +3067,10 @@ func _trigger_damage(card: String, target: int, amount: int, source := -1) -> vo
 	var event := {"kind": "trigger", "card": card, "target": target, "amount": amount}
 	if source >= 0: event["source"] = source
 	_emit(event)
+	var previous := _log_source_card
+	if not searching: _log_source_card = card
 	_damage(target, amount)
+	_log_source_card = previous
 
 ## Original tests the acting player's var 2, not the number
 ## enchantments on the active hero. These known auras add to their caster's
@@ -3237,7 +3252,7 @@ func gift_turns(side: int) -> int:
 	return 2 * count
 
 ## `reject` ("creatures" or "spells") picks normally but keeps nothing of that class.
-func _draw(side: int, reject := "") -> bool:
+func _draw(side: int, reject := "", source_card := "") -> bool:
 	# A fixed-hand study has no deck draws. Returning or creating a card uses
 	# _give_card directly and remains available as part of its combination.
 	if setup.get("puzzle_fixed_hands", false) == true: return false
@@ -3255,7 +3270,9 @@ func _draw(side: int, reject := "") -> bool:
 		slot = selected.slot
 	if not reject.is_empty() and (profile.table("CombatSpells")[card].get("Class") == "Creature") == (reject == "creatures"): return false
 	_give_card(side, card, slot, true)
-	_emit({"kind": "draw", "side": side, "card": card})
+	var drawn := {"kind": "draw", "side": side, "card": card}
+	if not source_card.is_empty(): drawn.source_card = source_card
+	_emit(drawn)
 	return true
 
 ## `front`: the card shows at the left of the hand rail. Drawn cards arrive at the front;
@@ -3307,10 +3324,14 @@ static func hand_order(hero: Dictionary) -> Array[int]:
 	return order
 
 ## Discards up to `count` random cards, one random choice per card.
-func _discard_random(side: int, count: int) -> void:
+func _discard_random(side: int, count: int, source_card := "", reason := "") -> void:
 	for i in count:
 		if heroes[side].hand.is_empty(): return
-		_emit({"kind": "discard", "side": side, "card": _take_card(side, hand_display(side)[random_index(heroes[side].hand.size())])})
+		var card := _take_card(side, hand_display(side)[random_index(heroes[side].hand.size())])
+		var event := {"kind": "discard", "side": side, "card": card}
+		if not source_card.is_empty(): event.source_card = source_card
+		if not reason.is_empty(): event.reason = reason
+		_emit(event)
 
 func hand_uses(side: int, index: int) -> int:
 	return hand_copy_uses(heroes[side], index)
@@ -3512,6 +3533,12 @@ func _witch_wall(blocker: int, id: int) -> bool:
 	return false
 
 func _strike(source: int, target: int, amount: int, poisoned: Array[int]) -> void:
+	var previous := _log_source_card
+	if not searching: _log_source_card = String(entity(source).get("card", ""))
+	_resolve_strike(source, target, amount, poisoned)
+	_log_source_card = previous
+
+func _resolve_strike(source: int, target: int, amount: int, poisoned: Array[int]) -> void:
 	var incoming := amount
 	# Stone skin lowers physical damage by 2 per copy.
 	if not entity(target).is_empty() and _enchantment_count(target, "STSK") > 0:
@@ -3615,7 +3642,7 @@ func _discard_on_hit(source: int, target: int, count: int) -> void:
 		var index := hand_display(target)[random_index(hero.hand.size())]
 		var key := int(_hand_view(hero)[index])
 		var dropped := _take_card(target, index)
-		_emit({"kind": "discard", "side": target, "card": dropped, "hand_key": key})
+		_emit({"kind": "discard", "side": target, "card": dropped, "hand_key": key, "source_card": String(entity(source).get("card", ""))})
 	_discard_cause = previous_cause
 
 ## Returns the damage that landed: zero when a hero's feedback redirected it or
@@ -3813,7 +3840,7 @@ func _kill(id: int) -> void:
 			for e: Dictionary in holder.enchantments:
 				if e.card == "BASO" and int(e.owner) == int(dead.owner): souls += 1
 	for copy in souls:
-		_draw(int(dead.owner))
+		_draw(int(dead.owner), "", "BASO")
 		# EL1 BarbedSoulsEnchantment left-play –
 		# registers Target/Draw on this controller after the draw attempt,
 		# even if the book is empty. One original callback per active copy.
@@ -3873,7 +3900,7 @@ func _kill(id: int) -> void:
 	if profile.id == "el2" and dead.card == "BATT":
 		var previous_cause := _discard_cause
 		_discard_cause = int(dead.owner)
-		_discard_random(1 - int(dead.owner), 1)
+		_discard_random(1 - int(dead.owner), 1, dead.card, "death")
 		_discard_cause = previous_cause
 
 func _unassign(id: int) -> void:
@@ -3899,10 +3926,7 @@ func _remove_creature(id: int, kind: String) -> void:
 	_unassign(id)
 	# Presentation of EL1 Unsummon needs the departed creature's owner
 	# after the creature has left the gameplay dictionary.
-	if kind == "unsummon":
-		_emit({"kind": kind, "target": id, "owner": owner})
-	else:
-		_emit({"kind": kind, "target": id})
+	_emit({"kind": kind, "target": id, "target_card": card, "owner": owner, "original_owner": true_owner})
 	if not ELCatalog.creature_aura(profile, card).is_empty() or global_enchantment_count("WRBN") > 0: _refresh_armies()
 	# Only surviving models receive the original modifier-decrease cue.
 	_war_banner_reactions(banner_before)
@@ -4063,8 +4087,18 @@ func _accept(command: Dictionary, run: Callable) -> bool:
 		if accepted.size() > COMMAND_LOG * 2: accepted = accepted.slice(accepted.size() - COMMAND_LOG)
 	return ok
 
+const LOG_OUTCOMES := ["damage", "heal", "draw", "discard", "return_card", "death", "exile", "unsummon",
+	"enchant", "disenchant", "grave_removed", "summon", "army_changed", "rest", "regenerate",
+	"lifeguard", "barrier", "feedback", "redirect"]
+
 func _emit(data: Dictionary) -> void:
 	if not searching:
+		if data.get("kind") in LOG_OUTCOMES:
+			var target := int(data.get("target", -1))
+			if target >= 2 and not data.has("target_card"):
+				data.target_card = str(creatures.get(target, {}).get("card", ""))
+			if not data.has("source_card") and not _log_source_card.is_empty():
+				data.source_card = _log_source_card
 		history.append(data)
 		event.emit(data)
 		if not scripted_turns and (bool(data.get("script", false)) or str(data.get("kind", "")).begins_with("script_")): scripted_turns = true
@@ -4086,7 +4120,7 @@ func _discard_answer(side: int, card: String, cause: int) -> void:
 	_emit({"kind": "discard_answer", "side": side, "card": card})
 	var previous_cause := _discard_cause
 	_discard_cause = side
-	_discard_random(cause, 3)
+	_discard_random(cause, 3, card)
 	_discard_cause = previous_cause
 
 func _fail(message: String) -> bool:

@@ -152,6 +152,9 @@ func begin() -> void:
 	_body.text = _t("Enlarging the selected art. Cancel keeps what is done; the rest can be prepared later from Options.")
 	_later.visible = false
 	_start.visible = false
+	_close.visible = false
+	_cancel.disabled = false
+	_cancel.text = _t("Cancel")
 	_cancel.visible = true
 	_bar.visible = true
 	_counts.visible = true
@@ -187,16 +190,26 @@ func _done() -> void:
 	_update()
 	# Textures made before now draw their finished pictures.
 	for upscaler: ELIconUpscale in upscalers: upscaler.apply_all()
-	var complete := preparation.done >= preparation.total
-	_title.text = _t("Sharper art is ready") if complete else _t("Sharper art: stopped")
+	if preparation.complete(): _title.text = _t("Sharper art is ready")
+	elif preparation.cancelled: _title.text = _t("Sharper art: stopped")
+	else: _title.text = _t("Sharper art is incomplete")
 	_counts.text = _t("%d of %d sheets · %s elapsed") % [preparation.done, preparation.total, clock(preparation.elapsed())]
 	_counts.text += _backend_status()
-	if preparation.failed > 0: _body.text = _t("Some sheets could not be enlarged and stay as they were.")
-	elif not complete: _body.text = _t("What is done is kept. Prepare the rest later from Options.")
-	else: _body.text = _t("Screens opened from now on use the sharper art.")
+	if preparation.save_failed:
+		_body.text = _t("The cache record could not be saved. Retry to reuse the pictures already written.")
+	elif preparation.failed > 0:
+		_body.text = _t("%d sheets could not be prepared. Retry to prepare the missing sheets.") % preparation.failed
+	elif preparation.cancelled:
+		_body.text = _t("What is done is kept. Prepare the rest later from Options.")
+	else:
+		_body.text = _t("Screens opened from now on use the sharper art.")
+	if preparation.unchanged > 0:
+		_body.text += "\n" + (_t("%d sheets kept their original art.") % preparation.unchanged)
+	_start.text = _t("Retry")
+	_start.visible = not preparation.cancelled and not preparation.complete()
 
 func _end() -> void:
-	var complete := preparation != null and preparation.finished and preparation.done >= preparation.total
+	var complete := preparation != null and preparation.complete()
 	closed.emit(complete)
 	queue_free()
 

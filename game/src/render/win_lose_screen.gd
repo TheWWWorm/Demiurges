@@ -187,9 +187,9 @@ func _place_wait() -> void:
 
 func _layout() -> void:
 	if _art == null or size.x <= 0.0 or size.y <= 0.0: return
-	var factor := minf(size.x / DESIGN.x, size.y / DESIGN.y)
+	var factor := ELFrontMenu.artwork_scale(size, _wide_picture)
 	_art.scale = Vector2(factor, factor)
-	_art.position = ((size - DESIGN * factor) * 0.5).round()
+	_art.position = (size - DESIGN * factor) * 0.5
 	queue_redraw()
 	_art.queue_redraw()
 	if _backdrop != null: _backdrop.queue_redraw()
@@ -206,7 +206,7 @@ func _draw_backdrop() -> void:
 	var factor := _art.scale.x
 	if factor <= 0.0: return
 	var gap := (size / factor - DESIGN) * 0.5
-	if _wide_picture != null and gap.x >= ELFrontMenu.WIDE_MINIMUM: return
+	if ELFrontMenu.use_wide_texture(size, _wide_picture): return
 	if maxf(gap.x, gap.y) < ELFrontMenu.WIDE_MINIMUM: return
 	var cover := maxf(size.x / DESIGN.x, size.y / DESIGN.y)
 	var extent := DESIGN * cover
@@ -231,24 +231,11 @@ func _edge(rect: Rect2, from: Color, to: Color, across: bool) -> void:
 
 func _draw_art() -> void:
 	var tint := Color(1, 1, 1, alpha)
-	var side := (size.x / _art.scale.x - DESIGN.x) * 0.5
-	if _wide_picture != null and side >= ELFrontMenu.WIDE_MINIMUM:
-		draw_wide_picture(_art, _wide_picture, side, tint)
+	if ELFrontMenu.use_wide_texture(size, _wide_picture):
+		ELFrontMenu.draw_wide_texture(_art, _wide_picture, tint)
 		return
 	for piece: Dictionary in pieces:
 		_art.draw_texture_rect_region(piece.texture, piece.rect, piece.source, tint)
-
-## At widescreen sizes, draw in one rectangle so filtering crosses the joins.
-## Narrower windows compress the extensions to keep the outer frame visible.
-static func draw_wide_picture(target: CanvasItem, picture: Texture2D, side: float, tint := Color.WHITE) -> void:
-	if side < DESIGN.y * (16.0 / 9.0) * 0.5 - DESIGN.x * 0.5 - 0.01:
-		ELFrontMenu.draw_wide_texture(target, picture, side, tint)
-		return
-	var margin := (Vector2(picture.get_size()) - DESIGN) * 0.5
-	var outer := minf(side, margin.x)
-	var extent := DESIGN + Vector2(outer * 2.0, 0)
-	target.draw_texture_rect_region(picture, Rect2(Vector2(-outer, 0), extent),
-		Rect2(Vector2(margin.x - outer, margin.y), extent), tint)
 
 func _process(delta: float) -> void:
 	if stage >= 3: return

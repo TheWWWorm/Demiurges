@@ -46,7 +46,8 @@ static func use(director: ELAdventureDirector, actor: Dictionary, building: Dict
 static func new_day(state: ELAdventureSession) -> void:
 	if state.map.profile.id != "el2": return
 	for item: Dictionary in state.objects.values():
-		if item.get("type") in ["hero", "monster"] and item.has("affects"):
+		var kind: String = item.get("type", "")
+		if (kind == "hero" or kind == "monster") and item.has("affects"):
 			for entry: Variant in item.affects:
 				if entry is Dictionary and entry.get("kind") in TIMED: entry.ticks = maxi(int(entry.get("ticks", 0)) - 1, 0)
 			var before: int = item.affects.size()

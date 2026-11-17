@@ -116,6 +116,8 @@ func _first(menu: ELFrontMenu) -> void:
 	if duel.apply(preset(duel), "add_rune", 1) != null:
 		await drag(choices, choices.item_rect(0).get_center(), duel.book_view, duel.book_view.slot_rect(1).get_center())
 		check(int(preset(duel).runes[1]) == 1 and int(preset(duel).runes[0]) == 0, "first game: a rune row dropped on a book spell adds its rune there")
+		await drag(duel.book_view, duel.book_view.slot_rect(1).get_center(), duel.book_view, duel.book_view.slot_rect(0).get_center())
+		check(preset(duel).runes == [1, 0], "first game: a reordered book spell keeps its rune")
 	else:
 		print("NOTE: no rune can be bought for the test preset")
 	# Artifacts.
@@ -197,6 +199,9 @@ func _second(menu: ELFrontMenu) -> void:
 	duel.act("remove_slot", 0)
 	duel.act("add_spell", card)
 	check(preset(duel).cards == [card] and preset(duel).reserve.is_empty(), "second game: the swap test leaves the preset as before")
+	duel.act("add_spell", other)
+	await drag(duel.book_view, duel.book_view.slot_rect(1).get_center(), duel.book_view, duel.book_view.slot_rect(0).get_center())
+	check(preset(duel).cards == [other, card] and preset(duel).reserve.is_empty(), "second game: dragging within the deck swaps two equipped spells")
 	await _tab(duel, 1)
 	list = duel.right_list
 	var skills := _zone(duel, "skills")

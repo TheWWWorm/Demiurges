@@ -1,5 +1,5 @@
 class_name ELWikiPreview
-extends SubViewportContainer
+extends Control
 ## The live creature beside a wiki card page (as the EI remake's WikiPreview),
 ## or a story hero beside a guide that lists `heroes` (Diamanda, the White Lord),
 ## or a map object (a mine, a shop, a shrine) beside a guide that shows `!objects`:
@@ -21,6 +21,8 @@ const OBJECT_TABLES := ["ResourceMine", "ResourceCut", "ManaNodes", "Buildings",
 	"NewBuildings", "GlobalSpellCut", "Artefacts", "TerrObj"]
 ## The bounding-sphere framing leaves wide margins; the reader starts closer.
 const OPENING_ZOOM := 0.72
+const RENDER_SCALE := 2.0
+const MAX_RENDER_SIDE := 1536
 const ANIMATIONS := ["cidle", "uattack", "ushot", "uhit", "udeath", "usummon", "utap", "uuntap", "uinstant"]
 
 signal creature_changed
@@ -35,13 +37,24 @@ var _opening_pitch := PITCH
 var _zoom := OPENING_ZOOM
 var _dragging := false
 var _sound: AudioStreamPlayer
+var _picture: TextureRect
 var _sound_directory := ""
 var _profile: ELProfile
 
 func _ready() -> void:
+	_picture = TextureRect.new()
+	_picture.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	_picture.stretch_mode = TextureRect.STRETCH_SCALE
+	_picture.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR
+	_picture.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(_picture)
+	_picture.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	if viewport != null: _picture.texture = viewport.get_texture()
 	_sound = AudioStreamPlayer.new()
 	add_child(_sound)
 	resized.connect(_refit)
+	get_viewport().size_changed.connect(_refit)
+	_refit()
 
 ## A viewport holding `code`'s creature, framed; null when the game has no
 ## model for it. `transparent` leaves the background clear (screenshots).
@@ -203,6 +216,7 @@ func _show(profile: ELProfile, staged: SubViewport, sounds: String, pitch := PIT
 		viewport.queue_free()
 		viewport = null
 	viewport = staged
+	if _picture != null: _picture.texture = viewport.get_texture() if viewport != null else null
 	if _sound != null: _sound.stop()
 	if viewport == null:
 		model = null
@@ -211,7 +225,6 @@ func _show(profile: ELProfile, staged: SubViewport, sounds: String, pitch := PIT
 	_profile = profile
 	_sound_directory = sounds
 	_opening_pitch = pitch
-	stretch = true
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	custom_minimum_size = Vector2(320, 320)
 	add_child(viewport)
@@ -256,6 +269,13 @@ func reset_view() -> void:
 
 func _refit() -> void:
 	if viewport == null: return
+	var area := size
+	if is_inside_tree(): area *= (get_viewport().get_final_transform() * get_global_transform_with_canvas()).get_scale().abs()
+	var longest := maxf(area.x, area.y)
+	if longest > 0.0:
+		var scale := minf(RENDER_SCALE, MAX_RENDER_SIDE / longest)
+		var pixels := Vector2i((area * scale).round()).max(Vector2i(2, 2))
+		if viewport.size != pixels: viewport.size = pixels
 	var opening := 1.0 / OPENING_ZOOM if viewport.size.x < viewport.size.y else 1.0
 	_distance = frame(viewport, _yaw, _pitch, _zoom * opening)
 

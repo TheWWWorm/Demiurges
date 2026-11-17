@@ -567,6 +567,9 @@ func _hot_seat_decks(profile: ELProfile) -> void:
 	var after: Dictionary = duel_match.presets[1]
 	check(swapped and after.cards[0] == code and int(after.reserve.get(before.cards[0], 0)) == int(before.reserve.get(before.cards[0], 0)) + 1, "el2 #77: a reserve spell replaces an active one in the match's preset")
 	check(Dictionary(duel_match.presets[0]).cards == before.cards, "el2 #77: the other player's deck is unchanged")
+	panel._drop_on_active("active", 0, 1)
+	var reordered := link.round_preset()
+	check(reordered.cards[0] == after.cards[1] and reordered.cards[1] == code and reordered.reserve == after.reserve, "el2: dragging within the between-round deck changes its order")
 	var next := duel_match.start_round(profile)
 	check(next != null and (Array(next.heroes[1].deck) + Array(next.heroes[1].hand)).has(code), "el2 #77: the next round deals the changed deck")
 	check(not link.swap_round_spell(0, "no such spell"), "el2 #77: a spell outside the reserve is refused")
@@ -1004,6 +1007,16 @@ func _second_prompt() -> void:
 				print("SKIP: el2 #139: the battle did not open")
 			else:
 				var side: int = view._battle_player_side(view.duel)
+				var opening: ELDuel = view.duel
+				var starting_health: int = opening.heroes[side].health
+				var starting_day := map.state.day
+				opening.heroes[side].health -= 1
+				map.state.day += 1
+				await view._retry_battle()
+				check(view.duel != opening and view.duel.heroes[side].health == starting_health and view.campaign_view.state.day == starting_day,
+					"Try again restores the campaign and duel to the start of the encounter")
+				map = view.campaign_view
+				director = map.director
 				view._surrender_encounter()
 				await _wait(2)
 				check(view.duel.phase == ELDuel.Phase.FINISHED and not map.visible and view.models[side].clip == "udeath" and not view.ending_over(),

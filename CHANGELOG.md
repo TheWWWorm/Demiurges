@@ -2,6 +2,24 @@
 
 Versions follow [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html) from 0.3.0 on.
 
+## Unreleased
+
+## 0.18.1
+
+- Duel spells and abilities can be aimed while the previous cast is still showing. The battle plays the queued casts before showing the next phase.
+- The surrender dialog offers **Try again** in local battles that can be restarted from their opening state. Its bronze restart arrow uses the same metal button artwork as OK and Cancel.
+- Fixed sharper-art seams on the Etherlords II campaign panels and battle menu. The main menu and result screens fit the full artwork at 16:10 without stretching.
+- Etherlords II fades newly revealed figures in, updates fog corners only where visibility changed, and animates collected resource piles out of the map.
+- Etherlords II reduces fog, HUD and scenery work while walking. Picking up a resource pile updates only its map tiles. Path tracing skips buffer readbacks for unchanged map batches.
+- Adventure characters keep their facing when their model changes and respond to scripted rotations in both games.
+- Save thumbnails render offscreen, so Quick Save and end-turn autosaves keep the adventure HUD visible.
+- The Etherlords spellbook's return arrow can put an advanced spell back over the restored cantrip. Dragging equipped spells onto another slot reorders the book in spell menus and deck editors, with runes and underlying cantrips kept with the spell.
+- The battle log (L) records damage, deaths, healing, hand changes, enchantments and other outcomes, with the triggering spell when known. It names the spell a dying Bat made you discard.
+- Renderer restarts pass the selected graphics SDK owner explicitly. Exported reports include SDK activation and presentation status.
+- Sharper-art preparation retries failed sheets, checks saved files before reporting completion, and offers Retry for missing sheets.
+- Path Tracing refreshes its texture cache when sharper 3D textures are applied. The in-game wiki renders its live previews at up to twice their display resolution, and the website uses higher-resolution creature, hero and map-object images.
+- Etherlords II no longer pauses play with a popup when a resource site runs out ([#161](https://github.com/TheWWWorm/Demiurges/issues/161)).
+
 ## 0.18.0
 
 - **Sharper textures** (Options › Display) prepares 2× textures for opaque creature and hero skins and battle scenery at any screen size. Preparation uses Vulkan on supported Windows PCs and automatically falls back to the CPU.

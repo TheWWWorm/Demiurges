@@ -199,6 +199,12 @@ func _catalog(screen: ELWikiScreen, shots: String) -> void:
 		await process_frame
 		check(screen._preview != null and screen._preview.model != null, "%s: a creature page shows the live model" % key)
 	if screen._preview != null:
+		var preview := screen._preview
+		var display_size := preview.size * (preview.get_viewport().get_final_transform() * preview.get_global_transform_with_canvas()).get_scale().abs()
+		var render_size := Vector2(preview.viewport.size)
+		var expected_scale := minf(2.0, ELWikiPreview.MAX_RENDER_SIDE / maxf(display_size.x, display_size.y))
+		check(render_size.distance_to((display_size * expected_scale).round()) <= 1.0, "the wiki renders above the display size with the same aspect ratio")
+		check(preview._picture.texture == preview.viewport.get_texture(), "the wiki displays the supersampled viewport")
 		var before := screen._preview.pivot.rotation.y
 		screen._preview.turn(Vector2(60, 0))
 		check(not is_equal_approx(before, screen._preview.pivot.rotation.y), "dragging turns the model")

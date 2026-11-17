@@ -87,6 +87,9 @@ static var forced_folder := ""
 static var tasks_started := 0
 static var loads := 0
 static var load_usec := 0
+## Existing 3D texture resources changed in place. The ray tracer keeps a
+## separate copy of their pixels and needs to refresh it.
+static var texture_revision := 0
 
 var edition := ""
 ## The kept pictures: the manifest of the screen's factor.
@@ -212,14 +215,22 @@ func read_manifest(factor: int) -> Dictionary:
 		return empty
 	return parsed
 
-func write_manifest() -> void:
-	DirAccess.make_dir_recursive_absolute(folder())
-	var part := "%s.%08x.part" % [manifest_path(int(manifest.factor)), randi()]
-	var file := FileAccess.open(part, FileAccess.WRITE)
-	if file == null: return
-	file.store_string(JSON.stringify(manifest))
-	file.close()
-	DirAccess.rename_absolute(part, manifest_path(int(manifest.factor)))
+func write_manifest() -> bool:
+	if DirAccess.make_dir_recursive_absolute(folder()) != OK: return false
+	return ELSafeFile.write_text(manifest_path(int(manifest.factor)), JSON.stringify(manifest))
+
+## Check the WebP envelope without decoding all the cached art.
+static func _kept_picture(path: String) -> bool:
+	var file := FileAccess.open(path, FileAccess.READ)
+	if file == null: return false
+	var header := file.get_buffer(16)
+	return header.size() == 16 and header.slice(0, 4).get_string_from_ascii() == "RIFF" \
+		and header.decode_u32(4) + 8 == file.get_length() and header.slice(8).get_string_from_ascii() == "WEBPVP8L"
+
+func _kept_sheet(record: Variant) -> bool:
+	if not record is Array or record.size() != 2 or not record[1] is String: return false
+	var name: String = record[1]
+	return name.is_empty() or (name == name.get_file() and _kept_picture(folder().path_join(name)))
 
 ## The sheets of the edition the switches ask for: archive entries, sorted
 ## (icons first).
@@ -244,7 +255,7 @@ func status() -> Dictionary:
 	var done := 0
 	var wanted := eligible()
 	for entry: String in wanted:
-		if sheets.has(entry): done += 1
+		if _kept_sheet(sheets.get(entry)): done += 1
 	return {"done": done, "total": wanted.size(), "stale": String(current.get("identity", "")) != _identity and not sheets.is_empty(),
 		"factor": factor, "bytes": disk_bytes(folder())}
 
@@ -349,6 +360,7 @@ func _restore(entry: String) -> void:
 		texture.set_image(known.image)
 		texture.remove_meta(ORIGINAL)
 	known.erase(&"sharp")
+	if kind_of(entry) == KIND_TEXTURE: texture_revision += 1
 
 ## Brings textures made so far in line with the switches and the kept
 ## pictures: after a preparation or a switch was changed, while a screen
@@ -367,7 +379,9 @@ func apply_all() -> void:
 		if known.has(&"sharp"): continue
 		var bytes := _archive.read(entry) if _archive != null else PackedByteArray()
 		var sharp := load_sharp(path, bytes, Vector2i(known.image.get_size()))
-		if sharp != null: _show(entry, sharp)
+		if sharp != null:
+			_show(entry, sharp)
+			if kind_of(entry) == KIND_TEXTURE: texture_revision += 1
 
 ## Every live edition's upscaler.
 static func all() -> Array[ELIconUpscale]:
@@ -397,7 +411,7 @@ static func estimate(upscalers: Array) -> Dictionary:
 			if location.size() == 3 and int(location[2]) > 76: size = maxi(1, (int(location[2]) - 76) / 3)
 			var scale := sheet_factor(entry, target_factor())
 			output_pixels += size * scale * scale
-			if kept.has(entry): continue
+			if upscaler._kept_sheet(kept.get(entry)): continue
 			sheets += 1
 			pixels += size
 	var per_megapixel := SECONDS_PER_MEGAPIXEL_ARM if OS.has_feature("arm64") or OS.has_feature("arm32") else SECONDS_PER_MEGAPIXEL
@@ -419,7 +433,7 @@ static func prepare_sheet(job: Dictionary) -> void:
 	var name := "%s.%s.x%d.webp" % [String(job.entry).get_basename().validate_filename(), key, factor]
 	var path := String(job.folder).path_join(name)
 	job.digest = key
-	if FileAccess.file_exists(path):
+	if _kept_picture(path):
 		job.file = name
 		stats.cached = true
 		return
@@ -458,10 +472,12 @@ static func prepare_sheet(job: Dictionary) -> void:
 	# Written aside first: a run that ends half way keeps no broken picture,
 	# and two games running at once never write the same file.
 	var part := "%s.%08x.part" % [path, randi()]
-	if picture.save_webp(part, false) != OK: return
+	if picture.save_webp(part, false) != OK or not _kept_picture(part):
+		DirAccess.remove_absolute(part)
+		return
 	if DirAccess.rename_absolute(part, path) != OK:
 		DirAccess.remove_absolute(part)
-		if not FileAccess.file_exists(path): return
+		if not _kept_picture(path): return
 	job.file = name
 
 
@@ -489,7 +505,9 @@ class Preparation:
 	## Sheets kept already when the run began (not counted in its speed).
 	var skipped := 0
 	var computed := 0
+	var unchanged := 0
 	var failed := 0
+	var save_failed := false
 	var gpu_sheets := 0
 	var use_gpu := OS.has_feature("windows") and ClassDB.class_has_method(&"ELNativeAssets", &"upscale_gpu")
 	var started_usec := 0
@@ -524,10 +542,12 @@ class Preparation:
 			if limit > 0: wanted = wanted.slice(0, limit)
 			for entry: String in wanted:
 				total += 1
-				if sheets.has(entry):
+				if upscaler._kept_sheet(sheets.get(entry)):
 					done += 1
 					skipped += 1
+					if String(sheets[entry][1]).is_empty(): unchanged += 1
 					continue
+				sheets.erase(entry)
 				var location := upscaler._archive.locate(entry)
 				if location.size() < 3 or int(location[2]) <= 0:
 					# An in-memory archive (an imported data pack): read here.
@@ -550,10 +570,12 @@ class Preparation:
 			_running.erase(task)
 		while not cancelled and _running.size() < JOBS and _next < _plan.size():
 			var item: Array = _plan[_next]
+			var retry := item.size() > 3
+			if retry and not _running.is_empty(): break
 			_next += 1
 			var upscaler: ELIconUpscale = item[0]
-			var job := {"entry": item[1], "flags": _flags, "factor": ELIconUpscale.sheet_factor(item[1], int(upscaler.manifest.factor)), "folder": upscaler.folder(), "gpu": use_gpu,
-				"weights": ELIconUpscale.weights(), "threads": ceili(ELIconUpscale.threads() / float(JOBS)), "stats": {}, "upscaler": upscaler, "started": Time.get_ticks_usec()}
+			var job := {"entry": item[1], "flags": _flags, "factor": ELIconUpscale.sheet_factor(item[1], int(upscaler.manifest.factor)), "folder": upscaler.folder(), "gpu": use_gpu and not retry,
+				"weights": ELIconUpscale.weights(), "threads": ceili(ELIconUpscale.threads() / float(JOBS)), "stats": {}, "upscaler": upscaler, "item": item}
 			if item[2] is PackedByteArray: job.bytes = item[2]
 			else: job.location = item[2]
 			ELIconUpscale.tasks_started += 1
@@ -561,9 +583,11 @@ class Preparation:
 		if _running.is_empty() and (cancelled or _next >= _plan.size()):
 			for upscaler: ELIconUpscale in upscalers:
 				if int(upscaler.manifest.get("factor", 0)) < 2: continue
-				upscaler.write_manifest()
-				# A finished set replaces every other factor's pictures.
-				if not cancelled and upscaler.complete(): upscaler.prune()
+				if not upscaler.write_manifest():
+					save_failed = true
+					upscaler.manifest = upscaler.read_manifest(int(upscaler.manifest.factor))
+				# Only a saved, finished set replaces every other factor's pictures.
+				elif not cancelled and upscaler.complete(): upscaler.prune()
 			finished = true
 		return finished
 
@@ -574,10 +598,16 @@ class Preparation:
 		if job.has("file"):
 			upscaler.manifest.sheets[job.entry] = [job.digest, job.file]
 			done += 1
+			if String(job.file).is_empty(): unchanged += 1
 			if stats.has("compute_usec"):
 				computed += 1
 				if stats.get("gpu", false): gpu_sheets += 1
-		elif not _flags[0]: failed += 1
+		elif not cancelled:
+			# Retry once on the CPU, after the other sheets, without a second
+			# job competing for memory.
+			var item: Array = job.item
+			if item.size() == 3: _plan.append(item + [true])
+			else: failed += 1
 		if stats.has("pixels"):
 			_pixels_done += int(stats.pixels)
 			_work_usec = Time.get_ticks_usec() - started_usec
@@ -585,6 +615,9 @@ class Preparation:
 		if _unsaved >= SAVE_EVERY:
 			_unsaved = 0
 			upscaler.write_manifest()
+
+	func complete() -> bool:
+		return finished and not cancelled and not save_failed and done == total
 
 	## Seconds the run has taken.
 	func elapsed() -> float:

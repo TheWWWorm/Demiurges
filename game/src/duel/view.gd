@@ -321,6 +321,8 @@ func _ready() -> void:
 	if get_tree().current_scene == self and ELCrashReport.instance == null:
 		var report := ELCrashReport.new()
 		report.options_summary = _options_summary
+		report.graphics_diagnostics = func() -> Dictionary:
+			return graphics_sdk.diagnostic_report() if is_instance_valid(graphics_sdk) and ELGraphicsSDK.engine_has_sdk() else {}
 		get_tree().root.add_child.call_deferred(report)
 	settings.load_file()
 	if get_tree().current_scene == self:
@@ -567,6 +569,9 @@ func _load_profiles() -> void:
 				profiles[edition] = data
 				ELContentLibrary.link_folder(edition, found[edition])
 
+var _practice_restart_seed := -1
+var _encounter_start: Dictionary = {}
+
 ## `battle_seed` < 0: a new seed each battle, except in --demo (and the
 ## checks that run it), which keep the fixed one so a battle can be repeated.
 func _start(edition: String, options: Dictionary = {}, restored: ELDuel = null, battle_seed := -1) -> void:
@@ -612,6 +617,7 @@ func _start(edition: String, options: Dictionary = {}, restored: ELDuel = null, 
 	auto_combat = false
 	profile = profiles[edition]
 	duel = next_duel
+	_practice_restart_seed = battle_seed if restored == null else -1
 	match_options = duel.setup.duplicate(true)
 	stage = Node3D.new()
 	add_child(stage)
@@ -1252,9 +1258,9 @@ func _target(id: int) -> void:
 			inspect_graveyard = false
 			_refresh()
 		return
-	# The original takes no command while a hit or effect is still to land:
-	# a figure's shown values may not be the rules' yet.
-	if _display_lagging() or not _hits_waiting.is_empty(): return
+	# Selected spells and abilities validate against the settled rules.
+	# Their cues enter the same presentation queue as the phase change.
+	if selection < 0 and ability_selection.is_empty() and (_display_lagging() or not _hits_waiting.is_empty()): return
 	# A creature still waiting for its arrival (a cast or script summon) is
 	# not on screen yet.
 	if id >= 2 and models.has(id) and bool(models[id].get_meta("arriving", false)): return
@@ -2149,6 +2155,9 @@ func _on_duel_event(data: Dictionary) -> void:
 		# no values of its own: what the rules change around it shows with
 		# the event that reports the change (a drain's heal after its effect).
 		var kind := String(data.get("kind", ""))
+		if _campaign_battle() == duel and strategic_session == null and kind in ["cast", "discard"]:
+			var source := " from " + str(data.source_card) if data.has("source_card") else ""
+			ELCrashReport.trace("battle %s: side %s, card %s%s, turn %d" % [kind, data.get("side", "?"), data.get("card", "?"), source, duel.turn_serial])
 		if not (kind.ends_with("_cue") or kind in ["combat_ability", "camera_cue", "combat_event", "attack_tax_effect"]):
 			data.shown = _display_stamp()
 		# A life drain heals when its DrainLife effect reaches the hero.
@@ -2329,6 +2338,7 @@ func _event(data: Dictionary) -> void:
 		_before_turn_cleanup.clear()
 		return
 	_note_shown(data)
+	_log_battle_outcome(data)
 	if data.get("kind") in CAST_KINDS: _cast_until = elapsed + _cast_seconds(data)
 	if not _effect_cast.is_empty():
 		if profile.id == "el1" and _effect_cast.card == "FRNT" and data.kind == "fury_result":
@@ -2379,6 +2389,9 @@ func _event(data: Dictionary) -> void:
 		# A later action in the same frame no longer waits for the cast's cue.
 		if data.kind in ["strike", "phase", "ability", "combat_ability"]: _effect_cast.hit = 0.0
 	match data.kind:
+		"discard":
+			if data.get("source_card") == "BATT" and data.get("reason") == "death" and not _hot_seat() and _local_side(int(data.side)):
+				_notice(_t("The dying Bat made you discard %s.") % duel.card_name(data.card))
 		"army_changed":
 			var id := int(data.target)
 			var side := int(data.side)
@@ -2406,7 +2419,10 @@ func _event(data: Dictionary) -> void:
 				_script_arrival(int(c.id), 0.0)
 			elif profile.id in ["el1", "el2"] and models.has(c.id):
 				_enter(c.id)
-			_log("%s summons %s." % [_side_name(c.owner), duel.card_name(c.card)])
+			var source_card := str(data.get("source_card", ""))
+			if not source_card.is_empty() and source_card != String(c.card):
+				_log(_t("%s puts %s into play during %s.") % [_side_name(c.owner), duel.card_name(c.card), duel.card_name(source_card)])
+			else: _log(_t("%s summons %s.") % [_side_name(c.owner), duel.card_name(c.card)])
 		"cast":
 			var summon := duel.is_summon(data.card)
 			var animation := _cast_clip(int(data.side), String(data.card))
@@ -2600,7 +2616,6 @@ func _event(data: Dictionary) -> void:
 				call_deferred("_remove_model", id)
 		"heal":
 			_float_number(data.target, -int(data.amount))
-			if data.get("skill") == "REGN": _log("%s regenerates 1 health." % _side_name(data.target))
 			# Complicity's regeneration hook (EL1, EL2)
 			# plays GainLife once at each healed holder's hero.
 			if data.get("card") == "COPL" and profile.id in ["el1", "el2"] and models.has(int(data.target)):
@@ -2834,8 +2849,8 @@ func _event(data: Dictionary) -> void:
 					effects.trigger(data.card, {"Start": [models[int(data.source)]], "Finish": [models[data.target]], "Target": [models[data.target]]})
 				else:
 					effects.trigger(data.card, {"Target": [models[data.target]], "Start": [models.get(1 - owner)]})
-			var target_name := _side_name(data.target) if data.target < 2 else duel.card_name(duel.entity(data.target).get("card", ""))
-			_log("%s deals %d damage to %s." % [duel.card_name(data.card), data.amount, target_name])
+			if data.amount == 0:
+				_log(_t("%s triggers on %s.") % [duel.card_name(data.card), _log_target(data)])
 		"skill":
 			var skill := ELHeroSkills.definition(profile, data.skill, int(duel.heroes[data.side].skills[data.skill]))
 			_log("%s draws an extra spell with %s." % [_side_name(data.side), profile.text(str(skill.get("Name", data.skill)))])
@@ -2897,7 +2912,6 @@ func _event(data: Dictionary) -> void:
 			_float_text(data.target, "Regeneration", Color("91dcc2"), true)
 		"disenchant":
 			_float_text(data.target, "Disenchanted", Color("91dcc2"), true)
-			_log("%s is removed." % duel.card_name(data.card))
 		"artifact":
 			_announce("T_USE_ARTIFACT", [_hero_name(data.side), str(data.get("title", duel.card_name(data.card)))], int(data.side))
 			# The artifact's own effects (its spell's cast visual), without the hero's cast gesture.
@@ -5418,10 +5432,82 @@ func _spec_text(code: String, field: String, fallback: String) -> String:
 		value = _original_text(str(specs.get("DRSK", {}).get(field, "")), "")
 	return fallback if value.is_empty() else value
 
+func _log_target(data: Dictionary) -> String:
+	var target := int(data.get("target", -1))
+	if target in [0, 1]: return _hero_name(target)
+	var card := str(data.get("target_card", duel.entity(target).get("card", "")))
+	return duel.card_name(card) if not card.is_empty() else _t("Creature")
+
+## Log outcomes once, as the battle presents them. Only the current player's
+## private hand is named. Hot-seat players share this log across handovers.
+func _log_battle_outcome(data: Dictionary) -> void:
+	var line := ""
+	var source := str(data.get("source_card", ""))
+	match String(data.kind):
+		"draw", "discard", "return_card":
+			var side := int(data.side)
+			var hero := _hero_name(side)
+			var reveal := not demo and not _hot_seat() and _local_side(side)
+			var card := duel.card_name(data.card) if reveal else ""
+			match String(data.kind):
+				"draw":
+					line = _t("%s draws %s.") % [hero, card] if reveal else _t("%s draws a spell.") % hero
+				"return_card":
+					line = _t("%s returns %s to hand.") % [hero, card] if reveal else _t("%s returns a spell to hand.") % hero
+				"discard":
+					if source == "BATT" and data.get("reason") == "death":
+						if reveal: _log(_t("The dying Bat made you discard %s.") % card)
+						else: _log(_t("The dying Bat makes %s discard a spell.") % hero)
+						return
+					line = _t("%s discards %s.") % [hero, card] if reveal else _t("%s discards a spell.") % hero
+					if data.get("hand_limit", false):
+						_log(_t("%s (five-spell hand limit)") % line)
+						return
+		"discard_answer":
+			line = _t("%s triggers when discarded.") % duel.card_name(data.card)
+		"damage":
+			line = _t("%s takes %d damage.") % [_log_target(data), data.amount]
+		"heal":
+			if data.amount > 0: line = _t("%s recovers %d health.") % [_log_target(data), data.amount]
+			elif data.amount < 0: line = _t("%s loses %d health.") % [_log_target(data), -int(data.amount)]
+			if data.has("card"): source = str(data.card)
+			if data.get("skill") == "REGN": line = _t("%s regenerates 1 health.") % _log_target(data)
+		"death":
+			line = _t("%s dies.") % _log_target(data)
+		"exile":
+			line = _t("%s is exiled.") % _log_target(data)
+		"unsummon":
+			var owner := int(data.get("original_owner", data.get("owner", -1)))
+			if owner in [0, 1]: line = _t("%s returns to the hand of %s.") % [_log_target(data), _hero_name(owner)]
+		"army_changed":
+			line = _t("%s comes under the control of %s.") % [_log_target(data), _hero_name(data.side)]
+		"enchant":
+			line = _t("%s takes effect on %s.") % [duel.card_name(data.card), _log_target(data)]
+		"disenchant":
+			line = _t("%s is removed from %s.") % [duel.card_name(data.card), _log_target(data)]
+		"grave_removed":
+			line = _t("%s leaves the graveyard of %s.") % [duel.card_name(data.card), _hero_name(data.side)]
+		"regenerate":
+			line = _t("%s regenerates.") % _log_target(data)
+		"rest":
+			line = _t("%s is forced to rest.") % _log_target(data)
+		"barrier":
+			line = _t("Energy Barrier reduces the damage to %s.") % _log_target(data)
+		"lifeguard":
+			line = _t("Lifeguard protects %s from the hit.") % _log_target(data)
+		"feedback":
+			line = _t("Damage aimed at %s is reflected.") % _log_target(data)
+		"redirect":
+			line = _t("Damage aimed at %s is redirected to its creatures.") % _log_target(data)
+	if line.is_empty(): return
+	if not source.is_empty() and not (data.kind == "enchant" and source == data.get("card")):
+		line = _t("%s (during %s)") % [line, duel.card_name(source)]
+	_log(line)
+
 ## The battle log (L) keeps the whole battle, up to LOG_LINES lines, and
 ## scrolls with the wheel or its bar; it follows the newest line unless the
 ## player has scrolled up to read.
-const LOG_LINES := 500
+const LOG_LINES := 1000
 ## Lines were logged that the log's text box does not hold yet (_show_log).
 var _log_stale := false
 
@@ -7047,11 +7133,12 @@ func _relaunch_args(marked: bool) -> PackedStringArray:
 		elif arg in ["--rendering-method", "--rendering-driver"]:
 			skip = true
 		elif arg.begins_with("--graphics-sdk="):
-			# The owner file names the upscaler's vendor for the next start.
+			# The saved choice replaces any stale command-line owner.
 			pass
 		else:
 			args.append(arg)
 	args.append_array(ELHardwareCheck.renderer_args(int(settings.values.renderer) == 1 or ELGraphicsSDK.needs_forward_plus(settings.values)))
+	if ELGraphicsSDK.engine_has_sdk(): args.append("--graphics-sdk=" + ELGraphicsSDK.wanted_owner(settings.values))
 	var user := PackedStringArray(OS.get_cmdline_user_args())
 	if user.has("--renderer-restarted"): user.remove_at(user.find("--renderer-restarted"))
 	if marked: user.append("--renderer-restarted")
@@ -7067,11 +7154,12 @@ func _ensure_renderer() -> bool:
 	if get_tree().current_scene != self or OS.has_feature("web") or OS.has_feature("mobile"): return false
 	# The upscaler's vendor is set up when the engine starts: a changed
 	# choice (or a missing file) restarts the game once, like the renderer.
-	var owner_changed := ELGraphicsSDK.write_owner_file(settings.values)
+	ELGraphicsSDK.write_owner_file(settings.values)
 	if OS.has_feature("editor"): return false
 	if OS.get_cmdline_user_args().has("--renderer-restarted") or OS.get_cmdline_args().has("--rendering-method"): return false
-	var wanted := "forward_plus" if int(settings.values.renderer) == 1 else "gl_compatibility"
-	if RenderingServer.get_current_rendering_method() == wanted and not (owner_changed and ELGraphicsSDK.needs_restart(settings.values)): return false
+	var forward := int(settings.values.renderer) == 1 or ELGraphicsSDK.needs_forward_plus(settings.values)
+	var wanted := "forward_plus" if forward else "gl_compatibility"
+	if RenderingServer.get_current_rendering_method() == wanted and not ELGraphicsSDK.needs_restart(settings.values): return false
 	OS.create_process(OS.get_executable_path(), _relaunch_args(true))
 	get_tree().quit()
 	return true
@@ -7211,7 +7299,7 @@ func _battle_host() -> ELFrontMenu:
 			# First game: the general page's Load, Main menu and Quit work in a
 			# battle as on the map (player report #65).
 			match command:
-				"Surrender": _surrender_battle()
+				"Surrender": _ask_surrender()
 				"GOLoad": _esc_load()
 				"GOMenu": _esc_exit_to_menu()
 				"GOQuit": ELAudio.quiet_quit(get_tree())
@@ -7352,7 +7440,7 @@ func _begin_campaign(edition: String, scenario: Dictionary, difficulty: int, res
 	campaign_view.campaign_map_requested.connect(_show_campaign_map)
 	if campaign_view.director.encounter != null:
 		var encounter := campaign_view.director.encounter
-		_begin_encounter(encounter.hero_id, encounter.opponent_id)
+		_begin_encounter(encounter.hero_id, encounter.opponent_id, restored.is_empty())
 		if online == null or not online.observes_battle():
 			var combat_view: Dictionary = restored.camera.get("battle", {})
 			var session := ELMatchSave.session(combat_view)
@@ -7545,7 +7633,7 @@ func _battle_player_side(battle: ELDuel) -> int:
 	if battle != null and battle == _campaign_battle(): return campaign_view.director.encounter.player_side()
 	return 0
 
-func _begin_encounter(_hero: int, _opponent: int) -> void:
+func _begin_encounter(_hero: int, _opponent: int, fresh := true) -> void:
 	var battle := _campaign_battle()
 	if battle == null: return
 	if strategic_session != null and strategic_session.observes_battle():
@@ -7561,6 +7649,10 @@ func _begin_encounter(_hero: int, _opponent: int) -> void:
 	# A map battle, new or loaded from a save, draws afresh from here (an
 	# online map keeps the shared random state).
 	if strategic_session == null: battle.reseed()
+	_encounter_start = {}
+	if fresh and strategic_session == null and not campaign_view.state.tutorial:
+		var codec := ELAdventureSave.new()
+		_encounter_start = codec.encode(campaign_view.director, campaign_view.camera_state()).duplicate(true)
 	_start(battle.profile.id, battle.setup, battle)
 	ui.show()
 	_show_map_affects()
@@ -7587,6 +7679,7 @@ func _return_from_encounter() -> void:
 	elif not campaign_view.director.finish_encounter():
 		_notice(campaign_view.director.error)
 		return
+	_encounter_start.clear()
 	menu.hide()
 	stage.hide()
 	stage.process_mode = Node.PROCESS_MODE_DISABLED
@@ -9149,8 +9242,8 @@ func _expedition_checkpoint(previous: Dictionary = {}) -> bool:
 	if reverted: _expedition_screen.message(failure)
 	return saved
 
-func _start_expedition_battle() -> void:
-	var battle := expedition_run.build_battle()
+func _start_expedition_battle(fresh := false) -> void:
+	var battle := expedition_run.build_battle(fresh)
 	if battle == null:
 		_expedition_screen.message(expedition_run.error)
 		return
@@ -9669,7 +9762,7 @@ func _open_esc_menu() -> void:
 			return
 		ui.add_child(esc_menu)
 		esc_menu.closed.connect(_close_esc_menu)
-		esc_menu.surrender_requested.connect(func(): _ask_battle("T_MB_SURRENDER", _esc_surrender))
+		esc_menu.surrender_requested.connect(_ask_surrender)
 		esc_menu.load_requested.connect(_esc_load)
 		esc_menu.encyclopaedia_requested.connect(func():
 			var host := _battle_host()
@@ -9693,12 +9786,48 @@ func _close_esc_menu() -> void:
 	_refresh()
 
 ## The original question box over the battle; OK runs `on_ok`.
-func _ask_battle(key: String, on_ok: Callable) -> void:
+func _ask_battle(key: String, on_ok: Callable, on_retry: Callable = Callable()) -> void:
 	var host := _battle_host()
 	if host == null: return
-	host.ask_hosted(profile.text(key).strip_edges(), on_ok)
+	host.ask_hosted(profile.text(key).strip_edges(), on_ok, on_retry)
 	options_layer.show()
 	host.show()
+
+func _ask_surrender() -> void:
+	var retry := Callable()
+	if _can_retry_battle(): retry = _retry_battle
+	_ask_battle("T_MB_SURRENDER", _esc_surrender, retry)
+
+func _can_retry_battle() -> bool:
+	if duel == null or duel.phase == ELDuel.Phase.FINISHED or demo or replay_player != null or combat_tutorial != null or network_duel != null or strategic_session != null: return false
+	if _campaign_battle() != null: return not _encounter_start.is_empty()
+	return duel_match != null or _expedition_battle != null or _practice_restart_seed >= 0
+
+func _retry_battle() -> void:
+	if not _can_retry_battle(): return
+	_close_esc_menu()
+	if _campaign_battle() != null:
+		var checkpoint := _encounter_start
+		var codec := ELAdventureSave.new()
+		var restored := codec.decode(checkpoint, profiles)
+		if restored.is_empty():
+			_notice(codec.error)
+			return
+		var state: ELAdventureSession = restored.state
+		var rng: int = restored.director.encounter.battle.rng_state
+		await _begin_campaign(state.map.profile.id, {"file_name": state.map.id, "script": state.script_name}, state.difficulty, restored)
+		if _campaign_battle() != null and campaign_view.state == state:
+			duel.rng_state = rng
+			_encounter_start = checkpoint
+	elif _expedition_battle != null:
+		_start_expedition_battle(true)
+	elif duel_match != null:
+		if match_recording != null and match_recording.tracking(duel):
+			match_recording.untrack()
+			match_recording.rounds.pop_back()
+		_play_match_round()
+	else:
+		_start(profile.id, match_options, null, _practice_restart_seed)
 
 func _esc_surrender() -> void:
 	_close_esc_menu()

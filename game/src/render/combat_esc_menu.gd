@@ -231,6 +231,15 @@ class MenuButton3 extends BaseButton:
 	func _ready() -> void:
 		mouse_entered.connect(queue_redraw)
 		mouse_exited.connect(queue_redraw)
+		for pieces: Array in states.values():
+			for piece: Dictionary in pieces:
+				if not piece.texture.changed.is_connected(_forget_joined_tiles):
+					piece.texture.changed.connect(_forget_joined_tiles)
+
+	func _forget_joined_tiles() -> void:
+		for pieces: Array in states.values():
+			for piece: Dictionary in pieces: piece.erase("joined")
+		queue_redraw()
 
 	func _draw() -> void:
 		var mode := get_draw_mode()
@@ -254,7 +263,14 @@ class MenuButton3 extends BaseButton:
 			var width: float = rect.size.x
 			if part.type == "Type6": width += size.x - 140.0
 			elif part.type == "Type7": x = size.x - (left + 140.0 - rect.position.x)
-			draw_texture_rect_region(part.texture, Rect2(Vector2(x, rect.position.y - design.position.y), Vector2(width, rect.size.y)), part.source, tint)
+			var destination := Rect2(Vector2(x, rect.position.y - design.position.y), Vector2(width, rect.size.y))
+			if part.texture.has_meta(ELIconUpscale.ORIGINAL):
+				if not part.has("joined"):
+					part.joined = ELFrontMenu._joined_tile(part.texture, Rect2i(part.source), [true, true, true, true])
+				if part.joined != null:
+					draw_texture_rect(part.joined, destination, false, tint)
+					continue
+			draw_texture_rect_region(part.texture, destination, part.source, tint)
 
 ## The round cancel button (Free/Push pieces with a Light overlay).
 class CancelButton extends BaseButton:

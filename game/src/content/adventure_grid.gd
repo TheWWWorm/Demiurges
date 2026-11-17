@@ -55,6 +55,8 @@ func rebuild(objects: Dictionary) -> void:
 		footprints[id] = shape
 		# An opened runestone barrier no longer blocks its cells.
 		if not item.get("visible", true) or not item.get("placed", true) or item.get("opened", false): continue
+		if map.profile.id == "el2" and item.get("group") == "resource_cuts" and not row.get("Bridge", 0):
+			shape.pickup_origin = Vector2i(item.x, item.y)
 		for cell: Vector2i in shape.cells:
 			var position := cell + Vector2i(item.x, item.y)
 			if contains(position): blockers[position.y * map.width + position.x] += 1
@@ -67,6 +69,20 @@ func rebuild(objects: Dictionary) -> void:
 		for x in map.width:
 			var pos := Vector2i(x, y)
 			_update_cell(pos)
+
+## Release just the cells this pile blocked, preserving overlapping blockers.
+## Return false for other shapes so the caller handles them with a rebuild.
+func release_pickup(id: int) -> bool:
+	var shape: Dictionary = footprints.get(id, {})
+	if not shape.has("pickup_origin"): return false
+	var origin: Vector2i = shape.pickup_origin
+	shape.erase("pickup_origin")
+	for offset: Vector2i in shape.cells:
+		var cell := origin + offset
+		if not contains(cell): continue
+		blockers[cell.y * map.width + cell.x] -= 1
+		_update_cell(cell)
+	return true
 
 func occupies(actor: Dictionary) -> bool:
 	# A garrison leaves map occupancy; the fort keeps its own footprint.

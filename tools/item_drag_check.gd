@@ -211,7 +211,8 @@ func _second_inventory(session: Dictionary) -> void:
 	drag(input, at.call("bag", 1), outside)
 	check(model.deck == deck_before and model.bag == bag_before and model.carried().is_empty(), "inventory: a bag card dropped outside the lists goes back")
 	drag(input, at.call("bag", 1), at.call("bag", 3))
-	check(model.deck == deck_before and model.bag == bag_before and model.carried().is_empty(), "inventory: a bag card dropped on the bag goes back")
+	ELSpellInventory.swap_slots(bag_before, 1, 3)
+	check(model.deck == deck_before and model.bag == bag_before and model.carried().is_empty(), "inventory: dropping a bag card onto another bag card swaps them")
 	drag(input, at.call("deck", 2), outside)
 	check(model.deck == deck_before and model.bag == bag_before and model.carried().is_empty(), "inventory: a deck card dropped outside the lists goes back")
 	# A short wobble is still a click: the card stays carried for a second click.
@@ -331,6 +332,9 @@ func _plain_lists(session: Dictionary) -> void:
 	await frames(3)
 	await _viewport_drag(book.reserve, book.reserve.get_item_rect(0).get_center(), book.book, book.book.size * 0.5)
 	check(hero.cards.size() == 3 and hero.cards[-1] == codes[2] and not hero.spell_stock.has(codes[2]), "plain spellbook: a reserve spell dragged onto the book is equipped")
+	await _viewport_drag(book.book, book.book.get_item_rect(0).get_center(), book.book, book.book.get_item_rect(1).get_center())
+	check(hero.cards == [codes[1], codes[0], codes[2]], "plain spellbook: dragging between equipped rows swaps them")
+	await _viewport_drag(book.book, book.book.get_item_rect(1).get_center(), book.book, book.book.get_item_rect(0).get_center())
 	await _viewport_drag(book.book, book.book.get_item_rect(0).get_center(), book.reserve, book.reserve.size * 0.5)
 	check(hero.cards.size() == 2 and int(hero.spell_stock.get(codes[0], 0)) == 1, "plain spellbook: a book spell dragged onto the reserve is stored")
 	await _viewport_drag(book.book, book.book.get_item_rect(0).get_center(), book.heading, book.heading.size * 0.5)
@@ -421,7 +425,7 @@ func _first_book(session: Dictionary) -> void:
 	check(hero.cards.size() == ELSpellInventory.book_size(profile) and int(hero.spell_stock.get(codes[1], 0)) == left, "first game book: a full book takes a dragged spell only over the slot it lands on")
 	view.reserve_pick = _entry(view, codes[1])
 	view.book_pick = -1
-	check(not view.equip_problem().is_empty(), "first game book: a full book refuses a spell sent with the arrow or a double click")
+	check(view.equip_problem().is_empty(), "first game book: a full book with a cantrip accepts an advanced spell")
 	var movable := int(hero.cards.size()) - 1
 	click(input, view.book_rect(movable).get_center())
 	click(input, view.book_rect(movable).get_center(), true)
@@ -458,13 +462,16 @@ func _full_cantrip_book(session: Dictionary, view: ELFirstBookView, input: Calla
 	check(hero.cards.size() == size and hero.cards[3] == codes[0] and int(hero.rune_uses[3]) == 4 and ELRunes.under(hero)[3] == cantrip and not hero.spell_stock.has(codes[0]), "first game book: a reserve spell dropped onto a cantrip of a full book goes over it")
 	drag(input, view.book_rect(3).get_center(), view.reserve_rect(0).get_center())
 	check(hero.cards.size() == size and hero.cards[3] == cantrip and int(hero.spell_stock.get(codes[0], 0)) == 1 and int(hero.rune_stock[codes[0]][0]) == 4, "first game book: stored again, the spell gives the slot back to its cantrip")
-	drag(input, view.reserve_rect(_entry(view, codes[0])).get_center(), view.book_rect(3).get_center())
-	check(hero.cards[3] == codes[0] and ELRunes.under(hero)[3] == cantrip and not hero.spell_stock.has(codes[0]), "first game book: the stored spell can be equipped over the cantrip again")
+	check(not view.buttons.BuySpell.disabled, "first game book: the return arrow is enabled after the basic spell fills the slot")
+	view.buttons.BuySpell.pressed.emit()
+	check(hero.cards[3] == codes[0] and int(hero.rune_uses[3]) == 4 and ELRunes.under(hero)[3] == cantrip and not hero.spell_stock.has(codes[0]), "first game book: the arrow puts the stored spell back over its original cantrip")
 	drag(input, view.reserve_rect(_entry(view, codes[1])).get_center(), view.book_rect(3).get_center())
 	check(hero.cards[3] == codes[1] and int(hero.rune_uses[3]) == 6 and ELRunes.under(hero)[3] == cantrip and int(hero.spell_stock.get(codes[0], 0)) == 1 and int(hero.rune_stock[codes[0]][0]) == 4, "first game book: another spell dropped onto it sends it to the reserve with its runes; the cantrip stays underneath")
 	var fifth := str(hero.cards[5])
 	drag(input, view.reserve_rect(_entry(view, codes[0])).get_center(), view.book_rect(5).get_center())
 	check(hero.cards.size() == size and hero.cards[5] == codes[0] and ELRunes.under(hero)[5] == fifth and ELRunes.under(hero)[3] == cantrip, "first game book: a second slot takes a spell over its cantrip too")
+	drag(input, view.book_rect(3).get_center(), view.book_rect(5).get_center())
+	check(hero.cards[3] == codes[0] and hero.cards[5] == codes[1] and int(hero.rune_uses[3]) == 4 and int(hero.rune_uses[5]) == 6 and ELRunes.under(hero)[3] == fifth and ELRunes.under(hero)[5] == cantrip, "first game book: dragging within the book swaps the spells, their runes and cantrips")
 	await frames(1)
 
 static func _entry(view: ELFirstBookView, card: String) -> int:
@@ -531,6 +538,14 @@ func _first_shop(profile: ELProfile) -> void:
 	check(view.carry == card, "first game laboratory: a click still picks a spell up")
 	click(input, view.book_rect(0).get_center())
 	check(trade.pending[0] == card and view.carry.is_empty(), "first game laboratory: the second click stages it")
-	trade.cancel()
+	trade.clear(0)
+	var other_card := trade.cards[0]
+	var before_bill := trade.bill()
+	drag(input, view.book_rect(1).get_center(), view.book_rect(0).get_center())
+	check(view.book_cards(0)[0] == card and view.book_cards(0)[1] == other_card and trade.bill() == before_bill, "first game laboratory: reordering the draft carries the purchase and keeps its price")
+	var hero: Dictionary = session.state.object(session.hero)
+	for kind: String in session.state.players[hero.owner].resources: session.state.players[hero.owner].resources[kind] = 1000000
+	view.accept()
+	check(trade.finished and hero.cards[0] == card and hero.cards[1] == other_card, "first game laboratory: accepting saves the new spell order")
 	view.queue_free()
 	await frames(2)

@@ -139,12 +139,14 @@ func problem() -> String:
 	if not ELResources.can_pay("el1", state.players[state.object(hero_id).owner].resources, bill()): return "Not enough resources for these runes."
 	return ""
 
-func commit() -> bool:
+func commit(order: Array = []) -> bool:
 	error = problem()
 	if not error.is_empty(): return false
 	var hero := state.object(hero_id)
+	if not ELSpellInventory.valid_slot_order(order, hero.cards.size()): return _fail("Invalid spellbook order.")
 	if not ELResources.pay("el1", state.players[hero.owner].resources, bill()): return _fail("Not enough resources for these runes.")
 	for slot in pending.size(): hero.rune_uses[slot] += pending[slot]
+	ELSpellInventory.apply_slot_order(hero, order)
 	finished = true
 	state.event.emit({"kind": "resources_changed", "player": hero.owner})
 	state.event.emit({"kind": "inventory_changed", "id": hero_id})

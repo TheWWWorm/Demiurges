@@ -17,9 +17,13 @@ extends SceneTree
 ## It also renders the story heroes that guide pages list (`heroes:` front
 ## matter, ELWikiData) as <images>/<game>/hero-<row>.webp, and the map objects
 ## of their `!objects` lines (ELWikiPreview.stage_object) as
-## <images>/<game>/object-<table>-<row>.webp (360 px). Without
+## <images>/<game>/object-<table>-<row>.webp (512 px). Without
 ## --wiki-output only the pictures are made and no export is written;
 ## --wiki-heroes-only skips the cards, --wiki-objects-only the cards and heroes.
+
+const MODEL_SIZE := 768
+const OBJECT_SIZE := 512
+const STAGE_SIZE := Vector2i(1536, 1536)
 
 func _initialize() -> void:
 	_run.call_deferred()
@@ -123,8 +127,8 @@ func _images(profile: ELProfile, catalog: ELWikiCatalog, folder: String) -> void
 				icons += 1
 		var model_path := folder.path_join("%s.webp" % code)
 		if page.get("kind") != "creature" or not profile.id in page.get("models", []): continue
-		if not redo and FileAccess.file_exists(model_path): continue
-		if await _render(ELWikiPreview.stage(profile, code, Vector2i(960, 960)), model_path): models += 1
+		if not redo and _image_at_size(model_path, MODEL_SIZE): continue
+		if await _render(ELWikiPreview.stage(profile, code, STAGE_SIZE), model_path): models += 1
 		else: printerr("export_wiki: no model for ", code)
 	# The story heroes of the guide pages.
 	var heroes := 0
@@ -134,9 +138,9 @@ func _images(profile: ELProfile, catalog: ELWikiCatalog, folder: String) -> void
 			if hero[0] != profile.id or seen.has(hero[1]): continue
 			seen[hero[1]] = true
 			var hero_path := folder.path_join("hero-%s.webp" % _slug(hero[1]))
-			if not redo and FileAccess.file_exists(hero_path): continue
+			if not redo and _image_at_size(hero_path, MODEL_SIZE): continue
 			# Heroes carry faint glows; a firmer threshold frames the figure itself.
-			if await _render(ELWikiPreview.stage_hero(profile, hero[1], Vector2i(960, 960)), hero_path, 0.12): heroes += 1
+			if await _render(ELWikiPreview.stage_hero(profile, hero[1], STAGE_SIZE), hero_path, 0.12): heroes += 1
 			else: printerr("export_wiki: no hero ", hero[1])
 	# The map objects of the guides' `!objects` lines, seen from above as on the map.
 	var objects := 0
@@ -145,8 +149,8 @@ func _images(profile: ELProfile, catalog: ELWikiCatalog, folder: String) -> void
 			if object[0] != profile.id or seen.has("object:" + object[1]): continue
 			seen["object:" + object[1]] = true
 			var object_path := folder.path_join("object-%s.webp" % _slug(object[1]))
-			if not redo and FileAccess.file_exists(object_path): continue
-			if await _render(ELWikiPreview.stage_object(profile, object[1], Vector2i(960, 960)), object_path, 0.05, 360, ELWikiPreview.OBJECT_PITCH): objects += 1
+			if not redo and _image_at_size(object_path, OBJECT_SIZE): continue
+			if await _render(ELWikiPreview.stage_object(profile, object[1], STAGE_SIZE), object_path, 0.05, OBJECT_SIZE, ELWikiPreview.OBJECT_PITCH): objects += 1
 			else: printerr("export_wiki: no map object ", object[1])
 	print("export_wiki: %d icons, %d creature, %d hero and %d map object pictures -> %s" % [icons, models, heroes, objects, folder])
 
@@ -156,7 +160,7 @@ func _slug(value: String) -> String:
 	return RegEx.create_from_string("[^a-z0-9]+").sub(value.to_lower(), "-", true).trim_prefix("-").trim_suffix("-")
 
 ## Renders a staged figure into `path` (`size` px WebP); false without a stage.
-func _render(view: SubViewport, path: String, threshold := 0.025, size := 480, pitch := ELWikiPreview.PITCH) -> bool:
+func _render(view: SubViewport, path: String, threshold := 0.025, size := MODEL_SIZE, pitch := ELWikiPreview.PITCH) -> bool:
 	if view == null: return false
 	root.add_child(view)
 	# Let the idle clip and its particles run for a moment.
@@ -164,9 +168,14 @@ func _render(view: SubViewport, path: String, threshold := 0.025, size := 480, p
 	ELWikiPreview.frame(view, ELWikiPreview.YAW, pitch)
 	for i in 3: await process_frame
 	var shot := _cropped(view.get_texture().get_image(), size, threshold)
-	shot.save_webp(path, true, 0.86)
+	var saved := shot.save_webp(path, true, 0.9)
 	view.queue_free()
-	return true
+	return saved == OK
+
+func _image_at_size(path: String, side: int) -> bool:
+	if not FileAccess.file_exists(path): return false
+	var image := Image.load_from_file(path)
+	return image != null and image.get_size() == Vector2i(side, side)
 
 ## The square around the drawn creature (pixels unlike the background), with a
 ## margin, scaled to `size`.
@@ -181,7 +190,9 @@ func _cropped(image: Image, size: int, threshold := 0.025) -> Image:
 			if absf(c.r - background.r) + absf(c.g - background.g) + absf(c.b - background.b) < threshold: continue
 			low = Vector2i(mini(low.x, x), mini(low.y, y))
 			high = Vector2i(maxi(high.x, x), maxi(high.y, y))
-	if high.x < 0: return image
+	if high.x < 0:
+		image.resize(size, size, Image.INTERPOLATE_LANCZOS)
+		return image
 	var side := int(maxf(high.x - low.x, high.y - low.y) * 1.16) + 4
 	var centre := (low + high) / 2
 	var square := Image.create(side, side, false, Image.FORMAT_RGB8)

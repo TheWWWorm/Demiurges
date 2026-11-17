@@ -1,6 +1,5 @@
 extends SceneTree
-## Headless check of second-game map feedback the original shows (issues
-## #145-#147, #149):
+## Headless check of second-game map feedback (issues #145-#147, #149, #161):
 ## - every magic bridge piece (TerrObj SpecEffect 111-118) in sight runs its
 ##   colour's pier/abutment effect at its figure, turned with it, and a
 ##   hidden piece has none;
@@ -80,9 +79,38 @@ func _map_part() -> void:
 		_messages(view, profile)
 		await _change_effect_message(view, profile)
 		await _camera(view)
+		_pickup_transition(view)
+		_fog_region(view.world)
+		_actor_facing(view)
 	view.queue_free()
 	await frames(2)
+	await _mine_depletion(profile, settings)
 	_restore(ELSaveSlots.folder("el2"), saves)
+
+func _actor_facing(view: ELAdventureView) -> void:
+	var state := view.state
+	var world := view.world
+	var placed_angles := {}
+	for item: Dictionary in state.objects.values():
+		if not item.get("type") in ["hero", "monster"] or not world.actors.has(item.uid): continue
+		placed_angles[int(item.rotation)] = world.object_yaw(item)
+	check(placed_angles.size() == 4 and range(4).all(func(quarter: int) -> bool:
+		return is_equal_approx(wrapf(float(placed_angles.get(quarter * 4, INF)) + quarter * PI / 2.0, -PI, PI), 0.0)),
+		"the second game's units start at the four headings authored in the map")
+	var hero := state.object(view._hero_id())
+	var id := int(hero.uid)
+	var before: ELModel = world.actors[id]
+	var old_rotation := int(hero.rotation)
+	world.orient_actor(id, Vector2.UP + Vector2.RIGHT)
+	var heading := world.object_yaw(hero)
+	hero.ship = not hero.ship
+	state.event.emit({"kind": "shape_changed", "id": id})
+	check(world.actors[id] != before and is_equal_approx(world.object_yaw(hero), heading), "the hero keeps its facing when its land or ship model replaces the other")
+	state._native([id, old_rotation], "ExSetRotateMirror")
+	check(is_equal_approx(wrapf(world.object_yaw(hero) + float((old_rotation >> 2) & 3) * PI / 2.0, -PI, PI), 0.0),
+		"the script can restore the hero's placed direction even when the stored rotation is already the same")
+	hero.ship = not hero.ship
+	state.event.emit({"kind": "shape_changed", "id": id})
 
 func _bridges(view: ELAdventureView, profile: ELProfile) -> void:
 	var state := view.state
@@ -257,6 +285,69 @@ static func _unowned_spec(state: ELAdventureSession, profile: ELProfile, hero: D
 	for code: String in profile.table("HeroesSpecs"):
 		if ELSpecs.valid(profile, code) and code != "NONE" and not state.specializations(hero).has(code): return code
 	return ""
+
+func _mine_depletion(profile: ELProfile, settings: ELSettings) -> void:
+	var view := ELAdventureView.new()
+	root.add_child(view)
+	var built := view.build(profile, {"file_name": "e2mission11"}, settings, 1)
+	check(built, "the opening Vitals map builds: " + view.error)
+	if built: _settle_last_mine_payment(view)
+	view.queue_free()
+	await frames(2)
+
+func _pickup_transition(view: ELAdventureView) -> void:
+	var state := view.state
+	for item: Dictionary in state.objects.values():
+		if item.group != "resource_cuts" or not item.alive or not ELFog.shown(state, 1, item): continue
+		var id: int = item.uid
+		var picked := state.collect_resources(view._hero_id(), id)
+		check(picked and not item.alive and view.world._retiring_pickups.has(id), "the resource is collected immediately and its visible pile animates out")
+		var grid := view.director.grid
+		var after := grid.blockers.duplicate()
+		grid.rebuild(state.objects)
+		check(grid.blockers == after, "collecting a pile updates its blockers exactly as a full grid rebuild")
+		view.world._fade_pickups(ELAdventureScene.PICKUP_FADE)
+		check(not view.world._retiring_pickups.has(id), "the collected pile is removed after its pickup animation")
+		return
+	check(false, "the chapter has a visible resource pile to collect")
+
+func _fog_region(world: ELAdventureScene) -> void:
+	var tiles := world.fog_tiles()
+	var old := world.fog_corners(tiles)
+	var cell := Vector2i(5, 5)
+	var at := cell.y * world.map.width + cell.x
+	tiles[at] = 255 - tiles[at]
+	var updated := world._update_fog_corners(tiles, old, Rect2i(cell, Vector2i(2, 2)))
+	check(updated == world.fog_corners(tiles), "updating only the affected fog corners matches a full rebuild")
+	var state := world.fog_session
+	check(state != null, "the campaign scene keeps the session for its fog updates")
+	if state == null: return
+	ELFog.reveal_for_console(state, 1, false)
+	world.sync_fog()
+	check(world._fog_tiles == world.fog_tiles() and world.fog_to == world.fog_corners(), "turning fog back on refreshes all affected tiles")
+	var previous := world.fog_to.duplicate()
+	world.fog_since = INF
+	ELFog.reveal_for_console(state, 1, true)
+	world.sync_fog()
+	check(world._fog_tiles == world.fog_tiles() and world.fog_to == world.fog_corners() and world.fog_from == previous, "a fog update keeps the previous corner opacity for the fade")
+
+func _settle_last_mine_payment(view: ELAdventureView) -> void:
+	var state := view.state
+	var player := state.current_player
+	var mine := {}
+	for site: Dictionary in state.objects.values():
+		if site.get("group") == "mines" and site.name == "Mine.Root.Green":
+			mine = site
+			break
+	check(not mine.is_empty(), "the opening Vitals map has a Mandrake Garden")
+	if mine.is_empty(): return
+	mine.owner = player
+	mine.mine_remaining = 1
+	var herbs: int = state.players[player].resources.Herbs
+	ELResourceSites.settle_income(state, true)
+	check(state.players[player].resources.Herbs == herbs + 5, "the final Mandrake Garden payment credits five herbs")
+	check(mine.mine_remaining == 0 and ELResourceSites.income(state, player).Herbs == 0, "the garden stops producing after its final payment")
+	check(view.building_message == null and view.building_messages.is_empty(), "mine depletion opens and queues no popup")
 
 func _camera(view: ELAdventureView) -> void:
 	var state := view.state

@@ -343,7 +343,9 @@ func _release(at: Vector2) -> void:
 	_mouse = at
 	if source.is_empty() or not dragged or model.picked_zone != source[0] or model.picked != source[1]: return
 	var target := hit(at)
-	if target[0] == "deck" or target[0] == "bag" and source[0] != "bag": _click(target)
+	if target[0] == "bag" and source[0] == "bag":
+		ELSpellInventory.swap_slots(model.bag, int(source[1]), int(target[1]))
+	elif target[0] in ["deck", "bag"]: _click(target)
 	if not model.carried().is_empty() and model.right_click(): _changed()
 
 func _changed() -> void:

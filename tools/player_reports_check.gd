@@ -483,13 +483,18 @@ func _first_rune_buying(profile: ELProfile) -> void:
 	var expected := ELResources.empty("el1")
 	for kind: String in expected: expected[kind] = int(ELRuneShop.price(profile, hero, state.object(trade.shop_id), hero.cards[1])[kind]) * 3 + int(ELRuneShop.price(profile, hero, state.object(trade.shop_id), hero.cards[2])[kind])
 	check(trade.bill() == expected, "el1 portal: the bill is the portal's own rune prices")
+	var reordered := [hero.cards[0], hero.cards[2], hero.cards[1]]
+	mouse.call(spell_two, MOUSE_BUTTON_LEFT, true)
+	for step in 4: moving.call(spell_two.lerp(spell_one, (step + 1) / 4.0))
+	mouse.call(spell_one, MOUSE_BUTTON_LEFT, false)
+	check(view.book_cards(0) == reordered and trade.bill() == expected, "el1 portal: reordering spells keeps their rune purchases and prices")
 	var before: Dictionary = state.players[hero.owner].resources.duplicate()
 	var closed := [false]
 	view.closed.connect(func(): closed[0] = true)
 	key.call(KEY_ENTER)
 	var paid := true
 	for kind: String in expected: paid = paid and int(state.players[hero.owner].resources[kind]) == int(before[kind]) - int(expected[kind])
-	check(closed[0] and trade.finished and hero.rune_uses == [-1, 4, ELRunes.capacity(hero)] and paid, "el1 portal: Enter pays and the runes are on the spells (%s)" % [hero.rune_uses])
+	check(closed[0] and trade.finished and hero.cards == reordered and hero.rune_uses == [-1, ELRunes.capacity(hero), 4] and paid, "el1 portal: Enter pays and keeps the order and runes (%s)" % [hero.rune_uses])
 	map.rune_shop = null
 	map.queue_free()
 	view.queue_free()

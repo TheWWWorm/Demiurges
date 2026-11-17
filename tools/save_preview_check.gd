@@ -8,6 +8,7 @@ extends SceneTree
 ##   a picture show none;
 ## - the first game's Load Mission screen shows the chosen save's picture in
 ##   the box above its details, and nothing for a save without one.
+## - in a rendered run, capturing a thumbnail keeps the on-screen UI visible.
 ##
 ##   godot --headless --path game --script ../tools/save_preview_check.gd
 ##
@@ -33,6 +34,7 @@ func _run() -> void:
 	DirAccess.make_dir_recursive_absolute(FOLDER)
 	_storage()
 	await _screen()
+	if DisplayServer.get_name() != "headless": await _offscreen()
 	for file in DirAccess.get_files_at(FOLDER): DirAccess.remove_absolute(FOLDER.path_join(file))
 	DirAccess.remove_absolute(FOLDER)
 	print("SAVE PREVIEW: %d failure(s)" % failures.size())
@@ -123,4 +125,45 @@ func _screen() -> void:
 	ui.choose_row(1)
 	check(box != null and box.texture == null, "a save without a picture leaves the box empty")
 	menu.queue_free()
+	await frames(2)
+
+func _offscreen() -> void:
+	var view := ELAdventureView.new()
+	root.add_child(view)
+	view.camera = Camera3D.new()
+	view.add_child(view.camera)
+	view.camera.position.z = 3
+	view.camera.make_current()
+
+	var figure := MeshInstance3D.new()
+	figure.mesh = BoxMesh.new()
+	var paint := StandardMaterial3D.new()
+	paint.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	paint.albedo_color = Color(0, 0, 1)
+	figure.material_override = paint
+	view.add_child(figure)
+
+	var layers := CanvasLayer.new()
+	view.add_child(layers)
+	var hud := ColorRect.new()
+	hud.color = Color(1, 0, 1)
+	view.ui = hud
+	layers.add_child(hud)
+	hud.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	view.extras_layer = CanvasLayer.new()
+	view.add_child(view.extras_layer)
+	var hidden := [false]
+	view.ui.visibility_changed.connect(func(): hidden[0] = hidden[0] or not view.ui.is_visible_in_tree())
+	view.extras_layer.visibility_changed.connect(func(): hidden[0] = hidden[0] or not view.extras_layer.visible)
+
+	await RenderingServer.frame_post_draw
+	var preview := await view._capture_save_preview()
+	var on_screen := root.get_texture().get_image()
+	var shown := on_screen.get_pixelv(on_screen.get_size() / 2)
+	check(not hidden[0] and shown.r > 0.8 and shown.b > 0.8, "capturing the thumbnail keeps the main HUD and overlays visible")
+	check(preview != null and preview.get_size() == ELSaveSlots.PREVIEW_SIZE, "the offscreen thumbnail has the save preview dimensions")
+	if preview != null:
+		var pixel := preview.get_pixelv(preview.get_size() / 2)
+		check(pixel.b > 0.8 and pixel.r < 0.2, "the thumbnail contains the world seen by the map camera")
+	view.queue_free()
 	await frames(2)

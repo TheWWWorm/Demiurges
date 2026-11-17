@@ -30,7 +30,7 @@ func build(link: Object) -> void:
 	_list_column(columns, _active, tr("Active deck"))
 	_list_column(columns, _reserve, tr("Reserve"))
 	# A spell dragged onto one in the other column swaps the two.
-	ELListDrag.enable(_active, "active", ["reserve"], func(_from: String, index: int, to: int): _drag_swap(to, index))
+	ELListDrag.enable(_active, "active", ["active", "reserve"], _drop_on_active)
 	ELListDrag.enable(_reserve, "reserve", ["active"], func(_from: String, index: int, to: int): _drag_swap(index, to))
 	_swap.text = tr("Swap selected spells")
 	_swap.pressed.connect(_exchange)
@@ -84,6 +84,10 @@ func _exchange() -> void:
 ## A drop of one column's spell on the other's: the same swap as selecting
 ## both and pressing the button. A drop beside the entries swaps with the
 ## spell already selected in that column, else does nothing.
+func _drop_on_active(source: String, from: int, to: int) -> void:
+	if source == "reserve": _drag_swap(to, from)
+	elif _link.reorder_round_spells(from, to): _refresh()
+
 func _drag_swap(active: int, reserve: int) -> void:
 	if active < 0 and _active.is_anything_selected(): active = _active.get_selected_items()[0]
 	if reserve < 0 and _reserve.is_anything_selected(): reserve = _reserve.get_selected_items()[0]

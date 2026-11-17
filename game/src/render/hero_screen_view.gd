@@ -60,8 +60,19 @@ var held: Dictionary = {}
 var held_at := Vector2.ZERO
 var press_at := Vector2.ZERO
 var dragging := false
+
+# A shop keeps its purchases indexed by the original book slots until OK.
+var shop_book_order: Array = []
 var _pieces: Array[Dictionary] = []
 var _labels: Array[Dictionary] = []
+
+func shop_order_changed() -> bool:
+	return shop_book_order != range(shop_book_order.size())
+
+func shop_order_for_network() -> String:
+	var encoded := ""
+	for index: int in shop_book_order: encoded += "%x" % index
+	return encoded
 
 func build(owner: ELAdventureDirector, panel: ELAdventureHud, ids: Array[int], is_exchange: bool) -> void:
 	director = owner

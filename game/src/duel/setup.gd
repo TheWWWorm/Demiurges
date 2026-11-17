@@ -189,9 +189,11 @@ func _edit_deck(side: int) -> void:
 	book.item_selected.connect(func(index: int): description.text = _profile().card_description(working_cards[index]))
 	library.item_activated.connect(_add_card)
 	book.item_activated.connect(_remove_card)
-	# A spell dragged into the book is added, one dragged out of it removed.
+	# Drag between the book and the library, or swap two equipped spells.
 	ELListDrag.enable(library, "library", ["book"], func(_from: String, index: int, _to: int): _remove_card(index))
-	ELListDrag.enable(book, "book", ["library"], func(_from: String, index: int, _to: int): _add_card(index))
+	ELListDrag.enable(book, "book", ["library", "book"], func(source: String, index: int, target: int):
+		if source == "library": _add_card(index)
+		elif ELSpellInventory.swap_slots(working_cards, index, target): _refresh_book())
 	var controls := HBoxContainer.new()
 	rows.add_child(controls)
 	controls.add_child(_button("Add →", func():

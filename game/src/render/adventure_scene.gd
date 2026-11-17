@@ -25,10 +25,16 @@ var _fog_revision := -1
 var _fog_textures: Array[ImageTexture] = []
 ## Tile levels last applied, and the largest object footprint side (tiles).
 var _fog_tiles := PackedByteArray()
+var _fog_known := PackedByteArray()
+var _fog_seen := PackedByteArray()
+var _fog_active := false
+var _fog_presence: Dictionary = {}
+var _fog_cells: Dictionary = {}
+var _fog_object_cells: Dictionary = {}
+const PLACEMENT_REVISION := &"adventure_placement_revision"
 ## Original clip code of the walk clips (as in battles).
 const WALK_CODE := 0x80140000
 const RUN_CODE := 0x80100000
-var _fog_reach := 1
 ## Mist opacity per map corner (ELFog levels as the fog pass draws them): the
 ## value the last change started from, the target and the seconds since.
 const FOG_UNEXPLORED := 255
@@ -51,6 +57,8 @@ var animate_fog := true
 ## {uid: brightness}; `_fading` holds {uid: target} until it is reached.
 var _fog_level: Dictionary = {}
 var _fading: Dictionary = {}
+const PICKUP_FADE := 0.18
+var _retiring_pickups: Dictionary = {}
 var _look_materials: Dictionary = {}
 var _grey_textures: Dictionary = {}
 var _pick_images: Dictionary = {}
@@ -125,11 +133,9 @@ func build(source: ELAdventureMap, session: ELAdventureSession = null) -> bool:
 			prototype.set_process(false)
 			prototypes[key] = prototype
 		var prototype: ELModel = prototypes[key]
-		var rotation := int(object.rotation)
-		var mirror := Vector3(-1 if rotation & 1 else 1, 1, -1 if rotation & 2 else 1)
 		var center := ELAdventureGrid.center(object, definition.row)
 		var position := Vector3(center.x * ELAdventureTerrain.CELL, 0, -center.y * ELAdventureTerrain.CELL)
-		var transform := Transform3D(Basis(Vector3.UP, -float((rotation >> 2) & 3) * PI / 2.0) * Basis.from_scale(mirror * float(definition.scale)), position)
+		var transform := Transform3D(_placed_basis(int(object.rotation), float(definition.scale)), position)
 		if blob_shadow(map.profile.id, object, definition) or _foliage_shadow(map.profile.id, object, definition):
 			var foliage := _foliage_shadow(map.profile.id, object, definition)
 			var footprint := FOLIAGE_BLOB_SCALE if foliage else 1.0
@@ -183,6 +189,7 @@ func build(source: ELAdventureMap, session: ELAdventureSession = null) -> bool:
 		if fogged and group.material is StandardMaterial3D: group.material.vertex_color_use_as_albedo = true
 		var node := MultiMeshInstance3D.new()
 		node.multimesh = instances
+		node.set_meta(PLACEMENT_REVISION, 0)
 		node.material_override = group.material
 		_shade(node, bool(group.casts))
 		add_child(node)
@@ -305,11 +312,12 @@ func enable_fog(session: ELAdventureSession) -> void:
 	if _fog_apron == null: _fog_apron = _make_fog_apron()
 	_fog_apron.visible = true
 	_fog_tiles = fog_tiles()
+	var masks := _fog_data()
+	_fog_known = masks[0].duplicate()
+	_fog_seen = masks[1].duplicate()
+	_fog_active = true
 	fog_to = fog_corners(_fog_tiles)
 	fog_from = fog_to
-	_fog_reach = 1
-	if session.grid != null:
-		for footprint: Dictionary in session.grid.footprints.values(): _fog_reach = maxi(_fog_reach, maxi(footprint.size.x, footprint.size.y))
 	fog_since = INF
 	_fog_textures.clear()
 	for data: PackedByteArray in [fog_from, fog_to]:
@@ -323,8 +331,13 @@ func enable_fog(session: ELAdventureSession) -> void:
 	_fog_revision = ELFog.revision(fog_session)
 	# The fog as loaded shows at once.
 	_fog_level.clear()
+	_fog_presence.clear()
 	_fading.clear()
-	for item: Dictionary in fog_session.objects.values(): fog_object(item, Vector2i(-1, -1), true)
+	_fog_cells.clear()
+	_fog_object_cells.clear()
+	for item: Dictionary in fog_session.objects.values():
+		_index_fog_object(item)
+		fog_object(item, Vector2i(-1, -1), true)
 	_sync_mist()
 
 func _make_fog_apron() -> MeshInstance3D:
@@ -349,8 +362,12 @@ func fog_corners(tiles := PackedByteArray()) -> PackedByteArray:
 	var columns := map.width + 1
 	var corners := PackedByteArray()
 	corners.resize(columns * (map.height + 1))
-	for y in map.height + 1:
-		for x in columns:
+	return _update_fog_corners(tiles, corners, Rect2i(0, 0, columns, map.height + 1))
+
+func _update_fog_corners(tiles: PackedByteArray, corners: PackedByteArray, area: Rect2i) -> PackedByteArray:
+	var columns := map.width + 1
+	for y in range(area.position.y, area.end.y):
+		for x in range(area.position.x, area.end.x):
 			var level := 0
 			if x == 0 or y == 0 or x == map.width or y == map.height: level = FOG_UNEXPLORED
 			else:
@@ -373,29 +390,18 @@ func fog_tiles() -> PackedByteArray:
 		tiles[i] = 0 if seen[i] & bit else (FOG_REMEMBERED if known[i] & bit else FOG_UNEXPLORED)
 	return tiles
 
-## The tiles whose fog level differs between two tile sets (empty when none).
-func _changed_tiles(before: PackedByteArray, after: PackedByteArray) -> Rect2i:
-	if before.size() != after.size(): return Rect2i(0, 0, map.width, map.height)
-	var low := Vector2i(map.width, map.height)
-	var high := Vector2i(-1, -1)
-	for y in map.height:
-		var row := y * map.width
-		# Rows without a change are skipped by comparing their slices.
-		if before.slice(row, row + map.width) == after.slice(row, row + map.width): continue
-		for x in map.width:
-			if before[row + x] == after[row + x]: continue
-			low = Vector2i(mini(low.x, x), mini(low.y, y))
-			high = Vector2i(maxi(high.x, x), maxi(high.y, y))
-	return Rect2i() if high.x < 0 else Rect2i(low, high - low + Vector2i.ONE)
-
 ## The corner opacities shown now, part way from `fog_from` to `fog_to`.
 func fog_shown() -> PackedByteArray:
 	var step := FOG_RATE * fog_since
-	if step >= 255.0: return fog_to
-	var shown := fog_from.duplicate()
+	if step >= 255.0: return fog_to.duplicate()
+	var shown := fog_to.duplicate()
 	var limit := int(step)
-	for i in shown.size():
-		shown[i] = fog_from[i] + clampi(fog_to[i] - fog_from[i], -limit, limit)
+	var columns := map.width + 1
+	for y in map.height + 1:
+		var row := y * columns
+		if fog_from.slice(row, row + columns) == fog_to.slice(row, row + columns): continue
+		for i in range(row, row + columns):
+			shown[i] = fog_from[i] + clampi(fog_to[i] - fog_from[i], -limit, limit)
 	return shown
 
 func set_animate_fog(on: bool) -> void:
@@ -427,6 +433,7 @@ func _process(delta: float) -> void:
 		sync_fog()
 		_sync_mist()
 		if not _fading.is_empty(): _fade_objects(delta)
+	if not _retiring_pickups.is_empty(): _fade_pickups(delta)
 	if colorless_session != null and colorless_session.colorless_level != colorless_shown: sync_colorless()
 
 ## Colourless zones: terrain corners touching a colourless cell are grey and
@@ -483,21 +490,72 @@ func grey_object(uid: int, cell := Vector2i(-1, -1)) -> void:
 func sync_fog() -> void:
 	if fog_session == null or ELFog.revision(fog_session) == _fog_revision: return
 	_fog_revision = ELFog.revision(fog_session)
-	var tiles := fog_tiles()
-	var changed := _changed_tiles(_fog_tiles, tiles)
-	_fog_tiles = tiles
-	if changed.has_area():
-		fog_from = fog_shown()
-		fog_to = fog_corners(tiles)
-		fog_since = 0.0
-		_fog_textures[0].update(Image.create_from_data(map.width + 1, map.height + 1, false, Image.FORMAT_R8, fog_from))
-		_fog_textures[1].update(Image.create_from_data(map.width + 1, map.height + 1, false, Image.FORMAT_R8, fog_to))
-	# Only objects whose footprint can touch a changed tile are re-checked: a
-	# step changes the cells round the hero, and checking every object of a
-	# large map on each step held the frame.
-	var reach := changed.grow_individual(_fog_reach - 1, _fog_reach - 1, 0, 0)
-	for item: Dictionary in fog_session.objects.values():
-		if changed.has_area() and reach.has_point(Vector2i(int(item.get("x", -99)), int(item.get("y", -99)))): fog_object(item)
+	var scenery := {}
+	var changed := _update_fog_tiles(scenery)
+	if not changed.has_area(): return
+	fog_from = fog_shown()
+	var corners := changed.grow_individual(0, 0, 1, 1)
+	fog_to = _update_fog_corners(_fog_tiles, fog_to, corners)
+	fog_since = 0.0
+	_fog_textures[0].update(Image.create_from_data(map.width + 1, map.height + 1, false, Image.FORMAT_R8, fog_from))
+	_fog_textures[1].update(Image.create_from_data(map.width + 1, map.height + 1, false, Image.FORMAT_R8, fog_to))
+	for id: int in scenery: fog_object(fog_session.object(id))
+	# Mobile figures are few and their current coordinates are authoritative.
+	for id: int in actors:
+		var actor := fog_session.object(id)
+		if not actor.is_empty() and changed.intersects(ELFog.object_bounds(fog_session, actor)): fog_object(actor)
+
+func _index_fog_object(item: Dictionary) -> void:
+	var id := int(item.uid)
+	var bounds := Rect2i()
+	if not actors.has(id) and (object_models.has(id) or _instances.has(id)):
+		bounds = ELFog.object_bounds(fog_session, item).intersection(Rect2i(0, 0, map.width, map.height))
+	var previous: Rect2i = _fog_object_cells.get(id, Rect2i())
+	if bounds == previous: return
+	for y in range(previous.position.y, previous.end.y):
+		for x in range(previous.position.x, previous.end.x):
+			var cell := Vector2i(x, y)
+			_fog_cells[cell].erase(id)
+			if _fog_cells[cell].is_empty(): _fog_cells.erase(cell)
+	if not bounds.has_area():
+		_fog_object_cells.erase(id)
+		return
+	_fog_object_cells[id] = bounds
+	for y in range(bounds.position.y, bounds.end.y):
+		for x in range(bounds.position.x, bounds.end.x):
+			var cell := Vector2i(x, y)
+			if not _fog_cells.has(cell): _fog_cells[cell] = {}
+			_fog_cells[cell][id] = true
+
+## The game stores per-player visibility and exploration as byte masks. An
+## unchanged row needs no per-tile work. Use snapshots because exploration
+## can also change in place (script observations and discoveries).
+func _update_fog_tiles(scenery: Dictionary) -> Rect2i:
+	var masks := _fog_data()
+	var known := masks[0]
+	var seen := masks[1]
+	var active := ELFog.active(fog_session, fog_player)
+	var all_rows := active != _fog_active
+	var bit := 1 << fog_player
+	var low := Vector2i(map.width, map.height)
+	var high := Vector2i(-1, -1)
+	for y in map.height:
+		var row := y * map.width
+		var end := row + map.width
+		if not all_rows and (not active or (_fog_known.slice(row, end) == known.slice(row, end) and _fog_seen.slice(row, end) == seen.slice(row, end))): continue
+		for x in map.width:
+			var i := row + x
+			var level := 0 if not active or seen[i] & bit else (FOG_REMEMBERED if known[i] & bit else FOG_UNEXPLORED)
+			if _fog_tiles[i] == level: continue
+			_fog_tiles[i] = level
+			var cell := Vector2i(x, y)
+			if _fog_cells.has(cell): scenery.merge(_fog_cells[cell])
+			low = Vector2i(mini(low.x, x), mini(low.y, y))
+			high = Vector2i(maxi(high.x, x), y)
+	_fog_known = known.duplicate()
+	_fog_seen = seen.duplicate()
+	_fog_active = active
+	return Rect2i() if high.x < 0 else Rect2i(low, high - low + Vector2i.ONE)
 
 ## Unexplored objects and remembered heroes, monsters, castles and forts are
 ## hidden; other remembered objects are dimmed. A moving actor also counts the
@@ -506,13 +564,14 @@ func sync_fog() -> void:
 func fog_object(item: Dictionary, passing := Vector2i(-1, -1), instant := false) -> void:
 	if fog_session == null or item.is_empty(): return
 	var uid := int(item.uid)
+	if _retiring_pickups.has(uid): return
 	if not object_models.has(uid) and not _instances.has(uid): return
 	var mode := ELFog.object_state(fog_session, fog_player, item)
 	if passing.x >= 0 and mode != ELFog.VISIBLE: mode = maxi(mode, ELFog.object_state(fog_session, fog_player, item, passing))
 	var present := _game_visible(item) and (mode == ELFog.VISIBLE or (mode == ELFog.REMEMBERED and not ELFog.dynamic(item)))
 	var target := 0.0 if not present else (1.0 if mode == ELFog.VISIBLE else FOG_DIM)
 	var level: float = _fog_level.get(uid, 0.0)
-	if instant or target <= level: level = target
+	if instant or not present or (map.profile.id == "el1" and target <= level): level = target
 	_fog_level[uid] = level
 	if level != target: _fading[uid] = target
 	else: _fading.erase(uid)
@@ -532,15 +591,67 @@ func _fade_objects(delta: float) -> void:
 		_show_fogged(uid, true, level)
 
 func _show_fogged(uid: int, present: bool, level: float) -> void:
+	var toggled: bool = _fog_presence.get(uid) != present
+	_fog_presence[uid] = present
 	if object_models.has(uid):
 		var model: ELModel = object_models[uid]
 		model.visible = present and not model.get_meta("portal_hidden", false)
 		_dim_model(model, level if present else 1.0)
+		if map.profile.id == "el2" and RenderingServer.get_current_rendering_method() == "forward_plus":
+			# Avoid a black silhouette popping in ahead of the terrain's mist.
+			var opacity := smoothstep(0.0, FOG_DIM, level) if present else 1.0
+			if model.get_meta("fog_opacity", 1.0) != opacity:
+				model.set_meta("fog_opacity", opacity)
+				for part: MeshInstance3D in model.parts.values(): part.transparency = 1.0 - opacity
 	for entry: Dictionary in _instances.get(uid, []):
 		var multimesh: MultiMesh = entry.node.multimesh
-		multimesh.set_instance_transform(entry.index, entry.transform if present else Transform3D(Basis.from_scale(Vector3.ZERO), Vector3.ZERO))
-		if multimesh.use_colors: multimesh.set_instance_color(entry.index, Color(level, level, level) if present else Color.WHITE)
-	_sync_blob(uid, present)
+		if toggled: _place_instance(entry, entry.transform if present else Transform3D(Basis.from_scale(Vector3.ZERO), Vector3.ZERO))
+		var grey := roundi(level * 255.0) if present else 255
+		if multimesh.use_colors and int(entry.get("grey", 255)) != grey:
+			entry.grey = grey
+			multimesh.set_instance_color(entry.index, Color8(grey, grey, grey))
+			_mark_placement(entry.node)
+	if toggled or actors.has(uid): _sync_blob(uid, present)
+
+static func _mark_placement(node: MultiMeshInstance3D) -> void:
+	node.set_meta(PLACEMENT_REVISION, int(node.get_meta(PLACEMENT_REVISION)) + 1)
+
+static func _place_instance(entry: Dictionary, transform: Transform3D) -> void:
+	entry.node.multimesh.set_instance_transform(entry.index, transform)
+	_mark_placement(entry.node)
+
+## The rules have already taken the pile. Keep only its on-screen pose for
+## a short pickup animation while the hero and camera keep moving.
+func retire_pickup(uid: int) -> bool:
+	var model: ELModel = object_models.get(uid)
+	var entries: Array = _instances.get(uid, [])
+	if model == null and entries.is_empty(): return false
+	if model != null and not model.visible: return false
+	if model == null:
+		var entry: Dictionary = entries[0]
+		var mesh: MultiMesh = entry.node.multimesh
+		if is_zero_approx(mesh.get_instance_transform(entry.index).basis.determinant()): return false
+	_retiring_pickups[uid] = {"elapsed": 0.0, "basis": model.basis if model != null else Basis.IDENTITY}
+	return true
+
+func _fade_pickups(delta: float) -> void:
+	for uid: int in _retiring_pickups.keys():
+		var pickup: Dictionary = _retiring_pickups[uid]
+		pickup.elapsed += delta
+		var model: ELModel = object_models.get(uid)
+		if pickup.elapsed >= PICKUP_FADE:
+			if model != null: model.basis = pickup.basis
+			_show_fogged(uid, false, 0.0)
+			_retiring_pickups.erase(uid)
+			continue
+		var shrink := 1.0 - smoothstep(0.0, PICKUP_FADE, pickup.elapsed)
+		if model != null:
+			var original: Basis = pickup.basis
+			model.basis = original.scaled(Vector3.ONE * shrink)
+		for entry: Dictionary in _instances.get(uid, []):
+			var transform: Transform3D = entry.transform
+			transform.basis = transform.basis.scaled(Vector3.ONE * shrink)
+			_place_instance(entry, transform)
 
 func _game_visible(item: Dictionary) -> bool:
 	return item.get("visible", true) and item.get("placed", true) and not item.get("fortified", false) and (not item.get("opened", false) or first_barrier(item)) \
@@ -590,9 +701,20 @@ func _grey_texture(texture: Texture2D) -> Texture2D:
 	_grey_textures[texture] = ImageTexture.create_from_image(grey)
 	return _grey_textures[texture]
 
-func update_object(item: Dictionary) -> void:
+static func _placed_basis(rotation: int, art_scale: float) -> Basis:
+	var mirror := Vector3(-1 if rotation & 1 else 1, 1, -1 if rotation & 2 else 1)
+	return Basis(Vector3.UP, -float((rotation >> 2) & 3) * PI / 2.0).scaled_local(mirror * art_scale)
+
+func update_object(item: Dictionary, apply_facing := false) -> void:
 	if item.is_empty(): return
 	var uid: int = item.uid
+	_fog_presence.erase(uid)
+	var actor: ELModel = actors.get(uid)
+	if apply_facing and actor != null:
+		actor.basis = _placed_basis(int(item.rotation), actor.basis.x.length())
+	if _retiring_pickups.has(uid):
+		if object_models.has(uid): object_models[uid].basis = _retiring_pickups[uid].basis
+		_retiring_pickups.erase(uid)
 	# An opened second-game gate has moved out of the way; a first-game
 	# runestone keeps its gate (barrier_pose).
 	var visible := _game_visible(item)
@@ -603,7 +725,7 @@ func update_object(item: Dictionary) -> void:
 			if item.get("type") in ["hero", "monster"] and not item.get("alive", true):
 				model.playing = false
 				model.set_process(false)
-		for entry: Dictionary in _instances.get(uid, []): entry.node.multimesh.set_instance_transform(entry.index, Transform3D(Basis.from_scale(Vector3.ZERO), Vector3.ZERO))
+		for entry: Dictionary in _instances.get(uid, []): _place_instance(entry, Transform3D(Basis.from_scale(Vector3.ZERO), Vector3.ZERO))
 		_sync_blob(uid, false)
 		return
 	var definition := _art.resolve(item)
@@ -623,13 +745,14 @@ func update_object(item: Dictionary) -> void:
 		if object_models.has(uid):
 			animated.erase(object_models[uid])
 			object_models[uid].queue_free()
-		for entry: Dictionary in _instances.get(uid, []): entry.node.multimesh.set_instance_transform(entry.index, Transform3D(Basis.from_scale(Vector3.ZERO), Vector3.ZERO))
+		for entry: Dictionary in _instances.get(uid, []): _place_instance(entry, Transform3D(Basis.from_scale(Vector3.ZERO), Vector3.ZERO))
 		_instances.erase(uid)
-		model.scale = Vector3.ONE * float(definition.scale)
-		if not unit:
-			var rotation := int(item.rotation)
-			var mirror := Vector3(-1 if rotation & 1 else 1, 1, -1 if rotation & 2 else 1)
-			model.basis = Basis(Vector3.UP, -float((rotation >> 2) & 3) * PI / 2.0) * Basis.from_scale(mirror * float(definition.scale))
+		var art_scale := float(definition.scale)
+		model.basis = _placed_basis(int(item.rotation), art_scale)
+		# A replacement figure (such as a new costume or ship) keeps the
+		# direction the unit had reached before its art changed.
+		if unit and actor != null:
+			model.basis = actor.basis.orthonormalized().scaled_local(Vector3.ONE * art_scale)
 		model.set_meta("art_key", key)
 		var casts := silhouette(map.profile.id, item, definition)
 		for part: MeshInstance3D in model.parts.values(): _shade(part, casts)
@@ -640,6 +763,7 @@ func update_object(item: Dictionary) -> void:
 			actors[uid] = model
 			units[int(item.source_index)] = model
 		else: _add_animated(model)
+	if fog_session != null: _index_fog_object(item)
 	if object_models.has(uid):
 		var model: ELModel = object_models[uid]
 		model.visible = visible
@@ -652,7 +776,7 @@ func update_object(item: Dictionary) -> void:
 		_sync_blob(uid, visible)
 		return
 	for entry: Dictionary in _instances.get(uid, []):
-		entry.node.multimesh.set_instance_transform(entry.index, entry.transform if visible else Transform3D(Basis.from_scale(Vector3.ZERO), Vector3.ZERO))
+		_place_instance(entry, entry.transform if visible else Transform3D(Basis.from_scale(Vector3.ZERO), Vector3.ZERO))
 	_sync_blob(uid, visible)
 
 ## Scripts swap portals in from off the map. Give each a model whose

@@ -150,7 +150,7 @@ func _select() -> void:
 func _offer_drag(at: Vector2) -> Variant:
 	var index: int = offers.get_item_at_position(at, true)
 	if index < 0: return null
-	offers.set_drag_preview(ELSpellbookView.drag_preview(offers.get_item_icon(index), Vector2(offers.fixed_icon_size)))
+	offers.set_drag_preview(ELListDrag.drag_preview(offers.get_item_icon(index), Vector2(offers.fixed_icon_size)))
 	return {"skills": self, "index": index}
 
 func _can_learn_drop(_at: Vector2, data: Variant) -> bool:

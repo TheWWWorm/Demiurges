@@ -102,6 +102,7 @@ var _label_time := 0.0
 # Main-thread snapshot state, cleared together with the GPU side on a reset.
 var _slots := {}          # node id -> {mesh, pose, look, flags}
 var _layers := {}         # [texture, solid] -> [layer (-1 none), has alpha]
+var _texture_revision := 0
 var _next_layer := 0
 var _layer_keys := []     # layer -> its [texture, solid] key (null when free)
 var _free_layers: Array[int] = []
@@ -349,6 +350,10 @@ func _process(delta: float) -> void:
 	_snapshot_us = Time.get_ticks_usec() - started
 
 func _snapshot(delta: float) -> void:
+	if _texture_revision != ELIconUpscale.texture_revision:
+		_reset()
+		_scan = 0.0
+		_effect.history_reset = true
 	# Options or scene effects may turn the shadow map back on.
 	if is_instance_valid(_sun) and _sun.shadow_enabled: _sun.shadow_enabled = false
 	if _effect.take_overflow():
@@ -577,7 +582,11 @@ func _scan_statics(ops: Array) -> void:
 			count = multimesh.instance_count if multimesh.visible_instance_count < 0 else multimesh.visible_instance_count
 			var material := node.material_override as BaseMaterial3D
 			fog_colours = node.get_parent() is ELAdventureScene and multimesh.use_colors and material != null and material.vertex_color_use_as_albedo
-			placement = hash([multimesh.buffer, fog_colours])
+			# The map records updates as they are written. Static batches need
+			# no render-server buffer readback just to check whether they moved.
+			if node.has_meta(ELAdventureScene.PLACEMENT_REVISION):
+				placement = int(node.get_meta(ELAdventureScene.PLACEMENT_REVISION)) * 2 + int(fog_colours)
+			else: placement = hash([multimesh.buffer, fog_colours])
 		if cached.is_empty() or cached[0] != node.global_transform or cached[1] != count or cached[3] != placement:
 			var placed := []
 			if node is MultiMeshInstance3D:
@@ -1001,6 +1010,7 @@ static func _authored_layer(texture: Texture2D, image: Image) -> Image:
 	return null
 
 func _reset() -> void:
+	_texture_revision = ELIconUpscale.texture_revision
 	_figure_lights.clear()
 	_slots.clear()
 	_layers.clear()

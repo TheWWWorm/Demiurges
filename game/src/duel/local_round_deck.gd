@@ -27,7 +27,15 @@ func swap_round_spell(slot: int, code: String) -> bool:
 	var draft := round_preset()
 	if slot < 0 or slot >= draft.cards.size() or int(draft.reserve.get(code, 0)) <= 0: return false
 	draft.cards[slot] = code
-	var validated := ELDuelPresets.with_reserve_deck(duel_match.presets[side], draft.cards)
+	return _stage(draft.cards)
+
+func reorder_round_spells(from: int, to: int) -> bool:
+	if profile.id != "el2" or duel_match.finished(): return false
+	var draft := round_preset()
+	return ELSpellInventory.swap_slots(draft.cards, from, to) and _stage(draft.cards)
+
+func _stage(cards: Array) -> bool:
+	var validated := ELDuelPresets.with_reserve_deck(duel_match.presets[side], cards)
 	if validated.is_empty(): return false
 	duel_match.presets[side] = validated
 	return true

@@ -51,7 +51,7 @@ const SPEC_TABLES := {"terrain_objects": "TerrObj", "mana_nodes": "ManaNodes"}
 ## Object effects (SpecEffect) are drawn only while their reach is in the
 ## camera's view, checked this often (seconds); a big map has scores of
 ## volcanoes, springs and ash clouds.
-const CULL_STEP := 0.2
+const CULL_STEP := 0.1
 ## Room (units) added round an effect's own reach before it counts as out
 ## of view.
 const CULL_MARGIN := 6.0
@@ -104,6 +104,7 @@ var _spec_objects: Dictionary = {}
 var _cull_clock := 0.0
 ## Effect names of the garrisons shown now; rebuilt after fort changes.
 var _garrisons: Dictionary = {}
+var _forts: Dictionary = {}
 var _garrisons_dirty := false
 
 func build(data: ELProfile, settings: ELSettings, state: ELAdventureSession) -> void:
@@ -120,6 +121,7 @@ func build(data: ELProfile, settings: ELSettings, state: ELAdventureSession) -> 
 	if data.id == "el2":
 		_shrine_session = state
 		for item: Dictionary in state.objects.values():
+			if item.get("type") == "fort": _forts[int(item.uid)] = item
 			if not building_effect(data, item).is_empty():
 				_shrines[int(item.uid)] = item
 			else:
@@ -157,6 +159,11 @@ func script_event(data: Dictionary) -> void:
 	if data.kind in ["object_changed", "object_killed", "object_created"] and _spec_objects.has(int(data.get("id", -1))):
 		_sync_spec(int(data.id))
 	if _shrine_session != null and data.kind in ["fort_entered", "fort_left", "fort_captured", "object_changed", "object_killed", "object_created"]:
+		if data.kind in ["object_changed", "object_killed", "object_created"]:
+			var id := int(data.get("id", -1))
+			var item := _shrine_session.object(id)
+			if item.get("type") == "fort": _forts[id] = item
+			else: _forts.erase(id)
 		_garrisons_dirty = true
 	if data.kind == "script_effect":
 		finish(str(data.name))
@@ -206,8 +213,10 @@ func _sync_spec(uid: int) -> void:
 	orient(name, -float((int(item.get("rotation", 0)) >> 2) & 3) * PI / 2.0)
 	var effect: Dictionary = effects[name]
 	var reach := _reach(effect.file)
-	effect.cull = Vector4(reach.position.x, reach.position.y, reach.position.z, reach.size.length() * 0.5 + CULL_MARGIN)
-	_cull(effect, get_viewport().get_camera_3d() if is_inside_tree() else null)
+	var middle := reach.get_center()
+	effect.cull = Vector4(middle.x, middle.y, middle.z, reach.size.length() * 0.5 + CULL_MARGIN)
+	var camera := get_viewport().get_camera_3d() if is_inside_tree() else null
+	_cull(effect, camera.get_frustum() if camera != null else [])
 
 ## The box (effect space: x east, y up, z south) the particles of a file
 ## ever reach.
@@ -226,14 +235,15 @@ static func _reach(file: ELParticleFile) -> AABB:
 ## Hides an object effect whose reach (its "cull" sphere: centre in effect
 ## space, radius) is out of the camera's view, and shows it again when it
 ## comes in; a hidden one keeps its clock but is not redrawn.
-func _cull(effect: Dictionary, camera: Camera3D) -> void:
+func _cull(effect: Dictionary, frustum: Array[Plane]) -> void:
 	var sphere: Vector4 = effect.cull
 	var node: MultiMeshInstance3D = effect.node
 	var inside := true
-	if camera != null:
+	if not frustum.is_empty():
 		var center := (node.global_transform if node.is_inside_tree() else node.transform) * Vector3(sphere.x, sphere.y, sphere.z)
-		for plane: Plane in camera.get_frustum():
-			if plane.distance_to(center) > sphere.w:
+		var reach := sphere.w + (CULL_MARGIN if node.visible else 0.0)
+		for plane: Plane in frustum:
+			if plane.distance_to(center) > reach:
 				inside = false
 				break
 	if inside == node.visible: return
@@ -242,8 +252,9 @@ func _cull(effect: Dictionary, camera: Camera3D) -> void:
 
 func _cull_all() -> void:
 	var camera := get_viewport().get_camera_3d() if is_inside_tree() else null
+	var frustum: Array[Plane] = camera.get_frustum() if camera != null else []
 	for effect: Dictionary in effects.values():
-		if effect.has("cull"): _cull(effect, camera)
+		if effect.has("cull"): _cull(effect, frustum)
 
 ## The guard-zone ring of every occupied fort in sight (RING_PIECES), each
 ## piece at its cell's centre on the ground.
@@ -251,7 +262,7 @@ func _sync_garrisons() -> void:
 	_garrisons_dirty = false
 	var wanted := {}
 	var map := _shrine_session.map
-	for fort: Dictionary in _shrine_session.objects.values():
+	for fort: Dictionary in _forts.values():
 		if fort.get("type") != "fort" or not fort.get("alive", true) or not fort.get("placed", true): continue
 		var garrison := _shrine_session.object(int(fort.get("garrison", -1)))
 		if garrison.is_empty() or not garrison.get("alive", false) or not garrison.get("fortified", false): continue

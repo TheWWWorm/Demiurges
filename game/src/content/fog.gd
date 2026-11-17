@@ -74,7 +74,7 @@ static func group_mask(state: ELAdventureSession, player: int) -> int:
 ## Rebuilds the visible masks of every player and adds them to the explored
 ## masks. Runs at start and load (when the director assigns its grid) and after
 ## any event that moves or changes a sight source.
-static func refresh(state: ELAdventureSession) -> void:
+static func refresh(state: ELAdventureSession, reuse_sources := false) -> void:
 	if not applies(state) or state.grid == null or state.grid.map != state.map: return
 	# How many rebuilds ran (for the checks; never saved like the rest of `fog`).
 	state.fog.refreshes = int(state.fog.get("refreshes", 0)) + 1
@@ -110,16 +110,18 @@ static func refresh(state: ELAdventureSession) -> void:
 				if masks[player] & bit(owner): mask |= masks[player]
 			reach[owner] = mask
 		masks = reach
-	for item: Dictionary in state.objects.values():
+	var sources: Array = state.objects.values() if not el2 else _second_sources(state, reuse_sources)
+	for id_or_item: Variant in sources:
+		var item: Dictionary = state.object(id_or_item) if el2 else id_or_item
 		var mask: int = masks.get(int(item.get("owner", -1)), 0)
 		if mask == 0 or not item.get("alive", false): continue
 		if source(state, item):
 			if hero_sees(state, item): _disc(state, seen, mask, Vector2i(item.x, item.y), radius(state, item))
 		elif ELFirstScenario.is_castle(item):
 			# An authored <hidden/> castle stands off the map and reveals nothing.
-			if item.get("visible", true) and state.grid.contains(Vector2i(item.x, item.y)): _rect(state, seen, mask, _bounds(state, item), CASTLE_RADIUS, true)
+			if item.get("visible", true) and state.grid.contains(Vector2i(item.x, item.y)): _rect(state, seen, mask, object_bounds(state, item), CASTLE_RADIUS, true)
 		elif item.get("group") == "mines":
-			_rect(state, seen, mask, _bounds(state, item), MINE_RADIUS, true)
+			_rect(state, seen, mask, object_bounds(state, item), MINE_RADIUS, true)
 	if not el2 and state.map.id == SHARED_SIGHT_MAP:
 		for item: Dictionary in state.objects.values():
 			if shared_sight(state, item) and hero_sees(state, item): _disc(state, seen, everyone, Vector2i(item.x, item.y), sight_radius(item))
@@ -128,18 +130,19 @@ static func refresh(state: ELAdventureSession) -> void:
 	for player: int in masks:
 		for id: Variant in state.players[player].get("scry", []):
 			var bowl := state.object(int(id))
-			if bowl.get("alive", false): _rect(state, seen, masks[player], _bounds(state, bowl), BOWL_RADIUS, true)
+			if bowl.get("alive", false): _rect(state, seen, masks[player], object_bounds(state, bowl), BOWL_RADIUS, true)
 	# mission24: the tomb's surroundings stay unseen until it opens, then
 	# every player sees them.
 	if not el2 and state.map.id == TOMB_MAP:
 		for item: Dictionary in state.objects.values():
-			if item.get("name") == "AncientTomb": _rect(state, seen, everyone, _bounds(state, item), TOMB_RADIUS, bool(state.scenario.get("tomb_open", false)))
+			if item.get("name") == "AncientTomb": _rect(state, seen, everyone, object_bounds(state, item), TOMB_RADIUS, bool(state.scenario.get("tomb_open", false)))
 	if el2:
 		# Closed Runestones keep their rectangles unseen for the local
 		# player's group even on an AI turn; observations are revealed afterwards.
 		var local := group_mask(state, 1)
 		if local != 0:
-			for item: Dictionary in state.objects.values():
+			for id: int in state.fog.gates:
+				var item := state.object(id)
 				if not ELSecondGates.is_gate(item) or item.get("opened", false): continue
 				for area: Rect2i in ELSecondGates.hide_rects(item): _hide(state, seen, local, area)
 		# Script observations show every player a disc.
@@ -148,6 +151,21 @@ static func refresh(state: ELAdventureSession) -> void:
 	var changed: bool = previous != seen or before != state.explored
 	state.fog.visible = seen
 	state.fog.revision = int(state.fog.get("revision", 0)) + (1 if changed else 0)
+
+## Movement and day rollover can reuse the candidate lists. Read each
+## candidate's live owner, position and state when composing the masks.
+## Other refreshes rebuild the lists after object changes and loading.
+static func _second_sources(state: ELAdventureSession, reuse_sources: bool) -> Array:
+	if reuse_sources and state.fog.has("sources"): return state.fog.sources
+	var sources: Array[int] = []
+	var gates: Array[int] = []
+	for item: Dictionary in state.objects.values():
+		if source(state, item) or item.get("group") == "mines" or ELFirstScenario.is_castle(item):
+			sources.append(int(item.uid))
+		if ELSecondGates.is_gate(item): gates.append(int(item.uid))
+	state.fog.sources = sources
+	state.fog.gates = gates
+	return sources
 
 ## The sight disc radius of a source actor in this edition.
 static func radius(state: ELAdventureSession, hero: Dictionary) -> int:
@@ -176,10 +194,12 @@ static func shared_sight(state: ELAdventureSession, item: Dictionary) -> bool:
 ## A step of a sight source: a player's hero (EL2 also mobs), or a neutral
 ## hero that shows its surroundings to every player.
 static func moved(state: ELAdventureSession, actor: Dictionary) -> void:
-	if source(state, actor) and (int(actor.get("owner", 0)) >= 1 or shared_sight(state, actor)): refresh(state)
+	if source(state, actor) and (int(actor.get("owner", 0)) >= 1 or shared_sight(state, actor)): refresh(state, true)
 
 static func on_event(state: ELAdventureSession, data: Dictionary) -> void:
-	if REFRESH_EVENTS.has(data.get("kind")): refresh(state)
+	# Resource piles have no effect on second-game sight.
+	if data.get("pickup", false) and applies(state) and second(state): return
+	if REFRESH_EVENTS.has(data.get("kind")): refresh(state, data.get("kind") == "day_changed")
 
 ## Increments whenever any explored or visible bit changes.
 static func revision(state: ELAdventureSession) -> int:
@@ -215,14 +235,22 @@ static func tile_state(state: ELAdventureSession, player: int, point: Vector2i) 
 ## is explored, and unexplored otherwise.
 static func object_state(state: ELAdventureSession, player: int, item: Dictionary, at := Vector2i(-1, -1)) -> int:
 	if not active(state, player) or item.is_empty(): return VISIBLE
-	var bounds := _bounds(state, item)
+	var bounds := object_bounds(state, item)
 	if at.x >= 0: bounds.position = at
+	var width := state.map.width
+	bounds = bounds.intersection(Rect2i(0, 0, width, state.map.height))
+	var seen: PackedByteArray = state.fog.get("visible", PackedByteArray())
+	var explored_cells := state.explored
+	var seen_size := seen.size()
+	var explored_size := explored_cells.size()
+	var mask := bit(player)
 	var result := UNEXPLORED
 	for y in range(bounds.position.y, bounds.end.y):
+		var row := y * width
 		for x in range(bounds.position.x, bounds.end.x):
-			var tile := tile_state(state, player, Vector2i(x, y))
-			if tile == VISIBLE: return VISIBLE
-			result = maxi(result, tile)
+			var i := row + x
+			if i < seen_size and seen[i] & mask: return VISIBLE
+			if i < explored_size and explored_cells[i] & mask: result = REMEMBERED
 	return result
 
 ## Heroes, monsters, castles and forts fade out of remembered fog; other
@@ -238,7 +266,7 @@ static func _index(state: ELAdventureSession, point: Vector2i) -> int:
 	if state.map == null or point.x < 0 or point.y < 0 or point.x >= state.map.width or point.y >= state.map.height: return -1
 	return point.y * state.map.width + point.x
 
-static func _bounds(state: ELAdventureSession, item: Dictionary) -> Rect2i:
+static func object_bounds(state: ELAdventureSession, item: Dictionary) -> Rect2i:
 	var origin := Vector2i(int(item.get("x", -1)), int(item.get("y", -1)))
 	if item.get("type") in ["hero", "monster", "corpse"]: return Rect2i(origin, Vector2i.ONE)
 	var size: Vector2i
@@ -251,6 +279,7 @@ static func _bounds(state: ELAdventureSession, item: Dictionary) -> Rect2i:
 
 static func _disc(state: ELAdventureSession, seen: PackedByteArray, mask: int, center: Vector2i, radius: int) -> void:
 	var width := state.map.width
+	var explored := state.explored
 	var limit := radius * radius
 	for y in range(maxi(0, center.y - radius), mini(state.map.height - 1, center.y + radius) + 1):
 		var span := limit - (y - center.y) * (y - center.y)
@@ -260,7 +289,7 @@ static func _disc(state: ELAdventureSession, seen: PackedByteArray, mask: int, c
 		var row := y * width
 		for x in range(maxi(0, center.x - half), mini(width - 1, center.x + half) + 1):
 			seen[row + x] |= mask
-			state.explored[row + x] |= mask
+			explored[row + x] |= mask
 
 ## A footprint grown by a radius with rounded corners: tiles whose squared
 ## distance to the footprint rectangle is at most radius². Hiding clears only
