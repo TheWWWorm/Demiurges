@@ -54,6 +54,7 @@ extends RefCounted
 ## "sharper_textures": opt-in 2x art for opaque 3D color textures.
 ## "sharper_declined": "version:factor" of the preparation prompt the player
 ## answered Later (it is not offered again for that screen size).
+## "sharper_startup_all": the player accepted the startup offer for all art.
 ## Per edition (original Options screen order):
 ## "music"/"effects" volumes 0..1; "movies" the originals' Video key (0 none,
 ## 1 own size, 2 fitted); "blood"; "map_tooltips" (second game
@@ -88,7 +89,7 @@ const WORLD_AI_LEVELS := [
 const SHARED := {"ambience": 0.55, "shadows": true, "soft_shadows": false, "weather": true, "helper_overlay": false, "antialiasing": -1, "sharpening": 0, "terrain_detail": false, "enhanced_water": false, "bloom": false, "soft_particles": false, "spell_light": true, "discord_activity": true, "renderer": 0, "path_tracing": false, "sky_light": 1.0, "light_bounces": 2, "show_fps": false, "hardware_check": 0, "free_movement": true, "duel_ai": 2, "world_ai": 1, "battle_estimate": false, "cast_icons": true, "first_battle_dome": true,
 	"window_mode": 0, "window_width": 0, "window_height": 0, "frame_rate": 0,
 	"upscaler": 0, "upscale_quality": 1, "frame_generation": false, "ray_reconstruction": false, "battle_interface": 0, "battle_gap": 0, "battle_gap_2": 2, "battle_gap_3": 1, "battle_readouts": true, "camera_drag_lock": false,
-	"sharper_icons": true, "sharper_interface": true, "sharper_textures": false, "sharper_declined": ""}
+	"sharper_icons": true, "sharper_interface": true, "sharper_textures": false, "sharper_declined": "", "sharper_startup_all": false}
 const EDITION := {"music": 0.55, "effects": 0.8, "movies": 2, "blood": true, "map_tooltips": true, "autosave": true,
 	"heroes_voices": true, "ambient_sounds": true, "adventure_fast": false, "animated_objects": true,
 	"mouse_rotation": 1.0, "keyboard_rotation": 1.0, "mouse_scroll": 1.0, "keyboard_scroll": 1.0,

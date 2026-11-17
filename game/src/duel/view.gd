@@ -6335,6 +6335,7 @@ func _open_sharper_art(ask: bool, then := Callable(), all_art := false) -> void:
 		screen.starting.connect(func():
 			for key: String in ELIconUpscale.SETTINGS: settings.values[key] = true
 			settings.values.sharper_declined = ""
+			settings.values.sharper_startup_all = true
 			ELIconUpscale.use(settings.values)
 			if not settings.save_file(): _notice(_t("Could not save preferences.")), CONNECT_ONE_SHOT)
 	screen.on_later = func(_why: String):
@@ -6343,18 +6344,21 @@ func _open_sharper_art(ask: bool, then := Callable(), all_art := false) -> void:
 	screen.closed.connect(func(_complete: bool):
 		if then.is_valid(): then.call())
 
-## At start: when the switches ask for art that is not prepared for this
-## screen, the prompt to prepare it (once per screen size and version, until
-## the player starts it from Options).
+## Offer missing selected art or the 3D sheets skipped by the old startup
+## prompt. After acceptance, use the player's chosen switches on later starts.
 func _offer_sharper_art() -> void:
 	if not ELIconUpscale.available() or ELIconUpscale.cache_factor() < 2 or not _campaign_probe.is_empty(): return
 	if String(settings.values.get("sharper_declined", "")) == "%d:%d" % [ELIconUpscale.VERSION, ELIconUpscale.cache_factor()]: return
-	if _sharper_art_complete(): return
+	var all_art := not bool(settings.values.sharper_startup_all)
+	if _sharper_art_complete():
+		if not all_art or ELIconUpscale.enabled(ELIconUpscale.KIND_TEXTURE): return
+		if not ELIconUpscale.enabled(ELIconUpscale.KIND_ICON) or not ELIconUpscale.enabled(ELIconUpscale.KIND_INTERFACE): return
+		if int(ELIconUpscale.estimate(_upscalers(), true).sheets) == 0: return
 	# Over the main menu, after the start-up movies.
 	for i in 1200:
 		if front_menu != null and front_menu.is_visible_in_tree() and (movie_layer == null or not is_instance_valid(movie_layer)): break
 		await get_tree().create_timer(0.25).timeout
-	_open_sharper_art(true, Callable(), true)
+	_open_sharper_art(true, Callable(), all_art)
 
 ## The game window's mode, size and frame rate (computers only).
 func _window_rows(page: VBoxContainer) -> VBoxContainer:
