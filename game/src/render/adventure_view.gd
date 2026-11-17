@@ -2197,6 +2197,9 @@ func _text_or(key: String, fallback: String) -> String:
 
 func _build_presentation() -> void:
 	presentation = ELFirstMapPresentation.new()
+	# Second game: the building idle particles (BuildingsPFX) go to the map's
+	# own effects; the first game's presentation makes its own.
+	if state.map.profile.id == "el2": presentation.effects = effects
 	world.add_child(presentation)
 	presentation.listener = target
 	presentation.build(state.map.profile, settings, state, world, camera)

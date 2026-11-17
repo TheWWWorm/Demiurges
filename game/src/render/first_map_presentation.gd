@@ -3,8 +3,10 @@ extends Node3D
 ## Map presentation that does not change the simulation. The first game
 ## uses all of it; the second game (`second`) its sounds only: building
 ## sounds, terrain ambience and hero footsteps, which its executable runs by
-## the same rules and from the same sfx folders. Its blazons, building
-## particles and weather belong to its own scripts and effects.
+## the same rules and from the same sfx folders, and the building idle
+## particles (BuildingsPFX/<model>/Idle.pfx, drawn by the map's own effects,
+## which the view hands over). Its blazons, table effects and weather belong
+## to its own scripts and effects.
 ##
 ## Ownership blazons. Every owned castle, hero, mine, mana node, fort, shop
 ## and captured shrine or citadel carries its owner's blazon: a 41 px cell of
@@ -25,7 +27,9 @@ extends Node3D
 ##
 ## Building particles. Mana nodes, volcano rocks and several additional
 ## buildings keep a looping map effect (SPEC_EFFECTS); a figure with
-## BuildingsPFX/<model>/Idle.pfx plays it once with each idle round.
+## BuildingsPFX/<model>/Idle.pfx plays it once with each idle round. Both
+## games: the second game's teleport altar (TeleportKit, tebuad132) raises
+## its column of light this way (#157), as do a few posts and shrines.
 ##
 ## Terrain ambience. While ambient sounds are on, the terrain in view is
 ## counted by colour (red, green, blue, black, lava, water; lava and water

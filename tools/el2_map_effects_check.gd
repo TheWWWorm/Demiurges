@@ -9,7 +9,9 @@ extends SceneTree
 ## - the weather preference leaves them (they are the object's own), and
 ##   unexplored fog hides them;
 ## - an effect whose reach is out of the camera's view is hidden and not
-##   redrawn, one in view is drawn.
+##   redrawn, one in view is drawn;
+## - #157: a building figure with a BuildingsPFX/<model>/Idle.pfx (chapter
+##   11's teleport altar) plays it with each round of its idle clip.
 ##
 ##   godot --headless --path game --script ../tools/el2_map_effects_check.gd
 ##
@@ -60,6 +62,7 @@ func _run() -> void:
 	_tables(profile)
 	var saves := _backup(ELSaveSlots.folder("el2"))
 	for map_id: String in MAPS: await _map(profile, map_id)
+	await _map(profile, "e2mission11", true)
 	var used := {}
 	for table: String in ["TerrObj", "ManaNodes"]:
 		for name: String in profile.table(table):
@@ -87,7 +90,8 @@ func _tables(profile: ELProfile) -> void:
 		if file == null or file.loop_end <= 0: once.append(name)
 	check(once.is_empty(), "every TerrObj effect loops (not: %s)" % str(once))
 
-func _map(profile: ELProfile, map_id: String) -> void:
+## With `idle_only` only the building idle effects (#157) are checked.
+func _map(profile: ELProfile, map_id: String, idle_only := false) -> void:
 	var row := {}
 	# A chapter map from its campaign (its script lives there), else a single map.
 	for campaign_id: String in ["Green", "Red", "Blue", "Black"]:
@@ -111,7 +115,11 @@ func _map(profile: ELProfile, map_id: String) -> void:
 	root.add_child(view)
 	var built := view.build(profile, row, settings, 1)
 	check(built, "%s builds: %s" % [map_id, view.error])
-	if built:
+	if built and idle_only:
+		await frames(5)
+		ELFog.reveal_for_console(view.state, 1, true)
+		await _idle(view, profile, map_id)
+	elif built:
 		await frames(5)
 		ELFog.reveal_for_console(view.state, 1, true)
 		await frames(3)
@@ -122,6 +130,28 @@ func _map(profile: ELProfile, map_id: String) -> void:
 		await _fog(view, profile, map_id)
 	view.queue_free()
 	await frames(2)
+
+## #157: the teleport altar's column of light, BuildingsPFX/tebuad132/Idle.pfx,
+## as its idle clip comes round (the map's own effects draw it).
+func _idle(view: ELAdventureView, profile: ELProfile, map_id: String) -> void:
+	var kit := {}
+	for item: Dictionary in view.state.objects.values():
+		if item.get("name") == "TeleportKit" and item.get("alive", false): kit = item
+	if kit.is_empty(): return
+	var model: ELModel = view.world.object_models.get(int(kit.uid))
+	check(model != null and model.has_clip("cidle") and profile.archives.pfx.has(ELArchive.key("BuildingsPFX/tebuad132/Idle.pfx")), "%s: the teleport altar has an idle clip and an idle effect file" % map_id)
+	if model == null: return
+	var at := ELAdventureGrid.center(kit, ELSecondBuildings.definition(profile, kit)) * ELAdventureTerrain.CELL
+	view.following = -1
+	view.target = Vector3(at.x, 0, -at.y)
+	view._update_camera()
+	await frames(3)
+	var name := "idle:%d" % int(kit.uid)
+	model.animation_looped.emit("cidle")
+	await frames(2)
+	var effect: Dictionary = view.effects.effects.get(name, {})
+	check(not effect.is_empty() and ELArchive.key(str(effect.entry.file)) == ELArchive.key("BuildingsPFX/tebuad132/Idle.pfx") and Vector2(float(effect.entry.x), float(effect.entry.y)).distance_to(at) < 0.5,
+		"%s: the teleport altar's idle round raises its column of light at the altar (#157)" % map_id)
 
 ## Each object's effect: the original's file at the figure, or none.
 func _placed(view: ELAdventureView, profile: ELProfile, map_id: String) -> void:

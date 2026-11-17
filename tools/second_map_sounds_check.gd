@@ -69,7 +69,8 @@ func _map_part() -> void:
 	if sounds == null:
 		_restore(ELSaveSlots.folder("el2"), saves)
 		return
-	check(sounds.effects == null and sounds.blazons.is_empty() and sounds.spec_effects.is_empty(), "no blazons or building particles of its own")
+	# Its building idle particles (#157) go to the map's own effects.
+	check(sounds.effects == view.effects and sounds.blazons.is_empty() and sounds.spec_effects.is_empty(), "no blazons or table particles of its own; idle particles on the map's effects")
 
 	# Building sounds.
 	var folders := {}
