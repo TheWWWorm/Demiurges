@@ -14,6 +14,8 @@ extends SceneTree
 ##   the prompt, and closing it goes back to the prompt;
 ## - #170: choosing a hero's destination leaves the view where it is (on the
 ##   destination), it does not swing back to the hero;
+## - #171: with free movement a right click stops the walking hero on the
+##   tile it is stepping onto; its unspent movement points stay;
 ## - #168: a map tooltip held up with the right button fits its text whatever
 ##   tooltip was shown before it (a building's after a monster's stretched).
 ##
@@ -226,6 +228,33 @@ func _route_camera_part(view: ELAdventureView) -> void:
 	var planned: Dictionary = hero.get("strategy_order", {})
 	check(not planned.is_empty() and Vector2i(planned.destination[0], planned.destination[1]) == goal, "a click far from the hero plans its route there")
 	check(view.following < 0 and Vector2(view.target.x - spot.x, view.target.z - spot.z).length() < 0.5, "planning the route leaves the view on the destination (%.1f from it, following %d)" % [Vector2(view.target.x - spot.x, view.target.z - spot.z).length(), view.following])
+	# #171: chosen again, the hero sets off (free movement); a right click
+	# stops it on the way.
+	var start := Vector2i(int(hero.x), int(hero.y))
+	var points := int(hero.ap)
+	check(ELStrategy.free_mode(view.director), "free movement is on")
+	view._unhandled_input(_click(view.camera.unproject_position(spot), false))
+	var waited := 0
+	while waited < 600 and Vector2i(int(hero.x), int(hero.y)) == start:
+		await process_frame
+		waited += 1
+	check(not view.director.movement.is_empty() and view.director.strategy.get("free", "") == "act", "the hero sets off on the second choice")
+	var right := InputEventMouseButton.new()
+	right.button_index = MOUSE_BUTTON_RIGHT
+	right.position = Vector2(200, 200)
+	right.pressed = true
+	view._unhandled_input(right)
+	right = right.duplicate()
+	right.pressed = false
+	view._unhandled_input(right)
+	waited = 0
+	while waited < 600 and (not view.director.movement.is_empty() or not view.director.strategy.is_empty()):
+		await process_frame
+		waited += 1
+	var at := Vector2i(int(hero.x), int(hero.y))
+	var walked := maxi(absi(at.x - start.x), absi(at.y - start.y))
+	check(view.director.movement.is_empty() and at != goal and walked >= 1 and walked <= 2 and hero.get("strategy_order", {}).is_empty(), "a right click stops the walking hero within a step (%d tiles walked of %d)" % [walked, maxi(absi(goal.x - start.x), absi(goal.y - start.y))])
+	check(int(hero.ap) > 0 and int(hero.ap) < points, "it keeps the movement points it did not spend (%d of %d)" % [int(hero.ap), points])
 	view._cancel_map_order()
 	view.following = view._hero_id()
 	await frames(2)

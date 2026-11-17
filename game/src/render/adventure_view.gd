@@ -1112,7 +1112,10 @@ func _unhandled_input(event: InputEvent) -> void:
 				if hud != null: hover(event.position)
 			else:
 				if hud != null: hud.show_tooltip(-1, {}, Vector2.ZERO)
-				if hud != null and event.position.distance_to(_right_origin) <= ELSecondMapTooltips.DRAG_THRESHOLD: _cancel_order_at(event.position)
+				if hud != null and event.position.distance_to(_right_origin) <= ELSecondMapTooltips.DRAG_THRESHOLD:
+					# Free movement: a right click stops the walking hero (#171).
+					if strategic_session == null and director.stop_free_walk(): _refresh_hero_info()
+					else: _cancel_order_at(event.position)
 		elif event.pressed and event.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN]:
 			view_goal = Vector2(-1, -1)
 			zoom = clampf(zoom * (0.9 if event.button_index == MOUSE_BUTTON_WHEEL_UP else 1.1), zoom_limits.x, zoom_limits.y)

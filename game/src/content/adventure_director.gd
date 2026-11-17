@@ -694,6 +694,20 @@ func cancel_strategy_move(player: int, day: int, id: int) -> bool:
 	presentation.emit({"kind": "notice", "text": notice})
 	return true
 
+## Free movement (remake): the local player's hero walking its route stops on
+## the tile it is stepping onto (#171). The rest of the order is dropped, the
+## movement points it did not spend stay, and the player plans again.
+func stop_free_walk() -> bool:
+	if movement.is_empty() or not movement.get("strategic", false) or strategy.get("free", "") != "act": return false
+	var actor := state.object(int(movement.id))
+	if actor.is_empty() or int(actor.get("owner", -1)) != state.current_player: return false
+	var last := int(movement.index) + (1 if float(movement.progress) > 0.0 else 0)
+	if last < movement.path.size() - 1: movement.path.resize(last + 1)
+	actor.strategy_order = {}
+	presentation.emit({"kind": "route", "id": actor.uid, "path": movement.path.slice(movement.index)})
+	if int(movement.index) >= movement.path.size() - 1: _complete_movement(false)
+	return true
+
 func submit_strategy_turn(player: int, day: int) -> bool:
 	if not _strategy_input(player, day, true): return false
 	notice = ""
