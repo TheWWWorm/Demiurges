@@ -78,6 +78,7 @@ func _map_part() -> void:
 		await _altars(view, profile)
 		await _garrison(view)
 		_messages(view, profile)
+		await _change_effect_message(view, profile)
 		await _camera(view)
 	view.queue_free()
 	await frames(2)
@@ -209,6 +210,53 @@ func _messages(view: ELAdventureView, profile: ELProfile) -> void:
 	hud.advance_messages(0.25)
 	check(hud.message_texts() == ["second"] and hud.messages[0].age == 0.0, "after 0.5 s it is gone, and the next line only now starts ageing")
 	hud.messages.clear()
+
+## #159: a specialization shrine's (or beacon's) message opens once the
+## hero's change effect (Bereserk.pfx, 30 ticks of the command queue) has
+## played, not over it; the map is held meanwhile.
+func _change_effect_message(view: ELAdventureView, profile: ELProfile) -> void:
+	var state := view.state
+	var hero := state.object(view._hero_id())
+	check(not hero.is_empty() and ELFog.shown(state, 1, hero), "the player has a hero in sight")
+	if hero.is_empty(): return
+	var text := profile.text("BldngMsg1Specialization").replace("%s", "X")
+	# As ELSecondBuildings.use: the effect event, then the message.
+	state.event.emit({"kind": "hero_change_effect", "id": hero.uid})
+	view.director.presentation.emit({"kind": "building_message", "hero": hero.uid, "building": -1, "title": "", "text": text, "resources": [], "skill": "", "key": "BldngMsg1Specialization"})
+	await frames(2)
+	var name := "hero_change:%d" % int(hero.uid)
+	check(view.effects.effects.has(name) and view.building_message == null and view.paused, "the shrine's message waits while the change effect plays, the map held")
+	var start := Time.get_ticks_msec()
+	while view.building_message == null and Time.get_ticks_msec() - start < 4000: await process_frame
+	var waited := (Time.get_ticks_msec() - start) / 1000.0
+	check(view.building_message != null and waited > 1.7 and waited < 2.4 and not view.effects.effects.has(name), "then it opens, the effect over (%.2f s)" % waited)
+	if view.building_message != null: view._close_building_message()
+	await frames(2)
+	check(not view.paused, "closing it frees the map")
+	# After a battle: the specialization's box waits for the commands queued
+	# before it (here a script wait of 0.6 s).
+	# The chapter's opening scene is let run out first.
+	var opening := Time.get_ticks_msec()
+	while Time.get_ticks_msec() - opening < 30000:
+		if view.director._map_idle(): break
+		if not view.director.dialogue.is_empty(): view.director.acknowledge("OK")
+		await frames(2)
+	check(view.director._map_idle(), "the chapter's opening commands have run")
+	view.director.action_wait = 0.6
+	state.learn_specialization(int(hero.uid), _unowned_spec(state, profile, hero))
+	await frames(2)
+	check(view.building_message == null and view.director.action_wait > 0.0, "a specialization learned after a battle waits for the map's commands")
+	start = Time.get_ticks_msec()
+	while view.building_message == null and Time.get_ticks_msec() - start < 3000: await process_frame
+	var d := view.director
+	check(view.building_message != null and view.director.action_wait <= 0.0, "then its box opens (%.2f s; idle %s: wait %.2f, commands %d, dialogue %s, outcome %s, exclusive %s, encounter %s, travel %s, paused %s)" % [(Time.get_ticks_msec() - start) / 1000.0, d._map_idle(), d.action_wait, state.commands.size(), not d.dialogue.is_empty(), state.outcome, state.exclusive, d.encounter != null, d.travel, view.paused])
+	if view.building_message != null: view._close_building_message()
+	await frames(2)
+
+static func _unowned_spec(state: ELAdventureSession, profile: ELProfile, hero: Dictionary) -> String:
+	for code: String in profile.table("HeroesSpecs"):
+		if ELSpecs.valid(profile, code) and code != "NONE" and not state.specializations(hero).has(code): return code
+	return ""
 
 func _camera(view: ELAdventureView) -> void:
 	var state := view.state

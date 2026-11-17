@@ -130,6 +130,11 @@ var first_level_ups: Array[int] = []
 var building_screen: ELBuildingScreenView
 var building_message: ELBuildingMessageView
 var building_messages: Array[Dictionary] = []
+## Second game: hero uid -> the msec time its change effect (shrine, beacon)
+## ends; its building message waits for it (#159).
+var _change_effects: Dictionary = {}
+## Building messages held back while a change effect plays.
+var _message_holds := 0
 var deferred_encounter: Dictionary = {}
 ## First game: a shop or resource-site screen, or the outcome window, waiting
 ## for the map notice in front of it (the original opens them after its
@@ -389,6 +394,8 @@ func _process(delta: float) -> void:
 		# window too (a building use pays its points before its message opens).
 		if second_hud != null and director != null: _refresh_hero_info()
 		return
+	# A message waiting for the map's commands (#159) opens once they are done.
+	if building_message == null and not building_messages.is_empty() and building_messages[0].get("wait_idle", false): _show_building_message()
 	if global_spell_waiting and _can_act():
 		_offer_global_spell()
 		if global_spells != null: return
@@ -1760,6 +1767,7 @@ func _present(data: Dictionary) -> void:
 		"building_message":
 			_remark(data.text)
 			building_messages.append(data)
+			if _hold_for_change_effect(data): return
 			_show_building_message()
 
 ## A portal hides its traveller until the receiver's effect has finished.
@@ -1828,6 +1836,32 @@ func hero_change_effect(uid: int) -> void:
 	var name := "hero_change:%d" % uid
 	if effects != null: effects.start(name, entry, 0.0)
 	if audio != null: audio.start_sound(name, entry.merged({"file": "Adventure/stars1.wav", "near": 1.0, "far": 32.0, "loop": false, "effects": true}, true))
+	_change_effects[uid] = Time.get_ticks_msec() + int(CHANGE_EFFECT_SECONDS * 1000.0)
+
+## CHero::PlayChangeEffect (Etherlords2.exe 0x66a661) queues the effect, its
+## sound, a 30-tick wait (15 ticks a second: the 61 frames of Bereserk.pfx)
+## and their end on the adventure command queue; the shrine's or beacon's
+## message box is queued after them (e.g. 0x4c6c31-0x4c6c8b), so it opens
+## once the effect has played (#159; it opened at once over it).
+const CHANGE_EFFECT_SECONDS := 30.0 / 15.0
+
+## A building message for a hero whose change effect is playing waits for it
+## (the map held meanwhile, as under the original command queue).
+func _hold_for_change_effect(data: Dictionary) -> bool:
+	var until := int(_change_effects.get(int(data.get("hero", -1)), 0))
+	_change_effects.erase(int(data.get("hero", -1)))
+	var left := (until - Time.get_ticks_msec()) / 1000.0
+	if second_hud == null or left <= 0.0: return false
+	_message_holds += 1
+	paused = true
+	dragging = false
+	get_tree().create_timer(left).timeout.connect(func() -> void:
+		if not is_inside_tree(): return
+		_message_holds -= 1
+		if effects != null: effects.finish("hero_change:%d" % int(data.hero))
+		if building_message == null and _message_holds == 0: paused = false
+		_show_building_message())
+	return true
 
 ## First game, CDestroyMainTower start: the hero turns to the
 ## castle and plays its attack clip (code); the
@@ -1881,7 +1915,12 @@ func _state_event(data: Dictionary) -> void:
 		"specialization_learned":
 			# The original reports a learned specialisation in a message box.
 			_remark(data.text)
-			building_messages.append({"kind": "building_message", "hero": data.id, "building": -1, "title": "", "text": data.text, "resources": [], "skill": "", "key": ""})
+			# Second game: ExGiveNewSpecialization only marks the specialization
+			# on the command queue; the battle's end queues its message box
+			# after the commands queued before it (Etherlords2.exe 0x67042f-
+			# 0x670563), so it opens once they have run (#159).
+			building_messages.append({"kind": "building_message", "hero": data.id, "building": -1, "title": "", "text": data.text, "resources": [], "skill": "", "key": "",
+				"wait_idle": second_hud != null})
 			_show_building_message()
 		"site_captured":
 			_remark("Captured " + ELResourceSites.title(state.map.profile, state.object(data.id)))
@@ -2638,7 +2677,9 @@ func _close_skills() -> void:
 ## A building message pauses the night like the original message box; queued
 ## messages from the same night follow one another.
 func _show_building_message() -> void:
-	if building_message != null or first_shop != null or rune_shop != null or building_messages.is_empty() or ui == null: return
+	if building_message != null or first_shop != null or rune_shop != null or building_messages.is_empty() or ui == null or _message_holds > 0: return
+	# A message queued behind the map's commands waits until they have run.
+	if building_messages[0].get("wait_idle", false) and not director._map_idle(): return
 	paused = true
 	dragging = false
 	var scrim := ColorRect.new()
