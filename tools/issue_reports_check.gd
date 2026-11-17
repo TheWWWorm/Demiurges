@@ -298,6 +298,13 @@ func _battle_view(edition: String) -> void:
 		check(false, "%s: a battle for the battle-screen checks starts on the player's turn" % edition)
 		view.queue_free()
 		return
+	var remake_key := InputEventKey.new()
+	remake_key.keycode = KEY_F11
+	remake_key.pressed = true
+	root.push_input(remake_key)
+	check(view.menu.is_visible_in_tree(), "%s: F11 opens the Remake menu during a local battle" % edition)
+	root.push_input(remake_key)
+	check(not view.menu.is_visible_in_tree(), "%s: F11 closes the Remake menu during a local battle" % edition)
 	var side := duel.active_side()
 	duel.heroes[side].mana = 20
 	# #121
@@ -915,7 +922,71 @@ func _faces(map: ELAdventureView, hero: Dictionary, monster: Dictionary, label: 
 
 func _map_reports(profiles: Dictionary) -> void:
 	if profiles.has("el1"): await _first_prompt(profiles.el1)
-	if profiles.has("el2"): await _second_prompt()
+	if profiles.has("el2"):
+		await _second_prompt()
+		await _remake_campaigns(profiles.el2)
+
+func _remake_campaigns(profile: ELProfile) -> void:
+	var chaots := ELCampaign.new()
+	if not chaots.load_campaign(profile, "Red"):
+		check(false, "el2: the Chaots campaign is available for the Remake menu check")
+		return
+	var view: Node = load("res://scenes/duel.tscn").instantiate()
+	root.add_child(view)
+	await _wait(3)
+	var initial: Dictionary = chaots.scenarios[0].duplicate()
+	initial.campaign = "Red"
+	await view._begin_campaign("el2", initial, 1)
+	var map: ELAdventureView = view.campaign_view
+	if map == null or map.second_hud == null:
+		check(false, "el2: the Chaots map opens with its original pause menu")
+		view.queue_free()
+		return
+	for i in 40:
+		if map.director.dialogue.is_empty(): break
+		map.director.acknowledge("OK")
+		await _wait(3)
+	var button := map.second_hud.remake_button
+	check(not button.is_visible_in_tree(), "el2: the Remake menu button is hidden during adventure play")
+	var key := InputEventKey.new()
+	key.pressed = true
+	key.keycode = KEY_ESCAPE
+	root.push_input(key)
+	check(button.is_visible_in_tree() and button.tooltip_text == "F11", "el2: Esc exposes the Remake menu button and its shortcut")
+	await process_frame
+	var click := InputEventMouseButton.new()
+	click.button_index = MOUSE_BUTTON_LEFT
+	click.position = button.get_global_rect().get_center()
+	click.pressed = true
+	root.push_input(click, true)
+	click.pressed = false
+	root.push_input(click, true)
+	check(map.remake_overlay.is_visible_in_tree() and not button.is_visible_in_tree() and map.paused, "el2: the pause button opens the separate Remake menu")
+	key.keycode = KEY_F11
+	root.push_input(key)
+	check(not map.remake_overlay.is_visible_in_tree() and not map.paused, "el2: F11 closes the Remake menu and returns to the map")
+	root.push_input(key)
+	check(map.remake_overlay.is_visible_in_tree(), "el2: F11 opens the Remake menu directly from the map")
+	var campaigns: Button = map._remake_menu.get_child(0).get_child(0)
+	campaigns.pressed.emit()
+	var picker: ELCampaignSetup = view.campaign_setup
+	check(picker != null and picker.is_visible_in_tree() and picker.chosen_edition() == "el2", "el2: Campaigns opens the edition's picker over the adventure map")
+	if picker != null:
+		for index in picker.campaign.item_count:
+			if picker.campaign.get_item_metadata(index) != "Blue": continue
+			picker.campaign.select(index)
+			picker.campaign.item_selected.emit(index)
+			break
+		var first_chapter := str(picker.entries[0].get("script", "")) if not picker.entries.is_empty() else ""
+		var begin: Button = picker.get_child(0).get_child(-2).get_child(0)
+		begin.pressed.emit()
+		await _wait(6)
+		var next: ELAdventureView = view.campaign_view
+		var progress: Dictionary = next.state.scenario.get(ELSecondCampaign.KEY, {}) if next != null else {}
+		check(next != map and progress.get("current") == "Blue" and progress.get("row") == 0 and next.state.script_name == first_chapter,
+			"el2: Begin chapter starts the first Kinet chapter from the Chaots map")
+	view.queue_free()
+	await _wait(3)
 
 ## #137 first game: the original orders show the wide strip alone (no
 ## decline); free movement shows the check mark and the cross.

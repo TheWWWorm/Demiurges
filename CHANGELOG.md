@@ -4,6 +4,7 @@ Versions follow [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html)
 
 ## Unreleased
 
+- Etherlords II's adventure pause menu has a Remake menu button for opening Campaigns and Options. F11 opens the Remake menu from the map and in local battles.
 - Unwritten Rules and Battlecraft add 60 puzzles, 30 per game, for 165 in all. The Briefing shows live spellbook and artifact reserves for studies that depend on them.
 - Etherlords II pans the adventure camera at the screen edges. Hold Ctrl at an edge to turn or tilt it.
 - Etherlords II accepts ground orders into unexplored fog and approaches enemies blocking the only route. Fog refreshes respect a moving figure's rendered position. ([#173](https://github.com/TheWWWorm/Demiurges/issues/173), [#178](https://github.com/TheWWWorm/Demiurges/issues/178))

@@ -4,6 +4,7 @@ var strategic_session: ELStrategicSession
 ## Called with 0..1 as `build` goes on (the chapter loading screen's bar).
 var loading_progress := Callable()
 signal leave_requested
+signal campaigns_requested
 signal encounter_requested(hero: int, opponent: int)
 ## F9 / F8: resume the quick save (ELSaveSlots.quick_path).
 signal resume_requested
@@ -19,6 +20,9 @@ var world: ELAdventureScene
 var rings: ELSelectionRing
 var camera: Camera3D
 var ui: Control
+var remake_overlay: Control
+var _remake_menu: PanelContainer
+var _remake_picker: Control
 var title: Label
 var hero_info: Label
 var notice: Label
@@ -1036,7 +1040,10 @@ func _unhandled_input(event: InputEvent) -> void:
 			get_viewport().set_input_as_handled()
 		return
 	if second_hud != null and second_hud.menu.visible:
-		if event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE:
+		if action == "map_remake_menu" and not extras_open() and not ELWikiScreen.is_open():
+			_open_remake_from_pause()
+			get_viewport().set_input_as_handled()
+		elif event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE:
 			close_options()
 			get_viewport().set_input_as_handled()
 		return
@@ -1048,6 +1055,11 @@ func _unhandled_input(event: InputEvent) -> void:
 	if lose_battle != null:
 		if event is InputEventKey and event.pressed and not event.echo: lose_battle.dismiss()
 		if event is InputEventKey: get_viewport().set_input_as_handled()
+		return
+	if remake_overlay != null and remake_overlay.is_visible_in_tree():
+		if key != null and key.pressed and not key.echo and (key.keycode == KEY_ESCAPE or action == "map_remake_menu"):
+			close_remake_menu()
+			get_viewport().set_input_as_handled()
 		return
 	if director == null or paused: return
 	if second_precombat != null and second_precombat.visible:
@@ -1079,6 +1091,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			match action:
 				"end_day":
 					if not _cursor_modal(): _end_day()
+				"map_remake_menu": _open_remake_menu()
 				"inventory": _open_spellbook(-1)
 				"skills": _open_skills()
 				"global_spells":
@@ -2160,6 +2173,7 @@ func _original_options_closed(tutorial_was_enabled: bool) -> void:
 ## Options changed: the map takes the new values at once.
 func apply_settings() -> void:
 	if settings == null: return
+	_remake_key_hint()
 	preview_volumes(settings.values)
 	var weather := bool(settings.values.get("weather", true))
 	var enhanced_water := bool(settings.values.get("enhanced_water", false))
@@ -3096,6 +3110,7 @@ func _build_ui() -> void:
 	if hud != null: _build_first_controls()
 	elif second_hud != null: _build_second_controls()
 	else: _build_remake_controls()
+	_build_remake_menu()
 	notice = Label.new()
 	ui.add_child(notice)
 	notice.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
@@ -3129,6 +3144,75 @@ func _build_ui() -> void:
 		_fit_first_layout()
 		_refresh_roster()
 	_apply_helper_overlay()
+
+func _build_remake_menu() -> void:
+	var profile := state.map.profile
+	remake_overlay = Control.new()
+	ui.add_child(remake_overlay)
+	remake_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	remake_overlay.hide()
+	_remake_menu = PanelContainer.new()
+	remake_overlay.add_child(_remake_menu)
+	_remake_menu.custom_minimum_size.x = 180
+	_remake_menu.set_anchors_and_offsets_preset(Control.PRESET_CENTER)
+	_remake_menu.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	_remake_menu.grow_vertical = Control.GROW_DIRECTION_BOTH
+	var rows := VBoxContainer.new()
+	_remake_menu.add_child(rows)
+	var campaigns := Button.new()
+	campaigns.text = ELRemakeText.t("Campaigns…", profile)
+	campaigns.disabled = strategic_session != null
+	campaigns.pressed.connect(func(): campaigns_requested.emit())
+	rows.add_child(campaigns)
+	var options := Button.new()
+	options.text = ELRemakeText.t("Options…", profile)
+	options.pressed.connect(func():
+		close_remake_menu()
+		open_original_options())
+	rows.add_child(options)
+	var back := Button.new()
+	back.text = ELRemakeText.t("Close", profile)
+	back.pressed.connect(close_remake_menu)
+	rows.add_child(back)
+
+func _remake_key_hint() -> void:
+	if second_hud == null: return
+	var edition := state.map.profile.id
+	var overrides := settings.hotkey_overrides(edition) if settings != null else {}
+	var code := int(overrides.get("map_remake_menu", KEY_F11))
+	var key := InputEventKey.new()
+	key.keycode = code & ~ELSettings.HOTKEY_MODIFIERS
+	key.ctrl_pressed = (code & KEY_MASK_CTRL) != 0
+	key.alt_pressed = (code & KEY_MASK_ALT) != 0
+	key.shift_pressed = (code & KEY_MASK_SHIFT) != 0
+	key.meta_pressed = (code & KEY_MASK_META) != 0
+	second_hud.remake_button.tooltip_text = OS.get_keycode_string(code) if ELSettings.hotkey_action(settings, edition, "Map", key) == "map_remake_menu" else ""
+
+func _open_remake_from_pause() -> void:
+	close_options()
+	_open_remake_menu()
+
+func _open_remake_menu() -> void:
+	if director == null or _cursor_modal() or ELWikiScreen.is_open(): return
+	paused = true
+	dragging = false
+	if world != null: world.process_mode = Node.PROCESS_MODE_DISABLED
+	_remake_menu.show()
+	remake_overlay.move_to_front()
+	remake_overlay.show()
+
+func show_remake_picker(picker: Control) -> void:
+	_remake_menu.hide()
+	_remake_picker = picker
+	remake_overlay.add_child(picker)
+
+func close_remake_menu() -> void:
+	if remake_overlay == null or not remake_overlay.visible: return
+	if is_instance_valid(_remake_picker): _remake_picker.hide()
+	_remake_picker = null
+	remake_overlay.hide()
+	paused = false
+	if world != null: world.process_mode = Node.PROCESS_MODE_INHERIT
 
 ## The remake's docked dialogue strip (first game and maps without panel art).
 func _build_remake_dialogue() -> void:
@@ -3314,6 +3398,7 @@ func _build_second_controls() -> void:
 		leave_requested.emit())
 	second_hud.quit_requested.connect(func(): ELAudio.quiet_quit(get_tree()))
 	second_hud.menu_closed.connect(close_options)
+	second_hud.remake_menu_requested.connect(_open_remake_from_pause)
 	# EscEncyclopaedia (0x636) pushes the Encyclopaedia over the Esc menu; its OK
 	# or Esc (0xef4) closes only the Encyclopaedia, so the paused Esc menu returns.
 	second_hud.original_options_requested.connect(open_original_options)

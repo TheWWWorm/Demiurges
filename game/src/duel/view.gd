@@ -1021,6 +1021,11 @@ func _input(event: InputEvent) -> void:
 				"skip": _skip_battle_presentation()
 				"battle_save": _save_duel()
 				"battle_load": _load_duel()
+				"battle_remake_menu":
+					if (not demo and network_duel == null and strategic_session == null
+							and not (duel.phase == ELDuel.Phase.FINISHED and _campaign_battle() != null)):
+						menu.show()
+						_refresh()
 				"reset_camera": _default_view()
 				"combat_log": log_text.visible = not log_text.visible
 				"artifacts", "hand":
@@ -1052,11 +1057,11 @@ func _press_battle_slot(index: int) -> void:
 func _unhandled_input(event: InputEvent) -> void:
 	if game_console != null and game_console.visible: return
 	if _network_battle_chat != null and _network_battle_chat.visible: return
-	# Esc closes the remake menu.
-	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_ESCAPE and menu != null and menu.visible:
-		get_viewport().set_input_as_handled()
-		_close_remake_menu()
-		return
+	if event is InputEventKey and event.pressed and not event.echo and menu != null and menu.is_visible_in_tree():
+		if event.keycode == KEY_ESCAPE or (profile != null and ELSettings.hotkey_action(settings, profile.id, "Battle", event) == "battle_remake_menu"):
+			get_viewport().set_input_as_handled()
+			_close_remake_menu()
+			return
 	if duel == null:
 		return
 	# The tutorial panel takes every key and click while it is open.
@@ -7403,29 +7408,41 @@ func _open_setup() -> void:
 	setup_panel.visibility_changed.connect(_refresh)
 	_refresh()
 
-func _open_campaigns() -> void:
+func _open_campaigns(from_map := false) -> void:
 	if _campaign_battle() != null:
 		_notice("Finish or surrender the campaign battle first.")
 		return
 	if profiles.is_empty(): return
+	if from_map and (campaign_view == null or strategic_session != null): return
 	menu.hide()
 	if setup_panel != null: setup_panel.hide()
-	if campaign_setup != null: campaign_setup.queue_free()
+	_close_campaign_setup()
 	campaign_setup = ELCampaignSetup.new()
-	ui.add_child(campaign_setup)
+	if from_map:
+		campaign_view.show_remake_picker(campaign_setup)
+		campaign_setup.closed.connect(campaign_view.close_remake_menu)
+	else: ui.add_child(campaign_setup)
 	campaign_setup.settings = settings
-	campaign_setup.build(profiles, profile.id if profile != null else launch_profile)
+	var edition := campaign_view.state.map.profile.id if from_map else (profile.id if profile != null else launch_profile)
+	campaign_setup.build(profiles, edition)
 	campaign_setup.set_anchors_and_offsets_preset(Control.PRESET_CENTER)
 	campaign_setup.grow_horizontal = Control.GROW_DIRECTION_BOTH
 	campaign_setup.grow_vertical = Control.GROW_DIRECTION_BOTH
 	campaign_setup.begin.connect(_begin_campaign)
 	campaign_setup.resume_requested.connect(func(): _resume_campaign(false, ELSingleScenario.campaign_file(campaign_setup.chosen_edition())))
-	campaign_setup.closed.connect(func(): campaign_setup.hide())
+	campaign_setup.closed.connect(_close_campaign_setup)
+
+func _close_campaign_setup() -> void:
+	if campaign_setup == null: return
+	campaign_setup.hide()
+	campaign_setup.queue_free()
+	campaign_setup = null
 
 func _begin_campaign(edition: String, scenario: Dictionary, difficulty: int, restored: Dictionary = {}, online: ELStrategicSession = null) -> void:
 	ELCrashReport.trace("map load %s %s (difficulty %d%s)" % [edition, scenario.get("script", scenario.get("file_name", "?")), difficulty, ", from a save" if not restored.is_empty() else ""])
 	ELCrashReport.where("map %s %s" % [edition, scenario.get("script", scenario.get("file_name", "?"))])
-	if campaign_setup != null: campaign_setup.hide()
+	if campaign_view != null: campaign_view.close_remake_menu()
+	_close_campaign_setup()
 	_notice("Loading chapter…")
 	# The original goes straight from the briefing to the map: no battle
 	# scene or earlier map stays on screen while the chapter builds.
@@ -7486,6 +7503,7 @@ func _begin_campaign(edition: String, scenario: Dictionary, difficulty: int, res
 	battle_audio.paused = true
 	ui.hide()
 	campaign_view.leave_requested.connect(_leave_campaign)
+	campaign_view.campaigns_requested.connect(_open_campaigns.bind(true))
 	campaign_view.resume_requested.connect(func(): _resume_campaign(false, ELSaveSlots.quick_load_path(campaign_view.state), edition))
 	campaign_view.slot_requested.connect(_load_slot)
 	campaign_view.encounter_requested.connect(_begin_encounter)
@@ -7849,12 +7867,13 @@ func _show_chapter_info(next: Dictionary, difficulty: int) -> void:
 func _show_front_menu_layer() -> void:
 	menu.hide()
 	if setup_panel != null: setup_panel.hide()
-	if campaign_setup != null: campaign_setup.hide()
+	_close_campaign_setup()
 	front_layer.show()
 	front_menu.show()
 	ELCrashReport.where("menu")
 
 func _leave_campaign() -> void:
+	_close_campaign_setup()
 	if affect_strip != null: affect_strip.clear()
 	if strategic_session != null and strategic_session.link.live and not strategic_session.link.is_host:
 		if strategic_session._leaving: return
@@ -8760,7 +8779,7 @@ func _show_front_menu() -> bool:
 	else: front_menu.show_screen("main")
 	menu.hide()
 	if setup_panel != null: setup_panel.hide()
-	if campaign_setup != null: campaign_setup.hide()
+	_close_campaign_setup()
 	front_layer.show()
 	front_menu.show()
 	_refresh()

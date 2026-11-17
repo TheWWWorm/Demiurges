@@ -15,6 +15,7 @@ signal notebook_requested
 signal options_requested
 ## Esc menu Options: the original Options screen.
 signal original_options_requested
+signal remake_menu_requested
 signal centre_requested
 signal minimap_clicked(cell: Vector2)
 signal save_requested
@@ -64,6 +65,8 @@ var remake_strip: VBoxContainer
 var menu: Control
 var menu_art: Control
 var menu_buttons: Dictionary = {}
+var remake_button: Button
+var _menu_footer: HBoxContainer
 var scale_factor := 1.0
 var right_shift := 0.0
 var hero_id := -1
@@ -266,8 +269,8 @@ func _layout() -> void:
 	header.position = control_rect("EscHdr").position
 	header.size = control_rect("EscHdr").size
 	var panel := control_rect(MENU)
-	var centre := panel.get_center().x
-	menu.get_node("Wiki").position = Vector2(centre - 70, panel.end.y + 10)
+	_menu_footer.size = _menu_footer.get_combined_minimum_size()
+	_menu_footer.position = Vector2(panel.get_center().x - _menu_footer.size.x * 0.5, panel.end.y + 10)
 	remake_strip.position = Vector2(8, 8)
 	remake_strip.size.x = 0
 	art.queue_redraw()
@@ -686,6 +689,17 @@ func _build_menu() -> void:
 	if menu_buttons.has("EscExitMM"): menu_buttons.EscExitMM.pressed.connect(func(): exit_requested.emit())
 	if menu_buttons.has("EscExitWin"): menu_buttons.EscExitWin.pressed.connect(func(): quit_requested.emit())
 	menu_buttons.EscCancel.pressed.connect(func(): menu_closed.emit())
+	_menu_footer = HBoxContainer.new()
+	_menu_footer.add_theme_constant_override("separation", 10)
+	menu.add_child(_menu_footer)
+	remake_button = Button.new()
+	remake_button.name = "RemakeMenuButton"
+	remake_button.text = ELRemakeText.t("Remake menu…", profile)
+	remake_button.focus_mode = Control.FOCUS_NONE
+	remake_button.add_theme_font_size_override("font_size", 15)
+	remake_button.custom_minimum_size = Vector2(140, 30)
+	remake_button.pressed.connect(func(): remake_menu_requested.emit())
+	_menu_footer.add_child(remake_button)
 	# Remake-only: the wiki over the map (also F6).
 	var wiki := Button.new()
 	wiki.name = "Wiki"
@@ -694,9 +708,9 @@ func _build_menu() -> void:
 	wiki.tooltip_text = "Справка по игре на движке Demiurges" if russian else "How to play on the Demiurges engine."
 	wiki.focus_mode = Control.FOCUS_NONE
 	wiki.add_theme_font_size_override("font_size", 15)
-	wiki.size = Vector2(140, 30)
+	wiki.custom_minimum_size = Vector2(140, 30)
 	wiki.pressed.connect(func(): ELWikiScreen.open(self, "adventure-map", header.text))
-	menu.add_child(wiki)
+	_menu_footer.add_child(wiki)
 	menu.hide()
 
 func _caption(control: String) -> String:
