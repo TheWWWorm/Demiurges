@@ -764,8 +764,10 @@ func show_tooltip(id: int, content: Dictionary, at: Vector2) -> void:
 	if local.y + extent.y > limit.y: local.y = maxf(0, at.y / scale_factor - extent.y - 12)
 	tooltip.position = local
 
-## The pre-battle panel's Level/Life/Sight lines, as a GDI cell height.
-const STAT_CELL := 15
+## The second game's pre-battle sizes (ELSecondPrecombatView): the question
+## and names, and the values and captions (#134).
+const PRECOMBAT_NAME_SIZE := 20
+const PRECOMBAT_STAT_SIZE := 17
 ## The portraits: the black window inside each ornate frame of the panel art
 ## (measured on the 1024 layout), filled as the panel's stats view does, with
 ## a 94x50 cut at (3, 9) of the 100x70 photo cell. The whole cell drawn over
@@ -782,16 +784,19 @@ func _build_precombat() -> void:
 		var piece := cut(row)
 		if not piece.is_empty(): _precombat_pieces.append(piece)
 	precombat.draw.connect(_draw_precombat)
-	# Sizes: BattleNumText and the two names are 20 px GDI cells (Controls
-	# FontSize); the Level/Life/Sight boxes and captions, drawn by the panel
-	# itself, measure as 15 px cells in the original.
-	var heading := _text_label(Rect2(160, 0, 320, 25), ELFrontMenu.cell_em(20), Color("b8b4aa"), _bold)
+	# Colours and sizes as the second game's panel (ELSecondPrecombatView,
+	# player report #134): the question and the names in its tan at 20 px,
+	# the values in its white and their captions in tan at 17 px, all with
+	# its shadow. They had the first game's 20 and 15 px GDI cells (Controls
+	# FontSize) in white and grey; the names stay at least as large as the
+	# enlargement of #45.
+	var heading := _text_label(Rect2(160, 0, 320, 25), PRECOMBAT_NAME_SIZE, ELSecondPrecombatView.TAN, _bold)
 	precombat_labels.heading = heading
 	precombat_labels.names = []
 	precombat_labels.values = []
 	precombat_labels.captions = []
 	for side in 2:
-		var name := _text_label(Rect2(12, 32, 320, 21) if side == 0 else Rect2(320, 32, 310, 21), ELFrontMenu.cell_em(20), Color("f2eee4"), _bold)
+		var name := _text_label(Rect2(12, 32, 320, 21) if side == 0 else Rect2(320, 32, 310, 21), PRECOMBAT_NAME_SIZE, ELSecondPrecombatView.TAN, _bold)
 		precombat_labels.names.append(name)
 		var portrait := TextureRect.new()
 		portrait.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
@@ -804,9 +809,9 @@ func _build_precombat() -> void:
 		var values: Array[Label] = []
 		var captions: Array[Label] = []
 		for line in 3:
-			var value := _text_label(Rect2(0, 0, 33, 17), ELFrontMenu.cell_em(STAT_CELL), Color("f2eee4"), _bold)
+			var value := _text_label(Rect2(0, 0, 33, 17), PRECOMBAT_STAT_SIZE, ELSecondPrecombatView.WHITE, _bold)
 			values.append(value)
-			var caption := _text_label(Rect2(0, 0, 100, 17), ELFrontMenu.cell_em(STAT_CELL), Color("f2eee4"), _bold)
+			var caption := _text_label(Rect2(0, 0, 100, 17), PRECOMBAT_STAT_SIZE, ELSecondPrecombatView.TAN, _bold)
 			caption.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 			captions.append(caption)
 		precombat_labels.values.append(values)
@@ -850,6 +855,9 @@ func _text_label(rect: Rect2, font_size: int, color: Color, font: Font) -> Label
 	label.add_theme_font_size_override("font_size", font_size)
 	label.add_theme_color_override("font_color", color)
 	label.add_theme_font_override("font", font)
+	label.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.85))
+	label.add_theme_constant_override("shadow_offset_x", 1)
+	label.add_theme_constant_override("shadow_offset_y", 1)
 	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	precombat.add_child(label)
 	ELMenuKit.place_text(label, rect)

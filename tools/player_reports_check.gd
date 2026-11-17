@@ -809,8 +809,13 @@ func _precombat(profile: ELProfile) -> void:
 		var value: Label = labels.values[0][0]
 		var caption: Label = labels.captions[0][0]
 		var size_of := func(label: Label) -> int: return label.get_theme_font_size("font_size")
-		check(size_of.call(heading) == ELFrontMenu.cell_em(20) and size_of.call(name) == ELFrontMenu.cell_em(20), "el1: the panel's heading and names use 20 px cells (%d em)" % size_of.call(name))
-		check(size_of.call(value) == ELFrontMenu.cell_em(15) and size_of.call(caption) == ELFrontMenu.cell_em(15), "el1: the Level/Life/Sight lines use 15 px cells (%d em)" % size_of.call(value))
+		# #134: the second game's colours and sizes; the names no smaller than
+		# the 20 px cells #45 enlarged them to.
+		check(size_of.call(heading) == 20 and size_of.call(name) == 20 and size_of.call(name) >= ELFrontMenu.cell_em(20), "el1: the panel's heading and names are 20 px as in the second game (%d em)" % size_of.call(name))
+		check(size_of.call(value) == 17 and size_of.call(caption) == 17, "el1: the Level/Life/Sight lines are 17 px as in the second game (%d em)" % size_of.call(value))
+		check(name.get_theme_color("font_color") == ELSecondPrecombatView.TAN and heading.get_theme_color("font_color") == ELSecondPrecombatView.TAN and caption.get_theme_color("font_color") == ELSecondPrecombatView.TAN and value.get_theme_color("font_color") == ELSecondPrecombatView.WHITE,
+			"el1: the names, question and captions are the second game's tan, the values its white (#134)")
+		check(caption.get_minimum_size().y <= 23.0, "el1: a stat line stays within its 23 px row (%.0f)" % caption.get_minimum_size().y)
 		var font: Font = caption.get_theme_font("font")
 		var widest := 0.0
 		for side in 2:
