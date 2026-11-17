@@ -1,7 +1,6 @@
 class_name ELSharperArtScreen
 extends CanvasLayer
-## "Preparing sharper art": the step that enlarges the games' icons and
-## interface art (ELIconUpscale.Preparation), in front of everything, with
+## "Preparing sharper art": enlarges the selected art (ELIconUpscale.Preparation) with
 ## a progress bar, the sheets done, the time taken and the time left, and a
 ## Cancel button (what is done is kept; the next run resumes). It can open
 ## first as a prompt (Start / Later) with an estimate of the time and the
@@ -138,7 +137,7 @@ func show_prompt() -> void:
 	if _title == null: await ready
 	var estimate := ELIconUpscale.estimate(upscalers)
 	_title.text = _t("Prepare sharper art?")
-	_body.text = _t("The games' icons and interface art can be enlarged once on this computer by a small AI model, so they look sharp on this screen. It takes about %s and %s of disk space. You can play with the original art meanwhile and prepare it later from Options.") % [
+	_body.text = _t("Real-ESRGAN prepares the selected art once on this computer. It uses Vulkan where available and falls back to the CPU. Allow about %s on the CPU and %s of disk space.") % [
 		duration(float(estimate.seconds)), size_text(int(estimate.bytes))]
 	_later.visible = true
 	_start.visible = true
@@ -150,7 +149,7 @@ func begin() -> void:
 	preparation = ELIconUpscale.Preparation.new(upscalers)
 	preparation.start()
 	_title.text = _t("Preparing sharper art")
-	_body.text = _t("Enlarging the games' icons and interface art on this computer. Cancel keeps what is done; the rest can be prepared later from Options.")
+	_body.text = _t("Enlarging the selected art. Cancel keeps what is done; the rest can be prepared later from Options.")
 	_later.visible = false
 	_start.visible = false
 	_cancel.visible = true
@@ -173,6 +172,13 @@ func _update() -> void:
 	_bar.max_value = maxi(preparation.total, 1)
 	_bar.value = preparation.done
 	_counts.text = _t("%d of %d sheets · %s elapsed · about %s left") % [preparation.done, preparation.total, clock(preparation.elapsed()), clock(preparation.remaining())]
+	_counts.text += _backend_status()
+
+func _backend_status() -> String:
+	if preparation.computed < 1: return ""
+	if preparation.gpu_sheets == 0: return " · CPU"
+	if preparation.gpu_sheets == preparation.computed: return " · Vulkan GPU"
+	return " · Vulkan GPU + CPU"
 
 func _done() -> void:
 	_cancel.visible = false
@@ -184,6 +190,7 @@ func _done() -> void:
 	var complete := preparation.done >= preparation.total
 	_title.text = _t("Sharper art is ready") if complete else _t("Sharper art: stopped")
 	_counts.text = _t("%d of %d sheets · %s elapsed") % [preparation.done, preparation.total, clock(preparation.elapsed())]
+	_counts.text += _backend_status()
 	if preparation.failed > 0: _body.text = _t("Some sheets could not be enlarged and stay as they were.")
 	elif not complete: _body.text = _t("What is done is kept. Prepare the rest later from Options.")
 	else: _body.text = _t("Screens opened from now on use the sharper art.")

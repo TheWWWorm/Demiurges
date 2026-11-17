@@ -98,6 +98,7 @@ func _run() -> void:
 	_check_adopt()
 	_check_fallback()
 	_check_kinds()
+	_check_backends()
 	await _check_real()
 	ELIconUpscale.forced_folder = ""
 	ELIconUpscale.forced_factor = 0
@@ -250,8 +251,35 @@ func _check_kinds() -> void:
 	check(ELIconUpscale.kind_of("interface/heroes/photo_01.mmp") == ELIconUpscale.KIND_ICON, "portrait sheets are icons")
 	check(ELIconUpscale.kind_of("interface/black/combat_panel_1.mmp") == ELIconUpscale.KIND_INTERFACE, "panels are interface art")
 	check(ELIconUpscale.kind_of("interface/combat_text_1.mmp") == ELIconUpscale.KIND_NONE, "digit sheets are left alone")
-	check(ELIconUpscale.kind_of("creatures/goblin.mmp") == ELIconUpscale.KIND_NONE, "figure skins are left alone")
+	check(ELIconUpscale.kind_of("creatures/goblin.mmp") == ELIconUpscale.KIND_TEXTURE, "figure color textures are eligible")
+	check(ELIconUpscale.kind_of("heroes/alpha/hero.mmp") == ELIconUpscale.KIND_NONE, "alpha skins are excluded")
+	check(ELIconUpscale.kind_of("combatscenes/stone_normal.mmp") == ELIconUpscale.KIND_NONE, "normal maps are excluded")
 	check(ELIconUpscale.factor_for(Vector2(1440, 900)) == 1 and ELIconUpscale.factor_for(Vector2(1920, 1080)) == 2 and ELIconUpscale.factor_for(Vector2(3840, 2160)) == 3 and ELIconUpscale.factor_for(Vector2(5120, 2880)) == 3, "factors follow the screen (1440x900: 1, 1080p: 2, 4K and 5K: 3)")
+
+func _check_backends() -> void:
+	if not ClassDB.class_has_method(&"ELNativeAssets", &"upscale_gpu"): return
+	var image := _tiny()
+	image.set_pixel(0, 0, Color.TRANSPARENT)
+	image.set_pixel(1, 0, Color(1.0, 1.0, 0.0, 0.32))
+	var cpu := _upscale(image)
+	var gpu: PackedByteArray = ClassDB.class_call_static(&"ELNativeAssets", &"upscale_gpu", ELIconUpscale.weights(), image.get_data(), TINY.x, TINY.y)
+	var ready := not gpu.is_empty()
+	if "--require-gpu" in OS.get_cmdline_user_args(): check(ready, "Vulkan backend returns pixels")
+	if "--require-cpu" in OS.get_cmdline_user_args(): check(not ready, "Vulkan backend is unavailable")
+	if ready:
+		check(gpu.size() == cpu.size(), "GPU and CPU produce the same output dimensions")
+		if gpu.size() == cpu.size():
+			var worst := 0
+			var alpha_matches := true
+			for i in gpu.size():
+				if i % 4 == 3: alpha_matches = alpha_matches and gpu[i] == cpu[i]
+				else: worst = maxi(worst, absi(int(gpu[i]) - int(cpu[i])))
+			check(alpha_matches and worst <= 3, "GPU preserves CPU alpha and stays within %d RGB levels" % worst)
+	var job := _job("interface/spells/backend_test.mmp", image.get_data(), image, 2, SCRATCH.path_join("backend"))
+	job.gpu = true
+	ELIconUpscale.prepare_sheet(job)
+	check(job.has("file") and not String(job.get("file", "")).is_empty() and job.stats.get("gpu", false) == ready,
+		"preparation saves output using the " + ("GPU" if ready else "CPU fallback"))
 
 ## Runs a preparation to its end, cancelling it once `cancel_after` sheets
 ## were worked out (0: never).
@@ -351,7 +379,47 @@ func _check_real() -> void:
 		upscaler.clear()
 		check(ELIconUpscale.disk_bytes(upscaler.folder()) == 0 and int(upscaler.status().done) == 0, "%s: Clear removes every kept picture" % edition)
 		_check_quality(edition, profile)
+		if edition == "el2": _check_texture_option(profile)
 	ELIconUpscale.forced_factor = 0
+
+func _check_texture_option(profile: ELProfile) -> void:
+	var values := {"sharper_icons": false, "sharper_interface": false, "sharper_textures": false}
+	ELIconUpscale.use(values)
+	check(not ELIconUpscale.enabled(ELIconUpscale.KIND_TEXTURE), "3D textures are opt-in")
+	ELIconUpscale.forced_factor = 1
+	values.sharper_textures = true
+	var entry := "heroes/diamanda02.mmp"
+	if not profile.archives.textures.has(entry):
+		print("SKIP: Diamanda texture absent")
+		return
+	var upscaler := profile.icon_upscale
+	var base := profile.texture(entry)
+	var alias := profile.texture(entry.get_basename())
+	var source := ELTexture.readable(ELIconUpscale.image_of(base))
+	check(upscaler.eligible().has(entry) and not upscaler.complete() and ELIconUpscale.cache_factor() == 2,
+		"opaque 3D texture is eligible at layout resolution")
+	var bytes := profile.read("textures", entry)
+	var job := _job(entry, bytes, source, 2, upscaler.folder())
+	job.gpu = ClassDB.class_has_method(&"ELNativeAssets", &"upscale_gpu")
+	ELIconUpscale.prepare_sheet(job)
+	upscaler.manifest.sheets[entry] = [job.get("digest", ""), job.get("file", "")]
+	upscaler.write_manifest()
+	upscaler.mount(profile)
+	upscaler.apply_all()
+	var sharp := upscaler.shown(entry)
+	check(sharp != null and sharp.get_size() == source.get_size() * 2 and sharp.has_mipmaps()
+		and base.get_size() == Vector2(source.get_size()) and alias.has_meta(ELIconUpscale.ORIGINAL),
+		"cached 2× texture keeps original dimensions and updates both aliases")
+	values.sharper_textures = false
+	upscaler.apply_all()
+	check(not base.has_meta(ELIconUpscale.ORIGINAL) and not alias.has_meta(ELIconUpscale.ORIGINAL),
+		"disabling 3D textures restores both aliases")
+	var alpha := _tiny()
+	alpha.set_pixel(0, 0, Color.TRANSPARENT)
+	var cutout := _job("combatscenes/cutout.mmp", alpha.get_data(), alpha, 2, upscaler.folder())
+	ELIconUpscale.prepare_sheet(cutout)
+	check(cutout.has("file") and cutout.file.is_empty() and not cutout.stats.has("compute_usec"), "3D cutouts keep their original image")
+	upscaler.clear()
 
 ## A real sheet of each kind, upscaled and reduced back, stays close.
 func _check_quality(edition: String, profile: ELProfile) -> void:

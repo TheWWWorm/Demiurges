@@ -2,6 +2,15 @@
 
 Versions follow [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html) from 0.3.0 on.
 
+## 0.18.0
+
+- **Sharper textures** (Options › Display) prepares 2× textures for opaque creature and hero skins and battle scenery at any screen size. Preparation uses Vulkan on supported Windows PCs and automatically falls back to the CPU.
+- Path Tracing keeps thin metal wings, including Gamma-200F Tricker's, from flashing black as they move. Held menu buttons keep a smooth face with sharper interface art enabled.
+- Smarter duel AI avoids harmful spells on its own side unless the play gives a clear advantage. Deep searches have their own stack on Android, Linux, and macOS to prevent crashes on small worker stacks. Creatures killed while moving into battle no longer stay on the field, and aggressive Orc Guards join the Orc Warriors that grant them Aggressive.
+- Etherlords I restores underlying basic spells in older saves and gives the freed Chaot hero Thaerid basic spells under his Orc book. Selecting a destination keeps the camera there, and right-clicking during free movement stops the hero at the next tile. Heroes can be inspected from a global spell prompt, and closing that prompt keeps the spell. Artifact and map tooltips also fit and respond to right-click, and pre-battle text uses the second game's colors and sizing.
+- Etherlords II shows artifact charges and skill ranks and descriptions. Adventure-map clicks act on the objects under the cursor, attacked figures turn to face the attacker, and NPC battles animate more figures. Town and landmark tooltips, the teleport altar's light, and specialization notification timing have been fixed.
+- The battle panel fills narrow gaps between the spell rail and phase caption, and battle tooltip frames fit shorter text.
+
 ## 0.17.1
 
 - Options: the sharper-art preparation status wraps below its buttons so Display controls stay visible. Long setting and hotkey labels also wrap, keeping controls visible in both games.

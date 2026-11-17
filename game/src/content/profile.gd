@@ -281,7 +281,7 @@ func _texture_store(key: String, decoded: Dictionary) -> Texture2D:
 	# Found in Alpha32: a soft-alpha skin (see ELModel.build).
 	if decoded.soft: tex.set_meta("alpha32", true)
 	_textures[key] = tex
-	# Icons and interface art with a finished sharp picture draw it (ELIconUpscale).
+	# Eligible art can draw a finished sharp picture (ELIconUpscale).
 	if icon_upscale != null and not decoded.authored: icon_upscale.adopt(String(decoded.get("entry", "")), tex, decoded.image, decoded.get("sharp"))
 	return tex
 

@@ -5964,6 +5964,7 @@ func remake_session(_owner: ELFrontMenu, phase: String) -> void:
 			ELGraphicsSDK.write_owner_file(settings.values)
 			_update_fps_counter()
 			_apply_settings()
+			for upscaler: ELIconUpscale in _upscalers(): upscaler.apply_all()
 	if phase != "open": _settings_before = {}
 
 ## Export log and Game files, beside OK / Cancel.
@@ -6107,8 +6108,7 @@ func _display_page(page: VBoxContainer) -> void:
 		_update_fps_counter())
 	_settings_row(window_box if window_box != null else picture, "Frame rate counter", "Shows frames per second in the top right corner.", fps_toggle)
 
-## "Sharper icons" and "Sharper interface" (ELIconUpscale), the state of the
-## prepared art and the buttons to prepare or clear it.
+## Sharper art switches, cache status, and preparation controls.
 func _sharper_art_rows(box: VBoxContainer) -> void:
 	var buttons := HBoxContainer.new()
 	buttons.add_theme_constant_override("separation", 8)
@@ -6116,10 +6116,10 @@ func _sharper_art_rows(box: VBoxContainer) -> void:
 		var status := _row_note(buttons)
 		status.text = _sharper_art_status()
 		status.show()
-	for key: String in ["sharper_icons", "sharper_interface"]:
+	for key: String in ["sharper_icons", "sharper_interface", "sharper_textures"]:
 		var toggle := CheckButton.new()
-		toggle.name = "SharperIcons" if key == "sharper_icons" else "SharperInterface"
-		toggle.button_pressed = bool(settings.values.get(key, true))
+		toggle.name = key.to_pascal_case()
+		toggle.button_pressed = bool(settings.values.get(key, false))
 		toggle.toggled.connect(func(enabled: bool):
 			settings.values[key] = enabled
 			ELIconUpscale.use(settings.values)
@@ -6129,8 +6129,10 @@ func _sharper_art_rows(box: VBoxContainer) -> void:
 			if enabled and not _sharper_art_complete(): _open_sharper_art(true, refresh))
 		if key == "sharper_icons":
 			_settings_row(box, "Sharper icons", "Spell icons, portraits, skills and other icons, enlarged once on this computer by a small AI model (Real-ESRGAN) and drawn with more pixels at the same size. Seen on screens larger than 1440 × 900. The art is prepared in one step with a progress bar, never during play; until then the original icons show.", toggle)
-		else:
+		elif key == "sharper_interface":
 			_settings_row(box, "Sharper interface", "The same for the rest of the interface art: screens, panels, frames and buttons.", toggle)
+		else:
+			_settings_row(box, "Sharper textures", "Prepares 2× color textures for opaque creature and hero skins and battle scenery. Works at any screen size and uses more video memory.", toggle)
 	var prepare := Button.new()
 	prepare.name = "PrepareSharperArt"
 	prepare.text = _t("Prepare now")
@@ -6174,18 +6176,18 @@ func _sharper_art_status() -> String:
 		bytes += int(state.bytes)
 		stale = stale or bool(state.stale)
 	var megabytes := _t("%d MB") % roundi(bytes / 1048576.0)
-	if ELIconUpscale.target_factor() < 2: return _t("Not needed at this screen size") + " · " + megabytes
+	if ELIconUpscale.cache_factor() < 2: return _t("Not needed at this screen size") + " · " + megabytes
 	if stale: return _t("The games' files changed: prepare again") + " · " + megabytes
-	if total == 0: return _t("Both switches are off") + " · " + megabytes
-	if done >= total: return _t("Ready (%d×)") % ELIconUpscale.target_factor() + " · " + megabytes
+	if total == 0: return _t("No art selected") + " · " + megabytes
+	if done >= total: return _t("Ready") + " · " + megabytes
 	return _t("%d of %d sheets ready") % [done, total] + " · " + megabytes
 
 ## The "Preparing sharper art" screen, as a prompt first when `ask`.
 func _open_sharper_art(ask: bool, then := Callable()) -> void:
 	var screen := ELSharperArtScreen.open(self, _upscalers(), _shown_profile(), ask)
 	screen.on_later = func(_why: String):
-		settings.values.sharper_declined = "%d:%d" % [ELIconUpscale.VERSION, ELIconUpscale.target_factor()]
-		settings.save_file()
+		settings.values.sharper_declined = "%d:%d" % [ELIconUpscale.VERSION, ELIconUpscale.cache_factor()]
+		if _settings_before.is_empty(): settings.save_file()
 	screen.closed.connect(func(_complete: bool):
 		if then.is_valid(): then.call())
 
@@ -6193,9 +6195,8 @@ func _open_sharper_art(ask: bool, then := Callable()) -> void:
 ## screen, the prompt to prepare it (once per screen size and version, until
 ## the player starts it from Options).
 func _offer_sharper_art() -> void:
-	if not ELIconUpscale.available() or ELIconUpscale.target_factor() < 2 or not _campaign_probe.is_empty(): return
-	if not (ELIconUpscale.enabled(ELIconUpscale.KIND_ICON) or ELIconUpscale.enabled(ELIconUpscale.KIND_INTERFACE)): return
-	if String(settings.values.get("sharper_declined", "")) == "%d:%d" % [ELIconUpscale.VERSION, ELIconUpscale.target_factor()]: return
+	if not ELIconUpscale.available() or ELIconUpscale.cache_factor() < 2 or not _campaign_probe.is_empty(): return
+	if String(settings.values.get("sharper_declined", "")) == "%d:%d" % [ELIconUpscale.VERSION, ELIconUpscale.cache_factor()]: return
 	if _sharper_art_complete(): return
 	# Over the main menu, after the start-up movies.
 	for i in 1200:

@@ -1,6 +1,6 @@
 class_name ELIconUpscale
 extends RefCounted
-## Sharper icons and interface art, prepared on the player's own machine.
+## Sharper icons, interface art, and opaque 3D color textures, prepared locally.
 ##
 ## The original games' icons (spells, heroes' portraits, skills, global
 ## spells, artefacts, states, buildings) and interface art (screens, panels,
@@ -29,8 +29,9 @@ extends RefCounted
 ## image_of(), which gives the original image. At 1440 x 900 or smaller
 ## nothing changes on screen.
 ##
-## Settings "sharper_icons" and "sharper_interface" (ELSettings) switch each
-## kind. Without the native library (the browser) nothing is offered.
+## Opaque 3D textures always use 2x. On Windows preparation tries Vulkan
+## first and retries on the CPU if the backend is unavailable or fails.
+## Without the native library (the browser) nothing is offered.
 ##
 ## Each edition's content (ELProfile.icon_upscale) has its own.
 
@@ -44,6 +45,10 @@ const ORIGINAL := &"el_original_image"
 const KIND_NONE := 0
 const KIND_ICON := 1
 const KIND_INTERFACE := 2
+const KIND_TEXTURE := 3
+## Color textures in the original texture archive. Keep cutouts and data maps
+## out of preparation, and check decoded alpha before running the network.
+const TEXTURE_FOLDERS := ["creatures/", "heroes/", "combatscenes/"]
 ## Sheets of icons (archive entries under these folders, or these files).
 const ICON_FOLDERS := ["interface/spells/", "interface/heroes/", "interface/skills/", "interface/globalspells/",
 	"interface/artifacts/", "interface/affects/", "interface/buildings/"]
@@ -86,8 +91,7 @@ static var load_usec := 0
 var edition := ""
 ## The kept pictures: the manifest of the screen's factor.
 var manifest := {}
-## Textures made from sheets (by archive entry): {texture (WeakRef), image
-## (the original), kind, sharp (the picture shown, if any)}.
+## Textures made from sheets, grouped by archive entry (including aliases).
 var _known := {}
 ## Where the edition's textures come from: [archive, entries] and their
 ## files' sizes and dates (a manifest made from other files is stale).
@@ -115,11 +119,21 @@ static func use(values: Dictionary) -> void:
 static func enabled(kind: int) -> bool:
 	if not available() or kind == KIND_NONE: return false
 	if kind == KIND_ICON: return bool(preferences.get("sharper_icons", recommended()))
+	if kind == KIND_TEXTURE: return bool(preferences.get("sharper_textures", false))
 	return bool(preferences.get("sharper_interface", recommended()))
 
 ## Which kind an archive entry (lower case, as ELArchive.key gives it) is.
 static func kind_of(entry: String) -> int:
-	if not entry.begins_with("interface/") or not entry.ends_with(".mmp"): return KIND_NONE
+	if not entry.ends_with(".mmp"): return KIND_NONE
+	if not entry.begins_with("interface/"):
+		for folder: String in TEXTURE_FOLDERS:
+			if not entry.begins_with(folder): continue
+			if entry.contains("/alpha") or entry.contains("/lightmap") or entry.contains("/noise/"): return KIND_NONE
+			var stem := entry.get_file().get_basename()
+			for suffix: String in ["_mask", "_normal", "_specular", "_roughness", "_metallic", "_height", "_ao", "_n", "_s"]:
+				if stem.ends_with(suffix): return KIND_NONE
+			return KIND_TEXTURE
+		return KIND_NONE
 	for prefix: String in SKIPPED:
 		if entry.begins_with(prefix): return KIND_NONE
 	if entry in ICON_FILES: return KIND_ICON
@@ -145,6 +159,12 @@ static func window_factor() -> int:
 static func target_factor() -> int:
 	if DisplayServer.get_name() == "headless": return factor_for(Vector2.ZERO)
 	return factor_for(Vector2(DisplayServer.screen_get_size(DisplayServer.window_get_current_screen())))
+
+static func cache_factor() -> int:
+	return maxi(2, target_factor()) if enabled(KIND_TEXTURE) else target_factor()
+
+static func sheet_factor(entry: String, factor: int) -> int:
+	return 2 if kind_of(entry) == KIND_TEXTURE else factor
 
 ## The image a texture was made from: the original even when the texture
 ## draws a sharp picture. For code that reads a sheet's pixels.
@@ -182,7 +202,7 @@ func mount(profile: ELProfile) -> void:
 		var file := profile.file(path)
 		parts.append("%s:%d:%d" % [path, FileAccess.get_size(file) if not file.is_empty() else 0, FileAccess.get_modified_time(file) if not file.is_empty() else 0])
 	_identity = "|".join(parts)
-	manifest = read_manifest(target_factor())
+	manifest = read_manifest(cache_factor())
 
 func read_manifest(factor: int) -> Dictionary:
 	var empty := {"version": VERSION, "factor": factor, "identity": _identity, "sheets": {}}
@@ -208,8 +228,9 @@ func eligible() -> Array[String]:
 	if _archive == null: return result
 	var names: Array = _archive.entries.keys()
 	names.sort()
-	for kind: int in [KIND_ICON, KIND_INTERFACE]:
+	for kind: int in [KIND_ICON, KIND_INTERFACE, KIND_TEXTURE]:
 		if not enabled(kind): continue
+		if kind != KIND_TEXTURE and target_factor() < 2: continue
 		for entry: String in names:
 			if kind_of(entry) == kind: result.append(entry)
 	return result
@@ -217,13 +238,15 @@ func eligible() -> Array[String]:
 ## How far the kept pictures are: {done, total, stale (the game's files
 ## changed since), factor, bytes (on disk, every factor)}.
 func status() -> Dictionary:
-	var sheets: Dictionary = manifest.get("sheets", {})
+	var factor := cache_factor()
+	var current := manifest if int(manifest.get("factor", 0)) == factor else read_manifest(factor)
+	var sheets: Dictionary = current.get("sheets", {})
 	var done := 0
 	var wanted := eligible()
 	for entry: String in wanted:
 		if sheets.has(entry): done += 1
-	return {"done": done, "total": wanted.size(), "stale": String(manifest.get("identity", "")) != _identity and not sheets.is_empty(),
-		"factor": target_factor(), "bytes": disk_bytes(folder())}
+	return {"done": done, "total": wanted.size(), "stale": String(current.get("identity", "")) != _identity and not sheets.is_empty(),
+		"factor": factor, "bytes": disk_bytes(folder())}
 
 ## Whether the kept pictures cover every sheet the switches ask for.
 func complete() -> bool:
@@ -241,7 +264,7 @@ func clear() -> void:
 	var path := folder()
 	if DirAccess.dir_exists_absolute(path):
 		for file: String in DirAccess.get_files_at(path): DirAccess.remove_absolute(path.path_join(file))
-	manifest = read_manifest(target_factor())
+	manifest = read_manifest(cache_factor())
 	restore_all()
 
 ## Removes kept files the current manifest does not name (other factors,
@@ -258,7 +281,7 @@ func prune() -> void:
 ## (the kind switched off, a small window, no finished picture). Main thread.
 func sharp_path(entry: String) -> String:
 	var kind := kind_of(entry)
-	if not enabled(kind) or window_factor() < 2: return ""
+	if not enabled(kind) or (kind != KIND_TEXTURE and window_factor() < 2): return ""
 	var found: Variant = manifest.get("sheets", {}).get(entry)
 	if not found is Array or found.size() < 2 or String(found[1]).is_empty(): return ""
 	return folder().path_join(String(found[1]))
@@ -293,17 +316,20 @@ static func load_sharp(path: String, bytes: PackedByteArray, original: Vector2i)
 func adopt(entry: String, texture: ImageTexture, image: Image, sharp: Image) -> void:
 	var kind := kind_of(entry)
 	if kind == KIND_NONE or texture == null or image == null: return
-	_known[entry] = {"texture": weakref(texture), "image": image, "kind": kind}
+	if not _known.has(entry):
+		_known[entry] = {"textures": [], "image": image}
+	_known[entry].textures.append(weakref(texture))
 	if sharp != null: _show(entry, sharp)
 
 func _show(entry: String, sharp: Image) -> void:
 	var known: Dictionary = _known[entry]
-	var texture: ImageTexture = known.texture.get_ref()
-	if texture == null: return
 	var image: Image = known.image
-	texture.set_image(sharp)
-	texture.set_size_override(image.get_size())
-	texture.set_meta(ORIGINAL, image)
+	for ref: WeakRef in known.textures:
+		var texture: ImageTexture = ref.get_ref()
+		if texture == null or texture.has_meta(ORIGINAL): continue
+		texture.set_image(sharp)
+		texture.set_size_override(image.get_size())
+		texture.set_meta(ORIGINAL, image)
 	known.sharp = sharp
 
 ## The sharp picture a texture shows, or null (checks).
@@ -316,20 +342,24 @@ func restore_all() -> void:
 
 func _restore(entry: String) -> void:
 	var known: Dictionary = _known[entry]
-	var texture: ImageTexture = known.texture.get_ref()
-	if texture == null or not known.has(&"sharp"): return
-	texture.set_image(known.image)
-	texture.remove_meta(ORIGINAL)
+	if not known.has(&"sharp"): return
+	for ref: WeakRef in known.textures:
+		var texture: ImageTexture = ref.get_ref()
+		if texture == null or not texture.has_meta(ORIGINAL): continue
+		texture.set_image(known.image)
+		texture.remove_meta(ORIGINAL)
 	known.erase(&"sharp")
 
 ## Brings textures made so far in line with the switches and the kept
 ## pictures: after a preparation or a switch was changed, while a screen
 ## of the player's choosing is in front (reads pictures on this thread).
 func apply_all() -> void:
+	var factor := cache_factor()
+	if int(manifest.get("factor", 0)) != factor: manifest = read_manifest(factor)
 	for entry: String in _known:
 		var known: Dictionary = _known[entry]
-		var texture: ImageTexture = known.texture.get_ref()
-		if texture == null: continue
+		known.textures = known.textures.filter(func(ref: WeakRef): return ref.get_ref() != null)
+		if known.textures.is_empty(): continue
 		var path := sharp_path(entry)
 		if path.is_empty():
 			_restore(entry)
@@ -354,23 +384,25 @@ static func all() -> Array[ELIconUpscale]:
 static func estimate(upscalers: Array) -> Dictionary:
 	var sheets := 0
 	var pixels := 0
-	var total_pixels := 0
+	var output_pixels := 0
 	for upscaler: ELIconUpscale in upscalers:
-		var kept: Dictionary = upscaler.manifest.get("sheets", {})
+		var factor := cache_factor()
+		var current := upscaler.manifest if int(upscaler.manifest.get("factor", 0)) == factor else upscaler.read_manifest(factor)
+		var kept: Dictionary = current.sheets if String(current.get("identity", "")) == upscaler._identity else {}
 		for entry: String in upscaler.eligible():
 			var location := upscaler._archive.locate(entry)
 			# From the stored size (16- or 32-bit pixels, mipmaps), or a 256 x
 			# 256 sheet when it is not known.
 			var size := 65536
 			if location.size() == 3 and int(location[2]) > 76: size = maxi(1, (int(location[2]) - 76) / 3)
-			total_pixels += size
+			var scale := sheet_factor(entry, target_factor())
+			output_pixels += size * scale * scale
 			if kept.has(entry): continue
 			sheets += 1
 			pixels += size
 	var per_megapixel := SECONDS_PER_MEGAPIXEL_ARM if OS.has_feature("arm64") or OS.has_feature("arm32") else SECONDS_PER_MEGAPIXEL
-	var factor := target_factor()
 	return {"sheets": sheets, "pixels": pixels, "seconds": pixels / 1000000.0 * per_megapixel / threads() + sheets * SECONDS_PER_SHEET,
-		"bytes": int(total_pixels * factor * factor * BYTES_PER_PIXEL)}
+		"bytes": int(output_pixels * BYTES_PER_PIXEL)}
 
 ## A worker thread's part of a preparation: a sheet's picture at `factor`,
 ## kept as lossless WebP under the digest of its stored bytes, or read back
@@ -401,14 +433,25 @@ static func prepare_sheet(job: Dictionary) -> void:
 	if image.is_compressed() and image.decompress() != OK: return
 	image.clear_mipmaps()
 	image.convert(Image.FORMAT_RGBA8)
+	if kind_of(job.entry) == KIND_TEXTURE and (bytes.decode_u32(32) == 1 or image.detect_alpha() != Image.ALPHA_NONE):
+		job.file = ""
+		return
 	if flags[0] or not native: return
 	var model: PackedByteArray = job.weights
 	if model.is_empty(): return
 	var started := Time.get_ticks_usec()
-	var out: PackedByteArray = ClassDB.class_call_static(&"ELNativeAssets", &"upscale", model, image.get_data(), image.get_width(), image.get_height(), int(job.threads))
+	var pixels := image.get_data()
+	var expected := image.get_width() * image.get_height() * 64
+	var out := PackedByteArray()
+	if job.get("gpu", false):
+		out = ClassDB.class_call_static(&"ELNativeAssets", &"upscale_gpu", model, pixels, image.get_width(), image.get_height())
+		stats.gpu = out.size() == expected
+	if out.size() != expected:
+		if flags[0]: return
+		out = ClassDB.class_call_static(&"ELNativeAssets", &"upscale", model, pixels, image.get_width(), image.get_height(), int(job.threads))
 	stats.compute_usec = Time.get_ticks_usec() - started
 	stats.pixels = image.get_width() * image.get_height()
-	if out.size() != image.get_width() * image.get_height() * 64: return
+	if out.size() != expected: return
 	var picture := Image.create_from_data(image.get_width() * 4, image.get_height() * 4, false, Image.FORMAT_RGBA8, out)
 	if factor < 4: picture.resize(image.get_width() * factor, image.get_height() * factor, Image.INTERPOLATE_LANCZOS)
 	DirAccess.make_dir_recursive_absolute(job.folder)
@@ -447,6 +490,8 @@ class Preparation:
 	var skipped := 0
 	var computed := 0
 	var failed := 0
+	var gpu_sheets := 0
+	var use_gpu := OS.has_feature("windows") and ClassDB.class_has_method(&"ELNativeAssets", &"upscale_gpu")
 	var started_usec := 0
 	var finished := false
 	var cancelled := false
@@ -464,7 +509,7 @@ class Preparation:
 	func start() -> void:
 		started_usec = Time.get_ticks_usec()
 		for upscaler: ELIconUpscale in upscalers:
-			var factor := ELIconUpscale.target_factor()
+			var factor := ELIconUpscale.cache_factor()
 			if factor < 2: continue
 			# A new factor, or the game's files changed: a fresh manifest, and
 			# sheets whose stored bytes did not change keep their pictures.
@@ -507,7 +552,7 @@ class Preparation:
 			var item: Array = _plan[_next]
 			_next += 1
 			var upscaler: ELIconUpscale = item[0]
-			var job := {"entry": item[1], "flags": _flags, "factor": int(upscaler.manifest.factor), "folder": upscaler.folder(),
+			var job := {"entry": item[1], "flags": _flags, "factor": ELIconUpscale.sheet_factor(item[1], int(upscaler.manifest.factor)), "folder": upscaler.folder(), "gpu": use_gpu,
 				"weights": ELIconUpscale.weights(), "threads": ceili(ELIconUpscale.threads() / float(JOBS)), "stats": {}, "upscaler": upscaler, "started": Time.get_ticks_usec()}
 			if item[2] is PackedByteArray: job.bytes = item[2]
 			else: job.location = item[2]
@@ -525,10 +570,13 @@ class Preparation:
 	func _finish(job: Dictionary) -> void:
 		var upscaler: ELIconUpscale = job.upscaler
 		var stats: Dictionary = job.stats
+		if stats.has("gpu") and not stats.gpu: use_gpu = false
 		if job.has("file"):
 			upscaler.manifest.sheets[job.entry] = [job.digest, job.file]
 			done += 1
-			if stats.has("compute_usec"): computed += 1
+			if stats.has("compute_usec"):
+				computed += 1
+				if stats.get("gpu", false): gpu_sheets += 1
 		elif not _flags[0]: failed += 1
 		if stats.has("pixels"):
 			_pixels_done += int(stats.pixels)

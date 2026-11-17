@@ -34,6 +34,9 @@
  *       Real-ESRGAN realesr-general-x4v3 network whose weights are given
  *       (native/models/), on up to `threads` threads; empty when the
  *       weights or the picture are invalid (src/content/icon_upscale.gd).
+ *   upscale_gpu(weights, pixels, width, height) -> PackedByteArray
+ *       the same picture using the optional Vulkan backend, or empty so
+ *       callers can retry with upscale().
  */
 #include <math.h>
 #include <stdatomic.h>
@@ -44,6 +47,7 @@
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <wchar.h>
 #else
 #include <pthread.h>
 #if defined(__linux__)
@@ -702,12 +706,16 @@ static float half_to_float(uint16_t h) {
 	return f;
 }
 
-static int sr_load(const uint8_t *d, int64_t n, SrNet *net) {
-	memset(net, 0, sizeof(*net));
+static int sr_valid(const uint8_t *d, int64_t n) {
 	if (n != 32 + (int64_t)SR_FLOATS * 2 || memcmp(d, "ELSR", 4) != 0) return 0;
 	static const uint32_t header[7] = { 1, 3, SR_FEAT, SR_CONVS - 2, SR_LAST, SR_SCALE, 1 };
 	for (int i = 0; i < 7; i++)
 		if (u32(d, n, 4 + i * 4) != header[i]) return 0;
+	return 1;
+}
+
+static int sr_load(const uint8_t *d, int64_t n, SrNet *net) {
+	if (!sr_valid(d, n)) return 0;
 	net->storage = (float *)malloc((size_t)SR_FLOATS * sizeof(float));
 	if (!net->storage) return 0;
 	int64_t at = 32;
@@ -853,6 +861,36 @@ typedef struct {
 #endif
 } SrJob;
 
+static void sr_tile_bounds(SrJob *job, int tx, int ty) {
+	job->cx = SR_PRE_PAD + tx;
+	job->cy = SR_PRE_PAD + ty;
+	job->cw = job->width - tx < SR_TILE ? job->width - tx : SR_TILE;
+	job->ch = job->height - ty < SR_TILE ? job->height - ty : SR_TILE;
+	job->wx = job->cx - SR_TILE_PAD < 0 ? 0 : job->cx - SR_TILE_PAD;
+	job->wy = job->cy - SR_TILE_PAD < 0 ? 0 : job->cy - SR_TILE_PAD;
+	int right = job->cx + job->cw + SR_TILE_PAD, bottom = job->cy + job->ch + SR_TILE_PAD;
+	job->ww = (right < job->padded_width ? right : job->padded_width) - job->wx;
+	job->wh = (bottom < job->padded_height ? bottom : job->padded_height) - job->wy;
+}
+
+/* Pixel shuffle, plus the input enlarged, into the tile's core. */
+static void sr_output_row(SrJob *job, int y) {
+	int ly = job->cy - job->wy + y, py = job->cy + y;
+	for (int x = 0; x < job->cw; x++) {
+		int lx = job->cx - job->wx + x, px = job->cx + x;
+		const float *f = job->last + ((int64_t)ly * job->ww + lx) * SR_LAST;
+		const float *base = job->padded + ((int64_t)py * job->padded_width + px) * 3;
+		for (int i = 0; i < SR_SCALE; i++) {
+			uint8_t *o = job->out + (((int64_t)(py - SR_PRE_PAD) * SR_SCALE + i) * job->width * SR_SCALE + (int64_t)(px - SR_PRE_PAD) * SR_SCALE) * 4;
+			for (int j = 0; j < SR_SCALE; j++)
+				for (int c = 0; c < 3; c++) {
+					float v = (f[c * 16 + i * 4 + j] + base[c]) * 255.0f;
+					o[j * 4 + c] = (uint8_t)(!(v > 0.0f) ? 0 : (v >= 255.0f ? 255 : (int)(v + 0.5f)));
+				}
+		}
+	}
+}
+
 /* Waits until `value` no longer holds `seen`: a short spin, then asleep
  * (a busy machine must not have waiting threads burn the time the late
  * ones need). */
@@ -960,17 +998,7 @@ static void sr_worker(SrJob *job, int id) {
 	for (int ty = 0; ty < core_h; ty += SR_TILE)
 		for (int tx = 0; tx < core_w; tx += SR_TILE) {
 			if (id == 0) {
-				job->cx = SR_PRE_PAD + tx;
-				job->cy = SR_PRE_PAD + ty;
-				job->cw = core_w - tx < SR_TILE ? core_w - tx : SR_TILE;
-				job->ch = core_h - ty < SR_TILE ? core_h - ty : SR_TILE;
-				job->wx = job->cx - SR_TILE_PAD < 0 ? 0 : job->cx - SR_TILE_PAD;
-				job->wy = job->cy - SR_TILE_PAD < 0 ? 0 : job->cy - SR_TILE_PAD;
-				int right = job->cx + job->cw + SR_TILE_PAD, bottom = job->cy + job->ch + SR_TILE_PAD;
-				if (right > job->padded_width) right = job->padded_width;
-				if (bottom > job->padded_height) bottom = job->padded_height;
-				job->ww = right - job->wx;
-				job->wh = bottom - job->wy;
+				sr_tile_bounds(job, tx, ty);
 				sr_prepare_tile(job);
 			}
 			sr_barrier(job, phase++);
@@ -986,23 +1014,7 @@ static void sr_worker(SrJob *job, int id) {
 				sr_barrier(job, phase++);
 				in = dst;
 			}
-			/* Pixel shuffle, plus the input enlarged, into the tile's core. */
-			for (int y; (y = atomic_fetch_add(&job->counters[phase & 1], 1)) < job->ch;) {
-				int ly = job->cy - job->wy + y, py = job->cy + y;
-				for (int x = 0; x < job->cw; x++) {
-					int lx = job->cx - job->wx + x, px = job->cx + x;
-					const float *f = job->last + ((int64_t)ly * job->ww + lx) * SR_LAST;
-					const float *base = job->padded + ((int64_t)py * job->padded_width + px) * 3;
-					for (int i = 0; i < SR_SCALE; i++) {
-						uint8_t *o = job->out + (((int64_t)(py - SR_PRE_PAD) * SR_SCALE + i) * job->width * SR_SCALE + (int64_t)(px - SR_PRE_PAD) * SR_SCALE) * 4;
-						for (int j = 0; j < SR_SCALE; j++)
-							for (int c = 0; c < 3; c++) {
-								float v = (f[c * 16 + i * 4 + j] + base[c]) * 255.0f;
-								o[j * 4 + c] = (uint8_t)(v <= 0.0f ? 0 : (v >= 255.0f ? 255 : (int)(v + 0.5f)));
-							}
-					}
-				}
-			}
+			for (int y; (y = atomic_fetch_add(&job->counters[phase & 1], 1)) < job->ch;) sr_output_row(job, y);
 			sr_barrier(job, phase++);
 		}
 	for (int y; (y = atomic_fetch_add(&job->counters[phase & 1], 1)) < core_h * SR_SCALE;) sr_alpha_row(job, y);
@@ -1091,14 +1103,82 @@ static void sr_fill_hidden(float *rgb, const uint8_t *alpha, int w, int h) {
 	free(next);
 }
 
-static void upscale(const uint8_t *weights, int64_t weights_n, const uint8_t *pixels, int64_t pixels_n, int64_t width, int64_t height,
-		int64_t threads, Buffer *out) {
-	if (width <= 0 || height <= 0 || width > SR_MAX_SIDE || height > SR_MAX_SIDE || width * height > SR_MAX_PIXELS || pixels_n != width * height * 4) return;
-	SrNet net;
-	if (!sr_load(weights, weights_n, &net)) {
-		free(net.storage);
-		return;
+#if defined(_WIN32)
+static SRWLOCK sr_gpu_lock = SRWLOCK_INIT;
+static HMODULE sr_gpu_module;
+static void *sr_gpu_context;
+static uint8_t *sr_gpu_weights;
+static int sr_gpu_checked;
+static void *(*sr_gpu_create)(const uint8_t *, size_t);
+static void (*sr_gpu_destroy)(void *);
+static int (*sr_gpu_tile)(void *, const float *, int, int, int, float *);
+
+static void sr_gpu_close(void) {
+	if (sr_gpu_module && sr_gpu_destroy) sr_gpu_destroy(sr_gpu_context);
+	sr_gpu_context = NULL;
+	free(sr_gpu_weights);
+	sr_gpu_weights = NULL;
+	if (sr_gpu_module) FreeLibrary(sr_gpu_module);
+	sr_gpu_module = NULL;
+	sr_gpu_checked = 0;
+}
+
+static int sr_gpu_open(const uint8_t *weights, size_t size) {
+	if (!sr_gpu_checked) {
+		sr_gpu_checked = 1;
+		/* Look alongside this extension, including when exported beside the exe. */
+		HMODULE self;
+		wchar_t path[4096];
+		if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+				(LPCWSTR)&sr_gpu_module, &self)) return 0;
+		DWORD length = GetModuleFileNameW(self, path, sizeof(path) / sizeof(*path));
+		if (!length || length >= sizeof(path) / sizeof(*path)) return 0;
+		wchar_t *last = wcsrchr(path, L'\\');
+		const wchar_t filename[] = L"el_upscale_gpu.dll";
+		if (!last || last + 1 - path + sizeof(filename) / sizeof(*filename) > sizeof(path) / sizeof(*path)) return 0;
+		memcpy(last + 1, filename, sizeof(filename));
+		sr_gpu_module = LoadLibraryExW(path, NULL, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+		if (sr_gpu_module) {
+			sr_gpu_create = (void *(*)(const uint8_t *, size_t))GetProcAddress(sr_gpu_module, "el_upscale_gpu_create");
+			sr_gpu_destroy = (void (*)(void *))GetProcAddress(sr_gpu_module, "el_upscale_gpu_destroy");
+			sr_gpu_tile = (int (*)(void *, const float *, int, int, int, float *))GetProcAddress(sr_gpu_module, "el_upscale_gpu_tile");
+		}
 	}
+	if (!sr_gpu_module || !sr_gpu_create || !sr_gpu_destroy || !sr_gpu_tile) return 0;
+	if (sr_gpu_context && !memcmp(sr_gpu_weights, weights, size)) return 1;
+	if (sr_gpu_context) sr_gpu_destroy(sr_gpu_context);
+	sr_gpu_context = NULL;
+	if (!sr_gpu_weights) sr_gpu_weights = (uint8_t *)malloc(size);
+	if (!sr_gpu_weights) return 0;
+	memcpy(sr_gpu_weights, weights, size);
+	sr_gpu_context = sr_gpu_create(weights, size);
+	return sr_gpu_context != NULL;
+}
+
+/* Reuse one Vulkan network. CPU fallback and image encoding run outside the lock. */
+static int sr_gpu_forward(SrJob *job, const uint8_t *weights, size_t size) {
+	AcquireSRWLockExclusive(&sr_gpu_lock);
+	int ok = sr_gpu_open(weights, size);
+	for (int y = 0; ok && y < job->height; y += SR_TILE)
+		for (int x = 0; ok && x < job->width; x += SR_TILE) {
+			sr_tile_bounds(job, x, y);
+			const float *tile = job->padded + ((int64_t)job->wy * job->padded_width + job->wx) * 3;
+			ok = sr_gpu_tile(sr_gpu_context, tile, job->padded_width, job->ww, job->wh, job->last);
+			if (ok) for (int row = 0; row < job->ch; row++) sr_output_row(job, row);
+		}
+	ReleaseSRWLockExclusive(&sr_gpu_lock);
+	return ok;
+}
+#endif
+
+static void upscale(const uint8_t *weights, int64_t weights_n, const uint8_t *pixels, int64_t pixels_n, int64_t width, int64_t height,
+		int64_t threads, int gpu, Buffer *out) {
+	if (width <= 0 || height <= 0 || width > SR_MAX_SIDE || height > SR_MAX_SIDE || width * height > SR_MAX_PIXELS || pixels_n != width * height * 4) return;
+#if !defined(_WIN32)
+	if (gpu) return;
+#endif
+	SrNet net = {0};
+	if (gpu ? !sr_valid(weights, weights_n) : !sr_load(weights, weights_n, &net)) return;
 	int w = (int)width, h = (int)height;
 	int pw = w + 2 * SR_PRE_PAD, ph = h + 2 * SR_PRE_PAD;
 	int64_t count = (int64_t)w * h;
@@ -1106,11 +1186,12 @@ static void upscale(const uint8_t *weights, int64_t weights_n, const uint8_t *pi
 	float *padded = (float *)malloc((size_t)pw * ph * 3 * sizeof(float));
 	uint8_t *alpha = (uint8_t *)malloc((size_t)count);
 	size_t feature = (size_t)(SR_WINDOW + 2) * (SR_WINDOW + 2) * SR_FEAT;
-	float *input = (float *)malloc((size_t)(SR_WINDOW + 2) * (SR_WINDOW + 2) * 3 * sizeof(float));
-	float *a = (float *)malloc(feature * sizeof(float)), *b = (float *)malloc(feature * sizeof(float));
+	float *input = gpu ? NULL : (float *)malloc((size_t)(SR_WINDOW + 2) * (SR_WINDOW + 2) * 3 * sizeof(float));
+	float *a = gpu ? NULL : (float *)malloc(feature * sizeof(float));
+	float *b = gpu ? NULL : (float *)malloc(feature * sizeof(float));
 	float *last = (float *)malloc((size_t)SR_WINDOW * SR_WINDOW * SR_LAST * sizeof(float));
 	uint8_t *result = (uint8_t *)malloc((size_t)count * SR_SCALE * SR_SCALE * 4);
-	if (!rgb || !padded || !alpha || !input || !a || !b || !last || !result) {
+	if (!rgb || !padded || !alpha || (!gpu && (!input || !a || !b)) || !last || !result) {
 		out->failed = 1;
 		goto done;
 	}
@@ -1152,6 +1233,15 @@ static void upscale(const uint8_t *weights, int64_t weights_n, const uint8_t *pi
 	job.a = a;
 	job.b = b;
 	job.last = last;
+#if defined(_WIN32)
+	if (gpu) {
+		if (sr_gpu_forward(&job, weights, (size_t)weights_n)) {
+			for (int y = 0; y < h * SR_SCALE; y++) sr_alpha_row(&job, y);
+			put(out, result, count * SR_SCALE * SR_SCALE * 4);
+		}
+		goto done;
+	}
+#endif
 	atomic_init(&job.counters[0], 0);
 	atomic_init(&job.counters[1], 0);
 	atomic_init(&job.arrived, 0);
@@ -1257,18 +1347,19 @@ static void to_packed(Buffer *b, PackedBytes *result) {
 	if (err == 0) memcpy(pba_index(result, 0), b->data, (size_t)b->size);
 }
 
-enum { M_RAW, M_PNT3, M_FIGURE, M_UNPACK, M_MORPH, M_METAL, M_UPSCALE, M_COUNT };
+enum { M_RAW, M_PNT3, M_FIGURE, M_UNPACK, M_MORPH, M_METAL, M_UPSCALE, M_UPSCALE_GPU, M_COUNT };
 #define B GDEXTENSION_VARIANT_TYPE_PACKED_BYTE_ARRAY
 #define I GDEXTENSION_VARIANT_TYPE_INT
 static const GDExtensionVariantType ARGS[M_COUNT][6] = {
-	{ B, I, I, I }, { B, I, I, I }, { B }, { B }, { B, B, B, I, I, I }, { B, B, I }, { B, B, I, I, I },
+	{ B, I, I, I }, { B, I, I, I }, { B }, { B }, { B, B, B, I, I, I }, { B, B, I }, { B, B, I, I, I }, { B, B, I, I },
 };
-static const int ARG_COUNT[M_COUNT] = { 4, 4, 1, 1, 6, 3, 5 };
-static const char *NAMES[M_COUNT] = { "decode_raw", "decode_pnt3", "figure", "unpack_track", "morph", "metal_mask", "upscale" };
+static const int ARG_COUNT[M_COUNT] = { 4, 4, 1, 1, 6, 3, 5, 4 };
+static const char *NAMES[M_COUNT] = { "decode_raw", "decode_pnt3", "figure", "unpack_track", "morph", "metal_mask", "upscale", "upscale_gpu" };
 static const char *ARG_NAMES[M_COUNT][6] = {
 	{ "data", "width", "height", "offset" }, { "data", "size", "width", "height" }, { "data" }, { "data" },
 	{ "base", "indices", "data", "offset", "frames", "count" }, { "pixels", "parts", "side" },
 	{ "weights", "pixels", "width", "height", "threads" },
+	{ "weights", "pixels", "width", "height" },
 };
 
 /* Runs method `m` on arguments already in their own types. */
@@ -1300,9 +1391,11 @@ static void run(int m, const void *const *args, PackedBytes *result) {
 		metal_mask(d0, n0, d1, n1, *(const int64_t *)args[2], &b);
 		break;
 	}
-	case M_UPSCALE: {
+	case M_UPSCALE:
+	case M_UPSCALE_GPU: {
 		const uint8_t *d1 = bytes_of((const PackedBytes *)args[1], &n1);
-		upscale(d0, n0, d1, n1, *(const int64_t *)args[2], *(const int64_t *)args[3], *(const int64_t *)args[4], &b);
+		int gpu = m == M_UPSCALE_GPU;
+		upscale(d0, n0, d1, n1, *(const int64_t *)args[2], *(const int64_t *)args[3], gpu ? 0 : *(const int64_t *)args[4], gpu, &b);
 		break;
 	}
 	}
@@ -1419,6 +1512,11 @@ static void initialize(void *userdata, GDExtensionInitializationLevel level) {
 static void deinitialize(void *userdata, GDExtensionInitializationLevel level) {
 	(void)userdata;
 	if (level != GDEXTENSION_INITIALIZATION_SCENE) return;
+#if defined(_WIN32)
+	AcquireSRWLockExclusive(&sr_gpu_lock);
+	sr_gpu_close();
+	ReleaseSRWLockExclusive(&sr_gpu_lock);
+#endif
 	unregister_class(library, &class_name);
 	string_name_free(&class_name);
 	string_name_free(&parent_name);
