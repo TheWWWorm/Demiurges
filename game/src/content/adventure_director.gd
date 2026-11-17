@@ -28,6 +28,7 @@ const PORTAL_SECONDS := 40.0 / 15.0
 const DOCK_FADE_SECONDS := 15.0 / 15.0
 const DOCK_MESSAGE_SECONDS := 20.0 / 15.0
 var strategy: Dictionary = {}
+var monster_forecasts: Dictionary = {}
 var strategy_shop_wait: Callable
 ## Empty in local play. Network planning keeps the map's viewing player and
 ## the set of human commanders separate.
@@ -89,6 +90,7 @@ var _running: Variant = null
 
 func build(session: ELAdventureSession) -> bool:
 	state = session
+	monster_forecasts.clear()
 	grid = ELAdventureGrid.new()
 	if not grid.build(state.map, state.objects): return _fail(grid.error)
 	state.grid = grid
@@ -1315,11 +1317,11 @@ func _place_back(hero: Dictionary, cell: Vector2i) -> void:
 ## a corner may leave no such tile next to the hero, and a hero kept in the
 ## zone had to fight (the next step or tick intercepted it again).
 const STEP_OUT_REACH := 8
-func _step_out_of_zone(hero: Dictionary) -> void:
+func _step_out_of_zone(hero: Dictionary) -> bool:
 	var here := Vector2i(int(hero.x), int(hero.y))
 	if interception.enemies(state, hero, here).is_empty() or hero.get("fortified", false):
 		hero.intercepted = false
-		return
+		return not hero.get("fortified", false)
 	var ship: bool = hero.get("ship", false)
 	var from: Vector2i = _stepped_from.get(int(hero.uid), Vector2i(-1, -1))
 	var candidates: Array[Vector2i] = []
@@ -1354,7 +1356,8 @@ func _step_out_of_zone(hero: Dictionary) -> void:
 		if state.map.profile.id == "el2": ELFog.moved(state, hero)
 		presentation.emit({"kind": "actor_moving", "id": hero.uid, "position": Vector2(cell), "moving": false})
 		state.event.emit({"kind": "object_changed", "id": hero.uid})
-		return
+		return true
+	return false
 
 ## Mid-duel chapter checks; the duel view leaves the battle once an outcome is set.
 func watch_encounter() -> String:

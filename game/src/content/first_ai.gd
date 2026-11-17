@@ -54,39 +54,131 @@ static func plays_monster_duel(director: ELAdventureDirector, first: Dictionary,
 	return hero.get("type") == "hero" and owner > 0 and director.state.players.has(owner) and not director.is_strategy_human(owner) \
 		and monster.get("type") == "monster" and int(monster.get("owner", 0)) <= 0
 
-# Leave time for the map to advance even if both books run out of attacks.
+# Keep headless battles bounded even when both books run out of attacks.
 const MONSTER_DUEL_STEPS := 512
-const MIN_MONSTER_ROUTE_WIN_CHANCE := 0.35
+const FORECAST_WINS := 3
+# Two draws for each initiative parity when terrain allows either side to start.
+const FORECAST_SEEDS := [9026, 18437, 27662, 3837]
+
+## Check a shortlisted monster or lair before committing a hero to the trip.
+static func forecast_objective(director: ELAdventureDirector, hero: Dictionary, task: Dictionary, budget: Dictionary = {}) -> bool:
+	var kind: String = task.get("kind", "")
+	if kind not in ["monster", "building"]: return true
+	var item := director.state.object(task.get("target", -1))
+	if not item.get("alive", false): return false
+	if kind == "monster":
+		var guard_first := director.interception.zones.has(int(item.uid)) and not ELStrategy.adjacent(director, hero, item)
+		return can_attack_monster(director, hero, item, guard_first, Vector2i(item.x, item.y), budget)
+	if ELAdditionalBuildings.DUNGEONS.has(item.get("name")):
+		var mob := director.state.object(item.monster)
+		return mob.get("alive", false) and can_attack_monster(director, hero, mob, false, Vector2i(item.x, item.y), budget)
+	return true
+
+## Starting books and modifiers fully determine the trials for a terrain and
+## seat order. Cache the result through free-movement replans and across days.
+static func _duel_roster(state: ELAdventureSession, actor: Dictionary) -> Array:
+	return [actor.name, actor.get("shape", ""), actor.level, actor.health, actor.get("specialization", ""), actor.get("monster_difficulty", -1),
+		actor.cards, actor.get("rune_uses", []), actor.get("rune_under", []), actor.get("skills", {}), actor.get("artifacts", []).map(func(art: Dictionary) -> String: return str(art.name)),
+		actor.get("global_spells", []), int(ELForts.garrison_of(state, actor).get("fort_level", 0))]
+
+static func can_attack_monster(director: ELAdventureDirector, hero: Dictionary, monster: Dictionary, guard_first: bool, at: Vector2i, budget: Dictionary = {}) -> bool:
+	if not plays_monster_duel(director, hero, monster): return true
+	var state := director.state
+	var retry: Dictionary = state.players[int(hero.owner)].get("ai", {}).get("retry", {})
+	if int(retry.get(_monster_retry_key(hero, monster), 0)) > int(state.day): return false
+	var key := var_to_str([guard_first, ELAdventureEncounter.terrain_class(state.map, at) if at != Vector2i.ZERO else -1,
+		_duel_roster(state, hero), _duel_roster(state, monster)])
+	var cache := director.monster_forecasts
+	if cache.has(key): return cache[key]
+	if budget.has("remaining"):
+		if int(budget.remaining) <= 0: return false
+		budget.remaining -= 1
+	if cache.size() >= 2048: cache.clear()
+	var started := Time.get_ticks_usec()
+	var wins := 0
+	var samples := 0
+	for seed_value: int in FORECAST_SEEDS:
+		var fight := ELAdventureEncounter.new()
+		var first := int(monster.uid) if guard_first else int(hero.uid)
+		var second := int(hero.uid) if guard_first else int(monster.uid)
+		samples += 1
+		if not fight.prepare_map_ai_duel(state, first, second, seed_value, at): break
+		for step in MONSTER_DUEL_STEPS:
+			if fight.battle.phase == ELDuel.Phase.FINISHED: break
+			ELPracticeAI.heuristic_step(fight.battle)
+		if fight.battle.winner == int(guard_first): wins += 1
+		if wins >= FORECAST_WINS or wins + FORECAST_SEEDS.size() - samples < FORECAST_WINS: break
+	cache[key] = wins >= FORECAST_WINS
+	if director.has_meta("first_ai_stats"):
+		var stats: Dictionary = director.get_meta("first_ai_stats")
+		var usec := Time.get_ticks_usec() - started
+		stats.forecast_trials = int(stats.get("forecast_trials", 0)) + samples
+		stats.forecast_usec = int(stats.get("forecast_usec", 0)) + usec
+		stats.forecast_peak = maxi(int(stats.get("forecast_peak", 0)), usec)
+	return cache[key]
 
 static func _fight_monster(director: ELAdventureDirector, first: Dictionary, second: Dictionary) -> bool:
 	var state := director.state
 	var fight := ELAdventureEncounter.new()
-	var hero := first if first.type == "hero" else second
-	var monster := second if first.type == "hero" else first
+	var hero_side := 0 if first.type == "hero" else 1
+	var hero := first if hero_side == 0 else second
+	var monster := second if hero_side == 0 else first
 	if not fight.prepare_map_ai_duel(state, int(first.uid), int(second.uid), ELAdditionalBuildings._random(state)):
-		push_warning("Computer hero retreated from %s: %s" % [monster.name, fight.error])
-		_retreat_from_monster(state, hero, monster)
+		push_warning("Unable to prepare a computer duel against %s: %s" % [monster.name, fight.error])
+		_retreat_from_monster(director, hero, monster)
 		return true
-	for i in MONSTER_DUEL_STEPS:
+	var escape_failed := false
+	for step in MONSTER_DUEL_STEPS:
 		if fight.battle.phase == ELDuel.Phase.FINISHED: break
+		if not escape_failed and _wants_to_retreat(fight.battle, hero_side):
+			if _retreat_from_monster(director, hero, monster, fight): return true
+			escape_failed = true
 		ELPracticeAI.heuristic_step(fight.battle)
 	if fight.battle.phase != ELDuel.Phase.FINISHED:
-		fight.write_back_runes()
-		_retreat_from_monster(state, hero, monster)
+		if not _retreat_from_monster(director, hero, monster, fight): fight.write_back_runes()
 		return true
 	if not fight.finish(): return director._fail(fight.error)
 	ELFirstScenario.evaluate(director, {"hero": first.uid, "opponent": second.uid, "winner": fight.winner})
 	return true
 
-static func _retreat_from_monster(state: ELAdventureSession, hero: Dictionary, monster: Dictionary) -> void:
-	hero.strategy_order = {}
-	var ai := data(state, int(hero.owner))
-	var retry: Dictionary = ai.get_or_add("retry", {})
+static func _wants_to_retreat(battle: ELDuel, side: int) -> bool:
+	var own: Dictionary = battle.heroes[side]
+	var life := int(own.health)
+	if life >= int(own.maximum) or life * 2 > int(own.maximum): return false
+	var foe_life := int(battle.heroes[1 - side].health)
+	if foe_life <= life: return false
+	if life <= 3: return true
+	var power := [0, 0]
+	for player in 2:
+		for unit: Dictionary in battle.army(player): power[player] += maxi(0, int(unit.power))
+	return power[1 - side] > power[side] and (power[1 - side] >= life or foe_life >= life * 2)
+
+static func _monster_retry_key(hero: Dictionary, monster: Dictionary) -> String:
 	var dungeon := int(monster.get("dungeon", -1))
 	var task := {"kind": "building", "target": dungeon} if dungeon >= 0 else {"kind": "monster", "target": int(monster.uid)}
-	retry[_key(task, int(hero.uid)) + "@" + str(hero.uid)] = int(state.day) + RETRY_DAYS
+	return _key(task, int(hero.uid)) + "@" + str(hero.uid)
+
+## Escape only while a safe tile is reachable. Keep the current turn cursor,
+## and withdraw the hero from the remaining ordinary battles of this move.
+static func _retreat_from_monster(director: ELAdventureDirector, hero: Dictionary, monster: Dictionary, fight: ELAdventureEncounter = null) -> bool:
+	if not director._step_out_of_zone(hero): return false
+	if fight != null: fight.write_back_runes()
+	var state := director.state
+	hero.strategy_order = {}
+	hero.ap = 0
+	var ai := data(state, int(hero.owner))
+	var retry: Dictionary = ai.get_or_add("retry", {})
+	retry[_monster_retry_key(hero, monster)] = int(state.day) + RETRY_DAYS
+	retry["resupply:%d" % int(hero.uid)] = int(state.day) + RETRY_DAYS
 	var assigned: Array = ai.assigned
 	ai.assigned = assigned.filter(func(pair: Array) -> bool: return int(pair[0]) != int(hero.uid))
+	var turn := director.strategy
+	if turn.get("phase") == "combat":
+		var combats: Array = turn.combats
+		for index in range(combats.size() - 1, int(turn.index) - 1, -1):
+			if combats[index].size() == 2 and combats[index].has(int(hero.uid)): combats.remove_at(index)
+	state.event.emit({"kind": "monster_retreat", "hero": int(hero.uid), "monster": int(monster.uid)})
+	return true
 
 ## A hero who defeats another hero takes the battle artifacts it carried.
 static func take_artifacts(victor: Dictionary, loser: Dictionary) -> Array:
@@ -215,6 +307,7 @@ static func plan_player(director: ELAdventureDirector, player: int, daily := tru
 		if not task.is_empty() and (finished(director, hero, task) or not _valid(task, open, smart)): drop = true
 		# A promotion or demotion since the task was given: it must still suit the role.
 		elif not task.is_empty() and not _role_allows(director, hero, role, task, smart): drop = true
+		elif smart and not task.is_empty() and not forecast_objective(director, hero, task): drop = true
 		# Remake option: a siege that would not ruin the castle (its damage
 		# undone by the castle's regeneration) is reconsidered (other heroes
 		# may join it, or another goal is better).
@@ -675,28 +768,15 @@ static func _route_cost(director: ELAdventureDirector, hero: Dictionary, item: D
 ## The route of the last _route_cost or _fought_cost (empty: none found).
 static var last_path: Array[Vector2i] = []
 
-## Close hostile guard cells, or only the cells of neutral monsters the hero
-## is unlikely to beat. The destination guard and the hero's tile stay open.
-## Reopen the returned cells with grid._update_cell.
-static func close_guards(director: ELAdventureDirector, hero: Dictionary, target: int, dangerous_monsters_only := false) -> Array[Vector2i]:
+## Close hostile guard cells other than the destination guard and the hero's
+## tile. Reopen the returned cells with grid._update_cell.
+static func close_guards(director: ELAdventureDirector, hero: Dictionary, target: int) -> Array[Vector2i]:
 	var grid := director.grid
 	var from := Vector2i(hero.x, hero.y)
 	var closed: Array[Vector2i] = []
-	var dangerous := {}
 	for entry: Array in _hostile_cells(director, hero):
 		var point: Vector2i = entry[0]
 		if point == from or grid.land.is_point_solid(point) or entry[1] == [target]: continue
-		if dangerous_monsters_only:
-			var blocked := false
-			for id: int in entry[1]:
-				if id == target: continue
-				if not dangerous.has(id):
-					var mob := director.state.object(id)
-					dangerous[id] = plays_monster_duel(director, hero, mob) and ELFirstAIPlanner.win_chance(director, hero, mob) < MIN_MONSTER_ROUTE_WIN_CHANCE
-				if dangerous[id]:
-					blocked = true
-					break
-			if not blocked: continue
 		grid.land.set_point_solid(point, true)
 		closed.append(point)
 	return closed

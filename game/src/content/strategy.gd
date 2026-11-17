@@ -100,11 +100,37 @@ static func order_path(director: ELAdventureDirector, actor: Dictionary) -> Arra
 	var closed := _close_unseen(director, actor)
 	if not rules.is_empty():
 		closed.append_array(_close_unknown(director, int(rules.get("known", -1))))
-		if rules.get("guards", false) or ELFirstAIEconomy.applies(director):
-			closed.append_array(ELFirstAI.close_guards(director, actor, int(rules.get("target", -1)), not rules.get("guards", false)))
-	var path := director.grid.approach(from, target) if not target.is_empty() else director.grid.path(from, Vector2i(order.destination[0], order.destination[1]))
+		if rules.get("guards", false):
+			closed.append_array(ELFirstAI.close_guards(director, actor, int(rules.get("target", -1))))
+	var destination := Vector2i(order.destination[0], order.destination[1])
+	var path := director.grid.approach(from, target) if not target.is_empty() else director.grid.path(from, destination)
+	if not rules.is_empty() and ELFirstAIEconomy.applies(director) and not director.is_strategy_human(int(actor.owner)):
+		path = _screen_monster_route(director, actor, path, target, destination, closed)
 	for point: Vector2i in closed: director.grid._update_cell(point)
 	return path
+
+## The first guard ends this move. If its fight is unsafe, try a route around
+## its zone, keeping the same explored-ground and other guard restrictions.
+static func _screen_monster_route(director: ELAdventureDirector, hero: Dictionary, path: Array[Vector2i], target: Dictionary, destination: Vector2i, closed: Array[Vector2i]) -> Array[Vector2i]:
+	var state := director.state
+	var here := Vector2i(hero.x, hero.y)
+	var budget := {"remaining": 3}
+	for attempt in 3:
+		var stopped := director.interception.preview(state, hero, path)
+		if stopped.size() < 2: return path
+		var next: Vector2i = stopped[-1]
+		var enemies := director.interception.enemies(state, hero, next)
+		var refused := false
+		for id: int in enemies:
+			if ELFirstAI.can_attack_monster(director, hero, state.object(id), true, next, budget): continue
+			refused = true
+			for point: Vector2i in director.interception.zones[id].cells:
+				if point == here or director.grid.land.is_point_solid(point): continue
+				director.grid.land.set_point_solid(point, true)
+				closed.append(point)
+		if not refused: return path
+		path = director.grid.approach(here, target) if not target.is_empty() else director.grid.path(here, destination)
+	return []
 
 ## Closes the tiles `player` has not explored (none for -1).
 static func _close_unknown(director: ELAdventureDirector, player: int) -> Array[Vector2i]:
@@ -229,6 +255,10 @@ static func after_movement(director: ELAdventureDirector, actor: Dictionary) -> 
 		return
 	# A hero inside a training camp has left the map and cannot be attacked.
 	if target.is_empty() or not target.alive or not target.get("placed", true) or target.type not in ["hero", "monster"] or not (director.state.hostile(actor, target) or ELFirstAI.hunts(director.state, actor, target)) or not adjacent(director, actor, target): return
+	if not order.get("route", {}).is_empty() and ELFirstAI.plays_monster_duel(director, actor, target):
+		if actor.get("intercepted", false) or not ELFirstAI.can_attack_monster(director, actor, target, false, Vector2i(target.x, target.y)):
+			actor.strategy_order = {}
+			return
 	# InterceptEnemy executes during the movement pass, before the next hero.
 	target.intercepted = true
 	queue_combat(director, actor.uid, target.uid)

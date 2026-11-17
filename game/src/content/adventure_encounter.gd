@@ -94,14 +94,14 @@ static func second_result(state: ELAdventureSession, first: int, second: int) ->
 	var b := int(state.object(second).get("level", 0))
 	return first if a > b else (second if b > a else -1)
 
-func prepare_map_ai_duel(session: ELAdventureSession, first: int, second: int, seed_value: int) -> bool:
+func prepare_map_ai_duel(session: ELAdventureSession, first: int, second: int, seed_value: int, forecast_at := Vector2i(-1, -1)) -> bool:
 	state = session
 	hero_id = first
 	opponent_id = second
 	map_ai_duel = true
-	return _prepare_duel(session, second, seed_value)
+	return _prepare_duel(session, second, seed_value, forecast_at)
 
-func _prepare_duel(state: ELAdventureSession, defender: int, seed_value := -1) -> bool:
+func _prepare_duel(state: ELAdventureSession, defender: int, seed_value := -1, forecast_at := Vector2i(-1, -1)) -> bool:
 	var options := {"adventure": true, "arena": "Green.001", "players": []}
 	var profile := state.map.profile
 	for id: int in [hero_id, opponent_id]:
@@ -140,6 +140,8 @@ func _prepare_duel(state: ELAdventureSession, defender: int, seed_value := -1) -
 				if not options.players[-1].has("artifacts"): options.players[-1].artifacts = []
 				options.players[-1].artifacts.append(entry)
 			ELGlobalSpells.battle_choice(state, actor, options.players[-1])
+			# Restore normalizes the book in place. Forecasts only read the map.
+			if forecast_at.x >= 0: actor = actor.duplicate(true)
 			if not ELRunes.restore(profile, actor): return _fail("Invalid encounter rune inventory.")
 			options.players[-1].rune_uses = actor.rune_uses.duplicate()
 			# The cantrips waiting under bought spells (ELRunes.under).
@@ -199,7 +201,7 @@ func _prepare_duel(state: ELAdventureSession, defender: int, seed_value := -1) -
 	var battle_seed := (randi() & 0x7fff) if seed_value < 0 else seed_value
 	var colours: Array[String] = [String(options.players[0].faction), String(options.players[1].faction)]
 	if swapped: colours.reverse()
-	options.first_side = first_side(state, attacker(), target(), colours, battle_seed) ^ (1 if swapped else 0)
+	options.first_side = first_side(state, attacker(), target(), colours, battle_seed, forecast_at) ^ (1 if swapped else 0)
 	battle = ELDuel.new()
 	if not battle.start(profile, battle_seed, options): return _fail(battle.error)
 	watch_side = ELFirstScenario.duel_watch(state, hero_id, opponent_id)
@@ -280,13 +282,14 @@ static func colour_index(edition: String, colour: String) -> int:
 ## coin flip from the battle seed. Attacker/defender roles are not consulted.
 ## As coded, colour 0 (Red) meets class 0 (Black-arena land) and colour 3
 ## (Black) class 3 (Red-arena land): an original quirk kept on purpose.
-static func first_side(state: ELAdventureSession, first: int, second: int, colours: Array[String], battle_seed: int) -> int:
+static func first_side(state: ELAdventureSession, first: int, second: int, colours: Array[String], battle_seed: int, forecast_at := Vector2i(-1, -1)) -> int:
 	var actors := [state.object(first), state.object(second)]
 	var placed: Array[bool] = []
 	for actor: Dictionary in actors: placed.append(Vector2i(int(actor.get("x", -1)), int(actor.get("y", -1))) != Vector2i(-1, -1))
 	var tile := Vector2i.ZERO
 	if placed[1]: tile = Vector2i(int(actors[1].x), int(actors[1].y))
 	elif placed[0]: tile = Vector2i(int(actors[0].x), int(actors[0].y))
+	if forecast_at.x >= 0: tile = forecast_at
 	var matches: Array[bool] = [false, false]
 	if tile != Vector2i.ZERO:
 		var terrain := terrain_class(state.map, tile)

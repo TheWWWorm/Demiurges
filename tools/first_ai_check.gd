@@ -81,7 +81,7 @@ func _run() -> void:
 	_finish()
 
 const CASES := ["a_castle", "a_mine", "b_teacher", "b_gnome", "b_spawn", "c_blocked", "d_unexplored", "d_guarded",
-	"e_unseen", "e_unreachable", "f_upgrade", "f_refill", "f_portal", "h_meteor", "j_free", "k_holds", "k_defend", "m_roles", "n_joint", "p_resolver", "p_monsters", "q_lookahead",
+	"e_unseen", "e_unreachable", "f_upgrade", "f_refill", "f_portal", "h_meteor", "j_free", "k_holds", "k_defend", "m_roles", "n_joint", "p_resolver", "p_monsters", "p_retreat", "q_lookahead",
 	"s_saved", "t_patrol", "t_raid", "t_escort", "t_retreat", "t_doctrine", "t_story", "t_off",
 	"v_cast", "v_income", "v_runes", "v_portal", "v_upkeep", "v_mine",
 	"w_pickup", "w_commander", "w_promotion", "w_hidden", "w_pile", "w_peace", "w_scouts", "w_tinkerer", "w_siege", "w_scrolls", "w_unfound", "w_human",
@@ -649,10 +649,18 @@ func _case_p_monsters() -> void:
 	director.interception.rebuild(state, director.grid)
 	var odds := ELFirstAIPlanner.win_chance(director, hero, mob)
 	var task := {"kind": "monster", "target": int(mob.uid)}
-	check(odds < 0.1 and not ELFirstAIPlanner.legal(director, hero, 0, task), "P: the planner leaves an overwhelming monster (%.3f)" % odds)
+	director.set_meta("first_ai_stats", {})
+	var before_seed := state.seed_value
+	var before_book: Array = hero.rune_uses.duplicate()
+	check(not ELFirstAI.forecast_objective(director, hero, task), "P: trial duels reject an overwhelming monster")
+	var forecast: Dictionary = director.get_meta("first_ai_stats")
+	check(int(forecast.get("forecast_trials", 0)) >= 2, "P: the decision came from actual duels")
+	check(hero.rune_uses == before_book and state.seed_value == before_seed and hero.alive and mob.alive, "P: forecasts leave runes, map RNG and fighters intact")
+	var samples := int(forecast.forecast_trials)
+	check(not ELFirstAI.forecast_objective(director, hero, task) and int(forecast.forecast_trials) == samples, "P: unchanged matchup reuses the forecast")
 	var lair := _place(director, "Teacher", 30, 79, {"name": "Dungeon1", "monster": int(mob.uid)})
 	check(ELAdditionalBuildings.visit_problem(state, hero, lair).is_empty(), "P: the lair is open for a visit")
-	check(not ELFirstAIPlanner.legal(director, hero, 0, {"kind": "building", "target": int(lair.uid)}), "P: the planner assesses the lair's monster before visiting")
+	check(not ELFirstAI.forecast_objective(director, hero, {"kind": "building", "target": int(lair.uid)}), "P: trial duels also assess the lair's occupant")
 
 	hero.strategy_order = {"destination": [33, 90], "use": -1, "route": ELFirstAI.route_rules(director, 2, false)}
 	var guarded: Array = director.interception.zones[int(mob.uid)].cells
@@ -678,9 +686,51 @@ func _case_p_monsters() -> void:
 	var before := int(winner.experience)
 	var winning_odds := ELFirstAIPlanner.win_chance(director, winner, mob)
 	check(winning_odds > odds, "P: a stronger hero has better odds (%.3f)" % winning_odds)
+	check(ELFirstAI.forecast_objective(director, winner, task), "P: the trials approve a favorable matchup")
 	director.strategy.combats.append([winner.uid, mob.uid])
 	ELStrategy.advance(director)
 	check(results == [mob.uid, winner.uid] and winner.alive and not mob.alive and int(winner.experience) > before, "P: a computer winner gets the actual duel reward")
+
+func _case_p_retreat() -> void:
+	if not smart: return
+	var director := _world()
+	var state := director.state
+	var hero := _hero(director, 2, 30, 90, 2)
+	var colour := str(state.players[2].color)
+	for code: String in profile.table("CombatSpells"):
+		if profile.table("CombatSpells")[code].get("Color") != colour or ELRunes.unlimited(profile, hero, code) or ELCatalog.rule(profile, code).is_empty(): continue
+		hero.cards[0] = code
+		ELRunes.initialize(profile, hero, [2])
+		break
+	var mob := _place(director, "monster", 34, 90, {"owner": 0, "level": 10, "health": 40})
+	director.interception.rebuild(state, director.grid)
+	var approach := director.interception.preview(state, hero, director.grid.approach(Vector2i(hero.x, hero.y), mob))
+	var safe: Vector2i = approach[-2]
+	var guarded: Vector2i = approach[-1]
+	_take(director, hero, guarded)
+	director._stepped_from[int(hero.uid)] = safe
+	hero.intercepted = true
+	var fight := ELAdventureEncounter.new()
+	check(fight.prepare_map_ai_duel(state, int(mob.uid), int(hero.uid), 992), "P: a real duel is prepared")
+	if fight.battle == null or fight.battle.heroes.size() < 2: return
+	var uses: Array = fight.battle.heroes[1].spell_uses
+	var spent := -1
+	for slot in uses.size():
+		if int(uses[slot]) > 0:
+			uses[slot] -= 1
+			spent = slot
+			break
+	check(spent >= 0, "P: the hero has a rune charge to spend")
+	fight.battle.heroes[1].health = 2
+	check(ELFirstAI._wants_to_retreat(fight.battle, 1), "P: a losing hero looks for an escape during the duel")
+	director.strategy = {"phase": "combat", "combats": [[mob.uid, hero.uid], [hero.uid, mob.uid]], "actors": [], "index": 1, "free": "night", "legacy_orders": false}
+	var experience := int(hero.experience)
+	check(ELFirstAI._retreat_from_monster(director, hero, mob, fight), "P: the losing hero can escape to a safe tile")
+	check(Vector2i(hero.x, hero.y) == safe and int(hero.ap) == 0, "P: retreat returns to the last safe tile and uses the day")
+	check(mob.alive and hero.alive and int(hero.experience) == experience, "P: retreat leaves both alive and grants no XP")
+	check(spent >= 0 and hero.rune_uses[spent] == uses[spent], "P: retreat keeps the rune spent during battle")
+	check(director.strategy.combats.size() == 1, "P: retreat cancels the hero's remaining queued fights")
+	check(not ELFirstAI.can_attack_monster(director, hero, mob, true, guarded), "P: the hero waits before trying that monster again")
 
 # --- Q: short strategic lookahead --------------------------------------------
 
@@ -697,7 +747,7 @@ func _q_world() -> Array:
 	# The gap is one cell wide (walls take the terrain corners beside it);
 	# the guard stands two cells out, its area covering the cell before it.
 	var guard := _place(director, "monster", gap.x - 2, gap.y, {"owner": 0, "level": 1, "health": 4, "cards": ["CAFG"], "rune_uses": [4]})
-	var teacher := _place(director, "Teacher", 12, 60)
+	var teacher := _place(director, "Teacher", 14, 60)
 	director.interception.rebuild(director.state, director.grid)
 	return [director, lead, mine, guard, teacher]
 

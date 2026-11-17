@@ -249,6 +249,8 @@ static func precombat(director: ELAdventureDirector, hero: Dictionary, item: Dic
 	var state := director.state
 	if not visit_problem(state, hero, item).is_empty() or not ELStrategy.adjacent(director, hero, item) or director.strategy.get("phase") != "movement": return {}
 	var monster := state.object(item.monster)
+	if not hero.get("strategy_order", {}).get("route", {}).is_empty() and ELFirstAI.plays_monster_duel(director, hero, monster):
+		if hero.get("intercepted", false) or not ELFirstAI.can_attack_monster(director, hero, monster, false, Vector2i(hero.x, hero.y)): return {}
 	ELStrategy.queue_combat(director, int(hero.uid), int(monster.uid))
 	hero.strategy_order = {}
 	var key := str(definition(state.map.profile, item).get("Message1", "BldngMsg1" + item.name))
