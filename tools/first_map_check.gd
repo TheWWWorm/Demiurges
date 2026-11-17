@@ -16,6 +16,8 @@ extends SceneTree
 ##   destination), it does not swing back to the hero;
 ## - #171: with free movement a right click stops the walking hero on the
 ##   tile it is stepping onto; its unspent movement points stay;
+## - #172: a right click on an artifact on the hero screen holds up its
+##   tooltip until the button is let go;
 ## - #168: a map tooltip held up with the right button fits its text whatever
 ##   tooltip was shown before it (a building's after a monster's stretched).
 ##
@@ -107,6 +109,7 @@ func _map_part() -> void:
 	view._update_camera()
 	await _tooltip_part(view)
 	await _route_camera_part(view)
+	await _artifact_tip_part(view, profile)
 
 	# Castle double-click.
 	check(not own.is_empty(), "the player has a castle")
@@ -258,6 +261,46 @@ func _route_camera_part(view: ELAdventureView) -> void:
 	view._cancel_map_order()
 	view.following = view._hero_id()
 	await frames(2)
+
+## #172: the hero screen's artifact tooltip on a right click.
+func _artifact_tip_part(view: ELAdventureView, profile: ELProfile) -> void:
+	var hero := view.state.object(view._hero_id())
+	var name := ""
+	for row: String in profile.table("Artefacts"):
+		if not ELMapPickups.artifact_title(profile, row).is_empty():
+			name = row
+			break
+	check(not name.is_empty(), "the game has an artifact with a name")
+	if name.is_empty(): return
+	var kept: Array = hero.get("artifacts", []).duplicate(true)
+	hero.artifacts = [{"name": name, "charges": 2}]
+	view.open_hero_screen(int(hero.uid))
+	await frames(2)
+	var screen := view.hero_screen
+	check(screen != null, "the hero screen opens")
+	if screen == null:
+		hero.artifacts = kept
+		return
+	var at := screen.slot_rect(0, 0).get_center()
+	var press := InputEventMouseButton.new()
+	press.button_index = MOUSE_BUTTON_RIGHT
+	press.pressed = true
+	press.position = at
+	screen.sheet._gui_input(press)
+	await frames(1)
+	var tip := screen.skill_tip
+	var text := (tip.get_child(0) as Label).text if tip != null and is_instance_valid(tip) else ""
+	check(text.begins_with(ELMapPickups.artifact_title(profile, name)) and text == screen.tooltip_at(at), "a right click on an artifact holds up its tooltip (%s)" % text.replace("
+", " / "))
+	if tip != null and is_instance_valid(tip): check(tip.size.y <= tip.get_combined_minimum_size().y + 0.5 and tip.get_rect().position.y >= 0, "the held tooltip fits its text (%.0f for %.0f)" % [tip.size.y, tip.get_combined_minimum_size().y])
+	var release := press.duplicate()
+	release.pressed = false
+	screen.sheet._gui_input(release)
+	await frames(1)
+	check(screen.skill_tip == null, "letting the button go closes it")
+	screen.closed.emit()
+	await frames(2)
+	hero.artifacts = kept
 
 ## #168: every map object's tooltip, one after another in a mixed order,
 ## is as tall as its own content and no taller.

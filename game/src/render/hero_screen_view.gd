@@ -268,16 +268,8 @@ func gs_icon(code: String) -> Texture2D:
 	return atlas
 
 func tooltip_at(point: Vector2) -> String:
-	var hit := slot_at(point)
-	if int(hit[0]) >= 0:
-		var entry: Dictionary = ELHeroExchange.bar(state.object(heroes[hit[0]]))[hit[1]]
-		if entry.kind == "artifact":
-			var row: Dictionary = profile.table("Artefacts").get(str(entry.item.name), {})
-			var body := profile.text("T_ARTIFACT_TT")
-			var details := body % [int(entry.item.charges), int(row.get("FirstUsage", 0)), int(row.get("UsageGap", 0)), int(row.get("RechargeDuration", 0))] if body.count("%d") == 4 else "%d" % int(entry.item.charges)
-			return ELMapPickups.artifact_title(profile, str(entry.item.name)) + "\n" + details
-		var code := ELMapPickups.resolve(profile, entry.item.spells, str(state.players.get(int(state.object(heroes[hit[0]]).get("owner", 0)), {}).get("color", "")))
-		return ELMapPickups.spell_title(profile, code) + "\n" + profile.text("T_GLOBAL_SPELL_PART" if entry.item.kind == ELMapPickups.PART else "T_GLOBAL_SPELL_FULL")
+	var item := item_tip_at(point)
+	if not item.is_empty(): return item
 	for side in heroes.size():
 		var cards := book_cards(side)
 		for index in mini(15, cards.size()):
@@ -293,6 +285,21 @@ func tooltip_at(point: Vector2) -> String:
 			if Rect2(362 + STEP * slot, 138, 50, 50).has_point(point) and gs_scroll + slot < spells.size(): return ELGlobalSpells.title(profile, spells[gs_scroll + slot].code)
 		var offer := offer_tip_at(point)
 		if not offer.is_empty(): return offer
+	return ""
+
+## The tooltip text of the artifact or global spell piece in the items row
+## under `point`, or "".
+func item_tip_at(point: Vector2) -> String:
+	var hit := slot_at(point)
+	if int(hit[0]) >= 0:
+		var entry: Dictionary = ELHeroExchange.bar(state.object(heroes[hit[0]]))[hit[1]]
+		if entry.kind == "artifact":
+			var row: Dictionary = profile.table("Artefacts").get(str(entry.item.name), {})
+			var body := profile.text("T_ARTIFACT_TT")
+			var details := body % [int(entry.item.charges), int(row.get("FirstUsage", 0)), int(row.get("UsageGap", 0)), int(row.get("RechargeDuration", 0))] if body.count("%d") == 4 else "%d" % int(entry.item.charges)
+			return ELMapPickups.artifact_title(profile, str(entry.item.name)) + "\n" + details
+		var code := ELMapPickups.resolve(profile, entry.item.spells, str(state.players.get(int(state.object(heroes[hit[0]]).get("owner", 0)), {}).get("color", "")))
+		return ELMapPickups.spell_title(profile, code) + "\n" + profile.text("T_GLOBAL_SPELL_PART" if entry.item.kind == ELMapPickups.PART else "T_GLOBAL_SPELL_FULL")
 	return ""
 
 ## The name and description of the level-up offer under `point`, or "".
@@ -494,6 +501,9 @@ func _draw_sheet() -> void:
 ## let go, as the original's skill tooltip (type 7).
 func right_press(point: Vector2) -> bool:
 	var text := skill_tip_at(point)
+	# An artifact (or global spell piece) in the items row: its tooltip, held
+	# like a skill's (#172).
+	if text.is_empty(): text = item_tip_at(point)
 	if text.is_empty(): return false
 	right_release()
 	skill_tip = PanelContainer.new()
