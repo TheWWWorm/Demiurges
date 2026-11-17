@@ -12,6 +12,9 @@ extends SceneTree
 ##   width is either a readout panel wide enough for its arrows and a
 ##   readout, or none, the phase caption's oval widened by it instead of an
 ##   empty strip;
+## - #135 (with the game's files): a battle tooltip's frame sits close round
+##   its text in both games: the first game's margins as small as the
+##   second's, and a wrapped paragraph as wide as its widest line;
 ## - the setting is stored with the shared remake settings and kept in range;
 ## - a lethal hit plays only the figure's death sound, a non-lethal hit its
 ##   hurt sound (in the battle audio and through the battle view).
@@ -34,6 +37,7 @@ func _run() -> void:
 	_slots()
 	_gap()
 	_narrow_gaps()
+	await _tooltip_margins()
 	_setting()
 	await _sounds()
 	await _view_sounds()
@@ -127,6 +131,36 @@ func _narrow_gaps() -> void:
 		check(strips.is_empty(), "%s: no screen at the automatic size, and no wide panel at any size, leaves an empty strip beside the rail (%s)" % [edition, ", ".join(strips)])
 		print("NOTE: %s: chosen sizes in the 800 layout with a narrow strip: %s" % [edition, ", ".join(narrow_800)])
 		check(widened.has("1600x900/0 +43"), "%s: at 1600x900 the caption's oval takes the 43 px (%s)" % [edition, ", ".join(widened)])
+
+func _tooltip_margins() -> void:
+	var paths: Variant = JSON.parse_string(FileAccess.get_file_as_string("user://profiles.json")) if FileAccess.file_exists("user://profiles.json") else null
+	for edition: String in ["el1", "el2"]:
+		if paths is not Dictionary or not paths.has(edition): continue
+		var profile := ELProfile.new()
+		if not profile.mount(edition, str(paths[edition])): continue
+		var tip := ELCombatTooltip.new()
+		root.add_child(tip)
+		tip.setup(profile)
+		var margin: Vector2 = tip.panel.margin
+		check(margin.x <= 13.0 and margin.y <= 11.0, "%s: the battle tooltip's margins are small (%s)" % [edition, margin])
+		var loose: Array[String] = []
+		var wrapped := 0
+		for code: String in profile.table("CombatSpells"):
+			if profile.card_description(code).length() < 40: continue
+			tip.panel.set_content(1, ELCombatTooltip.text_content(ELCombatTooltip.spell_text(profile, code)))
+			var right := 0.0
+			for label: Label in tip.panel._labels:
+				if label.text.is_empty(): continue
+				var width := label.size.x
+				if label.autowrap_mode != TextServer.AUTOWRAP_OFF:
+					wrapped += 1
+					width = label.get_theme_font("font").get_multiline_string_size(label.text, HORIZONTAL_ALIGNMENT_LEFT, label.size.x, label.get_theme_font_size("font_size"), -1, TextServer.BREAK_MANDATORY | TextServer.BREAK_WORD_BOUND | TextServer.BREAK_ADAPTIVE).x
+				right = maxf(right, label.position.x + width)
+			var spare := tip.panel.size.x - right - margin.x
+			if spare > 2.0 and loose.size() < 5: loose.append("%s +%.0f" % [code, spare])
+		tip.queue_free()
+		await process_frame
+		check(wrapped > 20 and loose.is_empty(), "%s: %d wrapped tooltip paragraphs are as wide as their widest line (%s)" % [edition, wrapped, ", ".join(loose)])
 
 func _setting() -> void:
 	var settings := ELSettings.new()

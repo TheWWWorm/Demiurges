@@ -25,8 +25,12 @@ const DELAY := 0.5
 ## (across, down) and the right and left screen limits.
 const PLACEMENT := {
 	"el2": {"below": Vector2(45, -8), "above": Vector2(-13, -13), "margin": Vector2(10, 10), "right": 33.0, "left": 0.0},
-	"el1": {"below": Vector2(45, -8), "above": Vector2(-35, -25), "margin": Vector2(38, 28.5), "right": 24.0, "left": 12.0},
+	"el1": {"below": Vector2(45, -8), "above": Vector2(-35, -25), "margin": FIRST_MARGIN, "right": 24.0, "left": 12.0},
 }
+## The first game's inner margins: the text clear of its 5-unit frame strips
+## by as much as the second game's text is of its frame (#135; they were 38
+## across and 28.5 down, a wide empty border round short tooltips).
+const FIRST_MARGIN := Vector2(13, 11)
 const PORTRAIT := Vector2(84, 59)
 ## The first game's battle hero card shows a whole 100 x 70 photo cell.
 const FIRST_PORTRAIT := Vector2(100, 70)

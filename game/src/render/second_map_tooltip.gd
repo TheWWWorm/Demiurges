@@ -73,6 +73,7 @@ func set_content(id: int, content: Dictionary) -> void:
 			label.custom_minimum_size.x = max_label_width
 			label.size = Vector2(max_label_width, 0)
 			label.size = Vector2(max_label_width, label.get_minimum_size().y)
+			_fit_wrapped(label, max_label_width)
 			if content.get("flow", false): wrap_offset += label.size.y - unwrapped_height
 		label.position = at + inset
 		_labels.append(label)
@@ -99,6 +100,23 @@ func set_content(id: int, content: Dictionary) -> void:
 	_content = bounds.size
 	size = _content + inset * 2.0
 	queue_redraw()
+
+## A wrapped paragraph takes the width of its widest line, not the whole
+## wrapping width: a paragraph whose lines broke short left up to 60 units
+## of empty frame at the right (#135). Its lines stay as they broke.
+static func _fit_wrapped(label: Label, wrap_width: float) -> void:
+	var lines := label.get_line_count()
+	var flags := TextServer.BREAK_MANDATORY | TextServer.BREAK_WORD_BOUND | TextServer.BREAK_ADAPTIVE
+	var widest := label.get_theme_font("font").get_multiline_string_size(label.text, HORIZONTAL_ALIGNMENT_LEFT, wrap_width, label.get_theme_font_size("font_size"), -1, flags).x
+	var width := minf(wrap_width, ceilf(widest) + 1.0)
+	if width >= wrap_width: return
+	label.custom_minimum_size.x = width
+	label.size = Vector2(width, 0)
+	label.size = Vector2(width, label.get_minimum_size().y)
+	if label.get_line_count() == lines: return
+	label.custom_minimum_size.x = wrap_width
+	label.size = Vector2(wrap_width, 0)
+	label.size = Vector2(wrap_width, label.get_minimum_size().y)
 
 ## Places the frame for a cursor given in the same units; `screen` is the
 ## visible canvas size.
