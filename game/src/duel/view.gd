@@ -2982,12 +2982,12 @@ func _event(data: Dictionary) -> void:
 				# A creature gone with its ability (a sacrifice) still names its card.
 				if card.is_empty() and source >= 2: card = String(data.get("user_card", ""))
 				var texture := _ability_icon(card)
-				if texture != null: notices.add_icon(texture, card)
+				if texture != null: notices.add_icon(texture, card, int(data.side))
 			elif source < 2:
 				_announce("T_USE_ENCHANTMENT", [_hero_name(source), String(data.get("name", String(data.ability).capitalize()))], int(data.side))
 				var card := String(data.get("enchantment_card", ""))
 				if profile.id == "el2" and not card.is_empty() and is_instance_valid(notices):
-					notices.add_icon(profile.card_icon(card), card)
+					notices.add_icon(profile.card_icon(card), card, int(data.side))
 			else: _announce("T_USE_ABILITY", [duel.card_name(String(data.get("user_card", duel.entity(source).get("card", ""))))], int(data.side))
 			# Both originals' hero ability command (both games)
 			# queues the hero's PlayAnimation 7, its instant gesture, ahead of
@@ -3137,7 +3137,7 @@ func _phase_notice(side: int, attack: bool, round_number: int) -> void:
 	elif not _enemy_banner_shown:
 		band = 2
 		_enemy_banner_shown = true
-		# Second game: the opponent's cast icons clear at its turn's first
+		# Cast icons clear at the opponent's first
 		# phase, which is usually its defence right after my attack.
 		if is_instance_valid(notices): notices.clear_icons()
 	if band >= 0 and bool(settings.values.get("combat_phases", true)) and is_instance_valid(notices): notices.show_banner(band)
@@ -3150,17 +3150,12 @@ func _local_side(side: int) -> bool:
 	var local := game_console.player_side(duel) if game_console != null else _battle_player_side(duel)
 	return side == local or _hot_seat() or (mode_select != null and mode_select.selected == 1 and combat_tutorial == null)
 
-## A hero's cast: T_CASTING in the log; the first game also lists it on screen,
-## the second shows the opponent's spell icon at the top left. The remake's
-## "cast_icons" setting gives the first game the second game's way: an icon
-## for each cast, the player's own included, and for each ability used, with
-## no cast lines on screen (player report #124).
+## Both heroes' casts go into the text log and the icon list. The first
+## game uses on-screen text instead when "cast_icons" is off.
 func _cast_notice(side: int, card: String) -> void:
 	if profile.id == "el2" or (profile.id == "el1" and bool(settings.values.get("cast_icons", true))):
 		_log(_format_text("T_CASTING", [_hero_name(side), duel.card_name(card)]))
-		# The first game's list shows the player's own casts as well (#124);
-		# the second game, as in the original, only the opponent's.
-		if (profile.id == "el1" or not _local_side(side)) and is_instance_valid(notices): notices.add_icon(profile.card_icon(card), card)
+		if is_instance_valid(notices): notices.add_icon(profile.card_icon(card), card, side)
 		return
 	_announce("T_CASTING", [_hero_name(side), duel.card_name(card)], side)
 
@@ -4898,6 +4893,7 @@ func _refresh() -> void:
 		child.queue_free()
 	var active := duel.active_side()
 	var displayed := _displayed_side()
+	notices.viewer_side = displayed
 	# Hot seat: the confirmed player's side; nothing while a hand-over waits.
 	var concealed := (_hot_seat() and hot_pending) or (_strategic_battle() and strategic_session.relay.local_side < 0)
 	var peek := game_console != null and game_console.enemy_hand(duel)
@@ -5741,8 +5737,6 @@ func _build_ui() -> void:
 	menu_rows.add_child(_label("Right-drag: orbit   Wheel: zoom\nR: reset camera   Space: end phase", 13, MUTED))
 	log_text = RichTextLabel.new()
 	ui.add_child(log_text)
-	log_text.position = Vector2(20, 56)
-	log_text.size = Vector2(470, 145)
 	log_text.add_theme_font_size_override("normal_font_size", 14)
 	log_text.add_theme_color_override("default_color", Color("e5e7d9"))
 	log_text.add_theme_color_override("font_shadow_color", Color.BLACK)
@@ -7839,6 +7833,7 @@ func _resume_campaign(newest := false, manual := "", edition := "") -> void:
 		if campaign_view != null: campaign_view.notice.text = codec.error
 		else: _notice(codec.error)
 		return
+	restored.state.reroll_pending_skill_offers()
 	_begin_campaign(restored.state.map.profile.id, {"file_name": restored.state.map.id, "script": restored.state.script_name}, restored.state.difficulty, restored)
 
 ## A row of a save list (ELSaveSlots): an adventure save, or the second game's
@@ -8581,7 +8576,12 @@ func _layout_hud() -> void:
 	var factor := pixels / unit
 	hud_root.scale = Vector2.ONE * factor
 	hud_root.texture_filter = ELHudFrame.interface_filter(pixels)
-	if notices != null: notices.ui_scale = factor
+	if notices != null:
+		notices.ui_scale = factor
+		notices.queue_redraw()
+		# Reserve the full width so the text stays put as cast rows fill up.
+		log_text.position = Vector2(notices.icon_column_right() + 12.0, 56.0)
+		log_text.size = Vector2(minf(470.0, maxf(0.0, ui.size.x - log_text.position.x - 16.0)), 145.0)
 	if affect_strip != null: affect_strip.ui_scale = factor
 	hud_root.size = (screen / pixels).ceil()
 	hud_root.position = Vector2(0.0, (screen.y - hud_root.size.y * pixels) / unit)

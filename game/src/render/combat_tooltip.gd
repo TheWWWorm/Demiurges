@@ -57,7 +57,7 @@ var touch: ELTouchInput
 ## The deck editor can show the first game's frame on hover as well.
 var hover_in_first_game := false
 var _shown_key := ""
-var _right_clicked := false
+var _right_click_at := Vector2.INF
 
 ## Bold Arial slanted, with the upright bold advances: the originals' tooltip
 ## lines are as wide as plain bold text of the same size.
@@ -168,11 +168,12 @@ func hide_tip() -> void:
 
 func _input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT and event.pressed and not event.shift_pressed:
-		_right_clicked = true
+		_right_click_at = event.position
 
 func _process(delta: float) -> void:
-	var right_clicked := _right_clicked
-	_right_clicked = false
+	var click_at := _right_click_at
+	_right_click_at = Vector2.INF
+	var right_clicked := click_at != Vector2.INF
 	if panel == null or not is_visible_in_tree(): return
 	if blocked.is_valid() and blocked.call():
 		hide_tip()
@@ -187,7 +188,9 @@ func _process(delta: float) -> void:
 	if hovered != null and not _owns(hovered):
 		hide_tip()
 		return
-	var point := touch.hold_position() if touch_hold else get_viewport().get_mouse_position()
+	var point := get_viewport().get_mouse_position()
+	if touch_hold: point = touch.hold_position()
+	elif right_clicked: point = click_at
 	var figure := hovered == null
 	var content: Dictionary = describe_figure.call(point) if figure and describe_figure.is_valid() else {}
 	var id := int(content.get("figure_id", -1))
@@ -237,7 +240,7 @@ func _layout_tip(cursor: Vector2) -> void:
 
 func _owns(control: Control) -> bool:
 	var owner_node := get_parent()
-	# The opponent's cast icons are drawn over the battle, outside the HUD.
+	# Cast icons are drawn over the battle, outside the HUD.
 	if control is ELCombatNotices: return true
 	return owner_node != null and owner_node.is_ancestor_of(control) and control != self and not is_ancestor_of(control)
 

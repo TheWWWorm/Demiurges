@@ -341,8 +341,12 @@ func _sprite(sheet: String, cell: int, layer: int) -> Sprite3D:
 func _place_blazon(uid: int, item: Dictionary) -> void:
 	var entry: Dictionary = blazons[uid]
 	var at := _object_position(item, entry.row) + Vector3(0, float(entry.top) + BLAZON_LIFT, 0)
-	var shown := true
+	var shown: bool
 	if world.actors.has(uid): shown = world.actors[uid].visible
+	else:
+		# Remembered scenery can stay drawn, but its current owner is hidden.
+		var viewer := state.current_player
+		shown = int(item.get("owner", -1)) == viewer or ELFog.object_state(state, viewer, item) == ELFog.VISIBLE
 	for key: String in ["back", "fore"]:
 		entry[key].position = at
 		entry[key].visible = shown
