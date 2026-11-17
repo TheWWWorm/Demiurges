@@ -747,6 +747,14 @@ func show_tooltip(id: int, content: Dictionary, at: Vector2) -> void:
 	ELTooltipWidth.fit(tooltip_body)
 	tooltip_picture.texture = content.picture
 	tooltip_picture.custom_minimum_size = content.picture_size
+	# A wrapped text's height is measured at the label's own width, which the
+	# panel sets only later: still the width of the tooltip before (a
+	# monster's 90 px), a building's two lines measured as ten and the panel
+	# stretched below them (#168). The label takes its width first; its height
+	# is measured again at that width once it has it.
+	var width := tooltip_body.get_minimum_size().x if tooltip_body.autowrap_mode == TextServer.AUTOWRAP_OFF else tooltip_body.custom_minimum_size.x
+	tooltip_body.size = Vector2(width, 0)
+	tooltip_body.update_minimum_size()
 	tooltip.reset_size()
 	tooltip.show()
 	var local := at / scale_factor + Vector2(18, 18)

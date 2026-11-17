@@ -7,7 +7,9 @@ extends SceneTree
 ##   does not;
 ## - a spell picture on that screen has the picture tooltip with the spell's
 ##   name and description from the game's texts, and no plain text tooltip;
-## - a long camera turn keeps the angle (and the saved one) within one turn.
+## - a long camera turn keeps the angle (and the saved one) within one turn;
+## - #168: a map tooltip held up with the right button fits its text whatever
+##   tooltip was shown before it (a building's after a monster's stretched).
 ##
 ##   godot --headless --path game --script ../tools/first_map_check.gd
 ##
@@ -95,6 +97,7 @@ func _map_part() -> void:
 	check(view.yaw >= 0.0 and view.yaw < TAU and is_equal_approx(view.yaw, fposmod(yaw + 0.5, TAU)) and state.camera_rotation >= 0.0 and state.camera_rotation < 360.0, "a long camera turn keeps the angle within one turn (%.3f rad, %.1f degrees)" % [view.yaw, state.camera_rotation])
 	view.yaw = yaw
 	view._update_camera()
+	await _tooltip_part(view)
 
 	# Castle double-click.
 	check(not own.is_empty(), "the player has a castle")
@@ -144,6 +147,26 @@ func _map_part() -> void:
 	check(not view.castle_double_click(view.camera.unproject_position(ground), ground) and view.global_spells == null, "a double-click away from the castle opens nothing")
 	view.queue_free()
 	await frames(2)
+
+## #168: every map object's tooltip, one after another in a mixed order,
+## is as tall as its own content and no taller.
+func _tooltip_part(view: ELAdventureView) -> void:
+	var hud := view.hud
+	var contents: Array = []
+	for item: Dictionary in view.state.objects.values():
+		var content := hud.describe(item, view._art.resolve(item).get("row", {}))
+		if not content.is_empty(): contents.append(content)
+	var wrapped := contents.filter(func(c: Dictionary) -> bool: return hud.tooltip_body.get_theme_font("font").get_multiline_string_size(str(c.text), HORIZONTAL_ALIGNMENT_LEFT, -1, hud.tooltip_body.get_theme_font_size("font_size")).x > ELTooltipWidth.MAX_WIDTH)
+	check(not wrapped.is_empty() and contents.size() > wrapped.size(), "the map has tooltips with wrapped text (%d) and others (%d)" % [wrapped.size(), contents.size() - wrapped.size()])
+	var loose: Array[String] = []
+	for i in contents.size() * 3:
+		var content: Dictionary = contents[(i * 7) % contents.size()]
+		hud.show_tooltip(1, content, Vector2(300, 300))
+		await process_frame
+		var needed := hud.tooltip.get_combined_minimum_size()
+		if hud.tooltip.size.y > needed.y + 0.5 and loose.size() < 5: loose.append("%s %.0f for %.0f" % [content.title, hud.tooltip.size.y, needed.y])
+	hud.show_tooltip(-1, {}, Vector2.ZERO)
+	check(loose.is_empty(), "each map tooltip is as tall as its text, whichever came before (%s)" % ", ".join(loose))
 
 ## Castle damage stage (GitHub #48): a saved and loaded castle keeps the model
 ## of its stage (the save brings the stage back as a float).
