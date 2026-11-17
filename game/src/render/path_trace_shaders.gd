@@ -629,10 +629,16 @@ void main() {
 	imageStore(primary_out, pixel, vec4(unlit ? vec3(0.0) : surface_emission(primary_look, primary.uv, 0.0), ground ? 1.0 : 0.0));
 	if (frame.counts.z > 0u) imageStore(secondary_out, pixel, vec4(primary.secondary, 0.0));
 	// A smoothed vertex normal can face away from the camera near a low-poly
-	// silhouette while still pointing out of its triangle. Flipping it there
-	// sends lighting rays into the model and draws a black rim.
+	// silhouette while still pointing out of its triangle. Left so, it sends
+	// lighting rays into the model and draws a black rim; it is mirrored to
+	// the side the surface faces. Mirrored, not reversed: thin blades (the
+	// wings of Gamma-200F "Tricker", he103) carry vertex normals that lie
+	// almost in their plane. Reversed, such a normal swapped sides with each
+	// small turn of the wing, so a blade went from sunlit to black and back
+	// from one frame to the next; mirrored, it changes no more than the turn.
 	vec3 geometric_normal = primary.normal;
-	if (dot(normal, geometric_normal) < 0.0) normal = -normal;
+	float facing = dot(normal, geometric_normal);
+	if (facing < 0.0) normal = normalize(normal - 2.0 * facing * geometric_normal);
 	uint state = hash(uint(pixel.x) * 1973u + uint(pixel.y) * 9277u + frame.info.x * 26699u);
 	vec3 origin = eye + view_direction * primary.distance + geometric_normal * (0.02 + distance_to_eye * 0.001);
 
