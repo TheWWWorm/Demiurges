@@ -11,12 +11,9 @@ extends Control
 ## - first game: the cast message list (option CastMessages, also ShowChat),
 ##   top left. Each line holds 3 s, then fades over 0.5 s while the list
 ##   slides up.
-## - second game: the opponent's cast spells as icons, top left. There are 5
-##   per row at a 53 px step. The list is cleared when the
-##   opponent's next turn starts. The remake's "cast_icons" setting shows
-##   them in the first game too, framed with its own list border (ADV_SCREEN_2
-##   206,155 50x50, ELListLook.HOVER; the first game has no WORLD_SYMBOLS_MAP),
-##   with the message lines under the icon rows.
+## - cast spells from both heroes as icons, top left, marked by caster.
+##   There are 5 per row at a 53 px step. The first game's "cast_icons"
+##   setting enables this list with its own list border (ELListLook.HOVER).
 ## Approximations: list and icon origins, and the line font.
 
 const BAND := 85.0
@@ -33,6 +30,8 @@ const ICON := 50.0
 const ICON_STEP := 53.0
 const ICON_ROW := 5
 const ORIGIN := Vector2(12, 8)
+const OWN_CAST := Color("65e0e0")
+const RIVAL_CAST := Color("ff9973")
 
 var profile: ELProfile
 var halves: Array[Texture2D] = []
@@ -42,8 +41,13 @@ var banner_age := 0.0
 var _sounded := false
 ## First game message lines: {"text", "colour", "age"}.
 var lines: Array = []
-## Second game enemy cast icons: {"texture", "card"}.
+## Cast icons: {"texture", "card", "side"}.
 var icons: Array = []
+var viewer_side := 0:
+	set(side):
+		if viewer_side == side: return
+		viewer_side = side
+		queue_redraw()
 ## The icons' frame drawn over each icon: WORLD_SYMBOLS_MAP (140,0)-(190,50),
 ## or, in the first game, its list border (already cut to 50x50).
 var frame: Texture2D
@@ -102,9 +106,9 @@ func add_line(text: String, colour: Color, chat := false) -> void:
 	lines.append({"text": text.strip_edges(), "colour": colour, "age": 0.0, "chat": chat})
 	queue_redraw()
 
-func add_icon(texture: Texture2D, card := "") -> void:
+func add_icon(texture: Texture2D, card: String, side: int) -> void:
 	if texture == null or (texture is AtlasTexture and texture.atlas == null): return
-	icons.append({"texture": texture, "card": card})
+	icons.append({"texture": texture, "card": card, "side": side})
 	queue_redraw()
 
 func clear_icons() -> void:
@@ -158,6 +162,13 @@ func _draw() -> void:
 		var cell := icon_rect(index)
 		draw_texture_rect(icon.texture, cell, false)
 		if frame != null: draw_texture_rect_region(frame, cell, _frame_region)
+		# The bars differ in position as well as colour. Keep the art legible.
+		var own: bool = icon.side == viewer_side
+		var edge := Vector2(cell.position.x, cell.end.y - 3.0 * k if own else cell.position.y)
+		draw_rect(Rect2(edge, Vector2(cell.size.x, 3.0 * k)), OWN_CAST if own else RIVAL_CAST)
+
+func icon_column_right() -> float:
+	return (ORIGIN.x + (ICON_ROW - 1) * ICON_STEP + ICON) * maxf(ui_scale, 0.5)
 
 ## Icon `index`'s place: rows of five; past five rows the list moves up a row
 ## per extra row, as in the original.

@@ -23,6 +23,9 @@ var duel_ai := -1
 var world_ai := -1
 var script_name := ""
 var seed_value := 212
+## The solo first-game view enables fresh skill rolls, independently of the
+## map/script RNG. Strategic sessions and checkpoint decoding stay deterministic.
+var random_skill_offers := false
 var camera_zoom := 40.0
 var camera_rotation := 0.0
 var camera_locked := false
@@ -101,7 +104,7 @@ func _fog_event(data: Dictionary) -> void:
 func _fog_moved(actor: Dictionary) -> void:
 	ELFog.moved(self, actor)
 
-func start(source: ELAdventureMap, level := 0, seed_number := 212, scenario_script := "", human := 1, campaign := false) -> bool:
+func start(source: ELAdventureMap, level := 0, seed_number := 212, scenario_script := "", human := 1, campaign := false, solo := false) -> bool:
 	close()
 	map = source
 	# The first game has five difficulties, the second three (its maps author
@@ -110,6 +113,7 @@ func start(source: ELAdventureMap, level := 0, seed_number := 212, scenario_scri
 	duel_ai = -1
 	world_ai = -1
 	seed_value = seed_number
+	random_skill_offers = solo and map.profile.id == "el1"
 	script_name = scenario_script if not scenario_script.is_empty() else ELSingleScenario.map_path(map.id)
 	error = ""
 	day = 0 if map.profile.id == "el2" else 1
@@ -334,12 +338,20 @@ func add_experience(hero_id: int, amount: int) -> int:
 		return -1
 	var previous := int(hero.level)
 	var look := ELHeroLooks.worn(map.profile, hero)
-	var granted := ELHeroProgression.award(map.profile, hero, amount)
+	var granted := ELHeroProgression.award(map.profile, hero, amount, random_skill_offers and int(hero.get("owner", -1)) == current_player)
 	if granted > 0:
 		event.emit({"kind": "experience_gained", "id": hero_id, "amount": granted, "levels": int(hero.level) - previous})
 	# A campaign lord reaching a new level step changes its look on the map.
 	if ELHeroLooks.worn(map.profile, hero) != look: event.emit({"kind": "shape_changed", "id": hero_id})
 	return granted
+
+## Loading a solo Etherlords save can reroll any choice still pending.
+func reroll_pending_skill_offers() -> void:
+	if map.profile.id != "el1": return
+	for hero: Dictionary in objects.values():
+		if hero.get("type") != "hero" or int(hero.get("owner", -1)) != current_player or int(hero.get("skill_points", 0)) <= 0: continue
+		hero.skill_offers = []
+		ELHeroSkills.prepare(map.profile, hero, true)
 
 ## `index` >= 0 stores that book slot; otherwise reserve copy `reserve_index`
 ## of `card` joins the book, at its end or over book slot `slot`.

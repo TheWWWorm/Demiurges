@@ -55,6 +55,7 @@ func build(owner: ELAdventureDirector, panel: ELAdventureHud, id: int) -> void:
 	sheet = Sheet.new()
 	sheet.view = self
 	sheet.mouse_filter = Control.MOUSE_FILTER_STOP
+	sheet.theme = ELCombatTooltip.hidden_theme()
 	add_child(sheet)
 	_icons = profile.texture(hud._paths.get("BUILDING_SCREEN_1", ""))
 	_compose()
@@ -74,6 +75,10 @@ func build(owner: ELAdventureDirector, panel: ELAdventureHud, id: int) -> void:
 	buttons.Ok = ok
 	if strategic_session != null:
 		_online_message = _label(Rect2(20, 531 - sheet_offset().y, 460, 20), 13, TEXT, hud._bold)
+	var tips := ELCombatTooltip.new()
+	tips.hover_in_first_game = true
+	add_child(tips)
+	tips.setup(profile)
 	sheet.size = Vector2(500, 520)
 	resized.connect(_layout)
 	_layout()
@@ -232,8 +237,7 @@ func tooltip_at(point: Vector2) -> String:
 	var list := spell_entries()
 	for index in mini(15, list.size()):
 		if spell_rect(index).has_point(point):
-			var row: Dictionary = profile.table("CombatSpells").get(str(list[index].code), {})
-			return profile.text(str(row.get("Name", list[index].code))) + "\n" + profile.text(str(row.get("ToolTip", "")))
+			return ELCombatTooltip.spell_text(profile, str(list[index].code))
 	return ""
 
 func panel_rect() -> Rect2:

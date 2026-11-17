@@ -43,6 +43,8 @@ var second_dialogue: ELSecondDialogueBox
 var _pending_speech: Dictionary = {}
 const MISSION_FADE_SECONDS := 2.0
 var route: MeshInstance3D
+var _route_owner := -1
+var _route_fog_revision := -1
 var target := Vector3.ZERO
 ## First game: the original's perspective map camera, set up when a map
 ## loads: the angle fixed at 45 degrees, the distance 25-50 starting at 50
@@ -224,6 +226,7 @@ func _enter_tree() -> void:
 
 func build(profile: ELProfile, scenario: Dictionary, preferences: ELSettings, difficulty := 0, restored: Dictionary = {}) -> bool:
 	settings = preferences
+	var solo_first := profile.id == "el1" and strategic_session == null
 	# Building or restoring a map shows the wait cursor until the map picks again.
 	wait_cursor(profile)
 	var map := ELAdventureMap.new()
@@ -231,7 +234,7 @@ func build(profile: ELProfile, scenario: Dictionary, preferences: ELSettings, di
 		if not map.load_map(profile, str(scenario.file_name)): return _fail(map.error)
 		_loading(0.15)
 		state = ELAdventureSession.new()
-		if not state.start(map, difficulty, 212, str(scenario.get("script", "")), int(str(scenario.get("player", "1"))), scenario.has("number")): return _fail(state.error)
+		if not state.start(map, difficulty, 212, str(scenario.get("script", "")), int(str(scenario.get("player", "1"))), scenario.has("number"), solo_first): return _fail(state.error)
 		_loading(0.25)
 		state.tutorial = bool(scenario.get("tutorial", false))
 		director = ELAdventureDirector.new()
@@ -239,6 +242,7 @@ func build(profile: ELProfile, scenario: Dictionary, preferences: ELSettings, di
 		_loading(0.4)
 	else:
 		state = restored.state
+		state.random_skill_offers = solo_first
 		director = restored.director
 		map = state.map
 	# The game's computer players' strength: kept by a save, brought by the
@@ -336,6 +340,7 @@ func build(profile: ELProfile, scenario: Dictionary, preferences: ELSettings, di
 			var point_on_path := Vector2(director.movement.path[at]).lerp(Vector2(director.movement.path[at + 1]), director.movement.progress)
 			world.move_actor(id, point_on_path, true, director.movement_speed(state.object(id)), director.fast_mode)
 		elif profile.id == "el1": _draw_route(ELStrategy.order_path(director, state.object(_hero_id())))
+		_stop_following_hidden_hero()
 		if not director.travel.is_empty(): _travel_phase(false)
 		_update_camera()
 	else:
@@ -481,6 +486,8 @@ func _process(delta: float) -> void:
 			zoom = view_goal.x
 			pitch = view_goal.y
 			view_goal = Vector2(-1, -1)
+	_sync_route_fog()
+	_stop_following_hidden_hero()
 	if following >= 0 and world.actors.has(following):
 		scroll_gliding = false
 		target = target.lerp(world.actors[following].position, minf(1, delta * 6.0))
@@ -2415,15 +2422,19 @@ func _draw_route(path: Array, actor_id := -1) -> void:
 		route.mesh = null
 		return
 	route.mesh = null
-	for mark: Node in route.get_children(): mark.queue_free()
+	for mark: Node in route.get_children():
+		route.remove_child(mark)
+		mark.queue_free()
 	var actor := state.object(_hero_id() if actor_id < 0 else actor_id)
+	_route_owner = int(actor.get("owner", state.current_player))
+	_route_fog_revision = -1
 	if _zones_stop(actor): path = director.interception.preview(state, actor, path)
 	if path.size() < 2: return
 	# First game: the original marks the route with figures, not lines: a
 	# telapa1 square on each step and telapa2 (square and four arrows) at the
 	# end, in the owner's colour (TerrainObjects Path0N / Finish0N) while the
 	# day's movement points last, NoPath / NoFinish beyond.
-	var colour := ROUTE_COLOURS.find(str(state.players.get(int(actor.get("owner", state.current_player)), {}).get("color", "")))
+	var colour := ROUTE_COLOURS.find(str(state.players.get(_route_owner, {}).get("color", "")))
 	var remaining := int(actor.get("ap", 0))
 	for index in range(1, path.size()):
 		remaining -= director.grid.passability(path[index])
@@ -2436,8 +2447,23 @@ func _draw_route(path: Array, actor_id := -1) -> void:
 			mark.queue_free()
 			continue
 		if mark.has_clip("uidle"): mark.play("uidle")
-		mark.position = ELAdventureScene.world_position(path[index].x, path[index].y) + Vector3(0, 0.02, 0)
+		var cell: Vector2i = path[index]
+		mark.set_meta("route_cell", cell)
+		mark.position = ELAdventureScene.world_position(cell.x, cell.y) + Vector3(0, 0.02, 0)
 		for part: MeshInstance3D in mark.parts.values(): part.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_sync_route_fog()
+
+func _sync_route_fog() -> void:
+	if route == null or _route_owner == state.current_player or _route_fog_revision == ELFog.revision(state): return
+	_route_fog_revision = ELFog.revision(state)
+	for mark: ELModel in route.get_children():
+		if mark.has_meta("route_cell"): mark.visible = ELFog.visible(state, state.current_player, mark.get_meta("route_cell"))
+
+func _stop_following_hidden_hero() -> void:
+	if state.map.profile.id != "el1" or following < 0 or director.strategy.is_empty(): return
+	var actor := state.object(following)
+	if int(actor.get("owner", state.current_player)) != state.current_player and not ELFog.shown(state, state.current_player, actor):
+		following = -1
 
 ## `scripted` is ExShowInventory: the script opens the main hero's inventory
 ## whatever the player is doing.

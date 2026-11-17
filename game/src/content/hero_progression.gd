@@ -44,7 +44,7 @@ static func recalculate_health(hero: Dictionary) -> void:
 	for buff: Array in hero.get("temp_buffs", []): health += int(buff[0])
 	hero.health = maxi(1, health)
 
-static func award(profile: ELProfile, hero: Dictionary, amount: int) -> int:
+static func award(profile: ELProfile, hero: Dictionary, amount: int, random_offers := false) -> int:
 	if amount <= 0 or hero.get("type") != "hero": return 0
 	var rank := int(hero.get("skills", {}).get("LEAR", -1))
 	# Original Learning bonuses are stored as single-precision values, and the
@@ -62,5 +62,5 @@ static func award(profile: ELProfile, hero: Dictionary, amount: int) -> int:
 	hero.skill_points = int(hero.skill_points) + gained
 	hero.level = level
 	recalculate_health(hero)
-	ELHeroSkills.prepare(profile, hero)
+	ELHeroSkills.prepare(profile, hero, random_offers)
 	return granted

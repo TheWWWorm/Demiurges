@@ -64,7 +64,7 @@ static func candidates(profile: ELProfile, hero: Dictionary) -> Array[String]:
 		if rank < MAX_RANK and (rank >= 0 or skills.size() < MAX_SKILLS): result.append(code)
 	return result
 
-static func prepare(profile: ELProfile, hero: Dictionary) -> Array:
+static func prepare(profile: ELProfile, hero: Dictionary, random_offers := false) -> Array:
 	if not hero.has("skill_offers"): hero.skill_offers = []
 	if int(hero.get("skill_points", 0)) <= 0:
 		hero.skill_offers.clear()
@@ -78,7 +78,7 @@ static func prepare(profile: ELProfile, hero: Dictionary) -> Array:
 	if profile.id == "el2" and pool.has("PRVD") and not hero.skills.has("PRVD"):
 		hero.skill_offers.append("PRVD")
 		pool.erase("PRVD")
-	var seed_number := int(hero.get("skill_seed", int(hero.get("uid", 0)) ^ 212)) & 0xffffffff
+	var seed_number := randi() if random_offers else int(hero.get("skill_seed", int(hero.get("uid", 0)) ^ 212)) & 0xffffffff
 	while hero.skill_offers.size() < 3 and not pool.is_empty():
 		seed_number = (seed_number * 214013 + 2531011) & 0xffffffff
 		var index := ((seed_number >> 16) & 0x7fff) % pool.size()
