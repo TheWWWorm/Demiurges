@@ -228,6 +228,19 @@ static func apply_window(preferences: Dictionary) -> void:
 	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_ENABLED if rate == 0 else DisplayServer.VSYNC_DISABLED)
 	Engine.max_fps = maxi(0, rate)
 
+## Windows can move a borderless fullscreen window off its monitor bounds.
+## Godot only reapplies the bounds when entering fullscreen from another mode.
+static func restore_borderless_window() -> void:
+	var mode := DisplayServer.window_get_mode()
+	if mode == DisplayServer.WINDOW_MODE_MINIMIZED: return
+	var screen := DisplayServer.window_get_current_screen()
+	if mode == DisplayServer.WINDOW_MODE_FULLSCREEN:
+		if DisplayServer.window_get_position() == DisplayServer.screen_get_position(screen) and DisplayServer.window_get_size() == DisplayServer.screen_get_size(screen): return
+		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_WINDOWED)
+		if DisplayServer.window_get_current_screen() != screen:
+			DisplayServer.window_set_current_screen(screen)
+	DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_FULLSCREEN)
+
 ## Window sizes offered on the Display page: common ones that fit the screen,
 ## and the screen's own.
 static func window_sizes() -> Array[Vector2i]:

@@ -318,6 +318,46 @@ class Run:
 	func briefing() -> String:
 		return _localized("briefing")
 
+	## Authored puzzles can disclose live book and artifact reserves.
+	func supply_text() -> String:
+		if duel == null or not bool(entry.get("show_supply", false)): return ""
+		var russian := _ru()
+		var lines := PackedStringArray()
+		var draws := not bool(duel.setup.get("puzzle_fixed_hands", false))
+		for side in 2:
+			var hero: Dictionary = duel.heroes[side]
+			if draws:
+				var heading := ("Ваша книга" if side == SIDE else "Книга противника") if russian else ("Your book" if side == SIDE else "Opponent's book")
+				lines.append(heading + (" · заряды / карт в руке" if russian else " · charges / copies in hand"))
+				var under: Array = hero.get("rune_under", [])
+				for slot in hero.deck.size():
+					var charges := int(hero.spell_uses[slot])
+					var row := "  %d. %s · %s / %d" % [slot + 1, duel.card_name(hero.deck[slot]),
+						"∞" if charges < 0 else str(charges), hero.hand_slots.count(slot)]
+					if slot < under.size() and not String(under[slot]).is_empty():
+						row += (" · основа: " if russian else " · underlay: ") + duel.card_name(under[slot])
+					lines.append(row)
+				if duel.profile.id == "el2":
+					var candidates := PackedStringArray()
+					var next_draw := PackedStringArray()
+					var available := ELSpellCharges.available(hero)
+					for slot in available.size():
+						if available[slot] <= 0: continue
+						var name := duel.card_name(hero.deck[slot])
+						candidates.append(name)
+						if not hero.drawn.has(slot): next_draw.append(name)
+					if next_draw.is_empty(): next_draw = candidates
+					lines.append(("  Следующее взятие: " if russian else "  Next draw: ") +
+						(", ".join(next_draw) if not next_draw.is_empty() else ("нет" if russian else "none")))
+			if hero.artifacts.is_empty(): continue
+			var heading := ("Ваши артефакты" if side == SIDE else "Артефакты противника") if russian else ("Your artifacts" if side == SIDE else "Opponent's artifacts")
+			var remaining := maxi(0, duel.artifact_limit(side) - int(hero.artifact_uses))
+			lines.append(heading + (" · осталось применений: %d · раунд %d" if russian else " · uses left: %d · round %d") % [remaining, duel.artifact_round()])
+			for item: Dictionary in hero.artifacts:
+				lines.append(("  %s · заряды: %d · готов с раунда %d" if russian else "  %s · charges: %d · ready from round %d") %
+					[duel.artifact_title(item), item.charges, item.ready_round])
+		return "\n".join(lines)
+
 	func explanation() -> String:
 		return _localized("explanation")
 

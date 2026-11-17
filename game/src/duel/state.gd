@@ -1772,6 +1772,7 @@ func abilities(id: int) -> Array[Dictionary]:
 			ability.key += ":" + str(e.id)
 			ability.name = card_name(e.card)
 			ability.enchantment = e.id
+			ability.enchantment_card = e.card
 			ability.used = e.get("used", false)
 			result.append(ability)
 		for index in heroes[id].get("artifacts", []).size():
@@ -2136,6 +2137,7 @@ func _use_ability(id: int, ability: String, target := -1, enchantment_id := -1, 
 		if definition.effect == "rebirth": _damage(side, 2)
 		_spend_ether(side, price)
 		var ability_event := {"kind": "ability", "source": id, "side": side, "ability": ability, "name": definition.name, "target": target}
+		ability_event.enchantment_card = definition.enchantment_card
 		# Burnout has two targets: `target` is the sacrifice, while the
 		# Fireball lands on `enchantment_id`. Keep the original two-choice
 		# contract and identify the impact figure for EL2 presentation.

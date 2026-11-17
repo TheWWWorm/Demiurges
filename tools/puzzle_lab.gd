@@ -62,6 +62,7 @@ func _profile(edition: String, entries: Array) -> ELProfile:
 
 func _supported(entry: Dictionary) -> String:
 	if entry.state.has("scripts"): return "Campaign-script fixtures are unsupported."
+	if not _arg("installed").is_empty(): return ""
 	if _arg("inspect") != "true" and (entry.state.setup.get("puzzle_fixed_hands", false) != true or entry.state.setup.get("puzzle_fixed_channels", false) != true):
 		return "This offline fixture requires fixed puzzle hands and natural channels; use installed-data checks for ordinary duel snapshots."
 	for hero: Dictionary in entry.state.heroes:

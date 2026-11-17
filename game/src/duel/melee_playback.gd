@@ -168,6 +168,12 @@ func dispatching() -> bool:
 func moving(id: int) -> bool:
 	return _moves.has(id)
 
+func has_moves() -> bool:
+	return not _moves.is_empty()
+
+func finish_moves() -> void:
+	for id: int in _moves.keys(): _arrive(id)
+
 ## Whether a figure stands away from its home slot (at its fight point or on
 ## the front line): it stays on its feet until it has walked home.
 func away(id: int) -> bool:
@@ -219,8 +225,7 @@ func finish() -> void:
 	if not busy(): return
 	_serial += 1
 	_capturing = false
-	for id: int in _moves.keys(): _arrive(id)
-	_moves.clear()
+	finish_moves()
 	var rest: Array[Dictionary] = []
 	for index in range(_next_blow, _blows.size()): rest.append_array(_blows[index].events)
 	rest.append_array(_after)

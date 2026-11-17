@@ -4,6 +4,15 @@ Versions follow [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html)
 
 ## Unreleased
 
+- Unwritten Rules and Battlecraft add 60 puzzles, 30 per game, for 165 in all. The Briefing shows live spellbook and artifact reserves for studies that depend on them.
+- Etherlords II pans the adventure camera at the screen edges. Hold Ctrl at an edge to turn or tilt it.
+- Etherlords II accepts ground orders into unexplored fog and approaches enemies blocking the only route. Fog refreshes respect a moving figure's rendered position. ([#173](https://github.com/TheWWWorm/Demiurges/issues/173), [#178](https://github.com/TheWWWorm/Demiurges/issues/178))
+- Etherlords II displays recurring hero enchantment icons, skips front-line movement with Space, and skips phase waits with banners disabled. The winner's caption wraps inside the phase oval. ([#174](https://github.com/TheWWWorm/Demiurges/issues/174), [#179](https://github.com/TheWWWorm/Demiurges/issues/179), [#181](https://github.com/TheWWWorm/Demiurges/issues/181))
+- Etherlords II missions fade in from black. Dialogue waits for the camera to reach the speaker. Escape keeps the level-up choice open, and its labels use the original font sizes. ([#175](https://github.com/TheWWWorm/Demiurges/issues/175), [#176](https://github.com/TheWWWorm/Demiurges/issues/176), [#180](https://github.com/TheWWWorm/Demiurges/issues/180))
+- The Etherlords II widescreen frame uses the intact gargoyles from the original menu. ([#177](https://github.com/TheWWWorm/Demiurges/issues/177))
+- Windows borderless fullscreen restores the game window to its monitor after an unexpected move or resize.
+- Sharper interface blends the Duel panel tile joins and uses the original fill behind the first game's reward popup.
+
 ## 0.18.1
 
 - Duel spells and abilities can be aimed while the previous cast is still showing. The battle plays the queued casts before showing the next phase.

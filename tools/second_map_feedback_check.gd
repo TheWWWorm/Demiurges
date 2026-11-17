@@ -12,7 +12,7 @@ extends SceneTree
 ##   it over 0.5 s; another player's pile adds nothing;
 ## - scripted camera moves fly: every 64 ms the look-at point covers
 ##   0.25 x AutoScrollAcceleration of the way left; the "Instant" commands
-##   jump.
+##   jump. Mouse edge panning can interrupt a flight.
 ##
 ##   godot --headless --path game --script ../tools/second_map_feedback_check.gd
 ##
@@ -69,6 +69,8 @@ func _map_part() -> void:
 	var built := view.build(profile, row, settings, 1)
 	check(built, "the %s map builds: %s" % [MAP, view.error])
 	if built:
+		var curtain := view.ui.get_node_or_null("MissionFade") as ColorRect
+		check(curtain != null and curtain.color == Color.BLACK, "#176: a new mission starts behind a black fade")
 		await frames(5)
 		var state := view.state
 		ELFog.reveal_for_console(state, 1, true)
@@ -82,6 +84,7 @@ func _map_part() -> void:
 		_pickup_transition(view)
 		_fog_region(view.world)
 		_actor_facing(view)
+		await _new_map_reports(view)
 	view.queue_free()
 	await frames(2)
 	await _mine_depletion(profile, settings)
@@ -371,6 +374,107 @@ func _camera(view: ELAdventureView) -> void:
 	check(view.target == other and view.scroll_gliding, "a plain script scroll flies")
 	view.touch_pan(Vector2(100, 100), Vector2(120, 100))
 	check(not view.scroll_gliding, "the player's own pan stops a flight")
+	var size := root.get_visible_rect().size
+	view._pointer_on_map = true
+	view._pointer = Vector2(size.x - 1.0, 0.0)
+	view.open_options()
+	check(view.second_hud.menu.visible and view.edge_direction() == Vector2i.ZERO, "the open Escape menu blocks mouse panning")
+	view.close_options()
+	for i in 60:
+		if not view._cursor_modal() and not state.exclusive and state.commands.is_empty(): break
+		if not view.director.dialogue.is_empty(): view.director.acknowledge()
+		await process_frame
+	check(view.edge_direction() == Vector2i(1, -1), "the top-right edge pans diagonally")
+	view._pointer = Vector2(size.x * 0.5, size.y - 1.0)
+	check(view.edge_direction() == Vector2i(0, 1), "the bottom edge pans")
+	view._pointer = Vector2(0.0, size.y * 0.5)
+	view._scroll_to(goal)
+	start = view.target
+	var yaw := view.yaw
+	view._update_edge(ELAdventureView.EDGE_TICK)
+	var left := Vector3.LEFT.rotated(Vector3.UP, yaw)
+	check((view.target - start).dot(left) > 0.0 and view.yaw == yaw and not view.scroll_gliding,
+		"the left edge moves across the map without turning and interrupts a flight")
+	view._pointer_on_map = false
+	check(view.edge_direction() == Vector2i.ZERO, "a pointer over the interface does not pan")
+	view._pointer_on_map = true
+	state.camera_locked = true
+	check(view.edge_direction() == Vector2i.ZERO, "a locked camera ignores mouse edges")
+	state.camera_locked = false
+	view._pointer_on_map = false
+
+func _new_map_reports(view: ELAdventureView) -> void:
+	var state := view.state
+	var director := view.director
+	var grid := director.grid
+	var hero := state.object(state.main_hero)
+	var id := int(hero.uid)
+	var from := Vector2i(hero.x, hero.y)
+	var to := from
+	for offset: Vector2i in [Vector2i.RIGHT, Vector2i.DOWN, Vector2i.LEFT, Vector2i.UP]:
+		var point := from + offset
+		if grid.passability(point, bool(hero.get("ship", false))) >= 0:
+			to = point
+			break
+	check(from != to, "#173: the hero has a passable neighboring tile")
+	if from != to:
+		ELFog.reveal_for_console(state, 1, false)
+		var bit := ELFog.bit(1)
+		var order_cell := to.y * state.map.width + to.x
+		var old_known := state.explored[order_cell]
+		state.explored[order_cell] &= ~bit
+		check(not ELFog.targetable(state, 1, to) and director.request_move(id, to), "#173: a ground order is accepted even where the cursor still shows cancel")
+		if not director.movement.is_empty(): director._complete_movement(false)
+		state.explored[order_cell] = old_known
+
+		var seen: PackedByteArray = state.fog.visible.duplicate()
+		var old_seen: PackedByteArray = seen.duplicate()
+		seen[from.y * state.map.width + from.x] &= ~bit
+		seen[order_cell] |= bit
+		state.fog.visible = seen
+		state.fog.revision = ELFog.revision(state) + 1
+		view.world.move_actor(id, Vector2(from).lerp(Vector2(to), 0.75), true, 12.0, true)
+		view.world.sync_fog()
+		check(view.world.actors[id].visible, "#178: a fog refresh keeps a figure visible on the tile it is crossing")
+		state.fog.visible = old_seen
+		ELFog.reveal_for_console(state, 1, true)
+		view.world.move_actor(id, Vector2(from), false)
+
+	var blocked := {}
+	var destination := Vector2i.ZERO
+	for uid: int in grid.occupied:
+		if not state.hostile(hero, state.object(uid)): continue
+		destination = grid.occupied[uid]
+		blocked = director._ground_route_to_enemy(hero, from, destination)
+		if not blocked.is_empty() and blocked.path.size() > 1: break
+	var ordered: bool = not blocked.is_empty() and blocked.path.size() > 1 and director.request_move(id, destination)
+	check(ordered and director.movement.get("use") == blocked.target, "#173: an enemy blocking a ground route becomes the attack target")
+	if not director.movement.is_empty(): director._complete_movement(false)
+
+	var focus := view.target + Vector3(4, 0, 4)
+	view._scroll_to(focus)
+	view._present({"kind": "dialogue", "dialogue": {"actor": id, "text": "Test line", "text_id": ""}})
+	check(not view.second_dialogue.visible and not view._pending_speech.is_empty(), "#175: the next line waits while the camera is in flight")
+	view._glide(10.0)
+	await frames(2)
+	check(view.second_dialogue.visible and view._pending_speech.is_empty(), "#175: the dialogue opens when the camera reaches the speaker")
+	view._present({"kind": "dialogue_closed"})
+
+	hero.skill_points = 1
+	ELHeroSkills.prepare(state.map.profile, hero)
+	view._open_skills(id)
+	if view.skills is ELSecondLevelUpView:
+		var dialog := view.skills as ELSecondLevelUpView
+		var escape := InputEventKey.new()
+		escape.keycode = KEY_ESCAPE
+		escape.pressed = true
+		view._unhandled_input(escape)
+		check(view.skills == dialog and dialog.offers.item_count > 0, "#180: Escape keeps the pending level-up dialog open")
+		var font_cell := int(view.second_hud._controls.LUHeader1.get("FontSize", 18))
+		check(dialog.heading.get_theme_font_size("font_size") == ELFrontMenu.cell_em(font_cell), "#180: the level-up title uses the original font cell height")
+		view._close_skills()
+	else:
+		check(false, "#180: a level-up dialog opens")
 
 func _backup(folder: String) -> Dictionary:
 	var kept := {}

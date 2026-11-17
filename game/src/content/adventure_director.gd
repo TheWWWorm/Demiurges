@@ -418,11 +418,8 @@ func request_move(id: int, destination: Vector2i, use_id := -1) -> bool:
 			return true
 		notice = "Use the fort again to leave it."
 		return false
-	# EL2: the local player may target any explored tile, also one under
-	# light fog; the route itself is not limited by fog.
-	if not ELFog.targetable(state, state.current_player, destination):
-		notice = "That place is not in sight."
-		return false
+	# The original accepts move orders into unexplored terrain even when
+	# the fog keeps the cursor from previewing the order.
 	return _begin_move(actor, destination, false, use_id)
 
 ## The hero panel's leave control: a fort garrison or a training-camp guest
@@ -762,6 +759,13 @@ func _begin_move(actor: Dictionary, destination: Vector2i, queued: bool, use_id 
 			path = grid.approach(from, state.object(use_id), actor.get("ship", false), avoid) if use_id >= 0 else grid.path(from, destination, actor.get("ship", false), avoid)
 		else:
 			path.insert(0, from)
+	if path.is_empty() and not queued and use_id < 0 and state.map.profile.id == "el2":
+		# If a ground order has no unobstructed route, the first enemy in
+		# the way becomes the target. Stop on the adjacent tile to fight it.
+		var blocked := _ground_route_to_enemy(actor, from, destination)
+		if not blocked.is_empty():
+			path = blocked.path
+			use_id = blocked.target
 	if path.is_empty():
 		notice = "No route to that location."
 		if queued:
@@ -780,6 +784,25 @@ func _begin_move(actor: Dictionary, destination: Vector2i, queued: bool, use_id 
 	presentation.emit({"kind": "route", "id": actor.uid, "path": path})
 	if path.size() == 1: _complete_movement()
 	return true
+
+func _ground_route_to_enemy(actor: Dictionary, from: Vector2i, destination: Vector2i) -> Dictionary:
+	var ship := bool(actor.get("ship", false))
+	if grid.passability(destination, ship, false) < 0: return {}
+	var search := grid.water if ship else grid.land
+	var enemies := {}
+	for id: int in grid.occupied:
+		var cell: Vector2i = grid.occupied[id]
+		var unit := state.object(id)
+		if not unit.get("enabled", false) or not state.hostile(actor, unit): continue
+		if grid.actor_blockers[cell.y * state.map.width + cell.x] != 1 or grid.passability(cell, ship, false) < 0: continue
+		enemies[cell] = id
+		search.set_point_solid(cell, false)
+	if enemies.is_empty(): return {}
+	var route := grid.path(from, destination, ship)
+	for cell: Vector2i in enemies: search.set_point_solid(cell, true)
+	for i in range(1, route.size()):
+		if enemies.has(route[i]): return {"path": route.slice(0, i), "target": enemies[route[i]]}
+	return {}
 
 ## Travel in tiles per second. Second-game figures receive a six-unit-per-second
 ## map speed override, or four times that in accelerated mode.

@@ -363,8 +363,7 @@ static func restore_eyes(state: ELAdventureSession) -> String:
 		state.players[player].scry = clean
 	return ""
 
-## Whether the local player may target this tile (EL2 local orders): any
-## explored tile, also one under the light fog of a place seen before; only
-## the dark of never-explored ground refuses. The route may cross fog.
+## Whether the EL2 cursor can preview an order at this tile. Clicks may still
+## issue ground move orders in the dark of never-explored terrain.
 static func targetable(state: ELAdventureSession, player: int, point: Vector2i) -> bool:
 	return not active(state, player) or explored(state, player, point)

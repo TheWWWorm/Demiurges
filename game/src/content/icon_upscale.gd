@@ -53,6 +53,8 @@ const TEXTURE_FOLDERS := ["creatures/", "heroes/", "combatscenes/"]
 const ICON_FOLDERS := ["interface/spells/", "interface/heroes/", "interface/skills/", "interface/globalspells/",
 	"interface/artifacts/", "interface/affects/", "interface/buildings/"]
 const ICON_FILES := ["interface/combatsymbols.mmp", "interface/hero_states.mmp", "interface/symbols.mmp", "interface/world_symbols_map.mmp"]
+## The first game's MessageBox and tooltips repeat this part of their atlas.
+const TOOLTIP_FILL := Rect2i(150, 50, 50, 50)
 ## Never upscaled: digits and tiny glyphs, plain fills, light maps and the
 ## selection rings drawn in the 3D scenes.
 const SKIPPED := ["interface/combat_text", "interface/big_states", "interface/lightmap", "interface/solid_", "interface/test",
@@ -335,6 +337,8 @@ func adopt(entry: String, texture: ImageTexture, image: Image, sharp: Image) -> 
 func _show(entry: String, sharp: Image) -> void:
 	var known: Dictionary = _known[entry]
 	var image: Image = known.image
+	if edition == "el1" and entry == "interface/black/tooltip.mmp":
+		_restore_tooltip_fill(image, sharp)
 	for ref: WeakRef in known.textures:
 		var texture: ImageTexture = ref.get_ref()
 		if texture == null or texture.has_meta(ORIGINAL): continue
@@ -342,6 +346,19 @@ func _show(entry: String, sharp: Image) -> void:
 		texture.set_size_override(image.get_size())
 		texture.set_meta(ORIGINAL, image)
 	known.sharp = sharp
+
+## Sharpening the atlas introduces dark bands at the edges of its fill tile.
+## Keep the original fill pixels so the repeated copies still meet cleanly.
+static func _restore_tooltip_fill(original: Image, sharp: Image) -> void:
+	if not Rect2i(Vector2i.ZERO, original.get_size()).encloses(TOOLTIP_FILL): return
+	var source := ELTexture.readable(original)
+	if source == null: return
+	var factor := sharp.get_width() / original.get_width()
+	var fill := source.get_region(TOOLTIP_FILL)
+	fill.resize(TOOLTIP_FILL.size.x * factor, TOOLTIP_FILL.size.y * factor, Image.INTERPOLATE_BILINEAR)
+	sharp.clear_mipmaps()
+	sharp.blit_rect(fill, Rect2i(Vector2i.ZERO, fill.get_size()), TOOLTIP_FILL.position * factor)
+	sharp.generate_mipmaps()
 
 ## The sharp picture a texture shows, or null (checks).
 func shown(entry: String) -> Image:

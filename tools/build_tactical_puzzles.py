@@ -41,6 +41,25 @@ HERO_LABELS = {
     "White Lord I": ("White Lord", "Белый Лорд"),
 }
 
+ARCHIVE_EXPANSIONS = {"unwritten-rules-v1", "battlecraft-v2", "battlecraft-v3", "battlecraft-v4"}
+
+
+def retain_archive_puzzles(edition, document):
+    # The shipped snapshots are the authoring source for these imports.
+    shipped = json.loads((ROOT / "game/puzzles" / (edition + ".json")).read_text(encoding="utf-8"))
+    archive_entries = [entry for entry in shipped["puzzles"] if entry.get("expansion") in ARCHIVE_EXPANSIONS]
+    if not archive_entries:
+        return
+    generated_ids = {entry["id"] for entry in document["puzzles"]}
+    for entry in archive_entries:
+        if entry["id"] in generated_ids:
+            raise ValueError("Repeated puzzle ID: " + entry["id"])
+        generated_ids.add(entry["id"])
+    document["puzzles"].extend(archive_entries)
+    document["puzzles"].sort(key=lambda entry: entry["level"])
+    document["expansions"] = sorted({entry["expansion"] for entry in archive_entries})
+    document["content_revision"] = max(document["content_revision"], shipped["content_revision"])
+
 
 def entries(edition, collection="all"):
     result = (first_puzzles() + first_advanced() + first_master() + first_legends() + first_legends_extra() + first_legends_crowd()) if edition == "el1" else (second_puzzles() + pale_puzzles() + second_advanced() + second_master() + second_legends())
@@ -161,7 +180,10 @@ def main():
                                      for branch in item.get("refutations", []))]
                 if incomplete:
                     raise RuntimeError("Incomplete adversarial validation; packs were not replaced: " + ", ".join(incomplete))
-            validated[edition] = json.loads(path.read_text(encoding="utf-8"))
+            document = json.loads(path.read_text(encoding="utf-8"))
+            if args.collection == "all":
+                retain_archive_puzzles(edition, document)
+            validated[edition] = document
         args.output_dir.mkdir(parents=True, exist_ok=True)
         for edition, document in validated.items():
             destination = args.output_dir / (edition + ".json")

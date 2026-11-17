@@ -57,6 +57,8 @@ var _bar_text: Label
 var _objective_text: Label
 var _rules_text: Label
 var _briefing_text: Label
+var _supply_scroll: ScrollContainer
+var _supply_text: Label
 var _briefing_button: Button
 var _hint_text: Label
 var _hint_button: Button
@@ -509,7 +511,8 @@ func _build_bar() -> void:
 	_briefing_button = _button("Briefing", 86, 28)
 	_briefing_button.toggle_mode = true
 	_briefing_button.pressed.connect(func():
-		_briefing_text.visible = _briefing_button.button_pressed)
+		_briefing_text.visible = _briefing_button.button_pressed
+		_refresh_supply())
 	row.add_child(_briefing_button)
 	_hint_button = _button("Hint", 115, 28)
 	_hint_button.pressed.connect(show_hint)
@@ -535,6 +538,14 @@ func _build_bar() -> void:
 	_briefing_text.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_briefing_text.hide()
 	column.add_child(_briefing_text)
+	_supply_scroll = ScrollContainer.new()
+	_supply_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	_supply_scroll.hide()
+	column.add_child(_supply_scroll)
+	_supply_text = _text(14, ELMenuKit.BODY_INK)
+	_supply_text.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_supply_text.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_supply_scroll.add_child(_supply_text)
 	_hint_text = _text(14, ELMenuKit.BODY_INK)
 	_hint_text.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_hint_text.hide()
@@ -562,7 +573,10 @@ func _update_hint_buttons() -> void:
 ## The host has started `attempt`'s duel: the strip shows over it.
 func begin(source: ELProfile, attempt: ELPuzzles.Run) -> void:
 	_use(source)
+	_disconnect_supply()
 	run = attempt
+	if bool(run.entry.get("show_supply", false)):
+		run.duel.changed.connect(_refresh_supply)
 	_result_clock = 0.0
 	_result_shown = false
 	_shown_turn = -1
@@ -572,12 +586,24 @@ func begin(source: ELProfile, attempt: ELPuzzles.Run) -> void:
 	_briefing_text.text = run.briefing()
 	_briefing_text.hide()
 	_briefing_button.set_pressed_no_signal(false)
-	_briefing_button.visible = not _briefing_text.text.is_empty()
+	_briefing_button.visible = not _briefing_text.text.is_empty() or bool(run.entry.get("show_supply", false))
+	_refresh_supply()
 	_list.hide()
 	_shade.hide()
 	_result.hide()
 	_bar.show()
 	_refresh_bar()
+
+func _refresh_supply() -> void:
+	var text := run.supply_text() if run != null and _briefing_button.button_pressed else ""
+	_supply_scroll.visible = not text.is_empty()
+	if _supply_scroll.visible:
+		_supply_scroll.custom_minimum_size.y = minf(180.0, get_viewport().get_visible_rect().size.y * 0.30)
+		_supply_text.text = text
+
+func _disconnect_supply() -> void:
+	if run != null and run.duel.changed.is_connected(_refresh_supply):
+		run.duel.changed.disconnect(_refresh_supply)
 
 func _refresh_bar() -> void:
 	if run == null: return
@@ -714,6 +740,7 @@ func _show_result() -> void:
 
 ## Ends the attempt without a word (another battle starts, the game leaves).
 func close() -> void:
+	_disconnect_supply()
 	run = null
 	if _list == null: return
 	_bar.hide()

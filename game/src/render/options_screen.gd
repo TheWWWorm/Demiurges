@@ -77,8 +77,8 @@ const SPEC := {
 ## Settings with no remake system (stored only). The second game's Autosave
 ## has no effect in the original either (its only reader arms a field nothing
 ## reads; the after-chapter autosave is unconditional), so it is not marked;
-## the first game's is the end-of-turn autosave. Mouse scroll is the first
-## game's edge-pan speed; the second game's edges only turn the view.
+## the first game's is the end-of-turn autosave. The first game's Options has
+## a slider for mouse edge-pan speed.
 ## VisualLog (ELDuelReport) is live. The second game's CastMessages has no reader
 ## besides this screen. FogAnimations (ELFogMist) is live. HideMotion
 ## (ELMeleePlayback fast mode) is live. The first game's ShowChat controls
@@ -158,7 +158,7 @@ func _remake_session(phase: String) -> void:
 	if is_instance_valid(remake_host): remake_host.call("remake_session", menu, phase)
 
 static func inert(key: String, edition: String) -> bool:
-	return edition == "el2" and key in ["show_chat", "mouse_scroll", "heroes_casting"]
+	return edition == "el2" and key in ["show_chat", "heroes_casting"]
 
 ## Screen offset of a control: its own shift plus every parent panel's.
 func shift(control: String) -> Vector2:

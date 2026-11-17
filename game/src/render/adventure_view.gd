@@ -36,6 +36,8 @@ var accept: BaseButton
 var decline: BaseButton
 ## Second game: the script boxes on the original TextDialog / MessageBox art.
 var second_dialogue: ELSecondDialogueBox
+var _pending_speech: Dictionary = {}
+const MISSION_FADE_SECONDS := 2.0
 var route: MeshInstance3D
 var target := Vector3.ZERO
 ## First game: the original's perspective map camera, set up when a map
@@ -176,8 +178,7 @@ var _right_origin := Vector2.ZERO
 ## the map, re-pick throttle and how long a script has held the map.
 var _pointer := Vector2(-1, -1)
 var _pointer_on_map := false
-## Edge camera: the pointer at a screen edge pans (first game; with Ctrl it
-## turns and tilts) or turns the view (second game, left and right edges).
+## Edge camera: the pointer pans at a screen edge. Ctrl turns and tilts.
 ## The velocities ease towards their targets on the original 64 ms camera
 ## step and stop at once when the pointer leaves the edge.
 const EDGE_TICK := 0.064
@@ -349,6 +350,7 @@ func build(profile: ELProfile, scenario: Dictionary, preferences: ELSettings, di
 			if not problem.is_empty(): return _fail(problem)
 			_refresh_hero_info()
 		ELFirstScenario.opening(director)
+		if profile.id == "el2": _fade_in_mission()
 		# First game: every mission start is saved as T_AUTOSAVE_START_MISSION.
 		if profile.id == "el1" and not state.tutorial:
 			wait_cursor(profile)
@@ -466,6 +468,10 @@ func _process(delta: float) -> void:
 	if scroll_gliding: _glide(delta)
 	if view_moved and following < 0: _clamp_target()
 	_update_camera()
+	if not _pending_speech.is_empty() and _speaker_in_place():
+		var speech := _pending_speech
+		_pending_speech = {}
+		_show_second_dialogue(speech)
 	_update_rings(delta)
 	if audio != null:
 		audio.listener = target
@@ -504,10 +510,10 @@ func edge_direction() -> Vector2i:
 	if not visible or paused or _cursor_modal(): return Vector2i.ZERO
 	var size := get_viewport().get_visible_rect().size
 	if state.map.profile.id == "el2":
-		if not _pointer_on_map or Input.is_anything_pressed() or state.exclusive or not state.commands.is_empty(): return Vector2i.ZERO
-		if _pointer.x < 4: return Vector2i(-1, 0)
-		if _pointer.x > size.x - 4: return Vector2i(1, 0)
-		return Vector2i.ZERO
+		if not _pointer_on_map or Input.get_mouse_button_mask() != 0 or state.exclusive or not state.commands.is_empty(): return Vector2i.ZERO
+		var x := -1 if _pointer.x < 4 else (1 if _pointer.x > size.x - 4 else 0)
+		var y := -1 if _pointer.y < 4 else (1 if _pointer.y > size.y - 4 else 0)
+		return Vector2i(x, y)
 	var x := -1 if _pointer.x <= 0 else (1 if _pointer.x >= size.x - 2 else 0)
 	var y := -1 if _pointer.y <= 0 else (1 if _pointer.y >= size.y - 2 else 0)
 	return Vector2i(x, y)
@@ -540,9 +546,8 @@ func _update_edge(delta: float) -> void:
 		pan_target = keys.get("pan", Vector2.ZERO)
 		turn_target = float(keys.get("turn", 0.0))
 		tilt_target = float(keys.get("tilt", 0.0))
-	elif state.map.profile.id == "el2":
-		turn_target = direction.x * EDGE_TURN * rotation_speed * (-1.0 if bool(values.get("invert_rotation", false)) else 1.0)
 	elif Input.is_key_pressed(KEY_CTRL):
+		if state.map.profile.id == "el2" and bool(values.get("invert_rotation", false)): rotation_speed = -rotation_speed
 		turn_target = direction.x * EDGE_TURN * rotation_speed
 		tilt_target = direction.y * EDGE_TILT
 	else:
@@ -953,7 +958,7 @@ func _end_day() -> void:
 	_refresh_hero_info()
 
 func _unhandled_input(event: InputEvent) -> void:
-	if console_open: return
+	if console_open or not _pending_speech.is_empty(): return
 	var key := event as InputEventKey
 	var continue_dialogue := key != null and key.pressed and (
 		not key.echo or (key.keycode == KEY_SPACE and director != null and not bool(director.dialogue.get("question", false))))
@@ -1019,7 +1024,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			(skills as ELSecondLevelUpView).select_offer(int(action.get_slice("_", 2)) - 1)
 			get_viewport().set_input_as_handled()
 		elif key != null and key.pressed and (key.keycode == KEY_ESCAPE or action == "skills"):
-			_close_skills()
+			if not (skills is ELSecondLevelUpView and skills.offers.item_count > 0): _close_skills()
 			get_viewport().set_input_as_handled()
 		elif event is InputEventKey and event.pressed and event.keycode in [KEY_ENTER, KEY_KP_ENTER] and skills is ELSecondLevelUpView:
 			(skills as ELSecondLevelUpView).press_ok()
@@ -1640,11 +1645,8 @@ func _present(data: Dictionary) -> void:
 				view_goal = Vector2(SECOND_TEXT_ZOOM, SECOND_TEXT_PITCH)
 				_script_lens = false
 			if second_dialogue != null:
-				second_dialogue.present(speech, state)
-				accept = second_dialogue.accept
-				decline = second_dialogue.decline
-				_place_dialogue(speech)
-				audio.speak(speech.text_id)
+				if int(speech.get("actor", -1)) < 0 or _speaker_in_place(): _show_second_dialogue(speech)
+				else: _pending_speech = speech
 				return
 			dialogue_name.text = speech.title
 			dialogue_text.text = speech.text
@@ -1659,6 +1661,7 @@ func _present(data: Dictionary) -> void:
 			audio.speak(speech.text_id)
 			accept.grab_focus()
 		"dialogue_closed":
+			_pending_speech = {}
 			if not text_view.is_empty():
 				view_goal = Vector2(float(text_view.zoom), float(text_view.pitch))
 				text_view = {}
@@ -2287,6 +2290,30 @@ func _focus_object(id: int, instant := false) -> void:
 	if item.is_empty(): return
 	_scroll_to(ELAdventureScene.world_position(item.x, item.y), instant)
 
+func _speaker_in_place() -> bool:
+	var destination := camera_goal()
+	if following >= 0 and world.actors.has(following): destination = world.actors[following].position
+	return target.distance_squared_to(destination) <= 0.25 * 0.25
+
+func _show_second_dialogue(speech: Dictionary) -> void:
+	second_dialogue.present(speech, state)
+	accept = second_dialogue.accept
+	decline = second_dialogue.decline
+	_place_dialogue(speech)
+	audio.speak(speech.text_id)
+
+func _fade_in_mission() -> void:
+	var curtain := ColorRect.new()
+	curtain.name = "MissionFade"
+	curtain.color = Color.BLACK
+	curtain.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	curtain.z_index = 1
+	ui.add_child(curtain)
+	curtain.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	var fade := curtain.create_tween()
+	fade.tween_property(curtain, "color:a", 0.0, MISSION_FADE_SECONDS)
+	fade.tween_callback(curtain.queue_free)
+
 ## Second game: the camera's look-at point flies to a new point. Every 64 ms
 ## it covers SCROLL_RATE x AutoScrollAcceleration (settings.ini, shipped 0.5)
 ## of the way left, and it stops when that step is shorter than 0.001; the
@@ -2484,8 +2511,7 @@ func _close_spellbook() -> void:
 
 ## Second game: the level-up dialog opens by itself for the local player's
 ## main hero once the map is idle and a skill choice waits (queues the
-## level-up action, whose run shows it with victory.wav). Closing it
-## without a choice brings it back on the next idle frame, as in the original.
+## level-up action, whose run shows it with victory.wav).
 func _auto_level_up() -> void:
 	if second_hud == null or skills != null or paused or state.map.profile.id != "el2": return
 	if not director.can_move() or not director.movement.is_empty() or not pending_encounter.is_empty() or not building_messages.is_empty(): return

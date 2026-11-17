@@ -823,6 +823,7 @@ func _battle_reports(edition: String) -> void:
 		check(audio.play(sound) and audio.played.has(sound), "%s #141: sounds play again after the skip" % edition)
 	# #140
 	if edition == "el2":
+		_second_duel_presentation(view, duel)
 		audio.played.clear()
 		var death := audio.effect_sound("RedDeath")
 		var before: int = view.effects.active_count()
@@ -830,6 +831,50 @@ func _battle_reports(edition: String) -> void:
 		check(view.effects.active_count() > before and (death.is_empty() or audio.played.has(death)), "el2 #140: a fallen hero goes up in its colour's death effect (RedDeath) with its sound")
 	view.queue_free()
 	await _wait(2)
+
+func _second_duel_presentation(view: Node, duel: ELDuel) -> void:
+	var side := duel.active_side()
+	duel.heroes[side].mana = 10
+	duel._mark(side, "FRBL", 0, 0, {"owner": side})
+	var key: String = duel.abilities(side)[0].key
+	view.notices.clear()
+	check(duel.use_ability(side, key, 1 - side), "#174: the hero activates Fireball")
+	view._skip_battle_presentation()
+	check(view.notices.icons.size() == 1 and view.notices.icons[0].card == "FRBL", "#174: activating a hero enchantment shows its card")
+
+	duel._summon(side, "STRT")
+	view._skip_battle_presentation()
+	var id := int(duel.next_id) - 1
+	duel.creatures[id].sick = false
+	check(duel.toggle_attack(id), "#179: a creature declares an attack")
+	view._step_front_line()
+	check(view.melee.moving(id) and not view.melee.busy(), "#179: the declaration starts a walk outside melee playback")
+	view._skip_battle_presentation()
+	check(not view.melee.moving(id) and view.melee.away(id), "#179: skipping the walk places the attacker at the front")
+
+	var previous: bool = view.settings.values.combat_phases
+	view.settings.values.combat_phases = false
+	view.ai_clock = 0.0
+	view._on_duel_event({"kind": "phase", "side": side, "phase": "attack", "round": duel.round_number})
+	check(view.ai_clock >= 0.85, "#179: a hidden phase banner consumes no AI interval")
+	view.settings.values.combat_phases = previous
+
+	var previous_phase := duel.phase
+	var previous_winner := duel.winner
+	var previous_name: Variant = duel.heroes[side].get("title")
+	duel.phase = ELDuel.Phase.FINISHED
+	duel.winner = side
+	duel.heroes[side].title = "Плотоядный фингус из Долины Виталов"
+	view._refresh_phase_caption()
+	var label: Label = view.phase_label
+	check(label.get_line_count() > 1 and label.get_visible_line_count() <= 2 and label.size.y <= view._phase_caption_rect.size.y,
+		"#181: a long winner caption wraps within the phase oval")
+	check(label.tooltip_text.contains(duel.heroes[side].title), "#181: the tooltip keeps the complete winner name")
+	duel.phase = previous_phase
+	duel.winner = previous_winner
+	if previous_name == null: duel.heroes[side].erase("title")
+	else: duel.heroes[side].title = previous_name
+	view._refresh_phase_caption()
 
 # --- 0.15.0 reports: #137 #138 #139 on the map ---------------------------------
 

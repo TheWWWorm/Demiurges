@@ -36,6 +36,8 @@ var list_look_profile: ELProfile
 var hand_frames: Control
 var status: Label
 var phase_label: Label
+const PHASE_CAPTION_FONT_SIZE := 15
+var _phase_caption_rect := Rect2()
 var hero_buttons: Array[Button] = []
 var end_button: Button
 ## The end-of-phase socket's original art and shutter, drawn under end_button
@@ -336,7 +338,11 @@ func _ready() -> void:
 	# The chosen renderer needs the game started with it.
 	if _ensure_renderer(): return
 	ELSettings.apply_display(get_viewport(), settings.values)
-	if get_tree().current_scene == self: ELSettings.apply_window(settings.values)
+	if get_tree().current_scene == self:
+		ELSettings.apply_window(settings.values)
+		if DisplayServer.get_name() == "Windows":
+			get_window().size_changed.connect(_queue_borderless_check)
+			_queue_borderless_check()
 	# Touch gestures and the touch bar; inactive without a touch screen.
 	add_to_group("touch_camera")
 	touch_input = ELTouchInput.new()
@@ -519,9 +525,27 @@ func _update_modal_blocker() -> void:
 		_modal_blocker.add_child(cover)
 	_modal_blocker.show()
 
+var _borderless_check_pending := false
+
+func _queue_borderless_check() -> void:
+	if _borderless_check_pending or int(settings.values.window_mode) != 1: return
+	if DisplayServer.get_name() != "Windows" or Engine.is_embedded_in_editor(): return
+	# Native window changes can emit more notifications during the repair.
+	_borderless_check_pending = true
+	_check_borderless_window.call_deferred()
+
+func _check_borderless_window() -> void:
+	if get_window().has_focus() and int(settings.values.window_mode) == 1:
+		ELSettings.restore_borderless_window()
+	_borderless_check_pending = false
+
 ## Android Back acts as Esc (close a window, cancel, open the game menu);
 ## the project does not quit on it.
 func _notification(what: int) -> void:
+	if what == NOTIFICATION_WM_POSITION_CHANGED or what == NOTIFICATION_WM_WINDOW_FOCUS_IN:
+		if is_node_ready() and is_inside_tree() and get_tree().current_scene == self:
+			_queue_borderless_check()
+		return
 	if what == NOTIFICATION_WM_CLOSE_REQUEST and not get_tree().auto_accept_quit:
 		if ELCrashReport.instance != null: ELCrashReport.instance.clean_exit()
 		ELAudio.quiet_quit(get_tree())
@@ -827,7 +851,7 @@ func _process(delta: float) -> void:
 	# The phase oval and the shutters follow a fight starting and ending.
 	if duel != null and phase_label != null and _melee_busy() != _melee_shown:
 		_melee_shown = _melee_busy()
-		phase_label.text = phase_caption()
+		_refresh_phase_caption()
 	# The end-of-phase and attack controls follow every condition of the
 	# player's turn (a fight, a summon or effect finishing, a closed window),
 	# not only the moments a full refresh runs: the original's controls are
@@ -1821,7 +1845,8 @@ func _end_phase() -> void:
 ## Space skips the presentation of the phase in the original combat controls.
 func _skip_battle_presentation() -> void:
 	if (_melee_busy() or _cast_busy() or not _arrivals.is_empty() or not _effect_cast.is_empty()
-		or not _battle_cues.is_empty() or (auto_camera != null and auto_camera.active())):
+		or not _battle_cues.is_empty() or (auto_camera != null and auto_camera.active())
+		or (is_instance_valid(melee) and melee.has_moves())):
 		_skipping_presentation = true
 		# The skipped events' sounds are dropped, not left to play long after
 		# them (player report #141).
@@ -1838,6 +1863,8 @@ func _skip_battle_presentation() -> void:
 			if _cast_queue.is_empty(): break
 			_step_cast_queue()
 		_finish_battle_cues()
+		_step_front_line()
+		if is_instance_valid(melee): melee.finish_moves()
 		if camera != null: _update_camera()
 		for id: int in models.keys():
 			var clip: String = models[id].clip
@@ -2943,7 +2970,11 @@ func _event(data: Dictionary) -> void:
 				if card.is_empty() and source >= 2: card = String(data.get("user_card", ""))
 				var texture := _ability_icon(card)
 				if texture != null: notices.add_icon(texture, card)
-			elif source < 2: _announce("T_USE_ENCHANTMENT", [_hero_name(source), String(data.get("name", String(data.ability).capitalize()))], int(data.side))
+			elif source < 2:
+				_announce("T_USE_ENCHANTMENT", [_hero_name(source), String(data.get("name", String(data.ability).capitalize()))], int(data.side))
+				var card := String(data.get("enchantment_card", ""))
+				if profile.id == "el2" and not card.is_empty() and is_instance_valid(notices):
+					notices.add_icon(profile.card_icon(card), card)
 			else: _announce("T_USE_ABILITY", [duel.card_name(String(data.get("user_card", duel.entity(source).get("card", ""))))], int(data.side))
 			# Both originals' hero ability command (both games)
 			# queues the hero's PlayAnimation 7, its instant gesture, ahead of
@@ -3020,6 +3051,8 @@ func _event(data: Dictionary) -> void:
 		"phase":
 			fight_shot = false
 			_phase_notice(int(data.side), String(data.phase) == "attack", int(data.round))
+			if profile.id == "el2" and not bool(settings.values.get("combat_phases", true)):
+				ai_clock = maxf(ai_clock, 0.85)
 		"victory", "duel_draw":
 			# A loser whose deciding hit still waits for its effect's cue frame
 			# falls when that hit lands (_late_hit).
@@ -4983,8 +5016,7 @@ func _refresh() -> void:
 		if helper_overlay(): hero_buttons[side].tooltip_text += "\n%s\n%d / %d health · %d ether · %d channels\n%d cards in hand · %d creatures in the graveyard\nClick this portrait to target the hero." % [_side_name(side), shown_health(side), h.maximum, shown_ether(side), shown_channels(side), h.hand.size(), h.grave.size()]
 	# The battle title line is a remake readout (helper overlay only).
 	status.text = "%s · %s vs %s" % [profile.title, ELCatalog.faction_name(duel.heroes[0].faction), ELCatalog.faction_name(duel.heroes[1].faction)] if helper_overlay() else ""
-	phase_label.text = phase_caption()
-	phase_label.tooltip_text = "%s's phase" % _side_name(active) if helper_overlay() else ""
+	_refresh_phase_caption()
 	# The phase control is the original panel's end-phase socket; its icon is
 	# part of the panel art. Only the post-battle return control carries text.
 	# The originals have no post-battle control: a finished battle closes by
@@ -5215,6 +5247,28 @@ func phase_caption() -> String:
 	if kind >= 0: return param_prompt(kind, "\n")
 	if not _local_side(duel.active_side()): return _original_text("T_ENEMY_TURN", "Enemy turn")
 	return _original_text("T_ATTACK_CAST_PHASE" if duel.phase == ELDuel.Phase.ATTACK else "T_BLOCK_PHASE", "Attack" if duel.phase == ELDuel.Phase.ATTACK else "Defence")
+
+## A winner's name can be longer than the phase oval. Fit it inside the
+## oval's narrower center and keep the complete result as a tooltip.
+func _refresh_phase_caption() -> void:
+	var text := phase_caption() if duel != null else ""
+	var finished := duel != null and duel.phase == ELDuel.Phase.FINISHED
+	var bounds := _phase_caption_rect
+	var font_size := PHASE_CAPTION_FONT_SIZE
+	if finished and bounds.has_area():
+		bounds = bounds.grow_individual(-16.0, 0.0, -16.0, 0.0)
+		var font := phase_label.get_theme_font("font")
+		while font_size > 10 and font.get_multiline_string_size(text, HORIZONTAL_ALIGNMENT_CENTER, bounds.size.x, font_size).y > bounds.size.y - 6.0:
+			font_size -= 1
+	if phase_label.get_theme_font_size("font_size") != font_size:
+		phase_label.add_theme_font_size_override("font_size", font_size)
+	phase_label.max_lines_visible = 2 if finished else -1
+	phase_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS if finished else TextServer.OVERRUN_NO_TRIMMING
+	phase_label.mouse_filter = Control.MOUSE_FILTER_PASS if finished else Control.MOUSE_FILTER_IGNORE
+	phase_label.text = text
+	phase_label.tooltip_text = text if finished else ("%s's phase" % _side_name(duel.active_side()) if duel != null and helper_overlay() else "")
+	phase_label.position = bounds.position
+	phase_label.size = bounds.size
 
 ## The original two-part prompt of a target or X step (EL2 numeric text ids
 ## 2k+9 and 2k+10): T_SPELL_PARAM, T_SPELL_PARAM02.. by kind;
@@ -5739,7 +5793,8 @@ func _build_ui() -> void:
 	# Godot's own tooltips stay invisible over the battle panel; ELCombatTooltip
 	# draws them in the original frame.
 	hud_root.theme = ELCombatTooltip.hidden_theme()
-	phase_label = _label("DUEL", 15, ELCombatRail.COUNT_COLOR)
+	phase_label = _label("DUEL", PHASE_CAPTION_FONT_SIZE, ELCombatRail.COUNT_COLOR)
+	phase_label.clip_text = true
 	# The original caption: bold Arial in the counts' gold, cap height 10 px
 	# at 1024x768 ("Фаза атаки" in the second game's oval).
 	var phase_font := SystemFont.new()
@@ -8499,15 +8554,12 @@ func _layout_hud() -> void:
 	var h := hud_root.size.y
 	if ELHudFrame.wide_layout(profile, w):
 		# The original's 1024 layout: the oval (488,535)-(729,600) beside the buttons.
-		phase_label.position = Vector2(w - 524, h - 57)
-		phase_label.size = Vector2(217, 46)
 		# A narrow extra width widens the oval instead of a strip (#164).
 		var stretch := ELHudFrame.caption_stretch(profile, w)
-		phase_label.position.x -= stretch
-		phase_label.size.x += stretch
+		_phase_caption_rect = Rect2(w - 524 - stretch, h - 57, 217 + stretch, 46)
 	else:
-		phase_label.position = Vector2(w - 296, h - 109)
-		phase_label.size = Vector2(118, 43)
+		_phase_caption_rect = Rect2(w - 296, h - 109, 118, 43)
+	_refresh_phase_caption()
 	# The original 1024 places: CombatMenu1 (509,542) and CombatMenu2
 	# (564,544) of the 800 panel moved right by 224 and down by 168.
 	attack_button.position = Vector2(w - 291, h - 58)

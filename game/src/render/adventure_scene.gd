@@ -500,10 +500,20 @@ func sync_fog() -> void:
 	_fog_textures[0].update(Image.create_from_data(map.width + 1, map.height + 1, false, Image.FORMAT_R8, fog_from))
 	_fog_textures[1].update(Image.create_from_data(map.width + 1, map.height + 1, false, Image.FORMAT_R8, fog_to))
 	for id: int in scenery: fog_object(fog_session.object(id))
-	# Mobile figures are few and their current coordinates are authoritative.
+	# The fog can change on either tile while a figure is between steps.
 	for id: int in actors:
 		var actor := fog_session.object(id)
-		if not actor.is_empty() and changed.intersects(ELFog.object_bounds(fog_session, actor)): fog_object(actor)
+		var passing := _actor_render_cell(id)
+		if not actor.is_empty() and (changed.intersects(ELFog.object_bounds(fog_session, actor)) or changed.has_point(passing)):
+			fog_object(actor, passing)
+
+## Fog updates and movement must sample the same rendered position between
+## logical steps, or a figure on the mist boundary is hidden and shown again.
+func _actor_render_cell(uid: int) -> Vector2i:
+	var actor: ELModel = actors.get(uid)
+	if map.profile.id != "el2" or actor == null: return Vector2i(-1, -1)
+	var cell := Vector2(actor.position.x, -actor.position.z) / ELAdventureTerrain.CELL - Vector2(0.5, 0.5)
+	return Vector2i(cell.round())
 
 func _index_fog_object(item: Dictionary) -> void:
 	var id := int(item.uid)
@@ -566,6 +576,7 @@ func fog_object(item: Dictionary, passing := Vector2i(-1, -1), instant := false)
 	var uid := int(item.uid)
 	if _retiring_pickups.has(uid): return
 	if not object_models.has(uid) and not _instances.has(uid): return
+	if passing.x < 0: passing = _actor_render_cell(uid)
 	var mode := ELFog.object_state(fog_session, fog_player, item)
 	if passing.x >= 0 and mode != ELFog.VISIBLE: mode = maxi(mode, ELFog.object_state(fog_session, fog_player, item, passing))
 	var present := _game_visible(item) and (mode == ELFog.VISIBLE or (mode == ELFog.REMEMBERED and not ELFog.dynamic(item)))

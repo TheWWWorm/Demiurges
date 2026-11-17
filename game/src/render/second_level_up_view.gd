@@ -14,9 +14,8 @@ extends ELHeroSkillsView
 ## original's frame (ELCombatTooltip) when the pointer rests on them or on a
 ## right click, as the inventory screen does.
 ## An offer dragged onto the skill rows is learned as with LUOk. LUOk learns the chosen offer and closes the dialog once no
-## choice is left. The remake keeps LUOk disabled while offers wait without a
-## selection, so a pending choice is never lost; Escape closes the dialog and
-## keeps it. The active specialisation is chosen on the inventory screen, as in
+## choice is left. LUOk stays disabled while offers wait without a selection.
+## The active specialisation is chosen on the inventory screen, as in
 ## the original, so this dialog carries no selector.
 
 const PANEL := "LevelUpDialog"
@@ -63,7 +62,9 @@ func build(session: ELAdventureSession, id: int) -> void:
 	for control: String in ["LUHeader1", "LUHeader2", "LUHeader3"]:
 		labels[control] = _text_label(hud.text(str(hud._controls.get(control, {}).get("Text", ""))), int(hud._controls.get(control, {}).get("FontSize", 18)), HORIZONTAL_ALIGNMENT_CENTER, TAN)
 		labels[control].clip_text = false
-	for index in 5: labels["LUSkill%d" % (index + 1)] = _text_label("", 17, HORIZONTAL_ALIGNMENT_LEFT, WHITE)
+	for index in 5:
+		var control := "LUSkill%d" % (index + 1)
+		labels[control] = _text_label("", int(hud._controls.get(control, {}).get("FontSize", 17)), HORIZONTAL_ALIGNMENT_LEFT, WHITE)
 	for control: String in labels: labels[control].name = control
 	heading = labels.LUHeader1
 	offers = OfferStrip.new()
@@ -113,7 +114,7 @@ func _text_label(value: String, font_size: int, align: HorizontalAlignment, colo
 	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	label.clip_text = true
 	label.add_theme_font_override("font", hud.face_bold)
-	label.add_theme_font_size_override("font_size", font_size)
+	label.add_theme_font_size_override("font_size", ELFrontMenu.cell_em(font_size))
 	label.add_theme_color_override("font_color", color)
 	label.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.85))
 	label.add_theme_constant_override("shadow_offset_x", 1)

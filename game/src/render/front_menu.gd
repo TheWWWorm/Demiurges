@@ -541,27 +541,27 @@ func _add_group(group: String, excluded: Array) -> void:
 	var offset := shift(group)
 	var list := rows(group, [], ["Res1"] + excluded)
 	list.sort_custom(func(a: Dictionary, b: Dictionary): return _layer(a) < _layer(b))
-	var first := _pieces.size()
+	var panel_tiles: Array[Dictionary] = []
+	var campaign_panel := edition == "el2" and group in ["SelectCampaign", "GlobalMapA6"]
 	for row: Dictionary in list:
 		var piece := cut(row, offset)
 		if piece.is_empty(): continue
 		piece.masks = row.masks
 		_pieces.append(piece)
-	if edition == "el2" and group in ["SelectCampaign", "GlobalMapA6"] and first < _pieces.size():
-		_mark_panel_joins(first)
+		if campaign_panel or (group == "Duel" and row.masks.has("Type1") and row.masks.has("Last")):
+			panel_tiles.append(piece)
+	if panel_tiles.size() > 1: _mark_panel_joins(panel_tiles)
 
-## Independently enlarged atlas tiles can ring near their edges. Restore
-## the original color and alpha at joins while keeping the sharp interiors.
-func _mark_panel_joins(first: int) -> void:
-	var bounds: Rect2 = _pieces[first].rect
-	for index in range(first + 1, _pieces.size()): bounds = bounds.merge(_pieces[index].rect)
-	for index in range(first, _pieces.size()):
-		var piece := _pieces[index]
-		var rect: Rect2 = piece.rect
-		piece.joins = [rect.position.x > bounds.position.x, rect.position.y > bounds.position.y,
+## Restore the original color and alpha where the sharpened tiles meet.
+func _mark_panel_joins(tiles: Array[Dictionary]) -> void:
+	var bounds: Rect2 = tiles[0].rect
+	for tile: Dictionary in tiles: bounds = bounds.merge(tile.rect)
+	for tile: Dictionary in tiles:
+		var rect: Rect2 = tile.rect
+		tile.joins = [rect.position.x > bounds.position.x, rect.position.y > bounds.position.y,
 			rect.end.x < bounds.end.x, rect.end.y < bounds.end.y]
-		if not piece.texture.changed.is_connected(_forget_joined_tiles):
-			piece.texture.changed.connect(_forget_joined_tiles)
+		if not tile.texture.changed.is_connected(_forget_joined_tiles):
+			tile.texture.changed.connect(_forget_joined_tiles)
 
 func _forget_joined_tiles() -> void:
 	for piece: Dictionary in _pieces: piece.erase("joined")
@@ -590,6 +590,7 @@ static func _joined_tile(texture: Texture2D, source: Rect2i, joins: Array) -> Im
 			for along in length:
 				var pixel := Vector2i(at, along) if vertical else Vector2i(along, at)
 				cropped.set_pixelv(pixel, cropped.get_pixelv(pixel).lerp(edge.get_pixelv(pixel), amount))
+	cropped.generate_mipmaps()
 	return ImageTexture.create_from_image(cropped)
 
 static func _layer(row: Dictionary) -> int:
@@ -620,6 +621,7 @@ const WIDE_SCREENS := {
 }
 var _wide_frame: Control
 var _wide_texture: Texture2D
+var _wide_corners: Array[Texture2D] = []
 ## A panel over the main-menu art (the screen's "under" sheet) takes the
 ## frame beneath it: drawn by the art after this many pieces (-1: on top).
 var _frame_after := -1
@@ -631,6 +633,7 @@ func _add_wide_frame(target: String, under_panel := false) -> void:
 	if overlay() or hosted or not WIDE_FRAMES.has(edition) or not target in WIDE_SCREENS.get(edition, []): return
 	if not ResourceLoader.exists(WIDE_FRAMES[edition]): return
 	_wide_texture = load(WIDE_FRAMES[edition])
+	_wide_corners = _menu_corners(profile)
 	if under_panel:
 		_frame_in_art = true
 		return
@@ -644,7 +647,7 @@ func _add_wide_frame(target: String, under_panel := false) -> void:
 func _draw_wide_frame(target: CanvasItem = null) -> void:
 	if target == null: target = _wide_frame
 	if scale_factor <= 0.0 or target == null: return
-	if use_wide_texture(size, _wide_texture): draw_wide_texture(target, _wide_texture)
+	if use_wide_texture(size, _wide_texture): _draw_menu_frame(target, _wide_texture, _wide_corners)
 
 static func use_wide_texture(window: Vector2, texture: Texture2D) -> bool:
 	var factor := minf(window.x / DESIGN.x, window.y / DESIGN.y)
@@ -657,6 +660,40 @@ static func artwork_scale(window: Vector2, texture: Texture2D) -> float:
 static func draw_wide_texture(target: CanvasItem, texture: Texture2D, tint := Color.WHITE) -> void:
 	var extent := texture.get_size()
 	target.draw_texture_rect(texture, Rect2((DESIGN - extent) * 0.5, extent), false, tint)
+
+## The stock EL2 menu tiles contain the complete gargoyle outlines. Sample
+## them from the mounted game so the widescreen art keeps both statues intact.
+static func _menu_corners(source: ELProfile) -> Array[Texture2D]:
+	var corners: Array[Texture2D] = []
+	if source.id != "el2": return corners
+	for name: String in ["_MAIN_PANEL_17", "_MAIN_PANEL_20"]:
+		var found: Texture2D
+		for row: Dictionary in source.table("InterfaceTextures").values():
+			if row.get("Name") != name: continue
+			found = source.texture("Interface/" + String(row.Path).replace("\\", "/"))
+			break
+		corners.append(found)
+	return corners
+
+static func _draw_menu_frame(target: CanvasItem, texture: Texture2D, corners: Array[Texture2D]) -> void:
+	draw_wide_texture(target, texture)
+	var outer := (texture.get_width() - DESIGN.x) * 0.5
+	var outline := PackedVector2Array([Vector2(34, 575), Vector2(57, 573), Vector2(65, 577), Vector2(65, 594),
+		Vector2(55, 601), Vector2(55, 622), Vector2(71, 640), Vector2(70, 646), Vector2(63, 650),
+		Vector2(97, 673), Vector2(108, 691), Vector2(101, 703), Vector2(103, 714), Vector2(95, 717),
+		Vector2(112, 742), Vector2(34, 742)])
+	for index in corners.size():
+		if corners[index] == null: continue
+		var points := PackedVector2Array()
+		var uvs := PackedVector2Array()
+		for point: Vector2 in outline:
+			if index == 0:
+				points.append(Vector2(point.x - outer, point.y))
+				uvs.append((point - Vector2(0, 512)) / 256.0)
+			else:
+				points.append(Vector2(DESIGN.x + outer - point.x, point.y))
+				uvs.append(Vector2(1.0 - point.x / 256.0, (point.y - 512.0) / 256.0))
+		target.draw_polygon(points, PackedColorArray([Color.WHITE]), uvs, corners[index])
 
 func _draw_art() -> void:
 	# Over a battle the dim covers the whole window (see _draw), not only the 4:3 art.
@@ -685,6 +722,7 @@ static func backdrop(source: ELProfile) -> Backdrop:
 class Backdrop extends Control:
 	var pieces: Array[Dictionary] = []
 	var wide: Texture2D
+	var corners: Array[Texture2D] = []
 
 	func build(source: ELProfile, group: String) -> void:
 		mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -713,7 +751,9 @@ class Backdrop extends Control:
 			var texture := source.texture(paths[str(row.Txt)])
 			if texture == null: continue
 			pieces.append({"texture": texture, "source": Rect2(row.TxtL, row.TxtT, row.TxtW, row.TxtH), "rect": Rect2(Vector2(row.ScrL, row.ScrT) + offset, Vector2(row.TxtW, row.TxtH))})
-		if WIDE_FRAMES.has(source.id) and ResourceLoader.exists(WIDE_FRAMES[source.id]): wide = load(WIDE_FRAMES[source.id])
+		if WIDE_FRAMES.has(source.id) and ResourceLoader.exists(WIDE_FRAMES[source.id]):
+			wide = load(WIDE_FRAMES[source.id])
+			corners = ELFrontMenu._menu_corners(source)
 		resized.connect(queue_redraw)
 
 	func _draw() -> void:
@@ -723,7 +763,7 @@ class Backdrop extends Control:
 		draw_set_transform((size - DESIGN * factor) * 0.5, 0.0, Vector2(factor, factor))
 		for piece: Dictionary in pieces:
 			draw_texture_rect_region(piece.texture, piece.rect, piece.source)
-		if ELFrontMenu.use_wide_texture(size, wide): ELFrontMenu.draw_wide_texture(self, wide)
+		if ELFrontMenu.use_wide_texture(size, wide): ELFrontMenu._draw_menu_frame(self, wide, corners)
 
 func _layout() -> void:
 	if canvas == null or size.x <= 0 or size.y <= 0: return
