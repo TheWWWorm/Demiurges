@@ -45,6 +45,8 @@ const FOG_APRON := 24
 var fog_from := PackedByteArray()
 var fog_to := PackedByteArray()
 var fog_since := 0.0
+## A script's hard cut must hide terrain and figures together.
+var snap_fog := false
 var mist: ELFogMist
 var _fog_apron: MeshInstance3D
 ## Options "fog animations": false keeps the mist's first frame.
@@ -492,10 +494,15 @@ func sync_fog() -> void:
 	_fog_revision = ELFog.revision(fog_session)
 	var scenery := {}
 	var changed := _update_fog_tiles(scenery)
-	if not changed.has_area(): return
+	if not changed.has_area():
+		snap_fog = false
+		return
 	fog_from = fog_shown()
 	var corners := changed.grow_individual(0, 0, 1, 1)
 	fog_to = _update_fog_corners(_fog_tiles, fog_to, corners)
+	if snap_fog:
+		fog_from = fog_to.duplicate()
+		snap_fog = false
 	fog_since = 0.0
 	_fog_textures[0].update(Image.create_from_data(map.width + 1, map.height + 1, false, Image.FORMAT_R8, fog_from))
 	_fog_textures[1].update(Image.create_from_data(map.width + 1, map.height + 1, false, Image.FORMAT_R8, fog_to))
@@ -666,7 +673,7 @@ func _fade_pickups(delta: float) -> void:
 
 func _game_visible(item: Dictionary) -> bool:
 	return item.get("visible", true) and item.get("placed", true) and not item.get("fortified", false) and (not item.get("opened", false) or first_barrier(item)) \
-		and (item.get("alive", true) or item.get("type") not in ["hero", "monster"])
+		and (item.get("alive", true) or item.get("type") not in ["hero", "monster"] or map.profile.id == "el2")
 
 ## Figure brightness under the fog (1 undimmed), in steps of 1/32 so fading
 ## figures share a few material copies.

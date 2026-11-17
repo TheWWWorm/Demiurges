@@ -183,6 +183,9 @@ static func sight_radius(hero: Dictionary) -> int:
 ## Heroes in a fort keep their sight; a training-camp guest keeps its tile.
 static func hero_sees(state: ELAdventureSession, hero: Dictionary) -> bool:
 	if not (hero.get("visible", true) or int(hero.get("camp", -1)) >= 0): return false
+	# ExHideExploration clears a stationary actor's sight too. Scripted
+	# observations must not reveal its whole sight disc again.
+	if second(state) and hero.get("sight_hidden_at") == [int(hero.x), int(hero.y)]: return false
 	return state.grid.contains(Vector2i(hero.x, hero.y))
 
 ## mission23: a neutral hero of the shared-sight colour, whose surroundings
@@ -194,6 +197,7 @@ static func shared_sight(state: ELAdventureSession, item: Dictionary) -> bool:
 ## A step of a sight source: a player's hero (EL2 also mobs), or a neutral
 ## hero that shows its surroundings to every player.
 static func moved(state: ELAdventureSession, actor: Dictionary) -> void:
+	if actor.get("sight_hidden_at") != [int(actor.x), int(actor.y)]: actor.erase("sight_hidden_at")
 	if source(state, actor) and (int(actor.get("owner", 0)) >= 1 or shared_sight(state, actor)): refresh(state, true)
 
 static func on_event(state: ELAdventureSession, data: Dictionary) -> void:
@@ -318,6 +322,9 @@ static func _hide(state: ELAdventureSession, seen: PackedByteArray, mask: int, a
 ## ExHideExploration: every player's explored and visible bits are cleared;
 ## nothing is revealed again until the next refresh.
 static func hide_exploration(state: ELAdventureSession) -> void:
+	if second(state):
+		for item: Dictionary in state.objects.values():
+			if source(state, item): item.sight_hidden_at = [int(item.x), int(item.y)]
 	state.explored.fill(0)
 	var seen: PackedByteArray = state.fog.get("visible", PackedByteArray())
 	seen.fill(0)

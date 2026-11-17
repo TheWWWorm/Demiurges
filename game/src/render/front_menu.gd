@@ -185,6 +185,9 @@ const PORTRAITS := {
 	"el2": {
 		"Green": [["CAMPAIGN_PANEL_01", Rect2(0, 0, 223, 256), Vector2(0, 0)], ["CAMPAIGN_PANEL_012", Rect2(0, 0, 223, 85), Vector2(0, 256)]],
 		"Red": [["CAMPAIGN_PANEL_02", Rect2(0, 0, 223, 256), Vector2(0, 0)], ["CAMPAIGN_PANEL_012", Rect2(0, 86, 223, 85), Vector2(0, 256)]],
+		"Black": [["CAMPAIGN_PANEL_03", Rect2(0, 0, 223, 256), Vector2.ZERO], ["CAMPAIGN_PANEL_034", Rect2(0, 0, 223, 85), Vector2(0, 256)]],
+		"Blue": [["CAMPAIGN_PANEL_04", Rect2(0, 0, 223, 256), Vector2.ZERO], ["CAMPAIGN_PANEL_034", Rect2(0, 86, 223, 85), Vector2(0, 256)]],
+		"White": [["CAMPAIGN_PANEL_05", Rect2(0, 0, 223, 256), Vector2.ZERO], ["CAMPAIGN_PANEL_034", Rect2(0, 172, 223, 84), Vector2(0, 256)]],
 	},
 }
 ## Card holes (1024 layout) and the original caption controls for each card.
@@ -208,6 +211,7 @@ var labels: Dictionary = {}
 var cards: Array[CardButton] = []
 var text_box: RichTextLabel
 var selected_campaign := ""
+var _campaign_offer := false
 var difficulty := 1
 var campaign_data: ELCampaign
 ## Times New Roman: the menu buttons (Controls FontType "Times").
@@ -435,6 +439,7 @@ func text(key: String) -> String:
 	return profile.text(key)
 
 func show_screen(target: String) -> void:
+	if target in ["main", "campaign_menu"]: _campaign_offer = false
 	if target == "main" and not _return_screen.is_empty() and SCREENS.get(edition, {}).has(_return_screen): target = _return_screen
 	_return_screen = ""
 	_choice.visible = target == "main" and not hosted
@@ -516,7 +521,11 @@ func _add_art(target: String) -> void:
 	# so does the second game's Options.
 	elif target == "options" and not hosted or target == "encyclopaedia" and edition == "el2" and not hosted: _add_group(SCREENS[edition].main.art, [])
 	_frame_after = _pieces.size() if definition.has("under") else -1
-	_add_group(definition.art, definition.get("exclude", []) + (duel_ui.art_exclude(target) if duel_ui != null else []) + (encyclopaedia_ui.art_exclude(target) if encyclopaedia_ui != null else []) + (options_ui.art_exclude(target) if options_ui != null else []))
+	var excluded: Array = definition.get("exclude", []).duplicate()
+	if target == "campaigns" and edition == "el2" and _campaign_offer:
+		excluded.erase("Type2")
+		excluded.append("Type1")
+	_add_group(definition.art, excluded + (duel_ui.art_exclude(target) if duel_ui != null else []) + (encyclopaedia_ui.art_exclude(target) if encyclopaedia_ui != null else []) + (options_ui.art_exclude(target) if options_ui != null else []))
 
 ## The art again for the shown screen (an Options page switch: the page's
 ## panel changes, its controls stay).
@@ -1009,17 +1018,19 @@ func _input(event: InputEvent) -> void:
 	if not is_visible_in_tree(): return
 	# Keys belong to the menu while it covers the game (Esc steps back).
 	if event is InputEventKey:
+		# Confirming a load can synchronously remove this menu and its mission.
+		var viewport := get_viewport()
 		if console_captures.is_valid() and console_captures.call(event): return
 		# An open message box answers its keys first.
 		if event.pressed and not event.echo and duel_ui != null and duel_ui.message_key(event.keycode):
-			get_viewport().set_input_as_handled()
+			viewport.set_input_as_handled()
 			return
 		# Text entry (the preset name) keeps its keys.
-		var focus := get_viewport().gui_get_focus_owner()
+		var focus := viewport.gui_get_focus_owner()
 		if focus is LineEdit and focus.is_visible_in_tree() and event.keycode != KEY_ESCAPE: return
 		# A shortcut field of the Options screen's remake pages waits for a key.
 		if focus != null and focus.is_visible_in_tree() and focus.has_method("captures_keys") and focus.captures_keys(): return
-		get_viewport().set_input_as_handled()
+		viewport.set_input_as_handled()
 		# Credits take every key (page turns, or any key closes).
 		if screen == "credits":
 			credits_ui.key(event)
@@ -1311,7 +1322,10 @@ func _build_campaigns() -> void:
 		_label("caption", text("CtrlSCCaption"), control_rect("SCCaption"), 17)
 	else:
 		_label("caption", text("CtrlSCHdr"), control_rect("SCHdr"), 17)
-	for card: Dictionary in CARDS[edition]:
+	var choices: Array = CARDS[edition]
+	if edition == "el2" and _campaign_offer:
+		choices = [{"id": str(second.current), "hole": Rect2(400, 185, 223, 341), "name": "SCCenter", "title": "T_SC_CAMP_" + str(second.current).to_upper(), "caption": "SCDesc3"}]
+	for card: Dictionary in choices:
 		var data := _campaign(card.id)
 		if data == null: continue
 		var button := CardButton.new()
@@ -1401,6 +1415,12 @@ func _confirm_campaign() -> void:
 	if selected_campaign.is_empty(): return
 	campaign_data = _campaign(selected_campaign)
 	if campaign_data == null: return
+	if edition == "el2" and _campaign_offer:
+		use_ai(ELAIChoice.from_scenario({ELSecondCampaign.KEY: second}))
+		_campaign_offer = false
+		if ELSecondCampaign.is_interlude(second): start_campaign()
+		else: show_screen("map")
+		return
 	difficulty = 1
 	ai_levels.clear()
 	if edition == "el1": _open_legend("mission")
@@ -1421,7 +1441,8 @@ func show_campaign_map(progress: Dictionary) -> bool:
 	selected_campaign = data.id
 	difficulty = int(second.difficulty)
 	use_ai(ELAIChoice.from_scenario({ELSecondCampaign.KEY: second}))
-	show_screen("map")
+	_campaign_offer = int(second.counter) > 0 and int(second.index) == 0 and int(second.row) == 0 and Dictionary(second.intermission).is_empty()
+	show_screen("campaigns" if _campaign_offer else "map")
 	return true
 
 func _between_chapters() -> bool:

@@ -524,7 +524,7 @@ func _native(args: Array, name: String) -> Array:
 		"ExHideExploration":
 			# Clears explored and visible for every player; no refresh follows.
 			ELFog.hide_exploration(self)
-			event.emit({"kind": "exploration_changed"})
+			event.emit({"kind": "exploration_changed", "clear": true})
 		"ExStartObservation":
 			if args.size() < 4: return []
 			var key := str(first) if first != null else ""

@@ -31,6 +31,7 @@ const PRICE_BOX := Vector2(32, 18)
 const BOOK_COLUMNS := 5
 const RED := Color(1, 0, 0)
 const WHITE := Color(1, 1, 1)
+const GREEN := Color(0, 1, 0)
 const PICK := Color("e8e0cc")
 const TIPS := {"CompTt1": Rect2(414, 128, 33, 33), "CompTt2": Rect2(465, 134, 30, 30), "CompTt3": Rect2(517, 128, 30, 30)}
 const COMMANDS := ["CompBuy1", "CompBuy2", "CompBuy3", "CompBack1", "CompBack2", "CompBack3", "CompOK", "CompCancel"]
@@ -60,7 +61,6 @@ func build_shop(owner: ELAdventureDirector, panel: ELAdventureHud, exchange_trad
 	sheet.view = self
 	sheet.size = Vector2(660, 600)
 	sheet.mouse_filter = Control.MOUSE_FILTER_STOP
-	sheet.tooltip_text = " "
 	add_child(sheet)
 	_compose()
 	_build_side(0)
@@ -77,6 +77,8 @@ func build_shop(owner: ELAdventureDirector, panel: ELAdventureHud, exchange_trad
 	_button("CompBack3", SHIFT).pressed.connect(func(): _act(trade.clear()))
 	_button("CompOK", SHIFT).pressed.connect(accept)
 	_button("CompCancel", SHIFT).pressed.connect(cancel_trade)
+	_bulk_button("BuyOneEach", "Buy one each", "Buy one rune for every spell in the book", Vector2(346, 86), 1)
+	_bulk_button("ReturnOneEach", "Return one each", "Return one pending rune for every spell in the book", Vector2(486, 86), -1)
 	# The arrow keys select book slots, so the buttons never take focus.
 	for button: BaseButton in buttons.values(): button.focus_mode = Control.FOCUS_NONE
 	slot = 0
@@ -84,6 +86,21 @@ func build_shop(owner: ELAdventureDirector, panel: ELAdventureHud, exchange_trad
 	resized.connect(_layout)
 	_layout()
 	refresh()
+
+func _bulk_button(key: String, caption: String, tip: String, at: Vector2, amount: int) -> void:
+	var button := Button.new()
+	var kit := ELMenuKit.for_profile(profile)
+	if kit != null: button.theme = kit.theme()
+	button.text = ELRemakeText.t(caption, profile)
+	button.tooltip_text = ELRemakeText.t(tip, profile)
+	button.add_theme_font_size_override("font_size", 13)
+	button.position = at
+	button.size = Vector2(134, 30)
+	button.focus_mode = Control.FOCUS_NONE
+	button.pressed.connect(func():
+		if not _purchase_pending: _act(trade.change_all(amount)))
+	sheet.add_child(button)
+	buttons[key] = button
 
 ## Panel art: generic pieces, then the 1024 set, then "Last" on top.
 func _compose() -> void:
@@ -291,6 +308,8 @@ func refresh() -> void:
 	buttons.CompBack3.disabled = not has_pending()
 	buttons.CompOK.disabled = not trade.problem().is_empty()
 	buttons.CompCancel.disabled = false
+	buttons.BuyOneEach.disabled = _purchase_pending or not _any_addable()
+	buttons.ReturnOneEach.disabled = _purchase_pending or not has_pending()
 	if _purchase_pending:
 		for name: String in COMMANDS: buttons[name].disabled = true
 	sheet.queue_redraw()
@@ -322,7 +341,7 @@ func _draw_sheet() -> void:
 			var width := font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, 14).x
 			var at := Vector2(box.get_center().x - width * 0.5, box.position.y + 14)
 			sheet.draw_string(font, at + Vector2(1, 1), text, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color(0, 0, 0, 0.9))
-			sheet.draw_string(font, at, text, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, RED if not values.is_empty() and price_red(column, kinds[row]) else WHITE)
+			sheet.draw_string(font, at, text, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, WHITE if values.is_empty() else (RED if price_red(column, kinds[row]) else GREEN))
 	# Book spells with runes bought carry a gold frame; the carried rune
 	# follows the cursor.
 	for index in mini(15, trade.pending.size()):

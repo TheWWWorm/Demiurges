@@ -105,6 +105,7 @@ func _prepare_duel(state: ELAdventureSession, defender: int) -> bool:
 		if row.is_empty(): return _fail("The encounter appearance is missing: " + actor.name)
 		var color := String(row.get("Color", ""))
 		options.players.append({"faction": color, "shape": shape, "kind": actor.type, "title": actor.get("title", actor.name), "level": actor.level, "health": actor.health, "cards": actor.cards.duplicate(), "skills": actor.get("skills", {}).duplicate()})
+		options.players[-1].main_hero = id == state.main_hero
 		# The battle shows the map hero's own template (figure, face): without
 		# it every hero fought as its faction's default hero, and heroes drawn
 		# as creatures on the map (Fire Elemental X, Walking Horror X) turned

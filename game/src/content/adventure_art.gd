@@ -9,7 +9,7 @@ func _init(source: ELAdventureMap) -> void:
 func resolve(object: Dictionary) -> Dictionary:
 	var node: Dictionary = object.node
 	if not object.get("visible", ELXml.child(node, "hidden").is_empty()): return {"hidden": true}
-	var corpse: bool = map.profile.id == "el2" and object.get("type") == "corpse"
+	var corpse: bool = map.profile.id == "el2" and (object.get("type") == "corpse" or (object.get("type") in ["hero", "monster"] and not object.get("alive", true)))
 	var shape := str(object.get("shape", ""))
 	# A campaign lord wears the shape of its level step (ELHeroLooks).
 	if object.get("group") in ["heroes", "np_heroes"]: shape = ELHeroLooks.worn(map.profile, object)

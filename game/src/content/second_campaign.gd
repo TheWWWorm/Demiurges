@@ -179,6 +179,9 @@ static func apply(state: ELAdventureSession, block: Dictionary) -> void:
 	if block.has("notebook"): ELSecondNotebook.apply(state, block.notebook)
 
 ## Chapter row ready for ELAdventureView, carrying the progress.
+static func is_interlude(data: Dictionary) -> bool:
+	return data.get("current") == FINAL and int(data.get("row", -1)) == 0
+
 static func chapter(profile: ELProfile, data: Dictionary) -> Dictionary:
 	if not valid(data) or str(data.current).is_empty(): return {}
 	var campaign := ELCampaign.new()

@@ -4,6 +4,19 @@ Versions follow [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html)
 
 ## Unreleased
 
+## 0.18.3
+
+- Fixed a crash when confirming a campaign autosave load with the keyboard from inside a mission.
+- A creature selected before Defence can block before, during and after the phase banner without being selected again. The targeting cursor follows the same readiness checks as clicks.
+- Startup and menu preview battles create no music, ambience or round-opening sound players. Real battles keep their normal audio.
+- First-game shops show affordable prices in green and resource names on hover. Empty background tooltips are suppressed. ([#182](https://github.com/TheWWWorm/Demiurges/issues/182), [#185](https://github.com/TheWWWorm/Demiurges/issues/185), [#186](https://github.com/TheWWWorm/Demiurges/issues/186))
+- Component portals can buy or return one pending rune for every spellbook copy at once, respecting cantrips and rune capacity. ([#184](https://github.com/TheWWWorm/Demiurges/issues/184))
+- Etherlords II uses the original lord death effects for the player's main hero. Computer heroes and neutral creatures keep their death animations without the ether burst. ([#183](https://github.com/TheWWWorm/Demiurges/issues/183))
+- Campaign transitions present the newly unlocked campaign's card. White starts with its interlude before showing the first mission's map. ([#187](https://github.com/TheWWWorm/Demiurges/issues/187), [#189](https://github.com/TheWWWorm/Demiurges/issues/189))
+- Kinet missions on shared maps finish their opening setup before revealing the hero and camera. ([#188](https://github.com/TheWWWorm/Demiurges/issues/188))
+- The interlude keeps the White Lord's small scripted sight radius, shows the four sacrificed heroes' bodies, advances without a victory screen, and clears terrain and scenery together at scripted fog cuts. ([#191](https://github.com/TheWWWorm/Demiurges/issues/191))
+- Scrolling the hand leaves the battle camera still, including at either end of the card list. ([#190](https://github.com/TheWWWorm/Demiurges/issues/190))
+
 ## 0.18.2
 
 - Starting sharper-art preparation from the startup prompt enables icons, interface art and 3D textures and prepares them together for both installed games.

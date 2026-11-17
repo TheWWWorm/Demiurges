@@ -125,13 +125,18 @@ func _exit_tree() -> void:
 	# playbacks were still held when the program quit (exit leak warning).
 	for voice in voices: voice.bus = &"Master"
 
-func build(data: ELProfile, arena: Dictionary, volumes: Dictionary) -> void:
+func build(data: ELProfile, arena: Dictionary, volumes: Dictionary, preview := false) -> void:
 	profile = data
 	edition = profile.id
 	random.randomize()
 	settings.merge(volumes, true)
 	terrain = String(arena.get("TerrainType", "")).to_lower()
 	load_effects()
+	# The menu's background duel has no playback nodes, even before the menu
+	# or intro has taken over. Keep the sound catalogue for battle warmup.
+	if preview:
+		apply_volumes(settings)
+		return
 	music = AudioStreamPlayer.new()
 	add_child(music)
 	music.finished.connect(_next_track)
@@ -1644,7 +1649,7 @@ func play(path: String, spatial_gain := 1.0, loop := false) -> bool:
 		return true
 	requested.append(path)
 	if requested.size() > 80: requested.pop_front()
-	if paused or silenced: return false
+	if paused or silenced or voices.is_empty(): return false
 	var stream := ELAudio.sound(profile, path)
 	if stream == null: return false
 	if loop:

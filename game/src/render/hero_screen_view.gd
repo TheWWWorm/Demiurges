@@ -298,6 +298,13 @@ func tooltip_at(point: Vector2) -> String:
 		if not offer.is_empty(): return offer
 	return ""
 
+## Resource names in the original shop's vertical price table.
+func resource_tip(point: Vector2, first: Vector2, step: float) -> String:
+	for index in ELResources.types(profile.id).size():
+		if Rect2(first + Vector2(0, step * index), Vector2(30, 26)).has_point(point):
+			return profile.text("T_RESOURCE_NAME_%d" % (index + 1)).strip_edges()
+	return ""
+
 ## The tooltip text of the artifact or global spell piece in the items row
 ## under `point`, or "".
 func item_tip_at(point: Vector2) -> String:
@@ -625,7 +632,7 @@ class Sheet extends Control:
 			view.pointer(event.position)
 
 	func _get_tooltip(at_position: Vector2) -> String:
-		return view.tooltip_at(at_position)
+		return view.tooltip_at(at_position).strip_edges()
 
 	## Godot's tooltip label never wraps, and some first-game card
 	## descriptions are one line several screens wide (the laboratory's stock

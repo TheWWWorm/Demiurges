@@ -119,6 +119,18 @@ func fill_all() -> bool:
 		if not fill(slot): return false
 	return true
 
+## Change the draft by one rune per refillable copy, including duplicate spells.
+## Returning runes only withdraws purchases made in this visit.
+func change_all(amount: int) -> bool:
+	error = _stale_problem()
+	if not error.is_empty(): return false
+	if amount not in [-1, 1]: return _fail("Invalid rune purchase.")
+	for slot in pending.size():
+		if amount > 0:
+			if can_add(slot): pending[slot] += 1
+		else: pending[slot] = maxi(0, pending[slot] - 1)
+	return true
+
 func clear(slot := -1) -> bool:
 	error = _stale_problem()
 	if not error.is_empty(): return false

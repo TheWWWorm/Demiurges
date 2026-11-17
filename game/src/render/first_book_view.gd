@@ -46,7 +46,6 @@ func build_book(owner: ELAdventureDirector, panel: ELAdventureHud, id: int) -> v
 	sheet.view = self
 	sheet.size = Vector2(660, 600)
 	sheet.mouse_filter = Control.MOUSE_FILTER_STOP
-	sheet.tooltip_text = " "
 	add_child(sheet)
 	var parts := ELFirstSpellShopView.panel_parts(hud, profile)
 	_pieces.assign(parts.pieces)

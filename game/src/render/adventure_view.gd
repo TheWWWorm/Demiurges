@@ -354,7 +354,27 @@ func build(profile: ELProfile, scenario: Dictionary, preferences: ELSettings, di
 			if not problem.is_empty(): return _fail(problem)
 			_refresh_hero_info()
 		ELFirstScenario.opening(director)
-		if profile.id == "el2": _fade_in_mission()
+		if profile.id == "el2":
+			# Wake the chapter while it is still covered: shared maps replace
+			# their authored main hero and camera on the first script step.
+			if strategic_session == null:
+				for tick in 120:
+					director.advance(director.script_tick())
+					if director.can_move() or not director.dialogue.is_empty() or director.encounter != null or not state.outcome.is_empty() or not director.error.is_empty(): break
+			if not director.error.is_empty(): return _fail(director.error)
+			target = camera_goal()
+			scroll_gliding = false
+			if following >= 0 and world.actors.has(following): target = world.actors[following].position
+			if yaw_goal != INF:
+				yaw = yaw_goal
+				yaw_goal = INF
+			if not _pending_speech.is_empty():
+				_show_second_dialogue(_pending_speech)
+				_pending_speech = {}
+			world.enable_fog(state)
+			_refresh_hero_info()
+			_update_camera()
+			_fade_in_mission()
 		# First game: every mission start is saved as T_AUTOSAVE_START_MISSION.
 		if profile.id == "el1" and not state.tutorial:
 			wait_cursor(profile)
@@ -1901,6 +1921,8 @@ func present_castle_assault(hero_id: int, player: int) -> void:
 	if audio != null: audio.effect_sound("Magic/Global%sDamage.wav" % colour)
 
 func _state_event(data: Dictionary) -> void:
+	if data.kind == "exploration_changed" and bool(data.get("clear", false)) and world != null:
+		world.snap_fog = true
 	if data.kind in ["day_changed", "site_captured", "object_changed", "object_killed", "object_created", "skill_learned", "experience_gained"]: mana_readout = {}
 	if world == null: return
 	if audio != null: audio.script_event(data)
@@ -2007,6 +2029,9 @@ func _show_result() -> void:
 		result_waiting = true
 		return
 	result_shown = true
+	if state.map.profile.id == "el2" and state.outcome == "win" and ELSecondCampaign.is_interlude(ELSecondCampaign.progress(state)):
+		_second_chapter_end.call_deferred()
+		return
 	# The second game's win/lose screen silences the map theme (music mode 1);
 	# the first game keeps it playing.
 	if state.map.profile.id == "el2" and audio != null: audio.cut_music()

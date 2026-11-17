@@ -505,6 +505,27 @@ func _enter_starts(edition: String, profile: ELProfile) -> void:
 	if FileAccess.file_exists(menu.settings_path): DirAccess.remove_absolute(menu.settings_path)
 	for i in 2: await process_frame
 
+	await _confirmation_leaves_menu(edition, profile)
+
+func _confirmation_leaves_menu(edition: String, profile: ELProfile) -> void:
+	var keys: Array[int] = [KEY_ENTER, KEY_KP_ENTER, KEY_ESCAPE]
+	if edition == "el2": keys.append(KEY_SPACE)
+	for keycode: int in keys:
+		var menu := ELFrontMenu.new()
+		root.add_child(menu)
+		if not menu.build({edition: profile}, edition):
+			check(false, edition + ": the confirmation menu builds")
+			menu.queue_free()
+			return
+		menu.duel_ui.show_message("Confirm", func(): root.remove_child(menu))
+		var key := InputEventKey.new()
+		key.keycode = keycode
+		key.pressed = true
+		root.push_input(key, true)
+		check(not menu.is_inside_tree() and root.is_input_handled(), "%s: %s consumes a confirmation that removes its menu" % [edition, OS.get_keycode_string(keycode)])
+		menu.queue_free()
+		await process_frame
+
 # --- #127 the load list opens on the last used save --------------------------------
 
 func _last_save(profile: ELProfile) -> void:
@@ -831,11 +852,12 @@ func _battle_reports(edition: String) -> void:
 	# #140
 	if edition == "el2":
 		_second_duel_presentation(view, duel)
+		duel.setup.players[own].main_hero = true
 		audio.played.clear()
-		var death := audio.effect_sound("RedDeath")
+		var death := audio.effect_sound("RedLordDeath")
 		var before: int = view.effects.active_count()
-		view._show_ending({"kind": "victory", "side": own})
-		check(view.effects.active_count() > before and (death.is_empty() or audio.played.has(death)), "el2 #140: a fallen hero goes up in its colour's death effect (RedDeath) with its sound")
+		view._show_ending({"kind": "victory", "side": 1 - own})
+		check(view.effects.active_count() > before and (death.is_empty() or audio.played.has(death)), "el2 #140: a fallen hero uses its lord death effect (RedLordDeath) with its sound")
 	view.queue_free()
 	await _wait(2)
 

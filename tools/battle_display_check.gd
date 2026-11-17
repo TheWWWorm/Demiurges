@@ -67,6 +67,7 @@ func _edition(edition: String) -> void:
 	await _gazed_blocker(view, edition)
 	await _spell_stats(view, edition)
 	await _skip(view, edition)
+	await _defence_selection(view, edition)
 	view.queue_free()
 	await process_frame
 	await process_frame
@@ -128,6 +129,41 @@ func _attack_turn(view: Node, side: int) -> void:
 		if duel.attacker == side and duel.phase == ELDuel.Phase.ATTACK: break
 		duel.end_phase()
 		await _idle(view)
+
+func _defence_selection(view: Node, edition: String) -> void:
+	await _clear(view)
+	await _attack_turn(view, 1)
+	var duel: ELDuel = view.duel
+	var card := _card(view, ["ORSH"])
+	var attacker := await _creature(view, 1, card, 3, 3)
+	var blocker := await _creature(view, 0, card, 3, 3)
+	if attacker < 2 or blocker < 2 or not duel.toggle_attack(attacker):
+		check(false, "%s: attacker and blocker ready (%s)" % [edition, duel.error])
+		return
+	view.demo = false
+	view.mode_select.select(0)
+	view.settings.values.combat_phases = true
+	view._target(blocker)
+	check(view.selected_creature == blocker, "%s: select the blocker during the opponent's attack" % edition)
+	# Keep the phase announcement queued behind the end of a cast gesture.
+	view._cast_until = view.elapsed + 0.25
+	if not duel.end_phase():
+		check(false, "%s: the opponent's attack advances to defence" % edition)
+		return
+	check(view._cast_queue.any(func(event: Dictionary) -> bool: return event.get("phase") == "defence"), "%s: the defence banner is still queued" % edition)
+	view.combat_hover = attacker
+	view._update_cursor()
+	check(view.cursor_name == "attack", "%s: the sword shows over a legal attacker at the start of defence" % edition)
+	view._target(attacker)
+	check(duel.blocks.get(blocker, -1) == attacker, "%s: click assigns the preselected blocker before the phase banner" % edition)
+	await _idle(view)
+	view._target(attacker)
+	check(view.selected_creature == blocker and not duel.blocks.has(blocker), "%s: click withdraws the same blocker after the phase announcement" % edition)
+	for i in 180:
+		if view.notices.banner < 0: break
+		await process_frame
+	view._target(attacker)
+	check(duel.blocks.get(blocker, -1) == attacker, "%s: click reassigns the same blocker after the banner disappears" % edition)
 
 func _plane(view: Node, id: int) -> bool:
 	if view.has_method("shown_plane"): return view.call("shown_plane", id)

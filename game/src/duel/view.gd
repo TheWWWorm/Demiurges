@@ -395,7 +395,9 @@ func _ready() -> void:
 		status.text = "Choose a game folder to begin. Original content is required."
 		if get_tree().current_scene == self and not demo and capture_path.is_empty(): _content_menu.call_deferred()
 		return
-	_start(launch_profile if profiles.has(launch_profile) else String(profiles.keys()[0]))
+	var launched := get_tree().current_scene == self
+	var preview := launched and not demo and capture_path.is_empty()
+	_start(launch_profile if profiles.has(launch_profile) else String(profiles.keys()[0]), {}, null, -1, preview)
 	if not _debug_options.is_empty(): _open_debug_options.call_deferred()
 	if not _debug_puzzle.is_empty(): _open_debug_puzzle.call_deferred()
 	if not _campaign_probe.is_empty():
@@ -407,7 +409,6 @@ func _ready() -> void:
 	# edition's start-up movies; scripted checks that instantiate this scene
 	# keep the direct duel setup.
 	if demo or not capture_path.is_empty(): return
-	var launched := get_tree().current_scene == self
 	if launched and ELHardwareCheck.pending(settings): _check_hardware()
 	if launched: _offer_crash_report.call_deferred()
 	if launched: _offer_sharper_art.call_deferred()
@@ -598,7 +599,7 @@ var _encounter_start: Dictionary = {}
 
 ## `battle_seed` < 0: a new seed each battle, except in --demo (and the
 ## checks that run it), which keep the fixed one so a battle can be repeated.
-func _start(edition: String, options: Dictionary = {}, restored: ELDuel = null, battle_seed := -1) -> void:
+func _start(edition: String, options: Dictionary = {}, restored: ELDuel = null, battle_seed := -1, preview := false) -> void:
 	if battle_seed < 0: battle_seed = 212 if demo else randi() & 0x7fffffff
 	if _campaign_battle() != null and restored != _campaign_battle():
 		_notice("Finish or surrender the campaign battle first.")
@@ -682,7 +683,7 @@ func _start(edition: String, options: Dictionary = {}, restored: ELDuel = null, 
 	_ending_waiting = {}
 	battle_audio = ELBattleAudio.new()
 	stage.add_child(battle_audio)
-	battle_audio.build(profile, arena.definition, settings.values)
+	battle_audio.build(profile, arena.definition, settings.values, preview)
 	effects.set_arena(arena, battle_audio.play)
 	if front_menu != null and front_menu.music_owned(): _pause_battle_audio(true)
 	camera = Camera3D.new()
@@ -790,8 +791,9 @@ func _start(edition: String, options: Dictionary = {}, restored: ELDuel = null, 
 	# set up; a loaded or replayed battle does not repeat it, and the menu's
 	# background battle is silent (its audio is paused).
 	if (restored == null or kind == "campaign") and duel.turn_serial <= 1 and duel.phase != ELDuel.Phase.FINISHED and not duel.has_meta("start_sound"):
-		duel.set_meta("start_sound", true)
-		battle_audio.play(BATTLE_START_SOUND)
+		if not preview:
+			duel.set_meta("start_sound", true)
+			battle_audio.play(BATTLE_START_SOUND)
 		_opening_script_summons()
 	# EL1 resolves global spells before models or the event listener
 	# exist. Replay their original battle-opening effects after the figures
@@ -993,6 +995,13 @@ func _process(delta: float) -> void:
 		ELAudio.quiet_quit(get_tree())
 
 func _input(event: InputEvent) -> void:
+	# ScrollContainer passes a wheel notch on at either end of its range.
+	# The hand owns these notches even there, so none can reach arena zoom.
+	if event is InputEventMouseButton and event.pressed and event.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN, MOUSE_BUTTON_WHEEL_LEFT, MOUSE_BUTTON_WHEEL_RIGHT] \
+			and not _overlay_open() and card_scroll != null and card_scroll.is_visible_in_tree() and card_scroll.get_global_rect().has_point(event.position):
+		rail._step_hand(1 if event.button_index in [MOUSE_BUTTON_WHEEL_DOWN, MOUSE_BUTTON_WHEEL_RIGHT] else -1)
+		get_viewport().set_input_as_handled()
+		return
 	if _network_battle_chat != null and _network_battle_chat.visible and event is InputEventKey:
 		if event.keycode == KEY_ESCAPE:
 			if event.pressed and not event.echo: _set_network_chat_open(false)
@@ -1170,8 +1179,9 @@ func _character_at(at: Vector2) -> int:
 func _update_cursor() -> void:
 	if profile == null or (campaign_view != null and campaign_view.visible): return
 	var wanted := "default"
-	if duel != null and not _overlay_open() and _human_turn():
-		wanted = ELCursors.combat(duel, combat_hover, ELCursors.combat_pending(duel, selection, ability_selection), selected_creature)
+	if _human_turn() and _target_ready(combat_hover):
+		var selected := selected_creature if duel.phase == ELDuel.Phase.DEFENCE or selection_phase == _phase_mark() else -1
+		wanted = ELCursors.combat(duel, combat_hover, ELCursors.combat_pending(duel, selection, ability_selection), selected)
 	# The autochess screen (an Etherlords II mode whichever game is chosen)
 	# asks for its own: the hand over movable creatures.
 	var owner := profile
@@ -1287,12 +1297,7 @@ func _target(id: int) -> void:
 			inspect_graveyard = false
 			_refresh()
 		return
-	# Selected spells and abilities validate against the settled rules.
-	# Their cues enter the same presentation queue as the phase change.
-	if selection < 0 and ability_selection.is_empty() and (_display_lagging() or not _hits_waiting.is_empty()): return
-	# A creature still waiting for its arrival (a cast or script summon) is
-	# not on screen yet.
-	if id >= 2 and models.has(id) and bool(models[id].get_meta("arriving", false)): return
+	if not _target_ready(id): return
 	if not ability_selection.is_empty():
 		if ability_selection.target == "enchantment":
 			selected_creature = id
@@ -1391,7 +1396,7 @@ func _target(id: int) -> void:
 			_hint("Spell cast.")
 		else:
 			_hint(duel.error)
-	elif duel.phase == ELDuel.Phase.DEFENCE and selected_creature >= 2 and selection_phase == _phase_mark() and duel.creatures.has(selected_creature) and duel.creatures[selected_creature].owner == duel.active_side() and duel.attacks.has(id):
+	elif duel.phase == ELDuel.Phase.DEFENCE and duel.creatures.has(selected_creature) and duel.creatures[selected_creature].owner == duel.active_side() and duel.attacks.has(id):
 		if not duel.assign_block(selected_creature, id): _hint(duel.error)
 	elif duel.phase == ELDuel.Phase.ATTACK and id == 1 - duel.attacker and selected_creature >= 2 and selection_phase == _phase_mark():
 		if not duel.toggle_attack(selected_creature): _hint(duel.error)
@@ -1401,9 +1406,13 @@ func _target(id: int) -> void:
 		inspect_graveyard = false
 	_refresh()
 
-## The phase a click selection was made in ("round:attacker:phase"): a
-## creature still selected from an earlier phase stays shown but is not
-## taken as the blocker or attacker of this one.
+## The cursor and clicks share the same readiness checks.
+func _target_ready(id: int) -> bool:
+	# Selected spells and abilities validate against the settled rules.
+	if selection < 0 and ability_selection.is_empty() and (_display_lagging() or not _hits_waiting.is_empty()): return false
+	return id < 2 or not models.has(id) or not bool(models[id].get_meta("arriving", false))
+
+## Only attack orders require a selection made in the current phase.
 func _phase_mark() -> String:
 	return "%d:%d:%d" % [duel.round_number, duel.attacker, duel.phase] if duel != null else ""
 
@@ -2171,9 +2180,8 @@ func _on_duel_event(data: Dictionary) -> void:
 	if data.get("kind") == "phase":
 		# Clear input as the rules change phase. The queued phase notice may
 		# play after the player has already picked a spell in the new phase.
-		# The selected creature or hero stays selected (a figure that left
-		# play is dropped in _refresh); only a selection made in this phase
-		# assigns a block or an attack (selection_phase).
+		# Keep the selected figure for defence; _refresh drops figures that
+		# left play. Attack orders still require a selection in this phase.
 		selection = -1
 		selection_power = 0
 		exchange_target = -1
@@ -3095,12 +3103,17 @@ func _show_ending(data: Dictionary) -> void:
 	_hint("Both heroes have fallen. The duel is a draw.")
 	_log("The duel ends in a draw.")
 
-## Second game: a fallen hero goes up in the burst of its own colour's
-## death effect (RedDeath, BlackDeath, BlueDeath, GreenDeath of Effects.xml,
-## with its sound), over its death clip (player report #140).
+## Only a campaign's main hero has the lord's ether burst. Other heroes and
+## neutral creatures keep their death animation without a summoning effect.
 func hero_death_effect_name(side: int) -> String:
 	if profile == null or profile.id != "el2" or duel == null or side < 0 or side > 1: return ""
-	var name := "%sDeath" % String(duel.heroes[side].get("faction", "")).capitalize()
+	if not _local_side(side): return ""
+	if duel.heroes[side].get("kind", "hero") != "hero": return ""
+	if bool(duel.setup.get("adventure", false)):
+		var players: Array = duel.setup.get("players", [])
+		var was_main := str(duel.heroes[side].get("shape", "")).contains("MainHero")
+		if players.size() != 2 or not bool(players[side].get("main_hero", was_main)): return ""
+	var name := "%sLordDeath" % String(duel.heroes[side].get("faction", "")).capitalize()
 	return name if is_instance_valid(effects) and not effects.definition(name).is_empty() else ""
 
 func _hero_death_effect(side: int) -> void:
@@ -5869,6 +5882,7 @@ func _build_ui() -> void:
 	hand_frames.draw.connect(_draw_hand_frames)
 	hud_root.add_child(hand_frames)
 	card_scroll = ScrollContainer.new()
+	card_scroll.mouse_force_pass_scroll_events = false
 	card_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	hud_root.add_child(card_scroll)
 	card_scroll.get_h_scroll_bar().value_changed.connect(func(_value: float): hand_frames.queue_redraw())
@@ -8710,7 +8724,7 @@ func _restart_after_content_change(edition := "") -> void:
 		front_menu = null
 	if profile_select != null:
 		for i in 2: profile_select.set_item_disabled(i, not profiles.has("el1" if i == 0 else "el2"))
-	_start(edition)
+	_start(edition, {}, null, -1, true)
 	_remember_edition()
 	if not _show_front_menu(): _open_setup()
 
@@ -8782,7 +8796,7 @@ func _show_front_menu() -> bool:
 		front_menu.quit_requested.connect(func(): ELAudio.quiet_quit(get_tree()))
 		front_menu.edition_requested.connect(func(chosen: String):
 			demo = false
-			_start(chosen)
+			_start(chosen, {}, null, -1, true)
 			_remember_edition())
 		front_menu.content_requested.connect(func(chosen: String): _open_content_setup(chosen))
 	elif front_menu.edition != edition: front_menu.use_edition(edition)

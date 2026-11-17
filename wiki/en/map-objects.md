@@ -53,6 +53,7 @@ Shops come in three kinds and three ranks. A hero who opens a shop captures it f
 - **Labs and summoner's buildings** sell only spells of the hero's colour, from the list the map gives the shop. That list has three tiers: an unupgraded shop sells the first, each upgrade adds the next. A bought spell takes a place in the spell book. The price is the spell's cost; for every copy of that spell already in the book it rises: ×2 for the second copy, ×3, ×5, ×10, ×20 and so on.
 - **Portals** sell runes for the spells in the hero's book (cantrips need none). A rune costs the spell's rune price times a factor: in a Stone Portal ×1 for common, ×5 for rare and ×25 for unique spells; in a Granite Portal ×2, ×1 and ×5; in an Obsidian Portal ×4, ×2 and ×1. An upgraded portal sells 15% cheaper, and 40% cheaper after the second upgrade.
 - The **Bargain** skill lowers both kinds of prices. See [Heroes and levels](heroes) and [Runes and artifacts](runes-artifacts).
+- In a portal, **Buy one each** adds one rune to every spellbook copy that can hold another. **Return one each** withdraws one pending rune from each copy. Cantrips and full copies are skipped; owned runes are kept. The purchase is paid only when you accept it. Affordable shop prices are green, unaffordable prices red; hover a resource icon to see its name.
 
 ## Learning and strength (Etherlords)
 
