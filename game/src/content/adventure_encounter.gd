@@ -41,6 +41,8 @@ const SECOND_TERRAIN_ARENAS := ["Black", "Green", "Blue", "Red", "Ether"]
 ## panel and spell buttons are always the player's) while hooks, events, the
 ## arena and the first move keep the attacker first.
 var swapped := false
+## A duel between a computer hero and a neutral monster on the map.
+var map_ai_duel := false
 
 ## The attacking actor (the first of the queued battle pair).
 func attacker() -> int:
@@ -92,7 +94,14 @@ static func second_result(state: ELAdventureSession, first: int, second: int) ->
 	var b := int(state.object(second).get("level", 0))
 	return first if a > b else (second if b > a else -1)
 
-func _prepare_duel(state: ELAdventureSession, defender: int) -> bool:
+func prepare_map_ai_duel(session: ELAdventureSession, first: int, second: int, seed_value: int) -> bool:
+	state = session
+	hero_id = first
+	opponent_id = second
+	map_ai_duel = true
+	return _prepare_duel(session, second, seed_value)
+
+func _prepare_duel(state: ELAdventureSession, defender: int, seed_value := -1) -> bool:
 	var options := {"adventure": true, "arena": "Green.001", "players": []}
 	var profile := state.map.profile
 	for id: int in [hero_id, opponent_id]:
@@ -154,7 +163,7 @@ func _prepare_duel(state: ELAdventureSession, defender: int) -> bool:
 		if owners[0] >= 1 and owners[1] >= 1 and state.players.has(owners[0]) and state.players.has(owners[1]):
 			for side in 2: options.players[side].global_effects = ELGlobalSpells.battle_effects(state, owners[side])
 		options.arena = FIRST_ARENAS[4] if ethereal_defender >= 0 else first_arena(state, hero_id, opponent_id, defender if defender >= 0 else opponent_id)
-		var levels := first_levels(state, hero_id, opponent_id)
+		var levels := first_levels(state, hero_id, opponent_id, not map_ai_duel)
 		for side in 2:
 			# The battle tooltip names the hero's own level, not the one the
 			# difficulty and a fort give it for this battle (player report #110).
@@ -179,7 +188,7 @@ func _prepare_duel(state: ELAdventureSession, defender: int) -> bool:
 		var scripts := ELBattleScripts.select(state, [hero_id, opponent_id])
 		if not scripts.is_empty(): options.scripts = scripts
 	var scripted_arena := ""
-	if state.vm != null:
+	if state.vm != null and not map_ai_duel:
 		var chosen := state.vm.invoke("Hook_OnGetArena", [float(attacker()), float(target())])
 		if not state.vm.error.is_empty(): return _fail(state.vm.error)
 		if not chosen.is_empty() and chosen[0] is String: scripted_arena = chosen[0]
@@ -187,7 +196,7 @@ func _prepare_duel(state: ELAdventureSession, defender: int) -> bool:
 	elif profile.id == "el2": options.arena = second_arena(state, attacker(), target(), randi())
 	# Both original battle constructors take a fresh rand() value. Reloading
 	# a map before combat creates a new battle, while an active battle restores its state.
-	var battle_seed := randi() & 0x7fff
+	var battle_seed := (randi() & 0x7fff) if seed_value < 0 else seed_value
 	var colours: Array[String] = [String(options.players[0].faction), String(options.players[1].faction)]
 	if swapped: colours.reverse()
 	options.first_side = first_side(state, attacker(), target(), colours, battle_seed) ^ (1 if swapped else 0)
@@ -295,13 +304,13 @@ static func coin_flip(battle_seed: int) -> int:
 ## The levels come back in side order. The local side is the one the local
 ## player owns, whichever side it fights on; with neither (a guest's battle
 ## prepared by the host), the first side, where the battle seats the human.
-static func first_levels(state: ELAdventureSession, first: int, second: int) -> Array[int]:
+static func first_levels(state: ELAdventureSession, first: int, second: int, adjust_difficulty := true) -> Array[int]:
 	var ids: Array[int] = [first, second]
 	var levels: Array[int] = [int(state.object(first).level), int(state.object(second).level)]
 	var local := 1 if int(state.object(second).get("owner", -1)) == state.current_player and int(state.object(first).get("owner", -1)) != state.current_player else 0
 	var change: Array = [[2, -1], [1, 0], [0, 0], [0, 1], [0, 2]][clampi(state.difficulty, 0, 4)]
 	for side in 2:
-		levels[side] += int(change[0 if side == local else 1])
+		if adjust_difficulty: levels[side] += int(change[0 if side == local else 1])
 		if int(ELForts.garrison_of(state, state.object(ids[side])).get("fort_level", 0)) == ELForts.MAX_LEVEL: levels[side] += 1
 		levels[side] = clampi(levels[side], 1, 20)
 	return levels
@@ -329,7 +338,7 @@ func finish() -> bool:
 				if entry.get("kind") == "spec" and int(entry.side) == 1 - main_side:
 					state.set_variable("IsNewSpecialization", 1.0)
 					state.set_variable("NewSpecializationType", str(entry.spec))
-	if state.vm != null:
+	if state.vm != null and not map_ai_duel:
 		var finishing := state.vm.invoke("Hook_OnBattleFinishing", [float(attacker()), float(target()), float(winner_id)])
 		if not state.vm.error.is_empty(): return _fail(state.vm.error)
 		# The EL2 original reads a numeric zero as a veto, as in chapter 54's retry.
@@ -344,20 +353,14 @@ func finish() -> bool:
 			var entries: Array = battle.heroes[side].get("artifacts", [])
 			ELSecondArtifacts.write_back(actor, entries, entries.size() - (1 if _second_garrison_rod(state, actor) else 0))
 	if state.map.profile.id == "el1" and scripted_winner < 0:
-		for side in 2:
-			var actor := state.object(hero_id if side == 0 else opponent_id)
-			if actor.type == "hero":
-				actor.rune_uses = battle.heroes[side].spell_uses.duplicate()
-				var players: Variant = battle.setup.get("players", [])
-				var before: Variant = players[side].get("rune_uses", []) if players is Array and players.size() == 2 and players[side] is Dictionary else []
-				ELRunes.return_cantrips(actor, before if before is Array else [])
+		write_back_runes()
 	# After the runes are written back: Retaliation takes runes from the book
 	# the battle left, and the attacker rewards read the finished duel.
 	if ethereal_defender >= 0: ELGlobalSpells.ethereal_result(state, ethereal_defender, winner_id, opponent_id if ethereal_defender == hero_id else hero_id, ELGlobalSpells.battle_report(battle) if scripted_winner < 0 else {})
 	if kill_loser:
 		if winner_id >= 0:
 			var reward := ELHeroProgression.battle_reward(state.map.profile, int(state.object(defeated[0]).get("level", 1)))
-			if state.variables != null:
+			if state.variables != null and not map_ai_duel:
 				var additional: Variant = state.variables.values.get("AdditionalExperience")
 				if typeof(additional) in [TYPE_INT, TYPE_FLOAT]: reward += int(additional)
 				state.variables.values.erase("AdditionalExperience")
@@ -393,6 +396,16 @@ func finish() -> bool:
 	winner = winner_id
 	state.event.emit({"kind": "battle_finished", "hero": attacker(), "opponent": target(), "winner": winner_id})
 	return true
+
+## Spells cast during a duel use their map charges even if both sides retreat.
+func write_back_runes() -> void:
+	for side in 2:
+		var actor := state.object(hero_id if side == 0 else opponent_id)
+		if actor.type != "hero": continue
+		actor.rune_uses = battle.heroes[side].spell_uses.duplicate()
+		var players: Variant = battle.setup.get("players", [])
+		var before: Variant = players[side].get("rune_uses", []) if players is Array and players.size() == 2 and players[side] is Dictionary else []
+		ELRunes.return_cantrips(actor, before if before is Array else [])
 
 ## Whether this prepared battle may be declined: in the second game every
 ## local battle (PreCombatCancel); in the first game, a remake addition, a

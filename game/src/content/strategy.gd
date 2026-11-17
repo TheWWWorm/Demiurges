@@ -100,7 +100,8 @@ static func order_path(director: ELAdventureDirector, actor: Dictionary) -> Arra
 	var closed := _close_unseen(director, actor)
 	if not rules.is_empty():
 		closed.append_array(_close_unknown(director, int(rules.get("known", -1))))
-		if rules.get("guards", false): closed.append_array(ELFirstAI.close_guards(director, actor, int(rules.get("target", -1))))
+		if rules.get("guards", false) or ELFirstAIEconomy.applies(director):
+			closed.append_array(ELFirstAI.close_guards(director, actor, int(rules.get("target", -1)), not rules.get("guards", false)))
 	var path := director.grid.approach(from, target) if not target.is_empty() else director.grid.path(from, Vector2i(order.destination[0], order.destination[1]))
 	for point: Vector2i in closed: director.grid._update_cell(point)
 	return path
@@ -295,7 +296,9 @@ static func advance(director: ELAdventureDirector) -> void:
 				director.use_object(second.uid, first.uid, second.uid)
 			elif director.is_strategy_human(first.owner):
 				director.use_object(first.uid, second.uid, second.uid)
-			elif not ELFirstAI.resolve(director, first, second, forfeit_winner): return
+			else:
+				var plays_duel := forfeit_winner < 0 and ELFirstAI.plays_monster_duel(director, first, second)
+				if not ELFirstAI.resolve(director, first, second, forfeit_winner) or plays_duel: return
 			continue
 		var actor := state.object(turn.actors[turn.index])
 		turn.index += 1

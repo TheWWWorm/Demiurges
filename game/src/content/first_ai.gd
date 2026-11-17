@@ -1,11 +1,8 @@
 class_name ELFirstAI
 extends RefCounted
-## First-game strategic opponents. Battles between computer and neutral sides
-## are decided at once, without a duel and without any message to the local
-## player: the loser simply leaves the map. Computer heroes gain experience and
-## levels (with their health) but never spend skill picks: in both games only
-## the human's level-up dialog chooses skills, so they keep their authored ones.
-## The remake option "smarter computer players" adds skills, shopping and
+## First-game strategic opponents. Original map AI settles non-local battles
+## without a duel. Smarter and Living world play hero-versus-monster duels
+## off screen. The Smarter map AI adds skill picks, shopping and
 ## global spells (ELFirstAIEconomy) and plans with ELFirstAIPlanner.
 
 ## Winner of a strategic battle that the local player takes no part in. The
@@ -34,6 +31,8 @@ static func winner(state: ELAdventureSession, first: Dictionary, second: Diction
 
 ## Decides the battle and applies its result. Returns false on a script failure.
 static func resolve(director: ELAdventureDirector, first: Dictionary, second: Dictionary, forfeit_winner := -1) -> bool:
+	if forfeit_winner < 0 and plays_monster_duel(director, first, second):
+		return _fight_monster(director, first, second)
 	var state := director.state
 	var victor := state.object(forfeit_winner) if forfeit_winner >= 0 else winner(state, first, second, director.battle_estimate)
 	var loser := second if victor == first else first
@@ -45,6 +44,49 @@ static func resolve(director: ELAdventureDirector, first: Dictionary, second: Di
 	if not state.hook("Hook_OnHeroKill", [float(loser.uid)]): return director._fail(state.error)
 	ELFirstScenario.evaluate(director, {"hero": first.uid, "opponent": second.uid, "winner": victor.uid})
 	return true
+
+static func plays_monster_duel(director: ELAdventureDirector, first: Dictionary, second: Dictionary) -> bool:
+	if not ELFirstAIEconomy.applies(director): return false
+	var first_is_hero: bool = first.get("type") == "hero"
+	var hero := first if first_is_hero else second
+	var monster := second if first_is_hero else first
+	var owner := int(hero.get("owner", 0))
+	return hero.get("type") == "hero" and owner > 0 and director.state.players.has(owner) and not director.is_strategy_human(owner) \
+		and monster.get("type") == "monster" and int(monster.get("owner", 0)) <= 0
+
+# Leave time for the map to advance even if both books run out of attacks.
+const MONSTER_DUEL_STEPS := 512
+const MIN_MONSTER_ROUTE_WIN_CHANCE := 0.35
+
+static func _fight_monster(director: ELAdventureDirector, first: Dictionary, second: Dictionary) -> bool:
+	var state := director.state
+	var fight := ELAdventureEncounter.new()
+	var hero := first if first.type == "hero" else second
+	var monster := second if first.type == "hero" else first
+	if not fight.prepare_map_ai_duel(state, int(first.uid), int(second.uid), ELAdditionalBuildings._random(state)):
+		push_warning("Computer hero retreated from %s: %s" % [monster.name, fight.error])
+		_retreat_from_monster(state, hero, monster)
+		return true
+	for i in MONSTER_DUEL_STEPS:
+		if fight.battle.phase == ELDuel.Phase.FINISHED: break
+		ELPracticeAI.heuristic_step(fight.battle)
+	if fight.battle.phase != ELDuel.Phase.FINISHED:
+		fight.write_back_runes()
+		_retreat_from_monster(state, hero, monster)
+		return true
+	if not fight.finish(): return director._fail(fight.error)
+	ELFirstScenario.evaluate(director, {"hero": first.uid, "opponent": second.uid, "winner": fight.winner})
+	return true
+
+static func _retreat_from_monster(state: ELAdventureSession, hero: Dictionary, monster: Dictionary) -> void:
+	hero.strategy_order = {}
+	var ai := data(state, int(hero.owner))
+	var retry: Dictionary = ai.get_or_add("retry", {})
+	var dungeon := int(monster.get("dungeon", -1))
+	var task := {"kind": "building", "target": dungeon} if dungeon >= 0 else {"kind": "monster", "target": int(monster.uid)}
+	retry[_key(task, int(hero.uid)) + "@" + str(hero.uid)] = int(state.day) + RETRY_DAYS
+	var assigned: Array = ai.assigned
+	ai.assigned = assigned.filter(func(pair: Array) -> bool: return int(pair[0]) != int(hero.uid))
 
 ## A hero who defeats another hero takes the battle artifacts it carried.
 static func take_artifacts(victor: Dictionary, loser: Dictionary) -> Array:
@@ -633,15 +675,28 @@ static func _route_cost(director: ELAdventureDirector, hero: Dictionary, item: D
 ## The route of the last _route_cost or _fought_cost (empty: none found).
 static var last_path: Array[Vector2i] = []
 
-## Closes the cells of hostile guard areas other than `target`'s own (and the
-## hero's tile) in the land graph; reopen them with grid._update_cell.
-static func close_guards(director: ELAdventureDirector, hero: Dictionary, target: int) -> Array[Vector2i]:
+## Close hostile guard cells, or only the cells of neutral monsters the hero
+## is unlikely to beat. The destination guard and the hero's tile stay open.
+## Reopen the returned cells with grid._update_cell.
+static func close_guards(director: ELAdventureDirector, hero: Dictionary, target: int, dangerous_monsters_only := false) -> Array[Vector2i]:
 	var grid := director.grid
 	var from := Vector2i(hero.x, hero.y)
 	var closed: Array[Vector2i] = []
+	var dangerous := {}
 	for entry: Array in _hostile_cells(director, hero):
 		var point: Vector2i = entry[0]
 		if point == from or grid.land.is_point_solid(point) or entry[1] == [target]: continue
+		if dangerous_monsters_only:
+			var blocked := false
+			for id: int in entry[1]:
+				if id == target: continue
+				if not dangerous.has(id):
+					var mob := director.state.object(id)
+					dangerous[id] = plays_monster_duel(director, hero, mob) and ELFirstAIPlanner.win_chance(director, hero, mob) < MIN_MONSTER_ROUTE_WIN_CHANCE
+				if dangerous[id]:
+					blocked = true
+					break
+			if not blocked: continue
 		grid.land.set_point_solid(point, true)
 		closed.append(point)
 	return closed

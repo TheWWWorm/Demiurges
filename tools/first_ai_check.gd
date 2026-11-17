@@ -81,7 +81,7 @@ func _run() -> void:
 	_finish()
 
 const CASES := ["a_castle", "a_mine", "b_teacher", "b_gnome", "b_spawn", "c_blocked", "d_unexplored", "d_guarded",
-	"e_unseen", "e_unreachable", "f_upgrade", "f_refill", "f_portal", "h_meteor", "j_free", "k_holds", "k_defend", "m_roles", "n_joint", "p_resolver", "q_lookahead",
+	"e_unseen", "e_unreachable", "f_upgrade", "f_refill", "f_portal", "h_meteor", "j_free", "k_holds", "k_defend", "m_roles", "n_joint", "p_resolver", "p_monsters", "q_lookahead",
 	"s_saved", "t_patrol", "t_raid", "t_escort", "t_retreat", "t_doctrine", "t_story", "t_off",
 	"v_cast", "v_income", "v_runes", "v_portal", "v_upkeep", "v_mine",
 	"w_pickup", "w_commander", "w_promotion", "w_hidden", "w_pile", "w_peace", "w_scouts", "w_tinkerer", "w_siege", "w_scrolls", "w_unfound", "w_human",
@@ -634,9 +634,53 @@ func _case_p_resolver() -> void:
 	for trial in trials:
 		if (ELFirstAI as Script).call("winner", state, strong, weak, true) == strong: estimated += 1
 	check(estimated > trials * 0.8, "P: with the estimate a far stronger side wins nearly always (%d of %d)" % [estimated, trials])
+	director.smart_ai = false
 	check(float(planner.call("win_chance", director, strong, neutral)) == 1.0, "P: the planner's risk follows the original rule while the switch is off")
 	director.set("battle_estimate", true)
 	check(float(planner.call("win_chance", director, strong, neutral)) < 1.0, "P: and the estimate while it is on")
+
+func _case_p_monsters() -> void:
+	if not smart: return
+	var director := _world()
+	var state := director.state
+	var hero := _hero(director, 2, 30, 90, 1)
+	var mob := _place(director, "monster", 34, 90, {"owner": 0, "level": 14, "health": 400})
+	hero.health = 1
+	director.interception.rebuild(state, director.grid)
+	var odds := ELFirstAIPlanner.win_chance(director, hero, mob)
+	var task := {"kind": "monster", "target": int(mob.uid)}
+	check(odds < 0.1 and not ELFirstAIPlanner.legal(director, hero, 0, task), "P: the planner leaves an overwhelming monster (%.3f)" % odds)
+	var lair := _place(director, "Teacher", 30, 79, {"name": "Dungeon1", "monster": int(mob.uid)})
+	check(ELAdditionalBuildings.visit_problem(state, hero, lair).is_empty(), "P: the lair is open for a visit")
+	check(not ELFirstAIPlanner.legal(director, hero, 0, {"kind": "building", "target": int(lair.uid)}), "P: the planner assesses the lair's monster before visiting")
+
+	hero.strategy_order = {"destination": [33, 90], "use": -1, "route": ELFirstAI.route_rules(director, 2, false)}
+	var guarded: Array = director.interception.zones[int(mob.uid)].cells
+	director.smart_ai = false
+	var original := ELStrategy.order_path(director, hero)
+	director.smart_ai = true
+	check(not original.is_empty() and guarded.has(original[-1]), "P: the original route can end inside the guard area")
+	check(ELStrategy.order_path(director, hero).is_empty(), "P: the smarter route refuses to end in the dangerous guard area")
+	hero.strategy_order.destination = [38, 90]
+	var smarter := ELStrategy.order_path(director, hero)
+	check(not smarter.is_empty() and not smarter.any(func(cell: Vector2i) -> bool: return guarded.has(cell)), "P: the smarter route goes around the guard")
+
+	var results := []
+	state.event.connect(func(event: Dictionary) -> void:
+		if event.kind == "battle_finished": results.append(event.winner))
+	director.strategy = {"phase": "combat", "combats": [[mob.uid, hero.uid]], "actors": [], "index": 0, "free": "night", "legacy_orders": false}
+	ELStrategy.advance(director)
+	check(results == [mob.uid] and mob.alive and not hero.alive, "P: a neutral monster can win an off-screen duel")
+	check(director.encounter == null and director.error.is_empty(), "P: the duel neither opens an encounter screen nor stops the turn")
+
+	var winner := _hero(director, 2, 36, 90, 10)
+	mob.health = 1
+	var before := int(winner.experience)
+	var winning_odds := ELFirstAIPlanner.win_chance(director, winner, mob)
+	check(winning_odds > odds, "P: a stronger hero has better odds (%.3f)" % winning_odds)
+	director.strategy.combats.append([winner.uid, mob.uid])
+	ELStrategy.advance(director)
+	check(results == [mob.uid, winner.uid] and winner.alive and not mob.alive and int(winner.experience) > before, "P: a computer winner gets the actual duel reward")
 
 # --- Q: short strategic lookahead --------------------------------------------
 
@@ -646,12 +690,13 @@ func _case_p_resolver() -> void:
 func _q_world() -> Array:
 	var director := _world()
 	var lead := _hero(director, 2, 30, 60, 5)
+	lead.health = 26
 	var mine := _place(director, "mine", 50, 60, {"owner": -1})
 	var gap := Vector2i(int(mine.x) - 2, int(mine.y))
 	_pen(director, mine, 2, [gap])
 	# The gap is one cell wide (walls take the terrain corners beside it);
 	# the guard stands two cells out, its area covering the cell before it.
-	var guard := _place(director, "monster", gap.x - 2, gap.y, {"owner": 0, "level": 1})
+	var guard := _place(director, "monster", gap.x - 2, gap.y, {"owner": 0, "level": 1, "health": 4, "cards": ["CAFG"], "rune_uses": [4]})
 	var teacher := _place(director, "Teacher", 12, 60)
 	director.interception.rebuild(director.state, director.grid)
 	return [director, lead, mine, guard, teacher]
@@ -1797,7 +1842,7 @@ func _case_y_route() -> void:
 	var director := _world()
 	var state := director.state
 	var hero := _hero(director, 2, 30, 90, 3)
-	var creature := _place(director, "monster", 42, 90, {"owner": 0, "level": 1})
+	var creature := _place(director, "monster", 42, 90, {"owner": 0, "level": 1, "health": 4, "cards": ["CAFG"], "rune_uses": [4]})
 	var enemy := _hero(director, 3, 36, 90, 3)
 	ELFog.refresh(state)
 	director.interception.rebuild(state, director.grid)
@@ -1871,10 +1916,11 @@ func _case_y_body() -> void:
 	if not smart: return
 	var director := _world()
 	var lead := _hero(director, 2, 30, 60, 5)
+	lead.health = 26
 	var mine := _place(director, "mine", 50, 60, {"owner": -1})
 	var gap := Vector2i(int(mine.x) - 2, int(mine.y))
 	_pen(director, mine, 2, [gap])
-	var guard := _place(director, "monster", gap.x, gap.y, {"owner": 0, "level": 1})
+	var guard := _place(director, "monster", gap.x, gap.y, {"owner": 0, "level": 1, "health": 4, "cards": ["CAFG"], "rune_uses": [4]})
 	_place(director, "Teacher", 12, 60)
 	director.interception.rebuild(director.state, director.grid)
 	_pass(director)

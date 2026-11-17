@@ -506,16 +506,9 @@ static func utility(director: ELAdventureDirector, hero: Dictionary, role: int, 
 	match task.kind:
 		"monster":
 			if not item.get("alive", false): return -INF
-			var gap := int(item.get("level", 1)) - level
-			# The original's limit; a supporter clears only clearly weaker creatures.
-			if gap > 1 or (role == 1 and gap > -2): return -INF
-			walk = _walk(director, hero, item, false, exact)
-			var chance := win_chance(director, hero, item)
-			gain = chance * (10.0 + 5.0 * int(item.get("level", 1))) - (1.0 - chance) * worth(hero)
-			# A creature is never a castle's last chance: a fight expected to
-			# cost more than it brings is left.
+			gain = monster_gain(director, hero, role, item)
 			if gain < 0.0: return -INF
-			if role == 1: gain *= 0.8
+			walk = _walk(director, hero, item, false, exact)
 		"hero":
 			if not item.get("alive", false) or int(item.get("level", 1)) - level >= 2 or not state.hostile(hero, item): return -INF
 			walk = _walk(director, hero, item, false, exact)
@@ -560,6 +553,9 @@ static func utility(director: ELAdventureDirector, hero: Dictionary, role: int, 
 			if NO_EFFECT.has(name): return -INF
 			gain = 30.0 if name in ["Teacher", "Magister", "Master"] else (12.0 if name in ELAdditionalBuildings.WEEKLY_VISITED else 15.0)
 			if role == 0: gain *= 0.7
+			if ELAdditionalBuildings.DUNGEONS.has(name):
+				gain = monster_gain(director, hero, role, state.object(item.monster))
+				if gain < 0.0: return -INF
 			walk = _walk(director, hero, item, false, exact)
 		"shop":
 			# The bound assumes a full visit (as many purchases as its worth
@@ -663,6 +659,13 @@ static func _lower_bound(hero: Dictionary, area: Rect2i) -> float:
 
 static func player_of(hero: Dictionary) -> int:
 	return int(hero.get("owner", -1))
+
+## Expected gain from fighting a neutral monster, including a lair's occupant.
+static func monster_gain(director: ELAdventureDirector, hero: Dictionary, role: int, monster: Dictionary) -> float:
+	var chance := win_chance(director, hero, monster)
+	var prize := 16.0 + 7.0 * int(monster.get("level", 1))
+	if role == 1: prize *= 0.8
+	return chance * prize - (1.0 - chance) * worth(hero)
 
 ## What losing the hero costs.
 static func worth(hero: Dictionary) -> float:
@@ -921,7 +924,10 @@ static func _act(director: ELAdventureDirector, hero: Dictionary, task: Dictiona
 	var day := maxf(1.0, float(hero.get("strategy_capacity", 1)))
 	var item := state.object(task.get("target", -1))
 	var area := Rect2i(Vector2i(int(task.tile[0]), int(task.tile[1])), Vector2i.ONE) if task.kind == "explore" else _area(director, item)
-	var chance := win_chance(director, hero, item) if task.kind in ["monster", "hero"] else 1.0
+	var chance := 1.0
+	if task.kind in ["monster", "hero"]: chance = win_chance(director, hero, item)
+	elif task.kind == "building" and ELAdditionalBuildings.DUNGEONS.has(item.get("name")):
+		chance = win_chance(director, hero, state.object(item.monster))
 	# Sieges, enemy heroes, exploration and escorts end a sequence: what
 	# follows them cannot be foreseen.
 	return {"key": key, "kind": task.kind, "target": int(task.get("target", -1)), "area": area, "gain": points + TURN * walk / day, "chance": chance, "blockers": [] as Array[int], "walk": walk,
@@ -1250,13 +1256,13 @@ static func win_chance(director: ELAdventureDirector, hero: Dictionary, enemy: D
 	return first_wins(director, hero, enemy)
 
 ## The chance that `first`, the first side of a queued battle, beats `second`
-## (ELFirstAI.winner): the strength estimate when that switch is on or a human
-## player's hero takes part (a real duel), otherwise the original rule.
+## The strength estimate prices actual duels and the optional estimated
+## resolver. The original rule prices other off-screen encounters.
 static func first_wins(director: ELAdventureDirector, first: Dictionary, second: Dictionary) -> float:
 	var state := director.state
 	for side: Dictionary in [first, second]:
 		if int(side.get("owner", 0)) >= 1 and director.is_strategy_human(int(side.owner)): return estimate(state, first, second)
-	if director.battle_estimate: return estimate(state, first, second)
+	if director.battle_estimate or ELFirstAI.plays_monster_duel(director, first, second): return estimate(state, first, second)
 	# A player's hero always beats a neutral side.
 	if int(second.get("owner", 0)) <= 0: return 1.0
 	if int(first.get("owner", 0)) <= 0: return 0.0
