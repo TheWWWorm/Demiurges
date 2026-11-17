@@ -7248,12 +7248,18 @@ static void sync_attack(State *s) {
 			u->flags &= ~(uint32_t)F_ATTACKING;
 	}
 	if (s->tax > 0) return;
-	for (int i = 0; i < s->n; i++) {
-		Unit *u = &s->u[i];
-		if (u->owner != s->attacker || (u->flags & (F_DEAD | F_GONE | F_ATTACKING)) || !(u->flags & F_BERSERK)) continue;
-		if (!can_declare(s, u) || ((u->flags & F_TEAM) && !team_partner(s, i))) continue;
-		u->flags |= F_ATTACKING;
-		ranked(s, u);
+	/* Again while any joins: a berserk guard listed before the orc warrior
+	 * that makes it berserk finds its partner once the warrior goes (#166). */
+	for (int joined = 1; joined; ) {
+		joined = 0;
+		for (int i = 0; i < s->n; i++) {
+			Unit *u = &s->u[i];
+			if (u->owner != s->attacker || (u->flags & (F_DEAD | F_GONE | F_ATTACKING)) || !(u->flags & F_BERSERK)) continue;
+			if (!can_declare(s, u) || ((u->flags & F_TEAM) && !team_partner(s, i))) continue;
+			u->flags |= F_ATTACKING;
+			ranked(s, u);
+			joined = 1;
+		}
 	}
 }
 

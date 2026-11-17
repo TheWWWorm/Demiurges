@@ -3387,9 +3387,16 @@ func _sync_attacks() -> void:
 		if not can_attack(id, true): attacks.erase(id)
 	# Original compulsory assignment is suppressed while attacking has a cost.
 	if global_enchantment_count("LSDS") > 0: return
-	for c: Dictionary in army(attacker):
-		if has_flag(c.id, "Berserk") and can_attack(c.id) and not attacks.has(c.id) and (not has_flag(c.id, "TeamAttack") or _team_partner(c.id)):
-			attacks.append(c.id)
+	# Repeat until nothing more joins: an aggressive guard summoned before the
+	# orc warrior that makes it aggressive finds its partner only once the
+	# warrior has been sent (#166).
+	var joined := true
+	while joined:
+		joined = false
+		for c: Dictionary in army(attacker):
+			if has_flag(c.id, "Berserk") and can_attack(c.id) and not attacks.has(c.id) and (not has_flag(c.id, "TeamAttack") or _team_partner(c.id)):
+				attacks.append(c.id)
+				joined = true
 
 func _resolve_attacks() -> void:
 	var poisoned: Array[int] = []

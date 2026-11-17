@@ -1127,6 +1127,14 @@ func _parity() -> void:
 	# A lamia warlord in play makes every lamia two cheaper, to no less than 1.
 	_fixture("lamia discount", {"heroes": [{"health": 20, "mana": 50, "hand": ["LMWD", "LMMN"]}, {"health": 20, "mana": 0}], "creatures": []},
 		[["cast", 0], ["cast", 1]], func(d: ELDuel) -> bool: return int(d.heroes[0].mana) == 38)
+	# #166: an orc warrior makes every orc aggressive. A guard summoned before
+	# the warrior goes too as the turn begins: the warrior is sent first and is
+	# then the guard's partner.
+	for order: Array in [["ORGD", "ORWR"], ["ORWR", "ORGD"], ["ORGD", "ORGD", "ORWR"]]:
+		var orcs: Array = []
+		for card: String in order: orcs.append({"card": card, "owner": 0})
+		_fixture("aggressive guards %s" % "+".join(PackedStringArray(order)), {"attacker": 1, "heroes": [{"health": 20, "mana": 0}, {"health": 20, "mana": 0}], "creatures": orcs,
+			"after": func(d: ELDuel) -> void: d._refresh_armies()}, [["end"]], func(d: ELDuel) -> bool: return d.attacker == 0 and d.phase == ELDuel.Phase.ATTACK and d.attacks.size() == order.size())
 	# Kobold mastery that nearly always works (and here, by the duel's chance,
 	# does) doubles a kobold's blow; the model counts on one that sure.
 	if roundi(surest * 100.0) >= 90:
