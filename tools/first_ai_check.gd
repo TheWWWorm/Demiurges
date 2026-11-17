@@ -81,7 +81,7 @@ func _run() -> void:
 	_finish()
 
 const CASES := ["a_castle", "a_mine", "b_teacher", "b_gnome", "b_spawn", "c_blocked", "d_unexplored", "d_guarded",
-	"e_unseen", "e_unreachable", "f_upgrade", "f_refill", "f_portal", "h_meteor", "j_free", "k_holds", "k_defend", "m_roles", "n_joint", "p_resolver", "p_monsters", "p_retreat", "q_lookahead",
+	"e_unseen", "e_unreachable", "f_upgrade", "f_refill", "f_portal", "h_meteor", "j_free", "k_holds", "k_defend", "m_roles", "n_joint", "p_resolver", "p_monsters", "p_committed_duel", "q_lookahead",
 	"s_saved", "t_patrol", "t_raid", "t_escort", "t_retreat", "t_doctrine", "t_story", "t_off",
 	"v_cast", "v_income", "v_runes", "v_portal", "v_upkeep", "v_mine",
 	"w_pickup", "w_commander", "w_promotion", "w_hidden", "w_pile", "w_peace", "w_scouts", "w_tinkerer", "w_siege", "w_scrolls", "w_unfound", "w_human",
@@ -691,46 +691,34 @@ func _case_p_monsters() -> void:
 	ELStrategy.advance(director)
 	check(results == [mob.uid, winner.uid] and winner.alive and not mob.alive and int(winner.experience) > before, "P: a computer winner gets the actual duel reward")
 
-func _case_p_retreat() -> void:
+func _case_p_committed_duel() -> void:
 	if not smart: return
 	var director := _world()
 	var state := director.state
-	var hero := _hero(director, 2, 30, 90, 2)
-	var colour := str(state.players[2].color)
+	var hero := _hero(director, 2, 30, 90, 1)
+	var mob := _place(director, "monster", 34, 90, {"owner": 0, "level": 1, "health": 400})
+	hero.health = 5
+	# The hero has only fallback cantrips and cannot deal enough damage
+	# before ether disturbance takes it down to two life and then kills it.
+	var finite_spell := ""
 	for code: String in profile.table("CombatSpells"):
-		if profile.table("CombatSpells")[code].get("Color") != colour or ELRunes.unlimited(profile, hero, code) or ELCatalog.rule(profile, code).is_empty(): continue
-		hero.cards[0] = code
-		ELRunes.initialize(profile, hero, [2])
-		break
-	var mob := _place(director, "monster", 34, 90, {"owner": 0, "level": 10, "health": 40})
-	director.interception.rebuild(state, director.grid)
-	var approach := director.interception.preview(state, hero, director.grid.approach(Vector2i(hero.x, hero.y), mob))
-	var safe: Vector2i = approach[-2]
-	var guarded: Vector2i = approach[-1]
-	_take(director, hero, guarded)
-	director._stepped_from[int(hero.uid)] = safe
-	hero.intercepted = true
-	var fight := ELAdventureEncounter.new()
-	check(fight.prepare_map_ai_duel(state, int(mob.uid), int(hero.uid), 992), "P: a real duel is prepared")
-	if fight.battle == null or fight.battle.heroes.size() < 2: return
-	var uses: Array = fight.battle.heroes[1].spell_uses
-	var spent := -1
-	for slot in uses.size():
-		if int(uses[slot]) > 0:
-			uses[slot] -= 1
-			spent = slot
+		if not ELRunes.unlimited(profile, hero, code) and not ELCatalog.rule(profile, code).is_empty():
+			finite_spell = code
 			break
-	check(spent >= 0, "P: the hero has a rune charge to spend")
-	fight.battle.heroes[1].health = 2
-	check(ELFirstAI._wants_to_retreat(fight.battle, 1), "P: a losing hero looks for an escape during the duel")
-	director.strategy = {"phase": "combat", "combats": [[mob.uid, hero.uid], [hero.uid, mob.uid]], "actors": [], "index": 1, "free": "night", "legacy_orders": false}
-	var experience := int(hero.experience)
-	check(ELFirstAI._retreat_from_monster(director, hero, mob, fight), "P: the losing hero can escape to a safe tile")
-	check(Vector2i(hero.x, hero.y) == safe and int(hero.ap) == 0, "P: retreat returns to the last safe tile and uses the day")
-	check(mob.alive and hero.alive and int(hero.experience) == experience, "P: retreat leaves both alive and grants no XP")
-	check(spent >= 0 and hero.rune_uses[spent] == uses[spent], "P: retreat keeps the rune spent during battle")
-	check(director.strategy.combats.size() == 1, "P: retreat cancels the hero's remaining queued fights")
-	check(not ELFirstAI.can_attack_monster(director, hero, mob, true, guarded), "P: the hero waits before trying that monster again")
+	check(not finite_spell.is_empty(), "P: a finite spell is available for the disturbance duel")
+	if finite_spell.is_empty(): return
+	for actor: Dictionary in [hero, mob]:
+		actor.cards = [finite_spell]
+		actor.specialization = "NONE"
+		actor.skills = {}
+		ELRunes.initialize(profile, actor, [0])
+	var results := []
+	state.event.connect(func(event: Dictionary) -> void:
+		if event.kind == "battle_finished": results.append(event.winner))
+	director.strategy = {"phase": "combat", "combats": [[hero.uid, mob.uid]], "actors": [], "index": 0, "free": "night", "legacy_orders": false}
+	ELStrategy.advance(director)
+	check(results == [mob.uid] and mob.alive and not hero.alive, "P: a committed hero fights to defeat even after surviving heavy damage")
+	check(director.error.is_empty() and director.encounter == null, "P: ether disturbance ends the headless duel and the turn can continue")
 
 # --- Q: short strategic lookahead --------------------------------------------
 

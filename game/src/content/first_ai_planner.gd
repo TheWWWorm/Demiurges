@@ -206,10 +206,14 @@ static func _assign(director: ELAdventureDirector, player: int, heroes: Array[Di
 		var walks := {}
 		var ends := {}
 		var next := 0
-		while next < options.size() and next < SEARCHES:
+		var searched := 0
+		var cached_only := {"remaining": 0, "allow_unknown": true}
+		while next < options.size() and searched < SEARCHES:
 			var option: Array = options[next]
 			if kept.size() >= SHORTLIST and option[0] < kept[SHORTLIST - 1]: break
 			next += 1
+			if not ELFirstAI.forecast_objective(director, hero, option[1], cached_only): continue
+			searched += 1
 			if not _price(director, hero, role, option[1], danger, row, columns, walks, ends): continue
 			kept.append(float(row[ELFirstAI._key(option[1], int(hero.uid))]))
 			kept.sort()
@@ -248,9 +252,10 @@ static func _assign(director: ELAdventureDirector, player: int, heroes: Array[Di
 			var left: Array = rest[index]
 			var found := 0
 			var searched := 0
+			var cached_only := {"remaining": 0, "allow_unknown": true}
 			while not left.is_empty() and found < SHORTLIST and searched < SEARCHES:
 				var task: Dictionary = left.pop_front()[1]
-				if taken.has(ELFirstAI._key(task, int(hero.uid))): continue
+				if taken.has(ELFirstAI._key(task, int(hero.uid))) or not ELFirstAI.forecast_objective(director, hero, task, cached_only): continue
 				searched += 1
 				if _price(director, hero, role, task, danger, utilities[index], columns, {}, {}): found += 1
 			if found > 0: widened = true
@@ -577,8 +582,6 @@ static func utility(director: ELAdventureDirector, hero: Dictionary, role: int, 
 			if exact and ELFirstAIEconomy.trip_cost(state, hero, item, int(walk), count) < 0: return -INF
 			gain = 12.0 * count if item.get("type") == "el1_spell_shop" else 3.0 * mini(count, RUNE_COUNT)
 			if item.get("type") == "rune_shop" and ELFirstAIEconomy.empty_copies(hero) > 0: gain += 60.0
-			var retry: Dictionary = state.players[player_of(hero)].get("ai", {}).get("retry", {})
-			if int(retry.get("resupply:%d" % int(hero.uid), 0)) > int(state.day): gain += 25.0
 		"explore":
 			var tile := Vector2i(int(task.tile[0]), int(task.tile[1]))
 			gain = reveal(state, player_of(hero), tile) / 4.0
@@ -669,12 +672,11 @@ static func player_of(hero: Dictionary) -> int:
 
 ## Expected gain from fighting a neutral monster, including a lair's occupant.
 static func monster_gain(director: ELAdventureDirector, hero: Dictionary, role: int, monster: Dictionary) -> float:
-	# This cheap score ranks candidates. The actual trials decide which
-	# fights to take, and a lost fight can cost a retreat instead of a hero.
+	# This cheap score ranks candidates. The actual trials decide which fights to take.
 	var chance := win_chance(director, hero, monster)
 	var prize := 16.0 + 7.0 * int(monster.get("level", 1))
 	if role == 1: prize *= 0.8
-	return chance * prize - (1.0 - chance) * (TURN + 0.5 * worth(hero))
+	return chance * prize - (1.0 - chance) * worth(hero)
 
 ## What losing the hero costs.
 static func worth(hero: Dictionary) -> float:

@@ -1317,11 +1317,11 @@ func _place_back(hero: Dictionary, cell: Vector2i) -> void:
 ## a corner may leave no such tile next to the hero, and a hero kept in the
 ## zone had to fight (the next step or tick intercepted it again).
 const STEP_OUT_REACH := 8
-func _step_out_of_zone(hero: Dictionary) -> bool:
+func _step_out_of_zone(hero: Dictionary) -> void:
 	var here := Vector2i(int(hero.x), int(hero.y))
 	if interception.enemies(state, hero, here).is_empty() or hero.get("fortified", false):
 		hero.intercepted = false
-		return not hero.get("fortified", false)
+		return
 	var ship: bool = hero.get("ship", false)
 	var from: Vector2i = _stepped_from.get(int(hero.uid), Vector2i(-1, -1))
 	var candidates: Array[Vector2i] = []
@@ -1356,8 +1356,7 @@ func _step_out_of_zone(hero: Dictionary) -> bool:
 		if state.map.profile.id == "el2": ELFog.moved(state, hero)
 		presentation.emit({"kind": "actor_moving", "id": hero.uid, "position": Vector2(cell), "moving": false})
 		state.event.emit({"kind": "object_changed", "id": hero.uid})
-		return true
-	return false
+		return
 
 ## Mid-duel chapter checks; the duel view leaves the battle once an outcome is set.
 func watch_encounter() -> String:
