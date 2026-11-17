@@ -2532,6 +2532,7 @@ func open_global_spells(prompt := false) -> void:
 	scrim.add_child(global_spells)
 	global_spells.build(state, state.current_player)
 	global_spells.closed.connect(_close_global_spells)
+	global_spells.hero_requested.connect(_hero_over_global_spells)
 	_refresh_hero_info()
 	if prompt: global_spells.open_prompt()
 
@@ -2818,6 +2819,13 @@ func castle_double_click(at: Vector2, hit: Vector3) -> bool:
 	open_global_spells()
 	return global_spells != null
 
+## #169: a hero's screen over the GlobalSpells prompt (a right click on its
+## portrait); closing it goes back to the prompt.
+func _hero_over_global_spells(id: int) -> void:
+	var hero := state.object(id)
+	if global_spells == null or hero.is_empty() or not hero.get("alive", false) or int(hero.get("owner", -1)) != state.current_player: return
+	_open_hero_view([id], false, true)
+
 func open_hero_screen(id: int) -> void:
 	if strategic_session != null and not strategic_session.can_plan(): return
 	var hero := state.object(id)
@@ -2825,8 +2833,8 @@ func open_hero_screen(id: int) -> void:
 	if id != _hero_id(): _select_hero(id)
 	_open_hero_view([id], false)
 
-func _open_hero_view(ids: Array[int], exchange: bool) -> void:
-	if hero_screen != null or paused or hud == null: return
+func _open_hero_view(ids: Array[int], exchange: bool, over_global_spells := false) -> void:
+	if hero_screen != null or (paused and not over_global_spells) or hud == null: return
 	paused = true
 	dragging = false
 	hud.show_tooltip(-1, {}, Vector2.ZERO)
@@ -2882,9 +2890,14 @@ func _close_hero_screen() -> void:
 	if hero_screen == null: return
 	hero_screen.get_parent().queue_free()
 	hero_screen = null
+	mana_readout = {}
+	# Opened over the GlobalSpells prompt: back to it, the map still held.
+	if global_spells != null:
+		global_spells.reopen_prompt()
+		_refresh_hero_info()
+		return
 	paused = false
 	if world != null: world.process_mode = Node.PROCESS_MODE_INHERIT
-	mana_readout = {}
 	_refresh_hero_info()
 
 func _open_shop() -> void:

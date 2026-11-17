@@ -8,6 +8,10 @@ extends SceneTree
 ## - a spell picture on that screen has the picture tooltip with the spell's
 ##   name and description from the game's texts, and no plain text tooltip;
 ## - a long camera turn keeps the angle (and the saved one) within one turn;
+## - #169: the cross of a created spell's "choose a hero" prompt keeps the
+##   spell ready (a click on its picture asks again, its cost is not lost);
+##   a right click on a hero's portrait there opens that hero's screen over
+##   the prompt, and closing it goes back to the prompt;
 ## - #168: a map tooltip held up with the right button fits its text whatever
 ##   tooltip was shown before it (a building's after a monster's stretched).
 ##
@@ -142,10 +146,57 @@ func _map_part() -> void:
 	if view.global_spells != null:
 		screen.closed.emit()
 		await frames(3)
+	await _ready_spell_part(view, profile)
 	# A double-click on bare ground beside the castle opens nothing.
 	var ground := Vector3(centre.x + (size.x * 0.5 + 6) * ELAdventureTerrain.CELL, 0, centre.z)
 	check(not view.castle_double_click(view.camera.unproject_position(ground), ground) and view.global_spells == null, "a double-click away from the castle opens nothing")
 	view.queue_free()
+	await frames(2)
+
+## #169: a created spell that goes to a hero, its prompt, and the hero's
+## screen from a right click on a portrait.
+func _ready_spell_part(view: ELAdventureView, profile: ELProfile) -> void:
+	var state := view.state
+	var player := state.current_player
+	var code := ""
+	for candidate: String in profile.table("GlobalSpells"):
+		var params: Variant = ELGlobalSpells.row(profile, candidate).get("Params", [])
+		if ELGlobalSpells.supported(candidate) and (params == "Hero" or params == ["Hero"]) and ELGlobalSpells.targets(state, player, candidate).size() == 1 and not ELGlobalSpells.targets(state, player, candidate)[0].is_empty():
+			code = candidate
+			break
+	check(not code.is_empty(), "a global spell goes to one of the player's heroes")
+	if code.is_empty(): return
+	var record := ELGlobalSpells.data(state, player)
+	record.production = {"code": code, "cost": 10, "spent": 10, "state": 2}
+	var resources: Dictionary = state.players[player].resources.duplicate()
+	view.open_global_spells(true)
+	await frames(2)
+	var screen := view.global_spells
+	check(screen != null and screen.prompt.visible, "a created spell opens the prompt to choose its hero")
+	if screen == null: return
+	var portrait := screen.prompt_cell(0, 0).get_center()
+	var right := InputEventMouseButton.new()
+	right.button_index = MOUSE_BUTTON_RIGHT
+	right.pressed = true
+	right.position = portrait
+	screen.prompt._gui_input(right)
+	await frames(2)
+	var hero_id := int(ELGlobalSpells.targets(state, player, code)[0][0])
+	check(view.hero_screen != null and view.hero_screen.heroes == [hero_id], "a right click on a hero's portrait opens that hero's screen")
+	if view.hero_screen != null:
+		view.hero_screen.closed.emit()
+		await frames(2)
+	check(view.hero_screen == null and view.global_spells == screen and screen.prompt.visible and view.paused, "closing the hero's screen goes back to the prompt, the map still held")
+	screen.prompt_buttons.SelectCancel.pressed.emit()
+	await frames(1)
+	check(not screen.prompt.visible and int(screen.production().get("state", 0)) == 2 and str(screen.production().get("code", "")) == code and state.players[player].resources == resources,
+		"the prompt's cross keeps the created spell ready, nothing paid is lost")
+	screen._press(screen.PRODUCTION + screen.CELL * 0.5)
+	check(screen.prompt.visible, "a click on the ready spell's picture asks for its hero again")
+	screen.prompt_buttons.SelectOK.pressed.emit()
+	await frames(1)
+	check(screen.production().is_empty() and ELGlobalSpells.data(state, player).active.any(func(spell: Dictionary) -> bool: return spell.code == code), "the spell then goes to the chosen hero")
+	screen.closed.emit()
 	await frames(2)
 
 ## #168: every map object's tooltip, one after another in a mixed order,

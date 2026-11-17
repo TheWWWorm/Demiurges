@@ -16,7 +16,14 @@ extends Control
 ## under Visions a castle's tooltip names the spell its player is creating.
 ## A spell picture (any list, the production, the prompt header) has the
 ## original picture tooltip: the picture, the spell's name and its description.
+##
+## The prompt's cross closes it and keeps the created spell ready: a click on
+## the production picture (or the next settlement) asks again, and
+## CancelSpell is what dispels it (#169; it was dispelled with its ether).
+## A right click on a hero's portrait in the prompt opens that hero's screen
+## over this one (hero_requested), to see whom the spell would go to.
 signal closed
+signal hero_requested(id: int)
 const PANEL := "GlobalSpells"
 ## Controls "GlobalSpells" ShiftX/ShiftY for 1024x768.
 const ORIGIN := Vector2(70, 84)
@@ -297,6 +304,10 @@ func entry_at(point: Vector2) -> Array:
 	return [-1, -1]
 
 func _press(point: Vector2) -> void:
+	# The ready spell's picture opens its prompt again.
+	if Rect2(PRODUCTION, CELL).has_point(point) and int(production().get("state", 0)) == 2 and not _pending:
+		open_prompt()
+		return
 	var hit := entry_at(point)
 	if int(hit[0]) < 0: return
 	if int(hit[0]) == 0: extra = 0
@@ -510,6 +521,7 @@ func _build_prompt() -> void:
 	prompt = Canvas.new()
 	prompt.draw_call = _draw_prompt
 	prompt.press_call = _press_prompt
+	prompt.right_call = _right_prompt
 	prompt.tip_call = _prompt_tooltip
 	prompt.mouse_filter = Control.MOUSE_FILTER_STOP
 	add_child(prompt)
@@ -579,6 +591,32 @@ func _press_prompt(point: Vector2) -> void:
 				_refresh_prompt()
 				return
 
+## A right click on a hero's portrait: that hero's screen.
+func _right_prompt(point: Vector2) -> void:
+	for list in _targets.size():
+		if str(_params[list]) != "Hero": continue
+		for slot in VISIBLE:
+			var index: int = prompt_scrolls[list] + slot
+			if index < _targets[list].size() and prompt_cell(list, slot).has_point(point):
+				hero_requested.emit(int(_targets[list][index]))
+				return
+
+## After the hero's screen: the lists again (a hero may have left), the
+## choices kept where their targets still are.
+func reopen_prompt() -> void:
+	if not prompt.visible: return
+	var chosen: Array = []
+	for list in _targets.size():
+		chosen.append(int(_targets[list][prompt_picks[list]]) if prompt_picks[list] >= 0 and prompt_picks[list] < _targets[list].size() else -1)
+	open_prompt()
+	if not prompt.visible: return
+	for list in mini(_targets.size(), chosen.size()):
+		var index: int = _targets[list].find(chosen[list])
+		if index >= 0:
+			prompt_picks[list] = index
+			prompt_scrolls[list] = clampi(index - VISIBLE + 1, 0, maxi(0, _targets[list].size() - VISIBLE))
+	_refresh_prompt()
+
 func _scroll_prompt(list: int, delta: int) -> void:
 	prompt_scrolls[list] += delta
 	_refresh_prompt()
@@ -601,13 +639,11 @@ func _open_remote_shop() -> void:
 	prompt.hide()
 	if strategic_session.remote_shop_open(player): closed.emit()
 
-## SelectCancel: the created spell is dispelled.
+## SelectCancel: the prompt closes, the created spell stays ready (#169).
 func _dismiss_prompt() -> void:
-	if strategic_session != null:
-		_cancel_production()
-		return
+	if _pending: return
 	prompt.hide()
-	ELGlobalSpells.cancel(state, player)
+	prompt_picture_tip.hide()
 	refresh()
 
 func target_icon(list: int, id: int) -> Texture2D:
@@ -694,6 +730,7 @@ func _button(canvas: Canvas, into: Dictionary, control: String) -> ELAdventureHu
 class Canvas extends Control:
 	var draw_call: Callable
 	var press_call: Callable
+	var right_call: Callable
 	var tip_call: Callable
 	var hover_call: Callable
 
@@ -703,6 +740,9 @@ class Canvas extends Control:
 	func _gui_input(event: InputEvent) -> void:
 		if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
 			press_call.call(event.position)
+			accept_event()
+		elif event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_RIGHT and right_call.is_valid():
+			right_call.call(event.position)
 			accept_event()
 		elif event is InputEventMouseMotion and hover_call.is_valid():
 			hover_call.call(event.position)
