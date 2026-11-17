@@ -4,6 +4,10 @@ Versions follow [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html)
 
 ## Unreleased
 
+## 0.18.2
+
+- Starting sharper-art preparation from the startup prompt enables icons, interface art and 3D textures and prepares them together for both installed games.
+- Black Forest, Black Tombs and Lost City have low ground fog that responds to moving creatures.
 - Etherlords II's adventure pause menu has a Remake menu button for opening Campaigns and Options. F11 opens the Remake menu from the map and in local battles.
 - Unwritten Rules and Battlecraft add 60 puzzles, 30 per game, for 165 in all. The Briefing shows live spellbook and artifact reserves for studies that depend on them.
 - Etherlords II pans the adventure camera at the screen edges. Hold Ctrl at an edge to turn or tilt it.

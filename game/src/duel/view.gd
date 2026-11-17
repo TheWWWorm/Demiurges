@@ -6262,7 +6262,7 @@ func _sharper_art_rows(box: VBoxContainer) -> void:
 		var status := _row_note(buttons)
 		status.text = _sharper_art_status()
 		status.show()
-	for key: String in ["sharper_icons", "sharper_interface", "sharper_textures"]:
+	for key: String in ELIconUpscale.SETTINGS:
 		var toggle := CheckButton.new()
 		toggle.name = key.to_pascal_case()
 		toggle.button_pressed = bool(settings.values.get(key, false))
@@ -6329,8 +6329,14 @@ func _sharper_art_status() -> String:
 	return _t("%d of %d sheets ready") % [done, total] + " · " + megabytes
 
 ## The "Preparing sharper art" screen, as a prompt first when `ask`.
-func _open_sharper_art(ask: bool, then := Callable()) -> void:
-	var screen := ELSharperArtScreen.open(self, _upscalers(), _shown_profile(), ask)
+func _open_sharper_art(ask: bool, then := Callable(), all_art := false) -> void:
+	var screen := ELSharperArtScreen.open(self, _upscalers(), _shown_profile(), ask, all_art)
+	if all_art:
+		screen.starting.connect(func():
+			for key: String in ELIconUpscale.SETTINGS: settings.values[key] = true
+			settings.values.sharper_declined = ""
+			ELIconUpscale.use(settings.values)
+			if not settings.save_file(): _notice(_t("Could not save preferences.")), CONNECT_ONE_SHOT)
 	screen.on_later = func(_why: String):
 		settings.values.sharper_declined = "%d:%d" % [ELIconUpscale.VERSION, ELIconUpscale.cache_factor()]
 		if _settings_before.is_empty(): settings.save_file()
@@ -6348,7 +6354,7 @@ func _offer_sharper_art() -> void:
 	for i in 1200:
 		if front_menu != null and front_menu.is_visible_in_tree() and (movie_layer == null or not is_instance_valid(movie_layer)): break
 		await get_tree().create_timer(0.25).timeout
-	_open_sharper_art(true)
+	_open_sharper_art(true, Callable(), true)
 
 ## The game window's mode, size and frame rate (computers only).
 func _window_rows(page: VBoxContainer) -> VBoxContainer:

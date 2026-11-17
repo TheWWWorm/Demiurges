@@ -579,6 +579,7 @@ const RU := {
 	"Ready (%d×)": "Готово (%d×)",
 	"%d of %d sheets ready": "Готово листов: %d из %d",
 	"Prepare sharper art?": "Подготовить чёткую графику?",
+	"Start enables and prepares sharper icons, interface art and 3D textures. Real-ESRGAN uses Vulkan where available and falls back to the CPU. Allow about %s on the CPU and %s of disk space.": "Кнопка «Начать» включает и подготавливает чёткие значки, интерфейс и 3D-текстуры. Real-ESRGAN использует Vulkan при наличии, иначе — процессор. На процессоре это займёт около %s, а на диске — %s.",
 	"Real-ESRGAN prepares the selected art once on this computer. It uses Vulkan where available and falls back to the CPU. Allow about %s on the CPU and %s of disk space.": "Real-ESRGAN один раз подготавливает выбранную графику на этом компьютере. При наличии Vulkan используется видеокарта, иначе — процессор. На процессоре это займёт около %s, а на диске — %s.",
 	"Start": "Начать",
 	"Retry": "Повторить",

@@ -46,6 +46,7 @@ const KIND_NONE := 0
 const KIND_ICON := 1
 const KIND_INTERFACE := 2
 const KIND_TEXTURE := 3
+const SETTINGS := ["sharper_icons", "sharper_interface", "sharper_textures"]
 ## Color textures in the original texture archive. Keep cutouts and data maps
 ## out of preparation, and check decoded alpha before running the network.
 const TEXTURE_FOLDERS := ["creatures/", "heroes/", "combatscenes/"]
@@ -165,8 +166,8 @@ static func target_factor() -> int:
 	if DisplayServer.get_name() == "headless": return factor_for(Vector2.ZERO)
 	return factor_for(Vector2(DisplayServer.screen_get_size(DisplayServer.window_get_current_screen())))
 
-static func cache_factor() -> int:
-	return maxi(2, target_factor()) if enabled(KIND_TEXTURE) else target_factor()
+static func cache_factor(all_art := false) -> int:
+	return maxi(2, target_factor()) if all_art or enabled(KIND_TEXTURE) else target_factor()
 
 static func sheet_factor(entry: String, factor: int) -> int:
 	return 2 if kind_of(entry) == KIND_TEXTURE else factor
@@ -236,13 +237,13 @@ func _kept_sheet(record: Variant) -> bool:
 
 ## The sheets of the edition the switches ask for: archive entries, sorted
 ## (icons first).
-func eligible() -> Array[String]:
+func eligible(all_art := false) -> Array[String]:
 	var result: Array[String] = []
 	if _archive == null: return result
 	var names: Array = _archive.entries.keys()
 	names.sort()
 	for kind: int in [KIND_ICON, KIND_INTERFACE, KIND_TEXTURE]:
-		if not enabled(kind): continue
+		if not all_art and not enabled(kind): continue
 		if kind != KIND_TEXTURE and target_factor() < 2: continue
 		for entry: String in names:
 			if kind_of(entry) == kind: result.append(entry)
@@ -412,15 +413,15 @@ static func all() -> Array[ELIconUpscale]:
 ## The work a preparation of `upscalers` would do: {sheets (left to
 ## work out), pixels, seconds (estimate), bytes (estimated disk use of the
 ## finished set)}.
-static func estimate(upscalers: Array) -> Dictionary:
+static func estimate(upscalers: Array, all_art := false) -> Dictionary:
 	var sheets := 0
 	var pixels := 0
 	var output_pixels := 0
 	for upscaler: ELIconUpscale in upscalers:
-		var factor := cache_factor()
+		var factor := cache_factor(all_art)
 		var current := upscaler.manifest if int(upscaler.manifest.get("factor", 0)) == factor else upscaler.read_manifest(factor)
 		var kept: Dictionary = current.sheets if String(current.get("identity", "")) == upscaler._identity else {}
-		for entry: String in upscaler.eligible():
+		for entry: String in upscaler.eligible(all_art):
 			var location := upscaler._archive.locate(entry)
 			# From the stored size (16- or 32-bit pixels, mipmaps), or a 256 x
 			# 256 sheet when it is not known.

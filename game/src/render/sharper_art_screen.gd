@@ -9,6 +9,7 @@ extends CanvasLayer
 ## Emits `closed` with whether every sheet is ready.
 
 signal closed(complete: bool)
+signal starting
 
 const INK := Color(0.93, 0.89, 0.8)
 const DIM := Color(0.72, 0.68, 0.6)
@@ -34,12 +35,12 @@ var _last_frame := 0
 
 ## Opens the screen over `parent` for these editions' upscalers: a prompt
 ## first when `ask`, otherwise the preparation at once.
-static func open(parent: Node, of: Array, shown: ELProfile, ask: bool) -> ELSharperArtScreen:
+static func open(parent: Node, of: Array, shown: ELProfile, ask: bool, all_art := false) -> ELSharperArtScreen:
 	var screen := ELSharperArtScreen.new()
 	screen.upscalers = of
 	screen.profile = shown
 	parent.add_child(screen)
-	if ask: screen.show_prompt()
+	if ask: screen.show_prompt(all_art)
 	else: screen.begin()
 	return screen
 
@@ -133,12 +134,14 @@ func _button(box: HBoxContainer, node_name: String, caption: String) -> Button:
 	return button
 
 ## The prompt: what the step does, how long it takes and the disk it needs.
-func show_prompt() -> void:
+func show_prompt(all_art := false) -> void:
 	if _title == null: await ready
-	var estimate := ELIconUpscale.estimate(upscalers)
+	var estimate := ELIconUpscale.estimate(upscalers, all_art)
 	_title.text = _t("Prepare sharper art?")
-	_body.text = _t("Real-ESRGAN prepares the selected art once on this computer. It uses Vulkan where available and falls back to the CPU. Allow about %s on the CPU and %s of disk space.") % [
-		duration(float(estimate.seconds)), size_text(int(estimate.bytes))]
+	var description := "Real-ESRGAN prepares the selected art once on this computer. It uses Vulkan where available and falls back to the CPU. Allow about %s on the CPU and %s of disk space."
+	if all_art:
+		description = "Start enables and prepares sharper icons, interface art and 3D textures. Real-ESRGAN uses Vulkan where available and falls back to the CPU. Allow about %s on the CPU and %s of disk space."
+	_body.text = _t(description) % [duration(float(estimate.seconds)), size_text(int(estimate.bytes))]
 	_later.visible = true
 	_start.visible = true
 	_start.grab_focus.call_deferred()
@@ -146,6 +149,7 @@ func show_prompt() -> void:
 ## Starts the preparation and shows its progress.
 func begin() -> void:
 	if _title == null: await ready
+	starting.emit()
 	preparation = ELIconUpscale.Preparation.new(upscalers)
 	preparation.start()
 	_title.text = _t("Preparing sharper art")
