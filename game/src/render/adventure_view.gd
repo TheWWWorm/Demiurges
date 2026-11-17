@@ -1496,9 +1496,12 @@ func _click_ground(tile: Vector2i, use_id := -1) -> void:
 	if not ordered: _remark(director.notice)
 	else:
 		_remark(director.notice)
-		# A move order brings the view back to the hero unless the player is
-		# moving the view at the same moment.
-		if not _panning_view():
+		# Second game: a move order brings the view back to the hero unless the
+		# player is moving the view at the same moment (#28). First game: the
+		# order only plans the route (carried out at night, or on the second
+		# choice with free movement), and the view stays on the destination
+		# the player picked (#170); the hero's walk itself is followed.
+		if not _panning_view() and second_hud != null:
 			following = _hero_id()
 			view_moved = false
 	if tutorial_panel != null and _hero_id() >= 0: tutorial_panel.map_click(site, ordered)

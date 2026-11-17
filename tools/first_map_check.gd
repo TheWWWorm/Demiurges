@@ -12,6 +12,8 @@ extends SceneTree
 ##   spell ready (a click on its picture asks again, its cost is not lost);
 ##   a right click on a hero's portrait there opens that hero's screen over
 ##   the prompt, and closing it goes back to the prompt;
+## - #170: choosing a hero's destination leaves the view where it is (on the
+##   destination), it does not swing back to the hero;
 ## - #168: a map tooltip held up with the right button fits its text whatever
 ##   tooltip was shown before it (a building's after a monster's stretched).
 ##
@@ -102,6 +104,7 @@ func _map_part() -> void:
 	view.yaw = yaw
 	view._update_camera()
 	await _tooltip_part(view)
+	await _route_camera_part(view)
 
 	# Castle double-click.
 	check(not own.is_empty(), "the player has a castle")
@@ -197,6 +200,34 @@ func _ready_spell_part(view: ELAdventureView, profile: ELProfile) -> void:
 	await frames(1)
 	check(screen.production().is_empty() and ELGlobalSpells.data(state, player).active.any(func(spell: Dictionary) -> bool: return spell.code == code), "the spell then goes to the chosen hero")
 	screen.closed.emit()
+	await frames(2)
+
+## #170: the view stays on a destination the player picks far from the hero.
+func _route_camera_part(view: ELAdventureView) -> void:
+	var state := view.state
+	var hero := state.object(view._hero_id())
+	await frames(2)
+	var from := Vector2i(int(hero.x), int(hero.y))
+	var goal := Vector2i(-1, -1)
+	for radius in range(12, 4, -1):
+		for step: Vector2i in [Vector2i(radius, 0), Vector2i(-radius, 0), Vector2i(0, radius), Vector2i(0, -radius)]:
+			var tile := from + step
+			if goal.x < 0 and tile.x >= 0 and tile.y >= 0 and tile.x < state.map.width and tile.y < state.map.height and view.director.grid.path(from, tile).size() > 3 and ELFog.explored(state, state.current_player, tile): goal = tile
+	check(goal.x >= 0, "the hero can walk to a tile some way off")
+	if goal.x < 0: return
+	var spot := Vector3((goal.x + 0.5) * ELAdventureTerrain.CELL, 0, -(goal.y + 0.5) * ELAdventureTerrain.CELL)
+	# The player scrolls there and picks the tile.
+	view.following = -1
+	view.view_moved = true
+	view.target = spot
+	view._update_camera()
+	view._unhandled_input(_click(view.camera.unproject_position(spot), false))
+	for i in 30: await process_frame
+	var planned: Dictionary = hero.get("strategy_order", {})
+	check(not planned.is_empty() and Vector2i(planned.destination[0], planned.destination[1]) == goal, "a click far from the hero plans its route there")
+	check(view.following < 0 and Vector2(view.target.x - spot.x, view.target.z - spot.z).length() < 0.5, "planning the route leaves the view on the destination (%.1f from it, following %d)" % [Vector2(view.target.x - spot.x, view.target.z - spot.z).length(), view.following])
+	view._cancel_map_order()
+	view.following = view._hero_id()
 	await frames(2)
 
 ## #168: every map object's tooltip, one after another in a mixed order,
