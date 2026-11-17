@@ -110,6 +110,46 @@ static func adopt_lost_cantrips(profile: ELProfile, hero: Dictionary, start: Arr
 			open.erase(slot)
 	set_under(hero, codes)
 
+## The basic spells a hero of `colour` is meant to begin with: the starting
+## book of that colour's hireable heroes (templates that are no quest hero),
+## where it is all cantrips (EL1 Red: STR1, 4 Strength, 3 Fire Wall, 4 Shock,
+## 4 Lesser Strength). Empty when the game has none.
+static func basic_book(profile: ELProfile, colour: String) -> Array[String]:
+	var templates: Dictionary = profile.table("HeroTemplates")
+	var votes := {}
+	for name: String in templates:
+		var row: Dictionary = templates[name]
+		if str(row.get("Color", "")) != colour or str(row.get("Quest", "")) != "-": continue
+		var deck := str(row.get("StartDeck", ""))
+		votes[deck] = int(votes.get(deck, 0)) + 1
+	var best := ""
+	for deck: String in votes:
+		if best.is_empty() or int(votes[deck]) > int(votes[best]): best = deck
+	var result: Array[String] = []
+	var hero := {"type": "hero"}
+	for card: String in ELCatalog.deck(profile, best):
+		if not unlimited(profile, hero, card): return []
+		result.append(card)
+	return result
+
+## A hero freed from a prison begins with a book of the chapter's spells and
+## no cantrip of its own (Thaereid, Mauleen). Its colour's basic spells go
+## under that book, slot by slot, so a spell stored or spent leaves the slot
+## to a basic spell as for any hero (#167). The book itself is unchanged.
+static func give_basic_under(profile: ELProfile, hero: Dictionary) -> void:
+	# Once: a later load does not give them again.
+	if hero.get("basic_under", false): return
+	hero.basic_under = true
+	var cards: Array = hero.get("cards", [])
+	if cards.any(func(card: String) -> bool: return unlimited(profile, hero, card)): return
+	var colour := str(profile.table("HeroTemplates").get(hero.get("name", ""), {}).get("Color", ""))
+	var basic := basic_book(profile, colour)
+	if basic.is_empty(): return
+	var codes := under(hero)
+	for slot in mini(codes.size(), basic.size()):
+		if codes[slot].is_empty(): codes[slot] = basic[slot]
+	set_under(hero, codes)
+
 ## After a battle (`before`: the book's runes when it began): a slot whose
 ## spell spent its last rune gives the slot back to the cantrip under it.
 static func return_cantrips(hero: Dictionary, before: Array) -> void:

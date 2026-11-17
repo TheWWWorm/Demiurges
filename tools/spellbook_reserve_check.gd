@@ -14,7 +14,12 @@ extends SceneTree
 ##   overwrote the cantrip) get back only the cantrips the hero began with,
 ##   and the book keeps its size; a hero whose starting book holds rune
 ##   spells gets no cantrip under them;
-## - a new book (ELRunes.initialize) drops what waited under the old one.
+## - a new book (ELRunes.initialize) drops what waited under the old one;
+## - #167: a hero freed from a prison (Thaereid, Chaot chapter 1) keeps the
+##   chapter's book and gets his colour's basic spells under it, slot by
+##   slot; storing a spell or spending its runes gives the slot to the basic
+##   spell; a save and load keep them, and a save made before they were given
+##   gets them once.
 ##
 ##   godot --headless --path game --script ../tools/spellbook_reserve_check.gd
 ##
@@ -52,6 +57,7 @@ func _run() -> void:
 	await _laboratory_and_book(profile)
 	await _saves(profile)
 	_starting_rune_spells(profile)
+	await _prisoner(profile)
 	print("SPELLBOOK RESERVE CHECK: %d failure(s)" % failures.size())
 	host.queue_free()
 	for state: ELAdventureSession in sessions: state.close()
@@ -284,6 +290,67 @@ func _starting_rune_spells(profile: ELProfile) -> void:
 	hero.rune_under[0] = str(start[0]) if ELRunes.unlimited(profile, hero, str(start[0])) else "TIWR"
 	ELRunes.initialize(profile, hero)
 	check(not hero.has("rune_under"), "a new book drops the cantrips that waited under the old one")
+
+## #167: Thaereid, freed from the cage of the Chaot campaign's first chapter.
+func _prisoner(profile: ELProfile) -> void:
+	var session := {}
+	var cage := {}
+	for campaign_index in ELCampaign.available(profile).size():
+		for mission in 3:
+			var found := _session(profile, campaign_index, mission)
+			if found.is_empty(): continue
+			for item: Dictionary in found.state.objects.values():
+				if item.get("name") == "Prison" and ELAdditionalBuildings.prisoner(item) == "Thaereid": cage = item
+			if not cage.is_empty():
+				session = found
+				break
+			found.hud.queue_free()
+		if not session.is_empty(): break
+	check(not session.is_empty(), "prisoner: a campaign chapter holds Thaereid in a cage")
+	if session.is_empty(): return
+	var state: ELAdventureSession = session.state
+	var visitor := state.object(session.hero)
+	visitor.x = int(cage.x) + 1
+	visitor.y = int(cage.y)
+	var message := ELAdditionalBuildings.visit(session.director, visitor, cage)
+	var freed := state.object(int(message.get("freed", -1)))
+	check(not freed.is_empty() and freed.get("name") == "Thaereid", "prisoner: visiting the cage frees Thaereid")
+	if freed.is_empty(): return
+	var template: Dictionary = profile.table("HeroTemplates").Thaereid
+	var book := ELCatalog.deck(profile, str(template.StartDeck))
+	var basic := ELRunes.basic_book(profile, str(template.Color))
+	var red_basic := ELCatalog.deck(profile, "STR1")
+	check(basic == red_basic and basic.size() == 15, "prisoner: the Chaots' basic spells are the hireable heroes' starting book STR1 (%s)" % ",".join(PackedStringArray(basic)))
+	check(freed.cards == book and freed.rune_uses.all(func(n: int) -> bool: return n == 5), "prisoner: his book is still the chapter's orc book with its runes")
+	check(ELRunes.under(freed) == basic, "prisoner: a basic spell waits under each of his 15 spells")
+	var basics_given := ELRunes.under(freed).duplicate()
+	check(ELSpellInventory.unequip(profile, freed, 0).is_empty() and freed.cards.size() == 15 and freed.cards[0] == basic[0] and int(freed.rune_uses[0]) == -1 and freed.rune_stock.get(book[0], []).has(5), "prisoner: storing a spell gives its slot to the basic spell; the book keeps 15 slots and the spell its runes")
+	var before: Array = freed.rune_uses.duplicate()
+	freed.rune_uses[3] = 0
+	ELRunes.return_cantrips(freed, before)
+	check(freed.cards[3] == basic[3] and freed.cards.size() == 15, "prisoner: a spell that spends its last rune in a battle leaves the slot to the basic spell")
+	var loaded := _reload(session, true)
+	var again: Dictionary = loaded.get("state", ELAdventureSession.new()).object(int(freed.uid)) if not loaded.is_empty() else {}
+	check(not again.is_empty() and again.cards == freed.cards and ELRunes.under(again) == ELRunes.under(freed), "prisoner: a save and load keep his book and the basic spells under it")
+	# Every basic spell taken back: a later load gives none again.
+	var spent := freed.duplicate(true)
+	freed.erase("rune_under")
+	loaded = _reload(session, true)
+	again = loaded.get("state", ELAdventureSession.new()).object(int(freed.uid)) if not loaded.is_empty() else {}
+	check(not again.is_empty() and not again.has("rune_under"), "prisoner: once given, a load does not give the basic spells again")
+	# A save made before prisoners were given them.
+	freed.merge(spent, true)
+	freed.cards = book.duplicate()
+	freed.rune_uses = [5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5]
+	freed.rune_stock = {}
+	freed.spell_stock = {}
+	freed.erase("rune_under")
+	freed.erase("basic_under")
+	loaded = _reload(session, true)
+	again = loaded.get("state", ELAdventureSession.new()).object(int(freed.uid)) if not loaded.is_empty() else {}
+	check(not again.is_empty() and again.cards == book and ELRunes.under(again) == basics_given, "prisoner: a save from before gets the basic spells under his book once loaded")
+	session.hud.queue_free()
+	await frames(2)
 
 static func ELCatalogSpells(profile: ELProfile) -> Array:
 	var codes: Array = profile.table("CombatSpells").keys()

@@ -209,6 +209,8 @@ func decode(raw: Variant, profiles: Dictionary) -> Dictionary:
 		if map.profile.id == "el2" and item.type in ["hero", "monster"] and not ELAdventureClock.restore(item, int(world.day)): return _reject(next, "Invalid saved travel clock.")
 		if map.profile.id == "el1" and item.type in ["hero", "monster"] and not ELRunes.restore(map.profile, item): return _reject(next, "Invalid saved rune inventory.")
 		if map.profile.id == "el1" and item.type == "hero" and raw.get("under_version") != UNDER_VERSION: ELRunes.adopt_lost_cantrips(map.profile, item, _start_book(next, item))
+		# A prisoner freed before prisoners were given them gets its basic spells under its book (#167).
+		if map.profile.id == "el1" and item.type == "hero" and not item.has("basic_under") and int(item.get("source_index", -1)) < 0 and _prisoner_of(next, str(item.get("name", ""))): ELRunes.give_basic_under(map.profile, item)
 		if map.profile.id == "el1" and item.type in ["hero", "monster"] and not ELStrategy.restore(map.profile, item, map): return _reject(next, "Invalid saved strategic movement.")
 		if map.profile.id == "el1" and item.type == "hero" and not ELAdditionalBuildings.restore_hero(item): return _reject(next, "Invalid saved building bonus.")
 		if map.profile.id == "el1" and item.type == "hero" and not ELMapPickups.restore_hero(map.profile, item): return _reject(next, "Invalid saved hero items.")
@@ -458,6 +460,12 @@ const UNDER_VERSION := 1
 
 ## The book a saved first-game hero began the mission with: the map's own
 ## hero, or the mob or hero template a script or building made it from.
+## Whether a hero of this template waits in one of the map's prisons.
+static func _prisoner_of(next: ELAdventureSession, name: String) -> bool:
+	for placed: Dictionary in next.objects.values():
+		if placed.get("name") == "Prison" and ELAdditionalBuildings.prisoner(placed) == name: return true
+	return false
+
 static func _start_book(next: ELAdventureSession, item: Dictionary) -> Array:
 	var fresh := next.object(int(item.uid))
 	if fresh.get("type") == "hero" and fresh.get("name") == item.get("name"): return fresh.get("cards", []).duplicate()

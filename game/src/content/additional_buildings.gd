@@ -343,6 +343,7 @@ static func activate(state: ELAdventureSession, hero: Dictionary, item: Dictiona
 			values.append(amount)
 		"Prison":
 			var freed := spawn_hero(state, prisoner(item), int(hero.owner), int(item.x), int(item.y))
+			if profile.id == "el1": ELRunes.give_basic_under(profile, state.object(freed))
 			values.append(str(state.object(freed).get("title", prisoner(item))))
 			result.freed = freed
 		"AltarOfWar":
