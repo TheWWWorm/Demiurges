@@ -272,6 +272,7 @@ var settings_path := "user://settings.json"
 ## choices are not changed here. Forgotten on leaving those screens.
 var ai_levels: Dictionary = {}
 var _ai_picks: Dictionary = {}
+var _fight_monsters: CheckBox
 ## Screens a game is set up on, which keep `ai_levels`.
 const AI_SCREENS := ["campaigns", "legend", "mission", "map", "branch", "blazon", "blazon_single", "single", "select_mission"]
 ## Interface music, credits music and the Hall of Fame fanfare.
@@ -447,6 +448,7 @@ func show_screen(target: String) -> void:
 	if target != "mission": chapter = {}
 	if not target in AI_SCREENS: ai_levels.clear()
 	_ai_picks.clear()
+	_fight_monsters = null
 	previous_screen = screen
 	screen = target
 	if single_ui != null: single_ui.close_picture()
@@ -1159,6 +1161,22 @@ func add_ai_choices(top := CHOICE_TOP) -> Control:
 		pick.add_theme_font_size_override("font_size", 16)
 		ELGameChoice.plain(pick)
 		pair.add_child(pick)
+	if edition == "el1":
+		var monsters := HBoxContainer.new()
+		strip.add_child(monsters)
+		_fight_monsters = ELAIChoice.monster_checkbox(ai_levels, _ai_picks.world_ai)
+		_fight_monsters.text = ELRemakeText.t(ELAIChoice.MONSTER_LABEL, profile)
+		_fight_monsters.add_theme_font_size_override("font_size", 16)
+		_fight_monsters.add_theme_color_override("font_color", ELGameChoice.INK)
+		monsters.add_child(_fight_monsters)
+		var help := Button.new()
+		help.name = "NeutralMonsterHelp"
+		help.text = "?"
+		help.tooltip_text = ELRemakeText.t(ELAIChoice.MONSTER_HELP, profile)
+		help.pressed.connect(func(): duel_ui.show_message(help.tooltip_text, Callable(), false, 380.0))
+		ELGameChoice.plain(help)
+		monsters.add_child(help)
+	_show_ai()
 	canvas.add_child(strip)
 	var size := strip.get_combined_minimum_size()
 	strip.size = size
@@ -1550,7 +1568,19 @@ func _build_mission() -> void:
 		radio.pressed.connect(func(): set_difficulty(index))
 	add_ai_choices()
 	var start := _square("CIStart")
-	if start != null: start.pressed.connect(start_campaign)
+	if start != null:
+		start.pressed.connect(start_campaign)
+		var back := Button.new()
+		back.name = "CIBack"
+		back.text = ELRemakeText.t("Back", profile)
+		back.position = start.position - Vector2(104, 0)
+		back.size = Vector2(92, start.size.y)
+		back.focus_mode = Control.FOCUS_NONE
+		ELGameChoice.plain(back)
+		ELUiSounds.bind(back, profile)
+		back.pressed.connect(go_back)
+		canvas.add_child(back)
+		buttons[back.name] = back
 	if edition == "el1":
 		_add_chapter_movie(scenario)
 		_add_chapter_players(scenario)
@@ -1668,11 +1698,13 @@ func start_campaign() -> void:
 ## The difficulty's computer players' strength (ELAIChoice.defaults) in
 ## `ai_levels`, shown on the dropdowns.
 func reset_ai() -> void:
+	if ai_levels.is_empty() and edition == "el1": ai_levels[ELAIChoice.FIGHT_MONSTERS] = true
 	ai_levels.merge(ELAIChoice.defaults(difficulty, option_settings()), true)
 	_show_ai()
 
 ## `levels` (a chapter's carried ones) in `ai_levels`, else the difficulty's.
 func use_ai(levels: Dictionary) -> void:
+	ai_levels.clear()
 	if ELAIChoice.valid(levels):
 		ai_levels.merge(ELAIChoice.normalized(levels), true)
 		_show_ai()
@@ -1680,7 +1712,9 @@ func use_ai(levels: Dictionary) -> void:
 
 func _show_ai() -> void:
 	for key: String in _ai_picks:
-		if is_instance_valid(_ai_picks[key]) and ai_levels.has(key): ELAIChoice.display(_ai_picks[key], int(ai_levels[key]))
+		if is_instance_valid(_ai_picks[key]): ELAIChoice.display(_ai_picks[key], int(ai_levels[key]))
+	if is_instance_valid(_fight_monsters):
+		ELAIChoice.display_monsters(_fight_monsters, _ai_picks.world_ai, ai_levels)
 
 ## A chapter row being begun with the levels shown (`ai_levels`).
 func with_ai(row: Dictionary) -> Dictionary:

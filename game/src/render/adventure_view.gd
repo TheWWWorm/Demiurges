@@ -445,10 +445,7 @@ func _process(delta: float) -> void:
 	director.free_movement = bool(settings.values.get("free_movement", true)) if settings != null and strategic_session == null else false
 	# The game's "world_ai": 0 Original, 1 Smarter, 2 Living world (ELAIChoice;
 	# a network game uses the Options choice).
-	if settings != null: ELAIChoice.apply_world(director, settings, strategic_session != null)
-	else:
-		director.smart_ai = false
-		director.living_world = false
+	ELAIChoice.apply_world(director, settings, strategic_session != null)
 	# Remake switch (settings only, off by default): estimated off-screen battles.
 	director.battle_estimate = bool(settings.values.get("battle_estimate", false)) if settings != null else false
 	if hud != null: hud.free_steps = ELStrategy.free_mode(director)

@@ -4290,7 +4290,8 @@ func _step_auto_camera(delta: float) -> void:
 		var at: Vector3 = ELAutoCamera.clear_of_frame(pose.position, pose.rotation, pose.fov, Vector2(camera.get_viewport().get_visible_rect().size), camera_safe_rect(), pose.anchor + lift, with)
 		camera.global_transform = Transform3D(Basis(pose.rotation), at)
 		camera.fov = pose.fov
-		arena.clear_camera_view(at, pose.focus)
+		with.push_front(pose.anchor + lift)
+		arena.clear_camera_view(at, pose.focus, with)
 
 ## The part of the battle screen (viewport pixels) not covered by the interface
 ## frame: the hero columns and corner pieces, the card rail and the top line,
@@ -5644,6 +5645,8 @@ func _build_ui() -> void:
 	notices.theme = ELCombatTooltip.hidden_theme()
 	ui.add_child(notices)
 	affect_strip = ELAffectStrip.new()
+	affect_strip.battle_tooltips = true
+	affect_strip.theme = ELCombatTooltip.hidden_theme()
 	ui.add_child(affect_strip)
 	status = _label("Choose your original game content from Menu.", 14, Color("e9e4d4"))
 	status.position = Vector2(20, 16)
@@ -5887,6 +5890,7 @@ func _build_ui() -> void:
 	card_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_SHOW_NEVER
 	rail.hand_scroll = card_scroll
 	combat_tip = ELCombatTooltip.new()
+	affect_strip.inspect_requested.connect(combat_tip.inspect_control)
 	combat_tip.describe = _tip_content
 	combat_tip.describe_figure = _figure_tip
 	combat_tip.blocked = func() -> bool: return _overlay_open() or orbiting
@@ -6638,7 +6642,11 @@ func _interface_page(page: VBoxContainer) -> void:
 	var ai_changed := func(_index: int):
 		if ai_game != null: ELAIChoice.store(ai_game, ai_values)
 	_settings_row(gameplay, "Duel AI", DUEL_AI_HELP, ELAIChoice.values_picker(ai_values, "duel_ai", profile, ai_changed))
-	_settings_row(gameplay, "World AI", WORLD_AI_HELP, ELAIChoice.values_picker(ai_values, "world_ai", profile, ai_changed))
+	var world_pick := ELAIChoice.values_picker(ai_values, "world_ai", profile, ai_changed)
+	_settings_row(gameplay, "World AI", WORLD_AI_HELP, world_pick)
+	if ai_game != null and ai_game.fight_neutral_monsters:
+		world_pick.disabled = true
+		_set_row_note(world_pick, world_pick.get_meta("row_note"), WORLD_AI_HELP, PackedStringArray([_t(ELAIChoice.MONSTER_LOCK)]))
 	var icons_toggle := CheckButton.new()
 	icons_toggle.name = "CastIcons"
 	icons_toggle.button_pressed = bool(settings.values.get("cast_icons", true))
@@ -6954,7 +6962,7 @@ func _settings_box(page: VBoxContainer, title: String, featured := false) -> VBo
 ## hidden until _set_row_note gives it something to say.
 ## Options help of the computer players' strength (ELAIChoice).
 const DUEL_AI_HELP := "How strong the computer opponent is in battle, in both games. Easy: the original opponent thinking less. Original: as in the original games. Smarter: judges positions steadily, looks at more replies and reads the fighting of the coming turns before it attacks or blocks. Puzzles are always defended by the smarter opponent. Each campaign and single scenario keeps its own choice: a new game takes it from its difficulty (Original on the lowest, otherwise the choice here), and during a game this changes that game's."
-const WORLD_AI_HELP := "First game, single player: how the computer players act on the map. Original: as in the original game. Smarter: computer heroes pick skills, buy spells and runes, and simulate fights before challenging neutral monsters. Computer players also cast global spells. Living world: smarter, and idle computer heroes patrol their lands, raid weakly held sites, escort a weaker hero to a siege and go back for runes; each computer player keeps its own temperament. Each campaign and single scenario keeps its own choice: a new game takes it from its difficulty (Original on the lowest, otherwise the choice here), and during a game this changes that game's at once."
+const WORLD_AI_HELP := "First game, single player: how the computer players act on the map. Original: as in the original game. Smarter: computer heroes also pick skills as they level up, buy spells and runes at shops, and computer players cast global spells. Living world: smarter, and idle computer heroes patrol their lands, raid weakly held sites, escort a weaker hero to a siege and go back for runes; each computer player keeps its own temperament (story heroes and neutral creatures act as before). Each campaign and single scenario keeps its own choice: a new game takes it from its difficulty (Original on the lowest, otherwise the choice here), and during a game this changes that game's at once."
 
 func _settings_row(box: VBoxContainer, title: String, description: String, control: Control, extra: Control = null) -> void:
 	var row := VBoxContainer.new()

@@ -498,14 +498,11 @@ func refresh(hero_uid: int, can_act: bool) -> void:
 	if progress != _progress:
 		_progress = progress
 		experience_bar.queue_redraw()
-	var face: Texture2D = null
-	if not hero.is_empty():
-		var row: Dictionary = _art.resolve(hero).get("row", {})
-		if row.has("Face"): face = profile.portrait(int(row.Face))
-	var signature := "%d/%d/%s" % [hero_id, int(_art.resolve(hero).get("row", {}).get("Face", -1)) if not hero.is_empty() else -1, hero.get("alive", false)]
+	var face := int(ELSecondMapTooltips.row_for(_art, hero).get("Face", -1)) if not hero.is_empty() else -1
+	var signature := "%d/%d/%s" % [hero_id, face, hero.get("alive", false)]
 	if signature != _signature:
 		_signature = signature
-		portrait_texture = face
+		portrait_texture = profile.portrait(face) if face >= 0 else null
 		portrait.queue_redraw()
 	buttons.AdvPanelHandBagBtn.disabled = not can_act or hero.is_empty()
 	_sync_minimap_fog()

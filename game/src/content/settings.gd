@@ -84,10 +84,10 @@ const DUEL_AI_LEVELS := [
 	["Smarter", "Judges positions steadily, looks at more replies and reads the fighting of the coming turns before it attacks or blocks."]]
 const WORLD_AI_LEVELS := [
 	["Original", "Computer players on the map act as in the original game."],
-	["Smarter", "Computer heroes pick skills, buy spells and runes, and simulate fights before challenging neutral monsters. Computer players also cast global spells."],
+	["Smarter", "Computer heroes choose skills, buy spells and runes, and cast global spells."],
 	["Living world", "Smarter, and idle computer heroes patrol their lands, raid weakly held sites, escort a weaker hero to a siege and go back for runes; each computer player keeps its own temperament."]]
 const SHARED := {"ambience": 0.55, "shadows": true, "soft_shadows": false, "weather": true, "helper_overlay": false, "antialiasing": -1, "sharpening": 0, "terrain_detail": false, "enhanced_water": false, "bloom": false, "soft_particles": false, "spell_light": true, "discord_activity": true, "renderer": 0, "path_tracing": false, "sky_light": 1.0, "light_bounces": 2, "show_fps": false, "hardware_check": 0, "free_movement": true, "duel_ai": 2, "world_ai": 1, "battle_estimate": false, "cast_icons": true, "first_battle_dome": true,
-	"window_mode": 0, "window_width": 0, "window_height": 0, "frame_rate": 0,
+	"window_mode": 1, "window_width": 0, "window_height": 0, "frame_rate": 0,
 	"upscaler": 0, "upscale_quality": 1, "frame_generation": false, "ray_reconstruction": false, "battle_interface": 0, "battle_gap": 0, "battle_gap_2": 2, "battle_gap_3": 1, "battle_readouts": true, "camera_drag_lock": false,
 	"sharper_icons": true, "sharper_interface": true, "sharper_textures": false, "sharper_declined": "", "sharper_startup_all": false}
 const EDITION := {"music": 0.55, "effects": 0.8, "movies": 2, "blood": true, "map_tooltips": true, "autosave": true,
@@ -212,7 +212,7 @@ static func apply_display(viewport: Viewport, preferences: Dictionary) -> void:
 static func apply_window(preferences: Dictionary) -> void:
 	if OS.has_feature("web") or OS.has_feature("mobile") or DisplayServer.get_name() == "headless": return
 	var screen := DisplayServer.window_get_current_screen()
-	match int(preferences.get("window_mode", 0)):
+	match int(preferences.get("window_mode", SHARED.window_mode)):
 		1:
 			DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_FULLSCREEN)
 		2:

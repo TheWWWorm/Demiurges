@@ -58,6 +58,7 @@ var touch: ELTouchInput
 var hover_in_first_game := false
 var _shown_key := ""
 var _right_click_at := Vector2.INF
+var _right_click_control: Control
 
 ## Bold Arial slanted, with the upright bold advances: the originals' tooltip
 ## lines are as wide as plain bold text of the same size.
@@ -166,6 +167,11 @@ func hide_tip() -> void:
 	_shown_key = ""
 	if panel != null: panel.hide()
 
+## A control that takes the mouse during inspection still owns its tooltip.
+func inspect_control(control: Control, at: Vector2) -> void:
+	_right_click_control = control
+	_right_click_at = at
+
 func _input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT and event.pressed and not event.shift_pressed:
 		_right_click_at = event.position
@@ -185,12 +191,16 @@ func _process(delta: float) -> void:
 	if first and not hover_in_first_game and not inspecting:
 		hide_tip()
 		return
-	if hovered != null and not _owns(hovered):
-		hide_tip()
-		return
 	var point := get_viewport().get_mouse_position()
 	if touch_hold: point = touch.hold_position()
 	elif right_clicked: point = click_at
+	if not inspecting and not right_clicked: _right_click_control = null
+	if is_instance_valid(_right_click_control) and _right_click_control.is_visible_in_tree():
+		var local := _right_click_control.get_global_transform_with_canvas().affine_inverse() * point
+		if not _right_click_control.get_tooltip(local).is_empty(): hovered = _right_click_control
+	if hovered != null and not _owns(hovered):
+		hide_tip()
+		return
 	var figure := hovered == null
 	var content: Dictionary = describe_figure.call(point) if figure and describe_figure.is_valid() else {}
 	var id := int(content.get("figure_id", -1))
@@ -240,8 +250,9 @@ func _layout_tip(cursor: Vector2) -> void:
 
 func _owns(control: Control) -> bool:
 	var owner_node := get_parent()
-	# Cast icons are drawn over the battle, outside the HUD.
+	# Status and cast icons are drawn over the battle, outside the HUD.
 	if control is ELCombatNotices: return true
+	if control is ELAffectStrip: return control.battle_tooltips
 	return owner_node != null and owner_node.is_ancestor_of(control) and control != self and not is_ancestor_of(control)
 
 ## First-game hero titles are centred over the whole frame.

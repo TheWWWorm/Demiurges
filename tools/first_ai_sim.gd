@@ -6,7 +6,7 @@ extends SceneTree
 ##
 ##   godot --headless --path game --script ../tools/first_ai_sim.gd -- [--map=<id>|all] [--days=40]
 ##         [--campaign=Good|Evil] [--smart=true] [--free=true] [--difficulty=1] [--seed=212]
-##         [--opponent=still|active] [--estimate=false] [--lookahead=true] [--living=false]
+##         [--opponent=still|active] [--estimate=false] [--fight-monsters=false] [--lookahead=true] [--living=false]
 ##         [--list] [--quiet] [--dump] [--balance]
 ##
 ## `--list` prints the single map ids. Without `--map` the first catalogue map
@@ -50,6 +50,8 @@ var stuck := false
 var active := false
 var explored_before := PackedByteArray()
 var threats := {}
+var recruits := {}
+var turn_number := 0
 
 func _arg(name: String, fallback: String) -> String:
 	for arg in OS.get_cmdline_user_args():
@@ -128,6 +130,7 @@ func _play(profile: ELProfile, entry: Dictionary, days: int, need_shop: bool) ->
 		if item.get("type") == "rune_shop": portals += 1
 	if need_shop and shops == 0: return "skip"
 	director.smart_ai = _arg("smart", "true") == "true"
+	director.fight_neutral_monsters = _arg("fight-monsters", "false") == "true"
 	director.free_movement = _arg("free", "true") == "true"
 	if "battle_estimate" in director: director.set("battle_estimate", _arg("estimate", "false") == "true")
 	if "living_world" in director: director.set("living_world", _arg("living", "false") == "true")
@@ -143,6 +146,7 @@ func _play(profile: ELProfile, entry: Dictionary, days: int, need_shop: bool) ->
 	var timeline := {"turn": 0, "dawn": {}, "acted": {}}
 	stats = {}
 	threats = {}
+	recruits = {}
 	stuck = false
 	var books := {}
 	var fell := {}
@@ -163,6 +167,9 @@ func _play(profile: ELProfile, entry: Dictionary, days: int, need_shop: bool) ->
 				if data.get("recruited", false) and int(hero.owner) != state.current_player:
 					var dawn: Dictionary = timeline.dawn
 					dawn.get_or_add(int(hero.uid), [Vector2i(hero.x, hero.y), _deeds(hero)])
+				if balance:
+					recruits[int(hero.uid)] = {"player": int(hero.owner), "hero": str(hero.name),
+						"hired": turn_number, "first_step": null}
 					_stat(int(hero.owner)).recruits += 1
 					_say("day %d  P%d recruits %s (level %d)" % [state.day, hero.owner, hero.name, hero.level])
 			"inventory_changed":
@@ -195,7 +202,7 @@ func _play(profile: ELProfile, entry: Dictionary, days: int, need_shop: bool) ->
 	)
 	explored_before = state.explored.duplicate()
 	director.grid.actor_moved.connect(_stepped)
-	print("=== %s (%s): %d spell shops, %d component portals, smart=%s free=%s seed=%s opponent=%s lookahead=%s living=%s, human P%d" % [entry.id, ELSingleScenario.title(profile, entry), shops, portals, director.smart_ai, director.free_movement, _arg("seed", "212"), "active" if active else "still", _arg("lookahead", "true"), _arg("living", "false"), state.current_player])
+	print("=== %s (%s): %d spell shops, %d component portals, smart=%s free=%s seed=%s opponent=%s lookahead=%s living=%s fight-monsters=%s difficulty=%d, human P%d" % [entry.id, ELSingleScenario.title(profile, entry), shops, portals, director.smart_ai, director.free_movement, _arg("seed", "212"), "active" if active else "still", _arg("lookahead", "true"), _arg("living", "false"), director.fight_neutral_monsters, state.difficulty, state.current_player])
 	var income := {}
 	for player: int in state.players:
 		if player == state.current_player: continue
@@ -210,7 +217,8 @@ func _play(profile: ELProfile, entry: Dictionary, days: int, need_shop: bool) ->
 	var last_globals := {}
 	var outcome_day := -1
 	for day in days:
-		timeline.turn = day + 1
+		turn_number = day + 1
+		timeline.turn = turn_number
 		timeline.acted.clear()
 		for item: Dictionary in state.objects.values():
 			if item.get("type") == "hero" and item.get("alive", false) and item.has("cards") and item.has("rune_uses"): books[int(item.uid)] = {"cards": item.cards.duplicate(), "uses": item.rune_uses.duplicate()}
@@ -279,6 +287,7 @@ func _play(profile: ELProfile, entry: Dictionary, days: int, need_shop: bool) ->
 			for item: Dictionary in state.objects.values():
 				if item.get("group") in ["mines", "mana_nodes"] and int(item.get("owner", -1)) == player: sites += 1
 			print("FACTION " + JSON.stringify({"player": player, "first_site_turn": capture.get(player), "sites": sites, "no_progress": s.no_progress, "hero_days": s.hero_days, "reasons": timing.get("reasons", {}).get(player, {})}))
+		for recruit: Dictionary in recruits.values(): print("RECRUIT " + JSON.stringify(recruit))
 		for outcome: Dictionary in timing.get("monster_outcomes", []):
 			print("MATCHUP " + JSON.stringify(outcome))
 		print("FORECAST " + JSON.stringify({"trials": int(timing.get("forecast_trials", 0)), "extended": int(timing.get("forecast_extended", 0)), "usec": int(timing.get("forecast_usec", 0))}))
@@ -399,6 +408,8 @@ func _threats(player: int) -> void:
 ## A computer hero's step: onto ground its player had not explored, or into
 ## a guard area that is not its order's target.
 func _stepped(actor: Dictionary) -> void:
+	var recruit: Dictionary = recruits.get(int(actor.uid), {})
+	if not recruit.is_empty() and recruit.first_step == null: recruit.first_step = turn_number
 	var player := int(actor.get("owner", -1))
 	if actor.get("type") == "hero" and ELFirstAI.computer_players(state).has(player) and director.grid.contains(Vector2i(actor.x, actor.y)):
 		var index := int(actor.y) * state.map.width + int(actor.x)

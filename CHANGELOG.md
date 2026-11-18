@@ -4,6 +4,16 @@ Versions follow [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html)
 
 ## Unreleased
 
+## 0.18.4
+
+- New Etherlords campaigns and single scenarios start with **AI fights neutral monsters** checked beside the difficulty controls. Computer heroes forecast and play the fight in Living world. Clear the box for the original automatic wins. Existing saves keep their choice.
+- Computer heroes replan blocked orders, look for safer approaches and better spells, and can receive orders on the turn they are recruited.
+- Smart duel AI can pass instead of wasting a cast. Autochess previews shop odds, has fairer neutral rounds, and makes tribal bonuses useful in mixed armies.
+- Global buff icons use framed tooltips on hover and right-click. Automatic close-ups clear foreground scenery, including in Vitals City. ([#200](https://github.com/TheWWWorm/Demiurges/issues/200), [#201](https://github.com/TheWWWorm/Demiurges/issues/201))
+- Cast logs distinguish both sides and respect the selected log mode. Etherlords hides enemy routes and banners in fog, adds card descriptions to shop upgrades, and refreshes solo skill offers. (Issues #192–#198)
+- Fixed metallic blotches on the Vital sorceress, kept hero portraits aboard ships, and added Back to the campaign mission screen. Fresh settings use borderless fullscreen.
+- Null Cycle maps skip pose updates for fog-hidden figures, load authored artifact spells, and can jump the camera while paused.
+
 ## 0.18.3
 
 - Fixed a crash when confirming a campaign autosave load with the keyboard from inside a mission.

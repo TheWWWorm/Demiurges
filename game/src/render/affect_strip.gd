@@ -12,6 +12,8 @@ extends Control
 ## reach, so they are listed while it is there.
 ## Not ported: the original fades icons in and out as they come and go.
 
+signal inspect_requested(control: Control, at: Vector2)
+
 const ICON := 50.0
 const STEP := 60.0
 const TOP := 10.0
@@ -21,6 +23,7 @@ const COLUMN := 5
 const FRAME := Rect2(140, 0, 50, 50)
 
 var profile: ELProfile
+var battle_tooltips := false
 var sheets: Array[Texture2D] = []
 var frame: Texture2D
 ## {icon: int, tooltip: String, name: String}
@@ -114,6 +117,14 @@ func _hovered(point: Vector2) -> int:
 	for index in entries.size():
 		if icon_rect(index).has_point(point): return index
 	return -1
+
+func _gui_input(event: InputEvent) -> void:
+	# The viewport can report no hovered control while a button is held.
+	# Give the tooltip the actual icon strip that received the press.
+	if battle_tooltips and event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT:
+		if event.pressed and not event.shift_pressed:
+			inspect_requested.emit(self, get_global_transform_with_canvas() * event.position)
+		accept_event()
 
 func _get_tooltip(at_position: Vector2) -> String:
 	var index := _hovered(at_position)

@@ -2399,6 +2399,17 @@ static int empty_hand(const Search *x, State *s, int hero, int cause) {
 	return count;
 }
 
+static int discardable_spell(const Search *x, const State *s, int side, int slot) {
+	const Card *c = &x->hand[side][slot];
+	if ((s->played[side] >> slot & 1) || c->none) return 0;
+	return c->cost < 0 ? slot < imin(s->held[side], HAND) : c->effect != EFF_SUMMON;
+}
+
+static int discardable_creature(const Search *x, const State *s, int side, int slot) {
+	const Card *c = &x->hand[side][slot];
+	return !(s->played[side] >> slot & 1) && c->effect == EFF_SUMMON && c->cost >= 0;
+}
+
 static void discard_cards(State *s, int side, int count, int spells, int cause) {
 	const Search *x = (const Search *)s->rules;
 	if (spells) {
@@ -2406,12 +2417,7 @@ static void discard_cards(State *s, int side, int count, int spells, int cause) 
 		 * a card the engine holds no rule for is never a creature. Where all
 		 * of them go, it is certain which did. */
 		int open = 0;
-		for (int i = 0; x && i < imin(SLOTS, HAND + s->drawn[side]); i++) {
-			const Card *c = &x->hand[side][i];
-			if ((s->played[side] >> i & 1) || c->none) continue;
-			if (c->cost < 0 ? i >= imin(s->held[side], HAND) : c->effect == EFF_SUMMON) continue;
-			open++;
-		}
+		for (int i = 0; x && i < imin(SLOTS, HAND + s->drawn[side]); i++) open += discardable_spell(x, s, side, i);
 		/* And the cards that came back to the hand which are no creatures. */
 		for (int j = 0; x && j < BACK; j++) {
 			int kind = s->back[side][j];
@@ -2428,8 +2434,7 @@ static void discard_cards(State *s, int side, int count, int spells, int cause) 
 		}
 		for (int i = 0; x && i < imin(SLOTS, HAND + s->drawn[side]) && count > 0; i++) {
 			const Card *c = &x->hand[side][i];
-			if ((s->played[side] >> i & 1) || c->none) continue;
-			if (c->cost < 0 ? i >= imin(s->held[side], HAND) : c->effect == EFF_SUMMON) continue;
+			if (!discardable_spell(x, s, side, i)) continue;
 			s->played[side] |= 1u << i;
 			count--;
 			gone++;
@@ -5001,7 +5006,7 @@ static int cast_card(const Search *x, State *s, int side, int slot, int target, 
 		}
 		for (int at = 0; at < n && left > 0; at++) {
 			int i = order[at];
-			if ((s->played[hero] >> i & 1) || x->hand[hero][i].effect != EFF_SUMMON || x->hand[hero][i].cost < 0) continue;
+			if (!discardable_creature(x, s, hero, i)) continue;
 			s->played[hero] |= 1u << i;
 			left--;
 			if (veiled(x, hero, i)) s->blind = 1;
@@ -5219,6 +5224,20 @@ static inline int same_move(const Move *a, const Move *b) {
 	return a->kind == b->kind && a->a == b->a && a->b == b->b && a->c == b->c;
 }
 
+/* Passing wins a tie with casting. Search it first so a later cast has to
+ * beat its score, even when alpha-beta returns only a bound for the cast. */
+static void pass_before_casts(Move *moves, int count) {
+	int pass_at = -1, cast_at = -1;
+	for (int i = 0; i < count; i++) {
+		if (moves[i].kind == 0) { pass_at = i; break; }
+		if (cast_at < 0 && moves[i].kind == 3) cast_at = i;
+	}
+	if (cast_at < 0 || pass_at < 0) return;
+	Move pass = moves[pass_at];
+	memmove(&moves[cast_at + 1], &moves[cast_at], (size_t)(pass_at - cast_at) * sizeof(*moves));
+	moves[cast_at] = pass;
+}
+
 /* Whether a spell of this card may be aimed at that creature. */
 static int may_aim(const State *s, int side, const Card *c, int i) {
 	const Unit *u = &s->u[i];
@@ -5249,6 +5268,13 @@ static int may_aim(const State *s, int side, const Card *c, int i) {
  * nothing), would find nothing to work on. The rules allow such a cast, but
  * it only spends the card, so the usual reading never offers it. A proof
  * does: a hand one card smaller can still matter to what follows. */
+/* A cast may still do something through Data Attraction or a spell trap. */
+static int cast_reacts(const State *s, int side, const Card *c) {
+	int foe = 1 - side;
+	return c->free != 1 && (s->he[side][HE_TRLB] || (s->second && c->klass == 2 &&
+		(s->he[side][HE_OST1] || s->he[side][HE_OST2] || s->he[foe][HE_OST1] || s->he[foe][HE_OST2] || s->he[foe][HE_OST3])));
+}
+
 static int idle_cast(const Search *x, const State *s, int side, const Card *c, int target) {
 	int living = 0, mine_resting = 0, theirs_ready = 0;
 	for (int i = 0; i < s->n; i++) {
@@ -5273,9 +5299,33 @@ static int idle_cast(const Search *x, const State *s, int side, const Card *c, i
 		if (c->amount == HE_ASST && s->he[0][HE_ASST] + s->he[1][HE_ASST] > 0) return 1;
 		return c->amount == HE_FOGG && s->he[0][HE_FOGG] + s->he[1][HE_FOGG] > 0;
 	case EFF_MIND_BLAST: return cards_held(s, 0) <= 5 && cards_held(s, 1) <= 5;
-	case EFF_DISCARD: return target == NO_TARGET || -target - 1 == side || cards_held(s, -target - 1) <= 0;
-	case EFF_DISCARD_ALL:
-	case EFF_DISCARD_CREATURES: return target == NO_TARGET || cards_held(s, -target - 1) <= 0;
+	case EFF_DISCARD: {
+		if (target == NO_TARGET || -target - 1 == side) return 1;
+		int hero = -target - 1;
+		if (cards_held(s, hero) <= 0) return 1;
+		if (c->scope == SCOPE_ALL || x->proof || cast_reacts(s, side, c)) return 0;
+		for (int j = 0; j < BACK; j++) {
+			int kind = s->back[hero][j];
+			if (kind > 0 && kind <= POOL && x->pool[kind - 1].effect != EFF_SUMMON) return 0;
+		}
+		for (int i = 0; i < imin(SLOTS, HAND + s->drawn[hero]); i++)
+			if (discardable_spell(x, s, hero, i)) return 0;
+		return 1;
+	}
+	case EFF_DISCARD_CREATURES: {
+		if (target == NO_TARGET) return 1;
+		int hero = -target - 1;
+		if (cards_held(s, hero) <= 0) return 1;
+		if (x->proof || cast_reacts(s, side, c)) return 0;
+		for (int j = 0; j < BACK; j++) {
+			int kind = s->back[hero][j];
+			if (kind > 0 && kind <= POOL && x->pool[kind - 1].effect == EFF_SUMMON) return 0;
+		}
+		for (int i = 0; i < imin(SLOTS, HAND + s->drawn[hero]); i++)
+			if (discardable_creature(x, s, hero, i)) return 0;
+		return 1;
+	}
+	case EFF_DISCARD_ALL: return target == NO_TARGET || cards_held(s, -target - 1) <= 0;
 	case EFF_AMNESIA:
 	case EFF_BAN: return cards_held(s, 1 - side) <= 0;
 	case EFF_CLEANSE: {
@@ -6905,7 +6955,8 @@ static int card_moves(const Search *x, const State *s, int side, Move *out, int 
 		const Card *c = card_at(x, s, side, h);
 		if (!c || c->cost < 0 || c->effect == EFF_NONE) continue;
 		if (s->phase != 0 && !c->defence && h < ART_BASE) continue;
-		if (card_cost(x, s, c) > s->ether[side] || c->channels > s->channels[side]) continue;
+		int price = card_cost(x, s, c);
+		if (price > s->ether[side] || c->channels > s->channels[side]) continue;
 		if (c->choice) {
 			count = choice_moves(x, s, side, c, h, out, count, light);
 			continue;
@@ -6947,7 +6998,9 @@ static int card_moves(const Search *x, const State *s, int side, Move *out, int 
 				}
 			}
 		} else if (c->variable) {
-			int most = s->ether[side] - card_cost(x, s, c);
+			int most = s->ether[side] - price;
+			/* The proof still considers a zero-X response. */
+			if (most == 0 && !lists_all(x) && (c->effect == EFF_DAMAGE || c->effect == EFF_WAVE) && !c->splash && !cast_reacts(s, side, c)) continue;
 			if (lists_all(x)) {
 				for (int p = most; p >= 0 && wide < MAX_MOVES; p--) powers[wide++] = p;
 			} else {
@@ -8138,6 +8191,7 @@ static int search_moves(Search *x, State *s, int phases, int steps, int alpha, i
 		}
 		for (int k = 0; k < held; k++) moves[kept + k] = late[k];
 	}
+	if (best != NULL) pass_before_casts(moves, count);
 	/* Commands that already leave the board far worse than the best of them
 	 * are not read at all. With hundreds to choose from, reading every one
 	 * shallowly is worth less than reading the few that can matter deeply.
@@ -8985,6 +9039,7 @@ static int run_search(const int32_t *in, int64_t length, int32_t *out) {
 		 * reading the clock cut short is told as such. */
 		Move moves[MAX_MOVES];
 		int count = generate(&x, &s, moves, 1, 0, 1, NULL);
+		pass_before_casts(moves, count);
 		int steps = imax(2, imin(in[16], MAX_COMMANDS));
 		double until = in[28] > 0 ? now_ms() + (double)in[28] : 0;
 		if (in[22] & 1) {

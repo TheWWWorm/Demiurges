@@ -23,6 +23,11 @@ var _secondary_sources := PackedFloat32Array()
 var _secondary_traced := false
 var _secondary_scenery: Array[ELModel] = []
 var _camera_obstacles: Array[ELModel] = []
+var _closeup_parts: Array[MeshInstance3D] = []
+var _closeup_hidden: Array[MeshInstance3D] = []
+var _closeup_faces: Dictionary = {}
+## Padding for near-plane intersections and shots that graze scenery.
+const CAMERA_CLEARANCE := 0.25
 ## An enclosed hall's tall shell (the Dungeon's outer wall and its pillars),
 ## hidden while the camera stands beyond the ring; made on first use.
 var _hall_shell: Array[ELModel] = []
@@ -101,7 +106,10 @@ func build(profile: ELProfile, arena_id := "Green.001") -> bool:
 		if not axis.is_zero_approx(): model.quaternion = Quaternion(axis.normalized(), transforms[at + 6])
 		var id := int(ids[i])
 		if not _scenery.has(id): _scenery[id] = model
-		if ELArchive.key(str(textures[i])) != ELArchive.key(str(definition.get("Background", ""))): _solid_models.append(model)
+		if ELArchive.key(str(textures[i])) != ELArchive.key(str(definition.get("Background", ""))):
+			_solid_models.append(model)
+			for part: MeshInstance3D in model.parts.values():
+				if part.mesh != null: _closeup_parts.append(part)
 		# Only authored tall scenery can clear the camera's viewing corridor.
 		# Low pieces include whole hills supporting separately placed trees;
 		# their wide bounds can cross the view without blocking the action.
@@ -521,7 +529,7 @@ func _process(delta: float) -> void:
 func camera_radius() -> float:
 	return float(CAMERA_RADIUS.get(scene_id, INF))
 
-func clear_camera_view(camera_position: Vector3, target: Vector3) -> void:
+func clear_camera_view(camera_position: Vector3, target: Vector3, framed: Array = []) -> void:
 	# Hide tall scenery between the camera and the central play area. Terrain
 	# and small scenery stay visible, including the ground under distant trees.
 	var ring := camera_radius()
@@ -547,6 +555,55 @@ func clear_camera_view(camera_position: Vector3, target: Vector3) -> void:
 			if box.size.y > 2.0 and box.intersects_segment(camera_position, target + Vector3(0, 1.5, 0)) != null:
 				obscures = true
 		child.visible = not obscures
+
+	# Close-ups can put the lens inside a bank or decoration too low to
+	# affect the orbit camera. Test each part in its own bounds, including
+	# rotated scenery. Keep the backdrop and the arena surface intact.
+	var hidden: Array[MeshInstance3D] = []
+	if not framed.is_empty():
+		for part: MeshInstance3D in _closeup_parts:
+			if not part.visible and part not in _closeup_hidden: continue
+			if not part.get_parent().is_visible_in_tree(): continue
+			var to_local := part.global_transform.affine_inverse()
+			var origin := to_local * camera_position
+			for point: Vector3 in framed:
+				var focus := to_local * point
+				var eye := origin + (origin - focus).normalized() * CAMERA_CLEARANCE
+				if not _camera_ray_hits(part, eye, focus): continue
+				hidden.append(part)
+				break
+	for part: MeshInstance3D in _closeup_hidden:
+		if part not in hidden: part.show()
+	for part: MeshInstance3D in hidden: part.hide()
+	_closeup_hidden = hidden
+
+## The boxes of banks and trees can cover much of the arena. Test their
+## triangles so a shot through an opening doesn't hide the whole piece.
+func _camera_ray_hits(part: MeshInstance3D, eye: Vector3, focus: Vector3) -> bool:
+	if part.mesh.get_aabb().grow(0.001).intersects_segment(eye, focus) == null: return false
+	if not _closeup_faces.has(part):
+		var buckets := {}
+		var faces := part.mesh.get_faces()
+		for i in range(0, faces.size(), 3):
+			var a := faces[i]
+			var b := faces[i + 1]
+			var c := faces[i + 2]
+			var centre := (a + b + c) / 3.0
+			var cell := Vector2i(floori(centre.x / 4.0), floori(centre.z / 4.0))
+			var bounds := AABB(a, Vector3.ZERO).expand(b).expand(c)
+			var bucket: Dictionary = buckets.get_or_add(cell, {"box": bounds, "faces": PackedVector3Array()})
+			bucket.box = (bucket.box as AABB).merge(bounds)
+			bucket.faces.append(a)
+			bucket.faces.append(b)
+			bucket.faces.append(c)
+		_closeup_faces[part] = buckets.values()
+	for bucket: Dictionary in _closeup_faces[part]:
+		if (bucket.box as AABB).grow(0.001).intersects_segment(eye, focus) == null: continue
+		var faces: PackedVector3Array = bucket.faces
+		for i in range(0, faces.size(), 3):
+			if Geometry3D.segment_intersects_triangle(eye, focus, faces[i], faces[i + 1], faces[i + 2]) != null:
+				return true
+	return false
 
 ## The tall pieces of an enclosed hall that are not its arches: from beyond
 ## the ring their pillars stand across the picture.

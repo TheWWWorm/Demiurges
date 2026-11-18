@@ -310,10 +310,10 @@ const METAL_NAMES := ["kogot1", "kogot2", "kogot3", "r_kogot"]
 ## colour they are painted.
 const SOFT_PARTS := ["wing", "l_w_", "r_w_", "feather", "pero", "hair", "fur", "xvost", "tail",
 	"cloth", "coat", "cape", "balahon", "robe", "flag", "ponit", "ponyt", "skin", "face", "hvost"]
-## Parts that are cloth on one figure although nothing in their paint tells
-## them from its armour: the White Lord's silver robe and hat are painted in
-## the very steel of his sword and shield.
-const CLOTH_PARTS := {"he500": ["body", "hat"], "he501": ["body", "hat"]}
+## Parts whose paint is too close to the figure's armour for the metal mask.
+## The Vital sorceress's body includes skin and cloth. The White Lord's silver
+## robe and hat are painted in the very steel of his sword and shield.
+const CLOTH_PARTS := {"he401": ["body"], "he500": ["body", "hat"], "he501": ["body", "hat"]}
 ## Metal's look: how metallic its grey and gold texels become, its
 ## reflectance and its roughness (a broad, soft sheen). The reflectance is
 ## the non-metallic share's: none, so texels the mask leaves out (plumes,

@@ -81,7 +81,7 @@ func _run() -> void:
 	_finish()
 
 const CASES := ["a_castle", "a_mine", "b_teacher", "b_gnome", "b_spawn", "c_blocked", "c_alternative", "c_spent", "d_unexplored", "d_guarded",
-	"e_unseen", "e_unreachable", "f_upgrade", "f_refill", "f_portal", "h_meteor", "j_free", "k_holds", "k_defend", "m_roles", "n_joint", "p_resolver", "p_monsters", "p_committed_duel", "p_approach", "p_matchup_shop", "q_lookahead",
+	"e_unseen", "e_unreachable", "f_upgrade", "f_refill", "f_portal", "h_meteor", "j_free", "k_holds", "k_defend", "m_roles", "n_joint", "p_resolver", "p_monster_options", "p_monsters", "p_committed_duel", "p_approach", "p_matchup_shop", "q_lookahead",
 	"s_saved", "t_patrol", "t_raid", "t_escort", "t_retreat", "t_doctrine", "t_story", "t_off",
 	"v_cast", "v_income", "v_runes", "v_portal", "v_upkeep", "v_mine",
 	"w_pickup", "w_commander", "w_promotion", "w_hidden", "w_pile", "w_peace", "w_scouts", "w_tinkerer", "w_siege", "w_scrolls", "w_unfound", "w_human",
@@ -386,6 +386,7 @@ func _case_d_guarded() -> void:
 	# A supporter goes for a mine beyond a wall: the near passage leads into a
 	# creature's guard area, the far one is clear.
 	var director := _world()
+	director.fight_neutral_monsters = smart
 	var home := _castle(director, 2)
 	_hero(director, 2, int(home.x) - 6, int(home.y), 7)
 	var side := _hero(director, 2, 30, 60, 2)
@@ -666,9 +667,33 @@ func _case_p_resolver() -> void:
 	director.set("battle_estimate", true)
 	check(float(planner.call("win_chance", director, strong, neutral)) < 1.0, "P: and the estimate while it is on")
 
+func _case_p_monster_options() -> void:
+	var director := _world()
+	var state := director.state
+	var hero := _hero(director, 2, 30, 90, 1)
+	var mob := _place(director, "monster", 34, 90, {"owner": 0, "level": 14, "health": 400})
+	hero.health = 1
+	var preferred := ELSettings.new()
+	var levels := ELAIChoice.defaults(state.difficulty, preferred)
+	check(not levels.get(ELAIChoice.FIGHT_MONSTERS, false) and ELAIChoice.valid(levels), "P: legacy AI preferences leave neutral duels off")
+	for world: int in [0, 1, 2]:
+		ELAIChoice.store(state, {"duel_ai": 2, "world_ai": world})
+		ELAIChoice.apply_world(director, preferred)
+		check(not ELFirstAI.plays_monster_duel(director, mob, hero) and ELFirstAI.winner(state, mob, hero) == hero,
+			"P: world AI %d with the checkbox off uses the original automatic win" % world)
+	levels[ELAIChoice.FIGHT_MONSTERS] = true
+	ELAIChoice.store(state, levels)
+	ELAIChoice.apply_world(director, preferred)
+	check(director.living_world and ELFirstAI.plays_monster_duel(director, mob, hero), "P: checked game uses Living world and plays the duel")
+	var next := ELAIChoice.carry_rows(state, [{"file_name": state.map.id}])
+	check(ELAIChoice.from_scenario(next[0]).get(ELAIChoice.FIGHT_MONSTERS), "P: the checkbox carries to the next chapter")
+	ELAIChoice.apply_world(director, preferred, true)
+	check(not ELFirstAI.plays_monster_duel(director, mob, hero), "P: the solo preference does not change network play")
+
 func _case_p_monsters() -> void:
 	if not smart: return
 	var director := _world()
+	director.fight_neutral_monsters = true
 	var state := director.state
 	var hero := _hero(director, 2, 30, 90, 1)
 	var mob := _place(director, "monster", 34, 90, {"owner": 0, "level": 14, "health": 400})
@@ -722,6 +747,7 @@ func _case_p_monsters() -> void:
 func _case_p_committed_duel() -> void:
 	if not smart: return
 	var director := _world()
+	director.fight_neutral_monsters = true
 	var state := director.state
 	var hero := _hero(director, 2, 30, 90, 1)
 	var mob := _place(director, "monster", 34, 90, {"owner": 0, "level": 1, "health": 400})
@@ -751,6 +777,7 @@ func _case_p_committed_duel() -> void:
 func _case_p_approach() -> void:
 	if not smart: return
 	var director := _world()
+	director.fight_neutral_monsters = true
 	var state := director.state
 	var hero := _hero(director, 2, 30, 90, 2)
 	var mob := _place(director, "monster", 34, 90, {"owner": 0})
@@ -777,6 +804,7 @@ func _case_p_approach() -> void:
 func _case_p_matchup_shop() -> void:
 	if not smart: return
 	var director := _world()
+	director.fight_neutral_monsters = true
 	var state := director.state
 	var hero := _hero(director, 2, 30, 90, 3)
 	var mob := _place(director, "monster", 33, 90, {"owner": 0, "level": 4})
@@ -850,6 +878,7 @@ func _case_p_matchup_shop() -> void:
 ## Teacher is worth a little more than the creature).
 func _q_world() -> Array:
 	var director := _world()
+	director.fight_neutral_monsters = smart
 	var lead := _hero(director, 2, 30, 60, 5)
 	lead.health = 26
 	var mine := _place(director, "mine", 50, 60, {"owner": -1})
@@ -2230,6 +2259,7 @@ func _case_s_saved() -> void:
 
 func _second_cases(second: ELProfile) -> void:
 	var catalog := ELSingleScenario.catalog(second)
+	if catalog.is_empty(): catalog.append({"id": "e2mission11"})
 	var director: ELAdventureDirector = null
 	for entry: Dictionary in catalog:
 		var map := ELAdventureMap.new()

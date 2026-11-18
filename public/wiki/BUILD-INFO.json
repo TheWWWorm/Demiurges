@@ -1,5 +1,5 @@
 {
-  "version": "0.18.3",
+  "version": "0.18.4",
   "languages": {
     "en": {
       "pages": 472,
@@ -18,8 +18,8 @@
   "translation_keys": 16,
   "files": {
     "data/en/index.json": {
-      "bytes": 331303,
-      "sha256": "f15ead60bfb5b54b42806ceb1c8a6ac1480371c5d3cc47ffbf8bc7dd8020cf0f"
+      "bytes": 331605,
+      "sha256": "37e9d50dfd0ecaa49fb74555fa7286167247b864e3cdfa85025bb47ac5c01149"
     },
     "data/en/pages/abilities.json": {
       "bytes": 2238,
@@ -1562,8 +1562,8 @@
       "sha256": "fa27e9aeb44b3b713d18f49127731a9a0f00b6096fb584405fc57c39bbceeec6"
     },
     "data/en/pages/options.json": {
-      "bytes": 14395,
-      "sha256": "373428a051eda23175ed3f72c1b795d6f7c5a3fd4ae3a54b2c0dff49d95430d1"
+      "bytes": 14754,
+      "sha256": "72d8f6dbc65ad80bc744d261844a410e70b136af0bf89a32efe303c76e1bf8c0"
     },
     "data/en/pages/pale.json": {
       "bytes": 4811,
@@ -1910,8 +1910,8 @@
       "sha256": "d18c0bf1a09af1788f0ca5427f86b6ecbb3cc60bc9a08d9da6d1b068de46ddaa"
     },
     "data/ru/index.json": {
-      "bytes": 584699,
-      "sha256": "ff153dc5a429cdc22b4e7d6d74f7bdb8ed6ac07827fda7a096f3e7669da65839"
+      "bytes": 585349,
+      "sha256": "ee2a30ad48731a0ac7e88a077310b5eb0b891620e1866074befc4d16fee4dea5"
     },
     "data/ru/pages/abilities.json": {
       "bytes": 3685,
@@ -3454,8 +3454,8 @@
       "sha256": "abe40e35df83e438e776b5c6c2df184570cd9bd1ca83a50f0a43de3f35c8a76e"
     },
     "data/ru/pages/options.json": {
-      "bytes": 24701,
-      "sha256": "adbacb0997ec9059cb088088c9b64b481797d05a76515991f3a09ea9becfc09e"
+      "bytes": 25408,
+      "sha256": "a377b0932217f66f5c99c031b8a901f03d27f069d567c5c59d479dd45842f28d"
     },
     "data/ru/pages/pale.json": {
       "bytes": 7741,
@@ -3802,8 +3802,8 @@
       "sha256": "838d61a3a9f77583762672b49490d1ddd71bda24d0ee738023127e375400f687"
     },
     "i18n.json": {
-      "bytes": 1917,
-      "sha256": "e8ea1273d286143f7291cab5976bdd0b546e07ee1661138bbd47c083514fa7c6"
+      "bytes": 1955,
+      "sha256": "c0c2fe7ea7e8b3125aba4d4660fa3d49e79ed43e17e044a84ad59f8c16595412"
     },
     "images/el1/hero-diamanda.webp": {
       "bytes": 14040,
@@ -5734,17 +5734,17 @@
       "sha256": "a20e8238923d70e0d188200c41ebc83afcb1187f9f9bb1b4ed46c6014613a40d"
     },
     "index.html": {
-      "bytes": 2445,
-      "sha256": "2eea4a2f80afcc102691067a8d876b7ac524df646bc2ad08962f6f27acbecdeb"
+      "bytes": 2488,
+      "sha256": "0af699a0765b5b31a3567caa9070ecefe1d62c691903beea83ed1f6215d0b328"
     },
     "wiki.css": {
-      "bytes": 7834,
-      "sha256": "4938106d5da82383b2d85d1a7923a9e91e6e585563a42e614b2b943f71461c2d"
+      "bytes": 7950,
+      "sha256": "b9785acd482bd464943f74afb90511f66671e1a3e61b621c1ed344f44bdd43cb"
     },
     "wiki.js": {
-      "bytes": 8424,
-      "sha256": "aabab5bcfce15545227916db3d8f7e6c353fbf93c2b073e25dec7262d79874ed"
+      "bytes": 8640,
+      "sha256": "f1ca10fe6ee26dfebb9874946e68af19933a07440d488f879dd85ba44f991925"
     }
   },
-  "bytes": 12212217
+  "bytes": 12214648
 }

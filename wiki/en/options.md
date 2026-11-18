@@ -90,6 +90,8 @@ At the bottom of the Path tracing page.
 
 Each campaign and single scenario keeps its own **Duel AI** and **World AI**, saved with it and carried to the next chapter. The same two choices are shown beside the difficulty when you begin one: on the lowest difficulty (**Easy**) they start at **Original**, on the others at the choices made here outside a game, and changing the difficulty puts that difficulty's back; you can still change them before you begin. During a game, these Options change that game's choices. A save from before games kept them gets **Original** at the lowest difficulty and the choices here at the others. Standalone duels, puzzles and network games use the choices here.
 
+New Etherlords campaigns and single scenarios start with **AI fights neutral monsters** checked. It locks **World AI** to **Living world** so computer heroes forecast and play neutral fights. Clear it on the difficulty screen for the original automatic wins. The choice is saved and carries into the next chapter.
+
 ## Hotkeys
 
 Choose a game and select a shortcut to change it. Press a key or key combination, or press **Esc** to cancel. **Reset defaults** restores the selected game's shortcuts for battle, maps and shops.

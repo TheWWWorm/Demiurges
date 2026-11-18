@@ -18,6 +18,9 @@ var settings: ELSettings
 var ai_levels: Dictionary = {}
 var ai_picks: Dictionary = {}
 var _world_ai: Control
+var _monster_row: HBoxContainer
+var _fight_monsters: CheckBox
+var _monster_help: Button
 var entries: Array[Dictionary] = []
 
 func build(available: Dictionary, initial: String) -> void:
@@ -60,6 +63,19 @@ func build(available: Dictionary, initial: String) -> void:
 			pick.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 			pair.add_child(pick)
 			if key == "world_ai": _world_ai = pair
+		_monster_row = HBoxContainer.new()
+		rows.add_child(_monster_row)
+		_fight_monsters = ELAIChoice.monster_checkbox(ai_levels, ai_picks.world_ai)
+		_monster_row.add_child(_fight_monsters)
+		_monster_help = Button.new()
+		_monster_help.name = "NeutralMonsterHelp"
+		_monster_help.text = "?"
+		var dialog := AcceptDialog.new()
+		_monster_help.pressed.connect(func():
+			dialog.dialog_text = _monster_help.tooltip_text
+			dialog.popup_centered(Vector2i(420, 0)))
+		add_child(dialog)
+		_monster_row.add_child(_monster_help)
 	description = RichTextLabel.new()
 	description.custom_minimum_size = Vector2(510, 230)
 	rows.add_child(description)
@@ -89,7 +105,9 @@ func build(available: Dictionary, initial: String) -> void:
 	saved.call()
 	edition.item_selected.connect(func(_index: int):
 		saved.call()
-		_campaigns())
+		ai_levels.clear()
+		_campaigns()
+		reset_ai())
 	campaign.item_selected.connect(func(_index: int): _chapters())
 	chapter.item_selected.connect(func(_index: int): _description())
 	difficulty.item_selected.connect(func(_index: int): reset_ai())
@@ -100,8 +118,10 @@ func build(available: Dictionary, initial: String) -> void:
 ## shown on the dropdowns.
 func reset_ai() -> void:
 	if settings == null: return
+	if ai_levels.is_empty() and chosen_edition() == "el1": ai_levels[ELAIChoice.FIGHT_MONSTERS] = true
 	ai_levels.merge(ELAIChoice.defaults(maxi(difficulty.selected, 0), settings), true)
 	for key: String in ai_picks: ELAIChoice.display(ai_picks[key], int(ai_levels[key]))
+	ELAIChoice.display_monsters(_fight_monsters, ai_picks.world_ai, ai_levels)
 
 ## Difficulty levels per edition: the first game has five, second-game maps
 ## author three variants (DifLvl 0-2, global-map GMA6Diff1-3).
@@ -124,7 +144,11 @@ func _campaigns() -> void:
 	var profile: ELProfile = profiles[edition.get_selected_metadata()]
 	_difficulties(profile.id)
 	# The map's computer players are the first game's only.
-	if _world_ai != null: _world_ai.visible = ELAIChoice.applies("world_ai", profile.id)
+	if _world_ai != null:
+		_world_ai.visible = ELAIChoice.applies("world_ai", profile.id)
+		_monster_row.visible = _world_ai.visible
+		_fight_monsters.text = ELRemakeText.t(ELAIChoice.MONSTER_LABEL, profile)
+		_monster_help.tooltip_text = ELRemakeText.t(ELAIChoice.MONSTER_HELP, profile)
 	for id: String in ELCampaign.available(profile):
 		var data := ELCampaign.new()
 		if data.load_campaign(profile, id):

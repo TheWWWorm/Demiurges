@@ -21,6 +21,7 @@ var difficulty := 0
 ## chapter.
 var duel_ai := -1
 var world_ai := -1
+var fight_neutral_monsters := false
 var script_name := ""
 var seed_value := 212
 ## The solo first-game view enables fresh skill rolls, independently of the
@@ -118,6 +119,7 @@ func start(source: ELAdventureMap, level := 0, seed_number := 212, scenario_scri
 	error = ""
 	day = 0 if map.profile.id == "el2" else 1
 	income_day = 0
+	fight_neutral_monsters = false
 	current_player = 1
 	main_hero = -1
 	outcome = ""

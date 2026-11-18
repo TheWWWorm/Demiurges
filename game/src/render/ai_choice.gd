@@ -15,6 +15,11 @@ class_name ELAIChoice
 
 ## The keys a game keeps.
 const KEYS := ["duel_ai", "world_ai"]
+const FIGHT_MONSTERS := "fight_neutral_monsters"
+const LIVING_WORLD := 2
+const MONSTER_LABEL := "AI fights neutral monsters"
+const MONSTER_HELP := "In the original Etherlords, computer heroes automatically won off-screen battles against ordinary neutral monsters. Enable this to make them forecast and play out those duels. Living world is required. Map turns may take longer."
+const MONSTER_LOCK := "Living world is required while AI fights neutral monsters is enabled."
 
 ## The levels of `key`: [[caption, description], ...].
 static func levels(key: String) -> Array:
@@ -54,14 +59,20 @@ static func valid_level(key: String, value: Variant) -> bool:
 
 ## Whether `value` is a game's levels: {"duel_ai": n, "world_ai": n}.
 static func valid(value: Variant) -> bool:
-	if not value is Dictionary or value.size() != KEYS.size(): return false
+	if not value is Dictionary or value.size() != KEYS.size() + int(value.has(FIGHT_MONSTERS)): return false
+	if not value.get(FIGHT_MONSTERS, false) is bool: return false
 	for key: String in KEYS:
 		if not valid_level(key, value.get(key)): return false
 	return true
 
 ## `value` with integer levels (JSON reads numbers as floats).
 static func normalized(value: Dictionary) -> Dictionary:
-	return {"duel_ai": int(value.duel_ai), "world_ai": int(value.world_ai)}
+	var result := {"duel_ai": int(value.duel_ai), "world_ai": selected_world(value)}
+	if value.get(FIGHT_MONSTERS, false): result[FIGHT_MONSTERS] = true
+	return result
+
+static func selected_world(value: Dictionary) -> int:
+	return LIVING_WORLD if value.get(FIGHT_MONSTERS, false) else int(value.world_ai)
 
 ## The levels a chapter row brings ("ai", or the second game's campaign
 ## progress' "ai"); empty when it brings none.
@@ -74,13 +85,16 @@ static func from_scenario(scenario: Dictionary) -> Dictionary:
 ## The session's own levels; empty before they are set.
 static func of(state: ELAdventureSession) -> Dictionary:
 	if state == null or state.duel_ai < 0 or state.world_ai < 0: return {}
-	return {"duel_ai": state.duel_ai, "world_ai": state.world_ai}
+	var result := {"duel_ai": state.duel_ai, "world_ai": state.world_ai}
+	if state.fight_neutral_monsters: result[FIGHT_MONSTERS] = true
+	return result
 
 ## Gives the session the levels `value` (when valid).
 static func store(state: ELAdventureSession, value: Dictionary) -> void:
 	if state == null or not valid(value): return
 	state.duel_ai = int(value.duel_ai)
-	state.world_ai = int(value.world_ai)
+	state.fight_neutral_monsters = bool(value.get(FIGHT_MONSTERS, false))
+	state.world_ai = selected_world(value)
 
 ## A map being opened: a session without levels (a new map, or a save from
 ## before games kept them) takes the chapter row's, else its difficulty's.
@@ -120,7 +134,8 @@ static func world_level(state: ELAdventureSession, settings: ELSettings) -> int:
 static func apply_world(director: ELAdventureDirector, settings: ELSettings, shared := false) -> void:
 	var level := world_level(null if shared else director.state, settings)
 	director.smart_ai = level >= 1
-	director.living_world = level >= 2
+	director.living_world = level >= LIVING_WORLD
+	director.fight_neutral_monsters = not shared and director.state.fight_neutral_monsters
 
 ## A dropdown of `key`'s levels showing the current value; choosing one
 ## stores it in `settings` (written to `path` when given).
@@ -146,6 +161,25 @@ static func values_picker(values: Dictionary, key: String, profile: ELProfile, c
 		pick.tooltip_text = ELRemakeText.t(String(list[index][1]), profile)
 		if changed.is_valid(): changed.call(index))
 	return pick
+
+## The campaign setup checkbox and the corresponding World AI picker state.
+static func monster_checkbox(values: Dictionary, pick: OptionButton) -> CheckBox:
+	var box := CheckBox.new()
+	box.name = "FightNeutralMonsters"
+	box.toggled.connect(func(enabled: bool):
+		if enabled: values[FIGHT_MONSTERS] = true
+		else: values.erase(FIGHT_MONSTERS)
+		display_monsters(box, pick, values))
+	return box
+
+static func display_monsters(box: CheckBox, pick: OptionButton, values: Dictionary) -> void:
+	var enabled := bool(values.get(FIGHT_MONSTERS, false))
+	box.set_pressed_no_signal(enabled)
+	display(pick, selected_world(values))
+	pick.disabled = enabled
+	if enabled:
+		var profile: ELProfile = pick.get_meta("ai_profile") if pick.has_meta("ai_profile") else null
+		pick.tooltip_text = ELRemakeText.t(MONSTER_LOCK, profile)
 
 ## Shows `level` on a dropdown `values_picker` made, without choosing it.
 static func display(pick: OptionButton, level: int) -> void:

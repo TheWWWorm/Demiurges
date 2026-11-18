@@ -66,6 +66,7 @@ func _initialize() -> void:
 	ELCombatSearch.smart_engine = _arg("engine", "true") == "true"
 	if only.is_empty() or "lookahead".contains(only): _lookahead()
 	if only.is_empty() or "fixtures".contains(only): _fixtures()
+	if only.is_empty() or "passing".contains(only): _passing()
 	_positions(only)
 	print("%d failures" % failures.size())
 	quit(1 if not failures.is_empty() else 0)
@@ -162,6 +163,68 @@ func _lookahead() -> void:
 	# (the two once counted as one, and so went or stayed together).
 	a = _ask(0, 0, 0, 2, [[20], [20]], [[2, 0, 2, 6, 0, -1, 0, 5], [3, 0, 2, 6, 0], [4, 1, 1, 3, 0]])
 	check(not a.choice.has(2), "lookahead: of two 2/6, the one at five damage is not sent into a ready 1/3 (%s)" % [a.choice])
+
+func _passing() -> void:
+	if not ELCombatBrain.available: return
+	var previous := ELCombatSearch.smart_engine
+	ELCombatSearch.smart_engine = true
+	for game: String in ["el1", "el2"]:
+		var profile := _profile(game)
+		if profile == null: continue
+		var duel := Fixtures.build(profile, {
+			"heroes": [{"mana": 2, "hand": ["ERQA"]}, {"mana": 0, "health": 1}],
+			"creatures": [{"owner": 0, "card": "GBAT", "power": 1, "flags": ["Fly"]}, {"owner": 1, "card": "KBGD", "toughness": 1, "flags": []}],
+			"attacks": [2],
+		})
+		if duel == null:
+			check(false, game + ": Earthquake fixture loads")
+			continue
+		duel.smart_sides = [0]
+		var ctx := Fixtures.context(profile, 0)
+		var offered := ELCombatBrain.weigh(ctx, duel, 2, 20000, 4)
+		check(duel.maximum_power("ERQA") == 0 and offered.size() == 1 and offered[0].command.kind == "end_phase",
+			game + ": an Earthquake with zero damage is left out of the ordinary search")
+		var tied := duel.search_copy()
+		tied.heroes[0].mana = 3
+		var prove := ELCombatSearch.smart_engine_prove
+		ELCombatSearch.smart_engine_prove = 0
+		var answer := ELCombatBrain.choose(ctx, tied, 2, 20000, 4)
+		ELCombatSearch.smart_engine_prove = prove
+		check(answer.get("command", {}).get("kind") == "end_phase",
+			game + ": ordinary search passes when casting Earthquake wins just as soon")
+		ELPracticeAI.step(duel)
+		check(duel.phase != ELDuel.Phase.ATTACK and duel.heroes[0].hand.has("ERQA"),
+			game + ": smart AI passes with lethal damage already attacking and keeps Earthquake")
+		duel = Fixtures.build(profile, {
+			"heroes": [{"mana": 3, "hand": ["ERQA"]}, {"mana": 0, "health": 1}],
+			"creatures": [{"owner": 0, "card": "GBAT", "power": 1, "toughness": 2, "flags": []}, {"owner": 1, "card": "KBGD", "toughness": 1, "flags": []}],
+			"attacks": [2],
+		})
+		if duel == null:
+			check(false, game + ": positive Earthquake fixture loads")
+			continue
+		duel.smart_sides = [0]
+		var command := ELCombatSearch.think(duel)
+		check(command.get("card") == "ERQA" and command.get("power") == 1 and ELCombatSearch.apply(duel, command) and duel.army(1).is_empty(),
+			game + ": smart AI casts Earthquake to remove the blocker for lethal damage")
+		_discard_targets(profile, ctx)
+	ELCombatSearch.smart_engine = previous
+
+func _discard_targets(profile: ELProfile, ctx: ELCombatSearch.Context) -> void:
+	for card: String in ["MALS", "CURS"]:
+		var discard := "ERQA" if card == "MALS" else "MTPT"
+		var keep := "MTPT" if card == "MALS" else "ERQA"
+		for eligible: bool in [false, true]:
+			var duel := Fixtures.build(profile, {"heroes": [
+				{"mana": 3, "hand": [card]}, {"mana": 0, "hand": [discard if eligible else keep]},
+			]})
+			var label := "%s: %s against %s" % [profile.id, card, discard if eligible else keep]
+			if duel == null:
+				check(false, label + " loads")
+				continue
+			var offered := ELCombatBrain.weigh(ctx, duel, 2, 20000, 4)
+			var cast := offered.any(func(item: Dictionary) -> bool: return item.command.get("card") == card and item.command.get("target") == 1)
+			check(cast == eligible, label + (" is worth considering" if eligible else " is omitted from the ordinary search"))
 
 # --- Positions from real duels -----------------------------------------------------
 

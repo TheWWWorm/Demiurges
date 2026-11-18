@@ -1,9 +1,8 @@
 class_name ELFirstAI
 extends RefCounted
-## First-game strategic opponents. Original map AI settles non-local battles
-## without a duel. Smarter and Living world play hero-versus-monster duels
-## off screen. The Smarter map AI adds skill picks, shopping and
-## global spells (ELFirstAIEconomy) and plans with ELFirstAIPlanner.
+## First-game strategic opponents. Off-screen monster battles use the original
+## automatic win unless the game enables neutral monster duels. Smarter adds
+## skill picks, shopping, global spells and the world planner.
 
 ## Winner of a strategic battle that the local player takes no part in. The
 ## pair keeps its queue order (guard or interceptor first). The original
@@ -46,7 +45,7 @@ static func resolve(director: ELAdventureDirector, first: Dictionary, second: Di
 	return true
 
 static func plays_monster_duel(director: ELAdventureDirector, first: Dictionary, second: Dictionary) -> bool:
-	if not ELFirstAIEconomy.applies(director): return false
+	if not director.fight_neutral_monsters or not ELFirstAIEconomy.applies(director): return false
 	var first_is_hero: bool = first.get("type") == "hero"
 	var hero := first if first_is_hero else second
 	var monster := second if first_is_hero else first
@@ -67,6 +66,7 @@ const MONSTER_LOSS_COOLDOWN := 4
 
 ## Check a shortlisted monster or lair before committing a hero to the trip.
 static func forecast_objective(director: ELAdventureDirector, hero: Dictionary, task: Dictionary, budget: Dictionary = {}) -> bool:
+	if not director.fight_neutral_monsters: return true
 	var kind: String = task.get("kind", "")
 	if kind not in ["monster", "building"]: return true
 	var item := director.state.object(task.get("target", -1))
@@ -386,21 +386,22 @@ static func plan_player(director: ELAdventureDirector, player: int, daily := tru
 	for hero: Dictionary in heroes:
 		if champion.is_empty() or int(hero.experience) > int(champion.experience): champion = hero
 	ai.champion = int(champion.get("uid", -1))
-	# Remake option: a champion held in a fort still meets ethereal attacks,
-	# while the most experienced hero free to move leads in the field.
-	var leader := commander(state, player) if ELFirstAIEconomy.applies(director) else champion
+	var smart := ELFirstAIEconomy.applies(director)
+	# Fewer than two heroes: a free level-one recruit joins beside the castle.
+	if daily:
+		if heroes.size() < 2: ELGlobalSpells.summon(state, player, 1, smart)
+		ELFirstAIEconomy.daily(director, player)
+		# Smarter planners can give new recruits orders on the day they arrive.
+		if smart: heroes = heroes_of(state, player)
+	# A champion held in a fort meets ethereal attacks. The strongest hero
+	# free to move leads in the field, including a first recruit.
+	var leader := commander(state, player) if smart else champion
 	if leader.is_empty(): ai.erase("commander")
 	else: ai.commander = int(leader.uid)
-	# Fewer than two heroes: a free level-one recruit joins beside the castle.
-	# It first receives orders on the next day.
-	if daily and heroes.size() < 2: ELGlobalSpells.summon(state, player, 1, ELFirstAIEconomy.applies(director))
-	# Remake option: skills, global spells (ELFirstAIEconomy).
-	if daily: ELFirstAIEconomy.daily(director, player)
 	# mission13: after day ten the Kinet leader may send an ethereal attack on
 	# the first player's castle (one chance in three each day).
 	if daily and state.map.id == "mission13" and player == 2 and state.day > 10 and not champion.is_empty() and ELAdditionalBuildings._random(state) % 3 == 1:
 		ELGlobalSpells.script_attack(state, player, champion, 1)
-	var smart := ELFirstAIEconomy.applies(director)
 	var free_movement := smart and ELStrategy.free_mode(director)
 	if smart: ELFirstAIPlanner.observe(director, player)
 	# Route costs only cross tiles this player has explored.

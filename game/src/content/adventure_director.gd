@@ -53,6 +53,8 @@ var battle_estimate := false
 ## heroes patrol, raid, escort, turn back to resupply and follow faction
 ## doctrines (ELFirstAIPlanner.living). A mission or the settings turn it on.
 var living_world := false
+## Solo EL1 option: forecast and play duels between computer heroes and neutral monsters.
+var fight_neutral_monsters := false
 var free_queue: Array = []
 var _strategic_ai := -1
 var _strategic_handoff_day := -1
