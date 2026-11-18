@@ -964,6 +964,7 @@ func _remake_campaigns(profile: ELProfile) -> void:
 		check(false, "el2: the Chaots map opens with its original pause menu")
 		view.queue_free()
 		return
+	if map._mission_fade != null: await map._mission_fade.tree_exited
 	for i in 40:
 		if map.director.dialogue.is_empty(): break
 		map.director.acknowledge("OK")

@@ -1372,6 +1372,7 @@ const RU := {
 	"Restart": "Заново",
 	"Next puzzle": "Следующая",
 	"Try again": "Ещё раз",
+	"Drag to All spells to remove this copy.": "Перетащите карту в список всех заклинаний, чтобы удалить её из резерва.",
 	"The dying Bat made you discard %s.": "Гибель летучей мыши заставила сбросить заклинание «%s».",
 	"The dying Bat makes %s discard a spell.": "Гибель летучей мыши. %s сбрасывает заклинание.",
 	"%s draws %s.": "%s получает заклинание «%s».",

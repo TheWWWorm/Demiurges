@@ -52,12 +52,13 @@ const FALLBACK_SPEED := 2.0
 const WALK_CODE := 0x80140000
 const RUN_CODE := 0x80100000
 ## Kinds that start the battle's next stage; they wait until everyone is home.
-const AFTER_KINDS := ["phase", "turn_cleanup", "turn_pos_rune", "turn_neg_rune", "turn_stasis"]
+const AFTER_KINDS := ["phase", "turn_cleanup", "turn_pos_rune", "turn_neg_rune", "turn_stasis", "combat_end"]
 
 ## The duel view (ELDuel view script): models, homes and event handling.
 var view: Node
 var queue: Array[Dictionary] = []
 var _capturing := false
+var _capture_finished := false
 var _dispatching := false
 var _running := false
 var _serial := 0
@@ -72,9 +73,11 @@ var _next_blow := 0
 ## Damage each figure has taken in the blows shown so far (the rules clear
 ## combat damage before the playback ends).
 var _wounds := {}
-## Hand rows retained until a combat discard is shown at the blow's impact.
-var _hands: Array[Dictionary] = []
-var _hands_with_discards: Array[int] = []
+## An attacker keeps the stance it had when combat began until it gets home.
+var _attacker_rest := {}
+## The stance at the end of each exchange can be shown at home even when a
+## timed effect still holds the full board stamp. Later stamps take over.
+var _resolved_rest := {}
 
 ## A side's slot position in remake axes (original x, -y).
 static func slot_position(side: int, index: int, line: Line) -> Vector3:
@@ -102,8 +105,8 @@ static func hero_position(side: int) -> Vector3:
 ## a short stagger. A blocker then faces the attacker it blocks; at the
 ## exchange it sets off from there, clear of its own hero.
 func step_out(id: int, facing := -1) -> void:
-	if not _has(id) or not view.duel.creatures.has(id): return
-	var c: Dictionary = view.duel.creatures[id]
+	var c: Dictionary = view.shown_creature(id)
+	if not _has(id) or c.is_empty(): return
 	var front := slot_position(int(c.owner), int(view.models[id].get_meta("slot", 0)), Line.FRONT)
 	var yaw := _yaw_at(front, int(c.owner))
 	if facing >= 0: yaw = _yaw_to(front, _front_of(facing))
@@ -118,16 +121,17 @@ func face_block(id: int, attacker: int) -> void:
 
 ## Where a declared attacker stands: its front-line slot.
 func _front_of(id: int) -> Vector3:
-	if not _has(id) or not view.duel.creatures.has(id): return _position(id)
-	return slot_position(int(view.duel.creatures[id].owner), int(view.models[id].get_meta("slot", 0)), Line.FRONT)
+	var c: Dictionary = view.shown_creature(id)
+	if not _has(id) or c.is_empty(): return _position(id)
+	return slot_position(int(c.owner), int(view.models[id].get_meta("slot", 0)), Line.FRONT)
 
 func _yaw_to(at: Vector3, target: Vector3) -> float:
 	return atan2(target.x - at.x, target.z - at.z)
 
 ## Attack withdrawn: back through the front line to its home slot.
 func step_back(id: int) -> void:
-	if not _has(id) or not view.duel.creatures.has(id): return
-	var c: Dictionary = view.duel.creatures[id]
+	var c := _returning_creature(id)
+	if not _has(id) or c.is_empty(): return
 	_move(id, _home_path(id, int(c.owner)), true, _yaw_at(view.homes[id], int(c.owner)))
 
 func change_side(id: int, side: int) -> void:
@@ -156,9 +160,10 @@ static func flat_distance(a: Vector3, b: Vector3) -> float:
 func busy() -> bool:
 	return _running or _capturing
 
-## Blows are being shown (collecting them has ended).
-func running() -> bool:
-	return _running
+## The current combat batch is complete. Any later actions wait in the cast
+## queue, including while the deferred playback start is still pending.
+func blocks_cast_queue() -> bool:
+	return _capture_finished or _running
 
 ## An event the playback hands back to the view is being handled.
 func dispatching() -> bool:
@@ -179,30 +184,31 @@ func finish_moves() -> void:
 func away(id: int) -> bool:
 	return _has(id) and view.homes.has(id) and flat_distance(_position(id), view.homes[id]) > 0.05
 
-## Takes an event from the battle. Returns true when the playback holds it:
-## the first strike opens playback, and every later event waits its turn.
+func shown_resting(id: int, resting: bool, serial: int) -> bool:
+	if _attacker_rest.has(id): return bool(_attacker_rest[id])
+	var resolved: Dictionary = _resolved_rest.get(id, {})
+	if not resolved.is_empty() and serial < int(resolved.serial): return bool(resolved.resting)
+	return resting
+
+## Capture from the start of combat, including effects resolved before any blow.
 func capture(data: Dictionary) -> bool:
 	if _dispatching: return false
-	if not busy() and data.get("kind") != "strike": return false
-	var held := data.duplicate()
-	if held.kind == "strike":
-		_note_strike(held)
-	if held.kind == "discard" and held.has("hand_key") and not int(held.side) in _hands_with_discards:
-		_hands_with_discards.append(int(held.side))
-	queue.append(held)
+	if not busy() and not data.get("kind") in ["combat_start", "strike"]: return false
+	if data.kind == "strike" and not data.has("attacking"): stamp_strike(data)
+	if data.kind != "combat_start": queue.append(data)
+	if data.kind == "combat_end": _capture_finished = true
 	if not busy():
-		_hands.clear()
-		_hands_with_discards.clear()
-		for hero: Dictionary in view.duel.heroes:
-			_hands.append({"hand": hero.hand.duplicate(), "hand_view": ELDuel._hand_view(hero).duplicate(),
-				"hand_slots": hero.hand_slots.duplicate(), "spell_uses": hero.spell_uses.duplicate()})
+		_resolved_rest.clear()
+		if data.kind == "combat_start":
+			for id: int in data.shown.attacks:
+				_attacker_rest[id] = data.shown.creatures.get(id, {}).get("resting", false)
 		_capturing = true
 		call_deferred("_start")
 	return true
 
 ## Records what the strike needs once the rules have moved on: the attacking
 ## side and each figure's contact range and wounds rule inputs.
-func _note_strike(strike: Dictionary) -> void:
+func stamp_strike(strike: Dictionary) -> void:
 	var duel: ELDuel = view.duel
 	strike.attacking = int(duel.attacker)
 	for key: String in ["from", "to"]:
@@ -238,11 +244,11 @@ func finish() -> void:
 		_dispatch(data)
 	_place_home()
 	_running = false
-	_hands.clear()
-	_hands_with_discards.clear()
+	_capture_finished = false
 	view._refresh()
 
 func _place_home() -> void:
+	_attacker_rest.clear()
 	for id: int in view.homes:
 		var c := _returning_creature(id)
 		if _has(id) and not c.is_empty():
@@ -254,6 +260,7 @@ func abort() -> void:
 	_clear_trails()
 	_serial += 1
 	_capturing = false
+	_capture_finished = false
 	_running = false
 	for id: int in _moves:
 		if view.models.has(id):
@@ -263,42 +270,34 @@ func abort() -> void:
 	_blows.clear()
 	_after.clear()
 	queue.clear()
-	_hands.clear()
-	_hands_with_discards.clear()
+	_attacker_rest.clear()
+	_resolved_rest.clear()
 
 func _dispatch(data: Dictionary) -> void:
 	if data.kind == "damage": _wounds[int(data.target)] = int(_wounds.get(int(data.target), 0)) + int(data.amount)
-	var hand_changed := _show_discard(data) if data.kind == "discard" and data.has("hand_key") else false
+	if data.kind == "attack_resolved": _resolved_rest[int(data.id)] = {"serial": int(data.shown.serial), "resting": bool(data.resting)}
 	_dispatching = true
 	view._event(data)
 	_dispatching = false
-	if hand_changed: view._refresh()
-
-func shown_hand(side: int) -> Dictionary:
-	if busy() and side in _hands_with_discards: return _hands[side]
-	return view.duel.heroes[side]
-
-func _show_discard(data: Dictionary) -> bool:
-	if _hands.is_empty(): return false
-	var hand := _hands[int(data.side)]
-	var index: int = hand.hand_view.find(int(data.hand_key))
-	if index < 0 or hand.hand[index] != data.card: return false
-	for field: String in ["hand", "hand_view", "hand_slots"]: hand[field].remove_at(index)
-	return true
 
 func _play(serial: int) -> void:
-	# Split the held events: blows with what each settles, then what follows.
+	# Split the events into what precedes the blows, each blow's results,
+	# and the turn transition once the figures return to their slots.
 	_blows.clear()
 	_after.clear()
 	_next_blow = 0
 	_wounds.clear()
 	var blows := _blows
 	var after := _after
+	var before: Array[Dictionary] = []
 	for data: Dictionary in queue:
 		if data.kind == "strike" and after.is_empty(): blows.append({"strike": data, "events": []})
-		elif after.is_empty() and not data.kind in AFTER_KINDS and not blows.is_empty(): blows[-1].events.append(data)
+		elif after.is_empty() and not data.kind in AFTER_KINDS:
+			if blows.is_empty(): before.append(data)
+			else: blows[-1].events.append(data)
 		else: after.append(data)
 	queue.clear()
+	_dispatch_all(before)
 	# Each attacker's blockers, for its fight point.
 	var blockers := {}
 	for blow: Dictionary in blows:
@@ -338,6 +337,7 @@ func _play(serial: int) -> void:
 			_face(pair.y, pair.x)
 		# The blow: attack clip, then at impact the hit sound and its results.
 		_face(from, to)
+		_dispatch(strike)
 		# The fight close-up starts as the first blow is struck (the
 		# original's Camera(3)), framed on the two figures.
 		if not view.fight_shot and _has(from) and _has(to): view._auto_fight(from, to, (_position(from) + _position(to)) * 0.5)
@@ -376,19 +376,19 @@ func _play(serial: int) -> void:
 			if c.is_empty(): continue
 			_move(id, _home_path(id, int(c.owner)), int(_wounds.get(id, 0)) == 0, _yaw_at(view.homes[id], int(c.owner)))
 	if not await _moved(_moves.keys(), serial): return
+	_attacker_rest.clear()
 	view._auto_fight_over()
 	var rest := after.duplicate()
 	_blows.clear()
 	_after.clear()
 	_dispatch_all(rest)
 	_running = false
+	_capture_finished = false
 	if not queue.is_empty():
 		# Events that arrived meanwhile without a strike of their own.
 		var late := queue.duplicate()
 		queue.clear()
 		_dispatch_all(late)
-	_hands.clear()
-	_hands_with_discards.clear()
 	view._refresh()
 
 func _dispatch_all(events: Array) -> void:
@@ -437,7 +437,8 @@ func _face(id: int, target: int) -> void:
 	if Vector2(direction.x, direction.z).length() > 0.001: view.models[id].rotation.y = atan2(direction.x, direction.z)
 
 func _returning_creature(id: int) -> Dictionary:
-	return view._before_turn_cleanup.get(id, view.duel.creatures.get(id, {}))
+	if _has(id) and view.models[id].get_meta("dying", false): return {}
+	return view.shown_creature(id)
 
 ## A figure's walk home after its exchange; it faces the enemy once there.
 func _go_home(id: int, blocker: bool, strike: Dictionary) -> void:
@@ -632,6 +633,7 @@ func _arrive(id: int) -> void:
 		var goal: Vector3 = move.points[-1]
 		model.position = Vector3(goal.x, view.arena.ground_height(goal.x, goal.z), goal.z)
 	if not move.is_empty() and not is_nan(float(move.finish)): model.rotation.y = float(move.finish)
+	if not away(id): _attacker_rest.erase(id)
 	view._animation_done("", id)
 
 func _moved(ids: Array, serial: int) -> bool:

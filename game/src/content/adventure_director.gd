@@ -2,6 +2,8 @@ class_name ELAdventureDirector
 extends RefCounted
 ## Advances the original command queue and tile movement independently of UI.
 signal presentation(data: Dictionary)
+signal encounter_finishing
+signal encounter_finished(winner: int)
 var state: ELAdventureSession
 var grid: ELAdventureGrid
 var dialogue: Dictionary = {}
@@ -259,6 +261,25 @@ const MAX_CATCH_UP := 4
 ## game's 10.
 func script_tick() -> float:
 	return 1.0 / 15.0 if state.map.profile.id == "el2" else 0.1
+
+## Some shipped chapters set up their opening scene in Hook_OnStep. Apply
+## the initial placement, camera and fog while the map is covered. Keep the
+## authored music, waits, movement and dialogue for the mission clock.
+func prepare_opening_scene() -> bool:
+	if not state.hook("Hook_Wake", [float(state.current_player)]) or not state.hook("Hook_OnStep"):
+		return _fail(state.error)
+	var music: Array[Dictionary] = []
+	while not state.commands.is_empty() and dialogue.is_empty() and error.is_empty():
+		var command: Dictionary = state.commands[0]
+		var script_function := str(command.arguments[0]) if command.kind == "ExecuteScriptFunction" and not command.arguments.is_empty() else ""
+		if script_function == "StartEmphasis":
+			music.append(state.commands.pop_front())
+			continue
+		if not str(command.kind).begins_with("Camera") and not script_function in ["ExCameraUnlock", "ExCameraPitch", "ExCameraZoom", "ExHideExploration", "ExCameraInstantScrollToPos"]: break
+		_execute(command)
+	music.reverse()
+	for command: Dictionary in music: state.commands.push_front(command)
+	return error.is_empty()
 
 func advance(delta: float) -> void:
 	if not error.is_empty() or not state.outcome.is_empty() or encounter != null or _shopping(): return
@@ -935,11 +956,19 @@ func use_object(hero_id: int, target_id: int, defender := -1) -> void:
 	if actor.is_empty() or target.is_empty() or not (target.alive or corpse) or not (target.visible or target.has("dungeon")) or not target.enabled or encounter != null or _shopping() or not travel.is_empty(): return
 	if corpse and hero_id != state.main_hero: return
 	if state.vm != null:
+		var command_count := state.commands.size()
 		var result := state.vm.invoke("Hook_OnPreUse", [float(target_id), float(hero_id)])
 		if not state.vm.error.is_empty():
 			_fail(state.vm.error)
 			return
-		if not result.is_empty() and not ELAdventureSession._truthy_flag(result[0]): return
+		if not result.is_empty() and not ELAdventureSession._truthy_flag(result[0]):
+			# Scripted conversations can replace the encounter that would have
+			# turned its participants toward each other (the Musician's warnings).
+			if state.map.profile.id == "el2" and target.type in ["hero", "monster"]:
+				var speaks := state.commands.slice(command_count).any(func(command: Dictionary) -> bool:
+					return command.kind in ["Text", "Question"] and not command.arguments.is_empty() and int(command.arguments[0]) == target_id)
+				if speaks or dialogue.get("actor", -1) == target_id: _face_opponents(actor, target)
+			return
 	# Looting is wholly scripted through Hook_OnPreUse.
 	if corpse: return
 	if target.type in ["hero", "monster"] and state.hostile(actor, target):
@@ -1229,7 +1258,10 @@ func _refuse_battle(reason: String) -> void:
 func finish_encounter() -> bool:
 	if encounter == null: return false
 	var interrupted := not state.outcome.is_empty()
-	if not encounter.finish(): return _fail(encounter.error)
+	encounter_finishing.emit()
+	if not encounter.finish():
+		encounter_finished.emit(-1)
+		return _fail(encounter.error)
 	var battle := {"hero": encounter.attacker(), "opponent": encounter.target(), "winner": encounter.winner}
 	var report := encounter.report
 	var encounter_lost := encounter.lose_screen
@@ -1272,6 +1304,7 @@ func finish_encounter() -> bool:
 			ELSecondBuildings.clear_tunnel_guards(state, source)
 			_use_tunnel(state.object(battle.hero), source)
 	if not interrupted: ELFirstScenario.evaluate(self, battle)
+	encounter_finished.emit(int(battle.winner))
 	return true
 
 ## The pre-battle panel's Cancel declines the prepared battle (second game;

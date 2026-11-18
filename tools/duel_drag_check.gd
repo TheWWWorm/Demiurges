@@ -178,20 +178,35 @@ func _second(menu: ELFrontMenu) -> void:
 	check(preset(duel).cards == [card] and int(preset(duel).reserve.get(card, 0)) == 1, "second game: a reserve spell dragged onto the deck moves there")
 	await drag(reserve, reserve.slot_rect(0).get_center(), list, Vector2(10, 10))
 	check(not preset(duel).reserve.has(card), "second game: a reserve spell dragged onto the list is removed")
+	# A selected catalogue spell must not be added when the gesture starts on
+	# an already owned card. Both the drag and click-to-place remain available.
+	var other: String = duel.right_items[1].value
+	duel.act("spell_to_reserve", card)
+	duel.act("spell_to_reserve", card)
+	await click(list, list.get_item_rect(1).get_center())
+	await drag(reserve, reserve.slot_rect(0).get_center(), list, Vector2(10, 10))
+	check(preset(duel).reserve == {card: 1}, "second game #203: a drag returns one reserve copy even with a catalogue spell selected")
+	duel.act("remove_reserve", card)
+	duel.act("remove_reserve", other)
+	await click(list, list.get_item_rect(1).get_center())
+	await drag(duel.book_view, duel.book_view.slot_rect(0).get_center(), reserve, Vector2(10, 10))
+	check(preset(duel).cards.is_empty() and preset(duel).reserve == {card: 1}, "second game: the drag moves the actual deck card while a catalogue spell is selected")
+	duel.act("remove_slot", 0)
+	duel.act("remove_reserve", card)
+	duel.act("remove_reserve", other)
+	await click(list, list.get_item_rect(0).get_center())
+	await click(duel.book_view, Vector2(10, 10))
+	check(preset(duel).cards == [card] and preset(duel).reserve.is_empty(), "second game: clicking still places a selected catalogue card")
 	await drag(list, list.get_item_rect(1).get_center(), menu.canvas, Vector2(4, 4))
 	check(preset(duel).cards == [card] and preset(duel).reserve.is_empty(), "second game: a spell dropped outside the panels goes back")
 	# #150: one reserve cell per copy, no stacked counts.
-	var other: String = duel.right_items[1].value
 	duel.act("spell_to_reserve", other)
 	duel.act("spell_to_reserve", other)
 	await frames(1)
 	var cells: Array = reserve.entries()
 	check(cells.size() == 2 and cells.all(func(c: Dictionary): return c.card == other and int(c.count) == 1), "second game: two reserve copies take two cells (#150)")
 	# #151: a reserve spell dropped on an occupied deck slot takes it; the
-	# slot's spell goes to the reserve. Nothing stays picked in the list (a
-	# press on the reserve would store the picked spell).
-	duel.edit.item = -1
-	duel.clear_choice()
+	# slot's spell goes to the reserve.
 	await drag(reserve, reserve.slot_rect(0).get_center(), duel.book_view, duel.book_view.slot_rect(0).get_center())
 	check(preset(duel).cards == [other] and int(preset(duel).reserve.get(card, 0)) == 1 and int(preset(duel).reserve.get(other, 0)) == 1, "second game: a reserve spell dropped on a deck slot swaps with it (#151)")
 	duel.act("remove_reserve", card)
@@ -202,6 +217,13 @@ func _second(menu: ELFrontMenu) -> void:
 	duel.act("add_spell", other)
 	await drag(duel.book_view, duel.book_view.slot_rect(1).get_center(), duel.book_view, duel.book_view.slot_rect(0).get_center())
 	check(preset(duel).cards == [other, card] and preset(duel).reserve.is_empty(), "second game: dragging within the deck swaps two equipped spells")
+	var reserve_grid := reserve as ELDuelScreen.BookView
+	preset(duel).reserve[other] = reserve_grid.slots + 1
+	reserve_grid.scroll(1)
+	check(reserve_grid.offset == 1, "second game: the last reserve copy is on a scrolled row")
+	await drag(reserve_grid, reserve_grid.slot_rect(reserve_grid.slots).get_center(), list, Vector2(10, 10))
+	check(preset(duel).reserve == {other: reserve_grid.slots} and reserve_grid.offset == 0,
+		"second game: returning the last copy on a scrolled row keeps the remaining reserve in view")
 	await _tab(duel, 1)
 	list = duel.right_list
 	var skills := _zone(duel, "skills")

@@ -8,6 +8,7 @@ extends SceneTree
 ##   a picture show none;
 ## - the first game's Load Mission screen shows the chosen save's picture in
 ##   the box above its details, and nothing for a save without one.
+## - the second game's save lists show race marks for new and older saves.
 ## - in a rendered run, capturing a thumbnail keeps the on-screen UI visible.
 ##
 ##   godot --headless --path game --script ../tools/save_preview_check.gd
@@ -34,6 +35,7 @@ func _run() -> void:
 	DirAccess.make_dir_recursive_absolute(FOLDER)
 	_storage()
 	await _screen()
+	await _race_screen()
 	if DisplayServer.get_name() != "headless": await _offscreen()
 	for file in DirAccess.get_files_at(FOLDER): DirAccess.remove_absolute(FOLDER.path_join(file))
 	DirAccess.remove_absolute(FOLDER)
@@ -113,6 +115,7 @@ func _screen() -> void:
 	menu.show_screen("load_mission")
 	await frames(1)
 	var ui := menu.mission_load_ui
+	check(ui.list.race_sheet == null, "EL1 does not use the second game's save race marks")
 	var with := FOLDER.path_join("el1-slot.json")
 	var without := FOLDER.path_join("bare.json")
 	ui.entries.assign([{"name": "with", "path": with, "type": ELSaveSlots.SLOT, "modified": 0, "edition": "el1", "kind": ELSaveSlots.KIND_SINGLE},
@@ -124,6 +127,69 @@ func _screen() -> void:
 	check(box != null and absf(box.position.x - frame.position.x) < 8 and box.position.y + box.size.y < frame.position.y, "the picture sits in the box above the save's details")
 	ui.choose_row(1)
 	check(box != null and box.texture == null, "a save without a picture leaves the box empty")
+	menu.queue_free()
+	await frames(2)
+
+func _race_screen() -> void:
+	var paths: Variant = JSON.parse_string(FileAccess.get_file_as_string("user://profiles.json")) if FileAccess.file_exists("user://profiles.json") else null
+	if paths is not Dictionary or not paths.has("el2"):
+		print("SKIP: no second-game files configured (user://profiles.json)")
+		return
+	var profile := ELProfile.new()
+	if not profile.mount("el2", str(paths.el2)):
+		print("SKIP: the second game's files could not be mounted")
+		return
+	var map := ELAdventureMap.new()
+	var state := ELAdventureSession.new()
+	var director := ELAdventureDirector.new()
+	var ready := map.load_map(profile, "e2mission24_32") and state.start(map, 1, 212, "Maps/e2mission32") and director.build(state)
+	check(ready, "the shared Chaot/Kinet map loads for the save-race check")
+	if not ready:
+		state.close()
+		return
+	var progress := ELSecondCampaign.new_game(1)
+	progress.possible = ["Blue"]
+	ELSecondCampaign.begin(progress, "Blue")
+	state.scenario[ELSecondCampaign.KEY] = progress
+	state.object(state.main_hero).shape = "BlueMainHero-1"
+	var name := "Race Check"
+	var file := ELSaveSlots.save_path("el2", name).get_file()
+	var path := FOLDER.path_join(file)
+	var index := path.get_basename() + ".meta.json"
+	check(ELSaveSlots._write(path, index, name, ELSaveSlots.SLOT, director, {}).is_empty(), "a Kinet save is written with a list header")
+	var identity := ELSaveSlots._slot_identity(profile, file)
+	var row := ELSaveSlots._slot_row(profile, path, index, identity)
+	check(row.get("race") == "Blue", "the saved hero's race is listed on a shared map")
+	var codec := ELAdventureSave.new()
+	var raw: Dictionary = codec.read_document(path)
+	var old_index := row.duplicate()
+	old_index.erase("race")
+	raw._slot = Marshalls.utf8_to_base64(JSON.stringify(old_index))
+	check(codec.write_document(path, raw) and codec.write_document(index, old_index), "an older header without the race field is written")
+	var old := ELSaveSlots._slot_row(profile, path, index, identity)
+	check(old.get("race") == "Blue", "the earlier save gets its badge from the checkpoint")
+	var restored := codec.read(path, {"el2": profile})
+	check(not restored.is_empty(), "the older save still restores normally")
+	if not restored.is_empty(): restored.state.close()
+	state.close()
+	var menu := ELFrontMenu.new()
+	menu.settings = ELSettings.new()
+	menu.settings.use_edition("el2")
+	root.add_child(menu)
+	check(menu.build({"el2": profile}, "el2"), "the second game's menu builds")
+	for mode: String in ["load", "save"]:
+		var ui := menu.mission_load_ui
+		ui.prepare(mode, ELSaveSlots.KIND_CAMPAIGN, mode == "save")
+		menu.show_screen("load_campaign" if mode == "load" else "save_game")
+		await frames(1)
+		var headers := menu.canvas.get_children().filter(func(node: Node) -> bool: return node.name.begins_with("SaveRaceHeader_"))
+		check(headers.size() == 4 and ui.list.race_sheet == menu.texture_named("SAVE_PANEL_6") and ui.list.race_sheet != null,
+			"EL2 %s shows the original four-color header and uses the save marks from the original sheet" % mode)
+		ui.entries.assign([old.merged({"modified": 0, "path": path}), {"name": "White", "modified": 0, "race": "White", "type": ELSaveSlots.PROGRESS}])
+		ui.list.queue_redraw()
+		await frames(1)
+	check(ELMissionLoadScreen.race_marks("Blue") == [2] and ELMissionLoadScreen.race_marks("White") == [0, 1, 2, 3]
+		and ELMissionLoadScreen.race_marks("").is_empty(), "the original marks distinguish a single race, White and an unknown race")
 	menu.queue_free()
 	await frames(2)
 

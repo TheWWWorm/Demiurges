@@ -8,6 +8,8 @@ extends SceneTree
 ## - #144 combat tutorial: the text column stands along the right edge and
 ##   fills most of the screen height, with only the close cross offered; the
 ##   spell the script awaits blinks in the hand.
+## - #212 ether disturbance, active abilities and specialisations add their
+##   original icons to the same battle notice list as casts.
 ##
 ##   godot --headless --path game --script ../tools/d2_battle_ui_check.gd
 ##
@@ -171,6 +173,8 @@ func _casting_and_retry() -> void:
 		check(view.duel != duel and view.duel.turn_serial == opening.turn_serial and view.duel.setup == opening.setup, "Try again restarts the same duel setup")
 		check(view.duel.rng_state != int(opening.rng), "Try again deals from a new random seed")
 	_duel_match_retry(view)
+	_creature_ability_buttons(view)
+	_battle_notice_icons(view)
 	view.queue_free()
 	await frames(2)
 
@@ -202,6 +206,103 @@ func _duel_match_retry(view: Node) -> void:
 	var replay := ELDuel.new()
 	check(replay.start(view.profile, int(recorded.seed), recorded.options) and replay.snapshot() == view.duel.snapshot(),
 		"the retried round's recording reconstructs the new opening")
+
+func _creature_ability_buttons(view: Node) -> void:
+	view._start("el2", {"first_side": 0}, null, 212)
+	view.settings.values.helper_overlay = true
+	var duel: ELDuel = view.duel
+	var sources := {}
+	for card: String in ["ORSH", "RFPT", "DRAT", "PRAT", "MOBE", "CLSP", "FMFI", "OUS1"]:
+		var id := duel.next_id
+		duel._summon(0, card)
+		duel.creatures[id].sick = false
+		duel.creatures[id].resting = false
+		sources[card] = id
+	duel.heroes[0].mana = 10
+	duel.heroes[0].channels = 1
+	check(_ability_buttons(view, sources.ORSH, "orc_rite", false) and _ability_buttons(view, sources.RFPT, "disenchant", false),
+		"#204: enchantment removal stays disabled when there are no enchantments")
+	duel._enchant("LSST", 0, sources.MOBE, ELCatalog.rule(duel.profile, "LSST"))
+	duel.heroes[0].channels = 0
+	check(_ability_buttons(view, sources.ORSH, "orc_rite", false) and _ability_buttons(view, sources.OUS1, "channel_ether", false),
+		"#204: channel abilities stay disabled when their hero has no channels")
+	duel.heroes[0].channels = 1
+	check(_ability_buttons(view, sources.ORSH, "orc_rite", true) and _ability_buttons(view, sources.OUS1, "channel_ether", true),
+		"#204: the rite and the Pale channel ability light up once a channel is available")
+	duel.heroes[0].mana = 0
+	check(_ability_buttons(view, sources.RFPT, "disenchant", false), "#204: Piercing Gaze stays disabled if removal is unaffordable")
+	duel.heroes[0].mana = 10
+	check(_ability_buttons(view, sources.RFPT, "disenchant", true), "#204: Piercing Gaze lights up for an affordable enchantment")
+	check(_ability_buttons(view, sources.DRAT, "gnaw", false) and _ability_buttons(view, sources.PRAT, "plague", false),
+		"#204: graveyard abilities stay disabled while both graveyards are empty")
+	duel.heroes[1].grave.append("WRSP")
+	check(_ability_buttons(view, sources.DRAT, "gnaw", true) and _ability_buttons(view, sources.PRAT, "plague", true) and _ability_buttons(view, sources.CLSP, "recall_spirit", false),
+		"#204: an enemy graveyard enables Gnaw and Plague but not a friendly-only revival")
+	duel.heroes[0].grave.append("WRSP")
+	duel.heroes[1].grave.append("STRT")
+	check(_ability_buttons(view, sources.CLSP, "recall_spirit", true) and _ability_buttons(view, sources.FMFI, "necromancy", true),
+		"#204: both revivals light up when they have suitable cards and room")
+	var filler := duel.next_id
+	while duel.army(0).size() < 10: duel._summon(0, "STRT")
+	check(_ability_buttons(view, sources.CLSP, "recall_spirit", false) and _ability_buttons(view, sources.FMFI, "necromancy", false) and _ability_buttons(view, sources.MOBE, "brood", false),
+		"#204: revivals and Spawn a Bee stay disabled at the creature limit")
+	view._strip_pressed(0)
+	check(duel.army(0).size() == 10 and not duel.creatures[sources.MOBE].resting and duel.heroes[0].mana == 10,
+		"#204: clicking a dimmed ability spends nothing and leaves the creature ready")
+	duel._kill(filler)
+	check(_ability_buttons(view, sources.MOBE, "brood", true), "#204: Spawn a Bee lights up again when a slot opens")
+	view._strip_pressed(0)
+	check(duel.army(0).size() == 10 and duel.creatures[sources.MOBE].resting, "#204: clicking the enabled ability summons a bee")
+
+func _battle_notice_icons(view: Node) -> void:
+	view._start("el2", {"first_side": 0}, null, 212)
+	var duel: ELDuel = view.duel
+	var profile := duel.profile
+	var notices: ELCombatNotices = view.notices
+	var pale := duel.next_id
+	duel._summon(0, "SMWB")
+	duel.heroes[0].grave.append("STRT")
+	check(duel.use_ability(pale, "sinister", 0, 0), "#212: a Pale Knight can use Sinister Manifestation (%s)" % duel.error)
+	view._skip_battle_presentation()
+	var manifestation: Dictionary = profile.table("CombatSpells").AOUF
+	var ability_icon := profile.icon_at(int(manifestation.AbilityIcon)) as AtlasTexture
+	check(notices.icons.size() == 1 and notices.icons[0].card == "AOUF" and _notice_uses(notices, 0, ability_icon)
+		and notices.get_tooltip(notices.icon_rect(0).get_center()) == profile.text(manifestation.AbilityText),
+		"#212: the manifestation notice uses its own ability icon and description")
+	duel.heroes[1].turns = int(duel.heroes[1].level) + 11
+	for hero: Dictionary in duel.heroes: hero.skills.clear()
+	var health := int(duel.heroes[1].health)
+	duel.end_phase()
+	view._skip_battle_presentation()
+	notices.viewer_side = 0
+	check(int(duel.heroes[1].health) < health and notices.icons.size() == 1 and _notice_uses(notices, 0, profile.icon_at(916))
+		and notices.get_tooltip(notices.icon_rect(0).get_center()) == profile.text("ETHER_DISTURBANCE_ENEMY_Tt"),
+		"#212: the turn change leaves the opposing hero's disturbance icon visible")
+	notices.viewer_side = 1
+	check(_notice_uses(notices, 0, profile.icon_at(915))
+		and notices.get_tooltip(notices.icon_rect(0).get_center()) == profile.text("ETHER_DISTURBANCE_SELF_Tt"),
+		"#212: the disturbance notice follows the player viewing it")
+	duel.heroes[1].spec = "BMWM"
+	duel.heroes[1].spec_level = 20
+	check(ELSpecs.roll(duel, 1, "BMWM", 100) > 0, "#212: Destructive Mindwipe can trigger a specialisation notice")
+	notices.viewer_side = 1
+	check(notices.icons.size() == 2 and _notice_uses(notices, 1, profile.icon_at(918))
+		and notices.get_tooltip(notices.icon_rect(1).get_center()) == profile.text(profile.table("HeroesSpecs").BMWM.Desc),
+		"#212: the specialisation icon describes the effect that triggered")
+	notices.viewer_side = 0
+	check(_notice_uses(notices, 1, profile.icon_at(917)), "#212: the opposing specialisation uses the opposing icon")
+
+func _notice_uses(notices: ELCombatNotices, index: int, expected: AtlasTexture) -> bool:
+	if index >= notices.icons.size(): return false
+	var texture := notices.icon_texture(index) as AtlasTexture
+	return texture != null and texture.atlas != null and texture.atlas == expected.atlas and texture.region == expected.region
+
+func _ability_buttons(view: Node, id: int, key: String, enabled: bool) -> bool:
+	view.selected_creature = id
+	view._refresh_inspector()
+	var strip: Array = view.rail.strip.items.filter(func(item: Dictionary) -> bool: return item.meta.get("ability") == key)
+	var buttons: Array = view.inspector_rows.get_children().filter(func(item: Node) -> bool: return item.get_meta("ability", "") == key)
+	return strip.size() == 1 and buttons.size() == 1 and strip[0].enabled == enabled and buttons[0].disabled != enabled
 
 # --- #144 ---------------------------------------------------------------------
 

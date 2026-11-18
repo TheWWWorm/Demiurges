@@ -181,11 +181,8 @@ func press(point: Vector2) -> void:
 	var index := book_at(point)
 	if index >= 0:
 		slot = index
-		if carry or double_click:
-			carry = false
-			buy()
-			return
-		if not _purchase_pending: held = {"kind": "book", "index": index, "icon": profile.card_icon(hero().cards[index])}
+		if not _purchase_pending:
+			held = {"kind": "book", "index": index, "icon": profile.card_icon(hero().cards[index]), "buy": carry or double_click}
 		refresh()
 		return
 	if not rune_rect().has_point(point):
@@ -201,14 +198,21 @@ func press(point: Vector2) -> void:
 	if carry: held = {"kind": "rune"}
 	refresh()
 
+func release(point: Vector2) -> void:
+	if held.get("buy", false) and not dragging and point.distance_to(press_at) <= DRAG_SLOP:
+		carry = false
+		buy()
+	super.release(point)
+
 ## A rune dragged onto a book spell is added there as with the second click;
 ## released anywhere else it is let go.
 func drop_held(item: Dictionary, point: Vector2) -> void:
 	var book := book_at(point)
 	if item.kind == "book":
+		carry = false
 		if not _purchase_pending and ELSpellInventory.swap_slots(shop_book_order, shop_book_order.find(item.index), shop_book_order.find(book)):
 			slot = int(item.index)
-			refresh()
+		refresh()
 		return
 	if item.kind != "rune" or not carry: return
 	carry = false
@@ -346,7 +350,7 @@ func _draw_sheet() -> void:
 	# follows the cursor.
 	for index in mini(15, trade.pending.size()):
 		if trade.pending[index] > 0: sheet.draw_rect(book_rect(shop_book_order.find(index)).grow(-1), Color(0.95, 0.8, 0.35, 0.8), false, 1.5)
-	if carry:
+	if carry and not (dragging and held.get("kind") == "book"):
 		var size := _rune_icon.get_size() if _rune_icon != null else rune_rect().size
 		var rect := Rect2(carry_at - size * 0.5, size)
 		if _rune_icon != null: sheet.draw_texture_rect(_rune_icon, rect, false, Color(1, 1, 1, 0.9))

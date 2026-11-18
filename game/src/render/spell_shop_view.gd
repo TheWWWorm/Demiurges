@@ -52,9 +52,10 @@ var _mouse := Vector2(-1000, -1000)
 const DRAG_SLOP := 6.0
 ## The card a left press picked up ([zone, index]), the press point and
 ## whether the pointer has since moved far enough to drag it.
-var _drag_from: Array = []
+var _pressed_cell: Array = []
 var _press_at := Vector2.ZERO
 var _dragging := false
+var _double_click := false
 
 func build(exchange: ELSpellShop) -> void:
 	trade = exchange
@@ -250,7 +251,12 @@ func surface_input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion:
 		_mouse = event.position
 		_show_selected_price()
-		if not _drag_from.is_empty() and event.button_mask & MOUSE_BUTTON_MASK_LEFT and event.position.distance_to(_press_at) > DRAG_SLOP: _dragging = true
+		if not _pressed_cell.is_empty() and not _dragging and event.button_mask & MOUSE_BUTTON_MASK_LEFT and event.position.distance_to(_press_at) > DRAG_SLOP:
+			_dragging = true
+			var index := int(_pressed_cell[1])
+			if index >= 0 and not model.zone(_pressed_cell[0])[index].is_empty() and _pressed_cell != [model.picked_zone, model.picked]:
+				model.right_click()
+				_click(_pressed_cell)
 		if not model.carried().is_empty(): cursor.queue_redraw()
 		return
 	if not event is InputEventMouseButton: return
@@ -264,17 +270,13 @@ func surface_input(event: InputEvent) -> void:
 		MOUSE_BUTTON_WHEEL_UP: if target[0] in ["bag", "shop"]: scroll(target[0], -1)
 		MOUSE_BUTTON_WHEEL_DOWN: if target[0] in ["bag", "shop"]: scroll(target[0], 1)
 		MOUSE_BUTTON_RIGHT:
-			_drag_from = []
+			_pressed_cell = []
 			put_back()
 		MOUSE_BUTTON_LEFT:
-			var quick: bool = event.double_click and target[0] == model.picked_zone and target[1] == model.picked and target[1] >= 0
-			var carrying := not model.carried().is_empty()
-			if not _click(target, quick): return
-			# A press that picks a card up may also drag it: releasing it over
-			# another place drops it there as a second click would.
-			_drag_from = [model.picked_zone, model.picked] if not carrying and not model.carried().is_empty() else []
+			_pressed_cell = target if not String(target[0]).is_empty() else []
 			_press_at = event.position
 			_dragging = false
+			_double_click = event.double_click
 
 ## One left click on `target` (the double-click shortcut when `quick`);
 ## false when the point is outside the three lists.
@@ -301,12 +303,17 @@ func _click(target: Array, quick := false) -> bool:
 ## to the shop, moved between the bag and the deck, swapped between slots);
 ## dropped on its own list or outside the lists it goes back.
 func _release(at: Vector2) -> void:
-	var source := _drag_from
+	var source := _pressed_cell
 	var dragged := _dragging
-	_drag_from = []
+	_pressed_cell = []
 	_dragging = false
 	_mouse = at
-	if source.is_empty() or not dragged or model.picked_zone != source[0] or model.picked != source[1]: return
+	if source.is_empty(): return
+	if not dragged:
+		if at.distance_to(_press_at) <= DRAG_SLOP:
+			_click(source, _double_click and int(source[1]) >= 0 and source == [model.picked_zone, model.picked])
+		return
+	if model.picked_zone != source[0] or model.picked != source[1]: return
 	var target := hit(at)
 	if target[0] == "bag" and source[0] == "bag":
 		ELSpellInventory.swap_slots(model.bag, int(source[1]), int(target[1]))

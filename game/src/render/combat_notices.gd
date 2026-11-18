@@ -12,6 +12,7 @@ extends Control
 ##   top left. Each line holds 3 s, then fades over 0.5 s while the list
 ##   slides up.
 ## - cast spells from both heroes as icons, top left, marked by caster.
+##   The second game adds abilities, ether disturbance and specialisations.
 ##   There are 5 per row at a 53 px step. The first game's "cast_icons"
 ##   setting enables this list with its own list border (ELListLook.HOVER).
 ## Approximations: list and icon origins, and the line font.
@@ -32,6 +33,12 @@ const ICON_ROW := 5
 const ORIGIN := Vector2(12, 8)
 const OWN_CAST := Color("65e0e0")
 const RIVAL_CAST := Color("ff9973")
+## Etherlords II SPELLS_37, column 3. The original's icon builders
+## (0x568469 and 0x568818) use separate cells for each side.
+const OWN_DISTURBANCE_ICON := 915
+const RIVAL_DISTURBANCE_ICON := 916
+const OWN_SPECIALISATION_ICON := 918
+const RIVAL_SPECIALISATION_ICON := 917
 
 var profile: ELProfile
 var halves: Array[Texture2D] = []
@@ -41,7 +48,7 @@ var banner_age := 0.0
 var _sounded := false
 ## First game message lines: {"text", "colour", "age"}.
 var lines: Array = []
-## Cast icons: {"texture", "card", "side"}.
+## Battle icons: texture, side and either a card or an explicit tooltip.
 var icons: Array = []
 var viewer_side := 0:
 	set(side):
@@ -106,9 +113,23 @@ func add_line(text: String, colour: Color, chat := false) -> void:
 	lines.append({"text": text.strip_edges(), "colour": colour, "age": 0.0, "chat": chat})
 	queue_redraw()
 
-func add_icon(texture: Texture2D, card: String, side: int) -> void:
+func add_icon(texture: Texture2D, card: String, side: int, tooltip := "") -> void:
+	_add_icon({"texture": texture, "card": card, "side": side, "tooltip": tooltip})
+
+func add_disturbance(side: int) -> void:
+	_add_sided_icon(OWN_DISTURBANCE_ICON, RIVAL_DISTURBANCE_ICON, side, profile.text("ETHER_DISTURBANCE_SELF_Tt"), profile.text("ETHER_DISTURBANCE_ENEMY_Tt"))
+
+func add_specialisation(side: int, tooltip: String) -> void:
+	_add_sided_icon(OWN_SPECIALISATION_ICON, RIVAL_SPECIALISATION_ICON, side, tooltip, tooltip)
+
+func _add_sided_icon(own: int, rival: int, side: int, tooltip: String, rival_tooltip: String) -> void:
+	_add_icon({"texture": profile.icon_at(own), "rival_texture": profile.icon_at(rival), "card": "", "side": side,
+		"tooltip": tooltip, "rival_tooltip": rival_tooltip})
+
+func _add_icon(icon: Dictionary) -> void:
+	var texture: Texture2D = icon.texture
 	if texture == null or (texture is AtlasTexture and texture.atlas == null): return
-	icons.append({"texture": texture, "card": card, "side": side})
+	icons.append(icon)
 	queue_redraw()
 
 func clear_icons() -> void:
@@ -160,12 +181,18 @@ func _draw() -> void:
 	for index in icons.size():
 		var icon: Dictionary = icons[index]
 		var cell := icon_rect(index)
-		draw_texture_rect(icon.texture, cell, false)
+		draw_texture_rect(icon_texture(index), cell, false)
 		if frame != null: draw_texture_rect_region(frame, cell, _frame_region)
+		# Ether disturbance and specialisation art already distinguishes the sides.
+		if icon.has("rival_texture"): continue
 		# The bars differ in position as well as colour. Keep the art legible.
 		var own: bool = icon.side == viewer_side
 		var edge := Vector2(cell.position.x, cell.end.y - 3.0 * k if own else cell.position.y)
 		draw_rect(Rect2(edge, Vector2(cell.size.x, 3.0 * k)), OWN_CAST if own else RIVAL_CAST)
+
+func icon_texture(index: int) -> Texture2D:
+	var icon: Dictionary = icons[index]
+	return icon.texture if icon.side == viewer_side else icon.get("rival_texture", icon.texture)
 
 func icon_column_right() -> float:
 	return (ORIGIN.x + (ICON_ROW - 1) * ICON_STEP + ICON) * maxf(ui_scale, 0.5)
@@ -188,8 +215,11 @@ func _has_point(point: Vector2) -> bool:
 
 func _get_tooltip(at: Vector2) -> String:
 	var index := _icon_at(at)
-	if index < 0 or not describe_card.is_valid(): return ""
-	return String(describe_card.call(String(icons[index].card)))
+	if index < 0: return ""
+	var icon: Dictionary = icons[index]
+	var tooltip: String = icon.tooltip if icon.side == viewer_side else icon.get("rival_tooltip", icon.tooltip)
+	if not tooltip.is_empty(): return tooltip
+	return String(describe_card.call(String(icon.card))) if describe_card.is_valid() and not String(icon.card).is_empty() else ""
 
 func _draw_banner() -> void:
 	var rect := banner_rect()

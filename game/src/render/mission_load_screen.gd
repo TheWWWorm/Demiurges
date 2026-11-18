@@ -25,6 +25,10 @@ const COLUMNS := [Rect2(93, 58, 200, 24), Rect2(296, 58, 79, 24), Rect2(378, 58,
 const SORT_HEADERS := ["CtrlSMSortName", "CtrlSMSortDate", "CtrlSMSortTime"]
 const EN_HEADERS := ["Name", "Date", "Time"]
 const RU_HEADERS := ["Имя", "Дата", "Время"]
+## EL2 SaveMissionScreen draws a 2x2 grid of 15x11 cuts from SAVE_PANEL_6
+## beside a row (Etherlords2.exe 0x50f652). White uses all four marks.
+const RACES := ["Red", "Green", "Blue", "Black"]
+const RACE_CUTS := [Rect2(95, 12, 15, 11), Rect2(79, 0, 15, 11), Rect2(95, 0, 15, 11), Rect2(79, 12, 15, 11)]
 ## The scene capture rectangle, relative to SaveMissionScreen (the same
 ## place in both games' art).
 const PREVIEW := Rect2(481, 60, 256, 192)
@@ -75,6 +79,11 @@ static func stamp(unix: int) -> Array[String]:
 	var at := Time.get_datetime_dict_from_unix_time(unix + bias)
 	return ["%02d.%02d.%04d" % [at.day, at.month, at.year], "%02d:%02d" % [at.hour, at.minute]]
 
+static func race_marks(race: String) -> Array[int]:
+	if race == "White": return [0, 1, 2, 3]
+	var index := RACES.find(race)
+	return [index] if index >= 0 else []
+
 func _rect(control: String) -> Rect2:
 	var found := menu.control_rect(control)
 	if found.size.x > 0 or not FALLBACK.has(control): return found
@@ -94,6 +103,9 @@ func build_screen() -> void:
 	list.screen = self
 	list.position = origin + GRID.position
 	list.size = GRID.size
+	if menu.edition == "el2":
+		list.race_sheet = menu.texture_named("SAVE_PANEL_6")
+		_build_race_header(origin)
 	for index in COLUMNS.size():
 		var column: Rect2 = COLUMNS[index]
 		menu._label("column%d" % index, _column_caption(index), Rect2(origin + column.position, column.size), 17)
@@ -130,6 +142,22 @@ func build_screen() -> void:
 	refresh()
 	if mode == "save" and name_edit != null:
 		_focus_name.call_deferred(name_edit.get_instance_id())
+
+func _build_race_header(origin: Vector2) -> void:
+	for row: Dictionary in menu.rows("SMSortRace", ["Free"]):
+		var piece := menu.cut(row, origin)
+		if piece.is_empty(): continue
+		var region := AtlasTexture.new()
+		region.atlas = piece.texture
+		region.region = piece.source
+		region.filter_clip = true
+		var icon := TextureRect.new()
+		icon.name = "SaveRaceHeader_%d_%d" % [row.ScrL, row.ScrT]
+		icon.texture = region
+		icon.position = piece.rect.position
+		icon.size = piece.rect.size
+		icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		menu.canvas.add_child(icon)
 
 func _column_caption(index: int) -> String:
 	var plain := "CtrlSMCaption%d" % (index + 1)
@@ -287,6 +315,7 @@ func escape() -> bool:
 class SaveList extends Control:
 	var screen: ELMissionLoadScreen
 	var offset := 0
+	var race_sheet: Texture2D
 	## Per column: x from the list's left edge and width.
 	var columns: Array[Vector2] = []
 
@@ -325,6 +354,11 @@ class SaveList extends Control:
 			var entry: Dictionary = screen.entries[index]
 			var y := at * ELMissionLoadScreen.ROW
 			if index == screen.selected: draw_rect(Rect2(0, y, size.x, ELMissionLoadScreen.ROW), Color(0.85, 0.7, 0.4, 0.22))
+			if race_sheet != null:
+				for mark: int in ELMissionLoadScreen.race_marks(str(entry.get("race", ""))):
+					var source: Rect2 = ELMissionLoadScreen.RACE_CUTS[mark]
+					var cell := Vector2(1 if mark < 2 else 17, y + 2 + (mark % 2) * 12)
+					draw_texture_rect_region(race_sheet, Rect2(cell, source.size), source)
 			var ink := ELFrontMenu.INK_HOVER if index == screen.selected else ELFrontMenu.BODY_INK
 			var when := ELMissionLoadScreen.stamp(int(entry.modified))
 			var cells: Array[String] = [str(entry.name), when[0], when[1]]

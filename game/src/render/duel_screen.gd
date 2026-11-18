@@ -10,8 +10,7 @@ extends RefCounted
 ## Approximations: sort-button
 ## mapping (race / level / name, default level), the list's race marker, the
 ## editor's right-panel interaction (select + Buy/Back or double-click), EL2
-## deck/reserve moves by double-click instead of dragging, message boxes drawn
-## procedurally (the MessageBox panel has no CutParts art). Artifacts follow
+## message boxes drawn procedurally (the MessageBox panel has no CutParts art). Artifacts follow
 ## the originals: EL1 Buy appends the artifact selected on the Artifacts tab
 ## and Back returns the one selected in the hero's strip; EL2 picks an
 ## artifact in one panel and drops it on the other (double-click and
@@ -307,11 +306,11 @@ func _drag_source(control: Control, source: String, pick: Callable) -> void:
 func canvas_point(control: Control, local: Vector2) -> Vector2:
 	return menu.canvas.get_global_transform().affine_inverse() * (control.get_global_transform() * local)
 
-func _drag_input(control: Control, source: String, pick: Callable, event: InputEvent) -> void:
+func _drag_input(control: Control, source: String, pick: Callable, event: InputEvent, click_on_release := false) -> void:
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		if event.pressed:
 			carry = {}
-			if event.double_click or edit.is_empty() or edit.view_only: return
+			if (event.double_click and not click_on_release) or edit.is_empty() or edit.view_only: return
 			var item: Dictionary = pick.call(event.position)
 			if item.is_empty(): return
 			carry = item.duplicate()
@@ -1788,7 +1787,6 @@ func _build_el1_editor() -> void:
 	book_view.slots = ELDuelCosts.EL1_BOOK
 	menu.canvas.add_child(book_view)
 	menu.labels["book"] = book_view
-	_drag_source(book_view, "book", book_view.carried)
 	_drop_zone(book_view, "book")
 	_drag_source(strip, "strip", strip.carried)
 	_drop_zone(strip, "strip")
@@ -1991,9 +1989,8 @@ func _build_el2_spells() -> void:
 	menu.canvas.add_child(book_view)
 	menu.labels["book"] = book_view
 	right_list = _right_list(_rect("EPAllSpellsBounds"), true, 5)
-	for pair: Array in [[reserve, "reserve"], [book_view, "book"]]:
-		_drag_source(pair[0], pair[1], pair[0].carried)
-		_drop_zone(pair[0], pair[1])
+	_drop_zone(reserve, "reserve")
+	_drop_zone(book_view, "book")
 	_drag_source(right_list, "choice", func(local: Vector2): return _list_item(right_list, local))
 	_drop_zone(right_list, "choice")
 	right_list.item_selected.connect(func(index: int):
@@ -2149,7 +2146,7 @@ func _refresh_el2_lists() -> void:
 		if entry.get("owned", false) and int(p.skills.get(entry.value, -1)) >= ELHeroSkills.MAX_RANK: right_list.set_item_icon_modulate(index, Color(0.5, 0.5, 0.5))
 	if int(edit.item) >= 0 and int(edit.item) < right_items.size(): right_list.select(int(edit.item))
 	right_list.get_v_scroll_bar().value = keep
-	if menu.labels.has("reserve"): menu.labels.reserve.queue_redraw()
+	if menu.labels.has("reserve"): menu.labels.reserve.scroll(0)
 	if book_view != null: book_view.queue_redraw()
 
 func _update_el2_misc() -> void:
@@ -2428,13 +2425,15 @@ class PresetList extends Control:
 
 ## Spellbook slots (EL1 15 with rune counts; EL2 16-spell active deck) or the
 ## EL2 reserve. Click selects a slot; double-click returns it (EL1) or moves it
-## between deck and reserve (EL2); right-click removes a reserve copy.
+## between deck and reserve (EL2); Shift-right-click removes a copy.
 class BookView extends Control:
 	var screen: ELDuelScreen
 	var columns := 5
 	var slots := 15
 	var reserve := false
 	var offset := 0
+	var _click_at := Vector2.INF
+	var _double_click := false
 
 	func _ready() -> void:
 		mouse_filter = Control.MOUSE_FILTER_STOP
@@ -2478,7 +2477,11 @@ class BookView extends Control:
 
 	func _get_tooltip(at: Vector2) -> String:
 		var index := slot_at(at)
-		return screen.spell_tooltip(entries()[index].card) if index >= 0 else ""
+		if index < 0: return ""
+		var tip := screen.spell_tooltip(entries()[index].card)
+		if reserve and not screen.edit.view_only:
+			tip += "\n" + ELRemakeText.t("Drag to All spells to remove this copy.", screen.profile())
+		return tip
 
 	## The slot under a local point for dragging: its index (the reserve: its
 	## spell) and picture.
@@ -2489,13 +2492,33 @@ class BookView extends Control:
 		return {"value": entry.card if reserve else index, "icon": screen.profile().card_icon(entry.card)}
 
 	func _gui_input(event: InputEvent) -> void:
-		if not (event is InputEventMouseButton and event.pressed): return
-		var index := slot_at(event.position)
-		accept_event()
+		if event is InputEventMouseMotion:
+			if _click_at.distance_to(event.position) > DRAG_SLOP: _click_at = Vector2.INF
+		elif event is InputEventMouseButton:
+			if event.button_index == MOUSE_BUTTON_LEFT:
+				if event.pressed:
+					_click_at = event.position
+					_double_click = event.double_click
+				else:
+					var pressed_at := _click_at
+					_click_at = Vector2.INF
+					if pressed_at.distance_to(event.position) <= DRAG_SLOP and Rect2(Vector2.ZERO, size).has_point(event.position):
+						_click(slot_at(pressed_at), _double_click)
+			elif event.pressed and event.button_index == MOUSE_BUTTON_RIGHT and event.shift_pressed:
+				var index := slot_at(event.position)
+				if index >= 0:
+					if reserve: screen.act("remove_reserve", entries()[index].card)
+					else: screen.act("remove_slot", index)
+			elif event.pressed and reserve and event.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN]:
+				scroll(-1 if event.button_index == MOUSE_BUTTON_WHEEL_UP else 1)
+			accept_event()
+		screen._drag_input(self, "reserve" if reserve else "book", carried, event, true)
+
+	func _click(index: int, double_click: bool) -> void:
 		# A spell picked in the list goes where the book is clicked: on a
 		# slot (replacing it) or on an empty place (added).
 		var pending := screen.selected_action()
-		if event.button_index == MOUSE_BUTTON_LEFT and not event.double_click and not pending.is_empty() and pending[0] == "add_spell":
+		if not double_click and not pending.is_empty() and pending[0] == "add_spell":
 			var placed := screen.act("spell_to_reserve", pending[1]) if reserve else screen.act("place_spell", [pending[1], index])
 			if placed:
 				screen.edit.item = -1
@@ -2506,13 +2529,7 @@ class BookView extends Control:
 				return
 		if index < 0: return
 		var entry: Dictionary = entries()[index]
-		if event.button_index == MOUSE_BUTTON_RIGHT:
-			if event.shift_pressed:
-				if reserve: screen.act("remove_reserve", entry.card)
-				else: screen.act("remove_slot", index)
-			return
-		if event.button_index != MOUSE_BUTTON_LEFT: return
-		if event.double_click:
+		if double_click:
 			if reserve: screen.act("reserve_to_deck", entry.card)
 			elif screen.el1(): screen.act("remove_slot", index)
 			else: screen.act("deck_to_reserve", index)

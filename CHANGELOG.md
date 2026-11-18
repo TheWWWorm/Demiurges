@@ -4,6 +4,16 @@ Versions follow [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html)
 
 ## Unreleased
 
+## 0.18.5
+
+- **Try again** after surrendering a local duel rerolls the opening hand and random outcomes.
+- Drag cards between the spellbook, reserve, and shop lists, including out of the reserve in the duel editor. ([#203](https://github.com/TheWWWorm/Demiurges/issues/203))
+- Creature abilities are enabled when they have a legal target, sufficient ether, and room to summon or revive a creature as required. ([#204](https://github.com/TheWWWorm/Demiurges/issues/204))
+- Combat draws, creature marks, and poses advance with the battle playback. Ending a phase during a cast preserves the order of the fight, the summon, and the next turn. ([#205](https://github.com/TheWWWorm/Demiurges/issues/205))
+- Etherlords II starts timed mission commands after the opening fade. Post-battle level and loot animations play before the reports, with 300 ms between dialogs. Enter and Space confirm both reward reports and warding-stone notices. ([#206](https://github.com/TheWWWorm/Demiurges/issues/206), [#207](https://github.com/TheWWWorm/Demiurges/issues/207), [#214](https://github.com/TheWWWorm/Demiurges/issues/214))
+- Etherlords II save and load lists show race badges, including on older saves. Global buff icons play their original flip animation, and gates stay visible in their open pose. ([#208](https://github.com/TheWWWorm/Demiurges/issues/208), [#209](https://github.com/TheWWWorm/Demiurges/issues/209), [#210](https://github.com/TheWWWorm/Demiurges/issues/210))
+- Etherlords II Pale summons appear in their sleeping pose. Ether disturbance, creature abilities, and specializations show their original battle notice icons. The Musician turns to face the hero and animates during dialogue. ([#211](https://github.com/TheWWWorm/Demiurges/issues/211), [#212](https://github.com/TheWWWorm/Demiurges/issues/212), [#213](https://github.com/TheWWWorm/Demiurges/issues/213))
+
 ## 0.18.4
 
 - New Etherlords campaigns and single scenarios start with **AI fights neutral monsters** checked beside the difficulty controls. Computer heroes forecast and play the fight in Living world. Clear the box for the original automatic wins. Existing saves keep their choice.

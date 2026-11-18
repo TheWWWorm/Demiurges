@@ -282,6 +282,7 @@ static func _write(path: String, entry: String, name: String, type: String, dire
 	if not stored.is_empty(): document.preview_jpg = stored
 	var meta := {"format": META_FORMAT, "version": 1, "name": name, "type": type, "file": path.get_file(), "edition": profile.id, "kind": kind_of(state), "map": state.map.id,
 		"title": map_title(profile, state.map.id), "campaign": campaign_title(state), "day": state.day, "players": player_count(state), "created": int(Time.get_unix_time_from_system())}
+	if profile.id == "el2": meta.race = _current_race(state)
 	# Sorted checkpoint JSON puts this bounded string first. Listings can
 	# read it without loading the world, even when it supersedes a stale index.
 	document._slot = Marshalls.utf8_to_base64(JSON.stringify(meta))
@@ -330,6 +331,31 @@ static func player_count(state: ELAdventureSession) -> int:
 	for id: int in state.players:
 		if id > 0: count += 1
 	return count
+
+## The original's mission_color follows the main hero in a running map and
+## the chosen campaign in a between-chapter save.
+static func _current_race(state: ELAdventureSession) -> String:
+	var color := state.hero_color(state.object(state.main_hero))
+	return color if color in ELSecondCampaign.CAMPAIGNS else _campaign_race(state.scenario)
+
+static func _campaign_race(scenario: Variant) -> String:
+	if scenario is not Dictionary: return ""
+	var progress: Variant = scenario.get(ELSecondCampaign.KEY)
+	return str(progress.current) if progress is Dictionary and progress.get("current") in ELSecondCampaign.CAMPAIGNS else ""
+
+## Older indexed saves have no race in their list metadata. Recover it from
+## the checkpoint without restoring the map, script VM or a running game.
+static func _checkpoint_race(profile: ELProfile, document: Dictionary) -> String:
+	if document.get("edition") != "el2": return ""
+	var world: Variant = document.get("world")
+	var objects: Variant = document.get("objects")
+	if world is Dictionary and ELLuaSave._integer(world.get("main_hero"), 0, 0x7fffffff) and objects is Array:
+		for hero: Variant in objects:
+			if hero is not Dictionary or hero.get("uid") != world.main_hero: continue
+			var color := ELAdventureSession.template_color(profile, hero)
+			if color in ELSecondCampaign.CAMPAIGNS: return color
+			break
+	return _campaign_race(document.get("scenario"))
 
 ## Rows of one edition and kind in list order: named slots and automatic
 ## saves by name (standing in for the original's folder order), then the old
@@ -383,6 +409,7 @@ static func _row_meta(text: String, profile: ELProfile, file: String, identity: 
 	if not ELLuaSave._integer(meta.get("created", 0), 0, 253402300799): return {}
 	if identity.type == SLOT and (clean_name(profile.id, meta.name).is_empty() or _stem(meta.name) + ".json" != file): return {}
 	if identity.type == AUTO and meta.kind != identity.kind: return {}
+	if meta.has("race") and meta.race != "" and meta.race not in ELSecondCampaign.CAMPAIGNS: meta.erase("race")
 	meta.type = identity.type
 	return meta
 
@@ -400,7 +427,10 @@ static func _slot_row(profile: ELProfile, path: String, index: String, identity:
 	if index_file != null and index_file.get_length() <= META_LIMIT:
 		var indexed := _row_meta(index_file.get_as_text(), profile, path.get_file(), identity)
 		index_file.close()
-		if not indexed.is_empty(): return embedded if not embedded.is_empty() else indexed
+		if not indexed.is_empty():
+			var known := embedded if not embedded.is_empty() else indexed
+			if profile.id == "el2" and not known.has("race"): known.race = _checkpoint_race(profile, _header(path))
+			return known
 	# The list must not present an unreadable payload merely because it has a
 	# recognizable filename. Validate orphaned checkpoints through normal Load.
 	var codec := ELAdventureSave.new()
@@ -459,11 +489,15 @@ static func legacy(profile: ELProfile, kind: String) -> Array[Dictionary]:
 		var title := map_title(profile, str(header.get("map", "")))
 		if kind == KIND_SINGLE and not _single_map(profile, str(header.get("map", ""))): continue
 		var world: Variant = header.get("world", {})
-		result.append({"type": LEGACY, "name": quick, "path": path, "kind": kind, "edition": profile.id, "map": str(header.get("map", "")), "title": title,
-			"campaign": "", "day": int(world.get("day", 0)) if world is Dictionary else 0, "players": -1, "modified": FileAccess.get_modified_time(path)})
-	if kind == KIND_CAMPAIGN and profile.id == "el2" and FileAccess.file_exists(ELSecondCampaign.AUTOSAVE) and not ELSecondCampaign.read(ELSecondCampaign.AUTOSAVE).is_empty():
-		result.append({"type": PROGRESS, "name": profile.text("T_AUTO_SAVE_AFTER_MISSION").strip_edges(), "path": ELSecondCampaign.AUTOSAVE, "kind": kind, "edition": "el2",
-			"map": "", "title": "", "campaign": "", "day": 0, "players": -1, "modified": FileAccess.get_modified_time(ELSecondCampaign.AUTOSAVE)})
+		var row := {"type": LEGACY, "name": quick, "path": path, "kind": kind, "edition": profile.id, "map": str(header.get("map", "")), "title": title,
+			"campaign": "", "day": int(world.get("day", 0)) if world is Dictionary else 0, "players": -1, "modified": FileAccess.get_modified_time(path)}
+		if profile.id == "el2": row.race = _checkpoint_race(profile, header)
+		result.append(row)
+	if kind == KIND_CAMPAIGN and profile.id == "el2":
+		var progress := ELSecondCampaign.read(ELSecondCampaign.AUTOSAVE)
+		if not progress.is_empty():
+			result.append({"type": PROGRESS, "name": profile.text("T_AUTO_SAVE_AFTER_MISSION").strip_edges(), "path": ELSecondCampaign.AUTOSAVE, "kind": kind, "edition": "el2",
+				"map": "", "title": "", "campaign": "", "race": str(progress.current), "day": 0, "players": -1, "modified": FileAccess.get_modified_time(ELSecondCampaign.AUTOSAVE)})
 	return result
 
 ## A single-mission save is listed only while its map is still a known
@@ -496,7 +530,9 @@ static func find(profile: ELProfile, name: String) -> Dictionary:
 
 ## The running game as a row (the save mode's information box).
 static func current_row(state: ELAdventureSession) -> Dictionary:
-	return {"name": "", "kind": kind_of(state), "map": state.map.id, "title": map_title(state.map.profile, state.map.id), "campaign": campaign_title(state), "day": state.day, "players": player_count(state)}
+	var row := {"name": "", "kind": kind_of(state), "map": state.map.id, "title": map_title(state.map.profile, state.map.id), "campaign": campaign_title(state), "day": state.day, "players": player_count(state)}
+	if state.map.profile.id == "el2": row.race = _current_race(state)
+	return row
 
 ## Information-box text of a row. First game: campaign title, name, map
 ## title, day and player count; second game: "Кампания" for a campaign game,

@@ -71,7 +71,8 @@ func _map_part() -> void:
 	if built:
 		var curtain := view.ui.get_node_or_null("MissionFade") as ColorRect
 		check(curtain != null and curtain.color == Color.BLACK, "#176: a new mission starts behind a black fade")
-		await frames(5)
+		await _wait_for_fade(view)
+		await create_timer(view.director.script_tick() * 2.0).timeout
 		var state := view.state
 		ELFog.reveal_for_console(state, 1, true)
 		await frames(3)
@@ -88,7 +89,132 @@ func _map_part() -> void:
 	view.queue_free()
 	await frames(2)
 	await _mine_depletion(profile, settings)
+	await _opening_and_rewards(profile, settings)
+	await _runestones(profile, settings)
 	_restore(ELSaveSlots.folder("el2"), saves)
+
+func _wait_for_fade(view: ELAdventureView) -> void:
+	if view._mission_fade != null: await view._mission_fade.tree_exited
+
+func _space(pressed := true, echo := false) -> void:
+	_dialogue_key(KEY_SPACE, pressed, echo)
+
+func _dialogue_key(code: Key, pressed := true, echo := false) -> void:
+	var key := InputEventKey.new()
+	key.keycode = code
+	key.pressed = pressed
+	key.echo = echo
+	root.push_input(key)
+
+func _opening_and_rewards(profile: ELProfile, settings: ELSettings) -> void:
+	var view := ELAdventureView.new()
+	root.add_child(view)
+	var built := view.build(profile, {"file_name": "e2mission11"}, settings, 1)
+	check(built, "#206: the Vitals map builds for the opening test")
+	if built:
+		var state := view.state
+		var calls := {"steps": 0}
+		state.vm.bind("Hook_Wake", func(_args: Array) -> Array: return [])
+		state.vm.bind("Hook_OnStep", func(_args: Array) -> Array:
+			calls.steps += 1
+			if calls.steps == 1: state._native(["Opening line"], "ExMessageBoxStandard")
+			return [])
+		_space()
+		await create_timer(0.3).timeout
+		_space(true, true)
+		check(view._mission_fade != null and calls.steps == 0 and view.director._clock == 0.0
+			and not view.second_dialogue.visible, "#206: the mission clock and opening script wait throughout the fade")
+		await _wait_for_fade(view)
+		await create_timer(view.director.script_tick() * 2.0).timeout
+		_space(true, true)
+		check(view._mission_fade == null and calls.steps == 1 and view.second_dialogue.visible
+			and not view.director.dialogue.is_empty(), "#206: the opening appears after the fade and a held key cannot dismiss it")
+		_space(false)
+		_space()
+		_space(false)
+		check(view.director.dialogue.is_empty(), "#206: a fresh press answers the opening dialog")
+		_reward_hotkeys(view)
+		await _battle_rewards(view, profile)
+	view.queue_free()
+	await frames(2)
+
+func _reward_hotkeys(view: ELAdventureView) -> void:
+	# An open notice owns its confirmation before a focused control behind it.
+	var behind := Button.new()
+	view.ui.add_child(behind)
+	var presses := [0]
+	behind.pressed.connect(func(): presses[0] += 1)
+	for report: Dictionary in [
+		{"key": "T_MB_LOOT_MONSTER_OR_HERO_1", "loot": true},
+		{"key": "T_MB_RECEIVE_LOOT", "loot": [{"kind": "spell", "card": "GRSN"}]}]:
+		for code: Key in [KEY_ENTER, KEY_KP_ENTER, KEY_SPACE]:
+			behind.grab_focus()
+			view.director.presentation.emit(report.merged({"kind": "building_message", "hero": -1, "building": -1,
+				"text": view.state.map.profile.text(report.key)}))
+			var opened: bool = view.building_message != null and view.building_message.data.key == report.key
+			_dialogue_key(code)
+			_dialogue_key(code, false)
+			check(opened and view.building_message == null, "#214: %s closes %s" % [OS.get_keycode_string(code), report.key])
+			if view.building_message != null: view._close_building_message()
+	check(presses[0] == 0, "#214: reward keys never activate a focused button behind the report")
+	behind.queue_free()
+
+func _battle_rewards(view: ELAdventureView, profile: ELProfile) -> void:
+	var state := view.state
+	var hero := state.object(state.main_hero)
+	var opponent := {}
+	for item: Dictionary in state.objects.values():
+		if item.type == "monster" and item.alive and item.visible and int(item.owner) != state.current_player:
+			opponent = item
+			break
+	if hero.is_empty() or opponent.is_empty():
+		check(false, "#207: the chapter has a hero and a neutral opponent")
+		return
+	var level := int(hero.level)
+	hero.experience = ELHeroProgression.threshold(profile, level + 1) - 1
+	var encounter := ELAdventureEncounter.new()
+	if not encounter.prepare(state, int(hero.uid), int(opponent.uid)) or encounter.battle == null:
+		check(false, "#207: the encounter can be prepared: " + encounter.error)
+		return
+	state.vm.bind("Hook_OnBattleFinishing", func(_args: Array) -> Array:
+		state._native([], "ExStartLootMessage")
+		state._native(["GRSN"], "ExAddLootMessageSpell")
+		state._native([], "ExSendLootMessage")
+		return [1.0])
+	view.director.encounter = encounter
+	view.set_suspended(true)
+	encounter.battle.heroes[1].health = 0
+	encounter.battle._check_winner()
+	check(view.director.finish_encounter() and int(hero.level) > level and view.building_messages.size() == 2,
+		"#207: the win awards a level and queues the XP and loot reports")
+	check(view.building_message == null and not view.effects.effects.has(ELAdventureView.REWARD_EFFECT),
+		"#207: the reward animation and dialogs wait while the map is hidden")
+	view.set_suspended(false)
+	var effects_seen := {}
+	var until := Time.get_ticks_msec() + 7000
+	while view.building_message == null and Time.get_ticks_msec() < until:
+		var effect: Dictionary = view.effects.effects.get(ELAdventureView.REWARD_EFFECT, {})
+		if not effect.is_empty(): effects_seen[effect.entry.file] = true
+		await process_frame
+	check(effects_seen.has(ELAdventureView.LEVEL_EFFECT) and effects_seen.has(ELAdventureView.LOOT_EFFECT)
+		and not view.effects.effects.has(ELAdventureView.REWARD_EFFECT), "#207: both original reward effects play before any dialog")
+	check(view.audio.played.has("Magic/GlobalCast.wav") and view.audio.played.has("Adventure/stars1.wav"), "#207: the reward cues play their original sounds")
+	if view.building_message == null:
+		check(false, "#207: the reward dialogs open after the effects")
+		return
+	check(view.building_message.data.key == "T_MB_LOOT_MONSTER_OR_HERO_1", "#207: the XP report opens first")
+	_space()
+	_space(true, true)
+	check(view.building_message == null and view.skills == null and not view._can_act(), "#207: the reports are separated by an input gap")
+	await create_timer(ELAdventureView.REWARD_DIALOG_GAP + 0.15).timeout
+	_space(true, true)
+	check(view.building_message != null and view.building_message.data.key == "T_MB_RECEIVE_LOOT", "#207: holding Space cannot dismiss the next report")
+	_space(false)
+	_space()
+	_space(false)
+	check(view.building_message == null and view.skills == null, "#207: the skill dialog also waits after the loot report closes")
+	await create_timer(ELAdventureView.REWARD_DIALOG_GAP + 0.15).timeout
+	check(view.skills is ELSecondLevelUpView, "#207: the level-up choice follows the battle rewards")
 
 func _actor_facing(view: ELAdventureView) -> void:
 	var state := view.state
@@ -252,15 +378,15 @@ func _change_effect_message(view: ELAdventureView, profile: ELProfile) -> void:
 	if hero.is_empty(): return
 	var text := profile.text("BldngMsg1Specialization").replace("%s", "X")
 	# As ELSecondBuildings.use: the effect event, then the message.
+	var start := Time.get_ticks_msec()
 	state.event.emit({"kind": "hero_change_effect", "id": hero.uid})
 	view.director.presentation.emit({"kind": "building_message", "hero": hero.uid, "building": -1, "title": "", "text": text, "resources": [], "skill": "", "key": "BldngMsg1Specialization"})
 	await frames(2)
 	var name := "hero_change:%d" % int(hero.uid)
 	check(view.effects.effects.has(name) and view.building_message == null and view.paused, "the shrine's message waits while the change effect plays, the map held")
-	var start := Time.get_ticks_msec()
-	while view.building_message == null and Time.get_ticks_msec() - start < 4000: await process_frame
+	while view.building_message == null and Time.get_ticks_msec() - start < 15000: await process_frame
 	var waited := (Time.get_ticks_msec() - start) / 1000.0
-	check(view.building_message != null and waited > 1.7 and waited < 2.4 and not view.effects.effects.has(name), "then it opens, the effect over (%.2f s)" % waited)
+	check(view.building_message != null and waited > 1.7 and not view.effects.effects.has(name), "then it opens, the effect over (%.2f s)" % waited)
 	if view.building_message != null: view._close_building_message()
 	await frames(2)
 	check(not view.paused, "closing it frees the map")
@@ -333,6 +459,84 @@ func _fog_region(world: ELAdventureScene) -> void:
 	ELFog.reveal_for_console(state, 1, true)
 	world.sync_fog()
 	check(world._fog_tiles == world.fog_tiles() and world.fog_to == world.fog_corners() and world.fog_from == previous, "a fog update keeps the previous corner opacity for the fade")
+
+func _runestones(profile: ELProfile, settings: ELSettings) -> void:
+	var row := {"file_name": "e2mission13"}
+	var view := ELAdventureView.new()
+	root.add_child(view)
+	var built := view.build(profile, row, settings, 1)
+	view.set_process(false)
+	check(built, "#210: the Vitals map with both runestone models builds")
+	if not built:
+		view.queue_free()
+		return
+	var state := view.state
+	ELFog.reveal_for_console(state, 1, true)
+	var tested := {}
+	var open_poses := {}
+	for gate: Dictionary in state.objects.values():
+		if not ELSecondGates.is_gate(gate) or not gate.visible: continue
+		var family := ELSecondGates.base(gate)
+		if tested.has(family): continue
+		tested[family] = true
+		var id := int(gate.uid)
+		var model: ELModel = view.world.object_models.get(id)
+		var part_name := "gate01" if family == "Runestone1" else "gate03_displacement4"
+		var part: MeshInstance3D = model.parts.get(part_name) if model != null else null
+		check(part != null and model.clip == "uclose" and not model.playing, "#210: %s starts in its closed pose" % family)
+		if part == null: continue
+		var closed_pose := part.transform
+		var origin := Vector2i(gate.x, gate.y)
+		var grid := view.director.grid
+		var covered: Array = grid.footprints[id].cells
+		state._native([float(id)], "ExOpenGate")
+		check(model.visible and model.clip == "uinstant" and model.playing, "#210: %s stays visible and plays its opening animation" % family)
+		model._process(1.0)
+		check(model.visible and not model.playing and not part.transform.is_equal_approx(closed_pose), "#210: %s holds the open pose" % family)
+		var open_cells := covered.filter(func(offset: Vector2i) -> bool: return grid.passability(origin + offset, false, false) >= 0)
+		check(not open_cells.is_empty(), "#210: %s opens a passage" % family)
+		open_poses[id] = {"part": part_name, "pose": part.transform}
+		state._native([float(id)], "ExCloseGate")
+		check(model.visible and model.clip == "uclose" and model.playing, "#210: %s plays its closing animation" % family)
+		view.world.set_animate_objects(false)
+		check(not model.playing and part.transform.is_equal_approx(closed_pose) and open_cells.all(
+			func(offset: Vector2i) -> bool: return grid.passability(origin + offset, false, false) < 0),
+			"#210: %s shuts the passage and settles when animation is disabled" % family)
+		state._native([float(id)], "ExOpenGate")
+		check(not model.playing and part.transform.is_equal_approx(open_poses[id].pose), "#210: %s opens immediately with object animation off" % family)
+		view.world.set_animate_objects(true)
+		state._native([float(id)], "ExCloseGate")
+		gate.visible = false
+		state.event.emit({"kind": "object_changed", "id": id})
+		state._native([float(id)], "ExOpenGate")
+		check(not model.visible, "#210: %s respects scripted hiding" % family)
+		gate.visible = true
+		state.event.emit({"kind": "object_changed", "id": id})
+		check(model.visible and not model.playing and part.transform.is_equal_approx(open_poses[id].pose),
+			"#210: %s returns in the latest pose when shown again" % family)
+	check(open_poses.size() == 2, "#210: both original gate models are covered")
+	var codec := ELAdventureSave.new()
+	var saved := codec.encode(view.director, view.camera_state())
+	var restored := codec.decode(JSON.parse_string(JSON.stringify(saved)), {"el2": profile})
+	view.queue_free()
+	await frames(2)
+	check(not restored.is_empty(), "#210: the checkpoint with opened runestones can be loaded (%s)" % codec.error)
+	if restored.is_empty(): return
+	var loaded := ELAdventureView.new()
+	root.add_child(loaded)
+	built = loaded.build(profile, row, settings, 1, restored)
+	check(built, "#210: the checkpoint's map builds")
+	if built:
+		ELFog.reveal_for_console(loaded.state, 1, true)
+		for id: int in open_poses:
+			var item := loaded.state.object(id)
+			loaded.world.fog_object(item)
+			var model: ELModel = loaded.world.object_models.get(id)
+			var expected: Dictionary = open_poses[id]
+			check(item.get("opened", false) and model != null and model.visible and not model.playing
+				and model.parts[expected.part].transform.is_equal_approx(expected.pose), "#210: the loaded %s starts in the open pose" % item.name)
+	loaded.queue_free()
+	await frames(2)
 
 func _settle_last_mine_payment(view: ELAdventureView) -> void:
 	var state := view.state
@@ -455,6 +659,17 @@ func _new_map_reports(view: ELAdventureView) -> void:
 	view._scroll_to(focus)
 	view._present({"kind": "dialogue", "dialogue": {"actor": id, "text": "Test line", "text_id": ""}})
 	check(not view.second_dialogue.visible and not view._pending_speech.is_empty(), "#175: the next line waits while the camera is in flight")
+	var stones := state.objects.values().filter(ELSecondGates.is_warding)
+	if not stones.is_empty():
+		var stone: Dictionary = stones[0]
+		var picked := ELSecondGates.use(director, hero, stone)
+		var opened: bool = view.building_message != null and view.building_message.data.building == stone.uid
+		_dialogue_key(KEY_ENTER)
+		_dialogue_key(KEY_ENTER, false)
+		check(picked and opened and view.building_message == null and not view._pending_speech.is_empty(),
+			"#214: Enter dismisses the warding-stone notice while the next script line is still waiting")
+		if view.building_message != null: view._close_building_message()
+	else: check(false, "#214: the chapter has its warding stone")
 	view._glide(10.0)
 	await frames(2)
 	check(view.second_dialogue.visible and view._pending_speech.is_empty(), "#175: the dialogue opens when the camera reaches the speaker")

@@ -173,11 +173,7 @@ func press(point: Vector2) -> void:
 	var book := book_at(point)
 	if book >= 0:
 		slot = book
-		if not carry.is_empty():
-			var card := carry
-			carry = ""
-			_stage(book, card)
-		elif not _purchase_pending:
+		if not _purchase_pending:
 			held = {"kind": "book", "index": book, "icon": profile.card_icon(trade.cards[book])}
 		refresh()
 		return
@@ -196,14 +192,23 @@ func press(point: Vector2) -> void:
 	if not carry.is_empty(): held = {"kind": "shop", "index": index}
 	refresh()
 
+func release(point: Vector2) -> void:
+	if held.get("kind") == "book" and not dragging and point.distance_to(press_at) <= DRAG_SLOP and not carry.is_empty():
+		var card := carry
+		carry = ""
+		_stage(int(held.index), card)
+		refresh()
+	super.release(point)
+
 ## A shop spell dragged onto a book slot is staged there as with the second
 ## click; released anywhere else it is let go.
 func drop_held(item: Dictionary, point: Vector2) -> void:
 	var book := book_at(point)
 	if item.kind == "book":
+		carry = ""
 		if not _purchase_pending and ELSpellInventory.swap_slots(shop_book_order, shop_book_order.find(item.index), shop_book_order.find(book)):
 			slot = int(item.index)
-			refresh()
+		refresh()
 		return
 	if item.kind != "shop" or carry.is_empty(): return
 	var card := carry
@@ -356,7 +361,7 @@ func _draw_sheet() -> void:
 	# Bought slots carry a gold frame; the carried spell follows the cursor.
 	for index in mini(15, trade.pending.size()):
 		if not trade.pending[index].is_empty(): sheet.draw_rect(book_rect(shop_book_order.find(index)).grow(-1), Color(0.95, 0.8, 0.35, 0.8), false, 1.5)
-	if not carry.is_empty():
+	if not carry.is_empty() and not (dragging and held.get("kind") == "book"):
 		var rect := Rect2(carry_at - ICON * 0.5, ICON)
 		sheet.draw_texture_rect(profile.card_icon(carry), rect, false, Color(1, 1, 1, 0.85))
 		sheet.draw_rect(rect, PICK, false, 1.5)

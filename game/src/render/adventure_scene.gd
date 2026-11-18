@@ -144,8 +144,9 @@ func build(source: ELAdventureMap, session: ELAdventureSession = null) -> bool:
 			_blob_slots[uid] = {"index": -1, "local": blob_local(prototype, footprint), "base": transform,
 				"footprint": footprint, "opacity": FOLIAGE_BLOB_ALPHA if foliage else BLOB_ALPHA}
 		var casts := silhouette(map.profile.id, object, definition)
-		# A fort is its own figure so its flag can rise when it is owned.
-		if definition.unit or prototype.clip_frames() > 1 or first_barrier(object) or _movable_portal(object) or object.get("type") == "fort":
+		# Gates and forts need their own figures for their state-dependent poses.
+		var gate := _second_gate(object)
+		if definition.unit or prototype.clip_frames() > 1 or first_barrier(object) or gate or _movable_portal(object) or object.get("type") == "fort":
 			var model := ELModel.new()
 			add_child(model)
 			if not model.build(map.profile, definition.model, definition.texture, definition.secondary, definition.get("wave", "")):
@@ -158,6 +159,7 @@ func build(source: ELAdventureMap, session: ELAdventureSession = null) -> bool:
 			model.set_meta("art_key", key)
 			if object.get("type") == "corpse" or not object.get("alive", true): _corpse_pose(model)
 			if first_barrier(object): barrier_pose(model, bool(object.get("opened", false)), false)
+			if gate: _second_gate_pose(model, bool(object.get("opened", false)), false)
 			# A garrison hero is inside its fort; its own figure is not drawn.
 			if object.get("fortified", false): model.hide()
 			if object.get("type") == "fort": fort_flag(model, int(object.get("owner", -1)) >= 1)
@@ -673,7 +675,8 @@ func _fade_pickups(delta: float) -> void:
 			_place_instance(entry, transform)
 
 func _game_visible(item: Dictionary) -> bool:
-	return item.get("visible", true) and item.get("placed", true) and not item.get("fortified", false) and (not item.get("opened", false) or first_barrier(item)) \
+	return item.get("visible", true) and item.get("placed", true) and not item.get("fortified", false) \
+		and (not item.get("opened", false) or first_barrier(item) or _second_gate(item)) \
 		and (item.get("alive", true) or item.get("type") not in ["hero", "monster"] or map.profile.id == "el2")
 
 ## Figure brightness under the fog (1 undimmed), in steps of 1/32 so fading
@@ -734,13 +737,13 @@ func update_object(item: Dictionary, apply_facing := false) -> void:
 	if _retiring_pickups.has(uid):
 		if object_models.has(uid): object_models[uid].basis = _retiring_pickups[uid].basis
 		_retiring_pickups.erase(uid)
-	# An opened second-game gate has moved out of the way; a first-game
-	# runestone keeps its gate (barrier_pose).
+	var gate := _second_gate(item)
 	var visible := _game_visible(item)
 	if not visible:
 		if object_models.has(uid):
 			var model: ELModel = object_models[uid]
 			model.hide()
+			if gate: _second_gate_pose(model, bool(item.get("opened", false)), false)
 			if item.get("type") in ["hero", "monster"] and not item.get("alive", true):
 				model.playing = false
 				model.set_process(false)
@@ -751,9 +754,9 @@ func update_object(item: Dictionary, apply_facing := false) -> void:
 	if definition.is_empty() or definition.get("hidden", false): return
 	var key := "%s/%s/%s/%s" % [definition.model, definition.texture, definition.secondary, definition.get("wave", "")]
 	var unit: bool = item.type in ["hero", "monster", "corpse"]
-	var movable_portal := _movable_portal(item)
-	var replaceable: bool = unit or movable_portal or item.type in ["rune_shop", "el1_spell_shop", "resource_mine", "mana_node", "fort"] or ELFirstScenario.is_castle(item)
-	var needs_model := (unit or movable_portal) and not object_models.has(uid)
+	var own_model := unit or _movable_portal(item) or gate
+	var replaceable: bool = own_model or item.type in ["rune_shop", "el1_spell_shop", "resource_mine", "mana_node", "fort"] or ELFirstScenario.is_castle(item)
+	var needs_model := own_model and not object_models.has(uid)
 	if replaceable and (_object_keys.get(uid, "") != key or needs_model):
 		var model := ELModel.new()
 		add_child(model)
@@ -791,6 +794,7 @@ func update_object(item: Dictionary, apply_facing := false) -> void:
 		model.position = Vector3(center.x * ELAdventureTerrain.CELL, 0, -center.y * ELAdventureTerrain.CELL)
 		if item.get("type") == "corpse" or not item.get("alive", true): _corpse_pose(model)
 		if first_barrier(item): barrier_pose(model, bool(item.get("opened", false)), true)
+		if gate: _second_gate_pose(model, bool(item.get("opened", false)), true)
 		if item.get("type") == "fort": fort_flag(model, int(item.get("owner", -1)) >= 1)
 		grey_object(uid)
 		_sync_blob(uid, visible)
@@ -807,6 +811,18 @@ func _movable_portal(item: Dictionary) -> bool:
 ## A first-game runestone barrier (Runestone1/2), drawn as its own figure.
 func first_barrier(item: Dictionary) -> bool:
 	return map.profile.id == "el1" and item.get("group") == "additional_buildings" and item.get("name") in ["Runestone1", "Runestone2"]
+
+func _second_gate(item: Dictionary) -> bool:
+	return map.profile.id == "el2" and ELSecondGates.is_gate(item)
+
+## EL2 runestones use the open and close clips on their own gate models.
+## A gate built in either state starts on the last frame of that state's clip.
+func _second_gate_pose(model: ELModel, opened: bool, animate: bool) -> void:
+	var known := model.has_meta("gate_opened")
+	if known and bool(model.get_meta("gate_opened")) == opened: return
+	model.set_meta("gate_opened", opened)
+	if model.play("uinstant" if opened else "uclose") and not (known and animate and animate_objects):
+		_hold_frame(model, float(model.clip_frames() - 1))
 
 ## Opening plays the figure's "uinstant" clip, then hides its moving parts
 ## object02-object10 so the gate stays (end callback).
@@ -1010,6 +1026,12 @@ func play_actor_code(uid: int, code: int) -> String:
 	if not clip.is_empty(): play_actor_clip(uid, clip)
 	return clip
 
+## EL2's Talk selects Enchantment, then Instant, then the generic attack
+## (0x6826da, 0x6811d6). The Musician's map model calls its Instant `uattack`.
+func speak_actor(uid: int) -> void:
+	for code: int in [0x014c0000, 0x01cc0000, 0x02880000]:
+		if not play_actor_code(uid, code).is_empty(): return
+
 func orient_actor(uid: int, direction: Vector2) -> void:
 	if actors.has(uid) and direction.length_squared() > 0.0001:
 		actors[uid].rotation.y = atan2(direction.x, -direction.y)
@@ -1050,7 +1072,10 @@ func _add_animated(model: ELModel) -> void:
 func set_animate_objects(on: bool) -> void:
 	animate_objects = on
 	for model: ELModel in animated:
-		if is_instance_valid(model): model.speed = 1.0 if on else 0.0
+		if not is_instance_valid(model): continue
+		model.speed = 1.0 if on else 0.0
+		if not on and model.playing and model.has_meta("gate_opened"):
+			_hold_frame(model, float(model.clip_frames() - 1))
 
 ## Whether an object draws the original ground blob shadow (view flag).
 ## Second game: terrain objects whose TerrObj

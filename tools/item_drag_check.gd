@@ -223,6 +223,11 @@ func _second_inventory(session: Dictionary) -> void:
 	card = model.bag[0]
 	click(input, at.call("deck", 3))
 	check(model.deck[3] == card and model.carried().is_empty(), "inventory: the second click places it")
+	var actual := model.deck[0]
+	var contents := model.bag.duplicate()
+	click(input, at.call("bag", 0))
+	drag(input, at.call("deck", 0), at.call("bag", 2))
+	check(model.deck[0].is_empty() and model.bag == contents + [actual] and model.carried().is_empty(), "inventory: dragging a deck slot takes its own card even when a bag card is already picked")
 	card = model.bag[0]
 	var blank := model.deck.find("")
 	click(input, at.call("bag", 0))
@@ -278,6 +283,11 @@ func _second_shop(session: Dictionary) -> void:
 	click(input, at.call("shop", 0))
 	click(input, at.call("shop", 0), true)
 	check(model.bag.size() == bag_size + 1 and model.bag[-1] == bought and model.carried().is_empty(), "spell shop: a double click still buys into the bag")
+	var deck_card := model.deck[0]
+	var stock := model.shop.duplicate()
+	click(input, at.call("shop", 0))
+	drag(input, at.call("deck", 0), at.call("shop", 1))
+	check(model.deck[0].is_empty() and model.shop == stock + [deck_card] and model.carried().is_empty(), "spell shop: dragging a deck card sells it without buying the previously picked offer")
 	view.queue_free()
 	state.objects.erase(shop_id)
 	await frames(2)
@@ -541,8 +551,9 @@ func _first_shop(profile: ELProfile) -> void:
 	trade.clear(0)
 	var other_card := trade.cards[0]
 	var before_bill := trade.bill()
+	click(input, view.shop_rect(0).get_center())
 	drag(input, view.book_rect(1).get_center(), view.book_rect(0).get_center())
-	check(view.book_cards(0)[0] == card and view.book_cards(0)[1] == other_card and trade.bill() == before_bill, "first game laboratory: reordering the draft carries the purchase and keeps its price")
+	check(view.book_cards(0)[0] == card and view.book_cards(0)[1] == other_card and trade.bill() == before_bill, "first game laboratory: reordering the draft keeps its price even while a shop spell is picked")
 	var hero: Dictionary = session.state.object(session.hero)
 	for kind: String in session.state.players[hero.owner].resources: session.state.players[hero.owner].resources[kind] = 1000000
 	view.accept()

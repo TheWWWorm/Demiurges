@@ -42,6 +42,11 @@ var decline: BaseButton
 var second_dialogue: ELSecondDialogueBox
 var _pending_speech: Dictionary = {}
 const MISSION_FADE_SECONDS := 2.0
+## These shared maps and the interlude choose their opening scene in the
+## first step hook. Their story commands still run on the mission clock.
+const SCRIPTED_OPENING_SCENES := {"maps/e2mission32": "e2mission24_32", "maps/e2mission34": "e2mission34_44_54", "maps/e2mission50": "e2mission50"}
+var _mission_fade: ColorRect
+var _held_dialogue_keys := {}
 var route: MeshInstance3D
 var _route_owner := -1
 var _route_fog_revision := -1
@@ -138,6 +143,18 @@ var first_level_ups: Array[int] = []
 var building_screen: ELBuildingScreenView
 var building_message: ELBuildingMessageView
 var building_messages: Array[Dictionary] = []
+const REWARD_DIALOG_GAP := 0.3
+const REWARD_EFFECT := "battle_reward"
+const LOOT_EFFECT := "Loot.pfx"
+const LEVEL_EFFECT := "Bereserk.pfx"
+## The original queues the loot cue and the hero change cue for 30 map ticks
+## (ExSendLootMessage at 0x69bdc9, CHero::PlayChangeEffect at 0x66a661).
+const REWARD_CUE_TICKS := 30
+var _finishing_battle := false
+var _encounter_loot: Array[Dictionary] = []
+var _reward_cues: Array[Dictionary] = []
+var _reward_wait := 0.0
+var _battle_level_hero := -1
 ## Second game: hero uid -> the msec time its change effect (shrine, beacon)
 ## ends; its building message waits for it (#159).
 var _change_effects: Dictionary = {}
@@ -230,11 +247,18 @@ func build(profile: ELProfile, scenario: Dictionary, preferences: ELSettings, di
 	# Building or restoring a map shows the wait cursor until the map picks again.
 	wait_cursor(profile)
 	var map := ELAdventureMap.new()
+	var opening_events: Array[Dictionary] = []
 	if restored.is_empty():
 		if not map.load_map(profile, str(scenario.file_name)): return _fail(map.error)
 		_loading(0.15)
 		state = ELAdventureSession.new()
+		# The scene initialization hooks can emit a direct box or wait before
+		# the director exists. Deliver them once the opening can be presented.
+		var capture := func(data: Dictionary) -> void:
+			if data.kind in ["message_box", "script_wait"]: opening_events.append(data)
+		if profile.id == "el2": state.event.connect(capture)
 		if not state.start(map, difficulty, 212, str(scenario.get("script", "")), int(str(scenario.get("player", "1"))), scenario.has("number"), solo_first): return _fail(state.error)
+		if profile.id == "el2": state.event.disconnect(capture)
 		_loading(0.25)
 		state.tutorial = bool(scenario.get("tutorial", false))
 		director = ELAdventureDirector.new()
@@ -254,6 +278,9 @@ func build(profile: ELProfile, scenario: Dictionary, preferences: ELSettings, di
 		if metadata.has("header"): map.title = profile.text(str(metadata.header))
 	state.event.connect(_state_event)
 	director.presentation.connect(_present)
+	if profile.id == "el2":
+		director.encounter_finishing.connect(_on_encounter_finishing)
+		director.encounter_finished.connect(_on_encounter_finished)
 	# ExIsDesktopModalChild: any window or message box over the map.
 	state.desktop_modal = func() -> bool: return paused or extras_open() or not director.dialogue.is_empty() or director._shopping()
 	_art = ELAdventureArt.new(map)
@@ -303,6 +330,8 @@ func build(profile: ELProfile, scenario: Dictionary, preferences: ELSettings, di
 		audio.restore(state)
 		effects.prepare(BATTLE_DOME_EFFECT)
 		effects.prepare(BATTLE_DEFEAT_EFFECT)
+		effects.prepare(LOOT_EFFECT)
+		effects.prepare(LEVEL_EFFECT)
 		ELAudio.sound(profile, BATTLE_DOME_SOUND)
 		# Building sounds, terrain ambience and footsteps (no blazons).
 		_build_presentation()
@@ -354,32 +383,29 @@ func build(profile: ELProfile, scenario: Dictionary, preferences: ELSettings, di
 			ELPlayerProfile.apply(state, str(scenario.player_name), int(scenario.get("logo", -1)), int(scenario.get("colour", -1)))
 			# The blazons were placed with the map's own picture.
 			if presentation != null: presentation.sync()
-		if profile.id == "el2" and scenario.get(ELSecondCampaign.KEY) is Dictionary:
-			var problem := ELSecondCampaign.start_chapter(state, scenario[ELSecondCampaign.KEY])
-			if not problem.is_empty(): return _fail(problem)
-			_refresh_hero_info()
 		ELFirstScenario.opening(director)
 		if profile.id == "el2":
-			# Wake the chapter while it is still covered: shared maps replace
-			# their authored main hero and camera on the first script step.
-			if strategic_session == null:
-				for tick in 120:
-					director.advance(director.script_tick())
-					if director.can_move() or not director.dialogue.is_empty() or director.encounter != null or not state.outcome.is_empty() or not director.error.is_empty(): break
-			if not director.error.is_empty(): return _fail(director.error)
-			target = camera_goal()
-			scroll_gliding = false
-			if following >= 0 and world.actors.has(following): target = world.actors[following].position
-			if yaw_goal != INF:
-				yaw = yaw_goal
-				yaw_goal = INF
-			if not _pending_speech.is_empty():
-				_show_second_dialogue(_pending_speech)
-				_pending_speech = {}
+			_fade_in_mission()
+			if scenario.get(ELSecondCampaign.KEY) is Dictionary:
+				var problem := ELSecondCampaign.start_chapter(state, scenario[ELSecondCampaign.KEY])
+				if not problem.is_empty(): return _fail(problem)
+			for event: Dictionary in opening_events: state.event.emit(event)
+			var script := ELArchive.key(state.script_name)
+			if SCRIPTED_OPENING_SCENES.get(script) == ELArchive.key(map.id):
+				if not director.prepare_opening_scene(): return _fail(director.error)
+				target = camera_goal()
+				scroll_gliding = false
+				if following >= 0 and world.actors.has(following): target = world.actors[following].position
+				if yaw_goal != INF:
+					yaw = yaw_goal
+					yaw_goal = INF
+				if view_goal.x > 0 and _script_lens:
+					zoom = view_goal.x
+					pitch = view_goal.y
+					view_goal = Vector2(-1, -1)
 			world.enable_fog(state)
 			_refresh_hero_info()
 			_update_camera()
-			_fade_in_mission()
 		# First game: every mission start is saved as T_AUTOSAVE_START_MISSION.
 		if profile.id == "el1" and not state.tutorial:
 			wait_cursor(profile)
@@ -420,13 +446,18 @@ func _process(delta: float) -> void:
 	if hud != null and paused and hud.tooltip.visible: hud.tooltip.hide()
 	_tick_cursor(delta)
 	if second_hud != null: _tick_map_tooltip(delta)
-	if director == null or not error.is_empty() or paused or console_open or extras_open():
+	if director == null or not visible or not error.is_empty() or _mission_fade != null or paused or console_open or extras_open():
 		# Second game: the hero readouts follow the state under a message box or
 		# window too (a building use pays its points before its message opens).
 		if second_hud != null and director != null: _refresh_hero_info()
 		return
+	if _reward_transition():
+		if _step_reward_transition(delta): return
+		_show_waiting_map_dialogs()
+	elif result_waiting: _show_waiting_map_dialogs()
 	# A message waiting for the map's commands (#159) opens once they are done.
-	if building_message == null and not building_messages.is_empty() and building_messages[0].get("wait_idle", false): _show_building_message()
+	elif not building_messages.is_empty(): _show_building_message()
+	if paused: return
 	if global_spell_waiting and _can_act():
 		_offer_global_spell()
 		if global_spells != null: return
@@ -496,7 +527,7 @@ func _process(delta: float) -> void:
 	if scroll_gliding: _glide(delta)
 	if view_moved and following < 0: _clamp_target()
 	_update_camera()
-	if not _pending_speech.is_empty() and _speaker_in_place():
+	if not _pending_speech.is_empty() and (int(_pending_speech.get("actor", -1)) < 0 or _speaker_in_place()):
 		var speech := _pending_speech
 		_pending_speech = {}
 		_show_second_dialogue(speech)
@@ -738,7 +769,7 @@ func resume_summon_playback(playback: Dictionary) -> void:
 			effects.start(name, cue.entry, cue.elapsed, cue.drawn)
 
 func _can_act() -> bool:
-	return not paused and director.can_move() and director.movement.is_empty() and (strategic_session == null or strategic_session.can_plan())
+	return _mission_fade == null and not _reward_transition() and not paused and director.can_move() and director.movement.is_empty() and (strategic_session == null or strategic_session.can_plan())
 
 func _refresh_hero_info() -> void:
 	var hero := state.object(_hero_id())
@@ -1022,8 +1053,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			get_viewport().set_input_as_handled()
 		return
 	if building_message != null:
-		var loot_panel := building_message.message_box != null and building_message.message_box.style == "loot"
-		if event is InputEventKey and event.pressed and (building_message.message_box.key_answer(event.keycode) == "OK" if loot_panel else event.keycode in [KEY_ESCAPE, KEY_ENTER, KEY_KP_ENTER, KEY_SPACE]):
+		if building_message.message_box == null and key != null and key.pressed and key.keycode in [KEY_ESCAPE, KEY_ENTER, KEY_KP_ENTER, KEY_SPACE]:
 			_close_building_message()
 			get_viewport().set_input_as_handled()
 		return
@@ -1251,6 +1281,27 @@ func _shop_hotkey(key: InputEventKey) -> void:
 ## _unhandled_input marks the moves that reached the map. A right release
 ## anywhere ends the press.
 func _input(event: InputEvent) -> void:
+	var blocked := _mission_fade != null or (not paused and _reward_transition())
+	var key := event as InputEventKey
+	if key != null:
+		if not key.pressed: _held_dialogue_keys.erase(key.keycode)
+		elif blocked or _reward_dialog_open(): _held_dialogue_keys[key.keycode] = true
+		if key.pressed and key.echo and _held_dialogue_keys.has(key.keycode):
+			get_viewport().set_input_as_handled()
+			return
+	if blocked:
+		get_viewport().set_input_as_handled()
+		return
+	# A map notice owns its confirmation keys before focused controls or a
+	# script line waiting to be shown. A script box already over it takes priority.
+	if key != null and not console_open and building_message != null and not dialogue_blocker.visible:
+		var box := building_message.message_box
+		if box != null and box.is_visible_in_tree():
+			var answer := box.key_answer(key.keycode)
+			if not answer.is_empty():
+				get_viewport().set_input_as_handled()
+				if key.pressed and not key.echo: box.answered.emit(answer)
+				return
 	if event is InputEventMouseMotion:
 		_pointer = event.position
 		_pointer_on_map = false
@@ -1396,7 +1447,7 @@ func update_cursor() -> void:
 
 ## Windows, panels and message boxes over the map show the default cursor.
 func _cursor_modal() -> bool:
-	return paused or console_open or not error.is_empty() or extras_open() or not director.dialogue.is_empty() \
+	return _mission_fade != null or _reward_transition() or paused or console_open or not error.is_empty() or extras_open() or not director.dialogue.is_empty() \
 		or hero_screen != null or building_screen != null or building_message != null or global_spells != null or diplomacy != null \
 		or first_shop != null or rune_shop != null or shop != null or skills != null or spellbook != null or notebook != null \
 		or (second_hud != null and second_hud.menu.visible) or result_shown \
@@ -1648,7 +1699,7 @@ func _present(data: Dictionary) -> void:
 		"spell_shop": _open_shop()
 		"rune_shop", "el1_spell_shop":
 			if global_spells != null: _close_global_spells()
-			if building_message != null:
+			if building_message != null or _reward_transition():
 				deferred_shop = data
 				return
 			if data.kind == "rune_shop": _open_rune_shop()
@@ -1682,7 +1733,7 @@ func _present(data: Dictionary) -> void:
 				view_goal = Vector2(SECOND_TEXT_ZOOM, SECOND_TEXT_PITCH)
 				_script_lens = false
 			if second_dialogue != null:
-				if int(speech.get("actor", -1)) < 0 or _speaker_in_place(): _show_second_dialogue(speech)
+				if _mission_fade == null and not _reward_transition() and (int(speech.get("actor", -1)) < 0 or _speaker_in_place()): _show_second_dialogue(speech)
 				else: _pending_speech = speech
 				return
 			dialogue_name.text = speech.title
@@ -1744,7 +1795,7 @@ func _present(data: Dictionary) -> void:
 			var from := Vector2(float(hero.get("x", -1)), float(hero.get("y", -1)))
 			yaw_goal = atan2(-(point.x - from.x), point.y - from.y)
 		"encounter":
-			if building_message != null:
+			if building_message != null or _reward_transition():
 				# The building's message is read before the battle it announces.
 				deferred_encounter = data
 				return
@@ -1806,9 +1857,7 @@ func _present(data: Dictionary) -> void:
 			else: _remark(data.text)
 		"building_message":
 			_remark(data.text)
-			building_messages.append(data)
-			if _hold_for_change_effect(data): return
-			_show_building_message()
+			_queue_building_message(data)
 
 ## A portal hides its traveller until the receiver's effect has finished.
 ## At a dock the departing figure fades before the switch to the new model.
@@ -1869,14 +1918,17 @@ func colorless_drain(uid: int) -> void:
 func hero_change_effect(uid: int) -> void:
 	var hero := state.object(uid)
 	if hero.is_empty() or world == null or not ELFog.shown(state, 1, hero): return
-	var at := ELAdventureScene.world_position(float(hero.get("x", 0)), float(hero.get("y", 0)))
-	var actor: Variant = world.actors.get(uid)
-	if actor is Node3D and is_instance_valid(actor): at = world.to_local((actor as Node3D).global_position)
-	var entry := {"file": "Bereserk.pfx", "x": at.x, "y": -at.z, "z": at.y, "loops": 0}
+	var at := _hero_effect_position(hero)
+	var entry := {"file": LEVEL_EFFECT, "x": at.x, "y": -at.z, "z": at.y, "loops": 0}
 	var name := "hero_change:%d" % uid
 	if effects != null: effects.start(name, entry, 0.0)
 	if audio != null: audio.start_sound(name, entry.merged({"file": "Adventure/stars1.wav", "near": 1.0, "far": 32.0, "loop": false, "effects": true}, true))
 	_change_effects[uid] = Time.get_ticks_msec() + int(CHANGE_EFFECT_SECONDS * 1000.0)
+
+func _hero_effect_position(hero: Dictionary) -> Vector3:
+	var actor: ELModel = world.actors.get(int(hero.uid))
+	if is_instance_valid(actor): return world.to_local(actor.global_position)
+	return ELAdventureScene.world_position(float(hero.x), float(hero.y))
 
 ## CHero::PlayChangeEffect (Etherlords2.exe 0x66a661) queues the effect, its
 ## sound, a 30-tick wait (15 ticks a second: the 61 frames of Bereserk.pfx)
@@ -1961,9 +2013,8 @@ func _state_event(data: Dictionary) -> void:
 			# on the command queue; the battle's end queues its message box
 			# after the commands queued before it (Etherlords2.exe 0x67042f-
 			# 0x670563), so it opens once they have run (#159).
-			building_messages.append({"kind": "building_message", "hero": data.id, "building": -1, "title": "", "text": data.text, "resources": [], "skill": "", "key": "",
+			_queue_building_message({"kind": "building_message", "hero": data.id, "building": -1, "title": "", "text": data.text, "resources": [], "skill": "", "key": "",
 				"wait_idle": second_hud != null})
-			_show_building_message()
 		"site_captured":
 			_remark("Captured " + ELResourceSites.title(state.map.profile, state.object(data.id)))
 			_first_capture_box(data)
@@ -2009,6 +2060,9 @@ func _state_event(data: Dictionary) -> void:
 		"experience_gained":
 			_note_first_level_up(data)
 			if int(state.object(data.id).get("owner", -1)) != state.current_player: return
+			if _finishing_battle and int(data.levels) > 0:
+				_queue_reward_cue(int(data.id), false)
+				if int(data.id) == state.main_hero: _battle_level_hero = int(data.id)
 			var gained := "%d experience gained" % data.amount
 			if data.levels > 0: gained += " · Reached level %d" % state.object(data.id).level
 			_remark(gained)
@@ -2029,7 +2083,7 @@ func _state_event(data: Dictionary) -> void:
 ## the Hall of Fame. A map notice in front of it is answered first.
 func _show_result() -> void:
 	if ui == null or result_shown: return
-	if building_message != null:
+	if building_message != null or _mission_fade != null or _reward_transition():
 		result_waiting = true
 		return
 	result_shown = true
@@ -2232,7 +2286,7 @@ func _remark(text: String) -> void:
 ## Second game: the scripted loot report (ExSendLootMessage /
 ## ExSendNoLootMessage) in the message box: T_MB_RECEIVE_LOOT over one line
 ## per spell and artifact, or T_MB_RECEIVE_NO_LOOT. The original shows the
-## items as pictures with names; the remake lists the names.
+## items as pictures with names.
 func _second_loot_box(data: Dictionary) -> void:
 	if state.map.profile.id != "el2" or second_hud == null: return
 	var profile := state.map.profile
@@ -2243,19 +2297,68 @@ func _second_loot_box(data: Dictionary) -> void:
 		if not item is Dictionary: continue
 		if item.get("kind") == "spell": lines.append(profile.text(str(profile.table("CombatSpells").get(str(item.get("card", "")), {}).get("Name", item.get("card", "")))))
 		elif item.get("kind") == "artifact": lines.append(ELMapPickups.artifact_title(profile, str(item.get("name", ""))))
-	# The original queues the report behind the loot effect, so a battle's
-	# experience box comes first; queue it after the current step.
-	var message := {"kind": "building_message", "hero": -1, "building": -1, "title": "", "text": "\n".join(PackedStringArray(lines)), "resources": [], "skill": "", "key": key}
+	var message := {"kind": "building_message", "hero": -1, "building": -1, "title": "", "text": "\n".join(PackedStringArray(lines)), "resources": [], "skill": "", "key": key, "battle_reward": true}
 	# Received loot uses the Messages panel: the title, then a picture and a name per item.
 	if not data.get("none", false):
 		message.text = lines[0]
 		message.loot = items.duplicate(true)
-	_queue_building_message.call_deferred(message)
+		if not items.is_empty(): _queue_reward_cue(-1 if _finishing_battle else state.main_hero, true)
+	# Battle scripts can report their loot before the director has reported
+	# the XP. Collect it until both can be presented together on the map.
+	if _finishing_battle: _encounter_loot.append(message)
+	else: _queue_building_message.call_deferred(message)
 
 func _queue_building_message(message: Dictionary) -> void:
 	if ui == null: return
+	if _finishing_battle: message = message.merged({"battle_reward": true}, true)
 	building_messages.append(message)
+	if _hold_for_change_effect(message): return
 	_show_building_message()
+
+func _on_encounter_finishing() -> void:
+	_finishing_battle = true
+
+func _on_encounter_finished(winner: int) -> void:
+	_finishing_battle = false
+	building_messages.append_array(_encounter_loot)
+	_encounter_loot.clear()
+	var victor := state.object(winner)
+	for cue: Dictionary in _reward_cues:
+		if int(cue.hero) < 0: cue.hero = winner if int(victor.get("owner", -1)) == state.current_player else state.main_hero
+	if visible: _show_waiting_map_dialogs()
+
+func _queue_reward_cue(hero: int, loot: bool) -> void:
+	var cue := {"hero": hero, "loot": loot}
+	if not _reward_cues.has(cue): _reward_cues.append(cue)
+
+func _reward_transition() -> bool:
+	return _finishing_battle or not _reward_cues.is_empty() or _reward_wait > 0.0
+
+func _reward_dialog_open() -> bool:
+	return (building_message != null and building_message.data.get("battle_reward", false)) \
+		or (skills != null and skills.hero_id == _battle_level_hero)
+
+func _step_reward_transition(delta: float) -> bool:
+	_reward_wait = maxf(0.0, _reward_wait - delta)
+	if _reward_wait > 0.0: return true
+	if effects != null: effects.finish(REWARD_EFFECT)
+	if audio != null: audio.cancel_sound(REWARD_EFFECT)
+	while not _reward_cues.is_empty() and _reward_wait == 0.0: _play_reward_cue(_reward_cues.pop_front())
+	return _reward_wait > 0.0
+
+func _play_reward_cue(cue: Dictionary) -> void:
+	var hero := state.object(cue.hero)
+	if hero.is_empty() or not hero.get("alive", false): return
+	var at := _hero_effect_position(hero)
+	if not state.camera_locked and not camera.is_position_in_frustum(world.to_global(at)): _scroll_to(at, true)
+	var loot := bool(cue.loot)
+	var entry := {"file": LOOT_EFFECT if loot else LEVEL_EFFECT, "x": at.x, "y": -at.z, "z": at.y, "loops": 0}
+	if effects != null: effects.start(REWARD_EFFECT, entry, 0.0, true)
+	if audio != null:
+		audio.listener = target
+		audio.start_sound(REWARD_EFFECT, entry.merged({"file": "Magic/GlobalCast.wav" if loot else "Adventure/stars1.wav",
+			"near": 1.0, "far": 8.0 if loot else 32.0, "effects": true}, true))
+	_reward_wait = REWARD_CUE_TICKS * director.script_tick()
 
 ## Remake setting "helper_overlay" (default off).
 func helper_overlay() -> bool:
@@ -2343,10 +2446,12 @@ func _show_second_dialogue(speech: Dictionary) -> void:
 	accept = second_dialogue.accept
 	decline = second_dialogue.decline
 	_place_dialogue(speech)
+	if not speech.get("direct", false): world.speak_actor(int(speech.get("actor", -1)))
 	audio.speak(speech.text_id)
 
 func _fade_in_mission() -> void:
 	var curtain := ColorRect.new()
+	_mission_fade = curtain
 	curtain.name = "MissionFade"
 	curtain.color = Color.BLACK
 	curtain.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -2355,7 +2460,10 @@ func _fade_in_mission() -> void:
 	curtain.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	var fade := curtain.create_tween()
 	fade.tween_property(curtain, "color:a", 0.0, MISSION_FADE_SECONDS)
-	fade.tween_callback(curtain.queue_free)
+	fade.tween_callback(func() -> void:
+		curtain.hide()
+		curtain.queue_free()
+		_mission_fade = null)
 
 ## Second game: the camera's look-at point flies to a new point. Every 64 ms
 ## it covers SCROLL_RATE x AutoScrollAcceleration (settings.ini, shipped 0.5)
@@ -2578,7 +2686,7 @@ func _close_spellbook() -> void:
 ## main hero once the map is idle and a skill choice waits (queues the
 ## level-up action, whose run shows it with victory.wav).
 func _auto_level_up() -> void:
-	if second_hud == null or skills != null or paused or state.map.profile.id != "el2": return
+	if second_hud == null or skills != null or paused or _reward_transition() or state.map.profile.id != "el2": return
 	if not director.can_move() or not director.movement.is_empty() or not pending_encounter.is_empty() or not building_messages.is_empty(): return
 	var hero := state.object(state.main_hero)
 	if hero.is_empty() or not hero.get("alive", false) or int(hero.get("owner", -1)) != state.current_player or int(hero.get("skill_points", 0)) <= 0: return
@@ -2752,6 +2860,10 @@ func _offer_global_spell() -> void:
 
 func _close_skills() -> void:
 	if skills == null: return
+	if skills.hero_id == _battle_level_hero:
+		_battle_level_hero = -1
+		_reward_wait = REWARD_DIALOG_GAP
+	skills.get_parent().hide()
 	skills.get_parent().queue_free()
 	skills = null
 	paused = false
@@ -2761,7 +2873,8 @@ func _close_skills() -> void:
 ## A building message pauses the night like the original message box; queued
 ## messages from the same night follow one another.
 func _show_building_message() -> void:
-	if building_message != null or first_shop != null or rune_shop != null or building_messages.is_empty() or ui == null or _message_holds > 0: return
+	if building_message != null or skills != null or first_shop != null or rune_shop != null or building_messages.is_empty() or ui == null or _message_holds > 0: return
+	if _mission_fade != null or _reward_transition() or (second_hud != null and not visible): return
 	# A message queued behind the map's commands waits until they have run.
 	if building_messages[0].get("wait_idle", false) and not director._map_idle(): return
 	paused = true
@@ -2883,10 +2996,16 @@ static func _fill(text: String, values: Array) -> String:
 
 func _close_building_message() -> void:
 	if building_message == null: return
+	if building_message.data.get("battle_reward", false): _reward_wait = REWARD_DIALOG_GAP
+	building_message.get_parent().hide()
 	building_message.get_parent().queue_free()
 	building_message = null
 	paused = false
 	_refresh_hero_info()
+	_show_waiting_map_dialogs()
+
+func _show_waiting_map_dialogs() -> void:
+	if _mission_fade != null or _reward_transition(): return
 	_show_building_message()
 	if building_message == null and not deferred_shop.is_empty():
 		var shop_waiting := deferred_shop
@@ -3713,7 +3832,9 @@ func set_suspended(value: bool) -> void:
 		if value: player.set_meta("map_paused", player.stream_paused)
 		player.stream_paused = true if value else bool(player.get_meta("map_paused", false))
 	if first and not value: audio.first_battle(false, state)
-	if not value: camera.current = true
+	if not value:
+		camera.current = true
+		if second_hud != null: _show_waiting_map_dialogs()
 
 ## F5: the original quick save, the named slot T_QUICK_SAVE_NAME of this
 ## edition, overwritten without a question; T_GAME_SAVED confirms it.

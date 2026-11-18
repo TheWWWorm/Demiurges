@@ -6,6 +6,8 @@ extends SceneTree
 ##   right: the first 60 px from the right edge and 10 px down, the next 60 px
 ##   further left; the tooltip is the row's Tooltip, plus Tooltip2 with the
 ##   days left for an affect that runs out; without affects there is none;
+## - activating a time building or entering a range building's area flips
+##   the new icon for 750 ms; HUD refreshes keep its place in the animation;
 ## - in a map battle the same icons are shown over the arena, the time
 ##   battleground's script is loaded for the hero's side, and the icons go
 ##   when the map returns.
@@ -52,6 +54,7 @@ func _map_and_battle() -> void:
 		print("SKIP: the second game's files could not be mounted")
 		view.queue_free()
 		return
+	_entrances(view.profiles.el2)
 	var entry := {}
 	for found: Dictionary in ELSingleScenario.maps(view.profiles.el2):
 		if str(found.id).to_lower().ends_with("e2mission11"): entry = found
@@ -66,6 +69,7 @@ func _map_and_battle() -> void:
 	var state := map.state
 	var director := map.director
 	var profile := state.map.profile
+	if map._mission_fade != null: await map._mission_fade.tree_exited
 	for i in 40:
 		if director.dialogue.is_empty(): break
 		director.acknowledge("OK")
@@ -112,6 +116,7 @@ func _map_and_battle() -> void:
 			var battle_strip: ELAffectStrip = view.affect_strip
 			var shown := battle_strip.entries.map(func(item: Dictionary) -> int: return int(item.icon))
 			check(battle_strip.is_visible_in_tree() and shown == icons, "the battle shows the hero's affect icons at the top right: %s" % str(shown))
+			check(not battle_strip.is_processing(), "the battle displays the established affects immediately")
 			check(is_equal_approx(battle_strip.icon_rect(0).position.y, 10.0 * battle_strip.ui_scale) and is_equal_approx(battle_strip.icon_rect(0).end.x, battle_strip.size.x - 10.0 * battle_strip.ui_scale),
 				"over the battle the first icon ends 10 px from the right edge at the panel's scale: %s in %s at %s" % [battle_strip.icon_rect(0), battle_strip.size, battle_strip.ui_scale])
 			view._surrender_encounter()
@@ -121,6 +126,63 @@ func _map_and_battle() -> void:
 	_restore(ELSaveSlots.folder("el2"), saves)
 	view.queue_free()
 	await _wait(3)
+
+func _entrances(profile: ELProfile) -> void:
+	var level := ELAdventureMap.new()
+	var state := ELAdventureSession.new()
+	var director := ELAdventureDirector.new()
+	if not level.load_map(profile, "e2mission12_52") or not state.start(level, 1, 212, "Maps/e2mission12") or not director.build(state):
+		check(false, "#209: the chapter with time and range battlegrounds opens")
+		state.close()
+		return
+	var hero := state.object(state.main_hero)
+	var time_site := {}
+	var range_site := {}
+	for site: Dictionary in state.objects.values():
+		if site.name == "E2Green8": time_site = site
+		if site.name == "E2Green6": range_site = site
+	if hero.is_empty() or time_site.is_empty() or range_site.is_empty():
+		check(false, "#209: the hero, Nature Revolt and Toxin Dump exist")
+		state.close()
+		return
+	var hud := ELSecondAdventureHud.new()
+	root.add_child(hud)
+	if not hud.build(state):
+		check(false, "#209: the adventure HUD opens")
+		hud.free()
+		state.close()
+		return
+	var strip := hud.affect_strip
+	state._native([float(hero.uid), time_site.x - 1.0, float(time_site.y)], "ExJumpToPos")
+	hud.refresh(int(hero.uid), true)
+	var activated := ELBattlegrounds.use(director, hero, time_site)
+	hud.refresh_affects(hero)
+	check(activated and strip.entries.size() == 1 and strip.entries[0].name == "NatureRevolt" and strip._icon_draw_rect(0).size.x == 0.0,
+		"#209: activating Nature Revolt starts its icon edge-on")
+	if strip.entries.size() == 1:
+		strip._process(0.125)
+		var part := strip._icon_draw_rect(0)
+		check(part.size.x == 35.0 and part.get_center() == strip.icon_rect(0).get_center(), "#209: the face turns around the middle of its slot")
+		hero.affects[0].ticks -= 1
+		hud.refresh_affects(hero)
+		check(strip._icon_draw_rect(0) == part, "#209: updating the days remaining preserves the entrance")
+		strip._process(0.625)
+		check(strip._icon_draw_rect(0) == strip.icon_rect(0) and not strip.is_processing(), "#209: the icon settles at full width after 750 ms")
+	state._native([float(hero.uid), range_site.x + 11.0, float(range_site.y)], "ExJumpToPos")
+	hud.refresh_affects(hero)
+	check(strip.entries.size() == 1, "#209: Toxin Dump is absent outside its range")
+	state._native([float(hero.uid), range_site.x + 10.0, float(range_site.y)], "ExJumpToPos")
+	hud.refresh_affects(hero)
+	check(strip.entries.size() == 2 and strip.entries[1].name == "ToxinDump" and strip._icon_draw_rect(1).size.x == 0.0
+		and strip._icon_draw_rect(0) == strip.icon_rect(0), "#209: entering range animates only the newly acquired Toxin Dump icon")
+	strip._process(0.25)
+	state._native([float(hero.uid), range_site.x + 11.0, float(range_site.y)], "ExJumpToPos")
+	hud.refresh_affects(hero)
+	state._native([float(hero.uid), range_site.x + 10.0, float(range_site.y)], "ExJumpToPos")
+	hud.refresh_affects(hero)
+	check(strip.entries.size() == 2 and strip._icon_draw_rect(1).size.x == 0.0, "#209: returning to range starts a fresh entrance")
+	hud.free()
+	state.close()
 
 func _hostile_monster(state: ELAdventureSession, hero: Dictionary) -> Dictionary:
 	var best := {}

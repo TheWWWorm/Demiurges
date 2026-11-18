@@ -454,7 +454,10 @@ func specialization_available(hero: Dictionary, code: String) -> bool:
 	return colors.has(color) if colors is Array else str(colors) == color
 
 func hero_color(hero: Dictionary) -> String:
-	var row: Dictionary = map.profile.table("Shapes").get(hero.get("shape", ""), {}) if not str(hero.get("shape", "")).is_empty() else map.profile.table("HeroTemplates").get(hero.get("name", ""), {})
+	return template_color(map.profile, hero)
+
+static func template_color(profile: ELProfile, hero: Dictionary) -> String:
+	var row: Dictionary = profile.table("Shapes").get(hero.get("shape", ""), {}) if not str(hero.get("shape", "")).is_empty() else profile.table("HeroTemplates").get(hero.get("name", ""), {})
 	return str(row.get("Color", ""))
 
 func learn_specialization(id: int, code: String) -> bool:

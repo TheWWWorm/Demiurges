@@ -153,7 +153,6 @@ func _maps() -> void:
 		var state := view.state
 		if index == 0:
 			var lord := state.object(state.main_hero)
-			check(not ELFog.visible(state, 1, Vector2i(lord.x + 7, lord.y)) and ELFog.visible(state, 1, Vector2i(lord.x, lord.y)), "#191: the White Lord is visible only through the script's small observation")
 			var count := 0
 			for item: Dictionary in state.objects.values():
 				if item.name not in ["BlackHero", "RedHero", "GreenHero", "BlueHero"]: continue
@@ -161,9 +160,12 @@ func _maps() -> void:
 				check(not item.alive and not art.is_empty() and view.world.object_models.has(item.uid), "#191: %s remains as a corpse in the sacrifice scene" % item.name)
 				count += 1
 			check(count == 4, "#191: all four sacrificed heroes exist")
-			for i in 3: await process_frame
-			var curtain := view.ui.get_node_or_null("MissionFade")
-			if curtain != null: curtain.hide()
+			if view._mission_fade != null: await view._mission_fade.tree_exited
+			for i in 24:
+				if state.observations.has("WhiteLord"): break
+				view._process(1.0 / 15.0)
+				view.world._process(1.0 / 15.0)
+			check(not ELFog.visible(state, 1, Vector2i(lord.x + 7, lord.y)) and ELFog.visible(state, 1, Vector2i(lord.x, lord.y)), "#191: the White Lord is visible only through the script's small observation")
 			await _capture("interlude-opening")
 			# Run the authored interlude to its sacrifice scene, including the
 			# original fog clears and instant camera jumps.
@@ -199,6 +201,8 @@ func _maps() -> void:
 		view.set_process(false)
 		var hero := view.state.object(view.state.main_hero)
 		check(str(hero.shape).begins_with("BlueMainHero") and view.target.distance_to(ELAdventureScene.world_position(hero.x, hero.y)) < 0.1, "#188: Kinet mission %d opens on the Kinet hero at the correct location" % (index + 1))
+		check(view.director.movement.is_empty() and view.director.dialogue.is_empty() and view.director._clock == 0.0,
+			"#206: Kinet mission %d keeps the scene's movement and dialogue queued during the fade" % (index + 1))
 		for i in 3: await process_frame
 		var curtain := view.ui.get_node_or_null("MissionFade")
 		if curtain != null: curtain.hide()

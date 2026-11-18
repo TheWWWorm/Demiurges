@@ -67,6 +67,11 @@ func _edition(edition: String) -> void:
 	await _gazed_blocker(view, edition)
 	await _spell_stats(view, edition)
 	await _skip(view, edition)
+	if edition == "el2":
+		await _phase_playback(view)
+		await _summon_then_end(view, "ORSH")
+		await _summon_then_end(view, "OUS1", true)
+		await _mastery_stance(view)
 	await _defence_selection(view, edition)
 	view.queue_free()
 	await process_frame
@@ -178,7 +183,7 @@ func _shown(view: Node, ids: Array) -> Dictionary:
 		out.heroes.append([view.shown_health(side), view.call("shown_ether", side) if view.has_method("shown_ether") else int(hero.mana),
 			view.call("shown_channels", side) if view.has_method("shown_channels") else int(hero.channels)])
 	for id: int in ids:
-		var c: Dictionary = view.duel.creatures.get(id, view._last_creature.get(id, {}))
+		var c: Dictionary = view.shown_creature(id)
 		var stats: Dictionary = view._shown_creature_stats(id, c)
 		out.creatures[id] = [int(stats.get("power", 0)), int(stats.get("toughness", 0)), view.shown_damage(id), _plane(view, id)]
 	return out
@@ -336,6 +341,111 @@ func _turn_end(view: Node, edition: String) -> void:
 	var both: Array = fight.samples.filter(func(s: Dictionary) -> bool: return int(s.shown.creatures[attacker][2]) > 0 and int(s.shown.creatures[blocker][2]) > 0)
 	check(not both.is_empty(), "%s: both wounds show after the exchange, before the turn's end heals them" % what)
 	check(_shown(view, fight.ids) == _live(view, fight.ids), "%s: the wounds are gone once the turn's end is shown" % what)
+
+func _phase_playback(view: Node) -> void:
+	await _clear(view)
+	await _attack_turn(view, 0)
+	var duel: ELDuel = view.duel
+	var card := _card(view, ["GRSN"])
+	var attacker := await _creature(view, 0, card, 6, 8, ["FS"])
+	var blocker := await _creature(view, 1, card, 1, 2, ["Fly"])
+	var sleeping := await _creature(view, 0, card, 1, 2)
+	if attacker < 2 or blocker < 2 or sleeping < 2:
+		check(false, "#205: all three test figures are on the field")
+		return
+	duel.creatures[sleeping].sick = true
+	duel.heroes[1].hand.clear()
+	duel.heroes[1].hand_view.clear()
+	duel.heroes[1].hand_slots.clear()
+	duel.heroes[1].spell_uses.fill(1)
+	duel.heroes[1].drawn.clear()
+	if not duel.toggle_attack(attacker) or not duel.end_phase() or not duel.assign_block(blocker, attacker):
+		check(false, "#205: the creatures can fight: " + duel.error)
+		return
+	await _idle(view)
+	var standing_icons: Array = view.creature_icons(blocker)
+	duel.end_phase()
+	check(not duel.creatures.has(blocker) and not duel.creatures[sleeping].sick and duel.creatures[attacker].resting
+		and duel.heroes[1].hand.size() == 1, "#205: the rules have already settled death, rest, wake and draw")
+	var saw_attack := false
+	var saw_death := false
+	var timed := standing_icons.has(ELCombatSymbols.ICON_CODES[3])
+	for i in 900:
+		view.ai_clock = -1000.0
+		await process_frame
+		if not view._melee_busy(): break
+		var dying: bool = not view.models.has(blocker) or view.models[blocker].get_meta("dying", false)
+		if dying: saw_death = true
+		var flying_icons: Array = view.creature_icons(blocker)
+		timed = timed and (flying_icons.is_empty() if dying else flying_icons == standing_icons)
+		timed = timed and view.shown_hero(1).hand.is_empty() and view.hand.get_child_count() == 0
+		timed = timed and view.creature_icons(sleeping).has(ELCombatSymbols.ICON_CODES[1])
+		if view.models[attacker].clip == "uattack":
+			saw_attack = true
+			timed = timed and not view.creature_icons(attacker).has(ELCombatSymbols.ICON_CODES[0])
+	check(timed and saw_attack and saw_death, "#205: marks follow the strike and death, while waking and the visible draw wait for the new turn")
+	await _idle(view)
+	check(view.shown_hero(1).hand == duel.heroes[1].hand and view.hand.get_child_count() == 1
+		and view.creature_icons(attacker).has(ELCombatSymbols.ICON_CODES[0])
+		and not view.creature_icons(sleeping).has(ELCombatSymbols.ICON_CODES[1]), "#205: the new turn shows the drawn card and both final stances")
+
+func _summon_then_end(view: Node, card: String, after_queued_combat := false) -> void:
+	await _clear(view)
+	var duel: ELDuel = view.duel
+	if after_queued_combat:
+		await _attack_turn(view, 1)
+		var attacker := await _creature(view, 1, "ORSH", 2, 3)
+		if not duel.toggle_attack(attacker) or not duel.end_phase():
+			check(false, "#205: the preceding combat can start")
+			return
+		# The same player can submit their next action while their defence cast
+		# still holds the previous combat's presentation.
+		view._cast_until = view.elapsed + 0.3
+		duel.end_phase()
+	else: await _attack_turn(view, 0)
+	duel.heroes[0].mana = 40
+	duel._give_card(0, card)
+	var id := duel.next_id
+	if not duel.cast(duel.heroes[0].hand.size() - 1) or not duel.creatures.has(id) or not duel.end_phase():
+		check(false, "#205: the turn can be ended immediately after summoning: " + duel.error)
+		return
+	check(not duel.creatures[id].sick and (not view.models.has(id) or not view.models[id].visible),
+		"#205: the rules have woken the summon while its entrance is still pending")
+	var entered_asleep := false
+	var entrance_clip := ""
+	for i in 900:
+		view.ai_clock = -1000.0
+		await process_frame
+		if view.models.has(id) and view.models[id].visible:
+			entered_asleep = view.creature_icons(id).has(ELCombatSymbols.ICON_CODES[1])
+			entrance_clip = view.models[id].clip
+			break
+	check(entered_asleep, "#205: ending the turn during the %s summon still shows its entrance asleep" % card)
+	check(entrance_clip == "ctapidle", "#211: %s appears in its sleeping animation (%s)" % [card, entrance_clip])
+	view._skip_battle_presentation()
+	check(not view.creature_icons(id).has(ELCombatSymbols.ICON_CODES[1]) and view.shown_hero(1).hand == duel.heroes[1].hand,
+		"#205: Space settles the queued wake and draw")
+
+func _mastery_stance(view: Node) -> void:
+	await _clear(view)
+	await _attack_turn(view, 0)
+	var duel: ELDuel = view.duel
+	var id := await _creature(view, 0, "GBBR", 2, 3)
+	if id < 2 or not duel.toggle_attack(id) or not duel.end_phase():
+		check(false, "#205: the mastery test has an attacking gibberling")
+		return
+	var hero: Dictionary = duel.heroes[0]
+	var previous := String(hero.spec)
+	hero.spec = "UOCR"
+	duel.rng_state = 0
+	var clips: Array[String] = []
+	view.models[id].animation_started.connect(func(clip: String) -> void: clips.append(clip))
+	duel.end_phase()
+	check(not duel.creatures[id].resting, "#205: mastery leaves the gibberling ready after the strike")
+	await _watch(view, [id], Time.get_ticks_usec())
+	check(clips.has("uattack") and not clips.has("utap") and not clips.has("ctapidle"),
+		"#205: the gibberling comes home ready without starting a rest animation")
+	hero.spec = previous
 
 func _pale(view: Node, edition: String) -> void:
 	await _clear(view)

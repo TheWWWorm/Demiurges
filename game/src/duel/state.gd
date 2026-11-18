@@ -2,8 +2,11 @@ class_name ELDuel
 extends RefCounted
 signal changed
 signal event(data: Dictionary)
-## Presentation boundary between combat damage and the turn-end callbacks.
+## Presentation boundaries around the synchronous combat resolution.
+signal combat_started
+signal attack_resolved(id: int, resting: bool)
 signal turn_cleanup
+signal combat_finished
 
 enum Phase { ATTACK, DEFENCE, FINISHED }
 var profile: ELProfile
@@ -1895,8 +1898,9 @@ func _pale_ability(id: int, d: Dictionary, target: int, choice: int) -> bool:
 	match d.key:
 		"sinister":
 			if target not in [0, 1] or choice < 0 or choice >= heroes[target].grave.size(): return _fail("Choose a card in a graveyard.")
-		"cruel":
-			if not creatures.has(target) or target == id or creatures[target].owner != side or has_flag(target, "NoTarget"): return _fail("Select another of your creatures.")
+		"cruel", "pale_devour":
+			var problem := _pale_creature_target_error(id, d, target)
+			if not problem.is_empty(): return _fail(problem)
 		"mystic", "absorb", "weave", "transpose":
 			chosen = _enchantment_by_id(target, choice)
 			if chosen.is_empty(): return _fail("Select an enchantment.")
@@ -1912,13 +1916,6 @@ func _pale_ability(id: int, d: Dictionary, target: int, choice: int) -> bool:
 			if available_mana(side) < price: return _fail("Not enough ether.")
 		"ether_plea":
 			if entity(target).is_empty() or not targetable(target): return _fail("Select a creature or hero.")
-		"pale_devour":
-			if not creatures.has(target) or target == id or not targetable(target): return _fail("Select a creature in the Ether.")
-			var prey: Dictionary = creatures[target]
-			# Since update 1.03 the Pale Scourge cannot devour walls.
-			if c.card == "OUD1" and race(target) == "Wall": return _fail("Walls cannot be devoured.")
-			var weaker: bool = prey.power < c.power if d.measure == "power" else (prey.toughness < c.toughness if d.measure == "toughness" else prey.power < c.power and prey.toughness < c.toughness)
-			if not weaker: return _fail("This creature is too strong to devour.")
 	if d.get("rest", false):
 		if not c.has("ability_used"): c.ability_used = {}
 		c.ability_used[d.key] = true
@@ -1984,6 +1981,19 @@ func _pale_ability(id: int, d: Dictionary, target: int, choice: int) -> bool:
 	_finish_action()
 	return true
 
+func _pale_creature_target_error(id: int, ability: Dictionary, target: int) -> String:
+	var c: Dictionary = creatures[id]
+	if ability.key == "cruel":
+		if not creatures.has(target) or target == id or creatures[target].owner != c.owner or has_flag(target, "NoTarget"): return "Select another of your creatures."
+		return ""
+	if not creatures.has(target) or target == id or not targetable(target): return "Select a creature in the Ether."
+	# Since update 1.03 the Pale Scourge cannot devour walls.
+	if c.card == "OUD1" and race(target) == "Wall": return "Walls cannot be devoured."
+	var prey: Dictionary = creatures[target]
+	if ability.measure != "toughness" and prey.power >= c.power: return "This creature is too strong to devour."
+	if ability.measure != "power" and prey.toughness >= c.toughness: return "This creature is too strong to devour."
+	return ""
+
 ## First-game abilities that tap their creature require it to be out of combat.
 func _in_combat(id: int) -> bool:
 	return not ELCatalog.first_ability(profile, creatures[id].card).is_empty() and (attacks.has(id) or blocks.has(id))
@@ -2035,15 +2045,44 @@ func can_use_ability(id: int, key: String, listed: Variant = null) -> bool:
 	for ability: Dictionary in (listed if listed is Array else abilities(id)):
 		if ability.key != key: continue
 		if id >= 2 and in_plane(id) and not ability.get("pale", false): return false
-		if ability.get("pale", false): return _pale_error(id, ability).is_empty()
+		if ability.get("pale", false): return _pale_error(id, ability).is_empty() and _second_creature_ability_available(id, ability)
 		if ability.get("used", false) or available_mana(active_side()) < maxi(int(ability.get("minimum", 0)), int(ability.cost)): return false
 		if id >= 2 and ability.get("ready", true) and not ready(id): return false
 		if id >= 2 and ability.get("ready", true) and _in_combat(id): return false
 		if ability.get("resting", false) and not c.resting: return false
 		if ability.get("tapped", false) and (not c.resting or c.sick): return false
 		if ability.get("phase") == "attack" and phase != Phase.ATTACK: return false
-		return true
+		return profile.id != "el2" or id < 2 or _second_creature_ability_available(id, ability)
 	return false
+
+## Second-game creature commands light up only while their conditions can be met.
+## Use the same target rules as execution, without spending ether or taking a turn.
+func _second_creature_ability_available(id: int, ability: Dictionary) -> bool:
+	var side: int = creatures[id].owner
+	var key: String = ability.key
+	if key in ["brood", "recall_spirit", "necromancy"] and army(side).size() >= 10: return false
+	match key:
+		"plague":
+			return available_mana(side) > 0 and (not heroes[0].grave.is_empty() or not heroes[1].grave.is_empty())
+		"siphon": return int(heroes[1 - side].mana) > 0
+	match String(ability.target):
+		"grave":
+			return not grave_ability_targets(id, key, 0).is_empty() or not grave_ability_targets(id, key, 1).is_empty()
+		"enchantment":
+			# Pale enchantment abilities already check their own targets in _pale_error.
+			if ability.get("pale", false): return true
+			for holder: int in [0, 1] + creatures.keys():
+				for enchantment: Dictionary in entity(holder).enchantments:
+					if _dispel_ability_error(side, key, holder, enchantment).is_empty(): return true
+			return false
+		"creature":
+			for target: int in creatures:
+				if ability.get("pale", false):
+					if _pale_creature_target_error(id, ability, target).is_empty(): return true
+				elif _first_creature_target_error(id, ability, target).is_empty() and (key != "tap_race" or _tap_race_price(1 - side, target) <= available_mana(side)):
+					return true
+			return false
+	return true
 
 ## `enchantment_id` is the chosen enchantment, graveyard index or, for Combine,
 ## the creature receiving the sacrifice. `amount` is the X of pay-X abilities.
@@ -2256,15 +2295,11 @@ func _use_ability(id: int, ability: String, target := -1, enchantment_id := -1, 
 			if not enfeebled(id): c.resting = false
 			_emit({"kind": "ability", "source": id, "side": side, "ability": ability, "target": id})
 		"disenchant":
-			var victim := entity(target)
-			if victim.is_empty(): return _fail("Select an enchantment.")
-			var chosen := {}
-			for ench: Dictionary in victim.enchantments:
-				if int(ench.id) == enchantment_id: chosen = ench
-			if chosen.is_empty(): return _fail("Select an enchantment.")
+			var chosen := _enchantment_by_id(target, enchantment_id)
+			var problem := _dispel_ability_error(side, ability, target, chosen)
+			if not problem.is_empty(): return _fail(problem)
 			# The removal price, not a warded casting cost.
 			var price := enchantment_price(chosen)
-			if available_mana(side) < price: return _fail("Not enough ether to remove this enchantment.")
 			_spend_ether(side, price)
 			c.resting = true
 			_unassign(id)
@@ -2272,6 +2307,55 @@ func _use_ability(id: int, ability: String, target := -1, enchantment_id := -1, 
 			_emit({"kind": "ability", "source": id, "side": side, "ability": ability, "target": target})
 	_finish_action()
 	return true
+
+func _dispel_ability_error(side: int, key: String, holder: int, enchantment: Dictionary) -> String:
+	if key == "disenchant":
+		if enchantment.is_empty(): return "Select an enchantment."
+	elif enchantment.is_empty() or not dispellable(holder, enchantment):
+		return "Select an enchantment that can be removed."
+	if key == "orc_rite":
+		if int(heroes[side].channels) < 1: return "The rite needs an ether channel to sacrifice."
+	elif available_mana(side) < enchantment_price(enchantment):
+		return "Not enough ether to remove this enchantment."
+	return ""
+
+func _first_creature_target_error(id: int, definition: Dictionary, target: int) -> String:
+	var side: int = creatures[id].owner
+	if definition.key != "tap_race" and creatures.has(target) and not targetable(target): return "This creature is protected by a magic screen."
+	match definition.key:
+		"tap_target", "gaze":
+			if not creatures.has(target): return "Select a creature."
+			if definition.key == "gaze":
+				if definition.measure == "power" and race(target) == "Wall": return "Walls resist this gaze."
+				var beholders := 0
+				for ally: Dictionary in army(side):
+					if race(ally.id) == "Beholder": beholders += 1
+				if int(creatures[target][definition.measure]) > beholders: return "Your beholders are too few for this creature."
+		"sacrifice":
+			if not creatures.has(target) or target == id or creatures[target].owner != side: return "Select another of your creatures to sacrifice."
+		"shoot":
+			if not creatures.has(target) or creatures[target].owner == side or not attacks.has(target): return "Select an attacking enemy creature."
+		"slay":
+			if not creatures.has(target) or target == id: return "Select another creature."
+			if not creatures[target].resting or attacks.has(target) or blocks.has(target): return "Select a resting creature that is not in combat."
+		"wall_break":
+			if not creatures.has(target) or race(target) != "Wall": return "Select a wall."
+		"hunt":
+			# The hunter can name itself once its own power reaches four.
+			if not creatures.has(target) or int(creatures[target].power) < 4: return "Select a creature with power 4 or more."
+		"tap_race":
+			if not creatures.has(target) or creatures[target].owner == side: return "Select an enemy creature."
+			if profile.id == "el2":
+				if in_plane(target): return "This creature is in the Colourless Plane."
+				if not targetable(target): return "This creature is protected by a magic screen."
+	return ""
+
+func _tap_race_price(side: int, target: int) -> int:
+	var price := 0
+	var kind := race(target)
+	for enemy: Dictionary in army(side):
+		if not enemy.resting and race(enemy.id) == kind and (profile.id != "el2" or not in_plane(enemy.id)): price += 1
+	return price
 
 func _first_ability(id: int, definition: Dictionary, target: int, grave_index: int, amount := -1) -> bool:
 	var c: Dictionary = creatures[id]
@@ -2283,60 +2367,32 @@ func _first_ability(id: int, definition: Dictionary, target: int, grave_index: i
 		price = amount
 	if available_mana(side) < price: return _fail("This ability costs %d ether." % price)
 	# A rejected ability is an illegal move: nothing is paid and nothing taps.
-	if definition.key in ["sting", "tap_target", "sacrifice", "shoot", "slay", "wall_break", "gaze", "hunt"] and creatures.has(target) and not targetable(target): return _fail("This creature is protected by a magic screen.")
+	if definition.target == "creature":
+		var problem := _first_creature_target_error(id, definition, target)
+		if not problem.is_empty(): return _fail(problem)
 	match definition.key:
 		"sting":
+			if creatures.has(target) and not targetable(target): return _fail("This creature is protected by a magic screen.")
 			if entity(target).is_empty(): return _fail("Select a creature or hero.")
-		"tap_target":
-			if not creatures.has(target): return _fail("Select a creature.")
-		"sacrifice":
-			if not creatures.has(target) or target == id or creatures[target].owner != side: return _fail("Select another of your creatures to sacrifice.")
 		"gnaw", "recall_lamia", "recall_spirit", "recall_rat":
 			if not grave_ability_targets(id, definition.key, target).has(grave_index): return _fail("Choose a suitable creature in a graveyard.")
 		"brood":
 			if army(side).size() >= 10: return _fail("A hero can control at most ten creatures.")
-		"shoot":
-			if not creatures.has(target) or creatures[target].owner == side or not attacks.has(target): return _fail("Select an attacking enemy creature.")
 		"plague":
 			if target not in [0, 1]: return _fail("Select a hero's graveyard.")
-		"dispel":
+		"dispel", "orc_rite":
 			var chosen := _enchantment_by_id(target, grave_index)
-			if chosen.is_empty() or not dispellable(target, chosen): return _fail("Select an enchantment that can be removed.")
-			price = enchantment_price(chosen)
-			if available_mana(side) < price: return _fail("Not enough ether to remove this enchantment.")
-		"orc_rite":
-			var chosen := _enchantment_by_id(target, grave_index)
-			if chosen.is_empty() or not dispellable(target, chosen): return _fail("Select an enchantment that can be removed.")
-			if int(heroes[side].channels) < 1: return _fail("The rite needs an ether channel to sacrifice.")
-		"slay":
-			if not creatures.has(target) or target == id: return _fail("Select another creature.")
-			if not creatures[target].resting or attacks.has(target) or blocks.has(target): return _fail("Select a resting creature that is not in combat.")
-		"wall_break":
-			if not creatures.has(target) or race(target) != "Wall": return _fail("Select a wall.")
-		"hunt":
-			# The hunter may name itself once its own power is 4 or more.
-			if not creatures.has(target) or int(creatures[target].power) < 4: return _fail("Select a creature with power 4 or more.")
+			var problem := _dispel_ability_error(side, definition.key, target, chosen)
+			if not problem.is_empty(): return _fail(problem)
+			if definition.key == "dispel": price = enchantment_price(chosen)
 		"necromancy":
 			if not grave_ability_targets(id, definition.key, target).has(grave_index): return _fail("Choose a cheap enough creature in a graveyard.")
 			# The second game refuses when the necromancer's army is already full.
 			if profile.id == "el2" and army(side).size() >= 10: return _fail("A hero can control at most ten creatures.")
 		"siphon":
 			if profile.id == "el2" and int(heroes[1 - side].mana) <= 0: return _fail("The opponent has no ether to draw.")
-		"gaze":
-			if not creatures.has(target): return _fail("Select a creature.")
-			var beholders := 0
-			for ally: Dictionary in army(side):
-				if race(ally.id) == "Beholder": beholders += 1
-			if definition.measure == "power" and race(target) == "Wall": return _fail("Walls resist this gaze.")
-			if int(creatures[target][definition.measure]) > beholders: return _fail("Your beholders are too few for this creature.")
 		"tap_race":
-			if not creatures.has(target) or creatures[target].owner == side: return _fail("Select an enemy creature.")
-			if profile.id == "el2":
-				if in_plane(target): return _fail("This creature is in the Colourless Plane.")
-				if not targetable(target): return _fail("This creature is protected by a magic screen.")
-			price = 0
-			for enemy: Dictionary in army(1 - side):
-				if not enemy.resting and race(enemy.id) == race(target) and (profile.id != "el2" or not in_plane(enemy.id)): price += 1
+			price = _tap_race_price(1 - side, target)
 			if available_mana(side) < price: return _fail("This costs %d ether." % price)
 	if definition.get("ready", true):
 		c.resting = true
@@ -2822,38 +2878,40 @@ func _end_phase_now() -> bool:
 		_emit({"kind": "phase", "side": active_side(), "phase": "defence", "round": round_number})
 		if attacks.is_empty(): return _end_phase_now()
 	else:
-		_resolve_attacks()
-		_discard_cause = -1
-		_settle_illusion_health()
-		_drain_scripts()
-		if phase == Phase.FINISHED:
-			changed.emit()
-			return true
-		turn_cleanup.emit()
-		# The last card of the hand goes first.
-		while heroes[attacker].hand.size() > 5:
-			var card := _take_card(attacker, hand_display(attacker).back())
-			_emit({"kind": "discard", "side": attacker, "card": card, "hand_limit": true})
-		for c: Dictionary in creatures.values():
-			# Second-game bloodlessness keeps the creature's damage.
-			if not recovery_blocked(c.owner) and not (profile.id == "el2" and _enchantment_count(c.id, "RIOT") > 0): c.damage = 0
-		_first_turn_end()
-		_return_buried_creatures(attacker)
-		for c: Dictionary in army(attacker): c.sick = false
-		_turn_enchantments(false)
-		_check_winner()
-		if phase == Phase.FINISHED:
-			changed.emit()
-			return true
-		attacker = 1 - attacker
-		if attacker == first_side(): round_number += 1
-		phase = Phase.ATTACK
-		attacks.clear()
-		blocks.clear()
-		# Only the battle's very first turn skips the draw.
-		_begin_attack(true)
+		var combat := not searching and not attacks.is_empty()
+		if combat: combat_started.emit()
+		_finish_defence()
+		if combat: combat_finished.emit()
 	changed.emit()
 	return true
+
+func _finish_defence() -> void:
+	_resolve_attacks()
+	_discard_cause = -1
+	_settle_illusion_health()
+	_drain_scripts()
+	if phase == Phase.FINISHED: return
+	turn_cleanup.emit()
+	# The last card of the hand goes first.
+	while heroes[attacker].hand.size() > 5:
+		var card := _take_card(attacker, hand_display(attacker).back())
+		_emit({"kind": "discard", "side": attacker, "card": card, "hand_limit": true})
+	for c: Dictionary in creatures.values():
+		# Second-game bloodlessness keeps the creature's damage.
+		if not recovery_blocked(c.owner) and not (profile.id == "el2" and _enchantment_count(c.id, "RIOT") > 0): c.damage = 0
+	_first_turn_end()
+	_return_buried_creatures(attacker)
+	for c: Dictionary in army(attacker): c.sick = false
+	_turn_enchantments(false)
+	_check_winner()
+	if phase == Phase.FINISHED: return
+	attacker = 1 - attacker
+	if attacker == first_side(): round_number += 1
+	phase = Phase.ATTACK
+	attacks.clear()
+	blocks.clear()
+	# Only the battle's very first turn skips the draw.
+	_begin_attack(true)
 
 ## Velos that took no combat damage since their owner's last turn end destroy
 ## themselves; mechozaurus parasites drain their controller.
@@ -3502,6 +3560,7 @@ func _resolve_attacks() -> void:
 		if creatures.has(id) and not attack.resting and not has_flag(id, "Restless"): attack.resting = true
 		# Cutter and gibberling masteries: a surviving attacker stays ready.
 		if creatures.has(id) and attack.resting and race(id) in ["Cutter", "Gibberling"] and ELSpecs.roll(self, int(attack.owner), "BCTR" if race(id) == "Cutter" else "UOCR") > 0: attack.resting = false
+		if not searching and creatures.has(id): attack_resolved.emit(id, bool(attack.resting))
 		_check_winner()
 		if phase == Phase.FINISHED: break
 	if scripts != null and not poisoned.is_empty(): scripts.dispatch("CHook_OnVisualStartMeleeDestroyFlag", [])

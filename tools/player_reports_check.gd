@@ -484,10 +484,12 @@ func _first_rune_buying(profile: ELProfile) -> void:
 	for kind: String in expected: expected[kind] = int(ELRuneShop.price(profile, hero, state.object(trade.shop_id), hero.cards[1])[kind]) * 3 + int(ELRuneShop.price(profile, hero, state.object(trade.shop_id), hero.cards[2])[kind])
 	check(trade.bill() == expected, "el1 portal: the bill is the portal's own rune prices")
 	var reordered := [hero.cards[0], hero.cards[2], hero.cards[1]]
+	mouse.call(rune, MOUSE_BUTTON_LEFT, true)
+	mouse.call(rune, MOUSE_BUTTON_LEFT, false)
 	mouse.call(spell_two, MOUSE_BUTTON_LEFT, true)
 	for step in 4: moving.call(spell_two.lerp(spell_one, (step + 1) / 4.0))
 	mouse.call(spell_one, MOUSE_BUTTON_LEFT, false)
-	check(view.book_cards(0) == reordered and trade.bill() == expected, "el1 portal: reordering spells keeps their rune purchases and prices")
+	check(view.book_cards(0) == reordered and trade.bill() == expected and not view.carry, "el1 portal: reordering spells keeps their prices even while a rune is picked")
 	var before: Dictionary = state.players[hero.owner].resources.duplicate()
 	var closed := [false]
 	view.closed.connect(func(): closed[0] = true)

@@ -25,7 +25,7 @@ extends Control
 ## x 20 inside a 60x60 slot frame (A6-Int-Message 192,123) and the name at
 ## (85, y+17). The panel is that content plus a 15-pixel right margin, the OK
 ## (MessagesOK) centred 20 pixels under it and 15 below; the same frame as the
-## MessageBox, centred on the screen. Esc and Space answer OK.
+## MessageBox, centred on the screen. Enter, Esc and Space answer OK.
 ##
 ## Coordinates are the 1024x768 design scaled by the window height, as the
 ## second-game panels are.
@@ -251,12 +251,9 @@ func present(speech: Dictionary, state: ELAdventureSession) -> void:
 	show()
 	layout()
 
-## The answer a key gives, or "" (TextDialog, MessageBox
-## ): one-answer boxes take Enter, Esc and Space; a question takes
-## Enter for the first button and Esc for the second.
+## One-answer boxes take Enter, Esc and Space. Questions take Enter for the
+## first button and Esc for the second.
 func key_answer(keycode: int) -> String:
-	# The loot panel binds only Esc and Space to its OK.
-	if style == "loot": return "OK" if keycode in [KEY_ESCAPE, KEY_SPACE] else ""
 	if not question:
 		return "OK" if keycode in [KEY_ENTER, KEY_KP_ENTER, KEY_ESCAPE, KEY_SPACE] else ""
 	if keycode in [KEY_ENTER, KEY_KP_ENTER]: return "OK"
