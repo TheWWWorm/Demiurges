@@ -67,6 +67,7 @@ func _initialize() -> void:
 	if only.is_empty() or "lookahead".contains(only): _lookahead()
 	if only.is_empty() or "fixtures".contains(only): _fixtures()
 	if only.is_empty() or "passing".contains(only): _passing()
+	if only.is_empty() or "aftershock".contains(only): _aftershock()
 	_positions(only)
 	print("%d failures" % failures.size())
 	quit(1 if not failures.is_empty() else 0)
@@ -211,6 +212,29 @@ func _passing() -> void:
 			game + ": smart AI casts Earthquake to remove the blocker for lethal damage")
 		_discard_targets(profile, ctx)
 	ELCombatSearch.smart_engine = previous
+
+func _aftershock() -> void:
+	if not ELCombatSearch.smart_engine or not ELCombatBrain.available: return
+	var profile := _profile("el2")
+	if profile == null: return
+	var puzzles := ELPuzzles.list("el2")
+	var index := puzzles.find_custom(func(entry: Dictionary) -> bool: return entry.id == "el2_tactical_v2_battlecraft_aftershock")
+	var run := ELPuzzles.Run.new()
+	var opened := index >= 0 and run.begin(profile, index)
+	check(opened, "Aftershock opens")
+	if not opened: return
+	var duel := run.duel
+	var hand: Array = duel.heroes[0].hand
+	var defending := (duel.cast(hand.find("WEAK"), 4) and duel.cast(hand.find("LGST"))
+		and duel.toggle_attack(2) and duel.toggle_attack(3) and duel.end_phase())
+	check(defending, "Aftershock reaches its first defence")
+	if not defending: return
+	duel.smart_sides = [1]
+	for step in 8:
+		if duel.phase != ELDuel.Phase.DEFENCE: break
+		ELPracticeAI.step(duel)
+	check(duel.phase == ELDuel.Phase.ATTACK and duel.attacker == 1 and int(duel.heroes[1].health) == 11,
+		"Aftershock: the defender keeps the Fingus block and takes only 7 damage")
 
 func _discard_targets(profile: ELProfile, ctx: ELCombatSearch.Context) -> void:
 	for card: String in ["MALS", "CURS"]:

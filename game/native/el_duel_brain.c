@@ -8050,6 +8050,14 @@ static inline int harm_margin(const Search *x) {
 	return x->proof ? 0 : imax(1, x->health_worth);
 }
 
+static int health_after_defence(const Search *x, const State *s, int side) {
+	if (s->phase != 1 || s->health[side] <= 0 || s->health[1 - side] <= 0) return s->health[side];
+	static const int32_t end_phase[4] = { 0, 0, 0, 0 };
+	State finished = *s;
+	apply_command(x, &finished, end_phase);
+	return finished.health[side];
+}
+
 static int search_moves(Search *x, State *s, int phases, int steps, int alpha, int beta, Move *best, const Move *first, Move *line, int *line_length) {
 	Move below[MAX_LINE];
 	int below_length = 0;
@@ -8219,6 +8227,8 @@ static int search_moves(Search *x, State *s, int phases, int steps, int alpha, i
 	}
 	int value = maximise ? -2 * WIN : 2 * WIN;
 	int played = 0, chosen = -1;
+	int compare_health = best != NULL && maximise && !x->proof && s->phase == 1;
+	int chosen_health = 0;
 	for (int i = 0; i < count; i++) {
 		/* Out of time, the commands not yet read stay unread, at every
 		 * level of the line: the best of those read is what there is. */
@@ -8244,9 +8254,15 @@ static int search_moves(Search *x, State *s, int phases, int steps, int alpha, i
 		/* Harm aimed at its own side counts a health point against it
 		 * (`harm_margin`): read with the window moved by as much. */
 		int penalty = maximise && harms_own(x, s, side, &moves[i]) ? harm_margin(x) : 0;
+		/* Equally losing defences favour the hero taking less damage now.
+		 * Read one point below a possible tie to distinguish it from a bound. */
+		int compare_loss = compare_health && chosen >= 0 && value <= -WIN;
+		int health = compare_loss ? health_after_defence(x, &t, side) : 0;
+		int prefer_health = compare_loss && health > chosen_health && alpha == value;
+		int floor = alpha + penalty - prefer_health;
 		int v = x->proof && (t.rolled || t.luck)
-			? search_chance(x, s, &t, &moves[i], plans, phases, steps, alpha + penalty, beta + penalty, line ? below : NULL, line ? &below_length : NULL)
-			: search_moves(x, &t, imax(0, phases - spent), steps - 1, alpha + penalty, beta + penalty, NULL, NULL, line ? below : NULL, line ? &below_length : NULL);
+			? search_chance(x, s, &t, &moves[i], plans, phases, steps, floor, beta + penalty, line ? below : NULL, line ? &below_length : NULL)
+			: search_moves(x, &t, imax(0, phases - spent), steps - 1, floor, beta + penalty, NULL, NULL, line ? below : NULL, line ? &below_length : NULL);
 		v -= penalty;
 		/* A command whose reading the clock cut short is not held against
 		 * those read whole, unless it is the only one read at all. */
@@ -8254,7 +8270,8 @@ static int search_moves(Search *x, State *s, int phases, int steps, int alpha, i
 			x->aborted = 1;
 			break;
 		}
-		if (maximise ? v > value : v < value) {
+		if ((maximise ? v > value : v < value) || (prefer_health && v == value)) {
+			if (compare_health && v <= -WIN) chosen_health = compare_loss ? health : health_after_defence(x, &t, side);
 			value = v;
 			chosen = i;
 			if (best) *best = moves[i];
@@ -9258,6 +9275,8 @@ static int run_search(const int32_t *in, int64_t length, int32_t *out) {
 				proved += read;
 			}
 			if (lost) {
+			int defending_loss = s.phase == 1 && value <= -WIN;
+			int defended_health = defending_loss ? health_after_defence(&x, &t, x.ai) : 0;
 				/* How long the other hero needs whatever is done here, and a
 				 * command that holds out: for good, as far as was read, or
 				 * at least longer than the one chosen. */
@@ -9294,6 +9313,8 @@ static int run_search(const int32_t *in, int64_t length, int32_t *out) {
 						tried = found;
 						State u = s;
 						if (!apply_command(&x, &u, (const int32_t *)&found)) continue;
+					/* Keep the better immediate defence when both lines still score as losses. */
+					if (defending_loss && v <= -WIN && health_after_defence(&x, &u, x.ai) <= defended_health) continue;
 						int bad = u.health[x.ai] <= 0;
 						if (!bad && u.health[1 - x.ai] > 0) {
 							g.revise = 0;
@@ -9312,24 +9333,27 @@ static int run_search(const int32_t *in, int64_t length, int32_t *out) {
 					if (guarded == 14) {
 						/* The command that holds out is given with its own worth
 						 * and line, read as any first command is. */
-						best = escape;
-						kept[0] = escape;
-						kept_length = 1;
 						State u = s;
-						value = -(WIN / 1000 * 1000 + (MAX_TURNS - imin(lost, MAX_TURNS)) * 1000);
 						if (apply_command(&x, &u, (const int32_t *)&escape)) {
 							Move below[MAX_LINE];
 							int below_length = 0;
+						int health = defending_loss ? health_after_defence(&x, &u, x.ai) : 0;
 							int64_t allowed = x.budget;
 							x.aborted = 0;
 							x.budget = x.nodes + part;
 							set_clock(&x, until);
 							int spent = phases_spent(&x, &s, &u, escape.kind);
-							value = search_moves(&x, &u, imax(0, read_phases - spent), imax(1, read_steps - 1), -2 * WIN, 2 * WIN, NULL, NULL, below, &below_length);
+						int v = search_moves(&x, &u, imax(0, read_phases - spent), imax(1, read_steps - 1), -2 * WIN, 2 * WIN, NULL, NULL, below, &below_length);
 							x.budget = allowed;
 							x.aborted = 0;
-							for (int k = 0; k < below_length && kept_length < MAX_LINE; k++) kept[kept_length++] = below[k];
-						}
+						if (!defending_loss || v > -WIN || health > defended_health) {
+							best = escape;
+						value = v;
+						kept[0] = escape;
+						kept_length = 1;
+						for (int k = 0; k < below_length && kept_length < MAX_LINE; k++) kept[kept_length++] = below[k];
+						} else guarded = 15;
+					} else guarded = 15;
 					}
 				}
 				if (guarded == 15) {
