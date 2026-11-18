@@ -4647,8 +4647,9 @@ static int cast_card(const Search *x, State *s, int side, int slot, int target, 
 	}
 	case EFF_CHANNEL:
 		/* X damage to the caster, ether for it (and four more in the first
-		 * game), and the other hero heals X. */
+		 * game), and the other hero heals X if reflection did not kill them. */
 		hurt_hero(s, side, amount, -1);
+		if (s->second && s->health[1 - side] <= 0) return 1;
 		s->ether[side] += amount + (s->second ? 0 : 4);
 		if (amount > 0) s->health[1 - side] += amount;
 		break;

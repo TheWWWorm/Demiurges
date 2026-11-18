@@ -151,9 +151,18 @@ func build(profile: ELProfile, arena_id := "Green.001") -> bool:
 	_sync_light()
 	return errors.is_empty()
 
+## Turn the authored battlefield with its physical sides. Duel models and
+## camera tracks stay in the local player's battle-seat coordinates.
+func reverse_sides() -> void:
+	basis *= Basis(Vector3.LEFT, Vector3.UP, Vector3.FORWARD)
+	if _sea != null: (_sea.material_override as ShaderMaterial).set_shader_parameter("sun_direction", light.global_basis.z)
+
 func stir_ground_fog(from: Vector3, to: Vector3, creature_scale: float) -> void:
-	if _ground_fog != null:
-		_ground_fog.stir(Vector2(from.x, from.z), Vector2(to.x, to.z), creature_scale)
+	if _ground_fog == null: return
+	var unplace := transform.affine_inverse()
+	var start := unplace * from
+	var finish := unplace * to
+	_ground_fog.stir(Vector2(start.x, start.z), Vector2(finish.x, finish.z), creature_scale)
 
 ## Ship's flat surface combines the deck with the sea. Most of the sea uses
 ## a planar atlas mapping, while the planks have bespoke UVs.
@@ -327,7 +336,8 @@ func set_detail(enabled: bool) -> void:
 
 func ground_height(x: float, z: float) -> float:
 	var surface: ELModel = get_child(0)
-	var point := Vector2(x, z)
+	var local := transform.affine_inverse() * Vector3(x, 0, z)
+	var point := Vector2(local.x, local.z)
 	for figure: Dictionary in surface.figures.values():
 		var vertices: PackedVector3Array = figure.arrays[Mesh.ARRAY_VERTEX]
 		var indices: PackedInt32Array = figure.arrays[Mesh.ARRAY_INDEX]
@@ -355,6 +365,8 @@ func clear_spot(spot: Vector2, radius: float, height := 3.0) -> bool:
 	for angle in 8:
 		var around := spot + Vector2.from_angle(angle * TAU / 8.0) * radius
 		if absf(ground_height(around.x, around.y) - floor_height) > 0.6: return false
+	var local := transform.affine_inverse() * Vector3(spot.x, 0, spot.y)
+	spot = Vector2(local.x, local.z)
 	var low := floor_height + 0.35
 	var high := floor_height + height
 	var reach := Rect2(spot - Vector2.ONE * radius, Vector2.ONE * radius * 2.0)

@@ -46,8 +46,6 @@ const SPEC_EFFECTS := {1: "ManaNodeRed", 2: "ManaNodeBlack", 7: "BlueManaNode",
 	115: "RedBridgePier", 116: "RedBridgeAbutment", 117: "BlueBridgePier", 118: "BlueBridgeAbutment",
 	119: "SpringMind", 120: "DungeonLvl1", 121: "DungeonLvl2", 122: "DungeonLvl3", 123: "SpringStrength",
 	124: "AltarOfWar", 125: "TerrainPFX/ConvulsionOfNature"}
-## The object groups whose table rows carry a SpecEffect kind.
-const SPEC_TABLES := {"terrain_objects": "TerrObj", "mana_nodes": "ManaNodes"}
 ## Object effects (SpecEffect) are drawn only while their reach is in the
 ## camera's view, checked this often (seconds); a big map has scores of
 ## volcanoes, springs and ash clouds.
@@ -60,12 +58,30 @@ const CULL_MARGIN := 6.0
 ## object.
 static func spec_effect(profile: ELProfile, item: Dictionary) -> String:
 	var row := spec_row(profile, item)
+	var color := _node_color(item, row)
+	if item.get("group") == "additional_buildings" and not color.is_empty():
+		# Power nodes share the ManaNodes figures and particles. Their own
+		# building rows still supply the footprint used to place the effect.
+		row = profile.table("ManaNodes").get("ManaNode." + color, row)
 	var kind := int(row.get("SpecEffect", 0))
+	# The green node has a particle sheet, but no matching PFX in the
+	# shipped data. Use the red node's sprite animation with that sheet.
+	if color == "Green" and kind == 0: kind = 1
 	return str(SPEC_EFFECTS[kind]) + ".pfx" if SPEC_EFFECTS.has(kind) else ""
 
 static func spec_row(profile: ELProfile, item: Dictionary) -> Dictionary:
-	var table := str(SPEC_TABLES.get(str(item.get("group", "")), ""))
-	return profile.table(table).get(str(item.get("name", "")), {}) if not table.is_empty() else {}
+	var name := str(item.get("name", ""))
+	match item.get("group", ""):
+		"terrain_objects": return profile.table("TerrObj").get(name, {})
+		"mana_nodes": return ELResourceSites.definition(profile, item)
+		"additional_buildings":
+			if ELSecondBuildings.kind(item) == "power_node": return ELSecondBuildings.definition(profile, item)
+	return {}
+
+static func _node_color(item: Dictionary, row: Dictionary) -> String:
+	if item.get("group") == "mana_nodes": return str(row.get("MagicColor", ""))
+	if ELSecondBuildings.kind(item) == "power_node": return ELSecondBuildings.color(item)
+	return ""
 ## Second game: an occupied fort's guard zone is ringed by twelve looping
 ## pieces, Intercept5x5_NN.pfx, one on each zone cell two cells from the
 ## fort that is not a corner of the 5 x 5 square (only zones of a fort
@@ -208,7 +224,8 @@ func _sync_spec(uid: int) -> void:
 	if effects.has(name): return
 	var center := ELAdventureGrid.center(item, entry.row) * ELAdventureTerrain.CELL
 	keep_file(profile, entry.file)
-	start(name, {"file": entry.file, "x": center.x, "y": center.y, "z": 0.0, "story": true}, 0.0)
+	var atlas := "ManaGreen" if _node_color(item, entry.row) == "Green" and entry.file == "ManaNodeRed.pfx" else ""
+	start(name, {"file": entry.file, "x": center.x, "y": center.y, "z": 0.0, "story": true, "atlas": atlas}, 0.0)
 	if not effects.has(name): return
 	orient(name, -float((int(item.get("rotation", 0)) >> 2) & 3) * PI / 2.0)
 	var effect: Dictionary = effects[name]
@@ -304,12 +321,13 @@ func orient(name: String, yaw: float) -> void:
 
 ## `source`: the edition whose files hold the effect, when it is not this map's
 ## own (the first game's battle dome borrows the second game's).
-func start(name: String, entry: Dictionary, elapsed: float, draw_current := false, source: ELProfile = null) -> void:
+## An `anchor` makes clip particles follow their actor's transform and fog.
+func start(name: String, entry: Dictionary, elapsed: float, draw_current := false, source: ELProfile = null, anchor: Node3D = null) -> void:
 	finish(name)
 	var data := source if source != null else profile
 	var file := particle_file(data, str(entry.file))
 	if file == null or not file.error.is_empty() or file.frames < 1: return
-	var material := _material(file, data)
+	var material := _material(file, data, str(entry.get("atlas", "")))
 	if material == null: return
 	var copies := 1 if file.loop_end <= 0 else ceili(float(file.frames) / file.loop_end)
 	var mesh := MultiMesh.new()
@@ -326,23 +344,27 @@ func start(name: String, entry: Dictionary, elapsed: float, draw_current := fals
 	var node := MultiMeshInstance3D.new()
 	node.multimesh = mesh
 	node.material_override = material
-	# The original drew effects without shadows; a shadow-only twin below
-	# gives the blended ones a soft one.
+	# The original drew effects without shadows. A shadow-only twin below
+	# gives some blended effects a soft one.
 	node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	# Large spells reach about 45 units from their origin.
 	node.custom_aabb = AABB(Vector3(-64, -16, -64), Vector3(128, 96, 128))
 	# Script coordinates: x east, y north, z up, two units per cell.
 	node.position = Vector3(float(entry.x), float(entry.z), -float(entry.y))
 	var hidden := optional(entry)
-	# Smoke, mist and water spray throw a soft shadow (a remake addition, see
-	# ELParticleFile.SHADOW_SHEETS); the weather layers do not.
-	var strength := 0.0 if hidden else ELParticleFile.shadow_strength(file)
+	# Keep the sequel's large smoke plumes out of the shadow map. Their
+	# overlapping quads cast dark, streaked patches (#233).
+	var smoke := data.id == "el2" and file.texture.to_lower().contains("smoke")
+	var strength := 0.0 if hidden or smoke else ELParticleFile.shadow_strength(file)
 	if strength > 0.0:
 		var camera := get_viewport().get_camera_3d() if is_inside_tree() else null
 		ELParticleFile.shade_twin(ELParticleFile.shadow_twin(node, false), material.get_shader_parameter("atlas"), Vector2(file.columns, file.rows), strength, ELParticleFile.camera_extent(camera))
 	(weather_layer if hidden else self).add_child(node)
 	var rain := hidden and ELArchive.key(str(entry.file)) in RAIN_FILES
 	effects[name] = {"entry": entry.duplicate(), "file": file, "node": node, "elapsed": elapsed, "frame": -1, "optional": hidden, "rain": rain}
+	if anchor != null:
+		effects[name].anchor = anchor
+		node.global_transform = anchor.global_transform
 	if rain and _rain_on_water and enabled: _publish_rain()
 	if draw_current: _advance(name, 0.0)
 
@@ -398,6 +420,13 @@ func _process(delta: float) -> void:
 
 func _advance(name: String, delta: float) -> void:
 	var effect: Dictionary = effects[name]
+	if effect.has("anchor"):
+		var anchor: Node3D = effect.anchor
+		if not is_instance_valid(anchor) or anchor.is_queued_for_deletion():
+			finish(name)
+			return
+		effect.node.global_transform = anchor.global_transform
+		effect.node.visible = anchor.is_visible_in_tree()
 	effect.elapsed += delta
 	var frame := int(effect.elapsed * ELParticleFile.FPS)
 	var file: ELParticleFile = effect.file
@@ -407,7 +436,7 @@ func _advance(name: String, delta: float) -> void:
 		return
 	# Hidden ambience and object effects out of view keep their clock but are
 	# not redrawn.
-	if frame == effect.frame or (effect.optional and not enabled) or (effect.has("cull") and not effect.node.visible): return
+	if frame == effect.frame or (effect.optional and not enabled) or not effect.node.visible: return
 	effect.frame = frame
 	_draw(effect, file.visible_frames(frame, loops))
 
@@ -450,11 +479,12 @@ func glow_sources() -> Array:
 			result.append([node.global_transform * glow[0], glow[1], glow[2]])
 	return result
 
-func _material(file: ELParticleFile, data: ELProfile = null) -> ShaderMaterial:
+func _material(file: ELParticleFile, data: ELProfile = null, atlas := "") -> ShaderMaterial:
 	if data == null: data = profile
-	var key := "%s|%s|%d|%d|%s" % [data.id, file.texture, file.columns, file.rows, file.additive]
-	if _materials.has(key): return _materials[key]
 	var name := file.texture.get_basename() if file.texture.to_lower().ends_with(".bmp") else file.texture
+	if not atlas.is_empty(): name = atlas
+	var key := "%s|%s|%d|%d|%s" % [data.id, name, file.columns, file.rows, file.additive]
+	if _materials.has(key): return _materials[key]
 	var texture := data.texture("Effects/" + name)
 	if texture == null:
 		_materials[key] = null

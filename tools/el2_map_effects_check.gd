@@ -4,8 +4,10 @@ extends SceneTree
 ## - every object whose kind has an effect in the original runs that file
 ##   at its figure's centre, turned with it, in sight and in explored fog;
 ##   an object of another kind runs none;
-## - the volcano smoke and the springs' water throw a particle shadow (a
-##   blended smoke or water sheet), the glows and the ash cloud do not;
+## - the springs' water throws a particle shadow. Volcano smoke, glows and
+##   the ash cloud do not;
+## - the four power-node buildings have their coloured particles, and the
+##   Wall of Lava plays its glow on the adventure map;
 ## - the weather preference leaves them (they are the object's own), and
 ##   unexplored fog hides them;
 ## - an effect whose reach is out of the camera's view is hidden and not
@@ -31,7 +33,9 @@ const ORIGINAL := {1: "ManaNodeRed", 2: "ManaNodeBlack", 7: "BlueManaNode",
 ## green bridges (second_map_feedback_check covers those).
 const MAPS := ["Maps/Custom/Null Cycle", "e2mission33", "e2mission22_53"]
 ## Kinds whose effect throws a particle shadow.
-const SHADOWED := [3, 4, 5, 6, 119, 123]
+const SHADOWED := [119, 123]
+const POWER_EFFECTS := {"PowerNodeRed": "ManaNodeRed.pfx", "PowerNodeBlack": "ManaNodeBlack.pfx",
+	"PowerNodeBlue": "BlueManaNode.pfx", "PowerNodeGreen": "ManaNodeRed.pfx"}
 
 var failures: Array[String] = []
 var seen_kinds := {}
@@ -125,6 +129,7 @@ func _map(profile: ELProfile, map_id: String, idle_only := false) -> void:
 		await frames(3)
 		_placed(view, profile, map_id)
 		_shadows(view, profile, map_id)
+		if map_id == "e2mission33": await _wall_idle(view)
 		await _weather(view, map_id)
 		await _cull(view, map_id)
 		await _fog(view, profile, map_id)
@@ -144,6 +149,7 @@ func _idle(view: ELAdventureView, profile: ELProfile, map_id: String) -> void:
 	var at := ELAdventureGrid.center(kit, ELSecondBuildings.definition(profile, kit)) * ELAdventureTerrain.CELL
 	view.following = -1
 	view.target = Vector3(at.x, 0, -at.y)
+	view.presentation.listener = view.target
 	view._update_camera()
 	await frames(3)
 	var name := "idle:%d" % int(kit.uid)
@@ -159,28 +165,36 @@ func _placed(view: ELAdventureView, profile: ELProfile, map_id: String) -> void:
 	var wrong: Array = []
 	var counts := {}
 	var expected_names := {}
+	var power_colors := {}
 	for item: Dictionary in view.state.objects.values():
 		var row := ELAdventureEffects.spec_row(profile, item)
 		var kind := int(row.get("SpecEffect", 0))
 		var name := "spec:%d" % int(item.uid)
-		if not ORIGINAL.has(kind):
+		var expected := str(POWER_EFFECTS.get(item.name, ""))
+		if ORIGINAL.has(kind): expected = str(ORIGINAL[kind]) + ".pfx"
+		if expected.is_empty():
 			if effects.effects.has(name): wrong.append("%s(%d) has %s" % [item.name, kind, effects.effects[name].entry.file])
 			continue
 		if not item.get("alive", true) or not item.get("visible", true) or not item.get("placed", true): continue
-		var expected := str(ORIGINAL[kind]) + ".pfx"
 		expected_names[name] = true
 		if not effects.effects.has(name) or str(effects.effects[name].entry.file) != expected:
 			wrong.append("%s(%d)@%d,%d lacks %s" % [item.name, kind, item.x, item.y, expected])
 			continue
 		var center := ELAdventureGrid.center(item, row) * ELAdventureTerrain.CELL
-		var node: Node3D = effects.effects[name].node
+		var node: MultiMeshInstance3D = effects.effects[name].node
 		if node.position.distance_to(Vector3(center.x, 0, -center.y)) > 0.01 or not is_equal_approx(node.rotation.y, -float((int(item.get("rotation", 0)) >> 2) & 3) * PI / 2.0):
 			wrong.append("%s placed at %s" % [item.name, node.position])
-		counts[kind] = int(counts.get(kind, 0)) + 1
-		seen_kinds[kind] = true
+		if POWER_EFFECTS.has(item.name):
+			power_colors[item.name] = true
+			if item.name == "PowerNodeGreen" and (node.material_override as ShaderMaterial).get_shader_parameter("atlas") != profile.texture("Effects/ManaGreen"):
+				wrong.append("%s missing its green particle sheet" % item.name)
+		else:
+			counts[kind] = int(counts.get(kind, 0)) + 1
+			seen_kinds[kind] = true
 	for name: String in effects.effects:
 		if name.begins_with("spec:") and not expected_names.has(name): wrong.append("stray " + name)
 	check(not counts.is_empty() and wrong.is_empty(), "%s: every object with an original effect runs it at its figure, others none (kinds %s; wrong %s)" % [map_id, str(counts), str(wrong.slice(0, 6))])
+	if map_id == "e2mission33": check(power_colors.size() == 4, "%s: all four power nodes have their particles (#229)" % map_id)
 
 func _shadows(view: ELAdventureView, profile: ELProfile, map_id: String) -> void:
 	var wrong: Array = []
@@ -190,7 +204,29 @@ func _shadows(view: ELAdventureView, profile: ELProfile, map_id: String) -> void
 		var kind := int(ELAdventureEffects.spec_row(profile, item).get("SpecEffect", 0))
 		var twin := (view.effects.effects[name].node as Node).get_node_or_null("Shadow") as MultiMeshInstance3D
 		if ELParticleFile.twin_casts(twin) != (kind in SHADOWED): wrong.append("%s(%d)" % [item.get("name"), kind])
-	check(wrong.is_empty(), "%s: volcano smoke and spring water throw a shadow, the rest none (wrong %s)" % [map_id, str(wrong.slice(0, 6))])
+	check(wrong.is_empty(), "%s: spring water casts a shadow and volcano smoke does not (wrong %s)" % [map_id, str(wrong.slice(0, 6))])
+
+func _wall_idle(view: ELAdventureView) -> void:
+	var wall := {}
+	for item: Dictionary in view.state.objects.values():
+		if item.name == "m33 - Wall of Lava":
+			wall = item
+			break
+	var model: ELModel = view.world.actors.get(wall.get("uid", -1))
+	check(model != null, "e2mission33: the Wall of Lava has a map figure")
+	if model == null: return
+	view.following = -1
+	view._scroll_to(model.position, true)
+	view.presentation.listener = model.position
+	await frames(3)
+	model.animation_looped.emit("cidle")
+	await frames(2)
+	var name := "actor_idle:%d" % int(wall.uid)
+	var effect: Dictionary = view.effects.effects.get(name, {})
+	check(not effect.is_empty() and ELArchive.key(str(effect.entry.file)) == "creaturespfx/ad216/idle.pfx"
+		and effect.node.global_transform.is_equal_approx(model.global_transform), "e2mission33: the Wall of Lava's glow follows its map figure (#229)")
+	model.animation_started.emit("udeath")
+	check(not view.effects.effects.has(name), "e2mission33: the glow stops when the figure leaves its idle animation (#229)")
 
 func _weather(view: ELAdventureView, map_id: String) -> void:
 	view.effects.set_enabled(false)

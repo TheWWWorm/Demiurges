@@ -588,6 +588,7 @@ func global_enchantment_count(card: String) -> int:
 func _caster_enchantments(side: int, card: String) -> int:
 	var count := 0
 	for c: Dictionary in creatures.values():
+		if not _enchantment_active(int(c.id), card): continue
 		for e: Dictionary in c.enchantments:
 			if e.card == card and int(e.owner) == side: count += 1
 	return count
@@ -686,6 +687,13 @@ func targetable(id: int) -> bool:
 func in_plane(id: int) -> bool:
 	return creatures.has(id) and creatures[id].get("plane", false)
 
+## Coloured enchantments stay attached but have no effect in the Colourless Plane.
+func _enchantment_active(holder: int, card: String) -> bool:
+	return holder < 2 or profile.id != "el2" or not in_plane(holder) or not coloured_enchantment(card)
+
+func coloured_enchantment(card: String) -> bool:
+	return profile.table("CombatSpells").get(card, {}).get("Color", "") in ["Red", "Green", "Blue", "Black"]
+
 func pale(id: int) -> bool:
 	return has_flag(id, "Outerplanar")
 
@@ -702,7 +710,7 @@ func can_change_aspect(id: int, enter: bool, guard := false) -> bool:
 ## Moves a creature between aspects (see `can_change_aspect`). Aspect Ward
 ## charges the controller 1 ether and 1 damage per copy, in either direction.
 ## Leaving with a beacon brings the same race along.
-func plane_change(id: int, enter: bool, guard := false) -> bool:
+func plane_change(id: int, enter: bool, guard := false, recover := false) -> bool:
 	if not creatures.has(id): return false
 	var c: Dictionary = creatures[id]
 	if bool(c.get("plane", false)) == enter: return true
@@ -718,12 +726,14 @@ func plane_change(id: int, enter: bool, guard := false) -> bool:
 		c.plane = true
 		_unassign(id)
 	else: c.erase("plane")
-	_emit({"kind": "plane", "target": id, "enter": enter})
-	# Army auras cover creatures outside the Colourless Plane only.
+	if recover: c.damage = 0
 	_refresh_stats(c)
-	if global_enchantment_count("WRBN") > 0:
+	# Unity and Earth Bonds can also change the stats or flags of other creatures.
+	if global_enchantment_count("WRBN") > 0 or c.enchantments.any(func(e: Dictionary) -> bool: return e.card == "ERBN"):
 		for other: Dictionary in creatures.values(): _refresh_stats(other)
-	if not enter and _enchantment_count(id, "PRGD") > 0:
+	_emit({"kind": "plane", "target": id, "enter": enter})
+	if c.damage >= c.toughness: _lethal(id)
+	if not enter and not in_plane(id) and _enchantment_count(id, "PRGD") > 0:
 		for other: Dictionary in army(int(c.owner)):
 			if other.id != id and in_plane(other.id) and race(other.id) == race(id): plane_change(other.id, false)
 	return true
@@ -736,9 +746,8 @@ func _ability_lethal(id: int) -> void:
 ## State check death: a bright Pale creature dissipates instead of dying.
 func _lethal(id: int) -> void:
 	if not creatures.has(id): return
-	if profile.id == "el2" and pale(id) and not in_plane(id) and creatures[id].toughness > 0 and plane_change(id, true):
-		creatures[id].damage = 0
-		_emit({"kind": "dissipate", "target": id})
+	if profile.id == "el2" and pale(id) and not in_plane(id) and creatures[id].toughness > 0 and plane_change(id, true, false, true):
+		if creatures.has(id): _emit({"kind": "dissipate", "target": id})
 	else: _kill(id)
 
 func find_enchantment(enchantment_id: int) -> int:
@@ -1362,13 +1371,19 @@ func _apply_spell_effect(side: int, card: String, rule: Dictionary, target: int,
 			# Channel: X damage to the caster, then ether + X (+4 in the first game)
 			# set directly, and the opponent heals X.
 			if extra_ether > 0: _damage(side, extra_ether)
+			# Reflected damage can defeat the opponent before the trade heals them.
+			if profile.id == "el2" and heroes[1 - side].health <= 0:
+				_discard_cause = previous_cause
+				return
 			var gain := extra_ether + (4 if profile.id == "el1" else 0)
 			if gain > 0:
 				heroes[side].mana += gain
 				_emit({"kind": "ether", "side": side, "amount": gain})
 			if extra_ether > 0:
 				heroes[1 - side].health += extra_ether
-				_emit({"kind": "heal", "target": 1 - side, "amount": extra_ether})
+				var heal := {"kind": "heal", "target": 1 - side, "amount": extra_ether}
+				if profile.id == "el2": heal.card = card
+				_emit(heal)
 		"cleanse":
 			var chosen: Array[int] = []
 			for id: int in [0, 1] + creatures.keys():
@@ -2609,6 +2624,7 @@ func _refresh_stats(c: Dictionary) -> void:
 	c.toughness = stats.y
 	var granted: Array[String] = []
 	for e: Dictionary in c.enchantments:
+		if not _enchantment_active(int(c.id), e.card): continue
 		for flag: String in ELCatalog.GRANTED_FLAGS.get(e.card, []): granted.append(flag)
 		# First-game redirection also forbids regeneration.
 		if e.card == "REDR" and profile.id == "el1": granted.append("NoRegen")
@@ -2702,13 +2718,18 @@ func creature_stats(c: Dictionary, additional_gas := 0) -> Vector2i:
 		power -= 2 * global_enchantment_count("DPGS")
 		toughness -= 2 * global_enchantment_count("FRGS")
 	var lethal := 0
+	var delusions := 0
+	var alpha_strike := false
 	for e: Dictionary in c.enchantments:
+		if not _enchantment_active(int(c.id), e.card): continue
 		# Unaffected creatures keep lake snake venom's mark without its -1/-1.
 		if e.card == "LASN" and c.flags.has("NoAffect"): continue
 		power += int(e.power)
 		# Lake snake venom lowers health past the usual minimum of one.
 		if e.get("lethal", false): lethal -= int(e.toughness)
 		else: toughness += int(e.toughness)
+		if e.card == "DELS": delusions += 1
+		if e.card == "ALST": alpha_strike = true
 	for effect: Dictionary in c.get("temporary", []):
 		power += int(effect.get("power", 0))
 		toughness += int(effect.get("toughness", 0))
@@ -2735,12 +2756,10 @@ func creature_stats(c: Dictionary, additional_gas := 0) -> Vector2i:
 	lethal += 2 * decay
 	# Delusion swaps power and toughness last (an even number cancels); a
 	# swapped toughness has no minimum of one, so a 0-power creature dies.
-	var delusions: int = c.enchantments.filter(func(e: Dictionary) -> bool: return e.card == "DELS").size()
 	# Ordinary creature stats clamp after all modifiers, not after each one.
 	var result := Vector2i(maxi(0, power), maxi(0, (maxi(1, toughness) if delusions % 2 == 0 else maxi(0, toughness)) - lethal))
 	# Alpha strike caps toughness at one after every other modifier.
-	for e: Dictionary in c.enchantments:
-		if e.card == "ALST": result.y = mini(result.y, 1)
+	if alpha_strike: result.y = mini(result.y, 1)
 	if delusions % 2 == 1: result = Vector2i(result.y, result.x)
 	return result
 
@@ -2794,6 +2813,7 @@ func _mark(target: int, card: String, power: int, toughness: int, extra: Diction
 	_emit({"kind": "enchant", "target": target, "card": card, "power": power, "toughness": toughness})
 
 func _enchantment_count(id: int, card: String) -> int:
+	if not _enchantment_active(id, card): return 0
 	var count := 0
 	for e: Dictionary in entity(id).get("enchantments", []):
 		if e.card == card: count += 1
@@ -2965,6 +2985,8 @@ func _turn_enchantments(at_start: bool) -> void:
 					_emit({"kind": "bless_expire", "target": target})
 			continue
 		if not victim.enchantments.has(e): continue
+		# Temporary enchantments can still reach their normal expiry here.
+		if e.card not in ["BLSS", "CMBN", "ALST", "RLSS", "FREL"] and not _enchantment_active(target, e.card): continue
 		if at_start:
 			var price := 0
 			match e.card:
@@ -3050,7 +3072,7 @@ func _turn_enchantments(at_start: bool) -> void:
 					# Original EL2 Irritation, Madness and
 					# Insanity share one gate ([[holder+4]] == 0):
 					# no damage and no effect while the holder is in the plane.
-					if target >= 2 and victim.owner == attacker and (profile.id != "el2" or not in_plane(target)):
+					if target >= 2 and victim.owner == attacker:
 						_trigger_damage(e.card, attacker, 1 if e.card == "IRRT" else 2)
 						# Irritation that kills its holder's hero shows the fight shot at that hero.
 						if e.card == "IRRT" and int(heroes[attacker].health) <= 0: _camera_cue("IRRT", attacker, "fight")
@@ -3199,6 +3221,7 @@ func _begin_attack(draw_card: bool) -> void:
 			var positive := false
 			var negative := false
 			for e: Dictionary in c.enchantments:
+				if not _enchantment_active(int(c.id), e.card): continue
 				positive = positive or String(e.card) in pos_sources
 				negative = negative or String(e.card) in neg_sources
 			# A hero-held water link still marks its creature (creature variable 0).
@@ -3569,11 +3592,9 @@ func _resolve_attacks() -> void:
 		if creatures.has(id) and not (creatures[id].regenerated and not regenerated_before.has(id)): _ability_lethal(id)
 	if scripts != null and not poisoned.is_empty(): scripts.dispatch("CHook_OnVisualFinishMeleeDestroyFlag", [])
 
-## Presentation of a combat strike's creature power (first game; in the
-## second only the life drain of a hero hit): `key` names the power
-## (a mastery code or a strike property), drawn from `source` to `target`.
+## Presentation of a combat strike's creature power, drawn from source to target.
 func _combat_effect(key: String, source: int, target: int) -> void:
-	if profile.id != "el1" and key != "Lifetap": return
+	if profile.id != "el1" and not key in ["Lifetap", "Venom", "Disenchant", "BPTD"]: return
 	var side := source if source < 2 else int(entity(source).get("owner", -1))
 	_emit({"kind": "combat_ability", "key": key, "source": source, "target": target, "side": side})
 
@@ -3632,7 +3653,9 @@ func _resolve_strike(source: int, target: int, amount: int, poisoned: Array[int]
 	# Second-game snake venom lowers health before the lethal check, so a creature it reduces to
 	# nothing cannot regenerate.
 	var venom_first := card == "LASN" and profile.id == "el2" and creatures.has(target)
-	if venom_first: _mark(target, "LASN", -1, -1, {"fixed": true, "lethal": true})
+	if venom_first:
+		_combat_effect("Venom", source, target)
+		_mark(target, "LASN", -1, -1, {"fixed": true, "lethal": true})
 	# First game: a disenchanting strike strips a creature before its (already allotted) damage is
 	# checked. The second game strips after.
 	var stripped_first: bool = profile.id == "el1" and disenchants and creatures.has(target) and not creatures[target].enchantments.is_empty()
@@ -3655,7 +3678,9 @@ func _resolve_strike(source: int, target: int, amount: int, poisoned: Array[int]
 		if card == "GRSN": _mark(source, "GRSN", 1, 1, {"fixed": true})
 		# Venom is priced like its token row: free in the first game, 1 in the second. The second game's
 		# venom is its own support card.
-		if card in ["TRSN", "SWSN"]: _mark(target, ({"TRSN": "ETRS", "SWSN": "ESWS"}[card] if profile.id == "el2" else card), 0, 0, {"owner": owner, "price": 1 if profile.id == "el2" else 0})
+		if card in ["TRSN", "SWSN"]:
+			if profile.id == "el2": _combat_effect("Venom", source, target)
+			_mark(target, ({"TRSN": "ETRS", "SWSN": "ESWS"}[card] if profile.id == "el2" else card), 0, 0, {"owner": owner, "price": 1 if profile.id == "el2" else 0})
 		for flag: String in creatures[source].flags:
 			if flag.begins_with("Discard("): robbed += int(flag.trim_prefix("Discard(").trim_suffix(")"))
 		for e: Dictionary in creatures[source].enchantments: robbed += ELCatalog.granted_discard(profile, e.card)
@@ -3664,7 +3689,9 @@ func _resolve_strike(source: int, target: int, amount: int, poisoned: Array[int]
 		if dealt > 0 and kind in ["Lamia", "Orc"] and ELSpecs.roll(self, owner, "UMTD" if kind == "Lamia" else "RORT") > 0: robbed += 1
 		if shielded: robbed = 0
 		# Snake mastery envenoms the hero.
-		if dealt > 0 and kind == "Snake" and ELSpecs.roll(self, owner, "GSNV") > 0: _mark(target, "ENVM", 0, 0, {"owner": owner})
+		if dealt > 0 and kind == "Snake" and ELSpecs.roll(self, owner, "GSNV") > 0:
+			if profile.id == "el2": _combat_effect("Venom", source, target)
+			_mark(target, "ENVM", 0, 0, {"owner": owner})
 		# EL1 - queues DrainLife before +
 		# processes the discard and Target/Discard. Keep EL2's prior order
 		# until its own combat callback is confirmed independently.
@@ -3688,11 +3715,12 @@ func _resolve_strike(source: int, target: int, amount: int, poisoned: Array[int]
 	# Pteros mastery: a strike strips the enchantments the target's own hero cast.
 	var stripped := false
 	if card in ["PTRS", "RFPT"] and not entity(target).is_empty() and ELSpecs.roll(self, owner, "BPTD") > 0:
-		stripped = true
-		_combat_effect("BPTD", source, target)
 		var controller := target if target < 2 else int(creatures[target].owner)
-		for e: Dictionary in entity(target).enchantments.duplicate():
-			if int(e.owner) == controller and not entity(target).is_empty(): _remove_enchantment(target, e.id)
+		var owned: Array = entity(target).enchantments.filter(func(e: Dictionary) -> bool: return int(e.owner) == controller)
+		stripped = profile.id == "el1" or not owned.is_empty()
+		if stripped: _combat_effect("BPTD", source, target)
+		for e: Dictionary in owned:
+			if not entity(target).is_empty(): _remove_enchantment(target, e.id)
 	if disenchants and not entity(target).is_empty() and not stripped_first:
 		if not stripped and not entity(target).enchantments.is_empty(): _combat_effect("Disenchant", source, target)
 		for e: Dictionary in entity(target).enchantments.duplicate(): _remove_enchantment(target, e.id)
@@ -3764,11 +3792,11 @@ func _damage(target: int, amount: int, combat := false, no_regeneration := false
 		victim.regenerated = true
 		if profile.id == "el2": _unassign(target)
 		_emit({"kind": "regenerate", "target": target, "cost": regeneration})
-	elif dissipates and plane_change(target, true):
+	elif dissipates and plane_change(target, true, false, true):
 		# A bright Pale creature dissipates instead of dying: healed and tapped.
-		victim.damage = 0
-		victim.resting = true
-		_emit({"kind": "dissipate", "target": target})
+		if creatures.has(target):
+			victim.resting = true
+			_emit({"kind": "dissipate", "target": target})
 	else:
 		_kill(target)
 	return amount
@@ -3790,7 +3818,7 @@ func regeneration_cost(id: int) -> int:
 	for flag: String in c.flags:
 		if flag.begins_with("Regen("): costs.append(int(flag.trim_prefix("Regen(").trim_suffix(")")))
 	for e: Dictionary in c.enchantments:
-		if ELCatalog.GRANTED_REGENERATION.has(e.card): costs.append(int(ELCatalog.GRANTED_REGENERATION[e.card]))
+		if ELCatalog.GRANTED_REGENERATION.has(e.card) and _enchantment_active(id, e.card): costs.append(int(ELCatalog.GRANTED_REGENERATION[e.card]))
 	for e: Dictionary in army_auras(c):
 		if ELCatalog.ARMY_AURAS[e.card].has("regeneration"): costs.append(int(ELCatalog.ARMY_AURAS[e.card].regeneration))
 	var best := 0
@@ -4330,5 +4358,9 @@ func restore(data: ELProfile, document: Dictionary) -> bool:
 	load_note = ""
 	if (data.id == "el1" and not saved.has("charge_version")) or saved.heroes.any(func(h: Dictionary) -> bool: return not h.has("spell_uses")):
 		load_note = "Older save: spellbook charges reset because charge history was not recorded. Cards in hand were kept."
+	# Older saves may have stored active coloured modifiers on creatures in the plane.
+	if data.id == "el2" and creatures.values().any(func(c: Dictionary) -> bool: return in_plane(int(c.id))):
+		_refresh_armies()
+		_check_winner()
 	changed.emit()
 	return true

@@ -241,6 +241,10 @@ const GOAL_FIELDS := 24
 ## `commands` are played out in the model.
 static func ask(ctx: ELCombatSearch.Context, s: ELDuel, turns: int, budget: int, wide: bool, mode := -1, commands: Array = [], steps := 0, width := 0) -> Dictionary:
 	if not available or s.creatures.size() > MAX_UNITS or s.phase == ELDuel.Phase.FINISHED: return {}
+	# The compiled model packs the current modifier as a single value. If an
+	# aspect change can suppress or restore it, let the full duel search play
+	# the position. Diagnostic replay and move-list modes can still compare it.
+	if ctx.second and mode not in [2, 3, 4, 10, 11] and _plane_sensitive(ctx, s, mode): return {}
 	var state := PackedInt32Array()
 	var worn_rows := 0
 	for c: Dictionary in s.creatures.values(): worn_rows += c.enchantments.size()
@@ -1311,6 +1315,29 @@ static func _bound_only(s: ELDuel, c: Dictionary) -> bool:
 	if c.get("granted", []).count("NoUntap") != 1 or c.flags.has("NoAffect"): return false
 	for holder: Dictionary in s.creatures.values():
 		if s._enchantment_count(int(holder.id), "ERBN") > 0 and s.race(int(holder.id)) == s.race(id): return true
+	return false
+
+static func _plane_sensitive(ctx: ELCombatSearch.Context, s: ELDuel, mode: int) -> bool:
+	var exchange_target := false
+	for c: Dictionary in s.creatures.values():
+		if c.enchantments.is_empty() or not c.enchantments.any(func(e: Dictionary) -> bool: return s.coloured_enchantment(e.card)): continue
+		var id := int(c.id)
+		if s.in_plane(id) or s.pale(id): return true
+		exchange_target = exchange_target or (s.targetable(id) and s.can_change_aspect(id, true))
+	if not exchange_target or not s.creatures.keys().any(func(id: int) -> bool: return s.in_plane(id) and not s.has_flag(id, "NoTarget")):
+		return false
+	# Dissipate names Pale creatures only. A regular creature can be sent to
+	# the plane by Transfer Aspects when there's another to bring back.
+	var side := s.active_side()
+	for e: Dictionary in s.heroes[side].enchantments:
+		if e.card == "OEXC" and s.can_use_ability(side, "recycle:%d" % int(e.id)): return true
+	# Keep a hidden enemy hand out of the decision to fall back.
+	var knower := ctx.viewer if ctx.viewer >= 0 else ctx.ai
+	if fair_info(ctx, s, mode) and side != knower: return false
+	if s.available_mana(side) < s.cost("OEXC") + int(ELCatalog.HERO_ABILITIES.OEXC.cost): return false
+	var hand: Array = s.heroes[side].hand
+	for i in hand.size():
+		if hand[i] == "OEXC" and s.can_cast_from_hand(i): return true
 	return false
 
 ## How the engine names an enchantment on `holder` (a hero, or a creature's

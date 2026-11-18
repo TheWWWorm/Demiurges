@@ -1,13 +1,15 @@
 class_name ELTextFixes
 extends RefCounted
-## Corrections to original card and spell texts that describe something other
-## than what the games (and this remake) actually do. The player's own texts
-## stay the source: each correction replaces one phrase of the English or the
-## Russian original when that phrase is present, so other language editions
-## and re-worded versions of a text are left untouched.
+## Corrections to original localization and to card and spell texts that
+## disagree with the game rules. The player's own texts stay the source:
+## each correction replaces a phrase of the English or Russian original when
+## present, leaving other editions and re-worded texts alone.
 ##
 ## Each entry is [old phrase, new phrase]. An empty old phrase appends the new
 ## one, once.
+
+const EL2_ALPHA_TITLE_KEY := "HrNmE2SynthetMainHero"
+const EL2_ALPHA_TITLE_TYPO := 'Альфа-100 "Сталь"'
 
 ## Effects that the texts call "until end of turn" last until the end of the
 ## caster's opponent's turn: cast in the caster's own turn they also cover the
@@ -101,6 +103,7 @@ const EDITIONS := {
 			["где X – число уничтоженных созданий", "где X – число созданий, которые оно поразило, включая выживших"]],
 	},
 	"el2": {
+		EL2_ALPHA_TITLE_KEY: [[EL2_ALPHA_TITLE_TYPO, 'Альфа-100Ф "Сталь"']],
 		# Unsummoned creatures return to their original owner; Lock Aspect hurts the owner.
 		"PRBNTt": [["enchanted creature's controller loses life", "enchanted creature's owner loses life"]],
 		# Counts the caster's creatures that are not Pale, in either aspect.

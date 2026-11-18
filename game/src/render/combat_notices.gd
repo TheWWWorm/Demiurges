@@ -11,8 +11,9 @@ extends Control
 ## - first game: the cast message list (option CastMessages, also ShowChat),
 ##   top left. Each line holds 3 s, then fades over 0.5 s while the list
 ##   slides up.
-## - cast spells from both heroes as icons, top left, marked by caster.
-##   The second game adds abilities, ether disturbance and specialisations.
+## - first game: cast spells from both heroes as icons, marked by caster.
+##   The second game clears the list when a new side acts or a turn starts,
+##   and adds ability, ether disturbance and specialisation icons.
 ##   There are 5 per row at a 53 px step. The first game's "cast_icons"
 ##   setting enables this list with its own list border (ELListLook.HOVER).
 ## Approximations: list and icon origins, and the line font.
@@ -50,6 +51,8 @@ var _sounded := false
 var lines: Array = []
 ## Battle icons: texture, side and either a card or an explicit tooltip.
 var icons: Array = []
+var _turn_side := -1
+var _turn_serial := -1
 var viewer_side := 0:
 	set(side):
 		if viewer_side == side: return
@@ -97,6 +100,8 @@ func clear() -> void:
 	banner_age = 0.0
 	lines.clear()
 	icons.clear()
+	_turn_side = -1
+	_turn_serial = -1
 	queue_redraw()
 
 func show_banner(band: int) -> void:
@@ -135,6 +140,12 @@ func _add_icon(icon: Dictionary) -> void:
 func clear_icons() -> void:
 	icons.clear()
 	queue_redraw()
+
+func show_turn(side: int, serial: int) -> void:
+	if side < 0 or (side == _turn_side and serial == _turn_serial): return
+	_turn_side = side
+	_turn_serial = serial
+	clear_icons()
 
 func _process(delta: float) -> void:
 	if banner < 0 and lines.is_empty(): return
@@ -183,8 +194,7 @@ func _draw() -> void:
 		var cell := icon_rect(index)
 		draw_texture_rect(icon_texture(index), cell, false)
 		if frame != null: draw_texture_rect_region(frame, cell, _frame_region)
-		# Ether disturbance and specialisation art already distinguishes the sides.
-		if icon.has("rival_texture"): continue
+		if profile == null or profile.id != "el1": continue
 		# The bars differ in position as well as colour. Keep the art legible.
 		var own: bool = icon.side == viewer_side
 		var edge := Vector2(cell.position.x, cell.end.y - 3.0 * k if own else cell.position.y)

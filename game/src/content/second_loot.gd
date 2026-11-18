@@ -82,3 +82,19 @@ static func valid(list: Variant) -> bool:
 		var amount: Variant = entry[1]
 		if not (amount is int or (amount is float and amount == floorf(amount))) or amount < 1 or amount > ELResources.MAX_AMOUNT: return false
 	return true
+
+## Scripted spell and artifact loot, with its icon's card code for save games.
+static func message_rows(profile: ELProfile, items: Variant) -> Array[Dictionary]:
+	var rows: Array[Dictionary] = []
+	# Experience reports use the same panel with no item rows.
+	if not items is Array: return rows
+	for item: Variant in items:
+		if not item is Dictionary: continue
+		match item.get("kind"):
+			"spell":
+				var card := str(item.get("card", ""))
+				rows.append({"card": card, "name": profile.text(str(profile.table("CombatSpells").get(card, {}).get("Name", card)))})
+			"artifact":
+				var name := str(item.get("name", ""))
+				rows.append({"card": ELSecondArtifacts.spell(profile, {"name": name}), "name": ELMapPickups.artifact_title(profile, name)})
+	return rows

@@ -116,7 +116,7 @@ var ambient_players: Array[AudioStreamPlayer] = []
 ## Started sound paths (latest 40), for checks.
 var played: Array[String] = []
 var _view_key := ""
-## Second game: sounds only (no blazons or building particles).
+## Second game: map sounds and idle effects, without blazons.
 var second := false
 ## uid -> {model, folder, glide (player or null), glide_name, and the bound
 ## signal callables}: map figures with footsteps.
@@ -302,10 +302,30 @@ func sync() -> void:
 
 func _connect_model(uid: int) -> void:
 	var model: ELModel = world.object_models.get(uid)
-	if model == null or world.actors.has(uid): return
-	if _connected.get(uid) == model: return
+	if model == null or _connected.get(uid) == model: return
 	_connected[uid] = model
+	if world.actors.has(uid):
+		if not second or effects == null: return
+		var file := "CreaturesPFX/%s/Idle.pfx" % model.template
+		var archive: ELArchive = profile.archives.get("pfx")
+		if archive == null or not archive.has(file): return
+		var idle := _actor_idle_effect.bind(uid, model, file)
+		model.animation_started.connect(idle)
+		model.animation_looped.connect(idle)
+		_actor_idle_effect(model.clip, uid, model, file)
+		return
 	model.animation_looped.connect(_idle_round.bind(uid))
+
+## EL2 adventure creatures can carry their own animated glow, such as the
+## Wall of Lava. Keep the effect on the live figure for each idle round.
+func _actor_idle_effect(clip: String, uid: int, model: ELModel, file: String) -> void:
+	if world.actors.get(uid) != model: return
+	var name := "actor_idle:%d" % uid
+	var item := state.object(uid)
+	if clip != "cidle" or item.get("type") == "corpse" or not item.get("alive", false) or not _near_view(model.position) or not _in_sight(uid):
+		effects.finish(name)
+		return
+	effects.start(name, {"file": file, "x": 0.0, "y": 0.0, "z": 0.0, "loops": 1, "story": true}, 0.0, false, null, model)
 
 func _sync_blazon(item: Dictionary, row: Dictionary) -> void:
 	var uid := int(item.uid)

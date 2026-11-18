@@ -130,6 +130,16 @@ func _world_changed(data: Dictionary) -> void:
 		boxes.append(data)
 		_show_box()
 		return
+	# Scripted map loot is a modal box in the command queue. Battle loot is
+	# presented with the rest of the encounter rewards after returning to the map.
+	if data.kind == "loot" and state.map.profile.id == "el2" and encounter == null:
+		var profile := state.map.profile
+		var empty: bool = data.none
+		boxes.append({"speaker": -1, "text": profile.text("T_MB_RECEIVE_NO_LOOT" if empty else "T_MB_RECEIVE_LOOT"),
+			"question": false, "hook": false, "box": "message" if empty else "loot",
+			"items": ELSecondLoot.message_rows(profile, data.items), "script_loot": true})
+		_show_box()
+		return
 	if data.kind == "script_notice":
 		presentation.emit({"kind": "notice", "text": str(data.text)})
 		return
@@ -289,6 +299,7 @@ func advance(delta: float) -> void:
 		return
 	var action_held := action_wait > 0.0
 	if not action_held and not movement.is_empty(): _advance_movement(delta)
+	if not dialogue.is_empty(): return
 	if not travel.is_empty():
 		_advance_travel(delta)
 		return
@@ -370,6 +381,7 @@ func _show_box() -> void:
 	if box.has("offset"): dialogue.offset = box.offset
 	if box.has("items"): dialogue.items = box.items.duplicate(true)
 	if box.get("created", false): dialogue.created = true
+	if box.get("script_loot", false): dialogue.script_loot = true
 	presentation.emit({"kind": "dialogue", "dialogue": dialogue})
 
 func can_move() -> bool:
@@ -890,7 +902,7 @@ func _advance_movement(delta: float) -> void:
 		elif movement.get("strategic", false):
 			actor.ap -= cost
 			ELStrategy.entered(self, actor)
-		presentation.emit({"kind": "actor_moving", "id": actor.uid, "position": to, "moving": true})
+		presentation.emit({"kind": "actor_moving", "id": actor.uid, "position": to, "moving": true, "step": true})
 		# Second game: every cell change runs Hook_OnStep at once, whichever
 		# figure moved, as in the original, so the library's interception
 		# and the scripts' position checks see each tile the figure enters,
@@ -961,13 +973,13 @@ func use_object(hero_id: int, target_id: int, defender := -1) -> void:
 		if not state.vm.error.is_empty():
 			_fail(state.vm.error)
 			return
+		# Pre-use conversations turn their participants toward each other
+		# whether the hook allows the ordinary use to proceed or replaces it.
+		if state.map.profile.id == "el2" and target.type in ["hero", "monster"]:
+			var speaks := state.commands.slice(command_count).any(func(command: Dictionary) -> bool:
+				return command.kind in ["Text", "Question"] and not command.arguments.is_empty() and int(command.arguments[0]) == target_id)
+			if speaks or dialogue.get("actor", -1) == target_id: _face_opponents(actor, target)
 		if not result.is_empty() and not ELAdventureSession._truthy_flag(result[0]):
-			# Scripted conversations can replace the encounter that would have
-			# turned its participants toward each other (the Musician's warnings).
-			if state.map.profile.id == "el2" and target.type in ["hero", "monster"]:
-				var speaks := state.commands.slice(command_count).any(func(command: Dictionary) -> bool:
-					return command.kind in ["Text", "Question"] and not command.arguments.is_empty() and int(command.arguments[0]) == target_id)
-				if speaks or dialogue.get("actor", -1) == target_id: _face_opponents(actor, target)
 			return
 	# Looting is wholly scripted through Hook_OnPreUse.
 	if corpse: return

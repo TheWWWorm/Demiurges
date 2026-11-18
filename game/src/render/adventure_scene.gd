@@ -652,6 +652,8 @@ func retire_pickup(uid: int) -> bool:
 		var entry: Dictionary = entries[0]
 		var mesh: MultiMesh = entry.node.multimesh
 		if is_zero_approx(mesh.get_instance_transform(entry.index).basis.determinant()): return false
+	# A pile may still be brightening after the moving hero revealed its tile.
+	_fading.erase(uid)
 	_retiring_pickups[uid] = {"elapsed": 0.0, "basis": model.basis if model != null else Basis.IDENTITY}
 	return true
 
@@ -662,6 +664,7 @@ func _fade_pickups(delta: float) -> void:
 		var model: ELModel = object_models.get(uid)
 		if pickup.elapsed >= PICKUP_FADE:
 			if model != null: model.basis = pickup.basis
+			_fog_level[uid] = 0.0
 			_show_fogged(uid, false, 0.0)
 			_retiring_pickups.erase(uid)
 			continue

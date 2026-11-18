@@ -16,6 +16,8 @@ extends SceneTree
 ##   destination), it does not swing back to the hero;
 ## - #171: with free movement a right click stops the walking hero on the
 ##   tile it is stepping onto; its unspent movement points stay;
+## - #220: the walking hero's markers disappear as it reaches them;
+## - #221: a new mission's camera opens on the local player's castle;
 ## - #172: a right click on an artifact on the hero screen holds up its
 ##   tooltip until the button is let go;
 ## - #168: a map tooltip held up with the right button fits its text whatever
@@ -98,6 +100,10 @@ func _map_part() -> void:
 		state.explored[index] = before
 	var own := ELFirstScenario.castle_object(state, player)
 	check(not own.is_empty() and hud.minimap_known(own), "the player's own castle is on the minimap")
+	if not own.is_empty():
+		var size: Vector2i = view.director.grid.footprints[int(own.uid)].size
+		var centre := ELAdventureScene.world_position(own.x + (size.x - 1) * 0.5, own.y + (size.y - 1) * 0.5)
+		check(view.camera_goal().is_equal_approx(centre) and view.following == -1, "the new mission opens and stays centred on the player's castle")
 
 	# Turning the camera for a long time keeps the saved angle within one turn
 	# (an angle past the save's old limit made the save unloadable).
@@ -238,11 +244,15 @@ func _route_camera_part(view: ELAdventureView) -> void:
 	var points := int(hero.ap)
 	check(ELStrategy.free_mode(view.director), "free movement is on")
 	view._unhandled_input(_click(view.camera.unproject_position(spot), false))
+	var markers := _route_cells(view)
 	var waited := 0
 	while waited < 600 and Vector2i(int(hero.x), int(hero.y)) == start:
 		await process_frame
 		waited += 1
 	check(not view.director.movement.is_empty() and view.director.strategy.get("free", "") == "act", "the hero sets off on the second choice")
+	var reached := Vector2i(int(hero.x), int(hero.y))
+	var remaining_markers := _route_cells(view)
+	check(markers.has(reached) and not remaining_markers.has(reached) and not remaining_markers.is_empty(), "reaching a route tile removes its marker and keeps the ones ahead")
 	var right := InputEventMouseButton.new()
 	right.button_index = MOUSE_BUTTON_RIGHT
 	right.position = Vector2(200, 200)
@@ -262,6 +272,12 @@ func _route_camera_part(view: ELAdventureView) -> void:
 	view._cancel_map_order()
 	view.following = view._hero_id()
 	await frames(2)
+
+func _route_cells(view: ELAdventureView) -> Array[Vector2i]:
+	var cells: Array[Vector2i] = []
+	for mark: Node in view.route.get_children():
+		if mark.has_meta("route_cell"): cells.append(mark.get_meta("route_cell"))
+	return cells
 
 func _actor_facing(view: ELAdventureView) -> void:
 	var hero := view.state.object(view._hero_id())

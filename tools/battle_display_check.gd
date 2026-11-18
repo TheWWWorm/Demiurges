@@ -18,8 +18,8 @@ extends SceneTree
 ##   after the blow that sends it to the Colourless Plane;
 ## - a creature enchantment with a hit cue changes the shown stats at its
 ##   hit, not at the cast;
-## - tooltips and the hero panel read the displayed values while a sequence
-##   plays; clicks on figures are gated meanwhile;
+## - the hero panel and live-stat tooltips read the displayed values while a
+##   sequence plays; clicks on figures are gated meanwhile;
 ## - skipping (Space) jumps to the rules' values at once.
 ##
 ##   godot --headless --path game --script ../tools/battle_display_check.gd
@@ -60,6 +60,7 @@ func _edition(edition: String) -> void:
 	view._start(edition)
 	await _idle(view)
 	await _growth_and_drain(view, edition)
+	if edition == "el2": await _strike_enchantments(view)
 	await _first_strike(view, edition)
 	await _regeneration(view, edition)
 	await _turn_end(view, edition)
@@ -252,7 +253,10 @@ func _growth_and_drain(view: Node, edition: String) -> void:
 	panel_ok = view.hero_values.size() < 2 or String(view.hero_values[foe].text).begins_with("%d " % before.heroes[foe][0])
 	check(panel_ok, "%s fight: the hero panel shows the shown health" % edition)
 	var tip: String = view._creature_tip_text(attacker)
-	check(tip.contains("%d/%d" % [before.creatures[attacker][0], before.creatures[attacker][1]]), "%s fight: the creature tooltip reads the shown stats (%s)" % [edition, tip.get_slice("\n", 0)])
+	if edition == "el2":
+		check(tip.contains(ELEncyclopaedia.strength(view.profile, card)), "el2 fight: the creature tooltip reads the printed stats (%s)" % tip.get_slice("\n", 0))
+	else:
+		check(tip.contains("%d/%d" % [before.creatures[attacker][0], before.creatures[attacker][1]]), "el1 fight: the creature tooltip reads the shown stats (%s)" % tip.get_slice("\n", 0))
 	var samples := await _watch(view, [attacker], start)
 	var hit := _changed_at(samples, before.heroes[foe][0], func(s: Dictionary) -> int: return s.heroes[foe][0])
 	var heal := _changed_at(samples, before.heroes[side][0], func(s: Dictionary) -> int: return s.heroes[side][0])
@@ -267,6 +271,44 @@ func _growth_and_drain(view: Node, edition: String) -> void:
 	if grows:
 		check(not growth.is_empty() and not hit.is_empty() and float(growth.t) >= float(hit.t), "%s fight: the snake's growth shows after its hit, not before" % edition)
 	check(_shown(view, [attacker]) == _live(view, [attacker]), "%s fight: the shown values match the rules afterwards" % edition)
+
+func _strike_enchantments(view: Node) -> void:
+	await _clear(view)
+	await _attack_turn(view, 0)
+	var duel: ELDuel = view.duel
+	var snake := await _creature(view, 0, "TRSN", 2, 4)
+	var dispeller := await _creature(view, 0, "ORSH", 2, 4, ["Disenchant"])
+	if snake < 2 or dispeller < 2 or not duel.toggle_attack(snake) or not duel.toggle_attack(dispeller):
+		check(false, "#219: the snake and disenchanter can attack")
+		return
+	await _idle(view)
+	view.effects.requested.clear()
+	view._set_strip_preview(1)
+	duel.end_phase()
+	if duel.phase == ELDuel.Phase.DEFENCE: duel.end_phase()
+	var venom_title := duel.card_name("ETRS")
+	var saw_venom := false
+	var saw_dispel := false
+	var saw_icon := false
+	var timed := true
+	for i in 900:
+		view.ai_clock = -1000.0
+		await process_frame
+		var has_venom: bool = view._strip_enchantments(1).any(func(e: Dictionary) -> bool: return e.card == "ETRS")
+		var venom_fx: bool = view.effects.requested.has("NegEnchantment")
+		var dispel_fx: bool = view.effects.requested.has("Disenchant")
+		var icon: bool = view.rail.strip.items.any(func(item: Dictionary) -> bool: return item.meta.get("card") == "ETRS")
+		var tooltip := str(view._hero_tip(1)).contains(venom_title)
+		timed = timed and has_venom == (venom_fx and not dispel_fx) and (not icon or venom_fx) and tooltip == has_venom
+		saw_venom = saw_venom or has_venom
+		saw_dispel = saw_dispel or dispel_fx
+		saw_icon = saw_icon or icon
+		if not view._melee_busy(): break
+	check(timed and saw_venom and saw_dispel, "#219: the venom appears with the bite effect and leaves with the next strike's dispel effect")
+	await _idle(view)
+	check(saw_icon and not view.rail.strip.items.any(func(item: Dictionary) -> bool: return item.meta.get("card") == "ETRS"),
+		"#219: the actual enchantment strip shows the venom only during the exchange")
+	view._set_strip_preview(-1)
 
 ## A blocked fight between a fresh attacker and blocker; returns the samples
 ## and the values shown before it, or {} when the block cannot be set.

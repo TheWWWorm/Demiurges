@@ -10,6 +10,10 @@ extends SceneTree
 ##   spell the script awaits blinks in the hand.
 ## - #212 ether disturbance, active abilities and specialisations add their
 ##   original icons to the same battle notice list as casts.
+## - #202/#230 figure tooltips show printed stats and omit enchantments;
+##   #227 played-card icons clear as the side or turn changes.
+## - #225: a scripted attacker keeps its side of the authored battlefield
+##   when the local defender takes the left HUD seat.
 ##
 ##   godot --headless --path game --script ../tools/d2_battle_ui_check.gd
 ##
@@ -36,7 +40,9 @@ func _run() -> void:
 		print("SKIP: no el2 files configured (user://profiles.json)")
 	else:
 		var profile := ELProfile.new()
-		if profile.mount("el2", str(paths.el2)): _pale_strength(profile)
+		if profile.mount("el2", str(paths.el2)):
+			_pale_strength(profile)
+			_precombat_font(profile)
 		else: print("SKIP: el2 files could not be mounted")
 	for edition: String in ["el2", "el1"]: await _hot_seat_panels(edition)
 	await _casting_and_retry()
@@ -58,6 +64,25 @@ func _pale_strength(profile: ELProfile) -> void:
 		check(tip.contains(" X/X") and not tip.contains("-2"), "el2 #143: %s's card tooltip reads X/X" % code)
 	check(found >= 2, "el2 #143: the pale manifestations with variable strength are found (%d)" % found)
 	check(ELEncyclopaedia.strength(profile, "ORSH") == "%d/%d" % [int(profile.table("CombatCreatures").ORSH.Power), int(profile.table("CombatCreatures").ORSH.Toughness)], "el2 #143: a printed strength stays as it is")
+
+func _precombat_font(profile: ELProfile) -> void:
+	var hud := ELSecondAdventureHud.new()
+	hud.profile = profile
+	hud.face_bold = ELArtDropList.row_font()
+	for row: Dictionary in profile.table("Controls").values(): hud._controls[String(row.Name)] = row
+	var panel := ELSecondPrecombatView.new()
+	root.add_child(panel)
+	panel.build(hud)
+	var state := ELAdventureSession.new()
+	state.objects = {1: {"title": 'Альфа-100Ф "Сталь"'}, 2: {"title": 'Омега-300В "Безрассудный"'}}
+	panel.open(state, 1, 2, [-1, -1])
+	var name_label: Label = panel.labels.OpponentName
+	var font_size := name_label.get_theme_font_size("font_size")
+	var width := hud.face_bold.get_string_size(name_label.text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x
+	check(width <= name_label.size.x, "#228: the long Russian hero name fits its cell (%s/%s px)" % [width, name_label.size.x])
+	check(panel.labels.caption_0_0.get_theme_font_size("font_size") == 15, "#228: the level and health captions use 15 px")
+	panel.free()
+	hud.free()
 
 # --- #148 ---------------------------------------------------------------------
 
@@ -133,6 +158,7 @@ func _casting_and_retry() -> void:
 		if data.kind == "discard": discarded.append(data))
 	view._cast_card(0)
 	check(played == ["FRWA"] and (view._display_lagging() or not view._hits_waiting.is_empty()), "Fire Wave starts and has a hit still being presented")
+	check(view.notices.icons.size() == 1 and view.notices.icons[0].card == "FRWA", "#227: a cast appears in its own turn's notices")
 	view._cast_card(0)
 	check(discarded.size() == 1 and discarded[0].card == "STRT" and discarded[0].get("source_card") == "BATT", "the dying Bat discards the rat and identifies the cause")
 	view._cast_card(duel.heroes[0].hand.find("ZAPP"))
@@ -140,6 +166,7 @@ func _casting_and_retry() -> void:
 	view._end_phase()
 	check(played == ["FRWA", "FRWA", "ZAPP"] and duel.active_side() == 1, "two Fire Waves and Electroshock resolve before the turn passes")
 	view._skip_battle_presentation()
+	check(view.notices.icons.is_empty(), "#227: the previous turn's casts are gone once the next turn is shown")
 	var log_key := InputEventKey.new()
 	log_key.keycode = KEY_L
 	log_key.physical_keycode = KEY_L
@@ -175,8 +202,37 @@ func _casting_and_retry() -> void:
 	_duel_match_retry(view)
 	_creature_ability_buttons(view)
 	_battle_notice_icons(view)
+	_figure_tooltips(view)
+	await _arena_orientation(view)
 	view.queue_free()
 	await frames(2)
+
+func _arena_orientation(view: Node) -> void:
+	await view._begin_campaign("el2", {"file_name": "Maps/e2mission13", "script": "Maps/e2mission13"}, 1)
+	var campaign: ELAdventureView = view.campaign_view
+	check(campaign != null, "#225: the third Vital mission loads")
+	if campaign == null: return
+	var state := campaign.state
+	var attacker := int(state.vm.globals.ID_C_BOSS)
+	var defender := state.main_hero
+	var encounter := ELAdventureEncounter.new()
+	var prepared := encounter.prepare(state, attacker, defender)
+	check(prepared and encounter.swapped and encounter.attacker() == attacker and encounter.player_side() == 0,
+		"#225: the scripted Chaot remains the attacker and the player takes the left HUD seat")
+	if not prepared: return
+	campaign.director.encounter = encounter
+	# Use an arena with a positional waterfall to check the scenery effect too.
+	encounter.battle.setup.arena = "Blue.001"
+	view._begin_encounter(attacker, defender)
+	var arena: ELArena = view.arena
+	var local_position: Vector3 = view.models[0].position
+	var authored := arena.transform.affine_inverse() * local_position
+	check(is_equal_approx(authored.x, ELMeleePlayback.hero_position(1).x) and view.camera.position.x < local_position.x,
+		"#225: the local defender keeps its authored battlefield position and the camera stays behind it")
+	var source: Array = arena.definition.ParticlesCP
+	var waterfall := ELFigure.vector(Vector3(source[0], source[1], source[2]))
+	check(not view.effects.arena_emitters.is_empty() and view.effects.arena_emitters[0].node.position.is_equal_approx(arena.transform * waterfall),
+		"#225: the waterfall effect follows the rotated scenery")
 
 func _duel_match_retry(view: Node) -> void:
 	var pool := ELDuelPresets.shipped(view.profile)
@@ -291,6 +347,34 @@ func _battle_notice_icons(view: Node) -> void:
 		"#212: the specialisation icon describes the effect that triggered")
 	notices.viewer_side = 0
 	check(_notice_uses(notices, 1, profile.icon_at(917)), "#212: the opposing specialisation uses the opposing icon")
+	# The defender and the next attacker can be the same side. A new turn
+	# still clears the defence's icons even when that side keeps the screen.
+	var attacker := duel.next_id
+	duel._summon(1, "ORSH")
+	duel.creatures[attacker].sick = false
+	check(duel.toggle_attack(attacker) and duel.end_phase(), "#227: an attacker is declared before passing to defence")
+	view._skip_battle_presentation()
+	check(duel.phase == ELDuel.Phase.DEFENCE and notices.icons.is_empty(), "#227: switching to defence clears the previous side's icons")
+	duel.heroes[0].mana = 10
+	duel.heroes[0].hand = ["FOGG"]
+	duel.heroes[0].hand_slots = [-1]
+	check(duel.cast(0), "#227: the defending side casts Fog (%s)" % duel.error)
+	view._skip_battle_presentation()
+	check(notices.icons.size() == 1 and notices.icons[0].card == "FOGG", "#227: the defender sees their own cast")
+	duel.end_phase()
+	view._skip_battle_presentation()
+	check(duel.active_side() == 0 and duel.phase == ELDuel.Phase.ATTACK and notices.icons.is_empty(),
+		"#227: the defender's cast disappears when their attack starts")
+
+func _figure_tooltips(view: Node) -> void:
+	view._start("el2", {"first_side": 0}, null, 230)
+	var duel: ELDuel = view.duel
+	var id := duel.next_id
+	duel._summon(0, "ORSH")
+	var printed := ELCombatTooltip.spell_text(duel.profile, "ORSH", -1, duel.card_name("ORSH"))
+	duel._mark(id, "STSK", 2, 2)
+	duel._damage(id, 1)
+	check(view._creature_tip_text(id) == printed, "#202/#230: a wounded, enchanted creature's tooltip reads like its printed card")
 
 func _notice_uses(notices: ELCombatNotices, index: int, expected: AtlasTexture) -> bool:
 	if index >= notices.icons.size(): return false

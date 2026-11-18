@@ -4,7 +4,8 @@ extends SceneTree
 ## screen and the frame rate drop). For each game whose files are configured:
 ## - the hero tooltip (portrait and figure) lists each distinct enchantment
 ##   once, with its count ("Name ×12: text"), in the order of first copy;
-## - a creature's tooltip groups its enchantments the same way;
+## - the first game's creature tooltip groups its enchantments the same way;
+##   the second game's creature tooltip shows the printed card (#202/#230);
 ## - the battle tooltip frame stays inside the viewport however many lines
 ##   it holds;
 ## - per-frame work stays bounded: an idle battle with the enchanted hero
@@ -121,13 +122,17 @@ func _edition(edition: String) -> void:
 		await _fits(view, tip, "%s hero %s" % [edition, "portrait" if portrait else "figure"])
 	if duel.creatures.has(creature) and creature_cards.size() == 2:
 		var text: String = view._creature_tip_text(creature)
-		var first: String = duel.card_name(creature_cards[0])
-		var count := _count(duel.creatures[creature], creature_cards[0])
-		check(count >= 2 and text.count(first + " ×%d" % count) == 1, "%s: the creature tooltip groups %d copies of %s (%s)" % [edition, count, first, JSON.stringify(text.get_slice("\n\n", 1).left(80))])
-		var worn: PackedStringArray = view._enchantment_lines(duel.creatures[creature])
-		check(worn.size() == _distinct(duel.creatures[creature]).size(), "%s: the creature's enchantments give one line per card (%d)" % [edition, worn.size()])
-		var after := text.find(duel.card_name(creature_cards[1]))
-		check(after > text.find(first), "%s: the creature's lines keep the order of the first copies" % edition)
+		if edition == "el2":
+			var card := String(duel.creatures[creature].card)
+			check(text == ELCombatTooltip.spell_text(duel.profile, card, -1, duel.card_name(card)), "el2 #202/#230: the creature tooltip is the original card text")
+		else:
+			var first: String = duel.card_name(creature_cards[0])
+			var count := _count(duel.creatures[creature], creature_cards[0])
+			check(count >= 2 and text.count(first + " ×%d" % count) == 1, "%s: the creature tooltip groups %d copies of %s (%s)" % [edition, count, first, JSON.stringify(text.get_slice("\n\n", 1).left(80))])
+			var worn: PackedStringArray = view._enchantment_lines(duel.creatures[creature])
+			check(worn.size() == _distinct(duel.creatures[creature]).size(), "%s: the creature's enchantments give one line per card (%d)" % [edition, worn.size()])
+			var after := text.find(duel.card_name(creature_cards[1]))
+			check(after > text.find(first), "%s: the creature's lines keep the order of the first copies" % edition)
 		await _fits(view, ELCombatTooltip.text_content(text), edition + " creature")
 	# A tooltip far taller than the screen is shrunk to fit it.
 	var tall := PackedStringArray()

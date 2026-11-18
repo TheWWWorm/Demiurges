@@ -45,13 +45,15 @@ func open(exchange: ELSpellShop) -> void:
 	bag.clear()
 	deck.clear()
 	shop.clear()
+	var reserve: Array[String] = []
 	for card: String in hero.cards:
 		if deck.size() < DECK_SLOTS: deck.append({"card": card, "origin": "hero"})
-		else: bag.append({"card": card, "origin": "hero"})
+		else: reserve.append(card)
 	while deck.size() < DECK_SLOTS: deck.append({})
-	# The bag keeps the reserve order: unlike the inventory, the shop does not sort it.
 	for card: String in hero.spell_stock:
-		for copy in int(hero.spell_stock[card]): bag.append({"card": card, "origin": "hero"})
+		for copy in int(hero.spell_stock[card]): reserve.append(card)
+	for card: String in ELSecondInventory.sorted_bag(state.map.profile, hero, reserve):
+		bag.append({"card": card, "origin": "hero"})
 	for card: String in state.object(trade.shop_id).shop_stock: shop.append({"card": card, "origin": "shop"})
 	picked_zone = ""
 	picked = -1

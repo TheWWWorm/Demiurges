@@ -169,6 +169,12 @@ func decode(raw: Variant, profiles: Dictionary) -> Dictionary:
 		item.uid = int(item.uid)
 		for key: String in ["source_index", "x", "y", "rotation", "owner", "level", "health", "base_ap", "ap", "experience"]: item[key] = int(item[key])
 		item.node = map.objects[item.source_index].node if item.source_index >= 0 else {}
+		# Checkpoints from the old Russian localization keep the name in the hero record.
+		if map.profile.id == "el2" and item.type == "hero" and item.get("title") == ELTextFixes.EL2_ALPHA_TITLE_TYPO:
+			var variants: Dictionary = map.mobs.get(item.name, {})
+			var mob: Dictionary = variants.get(next.difficulty, variants.get(0, {}))
+			if mob.get("attrs", {}).get("ElkName") == ELTextFixes.EL2_ALPHA_TITLE_KEY:
+				item.title = ELTextFixes.apply("el2", ELTextFixes.EL2_ALPHA_TITLE_KEY, item.title)
 		for card: String in item.spell_stock: item.spell_stock[card] = int(item.spell_stock[card])
 		if not item.get("stock_separate", false):
 			# Older checkpoints counted the equipped book a second time in reserve.
@@ -389,6 +395,7 @@ func decode(raw: Variant, profiles: Dictionary) -> Dictionary:
 		# Box style (older saves have none: a TextDialog).
 		if box.get("box") in ["text", "message", "loot"]: kept.box = box.box
 		if box.get("created") is bool: kept.created = box.created
+		if box.get("script_loot") is bool: kept.script_loot = box.script_loot
 		if box.get("items") is Array:
 			kept.items = []
 			for row: Variant in box.items:
