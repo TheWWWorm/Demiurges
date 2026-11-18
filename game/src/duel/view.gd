@@ -2715,9 +2715,9 @@ func _event(data: Dictionary) -> void:
 				call_deferred("_remove_model", id)
 		"heal":
 			if data.get("card") == "CHNL":
-				var presented: bool = _effect_cast.get("card") == "CHNL"
+				var pending := _effect_cast if _effect_cast.get("card") == "CHNL" else {}
 				var delay := _display_delay(data)
-				var show_heal := _show_trade_heal.bind(int(data.target), int(data.amount), presented)
+				var show_heal := _show_trade_heal.bind(int(data.target), int(data.amount), pending)
 				if delay > 0.0 and is_inside_tree() and not _skipping_presentation:
 					_schedule_battle_cue(delay, show_heal)
 				else: show_heal.call()
@@ -3402,9 +3402,11 @@ func _finish_battle_cues() -> void:
 func _clear_feedback_hit() -> void:
 	_feedback_hit.clear()
 
-func _show_trade_heal(target: int, amount: int, presented: bool) -> void:
+func _show_trade_heal(target: int, amount: int, pending: Dictionary) -> void:
+	# If the release and heal are due together, play the release first.
+	if not pending.is_empty() and is_same(_effect_cast, pending): _start_cast_effects()
 	_float_number(target, -amount)
-	if not presented: return
+	if pending.is_empty(): return
 	battle_audio.effect("GainMana", models.get(1 - target))
 	_figure_effect("GainMana", 1 - target)
 	battle_audio.effect("GainLife", models.get(target))
