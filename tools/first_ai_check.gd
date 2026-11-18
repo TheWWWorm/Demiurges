@@ -81,7 +81,7 @@ func _run() -> void:
 	_finish()
 
 const CASES := ["a_castle", "a_mine", "b_teacher", "b_gnome", "b_spawn", "c_blocked", "d_unexplored", "d_guarded",
-	"e_unseen", "e_unreachable", "f_upgrade", "f_refill", "f_portal", "h_meteor", "j_free", "k_holds", "k_defend", "m_roles", "n_joint", "p_resolver", "p_monsters", "p_committed_duel", "q_lookahead",
+	"e_unseen", "e_unreachable", "f_upgrade", "f_refill", "f_portal", "h_meteor", "j_free", "k_holds", "k_defend", "m_roles", "n_joint", "p_resolver", "p_monsters", "p_committed_duel", "p_approach", "p_matchup_shop", "q_lookahead",
 	"s_saved", "t_patrol", "t_raid", "t_escort", "t_retreat", "t_doctrine", "t_story", "t_off",
 	"v_cast", "v_income", "v_runes", "v_portal", "v_upkeep", "v_mine",
 	"w_pickup", "w_commander", "w_promotion", "w_hidden", "w_pile", "w_peace", "w_scouts", "w_tinkerer", "w_siege", "w_scrolls", "w_unfound", "w_human",
@@ -687,6 +687,7 @@ func _case_p_monsters() -> void:
 	var winning_odds := ELFirstAIPlanner.win_chance(director, winner, mob)
 	check(winning_odds > odds, "P: a stronger hero has better odds (%.3f)" % winning_odds)
 	check(ELFirstAI.forecast_objective(director, winner, task), "P: the trials approve a favorable matchup")
+	check(int(forecast.get("forecast_extended", 0)) > 0, "P: the last active hero receives extra trials")
 	director.strategy.combats.append([winner.uid, mob.uid])
 	ELStrategy.advance(director)
 	check(results == [mob.uid, winner.uid] and winner.alive and not mob.alive and int(winner.experience) > before, "P: a computer winner gets the actual duel reward")
@@ -719,6 +720,101 @@ func _case_p_committed_duel() -> void:
 	ELStrategy.advance(director)
 	check(results == [mob.uid] and mob.alive and not hero.alive, "P: a committed hero fights to defeat even after surviving heavy damage")
 	check(director.error.is_empty() and director.encounter == null, "P: ether disturbance ends the headless duel and the turn can continue")
+
+func _case_p_approach() -> void:
+	if not smart: return
+	var director := _world()
+	var state := director.state
+	var hero := _hero(director, 2, 30, 90, 2)
+	var mob := _place(director, "monster", 34, 90, {"owner": 0})
+	director.interception.rebuild(state, director.grid)
+	var here := Vector2i(hero.x, hero.y)
+	var plain := director.grid.approach(here, mob)
+	var original: Vector2i = director.interception.preview(state, hero, plain)[-1]
+	var alternate := Vector2i(35, 91)
+	var kind := 0
+	while ELAdventureEncounter.terrain_arena(kind) == ELAdventureEncounter.terrain_arena(GRASS) or ELAdventureEncounter.terrain_arena(kind) == 4:
+		kind += 1
+	for delta: Vector2i in [Vector2i.ZERO, Vector2i.RIGHT, Vector2i.DOWN, Vector2i.ONE]:
+		var corner := alternate + delta
+		state.map.terrain[corner.y * (state.map.width + 1) + corner.x] = kind
+	check(ELAdventureEncounter.terrain_class(state.map, original) != ELAdventureEncounter.terrain_class(state.map, alternate), "P: a reachable guard tile on different terrain")
+	director.monster_forecasts[ELFirstAI._forecast_key(state, hero, mob, true, original)] = {"base_approved": false, "samples": 3}
+	director.monster_forecasts[ELFirstAI._forecast_key(state, hero, mob, true, alternate)] = {"base_approved": true, "narrow": false, "samples": 10, "extended": true}
+	var closed: Array[Vector2i] = []
+	var path := ELStrategy.screen_monster_route(director, hero, plain, mob, Vector2i(mob.x, mob.y), closed, {"remaining": 0})
+	for point: Vector2i in closed: director.grid._update_cell(point)
+	var stop: Array = director.interception.preview(state, hero, path)
+	check(not stop.is_empty() and director.interception.enemies(state, hero, stop[-1]).has(int(mob.uid)) and ELAdventureEncounter.terrain_class(state.map, stop[-1]) == ELAdventureEncounter.terrain_class(state.map, alternate), "P: the rejected terrain leaves a reachable alternate approach")
+
+func _case_p_matchup_shop() -> void:
+	if not smart: return
+	var director := _world()
+	var state := director.state
+	var hero := _hero(director, 2, 30, 90, 3)
+	var mob := _place(director, "monster", 33, 90, {"owner": 0, "level": 4})
+	var portal := _place(director, "portal", 29, 90)
+	_rich(state, 2)
+	var slot := _rune_slot(hero)
+	check(slot >= 0, "P: the matchup shopper has a refillable spell")
+	if slot < 0: return
+	hero.rune_uses[slot] = 0
+	director.interception.rebuild(state, director.grid)
+	var tile := Vector2i(mob.x, mob.y)
+	var upgraded := hero.duplicate(true)
+	upgraded.rune_uses[slot] = ELRunes.capacity(hero)
+	for guard_first in [false, true]:
+		director.monster_forecasts[ELFirstAI._forecast_key(state, hero, mob, guard_first, tile)] = {"base_approved": false, "samples": 3}
+		director.monster_forecasts[ELFirstAI._forecast_key(state, upgraded, mob, guard_first, tile)] = {"base_approved": true, "narrow": false, "samples": 10, "extended": true}
+	var preview := ELAdventureEncounter.new()
+	check(preview.prepare_map_ai_duel(state, int(hero.uid), int(mob.uid), 9026, tile, upgraded) and int(preview.battle.heroes[0].spell_uses[slot]) == ELRunes.capacity(hero), "P: trial preparation uses the hypothetical charges")
+	var stock: Dictionary = state.players[2].resources.duplicate()
+	var quote := ELFirstAIEconomy.matchup_purchase(director, hero, portal, mob)
+	check(int(quote.get("slot", -1)) == slot and int(quote.get("amount", 0)) == ELRunes.capacity(hero), "P: a refill that changes the forecast is selected")
+	check(int(hero.rune_uses[slot]) == 0 and state.players[2].resources == stock, "P: quoting the refill leaves runes and resources intact")
+	var ai := ELFirstAI.data(state, 2)
+	ai.assigned = [[int(hero.uid), {"kind": "shop", "target": int(portal.uid), "guard": int(mob.uid)}]]
+	ELFirstAIEconomy.visit(director, hero, portal)
+	check(int(hero.rune_uses[slot]) == ELRunes.capacity(hero) and state.players[2].resources != stock, "P: the targeted visit pays through the ordinary portal transaction")
+	check(not ai.assigned.is_empty() and ai.assigned[0][1]["kind"] == "monster" and int(ai.assigned[0][1]["target"]) == int(mob.uid), "P: the hero resumes its guard objective after resupplying")
+
+	# Price a new spell together with its runes and carry the quote through
+	# both actual visits. The existing portal is reachable from the shop.
+	var card := ""
+	var colour := ELFirstSpellShop.hero_color(profile, hero)
+	for code: String in profile.table("CombatSpells"):
+		if profile.table("CombatSpells")[code].get("Color") != colour or hero.cards.has(code) or ELRunes.unlimited(profile, hero, code) or ELCatalog.rule(profile, code).is_empty(): continue
+		if ELFirstAIEconomy._total(ELRuneShop.price(profile, hero, portal, code)) <= 0: continue
+		card = code
+		break
+	check(not card.is_empty() and protos.has("shop"), "P: a compatible spell shop and finite spell")
+	if card.is_empty() or not protos.has("shop"): return
+	var node: Dictionary = protos.shop.node.duplicate(true)
+	node.children = node.children.filter(func(child: Dictionary) -> bool: return child.tag != "spells")
+	node.children.append({"tag": "spells", "attrs": {"level": 1}, "children": [{"tag": "spell", "text": card}]})
+	var shop := _place(director, "shop", 25, 84, {"node": node})
+	var replace := ELFirstAIEconomy._replacement_slot(state, hero, card)
+	var net := hero.duplicate(true)
+	var under := ELRunes.under(hero)
+	if ELRunes.unlimited(profile, hero, hero.cards[replace]): under[replace] = hero.cards[replace]
+	net.cards[replace] = card
+	net.rune_uses[replace] = mini(ELFirstAIEconomy.RUNE_LOAD, ELRunes.capacity(hero))
+	ELRunes.set_under(net, under)
+	for guard_first in [false, true]:
+		director.monster_forecasts[ELFirstAI._forecast_key(state, hero, mob, guard_first, tile)] = {"base_approved": false, "samples": 3}
+		director.monster_forecasts[ELFirstAI._forecast_key(state, net, mob, guard_first, tile)] = {"base_approved": true, "narrow": false, "samples": 10, "extended": true}
+	ai.assigned = [[int(hero.uid), {"kind": "shop", "target": int(shop.uid), "guard": int(mob.uid)}]]
+	ELFirstAIEconomy.visit(director, hero, shop)
+	check(hero.cards[replace] == card and int(hero.rune_uses[replace]) == 0, "P: buying the spell alone leaves its runes empty")
+	check(not ai.assigned.is_empty() and int(ai.assigned[0][1].get("target", -1)) == int(portal.uid), "P: the next objective carries the refill to the portal")
+	if ai.assigned.is_empty(): return
+	ai.assigned[0][1] = ELFirstAI._task(state, JSON.parse_string(JSON.stringify(ai.assigned[0][1])))
+	check(ai.assigned[0][1].has("refill"), "P: the matchup refill survives save validation")
+	for guard_first in [false, true]:
+		director.monster_forecasts[ELFirstAI._forecast_key(state, hero, mob, guard_first, tile)] = {"base_approved": false, "samples": 3}
+	ELFirstAIEconomy.visit(director, hero, portal)
+	check(int(hero.rune_uses[replace]) == int(net.rune_uses[replace]), "P: the portal fills the planned copy")
+	check(not ai.assigned.is_empty() and ai.assigned[0][1].get("kind") == "monster", "P: the purchased book leads back to the guard")
 
 # --- Q: short strategic lookahead --------------------------------------------
 

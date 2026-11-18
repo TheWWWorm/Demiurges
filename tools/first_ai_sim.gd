@@ -7,7 +7,7 @@ extends SceneTree
 ##   godot --headless --path game --script ../tools/first_ai_sim.gd -- [--map=<id>|all] [--days=40]
 ##         [--campaign=Good|Evil] [--smart=true] [--free=true] [--difficulty=1] [--seed=212]
 ##         [--opponent=still|active] [--estimate=false] [--lookahead=true] [--living=false]
-##         [--list] [--quiet] [--dump]
+##         [--list] [--quiet] [--dump] [--balance]
 ##
 ## `--list` prints the single map ids. Without `--map` the first catalogue map
 ## with a spell shop is played; `--campaign` plays that campaign's chapters
@@ -19,7 +19,9 @@ extends SceneTree
 ## estimate instead of the original level rule. `--lookahead=false` turns
 ## off the smarter planner's short lookahead, `--living=true` turns on the
 ## living-world switch (patrols, raids, escorts, retreats, doctrines). `--dump` adds each player's
-## ether, global spells, books and known shops at the end.
+## ether, global spells, books and known shops at the end. `--balance` adds
+## first resource-site capture, planning counters and forecast versus duel
+## outcome as one JSON line per faction or battle.
 ##
 ## Each computer player's summary counts, per hero and day:
 ##   idle         no objective at the end of the day;
@@ -106,6 +108,7 @@ func _stat(player: int) -> Dictionary:
 	return stats[player]
 
 func _play(profile: ELProfile, entry: Dictionary, days: int, need_shop: bool) -> String:
+	seed(int(_arg("seed", "212")))
 	var map := ELAdventureMap.new()
 	if not map.load_map(profile, str(entry.id)):
 		print("SKIP %s: %s" % [entry.id, map.error])
@@ -132,6 +135,11 @@ func _play(profile: ELProfile, entry: Dictionary, days: int, need_shop: bool) ->
 	if planner != null and "lookahead" in planner: planner.set("lookahead", _arg("lookahead", "true") == "true")
 	director.fast_mode = true
 	director.set_meta("first_ai_stats", {})
+	var balance := _arg("balance", "false") == "true"
+	if balance: director.set_meta("first_ai_balance", true)
+	var capture := {}
+	var participants := ELFirstAI.computer_players(state) if balance else []
+	var timeline := {"turn": 0}
 	stats = {}
 	threats = {}
 	stuck = false
@@ -139,6 +147,10 @@ func _play(profile: ELProfile, entry: Dictionary, days: int, need_shop: bool) ->
 	var fell := {}
 	state.event.connect(func(data: Dictionary):
 		match data.get("kind"):
+			"site_captured":
+				var player := int(data.player)
+				if balance and player in participants and not capture.has(player) and state.object(data.id).get("group") in ["mines", "mana_nodes"]:
+					capture[player] = int(timeline.turn)
 			"skill_learned":
 				var hero := state.object(data.id)
 				if int(hero.owner) != state.current_player: _stat(int(hero.owner)).skills += 1
@@ -192,6 +204,7 @@ func _play(profile: ELProfile, entry: Dictionary, days: int, need_shop: bool) ->
 	var last_globals := {}
 	var outcome_day := -1
 	for day in days:
+		timeline.turn = day + 1
 		for item: Dictionary in state.objects.values():
 			if item.get("type") == "hero" and item.get("alive", false) and item.has("cards") and item.has("rune_uses"): books[int(item.uid)] = {"cards": item.cards.duplicate(), "uses": item.rune_uses.duplicate()}
 		var before := _snapshot()
@@ -251,6 +264,16 @@ func _play(profile: ELProfile, entry: Dictionary, days: int, need_shop: bool) ->
 			if item.get("group") in ["mines", "mana_nodes"] and int(item.get("owner", -1)) == player: sites += 1
 		print("SUMMARY P%d: heroes %s, spells bought %d, runes bought %d, skills %d, recruits %d, global spells %d, idle hero-days %d/%d, shops known %d, %s" % [player, str(levels), s.spells, s.runes, s.skills, s.recruits, s.globals, s.idle, s.hero_days, known, _resources(player)])
 		print("METRICS P%d: no-progress %d/%d, stalled %d, unused movement %d%%, lost objective-days %d, unexplored steps %d, guard steps %d, threats %d answered %d (avg %.1f days), sites held %d, duplicate assignments %d, ether income %d -> %d" % [player, s.no_progress, s.hero_days, s.stalled, int(100.0 * s.ap_left / maxi(1, s.ap_total)), s.lost, s.unexplored_steps, s.guard_steps, s.threats, s.answered, float(s.response_days) / maxi(1, s.answered), sites, s.duplicates, int(income.get(player, 0)), int(ELStrategy.mana_budget(state, player).income)])
+	if balance:
+		for player: int in participants:
+			var s := _stat(player)
+			var sites := 0
+			for item: Dictionary in state.objects.values():
+				if item.get("group") in ["mines", "mana_nodes"] and int(item.get("owner", -1)) == player: sites += 1
+			print("FACTION " + JSON.stringify({"player": player, "first_site_turn": capture.get(player), "sites": sites, "no_progress": s.no_progress, "hero_days": s.hero_days, "reasons": timing.get("reasons", {}).get(player, {})}))
+		for outcome: Dictionary in timing.get("monster_outcomes", []):
+			print("MATCHUP " + JSON.stringify(outcome))
+		print("FORECAST " + JSON.stringify({"trials": int(timing.get("forecast_trials", 0)), "extended": int(timing.get("forecast_extended", 0)), "usec": int(timing.get("forecast_usec", 0))}))
 	var passes := maxi(1, int(timing.get("passes", 0)))
 	print("RESULT: outcome %s day %d, castles fallen %s, duplicate assignments after passes %d, planning passes %d, %.1f ms per pass (objectives %.1f, matching %.1f of which lookahead %.1f, orders %.1f), slowest pass %.1f ms" % [state.outcome if not state.outcome.is_empty() else "-", outcome_day if outcome_day >= 0 else int(state.day), str(fallen), int(timing.get("duplicates", 0)), int(timing.get("passes", 0)), float(timing.get("usec", 0)) / 1000.0 / passes, float(timing.get("objectives", 0)) / 1000.0 / passes, float(timing.get("assign", 0)) / 1000.0 / passes, float(timing.get("lookahead", 0)) / 1000.0 / passes, float(timing.get("command", 0)) / 1000.0 / passes, float(timing.get("slowest", 0)) / 1000.0])
 	if not director.error.is_empty():

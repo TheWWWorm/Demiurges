@@ -94,18 +94,18 @@ static func second_result(state: ELAdventureSession, first: int, second: int) ->
 	var b := int(state.object(second).get("level", 0))
 	return first if a > b else (second if b > a else -1)
 
-func prepare_map_ai_duel(session: ELAdventureSession, first: int, second: int, seed_value: int, forecast_at := Vector2i(-1, -1)) -> bool:
+func prepare_map_ai_duel(session: ELAdventureSession, first: int, second: int, seed_value: int, forecast_at := Vector2i(-1, -1), forecast_hero := {}) -> bool:
 	state = session
 	hero_id = first
 	opponent_id = second
 	map_ai_duel = true
-	return _prepare_duel(session, second, seed_value, forecast_at)
+	return _prepare_duel(session, second, seed_value, forecast_at, forecast_hero)
 
-func _prepare_duel(state: ELAdventureSession, defender: int, seed_value := -1, forecast_at := Vector2i(-1, -1)) -> bool:
+func _prepare_duel(state: ELAdventureSession, defender: int, seed_value := -1, forecast_at := Vector2i(-1, -1), forecast_hero := {}) -> bool:
 	var options := {"adventure": true, "arena": "Green.001", "players": []}
 	var profile := state.map.profile
 	for id: int in [hero_id, opponent_id]:
-		var actor := state.object(id)
+		var actor := forecast_hero if int(forecast_hero.get("uid", -1)) == id else state.object(id)
 		if actor.is_empty() or not actor.alive: return _fail("The encounter character is unavailable.")
 		# A campaign lord fights in the look of its level step (ELHeroLooks).
 		var shape := ELHeroLooks.worn(profile, actor)

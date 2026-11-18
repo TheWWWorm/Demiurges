@@ -230,6 +230,131 @@ static func _upgrade_affordable(state: ELAdventureSession, hero: Dictionary, sho
 	for kind: String in stock: spare[kind] = int(floor(int(stock[kind]) * UPGRADE_SHARE))
 	return ELResources.can_pay("el1", spare, ELBuildings.upgrade_price(state.map.profile, shop, colour))
 
+## Quote a small number of purchases against the guard that blocks expansion.
+## Return purchases supported by trial duels, including an interim upgrade
+## when paired trials improve enough. Price the spell and its runes together.
+static func matchup_purchase(director: ELAdventureDirector, hero: Dictionary, shop: Dictionary, guard: Dictionary, refill: Array = []) -> Dictionary:
+	if not is_shop(shop) or not guard.get("alive", false): return {}
+	var state := director.state
+	var goal := {"kind": "monster", "target": int(guard.uid)}
+	if ELFirstAI.forecast_objective(director, hero, goal): return {}
+	var profile := state.map.profile
+	var budget := _budget(state, hero)
+	var attempts := {"remaining": 2}
+	if shop.type == "rune_shop":
+		var slots: Array = range(hero.cards.size())
+		slots.sort_custom(func(a: int, b: int): return spell_value(profile, hero.cards[a]) > spell_value(profile, hero.cards[b]))
+		var preferred := -1
+		if refill.size() == 3 and int(refill[0]) in slots and hero.cards[int(refill[0])] == refill[1]:
+			preferred = int(refill[0])
+			slots.erase(preferred)
+			slots.push_front(preferred)
+		for slot: int in slots:
+			var uses := int(hero.rune_uses[slot])
+			if uses < 0 or uses >= ELRunes.capacity(hero): continue
+			var price := ELRuneShop.price(profile, hero, shop, hero.cards[slot])
+			if _total(price) <= 0: continue
+			var limit := ELRunes.capacity(hero) - uses
+			if slot == preferred: limit = mini(limit, maxi(0, int(refill[2]) - uses))
+			var amount := _affordable_runes(budget, price, limit)
+			if amount == 0: continue
+			var preview := hero.duplicate(true)
+			preview.rune_uses[slot] += amount
+			ELFirstAI.note_stat(director, int(hero.owner), "affordable_upgrade")
+			if ELFirstAI.upgrade_improves_guard(director, hero, preview, guard, attempts): return {"slot": slot, "amount": amount}
+			if int(attempts.remaining) <= 0: break
+		return {}
+	var stock := ELFirstSpellShop.authored_stock(profile, shop, ELFirstSpellShop.hero_color(profile, hero))
+	stock.sort_custom(func(a: String, b: String): return spell_value(profile, a) > spell_value(profile, b))
+	var portals: Variant = null
+	var checked := {}
+	for card: String in stock:
+		if checked.has(card) or hero.cards.count(card) >= MAX_COPIES or ELCatalog.rule(profile, card).is_empty(): continue
+		checked[card] = true
+		var slot := _replacement_slot(state, hero, card)
+		if slot < 0: continue
+		var price := ELFirstSpellShop.price(profile, hero, hero.cards, card, slot, state.map.id.begins_with("mission17") or state.map.id.begins_with("mission27"))
+		if not ELResources.can_pay("el1", budget, price): continue
+		var after := budget.duplicate()
+		ELResources.pay("el1", after, price)
+		var uses := -1
+		var portal_id := -1
+		if not ELRunes.unlimited(profile, hero, card):
+			if state.map.id.begins_with("mission17") or state.map.id.begins_with("mission27"): uses = 100000
+			else:
+				if portals == null: portals = _portals(state, int(hero.owner), hero)
+				uses = 0
+				for portal: Dictionary in portals:
+					var unit := ELRuneShop.price(profile, hero, portal, card)
+					if _total(unit) <= 0: continue
+					var amount := _affordable_runes(after, unit, mini(RUNE_LOAD, ELRunes.capacity(hero)))
+					if amount <= uses or ELFirstAI._route_cost(director, hero, portal, true, true) == ELFirstAI.NONE: continue
+					uses = amount
+					portal_id = int(portal.uid)
+				if uses == 0: continue
+		var preview := hero.duplicate(true)
+		var under := ELRunes.under(hero)
+		if uses < 0: under[slot] = ""
+		elif ELRunes.unlimited(profile, hero, hero.cards[slot]): under[slot] = hero.cards[slot]
+		preview.cards[slot] = card
+		preview.rune_uses[slot] = uses
+		ELRunes.set_under(preview, under)
+		ELFirstAI.note_stat(director, int(hero.owner), "affordable_upgrade")
+		if ELFirstAI.upgrade_improves_guard(director, hero, preview, guard, attempts): return {"slot": slot, "spell": card, "portal": portal_id, "uses": uses}
+		if int(attempts.remaining) <= 0: break
+	return {}
+
+static func _affordable_runes(budget: Dictionary, unit: Dictionary, limit: int) -> int:
+	var amount := limit
+	for resource: String in unit:
+		if int(unit[resource]) > 0: amount = mini(amount, int(budget.get(resource, 0)) / int(unit[resource]))
+	return amount
+
+static func _replacement_slot(state: ELAdventureSession, hero: Dictionary, card: String) -> int:
+	var slot := -1
+	var weakest := INF
+	for index in hero.cards.size():
+		if hero.cards[index] == card: continue
+		var points := spell_value(state.map.profile, hero.cards[index])
+		if int(hero.rune_uses[index]) == 0: points -= EMPTY
+		elif int(hero.rune_uses[index]) > 0: points += KEEP
+		if points < weakest:
+			weakest = points
+			slot = index
+	return slot
+
+## Requote on arrival. A lost guard or changed price invalidates the old
+## plan. Actual purchases go through the ordinary shop transactions.
+static func _visit_for_matchup(director: ELAdventureDirector, hero: Dictionary, shop: Dictionary, task: Dictionary, assigned: Array) -> void:
+	var state := director.state
+	var guard := state.object(task.guard)
+	var plan := matchup_purchase(director, hero, shop, guard, task.get("refill", []))
+	var purchased := false
+	if plan.has("spell"):
+		var trade := ELFirstSpellShop.new()
+		purchased = trade.open(state, int(hero.uid), int(shop.uid), true, int(hero.owner)) and trade.replace(int(plan.slot), str(plan.spell)) and trade.commit()
+	elif plan.has("amount"):
+		var trade := ELRuneShop.new()
+		purchased = trade.open(state, int(hero.uid), int(shop.uid), true, int(hero.owner)) and trade.set_amount(int(plan.slot), int(plan.amount)) and trade.commit()
+	if purchased:
+		ELBuildings.capture(state, shop, int(hero.owner))
+		ELFirstAI.note_stat(director, int(hero.owner), "matchup_purchase")
+	var next := int(plan.get("portal", -1))
+	var kind := "shop" if next >= 0 else "monster"
+	if next < 0: next = int(task.guard)
+	var reserved := assigned.any(func(pair: Array) -> bool: return int(pair[0]) != int(hero.uid) and pair[1].get("kind") == kind and int(pair[1].get("target", -1)) == next)
+	var kept: Dictionary = {"kind": kind, "target": next}
+	if kind == "shop":
+		kept.guard = int(task.guard)
+		kept.refill = [int(plan.slot), str(plan.spell), int(plan.uses)]
+	var ready: bool = purchased or (guard.get("alive", false) and ELFirstAI.forecast_objective(director, hero, kept))
+	for index in assigned.size():
+		var pair: Array = assigned[index]
+		if int(pair[0]) != int(hero.uid): continue
+		if ready and not reserved: pair[1] = kept
+		else: assigned.remove_at(index)
+		break
+
 ## The hero stands beside the shop: buy, as the player's screen would. A
 ## player with resources to spare then upgrades the shop.
 static func visit(director: ELAdventureDirector, hero: Dictionary, shop: Dictionary) -> void:
@@ -237,6 +362,12 @@ static func visit(director: ELAdventureDirector, hero: Dictionary, shop: Diction
 	if not applies(director):
 		ELBuildings.capture(state, shop, int(hero.owner))
 		return
+	var assigned: Array = ELFirstAI.data(state, int(hero.owner)).assigned
+	for pair: Array in assigned:
+		var task: Dictionary = pair[1]
+		if int(pair[0]) == int(hero.uid) and task.get("kind") == "shop" and int(task.get("target", -1)) == int(shop.uid) and task.has("guard"):
+			_visit_for_matchup(director, hero, shop, task, assigned)
+			return
 	# A portal whose upgrade the visit would pay anyway is upgraded first when
 	# its cheaper runes buy at least as many.
 	if shop.type == "rune_shop" and _upgrade_first(state, hero, shop):

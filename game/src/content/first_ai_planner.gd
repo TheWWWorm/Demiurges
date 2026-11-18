@@ -127,6 +127,7 @@ static var _leg_cache := {}
 ## Living-world answers of the current matching (story actors, doctrine
 ## tables, defended sites); null outside it, so nothing stale is kept.
 static var _living_cache: Variant = null
+static var _matchup_shops := {}
 
 # --- Matching ------------------------------------------------------------------
 
@@ -186,6 +187,7 @@ static func _assign(director: ELAdventureDirector, player: int, heroes: Array[Di
 		if key.begins_with("explore:"): scouted.append(Vector2i(int(key.get_slice(":", 1)), int(key.get_slice(":", 2))))
 	# Columns: objective key -> task; utilities[row][key] = points.
 	var columns := {}
+	_matchup_shops.clear()
 	var utilities: Array[Dictionary] = []
 	# Each row's options not priced yet, best bound first.
 	var rest: Array = []
@@ -274,6 +276,7 @@ static func _assign(director: ELAdventureDirector, player: int, heroes: Array[Di
 				if not _matched(choice, index, keys, utilities): continue
 				var column := choice[index]
 				if not ELFirstAI.forecast_objective(director, rows[index], columns[keys[column]], budgets[index]):
+					ELFirstAI.note_stat(director, player, "fight_assignment_rejected")
 					clash = [index, column]
 					break
 		if clash.is_empty(): break
@@ -293,7 +296,9 @@ static func _assign(director: ELAdventureDirector, player: int, heroes: Array[Di
 	for index in rows.size():
 		var uid := int(rows[index].uid)
 		var held: Dictionary = current.get(uid, {})
-		if _matched(choice, index, keys, utilities): chosen[uid] = columns[keys[choice[index]]]
+		if _matched(choice, index, keys, utilities):
+			var key: String = keys[choice[index]]
+			chosen[uid] = _matchup_shops.get(uid, {}).get(key, columns[key])
 		elif not held.is_empty() and not utilities[index].has(ELFirstAI._key(held, uid)) and not given.has(ELFirstAI._key(held, uid)) and ELFirstAI.forecast_objective(director, rows[index], held, budgets[index]): chosen[uid] = held
 		else: chosen[uid] = {}
 	for uid: int in current:
@@ -301,10 +306,12 @@ static func _assign(director: ELAdventureDirector, player: int, heroes: Array[Di
 		assigned.erase(uid)
 	for uid: int in chosen:
 		var task: Dictionary = chosen[uid]
-		if task.is_empty(): continue
+		if task.is_empty():
+			ELFirstAI.note_stat(director, player, "unassigned")
+			continue
 		var key := ELFirstAI._key(task, uid)
 		var held: Dictionary = current.get(uid, {})
-		if held.is_empty() or ELFirstAI._key(held, uid) != key:
+		if held.is_empty() or ELFirstAI._key(held, uid) != key or task.get("guard", -1) != held.get("guard", -1):
 			task = task.duplicate()
 			task.erase("tries")
 			task.erase("mark")
@@ -568,20 +575,24 @@ static func utility(director: ELAdventureDirector, hero: Dictionary, role: int, 
 				gain = monster_gain(director, hero, role, state.object(item.monster))
 			walk = _walk(director, hero, item, false, exact)
 		"shop":
-			# The bound assumes a full visit (as many purchases as its worth
-			# counts); only shortlisted shops are priced.
-			var count := ELFirstAIEconomy.wants(director, hero, item) if exact else (ELFirstAIEconomy.SPELLS_PER_VISIT if item.get("type") == "el1_spell_shop" else RUNE_COUNT)
-			if count == 0 or not ELFirstAIEconomy.is_shop(item): return -INF
-			walk = _walk(director, hero, item, true, exact)
-			if walk < 0.0 and role == 0 and exact:
-				var fought := ELFirstAI._fought_cost(director, hero, item)
-				walk = -1.0 if fought == ELFirstAI.NONE else float(fought)
-				_path = ELFirstAI.last_path
-			elif walk < 0.0 and not exact: walk = _walk(director, hero, item, false, false)
-			if walk < 0.0: return -INF
-			if exact and ELFirstAIEconomy.trip_cost(state, hero, item, int(walk), count) < 0: return -INF
-			gain = 12.0 * count if item.get("type") == "el1_spell_shop" else 3.0 * mini(count, RUNE_COUNT)
-			if item.get("type") == "rune_shop" and ELFirstAIEconomy.empty_copies(hero) > 0: gain += 60.0
+			if task.has("guard"):
+				walk = _walk(director, hero, item, true, exact)
+				gain = 35.0
+			else:
+				# The bound assumes a full visit (as many purchases as its worth
+				# counts); only shortlisted shops are priced.
+				var count := ELFirstAIEconomy.wants(director, hero, item) if exact else (ELFirstAIEconomy.SPELLS_PER_VISIT if item.get("type") == "el1_spell_shop" else RUNE_COUNT)
+				if count == 0 or not ELFirstAIEconomy.is_shop(item): return -INF
+				walk = _walk(director, hero, item, true, exact)
+				if walk < 0.0 and role == 0 and exact:
+					var fought := ELFirstAI._fought_cost(director, hero, item)
+					walk = -1.0 if fought == ELFirstAI.NONE else float(fought)
+					_path = ELFirstAI.last_path
+				elif walk < 0.0 and not exact: walk = _walk(director, hero, item, false, false)
+				if walk < 0.0: return -INF
+				if exact and ELFirstAIEconomy.trip_cost(state, hero, item, int(walk), count) < 0: return -INF
+				gain = 12.0 * count if item.get("type") == "el1_spell_shop" else 3.0 * mini(count, RUNE_COUNT)
+				if item.get("type") == "rune_shop" and ELFirstAIEconomy.empty_copies(hero) > 0: gain += 60.0
 		"explore":
 			var tile := Vector2i(int(task.tile[0]), int(task.tile[1]))
 			gain = reveal(state, player_of(hero), tile) / 4.0
@@ -614,14 +625,18 @@ static func utility(director: ELAdventureDirector, hero: Dictionary, role: int, 
 			walk = _walk(director, hero, item, false, exact)
 		_:
 			return -INF
-	if walk < 0.0: return -INF
+	if walk < 0.0:
+		if exact: ELFirstAI.note_stat(director, int(hero.owner), "objective_no_route")
+		return -INF
 	# Battles the route forces on the way: movement stops in each other
 	# hostile guard area it enters, and its guard strikes first.
 	if exact:
 		var through := _route_survival(director, hero, _path, int(task.get("target", -1)))
 		if through < 1.0:
 			gain = through * gain - (1.0 - through) * worth(hero)
-			if gain < 0.0 and not last: return -INF
+			if gain < 0.0 and not last:
+				ELFirstAI.note_stat(director, int(hero.owner), "objective_route_risk")
+				return -INF
 	if living(director) and not story_actor(state, hero):
 		# Low on runes: back to a portal, and no new fights meanwhile.
 		if low_charges(state, hero):
@@ -826,6 +841,8 @@ static func _look(director: ELAdventureDirector, hero: Dictionary, role: int, po
 	for id: int in director.interception.zones:
 		var guard := state.object(id)
 		if guard.get("type") == "monster" and state.hostile(guard, hero) and ELFog.explored(state, player, Vector2i(int(guard.x), int(guard.y))): bodies.append(id)
+	var blocked_guard := {}
+	var blocked_value := 0.0
 	for entry: Array in sites.slice(0, LOOK_SITES):
 		if _legs >= LOOK_LEGS: break
 		var task: Dictionary = entry[2]
@@ -870,12 +887,18 @@ static func _look(director: ELAdventureDirector, hero: Dictionary, role: int, po
 			var act: Dictionary = by_key[key]
 			var unlocked := float(act.gain) - TURN * float(act.walk) / day + 0.65 * base
 			row[key] = maxf(unlocked, float(row.get(key, -INF)))
+			var fight: Dictionary = columns[key]
+			if base > blocked_value and not ELFirstAI.forecast_objective(director, hero, fight, {"remaining": 0, "allow_unknown": true}):
+				blocked_guard = state.object(fights[0])
+				blocked_value = base
 		var key := ELFirstAI._key(task, uid)
 		if by_key.has(key): continue
 		if role == 0 and task.kind != "shop": base *= 0.5
 		var site := {"key": key, "kind": task.kind, "area": _area(director, item), "gain": base, "chance": 1.0, "blockers": fights, "walk": -1.0, "end": false, "site": task.kind != "shop", "stand": Vector2i(-1, -1)}
 		acts.append(site)
 		by_key[key] = site
+	if not blocked_guard.is_empty():
+		_add_matchup_shop(director, hero, blocked_guard, blocked_value, pool, others, retry, row, columns)
 	# Beam search: LOOK_BEAM sequences per first action and depth.
 	var best := {}
 	var beam: Array = [{"stand": here, "days": 0.0, "value": 0.0, "alive": 1.0, "done": {}, "cleared": {}, "first": "", "end": false}]
@@ -934,6 +957,40 @@ static func _look(director: ELAdventureDirector, hero: Dictionary, role: int, po
 		if first.is_empty() or float(best[key]) > float(best[first]): first = key
 	if first.is_empty() or first == single or not best.has(single) or float(best[first]) <= float(best[single]) + LOOK_MARGIN: return
 	row[first] = float(row[single]) + float(best[first]) - float(best[single])
+
+## A reachable shop gets credit for opening the route after its purchase.
+## Limit speculative shopping to two safe shops for the strongest blockage.
+static func _add_matchup_shop(director: ELAdventureDirector, hero: Dictionary, guard: Dictionary, value: float, pool: Array, others: Dictionary, retry: Dictionary, row: Dictionary, columns: Dictionary) -> void:
+	var state := director.state
+	var player := int(hero.owner)
+	var day := maxf(1.0, float(hero.strategy_capacity))
+	var uid := int(hero.uid)
+	var nearby: Array = []
+	for task: Dictionary in pool:
+		if task.kind != "shop" or not ELFirstAI._available(task, hero, others, retry): continue
+		var item := state.object(task.target)
+		var bound := _lower_bound(hero, _area(director, item))
+		if bound <= LOOK_DAYS * day: nearby.append([bound, int(item.uid), item])
+	nearby.sort_custom(func(a: Array, b: Array) -> bool: return a[0] < b[0] if a[0] != b[0] else a[1] < b[1])
+	var reachable := 0
+	for entry: Array in nearby.slice(0, 6):
+		var shop: Dictionary = entry[2]
+		var walk := ELFirstAI._route_cost(director, hero, shop, true, true)
+		if walk == ELFirstAI.NONE or float(walk) > LOOK_DAYS * day: continue
+		reachable += 1
+		ELFirstAI.note_stat(director, player, "reachable_matchup_shop")
+		var purchase := ELFirstAIEconomy.matchup_purchase(director, hero, shop, guard)
+		if not purchase.is_empty():
+			var task := {"kind": "shop", "target": int(shop.uid), "guard": int(guard.uid)}
+			var key := ELFirstAI._key(task, uid)
+			# The columns are shared between heroes. Keep the selected guard on
+			# this hero's choice when the matching awards the ordinary shop.
+			var plans: Dictionary = _matchup_shops.get_or_add(uid, {})
+			plans[key] = task
+			row[key] = maxf(float(row.get(key, -INF)), 16.0 + 0.8 * value - TURN * float(walk) / day)
+			columns[key] = {"kind": "shop", "target": int(shop.uid)}
+		if reachable >= 2: break
+	if reachable == 0: ELFirstAI.note_stat(director, player, "no_reachable_matchup_shop")
 
 ## One action of the lookahead from a shortlisted objective: its worth before
 ## walking (utility() plus the walk it subtracted), its risk, where it is and

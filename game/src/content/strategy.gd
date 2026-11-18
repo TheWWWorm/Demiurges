@@ -105,30 +105,39 @@ static func order_path(director: ELAdventureDirector, actor: Dictionary) -> Arra
 	var destination := Vector2i(order.destination[0], order.destination[1])
 	var path := director.grid.approach(from, target) if not target.is_empty() else director.grid.path(from, destination)
 	if not rules.is_empty() and ELFirstAIEconomy.applies(director) and not director.is_strategy_human(int(actor.owner)):
-		path = _screen_monster_route(director, actor, path, target, destination, closed)
+		path = screen_monster_route(director, actor, path, target, destination, closed, {"remaining": 3})
 	for point: Vector2i in closed: director.grid._update_cell(point)
 	return path
 
-## The first guard ends this move. If its fight is unsafe, try a route around
-## its zone, keeping the same explored-ground and other guard restrictions.
-static func _screen_monster_route(director: ELAdventureDirector, hero: Dictionary, path: Array[Vector2i], target: Dictionary, destination: Vector2i, closed: Array[Vector2i]) -> Array[Vector2i]:
+## Eliminate the rejected terrain from a guard zone, then search the
+## explored graph again. Other reachable terrain classes remain candidates.
+static func screen_monster_route(director: ELAdventureDirector, hero: Dictionary, path: Array[Vector2i], target: Dictionary, destination: Vector2i, closed: Array[Vector2i], budget: Dictionary, only_guard := -1) -> Array[Vector2i]:
 	var state := director.state
 	var here := Vector2i(hero.x, hero.y)
-	var budget := {"remaining": 3}
-	for attempt in 3:
-		var stopped := director.interception.preview(state, hero, path)
-		if stopped.size() < 2: return path
-		var next: Vector2i = stopped[-1]
-		var enemies := director.interception.enemies(state, hero, next)
+	for attempt in 5:
+		var next := Vector2i(-1, -1)
+		for tile: Vector2i in path.slice(1):
+			var guards := director.interception.enemies(state, hero, tile)
+			if (only_guard >= 0 and guards.has(only_guard)) or (only_guard < 0 and not guards.is_empty()):
+				next = tile
+				break
+		if next.x < 0: return path
+		var terrain := ELAdventureEncounter.terrain_class(state.map, next) if next != Vector2i.ZERO else -1
 		var refused := false
-		for id: int in enemies:
+		for id: int in director.interception.enemies(state, hero, next):
+			if only_guard >= 0 and id != only_guard: continue
 			if ELFirstAI.can_attack_monster(director, hero, state.object(id), true, next, budget): continue
 			refused = true
 			for point: Vector2i in director.interception.zones[id].cells:
 				if point == here or director.grid.land.is_point_solid(point): continue
+				var other := ELAdventureEncounter.terrain_class(state.map, point) if point != Vector2i.ZERO else -1
+				if other != terrain: continue
 				director.grid.land.set_point_solid(point, true)
 				closed.append(point)
-		if not refused: return path
+		if not refused:
+			if attempt > 0: ELFirstAI.note_stat(director, int(hero.owner), "alternate_approach")
+			return path
+		ELFirstAI.note_stat(director, int(hero.owner), "guard_terrain_rejected")
 		path = director.grid.approach(here, target) if not target.is_empty() else director.grid.path(here, destination)
 	return []
 
@@ -339,6 +348,7 @@ static func advance(director: ELAdventureDirector) -> void:
 		if turn.phase == "movement":
 			var path := order_path(director, actor)
 			if path.is_empty():
+				if not order.get("route", {}).is_empty(): ELFirstAI.note_stat(director, int(actor.owner), "order_no_route")
 				actor.strategy_order = {}
 				continue
 			path.assign(director.interception.preview(state, actor, path))
