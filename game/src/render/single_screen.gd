@@ -1,3 +1,4 @@
+## Modified for the EL1 Naval Worlds release, 18 November 2026.
 class_name ELSingleScreen
 extends RefCounted
 ## Single mission choice (CSelectMission) on the ELFrontMenu canvas: the
@@ -52,6 +53,7 @@ var kept_slot := 0
 ## Custom map whose music plays now ("" for none).
 var music_map := ""
 var _import_dialog: FileDialog
+var _random_map_dialog: ELFirstRandomMapScreen
 ## Shown in the description box instead of the chosen map's text (an import's
 ## result), until another row is chosen.
 var notice := ""
@@ -173,6 +175,8 @@ func build_screen() -> void:
 		# Maps copied into a maps folder while the game runs appear on reopening.
 		profile().refresh_custom_maps()
 		_build_map_buttons()
+	else:
+		_build_random_map_button()
 	# Showing the screen rebuilds the list. The first game chooses its first row
 	# the second game chooses none (selects -1). Back from the
 	# blazon choice keeps the chosen map and the human's slot.
@@ -369,6 +373,39 @@ func _build_map_buttons() -> void:
 		button.pressed.connect(actions[i][1])
 		menu.canvas.add_child(button)
 		menu.buttons["MapImport%d" % i] = button
+
+## First-game random worlds use the same launch signal as an authored single
+## mission, so battles, autosaves and the existing world AI stay integrated.
+func _build_random_map_button() -> void:
+	var back: Control = menu.buttons.get("SMBack")
+	if back == null: return
+	# The original Back and Start buttons have only a narrow gap between them.
+	var left := slots.position.x + 10.0
+	var right := back.position.x - 8.0
+	var button := ELDuelScreen.FlatText.new()
+	button.menu = menu
+	button.caption = ELRemakeText.t("Random map…", profile())
+	button.font_size = 17
+	button.position = Vector2(left, back.position.y)
+	button.size = Vector2(right - left, back.size.y)
+	button.tooltip_text = ELRemakeText.t("Create a seeded world with configurable players, terrain, resources and neutral guards.", profile())
+	button.pressed.connect(open_random_map)
+	menu.canvas.add_child(button)
+	menu.buttons["RandomMap"] = button
+
+func open_random_map() -> void:
+	if second(): return
+	if _random_map_dialog != null and is_instance_valid(_random_map_dialog):
+		_random_map_dialog.queue_free()
+	_random_map_dialog = ELFirstRandomMapScreen.new()
+	menu.add_child(_random_map_dialog)
+	_random_map_dialog.build(profile(), menu.difficulty, menu.ai_levels)
+	_random_map_dialog.requested.connect(func(configuration: Dictionary, difficulty: int, ai: Dictionary):
+		var row := {"file_name": ELFirstRandomMap.id_for_config(configuration), "player": 1,
+			"random_map": configuration, "ai": ai, "player_name": ELPlayerProfile.current_name(profile()),
+			"logo": ELPlayerProfile.blazon.x, "colour": ELPlayerProfile.blazon.y}
+		menu.campaign_requested.emit("el1", row, difficulty))
+	_random_map_dialog.popup_centered_clamped(Vector2i(920, 680), 0.94)
 
 func _open_import() -> void:
 	if _import_dialog == null or not is_instance_valid(_import_dialog):

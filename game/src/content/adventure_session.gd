@@ -1,3 +1,4 @@
+## Modified for the EL1 Naval Worlds release, 18 November 2026.
 class_name ELAdventureSession
 extends RefCounted
 ## Mutable scenario state and explicit script-to-engine calls. The presentation
@@ -147,7 +148,7 @@ func start(source: ELAdventureMap, level := 0, seed_number := 212, scenario_scri
 		object.merge({"uid": id, "source_index": index, "alive": true, "visible": ELXml.child(placed.node, "hidden").is_empty(), "enabled": true,
 			"type": "object", "shape": "", "level": 1, "health": 10, "base_ap": 0, "ap": 0, "experience": 0, "cards": [], "spell_stock": {}, "stock_separate": true, "skills": {}, "inventory": [], "orders": []}, true)
 		if placed.group in ["heroes", "np_heroes"]:
-			object.ship = map.profile.id == "el2" and _water_cell(object.x, object.y)
+			object.ship = (map.profile.id == "el2" or ELFirstNaval.enabled(map)) and _water_cell(object.x, object.y)
 			object.type = "hero" if ELXml.child(placed.node, "monster").is_empty() else "monster"
 			if map.mobs.has(placed.name):
 				var variants: Dictionary = map.mobs[placed.name]
@@ -310,6 +311,7 @@ func create_hero(owner: int, template: String, x: int, y: int, visible := true) 
 	return id
 
 func _water_cell(x: int, y: int) -> bool:
+	if ELFirstNaval.enabled(map): return ELFirstNaval.is_water(map, Vector2i(x, y))
 	return [map.tile(x, y), map.tile(x + 1, y), map.tile(x + 1, y + 1), map.tile(x, y + 1)].count(16) > 2
 
 func hostile(first: Dictionary, second: Dictionary) -> bool:
@@ -890,7 +892,7 @@ func _native(args: Array, name: String) -> Array:
 				item.x = int(args[1])
 				item.y = int(args[2])
 				# EL2 actors travel by ship wherever they are set down on water.
-				if map.profile.id == "el2" and item.get("type") in ["hero", "monster"]: item.ship = _water_cell(item.x, item.y)
+				if (map.profile.id == "el2" or ELFirstNaval.enabled(map)) and item.get("type") in ["hero", "monster"]: item.ship = _water_cell(item.x, item.y)
 				event.emit({"kind": "object_changed", "id": item.uid})
 		"ExGetRotateMirror": return [float(item.get("rotation", 0))]
 		"ExSetRotateMirror":
@@ -901,7 +903,7 @@ func _native(args: Array, name: String) -> Array:
 			if not item.is_empty() and args.size() > 2:
 				item.x = int(args[1])
 				item.y = int(args[2])
-				if map.profile.id == "el2" and item.get("type") in ["hero", "monster"]:
+				if (map.profile.id == "el2" or ELFirstNaval.enabled(map)) and item.get("type") in ["hero", "monster"]:
 					var ship := _water_cell(item.x, item.y)
 					if ship != bool(item.get("ship", false)):
 						item.ship = ship

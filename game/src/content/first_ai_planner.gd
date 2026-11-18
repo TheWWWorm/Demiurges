@@ -1,3 +1,4 @@
+## Modified for the EL1 Naval Worlds release, 18 November 2026.
 class_name ELFirstAIPlanner
 extends RefCounted
 ## Remake option "smarter computer players" (first game, single player): how
@@ -1039,6 +1040,7 @@ static func _stand(director: ELAdventureDirector, area: Rect2i, toward: Vector2i
 		for x in range(area.position.x - 1, area.end.x + 1):
 			var point := Vector2i(x, y)
 			if area.has_point(point) or not grid.contains(point) or grid.land.is_point_solid(point): continue
+			if grid.naval and ELFirstNaval.is_water(grid.map, point) != ELFirstNaval.is_water(grid.map, area.position): continue
 			if best.x < 0 or point.distance_squared_to(toward) < best.distance_squared_to(toward): best = point
 	return best if best.x >= 0 else area.position
 
@@ -1092,7 +1094,8 @@ static func _leg(director: ELAdventureDirector, from: Vector2i, area: Rect2i, pe
 		for y in range(area.position.y - 1, area.end.y + 1):
 			for x in range(area.position.x - 1, area.end.x + 1):
 				var point := Vector2i(x, y)
-				if not area.has_point(point) and grid.contains(point) and not grid.land.is_point_solid(point): cells.append(point)
+				if not area.has_point(point) and grid.contains(point) and not grid.land.is_point_solid(point):
+					if not grid.naval or ELFirstNaval.is_water(grid.map, point) == ELFirstNaval.is_water(grid.map, area.position): cells.append(point)
 		cells.sort_custom(func(a: Vector2i, b: Vector2i): return a.distance_squared_to(from) < b.distance_squared_to(from) if a.distance_squared_to(from) != b.distance_squared_to(from) else (a.y < b.y if a.y != b.y else a.x < b.x))
 		result = [-1.0, Vector2i(-1, -1)]
 		for point: Vector2i in cells:

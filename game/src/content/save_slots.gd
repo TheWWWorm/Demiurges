@@ -1,3 +1,4 @@
+## Modified for the EL1 Naval Worlds release, 18 November 2026.
 class_name ELSaveSlots
 extends RefCounted
 ## Named saved games of both editions (the original SaveMissionScreen list).
@@ -281,7 +282,7 @@ static func _write(path: String, entry: String, name: String, type: String, dire
 	var stored := encode_preview(preview)
 	if not stored.is_empty(): document.preview_jpg = stored
 	var meta := {"format": META_FORMAT, "version": 1, "name": name, "type": type, "file": path.get_file(), "edition": profile.id, "kind": kind_of(state), "map": state.map.id,
-		"title": map_title(profile, state.map.id), "campaign": campaign_title(state), "day": state.day, "players": player_count(state), "created": int(Time.get_unix_time_from_system())}
+		"title": _state_map_title(state), "campaign": campaign_title(state), "day": state.day, "players": player_count(state), "created": int(Time.get_unix_time_from_system())}
 	if profile.id == "el2": meta.race = _current_race(state)
 	# Sorted checkpoint JSON puts this bounded string first. Listings can
 	# read it without loading the world, even when it supersedes a stale index.
@@ -310,9 +311,14 @@ static func preview_image(row: Dictionary) -> Image:
 	return Image.create_from_data(PREVIEW_SIZE.x, PREVIEW_SIZE.y, false, Image.FORMAT_RGB8, pixels)
 
 static func map_title(profile: ELProfile, map_id: String) -> String:
+	if profile.id == "el1" and ELFirstRandomMap.is_random_id(map_id): return ELRemakeText.t("Random map", profile)
 	var entry := ELSingleScenario.read_binary_header(profile, ELSingleScenario.map_path(map_id)) if profile.id == "el2" else ELSingleScenario.read_header(profile, map_id)
 	if entry.is_empty(): return map_id
 	return ELSingleScenario.title(profile, entry)
+
+static func _state_map_title(state: ELAdventureSession) -> String:
+	if state.map.profile.id == "el1" and ELFirstRandomMap.is_random_id(state.map.id): return state.map.title
+	return map_title(state.map.profile, state.map.id)
 
 ## Title of the campaign a chapter belongs to ("" outside a campaign).
 static func campaign_title(state: ELAdventureSession) -> String:
@@ -487,7 +493,7 @@ static func legacy(profile: ELProfile, kind: String) -> Array[Dictionary]:
 		var header := _header(path)
 		if header.is_empty() or header.get("edition") != profile.id: continue
 		var title := map_title(profile, str(header.get("map", "")))
-		if kind == KIND_SINGLE and not _single_map(profile, str(header.get("map", ""))): continue
+		if kind == KIND_SINGLE and not _single_map(profile, str(header.get("map", "")), header): continue
 		var world: Variant = header.get("world", {})
 		var row := {"type": LEGACY, "name": quick, "path": path, "kind": kind, "edition": profile.id, "map": str(header.get("map", "")), "title": title,
 			"campaign": "", "day": int(world.get("day", 0)) if world is Dictionary else 0, "players": -1, "modified": FileAccess.get_modified_time(path)}
@@ -500,9 +506,12 @@ static func legacy(profile: ELProfile, kind: String) -> Array[Dictionary]:
 				"map": "", "title": "", "campaign": "", "race": str(progress.current), "day": 0, "players": -1, "modified": FileAccess.get_modified_time(ELSecondCampaign.AUTOSAVE)})
 	return result
 
-## A single-mission save is listed only while its map is still a known
-## non-tutorial map (the original drops records whose map left the catalogue).
-static func _single_map(profile: ELProfile, map_id: String) -> bool:
+## Authored single missions still need their map. Generated maps carry their
+## complete recipe in the save and do not depend on an external map file.
+static func _single_map(profile: ELProfile, map_id: String, document: Dictionary = {}) -> bool:
+	if ELFirstRandomMap.is_random_id(map_id):
+		if profile.id != "el1" or document.get("edition") != "el1" or document.get("map") != map_id: return false
+		return not ELAdventureSave.new()._random_map_payload(document.get("random_map")).is_empty()
 	for entry: Dictionary in ELSingleScenario.maps(profile):
 		if entry.id == map_id and not str(entry.get("path", "")).begins_with("Tutorial"): return true
 	return false
@@ -530,7 +539,7 @@ static func find(profile: ELProfile, name: String) -> Dictionary:
 
 ## The running game as a row (the save mode's information box).
 static func current_row(state: ELAdventureSession) -> Dictionary:
-	var row := {"name": "", "kind": kind_of(state), "map": state.map.id, "title": map_title(state.map.profile, state.map.id), "campaign": campaign_title(state), "day": state.day, "players": player_count(state)}
+	var row := {"name": "", "kind": kind_of(state), "map": state.map.id, "title": _state_map_title(state), "campaign": campaign_title(state), "day": state.day, "players": player_count(state)}
 	if state.map.profile.id == "el2": row.race = _current_race(state)
 	return row
 

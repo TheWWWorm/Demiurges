@@ -1,3 +1,4 @@
+## Modified for the EL1 Naval Worlds release, 18 November 2026.
 class_name ELAdditionalBuildings
 extends RefCounted
 ## First-game map buildings a hero visits from an adjacent tile during the
@@ -279,6 +280,7 @@ static func restock(state: ELAdventureSession, item: Dictionary) -> int:
 	var monster := {"uid": id, "permanent_id": id, "source_index": -1, "id": id, "name": name, "owner": 0, "group": "np_heroes", "x": -1, "y": -1, "rotation": 0, "type": "monster",
 		"alive": true, "visible": false, "enabled": true, "placed": false, "shape": "", "level": 1, "health": 10, "base_ap": 0, "ap": 0, "experience": 0,
 		"cards": [], "spell_stock": {}, "stock_separate": true, "skills": {}, "inventory": [], "orders": [], "node": {}, "dungeon": int(item.uid)}
+	if ELFirstNaval.enabled(state.map): monster.ship = false
 	if not ELFirstMonsters.initialize(state.map.profile, monster, state.difficulty): return -1
 	ELStrategy.initialize(state.map.profile, monster)
 	state.objects[id] = monster
@@ -421,6 +423,7 @@ static func leave_camp(state: ELAdventureSession, hero_id: int) -> bool:
 	if camp.get("name") != CAMP or int(camp.get("guest", -1)) != hero_id or camp.guest_entry.size() != 2: return false
 	hero.x = int(camp.guest_entry[0])
 	hero.y = int(camp.guest_entry[1])
+	if ELFirstNaval.enabled(state.map): hero.ship = ELFirstNaval.is_water(state.map, Vector2i(hero.x, hero.y))
 	release_camp(state, hero)
 	hero.placed = true
 	state.event.emit({"kind": "camp_left", "id": camp.uid, "hero": hero_id})
@@ -465,6 +468,7 @@ static func spawn_hero(state: ELAdventureSession, name: String, owner: int, x: i
 	var actor := {"uid": id, "permanent_id": id, "source_index": -1, "id": id, "name": name, "owner": owner, "group": "heroes", "x": x, "y": y, "rotation": 0, "type": "hero",
 		"alive": true, "visible": true, "enabled": true, "shape": "", "level": 1, "health": 10, "base_ap": 0, "ap": 0, "experience": 0,
 		"cards": [], "spell_stock": {}, "stock_separate": true, "skills": {}, "inventory": [], "orders": [], "node": {}, "fortified": false, "fort": -1, "temp_buffs": []}
+	if ELFirstNaval.enabled(state.map): actor.ship = ELFirstNaval.is_water(state.map, Vector2i(x, y))
 	apply_template(state.map.profile, actor, name)
 	state.objects[id] = actor
 	state._mob_ids.append(id)

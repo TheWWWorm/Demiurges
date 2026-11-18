@@ -1,3 +1,4 @@
+## Modified for the EL1 Naval Worlds release, 18 November 2026.
 class_name ELAdventureDirector
 extends RefCounted
 ## Advances the original command queue and tile movement independently of UI.
@@ -850,7 +851,7 @@ func _advance_movement(delta: float) -> void:
 		var index: int = movement.index
 		var from := Vector2(movement.path[index])
 		var to := Vector2(movement.path[index + 1])
-		var cost := grid.passability(Vector2i(to), actor.get("ship", false))
+		var cost := ELFirstNaval.step_cost(grid, Vector2i(from), Vector2i(to)) if grid.naval else grid.passability(Vector2i(to), actor.get("ship", false))
 		if movement.get("strategic", false) and not interception.can_step(state, grid, actor, Vector2i(to)):
 			_complete_movement(false)
 			return
@@ -878,6 +879,11 @@ func _advance_movement(delta: float) -> void:
 		_stepped_from[int(actor.uid)] = Vector2i(from)
 		actor.x = int(to.x)
 		actor.y = int(to.y)
+		var changed_ship := false
+		if grid.naval:
+			var ship := ELFirstNaval.is_water(state.map, Vector2i(to))
+			changed_ship = ship != bool(actor.get("ship", false))
+			actor.ship = ship
 		var moved := grid.update_actor(actor)
 		if state.map.profile.id == "el2":
 			# Each step refreshes the owner's sight once: a step that changed
@@ -890,6 +896,9 @@ func _advance_movement(delta: float) -> void:
 		elif movement.get("strategic", false):
 			actor.ap -= cost
 			ELStrategy.entered(self, actor)
+		if changed_ship:
+			state.event.emit({"kind": "object_changed", "id": actor.uid})
+			presentation.emit({"kind": "dock", "hero": actor.uid, "ship": bool(actor.ship)})
 		presentation.emit({"kind": "actor_moving", "id": actor.uid, "position": to, "moving": true})
 		# Second game: every cell change runs Hook_OnStep at once, whichever
 		# figure moved, as in the original, so the library's interception
@@ -945,7 +954,7 @@ func _complete_movement(use := true) -> void:
 ## short of it, is not used from afar (the command still completes). A
 ## remote use goes through RemoteUseHero, not here.
 func _in_use_range(actor: Dictionary, target: Dictionary) -> bool:
-	if state.map.profile.id != "el2" or actor.is_empty() or target.is_empty(): return true
+	if (state.map.profile.id != "el2" and not grid.naval) or actor.is_empty() or target.is_empty(): return true
 	return ELStrategy.adjacent(self, actor, target)
 
 func use_object(hero_id: int, target_id: int, defender := -1) -> void:
@@ -954,6 +963,9 @@ func use_object(hero_id: int, target_id: int, defender := -1) -> void:
 	var corpse: bool = state.map.profile.id == "el2" and target.get("type") == "corpse"
 	# A lair's creature waits off the map; its battle is still fought.
 	if actor.is_empty() or target.is_empty() or not (target.alive or corpse) or not (target.visible or target.has("dungeon")) or not target.enabled or encounter != null or _shopping() or not travel.is_empty(): return
+	if grid.naval and not ELFirstNaval.interaction_mode(grid, Vector2i(actor.x, actor.y), target):
+		if actor.owner == state.current_player: presentation.emit({"kind": "notice", "text": "Land at a harbor before visiting objects on shore."})
+		return
 	if corpse and hero_id != state.main_hero: return
 	if state.vm != null:
 		var command_count := state.commands.size()
@@ -1342,6 +1354,7 @@ func _misplaced(hero: Dictionary) -> bool:
 func _place_back(hero: Dictionary, cell: Vector2i) -> void:
 	hero.x = cell.x
 	hero.y = cell.y
+	if grid.naval: hero.ship = ELFirstNaval.is_water(state.map, cell)
 	grid.update_actor(hero)
 	state.event.emit({"kind": "object_changed", "id": hero.uid})
 
@@ -1373,7 +1386,8 @@ func _step_out_of_zone(hero: Dictionary) -> void:
 		for cell: Vector2i in ring:
 			for offset: Vector2i in ELInterception.DIRECTIONS:
 				var point := cell + offset
-				if visited.has(point) or not grid.contains(point) or grid.passability(point, ship) < 0: continue
+				if visited.has(point) or not grid.contains(point) or grid.passability(point, ship and not grid.naval) < 0: continue
+				if grid.naval and not ELFirstNaval.connected(grid, cell, point): continue
 				visited[point] = true
 				next.append(point)
 				if interception.enemies(state, hero, point).is_empty(): free.append(point)
@@ -1384,9 +1398,11 @@ func _step_out_of_zone(hero: Dictionary) -> void:
 		ring = next
 		if ring.is_empty(): break
 	for cell: Vector2i in candidates:
-		if grid.passability(cell, ship) < 0 or not interception.enemies(state, hero, cell).is_empty(): continue
+		if grid.passability(cell, ship and not grid.naval) < 0 or not interception.enemies(state, hero, cell).is_empty(): continue
+		if grid.naval and cell == from and not ELFirstNaval.connected(grid, here, cell): continue
 		hero.x = cell.x
 		hero.y = cell.y
+		if grid.naval: hero.ship = ELFirstNaval.is_water(state.map, cell)
 		hero.intercepted = false
 		_stepped_from.erase(int(hero.uid))
 		grid.update_actor(hero)

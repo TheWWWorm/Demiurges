@@ -1,3 +1,4 @@
+## Modified for the EL1 Naval Worlds release, 18 November 2026.
 class_name ELForts
 extends RefCounted
 ## Forts of both games: one garrison hero, authored color, tiers 0-2 and a
@@ -72,6 +73,7 @@ static func enter_problem(state: ELAdventureSession, hero_id: int, fort_id: int,
 	var fort := state.object(fort_id)
 	if fort.get("type") != "fort" or not fort.alive or not fort.visible or not fort.enabled: return "This fort is unavailable."
 	if hero.is_empty() or hero.type != "hero" or not hero.alive or not state.players.has(hero.owner): return "This hero cannot enter a fort."
+	if ELFirstNaval.enabled(state.map) and hero.get("ship", false): return "Land at a harbor before entering a fort."
 	if hero.get("fortified", false): return "This hero is already in a fort."
 	if fort.garrison >= 0 and not assault: return "This fort is already occupied."
 	return ""
@@ -95,6 +97,7 @@ static func occupy(state: ELAdventureSession, hero: Dictionary, fort: Dictionary
 	hero.fort = fort.uid
 	hero.x = int(fort.x)
 	hero.y = int(fort.y)
+	if ELFirstNaval.enabled(state.map): hero.ship = ELFirstNaval.is_water(state.map, Vector2i(hero.x, hero.y))
 	hero.strategy_order = {}
 	hero.orders.clear()
 	if previous != fort.owner: state.event.emit({"kind": "fort_captured", "id": fort_id, "player": fort.owner, "previous": previous})
@@ -119,6 +122,7 @@ static func leave(state: ELAdventureSession, hero_id: int, notify := true) -> bo
 	if fort.is_empty(): return false
 	hero.x = int(fort.fort_entry[0])
 	hero.y = int(fort.fort_entry[1])
+	if ELFirstNaval.enabled(state.map): hero.ship = ELFirstNaval.is_water(state.map, Vector2i(hero.x, hero.y))
 	hero.fortified = false
 	hero.fort = -1
 	fort.garrison = -1

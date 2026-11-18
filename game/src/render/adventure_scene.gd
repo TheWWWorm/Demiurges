@@ -1,9 +1,15 @@
+## Modified for the EL1 Naval Worlds release, 18 November 2026.
 class_name ELAdventureScene
 extends Node3D
 ## Original adventure figures with chunked static instancing. Simulation and
 ## camera controls are separate from these visual resources.
 var map: ELAdventureMap
 var terrain: ELAdventureTerrain
+var generated_roads: ELFirstRandomMapRoads
+## Explicitly supplied installed EL2 data for its original ship appearance.
+var naval_source: ELProfile
+var naval_visuals: ELFirstNavalVisuals
+var _ship_profile: ELProfile
 var units: Dictionary = {}
 var animated: Array[ELModel] = []
 ## Options "animated objects": false holds map objects still.
@@ -102,6 +108,15 @@ func build(source: ELAdventureMap, session: ELAdventureSession = null) -> bool:
 	if not terrain.build(map):
 		errors.append_array(terrain.errors)
 		return false
+	if ELFirstRandomMap.is_random_id(map.id):
+		generated_roads = ELFirstRandomMapRoads.new()
+		add_child(generated_roads)
+		generated_roads.build(map)
+	if ELFirstNaval.enabled(map):
+		_ship_profile = ELFirstNavalVisuals.ship_source(naval_source)
+		naval_visuals = ELFirstNavalVisuals.new()
+		add_child(naval_visuals)
+		naval_visuals.build(map)
 	_art = ELAdventureArt.new(map)
 	var prototypes := {}
 	var groups := {}
@@ -123,11 +138,11 @@ func build(source: ELAdventureMap, session: ELAdventureSession = null) -> bool:
 		if definition.is_empty():
 			errors.append("Missing art: %s / %s" % [object.group, object.name])
 			continue
-		var key := "%s/%s/%s/%s" % [definition.model, definition.texture, definition.secondary, definition.get("wave", "")]
+		var key := _art_key(definition)
 		if not prototypes.has(key):
 			var prototype := ELModel.new()
 			add_child(prototype)
-			if not prototype.build(map.profile, definition.model, definition.texture, definition.secondary, definition.get("wave", "")):
+			if not _build_model(prototype, definition):
 				errors.append(prototype.error)
 				prototype.queue_free()
 				continue
@@ -149,7 +164,7 @@ func build(source: ELAdventureMap, session: ELAdventureSession = null) -> bool:
 		if definition.unit or prototype.clip_frames() > 1 or first_barrier(object) or gate or _movable_portal(object) or object.get("type") == "fort":
 			var model := ELModel.new()
 			add_child(model)
-			if not model.build(map.profile, definition.model, definition.texture, definition.secondary, definition.get("wave", "")):
+			if not _build_model(model, definition):
 				errors.append(model.error)
 				model.queue_free()
 				continue
@@ -241,6 +256,17 @@ func build(source: ELAdventureMap, session: ELAdventureSession = null) -> bool:
 	build_usec = Time.get_ticks_usec() - started
 	return errors.is_empty()
 
+func _art_key(definition: Dictionary) -> String:
+	var key := "%s/%s/%s/%s" % [definition.model, definition.texture, definition.secondary, definition.get("wave", "")]
+	if definition.get("first_ship", false): key += "/naval/%s/%d" % ["el2" if _ship_profile != null else "local", int(definition.get("ship_owner", 1))]
+	return key
+
+func _build_model(model: ELModel, definition: Dictionary) -> bool:
+	if definition.get("first_ship", false):
+		if _ship_profile != null: return model.build(_ship_profile, definition.model, definition.texture, definition.secondary)
+		return ELFirstNavalVisuals.build_boat(model, map.profile, int(definition.get("ship_owner", 1)), str(definition.get("ship_color", "")))
+	return model.build(map.profile, definition.model, definition.texture, definition.secondary, definition.get("wave", ""))
+
 ## Resolves each object's art (the build loop's `definitions`, by index) and
 ## reads what it needs on worker threads first: the figures, their idle
 ## clips and meshes, and the skins, as ELModel.build would read them one
@@ -258,6 +284,8 @@ func _prepare_art(objects: Array) -> Array:
 		var definition := _art.resolve(object)
 		definitions[index] = definition
 		if definition.is_empty() or definition.get("hidden", false) or not object.get("visible", true): continue
+		# EL1 ships use an explicit second-game profile or local geometry.
+		if definition.get("first_ship", false): continue
 		templates[ELArchive.key(str(definition.model))] = true
 		for name: Variant in [definition.texture, definition.secondary, definition.get("wave", "")]:
 			if not str(name).is_empty(): skins[str(name)] = true
@@ -309,7 +337,10 @@ func enable_fog(session: ELAdventureSession) -> void:
 	_fog_revision = -1
 	if material != null: material.set_shader_parameter("fog_enabled", fog_session != null)
 	if _fog_apron != null: _fog_apron.visible = fog_session != null
-	if fog_session == null: return
+	if fog_session == null:
+		if generated_roads != null: generated_roads.set_fog(PackedByteArray())
+		if naval_visuals != null: naval_visuals.set_fog(PackedByteArray())
+		return
 	if mist == null:
 		mist = ELFogMist.new()
 		mist.animate = animate_fog
@@ -317,6 +348,8 @@ func enable_fog(session: ELAdventureSession) -> void:
 	if _fog_apron == null: _fog_apron = _make_fog_apron()
 	_fog_apron.visible = true
 	_fog_tiles = fog_tiles()
+	if generated_roads != null: generated_roads.set_fog(_fog_tiles)
+	if naval_visuals != null: naval_visuals.set_fog(_fog_tiles)
 	var masks := _fog_data()
 	_fog_known = masks[0].duplicate()
 	_fog_seen = masks[1].duplicate()
@@ -497,6 +530,8 @@ func sync_fog() -> void:
 	_fog_revision = ELFog.revision(fog_session)
 	var scenery := {}
 	var changed := _update_fog_tiles(scenery)
+	if generated_roads != null and changed.has_area(): generated_roads.set_fog(_fog_tiles)
+	if naval_visuals != null and changed.has_area(): naval_visuals.set_fog(_fog_tiles)
 	if not changed.has_area():
 		snap_fog = false
 		return
@@ -752,7 +787,7 @@ func update_object(item: Dictionary, apply_facing := false) -> void:
 		return
 	var definition := _art.resolve(item)
 	if definition.is_empty() or definition.get("hidden", false): return
-	var key := "%s/%s/%s/%s" % [definition.model, definition.texture, definition.secondary, definition.get("wave", "")]
+	var key := _art_key(definition)
 	var unit: bool = item.type in ["hero", "monster", "corpse"]
 	var own_model := unit or _movable_portal(item) or gate
 	var replaceable: bool = own_model or item.type in ["rune_shop", "el1_spell_shop", "resource_mine", "mana_node", "fort"] or ELFirstScenario.is_castle(item)
@@ -760,7 +795,7 @@ func update_object(item: Dictionary, apply_facing := false) -> void:
 	if replaceable and (_object_keys.get(uid, "") != key or needs_model):
 		var model := ELModel.new()
 		add_child(model)
-		if not model.build(map.profile, definition.model, definition.texture, definition.secondary, definition.get("wave", "")):
+		if not _build_model(model, definition):
 			errors.append(model.error)
 			model.queue_free()
 			return

@@ -1,3 +1,4 @@
+## Modified for the EL1 Naval Worlds release, 18 November 2026.
 class_name ELAdventureView
 extends Node3D
 var strategic_session: ELStrategicSession
@@ -249,7 +250,16 @@ func build(profile: ELProfile, scenario: Dictionary, preferences: ELSettings, di
 	var map := ELAdventureMap.new()
 	var opening_events: Array[Dictionary] = []
 	if restored.is_empty():
-		if not map.load_map(profile, str(scenario.file_name)): return _fail(map.error)
+		var map_seed := 212
+		if scenario.has("random_map"):
+			if profile.id != "el1" or strategic_session != null or not scenario.random_map is Dictionary:
+				return _fail("Random maps require a local Etherlords I game.")
+			var generator := ELFirstRandomMap.new()
+			map = generator.generate(profile, scenario.random_map)
+			if map == null: return _fail(generator.error)
+			map_seed = ELFirstRandomMap.seed_for_config(generator.config)
+		else:
+			if not map.load_map(profile, str(scenario.file_name)): return _fail(map.error)
 		_loading(0.15)
 		state = ELAdventureSession.new()
 		# The scene initialization hooks can emit a direct box or wait before
@@ -257,7 +267,7 @@ func build(profile: ELProfile, scenario: Dictionary, preferences: ELSettings, di
 		var capture := func(data: Dictionary) -> void:
 			if data.kind in ["message_box", "script_wait"]: opening_events.append(data)
 		if profile.id == "el2": state.event.connect(capture)
-		if not state.start(map, difficulty, 212, str(scenario.get("script", "")), int(str(scenario.get("player", "1"))), scenario.has("number"), solo_first): return _fail(state.error)
+		if not state.start(map, difficulty, map_seed, str(scenario.get("script", "")), int(str(scenario.get("player", "1"))), scenario.has("number"), solo_first): return _fail(state.error)
 		if profile.id == "el2": state.event.disconnect(capture)
 		_loading(0.25)
 		state.tutorial = bool(scenario.get("tutorial", false))
@@ -285,6 +295,7 @@ func build(profile: ELProfile, scenario: Dictionary, preferences: ELSettings, di
 	state.desktop_modal = func() -> bool: return paused or extras_open() or not director.dialogue.is_empty() or director._shopping()
 	_art = ELAdventureArt.new(map)
 	world = ELAdventureScene.new()
+	world.naval_source = naval_source
 	add_child(world)
 	if not world.build(map, state): return _fail("; ".join(world.errors))
 	_loading(0.75)
@@ -898,6 +909,8 @@ const BATTLE_DOME_SUMMON_CODE := 0x018c0000
 ## First game: the second game's files the borrowed battle dome comes from,
 ## or null for none.
 var dome_source: ELProfile
+## Independent of the battle-dome preference: installed EL2 ship appearance.
+var naval_source: ELProfile
 
 func _start_battle_dome(first: int, second: int) -> void:
 	_finish_battle_dome()
@@ -1841,11 +1854,16 @@ func _present(data: Dictionary) -> void:
 				model.set_opacity(1.0)
 				world.fog_object(state.object(data.hero))
 		"teleport", "tunnel", "dock":
-			if not director.travel.is_empty(): _face_travel_exit()
-			if data.hero == state.main_hero and world.actors.has(state.main_hero):
-				following = _hero_id()
-				target = world.actors[state.main_hero].position
-				_draw_route([])
+			if ELFirstNaval.enabled(state.map) and data.kind == "dock":
+				# First-game selection is not always the original main hero.
+				# Other ships boarding must not steal the player's camera.
+				if int(data.hero) == _hero_id(): _draw_route(ELStrategy.order_path(director, state.object(_hero_id())))
+			else:
+				if not director.travel.is_empty(): _face_travel_exit()
+				if data.hero == state.main_hero and world.actors.has(state.main_hero):
+					following = _hero_id()
+					target = world.actors[state.main_hero].position
+					_draw_route([])
 		"use_object":
 			var item := state.object(data.target)
 			_remark(item.get("title", state.map.profile.text(str(_art.resolve(item).get("row", {}).get("ELKName", item.name)))))
@@ -2545,7 +2563,7 @@ func _draw_route(path: Array, actor_id := -1) -> void:
 	var colour := ROUTE_COLOURS.find(str(state.players.get(_route_owner, {}).get("color", "")))
 	var remaining := int(actor.get("ap", 0))
 	for index in range(1, path.size()):
-		remaining -= director.grid.passability(path[index])
+		remaining -= ELFirstNaval.step_cost(director.grid, path[index - 1], path[index], false) if ELFirstNaval.enabled(state.map) else director.grid.passability(path[index])
 		var within := not (director.strategy.is_empty() and remaining < 0) and colour >= 0
 		var last := index == path.size() - 1
 		var texture := ("Finish%02d" if last else "Path%02d") % colour if within else ("NoFinish" if last else "NoPath")
@@ -3290,6 +3308,7 @@ func _build_ui() -> void:
 	notice.offset_bottom = -175 if state.map.profile.id == "el1" else -139
 	helper_hint = "Click to move or interact · WASD to pan · Right-drag to rotate · Wheel to zoom · H to follow your hero"
 	if state.map.profile.id == "el1": helper_hint = "Select a hero · Click to plan a route or capture · N to end turn · Backspace to clear orders"
+	if ELFirstNaval.enabled(state.map): helper_hint = ELRemakeText.t("Click a destination to sail via cyan harbors · Boarding and landing: +3 AP · N to end turn", state.map.profile)
 	notice.text = helper_hint if helper_overlay() or (hud == null and second_hud == null) else ""
 	notice.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	dialogue_blocker = Control.new()

@@ -1,3 +1,4 @@
+## Modified for the EL1 Naval Worlds release, 18 November 2026.
 class_name ELHallOfFame
 extends RefCounted
 ## Hall of Fame tables of at most ten
@@ -162,6 +163,7 @@ static func campaign_info(profile: ELProfile, campaign_id: String) -> Dictionary
 
 ## Title shown in the last column: the campaign name or the map title whose GUID matches.
 static func title(profile: ELProfile, kind: String, guid: String) -> String:
+	if profile.id == "el1" and kind == "scenario" and ELFirstRandomMap.is_random_id(guid): return ELRemakeText.t("Random map", profile)
 	if kind == "duel":
 		if guid.is_empty(): return ELRemakeText.t("Random arena", profile)
 		return profile.text(str(profile.table("ScenesNames").get(guid, {}).get("ELKName", guid)))
@@ -214,7 +216,8 @@ static func record_mission(state: ELAdventureSession) -> String:
 	if ELSingleScenario.is_single(state):
 		var points := ELCampaign.first_score(state.map.width, state.day, state.difficulty)
 		# The name typed on the Single player panel (the human's slot).
-		add(profile, "scenario", ELFirstScenario.player_name(state, state.current_player), map_guid(profile, state.map.id), points)
+		var map_id := state.map.id if ELFirstRandomMap.is_random_id(state.map.id) else map_guid(profile, state.map.id)
+		add(profile, "scenario", ELFirstScenario.player_name(state, state.current_player), map_id, points)
 		return "scenario"
 	var result := ELFirstScenario.chapter_result(state)
 	var progress: Dictionary = state.scenario.get("progress", {})

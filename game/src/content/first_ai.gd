@@ -1,3 +1,4 @@
+## Modified for the EL1 Naval Worlds release, 18 November 2026.
 class_name ELFirstAI
 extends RefCounted
 ## First-game strategic opponents. Off-screen monster battles use the original
@@ -751,6 +752,7 @@ static func frontier_tiles(director: ELAdventureDirector, player: int) -> Array[
 				if not director.grid.contains(next): continue
 				var index := next.y * width + next.x
 				if reached[index] != 0 or seen[index] & mask == 0 or director.grid.land.is_point_solid(next): continue
+				if director.grid.naval and not ELFirstNaval.connected(director.grid, at, next, true, true): continue
 				reached[index] = 1
 				queue.append(next)
 	for y in state.map.height:
@@ -923,7 +925,8 @@ static func _route_cost(director: ELAdventureDirector, hero: Dictionary, item: D
 		for y in range(-1, size.y + 1):
 			for x in range(-1, size.x + 1):
 				var point := Vector2i(int(item.x) + x, int(item.y) + y)
-				if (x < 0 or x >= size.x or y < 0 or y >= size.y) and grid.contains(point) and not grid.land.is_point_solid(point): cells.append(point)
+				if (x < 0 or x >= size.x or y < 0 or y >= size.y) and grid.contains(point) and not grid.land.is_point_solid(point):
+					if not grid.naval or ELFirstNaval.interaction_mode(grid, point, item): cells.append(point)
 		cells.sort_custom(func(a: Vector2i, b: Vector2i): return a.distance_squared_to(from) < b.distance_squared_to(from))
 		for point: Vector2i in cells.slice(0, 2):
 			path = grid.path(from, point)

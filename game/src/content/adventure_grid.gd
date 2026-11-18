@@ -1,3 +1,4 @@
+## Modified for the EL1 Naval Worlds release, 18 November 2026.
 class_name ELAdventureGrid
 extends RefCounted
 ## Shared terrain/footprint geometry for movement, picking and world placement.
@@ -10,6 +11,12 @@ var footprints: Dictionary = {}
 var occupied: Dictionary = {}
 var actor_blockers := PackedInt32Array()
 var error := ""
+## Naval maps expose their combined walking/sailing mask through land so
+## the strategic AI's fog and guard closures also apply to voyages. The
+## route search still enforces every harbor edge (ELFirstNaval).
+var naval := false
+var naval_water := PackedByteArray()
+var naval_links: Dictionary = {}
 ## An actor's occupied tile changed (a step, placement or removal).
 signal actor_moved(actor: Dictionary)
 
@@ -21,6 +28,11 @@ func build(source: ELAdventureMap, objects: Dictionary) -> bool:
 			error = tiles.error
 			return false
 		map.profile.terrain_tiles = tiles
+	naval = ELFirstNaval.enabled(map)
+	if naval and not ELFirstNaval.configure(self): return false
+	if not naval:
+		naval_water.clear()
+		naval_links.clear()
 	for grid: AStarGrid2D in [land, water]:
 		grid.region = Rect2i(0, 0, map.width, map.height)
 		grid.cell_size = Vector2.ONE
@@ -29,6 +41,11 @@ func build(source: ELAdventureMap, objects: Dictionary) -> bool:
 		grid.default_estimate_heuristic = AStarGrid2D.HEURISTIC_CHEBYSHEV
 		grid.update()
 	rebuild(objects)
+	if naval:
+		for id: int in naval_links:
+			if blockers[id] != 0:
+				error = "A building or terrain object blocks this map's harbor connection."
+				return false
 	return true
 
 func rebuild(objects: Dictionary) -> void:
@@ -106,7 +123,7 @@ func update_actor(actor: Dictionary) -> bool:
 
 func _update_cell(pos: Vector2i) -> void:
 	var land_cost := passability(pos, false)
-	var water_cost := land_cost if map.profile.id == "el1" else passability(pos, true)
+	var water_cost := land_cost if map.profile.id == "el1" and not naval else passability(pos, true)
 	land.set_point_solid(pos, land_cost < 0)
 	water.set_point_solid(pos, water_cost < 0)
 	land.set_point_weight_scale(pos, maxi(1, land_cost))
@@ -120,6 +137,7 @@ func contains(pos: Vector2i) -> bool:
 func passability(pos: Vector2i, ship := false, actors := true) -> int:
 	if not contains(pos): return -1
 	var index := pos.y * map.width + pos.x
+	if naval: return ELFirstNaval.terrain_cost(map, pos, blockers[index] != 0 or (actors and actor_blockers[index] != 0), ship)
 	var corners: Array[int] = [map.tile(pos.x, pos.y), map.tile(pos.x + 1, pos.y), map.tile(pos.x + 1, pos.y + 1), map.tile(pos.x, pos.y + 1)]
 	if map.profile.id == "el1": return strategic_cost(map.profile.terrain_tiles, corners, int(map.roads[index]), blockers[index] != 0 or actor_blockers[index] != 0)
 	# Both games count heroes and monsters on a cell as blocking it.
@@ -137,6 +155,12 @@ static func strategic_cost(tiles: ELTileSet, corners: Array[int], road: int, blo
 
 func path_cost(points: Array[Vector2i], ship := false) -> int:
 	var cost := 0
+	if naval:
+		for index in range(1, points.size()):
+			var step := ELFirstNaval.step_cost(self, points[index - 1], points[index])
+			if step < 0: return -1
+			cost += step
+		return cost
 	for point: Vector2i in points.slice(1): cost += passability(point, ship)
 	return cost
 
@@ -153,6 +177,9 @@ static func terrain_passability(tiles: ELTileSet, corners: Array[int], road: int
 ## such route the unrestricted search is used.
 func path(from: Vector2i, to: Vector2i, ship := false, avoid: Array[Vector2i] = []) -> Array[Vector2i]:
 	if not contains(from) or not contains(to): return []
+	if naval:
+		var route := ELFirstNaval.path(self, from, [to], avoid)
+		return ELFirstNaval.path(self, from, [to]) if route.is_empty() and not avoid.is_empty() else route
 	if not avoid.is_empty():
 		var grid_used := water if ship else land
 		var closed: Array[Vector2i] = []
@@ -176,6 +203,18 @@ func path(from: Vector2i, to: Vector2i, ship := false, avoid: Array[Vector2i] = 
 func approach(from: Vector2i, target: Dictionary, ship := false, avoid: Array[Vector2i] = []) -> Array[Vector2i]:
 	if map.profile.id == "el2" and target.get("type") == "corpse" and from == Vector2i(target.x, target.y): return [from]
 	var size: Vector2i = footprints.get(int(target.uid), {}).get("size", Vector2i.ONE)
+	if naval:
+		var goals: Array[Vector2i] = []
+		var safe_goals: Array[Vector2i] = []
+		for y in range(-1, size.y + 1):
+			for x in range(-1, size.x + 1):
+				if x >= 0 and x < size.x and y >= 0 and y < size.y: continue
+				var point := Vector2i(int(target.x) + x, int(target.y) + y)
+				if not contains(point) or not ELFirstNaval.interaction_mode(self, point, target): continue
+				goals.append(point)
+				if not avoid.has(point): safe_goals.append(point)
+		var route := ELFirstNaval.path(self, from, safe_goals, avoid)
+		return ELFirstNaval.path(self, from, goals) if route.is_empty() else route
 	var best: Array[Vector2i] = []
 	var best_cost := 0x7fffffff
 	var best_guarded := true

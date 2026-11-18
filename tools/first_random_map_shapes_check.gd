@@ -1,0 +1,274 @@
+extends SceneTree
+## Synthetic topology, fairness, recipe, and legacy replay checks.
+## Run with Godot4.7: --headless --path game --script ../tools/first_random_map_shapes_check.gd
+## --quick uses one water amount per layout; default covers all three.
+## Independent floods below read terrain and real collision footprints;
+## they do not call the generator's validation or naval path finder.
+
+const Fixture = preload("first_random_map_fixture.gd")
+const LAYOUTS := ["frontier", "lakes", "crossroads", "archipelago", "inland_sea", "river_delta", "ring", "peninsulas"]
+const SIZES := [64, 96, 128, 160]
+const WATER := ["low", "normal", "high"]
+var checks := 0
+var generated := 0
+var validated := 0
+var failures: Array[String] = []
+var completed: Array[String] = []
+var label := ""
+
+func _initialize() -> void:
+	_run.call_deferred()
+
+func _run() -> void:
+	await process_frame
+	var began := Time.get_ticks_msec()
+	_configuration()
+	_legacy_replay()
+	_matrix()
+	_regressions()
+	_reproduction()
+	label = "completion"
+	check(completed.size() == 5, "every required test section completed")
+	print("FIRST MAP SHAPES: %d checks, %d generated maps, %d failure(s), %.2f s" % [checks, generated, failures.size(), (Time.get_ticks_msec() - began) / 1000.0])
+	for failure: String in failures: printerr("  " + failure)
+	quit(0 if failures.is_empty() else 1)
+
+func check(ok: bool, what: String) -> void:
+	checks += 1
+	if ok: return
+	var message := label + ": " + what
+	failures.append(message)
+	printerr("FAIL: " + message)
+
+func _configuration() -> void:
+	label = "shape settings"
+	var defaults := ELFirstRandomMap.defaults()
+	check(defaults.version == 2 and defaults.has("naval") and defaults.has("water") and defaults.has("coast"), "new recipes expose the three topology controls")
+	check(ELFirstRandomMap.normalize(JSON.parse_string(JSON.stringify(defaults))) == defaults, "version2 settings survive JSON numeric conversion")
+	for options: Dictionary in [{"naval": 1}, {"naval": "true"}, {"water": true}, {"water": "huge"}, {"coast": []}, {"coast": "straight"}, {"version": 1, "naval": true}]:
+		check(ELFirstRandomMap.normalize(options).is_empty(), "malformed or wrong-version settings are rejected: " + JSON.stringify(options))
+	for layout: String in LAYOUTS:
+		check(not ELFirstRandomMap.normalize({"layout": layout, "naval": true, "water": "high", "coast": "rugged"}).is_empty(), "layout is selectable: " + layout)
+	completed.append("configuration")
+
+func _legacy_replay() -> void:
+	label = "version1 replay"
+	var path: String = get_script().resource_path.get_base_dir().path_join("first_random_map_v1_snapshots.json")
+	var data: Variant = JSON.parse_string(FileAccess.get_file_as_string(path))
+	check(data is Dictionary and data.get("maps") is Array, "the pre-change synthetic snapshot fixture is readable")
+	if not data is Dictionary or not data.get("maps") is Array: return
+	check(data.maps.size() == 11, "snapshots cover the original three layouts and the independently recovered five layouts")
+	var profile := Fixture.profile()
+	for row: Dictionary in data.maps:
+		var map := _generate(profile, row.config)
+		if map == null: continue
+		check(map.id == row.id and ELFirstRandomMap.content_hash(map) == row.hash, "original seed reproduces byte-for-byte: " + str(row.config.layout) + "/" + str(row.config.seed))
+	completed.append("legacy")
+
+func _generate(profile: ELProfile, config: Dictionary) -> ELAdventureMap:
+	var generator := ELFirstRandomMap.new()
+	var map := generator.generate(profile, config)
+	generated += 1
+	check(map != null, "generation succeeds: " + generator.error)
+	return map
+
+func _matrix() -> void:
+	var profile := Fixture.profile()
+	var amounts: Array = ["normal"] if "--quick" in OS.get_cmdline_user_args() else WATER
+	var index := 0
+	for layout: String in LAYOUTS:
+		for naval: bool in [false, true]:
+			for water: String in amounts:
+				var config := {"seed": "shape-matrix-%d" % index, "size": SIZES[index % SIZES.size()], "players": 2 + index % 3,
+					"layout": layout, "naval": naval, "water": water, "coast": "smooth" if index % 2 == 0 else "rugged",
+					"roads": index % 3 != 0, "scenery": index % 3, "guards": "none" if index % 2 == 0 else "normal"}
+				label = "%s/naval%s/%s/%d/%d/%s" % [layout, naval, water, config.size, config.players, config.seed]
+				var map := _generate(profile, config)
+				if map != null: _geometry(map, ELFirstRandomMap.normalize(config))
+				index += 1
+		print("PASS: shape matrix " + layout)
+	label = "shape matrix completion"
+	check(index == (16 if "--quick" in OS.get_cmdline_user_args() else 48) and validated == index, "all configuration cases complete their independent geometry checks")
+	completed.append("matrix")
+
+func _regressions() -> void:
+	# The two repaired archipelago cases remain in the main matrix and the
+	# topology-options loop. This coast had a dry-looking approach separated
+	# by diagonal shoreline cells; it must reach its actual harbor at runtime.
+	label = "lakes coastal-access regression"
+	var config := ELFirstRandomMap.normalize({"seed": "naval-worlds", "size": 128, "players": 4, "layout": "lakes", "naval": true})
+	var before := validated
+	var map := _generate(Fixture.profile(), config)
+	if map != null: _geometry(map, config)
+	check(validated == before + 1, "the repaired coastal-access case completes all independent geometry checks")
+	completed.append("regressions")
+
+func _geometry(map: ELAdventureMap, config: Dictionary) -> void:
+	check(map.width == config.size and map.height == config.size and map.players.size() == config.players, "size and player count match the recipe")
+	check(ELFirstRandomMap.configuration(map) == config, "the complete canonical recipe is attached")
+	var state := ELAdventureSession.new()
+	if not state.start(map, 1, ELFirstRandomMap.seed_for_config(config)):
+		check(false, "the generated session starts: " + state.error)
+		state.close()
+		return
+	var director := ELAdventureDirector.new()
+	if not director.build(state):
+		check(false, "the real navigation graph builds: " + director.error)
+		state.close()
+		return
+	var grid := director.grid
+	check(grid.naval == config.naval, "naval movement is enabled only when requested")
+	var modes := _modes(map, grid)
+	var collision_free := true
+	for count: int in grid.blockers:
+		if count > 1: collision_free = false
+	for count: int in grid.actor_blockers:
+		if count > 1: collision_free = false
+	check(collision_free, "actual static and actor footprints do not overlap")
+	var ports: Array = map.get_meta("first_naval", {}).get("ports", [])
+	var links := _links(map, ports)
+	var first := state.object(state.main_hero)
+	var from := Vector2i(int(first.x), int(first.y))
+	var reachable := _flood(map, modes, from, links, bool(config.naval))
+	var unreachable: Array[String] = []
+	for item: Dictionary in state.objects.values():
+		if item.group == "terrain_objects" or not item.get("visible", true): continue
+		if item.type in ["hero", "monster"]:
+			if not reachable[int(item.y) * map.width + int(item.x)]: unreachable.append(str(item.name))
+		elif not _approachable(map, grid, item, reachable): unreachable.append(str(item.name))
+	check(unreachable.is_empty(), "independent terrain/footprint flood reaches all strategic objects: " + ", ".join(unreachable.slice(0, 4)))
+	var starts: Array = map.get_meta("random_map_report", {}).get("starts", [])
+	check(starts.size() == config.players, "every homeland exposes its opening economy")
+	var balances := {}
+	var wallet_fair := true
+	var homes_valid := true
+	var port_counts: Array[int] = []
+	for start: Dictionary in starts:
+		var hero := state.object(int(start.hero_id))
+		var at := Vector2i(int(hero.x), int(hero.y))
+		homes_valid = homes_valid and modes[at.y * map.width + at.x] == 1 and not hero.ship
+		var land := _flood(map, modes, at, {}, bool(config.naval), 1)
+		var nearby_ports := 0
+		for port: Dictionary in ports:
+			if land[int(port.land[1]) * map.width + int(port.land[0])]: nearby_ports += 1
+		port_counts.append(nearby_ports)
+		var sites: Array = start.get("sites", [])
+		var local_economy := sites.size() == 7
+		for uid: int in sites: local_economy = local_economy and _approachable(map, grid, state.object(uid), land)
+		check(local_economy, "player%d can reach all seven opening economy sites without sailing" % int(start.player))
+		var wallet: Dictionary = state.players[int(start.player)].resources
+		if balances.is_empty(): balances = wallet.duplicate()
+		wallet_fair = wallet_fair and wallet == balances
+	check(homes_valid and wallet_fair, "all starting heroes occupy legal land and every player receives equal resources")
+	if config.naval:
+		check(ports.size() >= config.players * 2 and port_counts.all(func(value: int) -> bool: return value >= 2), "each inhabited homeland has at least two usable harbors")
+		var valid_ports := true
+		var unique := {}
+		for port: Dictionary in ports:
+			var a := Vector2i(int(port.land[0]), int(port.land[1]))
+			var b := Vector2i(int(port.water[0]), int(port.water[1]))
+			var key := "%s/%s" % [a, b]
+			valid_ports = valid_ports and not unique.has(key) and abs(a.x - b.x) + abs(a.y - b.y) == 1 and modes[a.y * map.width + a.x] == 1 and modes[b.y * map.width + b.x] == 2
+			unique[key] = true
+		check(valid_ports, "all harbor endpoints are unique, adjacent, unblocked land/sea pairs")
+		if not ports.is_empty():
+			var sea := _flood(map, modes, Vector2i(ports[0].water[0], ports[0].water[1]), {}, true, 2)
+			check(ports.all(func(port: Dictionary) -> bool: return sea[int(port.water[1]) * map.width + int(port.water[0])] != 0), "all harbors share an independently connected sea")
+		if config.layout == "archipelago":
+			var land := _flood(map, modes, from, {}, true, 1)
+			var separated := false
+			for start: Dictionary in starts:
+				var hero := state.object(int(start.hero_id))
+				if not land[int(hero.y) * map.width + int(hero.x)]: separated = true
+			check(separated, "archipelago players occupy genuinely separate islands requiring a voyage")
+	else:
+		check(ports.is_empty(), "non-naval maps do not advertise unusable harbors")
+	state.close()
+	validated += 1
+
+func _modes(map: ELAdventureMap, grid: ELAdventureGrid) -> PackedByteArray:
+	var result := PackedByteArray()
+	result.resize(map.width * map.height)
+	for y in map.height:
+		for x in map.width:
+			var index := y * map.width + x
+			if grid.blockers[index] > 0: continue
+			var wet := false
+			var valid := true
+			for dy in 2:
+				for dx in 2:
+					var kind := map.tile(x + dx, y + dy)
+					if kind == 16: wet = true
+					elif int(map.profile.terrain_tiles.types.get(kind, {}).get("movement", -1)) < 0: valid = false
+			if valid: result[index] = 2 if wet else 1
+	return result
+
+func _links(map: ELAdventureMap, ports: Array) -> Dictionary:
+	var result := {}
+	for port: Dictionary in ports:
+		var a := int(port.land[1]) * map.width + int(port.land[0])
+		var b := int(port.water[1]) * map.width + int(port.water[0])
+		result.get_or_add(a, {})[b] = true
+		result.get_or_add(b, {})[a] = true
+	return result
+
+func _flood(map: ELAdventureMap, modes: PackedByteArray, start: Vector2i, links: Dictionary, naval: bool, only_mode := 0) -> PackedByteArray:
+	var seen := PackedByteArray()
+	seen.resize(modes.size())
+	var initial := start.y * map.width + start.x
+	if initial < 0 or initial >= modes.size() or modes[initial] == 0: return seen
+	var queue := PackedInt32Array([initial])
+	seen[initial] = 1
+	var cursor := 0
+	while cursor < queue.size():
+		var id := queue[cursor]
+		cursor += 1
+		var x := id % map.width
+		var y := id / map.width
+		for dy in range(-1, 2):
+			for dx in range(-1, 2):
+				var nx := x + dx
+				var ny := y + dy
+				if nx < 0 or ny < 0 or nx >= map.width or ny >= map.height: continue
+				var next := ny * map.width + nx
+				if seen[next] or modes[next] == 0 or (only_mode > 0 and modes[next] != only_mode) or (not naval and modes[next] != 1): continue
+				if modes[id] != modes[next] and not links.get(id, {}).has(next): continue
+				if naval and dx != 0 and dy != 0:
+					if modes[y * map.width + nx] != modes[id] or modes[ny * map.width + x] != modes[id]: continue
+				seen[next] = 1
+				queue.append(next)
+	return seen
+
+func _approachable(map: ELAdventureMap, grid: ELAdventureGrid, item: Dictionary, seen: PackedByteArray) -> bool:
+	if item.is_empty(): return false
+	var size: Vector2i = grid.footprints.get(int(item.uid), {}).get("size", Vector2i.ONE)
+	for y in range(-1, size.y + 1):
+		for x in range(-1, size.x + 1):
+			if x >= 0 and y >= 0 and x < size.x and y < size.y: continue
+			var nx := int(item.x) + x
+			var ny := int(item.y) + y
+			if nx >= 0 and ny >= 0 and nx < map.width and ny < map.height and seen[ny * map.width + nx]: return true
+	return false
+
+func _reproduction() -> void:
+	label = "shape determinism and variation"
+	var profile := Fixture.profile()
+	var terrains := {}
+	for layout: String in LAYOUTS:
+		label = "shape reproduction/" + layout
+		var config := {"seed": "repeatable-shapes", "layout": layout, "naval": true, "size": 96, "players": 4, "coast": "rugged", "water": "normal"}
+		var first := _generate(profile, config)
+		var repeated := _generate(profile, JSON.parse_string(JSON.stringify(config)))
+		if first == null or repeated == null: continue
+		check(ELFirstRandomMap.content_hash(first) == ELFirstRandomMap.content_hash(repeated) and first.get_meta("first_naval", {}) == repeated.get_meta("first_naval", {}), "same JSON recipe reproduces terrain, content, and harbors for " + layout)
+		terrains[first.terrain.hex_encode().sha256_text()] = true
+	check(terrains.size() == LAYOUTS.size(), "all eight layouts create distinct geography with the same seed and settings")
+	var hashes := {}
+	for water: String in WATER:
+		for coast: String in ["smooth", "rugged"]:
+			label = "topology options/" + water + "/" + coast
+			var map := _generate(profile, {"seed": "topology-options", "size": 96, "layout": "archipelago", "naval": true, "water": water, "coast": coast})
+			if map != null: hashes[map.terrain.hex_encode().sha256_text()] = true
+	label = "topology options"
+	check(hashes.size() == 6, "water amount and coastline controls change actual terrain")
+	completed.append("reproducibility")

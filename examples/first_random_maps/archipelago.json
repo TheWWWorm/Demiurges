@@ -1,0 +1,18 @@
+{
+  "version": 2,
+  "seed": "random-map-example",
+  "size": 128,
+  "players": 4,
+  "layout": "archipelago",
+  "biome": "mixed",
+  "resources": "normal",
+  "starting_resources": "normal",
+  "guards": "normal",
+  "faction": "Green",
+  "roads": true,
+  "scenery": 1,
+  "castle_health": 30,
+  "naval": true,
+  "water": "high",
+  "coast": "rugged"
+}

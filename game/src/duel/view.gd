@@ -1,3 +1,4 @@
+## Modified for the EL1 Naval Worlds release, 18 November 2026.
 extends Node3D
 ## Runtime composition: profile-owned content -> rules -> scene and controls.
 
@@ -7556,6 +7557,7 @@ func _begin_campaign(edition: String, scenario: Dictionary, difficulty: int, res
 	campaign_view = ELAdventureView.new()
 	campaign_view.strategic_session = online
 	campaign_view.loading_progress = cover.panel.show_progress
+	if edition == "el1" and profiles.has("el2"): campaign_view.naval_source = profiles["el2"]
 	# First game: the second game's battle dome, borrowed when it is installed.
 	if edition == "el1" and profiles.has("el2") and bool(settings.values.get("first_battle_dome", true)): campaign_view.dome_source = profiles["el2"]
 	add_child(campaign_view)
