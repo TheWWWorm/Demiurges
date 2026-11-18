@@ -1,5 +1,5 @@
 {
-  "version": "0.18.4",
+  "version": "0.18.5",
   "languages": {
     "en": {
       "pages": 472,
@@ -19,7 +19,7 @@
   "files": {
     "data/en/index.json": {
       "bytes": 331605,
-      "sha256": "37e9d50dfd0ecaa49fb74555fa7286167247b864e3cdfa85025bb47ac5c01149"
+      "sha256": "2976022c52a45cf9a0100f0c62089ff6a4d3f68bbb2ba8f3979a5b05a8dea16c"
     },
     "data/en/pages/abilities.json": {
       "bytes": 2238,
@@ -1911,7 +1911,7 @@
     },
     "data/ru/index.json": {
       "bytes": 585349,
-      "sha256": "ee2a30ad48731a0ac7e88a077310b5eb0b891620e1866074befc4d16fee4dea5"
+      "sha256": "123742738952567c41bff6745d7e3ee67eb68e0c0209e1d96af03bbe2b6a7482"
     },
     "data/ru/pages/abilities.json": {
       "bytes": 3685,
@@ -3802,8 +3802,8 @@
       "sha256": "838d61a3a9f77583762672b49490d1ddd71bda24d0ee738023127e375400f687"
     },
     "i18n.json": {
-      "bytes": 1917,
-      "sha256": "e8ea1273d286143f7291cab5976bdd0b546e07ee1661138bbd47c083514fa7c6"
+      "bytes": 1955,
+      "sha256": "c0c2fe7ea7e8b3125aba4d4660fa3d49e79ed43e17e044a84ad59f8c16595412"
     },
     "images/el1/IRMC.webp": {
       "bytes": 29954,
@@ -5734,17 +5734,17 @@
       "sha256": "37f7185c2ffa1c37007ec638ea2729ad61959446d42733d4db156d5b0544282f"
     },
     "index.html": {
-      "bytes": 2445,
-      "sha256": "2eea4a2f80afcc102691067a8d876b7ac524df646bc2ad08962f6f27acbecdeb"
+      "bytes": 2488,
+      "sha256": "0af699a0765b5b31a3567caa9070ecefe1d62c691903beea83ed1f6215d0b328"
     },
     "wiki.css": {
-      "bytes": 7834,
-      "sha256": "4938106d5da82383b2d85d1a7923a9e91e6e585563a42e614b2b943f71461c2d"
+      "bytes": 7950,
+      "sha256": "b9785acd482bd464943f74afb90511f66671e1a3e61b621c1ed344f44bdd43cb"
     },
     "wiki.js": {
-      "bytes": 8424,
-      "sha256": "aabab5bcfce15545227916db3d8f7e6c353fbf93c2b073e25dec7262d79874ed"
+      "bytes": 8640,
+      "sha256": "f1ca10fe6ee26dfebb9874946e68af19933a07440d488f879dd85ba44f991925"
     }
   },
-  "bytes": 12214235
+  "bytes": 12214648
 }

@@ -1,6 +1,6 @@
 'use strict';
 // Filled in with content hashes and the engine files by the Web build tool.
-const ENGINE_CACHE = 'demiurges-engine-78d6e5a4bffa57787c82';
+const ENGINE_CACHE = 'demiurges-engine-d05b06c64a419741570c';
 // Hosts may redirect /index.html to / (Cloudflare Workers assets do). A
 // redirected response must never answer a navigation (the browser fails it
 // with ERR_FAILED), so the shell is fetched and stored as "./".
@@ -37,7 +37,7 @@ const FILES = {
 "size": 7298
 },
 "index.html": {
-"sha256": "d4771644a614bccc1cce95dfc2e1082cc517610fa30b700a24fed7bc7c88fe87",
+"sha256": "167603ea960b4819a5b3057cbcb68edc689fc9caaeb2940c0f944437befb27f8",
 "size": 5716
 },
 "index.icon.png": {
@@ -49,8 +49,8 @@ const FILES = {
 "size": 279833
 },
 "index.pck": {
-"sha256": "4cc2f4dee02e82685664c8a485d5c857994e002987697602c563d49fbadd6415",
-"size": 17799996
+"sha256": "07cb9810596f486d854d4ee311072923e19700cf74cea4f76bb1c05dc0c3b233",
+"size": 17816252
 },
 "index.png": {
 "sha256": "fe70f220ab59b7a0bbbb3128edf94d6676254762eec168899b1c4de8f6e76ea5",
