@@ -48,7 +48,7 @@ const RULES := {
 	"RodofKnights": {"tier": 5, "artifact": "RodofKnights", "knight": 0.6, "health": 80},
 	"RodOfRessurection": {"tier": 5, "artifact": "RodOfRessurection", "revive": 0.6, "health": 60},
 	"ScrollOfAshStorm": {"tier": 5, "artifact": "ScrollOfAshStorm", "dust": 2.5, "dust_radius": 7.0, "health": 100},
-	"AmuletOfWar": {"tier": 5, "artifact": "AmuletOfWar", "unity": 0.2, "unity_per": 0.1},
+	"AmuletOfWar": {"tier": 5, "artifact": "AmuletOfWar", "unity": 0.2, "unity_per": 0.05, "unity_cap": 3},
 	"IMML": {"tier": 5, "spell": "IMML", "fury_attack": 0.45, "fury_health": -0.1, "damage": 10},
 	"RingOfCommand": {"tier": 5, "artifact": "RingOfCommand", "command": 0.3, "health": 80},
 	"RingOfParalyzation": {"tier": 5, "artifact": "RingOfParalyzation", "paralyze": 0.15, "paralyze_seconds": 1.5, "damage": 20},
@@ -163,7 +163,7 @@ static func describe(kind: String) -> Array[String]:
 	if r.get("dispel_hit", false): lines.append("Breaks enchantments: hits remove the target's bonuses.")
 	if r.has("ward"): lines.append("Below 40%% health: heals %d%% of its health once." % roundi(float(r.ward) * 100))
 	if r.has("storm"): lines.append("Every %d hits: %d damage to another enemy within 4 m." % [int(r.storm_every), int(r.storm)])
-	if r.get("ether_shield", false): lines.append("Ether protection: enemy abilities cannot target it.")
+	if r.get("ether_shield", false): lines.append("Ether protection prevents direct targeting by enemy abilities and artifacts.")
 	if r.get("elusive", false): lines.append("Unblockable: goes for the enemy back line.")
 	if r.has("bless_attack"): lines.append("For the first %d s: +%d%% attack and a %d-point shield." % [roundi(float(r.bless_seconds)), roundi(float(r.bless_attack) * 100), int(r.bless_shield)])
 	if r.get("first_strike", false): lines.append("First strike.")
@@ -179,7 +179,7 @@ static func describe(kind: String) -> Array[String]:
 	if r.has("knight"): lines.append("On death, a Konung rises with %d%% of its health." % roundi(float(r.knight) * 100))
 	if r.has("revive"): lines.append("Returns once after death with %d%% health." % roundi(float(r.revive) * 100))
 	if r.has("dust"): lines.append("Below half health: enemies within %d m cannot attack for %.1f s. Once." % [roundi(float(r.dust_radius)), float(r.dust)])
-	if r.has("unity"): lines.append("+%d%% attack and health, +%d%% more per ally of the same race." % [roundi(float(r.unity) * 100), roundi(float(r.unity_per) * 100)])
+	if r.has("unity"): lines.append("+%d%% attack and health. Each other allied recruit line adds %d%%, up to %d lines." % [roundi(float(r.unity) * 100), roundi(float(r.unity_per) * 100), int(r.unity_cap)])
 	if r.has("fury_attack"): lines.append("Fury: +%d%% attack, %d%% health." % [roundi(float(r.fury_attack) * 100), roundi(float(r.fury_health) * 100)])
 	if r.has("command"): lines.append("Once: takes control of an enemy below %d%% health." % roundi(float(r.command) * 100))
 	if r.has("paralyze"): lines.append("Hits have a %d%% chance to paralyse for %.1f s." % [roundi(float(r.paralyze) * 100), float(r.paralyze_seconds)])

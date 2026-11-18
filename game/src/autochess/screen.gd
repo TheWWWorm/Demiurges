@@ -56,7 +56,7 @@ var _shop_panel: HBoxContainer
 var _offers: Array = []
 var _recruited: Array[Label] = []
 var _refresh_button: H.RoundButton
-var _level_button: H.RoundButton
+var _level_button: H.LevelButton
 var _actions: VBoxContainer
 var _ether: Label
 var _income: Label
@@ -249,8 +249,9 @@ func _build_shop() -> void:
 	_refresh_button.kind = "refresh"
 	_refresh_button.pressed.connect(func(): _act("refresh", []))
 	tools.add_child(_refresh_button)
-	_level_button = H.RoundButton.new()
-	_level_button.kind = "level"
+	_level_button = H.LevelButton.new()
+	_level_button.profile = profile
+	_level_button.tooltip_text = _t("Shop odds")
 	_level_button.pressed.connect(func(): _act("train", []))
 	tools.add_child(_level_button)
 	_actions = VBoxContainer.new()
@@ -1115,12 +1116,12 @@ func _refresh() -> void:
 	_refresh_button.tooltip_text = _t("Refresh · ◈ %d") % own.refresh_cost() + "\n" + _t("Refresh unlocked offers. Locked offers stay.") + " (R)"
 	_refresh_button.queue_redraw()
 	var maxed := own.level_needed() == 0
-	_level_button.value = str(own.capacity())
+	_level_button.level = own.capacity()
+	_level_button.value = str(_level_button.level)
 	_level_button.price = -1 if maxed else ELAutochessRules.TRAINING_COST
 	_level_button.progress = 1.0 if maxed else float(own.level_progress()) / own.level_needed()
 	_level_button.caption = _t("Max level") if maxed else _t("XP %d/%d") % [own.level_progress(), own.level_needed()]
 	_level_button.disabled = not own.can_shop() or maxed or not own.spending_error(ELAutochessRules.TRAINING_COST).is_empty()
-	_level_button.tooltip_text = _t("Level %d") % own.capacity() + "\n" + _t("Gain %d XP for ◈ %d. The level is how many creatures you can field; it also brings costlier offers.") % [ELAutochessRules.TRAINING_XP, ELAutochessRules.TRAINING_COST] + " (F)"
 	_level_button.queue_redraw()
 	_ether.text = str(own.ether)
 	var income := own.income_preview()
@@ -1575,8 +1576,8 @@ const FLAG_HELP := {
 	"NoUntap": "attacks 45% slower but hits 45% harder",
 	"Destroy": "hits poison the target for a third of the blow again over 3 s",
 	"NSS": "moves faster and uses its first ability sooner",
-	"NoTarget": "enemy abilities and poisons do not affect it",
-	"NoAffect": "enemy abilities and poisons do not affect it",
+	"NoTarget": "enemy single-target abilities and artifacts cannot select it",
+	"NoAffect": "blocks area abilities, poison and on-hit debuffs",
 	"Outerplanar": "takes 25% less damage from abilities and artifacts",
 	"Regeneration": "recovers health after two seconds without taking damage",
 }

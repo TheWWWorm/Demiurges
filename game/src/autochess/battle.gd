@@ -25,7 +25,6 @@ class Fighter:
 	var family := -1
 	var rank := 0
 	var tier := 1
-	var race := ""
 	var uid := 0
 	var item := ""
 	var creep := false
@@ -152,7 +151,6 @@ func _add(placement: Dictionary, team: int, echo := false) -> Fighter:
 	f.family = index
 	f.rank = star
 	f.tier = unit_tier
-	f.race = String(row.get("Race", ""))
 	f.uid = int(placement.get("uid", 0))
 	f.item = String(placement.get("item", "")) if not echo else ""
 	f.creep = bool(placement.get("creep", false))
@@ -203,24 +201,19 @@ func _apply_bell() -> void:
 					"synthets": u.defense += 3.0 * level
 					"flyers": u.evasion = 0.15 * level
 					"strikers": u.first_hit_bonus = 0.3 * level
-	# Race auras: each aura code counts once per team.
-	for team in 2:
-		var seen := {}
-		for source: Fighter in units:
-			if source.team != team or String(source.ability.get("kind", "")) not in ["aura", "rally", "revive"]: continue
-			var a := source.ability
-			if seen.has(source.code) or not a.has("race"): continue
-			if String(a.kind) == "revive" and not a.has("aura"): continue
-			seen[source.code] = true
-			for u: Fighter in units:
-				if u.team != team or u.race != String(a.race): continue
-				var attack := float(a.get("attack", a.get("aura", 0.0)))
-				var health := float(a.get("health", a.get("aura", 0.0))) if String(a.kind) != "rally" else float(a.get("health", 0.0))
-				u.damage *= 1.0 + attack
-				u.max_hp *= 1.0 + health
-				u.hp = u.max_hp
-				if String(a.kind) == "aura" and a.has("haste"): u.interval /= 1.0 + float(a.haste)
-				if a.get("elusive", false) and "Elusive" not in u.flags: u.flags.append("Elusive")
+	# Each creature form's aura counts once per team.
+	var seen := [{}, {}]
+	for source: Fighter in units:
+		var a := source.ability
+		if a.get("kind", "") != "aura" or seen[source.team].has(source.code): continue
+		seen[source.team][source.code] = true
+		for u: Fighter in units:
+			if not _receives_support(u, source, String(a.scope)): continue
+			u.damage *= 1.0 + float(a.get("attack", 0.0))
+			u.max_hp *= 1.0 + float(a.get("health", 0.0))
+			u.interval /= 1.0 + float(a.get("haste", 0.0))
+			u.recharge *= 1.0 + float(a.get("recharge", 0.0))
+			if a.get("elusive", false) and "Elusive" not in u.flags: u.flags.append("Elusive")
 	# Items: flat values after percentage bonuses.
 	for u: Fighter in units:
 		if u.item.is_empty(): continue
@@ -243,8 +236,10 @@ func _apply_bell() -> void:
 			u.shield += float(g.bless_shield)
 		if g.has("rod"): u.rod_left = float(g.rod_every)
 		if g.has("unity"):
-			var same := units.filter(func(o: Fighter) -> bool: return o != u and o.team == u.team and o.race == u.race).size()
-			var bonus := float(g.unity) + float(g.unity_per) * same
+			var other_lines := {}
+			for o: Fighter in units:
+				if o.team == u.team and o.family >= 0 and o.family != u.family: other_lines[o.family] = true
+			var bonus := float(g.unity) + float(g.unity_per) * mini(other_lines.size(), int(g.unity_cap))
 			u.damage *= 1.0 + bonus
 			u.max_hp *= 1.0 + bonus
 			u.hp = u.max_hp
@@ -271,6 +266,15 @@ func _apply_bell() -> void:
 	# A walking horror's aura of death strikes every creature as it enters.
 	for u: Fighter in units:
 		if String(u.ability.get("kind", "")) == "death_aura": _death_aura(u)
+
+func _receives_support(ally: Fighter, source: Fighter, scope: String) -> bool:
+	if ally.dead or ally.team != source.team: return false
+	match scope:
+		"melee": return not ally.ranged
+		"ranged": return ally.ranged
+		"flying": return "Fly" in ally.flags
+		"all": return true
+	return false
 
 func _allies_near(source: Fighter, radius: float, include_self: bool) -> Array[Fighter]:
 	var found: Array[Fighter] = []
@@ -570,9 +574,9 @@ func _can_cast(u: Fighter) -> bool:
 	var a := u.ability
 	match String(a.kind):
 		"revive": return _revive_candidate(u) != null
-		"rally": return units.any(func(o: Fighter) -> bool: return not o.dead and o.team == u.team and o.race == String(a.race) and o != u) or a.has("health")
+		"rally": return units.any(func(o: Fighter) -> bool: return _receives_support(o, u, String(a.scope)))
 		"nova":
-			return _alive(1 - u.team).any(func(o: Fighter) -> bool: return _nova_match(o, String(a.filter)) and not _immune(o)) or a.has("fallback")
+			return _alive(1 - u.team).any(func(o: Fighter) -> bool: return not _magic_screen(o) and (_nova_match(o, String(a.filter)) or a.has("fallback")))
 		"execute", "bolt", "stun", "silence", "drain", "dispel": return _ability_target(u) != null
 	return false
 
@@ -644,11 +648,12 @@ func _strike(u: Fighter, target: Fighter) -> void:
 	if u.gear.has("lifesteal") and dealt > 0.0:
 		_heal(u, dealt * float(u.gear.lifesteal))
 		_item_used(u)
-	if u.gear.get("dispel_hit", false): _item_used(u)
-	if "Disenchant" in u.flags or u.gear.get("dispel_hit", false): _dispel(target)
 	var a := u.ability
-	if _same_life(target, life) and not _immune(target):
-		match String(a.get("kind", "")):
+	var kind := String(a.get("kind", ""))
+	if _same_life(target, life) and not _magic_screen(target):
+		if u.gear.get("dispel_hit", false): _item_used(u)
+		if "Disenchant" in u.flags or u.gear.get("dispel_hit", false): _dispel(target)
+		match kind:
 			"poison": _poison(target, raw * float(a.share), float(a.seconds), u.id)
 			"venom":
 				_poison(target, raw * float(a.share), float(a.seconds), u.id)
@@ -658,29 +663,26 @@ func _strike(u: Fighter, target: Fighter) -> void:
 				target.weakened_left = float(a.seconds)
 			"burn": target.burn_left = maxf(target.burn_left, float(a.seconds))
 			"silence_hit": target.silenced = maxf(target.silenced, float(a.seconds))
-	if String(a.get("kind", "")) == "grow": u.growth = mini(int(a.limit), u.growth + 1)
-	# Poisonous: the original's end-of-turn kill becomes poison here, a
-	# third of the blow again over 3 s (ether-protected creatures are immune).
-	# A creature whose own ability already poisons (snakes, hornets) keeps
-	# just that, so the two never stack.
-	if _same_life(target, life) and "Destroy" in u.flags and not _immune(target) and not String(u.ability.get("kind", "")) in ["poison", "venom"]:
-		_poison(target, raw * POISONOUS_SHARE, 3.0, u.id)
-	if _same_life(target, life) and u.gear.has("poison"):
-		_poison(target, raw * float(u.gear.poison), 3.0, u.id)
-		_item_used(u)
-	if _same_life(target, life) and u.gear.has("venom") and target.venoms.is_empty() and not _immune(target):
-		target.venoms.append({"left": 4.0, "threshold": float(u.gear.venom), "source": u.id})
-		_item_used(u)
-	if _same_life(target, life) and u.gear.has("paralyze") and rng.randf() < float(u.gear.paralyze):
-		_stun(target, float(u.gear.paralyze_seconds))
-		_item_used(u)
+		# A creature's own poison replaces its Poisonous flag.
+		if "Destroy" in u.flags and kind not in ["poison", "venom"]:
+			_poison(target, raw * POISONOUS_SHARE, 3.0, u.id)
+		if u.gear.has("poison"):
+			_poison(target, raw * float(u.gear.poison), 3.0, u.id)
+			_item_used(u)
+		if u.gear.has("venom") and target.venoms.is_empty():
+			target.venoms.append({"left": 4.0, "threshold": float(u.gear.venom), "source": u.id})
+			_item_used(u)
+		if u.gear.has("paralyze") and rng.randf() < float(u.gear.paralyze):
+			_stun(target, float(u.gear.paralyze_seconds))
+			_item_used(u)
+	if kind == "grow": u.growth = mini(int(a.limit), u.growth + 1)
 	# Thorns: melee hits on a spiked carrier.
 	if not u.ranged and target.gear.has("thorns") and not u.dead:
 		_item_used(target)
 		_harm(u, float(target.gear.thorns), target.id, "thorns")
 	if u.gear.has("storm") and u.hits_dealt % int(u.gear.storm_every) == 0:
 		var other := _nearest_enemy(target, 4.0, u.team, target)
-		if other != null:
+		if other != null and not _magic_screen(other):
 			_emit("ability", {"u": u.id, "t": [other.id], "a": "storm"})
 			_item_used(u)
 			_harm(other, float(u.gear.storm), u.id, "storm")
@@ -705,8 +707,11 @@ func _nearest_enemy(around: Fighter, radius: float, team: int, exclude: Fighter)
 			best = o
 	return best
 
-func _immune(target: Fighter) -> bool:
-	return "NoTarget" in target.flags or "NoAffect" in target.flags
+func _ether_protected(target: Fighter) -> bool:
+	return "NoTarget" in target.flags
+
+func _magic_screen(target: Fighter) -> bool:
+	return "NoAffect" in target.flags
 
 func _poison(target: Fighter, total: float, seconds: float, source: int) -> void:
 	if total <= 0.0 or seconds <= 0.0: return
@@ -774,7 +779,7 @@ func _after_wound(target: Fighter) -> void:
 		target.dust_used = true
 		var hit: Array[int] = []
 		for o: Fighter in units:
-			if o.dead or o.team == target.team or o.pos.distance_to(target.pos) > float(target.gear.dust_radius): continue
+			if o.dead or o.team == target.team or _magic_screen(o) or o.pos.distance_to(target.pos) > float(target.gear.dust_radius): continue
 			o.dusted = float(target.gear.dust)
 			hit.append(o.id)
 		_emit("ability", {"u": target.id, "t": hit, "a": "dust"})
@@ -782,7 +787,7 @@ func _after_wound(target: Fighter) -> void:
 	# Ring of Command: one wounded enemy changes sides.
 	for holder: Fighter in units:
 		if holder.dead or holder.team == target.team or not holder.gear.has("command") or commanded[holder.team]: continue
-		if target.tier >= 5 or target.hp > target.max_hp * float(holder.gear.command) or _immune(target): continue
+		if target.tier >= 5 or target.hp > target.max_hp * float(holder.gear.command) or _ether_protected(target): continue
 		commanded[holder.team] = true
 		target.team = holder.team
 		target.target = -1
@@ -846,7 +851,7 @@ func _death_aura(u: Fighter) -> void:
 	var amount := u.ability_power * float(u.ability.scale)
 	var hit: Array[int] = []
 	for o: Fighter in units:
-		if o.dead or o == u: continue
+		if o.dead or o == u or _magic_screen(o): continue
 		hit.append(o.id)
 	_emit("ability", {"u": u.id, "t": hit, "a": "death_aura"})
 	for id: int in hit:
@@ -854,11 +859,12 @@ func _death_aura(u: Fighter) -> void:
 		if o != null and not o.dead: _harm(o, amount, u.id, "ability")
 
 func _rod(u: Fighter, target: Fighter) -> void:
+	if _ether_protected(target): return
 	u.rod_left = float(u.gear.rod_every)
 	var hit: Array[int] = [target.id]
 	if u.gear.has("rod_splash"):
 		for o: Fighter in units:
-			if not o.dead and o.team != u.team and o != target: hit.append(o.id)
+			if not o.dead and o.team != u.team and o != target and not _magic_screen(o): hit.append(o.id)
 	_emit("ability", {"u": u.id, "t": hit, "a": "rod", "item": u.item})
 	_item_used(u)
 	_harm(target, float(u.gear.rod), u.id, "rod")
@@ -872,9 +878,13 @@ func _nova_match(o: Fighter, filter: String) -> bool:
 		"ground": return "Fly" not in o.flags
 	return true
 
+func _is_targeted_ability(a: Dictionary) -> bool:
+	return a.kind in ["bolt", "execute", "silence", "drain", "dispel"] or (a.kind == "stun" and a.mode == "target")
+
 func _ability_target(u: Fighter) -> Fighter:
 	var a := u.ability
-	var enemies := _alive(1 - u.team).filter(func(o: Fighter) -> bool: return not _immune(o))
+	var targeted := _is_targeted_ability(a)
+	var enemies := _alive(1 - u.team).filter(func(o: Fighter) -> bool: return not (_ether_protected(o) if targeted else _magic_screen(o)))
 	if enemies.is_empty(): return null
 	var current := unit(u.target)
 	match String(a.kind):
@@ -906,7 +916,7 @@ func _ability_target(u: Fighter) -> Fighter:
 				for o: Fighter in enemies:
 					if not o.ranged and o.action == "attack": return o
 				return null
-	if current != null and not current.dead and current.team != u.team and not _immune(current): return current
+	if current in enemies: return current
 	var nearest: Fighter = null
 	for o: Fighter in enemies:
 		if nearest == null or o.pos.distance_to(u.pos) < nearest.pos.distance_to(u.pos): nearest = o
@@ -915,33 +925,29 @@ func _ability_target(u: Fighter) -> Fighter:
 func _ability(u: Fighter, target: Fighter) -> void:
 	if u.dead: return
 	var a := u.ability
+	if _is_targeted_ability(a) and (target == null or target.dead or target.team == u.team or _ether_protected(target)):
+		target = _ability_target(u)
+		if target == null: return
 	var power := u.ability_power * float(a.get("scale", 1.0))
 	match String(a.kind):
 		"bolt":
-			if target == null or target.dead: target = _ability_target(u)
-			if target == null: return
 			_emit("ability", {"u": u.id, "t": [target.id], "a": "bolt"})
 			_harm(target, power, u.id, "ability")
 		"nova":
 			var hit: Array[int] = []
 			for o: Fighter in _alive(1 - u.team):
-				if _nova_match(o, String(a.filter)) and not _immune(o): hit.append(o.id)
+				if _nova_match(o, String(a.filter)) and not _magic_screen(o): hit.append(o.id)
 			var amount := power
 			if hit.is_empty() and a.has("fallback"):
 				for o: Fighter in _alive(1 - u.team):
-					if not _immune(o): hit.append(o.id)
+					if not _magic_screen(o): hit.append(o.id)
 				amount = u.ability_power * float(a.fallback)
 			_emit("ability", {"u": u.id, "t": hit, "a": "nova"})
 			for id: int in hit:
 				var o := unit(id)
 				if o != null and not o.dead: _harm(o, amount, u.id, "ability")
 		"execute":
-			if target == null or target.dead: target = _ability_target(u)
-			if target == null: return
 			var threshold := float(a.threshold)
-			if a.has("per_race"):
-				var same := units.filter(func(o: Fighter) -> bool: return not o.dead and o.team == u.team and o.race == String(a.per_race)).size()
-				threshold += float(a.per) * maxi(0, same - 1)
 			_emit("ability", {"u": u.id, "t": [target.id], "a": "execute"})
 			if target.tier < 5 and target.hp <= target.max_hp * threshold: _harm(target, target.hp + target.shield + 1.0, u.id, "destroy")
 			else: _harm(target, power, u.id, "ability")
@@ -950,13 +956,15 @@ func _ability(u: Fighter, target: Fighter) -> void:
 			match String(a.mode):
 				"frontline":
 					for o: Fighter in _alive(1 - u.team):
-						if not o.ranged and not _immune(o) and unit(o.target) != null and unit(o.target).team == u.team and o.pos.distance_to(unit(o.target).pos) < 4.0: hit.append(o)
-				"race":
-					if target != null:
-						for o: Fighter in _alive(1 - u.team):
-							if o.race == target.race and not _immune(o): hit.append(o)
+						if not o.ranged and not _magic_screen(o) and unit(o.target) != null and unit(o.target).team == u.team and o.pos.distance_to(unit(o.target).pos) < 4.0: hit.append(o)
+				"near_target":
+					if target == null or target.dead: target = _ability_target(u)
+					if target == null: return
+					var radius_squared := float(a.radius) * float(a.radius)
+					for o: Fighter in _alive(1 - u.team):
+						if not _magic_screen(o) and o.pos.distance_squared_to(target.pos) <= radius_squared: hit.append(o)
 				_:
-					if target != null and not target.dead: hit.append(target)
+					hit.append(target)
 			var ids: Array[int] = []
 			for o: Fighter in hit: ids.append(o.id)
 			_emit("ability", {"u": u.id, "t": ids, "a": "stun"})
@@ -964,7 +972,6 @@ func _ability(u: Fighter, target: Fighter) -> void:
 				_stun(o, float(a.seconds))
 				_harm(o, power, u.id, "ability")
 		"silence":
-			if target == null or target.dead: return
 			_emit("ability", {"u": u.id, "t": [target.id], "a": "silence"})
 			target.silenced = maxf(target.silenced, float(a.seconds))
 			target.cooldown = maxf(target.cooldown, 1.0)
@@ -972,20 +979,16 @@ func _ability(u: Fighter, target: Fighter) -> void:
 		"rally":
 			var ids: Array[int] = []
 			for o: Fighter in units:
-				if o.dead or o.team != u.team or o.race != String(a.race): continue
+				if not _receives_support(o, u, String(a.scope)): continue
 				o.haste = maxf(o.haste, float(a.haste))
 				o.haste_left = float(a.seconds)
 				ids.append(o.id)
 			_emit("ability", {"u": u.id, "t": ids, "a": "rally"})
 		"drain":
-			if target == null or target.dead: return
-			var bats := maxi(1, units.filter(func(o: Fighter) -> bool: return not o.dead and o.team == u.team and o.race == String(a.get("per_race", u.race))).size())
-			var amount := power * (0.7 + 0.3 * bats)
 			_emit("ability", {"u": u.id, "t": [target.id], "a": "drain"})
-			var lost := _harm(target, amount, u.id, "ability")
+			var lost := _harm(target, power, u.id, "ability")
 			_heal(u, lost)
 		"dispel":
-			if target == null or target.dead: return
 			_emit("ability", {"u": u.id, "t": [target.id], "a": "dispel"})
 			_dispel(target)
 			_harm(target, power, u.id, "ability")
@@ -1001,8 +1004,7 @@ func _revive_candidate(u: Fighter) -> Fighter:
 	for o: Fighter in units:
 		if not o.dead or o.team != u.team or o.revived or o.echo or o == u: continue
 		if time - o.death_time < 1.0: continue
-		if a.has("race") and o.race != String(a.race): continue
-		if a.has("max_tier") and o.tier > int(a.max_tier): continue
+		if o.tier > int(a.max_tier): continue
 		if best == null or o.tier * 3 + o.rank > best.tier * 3 + best.rank: best = o
 	return best
 

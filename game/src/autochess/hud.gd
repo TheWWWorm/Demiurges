@@ -254,6 +254,57 @@ class RoundButton extends Button:
 		ELAutochessHud.centered(self, font, caption, Vector2(size.x * 0.5, 76), 13, ink, 3)
 
 
+## The level button compares the per-slot roll for each recruit price.
+class LevelButton extends RoundButton:
+	var profile: ELProfile
+	var level := 3:
+		set(new_level):
+			if level == new_level: return
+			level = new_level
+			if is_instance_valid(_odds_box): _fill_odds_tooltip()
+	var _odds_box: VBoxContainer
+
+	func _init() -> void:
+		kind = "level"
+
+	func _make_custom_tooltip(_text: String) -> Object:
+		var panel := PanelContainer.new()
+		panel.add_theme_stylebox_override("panel", ELAutochessHud.style(Color("182321f5"), Color("6d6248"), Vector2(12, 8)))
+		_odds_box = VBoxContainer.new()
+		_odds_box.add_theme_constant_override("separation", 6)
+		panel.add_child(_odds_box)
+		_fill_odds_tooltip()
+		return panel
+
+	func _fill_odds_tooltip() -> void:
+		for child in _odds_box.get_children(): child.free()
+		var t := func(key: String) -> String: return ELAutochessText.t(profile, key)
+		ELAutochessHud.label(_odds_box, t.call("Shop odds"), 16, ELAutochessHud.GOLD, true)
+		var grid := GridContainer.new()
+		var maxed := level == ELAutochessRules.MAX_ARMY
+		grid.columns = 2 if maxed else 3
+		grid.add_theme_constant_override("h_separation", 16)
+		grid.add_theme_constant_override("v_separation", 3)
+		_odds_box.add_child(grid)
+		ELAutochessHud.label(grid, t.call("Cost"), 13, ELAutochessHud.MUTED)
+		ELAutochessHud.label(grid, t.call("Level %d") % level, 13, ELAutochessHud.MUTED)
+		if not maxed: ELAutochessHud.label(grid, t.call("Level %d") % (level + 1), 13, ELAutochessHud.GOLD)
+		var odds: Array = ELAutochessRules.SHOP_ODDS[level]
+		var next: Array = ELAutochessRules.SHOP_ODDS[mini(level + 1, ELAutochessRules.MAX_ARMY)]
+		for tier in odds.size():
+			var chance := int(odds[tier])
+			ELAutochessHud.label(grid, "◈ %d" % (tier + 1), 14, ELAutochessHud.cost_accent(tier + 1))
+			ELAutochessHud.label(grid, "%d%%" % chance, 14, ELAutochessHud.PAPER if chance > 0 else ELAutochessHud.MUTED).horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+			if not maxed:
+				var upcoming := int(next[tier])
+				var ink := ELAutochessHud.MUTED
+				if upcoming > chance: ink = ELAutochessHud.WIN
+				elif upcoming < chance: ink = ELAutochessHud.LOSS
+				ELAutochessHud.label(grid, "%d%%" % upcoming, 14, ink).horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		var action: String = t.call("Max level") if maxed else t.call("Gain %d XP for ◈ %d") % [ELAutochessRules.TRAINING_XP, ELAutochessRules.TRAINING_COST] + " (F)"
+		ELAutochessHud.label(_odds_box, action, 13, ELAutochessHud.MUTED)
+
+
 ## One recruit offer: the live creature, stars, lock, and a price plate with
 ## its alliance colours. An offer that completes an evolution pulses with a
 ## cyan outline and shows ⇧ and its copy count.

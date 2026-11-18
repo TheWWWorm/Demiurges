@@ -39,6 +39,10 @@ func _run() -> void:
 		return
 	check(ELAutochessRules.available(profile), "every recruit form exists in this installation")
 	_check_forms(profile)
+	_check_shop_tooltip(profile)
+	_check_ability_protection(profile)
+	_check_ally_support(profile)
+	_check_mantis_fright(profile)
 	_check_mirror(profile)
 	_check_lines(profile)
 	_check_items(profile)
@@ -86,6 +90,98 @@ func _place(index: int, rank: int, count: int, team: int, item := "") -> Array:
 		rows.append({"code": ELAutochessRules.form(index, rank), "family": index, "rank": rank, "tier": ELAutochessRules.tier(index),
 			"point": [point.x, point.y], "uid": 100 * team + i + 1, "item": item})
 	return rows
+
+func _check_shop_tooltip(profile: ELProfile) -> void:
+	var button := ELAutochessHud.LevelButton.new()
+	button.profile = profile
+	var tooltip := button._make_custom_tooltip("") as PanelContainer
+	var content := tooltip.get_child(0)
+	for level: int in ELAutochessRules.SHOP_ODDS:
+		button.level = level
+		var grid := content.get_child(1) as GridContainer
+		var columns := 2 if level == ELAutochessRules.MAX_ARMY else 3
+		check(grid.columns == columns, "level %d shows a next-level column only when one exists" % level)
+		var odds: Array = ELAutochessRules.SHOP_ODDS[level]
+		for tier in odds.size():
+			var row := (tier + 1) * columns
+			check((grid.get_child(row + 1) as Label).text == "%d%%" % odds[tier], "current odds match the shop roll table")
+			if columns == 3:
+				var next: Array = ELAutochessRules.SHOP_ODDS[level + 1]
+				check((grid.get_child(row + 2) as Label).text == "%d%%" % next[tier], "next-level odds match the shop roll table")
+	tooltip.free()
+	button.free()
+
+func _check_ability_protection(profile: ELProfile) -> void:
+	var battle := ELAutochessBattle.new()
+	var dragons := _line("dragons")
+	var home := _place(dragons, 0, 1, 0) + _place(dragons, 2, 1, 0) + _place(_line("snakes"), 2, 1, 0)
+	battle.setup(profile, home, _place(_line("treants"), 1, 3, 1), 17)
+	var bolt := battle.units[0]
+	var breath := battle.units[1]
+	var snake := battle.units[2]
+	var ether := battle.units[3]
+	var screen := battle.units[4]
+	var both := battle.units[5]
+	ether.flags.assign(["NoTarget"])
+	screen.flags.assign(["NoAffect"])
+	both.flags.assign(["NoTarget", "NoAffect"])
+	bolt.target = ether.id
+	check(battle._ability_target(bolt) == screen, "direct casts skip ether protection and can choose a magic screen")
+	battle._ability(bolt, ether)
+	check(ether.hp == ether.max_hp and screen.hp < screen.max_hp and both.hp == both.max_hp, "a direct cast is redirected around ether protection")
+	var screen_hp := screen.hp
+	battle._ability(breath, null)
+	check(ether.hp < ether.max_hp and screen.hp == screen_hp and both.hp == both.max_hp, "area damage gets through ether protection and stops at a magic screen")
+	battle._strike(snake, ether)
+	battle._strike(snake, screen)
+	battle._strike(snake, both)
+	check(not ether.poisons.is_empty() and screen.poisons.is_empty() and both.poisons.is_empty(), "magic screen blocks on-hit poison")
+	check(screen.hp < screen_hp and both.hp < both.max_hp, "basic attacks still hit through either protection")
+
+func _check_ally_support(profile: ELProfile) -> void:
+	var battle := ELAutochessBattle.new()
+	var halos := _line("halos")
+	var treants := _line("treants")
+	var home := _place(_line("aviaks"), 2, 2, 0) + _place(halos, 0, 1, 0) + _place(treants, 0, 1, 0)
+	home += _place(_line("kobolds"), 2, 1, 0) + _place(_line("lamias"), 0, 1, 0)
+	battle.setup(profile, home, _place(halos, 0, 1, 1) + _place(treants, 0, 1, 1), 19)
+	var ranged_ally := battle.units[2]
+	var melee_ally := battle.units[3]
+	var rally := battle.units[4]
+	var healer := battle.units[5]
+	var ranged_enemy := battle.units[6]
+	var melee_enemy := battle.units[7]
+	check(ranged_ally.max_hp == ceilf(ranged_enemy.max_hp * 1.08) and is_equal_approx(ranged_ally.damage, snappedf(ranged_enemy.damage * 1.08, 0.1)),
+		"Aviak aura buffs a different ranged line and duplicate Aviaks do not stack it")
+	check(melee_ally.max_hp == melee_enemy.max_hp and melee_ally.damage == melee_enemy.damage, "Aviak aura leaves melee allies unchanged")
+	check(battle._can_cast(rally), "Kobold rally can cast without another Kobold")
+	battle._ability(rally, null)
+	check(melee_ally.haste > 0.0 and ranged_ally.haste == 0.0 and melee_enemy.haste == 0.0, "Kobold rally hastens allied melee from other lines")
+	battle._die(melee_ally, -1)
+	battle.time += 1.0
+	check(battle._revive_candidate(healer) == melee_ally, "Lamia can revive a fallen ally of a different line")
+	battle._ability(healer, null)
+	check(not melee_ally.dead and melee_ally.revived and melee_ally.hp == ceilf(melee_ally.max_hp * 0.4), "Lamia's cross-line revive restores the advertised health")
+	var carrier := _place(treants, 0, 1, 0, "AmuletOfWar")
+	battle.setup(profile, carrier + _place(halos, 0, 2, 0) + _place(treants, 0, 1, 0), _place(treants, 0, 1, 1), 20)
+	check(battle.units[0].max_hp == ceilf(battle.units.back().max_hp * 1.25), "Amulet of War counts a different line once and skips its own")
+
+func _check_mantis_fright(profile: ELProfile) -> void:
+	var battle := ELAutochessBattle.new()
+	var wolves := _line("wolves")
+	var enemies := [
+		_unit_at(wolves, 0, Vector2(4, 0), 101),
+		_unit_at(_line("treants"), 0, Vector2(4, 2.5), 102),
+		_unit_at(wolves, 0, Vector2(4, -6), 103),
+		_unit_at(_line("mechozaurs"), 2, Vector2(5, 1), 104),
+	]
+	battle.setup(profile, _place(_line("mantises"), 2, 1, 0), enemies, 21)
+	var mantis := battle.units[0]
+	mantis.target = battle.units[1].id
+	battle._ability(mantis, battle._ability_target(mantis))
+	check(battle.units[1].stunned > 0.0 and battle.units[2].stunned > 0.0, "Mantis fright stuns the target and a nearby enemy of another line")
+	check(battle.units[3].stunned == 0.0, "Mantis fright misses an enemy outside its radius")
+	check(battle.units[4].stunned == 0.0 and battle.units[4].hp == battle.units[4].max_hp, "Magic Screen blocks Mantis area fright")
 
 ## Identical armies on both sides must split the wins.
 func _check_mirror(profile: ELProfile) -> void:
@@ -148,6 +244,7 @@ func _check_items(profile: ELProfile) -> void:
 func _check_matches(profile: ELProfile, count: int) -> void:
 	var results := []
 	var line_picks := {}
+	var neutral_rounds := {}
 	for game in count:
 		var game_match := ELAutochessMatch.new()
 		game_match.auto_save = false
@@ -162,6 +259,12 @@ func _check_matches(profile: ELProfile, count: int) -> void:
 				game_match.start_fight()
 			elif game_match.stage == "fight":
 				game_match.process(1.0)
+				if game_match.stage != "fight" and game_match.is_creep_round():
+					var results_for_wave: Dictionary = neutral_rounds.get(game_match.round_number, {"wins": 0, "losses": 0, "draws": 0})
+					for result: Dictionary in game_match.round_results.values():
+						var outcome: String = ["draws", "wins", "losses"][int(result.winner) + 1]
+						results_for_wave[outcome] += 1
+					neutral_rounds[game_match.round_number] = results_for_wave
 			elif game_match.stage == "result":
 				game_match.next_round()
 		check(game_match.stage == "over", "match %d ends" % game)
@@ -181,6 +284,12 @@ func _check_matches(profile: ELProfile, count: int) -> void:
 		results.append({"rounds": game_match.round_number, "winner_seat": winner, "winner_strategy": ELAutochessBot.strategy(winner), "army": army})
 	report["matches"] = results
 	report["line_picks"] = line_picks
+	report["neutral_rounds"] = neutral_rounds
+	for round_number: int in [5, 10, 15, 20]:
+		if not neutral_rounds.has(round_number): continue
+		var wave: Dictionary = neutral_rounds[round_number]
+		check(wave.wins > wave.losses + wave.draws, "most companies clear neutral round %d (%d wins, %d losses, %d draws)" %
+			[round_number, wave.wins, wave.losses, wave.draws])
 
 func _check_save(profile: ELProfile) -> void:
 	var game_match := ELAutochessMatch.new()
