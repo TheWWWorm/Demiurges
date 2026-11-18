@@ -449,6 +449,13 @@ func _strategy(profile: ELProfile) -> void:
 	for hero: Dictionary in ELFirstAI.heroes_of(state, 2):
 		if not hero.get("strategy_order", {}).is_empty(): orders += 1
 	check(orders > 0 and state.error.is_empty() and director.error.is_empty(), "the smarter world AI plans on the same generated economy")
+	var recruit := state.object(generator.report.starts[1].hero_id)
+	state.add_experience(recruit.uid, ELHeroProgression.threshold(profile, 5) - int(recruit.experience))
+	var enemy := ELFirstScenario.castle_object(state, 1)
+	var assault := {"kind": "tower", "target": enemy.uid}
+	check(recruit.level == 5 and ELFirstAIPlanner.siege_ready(recruit, 0, map), "a recruited level-five hero leads sieges on current maps")
+	check(not ELFirstAIPlanner.siege_ready(recruit, 0) and not ELFirstAIPlanner.siege_ready(recruit, 1, map), "earlier siege rules and support roles retain their limits")
+	check(ELFirstAIPlanner.siege_nights(director, recruit, enemy) > 0 and ELFirstAI.cost(director, recruit, 0, assault) < ELFirstAI.NONE, "the AI makes a viable siege plan with the recruited hero")
 	# A simulated strategic seat suppresses the Hall of Fame write while
 	# using the same castle defeat and last-rival victory code.
 	director._strategic_players = [1]

@@ -560,9 +560,8 @@ static func utility(director: ELAdventureDirector, hero: Dictionary, role: int, 
 			# the castle's last chance.
 			if gain < 0.0 and not last: return -INF
 		"tower":
-			if level < 6 or not ELFirstScenario.assault_problem(state, hero, item).is_empty(): return -INF
-			# A strong supporter may make a second attack.
-			if role == 1 and level < 8: return -INF
+			if not siege_ready(hero, role, state.map) or not ELFirstScenario.assault_problem(state, hero, item).is_empty(): return -INF
+			if level < 6 and siege_nights(director, hero, item) < 0: return -INF
 			if urgent and not ELStrategy.adjacent(director, hero, item): return -INF
 			gain = siege_gain(director, hero, role, item)
 			walk = _walk(director, hero, item, true, exact)
@@ -628,7 +627,7 @@ static func utility(director: ELAdventureDirector, hero: Dictionary, role: int, 
 			# has not found: a share of that siege's worth, the rest of the
 			# way (at least the straight line from the frontier) counted in.
 			var castle := state.object(int(task.get("toward", -1)))
-			if walk >= 0.0 and siege_ready(hero, role) and not castle.is_empty() and ELFirstScenario.assault_problem(state, hero, castle).is_empty():
+			if walk >= 0.0 and siege_ready(hero, role, state.map) and not castle.is_empty() and ELFirstScenario.assault_problem(state, hero, castle).is_empty():
 				var size: Vector2i = director.grid.footprints.get(int(castle.uid), {}).get("size", Vector2i.ONE)
 				var rest := _lower_bound({"x": tile.x, "y": tile.y}, Rect2i(int(castle.x), int(castle.y), size.x, size.y))
 				var toward := SCOUT_SHARE * siege_gain(director, hero, role, castle) - TURN * rest / day
@@ -1330,9 +1329,13 @@ static func _unfound_castles(state: ELAdventureSession, player: int) -> Array[Di
 	return result
 
 ## Whether `hero` in `role` would besiege a castle (the level rules of a siege).
-static func siege_ready(hero: Dictionary, role: int) -> bool:
+static func siege_ready(hero: Dictionary, role: int, map: ELAdventureMap = null) -> bool:
 	var level := int(hero.get("level", 1))
-	return level >= 6 and (role == 0 or level >= 8)
+	if role != 0: return level >= 8
+	if level >= 6: return true
+	# Generated worlds offer a level-five recruit. It can lead the attack
+	# when its damage can overcome the target's restoration.
+	return level == 5 and map != null and int(map.get_meta("random_map", {}).get("version", 0)) >= ELFirstRandomMapV2.WILDERNESS_VERSION
 
 ## Unexplored tiles within REVEAL_RADIUS of `tile`.
 static func reveal(state: ELAdventureSession, player: int, tile: Vector2i) -> float:

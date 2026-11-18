@@ -113,6 +113,8 @@ economy. With guards enabled, a nearby optional encounter is drawn from a
 pool tested against the four starting spellbooks. Stronger creatures appear
 farther from the starting heroes, clear of main approaches. The difficulty
 setting still uses the original creatures' corresponding spellbooks.
+The computer can lead a siege with a level-five recruit when it can wear down
+the target castle's restoration.
 
 ## World configuration
 

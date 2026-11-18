@@ -813,7 +813,8 @@ static func cost(director: ELAdventureDirector, hero: Dictionary, role: int, tas
 			if role == 1: return AVOIDED if limit > AVOIDED and _route_cost(director, hero, item, false) != NONE else NONE
 			return _route_cost(director, hero, item, true)
 		"tower":
-			if role != 0 or level < 6 or not ELFirstScenario.assault_problem(state, hero, item).is_empty(): return NONE
+			if role != 0 or not ELFirstAIPlanner.siege_ready(hero, role, state.map) or not ELFirstScenario.assault_problem(state, hero, item).is_empty(): return NONE
+			if level < 6 and ELFirstAIPlanner.siege_nights(director, hero, item) < 0: return NONE
 			# Remake option: no siege is begun with spells that still wait for runes.
 			if ELFirstAIEconomy.urgent(director, hero) and not ELStrategy.adjacent(director, hero, item): return NONE
 			if limit <= 0: return NONE
