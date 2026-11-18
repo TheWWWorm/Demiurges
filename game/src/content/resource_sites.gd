@@ -101,7 +101,7 @@ static func capture(state: ELAdventureSession, hero_id: int, site_id: int, local
 	if site.owner == owner: return true
 	var previous: int = site.owner
 	site.owner = owner
-	state.event.emit({"kind": "site_captured", "id": site_id, "player": owner, "previous": previous})
+	state.event.emit({"kind": "site_captured", "id": site_id, "hero": hero_id, "player": owner, "previous": previous})
 	return true
 
 static func upgrade_price(profile: ELProfile, site: Dictionary) -> Dictionary:

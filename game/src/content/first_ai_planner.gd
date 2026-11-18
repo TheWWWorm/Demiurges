@@ -239,10 +239,28 @@ static func _assign(director: ELAdventureDirector, player: int, heroes: Array[Di
 	var keys: Array = columns.keys()
 	var matrix := _matrix(rows.size(), keys, utilities)
 	var choice := hungarian(matrix)
-	# A hero the matching left idle while others took its shortlist looks
-	# further down its own list (objectives no other hero took), and the
-	# matching is made again.
-	for round in WIDEN_ROUNDS:
+	# Check proposed duels before looking for a wider set of jobs. Heroes
+	# who lost their shortlist to a forecast can still take safer work.
+	var budgets: Array[Dictionary] = []
+	for hero: Dictionary in rows: budgets.append({"remaining": 4})
+	for round in WIDEN_ROUNDS + 1:
+		while true:
+			var clash := _frontier_clash(rows, choice, keys, columns, utilities)
+			if clash.is_empty():
+				for index in rows.size():
+					if not _matched(choice, index, keys, utilities): continue
+					var column := choice[index]
+					if not ELFirstAI.forecast_objective(director, rows[index], columns[keys[column]], budgets[index]):
+						ELFirstAI.note_stat(director, player, "fight_assignment_rejected")
+						clash = [index, column]
+						break
+			if clash.is_empty(): break
+			var line: PackedFloat64Array = matrix[clash[0]]
+			line[clash[1]] = BARRED
+			matrix[clash[0]] = line
+			utilities[clash[0]].erase(keys[clash[1]])
+			choice = hungarian(matrix)
+		if round == WIDEN_ROUNDS: break
 		var taken := {}
 		for index in rows.size():
 			if _matched(choice, index, keys, utilities): taken[keys[choice[index]]] = true
@@ -264,26 +282,6 @@ static func _assign(director: ELAdventureDirector, player: int, heroes: Array[Di
 		if not widened: break
 		keys = columns.keys()
 		matrix = _matrix(rows.size(), keys, utilities)
-		choice = hungarian(matrix)
-	# Only simulate the chosen fights. If a matchup is unsafe, drop it and
-	# match again so the hero can take a different objective this turn.
-	var budgets: Array[Dictionary] = []
-	for hero: Dictionary in rows: budgets.append({"remaining": 4})
-	while true:
-		var clash := _frontier_clash(rows, choice, keys, columns, utilities)
-		if clash.is_empty():
-			for index in rows.size():
-				if not _matched(choice, index, keys, utilities): continue
-				var column := choice[index]
-				if not ELFirstAI.forecast_objective(director, rows[index], columns[keys[column]], budgets[index]):
-					ELFirstAI.note_stat(director, player, "fight_assignment_rejected")
-					clash = [index, column]
-					break
-		if clash.is_empty(): break
-		var line: PackedFloat64Array = matrix[clash[0]]
-		line[clash[1]] = BARRED
-		matrix[clash[0]] = line
-		utilities[clash[0]].erase(keys[clash[1]])
 		choice = hungarian(matrix)
 	# The result is applied at once: each row's new objective first (a hero
 	# left idle keeps its errand only when it was not priced at all, so that
@@ -526,7 +524,8 @@ static func utility(director: ELAdventureDirector, hero: Dictionary, role: int, 
 		"monster":
 			if not item.get("alive", false): return -INF
 			gain = monster_gain(director, hero, role, item)
-			walk = _walk(director, hero, item, false, exact)
+			walk = _walk(director, hero, item, true, exact)
+			if walk < 0.0: walk = _walk(director, hero, item, false, exact)
 		"hero":
 			if not item.get("alive", false) or int(item.get("level", 1)) - level >= 2 or not state.hostile(hero, item): return -INF
 			walk = _walk(director, hero, item, false, exact)
@@ -599,7 +598,9 @@ static func utility(director: ELAdventureDirector, hero: Dictionary, role: int, 
 			if role == 0: gain *= 0.3
 			if not exact: walk = _lower_bound(hero, Rect2i(tile, Vector2i.ONE))
 			else:
+				var closed := ELFirstAI.close_guards(director, hero, -1)
 				var path := director.grid.path(Vector2i(hero.x, hero.y), tile)
+				for point: Vector2i in closed: director.grid._update_cell(point)
 				walk = -1.0 if path.is_empty() else float(director.grid.path_cost(path))
 				_path = path
 			# A hero ready for a siege looks for the way to an enemy castle it

@@ -12,6 +12,7 @@ var root := ""
 var error := ""
 var archives: Dictionary = {}
 var tables: Dictionary = {}
+var first_monster_definitions: Dictionary = {}
 var texts: Dictionary = {}
 var _textures: Dictionary = {}
 var _figure_diffuse: Dictionary = {}
@@ -55,6 +56,7 @@ func mount(edition: String, folder: String) -> bool:
 	error = ""
 	archives.clear()
 	tables.clear()
+	first_monster_definitions.clear()
 	texts.clear()
 	_textures.clear()
 	_figure_diffuse.clear()

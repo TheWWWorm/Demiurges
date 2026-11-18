@@ -29,6 +29,7 @@ const DOCK_FADE_SECONDS := 15.0 / 15.0
 const DOCK_MESSAGE_SECONDS := 20.0 / 15.0
 var strategy: Dictionary = {}
 var monster_forecasts: Dictionary = {}
+var monster_losses: Dictionary = {}
 var strategy_shop_wait: Callable
 ## Empty in local play. Network planning keeps the map's viewing player and
 ## the set of human commanders separate.
@@ -91,6 +92,7 @@ var _running: Variant = null
 func build(session: ELAdventureSession) -> bool:
 	state = session
 	monster_forecasts.clear()
+	monster_losses.clear()
 	grid = ELAdventureGrid.new()
 	if not grid.build(state.map, state.objects): return _fail(grid.error)
 	state.grid = grid

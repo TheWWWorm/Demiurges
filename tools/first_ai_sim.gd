@@ -25,8 +25,8 @@ extends SceneTree
 ##
 ## Each computer player's summary counts, per hero and day:
 ##   idle         no objective at the end of the day;
-##   no progress  idle, or an objective but neither a step nor anything done
-##                on the spot (a capture, a purchase, a visit, a battle won);
+##   no progress  neither a step nor an action on the spot (a capture,
+##                a purchase, a visit, a battle won);
 ##   stalled      an objective, no step, and not beside its target;
 ## and also unused movement (points left at night, share of the day's
 ## movement), lost objectives (objective-days: valid castles, sites,
@@ -137,9 +137,10 @@ func _play(profile: ELProfile, entry: Dictionary, days: int, need_shop: bool) ->
 	director.set_meta("first_ai_stats", {})
 	var balance := _arg("balance", "false") == "true"
 	if balance: director.set_meta("first_ai_balance", true)
+	if _arg("confirm-replays", "false") == "true": director.set_meta("first_ai_replay", true)
 	var capture := {}
 	var participants := ELFirstAI.computer_players(state) if balance else []
-	var timeline := {"turn": 0}
+	var timeline := {"turn": 0, "dawn": {}, "acted": {}}
 	stats = {}
 	threats = {}
 	stuck = false
@@ -148,15 +149,20 @@ func _play(profile: ELProfile, entry: Dictionary, days: int, need_shop: bool) ->
 	state.event.connect(func(data: Dictionary):
 		match data.get("kind"):
 			"site_captured":
+				timeline.acted[int(data.get("hero", -1))] = true
 				var player := int(data.player)
 				if balance and player in participants and not capture.has(player) and state.object(data.id).get("group") in ["mines", "mana_nodes"]:
 					capture[player] = int(timeline.turn)
+			"building_used", "castle_assaulted", "pickup_taken":
+				timeline.acted[int(data.get("hero", -1))] = true
 			"skill_learned":
 				var hero := state.object(data.id)
 				if int(hero.owner) != state.current_player: _stat(int(hero.owner)).skills += 1
 			"hero_placed":
 				var hero := state.object(data.id)
 				if data.get("recruited", false) and int(hero.owner) != state.current_player:
+					var dawn: Dictionary = timeline.dawn
+					dawn.get_or_add(int(hero.uid), [Vector2i(hero.x, hero.y), _deeds(hero)])
 					_stat(int(hero.owner)).recruits += 1
 					_say("day %d  P%d recruits %s (level %d)" % [state.day, hero.owner, hero.name, hero.level])
 			"inventory_changed":
@@ -205,9 +211,11 @@ func _play(profile: ELProfile, entry: Dictionary, days: int, need_shop: bool) ->
 	var outcome_day := -1
 	for day in days:
 		timeline.turn = day + 1
+		timeline.acted.clear()
 		for item: Dictionary in state.objects.values():
 			if item.get("type") == "hero" and item.get("alive", false) and item.has("cards") and item.has("rune_uses"): books[int(item.uid)] = {"cards": item.cards.duplicate(), "uses": item.rune_uses.duplicate()}
 		var before := _snapshot()
+		timeline.dawn = before
 		if not _settle(): break
 		if active and not _human_day(): break
 		if not director.end_day():
@@ -233,10 +241,10 @@ func _play(profile: ELProfile, entry: Dictionary, days: int, need_shop: bool) ->
 				s.hero_days += 1
 				var target := state.object(int(task.get("target", -1)))
 				var was: Array = before.get(int(hero.uid), [])
-				var moved: bool = was.is_empty() or was[0] != Vector2i(hero.x, hero.y)
-				var acted: bool = not was.is_empty() and was[1] != _deeds(hero)
+				var moved: bool = not was.is_empty() and was[0] != Vector2i(hero.x, hero.y)
+				var acted: bool = timeline.acted.has(int(hero.uid)) or (not was.is_empty() and was[1] != _deeds(hero))
 				if task.is_empty(): s.idle += 1
-				if task.is_empty() or (not moved and not acted): s.no_progress += 1
+				if not moved and not acted: s.no_progress += 1
 				if not task.is_empty() and not moved and not (not target.is_empty() and ELStrategy.adjacent(director, hero, target)): s.stalled += 1
 				lines.append("%s L%d (%d,%d) %s%s runes %d%%" % [hero.name, hero.level, hero.x, hero.y, task.get("kind", "idle"), (":" + str(target.get("name", ""))) if not target.is_empty() else "", int(ELFirstAIEconomy.rune_health(state, hero) * 100)])
 			_stat(player).lost += _lost(player)
@@ -317,8 +325,7 @@ func _human_day() -> bool:
 		if ELStrategy.act(director, hero) and not _settle(): return false
 	return true
 
-## Each computer hero's tile and what it has done (experience, book, skills,
-## resources and holdings of its player), at the start of a day.
+## Each computer hero's tile and personal progress at the start of a day.
 func _snapshot() -> Dictionary:
 	var result := {}
 	for player: int in ELFirstAI.computer_players(state):
@@ -326,10 +333,8 @@ func _snapshot() -> Dictionary:
 	return result
 
 func _deeds(hero: Dictionary) -> String:
-	var held := 0
-	for item: Dictionary in state.objects.values():
-		if int(item.get("owner", -1)) == int(hero.owner) and item.get("type") != "hero": held += 1
-	return var_to_str([int(hero.experience), hero.get("cards", []), hero.get("rune_uses", []), hero.get("skills", {}), held, state.players[int(hero.owner)].resources])
+	return var_to_str([int(hero.experience), hero.get("cards", []), hero.get("rune_uses", []), hero.get("skills", {}),
+		hero.get("artifacts", []), int(hero.health), int(hero.strategy_capacity)])
 
 ## Objectives a player could pursue that its plans have lost track of.
 func _lost(player: int) -> int:

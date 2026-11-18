@@ -56,12 +56,14 @@ static func plays_monster_duel(director: ELAdventureDirector, first: Dictionary,
 
 # Keep headless battles bounded even when both books run out of attacks.
 const MONSTER_DUEL_STEPS := 512
-const FORECAST_WINS := 5
 # Three draws for each initiative parity when terrain allows either side to start.
 const FORECAST_SEEDS := [9026, 18437, 27662, 3837, 14212, 31599]
 const EXTRA_SEEDS := [5398, 23951, 31076, 12079]
+const CONFIRMATION_SEEDS := [947, 6537, 20302, 29846]
 const EXTRA_WINS := 8
+const CONFIRMATION_WINS := 11
 const NARROW_WIN_MARGIN := 0.3
+const MONSTER_LOSS_COOLDOWN := 4
 
 ## Check a shortlisted monster or lair before committing a hero to the trip.
 static func forecast_objective(director: ELAdventureDirector, hero: Dictionary, task: Dictionary, budget: Dictionary = {}) -> bool:
@@ -72,9 +74,14 @@ static func forecast_objective(director: ELAdventureDirector, hero: Dictionary, 
 	if kind == "monster":
 		var at := Vector2i(item.x, item.y)
 		if director.interception.zones.has(int(item.uid)) and not ELStrategy.adjacent(director, hero, item):
-			var route := director.grid.approach(Vector2i(hero.x, hero.y), item)
-			var closed: Array[Vector2i] = []
-			route = ELStrategy.screen_monster_route(director, hero, route, item, at, closed, budget, int(item.uid))
+			var from := Vector2i(hero.x, hero.y)
+			var closed := close_guards(director, hero, int(item.uid))
+			var route := director.grid.approach(from, item)
+			if route.is_empty() and not closed.is_empty():
+				for tile: Vector2i in closed: director.grid._update_cell(tile)
+				closed.clear()
+				route = director.grid.approach(from, item)
+			route = ELStrategy.screen_monster_route(director, hero, route, item, at, closed, budget)
 			for tile: Vector2i in closed: director.grid._update_cell(tile)
 			if route.is_empty(): return false
 			for tile: Vector2i in route.slice(1):
@@ -90,14 +97,27 @@ static func forecast_objective(director: ELAdventureDirector, hero: Dictionary, 
 
 ## Starting books and modifiers fully determine the trials for a terrain and
 ## seat order. Cache the result through free-movement replans and across days.
-static func _duel_roster(state: ELAdventureSession, actor: Dictionary) -> Array:
-	return [actor.name, actor.get("shape", ""), actor.level, actor.health, actor.get("specialization", ""), actor.get("monster_difficulty", -1),
+static func _duel_roster(state: ELAdventureSession, actor: Dictionary, shape: String, row: Dictionary) -> Array:
+	var identity := [actor.name, shape]
+	if actor.type == "hero" and shape.is_empty() and not row.is_empty():
+		# For a template hero the duel supplies the complete book, skills,
+		# health and level. The template's only combat input is its faction.
+		identity = ["hero", str(row.get("Color", ""))]
+	return [identity, actor.level, actor.health, actor.get("specialization", ""), actor.get("monster_difficulty", -1),
 		actor.cards, actor.get("rune_uses", []), actor.get("rune_under", []), actor.get("skills", {}), actor.get("artifacts", []).map(func(art: Dictionary) -> String: return str(art.name)),
 		actor.get("global_spells", []), int(ELForts.garrison_of(state, actor).get("fort_level", 0))]
 
 static func _forecast_key(state: ELAdventureSession, hero: Dictionary, monster: Dictionary, guard_first: bool, at: Vector2i) -> String:
-	return var_to_str([guard_first, ELAdventureEncounter.terrain_class(state.map, at) if at != Vector2i.ZERO else -1,
-		_duel_roster(state, hero), _duel_roster(state, monster)])
+	var hero_shape := str(hero.get("shape", ""))
+	var hero_row := ELAdventureEncounter.combat_definition(state, hero, hero_shape)
+	var mob_shape := str(monster.get("shape", ""))
+	var mob_row := ELAdventureEncounter.combat_definition(state, monster, mob_shape)
+	var colours: Array[String] = [str(hero_row.get("Color", "")), str(mob_row.get("Color", ""))]
+	var placed: Array[bool] = [Vector2i(hero.x, hero.y) != Vector2i(-1, -1), Vector2i(monster.x, monster.y) != Vector2i(-1, -1)]
+	var terrain := ELAdventureEncounter.terrain_class(state.map, at) if at != Vector2i.ZERO else -1
+	# Different terrains with the same initiative play the same headless duel.
+	var initiative := ELAdventureEncounter.terrain_first_side(state.map.profile.id, terrain, colours, placed)
+	return var_to_str([guard_first, initiative, _duel_roster(state, hero, hero_shape, hero_row), _duel_roster(state, monster, mob_shape, mob_row)])
 
 static func _last_active_hero(director: ELAdventureDirector, owner: int) -> bool:
 	# Cache the answer for a planning pass. In movement/combat the roster
@@ -127,20 +147,26 @@ static func can_attack_monster(director: ELAdventureDirector, hero: Dictionary, 
 		if budget.has("remaining"): budget.remaining -= 1
 		if cache.size() >= 2048: cache.clear()
 		record = {"wins": 0, "samples": 0, "life": 0.0}
-		_sample_monster_duels(state, hero, monster, guard_first, at, FORECAST_SEEDS, FORECAST_WINS, record)
+		_sample_monster_duels(state, hero, monster, guard_first, at, FORECAST_SEEDS, EXTRA_WINS - EXTRA_SEEDS.size(), record)
 		record.base_samples = int(record.samples)
 		record.base_wins = int(record.wins)
 		record.base_life = float(record.life)
-		record.base_approved = int(record.wins) >= FORECAST_WINS
-		record.narrow = bool(record.base_approved) and float(record.life) / maxi(1, int(record.wins)) < NARROW_WIN_MARGIN
+		record.base_approved = int(record.wins) == FORECAST_SEEDS.size()
+		record.narrow = record.base_approved and float(record.life) / maxi(1, int(record.wins)) < NARROW_WIN_MARGIN
 		cache[key] = record
 	var approved: bool = record.base_approved
-	if approved and (record.narrow or _last_active_hero(director, int(hero.owner))):
+	var mixed := not approved and int(record.get("base_wins", 0)) >= EXTRA_WINS - EXTRA_SEEDS.size()
+	if mixed or (approved and (record.narrow or _last_active_hero(director, int(hero.owner)))):
 		if not record.has("extended"):
 			if not can_sample: return budget.get("allow_unknown", false)
 			if before > 0 and budget.has("remaining"): budget.remaining -= 1
 			_sample_monster_duels(state, hero, monster, guard_first, at, EXTRA_SEEDS, EXTRA_WINS, record)
 			record.extended = int(record.wins) >= EXTRA_WINS
+			# A fight with losses in the base sample has to hold up against a
+			# fresh set before the AI risks a hero on it.
+			if record.extended and mixed:
+				_sample_monster_duels(state, hero, monster, guard_first, at, CONFIRMATION_SEEDS, CONFIRMATION_WINS, record)
+				record.extended = int(record.wins) >= CONFIRMATION_WINS
 		approved = record.extended
 	if int(record.samples) > before and director.has_meta("first_ai_stats"):
 		var stats: Dictionary = director.get_meta("first_ai_stats")
@@ -149,7 +175,24 @@ static func can_attack_monster(director: ELAdventureDirector, hero: Dictionary, 
 		stats.forecast_usec = int(stats.get("forecast_usec", 0)) + usec
 		stats.forecast_peak = maxi(int(stats.get("forecast_peak", 0)), usec)
 		if record.has("extended"): stats.forecast_extended = int(stats.get("forecast_extended", 0)) + 1
+	if approved and not director.monster_losses.is_empty():
+		var loss: Dictionary = director.monster_losses.get(_monster_loss_key(hero, monster), {})
+		if int(loss.get("until", 0)) > int(state.day):
+			var assessment := _forecast_quality(record, mixed or record.narrow or _last_active_hero(director, int(hero.owner)))
+			var previous: Vector2 = loss.quality
+			if assessment.x < previous.x + 0.05 and assessment.y < previous.y + 0.12:
+				ELFirstAI.note_stat(director, int(hero.owner), "repeat_loss_avoided")
+				return false
 	return approved
+
+static func _monster_loss_key(hero: Dictionary, monster: Dictionary) -> Array:
+	return [int(hero.owner), int(monster.uid), int(hero.level), int(hero.health), hero.cards, hero.rune_uses]
+
+static func _forecast_quality(record: Dictionary, extra: bool) -> Vector2:
+	var wins := int(record.get("wins" if extra else "base_wins", 0))
+	var samples := int(record.get("samples" if extra else "base_samples", 0))
+	var life := float(record.get("life" if extra else "base_life", 0.0))
+	return Vector2(float(wins) / maxi(1, samples), life / maxi(1, wins))
 
 static func _sample_monster_duels(state: ELAdventureSession, hero: Dictionary, monster: Dictionary, guard_first: bool, at: Vector2i, seeds: Array, needed: int, record: Dictionary) -> void:
 	var first := int(monster.uid) if guard_first else int(hero.uid)
@@ -207,26 +250,34 @@ static func _play_monster_duel(battle: ELDuel) -> bool:
 static func _fight_monster(director: ELAdventureDirector, first: Dictionary, second: Dictionary) -> bool:
 	var state := director.state
 	var fight := ELAdventureEncounter.new()
-	if not fight.prepare_map_ai_duel(state, int(first.uid), int(second.uid), ELAdditionalBuildings._random(state)):
-		var hero := first if first.type == "hero" else second
-		var monster := second if first.type == "hero" else first
+	var guard_first: bool = first.type == "monster"
+	var hero := second if guard_first else first
+	var monster := first if guard_first else second
+	var at := Vector2i(second.x, second.y)
+	if at == Vector2i(-1, -1): at = Vector2i(first.x, first.y)
+	var battle_seed := ELAdditionalBuildings._random(state)
+	if not fight.prepare_map_ai_duel(state, int(first.uid), int(second.uid), battle_seed):
 		push_warning("Unable to prepare a computer duel against %s: %s" % [monster.name, fight.error])
 		_cancel_unavailable_duel(director, hero, monster)
 		return true
 	if not _play_monster_duel(fight.battle): return director._fail("The computer duel did not finish.")
+	var won := fight.battle.winner == int(guard_first)
+	var forecast: Dictionary = director.monster_forecasts.get(_forecast_key(state, hero, monster, guard_first, at), {})
+	var extra: bool = not forecast.is_empty() and forecast.has("extended") and (not forecast.base_approved or forecast.narrow or _last_active_hero(director, int(hero.owner)))
+	var loss_key := _monster_loss_key(hero, monster).duplicate(true) if not won and not forecast.is_empty() else []
 	if director.has_meta("first_ai_balance"):
-		var guard_first: bool = first.type == "monster"
-		var hero := second if guard_first else first
-		var monster := first if guard_first else second
-		var at := Vector2i(second.x, second.y)
-		if at == Vector2i(-1, -1): at = Vector2i(first.x, first.y)
 		var unit := fight.battle.heroes[int(guard_first)]
 		var report := {"player": int(hero.owner), "day": int(state.day), "hero": str(hero.name), "monster": str(monster.name),
-			"won": fight.battle.winner == int(guard_first), "draw": fight.battle.winner < 0,
+			"won": won, "draw": fight.battle.winner < 0,
 			"actual_health": clampf(float(unit.health) / maxf(1.0, float(unit.maximum)), 0.0, 1.0)}
-		var forecast: Dictionary = director.monster_forecasts.get(_forecast_key(state, hero, monster, guard_first, at), {})
+		if director.has_meta("first_ai_replay"):
+			var replay := ELAdventureEncounter.new()
+			if replay.prepare_map_ai_duel(state, int(first.uid), int(second.uid), battle_seed, at) and _play_monster_duel(replay.battle):
+				report.preview_match = replay.battle.winner == fight.battle.winner
+			report.battle_seed = battle_seed
+			report.monster_id = int(monster.uid)
+			report.terrain = ELAdventureEncounter.terrain_class(state.map, at)
 		if not forecast.is_empty():
-			var extra: bool = forecast.has("extended") and (forecast.narrow or _last_active_hero(director, int(hero.owner)))
 			report.wins = int(forecast.wins if extra else forecast.base_wins)
 			report.trials = int(forecast.samples if extra else forecast.base_samples)
 			report.win_health = float(forecast.life if extra else forecast.base_life) / maxi(1, int(report.wins))
@@ -234,6 +285,9 @@ static func _fight_monster(director: ELAdventureDirector, first: Dictionary, sec
 		var stats: Dictionary = director.get_meta("first_ai_stats", {})
 		stats.get_or_add("monster_outcomes", []).append(report)
 	if not fight.finish(): return director._fail(fight.error)
+	# Give other plans a chance after a loss; a better matchup can try sooner.
+	if not loss_key.is_empty():
+		director.monster_losses[loss_key] = {"until": int(state.day) + MONSTER_LOSS_COOLDOWN, "quality": _forecast_quality(forecast, extra)}
 	ELFirstScenario.evaluate(director, {"hero": first.uid, "opponent": second.uid, "winner": fight.winner})
 	return true
 
@@ -794,7 +848,7 @@ static func command(director: ELAdventureDirector, hero: Dictionary, task: Dicti
 	var item := director.state.object(task.get("target", -1))
 	var player := int(hero.owner)
 	if task.kind == "explore":
-		hero.strategy_order = {"destination": [int(task.tile[0]), int(task.tile[1])], "use": -1, "route": route_rules(director, player, false)}
+		hero.strategy_order = {"destination": [int(task.tile[0]), int(task.tile[1])], "use": -1, "route": route_rules(director, player, ELFirstAIEconomy.applies(director))}
 		return
 	if task.kind in ["patrol", "escort"]:
 		# Walks beside its own site or its besieger without using it.
@@ -810,9 +864,8 @@ static func command(director: ELAdventureDirector, hero: Dictionary, task: Dicti
 		if path.size() < 2: return
 		hero.strategy_order = {"destination": [path[-1].x, path[-1].y], "use": -1, "route": route_rules(director, player, false)}
 		return
-	# Creatures and buildings were planned along the plain route; the rest
-	# along a clean one when there is one.
-	var guarded: bool = task.kind in ["monster", "building"] or not clean
+	# Smarter monster orders use the screened approach chosen by the planner.
+	var guarded: bool = not clean or task.kind == "building" or (task.kind == "monster" and not ELFirstAIEconomy.applies(director))
 	hero.strategy_order = {"destination": [int(item.x), int(item.y)], "use": use, "route": route_rules(director, player, not guarded, use)}
 
 ## The rules of a planned route: whose explored ground it keeps to (-1: any

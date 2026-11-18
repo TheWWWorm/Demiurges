@@ -4,9 +4,12 @@ extends RefCounted
 
 static func definition(profile: ELProfile, name: String, difficulty: int) -> Dictionary:
 	if profile.id != "el1": return {}
-	for row: Dictionary in profile.table("Monsters").values():
-		if row.get("Name") == name and int(row.get("DifficultyLevel", -1)) == difficulty: return row
-	return {}
+	var index := profile.first_monster_definitions
+	if index.is_empty():
+		for row: Dictionary in profile.table("Monsters").values():
+			var levels: Dictionary = index.get_or_add(row.get("Name", ""), {})
+			levels.get_or_add(int(row.get("DifficultyLevel", -1)), row)
+	return index.get(name, {}).get(difficulty, {})
 
 static func book(row: Dictionary) -> Dictionary:
 	var cards: Array[String] = []

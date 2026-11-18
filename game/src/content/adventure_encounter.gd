@@ -109,8 +109,7 @@ func _prepare_duel(state: ELAdventureSession, defender: int, seed_value := -1, f
 		if actor.is_empty() or not actor.alive: return _fail("The encounter character is unavailable.")
 		# A campaign lord fights in the look of its level step (ELHeroLooks).
 		var shape := ELHeroLooks.worn(profile, actor)
-		var row: Dictionary = profile.table("Shapes").get(shape, {}) if not shape.is_empty() else profile.table("HeroTemplates").get(actor.name, {})
-		if profile.id == "el1" and actor.type == "monster": row = ELFirstMonsters.definition(profile, actor.name, int(actor.get("monster_difficulty", state.difficulty)))
+		var row := combat_definition(state, actor, shape)
 		if row.is_empty(): return _fail("The encounter appearance is missing: " + actor.name)
 		var color := String(row.get("Color", ""))
 		options.players.append({"faction": color, "shape": shape, "kind": actor.type, "title": actor.get("title", actor.name), "level": actor.level, "health": actor.health, "cards": actor.cards.duplicate(), "skills": actor.get("skills", {}).duplicate()})
@@ -207,6 +206,12 @@ func _prepare_duel(state: ELAdventureSession, defender: int, seed_value := -1, f
 	watch_side = ELFirstScenario.duel_watch(state, hero_id, opponent_id)
 	return true
 
+static func combat_definition(state: ELAdventureSession, actor: Dictionary, shape: String) -> Dictionary:
+	var profile := state.map.profile
+	if profile.id == "el1" and actor.type == "monster":
+		return ELFirstMonsters.definition(profile, actor.name, int(actor.get("monster_difficulty", state.difficulty)))
+	return profile.table("HeroTemplates").get(actor.name, {}) if shape.is_empty() else profile.table("Shapes").get(shape, {})
+
 static func _second_garrison_rod(state: ELAdventureSession, actor: Dictionary) -> bool:
 	return int(ELForts.garrison_of(state, actor).get("fort_level", 0)) >= 1
 
@@ -290,12 +295,15 @@ static func first_side(state: ELAdventureSession, first: int, second: int, colou
 	if placed[1]: tile = Vector2i(int(actors[1].x), int(actors[1].y))
 	elif placed[0]: tile = Vector2i(int(actors[0].x), int(actors[0].y))
 	if forecast_at.x >= 0: tile = forecast_at
-	var matches: Array[bool] = [false, false]
-	if tile != Vector2i.ZERO:
-		var terrain := terrain_class(state.map, tile)
-		for side in 2: matches[side] = placed[side] and colour_index(state.map.profile.id, colours[side]) == terrain
-	if matches[0] != matches[1]: return 0 if matches[0] else 1
-	return coin_flip(battle_seed)
+	var terrain := terrain_class(state.map, tile) if tile != Vector2i.ZERO else -1
+	var favoured := terrain_first_side(state.map.profile.id, terrain, colours, placed)
+	return coin_flip(battle_seed) if favoured < 0 else favoured
+
+static func terrain_first_side(edition: String, terrain: int, colours: Array[String], placed: Array[bool]) -> int:
+	if terrain < 0: return -1
+	var a := placed[0] and colour_index(edition, colours[0]) == terrain
+	var b := placed[1] and colour_index(edition, colours[1]) == terrain
+	return -1 if a == b else int(b)
 
 ## The original uses the battle seed's parity when terrain cannot decide.
 static func coin_flip(battle_seed: int) -> int:

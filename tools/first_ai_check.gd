@@ -1969,9 +1969,8 @@ func _case_y_impending() -> void:
 	check(ELFirstAIEconomy._choose(director, 2) != code or ELFirstAIEconomy.night_health(state, 2, cost) > 0, "Y15: the ether that saves the castle is not spent on an attack")
 
 func _case_y_route() -> void:
-	# A weak creature behind a fortified enemy hero: the route stops at the
-	# fort first, a battle the hero is likely to lose, so the creature is not
-	# worth the trip.
+	# A weak creature behind a fortified enemy hero. The scout can go around
+	# in the open, but a walled passage forces a battle it is likely to lose.
 	if not smart: return
 	var director := _world()
 	var state := director.state
@@ -1984,6 +1983,15 @@ func _case_y_route() -> void:
 	var task := {"kind": "monster", "target": int(creature.uid)}
 	var open := float(planner.call("utility", director, hero, 1, task, {}, true))
 	enemy.spell_fort = 1
+	director.interception.rebuild(state, director.grid)
+	var detour := float(planner.call("utility", director, hero, 1, task, {}, true))
+	check(detour > -INF and detour < open, "Y16: a safe detour makes the creature cost more time (%.1f -> %.1f)" % [open, detour])
+	for x in range(27, 46):
+		_wall(director, Vector2i(x, 88))
+		_wall(director, Vector2i(x, 92))
+	for y in range(89, 92):
+		_wall(director, Vector2i(27, y))
+		_wall(director, Vector2i(45, y))
 	director.interception.rebuild(state, director.grid)
 	var guarded := float(planner.call("utility", director, hero, 1, task, {}, true))
 	check(open > -INF and guarded < open, "Y16: the battle on the way lowers the creature's worth (%.1f -> %s)" % [open, str(guarded)])
