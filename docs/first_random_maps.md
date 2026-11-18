@@ -91,6 +91,22 @@ Starting opportunities are comparable, while coastlines, approaches and faction
 strengths can differ. The generator validates actual object footprints and
 reachable approaches after placing scenery and other content.
 
+### Exploring the wilderness
+
+Look behind your castle for springs and mentors. Springs give a visiting hero
+a weekly health or movement bonus. Mentors award experience or teach skills.
+Alchemists and traders offer runes and resources along longer routes. Lairs
+start with an occupant and can restock each week. Stronger lairs on neutral
+islands give heroes a reason to make a voyage after preparing their spellbooks.
+
+A Seer can reveal a distant crystal ball and the area around it through fog.
+Larger naval worlds can have small outlying islands with artifacts and lairs.
+Use the violet markers in the setup preview to spot regions with discoveries.
+
+The landscape uses connected stands of woodland, rocky ridges, and meadows.
+The placement logic reserves roads and routes to objectives before adding
+trees and cliffs. **Dense** adds more cover to woods and ridges.
+
 ## World configuration
 
 These are the keys accepted by `ELFirstRandomMap.generate(profile, options)`.
@@ -98,7 +114,7 @@ Omitted keys use the defaults below.
 
 | Key | Default | Supported values and effect |
 | --- | --- | --- |
-| `version` | `3` | `3` uses the denser scenery pass. `1` and `2` reproduce earlier worlds. Version 1 uses its own schema. |
+| `version` | `4` | `4` generates wilderness destinations and connected landscapes. Earlier versions reproduce their original worlds. Version 1 uses its own schema. |
 | `seed` | `"212"` | A string of 1–64 characters, not blank-only, without control characters. Whitespace in a valid seed is significant. |
 | `size` | `96` | `64`, `96`, `128`, `160` tiles per side. |
 | `players` | `4` | `2`, `3`, `4`: one human and the remaining seats controlled by AI. |
@@ -127,12 +143,12 @@ monsters** option also keeps its normal rules.
 
 ## Share and remember a setup
 
-**Copy setup** creates an `EL1R3:` code for a new world in the code field and clipboard. Paste a
+**Copy setup** creates an `EL1R4:` code for a new world in the code field and clipboard. Paste a
 complete code and press **Load setup** to restore its seed and world settings.
 Choose difficulty and AI separately. The code is a prefix followed by Base64
 encoded UTF-8 JSON; it is a recipe, not a map archive.
 
-`EL1R1:` and `EL1R2:` codes reproduce their original worlds when loaded and played
+`EL1R1:`, `EL1R2:`, and `EL1R3:` codes reproduce their original worlds when loaded and played
 without editing. Changing a world setting or choosing a new preset switches to
 the current generator.
 
@@ -146,7 +162,7 @@ modifies the installed original game's files.
 ```gdscript
 var generator := ELFirstRandomMap.new()
 var map := generator.generate(profile, {
-    "version": 3,
+    "version": 4,
     "seed": "island-expedition",
     "size": 128,
     "players": 4,
@@ -186,7 +202,7 @@ fingerprint, as applicable to the selected generator version.
 | Helper | Result |
 | --- | --- |
 | `ELFirstRandomMap.defaults()` | Current defaults. |
-| `ELFirstRandomMap.defaults(1)` and `ELFirstRandomMap.defaults(2)` | Defaults for earlier generator versions. |
+| `ELFirstRandomMap.defaults(version)` | Defaults for the given generator version. |
 | `ELFirstRandomMap.presets()` | Current preset names, descriptions and option overrides. |
 | `ELFirstRandomMap.normalize(options)` | Complete validated recipe, or an empty dictionary on failure. |
 | `ELFirstRandomMap.id_for_config(options)` | Deterministic identifier safe for the existing engine. |
@@ -219,11 +235,10 @@ games this includes hero ship state and queued travel, including a voyage
 paused at sea. Harbors are reconstructed from the same recipe and covered by
 the generated document's fingerprint. No separate generated map file is needed.
 
-Version 3 uses the version-2 geography and strategic placement before adding
-its scenery. The generator reserves access to sites, guards, and harbors before
-placing decorative blockers. Saves from each version regenerate with their
-original rules. Missing recipe fields, unsupported versions or incompatible
-generated content produce a load error.
+Version 4 reshapes rivers, coasts, and road approaches and reserves access to
+exploration sites before placing decorative blockers. Saves from each version
+regenerate with their original rules. Missing recipe fields, unsupported
+versions or incompatible generated content produce a load error.
 
 Ordinary campaign/custom maps retain their existing behavior. This feature does
 not add random maps to the multiplayer lobby or export original-editor

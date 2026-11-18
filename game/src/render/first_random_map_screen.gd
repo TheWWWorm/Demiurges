@@ -5,12 +5,13 @@ extends AcceptDialog
 signal requested(configuration: Dictionary, difficulty: int, ai: Dictionary)
 
 const SETTINGS_PATH := "user://el1_random_map_setup.json"
-const CODE_PREFIX := "EL1R3:"
+const CODE_PREFIX := "EL1R4:"
 const LEGACY_CODE_PREFIX := "EL1R1:"
-const CODE_VERSIONS := {LEGACY_CODE_PREFIX: 1, "EL1R2:": 2, CODE_PREFIX: ELFirstRandomMap.VERSION}
+const CODE_VERSIONS := {LEGACY_CODE_PREFIX: 1, "EL1R2:": 2, "EL1R3:": 3, CODE_PREFIX: ELFirstRandomMap.VERSION}
 const MAX_CODE_LENGTH := 4096
 const FACTIONS := [["Green", "Vitals"], ["Blue", "Kinets"], ["Red", "Chaots"], ["Black", "Synthets"]]
 const TERRAIN_INK := {"Green": Color("546a3d"), "Blue": Color("a8ac9b"), "Red": Color("8f5a3d"), "Black": Color("69634b"), "Colorless": Color("8d8778")}
+const LANDSCAPE_INK := {0: Color("49623a"), 1: Color("72844f"), 3: Color("67726a"), 4: Color("b5bfbd"), 7: Color("98aead"), 18: Color("80a4ac"), 8: Color("795040"), 10: Color("614848"), 11: Color("aa7857"), 12: Color("625654"), 13: Color("887862"), 15: Color("6c6150")}
 const PLAYER_INK := [Color("f4d789"), Color("dd6459"), Color("69b4e0"), Color("a4c879")]
 
 var profile: ELProfile
@@ -173,7 +174,7 @@ func build(source: ELProfile, level := 2, ai_levels: Dictionary = {}) -> void:
 	_preview.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 	_preview.tooltip_text = _t("The preview reveals the whole map. Exploration fog starts normally when you play.")
 	backing.add_child(_preview)
-	var legend := _label("Squares: castles · Gold: resources · Red: guards · Cyan: harbors")
+	var legend := _label("Squares: castles · Gold: resources · Red: guards · Cyan: harbors · Violet: discoveries")
 	legend.add_theme_font_size_override("font_size", 12)
 	preview_side.add_child(legend)
 	_summary = _label("Generate a preview to inspect your world before playing.")
@@ -419,10 +420,12 @@ func _start() -> void:
 static func preview_image(map: ELAdventureMap) -> Image:
 	var scale := 3
 	var result := Image.create(map.width * scale, map.height * scale, false, Image.FORMAT_RGB8)
+	var landscape := int(map.get_meta("random_map", {}).get("version", 0)) >= ELFirstRandomMapV2.LANDSCAPE_VERSION
 	for y in map.height:
 		for x in map.width:
 			var tile := map.tile(x, y)
 			var ink: Color = TERRAIN_INK.get(ELAdventureArt.terrain_color(tile), Color("8d8778"))
+			if landscape: ink = LANDSCAPE_INK.get(tile, ink)
 			if tile in ELTileSet.WATER_KINDS: ink = Color("294f68")
 			elif map.profile.terrain_tiles != null and int(map.profile.terrain_tiles.types.get(tile, {}).get("movement", 1)) < 0: ink = ink.darkened(0.5)
 			if map.roads[y * map.width + x] != 0: ink = ink.lerp(Color("d2b98a"), 0.45)
@@ -440,6 +443,7 @@ static func preview_image(map: ELAdventureMap) -> Image:
 			ink = PLAYER_INK[clampi(int(object.owner) - 1, 0, 3)]
 			radius = 5
 		elif object.group == "np_heroes": ink = Color("d65c50")
+		elif object.group == "additional_buildings": ink = Color("deb3ed")
 		var point := Vector2i(int(object.x) * scale, (map.height - 1 - int(object.y)) * scale)
 		var bounds := Rect2i(point - Vector2i(radius, radius), Vector2i(radius * 2 + 1, radius * 2 + 1)).intersection(Rect2i(Vector2i.ZERO, result.get_size()))
 		if radius == 5:

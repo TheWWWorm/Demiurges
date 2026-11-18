@@ -27,9 +27,10 @@ func _run() -> void:
 	_matrix()
 	_regressions()
 	_scenery()
+	_exploration()
 	_reproduction()
 	label = "completion"
-	check(completed.size() == 6, "every required test section completed")
+	check(completed.size() == 7, "every required test section completed")
 	print("FIRST MAP SHAPES: %d checks, %d generated maps, %d failure(s), %.2f s" % [checks, generated, failures.size(), (Time.get_ticks_msec() - began) / 1000.0])
 	for failure: String in failures: printerr("  " + failure)
 	quit(0 if failures.is_empty() else 1)
@@ -44,7 +45,7 @@ func check(ok: bool, what: String) -> void:
 func _configuration() -> void:
 	label = "shape settings"
 	var defaults := ELFirstRandomMap.defaults()
-	check(defaults.version == 3 and defaults.has("naval") and defaults.has("water") and defaults.has("coast"), "new recipes keep the naval settings schema")
+	check(defaults.version == 4 and defaults.has("naval") and defaults.has("water") and defaults.has("coast"), "new recipes keep the naval settings schema")
 	check(ELFirstRandomMap.normalize(JSON.parse_string(JSON.stringify(defaults))) == defaults, "settings survive JSON numeric conversion")
 	for options: Dictionary in [{"naval": 1}, {"naval": "true"}, {"water": true}, {"water": "huge"}, {"coast": []}, {"coast": "straight"}, {"version": 1, "naval": true}]:
 		check(ELFirstRandomMap.normalize(options).is_empty(), "malformed or wrong-version settings are rejected: " + JSON.stringify(options))
@@ -117,11 +118,12 @@ func _scenery() -> void:
 	var second_legacy := _generate(profile, {"version": 2, "seed": "scenery-regression", "size": 64, "players": 4, "layout": "crossroads"})
 	if second_legacy == null: return
 	check(ELFirstRandomMap.content_hash(second_legacy) == "4ecfa7abd3b2844cc6e9ea7aea4e8d73ecea5917816154b3d7563d0ba1f1f450", "the original v2 land recipe still reproduces exactly")
-	recipe.version = ELFirstRandomMap.VERSION
+	recipe.version = 3
 	var standard := _generate(profile, recipe)
 	var dense := _generate(profile, recipe.merged({"scenery": 2}, true))
 	var minimal := _generate(profile, recipe.merged({"scenery": 0}, true))
 	if standard == null or dense == null or minimal == null: return
+	check(ELFirstRandomMap.content_hash(standard) == "06fd34be5df4eb9667a2ba5a7c914a0e5261b7a35c816c44a397a0f86ae958fd", "the previous scenery pass still reproduces version-3 saves")
 	var decor := _listed_scenery(standard)
 	check(decor.size() >= 3 * _listed_scenery(original).size(), "normal scenery substantially increases terrain detail on the sparse island seed")
 	check(_listed_scenery(dense).size() > decor.size() and _listed_scenery(minimal).is_empty(), "the density control produces three distinct scenery levels")
@@ -137,6 +139,61 @@ func _scenery() -> void:
 			if away.dot(rear) > 0.0 and away.length_squared() < 15.0 * 15.0: count += 1
 		check(count >= 5, "each compact homeland has scenery behind its castle")
 	completed.append("scenery")
+
+func _exploration() -> void:
+	label = "landscape exploration"
+	var profile := Fixture.profile()
+	var map := _generate(profile, {"seed": "breakwater-41", "size": 128, "players": 4, "layout": "archipelago", "naval": true, "water": "high"})
+	if map == null: return
+	var stops: Array[Dictionary] = map.objects.filter(func(item: Dictionary) -> bool: return item.group == "additional_buildings")
+	var center := Vector2(map.width, map.height) / 2.0
+	for start: Dictionary in map.get_meta("random_map_report").starts:
+		var castle := Vector2(start.castle[0], start.castle[1])
+		var outward := (castle - center).normalized()
+		var behind := stops.filter(func(item: Dictionary) -> bool:
+			var direction := Vector2(item.x, item.y) - castle
+			return direction.length() < 26.0 and direction.dot(outward) > 3.0 and item.name in ["SpringOfStrength", "SpringOfDexterity", "Teacher", "Magister"])
+		check(behind.size() >= 2, "each homeland has two usable destinations in the backcountry")
+	var state := ELAdventureSession.new()
+	check(state.start(map, 2, ELFirstRandomMap.seed_for_config(ELFirstRandomMap.configuration(map))), "the expedition world starts")
+	var director := ELAdventureDirector.new()
+	if not director.build(state):
+		check(false, "the expedition navigation builds: " + director.error)
+		state.close()
+		return
+	var hero := state.object(state.main_hero)
+	var from := Vector2i(hero.x, hero.y)
+	var lake := {}
+	var lake_path: Array[Vector2i] = []
+	var bowl := {}
+	var lairs := 0
+	for item: Dictionary in state.objects.values():
+		if item.name == ELAdditionalBuildings.BOWL: bowl = item
+		if item.name == ELAdditionalBuildings.LAKE:
+			var candidate := director.grid.approach(from, item)
+			if not candidate.is_empty() and (lake_path.is_empty() or candidate.size() < lake_path.size()):
+				lake = item
+				lake_path = candidate
+		if ELAdditionalBuildings.DUNGEONS.has(item.name):
+			var inhabitant := state.object(item.monster)
+			check(inhabitant.get("alive", false) and not inhabitant.get("placed", true) and inhabitant.get("dungeon") == item.uid, "the standard lair restock populates generated dungeons")
+			lairs += 1
+	check(lairs >= 4, "both homelands and neutral islands offer lair encounters")
+	check(not lake.is_empty() and not bowl.is_empty() and ELAdditionalBuildings.barrier_key(lake) == ELAdditionalBuildings.barrier_key(bowl), "the reachable Seer points to a remote discovery")
+	if not lake_path.is_empty() and not bowl.is_empty():
+		hero.x = lake_path[-1].x
+		hero.y = lake_path[-1].y
+		director.grid.update_actor(hero)
+		director.use_object(hero.uid, lake.uid)
+		check(state.players[1].get("scry", []).has(bowl.uid) and ELFog.shown(state, 1, bowl), "visiting the Seer reveals the remote crystal ball through fog")
+		var codec := ELAdventureSave.new()
+		var restored := codec.decode(JSON.parse_string(JSON.stringify(codec.encode(director), "", true, true)), {"el1": profile})
+		check(not restored.is_empty(), "expedition discoveries and lair occupants survive a save: " + codec.error)
+		if not restored.is_empty():
+			check(restored.state.players[1].get("scry", []).has(bowl.uid), "the discovered sight source is restored")
+			restored.state.close()
+	state.close()
+	completed.append("exploration")
 
 func _geometry(map: ELAdventureMap, config: Dictionary) -> void:
 	check(map.width == config.size and map.height == config.size and map.players.size() == config.players, "size and player count match the recipe")

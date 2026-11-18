@@ -10,6 +10,7 @@ extends RefCounted
 
 const VERSION := 2
 const SCENERY_VERSION := 3
+const LANDSCAPE_VERSION := 4
 const PREFIX := "el1_random_v"
 const COLORS := ["Green", "Blue", "Red", "Black"]
 const SIZES := [64, 96, 128, 160]
@@ -20,6 +21,10 @@ const GEMS := {"Green": "Emerald", "Blue": "Sapphire", "Red": "Ruby", "Black": "
 const SUMMONS := {"Green": "SVWR", "Blue": "SKWR", "Red": "SCWR", "Black": "SSWR"}
 const NO_SPOT := Vector2i(-1, -1)
 const SCENERY_PATCH_SIZE := 12
+enum Landform { MEADOW, WOODS, RIDGE }
+const LAND_GROUND := {
+	"Green": [1, 0, 3], "Blue": [4, 7, 18], "Red": [11, 8, 10], "Black": [13, 15, 12],
+}
 const SCENERY_FAMILIES := {
 	"Green": [["greenforest", "greentree", "greenbush"], ["greenstone", "greenrock"]],
 	"Blue": [["bluepine", "blueel"], ["blueice", "bluestone", "blue_hill", "blue_rock"]],
@@ -59,6 +64,9 @@ var _sea_labels := PackedInt32Array()
 var _land_regions: Array = []
 var _sea_regions: Array = []
 var _ports: Array[Dictionary] = []
+var _landscape := PackedByteArray()
+var _exploration_access := PackedInt32Array()
+var _outlying_regions := {}
 
 static func defaults(version := VERSION) -> Dictionary:
 	return {"version": version, "seed": "212", "size": 96, "players": 4,
@@ -76,7 +84,7 @@ static func normalize(options: Dictionary, version := VERSION) -> Dictionary:
 		var value: Variant = options.get(key, result[key])
 		if typeof(value) not in [TYPE_INT, TYPE_FLOAT] or not is_finite(float(value)) or float(value) != floor(float(value)): return {}
 		result[key] = int(value)
-	if result.version not in [VERSION, SCENERY_VERSION] or result.size not in SIZES or result.players < 2 or result.players > 4 or result.scenery < 0 or result.scenery > 2 or result.castle_health not in [20, 30, 60]: return {}
+	if result.version < VERSION or result.version > LANDSCAPE_VERSION or result.size not in SIZES or result.players < 2 or result.players > 4 or result.scenery < 0 or result.scenery > 2 or result.castle_health not in [20, 30, 60]: return {}
 	for key: String in ["seed", "layout", "biome", "resources", "starting_resources", "guards", "faction", "water", "coast"]:
 		var value: Variant = options.get(key, result[key])
 		if value is not String: return {}
@@ -168,6 +176,7 @@ func generate(profile: ELProfile, options: Dictionary = {}) -> ELAdventureMap:
 	_sea_regions.clear()
 	_land_labels.clear()
 	_sea_labels.clear()
+	_outlying_regions.clear()
 	_map.terrain.resize((_map.width + 1) * (_map.height + 1))
 	_map.roads.resize(_map.width * _map.height)
 	_map.creeks.resize(_map.roads.size())
@@ -189,20 +198,27 @@ func generate(profile: ELProfile, options: Dictionary = {}) -> ELAdventureMap:
 	_route_grid.default_estimate_heuristic = AStarGrid2D.HEURISTIC_OCTILE
 	_route_grid.update()
 	_start_points()
+	if config.version >= LANDSCAPE_VERSION:
+		_build_landscape()
+		_add_outlying_islands()
 	_make_terrain()
 	if config.naval and not _prepare_naval_terrain(): return null
+	if config.version >= LANDSCAPE_VERSION: _weight_landscape_routes()
 	if not _make_players(): return null
 	if config.naval and not _make_ports(): return null
 	_make_routes()
 	if not _make_homelands(): return null
 	if not _make_frontiers(): return null
 	if config.naval: _populate_islands()
+	if config.version >= LANDSCAPE_VERSION:
+		if not _check_access(true): return null
+		_make_exploration_sites()
 	if config.scenery > 0:
 		if config.version == VERSION:
 			_make_legacy_scenery()
 		else:
 			# Keep a route to every strategic target before adding blockers.
-			if not _check_access(true): return null
+			if config.version == SCENERY_VERSION and not _check_access(true): return null
 			_make_scenery()
 	if not _check_terrain(): return null
 	if not _check_access(): return null
@@ -397,6 +413,7 @@ func _catalog_hash() -> String:
 	var data := {"terrain": _profile.terrain_tiles.types}
 	for name: String in ["HeroTemplates", "CombatDecks", "CombatSpells", "Buildings", "ManaNodes", "ResourceMine", "NewBuildings", "ResourceCut", "Monsters", "TerrObj", "Artefacts", "GlobalSpells", "GlobalSpellCut"]:
 		data[name] = _profile.table(name)
+	if config.version >= LANDSCAPE_VERSION: data["AdditionalBuildings"] = _profile.table("AdditionalBuildings")
 	return JSON.stringify(data, "", true).sha256_text()
 
 func _building_row(name: String, color: String) -> Dictionary:
@@ -470,10 +487,37 @@ func _owner(point: Vector2i) -> int:
 			best = distance
 	return chosen
 
+func _build_landscape() -> void:
+	var stride := _map.width + 1
+	_landscape.resize(stride * (_map.height + 1))
+	# Follow a contour of a broad, bent field for ridges. Moisture varies at
+	# a different scale so woodland trails off into meadows between them.
+	for y in range(_map.height + 1):
+		for x in range(stride):
+			var bend := (_noise(x, y, 32.0, 1621) - 0.5) * 18.0
+			var contour := absf(_noise(x + bend, y - bend, 29.0, 2633) - 0.52)
+			var relief := _noise(x, y, 39.0, 721)
+			var moisture := 0.72 * _noise(x - bend, y, 24.0, 4309) + 0.28 * _noise(x, y, 9.0, 5311)
+			var form := Landform.MEADOW
+			if contour < 0.085 and relief > 0.43: form = Landform.RIDGE
+			elif moisture > 0.48: form = Landform.WOODS
+			_landscape[y * stride + x] = form
+
+func _landform(point: Vector2i) -> int:
+	return _landscape[point.y * (_map.width + 1) + point.x]
+
 func _ground(point: Vector2i, varied := false) -> int:
 	var color := str(config.biome)
-	if color == "mixed": color = _colors[_owner(point)]
+	if color == "mixed":
+		var sample := point
+		if config.version >= LANDSCAPE_VERSION and varied:
+			sample += Vector2i((_noise(point.x, point.y, 23.0, 2081) - 0.5) * 12.0, (_noise(point.x, point.y, 23.0, 2347) - 0.5) * 12.0)
+		color = _colors[_owner(sample)]
 	var choices: Array = _palette[color]
+	if config.version >= LANDSCAPE_VERSION:
+		var form := _landform(point)
+		var native: int = LAND_GROUND[color][form]
+		return native if native in choices else int(choices[mini(form, choices.size() - 1)])
 	if varied and choices.size() > 1 and _noise(point.x, point.y, 8.0, 97) > 0.58: return int(choices[mini(1, choices.size() - 1)])
 	return int(choices[0])
 
@@ -491,6 +535,8 @@ func _home_land(point: Vector2) -> bool:
 		outline += 0.27 * sin(angle * 3.0 - _shape_phase * 0.7)
 		outline += 0.18 * sin(angle * 5.0 + _shape_phase * 1.3)
 		outline += 0.22 * sin(angle + _shape_phase * 0.4)
+		if config.version >= LANDSCAPE_VERSION:
+			outline += (_noise(point.x, point.y, 10.0, 491) - 0.5) * 0.9
 		var limit := float(_map.width)
 		for other in _anchors.size():
 			if other != index: limit = minf(limit, _anchors[index].distance_to(_anchors[other]) * 0.445)
@@ -501,7 +547,11 @@ func _home_land(point: Vector2) -> bool:
 func _water_field(point: Vector2i) -> bool:
 	var n := float(_map.width)
 	var center := Vector2(n, n) * 0.5
-	var relative := Vector2(point) - center
+	var sample := Vector2(point)
+	if config.version >= LANDSCAPE_VERSION:
+		var amplitude := n * (0.075 if config.coast == "rugged" else 0.040)
+		sample += Vector2(_noise(point.x, point.y, n * 0.28, 2801) - 0.5, _noise(point.x, point.y, n * 0.28, 3889) - 0.5) * amplitude
+	var relative := sample - center
 	var radius := relative.length() / n
 	var angle := relative.angle()
 	var amount: float = {"low": -0.035, "normal": 0.0, "high": 0.035}[config.water]
@@ -516,10 +566,12 @@ func _water_field(point: Vector2i) -> bool:
 			var ellipse := Vector2(relative.x / 1.12, relative.y / 0.9).length() / n
 			wet = ellipse < 0.285 + amount + jitter or radius > 0.56 - amount * 0.3 + jitter
 		"river_delta":
-			var river := relative.x - sin(float(point.y) / n * TAU + _shape_phase) * n * 0.045
-			var braid := relative.y - sin(float(point.x) / n * TAU * 0.8 + _shape_phase) * n * 0.035
-			var mouth := float(point.y) / n > 0.68 and absf(relative.x) < n * (0.14 + (float(point.y) / n - 0.68) * 0.6)
-			wet = absf(river) / n < 0.035 + amount * 0.3 + jitter * 0.4 or absf(braid) / n < 0.030 + amount * 0.3 + jitter * 0.3 or mouth
+			if config.version >= LANDSCAPE_VERSION: wet = _river_channels(sample / n, amount, jitter)
+			else:
+				var river := relative.x - sin(sample.y / n * TAU + _shape_phase) * n * 0.045
+				var braid := relative.y - sin(sample.x / n * TAU * 0.8 + _shape_phase) * n * 0.035
+				var mouth := sample.y / n > 0.68 and absf(relative.x) < n * (0.14 + (sample.y / n - 0.68) * 0.6)
+				wet = absf(river) / n < 0.035 + amount * 0.3 + jitter * 0.4 or absf(braid) / n < 0.030 + amount * 0.3 + jitter * 0.3 or mouth
 		"ring":
 			var gap_angle := angle - (Vector2(_anchors[0]) - center).angle() - PI / _anchors.size()
 			var strait := absf(sin(gap_angle * _anchors.size() * 0.5)) < 0.055
@@ -555,6 +607,36 @@ func _water_field(point: Vector2i) -> bool:
 	# harbors sit clear of it, so a coastal voyage never leaves map bounds.
 	if config.naval and (point.x <= 1 or point.y <= 1 or point.x >= _map.width - 1 or point.y >= _map.height - 1): wet = true
 	return wet
+
+func _river_channels(point: Vector2, amount: float, jitter: float) -> bool:
+	var trunk := 0.50 + 0.081 * sin(point.y * TAU + _shape_phase) + 0.029 * sin(point.y * TAU * 2.0 + _shape_phase * 0.7)
+	var branch := 0.49 + 0.072 * sin(point.x * TAU * 0.85 - _shape_phase) + 0.028 * sin(point.x * TAU * 1.75 + _shape_phase * 0.4)
+	var bank := 0.025 + amount * 0.26 + jitter * 0.35
+	var fork := maxf(0.0, point.y - 0.63)
+	var mouth := trunk + fork * (0.68 + 0.24 * sin(point.y * TAU + _shape_phase))
+	return absf(point.x - trunk) < bank + fork * 0.048 or absf(point.y - branch) < bank or (fork > 0.0 and absf(point.x - mouth) < bank * 0.85)
+
+func _add_outlying_islands() -> void:
+	if not config.naval or _map.width < 96 or config.layout not in ["archipelago", "inland_sea", "peninsulas"]: return
+	var n := float(_map.width)
+	var center := Vector2(n, n) * 0.5
+	var radius := n * 0.066
+	var added: Array[Vector2] = []
+	for step in 24:
+		var angle := _shape_phase + step * TAU / 24.0
+		var distance := n * lerpf(0.32, 0.45, _hash(step, _map.width, 1873))
+		var point := center + Vector2.from_angle(angle) * distance
+		var margin := radius + 6.0
+		if not Rect2(Vector2.ONE * margin, Vector2.ONE * (n - 2 * margin)).has_point(point): continue
+		if added.any(func(other: Vector2) -> bool: return point.distance_to(other) < n * 0.28): continue
+		var water := _water_field(Vector2i(point))
+		for direction in 16:
+			if not water: break
+			water = _water_field(Vector2i(point + Vector2.from_angle(direction * TAU / 16.0) * margin))
+		if not water: continue
+		_reward_centers.append({"point": point, "radius": radius, "outlying": true})
+		added.append(point)
+		if added.size() == 2: break
 
 func _make_terrain() -> void:
 	for y in range(_map.height + 1):
@@ -664,7 +746,20 @@ func _prepare_naval_terrain() -> bool:
 		if _land_labels[anchor.y * _map.width + anchor.x] < 0:
 			error = "A homeland was lost while shaping the coast."
 			return false
+	for island: Dictionary in _reward_centers:
+		if not island.get("outlying", false): continue
+		var region := _region_at(Vector2i(island.point))
+		if region >= 0: _outlying_regions[region] = true
 	return true
+
+func _weight_landscape_routes() -> void:
+	# Roads gravitate to clear valley floors and only use causeways when
+	# necessary. The weights shape placement, not the cost of hero movement.
+	for y in range(1, _map.height - 1):
+		for x in range(1, _map.width - 1):
+			var point := Vector2i(x, y)
+			var weight: float = [1.0, 1.22, 2.2][_landform(point)] if _walkable(point) else 5.0
+			_route_grid.set_point_weight_scale(point, weight + 0.21 * _noise(x, y, 15.0, 1091))
 
 func _region_at(point: Vector2i) -> int:
 	return int(_land_labels[point.y * _map.width + point.x]) if _inside(point) and _land_labels.size() == _map.width * _map.height else -1
@@ -760,7 +855,7 @@ func _populate_islands() -> void:
 	var placed_regions := {}
 	for port: Dictionary in _ports:
 		var region := int(port.island)
-		if homes.has(region) or placed_regions.has(region): continue
+		if homes.has(region) or placed_regions.has(region) or _outlying_regions.has(region): continue
 		placed_regions[region] = true
 		var center: Vector2 = _land_regions[region].center
 		var source := _region_root(region)
@@ -1006,9 +1101,128 @@ func _add_guard(desired: Vector2i, home: int, tier: int) -> void:
 	if pool.is_empty(): return
 	var chosen: Dictionary = pool[_next(pool.size())]
 	var row := ELFirstMonsters.definition(_profile, chosen.name, 0)
+	if config.version >= LANDSCAPE_VERSION and config.naval:
+		# Later guards and buildings must leave at least one coastal approach.
+		var path := _port_route(pos)
+		for index in range(path.size() - 1):
+			var at := path[index]
+			var next := path[index + 1]
+			_reserved[at.y * _map.width + at.x] = 1
+			if at.x != next.x and at.y != next.y:
+				_reserved[at.y * _map.width + next.x] = 1
+				_reserved[next.y * _map.width + at.x] = 1
 	var item := _place("np_heroes", chosen.name, pos, row, 0, _colors[home], [_node("monster")])
 	_paint_disk(pos, 2, false)
 	_important.append(int(item.permanent_id) - 1)
+
+func _make_exploration_sites() -> void:
+	var center := Vector2(_map.width, _map.height) * 0.5
+	var spring := "SpringOfStrength" if _next(2) == 0 else "SpringOfDexterity"
+	var lesson := "Teacher" if _next(2) == 0 else "Magister"
+	var local_challenge := "Dungeon1" if config.guards != "none" else "TrainingCamp"
+	var outer_reach := minf(_home_radius * 0.62, 14.0)
+	for index in _starts.size():
+		var home := Vector2(_anchors[index])
+		var outward := (home - center).normalized()
+		var side := Vector2(-outward.y, outward.x)
+		# Visit sites behind and beside the castle put a useful journey in
+		# each direction from the starting cluster.
+		_add_exploration_site(spring, Vector2i(home + outward * outer_reach + side * 6.0), 8, index)
+		_add_exploration_site(lesson, Vector2i(home + outward * outer_reach - side * 6.0), 8, index)
+		_add_exploration_site(local_challenge, Vector2i(home + side * outer_reach + outward * 4.0), 7, index)
+
+	var destination := Vector2i(center)
+	var neutral_regions := {}
+	if config.naval:
+		var home_regions := {}
+		for start: Dictionary in _starts: home_regions[start.island] = true
+		for port: Dictionary in _ports:
+			var region := int(port.island)
+			if home_regions.has(region) or neutral_regions.has(region): continue
+			neutral_regions[region] = true
+			var island := _region_root(region)
+			if island == NO_SPOT: continue
+			var outlying := _outlying_regions.has(region)
+			var challenge := "Dungeon1" if outlying and config.guards == "normal" else "Dungeon2"
+			if config.guards == "none": challenge = "Master"
+			_add_exploration_site(challenge, island, 8, -1, region)
+			_add_exploration_site("GnomeAlchemist", island + Vector2i(2, 2), 8, -1, region)
+			if outlying:
+				var relics: Array = _catalog.artifacts.filter(func(name: String) -> bool: return not ELDuel.artifact_entry(_profile, {"name": name}).is_empty())
+				if not relics.is_empty(): _add_exploration_site(relics[_next(relics.size())], island + Vector2i(-2, 2), 8, -1, region, "", "artefacts")
+				destination = island
+			elif destination == Vector2i(center): destination = island
+	var prize: String = ["ShrineMagic", "HealersCitadel", "WanderersCitadel"][_next(3)]
+	_add_exploration_site(prize, destination, 14, -1, _region_at(destination))
+	var clue := "Lost expedition"
+	var search := 13 if config.naval else mini(28, _map.width / 3)
+	if not _add_exploration_site(ELAdditionalBuildings.BOWL, destination, search, -1, _region_at(destination), clue).is_empty():
+		for index in _starts.size():
+			var home := Vector2(_anchors[index])
+			var outward := (home - center).normalized()
+			var side := Vector2(-outward.y, outward.x)
+			_add_exploration_site(ELAdditionalBuildings.LAKE, Vector2i(home - side * outer_reach), 7, index, -1, clue)
+	_make_wilderness_stops()
+
+func _make_wilderness_stops() -> void:
+	var options := ["GnomeMerchant", "MageWagon", "Master", "SpringOfStrength", "SpringOfDexterity"]
+	for y in range(10, _map.height - 5, 20):
+		for x in range(10, _map.width - 5, 20):
+			var desired := NO_SPOT
+			var best := 9 * 9
+			# Find an empty pocket instead of copying the opening resource
+			# cluster. Sample offsets inside each stretch of wilderness.
+			for offset_y in [-6, -2, 2, 6]:
+				for offset_x in [-6, -2, 2, 6]:
+					var point := Vector2i(x + offset_x, y + offset_y)
+					if not _walkable(point) or _exploration_access[point.y * _map.width + point.x] < -1: continue
+					var distance := 20 * 20
+					for item: Dictionary in _map.objects:
+						distance = mini(distance, point.distance_squared_to(Vector2i(item.x, item.y)))
+						if distance <= best: break
+					if distance <= best: continue
+					desired = point
+					best = distance
+			if desired != NO_SPOT:
+				_add_exploration_site(options[_next(options.size())], desired, 4, -1, _region_at(desired))
+
+func _add_exploration_site(name: String, near: Vector2i, radius: int, home := -1, region := -1, params := "", group := "additional_buildings") -> Dictionary:
+	var table := "Artefacts" if group == "artefacts" else "AdditionalBuildings"
+	var row: Dictionary = _profile.table(table).get(name, {})
+	if not _model(row): return {}
+	var size: Vector2i = ELAdventureGrid.footprint(row, 0).size
+	var pos := _find_spot(near, size, radius, home, true, true, true, region)
+	if pos == NO_SPOT: return {}
+	var approach := _expedition_trail(Rect2i(pos, size))
+	var children: Array = [] if params.is_empty() else [_node("params", {}, params)]
+	var item := _place(group, name, pos, row, 0, "", children)
+	_important.append(int(item.permanent_id) - 1)
+	_protect_route(approach, _exploration_access)
+	return item
+
+## Find a reachable stand beside the prospective site. Its footprint must
+## leave its own route intact, including the side cells of a naval diagonal.
+func _expedition_trail(footprint: Rect2i) -> int:
+	var perimeter := footprint.grow(1)
+	for y in range(perimeter.position.y, perimeter.end.y):
+		for x in range(perimeter.position.x, perimeter.end.x):
+			var point := Vector2i(x, y)
+			if footprint.has_point(point) or not _walkable(point): continue
+			var approach := y * _map.width + x
+			if _exploration_access[approach] < -1: continue
+			var offset := approach
+			while offset >= 0:
+				var tile := Vector2i(offset % _map.width, offset / _map.width)
+				var parent := _exploration_access[offset]
+				if footprint.has_point(tile) or (_occupied[offset] != 0 and parent >= 0): break
+				if config.naval and parent >= 0:
+					var from := Vector2i(parent % _map.width, parent / _map.width)
+					if tile.x != from.x and tile.y != from.y:
+						if footprint.has_point(Vector2i(tile.x, from.y)) or footprint.has_point(Vector2i(from.x, tile.y)): break
+						if _occupied[from.y * _map.width + tile.x] != 0 or _occupied[tile.y * _map.width + from.x] != 0: break
+				offset = parent
+			if offset == -1: return approach
+	return -1
 
 func _make_legacy_scenery() -> void:
 	if int(config.scenery) == 0 or _catalog.scenery.is_empty(): return
@@ -1034,6 +1248,8 @@ func _scenery_catalog() -> Dictionary:
 		var plants: Array[Dictionary] = []
 		var stones: Array[Dictionary] = []
 		var landmarks: Array[Dictionary] = []
+		var brush: Array[Dictionary] = []
+		var canopy: Array[Dictionary] = []
 		var families: Array = SCENERY_FAMILIES[color]
 		for key: String in keys:
 			var name := key.to_lower()
@@ -1046,11 +1262,14 @@ func _scenery_catalog() -> Dictionary:
 			var entry := {"name": key, "row": row}
 			if span > 4:
 				if span <= 8: landmarks.append(entry)
-			elif plant: plants.append(entry)
+			elif plant:
+				plants.append(entry)
+				if name.contains("bush"): brush.append(entry)
+				else: canopy.append(entry)
 			else: stones.append(entry)
 		# A content pack can use different terrain object names.
 		if plants.is_empty() and stones.is_empty(): plants.assign(_catalog.scenery)
-		pools[color] = {"plants": plants, "stones": stones, "landmarks": landmarks}
+		pools[color] = {"plants": plants, "stones": stones, "landmarks": landmarks, "brush": brush, "canopy": canopy}
 	return pools
 
 func _make_scenery() -> void:
@@ -1070,14 +1289,19 @@ func _make_scenery() -> void:
 func _make_scenery_patch(area: Rect2i, land: PackedByteArray, pools: Dictionary) -> void:
 	var points: Array[Vector2i] = []
 	var dry := 0
+	var cover := 0.0
 	for y in range(area.position.y, mini(area.end.y, _map.height - 2)):
 		for x in range(area.position.x, mini(area.end.x, _map.width - 2)):
 			var offset := y * _map.width + x
 			if land[offset] == 0: continue
 			dry += 1
+			if config.version >= LANDSCAPE_VERSION: cover += [0.085, 0.23, 0.155][_landform(Vector2i(x, y))]
 			if _reserved[offset] == 0 and _corridor[offset] == 0: points.append(Vector2i(x, y))
 	if points.is_empty() or dry < 4: return
 	_shuffle(points)
+	if config.version >= LANDSCAPE_VERSION:
+		_dress_landscape(points, land, pools, maxi(1, roundi(cover * (1.27 if config.scenery == 2 else 1.0))))
+		return
 	var focus := points[0]
 	var density := lerpf(0.065, 0.135, _noise(focus.x, focus.y, 24.0, 821))
 	if config.scenery == 2: density *= 1.45
@@ -1104,6 +1328,25 @@ func _make_scenery_patch(area: Rect2i, land: PackedByteArray, pools: Dictionary)
 	for point: Vector2i in points:
 		if remaining <= 0: break
 		if _place_scenery_detail(point, pools, land, not rocky): remaining -= 1
+
+func _dress_landscape(points: Array[Vector2i], land: PackedByteArray, pools: Dictionary, remaining: int) -> void:
+	var ridge: Array[Vector2i] = []
+	for point: Vector2i in points:
+		if _landform(point) == Landform.RIDGE: ridge.append(point)
+	# Tall rocks mark the continuous ridges. Dense woods use the original
+	# multi-tree models, while meadows keep scattered brush and stones.
+	if ridge.size() >= 16:
+		for point: Vector2i in ridge:
+			if _place_scenery(point, _scenery_pool(point, pools).landmarks, land):
+				remaining -= 1
+				break
+	for point: Vector2i in points:
+		if remaining <= 0: break
+		var form := _landform(point)
+		if _hash(point.x, point.y, 6143) > [0.43, 0.94, 0.74][form]: continue
+		var pool := _scenery_pool(point, pools)
+		var detail: Array = [pool.brush, pool.canopy, pool.stones][form]
+		if _place_scenery(point, detail, land) or _place_scenery_detail(point, pools, land, form == Landform.RIDGE): remaining -= 1
 
 func _scenery_pool(point: Vector2i, pools: Dictionary) -> Dictionary:
 	var color := ELAdventureArt.terrain_color(_map.tile(point.x, point.y))
@@ -1183,19 +1426,22 @@ func _fits(at: Vector2i, size: Vector2i, require_land: bool, avoid_roads: bool) 
 			var offset := y * _map.width + x
 			if _reserved[offset] != 0 or (avoid_roads and _corridor[offset] != 0): return false
 			if (require_land or config.naval) and not _walkable(Vector2i(x, y)): return false
-	if config.naval and not _ports.is_empty():
-		var sources: Array[Dictionary] = []
-		for port: Dictionary in _ports:
-			if int(port.island) != _region_at(at): continue
-			var source := Vector2i(port.land[0], port.land[1])
-			sources.append({"point": source, "distance": source.distance_squared_to(at)})
-		sources.sort_custom(func(a: Dictionary, b: Dictionary): return float(a.distance) < float(b.distance))
-		for source: Dictionary in sources:
-			if not _route_grid.get_id_path(source.point, at).is_empty(): return true
-		return false
-	return true
+	return not config.naval or _ports.is_empty() or not _port_route(at).is_empty()
 
-func _find_spot(near: Vector2i, size: Vector2i, radius: int, home: int, require_land: bool, avoid_roads: bool) -> Vector2i:
+func _port_route(at: Vector2i) -> Array[Vector2i]:
+	var sources: Array[Dictionary] = []
+	var region := _region_at(at)
+	for port: Dictionary in _ports:
+		if int(port.island) != region: continue
+		var source := Vector2i(port.land[0], port.land[1])
+		sources.append({"point": source, "distance": source.distance_squared_to(at)})
+	sources.sort_custom(func(a: Dictionary, b: Dictionary): return float(a.distance) < float(b.distance))
+	for source: Dictionary in sources:
+		var path := _route_grid.get_id_path(source.point, at)
+		if not path.is_empty(): return path
+	return []
+
+func _find_spot(near: Vector2i, size: Vector2i, radius: int, home: int, require_land: bool, avoid_roads: bool, expedition := false, region := -1) -> Vector2i:
 	# Deterministic expanding rings preserve the desired strategic distance.
 	var turn := _next(4)
 	for distance in range(radius + 1):
@@ -1204,9 +1450,13 @@ func _find_spot(near: Vector2i, size: Vector2i, radius: int, home: int, require_
 				var delta := Vector2i(step, -distance)
 				for rotation in (edge + turn) % 4: delta = Vector2i(-delta.y, delta.x)
 				var point := near + delta
+				if not expedition and not _outlying_regions.is_empty() and _outlying_regions.has(_region_at(point + size / 2)): continue
 				if home >= 0 and _owner(point + size / 2) != home: continue
 				if config.naval and home >= 0 and _region_at(point + size / 2) != _region_at(_anchors[home]): continue
-				if _fits(point, size, require_land, avoid_roads): return point
+				if region >= 0 and _region_at(point + size / 2) != region: continue
+				if not _fits(point, size, require_land, avoid_roads): continue
+				if expedition and _expedition_trail(Rect2i(point, size)) < 0: continue
+				return point
 	return NO_SPOT
 
 func _paint_disk(center: Vector2i, radius: int, road: bool) -> void:
@@ -1320,7 +1570,8 @@ func _check_access(protect_routes := false) -> bool:
 	var previous := PackedInt32Array()
 	if protect_routes:
 		previous.resize(reached.size())
-		previous.fill(-1)
+		previous.fill(-2)
+		previous[first.y * _map.width + first.x] = -1
 	var queue: Array[Vector2i] = [first]
 	reached[first.y * _map.width + first.x] = 1
 	var head := 0
@@ -1371,6 +1622,7 @@ func _check_access(protect_routes := false) -> bool:
 					return false
 				if protect_routes: _protect_route(offset, previous)
 	for start: Dictionary in _starts: start.reachable_sites = _important.size()
+	if protect_routes and config.version >= LANDSCAPE_VERSION: _exploration_access = previous
 	report.reachable = true
 	report.reachable_cells = queue.size()
 	return true

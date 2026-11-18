@@ -67,6 +67,10 @@ static func profile() -> ELProfile:
 				"Loot100": ["Root(5)"], "TileSize": [1, 1]}
 	result.tables.TerrObj["FixtureTree"] = {"Name": "FixtureTree", "Model": "fixture_tree", "Texture": "fixture", "TileSize": [2, 2]}
 	result.tables.TerrObj["FixtureRock"] = {"Name": "FixtureRock", "Model": "fixture_rock", "Texture": "fixture", "TileSize": [3, 2]}
+	for name: String in ["SpringOfStrength", "SpringOfDexterity", "Teacher", "Magister", "Master", "TrainingCamp",
+		"Dungeon1", "Dungeon2", "GnomeMerchant", "MageWagon", "GnomeAlchemist", "ShrineMagic", "HealersCitadel",
+		"WanderersCitadel", ELAdditionalBuildings.LAKE, ELAdditionalBuildings.BOWL]:
+		result.tables.AdditionalBuildings[name] = {"Model": "fixture_site", "Texture": "fixture", "TileSize": [2, 2] if name.begins_with("Dungeon") else [1, 1]}
 	result.tables.GlobalSpellCut["FullSpell"] = {"Name": "FullSpell", "Model": "fixture_scroll", "Texture": "fixture", "TileSize": [1, 1]}
 	for code: String in ["DFRL", "WRRL"]:
 		result.tables.GlobalSpells[code] = {"Color": "Colorless", "Name": code, "CostMana": 25}
