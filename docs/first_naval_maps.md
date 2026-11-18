@@ -145,7 +145,7 @@ Naval movement is explicitly enabled for these maps. Ordinary EL1 campaign and
 custom maps keep their existing land rules, and EL2 retains its own movement
 and dock behavior. Version-1 random recipes still use the preserved version-1
 generator and its original overland geometry. To make a new naval world, use a
-version-2 setup with ships enabled.
+current setup with ships enabled.
 
 ## Troubleshooting
 

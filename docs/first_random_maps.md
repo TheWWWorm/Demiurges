@@ -59,7 +59,7 @@ sailboat model is used.
 | Rich conquest | 128 × 128; 4 players | Off | Frontier layout, rich resources and treasury, 60 castle energy. |
 
 Choosing a preset preserves the seed and human faction. Other world fields
-reset to that preset's settings and the version-2 defaults. All remain editable.
+reset to that preset's settings and the current defaults. All remain editable.
 
 The eight layout identifiers are `frontier`, `lakes`, `crossroads`,
 `archipelago`, `inland_sea`, `river_delta`, `ring` and `peninsulas`. Changing the
@@ -91,14 +91,14 @@ Starting opportunities are comparable, while coastlines, approaches and faction
 strengths can differ. The generator validates actual object footprints and
 reachable approaches after placing scenery and other content.
 
-## Complete version-2 configuration
+## World configuration
 
 These are the keys accepted by `ELFirstRandomMap.generate(profile, options)`.
 Omitted keys use the defaults below.
 
 | Key | Default | Supported values and effect |
 | --- | --- | --- |
-| `version` | `2` | `1` for exact legacy generation or `2` for the current generator. Version 1 uses its own older schema. |
+| `version` | `3` | `3` uses the denser scenery pass. `1` and `2` reproduce earlier worlds. Version 1 uses its own schema. |
 | `seed` | `"212"` | A string of 1–64 characters, not blank-only, without control characters. Whitespace in a valid seed is significant. |
 | `size` | `96` | `64`, `96`, `128`, `160` tiles per side. |
 | `players` | `4` | `2`, `3`, `4`: one human and the remaining seats controlled by AI. |
@@ -109,7 +109,7 @@ Omitted keys use the defaults below.
 | `guards` | `"normal"` | `"none"`, `"normal"`, `"strong"`: neutral guard presence and strength. |
 | `faction` | `"Green"` | `"Green"`, `"Blue"`, `"Red"`, `"Black"`: Vitals, Kinets, Chaots, Synthets. The human is player 1. |
 | `roads` | `true` | Boolean; generated road ribbons and their normal land movement bonuses. |
-| `scenery` | `1` | `0`, `1`, `2`: minimal, normal or dense scenery. |
+| `scenery` | `1` | `0` skips decorative terrain props, `1` adds groves and rock formations, and `2` fills more of the available land. |
 | `castle_health` | `30` | `20`, `30`, `60`: starting and maximum castle energy for every player. |
 | `naval` | `false` | Boolean; enable navigable seas and explicit harbors. |
 | `water` | `"normal"` | `"low"`, `"normal"`, `"high"`: relative water coverage. |
@@ -127,18 +127,16 @@ monsters** option also keeps its normal rules.
 
 ## Share and remember a setup
 
-**Copy setup** creates an `EL1R2:` code in the code field and clipboard. Paste a
+**Copy setup** creates an `EL1R3:` code for a new world in the code field and clipboard. Paste a
 complete code and press **Load setup** to restore its seed and world settings.
 Choose difficulty and AI separately. The code is a prefix followed by Base64
 encoded UTF-8 JSON; it is a recipe, not a map archive.
 
-Legacy `EL1R1:` codes remain supported and reproduce the version-1 world.
-Loading and playing that recipe without changing its world settings retains
-version 1. Editing world settings or choosing a new preset switches to version
-2. Do not change only the version number of an old recipe and expect the same
-geography: the two generators deliberately differ.
+`EL1R1:` and `EL1R2:` codes reproduce their original worlds when loaded and played
+without editing. Changing a world setting or choosing a new preset switches to
+the current generator.
 
-The last launched configuration is remembered in
+The last launched settings carry forward to the current generator in
 `user://el1_random_map_setup.json`. Plain JSON examples are in
 [`examples/first_random_maps/`](../examples/first_random_maps/). Neither action
 modifies the installed original game's files.
@@ -148,7 +146,7 @@ modifies the installed original game's files.
 ```gdscript
 var generator := ELFirstRandomMap.new()
 var map := generator.generate(profile, {
-    "version": 2,
+    "version": 3,
     "seed": "island-expedition",
     "size": 128,
     "players": 4,
@@ -187,8 +185,8 @@ fingerprint, as applicable to the selected generator version.
 
 | Helper | Result |
 | --- | --- |
-| `ELFirstRandomMap.defaults()` | Current version-2 defaults. |
-| `ELFirstRandomMap.defaults(1)` | Legacy version-1 defaults. |
+| `ELFirstRandomMap.defaults()` | Current defaults. |
+| `ELFirstRandomMap.defaults(1)` and `ELFirstRandomMap.defaults(2)` | Defaults for earlier generator versions. |
 | `ELFirstRandomMap.presets()` | Current preset names, descriptions and option overrides. |
 | `ELFirstRandomMap.normalize(options)` | Complete validated recipe, or an empty dictionary on failure. |
 | `ELFirstRandomMap.id_for_config(options)` | Deterministic identifier safe for the existing engine. |
@@ -221,11 +219,11 @@ games this includes hero ship state and queued travel, including a voyage
 paused at sea. Harbors are reconstructed from the same recipe and covered by
 the generated document's fingerprint. No separate generated map file is needed.
 
-The public API keeps `ELFirstRandomMapV1` for exact version-1 replay. Version-2
-changes do not silently regenerate old saves with different geometry. Missing
-recipe fields, unsupported versions or incompatible generated content produce a
-load error. New future geometry or placement changes must preserve this
-versioning policy if those saves are to remain compatible.
+Version 3 uses the version-2 geography and strategic placement before adding
+its scenery. The generator reserves access to sites, guards, and harbors before
+placing decorative blockers. Saves from each version regenerate with their
+original rules. Missing recipe fields, unsupported versions or incompatible
+generated content produce a load error.
 
 Ordinary campaign/custom maps retain their existing behavior. This feature does
 not add random maps to the multiplayer lobby or export original-editor

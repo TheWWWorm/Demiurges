@@ -184,7 +184,7 @@ const RU := {
 	"Heroes board at cyan harbors, sail, and land at another harbor. Both you and the AI use sea routes.": "Герои садятся на корабль в бирюзовых гаванях и высаживаются в другой гавани. Морские пути доступны и вам, и ИИ.",
 	"Squares: castles · Gold: resources · Red: guards · Cyan: harbors": "Квадраты: замки · Жёлтые: ресурсы · Красные: стражи · Бирюзовые: гавани",
 	"%d%% water · %d harbors · land and sea routes": "%d%% воды · гаваней: %d · сухопутные и морские пути",
-	"Paste an EL1R1 or EL1R2 configuration code into the field first.": "Сначала вставьте в поле код настроек EL1R1 или EL1R2.",
+	"Paste a configuration code into the field first.": "Сначала вставьте в поле код настроек.",
 	"Click a destination to sail via cyan harbors · Boarding and landing: +3 AP · N to end turn": "Выберите цель: путь через бирюзовые гавани · Посадка и высадка: +3 ОД · N: конец хода",
 	"Random map": "Случайная карта",
 	"Random map…": "Случайная карта…",

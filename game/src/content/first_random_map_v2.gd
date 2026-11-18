@@ -9,6 +9,7 @@ extends RefCounted
 ## configuration is attached as random_map metadata for save regeneration.
 
 const VERSION := 2
+const SCENERY_VERSION := 3
 const PREFIX := "el1_random_v"
 const COLORS := ["Green", "Blue", "Red", "Black"]
 const SIZES := [64, 96, 128, 160]
@@ -18,6 +19,13 @@ const GUARDS := ["none", "normal", "strong"]
 const GEMS := {"Green": "Emerald", "Blue": "Sapphire", "Red": "Ruby", "Black": "Diamond"}
 const SUMMONS := {"Green": "SVWR", "Blue": "SKWR", "Red": "SCWR", "Black": "SSWR"}
 const NO_SPOT := Vector2i(-1, -1)
+const SCENERY_PATCH_SIZE := 12
+const SCENERY_FAMILIES := {
+	"Green": [["greenforest", "greentree", "greenbush"], ["greenstone", "greenrock"]],
+	"Blue": [["bluepine", "blueel"], ["blueice", "bluestone", "blue_hill", "blue_rock"]],
+	"Red": [["red_bush", "red_tree"], ["redhill", "red_stone", "red_rock", "red_voulcan"]],
+	"Black": [["blacktree", "blackbush"], ["blackcrater", "blackhill", "blackstone", "rock_"]],
+}
 
 var error := ""
 var config: Dictionary = {}
@@ -52,23 +60,23 @@ var _land_regions: Array = []
 var _sea_regions: Array = []
 var _ports: Array[Dictionary] = []
 
-static func defaults() -> Dictionary:
-	return {"version": VERSION, "seed": "212", "size": 96, "players": 4,
+static func defaults(version := VERSION) -> Dictionary:
+	return {"version": version, "seed": "212", "size": 96, "players": 4,
 		"layout": "frontier", "biome": "mixed", "resources": "normal",
 		"starting_resources": "normal", "guards": "normal", "faction": "Green",
 		"roads": true, "scenery": 1, "castle_health": 30, "naval": false, "water": "normal", "coast": "rugged"}
 
 ## Bad imported configurations fail explicitly. JSON represents integers as
 ## doubles, so integral finite doubles are accepted, but booleans never are.
-static func normalize(options: Dictionary) -> Dictionary:
-	var result := defaults()
+static func normalize(options: Dictionary, version := VERSION) -> Dictionary:
+	var result := defaults(version)
 	for key: Variant in options:
 		if key is not String or not result.has(key): return {}
 	for key: String in ["version", "size", "players", "scenery", "castle_health"]:
 		var value: Variant = options.get(key, result[key])
 		if typeof(value) not in [TYPE_INT, TYPE_FLOAT] or not is_finite(float(value)) or float(value) != floor(float(value)): return {}
 		result[key] = int(value)
-	if result.version != VERSION or result.size not in SIZES or result.players < 2 or result.players > 4 or result.scenery < 0 or result.scenery > 2 or result.castle_health not in [20, 30, 60]: return {}
+	if result.version not in [VERSION, SCENERY_VERSION] or result.size not in SIZES or result.players < 2 or result.players > 4 or result.scenery < 0 or result.scenery > 2 or result.castle_health not in [20, 30, 60]: return {}
 	for key: String in ["seed", "layout", "biome", "resources", "starting_resources", "guards", "faction", "water", "coast"]:
 		var value: Variant = options.get(key, result[key])
 		if value is not String: return {}
@@ -105,7 +113,7 @@ static func is_random_id(id: String) -> bool:
 
 static func id_for_config(options: Dictionary) -> String:
 	var normalized := normalize(options)
-	return "" if normalized.is_empty() else PREFIX + str(VERSION) + "_" + JSON.stringify(normalized, "", true).sha256_text().left(24)
+	return "" if normalized.is_empty() else PREFIX + str(normalized.version) + "_" + JSON.stringify(normalized, "", true).sha256_text().left(24)
 
 static func seed_for_config(options: Dictionary) -> int:
 	var normalized := normalize(options)
@@ -144,11 +152,11 @@ func generate(profile: ELProfile, options: Dictionary = {}) -> ELAdventureMap:
 	_map.height = config.size
 	_map.title = "Random map · %s · %s" % [str(config.layout).capitalize(), config.seed]
 	_map.objective = "Destroy every rival castle. Keep your own castle standing."
-	_map.set_meta("random_map", {"version": VERSION, "config": config.duplicate(true)})
+	_map.set_meta("random_map", {"version": config.version, "config": config.duplicate(true)})
 	_map.document = _node("scenario", {}, "", [_node("title", {}, _map.title), _node("objective", {}, _map.objective),
 		_node("win_condition", {}, "Destroy every rival castle."), _node("lose_condition", {}, "Your castle loses all of its energy."),
 		_node("description", {}, "Expand from your homeland, capture mines and shops, and discover the scrolls that summon stronger heroes."),
-		_node("random_map", {"version": str(VERSION), "config": JSON.stringify(config, "", true), "catalog_hash": _catalog_hash()})])
+		_node("random_map", {"version": str(config.version), "config": JSON.stringify(config, "", true), "catalog_hash": _catalog_hash()})])
 	_next_id = 1
 	_important.clear()
 	_starts.clear()
@@ -189,7 +197,13 @@ func generate(profile: ELProfile, options: Dictionary = {}) -> ELAdventureMap:
 	if not _make_homelands(): return null
 	if not _make_frontiers(): return null
 	if config.naval: _populate_islands()
-	_make_scenery()
+	if config.scenery > 0:
+		if config.version == VERSION:
+			_make_legacy_scenery()
+		else:
+			# Keep a route to every strategic target before adding blockers.
+			if not _check_access(true): return null
+			_make_scenery()
 	if not _check_terrain(): return null
 	if not _check_access(): return null
 	_map.document.children.append(_node("support", {"last_permanent_id": str(_next_id)}))
@@ -996,7 +1010,7 @@ func _add_guard(desired: Vector2i, home: int, tier: int) -> void:
 	_paint_disk(pos, 2, false)
 	_important.append(int(item.permanent_id) - 1)
 
-func _make_scenery() -> void:
+func _make_legacy_scenery() -> void:
 	if int(config.scenery) == 0 or _catalog.scenery.is_empty(): return
 	var target := _map.width * _map.height * int(config.scenery) / 180
 	for attempt in target * 5:
@@ -1012,25 +1026,138 @@ func _make_scenery() -> void:
 		_place("terrain_objects", entry.name, pos, entry.row)
 		target -= 1
 
+func _scenery_catalog() -> Dictionary:
+	var pools := {}
+	var rows := _profile.table("TerrObj")
+	var keys := _keys(rows)
+	for color: String in COLORS:
+		var plants: Array[Dictionary] = []
+		var stones: Array[Dictionary] = []
+		var landmarks: Array[Dictionary] = []
+		var families: Array = SCENERY_FAMILIES[color]
+		for key: String in keys:
+			var name := key.to_lower()
+			var plant: bool = families[0].any(func(prefix: String) -> bool: return name.begins_with(prefix))
+			if not plant and not families[1].any(func(prefix: String) -> bool: return name.begins_with(prefix)): continue
+			var row: Dictionary = rows[key]
+			if not _model(row) or row.get("Bridge", 0): continue
+			var size: Vector2i = ELAdventureGrid.footprint(row, 0).size
+			var span := maxi(size.x, size.y)
+			var entry := {"name": key, "row": row}
+			if span > 4:
+				if span <= 8: landmarks.append(entry)
+			elif plant: plants.append(entry)
+			else: stones.append(entry)
+		# A content pack can use different terrain object names.
+		if plants.is_empty() and stones.is_empty(): plants.assign(_catalog.scenery)
+		pools[color] = {"plants": plants, "stones": stones, "landmarks": landmarks}
+	return pools
+
+func _make_scenery() -> void:
+	var pools := _scenery_catalog()
+	var land := PackedByteArray()
+	land.resize(_map.width * _map.height)
+	for y in range(2, _map.height - 2):
+		for x in range(2, _map.width - 2):
+			if _walkable(Vector2i(x, y)): land[y * _map.width + x] = 1
+	# Give each patch of land its own budget. Coastlines and the backs of
+	# homelands get coverage even when most of the world is water.
+	for top in range(2, _map.height - 2, SCENERY_PATCH_SIZE):
+		for left in range(2, _map.width - 2, SCENERY_PATCH_SIZE):
+			var area := Rect2i(left, top, SCENERY_PATCH_SIZE, SCENERY_PATCH_SIZE)
+			_make_scenery_patch(area, land, pools)
+
+func _make_scenery_patch(area: Rect2i, land: PackedByteArray, pools: Dictionary) -> void:
+	var points: Array[Vector2i] = []
+	var dry := 0
+	for y in range(area.position.y, mini(area.end.y, _map.height - 2)):
+		for x in range(area.position.x, mini(area.end.x, _map.width - 2)):
+			var offset := y * _map.width + x
+			if land[offset] == 0: continue
+			dry += 1
+			if _reserved[offset] == 0 and _corridor[offset] == 0: points.append(Vector2i(x, y))
+	if points.is_empty() or dry < 4: return
+	_shuffle(points)
+	var focus := points[0]
+	var density := lerpf(0.065, 0.135, _noise(focus.x, focus.y, 24.0, 821))
+	if config.scenery == 2: density *= 1.45
+	var remaining := maxi(1, roundi(dry * density))
+	# A patch has one dominant form and some contrasting details. Its
+	# scattered props continue into the next patch instead of forming a grid.
+	var rocky := _noise(focus.x, focus.y, 28.0, 1567) > 0.59
+	if points.size() >= 50 and _hash(focus.x, focus.y, 237) < 0.42:
+		for point: Vector2i in points:
+			if _place_scenery(point, _scenery_pool(point, pools).landmarks, land):
+				remaining -= 1
+				break
+	var cluster := points.duplicate()
+	cluster.sort_custom(func(a: Vector2i, b: Vector2i) -> bool:
+		var first := focus.distance_squared_to(a)
+		var second := focus.distance_squared_to(b)
+		return a.y * _map.width + a.x < b.y * _map.width + b.x if first == second else first < second)
+	var clustered := ceili(remaining * 0.7)
+	for point: Vector2i in cluster:
+		if clustered <= 0 or point.distance_squared_to(focus) > 25: break
+		if _place_scenery_detail(point, pools, land, rocky):
+			remaining -= 1
+			clustered -= 1
+	for point: Vector2i in points:
+		if remaining <= 0: break
+		if _place_scenery_detail(point, pools, land, not rocky): remaining -= 1
+
+func _scenery_pool(point: Vector2i, pools: Dictionary) -> Dictionary:
+	var color := ELAdventureArt.terrain_color(_map.tile(point.x, point.y))
+	return pools[color] if pools.has(color) else pools[_colors[_owner(point)]]
+
+func _place_scenery_detail(point: Vector2i, pools: Dictionary, land: PackedByteArray, rocky: bool) -> bool:
+	var pool := _scenery_pool(point, pools)
+	var primary: Array = pool.stones if rocky else pool.plants
+	var secondary: Array = pool.plants if rocky else pool.stones
+	return _place_scenery(point, primary, land) or _place_scenery(point, secondary, land)
+
+func _place_scenery(point: Vector2i, pool: Array, land: PackedByteArray) -> bool:
+	if pool.is_empty(): return false
+	var first := _next(pool.size())
+	var rotation := _next(4) * 4
+	for attempt in mini(pool.size(), 5):
+		var entry: Dictionary = pool[(first + attempt) % pool.size()]
+		var size: Vector2i = ELAdventureGrid.footprint(entry.row, rotation).size
+		var origin := point - size / 2
+		if not _scenery_fits(origin, size, land): continue
+		_place("terrain_objects", entry.name, origin, entry.row, 0, "", [], {}, rotation)
+		return true
+	return false
+
+func _scenery_fits(origin: Vector2i, size: Vector2i, land: PackedByteArray) -> bool:
+	if origin.x < 2 or origin.y < 2 or origin.x + size.x > _map.width - 2 or origin.y + size.y > _map.height - 2: return false
+	for y in range(origin.y, origin.y + size.y):
+		for x in range(origin.x, origin.x + size.x):
+			var offset := y * _map.width + x
+			if land[offset] == 0 or _reserved[offset] != 0 or _corridor[offset] != 0: return false
+	return true
+
 static func _node(tag: String, attrs: Dictionary = {}, text := "", children: Array = []) -> Dictionary:
 	return {"tag": tag, "attrs": attrs, "text": text, "children": children}
 
-func _place(group: String, name: String, position: Vector2i, row: Dictionary, owner := 0, color := "", extra: Array = [], attrs: Dictionary = {}) -> Dictionary:
+func _place(group: String, name: String, position: Vector2i, row: Dictionary, owner := 0, color := "", extra: Array = [], attrs: Dictionary = {}, rotation := 0) -> Dictionary:
 	var id := _next_id
 	_next_id += 1
 	var properties := attrs.duplicate()
 	properties.permanent_id = str(id)
 	properties.id = str(id)
-	var children: Array = [_node("place", {"x": str(position.x), "y": str(position.y), "mr": "0"}), _node("template", {}, name)]
+	var children: Array = [_node("place", {"x": str(position.x), "y": str(position.y), "mr": str(rotation)}), _node("template", {}, name)]
 	if not color.is_empty(): children.append(_node("color", {}, color))
 	children.append_array(extra)
 	var node := _node("hero" if group in ["heroes", "np_heroes"] else "object", properties, "", children)
-	var item := {"group": group, "owner": owner, "node": node, "x": position.x, "y": position.y, "rotation": 0,
+	var item := {"group": group, "owner": owner, "node": node, "x": position.x, "y": position.y, "rotation": rotation,
 		"permanent_id": id, "id": id, "name": name}
 	_map.objects.append(item)
-	var size := Vector2i.ONE if group in ["heroes", "np_heroes"] else Vector2i(ELAdventureGrid.footprint(row, 0).size)
-	for y in range(position.y - 1, position.y + size.y + 1):
-		for x in range(position.x - 1, position.x + size.x + 1):
+	var size := Vector2i.ONE if group in ["heroes", "np_heroes"] else Vector2i(ELAdventureGrid.footprint(row, rotation).size)
+	# Original groves combine adjacent terrain props. Sites and legacy maps
+	# keep their one-cell placement margin.
+	var margin := 0 if group == "terrain_objects" and config.version >= SCENERY_VERSION else 1
+	for y in range(position.y - margin, position.y + size.y + margin):
+		for x in range(position.x - margin, position.x + size.x + margin):
 			if not _inside(Vector2i(x, y)): continue
 			_reserved[y * _map.width + x] = 1
 			if x >= position.x and x < position.x + size.x and y >= position.y and y < position.y + size.y:
@@ -1170,7 +1297,7 @@ func _check_terrain() -> bool:
 	report.terrain_combinations = checked.size()
 	return true
 
-func _check_access() -> bool:
+func _check_access(protect_routes := false) -> bool:
 	var objects := {}
 	for item: Dictionary in _map.objects:
 		var copy := item.duplicate()
@@ -1190,6 +1317,10 @@ func _check_access() -> bool:
 	var first := Vector2i(_starts[0].x, _starts[0].y)
 	var reached := PackedByteArray()
 	reached.resize(_map.width * _map.height)
+	var previous := PackedInt32Array()
+	if protect_routes:
+		previous.resize(reached.size())
+		previous.fill(-1)
 	var queue: Array[Vector2i] = [first]
 	reached[first.y * _map.width + first.x] = 1
 	var head := 0
@@ -1204,6 +1335,7 @@ func _check_access() -> bool:
 				if reached[offset] != 0 or grid.land.is_point_solid(next): continue
 				if config.naval and not ELFirstNaval.connected(grid, at, next, true, true): continue
 				reached[offset] = 1
+				if protect_routes: previous[offset] = at.y * _map.width + at.x
 				queue.append(next)
 	var targets: Array[int] = _important.duplicate()
 	for start: Dictionary in _starts:
@@ -1212,23 +1344,48 @@ func _check_access() -> bool:
 	for id: int in targets:
 		var item: Dictionary = objects[id]
 		var size: Vector2i = grid.footprints.get(id, {}).get("size", Vector2i.ONE)
-		var reachable := false
+		var approach := -1
+		var distance := INF
 		for y in range(-1, size.y + 1):
 			for x in range(-1, size.x + 1):
 				if x >= 0 and x < size.x and y >= 0 and y < size.y: continue
 				var point := Vector2i(item.x + x, item.y + y)
-				if grid.contains(point) and reached[point.y * _map.width + point.x] != 0 and (not config.naval or not _sea_cell(point)): reachable = true
-		if not reachable:
+				if not grid.contains(point): continue
+				var offset := point.y * _map.width + point.x
+				if reached[offset] == 0 or (config.naval and _sea_cell(point)): continue
+				var cost := first.distance_squared_to(point)
+				if cost < distance:
+					distance = cost
+					approach = offset
+		if approach < 0:
 			error = "Generated map contains an unreachable %s (%d). Try a different seed." % [str(item.group), id]
 			return false
+		if protect_routes: _protect_route(approach, previous)
 	if config.naval:
 		for port: Dictionary in _ports:
 			for key: String in ["land", "water"]:
 				var point := Vector2i(port[key][0], port[key][1])
-				if reached[point.y * _map.width + point.x] == 0:
+				var offset := point.y * _map.width + point.x
+				if reached[offset] == 0:
 					error = "A harbor is disconnected from the playable travel network."
 					return false
+				if protect_routes: _protect_route(offset, previous)
 	for start: Dictionary in _starts: start.reachable_sites = _important.size()
 	report.reachable = true
 	report.reachable_cells = queue.size()
 	return true
+
+func _protect_route(offset: int, previous: PackedInt32Array) -> void:
+	while offset >= 0:
+		_corridor[offset] = 1
+		var parent := previous[offset]
+		if config.naval and parent >= 0:
+			# A naval diagonal requires both orthogonal neighbors to stay clear.
+			var x := offset % _map.width
+			var y := offset / _map.width
+			var parent_x := parent % _map.width
+			var parent_y := parent / _map.width
+			if x != parent_x and y != parent_y:
+				_corridor[y * _map.width + parent_x] = 1
+				_corridor[parent_y * _map.width + x] = 1
+		offset = parent

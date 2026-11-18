@@ -26,9 +26,10 @@ func _run() -> void:
 	_legacy_replay()
 	_matrix()
 	_regressions()
+	_scenery()
 	_reproduction()
 	label = "completion"
-	check(completed.size() == 5, "every required test section completed")
+	check(completed.size() == 6, "every required test section completed")
 	print("FIRST MAP SHAPES: %d checks, %d generated maps, %d failure(s), %.2f s" % [checks, generated, failures.size(), (Time.get_ticks_msec() - began) / 1000.0])
 	for failure: String in failures: printerr("  " + failure)
 	quit(0 if failures.is_empty() else 1)
@@ -43,8 +44,8 @@ func check(ok: bool, what: String) -> void:
 func _configuration() -> void:
 	label = "shape settings"
 	var defaults := ELFirstRandomMap.defaults()
-	check(defaults.version == 2 and defaults.has("naval") and defaults.has("water") and defaults.has("coast"), "new recipes expose the three topology controls")
-	check(ELFirstRandomMap.normalize(JSON.parse_string(JSON.stringify(defaults))) == defaults, "version2 settings survive JSON numeric conversion")
+	check(defaults.version == 3 and defaults.has("naval") and defaults.has("water") and defaults.has("coast"), "new recipes keep the naval settings schema")
+	check(ELFirstRandomMap.normalize(JSON.parse_string(JSON.stringify(defaults))) == defaults, "settings survive JSON numeric conversion")
 	for options: Dictionary in [{"naval": 1}, {"naval": "true"}, {"water": true}, {"water": "huge"}, {"coast": []}, {"coast": "straight"}, {"version": 1, "naval": true}]:
 		check(ELFirstRandomMap.normalize(options).is_empty(), "malformed or wrong-version settings are rejected: " + JSON.stringify(options))
 	for layout: String in LAYOUTS:
@@ -102,6 +103,40 @@ func _regressions() -> void:
 	if map != null: _geometry(map, config)
 	check(validated == before + 1, "the repaired coastal-access case completes all independent geometry checks")
 	completed.append("regressions")
+
+func _listed_scenery(map: ELAdventureMap) -> Array[Dictionary]:
+	return map.objects.filter(func(item: Dictionary) -> bool: return item.group == "terrain_objects")
+
+func _scenery() -> void:
+	label = "scenery versioning and coverage"
+	var profile := Fixture.profile()
+	var recipe := {"version": 2, "seed": "breakwater-41", "size": 128, "players": 4, "layout": "archipelago", "naval": true, "water": "high"}
+	var original := _generate(profile, recipe)
+	if original == null: return
+	check(ELFirstRandomMap.content_hash(original) == "2228b1508c9cfa27dec544f7d3efe4026a0e77de076b860e0dded7ed9955bad1", "the original v2 island recipe still reproduces exactly")
+	var second_legacy := _generate(profile, {"version": 2, "seed": "scenery-regression", "size": 64, "players": 4, "layout": "crossroads"})
+	if second_legacy == null: return
+	check(ELFirstRandomMap.content_hash(second_legacy) == "4ecfa7abd3b2844cc6e9ea7aea4e8d73ecea5917816154b3d7563d0ba1f1f450", "the original v2 land recipe still reproduces exactly")
+	recipe.version = ELFirstRandomMap.VERSION
+	var standard := _generate(profile, recipe)
+	var dense := _generate(profile, recipe.merged({"scenery": 2}, true))
+	var minimal := _generate(profile, recipe.merged({"scenery": 0}, true))
+	if standard == null or dense == null or minimal == null: return
+	var decor := _listed_scenery(standard)
+	check(decor.size() >= 3 * _listed_scenery(original).size(), "normal scenery substantially increases terrain detail on the sparse island seed")
+	check(_listed_scenery(dense).size() > decor.size() and _listed_scenery(minimal).is_empty(), "the density control produces three distinct scenery levels")
+	check(standard.terrain == original.terrain and standard.roads == original.roads and standard.get_meta("first_naval") == original.get_meta("first_naval"), "scenery preserves the original terrain, roads and harbor locations")
+	check(standard.objects.filter(func(item: Dictionary) -> bool: return item.group != "terrain_objects") == original.objects.filter(func(item: Dictionary) -> bool: return item.group != "terrain_objects"), "all strategic objects and guards keep their placements")
+	var center := Vector2(standard.width, standard.height) / 2.0
+	for start: Dictionary in standard.get_meta("random_map_report").starts:
+		var castle := Vector2(start.castle[0], start.castle[1])
+		var rear := (castle - center).normalized()
+		var count := 0
+		for item: Dictionary in decor:
+			var away := Vector2(item.x, item.y) - castle
+			if away.dot(rear) > 0.0 and away.length_squared() < 15.0 * 15.0: count += 1
+		check(count >= 5, "each compact homeland has scenery behind its castle")
+	completed.append("scenery")
 
 func _geometry(map: ELAdventureMap, config: Dictionary) -> void:
 	check(map.width == config.size and map.height == config.size and map.players.size() == config.players, "size and player count match the recipe")

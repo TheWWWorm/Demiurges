@@ -1,8 +1,7 @@
 class_name ELFirstRandomMap
 extends RefCounted
-## Public random-map API. Version-one recipes remain an immutable generator;
-## version two adds real navigable seas and explicit coastal transitions.
-const VERSION := 2
+## Public random-map API. Each recipe selects its original generation rules.
+const VERSION := ELFirstRandomMapV2.SCENERY_VERSION
 const PREFIX := "el1_random_v"
 const COLORS := ["Green", "Blue", "Red", "Black"]
 const SIZES := [64, 96, 128, 160]
@@ -17,13 +16,13 @@ var report: Dictionary = {}
 
 static func defaults(version: int = VERSION) -> Dictionary:
 	if version == 1: return ELFirstRandomMapV1.defaults()
-	return ELFirstRandomMapV2.defaults() if version == 2 else {}
+	return ELFirstRandomMapV2.defaults(version) if version in [2, VERSION] else {}
 
 static func normalize(options: Dictionary) -> Dictionary:
 	var value: Variant = options.get("version", VERSION)
 	if typeof(value) not in [TYPE_INT, TYPE_FLOAT] or not is_finite(float(value)) or float(value) != floor(float(value)): return {}
 	if int(value) == 1: return ELFirstRandomMapV1.normalize(options)
-	return ELFirstRandomMapV2.normalize(options) if int(value) == 2 else {}
+	return ELFirstRandomMapV2.normalize(options, int(value)) if int(value) in [2, VERSION] else {}
 
 static func presets() -> Array[Dictionary]:
 	return ELFirstRandomMapV2.presets()

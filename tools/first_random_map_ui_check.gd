@@ -60,16 +60,18 @@ func _run() -> void:
 		screen._code.text = "not a configuration"
 		screen.load_setup()
 		check(screen.options() == before, language + ": bad setup leaves fields untouched")
-		var legacy := ELFirstRandomMap.defaults(1)
-		legacy.seed = "old-shape-recipe"
-		screen._code.text = ELFirstRandomMapScreen.LEGACY_CODE_PREFIX + Marshalls.utf8_to_base64(JSON.stringify(legacy))
-		screen.load_setup()
-		check(screen.options() == legacy, language + ": loading an old code preserves its exact generator version and recipe")
-		screen.copy_setup()
-		check(screen._code.text.begins_with(ELFirstRandomMapScreen.LEGACY_CODE_PREFIX), language + ": unchanged legacy recipes retain their sharing prefix")
+		for version: int in [1, 2]:
+			var legacy := ELFirstRandomMap.defaults(version)
+			legacy.seed = "old-shape-recipe"
+			var prefix := "EL1R%d:" % version
+			screen._code.text = prefix + Marshalls.utf8_to_base64(JSON.stringify(legacy))
+			screen.load_setup()
+			check(screen.options() == legacy, language + ": loading an old code preserves its exact generator version and recipe")
+			screen.copy_setup()
+			check(screen._code.text.begins_with(prefix), language + ": unchanged legacy recipes retain their sharing prefix")
 		screen._seed.text = "edited-old-shape"
 		screen._changed()
-		check(int(screen.options().version) == 2 and screen.options().has("naval"), language + ": editing a legacy recipe explicitly moves it to the current version")
+		check(int(screen.options().version) == 3 and screen.options().has("naval"), language + ": editing a legacy recipe explicitly moves it to the current version")
 		screen._code.text = code
 		screen.load_setup()
 		var built: bool = await screen.generate_preview()

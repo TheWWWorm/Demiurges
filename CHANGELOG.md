@@ -5,6 +5,7 @@ Versions follow [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html)
 ## Unreleased
 
 - Etherlords I can generate seeded single missions with eight layouts and eleven presets. Naval worlds add harbors, ships, sailing for human and computer heroes, naval encounters, and saves at sea.
+- New random maps group original trees, brush, and rock formations around homelands, inland edges, and coasts. Earlier saved worlds and setup codes keep their original scenery.
 
 ## 0.18.5
 

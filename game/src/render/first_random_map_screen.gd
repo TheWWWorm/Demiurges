@@ -5,8 +5,9 @@ extends AcceptDialog
 signal requested(configuration: Dictionary, difficulty: int, ai: Dictionary)
 
 const SETTINGS_PATH := "user://el1_random_map_setup.json"
-const CODE_PREFIX := "EL1R2:"
+const CODE_PREFIX := "EL1R3:"
 const LEGACY_CODE_PREFIX := "EL1R1:"
+const CODE_VERSIONS := {LEGACY_CODE_PREFIX: 1, "EL1R2:": 2, CODE_PREFIX: ELFirstRandomMap.VERSION}
 const MAX_CODE_LENGTH := 4096
 const FACTIONS := [["Green", "Vitals"], ["Blue", "Kinets"], ["Red", "Chaots"], ["Black", "Synthets"]]
 const TERRAIN_INK := {"Green": Color("546a3d"), "Blue": Color("a8ac9b"), "Red": Color("8f5a3d"), "Black": Color("69634b"), "Colorless": Color("8d8778")}
@@ -48,7 +49,9 @@ func build(source: ELProfile, level := 2, ai_levels: Dictionary = {}) -> void:
 		var saved: Variant = JSON.parse_string(FileAccess.get_file_as_string(SETTINGS_PATH))
 		if saved is Dictionary:
 			var normalized := ELFirstRandomMap.normalize(saved.get("config", {})) if saved.get("config") is Dictionary else {}
-			if not normalized.is_empty(): configuration = normalized
+			if not normalized.is_empty():
+				configuration.merge(normalized, true)
+				configuration.version = ELFirstRandomMap.VERSION
 	ai = ELAIChoice.normalized(ai_levels) if ELAIChoice.valid(ai_levels) else ELAIChoice.defaults(level, null)
 	var body := VBoxContainer.new()
 	body.add_theme_constant_override("separation", 8)
@@ -305,7 +308,7 @@ func options() -> Dictionary:
 
 func _changed(custom := true) -> void:
 	if _syncing: return
-	# Imported version-one worlds remain exact until a setting is edited.
+	# Imported worlds keep their generator version until a setting is edited.
 	if custom: configuration.version = ELFirstRandomMap.VERSION
 	_revision += 1
 	preview_map = null
@@ -377,21 +380,22 @@ func copy_setup() -> void:
 	if normalized.is_empty():
 		_status.text = _t("Enter a non-empty seed and valid world settings.")
 		return
-	_code.text = (LEGACY_CODE_PREFIX if int(normalized.version) == 1 else CODE_PREFIX) + Marshalls.utf8_to_base64(JSON.stringify(normalized))
+	var prefix := str(CODE_VERSIONS.find_key(int(normalized.version)))
+	_code.text = prefix + Marshalls.utf8_to_base64(JSON.stringify(normalized))
 	_code.select_all()
 	DisplayServer.clipboard_set(_code.text)
 	_status.text = _t("Setup copied. The same game data and generator version recreate this world.")
 
 func load_setup() -> void:
 	var encoded := _code.text.strip_edges()
-	var prefix := LEGACY_CODE_PREFIX if encoded.begins_with(LEGACY_CODE_PREFIX) else CODE_PREFIX
-	if not encoded.begins_with(prefix) or encoded.length() > MAX_CODE_LENGTH:
-		_status.text = _t("Paste an EL1R1 or EL1R2 configuration code into the field first.")
+	var prefix := encoded.get_slice(":", 0) + ":"
+	if not CODE_VERSIONS.has(prefix) or encoded.length() > MAX_CODE_LENGTH:
+		_status.text = _t("Paste a configuration code into the field first.")
 		return
 	var raw: Variant = JSON.parse_string(Marshalls.base64_to_utf8(encoded.trim_prefix(prefix)))
 	var normalized := ELFirstRandomMap.normalize(raw) if raw is Dictionary else {}
 	if not normalized.is_empty():
-		if raw.size() != normalized.size() or int(normalized.version) != (1 if prefix == LEGACY_CODE_PREFIX else 2): normalized = {}
+		if raw.size() != normalized.size() or int(normalized.version) != CODE_VERSIONS[prefix]: normalized = {}
 	if normalized.is_empty():
 		_status.text = _t("This configuration code is invalid or uses an unsupported version.")
 		return
@@ -423,17 +427,19 @@ static func preview_image(map: ELAdventureMap) -> Image:
 			elif map.profile.terrain_tiles != null and int(map.profile.terrain_tiles.types.get(tile, {}).get("movement", 1)) < 0: ink = ink.darkened(0.5)
 			if map.roads[y * map.width + x] != 0: ink = ink.lerp(Color("d2b98a"), 0.45)
 			result.fill_rect(Rect2i(x * scale, (map.height - 1 - y) * scale, scale, scale), ink)
+	# Keep dense terrain details below the strategic markers.
 	for object: Dictionary in map.objects:
+		if object.group != "terrain_objects": continue
+		var point := Vector2i(int(object.x) * scale, (map.height - 1 - int(object.y)) * scale)
+		result.set_pixelv(point, result.get_pixelv(point).darkened(0.44))
+	for object: Dictionary in map.objects:
+		if object.group in ["terrain_objects", "heroes"]: continue
 		var ink := Color("cfb865")
 		var radius := 2
 		if ELFirstScenario.is_castle(object):
 			ink = PLAYER_INK[clampi(int(object.owner) - 1, 0, 3)]
 			radius = 5
 		elif object.group == "np_heroes": ink = Color("d65c50")
-		elif object.group == "heroes": continue
-		elif object.group == "terrain_objects":
-			ink = Color("26392c")
-			radius = 1
 		var point := Vector2i(int(object.x) * scale, (map.height - 1 - int(object.y)) * scale)
 		var bounds := Rect2i(point - Vector2i(radius, radius), Vector2i(radius * 2 + 1, radius * 2 + 1)).intersection(Rect2i(Vector2i.ZERO, result.get_size()))
 		if radius == 5:
