@@ -401,6 +401,7 @@ static func plan_player(director: ELAdventureDirector, player: int, daily := tru
 	if daily and state.map.id == "mission13" and player == 2 and state.day > 10 and not champion.is_empty() and ELAdditionalBuildings._random(state) % 3 == 1:
 		ELGlobalSpells.script_attack(state, player, champion, 1)
 	var smart := ELFirstAIEconomy.applies(director)
+	var free_movement := smart and ELStrategy.free_mode(director)
 	if smart: ELFirstAIPlanner.observe(director, player)
 	# Route costs only cross tiles this player has explored.
 	var closed := _close_unexplored(director, player)
@@ -434,9 +435,13 @@ static func plan_player(director: ELAdventureDirector, player: int, daily := tru
 		var task: Dictionary = assigned.get(int(hero.uid), {})
 		var drop := false
 		if not task.is_empty() and (finished(director, hero, task) or not _valid(task, open, smart)): drop = true
+		elif free_movement and int(hero.ap) <= 0 and not task.is_empty() and task.kind != "tower": drop = true
 		# A promotion or demotion since the task was given: it must still suit the role.
 		elif not task.is_empty() and not _role_allows(director, hero, role, task, smart): drop = true
 		elif smart and not task.is_empty() and not forecast_objective(director, hero, task): drop = true
+		elif smart and not task.is_empty() and task.kind != "patrol" and (not free_movement or hero.strategy_order.is_empty()) and not can_start_order(director, hero, task, {"remaining": 3}):
+			retry[_key(task, int(hero.uid)) + "@" + str(hero.uid)] = int(state.day) + 1
+			drop = true
 		# Remake option: a siege that would not ruin the castle (its damage
 		# undone by the castle's regeneration) is reconsidered (other heroes
 		# may join it, or another goal is better).
@@ -865,8 +870,29 @@ static func command(director: ELAdventureDirector, hero: Dictionary, task: Dicti
 		hero.strategy_order = {"destination": [path[-1].x, path[-1].y], "use": -1, "route": route_rules(director, player, false)}
 		return
 	# Smarter monster orders use the screened approach chosen by the planner.
-	var guarded: bool = not clean or task.kind == "building" or (task.kind == "monster" and not ELFirstAIEconomy.applies(director))
+	var smart := ELFirstAIEconomy.applies(director)
+	var guarded: bool = not clean or (task.kind == "building" and (not smart or ELAdditionalBuildings.DUNGEONS.has(item.get("name")))) or (task.kind == "monster" and not smart)
 	hero.strategy_order = {"destination": [int(item.x), int(item.y)], "use": use, "route": route_rules(director, player, not guarded, use)}
+
+## Checks the order the movement phase will execute while fog is already
+## closed for the planning player. Keep the actor's current order intact.
+static func can_start_order(director: ELAdventureDirector, hero: Dictionary, task: Dictionary, budget: Dictionary) -> bool:
+	var previous: Dictionary = hero.get("strategy_order", {})
+	hero.strategy_order = {}
+	command(director, hero, task)
+	var order: Dictionary = hero.strategy_order
+	# A clean approach to an ordinary object has already been routed by
+	# command(). Screen paths which could still enter the target's guard zone.
+	var target := director.state.object(int(order.get("use", -1)))
+	var clean: bool = order.get("route", {}).get("guards", false) and usable(target) and target.type != "hero" and not director.interception.zones.has(int(target.uid))
+	# Free movement can discover an incidental guard just before stepping
+	# and plan again the same day. Cache-only checks keep those passes cheap.
+	var route_budget := {"remaining": 0, "allow_unknown": true} if ELStrategy.free_mode(director) else budget
+	var path := last_path if clean else ELStrategy.order_path(director, hero, route_budget, true)
+	hero.strategy_order = previous
+	if path.is_empty(): return task.kind == "escort" and ELStrategy.adjacent(director, hero, director.state.object(task.target))
+	if int(order.use) >= 0 and ELStrategy.adjacent(director, hero, target): return true
+	return path.size() > 1 and director.interception.can_step(director.state, director.grid, hero, path[1])
 
 ## The rules of a planned route: whose explored ground it keeps to (-1: any
 ## tile) and whether it keeps out of hostile guard areas other than that of

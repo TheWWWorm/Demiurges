@@ -83,7 +83,7 @@ static func restore(profile: ELProfile, actor: Dictionary, map: ELAdventureMap) 
 	actor.strategy_capacity = int(actor.strategy_capacity)
 	return true
 
-static func order_path(director: ELAdventureDirector, actor: Dictionary) -> Array[Vector2i]:
+static func order_path(director: ELAdventureDirector, actor: Dictionary, forecast_budget: Dictionary = {}, known_closed := false) -> Array[Vector2i]:
 	var order: Dictionary = actor.get("strategy_order", {})
 	if order.is_empty(): return []
 	var from := Vector2i(actor.x, actor.y)
@@ -99,13 +99,13 @@ static func order_path(director: ELAdventureDirector, actor: Dictionary) -> Arra
 	# a computer order keeps to the rules its route was planned under.
 	var closed := _close_unseen(director, actor)
 	if not rules.is_empty():
-		closed.append_array(_close_unknown(director, int(rules.get("known", -1))))
+		if not known_closed: closed.append_array(_close_unknown(director, int(rules.get("known", -1))))
 		if rules.get("guards", false):
 			closed.append_array(ELFirstAI.close_guards(director, actor, int(rules.get("target", -1))))
 	var destination := Vector2i(order.destination[0], order.destination[1])
 	var path := director.grid.approach(from, target) if not target.is_empty() else director.grid.path(from, destination)
 	if not rules.is_empty() and ELFirstAIEconomy.applies(director) and not director.is_strategy_human(int(actor.owner)):
-		path = screen_monster_route(director, actor, path, target, destination, closed, {"remaining": 3})
+		path = screen_monster_route(director, actor, path, target, destination, closed, {"remaining": 3} if forecast_budget.is_empty() else forecast_budget)
 	for point: Vector2i in closed: director.grid._update_cell(point)
 	return path
 

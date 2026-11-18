@@ -80,7 +80,7 @@ func _run() -> void:
 	elif not paths.has("el2"): _skip("no second-game files configured: its cases are not run")
 	_finish()
 
-const CASES := ["a_castle", "a_mine", "b_teacher", "b_gnome", "b_spawn", "c_blocked", "d_unexplored", "d_guarded",
+const CASES := ["a_castle", "a_mine", "b_teacher", "b_gnome", "b_spawn", "c_blocked", "c_alternative", "c_spent", "d_unexplored", "d_guarded",
 	"e_unseen", "e_unreachable", "f_upgrade", "f_refill", "f_portal", "h_meteor", "j_free", "k_holds", "k_defend", "m_roles", "n_joint", "p_resolver", "p_monsters", "p_committed_duel", "p_approach", "p_matchup_shop", "q_lookahead",
 	"s_saved", "t_patrol", "t_raid", "t_escort", "t_retreat", "t_doctrine", "t_story", "t_off",
 	"v_cast", "v_income", "v_runes", "v_portal", "v_upkeep", "v_mine",
@@ -324,6 +324,33 @@ func _case_c_blocked() -> void:
 	_wall(director, gap + Vector2i(0, 1), true)
 	for round in 4: _pass(director)
 	check(_known(director, mine), "C: the mine is an objective again once the way opens")
+
+func _case_c_alternative() -> void:
+	if not smart: return
+	var director := _world()
+	var home := _castle(director, 2)
+	_hero(director, 2, int(home.x) - 6, int(home.y), 7)
+	var hero := _hero(director, 2, 30, 90, 2)
+	var blocked := _place(director, "mine", 50, 90, {"owner": -1})
+	var gap := Vector2i(int(blocked.x) - 4, int(blocked.y))
+	_pen(director, blocked, 4, [gap])
+	_pass(director)
+	check(int(_task_of(director, hero).get("target", -1)) == int(blocked.uid), "C: the hero has an errand before the passage closes")
+	for offset in range(-1, 2): _wall(director, gap + Vector2i(0, offset))
+	var open := _place(director, "mine", 34, 90, {"owner": -1})
+	_pass(director)
+	check(int(_task_of(director, hero).get("target", -1)) == int(open.uid), "C: the hero takes the reachable mine on the first pass after the route closes")
+
+func _case_c_spent() -> void:
+	if not smart: return
+	var director := _world(true)
+	var spent := _hero(director, 2, 30, 90, 2)
+	spent.ap = 0
+	var ready := _hero(director, 2, 53, 90)
+	var mine := _place(director, "mine", 31, 90, {"owner": -1})
+	_pass(director)
+	check(spent.strategy_order.is_empty(), "C: a hero with no movement does not reserve the adjacent mine")
+	check(int(_task_of(director, ready).get("target", -1)) == int(mine.uid), "C: the hero with movement takes the mine assignment")
 
 # --- D: the executed route keeps the planned route's rules ------------------
 

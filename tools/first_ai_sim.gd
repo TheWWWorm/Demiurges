@@ -153,7 +153,7 @@ func _play(profile: ELProfile, entry: Dictionary, days: int, need_shop: bool) ->
 				var player := int(data.player)
 				if balance and player in participants and not capture.has(player) and state.object(data.id).get("group") in ["mines", "mana_nodes"]:
 					capture[player] = int(timeline.turn)
-			"building_used", "castle_assaulted", "pickup_taken":
+			"building_used", "castle_assaulted", "pickup_taken", "resources_collected":
 				timeline.acted[int(data.get("hero", -1))] = true
 			"skill_learned":
 				var hero := state.object(data.id)

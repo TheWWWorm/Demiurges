@@ -192,10 +192,15 @@ static func _assign(director: ELAdventureDirector, player: int, heroes: Array[Di
 	# Each row's options not priced yet, best bound first.
 	var rest: Array = []
 	var looked := 0
+	var free_movement := ELStrategy.free_mode(director)
 	for hero: Dictionary in rows:
 		var role := int(roles.get(int(hero.uid), 1))
+		var night_only := free_movement and int(hero.ap) <= 0
 		var options: Array = []
 		for task: Dictionary in pool:
+			# A spent hero cannot move or use an object today. An adjacent
+			# siege can still run at night, without a movement order.
+			if night_only and (task.kind != "tower" or not ELStrategy.adjacent(director, hero, state.object(task.target))): continue
 			if not ELFirstAI._available(task, hero, others, retry): continue
 			if task.kind == "explore" and _near_any(Vector2i(int(task.tile[0]), int(task.tile[1])), scouted): continue
 			var bound := utility(director, hero, role, task, danger, false)
@@ -221,7 +226,7 @@ static func _assign(director: ELAdventureDirector, player: int, heroes: Array[Di
 			kept.sort()
 			kept.reverse()
 		rest.append(options.slice(next))
-		if lookahead:
+		if lookahead and not night_only:
 			var started := Time.get_ticks_usec()
 			_look(director, hero, role, pool, others, retry, danger, row, columns, walks, ends)
 			looked += Time.get_ticks_usec() - started
@@ -242,7 +247,10 @@ static func _assign(director: ELAdventureDirector, player: int, heroes: Array[Di
 	# Check proposed duels before looking for a wider set of jobs. Heroes
 	# who lost their shortlist to a forecast can still take safer work.
 	var budgets: Array[Dictionary] = []
-	for hero: Dictionary in rows: budgets.append({"remaining": 4})
+	var approved: Array[Dictionary] = []
+	for hero: Dictionary in rows:
+		budgets.append({"remaining": 4})
+		approved.append({})
 	for round in WIDEN_ROUNDS + 1:
 		while true:
 			var clash := _frontier_clash(rows, choice, keys, columns, utilities)
@@ -250,10 +258,20 @@ static func _assign(director: ELAdventureDirector, player: int, heroes: Array[Di
 				for index in rows.size():
 					if not _matched(choice, index, keys, utilities): continue
 					var column := choice[index]
-					if not ELFirstAI.forecast_objective(director, rows[index], columns[keys[column]], budgets[index]):
+					var key: String = keys[column]
+					if approved[index].has(key): continue
+					if not ELFirstAI.forecast_objective(director, rows[index], columns[key], budgets[index]):
 						ELFirstAI.note_stat(director, player, "fight_assignment_rejected")
 						clash = [index, column]
 						break
+					# Classic gets one movement phase. Free movement checks the
+					# route when the order runs and can recover in a later pass.
+					if not free_movement and not ELFirstAI.can_start_order(director, rows[index], columns[key], budgets[index]):
+						ELFirstAI.note_stat(director, player, "unusable_order_rejected")
+						retry[key + "@" + str(rows[index].uid)] = int(state.day) + 1
+						clash = [index, column]
+						break
+					approved[index][key] = true
 			if clash.is_empty(): break
 			var line: PackedFloat64Array = matrix[clash[0]]
 			line[clash[1]] = BARRED
@@ -297,7 +315,7 @@ static func _assign(director: ELAdventureDirector, player: int, heroes: Array[Di
 		if _matched(choice, index, keys, utilities):
 			var key: String = keys[choice[index]]
 			chosen[uid] = _matchup_shops.get(uid, {}).get(key, columns[key])
-		elif not held.is_empty() and not utilities[index].has(ELFirstAI._key(held, uid)) and not given.has(ELFirstAI._key(held, uid)) and ELFirstAI.forecast_objective(director, rows[index], held, budgets[index]): chosen[uid] = held
+		elif not held.is_empty() and not utilities[index].has(ELFirstAI._key(held, uid)) and not given.has(ELFirstAI._key(held, uid)) and ELFirstAI.forecast_objective(director, rows[index], held, budgets[index]) and (free_movement or ELFirstAI.can_start_order(director, rows[index], held, budgets[index])): chosen[uid] = held
 		else: chosen[uid] = {}
 	for uid: int in current:
 		reserved.erase(ELFirstAI._key(current[uid], uid))
@@ -570,9 +588,11 @@ static func utility(director: ELAdventureDirector, hero: Dictionary, role: int, 
 			if NO_EFFECT.has(name): return -INF
 			gain = 30.0 if name in ["Teacher", "Magister", "Master"] else (12.0 if name in ELAdditionalBuildings.WEEKLY_VISITED else 15.0)
 			if role == 0: gain *= 0.7
-			if ELAdditionalBuildings.DUNGEONS.has(name):
+			var dungeon := ELAdditionalBuildings.DUNGEONS.has(name)
+			if dungeon:
 				gain = monster_gain(director, hero, role, state.object(item.monster))
-			walk = _walk(director, hero, item, false, exact)
+			walk = _walk(director, hero, item, not dungeon, exact)
+			if walk < 0.0 and not dungeon: walk = _walk(director, hero, item, false, exact)
 		"shop":
 			if task.has("guard"):
 				walk = _walk(director, hero, item, true, exact)

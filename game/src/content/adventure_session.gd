@@ -397,7 +397,7 @@ func collect_resources(hero_id: int, resource_id: int) -> bool:
 	item.visible = false
 	item.enabled = false
 	event.emit({"kind": "object_killed", "id": resource_id, "pickup": true})
-	event.emit({"kind": "resources_collected", "id": resource_id, "player": actor.owner, "amounts": amounts})
+	event.emit({"kind": "resources_collected", "id": resource_id, "hero": hero_id, "player": actor.owner, "amounts": amounts})
 	return true
 
 func _bindings() -> Array[String]:
