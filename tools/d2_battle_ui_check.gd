@@ -168,9 +168,40 @@ func _casting_and_retry() -> void:
 		check(retry.size == ok.size and retry.size == cancel.size, "the three surrender buttons are the original size")
 		check(retry.position - cancel.position == cancel.position - ok.position, "the three surrender buttons are evenly spaced")
 		retry.pressed.emit()
-		check(view.duel != duel and view.duel.turn_serial == opening.turn_serial and view.duel.heroes[0].hand == opening.heroes[0].hand, "Try again restarts the same duel and opening hand")
+		check(view.duel != duel and view.duel.turn_serial == opening.turn_serial and view.duel.setup == opening.setup, "Try again restarts the same duel setup")
+		check(view.duel.rng_state != int(opening.rng), "Try again deals from a new random seed")
+	_duel_match_retry(view)
 	view.queue_free()
 	await frames(2)
+
+func _duel_match_retry(view: Node) -> void:
+	var pool := ELDuelPresets.shipped(view.profile)
+	var preset: Dictionary = pool[0]
+	var started := ELDuelMatch.new()
+	var error := started.begin(view.profile, pool, [preset, preset], int(preset.resource_level), 2, ELDuelMatch.RANDOM, 77)
+	check(error.is_empty(), "the retry check starts a two-round duel match")
+	if not error.is_empty(): return
+	view._begin_duel_match(started)
+	view._surrender_round()
+	view._watch_match_round(0.0)
+	view._play_match_round()
+	var duel: ELDuel = view.duel
+	var recording: ELDuelRecording = view.match_recording
+	var first_round: Dictionary = recording.rounds[0]
+	var old_seed: int = recording.rounds[1].seed
+	view._ask_surrender()
+	var retry: ELFrontMenu.CutButton = view.options_host.buttons.get("MBRetry")
+	check(retry != null, "the second round can be retried")
+	if retry == null: return
+	retry.pressed.emit()
+	check(view.duel != duel and view.duel.setup == duel.setup and view.duel_match == started and started.played == 1 and started.wins == [0, 1],
+		"retry keeps the same round setup and match score")
+	check(recording.rounds.size() == 2 and recording.rounds[0] == first_round and recording.rounds[1].seed != old_seed and recording.tracking(view.duel),
+		"the recording replaces the retried round with its new seed")
+	var recorded: Dictionary = recording.rounds[1]
+	var replay := ELDuel.new()
+	check(replay.start(view.profile, int(recorded.seed), recorded.options) and replay.snapshot() == view.duel.snapshot(),
+		"the retried round's recording reconstructs the new opening")
 
 # --- #144 ---------------------------------------------------------------------
 

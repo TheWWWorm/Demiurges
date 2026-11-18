@@ -9403,7 +9403,8 @@ func _begin_duel_match(started: ELDuelMatch) -> void:
 
 ## Every round is a fresh battle from the same presets; its first attacker
 ## is the round's own coin flip (ELDuelMatch.round_first_side).
-func _play_match_round() -> void:
+## A retry can supply a new battle seed for the current round.
+func _play_match_round(battle_seed := -1) -> void:
 	var edition := duel_match.edition
 	hot_side = -1
 	hot_pending = false
@@ -9413,7 +9414,7 @@ func _play_match_round() -> void:
 	match_result_shown = false
 	var previous := duel
 	_match_starting = true
-	var battle_seed := (duel_match.seed_value + duel_match.played * 0x39) & 0x7fffffff
+	if battle_seed < 0: battle_seed = (duel_match.seed_value + duel_match.played * 0x39) & 0x7fffffff
 	_start(edition, duel_match.round_options(profiles[edition]), null, battle_seed)
 	_match_starting = false
 	if match_recording != null and duel != null and duel != previous:
@@ -9924,13 +9925,17 @@ func _retry_battle() -> void:
 			_encounter_start = checkpoint
 	elif _expedition_battle != null:
 		_start_expedition_battle(true)
-	elif duel_match != null:
+	else:
+		var battle_seed := randi() & 0x7fffffff
+		while battle_seed == _practice_restart_seed:
+			battle_seed = randi() & 0x7fffffff
+		if duel_match == null:
+			_start(profile.id, match_options, null, battle_seed)
+			return
 		if match_recording != null and match_recording.tracking(duel):
 			match_recording.untrack()
 			match_recording.rounds.pop_back()
-		_play_match_round()
-	else:
-		_start(profile.id, match_options, null, _practice_restart_seed)
+		_play_match_round(battle_seed)
 
 func _esc_surrender() -> void:
 	_close_esc_menu()
