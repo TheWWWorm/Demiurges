@@ -6999,8 +6999,6 @@ static int card_moves(const Search *x, const State *s, int side, Move *out, int 
 			}
 		} else if (c->variable) {
 			int most = s->ether[side] - price;
-			/* The proof still considers a zero-X response. */
-			if (most == 0 && !lists_all(x) && (c->effect == EFF_DAMAGE || c->effect == EFF_WAVE) && !c->splash && !cast_reacts(s, side, c)) continue;
 			if (lists_all(x)) {
 				for (int p = most; p >= 0 && wide < MAX_MOVES; p--) powers[wide++] = p;
 			} else {
@@ -7021,6 +7019,9 @@ static int card_moves(const Search *x, const State *s, int side, Move *out, int 
 			}
 		} else powers[wide++] = 0;
 		for (int p = 0; p < wide && count < MAX_MOVES - 2; p++) {
+			/* Proofs still consider zero-X responses. */
+			if (!x->proof && c->variable && powers[p] == 0 && (c->effect == EFF_DAMAGE || c->effect == EFF_WAVE)
+				&& !c->splash && !cast_reacts(s, side, c)) continue;
 			if (c->aim == AIM_NONE) {
 				if (!x->proof && idle_cast(x, s, side, c, NO_TARGET)) continue;
 				out[count].kind = 3;

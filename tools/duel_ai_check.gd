@@ -182,7 +182,9 @@ func _passing() -> void:
 		duel.smart_sides = [0]
 		var ctx := Fixtures.context(profile, 0)
 		var offered := ELCombatBrain.weigh(ctx, duel, 2, 20000, 4)
-		check(duel.maximum_power("ERQA") == 0 and offered.size() == 1 and offered[0].command.kind == "end_phase",
+		var offered_pass := offered.any(func(item: Dictionary) -> bool: return item.command.kind == "end_phase")
+		var offered_quake := offered.any(func(item: Dictionary) -> bool: return item.command.get("card") == "ERQA")
+		check(duel.maximum_power("ERQA") == 0 and offered_pass and not offered_quake,
 			game + ": an Earthquake with zero damage is left out of the ordinary search")
 		var tied := duel.search_copy()
 		tied.heroes[0].mana = 3
