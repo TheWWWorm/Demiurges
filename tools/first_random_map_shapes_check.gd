@@ -45,7 +45,7 @@ func check(ok: bool, what: String) -> void:
 func _configuration() -> void:
 	label = "shape settings"
 	var defaults := ELFirstRandomMap.defaults()
-	check(defaults.version == 4 and defaults.has("naval") and defaults.has("water") and defaults.has("coast"), "new recipes keep the naval settings schema")
+	check(defaults.version == 5 and defaults.has("naval") and defaults.has("water") and defaults.has("coast"), "new recipes keep the naval settings schema")
 	check(ELFirstRandomMap.normalize(JSON.parse_string(JSON.stringify(defaults))) == defaults, "settings survive JSON numeric conversion")
 	for options: Dictionary in [{"naval": 1}, {"naval": "true"}, {"water": true}, {"water": "huge"}, {"coast": []}, {"coast": "straight"}, {"version": 1, "naval": true}]:
 		check(ELFirstRandomMap.normalize(options).is_empty(), "malformed or wrong-version settings are rejected: " + JSON.stringify(options))
@@ -143,7 +143,7 @@ func _scenery() -> void:
 func _exploration() -> void:
 	label = "landscape exploration"
 	var profile := Fixture.profile()
-	var map := _generate(profile, {"seed": "breakwater-41", "size": 128, "players": 4, "layout": "archipelago", "naval": true, "water": "high"})
+	var map := _generate(profile, {"version": 4, "seed": "breakwater-41", "size": 128, "players": 4, "layout": "archipelago", "naval": true, "water": "high"})
 	if map == null: return
 	var stops: Array[Dictionary] = map.objects.filter(func(item: Dictionary) -> bool: return item.group == "additional_buildings")
 	var center := Vector2(map.width, map.height) / 2.0
@@ -229,8 +229,15 @@ func _geometry(map: ELAdventureMap, config: Dictionary) -> void:
 			if not reachable[int(item.y) * map.width + int(item.x)]: unreachable.append(str(item.name))
 		elif not _approachable(map, grid, item, reachable): unreachable.append(str(item.name))
 	check(unreachable.is_empty(), "independent terrain/footprint flood reaches all strategic objects: " + ", ".join(unreachable.slice(0, 4)))
-	var starts: Array = map.get_meta("random_map_report", {}).get("starts", [])
+	var generation: Dictionary = map.get_meta("random_map_report", {})
+	var starts: Array = generation.get("starts", [])
 	check(starts.size() == config.players, "every homeland exposes its opening economy")
+	var safe_modes := modes.duplicate()
+	if config.version >= ELFirstRandomMapV2.WILDERNESS_VERSION:
+		var field: PackedByteArray = map.get_meta("wilderness_detail", PackedByteArray())
+		check(field.size() == (map.width + 1) * (map.height + 1) * 3, "continuous ground detail covers the entire map")
+		check(int(generation.get("wilderness_distance", 0x7fff)) < 22, "reachable wilderness has nearby activities across the playable land")
+		for point: Vector2i in director.interception.cells: safe_modes[point.y * map.width + point.x] = 0
 	var balances := {}
 	var wallet_fair := true
 	var homes_valid := true
@@ -239,7 +246,7 @@ func _geometry(map: ELAdventureMap, config: Dictionary) -> void:
 		var hero := state.object(int(start.hero_id))
 		var at := Vector2i(int(hero.x), int(hero.y))
 		homes_valid = homes_valid and modes[at.y * map.width + at.x] == 1 and not hero.ship
-		var land := _flood(map, modes, at, {}, bool(config.naval), 1)
+		var land := _flood(map, safe_modes, at, {}, bool(config.naval), 1)
 		var nearby_ports := 0
 		for port: Dictionary in ports:
 			if land[int(port.land[1]) * map.width + int(port.land[0])]: nearby_ports += 1
@@ -247,7 +254,16 @@ func _geometry(map: ELAdventureMap, config: Dictionary) -> void:
 		var sites: Array = start.get("sites", [])
 		var local_economy := sites.size() == 7
 		for uid: int in sites: local_economy = local_economy and _approachable(map, grid, state.object(uid), land)
-		check(local_economy, "player%d can reach all seven opening economy sites without sailing" % int(start.player))
+		check(local_economy, "player%d can reach all seven opening economy sites by land" % int(start.player))
+		if config.version >= ELFirstRandomMapV2.WILDERNESS_VERSION:
+			check(start.rewards.all(func(uid: int) -> bool: return _approachable(map, grid, state.object(uid), land)), "player%d can recruit without an opening duel or sea crossing" % int(start.player))
+			if config.guards != "none":
+				var guard := state.object(start.get("opening_guard", -1))
+				if guard.is_empty():
+					var lair := state.object(start.get("opening_lair", -1))
+					guard = state.object(lair.get("monster", -1))
+					check(_approachable(map, grid, lair, land), "player%d can visit their starter lair easily" % int(start.player))
+				check(guard.get("alive", false) and guard.get("level") == 1, "player%d has a level-one opening encounter" % int(start.player))
 		var wallet: Dictionary = state.players[int(start.player)].resources
 		if balances.is_empty(): balances = wallet.duplicate()
 		wallet_fair = wallet_fair and wallet == balances

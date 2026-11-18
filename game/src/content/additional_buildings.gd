@@ -29,6 +29,10 @@ const OWNED := ["ShrineMagic", "HealersCitadel", "WanderersCitadel"]
 const RUNE_VISITS := ["MageWagon", "GnomeAlchemist"]
 ## Lairs hold one neutral creature of these level ranges, restocked weekly.
 const DUNGEONS := {"Dungeon1": [2, 4], "Dungeon2": [5, 7], "Dungeon3": [8, 10]}
+const WILDERNESS_LAIRS := {
+	"Dungeon1": ["Sea Halo", "OrcShaman", "Giant Fingus", "OrcGuard", "Small Bee Hive"],
+	"Dungeon2": ["Gibberling Gang", "KoboldElder", "Medium Bee Hive", "Steel Mechos"],
+}
 const DUNGEON_ARENA := "Dungeon.001"
 const MAGISTER_EXPERIENCE := 100
 const WAGON_RUNES := 3
@@ -266,6 +270,10 @@ static func precombat(director: ELAdventureDirector, hero: Dictionary, item: Dic
 ## at the current difficulty has a level inside the lair's range.
 static func restock(state: ELAdventureSession, item: Dictionary) -> int:
 	var levels: Array = DUNGEONS[item.name]
+	var recipe := ELFirstRandomMap.configuration(state.map)
+	var wilderness := int(recipe.get("version", 0)) >= ELFirstRandomMapV2.WILDERNESS_VERSION
+	var opening := wilderness and barrier_key(item) == ELFirstRandomMapV2.STARTER_LAIR
+	if opening: levels = [1, 1]
 	var pool: Array[String] = []
 	var rows: Dictionary = state.map.profile.table("Monsters")
 	# One name per creature, in registry order (its difficulty-3 row).
@@ -274,6 +282,10 @@ static func restock(state: ELAdventureSession, item: Dictionary) -> int:
 		var template := ELFirstMonsters.definition(state.map.profile, str(row.Name), state.difficulty)
 		if not template.is_empty() and int(template.Level) >= int(levels[0]) and int(template.Level) <= int(levels[1]): pool.append(str(row.Name))
 	if pool.is_empty(): return -1
+	if wilderness:
+		var choices: Array = ELFirstRandomMapV2.STARTER_ENCOUNTERS if opening else WILDERNESS_LAIRS.get(item.name, [])
+		var curated := pool.filter(func(monster: String) -> bool: return monster in choices)
+		if not curated.is_empty(): pool.assign(curated)
 	var name := pool[_random(state) % pool.size()]
 	var id := state._next_object
 	state._next_object += 1

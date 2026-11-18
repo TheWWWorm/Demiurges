@@ -40,6 +40,12 @@ func _generate(profile: ELProfile, options: Dictionary) -> bool:
 		failures += 1
 		printerr("FAIL: %s: %s" % [JSON.stringify(options, "", true), generator.error])
 		return false
+	if int(generator.config.version) >= ELFirstRandomMapV2.WILDERNESS_VERSION and generator.config.guards != "none":
+		for start: Dictionary in generator.report.starts:
+			if start.has("opening_guard") or start.has("opening_lair"): continue
+			failures += 1
+			printerr("FAIL: %s: player %d has no starter encounter" % [JSON.stringify(options, "", true), start.player])
+			return false
 	return true
 
 func _examples() -> void:

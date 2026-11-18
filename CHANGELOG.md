@@ -7,6 +7,7 @@ Versions follow [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html)
 - Etherlords I can generate seeded single missions with eight layouts and eleven presets. Naval worlds add harbors, ships, sailing for human and computer heroes, naval encounters, and saves at sea.
 - New random maps group original trees, brush, and rock formations around homelands, inland edges, and coasts. Earlier saved worlds and setup codes keep their original scenery.
 - Random worlds have wooded valleys, ridges, and meandering channels. Explore beyond the opening economy for springs, mentors, artifact islands, and stocked lairs. Seers reveal remote discoveries through the fog.
+- Generated terrain has continuous groves, cliff formations and curved paths. Every homeland gets local recruitment and an optional starter encounter. Harder enemies and discoveries fill the backcountry and outlying islands.
 
 ## 0.18.5
 

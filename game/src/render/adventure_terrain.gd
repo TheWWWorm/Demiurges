@@ -128,6 +128,12 @@ func build(map: ELAdventureMap) -> bool:
 	material.set_shader_parameter("pitch", pitch)
 	material.set_shader_parameter("tile_margin", GUTTER)
 	material.set_shader_parameter("atlas_size", Vector2(image.get_size()))
+	var ground_detail: PackedByteArray = map.get_meta("wilderness_detail", PackedByteArray())
+	if ground_detail.size() == (map.width + 1) * (map.height + 1) * 3:
+		var field := Image.create_from_data(map.width + 1, map.height + 1, false, Image.FORMAT_RGB8, ground_detail)
+		material.set_shader_parameter("wilderness_detail", ImageTexture.create_from_image(field))
+		material.set_shader_parameter("wilderness_size", Vector2(field.get_size()))
+		material.set_shader_parameter("wilderness_enabled", true)
 	# Keep only the most recently built map atlas per edition. Reloading a save
 	# can reuse it without accumulating every visited chapter's textures.
 	_cache = {"map": map.id, "atlas": atlas, "frames": animation_frames, "combinations": combinations, "cells": cells, "plans": compositions, "material": material,

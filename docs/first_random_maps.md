@@ -95,17 +95,24 @@ reachable approaches after placing scenery and other content.
 
 Look behind your castle for springs and mentors. Springs give a visiting hero
 a weekly health or movement bonus. Mentors award experience or teach skills.
-Alchemists and traders offer runes and resources along longer routes. Lairs
-start with an occupant and can restock each week. Stronger lairs on neutral
-islands give heroes a reason to make a voyage after preparing their spellbooks.
+Traveling merchants, training camps and alchemists can appear away from the
+main roads. Remote banks and islands get discoveries based on the distance
+from nearby sites along the same land. Lairs start occupied and can restock
+each week. The strongest lairs are intended for experienced heroes.
 
 A Seer can reveal a distant crystal ball and the area around it through fog.
 Larger naval worlds can have small outlying islands with artifacts and lairs.
 Use the violet markers in the setup preview to spot regions with discoveries.
 
-The landscape uses connected stands of woodland, rocky ridges, and meadows.
-The placement logic reserves roads and routes to objectives before adding
-trees and cliffs. **Dense** adds more cover to woods and ridges.
+Woodland thins into brush and meadows at its edges. Cliffs and boulders follow
+rocky ridges, and the worn paths to settlements are narrower than main roads.
+**Dense** adds more cover to the landscape.
+
+Each homeland has its own recruitment scrolls and access to its starting
+economy. With guards enabled, a nearby optional encounter is drawn from a
+pool tested against the four starting spellbooks. Stronger creatures appear
+farther from the starting heroes, clear of main approaches. The difficulty
+setting still uses the original creatures' corresponding spellbooks.
 
 ## World configuration
 
@@ -114,7 +121,7 @@ Omitted keys use the defaults below.
 
 | Key | Default | Supported values and effect |
 | --- | --- | --- |
-| `version` | `4` | `4` generates wilderness destinations and connected landscapes. Earlier versions reproduce their original worlds. Version 1 uses its own schema. |
+| `version` | `5` | `5` generates organic groves, curved roads, wilderness activities and balanced opening encounters. Earlier versions reproduce their original worlds. Version 1 uses its own schema. |
 | `seed` | `"212"` | A string of 1–64 characters, not blank-only, without control characters. Whitespace in a valid seed is significant. |
 | `size` | `96` | `64`, `96`, `128`, `160` tiles per side. |
 | `players` | `4` | `2`, `3`, `4`: one human and the remaining seats controlled by AI. |
@@ -143,12 +150,12 @@ monsters** option also keeps its normal rules.
 
 ## Share and remember a setup
 
-**Copy setup** creates an `EL1R4:` code for a new world in the code field and clipboard. Paste a
+**Copy setup** creates an `EL1R5:` code for a new world in the code field and clipboard. Paste a
 complete code and press **Load setup** to restore its seed and world settings.
 Choose difficulty and AI separately. The code is a prefix followed by Base64
 encoded UTF-8 JSON; it is a recipe, not a map archive.
 
-`EL1R1:`, `EL1R2:`, and `EL1R3:` codes reproduce their original worlds when loaded and played
+`EL1R1:` through `EL1R4:` codes reproduce their original worlds when loaded and played
 without editing. Changing a world setting or choosing a new preset switches to
 the current generator.
 
@@ -162,7 +169,7 @@ modifies the installed original game's files.
 ```gdscript
 var generator := ELFirstRandomMap.new()
 var map := generator.generate(profile, {
-    "version": 4,
+    "version": 5,
     "seed": "island-expedition",
     "size": 128,
     "players": 4,
@@ -235,10 +242,10 @@ games this includes hero ship state and queued travel, including a voyage
 paused at sea. Harbors are reconstructed from the same recipe and covered by
 the generated document's fingerprint. No separate generated map file is needed.
 
-Version 4 reshapes rivers, coasts, and road approaches and reserves access to
-exploration sites before placing decorative blockers. Saves from each version
-regenerate with their original rules. Missing recipe fields, unsupported
-versions or incompatible generated content produce a load error.
+Version 5 reserves routes to discoveries and recruitment scrolls before
+placing encounters and scenery. Saves from each version regenerate with
+their original rules. Missing recipe fields, unsupported versions or
+incompatible generated content produce a load error.
 
 Ordinary campaign/custom maps retain their existing behavior. This feature does
 not add random maps to the multiplayer lobby or export original-editor

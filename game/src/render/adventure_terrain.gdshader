@@ -16,6 +16,10 @@ uniform vec2 atlas_size;
 // extra assets; animated liquid tiles keep their original appearance.
 uniform bool detail_enabled = false;
 uniform vec3 detail_sun = vec3(0.6634, 0.6428, -0.3830);
+// Generated landscapes use their world-scale fields across tile seams.
+uniform bool wilderness_enabled = false;
+uniform sampler2D wilderness_detail : filter_linear, repeat_disable;
+uniform vec2 wilderness_size = vec2(1.0);
 // The optional water surface uses the original liquid masks for its shores.
 uniform bool water_enabled = false;
 uniform sampler2D water_weights : filter_linear, repeat_disable;
@@ -167,6 +171,18 @@ void fragment() {
 	float footprint = max(length(footprint_x), length(footprint_y));
 	float terrain_lod = clamp(log2(max(footprint, 1.0)), 0.0, 2.0);
 	ALBEDO = textureLod(tiles, tex_uv, terrain_lod).rgb;
+	if (wilderness_enabled) {
+		vec2 field_uv = (cell + vec2(0.5)) / wilderness_size;
+		vec3 field = texture(wilderness_detail, field_uv).rgb;
+		vec3 uphill = texture(wilderness_detail, field_uv + vec2(1.65, 1.05) / wilderness_size).rgb;
+		vec3 downhill = texture(wilderness_detail, field_uv - vec2(1.65, 1.05) / wilderness_size).rgb;
+		float slope_light = clamp((uphill.g - downhill.g) * 0.39, -0.15, 0.16);
+		float wooded = smoothstep(0.25, 0.82, field.r);
+		float bank = field.b * (1.0 - min(uphill.b, downhill.b));
+		float variation = 1.0 + slope_light + (field.g - 0.53) * 0.20 - wooded * 0.18 - bank * 0.11;
+		vec3 tint = mix(vec3(1.035, 1.01, 0.94), vec3(0.86, 0.97, 0.95), wooded);
+		ALBEDO *= mix(vec3(1.0), tint * variation, smoothstep(0.45, 0.98, field.b));
+	}
 	if (detail_enabled && int(round(UV2.y)) == 1) {
 		vec2 dx = dFdx(UV);
 		vec2 dy = dFdy(UV);

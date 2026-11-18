@@ -60,7 +60,7 @@ func _run() -> void:
 		screen._code.text = "not a configuration"
 		screen.load_setup()
 		check(screen.options() == before, language + ": bad setup leaves fields untouched")
-		for version: int in [1, 2, 3]:
+		for version: int in [1, 2, 3, 4]:
 			var legacy := ELFirstRandomMap.defaults(version)
 			legacy.seed = "old-shape-recipe"
 			var prefix := "EL1R%d:" % version
@@ -71,7 +71,7 @@ func _run() -> void:
 			check(screen._code.text.begins_with(prefix), language + ": unchanged legacy recipes retain their sharing prefix")
 		screen._seed.text = "edited-old-shape"
 		screen._changed()
-		check(int(screen.options().version) == 4 and screen.options().has("naval"), language + ": editing a legacy recipe explicitly moves it to the current version")
+		check(int(screen.options().version) == 5 and screen.options().has("naval"), language + ": editing a legacy recipe explicitly moves it to the current version")
 		screen._code.text = code
 		screen.load_setup()
 		var built: bool = await screen.generate_preview()

@@ -52,6 +52,20 @@ func _initialize() -> void:
 		roads.set_fog(PackedByteArray())
 		check(roads.surface.visible and roads.visibility_image.get_pixel(0, 0).is_equal_approx(Color.WHITE), "disabling fog restores the full road visibility mask")
 		check(roads.surface.material_override.albedo_texture == roads.visibility_texture, "the road material uses the maintained visibility texture")
+	var current := ELFirstRandomMap.normalize({"seed": "roads-check"})
+	map.set_meta("random_map", {"config": current})
+	map.roads[3 * 8 + 2] = 6
+	map.roads[3 * 8 + 3] = 6
+	check(roads.build(map) and roads.road_cells == 4 and roads.vertex_count < 1024, "main roads and curved side paths share one mesh")
+	if roads.surface != null:
+		var shades: PackedColorArray = roads.surface.mesh.surface_get_arrays(0)[Mesh.ARRAY_COLOR]
+		check(Array(shades).any(func(shade: Color) -> bool: return absf(shade.a - 0.78) < 0.01), "main roads have a distinct dirt surface")
+		check(Array(shades).any(func(shade: Color) -> bool: return absf(shade.a - 0.58) < 0.01), "side paths keep the underlying ground visible")
+	map.roads[4 * 8 + 3] = 5
+	var junction := ELFirstRandomMapRoads._trail_network(map)
+	var adjacent_count := 0
+	for neighbors: Array in junction.values(): adjacent_count += neighbors.size()
+	check(junction.size() == 5 and adjacent_count == 8, "a tight road loop becomes a single connected junction")
 	map.roads.fill(0)
 	check(roads.build(map) and roads.road_cells == 0 and roads.surface == null, "roads-off maps allocate no render mesh")
 	map.id = "mission11"
