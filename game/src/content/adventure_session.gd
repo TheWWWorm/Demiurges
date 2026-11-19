@@ -886,7 +886,8 @@ func _native(args: Array, name: String) -> Array:
 			# The Messages panel: the title, then the artifact's picture and name.
 			event.emit({"kind": "message_box", "speaker": -1, "text": map.profile.text("T_MB_ARTEFACT_CREATED"),
 				"question": false, "hook": false, "artifact": str(first), "box": "loot", "created": true, "speaker_box": false,
-				"items": [{"name": ELSecondArtifacts.title(map.profile, made), "card": str(definition.spell), "icon_index": int(definition.get("icon", -1))}]})
+				"items": [{"name": ELSecondArtifacts.title(map.profile, made), "card": str(definition.spell), "icon_index": int(definition.get("icon", -1)),
+					"artifact": made.merged({"charges": int(definition.get("max", 0))})}]})
 		"ExRechargeArtefacts":
 			if not item.get("type") in ["hero", "monster"]:
 				vm._fail("Hero not found: %d" % int(first if first is float or first is int else -1))

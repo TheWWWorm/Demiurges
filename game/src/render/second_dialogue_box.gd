@@ -193,7 +193,9 @@ func _get_tooltip(at: Vector2) -> String:
 	if index < 0: return ""
 	var card := str(loot[index].get("card", ""))
 	var title := str(loot[index].get("name", ""))
-	# An artifact row names the artifact over its spell's description.
+	# An artifact row shows the artifact's own tooltip, as on the hero's cells.
+	var artifact: Variant = loot[index].get("artifact")
+	if artifact is Dictionary and not artifact.is_empty(): return ELSecondArtifacts.tooltip(hud.profile, artifact)
 	return ELCombatTooltip.spell_text(hud.profile, card, -1, title) if not card.is_empty() else title
 
 ## The loot row whose picture or name holds `at` (design pixels), or -1.

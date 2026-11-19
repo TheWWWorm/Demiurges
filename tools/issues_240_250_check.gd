@@ -6,10 +6,13 @@ extends SceneTree
 ##   own tooltip stays hidden;
 ## - #240: a global affect icon at the top right shows its tooltip in the
 ##   same frame on a right click, and the press asks no map object for one;
-## - #245: while a character speaks the map objects keep their tooltips (a
-##   right press shows one), a script message box still hides them, and a
-##   spell row of a quest reward box shows the spell's tooltip;
-## - #250: a click on a level-up offer plays the lists' click;
+## - #245: while a character speaks, a script message box or a loot box is
+##   open, the map objects outside the box keep their tooltips (a right press
+##   shows one) and a left click on the map gives no order; a message box
+##   hides the tooltip shown as it opens; a spell row of a quest reward box
+##   shows the spell's tooltip, an artifact row and the created-artifact box
+##   the artifact's tooltip;
+## - #250: a click on a level-up offer plays Select4, a miss plays nothing;
 ## - #242: in the inventory a reserve card dragged or clicked onto the deck
 ##   goes there and a deck card goes back; in the spell shop a reserve card
 ##   dragged onto the shop leaves the reserve. A press after the pointer
@@ -242,13 +245,27 @@ func _dialogue_tooltips(view: ELAdventureView) -> void:
 	check(hud.map_tooltip.visible and view.map_tip.subject == int(hero.uid), "#245: a map object's tooltip shows during a character's line")
 	await _right_release(at)
 	await _answer_all(view)
-	# A script message box is modal: the map stays without tooltips.
+	# A script message box hides the tooltip once; the map keeps its tooltips
+	# around it, and a map click gives no order.
+	await _right_press(at)
+	check(hud.map_tooltip.visible, "#245: a map tooltip is up before the message box")
 	state._native(["Notice"], "ExMessageBoxStandard")
 	await frames(3)
 	check(view.second_dialogue.visible and view.second_dialogue.style == "message", "#245: a message box is shown")
-	await _right_press(at)
-	check(not hud.map_tooltip.visible, "#245: a script message box keeps the map tooltips off")
+	check(not hud.map_tooltip.visible, "#245: opening a message box hides the map tooltip")
 	await _right_release(at)
+	await _answer_all(view)
+	# The script's offset moves the box off the hero.
+	state._native(["Notice", null, 0.0, 260.0], "ExMessageBoxStandard")
+	await frames(3)
+	check(view.second_dialogue.visible and not view.second_dialogue.get_global_rect().has_point(at), "#245: a moved message box leaves the hero clear")
+	await _right_press(at)
+	check(hud.map_tooltip.visible and view.map_tip.subject == int(hero.uid), "#245: a map object's tooltip shows during a script message box")
+	await _right_release(at)
+	var route := view.director.movement.duplicate()
+	var dialogue := view.director.dialogue.duplicate()
+	await _click(at + Vector2(120, 40))
+	check(view.director.movement == route and view.director.dialogue == dialogue, "#245: a map click under a message box gives no order")
 	await _answer_all(view)
 	# A quest reward: spell rows with their tooltips.
 	var card := spell_codes(state.map.profile, 1)[0]
@@ -276,7 +293,74 @@ func _dialogue_tooltips(view: ELAdventureView) -> void:
 		check(box.tips.panel.visible and tip_text(box.tips) == expected, "#245: a rest on a reward spell shows its tooltip")
 		_move(Vector2(20, 300))
 		await frames(2)
+		var away := view.camera.unproject_position(actor.global_position + Vector3(0, 0.6, 0))
+		if not box.get_global_rect().has_point(away):
+			await _right_press(away)
+			check(hud.map_tooltip.visible and view.map_tip.subject == int(hero.uid), "#245: a map object's tooltip shows during a loot box")
+			await _right_release(away)
 	await _answer_all(view)
+	# A loot report after a battle uses the MessageBox panel over a clear holder.
+	view.director.presentation.emit({"kind": "building_message", "hero": -1, "building": -1, "title": "", "resources": [], "skill": "",
+		"text": state.map.profile.text("T_MB_RECEIVE_LOOT"), "key": "T_MB_RECEIVE_LOOT", "loot": [{"kind": "spell", "card": card}]})
+	await frames(3)
+	check(view.building_message != null and view._map_message_open() and not view._map_tooltip_blocked(), "#245: a loot report leaves the map tooltips on")
+	if view.building_message != null:
+		var corner := Vector2(60, 200)
+		_move(corner)
+		await frames(2)
+		check(view._tip_on_map and not view.building_message.message_box.get_global_rect().has_point(corner), "#245: the pointer beside the loot report is on the map")
+		view._close_building_message()
+		await frames(2)
+	await _artifact_rows(view)
+
+## Artifact rows show the artifact's own tooltip: a scripted artifact reward
+## and the created-artifact box.
+func _artifact_rows(view: ELAdventureView) -> void:
+	var state := view.state
+	var profile := state.map.profile
+	var names: Array = profile.table("Artefacts").keys()
+	names.sort()
+	var box := view.second_dialogue
+	var icon := func() -> Vector2: return screen_point(box.canvas, Vector2(ELSecondDialogueBox.LOOT_ICON_X + ELSecondDialogueBox.LOOT_ICON * 0.5, box.loot_top + ELSecondDialogueBox.LOOT_ICON * 0.5))
+	var artifact := ""
+	for name: String in names:
+		if state._artefact_valid(name):
+			artifact = name
+			break
+	if not artifact.is_empty():
+		state._native([artifact], "ExAddLootMessageArtefact")
+		state._native([], "ExSendLootMessage")
+		for wait in 50:
+			if box.visible: break
+			await create_timer(0.1).timeout
+		await frames(2)
+		var expected := ELSecondArtifacts.tooltip(profile, {"name": artifact, "charges": int(profile.table("Artefacts")[artifact].get("MaxCharges", 0))})
+		await _right_press(icon.call())
+		check(box.visible and box.tips.panel.visible and tip_text(box.tips) == expected, "#245: a reward artifact shows the artifact's tooltip")
+		await _right_release(icon.call())
+		await _answer_all(view)
+	else:
+		print("NOTE: no artifact for a reward row")
+	var hero := state.object(state.main_hero)
+	var spell := spell_codes(profile, 1)[0]
+	var created: Array = state._native(["Check artifact", spell, 3, 1, 2, -1], "ExCreateArtifact")
+	var made := str(created[0]) if not created.is_empty() else ""
+	if made.is_empty() or ELSecondArtifacts.template(state, made).is_empty():
+		print("NOTE: no created artifact for the created-artifact box")
+		return
+	state._native([made], "ExMessageBoxArtefactCreated")
+	for wait in 50:
+		if box.visible: break
+		await create_timer(0.1).timeout
+	await frames(2)
+	var definition := ELSecondArtifacts.template(state, made)
+	var expected := ELSecondArtifacts.tooltip(profile, {"name": made, "custom": definition, "charges": int(definition.get("max", 0))})
+	await _right_press(icon.call())
+	check(box.visible and box.tips.panel.visible and tip_text(box.tips) == expected, "#245: the created-artifact box shows the artifact's tooltip")
+	await _right_release(icon.call())
+	await _answer_all(view)
+	for index in range(hero.artifacts.size() - 1, -1, -1):
+		if str(hero.artifacts[index].get("name", "")) == made: hero.artifacts.remove_at(index)
 
 # --- #250: the level-up offers' click ---------------------------------------
 
@@ -295,9 +379,13 @@ func _level_up_sound(view: ELAdventureView) -> void:
 	check(dialog != null and dialog.offers.item_count > 0, "#250: the level-up dialog offers skills")
 	if dialog == null or dialog.offers.item_count == 0: return
 	var before := ELUiSounds.history.size()
+	# Between two offer cells.
+	await _click(screen_point(dialog.offers, Vector2(ELSecondLevelUpView.ICON + 8, ELSecondLevelUpView.ICON * 0.5)))
+	check(ELUiSounds.history.size() == before, "#250: a click beside the offers plays nothing")
 	await _click(screen_point(dialog.offers, dialog.offers.get_item_rect(0).get_center()))
-	check(dialog.offers.get_selected_items() == PackedInt32Array([0]) and ELUiSounds.history.size() > before and ELUiSounds.history[-1] == ELSecondLevelUpView.SELECT_SOUND,
-		"#250: a click on an offer selects it with the lists' click")
+	check(ELSecondLevelUpView.SELECT_SOUND == "Buttons/Select4.wav" and dialog.offers.get_selected_items() == PackedInt32Array([0])
+		and ELUiSounds.history.size() == before + 1 and ELUiSounds.history[-1] == ELSecondLevelUpView.SELECT_SOUND,
+		"#250: a click on an offer selects it with Select4")
 	hero.skill_points = 0
 	view._close_skills()
 	hero.skill_offers = []
