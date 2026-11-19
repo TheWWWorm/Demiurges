@@ -67,7 +67,7 @@ static func prepare(profile: ELProfile, model: String) -> String:
 ## the main thread for parse_resources.
 static func read_resources(profile: ELProfile, template: String) -> Dictionary:
 	return {"figures": profile.figure(template + ".mod"), "animations": profile.figure(template + ".anm"),
-		"timing": profile.read("animdb", template + ".adb")}
+		"timing": profile.read("animdb", template + ".adb"), "edition": profile.id}
 
 ## Parses a model's files (read_resources) into its shared resources, or
 ## {"error": ...}. Touches nothing shared, so worker threads may run it.
@@ -80,6 +80,7 @@ static func parse_resources(template: String, files: Dictionary) -> Dictionary:
 	for link: Array in hierarchy:
 		var parsed := ELFigure.parse(package.read(link[0]))
 		if not parsed.is_empty():
+			ELFigure.one_sided_faces(parsed, template, link[0], String(files.get("edition", "")))
 			parsed_figures[link[0]] = parsed
 			meshes["base/" + link[0]] = ELFigure.mesh(parsed)
 	var animations: ELArchive
@@ -197,6 +198,16 @@ func build(data: ELProfile, model: String, texture_name: String, secondary_textu
 						authored.set_meta(ELFigure.AUTHORED_FULLBRIGHT, true)
 					authored_materials[key] = authored
 				part_material = authored_materials[key]
+			if ELFigure.is_bone(template, name):
+				var bone_key := [part_material, "bone"]
+				if not authored_materials.has(bone_key): authored_materials[bone_key] = ELFigure.bone_material(part_material)
+				node.material_override = authored_materials[bone_key]
+				continue
+			if ELFigure.is_lifted_cloth(template, name):
+				var lift_key := [part_material, "lift"]
+				if not authored_materials.has(lift_key): authored_materials[lift_key] = ELFigure.cloth_lift_material(part_material)
+				node.material_override = authored_materials[lift_key]
+				continue
 			# Armour and weapons, which the originals light as matte as cloth.
 			# Figures only: map objects' "plate" and "chain" parts are rock slabs
 			# and shop signs, which turned to shiny metal.
@@ -205,6 +216,16 @@ func build(data: ELProfile, model: String, texture_name: String, secondary_textu
 			node.material_override = part_material
 		# Anchors may parent real geometry (the illusion wall uses "dust" as its
 		# root). Omit only their helper mesh; hiding the node hides descendants too.
+	var culled := {}
+	for name: String in parts:
+		var node: MeshInstance3D = parts[name]
+		var one_sided_part: bool = figures.has(name) and figures[name].get("one_sided", false)
+		if not (one_sided_part or ELFigure.is_back_culled(template, name)) or not node.material_override is BaseMaterial3D: continue
+		if not culled.has(node.material_override):
+			var one_sided := node.material_override.duplicate() as BaseMaterial3D
+			one_sided.cull_mode = BaseMaterial3D.CULL_BACK
+			culled[node.material_override] = one_sided
+		node.material_override = culled[node.material_override]
 	# Track keys are model-space transforms, so every part hangs from the
 	# model itself. The .lnk tree only names the parts: nested under their
 	# parents, the kobolds' five-deep limbs (cr206-cr209) drifted metres above
