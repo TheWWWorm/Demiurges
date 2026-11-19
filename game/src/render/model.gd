@@ -198,16 +198,6 @@ func build(data: ELProfile, model: String, texture_name: String, secondary_textu
 						authored.set_meta(ELFigure.AUTHORED_FULLBRIGHT, true)
 					authored_materials[key] = authored
 				part_material = authored_materials[key]
-			if ELFigure.is_bone(template, name):
-				var bone_key := [part_material, "bone"]
-				if not authored_materials.has(bone_key): authored_materials[bone_key] = ELFigure.bone_material(part_material)
-				node.material_override = authored_materials[bone_key]
-				continue
-			if ELFigure.is_lifted_cloth(template, name):
-				var lift_key := [part_material, "lift"]
-				if not authored_materials.has(lift_key): authored_materials[lift_key] = ELFigure.cloth_lift_material(part_material)
-				node.material_override = authored_materials[lift_key]
-				continue
 			# Armour and weapons, which the originals light as matte as cloth.
 			# Figures only: map objects' "plate" and "chain" parts are rock slabs
 			# and shop signs, which turned to shiny metal.
