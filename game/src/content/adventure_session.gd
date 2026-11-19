@@ -23,6 +23,8 @@ var difficulty := 0
 var duel_ai := -1
 var world_ai := -1
 var fight_neutral_monsters := false
+## Effective solo rules set by the director after loading the game's options.
+var balance_map_guards := false
 var script_name := ""
 var seed_value := 212
 ## The solo first-game view enables fresh skill rolls, independently of the
@@ -97,6 +99,41 @@ var desktop_modal: Callable
 const BLINK_ELEMENTS := ["E_INV_HERO_INFO", "E_INV_SPEC", "E_INV_SKILLS", "E_INV_ARTIFACTS", "E_INV_DECK", "E_INV_BAG",
 	"E_ADV_INVENTORY_BTN", "E_ADV_LEVEL", "E_ADV_LIFE", "E_ADV_EXPERIENCE"]
 
+func combat_health(actor: Dictionary) -> int:
+	var hp := int(actor.get("health", 0))
+	return maxi(1, roundi(hp * (1.0 - _guard_relief(actor)))) if hp > 0 else hp
+
+func combat_level(actor: Dictionary) -> int:
+	var level := int(actor.get("level", 1))
+	if level <= 1 or not balance_map_guards or actor.get("type") != "monster": return level
+	if not map.income_approaches.has(Vector2i(actor.x, actor.y)): return level
+	return 1 + roundi((level - 1) * (1.0 - _guard_relief(actor)))
+
+func field_guard_radius(actor: Dictionary) -> int:
+	# The flood of radius one covers the creature's own tile. It can still
+	# block a one-tile passage or be attacked directly by a passing hero.
+	if difficulty == 0 and _ordinary_field_guard(actor) and map.income_approaches.has(Vector2i(actor.x, actor.y)) and _castle_distance(actor) <= 24: return 1
+	return 2
+
+func _ordinary_field_guard(actor: Dictionary) -> bool:
+	return balance_map_guards and actor.has("monster_version") and actor.get("type") == "monster" and int(actor.get("owner", 0)) <= 0 and int(actor.get("dungeon", -1)) < 0 and not map.mobs.has(actor.name) and actor.get("battle_script", "").is_empty()
+
+func _castle_distance(actor: Dictionary) -> int:
+	var distance := 48
+	for castle: Vector2i in map.castle_tiles:
+		distance = mini(distance, maxi(absi(int(actor.x) - castle.x), absi(int(actor.y) - castle.y)))
+	return distance
+
+func _guard_relief(actor: Dictionary) -> float:
+	if not _ordinary_field_guard(actor): return 0.0
+	# Ordinary field guards near a starting castle face fresh books. Taper
+	# the reduction into the interior and as the selected difficulty rises.
+	var inland := clampf(float(_castle_distance(actor) - 16) / 32.0, 0.0, 1.0)
+	var income_guard := map.income_approaches.has(Vector2i(actor.x, actor.y))
+	var relief := lerpf(0.70, 0.35, inland) if income_guard else lerpf(0.20, 0.10, inland)
+	relief *= 1.0 - 0.2 * difficulty
+	return relief
+
 func _init() -> void:
 	event.connect(_fog_event)
 
@@ -121,6 +158,7 @@ func start(source: ELAdventureMap, level := 0, seed_number := 212, scenario_scri
 	day = 0 if map.profile.id == "el2" else 1
 	income_day = 0
 	fight_neutral_monsters = false
+	balance_map_guards = false
 	current_player = 1
 	main_hero = -1
 	outcome = ""

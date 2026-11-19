@@ -118,7 +118,6 @@ func build(available: Dictionary, initial: String) -> void:
 ## shown on the dropdowns.
 func reset_ai() -> void:
 	if settings == null: return
-	if ai_levels.is_empty() and chosen_edition() == "el1": ai_levels[ELAIChoice.FIGHT_MONSTERS] = true
 	ai_levels.merge(ELAIChoice.defaults(maxi(difficulty.selected, 0), settings), true)
 	for key: String in ai_picks: ELAIChoice.display(ai_picks[key], int(ai_levels[key]))
 	ELAIChoice.display_monsters(_fight_monsters, ai_picks.world_ai, ai_levels)

@@ -18,6 +18,8 @@ const RELIEF_UNIT := 1.0 / 16.0
 var relief := PackedByteArray()
 var players: Array[Dictionary] = []
 var objects: Array[Dictionary] = []
+var castle_tiles: Array[Vector2i] = []
+var income_approaches := {}
 var mobs: Dictionary = {}
 var document: Dictionary = {}
 var error := ""
@@ -120,6 +122,18 @@ func _add_object(node: Dictionary, group: String, owner := 0) -> void:
 		"x": int(place.get("x", 0)), "y": int(place.get("y", 0)), "rotation": int(place.get("mr", 0)),
 		"permanent_id": int(node.attrs.get("permanent_id", -1)),
 		"id": int(node.attrs.get("id", -1)), "name": ELXml.value(node, "template", ELXml.value(node, "name", ELXml.value(node, "type", node.tag)))})
+
+func index_first_guard_sites() -> void:
+	castle_tiles.clear()
+	income_approaches.clear()
+	for item: Dictionary in objects:
+		if not ELXml.child(item.node, "hidden").is_empty(): continue
+		var at := Vector2i(item.x, item.y)
+		if int(item.owner) > 0 and ELFirstScenario.is_castle(item):
+			castle_tiles.append(at)
+		if item.group in ["mines", "mana_nodes"]:
+			for y in range(-5, 6):
+				for x in range(-5, 6): income_approaches[at + Vector2i(x, y)] = true
 
 func tile(x: int, y: int) -> int:
 	return int(terrain[y * (width + 1) + x]) if x >= 0 and y >= 0 and x <= width and y <= height else -1

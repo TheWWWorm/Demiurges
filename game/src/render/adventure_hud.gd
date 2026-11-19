@@ -674,8 +674,8 @@ func describe(item: Dictionary, art_row: Dictionary) -> Dictionary:
 		var kind := "T_GLOBAL_SPELL_PART" if item.name == ELMapPickups.PART else "T_GLOBAL_SPELL_FULL"
 		return {"title": profile.text(kind), "text": "", "picture": null, "picture_size": Vector2.ZERO}
 	if item.get("type") == "monster":
-		lines.append("%s: %d" % [profile.text("T_LEVEL"), int(item.get("level", 1))])
-		lines.append("%s: %d" % [profile.text("T_LIFE"), int(item.get("health", 0))])
+		lines.append("%s: %d" % [profile.text("T_LEVEL"), state.combat_level(item)])
+		lines.append("%s: %d" % [profile.text("T_LIFE"), state.combat_health(item)])
 		return {"title": str(item.get("title", item.name)), "text": "\n".join(lines), "picture": profile.portrait(int(art_row.get("Icon", 0))), "picture_size": Vector2(100, 70)}
 	return {}
 
@@ -922,7 +922,7 @@ func show_precombat(hero_id: int, opponent_id: int, number: int, total: int, dec
 			photo.region = Rect2(photo.region.position + PRECOMBAT_PORTRAIT_CUT, PRECOMBAT_PORTRAITS[side].size)
 		precombat_portraits[side].texture = photo
 		var hero: bool = actor.get("type") == "hero"
-		var entries: Array = [["T_LEVEL", int(actor.get("level", 1))], ["T_LIFE", int(actor.get("health", 0))]]
+		var entries: Array = [["T_LEVEL", state.combat_level(actor)], ["T_LIFE", state.combat_health(actor)]]
 		if hero: entries.append(["T_SIGHT", int(actor.get("base_ap", 0))])
 		var box_x := 156.0 if side == 0 else 449.0
 		var top := 67.0 if side == 0 or hero else 77.0

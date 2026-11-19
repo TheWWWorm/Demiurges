@@ -72,7 +72,7 @@ func rebuild(state: ELAdventureSession, grid: ELAdventureGrid) -> void:
 			continue
 		if not guards(actor): continue
 		var origin := Vector2i(actor.x, actor.y)
-		if grid.contains(origin): register(actor.uid, origin, flood(grid, origin, 2))
+		if grid.contains(origin): register(actor.uid, origin, flood(grid, origin, state.field_guard_radius(actor)))
 
 static func fort_area(grid: ELAdventureGrid, fort: Dictionary) -> Rect2i:
 	return Rect2i(Vector2i(fort.x, fort.y), grid.footprints.get(int(fort.uid), {}).get("size", Vector2i.ONE))

@@ -697,6 +697,30 @@ func _case_p_monsters() -> void:
 	var state := director.state
 	var hero := _hero(director, 2, 30, 90, 1)
 	var mob := _place(director, "monster", 34, 90, {"owner": 0, "level": 14, "health": 400})
+	var probe := mob.duplicate()
+	var home := state.map.castle_tiles[0]
+	probe.x = home.x
+	probe.y = home.y
+	var nearby := state.combat_health(probe)
+	check(nearby < int(probe.health), "P: neutral field guards have reduced combat health with monster fights enabled")
+	var harder := state.difficulty
+	var was_income := state.map.income_approaches.has(home)
+	state.map.income_approaches[home] = true
+	state.difficulty = 0
+	check(state.field_guard_radius(probe) == 1 and state.combat_level(probe) < int(probe.level), "P: an early income guard leaves neighbouring tiles open on easiest")
+	state.difficulty = 1
+	check(state.field_guard_radius(probe) == 2, "P: above easiest the guard still intercepts neighbouring tiles")
+	if not was_income: state.map.income_approaches.erase(home)
+	state.difficulty = 4
+	check(state.combat_health(probe) > nearby, "P: harder difficulties retain more guard health")
+	state.difficulty = harder
+	probe.dungeon = 17
+	check(state.combat_health(probe) == int(probe.health), "P: lair occupants retain their encounter health")
+	director.fight_neutral_monsters = false
+	check(state.combat_health(mob) == 400, "P: authored health is restored with the option off")
+	director.fight_neutral_monsters = true
+	var encounter := ELAdventureEncounter.new()
+	check(encounter.prepare_map_ai_duel(state, int(hero.uid), int(mob.uid), 9026) and int(encounter.battle.heroes[1].maximum) == state.combat_health(mob) and mob.health == 400, "P: forecasts use displayed guard health without changing the saved roster")
 	hero.health = 1
 	director.interception.rebuild(state, director.grid)
 	var odds := ELFirstAIPlanner.win_chance(director, hero, mob)

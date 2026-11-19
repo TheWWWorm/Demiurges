@@ -56,10 +56,12 @@ func _campaign(view: Node) -> void:
 	var back := menu.find_child("CIBack", true, false) as Button
 	_check(box != null and pick != null and help != null and back != null, "Difficulty screen has the checkbox, world AI picker, help and Back button")
 	if box != null and pick != null and help != null and back != null:
-		_check(box.button_pressed and pick.disabled and pick.selected == ELAIChoice.LIVING_WORLD,
-			"Easy starts with neutral monster duels on and Living world locked")
-		box.button_pressed = false
-		_check(not pick.disabled and pick.selected == 0, "Clearing the option on Easy restores Original world AI")
+		_check(not box.button_pressed and not pick.disabled and pick.selected == 0,
+			"Easy starts with neutral monster duels off and Original world AI available")
+		menu.set_difficulty(4)
+		_check(not box.button_pressed and not pick.disabled, "Higher difficulty also defaults to monster duels off")
+		menu.set_difficulty(0)
+		_check(help.tooltip_text.contains("higher difficulties") or help.tooltip_text.contains("более высокой сложности"), "Help advises against enabling the option on higher difficulties")
 		_check(help.tooltip_text.contains("automatically") or help.tooltip_text.contains("автоматически"), "Help explains the original automatic win")
 		help.pressed.emit()
 		_check(menu.duel_ui.message_open(), "Clicking the question mark opens the help")
@@ -81,7 +83,7 @@ func _campaign(view: Node) -> void:
 	root.add_child(fallback)
 	fallback.build(view.profiles, "el1")
 	var fallback_box := fallback.find_child("FightNeutralMonsters", true, false) as CheckBox
-	_check(fallback_box != null and fallback_box.button_pressed, "The alternate campaign setup also starts checked")
+	_check(fallback_box != null and not fallback_box.button_pressed, "The alternate campaign setup also starts unchecked")
 	if fallback_box != null:
 		fallback_box.button_pressed = true
 		_check(fallback.ai_picks.world_ai.disabled and fallback.ai_picks.world_ai.selected == ELAIChoice.LIVING_WORLD,

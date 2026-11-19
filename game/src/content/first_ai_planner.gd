@@ -711,6 +711,16 @@ static func monster_gain(director: ELAdventureDirector, hero: Dictionary, role: 
 	# This cheap score ranks candidates. The actual trials decide which fights to take.
 	var chance := win_chance(director, hero, monster)
 	var prize := 16.0 + 7.0 * int(monster.get("level", 1))
+	if ELFirstAI.plays_monster_duel(director, hero, monster):
+		var profile := director.state.map.profile
+		var level := int(hero.level)
+		if level < ELHeroProgression.MAX_LEVEL:
+			var needed := ELHeroProgression.threshold(profile, level + 1) - ELHeroProgression.effective(hero)
+			var reward := ELHeroProgression.battle_reward(profile, int(monster.level))
+			prize += 30.0 * clampf(float(reward) / maxi(1, needed), 0.0, 1.0)
+		# A known guard on the frontier is also a scouting opportunity.
+		if director.interception.zones.has(int(monster.uid)):
+			prize += reveal(director.state, player_of(hero), Vector2i(monster.x, monster.y)) / 4.0
 	if role == 1: prize *= 0.8
 	return chance * prize - (1.0 - chance) * worth(hero)
 
@@ -1386,7 +1396,7 @@ static func estimate(state: ELAdventureSession, first: Dictionary, second: Dicti
 static func strength(state: ELAdventureSession, unit: Dictionary) -> float:
 	var cards: Array = unit.get("cards", [])
 	var uses: Array = unit.get("rune_uses", [])
-	var key := "%d|%d|%d|%d|%d|%d|%d|%s" % [int(unit.get("uid", -1)), int(unit.get("level", 1)), int(unit.get("health", 0)), hash(cards), hash(uses), hash(unit.get("skills", {})), unit.get("artifacts", []).size(), str(unit.get("specialization", "NONE"))]
+	var key := "%d|%d|%d|%d|%d|%d|%d|%s" % [int(unit.get("uid", -1)), state.combat_level(unit), state.combat_health(unit), hash(cards), hash(uses), hash(unit.get("skills", {})), unit.get("artifacts", []).size(), str(unit.get("specialization", "NONE"))]
 	if _strengths.has(key): return _strengths[key]
 	var profile := state.map.profile
 	var book := 0.0
@@ -1395,7 +1405,7 @@ static func strength(state: ELAdventureSession, unit: Dictionary) -> float:
 		if live: book += maxf(0.0, ELFirstAIEconomy.spell_value(profile, str(cards[slot])))
 	var skills := 0
 	for code: Variant in unit.get("skills", {}): skills += int(unit.skills[code]) + 1
-	var value: float = float(unit.get("health", 0)) + 2.0 * int(unit.get("level", 1)) + 0.8 * book + 2.0 * skills + 3.0 * unit.get("artifacts", []).size()
+	var value: float = float(state.combat_health(unit)) + 2.0 * state.combat_level(unit) + 0.8 * book + 2.0 * skills + 3.0 * unit.get("artifacts", []).size()
 	if str(unit.get("specialization", "NONE")) not in ["NONE", ""]: value += 3.0
 	if _strengths.size() > 4096: _strengths.clear()
 	_strengths[key] = value

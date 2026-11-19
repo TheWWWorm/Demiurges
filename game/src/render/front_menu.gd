@@ -1716,7 +1716,6 @@ func start_campaign() -> void:
 ## The difficulty's computer players' strength (ELAIChoice.defaults) in
 ## `ai_levels`, shown on the dropdowns.
 func reset_ai() -> void:
-	if ai_levels.is_empty() and edition == "el1": ai_levels[ELAIChoice.FIGHT_MONSTERS] = true
 	ai_levels.merge(ELAIChoice.defaults(difficulty, option_settings()), true)
 	_show_ai()
 

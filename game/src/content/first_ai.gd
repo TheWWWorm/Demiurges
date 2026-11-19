@@ -86,7 +86,9 @@ static func forecast_objective(director: ELAdventureDirector, hero: Dictionary, 
 			for tile: Vector2i in closed: director.grid._update_cell(tile)
 			if route.is_empty(): return false
 			for tile: Vector2i in route.slice(1):
-				if director.interception.enemies(director.state, hero, tile).has(int(item.uid)): return true
+				# A different guard can intercept earlier on the same route.
+				if director.interception.enemies(director.state, hero, tile).has(int(item.uid)):
+					return can_attack_monster(director, hero, item, true, tile, budget)
 		return can_attack_monster(director, hero, item, false, at, budget)
 	if ELAdditionalBuildings.DUNGEONS.has(item.get("name")):
 		var mob := director.state.object(item.monster)
@@ -104,7 +106,7 @@ static func _duel_roster(state: ELAdventureSession, actor: Dictionary, shape: St
 		# For a template hero the duel supplies the complete book, skills,
 		# health and level. The template's only combat input is its faction.
 		identity = ["hero", str(row.get("Color", ""))]
-	return [identity, actor.level, actor.health, actor.get("specialization", ""), actor.get("monster_difficulty", -1),
+	return [identity, state.combat_level(actor), state.combat_health(actor), actor.get("specialization", ""), actor.get("monster_difficulty", -1),
 		actor.cards, actor.get("rune_uses", []), actor.get("rune_under", []), actor.get("skills", {}), actor.get("artifacts", []).map(func(art: Dictionary) -> String: return str(art.name)),
 		actor.get("global_spells", []), int(ELForts.garrison_of(state, actor).get("fort_level", 0))]
 
@@ -677,6 +679,8 @@ static func objectives(director: ELAdventureDirector, player: int) -> Array:
 	var kept: Array = []
 	for task: Dictionary in candidates(state, player):
 		var item := state.object(task.target)
+		# Castles are landmarks. Reserve bounded searches for discovered sites and fights.
+		if smart and director.fight_neutral_monsters and task.kind != "tower" and not ELFog.explored(state, player, Vector2i(item.x, item.y)): continue
 		match task.kind:
 			"mine", "node":
 				var holder := int(item.get("owner", -1))

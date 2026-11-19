@@ -18,7 +18,7 @@ const KEYS := ["duel_ai", "world_ai"]
 const FIGHT_MONSTERS := "fight_neutral_monsters"
 const LIVING_WORLD := 2
 const MONSTER_LABEL := "AI fights neutral monsters"
-const MONSTER_HELP := "In the original Etherlords, computer heroes automatically won off-screen battles against ordinary neutral monsters. Enable this to make them forecast and play out those duels. Living world is required. Map turns may take longer."
+const MONSTER_HELP := "Recommended for the easiest difficulty. On higher difficulties, leave this off: strong guards can defeat computer heroes and block their route to resources.\n\nBy default, computer heroes automatically win off-screen battles against ordinary neutral monsters. Enable this option to have them forecast and play those duels. Map turns may take longer.\n\nThis option requires Living world. Field monsters have less health, and guards near mines and mana nodes fight at a lower level. On the easiest difficulty, those near starting castles guard only their own tile."
 const MONSTER_LOCK := "Living world is required while AI fights neutral monsters is enabled."
 
 ## The levels of `key`: [[caption, description], ...].

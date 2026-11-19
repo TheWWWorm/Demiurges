@@ -112,7 +112,7 @@ func _prepare_duel(state: ELAdventureSession, defender: int, seed_value := -1, f
 		var row := combat_definition(state, actor, shape)
 		if row.is_empty(): return _fail("The encounter appearance is missing: " + actor.name)
 		var color := String(row.get("Color", ""))
-		options.players.append({"faction": color, "shape": shape, "kind": actor.type, "title": actor.get("title", actor.name), "level": actor.level, "health": actor.health, "cards": actor.cards.duplicate(), "skills": actor.get("skills", {}).duplicate()})
+		options.players.append({"faction": color, "shape": shape, "kind": actor.type, "title": actor.get("title", actor.name), "level": actor.level, "health": state.combat_health(actor), "cards": actor.cards.duplicate(), "skills": actor.get("skills", {}).duplicate()})
 		options.players[-1].main_hero = id == state.main_hero
 		# The battle shows the map hero's own template (figure, face): without
 		# it every hero fought as its faction's default hero, and heroes drawn
@@ -168,7 +168,7 @@ func _prepare_duel(state: ELAdventureSession, defender: int, seed_value := -1, f
 		for side in 2:
 			# The battle tooltip names the hero's own level, not the one the
 			# difficulty and a fort give it for this battle (player report #110).
-			options.players[side].map_level = int(state.object(hero_id if side == 0 else opponent_id).level)
+			options.players[side].map_level = state.combat_level(state.object(hero_id if side == 0 else opponent_id))
 			options.players[side].level = levels[side]
 	else:
 		# Second-game difficulty moves the battle level, as in the first game:
@@ -317,7 +317,7 @@ static func coin_flip(battle_seed: int) -> int:
 ## prepared by the host), the first side, where the battle seats the human.
 static func first_levels(state: ELAdventureSession, first: int, second: int, adjust_difficulty := true) -> Array[int]:
 	var ids: Array[int] = [first, second]
-	var levels: Array[int] = [int(state.object(first).level), int(state.object(second).level)]
+	var levels: Array[int] = [state.combat_level(state.object(first)), state.combat_level(state.object(second))]
 	var local := 1 if int(state.object(second).get("owner", -1)) == state.current_player and int(state.object(first).get("owner", -1)) != state.current_player else 0
 	var change: Array = [[2, -1], [1, 0], [0, 0], [0, 1], [0, 2]][clampi(state.difficulty, 0, 4)]
 	for side in 2:

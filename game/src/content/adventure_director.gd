@@ -47,7 +47,10 @@ var network_session := false
 var free_movement := false
 ## Remake option: computer players pick skills, shop and cast global spells
 ## (ELFirstAIEconomy).
-var smart_ai := false
+var smart_ai := false:
+	set(value):
+		smart_ai = value
+		_sync_guard_balance()
 ## Remake switch (off by default): battles between computer and neutral sides
 ## are decided by an estimate of both sides' strength instead of the
 ## original's level rule (ELFirstAI.winner).
@@ -57,7 +60,10 @@ var battle_estimate := false
 ## doctrines (ELFirstAIPlanner.living). A mission or the settings turn it on.
 var living_world := false
 ## Solo EL1 option: forecast and play duels between computer heroes and neutral monsters.
-var fight_neutral_monsters := false
+var fight_neutral_monsters := false:
+	set(value):
+		fight_neutral_monsters = value
+		_sync_guard_balance()
 var free_queue: Array = []
 var _strategic_ai := -1
 var _strategic_handoff_day := -1
@@ -94,8 +100,17 @@ var _commands_pending := false
 ## "running" field (null after a load of an older save).
 var _running: Variant = null
 
+func _sync_guard_balance() -> void:
+	if state == null: return
+	var enabled := fight_neutral_monsters and ELFirstAIEconomy.applies(self)
+	if enabled == state.balance_map_guards: return
+	state.balance_map_guards = enabled
+	if enabled: state.map.index_first_guard_sites()
+	if grid != null and state.grid == grid: interception.rebuild(state, grid)
+
 func build(session: ELAdventureSession) -> bool:
 	state = session
+	_sync_guard_balance()
 	monster_forecasts.clear()
 	monster_losses.clear()
 	grid = ELAdventureGrid.new()
@@ -499,6 +514,7 @@ func bind_strategy_players(players: Array[int], local_authority := false) -> boo
 		if not ELFirstScenario.alive(state, player) and (not local_authority or player != players[1]): return false
 		unique[player] = true
 	_strategic_players.assign(players)
+	_sync_guard_balance()
 	network_session = true
 	if local_authority: _strategic_ai = players[1]
 	return true
@@ -514,6 +530,7 @@ func restore_network_seats(players: Array[int]) -> bool:
 		if unique.has(player) or not state.players.has(player): return false
 		unique[player] = true
 	_strategic_players.assign(players)
+	_sync_guard_balance()
 	network_session = true
 	return true
 
