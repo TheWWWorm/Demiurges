@@ -2989,6 +2989,14 @@ func _event(data: Dictionary) -> void:
 				for name: String in ["PosAttack", "PosDefence", "Trample", "PosRune"]:
 					battle_audio.effect(name)
 					_figure_effect(name, int(data.target))
+			# Both originals' Grass Snake and Lake Snake enchantments queue three
+			# Target effects as they attach: the snake's +1/+1 on a hit on the
+			# hero, the struck creature's -1/-1 (player report #241).
+			elif profile.id in ["el1", "el2"] and String(data.card) in ["GRSN", "LASN"] and models.has(int(data.target)):
+				var cues: Array = ["PosAttack", "PosDefence", "PosRune"] if String(data.card) == "GRSN" else ["NegAttack", "NegDefence", "NegRune"]
+				for name: String in cues:
+					battle_audio.effect(name)
+					_figure_effect(name, int(data.target))
 		"unsummon":
 			# EL1 Unsummon@, LesserUnsummon@ and
 			# EL2 Unsummon@, LesserUnsummon@ bind BlueDeath to the departing
@@ -3041,6 +3049,7 @@ func _event(data: Dictionary) -> void:
 			_float_text(data.target, "Disenchanted", Color("91dcc2"), true)
 		"artifact":
 			_announce("T_USE_ARTIFACT", [_hero_name(data.side), str(data.get("title", duel.card_name(data.card)))], int(data.side))
+			if profile.id == "el2" and is_instance_valid(notices): _artifact_notice(data)
 			# The artifact's own effects (its spell's cast visual), without the hero's cast gesture.
 			# Both originals register WRBN hero PosEnchantment once; original
 			# per-creature PosAttack/PosDefence effects and WAV belong to each
@@ -3247,6 +3256,16 @@ func _cast_notice(side: int, card: String) -> void:
 func _specialisation_notice(side: int, code: String) -> void:
 	if not is_instance_valid(notices): return
 	notices.add_specialisation(side, _spec_text(code, "Desc", _spec_name(code)))
+
+## A used artifact joins the second game's battle icons with its rail icon
+## (a generated artifact's own cell) and its name and spell text.
+func _artifact_notice(data: Dictionary) -> void:
+	var card := String(data.card)
+	var icon := int(data.get("icon", -1))
+	var texture := profile.icon_at(icon) if icon >= 0 else profile.card_icon(card)
+	var title := str(data.get("title", duel.card_name(card)))
+	notices.add_icon(texture, card, int(data.side), "%s
+%s" % [title, profile.card_description(card)])
 
 func _second_ability_notice(data: Dictionary, source: int) -> void:
 	var side := int(data.side)
@@ -4857,7 +4876,9 @@ func _ability_marks(id: int, c: Dictionary) -> Array:
 		owned.has("Trample"), owned.has("Restless"), owned.has("Lifetap"), duel.regeneration_cost(id) > 0,
 		owned.any(func(flag: Variant) -> bool: return String(flag).begins_with("Discard(")), owned.has("Disenchant"), owned.has("Destroy"),
 		duel.cannot_rise(id), owned.has("UB"), owned.has("NSS"), owned.has("Berserk"), owned.has("TeamAttack"), owned.has("Elusive")]
-	if profile.id == "el2": marks.append_array([duel.pale(id), duel.in_plane(id), duel.race(id) == "OutSpellJammer"])
+	# The second game's spell-silencing icon has a text but no mechanic: no
+	# released creature silences spells (Pale spell-jammers included), so it never shows.
+	if profile.id == "el2": marks.append_array([duel.pale(id), duel.in_plane(id)])
 	var result: Array = []
 	for bit in marks.size():
 		if marks[bit]: result.append(ELCombatSymbols.ICON_CODES[bit + 2])

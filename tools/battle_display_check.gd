@@ -7,7 +7,8 @@ extends SceneTree
 ## - a fight: a growing, life-draining attacker (Gray Snake when the game has
 ##   it) shows its old stats and the defending hero its old health until the
 ##   blow lands; the drained health reaches its hero only with the DrainLife
-##   effect; the growth shows after the hit, never before it;
+##   effect; the growth shows after the hit, never before it, with the snake's
+##   own attack, defence and rune effects (#241);
 ## - first strike: a first-striking attacker kills its blocker, which keeps
 ##   its numbers until that blow lands and never wounds the attacker;
 ## - regeneration: the ether a regenerating blocker's owner pays shows spent
@@ -236,6 +237,7 @@ func _growth_and_drain(view: Node, edition: String) -> void:
 	check(duel.toggle_attack(attacker), "%s fight: the attack is declared (%s)" % [edition, duel.error])
 	await _idle(view)
 	before = _shown(view, [attacker])
+	if is_instance_valid(view.effects): view.effects.requested.clear()
 	var start := Time.get_ticks_usec()
 	duel.end_phase()
 	if duel.phase == ELDuel.Phase.DEFENCE: duel.end_phase()
@@ -270,6 +272,9 @@ func _growth_and_drain(view: Node, edition: String) -> void:
 		check(float(heal.t) - float(hit.t) >= drain - 0.05, "%s fight: the drained health reaches its hero with DrainLife (%.2f s after the hit, effect %.2f s)" % [edition, float(heal.t) - float(hit.t), drain])
 	if grows:
 		check(not growth.is_empty() and not hit.is_empty() and float(growth.t) >= float(hit.t), "%s fight: the snake's growth shows after its hit, not before" % edition)
+		var cues: Array = view.effects.requested if is_instance_valid(view.effects) else []
+		check(["PosAttack", "PosDefence", "PosRune"].all(func(cue: String) -> bool: return cues.has(cue)),
+			"%s fight #241: the Grass Snake's growth plays its sword, shield and rune effects (%s)" % [edition, cues])
 	check(_shown(view, [attacker]) == _live(view, [attacker]), "%s fight: the shown values match the rules afterwards" % edition)
 
 func _strike_enchantments(view: Node) -> void:

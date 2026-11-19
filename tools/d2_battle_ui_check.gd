@@ -14,6 +14,8 @@ extends SceneTree
 ##   #227 played-card icons clear as the side or turn changes.
 ## - #225: a scripted attacker keeps its side of the authored battlefield
 ##   when the local defender takes the left HUD seat.
+## - #243 a used artifact joins the battle notice icons with its own icon
+##   and text; #252 a Pale spell-jammer shows no spell-silencing icon.
 ##
 ##   godot --headless --path game --script ../tools/d2_battle_ui_check.gd
 ##
@@ -202,6 +204,8 @@ func _casting_and_retry() -> void:
 	_duel_match_retry(view)
 	_creature_ability_buttons(view)
 	_battle_notice_icons(view)
+	_artifact_notice(view)
+	_jammer_marks(view)
 	_figure_tooltips(view)
 	await _arena_orientation(view)
 	view.queue_free()
@@ -365,6 +369,48 @@ func _battle_notice_icons(view: Node) -> void:
 	view._skip_battle_presentation()
 	check(duel.active_side() == 0 and duel.phase == ELDuel.Phase.ATTACK and notices.icons.is_empty(),
 		"#227: the defender's cast disappears when their attack starts")
+
+func _artifact_notice(view: Node) -> void:
+	view._start("el2", {"first_side": 0}, null, 243)
+	var duel: ELDuel = view.duel
+	var profile := duel.profile
+	var notices: ELCombatNotices = view.notices
+	var item := {}
+	for name: String in profile.table("Artefacts"):
+		var entry := ELDuel.artifact_entry(profile, {"name": name})
+		if entry.is_empty() or String(duel.artifact_rule(entry).get("target", "none")) != "none": continue
+		entry.charges = 1
+		entry.ready_round = 0
+		duel.heroes[0].artifacts = [entry]
+		duel.heroes[0].artifact_uses = 0
+		if duel.artifact_error(0, 0).is_empty():
+			item = entry
+			break
+	check(not item.is_empty(), "#243: an untargeted artifact can be used")
+	if item.is_empty(): return
+	view._skip_battle_presentation()
+	var before := notices.icons.size()
+	check(duel.use_artifact(0, 0), "#243: the hero uses %s (%s)" % [item.name, duel.error])
+	view._skip_battle_presentation()
+	var index := notices.icons.find_custom(func(icon: Dictionary) -> bool: return icon.card == item.spell)
+	notices.viewer_side = 0
+	check(notices.icons.size() > before and index >= 0 and _notice_uses(notices, index, profile.card_icon(item.spell))
+		and notices.get_tooltip(notices.icon_rect(index).get_center()).begins_with(duel.artifact_title(item)),
+		"#243: the used artifact shows its icon and name in the battle notices")
+
+func _jammer_marks(view: Node) -> void:
+	view._start("el2", {"first_side": 0}, null, 252)
+	var duel: ELDuel = view.duel
+	if not duel.profile.table("CombatCreatures").has("OSJ1"):
+		print("SKIP: #252 no Pale spell-jammer in this edition")
+		return
+	var jammer := duel.next_id
+	duel._summon(0, "OSJ1")
+	view._skip_battle_presentation()
+	var silencing: int = ELCombatSymbols.ICON_CODES[20]
+	check(duel.creatures.has(jammer) and duel.race(jammer) == "OutSpellJammer" and duel.pale(jammer)
+		and view.creature_icons(jammer).has(ELCombatSymbols.ICON_CODES[18]) and not view.creature_icons(jammer).has(silencing),
+		"#252: a Pale Avenger shows the Pale mark but no spell-silencing icon")
 
 func _figure_tooltips(view: Node) -> void:
 	view._start("el2", {"first_side": 0}, null, 230)

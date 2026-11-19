@@ -568,7 +568,6 @@ func _card_preview(parent: VBoxContainer, code: String, color: Color) -> void:
 	stage.add_child(tray)
 	var creature: Dictionary = profile.table("CombatCreatures").get(code, {})
 	var traits := ELEncyclopaedia.ability_icons(profile, code)
-	if creature.get("Race") == "OutSpellJammer": traits.append(20)
 	var preview: Control
 	if DisplayServer.get_name() != "headless" and not creature.is_empty():
 		var figure := ELAutochessFigure.new()
