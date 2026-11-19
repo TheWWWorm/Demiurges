@@ -27,6 +27,7 @@ signal content_requested(edition: String)
 ## Duel screen Start: the match is begun (presets resolved); the view plays its rounds.
 signal duel_match_requested(match: ELDuelMatch)
 signal expedition_requested
+signal arena_requested
 signal autochess_requested
 ## Remake: the battle puzzles of the shown game (ELPuzzleMode).
 signal puzzles_requested
@@ -332,6 +333,7 @@ func build(available: Dictionary, initial: String) -> bool:
 	_choice = ELGameChoice.new()
 	_choice.expedition_available = available.has("el2")
 	_choice.expedition_requested.connect(func(): expedition_requested.emit())
+	_choice.arena_requested.connect(func(): arena_requested.emit())
 	_choice.autochess_requested.connect(func(): autochess_requested.emit())
 	_choice.puzzles_available = true
 	_choice.puzzles_requested.connect(func(): puzzles_requested.emit())
@@ -553,13 +555,14 @@ func _add_group(group: String, excluded: Array) -> void:
 	var list := rows(group, [], ["Res1"] + excluded)
 	list.sort_custom(func(a: Dictionary, b: Dictionary): return _layer(a) < _layer(b))
 	var panel_tiles: Array[Dictionary] = []
-	var campaign_panel := edition == "el2" and group in ["SelectCampaign", "GlobalMapA6"]
+	var continuous_backing := (edition == "el2" and group in ["SelectCampaign", "GlobalMapA6"]) or (edition == "el1" and group == "SelectMission")
 	for row: Dictionary in list:
 		var piece := cut(row, offset)
 		if piece.is_empty(): continue
 		piece.masks = row.masks
+		if continuous_backing: piece.continuous_backing = true
 		_pieces.append(piece)
-		if campaign_panel or (group == "Duel" and row.masks.has("Type1") and row.masks.has("Last")):
+		if group == "Duel" and row.masks.has("Type1") and row.masks.has("Last"):
 			panel_tiles.append(piece)
 	if panel_tiles.size() > 1: _mark_panel_joins(panel_tiles)
 
@@ -713,6 +716,9 @@ func _draw_art() -> void:
 		if _frame_in_art and index == _frame_after: _draw_wide_frame(art)
 		var piece: Dictionary = _pieces[index]
 		if not hidden_masks.is_empty() and hidden_masks.any(func(mask: String): return piece.get("masks", []).has(mask)): continue
+		if piece.get("continuous_backing", false):
+			art.draw_texture_rect_region(_backing_sheet(piece.texture), piece.rect, piece.source)
+			continue
 		if piece.has("joins") and piece.texture.has_meta(ELIconUpscale.ORIGINAL):
 			if not piece.has("joined"): piece.joined = _joined_tile(piece.texture, Rect2i(piece.source), piece.joins)
 			if piece.joined != null:
@@ -720,6 +726,17 @@ func _draw_art() -> void:
 				continue
 		piece.erase("joined")
 		art.draw_texture_rect_region(piece.texture, piece.rect, piece.source)
+
+## These backings are continuous paintings split into atlas tiles. Sharpening
+## each sheet separately changes the shades at the joins, even beyond their
+## edges. Keep the original backing while the controls and portraits use art
+## at the selected sharpness.
+static func _backing_sheet(texture: Texture2D) -> Texture2D:
+	if not texture.has_meta(ELIconUpscale.ORIGINAL): return texture
+	const CACHE := &"continuous_menu_backing"
+	if not texture.has_meta(CACHE):
+		texture.set_meta(CACHE, ImageTexture.create_from_image(texture.get_meta(ELIconUpscale.ORIGINAL)))
+	return texture.get_meta(CACHE)
 
 ## Remake: the edition's main-menu picture without its buttons (the art and the
 ## widescreen frame, scaled and centred as the menu fills the window), for the
@@ -786,8 +803,10 @@ func _layout() -> void:
 	_place_version()
 	if _choice != null:
 		_choice.size = _choice.get_combined_minimum_size()
-		_choice.scale = Vector2(scale_factor, scale_factor)
-		_choice.position = (canvas.position + Vector2(DESIGN.x * 0.5 - _choice.size.x * 0.5, CHOICE_TOP) * scale_factor).floor()
+		# Extra standalone modes still fit on a narrow window and in translation.
+		var choice_scale := minf(scale_factor, maxf(1.0, size.x - 24.0) / maxf(1.0, _choice.size.x))
+		_choice.scale = Vector2(choice_scale, choice_scale)
+		_choice.position = Vector2((size.x - _choice.size.x * choice_scale) * 0.5, canvas.position.y + CHOICE_TOP * scale_factor).floor()
 
 func _draw() -> void:
 	draw_rect(Rect2(Vector2.ZERO, size), Color(0, 0, 0, 0.35) if overlay() else Color.BLACK)
@@ -1167,7 +1186,6 @@ func add_ai_choices(top := CHOICE_TOP) -> Control:
 		_fight_monsters = ELAIChoice.monster_checkbox(ai_levels, _ai_picks.world_ai)
 		_fight_monsters.text = ELRemakeText.t(ELAIChoice.MONSTER_LABEL, profile)
 		_fight_monsters.add_theme_font_size_override("font_size", 16)
-		_fight_monsters.add_theme_color_override("font_color", ELGameChoice.INK)
 		monsters.add_child(_fight_monsters)
 		var help := Button.new()
 		help.name = "NeutralMonsterHelp"

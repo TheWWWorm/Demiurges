@@ -246,6 +246,11 @@ var _expedition_screen: ELExpeditionScreen
 var _expedition_layer: CanvasLayer
 var _expedition_battle: ELDuel
 var _expedition_save_error := ""
+var arena_run: ELArenaRun
+var _arena_screen: ELArenaScreen
+var _arena_layer: CanvasLayer
+var _arena_battle: ELDuel
+var _arena_save_error := ""
 var _autochess_layer: CanvasLayer
 var _autochess_lobby: ELAutochessLobby
 var _autochess_screen: ELAutochessScreen
@@ -467,6 +472,8 @@ func _play_startup_movies() -> bool:
 
 func _exit_tree() -> void:
 	if ELOptionsScreen.remake_host == self: ELOptionsScreen.remake_host = null
+	if _arena_battle != null and arena_run != null: arena_run.save_battle(_arena_battle)
+	elif arena_run != null: arena_run.persist()
 	if _expedition_battle != null: expedition_run.save_battle(_expedition_battle)
 	elif expedition_run != null and not _expedition_save_error.is_empty(): expedition_run.persist()
 	remove_from_group(TRANSLATION_USERS)
@@ -600,6 +607,9 @@ var _encounter_start: Dictionary = {}
 ## checks that run it), which keep the fixed one so a battle can be repeated.
 func _start(edition: String, options: Dictionary = {}, restored: ELDuel = null, battle_seed := -1, preview := false) -> void:
 	if battle_seed < 0: battle_seed = 212 if demo else randi() & 0x7fffffff
+	if _arena_battle != null and restored != _arena_battle:
+		_notice("Return to the main menu to pause the Arena run first.")
+		return
 	if _campaign_battle() != null and restored != _campaign_battle():
 		_notice("Finish or surrender the campaign battle first.")
 		return
@@ -885,6 +895,9 @@ func _process(delta: float) -> void:
 		# The computer, a replay and the tutorial's recorded side act only once
 		# the previous action has been shown (fight and cast alike).
 		if _melee_busy() or _cast_busy(): ai_clock = minf(ai_clock, 0.85 - 0.25)
+		if duel == _arena_battle and duel.phase == ELDuel.Phase.FINISHED and ending_over() and not _presentation_held() and not _cast_busy() and not _overlay_open():
+			_finish_arena_battle()
+			return
 		if duel == _expedition_battle and duel.phase == ELDuel.Phase.FINISHED and ending_over() and not _presentation_held() and not _cast_busy() and not _overlay_open():
 			_finish_expedition_battle()
 			return
@@ -1038,7 +1051,7 @@ func _input(event: InputEvent) -> void:
 			if not event.pressed or (event.echo and action != "skip"): return
 			match action:
 				"end_phase":
-					if _human_turn() or ((_campaign_battle() != null or duel_match != null or combat_tutorial != null or network_duel != null or _expedition_battle != null or _in_puzzle()) and duel.phase == ELDuel.Phase.FINISHED): _end_phase()
+					if _human_turn() or ((_campaign_battle() != null or duel_match != null or combat_tutorial != null or network_duel != null or _expedition_battle != null or _arena_battle != null or _in_puzzle()) and duel.phase == ELDuel.Phase.FINISHED): _end_phase()
 				"attack_all": _attack_all()
 				"auto_combat": _toggle_auto()
 				"skip": _skip_battle_presentation()
@@ -1833,6 +1846,9 @@ func _set_auto(on: bool) -> void:
 	_refresh()
 
 func _end_phase() -> void:
+	if duel == _arena_battle and _arena_battle != null and duel.phase == ELDuel.Phase.FINISHED:
+		if ending_over(): _finish_arena_battle()
+		return
 	if duel == _expedition_battle and duel.phase == ELDuel.Phase.FINISHED:
 		if ending_over(): _finish_expedition_battle()
 		return
@@ -5333,6 +5349,8 @@ func _bind_list_sound(button: TextureButton) -> void:
 			ELUiSounds.play(profile, ELUiSounds.ERROR))
 
 func _side_name(side: int) -> String:
+	if side == 1 and arena_run != null and duel == _arena_battle:
+		return str(arena_run.opponent.get("name", "Arena AI"))
 	if duel != null and duel.heroes[side].has("title"): return str(duel.heroes[side].title)
 	if _hot_seat() and not String(duel_match.names[side]).is_empty(): return String(duel_match.names[side])
 	return "Player 1" if side == 0 else ("Practice AI" if mode_select.selected == 0 else "Player 2")
@@ -5797,6 +5815,10 @@ func _build_ui() -> void:
 	for i in 2:
 		profile_select.set_item_disabled(i, not profiles.has("el1" if i == 0 else "el2"))
 	profile_select.item_selected.connect(func(i: int):
+		if _arena_battle != null:
+			profile_select.select(1)
+			_notice("Return to the main menu to pause the Arena run first.")
+			return
 		demo = false
 		_start("el1" if i == 0 else "el2")
 		menu.hide())
@@ -5818,6 +5840,9 @@ func _build_ui() -> void:
 	menu_rows.add_child(_button("Surrender campaign battle", _surrender_encounter))
 	menu_rows.add_child(_button("Surrender duel round", _surrender_round))
 	menu_rows.add_child(_button("Watch / stop demo", func():
+		if _arena_battle != null:
+			_notice("Return to the main menu to pause the Arena run first.")
+			return
 		if _campaign_battle() != null:
 			_notice("Finish or surrender the campaign battle first.")
 			return
@@ -6038,6 +6063,7 @@ func _overlay_open() -> bool:
 	if ELWikiScreen.is_open(): return true
 	if puzzle_mode != null and puzzle_mode.blocking(): return true
 	if _expedition_screen != null and _expedition_screen.visible: return true
+	if _arena_screen != null and _arena_screen.visible: return true
 	return (first_tutorial != null and first_tutorial.visible) or (options_host != null and options_host.is_visible_in_tree()) or movie_player != null or (front_menu != null and front_menu.is_visible_in_tree()) or (setup_panel != null and setup_panel.visible) or (menu != null and menu.visible) or (settings_dialog != null and settings_dialog.visible) or (campaign_setup != null and campaign_setup.visible) or (power_dialog != null and power_dialog.visible) or (tutorial_quit != null and tutorial_quit.visible) or (esc_menu != null and esc_menu.visible) or (replay_quit != null and replay_quit.visible) or replay_inventory != null
 
 func _console_visibility(opened: bool) -> void:
@@ -7387,6 +7413,7 @@ func _discord_activity() -> Dictionary:
 	return discord.activity(game, _t(state))
 
 func _preview_volumes(values: Dictionary) -> void:
+	if is_instance_valid(_arena_screen): _arena_screen.apply_volumes(values)
 	if is_instance_valid(battle_audio): battle_audio.apply_volumes(values)
 	if is_instance_valid(_autochess_screen): _autochess_screen.apply_volumes(values)
 	if front_menu != null: front_menu.apply_volumes(values)
@@ -7491,6 +7518,11 @@ func _battle_host() -> ELFrontMenu:
 func _surrender_battle() -> void:
 	if network_duel != null:
 		if not network_duel.surrender(): _notice("You can concede when it is your action.")
+	elif _arena_battle != null:
+		if duel.phase == ELDuel.Phase.FINISHED: return
+		duel.heroes[0].health = 0
+		duel._check_winner()
+		_save_arena_battle(_arena_battle.get_instance_id())
 	elif _expedition_battle != null:
 		duel.heroes[0].health = 0
 		duel._check_winner()
@@ -7500,6 +7532,9 @@ func _surrender_battle() -> void:
 	else: _notice("Surrender ends campaign battles and Duel mode rounds.")
 
 func _open_setup() -> void:
+	if _arena_battle != null:
+		_notice("Return to the main menu to pause the Arena run first.")
+		return
 	if _campaign_battle() != null:
 		_notice("Finish or surrender the campaign battle first.")
 		return
@@ -7528,6 +7563,9 @@ func _open_setup() -> void:
 	_refresh()
 
 func _open_campaigns(from_map := false) -> void:
+	if arena_run != null:
+		_notice("Return to the main menu to pause the Arena run first.")
+		return
 	if _campaign_battle() != null:
 		_notice("Finish or surrender the campaign battle first.")
 		return
@@ -7558,6 +7596,9 @@ func _close_campaign_setup() -> void:
 	campaign_setup = null
 
 func _begin_campaign(edition: String, scenario: Dictionary, difficulty: int, restored: Dictionary = {}, online: ELStrategicSession = null) -> void:
+	if arena_run != null:
+		_notice("Return to the main menu to pause the Arena run first.")
+		return
 	ELCrashReport.trace("map load %s %s (difficulty %d%s)" % [edition, scenario.get("script", scenario.get("file_name", "?")), difficulty, ", from a save" if not restored.is_empty() else ""])
 	ELCrashReport.where("map %s %s" % [edition, scenario.get("script", scenario.get("file_name", "?"))])
 	if campaign_view != null: campaign_view.close_remake_menu()
@@ -7819,6 +7860,9 @@ func _ai_game() -> ELAdventureSession:
 
 ## The duel opponent's level: the game's in its battles, else the Options choice.
 func _duel_ai_level() -> int:
+	# All Arena opponents use the strongest available engine, independent of
+	# the user's campaign/practice difficulty preference.
+	if _arena_battle != null and duel == _arena_battle: return 2
 	var game := _ai_game()
 	return ELAIChoice.duel_level(game if game != null and duel != null and duel == _campaign_battle() else null, settings)
 
@@ -8017,6 +8061,10 @@ func _leave_campaign() -> void:
 	if front_menu != null: _show_front_menu()
 
 func _save_duel() -> void:
+	if _arena_battle != null:
+		_save_arena_battle(_arena_battle.get_instance_id())
+		if _arena_save_error.is_empty(): _notice("Arena saved. Resume it from Draft Arena on the main menu.")
+		return
 	if strategic_session != null:
 		_notice("Network matches cannot be saved here.")
 		return
@@ -8053,6 +8101,9 @@ func _save_duel() -> void:
 
 ## Loads the quick save of `wanted`, or of the edition being played.
 func _load_duel(wanted := "") -> void:
+	if _arena_battle != null:
+		_notice("Resume the Arena run from Draft Arena on the main menu.")
+		return
 	if strategic_session != null:
 		_notice("Leave the network match before loading.")
 		return
@@ -8772,6 +8823,9 @@ func _content_menu() -> void:
 ## Game files import screen (ELContentSetup) over everything else; `edition`
 ## is the game shown first.
 func _open_content_setup(edition := "") -> void:
+	if arena_run != null:
+		_notice("Return to the main menu to pause the Arena run first.")
+		return
 	if content_setup != null: return
 	if campaign_view != null or _campaign_battle() != null:
 		_notice("Leave the campaign before changing game files.")
@@ -8841,6 +8895,28 @@ func _show_front_menu() -> bool:
 	if campaign_view != null or profiles.is_empty(): return false
 	var edition := profile.id if profile != null else launch_profile
 	if not profiles.has(edition) or not ELFrontMenu.supports(profiles[edition]): return false
+	# Never discard a live Arena action/result after a failed checkpoint.
+	if arena_run != null:
+		if _arena_battle != null:
+			if _arena_battle.phase == ELDuel.Phase.FINISHED:
+				if not arena_run.resolve_battle(_arena_battle):
+					_arena_save_error = arena_run.error
+					_show_arena()
+					return false
+			elif not arena_run.save_battle(_arena_battle):
+				_arena_save_error = arena_run.error
+				_show_arena()
+				return false
+		elif not arena_run.persist():
+			_arena_save_error = arena_run.error
+			_show_arena()
+			return false
+	_arena_battle = null
+	arena_run = null
+	_arena_save_error = ""
+	if _arena_screen != null and _arena_screen.visible:
+		_arena_screen.hide()
+		_arena_screen.show_run(null)
 	_close_network_deck()
 	_drop_network_chat()
 	if network_duel != null:
@@ -8874,6 +8950,7 @@ func _show_front_menu() -> bool:
 			_open_setup())
 		front_menu.duel_match_requested.connect(_begin_duel_match)
 		front_menu.expedition_requested.connect(_open_expedition)
+		front_menu.arena_requested.connect(_open_arena)
 		front_menu.autochess_requested.connect(_open_autochess)
 		front_menu.puzzles_requested.connect(_open_puzzles)
 		front_menu.network_requested.connect(_open_network_lobby)
@@ -8910,6 +8987,8 @@ func _show_front_menu() -> bool:
 	_close_campaign_setup()
 	front_layer.show()
 	front_menu.show()
+	# Park the Arena checkpoint before unveiling a normal practice duel.
+	if duel != null and duel.setup.has("arena_run_id"): _start(edition, {}, null, -1, true)
 	_refresh()
 	return true
 
@@ -9363,6 +9442,149 @@ func _close_autochess(to_menu := true) -> void:
 	if path_tracing != null and is_instance_valid(arena): path_tracing.attach(stage, arena, camera, effects)
 	_pause_battle_audio(false)
 	if to_menu: _show_front_menu()
+
+## Draft Arena owns its run; each encounter uses the ordinary duel engine.
+func _open_arena() -> void:
+	if not profiles.has("el2"): return
+	_hide_front_menu()
+	if _arena_screen != null and (_arena_screen.profile != profiles.el2 or _arena_screen.profile_generation != profiles.el2.generation or not _arena_screen.uses_current_language()):
+		_arena_layer.hide()
+		_arena_layer.queue_free()
+		_arena_screen = null
+	if _arena_screen == null:
+		_arena_layer = CanvasLayer.new()
+		_arena_layer.layer = 5
+		add_child(_arena_layer)
+		_arena_screen = ELArenaScreen.new()
+		_arena_screen.hide()
+		_arena_layer.add_child(_arena_screen)
+		_arena_screen.build(profiles.el2)
+		_arena_screen.started.connect(_new_arena)
+		_arena_screen.resumed.connect(_resume_arena)
+		_arena_screen.hero_chosen.connect(_arena_hero)
+		_arena_screen.card_picked.connect(_arena_pick)
+		_arena_screen.battle_requested.connect(_start_arena_battle)
+		_arena_screen.continued.connect(_arena_continue)
+		_arena_screen.retired.connect(_arena_retire)
+		_arena_screen.save_retried.connect(_retry_arena_save)
+		_arena_screen.left.connect(func(): _show_front_menu())
+	_show_arena()
+
+func _new_arena(run_seed: int, rules: int, level: int) -> void:
+	if not _arena_save_error.is_empty():
+		_arena_screen.message(_arena_save_error)
+		return
+	var next := ELArenaRun.new()
+	if run_seed < 0: run_seed = randi() & 0x7fffffff
+	if not next.create(profiles.el2, run_seed, rules, Vector2i.ONE * level) or not next.persist():
+		_arena_screen.message(next.error)
+		return
+	arena_run = next
+	_arena_battle = null
+	_show_arena()
+
+func _resume_arena() -> void:
+	var saved := ELArenaRun.new()
+	if not saved.restore(profiles.el2):
+		_arena_screen.message(saved.error)
+		return
+	arena_run = saved
+	_arena_save_error = ""
+	if arena_run.phase == "battle": _start_arena_battle()
+	else: _show_arena()
+
+func _arena_hero(faction: String) -> void:
+	if arena_run == null or not _arena_save_error.is_empty(): return
+	var ok := arena_run.choose_hero(faction)
+	var failure := arena_run.error
+	_show_arena()
+	if not ok: _arena_screen.message(failure)
+
+func _arena_pick(index: int) -> void:
+	if arena_run == null or not _arena_save_error.is_empty(): return
+	var ok := arena_run.pick(index)
+	var failure := arena_run.error
+	_show_arena()
+	if not ok: _arena_screen.message(failure)
+
+func _arena_continue() -> void:
+	if arena_run == null or not _arena_save_error.is_empty(): return
+	var ok := arena_run.continue_run()
+	var failure := arena_run.error
+	_show_arena()
+	if not ok: _arena_screen.message(failure)
+
+func _arena_retire() -> void:
+	if arena_run == null or not _arena_save_error.is_empty(): return
+	var ok := arena_run.retire()
+	var failure := arena_run.error
+	if ok: _arena_battle = null
+	_show_arena()
+	if not ok: _arena_screen.message(failure)
+
+func _show_arena() -> void:
+	if _arena_screen == null: return
+	_arena_screen.show_run(arena_run, _arena_save_error)
+	_pause_battle_audio(true)
+	_arena_screen.apply_volumes(settings.values)
+	_arena_screen.show()
+	if menu != null: menu.hide()
+	if esc_menu != null: esc_menu.hide()
+
+func _start_arena_battle() -> void:
+	if arena_run == null or not _arena_save_error.is_empty(): return
+	var battle := arena_run.build_battle()
+	if battle == null:
+		_arena_screen.message(arena_run.error)
+		return
+	_arena_battle = battle
+	if battle.phase == ELDuel.Phase.FINISHED:
+		_finish_arena_battle()
+		return
+	_arena_screen.hide()
+	demo = false
+	mode_select.select(0)
+	battle.smart_sides.assign([1])
+	_start("el2", {}, battle)
+	_pause_battle_audio(false)
+	var battle_id := battle.get_instance_id()
+	battle.changed.connect(_save_arena_battle.bind(battle_id), CONNECT_DEFERRED)
+	_save_arena_battle(battle_id)
+
+func _save_arena_battle(battle_id: int) -> void:
+	if _arena_battle == null or arena_run == null or arena_run.phase != "battle" or _arena_battle.get_instance_id() != battle_id: return
+	if not arena_run.save_battle(_arena_battle):
+		_arena_save_error = arena_run.error
+		# Stop advancing before another action can outrun a failed checkpoint.
+		_show_arena()
+
+func _finish_arena_battle() -> void:
+	if _arena_battle == null or arena_run == null: return
+	if not arena_run.resolve_battle(_arena_battle):
+		_arena_save_error = arena_run.error
+		_show_arena()
+		return
+	_arena_battle = null
+	_arena_save_error = ""
+	_set_auto(false)
+	_show_arena()
+
+func _retry_arena_save() -> void:
+	if arena_run == null: return
+	if _arena_battle != null and _arena_battle.phase == ELDuel.Phase.FINISHED:
+		_finish_arena_battle()
+		return
+	var ok := arena_run.save_battle(_arena_battle) if _arena_battle != null else arena_run.persist()
+	if not ok:
+		_arena_save_error = arena_run.error
+		_show_arena()
+		return
+	_arena_save_error = ""
+	if _arena_battle != null:
+		_arena_screen.hide()
+		_pause_battle_audio(false)
+		_refresh()
+	else: _show_arena()
 
 func _open_expedition() -> void:
 	if not profiles.has("el2"): return
@@ -9999,6 +10221,7 @@ func _ask_surrender() -> void:
 	_ask_battle("T_MB_SURRENDER", _esc_surrender, retry)
 
 func _can_retry_battle() -> bool:
+	if _arena_battle != null: return false
 	if duel == null or duel.phase == ELDuel.Phase.FINISHED or demo or replay_player != null or combat_tutorial != null or network_duel != null or strategic_session != null: return false
 	if _campaign_battle() != null: return not _encounter_start.is_empty()
 	return duel_match != null or _expedition_battle != null or _practice_restart_seed >= 0
@@ -10035,7 +10258,7 @@ func _retry_battle() -> void:
 
 func _esc_surrender() -> void:
 	_close_esc_menu()
-	if network_duel != null or _expedition_battle != null or _campaign_battle() != null or duel_match != null: _surrender_battle()
+	if network_duel != null or _expedition_battle != null or _arena_battle != null or _campaign_battle() != null or duel_match != null: _surrender_battle()
 	elif duel != null and duel.phase != ELDuel.Phase.FINISHED and replay_player == null and combat_tutorial == null:
 		# A practice battle: the player's side concedes.
 		duel.heroes[0].health = 0
@@ -10044,6 +10267,9 @@ func _esc_surrender() -> void:
 
 ## Load: the save list of the running kind of game (campaign or single mission).
 func _esc_load() -> void:
+	if _arena_battle != null:
+		_notice("Resume the Arena run from Draft Arena on the main menu.")
+		return
 	if strategic_session != null:
 		_notice("Leave the network match before loading.")
 		return

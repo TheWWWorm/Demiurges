@@ -1,6 +1,6 @@
 class_name ELAutochessFigure
 extends Control
-## A live creature in the interface: the creature's own model and textures,
+## A live figure in the interface: the original model and textures,
 ## playing its idle animation on a transparent background. Used by the shop
 ## offers, reserves, inspector and evolution notice. `glow` draws an outline
 ## around the figure itself (an offer that completes an evolution pulses).
@@ -104,18 +104,26 @@ var _idle_back: Callable
 
 ## Shows `value`'s creature (empty clears). Keeps the figure when unchanged.
 func show_code(data: ELProfile, value: String) -> void:
-	if value == code and is_instance_valid(view): return
+	_show(data, value, false)
+
+## Full-body hero preview using the same lighting and framing as creatures.
+func show_hero(data: ELProfile, template: String) -> void:
+	_show(data, template, true)
+
+func _show(data: ELProfile, value: String, hero: bool) -> void:
+	var key := "%d:%d:hero:%s" % [data.get_instance_id(), data.generation, value] if hero else value
+	if key == code and is_instance_valid(view): return
 	profile = data
 	release()
-	code = value
+	code = key
 	if value.is_empty(): return
-	var spares: Array = _spare.get(value, [])
+	var spares: Array = _spare.get(key, [])
 	while not spares.is_empty() and view == null:
 		var kept: SubViewport = spares.pop_back()
 		_spare_count -= 1
 		if is_instance_valid(kept): view = kept
 	if view == null:
-		view = ELWikiPreview.stage(profile, value, _pixels(), true)
+		view = ELWikiPreview.stage_hero(profile, value, _pixels(), true) if hero else ELWikiPreview.stage(profile, value, _pixels(), true)
 		if view == null: return
 		view.gui_disable_input = true
 		for node: Node in view.get_children():
