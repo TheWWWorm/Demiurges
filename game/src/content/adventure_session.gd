@@ -518,7 +518,7 @@ func learn_specialization(id: int, code: String) -> bool:
 	var owned := specializations(hero)
 	if owned.has(code): return false
 	var text := map.profile.text("T_MB_RECEIVE_NEW_SPEC").replace("%s", map.profile.text(str(map.profile.table("HeroesSpecs")[code].get("Name", code))))
-	if map.profile.id == "el2" and ELSecondCampaign.first_specialization_hint(self, hero, owned): text += "\n\n" + map.profile.text("T_MB_RECEIVE_NEW_SPEC_FIRST")
+	if map.profile.id == "el2" and ELSecondCampaign.first_specialization_hint(self, hero): text += "\n\n" + map.profile.text("T_MB_RECEIVE_NEW_SPEC_FIRST")
 	owned.append(code)
 	hero.specializations = owned
 	if str(hero.get("specialization", "NONE")) == "NONE": hero.specialization = code

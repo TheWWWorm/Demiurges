@@ -9,7 +9,7 @@ extends SceneTree
 ## - #249: script commands queued after a move-and-use that starts a battle
 ##   between two computer sides wait until that battle has ended;
 ## - #253: the first-specialisation hint follows only the first specialisation
-##   of a playthrough, for a hero that held none.
+##   of a playthrough, for a hero that has learned none beyond its starting one.
 ##
 ##   godot --headless --path game --script ../tools/issues_238_253_check.gd
 ##
@@ -102,11 +102,13 @@ func _specialization_hint(profile: ELProfile) -> void:
 	hero.specialization = "NONE"
 	hero.specializations = []
 	check(state.learn_specialization(int(hero.uid), codes[2]) and not texts[-1].contains(hint), "#253: a later campaign's first specialisation has no hint")
-	# A hero starting with its own specialisation (chapter 41's Alpha).
+	# A hero starting with its own specialisation (the original counts its
+	# starting entry: the hint follows its first learned one).
 	state.scenario[ELSecondCampaign.KEY] = ELSecondCampaign.new_game()
 	hero.specialization = codes[0]
 	hero.specializations = []
-	check(state.learn_specialization(int(hero.uid), codes[3]) and not texts[-1].contains(hint), "#253: a hero with a starting specialisation gets no hint (#253's Synthet chapter)")
+	check(state.learn_specialization(int(hero.uid), codes[3]) and texts[-1].ends_with(hint), "#253: a hero with a starting specialisation still gets the hint with its first learned one")
+	check(state.learn_specialization(int(hero.uid), codes[4]) and not texts[-1].contains(hint), "#253: and not with the next one")
 	# The altar's message follows the same rule.
 	var shrine := {}
 	for item: Dictionary in state.objects.values():
@@ -123,12 +125,20 @@ func _specialization_hint(profile: ELProfile) -> void:
 	hero.travel_day = state.day
 	ELSecondBuildings.use(director, hero, shrine)
 	check(not boxes.is_empty() and boxes[-1].ends_with(hint), "#253: the altar's first specialisation of the playthrough adds the hint (Eilin's altar)")
-	shrine.used = false
-	hero.specialization = codes[0]
-	hero.specializations = []
+	# A hero with its own starting specialisation (single chapter: no progress).
+	var own := codes[0] if codes[0] != ELSecondBuildings.shrine_code(profile, shrine) else codes[1]
+	var learned := codes[2] if codes[2] != ELSecondBuildings.shrine_code(profile, shrine) else codes[3]
 	state.scenario.erase(ELSecondCampaign.KEY)
+	shrine.used = false
+	hero.specialization = own
+	hero.specializations = []
 	ELSecondBuildings.use(director, hero, shrine)
-	check(not boxes.is_empty() and not boxes[-1].contains(hint), "#253: the altar adds no hint for a hero that already holds one")
+	check(not boxes.is_empty() and boxes[-1].ends_with(hint), "#253: the altar adds the hint for a hero holding only its starting specialisation")
+	shrine.used = false
+	hero.specialization = own
+	hero.specializations = [own, learned]
+	ELSecondBuildings.use(director, hero, shrine)
+	check(not boxes.is_empty() and not boxes[-1].contains(hint), "#253: the altar adds no hint for a hero that already learned one")
 
 func _auto_fight_holds_commands(profile: ELProfile) -> void:
 	var pair := _session(profile, "e2mission23")

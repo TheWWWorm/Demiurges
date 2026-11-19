@@ -234,13 +234,14 @@ static func restore(state: ELAdventureSession, raw_scenario: Variant) -> bool:
 	return true
 
 ## Second game: whether a specialisation the local player's hero receives
-## (altar or battle) adds T_MB_RECEIVE_NEW_SPEC_FIRST: only the first one of the
-## playthrough, for a hero that held none (player report #253; a chapter's own
-## starting specialisation does not count). Inside a campaign the shown hint
-## is kept in the progress, so later chapters and campaigns skip it; a
-## single chapter decides by the hero alone. `owned` is the list before the new one.
-static func first_specialization_hint(state: ELAdventureSession, hero: Dictionary, owned: Array) -> bool:
-	if not owned.is_empty() or int(hero.get("owner", -1)) != state.current_player: return false
+## (altar or battle) adds T_MB_RECEIVE_NEW_SPEC_FIRST. As in the original, the
+## hero has learned nothing beyond its starting specialisation (its own, or
+## none): the stored list of learned ones is still empty before the new one
+## is added. The remake shows it once per playthrough (player report #253):
+## inside a campaign the shown hint is kept in the progress, so later chapters
+## and campaigns skip it; a single chapter decides by the hero alone.
+static func first_specialization_hint(state: ELAdventureSession, hero: Dictionary) -> bool:
+	if not Array(hero.get("specializations", [])).is_empty() or int(hero.get("owner", -1)) != state.current_player: return false
 	var data := progress(state)
 	if data.is_empty(): return true
 	if bool(data.get("spec_hint", false)): return false
