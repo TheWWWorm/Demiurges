@@ -92,6 +92,17 @@ func _placement_approaches(director: ELAdventureDirector, report: Dictionary) ->
 	var forts: int = report.counts.get("forts", 0)
 	var first := Vector2i(report.starts[0].x, report.starts[0].y)
 	check(forts > 0, "the travel network has at least one fort")
+	var supplies: Dictionary = report.get("guarded_supplies", {})
+	check(not supplies.is_empty(), "the frontier has encounter-side supplies")
+	var supply_counts := {}
+	for id: int in supplies:
+		var cache := state.object(id)
+		var guard := state.object(supplies[id])
+		var gap := Vector2i(cache.x, cache.y) - Vector2i(guard.x, guard.y)
+		var count := int(supply_counts.get(guard.uid, 0)) + 1
+		supply_counts[guard.uid] = count
+		check(cache.group == "resource_cuts" and guard.type == "monster" and maxi(absi(gap.x), absi(gap.y)) <= 4
+			and count <= 2 and not grid.approach(first, cache).is_empty(), "supplies form small, reachable groups beside reward guards")
 	for item: Dictionary in state.objects.values():
 		if item.group != "forts": continue
 		var area := Rect2i(Vector2i(item.x, item.y), grid.footprints[item.uid].size).grow(4)

@@ -14,6 +14,7 @@ const LANDSCAPE_VERSION := 4
 const WILDERNESS_VERSION := 5
 const RELIEF_VERSION := 6
 const PLACEMENT_VERSION := 7
+const FRONTIERS_VERSION := 8
 const DailyCoverage := preload("first_daily_coverage.gd")
 const PREFIX := "el1_random_v"
 const COLORS := ["Green", "Blue", "Red", "Black"]
@@ -89,7 +90,10 @@ var _guard_queue: Array[Dictionary] = []
 var _home_lairs: Array[Dictionary] = []
 var _trunk_points: Array[Vector2i] = []
 var _guard_safe := PackedByteArray()
+var _scenery_paths := PackedByteArray()
 var _reward_guards := {}
+var _basins: Array[Transform2D] = []
+var _frontier_supplies: Array[Dictionary] = []
 
 static func defaults(version := VERSION) -> Dictionary:
 	return {"version": version, "seed": "212", "size": 96, "players": 4,
@@ -107,7 +111,7 @@ static func normalize(options: Dictionary, version := VERSION) -> Dictionary:
 		var value: Variant = options.get(key, result[key])
 		if typeof(value) not in [TYPE_INT, TYPE_FLOAT] or not is_finite(float(value)) or float(value) != floor(float(value)): return {}
 		result[key] = int(value)
-	if result.version < VERSION or result.version > PLACEMENT_VERSION or result.size not in SIZES or result.players < 2 or result.players > 4 or result.scenery < 0 or result.scenery > 2 or result.castle_health not in [20, 30, 60]: return {}
+	if result.version < VERSION or result.version > FRONTIERS_VERSION or result.size not in SIZES or result.players < 2 or result.players > 4 or result.scenery < 0 or result.scenery > 2 or result.castle_health not in [20, 30, 60]: return {}
 	for key: String in ["seed", "layout", "biome", "resources", "starting_resources", "guards", "faction", "water", "coast"]:
 		var value: Variant = options.get(key, result[key])
 		if value is not String: return {}
@@ -209,7 +213,10 @@ func generate(profile: ELProfile, options: Dictionary = {}) -> ELAdventureMap:
 	_home_lairs.clear()
 	_trunk_points.clear()
 	_guard_safe.clear()
+	_scenery_paths.clear()
 	_reward_guards.clear()
+	_basins.clear()
+	_frontier_supplies.clear()
 	_map.terrain.resize((_map.width + 1) * (_map.height + 1))
 	_map.roads.resize(_map.width * _map.height)
 	_map.creeks.resize(_map.roads.size())
@@ -221,6 +228,7 @@ func generate(profile: ELProfile, options: Dictionary = {}) -> ELAdventureMap:
 	_corridor.resize(_map.roads.size())
 	_corridor.fill(0)
 	if config.version >= PLACEMENT_VERSION: _guard_safe.resize(_map.roads.size())
+	if config.version >= FRONTIERS_VERSION: _scenery_paths.resize(_map.roads.size())
 	_network.resize(_map.roads.size())
 	_network.fill(0)
 	_network_points.clear()
@@ -232,6 +240,7 @@ func generate(profile: ELProfile, options: Dictionary = {}) -> ELAdventureMap:
 	_route_grid.default_estimate_heuristic = AStarGrid2D.HEURISTIC_OCTILE
 	_route_grid.update()
 	_start_points()
+	if config.version >= FRONTIERS_VERSION and not config.naval: _build_basins()
 	if config.version >= LANDSCAPE_VERSION:
 		_build_landscape()
 		_add_outlying_islands()
@@ -255,6 +264,8 @@ func generate(profile: ELProfile, options: Dictionary = {}) -> ELAdventureMap:
 	if config.version >= WILDERNESS_VERSION and config.guards != "none":
 		_make_encounters()
 		if not _check_access(true): return null
+	if config.version >= FRONTIERS_VERSION:
+		_place_frontier_supplies()
 	if config.scenery > 0:
 		if config.version == VERSION:
 			_make_legacy_scenery()
@@ -688,7 +699,51 @@ func _home_land(point: Vector2) -> bool:
 		if offset.length() < shore: return true
 	return false
 
+func _build_basins() -> void:
+	var shore := floorf(_hash(3, 8, 614) * 4.0) * PI * 0.5
+	var offset := (_hash(3, 8, 881) - 0.5) * 0.26
+	var width: float = {"low": 0.76, "normal": 1.0, "high": 1.23}[config.water]
+	match str(config.layout):
+		"frontier":
+			# A long bay on one edge and a few inland pools leave most of
+			# the border as open countryside. The seed chooses the coast.
+			_add_basin(Vector2(offset, -0.50).rotated(shore), Vector2(0.30, 0.19) * width, shore + offset)
+			_add_basin(Vector2(-0.21, 0.10 + offset).rotated(shore), Vector2(0.13, 0.083) * width, shore + _shape_phase)
+			_add_basin(Vector2(0.28, 0.23 - offset).rotated(shore), Vector2(0.095, 0.066) * width, _shape_phase)
+			if _hash(3, 8, 879) > 0.50:
+				_add_basin(Vector2(-0.14, 0.49).rotated(shore), Vector2(0.22, 0.11) * width, shore)
+		"lakes":
+			var count := 4 + floori(_hash(3, 8, 945) * 3.0)
+			var main_lake := Vector2.from_angle(_shape_phase + 1.3) * lerpf(0.03, 0.13, _hash(3, 8, 788))
+			_add_basin(main_lake, Vector2(0.155, 0.105) * width, _shape_phase)
+			for index in count:
+				var angle := TAU * index / count + _shape_phase
+				var reach := lerpf(0.19, 0.36, _hash(index, 8, 462))
+				var radius := lerpf(0.095, 0.153, _hash(index, 8, 654))
+				_add_basin(Vector2.from_angle(angle) * reach, Vector2(radius * 1.3, radius * 0.82) * width, angle + offset)
+		"crossroads":
+			for index in 4:
+				var angle := shore + PI * 0.5 * index
+				var reach := lerpf(0.28, 0.39, _hash(index, 8, 421))
+				var radius := lerpf(0.10, 0.15, _hash(index, 8, 238))
+				_add_basin(Vector2.from_angle(angle + offset) * reach, Vector2(radius, radius * 0.64) * width, angle)
+
+func _add_basin(offset: Vector2, extent: Vector2, angle: float) -> void:
+	var basin := Transform2D(angle, extent, 0.0, Vector2(0.5, 0.5) + offset)
+	_basins.append(basin.affine_inverse())
+
+func _basin_water(point: Vector2i) -> bool:
+	var n := float(_map.width)
+	var sample := Vector2(point) / n
+	if config.layout == "crossroads" and sample.distance_squared_to(Vector2(0.5, 0.5)) < 0.10 * 0.10: return false
+	var roughness := 0.11 if config.coast == "smooth" else 0.33
+	var edge := 1.0 + (_noise(point.x, point.y, n * 0.12, 671) - 0.5) * roughness
+	for basin: Transform2D in _basins:
+		if (basin * sample).length_squared() < edge: return not _home_land(Vector2(point))
+	return false
+
 func _water_field(point: Vector2i) -> bool:
+	if not _basins.is_empty(): return _basin_water(point)
 	var n := float(_map.width)
 	var center := Vector2(n, n) * 0.5
 	var sample := Vector2(point)
@@ -902,10 +957,11 @@ func _prepare_naval_terrain() -> bool:
 func _weight_landscape_routes() -> void:
 	# Roads gravitate to clear valley floors and only use causeways when
 	# necessary. The weights shape placement, not the cost of hero movement.
+	var wet_weight := 14.0 if not _basins.is_empty() else 5.0
 	for y in range(1, _map.height - 1):
 		for x in range(1, _map.width - 1):
 			var point := Vector2i(x, y)
-			var weight: float = [1.0, 1.22, 2.2][_landform(point)] if _walkable(point) else 5.0
+			var weight: float = [1.0, 1.22, 2.2][_landform(point)] if _walkable(point) else wet_weight
 			_route_grid.set_point_weight_scale(point, weight + 0.21 * _noise(x, y, 15.0, 1091))
 
 func _region_at(point: Vector2i) -> int:
@@ -1254,7 +1310,12 @@ func _make_frontiers() -> bool:
 			_connect_site(Vector2i(start.x, start.y), item, size, config.version < PLACEMENT_VERSION, config.version < PLACEMENT_VERSION)
 			_important.append(int(item.permanent_id) - 1)
 			if config.guards != "none": _add_guard(Vector2i((Vector2(pos) - forward * 2).round()), index, 1 + number / 2, item, size)
-			_add_pickup(pos + size + Vector2i(2, 2), -1, 10 + abundance * 10)
+			var supply_at := pos + size + Vector2i(2, 2)
+			var amount := 10 + abundance * 10
+			if config.version >= FRONTIERS_VERSION:
+				_frontier_supplies.append({"mine": int(item.permanent_id) - 1, "fallback": supply_at, "amount": amount})
+			else:
+				_add_pickup(supply_at, -1, amount)
 		# Optional adventure rewards use genuine installed artifact rows.
 		if config.version < PLACEMENT_VERSION and not _catalog.artifacts.is_empty():
 			var name: String = _catalog.artifacts[_next(_catalog.artifacts.size())]
@@ -1380,23 +1441,59 @@ func _homeland_scroll(origin: Vector2i, desired: Vector2i, size: Vector2i, home:
 	_route_grid.set_point_solid(origin, true)
 	return best
 
-func _add_pickup(desired: Vector2i, home: int, amount: int) -> void:
-	if _catalog.cuts.is_empty(): return
+func _place_frontier_supplies() -> void:
+	var counts := {}
+	var pairs := {}
+	for supply: Dictionary in _frontier_supplies:
+		var mine: Dictionary = _map.objects[supply.mine]
+		var source := Vector2i(mine.x, mine.y)
+		var region := _region_at(source)
+		var candidates: Array[Dictionary] = []
+		for guard_id: int in _reward_guards.values():
+			if int(counts.get(guard_id, 0)) >= 2: continue
+			var guard: Dictionary = _map.objects[guard_id]
+			var at := Vector2i(guard.x, guard.y)
+			var distance := at.distance_squared_to(source)
+			if distance > 14 * 14 or _region_at(at) != region: continue
+			candidates.append({"guard": guard_id, "at": at, "score": distance - (14 * 14 if _reward_guards.get(supply.mine, -1) == guard_id else 0)})
+		candidates.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return a.score < b.score if a.score != b.score else a.guard < b.guard)
+		var placed := false
+		for candidate: Dictionary in candidates:
+			var at: Vector2i = candidate.at
+			var direction := (at - source).sign()
+			var id := _add_pickup(at + direction * 2, -1, supply.amount, 2, true, region)
+			if id < 0: continue
+			counts[candidate.guard] = int(counts.get(candidate.guard, 0)) + 1
+			pairs[id] = candidate.guard
+			placed = true
+			break
+		if not placed:
+			_add_pickup(supply.fallback, -1, supply.amount, 8, true, region)
+	report.guarded_supplies = pairs
+
+func _add_pickup(desired: Vector2i, home: int, amount: int, radius := 8, expedition := false, region := -1) -> int:
+	if _catalog.cuts.is_empty(): return -1
 	var keys := _keys(_catalog.cuts)
 	var name: String = keys[_next(keys.size())]
 	var row: Dictionary = _catalog.cuts[name]
 	var size: Vector2i = ELAdventureGrid.footprint(row, 0).size
-	var pos := _find_spot(desired, size, 8, home, config.version >= PLACEMENT_VERSION, true)
-	if pos == NO_SPOT: return
+	var pos := _find_spot(desired, size, radius, home, config.version >= PLACEMENT_VERSION, true, expedition, region)
+	if pos == NO_SPOT: return -1
 	var resources: Array = []
 	# A visible pile gives a small mixed cache, avoiding a dead opening when
 	# an installed pile's display name is not one of the resource constants.
 	for kind: String in ELResources.ORIGINAL: resources.append(_node("resource", {"type": kind, "amount": str(amount if kind in ["Root", "Lotus"] else maxi(1, amount / 3))}))
+	var approach := _expedition_trail(Rect2i(pos, size)) if expedition else -1
 	var item := _place("resource_cuts", name, pos, row, 0, "", [_node("resources", {}, "", resources)])
-	_clear_footprint(pos, size)
-	var seat := home if home >= 0 else _owner(pos)
-	_connect_site(Vector2i(_starts[seat].x, _starts[seat].y), item, size, config.version < PLACEMENT_VERSION, home >= 0 or config.version < PLACEMENT_VERSION)
-	_important.append(int(item.permanent_id) - 1)
+	if expedition:
+		_protect_route(approach, _exploration_access)
+	else:
+		_clear_footprint(pos, size)
+		var seat := home if home >= 0 else _owner(pos)
+		_connect_site(Vector2i(_starts[seat].x, _starts[seat].y), item, size, config.version < PLACEMENT_VERSION, home >= 0 or config.version < PLACEMENT_VERSION)
+	var id := int(item.permanent_id) - 1
+	_important.append(id)
+	return id
 
 func _add_guard(desired: Vector2i, home: int, tier: int, site := {}, size := Vector2i.ONE) -> void:
 	if config.version >= WILDERNESS_VERSION:
@@ -1495,7 +1592,9 @@ func _make_encounters() -> void:
 
 func _record_reward_guard(id: int, guard: Vector2i, approach: Vector2i, name: String, home: int) -> void:
 	_reward_guards[id] = _place_guard(guard, name, home)
-	_corridor[approach.y * _map.width + approach.x] = 1
+	var offset := approach.y * _map.width + approach.x
+	_corridor[offset] = 1
+	if not _scenery_paths.is_empty(): _scenery_paths[offset] = 1
 
 func _reward_guard(site: Rect2i, preferred: Vector2i) -> Dictionary:
 	var best := {}
@@ -1901,6 +2000,7 @@ func _make_scenery() -> void:
 			if _walkable(Vector2i(x, y)): land[y * _map.width + x] = 1
 	if config.version >= WILDERNESS_VERSION:
 		_make_groves(land, pools)
+		if config.version >= FRONTIERS_VERSION: _fill_scenery_between_groves(land, pools)
 		return
 	# Give each patch of land its own budget. Coastlines and the backs of
 	# homelands get coverage even when most of the world is water.
@@ -1960,6 +2060,49 @@ func _make_groves(land: PackedByteArray, pools: Dictionary) -> void:
 		if plants.is_empty() or _reserved[point.y * _map.width + point.x] != 0: continue
 		var grass: Dictionary = plants[_next(plants.size())]
 		_place("terrain_objects", grass.name, point, grass.row, 0, "", [], {}, _next(4) * 4)
+
+func _fill_scenery_between_groves(land: PackedByteArray, pools: Dictionary) -> void:
+	# Cluster smaller trees around the big groves and dress the road
+	# shoulders, including the foreground between nearby strategic sites.
+	# The route and harbor masks still apply to every blocking footprint.
+	for color: String in COLORS:
+		var pool: Dictionary = pools[color]
+		var trees: Array = pool.canopy if not pool.canopy.is_empty() else pool.plants
+		pool.small_trees = trees.filter(func(entry: Dictionary) -> bool:
+			var size: Vector2i = ELAdventureGrid.footprint(entry.row, 0).size
+			return maxi(size.x, size.y) <= 2
+		)
+	var candidates: Array[Dictionary] = []
+	var verges := PackedByteArray()
+	verges.resize(land.size())
+	for index in _map.roads.size():
+		if _map.roads[index] == 0: continue
+		var road := Vector2i(index % _map.width, index / _map.width)
+		for y in range(maxi(2, road.y - 3), mini(_map.height - 2, road.y + 4)):
+			for x in range(maxi(2, road.x - 3), mini(_map.width - 2, road.x + 4)):
+				verges[y * _map.width + x] = 1
+	var density := 0.24 if config.scenery == 2 else 0.16
+	var remaining := roundi(land.count(1) * density)
+	for y in range(2, _map.height - 2):
+		for x in range(2, _map.width - 2):
+			var offset := y * _map.width + x
+			if land[offset] == 0 or _reserved[offset] != 0 or _scenery_paths[offset] != 0 or _map.roads[offset] != 0: continue
+			var point := Vector2i(x, y)
+			var cover := _canopy[y * (_map.width + 1) + x]
+			var grove := _noise(x, y, 8.0, 1739)
+			var draw := _hash(x, y, 3929)
+			var score := 0.37 * cover + 0.40 * grove + 0.32 * draw + (0.28 if verges[offset] else 0.0)
+			if score < (0.24 if config.scenery == 2 else 0.32): continue
+			candidates.append({"point": point, "score": score, "stone": draw < (0.44 if _landform(point) == Landform.RIDGE else 0.15)})
+	candidates.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return a.score > b.score)
+	for candidate: Dictionary in candidates:
+		if remaining <= 0: break
+		var point: Vector2i = candidate.point
+		if _reserved[point.y * _map.width + point.x] != 0: continue
+		var pool := _scenery_pool(point, pools)
+		var primary: Array = pool.stones if candidate.stone else pool.small_trees
+		var secondary: Array = pool.small_trees if candidate.stone else pool.brush
+		if _place_scenery(point, primary, land, true) or _place_scenery(point, secondary, land, true): remaining -= 1
 
 func _dress_wilderness_sites(land: PackedByteArray, pools: Dictionary) -> void:
 	var sites := _map.objects.filter(func(item: Dictionary) -> bool: return item.group == "additional_buildings")
@@ -2076,7 +2219,7 @@ func _place_scenery_detail(point: Vector2i, pools: Dictionary, land: PackedByteA
 	var secondary: Array = pool.plants if rocky else pool.stones
 	return _place_scenery(point, primary, land) or _place_scenery(point, secondary, land)
 
-func _place_scenery(point: Vector2i, pool: Array, land: PackedByteArray) -> bool:
+func _place_scenery(point: Vector2i, pool: Array, land: PackedByteArray, allow_verges := false) -> bool:
 	if pool.is_empty(): return false
 	var first := _next(pool.size())
 	var rotation := _next(4) * 4
@@ -2084,17 +2227,20 @@ func _place_scenery(point: Vector2i, pool: Array, land: PackedByteArray) -> bool
 		var entry: Dictionary = pool[(first + attempt) % pool.size()]
 		var size: Vector2i = ELAdventureGrid.footprint(entry.row, rotation).size
 		var origin := point - size / 2
-		if not _scenery_fits(origin, size, land): continue
+		if not _scenery_fits(origin, size, land, allow_verges): continue
 		_place("terrain_objects", entry.name, origin, entry.row, 0, "", [], {}, rotation)
 		return true
 	return false
 
-func _scenery_fits(origin: Vector2i, size: Vector2i, land: PackedByteArray) -> bool:
+func _scenery_fits(origin: Vector2i, size: Vector2i, land: PackedByteArray, allow_verges := false) -> bool:
 	if origin.x < 2 or origin.y < 2 or origin.x + size.x > _map.width - 2 or origin.y + size.y > _map.height - 2: return false
 	for y in range(origin.y, origin.y + size.y):
 		for x in range(origin.x, origin.x + size.x):
 			var offset := y * _map.width + x
-			if land[offset] == 0 or _reserved[offset] != 0 or _corridor[offset] != 0: return false
+			if land[offset] == 0 or _reserved[offset] != 0: return false
+			if allow_verges:
+				if _scenery_paths[offset] != 0 or _map.roads[offset] != 0: return false
+			elif _corridor[offset] != 0: return false
 	return true
 
 static func _node(tag: String, attrs: Dictionary = {}, text := "", children: Array = []) -> Dictionary:
@@ -2211,6 +2357,14 @@ func _connect(from: Vector2i, to: Vector2i, width: int, road: bool, trunk := fal
 	var path := _route_grid.get_id_path(from, to)
 	_route_grid.set_point_solid(from, from_solid)
 	_route_grid.set_point_solid(to, to_solid)
+	if not _scenery_paths.is_empty():
+		var previous := from
+		for at: Vector2i in path:
+			_scenery_paths[at.y * _map.width + at.x] = 1
+			if config.naval and at.x != previous.x and at.y != previous.y:
+				_scenery_paths[at.y * _map.width + previous.x] = 1
+				_scenery_paths[previous.y * _map.width + at.x] = 1
+			previous = at
 	for point: Vector2i in path:
 		var offset := point.y * _map.width + point.x
 		if guard_route and _network[offset] == 0:
@@ -2411,6 +2565,7 @@ func _fill_daily_gaps(grid: ELAdventureGrid, objects: Dictionary, reached: Packe
 func _protect_route(offset: int, previous: PackedInt32Array, guard_safe := false) -> void:
 	while offset >= 0:
 		_corridor[offset] = 1
+		if not _scenery_paths.is_empty(): _scenery_paths[offset] = 1
 		if guard_safe: _guard_safe[offset] = 1
 		var parent := previous[offset]
 		if config.naval and parent >= 0:
@@ -2422,6 +2577,9 @@ func _protect_route(offset: int, previous: PackedInt32Array, guard_safe := false
 			if x != parent_x and y != parent_y:
 				_corridor[y * _map.width + parent_x] = 1
 				_corridor[parent_y * _map.width + x] = 1
+				if not _scenery_paths.is_empty():
+					_scenery_paths[y * _map.width + parent_x] = 1
+					_scenery_paths[parent_y * _map.width + x] = 1
 				if guard_safe:
 					_guard_safe[y * _map.width + parent_x] = 1
 					_guard_safe[parent_y * _map.width + x] = 1

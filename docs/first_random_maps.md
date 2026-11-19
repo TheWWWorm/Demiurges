@@ -116,7 +116,8 @@ Woodland thins into brush and meadows at its edges. Hills rise above low
 riverbanks and beaches, and buildings sit on terraces cut into the ground.
 Shops gather along the same approach. Root and lotus production favor woods
 and riverbanks respectively, while gems and stone favor ridges. Roads and
-footpaths follow the terrain. **Dense** adds more cover to the landscape.
+footpaths follow the terrain. Normal scenery uses native trees and rocks
+in groves, on slopes, and along road verges. **Dense** adds heavier cover.
 
 On a fresh map, every reachable land tile has a pickup, usable site, or
 encounter within one day of travel for the slowest starting hero. The check
@@ -163,6 +164,38 @@ economy, travel routes, and optional discoveries. Recruitment scrolls remain
 part of each player's opening progression. Compact maps may have no suitable
 site for a frontier fort.
 
+### Supplies, terrain, and decoration
+
+In the broader placement survey, 52 of 65 resource piles in the stock single
+missions and 239 of 304 in multiplayer sat within four tiles of a neutral
+creature. About three in ten piles had another pile within four tiles. Version 8
+groups frontier supplies in pairs or single caches by a nearby reward guard
+where the approaches fit. Each homeland still gets its own opening supplies.
+
+All 17 stock single and multiplayer maps had more dry than wet boundary
+samples. Median wet-edge coverage was 19% for single missions and 9% for
+multiplayer. Version 8 gives overland Frontier a seed-dependent bay and inland
+pools, Lake country a group of distinct basins, and Crossroads a dry central
+junction with water between some of the approaches. Island chains and other
+naval recipes use the connected water routes.
+
+Stock decoration also clusters. In single and multiplayer maps respectively,
+75% and 78% of tree objects had another tree group within two tiles. About
+48% and 38% of tree objects on maps with roads stood within three tiles of a
+road. Rocks clustered even more tightly. The generator now adds biome-matched
+trees to broader groves and fills some of the road verges with trees and rocks.
+It preserves the roads, actual paths to objectives, and harbor approaches.
+
+The same 22 preset runs measured the effect of the second pass. Overland
+boundary figures use the ten runs from the five overland presets.
+
+| Measure | Generated v7 | Generated v8 |
+| --- | ---: | ---: |
+| Resource piles within four tiles of a neutral creature | 16% | 32% |
+| Median wet-edge coverage on overland presets | 100% | 15% |
+| Median scenery objects per 100 map cells | 8.5 | 21.7 |
+| Tree objects within three tiles of a road | 18% | 32% |
+
 ## World configuration
 
 These are the keys accepted by `ELFirstRandomMap.generate(profile, options)`.
@@ -170,7 +203,7 @@ Omitted keys use the defaults below.
 
 | Key | Default | Supported values and effect |
 | --- | --- | --- |
-| `version` | `7` | `7` adds roadside forts, roads to services, and guarded frontier discoveries to the version 6 terrain. Versions 1–6 reproduce their original worlds. Version 1 uses its own schema. |
+| `version` | `8` | `8` adds open-edged overland shapes, frontier supply groups, and thicker scenery. Versions 1–7 reproduce their original worlds. Version 1 uses its own schema. |
 | `seed` | `"212"` | A string of 1–64 characters, not blank-only, without control characters. Whitespace in a valid seed is significant. |
 | `size` | `96` | `64`, `96`, `128`, `160` tiles per side. |
 | `players` | `4` | `2`, `3`, `4`: one human and the remaining seats controlled by AI. |
@@ -181,7 +214,7 @@ Omitted keys use the defaults below.
 | `guards` | `"normal"` | `"none"`, `"normal"`, `"strong"`: neutral guard presence and strength. |
 | `faction` | `"Green"` | `"Green"`, `"Blue"`, `"Red"`, `"Black"`: Vitals, Kinets, Chaots, Synthets. The human is player 1. |
 | `roads` | `true` | Boolean; generated road ribbons and their normal land movement bonuses. |
-| `scenery` | `1` | `0` skips decorative terrain props, `1` adds groves and rock formations, and `2` fills more of the available land. |
+| `scenery` | `1` | `0` skips decorative terrain props, `1` adds groves, rock formations and roadside scenery, and `2` fills more of the available land. |
 | `castle_health` | `30` | `20`, `30`, `60`: starting and maximum castle energy for every player. |
 | `naval` | `false` | Boolean; enable navigable seas and explicit harbors. |
 | `water` | `"normal"` | `"low"`, `"normal"`, `"high"`: relative water coverage. |
@@ -199,12 +232,12 @@ monsters** option also keeps its normal rules.
 
 ## Share and remember a setup
 
-**Copy setup** creates an `EL1R7:` code for a new world in the code field and clipboard. Paste a
+**Copy setup** creates an `EL1R8:` code for a new world in the code field and clipboard. Paste a
 complete code and press **Load setup** to restore its seed and world settings.
 Choose difficulty and AI separately. The code is a prefix followed by Base64
 encoded UTF-8 JSON; it is a recipe, not a map archive.
 
-`EL1R1:` through `EL1R6:` codes reproduce their original worlds when loaded and played
+`EL1R1:` through `EL1R7:` codes reproduce their original worlds when loaded and played
 without editing. Changing a world setting or choosing a new preset switches to
 the current generator.
 
@@ -218,7 +251,7 @@ modifies the installed original game's files.
 ```gdscript
 var generator := ELFirstRandomMap.new()
 var map := generator.generate(profile, {
-    "version": 7,
+    "version": 8,
     "seed": "island-expedition",
     "size": 128,
     "players": 4,

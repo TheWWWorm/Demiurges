@@ -1,7 +1,7 @@
 class_name ELFirstRandomMap
 extends RefCounted
 ## Public random-map API. Each recipe selects its original generation rules.
-const VERSION := ELFirstRandomMapV2.PLACEMENT_VERSION
+const VERSION := ELFirstRandomMapV2.FRONTIERS_VERSION
 const PREFIX := "el1_random_v"
 const COLORS := ["Green", "Blue", "Red", "Black"]
 const SIZES := [64, 96, 128, 160]

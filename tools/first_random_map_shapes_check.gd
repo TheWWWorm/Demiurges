@@ -46,7 +46,7 @@ func check(ok: bool, what: String) -> void:
 func _configuration() -> void:
 	label = "shape settings"
 	var defaults := ELFirstRandomMap.defaults()
-	check(defaults.version == ELFirstRandomMapV2.PLACEMENT_VERSION and defaults.has("naval") and defaults.has("water") and defaults.has("coast"), "new recipes use stock-inspired placement and keep the naval settings schema")
+	check(defaults.version == ELFirstRandomMapV2.FRONTIERS_VERSION and defaults.has("naval") and defaults.has("water") and defaults.has("coast"), "new recipes use the open-edged land shapes and keep the naval settings schema")
 	check(ELFirstRandomMap.normalize(JSON.parse_string(JSON.stringify(defaults))) == defaults, "settings survive JSON numeric conversion")
 	for options: Dictionary in [{"naval": 1}, {"naval": "true"}, {"water": true}, {"water": "huge"}, {"coast": []}, {"coast": "straight"}, {"version": 1, "naval": true}]:
 		check(ELFirstRandomMap.normalize(options).is_empty(), "malformed or wrong-version settings are rejected: " + JSON.stringify(options))
@@ -199,6 +199,16 @@ func _exploration() -> void:
 func _geometry(map: ELAdventureMap, config: Dictionary) -> void:
 	check(map.width == config.size and map.height == config.size and map.players.size() == config.players, "size and player count match the recipe")
 	check(ELFirstRandomMap.configuration(map) == config, "the complete canonical recipe is attached")
+	if config.version >= ELFirstRandomMapV2.FRONTIERS_VERSION and not config.naval and config.layout in ["frontier", "crossroads", "lakes"]:
+		var wet_edges := 0
+		for i in map.width + 1:
+			for point: Vector2i in [Vector2i(i, 0), Vector2i(i, map.height), Vector2i(0, i), Vector2i(map.width, i)]:
+				if map.tile(point.x, point.y) in ELTileSet.WATER_KINDS: wet_edges += 1
+		check(wet_edges < (map.width + 1) * 2, "the land layout keeps most of its boundary dry")
+		if config.layout == "crossroads":
+			var center := Vector2i(map.width, map.height) / 2
+			check(map.tile(center.x, center.y) not in ELTileSet.WATER_KINDS, "the central crossroads is on dry land")
+			check(map.terrain.count(16) > map.width, "water still separates some of the outer approaches")
 	var state := ELAdventureSession.new()
 	if not state.start(map, 1, ELFirstRandomMap.seed_for_config(config)):
 		check(false, "the generated session starts: " + state.error)

@@ -5,9 +5,9 @@ extends AcceptDialog
 signal requested(configuration: Dictionary, difficulty: int, ai: Dictionary)
 
 const SETTINGS_PATH := "user://el1_random_map_setup.json"
-const CODE_PREFIX := "EL1R7:"
+const CODE_PREFIX := "EL1R8:"
 const LEGACY_CODE_PREFIX := "EL1R1:"
-const CODE_VERSIONS := {LEGACY_CODE_PREFIX: 1, "EL1R2:": 2, "EL1R3:": 3, "EL1R4:": 4, "EL1R5:": 5, "EL1R6:": 6, CODE_PREFIX: ELFirstRandomMap.VERSION}
+const CODE_VERSIONS := {LEGACY_CODE_PREFIX: 1, "EL1R2:": 2, "EL1R3:": 3, "EL1R4:": 4, "EL1R5:": 5, "EL1R6:": 6, "EL1R7:": 7, CODE_PREFIX: ELFirstRandomMap.VERSION}
 const MAX_CODE_LENGTH := 4096
 const FACTIONS := [["Green", "Vitals"], ["Blue", "Kinets"], ["Red", "Chaots"], ["Black", "Synthets"]]
 const TERRAIN_INK := {"Green": Color("546a3d"), "Blue": Color("a8ac9b"), "Red": Color("8f5a3d"), "Black": Color("69634b"), "Colorless": Color("8d8778")}
