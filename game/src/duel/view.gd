@@ -1056,7 +1056,7 @@ func _input(event: InputEvent) -> void:
 					if _human_turn() or ((_campaign_battle() != null or duel_match != null or combat_tutorial != null or network_duel != null or _expedition_battle != null or _arena_battle != null or _in_puzzle()) and duel.phase == ELDuel.Phase.FINISHED): _end_phase()
 				"attack_all": _attack_all()
 				"auto_combat": _toggle_auto()
-				"skip": _skip_battle_presentation()
+				"skip": _skip_battle_step()
 				"battle_save": _save_duel()
 				"battle_load": _load_duel()
 				"battle_remake_menu":
@@ -1858,7 +1858,10 @@ func _end_phase() -> void:
 		if ending_over(): _show_network_round()
 		return
 	if _campaign_battle() != null and duel.phase == ELDuel.Phase.FINISHED:
-		_return_from_encounter()
+		# A fallen hero's death is always shown; only the winner's victory
+		# clip may be cut short (_skip_victory).
+		if ending_over(): _return_from_encounter()
+		else: _skip_victory()
 		return
 	if duel_match != null and duel.phase == ELDuel.Phase.FINISHED:
 		_continue_match()
@@ -1888,20 +1891,48 @@ func _end_phase() -> void:
 		declared_attackers = committing
 		own_attack_pending = own_attack_side
 
-## Space skips the presentation of the phase in the original combat controls.
-func _skip_battle_presentation() -> void:
+## Space in battle (held, it repeats): one step of the presentation at a
+## time. During a fight it ends the exchange being shown: that attacker's
+## blows land at once and it walks home while the next attacker sets off;
+## once only the walk home is left, everyone is home at once. Otherwise the
+## casts and walks being shown end. Sounds are never cut: attack hits,
+## deaths and spell sounds still play (a spell's held sounds start at once).
+## The death of a hero is never skipped; the winner's victory clip may be.
+func _skip_battle_step() -> void:
+	if not ending.is_empty() or not _ending_waiting.is_empty():
+		_skip_victory()
+		return
+	if _melee_busy():
+		if not melee.skip_exchange(): melee.finish()
+		return
+	_skip_battle_presentation(true)
+
+## The end of a won battle: Space or the end button cut the winner's victory
+## clip short, but neither a fallen hero's death nor the victory fanfare.
+func _skip_victory() -> void:
+	if ending.is_empty() or String(ending.stage) != "victory": return
+	ending.length = minf(float(ending.length), maxf(float(ending.clock), float(ending.get("fanfare", 0.0))))
+
+## Ends the presentation being shown at once (checks and loads use it for
+## the whole queue). With `keep_sounds` (Space) it stops at a fight, which
+## Space then takes one exchange at a time, and the skipped sounds still play.
+func _skip_battle_presentation(keep_sounds := false) -> void:
 	if (_melee_busy() or _cast_busy() or not _arrivals.is_empty() or not _effect_cast.is_empty()
 		or not _battle_cues.is_empty() or (auto_camera != null and auto_camera.active())
 		or (is_instance_valid(melee) and melee.has_moves())):
 		_skipping_presentation = true
-		# The skipped events' sounds are dropped, not left to play long after
-		# them (player report #141).
+		# Without `keep_sounds` the skipped events' sounds are dropped, not
+		# left to play long after them (player report #141); with it the
+		# sounds held for a gesture start now instead.
 		var audio_on := is_instance_valid(battle_audio)
 		if audio_on:
-			battle_audio.cut()
-			battle_audio.silenced = true
+			if keep_sounds: battle_audio.release_held()
+			else:
+				battle_audio.cut()
+				battle_audio.silenced = true
 		var remaining := _cast_queue.size() + 1
 		for _step in remaining:
+			if keep_sounds and _melee_busy(): break
 			if _melee_busy(): melee.finish()
 			if not _effect_cast.is_empty(): _start_cast_effects()
 			_step_arrivals(true)
@@ -1910,19 +1941,20 @@ func _skip_battle_presentation() -> void:
 			_step_cast_queue()
 		_finish_battle_cues()
 		_step_front_line()
-		if is_instance_valid(melee): melee.finish_moves()
+		if is_instance_valid(melee) and not _melee_busy(): melee.finish_moves()
 		if camera != null: _update_camera()
 		for id: int in models.keys():
 			var clip: String = models[id].clip
 			if clip in ["uattack", "uhit", "utap", "uuntap", "usummon", "uenchantment", "uinstant"]:
 				_animation_done(clip, id)
-		if audio_on:
+		if audio_on and not keep_sounds:
 			battle_audio.silenced = false
 			battle_audio.cut()
 		_skipping_presentation = false
 		_sync_shown()
 		_refresh()
-	if effects != null: effects.finish_transients()
+	# A fallen hero's death effect plays out.
+	if effects != null and ending.is_empty(): effects.finish_transients()
 
 ## The fight of the player's committed attack begins (its first blow is about
 ## to be shown): the declaration shot at the declared attackers still on the
@@ -2184,11 +2216,23 @@ var _ending_waiting: Dictionary = {}
 
 ## The previous action is still on screen: a cast's gesture and cue, a
 ## summon waiting for its effect, or a summoned creature's entrance clip.
-func _presenting() -> bool:
+func _presenting(kind := "") -> bool:
 	if _skipping_presentation: return false
 	if elapsed < _cast_until or not _arrivals.is_empty(): return true
 	for id: int in models:
 		if id >= 2 and is_instance_valid(models[id]) and models[id].visible and models[id].clip == "usummon": return true
+	# The next phase also waits for figures lying down or getting up (#237:
+	# a creature home from a fight fell asleep and woke in the same moment).
+	if kind == "phase" and figures_turning(): return true
+	return false
+
+## A creature is playing its tap or untap clip (lying down to rest or
+## getting up).
+func figures_turning() -> bool:
+	for id: int in models:
+		if id < 2 or not is_instance_valid(models[id]) or not models[id].visible: continue
+		var model: ELModel = models[id]
+		if model.playing and model.clip in ["utap", "uuntap"] and not model.get_meta("dying", false): return true
 	return false
 
 ## A cast is still being shown, or casts wait for their turn.
@@ -2265,7 +2309,7 @@ func _on_combat_finished() -> void:
 func _hold_cast(data: Dictionary) -> bool:
 	if _cast_dispatching or (is_instance_valid(melee) and melee.dispatching()): return false
 	var combat_closed := is_instance_valid(melee) and melee.blocks_cast_queue()
-	if not combat_closed and _cast_queue.is_empty() and (_melee_busy() or not data.get("kind") in SEQUENCED_KINDS or not _presenting()): return false
+	if not combat_closed and _cast_queue.is_empty() and (_melee_busy() or not data.get("kind") in SEQUENCED_KINDS or not _presenting(String(data.get("kind", "")))): return false
 	_cast_queue.append(data)
 	return true
 
@@ -2278,7 +2322,7 @@ func _step_cast_queue() -> void:
 		var next: Dictionary = _cast_queue[0]
 		# A summoned creature appears (and plays its entrance) before the
 		# next action is shown.
-		if next.get("kind") in SEQUENCED_KINDS and _presenting(): break
+		if next.get("kind") in SEQUENCED_KINDS and _presenting(String(next.get("kind", ""))): break
 		_cast_queue.pop_front()
 		_cast_dispatching = true
 		_event(next)
@@ -2542,10 +2586,12 @@ func _event(data: Dictionary) -> void:
 		"cast":
 			var summon := duel.is_summon(data.card)
 			var animation := _cast_clip(int(data.side), String(data.card))
-			# Options "Hide casting animations" skips the hero's gesture only.
-			if not bool(settings.values.get("hide_cast", false)) and not animation.is_empty(): models[data.side].play(animation)
-			# The caster's voice starts with its gesture.
-			battle_audio.unit(models[data.side], (animation if not animation.is_empty() else _cast_gesture(String(data.card))).trim_prefix("u"))
+			# Options "Hide casting animations" skips the hero's gesture and
+			# the voice that goes with it; the spell's own sounds remain.
+			if not bool(settings.values.get("hide_cast", false)):
+				if not animation.is_empty(): models[data.side].play(animation)
+				# The caster's voice starts with its gesture.
+				battle_audio.unit(models[data.side], (animation if not animation.is_empty() else _cast_gesture(String(data.card))).trim_prefix("u"))
 			# The spell's own sounds wait, like its effects, for the gesture's release.
 			battle_audio.hold(_cast_release(int(data.side), String(data.card)))
 			# Original EL1 Fury registers GreenDamage only after it counts at
@@ -4311,7 +4357,9 @@ func _step_ending(delta: float) -> void:
 			var model: ELModel = models[winner]
 			# The fanfare of the winner's colour, for a hero figure (he*) only.
 			if String(model.template).begins_with("he"):
+				var fanfare := ELAudio.sound(profile, "buttons/%svictory.wav" % String(duel.heroes[winner].get("faction", "Red")))
 				battle_audio.play("buttons/%svictory.wav" % String(duel.heroes[winner].get("faction", "Red")))
+				if fanfare != null: ending.fanfare = fanfare.get_length()
 			# The winner camera follows the player's own win only (both originals).
 			if _auto_camera_on() and _local_side(winner): auto_camera.victory(winner, model.position)
 			var clip := victory_clip(model)
@@ -4781,6 +4829,15 @@ func _animation_done(clip: String, id: int) -> void:
 	if resting and clip.is_empty() and model.has_clip("utap") and model.has_clip("ctapidle") and model.base_clip() != "ctapidle":
 		if model.play("utap"):
 			battle_audio.unit(model, "tap")
+			return
+	# A figure that rose (or was put to rest) while it was lying down (or
+	# getting up) turns back with its own clip instead of jumping into the
+	# other idle (a skip settles it at once).
+	var asleep := resting or bool(c.get("sick", false))
+	if not _skipping_presentation and ((clip == "utap" and not asleep) or (clip == "uuntap" and asleep)):
+		var turn := "uuntap" if clip == "utap" else "utap"
+		if model.has_clip(turn) and model.play(turn):
+			battle_audio.unit(model, turn.trim_prefix("u"))
 			return
 	_play_figure_idle(model, c, resting)
 
