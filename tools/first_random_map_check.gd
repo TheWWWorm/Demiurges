@@ -91,9 +91,26 @@ func _placement_approaches(director: ELAdventureDirector, report: Dictionary) ->
 
 	var forts: int = report.counts.get("forts", 0)
 	var first := Vector2i(report.starts[0].x, report.starts[0].y)
+	var gates: Dictionary = report.get("gated_prizes", {})
+	check(gates.size() >= 2, "multiple optional prizes have a real guarded entrance")
+	for id: int in gates:
+		var site := state.object(id)
+		var zone: Array = director.interception.zones.get(gates[id], {}).get("cells", [])
+		var body := Rect2i(Vector2i(site.x, site.y), grid.footprints[id].size)
+		var ring := body.grow(1)
+		var stands := 0
+		var guarded := 0
+		for y in range(ring.position.y, ring.end.y):
+			for x in range(ring.position.x, ring.end.x):
+				var at := Vector2i(x, y)
+				if body.has_point(at) or grid.passability(at) < 1 or (grid.naval and not ELFirstNaval.interaction_mode(grid, at, site)): continue
+				stands += 1
+				if at in zone: guarded += 1
+		var path := grid.approach(first, site)
+		check(stands > 0 and stands == guarded and not path.is_empty() and path[-1] in zone,
+			"every legal approach to the prize enters its guard's zone")
 	check(forts > 0, "the travel network has at least one fort")
 	var supplies: Dictionary = report.get("guarded_supplies", {})
-	check(not supplies.is_empty(), "the frontier has encounter-side supplies")
 	var supply_counts := {}
 	for id: int in supplies:
 		var cache := state.object(id)
@@ -102,7 +119,7 @@ func _placement_approaches(director: ELAdventureDirector, report: Dictionary) ->
 		var count := int(supply_counts.get(guard.uid, 0)) + 1
 		supply_counts[guard.uid] = count
 		check(cache.group == "resource_cuts" and guard.type == "monster" and maxi(absi(gap.x), absi(gap.y)) <= 4
-			and count <= 2 and not grid.approach(first, cache).is_empty(), "supplies form small, reachable groups beside reward guards")
+			and count == 1 and not grid.approach(first, cache).is_empty(), "a reward guard has at most one reachable frontier cache")
 	for item: Dictionary in state.objects.values():
 		if item.group != "forts": continue
 		var area := Rect2i(Vector2i(item.x, item.y), grid.footprints[item.uid].size).grow(4)

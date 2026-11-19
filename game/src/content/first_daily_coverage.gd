@@ -8,7 +8,7 @@ var budget: int
 var costs := PackedInt32Array()
 var distance := PackedInt32Array()
 
-func build(board: ELAdventureMap, navigation: ELAdventureGrid, objects: Dictionary, reached: PackedByteArray, day_ap: int) -> void:
+func build(board: ELAdventureMap, navigation: ELAdventureGrid, objects: Dictionary, reached: PackedByteArray, day_ap: int, include_waypoints := false) -> void:
 	map = board
 	grid = navigation
 	budget = day_ap
@@ -20,8 +20,10 @@ func build(board: ELAdventureMap, navigation: ELAdventureGrid, objects: Dictiona
 		if reached[offset] == 0 or (grid.naval and grid.naval_water[offset] != 0): continue
 		costs[offset] = grid.passability(Vector2i(offset % map.width, offset / map.width))
 	var sources := PackedInt32Array()
+	var roles := ["buildings", "mines", "mana_nodes", "laboratories", "factories", "resource_cuts", "artefacts", "np_heroes"]
+	if include_waypoints: roles.append_array(["global_spells", "forts"])
 	for item: Dictionary in objects.values():
-		if item.group in ["buildings", "mines", "mana_nodes", "laboratories", "factories", "resource_cuts", "artefacts", "np_heroes"] or ELAdditionalBuildings.supported(item):
+		if item.group in roles or ELAdditionalBuildings.supported(item):
 			_add_sources(item, grid.footprints.get(item.uid, {}).get("size", Vector2i.ONE), sources)
 	_spread(sources)
 

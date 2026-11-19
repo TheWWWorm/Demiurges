@@ -46,7 +46,7 @@ func check(ok: bool, what: String) -> void:
 func _configuration() -> void:
 	label = "shape settings"
 	var defaults := ELFirstRandomMap.defaults()
-	check(defaults.version == ELFirstRandomMapV2.FRONTIERS_VERSION and defaults.has("naval") and defaults.has("water") and defaults.has("coast"), "new recipes use the open-edged land shapes and keep the naval settings schema")
+	check(defaults.version == ELFirstRandomMapV2.GUARDED_PRIZES_VERSION and defaults.has("naval") and defaults.has("water") and defaults.has("coast"), "new recipes use guarded prizes and keep the naval settings schema")
 	check(ELFirstRandomMap.normalize(JSON.parse_string(JSON.stringify(defaults))) == defaults, "settings survive JSON numeric conversion")
 	for options: Dictionary in [{"naval": 1}, {"naval": "true"}, {"water": true}, {"water": "huge"}, {"coast": []}, {"coast": "straight"}, {"version": 1, "naval": true}]:
 		check(ELFirstRandomMap.normalize(options).is_empty(), "malformed or wrong-version settings are rejected: " + JSON.stringify(options))
@@ -233,17 +233,22 @@ func _geometry(map: ELAdventureMap, config: Dictionary) -> void:
 	var first := state.object(state.main_hero)
 	var from := Vector2i(int(first.x), int(first.y))
 	var reachable := _flood(map, modes, from, links, bool(config.naval))
+	if config.version >= ELFirstRandomMapV2.GUARDED_PRIZES_VERSION:
+		var passable := modes.count(1) + (modes.count(2) if config.naval else 0)
+		check(reachable.count(1) == passable and int(map.get_meta("random_map_report").connected_passable_cells) == passable,
+			"all passable tiles connect to the travel network after occupants clear")
 	if config.version >= ELFirstRandomMapV2.RELIEF_VERSION:
-		var day := int(map.get_meta("random_map_report").daily_travel_ap)
+		var travel: Dictionary = map.get_meta("random_map_report")
+		var budget := int(travel.get("wilderness_travel_ap", travel.daily_travel_ap))
 		var coverage := DailyCoverage.new()
 		var residents := {}
 		for item: Dictionary in state.objects.values():
 			if item.get("alive", false) and item.get("visible", false) and item.get("placed", true): residents[item.uid] = item
-		coverage.build(map, grid, residents, reachable, day)
+		coverage.build(map, grid, residents, reachable, budget, config.version >= ELFirstRandomMapV2.GUARDED_PRIZES_VERSION)
 		var missed := 0
 		for index in coverage.costs.size():
-			if coverage.costs[index] > 0 and coverage.distance[index] > day: missed += 1
-		check(missed == 0, "final runtime grid has an encounter or interaction within one travel day on each reachable land tile")
+			if coverage.costs[index] > 0 and coverage.distance[index] > budget: missed += 1
+		check(missed == 0, "final runtime grid has an encounter or interaction within the travel budget on each reachable land tile")
 	var unreachable: Array[String] = []
 	for item: Dictionary in state.objects.values():
 		if item.group == "terrain_objects" or not item.get("visible", true): continue
@@ -264,7 +269,8 @@ func _geometry(map: ELAdventureMap, config: Dictionary) -> void:
 	if config.version >= ELFirstRandomMapV2.WILDERNESS_VERSION:
 		var field: PackedByteArray = map.get_meta("wilderness_detail", PackedByteArray())
 		check(field.size() == (map.width + 1) * (map.height + 1) * 3, "continuous ground detail covers the entire map")
-		check(int(generation.get("wilderness_distance", 0x7fff)) < 22, "reachable wilderness has nearby activities across the playable land")
+		var limit := 34 if config.version >= ELFirstRandomMapV2.GUARDED_PRIZES_VERSION else 22
+		check(int(generation.get("wilderness_distance", 0x7fff)) < limit, "reachable wilderness has nearby activities across the playable land")
 		for point: Vector2i in director.interception.cells: safe_modes[point.y * map.width + point.x] = 0
 	var balances := {}
 	var wallet_fair := true
@@ -329,6 +335,10 @@ func _modes(map: ELAdventureMap, grid: ELAdventureGrid) -> PackedByteArray:
 		for x in map.width:
 			var index := y * map.width + x
 			if grid.blockers[index] > 0: continue
+			if not grid.naval and int(map.get_meta("random_map").version) >= ELFirstRandomMapV2.GUARDED_PRIZES_VERSION:
+				var corners: Array[int] = [map.tile(x,y), map.tile(x+1,y), map.tile(x+1,y+1), map.tile(x,y+1)]
+				result[index] = int(ELAdventureGrid.strategic_cost(map.profile.terrain_tiles, corners, map.roads[index], false) > 0)
+				continue
 			var wet := false
 			var valid := true
 			for dy in 2:

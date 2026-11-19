@@ -91,9 +91,11 @@ Main roads link markets, recruitment scrolls, and harbors. Neutral forts stand
 beside these routes where the terrain leaves room for an approach and a way
 past. Heroes can garrison them using the usual fort controls. Mines follow
 their terrain and many caches, artifacts, and optional scrolls sit off the road.
-When guards are enabled, valuable frontier discoveries favor positions with a
-creature close enough to threaten a real approach. The economy and recruitment
-paths leave room to expand without starting a fight.
+When guards are enabled, optional frontier prizes favor alcoves where a
+creature can cover every approach. Shorelines, trees, and rocks help define the
+entrance. Crowded areas and content without suitable blockers can get a prize
+with an alternate approach. The economy and recruitment paths leave room to
+expand without starting a fight.
 
 Starting opportunities are comparable, while coastlines, approaches and faction
 strengths can differ. The generator validates actual object footprints and
@@ -119,11 +121,11 @@ and riverbanks respectively, while gems and stone favor ridges. Roads and
 footpaths follow the terrain. Normal scenery uses native trees and rocks
 in groves, on slopes, and along road verges. **Dense** adds heavier cover.
 
-On a fresh map, every reachable land tile has a pickup, usable site, or
-encounter within one day of travel for the slowest starting hero. The check
-uses actual movement costs, shorelines, and final scenery. Quiet stretches
-gain small resource caches where needed. Monster searches count creatures
-out in the world separately from occupied lairs.
+On a fresh version 9 map, every reachable land tile has a pickup, usable site,
+or encounter within about a day and a half of travel for the slowest starting
+hero. The check uses actual movement costs, shorelines, and final scenery.
+Quiet stretches gain small resource caches where needed. Monster searches
+count creatures out in the world separately from occupied lairs.
 
 Each homeland has its own recruitment scrolls and access to its starting
 economy. With guards enabled, a nearby optional encounter is drawn from a
@@ -255,6 +257,36 @@ narrow passes, and prizes with guarded entrances. Generated v8 mostly places
 creatures near side objectives and leaves several ways to approach. The opening
 economy and recruitment routes are especially well protected from interception.
 
+### Guarded prizes and room between sites
+
+Version 9 places fewer frontier mines, service stops and supply piles, and
+leaves more space between optional sites. Each homeland has one larger
+starting cache and its complete starting economy. Frontier supplies are more
+occasional, and one reward guard can have a single nearby cache. The scenery
+setting still controls trees, rock formations, and other decoration.
+
+Across the same 22 matched maps, the median count of interactable sites fell
+from 155.5 to 97, excluding starting heroes and castles. The typical
+interactable site had three other sites within six tiles in version 8 and
+one in version 9. In the actual movement grid, 149 of 151 optional scrolls
+and artifacts had every usable approach covered by their assigned field
+creature. Version 8 had no such prizes in this sample. Recruitment scrolls
+remain part of the starting progression.
+
+### Whole-map access
+
+Version 9 checks every passable tile after placing scenery. It opens short
+connections around buildings and through decoration, and adds a legal
+landing when a dry part of a naval map lacks a route. A shore at a guarded
+prize has a clearing around its approach so the route is visible at normal
+camera angles. Water on overland maps and the occupied footprints of static
+objects are outside the walkable grid.
+
+All 192,806 passable tiles across the 22 final maps belonged to their map's
+travel network after creatures and heroes were cleared for the test. All 756
+opening economy and recruitment targets also had a land route from their
+own starting hero with every creature zone still active.
+
 ## World configuration
 
 These are the keys accepted by `ELFirstRandomMap.generate(profile, options)`.
@@ -262,7 +294,7 @@ Omitted keys use the defaults below.
 
 | Key | Default | Supported values and effect |
 | --- | --- | --- |
-| `version` | `8` | `8` adds open-edged overland shapes, frontier supply groups, and thicker scenery. Versions 1–7 reproduce their original worlds. Version 1 uses its own schema. |
+| `version` | `9` | `9` adds guarded prize entrances and fewer, more widely spaced interactable sites. Versions 1–8 reproduce their original worlds. Version 1 uses its own schema. |
 | `seed` | `"212"` | A string of 1–64 characters, not blank-only, without control characters. Whitespace in a valid seed is significant. |
 | `size` | `96` | `64`, `96`, `128`, `160` tiles per side. |
 | `players` | `4` | `2`, `3`, `4`: one human and the remaining seats controlled by AI. |
@@ -291,12 +323,12 @@ monsters** option also keeps its normal rules.
 
 ## Share and remember a setup
 
-**Copy setup** creates an `EL1R8:` code for a new world in the code field and clipboard. Paste a
+**Copy setup** creates an `EL1R9:` code for a new world in the code field and clipboard. Paste a
 complete code and press **Load setup** to restore its seed and world settings.
 Choose difficulty and AI separately. The code is a prefix followed by Base64
 encoded UTF-8 JSON; it is a recipe, not a map archive.
 
-`EL1R1:` through `EL1R7:` codes reproduce their original worlds when loaded and played
+`EL1R1:` through `EL1R8:` codes reproduce their original worlds when loaded and played
 without editing. Changing a world setting or choosing a new preset switches to
 the current generator.
 
@@ -310,7 +342,7 @@ modifies the installed original game's files.
 ```gdscript
 var generator := ELFirstRandomMap.new()
 var map := generator.generate(profile, {
-    "version": 8,
+    "version": 9,
     "seed": "island-expedition",
     "size": 128,
     "players": 4,
