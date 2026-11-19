@@ -46,7 +46,7 @@ func check(ok: bool, what: String) -> void:
 func _configuration() -> void:
 	label = "shape settings"
 	var defaults := ELFirstRandomMap.defaults()
-	check(defaults.version == ELFirstRandomMapV2.GUARD_POSTS_VERSION and defaults.has("naval") and defaults.has("water") and defaults.has("coast"), "new recipes use guard posts and keep the naval settings schema")
+	check(defaults.version == ELFirstRandomMapV2.LIVING_WILDS_VERSION and defaults.has("naval") and defaults.has("water") and defaults.has("coast"), "new recipes use guard posts and keep the naval settings schema")
 	check(ELFirstRandomMap.normalize(JSON.parse_string(JSON.stringify(defaults))) == defaults, "settings survive JSON numeric conversion")
 	for options: Dictionary in [{"naval": 1}, {"naval": "true"}, {"water": true}, {"water": "huge"}, {"coast": []}, {"coast": "straight"}, {"version": 1, "naval": true}]:
 		check(ELFirstRandomMap.normalize(options).is_empty(), "malformed or wrong-version settings are rejected: " + JSON.stringify(options))
@@ -358,8 +358,13 @@ func _field_guards(director: ELAdventureDirector, generation: Dictionary, modes:
 		var safe := _flood(map, open, ends[0], links, grid.naval, 1, bounds)
 		check(walked[index] != 0 and safe[index] == 0, "a passage has two connected sides and crossing the gap enters the creature's zone")
 		posts[id] = true
+	# Version 12 roaming creatures stand in the open, clear of the map edge.
+	for id: int in generation.get("roaming_creatures", []):
+		var origin: Vector2i = guards[id].origin
+		check(origin.x >= 4 and origin.y >= 4 and origin.x < map.width - 4 and origin.y < map.height - 4, "a roaming creature stands clear of the map edge")
+		posts[id] = true
 	check(posts.size() == guards.size() and guards.keys().all(func(id: int) -> bool: return posts.has(id)),
-		"every field creature controls a site approach or a navigable passage")
+		"every field creature controls a site approach or a navigable passage, or roams the wilderness")
 
 func _modes(map: ELAdventureMap, grid: ELAdventureGrid) -> PackedByteArray:
 	var result := PackedByteArray()

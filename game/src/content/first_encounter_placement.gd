@@ -79,6 +79,18 @@ func crossing(at: Vector2i) -> Array[Vector2i]:
 		ends.append(entrance)
 	return []
 
+## A roaming creature's post: open land away from the map edge, outside
+## every protected opening route and its interception zone, off harbor
+## links, and with a local detour around its occupied tile. Unlike guard
+## posts it may stand on tracks and roads, as stock creatures often do.
+func field_cell(at: Vector2i, spaced: PackedByteArray, margin: int) -> bool:
+	if at.x < margin or at.y < margin or at.x >= grid.map.width - margin or at.y >= grid.map.height - margin: return false
+	if not _land(at) or spaced[_index(at)] != 0 or protected[_index(at)] != 0: return false
+	for delta: Vector2i in ELInterception.DIRECTIONS:
+		var near := at + delta
+		if not grid.contains(near) or protected[_index(near)] != 0 or grid.naval_links.has(_index(near)): return false
+	return _body_leaves_route(at)
+
 func _wall(at: Vector2i, direction: Vector2i) -> bool:
 	for distance: int in [1, 2]:
 		var point := at + direction * distance

@@ -287,6 +287,26 @@ its interception zone. The generator checks those positions on the finished
 movement grid, including scenery and coastal obstacles. Optional level-one
 fights take place inside the homelands' lairs.
 
+Version 12 adds roaming creatures to the finished world. They gather on
+roadsides, clearings, ridges, and shores away from the map edge, and they
+toughen with walking distance from the nearest castle: level one just outside
+a homeland, up to level four on remote ground and outlying islands. Prize
+guards follow the same idea, one step gentler near a castle and one step
+sterner far away. **Strong** guards are one level higher and stand closer
+together. Opening economy, recruitment, and harbor routes stay clear of
+every interception zone. Across ten seeds of each of the 11 presets the
+median is about nine creatures per thousand passable tiles, against two to
+five in version 11. Stock missions have about 22.
+
+Climates in version 12 meet along warped, irregular borders instead of
+straight lines between castles, while each homeland keeps its own ground.
+A central or outlying reward island takes a single climate. Roads leave out
+the corner cell where a route turns diagonally, so the track runs diagonally
+instead of climbing a staircase. Large rocks and mesas keep clear of every
+castle. A lake that cannot be joined to the sea without crossing a homeland
+becomes meadow instead of preventing the world from generating, and the
+connecting waterways bend with the terrain.
+
 ### Whole-map access
 
 Since version 9, generation checks every passable tile after placing scenery. It opens short
@@ -308,7 +328,7 @@ Omitted keys use the defaults below.
 
 | Key | Default | Supported values and effect |
 | --- | --- | --- |
-| `version` | `11` | `11` stations neutral creatures at optional sites and narrow crossings. Versions 1–10 reproduce their original worlds. Version 1 uses its own schema. |
+| `version` | `12` | `12` adds roaming creatures scaled by distance, irregular climate borders, and smoother roads. Versions 1–11 reproduce their original worlds. Version 1 uses its own schema. |
 | `seed` | `"212"` | A string of 1–64 characters, not blank-only, without control characters. Whitespace in a valid seed is significant. |
 | `size` | `96` | `64`, `96`, `128`, `160` tiles per side. |
 | `players` | `4` | `2`, `3`, `4`: one human and the remaining seats controlled by AI. |
@@ -337,12 +357,12 @@ monsters** option also keeps its normal rules.
 
 ## Share and remember a setup
 
-**Copy setup** creates an `EL1R11:` code for a new world in the code field and clipboard. Paste a
+**Copy setup** creates an `EL1R12:` code for a new world in the code field and clipboard. Paste a
 complete code and press **Load setup** to restore its seed and world settings.
 Choose difficulty and AI separately. The code is a prefix followed by Base64
 encoded UTF-8 JSON; it is a recipe, not a map archive.
 
-`EL1R1:` through `EL1R8:` codes reproduce their original worlds when loaded and played
+`EL1R1:` through `EL1R11:` codes reproduce their original worlds when loaded and played
 without editing. Changing a world setting or choosing a new preset switches to
 the current generator.
 
@@ -356,7 +376,7 @@ modifies the installed original game's files.
 ```gdscript
 var generator := ELFirstRandomMap.new()
 var map := generator.generate(profile, {
-    "version": 11,
+    "version": 12,
     "seed": "island-expedition",
     "size": 128,
     "players": 4,

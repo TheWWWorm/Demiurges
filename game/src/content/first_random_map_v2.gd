@@ -18,6 +18,7 @@ const FRONTIERS_VERSION := 8
 const GUARDED_PRIZES_VERSION := 9
 const REGIONAL_LANDSCAPES_VERSION := 10
 const GUARD_POSTS_VERSION := 11
+const LIVING_WILDS_VERSION := 12
 const DailyCoverage := preload("first_daily_coverage.gd")
 const Reachability := preload("first_map_reachability.gd")
 const EncounterPlacement := preload("first_encounter_placement.gd")
@@ -97,6 +98,14 @@ var _home_lairs: Array[Dictionary] = []
 var _trunk_points: Array[Vector2i] = []
 var _guard_safe := PackedByteArray()
 var _scenery_paths := PackedByteArray()
+# Memo of the footprint-independent part of _expedition_trail: the depth of
+# each cell in the route tree and whether its walk to the root is clear.
+# Invalidated whenever occupancy or the route tree changes.
+var _trail_depth := PackedInt32Array()
+var _trail_clear := PackedByteArray()
+var _trail_stale := true
+# Harbor routes by destination cell; cleared whenever the route grid changes.
+var _port_routes := {}
 var _reward_guards := {}
 var _basins: Array[Transform2D] = []
 var _frontier_supplies: Array[Dictionary] = []
@@ -123,7 +132,7 @@ static func normalize(options: Dictionary, version := VERSION) -> Dictionary:
 		var value: Variant = options.get(key, result[key])
 		if typeof(value) not in [TYPE_INT, TYPE_FLOAT] or not is_finite(float(value)) or float(value) != floor(float(value)): return {}
 		result[key] = int(value)
-	if result.version < VERSION or result.version > GUARD_POSTS_VERSION or result.size not in SIZES or result.players < 2 or result.players > 4 or result.scenery < 0 or result.scenery > 2 or result.castle_health not in [20, 30, 60]: return {}
+	if result.version < VERSION or result.version > LIVING_WILDS_VERSION or result.size not in SIZES or result.players < 2 or result.players > 4 or result.scenery < 0 or result.scenery > 2 or result.castle_health not in [20, 30, 60]: return {}
 	for key: String in ["seed", "layout", "biome", "resources", "starting_resources", "guards", "faction", "water", "coast"]:
 		var value: Variant = options.get(key, result[key])
 		if value is not String: return {}
@@ -239,6 +248,8 @@ func generate(profile: ELProfile, options: Dictionary = {}) -> ELAdventureMap:
 	_map.colorless.resize(_map.roads.size())
 	_occupied.resize(_map.roads.size())
 	_occupied.fill(0)
+	_trail_stale = true
+	_port_routes.clear()
 	_reserved.resize(_map.roads.size())
 	_reserved.fill(0)
 	_corridor.resize(_map.roads.size())
@@ -756,7 +767,9 @@ func _ground(point: Vector2i, varied := false) -> int:
 	var color := str(config.biome)
 	if color == "mixed":
 		var sample := point
-		if config.version >= REGIONAL_LANDSCAPES_VERSION:
+		if config.version >= LIVING_WILDS_VERSION:
+			sample = _climate_sample(point)
+		elif config.version >= REGIONAL_LANDSCAPES_VERSION:
 			# Give neighboring climates broad tongues and smaller breaks
 			# without changing which player owns the corner of the map.
 			var drift := Vector2(_noise(point.x, point.y, 26.0, 2081), _noise(point.x, point.y, 26.0, 2347))
@@ -780,6 +793,24 @@ func _ground(point: Vector2i, varied := false) -> int:
 		return native if native in choices else int(choices[mini(form, choices.size() - 1)])
 	if varied and choices.size() > 1 and _noise(point.x, point.y, 8.0, 97) > 0.58: return int(choices[mini(1, choices.size() - 1)])
 	return int(choices[0])
+
+## Version 12 climate lookup. Equal-distance borders between castles are
+## straight lines, so the sample point is warped at three scales. The warp
+## fades out around each castle, which keeps the homeland's own climate. A
+## reward island far from every castle takes the single climate of its
+## center instead of a slice of each neighbor.
+func _climate_sample(point: Vector2i) -> Vector2i:
+	for island: Dictionary in _reward_centers:
+		var center: Vector2 = island.point
+		if Vector2(point).distance_to(center) < float(island.radius) * 1.9:
+			return Vector2i(center)
+	var nearest := 1.0e30
+	for anchor: Vector2i in _anchors: nearest = minf(nearest, Vector2(point).distance_to(Vector2(anchor)))
+	var freedom := smoothstep(_home_radius * 0.45, _home_radius * 0.95, nearest)
+	var warp := Vector2(_noise(point.x, point.y, 37.0, 2081) - 0.5, _noise(point.x, point.y, 37.0, 2347) - 0.5) * 46.0
+	warp += Vector2(_noise(point.x, point.y, 13.0, 2087) - 0.5, _noise(point.x, point.y, 13.0, 2351) - 0.5) * 18.0
+	warp += Vector2(_noise(point.x, point.y, 4.0, 2089) - 0.5, _noise(point.x, point.y, 4.0, 2357) - 0.5) * 5.0
+	return point + Vector2i((warp * freedom).round())
 
 func _home_land(point: Vector2) -> bool:
 	# The same coastline budget is rotated around every kingdom. Large
@@ -1028,7 +1059,10 @@ func _prepare_naval_terrain() -> bool:
 				for anchor: Vector2i in _anchors:
 					if point.distance_to(anchor) < _home_radius + 1.0: home_closed = true
 				channels.set_point_solid(point, home_closed and not _sea_cell(point))
-				channels.set_point_weight_scale(point, 1.0 if _sea_cell(point) else 7.0)
+				var cut := 7.0
+				# Version 12 channels follow the lie of the land instead of a ruler.
+				if config.version >= LIVING_WILDS_VERSION: cut *= 0.45 + 1.1 * _noise(x, y, 7.0, 6151)
+				channels.set_point_weight_scale(point, 1.0 if _sea_cell(point) else cut)
 		for index in sea.regions.size():
 			if index == main: continue
 			var start: Vector2i = sea.regions[index].cells[0]
@@ -1040,6 +1074,16 @@ func _prepare_naval_terrain() -> bool:
 					best = distance
 					target = point
 			var route := channels.get_id_path(start, target)
+			if route.is_empty() and config.version >= LIVING_WILDS_VERSION:
+				# A lake sealed inside a homeland becomes meadow instead of
+				# failing the whole world.
+				for cell: Vector2i in sea.regions[index].cells:
+					for dy in 2:
+						for dx in 2:
+							var corner := cell + Vector2i(dx, dy)
+							var at := corner.y * (_map.width + 1) + corner.x
+							if _map.terrain[at] == 16: _map.terrain[at] = _ground(corner, true)
+				continue
 			if route.is_empty():
 				error = "Could not join the world's waterways without cutting into a homeland."
 				return false
@@ -1054,6 +1098,7 @@ func _prepare_naval_terrain() -> bool:
 	_sea_regions = sea.regions
 	for y in range(1, _map.height - 1):
 		for x in range(1, _map.width - 1): _route_grid.set_point_solid(Vector2i(x, y), not _walkable(Vector2i(x, y)))
+	_port_routes.clear()
 	for anchor: Vector2i in _anchors:
 		if _land_labels[anchor.y * _map.width + anchor.x] < 0:
 			error = "A homeland was lost while shaping the coast."
@@ -1642,6 +1687,7 @@ func _homeland_scroll(origin: Vector2i, desired: Vector2i, size: Vector2i, home:
 	var best_distance := 10 if rank == 0 else 18
 	var region := _region_at(origin)
 	_route_grid.set_point_solid(origin, false)
+	_port_routes.clear()
 	for y in range(origin.y - radius, origin.y + radius + 1):
 		for x in range(origin.x - radius, origin.x + radius + 1):
 			var at := Vector2i(x, y)
@@ -1656,6 +1702,7 @@ func _homeland_scroll(origin: Vector2i, desired: Vector2i, size: Vector2i, home:
 			best = at
 			best_score = score
 	_route_grid.set_point_solid(origin, true)
+	_port_routes.clear()
 	return best
 
 func _place_frontier_supplies() -> void:
@@ -1775,6 +1822,7 @@ func _post_field_guards() -> bool:
 		error = "Encounter placement could not build the movement grid: " + grid.error
 		return false
 	var placement := EncounterPlacement.new(grid, _guard_safe, _scenery_paths)
+	var travel := _home_travel(placement) if config.version >= LIVING_WILDS_VERSION else PackedInt32Array()
 	var spacing := 4 if config.guards == "strong" else 5
 	var spaced := PackedByteArray()
 	spaced.resize(_map.roads.size())
@@ -1803,12 +1851,94 @@ func _post_field_guards() -> bool:
 		var spot := placement.site_guard(site, Vector2i(start.x, start.y), spaced)
 		if spot.is_empty(): continue
 		var level := maxi(2, int(ranks[site.group])) + (1 if config.guards == "strong" else 0)
+		if not travel.is_empty():
+			# Prizes near a castle get a gentler guard; distant ones a sterner one.
+			var steps := travel[spot.guard.y * _map.width + spot.guard.x]
+			var band := -1 if steps >= 0 and steps < 22 else (1 if steps < 0 or steps >= 40 else 0)
+			level = clampi(int(ranks[site.group]) + band, 2, 5) + (1 if config.guards == "strong" else 0)
 		var id := _station_guard(grid, spot.guard, level, home)
 		_reward_guards[site.uid] = id
 		if spot.full and site.group in ["artefacts", "global_spells"]: _gated_prizes[site.uid] = id
 		_mark_radius(spaced, spot.guard, spacing)
 	_post_pass_guards(placement)
+	if config.version >= LIVING_WILDS_VERSION: _post_wilderness_creatures(placement, travel)
 	return true
+
+## Land steps from the nearest castle on the finished grid; -1 where no
+## castle can walk (outlying islands).
+func _home_travel(placement: RefCounted) -> PackedInt32Array:
+	var steps := PackedInt32Array()
+	steps.resize(_map.width * _map.height)
+	steps.fill(-1)
+	var queue: Array[Vector2i] = []
+	for start: Dictionary in _starts:
+		var origin := Vector2i(start.x, start.y)
+		steps[origin.y * _map.width + origin.x] = 0
+		queue.append(origin)
+	var head := 0
+	while head < queue.size():
+		var at := queue[head]
+		head += 1
+		var next_step := steps[at.y * _map.width + at.x] + 1
+		for delta: Vector2i in ELInterception.DIRECTIONS:
+			var next := at + delta
+			if not _inside(next) or steps[next.y * _map.width + next.x] >= 0 or not placement._land(next): continue
+			steps[next.y * _map.width + next.x] = next_step
+			queue.append(next)
+	return steps
+
+## Stock missions keep a creature every few screens: around 22 per thousand
+## passable tiles, level two near a castle and about four farther out. Add
+## roaming creatures on the finished grid toward a lighter share of that,
+## favoring roadsides, clearings, ridges and shores, never on a protected
+## opening route or a harbor approach.
+func _post_wilderness_creatures(placement: RefCounted, travel: PackedInt32Array) -> void:
+	var strong: bool = config.guards == "strong"
+	var gap := 3 if strong else 4
+	var spaced := PackedByteArray()
+	spaced.resize(_map.roads.size())
+	var placed := 0
+	for item: Dictionary in _map.objects:
+		if item.group != "np_heroes": continue
+		_mark_radius(spaced, Vector2i(item.x, item.y), gap)
+		placed += 1
+	var land := 0
+	var candidates: Array[Dictionary] = []
+	for y in range(4, _map.height - 4):
+		for x in range(4, _map.width - 4):
+			var at := Vector2i(x, y)
+			if not placement._land(at): continue
+			land += 1
+			var offset := y * _map.width + x
+			var steps := travel[offset]
+			if steps >= 0 and steps < 10: continue
+			if not placement.field_cell(at, spaced, 4): continue
+			var field := y * (_map.width + 1) + x
+			var roadside := 0.0
+			for delta: Vector2i in ELInterception.DIRECTIONS:
+				var near := at + delta
+				if _map.roads[near.y * _map.width + near.x] != 0: roadside = 0.3
+			var score := _hash(x, y, 9157) + roadside + 0.22 * (1.0 - _canopy[field]) + 0.2 * float(_landform(at) == Landform.RIDGE) + (0.15 if _shore[field] <= 3 else 0.0)
+			candidates.append({"at": at, "score": score})
+	var target := ceili(float(land) / (70.0 if strong else 85.0))
+	candidates.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		return float(a.score) > float(b.score) if a.score != b.score else _index(a.at) < _index(b.at))
+	var roaming: Array[int] = []
+	for candidate: Dictionary in candidates:
+		if placed >= target: break
+		var at: Vector2i = candidate.at
+		if spaced[at.y * _map.width + at.x] != 0 or not placement.field_cell(at, spaced, 4): continue
+		var steps := travel[at.y * _map.width + at.x]
+		var level := 4 if steps < 0 else (1 if steps < 16 else (2 if steps < 28 else (3 if steps < 42 else 4)))
+		if level < 4 and _landform(at) == Landform.RIDGE and _hash(at.x, at.y, 9173) > 0.5: level += 1
+		if strong: level += 1
+		roaming.append(_station_guard(placement.grid, at, level, _owner(at)))
+		_mark_radius(spaced, at, gap)
+		placed += 1
+	report.roaming_creatures = roaming
+
+func _index(at: Vector2i) -> int:
+	return at.y * _map.width + at.x
 
 func _post_pass_guards(placement: RefCounted) -> void:
 	var spaced := PackedByteArray()
@@ -2224,7 +2354,11 @@ func _fill_wilderness() -> void:
 				continue
 			# The selected point may be unusable because of a narrow coast.
 			# Drop it without falsely filling the surrounding distance field.
-			candidates.erase(point)
+			# Version 12 also drops its immediate neighbors: they share the
+			# same search area and would fail the same way, one by one.
+			if config.version >= LIVING_WILDS_VERSION:
+				candidates.assign(candidates.filter(func(other: Vector2i) -> bool: return absi(other.x - point.x) > 2 or absi(other.y - point.y) > 2))
+			else: candidates.erase(point)
 		else:
 			paths_dirty = true
 			variety.get_or_add(site.name, []).append(Vector2i(site.x, site.y))
@@ -2319,6 +2453,15 @@ func _join_wilderness_track(approach: int) -> void:
 ## leave its own route intact, including the side cells of a naval diagonal.
 func _expedition_trail(footprint: Rect2i, obstacles := {}, approaches: Array[Vector2i] = []) -> int:
 	var perimeter := footprint.grow(1)
+	# -2 disables the shortcut (custom obstacles are not part of the memo).
+	var shallowest := -2
+	if obstacles.is_empty() and _exploration_access.size() == _map.width * _map.height:
+		shallowest = 1 << 30
+		for y in range(footprint.position.y, footprint.end.y):
+			for x in range(footprint.position.x, footprint.end.x):
+				if not _inside(Vector2i(x, y)): continue
+				var cell := y * _map.width + x
+				if _exploration_access[cell] >= -1: shallowest = mini(shallowest, _trail_depth_at(cell))
 	for y in range(perimeter.position.y, perimeter.end.y):
 		for x in range(perimeter.position.x, perimeter.end.x):
 			var point := Vector2i(x, y)
@@ -2328,6 +2471,11 @@ func _expedition_trail(footprint: Rect2i, obstacles := {}, approaches: Array[Vec
 			if _exploration_access[approach] < -1: continue
 			var offset := approach
 			while offset >= 0:
+				# Below the shallowest footprint cell the walk can no longer
+				# meet the footprint, so the memoized remainder decides.
+				if shallowest > -2 and _trail_depth_at(offset) < shallowest:
+					offset = -1 if _trail_clear[offset] == 1 else -3
+					break
 				var tile := Vector2i(offset % _map.width, offset / _map.width)
 				var parent := _exploration_access[offset]
 				if footprint.has_point(tile) or obstacles.has(tile) or (_occupied[offset] != 0 and parent >= 0): break
@@ -2341,6 +2489,39 @@ func _expedition_trail(footprint: Rect2i, obstacles := {}, approaches: Array[Vec
 				offset = parent
 			if offset == -1: return approach
 	return -1
+
+## Route-tree depth of a reached cell (the root is 0), memoized together
+## with whether every step to the root avoids occupied cells.
+func _trail_depth_at(cell: int) -> int:
+	if _trail_stale:
+		_trail_depth.resize(_map.width * _map.height)
+		_trail_depth.fill(-1)
+		_trail_clear.resize(_trail_depth.size())
+		_trail_clear.fill(0)
+		_trail_stale = false
+	if _trail_depth[cell] >= 0: return _trail_depth[cell]
+	var chain := PackedInt32Array()
+	var offset := cell
+	while offset >= 0 and _trail_depth[offset] < 0:
+		chain.append(offset)
+		offset = _exploration_access[offset]
+	var depth := -1 if offset < 0 else _trail_depth[offset]
+	var clear := 1 if offset < 0 else _trail_clear[offset]
+	for index in range(chain.size() - 1, -1, -1):
+		var at := chain[index]
+		var parent := _exploration_access[at]
+		depth += 1
+		if parent >= 0 and clear == 1:
+			if _occupied[at] != 0: clear = 2
+			elif config.naval:
+				var x := at % _map.width
+				var y := at / _map.width
+				var px := parent % _map.width
+				var py := parent / _map.width
+				if x != px and y != py and (_occupied[y * _map.width + px] != 0 or _occupied[py * _map.width + x] != 0): clear = 2
+		_trail_depth[at] = depth
+		_trail_clear[at] = clear
+	return _trail_depth[cell]
 
 func _make_legacy_scenery() -> void:
 	if int(config.scenery) == 0 or _catalog.scenery.is_empty(): return
@@ -2774,6 +2955,13 @@ func _place_scenery(point: Vector2i, pool: Array, land: PackedByteArray, allow_v
 
 func _scenery_fits(origin: Vector2i, size: Vector2i, land: PackedByteArray, allow_verges := false) -> bool:
 	if origin.x < 2 or origin.y < 2 or origin.x + size.x > _map.width - 2 or origin.y + size.y > _map.height - 2: return false
+	if config.version >= LIVING_WILDS_VERSION:
+		# Mesas and boulders read much larger than their footprint. Keep the
+		# castle's silhouette clear, more so for bigger props.
+		var middle := Vector2(origin) + Vector2(size) * 0.5
+		var reach := 1.5 + 2.0 * maxi(size.x, size.y)
+		for anchor: Vector2i in _anchors:
+			if middle.distance_to(Vector2(anchor)) < reach + 2.5: return false
 	for y in range(origin.y, origin.y + size.y):
 		for x in range(origin.x, origin.x + size.x):
 			var offset := y * _map.width + x
@@ -2812,7 +3000,10 @@ func _place(group: String, name: String, position: Vector2i, row: Dictionary, ow
 			_reserved[y * _map.width + x] = 1
 			if x >= position.x and x < position.x + size.x and y >= position.y and y < position.y + size.y:
 				_occupied[y * _map.width + x] = 1
-				if _route_grid.region.has_point(Vector2i(x, y)): _route_grid.set_point_solid(Vector2i(x, y), true)
+				_trail_stale = true
+				if _route_grid.region.has_point(Vector2i(x, y)):
+					_route_grid.set_point_solid(Vector2i(x, y), true)
+					_port_routes.clear()
 	return item
 
 func _mark_site_clearance(footprint: Rect2i) -> void:
@@ -2848,6 +3039,12 @@ func _fits(at: Vector2i, size: Vector2i, require_land: bool, avoid_roads: bool) 
 	return not config.naval or _ports.is_empty() or not _port_route(at).is_empty()
 
 func _port_route(at: Vector2i) -> Array[Vector2i]:
+	if _port_routes.has(at): return _port_routes[at]
+	var path := _find_port_route(at)
+	_port_routes[at] = path
+	return path
+
+func _find_port_route(at: Vector2i) -> Array[Vector2i]:
 	var sources: Array[Dictionary] = []
 	var region := _region_at(at)
 	for port: Dictionary in _ports:
@@ -2913,6 +3110,7 @@ func _connect(from: Vector2i, to: Vector2i, width: int, road: bool, trunk := fal
 	var path := _route_grid.get_id_path(from, to)
 	_route_grid.set_point_solid(from, from_solid)
 	_route_grid.set_point_solid(to, to_solid)
+	if from_solid or to_solid: _port_routes.clear()
 	if not _scenery_paths.is_empty():
 		var previous := from
 		for at: Vector2i in path:
@@ -2921,18 +3119,39 @@ func _connect(from: Vector2i, to: Vector2i, width: int, road: bool, trunk := fal
 				_scenery_paths[at.y * _map.width + previous.x] = 1
 				_scenery_paths[previous.y * _map.width + at.x] = 1
 			previous = at
+	var corners := _road_corners(path) if config.version >= LIVING_WILDS_VERSION else {}
 	for point: Vector2i in path:
 		var offset := point.y * _map.width + point.x
 		if guard_route and _network[offset] == 0:
 			_network[offset] = 1
 			_network_points.append(point)
-		_paint_disk(point, width + 1, road, trunk, track and _walkable(point))
+		_paint_disk(point, width + 1, road and not corners.has(point), trunk, track and _walkable(point))
 		for y in range(maxi(0, point.y - width), mini(_map.height, point.y + width + 1)):
 			for x in range(maxi(0, point.x - width), mini(_map.width, point.x + width + 1)):
 				var cell := y * _map.width + x
 				_corridor[cell] = 1
 				if guard_route and not _guard_safe.is_empty(): _guard_safe[cell] = 1
 	return not path.is_empty()
+
+## Cells where a grid path turns through an L between two diagonal
+## neighbors. Leaving them unpaved lets the road run diagonally instead of
+## climbing a staircase. Alternate cells only, so the road stays joined, and
+## only where both sides of the diagonal are dry land.
+func _road_corners(path: Array[Vector2i]) -> Dictionary:
+	var corners := {}
+	var index := 1
+	while index < path.size() - 1:
+		var before := path[index - 1]
+		var after := path[index + 1]
+		var turn := after - before
+		if absi(turn.x) == 1 and absi(turn.y) == 1:
+			var other := before + after - path[index]
+			if _walkable(other) and _walkable(path[index]):
+				corners[path[index]] = true
+				index += 2
+				continue
+		index += 1
+	return corners
 
 func _connect_site(from: Vector2i, item: Dictionary, size: Vector2i, road := true, guard_route := true) -> void:
 	var approaches: Array[Dictionary] = []
@@ -3109,7 +3328,9 @@ func _check_access(protect_routes := false, enforce_daily := false) -> bool:
 					return false
 				if protect_routes: _protect_route(offset, previous, not _guard_safe.is_empty())
 	for start: Dictionary in _starts: start.reachable_sites = _important.size()
-	if protect_routes and config.version >= LANDSCAPE_VERSION: _exploration_access = previous
+	if protect_routes and config.version >= LANDSCAPE_VERSION:
+		_exploration_access = previous
+		_trail_stale = true
 	if not protect_routes and not _gated_prizes.is_empty(): _verify_gated_prizes(grid, objects, reached)
 	report.reachable = true
 	report.reachable_cells = queue.size()
