@@ -202,6 +202,8 @@ var _script_summon: Dictionary = {}
 ## opposing army, so the scope may hold several creature ids. The action's
 ## events remain synchronous; deferred hit timers retain their own data.
 var _ability_hit: Dictionary = {}
+## Fingi that spat in the current action: seconds until their action's impact.
+var _spat: Dictionary = {}
 ## The EL2 damage reducer starts BlueFeedback on the protected hero before
 ## the reflected hit lands on the opposite hero.
 ## Like ability hit cues, this scopes only synchronous presentation events.
@@ -3387,9 +3389,13 @@ func _pend_cast_effects(data: Dictionary, artifact: bool) -> void:
 func _hit_later(data: Dictionary) -> bool:
 	var delay := _hit_delay(data)
 	var id := int(data.get("target", -1))
-	# A creature that falls to its own ability (Fingus spores, Final Courtesy)
-	# finishes the action the original queues before its death.
-	if data.kind == "death" and models.has(id) and models[id].clip == "uinstant" and models[id].playing:
+	# A fingus that spat falls at its action's impact frame, as the spit
+	# leaves it (the original's death waits on that frame, not the clip's end).
+	if data.kind == "death" and _spat.has(id):
+		delay = maxf(delay, float(_spat[id]))
+	# A creature that falls to its own ability (Final Courtesy) finishes the
+	# action the original queues before its death.
+	elif data.kind == "death" and models.has(id) and models[id].clip == "uinstant" and models[id].playing:
 		var actor: ELModel = models[id]
 		delay = maxf(delay, (actor.clip_frames() - actor.frame) / (actor.fps * actor.speed))
 	if delay <= 0.0 or not models.has(id) or not is_inside_tree(): return false
@@ -4631,6 +4637,9 @@ func _ability_effects(data: Dictionary) -> void:
 	# selection (onwards). EL1 presentation stays unchanged.
 	var visual_target := int(data.get("target", -1))
 	if profile.id == "el2" and card == "BROT": visual_target = int(data.get("hit_target", visual_target))
+	if source >= 2 and card in ["SPFG", "CAFG"] and data.ability == "spores":
+		_spit(items, source, side, visual_target, card)
+		return
 	# RNST has no selected target: original RainOfStoneAbility strikes every
 	# opposing creature and its RedRainOfStones visual has Monsters Hit@35.
 	# Snapshot these ids before synchronous damage removes any of them.
@@ -4708,6 +4717,33 @@ func _ability_effects(data: Dictionary) -> void:
 
 func _clear_ability_hit() -> void:
 	_ability_hit.clear()
+
+## Fingus spores (both editions). The original turns the fingus to its target
+## and plays its action; at the action's impact frame it launches FingusSpit
+## and, unless the fingus mastery saves it, the fingus dies at that same
+## moment. The target takes the spit at the effect's MonstersHit cue.
+func _spit(items: Array, source: int, side: int, target: int, card: String) -> void:
+	var key := _action_key(models[source])
+	_spat[source] = key
+	call_deferred("_clear_spat")
+	# Naming itself deals nothing, so nothing waits for the spit's hit.
+	if target >= 0 and target != source:
+		_ability_hit = {"target": target, "hit": key + ELCombatEffects.ability_hit_delay(profile, card)}
+		call_deferred("_clear_ability_hit")
+	if key <= 0.0 or not is_inside_tree(): _play_ability(items, source, side, target, true)
+	else: _schedule_battle_cue(key, _play_ability.bind(items, source, side, target, true))
+
+## Seconds until the figure's action clip reaches its impact frame (the end
+## of the clip when it marks none); 0 when it plays no action.
+func _action_key(actor: ELModel) -> float:
+	if actor.clip != "uinstant" or not actor.playing: return 0.0
+	var at := actor.clip_frames()
+	var impact := int(actor.timing.get("uinstant", {}).get("impact", -1))
+	if impact >= 0 and impact < at: at = impact
+	return maxf(0.0, (at - actor.frame) / (actor.fps * actor.speed))
+
+func _clear_spat() -> void:
+	_spat.clear()
 
 ## A combat power's effects and sounds, drawn at (or towards) the figure it struck.
 func _combat_ability(data: Dictionary) -> void:

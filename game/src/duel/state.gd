@@ -2293,10 +2293,13 @@ func _use_ability(id: int, ability: String, target := -1, enchantment_id := -1, 
 			if (target == id and c.card != "CAFG") or entity(target).is_empty(): return _fail("Select another creature or a hero.")
 			var spore_damage := maxi(0, int(c.power)) if c.card == "CAFG" else 1
 			_emit({"kind": "ability", "source": id, "side": side, "ability": ability, "target": target})
-			# Fingus mastery: three successes out of three regenerate it for free.
-			var saved := ELSpecs.roll(self, side, "GFNR", 3) == 3
 			# The target dies before the fingus; naming itself deals nothing.
 			if target != id and not entity(target).is_empty(): _damage(target, spore_damage)
+			# Fingus mastery, rolled after the spit lands: only three successes
+			# out of three regenerate it for free, and only that is announced
+			# (one or two successes leave the fingus to die, unannounced).
+			var saved := ELSpecs.roll(self, side, "GFNR", 3, false) == 3
+			if saved: _emit({"kind": "spec", "side": side, "spec": "GFNR", "count": 1})
 			if saved: _emit({"kind": "regenerate", "target": id, "cost": 0})
 			elif creatures.has(id): _kill(id)
 		"wake":
