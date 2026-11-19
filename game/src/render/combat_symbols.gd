@@ -339,7 +339,7 @@ func _draw_codes(codes: Array, colour: Color, centre: float, y: float, size: flo
 		x += size
 
 func _draw_glyph(code: int, colour: Color, rect: Rect2) -> void:
-	draw_texture_rect_region(sheet, rect, _cell(code), colour)
+	draw_texture_rect_region(sheet, rect, cell_rect(code), colour)
 
 ## The marker (sword three cells wide, or shield two cells tall) with the
 ## number centred over it.
