@@ -2,13 +2,16 @@
 
 Versions follow [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html) from 0.3.0 on.
 
-## Unreleased
+## 0.19.0
 
-- Etherlords I can generate seeded single missions with eight layouts and eleven presets. Naval worlds add harbors, ships, sailing for human and computer heroes, naval encounters, and saves at sea.
-- New random maps group original trees, brush, and rock formations around homelands, inland edges, and coasts. Earlier saved worlds and setup codes keep their original scenery.
-- Random worlds have wooded valleys, ridges, and meandering channels. Explore beyond the opening economy for springs, mentors, artifact islands, and stocked lairs. Seers reveal remote discoveries through the fog.
-- Generated terrain has continuous groves, cliff formations and curved paths. Every homeland gets local recruitment and an optional starter encounter. Harder enemies and discoveries fill the backcountry and outlying islands.
-- New random worlds have raised inland ridges, low shores, roads that follow the terrain, and settlements laid out around the local landscape.
+- **Etherlords I random missions.** Generate seeded worlds with eight layouts and eleven presets. Naval worlds add harbors, sailing for human and computer heroes, naval encounters, and saves at sea. Explore raised ridges, branching trails, outlying islands, shops, springs, mentors, and lairs. Every reachable land tile on a fresh map is within a day of a pickup, site, or fight for the slowest starting hero. Existing generated saves and setup codes retain their original generation rules.
+- **Etherlords II Draft Arena.** Pick a hero from full-body 3D previews, draft a 16-card spellbook, and face new bot decks on the way to twelve wins or three losses. Choose single-faction or mixed cards and a shared level of 1–13. Drafts and runs resume from their own save slot.
+- **Graphics Presentation V4.** Updated terrain, water, fog, shadows, and effects. Reduced redundant pose, mesh, and HUD work. Desktop builds prepare animated Etherlords II dialogue meshes during the camera approach.
+- **Etherlords I map AI.** Neutral monster duels are opt-in. With the option enabled, heroes prioritize discovered objectives and weigh experience and exploration when choosing fights. Ordinary field monsters have less health, and the easiest difficulty opens routes around early resource guards.
+- **Duel AI.** When losing defence lines tie, the AI favors the line that preserves more hero health through the current combat. The Aftershock solution remains valid.
+- **Etherlords I reports.** New missions center on the local castle, and hero route markers disappear as the hero walks. [#220](https://github.com/TheWWWorm/Demiurges/issues/220) · [#221](https://github.com/TheWWWorm/Demiurges/issues/221)
+- **Etherlords II adventure reports.** Fixed dialogue rewards and facing, alert text, experience and level-up presentation, reserve sorting, the Russian Alpha-100F name, resource pickups, ether node effects, and smoke shadows. [#215](https://github.com/TheWWWorm/Demiurges/issues/215) · [#216](https://github.com/TheWWWorm/Demiurges/issues/216) · [#218](https://github.com/TheWWWorm/Demiurges/issues/218) · [#222](https://github.com/TheWWWorm/Demiurges/issues/222) · [#224](https://github.com/TheWWWorm/Demiurges/issues/224) · [#226](https://github.com/TheWWWorm/Demiurges/issues/226) · [#229](https://github.com/TheWWWorm/Demiurges/issues/229) · [#231](https://github.com/TheWWWorm/Demiurges/issues/231) · [#233](https://github.com/TheWWWorm/Demiurges/issues/233) · [#234](https://github.com/TheWWWorm/Demiurges/issues/234)
+- **Etherlords II combat reports.** Fixed creature tooltips and enchantment lists, reflected Ether Trade playback, venom and dispel cues, scripted arena framing, played-card icons, pre-battle typography, and creature stats in the Pale Plane. [#202](https://github.com/TheWWWorm/Demiurges/issues/202) · [#217](https://github.com/TheWWWorm/Demiurges/issues/217) · [#219](https://github.com/TheWWWorm/Demiurges/issues/219) · [#225](https://github.com/TheWWWorm/Demiurges/issues/225) · [#227](https://github.com/TheWWWorm/Demiurges/issues/227) · [#228](https://github.com/TheWWWorm/Demiurges/issues/228) · [#230](https://github.com/TheWWWorm/Demiurges/issues/230) · [#232](https://github.com/TheWWWorm/Demiurges/issues/232)
 
 ## 0.18.5
 

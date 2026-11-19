@@ -2,13 +2,17 @@
 
 <img src="https://raw.githubusercontent.com/TheWWWorm/Demiurges/main/game/icon.png?v=269c806a4b1a" alt="Demiurges" width="160">
 
-Play **Etherlords** («Демиурги», Nival, 2001) and **Etherlords II** («Демиурги II», 2003) on a modern engine on Windows, Linux, macOS and Android or in your browser.
+Play **Etherlords** («Демиурги», Nival, 2001) and **Etherlords II** («Демиурги II», 2003) on Windows, Linux, macOS, Android, or in your browser.
 
-**[Play](https://demiurges.wwworm.com/) · [Download](https://github.com/TheWWWorm/Demiurges/releases/latest) · [Wiki](https://demiurges.wwworm.com/wiki/) · [Вики](https://demiurges.wwworm.com/wiki/?lang=ru)**
+**[Play in your browser](https://demiurges.wwworm.com/) · [Download](https://github.com/TheWWWorm/Demiurges/releases/latest) · [Wiki](https://demiurges.wwworm.com/wiki/) · [Вики](https://demiurges.wwworm.com/wiki/?lang=ru)**
 
-Demiurges is a fan-made replacement engine built in Godot. It reads the game files you already own (models, textures, animations, sounds, music, texts, maps, campaign scripts and game tables) and plays them with newly written combat, campaign, interface and rendering systems that follow the original games' rules.
+Demiurges is a fan-made Godot engine for the two games. It loads their campaigns, maps, creatures, spells, art, music, and dialogue from your own game files. The GOG editions are tested. Install either game or both and switch between them from the main menu.
 
-> **You need your own copy of the game you want to play.** No game content ships with this engine and nothing is downloaded for you. The GOG versions are the tested editions. Either game is enough; with both, you can switch between them. Each game keeps its own rules, files and saves.
+## What's new in 0.19.0
+
+- **Random missions and naval travel in Etherlords I.** Choose **Single Mission → Random map…** for seeded worlds with eight layouts and eleven presets. Route heroes through harbors, sail to other islands, and save at sea. Fresh maps put a pickup, site, or encounter within a day's travel of each reachable land tile for the slowest starting hero. [Random maps](docs/first_random_maps.md) · [Naval travel](docs/first_naval_maps.md)
+- **Draft Arena in Etherlords II.** Choose **Draft Arena** on the main menu and pick a hero from animated 3D previews. Draft a 16-card book from one faction or the mixed pool and face a freshly drafted opponent each match. Both sides play at the same chosen level in new runs. Your run saves between matches and resumes from the Arena menu. [Draft Arena rules](docs/draft_arena.md)
+- **Graphics and campaign fixes.** Terrain, water, fog, lighting, and model playback received updates. Etherlords II prepares animated dialogue meshes as the camera approaches on desktop, reducing the hitch at the start of conversations. This release also fixes campaign and combat reports across both games. [Full changelog](CHANGELOG.md#0190)
 
 ## Play in your browser
 
@@ -23,7 +27,7 @@ Repeat this for the other game to keep both. Your files are never uploaded: the 
 A data pack is optional. It helps on a phone that has neither the installer nor the game folder: make the pack on your computer and copy it to the phone. You need Python 3 and the [`tools/prepare_game_data.py`](tools/prepare_game_data.py) script from this repository:
 
 ```sh
-python3 prepare_game_data.py "/path/to/Etherlords II" Etherlords2.elpack
+python3 tools/prepare_game_data.py "/path/to/Etherlords II" Etherlords2.elpack
 ```
 
 The installer and the pack hold your own game files, so keep them to yourself.
@@ -41,27 +45,7 @@ Download the package for your system from the [Releases](https://github.com/TheW
 - **Browser (WebGL 2):** nothing to download; [play the hosted version](https://demiurges.wwworm.com/), see above.
   To host the browser version yourself, use `…-web.zip`. It needs HTTPS (or `localhost`) and the `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp` headers (included in its `_headers` file); see [hosting the browser version](docs/hosting.md).
 
-## Wiki
-
-The [**Demiurges wiki**](https://demiurges.wwworm.com/wiki/) is free to read without game files, an account or the engine. Its encyclopedia has a page for every creature (with a picture), sorcery, enchantment, artifact, skill and specialization of both games. Its guides explain installing, controls, combat rules and phases, spells and creatures, the campaigns, duels, options and the differences from the originals, in English and [Russian](https://demiurges.wwworm.com/wiki/?lang=ru). Good starting points: [installing the game files](https://demiurges.wwworm.com/wiki/?page=installing), [controls](https://demiurges.wwworm.com/wiki/?page=controls), [how a battle works](https://demiurges.wwworm.com/wiki/?page=combat) and [turn and phases](https://demiurges.wwworm.com/wiki/?page=combat-phases). The same articles open in the game: **Wiki** on the main menu or **F6** on any screen. See [the wiki guide](docs/wiki.md) to edit or rebuild it.
-
-Creature pages in the in-game wiki can play the installed game's attack, death, and other available animations with their own sounds.
-
-## Ether Expedition
-
-With Etherlords II installed, select **Expedition** on the main menu for a three-act deck-building run. Pick routes, fight original enemies and bosses, and use rewards, camps, and events to change your spellbook. Elite victories and the first two guardians offer extra spell choices, with priority given to rare and unique spells. **Resume expedition** restores the current room and the last settled combat action.
-
-## Autochess
-
-With Etherlords II installed, select **Autochess** on the main menu. Nine heroes recruit Etherlords II creatures from one shared pool, evolve three copies into stronger forms, combine faction alliances and fight real-time battles on the game's battlefields; the last hero standing wins. Creature stats come from the originals' Power and Toughness, their abilities are adapted to real time, and rewards after neutral rounds are the game's own enchantments and artifacts. Play against eight computer heroes or online with a room code or by address. See [Autochess](https://demiurges.wwworm.com/wiki/?page=autochess) in the wiki.
-
-## Draft Arena
-
-With Etherlords II installed, select **Draft Arena** on the main menu. Choose a card pool for both sides, then choose one of three heroes and pick one of three cards sixteen times. Choose **Any faction** for all factions and neutral cards, or **Hero’s faction only** to restrict each deck to its hero's faction. Keep that spellbook for a run ending at twelve wins or three losses. Every computer opponent drafts sixteen cards under the same pool and offer rules. Choose a shared hero level from 1–13, with 5 as the default. Each battle starts with two charges per spellbook slot, full health, and no artifacts or specialization. Arena always uses the strongest available combat AI, including its full knowledge of both hands and future draws. Choices, opponents, and battle progress save automatically; use **Resume saved run** in Draft Arena to continue. See [the Arena rules and checks](docs/draft_arena.md) for rules, card exclusions, tuning, and checks.
-
 ## Getting started (desktop)
-
-See also [Installing the game files](https://demiurges.wwworm.com/wiki/?page=installing) in the wiki.
 
 1. Start the engine.
 2. Choose **Etherlords I** or **Etherlords II** at the top of the game files screen, then one of:
@@ -81,7 +65,7 @@ python3 tools/import_game.py el2 /path/to/Etherlords2
 ## What you can play
 
 - **Both campaigns** of each game, with the original maps, dialogue, scripted events, shops, buildings, heroes, experience and level-ups, resource sites and spellbook management. Chapters follow the original order and branches.
-- **Single missions** of the first game and the second game's tutorial.
+- **Single missions** and seeded random maps in Etherlords I, and the Etherlords II tutorial.
 - **Random maps** in Etherlords I. Open **Single Mission → Random map…** for seeded worlds against computer players, with optional ships, harbors, and naval routes. See the [random map guide](docs/first_random_maps.md).
 - **Duels**: the original Duel screen with its presets and hero editor, practice battles against the computer and local hot seat for two players. Etherlords II duels can be replayed.
 - **Combat** with the original creatures, spells, abilities, enchantments, artifacts and battlefields of both games, including automatic combat.
@@ -93,7 +77,25 @@ To import an original custom duel preset, copy its `.prs` file into the remake's
 
 In Etherlords II duels, resource level 4 has a larger budget and level 5 has unlimited resources. Level 6 also lets you mix playable spells and creatures from every faction, including neutral cards, and use as many copies as you like in the 16-card deck.
 
-## Not finished yet
+## Wiki
+
+The [**Demiurges wiki**](https://demiurges.wwworm.com/wiki/) is free to read without game files, an account or the engine. Its encyclopedia has a page for every creature (with a picture), sorcery, enchantment, artifact, skill and specialization of both games. Its guides explain installing, controls, combat rules and phases, spells and creatures, the campaigns, duels, options and the differences from the originals, in English and [Russian](https://demiurges.wwworm.com/wiki/?lang=ru). Good starting points: [installing the game files](https://demiurges.wwworm.com/wiki/?page=installing), [controls](https://demiurges.wwworm.com/wiki/?page=controls), [how a battle works](https://demiurges.wwworm.com/wiki/?page=combat) and [turn and phases](https://demiurges.wwworm.com/wiki/?page=combat-phases). The same articles open in the game: **Wiki** on the main menu or **F6** on any screen. See [the wiki guide](docs/wiki.md) to edit or rebuild it.
+
+Creature pages in the in-game wiki can play the installed game's attack, death, and other available animations with their own sounds.
+
+## Ether Expedition
+
+With Etherlords II installed, select **Expedition** on the main menu for a three-act deck-building run. Pick routes, fight original enemies and bosses, and use rewards, camps, and events to change your spellbook. Elite victories and the first two guardians offer extra spell choices, with priority given to rare and unique spells. **Resume expedition** restores the current room and the last settled combat action.
+
+## Autochess
+
+With Etherlords II installed, select **Autochess** on the main menu. Nine heroes recruit Etherlords II creatures from one shared pool, evolve three copies into stronger forms, combine faction alliances and fight real-time battles on the game's battlefields; the last hero standing wins. Creature stats come from the originals' Power and Toughness, their abilities are adapted to real time, and rewards after neutral rounds are the game's own enchantments and artifacts. Play against eight computer heroes or online with a room code or by address. See [Autochess](https://demiurges.wwworm.com/wiki/?page=autochess) in the wiki.
+
+## Multiplayer
+
+Duels in both games, the Etherlords I strategic preview for two human commanders and online autochess can be played through an online room code (no ports to open, also in the browser) or, in native builds, over LAN and direct IP. A duel or autochess player whose connection drops can join again and take their seat back. See the [multiplayer guide](https://demiurges.wwworm.com/wiki/?page=duel) for supported map actions and connection details.
+
+## Current limitations
 
 The engine is still in development. Things you may notice:
 
@@ -102,7 +104,6 @@ The engine is still in development. Things you may notice:
 - Computer opponents follow the original's approach but are not an exact copy of its decisions. As in the original, they never answer alliance or trade offers.
 - Etherlords II map particle effects use approximate sizes and blending.
 - The campaigns are tested screen by screen and system by system, not yet by playing every chapter from start to finish. Please report anything that blocks progress.
-- Duels in both games, the Etherlords I strategic preview for two human commanders and online autochess can be played through an online room code (no ports to open, also in the browser) or, in native builds, over LAN and direct IP. A duel or autochess player whose connection drops can join again and take their seat back. See the [multiplayer guide](https://demiurges.wwworm.com/wiki/?page=duel) for supported map actions and connection details.
 - Saves and replays of the original games cannot be loaded; the engine keeps its own.
 - Touch controls have not yet been tried on real phones and tablets, only in testing. The interface keeps the original layout, so on a small phone screen text and buttons are small.
 
@@ -153,6 +154,8 @@ Saves and settings are kept in the engine's user folder:
 - **Android:** in the app's private storage. Uninstalling the app removes them.
 
 The folder keeps its earlier name, `Etherlords Duel`, so existing saves continue to work.
+
+In Etherlords I, **AI fights neutral monsters** is off by default. Enable it on the difficulty screen to have Living world computer heroes forecast and play neutral fights. This also rebalances ordinary field guards. The easiest difficulty is recommended for this option.
 
 In **Remake settings**, **Terrain detail** adds subtle texture contrast and surface relief to adventure-map ground, and fine grain from the original detail textures to battle ground where available. **Enhanced water** adds ripples, a subtle sky tint and foam along adventure-map shores. **Soft shadows** smooths sun-shadow edges in battles and on Etherlords II maps. All three start off and can be changed during play.
 
