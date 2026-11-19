@@ -869,7 +869,11 @@ func _second_duel_presentation(view: Node, duel: ELDuel) -> void:
 	view.notices.clear()
 	check(duel.use_ability(side, key, 1 - side), "#174: the hero activates Fireball")
 	view._skip_battle_presentation()
-	check(view.notices.icons.size() == 1 and view.notices.icons[0].card == "FRBL", "#174: activating a hero enchantment shows its card")
+	# The second game lists only the opponent's abilities (#243).
+	if side != view._displayed_side():
+		check(view.notices.icons.size() == 1 and view.notices.icons[0].card == "FRBL", "#174: the opponent activating a hero enchantment shows its card")
+	else:
+		check(view.notices.icons.is_empty(), "#174/#243: the player's own hero enchantment activation adds no notice icon")
 
 	duel._summon(side, "STRT")
 	view._skip_battle_presentation()

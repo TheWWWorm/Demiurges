@@ -14,8 +14,9 @@ extends SceneTree
 ##   #227 played-card icons clear as the side or turn changes.
 ## - #225: a scripted attacker keeps its side of the authored battlefield
 ##   when the local defender takes the left HUD seat.
-## - #243 a used artifact joins the battle notice icons with its own icon
-##   and text; #252 a Pale spell-jammer shows no spell-silencing icon.
+## - #243 the opponent's casts, abilities and artifact uses join the battle
+##   notice icons (an artifact as its spell's icon and card tooltip), the
+##   player's own do not; #252 a Pale spell-jammer shows no spell-silencing icon.
 ##
 ##   godot --headless --path game --script ../tools/d2_battle_ui_check.gd
 ##
@@ -160,7 +161,7 @@ func _casting_and_retry() -> void:
 		if data.kind == "discard": discarded.append(data))
 	view._cast_card(0)
 	check(played == ["FRWA"] and (view._display_lagging() or not view._hits_waiting.is_empty()), "Fire Wave starts and has a hit still being presented")
-	check(view.notices.icons.size() == 1 and view.notices.icons[0].card == "FRWA", "#227: a cast appears in its own turn's notices")
+	check(view.notices.icons.is_empty(), "#243: the player's own cast adds no notice icon (only the opponent's show)")
 	view._cast_card(0)
 	check(discarded.size() == 1 and discarded[0].card == "STRT" and discarded[0].get("source_card") == "BATT", "the dying Bat discards the rat and identifies the cause")
 	view._cast_card(duel.heroes[0].hand.find("ZAPP"))
@@ -204,7 +205,6 @@ func _casting_and_retry() -> void:
 	_duel_match_retry(view)
 	_creature_ability_buttons(view)
 	_battle_notice_icons(view)
-	_artifact_notice(view)
 	_jammer_marks(view)
 	_figure_tooltips(view)
 	await _arena_orientation(view)
@@ -319,16 +319,17 @@ func _battle_notice_icons(view: Node) -> void:
 	var duel: ELDuel = view.duel
 	var profile := duel.profile
 	var notices: ELCombatNotices = view.notices
+	check(view._displayed_side() == 0, "#243: the first hero plays at this screen")
 	var pale := duel.next_id
 	duel._summon(0, "SMWB")
 	duel.heroes[0].grave.append("STRT")
 	check(duel.use_ability(pale, "sinister", 0, 0), "#212: a Pale Knight can use Sinister Manifestation (%s)" % duel.error)
 	view._skip_battle_presentation()
-	var manifestation: Dictionary = profile.table("CombatSpells").AOUF
-	var ability_icon := profile.icon_at(int(manifestation.AbilityIcon)) as AtlasTexture
-	check(notices.icons.size() == 1 and notices.icons[0].card == "AOUF" and _notice_uses(notices, 0, ability_icon)
-		and notices.get_tooltip(notices.icon_rect(0).get_center()) == profile.text(manifestation.AbilityText),
-		"#212: the manifestation notice uses its own ability icon and description")
+	check(notices.icons.is_empty(), "#243: the player's own ability adds no notice icon")
+	var own := _ready_artifact(duel, 0)
+	check(not own.is_empty() and duel.use_artifact(0, 0), "#243: the player uses an artifact (%s)" % duel.error)
+	view._skip_battle_presentation()
+	check(notices.icons.is_empty(), "#243: the player's own artifact use adds no notice icon")
 	duel.heroes[1].turns = int(duel.heroes[1].level) + 11
 	for hero: Dictionary in duel.heroes: hero.skills.clear()
 	var health := int(duel.heroes[1].health)
@@ -351,6 +352,25 @@ func _battle_notice_icons(view: Node) -> void:
 		"#212: the specialisation icon describes the effect that triggered")
 	notices.viewer_side = 0
 	check(_notice_uses(notices, 1, profile.icon_at(917)), "#212: the opposing specialisation uses the opposing icon")
+	# The opponent's ability and artifact use show.
+	var rival_pale := duel.next_id
+	duel._summon(1, "SMWB")
+	duel.heroes[1].grave.append("STRT")
+	check(duel.use_ability(rival_pale, "sinister", 1, duel.heroes[1].grave.size() - 1), "#212: the opponent's Pale Knight manifests (%s)" % duel.error)
+	view._skip_battle_presentation()
+	var manifestation: Dictionary = profile.table("CombatSpells").AOUF
+	var ability_icon := profile.icon_at(int(manifestation.AbilityIcon)) as AtlasTexture
+	check(notices.icons.size() == 3 and notices.icons[2].card == "AOUF" and _notice_uses(notices, 2, ability_icon)
+		and notices.get_tooltip(notices.icon_rect(2).get_center()) == profile.text(manifestation.AbilityText),
+		"#212: the opponent's manifestation notice uses its own ability icon and description")
+	var item := _ready_artifact(duel, 1)
+	check(not item.is_empty() and duel.use_artifact(1, 0), "#243: the opponent uses an artifact (%s)" % duel.error)
+	view._skip_battle_presentation()
+	var index := notices.icons.find_custom(func(icon: Dictionary) -> bool: return icon.card == item.get("spell", ""))
+	var tip := notices.get_tooltip(notices.icon_rect(index).get_center()) if index >= 0 else ""
+	check(index >= 0 and _notice_uses(notices, index, profile.card_icon(item.spell)) and not tip.is_empty()
+		and tip == String(notices.describe_card.call(String(item.spell))),
+		"#243: the opponent's artifact shows as its spell's icon with the card's tooltip")
 	# The defender and the next attacker can be the same side. A new turn
 	# still clears the defence's icons even when that side keeps the screen.
 	var attacker := duel.next_id
@@ -364,39 +384,23 @@ func _battle_notice_icons(view: Node) -> void:
 	duel.heroes[0].hand_slots = [-1]
 	check(duel.cast(0), "#227: the defending side casts Fog (%s)" % duel.error)
 	view._skip_battle_presentation()
-	check(notices.icons.size() == 1 and notices.icons[0].card == "FOGG", "#227: the defender sees their own cast")
+	check(notices.icons.is_empty(), "#243: the defender's own cast adds no notice icon")
 	duel.end_phase()
 	view._skip_battle_presentation()
 	check(duel.active_side() == 0 and duel.phase == ELDuel.Phase.ATTACK and notices.icons.is_empty(),
-		"#227: the defender's cast disappears when their attack starts")
+		"#227: the list is empty when the defender's attack starts")
 
-func _artifact_notice(view: Node) -> void:
-	view._start("el2", {"first_side": 0}, null, 243)
-	var duel: ELDuel = view.duel
-	var profile := duel.profile
-	var notices: ELCombatNotices = view.notices
-	var item := {}
-	for name: String in profile.table("Artefacts"):
-		var entry := ELDuel.artifact_entry(profile, {"name": name})
+## Gives `side` one ready untargeted artifact; {} when the game has none.
+func _ready_artifact(duel: ELDuel, side: int) -> Dictionary:
+	for name: String in duel.profile.table("Artefacts"):
+		var entry := ELDuel.artifact_entry(duel.profile, {"name": name})
 		if entry.is_empty() or String(duel.artifact_rule(entry).get("target", "none")) != "none": continue
 		entry.charges = 1
 		entry.ready_round = 0
-		duel.heroes[0].artifacts = [entry]
-		duel.heroes[0].artifact_uses = 0
-		if duel.artifact_error(0, 0).is_empty():
-			item = entry
-			break
-	check(not item.is_empty(), "#243: an untargeted artifact can be used")
-	if item.is_empty(): return
-	view._skip_battle_presentation()
-	var before := notices.icons.size()
-	check(duel.use_artifact(0, 0), "#243: the hero uses %s (%s)" % [item.name, duel.error])
-	view._skip_battle_presentation()
-	var index := notices.icons.find_custom(func(icon: Dictionary) -> bool: return icon.card == item.spell)
-	notices.viewer_side = 0
-	check(notices.icons.size() > before and index >= 0 and _notice_uses(notices, index, profile.card_icon(item.spell))
-		and notices.get_tooltip(notices.icon_rect(index).get_center()).begins_with(duel.artifact_title(item)),
-		"#243: the used artifact shows its icon and name in the battle notices")
+		duel.heroes[side].artifacts = [entry]
+		duel.heroes[side].artifact_uses = 0
+		if duel.artifact_error(side, 0).is_empty(): return entry
+	return {}
 
 func _jammer_marks(view: Node) -> void:
 	view._start("el2", {"first_side": 0}, null, 252)

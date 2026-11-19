@@ -96,5 +96,7 @@ static func message_rows(profile: ELProfile, items: Variant) -> Array[Dictionary
 				rows.append({"card": card, "name": profile.text(str(profile.table("CombatSpells").get(card, {}).get("Name", card)))})
 			"artifact":
 				var name := str(item.get("name", ""))
-				rows.append({"card": ELSecondArtifacts.spell(profile, {"name": name}), "name": ELMapPickups.artifact_title(profile, name)})
+				# The artifact as the hero receives it, for its tooltip.
+				var artifact := {"name": name, "charges": int(profile.table("Artefacts").get(name, {}).get("MaxCharges", 0))}
+				rows.append({"card": ELSecondArtifacts.spell(profile, artifact), "name": ELMapPickups.artifact_title(profile, name), "artifact": artifact})
 	return rows

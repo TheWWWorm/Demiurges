@@ -518,7 +518,7 @@ func learn_specialization(id: int, code: String) -> bool:
 	var owned := specializations(hero)
 	if owned.has(code): return false
 	var text := map.profile.text("T_MB_RECEIVE_NEW_SPEC").replace("%s", map.profile.text(str(map.profile.table("HeroesSpecs")[code].get("Name", code))))
-	if map.profile.id == "el2" and ELSecondCampaign.first_specialization_hint(self, hero, owned): text += "\n\n" + map.profile.text("T_MB_RECEIVE_NEW_SPEC_FIRST")
+	if map.profile.id == "el2" and ELSecondCampaign.first_specialization_hint(self, hero): text += "\n\n" + map.profile.text("T_MB_RECEIVE_NEW_SPEC_FIRST")
 	owned.append(code)
 	hero.specializations = owned
 	if str(hero.get("specialization", "NONE")) == "NONE": hero.specialization = code
@@ -886,7 +886,8 @@ func _native(args: Array, name: String) -> Array:
 			# The Messages panel: the title, then the artifact's picture and name.
 			event.emit({"kind": "message_box", "speaker": -1, "text": map.profile.text("T_MB_ARTEFACT_CREATED"),
 				"question": false, "hook": false, "artifact": str(first), "box": "loot", "created": true, "speaker_box": false,
-				"items": [{"name": ELSecondArtifacts.title(map.profile, made), "card": str(definition.spell), "icon_index": int(definition.get("icon", -1))}]})
+				"items": [{"name": ELSecondArtifacts.title(map.profile, made), "card": str(definition.spell), "icon_index": int(definition.get("icon", -1)),
+					"artifact": made.merged({"charges": int(definition.get("max", 0))})}]})
 		"ExRechargeArtefacts":
 			if not item.get("type") in ["hero", "monster"]:
 				vm._fail("Hero not found: %d" % int(first if first is float or first is int else -1))
