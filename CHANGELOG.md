@@ -11,6 +11,7 @@ Versions follow [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html)
 - **Etherlords I saves and castles.** Save and load lists mark the races playing on each saved map, as the original does. Each new start of a mission or campaign chapter recruits different castle heroes; a loaded save keeps its own. [#255](https://github.com/TheWWWorm/Demiurges/issues/255) · [#259](https://github.com/TheWWWorm/Demiurges/issues/259)
 - **Wiki.** Creature and hero models are framed by their own meshes, so their sizes are consistent (no more tiny Orc Shaman or giant Gibberling) and they stay inside their frame at any zoom or angle. [#262](https://github.com/TheWWWorm/Demiurges/issues/262)
 - **Enter** (and keypad Enter) presses the visible check (OK) button in both games, as a click would, unless Enter already does something there, including from the hero name field on the Etherlords I campaign selection. [#264](https://github.com/TheWWWorm/Demiurges/issues/264)
+- The orc shaman is no longer overly bright: the extra glow on his hood, wraps and skull is gone, and his hood still shows no dark patch. [#223](https://github.com/TheWWWorm/Demiurges/issues/223)
 
 ## 0.19.1 (not released yet)
 
