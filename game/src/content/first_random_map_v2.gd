@@ -109,6 +109,8 @@ var _trail_stale := true
 var _port_routes := {}
 # Where the last failed access check found an unreachable site.
 var _unreached := Vector2i(-1, -1)
+## Version 13 woods: a diagonal step between two blocking objects is no way in.
+var _strict_corners := false
 var _reward_guards := {}
 var _basins: Array[Transform2D] = []
 var _frontier_supplies: Array[Dictionary] = []
@@ -320,11 +322,13 @@ func generate(profile: ELProfile, options: Dictionary = {}) -> ELAdventureMap:
 			if config.version == SCENERY_VERSION and not _check_access(true): return null
 			_make_scenery()
 	if config.version >= GUARDED_PRIZES_VERSION and not _reconnect_landscape(first_decoration, cliff_ids): return null
+	if config.version >= STOCK_LAYOUT_VERSION and config.scenery > 0 and not _open_corner_gaps(first_decoration, cliff_ids): return null
 	if config.version >= STOCK_LAYOUT_VERSION and config.scenery > 0:
 		# The woods closed over the old opening routes. Find them again on
 		# the finished ground so guards still leave every opening site free.
 		_guard_safe.fill(0)
 		var opened := false
+		_strict_corners = true
 		for attempt in 8:
 			_unreached = Vector2i(-1, -1)
 			if _check_access(true):
@@ -337,7 +341,10 @@ func generate(profile: ELProfile, options: Dictionary = {}) -> ELAdventureMap:
 			_map.objects = _map.objects.filter(func(item: Dictionary) -> bool:
 				return item.group != "terrain_objects" or int(item.permanent_id) < first_decoration or Vector2i(item.x, item.y).distance_squared_to(site) > (6 + attempt * 3) * (6 + attempt * 3))
 			if not _reconnect_landscape(first_decoration, cliff_ids): return null
-		if not opened: return null
+		# A gap between two fixed objects stays; the game's diagonal step
+		# still crosses it.
+		_strict_corners = false
+		if not opened and not _check_access(true): return null
 	if not _check_terrain(): return null
 	if config.version >= GUARD_POSTS_VERSION and config.guards != "none":
 		if not _post_field_guards(): return null
@@ -1988,6 +1995,7 @@ func _post_wilderness_creatures(placement: RefCounted, travel: PackedInt32Array)
 ## the start last, until every remaining one has a reachable neighbor.
 func _drop_sealed_creatures(grid: ELAdventureGrid, roaming: Array[int]) -> Dictionary:
 	var removed := {}
+	_strict_corners = config.version >= STOCK_LAYOUT_VERSION
 	var by_id := {}
 	for item: Dictionary in _map.objects:
 		if item.group == "np_heroes": by_id[int(item.permanent_id) - 1] = item
@@ -2005,6 +2013,7 @@ func _drop_sealed_creatures(grid: ELAdventureGrid, roaming: Array[int]) -> Dicti
 				var next := at + delta
 				if not grid.contains(next) or reached[_index(next)] != 0 or grid.land.is_point_solid(next): continue
 				if config.naval and not ELFirstNaval.connected(grid, at, next, true, true): continue
+				if _corner_gap(grid, at, next): continue
 				reached[_index(next)] = 1
 				queue.append(next)
 		var sealed: Array[int] = []
@@ -2016,7 +2025,7 @@ func _drop_sealed_creatures(grid: ELAdventureGrid, roaming: Array[int]) -> Dicti
 				# The final access check does not count shore cells as stands.
 				if grid.contains(near) and reached[_index(near)] != 0 and not (config.naval and _sea_cell(near)): open = true
 			if not open: sealed.append(id)
-		if sealed.is_empty(): return removed
+		if sealed.is_empty(): break
 		for id: int in sealed:
 			var item: Dictionary = by_id[id]
 			grid.update_actor({"uid": id, "x": item.x, "y": item.y, "type": "monster", "alive": false, "visible": false})
@@ -2024,6 +2033,7 @@ func _drop_sealed_creatures(grid: ELAdventureGrid, roaming: Array[int]) -> Dicti
 			_important.erase(id)
 		for id: int in sealed: removed[id] = true
 		_map.objects = _map.objects.filter(func(item: Dictionary) -> bool: return not removed.has(int(item.permanent_id) - 1))
+	_strict_corners = false
 	return removed
 
 ## Median creature level in the stock missions by land steps from the
@@ -3476,6 +3486,78 @@ func _reconnect_landscape(first_decoration: int, cliff_ids: Vector2i) -> bool:
 	report.reopened_connections = reach.connections
 	return true
 
+## Version 13: a diagonal step between two cells blocked by objects or
+## impassable ground. The game allows it, but among dense props it reads as
+## walking through a wall, so the generator does not count it as a way in.
+## A road drawn across the corner shows the way and still counts.
+func _corner_gap(grid: ELAdventureGrid, at: Vector2i, next: Vector2i) -> bool:
+	if not _strict_corners or at.x == next.x or at.y == next.y: return false
+	if _map.roads[_index(at)] != 0 and _map.roads[_index(next)] != 0: return false
+	return _corner_blocked(grid, Vector2i(next.x, at.y)) and _corner_blocked(grid, Vector2i(at.x, next.y))
+
+func _corner_blocked(grid: ELAdventureGrid, cell: Vector2i) -> bool:
+	var index := _index(cell)
+	return grid.blockers[index] > 0 or (grid.land.is_point_solid(cell) and grid.actor_blockers[index] == 0)
+
+## Version 13: open land that the woods leave reachable only through a
+## diagonal gap between two objects. Remove the smaller generated prop at
+## each such gap until every pocket has a visible way in.
+func _open_corner_gaps(first_decoration: int, cliff_ids: Vector2i) -> bool:
+	_strict_corners = true
+	var opened := 0
+	for round in 32:
+		var objects := _navigation_objects(false)
+		var grid := ELAdventureGrid.new()
+		if not grid.build(_map, objects):
+			error = grid.error
+			return false
+		var owner := {}
+		var area := {}
+		for id: int in objects:
+			var item: Dictionary = objects[id]
+			var permanent_id := int(item.permanent_id)
+			if item.group != "terrain_objects" or not (permanent_id >= first_decoration or (permanent_id >= cliff_ids.x and permanent_id < cliff_ids.y)): continue
+			var cells: Array = grid.footprints.get(id, {}).get("cells", [])
+			area[permanent_id] = cells.size()
+			for cell: Vector2i in cells:
+				var point := cell + Vector2i(item.x, item.y)
+				if grid.contains(point): owner[_index(point)] = permanent_id
+		var first := Vector2i(_starts[0].x, _starts[0].y)
+		var reached := PackedByteArray()
+		reached.resize(_map.width * _map.height)
+		reached[_index(first)] = 1
+		var queue: Array[Vector2i] = [first]
+		var head := 0
+		while head < queue.size():
+			var at := queue[head]
+			head += 1
+			for delta: Vector2i in ELInterception.DIRECTIONS:
+				var next := at + delta
+				if not grid.contains(next) or reached[_index(next)] != 0 or grid.land.is_point_solid(next): continue
+				if config.naval and not ELFirstNaval.connected(grid, at, next, true, true): continue
+				if _corner_gap(grid, at, next): continue
+				reached[_index(next)] = 1
+				queue.append(next)
+		var removed := {}
+		for at: Vector2i in queue:
+			if config.naval and _sea_cell(at): continue
+			for delta: Vector2i in [Vector2i(1, 1), Vector2i(1, -1), Vector2i(-1, 1), Vector2i(-1, -1)]:
+				var next := at + delta
+				if not grid.contains(next) or reached[_index(next)] != 0 or grid.land.is_point_solid(next): continue
+				if config.naval and _sea_cell(next): continue
+				if not _corner_gap(grid, at, next): continue
+				var a: int = owner.get(_index(Vector2i(next.x, at.y)), -1)
+				var b: int = owner.get(_index(Vector2i(at.x, next.y)), -1)
+				if (a < 0 and b < 0) or removed.has(a) or removed.has(b): continue
+				removed[a if b < 0 or (a >= 0 and int(area[a]) <= int(area[b])) else b] = true
+		if removed.is_empty(): break
+		opened += removed.size()
+		_map.objects = _map.objects.filter(func(item: Dictionary) -> bool: return not removed.has(int(item.permanent_id)))
+	_strict_corners = false
+	report.opened_corner_gaps = opened
+	# Recount the joined ground with the freed cells.
+	return opened == 0 or _reconnect_landscape(first_decoration, cliff_ids)
+
 func _widen_land_connection(at: Vector2i) -> void:
 	for y in range(at.y, at.y + 2):
 		for x in range(at.x, at.x + 2):
@@ -3514,6 +3596,7 @@ func _check_access(protect_routes := false, enforce_daily := false) -> bool:
 				var offset := next.y * _map.width + next.x
 				if reached[offset] != 0 or grid.land.is_point_solid(next): continue
 				if config.naval and not ELFirstNaval.connected(grid, at, next, true, true): continue
+				if _corner_gap(grid, at, next): continue
 				reached[offset] = 1
 				if protect_routes: previous[offset] = at.y * _map.width + at.x
 				queue.append(next)

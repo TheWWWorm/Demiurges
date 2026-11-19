@@ -320,6 +320,12 @@ the stock curve from walking distance: level one beside a castle, three
 after 11–20 steps, four after 21–30, five after 31–45 and six beyond. After
 the woods are placed, generation clears scenery around any site the travel
 check cannot reach. It also removes any creature that has been shut in.
+The game lets a hero step diagonally between two blocked corners. Among
+dense woods, though, that step looks like walking through a wall.
+Version 13 therefore removes the smaller generated prop at any such gap that
+is the only way into land. A diagonal road still counts as a way in.
+`tools/first_ai_sim.gd --random=<preset>` plays the world AI on a generated
+map, for example with `--fight-monsters=true`.
 
 ### Whole-map access
 

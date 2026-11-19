@@ -7,7 +7,7 @@ extends SceneTree
 ##   godot --headless --path game --script ../tools/first_ai_sim.gd -- [--map=<id>|all] [--days=40]
 ##         [--campaign=Good|Evil] [--smart=true] [--free=true] [--difficulty=1] [--seed=212]
 ##         [--opponent=still|active] [--estimate=false] [--fight-monsters=false] [--lookahead=true] [--living=false]
-##         [--list] [--quiet] [--dump] [--balance]
+##         [--list] [--quiet] [--dump] [--balance] [--random=<preset>[,<preset>...] [--map-seed=212]]
 ##
 ## `--list` prints the single map ids. Without `--map` the first catalogue map
 ## with a spell shop is played; `--campaign` plays that campaign's chapters
@@ -21,7 +21,9 @@ extends SceneTree
 ## living-world switch (patrols, raids, escorts, retreats, doctrines). `--dump` adds each player's
 ## ether, global spells, books and known shops at the end. `--balance` adds
 ## first resource-site capture, planning counters and forecast versus duel
-## outcome as one JSON line per faction or battle.
+## outcome as one JSON line per faction or battle. `--random` plays a generated
+## world from each named random-map preset (current generator, seed
+## `--map-seed`) instead of a stock map.
 ##
 ## Each computer player's summary counts, per hero and day:
 ##   idle         no objective at the end of the day;
@@ -82,6 +84,12 @@ func _run() -> void:
 		return
 	var wanted := _arg("map", "")
 	var failed := false
+	if not _arg("random", "").is_empty():
+		for preset: String in _arg("random", "").split(","):
+			for map_seed: String in _arg("map-seed", "212").split(","):
+				if _play(profile, {"id": "random:%s:%s" % [preset, map_seed], "random": preset, "map_seed": map_seed}, int(_arg("days", "40")), false) == "fail": failed = true
+		quit(1 if failed else 0)
+		return
 	var chapters := _arg("campaign", "")
 	if not chapters.is_empty():
 		# Campaign chapters ("Good", "Evil"...): the human's seat and the chapter rules.
@@ -112,7 +120,20 @@ func _stat(player: int) -> Dictionary:
 func _play(profile: ELProfile, entry: Dictionary, days: int, need_shop: bool) -> String:
 	seed(int(_arg("seed", "212")))
 	var map := ELAdventureMap.new()
-	if not map.load_map(profile, str(entry.id)):
+	if entry.has("random"):
+		var options := {}
+		for preset: Dictionary in ELFirstRandomMap.presets():
+			if preset.id == entry.random: options = ELFirstRandomMap.defaults().merged(preset.options, true)
+		if options.is_empty():
+			print("SKIP %s: unknown random-map preset" % entry.id)
+			return "skip"
+		options.seed = str(entry.map_seed)
+		var generator := ELFirstRandomMap.new()
+		map = generator.generate(profile, options)
+		if map == null:
+			print("FAIL %s: %s" % [entry.id, generator.error])
+			return "fail"
+	elif not map.load_map(profile, str(entry.id)):
 		print("SKIP %s: %s" % [entry.id, map.error])
 		return "skip"
 	state = ELAdventureSession.new()
@@ -142,7 +163,7 @@ func _play(profile: ELProfile, entry: Dictionary, days: int, need_shop: bool) ->
 	if balance: director.set_meta("first_ai_balance", true)
 	if _arg("confirm-replays", "false") == "true": director.set_meta("first_ai_replay", true)
 	var capture := {}
-	var participants := ELFirstAI.computer_players(state) if balance else []
+	var participants: Array[int] = ELFirstAI.computer_players(state) if balance else ([] as Array[int])
 	var timeline := {"turn": 0, "dawn": {}, "acted": {}}
 	stats = {}
 	threats = {}
@@ -202,7 +223,10 @@ func _play(profile: ELProfile, entry: Dictionary, days: int, need_shop: bool) ->
 	)
 	explored_before = state.explored.duplicate()
 	director.grid.actor_moved.connect(_stepped)
-	print("=== %s (%s): %d spell shops, %d component portals, smart=%s free=%s seed=%s opponent=%s lookahead=%s living=%s fight-monsters=%s difficulty=%d, human P%d" % [entry.id, ELSingleScenario.title(profile, entry), shops, portals, director.smart_ai, director.free_movement, _arg("seed", "212"), "active" if active else "still", _arg("lookahead", "true"), _arg("living", "false"), director.fight_neutral_monsters, state.difficulty, state.current_player])
+	var monsters_at_start := 0
+	for item: Dictionary in state.objects.values():
+		if item.get("type") == "monster" and item.get("alive", false): monsters_at_start += 1
+	print("=== %s (%s): %d spell shops, %d component portals, smart=%s free=%s seed=%s opponent=%s lookahead=%s living=%s fight-monsters=%s difficulty=%d, human P%d" % [entry.id, "random map" if entry.has("random") else ELSingleScenario.title(profile, entry), shops, portals, director.smart_ai, director.free_movement, _arg("seed", "212"), "active" if active else "still", _arg("lookahead", "true"), _arg("living", "false"), director.fight_neutral_monsters, state.difficulty, state.current_player])
 	var income := {}
 	for player: int in state.players:
 		if player == state.current_player: continue
@@ -263,6 +287,10 @@ func _play(profile: ELProfile, entry: Dictionary, days: int, need_shop: bool) ->
 			outcome_day = int(state.day)
 			print("day %d: outcome %s" % [state.day, state.outcome])
 			break
+	var monsters_left := 0
+	for item: Dictionary in state.objects.values():
+		if item.get("type") == "monster" and item.get("alive", false): monsters_left += 1
+	print("MONSTERS: %d at start, %d left after day %d" % [monsters_at_start, monsters_left, state.day])
 	var failed := false
 	var timing: Dictionary = director.get_meta("first_ai_stats", {})
 	var fallen: Array = []
