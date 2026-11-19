@@ -886,6 +886,13 @@ static func _engine(ctx: Context, duel: ELDuel, stats: Dictionary, asked: Dictio
 	if smart_engine_likely and not smart_engine_rollouts and not found.is_empty() and _unlikely(ctx, duel, found.command):
 		found = _likely(ctx, duel, found, stats)
 		_stage(stats, "likely", stage_began)
+	# A spell for one side's creatures is never laid on the other's: the
+	# engine's model can value a buff on the other hero's creature or a curse
+	# on its own, but the original never casts one so (SPELL_SIDES).
+	stage_began = Time.get_ticks_usec()
+	if not found.is_empty() and _wrong_side(ctx, duel, found.command):
+		found = _right_side(ctx, duel, found, stats)
+		_stage(stats, "sides", stage_began)
 	stage_began = Time.get_ticks_usec()
 	# An ether spell that nothing in the line after it needs stays in the
 	# hand, and the line goes on without it.
@@ -895,6 +902,7 @@ static func _engine(ctx: Context, duel: ELDuel, stats: Dictionary, asked: Dictio
 		if not instead.is_empty(): _stage(stats, "idle", stage_began)
 	stage_began = Time.get_ticks_usec()
 	var beyond := _beyond(ctx, duel, found) if smart_engine_beyond > 0 and not smart_engine_rollouts and not _late(ctx) else {}
+	if not beyond.is_empty() and _wrong_side(ctx, duel, beyond.command): beyond = {}
 	_stage(stats, "beyond", stage_began)
 	# Measuring aid: a class of the engine's decisions is handed back to
 	# the search, to see how much of the difference between them it holds.
@@ -966,6 +974,33 @@ static func _likely(ctx: Context, duel: ELDuel, found: Dictionary, stats: Dictio
 		return found
 	stats.likely = int(stats.get("likely", 0)) + 1
 	return {"command": better.command, "value": better.value, "positions": found.get("positions", 0), "status": "heuristic"}
+
+## Enchantments that pay their caster whichever creature carries them.
+const ANY_SIDE_HOSTS := ["MNBR", "MNST"]
+
+## Whether `command` casts a spell meant for one side's creatures on a
+## creature of the other side (SPELL_SIDES); heroes are judged by the
+## spells' own priorities.
+static func _wrong_side(ctx: Context, duel: ELDuel, command: Dictionary) -> bool:
+	if String(command.get("kind", "")) != "cast": return false
+	var card := String(command.get("card", ""))
+	var target := int(command.get("target", -1))
+	if target < 2 or card in ANY_SIDE_HOSTS or not duel.creatures.has(target): return false
+	var flags := int(SPELL_SIDES[ctx.edition].get(card, 0)) & 3
+	return flags != 0 and not _sides_ok(duel, ctx.ai, flags, target, -1, ctx.second)
+
+## The best command the engine weighs that keeps to the spells' sides and
+## the original's reckoning; with none, the phase ends.
+static func _right_side(ctx: Context, duel: ELDuel, found: Dictionary, stats: Dictionary) -> Dictionary:
+	stats.wrong_side = int(stats.get("wrong_side", 0)) + 1
+	var better := {}
+	for item: Dictionary in ELCombatBrain.weigh(ctx, duel, smart_engine_phases, _share(ctx, ctx.budget), smart_engine_steps, smart_engine_width):
+		if item.command.is_empty() or not bool(item.get("complete", true)): continue
+		if _wrong_side(ctx, duel, item.command) or _unlikely(ctx, duel, item.command): continue
+		if better.is_empty() or float(item.value) > float(better.value): better = item
+	ctx.used += _share(ctx, ctx.budget) if ctx.budget > 0 else 0
+	var command: Dictionary = better.command if not better.is_empty() else {"kind": "end_phase"}
+	return {"command": command, "value": better.get("value", found.get("value", 0.0)), "positions": found.get("positions", 0), "status": "heuristic"}
 
 ## Whether `command` passes the engine's guard, as the engine's own choice
 ## must: once it is played, the other hero is not proved to win within
