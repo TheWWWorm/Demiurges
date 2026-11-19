@@ -1043,6 +1043,8 @@ const RU := {
 	"Stinging spores": "Жалящие споры",
 	"Manifests": "Проявляется",
 	"Pale aspect": "Бледный облик",
+	"Your ether disturbance": "Ваше Эфирное Возмущение",
+	"The opponent's ether disturbance": "Эфирное Возмущение противника",
 	"Protected": "Защищено",
 	"Regeneration": "Регенерация",
 	"Disenchanted": "Чары сняты",

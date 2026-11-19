@@ -317,7 +317,7 @@ func _battle_view(edition: String) -> void:
 	duel.creatures[shaman].enchantments.append(worn)
 	duel.heroes[side].enchantments.append(worn)
 	var hero_tip: Dictionary = view._hero_tip(side)
-	check(view._creature_tip_text(shaman).contains(duel.card_name("HEAL") + ": " + about), "%s: a creature's tooltip lists its enchantments with their text" % edition)
+	check(not view._creature_tip_text(shaman).contains(about), "%s #202/#254: a creature's tooltip is its printed card, without its enchantments" % edition)
 	check(hero_tip.labels.any(func(label: Dictionary) -> bool: return str(label.text).contains(duel.card_name("HEAL"))), "%s: a hero's tooltip lists its enchantments" % edition)
 	duel.creatures[shaman].enchantments.erase(worn)
 	duel.heroes[side].enchantments.erase(worn)

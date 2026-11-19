@@ -131,8 +131,8 @@ func _edition(edition: String) -> void:
 			_mouse_button(body_point, true)
 			for i in 4: await process_frame
 			var creature_text := _shown(tip)
-			# The second game titles it like the hand card ("Создание: <name>", report #100).
-			var title: String = (view._original_text("T_SPELL_TYPE", "Creature") + ": " if edition == "el2" else "") + duel.card_name(str(duel.creatures[creature].card))
+			# Both games title it like the hand card ("Создание: <name>", reports #100, #254).
+			var title: String = view._original_text("T_SPELL_TYPE", "Creature") + ": " + duel.card_name(str(duel.creatures[creature].card))
 			check(tip.panel.visible and creature_text.begins_with(title), "%s: right button on the body shows the creature (%s)" % [edition, JSON.stringify(creature_text.get_slice("\n", 0))])
 			check(int(view.strip_preview) == creature, "%s: right button on the body previews the creature's strip" % edition)
 			_mouse_button(body_point, false)

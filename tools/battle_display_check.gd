@@ -255,10 +255,7 @@ func _growth_and_drain(view: Node, edition: String) -> void:
 	panel_ok = view.hero_values.size() < 2 or String(view.hero_values[foe].text).begins_with("%d " % before.heroes[foe][0])
 	check(panel_ok, "%s fight: the hero panel shows the shown health" % edition)
 	var tip: String = view._creature_tip_text(attacker)
-	if edition == "el2":
-		check(tip.contains(ELEncyclopaedia.strength(view.profile, card)), "el2 fight: the creature tooltip reads the printed stats (%s)" % tip.get_slice("\n", 0))
-	else:
-		check(tip.contains("%d/%d" % [before.creatures[attacker][0], before.creatures[attacker][1]]), "el1 fight: the creature tooltip reads the shown stats (%s)" % tip.get_slice("\n", 0))
+	check(tip.contains(ELEncyclopaedia.strength(view.profile, card)), "%s fight #202/#254: the creature tooltip reads the printed stats (%s)" % [edition, tip.get_slice("\n", 0)])
 	var samples := await _watch(view, [attacker], start)
 	var hit := _changed_at(samples, before.heroes[foe][0], func(s: Dictionary) -> int: return s.heroes[foe][0])
 	var heal := _changed_at(samples, before.heroes[side][0], func(s: Dictionary) -> int: return s.heroes[side][0])
