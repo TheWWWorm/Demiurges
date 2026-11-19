@@ -1,3 +1,4 @@
+## Modified for the EL1 Naval Worlds release, 18 November 2026.
 class_name ELInterception
 extends RefCounted
 ## EL1 registered guard areas. Ordinary moving heroes do not create zones.
@@ -35,6 +36,9 @@ static func flood(grid: ELAdventureGrid, origin: Vector2i, radius: int, allowed:
 			if visited.has(point) or origin.distance_squared_to(point) >= radius * radius - 1 or not grid.contains(point): continue
 			# A fort zone admits its own blocked footprint cells.
 			if grid.passability(point, false, grid.map.profile.id == "el1") < 0 and not allowed.has(point): continue
+			# A land guard cannot intercept through an inaccessible coast.
+			# Ships likewise guard the sea, not the shore behind it.
+			if grid.naval and grid.naval_water[current.y * grid.map.width + current.x] != grid.naval_water[point.y * grid.map.width + point.x]: continue
 			visited[point] = true
 			result.append(point)
 	return result
@@ -105,7 +109,7 @@ func enemies(state: ELAdventureSession, actor: Dictionary, point: Vector2i) -> A
 
 func can_step(state: ELAdventureSession, grid: ELAdventureGrid, actor: Dictionary, point: Vector2i) -> bool:
 	if actor.get("fortified", false) or int(actor.get("spell_fort", 0)) > 0 or actor.get("intercepted", false) or not enemies(state, actor, Vector2i(actor.x, actor.y)).is_empty(): return false
-	var cost := grid.passability(point)
+	var cost := ELFirstNaval.step_cost(grid, Vector2i(actor.x, actor.y), point) if grid.naval else grid.passability(point)
 	return cost >= 0 and cost <= int(actor.ap)
 
 func preview(state: ELAdventureSession, actor: Dictionary, path: Array) -> Array:

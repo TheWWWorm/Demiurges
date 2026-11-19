@@ -1,0 +1,219 @@
+{
+	"description": "Synthetic version1 snapshots: six from the first delivered generator before naval changes; five from the independently recovered naval-prototype ZIP. No original game assets.",
+	"maps": [
+		{
+			"config": {
+				"biome": "mixed",
+				"castle_health": 30.0,
+				"faction": "Green",
+				"guards": "normal",
+				"layout": "frontier",
+				"players": 2.0,
+				"resources": "normal",
+				"roads": true,
+				"scenery": 0.0,
+				"seed": "legacy-snapshot-0",
+				"size": 64.0,
+				"starting_resources": "normal",
+				"version": 1.0
+			},
+			"hash": "ba6d37d5baa6a441b9dde84ad08884d47355118cd81ca1d18bc665a13948815e",
+			"id": "el1_random_v1_8980657d50a33d302d9e617c"
+		},
+		{
+			"config": {
+				"biome": "mixed",
+				"castle_health": 30.0,
+				"faction": "Green",
+				"guards": "normal",
+				"layout": "frontier",
+				"players": 4.0,
+				"resources": "normal",
+				"roads": true,
+				"scenery": 1.0,
+				"seed": "legacy-snapshot-1",
+				"size": 96.0,
+				"starting_resources": "normal",
+				"version": 1.0
+			},
+			"hash": "d3af3580345dd27b87f61001368de15ef9fba824a90b52c3f40884ba6a28e943",
+			"id": "el1_random_v1_04f4b45ac42c4c332f9c31bf"
+		},
+		{
+			"config": {
+				"biome": "mixed",
+				"castle_health": 30.0,
+				"faction": "Green",
+				"guards": "normal",
+				"layout": "lakes",
+				"players": 2.0,
+				"resources": "normal",
+				"roads": true,
+				"scenery": 0.0,
+				"seed": "legacy-snapshot-0",
+				"size": 64.0,
+				"starting_resources": "normal",
+				"version": 1.0
+			},
+			"hash": "612fc241ba7ee31759a85d74f72fff622e36acae72ae1728533bd9f4a82a36a2",
+			"id": "el1_random_v1_614cad127fca1092c3345cb9"
+		},
+		{
+			"config": {
+				"biome": "mixed",
+				"castle_health": 30.0,
+				"faction": "Green",
+				"guards": "normal",
+				"layout": "lakes",
+				"players": 4.0,
+				"resources": "normal",
+				"roads": true,
+				"scenery": 1.0,
+				"seed": "legacy-snapshot-1",
+				"size": 96.0,
+				"starting_resources": "normal",
+				"version": 1.0
+			},
+			"hash": "a668339ea61f37c9b0bca9410eea47d00fcc95f582d81100bc78a94efd46568b",
+			"id": "el1_random_v1_bf061bf7cc0da51c715d6db1"
+		},
+		{
+			"config": {
+				"biome": "mixed",
+				"castle_health": 30.0,
+				"faction": "Green",
+				"guards": "normal",
+				"layout": "crossroads",
+				"players": 2.0,
+				"resources": "normal",
+				"roads": true,
+				"scenery": 0.0,
+				"seed": "legacy-snapshot-0",
+				"size": 64.0,
+				"starting_resources": "normal",
+				"version": 1.0
+			},
+			"hash": "67d614235854e3db1552b256f1699ec9a835decd6ba0fd7a105211b95d8cdd3b",
+			"id": "el1_random_v1_5c8498329d90031f243d2efb"
+		},
+		{
+			"config": {
+				"biome": "mixed",
+				"castle_health": 30.0,
+				"faction": "Green",
+				"guards": "normal",
+				"layout": "crossroads",
+				"players": 4.0,
+				"resources": "normal",
+				"roads": true,
+				"scenery": 1.0,
+				"seed": "legacy-snapshot-1",
+				"size": 96.0,
+				"starting_resources": "normal",
+				"version": 1.0
+			},
+			"hash": "6c1580c640a7a5011cd6daf13218c9405f37695018dc5d3f39ba7d935673cf4d",
+			"id": "el1_random_v1_88758f71cf4b3162a4aebbe7"
+		},
+		{
+			"config": {
+				"biome": "mixed",
+				"castle_health": 30,
+				"faction": "Green",
+				"guards": "normal",
+				"layout": "archipelago",
+				"players": 4,
+				"resources": "normal",
+				"roads": true,
+				"scenery": 1,
+				"seed": "prototype-replay",
+				"size": 96,
+				"starting_resources": "normal",
+				"version": 1
+			},
+			"hash": "b2889dd49d0d956063dce12a938be1c2d3597aacb0da9cb138a19efbb055e2e6",
+			"id": "el1_random_v1_91c7ab36ec6a1627354738d1",
+			"origin": "recovered_naval_prototype"
+		},
+		{
+			"config": {
+				"biome": "mixed",
+				"castle_health": 30,
+				"faction": "Green",
+				"guards": "normal",
+				"layout": "inland_sea",
+				"players": 4,
+				"resources": "normal",
+				"roads": true,
+				"scenery": 1,
+				"seed": "prototype-replay",
+				"size": 96,
+				"starting_resources": "normal",
+				"version": 1
+			},
+			"hash": "24a25923720104b6c837651296ec0fd8b095cfaee085d8933efe8a1a191440d1",
+			"id": "el1_random_v1_a8fd9c953359d6cbfad271bb",
+			"origin": "recovered_naval_prototype"
+		},
+		{
+			"config": {
+				"biome": "mixed",
+				"castle_health": 30,
+				"faction": "Green",
+				"guards": "normal",
+				"layout": "river_delta",
+				"players": 4,
+				"resources": "normal",
+				"roads": true,
+				"scenery": 1,
+				"seed": "prototype-replay",
+				"size": 96,
+				"starting_resources": "normal",
+				"version": 1
+			},
+			"hash": "2070d7cf0ae6b9363dc7fe24c2c2cee5e6034eb43fb187e03ca235da5b3bc18a",
+			"id": "el1_random_v1_d049a85485d7e409f1b50796",
+			"origin": "recovered_naval_prototype"
+		},
+		{
+			"config": {
+				"biome": "mixed",
+				"castle_health": 30,
+				"faction": "Green",
+				"guards": "normal",
+				"layout": "ring",
+				"players": 4,
+				"resources": "normal",
+				"roads": true,
+				"scenery": 1,
+				"seed": "prototype-replay",
+				"size": 96,
+				"starting_resources": "normal",
+				"version": 1
+			},
+			"hash": "a3d314e876f50886635007a6fa5289e8028685e3444c0d20b96eea429ad32da0",
+			"id": "el1_random_v1_ccadfc03401e6657b52cb0b2",
+			"origin": "recovered_naval_prototype"
+		},
+		{
+			"config": {
+				"biome": "mixed",
+				"castle_health": 30,
+				"faction": "Green",
+				"guards": "normal",
+				"layout": "peninsulas",
+				"players": 4,
+				"resources": "normal",
+				"roads": true,
+				"scenery": 1,
+				"seed": "prototype-replay",
+				"size": 96,
+				"starting_resources": "normal",
+				"version": 1
+			},
+			"hash": "79609dab2c9711d872f4b981ac56b6955fdc7a4b919e16e82f86c9b36a39c398",
+			"id": "el1_random_v1_7f9ddb3a284d8d55c34739e8",
+			"origin": "recovered_naval_prototype"
+		}
+	]
+}

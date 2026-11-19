@@ -128,6 +128,13 @@ func build(map: ELAdventureMap) -> bool:
 	material.set_shader_parameter("pitch", pitch)
 	material.set_shader_parameter("tile_margin", GUTTER)
 	material.set_shader_parameter("atlas_size", Vector2(image.get_size()))
+	material.set_shader_parameter("relief_enabled", not map.relief.is_empty())
+	var ground_detail: PackedByteArray = map.get_meta("wilderness_detail", PackedByteArray())
+	if ground_detail.size() == (map.width + 1) * (map.height + 1) * 3:
+		var field := Image.create_from_data(map.width + 1, map.height + 1, false, Image.FORMAT_RGB8, ground_detail)
+		material.set_shader_parameter("wilderness_detail", ImageTexture.create_from_image(field))
+		material.set_shader_parameter("wilderness_size", Vector2(field.get_size()))
+		material.set_shader_parameter("wilderness_enabled", true)
 	# Keep only the most recently built map atlas per edition. Reloading a save
 	# can reuse it without accumulating every visited chapter's textures.
 	_cache = {"map": map.id, "atlas": atlas, "frames": animation_frames, "combinations": combinations, "cells": cells, "plans": compositions, "material": material,
@@ -257,6 +264,7 @@ func set_water_rain(areas: PackedVector4Array) -> void:
 
 func _build_chunk(map: ELAdventureMap, origin: Vector2i, cells: PackedInt32Array, plans: Array[Dictionary], material: Material) -> void:
 	var vertices := PackedVector3Array()
+	var normals := PackedVector3Array()
 	var uvs := PackedVector2Array()
 	var data := PackedVector2Array()
 	var indices := PackedInt32Array()
@@ -271,17 +279,15 @@ func _build_chunk(map: ELAdventureMap, origin: Vector2i, cells: PackedInt32Array
 			var corners: Array[Vector2i] = [Vector2i(0, 0), Vector2i(1, 0), Vector2i(1, 1), Vector2i(0, 1)]
 			for i in 4:
 				var corner := corners[i]
-				vertices.append(Vector3((x + corner.x) * CELL, 0, -(y + corner.y) * CELL))
+				var at := Vector2(x + corner.x, y + corner.y)
+				vertices.append(Vector3(at.x * CELL, map.surface_height(at), -at.y * CELL))
+				normals.append(map.surface_normal(at, CELL))
 				uvs.append(Vector2(corners[posmod(i - cell % 4, 4)]))
 				data.append(Vector2(plan.offset, plan.frames))
 			indices.append_array([base, base + 1, base + 2, base, base + 2, base + 3])
 	var arrays := []
 	arrays.resize(Mesh.ARRAY_MAX)
 	arrays[Mesh.ARRAY_VERTEX] = vertices
-	# Flat ground: up normals, which the sun's shadow lookup needs.
-	var normals := PackedVector3Array()
-	normals.resize(vertices.size())
-	normals.fill(Vector3.UP)
 	arrays[Mesh.ARRAY_NORMAL] = normals
 	arrays[Mesh.ARRAY_TEX_UV] = uvs
 	arrays[Mesh.ARRAY_TEX_UV2] = data

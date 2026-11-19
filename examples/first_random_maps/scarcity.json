@@ -1,0 +1,18 @@
+{
+  "version": 2,
+  "seed": "random-map-example",
+  "size": 96,
+  "players": 4,
+  "layout": "frontier",
+  "biome": "mixed",
+  "resources": "scarce",
+  "starting_resources": "scarce",
+  "guards": "strong",
+  "faction": "Green",
+  "roads": true,
+  "scenery": 1,
+  "castle_health": 30,
+  "naval": false,
+  "water": "normal",
+  "coast": "rugged"
+}

@@ -1,3 +1,4 @@
+## Modified for the EL1 Naval Worlds release, 18 November 2026.
 class_name ELGlobalSpells
 extends RefCounted
 ## First-game adventure global spells. Ether is a daily budget: each settlement
@@ -736,6 +737,7 @@ static func near_castle(state: ELAdventureSession, player: int) -> Vector2i:
 			for dx in range(-1, 2):
 				var next := at + Vector2i(dx, dy)
 				if not grid.contains(next) or reached[next.y * width + next.x] != 0 or grid.land.is_point_solid(next): continue
+				if grid.naval and not ELFirstNaval.connected(grid, at, next, true, true): continue
 				reached[next.y * width + next.x] = 1
 				queue.append(next)
 	var tiles: Array[Vector2i] = []
@@ -749,6 +751,9 @@ static func near_castle(state: ELAdventureSession, player: int) -> Vector2i:
 
 static func _free(state: ELAdventureSession, point: Vector2i) -> bool:
 	if state.grid.passability(point) < 0: return false
+	# Summons and castle recalls arrive on land, even when the map permits
+	# sailing. They do not create a boat on a neighboring sea cell.
+	if state.grid.naval and ELFirstNaval.is_water(state.map, point): return false
 	for item: Dictionary in state.objects.values():
 		if item.get("alive", false) and item.get("visible", false) and item.get("placed", true) and int(item.get("x", -1)) == point.x and int(item.get("y", -1)) == point.y: return false
 	return true
@@ -799,6 +804,7 @@ static func recall(state: ELAdventureSession, hero: Dictionary) -> bool:
 	hero.strategy_order = {}
 	hero.x = spot.x
 	hero.y = spot.y
+	if ELFirstNaval.enabled(state.map): hero.ship = false
 	state.event.emit({"kind": "object_changed", "id": hero.uid})
 	return true
 
@@ -816,6 +822,7 @@ static func resurrect(state: ELAdventureSession, player: int) -> int:
 	# Back on the map, whatever held it off it (a training camp included).
 	if hero.has("camp"): ELAdditionalBuildings.release_camp(state, hero)
 	hero.merge({"alive": true, "visible": true, "placed": true, "x": spot.x, "y": spot.y, "strategy_order": {}, "intercepted": false, "fortified": false, "fort": -1}, true)
+	if ELFirstNaval.enabled(state.map): hero.ship = false
 	hero.orders.clear()
 	state._mob_ids.append(id)
 	state.event.emit({"kind": "object_changed", "id": id})

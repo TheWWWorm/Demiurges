@@ -1,3 +1,4 @@
+## Modified for the EL1 Naval Worlds release, 18 November 2026.
 class_name ELAdventureSave
 extends RefCounted
 ## A campaign checkpoint includes the script graph, mutable world, and the
@@ -13,6 +14,17 @@ var error := ""
 func encode(director: ELAdventureDirector, camera: Dictionary = {}) -> Dictionary:
 	error = ""
 	var state := director.state
+	var generated := ELFirstRandomMap.is_random_id(state.map.id)
+	var generation: Dictionary = {}
+	if generated:
+		generation = _random_map_payload(state.map.get_meta("random_map", null))
+		if generation.is_empty(): return {}
+		if state.map.profile.id != "el1" or state.map.id != ELFirstRandomMap.id_for_config(generation.config):
+			error = "The random-map recipe does not match its identity."
+			return {}
+	elif state.map.has_meta("random_map"):
+		error = "The random map has an invalid identity."
+		return {}
 	# A shown battle with no local side is not saved half-way: it ends first.
 	director.resolve_auto_fight()
 	if director._shopping():
@@ -53,9 +65,13 @@ func encode(director: ELAdventureDirector, camera: Dictionary = {}) -> Dictionar
 	if director.encounter != null:
 		encounter = {"hero": director.encounter.hero_id, "opponent": director.encounter.opponent_id, "ethereal": director.encounter.ethereal_defender, "swapped": director.encounter.swapped, "battle": {"format": "etherlords-duel", "version": 1, "state": director.encounter.battle.snapshot()}}
 		if director.encounter.assault_fort >= 0: encounter.fort = director.encounter.assault_fort
-	return {"format": FORMAT, "version": 1, "under_version": UNDER_VERSION, "edition": state.map.profile.id, "map": state.map.id, "map_hash": _map_hash(state.map), "script_name": state.script_name, "encounter": encounter,
+	var document := {"format": FORMAT, "version": 1, "under_version": UNDER_VERSION, "edition": state.map.profile.id, "map": state.map.id, "map_hash": _map_hash(state.map), "script_name": state.script_name, "encounter": encounter,
 		"world": world, "scenario": state.scenario.duplicate(true), "objects": objects, "players": players, "explored": Marshalls.raw_to_base64(state.explored), "notebook": ELSecondNotebook.encode(state), "observations": state.observations.duplicate(true), "ambience": ELSecondAmbience.encode(state), "script": script, "artifact_templates": state.artifact_templates.duplicate(true),
 		"commands": state.commands.duplicate(true), "director": {"movement": movement, "travel": director.travel.duplicate(), "strategy": director.strategy.duplicate(true), "free_queue": director.free_queue.duplicate(true), "guard_zones": director.interception.snapshot(), "dialogue": director.dialogue.duplicate(true), "boxes": director.boxes.duplicate(true), "action_wait": director.action_wait, "player_round": director.player_round, "woken": director._woken, "waiting": director._waiting, "wait_remaining": director.wait_remaining, "clock": director._clock, "commands_pending": director._commands_pending, "running": director.running_command()}, "camera": camera.duplicate(true)}
+	# Store only the immutable recipe. Mutable map state is already above;
+	# the terrain and authored objects regenerate before their hash is checked.
+	if generated: document.random_map = generation
+	return document
 
 func write(path: String, director: ELAdventureDirector, camera: Dictionary = {}) -> bool:
 	# The remake keeps fixed campaign/mission slots; the tutorial is not saved
@@ -100,13 +116,31 @@ func decode(raw: Variant, profiles: Dictionary) -> Dictionary:
 	if raw.objects.size() > 100000 or not _plain(raw, 0):
 		_fail("Campaign save data exceeds its limits.")
 		return {}
+	var generated := ELFirstRandomMap.is_random_id(String(raw.map))
+	if generated != raw.has("random_map") or (generated and raw.edition != "el1"):
+		_fail("The random-map save is missing its recipe or has an invalid identity.")
+		return {}
 	var map := ELAdventureMap.new()
 	var custom := ELCustomMaps.is_custom(String(raw.map))
-	if not map.load_map(profiles[raw.edition], raw.map):
+	if generated:
+		var generation := _random_map_payload(raw.random_map)
+		if generation.is_empty(): return {}
+		if raw.map != ELFirstRandomMap.id_for_config(generation.config):
+			_fail("The saved random-map recipe does not match its identity.")
+			return {}
+		var generator := ELFirstRandomMap.new()
+		map = generator.generate(profiles[raw.edition], generation.config)
+		if map == null:
+			_fail("Could not regenerate the saved random map: " + generator.error)
+			return {}
+		if map.id != raw.map:
+			_fail("The saved random-map recipe does not match its identity.")
+			return {}
+	elif not map.load_map(profiles[raw.edition], raw.map):
 		_fail("The custom map %s is missing: put it back in Maps/Custom or the maps folder." % String(raw.map).trim_prefix(ELCustomMaps.FOLDER) if custom else map.error)
 		return {}
 	if raw.get("map_hash") != _map_hash(map):
-		_fail("The custom map has changed since this game was saved." if custom else "The original map has changed since this campaign was saved.")
+		_fail("The random map no longer reproduces its saved terrain and objects. Restore the same generator version and game data." if generated else ("The custom map has changed since this game was saved." if custom else "The original map has changed since this campaign was saved."))
 		return {}
 	var world: Dictionary = raw.world
 	for key: String in STATE_FIELDS:
@@ -206,6 +240,15 @@ func decode(raw: Variant, profiles: Dictionary) -> Dictionary:
 			if item.specializations is not Array or item.specializations.size() > 64: return _reject(next, "Invalid saved specializations.")
 			for code: Variant in item.specializations:
 				if not ELSpecs.valid(map.profile, code) or code == "NONE": return _reject(next, "Invalid saved specializations.")
+		if item.has("ship") and not item.ship is bool: return _reject(next, "Invalid saved ship state.")
+		if ELFirstNaval.enabled(map) and item.type in ["hero", "monster"]:
+			if not item.get("ship") is bool: return _reject(next, "Missing saved ship state.")
+			if item.alive and item.get("placed", true):
+				var cell := Vector2i(item.x, item.y)
+				if not Rect2i(0, 0, map.width, map.height).has_point(cell) or ELFirstNaval.terrain_cost(map, cell, false) < 0 or item.ship != ELFirstNaval.is_water(map, cell):
+					return _reject(next, "The saved hero's ship state does not match its terrain.")
+		elif map.profile.id == "el1" and item.get("ship", false):
+			return _reject(next, "Ships are not enabled on this first-game map.")
 		if map.profile.id == "el2" and item.type in ["hero", "monster"] and not ELAdventureClock.restore(item, int(world.day)): return _reject(next, "Invalid saved travel clock.")
 		if map.profile.id == "el1" and item.type in ["hero", "monster"] and not ELRunes.restore(map.profile, item): return _reject(next, "Invalid saved rune inventory.")
 		if map.profile.id == "el1" and item.type == "hero" and raw.get("under_version") != UNDER_VERSION: ELRunes.adopt_lost_cantrips(map.profile, item, _start_book(next, item))
@@ -343,6 +386,13 @@ func decode(raw: Variant, profiles: Dictionary) -> Dictionary:
 		movement.id = int(movement.id)
 		movement.index = int(movement.index)
 		movement.use = int(movement.use)
+		if ELFirstNaval.enabled(map):
+			var sailing_actor: Dictionary = objects[movement.id]
+			if sailing_actor.type not in ["hero", "monster"] or not sailing_actor.alive or Vector2i(sailing_actor.x, sailing_actor.y) != points[movement.index]:
+				return _reject(next, "The saved voyage does not match its travelling hero.")
+			for index in range(1, points.size()):
+				if not ELFirstNaval.connected(director.grid, points[index - 1], points[index], false) or ELFirstNaval.terrain_cost(map, points[index], false) < 0:
+					return _reject(next, "The saved voyage contains an invalid coastal transition.")
 		# The object the move heads for (second game, for a new route).
 		if movement.has("target"):
 			if not ELLuaSave._integer(movement.target, -1, 0x7fffffff): return _reject(next, "Invalid active movement.")
@@ -517,9 +567,38 @@ func _reject(state: ELAdventureSession, message: String) -> Dictionary:
 	return {}
 
 func _map_hash(map: ELAdventureMap) -> String:
+	if ELFirstRandomMap.is_random_id(map.id): return ELFirstRandomMap.content_hash(map)
 	# A custom map's saves check its scenario, map file and scripts.
 	if ELCustomMaps.is_custom(map.id): return ELCustomMaps.content_hash(map.profile, map.id)
 	return FileAccess.get_sha256(map.profile.file(ELSingleScenario.map_path(map.id) + ".map"))
+
+## Random-map saves require a complete, canonical recipe. The public generator
+## accepts partial setup options; a saved recipe must not acquire new defaults
+## or silently discard an unknown field when reopened in another build.
+func _random_map_payload(raw: Variant) -> Dictionary:
+	if raw is not Dictionary or raw.size() != 2 or not raw.has("version") or not raw.has("config"):
+		_fail("Invalid saved random-map recipe.")
+		return {}
+	if not ELLuaSave._integer(raw.version, 1, ELFirstRandomMap.VERSION):
+		_fail("This save requires a different random-map generator version.")
+		return {}
+	if raw.config is not Dictionary or raw.config.size() > 32 or JSON.stringify(raw.config).length() > 8192:
+		_fail("Invalid saved random-map configuration.")
+		return {}
+	var config := ELFirstRandomMap.normalize(raw.config)
+	if config.is_empty() or config.size() != raw.config.size() or int(config.version) != int(raw.version):
+		_fail("Invalid or incomplete saved random-map configuration.")
+		return {}
+	for key: String in config:
+		var value: Variant = raw.config.get(key)
+		# JSON reads every number as float; Dictionary equality distinguishes
+		# that from the generator's canonical ints. Accept exact integer values
+		# only, while keeping booleans and strings strictly typed.
+		var matches: bool = ELLuaSave._integer(value, int(config[key]), int(config[key])) if config[key] is int else (typeof(value) == typeof(config[key]) and value == config[key])
+		if not matches:
+			_fail("Invalid or incomplete saved random-map configuration.")
+			return {}
+	return {"version": int(config.version), "config": config.duplicate(true)}
 
 func _plain(value: Variant, depth: int) -> bool:
 	if depth > 32: return false

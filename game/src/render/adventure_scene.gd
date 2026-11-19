@@ -1,9 +1,15 @@
+## Modified for the EL1 Naval Worlds release, 18 November 2026.
 class_name ELAdventureScene
 extends Node3D
 ## Original adventure figures with chunked static instancing. Simulation and
 ## camera controls are separate from these visual resources.
 var map: ELAdventureMap
 var terrain: ELAdventureTerrain
+var generated_roads: ELFirstRandomMapRoads
+## Explicitly supplied installed EL2 data for its original ship appearance.
+var naval_source: ELProfile
+var naval_visuals: ELFirstNavalVisuals
+var _ship_profile: ELProfile
 var units: Dictionary = {}
 var animated: Array[ELModel] = []
 ## Options "animated objects": false holds map objects still.
@@ -102,6 +108,15 @@ func build(source: ELAdventureMap, session: ELAdventureSession = null) -> bool:
 	if not terrain.build(map):
 		errors.append_array(terrain.errors)
 		return false
+	if ELFirstRandomMap.is_random_id(map.id):
+		generated_roads = ELFirstRandomMapRoads.new()
+		add_child(generated_roads)
+		generated_roads.build(map)
+	if ELFirstNaval.enabled(map):
+		_ship_profile = ELFirstNavalVisuals.ship_source(naval_source)
+		naval_visuals = ELFirstNavalVisuals.new()
+		add_child(naval_visuals)
+		naval_visuals.build(map)
 	_art = ELAdventureArt.new(map)
 	var prototypes := {}
 	var groups := {}
@@ -123,11 +138,11 @@ func build(source: ELAdventureMap, session: ELAdventureSession = null) -> bool:
 		if definition.is_empty():
 			errors.append("Missing art: %s / %s" % [object.group, object.name])
 			continue
-		var key := "%s/%s/%s/%s" % [definition.model, definition.texture, definition.secondary, definition.get("wave", "")]
+		var key := _art_key(definition)
 		if not prototypes.has(key):
 			var prototype := ELModel.new()
 			add_child(prototype)
-			if not prototype.build(map.profile, definition.model, definition.texture, definition.secondary, definition.get("wave", "")):
+			if not _build_model(prototype, definition):
 				errors.append(prototype.error)
 				prototype.queue_free()
 				continue
@@ -136,7 +151,7 @@ func build(source: ELAdventureMap, session: ELAdventureSession = null) -> bool:
 			prototypes[key] = prototype
 		var prototype: ELModel = prototypes[key]
 		var center := ELAdventureGrid.center(object, definition.row)
-		var position := Vector3(center.x * ELAdventureTerrain.CELL, 0, -center.y * ELAdventureTerrain.CELL)
+		var position := _placement(object, definition.row)
 		var transform := Transform3D(_placed_basis(int(object.rotation), float(definition.scale)), position)
 		if blob_shadow(map.profile.id, object, definition) or _foliage_shadow(map.profile.id, object, definition):
 			var foliage := _foliage_shadow(map.profile.id, object, definition)
@@ -149,7 +164,7 @@ func build(source: ELAdventureMap, session: ELAdventureSession = null) -> bool:
 		if definition.unit or prototype.clip_frames() > 1 or first_barrier(object) or gate or _movable_portal(object) or object.get("type") == "fort":
 			var model := ELModel.new()
 			add_child(model)
-			if not model.build(map.profile, definition.model, definition.texture, definition.secondary, definition.get("wave", "")):
+			if not _build_model(model, definition):
 				errors.append(model.error)
 				model.queue_free()
 				continue
@@ -241,6 +256,17 @@ func build(source: ELAdventureMap, session: ELAdventureSession = null) -> bool:
 	build_usec = Time.get_ticks_usec() - started
 	return errors.is_empty()
 
+func _art_key(definition: Dictionary) -> String:
+	var key := "%s/%s/%s/%s" % [definition.model, definition.texture, definition.secondary, definition.get("wave", "")]
+	if definition.get("first_ship", false): key += "/naval/%s/%d" % ["el2" if _ship_profile != null else "local", int(definition.get("ship_owner", 1))]
+	return key
+
+func _build_model(model: ELModel, definition: Dictionary) -> bool:
+	if definition.get("first_ship", false):
+		if _ship_profile != null: return model.build(_ship_profile, definition.model, definition.texture, definition.secondary)
+		return ELFirstNavalVisuals.build_boat(model, map.profile, int(definition.get("ship_owner", 1)), str(definition.get("ship_color", "")))
+	return model.build(map.profile, definition.model, definition.texture, definition.secondary, definition.get("wave", ""))
+
 ## Resolves each object's art (the build loop's `definitions`, by index) and
 ## reads what it needs on worker threads first: the figures, their idle
 ## clips and meshes, and the skins, as ELModel.build would read them one
@@ -258,6 +284,8 @@ func _prepare_art(objects: Array) -> Array:
 		var definition := _art.resolve(object)
 		definitions[index] = definition
 		if definition.is_empty() or definition.get("hidden", false) or not object.get("visible", true): continue
+		# EL1 ships use an explicit second-game profile or local geometry.
+		if definition.get("first_ship", false): continue
 		templates[ELArchive.key(str(definition.model))] = true
 		for name: Variant in [definition.texture, definition.secondary, definition.get("wave", "")]:
 			if not str(name).is_empty(): skins[str(name)] = true
@@ -309,7 +337,10 @@ func enable_fog(session: ELAdventureSession) -> void:
 	_fog_revision = -1
 	if material != null: material.set_shader_parameter("fog_enabled", fog_session != null)
 	if _fog_apron != null: _fog_apron.visible = fog_session != null
-	if fog_session == null: return
+	if fog_session == null:
+		if generated_roads != null: generated_roads.set_fog(PackedByteArray())
+		if naval_visuals != null: naval_visuals.set_fog(PackedByteArray())
+		return
 	if mist == null:
 		mist = ELFogMist.new()
 		mist.animate = animate_fog
@@ -317,6 +348,8 @@ func enable_fog(session: ELAdventureSession) -> void:
 	if _fog_apron == null: _fog_apron = _make_fog_apron()
 	_fog_apron.visible = true
 	_fog_tiles = fog_tiles()
+	if generated_roads != null: generated_roads.set_fog(_fog_tiles)
+	if naval_visuals != null: naval_visuals.set_fog(_fog_tiles)
 	var masks := _fog_data()
 	_fog_known = masks[0].duplicate()
 	_fog_seen = masks[1].duplicate()
@@ -497,6 +530,8 @@ func sync_fog() -> void:
 	_fog_revision = ELFog.revision(fog_session)
 	var scenery := {}
 	var changed := _update_fog_tiles(scenery)
+	if generated_roads != null and changed.has_area(): generated_roads.set_fog(_fog_tiles)
+	if naval_visuals != null and changed.has_area(): naval_visuals.set_fog(_fog_tiles)
 	if not changed.has_area():
 		snap_fog = false
 		return
@@ -752,7 +787,7 @@ func update_object(item: Dictionary, apply_facing := false) -> void:
 		return
 	var definition := _art.resolve(item)
 	if definition.is_empty() or definition.get("hidden", false): return
-	var key := "%s/%s/%s/%s" % [definition.model, definition.texture, definition.secondary, definition.get("wave", "")]
+	var key := _art_key(definition)
 	var unit: bool = item.type in ["hero", "monster", "corpse"]
 	var own_model := unit or _movable_portal(item) or gate
 	var replaceable: bool = own_model or item.type in ["rune_shop", "el1_spell_shop", "resource_mine", "mana_node", "fort"] or ELFirstScenario.is_castle(item)
@@ -760,7 +795,7 @@ func update_object(item: Dictionary, apply_facing := false) -> void:
 	if replaceable and (_object_keys.get(uid, "") != key or needs_model):
 		var model := ELModel.new()
 		add_child(model)
-		if not model.build(map.profile, definition.model, definition.texture, definition.secondary, definition.get("wave", "")):
+		if not _build_model(model, definition):
 			errors.append(model.error)
 			model.queue_free()
 			return
@@ -790,8 +825,7 @@ func update_object(item: Dictionary, apply_facing := false) -> void:
 	if object_models.has(uid):
 		var model: ELModel = object_models[uid]
 		model.visible = visible
-		var center := ELAdventureGrid.center(item, definition.row)
-		model.position = Vector3(center.x * ELAdventureTerrain.CELL, 0, -center.y * ELAdventureTerrain.CELL)
+		model.position = _placement(item, definition.row)
 		if item.get("type") == "corpse" or not item.get("alive", true): _corpse_pose(model)
 		if first_barrier(item): barrier_pose(model, bool(item.get("opened", false)), true)
 		if gate: _second_gate_pose(model, bool(item.get("opened", false)), true)
@@ -969,7 +1003,7 @@ func _corpse_surfaces(model: ELModel) -> Array:
 func move_actor(uid: int, position: Vector2, moving: bool, tiles_per_second := 0.0, fast := false) -> void:
 	if not actors.has(uid): return
 	var model: ELModel = actors[uid]
-	var next := world_position(position.x, position.y)
+	var next := ground_position(position.x, position.y)
 	var delta := next - model.position
 	if delta.length_squared() > 0.00001:
 		model.rotation.y = atan2(delta.x, delta.z)
@@ -1045,6 +1079,49 @@ func object_yaw(item: Dictionary) -> float:
 
 static func world_position(x: float, y: float) -> Vector3:
 	return Vector3((x + 0.5) * ELAdventureTerrain.CELL, 0, -(y + 0.5) * ELAdventureTerrain.CELL)
+
+func ground_position(x: float, y: float) -> Vector3:
+	var at := world_position(x, y)
+	if map != null: at.y = map.surface_height(Vector2(x + 0.5, y + 0.5))
+	return at
+
+func _placement(item: Dictionary, row: Dictionary) -> Vector3:
+	var center := ELAdventureGrid.center(item, row)
+	var at := ground_position(center.x - 0.5, center.y - 0.5)
+	if map.relief.is_empty() or item.group != "terrain_objects": return at
+	var span := center - Vector2(item.x, item.y)
+	if maxf(span.x, span.y) < 1.5: return at
+	# Seat a broad rock or grove partly into the hillside so its downslope
+	# edge still meets the ground.
+	for sign_x in [-1.0, 1.0]:
+		for sign_y in [-1.0, 1.0]:
+			var edge := center + span * Vector2(sign_x, sign_y) * 0.60
+			at.y = minf(at.y, map.surface_height(edge))
+	return at
+
+func ground_intersection(origin: Vector3, direction: Vector3) -> Variant:
+	var flat: Variant = Plane(Vector3.UP, 0).intersects_ray(origin, direction)
+	if flat == null or map == null or map.relief.is_empty() or direction.y >= -0.0001: return flat
+	var bottom := -origin.y / direction.y
+	var top := maxf(0.0, (255.0 * ELAdventureMap.RELIEF_UNIT - origin.y) / direction.y)
+	var previous := top
+	var steps := maxi(1, ceili((bottom - top) / (ELAdventureTerrain.CELL * 0.5)))
+	for step in range(1, steps + 1):
+		var next := lerpf(top, bottom, float(step) / steps)
+		var point := origin + direction * next
+		if point.y > _surface_at(point):
+			previous = next
+			continue
+		for iteration in 12:
+			var middle := (next + previous) * 0.5
+			var probe := origin + direction * middle
+			if probe.y > _surface_at(probe): previous = middle
+			else: next = middle
+		return origin + direction * next
+	return flat
+
+func _surface_at(at: Vector3) -> float:
+	return map.surface_height(Vector2(at.x, -at.z) / ELAdventureTerrain.CELL)
 
 ## Second-game forts carry a flag their own clips raise ("utap"), wave
 ## ("cidleintap") and lower ("uuntap"). An owned fort flies it; a new figure
@@ -1146,6 +1223,10 @@ func _sync_blob(uid: int, present: bool) -> void:
 	var slot: Dictionary = _blob_slots[uid]
 	var base: Transform3D = object_models[uid].transform if object_models.has(uid) else slot.base
 	var placed := base * (slot.local as Transform3D)
+	if not map.relief.is_empty():
+		var ground := Vector2(placed.origin.x, -placed.origin.z) / ELAdventureTerrain.CELL
+		placed.origin.y = map.surface_height(ground)
+		placed.basis = Basis(Quaternion(Vector3.UP, map.surface_normal(ground, ELAdventureTerrain.CELL))) * placed.basis
 	placed.origin.y += BLOB_LIFT
 	slot["placed"] = placed
 	slot["present"] = present

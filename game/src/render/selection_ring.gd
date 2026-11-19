@@ -28,6 +28,7 @@ const PULSE_SIZE := 0.3
 const PULSE_FADE := 0.6
 
 var textures: Array[Texture2D] = []
+var surface: ELAdventureMap
 var colour := 0
 var hover_uid := -1
 var selected_uid := -1
@@ -127,7 +128,11 @@ func _place(node: MeshInstance3D, shown: bool, at: Vector3, size: Vector2i, scal
 	if not shown: return
 	var half := half_extent(size, scale)
 	node.position = at + Vector3(0, 0.03, 0)
-	node.scale = Vector3(half, 1, half)
+	var basis := Basis.IDENTITY
+	if surface != null and not surface.relief.is_empty():
+		var point := Vector2(at.x, -at.z) / ELAdventureTerrain.CELL
+		basis = Basis(Quaternion(Vector3.UP, surface.surface_normal(point, ELAdventureTerrain.CELL)))
+	node.basis = basis.scaled_local(Vector3(half, 1, half))
 	var material: StandardMaterial3D = node.material_override
 	material.albedo_texture = textures[ATLAS[clampi(colour, 0, 3)][0]]
 	material.uv1_offset = Vector3(frame_offset(colour, frame).x, frame_offset(colour, frame).y, 0)

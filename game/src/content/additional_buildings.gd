@@ -1,3 +1,4 @@
+## Modified for the EL1 Naval Worlds release, 18 November 2026.
 class_name ELAdditionalBuildings
 extends RefCounted
 ## First-game map buildings a hero visits from an adjacent tile during the
@@ -28,6 +29,10 @@ const OWNED := ["ShrineMagic", "HealersCitadel", "WanderersCitadel"]
 const RUNE_VISITS := ["MageWagon", "GnomeAlchemist"]
 ## Lairs hold one neutral creature of these level ranges, restocked weekly.
 const DUNGEONS := {"Dungeon1": [2, 4], "Dungeon2": [5, 7], "Dungeon3": [8, 10]}
+const WILDERNESS_LAIRS := {
+	"Dungeon1": ["Sea Halo", "OrcShaman", "Giant Fingus", "OrcGuard", "Small Bee Hive"],
+	"Dungeon2": ["Gibberling Gang", "KoboldElder", "Medium Bee Hive", "Steel Mechos"],
+}
 const DUNGEON_ARENA := "Dungeon.001"
 const MAGISTER_EXPERIENCE := 100
 const WAGON_RUNES := 3
@@ -265,6 +270,10 @@ static func precombat(director: ELAdventureDirector, hero: Dictionary, item: Dic
 ## at the current difficulty has a level inside the lair's range.
 static func restock(state: ELAdventureSession, item: Dictionary) -> int:
 	var levels: Array = DUNGEONS[item.name]
+	var recipe := ELFirstRandomMap.configuration(state.map)
+	var wilderness := int(recipe.get("version", 0)) >= ELFirstRandomMapV2.WILDERNESS_VERSION
+	var opening := wilderness and barrier_key(item) == ELFirstRandomMapV2.STARTER_LAIR
+	if opening: levels = [1, 1]
 	var pool: Array[String] = []
 	var rows: Dictionary = state.map.profile.table("Monsters")
 	# One name per creature, in registry order (its difficulty-3 row).
@@ -273,12 +282,17 @@ static func restock(state: ELAdventureSession, item: Dictionary) -> int:
 		var template := ELFirstMonsters.definition(state.map.profile, str(row.Name), state.difficulty)
 		if not template.is_empty() and int(template.Level) >= int(levels[0]) and int(template.Level) <= int(levels[1]): pool.append(str(row.Name))
 	if pool.is_empty(): return -1
+	if wilderness:
+		var choices: Array = ELFirstRandomMapV2.STARTER_ENCOUNTERS if opening else WILDERNESS_LAIRS.get(item.name, [])
+		var curated := pool.filter(func(monster: String) -> bool: return monster in choices)
+		if not curated.is_empty(): pool.assign(curated)
 	var name := pool[_random(state) % pool.size()]
 	var id := state._next_object
 	state._next_object += 1
 	var monster := {"uid": id, "permanent_id": id, "source_index": -1, "id": id, "name": name, "owner": 0, "group": "np_heroes", "x": -1, "y": -1, "rotation": 0, "type": "monster",
 		"alive": true, "visible": false, "enabled": true, "placed": false, "shape": "", "level": 1, "health": 10, "base_ap": 0, "ap": 0, "experience": 0,
 		"cards": [], "spell_stock": {}, "stock_separate": true, "skills": {}, "inventory": [], "orders": [], "node": {}, "dungeon": int(item.uid)}
+	if ELFirstNaval.enabled(state.map): monster.ship = false
 	if not ELFirstMonsters.initialize(state.map.profile, monster, state.difficulty): return -1
 	ELStrategy.initialize(state.map.profile, monster)
 	state.objects[id] = monster
@@ -421,6 +435,7 @@ static func leave_camp(state: ELAdventureSession, hero_id: int) -> bool:
 	if camp.get("name") != CAMP or int(camp.get("guest", -1)) != hero_id or camp.guest_entry.size() != 2: return false
 	hero.x = int(camp.guest_entry[0])
 	hero.y = int(camp.guest_entry[1])
+	if ELFirstNaval.enabled(state.map): hero.ship = ELFirstNaval.is_water(state.map, Vector2i(hero.x, hero.y))
 	release_camp(state, hero)
 	hero.placed = true
 	state.event.emit({"kind": "camp_left", "id": camp.uid, "hero": hero_id})
@@ -465,6 +480,7 @@ static func spawn_hero(state: ELAdventureSession, name: String, owner: int, x: i
 	var actor := {"uid": id, "permanent_id": id, "source_index": -1, "id": id, "name": name, "owner": owner, "group": "heroes", "x": x, "y": y, "rotation": 0, "type": "hero",
 		"alive": true, "visible": true, "enabled": true, "shape": "", "level": 1, "health": 10, "base_ap": 0, "ap": 0, "experience": 0,
 		"cards": [], "spell_stock": {}, "stock_separate": true, "skills": {}, "inventory": [], "orders": [], "node": {}, "fortified": false, "fort": -1, "temp_buffs": []}
+	if ELFirstNaval.enabled(state.map): actor.ship = ELFirstNaval.is_water(state.map, Vector2i(x, y))
 	apply_template(state.map.profile, actor, name)
 	state.objects[id] = actor
 	state._mob_ids.append(id)

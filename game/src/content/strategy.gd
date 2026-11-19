@@ -1,3 +1,4 @@
+## Modified for the EL1 Naval Worlds release, 18 November 2026.
 class_name ELStrategy
 extends RefCounted
 ## First-game orders are planned, then resolved before income and daily refresh.
@@ -230,6 +231,7 @@ static func begin(director: ELAdventureDirector) -> bool:
 	return true
 
 static func adjacent(director: ELAdventureDirector, actor: Dictionary, target: Dictionary) -> bool:
+	if director.grid.naval and not ELFirstNaval.interaction_mode(director.grid, Vector2i(actor.x, actor.y), target): return false
 	var size: Vector2i = director.grid.footprints.get(int(target.uid), {}).get("size", Vector2i.ONE)
 	return Rect2i(int(target.x) - 1, int(target.y) - 1, size.x + 2, size.y + 2).has_point(Vector2i(actor.x, actor.y))
 
@@ -354,12 +356,14 @@ static func advance(director: ELAdventureDirector) -> void:
 			path.assign(director.interception.preview(state, actor, path))
 			var available := int(actor.ap)
 			var count := 1
+			var previous := Vector2i(actor.x, actor.y)
 			if path.size() > 1 and not director.interception.can_step(state, director.grid, actor, path[1]): path.resize(1)
 			for point: Vector2i in path.slice(1):
-				var cost := director.grid.passability(point)
+				var cost := ELFirstNaval.step_cost(director.grid, previous, point) if director.grid.naval else director.grid.passability(point)
 				if cost < 0 or cost > available: break
 				available -= cost
 				count += 1
+				previous = point
 			if count > 1:
 				path.resize(count)
 				director.movement = {"id": actor.uid, "path": path, "index": 0, "progress": 0.0, "queued": false, "use": -1, "strategic": true}

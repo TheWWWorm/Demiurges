@@ -1,3 +1,4 @@
+## Modified for the EL1 Naval Worlds release, 18 November 2026.
 class_name ELAdventureArt
 extends RefCounted
 var map: ELAdventureMap
@@ -15,7 +16,10 @@ func resolve(object: Dictionary) -> Dictionary:
 	if object.get("group") in ["heroes", "np_heroes"]: shape = ELHeroLooks.worn(map.profile, object)
 	if corpse and shape.is_empty(): shape = ELXml.value(node, "params")
 	if object.get("ship", false) or (corpse and shape.to_lower() == "ship"):
-		return {"model": "tebuad552" if corpse else "he551", "texture": "Heroes/Boat00", "secondary": "", "scale": 1.0, "row": {"TileSize": [1, 1]}, "unit": true}
+		var ship_color := ""
+		for player: Dictionary in map.players:
+			if int(player.attrs.id) == int(object.owner): ship_color = ELXml.value(player, "color")
+		return {"model": "tebuad552" if corpse else "he551", "texture": "Heroes/Boat00", "secondary": "", "scale": 1.0, "row": {"TileSize": [1, 1]}, "unit": true, "first_ship": map.profile.id == "el1", "ship_owner": int(object.get("owner", 1)), "ship_color": ship_color}
 	var color := ELXml.value(node, "color")
 	if color.is_empty():
 		for player: Dictionary in map.players:
