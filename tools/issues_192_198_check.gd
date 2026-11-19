@@ -40,8 +40,14 @@ func battle_checks() -> void:
 		var card: String = view.duel.heroes[0].deck[0]
 		view._cast_notice(0, card)
 		view._cast_notice(1, card)
-		check(notices.icons.size() == 2 and notices.icons[0].side == 0 and notices.icons[1].side == 1,
-			"%s #196/#197: the same card cast by both heroes retains each caster" % edition)
+		if edition == "el1":
+			check(notices.icons.size() == 2 and notices.icons[0].side == 0 and notices.icons[1].side == 1,
+				"el1 #196/#197: the same card cast by both heroes retains each caster")
+		else:
+			# The second game lists only the opponent's casts (#243).
+			var rival: int = 1 - int(view._displayed_side())
+			check(notices.icons.size() == 1 and notices.icons[0].side == rival,
+				"el2 #196/#197/#243: of the same card cast by both heroes only the opponent's is listed")
 		if edition != "el1": continue
 		for i in 27: view._cast_notice(i % 2, card)
 		view.log_text.show()

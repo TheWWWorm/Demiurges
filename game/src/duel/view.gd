@@ -3295,7 +3295,7 @@ func _local_side(side: int) -> bool:
 func _cast_notice(side: int, card: String) -> void:
 	if profile.id == "el2" or (profile.id == "el1" and bool(settings.values.get("cast_icons", true))):
 		_log(_format_text("T_CASTING", [_hero_name(side), duel.card_name(card)]))
-		if is_instance_valid(notices): notices.add_icon(profile.card_icon(card), card, side)
+		if is_instance_valid(notices) and (profile.id == "el1" or _rival_notice(side)): notices.add_icon(profile.card_icon(card), card, side)
 		return
 	_announce("T_CASTING", [_hero_name(side), duel.card_name(card)], side)
 
@@ -3303,18 +3303,22 @@ func _specialisation_notice(side: int, code: String) -> void:
 	if not is_instance_valid(notices): return
 	notices.add_specialisation(side, _spec_text(code, "Desc", _spec_name(code)))
 
-## A used artifact joins the second game's battle icons with its rail icon
-## (a generated artifact's own cell) and its name and spell text.
+## The second game's notice icons show only the opponent's casts, abilities
+## and artifact uses (not those of the side at this screen); ether
+## disturbance and specialisations show for both sides.
+func _rival_notice(side: int) -> bool:
+	return side != _displayed_side()
+
+## The opponent's artifact use joins the second game's battle icons as its
+## spell: the spell's icon and the hand card's tooltip.
 func _artifact_notice(data: Dictionary) -> void:
+	if not _rival_notice(int(data.side)): return
 	var card := String(data.card)
-	var icon := int(data.get("icon", -1))
-	var texture := profile.icon_at(icon) if icon >= 0 else profile.card_icon(card)
-	var title := str(data.get("title", duel.card_name(card)))
-	notices.add_icon(texture, card, int(data.side), "%s
-%s" % [title, profile.card_description(card)])
+	notices.add_icon(profile.card_icon(card), card, int(data.side))
 
 func _second_ability_notice(data: Dictionary, source: int) -> void:
 	var side := int(data.side)
+	if not _rival_notice(side): return
 	if source < 2:
 		var enchantment := String(data.get("enchantment_card", ""))
 		if not enchantment.is_empty(): notices.add_icon(profile.card_icon(enchantment), enchantment, side)
