@@ -66,15 +66,23 @@ var _frame_region := Rect2(140, 0, 50, 50)
 var describe_card: Callable
 var _font: SystemFont
 ## The combat panel's scale (the HUD's 800x600 layout factor); lines and icons follow it.
-var ui_scale := 1.0
+var ui_scale := 1.0:
+	set(value):
+		if ui_scale == value: return
+		ui_scale = value
+		queue_redraw()
 
 func _init() -> void:
+	set_process(false)
 	# Only the icons take the mouse (see _has_point), for their spell tooltips.
 	mouse_filter = Control.MOUSE_FILTER_PASS
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_font = SystemFont.new()
 	_font.font_names = PackedStringArray(["Arial", "Liberation Sans", "Arimo", "DejaVu Sans"])
 	_font.font_weight = 700
+
+func _ready() -> void:
+	set_process(banner >= 0 or not lines.is_empty())
 
 func build(source: ELProfile) -> void:
 	profile = source
@@ -102,6 +110,7 @@ func clear() -> void:
 	icons.clear()
 	_turn_side = -1
 	_turn_serial = -1
+	set_process(false)
 	queue_redraw()
 
 func show_banner(band: int) -> void:
@@ -109,6 +118,7 @@ func show_banner(band: int) -> void:
 	banner = clampi(band, 0, 2)
 	banner_age = 0.0
 	_sounded = false
+	set_process(true)
 	queue_redraw()
 
 func add_line(text: String, colour: Color, chat := false) -> void:
@@ -116,6 +126,7 @@ func add_line(text: String, colour: Color, chat := false) -> void:
 	if chat and lines.filter(func(line: Dictionary) -> bool: return line.chat).size() >= MAX_CHAT_LINES:
 		lines.remove_at(lines.find_custom(func(line: Dictionary) -> bool: return line.chat))
 	lines.append({"text": text.strip_edges(), "colour": colour, "age": 0.0, "chat": chat})
+	set_process(true)
 	queue_redraw()
 
 func add_icon(texture: Texture2D, card: String, side: int, tooltip := "") -> void:
@@ -148,16 +159,31 @@ func show_turn(side: int, serial: int) -> void:
 	clear_icons()
 
 func _process(delta: float) -> void:
-	if banner < 0 and lines.is_empty(): return
+	var changed := false
 	if banner >= 0:
+		var previous := banner_age
 		banner_age += delta
+		changed = previous < GROW or banner_age >= GROW + HOLD
 		if not _sounded and banner_age >= GROW:
 			_sounded = true
 			if profile != null: ELUiSounds.play(profile, "Buttons/Begin_Combat.wav")
 		if banner_age >= GROW + HOLD + SHRINK: banner = -1
-	for line: Dictionary in lines: line.age = float(line.age) + delta
-	lines = lines.filter(func(line: Dictionary) -> bool: return float(line.age) < HOLD_LINE + FADE_LINE)
-	queue_redraw()
+	# Retain the array and compact survivors in place. Most frames are in
+	# the unchanged hold period; only a fade or banner transition redraws.
+	var count := 0
+	for line: Dictionary in lines:
+		line.age = float(line.age) + delta
+		if float(line.age) >= HOLD_LINE: changed = true
+		if float(line.age) < HOLD_LINE + FADE_LINE:
+			lines[count] = line
+			count += 1
+	if count != lines.size(): lines.resize(count)
+	if changed and is_visible_in_tree(): queue_redraw()
+	if banner < 0 and lines.is_empty(): set_process(false)
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_RESIZED or (what == NOTIFICATION_VISIBILITY_CHANGED and is_visible_in_tree()):
+		queue_redraw()
 
 ## The banner's scale in percent and its alpha (0..1) at `age` seconds.
 static func banner_frame(age: float) -> Vector2:
@@ -189,7 +215,10 @@ func _draw() -> void:
 		draw_string_outline(_font, at, String(line.text), HORIZONTAL_ALIGNMENT_LEFT, 768.0 * k, font_size, 3, Color(0, 0, 0, colour.a))
 		draw_string(_font, at, String(line.text), HORIZONTAL_ALIGNMENT_LEFT, 768.0 * k, font_size, colour)
 		y += LINE_HEIGHT * k * (1.0 - fade)
-	for index in icons.size():
+	# Older rows scroll above the view. Keep their history for tooltips and
+	# ordering, but submit only the rows which can touch the viewport.
+	var visible_icons := visible_icon_range()
+	for index in range(visible_icons.x, visible_icons.y):
 		var icon: Dictionary = icons[index]
 		var cell := icon_rect(index)
 		draw_texture_rect(icon_texture(index), cell, false)
@@ -216,9 +245,21 @@ func icon_rect(index: int) -> Rect2:
 	return Rect2(cell * k, Vector2(ICON, ICON) * k)
 
 func _icon_at(at: Vector2) -> int:
-	for index in icons.size():
-		if icon_rect(index).has_point(at): return index
-	return -1
+	var k := maxf(ui_scale, 0.5)
+	var cell := (at / k - ORIGIN) / ICON_STEP
+	var column := floori(cell.x)
+	if column < 0 or column >= ICON_ROW: return -1
+	var over := maxi(0, (icons.size() + ICON_ROW - 1) / ICON_ROW - 5)
+	var index := (floori(cell.y) + over) * ICON_ROW + column
+	if index < 0 or index >= icons.size(): return -1
+	return index if icon_rect(index).has_point(at) else -1
+
+## [first, end) of rows which can intersect the viewport. Include the
+## preceding row: its final five design pixels remain visible at the top.
+func visible_icon_range() -> Vector2i:
+	var over := maxi(0, (icons.size() + ICON_ROW - 1) / ICON_ROW - 5)
+	var rows := ceili(maxf(get_viewport_rect().size.y / maxf(ui_scale, 0.5) - ORIGIN.y, 0.0) / ICON_STEP)
+	return Vector2i(maxi(0, over - 1) * ICON_ROW, mini(icons.size(), (over + rows) * ICON_ROW))
 
 func _has_point(point: Vector2) -> bool:
 	return _icon_at(point) >= 0

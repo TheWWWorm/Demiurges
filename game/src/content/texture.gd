@@ -8,6 +8,9 @@ const MAGIC := 0x00504D4D  # "MMP\0"
 const DATA_OFFSET := 76
 const ONE_BIT_ALPHA := &"one_bit_alpha"
 const AUTHORED_MASK_MIPS := &"authored_mask_mips"
+## Generated mask mipmaps whose coverage is kept close to the source level.
+## Separate from authored chains: the originals' hand-made levels take priority.
+const COVERAGE_MASK_MIPS := &"coverage_mask_mips"
 ## The compiled decoders (native/el_assets.c), where the platform has them.
 static var native := ClassDB.class_exists(&"ELNativeAssets")
 
@@ -36,6 +39,66 @@ static func uncompressed(image: Image) -> Image:
 	if image == null or not image.is_compressed(): return image
 	image = image.duplicate()
 	return null if image.decompress() != OK else image
+
+## Make mipmaps for a one-bit cutout (leaves, feathers, hair and thin chains).
+## Ordinary averaging erodes these silhouettes when the mip's alpha falls
+## below the material's half-alpha cut. Correct each level independently to
+## the closest representable coverage, with a bounded scale so very sparse
+## sheets cannot turn into solid rectangles. Never edits a shared image.
+## This runs with texture decoding, including on the loading worker threads;
+## it adds no per-frame work and leaves the texture's size unchanged.
+static func cutout_mipmaps(base: Image, cutoff := 0.5) -> Image:
+	if base == null: return null
+	var image := base.duplicate() as Image
+	if image.is_compressed() and image.decompress() != OK: return null
+	image.convert(Image.FORMAT_RGBA8)
+	image.clear_mipmaps()
+	var pixels := image.get_data()
+	var count := image.get_width() * image.get_height()
+	var alpha_cut := clampi(int(ceil(clampf(cutoff, 0.0, 1.0) * 255.0)), 1, 255)
+	var covered := 0
+	for at in range(3, pixels.size(), 4):
+		if pixels[at] >= alpha_cut: covered += 1
+	# Repair only invisible RGB before filtering: dark transparent texels
+	# otherwise leave a black outline even when alpha coverage is preserved.
+	if covered > 0 and covered < count: image.fix_alpha_edges()
+	image.generate_mipmaps()
+	if covered == 0 or covered == count: return image
+	var coverage := float(covered) / float(count)
+	pixels = image.get_data()
+	var width := image.get_width()
+	var height := image.get_height()
+	for level in range(1, image.get_mipmap_count() + 1):
+		width = maxi(1, width / 2)
+		height = maxi(1, height / 2)
+		var start := image.get_mipmap_offset(level)
+		var end := start + width * height * 4
+		var histogram := PackedInt32Array()
+		histogram.resize(256)
+		for at in range(start + 3, end, 4): histogram[pixels[at]] += 1
+		var scale := _coverage_scale(histogram, coverage * width * height, alpha_cut)
+		if is_equal_approx(scale, 1.0): continue
+		for at in range(start + 3, end, 4):
+			pixels[at] = mini(255, int(round(float(pixels[at]) * scale)))
+	return Image.create_from_data(image.get_width(), image.get_height(), true, Image.FORMAT_RGBA8, pixels)
+
+## Threshold whose histogram coverage is nearest the requested amount.
+## Prefer no change on ties, especially for the final 1x1 mip where fractional
+## coverage cannot be represented by a binary cut. Empty texels stay empty.
+static func _coverage_scale(histogram: PackedInt32Array, wanted: float, alpha_cut := 128) -> float:
+	var ordinary := 0
+	for alpha in range(alpha_cut, 256): ordinary += histogram[alpha]
+	var best_error := absf(float(ordinary) - wanted)
+	var best_scale := 1.0
+	var above := 0
+	for threshold in range(255, maxi(1, int(ceil(float(alpha_cut) / 4.0))) - 1, -1):
+		above += histogram[threshold]
+		var error := absf(float(above) - wanted)
+		var scale := float(alpha_cut) / float(threshold)
+		if error < best_error or (is_equal_approx(error, best_error) and absf(log(scale)) < absf(log(best_scale))):
+			best_error = error
+			best_scale = scale
+	return best_scale
 
 ## Largest side and pixel count of a texture level (the games' largest are
 ## 1024 a side); larger headers are taken as damaged.

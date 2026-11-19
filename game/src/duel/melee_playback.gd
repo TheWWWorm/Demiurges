@@ -608,7 +608,9 @@ class MovementTrail extends Node3D:
 				ghost.mesh = part.mesh
 			var morphs: Array = model._previous_morphs.get(name, [])
 			for index: int in morphs: ghost.set_blend_shape_value(index, part.get_blend_shape_value(index))
-			ghost.set_meta("morphs", morphs)
+			# A snapshot owns the indices of its frozen pose. The live model
+			# reuses its pair as it moves through subsequent animation frames.
+			ghost.set_meta("morphs", morphs.duplicate())
 			var material: StandardMaterial3D = snapshot.materials.get(source)
 			if material == null:
 				material = source.duplicate()

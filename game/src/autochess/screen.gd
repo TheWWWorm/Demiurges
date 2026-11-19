@@ -144,6 +144,11 @@ func apply_volumes(values: Dictionary) -> void:
 	board.settings = values
 	if is_instance_valid(board.audio): board.audio.apply_volumes(values)
 
+## Closing Options applies the visual preferences as well as the volumes.
+func apply_settings(values: Dictionary) -> void:
+	settings = values
+	if is_instance_valid(board): board.apply_settings(values)
+
 func build(data: ELProfile, values: Dictionary) -> void:
 	profile = data
 	settings = values
@@ -724,11 +729,12 @@ func _build_loading() -> void:
 func _load_step() -> void:
 	if _load_tasks.is_empty(): return
 	# Figures and portraits in flight settle over several frames.
-	_framing = _framing.filter(func(figure: Control) -> bool:
+	_framing = _framing.filter(func(figure: Variant) -> bool:
+		if not is_instance_valid(figure): return false
 		var busy := false
-		if figure is ELAutochessFigure: busy = not ELAutochessFigure.is_framed(figure.code) and int(figure.get("_framed")) < 24
-		elif figure is ELAutochessBust: busy = not ELAutochessBust.is_measured(figure.hero) and int(figure.get("_framed")) <= 6
-		if is_instance_valid(figure) and busy: return true
+		if figure is ELAutochessFigure: busy = is_instance_valid(figure.view) and not ELAutochessFigure.is_framed(figure.code, figure.yaw, figure.pitch, figure.zoom, figure.relative, figure.profile) and int(figure.get("_framed")) < 24
+		elif figure is ELAutochessBust: busy = is_instance_valid(figure.model) and not ELAutochessBust.is_measured(figure.hero, figure.profile) and int(figure.get("_framed")) <= 6
+		if busy: return true
 		if figure is ELAutochessFigure: figure.release()
 		if is_instance_valid(figure): figure.queue_free()
 		return false)

@@ -269,18 +269,30 @@ static func _texture_decode(source: Dictionary) -> Dictionary:
 	if img == null: return {}
 	var one_bit_alpha := bytes.decode_u32(32) == 1
 	var authored: Image
+	var coverage := false
+	var category := String(source.file).get_slice("/", 0)
+	# Arena fire and other Alpha sheets blend rather than testing alpha.
+	# Check the resolved entry too: tables can omit the Alpha subfolder.
+	var arena_blend := String(source.file).begins_with("combatscenes/alpha/") or String(source.get("entry", "")).begins_with("combatscenes/alpha/")
 	if one_bit_alpha and String(source.file).begins_with("combatscenes/"):
 		authored = ELTexture.authored_mask_mipmaps(bytes, img)
 	if authored != null: img = authored
+	elif one_bit_alpha and not arena_blend and not bool(source.soft) and not String(source.file).contains("/alpha32/") and category in ["heroes", "creatures", "terrainobjects", "combatscenes"]:
+		# Model cutouts only: UI art, particles and soft-alpha skins blend
+		# their alpha and must keep ordinary averaged mipmaps. Arena cutouts
+		# use the originals' stronger threshold (ELArena.MASKED_ALPHA_CUTOFF).
+		img = ELTexture.cutout_mipmaps(img, 201.0 / 255.0 if category == "combatscenes" else 0.5)
+		coverage = true
 	else: img.generate_mipmaps()
 	var sharp: Image = null
 	if authored == null and not String(source.get("sharp", "")).is_empty(): sharp = ELIconUpscale.load_sharp(source.sharp, bytes, img.get_size())
-	return {"image": img, "one_bit": one_bit_alpha, "authored": authored != null, "levels": bytes.decode_u32(12), "soft": bool(source.soft), "entry": String(source.get("entry", "")), "sharp": sharp}
+	return {"image": img, "one_bit": one_bit_alpha, "authored": authored != null, "coverage": coverage, "levels": bytes.decode_u32(12), "soft": bool(source.soft), "entry": String(source.get("entry", "")), "sharp": sharp}
 
 func _texture_store(key: String, decoded: Dictionary) -> Texture2D:
 	var tex := ImageTexture.create_from_image(decoded.image)
 	if decoded.one_bit: tex.set_meta(ELTexture.ONE_BIT_ALPHA, true)
 	if decoded.authored: tex.set_meta(ELTexture.AUTHORED_MASK_MIPS, int(decoded.levels))
+	elif bool(decoded.get("coverage", false)): tex.set_meta(ELTexture.COVERAGE_MASK_MIPS, decoded.image.get_mipmap_count() + 1)
 	# Found in Alpha32: a soft-alpha skin (see ELModel.build).
 	if decoded.soft: tex.set_meta("alpha32", true)
 	_textures[key] = tex

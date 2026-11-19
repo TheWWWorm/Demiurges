@@ -12,9 +12,17 @@ var view: SubViewport
 var camera: Camera3D
 var model: ELModel
 ## Head heights shown from the top of the head down.
-var heads := 2.3
+var heads := 2.3:
+	set(value):
+		if heads == value: return
+		heads = value
+		if _framed > 6: _fit()
 ## How far right of centre the head sits, as a share of the width.
-var shift := 0.0
+var shift := 0.0:
+	set(value):
+		if shift == value: return
+		shift = value
+		if _framed > 6: _fit()
 var _framed := 0
 var _head := Rect2()
 var _measure_size := 0.0
@@ -25,20 +33,31 @@ var _tall := 1.8
 ## The chin: the bottom of the head part (crests, horns and wings grow from
 ## the head upwards, never below it).
 var _chin := -1.0
-## Measured heads by hero: a hero shown again is framed at once.
+var _source_generation := -1
+## Compatibility index for callers asking only whether a name was measured.
+## Actual measurements live on their source profile, with its generation.
 static var _measured: Dictionary = {}
 
-static func is_measured(id: String) -> bool:
-	return _measured.has(id)
+static func is_measured(id: String, source: ELProfile = null) -> bool:
+	return _measured.has(id) if source == null else _measurements(source).has(id)
+
+static func _measurements(source: ELProfile) -> Dictionary:
+	if source == null: return {}
+	var cache: Dictionary = source.get_meta("autochess_bust_measurements", {})
+	if int(cache.get("generation", -1)) != source.generation:
+		cache = {"generation": source.generation, "heroes": {}}
+		source.set_meta("autochess_bust_measurements", cache)
+	return cache.heroes
 
 func _init() -> void:
+	set_process(false)
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	view = SubViewport.new()
 	view.own_world_3d = true
 	view.transparent_bg = true
 	view.gui_disable_input = true
 	view.msaa_3d = Viewport.MSAA_4X
-	view.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	view.render_target_update_mode = SubViewport.UPDATE_DISABLED
 	view.size = Vector2i(64, 64)
 	add_child(view)
 	camera = Camera3D.new()
@@ -70,6 +89,30 @@ void fragment() {
 	material = ShaderMaterial.new()
 	material.shader = fade
 
+func _ready() -> void:
+	_sync_activity()
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_VISIBILITY_CHANGED or what == NOTIFICATION_ENTER_TREE:
+		_sync_activity()
+	elif what == NOTIFICATION_EXIT_TREE:
+		if is_instance_valid(view):
+			view.render_target_update_mode = SubViewport.UPDATE_DISABLED
+			view.process_mode = Node.PROCESS_MODE_DISABLED
+	elif what == NOTIFICATION_RESIZED:
+		queue_redraw()
+
+func _sync_activity() -> void:
+	if not is_instance_valid(view): return
+	var measuring := is_instance_valid(model) and _framed <= 6
+	# Offscreen loading-screen previews must finish their measurements.
+	# A settled hidden bust has no animation, effects or viewport work.
+	var active := is_inside_tree() and is_instance_valid(model) and (measuring or is_visible_in_tree())
+	view.process_mode = Node.PROCESS_MODE_INHERIT if active else Node.PROCESS_MODE_DISABLED
+	view.render_target_update_mode = (SubViewport.UPDATE_ALWAYS if measuring else SubViewport.UPDATE_WHEN_VISIBLE) if active else SubViewport.UPDATE_DISABLED
+	set_process(active)
+	if active: queue_redraw()
+
 func _pixels() -> Vector2i:
 	var scale_on_screen := (get_viewport().get_final_transform() * get_global_transform_with_canvas()).get_scale() if is_inside_tree() else Vector2.ONE
 	return Vector2i((size * scale_on_screen.abs()).ceil()).max(Vector2i(16, 16))
@@ -78,13 +121,20 @@ func _draw() -> void:
 	if _framed > 6: draw_texture_rect(view.get_texture(), Rect2(Vector2.ZERO, size), false)
 
 func show_hero(data: ELProfile, id: String) -> void:
-	if id == hero and is_instance_valid(model): return
+	if id == hero and data == profile and data != null and data.generation == _source_generation and is_instance_valid(model): return
 	profile = data
+	_source_generation = data.generation if data != null else -1
 	hero = id
 	if is_instance_valid(model):
 		model.hide()
+		model.process_mode = Node.PROCESS_MODE_DISABLED
 		model.queue_free()
 	model = null
+	_framed = 0
+	_head = Rect2()
+	_sync_activity()
+	queue_redraw()
+	if profile == null: return
 	var row := ELAutochessCharacters.row(profile, id)
 	if row.is_empty(): return
 	model = ELModel.new()
@@ -98,8 +148,7 @@ func show_hero(data: ELProfile, id: String) -> void:
 	model.play("cidle")
 	model.animation_finished.connect(func(clip: String):
 		if clip != "udeath" and is_instance_valid(model): model.play.call_deferred("cidle"))
-	_framed = 0
-	queue_redraw()
+	_sync_activity()
 
 func react(clip: String) -> void:
 	if _framed <= 6: return
@@ -144,23 +193,28 @@ func _stature() -> float:
 	return top if top > 0.3 else ELWikiPreview.bounds(model).end.y
 
 func _process(_delta: float) -> void:
-	if not is_instance_valid(model) or DisplayServer.get_name() == "headless": return
+	if not is_instance_valid(model): return
+	if profile != null and profile.generation != _source_generation:
+		show_hero(profile, hero)
+		return
+	if DisplayServer.get_name() == "headless": return
 	var pixels := _pixels()
 	if view.size != pixels:
 		view.size = pixels
 		if _framed > 6: _fit()
-	if _framed > 6:
 		queue_redraw()
+	if _framed > 6:
 		return
 	_framed += 1
-	if _framed == 2 and _measured.has(hero):
-		var known: Array = _measured[hero]
+	var measurements := _measurements(profile)
+	if _framed == 2 and measurements.has(hero):
+		var known: Array = measurements[hero]
 		_head = known[0]
 		_tall = known[1]
 		_measure_center = known[2]
 		_framed = 7
 		_fit()
-		queue_redraw()
+		_sync_activity()
 		return
 	if _framed == 3:
 		# The whole figure from the front, with only the head drawn.
@@ -219,10 +273,11 @@ func _process(_delta: float) -> void:
 			var face_x := _measure_center.x + ((sum / weight if weight > 0.0 else Rect2(used).get_center().x) - middle.x) * per_pixel
 			var width := minf(_head.size.x, _tall * 0.12)
 			_head = Rect2(face_x - width * 0.5, top, width, top - _chin)
-		_measured[hero] = [_head, _tall, _measure_center]
+		measurements[hero] = [_head, _tall, _measure_center]
+		_measured[hero] = true
 		_framed = 7
 		_fit()
-		queue_redraw()
+		_sync_activity()
 
 ## Head and shoulders from just above the head, the head centred (moved
 ## right by `shift`); `heads` scales the crop (2.3 is the usual one).

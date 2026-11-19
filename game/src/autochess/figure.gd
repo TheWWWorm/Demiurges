@@ -21,17 +21,29 @@ var relative := true
 var view: SubViewport
 var model: ELModel
 var _framed := 0
+var _source_generation := -1
+var _hero := false
 var _glow_material: ShaderMaterial
-## Settled framings by creature and view shape: a creature shown again is
-## framed at once, without reading pixels back from the graphics card.
+## Compatibility index for unprofiled callers. Production framing records
+## belong to the source profile and are invalidated by its mount generation.
 static var _framings: Dictionary = {}
 
 func _framing_key() -> String:
-	return "%s|%.3f|%.3f|%.3f|%s" % [code, yaw, pitch, zoom, relative]
+	var key := "hero:" + code if _hero else code
+	return "%s|%.3f|%.3f|%.3f|%s" % [key, yaw, pitch, zoom, relative]
 
 ## Whether `code` was framed already (the loading screen frames them all).
-static func is_framed(code: String, figure_yaw := deg_to_rad(-28.0), figure_pitch := deg_to_rad(10.0), figure_zoom := 0.88, figure_relative := true) -> bool:
-	return _framings.has("%s|%.3f|%.3f|%.3f|%s" % [code, figure_yaw, figure_pitch, figure_zoom, figure_relative])
+static func is_framed(code: String, figure_yaw := deg_to_rad(-28.0), figure_pitch := deg_to_rad(10.0), figure_zoom := 0.88, figure_relative := true, source: ELProfile = null) -> bool:
+	var key := "%s|%.3f|%.3f|%.3f|%s" % [code, figure_yaw, figure_pitch, figure_zoom, figure_relative]
+	return _framings.has(key) if source == null else _profile_framings(source).has(key)
+
+static func _profile_framings(source: ELProfile) -> Dictionary:
+	if source == null: return {}
+	var cache: Dictionary = source.get_meta("autochess_figure_framings", {})
+	if int(cache.get("generation", -1)) != source.generation:
+		cache = {"generation": source.generation, "figures": {}}
+		source.set_meta("autochess_figure_framings", cache)
+	return cache.figures
 
 ## Places the camera from a settled framing for this view's shape.
 func _apply_framing(known: Dictionary) -> void:
@@ -48,6 +60,31 @@ func _apply_framing(known: Dictionary) -> void:
 
 func _init() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
+	set_process(false)
+
+func _ready() -> void:
+	_sync_activity()
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_VISIBILITY_CHANGED or what == NOTIFICATION_ENTER_TREE:
+		_sync_activity()
+	elif what == NOTIFICATION_EXIT_TREE:
+		if is_instance_valid(view):
+			view.render_target_update_mode = SubViewport.UPDATE_DISABLED
+			view.process_mode = Node.PROCESS_MODE_DISABLED
+	elif what == NOTIFICATION_RESIZED:
+		queue_redraw()
+
+func _sync_activity() -> void:
+	var framing := is_instance_valid(view) and _framed < 24
+	# Loading-screen figures finish framing even before their canvas texture
+	# is shown. Afterwards hidden shop/reserve views stop their whole stage.
+	var active := is_inside_tree() and is_instance_valid(view) and (framing or is_visible_in_tree())
+	if is_instance_valid(view):
+		view.process_mode = Node.PROCESS_MODE_INHERIT if active else Node.PROCESS_MODE_DISABLED
+		view.render_target_update_mode = (SubViewport.UPDATE_ALWAYS if framing else SubViewport.UPDATE_WHEN_VISIBLE) if active else SubViewport.UPDATE_DISABLED
+	set_process(active)
+	if active: queue_redraw()
 
 ## Pixels on screen for the figure's rectangle.
 func _pixels() -> Vector2i:
@@ -111,17 +148,19 @@ func show_hero(data: ELProfile, template: String) -> void:
 	_show(data, template, true)
 
 func _show(data: ELProfile, value: String, hero: bool) -> void:
-	var key := "%d:%d:hero:%s" % [data.get_instance_id(), data.generation, value] if hero else value
-	if key == code and is_instance_valid(view): return
-	profile = data
+	if value == code and hero == _hero and profile == data and data != null and data.generation == _source_generation and is_instance_valid(view): return
 	release()
-	code = key
-	if value.is_empty(): return
-	var spares: Array = _spare.get(key, [])
+	profile = data
+	_source_generation = data.generation if data != null else -1
+	code = value
+	_hero = hero
+	if value.is_empty() or profile == null: return
+	var spares: Array = _spare.get(_spare_key(), [])
 	while not spares.is_empty() and view == null:
 		var kept: SubViewport = spares.pop_back()
 		_spare_count -= 1
 		if is_instance_valid(kept): view = kept
+	if spares.is_empty(): _spare.erase(_spare_key())
 	if view == null:
 		view = ELWikiPreview.stage_hero(profile, value, _pixels(), true) if hero else ELWikiPreview.stage(profile, value, _pixels(), true)
 		if view == null: return
@@ -140,6 +179,10 @@ func _show(data: ELProfile, value: String, hero: bool) -> void:
 	_idle_back = func(clip: String): if clip != "udeath" and is_instance_valid(model): model.play.call_deferred("cidle")
 	model.animation_finished.connect(_idle_back)
 	_framed = 0
+	_sync_activity()
+
+func _spare_key() -> String:
+	return "%d|%d|%s|%s" % [profile.get_instance_id(), _source_generation, _hero, code]
 
 ## Gives the shown creature's view back: kept for the next figure of the
 ## same creature once it is framed, otherwise freed.
@@ -147,15 +190,20 @@ func release() -> void:
 	if not is_instance_valid(view):
 		view = null
 		model = null
+		code = ""
+		set_process(false)
+		queue_redraw()
 		return
 	if is_instance_valid(model) and _idle_back.is_valid() and model.animation_finished.is_connected(_idle_back):
 		model.animation_finished.disconnect(_idle_back)
 	view.render_target_update_mode = SubViewport.UPDATE_DISABLED
-	if (_framed >= 24 or _framings.has(_framing_key())) and _framed >= 2 and _spare_count < SPARE_LIMIT and not code.is_empty() and is_instance_valid(model):
+	view.process_mode = Node.PROCESS_MODE_DISABLED
+	if profile != null and profile.generation == _source_generation and (_framed >= 24 or _profile_framings(profile).has(_framing_key())) and _framed >= 2 and _spare_count < SPARE_LIMIT and not code.is_empty() and is_instance_valid(model):
 		model.play("cidle")
 		remove_child(view)
-		if not _spare.has(code): _spare[code] = []
-		_spare[code].append(view)
+		var key := _spare_key()
+		if not _spare.has(key): _spare[key] = []
+		_spare[key].append(view)
 		_spare_count += 1
 	else:
 		# Freed at the end of the frame, still in the tree for the effects'
@@ -164,6 +212,8 @@ func release() -> void:
 	view = null
 	model = null
 	code = ""
+	set_process(false)
+	queue_redraw()
 
 ## Frees the kept views (they are outside the tree, so nothing else does).
 static func free_spares() -> void:
@@ -241,19 +291,23 @@ static func refine(view: SubViewport, fill := 0.86, relative := false) -> float:
 
 func _process(_delta: float) -> void:
 	if not is_instance_valid(view): return
+	if profile != null and profile.generation != _source_generation:
+		_show(profile, code, _hero)
+		return
 	var pixels := _pixels()
 	if view.size != pixels:
 		view.size = pixels
 		_framed = 0
-	if is_visible_in_tree(): queue_redraw()
+		_sync_activity()
 	# Frame after the model and its particles have shown a few poses.
 	# Then refine from the drawn pixels every other frame until it settles.
 	if _framed < 24 and view.size.x > 8 and view.size.y > 8:
 		_framed += 1
 		var pivot_node: Node3D = view.get_node("Pivot")
 		var eye: Camera3D = pivot_node.get_node("Camera")
-		if _framed == 1 and _framings.has(_framing_key()):
-			_apply_framing(_framings[_framing_key()])
+		var framings := _profile_framings(profile)
+		if _framed == 1 and framings.has(_framing_key()):
+			_apply_framing(framings[_framing_key()])
 			# One frame later the view holds the framed creature.
 			_framed = 23
 			return
@@ -263,6 +317,7 @@ func _process(_delta: float) -> void:
 			if factor > 0.0 and absf(factor - 1.0) < 0.04:
 				_framed = 24
 				if view.has_meta("extent"):
-					_framings[_framing_key()] = {"pivot": pivot_node.transform, "center": Vector2(eye.position.x, eye.position.y),
+					framings[_framing_key()] = {"pivot": pivot_node.transform, "center": Vector2(eye.position.x, eye.position.y),
 						"extent": view.get_meta("extent"), "fill": float(view.get_meta("fill"))}
-		if _framed >= 24: view.render_target_update_mode = SubViewport.UPDATE_WHEN_VISIBLE
+					_framings[_framing_key()] = true
+		if _framed >= 24: _sync_activity()

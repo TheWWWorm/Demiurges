@@ -443,7 +443,7 @@ func _offer_crash_report() -> void:
 ## The player's options in a report: the remake settings that change drawing.
 func _options_summary() -> String:
 	var parts := PackedStringArray()
-	for key: String in ["renderer", "path_tracing", "antialiasing", "upscaler", "fsr_version", "upscale_quality", "frame_generation", "ray_reconstruction", "sharpening", "terrain_detail", "enhanced_water", "bloom", "soft_particles", "spell_light", "shadows", "soft_shadows", "weather", "auto_camera", "helper_overlay"]:
+	for key: String in ["renderer", "path_tracing", "antialiasing", "upscaler", "fsr_version", "upscale_quality", "frame_generation", "ray_reconstruction", "sharpening", "terrain_detail", "enhanced_water", "contact_shading", "bloom", "soft_particles", "spell_light", "shadows", "soft_shadows", "weather", "auto_camera", "helper_overlay"]:
 		if settings.values.has(key): parts.append("%s=%s" % [key, settings.values[key]])
 	return " ".join(parts)
 
@@ -787,6 +787,8 @@ func _start(edition: String, options: Dictionary = {}, restored: ELDuel = null, 
 	selection_ring.material_override = ring_material
 	selection_ring.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	selection_ring.layers = 1 << (ELCombatWatch.HIDDEN_LAYER - 1)
+	selection_ring.set_meta("raster_only", true)
+	selection_ring.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
 	stage.add_child(selection_ring)
 	selection_ring.hide()
 	front_line = []
@@ -4881,7 +4883,7 @@ func _float_number(id: int, amount: int) -> void:
 ## state have no original counterpart and show only with the helper overlay;
 ## numbers always show. Captions over one figure stack upward, never overlapping.
 func _float_text(id: int, text: String, color: Color, remake_only := false) -> void:
-	if not models.has(id) or (remake_only and not helper_overlay()):
+	if not models.has(id) or not is_instance_valid(models[id]) or not is_instance_valid(stage) or text.is_empty() or (remake_only and not helper_overlay()):
 		return
 	var live: Array = _floating.get(id, []).filter(func(node) -> bool: return is_instance_valid(node) and not node.is_queued_for_deletion())
 	var label := Label3D.new()
@@ -6558,13 +6560,22 @@ func _graphics_page(page: VBoxContainer) -> void:
 	soft_shadows.toggled.connect(func(enabled: bool):
 		settings.values.soft_shadows = enabled
 		_apply_settings())
+	var contact_shading := CheckButton.new()
+	contact_shading.name = "ContactShading"
+	contact_shading.button_pressed = bool(settings.values.get("contact_shading", false))
+	contact_shading.disabled = not ELEffectLook.ContactShading.available()
+	contact_shading.toggled.connect(func(enabled: bool):
+		settings.values.contact_shading = enabled
+		_apply_settings())
+	_settings_row(scene, "Contact shading", "Subtle shade where lit figures meet the ground and nearby surfaces. Requires Forward+; switches off during path tracing. Unlit scenery is unchanged.", contact_shading)
 	var terrain_detail := CheckButton.new()
 	terrain_detail.name = "TerrainDetail"
 	terrain_detail.button_pressed = bool(settings.values.terrain_detail)
 	terrain_detail.toggled.connect(func(enabled: bool):
 		settings.values.terrain_detail = enabled
 		if is_instance_valid(arena): arena.set_detail(enabled)
-		if campaign_view != null: campaign_view.apply_settings())
+		if campaign_view != null: campaign_view.apply_settings()
+		if is_instance_valid(_autochess_screen): _autochess_screen.apply_settings(settings.values))
 	_settings_row(scene, "Terrain detail", "Subtle surface detail on map terrain and battle ground. May reduce performance on slower devices.", terrain_detail)
 	var enhanced_water := CheckButton.new()
 	enhanced_water.name = "EnhancedWater"
@@ -6572,7 +6583,8 @@ func _graphics_page(page: VBoxContainer) -> void:
 	enhanced_water.toggled.connect(func(enabled: bool):
 		settings.values.enhanced_water = enabled
 		if is_instance_valid(arena): arena.set_water(enabled)
-		if campaign_view != null: campaign_view.apply_settings())
+		if campaign_view != null: campaign_view.apply_settings()
+		if is_instance_valid(_autochess_screen): _autochess_screen.apply_settings(settings.values))
 	_settings_row(scene, "Enhanced water", "Adds reflections, ripples, shoreline foam and rain rings to map water, and animated waves to the Ship arena.", enhanced_water)
 	# How effects look (ELEffectLook), in battles and on maps.
 	for row: Array in [
@@ -7382,7 +7394,13 @@ func _apply_settings() -> void:
 	ELSettings.apply_display(get_viewport(), settings.values)
 	if is_instance_valid(path_tracing): path_tracing.display_applied()
 	if is_instance_valid(arena) and arena.light != null:
-		arena.light.shadow_enabled = settings.values.shadows
+		# Options can change while tracing owns this light. Keep raster
+		# shadows off until tracing releases it, but remember the new choice.
+		if arena.light.has_meta("traced_shadow"):
+			arena.light.set_meta("traced_shadow", bool(settings.values.shadows))
+			arena.light.shadow_enabled = false
+		else:
+			arena.light.shadow_enabled = settings.values.shadows
 		arena.light.shadow_blur = 2.0 if settings.values.soft_shadows else 1.0
 		arena.set_detail(bool(settings.values.terrain_detail))
 		arena.set_water(bool(settings.values.enhanced_water))
@@ -7393,6 +7411,7 @@ func _apply_settings() -> void:
 	_layout_hud()
 	_preview_volumes(settings.values)
 	if campaign_view != null: campaign_view.apply_settings()
+	if is_instance_valid(_autochess_screen): _autochess_screen.apply_settings(settings.values)
 	_refresh()
 
 ## What Discord shows: the game, and the menus, a campaign map or a battle.

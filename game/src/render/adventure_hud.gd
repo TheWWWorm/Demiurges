@@ -47,6 +47,8 @@ var minimap_view: Control
 var minimap_fog: TextureRect
 var _fog_textures: Array[ImageTexture] = []
 var _fog_revision := -1
+var _fog_player := -1
+var _fog_masks: Array[PackedByteArray] = []
 const MINIMAP_FOG := """shader_type canvas_item;
 uniform sampler2D seen : filter_nearest;
 uniform int bit = 1;
@@ -119,7 +121,12 @@ const HEADER_INK := Color("d6bb88")
 ## Map info text: Arial Bold Italic, about 16 px cells in the original capture.
 const TOOLTIP_SIZE := 15
 var _bold: FontVariation
-var _signature := -1
+var _marker_state := PackedInt64Array()
+var _marker_castles: Array[Dictionary] = []
+var _marker_sites: Array[Dictionary] = []
+var _marker_actors: Array[Dictionary] = []
+var _building_counts := PackedInt32Array([0, 0, 0, 0, 0])
+var _overview_income: Dictionary = {}
 var _art: ELAdventureArt
 ## Minimap markers (CMiniMap, table): castles,
 ## heroes and owned sites are TOOLTIP_1 sprites in the player's slot colour;
@@ -186,6 +193,7 @@ func build(source: ELAdventureSession) -> bool:
 	var panel_sheet := profile.texture(_paths.get("ADV_PANEL1", ""))
 	if panel_sheet != null: _empty_slot = {"texture": panel_sheet, "source": Rect2(149, 60, 74, 49)}
 	_build_minimap()
+	_refresh_overview(state.current_player)
 	_build_slots()
 	_build_buttons()
 	_build_bar()
@@ -374,22 +382,34 @@ static func terrain_colors(data: ELProfile) -> Dictionary:
 	return result
 
 func _sync_minimap_fog() -> void:
-	if minimap_fog == null or ELFog.revision(state) == _fog_revision: return
+	if minimap_fog == null: return
+	if ELFog.revision(state) == _fog_revision and _fog_player == state.current_player: return
 	_fog_revision = ELFog.revision(state)
+	if _fog_player != state.current_player:
+		_fog_player = state.current_player
+		(minimap_fog.material as ShaderMaterial).set_shader_parameter("bit", _fog_player)
 	# The console's open_fog lifts the fog without exploring anything.
 	minimap_fog.visible = ELFog.active(state, state.current_player)
 	if minimap_marks != null: minimap_marks.queue_redraw()
+	if not minimap_fog.visible: return
 	var size := state.map.width * state.map.height
 	var masks: Array[PackedByteArray] = [state.explored, state.fog.get("visible", PackedByteArray())]
 	for index in masks.size():
 		if masks[index].size() != size:
 			masks[index] = PackedByteArray()
 			masks[index].resize(size)
+		# Movement frequently changes current sight without changing explored
+		# ground. Upload only the mask whose bytes actually changed.
+		if _fog_masks.size() > index and _fog_masks[index] == masks[index]: continue
 		var image := Image.create_from_data(maxi(1, state.map.width), maxi(1, state.map.height), false, Image.FORMAT_R8, masks[index])
-		if _fog_textures.size() <= index: _fog_textures.append(ImageTexture.create_from_image(image))
-		else: _fog_textures[index].update(image)
-	minimap_fog.texture = _fog_textures[0]
-	(minimap_fog.material as ShaderMaterial).set_shader_parameter("seen", _fog_textures[1])
+		if _fog_textures.size() <= index:
+			_fog_textures.append(ImageTexture.create_from_image(image))
+			_fog_masks.append(masks[index].duplicate())
+			if index == 0: minimap_fog.texture = _fog_textures[0]
+			else: (minimap_fog.material as ShaderMaterial).set_shader_parameter("seen", _fog_textures[1])
+		else:
+			_fog_textures[index].update(image)
+			_fog_masks[index] = masks[index].duplicate()
 
 func _draw_minimap() -> void:
 	minimap.draw_rect(Rect2(Vector2.ZERO, minimap.size), Color.BLACK)
@@ -407,16 +427,16 @@ func _draw_minimap_marks() -> void:
 	# Sprite size set: maps under 100 cells wide get the large sprites.
 	var size_index := 0 if map.width < 100 else (1 if map.width < 140 else 2)
 	var footprints: Dictionary = state.grid.footprints if state.grid != null else {}
-	for item: Dictionary in state.objects.values():
+	for item: Dictionary in _marker_castles:
 		if not item.get("alive", false) or not ELFirstScenario.is_castle(item) or not state.players.has(int(item.get("owner", 0))) or not minimap_known(item): continue
 		_draw_mark(1, int(item.owner), item, footprints, area, cell, size_index)
-	for item: Dictionary in state.objects.values():
+	for item: Dictionary in _marker_sites:
 		if not item.get("alive", false) or not item.get("visible", true) or not item.get("placed", true): continue
 		var group := str(item.get("group", ""))
 		if (group in ["mana_nodes", "mines", "laboratories", "factories", "forts"] or (group == "additional_buildings" and str(item.get("name", "")).ends_with("Citadel"))) and minimap_known(item):
 			var owner := int(item.get("owner", 0))
 			_draw_mark(2, owner if state.players.has(owner) else 7, item, footprints, area, cell, size_index)
-	for item: Dictionary in state.objects.values():
+	for item: Dictionary in _marker_actors:
 		if not item.get("alive", false) or not item.get("visible", true) or not item.get("placed", true) or item.get("type") not in ["hero", "monster"] or item.get("fortified", false): continue
 		if not ELFog.visible(state, state.current_player, Vector2i(item.x, item.y)): continue
 		var owner := int(item.get("owner", 0))
@@ -961,14 +981,9 @@ func _entry_count() -> int:
 func refresh(selected_hero: int, budget: Dictionary, can_act: bool) -> void:
 	var player: int = state.current_player
 	selected = selected_hero
-	roster.clear()
-	for actor: Dictionary in state.objects.values():
-		if actor.type != "hero" or not actor.alive or not actor.visible or actor.owner != player: continue
-		# The filter lists heroes inside a fort or a training camp.
-		if tower_only and not ELGlobalSpells.held(actor): continue
-		roster.append(int(actor.uid))
+	_refresh_overview(player)
 	var wallet: Dictionary = state.players.get(player, {}).get("resources", {})
-	var income := ELResourceSites.income(state, player)
+	var income := _overview_income
 	var kinds := ELResources.types(profile.id)
 	for index in income_labels.size():
 		if index < kinds.size():
@@ -994,13 +1009,11 @@ func refresh(selected_hero: int, budget: Dictionary, can_act: bool) -> void:
 	buttons.DisconnectButton.disabled = false
 	dial.NextTurn.disabled = not can_act
 	# Buildings mode lists the chosen category of the player's buildings.
-	listing.clear()
 	for kind in ELBuildingScreen.CATEGORIES:
 		var button: CutButton = buttons["BuildingType%d" % (kind + 1)]
-		var count := ELBuildingScreen.owned(state, player, kind).size()
+		var count := _building_counts[kind]
 		button.disabled = count == 0
 		button.active = kind == building_kind
-	if building_kind >= 0: listing = ELBuildingScreen.owned(state, player, building_kind)
 	spell_listing.clear()
 	var spells := ELGlobalSpells.applies(state)
 	for kind in ELGlobalSpellsView.KINDS.size():
@@ -1054,17 +1067,63 @@ func refresh(selected_hero: int, budget: Dictionary, can_act: bool) -> void:
 		var walker := state.object(id) if id >= 0 else {}
 		slots[slot_index].set_steps("%d/%d" % [int(walker.get("ap", 0)), int(walker.get("strategy_capacity", walker.get("base_ap", 0)))] if free_steps and not walker.is_empty() else "")
 	_sync_minimap_fog()
-	# What the marks show, packed as numbers (this runs every frame).
-	var values := PackedInt64Array([selected, roster.size(), state.day, ELFog.revision(state)])
-	for item: Dictionary in state.objects.values():
-		var kind: Variant = item.get("type")
-		if kind == "hero" or kind == "monster": values.append_array([int(item.x), int(item.y), int(item.alive)])
-		elif item.has("owner") and item.has("group"): values.append(int(item.owner))
-	var signature := hash(values)
-	if signature != _signature:
-		_signature = signature
-		minimap_marks.queue_redraw()
 	if tooltip.visible and tooltip_subject >= 0 and not state.object(tooltip_subject).get("alive", false): tooltip.hide()
+
+## One pass replaces the separate hero, income, five building-category and
+## minimap scans. Read current dictionaries every refresh, so script changes
+## do not depend on a separate cache-invalidation event being emitted.
+func _refresh_overview(player: int) -> void:
+	roster.clear()
+	listing.clear()
+	_building_counts.fill(0)
+	_overview_income = ELResources.empty(profile.id)
+	_marker_castles.clear()
+	_marker_sites.clear()
+	_marker_actors.clear()
+	var marks := PackedInt64Array([player, ELFog.revision(state)])
+	for id: int in state.players:
+		marks.append(id)
+		marks.append(hash(state.players[id].get("color", "")))
+	for id: int in state.objects:
+		var item: Dictionary = state.objects[id]
+		var type := str(item.get("type", ""))
+		var group := str(item.get("group", ""))
+		var alive: bool = item.get("alive", false)
+		var owner := int(item.get("owner", -1))
+		if alive and owner == player:
+			if type == "hero" and item.get("visible", true) and (not tower_only or ELGlobalSpells.held(item)):
+				roster.append(id)
+			var category := ELBuildingScreen.category(item) if profile.id == "el1" else -1
+			if category >= 0:
+				_building_counts[category] += 1
+				if category == building_kind: listing.append(id)
+			if group == "mines":
+				var amounts := ELResourceSites.production(profile, item)
+				for kind: String in _overview_income:
+					_overview_income[kind] = mini(ELResources.MAX_AMOUNT, int(_overview_income[kind]) + int(amounts[kind]))
+		var marker := 0
+		if ELFirstScenario.is_castle(item):
+			_marker_castles.append(item)
+			marker |= 1
+		if group in ["mana_nodes", "mines", "laboratories", "factories", "forts"] or (group == "additional_buildings" and str(item.get("name", "")).ends_with("Citadel")):
+			_marker_sites.append(item)
+			marker |= 2
+		if type == "hero" or type == "monster":
+			_marker_actors.append(item)
+			marker |= 4
+		if marker == 0: continue
+		# Include visibility/placement/fortification changes too; the old key
+		# missed them, leaving a stale marker until movement or fog changed.
+		var flags := int(alive) | (int(item.get("visible", true)) << 1) | (int(item.get("placed", true)) << 2) | (int(item.get("fortified", false)) << 3)
+		marks.append(id)
+		marks.append(int(item.get("x", 0)))
+		marks.append(int(item.get("y", 0)))
+		marks.append(owner)
+		marks.append(flags)
+		marks.append(marker)
+	if marks != _marker_state:
+		_marker_state = marks
+		if minimap_marks != null: minimap_marks.queue_redraw()
 
 ## Original button art: optional normal, pushed and hover-light pieces.
 class CutButton extends BaseButton:
@@ -1072,6 +1131,7 @@ class CutButton extends BaseButton:
 	var parts: Dictionary = {}
 	var active := false:
 		set(value):
+			if active == value: return
 			active = value
 			queue_redraw()
 	var _origin := Vector2.ZERO

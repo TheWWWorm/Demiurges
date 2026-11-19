@@ -19,7 +19,8 @@ extends Control
 ## Approximations: floating numbers rise straight up at 0.8 units a second;
 ## numbers that start together over one figure begin a step apart; glyphs never
 ## shrink below MIN_SIZE window pixels (remake readability floor for small
-## windows and the remake's zoomed-out orbit; the original has none).
+## windows and the remake's zoomed-out orbit; the original has none). Numeric
+## readouts have a dark backing for light ground.
 
 const CELL := 16.0
 ## Half the glyph's world width: figure readouts, rising numbers (original
@@ -46,27 +47,52 @@ const FLOAT_START := 0.17
 ## screen, so they stay readable from any view (remake spacing).
 const STACK_STEP := 1.25
 const STACK_AGE := 0.5
+const PLATE_INK := Color(0.015, 0.020, 0.026, 0.31)
 
-var sheet: Texture2D
-var camera: Camera3D
+var sheet: Texture2D:
+	set(value):
+		if sheet == value: return
+		sheet = value
+		_invalidate()
+var camera: Camera3D:
+	set(value):
+		if camera == value: return
+		camera = value
+		_view_valid = false
+		_invalidate()
 ## Per figure: {"top": Vector3, "numbers": [[code, colour]...], "icons": [codes],
 ## "order": [marker, digits...] or []}.
-var figures: Array = []
+var figures: Array = []:
+	set(value):
+		if figures == value: return
+		figures = value
+		_invalidate()
+		_refresh_processing()
 ## Rising numbers: {"point": Vector3, "glyphs": [codes], "colour": Color, "age": float}.
 var floating: Array = []
-var _shown := false
+var _dirty := true
+var _view_valid := false
+var _view_camera := Transform3D.IDENTITY
+var _view_projection := Projection()
+var _view_canvas := Transform2D.IDENTITY
+var _view_rect := Rect2()
 
 func _init() -> void:
+	set_process(false)
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	# The 16 px sheet is drawn smaller than its cells; mipmaps keep it legible.
 	texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 
+func _ready() -> void:
+	_refresh_processing()
+
 func build(profile: ELProfile) -> void:
 	sheet = profile.texture("Interface/combatsymbols") if profile != null else null
 	figures.clear()
 	floating.clear()
-	queue_redraw()
+	_invalidate()
+	_refresh_processing()
 
 ## Digit codes of a non-negative number: '0' is 1, '1'..'9' are 2..10.
 static func digits(value: int) -> Array:
@@ -101,6 +127,8 @@ func add_number(point: Vector3, amount: int, key := -1) -> void:
 	for entry: Dictionary in floating:
 		if key >= 0 and int(entry.get("key", -1)) == key and float(entry.age) < STACK_AGE: fresh += 1
 	floating.append({"point": point + Vector3(0, FLOAT_START, 0), "stack": fresh, "glyphs": digits(mini(absi(amount), 99999)), "colour": RED if amount > 0 else GREEN, "age": 0.0, "key": key})
+	_invalidate()
+	_refresh_processing()
 
 ## Screen points of the rising numbers (for checks).
 func number_points() -> Array[Vector2]:
@@ -109,21 +137,59 @@ func number_points() -> Array[Vector2]:
 	for entry: Dictionary in floating: result.append(_number_at(entry))
 	return result
 
-func _number_at(entry: Dictionary) -> Vector2:
-	return camera.unproject_position(entry.point) - Vector2(0, glyph_size(entry.point, FLOAT_HALF) * STACK_STEP * int(entry.get("stack", 0)))
+func _number_at(entry: Dictionary, size := -1.0) -> Vector2:
+	if size < 0.0: size = glyph_size(entry.point, FLOAT_HALF)
+	return camera.unproject_position(entry.point) - Vector2(0, size * STACK_STEP * int(entry.get("stack", 0)))
 
 func _process(delta: float) -> void:
-	if floating.is_empty() and figures.is_empty():
-		# Clear the last drawn marks once (numbers turned off, a close-up started).
-		if _shown: queue_redraw()
-		_shown = false
-		return
-	_shown = true
+	var moving := not floating.is_empty()
+	var count := 0
 	for entry: Dictionary in floating:
 		entry.age += delta
 		entry.point = entry.point + Vector3(0, FLOAT_SPEED * delta, 0)
-	floating = floating.filter(func(entry: Dictionary) -> bool: return entry.age < FLOAT_LIFE)
-	queue_redraw()
+		if float(entry.age) < FLOAT_LIFE:
+			floating[count] = entry
+			count += 1
+	if count != floating.size(): floating.resize(count)
+	# Hidden readouts still age correctly, but do not project or rebuild draw
+	# commands. Static anchors need a redraw only after camera/canvas changes.
+	if is_visible_in_tree():
+		if _view_changed() or moving or _dirty: queue_redraw()
+	elif moving:
+		_dirty = true
+	_refresh_processing()
+
+func _invalidate() -> void:
+	_dirty = true
+	if is_visible_in_tree(): queue_redraw()
+
+func _refresh_processing() -> void:
+	set_process(not floating.is_empty() or (not figures.is_empty() and is_visible_in_tree()))
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_VISIBILITY_CHANGED or what == NOTIFICATION_ENTER_TREE:
+		_refresh_processing()
+		if is_visible_in_tree(): _invalidate()
+	elif what == NOTIFICATION_RESIZED:
+		_invalidate()
+
+func _view_changed() -> bool:
+	if not is_instance_valid(camera) or not camera.is_inside_tree():
+		var changed := _view_valid
+		_view_valid = false
+		return changed
+	var pose := camera.get_camera_transform()
+	var projection := camera.get_camera_projection()
+	var canvas := get_viewport().get_final_transform()
+	var rect := get_viewport_rect()
+	if _view_valid and pose == _view_camera and projection == _view_projection and canvas == _view_canvas and rect == _view_rect:
+		return false
+	_view_valid = true
+	_view_camera = pose
+	_view_projection = projection
+	_view_canvas = canvas
+	_view_rect = rect
+	return true
 
 ## Glyph size in px at a world point: the screen width of a camera-facing
 ## square `half` x 2 units across there (fixed 16 px without a camera).
@@ -152,6 +218,9 @@ func figure_rows(figure: Dictionary) -> Dictionary:
 ## The area one figure's readout covers on screen (for checks).
 func figure_rect(figure: Dictionary) -> Rect2:
 	var rows := figure_rows(figure)
+	return _figure_bounds(figure, rows)
+
+func _figure_bounds(figure: Dictionary, rows: Dictionary) -> Rect2:
 	var size: float = rows.size
 	var width := maxf(float((figure.get("numbers", []) as Array).size()), float((figure.get("icons", []) as Array).size())) * size
 	var top: float = rows.numbers
@@ -185,38 +254,71 @@ func icon_at(point: Vector2) -> Dictionary:
 	if not is_visible_in_tree() or camera == null or not is_instance_valid(camera) or not camera.is_inside_tree(): return found
 	var depth := INF
 	for figure: Dictionary in figures:
-		for entry: Dictionary in icon_rects(figure):
-			if int(entry.bit) < 0 or not (entry.rect as Rect2).has_point(point): continue
-			var distance := camera.global_position.distance_to(figure.get("top", Vector3.ZERO))
-			if distance < depth:
-				depth = distance
-				found = entry
+		var icons: Array = figure.get("icons", [])
+		var top: Vector3 = figure.get("top", Vector3.ZERO)
+		if icons.is_empty() or camera.is_position_behind(top): continue
+		var rows := figure_rows(figure)
+		var size: float = rows.size
+		var x: float = rows.anchor.x - icons.size() * size * 0.5
+		var row := Rect2(x, rows.icons, 0.0, size)
+		if point.y < row.position.y or point.y >= row.end.y: continue
+		var index := floori((point.x - x) / size)
+		var distance := camera.global_position.distance_squared_to(top)
+		if distance >= depth: continue
+		# Rect2 stores float32 coordinates. At an exact cell boundary its
+		# rounded edge can differ from the division by one ULP; checking the
+		# adjacent cells keeps picking identical to the drawn rectangles.
+		for candidate in range(maxi(0, index - 1), mini(icons.size(), index + 2)):
+			var rect := Rect2(x + candidate * size, rows.icons, size, size)
+			if not rect.has_point(point): continue
+			var bit := ICON_CODES.find(int(icons[candidate]))
+			if bit < 0: continue
+			depth = distance
+			found = {"id": int(figure.get("id", -1)), "bit": bit, "rect": rect}
+			break
 	return found
 
 func _draw() -> void:
+	_dirty = false
 	if sheet == null or camera == null or not is_instance_valid(camera) or not camera.is_inside_tree(): return
+	var view := get_viewport_rect()
+	var pixel := 1.0 / _window_scale()
+	var margin := maxf(2.0, 3.0 * pixel)
+	var padding := maxf(1.0, 2.0 * pixel)
 	for figure: Dictionary in figures:
 		var top: Vector3 = figure.get("top", Vector3.ZERO)
 		if camera.is_position_behind(top): continue
 		var rows := figure_rows(figure)
+		if not view.intersects(_figure_bounds(figure, rows).grow(margin)): continue
 		var size: float = rows.size
 		var x: float = rows.anchor.x
 		var icons: Array = figure.get("icons", [])
 		var numbers: Array = figure.get("numbers", [])
-		if not numbers.is_empty(): _draw_row(numbers, x, rows.numbers, size)
+		if not numbers.is_empty():
+			_draw_plate(x, rows.numbers, numbers.size(), size, padding)
+			_draw_row(numbers, x, rows.numbers, size)
 		if not icons.is_empty():
-			var cells: Array = []
-			for code: int in icons: cells.append([code, WHITE])
-			_draw_row(cells, x, rows.icons, size)
+			_draw_codes(icons, WHITE, x, rows.icons, size)
 		var order: Array = figure.get("order", [])
 		if not order.is_empty(): _draw_order(order, x, rows.order, size)
 	for entry: Dictionary in floating:
 		if camera.is_position_behind(entry.point): continue
 		var size := glyph_size(entry.point, FLOAT_HALF)
-		var at := _number_at(entry)
-		var cells: Array = []
-		for code: int in entry.glyphs: cells.append([code, entry.colour])
-		_draw_row(cells, at.x, at.y - size * 0.5, size)
+		var at := _number_at(entry, size)
+		var glyphs: Array = entry.glyphs
+		var width := glyphs.size() * size
+		if not view.intersects(Rect2(at - Vector2(width, size) * 0.5, Vector2(width, size)).grow(margin)): continue
+		var x := at.x - width * 0.5
+		for code: int in glyphs:
+			_draw_glyph(code, entry.colour, Rect2(x, at.y - size * 0.5, size, size))
+			x += size
+
+## A low-opacity ink plate separates glyphs from snow, sand, and fire.
+## The plate has no input area and never alters the original icon sheet.
+func _draw_plate(centre: float, top: float, cells: int, size: float, padding: float) -> void:
+	var bounds := Rect2(centre - cells * size * 0.5 - padding, top - padding,
+		cells * size + padding * 2.0, size + padding * 2.0)
+	draw_rect(bounds, PLATE_INK)
 
 static func cell_rect(code: int) -> Rect2:
 	return Rect2((code % 16) * CELL, (code / 16) * CELL, CELL, CELL)
@@ -225,8 +327,19 @@ static func cell_rect(code: int) -> Rect2:
 func _draw_row(cells: Array, centre: float, y: float, size: float) -> void:
 	var x := centre - cells.size() * size * 0.5
 	for cell: Array in cells:
-		draw_texture_rect_region(sheet, Rect2(x, y, size, size), cell_rect(int(cell[0])), cell[1])
+		_draw_glyph(int(cell[0]), cell[1], Rect2(x, y, size, size))
 		x += size
+
+## Single-colour rows already store codes, so avoid building [code, colour]
+## arrays for every icon, order and floating number on every drawn frame.
+func _draw_codes(codes: Array, colour: Color, centre: float, y: float, size: float, first := 0) -> void:
+	var x := centre - (codes.size() - first) * size * 0.5
+	for index in range(first, codes.size()):
+		_draw_glyph(int(codes[index]), colour, Rect2(x, y, size, size))
+		x += size
+
+func _draw_glyph(code: int, colour: Color, rect: Rect2) -> void:
+	draw_texture_rect_region(sheet, rect, _cell(code), colour)
 
 ## The marker (sword three cells wide, or shield two cells tall) with the
 ## number centred over it.
@@ -236,6 +349,4 @@ func _draw_order(order: Array, centre: float, y: float, size: float) -> void:
 		draw_texture_rect_region(sheet, Rect2(centre - size * 1.5, y, size * 3, size), Rect2(SWORD * CELL, 0, CELL * 3, CELL))
 	else:
 		draw_texture_rect_region(sheet, Rect2(centre - size * 0.5, y - size * 0.5, size, size * 2), Rect2(CELL, 2 * CELL, CELL, CELL * 2))
-	var cells: Array = []
-	for code: int in order.slice(1): cells.append([code, WHITE])
-	_draw_row(cells, centre, y, size)
+	_draw_codes(order, WHITE, centre, y, size, 1)

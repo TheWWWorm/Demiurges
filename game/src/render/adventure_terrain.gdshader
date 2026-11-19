@@ -101,7 +101,7 @@ vec2 rain_ring_slope(vec2 point) {
 	return slope * rain;
 }
 
-vec3 water_surface(vec3 original, vec2 weights, vec3 view, vec2 screen_uv, mat3 view_basis, float ripple_fade, bool srgb) {
+vec3 water_surface(vec3 original, vec2 weights, vec3 view, vec2 screen_uv, mat3 view_basis, float ripple_fade, float pixel_footprint, bool srgb) {
 	float coverage = weights.r;
 	float bog = clamp(weights.g / coverage, 0.0, 1.0);
 	// Drift broad ripples and smaller chop in different directions through
@@ -122,7 +122,15 @@ vec3 water_surface(vec3 original, vec2 weights, vec3 view, vec2 screen_uv, mat3 
 	// Clear water still reflects the sky from the map's steep default view.
 	float fresnel = mix(0.075 + 0.24 * pow(grazing, 3.0), 0.18 * pow(grazing, 4.0), bog);
 	// Bog's duckweed has no sun glint. Keep it on the water share of mixed tiles.
-	float glint = pow(max(dot(normal, normalize(sun + view)), 0.0), 45.0) * ripple_fade * (1.0 - bog);
+	// Broaden undersampled glints and reduce their peak to keep their energy
+	// bounded. The footprint was measured before the water coverage branch:
+	// normal derivatives inside it would be undefined across shoreline quads.
+	vec3 half_vector = sun + view;
+	float normal_spread = min(pixel_footprint * 0.35, 0.22);
+	float normal_variance = normal_spread * normal_spread;
+	float shininess = 1.0 / (1.0 / 45.0 + normal_variance * 2.0);
+	float glint = pow(max(dot(normal, half_vector / max(length(half_vector), 0.0001)), 0.0), shininess)
+		* (shininess / 45.0) * ripple_fade * (1.0 - bog);
 	float crest = smoothstep(0.12, 0.62, crest_height) * ripple_fade * (1.0 - bog);
 	float shore = 4.0 * coverage * (1.0 - coverage);
 	float foam = shore * smoothstep(0.04, 0.56, crest_height) * ripple_fade * (1.0 - bog);
@@ -224,9 +232,10 @@ void fragment() {
 		vec2 water_start = vec2(float(index % columns), float(index / columns)) * WATER_PITCH + vec2(1.0);
 		vec2 weights = texture(water_weights, (water_start + UV * WATER_SIDE) / water_atlas_size).rg;
 		float ripple_fade = 1.0 - smoothstep(0.035, 0.19, length(dFdx(cell)) + length(dFdy(cell)));
+		float water_footprint = 2.0 * max(length(dFdx(cell)), length(dFdy(cell)));
 		if (weights.r > 0.0) {
 			ALBEDO = water_surface(ALBEDO, weights, mat3(INV_VIEW_MATRIX) * VIEW,
-				SCREEN_UV, mat3(VIEW_MATRIX), ripple_fade, OUTPUT_IS_SRGB);
+				SCREEN_UV, mat3(VIEW_MATRIX), ripple_fade, water_footprint, OUTPUT_IS_SRGB);
 		}
 	}
 	if (clrless_enabled) {

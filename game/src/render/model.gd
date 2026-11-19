@@ -8,6 +8,7 @@ signal animation_looped(clip: String)
 ## The clip passed one of its recorded event frames (footfalls of walk/run).
 signal frame_event(clip: String)
 const EFFECT_ANCHORS := ["cast", "dust", "numbers", "soul", "b_point"]
+const HIT_FLASH := preload("res://src/render/model_hit_flash.gdshader")
 
 var profile: ELProfile
 var template := ""
@@ -30,6 +31,10 @@ var error := ""
 var sample_count := 0
 var _animations: ELArchive
 var _mesh_cache: Dictionary = {}
+var _clip_prefetch_task := -1
+var _clip_prefetch_name := ""
+var _clip_prefetch_tracks: Dictionary = {}
+var _clip_prefetch_parts: Array[Dictionary] = []
 var _previous_morphs: Dictionary = {}
 var _clip_frames := 1
 ## Clip records of the figure's animation table ("name" -> record).
@@ -44,6 +49,9 @@ var _rng := RandomNumberGenerator.new()
 ## [material, "main" or "second" skin], and the masks' key (ELMetalMasks).
 var _metal_parts := {}
 var _metal_key := ""
+## Temporary hit tints keep the underlying cutout and any previous overlay.
+var _flash_overlays: Dictionary = {}
+var _flash_tween: Tween
 
 ## Reads and parses a model's figures and animation archive once per
 ## profile (shared by every figure of it). Returns "" or the error.
@@ -81,13 +89,16 @@ static func parse_resources(template: String, files: Dictionary) -> Dictionary:
 		"meshes": meshes, "animations": animations, "clips": {},
 		"timing": animation_table(files.timing)}
 
-## A decoded clip's part meshes (keys as the figure's mesh cache), for
-## worker threads like decode_clip.
+## A decoded clip's deforming part meshes (keys as the figure's mesh cache),
+## for worker threads like decode_clip. Rigid parts use the shared base mesh:
+## another copy for every idle, attack and movement clip wastes GPU buffers.
 static func clip_meshes(figures: Dictionary, name: String, tracks: Dictionary) -> Dictionary:
 	var meshes := {}
 	for part: String in figures:
 		if part in EFFECT_ANCHORS: continue
-		meshes[name + "/" + part] = ELFigure.mesh(figures[part], tracks.get(part, {}))
+		var track: Dictionary = tracks.get(part, {})
+		if int(track.get("morph_frames", 0)) > 0 and int(track.get("morph_vertices", 0)) > 0:
+			meshes[name + "/" + part] = ELFigure.mesh(figures[part], track)
 	return meshes
 
 ## Decodes a clip's tracks for the parts named in `links` (pure data work:
@@ -105,6 +116,7 @@ static func decode_clip(animations: ELArchive, name: String, links: Array) -> Di
 	return tracks
 
 func build(data: ELProfile, model: String, texture_name: String, secondary_texture := "", wave_texture := "") -> bool:
+	_finish_clip_prefetch()
 	set_process(false)
 	profile = data
 	template = ELArchive.key(model)
@@ -273,23 +285,109 @@ func set_opacity(alpha: float) -> void:
 		material.albedo_color.a = alpha
 		node.material_override = material
 
-## Shows the whole figure, carried weapons included, in one lit colour for
-## `seconds` (a hit), then its own look again.
+## A brief, smoothly fading hit tint, carried weapons included. Preserve
+## cutout silhouettes, soft-alpha/fading figures and other overlays. A
+## repeated hit restarts the pulse rather than letting an older timer end it.
 func flash(color: Color, seconds: float) -> void:
-	var material := StandardMaterial3D.new()
-	material.albedo_color = color
+	if not is_inside_tree() or seconds <= 0.0: return
+	if _flash_tween != null and _flash_tween.is_valid(): _flash_tween.kill()
 	for node: Node in find_children("*", "MeshInstance3D", true, false):
-		(node as MeshInstance3D).material_overlay = material
-	var timer := get_tree().create_timer(seconds) if is_inside_tree() else null
-	if timer == null: return
-	timer.timeout.connect(func():
-		if not is_instance_valid(self): return
-		for node: Node in find_children("*", "MeshInstance3D", true, false):
-			if (node as MeshInstance3D).material_overlay == material: (node as MeshInstance3D).material_overlay = null)
+		var part := node as MeshInstance3D
+		if part.mesh == null or part.mesh.get_surface_count() == 0: continue
+		var base := part.get_active_material(0) as BaseMaterial3D
+		# Particle sprites and additive weapon glows keep their own effects.
+		if base == null or base.blend_mode != BaseMaterial3D.BLEND_MODE_MIX: continue
+		var entry: Dictionary = _flash_overlays.get(part, {})
+		if entry.is_empty() or part.material_overlay != entry.material:
+			var material := ShaderMaterial.new()
+			material.shader = HIT_FLASH
+			entry = {"material": material, "previous": part.material_overlay, "base": null}
+			_flash_overlays[part] = entry
+			part.material_overlay = material
+		(entry.material as ShaderMaterial).set_shader_parameter("flash_colour", color)
+	_set_flash_strength(1.0)
+	_flash_tween = create_tween()
+	_flash_tween.tween_method(_set_flash_strength, 1.0, 0.0, seconds).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	_flash_tween.tween_callback(_finish_flash)
+
+func _set_flash_strength(strength: float) -> void:
+	for key: Variant in _flash_overlays:
+		if not is_instance_valid(key): continue
+		var part := key as MeshInstance3D
+		var entry: Dictionary = _flash_overlays[part]
+		if part.material_overlay != entry.material: continue
+		var material := entry.material as ShaderMaterial
+		var base := part.get_active_material(0) as BaseMaterial3D
+		var eligible := base != null and base.blend_mode == BaseMaterial3D.BLEND_MODE_MIX
+		material.set_shader_parameter("strength", strength if eligible else 0.0)
+		if not eligible: continue
+		# Opacity can change during a hit (a pale aspect or departure fade).
+		material.set_shader_parameter("figure_opacity", clampf(base.albedo_color.a, 0.0, 1.0))
+		# Animated skins can move their atlas window without replacing the material.
+		material.set_shader_parameter("skin_uv", Vector4(base.uv1_scale.x, base.uv1_scale.y, base.uv1_offset.x, base.uv1_offset.y))
+		if entry.base == base: continue
+		entry.base = base
+		material.set_shader_parameter("skin", base.albedo_texture)
+		material.set_shader_parameter("repeat_skin", base.texture_repeat)
+		material.set_shader_parameter("alpha_enabled", base.transparency != BaseMaterial3D.TRANSPARENCY_DISABLED)
+		material.set_shader_parameter("cutout", base.transparency == BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR)
+		material.set_shader_parameter("alpha_cutoff", base.alpha_scissor_threshold)
+
+func _finish_flash() -> void:
+	for key: Variant in _flash_overlays:
+		if not is_instance_valid(key): continue
+		var part := key as MeshInstance3D
+		var entry: Dictionary = _flash_overlays[part]
+		if part.material_overlay == entry.material: part.material_overlay = entry.previous
+	_flash_overlays.clear()
+	_flash_tween = null
+
+## Prepare an upcoming clip while the camera moves to the speaker. Each
+## deforming part is independent, so a long clip can use several workers.
+func prefetch_clip(name: String) -> void:
+	if not is_inside_tree() or not has_clip(name) or _clip_prefetch_name == name: return
+	# The dummy renderer cannot create mesh resources concurrently.
+	if DisplayServer.get_name() == "headless": return
+	if OS.has_feature("web") and not OS.has_feature("threads"): return
+	_finish_clip_prefetch()
+	var resources: Dictionary = profile.model_resources[template]
+	var tracks: Dictionary = clips[name] if clips.has(name) else decode_clip(_animations, name, resources.links)
+	var jobs: Array[Dictionary] = []
+	for part: String in tracks:
+		if part in EFFECT_ANCHORS or not figures.has(part): continue
+		var key := name + "/" + part
+		if _mesh_cache.has(key): continue
+		var track: Dictionary = tracks[part]
+		if int(track.get("morph_frames", 0)) > 0 and int(track.get("morph_vertices", 0)) > 0:
+			jobs.append({"key": key, "figure": figures[part], "track": track})
+	if jobs.is_empty():
+		clips[name] = tracks
+		return
+	_clip_prefetch_name = name
+	_clip_prefetch_tracks = tracks
+	_clip_prefetch_parts = jobs
+	_clip_prefetch_task = WorkerThreadPool.add_group_task(func(index: int) -> void:
+		var job := jobs[index]
+		job.mesh = ELFigure.mesh(job.figure, job.track), jobs.size(), -1, false, "Map speech animation")
+
+func _finish_clip_prefetch() -> void:
+	if _clip_prefetch_task < 0: return
+	WorkerThreadPool.wait_for_group_task_completion(_clip_prefetch_task)
+	if not clips.has(_clip_prefetch_name): clips[_clip_prefetch_name] = _clip_prefetch_tracks
+	for job: Dictionary in _clip_prefetch_parts:
+		if not _mesh_cache.has(job.key): _mesh_cache[job.key] = job.mesh
+	_clip_prefetch_task = -1
+	_clip_prefetch_name = ""
+	_clip_prefetch_tracks = {}
+	_clip_prefetch_parts = []
+
+func _exit_tree() -> void:
+	_finish_clip_prefetch()
 
 func play(name: String) -> bool:
 	if _animations == null or not _animations.has(name):
 		return false
+	if _clip_prefetch_name == name: _finish_clip_prefetch()
 	if not clips.has(name):
 		var arc := ELArchive.from_bytes(_animations.read(name))
 		var tracks := {}
@@ -322,9 +420,13 @@ func play(name: String) -> bool:
 	_previous_morphs.clear()
 	for part: String in figures:
 		if part in EFFECT_ANCHORS: continue
+		var track: Dictionary = clips[name].get(part, {})
+		if int(track.get("morph_frames", 0)) == 0 or int(track.get("morph_vertices", 0)) == 0:
+			parts[part].mesh = _mesh_cache["base/" + part]
+			continue
 		var key := name + "/" + part
 		if not _mesh_cache.has(key):
-			_mesh_cache[key] = ELFigure.mesh(figures[part], clips[name].get(part, {}))
+			_mesh_cache[key] = ELFigure.mesh(figures[part], track)
 		parts[part].mesh = _mesh_cache[key]
 	apply_frame(0.0)
 	animation_started.emit(name)
@@ -437,27 +539,35 @@ func apply_frame(at: float) -> void:
 	for name: String in clips.get(clip, {}):
 		var track: Dictionary = clips[clip][name]
 		var node: MeshInstance3D = parts[name]
-		var bytes: PackedByteArray = track.data
-		var rc: int = track.rotation_count
+		var rotations: Array[Quaternion] = track.rotation_keys
+		var rc := rotations.size()
 		if rc > 0:
 			var f := clampf(at, 0, rc - 1)
 			var a := int(f)
 			var b := mini(a + 1, rc - 1)
-			node.quaternion = ELFigure.quaternion(bytes, track.rotation_offset + a * 16).slerp(
-				ELFigure.quaternion(bytes, track.rotation_offset + b * 16), f - a)
-		node.position = _vec_sample(track, "position", at, Vector3.ZERO)
-		node.scale = _vec_sample(track, "scale", at, Vector3.ONE, true)
+			node.quaternion = rotations[a] if a == b else rotations[a].slerp(rotations[b], f - a)
+		node.position = _vec_sample(track.position_keys, at, Vector3.ZERO)
+		node.scale = _vec_sample(track.scale_keys, at, Vector3.ONE)
 		var mc: int = track.morph_frames
 		if mc > 0 and node.mesh != null:
-			for previous: int in _previous_morphs.get(name, []):
-				node.set_blend_shape_value(previous, 0.0)
 			var f := clampf(at, 0, mc - 1)
 			var a := int(f)
 			var b := mini(a + 1, mc - 1)
+			var previous: Array = _previous_morphs.get(name, [])
+			if previous.is_empty():
+				previous = [-1, -1]
+				_previous_morphs[name] = previous
+			# Keep the two still-active shapes; zero only those we left. Reuse
+			# the pair instead of allocating an Array for each part every frame.
+			if previous[0] >= 0 and previous[0] != a and previous[0] != b:
+				node.set_blend_shape_value(previous[0], 0.0)
+			if previous[1] >= 0 and previous[1] != previous[0] and previous[1] != a and previous[1] != b:
+				node.set_blend_shape_value(previous[1], 0.0)
 			node.set_blend_shape_value(a, 1.0 - (f - a) if a != b else 1.0)
 			if a != b:
 				node.set_blend_shape_value(b, f - a)
-			_previous_morphs[name] = [a, b]
+			previous[0] = a
+			previous[1] = b
 
 ## Local bounds of a rendered mesh part at its current pose. The mesh's
 ## culling box spans the whole clip, including space the pose does not occupy.
@@ -473,16 +583,11 @@ func posed_part_bounds(name: String) -> AABB:
 	var weight := part.get_blend_shape_value(frames[1])
 	return AABB(first.position.lerp(next.position, weight), first.size.lerp(next.size, weight))
 
-func _vec_sample(track: Dictionary, field: String, at: float, default: Vector3, scaling := false) -> Vector3:
-	var count: int = track[field + "_count"]
+func _vec_sample(keys: PackedVector3Array, at: float, default: Vector3) -> Vector3:
+	var count := keys.size()
 	if count == 0:
 		return default
-	var bytes: PackedByteArray = track.data
 	var f := clampf(at, 0, count - 1)
 	var a := int(f)
 	var b := mini(a + 1, count - 1)
-	var off: int = track[field + "_offset"]
-	var first := Vector3(bytes.decode_float(off + a * 12), bytes.decode_float(off + a * 12 + 4), bytes.decode_float(off + a * 12 + 8))
-	var second := Vector3(bytes.decode_float(off + b * 12), bytes.decode_float(off + b * 12 + 4), bytes.decode_float(off + b * 12 + 8))
-	var value := first.lerp(second, f - a)
-	return Vector3(value.x, value.z, value.y) if scaling else ELFigure.vector(value)
+	return keys[a] if a == b else keys[a].lerp(keys[b], f - a)

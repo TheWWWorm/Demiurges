@@ -4,6 +4,7 @@ extends RefCounted
 ## Both original material loaders give Magic full emission (RGB 1).
 const MATERIAL_MAGIC := 23
 const AUTHORED_FULLBRIGHT := &"authored_fullbright"
+const MorphNormals := preload("res://src/render/morph_normals.gd")
 ## The compiled readers (native/el_assets.c), where the platform has them.
 static var native := ClassDB.class_exists(&"ELNativeAssets")
 
@@ -141,6 +142,14 @@ static func mesh(figure: Dictionary, track: Dictionary = {}) -> ArrayMesh:
 			shape[Mesh.ARRAY_NORMAL] = arrays[Mesh.ARRAY_NORMAL]
 			shapes.append(shape)
 			mesh.add_blend_shape("frame_%d" % frame)
+	# Morph frames bend the surface as well as moving its vertices. Transport
+	# the authored shading once when its cached mesh is built, keeping
+	# UV seams and deliberate hard edges. Playback only blends cached normals.
+	if not positions.is_empty():
+		var normal_rest := MorphNormals.prepare(arrays, figure.source_indices)
+		if not normal_rest.is_empty():
+			for index in shapes.size():
+				shapes[index][Mesh.ARRAY_NORMAL] = MorphNormals.for_pose(normal_rest, positions[index])
 	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays, shapes)
 	# Each frame's whole vertex positions, for traced lighting.
 	if not positions.is_empty():
@@ -189,7 +198,35 @@ static func track(bytes: PackedByteArray) -> Dictionary:
 			result.morph_vertices = count
 			result.morph_offset = p + 8
 			result.frames = maxi(result.frames, frames)
+	# Tracks are shared by every instance of the model. Prepare the small
+	# transform keys here (including worker-thread warm-up), instead of
+	# decoding floats and normalising the same quaternions every drawn frame.
+	# Keep the original counts and bytes: they define clip timing and morphs.
+	var rotations: Array[Quaternion] = []
+	rotations.resize(int(result.rotation_count))
+	var same_rotation := true
+	for index in rotations.size():
+		rotations[index] = quaternion(bytes, int(result.rotation_offset) + index * 16)
+		if index > 0 and rotations[index] != rotations[0]: same_rotation = false
+	if same_rotation and rotations.size() > 1: rotations.resize(1)
+	result.rotation_keys = rotations
+	result.position_keys = _vector_keys(bytes, int(result.position_offset), int(result.position_count), false)
+	result.scale_keys = _vector_keys(bytes, int(result.scale_offset), int(result.scale_count), true)
 	return result
+
+## Constant channels need only one prepared value, even when the file repeats
+## it for the entire clip. The original channel counts remain in the track.
+static func _vector_keys(bytes: PackedByteArray, offset: int, count: int, scaling: bool) -> PackedVector3Array:
+	var keys := PackedVector3Array()
+	keys.resize(count)
+	var same := true
+	for index in count:
+		var at := offset + index * 12
+		var value := Vector3(bytes.decode_float(at), bytes.decode_float(at + 4), bytes.decode_float(at + 8))
+		keys[index] = Vector3(value.x, value.z, value.y) if scaling else vector(value)
+		if index > 0 and keys[index] != keys[0]: same = false
+	if same and count > 1: keys.resize(1)
+	return keys
 
 ## True when the track fills the plain layout exactly: 32-bit counts with
 ## float rotation, position and scale keys, then an 8-byte vertex animation

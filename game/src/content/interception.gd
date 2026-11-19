@@ -216,9 +216,11 @@ static func allows(state: ELAdventureSession, hero: int, guard: int) -> bool:
 	var arguments := [float(hero), float(guard)]
 	# Usually reached from ExCheckIntercepts inside a running script: call
 	# without resetting the outer call's depth and counters.
-	var context := vm._context
+	var context_label := vm._context_label
+	var context_pc := vm._context_pc
 	var result: Array = vm._invoke(vm.globals["Hook_OnIntercept"], arguments) if vm._depth > 0 else vm.invoke("Hook_OnIntercept", arguments)
-	vm._context = context
+	vm._context_label = context_label
+	vm._context_pc = context_pc
 	if not vm.error.is_empty():
 		vm.error = ""
 		return true

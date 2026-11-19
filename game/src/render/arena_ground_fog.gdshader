@@ -8,6 +8,7 @@ uniform sampler2D mist_noise : filter_linear, repeat_enable;
 uniform sampler2D wake_mask : filter_linear, repeat_disable;
 uniform sampler2D scene_depth : hint_depth_texture, filter_nearest, repeat_disable;
 varying vec2 floor_position;
+#include "res://src/render/arena_atmosphere.gdshaderinc"
 
 void vertex() {
 	floor_position = VERTEX.xz;
@@ -40,6 +41,6 @@ void fragment() {
 	float edge = 1.0 - smoothstep(17.0, 26.5, radius);
 	float centre_fade = mix(0.58, 1.0, smoothstep(5.0, 15.0, radius));
 	float camera_fade = smoothstep(1.0, 4.0, length(VERTEX));
-	ALBEDO = fog_colour.rgb;
+	ALBEDO = arena_atmosphere_light(fog_colour.rgb);
 	ALPHA = (1.0 - exp(-2.0 * thickness)) * density * edge * centre_fade * camera_fade * fog_colour.a;
 }

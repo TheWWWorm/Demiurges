@@ -14,6 +14,11 @@ extends RefCounted
 ## - "spell_light": in battles, glowing effects light the figures and
 ##   scenery near them (ELGlowLights). Path tracing traces that light itself.
 ##   The adventure map has none: its ground and scenery are drawn unlit.
+## - "contact_shading": off by default; small-scale ambient shade grounds
+##   lit geometry in Forward+. Unlit art is unchanged; path tracing turns
+##   this extra occlusion off and the raster preference returns afterwards.
+
+const ContactShading := preload("res://src/render/contact_shading.gd")
 
 ## What each preference is called, for a message naming one.
 const LABELS := {"bloom": "Bloom", "soft_particles": "Soft particles", "spell_light": "Spell light"}
@@ -57,10 +62,11 @@ const BLOOM_LEVELS := [0.0, 0.6, 0.5, 0.35, 0.2, 0.1, 0.0]
 static var bloom := false
 static var spell_light := true
 
-## Takes the three preferences from the settings' values.
+## Takes the presentation preferences from the settings' values.
 static func use(values: Dictionary) -> void:
 	bloom = bool(values.get("bloom", false))
 	spell_light = bool(values.get("spell_light", false))
+	ContactShading.enabled = bool(values.get("contact_shading", false))
 	ELParticleFile.set_soft(bool(values.get("soft_particles", false)))
 	# Blended smoke, mist and water cast soft shadows with the shadows
 	# preference (ELParticleFile.SHADOW_SHEETS).
@@ -90,6 +96,7 @@ static func lights(environment: Environment) -> bool:
 ## scene's combat effects, if it has any. Returns whether it blooms.
 static func sync(environment: Environment, effects: ELCombatEffects = null) -> bool:
 	var on := blooms(environment)
+	ContactShading.sync(environment)
 	if environment != null:
 		environment.glow_enabled = on
 		if on:

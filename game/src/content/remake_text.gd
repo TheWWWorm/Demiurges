@@ -723,6 +723,8 @@ const RU := {
 	"Shadows": "Тени",
 	"Shadows of figures in battles and of trees, rocks and buildings on maps.": "Тени фигур в бою и деревьев, скал и зданий на картах.",
 	"Soft shadows": "Мягкие тени",
+	"Contact shading": "Контактное затенение",
+	"Subtle shade where lit figures meet the ground and nearby surfaces. Requires Forward+; switches off during path tracing. Unlit scenery is unchanged.": "Лёгкое затенение в местах соприкосновения фигур с землёй и соседними поверхностями. Требует Forward+; отключается при трассировке путей. Не влияет на объекты без освещения.",
 	"Softer shadow edges. May reduce performance on slower devices.": "Более мягкие края теней. На медленных устройствах может снизить скорость.",
 	"Terrain detail": "Детали земли",
 	"Enhanced water": "Улучшенная вода",

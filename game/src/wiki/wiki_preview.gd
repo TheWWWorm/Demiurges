@@ -146,7 +146,15 @@ static func _stage(profile: ELProfile, model_name: String, skin: String, seconda
 	view.add_child(effects)
 	effects.build(profile)
 	# The reader may already have moved on to another page by then.
-	(func() -> void: if is_instance_valid(figure) and figure.is_inside_tree(): effects.attach(figure)).call_deferred()
+	# Capture weak references: a lambda's captured Node can already be freed
+	# before its validity guard runs, which itself produces a script error.
+	var figure_ref: WeakRef = weakref(figure)
+	var effects_ref: WeakRef = weakref(effects)
+	(func() -> void:
+		var live_figure := figure_ref.get_ref() as ELModel
+		var live_effects := effects_ref.get_ref() as ELCombatEffects
+		if is_instance_valid(live_figure) and is_instance_valid(live_effects) and live_figure.is_inside_tree():
+			live_effects.attach(live_figure)).call_deferred()
 	var pivot_node := Node3D.new()
 	pivot_node.name = "Pivot"
 	view.add_child(pivot_node)

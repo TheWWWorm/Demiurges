@@ -78,10 +78,13 @@ static func object_grey(map: ELAdventureMap, level: int, cell: Vector2i) -> bool
 
 ## The greyscale copy of an image:
 ## each texel's colour channels become their integer mean; alpha is kept.
-static func grey_image(source: Image) -> Image:
+## Optional preservation is for prepared cutout chains: every level keeps
+## its own alpha mask while its RGB receives the same original grey rule.
+## Other callers retain the historical base-level-only result.
+static func grey_image(source: Image, keep_mipmaps := false) -> Image:
 	var image := source.duplicate() as Image
 	if image.is_compressed(): image.decompress()
-	if image.has_mipmaps(): image.clear_mipmaps()
+	if image.has_mipmaps() and not keep_mipmaps: image.clear_mipmaps()
 	image.convert(Image.FORMAT_RGBA8)
 	var data := image.get_data()
 	for i in range(0, data.size(), 4):
@@ -89,4 +92,4 @@ static func grey_image(source: Image) -> Image:
 		data[i] = value
 		data[i + 1] = value
 		data[i + 2] = value
-	return Image.create_from_data(image.get_width(), image.get_height(), false, Image.FORMAT_RGBA8, data)
+	return Image.create_from_data(image.get_width(), image.get_height(), image.has_mipmaps(), Image.FORMAT_RGBA8, data)

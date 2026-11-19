@@ -29,7 +29,9 @@ var _depth := 0
 var _tables: Array[WeakRef] = []
 ## The size _tables is pruned of freed tables at next.
 var _prune_at := 1024
-var _context := ""
+## Keep the bytecode location and format it only when reporting an error.
+var _context_label := ""
+var _context_pc := -1
 
 func _init() -> void:
 	for name: String in ["type", "tonumber", "tostring", "getn", "next", "rawget", "rawset", "tinsert", "tremove", "getglobal", "setglobal", "call", "assert", "error",
@@ -136,7 +138,7 @@ func _begin() -> void:
 	error = ""
 	instructions = 0
 	_depth = 0
-	_context = ""
+	_context_pc = -1
 
 func _register_prototypes(prototype: Dictionary) -> void:
 	prototypes[prototype.id] = prototype
@@ -160,6 +162,8 @@ func _invoke(function: Variant, arguments: Array) -> Array:
 
 func _execute(function: Closure, arguments: Array) -> Array:
 	var p: Dictionary = function.prototype
+	var code: PackedInt64Array = p.code
+	var prototype_id: String = p.id
 	var stack: Array = arguments.slice(0, p.parameters)
 	stack.resize(p.parameters)
 	if p.vararg:
@@ -170,14 +174,15 @@ func _execute(function: Closure, arguments: Array) -> Array:
 	var pc := 0
 	while error.is_empty():
 		instructions += 1
-		_context = "%s @%d" % [function.label if not function.label.is_empty() else p.id, pc]
+		_context_label = function.label if not function.label.is_empty() else prototype_id
+		_context_pc = pc
 		if instructions > instruction_limit:
 			_fail("Script instruction budget exceeded.")
 			break
-		if pc < 0 or pc >= p.code.size():
+		if pc < 0 or pc >= code.size():
 			_fail("Script program counter is outside the function.")
 			break
-		var word: int = p.code[pc]
+		var word := code[pc]
 		pc += 1
 		var op := word & 63
 		var u := word >> 6
@@ -186,15 +191,22 @@ func _execute(function: Closure, arguments: Array) -> Array:
 		var s := u - 33554431
 		var size := stack.size()
 		var needed := 0
-		if op in [13, 23, 25, 26, 27, 28, 32, 33, 34, 35, 36, 37]: needed = 2
-		if op in [14, 15, 16, 18, 19, 24, 30, 31, 38, 39, 40, 41, 46]: needed = 1
-		if op in [44, 45, 47]: needed = 3
-		if op in [5, 29]: needed = u
-		if op == 20: needed = maxi(a, b)
-		if op == 21: needed = b + 1
-		if op == 22: needed = 2 * u + 1
-		if op == 48: needed = b
-		if size < needed or (op in [11, 15] and u >= size) or (op == 18 and u >= size - 1) or (op in [2, 3] and a >= size) or (op == 10 and u >= function.captures.size()) or (op == 1 and u > size) or (op == 4 and size + u > 4096):
+		var invalid := false
+		match op:
+			1, 5, 29: needed = u
+			2, 3: needed = a + 1
+			4: invalid = size + u > 4096
+			10: invalid = u >= function.captures.size()
+			11, 15: needed = u + 1
+			13, 23, 25, 26, 27, 28, 32, 33, 34, 35, 36, 37: needed = 2
+			14, 16, 19, 24, 30, 31, 38, 39, 40, 41, 46: needed = 1
+			18: needed = u + 2
+			20: needed = maxi(a, b)
+			21: needed = b + 1
+			22: needed = 2 * u + 1
+			44, 45, 47: needed = 3
+			48: needed = b
+		if invalid or size < needed:
 			_fail("Invalid script stack access.")
 			break
 		match op:
@@ -537,4 +549,5 @@ func _charge(cost: int) -> bool:
 	return false
 
 func _fail(message: String) -> void:
-	if error.is_empty(): error = message + (" (" + _context + ")" if not _context.is_empty() else "")
+	if error.is_empty():
+		error = message if _context_pc == -1 else "%s (%s @%d)" % [message, _context_label, _context_pc]
