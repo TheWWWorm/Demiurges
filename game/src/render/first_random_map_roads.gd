@@ -19,6 +19,7 @@ var visibility_texture: ImageTexture
 ## fog diagnostics possible with Godot's headless dummy texture backend.
 var visibility_image: Image
 var _map_size := Vector2i.ZERO
+var _surface_map: ELAdventureMap
 var _material: StandardMaterial3D
 var _vertices := PackedVector3Array()
 var _colors := PackedColorArray()
@@ -38,6 +39,7 @@ func build(map: ELAdventureMap) -> bool:
 	road_cells = 0
 	if map == null or not ELFirstRandomMap.is_random_id(map.id) or map.roads.size() != map.width * map.height: return false
 	_map_size = Vector2i(map.width, map.height)
+	_surface_map = map
 	var recipe := ELFirstRandomMap.configuration(map)
 	var wilderness := int(recipe.get("version", 0)) >= ELFirstRandomMapV2.WILDERNESS_VERSION
 	var phase := (ELFirstRandomMap.seed_for_config(recipe) % 630) * 0.01 if wilderness else 0.0
@@ -135,20 +137,24 @@ static func _world(point: Vector2i) -> Vector3:
 	return Vector3((point.x + 0.5) * ELAdventureTerrain.CELL, HEIGHT, -(point.y + 0.5) * ELAdventureTerrain.CELL)
 
 func _draw_trail(map: ELAdventureMap, point: Vector2i, phase: float, network: Dictionary) -> void:
-	var primary := map.roads[point.y * map.width + point.x] == 6
-	var width := _trail_width(point, phase, primary)
+	var grade := int(map.roads[point.y * map.width + point.x])
+	var width := _trail_width(point, phase, grade)
 	var start := _trail_point(point, phase)
-	var shade := Color(0.40, 0.31, 0.205, 0.78) if primary else Color(0.38, 0.285, 0.18, 0.58)
+	var shade := Color(0.40, 0.31, 0.205, 0.78) if grade == 6 else Color(0.38, 0.285, 0.18, 0.58)
+	if grade == 7: shade.a = 0.22
 	var neighbors: Array = network.get(point, [])
 	for target: Vector2i in neighbors:
 		var delta := target - point
 		if delta.y < 0 or (delta.y == 0 and delta.x < 0): continue
-		var next_width := _trail_width(target, phase, map.roads[target.y * map.width + target.x] == 6)
+		var target_grade := int(map.roads[target.y * map.width + target.x])
+		var next_width := _trail_width(target, phase, target_grade)
 		var end := _trail_point(target, phase)
 		var reach := start.distance_to(end) * 0.37
 		var leaving := _trail_tangent(neighbors, target, start, phase)
 		var arriving := _trail_tangent(network[target], point, end, phase)
-		_trail_curve(start, end, start + leaving * reach, end + arriving * reach, shade, Vector2(width, next_width))
+		var edge := shade
+		if target_grade == 7: edge.a = minf(edge.a, 0.31)
+		_trail_curve(start, end, start + leaving * reach, end + arriving * reach, edge, Vector2(width, next_width))
 	if neighbors.size() != 2: _cap(start, shade, width)
 
 static func _trail_network(map: ELAdventureMap) -> Dictionary:
@@ -214,8 +220,9 @@ func _trail_curve(a: Vector3, b: Vector3, control_a: Vector3, control_b: Vector3
 static func _trail_normal(direction: Vector3) -> Vector3:
 	return Vector3(-direction.z, 0, direction.x).normalized()
 
-static func _trail_width(point: Vector2i, phase: float, primary: bool) -> float:
-	return (1.06 if primary else 0.65) + 0.17 * sin(point.x * 0.222 + point.y * 0.195 + phase)
+static func _trail_width(point: Vector2i, phase: float, grade: int) -> float:
+	var width := 1.06 if grade == 6 else (0.42 if grade == 7 else 0.65)
+	return width + 0.17 * sin(point.x * 0.222 + point.y * 0.195 + phase)
 
 static func _trail_point(point: Vector2i, phase: float) -> Vector3:
 	var x := sin(0.49 * point.y + 0.18 * point.x + phase) * 0.30
@@ -251,8 +258,36 @@ func _quad(a: Vector3, b: Vector3, c: Vector3, d: Vector3, ca: Color, cb: Color,
 	_triangle(a, c, d, ca, cc, cd)
 
 func _triangle(a: Vector3, b: Vector3, c: Vector3, ca: Color, cb: Color, cc: Color) -> void:
-	_vertices.append_array([a, b, c])
-	_colors.append_array([ca, cb, cc])
-	for point: Vector3 in [a, b, c]:
-		var cell := Vector2(point.x, -point.z) / ELAdventureTerrain.CELL
-		_uvs.append((cell + Vector2(0.5, 0.5)) / Vector2(_map_size + Vector2i.ONE))
+	var cell_a := Vector2(a.x, -a.z) / ELAdventureTerrain.CELL
+	var cell_b := Vector2(b.x, -b.z) / ELAdventureTerrain.CELL
+	var cell_c := Vector2(c.x, -c.z) / ELAdventureTerrain.CELL
+	if _surface_map.relief.is_empty():
+		_vertex(cell_a, ca)
+		_vertex(cell_b, cb)
+		_vertex(cell_c, cc)
+		return
+	var low := Vector2i(cell_a.min(cell_b).min(cell_c).floor()).max(Vector2i.ZERO)
+	var high := Vector2i(cell_a.max(cell_b).max(cell_c).floor()).min(_map_size - Vector2i.ONE)
+	var ab := cell_b - cell_a
+	var ac := cell_c - cell_a
+	var area := ab.cross(ac)
+	if absf(area) < 0.000001: return
+	var subject := PackedVector2Array([cell_a, cell_b, cell_c])
+	# Subdivide the decal at the same edges as the ground mesh. A single
+	# ribbon spanning a ridge would otherwise disappear into the uphill face.
+	for y in range(low.y, high.y + 1):
+		for x in range(low.x, high.x + 1):
+			var origin := Vector2(x, y)
+			var corner := origin + Vector2.ONE
+			for clip: PackedVector2Array in [PackedVector2Array([origin, origin + Vector2.RIGHT, corner]), PackedVector2Array([origin, corner, origin + Vector2.DOWN])]:
+				for polygon: PackedVector2Array in Geometry2D.intersect_polygons(subject, clip):
+					for tri in range(1, polygon.size() - 1):
+						for point: Vector2 in [polygon[0], polygon[tri], polygon[tri + 1]]:
+							var wb := (point - cell_a).cross(ac) / area
+							var wc := ab.cross(point - cell_a) / area
+							_vertex(point, ca * (1.0 - wb - wc) + cb * wb + cc * wc)
+
+func _vertex(cell: Vector2, shade: Color) -> void:
+	_vertices.append(Vector3(cell.x * ELAdventureTerrain.CELL, _surface_map.surface_height(cell) + HEIGHT, -cell.y * ELAdventureTerrain.CELL))
+	_colors.append(shade)
+	_uvs.append((cell + Vector2(0.5, 0.5)) / Vector2(_map_size + Vector2i.ONE))

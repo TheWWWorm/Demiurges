@@ -66,6 +66,23 @@ func _initialize() -> void:
 	var adjacent_count := 0
 	for neighbors: Array in junction.values(): adjacent_count += neighbors.size()
 	check(junction.size() == 5 and adjacent_count == 8, "a tight road loop becomes a single connected junction")
+	map.relief.resize(81)
+	map.relief[3 * 9 + 3] = 64
+	map.relief[4 * 9 + 4] = 48
+	check(roads.build(map), "roads build over steep and irregular ground")
+	if roads.surface != null:
+		var projected: PackedVector3Array = roads.surface.mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX]
+		var follows := true
+		for index in range(0, projected.size(), 3):
+			var at := (projected[index] + projected[index + 1] + projected[index + 2]) / 3.0
+			follows = follows and absf(at.y - ELFirstRandomMapRoads.HEIGHT - map.surface_height(Vector2(at.x, -at.z) / ELAdventureTerrain.CELL)) < 0.003
+		check(follows, "every road triangle follows the actual mesh surface between vertices")
+	var ground := ELAdventureScene.new()
+	ground.map = map
+	var summit := ground.ground_position(2.5, 2.5)
+	var hit: Variant = ground.ground_intersection(summit + Vector3(4.0, 20.0, -2.0), Vector3(-4, -20, 2).normalized())
+	check(hit is Vector3 and (hit as Vector3).distance_to(summit) < 0.01, "an oblique pointer projects onto raised ground")
+	ground.free()
 	map.roads.fill(0)
 	check(roads.build(map) and roads.road_cells == 0 and roads.surface == null, "roads-off maps allocate no render mesh")
 	map.id = "mission11"

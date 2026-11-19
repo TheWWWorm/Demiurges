@@ -251,6 +251,7 @@ const RU := {
 	"Settings changed during generation. Generate again.": "Настройки изменились во время генерации. Создайте карту заново.",
 	"%d × %d · %d players · seed %s": "%d × %d · игроков: %d · зерно: %s",
 	"%d placed objects · all castles connected": "Объектов: %d · между всеми замками есть путь",
+	"%d outdoor creatures · Land activities within %d AP": "Существ на карте: %d · До ближайшего объекта не больше %d ОД",
 	"Ready. Defeat the rival castles while protecting your own.": "Готово. Уничтожьте замки соперников и защитите свой.",
 	"Play this map": "Играть на карте",
 	"Setup copied. The same game data and generator version recreate this world.": "Настройки скопированы. Для повторения мира нужны те же данные игры и версия генератора.",

@@ -69,6 +69,7 @@ func rebuild(objects: Dictionary) -> void:
 		var definition := art.resolve(item)
 		var row: Dictionary = definition.get("row", {})
 		var shape := footprint(row, int(item.rotation))
+		if ELAdventureMap.is_trail_cache(item): shape.cells.clear()
 		footprints[id] = shape
 		# An opened runestone barrier no longer blocks its cells.
 		if not item.get("visible", true) or not item.get("placed", true) or item.get("opened", false): continue
@@ -203,12 +204,13 @@ func path(from: Vector2i, to: Vector2i, ship := false, avoid: Array[Vector2i] = 
 func approach(from: Vector2i, target: Dictionary, ship := false, avoid: Array[Vector2i] = []) -> Array[Vector2i]:
 	if map.profile.id == "el2" and target.get("type") == "corpse" and from == Vector2i(target.x, target.y): return [from]
 	var size: Vector2i = footprints.get(int(target.uid), {}).get("size", Vector2i.ONE)
+	var cache := ELAdventureMap.is_trail_cache(target)
 	if naval:
 		var goals: Array[Vector2i] = []
 		var safe_goals: Array[Vector2i] = []
 		for y in range(-1, size.y + 1):
 			for x in range(-1, size.x + 1):
-				if x >= 0 and x < size.x and y >= 0 and y < size.y: continue
+				if not cache and x >= 0 and x < size.x and y >= 0 and y < size.y: continue
 				var point := Vector2i(int(target.x) + x, int(target.y) + y)
 				if not contains(point) or not ELFirstNaval.interaction_mode(self, point, target): continue
 				goals.append(point)
@@ -224,7 +226,7 @@ func approach(from: Vector2i, target: Dictionary, ship := false, avoid: Array[Ve
 	for point: Vector2i in avoid: guarded[point] = true
 	for y in range(-1, size.y + 1):
 		for x in range(-1, size.x + 1):
-			if x >= 0 and x < size.x and y >= 0 and y < size.y: continue
+			if not cache and x >= 0 and x < size.x and y >= 0 and y < size.y: continue
 			var point := Vector2i(target.x + x, target.y + y)
 			# The moving hero already occupies this approach cell.
 			if point == from and map.profile.id == "el2" and passability(from, ship, false) >= 0: return [from]

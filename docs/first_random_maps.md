@@ -104,9 +104,17 @@ A Seer can reveal a distant crystal ball and the area around it through fog.
 Larger naval worlds can have small outlying islands with artifacts and lairs.
 Use the violet markers in the setup preview to spot regions with discoveries.
 
-Woodland thins into brush and meadows at its edges. Cliffs and boulders follow
-rocky ridges, and the worn paths to settlements are narrower than main roads.
-**Dense** adds more cover to the landscape.
+Woodland thins into brush and meadows at its edges. Hills rise above low
+riverbanks and beaches, and buildings sit on terraces cut into the ground.
+On larger maps, shops gather along the same approach and mines favor woods,
+riverbanks, or ridges according to what they produce. Roads and footpaths
+follow the terrain. **Dense** adds more cover to the landscape.
+
+On a fresh map, every reachable land tile has a pickup, usable site, or
+encounter within one day of travel for the slowest starting hero. The check
+uses actual movement costs, shorelines, and final scenery. Quiet stretches
+gain small resource caches where needed. Monster searches count creatures
+out in the world separately from occupied lairs.
 
 Each homeland has its own recruitment scrolls and access to its starting
 economy. With guards enabled, a nearby optional encounter is drawn from a
@@ -123,7 +131,7 @@ Omitted keys use the defaults below.
 
 | Key | Default | Supported values and effect |
 | --- | --- | --- |
-| `version` | `5` | `5` generates organic groves, curved roads, wilderness activities and balanced opening encounters. Earlier versions reproduce their original worlds. Version 1 uses its own schema. |
+| `version` | `6` | `6` generates hills, low shores, terraced settlements and roads that follow the ground. Earlier versions reproduce their original worlds. Version 1 uses its own schema. |
 | `seed` | `"212"` | A string of 1–64 characters, not blank-only, without control characters. Whitespace in a valid seed is significant. |
 | `size` | `96` | `64`, `96`, `128`, `160` tiles per side. |
 | `players` | `4` | `2`, `3`, `4`: one human and the remaining seats controlled by AI. |
@@ -152,12 +160,12 @@ monsters** option also keeps its normal rules.
 
 ## Share and remember a setup
 
-**Copy setup** creates an `EL1R5:` code for a new world in the code field and clipboard. Paste a
+**Copy setup** creates an `EL1R6:` code for a new world in the code field and clipboard. Paste a
 complete code and press **Load setup** to restore its seed and world settings.
 Choose difficulty and AI separately. The code is a prefix followed by Base64
 encoded UTF-8 JSON; it is a recipe, not a map archive.
 
-`EL1R1:` through `EL1R4:` codes reproduce their original worlds when loaded and played
+`EL1R1:` through `EL1R5:` codes reproduce their original worlds when loaded and played
 without editing. Changing a world setting or choosing a new preset switches to
 the current generator.
 
@@ -171,7 +179,7 @@ modifies the installed original game's files.
 ```gdscript
 var generator := ELFirstRandomMap.new()
 var map := generator.generate(profile, {
-    "version": 5,
+    "version": 6,
     "seed": "island-expedition",
     "size": 128,
     "players": 4,
@@ -244,10 +252,10 @@ games this includes hero ship state and queued travel, including a voyage
 paused at sea. Harbors are reconstructed from the same recipe and covered by
 the generated document's fingerprint. No separate generated map file is needed.
 
-Version 5 reserves routes to discoveries and recruitment scrolls before
-placing encounters and scenery. Saves from each version regenerate with
-their original rules. Missing recipe fields, unsupported versions or
-incompatible generated content produce a load error.
+Version 6 records terrain elevation in its generated-map fingerprint.
+Movement still follows terrain and road costs. Saves from each version
+regenerate with their original rules. Missing recipe fields, unsupported
+versions or incompatible generated content produce a load error.
 
 Ordinary campaign/custom maps retain their existing behavior. This feature does
 not add random maps to the multiplayer lobby or export original-editor

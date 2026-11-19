@@ -300,6 +300,7 @@ func build(profile: ELProfile, scenario: Dictionary, preferences: ELSettings, di
 	if not world.build(map, state): return _fail("; ".join(world.errors))
 	_loading(0.75)
 	rings = ELSelectionRing.new()
+	rings.surface = map
 	world.add_child(rings)
 	if not rings.setup(profile): rings.textures.clear()
 	camera = Camera3D.new()
@@ -320,7 +321,7 @@ func build(profile: ELProfile, scenario: Dictionary, preferences: ELSettings, di
 		zoom_limits = Vector2(8, 100)
 	camera.current = true
 	var hero := state.object(_hero_id())
-	target = ELAdventureScene.world_position(hero.get("x", map.width * 0.5), hero.get("y", map.height * 0.5))
+	target = world.ground_position(hero.get("x", map.width * 0.5), hero.get("y", map.height * 0.5))
 	following = _hero_id()
 	_update_camera()
 	_build_ui()
@@ -689,12 +690,12 @@ func _ring_place(uid: int) -> Array:
 		# the second game's heroes keep the default 1.0, while its
 		# roaming creatures (CMOBBuilding, built through the static map-object
 		# path) get 0.7 × their record size like buildings.
-		if state.map.profile.id == "el1" or item.get("type") == "hero": return [Vector3(at.x, 0, at.z), ELSelectionRing.NO_SIZE]
+		if state.map.profile.id == "el1" or item.get("type") == "hero": return [at, ELSelectionRing.NO_SIZE]
 		var figure_row: Dictionary = _art.resolve(item).get("row", {})
 		return [Vector3(at.x, 0, at.z), ELAdventureGrid.footprint(figure_row, int(item.get("rotation", 0))).size if not figure_row.is_empty() else Vector2i.ONE]
 	var row: Dictionary = _art.resolve(item).get("row", {})
 	var centre := ELAdventureGrid.center(item, row)
-	return [Vector3(centre.x * ELAdventureTerrain.CELL, 0, -centre.y * ELAdventureTerrain.CELL), ELAdventureGrid.footprint(row, int(item.get("rotation", 0))).size]
+	return [world.ground_position(centre.x - 0.5, centre.y - 0.5), ELAdventureGrid.footprint(row, int(item.get("rotation", 0))).size]
 
 func _hero_id() -> int:
 	var actor := state.object(selected_hero)
@@ -754,7 +755,7 @@ func present_summon(id: int, code: String) -> void:
 	if owned and (selected_hero != id or following != id): focus_recruit(id)
 	if not ELFog.shown(state, state.current_player, hero): return
 	if owned:
-		target = ELAdventureScene.world_position(hero.x, hero.y)
+		target = world.ground_position(hero.x, hero.y)
 	else:
 		_focus_object(id)
 	var at := camera_goal()
@@ -1215,7 +1216,7 @@ func _unhandled_input(event: InputEvent) -> void:
 				map_tip.clear()
 				second_hud.hide_map_tooltip()
 		elif event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
-			var hit: Variant = Plane(Vector3.UP, 0).intersects_ray(camera.project_ray_origin(event.position), camera.project_ray_normal(event.position))
+			var hit: Variant = _ground_hit(event.position)
 			if hit != null and hud != null and ELHeroExchange.applies(state) and (event.ctrl_pressed or event.double_click) and _hero_click(Vector2i(floori(hit.x / 2.0), floori(-hit.z / 2.0)), event.ctrl_pressed): return
 			if hit != null and hud != null and event.double_click and not event.ctrl_pressed and castle_double_click(event.position, hit): return
 			if hit != null:
@@ -1362,7 +1363,7 @@ func _map_tip_pick() -> int:
 	if not _tip_on_map or _tip_point.x < 0: return -1
 	var corpse := _corpse_under_pointer(_tip_point)
 	if corpse >= 0: return corpse
-	var hit: Variant = Plane(Vector3.UP, 0).intersects_ray(camera.project_ray_origin(_tip_point), camera.project_ray_normal(_tip_point))
+	var hit: Variant = _ground_hit(_tip_point)
 	if hit == null: return -1
 	return ELSecondMapTooltips.object_at(state, Vector2(hit.x, -hit.z) / ELAdventureTerrain.CELL)
 
@@ -1433,7 +1434,7 @@ func update_cursor() -> void:
 		"in_bounds": false, "modal": _cursor_modal(), "right_held": second and _right_down, "busy_time": _script_busy,
 		"previous": cursor_name if not cursor_name.is_empty() else "default", "local_turn": director.can_move()}
 	if context.on_map and not context.modal:
-		var hit: Variant = Plane(Vector3.UP, 0).intersects_ray(camera.project_ray_origin(_pointer), camera.project_ray_normal(_pointer))
+		var hit: Variant = _ground_hit(_pointer)
 		if hit != null:
 			var point := Vector2(hit.x, -hit.z) / ELAdventureTerrain.CELL
 			context.tile = Vector2i(floori(point.x), floori(point.y))
@@ -1470,10 +1471,13 @@ func _cursor_modal() -> bool:
 func hover(at: Vector2) -> void:
 	var id := -1
 	if hud.map_rect().has_point(at):
-		var hit: Variant = Plane(Vector3.UP, 0).intersects_ray(camera.project_ray_origin(at), camera.project_ray_normal(at))
+		var hit: Variant = _ground_hit(at)
 		if hit != null: id = _object_at(Vector2(hit.x, -hit.z) / ELAdventureTerrain.CELL, at)
 	var item := state.object(id)
 	hud.show_tooltip(id, hud.describe(item, _art.resolve(item).get("row", {})) if not item.is_empty() else {}, at)
+
+func _ground_hit(screen: Vector2) -> Variant:
+	return world.ground_intersection(camera.project_ray_origin(screen), camera.project_ray_normal(screen))
 
 ## First-game building groups with their own map tooltip (and use cursor).
 const FIRST_SITE_GROUPS := ["mines", "mana_nodes", "forts", "laboratories", "factories", "resource_cuts"]
@@ -1573,7 +1577,8 @@ var _pick_boxes: Dictionary = {}
 func _pick_box(id: int, cells: Rect2, fallback: float) -> AABB:
 	if _pick_boxes.has(id) and not world.actors.has(id): return _pick_boxes[id]
 	var cell := ELAdventureTerrain.CELL
-	var box := AABB(Vector3(cells.position.x * cell, 0.0, -cells.end.y * cell), Vector3(cells.size.x * cell, fallback * cell, cells.size.y * cell))
+	var ground := state.map.surface_height(cells.get_center())
+	var box := AABB(Vector3(cells.position.x * cell, ground, -cells.end.y * cell), Vector3(cells.size.x * cell, fallback * cell, cells.size.y * cell))
 	var drawn := world.object_bounds(id)
 	if drawn.has_volume(): box = box.merge(drawn)
 	_pick_boxes[id] = box
@@ -2575,7 +2580,7 @@ func _draw_route(path: Array, actor_id := -1) -> void:
 		if mark.has_clip("uidle"): mark.play("uidle")
 		var cell: Vector2i = path[index]
 		mark.set_meta("route_cell", cell)
-		mark.position = ELAdventureScene.world_position(cell.x, cell.y) + Vector3(0, 0.02, 0)
+		mark.position = world.ground_position(cell.x, cell.y) + Vector3(0, 0.02, 0)
 		for part: MeshInstance3D in mark.parts.values(): part.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	_sync_route_fog()
 
@@ -3043,7 +3048,7 @@ func _show_waiting_map_dialogs() -> void:
 ## First game: the own hero under a right click drops its planned order.
 func _cancel_order_at(at: Vector2) -> void:
 	if paused or not hud.map_rect().has_point(at): return
-	var hit: Variant = Plane(Vector3.UP, 0).intersects_ray(camera.project_ray_origin(at), camera.project_ray_normal(at))
+	var hit: Variant = _ground_hit(at)
 	if hit == null: return
 	var tile := Vector2i(floori(hit.x / 2.0), floori(-hit.z / 2.0))
 	for item: Dictionary in state.objects.values():

@@ -8,6 +8,7 @@ Versions follow [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html)
 - New random maps group original trees, brush, and rock formations around homelands, inland edges, and coasts. Earlier saved worlds and setup codes keep their original scenery.
 - Random worlds have wooded valleys, ridges, and meandering channels. Explore beyond the opening economy for springs, mentors, artifact islands, and stocked lairs. Seers reveal remote discoveries through the fog.
 - Generated terrain has continuous groves, cliff formations and curved paths. Every homeland gets local recruitment and an optional starter encounter. Harder enemies and discoveries fill the backcountry and outlying islands.
+- New random worlds have raised inland ridges, low shores, roads that follow the terrain, and settlements laid out around the local landscape.
 
 ## 0.18.5
 

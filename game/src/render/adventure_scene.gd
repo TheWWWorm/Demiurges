@@ -151,7 +151,7 @@ func build(source: ELAdventureMap, session: ELAdventureSession = null) -> bool:
 			prototypes[key] = prototype
 		var prototype: ELModel = prototypes[key]
 		var center := ELAdventureGrid.center(object, definition.row)
-		var position := Vector3(center.x * ELAdventureTerrain.CELL, 0, -center.y * ELAdventureTerrain.CELL)
+		var position := _placement(object, definition.row)
 		var transform := Transform3D(_placed_basis(int(object.rotation), float(definition.scale)), position)
 		if blob_shadow(map.profile.id, object, definition) or _foliage_shadow(map.profile.id, object, definition):
 			var foliage := _foliage_shadow(map.profile.id, object, definition)
@@ -825,8 +825,7 @@ func update_object(item: Dictionary, apply_facing := false) -> void:
 	if object_models.has(uid):
 		var model: ELModel = object_models[uid]
 		model.visible = visible
-		var center := ELAdventureGrid.center(item, definition.row)
-		model.position = Vector3(center.x * ELAdventureTerrain.CELL, 0, -center.y * ELAdventureTerrain.CELL)
+		model.position = _placement(item, definition.row)
 		if item.get("type") == "corpse" or not item.get("alive", true): _corpse_pose(model)
 		if first_barrier(item): barrier_pose(model, bool(item.get("opened", false)), true)
 		if gate: _second_gate_pose(model, bool(item.get("opened", false)), true)
@@ -1004,7 +1003,7 @@ func _corpse_surfaces(model: ELModel) -> Array:
 func move_actor(uid: int, position: Vector2, moving: bool, tiles_per_second := 0.0, fast := false) -> void:
 	if not actors.has(uid): return
 	var model: ELModel = actors[uid]
-	var next := world_position(position.x, position.y)
+	var next := ground_position(position.x, position.y)
 	var delta := next - model.position
 	if delta.length_squared() > 0.00001:
 		model.rotation.y = atan2(delta.x, delta.z)
@@ -1080,6 +1079,49 @@ func object_yaw(item: Dictionary) -> float:
 
 static func world_position(x: float, y: float) -> Vector3:
 	return Vector3((x + 0.5) * ELAdventureTerrain.CELL, 0, -(y + 0.5) * ELAdventureTerrain.CELL)
+
+func ground_position(x: float, y: float) -> Vector3:
+	var at := world_position(x, y)
+	if map != null: at.y = map.surface_height(Vector2(x + 0.5, y + 0.5))
+	return at
+
+func _placement(item: Dictionary, row: Dictionary) -> Vector3:
+	var center := ELAdventureGrid.center(item, row)
+	var at := ground_position(center.x - 0.5, center.y - 0.5)
+	if map.relief.is_empty() or item.group != "terrain_objects": return at
+	var span := center - Vector2(item.x, item.y)
+	if maxf(span.x, span.y) < 1.5: return at
+	# Seat a broad rock or grove partly into the hillside so its downslope
+	# edge still meets the ground.
+	for sign_x in [-1.0, 1.0]:
+		for sign_y in [-1.0, 1.0]:
+			var edge := center + span * Vector2(sign_x, sign_y) * 0.60
+			at.y = minf(at.y, map.surface_height(edge))
+	return at
+
+func ground_intersection(origin: Vector3, direction: Vector3) -> Variant:
+	var flat: Variant = Plane(Vector3.UP, 0).intersects_ray(origin, direction)
+	if flat == null or map == null or map.relief.is_empty() or direction.y >= -0.0001: return flat
+	var bottom := -origin.y / direction.y
+	var top := maxf(0.0, (255.0 * ELAdventureMap.RELIEF_UNIT - origin.y) / direction.y)
+	var previous := top
+	var steps := maxi(1, ceili((bottom - top) / (ELAdventureTerrain.CELL * 0.5)))
+	for step in range(1, steps + 1):
+		var next := lerpf(top, bottom, float(step) / steps)
+		var point := origin + direction * next
+		if point.y > _surface_at(point):
+			previous = next
+			continue
+		for iteration in 12:
+			var middle := (next + previous) * 0.5
+			var probe := origin + direction * middle
+			if probe.y > _surface_at(probe): previous = middle
+			else: next = middle
+		return origin + direction * next
+	return flat
+
+func _surface_at(at: Vector3) -> float:
+	return map.surface_height(Vector2(at.x, -at.z) / ELAdventureTerrain.CELL)
 
 ## Second-game forts carry a flag their own clips raise ("utap"), wave
 ## ("cidleintap") and lower ("uuntap"). An owned fort flies it; a new figure
@@ -1181,6 +1223,10 @@ func _sync_blob(uid: int, present: bool) -> void:
 	var slot: Dictionary = _blob_slots[uid]
 	var base: Transform3D = object_models[uid].transform if object_models.has(uid) else slot.base
 	var placed := base * (slot.local as Transform3D)
+	if not map.relief.is_empty():
+		var ground := Vector2(placed.origin.x, -placed.origin.z) / ELAdventureTerrain.CELL
+		placed.origin.y = map.surface_height(ground)
+		placed.basis = Basis(Quaternion(Vector3.UP, map.surface_normal(ground, ELAdventureTerrain.CELL))) * placed.basis
 	placed.origin.y += BLOB_LIFT
 	slot["placed"] = placed
 	slot["present"] = present

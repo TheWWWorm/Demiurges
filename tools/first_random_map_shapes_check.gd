@@ -6,6 +6,7 @@ extends SceneTree
 ## they do not call the generator's validation or naval path finder.
 
 const Fixture = preload("first_random_map_fixture.gd")
+const DailyCoverage = preload("../game/src/content/first_daily_coverage.gd")
 const LAYOUTS := ["frontier", "lakes", "crossroads", "archipelago", "inland_sea", "river_delta", "ring", "peninsulas"]
 const SIZES := [64, 96, 128, 160]
 const WATER := ["low", "normal", "high"]
@@ -45,7 +46,7 @@ func check(ok: bool, what: String) -> void:
 func _configuration() -> void:
 	label = "shape settings"
 	var defaults := ELFirstRandomMap.defaults()
-	check(defaults.version == 5 and defaults.has("naval") and defaults.has("water") and defaults.has("coast"), "new recipes keep the naval settings schema")
+	check(defaults.version == 6 and defaults.has("naval") and defaults.has("water") and defaults.has("coast"), "new recipes keep the naval settings schema")
 	check(ELFirstRandomMap.normalize(JSON.parse_string(JSON.stringify(defaults))) == defaults, "settings survive JSON numeric conversion")
 	for options: Dictionary in [{"naval": 1}, {"naval": "true"}, {"water": true}, {"water": "huge"}, {"coast": []}, {"coast": "straight"}, {"version": 1, "naval": true}]:
 		check(ELFirstRandomMap.normalize(options).is_empty(), "malformed or wrong-version settings are rejected: " + JSON.stringify(options))
@@ -222,6 +223,17 @@ func _geometry(map: ELAdventureMap, config: Dictionary) -> void:
 	var first := state.object(state.main_hero)
 	var from := Vector2i(int(first.x), int(first.y))
 	var reachable := _flood(map, modes, from, links, bool(config.naval))
+	if config.version >= ELFirstRandomMapV2.RELIEF_VERSION:
+		var day := int(map.get_meta("random_map_report").daily_travel_ap)
+		var coverage := DailyCoverage.new()
+		var residents := {}
+		for item: Dictionary in state.objects.values():
+			if item.get("alive", false) and item.get("visible", false) and item.get("placed", true): residents[item.uid] = item
+		coverage.build(map, grid, residents, reachable, day)
+		var missed := 0
+		for index in coverage.costs.size():
+			if coverage.costs[index] > 0 and coverage.distance[index] > day: missed += 1
+		check(missed == 0, "final runtime grid has an encounter or interaction within one travel day on each reachable land tile")
 	var unreachable: Array[String] = []
 	for item: Dictionary in state.objects.values():
 		if item.group == "terrain_objects" or not item.get("visible", true): continue
@@ -232,6 +244,12 @@ func _geometry(map: ELAdventureMap, config: Dictionary) -> void:
 	var generation: Dictionary = map.get_meta("random_map_report", {})
 	var starts: Array = generation.get("starts", [])
 	check(starts.size() == config.players, "every homeland exposes its opening economy")
+	if config.version >= ELFirstRandomMapV2.RELIEF_VERSION:
+		check(map.relief.size() == map.terrain.size() and map.relief.count(0) < map.relief.size(), "new maps have a varied surface on the corner grid")
+		var level_water := true
+		for index in map.terrain.size():
+			if int(map.terrain[index]) in ELTileSet.WATER_KINDS and map.relief[index] != 0: level_water = false
+		check(level_water, "rivers and harbors retain a flat water surface")
 	var safe_modes := modes.duplicate()
 	if config.version >= ELFirstRandomMapV2.WILDERNESS_VERSION:
 		var field: PackedByteArray = map.get_meta("wilderness_detail", PackedByteArray())

@@ -12,16 +12,47 @@ var terrain := PackedByteArray()
 var roads := PackedByteArray()
 var creeks := PackedByteArray()
 var colorless := PackedByteArray()
+## Optional corner heights in sixteenths of a world unit. Travel still uses
+## the scenario's terrain and road bytes.
+const RELIEF_UNIT := 1.0 / 16.0
+var relief := PackedByteArray()
 var players: Array[Dictionary] = []
 var objects: Array[Dictionary] = []
 var mobs: Dictionary = {}
 var document: Dictionary = {}
 var error := ""
 
+static func is_trail_cache(item: Dictionary) -> bool:
+	return item.get("group") == "resource_cuts" and item.get("node", {}).get("attrs", {}).get("trail_cache", "") == "1"
+
+## Fractional corner coordinates. The mesh splits cells from (+0,+0) to
+## (+1,+1), so figures, ground clicks and the mesh sample the same plane.
+func surface_height(at: Vector2) -> float:
+	if relief.is_empty() or at.x < 0.0 or at.y < 0.0 or at.x > width or at.y > height: return 0.0
+	var x := mini(floori(at.x), width - 1)
+	var y := mini(floori(at.y), height - 1)
+	var u := at.x - x
+	var v := at.y - y
+	var cell := y * (width + 1) + x
+	var a := float(relief[cell])
+	var c := float(relief[cell + width + 2])
+	if u >= v:
+		var b := float(relief[cell + 1])
+		return (a + (b - a) * u + (c - b) * v) * RELIEF_UNIT
+	var d := float(relief[cell + width + 1])
+	return (a + (c - d) * u + (d - a) * v) * RELIEF_UNIT
+
+func surface_normal(at: Vector2, cell_size: float, radius := 0.75) -> Vector3:
+	if relief.is_empty(): return Vector3.UP
+	var dx := surface_height(at + Vector2(radius, 0)) - surface_height(at - Vector2(radius, 0))
+	var dy := surface_height(at + Vector2(0, radius)) - surface_height(at - Vector2(0, radius))
+	return Vector3(-dx, 2.0 * cell_size * radius, dy).normalized()
+
 func load_map(data: ELProfile, map_id: String) -> bool:
 	profile = data
 	id = map_id
 	error = ""
+	relief.clear()
 	players.clear()
 	objects.clear()
 	mobs.clear()

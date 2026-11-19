@@ -5,9 +5,9 @@ extends AcceptDialog
 signal requested(configuration: Dictionary, difficulty: int, ai: Dictionary)
 
 const SETTINGS_PATH := "user://el1_random_map_setup.json"
-const CODE_PREFIX := "EL1R5:"
+const CODE_PREFIX := "EL1R6:"
 const LEGACY_CODE_PREFIX := "EL1R1:"
-const CODE_VERSIONS := {LEGACY_CODE_PREFIX: 1, "EL1R2:": 2, "EL1R3:": 3, "EL1R4:": 4, CODE_PREFIX: ELFirstRandomMap.VERSION}
+const CODE_VERSIONS := {LEGACY_CODE_PREFIX: 1, "EL1R2:": 2, "EL1R3:": 3, "EL1R4:": 4, "EL1R5:": 5, CODE_PREFIX: ELFirstRandomMap.VERSION}
 const MAX_CODE_LENGTH := 4096
 const FACTIONS := [["Green", "Vitals"], ["Blue", "Kinets"], ["Red", "Chaots"], ["Black", "Synthets"]]
 const TERRAIN_INK := {"Green": Color("546a3d"), "Blue": Color("a8ac9b"), "Red": Color("8f5a3d"), "Black": Color("69634b"), "Colorless": Color("8d8778")}
@@ -368,7 +368,10 @@ func generate_preview() -> bool:
 	_preview.texture = ImageTexture.create_from_image(preview_image(result))
 	_preview.modulate.a = 1.0
 	_summary.text = _t("%d × %d · %d players · seed %s") % [result.width, result.height, result.players.size(), str(configuration.seed)]
-	_summary.text += "\n" + _t("%d placed objects · all castles connected") % result.objects.size()
+	if report.has("daily_travel_ap"):
+		_summary.text += "\n" + _t("%d outdoor creatures · Land activities within %d AP") % [int(report.counts.get("np_heroes", 0)), int(report.daily_travel_ap)]
+	else:
+		_summary.text += "\n" + _t("%d placed objects · all castles connected") % result.objects.size()
 	if bool(configuration.get("naval", false)):
 		_summary.text += "\n" + _t("%d%% water · %d harbors · land and sea routes") % [roundi(float(report.get("water_fraction", 0.0)) * 100.0), result.get_meta("first_naval", {}).get("ports", []).size()]
 	_summary.tooltip_text = _summary.text

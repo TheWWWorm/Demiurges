@@ -18,6 +18,7 @@ uniform bool detail_enabled = false;
 uniform vec3 detail_sun = vec3(0.6634, 0.6428, -0.3830);
 // Generated landscapes use their world-scale fields across tile seams.
 uniform bool wilderness_enabled = false;
+uniform bool relief_enabled = false;
 uniform sampler2D wilderness_detail : filter_linear, repeat_disable;
 uniform vec2 wilderness_size = vec2(1.0);
 // The optional water surface uses the original liquid masks for its shores.
@@ -58,8 +59,9 @@ varying vec2 cell;
 
 void vertex() {
 	cell = vec2(VERTEX.x, -VERTEX.z) / 2.0;
-	// The ground mesh is flat and carries no normals of its own.
-	NORMAL = vec3(0.0, 1.0, 0.0);
+	if (!relief_enabled) {
+		NORMAL = vec3(0.0, 1.0, 0.0);
+	}
 }
 
 vec3 to_srgb(vec3 c) {
@@ -171,12 +173,17 @@ void fragment() {
 	float footprint = max(length(footprint_x), length(footprint_y));
 	float terrain_lod = clamp(log2(max(footprint, 1.0)), 0.0, 2.0);
 	ALBEDO = textureLod(tiles, tex_uv, terrain_lod).rgb;
+	if (relief_enabled) {
+		vec3 ground_normal = normalize(mat3(INV_VIEW_MATRIX) * NORMAL);
+		float slope = dot(ground_normal - vec3(0.0, 1.0, 0.0), normalize(vec3(-0.55, 0.72, 0.42)));
+		ALBEDO *= 1.0 + clamp(slope * 0.82, -0.32, 0.23);
+	}
 	if (wilderness_enabled) {
 		vec2 field_uv = (cell + vec2(0.5)) / wilderness_size;
 		vec3 field = texture(wilderness_detail, field_uv).rgb;
 		vec3 uphill = texture(wilderness_detail, field_uv + vec2(1.65, 1.05) / wilderness_size).rgb;
 		vec3 downhill = texture(wilderness_detail, field_uv - vec2(1.65, 1.05) / wilderness_size).rgb;
-		float slope_light = clamp((uphill.g - downhill.g) * 0.39, -0.15, 0.16);
+		float slope_light = relief_enabled ? 0.0 : clamp((uphill.g - downhill.g) * 0.39, -0.15, 0.16);
 		float wooded = smoothstep(0.25, 0.82, field.r);
 		float bank = field.b * (1.0 - min(uphill.b, downhill.b));
 		float variation = 1.0 + slope_light + (field.g - 0.53) * 0.20 - wooded * 0.18 - bank * 0.11;
@@ -258,7 +265,9 @@ void fragment() {
 		shadow_weight = shadow_strength;
 	}
 	// Up, whichever side of the double-sided ground mesh is drawn.
-	NORMAL = normalize((VIEW_MATRIX * vec4(0.0, 1.0, 0.0, 0.0)).xyz);
+	if (!relief_enabled) {
+		NORMAL = normalize((VIEW_MATRIX * vec4(0.0, 1.0, 0.0, 0.0)).xyz);
+	}
 	// With silhouettes on, the shadowed sun gives the whole colour in its own
 	// pass: splitting it between this pass and the sun's (added together after
 	// display encoding by the compatibility renderer) would brighten the ground.
