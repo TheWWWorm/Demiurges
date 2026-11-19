@@ -10312,10 +10312,12 @@ func _retry_battle() -> void:
 			_notice(codec.error)
 			return
 		var state: ELAdventureSession = restored.state
-		var rng: int = restored.director.encounter.battle.rng_state
+		# The map comes back as it was when the encounter began, but the
+		# battle is dealt anew from the same setup with a fresh seed, so the
+		# opening hands and later draws differ from the abandoned attempt.
+		_redeal_encounter(restored.director.encounter)
 		await _begin_campaign(state.map.profile.id, {"file_name": state.map.id, "script": state.script_name}, state.difficulty, restored)
 		if _campaign_battle() != null and campaign_view.state == state:
-			duel.rng_state = rng
 			_encounter_start = checkpoint
 	elif _expedition_battle != null:
 		_start_expedition_battle(true)
@@ -10330,6 +10332,36 @@ func _retry_battle() -> void:
 			match_recording.untrack()
 			match_recording.rounds.pop_back()
 		_play_match_round(battle_seed)
+
+## Restarts a restored map encounter's battle from its own setup with a new
+## seed, as a new battle takes a fresh random value. A few seeds are tried so
+## the opening hands differ from the checkpoint's whenever the books allow it.
+## The old battle stays if the setup cannot start again.
+static func _redeal_encounter(encounter: ELAdventureEncounter) -> void:
+	var old: ELDuel = encounter.battle if encounter != null else null
+	if old == null: return
+	var hands := old.heroes.map(func(hero: Dictionary) -> Array: return hero.hand)
+	# The checkpoint's mission variables already hold what the battle scripts'
+	# set-up wrote; running it again must not write them twice.
+	var variables: ELLuaVM.Table = encounter.state.variables if encounter.state != null else null
+	var kept: Dictionary = variables.values.duplicate() if variables != null else {}
+	var chosen: ELDuel = null
+	for attempt in 8:
+		var next := ELDuel.new()
+		next.attach_session(encounter.state)
+		var started := next.start(old.profile, randi() & 0x7fff, old.setup)
+		if variables != null and variables.values != kept:
+			variables.values.clear()
+			variables.values.merge(kept)
+		if not started:
+			if next.scripts != null: next.scripts.close()
+			break
+		if chosen != null and chosen.scripts != null: chosen.scripts.close()
+		chosen = next
+		if next.heroes.map(func(hero: Dictionary) -> Array: return hero.hand) != hands: break
+	if chosen == null: return
+	if old.scripts != null: old.scripts.close()
+	encounter.battle = chosen
 
 func _esc_surrender() -> void:
 	_close_esc_menu()

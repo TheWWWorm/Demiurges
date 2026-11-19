@@ -1153,11 +1153,14 @@ func _second_prompt() -> void:
 				var opening: ELDuel = view.duel
 				var starting_health: int = opening.heroes[side].health
 				var starting_day := map.state.day
+				var opening_hands := opening.heroes.map(func(h: Dictionary) -> Array: return h.hand.duplicate())
 				opening.heroes[side].health -= 1
 				map.state.day += 1
 				await view._retry_battle()
 				check(view.duel != opening and view.duel.heroes[side].health == starting_health and view.campaign_view.state.day == starting_day,
 					"Try again restores the campaign and duel to the start of the encounter")
+				check(view.duel.setup == opening.setup and view.duel.heroes.map(func(h: Dictionary) -> Array: return h.hand) != opening_hands,
+					"el2 #263: Try again deals the same battle new opening hands")
 				map = view.campaign_view
 				director = map.director
 				view._surrender_encounter()

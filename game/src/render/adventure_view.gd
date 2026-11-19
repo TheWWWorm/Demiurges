@@ -243,6 +243,13 @@ var lose_battle: ELSecondLoseBattleView
 func _enter_tree() -> void:
 	add_to_group("touch_camera")
 
+## A fresh map random state for a new local first-game start (never the
+## fixed default 212, which earlier builds used for every start).
+static func new_map_seed() -> int:
+	var value := randi() & 0x7fffffff
+	while value == 212: value = randi() & 0x7fffffff
+	return value
+
 func build(profile: ELProfile, scenario: Dictionary, preferences: ELSettings, difficulty := 0, restored: Dictionary = {}) -> bool:
 	settings = preferences
 	var solo_first := profile.id == "el1" and strategic_session == null
@@ -261,6 +268,10 @@ func build(profile: ELProfile, scenario: Dictionary, preferences: ELSettings, di
 			map_seed = ELFirstRandomMap.seed_for_config(generator.config)
 		else:
 			if not map.load_map(profile, str(scenario.file_name)): return _fail(map.error)
+			# The first game seeds its random generator from the clock, so every
+			# new start of a mission or chapter draws its own castle recruits.
+			# A save keeps the generator's state; the tutorial stays scripted.
+			if solo_first and not scenario.get("tutorial", false): map_seed = new_map_seed()
 		_loading(0.15)
 		state = ELAdventureSession.new()
 		# The scene initialization hooks can emit a direct box or wait before
