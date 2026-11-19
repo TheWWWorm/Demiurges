@@ -105,6 +105,20 @@ The most common prop families are Green forest, Green stone, Green bush,
 Blue pine, Red bush, Black stone, Red stone, Black bush, Black tree and
 neutral rock. Stock ground is flat: the original missions have no relief.
 
+Prop names follow the art sets, not the ground they stand on. The dark Chaot
+ground carries the neutral grey rock stacks (`rock_1`–`rock_8`), black trees,
+black hills and some ice ridges (`Blue_rock1_*`). The tan Synthet ground
+carries the `Red_rock`, `Red_Stone` and `Red_Bush` props. Grass carries green
+forest and the green crags (`GreenRock*`), and snow carries blue pines, ice and
+a few snowy ridges.
+
+Large props shape the maze. Cliffs and rocks with a span of five tiles or more
+make up 50% of all scenery cover: 62% on dark ground, 44% on tan, 33% on grass
+and 8% on snow. Their footprints interlock, so they form continuous walls
+rather than separate boulders. By footprint area, the remaining cover is 25%
+props three to four tiles across, 18% two-tile props and 8% single tiles.
+`STOCK_SCENERY` in the generator lists each ground's prop mix by share of cover.
+
 ## Derived rules
 
 1. Keep the ground level. Shape the land with scenery and water, not hills
@@ -135,34 +149,36 @@ the same set.
 | Measure | Stock | Version 12 | Version 13 |
 | --- | ---: | ---: | ---: |
 | Ground relief | flat | hills and valleys | flat |
-| Scenery props per 1000 land | 123 | 49 | 148 |
-| Scenery cover % of land | 41.5 | 14.4 | 34.4 |
-| Mean prop footprint, tiles | 4.9 | 2.9 | 2.3 |
-| Mean scenery cluster, tiles | 44 | — | 44 |
-| Walkable tiles with clearance ≤ 1 | 72% | 51% | 72% |
-| Walkable tiles with clearance ≥ 4 | 6.8% | 4.2% | 0.6% |
-| Widest open spot (clearance) | 4.9 | 9.6 | 8.8 |
-| Narrow share of castle routes | 79% | 49% | 69% |
+| Scenery props per 1000 land | 123 | 49 | 167 |
+| Scenery cover % of land | 41.5 | 14.4 | 40.7 |
+| Cover from props spanning 5+ tiles | 50% | — | 29% |
+| Mean prop footprint, tiles | 4.9 | 2.9 | 2.4 |
+| Mean scenery cluster, tiles | 44 | — | 39 |
+| Walkable tiles with clearance ≤ 1 | 72% | 51% | 75% |
+| Walkable tiles with clearance ≥ 4 | 6.8% | 4.2% | 0.8% |
+| Widest open spot (clearance) | 4.9 | 9.6 | 8.9 |
+| Narrow share of castle routes | 79% | 49% | 70% |
 | Castle route / straight line | 1.4 | 1.1 | 1.1 |
 | Road % of land | 4.4 | 4.9 | 4.4 |
 | Creatures per 1000 land | 10.2 | 8.6 | 10.3 |
-| Creatures in passages | 59% | 71% | 88% |
-| Creatures near a site | 49% | 36% | 74% |
-| Creatures on or beside a road | 26% | 16% | 30% |
-| Creature level, ≤ 10 steps (mean) | 2.8 | 2.3 | 3.5 |
-| Creature level, 11–20 steps | 3.7 | 2.5 | 4.0 |
+| Creatures in passages | 59% | 71% | 90% |
+| Creatures near a site | 49% | 36% | 77% |
+| Creatures on or beside a road | 26% | 16% | 31% |
+| Creature level, ≤ 10 steps (mean) | 2.8 | 2.3 | 3.4 |
+| Creature level, 11–20 steps | 3.7 | 2.5 | 3.9 |
 | Creature level, 21–30 steps | 4.5 | 2.8 | 4.5 |
 | Creature level, 31–45 steps | 5.1 | 3.2 | 4.9 |
-| Gap to nearest creature, tiles | 5.4 | 5.0 | 5.5 |
-| Gap to nearest site, tiles | 4.2 | 5.2 | 5.1 |
+| Gap to nearest creature, tiles | 5.4 | 5.0 | 5.7 |
+| Gap to nearest site, tiles | 4.2 | 5.2 | 5.2 |
 
-Scenery cover by ground in version 13 is Red 45%, Green 35%, Black 32% and
-Blue 29%. This follows the stock order, apart from Blue, and is lower overall.
+Scenery cover by ground in version 13 is Red 49%, Green 46%, Black 46% and
+Blue 26%, against 62%, 45%, 42% and 24% in the stock missions.
 
 Known differences in version 13:
 
-- Props are smaller on average (2.3 tiles against 4.9), because the generator
-  fills masses from the props available for each ground.
+- Large cliffs make up less of the cover (29% against 50%). Mass edges are
+  irregular, so many gaps fit only single-tile props, which brings the mean
+  prop footprint down to 2.4 tiles against 4.9.
 - Starting areas and the centres of naval maps can still hold a clearing
   wider than any in the stock single and multiplayer missions.
 - Creatures within ten steps of a castle are about one level stronger than
