@@ -42,6 +42,67 @@ func _run() -> void:
 	for failure: String in failures: printerr("  " + failure)
 	quit(0 if failures.is_empty() else 1)
 
+func _installed_placement(profile: ELProfile) -> void:
+	label = "stock-inspired placement with installed content"
+	for naval: bool in [false, true]:
+		var options := {"seed": "placement-41", "size": 96 if not naval else 128, "players": 4,
+			"naval": naval, "layout": "archipelago" if naval else "frontier"}
+		var map := _generate(ELFirstRandomMap.new(), profile, options)
+		if map == null: continue
+		var state := ELAdventureSession.new()
+		var started := state.start(map, 2)
+		check(started, "a generated placement starts in the normal session")
+		if not started: continue
+		var director := ELAdventureDirector.new()
+		var built := director.build(state)
+		check(built, "the director builds navigation and interception for the new placement")
+		if built: _placement_approaches(director, map.get_meta("random_map_report"))
+		state.close()
+	print("CHECKED: guarded rewards, opening routes and roadside forts on land and at sea")
+
+func _placement_approaches(director: ELAdventureDirector, report: Dictionary) -> void:
+	var state := director.state
+	var grid := director.grid
+	var pairs: Dictionary = report.reward_guards
+	var prize_count := 0
+	for id: int in pairs:
+		var site := state.object(id)
+		var guard: Dictionary = director.interception.zones.get(pairs[id], {})
+		var footprint := Rect2i(Vector2i(site.x, site.y), grid.footprints[id].size)
+		var covered: bool = guard.get("cells", []).any(func(point: Vector2i) -> bool:
+			return footprint.grow(1).has_point(point) and not footprint.has_point(point) and grid.passability(point) > 0
+		)
+		check(covered, "each placed reward guard threatens a real interaction tile")
+		if site.group in ["artefacts", "global_spells"]: prize_count += 1
+	check(prize_count >= 4, "optional scrolls and artifacts form guarded discoveries across the home regions")
+
+	var safe := true
+	var avoid: Array[Vector2i] = []
+	avoid.assign(director.interception.cells.keys())
+	for start: Dictionary in report.starts:
+		var hero := state.object(start.hero_id)
+		var origin := Vector2i(hero.x, hero.y)
+		for id: int in start.sites + start.rewards:
+			var route := grid.approach(origin, state.object(id), false, avoid)
+			safe = safe and not route.is_empty() and route.all(func(point: Vector2i) -> bool:
+				return not director.interception.cells.has(point) and not (grid.naval and ELFirstNaval.is_water(state.map, point))
+			)
+	check(safe, "every player can reach their economy and recruitment scrolls by land without entering any guard zone")
+
+	var forts: int = report.counts.get("forts", 0)
+	var first := Vector2i(report.starts[0].x, report.starts[0].y)
+	check(forts > 0, "the travel network has at least one fort")
+	for item: Dictionary in state.objects.values():
+		if item.group != "forts": continue
+		var area := Rect2i(Vector2i(item.x, item.y), grid.footprints[item.uid].size).grow(4)
+		var nearby_road := false
+		for y in range(area.position.y, area.end.y):
+			for x in range(area.position.x, area.end.x):
+				if grid.contains(Vector2i(x, y)) and state.map.roads[y * state.map.width + x] == 6: nearby_road = true
+		check(nearby_road and item.type == "fort" and item.owner == -1 and item.garrison == -1
+			and not ELForts.definition(state.map.profile, item).is_empty() and not grid.approach(first, item).is_empty(),
+			"frontier fort is functional, empty, and accessible beside a main route")
+
 func check(ok: bool, what: String) -> void:
 	checks += 1
 	if ok: return
@@ -498,3 +559,4 @@ func _installed_content() -> void:
 		if map != null:
 			check(ELFirstNaval.enabled(map) == (version == 2), "installed catalog supports legacy maps and new harbor layouts")
 	_persistence(profile)
+	_installed_placement(profile)

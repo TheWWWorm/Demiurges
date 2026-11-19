@@ -87,6 +87,14 @@ are discovered on the map. Shops use actual installed combat spells and the
 normal stock and purchase rules. Naval homelands have multiple harbor
 approaches, giving opponents alternate routes and coastal objectives to contest.
 
+Main roads link markets, recruitment scrolls, and harbors. Neutral forts stand
+beside these routes where the terrain leaves room for an approach and a way
+past. Heroes can garrison them using the usual fort controls. Mines follow
+their terrain and many caches, artifacts, and optional scrolls sit off the road.
+When guards are enabled, valuable frontier discoveries favor positions with a
+creature close enough to threaten a real approach. The economy and recruitment
+paths leave room to expand without starting a fight.
+
 Starting opportunities are comparable, while coastlines, approaches and faction
 strengths can differ. The generator validates actual object footprints and
 reachable approaches after placing scenery and other content.
@@ -106,9 +114,9 @@ Use the violet markers in the setup preview to spot regions with discoveries.
 
 Woodland thins into brush and meadows at its edges. Hills rise above low
 riverbanks and beaches, and buildings sit on terraces cut into the ground.
-On larger maps, shops gather along the same approach and mines favor woods,
-riverbanks, or ridges according to what they produce. Roads and footpaths
-follow the terrain. **Dense** adds more cover to the landscape.
+Shops gather along the same approach. Root and lotus production favor woods
+and riverbanks respectively, while gems and stone favor ridges. Roads and
+footpaths follow the terrain. **Dense** adds more cover to the landscape.
 
 On a fresh map, every reachable land tile has a pickup, usable site, or
 encounter within one day of travel for the slowest starting hero. The check
@@ -119,10 +127,41 @@ out in the world separately from occupied lairs.
 Each homeland has its own recruitment scrolls and access to its starting
 economy. With guards enabled, a nearby optional encounter is drawn from a
 pool tested against the four starting spellbooks. Stronger creatures appear
-farther from the starting heroes, clear of main approaches. The difficulty
-setting still uses the original creatures' corresponding spellbooks.
+farther from the starting heroes, near optional mines, scrolls, and relics.
+The difficulty setting uses the original creatures' corresponding spellbooks.
 The computer can lead a siege with a level-five recruit when it can wear down
 the target castle's restoration.
+
+### Placement in the original missions
+
+The placement survey used the 37 maps read from a Steam installation of
+Etherlords I. That includes 20 campaign entries, some of them alternate
+versions of the same chapter, plus seven single missions and ten multiplayer
+missions. The survey measured distances in tiles from object anchors, counting
+a diagonal as one tile. The generated comparison used the same two seeds,
+`212` and `placement-41`, for each of the 11 presets in versions 6 and 7.
+
+| Placement measure | Stock single | Stock multiplayer | Generated v6 | Generated v7 |
+| --- | ---: | ---: | ---: | ---: |
+| Scrolls and artifacts within four tiles of a neutral creature | 73% | 91% | 10% | 62% |
+| Median distance from a scroll or artifact to its nearest neutral creature | 3 | 2 | 11 | 2 |
+| Mines and mana nodes within three tiles of a road | 28% | 34% | 100% | 53% |
+| Shops within three tiles of a road | 66% | 44% | 100% | 100% |
+| Visit sites within three tiles of a road | 63% | 51% | 20% | 35% |
+| Forts within three tiles of a road | 100% | 86% | — | 75% |
+
+Road percentages are medians of the per-map percentages among maps with
+roads and the relevant objects. The creature measurements pool objects across
+maps with neutral creatures. Those distances describe placement and include
+every scroll. The runtime check separately tests whether each generated reward
+guard can intercept a hero on an actual interaction tile.
+
+Stock missions put scrolls and artifacts farther from starting positions than
+shops or income sites, and commonly place guards beside them. Roads favor
+services and forts. The generator uses these patterns to separate the opening
+economy, travel routes, and optional discoveries. Recruitment scrolls remain
+part of each player's opening progression. Compact maps may have no suitable
+site for a frontier fort.
 
 ## World configuration
 
@@ -131,7 +170,7 @@ Omitted keys use the defaults below.
 
 | Key | Default | Supported values and effect |
 | --- | --- | --- |
-| `version` | `6` | `6` generates hills, low shores, terraced settlements and roads that follow the ground. Earlier versions reproduce their original worlds. Version 1 uses its own schema. |
+| `version` | `7` | `7` adds roadside forts, roads to services, and guarded frontier discoveries to the version 6 terrain. Versions 1–6 reproduce their original worlds. Version 1 uses its own schema. |
 | `seed` | `"212"` | A string of 1–64 characters, not blank-only, without control characters. Whitespace in a valid seed is significant. |
 | `size` | `96` | `64`, `96`, `128`, `160` tiles per side. |
 | `players` | `4` | `2`, `3`, `4`: one human and the remaining seats controlled by AI. |
@@ -160,12 +199,12 @@ monsters** option also keeps its normal rules.
 
 ## Share and remember a setup
 
-**Copy setup** creates an `EL1R6:` code for a new world in the code field and clipboard. Paste a
+**Copy setup** creates an `EL1R7:` code for a new world in the code field and clipboard. Paste a
 complete code and press **Load setup** to restore its seed and world settings.
 Choose difficulty and AI separately. The code is a prefix followed by Base64
 encoded UTF-8 JSON; it is a recipe, not a map archive.
 
-`EL1R1:` through `EL1R5:` codes reproduce their original worlds when loaded and played
+`EL1R1:` through `EL1R6:` codes reproduce their original worlds when loaded and played
 without editing. Changing a world setting or choosing a new preset switches to
 the current generator.
 
@@ -179,7 +218,7 @@ modifies the installed original game's files.
 ```gdscript
 var generator := ELFirstRandomMap.new()
 var map := generator.generate(profile, {
-    "version": 6,
+    "version": 7,
     "seed": "island-expedition",
     "size": 128,
     "players": 4,
@@ -291,6 +330,8 @@ landing and capture through normal day turns. Battle checks prepare and play
 EL1 duels for open-water and harbor-edge encounters.
 
 Use the installed-content pass to exercise real terrain, table definitions,
-navigation and checkpoint regeneration. Pass the same `-- --el1=...` argument
+navigation and checkpoint regeneration. It checks the new forts and guard
+zones in a land and a naval mission, including guard-free land approaches
+to each player's opening sites. Pass the same `-- --el1=...` argument
 to `first_random_map_ui_check.gd` to test the entry point in the installed
 game's Single Mission menu.
