@@ -116,7 +116,9 @@ func _lethal_cast(view: Node, caster: int, card: String, target: int, what: Stri
 	var wound_before: int = view.shown_damage(target) if not hero else 0
 	var model: ELModel = view.models.get(target)
 	check(_has_numbers(view, target), "%s: the target's numbers are drawn before the cast" % what)
-	var start := Time.get_ticks_usec()
+	# The battle clock the effect cues run on; the wall clock can fall a
+	# frame behind on long frames.
+	var start: float = view.elapsed
 	var args: Array = [target]
 	args.append_array(extra)
 	if not duel.cast_free(caster, card, args, true):
@@ -131,7 +133,7 @@ func _lethal_cast(view: Node, caster: int, card: String, target: int, what: Stri
 	for i in 2000:
 		view.ai_clock = -1000.0
 		await process_frame
-		var seconds := (Time.get_ticks_usec() - start) / 1000000.0
+		var seconds: float = view.elapsed - start
 		var shown := false
 		if hero:
 			shown = view.shown_health(target) != health_before or not view.ending.is_empty() or (is_instance_valid(model) and model.clip == "udeath")
