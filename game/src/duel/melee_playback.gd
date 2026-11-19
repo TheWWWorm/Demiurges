@@ -87,6 +87,8 @@ var _skip_requested := false
 var _skipped := -1
 ## The blows are still being played (not yet the final walk home).
 var _in_blows := false
+## The timer a blow is waiting on (_wait).
+var _timer: SceneTreeTimer
 ## Longest wait for figures lying down or getting up before the turn goes on.
 const SETTLE_LIMIT := 4.0
 
@@ -193,6 +195,7 @@ func has_moves() -> bool:
 func skip_exchange() -> bool:
 	if not _capturing and not _in_blows: return false
 	_skip_requested = true
+	if _timer != null: _timer.time_left = 0.0
 	return true
 
 ## Takes a pending skip for the attacker being shown.
@@ -710,12 +713,14 @@ func _moved(ids: Array, serial: int) -> bool:
 		await get_tree().process_frame
 	return serial == _serial
 
-## Waits `seconds` of game time; a skip of the exchange ends the wait.
+## Waits `seconds` of game time on a scene timer, so the blow's results land
+## at the same point of the frame as the timed effect cues they go with; a
+## skip of the exchange runs the timer out at once (skip_exchange).
 func _wait(seconds: float, serial: int) -> bool:
-	var left := seconds
-	while left > 0.0 and serial == _serial and is_inside_tree() and not _skip_requested:
-		await get_tree().process_frame
-		if not get_tree().paused: left -= get_process_delta_time()
+	if seconds > 0.0 and is_inside_tree() and not _skip_requested:
+		_timer = get_tree().create_timer(seconds, false)
+		await _timer.timeout
+		_timer = null
 	return serial == _serial
 
 ## Waits while a figure plays its tap or untap clip (at most SETTLE_LIMIT).
