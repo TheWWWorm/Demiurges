@@ -79,13 +79,14 @@ func _edition(edition: String) -> void:
 	await process_frame
 	await process_frame
 
-## Waits until nothing of the previous action is on screen.
+## Waits until nothing of the previous action is on screen, including a
+## creature still getting up or lying down (the next phase waits for it).
 func _idle(view: Node) -> void:
 	for i in 900:
 		view.ai_clock = -1000.0
 		await process_frame
 		if not view._cast_busy() and not view._presentation_held() and view._hits_waiting.is_empty() and view._arrivals.is_empty() \
-				and view._effect_cast.is_empty() and not view._shown_held(): return
+				and view._effect_cast.is_empty() and not view._shown_held() and not view.figures_turning(): return
 
 func _card(view: Node, wanted: Array) -> String:
 	var duel: ELDuel = view.duel
@@ -201,13 +202,15 @@ func _live(view: Node, ids: Array) -> Dictionary:
 	return out
 
 ## Steps frames until the presentation is over, sampling the displayed values
-## with the number of blows shown so far and the seconds since `start`.
-func _watch(view: Node, ids: Array, start: int) -> Array:
+## with the number of blows shown so far and the battle clock's seconds since
+## `start` (view.elapsed: the clock the cues run on, unlike the wall clock,
+## which a long frame puts behind it).
+func _watch(view: Node, ids: Array, start: float) -> Array:
 	var samples: Array = []
 	for i in 1500:
 		view.ai_clock = -1000.0
 		await process_frame
-		samples.append({"t": (Time.get_ticks_usec() - start) / 1000000.0, "blows": int(view.melee._next_blow) if view._melee_busy() else 999,
+		samples.append({"t": view.elapsed - start, "blows": int(view.melee._next_blow) if view._melee_busy() else 999,
 			"shown": _shown(view, ids), "standing": ids.filter(func(id: int) -> bool:
 				return view.models.has(id) and not bool(view.models[id].get_meta("dying", false)) and (not is_instance_valid(view.symbols) or not view.figure_rows(id).is_empty()))})
 		if not view._shown_held() and not view._melee_busy() and view._cast_queue.is_empty() and view._hits_waiting.is_empty(): break
@@ -238,7 +241,7 @@ func _growth_and_drain(view: Node, edition: String) -> void:
 	await _idle(view)
 	before = _shown(view, [attacker])
 	if is_instance_valid(view.effects): view.effects.requested.clear()
-	var start := Time.get_ticks_usec()
+	var start: float = view.elapsed
 	duel.end_phase()
 	if duel.phase == ELDuel.Phase.DEFENCE: duel.end_phase()
 	var live := _live(view, [attacker])
@@ -336,7 +339,7 @@ func _blocked_fight(view: Node, what: String, attacker_stats: Array, blocker_sta
 	await _idle(view)
 	var ids := [attacker, blocker]
 	var before := _shown(view, ids)
-	var start := Time.get_ticks_usec()
+	var start: float = view.elapsed
 	duel.end_phase()
 	var settled := _live(view, ids)
 	var samples := await _watch(view, ids, start)
@@ -489,7 +492,7 @@ func _mastery_stance(view: Node) -> void:
 	view.models[id].animation_started.connect(func(clip: String) -> void: clips.append(clip))
 	duel.end_phase()
 	check(not duel.creatures[id].resting, "#205: mastery leaves the gibberling ready after the strike")
-	await _watch(view, [id], Time.get_ticks_usec())
+	await _watch(view, [id], view.elapsed)
 	check(clips.has("uattack") and not clips.has("utap") and not clips.has("ctapidle"),
 		"#205: the gibberling comes home ready without starting a rest animation")
 	hero.spec = previous
@@ -512,7 +515,7 @@ func _pale(view: Node, edition: String) -> void:
 	await _idle(view)
 	var ids := [attacker, blocker]
 	var before := _shown(view, ids)
-	var start := Time.get_ticks_usec()
+	var start: float = view.elapsed
 	duel.end_phase()
 	check(duel.in_plane(attacker), "%s pale: the rules send the dissipating attacker to the Colourless Plane at once" % edition)
 	check(not _plane(view, attacker), "%s pale: the screen does not show it pale yet" % edition)
@@ -542,7 +545,7 @@ func _spell_stats(view: Node, edition: String) -> void:
 	if spell.is_empty(): return
 	var ids := [target]
 	var before := _shown(view, ids)
-	var start := Time.get_ticks_usec()
+	var start: float = view.elapsed
 	check(duel.cast_free(side, spell, [target], true), "%s spell: %s is cast (%s)" % [edition, spell, duel.error])
 	var hit := float(view._effect_cast.get("hit", 0.0))
 	check(int(_live(view, ids).creatures[target][0]) != int(before.creatures[target][0]), "%s spell: the rules change the stats at once" % edition)
@@ -611,7 +614,7 @@ func _gazed_blocker(view: Node, edition: String) -> void:
 		var moving: bool = view.melee.moving(blocker)
 		duel.end_phase()
 		check(not duel.creatures.has(blocker), "%s: the rules destroy the blocker (moving: %s)" % [what, moving])
-		await _watch(view, [attacker, blocker], Time.get_ticks_usec())
+		await _watch(view, [attacker, blocker], view.elapsed)
 		for i in 120: await process_frame
 		check(not view.models.has(blocker), "%s: the dead blocker's figure is gone (%s)" % [what, str(view.models[blocker].clip) if view.models.has(blocker) else "-"])
 		duel.heroes[side].spec = "NONE"
