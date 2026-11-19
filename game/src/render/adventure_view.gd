@@ -1408,24 +1408,44 @@ func _second_right_press(at: Vector2) -> void:
 	_tip_content = {}
 	_show_map_tip()
 
-## Second game: while a character speaks (TextDialog) the map objects keep
-## their tooltips, on a rest of the pointer or a right press. Other clicks
-## on the map wait for the answer.
+## Second game: while a character speaks (TextDialog), a script message box
+## or a loot box is open, the map objects outside the box keep their
+## tooltips, on a rest of the pointer or a right press, as in the original,
+## whose tooltip path has no modal check. Other clicks on the map wait for
+## the answer; over the box itself there is no map tooltip.
 func _dialogue_map_tip_input(event: InputEvent) -> void:
 	if second_hud == null or _dialogue_blocks_map_tips(): return
 	if event is InputEventMouseMotion: _tip_on_map = true
 	elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT and event.pressed: _second_right_press(event.position)
 
-## Script message boxes and boxes over a window are modal; a character's
-## line is not.
+## A script box over a window (inventory, shop, notebook) keeps the map
+## without tooltips: the window covers it.
 func _dialogue_blocks_map_tips() -> bool:
 	if director.dialogue.is_empty(): return false
-	return str(director.dialogue.get("box", "text")) != "text" or (dialogue_blocker != null and dialogue_blocker.visible) or not _pending_speech.is_empty()
+	return (dialogue_blocker != null and dialogue_blocker.visible) or not _pending_speech.is_empty()
 
-## Panels, dialogs, menus, scripted messages and pauses close the map tooltip.
+## Second game: a map notice or loot report in the original MessageBox.
+func _map_message_open() -> bool:
+	return second_hud != null and building_message != null and building_message.message_box != null
+
+## A script box, map notice or loot report is open (the original's modal
+## boxes): the camera's periodic tooltip refresh waits.
+func _map_box_open() -> bool:
+	return not director.dialogue.is_empty() or _map_message_open()
+
+## Hides the map tooltip once as a message box opens.
+func _box_opened_hides_map_tip() -> void:
+	if second_hud == null: return
+	map_tip.reset()
+	_right_down = false
+	_tip_content = {}
+	second_hud.hide_map_tooltip()
+
+## Panels, windows, menus and pauses close the map tooltip.
 func _map_tooltip_blocked() -> bool:
-	return director == null or state == null or paused or not error.is_empty() or extras_open() or _dialogue_blocks_map_tips() \
-		or hero_screen != null or building_screen != null or building_message != null or global_spells != null or diplomacy != null \
+	var message := _map_message_open()
+	return director == null or state == null or (paused and not message) or not error.is_empty() or extras_open() or _dialogue_blocks_map_tips() \
+		or hero_screen != null or building_screen != null or (building_message != null and not message) or global_spells != null or diplomacy != null \
 		or first_shop != null or rune_shop != null or shop != null or skills != null or spellbook != null or notebook != null \
 		or second_hud.menu.visible or result_shown
 
@@ -1455,7 +1475,11 @@ func _tick_map_tooltip(delta: float) -> void:
 		_tip_moved = false
 		_tip_clock = 0.0
 	var view_signature := "%s/%.4f/%.4f/%.3f" % [target, yaw, pitch, zoom]
-	if view_signature != _tip_camera:
+	if _map_box_open():
+		# The original skips its camera-movement refresh under a modal box.
+		_tip_camera = view_signature
+		_tip_camera_clock = 0.0
+	elif view_signature != _tip_camera:
 		_tip_camera = view_signature
 		_tip_camera_clock += delta
 		if _tip_camera_clock >= ELSecondMapTooltips.CAMERA_INTERVAL:
@@ -2539,6 +2563,7 @@ func _speaker_in_place() -> bool:
 	return target.distance_squared_to(destination) <= 0.25 * 0.25
 
 func _show_second_dialogue(speech: Dictionary) -> void:
+	if str(speech.get("box", "text")) != "text": _box_opened_hides_map_tip()
 	second_dialogue.present(speech, state)
 	accept = second_dialogue.accept
 	decline = second_dialogue.decline
@@ -3014,13 +3039,23 @@ func _show_building_message() -> void:
 		scrim.color = Color(0, 0, 0, 0)
 		building_message.build_first(state, hud, message)
 	elif second_hud != null and ELBuildingMessageView.second_applies(message):
-		# The original MessageBox does not darken the map.
+		# The original MessageBox does not darken the map. The map keeps its
+		# object tooltips around the box; clicks on it wait for the answer.
 		scrim.color = Color(0, 0, 0, 0)
 		building_message.build_second(state, second_hud, message)
+		_box_opened_hides_map_tip()
+		scrim.gui_input.connect(_message_scrim_input)
 	else:
 		building_message.build(state, hud, message)
 		building_message.accept.grab_focus()
 	building_message.closed.connect(_close_building_message)
+
+## Pointer events on the clear holder around a second-game MessageBox reach
+## the map only for its tooltips.
+func _message_scrim_input(event: InputEvent) -> void:
+	if not _map_message_open() or _map_tooltip_blocked(): return
+	if event is InputEventMouseMotion: _tip_on_map = true
+	elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT and event.pressed: _second_right_press(event.position)
 
 ## First game: the local player's resource pile in the original MessageBox
 ## (T_MB_TAKE_PLUHA_1 over one icon and amount per resource).

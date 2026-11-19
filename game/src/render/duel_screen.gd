@@ -73,6 +73,12 @@ var choice_view: ChoiceView
 ## ({source, value, icon, text, press, at, moving}), the panels that take a
 ## drop ({control, zone}) and the icon under the pointer.
 var carry: Dictionary = {}
+## Second game, Spells tab: a deck or reserve card picked up by a click, as in
+## the original editor, {zone: "book" or "reserve", index, card}, or {}. A
+## picked available spell is the list's selection (edit.item).
+var held: Dictionary = {}
+const SELECT_SOUND := "Buttons/Select3.wav"
+const ERROR_SOUND := "Buttons/Error.wav"
 var drop_zones: Array = []
 var _ghost: DragGhost
 var book_view: Control
@@ -90,8 +96,10 @@ var _random_portrait: Texture2D
 
 func _init(owner: ELFrontMenu) -> void:
 	menu = owner
+	menu.gui_input.connect(_backdrop_input)
 
 func reset() -> void:
+	_drop_held()
 	edit.clear()
 	_random_portrait = null
 	leave_hot_seat()
@@ -329,7 +337,9 @@ func _drag_input(control: Control, source: String, pick: Callable, event: InputE
 			_show_ghost()
 			return
 		carry.at = canvas_point(control, event.position)
-		if not bool(carry.moving) and carry.at.distance_to(carry.press) > DRAG_SLOP: carry.moving = true
+		if not bool(carry.moving) and carry.at.distance_to(carry.press) > DRAG_SLOP:
+			carry.moving = true
+			if not held.is_empty(): _drop_held()
 		if bool(carry.moving): _show_ghost()
 
 func _show_ghost() -> void:
@@ -1083,6 +1093,7 @@ func cancel_editor() -> void:
 func _close_editor(saved_id := "") -> void:
 	var on_close: Callable = edit.get("on_close", Callable())
 	edit.clear()
+	_drop_held()
 	if on_close.is_valid():
 		on_close.call(saved_id)
 		return
@@ -1443,6 +1454,15 @@ func apply(preset: Dictionary, action: String, value: Variant) -> Variant:
 			p.reserve[card] = int(p.reserve[card]) - 1
 			if int(p.reserve[card]) <= 0: p.reserve.erase(card)
 			p.reserve[displaced] = int(p.reserve.get(displaced, 0)) + 1
+		"move_slot_to_end":
+			# A deck card put on the deck's blank space goes after the others.
+			var from := int(value)
+			if from < 0 or from >= p.cards.size() - 1: return null
+			p.cards.append(p.cards[from])
+			p.cards.remove_at(from)
+			if from < p.runes.size():
+				p.runes.append(p.runes[from])
+				p.runes.remove_at(from)
 		"remove_reserve":
 			if not p.reserve.has(value): return null
 			p.reserve[value] = int(p.reserve[value]) - 1
@@ -1512,6 +1532,7 @@ func resource_title(index: int) -> String:
 
 func update_editor() -> void:
 	if menu.screen != "duel_editor" or edit.is_empty(): return
+	_show_carried()
 	var p := editor_preset()
 	var price := ELDuelCosts.cost(profile(), p)
 	var limit := ELDuelCosts.budget(profile(), int(p.resource_level))
@@ -1575,6 +1596,172 @@ func selected_price() -> Dictionary:
 		return result
 	var pending := selected_action()
 	return {} if pending.is_empty() else action_price(pending[0], pending[1])
+
+# --- Second game: click to pick up, click to place ---------------------------
+# The original deck editor has no drag: a click picks a card up (a deck card,
+# a reserve copy or an available spell) and the next click places it.
+# - On a deck card the two change places (a reserve copy swaps with it, the
+#   deck card going to the reserve; an available spell takes the slot and
+#   the deck card goes to the reserve); on the deck's blank space the card is
+#   added (a deck card moves after the others).
+# - Anywhere on the available spells a carried deck or reserve card is removed.
+# - On the reserve a carried deck card or available spell is stored there and
+#   scrolled into view; a carried reserve copy goes back.
+# - Elsewhere an available spell goes to the reserve and a deck or reserve
+#   card goes back. The same card clicked again goes back.
+# Every pick and place clicks (Select3); a click on an empty place with
+# nothing carried plays Error. A right click only puts the carried card back.
+# The remake's drags and Shift+right-click stay as extra gestures.
+
+func _el2_spells() -> bool:
+	return not el1() and not edit.is_empty() and not edit.view_only and int(edit.get("tab", -1)) == 0 and menu.screen == "duel_editor"
+
+func _carried_spell() -> String:
+	if not held.is_empty(): return String(held.card)
+	var pending := selected_action()
+	return String(pending[1]) if pending.size() > 1 and pending[0] == "add_spell" else ""
+
+## Whether `zone` cell `index` is the card being carried (drawn on the pointer).
+func is_held(zone: String, index: int) -> bool:
+	return not held.is_empty() and held.zone == zone and int(held.index) == index
+
+func _show_carried() -> void:
+	var card := _carried_spell() if _el2_spells() else ""
+	ELCursorDriver.carry(profile(), profile().card_icon(card) if not card.is_empty() else null)
+	for key: String in ["reserve", "book"]:
+		var view: Variant = menu.labels.get(key)
+		if view is Control and is_instance_valid(view): (view as Control).queue_redraw()
+
+func _drop_held() -> void:
+	held = {}
+	if menu != null and menu.profile != null: ELCursorDriver.carry(profile(), null)
+	if not edit.is_empty(): _show_carried()
+
+func _sound(path: String) -> void:
+	ELUiSounds.play(profile(), path)
+
+## Lets go of the available spell picked in the list.
+func _drop_choice() -> void:
+	edit.item = -1
+	clear_choice()
+
+## Shows the reserve row of the last copy of `card`.
+func _reveal_reserve(card: String) -> void:
+	var reserve: Variant = menu.labels.get("reserve")
+	if not reserve is BookView or not is_instance_valid(reserve): return
+	var view: BookView = reserve
+	var at: int = view.entries().map(func(entry: Dictionary): return entry.card).rfind(card)
+	if at < 0: return
+	var row := at / view.columns
+	var shown := maxi(1, int(view.size.y / view.cell().y))
+	if row < view.offset: view.offset = row
+	elif row >= view.offset + shown: view.offset = row - shown + 1
+	view.queue_redraw()
+
+## Right button: the carried card goes back. True when one was carried.
+func cancel_carried() -> bool:
+	if not _el2_spells() or _carried_spell().is_empty(): return false
+	held = {}
+	_drop_choice()
+	_sound(SELECT_SOUND)
+	update_editor()
+	return true
+
+## A click on a deck (`zone` "book") or reserve cell; `index` -1 is blank
+## space. False when the second game's rules do not apply here.
+func click_cell(zone: String, index: int, double_click: bool) -> bool:
+	if not _el2_spells(): return false
+	if double_click:
+		# The remake's double-click move: the first click's pick is let go.
+		held = {}
+		return false
+	var p := editor_preset()
+	if not held.is_empty():
+		var from := held
+		held = {}
+		if from.zone == zone and int(from.index) == index:
+			_sound(SELECT_SOUND)
+			update_editor()
+			return true
+		if zone == "book":
+			if from.zone == "reserve": act("reserve_to_slot", [from.card, index])
+			elif index >= 0: act("reorder_book", [int(from.index), index])
+			else: act("move_slot_to_end", int(from.index))
+		elif from.zone == "book" and act("deck_to_reserve", int(from.index)):
+			_reveal_reserve(String(from.card))
+		_sound(SELECT_SOUND)
+		update_editor()
+		return true
+	var card := _carried_spell()
+	if not card.is_empty():
+		_drop_choice()
+		if zone == "book": act("place_spell", [card, index])
+		elif act("spell_to_reserve", card): _reveal_reserve(card)
+		_sound(SELECT_SOUND)
+		update_editor()
+		return true
+	var view: Variant = menu.labels.get(zone)
+	if index < 0 or not view is BookView:
+		_sound(ERROR_SOUND)
+		return true
+	held = {"zone": zone, "index": index, "card": (view as BookView).entries()[index].card}
+	_sound(SELECT_SOUND)
+	update_editor()
+	return true
+
+## Clicks on the available spells while a card is carried: a deck or
+## reserve card is removed anywhere on the list; an available spell goes
+## back when clicked again and to the reserve from the list's blank space.
+func _spell_list_input(event: InputEvent) -> void:
+	if not _el2_spells() or not event is InputEventMouseButton or not event.pressed: return
+	if event.button_index == MOUSE_BUTTON_RIGHT and not event.shift_pressed:
+		if cancel_carried(): right_list.accept_event()
+		return
+	if event.button_index != MOUSE_BUTTON_LEFT or event.double_click: return
+	var index := right_list.get_item_at_position(event.position, true)
+	if not held.is_empty():
+		var from := held
+		held = {}
+		if from.zone == "reserve": act("remove_reserve", from.card)
+		else: act("remove_slot", int(from.index))
+		_sound(SELECT_SOUND)
+		update_editor()
+		right_list.accept_event()
+		return
+	var card := _carried_spell()
+	if index < 0:
+		if card.is_empty(): _sound(ERROR_SOUND)
+		else:
+			_drop_choice()
+			if act("spell_to_reserve", card): _reveal_reserve(card)
+			_sound(SELECT_SOUND)
+			update_editor()
+		right_list.accept_event()
+		return
+	if index == int(edit.get("item", -1)):
+		_drop_choice()
+		_sound(SELECT_SOUND)
+		update_editor()
+		right_list.accept_event()
+		return
+	# The list selects the spell itself: it is now carried.
+	_sound(SELECT_SOUND)
+
+## Clicks beside the lists: an available spell goes to the reserve, a deck or
+## reserve card goes back; a right click puts the carried card back.
+func _backdrop_input(event: InputEvent) -> void:
+	if not _el2_spells() or not event is InputEventMouseButton or not event.pressed: return
+	if event.button_index == MOUSE_BUTTON_RIGHT and not event.shift_pressed:
+		cancel_carried()
+		return
+	if event.button_index != MOUSE_BUTTON_LEFT or _carried_spell().is_empty(): return
+	if held.is_empty():
+		var card := _carried_spell()
+		_drop_choice()
+		if act("spell_to_reserve", card): _reveal_reserve(card)
+	held = {}
+	_sound(SELECT_SOUND)
+	update_editor()
 
 ## The buy action for the selected right-panel item (or the picked EL2 artifact).
 func selected_action() -> Array:
@@ -1825,6 +2012,7 @@ func _build_el1_editor() -> void:
 	refresh_editor_lists()
 
 func select_tab(index: int) -> void:
+	held = {}
 	edit.tab = index
 	edit.item = -1
 	edit.art = -1
@@ -1989,6 +2177,8 @@ func _build_el2_spells() -> void:
 	menu.canvas.add_child(book_view)
 	menu.labels["book"] = book_view
 	right_list = _right_list(_rect("EPAllSpellsBounds"), true, 5)
+	held = {}
+	right_list.gui_input.connect(_spell_list_input)
 	_drop_zone(reserve, "reserve")
 	_drop_zone(book_view, "book")
 	_drag_source(right_list, "choice", func(local: Vector2): return _list_item(right_list, local))
@@ -2504,6 +2694,8 @@ class BookView extends Control:
 					_click_at = Vector2.INF
 					if pressed_at.distance_to(event.position) <= DRAG_SLOP and Rect2(Vector2.ZERO, size).has_point(event.position):
 						_click(slot_at(pressed_at), _double_click)
+			elif event.pressed and event.button_index == MOUSE_BUTTON_RIGHT and not event.shift_pressed:
+				screen.cancel_carried()
 			elif event.pressed and event.button_index == MOUSE_BUTTON_RIGHT and event.shift_pressed:
 				var index := slot_at(event.position)
 				if index >= 0:
@@ -2515,6 +2707,10 @@ class BookView extends Control:
 		screen._drag_input(self, "reserve" if reserve else "book", carried, event, true)
 
 	func _click(index: int, double_click: bool) -> void:
+		# Second game: the original's click to pick up and click to place.
+		if screen.click_cell("reserve" if reserve else "book", index, double_click):
+			queue_redraw()
+			return
 		# A spell picked in the list goes where the book is clicked: on a
 		# slot (replacing it) or on an empty place (added).
 		var pending := screen.selected_action()
@@ -2546,6 +2742,8 @@ class BookView extends Control:
 		for index in list.size():
 			var rect := slot_rect(index)
 			if rect.position.y < -1 or rect.end.y > size.y + 1: continue
+			# The carried card is on the pointer, its cell left empty.
+			if screen.is_held("reserve" if reserve else "book", index): continue
 			var icon_rect := Rect2(rect.position + Vector2(2, 2), Vector2(minf(c.x, c.y) - 4, minf(c.x, c.y) - 4))
 			draw_texture_rect(screen.profile().card_icon(list[index].card), icon_rect, false)
 			if not reserve and int(screen.edit.get("slot", -1)) == index: draw_rect(icon_rect, ELFrontMenu.INK_HOVER, false, 2)
