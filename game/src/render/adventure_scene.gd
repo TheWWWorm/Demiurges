@@ -45,6 +45,7 @@ const FOG_APRON := 24
 var fog_from := PackedByteArray()
 var fog_to := PackedByteArray()
 var fog_since := 0.0
+var _fog_fade_sent := 1.0
 ## A script's hard cut must hide terrain and figures together.
 var snap_fog := false
 var mist: ELFogMist
@@ -301,14 +302,26 @@ static func _on_workers(jobs: Array[Dictionary], work: Callable) -> void:
 static func _fog_viewer(session: ELAdventureSession) -> int:
 	return 1 if session.map.profile.id == "el2" else session.current_player
 
+## The profile cache holds reusable atlas resources; this scene owns live
+## fog, lighting and reflection state. The fallback also supports lightweight
+## scene fixtures which supply only a cached ground material.
+func _terrain_material() -> ShaderMaterial:
+	if terrain != null: return terrain.material
+	if map != null and map.profile.adventure_terrain_cache.get("map") == map.id:
+		return map.profile.adventure_terrain_cache.get("material") as ShaderMaterial
+	return null
+
 ## Turns the terrain and object fog on for the session's local player.
 func enable_fog(session: ELAdventureSession) -> void:
-	var material := map.profile.adventure_terrain_cache.get("material") as ShaderMaterial if map.profile.adventure_terrain_cache.get("map") == map.id else null
+	var material := _terrain_material()
+	var shadow := blobs.material_override as ShaderMaterial if blobs != null else null
 	fog_player = _fog_viewer(session) if session != null else 0
 	fog_session = session if session != null and ELFog.active(session, fog_player) else null
 	_fog_revision = -1
 	if material != null: material.set_shader_parameter("fog_enabled", fog_session != null)
+	if shadow != null: shadow.set_shader_parameter("fog_enabled", fog_session != null)
 	if _fog_apron != null: _fog_apron.visible = fog_session != null
+	if mist != null: mist.render_active = fog_session != null and is_visible_in_tree()
 	if fog_session == null: return
 	if mist == null:
 		mist = ELFogMist.new()
@@ -324,6 +337,7 @@ func enable_fog(session: ELAdventureSession) -> void:
 	fog_to = fog_corners(_fog_tiles)
 	fog_from = fog_to
 	fog_since = INF
+	_fog_fade_sent = 1.0
 	_fog_textures.clear()
 	for data: PackedByteArray in [fog_from, fog_to]:
 		_fog_textures.append(ImageTexture.create_from_image(Image.create_from_data(map.width + 1, map.height + 1, false, Image.FORMAT_R8, data)))
@@ -333,6 +347,11 @@ func enable_fog(session: ELAdventureSession) -> void:
 		material.set_shader_parameter("fog_size", Vector2i(map.width, map.height))
 		material.set_shader_parameter("fog_fade", 1.0)
 		material.set_shader_parameter("fog_mist", mist.get_texture())
+	if shadow != null:
+		shadow.set_shader_parameter("fog_from", _fog_textures[0])
+		shadow.set_shader_parameter("fog_to", _fog_textures[1])
+		shadow.set_shader_parameter("fog_size", Vector2i(map.width, map.height))
+		shadow.set_shader_parameter("fog_fade", 1.0)
 	_fog_revision = ELFog.revision(fog_session)
 	# The fog as loaded shows at once.
 	_fog_level.clear()
@@ -414,11 +433,16 @@ func set_animate_fog(on: bool) -> void:
 	if mist != null: mist.animate = on
 
 func _sync_mist() -> void:
-	var material := map.profile.adventure_terrain_cache.get("material") as ShaderMaterial if map.profile.adventure_terrain_cache.get("map") == map.id else null
-	if material != null:
-		material.set_shader_parameter("fog_drift", mist.drift)
-		material.set_shader_parameter("fog_fade", minf(FOG_RATE * fog_since / 255.0, 1.0))
+	var material := _terrain_material()
+	if material != null: material.set_shader_parameter("fog_drift", mist.drift)
 	if _fog_apron != null: (_fog_apron.material_override as ShaderMaterial).set_shader_parameter("fog_drift", mist.drift)
+	# Drift continues after a reveal. Both materials keep the same completed
+	# fade without another shader update until the next reveal changes it.
+	var fade := minf(FOG_RATE * fog_since / 255.0, 1.0)
+	if fade == _fog_fade_sent: return
+	_fog_fade_sent = fade
+	if material != null: material.set_shader_parameter("fog_fade", fade)
+	if blobs != null: (blobs.material_override as ShaderMaterial).set_shader_parameter("fog_fade", fade)
 
 func _fog_data() -> Array[PackedByteArray]:
 	var size := map.width * map.height
@@ -433,10 +457,13 @@ func _fog_data() -> Array[PackedByteArray]:
 	return [known, seen]
 
 func _process(delta: float) -> void:
+	# Noise time continues in the child, but a cached/hidden map does not
+	# render its mist texture or send drift uniforms to invisible materials.
+	if mist != null: mist.render_active = fog_session != null and is_visible_in_tree()
 	if fog_session != null:
 		fog_since += delta
 		sync_fog()
-		_sync_mist()
+		if mist != null and mist.render_active: _sync_mist()
 		if not _fading.is_empty(): _fade_objects(delta)
 	if not _retiring_pickups.is_empty(): _fade_pickups(delta)
 	if colorless_session != null and colorless_session.colorless_level != colorless_shown: sync_colorless()
@@ -448,7 +475,7 @@ func _process(delta: float) -> void:
 ## centre is colourless use greyscale copies of their textures.
 ## Everything is rebuilt on a level switch only.
 func enable_colorless(session: ELAdventureSession) -> void:
-	var material := map.profile.adventure_terrain_cache.get("material") as ShaderMaterial if map.profile.adventure_terrain_cache.get("map") == map.id else null
+	var material := _terrain_material()
 	colorless_session = session if session != null and map.profile.id == "el2" and map.colorless.size() == map.width * map.height else null
 	colorless_shown = -1
 	if material != null: material.set_shader_parameter("clrless_enabled", false)
@@ -456,7 +483,7 @@ func enable_colorless(session: ELAdventureSession) -> void:
 	sync_colorless()
 
 func sync_colorless() -> void:
-	var material := map.profile.adventure_terrain_cache.get("material") as ShaderMaterial if map.profile.adventure_terrain_cache.get("map") == map.id else null
+	var material := _terrain_material()
 	colorless_shown = clampi(colorless_session.colorless_level, 0, 3)
 	if material != null:
 		var layer := ELAdventureTerrain.colorless_layer(map, colorless_shown)
@@ -673,6 +700,7 @@ func _fade_pickups(delta: float) -> void:
 			var transform: Transform3D = entry.transform
 			transform.basis = transform.basis.scaled(Vector3.ONE * shrink)
 			_place_instance(entry, transform)
+		_sync_blob(uid, true)
 
 func _game_visible(item: Dictionary) -> bool:
 	return item.get("visible", true) and item.get("placed", true) and not item.get("fortified", false) \
@@ -718,9 +746,16 @@ func _grey_texture(texture: Texture2D) -> Texture2D:
 	var image := texture.get_image()
 	if image == null: return texture
 	var mipmaps := image.has_mipmaps()
-	var grey := ELColorless.grey_image(image)
-	if mipmaps: grey.generate_mipmaps()
-	_grey_textures[texture] = ImageTexture.create_from_image(grey)
+	var prepared := mipmaps and (texture.has_meta(ELTexture.AUTHORED_MASK_MIPS) or texture.has_meta(ELTexture.COVERAGE_MASK_MIPS))
+	# Rebuilding prepared alpha levels would erase thin silhouettes when a
+	# figure enters a colourless zone. Recolour each level's RGB in place on
+	# a private image; ordinary textures keep the previous filtering path.
+	var grey := ELColorless.grey_image(image, prepared)
+	if mipmaps and not prepared: grey.generate_mipmaps()
+	var copied := ImageTexture.create_from_image(grey)
+	for key: StringName in [ELTexture.ONE_BIT_ALPHA, ELTexture.AUTHORED_MASK_MIPS, ELTexture.COVERAGE_MASK_MIPS]:
+		if texture.has_meta(key): copied.set_meta(key, texture.get_meta(key))
+	_grey_textures[texture] = copied
 	return _grey_textures[texture]
 
 static func _placed_basis(rotation: int, art_scale: float) -> Basis:
@@ -1021,16 +1056,31 @@ func play_actor_clip(uid: int, clip: String) -> void:
 func play_actor_code(uid: int, code: int) -> String:
 	var model: ELModel = actors.get(uid)
 	if model == null: return ""
-	var clip := model.clip_for_code(code)
-	if clip.is_empty(): clip = model.clip_for_code(code | 0x80000000)
+	var clip := _coded_clip(model, code)
 	if not clip.is_empty(): play_actor_clip(uid, clip)
 	return clip
 
+static func _coded_clip(model: ELModel, code: int) -> String:
+	var clip := model.clip_for_code(code)
+	return model.clip_for_code(code | 0x80000000) if clip.is_empty() else clip
+
 ## EL2's Talk selects Enchantment, then Instant, then the generic attack
 ## (0x6826da, 0x6811d6). The Musician's map model calls its Instant `uattack`.
-func speak_actor(uid: int) -> void:
+static func _speech_clip(model: ELModel) -> String:
 	for code: int in [0x014c0000, 0x01cc0000, 0x02880000]:
-		if not play_actor_code(uid, code).is_empty(): return
+		var clip := _coded_clip(model, code)
+		if not clip.is_empty(): return clip
+	return ""
+
+func prepare_speech(uid: int) -> void:
+	var model: ELModel = actors.get(uid)
+	if model != null: model.prefetch_clip(_speech_clip(model))
+
+func speak_actor(uid: int) -> void:
+	var model: ELModel = actors.get(uid)
+	if model == null: return
+	var clip := _speech_clip(model)
+	if not clip.is_empty(): play_actor_clip(uid, clip)
 
 func orient_actor(uid: int, direction: Vector2) -> void:
 	if actors.has(uid) and direction.length_squared() > 0.0001:
@@ -1146,6 +1196,13 @@ func _sync_blob(uid: int, present: bool) -> void:
 	var slot: Dictionary = _blob_slots[uid]
 	var base: Transform3D = object_models[uid].transform if object_models.has(uid) else slot.base
 	var placed := base * (slot.local as Transform3D)
+	# A model's basis already contains its pickup shrink. Instanced pickups
+	# need the same visual scale applied to their independently batched blob.
+	if _retiring_pickups.has(uid) and not object_models.has(uid):
+		var shrink := 1.0 - smoothstep(0.0, PICKUP_FADE, float(_retiring_pickups[uid].elapsed))
+		var shrinking := base
+		shrinking.basis = shrinking.basis.scaled(Vector3.ONE * shrink)
+		placed = shrinking * (slot.local as Transform3D)
 	placed.origin.y += BLOB_LIFT
 	slot["placed"] = placed
 	slot["present"] = present
@@ -1157,12 +1214,22 @@ func set_blob_shadows(on: bool) -> void:
 	if blobs != null: blobs.visible = on
 	var silhouettes := on and map != null and map.profile.id in ["el1", "el2"]
 	if sun != null:
-		sun.shadow_enabled = silhouettes
+		# Preserve tracing's ownership when Options reapplies map settings.
+		# Its deactivation restores this updated preference from the metadata.
+		if sun.has_meta("traced_shadow"):
+			sun.set_meta("traced_shadow", silhouettes)
+			sun.shadow_enabled = false
+		else:
+			sun.shadow_enabled = silhouettes
 		# Only the compatibility renderer's encoded sun pass needs the lower energy.
 		var encoded := silhouettes and ELEffectLook.encoded_sun_pass(environment)
 		sun.light_energy = SHADOW_SUN_ENERGY if encoded else SUN_ENERGY
-	var material := map.profile.adventure_terrain_cache.get("material") as ShaderMaterial if map != null and map.profile.adventure_terrain_cache.get("map") == map.id else null
-	if material != null: material.set_shader_parameter("shadow_strength", SILHOUETTE_STRENGTH if silhouettes else 0.0)
+	var material := _terrain_material()
+	if material != null:
+		material.set_shader_parameter("shadow_strength", SILHOUETTE_STRENGTH if silhouettes else 0.0)
+		# EL1 rotates the map sun with its camera convention. Relief and water
+		# highlights must follow it instead of retaining EL2's default vector.
+		if sun != null: material.set_shader_parameter("detail_sun", sun.basis.z.normalized())
 
 ## Whether an object casts the original's silhouette shadow on the ground
 ## (recorded footage of both games shows them under trees, rocks and

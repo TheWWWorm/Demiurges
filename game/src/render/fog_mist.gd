@@ -21,6 +21,13 @@ const DARK := Color8(5, 5, 5)
 const LIGHT := Color8(0x30, 0x30, 0x30)
 
 var animate := true
+## A hidden map keeps its original noise clock and drift but need not draw a
+## texture nobody samples. Enabling it requests the current frame immediately.
+var render_active := true:
+	set(value):
+		if render_active == value: return
+		render_active = value
+		render_target_update_mode = SubViewport.UPDATE_ONCE if value else SubViewport.UPDATE_DISABLED
 ## Texture offset along the map rows, 0.01 a second whether animated or not.
 var drift := 0.0
 var step := 0
@@ -29,12 +36,13 @@ var rng := RandomNumberGenerator.new()
 var _from: ImageTexture
 var _to: ImageTexture
 var _material: ShaderMaterial
+var _drawn_weight := -1
 
 func _init() -> void:
 	size = Vector2i(SIZE, SIZE)
 	disable_3d = true
 	transparent_bg = false
-	render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	render_target_update_mode = SubViewport.UPDATE_ONCE
 	var rect := ColorRect.new()
 	rect.size = Vector2(SIZE, SIZE)
 	_material = ShaderMaterial.new()
@@ -56,6 +64,7 @@ func advance(delta: float) -> void:
 	drift = fposmod(drift + delta * 0.01, 1.0)
 	if not animate: return
 	fraction += delta * RATE
+	var grids_changed := false
 	while fraction >= 1.0:
 		fraction -= 1.0
 		if step == STEPS - 1:
@@ -66,15 +75,23 @@ func advance(delta: float) -> void:
 			_to = older
 			_material.set_shader_parameter("grids_from", _from)
 			_material.set_shader_parameter("grids_to", _to)
+			grids_changed = true
 		else:
 			step += 1
-	_apply_weight()
+	_apply_weight(grids_changed)
 
 func _process(delta: float) -> void:
 	advance(delta)
 
-func _apply_weight() -> void:
-	_material.set_shader_parameter("weight", weight())
+func _apply_weight(grids_changed := false) -> void:
+	var next := weight()
+	if next == _drawn_weight and not grids_changed: return
+	_drawn_weight = next
+	_material.set_shader_parameter("weight", next)
+	# The shader takes an integer byte weight. Identical weights produce an
+	# identical image; at high refresh rates keep the last completed texture.
+	# Drift is applied by the terrain sampler and never needs this pass.
+	if render_active: render_target_update_mode = SubViewport.UPDATE_ONCE
 
 ## Four noise grids for one frame, one per RGBA channel.
 static func grids_image(source: RandomNumberGenerator) -> Image:

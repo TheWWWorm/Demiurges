@@ -11,7 +11,12 @@ var light: DirectionalLight3D
 ## The scene's ambient light (combat effects dim it with the sun).
 var environment_settings: Environment
 var _profile: ELProfile
-var _ground: ELModel
+var _ground: ELModel:
+	set(value):
+		if _ground == value: return
+		_ground = value
+		_ground_height_index = null
+var _ground_height_index: ELGroundHeightIndex
 var _sea: MeshInstance3D
 var _ship_surface: MeshInstance3D
 var _ship_original_mesh: Mesh
@@ -72,6 +77,11 @@ const NEAR_SIDE_ANGLE := deg_to_rad(75.0)
 var _lit: Dictionary = {}
 var _unlit: Dictionary = {}
 var _ground_fog: GroundFog
+## The painted water and low mist retain their authored palette at the
+## arena's ordinary light level, but follow spell-driven changes to it.
+var _atmosphere_reference := Vector3.ONE
+var _atmosphere_seen := Vector3(-1.0, -1.0, -1.0)
+var _water_sun_seen := Vector3.ZERO
 
 static func title(id: String) -> String:
 	var names := {"Green": "Vital forest", "Red": "Chaot desert", "Black": "Synthet wasteland", "Blue": "Kinet mountains",
@@ -134,6 +144,14 @@ func build(profile: ELProfile, arena_id := "Green.001") -> bool:
 	light.light_energy = 0.85
 	light.shadow_enabled = true
 	light.directional_shadow_max_distance = 65.0
+	# Four cascades on desktop Forward+, two on the lighter renderers. The
+	# two-split layout needs a wider near region than the four-split layout.
+	var four_splits := RenderingServer.get_current_rendering_method() == "forward_plus" and not OS.has_feature("mobile") and not OS.has_feature("web")
+	light.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS if four_splits else DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS
+	light.directional_shadow_split_1 = 0.08 if four_splits else 0.28
+	light.directional_shadow_split_2 = 0.28
+	light.directional_shadow_split_3 = 0.60
+	light.directional_shadow_blend_splits = true
 	# The sun shines down along the SunDirection line, whichever way the vector
 	# points: the original throws figure shadows along it, away from the sun
 	# (a wasteland arena points it along -Z, the forest arena along +Z).
@@ -142,6 +160,7 @@ func build(profile: ELProfile, arena_id := "Green.001") -> bool:
 	var toward := ELFigure.vector(Vector3(direction[0], direction[1], direction[2])).normalized()
 	if toward.y > 0.0: toward = -toward
 	light.look_at_from_position(-toward * 10.0, Vector3.ZERO, Vector3.UP if absf(toward.y) < 0.99 else Vector3.FORWARD)
+	_atmosphere_reference = _surface_light()
 	if arena_id == "Ship.001": _build_sea(-toward)
 	if _ground != null and GROUND_FOG_TINTS.has(arena_id):
 		_ground_fog = GroundFog.new()
@@ -276,6 +295,7 @@ func scenery(id: int) -> ELModel:
 ## combat effects dim and restore.
 func _sync_light() -> void:
 	if environment_settings == null: return
+	_sync_atmosphere_light()
 	var ambient := environment_settings.ambient_light_color * environment_settings.ambient_light_energy
 	# Only the Compatibility renderer adds a shadowed sun in a display-encoded pass.
 	var encoded := light != null and light.visible and light.shadow_enabled and ELEffectLook.encoded_sun_pass(environment_settings)
@@ -289,6 +309,46 @@ func _sync_light() -> void:
 		material.set_shader_parameter("ambient_light", level)
 		material.set_shader_parameter("light_limit", light_limit)
 		material.set_shader_parameter("encoded_sun_pass", encoded)
+
+## Light falling onto a level patch of ground, in linear colour. This is
+## only a palette multiplier for the unlit atmosphere, not another light
+## on the opaque scene. In particular it does not interfere with tracing.
+func _surface_light() -> Vector3:
+	var ambient := Color.BLACK
+	if environment_settings != null:
+		ambient = environment_settings.ambient_light_color.srgb_to_linear() * environment_settings.ambient_light_energy
+	var sun := Color.BLACK
+	if is_instance_valid(light) and light.visible:
+		sun = light.light_color.srgb_to_linear() * maxf(0.0, light.light_energy) * maxf(light.basis.z.normalized().y, 0.0)
+	var level := Vector3(ambient.r + sun.r, ambient.g + sun.g, ambient.b + sun.b)
+	return level.clamp(Vector3.ZERO, Vector3.ONE * maxf(light_limit, 0.0))
+
+static func atmosphere_gain(current: Vector3, reference: Vector3) -> Vector3:
+	# A black channel in the original lighting has no meaningful ratio.
+	# Use the overall brightness there, avoiding coloured spikes or NaNs.
+	var weights := Vector3(0.2126, 0.7152, 0.0722)
+	var mean := current.dot(weights) / maxf(reference.dot(weights), 0.0001)
+	if reference.length_squared() < 0.00000001: mean = 1.0
+	var gain := Vector3.ZERO
+	for axis in 3:
+		gain[axis] = current[axis] / reference[axis] if reference[axis] > 0.0001 else mean
+	# Retain the full dimming range; large authored light flashes cannot
+	# turn the water or mist into an unbounded HDR light source.
+	return gain.clamp(Vector3.ZERO, Vector3.ONE * 2.0)
+
+func _sync_atmosphere_light() -> void:
+	if _sea == null and _ground_fog == null: return
+	var gain := atmosphere_gain(_surface_light(), _atmosphere_reference)
+	if not gain.is_equal_approx(_atmosphere_seen):
+		_atmosphere_seen = gain
+		if is_instance_valid(_sea):
+			(_sea.material_override as ShaderMaterial).set_shader_parameter("scene_light_gain", gain)
+		if is_instance_valid(_ground_fog): _ground_fog.set_light(gain)
+	if is_instance_valid(_sea) and is_instance_valid(light):
+		var direction := light.basis.z.normalized()
+		if not direction.is_equal_approx(_water_sun_seen):
+			_water_sun_seen = direction
+			(_sea.material_override as ShaderMaterial).set_shader_parameter("sun_direction", direction)
 
 ## Optional close-up ground grain using the arena's authored detail texture
 ## and world-space tile size. Missing detail art keeps the original material.
@@ -326,26 +386,14 @@ func set_detail(enabled: bool) -> void:
 	_update_secondary_overlays()
 
 func ground_height(x: float, z: float) -> float:
-	var surface: ELModel = get_child(0)
-	var point := Vector2(x, z)
-	for figure: Dictionary in surface.figures.values():
-		var vertices: PackedVector3Array = figure.arrays[Mesh.ARRAY_VERTEX]
-		var indices: PackedInt32Array = figure.arrays[Mesh.ARRAY_INDEX]
-		for i in range(0, indices.size(), 3):
-			var a := vertices[indices[i]]
-			var b := vertices[indices[i + 1]]
-			var c := vertices[indices[i + 2]]
-			var va := Vector2(a.x, a.z)
-			var vb := Vector2(b.x, b.z)
-			var vc := Vector2(c.x, c.z)
-			var determinant := (vb - va).cross(vc - va)
-			if absf(determinant) < 0.00001:
-				continue
-			var u := (point - va).cross(vc - va) / determinant
-			var v := (vb - va).cross(point - va) / determinant
-			if u >= -0.001 and v >= -0.001 and u + v <= 1.001:
-				return a.y + (b.y - a.y) * u + (c.y - a.y) * v
-	return 0.0
+	# Presentation helpers and cached arenas need not keep the ground as
+	# child zero. Use the actual surface, including a partially built arena.
+	var surface := _ground
+	if not is_instance_valid(surface): return 0.0
+	if _ground_height_index == null:
+		_ground_height_index = ELGroundHeightIndex.new()
+		_ground_height_index.build(surface.figures)
+	return _ground_height_index.height(x, z)
 
 ## Whether a figure `radius` wide stands clear at `spot` (x, z): no scenery
 ## (rocks, walls, trees, bushes) rises between its knees and its head inside

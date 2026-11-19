@@ -23,7 +23,15 @@ var uploads := 0
 ## hotspot. Null when nothing is carried.
 var carry_image: Texture2D
 var _carry_source: Texture2D
+var _entry: Dictionary = {}
+var _source_generation := -1
 const CARRY_SIZE := 48
+
+func _init() -> void:
+	set_process(false)
+
+func _ready() -> void:
+	set_process((_entry.get("frames", []) as Array).size() > 1)
 
 ## The shared driver, created under the scene root on first use.
 static func instance() -> ELCursorDriver:
@@ -52,17 +60,25 @@ static func current_name() -> String:
 	return _instance.current if is_instance_valid(_instance) else ""
 
 func select(owner_profile: ELProfile, cursor_name: String) -> void:
-	if owner_profile == profile and cursor_name == current: return
+	var generation := owner_profile.generation if owner_profile != null else -1
+	if owner_profile == profile and cursor_name == current and generation == _source_generation: return
 	if owner_profile != profile: positions.clear()
 	profile = owner_profile
+	_source_generation = generation
 	current = cursor_name
+	_entry = ELCursors.cursor(profile, current) if profile != null else {}
+	set_process((_entry.get("frames", []) as Array).size() > 1)
 	_apply()
 
 func set_carry(owner_profile: ELProfile, icon: Texture2D) -> bool:
 	if icon == _carry_source and (icon == null or carry_image != null): return carry_image != null
 	_carry_source = icon
 	carry_image = carry_picture(icon)
-	if owner_profile != null and profile == null: profile = owner_profile
+	if owner_profile != null and profile == null:
+		profile = owner_profile
+		_source_generation = profile.generation
+		_entry = ELCursors.cursor(profile, current)
+		set_process((_entry.get("frames", []) as Array).size() > 1)
 	shown = {} if carry_image == null else shown
 	_apply()
 	return carry_image != null
@@ -89,23 +105,24 @@ static func carry_picture(icon: Texture2D) -> Texture2D:
 
 func _process(delta: float) -> void:
 	if current.is_empty() or profile == null: return
+	if profile.generation != _source_generation: select(profile, current)
 	clock += delta
 	if clock < ELCursors.FRAME_TIME: return
 	var steps := int(clock / ELCursors.FRAME_TIME)
 	clock -= steps * ELCursors.FRAME_TIME
-	var entry := ELCursors.cursor(profile, current)
-	if entry.is_empty() or entry.frames.size() < 2: return
-	positions[current] = (int(positions.get(current, 0)) + steps) % entry.frames.size()
+	if _entry.is_empty() or _entry.frames.size() < 2: return
+	positions[current] = (int(positions.get(current, 0)) + steps) % _entry.frames.size()
 	_apply()
 
 func _apply() -> void:
-	var entry := ELCursors.cursor(profile, current) if profile != null else {}
+	var entry := _entry
 	if carry_image != null:
-		if shown.get("image") == carry_image: return
 		var hotspot := Vector2(entry.get("hotspot", Vector2i.ZERO))
-		Input.set_custom_mouse_cursor(carry_image, Input.CURSOR_ARROW, hotspot)
-		uploads += 1
-		shown = {"edition": profile.id if profile != null else "", "name": current, "frame": -1, "hotspot": hotspot, "point": hotspot, "image": carry_image, "carry": true}
+		var point := _display_point(hotspot, carry_image)
+		if shown.get("image") != carry_image or shown.get("point") != point:
+			Input.set_custom_mouse_cursor(carry_image, Input.CURSOR_ARROW, point)
+			uploads += 1
+		shown = {"edition": profile.id if profile != null else "", "name": current, "frame": -1, "hotspot": hotspot, "point": point, "image": carry_image, "carry": true}
 		return
 	if entry.is_empty() or entry.frames.is_empty():
 		if not shown.is_empty(): Input.set_custom_mouse_cursor(null)
@@ -113,14 +130,18 @@ func _apply() -> void:
 		return
 	var frame: int = int(positions.get(current, 0)) % int(entry.frames.size())
 	var image: ImageTexture = entry.frames[frame]
-	if shown.get("image") == image: return
 	# A hotspot on the far edge (the right/down scroll cursors) is kept on
-	# the last pixel, which display servers require.
-	var size := image.get_size()
-	var point := Vector2(minf(entry.hotspot.x, size.x - 1), minf(entry.hotspot.y, size.y - 1))
-	Input.set_custom_mouse_cursor(image, Input.CURSOR_ARROW, point)
-	uploads += 1
+	# the last pixel, which display servers require. The hotspot is part of
+	# the display state too, even when two cursors share the same image.
+	var point := _display_point(Vector2(entry.hotspot), image)
+	if shown.get("image") != image or shown.get("point") != point:
+		Input.set_custom_mouse_cursor(image, Input.CURSOR_ARROW, point)
+		uploads += 1
 	shown = {"edition": profile.id, "name": current, "frame": frame, "hotspot": entry.hotspot, "point": point, "image": image}
+
+static func _display_point(hotspot: Vector2, image: Texture2D) -> Vector2:
+	var size := image.get_size()
+	return Vector2(clampf(hotspot.x, 0.0, size.x - 1.0), clampf(hotspot.y, 0.0, size.y - 1.0))
 
 func _exit_tree() -> void:
 	if not shown.is_empty(): Input.set_custom_mouse_cursor(null)

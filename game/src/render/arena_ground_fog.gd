@@ -41,6 +41,12 @@ func build(tint: Color, floor_height: float) -> void:
 	material.set_shader_parameter("wake_mask", _wake_texture)
 	material_override = material
 
+## Spell-driven arena lighting also dims/tints the low mist. Its ordinary
+## density and palette are unchanged, and the wake texture is untouched.
+func set_light(gain: Vector3) -> void:
+	var material := material_override as ShaderMaterial
+	if material != null: material.set_shader_parameter("scene_light_gain", gain)
+
 func stir(from: Vector2, to: Vector2, creature_scale: float) -> void:
 	if from.distance_squared_to(to) < 0.000001: return
 	# Sweep the whole segment so fast creatures leave a continuous wake.

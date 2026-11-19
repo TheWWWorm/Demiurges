@@ -6,12 +6,35 @@ extends Node
 
 const SIZE := 72
 
-var profile: ELProfile
+var profile: ELProfile:
+	set(value):
+		if profile == value: return
+		profile = value
+		_clear_views()
 var _views := {}
 var _settling := {}
+var _source_generation := -1
+
+func _init() -> void:
+	set_process(false)
+
+func _ready() -> void:
+	set_process(not _settling.is_empty())
+
+func _clear_views() -> void:
+	for view: Variant in _views.values():
+		if is_instance_valid(view):
+			view.render_target_update_mode = SubViewport.UPDATE_DISABLED
+			view.process_mode = Node.PROCESS_MODE_DISABLED
+			view.queue_free()
+	_views.clear()
+	_settling.clear()
+	_source_generation = profile.generation if profile != null else -1
+	set_process(false)
 
 func texture(code: String) -> Texture2D:
 	if code.is_empty() or profile == null: return null
+	if profile.generation != _source_generation: _clear_views()
 	if not _views.has(code):
 		var view := ELWikiPreview.stage(profile, code, Vector2i(SIZE, SIZE), true)
 		if view == null:
@@ -24,6 +47,7 @@ func texture(code: String) -> Texture2D:
 		(view.get_node("Model") as ELModel).play("cidle")
 		_views[code] = view
 		_settling[code] = 0
+		set_process(true)
 	var found: SubViewport = _views[code]
 	return found.get_texture() if found != null else profile.card_icon(code)
 
@@ -42,5 +66,8 @@ func _process(_delta: float) -> void:
 			if factor > 0.0 and absf(factor - 1.0) < 0.04: frames = 23
 		if frames >= 23:
 			view.render_target_update_mode = SubViewport.UPDATE_ONCE
-			(view.get_node("Model") as ELModel).set_process(false)
+			# The result is a still image. Freeze the whole stage, including
+			# its original effect emitters, after the final framing draw.
+			view.process_mode = Node.PROCESS_MODE_DISABLED
 			_settling.erase(code)
+	if _settling.is_empty(): set_process(false)

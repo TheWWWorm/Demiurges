@@ -1733,6 +1733,7 @@ func _present(data: Dictionary) -> void:
 				view_goal = Vector2(SECOND_TEXT_ZOOM, SECOND_TEXT_PITCH)
 				_script_lens = false
 			if second_dialogue != null:
+				if not speech.get("direct", false): world.prepare_speech(int(speech.get("actor", -1)))
 				if _mission_fade == null and not _reward_transition() and (int(speech.get("actor", -1)) < 0 or _speaker_in_place()): _show_second_dialogue(speech)
 				else: _pending_speech = speech
 				return

@@ -50,8 +50,37 @@ func build(data: ELProfile, scene_id: String, values: Dictionary) -> bool:
 	settings = values
 	return _build_arena(scene_id)
 
+## Preferences also reach battlefields waiting in the cache. A board may be
+## revisited without being rebuilt, and the same scene can stay on screen
+## while Options changes its water, grain or shadows.
+func apply_settings(values: Dictionary) -> void:
+	settings = values
+	ELEffectLook.use(settings)
+	for kept: Dictionary in _arenas.values():
+		_apply_arena_settings(kept.arena, kept.effects)
+	if is_instance_valid(audio): audio.apply_volumes(settings)
+
+func _apply_arena_settings(target: ELArena, target_effects: ELCombatEffects) -> void:
+	if not is_instance_valid(target): return
+	if is_instance_valid(target.light):
+		var shadows := bool(settings.get("shadows", true))
+		# A traced scene keeps raster shadows off; retain the new preference
+		# for the moment tracing hands the scene back to the raster renderer.
+		if target.light.has_meta("traced_shadow"):
+			target.light.set_meta("traced_shadow", shadows)
+			target.light.shadow_enabled = false
+		else:
+			target.light.shadow_enabled = shadows
+		target.light.shadow_blur = 2.0 if settings.get("soft_shadows", false) else 1.0
+	target.set_detail(bool(settings.get("terrain_detail", false)))
+	target.set_water(bool(settings.get("enhanced_water", false)))
+	ELEffectLook.sync(target.environment_settings, target_effects)
+
 func _build_arena(scene_id: String) -> bool:
-	if scene_id == arena_id and is_instance_valid(arena): return true
+	if scene_id == arena_id and is_instance_valid(arena):
+		ELEffectLook.use(settings)
+		_apply_arena_settings(arena, effects)
+		return true
 	clear_units()
 	# The current battlefield waits aside; its sounds stop for good (an
 	# audio host leaving the tree releases its streams), so each showing
@@ -73,8 +102,6 @@ func _build_arena(scene_id: String) -> bool:
 		add_child(arena)
 		if not arena.build(profile, scene_id):
 			push_warning("Autochess arena: " + "; ".join(arena.errors))
-		arena.light.shadow_enabled = bool(settings.get("shadows", true))
-		arena.set_detail(bool(settings.get("terrain_detail", true)))
 		effects = ELCombatEffects.new()
 		add_child(effects)
 		effects.build(profile)
@@ -87,7 +114,7 @@ func _build_arena(scene_id: String) -> bool:
 	audio.paused = _muted
 	effects.set_arena(arena, audio.play)
 	ELEffectLook.use(settings)
-	ELEffectLook.sync(arena.environment_settings, effects)
+	_apply_arena_settings(arena, effects)
 	if not is_instance_valid(fire): _build_fire()
 	_place_fire()
 	for side: int in heroes:

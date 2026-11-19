@@ -94,6 +94,59 @@ const ADD_PLAIN_FUNCTION := """float sprite_add(float alpha) {
 	return alpha;
 }"""
 static var add_knee := 0.0
+## Atlas cells share an image, but must never borrow colour or opacity from
+## their neighbours. At smaller sizes the ordinary sampler can reach a mip
+## that has already averaged several cells together. Keep the original mip
+## chain and stop at the last level that still has whole texels per cell.
+## The two neighbouring mip levels are sampled inside their own half-texel
+## borders; this also avoids a visible step whenever the mip level changes.
+const ATLAS_FUNCTION := """uniform float atlas_max_lod = 0.0;
+vec4 sprite_atlas_level(sampler2D sheet, vec2 uv, vec2 slot, vec2 cells, float level) {
+	vec2 pixels = vec2(textureSize(sheet, int(level)));
+	vec2 inset = vec2(0.5) / pixels;
+	vec2 low = slot / cells + inset;
+	vec2 high = (slot + vec2(1.0)) / cells - inset;
+	return textureLod(sheet, clamp(uv, low, max(low, high)), level);
+}
+vec4 sprite_atlas(sampler2D sheet, vec2 uv, vec2 slot, vec2 cells) {
+	if (cells.x == 1.0 && cells.y == 1.0) return texture(sheet, uv);
+	vec2 pixels = vec2(textureSize(sheet, 0));
+	vec2 dx = dFdx(uv) * pixels;
+	vec2 dy = dFdy(uv) * pixels;
+	float lod = clamp(0.5 * log2(max(max(dot(dx, dx), dot(dy, dy)), 1.0)), 0.0, atlas_max_lod);
+	float lower = floor(lod);
+	float upper = min(lower + 1.0, atlas_max_lod);
+	vec4 a = sprite_atlas_level(sheet, uv, slot, cells, lower);
+	float blend = lod - lower;
+	if (upper == lower || blend == 0.0) return a;
+	vec4 b = sprite_atlas_level(sheet, uv, slot, cells, upper);
+	return mix(a, b, blend);
+}"""
+
+## Pure size calculation; odd cell dimensions stop before a mip would mix
+## adjacent frames. A single-cell sheet can use its complete original chain.
+static func atlas_lod_limit(size: Vector2i, grid: Vector2i) -> int:
+	if size.x < 1 or size.y < 1 or grid.x < 1 or grid.y < 1: return 0
+	var level := 0
+	while size.x > 1 or size.y > 1:
+		var next := Vector2i(maxi(size.x / 2, 1), maxi(size.y / 2, 1))
+		if (grid.x > 1 and (size.x % (grid.x * 2) != 0 or next.x < grid.x)) or (grid.y > 1 and (size.y % (grid.y * 2) != 0 or next.y < grid.y)): break
+		level += 1
+		size = next
+	return level
+
+static func set_atlas(material: ShaderMaterial, texture: Texture2D, grid: Vector2) -> void:
+	material.set_shader_parameter("atlas", texture)
+	material.set_shader_parameter("grid", grid)
+	var limit := 0
+	if texture != null:
+		# ImageTexture retains the source image; do this only when a material
+		# is made/reused, never per particle or render frame.
+		var image := texture.get_image()
+		if image != null:
+			limit = mini(atlas_lod_limit(image.get_size(), Vector2i(grid)), image.get_mipmap_count())
+	material.set_shader_parameter("atlas_max_lod", float(limit))
+
 ## Shaders made by make_sprite_shader: [WeakRef, source], rebuilt by set_soft
 ## and set_add_knee.
 static var _sprite_shaders: Array = []
@@ -101,7 +154,7 @@ static var _sprite_shaders: Array = []
 static func sprite_shader(code: String) -> String:
 	var function := SOFT_FUNCTION.replace("SOFT_RANGE", str(SOFT_RANGE)) if soft else HARD_FUNCTION
 	var add := ADD_FUNCTION.replace("ADD_KNEE", str(add_knee)) if add_knee > 0.0 else ADD_PLAIN_FUNCTION
-	return code.replace("SPRITE_SIZE_FUNCTION", SPRITE_SIZE_FUNCTION).replace("SOFT_FUNCTION", function).replace("ADD_FUNCTION", add)
+	return code.replace("SPRITE_SIZE_FUNCTION", SPRITE_SIZE_FUNCTION).replace("SOFT_FUNCTION", function).replace("ADD_FUNCTION", add).replace("ATLAS_FUNCTION", ATLAS_FUNCTION)
 
 ## A sprite shader that follows the soft particles preference while it lives.
 static func make_sprite_shader(code: String) -> Shader:
@@ -211,8 +264,7 @@ static func shade_twin(twin: MultiMeshInstance3D, atlas: Texture2D, grid: Vector
 	var casts := strength > 0.0 and atlas != null
 	if casts:
 		var material := twin.material_override as ShaderMaterial
-		material.set_shader_parameter("atlas", atlas)
-		material.set_shader_parameter("grid", grid)
+		set_atlas(material, atlas, grid)
 		material.set_shader_parameter("strength", strength)
 		material.set_shader_parameter("extent", extent)
 		if not twin.is_in_group(SHADOW_GROUP): twin.add_to_group(SHADOW_GROUP)
@@ -233,7 +285,7 @@ static func camera_extent(camera: Camera3D) -> float:
 static func shadow_shader() -> Shader:
 	if _shadow_shader == null:
 		_shadow_shader = Shader.new()
-		_shadow_shader.code = SHADOW_SHADER
+		_shadow_shader.code = SHADOW_SHADER.replace("ATLAS_FUNCTION", ATLAS_FUNCTION)
 	return _shadow_shader
 
 ## Drawn in the shadow pass only. The quads face the pass's camera (the
@@ -246,7 +298,7 @@ static func shadow_shader() -> Shader:
 const SHADOW_SHADER := """
 shader_type spatial;
 render_mode unshaded, cull_disabled, shadows_disabled, depth_draw_opaque;
-uniform sampler2D atlas : filter_linear_mipmap;
+uniform sampler2D atlas : filter_linear_mipmap, repeat_disable;
 uniform vec2 grid = vec2(1.0);
 uniform float strength = 0.5;
 uniform float opacity = 1.0;
@@ -254,6 +306,8 @@ uniform float extent = 0.5549581;
 uniform bool cells_scaled = false;
 varying float fade;
 varying flat float seed;
+varying flat vec2 atlas_slot;
+ATLAS_FUNCTION
 void vertex() {
 	float stretch = max(length(MODEL_MATRIX[0].xyz), 0.0001);
 	float cell = floor(length(MODEL_MATRIX[1].xyz) / (cells_scaled ? stretch : 1.0) - 0.5);
@@ -261,13 +315,14 @@ void vertex() {
 	MODELVIEW_MATRIX = VIEW_MATRIX * mat4(INV_VIEW_MATRIX[0], INV_VIEW_MATRIX[1], INV_VIEW_MATRIX[2], MODEL_MATRIX[3]);
 	MODELVIEW_MATRIX = MODELVIEW_MATRIX * mat4(vec4(size, 0.0, 0.0, 0.0), vec4(0.0, size, 0.0, 0.0), vec4(0.0, 0.0, size, 0.0), vec4(0.0, 0.0, 0.0, 1.0));
 	vec2 slot = vec2(mod(cell, grid.x), floor(cell / grid.x));
+	atlas_slot = vec2(slot.x, grid.y - 1.0 - slot.y);
 	UV = (UV + slot) / grid;
 	UV.y = 1.0 - UV.y;
 	fade = INSTANCE_CUSTOM.a * opacity * strength;
 	seed = fract(float(INSTANCE_ID) * 0.618034);
 }
 void fragment() {
-	float cover = texture(atlas, UV).a * fade;
+	float cover = sprite_atlas(atlas, UV, atlas_slot, grid).a * fade;
 	// A hashed threshold per shadow map pixel, shifted per puff.
 	uvec2 q = uvec2(FRAGCOORD.xy);
 	uint h = q.x * 1664525u + q.y * 1013904223u;
@@ -302,6 +357,45 @@ var error := ""
 ## MultiMesh instance data of each frame (16 floats per particle), built the
 ## first time the frame is drawn and shared by every effect using this file.
 var _instances: Dictionary = {}
+var _bounds_ready := false
+var _centre_bounds := AABB()
+var _largest_size := 0.0
+var _visible_capacity := -1
+
+## Stable map emitter capacity: the largest set of particles that can be
+## visible together. Summing each loop phase avoids the much looser bound
+## max_count * cycle_count, while retaining one GPU allocation for life.
+func visible_capacity() -> int:
+	if _visible_capacity >= 0: return _visible_capacity
+	_visible_capacity = max_count
+	if loop_end <= 0: return _visible_capacity
+	var phases := PackedInt32Array()
+	phases.resize(loop_end)
+	var last := mini(loop_end, frames) if closing_frame else frames
+	for frame in last:
+		phases[frame % loop_end] += starts[frame + 1] - starts[frame]
+	_visible_capacity = 0
+	for count: int in phases: _visible_capacity = maxi(_visible_capacity, count)
+	return _visible_capacity
+
+## Local bounds for shader-expanded billboard quads, including their full
+## diagonals for every camera/sun orientation. A MultiMesh's automatic bounds
+## see the packed atlas index as a scale and miss this custom shader geometry.
+## The map uses an orthographic camera, so this extent does not change with
+## zoom. Only source positions/sizes are scanned, once per decoded file.
+func sprite_bounds(extent := ORTHO_EXTENT) -> AABB:
+	if not _bounds_ready:
+		var low := Vector3(INF, INF, INF)
+		var high := -low
+		for i in mini(sizes.size(), positions.size() / 3):
+			var point := Vector3(positions[i * 3], positions[i * 3 + 2], -positions[i * 3 + 1])
+			if not point.is_finite() or not is_finite(sizes[i]): continue
+			low = low.min(point)
+			high = high.max(point)
+			_largest_size = maxf(_largest_size, absf(sizes[i]))
+		_centre_bounds = AABB(low, high - low) if low.is_finite() else AABB()
+		_bounds_ready = true
+	return _centre_bounds.grow(_largest_size * maxf(extent, 0.0) * sqrt(2.0) + 0.05)
 
 static func decode(bytes: PackedByteArray) -> ELParticleFile:
 	var file := ELParticleFile.new()

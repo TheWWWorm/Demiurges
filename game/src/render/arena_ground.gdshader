@@ -5,6 +5,9 @@ uniform sampler2D base_texture : source_color, filter_linear_mipmap_anisotropic,
 uniform sampler2D detail_texture : filter_linear_mipmap_anisotropic, repeat_enable;
 uniform float detail_tile_size = 2.0;
 uniform float detail_neutral = 0.0;
+// A shallow surface relief in world units. Derivatives reuse the sampled
+// detail signal, so this does not need a normal map or extra texture reads.
+uniform float detail_height : hint_range(0.0, 0.08) = 0.028;
 #include "res://src/render/arena_light.gdshaderinc"
 varying vec2 detail_uv;
 
@@ -22,6 +25,22 @@ void fragment() {
 	float fade = 1.0 - smoothstep(1.0, 4.0, footprint);
 	float relief = clamp((dot(grain, vec3(0.333333)) - detail_neutral) * 1.2, -0.1, 0.1);
 	ALBEDO = base.rgb * (1.0 + relief * fade);
+	// A surface-gradient bump works without authored tangent attributes,
+	// including the originals' slopes and mirrored UVs. Filter it away with
+	// the grain and limit the slope, so large texel steps never turn a flat
+	// floor into jagged rocks or crawl against a distant silhouette.
+	float height = (dot(grain, vec3(0.333333)) - detail_neutral) * detail_height * fade;
+	vec3 dx = dFdx(VERTEX);
+	vec3 dy = dFdy(VERTEX);
+	vec3 across_x = cross(dy, NORMAL);
+	vec3 across_y = cross(NORMAL, dx);
+	float surface_determinant = dot(dx, across_x);
+	vec3 gradient = dFdx(height) * across_x + dFdy(height) * across_y;
+	if (abs(surface_determinant) > 0.00000001) {
+		gradient /= surface_determinant;
+		gradient *= min(1.0, 0.35 / max(length(gradient), 0.00001));
+		NORMAL = normalize(NORMAL - gradient);
+	}
 	ALPHA = base.a;
 	ALPHA_SCISSOR_THRESHOLD = 0.5;
 	ROUGHNESS = 1.0;

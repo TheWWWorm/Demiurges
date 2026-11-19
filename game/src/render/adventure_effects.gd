@@ -13,6 +13,12 @@ extends Node3D
 ## Effects only sit where they were started; a script may turn one to an
 ## object's facing (OrientEffectByObject).
 const CACHE_LIMIT := 6
+## Combined loop buffers belong to this live map, not the global decoded-file
+## cache. This bounds the added cache; the existing source-frame preparation
+## cache remains intact so evicted long loops never redo per-particle script
+## work. Small frames can retain a full long loop within the same byte limit.
+const FRAME_CACHE_BYTES := 8 * 1024 * 1024
+const FRAME_CACHE_ENTRIES := 4096
 const RAIN_FILES := ["terrainpfx/rain.pfx", "terrainpfx/rainnocycle.pfx"]
 ## Second game: every additional building whose AdditionalBuildings row names
 ## an Effect runs it from the moment the building is made, whoever owns it
@@ -85,6 +91,7 @@ static var glow_level := 1.0
 static var _glowing: Array = []
 ## Files decoded ahead of use (keep_file), never evicted.
 static var _kept: Dictionary = {}
+static var _generations: Dictionary = {}
 
 var profile: ELProfile
 var enabled := true
@@ -95,6 +102,9 @@ var effects: Dictionary = {}
 ## Scripted point lights by name (ExStartLight).
 var lights: Dictionary = {}
 var _materials: Dictionary = {}
+var _frame_cache: Dictionary = {}
+var _frame_order: Array = []
+var _frame_bytes := 0
 var _rain_on_water := false
 var _shrine_session: ELAdventureSession
 var _shrines: Dictionary = {}
@@ -219,18 +229,10 @@ func _sync_spec(uid: int) -> void:
 	_cull(effect, camera.get_frustum() if camera != null else [])
 
 ## The box (effect space: x east, y up, z south) the particles of a file
-## ever reach.
+## ever reach, including the sprite corners. Centre-only bounds let broad
+## smoke and magic halos disappear while their edges were still on screen.
 static func _reach(file: ELParticleFile) -> AABB:
-	if file.has_meta(&"map_reach"): return file.get_meta(&"map_reach")
-	var low := Vector3(INF, INF, INF)
-	var high := -low
-	for i in file.alpha.size():
-		var point := Vector3(file.positions[i * 3], file.positions[i * 3 + 2], -file.positions[i * 3 + 1])
-		low = low.min(point)
-		high = high.max(point)
-	var box := AABB(low, high - low) if low.is_finite() and high.is_finite() else AABB()
-	file.set_meta(&"map_reach", box)
-	return box
+	return file.sprite_bounds()
 
 ## Hides an object effect whose reach (its "cull" sphere: centre in effect
 ## space, radius) is out of the camera's view, and shows it again when it
@@ -311,7 +313,6 @@ func start(name: String, entry: Dictionary, elapsed: float, draw_current := fals
 	if file == null or not file.error.is_empty() or file.frames < 1: return
 	var material := _material(file, data)
 	if material == null: return
-	var copies := 1 if file.loop_end <= 0 else ceili(float(file.frames) / file.loop_end)
 	var mesh := MultiMesh.new()
 	mesh.transform_format = MultiMesh.TRANSFORM_3D
 	mesh.use_custom_data = true
@@ -321,7 +322,10 @@ func start(name: String, entry: Dictionary, elapsed: float, draw_current := fals
 	var quad := QuadMesh.new()
 	quad.size = Vector2(2, 2)
 	mesh.mesh = quad
-	mesh.instance_count = file.max_count * copies
+	# Allocate once using the largest authored overlap, not the loose
+	# largest-frame times number-of-cycles estimate. Keep capacity stable so
+	# changing particle counts never reallocate the GPU buffer mid-animation.
+	mesh.instance_count = maxi(1, file.visible_capacity())
 	mesh.visible_instance_count = 0
 	var node := MultiMeshInstance3D.new()
 	node.multimesh = mesh
@@ -329,8 +333,9 @@ func start(name: String, entry: Dictionary, elapsed: float, draw_current := fals
 	# The original drew effects without shadows; a shadow-only twin below
 	# gives the blended ones a soft one.
 	node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	# Large spells reach about 45 units from their origin.
-	node.custom_aabb = AABB(Vector3(-64, -16, -64), Vector3(128, 96, 128))
+	# Bounds follow the decoded effect rather than a fixed arena-sized box:
+	# large spells stay visible and small distant effects can be culled.
+	node.custom_aabb = _reach(file)
 	# Script coordinates: x east, y north, z up, two units per cell.
 	node.position = Vector3(float(entry.x), float(entry.z), -float(entry.y))
 	var hidden := optional(entry)
@@ -346,13 +351,16 @@ func start(name: String, entry: Dictionary, elapsed: float, draw_current := fals
 	if rain and _rain_on_water and enabled: _publish_rain()
 	if draw_current: _advance(name, 0.0)
 
-## Decodes a particle file and builds its material while the map loads, so
-## its first appearance does not hitch (see keep_file).
+## Decodes a particle file and builds its material/bounds while the map
+## loads, so its first appearance does not hitch (see keep_file).
 func prepare(path: String, source: ELProfile = null) -> void:
 	var data := source if source != null else profile
 	keep_file(data, path)
 	var file := particle_file(data, path)
-	if file != null and file.error.is_empty() and file.frames > 0: _material(file, data)
+	if file != null and file.error.is_empty() and file.frames > 0:
+		_reach(file)
+		file.visible_capacity()
+		_material(file, data)
 
 func finish(name: String) -> void:
 	var effect: Variant = effects.get(name)
@@ -407,7 +415,7 @@ func _advance(name: String, delta: float) -> void:
 		return
 	# Hidden ambience and object effects out of view keep their clock but are
 	# not redrawn.
-	if frame == effect.frame or (effect.optional and not enabled) or (effect.has("cull") and not effect.node.visible): return
+	if frame == effect.frame or (effect.optional and not enabled) or not effect.node.is_visible_in_tree(): return
 	effect.frame = frame
 	_draw(effect, file.visible_frames(frame, loops))
 
@@ -415,12 +423,36 @@ func _advance(name: String, delta: float) -> void:
 func _draw(effect: Dictionary, frames: PackedInt32Array) -> void:
 	var file: ELParticleFile = effect.file
 	var mesh: MultiMesh = effect.node.multimesh
+	var data := _frame_data(file, frames)
+	var buffer: PackedFloat32Array = data.buffer
+	var capacity := buffer.size() / 16
+	if mesh.instance_count != capacity: mesh.instance_count = capacity
+	mesh.buffer = buffer
+	mesh.visible_instance_count = data.count
+
+## Source instance identity and the exact visible frame set distinguish
+## profiles, finite-loop tails and overlapping cycles. IDs avoid retaining
+## decoded files beyond their own LRU lifetime. Oversized buffers are drawn
+## but not retained; buffer bytes and entry count are both strictly bounded.
+func _frame_data(file: ELParticleFile, frames: PackedInt32Array) -> Dictionary:
+	var key := [file.get_instance_id(), frames]
+	if _frame_cache.has(key): return _frame_cache[key]
 	var buffer := PackedFloat32Array()
 	for frame: int in frames: buffer.append_array(file.instances(frame))
-	var count := mini(buffer.size() / 16, mesh.instance_count)
-	buffer.resize(mesh.instance_count * 16)
-	mesh.buffer = buffer
-	mesh.visible_instance_count = count
+	var count := buffer.size() / 16
+	var capacity := maxi(count, maxi(1, file.visible_capacity()))
+	buffer.resize(capacity * 16)
+	var data := {"buffer": buffer, "count": count}
+	var bytes := buffer.size() * 4
+	if bytes <= FRAME_CACHE_BYTES:
+		while not _frame_order.is_empty() and (_frame_bytes + bytes > FRAME_CACHE_BYTES or _frame_order.size() >= FRAME_CACHE_ENTRIES):
+			var oldest: Array = _frame_order.pop_front()
+			_frame_bytes -= (_frame_cache[oldest].buffer as PackedFloat32Array).size() * 4
+			_frame_cache.erase(oldest)
+		_frame_cache[key] = data
+		_frame_order.append(key)
+		_frame_bytes += bytes
+	return data
 
 ## Additive story sprites can light the traced map. Terrain effects use the
 ## same blend for weather such as rain, so it does not make them light sources.
@@ -432,12 +464,14 @@ func glow_sources() -> Array:
 		if effect.frame < 0 or not file.additive or ELSecondAmbience.is_terrain_effect(str(effect.entry.file)) or not node.is_visible_in_tree(): continue
 		if effect.get("glow_frame", -1) != effect.frame:
 			effect.glow_frame = effect.frame
-			var buffer := PackedFloat32Array()
-			for frame: int in file.visible_frames(effect.frame, int(effect.entry.get("loops", -1))):
-				buffer.append_array(file.instances(frame))
-			var atlas := (node.material_override as ShaderMaterial).get_shader_parameter("atlas") as Texture2D
-			var tints := ELCombatEffects._atlas_cell_tints(atlas, Vector2i(file.columns, file.rows))
-			var glows := ELCombatEffects._glow({"glow_tints": tints}, "", buffer, buffer.size() / 16)
+			var data := _frame_data(file, file.visible_frames(effect.frame, int(effect.entry.get("loops", -1))))
+			if not data.has("glows"):
+				var atlas := (node.material_override as ShaderMaterial).get_shader_parameter("atlas") as Texture2D
+				var tints := ELCombatEffects._atlas_cell_tints(atlas, Vector2i(file.columns, file.rows))
+				data.glows = ELCombatEffects._glow({"glow_tints": tints}, "", data.buffer, data.count)
+			# Saturation/budget adjustment mutates each patch; keep the shared
+			# cached result immutable for other emitters at the same phase.
+			var glows: Array = data.glows.duplicate(true)
 			var total := 0.0
 			for glow: Array in glows:
 				var colour := ELCombatEffects._saturate(glow[2])
@@ -452,7 +486,7 @@ func glow_sources() -> Array:
 
 func _material(file: ELParticleFile, data: ELProfile = null) -> ShaderMaterial:
 	if data == null: data = profile
-	var key := "%s|%s|%d|%d|%s" % [data.id, file.texture, file.columns, file.rows, file.additive]
+	var key := "%s#%d|%s|%d|%d|%s" % [data.id, data.generation, file.texture, file.columns, file.rows, file.additive]
 	if _materials.has(key): return _materials[key]
 	var name := file.texture.get_basename() if file.texture.to_lower().ends_with(".bmp") else file.texture
 	var texture := data.texture("Effects/" + name)
@@ -461,8 +495,7 @@ func _material(file: ELParticleFile, data: ELProfile = null) -> ShaderMaterial:
 		return null
 	var material := ShaderMaterial.new()
 	material.shader = _shader(file.additive)
-	material.set_shader_parameter("atlas", texture)
-	material.set_shader_parameter("grid", Vector2(file.columns, file.rows))
+	ELParticleFile.set_atlas(material, texture, Vector2(file.columns, file.rows))
 	material.render_priority = 10
 	if file.additive:
 		material.set_shader_parameter("glow", glow_level)
@@ -491,20 +524,38 @@ static func set_glow_level(value: float) -> void:
 ## cache's eviction (a large effect such as the battle dome would otherwise
 ## be decoded on the frame it appears).
 static func keep_file(data: ELProfile, path: String) -> void:
-	var key := data.id + ":" + ELArchive.key(path)
+	var key := cache_space(data) + ":" + ELArchive.key(path)
 	if _kept.has(key): return
 	var file := particle_file(data, path)
-	if file != null and file.error.is_empty(): _kept[key] = file
+	if file != null and file.error.is_empty() and data.generation >= int(_generations.get(data.id, -1)): _kept[key] = file
+
+## Match the combat cache's content-generation boundary. Reimporting an
+## edition drops old pinned decodes instead of rendering stale particles
+## forever; an old view finishing work cannot repopulate the new cache.
+static func cache_space(data: ELProfile) -> String:
+	var latest := int(_generations.get(data.id, -1))
+	if data.generation > latest:
+		_generations[data.id] = data.generation
+		if latest >= 0:
+			var prefix := data.id + "#"
+			for key: String in _kept.keys():
+				if key.begins_with(prefix): _kept.erase(key)
+			for key: String in _files.keys():
+				if key.begins_with(prefix):
+					_files.erase(key)
+					_order.erase(key)
+	return "%s#%d" % [data.id, data.generation]
 
 ## Decoded particle files, shared by every view of the same edition.
 static func particle_file(data: ELProfile, path: String) -> ELParticleFile:
-	var key := data.id + ":" + ELArchive.key(path)
+	var key := cache_space(data) + ":" + ELArchive.key(path)
 	if _kept.has(key): return _kept[key]
 	if _files.has(key):
 		_order.erase(key)
 		_order.append(key)
 		return _files[key]
 	var file := ELParticleFile.decode(data.read("pfx", ELArchive.key(path)))
+	if data.generation < int(_generations.get(data.id, -1)): return file
 	_files[key] = file
 	_order.append(key)
 	while _order.size() > CACHE_LIMIT: _files.erase(_order.pop_front())
@@ -513,14 +564,16 @@ static func particle_file(data: ELProfile, path: String) -> ELParticleFile:
 const SHADER := """
 shader_type spatial;
 render_mode unshaded, cull_disabled, depth_draw_never, shadows_disabled, BLEND;
-uniform sampler2D atlas : source_color, filter_linear_mipmap;
+uniform sampler2D atlas : source_color, filter_linear_mipmap, repeat_disable;
 uniform vec2 grid = vec2(1.0);
 uniform float glow = 1.0;
 varying vec4 tint;
 varying float sprite_extent;
+varying flat vec2 atlas_slot;
 SPRITE_SIZE_FUNCTION
 SOFT_FUNCTION
 ADD_FUNCTION
+ATLAS_FUNCTION
 void vertex() {
 	float size = sprite_half_extent(length(MODEL_MATRIX[0].xyz), PROJECTION_MATRIX);
 	sprite_extent = size;
@@ -528,6 +581,7 @@ void vertex() {
 	MODELVIEW_MATRIX = VIEW_MATRIX * mat4(INV_VIEW_MATRIX[0], INV_VIEW_MATRIX[1], INV_VIEW_MATRIX[2], MODEL_MATRIX[3]);
 	MODELVIEW_MATRIX = MODELVIEW_MATRIX * mat4(vec4(size, 0.0, 0.0, 0.0), vec4(0.0, size, 0.0, 0.0), vec4(0.0, 0.0, size, 0.0), vec4(0.0, 0.0, 0.0, 1.0));
 	vec2 slot = vec2(mod(cell, grid.x), floor(cell / grid.x));
+	atlas_slot = vec2(slot.x, grid.y - 1.0 - slot.y);
 	// Cells count up from the bottom row of the stored image; the sprite's top
 	// edge shows the lower edge of its cell.
 	UV = (UV + slot) / grid;
@@ -535,7 +589,7 @@ void vertex() {
 	tint = INSTANCE_CUSTOM;
 }
 void fragment() {
-	vec4 texel = texture(atlas, UV);
+	vec4 texel = sprite_atlas(atlas, UV, atlas_slot, grid);
 	ALBEDO = texel.rgb * tint.rgb * glow;
 	ALPHA = SPRITE_ADD(texel.a * tint.a * sprite_soft(SCREEN_UV, VERTEX.z, INV_PROJECTION_MATRIX, sprite_extent));
 }

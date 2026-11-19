@@ -26,6 +26,10 @@ func _ready() -> void:
 	visibility_changed.connect(func():
 		if not is_visible_in_tree(): _show_water_reflection(false))
 
+func _exit_tree() -> void:
+	_show_water_reflection(false)
+	if material != null: material.set_shader_parameter("water_reflection", null)
+
 func build(map: ELAdventureMap) -> bool:
 	var started := Time.get_ticks_usec()
 	if map.profile.terrain_tiles == null:
@@ -40,11 +44,11 @@ func build(map: ELAdventureMap) -> bool:
 	if cached.get("map") == map.id:
 		_cache = cached
 		atlas = cached.atlas
-		material = cached.material
+		material = _scene_material(cached.material)
 		animation_frames = cached.frames
 		combinations = cached.combinations
 		for y in range(0, map.height, CHUNK):
-			for x in range(0, map.width, CHUNK): _build_chunk(map, Vector2i(x, y), cached.cells, cached.plans, cached.material)
+			for x in range(0, map.width, CHUNK): _build_chunk(map, Vector2i(x, y), cached.cells, cached.plans, material)
 		build_usec = Time.get_ticks_usec() - started
 		return true
 	var keys := {}
@@ -133,11 +137,28 @@ func build(map: ELAdventureMap) -> bool:
 	_cache = {"map": map.id, "atlas": atlas, "frames": animation_frames, "combinations": combinations, "cells": cells, "plans": compositions, "material": material,
 		"water_masks_animate": map.profile.id == "el2"}
 	map.profile.adventure_terrain_cache = _cache
+	material = _scene_material(material)
 	for y in range(0, map.height, CHUNK):
 		for x in range(0, map.width, CHUNK):
 			_build_chunk(map, Vector2i(x, y), cells, compositions, material)
 	build_usec = Time.get_ticks_usec() - started
 	return true
+
+## Atlas pixels and composition plans are shared, but fog, colourless zones,
+## sunlight and a live viewport texture belong to one scene. A saved map can
+## be rebuilt while its previous view is still leaving the tree.
+static func _scene_material(source: ShaderMaterial) -> ShaderMaterial:
+	# Replay the immutable bindings with their declared shader types. The
+	# dimensions come from integer atlas layout calculations.
+	var copy := ShaderMaterial.new()
+	copy.shader = source.shader
+	copy.set_shader_parameter("tiles", source.get_shader_parameter("tiles"))
+	copy.set_shader_parameter("columns", int(source.get_shader_parameter("columns")))
+	copy.set_shader_parameter("tile_side", float(source.get_shader_parameter("tile_side")))
+	copy.set_shader_parameter("pitch", float(source.get_shader_parameter("pitch")))
+	copy.set_shader_parameter("tile_margin", float(source.get_shader_parameter("tile_margin")))
+	copy.set_shader_parameter("atlas_size", source.get_shader_parameter("atlas_size"))
+	return copy
 
 ## The atlas's pixel format. The Vulkan and D3D12 renderers sample no
 ## three-channel textures and would widen an RGB atlas on upload, on the main
@@ -206,21 +227,29 @@ func _update_water_reflection() -> void:
 		_reflection.positional_shadow_atlas_size = 0
 		_reflection.render_target_update_mode = SubViewport.UPDATE_DISABLED
 		add_child(_reflection)
-		_reflection.world_3d = source.get_world_3d()
 		_mirror_camera = Camera3D.new()
 		_mirror_camera.cull_mask = REFLECTION_LAYER
 		_reflection.add_child(_mirror_camera)
 		_mirror_camera.current = true
-		material.set_shader_parameter("water_reflection", _reflection.get_texture())
+	# A hidden/reparented map can resume with the existing viewport. Refresh
+	# its world and sampler after _exit_tree released the old live binding.
+	if _reflection.world_3d != source.get_world_3d(): _reflection.world_3d = source.get_world_3d()
+	if not _mirror_active: material.set_shader_parameter("water_reflection", _reflection.get_texture())
 	var dimensions := viewport.get_texture().get_size()
 	var scale_factor := minf(0.75, 1024.0 / maxf(dimensions.x, dimensions.y))
 	_reflection.size = Vector2i((dimensions * scale_factor).round()).max(Vector2i(2, 2))
+	# Respect AA off, and soften reflected silhouettes when the main view
+	# uses MSAA. The smaller reflection needs at most 2x, even with 4x/8x on
+	# the main viewport; temporal AA would smear moving reflected figures.
+	_reflection.msaa_3d = Viewport.MSAA_DISABLED if viewport.msaa_3d == Viewport.MSAA_DISABLED else Viewport.MSAA_2X
 	_mirror_camera.keep_aspect = source.keep_aspect
 	_mirror_camera.projection = source.projection
+	_mirror_camera.frustum_offset = Vector2(-source.frustum_offset.x, source.frustum_offset.y)
 	_mirror_camera.fov = source.fov
 	_mirror_camera.size = source.size
 	_mirror_camera.near = source.near
 	_mirror_camera.far = source.far
+	_mirror_camera.environment = source.environment
 	var pose := source.get_camera_transform()
 	var flip := Vector3(1.0, -1.0, 1.0)
 	# Reflect around the map's y = 0 plane, then reverse the horizontal axis
@@ -230,10 +259,12 @@ func _update_water_reflection() -> void:
 	_show_water_reflection(true)
 
 func _show_water_reflection(on: bool) -> void:
-	if on == _mirror_active: return
-	_mirror_active = on
-	_reflection.render_target_update_mode = SubViewport.UPDATE_ALWAYS if on else SubViewport.UPDATE_DISABLED
-	material.set_shader_parameter("water_reflection_enabled", on)
+	var active := on and _reflection != null
+	if active == _mirror_active: return
+	_mirror_active = active
+	if _reflection != null:
+		_reflection.render_target_update_mode = SubViewport.UPDATE_ALWAYS if _mirror_active else SubViewport.UPDATE_DISABLED
+	if material != null: material.set_shader_parameter("water_reflection_enabled", _mirror_active)
 
 func _water_in_view(source: Camera3D) -> bool:
 	var frustum := source.get_frustum()

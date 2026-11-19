@@ -768,8 +768,12 @@ func _step_emitter(emitter: Dictionary, delta: float) -> void:
 			_release(emitter)
 			return
 		var model: ELModel = emitter.follow
-		emitter.node.transform = _figure_transform(model)
 		emitter.node.visible = model.is_visible_in_tree()
+		# Keep the figure's animation clock authoritative, but do not rebuild
+		# or upload an invisible attachment. The saved draw frame deliberately
+		# stays stale so revealing it samples the current pose immediately.
+		if not emitter.node.is_visible_in_tree(): return
+		emitter.node.transform = _figure_transform(model)
 		var animation_frame := roundi(model.frame)
 		if animation_frame != int(emitter.frame): _draw(emitter, animation_frame)
 		return
@@ -778,11 +782,13 @@ func _step_emitter(emitter: Dictionary, delta: float) -> void:
 	if not emitter.loop and frame >= int(emitter.life):
 		_release(emitter)
 		return
-	if is_instance_valid(emitter.visibility_link): emitter.node.visible = emitter.visibility_link.is_visible_in_tree()
 	if emitter.loop and emitter.entry.file.loop_end == 0: frame %= int(emitter.life)
 	if frame != int(emitter.frame):
 		if not emitter.track.is_empty(): _apply_emitter_track(emitter, frame)
-		_draw(emitter, frame)
+	# Apply the scenery link after opacity: a bright opacity key must not
+	# reveal particles belonging to a hidden prop. Lifetime still advances.
+	emitter.node.visible = float(emitter.opacity) > 0.004 and (not is_instance_valid(emitter.visibility_link) or emitter.visibility_link.is_visible_in_tree())
+	if frame != int(emitter.frame) and emitter.node.is_visible_in_tree(): _draw(emitter, frame)
 
 ## Spell particles keep their placement matrix. The native matrix draw reads
 ## billboard size from the particle file and opacity from the .fx track.
@@ -801,6 +807,7 @@ func _track_emitter(emitter: Dictionary, track: PackedFloat32Array) -> void:
 		own.render_priority = shared.render_priority
 		own.set_shader_parameter("atlas", shared.get_shader_parameter("atlas"))
 		own.set_shader_parameter("grid", shared.get_shader_parameter("grid"))
+		own.set_shader_parameter("atlas_max_lod", shared.get_shader_parameter("atlas_max_lod"))
 		own.set_shader_parameter("glow", shared.get_shader_parameter("glow"))
 		emitter.node.material_override = own
 	emitter.opacity = -1.0
@@ -1693,7 +1700,7 @@ static func cached_files(data: ELProfile) -> int:
 static func _material(data: ELProfile, file: ELParticleFile, ambient: bool, figure := false) -> ShaderMaterial:
 	var capped := ambient and file.additive
 	var held := figure and file.additive and not capped
-	var key := "%s|%s|%s|%s" % [cache_space(data), file.texture.to_lower(), "arena" if capped else ("figure" if held else "effect"), file.additive]
+	var key := "%s|%s|%d|%d|%s|%s" % [cache_space(data), file.texture.to_lower(), file.columns, file.rows, "arena" if capped else ("figure" if held else "effect"), file.additive]
 	if _materials.has(key): return _materials[key]
 	var name := file.texture.get_basename() if file.texture.to_lower().ends_with(".bmp") else file.texture
 	var texture := data.texture("Effects/" + name)
@@ -1702,8 +1709,7 @@ static func _material(data: ELProfile, file: ELParticleFile, ambient: bool, figu
 		return null
 	var material := ShaderMaterial.new()
 	material.shader = _shader(file.additive)
-	material.set_shader_parameter("atlas", texture)
-	material.set_shader_parameter("grid", Vector2(file.columns, file.rows))
+	ELParticleFile.set_atlas(material, texture, Vector2(file.columns, file.rows))
 	material.render_priority = 10
 	var glow := minf(glow_level, ARENA_HDR_LIMIT) if capped else (minf(glow_level, FIGURE_HDR_LIMIT) if held else glow_level)
 	material.set_shader_parameter("glow", glow if file.additive else 1.0)
@@ -1747,15 +1753,17 @@ func _set_vent_glow(item: Dictionary) -> void:
 const SHADER := """
 shader_type spatial;
 render_mode unshaded, cull_disabled, depth_draw_never, shadows_disabled, BLEND;
-uniform sampler2D atlas : source_color, filter_linear_mipmap;
+uniform sampler2D atlas : source_color, filter_linear_mipmap, repeat_disable;
 uniform vec2 grid = vec2(1.0);
 uniform float opacity = 1.0;
 uniform float glow = 1.0;
 varying vec4 tint;
 varying float sprite_extent;
+varying flat vec2 atlas_slot;
 SPRITE_SIZE_FUNCTION
 SOFT_FUNCTION
 ADD_FUNCTION
+ATLAS_FUNCTION
 void vertex() {
 	float stretch = max(length(MODEL_MATRIX[0].xyz), 0.0001);
 	float cell = floor(length(MODEL_MATRIX[1].xyz) / stretch - 0.5);
@@ -1764,12 +1772,13 @@ void vertex() {
 	MODELVIEW_MATRIX = VIEW_MATRIX * mat4(INV_VIEW_MATRIX[0], INV_VIEW_MATRIX[1], INV_VIEW_MATRIX[2], MODEL_MATRIX[3]);
 	MODELVIEW_MATRIX = MODELVIEW_MATRIX * mat4(vec4(size, 0.0, 0.0, 0.0), vec4(0.0, size, 0.0, 0.0), vec4(0.0, 0.0, size, 0.0), vec4(0.0, 0.0, 0.0, 1.0));
 	vec2 slot = vec2(mod(cell, grid.x), floor(cell / grid.x));
+	atlas_slot = vec2(slot.x, grid.y - 1.0 - slot.y);
 	UV = (UV + slot) / grid;
 	UV.y = 1.0 - UV.y;
 	tint = INSTANCE_CUSTOM;
 }
 void fragment() {
-	vec4 texel = texture(atlas, UV);
+	vec4 texel = sprite_atlas(atlas, UV, atlas_slot, grid);
 	ALBEDO = texel.rgb * tint.rgb * glow;
 	ALPHA = SPRITE_ADD(texel.a * tint.a * opacity * sprite_soft(SCREEN_UV, VERTEX.z, INV_PROJECTION_MATRIX, sprite_extent));
 }

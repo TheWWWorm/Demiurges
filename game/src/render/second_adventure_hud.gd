@@ -90,7 +90,7 @@ var _fog_explored := PackedByteArray()
 var _markers: Dictionary = {}
 var _progress := 0.0
 var _signature := ""
-var _marks := ""
+var _marks := PackedInt64Array()
 var _art: ELAdventureArt
 ## Map hover tooltip (ELSecondMapTooltips); above the panel art.
 var map_tooltip: ELSecondMapTooltip
@@ -332,6 +332,10 @@ func minimap_cell(point: Vector2) -> Vector2:
 func _sync_minimap_fog() -> void:
 	if minimap_fog == null or ELFog.revision(state) == _fog_revision: return
 	_fog_revision = ELFog.revision(state)
+	# A console reveal changes visibility, not explored pixels. Apply it
+	# before the unchanged-image fast path, and defer hidden uploads.
+	minimap_fog.visible = ELFog.active(state, MINIMAP_LOCAL_PLAYER)
+	if not minimap_fog.visible: return
 	var cells := state.map.width * state.map.height
 	var mask := state.explored
 	if _fog_texture != null and mask == _fog_explored: return
@@ -379,7 +383,7 @@ func _draw_minimap_marks() -> void:
 	var hero := state.object(hero_id)
 	if not hero.is_empty():
 		var at := area.position + Vector2(float(hero.x) + 0.5, map.height - float(hero.y) - 0.5) * cell
-		minimap_marks.draw_arc(at, 5, 0, TAU, 20, Color("d8b058"), 1.5)
+		minimap_marks.draw_arc(at, 5, 0, TAU, 20, Color("d8b058"), 1.5, true)
 
 # --- Hero panel ---------------------------------------------------------------
 
@@ -506,9 +510,23 @@ func refresh(hero_uid: int, can_act: bool) -> void:
 		portrait.queue_redraw()
 	buttons.AdvPanelHandBagBtn.disabled = not can_act or hero.is_empty()
 	_sync_minimap_fog()
-	var marks := "%d/%d" % [hero_id, ELFog.revision(state)]
-	for item: Dictionary in _markers.values():
-		if item.get("type") == "hero": marks += "/%d,%d,%s" % [item.x, item.y, item.alive]
+	_sync_minimap_marks()
+
+## Compare compact values instead of building a growing string every frame.
+## State is read directly so visibility, ownership and placement changes
+## cannot leave stale dots even when no fog tile changes at the same time.
+func _sync_minimap_marks() -> void:
+	var marks := PackedInt64Array([hero_id, ELFog.revision(state)])
+	for id: int in state.players:
+		marks.append(id)
+		marks.append(hash(state.players[id].get("color", "")))
+	for id: int in _markers:
+		var item: Dictionary = _markers[id]
+		marks.append(id)
+		marks.append(int(item.get("x", 0)))
+		marks.append(int(item.get("y", 0)))
+		marks.append(int(item.get("owner", 0)))
+		marks.append(int(item.get("alive", false)) | (int(item.get("visible", true)) << 1) | (int(item.get("placed", true)) << 2))
 	if marks != _marks:
 		_marks = marks
 		minimap_marks.queue_redraw()

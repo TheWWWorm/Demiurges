@@ -781,6 +781,9 @@ func _restore_effect_lights() -> void:
 ## (instanced objects and the map's ground) under `node`.
 func _collect(node: Node) -> void:
 	for child in node.get_children():
+		# Ambient dressing is raster-only and should not consume ray geometry,
+		# even when the renderer scans an arena rebuilt from its cache.
+		if child.has_meta("raster_only"): continue
 		if child is ELCombatEffects:
 			for pool: Array[Dictionary] in [child.objects, child.arena_objects]:
 				for item: Dictionary in pool:
@@ -999,11 +1002,22 @@ func _free_layer(alpha: bool) -> int:
 		_layer_ops.append(["material", id, material[0]])
 	return chosen
 
-## Keep the original mask at the ray atlas's resolution when the asset has it.
+## Keep a prepared mask at the ray atlas's resolution. Authored levels take
+## priority, followed by the coverage-preserving chain made when a cutout
+## texture loads. Resizing its full-resolution mask here would erase the
+## thin silhouettes that the raster mipmaps preserve. Reuse those bytes;
+## no mask filtering or coverage search belongs on the tracing hot path.
 static func _authored_layer(texture: Texture2D, image: Image) -> Image:
-	if not texture.has_meta(ELTexture.AUTHORED_MASK_MIPS) or image.get_width() != image.get_height(): return null
+	if image == null or image.get_width() != image.get_height(): return null
+	if image.is_compressed() or image.get_format() != Image.FORMAT_RGBA8: return null
+	# Metadata can outlive a replaced image. A traced array layer needs the
+	# complete mip chain; a base-only image must use the ordinary fallback.
+	if not image.has_mipmaps(): return null
+	var levels := int(texture.get_meta(ELTexture.AUTHORED_MASK_MIPS,
+		texture.get_meta(ELTexture.COVERAGE_MASK_MIPS, 0)))
+	levels = mini(levels, image.get_mipmap_count() + 1)
 	var side := image.get_width()
-	for level in int(texture.get_meta(ELTexture.AUTHORED_MASK_MIPS)):
+	for level in levels:
 		if side == LAYER_SIZE:
 			return Image.create_from_data(side, side, true, Image.FORMAT_RGBA8, image.get_data().slice(image.get_mipmap_offset(level)))
 		side /= 2

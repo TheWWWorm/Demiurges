@@ -248,10 +248,10 @@ func _particle_shadows() -> void:
 	var sheets := {"smoke.pfx": _particle("SmokeVoulcan.bmp", false), "fire.pfx": _particle("Fire.bmp", true), "terrainpfx/ash.pfx": _particle("SmokeBlack.bmp", false)}
 	for path: String in sheets:
 		var file: ELParticleFile = sheets[path]
-		ELAdventureEffects._kept[profile.id + ":" + path] = file
+		ELAdventureEffects._kept[ELAdventureEffects.cache_space(profile) + ":" + path] = file
 		var material := ShaderMaterial.new()
 		material.set_shader_parameter("atlas", atlas)
-		map._materials["%s|%s|%d|%d|%s" % [profile.id, file.texture, file.columns, file.rows, file.additive]] = material
+		map._materials["%s#%d|%s|%d|%d|%s" % [profile.id, profile.generation, file.texture, file.columns, file.rows, file.additive]] = material
 		map.start(path, {"file": path, "x": 0.0, "y": 0.0, "z": 0.0}, 0.0, true)
 	var smoke := _twin(map.effects.get("smoke.pfx", {}))
 	check(smoke != null and ELParticleFile.twin_casts(smoke) and smoke.visible and smoke.cast_shadow == GeometryInstance3D.SHADOW_CASTING_SETTING_SHADOWS_ONLY, "map smoke gets a shadow-only twin")
@@ -277,7 +277,7 @@ func _particle_shadows() -> void:
 		for use: String in ["effect", "arena"]:
 			var material := ShaderMaterial.new()
 			material.set_shader_parameter("atlas", atlas)
-			ELCombatEffects._materials["%s|%s|%s|%s" % [space, file.texture.to_lower(), use, file.additive]] = material
+			ELCombatEffects._materials["%s|%s|%d|%d|%s|%s" % [space, file.texture.to_lower(), file.columns, file.rows, use, file.additive]] = material
 	var gas := battle._spawn("gas.pfx", false, 30, Transform3D.IDENTITY)
 	check(not gas.is_empty() and ELParticleFile.twin_casts(gas.shadow) and (gas.shadow as MultiMeshInstance3D).visible, "a battle's gas casts a shadow")
 	battle._release(gas)
@@ -290,7 +290,7 @@ func _particle_shadows() -> void:
 	var quiet := battle._spawn("gas.pfx", false, 30, Transform3D.IDENTITY)
 	check(not quiet.is_empty() and not (quiet.shadow as MultiMeshInstance3D).visible, "battle gas casts none with the shadows preference off")
 	ELEffectLook.use({})
-	for path: String in sheets: ELAdventureEffects._kept.erase(profile.id + ":" + path)
+	for path: String in sheets: ELAdventureEffects._kept.erase(ELAdventureEffects.cache_space(profile) + ":" + path)
 	ELCombatEffects._forget_edition(profile.id)
 	map.queue_free()
 	battle.queue_free()

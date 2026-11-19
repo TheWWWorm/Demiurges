@@ -8,7 +8,7 @@ const LAYER := -10
 const AMOUNTS := [0.0, 0.45, 0.9]
 const SHADER := """
 shader_type canvas_item;
-uniform sampler2D screen : hint_screen_texture, filter_nearest;
+uniform sampler2D screen : hint_screen_texture, filter_nearest, repeat_disable;
 uniform float amount = 0.45;
 void fragment() {
 	vec2 px = SCREEN_PIXEL_SIZE;
@@ -22,7 +22,9 @@ void fragment() {
 	// Less sharpening where the neighbourhood already has strong contrast.
 	vec3 weight = sqrt(clamp(min(low, 1.0 - high) / max(high, vec3(1e-4)), 0.0, 1.0)) * (-1.0 / mix(8.0, 5.0, amount));
 	vec3 result = (c + (n + s + e + w) * weight) / (1.0 + 4.0 * weight);
-	COLOR = vec4(clamp(result, 0.0, 1.0), 1.0);
+	// Keep detail within the neighbourhood's colour range. The unrestricted
+	// high-pass produced dark/bright outlines beside otherwise flat edges.
+	COLOR = vec4(clamp(result, low, high), 1.0);
 }
 """
 var rect: ColorRect

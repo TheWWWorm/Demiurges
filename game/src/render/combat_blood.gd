@@ -7,12 +7,14 @@ extends Node3D
 ## figure's `Blood` material (creature and hero tables): red for Alive, dark oil
 ## for Mech, green for Plant and blue for Unmaterial, Clrless or anything else.
 ## Positions and speeds use the original combat units (x east, y north, z up),
-## converted with ELFigure.vector when drawn. Drops run on a 30 Hz tick.
+## converted with ELFigure.vector when drawn. Drops run on a 30 Hz tick;
+## their displayed positions interpolate between ticks for smooth motion.
 
 const TICK := 1.0 / 30.0
 const DROPS_PER_BURST := 45
 const DROP_LIMIT := 300
 const PRINTS_PER_BURST := 16
+const PRINT_LIMIT := 256
 ## Print timeline in seconds: hidden, growing, holding, fading.
 const PRINT_SHOW := 0.3
 const PRINT_GROWN := 0.8
@@ -46,6 +48,18 @@ var arena: ELArena
 var _drop_node: MultiMeshInstance3D
 var _print_node: MultiMeshInstance3D
 var _clock := 0.0
+var _drops_dirty := false
+var _prints_dirty := false
+
+func _ready() -> void:
+	set_process(not drops.is_empty() or not prints.is_empty())
+
+func _notification(what: int) -> void:
+	# Hidden boards keep their original clocks, but defer RenderingServer
+	# updates until visible. Held prints need an explicit refresh on reveal.
+	if what == NOTIFICATION_VISIBILITY_CHANGED and is_visible_in_tree():
+		if _drops_dirty: _draw_drops()
+		if _prints_dirty: _draw_prints()
 
 func build(profile: ELProfile, battle_arena: ELArena, seed_value := 0, edition := "el1") -> bool:
 	arena = battle_arena
@@ -59,7 +73,7 @@ func build(profile: ELProfile, battle_arena: ELArena, seed_value := 0, edition :
 	# Prints lie flat on the ground and use one of the round splats.
 	var flat := PlaneMesh.new()
 	flat.size = Vector2(2, 2)
-	_print_node = _layer(flat, _material(PRINT_SHADER, print_texture), 256)
+	_print_node = _layer(flat, _material(PRINT_SHADER, print_texture), PRINT_LIMIT)
 	return true
 
 func _layer(mesh: PrimitiveMesh, material: ShaderMaterial, limit: int) -> MultiMeshInstance3D:
@@ -83,7 +97,7 @@ func _material(code: String, texture: Texture2D) -> ShaderMaterial:
 	shader.code = ELParticleFile.sprite_shader(code)
 	var material := ShaderMaterial.new()
 	material.shader = shader
-	material.set_shader_parameter("atlas", texture)
+	ELParticleFile.set_atlas(material, texture, Vector2(4, 4))
 	material.render_priority = 4
 	return material
 
@@ -122,11 +136,13 @@ func set_enabled(value: bool) -> void:
 	if not value:
 		prints.clear()
 		_draw_prints()
+		set_process(not drops.is_empty())
 
 ## A figure dies: `origin` is its body point in Godot space; `material` is its
 ## `Blood` value (second game only).
 func burst(origin: Vector3, material := "") -> void:
 	if not enabled or _drop_node == null: return
+	set_process(true)
 	var cells := look(material)
 	var prints_cells: Array = cells.prints
 	var at := Vector3(origin.x, -origin.z, origin.y)  # original x, y, z
@@ -140,7 +156,7 @@ func burst(origin: Vector3, material := "") -> void:
 		var speed := source.x * 0.5 + rng.randf() * source.x
 		var spread := deg_to_rad(10.0) * source.y
 		var angle := source.y - spread + rng.randf() * spread * 2.0
-		drops.append({"p": at, "v": Vector3(sin(angle) * speed, cos(angle) * speed, 0.0),
+		drops.append({"p": at, "previous": at, "v": Vector3(sin(angle) * speed, cos(angle) * speed, 0.0),
 			"size": 0.1 + rng.randf() * 0.1, "gravity": -0.18 + rng.randf() * 0.12,
 			"terminal": -0.6 + rng.randf() * 0.4, "floor": ground, "cell": cells.drop})
 	for i in PRINTS_PER_BURST:
@@ -153,48 +169,62 @@ func burst(origin: Vector3, material := "") -> void:
 			y += rng.randf() * 3.0 - 1.5
 		var centre := ELFigure.vector(Vector3(x, y, 0.0))
 		centre.y = (arena.ground_height(centre.x, centre.z) if arena != null else 0.0) + PRINT_LIFT
+		var cell: Vector2i = prints_cells[rng.randi() % prints_cells.size()]
+		# Vary the orientation without drawing from the established stream:
+		# an added cosmetic rotation must not move later drops or change cells.
+		var angle := float(hash([rng.state, centre, i]) & 0xffff) * (TAU / 65536.0) - PI
 		prints.append({"at": centre, "age": 0.0, "half": 0.0, "rate": scale, "alpha": 1.0,
-			"cell": prints_cells[rng.randi() % prints_cells.size()]})
+			"yaw": angle, "cell": cell})
+	# A crowded battle must show its newest impact. Keeping invisible excess
+	# prints behind the first 256 hid later deaths until old stains expired.
+	if prints.size() > PRINT_LIMIT:
+		prints = prints.slice(prints.size() - PRINT_LIMIT)
 	_draw_drops()
 	_draw_prints()
 
 func clear() -> void:
 	drops.clear()
 	prints.clear()
+	_clock = 0.0
 	_draw_drops()
 	_draw_prints()
+	set_process(false)
 
 func _process(delta: float) -> void:
 	if not drops.is_empty():
 		_clock += delta
-		var stepped := false
 		while _clock >= TICK:
 			_clock -= TICK
 			_step_drops()
-			stepped = true
-		if stepped: _draw_drops()
+		_draw_drops()
 	else:
 		_clock = 0.0
 	if not prints.is_empty():
 		advance_prints(delta)
+	if drops.is_empty() and prints.is_empty(): set_process(false)
 
 func _step_drops() -> void:
-	var alive: Array[Dictionary] = []
-	for drop: Dictionary in drops:
+	var count := 0
+	for i in drops.size():
+		var drop: Dictionary = drops[i]
 		var p: Vector3 = drop.p
 		if p.z < drop.floor: continue
 		var v: Vector3 = drop.v
+		drop.previous = p
 		drop.p = p + v
 		v.z = maxf(v.z + float(drop.gravity), float(drop.terminal))
 		drop.v = v
-		alive.append(drop)
-	drops = alive
+		if count != i: drops[count] = drop
+		count += 1
+	# Preserve order without allocating a replacement array on every tick.
+	drops.resize(count)
 
 ## Print timeline: hidden, then growing to half its rate, held, then fading.
 func advance_prints(delta: float) -> void:
-	var kept: Array[Dictionary] = []
+	var count := 0
 	var changed := false
-	for mark: Dictionary in prints:
+	for i in prints.size():
+		var mark: Dictionary = prints[i]
 		var before: float = mark.age
 		var age := before + delta
 		mark.age = age
@@ -207,29 +237,41 @@ func advance_prints(delta: float) -> void:
 		mark.alpha = maxf(0.0, float(mark.alpha) - fade * 0.2)
 		# Held prints need no redraw.
 		changed = changed or grow > 0.0 or fade > 0.0 or (before < PRINT_SHOW and age >= PRINT_SHOW)
-		kept.append(mark)
-	prints = kept
+		if count != i: prints[count] = mark
+		count += 1
+	prints.resize(count)
 	if changed: _draw_prints()
 
 func _draw_drops() -> void:
+	if _drop_node == null: return
+	_drops_dirty = is_inside_tree() and not is_visible_in_tree()
+	if _drops_dirty: return
 	var multimesh := _drop_node.multimesh
 	var count := mini(drops.size(), multimesh.instance_count)
 	for i in count:
 		var drop: Dictionary = drops[i]
 		var size: float = drop.size
-		multimesh.set_instance_transform(i, Transform3D(Basis.from_scale(Vector3.ONE * size), ELFigure.vector(drop.p)))
+		multimesh.set_instance_transform(i, Transform3D(Basis.from_scale(Vector3.ONE * size), drop_position(drop)))
 		var cell: Vector2i = drop.cell
 		multimesh.set_instance_custom_data(i, Color(cell.x * 0.25, cell.y * 0.25, 0, 1))
 	multimesh.visible_instance_count = count
 
+## The displayed position between two authored 30 Hz samples (Godot space).
+func drop_position(drop: Dictionary) -> Vector3:
+	var previous: Vector3 = drop.get("previous", drop.p)
+	return ELFigure.vector(previous.lerp(drop.p, clampf(_clock / TICK, 0.0, 1.0)))
+
 func _draw_prints() -> void:
 	if _print_node == null: return
+	_prints_dirty = is_inside_tree() and not is_visible_in_tree()
+	if _prints_dirty: return
 	var multimesh := _print_node.multimesh
 	var count := 0
 	for mark: Dictionary in prints:
 		if mark.age < PRINT_SHOW or count >= multimesh.instance_count: continue
 		var half: float = mark.half
-		multimesh.set_instance_transform(count, Transform3D(Basis.from_scale(Vector3(half, 1.0, half)), mark.at))
+		var angle := float(mark.get("yaw", 0.0))
+		multimesh.set_instance_transform(count, Transform3D(Basis(Vector3.UP, angle).scaled(Vector3(half, 1.0, half)), mark.at))
 		var cell: Vector2i = mark.cell
 		multimesh.set_instance_custom_data(count, Color(cell.x * 0.25, cell.y * 0.25, 0, float(mark.alpha)))
 		count += 1
@@ -252,16 +294,20 @@ func visible_prints() -> int:
 const DROP_SHADER := """
 shader_type spatial;
 render_mode unshaded, cull_disabled, depth_draw_never, shadows_disabled, blend_mix;
-uniform sampler2D atlas : source_color, filter_linear_mipmap;
+uniform sampler2D atlas : source_color, filter_linear_mipmap, repeat_disable;
+uniform vec2 grid = vec2(4.0);
+varying flat vec2 atlas_slot;
 SPRITE_SIZE_FUNCTION
+ATLAS_FUNCTION
 void vertex() {
 	float size = sprite_half_extent(length(MODEL_MATRIX[0].xyz), PROJECTION_MATRIX);
 	MODELVIEW_MATRIX = VIEW_MATRIX * mat4(INV_VIEW_MATRIX[0], INV_VIEW_MATRIX[1], INV_VIEW_MATRIX[2], MODEL_MATRIX[3]);
 	MODELVIEW_MATRIX = MODELVIEW_MATRIX * mat4(vec4(size, 0.0, 0.0, 0.0), vec4(0.0, size, 0.0, 0.0), vec4(0.0, 0.0, size, 0.0), vec4(0.0, 0.0, 0.0, 1.0));
 	UV = UV * 0.25 + INSTANCE_CUSTOM.rg;
+	atlas_slot = floor(INSTANCE_CUSTOM.rg * 4.0 + vec2(0.001));
 }
 void fragment() {
-	vec4 texel = texture(atlas, UV);
+	vec4 texel = sprite_atlas(atlas, UV, atlas_slot, grid);
 	ALBEDO = texel.rgb;
 	ALPHA = texel.a;
 }
@@ -270,14 +316,18 @@ void fragment() {
 const PRINT_SHADER := """
 shader_type spatial;
 render_mode unshaded, cull_disabled, depth_draw_never, shadows_disabled, blend_mix;
-uniform sampler2D atlas : source_color, filter_linear_mipmap;
+uniform sampler2D atlas : source_color, filter_linear_mipmap, repeat_disable;
+uniform vec2 grid = vec2(4.0);
 varying float fade;
+varying flat vec2 atlas_slot;
+ATLAS_FUNCTION
 void vertex() {
 	UV = UV * 0.25 + INSTANCE_CUSTOM.rg;
+	atlas_slot = floor(INSTANCE_CUSTOM.rg * 4.0 + vec2(0.001));
 	fade = INSTANCE_CUSTOM.a;
 }
 void fragment() {
-	vec4 texel = texture(atlas, UV);
+	vec4 texel = sprite_atlas(atlas, UV, atlas_slot, grid);
 	ALBEDO = texel.rgb;
 	ALPHA = texel.a * fade;
 }
