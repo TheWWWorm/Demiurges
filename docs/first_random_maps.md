@@ -196,6 +196,65 @@ boundary figures use the ten runs from the five overland presets.
 | Median scenery objects per 100 map cells | 8.5 | 21.7 |
 | Tree objects within three tiles of a road | 18% | 32% |
 
+### Creature placement and passability
+
+The creature survey loaded all 37 stock missions and the same 22 generated
+presets and seeds at the middle of the five difficulty levels. It used the
+game's terrain costs, rotated object footprints, active creature zones, and
+naval crossings at mission start, with the standard interception radius.
+Hidden creatures, dungeon occupants, and later scripted spawns are outside
+the survey.
+
+A creature occupies one tile. Its interception zone usually reaches the
+eight neighboring tiles that a hero can stand on. Entering a hostile zone
+stops movement and queues a duel. Shore, scenery, structures, and other
+actors can trim this zone. A tile can therefore be legal to enter and still
+trigger combat. On naval maps the land guard's zone stays on land, and the
+route search also checks both sides of a diagonal and the exact harbor links.
+
+| Measure at mission start | Stock single | Stock multiplayer | Generated v8 |
+| --- | ---: | ---: | ---: |
+| Creatures whose occupied tile alone cuts a crossing | 6/321 | 15/881 | 0/700 |
+| Creatures whose interception zone separates two usable areas | 86/321 | 168/881 | 7/700 |
+| Creatures whose zone touches a road, among maps with roads | 151/309 | 208/769 | 3/700 |
+| Scroll and artifact sites whose every open approach is guarded | 13/50 | 80/206 | 0/336 |
+
+A crossing connects two walkable exits beside the guard or zone. The test
+checks for a detour anywhere on the map with that one zone avoided. The
+second row requires two separated areas with at least twelve traversable
+tiles each, which excludes guards that only seal small pockets. The full
+survey found this effect around 234 of 1,006 visible campaign creatures as
+well. The last row measures the tiles directly around a site, while a guard
+farther along the route can also prevent safe access.
+
+With all field creature zones avoided, 235 of 252 otherwise reachable stock
+single and multiplayer scroll and artifact sites lost their route from every
+opening hero or castle approach. This happened at 9 of 336 generated sites,
+counting legal harbor transfers. In the generated sample, all 756 opening
+economy and recruitment targets remained reachable from their own starting
+hero by land. These are mission-start routes on an explored board.
+
+The stock single and multiplayer missions also have about 22–24 creatures
+per thousand passable land tiles at the median map. Generated maps have
+about six. Stock guards within twelve tiles of a starting hero or castle
+have median creature level two in both groups, rising to four farther out.
+In the generated sample, the median rises from two to three on land and
+stays at two on naval maps. The nearest other creature is typically five
+or six tiles away in stock missions, five on generated land maps, and ten
+on generated naval maps. About 45% of stock single and multiplayer creatures
+match the faction of their ground tile, compared with 49% in the generator.
+
+Two stock spot checks reproduced the geometry in the game's pathfinder. In
+`pmission02`, the Medium Tick Hive at `(37, 30)` closes a crossing with its
+interception zone, and the Lake Snake at `(57, 100)` does the same in
+`mmission01`. Each has a geometric path around its occupied tile that
+enters the zone. Removing the guard opens a fight-free route.
+
+Stock placement uses creatures for encounters beside roads, shortcuts through
+narrow passes, and prizes with guarded entrances. Generated v8 mostly places
+creatures near side objectives and leaves several ways to approach. The opening
+economy and recruitment routes are especially well protected from interception.
+
 ## World configuration
 
 These are the keys accepted by `ELFirstRandomMap.generate(profile, options)`.
