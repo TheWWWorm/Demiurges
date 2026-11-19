@@ -24,6 +24,10 @@ var playing := false
 ## Adventure fog can hide a figure without stopping its animation clock or cues.
 var skip_hidden_pose := false
 var _pose_stale := false
+## Set by watch_screen: false while the renderer's culling has the figure
+## off screen, so a skip_hidden_pose figure keeps its clock but not its pose.
+var on_screen := true
+var _screen_notifier: VisibleOnScreenNotifier3D
 var _faded: Dictionary = {}
 ## Made wholly of the Magic material: the second game's colourless creatures.
 var colourless := false
@@ -457,8 +461,8 @@ func _process(delta: float) -> void:
 			frame = length - 1
 			playing = false
 			animation_finished.emit(clip)
-	if skip_hidden_pose and not is_visible_in_tree(): _pose_stale = true
-	else: apply_frame(frame)
+	if skip_hidden_pose and (not on_screen or not is_visible_in_tree()): _pose_stale = true
+	else: apply_frame(frame, true)
 	set_process(playing)
 	if playing and clip == "cidle" and idle_specials and not _special_waiting and _rng.randf() < 0.04 * delta:
 		_special_waiting = special_count() > 0
@@ -530,24 +534,63 @@ static func animation_table(bytes: PackedByteArray) -> Dictionary:
 	return result
 
 func _notification(what: int) -> void:
-	if what == NOTIFICATION_VISIBILITY_CHANGED and _pose_stale and is_visible_in_tree():
+	if what == NOTIFICATION_VISIBILITY_CHANGED and _pose_stale and is_visible_in_tree() and on_screen:
 		apply_frame(frame)
 
-func apply_frame(at: float) -> void:
+## Lets the renderer's view culling pause the pose of a skip_hidden_pose
+## figure off screen (a large revealed map holds hundreds of animated
+## figures, each posed in script every frame). The watched box is the
+## figure's parts grown by `margin` and half its size, so a figure is posed
+## again before any of it scrolls into view; the clock keeps running.
+func watch_screen(margin := 2.0) -> void:
+	var bounds := AABB()
+	var first := true
+	for part: MeshInstance3D in parts.values():
+		if part.mesh == null: continue
+		var box := part.transform * part.get_aabb()
+		bounds = box if first else bounds.merge(box)
+		first = false
+	# Without a renderer (headless checks) nothing is culled or reported.
+	if first or DisplayServer.get_name() == "headless": return
+	bounds = bounds.grow(margin + 0.5 * maxf(bounds.size.x, maxf(bounds.size.y, bounds.size.z)))
+	if _screen_notifier == null:
+		_screen_notifier = VisibleOnScreenNotifier3D.new()
+		_screen_notifier.name = "ScreenNotifier"
+		add_child(_screen_notifier)
+		_screen_notifier.screen_entered.connect(_on_screen_changed.bind(true))
+		_screen_notifier.screen_exited.connect(_on_screen_changed.bind(false))
+	_screen_notifier.aabb = bounds
+	# The notifier reports entering only: until then the figure counts as off
+	# screen (its current pose stays; entering poses it at once).
+	on_screen = _screen_notifier.is_on_screen()
+
+func _on_screen_changed(shown: bool) -> void:
+	on_screen = shown
+	if shown and _pose_stale and is_visible_in_tree(): apply_frame(frame)
+
+## Poses every part of the clip at `at`. `moving_only` (the frame loop)
+## skips still parts (ELFigure.track), whose pose the clip's first frame set;
+## other callers pose everything, as they may have moved parts themselves.
+func apply_frame(at: float, moving_only := false) -> void:
 	_pose_stale = false
 	sample_count += 1
-	for name: String in clips.get(clip, {}):
-		var track: Dictionary = clips[clip][name]
+	var tracks: Dictionary = clips.get(clip, {})
+	for name: String in tracks:
+		var track: Dictionary = tracks[name]
+		if moving_only and track.get("still", false): continue
 		var node: MeshInstance3D = parts[name]
 		var rotations: Array[Quaternion] = track.rotation_keys
 		var rc := rotations.size()
-		if rc > 0:
+		# Single-key channels hold the value the clip's first pose set.
+		if rc > 1 or (rc == 1 and not moving_only):
 			var f := clampf(at, 0, rc - 1)
 			var a := int(f)
 			var b := mini(a + 1, rc - 1)
 			node.quaternion = rotations[a] if a == b else rotations[a].slerp(rotations[b], f - a)
-		node.position = _vec_sample(track.position_keys, at, Vector3.ZERO)
-		node.scale = _vec_sample(track.scale_keys, at, Vector3.ONE)
+		var positions: PackedVector3Array = track.position_keys
+		if positions.size() > 1 or not moving_only: node.position = _vec_sample(positions, at, Vector3.ZERO)
+		var scales: PackedVector3Array = track.scale_keys
+		if scales.size() > 1 or not moving_only: node.scale = _vec_sample(scales, at, Vector3.ONE)
 		var mc: int = track.morph_frames
 		if mc > 0 and node.mesh != null:
 			var f := clampf(at, 0, mc - 1)

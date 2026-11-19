@@ -127,6 +127,13 @@ var _marker_sites: Array[Dictionary] = []
 var _marker_actors: Array[Dictionary] = []
 var _building_counts := PackedInt32Array([0, 0, 0, 0, 0])
 var _overview_income: Dictionary = {}
+## Map objects the overview can count (heroes, monsters, castles and sites),
+## in map order: a large map is mostly scenery, which the ten-a-second
+## refresh need not walk. Session objects are only ever added (never
+## erased), so the list is rebuilt when their count changes.
+var _overview_ids: Array[int] = []
+var _overview_size := -1
+const OVERVIEW_GROUPS := ["mana_nodes", "mines", "laboratories", "factories", "forts", "additional_buildings", "buildings"]
 var _art: ELAdventureArt
 ## Minimap markers (CMiniMap, table): castles,
 ## heroes and owned sites are TOOLTIP_1 sprites in the player's slot colour;
@@ -142,6 +149,7 @@ var _empty_slot: Dictionary = {}
 ## Composes the panel and returns false when this edition has no matching art.
 func build(source: ELAdventureSession) -> bool:
 	state = source
+	_overview_size = -1
 	profile = state.map.profile
 	_art = ELAdventureArt.new(state.map)
 	for definition: Dictionary in profile.table("InterfaceTextures").values():
@@ -1084,7 +1092,13 @@ func _refresh_overview(player: int) -> void:
 	for id: int in state.players:
 		marks.append(id)
 		marks.append(hash(state.players[id].get("color", "")))
-	for id: int in state.objects:
+	if state.objects.size() != _overview_size:
+		_overview_size = state.objects.size()
+		_overview_ids.clear()
+		for id: int in state.objects:
+			var item: Dictionary = state.objects[id]
+			if item.get("type") in ["hero", "monster"] or str(item.get("group", "")) in OVERVIEW_GROUPS: _overview_ids.append(id)
+	for id: int in _overview_ids:
 		var item: Dictionary = state.objects[id]
 		var type := str(item.get("type", ""))
 		var group := str(item.get("group", ""))

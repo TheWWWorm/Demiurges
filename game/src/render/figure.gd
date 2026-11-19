@@ -212,6 +212,9 @@ static func track(bytes: PackedByteArray) -> Dictionary:
 	result.rotation_keys = rotations
 	result.position_keys = _vector_keys(bytes, int(result.position_offset), int(result.position_count), false)
 	result.scale_keys = _vector_keys(bytes, int(result.scale_offset), int(result.scale_count), true)
+	# A part whose every channel holds one value and has no morphs keeps the
+	# same pose for the whole clip (ELModel poses it when the clip starts).
+	result.still = rotations.size() <= 1 and result.position_keys.size() <= 1 and result.scale_keys.size() <= 1 and int(result.get("morph_frames", 0)) == 0
 	return result
 
 ## Constant channels need only one prepared value, even when the file repeats

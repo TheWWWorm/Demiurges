@@ -708,10 +708,24 @@ func _hero_id() -> int:
 	var actor := state.object(selected_hero)
 	if state.map.profile.id == "el1" and not actor.is_empty() and actor.alive and actor.owner == state.current_player: return selected_hero
 	if state.map.profile.id == "el1" and not state.object(state.main_hero).get("alive", false):
-		for candidate: Dictionary in state.objects.values():
-			if candidate.type == "hero" and candidate.alive and candidate.owner == state.current_player: return candidate.uid
+		for id: int in _hero_ids():
+			var candidate := state.object(id)
+			if candidate.alive and candidate.owner == state.current_player: return candidate.uid
 		return -1
 	return state.main_hero
+
+## Hero uids in map order. Session objects are only ever added, so the list
+## is rebuilt when their count changes; the frame loop asks several times a
+## frame and a large map holds thousands of objects.
+var _hero_list: Array[int] = []
+var _hero_list_size := -1
+func _hero_ids() -> Array[int]:
+	if state.objects.size() != _hero_list_size:
+		_hero_list_size = state.objects.size()
+		_hero_list.clear()
+		for candidate: Dictionary in state.objects.values():
+			if candidate.type == "hero": _hero_list.append(int(candidate.uid))
+	return _hero_list
 
 func _refresh_roster() -> void:
 	if hud != null: hud.refresh(_hero_id(), mana_readout, _can_act())
