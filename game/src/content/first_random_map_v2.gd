@@ -19,6 +19,7 @@ const GUARDED_PRIZES_VERSION := 9
 const REGIONAL_LANDSCAPES_VERSION := 10
 const GUARD_POSTS_VERSION := 11
 const LIVING_WILDS_VERSION := 12
+const STOCK_LAYOUT_VERSION := 13
 const DailyCoverage := preload("first_daily_coverage.gd")
 const Reachability := preload("first_map_reachability.gd")
 const EncounterPlacement := preload("first_encounter_placement.gd")
@@ -106,6 +107,8 @@ var _trail_clear := PackedByteArray()
 var _trail_stale := true
 # Harbor routes by destination cell; cleared whenever the route grid changes.
 var _port_routes := {}
+# Where the last failed access check found an unreachable site.
+var _unreached := Vector2i(-1, -1)
 var _reward_guards := {}
 var _basins: Array[Transform2D] = []
 var _frontier_supplies: Array[Dictionary] = []
@@ -132,7 +135,7 @@ static func normalize(options: Dictionary, version := VERSION) -> Dictionary:
 		var value: Variant = options.get(key, result[key])
 		if typeof(value) not in [TYPE_INT, TYPE_FLOAT] or not is_finite(float(value)) or float(value) != floor(float(value)): return {}
 		result[key] = int(value)
-	if result.version < VERSION or result.version > LIVING_WILDS_VERSION or result.size not in SIZES or result.players < 2 or result.players > 4 or result.scenery < 0 or result.scenery > 2 or result.castle_health not in [20, 30, 60]: return {}
+	if result.version < VERSION or result.version > STOCK_LAYOUT_VERSION or result.size not in SIZES or result.players < 2 or result.players > 4 or result.scenery < 0 or result.scenery > 2 or result.castle_health not in [20, 30, 60]: return {}
 	for key: String in ["seed", "layout", "biome", "resources", "starting_resources", "guards", "faction", "water", "coast"]:
 		var value: Variant = options.get(key, result[key])
 		if value is not String: return {}
@@ -317,12 +320,32 @@ func generate(profile: ELProfile, options: Dictionary = {}) -> ELAdventureMap:
 			if config.version == SCENERY_VERSION and not _check_access(true): return null
 			_make_scenery()
 	if config.version >= GUARDED_PRIZES_VERSION and not _reconnect_landscape(first_decoration, cliff_ids): return null
+	if config.version >= STOCK_LAYOUT_VERSION and config.scenery > 0:
+		# The woods closed over the old opening routes. Find them again on
+		# the finished ground so guards still leave every opening site free.
+		_guard_safe.fill(0)
+		var opened := false
+		for attempt in 8:
+			_unreached = Vector2i(-1, -1)
+			if _check_access(true):
+				opened = true
+				break
+			if _unreached.x < 0: return null
+			# Clear the generated woods around a sealed-off site and join
+			# the freed ground again.
+			var site := _unreached
+			_map.objects = _map.objects.filter(func(item: Dictionary) -> bool:
+				return item.group != "terrain_objects" or int(item.permanent_id) < first_decoration or Vector2i(item.x, item.y).distance_squared_to(site) > (6 + attempt * 3) * (6 + attempt * 3))
+			if not _reconnect_landscape(first_decoration, cliff_ids): return null
+		if not opened: return null
 	if not _check_terrain(): return null
 	if config.version >= GUARD_POSTS_VERSION and config.guards != "none":
 		if not _post_field_guards(): return null
 	if not _check_access(false, config.version >= RELIEF_VERSION): return null
-	if config.version >= WILDERNESS_VERSION: _paint_wilderness_detail()
-	if config.version >= RELIEF_VERSION: _shape_relief()
+	# Stock maps are flat; their hills are props and rock tiles. Version 13
+	# keeps the ground level instead of sculpting mesas and shelves.
+	if config.version >= WILDERNESS_VERSION and config.version < STOCK_LAYOUT_VERSION: _paint_wilderness_detail()
+	if config.version >= RELIEF_VERSION and config.version < STOCK_LAYOUT_VERSION: _shape_relief()
 	_map.document.children.append(_node("support", {"last_permanent_id": str(_next_id)}))
 	report.starts = _starts.duplicate(true)
 	if config.version >= PLACEMENT_VERSION: report.reward_guards = _reward_guards.duplicate()
@@ -1119,7 +1142,10 @@ func _weight_landscape_routes() -> void:
 			var weight: float = [1.0, 1.22, 2.2][_landform(point)] if _walkable(point) else wet_weight
 			if config.version >= REGIONAL_LANDSCAPES_VERSION:
 				weight += 2.6 * _uplands[y * (_map.width + 1) + x]
-			_route_grid.set_point_weight_scale(point, weight + 0.21 * _noise(x, y, 15.0, 1091))
+			var wander := 0.21 * _noise(x, y, 15.0, 1091)
+			# Stock routes run about 1.4 times the straight distance.
+			if config.version >= STOCK_LAYOUT_VERSION: wander = 5.0 * pow(_noise(x, y, 11.0, 1093), 2.0) + 1.6 * _noise(x, y, 4.0, 1097)
+			_route_grid.set_point_weight_scale(point, weight + wander)
 
 func _region_at(point: Vector2i) -> int:
 	return int(_land_labels[point.y * _map.width + point.x]) if _inside(point) and _land_labels.size() == _map.width * _map.height else -1
@@ -1234,7 +1260,7 @@ func _populate_islands() -> void:
 			var row: Dictionary = _catalog.mines[kind]
 			var size: Vector2i = ELAdventureGrid.footprint(row, 0).size
 			var pos := _find_spot(Vector2i(center) + Vector2i(index * 3 - 3, 1), size, 12, -1, true, true,
-				false, -1, FRONTIER_SITE_GAP if config.version >= GUARDED_PRIZES_VERSION else 0)
+				false, -1, _site_gap())
 			if pos == NO_SPOT or _region_at(pos) != region: continue
 			var item := _place("mines", str(row.Name), pos, row, 0, _colors[index % _colors.size()], [_node("level", {}, "0")])
 			_clear_footprint(pos, size)
@@ -1458,6 +1484,8 @@ func _make_frontiers() -> bool:
 	var abundance := ECONOMIES.find(config.resources)
 	var per_player := 2 + abundance * 2 + maxi(0, (_map.width - 64) / 32)
 	if config.version >= GUARDED_PRIZES_VERSION: per_player = 1 + abundance + maxi(0, (_map.width - 96) / 48)
+	# Stock maps carry about 2.3 mines per thousand land tiles.
+	if config.version >= STOCK_LAYOUT_VERSION: per_player = 2 + abundance + maxi(0, (_map.width - 64) / 32)
 	for index in _starts.size():
 		var start: Dictionary = _starts[index]
 		var home := Vector2(start.x, start.y)
@@ -1474,7 +1502,7 @@ func _make_frontiers() -> bool:
 			var row: Dictionary = _catalog.mines[kind]
 			var size: Vector2i = ELAdventureGrid.footprint(row, 0).size
 			var pos := _find_spot(desired, size, 14, -1, config.version >= PLACEMENT_VERSION, true,
-				false, -1, FRONTIER_SITE_GAP if config.version >= GUARDED_PRIZES_VERSION else 0)
+				false, -1, _site_gap())
 			if pos == NO_SPOT: continue
 			var item := _place("mines", str(row.Name), pos, row, 0, start.color, [_node("level", {}, "0")])
 			_clear_footprint(pos, size)
@@ -1485,7 +1513,7 @@ func _make_frontiers() -> bool:
 			var amount := 10 + abundance * 10
 			if config.version < FRONTIERS_VERSION:
 				_add_pickup(supply_at, -1, amount)
-			elif config.version < GUARDED_PRIZES_VERSION or number % 2 == 0:
+			elif config.version < GUARDED_PRIZES_VERSION or config.version >= STOCK_LAYOUT_VERSION or number % 2 == 0:
 				_frontier_supplies.append({"mine": int(item.permanent_id) - 1, "fallback": supply_at, "amount": amount})
 		# Optional adventure rewards use genuine installed artifact rows.
 		if config.version < PLACEMENT_VERSION and not _catalog.artifacts.is_empty():
@@ -1548,7 +1576,7 @@ func _place_frontier_prize(home: int, desired: Vector2i, group: String, name: St
 			var at := Vector2i(x, y)
 			if _owner(at) != home or (config.naval and _region_at(at) != region): continue
 			if at.distance_squared_to(origin) < 12 * 12: continue
-			if config.version >= GUARDED_PRIZES_VERSION and not _clears_sites(at + size / 2, FRONTIER_SITE_GAP): continue
+			if config.version >= GUARDED_PRIZES_VERSION and not _clears_sites(at + size / 2, _site_gap()): continue
 			var score := float(at.distance_squared_to(desired))
 			if score >= best_score or not _fits(at, size, true, true): continue
 			var footprint := Rect2i(at, size)
@@ -1856,6 +1884,8 @@ func _post_field_guards() -> bool:
 			var steps := travel[spot.guard.y * _map.width + spot.guard.x]
 			var band := -1 if steps >= 0 and steps < 22 else (1 if steps < 0 or steps >= 40 else 0)
 			level = clampi(int(ranks[site.group]) + band, 2, 5) + (1 if config.guards == "strong" else 0)
+			if config.version >= STOCK_LAYOUT_VERSION:
+				level = _stock_level(steps) + (1 if site.group == "artefacts" else 0) + (1 if config.guards == "strong" else 0)
 		var id := _station_guard(grid, spot.guard, level, home)
 		_reward_guards[site.uid] = id
 		if spot.full and site.group in ["artefacts", "global_spells"]: _gated_prizes[site.uid] = id
@@ -1921,6 +1951,13 @@ func _post_wilderness_creatures(placement: RefCounted, travel: PackedInt32Array)
 			var score := _hash(x, y, 9157) + roadside + 0.22 * (1.0 - _canopy[field]) + 0.2 * float(_landform(at) == Landform.RIDGE) + (0.15 if _shore[field] <= 3 else 0.0)
 			candidates.append({"at": at, "score": score})
 	var target := ceili(float(land) / (70.0 if strong else 85.0))
+	if config.version >= STOCK_LAYOUT_VERSION:
+		# Stock: about ten creatures per thousand tiles of dry ground,
+		# counting ground under woods, as common far out as near home.
+		var ground := 0
+		for y in range(_map.height):
+			for x in range(_map.width): ground += int(_walkable(Vector2i(x, y)))
+		target = ceili(float(ground) / (82.0 if strong else 100.0))
 	candidates.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
 		return float(a.score) > float(b.score) if a.score != b.score else _index(a.at) < _index(b.at))
 	var roaming: Array[int] = []
@@ -1930,12 +1967,70 @@ func _post_wilderness_creatures(placement: RefCounted, travel: PackedInt32Array)
 		if spaced[at.y * _map.width + at.x] != 0 or not placement.field_cell(at, spaced, 4): continue
 		var steps := travel[at.y * _map.width + at.x]
 		var level := 4 if steps < 0 else (1 if steps < 16 else (2 if steps < 28 else (3 if steps < 42 else 4)))
-		if level < 4 and _landform(at) == Landform.RIDGE and _hash(at.x, at.y, 9173) > 0.5: level += 1
+		if config.version >= STOCK_LAYOUT_VERSION:
+			# Stock median levels by walking distance from a castle.
+			level = _stock_level(steps)
+		elif level < 4 and _landform(at) == Landform.RIDGE and _hash(at.x, at.y, 9173) > 0.5: level += 1
 		if strong: level += 1
 		roaming.append(_station_guard(placement.grid, at, level, _owner(at)))
 		_mark_radius(spaced, at, gap)
 		placed += 1
+	if config.version >= STOCK_LAYOUT_VERSION:
+		var watched: Array[int] = roaming.duplicate()
+		for id: int in report.get("passage_guards", {}): watched.append(id)
+		var dropped := _drop_sealed_creatures(placement.grid, watched)
+		roaming.assign(roaming.filter(func(id: int) -> bool: return not dropped.has(id)))
+		for id: int in dropped: report.passage_guards.erase(id)
 	report.roaming_creatures = roaming
+
+## In narrow woods one roaming creature can close the only way to another.
+## Remove roaming creatures no hero can reach on the finished grid, nearest
+## the start last, until every remaining one has a reachable neighbor.
+func _drop_sealed_creatures(grid: ELAdventureGrid, roaming: Array[int]) -> Dictionary:
+	var removed := {}
+	var by_id := {}
+	for item: Dictionary in _map.objects:
+		if item.group == "np_heroes": by_id[int(item.permanent_id) - 1] = item
+	for round in 6:
+		var reached := PackedByteArray()
+		reached.resize(_map.width * _map.height)
+		var first := Vector2i(_starts[0].x, _starts[0].y)
+		var queue: Array[Vector2i] = [first]
+		reached[_index(first)] = 1
+		var head := 0
+		while head < queue.size():
+			var at := queue[head]
+			head += 1
+			for delta: Vector2i in ELInterception.DIRECTIONS:
+				var next := at + delta
+				if not grid.contains(next) or reached[_index(next)] != 0 or grid.land.is_point_solid(next): continue
+				if config.naval and not ELFirstNaval.connected(grid, at, next, true, true): continue
+				reached[_index(next)] = 1
+				queue.append(next)
+		var sealed: Array[int] = []
+		for id: int in roaming:
+			var item: Dictionary = by_id[id]
+			var open := false
+			for delta: Vector2i in ELInterception.DIRECTIONS:
+				var near := Vector2i(item.x, item.y) + delta
+				# The final access check does not count shore cells as stands.
+				if grid.contains(near) and reached[_index(near)] != 0 and not (config.naval and _sea_cell(near)): open = true
+			if not open: sealed.append(id)
+		if sealed.is_empty(): return removed
+		for id: int in sealed:
+			var item: Dictionary = by_id[id]
+			grid.update_actor({"uid": id, "x": item.x, "y": item.y, "type": "monster", "alive": false, "visible": false})
+			roaming.erase(id)
+			_important.erase(id)
+		for id: int in sealed: removed[id] = true
+		_map.objects = _map.objects.filter(func(item: Dictionary) -> bool: return not removed.has(int(item.permanent_id) - 1))
+	return removed
+
+## Median creature level in the stock missions by land steps from the
+## nearest castle (-1: no land route, such as an outlying island).
+func _stock_level(steps: int) -> int:
+	if steps < 0: return 6
+	return 1 if steps <= 10 else (3 if steps <= 20 else (4 if steps <= 30 else (5 if steps <= 45 else 6)))
 
 func _index(at: Vector2i) -> int:
 	return at.y * _map.width + at.x
@@ -2200,7 +2295,11 @@ func _regional_guard(pos: Vector2i, choices: Array, level: int) -> String:
 	var color := ELAdventureArt.terrain_color(_map.tile(pos.x, pos.y))
 	for row: Dictionary in choices:
 		if ELFirstMonsters.definition(_profile, row.name, 0).get("Color") == color: favored.append(row)
-	if not favored.is_empty() and _next(3) != 0: choices = favored
+	# Stock creatures match their ground about a third of the time.
+	# The roll is only drawn when there is a choice, as in earlier versions.
+	if not favored.is_empty():
+		var roll := _next(3)
+		if (roll == 0) if config.version >= STOCK_LAYOUT_VERSION else (roll != 0): choices = favored
 	return str(choices[_next(choices.size())].name)
 
 func _encounter_cell(desired: Vector2i, radius: int, home := -1) -> Vector2i:
@@ -2315,6 +2414,9 @@ func _fill_wilderness() -> void:
 				candidates.append(Vector2i(x, y))
 	var paths_dirty := false
 	var spacing := 17 if config.version >= GUARDED_PRIZES_VERSION else WILDERNESS_SPACING
+	# Stock sites are four or five tiles apart and as common far from a
+	# castle as near one.
+	if config.version >= STOCK_LAYOUT_VERSION: spacing = 9
 	for visit in _map.width * _map.height / 60:
 		var point := NO_SPOT
 		var score := -INF
@@ -2342,6 +2444,16 @@ func _fill_wilderness() -> void:
 			scores[name] = placed.size() + (5 if repeat else 0)
 		pool.sort_custom(func(a: String, b: String) -> bool: return int(scores[a]) < int(scores[b]))
 		var site := {}
+		# Stock maps scatter about four resource piles per thousand land
+		# tiles between their buildings. Every third stop is a pile.
+		if config.version >= STOCK_LAYOUT_VERSION and visit % 3 == 2:
+			var amount := 6 + 6 * ECONOMIES.find(config.resources)
+			var pile := _add_pickup(point, -1, amount, 4, true, _region_at(point))
+			if pile >= 0:
+				paths_dirty = true
+				var placed: Dictionary = _map.objects[pile]
+				_spread_wilderness(distance, [Vector2i(placed.x, placed.y)], dry)
+				continue
 		for name: String in pool:
 			site = _add_exploration_site(name, point, 5, -1, _region_at(point))
 			if not site.is_empty(): break
@@ -2409,12 +2521,16 @@ func _make_wilderness_stops() -> void:
 			if desired != NO_SPOT:
 				_add_exploration_site(options[_next(options.size())], desired, 4, -1, _region_at(desired))
 
+func _site_gap() -> int:
+	if config.version >= STOCK_LAYOUT_VERSION: return 5
+	return FRONTIER_SITE_GAP if config.version >= GUARDED_PRIZES_VERSION else 0
+
 func _add_exploration_site(name: String, near: Vector2i, radius: int, home := -1, region := -1, params := "", group := "additional_buildings") -> Dictionary:
 	var table := "Artefacts" if group == "artefacts" else "AdditionalBuildings"
 	var row: Dictionary = _profile.table(table).get(name, {})
 	if not _model(row): return {}
 	var size: Vector2i = ELAdventureGrid.footprint(row, 0).size
-	var gap := FRONTIER_SITE_GAP if config.version >= GUARDED_PRIZES_VERSION else 0
+	var gap := _site_gap()
 	if config.version >= GUARDED_PRIZES_VERSION and ELAdditionalBuildings.DUNGEONS.has(name) and home >= 0:
 		gap = 5
 	var pos := _find_spot(near, size, radius, home, true, true, true, region, gap)
@@ -2430,6 +2546,10 @@ func _add_exploration_site(name: String, near: Vector2i, radius: int, home := -1
 		if home >= 0:
 			var origin := Vector2i(_starts[home].x, _starts[home].y)
 			_connect_site(origin, item, size)
+		elif config.roads and config.version >= STOCK_LAYOUT_VERSION:
+			# Wind the track in from the road network instead of following
+			# the straight search tree.
+			_connect_site(Vector2i(approach % _map.width, approach / _map.width), item, size, true, false)
 		elif config.roads:
 			_join_wilderness_track(approach)
 	elif config.version >= RELIEF_VERSION and config.version < PLACEMENT_VERSION and config.roads:
@@ -2593,6 +2713,9 @@ func _scenery_land() -> PackedByteArray:
 func _make_scenery() -> void:
 	var pools := _scenery_catalog()
 	var land := _scenery_land()
+	if config.version >= STOCK_LAYOUT_VERSION:
+		_make_vein_scenery(land, pools)
+		return
 	if config.version >= REGIONAL_LANDSCAPES_VERSION:
 		_make_regional_scenery(land, pools)
 		return
@@ -2606,6 +2729,104 @@ func _make_scenery() -> void:
 		for left in range(2, _map.width - 2, SCENERY_PATCH_SIZE):
 			var area := Rect2i(left, top, SCENERY_PATCH_SIZE, SCENERY_PATCH_SIZE)
 			_make_scenery_patch(area, land, pools)
+
+## Version 13 follows the stock maps: about half the land is solid wood and
+## rock in large masses, and travel runs along veins two to four tiles wide.
+## Roads, site approaches and protected routes keep a three-tile vein; noise
+## adds winding side channels and small glades. Everything else is filled
+## with the biome's props, the largest first. The later reconnection pass
+## opens a short way through any mass that seals off free ground.
+func _make_vein_scenery(land: PackedByteArray, pools: Dictionary) -> void:
+	var w := _map.width
+	var h := _map.height
+	var art := ELAdventureArt.new(_map)
+	var open := PackedByteArray()
+	open.resize(w * h)
+	for y in h:
+		for x in w:
+			var i := y * w + x
+			if land[i] == 0: continue
+			# Site trails are straight search lines; the woods may close over
+			# them. Reconnection and the access checks run on the result.
+			var keep := _map.roads[i] != 0
+			# Stock cover by ground: Red about 62%, Green 45%, Black 42%,
+			# Blue 24%. Lighter ground gets more channels and glades.
+			var openness: float = {"Blue": 1.9, "Green": 1.0, "Black": 1.1, "Red": 0.55}.get(ELAdventureArt.terrain_color(_map.tile(x, y)), 1.0)
+			var warp := Vector2(_noise(x, y, 17.0, 6311) - 0.5, _noise(x, y, 17.0, 6317) - 0.5) * 9.0
+			var ridge := absf(_noise(x + warp.x, y + warp.y, 13.0, 6323) - 0.5)
+			if ridge < 0.03 * openness: keep = true
+			if _noise(x, y, 5.0, 6329) > 1.0 - 0.14 * openness: keep = true
+			if keep: _mark_radius(open, Vector2i(x, y), 1)
+	# Sites keep a two-tile apron, castles a homeland yard, harbors a quay.
+	for item: Dictionary in _map.objects:
+		if item.group in ["terrain_objects", "np_heroes"]: continue
+		var size := Vector2i.ONE if item.group == "heroes" else Vector2i(ELAdventureGrid.footprint(art.resolve(item).get("row", {}), int(item.rotation)).size)
+		var area := Rect2i(Vector2i(item.x, item.y), size).grow(1).intersection(Rect2i(0, 0, w, h))
+		for y in range(area.position.y, area.end.y):
+			for x in range(area.position.x, area.end.x): open[y * w + x] = 1
+	for anchor: Vector2i in _anchors: _mark_radius(open, anchor, 4)
+	for port: Dictionary in _ports: _mark_radius(open, Vector2i(port.land[0], port.land[1]), 2)
+	var fill := PackedByteArray()
+	fill.resize(w * h)
+	var order: Array[Vector2i] = []
+	for y in h:
+		for x in w:
+			var i := y * w + x
+			if land[i] != 0 and open[i] == 0 and _occupied[i] == 0:
+				fill[i] = 1
+				order.append(Vector2i(x, y))
+	order.sort_custom(func(a: Vector2i, b: Vector2i) -> bool: return _hash(a.x, a.y, 6337) < _hash(b.x, b.y, 6337))
+	var sized := {}
+	for color: String in COLORS:
+		var pool: Dictionary = pools[color]
+		var bands := {"woods": [[], [], []], "rocks": [[], [], []]}
+		for kind: String in ["plants", "stones"]:
+			for entry: Dictionary in pool[kind]:
+				var shape := ELAdventureGrid.footprint(entry.row, 0)
+				if shape.cells.is_empty(): continue
+				var span := maxi(shape.size.x, shape.size.y)
+				if span > 8: continue
+				var band := 0 if span >= 3 else (1 if span == 2 else 2)
+				bands["woods" if kind == "plants" else "rocks"][band].append(entry)
+		for kind: String in ["landscape_rocks"]:
+			for entry: Dictionary in pool[kind]:
+				if not bands.rocks[0].has(entry): bands.rocks[0].append(entry)
+		sized[color] = bands
+	# Naval guards reserve straight harbor lanes. The woods only need to
+	# avoid real footprints and a one-tile margin; the access checks after
+	# this pass see the finished grid.
+	var reserved := _reserved
+	_reserved = PackedByteArray()
+	_reserved.resize(w * h)
+	# Old site trails are straight search lines, so the woods may cover them.
+	var trails := _scenery_paths
+	_scenery_paths = PackedByteArray()
+	_scenery_paths.resize(w * h)
+	for item: Dictionary in _map.objects:
+		var size := Vector2i.ONE if item.group in ["heroes", "np_heroes"] else Vector2i(ELAdventureGrid.footprint(art.resolve(item).get("row", {}), int(item.rotation)).size)
+		var margin := 0 if item.group == "terrain_objects" else 1
+		var area := Rect2i(Vector2i(item.x, item.y), size).grow(margin).intersection(Rect2i(0, 0, w, h))
+		for y in range(area.position.y, area.end.y):
+			for x in range(area.position.x, area.end.x): _reserved[y * w + x] = 1
+	# Stock props average about five cells: try the large band twice.
+	for band in [0, 0, 1, 2]:
+		for point: Vector2i in order:
+			if _occupied[point.y * w + point.x] != 0: continue
+			var color := ELAdventureArt.terrain_color(_map.tile(point.x, point.y))
+			if not sized.has(color): color = _colors[_owner(point)]
+			var field := point.y * (w + 1) + point.x
+			# Stock green and snow land is mostly forest; dry land mixes rock.
+			var rocky := _rock[field] > 0.45 or _noise(point.x, point.y, 11.0, 6343) > (0.48 if color in ["Red", "Black"] else 0.78)
+			var bands: Dictionary = sized[color]
+			var pool: Array = bands.rocks[band] if rocky else bands.woods[band]
+			if pool.is_empty(): pool = bands.woods[band] if rocky else bands.rocks[band]
+			if band == 0:
+				# Big masses first: try every large prop before giving up.
+				for attempt in ceili(pool.size() / 5.0):
+					if _occupied[point.y * w + point.x] != 0 or _place_scenery(point, pool, fill, true): break
+			else: _place_scenery(point, pool, fill, true)
+	for i in w * h: _reserved[i] = maxi(_reserved[i], reserved[i])
+	_scenery_paths = trails
 
 func _make_regional_scenery(land: PackedByteArray, pools: Dictionary) -> void:
 	for color: String in COLORS:
@@ -2954,12 +3175,16 @@ func _place_scenery(point: Vector2i, pool: Array, land: PackedByteArray, allow_v
 	return false
 
 func _scenery_fits(origin: Vector2i, size: Vector2i, land: PackedByteArray, allow_verges := false) -> bool:
-	if origin.x < 2 or origin.y < 2 or origin.x + size.x > _map.width - 2 or origin.y + size.y > _map.height - 2: return false
+	# Stock woods run to the map's edge; earlier versions kept a clear rim.
+	var rim := 0 if config.version >= STOCK_LAYOUT_VERSION else 2
+	if origin.x < rim or origin.y < rim or origin.x + size.x > _map.width - rim or origin.y + size.y > _map.height - rim: return false
 	if config.version >= LIVING_WILDS_VERSION:
 		# Mesas and boulders read much larger than their footprint. Keep the
 		# castle's silhouette clear, more so for bigger props.
 		var middle := Vector2(origin) + Vector2(size) * 0.5
 		var reach := 1.5 + 2.0 * maxi(size.x, size.y)
+		# Version 13 woods close in around the castle like the stock yards.
+		if config.version >= STOCK_LAYOUT_VERSION: reach = 1.5 + maxi(size.x, size.y) * (2.0 if maxi(size.x, size.y) >= 5 else 0.8)
 		for anchor: Vector2i in _anchors:
 			if middle.distance_to(Vector2(anchor)) < reach + 2.5: return false
 	for y in range(origin.y, origin.y + size.y):
@@ -3126,6 +3351,10 @@ func _connect(from: Vector2i, to: Vector2i, width: int, road: bool, trunk := fal
 			_network[offset] = 1
 			_network_points.append(point)
 		_paint_disk(point, width + 1, road and not corners.has(point), trunk, track and _walkable(point))
+		# Later routes share an existing road instead of running a parallel
+		# track beside it and closing a small loop.
+		if road and config.version >= STOCK_LAYOUT_VERSION and _route_grid.region.has_point(point):
+			_route_grid.set_point_weight_scale(point, 0.25)
 		for y in range(maxi(0, point.y - width), mini(_map.height, point.y + width + 1)):
 			for x in range(maxi(0, point.x - width), mini(_map.width, point.x + width + 1)):
 				var cell := y * _map.width + x
@@ -3316,6 +3545,7 @@ func _check_access(protect_routes := false, enforce_daily := false) -> bool:
 					approach = offset
 		if approach < 0:
 			error = "Generated map contains an unreachable %s (%d). Try a different seed." % [str(item.group), id]
+			_unreached = Vector2i(item.x, item.y)
 			return false
 		if protect_routes: _protect_route(approach, previous, safe)
 	if config.naval:

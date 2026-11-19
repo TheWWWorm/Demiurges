@@ -307,6 +307,20 @@ castle. A lake that cannot be joined to the sea without crossing a homeland
 becomes meadow instead of preventing the world from generating, and the
 connecting waterways bend with the terrain.
 
+Version 13 follows the measured layout of the 37 original missions, which
+are recorded in the [stock map survey](first_map_survey.md). The ground is
+level, as in the originals. Forests and rock masses cover about a third of the
+land, leaving walkable veins two to four tiles wide. Red ground is the densest
+and Blue the most open. Later roads reuse earlier ones, so routes merge
+instead of running in parallel or looping around a castle. Roadside services
+join the network along winding tracks. Mines and supplies are kept, and
+optional sites stand about five tiles apart. The generator places about ten
+creatures per thousand passable tiles across the whole map. Their levels follow
+the stock curve from walking distance: level one beside a castle, three
+after 11–20 steps, four after 21–30, five after 31–45 and six beyond. After
+the woods are placed, generation clears scenery around any site the travel
+check cannot reach. It also removes any creature that has been shut in.
+
 ### Whole-map access
 
 Since version 9, generation checks every passable tile after placing scenery. It opens short
@@ -328,7 +342,7 @@ Omitted keys use the defaults below.
 
 | Key | Default | Supported values and effect |
 | --- | --- | --- |
-| `version` | `12` | `12` adds roaming creatures scaled by distance, irregular climate borders, and smoother roads. Versions 1–11 reproduce their original worlds. Version 1 uses its own schema. |
+| `version` | `13` | `13` follows the measured layout of the stock missions: level ground, dense woods and rock masses with narrow walkable veins, merged roads, and stock creature density and levels. Versions 1–12 reproduce their original worlds. Version 1 uses its own schema. |
 | `seed` | `"212"` | A string of 1–64 characters, not blank-only, without control characters. Whitespace in a valid seed is significant. |
 | `size` | `96` | `64`, `96`, `128`, `160` tiles per side. |
 | `players` | `4` | `2`, `3`, `4`: one human and the remaining seats controlled by AI. |
@@ -357,12 +371,12 @@ monsters** option also keeps its normal rules.
 
 ## Share and remember a setup
 
-**Copy setup** creates an `EL1R12:` code for a new world in the code field and clipboard. Paste a
+**Copy setup** creates an `EL1R13:` code for a new world in the code field and clipboard. Paste a
 complete code and press **Load setup** to restore its seed and world settings.
 Choose difficulty and AI separately. The code is a prefix followed by Base64
 encoded UTF-8 JSON; it is a recipe, not a map archive.
 
-`EL1R1:` through `EL1R11:` codes reproduce their original worlds when loaded and played
+`EL1R1:` through `EL1R12:` codes reproduce their original worlds when loaded and played
 without editing. Changing a world setting or choosing a new preset switches to
 the current generator.
 
@@ -376,7 +390,7 @@ modifies the installed original game's files.
 ```gdscript
 var generator := ELFirstRandomMap.new()
 var map := generator.generate(profile, {
-    "version": 12,
+    "version": 13,
     "seed": "island-expedition",
     "size": 128,
     "players": 4,

@@ -46,7 +46,7 @@ func check(ok: bool, what: String) -> void:
 func _configuration() -> void:
 	label = "shape settings"
 	var defaults := ELFirstRandomMap.defaults()
-	check(defaults.version == ELFirstRandomMapV2.LIVING_WILDS_VERSION and defaults.has("naval") and defaults.has("water") and defaults.has("coast"), "new recipes use guard posts and keep the naval settings schema")
+	check(defaults.version == ELFirstRandomMapV2.STOCK_LAYOUT_VERSION and defaults.has("naval") and defaults.has("water") and defaults.has("coast"), "new recipes use guard posts and keep the naval settings schema")
 	check(ELFirstRandomMap.normalize(JSON.parse_string(JSON.stringify(defaults))) == defaults, "settings survive JSON numeric conversion")
 	for options: Dictionary in [{"naval": 1}, {"naval": "true"}, {"water": true}, {"water": "huge"}, {"coast": []}, {"coast": "straight"}, {"version": 1, "naval": true}]:
 		check(ELFirstRandomMap.normalize(options).is_empty(), "malformed or wrong-version settings are rejected: " + JSON.stringify(options))
@@ -260,7 +260,9 @@ func _geometry(map: ELAdventureMap, config: Dictionary) -> void:
 	if config.version >= ELFirstRandomMapV2.GUARD_POSTS_VERSION: _field_guards(director, generation, modes, links)
 	var starts: Array = generation.get("starts", [])
 	check(starts.size() == config.players, "every homeland exposes its opening economy")
-	if config.version >= ELFirstRandomMapV2.RELIEF_VERSION:
+	if config.version >= ELFirstRandomMapV2.STOCK_LAYOUT_VERSION:
+		check(map.relief.is_empty(), "stock-layout maps keep the level ground of the original missions")
+	elif config.version >= ELFirstRandomMapV2.RELIEF_VERSION:
 		check(map.relief.size() == map.terrain.size() and map.relief.count(0) < map.relief.size(), "new maps have a varied surface on the corner grid")
 		var level_water := true
 		for index in map.terrain.size():
@@ -269,7 +271,10 @@ func _geometry(map: ELAdventureMap, config: Dictionary) -> void:
 	var safe_modes := modes.duplicate()
 	if config.version >= ELFirstRandomMapV2.WILDERNESS_VERSION:
 		var field: PackedByteArray = map.get_meta("wilderness_detail", PackedByteArray())
-		check(field.size() == (map.width + 1) * (map.height + 1) * 3, "continuous ground detail covers the entire map")
+		if config.version >= ELFirstRandomMapV2.STOCK_LAYOUT_VERSION:
+			check(field.is_empty(), "stock-layout maps use the plain ground of the original missions")
+		else:
+			check(field.size() == (map.width + 1) * (map.height + 1) * 3, "continuous ground detail covers the entire map")
 		var limit := 34 if config.version >= ELFirstRandomMapV2.GUARDED_PRIZES_VERSION else 22
 		check(int(generation.get("wilderness_distance", 0x7fff)) < limit, "reachable wilderness has nearby activities across the playable land")
 		for point: Vector2i in director.interception.cells: safe_modes[point.y * map.width + point.x] = 0
