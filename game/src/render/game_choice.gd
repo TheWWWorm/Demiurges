@@ -6,6 +6,7 @@ extends HBoxContainer
 signal selected(edition: String)
 signal missing(edition: String)
 signal expedition_requested
+signal arena_requested
 signal autochess_requested
 ## Battle puzzles of the chosen game (ELPuzzles).
 signal puzzles_requested
@@ -20,6 +21,7 @@ var font_size := 16
 var wiki_button: Button
 var expedition_available := false
 var _expedition_button: Button
+var _arena_button: Button
 var _autochess_button: Button
 ## Offered on the main menu, for a game that has puzzles.
 var puzzles_available := false
@@ -78,6 +80,13 @@ func _ready() -> void:
 		_plain(_expedition_button)
 		_expedition_button.pressed.connect(func(): expedition_requested.emit())
 		add_child(_expedition_button)
+		_arena_button = Button.new()
+		_arena_button.name = "DraftArena"
+		_arena_button.custom_minimum_size = Vector2(126, 46)
+		_arena_button.add_theme_font_size_override("font_size", font_size)
+		_plain(_arena_button)
+		_arena_button.pressed.connect(func(): arena_requested.emit())
+		add_child(_arena_button)
 		_autochess_button = Button.new()
 		_autochess_button.name = "Autochess"
 		_autochess_button.custom_minimum_size = Vector2(138, 46)
@@ -105,7 +114,9 @@ static func plain(button: Button) -> void:
 	button.add_theme_stylebox_override("pressed", _plate(0.88, INK))
 	button.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
 	# A dropdown's arrow keeps the plate's own inner margin from the border.
-	if button is OptionButton: button.add_theme_constant_override("arrow_margin", 14)
+	if button is OptionButton:
+		button.add_theme_constant_override("arrow_margin", 14)
+		button.add_theme_color_override("font_disabled_color", INK.darkened(0.30))
 
 static func _plate(alpha: float, border: Color) -> StyleBoxFlat:
 	var style := StyleBoxFlat.new()
@@ -144,6 +155,9 @@ func _refresh() -> void:
 			_puzzles_button.tooltip_text = "Бои, которые можно выиграть за несколько ходов. Найдите как" if russian else "Battles that can be won within a few turns. Find the way"
 		if _expedition_button != null:
 			_expedition_button.text = "Экспедиция" if russian else "Expedition"
+		if _arena_button != null:
+			_arena_button.text = "Арена" if russian else "Draft Arena"
+			_arena_button.tooltip_text = "16 выборов из трёх карт. 12 побед или 3 поражения против сильнейшего ИИ" if russian else "Draft 16 cards from three choices. Reach 12 wins before 3 losses against the strongest AI"
 		if _autochess_button != null:
 			_autochess_button.text = "Автошахматы" if russian else "Autochess"
 			_autochess_button.tooltip_text = "Девять героев, общий запас существ, бои в реальном времени" if russian else "Nine heroes, one pool of creatures, real-time battles"

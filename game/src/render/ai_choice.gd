@@ -166,6 +166,9 @@ static func values_picker(values: Dictionary, key: String, profile: ELProfile, c
 static func monster_checkbox(values: Dictionary, pick: OptionButton) -> CheckBox:
 	var box := CheckBox.new()
 	box.name = "FightNeutralMonsters"
+	for state: String in ["font_color", "font_focus_color", "font_hover_color", "font_pressed_color", "font_hover_pressed_color"]:
+		box.add_theme_color_override(state, ELGameChoice.INK)
+	box.add_theme_color_override("font_disabled_color", ELGameChoice.INK.darkened(0.30))
 	box.toggled.connect(func(enabled: bool):
 		if enabled: values[FIGHT_MONSTERS] = true
 		else: values.erase(FIGHT_MONSTERS)

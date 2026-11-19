@@ -565,6 +565,7 @@ class Cancel:
 ## fixed hands ("puzzle_fixed_hands": true, as every packed puzzle and
 ## prepared study has).
 static func info_policy(duel: ELDuel) -> String:
+	if not str(duel.setup.get("arena_run_id", "")).is_empty(): return "full"
 	if duel.setup.get("puzzle_fixed_hands", false) == true: return "full"
 	var goal: Variant = duel.setup.get("puzzle_goal")
 	if goal is Dictionary and not (goal as Dictionary).is_empty(): return "full"

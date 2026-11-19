@@ -55,6 +55,10 @@ With Etherlords II installed, select **Expedition** on the main menu for a three
 
 With Etherlords II installed, select **Autochess** on the main menu. Nine heroes recruit Etherlords II creatures from one shared pool, evolve three copies into stronger forms, combine faction alliances and fight real-time battles on the game's battlefields; the last hero standing wins. Creature stats come from the originals' Power and Toughness, their abilities are adapted to real time, and rewards after neutral rounds are the game's own enchantments and artifacts. Play against eight computer heroes or online with a room code or by address. See [Autochess](https://demiurges.wwworm.com/wiki/?page=autochess) in the wiki.
 
+## Draft Arena
+
+With Etherlords II installed, select **Draft Arena** on the main menu. Choose a card pool for both sides, then choose one of three heroes and pick one of three cards sixteen times. Choose **Any faction** for all factions and neutral cards, or **Hero’s faction only** to restrict each deck to its hero's faction. Keep that spellbook for a run ending at twelve wins or three losses. Every computer opponent drafts sixteen cards under the same pool and offer rules. Choose a shared hero level from 1–13, with 5 as the default. Each battle starts with two charges per spellbook slot, full health, and no artifacts or specialization. Arena always uses the strongest available combat AI, including its full knowledge of both hands and future draws. Choices, opponents, and battle progress save automatically; use **Resume saved run** in Draft Arena to continue. See [the Arena rules and checks](docs/draft_arena.md) for rules, card exclusions, tuning, and checks.
+
 ## Getting started (desktop)
 
 See also [Installing the game files](https://demiurges.wwworm.com/wiki/?page=installing) in the wiki.

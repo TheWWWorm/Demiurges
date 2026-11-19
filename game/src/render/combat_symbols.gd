@@ -218,14 +218,14 @@ func _draw() -> void:
 		for code: int in entry.glyphs: cells.append([code, entry.colour])
 		_draw_row(cells, at.x, at.y - size * 0.5, size)
 
-func _cell(code: int) -> Rect2:
+static func cell_rect(code: int) -> Rect2:
 	return Rect2((code % 16) * CELL, (code / 16) * CELL, CELL, CELL)
 
 ## One centred row of fixed-advance glyphs.
 func _draw_row(cells: Array, centre: float, y: float, size: float) -> void:
 	var x := centre - cells.size() * size * 0.5
 	for cell: Array in cells:
-		draw_texture_rect_region(sheet, Rect2(x, y, size, size), _cell(int(cell[0])), cell[1])
+		draw_texture_rect_region(sheet, Rect2(x, y, size, size), cell_rect(int(cell[0])), cell[1])
 		x += size
 
 ## The marker (sword three cells wide, or shield two cells tall) with the
