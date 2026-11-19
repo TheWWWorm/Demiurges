@@ -85,6 +85,11 @@ func _run() -> void:
 		else: print("SKIP: %s files could not be mounted" % edition)
 	for edition: String in profiles: _cost_lines(profiles[edition])
 	for edition: String in profiles: _status_breaks(profiles[edition])
+	# Enfeeblement's cast curses the creature in both games; Disenchant is
+	# only its paid removal.
+	for edition: String in ["el1", "el2"]:
+		check(ELCombatEffects.Table.cast_effects(edition, "ENFL") == ["CantUntap", "NegRune"], "%s: Enfeeblement's cast shows the curse, not its removal" % edition)
+		check(ELCombatEffects.Table.ability_effects(edition, "ENFL") == [["Disenchant", "at"]], "%s: Enfeeblement's paid removal shows Disenchant" % edition)
 	if profiles.has("el2"): _pale_commands(profiles.el2)
 	for edition: String in profiles: await _battle_controls(edition)
 	if profiles.has("el2"):

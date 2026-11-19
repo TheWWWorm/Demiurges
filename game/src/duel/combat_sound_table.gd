@@ -38,7 +38,7 @@ const CAST := {
 		"DNFR": ["PosEnchantment", "GreenAncientForest"], "DOMN": ["PosEnchantment", "PosAttack", "PosDefence", "PosRune"],
 		"DPGS": ["BlackDepressGas", "NegRune", "NegAttack"], "DRAT": ["RedSummon"],
 		"DRFR": ["PosEnchantment", "GreenDarkForest"], "DRGS": ["BlackDrowsyGas", "NegRune", "NegAttack"],
-		"DSIG": ["RedFireStream"], "DWND": ["NegDefence", "NegRune"], "ENAL": ["PosSorcery"], "ENFL": ["Disenchant"], "ENFR": ["Discard", "Draw"],
+		"DSIG": ["RedFireStream"], "DWND": ["NegDefence", "NegRune"], "ENAL": ["PosSorcery"], "ENFL": ["CantUntap", "NegRune"], "ENFR": ["Discard", "Draw"],
 		"ENLH": ["PosEnchantment"], "ENRG": ["PosEnchantment"], "ENVM": ["NegEnchantment"],
 		"ENWO": ["PosEnchantment", "PosDefence", "PosRune"], "ERBN": ["NegEnchantment", "CantUntap"],
 		"EREL": ["BlueSummon"], "ERQA": ["Tremor"], "ETAM": ["PosEnchantment"], "ETCH": ["PosSorcery"],
