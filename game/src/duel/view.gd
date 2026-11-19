@@ -1110,7 +1110,9 @@ func _unhandled_input(event: InputEvent) -> void:
 	if power_dialog != null and power_dialog.visible:
 		# The X choice holds the battle: Enter takes the value, Esc cancels.
 		if event is InputEventKey and event.pressed and not event.echo:
-			if event.keycode in [KEY_ENTER, KEY_KP_ENTER]: _confirm_power()
+			if event.keycode in [KEY_ENTER, KEY_KP_ENTER]:
+				get_viewport().set_input_as_handled()
+				_confirm_power()
 			elif event.keycode == KEY_ESCAPE: _cancel_power()
 		return
 	if event is InputEventKey and event.pressed:

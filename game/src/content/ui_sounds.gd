@@ -41,6 +41,8 @@ static func bind(button: BaseButton, profile: ELProfile, control := "") -> void:
 	if button == null or profile == null: return
 	var bound := button.has_meta("ui_sound")
 	button.set_meta("ui_sound", sound_of(profile, control if not control.is_empty() else String(button.name)))
+	# A check (OK) plate also answers Enter.
+	ELCheckEnter.mark(button, profile, control if not control.is_empty() else String(button.name))
 	if bound: return
 	button.pressed.connect(func(): play(profile, str(button.get_meta("ui_sound", ""))))
 	button.gui_input.connect(func(event: InputEvent):
