@@ -120,6 +120,17 @@ static func placed_gain(fade: float, edition := "") -> float:
 	fade = clampf(fade, 0.0, 1.0)
 	return pow(fade, 5.0 / 3.0) if edition == "el2" else fade
 
+## Loops the whole of `stream` (pass a copy: loop points belong to one use).
+## Godot's mixer plays loop_end itself as the loop's last frame and keeps no
+## padding after the samples, so the loop ends on the last frame; one more
+## reads past the sound's data, which crashes on Android, where a big buffer
+## ends at the edge of its memory page.
+static func loop_whole(stream: AudioStreamWAV) -> void:
+	var frame := (2 if stream.format == AudioStreamWAV.FORMAT_16_BITS else 1) * (2 if stream.stereo else 1)
+	stream.loop_mode = AudioStreamWAV.LOOP_FORWARD
+	stream.loop_begin = 0
+	stream.loop_end = maxi(0, stream.data.size() / frame - 1)
+
 static func sound(profile: ELProfile, path: String) -> AudioStreamWAV:
 	var key := ELArchive.key(path)
 	if profile.sound_cache.has(key): return profile.sound_cache[key]

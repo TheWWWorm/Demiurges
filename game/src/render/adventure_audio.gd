@@ -239,9 +239,7 @@ func start_sound(name: String, entry: Dictionary, data: ELProfile = null) -> voi
 	var stream: AudioStreamWAV = source
 	if bool(entry.get("loop", false)):
 		stream = source.duplicate()
-		stream.loop_mode = AudioStreamWAV.LOOP_FORWARD
-		stream.loop_begin = 0
-		stream.loop_end = stream.data.size() / ((2 if stream.format == AudioStreamWAV.FORMAT_16_BITS else 1) * (2 if stream.stereo else 1))
+		ELAudio.loop_whole(stream)
 	var player := AudioStreamPlayer.new()
 	add_child(player)
 	player.stream = stream

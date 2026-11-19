@@ -39,6 +39,7 @@ func _run() -> void:
 	_narrow_gaps()
 	await _tooltip_margins()
 	_setting()
+	_loops()
 	await _sounds()
 	await _view_sounds()
 	print("BATTLE HUD: %d failure(s)" % failures.size())
@@ -95,6 +96,14 @@ func _gap() -> void:
 	panel.readouts = false
 	check(not panel.roomy(), "with the readouts setting off a wide gap shows the plain strip")
 	panel.free()
+	# No stub of a gap: a panel a little past its layout is drawn at exactly
+	# its width; a phone's 896 panel (2688 at 3×) moves the caption into its gap.
+	for screen: Vector2 in [Vector2(2412, 1080), Vector2(2520, 1080), Vector2(2600, 1200)]:
+		var snapped := ELHudFrame.snap_scale(null, screen, 3.0)
+		check(is_equal_approx(screen.x / snapped, 800.0) and ELHudFrame.interface_filter(snapped) == CanvasItem.TEXTURE_FILTER_NEAREST, "%dx%d at 3× fills the 800 panel exactly, sharp (%.3f×)" % [screen.x, screen.y, snapped])
+	check(is_equal_approx(ELHudFrame.snap_scale(null, Vector2(2688, 1216), 3.0), 3.0), "a 96 px gap keeps 3× (the caption takes it)")
+	check(ELHudFrame.caption_in_gap(null, Vector2(896, 405), false) and not ELHudFrame.caption_in_gap(null, Vector2(896, 405), true), "the 896 panel's gap holds the caption unless a readout shows there")
+	check(not ELHudFrame.caption_in_gap(null, Vector2(800, 600), false), "the 800 panel keeps the caption box")
 	var settings := ELSettings.new()
 	check(int(settings.values.get("battle_gap", -1)) == 0 and ELSettings.SHARED.has("battle_gap"), "the slide is a shared remake setting, the spellbook by default")
 	check(ELSettings._clean("battle_gap", 9, 0) == ELCombatGapPanel.SLIDES.size() - 1 and ELSettings._clean("battle_gap", -3, 0) == 0, "a stored slide is kept in range")
@@ -166,6 +175,20 @@ func _setting() -> void:
 	var settings := ELSettings.new()
 	check(int(settings.values.get("battle_interface", -1)) == 0 and ELSettings.SHARED.has("battle_interface"), "the size is a shared remake setting, Automatic by default")
 	check(ELSettings._clean("battle_interface", 9, 0) == 4 and ELSettings._clean("battle_interface", -3, 0) == 0 and ELSettings._clean("battle_interface", "x", 0) == 0, "stored values are kept in range")
+
+## A looped sound ends on its last frame: Godot's mixer plays loop_end itself,
+## and a frame past the data crashed Android's audio thread.
+func _loops() -> void:
+	for case: Array in [[AudioStreamWAV.FORMAT_16_BITS, true, 4], [AudioStreamWAV.FORMAT_16_BITS, false, 2], [AudioStreamWAV.FORMAT_8_BITS, false, 1]]:
+		var stream := AudioStreamWAV.new()
+		stream.format = case[0]
+		stream.stereo = case[1]
+		stream.mix_rate = 22050
+		var data := PackedByteArray()
+		data.resize(1000 * int(case[2]))
+		stream.data = data
+		ELAudio.loop_whole(stream)
+		check(stream.loop_mode == AudioStreamWAV.LOOP_FORWARD and stream.loop_begin == 0 and stream.loop_end == 999, "a %d-byte-frame loop of 1000 frames ends on frame 999 (%d)" % [case[2], stream.loop_end])
 
 ## A test figure with its own sound folder.
 func _figure(directory: String) -> ELModel:

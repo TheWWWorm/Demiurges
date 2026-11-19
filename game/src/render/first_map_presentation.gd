@@ -478,9 +478,7 @@ func _walk_started(clip: String, uid: int) -> void:
 	var source := ELAudio.sound(profile, entry.folder + name)
 	if source == null: return
 	var loop: AudioStreamWAV = source.duplicate()
-	loop.loop_mode = AudioStreamWAV.LOOP_FORWARD
-	loop.loop_begin = 0
-	loop.loop_end = int(loop.get_length() * loop.mix_rate)
+	ELAudio.loop_whole(loop)
 	var player := AudioStreamPlayer.new()
 	add_child(player)
 	player.bus = _placed_bus()
@@ -610,9 +608,7 @@ func _update_cycles() -> void:
 				entry.cycle = false
 				continue
 			var loop: AudioStreamWAV = source.duplicate()
-			loop.loop_mode = AudioStreamWAV.LOOP_FORWARD
-			loop.loop_begin = 0
-			loop.loop_end = int(loop.get_length() * loop.mix_rate)
+			ELAudio.loop_whole(loop)
 			var player := AudioStreamPlayer.new()
 			add_child(player)
 			player.bus = _placed_bus()
@@ -721,9 +717,7 @@ func _ambient_step() -> void:
 			var source := ELAudio.sound(profile, "Ambient/%s/circle.wav" % folder)
 			if source == null: continue
 			var loop: AudioStreamWAV = source.duplicate()
-			loop.loop_mode = AudioStreamWAV.LOOP_FORWARD
-			loop.loop_begin = 0
-			loop.loop_end = int(loop.get_length() * loop.mix_rate)
+			ELAudio.loop_whole(loop)
 			player = AudioStreamPlayer.new()
 			add_child(player)
 			player.stream = loop

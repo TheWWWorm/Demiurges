@@ -150,8 +150,7 @@ func build(data: ELProfile, arena: Dictionary, volumes: Dictionary, preview := f
 	if sound != null:
 		# Loop points are instance settings, never mutations of a shared stream.
 		sound = sound.duplicate()
-		sound.loop_mode = AudioStreamWAV.LOOP_FORWARD
-		sound.loop_end = int(sound.get_length() * sound.mix_rate)
+		ELAudio.loop_whole(sound)
 		ambience.stream = sound
 		ambience.play()
 	var directory := ELArchive.key("Ambient/" + String(arena.get("Ambient", "")) + "/")
@@ -167,8 +166,7 @@ func build(data: ELProfile, arena: Dictionary, volumes: Dictionary, preview := f
 		var loop := ELAudio.sound(profile, String(sounds[i]))
 		if loop == null: continue
 		loop = loop.duplicate()
-		loop.loop_mode = AudioStreamWAV.LOOP_FORWARD
-		loop.loop_end = int(loop.get_length() * loop.mix_rate)
+		ELAudio.loop_whole(loop)
 		var player := AudioStreamPlayer3D.new()
 		add_child(player)
 		player.bus = ELAudio.positional_bus(bool(settings.get("audio_reverse", false)))
@@ -1654,8 +1652,7 @@ func play(path: String, spatial_gain := 1.0, loop := false) -> bool:
 	if stream == null: return false
 	if loop:
 		stream = stream.duplicate()
-		stream.loop_mode = AudioStreamWAV.LOOP_FORWARD
-		stream.loop_end = int(stream.get_length() * stream.mix_rate)
+		ELAudio.loop_whole(stream)
 	for voice in voices:
 		if not voice.playing:
 			_last_voice = voice

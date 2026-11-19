@@ -11,10 +11,6 @@ const RAIL_LEFT := 151.0
 const RAIL_RIGHT := 467.0
 ## A complete 53 px bay between the original left arrow and the next bay.
 const RAIL_TILE := Rect2(31, 0, ELListLook.PITCH, 61)
-## Panel art right of x 374 and left of this belongs to the rails' right ends
-## (the arrow housings and the left half of the knot after the arrow); the
-## caption and buttons start here. A piece crossing it is drawn in two parts.
-const RAIL_END_CAP := 499.0
 ## The card rail's own end: its right arrow housing closes here, and the knot
 ## after it belongs to the caption.
 const RAIL_CLOSE := 488.0
@@ -59,9 +55,22 @@ static func interface_scale(choice: int, screen: Vector2, touch_dpi := 0.0) -> f
 	return minf(wanted, fit)
 
 ## Whole sizes draw the art with nearest sampling (sharp squares), 1.5 with
-## linear filtering.
+## linear filtering; a size up to a tenth over a whole one of at least 2 (see
+## `snap_scale`) stays sharp too.
 static func interface_filter(scale: float) -> CanvasItem.TextureFilter:
-	return CanvasItem.TEXTURE_FILTER_NEAREST if is_equal_approx(scale, roundf(scale)) else CanvasItem.TEXTURE_FILTER_LINEAR
+	var whole := floorf(scale + 0.001)
+	return CanvasItem.TEXTURE_FILTER_NEAREST if is_equal_approx(scale, roundf(scale)) or (whole >= 2.0 and scale - whole <= 0.1 * whole) else CanvasItem.TEXTURE_FILTER_LINEAR
+
+## A panel a little wider than the 800 layout would leave a stub of a gap too
+## narrow for the caption (under CAPTION_GAP): such a panel is drawn a little
+## bigger instead, exactly 800 wide (at most 9%). The 1024 layout widens its
+## caption oval instead (`caption_stretch`).
+static func snap_scale(profile: ELProfile, screen: Vector2, pixels: float) -> float:
+	var width := ceilf(screen.x / pixels - 0.001)
+	var base := base_width(profile, width)
+	if base >= WIDE: return pixels
+	var gap := rail_trim(profile, width)
+	return screen.x / base if gap > 0.0 and gap < CAPTION_GAP else pixels
 
 ## Card slots the hand rail shows at once: the original's six, whatever the
 ## panel's width (the rail runs from its left arrow to its right one).
@@ -84,6 +93,22 @@ static func gap_rect(profile: ELProfile, size: Vector2) -> Rect2:
 	if caption_stretch(profile, size.x) > 0.0: return Rect2(right - trim, size.y - RAIL_TILE.size.y, 0.0, RAIL_TILE.size.y)
 	return Rect2(right - trim, size.y - RAIL_TILE.size.y, trim, RAIL_TILE.size.y)
 
+## The narrowest gap the phase caption moves into (see `caption_in_gap`).
+const CAPTION_GAP := 72.0
+## The 800 layout's caption box above the buttons and the frame end to its left.
+const CAPTION_BOX := Rect2(499, -119, 181, 58)
+const CAPTION_BRACKET := Rect2(479, -119, 20, 58)
+## Where that frame end goes when the box is not drawn: against the right
+## hero's box, as the 1024 layout's own end piece stands.
+const HERO_BOX_LEFT := 680.0
+
+## Whether the phase caption is shown in the gap instead of the 800 layout's
+## box above the buttons: on a panel a little wider than 800 (a phone at a
+## large interface size) whose gap shows no readout, the box goes and the
+## buttons' row stands at the rail's height, as in the 1024 layout.
+static func caption_in_gap(profile: ELProfile, size: Vector2, readout: bool) -> bool:
+	return not wide_layout(profile, size.x) and not readout and gap_rect(profile, size).size.x >= CAPTION_GAP
+
 ## The 1024 layout's phase caption oval: its piece and the column at which
 ## it is widened (the oval's straight middle, under the caption's centre).
 const CAPTION_LEFT := 488.0
@@ -105,6 +130,8 @@ static func caption_stretch(profile: ELProfile, width: float) -> float:
 var pieces: Array[Dictionary] = []
 var panel_texture: Texture2D
 var has_wide := false
+## Set by the view: the caption is in the gap (see `caption_in_gap`).
+var caption_moved := false
 var _profile: ELProfile
 
 func build(profile: ELProfile) -> void:
@@ -177,15 +204,18 @@ func _draw() -> void:
 		if destination.position.x < 374:
 			draw_texture_rect_region(piece.texture, destination, source)
 			continue
+		if not wide and caption_moved:
+			if piece.destination == CAPTION_BOX: continue
+			if piece.destination == CAPTION_BRACKET: destination.position.x = HERO_BOX_LEFT - CAPTION_BRACKET.size.x
 		destination.position.x += extra
 		var left: float = piece.destination.position.x
-		# The rail's part of a piece follows the rail; the rest stays with the
-		# caption. In the bottom row the rail ends with its arrow housing, and
-		# what stands taller than the rail is the caption's.
+		# The rail's part of a bottom-row piece follows the rail (it ends with
+		# its arrow housing); the rest, and everything standing taller than
+		# the rail, stays with the caption, so the frame end above the rail's
+		# end keeps against the caption box.
 		var bottom: bool = piece.destination.position.y > -70.0
-		var cap := RAIL_CLOSE if bottom else RAIL_END_CAP
-		if left < cap and trim > 0.0 and not (bottom and piece.destination.position.y < -RAIL_TILE.size.y):
-			var cut := minf(cap - left, destination.size.x)
+		if bottom and left < RAIL_CLOSE and trim > 0.0 and piece.destination.position.y >= -RAIL_TILE.size.y:
+			var cut := minf(RAIL_CLOSE - left, destination.size.x)
 			var scale_x := source.size.x / destination.size.x
 			draw_texture_rect_region(piece.texture, Rect2(destination.position - Vector2(trim, 0), Vector2(cut, destination.size.y)), Rect2(source.position, Vector2(cut * scale_x, source.size.y)))
 			if cut >= destination.size.x: continue

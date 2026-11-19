@@ -297,6 +297,11 @@ const BATTLE_START_SOUND := "Buttons/Combat02.wav"
 ## Original cursors (ELCursors): the character under the pointer when the
 ## pointer reached the battlefield rather than a panel, and the cursor asked for.
 var combat_hover := -1
+## The last hint's time (msec, -1 for none or a notice) and the hand item it
+## describes; hints go after HINT_SECONDS (_expire_hint).
+const HINT_SECONDS := 5.0
+var _hint_ms := -1
+var _hint_control: Control
 ## Original combat readouts: figure numbers, icons and order marks; phase
 ## banners and cast messages.
 var symbols: ELCombatSymbols
@@ -854,6 +859,7 @@ var _tutorial_end_clock := 0.0
 
 func _process(delta: float) -> void:
 	elapsed += delta
+	_expire_hint()
 	_show_log()
 	if gap_panel != null and advisor.tick(): _show_advice()
 	if combat_watch != null and combat_watch.step(delta): _show_watch()
@@ -1118,6 +1124,19 @@ func _unhandled_input(event: InputEvent) -> void:
 		if event.keycode == KEY_ESCAPE and _wants_esc_menu():
 			_open_game_menu()
 			return
+		if event.keycode == KEY_MENU and not event.echo:
+			if esc_menu != null and esc_menu.visible:
+				_close_esc_menu()
+				return
+			_hand_drag_cancel()
+			selection = -1
+			selection_power = 0
+			exchange_target = -1
+			selected_creature = -1
+			ability_selection.clear()
+			if _wants_esc_menu(): _open_game_menu()
+			else: _refresh()
+			return
 		if event.keycode == KEY_ESCAPE:
 			_hand_drag_cancel()
 			selection = -1
@@ -1144,6 +1163,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		_update_camera()
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
 		var nearest := _character_at(event.position)
+		if nearest < 0: _clear_inspection()
 		if nearest >= 0:
 			_target(nearest)
 			if event.double_click and _human_turn() and nearest >= 2 and duel.phase == ELDuel.Phase.ATTACK and selection < 0 and ability_selection.is_empty():
@@ -1238,7 +1258,9 @@ func touch_zoom(factor: float) -> void:
 	_update_camera()
 
 func touch_bar_keys() -> Array:
-	var keys := [["Camera", KEY_R]]
+	# Menu: the game menu (Surrender, Save, Load) in one tap, whatever is
+	# selected (Back cancels a selection first).
+	var keys := [["Menu", KEY_MENU], ["Camera", KEY_R]]
 	if profile != null and profile.id == "el1": keys.append(["Tutorial", KEY_H])
 	return keys
 
@@ -5076,7 +5098,7 @@ func _refresh() -> void:
 			for child in button.get_children():
 				button.remove_child(child)
 				child.queue_free()
-			for signal_name: String in ["pressed", "mouse_entered"]:
+			for signal_name: String in ["pressed", "mouse_entered", "mouse_exited"]:
 				for connection: Dictionary in button.get_signal_connection_list(signal_name):
 					button.disconnect(signal_name, connection.callable)
 		button.custom_minimum_size = Vector2.ONE * ELListLook.ITEM_SIZE
@@ -5121,7 +5143,8 @@ func _refresh() -> void:
 		_bind_list_sound(button)
 		_bind_hand_drag(button)
 		button.pressed.connect(_cast_card.bind(index))
-		button.mouse_entered.connect(_hint.bind(_t(button.tooltip_text).replace("\n", " — ")))
+		button.mouse_entered.connect(_hover_hint.bind(_t(button.tooltip_text).replace("\n", " — "), button))
+		button.mouse_exited.connect(_hover_hint_left.bind(button))
 		if reused == null: hand.add_child(button)
 		hand.move_child(button, place)
 		place += 1
@@ -5356,7 +5379,8 @@ func _fill_artifact_rail(displayed: int) -> void:
 		button.add_child(charges)
 		_bind_list_sound(button)
 		if commands.has(index): button.pressed.connect(_select_ability.bind(displayed, commands[index]))
-		button.mouse_entered.connect(_hint.bind(button.tooltip_text.replace("\n", " — ")))
+		button.mouse_entered.connect(_hover_hint.bind(button.tooltip_text.replace("\n", " — "), button))
+		button.mouse_exited.connect(_hover_hint_left.bind(button))
 		hand.add_child(button)
 
 ## The hand/artifact list's item sounds (both games' list control): the
@@ -5408,7 +5432,7 @@ func _refresh_phase_caption() -> void:
 	var text := phase_caption() if duel != null else ""
 	var finished := duel != null and _shown_phase() == ELDuel.Phase.FINISHED
 	var bounds := _phase_caption_rect
-	var font_size := PHASE_CAPTION_FONT_SIZE
+	var font_size := PHASE_CAPTION_FONT_SIZE if hud == null or not hud.caption_moved else 12
 	if finished and bounds.has_area():
 		bounds = bounds.grow_individual(-16.0, 0.0, -16.0, 0.0)
 		var font := phase_label.get_theme_font("font")
@@ -5616,13 +5640,53 @@ func _control_tip(control: String) -> String:
 func _notice(text: String) -> void:
 	notice.text = text
 	notice.visible = true
+	_hint_ms = -1
+	_hint_control = null
 
 ## A remake prompt, refusal or hover readout in combat. The original has none
 ## (only the cursor and the phase box prompt), so it shows with the helper
-## overlay only.
+## overlay only. It goes after HINT_SECONDS unless a target is still awaited
+## (see _expire_hint).
 func _hint(text: String) -> void:
 	notice.text = text
 	notice.visible = helper_overlay()
+	_hint_ms = Time.get_ticks_msec()
+	_hint_control = null
+
+## A hand or artifact item's readout while the pointer is over it; it goes
+## when the pointer leaves (on a touch screen, where a tap leaves the pointer
+## on the item, after HINT_SECONDS like any hint).
+func _hover_hint(text: String, control: Control) -> void:
+	_hint(text)
+	_hint_control = control
+
+func _hover_hint_left(control: Control) -> void:
+	if _hint_control != control: return
+	_hint_control = null
+	_hint_ms = -1
+	notice.visible = false
+
+func _expire_hint() -> void:
+	if _hint_ms < 0 or notice == null or not notice.visible: return
+	if Time.get_ticks_msec() - _hint_ms < HINT_SECONDS * 1000.0: return
+	if not ELTouchInput.enabled and is_instance_valid(_hint_control) and get_viewport().gui_get_hovered_control() == _hint_control: return
+	if selection >= 0 or not ability_selection.is_empty() or (power_dialog != null and power_dialog.visible) or not _hand_drag.is_empty(): return
+	_hint_ms = -1
+	_hint_control = null
+	notice.visible = false
+
+## A tap or click on open ground (no figure, nothing awaiting a target): the
+## selected character's readouts, its tooltip and the remake notice go.
+func _clear_inspection() -> void:
+	if selection >= 0 or not ability_selection.is_empty() or (power_dialog != null and power_dialog.visible) or (_hot_seat() and hot_pending): return
+	if combat_tip != null: combat_tip.hide_tip()
+	if notice != null: notice.visible = false
+	_hint_ms = -1
+	_hint_control = null
+	if selected_creature >= 0:
+		selected_creature = -1
+		inspect_graveyard = false
+		_refresh()
 
 func _spec_name(code: String) -> String:
 	return _spec_text(code, "Name", code)
@@ -6843,6 +6907,8 @@ func _battle_interface_row(box: Control) -> void:
 		for panel in gap_panels:
 			panel.readouts = enabled
 			panel.layout()
+		# Without readouts a narrow gap may take the phase caption.
+		_layout_hud()
 		if duel != null: _refresh())
 	_settings_row(box, "Battle panel readouts", "On a wide screen, the free width of the battle panel beside the spells shows readouts switched with its arrows: the spellbook, the battle adviser with the chances to win, both heroes' graveyards and enchantments, and the battle camera. Off: that width stays an empty strip.", readouts_toggle)
 	var lock_toggle := CheckButton.new()
@@ -8768,6 +8834,8 @@ func _layout_hud() -> void:
 	if unit <= 0.0: unit = 1.0
 	var screen := (ui.size * unit).round()
 	var pixels := ELHudFrame.interface_scale(int(settings.values.get("battle_interface", 0)), screen, _touch_dpi())
+	# No stub of a gap too narrow to hold anything.
+	pixels = ELHudFrame.snap_scale(profile, screen, pixels)
 	var factor := pixels / unit
 	hud_root.scale = Vector2.ONE * factor
 	hud_root.texture_filter = ELHudFrame.interface_filter(pixels)
@@ -8778,7 +8846,7 @@ func _layout_hud() -> void:
 		log_text.position = Vector2(notices.icon_column_right() + 12.0, 56.0)
 		log_text.size = Vector2(minf(470.0, maxf(0.0, ui.size.x - log_text.position.x - 16.0)), 145.0)
 	if affect_strip != null: affect_strip.ui_scale = factor
-	hud_root.size = (screen / pixels).ceil()
+	hud_root.size = (screen / pixels - Vector2.ONE * 0.001).ceil()
 	hud_root.position = Vector2(0.0, (screen.y - hud_root.size.y * pixels) / unit)
 	hud.size = hud_root.size
 	hud.queue_redraw()
@@ -8790,11 +8858,19 @@ func _layout_hud() -> void:
 	_place_hero_boxes()
 	var w := hud_root.size.x
 	var h := hud_root.size.y
+	# The extra width between the rail and the caption holds the readouts.
+	var gap := ELHudFrame.gap_rect(profile, hud_root.size)
+	var readout: bool = gap_panels[0].readouts and gap.size.x >= ELCombatGapPanel.MIN_WIDTH
+	hud.caption_moved = ELHudFrame.caption_in_gap(profile, hud_root.size, readout)
 	if ELHudFrame.wide_layout(profile, w):
 		# The original's 1024 layout: the oval (488,535)-(729,600) beside the buttons.
 		# A narrow extra width widens the oval instead of a strip (#164).
 		var stretch := ELHudFrame.caption_stretch(profile, w)
 		_phase_caption_rect = Rect2(w - 524 - stretch, h - 57, 217 + stretch, 46)
+	elif hud.caption_moved:
+		# A gap with no readout (a phone's panel just over 800 wide): the
+		# caption sits in its strip, smaller, and the box above the buttons goes.
+		_phase_caption_rect = Rect2(gap.position + Vector2(4, 3), Vector2(gap.size.x - 8, gap.size.y - 10))
 	else:
 		_phase_caption_rect = Rect2(w - 296, h - 109, 118, 43)
 	_refresh_phase_caption()
@@ -8817,8 +8893,6 @@ func _layout_hud() -> void:
 	hand_frames.position = rail_rect.position
 	hand_frames.size = rail_rect.size
 	hand_frames.queue_redraw()
-	# The extra width between the rail and the caption holds the readouts.
-	var gap := ELHudFrame.gap_rect(profile, hud_root.size)
 	var shown := clampi(int(gap.size.x / GAP_PANEL_WIDTH), 1, gap_panels.size())
 	var share := floorf(gap.size.x / shown)
 	for i in gap_panels.size():
