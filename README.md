@@ -68,6 +68,7 @@ python3 tools/import_game.py el2 /path/to/Etherlords2
 - **Single missions** and seeded random maps in Etherlords I, and the Etherlords II tutorial.
 - **Random maps** in Etherlords I. Open **Single Mission → Random map…** for seeded worlds against computer players, with optional ships, harbors, and naval routes. See the [random map guide](docs/first_random_maps.md).
 - **Duels**: the original Duel screen with its presets and hero editor, practice battles against the computer and local hot seat for two players. Etherlords II duels can be replayed.
+- **Tactical puzzles** in both games. Search **Crucible** (English) or **Горнило** (Russian) for the new Expert collection: short combinations with an ordinary victory objective and a maximum of three own turns. [Crucible guide](docs/puzzle_crucible.md).
 - **Combat** with the original creatures, spells, abilities, enchantments, artifacts and battlefields of both games, including automatic combat.
 - **Automatic battle camera**: spells, the first blow of a fight and the winner get close-ups along the games' own camera tracks before the view returns to yours. **Camera dynamics** in Options sets how often they happen, and the numbers over creatures can be hidden during close-ups. Moving the camera yourself ends a close-up at once.
 - **Original interface**: the main menu, campaign and mission screens, Options, saving and loading, the map interface and the battle screen use the games' own art and texts.

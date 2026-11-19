@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check Curiosities content, preservation and exact runtime evidence.
+"""Check authored expansions, preservation and exact runtime evidence.
 
   python tools/curiosities_check.py
   python tools/curiosities_check.py --runtime --baselines --godot /path/to/godot
@@ -23,6 +23,7 @@ from puzzle_authoring import ROOT, card
 from puzzle_lab import prepare
 
 BASE_REVISION = "1933bc4a303c3369657accb5c29475810089653a"
+CRUCIBLE_BASE_REVISION = "5d39ca49b07b0fd65adc7eaca4ce89d70c704c6c"
 
 
 def definition(entry):
@@ -39,20 +40,34 @@ def whole(value, low, high):
     return isinstance(value, (int, float)) and not isinstance(value, bool) and low <= value <= high and value == int(value)
 
 
+def completed_native(proof, status, turns):
+    """Accept only a completed native-model verdict, never a budget timeout."""
+    if proof.get("status") != status or any(proof.get(flag) is not False for flag in ("aborted", "unknown", "incomplete")):
+        return False
+    if status == "proven":
+        return whole(proof.get("turns"), 1, turns)
+    return whole(proof.get("settled"), turns, 12)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--pack-dir", type=Path, default=ROOT / "game/puzzles")
-    parser.add_argument("--base-ref", default=BASE_REVISION)
+    parser.add_argument("--base-ref", help="Preservation baseline; defaults to the release before the selected expansion")
     parser.add_argument("--base-dir", type=Path, help="Original catalog directory, instead of git show")
     parser.add_argument("--edition", choices=("el1", "el2", "both"), default="both")
-    parser.add_argument("--collection", choices=("all", "curiosities-v1", "paradoxes", "crossroads"), default="all",
+    parser.add_argument("--collection", choices=("all", "crucible", "curiosities-v1", "paradoxes", "crossroads"), default="all",
                         help="Check all expansions or only one named collection")
     parser.add_argument("--report-dir", type=Path, default=ROOT / "build/curiosities-validation")
     parser.add_argument("--runtime", action="store_true")
     parser.add_argument("--baselines", action="store_true", help="No-action and attack-everyone policies versus real AI")
     parser.add_argument("--godot", default=shutil.which("godot") or "godot")
     parser.add_argument("--proof-dir", type=Path, help="Directory with exact-definition puzzle_lab --search reports named el1.json and el2.json")
+    parser.add_argument("--native-proof-dir", type=Path, help="Optional exact-definition crucible_audit reports; native-model evidence is counted separately from GDScript")
+    parser.add_argument("--require-proofs", action="store_true", help="Require a completed matching GDScript or native-model proof for every root and wrong-plan prefix")
     args = parser.parse_args()
+    if args.require_proofs and (not args.runtime or not (args.proof_dir or args.native_proof_dir)):
+        parser.error("--require-proofs needs --runtime and at least one proof directory")
+    args.base_ref = args.base_ref or (CRUCIBLE_BASE_REVISION if args.collection == "crucible" else BASE_REVISION)
     editions = ("el1", "el2") if args.edition == "both" else (args.edition,)
     errors, warnings, summaries = [], [], {}
     args.report_dir.mkdir(parents=True, exist_ok=True)
@@ -69,7 +84,7 @@ def main():
         check(len(entries) == len(by_id), edition + ": duplicate IDs")
         check(document.get("format") == "etherlords-puzzles" and document.get("game") == edition,
               edition + ": invalid catalog identity")
-        groups = {"curiosities-v1": "curiosities", "curiosities-v2": "paradoxes", "curiosities-v3": "crossroads"}
+        groups = {"curiosities-v1": "curiosities", "curiosities-v2": "paradoxes", "curiosities-v3": "crossroads", "crucible-v1": "crucible"}
         selected = "curiosities" if args.collection == "curiosities-v1" else args.collection
         chosen_groups = {key: suffix for key, suffix in groups.items() if args.collection == "all" or suffix == selected}
         authored, expected_expansion = [], {}
@@ -109,6 +124,7 @@ def main():
                 "curiosities-v1": ("Curiosities · ", "Курьёзы · "),
                 "curiosities-v2": ("Curiosities · Paradoxes · ", "Курьёзы · Парадоксы · "),
                 "curiosities-v3": ("Curiosities · Crossroads · ", "Курьёзы · Развилки · "),
+                "crucible-v1": ("Crucible · ", "Горнило · "),
             }[expected_expansion[identity]]
             check(entry.get("category", "").startswith(prefixes[0]) and entry.get("category_ru", "").startswith(prefixes[1]),
                   identity + ": expansion is not searchable by its English and Russian collection names")
@@ -126,6 +142,10 @@ def main():
                       identity + ": missing combatant names" + suffix)
             check(whole(entry.get("level"), 1, 4), identity + ": invalid difficulty")
             check(whole(entry.get("turns"), 1, 12), identity + ": invalid turn allowance")
+            if expected_expansion[identity] == "crucible-v1":
+                check(entry.get("level") == 4, identity + ": Crucible must remain Expert difficulty")
+                check(whole(entry.get("turns"), 1, 3), identity + ": Crucible exceeds its three-turn limit")
+                check(entry.get("objective") == {"type": "win"}, identity + ": Crucible requires an ordinary victory objective")
             state = entry["state"]
             check(state.get("profile") == edition, identity + ": wrong edition")
             check(state.get("setup", {}).get("puzzle_fixed_hands") is True and state.get("setup", {}).get("puzzle_fixed_channels") is True,
@@ -143,6 +163,8 @@ def main():
                 check(alternative.get("commands") != entry.get("solution"), identity + ": alternative repeats the reference line")
             refs = entry.get("refutations", [])
             check(bool(refs), identity + ": missing tempting alternative")
+            if expected_expansion[identity] == "crucible-v1":
+                check(len(refs) >= 2, identity + ": Crucible needs at least two tested wrong-plan prefixes")
             for branch in refs:
                 prefix = branch.get("commands", [])
                 check(bool(branch.get("label")) and bool(prefix), identity + ": empty refutation")
@@ -169,6 +191,7 @@ def main():
             selected_path = args.report_dir / (edition + "-curiosities.json")
             selected_path.write_text(json.dumps({**document, "puzzles": new}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
             runtime_path = args.report_dir / (edition + "-runtime.json")
+            runtime_path.unlink(missing_ok=True)
             for command in ([args.godot, "--headless", "--editor", "--path", str(workspace.resolve()), "--quit"],
                             [args.godot, "--headless", "--path", str(workspace.resolve()), "--script", "curiosities_check.gd", "--check-only"]):
                 scan = subprocess.run(command, capture_output=True, text=True)
@@ -187,30 +210,60 @@ def main():
                       edition + ": runtime checks failed: " + run.stderr)
                 if runtime_path.exists():
                     runtime = json.loads(runtime_path.read_text(encoding="utf-8"))
+        if args.runtime and new:
+            check(runtime is not None, edition + ": requested runtime check did not produce a fresh report")
 
         proof_rows = {}
         if args.proof_dir and (args.proof_dir / (edition + ".json")).is_file():
             proof_rows = {item["id"]: item for item in json.loads((args.proof_dir / (edition + ".json")).read_text())["results"]}
+        native_rows = {}
+        if args.native_proof_dir and (args.native_proof_dir / (edition + ".json")).is_file():
+            native_rows = {item["id"]: item for item in json.loads((args.native_proof_dir / (edition + ".json")).read_text())["results"]}
         evidence_counts = Counter(dict.fromkeys((
             "reference_replays_solved", "initial_positions_live", "reference_action_coverage_passed",
             "reference_actions_checked", "naive_attempts_tested", "naive_attempts_failed",
             "alternatives_tested", "terminal_losing_replays", "live_prefixes_bounded_refuted",
             "bounded_refutations_total", "bounded_root_forced", "unverified_alternatives",
+            "native_root_forced", "native_refutations_total", "live_prefixes_native_refuted",
         ), 0))
         if runtime:
             check(runtime["count"] == len(new), edition + ": runtime report coverage differs from catalog")
+            check(len(runtime["results"]) == len(new) and {row.get("id") for row in runtime["results"]} == new_ids,
+                  edition + ": runtime result identities differ from selected puzzles")
             for result in runtime["results"]:
                 entry = by_id[result["id"]]
                 check(result.get("definition") == definition(entry), entry["id"] + ": report does not match shipped definition")
                 demonstrated = 0
                 proof = proof_rows.get(entry["id"], {})
                 bound = proof.get("definition") == definition(entry)
+                native = native_rows.get(entry["id"], {})
+                native_bound = (native.get("definition") == definition(entry)
+                                and entry.get("objective") == {"type": "win"}
+                                and native.get("reference", {}).get("ok") is True
+                                and native.get("reference", {}).get("terminal") == 1
+                                and native.get("native_parity", {}).get("ok") is True
+                                and native.get("native_parity", {}).get("actions") == len(entry["solution"]))
+                native_roots = [row.get("proof", {}) for row in native.get("native_horizons", [])
+                                if row.get("turns") == entry["turns"]] if native_bound else []
+                native_won = any(completed_native(row, "proven", int(entry["turns"])) for row in native_roots)
+                if args.native_proof_dir:
+                    check(native_bound, entry["id"] + ": missing, stale or incomplete native audit binding")
+                if native_bound:
+                    check(not any(completed_native(row, "no_forced_win", int(entry["turns"])) for row in native_roots),
+                          entry["id"] + ": native model refutes the initial position")
                 if args.proof_dir:
                     check(bool(proof), entry["id"] + ": no search report supplied")
                     check(bound, entry["id"] + ": search report does not match shipped definition")
                 if bound:
                     check(proof.get("proof", {}).get("result") != "refuted",
                           entry["id"] + ": bounded search found that the opponent can refute the initial position")
+                    if args.require_proofs:
+                        check(len(proof.get("refutations", [])) == len(entry.get("refutations", [])),
+                              entry["id"] + ": incomplete wrong-plan proof coverage")
+                if args.require_proofs:
+                    check((bound and proof.get("proof", {}).get("result") == "forced") or native_won,
+                          entry["id"] + ": no completed root proof in either backend")
+                evidence_counts["native_root_forced"] += native_won
                 evidence_counts["reference_replays_solved"] += bool(result.get("solution", {}).get("ok") and result["solution"].get("terminal") == 1)
                 actual_alternatives = result.get("alternative_solutions", [])
                 declared_alternatives = entry.get("alternative_solutions", [])
@@ -227,9 +280,12 @@ def main():
                     evidence_counts["naive_attempts_failed"] += baseline.get("outcome") == "failed"
                 result["correlated_evidence"] = {
                     "proof_definition_matches": bound,
-                    "scope": "Exact-input bounded GDScript lab search. Reference ordering is an ordering aid, not a blind native-AI solve or exhaustive correctness certificate.",
+                    "native_definition_and_reference_parity_match": native_bound,
+                    "scope": "Exact-input bounded GDScript search and, when requested, separately identified native-model proofs. Reference ordering only changes search order; reference parity does not certify every native branch or human difficulty.",
                     "alternatives": [],
                 }
+                if native_bound:
+                    result["correlated_evidence"]["native_root_search"] = native_roots
                 if bound:
                     result["correlated_evidence"]["root_search"] = proof.get("proof", {})
                     evidence_counts["bounded_root_forced"] += proof.get("proof", {}).get("result") == "forced"
@@ -237,11 +293,30 @@ def main():
                     evidence_counts["alternatives_tested"] += 1
                     losing = branch.get("failure_line", branch.get("prefix", {}))
                     searched = proof["refutations"][index].get("proof", {}) if bound and index < len(proof.get("refutations", [])) else {}
+                    native_branch = native["native_refutations"][index] if native_bound and index < len(native.get("native_refutations", [])) else {}
+                    native_prefix = native_branch.get("prefix", {})
+                    native_loss = (native_prefix.get("ok") is True
+                                   and native_branch.get("label") == branch.get("label")
+                                   and native_prefix.get("trace") == branch.get("prefix", {}).get("trace")
+                                   and native_prefix.get("terminal") == branch.get("prefix", {}).get("terminal")
+                                   and (native_prefix.get("terminal") == -1
+                                        or completed_native(native_branch.get("proof", {}), "no_forced_win", int(entry["turns"]))))
+                    check(searched.get("result") != "forced",
+                          entry["id"] + ": GDScript search finds a win after a claimed wrong plan: " + branch.get("label", ""))
+                    if native_prefix.get("ok") is True:
+                        check(not completed_native(native_branch.get("proof", {}), "proven", int(entry["turns"])),
+                              entry["id"] + ": native model finds a win after a claimed wrong plan: " + branch.get("label", ""))
+                    evidence_counts["native_refutations_total"] += native_loss
                     if searched.get("result") == "refuted":
                         evidence_counts["bounded_refutations_total"] += 1
+                    if args.require_proofs:
+                        check(searched.get("result") == "refuted" or native_loss or (branch.get("prefix", {}).get("ok") and branch["prefix"].get("terminal") == -1),
+                              entry["id"] + ": wrong-plan proof is missing or inconclusive: " + branch.get("label", ""))
                     evidence = {"label": branch.get("label", ""), "prefix_terminal": branch.get("prefix", {}).get("terminal")}
                     if searched:
                         evidence["prefix_search"] = searched
+                    if native_branch:
+                        evidence["native_prefix_search"] = native_branch.get("proof", {})
                     if losing.get("ok") and losing.get("terminal") == -1:
                         demonstrated += 1
                         evidence_counts["terminal_losing_replays"] += 1
@@ -252,6 +327,11 @@ def main():
                         evidence_counts["live_prefixes_bounded_refuted"] += 1
                         evidence["kind"] = "live_prefix_bounded_refuted"
                         evidence["scope"] = "The legal prefix remains live in replay; bounded lab search refutes its continuations within this puzzle's deadline."
+                    elif native_loss:
+                        demonstrated += 1
+                        evidence_counts["live_prefixes_native_refuted"] += 1
+                        evidence["kind"] = "live_prefix_native_model_refuted"
+                        evidence["scope"] = "The legal prefix remains live in the actual runtime; the separately bound native model completes a no-forced-win proof. This is not a completed GDScript search."
                     else:
                         evidence_counts["unverified_alternatives"] += 1
                         evidence["kind"] = "unverified_live_prefix"
@@ -274,7 +354,7 @@ def main():
     for warning in warnings:
         print("NOTE " + warning)
     print(json.dumps(summaries, ensure_ascii=False, indent=2))
-    print(f"CURIOSITIES QUALITY: {len(errors)} failure(s), {len(warnings)} review note(s)")
+    print(f"EXPANSION QUALITY: {len(errors)} failure(s), {len(warnings)} review note(s)")
     return 1 if errors else 0
 
 

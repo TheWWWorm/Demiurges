@@ -14,7 +14,7 @@ import os
 from pathlib import Path
 import tempfile
 
-EXPANSIONS = {"curiosities-v1": 5, "curiosities-v2": 6, "curiosities-v3": 7}
+EXPANSIONS = {"curiosities-v1": 5, "curiosities-v2": 6, "curiosities-v3": 7, "crucible-v1": 12}
 
 
 def read_pack(path: Path, edition: str) -> tuple[bytes, dict]:
@@ -56,7 +56,7 @@ def install(target: Path, pack: Path, dry_run: bool = False) -> dict:
         raise ValueError("Target must be the Demiurges source repository (the folder containing game/project.godot), not an installed Etherlords folder or a release executable.")
     source = runtime.read_text(encoding="utf-8")
     if any(marker not in source for marker in ("finish_health", "finish_mana", "min_allies", '"control"', "failed_target")):
-        raise ValueError("This checkout lacks the objective-aware puzzle runtime. Update Demiurges before installing Curiosities.")
+        raise ValueError("This checkout lacks the objective-aware puzzle runtime. Update Demiurges before installing this expansion.")
 
     planned = []
     stats = []
@@ -64,7 +64,7 @@ def install(target: Path, pack: Path, dry_run: bool = False) -> dict:
     for edition in ("el1", "el2"):
         _, incoming = read_pack(pack / (edition + ".json"), edition)
         if incoming.get("collection_id") not in EXPANSIONS or not incoming["puzzles"]:
-            raise ValueError(f"Expected a nonempty Curiosities expansion in {pack / (edition + '.json')}")
+            raise ValueError(f"Expected a nonempty supported puzzle expansion in {pack / (edition + '.json')}")
         for entry in incoming["puzzles"]:
             if entry.get("expansion") not in EXPANSIONS or entry.get("state", {}).get("profile") != edition:
                 raise ValueError(f"Unexpected expansion entry: {entry['id']}")
@@ -102,7 +102,7 @@ def install(target: Path, pack: Path, dry_run: bool = False) -> dict:
 
     backups = target / "build/puzzle-backups"
     backups.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime("curiosities-%Y%m%dT%H%M%SZ-")
+    stamp = datetime.now(timezone.utc).strftime("puzzles-%Y%m%dT%H%M%SZ-")
     backup = Path(tempfile.mkdtemp(prefix=stamp, dir=backups))
     staged = []
     replaced = []

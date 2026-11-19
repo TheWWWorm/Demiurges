@@ -81,6 +81,25 @@ class InstallationChecks(unittest.TestCase):
         self.assertEqual([item["added"] for item in report["catalogs"]], [0, 0])
         self.assertEqual(self.catalogs(), once)
 
+    def test_crucible_preserves_all_previous_entries_and_revision(self):
+        for edition in ("el1", "el2"):
+            self.incoming[edition]["collection_id"] = "crucible-v1"
+            self.incoming[edition]["puzzles"][0]["expansion"] = "crucible-v1"
+            self.write_incoming(edition)
+        report = install(self.target, self.pack)
+        self.assertEqual([item["added"] for item in report["catalogs"]], [1, 1])
+        for edition, contents in self.catalogs().items():
+            installed = json.loads(contents)
+            by_id = {entry["id"]: entry for entry in installed["puzzles"]}
+            for original in self.originals[edition]["puzzles"]:
+                self.assertEqual(by_id[original["id"]], original)
+            self.assertIn("crucible-v1", installed["expansions"])
+            self.assertGreaterEqual(installed["content_revision"], 12)
+        once = self.catalogs()
+        repeated = install(self.target, self.pack)
+        self.assertEqual([item["added"] for item in repeated["catalogs"]], [0, 0])
+        self.assertEqual(self.catalogs(), once)
+
     def test_successive_cumulative_expansions_preserve_earlier_entries(self):
         install(self.target, self.pack)
         for generation in (2, 3):

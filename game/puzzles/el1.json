@@ -1,13 +1,7 @@
 {
   "collection": "Tactical Studies",
   "collection_id": "tactical-studies-v2",
-  "content_revision": 11,
-  "expansions": [
-    "battlecraft-v2",
-    "battlecraft-v3",
-    "battlecraft-v4",
-    "unwritten-rules-v1"
-  ],
+  "content_revision": 12.0,
   "format": "etherlords-puzzles",
   "game": "el1",
   "puzzles": [
@@ -24611,7 +24605,1910 @@
       "title": "The Sky Is the Exit",
       "title_ru": "Выход в небе",
       "turns": 1
+    },
+    {
+      "authored": true,
+      "briefing": "Win within two turns. Your Cutter Man is resting. A Hopper lies beneath two newer creatures in your graveyard, and your four ether will not refill.",
+      "briefing_ru": "Победите за два хода. Раскройщик отдыхает. Над Прыгуном в вашем могильнике лежат два более новых существа. Четыре единицы эфира больше не пополнятся.",
+      "category": "Crucible · A sacrifice held across two battles",
+      "category_ru": "Горнило · Жертва между двумя боями",
+      "expansion": "crucible-v1",
+      "explanation": "The first sacrifice places the third newer creature over the Hopper, which returns at the end of the turn. Overload and Cloak produce a twelve-point unblockable attack. The Cutter then decays to 10/7; sacrificing the returned Hopper readies it for defence. It survives the Mechozaurus's six damage and kills that attacker while the wall stops the flyer. Its last ten damage is exact: the dead Mechozaurus no longer drains its controller. If the Mechozaurus stays home, that four-health drain instead makes the final attack easier.",
+      "explanation_ru": "Первая жертва кладёт третье новое существо над Прыгуном: он вернётся в конце хода. Перегрузка и Маска Ужаса обеспечивают неблокируемую атаку на двенадцать. Затем Раскройщик ослабевает до 10/7; жертва Прыгуна будит его для защиты. Он выдерживает шесть урона Железного мехозавра и убивает его, пока стена держит Дракона. Последние десять урона точны: погибший Мехозавр уже не отнимает здоровье у хозяина. Если враг оставит Мехозавра дома, тот сам отнимет четыре здоровья, облегчив последнюю атаку.",
+      "hero_names": [
+        "Crucible challenger",
+        "Crucible defender"
+      ],
+      "hero_names_ru": [
+        "Испытуемый",
+        "Страж испытания"
+      ],
+      "hints": [
+        "Reserve the creatures needed for the counterattack.",
+        "One more burial will return the Hopper at the turn boundary. The Cutter needs two separate sacrifices.",
+        "Feed the Tick to the Cutter, overload it and give it Cloak of Fear. Keep the returned Hopper; sacrifice it during your next defence, then block the Mechozaurus with the Cutter and the Dragon with the wall."
+      ],
+      "hints_ru": [
+        "Берегите существ, которые понадобятся для отражения контратаки.",
+        "Ещё одна смерть обеспечит возвращение Прыгуна на границе хода. Раскройщику понадобятся две разные жертвы.",
+        "Пожертвуйте Клеща Раскройщику, дайте Раскройщику Перегрузку и Маску Ужаса. Берегите вернувшегося Прыгуна: пожертвуйте его при следующей защите. Раскройщиком блокируйте Мехозавра, стеной — Дракона."
+      ],
+      "id": "el1_tactical_v2_crucible_buried_reserve",
+      "level": 4,
+      "objective": {
+        "type": "win"
+      },
+      "refutations": [
+        {
+          "label": "Sacrifice the wall instead",
+          "commands": [
+            {
+              "kind": "ability",
+              "id": 2,
+              "key": "sacrifice",
+              "target": 3
+            }
+          ]
+        },
+        {
+          "label": "Spend three ether on Energize All",
+          "commands": [
+            {
+              "kind": "cast",
+              "card": "ENAL",
+              "target": -1
+            }
+          ]
+        }
+      ],
+      "solution": [
+        {
+          "kind": "ability",
+          "id": 2,
+          "key": "sacrifice",
+          "target": 4
+        },
+        {
+          "kind": "cast",
+          "card": "OVRL",
+          "target": 2
+        },
+        {
+          "kind": "cast",
+          "card": "CLFR",
+          "target": 2
+        },
+        {
+          "kind": "attack",
+          "id": 2
+        },
+        {
+          "kind": "end_phase"
+        },
+        {
+          "kind": "end_phase",
+          "side": 1
+        },
+        {
+          "kind": "attack",
+          "id": 5,
+          "side": 1
+        },
+        {
+          "kind": "attack",
+          "id": 6,
+          "side": 1
+        },
+        {
+          "kind": "end_phase",
+          "side": 1
+        },
+        {
+          "kind": "ability",
+          "id": 2,
+          "key": "sacrifice",
+          "target": 7
+        },
+        {
+          "kind": "block",
+          "id": 2,
+          "target": 5
+        },
+        {
+          "kind": "block",
+          "id": 3,
+          "target": 6
+        },
+        {
+          "kind": "end_phase"
+        },
+        {
+          "kind": "attack",
+          "id": 2
+        },
+        {
+          "kind": "end_phase"
+        },
+        {
+          "kind": "end_phase",
+          "side": 1
+        }
+      ],
+      "state": {
+        "attacker": 0,
+        "attacks": [],
+        "blocks": {},
+        "charge_version": 2,
+        "creatures": {
+          "2": {
+            "card": "CTMN",
+            "damage": 0,
+            "enchantments": [],
+            "flags": [
+              "NoUntap",
+              "Disenchant"
+            ],
+            "flying": false,
+            "id": 2,
+            "owner": 0,
+            "power": 7,
+            "regenerated": false,
+            "resting": true,
+            "sick": false,
+            "toughness": 4
+          },
+          "3": {
+            "card": "WLFC",
+            "damage": 0,
+            "enchantments": [],
+            "flags": [
+              "NoAttack",
+              "Fly"
+            ],
+            "flying": true,
+            "id": 3,
+            "owner": 0,
+            "power": 0,
+            "regenerated": false,
+            "resting": false,
+            "sick": false,
+            "toughness": 12
+          },
+          "4": {
+            "card": "TIWR",
+            "damage": 0,
+            "enchantments": [],
+            "flags": [],
+            "flying": false,
+            "id": 4,
+            "owner": 0,
+            "power": 2,
+            "regenerated": false,
+            "resting": false,
+            "sick": false,
+            "toughness": 2
+          },
+          "5": {
+            "card": "IRMZ",
+            "damage": 0,
+            "enchantments": [],
+            "flags": [
+              "Trample",
+              "Lifetap",
+              "NoTarget",
+              "NoAffect"
+            ],
+            "flying": false,
+            "id": 5,
+            "owner": 1,
+            "power": 6,
+            "regenerated": false,
+            "resting": false,
+            "sick": false,
+            "toughness": 4
+          },
+          "6": {
+            "card": "BUDG",
+            "damage": 0,
+            "enchantments": [],
+            "flags": [
+              "Fly"
+            ],
+            "flying": true,
+            "id": 6,
+            "owner": 1,
+            "power": 8,
+            "regenerated": false,
+            "resting": false,
+            "sick": false,
+            "toughness": 8
+          }
+        },
+        "heroes": [
+          {
+            "artifact_uses": 0,
+            "artifacts": [],
+            "channels": 0,
+            "deck": [
+              "STRT"
+            ],
+            "drawn": [],
+            "enchantments": [],
+            "faction": "Black",
+            "grave": [
+              "HOPR",
+              "STRT",
+              "KBSH"
+            ],
+            "hand": [
+              "OVRL",
+              "CLFR",
+              "SHSK",
+              "ENAL"
+            ],
+            "hand_slots": [
+              -1,
+              -1,
+              -1,
+              -1
+            ],
+            "hand_view": [
+              0,
+              1,
+              2,
+              3
+            ],
+            "health": 1,
+            "id": 0,
+            "kind": "hero",
+            "level": 4,
+            "luck": 0,
+            "mana": 4,
+            "maximum": 20,
+            "skills": {},
+            "spec": "NONE",
+            "spec_level": 4,
+            "spell_uses": [
+              -1
+            ],
+            "suppression": 0,
+            "template": "BlackMale1",
+            "turns": 4
+          },
+          {
+            "artifact_uses": 0,
+            "artifacts": [],
+            "channels": 0,
+            "deck": [
+              "STRT"
+            ],
+            "drawn": [],
+            "enchantments": [],
+            "faction": "Blue",
+            "grave": [],
+            "hand": [],
+            "hand_slots": [],
+            "hand_view": [],
+            "health": 22,
+            "id": 1,
+            "kind": "hero",
+            "level": 4,
+            "luck": 0,
+            "mana": 0,
+            "maximum": 22,
+            "skills": {},
+            "spec": "NONE",
+            "spec_level": 4,
+            "spell_uses": [
+              -1
+            ],
+            "suppression": 0,
+            "template": "BlueWingedMale1",
+            "turns": 3
+          }
+        ],
+        "next_enchantment": 1,
+        "next_id": 7,
+        "payment_version": 1,
+        "phase": 0,
+        "profile": "el1",
+        "rng": 712367,
+        "round": 4,
+        "setup": {
+          "players": [
+            {
+              "faction": "Black",
+              "level": 4
+            },
+            {
+              "faction": "Blue",
+              "level": 4
+            }
+          ],
+          "puzzle_fixed_channels": true,
+          "puzzle_fixed_hands": true
+        },
+        "turn_serial": 7,
+        "winner": -1
+      },
+      "title": "The Buried Reserve",
+      "title_ru": "Погребённый резерв",
+      "turns": 2
+    },
+    {
+      "authored": true,
+      "briefing": "Win this turn. You have three ether, two health, and no ready attacker. The Steel Mechozaurus is unaffected by magic; your Cutter carries Delusion.",
+      "briefing_ru": "Победите за этот ход. У вас три эфира, два здоровья и ни одного готового атакующего. Стальной мехозавр невосприимчив к магии, а на Раскройщике действует Перестановка.",
+      "category": "Crucible · A lethal with an exact life payment",
+      "category_ru": "Горнило · Летальный удар с точной ценой в здоровье",
+      "expansion": "crucible-v1",
+      "explanation": "Polymorph removes eleven opposing power and sets health to eight. Ether Trade at six leaves two health, provides ten ether and heals the enemy from fifteen to twenty-one. Lesser Disenchant, Alpha Strike, Strength and Annihilation cost exactly ten. The restored Cutter supplies eighteen power and the Treant three. The unaffected Mechozaurus contributes no Annihilation damage. Trading less cannot fund the line; trading more heals the enemy beyond twenty-one.",
+      "explanation_ru": "Превращение убирает одиннадцать вражеской силы и устанавливает герою восемь здоровья. Эфирная Торговля на шесть оставляет два здоровья, даёт десять эфира и лечит врага с пятнадцати до двадцати одного. Снятие Чар, Альфа-удар, Усиление и Аннигиляция стоят ровно десять. Раскройщик без Перестановки даёт восемнадцать силы, Старый древень — три. Невосприимчивый Мехозавр не добавляет урона Аннигиляции. Меньшая плата не финансирует комбинацию, большая лечит врага выше двадцати одного.",
+      "hero_names": [
+        "Crucible challenger",
+        "Crucible defender"
+      ],
+      "hero_names_ru": [
+        "Испытуемый",
+        "Страж испытания"
+      ],
+      "hints": [
+        "Calculate both sides of Annihilation before choosing what to remove.",
+        "Ether Trade heals the enemy as well as funding you. Spending more life can put the enemy beyond your final damage.",
+        "Polymorph the Green Dragon, trade six health, dispel the Cutter's Delusion, and give the Cutter Alpha Strike plus Strength. Annihilation now deals exactly twenty-one."
+      ],
+      "hints_ru": [
+        "Прежде чем выбирать цель уничтожения, посчитайте урон Аннигиляции для обеих сторон.",
+        "Эфирная Торговля не только даёт вам эфир, но и лечит врага. Лишняя плата здоровьем может вывести его из-под летального удара.",
+        "Превратите Зелёного дракона, обменяйте шесть здоровья на эфир, снимите Перестановку с Раскройщика и дайте ему Альфа-удар с Усилением. Аннигиляция нанесёт ровно двадцать один урон."
+      ],
+      "id": "el1_tactical_v2_crucible_mortal_equation",
+      "level": 4,
+      "objective": {
+        "type": "win"
+      },
+      "refutations": [
+        {
+          "label": "Spend Lesser Disenchant on the enemy Strength",
+          "commands": [
+            {
+              "kind": "cast",
+              "card": "CLNP",
+              "target": 7,
+              "grave": 2
+            }
+          ]
+        },
+        {
+          "label": "Trade only five health",
+          "commands": [
+            {
+              "kind": "cast",
+              "card": "PLMR",
+              "target": 7
+            },
+            {
+              "kind": "cast",
+              "card": "CHNL",
+              "target": -1,
+              "power": 5
+            }
+          ]
+        },
+        {
+          "label": "Trade seven health and heal the enemy too far",
+          "commands": [
+            {
+              "kind": "cast",
+              "card": "PLMR",
+              "target": 7
+            },
+            {
+              "kind": "cast",
+              "card": "CHNL",
+              "target": -1,
+              "power": 7
+            }
+          ]
+        }
+      ],
+      "solution": [
+        {
+          "kind": "cast",
+          "card": "PLMR",
+          "target": 7
+        },
+        {
+          "kind": "cast",
+          "card": "CHNL",
+          "target": -1,
+          "power": 6
+        },
+        {
+          "kind": "cast",
+          "card": "CLNP",
+          "target": 2,
+          "grave": 1
+        },
+        {
+          "kind": "cast",
+          "card": "ALST",
+          "target": 2
+        },
+        {
+          "kind": "cast",
+          "card": "STRG",
+          "target": 2
+        },
+        {
+          "kind": "cast",
+          "card": "ANHL",
+          "target": -1
+        }
+      ],
+      "state": {
+        "attacker": 0,
+        "attacks": [],
+        "blocks": {},
+        "charge_version": 2,
+        "creatures": {
+          "2": {
+            "card": "CTMN",
+            "damage": 0,
+            "enchantments": [
+              {
+                "born": 7,
+                "card": "DELS",
+                "id": 1,
+                "owner": 0,
+                "power": 0,
+                "toughness": 0,
+                "used": false
+              }
+            ],
+            "flags": [
+              "NoUntap",
+              "Disenchant"
+            ],
+            "flying": false,
+            "id": 2,
+            "owner": 0,
+            "power": 4,
+            "regenerated": false,
+            "resting": true,
+            "sick": false,
+            "toughness": 7
+          },
+          "3": {
+            "card": "GRTN",
+            "damage": 0,
+            "enchantments": [],
+            "flags": [
+              "Regen(1)"
+            ],
+            "flying": false,
+            "id": 3,
+            "owner": 0,
+            "power": 3,
+            "regenerated": false,
+            "resting": true,
+            "sick": false,
+            "toughness": 3
+          },
+          "4": {
+            "card": "WLIL",
+            "damage": 0,
+            "enchantments": [],
+            "flags": [
+              "NoAttack"
+            ],
+            "flying": false,
+            "id": 4,
+            "owner": 0,
+            "power": 0,
+            "regenerated": false,
+            "resting": false,
+            "sick": false,
+            "toughness": 3
+          },
+          "5": {
+            "card": "WLFC",
+            "damage": 0,
+            "enchantments": [],
+            "flags": [
+              "NoAttack",
+              "Fly"
+            ],
+            "flying": true,
+            "id": 5,
+            "owner": 1,
+            "power": 0,
+            "regenerated": false,
+            "resting": false,
+            "sick": false,
+            "toughness": 12
+          },
+          "6": {
+            "card": "STMZ",
+            "damage": 0,
+            "enchantments": [],
+            "flags": [
+              "Trample",
+              "Lifetap",
+              "NoTarget",
+              "NoAffect"
+            ],
+            "flying": false,
+            "id": 6,
+            "owner": 1,
+            "power": 8,
+            "regenerated": false,
+            "resting": false,
+            "sick": false,
+            "toughness": 6
+          },
+          "7": {
+            "card": "GRDG",
+            "damage": 0,
+            "enchantments": [
+              {
+                "born": 7,
+                "card": "STRG",
+                "id": 2,
+                "owner": 1,
+                "power": 4,
+                "toughness": 0,
+                "used": false
+              }
+            ],
+            "flags": [
+              "Fly"
+            ],
+            "flying": true,
+            "id": 7,
+            "owner": 1,
+            "power": 11,
+            "regenerated": false,
+            "resting": false,
+            "sick": false,
+            "toughness": 8
+          }
+        },
+        "heroes": [
+          {
+            "artifact_uses": 0,
+            "artifacts": [],
+            "channels": 0,
+            "deck": [
+              "STRT"
+            ],
+            "drawn": [],
+            "enchantments": [],
+            "faction": "Green",
+            "grave": [],
+            "hand": [
+              "CHNL",
+              "PLMR",
+              "CLNP",
+              "ALST",
+              "STRG",
+              "ANHL",
+              "HUNG"
+            ],
+            "hand_slots": [
+              -1,
+              -1,
+              -1,
+              -1,
+              -1,
+              -1,
+              -1
+            ],
+            "hand_view": [
+              0,
+              1,
+              2,
+              3,
+              4,
+              5,
+              6
+            ],
+            "health": 2,
+            "id": 0,
+            "kind": "hero",
+            "level": 4,
+            "luck": 0,
+            "mana": 3,
+            "maximum": 20,
+            "skills": {},
+            "spec": "NONE",
+            "spec_level": 4,
+            "spell_uses": [
+              -1
+            ],
+            "suppression": 0,
+            "template": "GreenMale1",
+            "turns": 4
+          },
+          {
+            "artifact_uses": 0,
+            "artifacts": [],
+            "channels": 0,
+            "deck": [
+              "STRT"
+            ],
+            "drawn": [],
+            "enchantments": [],
+            "faction": "Blue",
+            "grave": [],
+            "hand": [],
+            "hand_slots": [],
+            "hand_view": [],
+            "health": 15,
+            "id": 1,
+            "kind": "hero",
+            "level": 4,
+            "luck": 0,
+            "mana": 0,
+            "maximum": 20,
+            "skills": {},
+            "spec": "NONE",
+            "spec_level": 4,
+            "spell_uses": [
+              -1
+            ],
+            "suppression": 0,
+            "template": "BlueWingedMale1",
+            "turns": 3
+          }
+        ],
+        "next_enchantment": 3,
+        "next_id": 8,
+        "payment_version": 1,
+        "phase": 0,
+        "profile": "el1",
+        "rng": 712367,
+        "round": 4,
+        "setup": {
+          "players": [
+            {
+              "faction": "Green",
+              "level": 4
+            },
+            {
+              "faction": "Blue",
+              "level": 4
+            }
+          ],
+          "puzzle_fixed_channels": true,
+          "puzzle_fixed_hands": true
+        },
+        "turn_serial": 7,
+        "winner": -1
+      },
+      "title": "A Mortal Equation",
+      "title_ru": "Смертельное уравнение",
+      "turns": 1
+    },
+    {
+      "authored": true,
+      "briefing": "Win within two turns. The opponent has six ether, six channels, Call Lightning and Polymorph, and is already Envenomed. You have three ether and no channels.",
+      "briefing_ru": "Победите за два хода. У противника шесть эфира, шесть каналов, Молния и Превращение; на нём уже действует Отравление. У вас три эфира и ни одного канала.",
+      "category": "Crucible · Denial, upkeep and a defensive reserve",
+      "category_ru": "Горнило · Лишение эфира, содержание чар и резерв защиты",
+      "expansion": "crucible-v1",
+      "explanation": "Siphon creates nine ether and removes the defensive Polymorph. Stasis prevents the six-channel refill and the lethal Lightning. Strength makes the unblockable Elemental hit for seven twice; Envenoming supplies two damage at each enemy turn end. Energize All restores the Halo for the flying counterattack; Rock Wall must stop the Mechos because its execution ignores surviving non-Walls. The remaining two ether pays Stasis upkeep at the second own turn. Both defenders must cover another counterattack before the poison finishes the enemy. On this line, allowing Stasis to expire gives the enemy its lethal Lightning first.",
+      "explanation_ru": "Кража даёт девять эфира и лишает врага защитного Превращения. Стазис отменяет пополнение от шести каналов и смертельную Молнию. Усиленный неблокируемый Элементаль дважды наносит по семь, Отравление — ещё по два в конце каждого вражеского хода. Общая Подзарядка будит Нимб после кражи, позволяя остановить Дракона. Каменная стена должна держать Мехоса: его добивание уничтожает уцелевших существ, кроме стен. Два сохранённых эфира оплачивают Стазис в начале второго своего хода. Оба защитника нужны для второй контратаки до последнего урона Отравления; в этой линии отмена Стазиса даст врагу Молнию раньше этого момента.",
+      "hero_names": [
+        "Crucible challenger",
+        "Crucible defender"
+      ],
+      "hero_names_ru": [
+        "Испытуемый",
+        "Страж испытания"
+      ],
+      "hints": [
+        "The enemy must lose both the ether it has and the refill it expects.",
+        "Your source of ether must also stop the flying counterattack. Reserve Stasis upkeep before spending the final points.",
+        "Siphon all six ether, cast Stasis, give the Air Elemental Strength, and use Energize All after the siphon. Attack with the Elemental, cover the Dragon with the Halo and the Mechos with the wall, and retain two ether for upkeep."
+      ],
+      "hints_ru": [
+        "Враг должен потерять и нынешний запас эфира, и ожидаемое пополнение.",
+        "Ваш источник эфира должен также остановить воздушную контратаку. Прежде чем расходовать последние единицы, оставьте плату за Стазис.",
+        "Украдите Нимбом все шесть эфира, наложите Стазис и дайте Элементалю воздуха Усиление. Затем примените Общую Подзарядку. Атакуйте Элементалем; Нимбом держите Дракона, стеной — Мехоса. Два оставшихся эфира оплатят Стазис: переживите и вторую контратаку, чтобы сработало Отравление."
+      ],
+      "id": "el1_tactical_v2_crucible_frozen_account",
+      "level": 4,
+      "objective": {
+        "type": "win"
+      },
+      "refutations": [
+        {
+          "label": "Cast Energize All before siphoning",
+          "commands": [
+            {
+              "kind": "cast",
+              "card": "ENAL",
+              "target": -1
+            }
+          ]
+        },
+        {
+          "label": "Put Strength on the flying Halo",
+          "commands": [
+            {
+              "kind": "cast",
+              "card": "STRG",
+              "target": 2
+            }
+          ]
+        }
+      ],
+      "solution": [
+        {
+          "kind": "ability",
+          "id": 2,
+          "key": "siphon",
+          "target": -1
+        },
+        {
+          "kind": "cast",
+          "card": "STSI",
+          "target": -1
+        },
+        {
+          "kind": "cast",
+          "card": "STRG",
+          "target": 3
+        },
+        {
+          "kind": "cast",
+          "card": "ENAL",
+          "target": -1
+        },
+        {
+          "kind": "attack",
+          "id": 3
+        },
+        {
+          "kind": "end_phase"
+        },
+        {
+          "kind": "end_phase",
+          "side": 1
+        },
+        {
+          "kind": "attack",
+          "id": 5,
+          "side": 1
+        },
+        {
+          "kind": "attack",
+          "id": 6,
+          "side": 1
+        },
+        {
+          "kind": "end_phase",
+          "side": 1
+        },
+        {
+          "kind": "block",
+          "id": 2,
+          "target": 5
+        },
+        {
+          "kind": "block",
+          "id": 4,
+          "target": 6
+        },
+        {
+          "kind": "end_phase"
+        },
+        {
+          "kind": "attack",
+          "id": 3
+        },
+        {
+          "kind": "end_phase"
+        },
+        {
+          "kind": "end_phase",
+          "side": 1
+        },
+        {
+          "kind": "attack",
+          "id": 5,
+          "side": 1
+        },
+        {
+          "kind": "attack",
+          "id": 6,
+          "side": 1
+        },
+        {
+          "kind": "end_phase",
+          "side": 1
+        },
+        {
+          "kind": "block",
+          "id": 2,
+          "target": 5
+        },
+        {
+          "kind": "block",
+          "id": 4,
+          "target": 6
+        },
+        {
+          "kind": "end_phase"
+        }
+      ],
+      "state": {
+        "attacker": 0,
+        "attacks": [],
+        "blocks": {},
+        "charge_version": 2,
+        "creatures": {
+          "2": {
+            "card": "SWHL",
+            "damage": 0,
+            "enchantments": [
+              {
+                "born": 7,
+                "card": "SHSK",
+                "id": 2,
+                "owner": 0,
+                "power": 0,
+                "toughness": 4,
+                "used": false
+              }
+            ],
+            "flags": [
+              "Fly"
+            ],
+            "flying": true,
+            "id": 2,
+            "owner": 0,
+            "power": 3,
+            "regenerated": false,
+            "resting": false,
+            "sick": false,
+            "toughness": 11
+          },
+          "3": {
+            "card": "AREL",
+            "damage": 0,
+            "enchantments": [],
+            "flags": [
+              "Restless",
+              "UB"
+            ],
+            "flying": false,
+            "id": 3,
+            "owner": 0,
+            "power": 3,
+            "regenerated": false,
+            "resting": false,
+            "sick": false,
+            "toughness": 6
+          },
+          "4": {
+            "card": "RKWL",
+            "damage": 0,
+            "enchantments": [],
+            "flags": [
+              "NoAttack"
+            ],
+            "flying": false,
+            "id": 4,
+            "owner": 0,
+            "power": 0,
+            "regenerated": false,
+            "resting": false,
+            "sick": false,
+            "toughness": 10
+          },
+          "5": {
+            "card": "BUDG",
+            "damage": 0,
+            "enchantments": [],
+            "flags": [
+              "Fly"
+            ],
+            "flying": true,
+            "id": 5,
+            "owner": 1,
+            "power": 8,
+            "regenerated": false,
+            "resting": false,
+            "sick": false,
+            "toughness": 8
+          },
+          "6": {
+            "card": "IRMC",
+            "damage": 0,
+            "enchantments": [],
+            "flags": [
+              "Trample"
+            ],
+            "flying": false,
+            "id": 6,
+            "owner": 1,
+            "power": 6,
+            "regenerated": false,
+            "resting": false,
+            "sick": false,
+            "toughness": 4
+          }
+        },
+        "heroes": [
+          {
+            "artifact_uses": 0,
+            "artifacts": [],
+            "channels": 0,
+            "deck": [
+              "STRT"
+            ],
+            "drawn": [],
+            "enchantments": [],
+            "faction": "Blue",
+            "grave": [],
+            "hand": [
+              "STSI",
+              "STRG",
+              "ENAL",
+              "SHSK",
+              "FLOD",
+              "SMOK"
+            ],
+            "hand_slots": [
+              -1,
+              -1,
+              -1,
+              -1,
+              -1,
+              -1
+            ],
+            "hand_view": [
+              0,
+              1,
+              2,
+              3,
+              4,
+              5
+            ],
+            "health": 1,
+            "id": 0,
+            "kind": "hero",
+            "level": 4,
+            "luck": 0,
+            "mana": 3,
+            "maximum": 20,
+            "skills": {},
+            "spec": "NONE",
+            "spec_level": 4,
+            "spell_uses": [
+              -1
+            ],
+            "suppression": 0,
+            "template": "BlueWingedMale1",
+            "turns": 4
+          },
+          {
+            "artifact_uses": 0,
+            "artifacts": [],
+            "channels": 6,
+            "deck": [
+              "STRT"
+            ],
+            "drawn": [],
+            "enchantments": [
+              {
+                "born": 7,
+                "card": "ENVM",
+                "id": 1,
+                "owner": 0,
+                "power": 0,
+                "toughness": 0,
+                "used": false
+              }
+            ],
+            "faction": "Red",
+            "grave": [],
+            "hand": [
+              "CLIG",
+              "PLMR"
+            ],
+            "hand_slots": [
+              -1,
+              -1
+            ],
+            "hand_view": [
+              0,
+              1
+            ],
+            "health": 18,
+            "id": 1,
+            "kind": "hero",
+            "level": 4,
+            "luck": 0,
+            "mana": 6,
+            "maximum": 20,
+            "skills": {},
+            "spec": "NONE",
+            "spec_level": 4,
+            "spell_uses": [
+              -1
+            ],
+            "suppression": 0,
+            "template": "RedMaleWarrior2",
+            "turns": 3
+          }
+        ],
+        "next_enchantment": 3,
+        "next_id": 7,
+        "payment_version": 1,
+        "phase": 0,
+        "profile": "el1",
+        "rng": 712367,
+        "round": 4,
+        "setup": {
+          "players": [
+            {
+              "faction": "Blue",
+              "level": 4
+            },
+            {
+              "faction": "Red",
+              "level": 4
+            }
+          ],
+          "puzzle_fixed_channels": true,
+          "puzzle_fixed_hands": true
+        },
+        "turn_serial": 7,
+        "winner": -1
+      },
+      "title": "The Frozen Account",
+      "title_ru": "Замороженный счёт",
+      "turns": 2
+    },
+    {
+      "alternative_solutions": [
+        {
+          "label": "Break the first blockade with Bless instead of Cloak of Fear",
+          "commands": [
+            {
+              "kind": "cast",
+              "card": "BLSS",
+              "target": 2
+            },
+            {
+              "kind": "cast",
+              "card": "OVRL",
+              "target": 2
+            },
+            {
+              "kind": "cast",
+              "card": "SPWR",
+              "target": 2
+            },
+            {
+              "kind": "cast",
+              "card": "PLMR",
+              "target": 4
+            },
+            {
+              "kind": "attack",
+              "id": 2
+            },
+            {
+              "kind": "end_phase"
+            },
+            {
+              "kind": "block",
+              "id": 5,
+              "target": 2,
+              "side": 1
+            },
+            {
+              "kind": "block",
+              "id": 3,
+              "target": 2,
+              "side": 1
+            },
+            {
+              "kind": "end_phase",
+              "side": 1
+            },
+            {
+              "kind": "end_phase",
+              "side": 1
+            },
+            {
+              "kind": "block",
+              "id": 2,
+              "target": 3
+            },
+            {
+              "kind": "end_phase"
+            },
+            {
+              "kind": "attack",
+              "id": 2
+            },
+            {
+              "kind": "end_phase"
+            },
+            {
+              "kind": "end_phase",
+              "side": 1
+            },
+            {
+              "kind": "end_phase",
+              "side": 1
+            },
+            {
+              "kind": "ability",
+              "id": 0,
+              "key": "burnout:1",
+              "target": 2,
+              "choice": 1
+            }
+          ]
+        }
+      ],
+      "authored": true,
+      "briefing": "Win within two turns. Burnout is active and your Walking Horror is resting. The Warrior Spirit is a berserker with regeneration; the Wizard and a wall support its defence.",
+      "briefing_ru": "Победите за два хода. Сожжение уже действует, Ходячий ужас отдыхает. Призрак-воин обладает регенерацией и обязан атаковать; Колдун и стена поддерживают его защиту.",
+      "category": "Crucible · A damage clock across response windows",
+      "category_ru": "Горнило · Урон по обе стороны боевой фазы",
+      "expansion": "crucible-v1",
+      "explanation": "The initial six ether funds all four preparations, leaving no early Burnout payment. Polymorph removes the second attacker and raises the hero to two health. The Horror attacks for fourteen, decays to twelve and remains ready to block because of Spirit of War. The Spirit regenerates and must attack again. At the second own turn one ether refills; the Horror deals twelve, then decays to ten. Preserve that ether until the following defence and use Burnout before combat. Fourteen plus twelve plus ten is exactly thirty-six. Another valid plan replaces Cloak with Bless: its eighteen-power first attack tramples for fourteen through the wall and Spirit together; the wall dies and the berserker remains resting during your second attack.",
+      "explanation_ru": "Начальные шесть эфира оплачивают все четыре приготовления, не оставляя платы за раннее Сожжение. Превращение убирает второго атакующего и даёт герою два здоровья. Ужас атакует на четырнадцать, ослабевает до двенадцати и благодаря Духу Войны остаётся готовым блокировать. Призрак регенерирует и снова будет обязан атаковать. Второй свой ход даёт один эфир; Ужас наносит двенадцать, затем ослабевает до десяти. Сохраните эфир до следующей защиты и примените Сожжение до разрешения боя. Четырнадцать, двенадцать и десять дают ровно тридцать шесть. Есть и другой план: вместо Маски Ужаса примените Благословение. Первая атака с силой восемнадцать наносит четырнадцать через совместный блок стены и Призрака; стена гибнет, а к вашей второй атаке берсерк уже отдыхает.",
+      "hero_names": [
+        "Crucible challenger",
+        "Crucible defender"
+      ],
+      "hero_names_ru": [
+        "Испытуемый",
+        "Страж испытания"
+      ],
+      "hints": [
+        "The Horror must contribute in more than one phase.",
+        "An early sacrifice wastes future attacks. The overloaded body loses two power at the end of each of your turns.",
+        "Polymorph the Wizard. Give the Horror Overload, Spirit of War and Cloak of Fear. Hit for fourteen, block the regenerating Spirit, then hit for twelve. During the next forced defence, burn the Horror for the final ten."
+      ],
+      "hints_ru": [
+        "Ужас должен принести пользу в нескольких разных фазах.",
+        "Ранняя жертва теряет будущие атаки. Перегрузка отнимает две силы в конце каждого вашего хода.",
+        "Превратите Колдуна. Дайте Ужасу Перегрузку, Дух Войны и Маску Ужаса. Ударьте на четырнадцать, заблокируйте регенерирующего Призрака, затем ударьте на двенадцать. Во время следующей обязательной защиты Сожжение Ужаса даст последние десять."
+      ],
+      "id": "el1_tactical_v2_crucible_black_furnace",
+      "level": 4,
+      "objective": {
+        "type": "win"
+      },
+      "refutations": [
+        {
+          "label": "Burn the unprepared Horror immediately",
+          "commands": [
+            {
+              "kind": "ability",
+              "id": 0,
+              "key": "burnout:1",
+              "target": 2,
+              "choice": 1
+            }
+          ]
+        },
+        {
+          "label": "Use Energize All instead of Spirit of War",
+          "commands": [
+            {
+              "kind": "cast",
+              "card": "ENAL",
+              "target": -1
+            }
+          ]
+        }
+      ],
+      "solution": [
+        {
+          "kind": "cast",
+          "card": "PLMR",
+          "target": 4
+        },
+        {
+          "kind": "cast",
+          "card": "OVRL",
+          "target": 2
+        },
+        {
+          "kind": "cast",
+          "card": "SPWR",
+          "target": 2
+        },
+        {
+          "kind": "cast",
+          "card": "CLFR",
+          "target": 2
+        },
+        {
+          "kind": "attack",
+          "id": 2
+        },
+        {
+          "kind": "end_phase"
+        },
+        {
+          "kind": "end_phase",
+          "side": 1
+        },
+        {
+          "kind": "end_phase",
+          "side": 1
+        },
+        {
+          "kind": "block",
+          "id": 2,
+          "target": 3
+        },
+        {
+          "kind": "end_phase"
+        },
+        {
+          "kind": "attack",
+          "id": 2
+        },
+        {
+          "kind": "end_phase"
+        },
+        {
+          "kind": "end_phase",
+          "side": 1
+        },
+        {
+          "kind": "end_phase",
+          "side": 1
+        },
+        {
+          "kind": "ability",
+          "id": 0,
+          "key": "burnout:1",
+          "target": 2,
+          "choice": 1
+        }
+      ],
+      "state": {
+        "attacker": 0,
+        "attacks": [],
+        "blocks": {},
+        "charge_version": 2,
+        "creatures": {
+          "2": {
+            "card": "WKHR",
+            "damage": 0,
+            "enchantments": [],
+            "flags": [
+              "Trample"
+            ],
+            "flying": false,
+            "id": 2,
+            "owner": 0,
+            "power": 9,
+            "regenerated": false,
+            "resting": true,
+            "sick": false,
+            "toughness": 9
+          },
+          "3": {
+            "card": "WRSP",
+            "damage": 0,
+            "enchantments": [],
+            "flags": [
+              "FS",
+              "Lifetap",
+              "Berserk",
+              "Regen(2)"
+            ],
+            "flying": false,
+            "id": 3,
+            "owner": 1,
+            "power": 5,
+            "regenerated": false,
+            "resting": false,
+            "sick": false,
+            "toughness": 1
+          },
+          "4": {
+            "card": "WZSP",
+            "damage": 0,
+            "enchantments": [],
+            "flags": [
+              "Lifetap"
+            ],
+            "flying": false,
+            "id": 4,
+            "owner": 1,
+            "power": 3,
+            "regenerated": false,
+            "resting": false,
+            "sick": false,
+            "toughness": 2
+          },
+          "5": {
+            "card": "WLBR",
+            "damage": 0,
+            "enchantments": [],
+            "flags": [
+              "NoAttack"
+            ],
+            "flying": false,
+            "id": 5,
+            "owner": 1,
+            "power": 1,
+            "regenerated": false,
+            "resting": false,
+            "sick": false,
+            "toughness": 3
+          }
+        },
+        "heroes": [
+          {
+            "artifact_uses": 0,
+            "artifacts": [],
+            "channels": 1,
+            "deck": [
+              "STRT"
+            ],
+            "drawn": [],
+            "enchantments": [
+              {
+                "born": 7,
+                "card": "BROT",
+                "id": 1,
+                "owner": 0,
+                "power": 0,
+                "toughness": 0,
+                "used": false
+              }
+            ],
+            "faction": "Black",
+            "grave": [],
+            "hand": [
+              "OVRL",
+              "SPWR",
+              "CLFR",
+              "PLMR",
+              "BLSS",
+              "DELS",
+              "ENAL"
+            ],
+            "hand_slots": [
+              -1,
+              -1,
+              -1,
+              -1,
+              -1,
+              -1,
+              -1
+            ],
+            "hand_view": [
+              0,
+              1,
+              2,
+              3,
+              4,
+              5,
+              6
+            ],
+            "health": 1,
+            "id": 0,
+            "kind": "hero",
+            "level": 4,
+            "luck": 0,
+            "mana": 6,
+            "maximum": 20,
+            "skills": {},
+            "spec": "NONE",
+            "spec_level": 4,
+            "spell_uses": [
+              -1
+            ],
+            "suppression": 0,
+            "template": "BlackMale1",
+            "turns": 4
+          },
+          {
+            "artifact_uses": 0,
+            "artifacts": [],
+            "channels": 2,
+            "deck": [
+              "STRT"
+            ],
+            "drawn": [],
+            "enchantments": [],
+            "faction": "Blue",
+            "grave": [],
+            "hand": [],
+            "hand_slots": [],
+            "hand_view": [],
+            "health": 36,
+            "id": 1,
+            "kind": "hero",
+            "level": 4,
+            "luck": 0,
+            "mana": 2,
+            "maximum": 36,
+            "skills": {},
+            "spec": "NONE",
+            "spec_level": 4,
+            "spell_uses": [
+              -1
+            ],
+            "suppression": 0,
+            "template": "BlueWingedMale1",
+            "turns": 3
+          }
+        ],
+        "next_enchantment": 2,
+        "next_id": 6,
+        "payment_version": 1,
+        "phase": 0,
+        "profile": "el1",
+        "rng": 712367,
+        "round": 4,
+        "setup": {
+          "players": [
+            {
+              "faction": "Black",
+              "level": 4
+            },
+            {
+              "faction": "Blue",
+              "level": 4
+            }
+          ],
+          "puzzle_fixed_channels": true,
+          "puzzle_fixed_hands": true
+        },
+        "turn_serial": 7,
+        "winner": -1
+      },
+      "title": "The Black Furnace",
+      "title_ru": "Чёрная печь",
+      "turns": 2
+    },
+    {
+      "authored": true,
+      "briefing": "Survive this attack and win within two of your own turns. Martyrdom is active. The enemy attacks through the ground, the air and a lane only a Wall can block; its Rock Wall protects the backline.",
+      "briefing_ru": "Переживите эту атаку и победите за два своих хода. Самопожертвование уже действует. Враг атакует по земле, по воздуху и существом, которое может блокировать только стена; его Каменная стена прикрывает тыл.",
+      "category": "Crucible · Survive the siege, then build the lethal",
+      "category_ru": "Горнило · Пережить осаду и собрать летальный удар",
+      "expansion": "crucible-v1",
+      "explanation": "The Monk grants eight toughness, allowing the Assassin to survive eight aerial damage. The Ogre grants only five toughness and is saved for the attack in this line. Remove Steel Mechos to keep the Assassin alive: its execution would ignore the extra toughness. The twelve-toughness Wall covers the eight-power elusive Wolf. At your first turn, four ether pays for Polymorph, Strength and Martyrdom. The ground Rock Wall cannot block the flying Assassin, and the Wolf cannot block its elusive attack; it deals twelve, then six after the temporary Ogre bonus expires. The Wall remains to cover the counterattack.",
+      "explanation_ru": "Монахиня даёт восемь стойкости: Авиак выдерживает восемь воздушного урона. Людоед дал бы лишь пять; его нужно сохранить для атаки. Стального мехоса необходимо убрать: добивание убило бы Авиака несмотря на добавленную стойкость. Стена со стойкостью двенадцать держит неуловимого Волка с силой восемь. На первом своём ходу четыре эфира оплачивают Превращение, Усиление и Самопожертвование. Наземная Каменная стена не достаёт летающего Авиака, а Волк не может блокировать его неуловимую атаку. Он наносит двенадцать, затем шесть после окончания временного бонуса Людоеда. Ваша стена остаётся для отражения контратаки.",
+      "hero_names": [
+        "Crucible challenger",
+        "Crucible defender"
+      ],
+      "hero_names_ru": [
+        "Испытуемый",
+        "Страж испытания"
+      ],
+      "hints": [
+        "One winning plan borrows toughness for the opening defence and power for the finishing attack.",
+        "The Mechos kills a non-Wall after damaging it, even if its toughness was high enough. Keep the Wall for the Wolf.",
+        "Polymorph the Mechos. Sacrifice the Lamia Monk into the Assassin, block the Dragon with the Assassin and the Wolf with the Wall. On your turn, Polymorph the Dragon, strengthen the Assassin and give it the Ogre through Martyrdom. Attack for twelve, then six."
+      ],
+      "hints_ru": [
+        "Один из выигрышных планов использует стойкость жертвы для начальной защиты, а силу другой — для решающей атаки.",
+        "Мехос добивает повреждённое существо, даже если его стойкости хватило для выживания. Стены защищены от этого; свою стену берегите для Волка.",
+        "Превратите Мехоса. Пожертвуйте Ламию-монахиню Авиаку-убийце; Авиаком блокируйте Дракона, стеной — Волка. На своём ходу превратите Дракона, усильте Авиака и передайте ему Людоеда через Самопожертвование. Атакуйте на двенадцать, затем на шесть."
+      ],
+      "id": "el1_tactical_v2_crucible_two_bequests",
+      "level": 4,
+      "objective": {
+        "type": "win"
+      },
+      "refutations": [
+        {
+          "label": "Feed the only Assassin into the Ogre",
+          "commands": [
+            {
+              "kind": "ability",
+              "id": 0,
+              "key": "combine:1",
+              "target": 2,
+              "choice": 5
+            }
+          ]
+        },
+        {
+          "label": "Sacrifice the wall into the Assassin",
+          "commands": [
+            {
+              "kind": "ability",
+              "id": 0,
+              "key": "combine:1",
+              "target": 3,
+              "choice": 2
+            }
+          ]
+        }
+      ],
+      "solution": [
+        {
+          "kind": "cast",
+          "card": "PLMR",
+          "target": 6
+        },
+        {
+          "kind": "ability",
+          "id": 0,
+          "key": "combine:1",
+          "target": 4,
+          "choice": 2
+        },
+        {
+          "kind": "block",
+          "id": 2,
+          "target": 7
+        },
+        {
+          "kind": "block",
+          "id": 3,
+          "target": 8
+        },
+        {
+          "kind": "end_phase"
+        },
+        {
+          "kind": "cast",
+          "card": "PLMR",
+          "target": 7
+        },
+        {
+          "kind": "cast",
+          "card": "STRG",
+          "target": 2
+        },
+        {
+          "kind": "ability",
+          "id": 0,
+          "key": "combine:1",
+          "target": 5,
+          "choice": 2
+        },
+        {
+          "kind": "attack",
+          "id": 2
+        },
+        {
+          "kind": "end_phase"
+        },
+        {
+          "kind": "end_phase",
+          "side": 1
+        },
+        {
+          "kind": "attack",
+          "id": 8,
+          "side": 1
+        },
+        {
+          "kind": "end_phase",
+          "side": 1
+        },
+        {
+          "kind": "block",
+          "id": 3,
+          "target": 8
+        },
+        {
+          "kind": "end_phase"
+        },
+        {
+          "kind": "attack",
+          "id": 2
+        },
+        {
+          "kind": "end_phase"
+        },
+        {
+          "kind": "end_phase",
+          "side": 1
+        }
+      ],
+      "state": {
+        "attacker": 1,
+        "attacks": [
+          6,
+          7,
+          8
+        ],
+        "blocks": {},
+        "charge_version": 2,
+        "creatures": {
+          "2": {
+            "card": "AVAS",
+            "damage": 0,
+            "enchantments": [],
+            "flags": [
+              "Fly"
+            ],
+            "flying": true,
+            "id": 2,
+            "owner": 0,
+            "power": 2,
+            "regenerated": false,
+            "resting": false,
+            "sick": false,
+            "toughness": 1
+          },
+          "3": {
+            "card": "WLLV",
+            "damage": 0,
+            "enchantments": [
+              {
+                "born": 8,
+                "card": "SHSK",
+                "id": 2,
+                "owner": 0,
+                "power": 0,
+                "toughness": 4,
+                "used": false
+              }
+            ],
+            "flags": [
+              "NoAttack",
+              "Fly"
+            ],
+            "flying": true,
+            "id": 3,
+            "owner": 0,
+            "power": 1,
+            "regenerated": false,
+            "resting": false,
+            "sick": false,
+            "toughness": 12
+          },
+          "4": {
+            "card": "LMMN",
+            "damage": 0,
+            "enchantments": [],
+            "flags": [],
+            "flying": false,
+            "id": 4,
+            "owner": 0,
+            "power": 4,
+            "regenerated": false,
+            "resting": true,
+            "sick": false,
+            "toughness": 8
+          },
+          "5": {
+            "card": "GROG",
+            "damage": 0,
+            "enchantments": [],
+            "flags": [
+              "Restless"
+            ],
+            "flying": false,
+            "id": 5,
+            "owner": 0,
+            "power": 6,
+            "regenerated": false,
+            "resting": true,
+            "sick": false,
+            "toughness": 5
+          },
+          "6": {
+            "card": "STMC",
+            "damage": 0,
+            "enchantments": [],
+            "flags": [
+              "Trample"
+            ],
+            "flying": false,
+            "id": 6,
+            "owner": 1,
+            "power": 8,
+            "regenerated": false,
+            "resting": false,
+            "sick": false,
+            "toughness": 6
+          },
+          "7": {
+            "card": "BUDG",
+            "damage": 0,
+            "enchantments": [],
+            "flags": [
+              "Fly"
+            ],
+            "flying": true,
+            "id": 7,
+            "owner": 1,
+            "power": 8,
+            "regenerated": false,
+            "resting": false,
+            "sick": false,
+            "toughness": 8
+          },
+          "8": {
+            "card": "SHWL",
+            "damage": 0,
+            "enchantments": [
+              {
+                "born": 8,
+                "card": "STRG",
+                "id": 3,
+                "owner": 1,
+                "power": 4,
+                "toughness": 0,
+                "used": false
+              }
+            ],
+            "flags": [
+              "FS"
+            ],
+            "flying": false,
+            "id": 8,
+            "owner": 1,
+            "power": 8,
+            "regenerated": false,
+            "resting": false,
+            "sick": false,
+            "toughness": 3
+          },
+          "9": {
+            "card": "RKWL",
+            "damage": 0,
+            "enchantments": [],
+            "flags": [
+              "NoAttack"
+            ],
+            "flying": false,
+            "id": 9,
+            "owner": 1,
+            "power": 0,
+            "regenerated": false,
+            "resting": false,
+            "sick": false,
+            "toughness": 10
+          }
+        },
+        "heroes": [
+          {
+            "artifact_uses": 0,
+            "artifacts": [],
+            "channels": 4,
+            "deck": [
+              "STRT"
+            ],
+            "drawn": [],
+            "enchantments": [
+              {
+                "born": 8,
+                "card": "CMBN",
+                "id": 1,
+                "owner": 0,
+                "power": 0,
+                "toughness": 0,
+                "used": false
+              }
+            ],
+            "faction": "Green",
+            "grave": [],
+            "hand": [
+              "PLMR",
+              "PLMR",
+              "STRG",
+              "HAST",
+              "ENAL"
+            ],
+            "hand_slots": [
+              -1,
+              -1,
+              -1,
+              -1,
+              -1
+            ],
+            "hand_view": [
+              0,
+              1,
+              2,
+              3,
+              4
+            ],
+            "health": 1,
+            "id": 0,
+            "kind": "hero",
+            "level": 4,
+            "luck": 0,
+            "mana": 2,
+            "maximum": 20,
+            "skills": {},
+            "spec": "NONE",
+            "spec_level": 4,
+            "spell_uses": [
+              -1
+            ],
+            "suppression": 0,
+            "template": "GreenMale1",
+            "turns": 4
+          },
+          {
+            "artifact_uses": 0,
+            "artifacts": [],
+            "channels": 0,
+            "deck": [
+              "STRT"
+            ],
+            "drawn": [],
+            "enchantments": [],
+            "faction": "Blue",
+            "grave": [],
+            "hand": [],
+            "hand_slots": [],
+            "hand_view": [],
+            "health": 18,
+            "id": 1,
+            "kind": "hero",
+            "level": 4,
+            "luck": 0,
+            "mana": 0,
+            "maximum": 20,
+            "skills": {},
+            "spec": "NONE",
+            "spec_level": 4,
+            "spell_uses": [
+              -1
+            ],
+            "suppression": 0,
+            "template": "BlueWingedMale1",
+            "turns": 4
+          }
+        ],
+        "next_enchantment": 4,
+        "next_id": 10,
+        "payment_version": 1,
+        "phase": 1,
+        "profile": "el1",
+        "rng": 712367,
+        "round": 4,
+        "setup": {
+          "players": [
+            {
+              "faction": "Green",
+              "level": 4
+            },
+            {
+              "faction": "Blue",
+              "level": 4
+            }
+          ],
+          "puzzle_fixed_channels": true,
+          "puzzle_fixed_hands": true
+        },
+        "turn_serial": 8,
+        "winner": -1
+      },
+      "title": "Two Bequests",
+      "title_ru": "Два наследства",
+      "turns": 2
     }
   ],
-  "version": 2.0
+  "version": 2.0,
+  "expansions": [
+    "battlecraft-v2",
+    "battlecraft-v3",
+    "battlecraft-v4",
+    "crucible-v1",
+    "curiosities-v1",
+    "curiosities-v2",
+    "curiosities-v3",
+    "unwritten-rules-v1"
+  ]
 }

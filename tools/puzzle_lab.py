@@ -11,6 +11,7 @@ This is a content test, not an original-game installation or a rendering test.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import html
 import json
 from pathlib import Path
@@ -331,7 +332,8 @@ def prepare(destination: Path, compatibility: bool = True) -> Path:
     (destination / "fixture.json").write_text(json.dumps(card_tables(), ensure_ascii=False))
     # The native bridge is optional. Its model code is compiled unchanged; only
     # transport uses files because the shipped extension binds to Godot 4.7.
-    if shutil.which("cc"):
+    compiler = shutil.which("cc")
+    if compiler:
         bridge = destination / "native_bridge.c"
         bridge.write_text('#include <stdio.h>\n#include "' + str(ROOT / "game/native/el_duel_brain.c") + '"\n'
             'int main(int argc,char **argv){if(argc!=3)return 2; FILE *f=fopen(argv[1],"rb");if(!f)return 3; '
@@ -339,8 +341,27 @@ def prepare(destination: Path, compatibility: bool = True) -> Path:
             'if(!in||fread(in,1,n,f)!=(size_t)n)return 4;fclose(f);int k=run_search(in,n/4,out);free(in); '
             'f=fopen(argv[2],"wb");if(!f)return 5;fwrite(out,4,k,f);fclose(f);return 0;}\n')
         binary = destination / "native_bridge"
-        if not binary.exists() or binary.stat().st_mtime < (ROOT / "game/native/el_duel_brain.c").stat().st_mtime:
-            subprocess.run(["cc", "-O2", "-D_POSIX_C_SOURCE=200809L", "-std=c11", str(bridge), "-o", str(binary)], check=True)
+        command = [compiler, "-O2", "-D_POSIX_C_SOURCE=200809L", "-std=c11", str(bridge), "-o", str(binary)]
+        # A copied lab can contain a newer binary compiled from another
+        # checkout. Timestamps cannot certify which rules that binary uses.
+        # Bind the cache to the actual wrapper, model, header and compiler.
+        digest = hashlib.sha256()
+        for data in (bridge.read_bytes(), (ROOT / "game/native/el_duel_brain.c").read_bytes(),
+                     (ROOT / "game/native/include/gdextension_interface.h").read_bytes(),
+                     "\0".join(command).encode(),
+                     subprocess.run([compiler, "--version"], capture_output=True, check=True).stdout):
+            digest.update(len(data).to_bytes(8, "big"))
+            digest.update(data)
+        fingerprint = digest.hexdigest()
+        stamp = destination / "native_bridge.sha256"
+        if not binary.exists() or not stamp.exists() or stamp.read_text().strip() != fingerprint:
+            staged_binary = destination / "native_bridge.build"
+            try:
+                subprocess.run(command[:-1] + [str(staged_binary)], check=True)
+                staged_binary.replace(binary)
+                stamp.write_text(fingerprint + "\n")
+            finally:
+                staged_binary.unlink(missing_ok=True)
         brain = destination / "combat_brain.gd"
         source = brain.read_text()
         source = source.replace('static var available := ClassDB.class_exists(&"ELNativeDuelBrain")', 'static var available := true')

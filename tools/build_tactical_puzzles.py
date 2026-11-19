@@ -21,6 +21,7 @@ from puzzle_designs_el1_legends_crowd import puzzles as first_legends_crowd
 from puzzle_designs_el1_curiosities import puzzles as first_curiosities
 from puzzle_designs_el1_paradoxes import puzzles as first_paradoxes
 from puzzle_designs_el1_crossroads import puzzles as first_crossroads
+from puzzle_designs_el1_crucible import puzzles as first_crucible
 from puzzle_designs_el2 import puzzles as second_puzzles
 from puzzle_designs_el2_advanced import puzzles as second_advanced
 from puzzle_designs_el2_master import puzzles as second_master
@@ -28,6 +29,7 @@ from puzzle_designs_el2_legends import puzzles as second_legends
 from puzzle_designs_el2_curiosities import puzzles as second_curiosities
 from puzzle_designs_el2_paradoxes import puzzles as second_paradoxes
 from puzzle_designs_el2_crossroads import puzzles as second_crossroads
+from puzzle_designs_el2_crucible import puzzles as second_crucible
 from puzzle_designs_pale import puzzles as pale_puzzles
 
 # These are role labels for the existing studies, not invented campaign names.
@@ -48,16 +50,18 @@ def retain_archive_puzzles(edition, document):
     # The shipped snapshots are the authoring source for these imports.
     shipped = json.loads((ROOT / "game/puzzles" / (edition + ".json")).read_text(encoding="utf-8"))
     archive_entries = [entry for entry in shipped["puzzles"] if entry.get("expansion") in ARCHIVE_EXPANSIONS]
-    if not archive_entries:
-        return
     generated_ids = {entry["id"] for entry in document["puzzles"]}
     for entry in archive_entries:
         if entry["id"] in generated_ids:
             raise ValueError("Repeated puzzle ID: " + entry["id"])
         generated_ids.add(entry["id"])
     document["puzzles"].extend(archive_entries)
-    document["puzzles"].sort(key=lambda entry: entry["level"])
-    document["expansions"] = sorted({entry["expansion"] for entry in archive_entries})
+    # Keep installed studies in their existing order within each tier. New
+    # studies follow them, just as in the additive installer; a rebuild must
+    # not move the newly authored tier ahead of earlier imported studies.
+    installed_order = {entry["id"]: index for index, entry in enumerate(shipped["puzzles"])}
+    document["puzzles"].sort(key=lambda entry: (entry["level"], installed_order.get(entry["id"], len(installed_order))))
+    document["expansions"] = sorted({entry["expansion"] for entry in document["puzzles"] if entry.get("expansion")})
     document["content_revision"] = max(document["content_revision"], shipped["content_revision"])
 
 
@@ -66,6 +70,7 @@ def entries(edition, collection="all"):
     additions = first_curiosities() if edition == "el1" else second_curiosities()
     paradoxes = first_paradoxes() if edition == "el1" else second_paradoxes()
     crossroads = first_crossroads() if edition == "el1" else second_crossroads()
+    crucible = first_crucible() if edition == "el1" else second_crucible()
     for entry in additions:
         entry["expansion"] = "curiosities-v1"
         # The existing selector searches categories in both languages. A
@@ -86,6 +91,12 @@ def entries(edition, collection="all"):
             entry["category"] = "Curiosities · Crossroads · " + entry["category"]
         if not entry["category_ru"].startswith("Курьёзы · Развилки · "):
             entry["category_ru"] = "Курьёзы · Развилки · " + entry["category_ru"]
+    for entry in crucible:
+        entry["expansion"] = "crucible-v1"
+        if not entry["category"].startswith("Crucible · "):
+            entry["category"] = "Crucible · " + entry["category"]
+        if not entry["category_ru"].startswith("Горнило · "):
+            entry["category_ru"] = "Горнило · " + entry["category_ru"]
     if collection == "curiosities":
         result = additions + paradoxes + crossroads
     elif collection == "crossroads":
@@ -94,8 +105,10 @@ def entries(edition, collection="all"):
         result = paradoxes
     elif collection == "curiosities-v1":
         result = additions
+    elif collection == "crucible":
+        result = crucible
     elif collection == "all":
-        result += additions + paradoxes + crossroads
+        result += additions + paradoxes + crossroads + crucible
     elif collection != "original":
         raise ValueError("Unknown puzzle collection: " + collection)
     module = __import__("puzzle_translations_" + edition)
@@ -132,8 +145,8 @@ def entries(edition, collection="all"):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--edition", choices=("el1", "el2", "both"), default="both")
-    parser.add_argument("--collection", choices=("all", "curiosities", "crossroads", "paradoxes", "curiosities-v1", "original"), default="all",
-                        help="Build all studies, all Curiosities expansions, one named expansion, or the original studies")
+    parser.add_argument("--collection", choices=("all", "crucible", "curiosities", "crossroads", "paradoxes", "curiosities-v1", "original"), default="all",
+                        help="Build all studies, Crucible, all Curiosities expansions, one named expansion, or the original studies")
     parser.add_argument("--godot", default=shutil.which("godot") or shutil.which("godot4") or shutil.which("godot-4") or "godot")
     parser.add_argument("--report-dir", type=Path, default=ROOT / "build/puzzle-validation")
     parser.add_argument("--output-dir", type=Path,
@@ -154,11 +167,11 @@ def main():
     with tempfile.TemporaryDirectory(prefix="demiurges-puzzles-") as folder:
         temp = Path(folder)
         for edition in editions:
-            collection_name = {"curiosities": "Curiosities", "curiosities-v1": "Curiosities", "paradoxes": "Curiosities: Paradoxes", "crossroads": "Curiosities: Crossroads"}.get(args.collection, "Tactical Studies")
-            collection_id = {"curiosities": "curiosities-v3", "curiosities-v1": "curiosities-v1", "paradoxes": "curiosities-v2", "crossroads": "curiosities-v3"}.get(args.collection, "tactical-studies-v2")
+            collection_name = {"crucible": "Crucible", "curiosities": "Curiosities", "curiosities-v1": "Curiosities", "paradoxes": "Curiosities: Paradoxes", "crossroads": "Curiosities: Crossroads"}.get(args.collection, "Tactical Studies")
+            collection_id = {"crucible": "crucible-v1", "curiosities": "curiosities-v3", "curiosities-v1": "curiosities-v1", "paradoxes": "curiosities-v2", "crossroads": "curiosities-v3"}.get(args.collection, "tactical-studies-v2")
             pack = {"format": "etherlords-puzzles", "version": 2, "game": edition,
                     "collection": collection_name, "collection_id": collection_id,
-                    "content_revision": {"original": 4, "curiosities-v1": 5, "paradoxes": 6}.get(args.collection, 7),
+                    "content_revision": {"original": 4, "curiosities-v1": 5, "paradoxes": 6, "crucible": 12, "all": 12}.get(args.collection, 7),
                     "puzzles": entries(edition, args.collection)}
             path = temp / (edition + ".json")
             path.write_text(json.dumps(pack, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
