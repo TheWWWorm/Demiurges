@@ -24,6 +24,8 @@ extends SceneTree
 const MODEL_SIZE := 768
 const OBJECT_SIZE := 512
 const STAGE_SIZE := Vector2i(1536, 1536)
+## How much farther than a tight fit of the model's meshes the camera stands.
+const EXPORT_ROOM := 1.5
 
 func _initialize() -> void:
 	_run.call_deferred()
@@ -165,7 +167,9 @@ func _render(view: SubViewport, path: String, threshold := 0.025, size := MODEL_
 	root.add_child(view)
 	# Let the idle clip and its particles run for a moment.
 	for i in 12: await process_frame
-	ELWikiPreview.frame(view, ELWikiPreview.YAW, pitch)
+	# Framed by the model's own outline with room for its particles (flames,
+	# glows); the crop then squares the picture around what was drawn.
+	ELWikiPreview.frame(view, ELWikiPreview.YAW, pitch, ELWikiPreview.closest_zoom(view) * EXPORT_ROOM)
 	for i in 3: await process_frame
 	var shot := _cropped(view.get_texture().get_image(), size, threshold)
 	var saved := shot.save_webp(path, true, 0.9)

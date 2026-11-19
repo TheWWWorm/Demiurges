@@ -211,8 +211,20 @@ func _catalog(screen: ELWikiScreen, shots: String) -> void:
 		var distance := screen._preview.camera.position.z
 		screen._preview.zoom(0.8)
 		check(screen._preview.camera.position.z < distance, "the wheel zooms")
+		# Zoomed in all the way and turned, the model stays in its frame (#262).
+		screen._preview.zoom(0.01)
+		check(_framed(screen._preview) > 0.0, "zoomed in all the way, the model stays in its frame")
+		screen._preview.turn(Vector2(140, 250))
+		check(_framed(screen._preview) > 0.0, "turned from above, the model stays in its frame")
 		screen._preview.reset_view()
 	await _shot(shots, "artifact-creature")
+	# The orc shaman's torch particles once shrank him to a speck (#262):
+	# models open filling much of their frame, and never beyond it.
+	if not profiles.is_empty():
+		screen.navigate("card-orsh")
+		for i in 3: await process_frame
+		check(screen._preview != null and screen._preview.model != null and _framed(screen._preview) > 0.5,
+			"card-orsh: the shaman fills much of his frame")
 	if profiles.has("el1"):
 		# An air wall: its lower half is see-through cloth in soft alpha, which
 		# the preview blends (an alpha cut-off would drop it).
@@ -249,6 +261,20 @@ func _catalog(screen: ELWikiScreen, shots: String) -> void:
 ## Guides with `!objects` lines: every map object they name has a model in
 ## its installed game, the page shows them beside the article (one at a time,
 ## with a choice), and an object link in the article picks that one.
+## How much of its frame the preview's model fills (its outline's larger
+## share of the view's width or height); 0 when any of it is outside.
+func _framed(preview: ELWikiPreview) -> float:
+	var size := Vector2(preview.viewport.size)
+	var low := Vector2.INF
+	var high := -Vector2.INF
+	for point in ELWikiPreview.outline(preview.model):
+		if preview.camera.is_position_behind(point): return 0.0
+		var seen := preview.camera.unproject_position(point)
+		if seen.x < -1.0 or seen.y < -1.0 or seen.x > size.x + 1.0 or seen.y > size.y + 1.0: return 0.0
+		low = low.min(seen)
+		high = high.max(seen)
+	return maxf((high.x - low.x) / size.x, (high.y - low.y) / size.y)
+
 func _map_objects(screen: ELWikiScreen, profiles: Dictionary, shots: String) -> void:
 	var named := 0
 	for lang: String in ELWikiData.LANGUAGES:
