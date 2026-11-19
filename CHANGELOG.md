@@ -2,6 +2,14 @@
 
 Versions follow [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html) from 0.3.0 on.
 
+## Unreleased
+
+- **Etherlords I battle display.** A creature's tooltip shows its printed card without live stats or a list of enchantments, as in the original. With battle cast icons on, ether disturbance and specialization triggers also appear in the top-left icons, and those icons clear whenever the other side starts acting. The numbers over battle figures sit on no dark square in either game. [#254](https://github.com/TheWWWorm/Demiurges/issues/254) · [#256](https://github.com/TheWWWorm/Demiurges/issues/256) · [#257](https://github.com/TheWWWorm/Demiurges/issues/257) · [#258](https://github.com/TheWWWorm/Demiurges/issues/258)
+- **Fungi.** Fungus Immortality is announced only when it actually saves a fingus (all three of its rolls succeed), and a fingus that spits dies the moment the spit leaves it while its target is hit when the spit lands, as in the originals. [#260](https://github.com/TheWWWorm/Demiurges/issues/260) · [#261](https://github.com/TheWWWorm/Demiurges/issues/261)
+- **Try again** in campaign, mission and map battles of both games deals new opening hands and draws. [#263](https://github.com/TheWWWorm/Demiurges/issues/263)
+- **Etherlords I saves and castles.** Save and load lists mark the races playing on each saved map, as the original does. Each new start of a mission or campaign chapter recruits different castle heroes; a loaded save keeps its own. [#255](https://github.com/TheWWWorm/Demiurges/issues/255) · [#259](https://github.com/TheWWWorm/Demiurges/issues/259)
+- **Wiki.** Creature and hero models are framed by their own meshes, so their sizes are consistent (no more tiny Orc Shaman or giant Gibberling) and they stay inside their frame at any zoom or angle. [#262](https://github.com/TheWWWorm/Demiurges/issues/262)
+
 ## 0.19.1 (not released yet)
 
 - **Etherlords II battle display.** Grass Snake's +1/+1 growth shows its sword, shield and rune effects again (and Lake Snake's -1/-1 mark its matching ones). The top-left notice icons list the opponent's used artifacts as their spell's icon with the card tooltip; as in the original, only the opponent's casts, abilities and artifacts appear there, while ether disturbance and specializations show for both sides. The stat and health numbers over figures lost the dark plate added in 0.19.0, and Pale spell-jammers such as the Pale Avenger no longer show the unused "Spell silencing" icon. [#241](https://github.com/TheWWWorm/Demiurges/issues/241) · [#243](https://github.com/TheWWWorm/Demiurges/issues/243) · [#251](https://github.com/TheWWWorm/Demiurges/issues/251) · [#252](https://github.com/TheWWWorm/Demiurges/issues/252)
