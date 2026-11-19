@@ -546,7 +546,7 @@ func _process(delta: float) -> void:
 	if scroll_gliding: _glide(delta)
 	if view_moved and following < 0: _clamp_target()
 	_update_camera()
-	if not _pending_speech.is_empty() and (int(_pending_speech.get("actor", -1)) < 0 or _speaker_in_place()):
+	if not _pending_speech.is_empty() and not _level_up_before_speech() and (int(_pending_speech.get("actor", -1)) < 0 or _speaker_in_place()):
 		var speech := _pending_speech
 		_pending_speech = {}
 		_show_second_dialogue(speech)
@@ -879,6 +879,7 @@ func decline_encounter() -> void:
 
 func _close_second_precombat() -> void:
 	_finish_battle_dome()
+	_leave_tunnel()
 	if second_precombat == null or not second_precombat.visible: return
 	second_precombat.close()
 	if second_hud != null: second_hud.show()
@@ -895,22 +896,69 @@ func _open_second_precombat(first: int, second: int) -> void:
 		shown.visible = true
 		faces.append(int(_art.resolve(shown).get("row", {}).get("Face", -1)) if not actor.is_empty() else -1)
 	pending_encounter = [first, second]
-	# The camera centres between the two sides while the panel is up. A tunnel
-	# guard waits off the map, so it counts as standing at its tunnel mouth.
-	var spots: Array[Vector3] = []
-	for id: int in [first, second]:
-		var place := state.object(id)
-		if place.has("tunnel_source") and not state.object(place.tunnel_source).is_empty(): place = state.object(place.tunnel_source)
-		if place.is_empty() or int(place.get("x", -1)) < 0 or int(place.get("y", -1)) < 0: continue
-		if int(place.x) >= state.map.width or int(place.y) >= state.map.height: continue
-		spots.append(ELAdventureScene.world_position(place.x, place.y))
-	if not spots.is_empty():
+	# A tunnel guard waits off the map, inside its tunnel: the hero goes into
+	# the mouth, and the view and the dome centre on the mouth (player report
+	# #247; the dome had stood on the hero alone).
+	var mouth := _tunnel_mouth(first, second)
+	if not mouth.is_empty():
+		var inside := first if not state.object(first).has("tunnel_source") else second
+		_enter_tunnel(inside)
 		following = -1
 		scroll_gliding = false
-		target = spots[0] if spots.size() == 1 else (spots[0] + spots[1]) * 0.5
+		target = _tunnel_mouth_position(mouth)
+	else:
+		# The camera centres between the two sides while the panel is up.
+		var spots: Array[Vector3] = []
+		for id: int in [first, second]:
+			var place := state.object(id)
+			if place.is_empty() or int(place.get("x", -1)) < 0 or int(place.get("y", -1)) < 0: continue
+			if int(place.x) >= state.map.width or int(place.y) >= state.map.height: continue
+			spots.append(ELAdventureScene.world_position(place.x, place.y))
+		if not spots.is_empty():
+			following = -1
+			scroll_gliding = false
+			target = spots[0] if spots.size() == 1 else (spots[0] + spots[1]) * 0.5
 	second_hud.hide()
 	second_precombat.open(state, local, other, faces)
 	_start_battle_dome(first, second)
+
+## The tunnel mouth whose guard one of the two sides is, or {}.
+func _tunnel_mouth(first: int, second: int) -> Dictionary:
+	for id: int in [first, second]:
+		var side := state.object(id)
+		if not side.has("tunnel_source"): continue
+		var mouth := state.object(side.tunnel_source)
+		if not mouth.is_empty() and int(mouth.get("x", -1)) >= 0 and int(mouth.get("y", -1)) >= 0: return mouth
+	return {}
+
+## The centre of a tunnel mouth's footprint on the ground (map space).
+func _tunnel_mouth_position(mouth: Dictionary) -> Vector3:
+	var centre := ELAdventureGrid.center(mouth, _art.resolve(mouth).get("row", {}))
+	return world.ground_position(centre.x - 0.5, centre.y - 0.5) if world != null else ELAdventureScene.world_position(centre.x - 0.5, centre.y - 0.5)
+
+## The hero hidden inside a tunnel for its guard's battle (-1 for none).
+var _tunnel_hero := -1
+
+func _enter_tunnel(hero: int) -> void:
+	_leave_tunnel()
+	var model: ELModel = world.actors.get(hero) if world != null else null
+	if model == null: return
+	_tunnel_hero = hero
+	model.set_meta("portal_hidden", true)
+	model.hide()
+
+## The hero comes out of the tunnel when the panel closes: a declined battle
+## leaves it where it stood; an accepted one hands over to the battle screen
+## at once, and a win then moves it to the tunnel's exit.
+func _leave_tunnel() -> void:
+	if _tunnel_hero < 0: return
+	var hero := _tunnel_hero
+	_tunnel_hero = -1
+	var model: ELModel = world.actors.get(hero) if world != null else null
+	if model == null: return
+	if model.has_meta("portal_hidden"): model.remove_meta("portal_hidden")
+	model.show()
+	world.fog_object(state.object(hero))
 
 ## Second game: a battle with a local side raises the ether dome as its
 ## pre-battle panel opens (the original attack order, for the player's attacks,
@@ -1052,7 +1100,7 @@ func _end_day() -> void:
 	_refresh_hero_info()
 
 func _unhandled_input(event: InputEvent) -> void:
-	if console_open or not _pending_speech.is_empty(): return
+	if console_open or (not _pending_speech.is_empty() and skills == null): return
 	var key := event as InputEventKey
 	var continue_dialogue := key != null and key.pressed and (
 		not key.echo or (key.keycode == KEY_SPACE and director != null and not bool(director.dialogue.get("question", false))))
@@ -1208,7 +1256,9 @@ func _unhandled_input(event: InputEvent) -> void:
 		elif event.keycode in [KEY_W, KEY_A, KEY_S, KEY_D]:
 			following = -1
 			view_moved = true
-	if not director.dialogue.is_empty(): return
+	if not director.dialogue.is_empty():
+		_dialogue_map_tip_input(event)
+		return
 	if event is InputEventMouseMotion:
 		_pointer_on_map = hud == null or hud.map_rect().has_point(event.position)
 		if second_hud != null: _tip_on_map = true
@@ -1372,9 +1422,23 @@ func _second_right_press(at: Vector2) -> void:
 	_tip_content = {}
 	_show_map_tip()
 
+## Second game: while a character speaks (TextDialog) the map objects keep
+## their tooltips, on a rest of the pointer or a right press. Other clicks
+## on the map wait for the answer.
+func _dialogue_map_tip_input(event: InputEvent) -> void:
+	if second_hud == null or _dialogue_blocks_map_tips(): return
+	if event is InputEventMouseMotion: _tip_on_map = true
+	elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT and event.pressed: _second_right_press(event.position)
+
+## Script message boxes and boxes over a window are modal; a character's
+## line is not.
+func _dialogue_blocks_map_tips() -> bool:
+	if director.dialogue.is_empty(): return false
+	return str(director.dialogue.get("box", "text")) != "text" or (dialogue_blocker != null and dialogue_blocker.visible) or not _pending_speech.is_empty()
+
 ## Panels, dialogs, menus, scripted messages and pauses close the map tooltip.
 func _map_tooltip_blocked() -> bool:
-	return director == null or state == null or paused or not error.is_empty() or extras_open() or not director.dialogue.is_empty() \
+	return director == null or state == null or paused or not error.is_empty() or extras_open() or _dialogue_blocks_map_tips() \
 		or hero_screen != null or building_screen != null or building_message != null or global_spells != null or diplomacy != null \
 		or first_shop != null or rune_shop != null or shop != null or skills != null or spellbook != null or notebook != null \
 		or second_hud.menu.visible or result_shown
@@ -1778,7 +1842,7 @@ func _present(data: Dictionary) -> void:
 				_script_lens = false
 			if second_dialogue != null:
 				if not speech.get("direct", false): world.prepare_speech(int(speech.get("actor", -1)))
-				if _mission_fade == null and not _reward_transition() and (int(speech.get("actor", -1)) < 0 or _speaker_in_place()): _show_second_dialogue(speech)
+				if _mission_fade == null and not _reward_transition() and not _level_up_before_speech() and (int(speech.get("actor", -1)) < 0 or _speaker_in_place()): _show_second_dialogue(speech)
 				else: _pending_speech = speech
 				return
 			dialogue_name.text = speech.title
@@ -2251,6 +2315,10 @@ func _extras_ready() -> bool:
 	if not ELFrontMenu.supports(profile): return false
 	extras_layer = CanvasLayer.new()
 	extras_layer.layer = 2
+	# Building the menu shows its main screen; the layer stays hidden until a
+	# screen is opened over the map (player report #239: the main menu showed
+	# while the first save of a session captured its picture).
+	extras_layer.hide()
 	add_child(extras_layer)
 	extras = ELFrontMenu.new()
 	extras_layer.add_child(extras)
@@ -2359,6 +2427,7 @@ func _queue_building_message(message: Dictionary) -> void:
 
 func _on_encounter_finishing() -> void:
 	_finishing_battle = true
+	_battle_level_hero = -1
 
 func _on_encounter_finished(winner: int) -> void:
 	_finishing_battle = false
@@ -2737,11 +2806,14 @@ func _close_spellbook() -> void:
 ## level-up action, whose run shows it with victory.wav).
 func _auto_level_up() -> void:
 	if second_hud == null or skills != null or paused or _reward_transition() or state.map.profile.id != "el2": return
-	if not director.can_move() or not director.movement.is_empty() or not pending_encounter.is_empty() or not building_messages.is_empty(): return
+	# A dialogue started by the battle's script waits for the level's choice.
+	var before_speech := not _pending_speech.is_empty() and _level_up_before_speech()
+	if not before_speech and (not director.can_move() or not director.movement.is_empty()): return
+	if not pending_encounter.is_empty() or not building_messages.is_empty(): return
 	var hero := state.object(state.main_hero)
 	if hero.is_empty() or not hero.get("alive", false) or int(hero.get("owner", -1)) != state.current_player or int(hero.get("skill_points", 0)) <= 0: return
 	if ELHeroSkills.prepare(state.map.profile, hero).is_empty(): return
-	_open_skills(state.main_hero)
+	_open_skills(state.main_hero, before_speech)
 	if skills != null and audio != null: audio.effect_sound("Adventure/victory.wav")
 
 ## First game: a level gained by one of the player's heroes (in a battle, a
@@ -2769,10 +2841,21 @@ func _first_level_up() -> void:
 	if int(hero.get("skill_points", 0)) <= 0 or offers.is_empty(): return
 	open_hero_screen(id)
 
-func _open_skills(for_hero := -1) -> void:
+## Second game: a level the main hero gained in the battle just won is chosen
+## before a dialogue that battle's script starts, as in the original (player
+## report #238); the dialogue opens once the level-up dialog is closed.
+func _level_up_before_speech() -> bool:
+	if _battle_level_hero < 0 or _battle_level_hero != state.main_hero or second_hud == null or strategic_session != null: return false
+	var hero := state.object(_battle_level_hero)
+	if hero.is_empty() or not hero.get("alive", false) or int(hero.get("owner", -1)) != state.current_player or int(hero.get("skill_points", 0)) <= 0: return false
+	return not ELHeroSkills.prepare(state.map.profile, hero).is_empty()
+
+## `before_speech` opens the level-up dialog while a battle's dialogue waits
+## for it (_level_up_before_speech).
+func _open_skills(for_hero := -1, before_speech := false) -> void:
 	if strategic_session != null and not strategic_session.can_plan(): return
 	if skills != null or paused: return
-	if not director.can_move() or not director.movement.is_empty():
+	if not before_speech and (not director.can_move() or not director.movement.is_empty()):
 		_remark("Finish the current action before opening skills.")
 		return
 	var shown := for_hero if for_hero >= 0 else _hero_id()
@@ -3327,6 +3410,8 @@ func _build_ui() -> void:
 		if not second_hud.build(state):
 			second_hud.queue_free()
 			second_hud = null
+		else:
+			second_hud.tooltip_blocked = func() -> bool: return _mission_fade != null or extras_open() or result_shown or (paused and not second_hud.menu.visible)
 	if hud != null: _build_first_controls()
 	elif second_hud != null: _build_second_controls()
 	else: _build_remake_controls()

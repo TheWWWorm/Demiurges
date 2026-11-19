@@ -476,7 +476,7 @@ func _use_custom_artifact(side: int, item: Dictionary, target: int, choice: int)
 		return _fail(invalid)
 	var traps := _sorcery_traps()
 	_spend_artifact_use(side, item)
-	_emit({"kind": "artifact", "side": side, "artifact": item.name, "card": item.spell, "target": target, "charges": item.charges, "title": artifact_title(item)})
+	_emit({"kind": "artifact", "side": side, "artifact": item.name, "card": item.spell, "target": target, "charges": item.charges, "title": artifact_title(item), "icon": int(item.custom.get("icon", -1))})
 	_resolve_spell(side, item.spell, rule, target, choice, 0, traps, false)
 	_acting = -1
 	_finish_action()

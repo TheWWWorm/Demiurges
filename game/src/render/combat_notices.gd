@@ -13,7 +13,7 @@ extends Control
 ##   slides up.
 ## - first game: cast spells from both heroes as icons, marked by caster.
 ##   The second game clears the list when a new side acts or a turn starts,
-##   and adds ability, ether disturbance and specialisation icons.
+##   and adds ability, ether disturbance, specialisation and used artifact icons.
 ##   There are 5 per row at a 53 px step. The first game's "cast_icons"
 ##   setting enables this list with its own list border (ELListLook.HOVER).
 ## Approximations: list and icon origins, and the line font.

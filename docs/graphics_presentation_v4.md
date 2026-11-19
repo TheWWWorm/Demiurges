@@ -7,8 +7,8 @@ playback, HUD updates and preview viewports. Original-game data was not used.
 
 The applied 0.18.5 build restores the stock combat selection marker, floating
 damage and healing numbers, and helper captions. It removes added impact
-accents and arena motes. Overhead numbers draw each glyph once and use a
-single unbordered backing per number row. Settled map fog fades retain their
+accents and arena motes. Overhead numbers draw each glyph once over the
+scene; the number-row backing was later removed to match the original. Settled map fog fades retain their
 shader value until the next change.
 
 ## Campaign script performance
@@ -170,7 +170,7 @@ projection are unchanged. Visible moving anchors and floating numbers still
 update at the display rate. Hidden floating numbers continue aging without
 building draw commands, and empty readouts stop processing. Lifetime arrays
 compact in place, and uniform-colour glyph rows avoid per-glyph wrapper arrays.
-Offscreen rows are skipped with a margin for keylines and plates.
+Offscreen rows are skipped with a small margin.
 
 Icon hit testing identifies the relevant cell rather than allocating every
 icon rectangle. Adjacent cells are checked at floating-point boundaries to

@@ -146,7 +146,7 @@ static func use(director: ELAdventureDirector, actor: Dictionary, item: Dictiona
 				text = profile.text(key).replace("%s", spec_name)
 			else:
 				text = profile.text(key).replace("%s", spec_name)
-				if owned.size() == 1: text += "\n\n" + profile.text("T_MB_RECEIVE_NEW_SPEC_FIRST")
+				if ELSecondCampaign.first_specialization_hint(state, actor, owned): text += "\n\n" + profile.text("T_MB_RECEIVE_NEW_SPEC_FIRST")
 				# Added to the hero's list; as in learn_specialization
 				# a hero without an active one starts using it, otherwise the
 				# player picks it from the bag (the hint above).
