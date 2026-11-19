@@ -1863,7 +1863,7 @@ func _end_phase() -> void:
 		return
 	if _campaign_battle() != null and duel.phase == ELDuel.Phase.FINISHED:
 		# A fallen hero's death is always shown; only the winner's victory
-		# clip may be cut short (_skip_victory).
+		# clip may be cut (_skip_victory).
 		if ending_over(): _return_from_encounter()
 		else: _skip_victory()
 		return
@@ -1896,10 +1896,10 @@ func _end_phase() -> void:
 		own_attack_pending = own_attack_side
 
 ## Space in battle (held, it repeats): one step of the presentation at a
-## time. During a fight it ends the exchange being shown: that attacker's
-## blows land at once and it walks home while the next attacker sets off;
-## once only the walk home is left, everyone is home at once. Otherwise the
-## casts and walks being shown end. Sounds are never cut: attack hits,
+## time. During a fight it ends all the remaining attacks at once: their
+## blows land together and everyone is home, resting figures lying down;
+## what follows the attacks (deaths after them, the next phase) plays as
+## usual. Otherwise the casts and walks being shown end. Sounds are never cut: attack hits,
 ## deaths and spell sounds still play (a spell's held sounds start at once).
 ## The death of a hero is never skipped; the winner's victory clip may be.
 func _skip_battle_step() -> void:
@@ -1911,11 +1911,12 @@ func _skip_battle_step() -> void:
 		return
 	_skip_battle_presentation(true)
 
-## The end of a won battle: Space or the end button cut the winner's victory
-## clip short, but neither a fallen hero's death nor the victory fanfare.
+## The end of a won battle: Space or the end button end the winner's victory
+## clip at once and the battle is over (the fanfare plays on). A fallen
+## hero's death clip is never cut.
 func _skip_victory() -> void:
 	if ending.is_empty() or String(ending.stage) != "victory": return
-	ending.length = minf(float(ending.length), maxf(float(ending.clock), float(ending.get("fanfare", 0.0))))
+	ending.length = minf(float(ending.length), float(ending.clock))
 
 ## Ends the presentation being shown at once (checks and loads use it for
 ## the whole queue). With `keep_sounds` (Space) it stops at a fight, which
@@ -4390,10 +4391,9 @@ func _step_ending(delta: float) -> void:
 		if winner >= 0 and models.has(winner):
 			var model: ELModel = models[winner]
 			# The fanfare of the winner's colour, for a hero figure (he*) only.
+			# It plays to its end even when the battle closes before it does.
 			if String(model.template).begins_with("he"):
-				var fanfare := ELAudio.sound(profile, "buttons/%svictory.wav" % String(duel.heroes[winner].get("faction", "Red")))
-				battle_audio.play("buttons/%svictory.wav" % String(duel.heroes[winner].get("faction", "Red")))
-				if fanfare != null: ending.fanfare = fanfare.get_length()
+				ending.fanfare = battle_audio.play_detached("buttons/%svictory.wav" % String(duel.heroes[winner].get("faction", "Red")))
 			# The winner camera follows the player's own win only (both originals).
 			if _auto_camera_on() and _local_side(winner): auto_camera.victory(winner, model.position)
 			var clip := victory_clip(model)
@@ -4890,7 +4890,7 @@ func _animation_done(clip: String, id: int) -> void:
 	var resting := _shown_resting(id, c)
 	# Home again after a fight (a move's end): the figure's own tap clip, then
 	# its resting idle (_turn_figure), rather than a jump into the pose.
-	if resting and clip.is_empty() and model.has_clip("utap") and model.has_clip("ctapidle") and model.base_clip() != "ctapidle":
+	if resting and clip.is_empty() and _tap_clips() and not _skipping_presentation and model.has_clip("utap") and model.has_clip("ctapidle") and model.base_clip() != "ctapidle":
 		if model.play("utap"):
 			battle_audio.unit(model, "tap")
 			return
@@ -4898,12 +4898,17 @@ func _animation_done(clip: String, id: int) -> void:
 	# getting up) turns back with its own clip instead of jumping into the
 	# other idle (a skip settles it at once).
 	var asleep := resting or bool(c.get("sick", false))
-	if not _skipping_presentation and ((clip == "utap" and not asleep) or (clip == "uuntap" and asleep)):
+	if not _skipping_presentation and _tap_clips() and ((clip == "utap" and not asleep) or (clip == "uuntap" and asleep)):
 		var turn := "uuntap" if clip == "utap" else "utap"
 		if model.has_clip(turn) and model.play(turn):
 			battle_audio.unit(model, turn.trim_prefix("u"))
 			return
 	_play_figure_idle(model, c, resting)
+
+## Options "Hide movement" (the originals' fast combat mode) also drops the
+## tap and untap clips and their sounds: a figure changes idle at once.
+func _tap_clips() -> bool:
+	return not bool(settings.values.get("hide_motion", false))
 
 func _play_figure_idle(model: ELModel, creature: Dictionary, resting: bool) -> void:
 	var clip := "ctapidle" if resting or creature.get("sick", false) else "cidle"
@@ -5363,12 +5368,12 @@ func _attack_all() -> void:
 
 ## A creature put to rest by an action, or rising from rest, plays the figure's own tap
 ## or untap clip (with its sound and clip particles) before the idle it ends
-## in; figures without the clip change idle at once.
+## in; figures without the clip (or with Hide movement) change idle at once.
 func _turn_figure(model: ELModel, desired: String, resting: bool) -> void:
 	var from := model.base_clip()
 	# A newly summoned figure simply waits in its resting idle.
 	var clip := "utap" if desired == "ctapidle" and from == "cidle" and resting else ("uuntap" if desired == "cidle" and from == "ctapidle" else "")
-	if not clip.is_empty() and model.has_clip(desired) and model.play(clip):
+	if not clip.is_empty() and _tap_clips() and model.has_clip(desired) and model.play(clip):
 		battle_audio.unit(model, clip.trim_prefix("u"))
 		return
 	model.play(desired)

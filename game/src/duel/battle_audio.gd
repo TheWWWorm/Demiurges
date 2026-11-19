@@ -1688,6 +1688,26 @@ func play(path: String, spatial_gain := 1.0, loop := false) -> bool:
 			return true
 	return false
 
+## A sound that outlives the battle screen, as the victory fanfare does: it
+## plays to its end on its own player under the scene root, even once the
+## battle has closed. Returns its length in seconds (0 when it cannot play).
+func play_detached(path: String) -> float:
+	requested.append(path)
+	if requested.size() > 80: requested.pop_front()
+	if paused or silenced or not is_inside_tree(): return 0.0
+	var stream := ELAudio.sound(profile, path)
+	if stream == null: return 0.0
+	var player := AudioStreamPlayer.new()
+	player.name = "BattleFanfare"
+	get_tree().root.add_child(player)
+	player.stream = stream
+	player.volume_db = linear_to_db(maxf(0.0001, ELAudio.option_gain(float(settings.effects), edition) * ELAudio.placed_gain(1.0, edition))) - 3.0
+	player.finished.connect(player.queue_free)
+	player.play()
+	played.append(path)
+	if played.size() > 40: played.pop_front()
+	return stream.get_length()
+
 ## Like play(), but `gain` (which may set the pan source) is asked for when
 ## the sound actually starts, after any hold for the hero's gesture.
 func play_released(path: String, gain: Callable) -> void:
