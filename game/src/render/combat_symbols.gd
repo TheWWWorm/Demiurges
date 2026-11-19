@@ -20,7 +20,7 @@ extends Control
 ## numbers that start together over one figure begin a step apart; glyphs never
 ## shrink below MIN_SIZE window pixels (remake readability floor for small
 ## windows and the remake's zoomed-out orbit; the original has none). Numeric
-## readouts have a dark backing for light ground.
+## readouts are drawn bare over the scene, as in the original (no backing).
 
 const CELL := 16.0
 ## Half the glyph's world width: figure readouts, rising numbers (original
@@ -38,7 +38,8 @@ const GREEN := Color(0, 1, 0)
 ## first strike, bloodthirsty, tireless, vampire, regeneration, robber,
 ## breaks enchantments, poisonous, cannot rise, unblockable, ready,
 ## aggressive, guard, evasive; the second game adds the colourless group,
-## the Colourless Plane and spell silencing.
+## the Colourless Plane and spell silencing (sheet and text only: no released
+## creature has that ability, so the duel never sets it).
 const ICON_CODES := [15, 32, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 35, 36, 37]
 const FLOAT_LIFE := 3.0
 const FLOAT_SPEED := 0.8
@@ -47,7 +48,6 @@ const FLOAT_START := 0.17
 ## screen, so they stay readable from any view (remake spacing).
 const STACK_STEP := 1.25
 const STACK_AGE := 0.5
-const PLATE_INK := Color(0.015, 0.020, 0.026, 0.31)
 
 var sheet: Texture2D:
 	set(value):
@@ -284,7 +284,6 @@ func _draw() -> void:
 	var view := get_viewport_rect()
 	var pixel := 1.0 / _window_scale()
 	var margin := maxf(2.0, 3.0 * pixel)
-	var padding := maxf(1.0, 2.0 * pixel)
 	for figure: Dictionary in figures:
 		var top: Vector3 = figure.get("top", Vector3.ZERO)
 		if camera.is_position_behind(top): continue
@@ -294,9 +293,7 @@ func _draw() -> void:
 		var x: float = rows.anchor.x
 		var icons: Array = figure.get("icons", [])
 		var numbers: Array = figure.get("numbers", [])
-		if not numbers.is_empty():
-			_draw_plate(x, rows.numbers, numbers.size(), size, padding)
-			_draw_row(numbers, x, rows.numbers, size)
+		if not numbers.is_empty(): _draw_row(numbers, x, rows.numbers, size)
 		if not icons.is_empty():
 			_draw_codes(icons, WHITE, x, rows.icons, size)
 		var order: Array = figure.get("order", [])
@@ -312,13 +309,6 @@ func _draw() -> void:
 		for code: int in glyphs:
 			_draw_glyph(code, entry.colour, Rect2(x, at.y - size * 0.5, size, size))
 			x += size
-
-## A low-opacity ink plate separates glyphs from snow, sand, and fire.
-## The plate has no input area and never alters the original icon sheet.
-func _draw_plate(centre: float, top: float, cells: int, size: float, padding: float) -> void:
-	var bounds := Rect2(centre - cells * size * 0.5 - padding, top - padding,
-		cells * size + padding * 2.0, size + padding * 2.0)
-	draw_rect(bounds, PLATE_INK)
 
 static func cell_rect(code: int) -> Rect2:
 	return Rect2((code % 16) * CELL, (code / 16) * CELL, CELL, CELL)
