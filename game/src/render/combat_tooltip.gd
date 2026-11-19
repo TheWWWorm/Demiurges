@@ -56,6 +56,9 @@ var blocked: Callable
 var touch: ELTouchInput
 ## The deck editor can show the first game's frame on hover as well.
 var hover_in_first_game := false
+## The battle's status and affect icons sit outside the holder; tooltips
+## of the map panels and boxes leave them to the battle's own tooltip.
+var battle_icons := true
 var _shown_key := ""
 var _right_click_at := Vector2.INF
 var _right_click_control: Control
@@ -250,10 +253,14 @@ func _layout_tip(cursor: Vector2) -> void:
 
 func _owns(control: Control) -> bool:
 	var owner_node := get_parent()
+	if owner_node == null or control == self or is_ancestor_of(control): return false
+	# The holder itself can carry the tooltip (a dialogue box's item rows).
+	if owner_node == control or owner_node.is_ancestor_of(control): return true
+	if not battle_icons: return false
 	# Status and cast icons are drawn over the battle, outside the HUD.
 	if control is ELCombatNotices: return true
 	if control is ELAffectStrip: return control.battle_tooltips
-	return owner_node != null and owner_node.is_ancestor_of(control) and control != self and not is_ancestor_of(control)
+	return false
 
 ## First-game hero titles are centred over the whole frame.
 func _centre_titles(content: Dictionary) -> void:

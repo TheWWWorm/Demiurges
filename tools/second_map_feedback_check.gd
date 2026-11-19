@@ -116,11 +116,12 @@ func _experience_tooltip(view: ELAdventureView) -> void:
 	var hud := view.second_hud
 	var delay := float(ProjectSettings.get_setting("gui/timers/tooltip_delay_sec", 0.5))
 	await create_timer(delay + 0.1).timeout
-	check(hud.experience_tip.visible and hud.experience_tip.get_rect().end.y < hud.experience_bar.position.y,
+	var tip := hud.panel_tips.panel
+	check(tip.visible and tip.position.y + tip.size.y * tip.scale.y < hud.experience_bar.position.y and tip.get_child_count() > 0,
 		"#226: hovering during the opening fade shows the XP tooltip above the bar after the dialogue")
 	view.open_options()
 	await frames(2)
-	check(not hud.experience_tip.visible, "#226: Options hides the XP tooltip even if the pointer does not move")
+	check(not tip.visible, "#226: Options hides the XP tooltip even if the pointer does not move")
 	view.close_options()
 	_move_pointer(Vector2(400, 350))
 	root.notify_mouse_exited()
