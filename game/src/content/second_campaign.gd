@@ -206,6 +206,8 @@ static func valid(data: Variant) -> bool:
 	# Optional (older saves lack it): the game's computer players' strength
 	# (ELAIChoice), carried from chapter to chapter.
 	if data.has("ai") and not ELAIChoice.valid(data.ai): return false
+	# Optional (older saves lack it): the first-specialisation hint was shown.
+	if data.has("spec_hint") and not data.spec_hint is bool: return false
 	# Optional (older saves lack it): rows of the chapters already won.
 	if data.has("played"):
 		if not data.played is Array or data.played.size() > MAX_ROWS: return false
@@ -229,6 +231,20 @@ static func restore(state: ELAdventureSession, raw_scenario: Variant) -> bool:
 	if not raw_scenario is Dictionary or not raw_scenario.has(KEY): return true
 	if not valid(raw_scenario[KEY]): return false
 	state.scenario[KEY] = normalized(raw_scenario[KEY])
+	return true
+
+## Second game: whether a specialisation the local player's hero receives
+## (altar or battle) adds T_MB_RECEIVE_NEW_SPEC_FIRST: only the first one of the
+## playthrough, for a hero that held none (player report #253; a chapter's own
+## starting specialisation does not count). Inside a campaign the shown hint
+## is kept in the progress, so later chapters and campaigns skip it; a
+## single chapter decides by the hero alone. `owned` is the list before the new one.
+static func first_specialization_hint(state: ELAdventureSession, hero: Dictionary, owned: Array) -> bool:
+	if not owned.is_empty() or int(hero.get("owner", -1)) != state.current_player: return false
+	var data := progress(state)
+	if data.is_empty(): return true
+	if bool(data.get("spec_hint", false)): return false
+	data.spec_hint = true
 	return true
 
 static func progress(state: ELAdventureSession) -> Dictionary:

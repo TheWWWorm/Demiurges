@@ -359,10 +359,10 @@ func advance(delta: float) -> void:
 	if action_held or action_wait > 0.0 or not movement.is_empty(): return
 	for budget in 32:
 		if not state.commands.is_empty(): _commands_pending = true
-		if state.commands.is_empty() or not dialogue.is_empty() or not movement.is_empty() or not travel.is_empty() or _waiting or not error.is_empty() or encounter != null or _shopping(): break
+		if state.commands.is_empty() or not dialogue.is_empty() or not movement.is_empty() or not travel.is_empty() or _waiting or not error.is_empty() or encounter != null or not auto_fight.is_empty() or _shopping(): break
 		_execute(state.commands[0])
 		if action_wait > 0.0: return
-	if _commands_pending and state.commands.is_empty() and movement.is_empty() and travel.is_empty() and not _waiting and dialogue.is_empty() and error.is_empty() and encounter == null:
+	if _commands_pending and state.commands.is_empty() and movement.is_empty() and travel.is_empty() and not _waiting and dialogue.is_empty() and error.is_empty() and encounter == null and auto_fight.is_empty():
 		_commands_pending = false
 		if not state.hook("Hook_AllCommandsFinished"): _fail(state.error)
 	# A computer player's commander, once woken with no hero busy, queues its end
@@ -1261,10 +1261,8 @@ func _use_tunnel(actor: Dictionary, source: Dictionary) -> void:
 	var guard := state.object(source.get("guard"))
 	if guard.get("alive", false):
 		guard.tunnel_source = int(source.uid)
-		if int(actor.owner) == state.current_player:
-			var key := str(ELSecondBuildings.definition(state.map.profile, source).get("Message1", ""))
-			presentation.emit({"kind": "building_message", "hero": actor.uid, "building": source.uid,
-				"text": state.map.profile.text(key).replace("%s", str(guard.get("title", guard.name))), "key": key})
+		# The battle offer opens at once: the second game shows no message box
+		# for a guarded tunnel (player report #247).
 		_begin_encounter(actor, guard)
 		return
 	state.seed_value = (state.seed_value * 0x343fd + 0x269ec3) & 0xffffffff
@@ -1467,7 +1465,12 @@ func _execute(command: Dictionary) -> void:
 			# set offers Move/Explore instead of Yes/No, with no portrait when the
 			# speaker is not a hero.
 			var move := kind == "Question" and args.size() > 3 and ELSecondNotebook.lua_flag(args[3])
-			dialogue = {"actor": int(first), "title": actor.get("title", actor.get("name", "")), "text_id": str(args[1]),
+			# ExAddCommandText's optional fourth argument names the line's text
+			# key when the second is already formatted text (chapter 41's
+			# "%d days" line, player report #248); its voice is that key's.
+			var text_id := str(args[1])
+			if kind == "Text" and args.size() > 3 and args[3] is String and not str(args[3]).is_empty(): text_id = str(args[3])
+			dialogue = {"actor": int(first), "title": actor.get("title", actor.get("name", "")), "text_id": text_id,
 				"text": state.map.profile.text(str(args[1])), "question": kind == "Question", "arguments": args.duplicate(),
 				"box": "text", "speaker_box": not move or actor.get("type") == "hero", "move": move}
 			presentation.emit({"kind": "dialogue", "dialogue": dialogue})
