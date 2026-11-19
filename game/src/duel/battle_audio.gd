@@ -125,7 +125,7 @@ func _exit_tree() -> void:
 	# playbacks were still held when the program quit (exit leak warning).
 	for voice in voices: voice.bus = &"Master"
 
-func build(data: ELProfile, arena: Dictionary, volumes: Dictionary, preview := false) -> void:
+func build(data: ELProfile, arena: Dictionary, volumes: Dictionary, preview := false, placement := Transform3D.IDENTITY) -> void:
 	profile = data
 	edition = profile.id
 	random.randomize()
@@ -175,7 +175,7 @@ func build(data: ELProfile, arena: Dictionary, volumes: Dictionary, preview := f
 		player.stream = loop
 		if parameters.size() >= (i + 1) * 5:
 			var at := i * 5
-			player.position = ELFigure.vector(Vector3(parameters[at], parameters[at + 1], parameters[at + 2]))
+			player.position = placement * ELFigure.vector(Vector3(parameters[at], parameters[at + 1], parameters[at + 2]))
 			player.unit_size = maxf(1.0, float(parameters[at + 3]))
 			player.max_distance = float(parameters[at + 4])
 		player.play()

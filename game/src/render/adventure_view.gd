@@ -49,6 +49,7 @@ const SCRIPTED_OPENING_SCENES := {"maps/e2mission32": "e2mission24_32", "maps/e2
 var _mission_fade: ColorRect
 var _held_dialogue_keys := {}
 var route: MeshInstance3D
+var _route_actor := -1
 var _route_owner := -1
 var _route_fog_revision := -1
 var target := Vector3.ZERO
@@ -265,7 +266,7 @@ func build(profile: ELProfile, scenario: Dictionary, preferences: ELSettings, di
 		# The scene initialization hooks can emit a direct box or wait before
 		# the director exists. Deliver them once the opening can be presented.
 		var capture := func(data: Dictionary) -> void:
-			if data.kind in ["message_box", "script_wait"]: opening_events.append(data)
+			if data.kind in ["message_box", "loot", "script_wait"]: opening_events.append(data)
 		if profile.id == "el2": state.event.connect(capture)
 		if not state.start(map, difficulty, map_seed, str(scenario.get("script", "")), int(str(scenario.get("player", "1"))), scenario.has("number"), solo_first): return _fail(state.error)
 		if profile.id == "el2": state.event.disconnect(capture)
@@ -320,9 +321,15 @@ func build(profile: ELProfile, scenario: Dictionary, preferences: ELSettings, di
 		pitch = SECOND_PITCH
 		zoom_limits = Vector2(8, 100)
 	camera.current = true
-	var hero := state.object(_hero_id())
-	target = world.ground_position(hero.get("x", map.width * 0.5), hero.get("y", map.height * 0.5))
 	following = _hero_id()
+	var hero := state.object(following)
+	target = world.ground_position(hero.get("x", map.width * 0.5), hero.get("y", map.height * 0.5))
+	if profile.id == "el1":
+		var castle := ELFirstScenario.castle_object(state, state.current_player)
+		if castle.get("alive", false) and castle.get("placed", true):
+			var size: Vector2i = director.grid.footprints.get(int(castle.uid), {}).get("size", Vector2i.ONE)
+			target = world.ground_position(castle.x + (size.x - 1) * 0.5, castle.y + (size.y - 1) * 0.5)
+			following = -1
 	_update_camera()
 	_build_ui()
 	if strategic_session != null: strategic_session.management_changed.connect(_refresh_hero_info)
@@ -374,8 +381,8 @@ func build(profile: ELProfile, scenario: Dictionary, preferences: ELSettings, di
 			_present({"kind": "dialogue", "dialogue": director.dialogue})
 			if audio.voice.stream != null: audio.voice.seek(float(saved.get("voice_position", 0)))
 		if not director.movement.is_empty():
-			_draw_route(director.movement.path, director.movement.id)
 			var at: int = director.movement.index
+			if profile.id == "el1": _draw_route(director.movement.path.slice(at), director.movement.id)
 			director.fast_mode = bool(settings.values.get("adventure_fast", false)) if settings != null else false
 			var id: int = director.movement.id
 			var point_on_path := Vector2(director.movement.path[at]).lerp(Vector2(director.movement.path[at + 1]), director.movement.progress)
@@ -1722,7 +1729,10 @@ func _present(data: Dictionary) -> void:
 				return
 			if data.kind == "rune_shop": _open_rune_shop()
 			else: _open_first_shop()
-		"actor_moving": world.move_actor(data.id, data.position, data.moving, director.movement_speed(state.object(data.id)), director.fast_mode)
+		"actor_moving":
+			world.move_actor(data.id, data.position, data.moving, director.movement_speed(state.object(data.id)), director.fast_mode)
+			if int(data.id) == _route_actor and data.get("step", false):
+				_remove_route_marker(Vector2i(data.position))
 		"orient": world.orient_actor(data.id, data.direction)
 		"route":
 			if strategic_session != null and state.object(data.id).get("owner") != state.current_player: return
@@ -1746,7 +1756,9 @@ func _present(data: Dictionary) -> void:
 			_refresh_hero_info()
 		"dialogue":
 			var speech: Dictionary = data.dialogue
-			if state.map.profile.id == "el2" and camera != null and camera.projection == Camera3D.PROJECTION_PERSPECTIVE:
+			var script_loot: bool = speech.get("script_loot", false)
+			if script_loot and not speech.get("items", []).is_empty() and not paused: _queue_reward_cue(state.main_hero, true)
+			if not script_loot and state.map.profile.id == "el2" and camera != null and camera.projection == Camera3D.PROJECTION_PERSPECTIVE:
 				if text_view.is_empty(): text_view = {"zoom": zoom if view_goal.x < 0 else view_goal.x, "pitch": pitch if view_goal.x < 0 else view_goal.y}
 				view_goal = Vector2(SECOND_TEXT_ZOOM, SECOND_TEXT_PITCH)
 				_script_lens = false
@@ -1756,6 +1768,7 @@ func _present(data: Dictionary) -> void:
 				return
 			dialogue_name.text = speech.title
 			dialogue_text.text = speech.text
+			for item: Dictionary in speech.get("items", []): dialogue_text.text += "\n" + str(item.get("name", ""))
 			(accept as Button).text = "Yes" if speech.question else "Continue  [Space]"
 			decline.visible = speech.question
 			# Script boxes without a speaker (-1) have no portrait.
@@ -2084,7 +2097,7 @@ func _state_event(data: Dictionary) -> void:
 			_note_first_level_up(data)
 			if int(state.object(data.id).get("owner", -1)) != state.current_player: return
 			if _finishing_battle and int(data.levels) > 0:
-				_queue_reward_cue(int(data.id), false)
+				if state.map.profile.id == "el1" or bool(data.get("changed_look", false)): _queue_reward_cue(int(data.id), false)
 				if int(data.id) == state.main_hero: _battle_level_hero = int(data.id)
 			var gained := "%d experience gained" % data.amount
 			if data.levels > 0: gained += " · Reached level %d" % state.object(data.id).level
@@ -2099,7 +2112,7 @@ func _state_event(data: Dictionary) -> void:
 			if not rewards.is_empty(): lines.append("Spells received: " + ", ".join(rewards))
 			if not artifacts.is_empty(): lines.append("Artifacts received: " + ", ".join(artifacts))
 			_remark(" · ".join(lines) if not lines.is_empty() else "No spells found.")
-			_second_loot_box(data)
+			if director.encounter != null: _second_battle_loot_box(data)
 
 ## Mission end: the original WinLose picture over everything (also over a
 ## running duel). Nothing is shown in text; the score goes to the campaign and
@@ -2306,24 +2319,15 @@ func _remark(text: String) -> void:
 	# Without the original HUD art the status line is the only readout.
 	if notice != null and _observer_battle_note.is_empty() and (strategic_session != null or helper_overlay() or (hud == null and second_hud == null)): notice.text = text
 
-## Second game: the scripted loot report (ExSendLootMessage /
-## ExSendNoLootMessage) in the message box: T_MB_RECEIVE_LOOT over one line
-## per spell and artifact, or T_MB_RECEIVE_NO_LOOT. The original shows the
-## items as pictures with names.
-func _second_loot_box(data: Dictionary) -> void:
+## Scripted loot awarded during a battle joins the experience report on return.
+func _second_battle_loot_box(data: Dictionary) -> void:
 	if state.map.profile.id != "el2" or second_hud == null: return
 	var profile := state.map.profile
 	var items: Array = data.get("items", [])
 	var key := "T_MB_RECEIVE_NO_LOOT" if data.get("none", false) else "T_MB_RECEIVE_LOOT"
-	var lines: Array[String] = [profile.text(key).strip_edges()]
-	for item: Variant in items:
-		if not item is Dictionary: continue
-		if item.get("kind") == "spell": lines.append(profile.text(str(profile.table("CombatSpells").get(str(item.get("card", "")), {}).get("Name", item.get("card", "")))))
-		elif item.get("kind") == "artifact": lines.append(ELMapPickups.artifact_title(profile, str(item.get("name", ""))))
-	var message := {"kind": "building_message", "hero": -1, "building": -1, "title": "", "text": "\n".join(PackedStringArray(lines)), "resources": [], "skill": "", "key": key, "battle_reward": true}
+	var message := {"kind": "building_message", "hero": -1, "building": -1, "title": "", "text": profile.text(key), "resources": [], "skill": "", "key": key, "battle_reward": true}
 	# Received loot uses the Messages panel: the title, then a picture and a name per item.
 	if not data.get("none", false):
-		message.text = lines[0]
 		message.loot = items.duplicate(true)
 		if not items.is_empty(): _queue_reward_cue(-1 if _finishing_battle else state.main_hero, true)
 	# Battle scripts can report their loot before the director has reported
@@ -2556,7 +2560,8 @@ func _draw_route(path: Array, actor_id := -1) -> void:
 	for mark: Node in route.get_children():
 		route.remove_child(mark)
 		mark.queue_free()
-	var actor := state.object(_hero_id() if actor_id < 0 else actor_id)
+	_route_actor = _hero_id() if actor_id < 0 else actor_id
+	var actor := state.object(_route_actor)
 	_route_owner = int(actor.get("owner", state.current_player))
 	_route_fog_revision = -1
 	if _zones_stop(actor): path = director.interception.preview(state, actor, path)
@@ -2583,6 +2588,13 @@ func _draw_route(path: Array, actor_id := -1) -> void:
 		mark.position = world.ground_position(cell.x, cell.y) + Vector3(0, 0.02, 0)
 		for part: MeshInstance3D in mark.parts.values(): part.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	_sync_route_fog()
+
+func _remove_route_marker(cell: Vector2i) -> void:
+	for mark: Node in route.get_children():
+		if mark.get_meta("route_cell", Vector2i(-1, -1)) != cell: continue
+		route.remove_child(mark)
+		mark.queue_free()
+		return
 
 func _sync_route_fog() -> void:
 	if route == null or _route_owner == state.current_player or _route_fog_revision == ELFog.revision(state): return

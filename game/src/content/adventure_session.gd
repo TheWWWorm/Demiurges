@@ -252,8 +252,19 @@ func close() -> void:
 
 func hook(name: String, arguments: Array = []) -> bool:
 	if vm == null or not vm.has_function(name): return true
+	if name == "Hook_OnStep" and map.id == "e2mission13": _check_kinet_sighting()
 	vm.invoke(name, arguments)
 	return _fail(vm.error) if not vm.error.is_empty() else true
+
+## The third Vital chapter's first sighting checks the distance to the Kinet
+## even after he has been killed. Close that branch if it is still pending.
+func _check_kinet_sighting() -> void:
+	var kinet := object(vm.globals.get("ID_KINET_HERO"))
+	if kinet.is_empty() or kinet.alive: return
+	var heroes: Variant = vm.globals.get("Heroes")
+	if not heroes is ELLuaVM.Table: return
+	var avatar: Variant = heroes.values.get("Avatar")
+	if avatar is ELLuaVM.Table and avatar.values.get("KinetHero") == "Start": avatar.values.KinetHero = "Dead"
 
 ## One script tick. Second game: Hook_Wake(current player) only while that
 ## player's heroes are idle (`wake`).
@@ -343,10 +354,11 @@ func add_experience(hero_id: int, amount: int) -> int:
 	var previous := int(hero.level)
 	var look := ELHeroLooks.worn(map.profile, hero)
 	var granted := ELHeroProgression.award(map.profile, hero, amount, random_skill_offers and int(hero.get("owner", -1)) == current_player)
+	var changed_look := ELHeroLooks.worn(map.profile, hero) != look
 	if granted > 0:
-		event.emit({"kind": "experience_gained", "id": hero_id, "amount": granted, "levels": int(hero.level) - previous})
+		event.emit({"kind": "experience_gained", "id": hero_id, "amount": granted, "levels": int(hero.level) - previous, "changed_look": changed_look})
 	# A campaign lord reaching a new level step changes its look on the map.
-	if ELHeroLooks.worn(map.profile, hero) != look: event.emit({"kind": "shape_changed", "id": hero_id})
+	if changed_look: event.emit({"kind": "shape_changed", "id": hero_id})
 	return granted
 
 ## Loading a solo Etherlords save can reroll any choice still pending.

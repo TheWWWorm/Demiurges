@@ -25,6 +25,10 @@ const PORTRAIT_CUT := Vector2(3, 9)
 const VALUE_WIDTH := 41
 const CAPTION_WIDTH := 90
 const ROW := 25
+## The original's 20 px heading and name cells hold a 17 px Arial Bold em.
+const TITLE_SIZE := 17
+const STAT_SIZE := 15
+const MIN_NAME_SIZE := 12
 const TAN := Color("d6bb88")
 const WHITE := Color("f2ead8")
 
@@ -55,14 +59,16 @@ func build(owner: ELSecondAdventureHud) -> void:
 	surface.mouse_filter = Control.MOUSE_FILTER_STOP
 	surface.draw.connect(_draw_surface)
 	canvas.add_child(surface)
-	labels.BattleNumText = _label(hud.text(str(hud._controls.get("BattleNumText", {}).get("Text", ""))), 20, HORIZONTAL_ALIGNMENT_CENTER, TAN)
-	labels.PrecombatHeroName = _label("", 20, HORIZONTAL_ALIGNMENT_CENTER, TAN)
-	labels.OpponentName = _label("", 20, HORIZONTAL_ALIGNMENT_CENTER, TAN)
+	labels.BattleNumText = _label(hud.text(str(hud._controls.get("BattleNumText", {}).get("Text", ""))), TITLE_SIZE, HORIZONTAL_ALIGNMENT_CENTER, TAN)
+	labels.PrecombatHeroName = _label("", TITLE_SIZE, HORIZONTAL_ALIGNMENT_CENTER, TAN)
+	labels.OpponentName = _label("", TITLE_SIZE, HORIZONTAL_ALIGNMENT_CENTER, TAN)
+	for control: String in ["PrecombatHeroName", "OpponentName"]:
+		labels[control].text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	for control: String in labels: labels[control].name = control
 	for side in 2:
 		for row in 2:
-			labels["value_%d_%d" % [side, row]] = _label("", 17, HORIZONTAL_ALIGNMENT_CENTER, WHITE)
-			labels["caption_%d_%d" % [side, row]] = _label(hud.text(["T_LEVEL", "T_LIFE"][row]), 17, HORIZONTAL_ALIGNMENT_LEFT, TAN)
+			labels["value_%d_%d" % [side, row]] = _label("", STAT_SIZE, HORIZONTAL_ALIGNMENT_CENTER, WHITE)
+			labels["caption_%d_%d" % [side, row]] = _label(hud.text(["T_LEVEL", "T_LIFE"][row]), STAT_SIZE, HORIZONTAL_ALIGNMENT_LEFT, TAN)
 	begin_button = ELSecondNotebookView.ArtButton.make(hud, "PreCombatBegin")
 	begin_button.pressed.connect(func(): accepted.emit())
 	canvas.add_child(begin_button)
@@ -133,8 +139,14 @@ func _layout() -> void:
 	surface.size = panel.size
 	for control: String in ["BattleNumText", "PrecombatHeroName", "OpponentName"]:
 		var box := design(control)
-		labels[control].position = box.position
-		labels[control].size = box.size
+		var label: Label = labels[control]
+		label.position = box.position
+		label.size = box.size
+		if control != "BattleNumText" and box.size.x > 0.0:
+			var font_size := TITLE_SIZE
+			while font_size > MIN_NAME_SIZE and hud.face_bold.get_string_size(label.text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x > box.size.x:
+				font_size -= 1
+			label.add_theme_font_size_override("font_size", font_size)
 	for side in 2:
 		for line in 2:
 			var origin: Vector2 = STATS[side] + _offset + Vector2(0, line * ROW)

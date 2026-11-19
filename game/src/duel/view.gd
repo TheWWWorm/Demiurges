@@ -651,6 +651,10 @@ func _start(edition: String, options: Dictionary = {}, restored: ELDuel = null, 
 	if not arena.build(profile, String(match_options.get("arena", "Green.001"))):
 		status.text = "Arena failed: " + "; ".join(arena.errors)
 		return
+	# The local defender uses the left battle seat. Keep both heroes on their
+	# original sides of the authored battlefield when the seats were swapped.
+	if kind == "campaign" and campaign_view.director.encounter.swapped:
+		arena.reverse_sides()
 	arena.light.shadow_enabled = settings.values.shadows
 	arena.light.shadow_blur = 2.0 if settings.values.soft_shadows else 1.0
 	arena.set_detail(bool(settings.values.terrain_detail))
@@ -682,7 +686,7 @@ func _start(edition: String, options: Dictionary = {}, restored: ELDuel = null, 
 	_ending_waiting = {}
 	battle_audio = ELBattleAudio.new()
 	stage.add_child(battle_audio)
-	battle_audio.build(profile, arena.definition, settings.values, preview)
+	battle_audio.build(profile, arena.definition, settings.values, preview, arena.transform)
 	effects.set_arena(arena, battle_audio.play)
 	if front_menu != null and front_menu.music_owned(): _pause_battle_audio(true)
 	camera = Camera3D.new()
@@ -731,6 +735,7 @@ func _start(edition: String, options: Dictionary = {}, restored: ELDuel = null, 
 	symbols.build(profile)
 	symbols.camera = camera
 	notices.build(profile)
+	if edition == "el2": notices.show_turn(duel.active_side(), duel.turn_serial)
 	_enemy_banner_shown = false
 	auto_button.build(profile, "CombatMenu3", Rect2(619, 542, 47, 49))
 	attack_button.build(profile, "CombatMenu1", Rect2(509, 542, 47, 49))
@@ -960,7 +965,7 @@ func _process(delta: float) -> void:
 				if helper_overlay():
 					if resting and not c.sick: parts.append("RESTING")
 				label.text = "  •  ".join(parts)
-				label.modulate = ACCENT if c.get("enchanted", false) or not c.get("enchantments", []).is_empty() else INK
+				label.modulate = ACCENT if not c.get("enchantments", []).is_empty() else INK
 				# Pale aspect: the figure's opacity pulses 0.2-0.6 (1.8 s triangle wave).
 				# A creature killed in the plane stays pale until its death is shown;
 				# one the rules have sent there fades when that is shown.
@@ -2290,9 +2295,10 @@ func _display_stamp(advance := true) -> Dictionary:
 		var c: Dictionary = duel.creatures[id]
 		creatures[id] = {"power": int(c.power), "toughness": int(c.toughness), "damage": int(c.damage),
 			"owner": c.owner, "plane": duel.in_plane(id), "resting": c.resting, "sick": c.sick,
-			"enchanted": not c.enchantments.is_empty(), "marks": _ability_marks(id, c)}
+			"enchantments": c.enchantments.duplicate(), "marks": _ability_marks(id, c)}
 	return {"serial": _stamp_serial, "heroes": heroes, "creatures": creatures,
-		"phase": duel.phase, "active": duel.active_side(), "attacks": duel.attacks.duplicate(), "blocks": duel.blocks.duplicate()}
+		"phase": duel.phase, "active": duel.active_side(), "turn": duel.turn_serial,
+		"attacks": duel.attacks.duplicate(), "blocks": duel.blocks.duplicate()}
 
 ## Keeps the shown values equal to the rules' while nothing waits, and jumps
 ## to them when the presentation is skipped.
@@ -2317,6 +2323,11 @@ func shown_hero(side: int) -> Dictionary:
 
 func shown_creature(id: int) -> Dictionary:
 	return _shown.creatures.get(id, {}) if _display_active() else duel.creatures.get(id, {})
+
+func _shown_enchantments(id: int) -> Array:
+	if profile.id != "el2": return duel.entity(id).get("enchantments", [])
+	var shown := shown_hero(id) if id < 2 else shown_creature(id)
+	return shown.get("enchantments", [])
 
 func _shown_resting(id: int, creature: Dictionary) -> bool:
 	var resting := bool(creature.get("resting", false))
@@ -2365,6 +2376,9 @@ func _note_shown(data: Dictionary, landed := false) -> void:
 func _display_delay(data: Dictionary) -> float:
 	if data.get("kind") in ["cast", "artifact", "ability", "summon", "strike", "phase", "combat_start", "attack_resolved", "turn_cleanup", "combat_end", "combat_event", "camera_cue"]: return 0.0
 	var delay := _hit_delay(data)
+	if data.get("kind") == "heal" and data.get("card") == "CHNL":
+		# Ether Trade's heal follows the reflected hit and the spell's release.
+		delay = maxf(delay, float(_effect_cast.get("release", 0.0)))
 	if bool(data.get("drain", false)): delay = maxf(delay, _drain_seconds())
 	return delay
 
@@ -2408,6 +2422,10 @@ func _flush_display() -> void:
 		for side in 2:
 			for field: String in ["maximum", "hand", "hand_view", "hand_slots", "spell_uses", "deck", "grave", "enchantments", "artifacts"]:
 				if _shown.heroes[side][field] != best.heroes[side][field]: _display_dirty = true
+		if profile.id == "el2":
+			for id: int in [selected_creature, _strip_subject()]:
+				if id >= 2 and _shown.creatures.get(id, {}).get("enchantments", []) != best.creatures.get(id, {}).get("enchantments", []):
+					_display_dirty = true
 	_shown = best
 
 func _event(data: Dictionary) -> void:
@@ -2419,6 +2437,8 @@ func _event(data: Dictionary) -> void:
 	if is_instance_valid(melee) and melee.capture(data): return
 	if data.get("kind") == "combat_start": return
 	_note_shown(data)
+	if profile.id == "el2" and data.has("shown") and is_instance_valid(notices):
+		notices.show_turn(int(data.shown.active), int(data.shown.turn))
 	if data.get("kind") in ["attack_resolved", "turn_cleanup", "combat_end"]: return
 	_log_battle_outcome(data)
 	if data.get("kind") in CAST_KINDS: _cast_until = elapsed + _cast_seconds(data)
@@ -2652,11 +2672,13 @@ func _event(data: Dictionary) -> void:
 				# Its automatic target is the hero losing the channel.
 				battle_audio.spell(data.card, models.get(int(data.side)),
 					models.get(1 - int(data.side)))
-			elif profile.id in ["el1", "el2"] and data.card == "CHNL":
-				# Both original Channels pay life on the caster but place
-				# GainLife at the opposing hero; bind that WAV source.
-				battle_audio.spell(data.card, models.get(int(data.side)),
-					models.get(1 - int(data.side)))
+			elif data.card == "CHNL":
+				# EL2's gain sounds follow the successful trade's heal event.
+				if profile.id == "el1":
+					battle_audio.spell(data.card, models.get(int(data.side)),
+						models.get(1 - int(data.side)))
+				elif int(data.get("power", 0)) > 0:
+					battle_audio.effect("LoseLife", models.get(int(data.side)))
 			elif data.card in ["MNBR", "MNST"] and profile.id != "el2":
 				battle_audio.shared_mana_gain(models.get(0), models.get(1))
 			elif profile.id in ["el1", "el2"] and data.card == "TPLF":
@@ -2693,7 +2715,14 @@ func _event(data: Dictionary) -> void:
 			else:
 				call_deferred("_remove_model", id)
 		"heal":
-			_float_number(data.target, -int(data.amount))
+			if data.get("card") == "CHNL":
+				var pending := _effect_cast if _effect_cast.get("card") == "CHNL" else {}
+				var delay := _display_delay(data)
+				var show_heal := _show_trade_heal.bind(int(data.target), int(data.amount), pending)
+				if delay > 0.0 and is_inside_tree() and not _skipping_presentation:
+					_schedule_battle_cue(delay, show_heal)
+				else: show_heal.call()
+			else: _float_number(data.target, -int(data.amount))
 			# Complicity's regeneration hook (EL1, EL2)
 			# plays GainLife once at each healed holder's hero.
 			if data.get("card") == "COPL" and profile.id in ["el1", "el2"] and models.has(int(data.target)):
@@ -3177,7 +3206,7 @@ func _phase_notice(side: int, attack: bool, round_number: int) -> void:
 		_enemy_banner_shown = true
 		# Cast icons clear at the opponent's first
 		# phase, which is usually its defence right after my attack.
-		if is_instance_valid(notices): notices.clear_icons()
+		if profile.id == "el1" and is_instance_valid(notices): notices.clear_icons()
 	if band >= 0 and bool(settings.values.get("combat_phases", true)) and is_instance_valid(notices): notices.show_banner(band)
 
 ## Whether `side` is played at this screen (both sides in a local two-player battle).
@@ -3373,6 +3402,16 @@ func _finish_battle_cues() -> void:
 
 func _clear_feedback_hit() -> void:
 	_feedback_hit.clear()
+
+func _show_trade_heal(target: int, amount: int, pending: Dictionary) -> void:
+	# If the release and heal are due together, play the release first.
+	if not pending.is_empty() and is_same(_effect_cast, pending): _start_cast_effects()
+	_float_number(target, -amount)
+	if pending.is_empty(): return
+	battle_audio.effect("GainMana", models.get(1 - target))
+	_figure_effect("GainMana", 1 - target)
+	battle_audio.effect("GainLife", models.get(target))
+	_figure_effect("GainLife", target)
 
 func _clear_redirect_hit() -> void:
 	_redirect_hit.clear()
@@ -3836,13 +3875,13 @@ func _start_cast_effects() -> void:
 			effects.play("PosRune", {"Target": [models[caster]]})
 			effects.play("NegRune", {"Target": [models[donor]]})
 		return
-	# Both originals' Channel: EL1 and EL2 bind
-	# LoseLife/GainMana to the caster, GainLife to the opposite hero.
-	# EL2 has three separate Target registrations;
-	# the generic targetless cast instead puts all effects on the caster.
-	# Preserve edition-specific X, life, ether and audio rules.
+	# EL1 plays all three Channel effects on release. EL2 plays the gains only
+	# when the trade heals its opponent.
 	if profile.id in ["el1", "el2"] and pending.card == "CHNL":
 		var caster := int(pending.side)
+		if profile.id == "el2":
+			if int(pending.power) > 0: _figure_effect("LoseLife", caster)
+			return
 		if models.has(caster):
 			effects.play("LoseLife", {"Target": [models[caster]]})
 			effects.play("GainMana", {"Target": [models[caster]]})
@@ -5454,7 +5493,7 @@ func _hero_tip(side: int, control: Control = null) -> Dictionary:
 		if not name.is_empty(): lines.append(name)
 		var description := _spec_text(code, "Desc", "")
 		if not description.is_empty(): lines.append(description)
-	lines.append_array(_enchantment_lines(hero))
+	lines.append_array(_enchantment_lines(shown_hero(side)))
 	return ELCombatTooltip.hero_content(profile.id, portraits[side].texture, title, lines)
 
 ## The tooltip of a state or ability icon over a figure, both games: the
@@ -5494,16 +5533,11 @@ func _figure_tip(at: Vector2) -> Dictionary:
 func _creature_tip_text(id: int) -> String:
 	var creature := duel.entity(id)
 	var card := str(creature.card)
+	# The second game shows the printed card, including variable X/X stats.
+	if profile.id == "el2": return ELCombatTooltip.spell_text(profile, card, -1, duel.card_name(card))
 	var stats := _shown_creature_stats(id, creature)
 	var label := "%s %d/%d" % [duel.card_name(card), int(stats.power), maxi(0, int(stats.toughness) - shown_damage(id))]
-	# The second game titles a figure like its hand card: "Создание:"
-	# and the name, then the printed cost line (player report #100); the
-	# first game adds the cost line under its name (#121).
-	var printed := ELCombatTooltip.cost_line(profile, int(profile.table("CombatSpells").get(card, {}).get("Cost", 0)))
-	if profile.id == "el2":
-		var kind := _original_text("T_SPELL_TYPE", "Creature")
-		label = "%s: %s\n%s" % [kind, label, printed]
-	else: label += "\n" + printed
+	label += "\n" + ELCombatTooltip.cost_line(profile, int(profile.table("CombatSpells").get(card, {}).get("Cost", 0)))
 	var description := profile.card_description(card)
 	if not description.is_empty() and description != card: label += "\n" + description
 	var worn := _enchantment_lines(creature)
@@ -8166,7 +8200,7 @@ func _refresh_inspector() -> void:
 			row.tooltip_text = profile.card_description(card)
 			rows.add_child(row)
 	else:
-		for enchantment: Dictionary in entity.enchantments:
+		for enchantment: Dictionary in _shown_enchantments(selected_creature):
 			var row := _button(duel.card_name(enchantment.card), _remove_selected_enchantment.bind(selected_creature, int(enchantment.id)))
 			row.set_meta("enchantment", enchantment.id)
 			if enchantment.card == "STSI":
@@ -8225,8 +8259,9 @@ func _strip_enchantments(subject: int) -> Array[Dictionary]:
 	var holder := subject if subject < 2 else int(entity.get("owner", -1))
 	var ranked: Array = []
 	var listed := duel.abilities(subject)
-	for index in entity.enchantments.size():
-		var enchantment: Dictionary = entity.enchantments[index]
+	var enchantments := _shown_enchantments(subject)
+	for index in enchantments.size():
+		var enchantment: Dictionary = enchantments[index]
 		var ability := _enchantment_ability(enchantment, subject, listed)
 		var used: bool = not ability.is_empty() and bool(ability.get("used", false))
 		var hostile := int(enchantment.get("owner", holder)) != holder

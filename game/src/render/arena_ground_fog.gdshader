@@ -21,7 +21,7 @@ void fragment() {
 	vec4 scene = INV_PROJECTION_MATRIX * vec4(SCREEN_UV * 2.0 - 1.0, depth, 1.0);
 	float gap = max(VERTEX.z - scene.z / scene.w, 0.0);
 	vec3 view_ray = normalize(VERTEX);
-	vec3 ray = mat3(INV_VIEW_MATRIX) * view_ray;
+	vec3 ray = transpose(mat3(MODEL_MATRIX)) * mat3(INV_VIEW_MATRIX) * view_ray;
 	float slab = fog_height / max(-ray.y, 0.05);
 	float fraction = clamp(gap / max(-view_ray.z * slab, 0.001), 0.0, 1.0);
 	float thickness = slab * fraction * fraction;

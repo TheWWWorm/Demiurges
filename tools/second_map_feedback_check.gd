@@ -106,6 +106,25 @@ func _dialogue_key(code: Key, pressed := true, echo := false) -> void:
 	key.echo = echo
 	root.push_input(key)
 
+func _move_pointer(at: Vector2) -> void:
+	var event := InputEventMouseMotion.new()
+	event.position = at
+	event.global_position = at
+	root.push_input(event, true)
+
+func _experience_tooltip(view: ELAdventureView) -> void:
+	var hud := view.second_hud
+	var delay := float(ProjectSettings.get_setting("gui/timers/tooltip_delay_sec", 0.5))
+	await create_timer(delay + 0.1).timeout
+	check(hud.experience_tip.visible and hud.experience_tip.get_rect().end.y < hud.experience_bar.position.y,
+		"#226: hovering during the opening fade shows the XP tooltip above the bar after the dialogue")
+	view.open_options()
+	await frames(2)
+	check(not hud.experience_tip.visible, "#226: Options hides the XP tooltip even if the pointer does not move")
+	view.close_options()
+	_move_pointer(Vector2(400, 350))
+	root.notify_mouse_exited()
+
 func _opening_and_rewards(profile: ELProfile, settings: ELSettings) -> void:
 	var view := ELAdventureView.new()
 	root.add_child(view)
@@ -119,6 +138,10 @@ func _opening_and_rewards(profile: ELProfile, settings: ELSettings) -> void:
 			calls.steps += 1
 			if calls.steps == 1: state._native(["Opening line"], "ExMessageBoxStandard")
 			return [])
+		await frames(2)
+		root.notify_mouse_entered()
+		var bar := view.second_hud.experience_bar
+		_move_pointer(bar.get_global_transform_with_canvas() * (bar.size * 0.5))
 		_space()
 		await create_timer(0.3).timeout
 		_space(true, true)
@@ -133,6 +156,7 @@ func _opening_and_rewards(profile: ELProfile, settings: ELSettings) -> void:
 		_space()
 		_space(false)
 		check(view.director.dialogue.is_empty(), "#206: a fresh press answers the opening dialog")
+		await _experience_tooltip(view)
 		_reward_hotkeys(view)
 		await _battle_rewards(view, profile)
 	view.queue_free()
@@ -170,6 +194,13 @@ func _battle_rewards(view: ELAdventureView, profile: ELProfile) -> void:
 	if hero.is_empty() or opponent.is_empty():
 		check(false, "#207: the chapter has a hero and a neutral opponent")
 		return
+	# An ordinary level still queues the skill choice, without the stars.
+	hero.experience = ELHeroProgression.threshold(profile, 3) - 1
+	view._on_encounter_finishing()
+	state.add_experience(int(hero.uid), 1)
+	view._on_encounter_finished(int(hero.uid))
+	check(int(hero.level) == 3 and view._reward_cues.is_empty() and view._battle_level_hero == int(hero.uid),
+		"#234: an ordinary level-up keeps the skill choice without the appearance cue")
 	var level := int(hero.level)
 	hero.experience = ELHeroProgression.threshold(profile, level + 1) - 1
 	var encounter := ELAdventureEncounter.new()
@@ -426,19 +457,29 @@ func _mine_depletion(profile: ELProfile, settings: ELSettings) -> void:
 
 func _pickup_transition(view: ELAdventureView) -> void:
 	var state := view.state
+	var world := view.world
+	var picked_ids: Array[int] = []
 	for item: Dictionary in state.objects.values():
 		if item.group != "resource_cuts" or not item.alive or not ELFog.shown(state, 1, item): continue
 		var id: int = item.uid
+		# Collect while the pile is still fading in, as when approaching at speed.
+		world._fog_level[id] = 0.0
+		world._fading[id] = 1.0
 		var picked := state.collect_resources(view._hero_id(), id)
-		check(picked and not item.alive and view.world._retiring_pickups.has(id), "the resource is collected immediately and its visible pile animates out")
-		var grid := view.director.grid
-		var after := grid.blockers.duplicate()
-		grid.rebuild(state.objects)
-		check(grid.blockers == after, "collecting a pile updates its blockers exactly as a full grid rebuild")
-		view.world._fade_pickups(ELAdventureScene.PICKUP_FADE)
-		check(not view.world._retiring_pickups.has(id), "the collected pile is removed after its pickup animation")
-		return
-	check(false, "the chapter has a visible resource pile to collect")
+		check(picked and not item.alive and world._retiring_pickups.has(id), "the resource is collected immediately and its visible pile animates out")
+		picked_ids.append(id)
+		world._process(ELAdventureScene.PICKUP_FADE / 2.0)
+		if picked_ids.size() == 2: break
+	check(picked_ids.size() == 2, "the chapter has two visible resource piles to collect")
+	var grid := view.director.grid
+	var after := grid.blockers.duplicate()
+	grid.rebuild(state.objects)
+	check(grid.blockers == after, "collecting the piles updates their blockers exactly as a full grid rebuild")
+	world._process(ELAdventureScene.PICKUP_FADE)
+	world._process(1.0 / 60.0)
+	for id: int in picked_ids:
+		check(not world._retiring_pickups.has(id) and not world._fading.has(id) and not world._fog_presence.get(id, true),
+			"#218: a collected pile stays hidden when a second pickup overlaps its animation")
 
 func _fog_region(world: ELAdventureScene) -> void:
 	var tiles := world.fog_tiles()
@@ -518,6 +559,7 @@ func _runestones(profile: ELProfile, settings: ELSettings) -> void:
 	var codec := ELAdventureSave.new()
 	var saved := codec.encode(view.director, view.camera_state())
 	var restored := codec.decode(JSON.parse_string(JSON.stringify(saved)), {"el2": profile})
+	_talk_facing(view)
 	view.queue_free()
 	await frames(2)
 	check(not restored.is_empty(), "#210: the checkpoint with opened runestones can be loaded (%s)" % codec.error)
@@ -537,6 +579,32 @@ func _runestones(profile: ELProfile, settings: ELSettings) -> void:
 				and model.parts[expected.part].transform.is_equal_approx(expected.pose), "#210: the loaded %s starts in the open pose" % item.name)
 	loaded.queue_free()
 	await frames(2)
+
+## Green chapter 3's real pre-use hooks queue these lines and still allow
+## ordinary use. The participants should already face each other.
+func _talk_facing(view: ELAdventureView) -> void:
+	var state := view.state
+	state.step()
+	var heroes: ELLuaVM.Table = state.vm.globals.get("Heroes")
+	check(heroes != null, "#224: the Vitals chapter has its conversation script")
+	if heroes == null: return
+	heroes.values.VHead.values.State = "DonePrisoner1"
+	heroes.values.VGuardEast.values.State = "OutOfGate"
+	heroes.values.Prisoner02.values.State = "InCity"
+	var actor := state.object(state.main_hero)
+	for speaker: Array in [["VGuardEast", "MV_M13_S17_P01_FV_EASTGUARD_13"], ["Prisoner02", "MV_M13_S37_P01_FV_PRISONER2_13"]]:
+		state.commands.clear()
+		var target := state.object(heroes.values[speaker[0]].values.Id)
+		actor.x = target.x
+		actor.y = target.y - 1
+		view.world.update_object(actor)
+		view.world.orient_actor(int(actor.uid), Vector2.RIGHT)
+		view.world.orient_actor(int(target.uid), Vector2.RIGHT)
+		view.director.use_object(int(actor.uid), int(target.uid))
+		var speaks := state.commands.any(func(command: Dictionary) -> bool:
+			return command.kind == "Text" and command.arguments[1] == speaker[1])
+		var facing := is_equal_approx(cos(view.world.object_yaw(actor)), -1.0) and is_equal_approx(cos(view.world.object_yaw(target)), 1.0)
+		check(speaks and facing, "#224: the player and %s face each other for the reported dialogue" % str(speaker[0]))
 
 func _settle_last_mine_payment(view: ELAdventureView) -> void:
 	var state := view.state

@@ -452,6 +452,7 @@ func _start_arena() -> void:
 		var at := i * 3
 		if at + 2 < positions.size():
 			where.origin = ELFigure.vector(Vector3(positions[at], positions[at + 1], positions[at + 2]))
+		where = _arena.transform * where
 		if path.ends_with(".fx"):
 			var name := path.get_file().get_basename()
 			var entry := definition(name)

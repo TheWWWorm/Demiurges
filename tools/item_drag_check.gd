@@ -245,7 +245,9 @@ func _second_shop(session: Dictionary) -> void:
 	hero.cards.clear()
 	for index in 12: hero.cards.append(codes[index])
 	hero.spell_stock.clear()
-	hero.spell_stock[codes[12]] = 2
+	var reserve := ELSecondInventory.sorted_bag(profile, hero, codes.slice(12, 16))
+	reserve.reverse()
+	for card: String in reserve: hero.spell_stock[card] = 2
 	# A stand-in laboratory: the screen only reads its stock.
 	var shop_id := 987654
 	state.objects[shop_id] = {"uid": shop_id, "type": "building", "group": "laboratories", "shop_stock": codes.slice(16, 24)}
@@ -259,6 +261,9 @@ func _second_shop(session: Dictionary) -> void:
 	view.build(trade)
 	await frames(3)
 	var model := view.model
+	var inventory := ELSecondInventory.new()
+	check(inventory.open(state, session.hero) and model.bag.map(func(entry: Dictionary): return entry.card) == inventory.bag,
+		"spell shop: the reserve opens in inventory order with every copy")
 	var input := view.surface_input
 	var at := func(zone: String, index: int) -> Vector2: return view.cell_rect(zone, index).get_center()
 	var outside := view.design("SpellShopScreen").position + Vector2(4, 4)

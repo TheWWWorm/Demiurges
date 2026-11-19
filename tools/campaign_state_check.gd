@@ -45,6 +45,8 @@ func _run() -> void:
 	var second := _mount("el2", paths)
 	if second != null:
 		_dialogue_saves(second)
+		_dialogue_loot(second)
+		_kinet_sighting(second)
 		_command_identity(second)
 		_tick_rate(second)
 		_tile_interception(second)
@@ -177,6 +179,56 @@ func _dialogue_saves(profile: ELProfile) -> void:
 	check(not restored.is_empty() and is_equal_approx(restored.state.camera_rotation, 90.0), "el2: a save with a huge camera angle reads back within one turn (%s) %s" % [restored.state.camera_rotation if not restored.is_empty() else "-", why])
 	if not restored.is_empty(): restored.state.close()
 	check(is_equal_approx(ELAdventureSave.normal_degrees(-90.0), 270.0) and ELAdventureSave.normal_degrees(720.0) == 0.0, "camera angles normalise into [0, 360)")
+	state.close()
+
+func _dialogue_loot(profile: ELProfile) -> void:
+	var pair := _second_session(profile, "e2mission11")
+	if pair.is_empty():
+		check(false, "#231: chapter 11 opens")
+		return
+	var state: ELAdventureSession = pair[0]
+	var director: ELAdventureDirector = pair[1]
+	state.commands.clear()
+	state._native([], "ExStartLootMessage")
+	state._native(["GRSN"], "ExAddLootMessageSpell")
+	state._native(["ExSendLootMessage"], "ExAddCommandExecuteScriptFunction")
+	state._native([float(state.main_hero), "T_CHECK_AFTER_LOOT"], "ExAddCommandText")
+	director.advance(0.1)
+	director.advance(0.1)
+	check(director.dialogue.get("box") == "loot" and director.dialogue.get("items", []).size() == 1
+		and state.commands.size() == 1 and state.commands[0].kind == "Text", "#231: scripted loot holds the next dialogue line")
+	var why: Array = []
+	var restored := _round_trip(director, why)
+	check(not restored.is_empty(), "#231: the open loot report and waiting line survive a save %s" % [why])
+	if not restored.is_empty():
+		var next: ELAdventureDirector = restored.director
+		var closed := _count_closes(next.state)
+		next.acknowledge()
+		next.advance(0.1)
+		check(next.dialogue.get("text_id") == "T_CHECK_AFTER_LOOT" and closed[0] == 0,
+			"#231: acknowledging the restored loot opens the next line without a dialogue close hook")
+		next.state.close()
+	state.close()
+
+func _kinet_sighting(profile: ELProfile) -> void:
+	var pair := _second_session(profile, "e2mission13")
+	if pair.is_empty():
+		check(false, "#222: chapter 13 opens")
+		return
+	var state: ELAdventureSession = pair[0]
+	var kinet := state.object(state.vm.globals.get("ID_KINET_HERO"))
+	var heroes: ELLuaVM.Table = state.vm.globals.Heroes
+	var avatar: ELLuaVM.Table = heroes.values.Avatar
+	var seen := func(command: Dictionary) -> bool:
+		return command.kind == "Text" and str(command.arguments[1]).begins_with("MV_M13_S26_P01")
+	state._native([float(state.main_hero), float(kinet.x), float(kinet.y)], "ExJumpToPos")
+	state.commands.clear()
+	avatar.values.KinetHero = "Start"
+	check(state.hook("Hook_OnStep") and state.commands.any(seen), "#222: nearing the living Kinet queues the sighting dialogue")
+	state._native([float(kinet.uid)], "ExKillHero")
+	state.commands.clear()
+	avatar.values.KinetHero = "Start"
+	check(state.hook("Hook_OnStep") and not state.commands.any(seen), "#222: nearing the fallen Kinet skips the sighting dialogue")
 	state.close()
 
 # --- 4. the running command's identity -----------------------------------------

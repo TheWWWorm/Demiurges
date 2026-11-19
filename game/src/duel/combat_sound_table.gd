@@ -318,16 +318,15 @@ const ABILITY := {
 }
 ## COMBAT: effects of a creature power that acts during combat damage, keyed by
 ## the power (a mastery code or a strike property), each drawn at the affected
-## figure ("at") or from the first figure to the second ("line"). The second
-## game has only the life drain: after a hero hit heals the attacker's hero it
-## queues DrainLife, Start at the hit hero, Finish at the healed one.
+## figure ("at") or from the first figure to the second ("line").
 const COMBAT := {
 	"el1": {
 		"GBHD": [["GreenDamage", "at"]], "BWIT": [["CantUntap", "at"], ["NegRune", "at"]], "BPTD": [["Disenchant", "at"]],
 		"Disenchant": [["Disenchant", "at"]], "Lifetap": [["DrainLife", "line"]], "Discard": [["Discard", "at"]],
 		"ENLH": [["Draw", "at"]]
 	},
-	"el2": {"Lifetap": [["DrainLife", "line"]]},
+	"el2": {"Lifetap": [["DrainLife", "line"]], "Venom": [["NegEnchantment", "at"]],
+		"Disenchant": [["Disenchant", "at"]], "BPTD": [["Disenchant", "at"]]},
 }
 ## Effects about a hero's own life, ether or cards.
 ## Creature auras: the effects each original aura callback starts on a
