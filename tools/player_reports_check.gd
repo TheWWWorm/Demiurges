@@ -1442,8 +1442,31 @@ func _second_map_reports() -> void:
 		check(ELAdventureEncounter.second_arena(state, int(hero.uid), int(guard.uid), 0) == "Dungeon.001", "el2: a tunnel guard is fought on the Dungeon arena")
 		map._open_second_precombat(int(hero.uid), int(guard.uid))
 		check(int(map.second_precombat._faces[1]) >= 0, "el2: the pre-battle panel shows the tunnel guard's portrait")
+		# #247: the hero goes into the tunnel; the view centres on the mouth.
+		var model: Node3D = map.world.actors.get(int(hero.uid))
+		check(model != null and not model.visible, "el2: the hero goes into the tunnel while its battle is offered (#247)")
+		var centre := ELAdventureGrid.center(mouth, map._art.resolve(mouth).get("row", {}))
+		var at := ELAdventureScene.world_position(centre.x - 0.5, centre.y - 0.5)
+		check(Vector2(map.target.x, map.target.z).distance_to(Vector2(at.x, at.z)) < 0.01, "el2: the tunnel battle's view and dome centre on the mouth (#247)")
 		map._close_second_precombat()
+		check(model != null and model.visible, "el2: a closed tunnel battle offer brings the hero back out (#247)")
 		guard.erase("tunnel_source")
+		# #247: the second game's guarded tunnel opens no message box first.
+		var boxes := [0]
+		var count_box := func(data: Dictionary): if data.kind == "building_message": boxes[0] += 1
+		director.presentation.connect(count_box)
+		var stood := Vector2i(int(hero.x), int(hero.y))
+		director._use_tunnel(hero, mouth)
+		director.presentation.disconnect(count_box)
+		check(boxes[0] == 0 and director.encounter != null, "el2: a guarded tunnel offers its battle without a message box (#247)")
+		if director.encounter != null:
+			if map.pending_encounter.is_empty(): map._open_second_precombat(int(hero.uid), int(guard.uid))
+			check(not model.visible, "el2: the hero waits inside the tunnel under the battle offer (#247)")
+			map.decline_encounter()
+			check(director.encounter == null and model.visible, "el2: declining the tunnel battle brings the hero back out (#247)")
+		guard.erase("tunnel_source")
+		hero.x = stood.x
+		hero.y = stood.y
 	var shrine := {}
 	for item: Dictionary in state.objects.values():
 		if ELSecondBuildings.kind(item) == "specialization" and not item.get("used", false) and not ELSecondBuildings.shrine_code(state.map.profile, item).is_empty():
