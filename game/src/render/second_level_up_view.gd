@@ -13,6 +13,7 @@ extends ELHeroSkillsView
 ## Offers and rows show the skill's tooltip (name, rank, description) in the
 ## original's frame (ELCombatTooltip) when the pointer rests on them or on a
 ## right click, as the inventory screen does.
+## A click on an offer plays the lists' click sound.
 ## An offer dragged onto the skill rows is learned as with LUOk. LUOk learns the chosen offer and closes the dialog once no
 ## choice is left. LUOk stays disabled while offers wait without a selection.
 ## The active specialisation is chosen on the inventory screen, as in
@@ -24,6 +25,8 @@ const ICON := 50
 const TAN := Color("d6bb88")
 const WHITE := Color("f2ead8")
 const MARK := Rect2(0, 60, 4, 4)
+## The click of the original's skill and card lists.
+const SELECT_SOUND := "Buttons/Select3.wav"
 
 var hud: ELSecondAdventureHud
 var root_control: Control
@@ -315,6 +318,8 @@ class OfferStrip extends Control:
 				return
 			var index := item_at(event.position)
 			if index >= 0:
+				# A click on an offer plays the lists' click (#250).
+				ELUiSounds.play(view.state.map.profile, SELECT_SOUND)
 				select(index)
 				item_selected.emit(index)
 				held = index

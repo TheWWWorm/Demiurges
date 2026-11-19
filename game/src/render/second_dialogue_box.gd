@@ -25,7 +25,9 @@ extends Control
 ## x 20 inside a 60x60 slot frame (A6-Int-Message 192,123) and the name at
 ## (85, y+17). The panel is that content plus a 15-pixel right margin, the OK
 ## (MessagesOK) centred 20 pixels under it and 15 below; the same frame as the
-## MessageBox, centred on the screen. Enter, Esc and Space answer OK.
+## MessageBox, centred on the screen. Enter, Esc and Space answer OK. A spell
+## or artifact row shows the card's tooltip, and the buttons theirs, in the
+## original frame (ELCombatTooltip) on a rest of the pointer or a right click.
 ##
 ## Coordinates are the 1024x768 design scaled by the window height, as the
 ## second-game panels are.
@@ -103,6 +105,7 @@ var box := Rect2()
 var offset := Vector2.ZERO
 var _frame: Texture2D
 var _factor := 1.0
+var tips: ELCombatTooltip
 
 func setup(source: ELSecondAdventureHud) -> void:
 	hud = source
@@ -170,6 +173,12 @@ func setup(source: ELSecondAdventureHud) -> void:
 			label.size = button.size
 			button.add_child(label)
 			captions[control] = label
+	theme = ELCombatTooltip.hidden_theme()
+	tips = ELCombatTooltip.new()
+	tips.name = "Tooltips"
+	tips.battle_icons = false
+	add_child(tips)
+	tips.setup(hud.profile)
 	hide()
 
 func _gui_input(event: InputEvent) -> void:
@@ -177,6 +186,25 @@ func _gui_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
 		accept_event()
 		answered.emit("OK")
+
+## The card tooltip of the loot row under `at` (box pixels), or "".
+func _get_tooltip(at: Vector2) -> String:
+	var index := loot_row_at(at / maxf(_factor, 0.001))
+	if index < 0: return ""
+	var card := str(loot[index].get("card", ""))
+	var title := str(loot[index].get("name", ""))
+	# An artifact row names the artifact over its spell's description.
+	return ELCombatTooltip.spell_text(hud.profile, card, -1, title) if not card.is_empty() else title
+
+## The loot row whose picture or name holds `at` (design pixels), or -1.
+func loot_row_at(at: Vector2) -> int:
+	if style != "loot": return -1
+	for index in loot.size():
+		var y := loot_top + LOOT_ROW * index
+		var row := Rect2(LOOT_ICON_X, y, LOOT_ICON, LOOT_ICON)
+		if index < loot_names.size(): row = row.merge(Rect2(loot_names[index].position, loot_names[index].size))
+		if row.has_point(at): return index
+	return -1
 
 func _texture(texture_name: String) -> Texture2D:
 	var path: String = hud._paths.get(texture_name, "")

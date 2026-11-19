@@ -1194,7 +1194,9 @@ func _unhandled_input(event: InputEvent) -> void:
 		elif event.keycode in [KEY_W, KEY_A, KEY_S, KEY_D]:
 			following = -1
 			view_moved = true
-	if not director.dialogue.is_empty(): return
+	if not director.dialogue.is_empty():
+		_dialogue_map_tip_input(event)
+		return
 	if event is InputEventMouseMotion:
 		_pointer_on_map = hud == null or hud.map_rect().has_point(event.position)
 		if second_hud != null: _tip_on_map = true
@@ -1358,9 +1360,23 @@ func _second_right_press(at: Vector2) -> void:
 	_tip_content = {}
 	_show_map_tip()
 
+## Second game: while a character speaks (TextDialog) the map objects keep
+## their tooltips, on a rest of the pointer or a right press. Other clicks
+## on the map wait for the answer.
+func _dialogue_map_tip_input(event: InputEvent) -> void:
+	if second_hud == null or _dialogue_blocks_map_tips(): return
+	if event is InputEventMouseMotion: _tip_on_map = true
+	elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT and event.pressed: _second_right_press(event.position)
+
+## Script message boxes and boxes over a window are modal; a character's
+## line is not.
+func _dialogue_blocks_map_tips() -> bool:
+	if director.dialogue.is_empty(): return false
+	return str(director.dialogue.get("box", "text")) != "text" or (dialogue_blocker != null and dialogue_blocker.visible) or not _pending_speech.is_empty()
+
 ## Panels, dialogs, menus, scripted messages and pauses close the map tooltip.
 func _map_tooltip_blocked() -> bool:
-	return director == null or state == null or paused or not error.is_empty() or extras_open() or not director.dialogue.is_empty() \
+	return director == null or state == null or paused or not error.is_empty() or extras_open() or _dialogue_blocks_map_tips() \
 		or hero_screen != null or building_screen != null or building_message != null or global_spells != null or diplomacy != null \
 		or first_shop != null or rune_shop != null or shop != null or skills != null or spellbook != null or notebook != null \
 		or second_hud.menu.visible or result_shown
@@ -3313,6 +3329,8 @@ func _build_ui() -> void:
 		if not second_hud.build(state):
 			second_hud.queue_free()
 			second_hud = null
+		else:
+			second_hud.tooltip_blocked = func() -> bool: return _mission_fade != null or extras_open() or result_shown or (paused and not second_hud.menu.visible)
 	if hud != null: _build_first_controls()
 	elif second_hud != null: _build_second_controls()
 	else: _build_remake_controls()

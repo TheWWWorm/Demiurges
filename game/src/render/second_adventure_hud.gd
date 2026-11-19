@@ -58,10 +58,11 @@ var minimap_marks: Control
 var portrait: Control
 var portrait_texture: Texture2D
 var experience_bar: Control
-var experience_tip: ELSecondMapTooltip
-var _experience_text := ""
-var _experience_tip_text := ""
-var _experience_hover := 0.0
+## Tooltips of the panel controls, the experience bar and the affect icons
+## in the original frame, on a rest of the pointer or a right click.
+var panel_tips: ELCombatTooltip
+## True while a window or pause covers the map and its panels.
+var tooltip_blocked: Callable
 var buttons: Dictionary = {}
 var labels: Dictionary = {}
 var hints: Dictionary = {}
@@ -164,9 +165,15 @@ func build(source: ELAdventureSession) -> bool:
 	map_tooltip = ELSecondMapTooltip.new()
 	map_tooltip.setup(profile, face)
 	canvas.add_child(map_tooltip)
-	experience_tip = ELSecondMapTooltip.new()
-	experience_tip.setup(profile, face)
-	canvas.add_child(experience_tip)
+	# Godot's own tooltip stays hidden; the panel's tooltip draws the frame.
+	canvas.theme = ELCombatTooltip.hidden_theme()
+	panel_tips = ELCombatTooltip.new()
+	panel_tips.name = "PanelTooltips"
+	panel_tips.battle_icons = false
+	panel_tips.blocked = _panel_tips_blocked
+	canvas.add_child(panel_tips)
+	panel_tips.setup(profile)
+	affect_strip.inspect_requested.connect(panel_tips.inspect_control)
 	resized.connect(_layout)
 	_layout()
 	return true
@@ -476,25 +483,14 @@ func level_tooltip(hero: Dictionary) -> String:
 	if format.count("%d") != 5: return ELRemakeText.t("Experience %d / %d", profile) % [values[2], values[4]]
 	return format % values
 
-## Keep the tooltip on the HUD canvas like the map's object tips. Poll GUI
-## hover so it can open when the pointer is already parked over the bar.
-func _tick_experience_tip(delta: float) -> void:
-	var hovered := get_viewport().gui_get_hovered_control() == experience_bar
-	if hovered and state.desktop_modal.is_valid(): hovered = not bool(state.desktop_modal.call())
-	if _experience_text.is_empty() or not hovered or Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT) or Input.is_mouse_button_pressed(MOUSE_BUTTON_RIGHT):
-		_experience_hover = 0.0
-		experience_tip.hide()
-		return
-	var delay := float(ProjectSettings.get_setting("gui/timers/tooltip_delay_sec", 0.5))
-	_experience_hover = minf(delay, _experience_hover + delta)
-	if _experience_hover < delay: return
-	if _experience_text != _experience_tip_text:
-		_experience_tip_text = _experience_text
-		experience_tip.set_content(-1, {"labels": [{"text": _experience_text, "at": Vector2.ZERO}]})
-	experience_tip.position = Vector2(experience_bar.position.x + experience_bar.size.x * 0.5, experience_bar.position.y - experience_tip.size.y - 8.0)
-	if not experience_tip.visible:
-		experience_tip.move_to_front()
-		experience_tip.show()
+## The panel tooltips wait while a window or pause covers the map. The
+## pointer can rest on a panel control when the Esc menu opens over it.
+func _panel_tips_blocked() -> bool:
+	if tooltip_blocked.is_valid() and bool(tooltip_blocked.call()): return true
+	if Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT): return true
+	if not menu.visible: return false
+	var hovered := get_viewport().gui_get_hovered_control()
+	return hovered == null or not menu.is_ancestor_of(hovered)
 
 ## The hero's affect icons at the top right (ELAffectStrip), worked out again
 ## only when the hero, its place or its affects change.
@@ -523,8 +519,9 @@ func refresh(hero_uid: int, can_act: bool) -> void:
 	var low := ELHeroProgression.threshold(profile, level)
 	var high := ELHeroProgression.threshold(profile, level + 1)
 	var progress := clampf(float(ELHeroProgression.effective(hero) - low) / float(maxi(1, high - low)), 0, 1) if level < ELHeroProgression.MAX_LEVEL else 1.0
-	_experience_text = level_tooltip(hero) if not hero.is_empty() else ""
-	labels.AdvPanelLevelDig.tooltip_text = _experience_text
+	var experience := level_tooltip(hero) if not hero.is_empty() else ""
+	experience_bar.tooltip_text = experience
+	labels.AdvPanelLevelDig.tooltip_text = experience
 	if progress != _progress:
 		_progress = progress
 		experience_bar.queue_redraw()
@@ -592,12 +589,11 @@ func sync_script_tint() -> void:
 	if busy == script_tinted: return
 	script_tinted = busy
 	for child: Node in canvas.get_children():
-		if child in [menu, map_tooltip, experience_tip, remake_strip, message_layer, affect_strip] or not child is CanvasItem: continue
+		if child in [menu, map_tooltip, panel_tips, remake_strip, message_layer, affect_strip] or not child is CanvasItem: continue
 		(child as CanvasItem).modulate = script_tint if busy else Color.WHITE
 
 func _process(delta: float) -> void:
 	if canvas != null: sync_script_tint()
-	if experience_tip != null: _tick_experience_tip(delta)
 	if not messages.is_empty(): advance_messages(delta)
 	if blinking.is_empty(): return
 	_blink_clock += delta

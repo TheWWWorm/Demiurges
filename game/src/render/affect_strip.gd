@@ -9,7 +9,9 @@ extends Control
 ## WORLD_SYMBOLS_MAP frame (140,0)-(190,50) is drawn over each. The tooltip is
 ## the row's Tooltip; an affect that runs out after some days adds a line with
 ## Tooltip2 and the days left. Range battlegrounds act on a hero within their
-## reach, so they are listed while it is there.
+## reach, so they are listed while it is there. The tooltip is drawn in the
+## original frame (ELCombatTooltip) on a rest of the pointer or a right click,
+## in battle by the battle's tooltip and on the map by the panel's.
 
 signal inspect_requested(control: Control, at: Vector2)
 
@@ -164,8 +166,10 @@ func _hovered(point: Vector2) -> int:
 
 func _gui_input(event: InputEvent) -> void:
 	# The viewport can report no hovered control while a button is held.
-	# Give the tooltip the actual icon strip that received the press.
-	if battle_tooltips and event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT:
+	# Give the tooltip the actual icon strip that received the press. On the
+	# map the press stays on the icon: it neither turns the camera nor asks
+	# for the tooltip of a map object behind it.
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT:
 		if event.pressed and not event.shift_pressed:
 			inspect_requested.emit(self, get_global_transform_with_canvas() * event.position)
 		accept_event()
