@@ -216,6 +216,9 @@ func build(data: ELProfile, model: String, texture_name: String, secondary_textu
 			one_sided.cull_mode = BaseMaterial3D.CULL_BACK
 			culled[node.material_override] = one_sided
 		node.material_override = culled[node.material_override]
+		# Its metal is made from the one-sided copy, so armour drawn one-sided
+		# (helmets, shoulder plates) still turns to metal.
+		if _metal_parts.has(name): _metal_parts[name][0] = node.material_override
 	# Track keys are model-space transforms, so every part hangs from the
 	# model itself. The .lnk tree only names the parts: nested under their
 	# parents, the kobolds' five-deep limbs (cr206-cr209) drifted metres above
