@@ -17,8 +17,10 @@ const PLACEMENT_VERSION := 7
 const FRONTIERS_VERSION := 8
 const GUARDED_PRIZES_VERSION := 9
 const REGIONAL_LANDSCAPES_VERSION := 10
+const GUARD_POSTS_VERSION := 11
 const DailyCoverage := preload("first_daily_coverage.gd")
 const Reachability := preload("first_map_reachability.gd")
+const EncounterPlacement := preload("first_encounter_placement.gd")
 const PREFIX := "el1_random_v"
 const COLORS := ["Green", "Blue", "Red", "Black"]
 const SIZES := [64, 96, 128, 160]
@@ -121,7 +123,7 @@ static func normalize(options: Dictionary, version := VERSION) -> Dictionary:
 		var value: Variant = options.get(key, result[key])
 		if typeof(value) not in [TYPE_INT, TYPE_FLOAT] or not is_finite(float(value)) or float(value) != floor(float(value)): return {}
 		result[key] = int(value)
-	if result.version < VERSION or result.version > REGIONAL_LANDSCAPES_VERSION or result.size not in SIZES or result.players < 2 or result.players > 4 or result.scenery < 0 or result.scenery > 2 or result.castle_health not in [20, 30, 60]: return {}
+	if result.version < VERSION or result.version > GUARD_POSTS_VERSION or result.size not in SIZES or result.players < 2 or result.players > 4 or result.scenery < 0 or result.scenery > 2 or result.castle_health not in [20, 30, 60]: return {}
 	for key: String in ["seed", "layout", "biome", "resources", "starting_resources", "guards", "faction", "water", "coast"]:
 		var value: Variant = options.get(key, result[key])
 		if value is not String: return {}
@@ -290,7 +292,8 @@ func generate(profile: ELProfile, options: Dictionary = {}) -> ELAdventureMap:
 			_make_frontier_prizes()
 		_make_exploration_sites()
 	if config.version >= WILDERNESS_VERSION and config.guards != "none":
-		_make_encounters()
+		if config.version >= GUARD_POSTS_VERSION: _prepare_starter_lairs()
+		else: _make_encounters()
 		if not _check_access(true): return null
 	if config.version >= FRONTIERS_VERSION:
 		_place_frontier_supplies()
@@ -304,6 +307,8 @@ func generate(profile: ELProfile, options: Dictionary = {}) -> ELAdventureMap:
 			_make_scenery()
 	if config.version >= GUARDED_PRIZES_VERSION and not _reconnect_landscape(first_decoration, cliff_ids): return null
 	if not _check_terrain(): return null
+	if config.version >= GUARD_POSTS_VERSION and config.guards != "none":
+		if not _post_field_guards(): return null
 	if not _check_access(false, config.version >= RELIEF_VERSION): return null
 	if config.version >= WILDERNESS_VERSION: _paint_wilderness_detail()
 	if config.version >= RELIEF_VERSION: _shape_relief()
@@ -1449,7 +1454,7 @@ func _make_frontiers() -> bool:
 				_connect_site(Vector2i(start.x, start.y), item, size)
 				_important.append(int(item.permanent_id) - 1)
 				if config.guards != "none": _add_guard(pos - Vector2i(2, 1), index, 4, item, size)
-		if config.guards != "none":
+		if config.guards != "none" and config.version < GUARD_POSTS_VERSION:
 			for number in (2 if config.guards == "normal" else 3):
 				_add_guard(Vector2i(home.lerp(center, 0.6 + number * 0.1) + side * (5 + number * 3)), index, 2 + number)
 
@@ -1710,6 +1715,7 @@ func _add_pickup(desired: Vector2i, home: int, amount: int, radius := 8, expedit
 	return id
 
 func _add_guard(desired: Vector2i, home: int, tier: int, site := {}, size := Vector2i.ONE) -> void:
+	if config.version >= GUARD_POSTS_VERSION: return
 	if config.version >= WILDERNESS_VERSION:
 		var encounter := {"at": desired, "home": home, "tier": tier}
 		if config.version >= PLACEMENT_VERSION and not site.is_empty():
@@ -1735,9 +1741,9 @@ func _add_guard(desired: Vector2i, home: int, tier: int, site := {}, size := Vec
 	var chosen: Dictionary = pool[_next(pool.size())]
 	_place_guard(pos, chosen.name, home)
 
-func _place_guard(pos: Vector2i, name: String, home: int) -> int:
+func _place_guard(pos: Vector2i, name: String, home: int, reserve_naval_route := true) -> int:
 	var row := ELFirstMonsters.definition(_profile, name, 0)
-	if config.version >= LANDSCAPE_VERSION and config.naval:
+	if config.version >= LANDSCAPE_VERSION and config.naval and reserve_naval_route:
 		# Later guards and buildings must leave at least one coastal approach.
 		var path := _port_route(pos)
 		for index in range(path.size() - 1):
@@ -1751,6 +1757,93 @@ func _place_guard(pos: Vector2i, name: String, home: int) -> int:
 	if config.version < GUARDED_PRIZES_VERSION: _paint_disk(pos, 2, false)
 	var id := int(item.permanent_id) - 1
 	_important.append(id)
+	return id
+
+func _prepare_starter_lairs() -> void:
+	for home in _starts.size():
+		var start: Dictionary = _starts[home]
+		var lair: Dictionary = _home_lairs[home]
+		if lair.is_empty(): lair = _add_exploration_site("Dungeon1", Vector2i(start.x, start.y), 19, home)
+		if lair.is_empty(): continue
+		lair.node.children.append(_node("params", {}, STARTER_LAIR))
+		start.opening_lair = int(lair.permanent_id) - 1
+
+func _post_field_guards() -> bool:
+	var objects := _navigation_objects()
+	var grid := ELAdventureGrid.new()
+	if not grid.build(_map, objects):
+		error = "Encounter placement could not build the movement grid: " + grid.error
+		return false
+	var placement := EncounterPlacement.new(grid, _guard_safe, _scenery_paths)
+	var spacing := 4 if config.guards == "strong" else 5
+	var spaced := PackedByteArray()
+	spaced.resize(_map.roads.size())
+	var opening := {}
+	for start: Dictionary in _starts:
+		for id: int in start.sites + start.rewards: opening[id] = true
+	var ranks := {"artefacts": 4, "global_spells": 3, "mines": 3, "mana_nodes": 3, "additional_buildings": 2, "resource_cuts": 1}
+	var sites: Array[Dictionary] = []
+	for id: int in objects:
+		var item: Dictionary = objects[id]
+		var at := Vector2i(item.x, item.y)
+		if item.type == "monster":
+			_mark_radius(spaced, at, spacing)
+			continue
+		if not ranks.has(item.group) or opening.has(id) or _reward_guards.has(id): continue
+		if item.group == "additional_buildings" and (not ELAdditionalBuildings.supported(item) or ELAdditionalBuildings.DUNGEONS.has(item.name)): continue
+		if _starts.any(func(start: Dictionary) -> bool: return at.distance_squared_to(Vector2i(start.x, start.y)) < 12 * 12): continue
+		sites.append(item)
+	sites.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		if a.group == b.group or ranks[a.group] == ranks[b.group]: return int(a.uid) < int(b.uid)
+		return int(ranks[a.group]) > int(ranks[b.group]))
+	for site: Dictionary in sites:
+		var at := Vector2i(site.x, site.y)
+		var home := _owner(at)
+		var start: Dictionary = _starts[home]
+		var spot := placement.site_guard(site, Vector2i(start.x, start.y), spaced)
+		if spot.is_empty(): continue
+		var level := maxi(2, int(ranks[site.group])) + (1 if config.guards == "strong" else 0)
+		var id := _station_guard(grid, spot.guard, level, home)
+		_reward_guards[site.uid] = id
+		if spot.full and site.group in ["artefacts", "global_spells"]: _gated_prizes[site.uid] = id
+		_mark_radius(spaced, spot.guard, spacing)
+	_post_pass_guards(placement)
+	return true
+
+func _post_pass_guards(placement: RefCounted) -> void:
+	var spaced := PackedByteArray()
+	spaced.resize(_map.roads.size())
+	for item: Dictionary in _map.objects:
+		if item.group == "np_heroes": _mark_radius(spaced, Vector2i(item.x, item.y), 7)
+	var candidates: Array[Dictionary] = []
+	var land := 0
+	for y in range(3, _map.height - 3):
+		for x in range(3, _map.width - 3):
+			var at := Vector2i(x, y)
+			if not _walkable(at): continue
+			land += 1
+			if not _clears_sites(at, 4) or not placement.pass_candidate(at, spaced): continue
+			var field := y * (_map.width + 1) + x
+			var score := _rock[field] + (0.45 if _shore[field] <= 4 else 0.0) + _hash(x, y, 8069) * 0.3
+			candidates.append({"at": at, "score": score})
+	candidates.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return float(a.score) > float(b.score))
+	var passes := {}
+	var budget := ceili(land / 1800.0)
+	for candidate: Dictionary in candidates:
+		if passes.size() >= budget: break
+		var at: Vector2i = candidate.at
+		if spaced[at.y * _map.width + at.x] != 0: continue
+		var ends: Array[Vector2i] = placement.crossing(at)
+		if ends.is_empty(): continue
+		var level := 4 if config.guards == "strong" else 3
+		var id := _station_guard(placement.grid, at, level, _owner(at))
+		passes[id] = ends
+		_mark_radius(spaced, at, 12)
+	report.passage_guards = passes
+
+func _station_guard(grid: ELAdventureGrid, at: Vector2i, level: int, home: int) -> int:
+	var id := _place_guard(at, _regional_guard(at, [], level), home, false)
+	grid.update_actor({"uid": id, "x": at.x, "y": at.y, "type": "monster", "alive": true, "visible": true})
 	return id
 
 func _make_encounters() -> void:
@@ -2983,6 +3076,7 @@ func _check_access(protect_routes := false, enforce_daily := false) -> bool:
 		targets.append(int(start.hero_id))
 		if not _guard_safe.is_empty():
 			for id: int in start.sites + start.rewards: opening[id] = true
+			if config.version >= GUARD_POSTS_VERSION and start.has("opening_lair"): opening[start.opening_lair] = true
 	for id: int in targets:
 		var item: Dictionary = objects[id]
 		var safe: bool = not _guard_safe.is_empty() and (id in opening or item.group in ["buildings", "heroes", "forts"])

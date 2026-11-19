@@ -128,9 +128,9 @@ Quiet stretches gain small resource caches where needed. Monster searches
 count creatures out in the world separately from occupied lairs.
 
 Each homeland has its own recruitment scrolls and access to its starting
-economy. With guards enabled, a nearby optional encounter is drawn from a
-pool tested against the four starting spellbooks. Stronger creatures appear
-farther from the starting heroes, near optional mines, scrolls, and relics.
+economy. With guards enabled, a nearby lair offers an optional level-one
+fight from a pool tested against the four starting spellbooks. Stronger
+creatures defend optional mines, scrolls, relics, and narrow crossings.
 The difficulty setting uses the original creatures' corresponding spellbooks.
 The computer can lead a siege with a level-five recruit when it can wear down
 the target castle's restoration.
@@ -279,6 +279,14 @@ creatures draw from the installed roster, with tougher encounters on the
 farther ridges. Opening economy and recruitment routes stay clear of guard
 zones.
 
+Version 11 stations field creatures at optional sites and passages. A site
+guard's interception zone covers at least one actual interaction tile.
+Passage guards have walkable ground on both sides of a narrow gap. A hero
+can walk around the creature's occupied tile, and the short crossing enters
+its interception zone. The generator checks those positions on the finished
+movement grid, including scenery and coastal obstacles. Optional level-one
+fights take place inside the homelands' lairs.
+
 ### Whole-map access
 
 Since version 9, generation checks every passable tile after placing scenery. It opens short
@@ -300,7 +308,7 @@ Omitted keys use the defaults below.
 
 | Key | Default | Supported values and effect |
 | --- | --- | --- |
-| `version` | `10` | `10` adds regional ridges, biome-specific scenery and more neutral encounters. Versions 1–9 reproduce their original worlds. Version 1 uses its own schema. |
+| `version` | `11` | `11` stations neutral creatures at optional sites and narrow crossings. Versions 1–10 reproduce their original worlds. Version 1 uses its own schema. |
 | `seed` | `"212"` | A string of 1–64 characters, not blank-only, without control characters. Whitespace in a valid seed is significant. |
 | `size` | `96` | `64`, `96`, `128`, `160` tiles per side. |
 | `players` | `4` | `2`, `3`, `4`: one human and the remaining seats controlled by AI. |
@@ -329,7 +337,7 @@ monsters** option also keeps its normal rules.
 
 ## Share and remember a setup
 
-**Copy setup** creates an `EL1R10:` code for a new world in the code field and clipboard. Paste a
+**Copy setup** creates an `EL1R11:` code for a new world in the code field and clipboard. Paste a
 complete code and press **Load setup** to restore its seed and world settings.
 Choose difficulty and AI separately. The code is a prefix followed by Base64
 encoded UTF-8 JSON; it is a recipe, not a map archive.
@@ -348,7 +356,7 @@ modifies the installed original game's files.
 ```gdscript
 var generator := ELFirstRandomMap.new()
 var map := generator.generate(profile, {
-    "version": 10,
+    "version": 11,
     "seed": "island-expedition",
     "size": 128,
     "players": 4,

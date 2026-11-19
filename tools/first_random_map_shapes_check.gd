@@ -46,7 +46,7 @@ func check(ok: bool, what: String) -> void:
 func _configuration() -> void:
 	label = "shape settings"
 	var defaults := ELFirstRandomMap.defaults()
-	check(defaults.version == ELFirstRandomMapV2.REGIONAL_LANDSCAPES_VERSION and defaults.has("naval") and defaults.has("water") and defaults.has("coast"), "new recipes use regional landscapes and keep the naval settings schema")
+	check(defaults.version == ELFirstRandomMapV2.GUARD_POSTS_VERSION and defaults.has("naval") and defaults.has("water") and defaults.has("coast"), "new recipes use guard posts and keep the naval settings schema")
 	check(ELFirstRandomMap.normalize(JSON.parse_string(JSON.stringify(defaults))) == defaults, "settings survive JSON numeric conversion")
 	for options: Dictionary in [{"naval": 1}, {"naval": "true"}, {"water": true}, {"water": "huge"}, {"coast": []}, {"coast": "straight"}, {"version": 1, "naval": true}]:
 		check(ELFirstRandomMap.normalize(options).is_empty(), "malformed or wrong-version settings are rejected: " + JSON.stringify(options))
@@ -257,6 +257,7 @@ func _geometry(map: ELAdventureMap, config: Dictionary) -> void:
 		elif not _approachable(map, grid, item, reachable): unreachable.append(str(item.name))
 	check(unreachable.is_empty(), "independent terrain/footprint flood reaches all strategic objects: " + ", ".join(unreachable.slice(0, 4)))
 	var generation: Dictionary = map.get_meta("random_map_report", {})
+	if config.version >= ELFirstRandomMapV2.GUARD_POSTS_VERSION: _field_guards(director, generation, modes, links)
 	var starts: Array = generation.get("starts", [])
 	check(starts.size() == config.players, "every homeland exposes its opening economy")
 	if config.version >= ELFirstRandomMapV2.RELIEF_VERSION:
@@ -328,6 +329,38 @@ func _geometry(map: ELAdventureMap, config: Dictionary) -> void:
 	state.close()
 	validated += 1
 
+func _field_guards(director: ELAdventureDirector, generation: Dictionary, modes: PackedByteArray, links: Dictionary) -> void:
+	var map := director.state.map
+	var grid := director.grid
+	var guards := director.interception.zones
+	var posts := {}
+	for site_id: int in generation.get("reward_guards", {}):
+		var id: int = generation.reward_guards[site_id]
+		var site := director.state.object(site_id)
+		var body := Rect2i(Vector2i(site.x, site.y), grid.footprints[site_id].size)
+		var zone: Array = guards.get(id, {}).get("cells", [])
+		var covers_approach := zone.any(func(point: Vector2i) -> bool:
+			return not body.has_point(point) and body.grow(1).has_point(point) and grid.passability(point) > 0
+		)
+		check(covers_approach, "a site guard's real interception area includes an interaction tile")
+		posts[id] = true
+	for id: int in generation.get("passage_guards", {}):
+		var zone: Dictionary = guards[id]
+		var ends: Array = generation.passage_guards[id]
+		var bounds := Rect2i(zone.origin - Vector2i.ONE * 6, Vector2i.ONE * 13)
+		var endpoint: Vector2i = ends[1]
+		var index := endpoint.y * map.width + endpoint.x
+		var open := modes.duplicate()
+		for at: int in open.size():
+			if grid.actor_blockers[at] > 0: open[at] = 0
+		var walked := _flood(map, open, ends[0], links, grid.naval, 1, bounds)
+		for at: Vector2i in zone.cells: open[at.y * map.width + at.x] = 0
+		var safe := _flood(map, open, ends[0], links, grid.naval, 1, bounds)
+		check(walked[index] != 0 and safe[index] == 0, "a passage has two connected sides and crossing the gap enters the creature's zone")
+		posts[id] = true
+	check(posts.size() == guards.size() and guards.keys().all(func(id: int) -> bool: return posts.has(id)),
+		"every field creature controls a site approach or a navigable passage")
+
 func _modes(map: ELAdventureMap, grid: ELAdventureGrid) -> PackedByteArray:
 	var result := PackedByteArray()
 	result.resize(map.width * map.height)
@@ -358,7 +391,7 @@ func _links(map: ELAdventureMap, ports: Array) -> Dictionary:
 		result.get_or_add(b, {})[a] = true
 	return result
 
-func _flood(map: ELAdventureMap, modes: PackedByteArray, start: Vector2i, links: Dictionary, naval: bool, only_mode := 0) -> PackedByteArray:
+func _flood(map: ELAdventureMap, modes: PackedByteArray, start: Vector2i, links: Dictionary, naval: bool, only_mode := 0, bounds := Rect2i()) -> PackedByteArray:
 	var seen := PackedByteArray()
 	seen.resize(modes.size())
 	var initial := start.y * map.width + start.x
@@ -376,6 +409,7 @@ func _flood(map: ELAdventureMap, modes: PackedByteArray, start: Vector2i, links:
 				var nx := x + dx
 				var ny := y + dy
 				if nx < 0 or ny < 0 or nx >= map.width or ny >= map.height: continue
+				if bounds.has_area() and not bounds.has_point(Vector2i(nx, ny)): continue
 				var next := ny * map.width + nx
 				if seen[next] or modes[next] == 0 or (only_mode > 0 and modes[next] != only_mode) or (not naval and modes[next] != 1): continue
 				if modes[id] != modes[next] and not links.get(id, {}).has(next): continue

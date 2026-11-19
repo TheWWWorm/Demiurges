@@ -60,7 +60,8 @@ func _installed_placement(profile: ELProfile) -> void:
 		state.close()
 		if not naval:
 			var previous := _generate(ELFirstRandomMap.new(), profile, options.merged({"version": 9}))
-			if previous != null: _regional_landscape(map, previous)
+			var regional := _generate(ELFirstRandomMap.new(), profile, options.merged({"version": 10}))
+			if previous != null and regional != null: _regional_landscape(regional, previous)
 	print("CHECKED: guarded rewards, opening routes and roadside forts on land and at sea")
 
 func _regional_landscape(current: ELAdventureMap, previous: ELAdventureMap) -> void:
