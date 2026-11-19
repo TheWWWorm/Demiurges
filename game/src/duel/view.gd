@@ -747,7 +747,7 @@ func _start(edition: String, options: Dictionary = {}, restored: ELDuel = null, 
 	symbols.build(profile)
 	symbols.camera = camera
 	notices.build(profile)
-	if edition == "el2": notices.show_turn(duel.active_side(), duel.turn_serial)
+	notices.show_turn(duel.active_side(), duel.turn_serial)
 	_enemy_banner_shown = false
 	auto_button.build(profile, "CombatMenu3", Rect2(619, 542, 47, 49))
 	attack_button.build(profile, "CombatMenu1", Rect2(509, 542, 47, 49))
@@ -815,7 +815,7 @@ func _start(edition: String, options: Dictionary = {}, restored: ELDuel = null, 
 		if not preview:
 			duel.set_meta("start_sound", true)
 			battle_audio.play(BATTLE_START_SOUND)
-			if edition == "el2":
+			if _notice_icons():
 				# The opening turn settles before the view subscribes to its events.
 				for entry: Dictionary in duel.history:
 					if entry.kind == "disturbance": notices.add_disturbance(int(entry.side))
@@ -2457,7 +2457,7 @@ func _event(data: Dictionary) -> void:
 	if is_instance_valid(melee) and melee.capture(data): return
 	if data.get("kind") == "combat_start": return
 	_note_shown(data)
-	if profile.id == "el2" and data.has("shown") and is_instance_valid(notices):
+	if data.has("shown") and is_instance_valid(notices):
 		notices.show_turn(int(data.shown.active), int(data.shown.turn))
 	if data.get("kind") in ["attack_resolved", "turn_cleanup", "combat_end"]: return
 	_log_battle_outcome(data)
@@ -2803,7 +2803,7 @@ func _event(data: Dictionary) -> void:
 			# EL1's turn entry plays RedLightning at the damaged hero only when
 			# the ether disturbance is positive (before hero damage);
 			# EL2 binds it the same way.
-			if profile.id == "el2" and is_instance_valid(notices): notices.add_disturbance(int(data.side))
+			if _notice_icons() and is_instance_valid(notices): notices.add_disturbance(int(data.side))
 			if profile.id in ["el1", "el2"] and int(data.amount) > 0 and models.has(int(data.side)):
 				battle_audio.effect("RedLightning")
 				_figure_effect("RedLightning", int(data.side))
@@ -3031,7 +3031,7 @@ func _event(data: Dictionary) -> void:
 				_figure_effect("Specialisation", side)
 				battle_audio.effect("Specialisation")
 			_float_text(side, name, Color("e8c66a"), true)
-			if profile.id == "el2": _specialisation_notice(side, String(data.spec))
+			if _notice_icons(): _specialisation_notice(side, String(data.spec))
 			_announce("T_SPEC_WORKED", [name, _hero_name(side)], side)
 		"global_spell":
 			var spell := profile.text(str(profile.table("GlobalSpells").get(data.spell, {}).get("Name", data.spell)))
@@ -3233,9 +3233,6 @@ func _phase_notice(side: int, attack: bool, round_number: int) -> void:
 	elif not _enemy_banner_shown:
 		band = 2
 		_enemy_banner_shown = true
-		# Cast icons clear at the opponent's first
-		# phase, which is usually its defence right after my attack.
-		if profile.id == "el1" and is_instance_valid(notices): notices.clear_icons()
 	if band >= 0 and bool(settings.values.get("combat_phases", true)) and is_instance_valid(notices): notices.show_banner(band)
 
 ## Whether `side` is played at this screen (both sides in a local two-player battle).
@@ -3254,6 +3251,12 @@ func _cast_notice(side: int, card: String) -> void:
 		if is_instance_valid(notices) and (profile.id == "el1" or _rival_notice(side)): notices.add_icon(profile.card_icon(card), card, side)
 		return
 	_announce("T_CASTING", [_hero_name(side), duel.card_name(card)], side)
+
+## Whether the battle shows the top-left notice icons: always in the second
+## game, with the "cast_icons" setting in the first. Both clear the list when
+## a new side acts or a turn starts (#227, first game #257).
+func _notice_icons() -> bool:
+	return profile.id == "el2" or (profile.id == "el1" and bool(settings.values.get("cast_icons", true)))
 
 func _specialisation_notice(side: int, code: String) -> void:
 	if not is_instance_valid(notices): return
@@ -5612,18 +5615,10 @@ func _figure_tip(at: Vector2) -> Dictionary:
 
 ## A creature figure's tooltip text: name and stats, cost line, description.
 func _creature_tip_text(id: int) -> String:
-	var creature := duel.entity(id)
-	var card := str(creature.card)
-	# The second game shows the printed card, including variable X/X stats.
-	if profile.id == "el2": return ELCombatTooltip.spell_text(profile, card, -1, duel.card_name(card))
-	var stats := _shown_creature_stats(id, creature)
-	var label := "%s %d/%d" % [duel.card_name(card), int(stats.power), maxi(0, int(stats.toughness) - shown_damage(id))]
-	label += "\n" + ELCombatTooltip.cost_line(profile, int(profile.table("CombatSpells").get(card, {}).get("Cost", 0)))
-	var description := profile.card_description(card)
-	if not description.is_empty() and description != card: label += "\n" + description
-	var worn := _enchantment_lines(creature)
-	if not worn.is_empty(): label += "\n\n" + "\n".join(worn)
-	return label
+	var card := str(duel.entity(id).card)
+	# Both games show the printed card (the second game's variable X/X
+	# included): neither the live stats nor the creature's enchantments.
+	return ELCombatTooltip.spell_text(profile, card, -1, duel.card_name(card))
 
 ## A remake addition to a figure's tooltip: each enchantment on it, by name
 ## with its card text, so spells cast on a creature or hero can be read
