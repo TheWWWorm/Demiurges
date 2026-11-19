@@ -16,6 +16,7 @@ const RELIEF_VERSION := 6
 const PLACEMENT_VERSION := 7
 const FRONTIERS_VERSION := 8
 const GUARDED_PRIZES_VERSION := 9
+const REGIONAL_LANDSCAPES_VERSION := 10
 const DailyCoverage := preload("first_daily_coverage.gd")
 const Reachability := preload("first_map_reachability.gd")
 const PREFIX := "el1_random_v"
@@ -101,6 +102,8 @@ var _site_clearance := PackedByteArray()
 var _prize_scenery := {}
 var _gated_prizes := {}
 var _approach_clearings := PackedByteArray()
+var _uplands := PackedFloat32Array()
+var _summits: Array[Vector2i] = []
 
 static func defaults(version := VERSION) -> Dictionary:
 	return {"version": version, "seed": "212", "size": 96, "players": 4,
@@ -118,7 +121,7 @@ static func normalize(options: Dictionary, version := VERSION) -> Dictionary:
 		var value: Variant = options.get(key, result[key])
 		if typeof(value) not in [TYPE_INT, TYPE_FLOAT] or not is_finite(float(value)) or float(value) != floor(float(value)): return {}
 		result[key] = int(value)
-	if result.version < VERSION or result.version > GUARDED_PRIZES_VERSION or result.size not in SIZES or result.players < 2 or result.players > 4 or result.scenery < 0 or result.scenery > 2 or result.castle_health not in [20, 30, 60]: return {}
+	if result.version < VERSION or result.version > REGIONAL_LANDSCAPES_VERSION or result.size not in SIZES or result.players < 2 or result.players > 4 or result.scenery < 0 or result.scenery > 2 or result.castle_health not in [20, 30, 60]: return {}
 	for key: String in ["seed", "layout", "biome", "resources", "starting_resources", "guards", "faction", "water", "coast"]:
 		var value: Variant = options.get(key, result[key])
 		if value is not String: return {}
@@ -263,6 +266,7 @@ func generate(profile: ELProfile, options: Dictionary = {}) -> ELAdventureMap:
 	_make_terrain()
 	if config.naval and not _prepare_naval_terrain(): return null
 	if config.version >= RELIEF_VERSION: _shore = _shore_distance()
+	if config.version >= REGIONAL_LANDSCAPES_VERSION: _build_uplands()
 	if config.version >= LANDSCAPE_VERSION: _weight_landscape_routes()
 	if not _make_players(): return null
 	if config.naval and not _make_ports(): return null
@@ -271,8 +275,16 @@ func generate(profile: ELProfile, options: Dictionary = {}) -> ELAdventureMap:
 	if not _make_homelands(): return null
 	if not _make_frontiers(): return null
 	if config.naval: _populate_islands()
+	var cliff_ids := Vector2i.ZERO
 	if config.version >= LANDSCAPE_VERSION:
 		if not _check_access(true): return null
+		if config.version >= REGIONAL_LANDSCAPES_VERSION and config.scenery > 0:
+			# Claim room for the mountains before optional sites and encounters
+			# use up their slopes. The opening sites already have clear paths.
+			cliff_ids.x = _next_id
+			_place_regional_cliffs(_scenery_land(), _scenery_catalog())
+			cliff_ids.y = _next_id
+			if cliff_ids.x != cliff_ids.y and not _check_access(true): return null
 		if config.version >= PLACEMENT_VERSION:
 			_make_frontier_forts()
 			_make_frontier_prizes()
@@ -290,7 +302,7 @@ func generate(profile: ELProfile, options: Dictionary = {}) -> ELAdventureMap:
 			# Keep a route to every strategic target before adding blockers.
 			if config.version == SCENERY_VERSION and not _check_access(true): return null
 			_make_scenery()
-	if config.version >= GUARDED_PRIZES_VERSION and not _reconnect_landscape(first_decoration): return null
+	if config.version >= GUARDED_PRIZES_VERSION and not _reconnect_landscape(first_decoration, cliff_ids): return null
 	if not _check_terrain(): return null
 	if not _check_access(false, config.version >= RELIEF_VERSION): return null
 	if config.version >= WILDERNESS_VERSION: _paint_wilderness_detail()
@@ -584,7 +596,10 @@ func _build_landscape() -> void:
 			if config.version >= WILDERNESS_VERSION:
 				var rock := (1.0 - smoothstep(0.015, 0.16, contour)) * smoothstep(0.32, 0.66, relief)
 				var undergrowth := 0.78 * moisture + 0.22 * _noise(x + bend, y - bend, 5.0, 2365)
-				_canopy[index] = smoothstep(0.37, 0.73, undergrowth) * (1.0 - rock * 0.65)
+				var cover := smoothstep(0.37, 0.73, undergrowth) * (1.0 - rock * 0.65)
+				if config.version >= REGIONAL_LANDSCAPES_VERSION:
+					cover = clampf(0.69 * cover + 0.57 * _noise(x, y, 17.0, 7957), 0.0, 1.0)
+				_canopy[index] = cover
 				_relief[index] = clampf(0.69 * relief + 0.31 * rock, 0.0, 1.0)
 				_rock[index] = rock
 				form = Landform.RIDGE if rock > 0.42 else (Landform.WOODS if _canopy[index] > 0.44 else Landform.MEADOW)
@@ -630,6 +645,64 @@ func _shore_distance() -> PackedByteArray:
 			queue.append(neighbor)
 	return distance
 
+func _build_uplands() -> void:
+	var stride := _map.width + 1
+	_uplands.resize(_map.terrain.size())
+	_uplands.fill(0.0)
+	_summits.clear()
+	var candidates: Array[Dictionary] = []
+	var dry := 0
+	var hub := Vector2i(_map.width, _map.height) / 2
+	for y in range(3, _map.height - 2):
+		for x in range(3, _map.width - 2):
+			var index := y * stride + x
+			if int(_map.terrain[index]) in ELTileSet.WATER_KINDS: continue
+			dry += 1
+			if _shore[index] < 5 or _hash(x, y, 7819) > 0.16: continue
+			var point := Vector2i(x, y)
+			if point.distance_squared_to(_anchors[_owner(point)]) < 9 * 9: continue
+			if not config.naval and point.distance_squared_to(hub) < 9 * 9: continue
+			var edge := mini(mini(x, _map.width - x), mini(y, _map.height - y))
+			var prominence := _relief[index] * 0.8 + _rock[index] * 0.25
+			prominence += 0.62 * smoothstep(3.0, 17.0, edge) + mini(_shore[index], 12) * 0.035 + _hash(x, y, 7823) * 0.37
+			candidates.append({"point": point, "prominence": prominence})
+	candidates.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return float(a.prominence) > float(b.prominence))
+	var ranges := maxi(2, roundi(dry / 1100.0))
+	var separation := clampi(_map.width / 5, 17, 24)
+	for candidate: Dictionary in candidates:
+		var point: Vector2i = candidate.point
+		if _summits.any(func(other: Vector2i) -> bool: return point.distance_squared_to(other) < separation * separation): continue
+		_summits.append(point)
+		_raise_ridge(point)
+		if _summits.size() >= ranges: break
+	for y in _map.height + 1:
+		for x in stride:
+			var index := y * stride + x
+			var height := _uplands[index]
+			_rock[index] = maxf(_rock[index] * 0.55, smoothstep(0.22, 0.88, height))
+			_canopy[index] *= 1.0 - 0.78 * smoothstep(0.24, 0.81, height)
+			var edge := 0.24 + 0.17 * (_noise(x, y, 6.0, 7937) - 0.5)
+			if height < edge or int(_map.terrain[index]) in ELTileSet.WATER_KINDS: continue
+			_landscape[index] = Landform.RIDGE
+			_map.terrain[index] = _ground(Vector2i(x, y), true)
+
+func _raise_ridge(center: Vector2i) -> void:
+	var heading := TAU * _hash(center.x, center.y, 7877)
+	var length := lerpf(11.0, 18.0, _hash(center.x, center.y, 7883))
+	var width := lerpf(7.5, 11.0, _hash(center.x, center.y, 7901))
+	var amplitude := lerpf(0.84, 1.0, _hash(center.x, center.y, 7907))
+	var radius := ceili(length + 3.0)
+	for y in range(maxi(0, center.y - radius), mini(_map.height, center.y + radius) + 1):
+		for x in range(maxi(0, center.x - radius), mini(_map.width, center.x + radius) + 1):
+			var local := Vector2(Vector2i(x, y) - center).rotated(-heading)
+			var along := local.x / length
+			var across := (local.y - 2.2 * sin(along * PI)) / width
+			var contour := Vector2(along, across).length()
+			var crest := 1.0 - smoothstep(0.28, 1.0, contour)
+			var saddle := 0.84 + 0.20 * _noise(x, y, 5.0, 7927)
+			var index := y * (_map.width + 1) + x
+			_uplands[index] = maxf(_uplands[index], amplitude * crest * saddle)
+
 func _shape_relief() -> void:
 	var shore := _shore_distance()
 	var stride := _map.width + 1
@@ -640,21 +713,28 @@ func _shape_relief() -> void:
 		# of the same ground that controls the rock and woodland masks.
 		var inland := smoothstep(2.0, 9.0, float(shore[index]))
 		var mass := pow(clampf((_relief[index] - 0.20) / 0.75, 0.0, 1.0), 1.45)
-		sculpted[index] = inland * (0.40 + 7.4 * mass + 2.6 * pow(_rock[index], 2.0))
+		if config.version >= REGIONAL_LANDSCAPES_VERSION:
+			var bank := smoothstep(0.0, 7.0, float(shore[index]))
+			sculpted[index] = bank * (0.32 + 4.1 * mass + 9.4 * _uplands[index])
+		else:
+			sculpted[index] = inland * (0.40 + 7.4 * mass + 2.6 * pow(_rock[index], 2.0))
 	var original := sculpted.duplicate()
 	var art := ELAdventureArt.new(_map)
 	for item: Dictionary in _map.objects:
-		if item.group not in ["buildings", "factories", "laboratories", "mines", "additional_buildings", "mana_nodes"]: continue
+		var cliff: bool = config.version >= REGIONAL_LANDSCAPES_VERSION and item.group == "terrain_objects"
+		if not cliff and item.group not in ["buildings", "factories", "laboratories", "mines", "additional_buildings", "mana_nodes"]: continue
 		var definition := art.resolve(item)
 		var shape := ELAdventureGrid.footprint(definition.get("row", {}), int(item.rotation))
-		if shape.size == Vector2i.ONE and item.group != "buildings": continue
+		if cliff:
+			if maxi(shape.size.x, shape.size.y) < 5: continue
+		elif shape.size == Vector2i.ONE and item.group != "buildings": continue
 		var origin := Vector2i(item.x, item.y)
 		var end: Vector2i = origin + shape.size
 		var height := INF
 		for y in range(origin.y, end.y + 1):
 			for x in range(origin.x, end.x + 1): height = minf(height, original[y * stride + x])
-		# Seat foundations on rock. Blend the cut into neighboring terrain
-		# over a few tiles and keep the original level of shallow water.
+		# Seat buildings and the broad native cliffs on a shelf. The
+		# neighboring slopes blend out from the shelf to the original grade.
 		for y in range(maxi(0, origin.y - 3), mini(_map.height, end.y + 3) + 1):
 			for x in range(maxi(0, origin.x - 3), mini(_map.width, end.x + 3) + 1):
 				var distance := maxi(maxi(origin.x - x, x - end.x), maxi(origin.y - y, y - end.y))
@@ -671,7 +751,13 @@ func _ground(point: Vector2i, varied := false) -> int:
 	var color := str(config.biome)
 	if color == "mixed":
 		var sample := point
-		if config.version >= LANDSCAPE_VERSION and varied:
+		if config.version >= REGIONAL_LANDSCAPES_VERSION:
+			# Give neighboring climates broad tongues and smaller breaks
+			# without changing which player owns the corner of the map.
+			var drift := Vector2(_noise(point.x, point.y, 26.0, 2081), _noise(point.x, point.y, 26.0, 2347))
+			var edge := Vector2(_noise(point.x, point.y, 9.0, 2087), _noise(point.x, point.y, 9.0, 2351))
+			sample += Vector2i((drift - Vector2.ONE * 0.5) * 22.0 + (edge - Vector2.ONE * 0.5) * 8.0)
+		elif config.version >= LANDSCAPE_VERSION and varied:
 			sample += Vector2i((_noise(point.x, point.y, 23.0, 2081) - 0.5) * 12.0, (_noise(point.x, point.y, 23.0, 2347) - 0.5) * 12.0)
 		color = _colors[_owner(sample)]
 	var choices: Array = _palette[color]
@@ -981,6 +1067,8 @@ func _weight_landscape_routes() -> void:
 		for x in range(1, _map.width - 1):
 			var point := Vector2i(x, y)
 			var weight: float = [1.0, 1.22, 2.2][_landform(point)] if _walkable(point) else wet_weight
+			if config.version >= REGIONAL_LANDSCAPES_VERSION:
+				weight += 2.6 * _uplands[y * (_map.width + 1) + x]
 			_route_grid.set_point_weight_scale(point, weight + 0.21 * _noise(x, y, 15.0, 1091))
 
 func _region_at(point: Vector2i) -> int:
@@ -1467,6 +1555,8 @@ func _read_prize_scenery() -> void:
 	for color: String in COLORS:
 		var pool: Dictionary = pools[color]
 		var choices: Array = pool.canopy + pool.stones + pool.plants
+		if config.version >= REGIONAL_LANDSCAPES_VERSION and not pool.stones.is_empty():
+			choices = pool.stones if color in ["Red", "Black"] else pool.canopy + pool.stones
 		_prize_scenery[color] = choices.filter(func(prop: Dictionary) -> bool:
 			var shape := ELAdventureGrid.footprint(prop.row, 0)
 			return shape.size == Vector2i.ONE and shape.cells.size() == 1
@@ -1712,7 +1802,10 @@ func _make_encounters() -> void:
 			_record_reward_guard(encounter.site_id, pos, approach, name, encounter.home)
 		else:
 			_place_guard(pos, name, int(encounter.home))
-	if config.version >= RELIEF_VERSION: _populate_roaming_creatures(journey, wilderness)
+	if config.version >= REGIONAL_LANDSCAPES_VERSION:
+		_populate_regional_encounters()
+	elif config.version >= RELIEF_VERSION:
+		_populate_roaming_creatures(journey, wilderness)
 
 func _record_reward_guard(id: int, guard: Vector2i, approach: Vector2i, name: String, home: int) -> void:
 	_reward_guards[id] = _place_guard(guard, name, home)
@@ -1749,6 +1842,94 @@ func _reward_guard(site: Rect2i, preferred: Vector2i) -> Dictionary:
 			best_score = score
 			best = {"guard": point, "approach": approach}
 	return best
+
+func _populate_regional_encounters() -> void:
+	var spaced := PackedByteArray()
+	spaced.resize(_map.roads.size())
+	var verges := PackedByteArray()
+	verges.resize(spaced.size())
+	var gap := 5 if config.guards == "strong" else 6
+	var placed := 0
+	for item: Dictionary in _map.objects:
+		if item.group != "np_heroes": continue
+		_mark_radius(spaced, Vector2i(item.x, item.y), gap)
+		placed += 1
+	for point: Vector2i in _network_points: _mark_radius(verges, point, 4)
+	var land := 0
+	var candidates: Array[Dictionary] = []
+	for y in range(3, _map.height - 3):
+		for x in range(3, _map.width - 3):
+			var offset := y * _map.width + x
+			var point := Vector2i(x, y)
+			if _exploration_access[offset] < -1 or not _walkable(point): continue
+			land += 1
+			if spaced[offset] or _reserved[offset] or _corridor[offset]: continue
+			var field := y * (_map.width + 1) + x
+			var verge := 0.17 * verges[offset]
+			var clearing := 1.0 - smoothstep(0.45, 0.77, _canopy[field])
+			var score := _hash(x, y, 8011) + verge + 0.16 * clearing
+			candidates.append({"point": point, "score": score})
+	var target := ceili(float(land) / (110.0 if config.guards == "strong" else 128.0))
+	if placed >= target: return
+	var by_level := {}
+	for entry: Dictionary in _catalog.monsters: by_level.get_or_add(entry.level, []).append(entry)
+	# Give some optional stops a creature that actually threatens their
+	# approach, then use the rest of the space for encounters between sites.
+	var site_budget := ceili((target - placed) * 0.45)
+	placed += _guard_regional_sites(spaced, gap, by_level, site_budget)
+	candidates.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return float(a.score) > float(b.score))
+	for candidate: Dictionary in candidates:
+		if placed >= target: break
+		var point: Vector2i = candidate.point
+		var offset := point.y * _map.width + point.x
+		if spaced[offset] or not _open_encounter_cell(point): continue
+		var home := _owner(point)
+		var start: Dictionary = _starts[home]
+		var distance := point.distance_squared_to(Vector2i(start.x, start.y))
+		if distance < 11 * 11: continue
+		var level := 2 if distance < 22 * 22 else (4 if _landform(point) == Landform.RIDGE else 3)
+		if config.guards == "strong": level += 1
+		_place_guard(point, _regional_guard(point, by_level.get(level, []), level), home)
+		_mark_radius(spaced, point, gap)
+		placed += 1
+
+func _guard_regional_sites(spaced: PackedByteArray, gap: int, by_level: Dictionary, budget: int) -> int:
+	var sites := _map.objects.filter(func(item: Dictionary) -> bool:
+		return item.group in ["additional_buildings", "mines", "mana_nodes", "artefacts", "global_spells"] and not _reward_guards.has(int(item.permanent_id) - 1)
+	)
+	_shuffle(sites)
+	var art := ELAdventureArt.new(_map)
+	var count := 0
+	for site: Dictionary in sites:
+		if count >= budget: break
+		var point := Vector2i(site.x, site.y)
+		if spaced[point.y * _map.width + point.x]: continue
+		var home := _owner(point)
+		var start: Dictionary = _starts[home]
+		var origin := Vector2i(start.x, start.y)
+		if point.distance_squared_to(origin) < 15 * 15: continue
+		var size: Vector2i = ELAdventureGrid.footprint(art.resolve(site).get("row", {}), int(site.rotation)).size
+		var spot := _reward_guard(Rect2i(point, size), point + (origin - point).sign() * 2)
+		if spot.is_empty(): continue
+		var at: Vector2i = spot.guard
+		if spaced[at.y * _map.width + at.x] or not _open_encounter_cell(at): continue
+		var level := 4 if config.guards == "strong" else 3
+		_record_reward_guard(int(site.permanent_id) - 1, at, spot.approach, _regional_guard(at, by_level.get(level, []), level), home)
+		_mark_radius(spaced, at, gap)
+		count += 1
+	return count
+
+func _open_encounter_cell(point: Vector2i) -> bool:
+	if not _fits(point, Vector2i.ONE, true, true): return false
+	for delta: Vector2i in ELInterception.DIRECTIONS:
+		var near := point + delta
+		if _guard_safe[near.y * _map.width + near.x] != 0: return false
+	var exits := 0
+	for delta: Vector2i in CARDINAL:
+		var near := point + delta
+		var offset := near.y * _map.width + near.x
+		if _exploration_access[offset] >= -1 and _occupied[offset] == 0 and _walkable(near): exits += 1
+	return exits >= 3
 
 func _populate_roaming_creatures(journey: Array, wilderness: Array) -> void:
 	var points: Array[Vector2i] = []
@@ -2111,7 +2292,7 @@ func _scenery_catalog() -> Dictionary:
 			if span == 1 and plant and ELAdventureGrid.footprint(row, 0).cells.is_empty(): undergrowth.append(entry)
 			if span > 4:
 				if span <= 8: landmarks.append(entry)
-				if not plant and span <= 10: cliffs.append(entry)
+				if not plant and span <= (12 if config.version >= REGIONAL_LANDSCAPES_VERSION else 10): cliffs.append(entry)
 			elif plant:
 				plants.append(entry)
 				if name.contains("bush"): brush.append(entry)
@@ -2127,13 +2308,20 @@ func _scenery_catalog() -> Dictionary:
 			"groves": groves, "landscape_rocks": rocks, "cliffs": cliffs, "undergrowth": undergrowth}
 	return pools
 
-func _make_scenery() -> void:
-	var pools := _scenery_catalog()
+func _scenery_land() -> PackedByteArray:
 	var land := PackedByteArray()
 	land.resize(_map.width * _map.height)
 	for y in range(2, _map.height - 2):
 		for x in range(2, _map.width - 2):
 			if _walkable(Vector2i(x, y)): land[y * _map.width + x] = 1
+	return land
+
+func _make_scenery() -> void:
+	var pools := _scenery_catalog()
+	var land := _scenery_land()
+	if config.version >= REGIONAL_LANDSCAPES_VERSION:
+		_make_regional_scenery(land, pools)
+		return
 	if config.version >= WILDERNESS_VERSION:
 		_make_groves(land, pools)
 		if config.version >= FRONTIERS_VERSION: _fill_scenery_between_groves(land, pools)
@@ -2144,6 +2332,129 @@ func _make_scenery() -> void:
 		for left in range(2, _map.width - 2, SCENERY_PATCH_SIZE):
 			var area := Rect2i(left, top, SCENERY_PATCH_SIZE, SCENERY_PATCH_SIZE)
 			_make_scenery_patch(area, land, pools)
+
+func _make_regional_scenery(land: PackedByteArray, pools: Dictionary) -> void:
+	for color: String in COLORS:
+		var pool: Dictionary = pools[color]
+		var dry := color in ["Red", "Black"]
+		var timber: Array = [] if dry else pool.canopy.filter(func(entry: Dictionary) -> bool:
+			return not str(entry.name).to_lower().begins_with("blueel")
+		)
+		if timber.is_empty() and pool.stones.is_empty() and not dry: timber = pool.plants
+		pool.groves = timber.filter(func(entry: Dictionary) -> bool:
+			return ELAdventureGrid.footprint(entry.row, 0).size != Vector2i.ONE
+		)
+		pool.edge_trees = timber.filter(func(entry: Dictionary) -> bool:
+			var size: Vector2i = ELAdventureGrid.footprint(entry.row, 0).size
+			return size.x <= 2 and size.y <= 2
+		)
+		var plants: Array = pool.plants if dry else pool.brush
+		var accent_size := 2 if dry else 1
+		pool.accents = plants.filter(func(entry: Dictionary) -> bool:
+			var size: Vector2i = ELAdventureGrid.footprint(entry.row, 0).size
+			return size.x <= accent_size and size.y <= accent_size
+		)
+		pool.pebbles = pool.stones.filter(func(entry: Dictionary) -> bool:
+			var size: Vector2i = ELAdventureGrid.footprint(entry.row, 0).size
+			return size.x <= 2 and size.y <= 2
+		)
+	_place_regional_woods(land, pools)
+	_scatter_ground_detail(land, pools)
+
+func _place_regional_cliffs(land: PackedByteArray, pools: Dictionary) -> void:
+	var dense: bool = config.scenery == 2
+	for summit: Vector2i in _summits:
+		var search := Rect2i(summit - Vector2i.ONE * 12, Vector2i.ONE * 25).intersection(Rect2i(2, 2, _map.width - 4, _map.height - 4))
+		var candidates: Array[Dictionary] = []
+		for y in range(search.position.y, search.end.y):
+			for x in range(search.position.x, search.end.x):
+				var offset := y * _map.width + x
+				var crest := _uplands[y * (_map.width + 1) + x]
+				if crest < 0.24 or land[offset] == 0 or _reserved[offset] != 0: continue
+				var point := Vector2i(x, y)
+				if not _clears_sites(point, 4): continue
+				var score := crest + _hash(x, y, 7933) * 0.31
+				candidates.append({"point": point, "score": score})
+		candidates.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return float(a.score) > float(b.score))
+		var silhouettes := 0
+		for candidate: Dictionary in candidates:
+			var point: Vector2i = candidate.point
+			if not _place_scenery(point, _scenery_pool(point, pools).cliffs, land, true): continue
+			silhouettes += 1
+			if silhouettes >= (3 if dense else 2): break
+		var outcrops := 0
+		for candidate: Dictionary in candidates:
+			var point: Vector2i = candidate.point
+			if not _place_scenery(point, _scenery_pool(point, pools).landscape_rocks, land, true): continue
+			outcrops += 1
+			if outcrops >= (5 if dense else 4): break
+
+func _place_regional_woods(land: PackedByteArray, pools: Dictionary) -> void:
+	var dense: bool = config.scenery == 2
+	var stride := _map.width + 1
+	var interiors: Array[Vector2i] = []
+	var edges: Array[Vector2i] = []
+	for y in range(2, _map.height - 2):
+		for x in range(2, _map.width - 2):
+			var offset := y * _map.width + x
+			if land[offset] == 0 or _reserved[offset] != 0 or _corridor[offset] != 0: continue
+			var field := y * stride + x
+			if _uplands[field] > 0.53: continue
+			var cover := _canopy[field]
+			if _shore[field] >= 4 and _shore[field] <= 8: cover += 0.13
+			var point := Vector2i(x, y)
+			var pool := _scenery_pool(point, pools)
+			var draw := _hash(x, y, 7951)
+			if not pool.groves.is_empty() and cover > (0.46 if dense else 0.51) and draw < cover * (0.76 if dense else 0.57):
+				interiors.append(point)
+			elif not pool.edge_trees.is_empty() and cover > 0.35 and draw < (0.21 if dense else 0.15):
+				edges.append(point)
+	_shuffle(interiors)
+	var margins := PackedByteArray()
+	margins.resize(land.size())
+	for point: Vector2i in interiors:
+		if _place_scenery(point, _scenery_pool(point, pools).groves, land, true):
+			_mark_radius(margins, point, 5)
+	_shuffle(edges)
+	for point: Vector2i in edges:
+		var pool := _scenery_pool(point, pools)
+		if margins[point.y * _map.width + point.x] == 0 and _hash(point.x, point.y, 7963) >= 0.24: continue
+		_place_scenery(point, pool.edge_trees, land, true)
+
+func _scatter_ground_detail(land: PackedByteArray, pools: Dictionary) -> void:
+	var candidates: Array[Vector2i] = []
+	for y in range(2, _map.height - 2):
+		for x in range(2, _map.width - 2):
+			var offset := y * _map.width + x
+			if land[offset] != 0 and _reserved[offset] == 0 and _hash(x, y, 7973) < 0.24:
+				candidates.append(Vector2i(x, y))
+	_shuffle(candidates)
+	var spaced := PackedByteArray()
+	spaced.resize(land.size())
+	for point: Vector2i in candidates:
+		var offset := point.y * _map.width + point.x
+		if spaced[offset] != 0 or _reserved[offset] != 0: continue
+		var field := point.y * (_map.width + 1) + point.x
+		var color := ELAdventureArt.terrain_color(_map.tile(point.x, point.y))
+		var draw := _hash(point.x, point.y, 7993)
+		var rocky := _rock[field] > 0.17
+		var shore := _shore[field] <= 4
+		var dry := color in ["Red", "Black"]
+		var pool := _scenery_pool(point, pools)
+		var stone := rocky or (shore and draw < 0.45) or (color == "Blue" and draw < 0.27)
+		var incidence := 0.82 if rocky else (0.43 if dry else 0.49)
+		if config.scenery == 2: incidence *= 1.28
+		if draw >= incidence: continue
+		var moisture := 0.69 * _canopy[field] + 0.31 * _noise(point.x, point.y, 12.0, 8009)
+		if dry and not stone and moisture < 0.29 and not shore: continue
+		if _place_scenery(point, pool.pebbles if stone else pool.accents, land, true):
+			var spacing := 2 if rocky else (4 if dry and not stone else 3)
+			_mark_radius(spaced, point, spacing)
+
+func _mark_radius(mask: PackedByteArray, point: Vector2i, radius: int) -> void:
+	for y in range(maxi(0, point.y - radius), mini(_map.height - 1, point.y + radius) + 1):
+		for x in range(maxi(0, point.x - radius), mini(_map.width - 1, point.x + radius) + 1):
+			if point.distance_squared_to(Vector2i(x, y)) <= radius * radius: mask[y * _map.width + x] = 1
 
 func _make_groves(land: PackedByteArray, pools: Dictionary) -> void:
 	# A single landscape-wide field drives shape and scale. Place the ridge
@@ -2595,7 +2906,7 @@ func _navigation_objects(include_actors := true) -> Dictionary:
 		objects[copy.uid] = copy
 	return objects
 
-func _reconnect_landscape(first_decoration: int) -> bool:
+func _reconnect_landscape(first_decoration: int, cliff_ids: Vector2i) -> bool:
 	var objects := _navigation_objects(false)
 	var grid := ELAdventureGrid.new()
 	if not grid.build(_map, objects):
@@ -2606,7 +2917,9 @@ func _reconnect_landscape(first_decoration: int) -> bool:
 	for id: int in objects:
 		var item: Dictionary = objects[id]
 		var at := Vector2i(item.x, item.y)
-		if item.group == "terrain_objects" and int(item.permanent_id) >= first_decoration: props[id] = at
+		var permanent_id := int(item.permanent_id)
+		var scenic_cliff := permanent_id >= cliff_ids.x and permanent_id < cliff_ids.y
+		if item.group == "terrain_objects" and (permanent_id >= first_decoration or scenic_cliff): props[id] = at
 		if item.type in ["hero", "monster"]: actors[at] = true
 	var ports_before := _ports.size()
 	var start := Vector2i(_starts[0].x, _starts[0].y)

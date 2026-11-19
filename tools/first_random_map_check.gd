@@ -58,7 +58,32 @@ func _installed_placement(profile: ELProfile) -> void:
 		check(built, "the director builds navigation and interception for the new placement")
 		if built: _placement_approaches(director, map.get_meta("random_map_report"))
 		state.close()
+		if not naval:
+			var previous := _generate(ELFirstRandomMap.new(), profile, options.merged({"version": 9}))
+			if previous != null: _regional_landscape(map, previous)
 	print("CHECKED: guarded rewards, opening routes and roadside forts on land and at sea")
+
+func _regional_landscape(current: ELAdventureMap, previous: ELAdventureMap) -> void:
+	var counts: Array[Dictionary] = []
+	for map: ELAdventureMap in [previous, current]:
+		var census := {"cliffs": 0, "dry_plants": 0, "woodland": 0, "creatures": 0}
+		var props := map.profile.table("TerrObj")
+		for item: Dictionary in map.objects:
+			if item.group == "np_heroes": census.creatures += 1
+			if item.group != "terrain_objects": continue
+			var shape := ELAdventureGrid.footprint(props.get(item.name, {}), int(item.rotation))
+			var name := str(item.name).to_lower()
+			if maxi(shape.size.x, shape.size.y) >= 5: census.cliffs += 1
+			if name.begins_with("red_tree") or name.begins_with("red_bush") or name.begins_with("blacktree") or name.begins_with("blackbush"):
+				census.dry_plants += 1
+			if shape.size != Vector2i.ONE and (name.begins_with("greenforest") or name.begins_with("bluepine")):
+				census.woodland += 1
+		counts.append(census)
+	var before := counts[0]
+	var after := counts[1]
+	check(after.cliffs > before.cliffs and after.woodland > 0, "the installed Frontier seed has larger rock formations and multi-tree groves")
+	check(after.dry_plants > 0 and after.dry_plants < before.dry_plants / 2.0, "dry vegetation is present without blanketing the Frontier seed")
+	check(after.creatures > before.creatures, "the Frontier seed has more actual neutral creatures than version 9")
 
 func _placement_approaches(director: ELAdventureDirector, report: Dictionary) -> void:
 	var state := director.state

@@ -114,14 +114,14 @@ A Seer can reveal a distant crystal ball and the area around it through fog.
 Larger naval worlds can have small outlying islands with artifacts and lairs.
 Use the violet markers in the setup preview to spot regions with discoveries.
 
-Woodland thins into brush and meadows at its edges. Hills rise above low
-riverbanks and beaches, and buildings sit on terraces cut into the ground.
-Shops gather along the same approach. Root and lotus production favor woods
-and riverbanks respectively, while gems and stone favor ridges. Roads and
-footpaths follow the terrain. Normal scenery uses native trees and rocks
-in groves, on slopes, and along road verges. **Dense** adds heavier cover.
+Woodland thins into brush and meadows at its edges. Native rock formations
+group along ridges above beaches, riverbanks and passes. Green and snowy
+regions have continuous groves with breaks for trails and clearings. Dry
+ground gets widely spaced patches of scrub, cacti and stones. **Dense**
+thickens the groves and rocky slopes. The shape of the ground is present at
+every scenery setting.
 
-On a fresh version 9 map, every reachable land tile has a pickup, usable site,
+On a fresh map, every reachable land tile has a pickup, usable site,
 or encounter within about a day and a half of travel for the slowest starting
 hero. The check uses actual movement costs, shorelines, and final scenery.
 Quiet stretches gain small resource caches where needed. Monster searches
@@ -237,8 +237,8 @@ economy and recruitment targets remained reachable from their own starting
 hero by land. These are mission-start routes on an explored board.
 
 The stock single and multiplayer missions also have about 22–24 creatures
-per thousand passable land tiles at the median map. Generated maps have
-about six. Stock guards within twelve tiles of a starting hero or castle
+per thousand passable land tiles at the median map. Version 8 maps in this
+sample had about six. Stock guards within twelve tiles of a starting hero or castle
 have median creature level two in both groups, rising to four farther out.
 In the generated sample, the median rises from two to three on land and
 stays at two on naval maps. The nearest other creature is typically five
@@ -273,9 +273,15 @@ and artifacts had every usable approach covered by their assigned field
 creature. Version 8 had no such prizes in this sample. Recruitment scrolls
 remain part of the starting progression.
 
+Version 10 adds more neutral creatures, with some covering the approaches to
+optional sites and others appearing near tracks and in clearings. The
+creatures draw from the installed roster, with tougher encounters on the
+farther ridges. Opening economy and recruitment routes stay clear of guard
+zones.
+
 ### Whole-map access
 
-Version 9 checks every passable tile after placing scenery. It opens short
+Since version 9, generation checks every passable tile after placing scenery. It opens short
 connections around buildings and through decoration, and adds a legal
 landing when a dry part of a naval map lacks a route. A shore at a guarded
 prize has a clearing around its approach so the route is visible at normal
@@ -294,7 +300,7 @@ Omitted keys use the defaults below.
 
 | Key | Default | Supported values and effect |
 | --- | --- | --- |
-| `version` | `9` | `9` adds guarded prize entrances and fewer, more widely spaced interactable sites. Versions 1–8 reproduce their original worlds. Version 1 uses its own schema. |
+| `version` | `10` | `10` adds regional ridges, biome-specific scenery and more neutral encounters. Versions 1–9 reproduce their original worlds. Version 1 uses its own schema. |
 | `seed` | `"212"` | A string of 1–64 characters, not blank-only, without control characters. Whitespace in a valid seed is significant. |
 | `size` | `96` | `64`, `96`, `128`, `160` tiles per side. |
 | `players` | `4` | `2`, `3`, `4`: one human and the remaining seats controlled by AI. |
@@ -305,7 +311,7 @@ Omitted keys use the defaults below.
 | `guards` | `"normal"` | `"none"`, `"normal"`, `"strong"`: neutral guard presence and strength. |
 | `faction` | `"Green"` | `"Green"`, `"Blue"`, `"Red"`, `"Black"`: Vitals, Kinets, Chaots, Synthets. The human is player 1. |
 | `roads` | `true` | Boolean; generated road ribbons and their normal land movement bonuses. |
-| `scenery` | `1` | `0` skips decorative terrain props, `1` adds groves, rock formations and roadside scenery, and `2` fills more of the available land. |
+| `scenery` | `1` | `0` skips decorative props, `1` adds groves, cliff faces and scattered ground props, and `2` thickens the groves and rocky slopes. |
 | `castle_health` | `30` | `20`, `30`, `60`: starting and maximum castle energy for every player. |
 | `naval` | `false` | Boolean; enable navigable seas and explicit harbors. |
 | `water` | `"normal"` | `"low"`, `"normal"`, `"high"`: relative water coverage. |
@@ -323,7 +329,7 @@ monsters** option also keeps its normal rules.
 
 ## Share and remember a setup
 
-**Copy setup** creates an `EL1R9:` code for a new world in the code field and clipboard. Paste a
+**Copy setup** creates an `EL1R10:` code for a new world in the code field and clipboard. Paste a
 complete code and press **Load setup** to restore its seed and world settings.
 Choose difficulty and AI separately. The code is a prefix followed by Base64
 encoded UTF-8 JSON; it is a recipe, not a map archive.
@@ -342,7 +348,7 @@ modifies the installed original game's files.
 ```gdscript
 var generator := ELFirstRandomMap.new()
 var map := generator.generate(profile, {
-    "version": 9,
+    "version": 10,
     "seed": "island-expedition",
     "size": 128,
     "players": 4,

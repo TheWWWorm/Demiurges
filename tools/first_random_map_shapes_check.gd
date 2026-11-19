@@ -46,7 +46,7 @@ func check(ok: bool, what: String) -> void:
 func _configuration() -> void:
 	label = "shape settings"
 	var defaults := ELFirstRandomMap.defaults()
-	check(defaults.version == ELFirstRandomMapV2.GUARDED_PRIZES_VERSION and defaults.has("naval") and defaults.has("water") and defaults.has("coast"), "new recipes use guarded prizes and keep the naval settings schema")
+	check(defaults.version == ELFirstRandomMapV2.REGIONAL_LANDSCAPES_VERSION and defaults.has("naval") and defaults.has("water") and defaults.has("coast"), "new recipes use regional landscapes and keep the naval settings schema")
 	check(ELFirstRandomMap.normalize(JSON.parse_string(JSON.stringify(defaults))) == defaults, "settings survive JSON numeric conversion")
 	for options: Dictionary in [{"naval": 1}, {"naval": "true"}, {"water": true}, {"water": "huge"}, {"coast": []}, {"coast": "straight"}, {"version": 1, "naval": true}]:
 		check(ELFirstRandomMap.normalize(options).is_empty(), "malformed or wrong-version settings are rejected: " + JSON.stringify(options))
