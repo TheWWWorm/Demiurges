@@ -37,6 +37,14 @@ const CAMERA_CLEARANCE := 0.25
 ## hidden while the camera stands beyond the ring; made on first use.
 var _hall_shell: Array[ELModel] = []
 var _hall_shell_found := false
+## Secondary scenery at the ring's edge, found on first use.
+var _edge_scenery: Array[Dictionary] = []
+var _edge_scenery_found := false
+## How far from the centre secondary scenery counts as standing at the ring.
+const EDGE_SCENERY_RADIUS := 12.0
+## A gate at the ring hides while the camera's bearing from the centre lies
+## within this angle of its own (the Ether plane's four gates stand 90 apart).
+const EDGE_SCENERY_ANGLE := deg_to_rad(35.0)
 var _scenery: Dictionary = {}
 ## Scenery standing in the ring (not the backdrop), and its triangles in
 ## arena space once asked for: [{"box": Rect2 (x, z), "triangles": PackedVector3Array}].
@@ -596,6 +604,11 @@ func clear_camera_view(camera_position: Vector3, target: Vector3, framed: Array 
 	var outside := Vector2(camera_position.x, camera_position.z)
 	var beyond := is_finite(ring) and outside.length() > ring
 	for shell: ELModel in _hall_shell_models(): shell.visible = not beyond
+	# A gate at the ring's edge hides whenever the camera stands beyond it on
+	# its side: the view passes over its top but it still covers the fight.
+	for gate: Dictionary in _edge_scenery_models():
+		var bearing: Vector2 = gate.bearing
+		(gate.model as ELModel).visible = not (outside.length() > bearing.length() and absf(bearing.angle_to(outside)) < EDGE_SCENERY_ANGLE)
 	for child: ELModel in _camera_obstacles:
 		var obscures := false
 		if beyond:
@@ -664,6 +677,24 @@ func _camera_ray_hits(part: MeshInstance3D, eye: Vector3, focus: Vector3) -> boo
 			if Geometry3D.segment_intersects_triangle(eye, focus, faces[i], faces[i + 1], faces[i + 2]) != null:
 				return true
 	return false
+
+## Secondary scenery standing out at the ring (the Ether plane's gates under
+## its columns) rather than in the middle: [{"model", "bearing" (x, z)}].
+func _edge_scenery_models() -> Array[Dictionary]:
+	if _edge_scenery_found: return _edge_scenery
+	_edge_scenery_found = true
+	for model: ELModel in _secondary_scenery:
+		if not is_instance_valid(model): continue
+		var centre := Vector3.ZERO
+		var pieces := 0
+		for part: MeshInstance3D in model.parts.values():
+			if part.mesh == null: continue
+			centre += (part.global_transform * part.mesh.get_aabb()).get_center()
+			pieces += 1
+		if pieces == 0: continue
+		var bearing := Vector2(centre.x, centre.z) / pieces
+		if bearing.length() > EDGE_SCENERY_RADIUS: _edge_scenery.append({"model": model, "bearing": bearing})
+	return _edge_scenery
 
 ## The tall pieces of an enclosed hall that are not its arches: from beyond
 ## the ring their pillars stand across the picture.
