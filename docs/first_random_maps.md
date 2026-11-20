@@ -317,9 +317,12 @@ under half of the land in rounded blocks, parted by a maze of lanes two to four
 tiles wide. The lanes follow the borders between irregular cells about 24
 tiles across. Close to a third of those borders stay closed, which leaves long
 walls and dead ends, and the lanes widen into small yards where three cells
-meet. Roads follow the lanes, so they wind around the blocks. They are one
-tile wide and climb diagonals as staircases, use one road texture, and leave
-no stubs to guarded prizes. Sites keep open ground only on the side facing
+meet. Snow takes narrower lanes and a few small fields among its pines.
+Roads follow the lanes, so they wind around the blocks. They are one tile
+wide and climb diagonals as staircases. As in the stock missions, they have
+no drawn surface: their tiles take the path ground of their climate, which
+the terrain blends into a soft band. Short side spurs and stubs to guarded
+prizes are left out, so roads rarely branch. Sites keep open ground only on the side facing
 their lane, and woods and rock close in around castles except at the gate,
 as in the stock missions. The scenery runs to the edge of the map. Each ground
 takes its props in the proportions the original missions use, and the largest

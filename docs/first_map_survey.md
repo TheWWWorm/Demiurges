@@ -140,6 +140,24 @@ props three to four tiles across, 18% two-tile props and 8% single tiles.
 8. Place about 16–18 interactable sites per 1000 land tiles, about four tiles
    apart.
 
+## Roads
+
+Twenty-six of the 37 stock missions have roads. The road bytes only set
+movement cost and the minimap colour; the game draws no road surface.
+Instead, about three in four road tiles carry the climate's path ground on
+their corners (kind 0 on grass, 4 on snow, 8 on red ground and 12 on tan
+ground), and the tile blending shows that as a soft band. On snow and tan
+ground the path ground looks almost the same as the field around it.
+
+Stock roads are one tile wide and climb diagonals as staircases; 44% of
+their tiles are turns. They branch rarely: 3% of road tiles are junctions,
+and a map holds 20 to 40 separate road pieces, the largest 60 to 180
+tiles long.
+
+Version 13 paints its roads the same way. After it drops short side spurs,
+36% of its road tiles are turns and 6% are junctions. Its roads still form
+one network between the castles rather than separate pieces.
+
 ## Comparison with generated maps
 
 Generated figures come from 2 seeds (212 and audit-7) of each of the 11
@@ -150,16 +168,16 @@ the same set.
 | --- | ---: | ---: | ---: |
 | Ground relief | flat | hills and valleys | flat |
 | Scenery props per 1000 land | 123 | 49 | 182 |
-| Scenery cover % of land | 41.5 | 14.4 | 46.3 |
+| Scenery cover % of land | 41.5 | 14.4 | 50.0 |
 | Cover from props spanning 5+ tiles | 50% | — | 33% |
 | Mean prop footprint, tiles | 4.9 | 2.9 | 2.5 |
 | Mean scenery cluster, tiles | 44 | — | 48 |
-| Walkable tiles with clearance ≤ 1 | 72% | 51% | 67% |
-| Walkable tiles with clearance ≥ 4 | 6.8% | 4.2% | 1.0% |
-| Widest open spot (clearance) | 4.9 | 9.6 | 8.8 |
-| Narrow share of castle routes | 79% | 49% | 64% |
-| Castle route / straight line | 1.4 | 1.1 | 1.1 |
-| Road % of land | 4.4 | 4.9 | 5.9 |
+| Walkable tiles with clearance ≤ 1 | 72% | 51% | 74% |
+| Walkable tiles with clearance ≥ 4 | 6.8% | 4.2% | 0.1% |
+| Widest open spot (clearance) | 4.9 | 9.6 | 8.3 |
+| Narrow share of castle routes | 79% | 49% | 67% |
+| Castle route / straight line | 1.4 | 1.1 | 1.2 |
+| Road % of land | 4.4 | 4.9 | 5.6 |
 | Creatures per 1000 land | 10.2 | 8.6 | 10.2 |
 | Creatures in passages | 59% | 71% | 90% |
 | Creatures near a site | 49% | 36% | 69% |
@@ -171,8 +189,10 @@ the same set.
 | Gap to nearest creature, tiles | 5.4 | 5.0 | 5.5 |
 | Gap to nearest site, tiles | 4.2 | 5.2 | 5.2 |
 
-Scenery cover by ground in version 13 is Red 54%, Green 51%, Black 52% and
-Blue 31%, against 62%, 45%, 42% and 24% in the stock missions. The share of
+Scenery cover by ground in version 13 is Red 54%, Green 51%, Black 51% and
+Blue 48%, against 62%, 45%, 42% and 24% in the stock missions. Snow is
+deliberately closer to the other grounds than in the stock missions, so it
+keeps the maze of lanes instead of opening into wide fields. The share of
 creatures in passages was not measured again after the last change.
 
 Scenery cover in rings around castles (tiles from the walls) is 41% at one
@@ -185,11 +205,11 @@ Known differences in version 13:
 - Large cliffs make up less of the cover (33% against 50%). Mass edges are
   irregular, so many gaps fit only single-tile props, which brings the mean
   prop footprint down to 2.5 tiles against 4.9.
-- Scenery covers somewhat more land (46% against 42%), and roads take a
-  little more of it (5.9% against 4.4%).
+- Scenery covers more land (50% against 42%), mostly on snow, and roads
+  take a little more of it (5.6% against 4.4%).
 - Starting areas and the centres of naval maps can still hold a clearing
   wider than any in the stock single and multiplayer missions.
 - Creatures within ten steps of a castle are about one level stronger than
   in the stock missions.
 - Roads now wind along the lanes, but the shortest walking route between
-  castles is still straighter than in the stock missions (1.1 against 1.4).
+  castles is still straighter than in the stock missions (1.2 against 1.4).

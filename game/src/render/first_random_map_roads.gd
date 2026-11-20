@@ -41,6 +41,8 @@ func build(map: ELAdventureMap) -> bool:
 	_map_size = Vector2i(map.width, map.height)
 	_surface_map = map
 	var recipe := ELFirstRandomMap.configuration(map)
+	# Version 13 paints its roads into the ground, as the stock maps do.
+	if int(recipe.get("version", 0)) >= ELFirstRandomMapV2.STOCK_LAYOUT_VERSION: return false
 	var wilderness := int(recipe.get("version", 0)) >= ELFirstRandomMapV2.WILDERNESS_VERSION
 	var phase := (ELFirstRandomMap.seed_for_config(recipe) % 630) * 0.01 if wilderness else 0.0
 	var trails := _trail_network(map) if wilderness else {}

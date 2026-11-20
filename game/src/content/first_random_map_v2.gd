@@ -407,6 +407,13 @@ func generate(profile: ELProfile, options: Dictionary = {}) -> ELAdventureMap:
 	if not _check_terrain(): return null
 	if config.version >= GUARD_POSTS_VERSION and config.guards != "none":
 		if not _post_field_guards(): return null
+	if config.version >= STOCK_LAYOUT_VERSION and config.scenery > 0:
+		# A creature posted in the only gap to a site closes it; it goes.
+		for attempt in 6:
+			_unreached_id = -1
+			if _check_access(false, config.version >= RELIEF_VERSION): break
+			if _unreached_id < 0 or not _carve_woods(_unreached_id, first_decoration, cliff_ids, true): return null
+		error = ""
 	if not _check_access(false, config.version >= RELIEF_VERSION): return null
 	# Stock maps are flat; their hills are props and rock tiles. Version 13
 	# keeps the ground level instead of sculpting mesas and shelves.
@@ -2837,7 +2844,9 @@ func _make_scenery() -> void:
 func _make_vein_scenery(land: PackedByteArray, pools: Dictionary) -> void:
 	var w := _map.width
 	var h := _map.height
-	if config.roads: _tidy_roads()
+	if config.roads:
+		_tidy_roads()
+		_paint_road_ground()
 	var art := ELAdventureArt.new(_map)
 	var open := PackedByteArray()
 	open.resize(w * h)
@@ -3040,9 +3049,9 @@ func _cell_lanes() -> PackedByteArray:
 					elif d < near[1][0]: near = [near[0], [d, index], near[1]]
 					elif d < near[2][0]: near[2] = [d, index]
 			var ground := ELAdventureArt.terrain_color(_map.tile(x, y))
-			var width: float = {"Blue": 4.6, "Green": 1.9, "Black": 1.6, "Red": 1.3}.get(ground, 1.9)
-			# Stock snow is mostly open field with stands of pine.
-			if ground == "Blue" and _noise(x, y, 7.0, 6401) > 0.58:
+			var width: float = {"Blue": 2.4, "Green": 1.9, "Black": 1.6, "Red": 1.3}.get(ground, 1.9)
+			# Snow keeps a few small open fields among its stands of pine.
+			if ground == "Blue" and _noise(x, y, 7.0, 6401) > 0.8:
 				lanes[y * w + x] = 1
 				continue
 			var a: int = mini(near[0][1], near[1][1])
@@ -3823,6 +3832,47 @@ func _connect(from: Vector2i, to: Vector2i, width: int, road: bool, trunk := fal
 				if guard_route and not _guard_safe.is_empty(): _guard_safe[cell] = 1
 	return not path.is_empty()
 
+## Stock roads have no drawn surface. Their tiles carry the climate's path
+## ground (green 0, snow 4, red 8, tan 12) on every corner, and the tile
+## blending turns that into a soft band. Corners whose transition the
+## installed tileset cannot draw keep their ground.
+func _paint_road_ground() -> void:
+	var stride := _map.width + 1
+	var changed := {}
+	for y in _map.height:
+		for x in _map.width:
+			var road := int(_map.roads[y * _map.width + x])
+			if road == 0 or road == 255: continue
+			for corner: Vector2i in [Vector2i(x, y), Vector2i(x + 1, y), Vector2i(x, y + 1), Vector2i(x + 1, y + 1)]:
+				var index := corner.y * stride + corner.x
+				if changed.has(index): continue
+				var kind := int(_map.terrain[index])
+				var path := _path_kind(kind & ~ELTileSet.GREY)
+				if path < 0 or path == kind & ~ELTileSet.GREY: continue
+				changed[index] = kind
+				_map.terrain[index] = path | (kind & ELTileSet.GREY)
+	for sweep in 4:
+		var reverted := false
+		for index: int in changed.keys():
+			var corner := Vector2i(index % stride, index / stride)
+			for cell: Vector2i in [corner - Vector2i.ONE, corner - Vector2i(0, 1), corner - Vector2i(1, 0), corner]:
+				if cell.x < 0 or cell.y < 0 or cell.x >= _map.width or cell.y >= _map.height: continue
+				var corners: Array[int] = [_map.tile(cell.x, cell.y), _map.tile(cell.x + 1, cell.y), _map.tile(cell.x + 1, cell.y + 1), _map.tile(cell.x, cell.y + 1)]
+				if not _profile.terrain_tiles.plan(corners, 0).is_empty(): continue
+				_map.terrain[index] = changed[index]
+				changed.erase(index)
+				reverted = true
+				break
+		if not reverted: break
+
+func _path_kind(kind: int) -> int:
+	match ELAdventureArt.terrain_color(kind):
+		"Green": return 0
+		"Blue": return 4
+		"Red": return 8
+		"Black": return 12
+	return -1
+
 ## Stock roads are one tile wide. Thin the blocks where merged routes
 ## run side by side, without cutting the network, and drop fragments of
 ## fewer than four road tiles.
@@ -3859,6 +3909,47 @@ func _tidy_roads() -> void:
 					piece.append(next)
 			if piece.size() < 4:
 				for at: Vector2i in piece: _map.roads[at.y * w + at.x] = 0
+	_prune_road_spurs()
+
+## Stock roads branch rarely: about 3% of their tiles are junctions. Drop
+## spurs of up to three tiles that leave a road and end away from any site.
+func _prune_road_spurs() -> void:
+	var w := _map.width
+	var sites := PackedByteArray()
+	sites.resize(w * _map.height)
+	for item: Dictionary in _map.objects:
+		if item.group == "terrain_objects": continue
+		_mark_radius(sites, Vector2i(item.x, item.y), 3)
+	var orthogonal: Array[Vector2i] = [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]
+	var links := func(at: Vector2i) -> Array[Vector2i]:
+		var out: Array[Vector2i] = []
+		for step: Vector2i in orthogonal:
+			var next := at + step
+			if _inside(next) and _map.roads[next.y * w + next.x] != 0: out.append(next)
+		return out
+	for sweep in 2:
+		for y in _map.height:
+			for x in w:
+				var end := Vector2i(x, y)
+				if _map.roads[y * w + x] == 0 or sites[y * w + x] != 0: continue
+				var around: Array[Vector2i] = links.call(end)
+				if around.size() != 1: continue
+				var spur: Array[Vector2i] = [end]
+				var at: Vector2i = around[0]
+				var previous := end
+				var junction := false
+				while spur.size() <= 3:
+					var next: Array[Vector2i] = links.call(at)
+					if next.size() >= 3:
+						junction = true
+						break
+					if next.size() != 2: break
+					spur.append(at)
+					var forward: Vector2i = next[0] if next[1] == previous else next[1]
+					previous = at
+					at = forward
+				if not junction or spur.size() > 3: continue
+				for cell: Vector2i in spur: _map.roads[cell.y * w + cell.x] = 0
 
 ## A road cell whose removal keeps its road neighbours joined through the
 ## rest of its 3x3 block, and which is not the end of a road.
@@ -4026,9 +4117,10 @@ func _reconnect_landscape(first_decoration: int, cliff_ids: Vector2i) -> bool:
 
 ## Version 13: remove the generated props on the shortest orthogonal way
 ## from the reached ground to a sealed site. Creatures and fixed objects
-## stay; a site behind a guard the woods narrowed opens this way. False
-## when no such way exists.
-func _carve_woods(id: int, first_decoration: int, cliff_ids: Vector2i) -> bool:
+## stay; a site behind a guard the woods narrowed opens this way. With
+## `creatures`, remove the creatures on that way instead and keep every
+## prop. False when no such way exists.
+func _carve_woods(id: int, first_decoration: int, cliff_ids: Vector2i, creatures := false) -> bool:
 	if _last_reached.size() != _map.width * _map.height: return false
 	var objects := _navigation_objects()
 	var grid := ELAdventureGrid.new()
@@ -4037,6 +4129,9 @@ func _carve_woods(id: int, first_decoration: int, cliff_ids: Vector2i) -> bool:
 	for uid: int in objects:
 		var item: Dictionary = objects[uid]
 		var permanent_id := int(item.permanent_id)
+		if creatures:
+			if item.group == "np_heroes" and uid != id and grid.contains(Vector2i(item.x, item.y)): owner[_index(Vector2i(item.x, item.y))] = uid
+			continue
 		if item.group != "terrain_objects" or not (permanent_id >= first_decoration or (permanent_id >= cliff_ids.x and permanent_id < cliff_ids.y)): continue
 		for cell: Vector2i in grid.footprints.get(uid, {}).get("cells", []):
 			var point := cell + Vector2i(item.x, item.y)
@@ -4082,7 +4177,7 @@ func _carve_woods(id: int, first_decoration: int, cliff_ids: Vector2i) -> bool:
 			var next := at + delta
 			if not grid.contains(next) or (config.naval and _sea_cell(next)): continue
 			var index := _index(next)
-			if grid.actor_blockers[index] != 0 or body.has_point(next): continue
+			if body.has_point(next) or (grid.actor_blockers[index] != 0 and not owner.has(index)): continue
 			var step := 0
 			if owner.has(index): step = 1
 			elif grid.land.is_point_solid(next): continue
@@ -4099,6 +4194,16 @@ func _carve_woods(id: int, first_decoration: int, cliff_ids: Vector2i) -> bool:
 		walk = previous[walk]
 	if removed.is_empty(): return false
 	_map.objects = _map.objects.filter(func(item: Dictionary) -> bool: return not removed.has(int(item.permanent_id) - 1))
+	if creatures:
+		for uid: int in removed:
+			_important.erase(uid)
+			if report.get("passage_guards") is Dictionary: report.passage_guards.erase(uid)
+		if report.get("roaming_creatures") is Array:
+			report.roaming_creatures = report.roaming_creatures.filter(func(uid: int) -> bool: return not removed.has(uid))
+		for prize: int in _reward_guards.keys():
+			if removed.has(int(_reward_guards[prize])):
+				_reward_guards.erase(prize)
+				_gated_prizes.erase(prize)
 	return true
 
 ## Version 13: a diagonal step between two cells blocked by objects or
