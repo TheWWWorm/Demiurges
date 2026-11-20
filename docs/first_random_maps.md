@@ -338,7 +338,12 @@ row. The woods keep only the first three rows before the stairs open, and
 close in elsewhere.
 On a home island too small for a starting economy with that rule, the
 generator builds the same map again and lets only the starting mines and
-shops use the approach. A site, creature or yard away from the lanes gets a
+shops use the approach, then looks farther across the homeland if a mine
+still does not fit. If a seed's layout still leaves a site or economy
+without room, the generator builds it again from up to four derived layout
+seeds. The seed, title and map id stay the same, so the same settings
+always give the same map. All 440 maps of a sweep over every preset, four
+sizes and ten seeds generate this way. A site, creature or yard away from the lanes gets a
 winding path two tiles wide to the nearest open ground joined to a castle or
 harbor on its island. The nearest pockets join first, so later paths branch
 off earlier ones instead of running side by side. Paths to guarded prizes

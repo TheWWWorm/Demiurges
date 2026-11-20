@@ -174,6 +174,9 @@ var _apron_level := 0
 ## that left no room for it.
 var _economy_apron := true
 var _economy_crowded := false
+## Version 13: derived layout seeds tried when a seed's layout fails.
+const LAYOUT_VARIANTS := 5
+var _layout_variant := 0
 var _prize_scenery := {}
 var _gated_prizes := {}
 var _approach_clearings := PackedByteArray()
@@ -264,13 +267,34 @@ static func content_hash(map: ELAdventureMap) -> String:
 	return JSON.stringify(data, "", true).sha256_text()
 
 func generate(profile: ELProfile, options: Dictionary = {}) -> ELAdventureMap:
+	var map := _generate_layout(profile, options)
+	if map != null or config.is_empty() or int(config.version) < STOCK_LAYOUT_VERSION: return map
+	# Version 13: a seed whose layout leaves a site or economy without room
+	# is built again from a derived layout seed. The seed, title and map id
+	# stay the same, so the same settings always give the same map.
+	var first_error := error
+	for variant in range(1, LAYOUT_VARIANTS):
+		var retry := ELFirstRandomMapV2.new()
+		retry._layout_variant = variant
+		map = retry._generate_layout(profile, options)
+		if map == null: continue
+		error = retry.error
+		config = retry.config
+		report = retry.report
+		report.layout_variant = variant
+		return map
+	error = first_error
+	return null
+
+## One layout; when the castle approaches left no room for a starting
+## economy, the same layout again with the economy free to use them.
+func _generate_layout(profile: ELProfile, options: Dictionary) -> ELAdventureMap:
 	var map := _generate_map(profile, options)
 	if map != null or not _economy_crowded: return map
-	# The castle approaches left no room for a starting economy: build the
-	# same map again with the economy free to use them.
 	var retry := ELFirstRandomMapV2.new()
 	retry._economy_apron = false
-	map = retry.generate(profile, options)
+	retry._layout_variant = _layout_variant
+	map = retry._generate_map(profile, options)
 	error = retry.error
 	config = retry.config
 	report = retry.report
@@ -284,6 +308,7 @@ func _generate_map(profile: ELProfile, options: Dictionary) -> ELAdventureMap:
 	if profile == null or profile.id != "el1": return _fail("Random maps require Etherlords I game files.")
 	_profile = profile
 	_rng = seed_for_config(config)
+	if _layout_variant > 0: _rng = hash([_rng, _layout_variant]) & 0x7fffffff
 	_terrain_seed = _rng
 	if not _read_catalog(): return null
 	_map = ELAdventureMap.new()
@@ -1539,6 +1564,11 @@ func _make_homelands() -> bool:
 			var size: Vector2i = ELAdventureGrid.footprint(entry.row, 0).size
 			_apron_level = 0 if _economy_apron else 2
 			var position := _find_spot(desired, size, 16, index, false, true)
+			if position == NO_SPOT and config.version >= STOCK_LAYOUT_VERSION and not _economy_apron:
+				# A crowded homeland: let the site touch a planned route, then
+				# look farther across the same homeland.
+				position = _find_spot(desired, size, 16, index, false, false)
+				if position == NO_SPOT: position = _find_spot(Vector2i(origin), size, 24, index, false, false)
 			_apron_level = 0
 			if position == NO_SPOT:
 				_economy_crowded = _economy_apron and config.version >= STOCK_LAYOUT_VERSION

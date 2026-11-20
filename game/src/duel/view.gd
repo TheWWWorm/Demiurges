@@ -5560,7 +5560,10 @@ func _creature_tip_text(id: int) -> String:
 	var creature := duel.entity(id)
 	var card := str(creature.card)
 	# The second game shows the printed card, including variable X/X stats.
-	if profile.id == "el2": return ELCombatTooltip.spell_text(profile, card, -1, duel.card_name(card))
+	if profile.id == "el2":
+		var printed := ELCombatTooltip.spell_text(profile, card, -1, duel.card_name(card))
+		var enchanted := _enchantment_lines(creature)
+		return printed if enchanted.is_empty() else printed + "\n\n" + "\n".join(enchanted)
 	var stats := _shown_creature_stats(id, creature)
 	var label := "%s %d/%d" % [duel.card_name(card), int(stats.power), maxi(0, int(stats.toughness) - shown_damage(id))]
 	label += "\n" + ELCombatTooltip.cost_line(profile, int(profile.table("CombatSpells").get(card, {}).get("Cost", 0)))
