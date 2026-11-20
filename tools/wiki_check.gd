@@ -257,6 +257,9 @@ func _map_objects(screen: ELWikiScreen, profiles: Dictionary, shots: String) -> 
 				named += 1
 				check(ELWikiHtml.object_id("%s/%s" % [object[0], object[1]]) != "", "%s/%s: %s/%s is a valid object" % [lang, row.key, object[0], object[1]])
 				if not profiles.has(object[0]) or lang != "en": continue
+				if ELWikiPreview.is_flat(str(object[1])):
+					check(ELWikiPreview.flat_picture(profiles[object[0]], object[1]) != null, "%s: picture %s/%s exists" % [row.key, object[0], object[1]])
+					continue
 				var model := str(ELWikiPreview.object_row(profiles[object[0]], object[1]).get("Model", ""))
 				check(not model.is_empty() and ELModel.prepare(profiles[object[0]], model).is_empty(), "%s: map object %s/%s has a model" % [row.key, object[0], object[1]])
 	check(named > 0, "guides show map objects")

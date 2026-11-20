@@ -167,7 +167,7 @@ func poll() -> void:
 		var transport := (peer as ENetMultiplayerPeer).get_peer(_remote) if peer is ENetMultiplayerPeer else null
 		if transport != null: transport.set_timeout(32, 5000, CONNECT_TIMEOUT)
 	if _state == State.WAIT_SETUP and not _hello_sent and connection == MultiplayerPeer.CONNECTION_CONNECTED:
-		_hello_sent = _send(["hello", PROTOCOL, VERSION, EDITION])
+		_hello_sent = _send(["hello", PROTOCOL, VERSION, _rules_id()])
 	if peer.get_available_packet_count() > MAX_QUEUED: _invalid()
 	for index in mini(PACKETS_PER_POLL, peer.get_available_packet_count()):
 		if not _failure.is_empty(): break
@@ -249,18 +249,18 @@ func _receive_hello(packet: Array) -> void:
 	if _state != State.WAIT_HELLO or packet.size() != 4:
 		_invalid()
 		return
-	if not _compatible(packet):
+	if not _compatible(packet, _rules_id()):
 		_reject("version")
 		return
 	_state = State.WAIT_READY
-	_send(["setup", PROTOCOL, VERSION, EDITION, _setup.map, _setup.map_hash, _setup.players, _setup.difficulty,
+	_send(["setup", PROTOCOL, VERSION, _rules_id(), _setup.map, _setup.map_hash, _setup.players, _setup.difficulty,
 		_setup.seed, _setup.day, _setup.turn_seconds, _setup.combat_seconds])
 
 func _receive_setup(packet: Array) -> void:
 	if _state != State.WAIT_SETUP or not _hello_sent or packet.size() != 12:
 		_invalid()
 		return
-	if not _compatible(packet):
+	if not _compatible(packet, _rules_id()):
 		_reject("version")
 		return
 	if (not _valid_map_id(packet[4]) or not _valid_hash(packet[5]) or not packet[6] is Array or packet[6].size() != 2
@@ -310,7 +310,7 @@ func _reject(code: String) -> void:
 	_deadline = Time.get_ticks_msec() + 1000
 
 static func _rejection_text(code: String) -> String:
-	return "The installed original strategic map differs from the host." if code == "map" else "Use the same Demiurges version and Etherlords I edition."
+	return "The installed original strategic map differs from the host." if code == "map" else "Use the same Demiurges version and Etherlords I edition, with the same Etherlords II card balance option."
 
 func submit_plan(day: int, plan: Array) -> bool:
 	if not live or day != current_day or _local_ready or not _valid_plan(plan): return false
@@ -579,8 +579,12 @@ func _stop_discovery() -> void:
 	_discovery.close()
 	_discovery = null
 
-static func _compatible(packet: Array) -> bool:
-	return packet[1] is String and packet[1] == PROTOCOL and ELLuaSave._integer(packet[2], VERSION, VERSION) and packet[3] is String and packet[3] == EDITION
+static func _compatible(packet: Array, rules := EDITION) -> bool:
+	return packet[1] is String and packet[1] == PROTOCOL and ELLuaSave._integer(packet[2], VERSION, VERSION) and packet[3] is String and packet[3] == rules
+
+## The edition and its card balance (ELSecondBalance), which every player must share.
+func _rules_id() -> String:
+	return EDITION + ("+second_balance" if ELSecondBalance.active(_profile) else "")
 
 static func _valid_profile(profile: ELProfile, port: int) -> bool:
 	return profile != null and profile.id == EDITION and port >= 1024 and port <= 65535

@@ -375,7 +375,7 @@ func set_language(lang: String) -> void:
 func _show(scroll: float) -> void:
 	var row := _entry(page)
 	_article.clear()
-	var code := ELWikiHtml.to_bbcode(str(row.get("html", "")))
+	var code := ELWikiHtml.to_bbcode(ELWikiHtml.fill_game_texts(str(row.get("html", "")), profiles))
 	if not _notice.is_empty() and page == "home": code = "[i][color=#%s]%s[/color][/i]\n\n" % [MUTED.to_html(false), _notice.replace("[", "[lb]")] + code
 	_notice = ""
 	_article.parse_bbcode(code)
@@ -536,7 +536,8 @@ func show_object(index: int) -> void:
 	var object: Array = _objects[index]
 	_preview.show_object(profiles[object[0]], object[1])
 	if _object_choice != null: _object_choice.select(index)
-	_object_caption.text = (str(object[2]) + "\n" if _object_choice == null else "") + _text("turn")
+	var hint := "" if ELWikiPreview.is_flat(str(object[1])) else _text("turn")
+	_object_caption.text = ((str(object[2]) + "\n" if _object_choice == null else "") + hint).strip_edges()
 
 func _add_animation_controls(preview: ELWikiPreview) -> void:
 	var controls := HBoxContainer.new()

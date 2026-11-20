@@ -82,6 +82,7 @@ article .heroes figcaption { max-width: 200px; }
 article .objects { display: flex; flex-wrap: wrap; gap: 10px; margin: 8px 0 20px; clear: both; }
 article .objects figure { float: none; margin: 0; width: 132px; }
 article .objects figure.model img { width: 132px; height: 132px; }
+article .objects figure.flat img { width: 132px; height: auto; border: 1px solid var(--line); border-radius: 6px; background: #120e0b; }
 article .objects figcaption { font-size: 13px; line-height: 1.25; }
 article figcaption { text-align: center; font-size: 14px; color: var(--muted); margin-top: 4px; }
 td.changed { background: #4a3516; color: #ffd88a; }

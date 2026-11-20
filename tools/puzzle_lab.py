@@ -25,6 +25,10 @@ CORE = [
     "duel/state.gd", "duel/catalog.gd", "duel/match_save.gd",
     "duel/specs.gd", "duel/spell_charges.gd", "duel/hero_effects.gd",
     "duel/combat_search.gd", "duel/combat_brain.gd", "duel/puzzles.gd",
+    "duel/puzzle_recipes.gd", "duel/puzzle_proof.gd", "duel/puzzle_generator.gd", "duel/puzzle_advice.gd",
+    "duel/puzzle_zone_recipes.gd",
+    "duel/puzzle_mortality_recipes.gd",
+    "duel/puzzle_spell_recipes.gd",
     "content/runes.gd", "content/hero_skills.gd", "content/hero_progression.gd",
     "content/safe_file.gd",
 ]
@@ -394,7 +398,27 @@ def main() -> int:
     parser.add_argument("--workspace", type=Path)
     parser.add_argument("--prepare", action="store_true", help="Prepare an isolated lab and print its path.")
     args, forward = parser.parse_known_args()
-    destination = args.workspace or Path(tempfile.mkdtemp(prefix="demiurges-puzzle-lab-"))
+    # Godot runs from the isolated project, not from the caller's directory.
+    # Resolve file arguments before changing that context so documented
+    # repository-relative packs and reports keep pointing at the right files.
+    resolved = []
+    index = 0
+    while index < len(forward):
+        value = forward[index]
+        key, separator, path = value.partition("=")
+        if key in ("--file", "--report", "--commands"):
+            if not separator and index + 1 < len(forward) and not forward[index + 1].startswith("--"):
+                index += 1
+                path = forward[index]
+            if path and not path.startswith(("res://", "user://")):
+                target = Path(path).expanduser().resolve()
+                if key == "--report":
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                value = f"{key}={target}"
+        resolved.append(value)
+        index += 1
+    forward = resolved
+    destination = (args.workspace or Path(tempfile.mkdtemp(prefix="demiurges-puzzle-lab-"))).resolve()
     version = subprocess.run([args.godot, "--version"], capture_output=True, text=True, check=True).stdout
     prepare(destination, compatibility=version.startswith("4.6"))
     scanned = subprocess.run([args.godot, "--headless", "--editor", "--path", str(destination), "--quit"], text=True, capture_output=True)

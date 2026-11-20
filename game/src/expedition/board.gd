@@ -105,6 +105,15 @@ var _action_buttons: Array[Button] = []
 static func make(menu_kit: ELMenuKit, run: ELExpeditionRun, in_russian: bool) -> ELExpeditionBoard:
 	if menu_kit == null or menu_kit.theme() == null or not menu_kit.has_control(PANEL): return null
 	if run == null or run.phase not in ["reward", "rest", "event"] or not run.pending_card.is_empty(): return null
+	# Current rewards keep their receipt, reroll status and run context on
+	# one readable journal page, even after the reroll has been spent.
+	if run.balanced() and run.phase == "reward": return null
+	# The original shop art has a small deal table and icon-only stock. New
+	# narrative events, paid services and passive relics use the journal so
+	# their effects and unavailable choices stay visible and readable.
+	if run.expanded() and run.phase == "event": return null
+	var options := run.choices()
+	if not _fits_board(options): return null
 	var board := ELExpeditionBoard.new()
 	board.kit = menu_kit
 	board.profile = menu_kit.profile
@@ -113,16 +122,32 @@ static func make(menu_kit: ELMenuKit, run: ELExpeditionRun, in_russian: bool) ->
 	board.deck.assign(run.deck)
 	board.max_deck = ELExpeditionRun.MAX_DECK
 	board.health_text = board._text("Life %d / %d", "Здоровье %d / %d") % [run.health, run.max_health]
+	if run.expanded(): board.health_text += " · " + board._text("Gold %d", "Золото %d") % run.gold
 	var summary := run.room_summary()
 	board.room_title = str(summary.get("title", ""))
 	board.room_text = str(summary.get("description", ""))
 	board.can_scout = not run.upcoming().is_empty()
 	board.can_inspect = str(summary.get("illustration", "")) == "warden" and not run.opponent_at(run.current).is_empty()
-	for option: Dictionary in run.choices():
+	for option: Dictionary in options:
 		board._sort(option)
 	if board.phase == "reward" and board.offers.is_empty(): return null
 	board._build()
 	return board
+
+static func _fits_board(options: Array[Dictionary]) -> bool:
+	var plain_count := 0
+	var actions := {}
+	for option: Dictionary in options:
+		if bool(option.get("disabled", false)) or option.has("cost") or option.has("relic"): return false
+		var id := str(option.id)
+		var prefix := id.get_slice(":", 0)
+		if id in WAY_OUT: continue
+		if CARD_ACTIONS.has(prefix): actions[prefix] = true
+		elif id in PLAIN: plain_count += 1
+		elif str(option.get("card", "")).is_empty() and not option.has("artifact") and not option.has("incoming") and prefix != "train":
+			return false
+	# More rows would overflow the 116-pixel deal table at the original scale.
+	return plain_count + actions.size() <= 2
 
 func _text(en: String, ru: String) -> String:
 	return ru if russian else en
@@ -450,22 +475,28 @@ func _refresh() -> void:
 
 ## {icon, name, stats, text} for the detail box.
 func _subject() -> Dictionary:
+	var index := int(_hover[1])
 	match str(_hover[0]):
-		"shop": return offers[_hover[1]]
-		"bag": return _card_facts(deck[_hover[1]]).merged({"stats": _stats(deck[_hover[1]])})
+		"shop":
+			if index >= 0 and index < offers.size(): return offers[index]
+		"bag":
+			if index >= 0 and index < deck.size():
+				return _card_facts(deck[index]).merged({"stats": _stats(deck[index])})
 		"deal":
 			var entries: Array[Dictionary] = []
 			entries.append_array(plain)
 			entries.append_array(card_actions)
-			var entry := entries[_hover[1]]
-			var facts := {"name": entry.title, "text": entry.description}
-			if not entry.has("id") and marked >= 0: facts.stats = ELEncyclopaedia.name(profile, deck[marked])
-			return facts
+			if index >= 0 and index < entries.size():
+				var entry := entries[index]
+				var facts := {"name": entry.title, "text": entry.description}
+				if not entry.has("id") and marked >= 0: facts.stats = ELEncyclopaedia.name(profile, deck[marked])
+				return facts
 	if picked >= 0: return offers[picked]
 	if marked >= 0: return _card_facts(deck[marked])
 	if phase == "reward":
 		return {"name": _text("Choose a spell from the reward", "Выберите заклинание из награды"),
-			"stats": _text("Mark a spellbook card to replace it instead.", "Отметьте заклинание в книге, чтобы заменить его.")}
+			"stats": _text("Mark a spellbook card to replace it instead.", "Отметьте заклинание в книге, чтобы заменить его."),
+			"text": room_text}
 	return {"name": room_title, "text": room_text}
 
 func _stats(card: String) -> String:
@@ -476,7 +507,7 @@ func _stats(card: String) -> String:
 	if not strength.is_empty(): line += " · " + strength
 	match str(row.get("Rarity", "")):
 		"Rare": line += " · " + _text("Rare", "Редкое")
-		"Unique": line += " · " + _text("Unique", "Уникальное")
+		"Unique": line += " · " + _text("Unique", "Тайное")
 	var copies := deck.count(card)
 	if copies > 0: line += " · " + _text("%d in spellbook", "в книге: %d") % copies
 	return line

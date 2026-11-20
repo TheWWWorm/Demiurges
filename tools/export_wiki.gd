@@ -23,6 +23,10 @@ extends SceneTree
 
 const MODEL_SIZE := 768
 const OBJECT_SIZE := 512
+## Card icons (`Icon/<code>` entries, 50 px cells) and hero portraits
+## (`Portrait/<index>`, 100 x 70) are shown enlarged.
+const ICON_SIZE := Vector2i(150, 150)
+const PORTRAIT_SIZE := Vector2i(200, 140)
 const STAGE_SIZE := Vector2i(1536, 1536)
 
 func _initialize() -> void:
@@ -149,8 +153,20 @@ func _images(profile: ELProfile, catalog: ELWikiCatalog, folder: String) -> void
 			if object[0] != profile.id or seen.has("object:" + object[1]): continue
 			seen["object:" + object[1]] = true
 			var object_path := folder.path_join("object-%s.webp" % _slug(object[1]))
+			if ELWikiPreview.is_flat(object[1]):
+				# A card icon or a portrait: the picture itself, enlarged.
+				var side: Vector2i = ICON_SIZE if object[1].begins_with("Icon/") else PORTRAIT_SIZE
+				if not redo and FileAccess.file_exists(object_path) and Image.load_from_file(object_path).get_size() == side: continue
+				var texture := ELWikiPreview.flat_picture(profile, object[1])
+				if texture == null:
+					printerr("export_wiki: no picture ", object[1])
+					continue
+				var picture := texture.get_image()
+				picture.resize(side.x, side.y, Image.INTERPOLATE_LANCZOS)
+				if picture.save_webp(object_path) == OK: objects += 1
+				continue
 			if not redo and _image_at_size(object_path, OBJECT_SIZE): continue
-			if await _render(ELWikiPreview.stage_object(profile, object[1], STAGE_SIZE), object_path, 0.05, OBJECT_SIZE, ELWikiPreview.OBJECT_PITCH): objects += 1
+			if await _render(ELWikiPreview.stage_object(profile, object[1], STAGE_SIZE), object_path, 0.05, OBJECT_SIZE, ELWikiPreview.object_pitch(object[1])): objects += 1
 			else: printerr("export_wiki: no map object ", object[1])
 	print("export_wiki: %d icons, %d creature, %d hero and %d map object pictures -> %s" % [icons, models, heroes, objects, folder])
 

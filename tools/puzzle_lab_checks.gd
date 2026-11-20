@@ -287,6 +287,8 @@ static func run(profile: ELProfile, seed: Dictionary) -> Dictionary:
 	entry.objective = {"type": "win", "finish_mana": 0}
 	_check(ELPuzzles.valid_entry(entry, profile.id), "Expert level and zero final ether are valid")
 	entry.level = 5
+	_check(ELPuzzles.valid_entry(entry, profile.id), "Master level is a supported difficulty")
+	entry.level = 6
 	_check(not ELPuzzles.valid_entry(entry, profile.id), "unknown difficulty levels are rejected")
 	entry.level = 4
 	for requirement: String in ["finish_health", "finish_mana", "min_allies"]:

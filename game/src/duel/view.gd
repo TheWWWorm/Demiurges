@@ -398,6 +398,7 @@ func _ready() -> void:
 		elif arg == "--demo":
 			demo = true
 	_load_profiles()
+	_use_second_balance()
 	ELRemakeText.use(_shown_profile())
 	_build_ui()
 	if profiles.is_empty():
@@ -559,6 +560,7 @@ func _notification(what: int) -> void:
 			_queue_borderless_check()
 		return
 	if what == NOTIFICATION_WM_CLOSE_REQUEST and not get_tree().auto_accept_quit:
+		if not _save_expedition_before_exit(): return
 		if ELCrashReport.instance != null: ELCrashReport.instance.clean_exit()
 		ELAudio.quiet_quit(get_tree())
 		return
@@ -626,6 +628,9 @@ func _start(edition: String, options: Dictionary = {}, restored: ELDuel = null, 
 	if puzzle_mode != null and (restored == null or restored != puzzle_mode.duel()): puzzle_mode.close()
 	if replay_player != null and (restored == null or restored != replay_player.duel): _close_replay()
 	if esc_menu != null: esc_menu.hide()
+	# A new first-game battle takes the card balance chosen in Options; a
+	# resumed one (a map encounter, a save, a puzzle) the one it began with.
+	if edition == "el1": _use_second_balance(restored)
 	var next_duel := restored if restored != null else ELDuel.new()
 	if restored == null and not next_duel.start(profiles[edition], battle_seed, options):
 		_notice(next_duel.error)
@@ -5554,16 +5559,25 @@ func _hero_tip(side: int, control: Control = null) -> Dictionary:
 		var rank := int(hero.skills[code])
 		var skill := ELHeroSkills.definition(profile, code, rank)
 		var name := _original_text(str(skill.get("Name", "")), "")
-		if not name.is_empty(): skills.append("%s %s" % [name, ["I", "II", "III"][rank]])
+		if not name.is_empty(): skills.append("%s %s%s" % [name, ["I", "II", "III"][rank], _artifact_use_note(side) if code == "ARTF" else ""])
 	if not skills.is_empty(): lines.append(", ".join(skills))
 	var code := str(hero.get("spec", "NONE"))
 	if code != "NONE":
 		var name := _spec_text(code, "Name", "")
-		if not name.is_empty(): lines.append(name)
+		# The shared artifact count goes on the skill when it is listed,
+		# else on Expert Artificer; Rebirth works once per battle here.
+		if code == "ARTF" and not shown.has("ARTF"): name += _artifact_use_note(side)
+		elif code == "RVVE": name += " " + _t("(%d left)") % (0 if hero.get("revived", false) else 1)
+		if not name.strip_edges().is_empty(): lines.append(name)
 		var description := _spec_text(code, "Desc", "")
 		if not description.is_empty(): lines.append(description)
 	lines.append_array(_enchantment_lines(shown_hero(side)))
 	return ELCombatTooltip.hero_content(profile.id, portraits[side].texture, title, lines)
+
+## " (N left)": the artifact activations the hero has left this battle,
+## for the Artificer skill and Expert Artificer lines of its tooltip.
+func _artifact_use_note(side: int) -> String:
+	return " " + _t("(%d left)") % maxi(0, duel.artifact_limit(side) - int(duel.heroes[side].get("artifact_uses", 0)))
 
 ## The tooltip of a state or ability icon over a figure, both games: the
 ## icon's caption and its description (T_CREATURE_ICON_<n>C, "\n",
@@ -5602,16 +5616,47 @@ func _figure_tip(at: Vector2) -> Dictionary:
 func _creature_tip_text(id: int) -> String:
 	var creature := duel.entity(id)
 	var card := str(creature.card)
-	# The second game shows the printed card, including variable X/X stats.
-	if profile.id == "el2": return ELCombatTooltip.spell_text(profile, card, -1, duel.card_name(card))
 	var stats := _shown_creature_stats(id, creature)
-	var label := "%s %d/%d" % [duel.card_name(card), int(stats.power), maxi(0, int(stats.toughness) - shown_damage(id))]
+	var damage := shown_damage(id)
+	var damage_facts := _creature_damage_facts(int(stats.toughness), damage)
+	var piece := _puzzle_piece_reference(id)
+	# The second game shows the printed card, including variable X/X stats.
+	if profile.id == "el2":
+		var printed := ELCombatTooltip.spell_text(profile, card, -1, duel.card_name(card))
+		var facts := PackedStringArray()
+		if not piece.is_empty(): facts.append(piece)
+		if not damage_facts.is_empty(): facts.append(damage_facts)
+		return printed + ("\n\n" + "\n".join(facts) if not facts.is_empty() else "")
+	var label := "%s %d/%d" % [duel.card_name(card), int(stats.power), maxi(0, int(stats.toughness) - damage)]
+	if not piece.is_empty(): label += "\n" + piece
 	label += "\n" + ELCombatTooltip.cost_line(profile, int(profile.table("CombatSpells").get(card, {}).get("Cost", 0)))
+	if not damage_facts.is_empty(): label += "\n" + damage_facts
 	var description := profile.card_description(card)
 	if not description.is_empty() and description != card: label += "\n" + description
 	var worn := _enchantment_lines(creature)
 	if not worn.is_empty(): label += "\n\n" + "\n".join(worn)
 	return label
+
+## Remaining health alone hides how a wounded creature survives a change
+## of toughness. These are visible state facts, using presentation timing
+## so a pending hit is not disclosed before its ordinary health readout.
+func _creature_damage_facts(toughness: int, damage: int) -> String:
+	if damage <= 0: return ""
+	return _t("Toughness: %d · Damage taken: %d") % [toughness, damage]
+
+## A generated puzzle's optional advice names exact pieces. Keep that
+## reference inspectable even when two creatures have the same card and stats.
+func _puzzle_piece_reference(id: int) -> String:
+	if id < 2 or puzzle_mode == null or puzzle_mode.run == null or puzzle_mode.duel() != duel: return ""
+	if puzzle_mode.run.entry.get("generated") is not Dictionary: return ""
+	return _t("Puzzle piece #%d") % id
+
+## Enchantment copies may differ in age or remaining uses while sharing a
+## name. Their reference stays attached to the actual copy as the strip sorts.
+func _puzzle_enchantment_reference(id: int) -> String:
+	if id < 1 or puzzle_mode == null or puzzle_mode.run == null or puzzle_mode.duel() != duel: return ""
+	if puzzle_mode.run.entry.get("generated") is not Dictionary: return ""
+	return _t("Puzzle enchantment #%d") % id
 
 ## A remake addition to a figure's tooltip: each enchantment on it, by name
 ## with its card text, so spells cast on a creature or hero can be read
@@ -6878,6 +6923,15 @@ func _interface_page(page: VBoxContainer) -> void:
 	dome_toggle.disabled = not profiles.has("el2")
 	dome_toggle.toggled.connect(func(enabled: bool): settings.values.first_battle_dome = enabled)
 	_settings_row(gameplay, "Battle dome in the first game", "First game: when a battle is about to start on the map, the second game's ether dome rises over both sides, with its sound. Needs Etherlords II installed; applies from the next map loaded.", dome_toggle)
+	var balance_toggle := CheckButton.new()
+	balance_toggle.name = "SecondBalance"
+	balance_toggle.button_pressed = bool(settings.values.get("second_balance", false))
+	# A battle keeps the balance it began with; an online duel needs both players on the same one.
+	balance_toggle.disabled = not (profiles.has("el1") and profiles.has("el2")) or _second_balance_locked()
+	balance_toggle.toggled.connect(func(enabled: bool):
+		settings.values.second_balance = enabled
+		if not _second_balance_locked(): _use_second_balance())
+	_settings_row(gameplay, "Etherlords II card balance in the first game", SECOND_BALANCE_HELP, balance_toggle)
 	_settings_row(gameplay, "Free movement", "First game, single player: heroes move as soon as you confirm a route and may move several times a day until their movement points run out; computer players move their heroes the same way when you end the day. Off: the original orders, carried out together at night.", free_toggle)
 	var sharing := _settings_box(page, "Sharing")
 	var discord_toggle := CheckButton.new()
@@ -7423,6 +7477,7 @@ static func _switch_icon(on: bool, disabled: bool) -> Texture2D:
 
 ## Starts the game again (for a new renderer) and closes this one.
 func _restart_game() -> void:
+	if not _save_expedition_before_exit(): return
 	settings.save_file()
 	ELGraphicsSDK.write_owner_file(settings.values)
 	OS.create_process(OS.get_executable_path(), _relaunch_args(false))
@@ -7618,7 +7673,7 @@ func _battle_host() -> ELFrontMenu:
 				"Surrender": _ask_surrender()
 				"GOLoad": _esc_load()
 				"GOMenu": _esc_exit_to_menu()
-				"GOQuit": ELAudio.quiet_quit(get_tree())
+				"GOQuit": _quit_after_expedition_save()
 			# Another box replaced a waiting hand-over: show it again.
 			if hot_pending: call_deferred("_show_handover"))
 		options_host.slot_chosen.connect(_load_slot)
@@ -7642,6 +7697,9 @@ func _surrender_battle() -> void:
 	else: _notice("Surrender ends campaign battles and Duel mode rounds.")
 
 func _open_setup() -> void:
+	if expedition_run != null and expedition_run.refined() and not _expedition_save_error.is_empty():
+		_show_expedition()
+		return
 	if _arena_battle != null:
 		_notice("Return to the main menu to pause the Arena run first.")
 		return
@@ -7962,6 +8020,24 @@ func director_battle_open() -> bool:
 func _campaign_battle() -> ELDuel:
 	return campaign_view.director.encounter.battle if campaign_view != null and campaign_view.director != null and campaign_view.director.encounter != null else null
 
+const SECOND_BALANCE_HELP := "First game: every spell and creature the second game also has is played as in Etherlords II (update 1.03): its cost, power, toughness, abilities, description and rules, so both games share one balance. Heroes, artifacts, runes, global spells and the first game's own battle rules stay as they are; puzzles keep the original balance. Needs Etherlords II installed. Takes effect from the next battle; online, both players need the same choice."
+
+## Whether the first game's card balance must stay as it is for now: during
+## a battle in progress, which keeps the balance it began with, and an online
+## duel, whose players agreed on theirs.
+func _second_balance_locked() -> bool:
+	if network_duel != null or strategic_session != null or _campaign_battle() != null or _in_puzzle(): return true
+	return duel != null and duel.profile != null and duel.profile.id == "el1" and duel.phase != ELDuel.Phase.FINISHED and not (front_menu != null and front_menu.is_visible_in_tree())
+
+## Puts the first game on the second game's card balance or back on its own
+## (ELSecondBalance): as Options chooses, or as `battle` began, or with
+## `plain` its own (puzzles).
+func _use_second_balance(battle: ELDuel = null, plain := false) -> void:
+	if not profiles.has("el1"): return
+	var wanted := bool(settings.values.get("second_balance", false)) and not plain
+	if battle != null: wanted = bool(battle.setup.get("second_balance", false))
+	ELSecondBalance.apply(profiles.el1, profiles.get("el2"), wanted)
+
 ## The game being played on the map, whose own computer players' strength
 ## Options changes (ELAIChoice); null outside one and in a network game.
 func _ai_game() -> ELAdventureSession:
@@ -8027,6 +8103,8 @@ func _return_from_encounter() -> void:
 		_notice(campaign_view.director.error)
 		return
 	_encounter_start.clear()
+	# The map's next battles take the balance chosen in Options again.
+	if strategic_session == null: _use_second_balance()
 	menu.hide()
 	stage.hide()
 	stage.process_mode = Node.PROCESS_MODE_DISABLED
@@ -8302,6 +8380,10 @@ func _refresh_inspector() -> void:
 		for flag: String in entity.flags: flags.append(_t(ELCatalog.flag_name(flag)))
 		var shown := _shown_creature_stats(selected_creature, entity)
 		var stats := "%d / %d · %s" % [int(shown.power), int(shown.toughness) - shown_damage(selected_creature), ", ".join(flags)]
+		var damage_facts := _creature_damage_facts(int(shown.toughness), shown_damage(selected_creature))
+		if not damage_facts.is_empty(): stats += "\n" + damage_facts
+		var piece := _puzzle_piece_reference(selected_creature)
+		if not piece.is_empty(): stats += "\n" + piece
 		if shown_plane(selected_creature): stats += "\nPale aspect: common magic cannot affect it; it cannot attack or block."
 		var line := _label(stats, 13)
 		line.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -8336,6 +8418,10 @@ func _refresh_inspector() -> void:
 			if ability.effect == "artifact": text = "%s · artifact · %d charges" % [ability.name, ability.charges]
 			var button := _button(text, _select_ability.bind(selected_creature, ability))
 			button.set_meta("ability", ability.key)
+			var reference := _puzzle_enchantment_reference(int(ability.get("enchantment", -1)))
+			if not reference.is_empty():
+				button.text += "\n" + reference
+				button.tooltip_text = reference
 			button.disabled = not _human_turn() or not duel.can_use_ability(selected_creature, ability.key, listed)
 			if ability.effect == "artifact":
 				var reason := duel.artifact_error(selected_creature, int(ability.artifact))
@@ -8364,10 +8450,13 @@ func _refresh_inspector() -> void:
 		for enchantment: Dictionary in _shown_enchantments(selected_creature):
 			var row := _button(duel.card_name(enchantment.card), _remove_selected_enchantment.bind(selected_creature, int(enchantment.id)))
 			row.set_meta("enchantment", enchantment.id)
+			var reference := _puzzle_enchantment_reference(int(enchantment.id))
+			if not reference.is_empty(): row.text += "\n" + reference
 			if enchantment.card == "STSI":
 				var next_turn := duel.turn_serial + (2 if enchantment.owner == duel.attacker else 1)
 				row.text += "\nNext upkeep: %d ether" % duel.stasis_upkeep(enchantment, next_turn)
 			row.tooltip_text = profile.card_description(enchantment.card)
+			if not reference.is_empty(): row.tooltip_text = reference + "\n" + row.tooltip_text
 			row.disabled = not _removal_allowed(enchantment)
 			row.add_theme_color_override("font_disabled_color", INK)
 			rows.add_child(row)
@@ -8567,6 +8656,8 @@ func _fill_strip() -> void:
 			var tip := duel.card_name(enchantment.card)
 			if profile.id == "el2" and not ability.is_empty() and int(ability.get("cost", -1)) >= 0 and profile.text("T_ENCHANTMENT_COST_TT").count("%") == 2:
 				tip = profile.text("T_ENCHANTMENT_COST_TT") % [tip, int(ability.cost)]
+			var reference := _puzzle_enchantment_reference(int(enchantment.id))
+			if not reference.is_empty(): tip += "\n" + reference
 			# The card's text too, so a spell on a character can be read.
 			var about := profile.card_description(enchantment.card)
 			if not about.is_empty() and about != enchantment.card: tip += "\n" + about
@@ -9011,6 +9102,7 @@ func _remember_edition() -> void:
 ## Original front end (ELFrontMenu) over the remake's duel and campaign flows.
 func _show_front_menu() -> bool:
 	if campaign_view != null or profiles.is_empty(): return false
+	if not _save_expedition_before_exit(): return false
 	var edition := profile.id if profile != null else launch_profile
 	if not profiles.has(edition) or not ELFrontMenu.supports(profiles[edition]): return false
 	# Never discard a live Arena action/result after a failed checkpoint.
@@ -9044,7 +9136,8 @@ func _show_front_menu() -> bool:
 	game_console.refresh_chat()
 	if _network_lobby != null: _close_network_lobby()
 	remove_from_group(&"live_network_duel")
-	if _expedition_battle != null: _save_expedition_battle(_expedition_battle.get_instance_id())
+	if _expedition_battle != null and (expedition_run == null or not expedition_run.refined()):
+		_save_expedition_battle(_expedition_battle.get_instance_id())
 	_expedition_battle = null
 	expedition_run = null
 	_expedition_save_error = ""
@@ -9092,7 +9185,7 @@ func _show_front_menu() -> bool:
 		front_menu.settings = settings
 		front_menu.settings_previewed.connect(_preview_volumes)
 		front_menu.options_closed.connect(func(_applied: bool, _command: String): _apply_settings())
-		front_menu.quit_requested.connect(func(): ELAudio.quiet_quit(get_tree()))
+		front_menu.quit_requested.connect(_quit_after_expedition_save)
 		front_menu.edition_requested.connect(func(chosen: String):
 			demo = false
 			_start(chosen, {}, null, -1, true)
@@ -9718,15 +9811,15 @@ func _open_expedition() -> void:
 		_expedition_screen.resumed.connect(_resume_expedition)
 		_expedition_screen.node_chosen.connect(_expedition_node)
 		_expedition_screen.choice_made.connect(_expedition_choice)
-		_expedition_screen.save_retried.connect(func(): _expedition_checkpoint())
+		_expedition_screen.save_retried.connect(_retry_expedition_save)
 		_expedition_screen.retried.connect(_retry_expedition)
 		_expedition_screen.left.connect(func(): _show_front_menu())
 	_show_expedition()
 
-func _new_expedition(preset: String, run_seed := ELExpeditionScreen.RANDOM_SEED) -> void:
+func _new_expedition(preset: String, run_seed := ELExpeditionScreen.RANDOM_SEED, difficulty := "standard") -> void:
 	var next := ELExpeditionRun.new()
 	if run_seed == ELExpeditionScreen.RANDOM_SEED: run_seed = randi() & 0x7fffffff
-	if not next.create(profiles.el2, preset, run_seed):
+	if not next.create(profiles.el2, preset, run_seed, ELExpeditionRun.SAVE_VERSION, difficulty):
 		_expedition_screen.message(next.error)
 		return
 	_store_new_expedition(next)
@@ -9769,6 +9862,9 @@ func _show_expedition() -> void:
 	_expedition_screen.show_run(expedition_run, _expedition_save_error)
 	_expedition_screen.show()
 	_pause_battle_audio(true)
+	if expedition_run != null and expedition_run.refined() and not _expedition_save_error.is_empty():
+		if menu != null: menu.hide()
+		if esc_menu != null: esc_menu.hide()
 
 func _expedition_checkpoint(previous: Dictionary = {}) -> bool:
 	var saved := expedition_run.persist()
@@ -9782,6 +9878,7 @@ func _expedition_checkpoint(previous: Dictionary = {}) -> bool:
 	return saved
 
 func _start_expedition_battle(fresh := false) -> void:
+	if expedition_run != null and expedition_run.refined() and not _expedition_save_error.is_empty(): return
 	var battle := expedition_run.build_battle(fresh)
 	if battle == null:
 		_expedition_screen.message(expedition_run.error)
@@ -9799,10 +9896,63 @@ func _start_expedition_battle(fresh := false) -> void:
 	_save_expedition_battle(battle_id)
 
 func _save_expedition_battle(battle_id: int) -> void:
-	if _expedition_battle == null or _expedition_battle.get_instance_id() != battle_id: return
-	if not expedition_run.save_battle(_expedition_battle): _notice(expedition_run.error)
+	if _expedition_battle == null or expedition_run == null or _expedition_battle.get_instance_id() != battle_id: return
+	if not expedition_run.save_battle(_expedition_battle):
+		if expedition_run.refined():
+			_expedition_save_error = expedition_run.error
+			# The live duel is newer than its durable checkpoint. Keep it intact
+			# and block further commands until that same state can be saved.
+			_show_expedition()
+		else: _notice(expedition_run.error)
+
+func _retry_expedition_save() -> void:
+	if expedition_run == null: return
+	if not expedition_run.refined():
+		_expedition_checkpoint()
+		return
+	if _expedition_battle != null:
+		if not expedition_run.save_battle(_expedition_battle):
+			_expedition_save_error = expedition_run.error
+			_show_expedition()
+			return
+		_expedition_save_error = ""
+		if _expedition_battle.phase == ELDuel.Phase.FINISHED:
+			_finish_expedition_battle()
+			return
+		_expedition_screen.hide()
+		_pause_battle_audio(false)
+		_refresh()
+	elif _expedition_checkpoint() and expedition_run.phase == "battle":
+		_start_expedition_battle()
+
+## A menu/quit must never discard a v11 action or settled result that has not
+## reached disk. Finished duels can be saved intact and settled after Resume.
+func _save_expedition_before_exit() -> bool:
+	if expedition_run == null or not expedition_run.refined(): return true
+	var saved := expedition_run.save_battle(_expedition_battle) if _expedition_battle != null else expedition_run.persist()
+	if not saved:
+		_expedition_save_error = expedition_run.error
+		_show_expedition()
+		return false
+	_expedition_save_error = ""
+	return true
+
+func _quit_after_expedition_save() -> void:
+	if _save_expedition_before_exit(): ELAudio.quiet_quit(get_tree())
 
 func _finish_expedition_battle() -> void:
+	if expedition_run != null and expedition_run.refined():
+		if _expedition_battle == null: return
+		if not _expedition_save_error.is_empty():
+			_show_expedition()
+			return
+		if not expedition_run.resolve_battle(_expedition_battle):
+			_expedition_save_error = expedition_run.error
+			_show_expedition()
+			return
+		_expedition_battle = null
+		_expedition_checkpoint()
+		return
 	var battle := _expedition_battle
 	_expedition_battle = null
 	if expedition_run.resolve_battle(battle): _expedition_checkpoint()
@@ -10005,6 +10155,7 @@ func _puzzle_mode_ready() -> void:
 	puzzle_mode.games = profiles
 	add_child(puzzle_mode)
 	puzzle_mode.play_requested.connect(_begin_puzzle)
+	puzzle_mode.generated_requested.connect(_begin_generated_puzzle)
 	puzzle_mode.left.connect(_leave_puzzles)
 
 ## Main menu -> Puzzles: the list of the shown game's puzzles, over the menu.
@@ -10012,6 +10163,8 @@ func _open_puzzles() -> void:
 	var edition := front_menu.edition if front_menu != null else (profile.id if profile != null else "")
 	if not profiles.has(edition): return
 	_puzzle_mode_ready()
+	# Puzzles are made for each game's own balance.
+	_use_second_balance(null, true)
 	puzzle_mode.open_list(profiles[edition])
 
 ## A puzzle's position as a battle of its own: the player has the first
@@ -10022,10 +10175,35 @@ func _begin_puzzle(index: int) -> void:
 		_notice("Finish or surrender the campaign battle first.")
 		return
 	var source := puzzle_mode.profile
+	_use_second_balance(null, true)
 	var attempt := ELPuzzles.Run.new()
 	if not attempt.begin(source, index):
 		_notice(attempt.error)
 		return
+	_start_puzzle_attempt(source, attempt)
+
+## Generated challenges bypass the authored catalog. Retrying uses the
+## exact checked snapshot, and completion never changes collection totals.
+func _begin_generated_puzzle(entry: Dictionary) -> void:
+	if puzzle_mode == null: return
+	if _campaign_battle() != null:
+		_notice("Finish or surrender the campaign battle first.")
+		return
+	var edition := String(entry.get("state", {}).get("profile", ""))
+	if not profiles.has(edition):
+		_notice("This challenge code needs a game that is not installed.")
+		return
+	var source: ELProfile = profiles[edition]
+	_use_second_balance(null, true)
+	var attempt := ELPuzzles.Run.new()
+	if not attempt.begin_entry(source, entry, false):
+		puzzle_mode.open_list(source)
+		puzzle_mode._select_puzzle_tab(true)
+		puzzle_mode._random_error(attempt.error)
+		return
+	_start_puzzle_attempt(source, attempt)
+
+func _start_puzzle_attempt(source: ELProfile, attempt: ELPuzzles.Run) -> void:
 	_hide_front_menu()
 	demo = false
 	mode_select.select(0)
@@ -10040,6 +10218,7 @@ func _begin_puzzle(index: int) -> void:
 
 ## Leave on the strip, or Back on the list opened from the main menu.
 func _leave_puzzles() -> void:
+	_use_second_balance()
 	if front_menu != null and front_menu.is_visible_in_tree(): return
 	if not _show_front_menu(): _open_setup()
 
@@ -10312,7 +10491,7 @@ func _open_esc_menu() -> void:
 			host.show())
 		esc_menu.options_requested.connect(_open_battle_options)
 		esc_menu.exit_requested.connect(func(): _ask_battle("T_MB_QUIT_TO_MM", _esc_exit_to_menu))
-		esc_menu.quit_requested.connect(func(): _ask_battle("T_MB_QUIT_TO_WIN", func(): ELAudio.quiet_quit(get_tree())))
+		esc_menu.quit_requested.connect(func(): _ask_battle("T_MB_QUIT_TO_WIN", _quit_after_expedition_save))
 		esc_menu.remake_menu_requested.connect(func():
 			_close_esc_menu()
 			menu.show())
@@ -10340,6 +10519,9 @@ func _ask_surrender() -> void:
 
 func _can_retry_battle() -> bool:
 	if _arena_battle != null: return false
+	# Evolved Expedition runs commit to each duel. Older checkpoints retain
+	# their original restart behavior, and retrying a finished run is separate.
+	if _expedition_battle != null and expedition_run != null and expedition_run.evolved(): return false
 	if duel == null or duel.phase == ELDuel.Phase.FINISHED or demo or replay_player != null or combat_tutorial != null or network_duel != null or strategic_session != null: return false
 	if _campaign_battle() != null: return not _encounter_start.is_empty()
 	return duel_match != null or _expedition_battle != null or _practice_restart_seed >= 0

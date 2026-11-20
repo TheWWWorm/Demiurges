@@ -32,6 +32,7 @@ Open a creature's page in the game to rotate and zoom its 3D model. Choose an ac
 - [Chaots](chaots) · [Kinets](kinets) · [Vitals](vitals) · [Synthets](synthets) · [The Pale](pale)
 - [Diamanda](diamanda) · [The White Lord](white-lord)
 - [The story of Etherlords](story-el1) · [The story of Etherlords II](story-el2)
+- [Cut content of Etherlords](cut-content-el1) · [Cut content of Etherlords II](cut-content-el2)
 
 ## Campaigns and modes
 

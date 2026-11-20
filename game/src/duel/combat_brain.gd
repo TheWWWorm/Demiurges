@@ -797,7 +797,7 @@ static func ask(ctx: ELCombatSearch.Context, s: ELDuel, turns: int, budget: int,
 		state[slot + 7] = 1 if card in CHARMS_ENDING else 0
 		if k < HERO_KEYS.size():
 			var gift: Dictionary = ELCatalog.HERO_ABILITIES.get(card, {}).duplicate()
-			if ctx.second: gift.merge(ELCatalog.SECOND_HERO_ABILITIES.get(card, {}), true)
+			if ELCatalog.second_rules(s.profile, card): gift.merge(ELCatalog.SECOND_HERO_ABILITIES.get(card, {}), true)
 			state[slot + 8] = int(gift.get("cost", 0))
 			state[slot + 9] = int(gift.get("amount", 0))
 	# The creature cards by kind, each as it would be played from a hand.
@@ -1179,7 +1179,7 @@ static func _card_extras(s: ELDuel, card: String, record: Array, kinds: Array, s
 	# The ether channels it costs, and what it names beside its target.
 	state[slot + 22] = mini(s.channel_cost(card), 15) | (int(CHOICES.get(String(rule.get("effect", "")), 0)) << 4)
 	# The second game's cards that answer being taken out of a hand.
-	if s.profile.id == "el2": state[slot + 22] |= (1 if card in ELCatalog.DISCARD_SUMMONS else (2 if card in ELCatalog.DISCARD_RETORTS else 0)) << 7
+	if ELCatalog.second_rules(s.profile, card): state[slot + 22] |= (1 if card in ELCatalog.DISCARD_SUMMONS else (2 if card in ELCatalog.DISCARD_RETORTS else 0)) << 7
 	# Its class, which the wardings and the spell traps go by; and for a
 	# spell jammer, the trap that lets it out.
 	state[slot + 22] |= int({"Creature": 1, "Sorcery": 2, "Enchantment": 3}.get(String(s.profile.table("CombatSpells").get(card, {}).get("Class", "")), 0)) << 9
@@ -1875,7 +1875,7 @@ static func _rises(profile: ELProfile, card: String) -> bool:
 ## The average creature of `faction` for each cost, and how many of the
 ## colour's cards are creatures.
 static func _typical_of(profile: ELProfile, faction: String) -> Dictionary:
-	var key := profile.id + ":" + faction
+	var key := profile.id + (":second" if ELSecondBalance.active(profile) else "") + ":" + faction
 	if _typical.has(key): return _typical[key]
 	var sums: Array = []
 	for cost in COSTS: sums.append([0, 0, 0])

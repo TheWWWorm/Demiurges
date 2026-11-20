@@ -42,7 +42,7 @@ static func valid_entry(entry: Variant, edition: String) -> bool:
 	if entry is not Dictionary or entry.get("id") is not String or String(entry.id).is_empty(): return false
 	if entry.get("state") is not Dictionary or entry.state.get("profile") != edition: return false
 	if not _whole(entry.get("turns"), 1, 12): return false
-	if entry.has("level") and not _whole(entry.level, 1, 4): return false
+	if entry.has("level") and not _whole(entry.level, 1, 5): return false
 	var goal: Variant = entry.get("objective", {"type": "win"})
 	if goal is not Dictionary or goal.get("type", "win") not in ["win", "clear", "survive", "control"]: return false
 	if goal.get("type") == "survive" and not _whole(goal.get("enemy_turns"), 1, 12): return false
@@ -188,6 +188,11 @@ class Run:
 	var failed_target := -1
 	var error := ""
 	var hints_used := 0
+	## Live guidance is counted independently of the authored hint sequence.
+	var tactical_hints_used := 0
+	## Generated challenges and internal verification never change the authored
+	## collection's completion files or its in-memory mastery records.
+	var _record_progress := true
 	## The hero's own count of turns when the puzzle began, and whether the
 	## first of them was already under way.
 	var _begun := 0
@@ -201,12 +206,25 @@ class Run:
 		if at < 0 or at >= entries.size():
 			error = "No such puzzle."
 			return false
+		return _begin_entry(profile, entries[at], at, true, true)
+
+	## Start a self-contained challenge without inserting it into the catalog.
+	## A retry restores an independent copy of exactly the same position.
+	func begin_entry(profile: ELProfile, definition: Dictionary, record_progress := false, reset_search := true) -> bool:
+		return _begin_entry(profile, definition, -1, record_progress, reset_search)
+
+	func _begin_entry(profile: ELProfile, definition: Dictionary, at: int, record_progress: bool, reset_search: bool) -> bool:
+		if not ELPuzzles.valid_entry(definition, profile.id):
+			error = "Invalid puzzle definition."
+			return false
 		edition = profile.id
 		index = at
+		_record_progress = record_progress
 		# A fresh attempt reads with no plan or proof kept from another duel
 		# (the duel identity already keeps them apart; this frees them too).
-		ELCombatSearch.reset_caches()
-		entry = entries[at]
+		if reset_search: ELCombatSearch.reset_caches()
+		entry = definition.duplicate(true)
+		error = ""
 		allowed = int(entry.turns)
 		duel = ELDuel.new()
 		if not duel.restore(profile, {"format": "etherlords-duel", "version": 1, "state": (entry.state as Dictionary).duplicate(true)}):
@@ -235,6 +253,7 @@ class Run:
 		reason = ""
 		failed_target = -1
 		hints_used = 0
+		tactical_hints_used = 0
 		# Check constraints at each settled action, including several commands
 		# within a frame. A weak observer avoids a Run <-> duel reference cycle.
 		var observer: WeakRef = weakref(self)
@@ -283,7 +302,7 @@ class Run:
 		if complete:
 			turn = mini(turn, allowed)
 			outcome = "solved"
-			ELPuzzles.mark(edition, String(entry.id), maxi(turn, 1), hints_used)
+			if _record_progress: ELPuzzles.mark(edition, String(entry.id), maxi(turn, 1), hints_used)
 			return true
 		if duel.phase == ELDuel.Phase.FINISHED:
 			return _fail(missing if primary_complete and not missing.is_empty() else ("objective" if won else "lost"))
@@ -318,7 +337,8 @@ class Run:
 	func briefing() -> String:
 		return _localized("briefing")
 
-	## Authored puzzles can disclose live book and artifact reserves.
+	## An explicit puzzle opt-in discloses both sides' live supplies. Fixed-hand
+	## challenges need the opponent's cards too: a legal reply must be foreseeable.
 	func supply_text() -> String:
 		if duel == null or not bool(entry.get("show_supply", false)): return ""
 		var russian := _ru()
@@ -326,6 +346,17 @@ class Run:
 		var draws := not bool(duel.setup.get("puzzle_fixed_hands", false))
 		for side in 2:
 			var hero: Dictionary = duel.heroes[side]
+			var hand := PackedStringArray()
+			for card: String in hero.get("hand", []): hand.append(duel.card_name(card))
+			var hand_heading := ("Ваша текущая рука" if side == SIDE else "Текущая рука противника") if russian else ("Your current hand" if side == SIDE else "Opponent's current hand")
+			lines.append(hand_heading + ": " + (", ".join(hand) if not hand.is_empty() else ("пуста" if russian else "empty")))
+			lines.append(("  Эфир сейчас: %d · каналы: %d" if russian else "  Current ether: %d · channels: %d") %
+				[int(hero.get("mana", 0)), int(hero.get("channels", 0))])
+			var grave := PackedStringArray()
+			for card: String in hero.get("grave", []): grave.append(duel.card_name(card))
+			if not grave.is_empty():
+				var grave_heading := ("Ваше кладбище" if side == SIDE else "Кладбище противника") if russian else ("Your graveyard" if side == SIDE else "Opponent's graveyard")
+				lines.append(grave_heading + (" · от старых карт к новым: " if russian else " · oldest to newest: ") + ", ".join(grave))
 			if draws:
 				var heading := ("Ваша книга" if side == SIDE else "Книга противника") if russian else ("Your book" if side == SIDE else "Opponent's book")
 				lines.append(heading + (" · заряды / карт в руке" if russian else " · charges / copies in hand"))
@@ -363,7 +394,14 @@ class Run:
 
 	func note_hint(index: int) -> void:
 		if not outcome.is_empty() or index < 0: return
-		hints_used = maxi(hints_used, mini(index + 1, hint_count()))
+		hints_used = maxi(hints_used - tactical_hints_used, mini(index + 1, hint_count())) + tactical_hints_used
+
+	## Called only when useful, verified current-position guidance is revealed.
+	## Cancelled, stale and inconclusive analyses are not assistance.
+	func note_tactical_hint() -> void:
+		if not outcome.is_empty(): return
+		tactical_hints_used += 1
+		hints_used += 1
 
 	func _creature_names(ids: Array) -> String:
 		var names: Array[String] = []

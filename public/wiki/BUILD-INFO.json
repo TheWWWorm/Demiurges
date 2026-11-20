@@ -2,24 +2,24 @@
   "version": "0.20.0",
   "languages": {
     "en": {
-      "pages": 472,
+      "pages": 484,
       "catalog_pages": 433,
-      "links": 1101
+      "links": 1243
     },
     "ru": {
-      "pages": 472,
+      "pages": 484,
       "catalog_pages": 433,
-      "links": 1101
+      "links": 1243
     }
   },
   "requires_game_files": false,
   "requires_account": false,
-  "images": 482,
+  "images": 539,
   "translation_keys": 16,
   "files": {
     "data/en/index.json": {
-      "bytes": 331731,
-      "sha256": "906b6470dabf66f24dccc54828a5b0584f3608038f7451122ed9f5e892e5b66c"
+      "bytes": 362996,
+      "sha256": "94b863ac61cdbd54d6bd6f12d2ff7c50a3b30eb70a2fff0da556f9fc5c4ead8e"
     },
     "data/en/pages/abilities.json": {
       "bytes": 2238,
@@ -1525,6 +1525,54 @@
       "bytes": 3500,
       "sha256": "da2f17b3ea6b4d4cfe1291eca5bc3bae27a9a7a87cd82ca3ee1131026720c395"
     },
+    "data/en/pages/cut-campaign-intrusion.json": {
+      "bytes": 2422,
+      "sha256": "6f8f745dbf571d0f217c7ac1489e1251b45f7c343eda19f213367726e18d8f73"
+    },
+    "data/en/pages/cut-content-el1.json": {
+      "bytes": 14029,
+      "sha256": "b24a421bebe32fa2eba85ab6458fa4f3db2deb9f3c3ebb21b3ad6c5b72324c47"
+    },
+    "data/en/pages/cut-content-el2.json": {
+      "bytes": 11337,
+      "sha256": "1691ca81c924e18dbdd65b6f2d950a80fe5c01796106b831b50ab34607378efa"
+    },
+    "data/en/pages/cut-mission-balance-of-terror.json": {
+      "bytes": 1753,
+      "sha256": "d79d6369334e61630de827f1e9d36984bb481b08d6c847b69f7322463c3c84f3"
+    },
+    "data/en/pages/cut-mission-dragon-lake.json": {
+      "bytes": 1716,
+      "sha256": "29d7f69f3729513c118ad1df9bb8e225b4479e5c4cb394c320814229a8f4128c"
+    },
+    "data/en/pages/cut-mission-evil-dale.json": {
+      "bytes": 8539,
+      "sha256": "9f9b371d4252d34a1dc1594cacefa153594882f32a7a16f0e913a4269593dc74"
+    },
+    "data/en/pages/cut-mission-first-strike.json": {
+      "bytes": 1759,
+      "sha256": "def5d46be12946c934f5f64a1652acfcd95df8a57f858c9ed60613114967a5c5"
+    },
+    "data/en/pages/cut-mission-ice-trap.json": {
+      "bytes": 1731,
+      "sha256": "f9e313642576472e25a42cdbbb40a709332ce54e129053bf0858624586a39109"
+    },
+    "data/en/pages/cut-mission-savage-desert.json": {
+      "bytes": 1998,
+      "sha256": "98c6f38ac4860b0889d19de2fdb231788f84b6b17deb1785dae708779e18947b"
+    },
+    "data/en/pages/cut-mission-snowflake-maze.json": {
+      "bytes": 3833,
+      "sha256": "a23a7d9b32e7ec179c71846f0a266e95c99e988d1bdf4c9c11437bc80d917173"
+    },
+    "data/en/pages/cut-mission-synthets-menace.json": {
+      "bytes": 1824,
+      "sha256": "05c423d2a6f2182f69cc67b41641589aea977691f77bd727c1ee43dec9d6f142"
+    },
+    "data/en/pages/cut-mission-three-lakes-valley.json": {
+      "bytes": 1465,
+      "sha256": "32c515f51d82f3665848997e32af3bbcf81629c94d4dacf185d11f5a5ef8c144"
+    },
     "data/en/pages/diamanda.json": {
       "bytes": 4143,
       "sha256": "72dc65a9bd7c594b24b6d7879f80c5fbb6087360a0a7db9fd4e325e5d7e0a32b"
@@ -1542,8 +1590,8 @@
       "sha256": "366e1576150e65800250ff1a7ac2d6d9bdccf592d934cb323daebc7d00f00881"
     },
     "data/en/pages/home.json": {
-      "bytes": 3984,
-      "sha256": "9f7a8349bcbe72e99a4fd885d52f903941e3718436a76819cdd1a546eb013c5d"
+      "bytes": 4128,
+      "sha256": "1f5be6003037d5a6ede84e06c50622131f89dbec33824864a0b140c5bea34669"
     },
     "data/en/pages/installing.json": {
       "bytes": 3215,
@@ -1910,8 +1958,8 @@
       "sha256": "d18c0bf1a09af1788f0ca5427f86b6ecbb3cc60bc9a08d9da6d1b068de46ddaa"
     },
     "data/ru/index.json": {
-      "bytes": 585544,
-      "sha256": "a201f104e03a7084abcd9b1ac2007a75560918fb28a04ffcd1921135a2217710"
+      "bytes": 639783,
+      "sha256": "762d2b31e2bf7566111e2d60b658a01b4f3a89b5ec59b85c76f340ce9e39728b"
     },
     "data/ru/pages/abilities.json": {
       "bytes": 3685,
@@ -3417,6 +3465,54 @@
       "bytes": 5877,
       "sha256": "32c05c086a8c41abd37fccd81ae69b8cadc24bdc89280db7e786d5ef94103572"
     },
+    "data/ru/pages/cut-campaign-intrusion.json": {
+      "bytes": 3900,
+      "sha256": "25c0f933fab4fad7450684b6d2b47eb0291bde73369edb1d97b370e9bcd69337"
+    },
+    "data/ru/pages/cut-content-el1.json": {
+      "bytes": 20547,
+      "sha256": "104da7c2428ac37ef839931ac40b61c127fbc9cc58282b96e557bd48454514cb"
+    },
+    "data/ru/pages/cut-content-el2.json": {
+      "bytes": 17329,
+      "sha256": "cb4677149867a75874c462545adafa407a4fd9ed3428673aac8eb6f4b5cb61c2"
+    },
+    "data/ru/pages/cut-mission-balance-of-terror.json": {
+      "bytes": 2644,
+      "sha256": "410f87caf3a48f45886dc5dbc94bdd34feb70965f9ec665178b22a24067cd5c4"
+    },
+    "data/ru/pages/cut-mission-dragon-lake.json": {
+      "bytes": 2628,
+      "sha256": "78078f948dde8630be4484b1ffffb8fbdd5ed94520c340a4f1890c6418efb34d"
+    },
+    "data/ru/pages/cut-mission-evil-dale.json": {
+      "bytes": 10970,
+      "sha256": "cd4e843604afe7aa8b0ad4bd15ec6083de8ffe61a84e290f78ec9968141ac016"
+    },
+    "data/ru/pages/cut-mission-first-strike.json": {
+      "bytes": 2636,
+      "sha256": "198c6d2af430c44b0eeb50f5a4e6e8d182c079344b8829df1242356807592210"
+    },
+    "data/ru/pages/cut-mission-ice-trap.json": {
+      "bytes": 2618,
+      "sha256": "90c6ef11b0021ab0090577ece55a241a45f52d68fee4371383fa86daac11c833"
+    },
+    "data/ru/pages/cut-mission-savage-desert.json": {
+      "bytes": 2992,
+      "sha256": "ae36320cc72879a726953a5e22d01ce36c9be557db9badf106950f2f88072256"
+    },
+    "data/ru/pages/cut-mission-snowflake-maze.json": {
+      "bytes": 5082,
+      "sha256": "a3e5a01e6471685a39d6f97190bfe6085288a40e0c3d93bbbe66201a7104dcb4"
+    },
+    "data/ru/pages/cut-mission-synthets-menace.json": {
+      "bytes": 2690,
+      "sha256": "f7dc1ff734e76ff1dedc988fed66537c2f42dd6d3f4ca3b6ce4ba29b4f23f209"
+    },
+    "data/ru/pages/cut-mission-three-lakes-valley.json": {
+      "bytes": 2335,
+      "sha256": "7cc66bab290f198defb216df713d56ea3221d4f8a7f1b20cbebb99040d82deaa"
+    },
     "data/ru/pages/diamanda.json": {
       "bytes": 6438,
       "sha256": "3c9369d7aa813fa967968521f3e2130097449768ceec74ca71ee30e10dcfcc47"
@@ -3434,8 +3530,8 @@
       "sha256": "af0b6dccb683b2a38d41c8f1d3ec6709c8fb754b2e25535116bd10a197eccd85"
     },
     "data/ru/pages/home.json": {
-      "bytes": 5609,
-      "sha256": "2ecabbf52df4f77e64c88e9fb42d5bc95424b5a9de9b95fff54cf24d81ed1699"
+      "bytes": 5799,
+      "sha256": "ccec66f6148971380c4ae5e0e66076832f0f6f07e27463f7727420b7d104db09"
     },
     "data/ru/pages/installing.json": {
       "bytes": 5015,
@@ -3802,8 +3898,8 @@
       "sha256": "838d61a3a9f77583762672b49490d1ddd71bda24d0ee738023127e375400f687"
     },
     "i18n.json": {
-      "bytes": 1955,
-      "sha256": "c0c2fe7ea7e8b3125aba4d4660fa3d49e79ed43e17e044a84ad59f8c16595412"
+      "bytes": 1917,
+      "sha256": "e8ea1273d286143f7291cab5976bdd0b546e07ee1661138bbd47c083514fa7c6"
     },
     "images/el1/hero-diamanda.webp": {
       "bytes": 14040,
@@ -3941,9 +4037,21 @@
       "bytes": 13468,
       "sha256": "e95343e46ef65445b287ca9253afcc8bb47575217f5268cb613e6cb149979b5e"
     },
+    "images/el1/object-buildings-a10.webp": {
+      "bytes": 12722,
+      "sha256": "747f7aef4c6f162c1cd41a71fe5b890b560680ac0c2f0e5f75f9d9dd43b12b0e"
+    },
+    "images/el1/object-buildings-a9.webp": {
+      "bytes": 22670,
+      "sha256": "3035aadd91a78cdc03cfb6c0d5d05b6064e6612e4ccfecb9dcb5f1460d0af07a"
+    },
     "images/el1/object-buildings-fortress-0-red.webp": {
       "bytes": 22212,
       "sha256": "88fc304597b27e7a297b6ae34177cd66d4a70f09867d9c42cad7033a5a434088"
+    },
+    "images/el1/object-combatcreatures-bsmg.webp": {
+      "bytes": 10458,
+      "sha256": "f80dea7e7738b391f6df37bf19616a6690f973044abdbddbedb2fe1fbc52cf9d"
     },
     "images/el1/object-globalspellcut-fullspell.webp": {
       "bytes": 18296,
@@ -3952,6 +4060,62 @@
     "images/el1/object-globalspellcut-partspell.webp": {
       "bytes": 20450,
       "sha256": "a1f9e86ecb0478081cc7d471edf8a5864650294eb17f551653a6cb567c519e06"
+    },
+    "images/el1/object-herotemplates-blevhero1.webp": {
+      "bytes": 12070,
+      "sha256": "3f7322886b09959f18d75c49d6e12d2a9e4ce3d09467bd11112c604c30989ad9"
+    },
+    "images/el1/object-herotemplates-blevhero2.webp": {
+      "bytes": 8740,
+      "sha256": "c0e77dae50db9564137142f408b9602b3751620166cd2ca1134de0f88f80cb7d"
+    },
+    "images/el1/object-herotemplates-blevhero3.webp": {
+      "bytes": 10846,
+      "sha256": "8e3d86484a7f82b047093cd9e7a91a4ffb9b05e1c57903fe7e89dd5954cb7317"
+    },
+    "images/el1/object-herotemplates-blevhero4.webp": {
+      "bytes": 11842,
+      "sha256": "347c3f0cd768a2b450a32f0a94ebd5a594c8a230c3c6e11581118fb7de5f1d72"
+    },
+    "images/el1/object-herotemplates-blevhero5.webp": {
+      "bytes": 10650,
+      "sha256": "720cffc9b96e14222b03603230b1bc4e547e2099b912f0686b4b68cfc733261c"
+    },
+    "images/el1/object-herotemplates-blevstarthero.webp": {
+      "bytes": 8278,
+      "sha256": "0ab92fdc9806ab6bbdf28773fa95934d65a6ca1be18235131108f78c56614ffd"
+    },
+    "images/el1/object-herotemplates-johntestwhitelord.webp": {
+      "bytes": 8330,
+      "sha256": "2b0a1cde403f62d31cc210006c3231edceb45ae6539edc2c2d3adbf2987abaa4"
+    },
+    "images/el1/object-herotemplates-newyear2002aviak.webp": {
+      "bytes": 11712,
+      "sha256": "3249f652285e3cfeccb5dd7f1d01173ac12547905e90f53bed3c7376004afc76"
+    },
+    "images/el1/object-herotemplates-newyear2002lamia.webp": {
+      "bytes": 7890,
+      "sha256": "7b791049b37247e9dc57e570a0328332cf8eea3b153c03607f31222d0cc199e7"
+    },
+    "images/el1/object-herotemplates-testhero1.webp": {
+      "bytes": 8660,
+      "sha256": "6411791712a303864327eff6e9f61293e9530d1a1586b554bdd26e3f74b1c521"
+    },
+    "images/el1/object-icon-gift.webp": {
+      "bytes": 24906,
+      "sha256": "d76b615899f625e204a71e750fe45c8b58cce3523c2271d7ee691338a6cc1776"
+    },
+    "images/el1/object-icon-mnfl.webp": {
+      "bytes": 20142,
+      "sha256": "4fdeb55337eb7094c2cb9ca1ea33c370859504ee8759479cf7f17549d1c7210a"
+    },
+    "images/el1/object-icon-rset.webp": {
+      "bytes": 22538,
+      "sha256": "67f94264d643f11abceeff262f4ee8a7ec23746400fcd1deac8c48fb6ddaa664"
+    },
+    "images/el1/object-icon-smgs.webp": {
+      "bytes": 24848,
+      "sha256": "42990f87c791de7b4c12b45ec6ab22ce19f4dbe9d49367bc69b678d41e21a742"
     },
     "images/el1/object-mananodes-mananode-black.webp": {
       "bytes": 16910,
@@ -3968,6 +4132,62 @@
     "images/el1/object-mananodes-mananode-red.webp": {
       "bytes": 22400,
       "sha256": "7d5d0fe5ecbca294c8ff8b8baea30a4a3d9c96679664eeff4bacd766cea7b5b7"
+    },
+    "images/el1/object-model-ad106-creatures-smblackmaggot00.webp": {
+      "bytes": 9608,
+      "sha256": "981fcb28e246376e81cfdd9d98722be882081982d13096ff45d387ff4b53b2ce"
+    },
+    "images/el1/object-model-ad307-creatures-smgreenmantis00-creatures-smgreenmantisadd00.webp": {
+      "bytes": 19746,
+      "sha256": "9c17897b90161c1202c4807cbc2f40cc9f72e31adad3727c4367593b99ccce24"
+    },
+    "images/el1/object-model-ad314-creatures-smgreenbeholder00.webp": {
+      "bytes": 18124,
+      "sha256": "3ed4986eefa533adc17d48e41f02f0a38af9eaaf7220e7652fef39e0736db3a2"
+    },
+    "images/el1/object-model-ad501-creatures-smknight00.webp": {
+      "bytes": 17082,
+      "sha256": "3d9716878fbf0e1d695265f63f1427d0b68c74839445ff93b15ecbf9ac4d1441"
+    },
+    "images/el1/object-model-ad502-creatures-smhunter00.webp": {
+      "bytes": 17686,
+      "sha256": "b4be09236097993e5b6e11c7207320d12af1b86b3181702e5542e64db120796f"
+    },
+    "images/el1/object-model-cr213-none.webp": {
+      "bytes": 9214,
+      "sha256": "82a23d780cf9dd9109609650a13bb09f11609446972a7adc143148e2c28e829d"
+    },
+    "images/el1/object-model-cr601-none.webp": {
+      "bytes": 5360,
+      "sha256": "595cbc9d1ebfbb4afbabf0476347f1d018cb8fae21e3da2c4f4cd877ab377874"
+    },
+    "images/el1/object-model-tebuad16-none.webp": {
+      "bytes": 11012,
+      "sha256": "033eb171f31b6545da897a787271c411f176d3d27ca9403c4c7bc1af7b15649d"
+    },
+    "images/el1/object-model-tebuad5-terrainobjects-shrinecrafting-knowledge00.webp": {
+      "bytes": 21772,
+      "sha256": "c38708d32c434862a48cf9e43c222f3111638c03a0040260d206657950eaa3cb"
+    },
+    "images/el1/object-model-tebuad7-terrainobjects-shrineprosperity00.webp": {
+      "bytes": 10660,
+      "sha256": "2a1f523401d90f6a495f2795b7f42340cc26140a8c245581d9f68d87022f0d29"
+    },
+    "images/el1/object-model-tebumaba3-terrainobjects-alpha-bank00-terrainobjects-alpha-bank01.webp": {
+      "bytes": 36230,
+      "sha256": "99da964bf3e970a6a756e437317e5f6ea974f3ac94a656ff2b58620f85dc6e7d"
+    },
+    "images/el1/object-model-tebumafa1-terrainobjects-factory00-terrainobjects-factory01.webp": {
+      "bytes": 27910,
+      "sha256": "4c7175a5a8353abf25319ae92ae5164bcc450f9813fe81b49b0d5460a5c8718f"
+    },
+    "images/el1/object-model-tebumala1-terrainobjects-laboratory00-terrainobjects-laboratory01.webp": {
+      "bytes": 30656,
+      "sha256": "76bbf832ec0e7ed871ad7ee978654b53e76736cbfd0f956165fd2764bfa16be3"
+    },
+    "images/el1/object-model-tebumama3-terrainobjects-manacollector00-terrainobjects-manacollector01.webp": {
+      "bytes": 27538,
+      "sha256": "f0ce8e427d94036ba176feda5dc632317344cc0542bf5a662fc2c299750e97d6"
     },
     "images/el1/object-newbuildings-commonlab-0.webp": {
       "bytes": 27878,
@@ -4004,6 +4224,38 @@
     "images/el1/object-newbuildings-uniquezoo-0.webp": {
       "bytes": 26582,
       "sha256": "fa59d952e320f982cba561d1be3379559f349656a40ebd79e3a94802fadcc52e"
+    },
+    "images/el1/object-portrait-34.webp": {
+      "bytes": 40232,
+      "sha256": "6d1f079d9b128a1874fdd2b44ce3a41974ddcfa403c9317181f7844fd73d3ae1"
+    },
+    "images/el1/object-portrait-39.webp": {
+      "bytes": 36568,
+      "sha256": "fc0b98560b92c1517f6a57fccbca71027c07a21281df2193f34a9443212ba0d9"
+    },
+    "images/el1/object-portrait-56.webp": {
+      "bytes": 40466,
+      "sha256": "37ffed0311f54c30a49b5d84a552c816a1026aaf73875ff435eef76698346b92"
+    },
+    "images/el1/object-portrait-70.webp": {
+      "bytes": 39734,
+      "sha256": "4c6d13a83fc4f0bf66dfc15075cb9cf8f955a8025c62d6955de975389b2b95fe"
+    },
+    "images/el1/object-portrait-75.webp": {
+      "bytes": 36906,
+      "sha256": "4e921526458e4ee2590faffc00e98127fd87752a359cde761093dfe41c75c351"
+    },
+    "images/el1/object-portrait-89.webp": {
+      "bytes": 40418,
+      "sha256": "936c1fdc7b37d75f2255ec9a40aada417391f15d0f3812a87dac61505f5b16a7"
+    },
+    "images/el1/object-portrait-91.webp": {
+      "bytes": 40458,
+      "sha256": "7575edac91f0c5a9693598da648e8ec3a23a377ef8bf02ac8f4b5d8239c80b01"
+    },
+    "images/el1/object-portrait-93.webp": {
+      "bytes": 40034,
+      "sha256": "49335c5a7efa3f802f8b741bb50e7d8db335ac984ed9f581f824342cdd5bb8c4"
     },
     "images/el1/object-resourcecut-bigfflame.webp": {
       "bytes": 11858,
@@ -5385,6 +5637,10 @@
       "bytes": 50920,
       "sha256": "126cc5c952a934248cbfac60181b8b0bfed0d46dfdc2949b7d8c04807ae5b324"
     },
+    "images/el2/object-additionalbuildings-scroll.webp": {
+      "bytes": 13000,
+      "sha256": "dc672dee2133486613807facd713207d8312d5f07d547fba3e6a45faa4e34c65"
+    },
     "images/el2/object-additionalbuildings-sign.webp": {
       "bytes": 14304,
       "sha256": "2ebeced590de2843bb0e263805de64c59eb40b531ebb1f3a2820de7ff41e3032"
@@ -5413,9 +5669,61 @@
       "bytes": 41548,
       "sha256": "2245410ca9173ac193e42fb3321eff29eb69d10cdaba5b0561c4610e638ede39"
     },
+    "images/el2/object-additionalbuildings-wardingstonered.webp": {
+      "bytes": 38182,
+      "sha256": "f0d0e2c9bea62251105c39eeb44329bfc802aee4dc9a45d279ecc90c5a3c6dcf"
+    },
     "images/el2/object-buildings-fortress-0-blue.webp": {
       "bytes": 22972,
       "sha256": "af14bd3ed85c1ba7b7e705eab106b02ad5a6ba71829e495530fded38e8fc7110"
+    },
+    "images/el2/object-combatcreatures-bsmg.webp": {
+      "bytes": 10452,
+      "sha256": "65fbdb111c3a9aeadcce920ee3d23b32ac04716c6896b3d3295044a4f44038f6"
+    },
+    "images/el2/object-herotemplates-a6m12greenbetrayer.webp": {
+      "bytes": 7718,
+      "sha256": "aa840345ac73c37f3231a2321dfe2125bfb4de41e7aa38eb58d6496fcef39670"
+    },
+    "images/el2/object-herotemplates-a6m13suicider.webp": {
+      "bytes": 14392,
+      "sha256": "2963c04e10aba5f4a80f394c72a2caafeec888f0e5ef7163f28ae5d375818906"
+    },
+    "images/el2/object-herotemplates-a6m14greedragon.webp": {
+      "bytes": 27908,
+      "sha256": "193f988dd35cce14ad888c1178ea836bac8e26c6ba44d20a1fbe08ec915162bb"
+    },
+    "images/el2/object-herotemplates-diamanda1blue.webp": {
+      "bytes": 15628,
+      "sha256": "a19d665d4f12427acee4ee8b477d517a2f4039de541875327f0d0769c611095f"
+    },
+    "images/el2/object-herotemplates-mainheroblack2.webp": {
+      "bytes": 17240,
+      "sha256": "c0b5d34a314ad93d6db0bc8be779112777a2379b1314d6338a104272e99a6604"
+    },
+    "images/el2/object-herotemplates-mainherored1.webp": {
+      "bytes": 17142,
+      "sha256": "a6499d8c492d32426e0fd0b537d148a660042c7ed52bc780a7333c73b3b78664"
+    },
+    "images/el2/object-model-ad502-creatures-alpha-hunter00.webp": {
+      "bytes": 19702,
+      "sha256": "ecf8fbc11d4399960b3f1c9f770a78a12305adf3ef9484cf46fe11ff9c9dd1d2"
+    },
+    "images/el2/object-model-cr500-none.webp": {
+      "bytes": 3502,
+      "sha256": "fceff18b45c6b9f4bada7a408b4967764d4fefae8ee554ceedaeae7359ef8a34"
+    },
+    "images/el2/object-model-tebuad551-terrainobjects-alpha-boat01.webp": {
+      "bytes": 21712,
+      "sha256": "a3c6fe62d8f47b2f6619726bfcd3e58f3e04f054d2e4604bbefca9284af8e57b"
+    },
+    "images/el2/object-model-tebuca5-terrainobjects-whitecastle00.webp": {
+      "bytes": 44352,
+      "sha256": "59e244747a2ab10034d0f7b2a0cb81e142d08906432ba4eae801689909a3f146"
+    },
+    "images/el2/object-model-telamise620-none.webp": {
+      "bytes": 9002,
+      "sha256": "95f2388c0af7cb25ae174f75374ee083414929b490d1ff8c136d3a8ca6bf8b4f"
     },
     "images/el2/object-newbuildings-commonlab-0.webp": {
       "bytes": 46058,
@@ -5464,6 +5772,22 @@
     "images/el2/object-resourcemine-mine-ruby-red.webp": {
       "bytes": 43572,
       "sha256": "37f7185c2ffa1c37007ec638ea2729ad61959446d42733d4db156d5b0544282f"
+    },
+    "images/el2/object-terrobj-magister00.webp": {
+      "bytes": 19348,
+      "sha256": "74830019af9848c339ec3614cb7f0528b4cbee85dee02325f5c907094cf469d4"
+    },
+    "images/el2/object-terrobj-master00.webp": {
+      "bytes": 20240,
+      "sha256": "c20254e6f46dde0cd4b7a656113f0601b9ae0a88a3e9fd1182faf3bf5a9537de"
+    },
+    "images/el2/object-terrobj-ship-01.webp": {
+      "bytes": 15848,
+      "sha256": "d729edc0fd105cf2f4a4a03fb478e9a4e2a72559b45e843fd1bb9760bb5d1908"
+    },
+    "images/el2/object-terrobj-teacher00.webp": {
+      "bytes": 16810,
+      "sha256": "a4492d65e0ad23224f3beced5c75badd2e8656168db256d10bce4aab88286dde"
     },
     "images/el2/OGKN.webp": {
       "bytes": 47596,
@@ -5734,17 +6058,17 @@
       "sha256": "a20e8238923d70e0d188200c41ebc83afcb1187f9f9bb1b4ed46c6014613a40d"
     },
     "index.html": {
-      "bytes": 2488,
-      "sha256": "0af699a0765b5b31a3567caa9070ecefe1d62c691903beea83ed1f6215d0b328"
+      "bytes": 2445,
+      "sha256": "2eea4a2f80afcc102691067a8d876b7ac524df646bc2ad08962f6f27acbecdeb"
     },
     "wiki.css": {
-      "bytes": 7950,
-      "sha256": "b9785acd482bd464943f74afb90511f66671e1a3e61b621c1ed344f44bdd43cb"
+      "bytes": 7971,
+      "sha256": "e7cb1dd66721a42650740aa216f84615f37e274869a5b3da051e765c79f12353"
     },
     "wiki.js": {
-      "bytes": 8640,
-      "sha256": "f1ca10fe6ee26dfebb9874946e68af19933a07440d488f879dd85ba44f991925"
+      "bytes": 8424,
+      "sha256": "aabab5bcfce15545227916db3d8f7e6c353fbf93c2b073e25dec7262d79874ed"
     }
   },
-  "bytes": 12215273
+  "bytes": 13576506
 }

@@ -107,7 +107,7 @@ def hero_image(game, template):
     return f'{game}/hero-' + re.sub(r'[^a-z0-9]+', '-', template.lower()).strip('-') + '.webp'
 
 
-OBJECT = re.compile(r'(el1|el2)/([A-Za-z]+/[A-Za-z0-9_.@-]+)\s*=\s*([^|]+)')
+OBJECT = re.compile(r'(el1|el2)/([A-Za-z]+/[A-Za-z0-9_.@-]+(?:/[A-Za-z0-9_.@-]+)*)\s*=\s*([^|]+)')
 
 
 def objects(value, name):
@@ -122,6 +122,23 @@ def objects(value, name):
         out.append([m[1], m[2], m[3].strip()])
     if not out:
         raise WikiError(f'{name}: an !objects line lists no objects')
+    return out
+
+
+GAME_TEXT = re.compile(r'(el1|el2)/([A-Za-z0-9_]+)')
+
+
+def game_texts(value, name):
+    """Game texts of a `!text el1/<key> | el2/<key>` line: text keys the
+    in-game reader fills in from the installed copy -> [[game, key], ...]."""
+    out = []
+    for item in filter(None, (part.strip() for part in value.split('|'))):
+        m = GAME_TEXT.fullmatch(item)
+        if not m:
+            raise WikiError(f'{name}: !text entries are "el1|el2/<text key>", not {item!r}')
+        out.append([m[1], m[2]])
+    if not out:
+        raise WikiError(f'{name}: a !text line lists no texts')
     return out
 
 
@@ -147,6 +164,7 @@ def parse(path):
     meta['order'] = int(meta.get('order', 100))
     meta['heroes'] = heroes(meta.get('heroes', ''), name)
     meta['objects'] = []
+    meta['texts'] = []
     body = text[m.end():].strip('\n').split('\n')
     links, out, plain, sections = set(), [f'<h1>{html.escape(meta["title"], quote=False)}</h1>'], [meta['title']], 0
     i = 0
@@ -154,7 +172,7 @@ def parse(path):
     def para_lines(start):
         rows = []
         j = start
-        while j < len(body) and body[j].strip() and not re.match(r'(#{2,3} |- |\d+\. |\||> |!objects )', body[j]):
+        while j < len(body) and body[j].strip() and not re.match(r'(#{2,3} |- |\d+\. |\||> |!objects |!text )', body[j]):
             rows.append(body[j].strip())
             j += 1
         return rows, j
@@ -207,6 +225,11 @@ def parse(path):
                               for game, ident, caption in shown)
             out.append(f'<div class="objects">{figures}</div>')
             i += 1
+        elif line.startswith('!text '):
+            shown = game_texts(line[len('!text '):], name)
+            meta['texts'].extend(shown)
+            out.append(''.join(f'<p class="gametext" data-text="{game}/{key}"></p>' for game, key in shown))
+            i += 1
         elif line.startswith('> '):
             rows = []
             while i < len(body) and body[i].startswith('> '):
@@ -242,7 +265,7 @@ def load():
                 raise WikiError(f'ru/{path.name}: the Russian article is mostly not in Russian')
             rows.append({'key': key, 'title': meta['title'], 'category': meta['category'],
                          'order': meta['order'], 'summary': meta.get('summary', ''), 'heroes': meta['heroes'],
-                         'objects': meta['objects'],
+                         'objects': meta['objects'], 'texts': meta['texts'],
                          'html': body, 'search': words.lower(), 'sections': sections, 'links': sorted(links)})
         pages[lang] = rows
     catalog_pages = load_catalog(known)
@@ -265,6 +288,8 @@ def load():
             raise WikiError(f'{key}: the translations list different heroes')
         if len({tuple((o[0], o[1]) for o in r['objects']) for r in rows}) != 1:
             raise WikiError(f'{key}: the translations show different map objects (!objects lines)')
+        if len({tuple(tuple(t) for t in r['texts']) for r in rows}) != 1:
+            raise WikiError(f'{key}: the translations show different game texts (!text lines)')
         if len({r['sections'] for r in rows}) != 1:
             raise WikiError(f'{key}: the translations have different numbers of "## " sections')
         if len({tuple(r['links']) for r in rows}) != 1:
@@ -355,10 +380,23 @@ def web_objects(page, images, used):
         if name not in images:
             return ''
         used.add(name)
-        return (f'<figure class="model"><img src="/wiki/images/{name}" alt="{html.escape(html.unescape(m[3]))}" loading="lazy">'
+        # Card icons and portraits are flat pictures of their own shape.
+        ident = html.unescape(m[2])
+        kind = 'flat' if ident.startswith(('Icon/', 'Portrait/')) else 'model'
+        # Their size, so the page keeps their shape before they load.
+        size = ' width="200" height="140"' if ident.startswith('Portrait/') else ' width="150" height="150"' if kind == 'flat' else ''
+        return (f'<figure class="{kind}"><img src="/wiki/images/{name}"{size} alt="{html.escape(html.unescape(m[3]))}" loading="lazy">'
                 f'<figcaption>{m[3]}</figcaption></figure>')
     page = OBJECT_FIGURE.sub(figure, page)
     return page.replace('<div class="objects"></div>', '')
+
+
+GAME_TEXT_TAG = re.compile(r'<p class="gametext" data-text="[^"]+"></p>')
+
+
+def web_texts(page):
+    """The website has no game installed: `!text` placeholders go."""
+    return GAME_TEXT_TAG.sub('', page)
 
 
 def web_heroes(page, heroes, images, used):
@@ -408,7 +446,7 @@ def write_public(output, cats, pages):
         entries = []
         for row in pages[lang]:
             page = {'key': row['key'], 'title': row['title'], 'category': row['category'],
-                    'html': web_heroes(web_objects(web_figures(row['html'], images, used), images, used), row.get('heroes', []), images, used)}
+                    'html': web_heroes(web_objects(web_figures(web_texts(row['html']), images, used), images, used), row.get('heroes', []), images, used)}
             (folder / f'{row["key"]}.json').write_text(json.dumps(page, ensure_ascii=False, sort_keys=True) + '\n', encoding='utf-8', newline='\n')
             entry = {'key': row['key'], 'title': row['title'], 'category': row['category'],
                      'summary': row['summary'], 'search': row['search']}

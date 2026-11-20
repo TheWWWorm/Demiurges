@@ -126,11 +126,30 @@ static func key_from_url(url: String) -> String:
 	var check := RegEx.create_from_string("^[a-z0-9]+(-[a-z0-9]+)*$")
 	return key if check.search(key) != null else ""
 
+## The page `html` with its `!text` placeholders (`p.gametext`, see
+## tools/build_wiki.py) replaced by those texts of the installed games, one
+## note paragraph per line, escaped; a text the games lack is left out.
+static func fill_game_texts(html: String, profiles: Dictionary) -> String:
+	if not "class=\"gametext\"" in html: return html
+	var tag := RegEx.create_from_string("<p class=\"gametext\" data-text=\"(el[12])/([A-Za-z0-9_]+)\"></p>")
+	var out := ""
+	var at := 0
+	for found: RegExMatch in tag.search_all(html):
+		out += html.substr(at, found.get_start() - at)
+		at = found.get_end()
+		var profile: ELProfile = profiles.get(found.get_string(1))
+		if profile == null or not profile.texts.has(found.get_string(2)): continue
+		for line: String in str(profile.texts[found.get_string(2)]).split("
+"):
+			if line.strip_edges().is_empty(): continue
+			out += "<p class=\"note\">%s</p>" % line.strip_edges().xml_escape()
+	return out + html.substr(at)
+
 ## The map object ("<game>/<Table>/<row>") of an `object:` link or a
 ## `data-object` value, or "" for anything else.
 static func object_id(url: String) -> String:
 	var id := url.trim_prefix("object:")
-	var check := RegEx.create_from_string("^el[12]/[A-Za-z]+/[A-Za-z0-9_.@-]+$")
+	var check := RegEx.create_from_string("^el[12]/[A-Za-z]+/[A-Za-z0-9_.@-]+(/[A-Za-z0-9_.@-]+)*$")
 	return id if check.search(id) != null else ""
 
 static func _external(url: String) -> bool:

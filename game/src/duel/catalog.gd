@@ -473,11 +473,26 @@ static func flags(row: Dictionary) -> Array[String]:
 		for flag: String in value: result.append(flag)
 	return result
 
+## Whether `card` is played by the second game's rules: every card in the
+## second game, and in the first the cards ELSecondBalance moves to them.
+static func second_rules(profile: ELProfile, card: String) -> bool:
+	return profile.id == "el2" or profile.second_cards.has(card)
+
 static func rule(profile: ELProfile, card: String) -> Dictionary:
+	var result := _rule(profile, card)
+	# A first-game card on the second game's balance takes its second-game amount.
+	if profile.id == "el1" and result.has("amount_el2") and profile.second_cards.has(card):
+		if not _second_amounts.has(card): _second_amounts[card] = result.merged({"amount": result.amount_el2}, true)
+		return _second_amounts[card]
+	return result
+
+static var _second_amounts := {}
+
+static func _rule(profile: ELProfile, card: String) -> Dictionary:
 	var spell: Dictionary = profile.table("CombatSpells").get(card, {})
 	if spell.is_empty(): return {}
 	# Second-game rules take precedence over the shared table.
-	if profile.id == "el2" and SECOND_EFFECTS.has(card): return SECOND_EFFECTS[card]
+	if second_rules(profile, card) and SECOND_EFFECTS.has(card): return SECOND_EFFECTS[card]
 	if profile.id == "el2" and ARTIFACT_EFFECTS.has(card): return ARTIFACT_EFFECTS[card]
 	if EFFECTS.has(card): return EFFECTS[card]
 	var first := shared(profile, card)
@@ -502,16 +517,16 @@ static func shared(profile: ELProfile, card: String) -> bool:
 static func first_ability(profile: ELProfile, card: String) -> Dictionary:
 	if not FIRST_ABILITIES.has(card) or not shared(profile, card): return {}
 	var ability: Dictionary = FIRST_ABILITIES[card].duplicate()
-	if profile.id == "el2": ability.merge(SECOND_ABILITIES.get(card, {}), true)
+	if second_rules(profile, card): ability.merge(SECOND_ABILITIES.get(card, {}), true)
 	return ability
 
 ## The passive creature aura for this edition, or an empty dictionary.
 static func creature_aura(profile: ELProfile, card: String) -> Dictionary:
 	if not CREATURE_AURAS.has(card) or not shared(profile, card): return {}
-	return SECOND_AURAS.get(card, CREATURE_AURAS[card]) if profile.id == "el2" else CREATURE_AURAS[card]
+	return SECOND_AURAS.get(card, CREATURE_AURAS[card]) if second_rules(profile, card) else CREATURE_AURAS[card]
 
 static func granted_discard(profile: ELProfile, card: String) -> int:
-	return int(SECOND_DISCARD.get(card, GRANTED_DISCARD.get(card, 0)) if profile.id == "el2" else GRANTED_DISCARD.get(card, 0))
+	return int(SECOND_DISCARD.get(card, GRANTED_DISCARD.get(card, 0)) if second_rules(profile, card) else GRANTED_DISCARD.get(card, 0))
 
 static func deck(profile: ELProfile, name: String) -> Array[String]:
 	var result: Array[String] = []

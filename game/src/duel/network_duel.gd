@@ -216,7 +216,7 @@ func poll(allow_action: bool, advance_phase := Callable()) -> void:
 	var connection := _peer.get_connection_status()
 	if _joining and connection == MultiplayerPeer.CONNECTION_CONNECTED:
 		_joining = false
-		_send(["hello", VERSION, profile.id, player_token()])
+		_send(["hello", VERSION, rules_id(), player_token()])
 	if connection == MultiplayerPeer.CONNECTION_DISCONNECTED and _departure.is_empty():
 		var reason: String = (_peer as ELRelayPeer).close_reason if _peer is ELRelayPeer else ""
 		if local_side == 1 and live: reason = "The connection to the other player closed. Join the host again to continue the duel."
@@ -268,7 +268,7 @@ func _receive(packet: Array) -> void:
 			if _rejoin_deadline > 0:
 				# Only the player who dropped may take the seat back.
 				if _turning_away: return
-				if packet.size() == 4 and packet[1] == VERSION and packet[2] == profile.id and packet[3] == _guest_token:
+				if packet.size() == 4 and packet[1] == VERSION and packet[2] == rules_id() and packet[3] == _guest_token:
 					_ready_deadline = Time.get_ticks_msec() + 15000
 					_resume_due = true
 				else:
@@ -278,7 +278,7 @@ func _receive(packet: Array) -> void:
 					_ready_deadline = Time.get_ticks_msec() + 1000
 				return
 			if duel != null or _awaiting_pick: return _invalid()
-			if packet[1] != VERSION or packet[2] != profile.id:
+			if packet[1] != VERSION or packet[2] != rules_id():
 				_send(["reject", "version"])
 				_ready_deadline = Time.get_ticks_msec() + 1000
 				return
@@ -361,7 +361,7 @@ func _receive(packet: Array) -> void:
 			var code: Variant = packet[1] if packet.size() == 2 else ""
 			if code == "preset": _failure = "A hero preset does not meet the match rules."
 			elif code == "busy": _failure = "This duel is waiting for its own player to return."
-			else: _failure = "Use the same Demiurges version and game edition."
+			else: _failure = "Use the same Demiurges version and game edition, with the same Etherlords II card balance option."
 		"leave":
 			_departure = "The other player left the duel."
 		_:
@@ -651,6 +651,10 @@ func _start() -> void:
 	_ready_deadline = 0
 	live = true
 	started.emit(duel)
+
+## The edition and its card balance (ELSecondBalance), which both players must share.
+func rules_id() -> String:
+	return profile.id + ("+second_balance" if ELSecondBalance.active(profile) else "")
 
 func _digest() -> String:
 	var state := duel.snapshot()

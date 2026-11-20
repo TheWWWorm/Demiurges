@@ -103,6 +103,10 @@ static func decode(profile: ELProfile, raw: Dictionary) -> Dictionary:
 			if entry.is_empty() or entry.spell != item.get("spell"): return _bad("Invalid battle artifacts.")
 			artifacts.append(entry)
 		h.artifacts = artifacts
+	# Opening instructions belong to setup only. A valid saved hand may no
+	# longer contain that card, and its real book slot may now be exhausted.
+	var opening_problem := ELDuel.opening_slots_error(profile, s.setup, s.heroes)
+	if not opening_problem.is_empty(): return _bad(opening_problem)
 	if s.phase == 2 and s.winner < 0 and (s.heroes[0].health != 0 or s.heroes[1].health != 0): return _bad("A drawn duel requires both heroes to have fallen.")
 	var creatures := {}
 	var counts := [0, 0]

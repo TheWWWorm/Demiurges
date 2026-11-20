@@ -15,6 +15,10 @@ var archives: Dictionary = {}
 var tables: Dictionary = {}
 var first_monster_definitions: Dictionary = {}
 var texts: Dictionary = {}
+## First game with the second game's card balance (ELSecondBalance): the
+## cards played by the second game's values and rules, and their own values.
+var second_cards: Dictionary = {}
+var second_restore: Dictionary = {}
 var _textures: Dictionary = {}
 var _figure_diffuse: Dictionary = {}
 var _files: Dictionary = {}
@@ -59,6 +63,8 @@ func mount(edition: String, folder: String) -> bool:
 	tables.clear()
 	first_monster_definitions.clear()
 	texts.clear()
+	second_cards.clear()
+	second_restore.clear()
 	_textures.clear()
 	_figure_diffuse.clear()
 	_icons.clear()

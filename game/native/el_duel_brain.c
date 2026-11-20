@@ -2410,6 +2410,15 @@ static int discardable_creature(const Search *x, const State *s, int side, int s
 	return !(s->played[side] >> slot & 1) && c->effect == EFF_SUMMON && c->cost >= 0;
 }
 
+/* Cards that go by the duel's chance use up its rolls, and those rolls deal
+ * the cards to come as well: where cards are still to be dealt, none the
+ * engine was told of holds after. A duel that deals nothing more (a puzzle's
+ * fixed hands), or a proof that names no card to come, loses nothing by it
+ * when it is certain which cards went. */
+static inline int chance_blinds(const Search *x) {
+	return x && x->blinds && !x->no_draws && !(x->fair && x->proof);
+}
+
 static void discard_cards(State *s, int side, int count, int spells, int cause) {
 	const Search *x = (const Search *)s->rules;
 	if (spells) {
@@ -2441,8 +2450,9 @@ static void discard_cards(State *s, int side, int count, int spells, int cause) 
 			if (veiled(x, side, i)) s->blind = 1;
 			else if (every && c->cost >= 0) discard_answer(x, s, side, c, cause);
 		}
-		/* Chance is asked only where there is a card to take. */
-		if (x && x->blinds && gone > 0) s->blind = 1;
+		/* Chance is asked only where there is a card to take, and where all
+		 * of them went it chose nothing. */
+		if (x && x->blinds && gone > 0 && (!every || chance_blinds(x))) s->blind = 1;
 		return;
 	}
 	/* An empty hand gives nothing up, and chance is not asked. */
@@ -2450,7 +2460,7 @@ static void discard_cards(State *s, int side, int count, int spells, int cause) 
 	/* Every card it holds: no chance in that. */
 	if (x && count > 0 && count >= cards_held(s, side)) {
 		empty_hand(x, s, side, cause);
-		if (x->blinds) s->blind = 1;
+		if (chance_blinds(x)) s->blind = 1;
 		return;
 	}
 	for (int k = 0; k < count; k++) {
@@ -4796,7 +4806,7 @@ static int cast_card(const Search *x, State *s, int side, int slot, int target, 
 	case EFF_AMNESIA:
 		/* Every card goes, each taken by the duel's chance: the same chance
 		 * deals the cards to come, so none the engine was told of holds. */
-		if (empty_hand(x, s, 0, side) + empty_hand(x, s, 1, side) > 0 && x->blinds) s->blind = 1;
+		if (empty_hand(x, s, 0, side) + empty_hand(x, s, 1, side) > 0 && chance_blinds(x)) s->blind = 1;
 		if (s->second) deal(x, s, side, 1);
 		break;
 	case EFF_BAN:

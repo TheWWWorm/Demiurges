@@ -19,6 +19,12 @@ const OBJECT_PITCH := deg_to_rad(30.0)
 ## resolves them (ELAdventureArt): their models wear TerrainObjects skins.
 const OBJECT_TABLES := ["ResourceMine", "ResourceCut", "ManaNodes", "Buildings", "AdditionalBuildings",
 	"NewBuildings", "GlobalSpellCut", "Artefacts", "TerrObj"]
+## Other things an `!objects` marker may show (the cut-content pages): a
+## CombatCreatures row by code, a HeroTemplates row, a bare model with skins,
+## "Model/<model>@<texture>[@<second texture>]", for figures no table names, or
+## a flat picture: "Icon/<code>", the spell icon of a card that has no page of
+## its own, or "Portrait/<index>", a cell of the hero portrait sheets.
+const FIGURE_TABLES := ["CombatCreatures", "HeroTemplates", "Model", "Icon", "Portrait"]
 ## The bounding-sphere framing leaves wide margins; the reader starts closer.
 const OPENING_ZOOM := 0.72
 const RENDER_SCALE := 2.0
@@ -44,7 +50,7 @@ var _profile: ELProfile
 func _ready() -> void:
 	_picture = TextureRect.new()
 	_picture.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	_picture.stretch_mode = TextureRect.STRETCH_SCALE
+	_picture.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	_picture.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR
 	_picture.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(_picture)
@@ -80,7 +86,19 @@ static func stage_hero(profile: ELProfile, template: String, size: Vector2i, tra
 static func object_row(profile: ELProfile, id: String) -> Dictionary:
 	var table_name := id.get_slice("/", 0)
 	var key := id.substr(table_name.length() + 1)
-	if not table_name in OBJECT_TABLES or key.is_empty(): return {}
+	if key.is_empty(): return {}
+	if table_name == "Model":
+		var parts := key.split("@")
+		if parts.size() < 2 or parts[0].is_empty() or profile.locate_figure(parts[0] + ".mod").is_empty(): return {}
+		return {"Model": parts[0], "Texture": parts[1], "SecTexture": parts[2] if parts.size() > 2 else ""}
+	if table_name == "Icon":
+		var card: Dictionary = profile.table("CombatSpells").get(key, {})
+		return {"Icon": key} if int(card.get("Icon", 0)) > 0 else {}
+	if table_name == "Portrait":
+		if not key.is_valid_int() or int(key) < 0: return {}
+		return {"Portrait": int(key)} if profile.texture("Interface/heroes/photo_%02d" % (int(key) / 6 + 1)) != null else {}
+	if table_name in FIGURE_TABLES: return profile.table(table_name).get(key, {})
+	if not table_name in OBJECT_TABLES: return {}
 	var table := profile.table(table_name)
 	if table.has(key): return table[key]
 	var name := key.get_slice("@", 0)
@@ -92,7 +110,15 @@ static func object_row(profile: ELProfile, id: String) -> Dictionary:
 ## A viewport holding map object `id` (see object_row) with its adventure-map
 ## model and skins; null when the game has no such object.
 static func stage_object(profile: ELProfile, id: String, size: Vector2i, transparent := false) -> SubViewport:
+	var table_name := id.get_slice("/", 0)
+	var key := id.substr(table_name.length() + 1)
+	if table_name == "CombatCreatures": return stage(profile, key, size, transparent)
+	if table_name == "HeroTemplates": return stage_hero(profile, key, size, transparent)
+	if is_flat(id): return null
 	var row := object_row(profile, id)
+	if table_name == "Model":
+		if row.is_empty(): return null
+		return _stage(profile, row.Model, row.Texture, row.SecTexture, 1.0, size, transparent)
 	var model_name := str(row.get("Model", ""))
 	if model_name.is_empty(): return null
 	var skin := "TerrainObjects/" + str(row.get("TextureName", row.get("Texture", "")))
@@ -215,7 +241,35 @@ func show_hero(profile: ELProfile, template: String) -> bool:
 
 ## Shows map object `id` (see object_row); false when the game has none.
 func show_object(profile: ELProfile, id: String) -> bool:
-	return _show(profile, stage_object(profile, id, Vector2i(512, 512)), "", OBJECT_PITCH)
+	if is_flat(id):
+		# A card icon or a portrait: a flat picture instead of a model.
+		_show(profile, null, "")
+		var picture := flat_picture(profile, id)
+		if picture == null or _picture == null: return false
+		_picture.texture = picture
+		custom_minimum_size = Vector2(320, 320)
+		return true
+	return _show(profile, stage_object(profile, id, Vector2i(512, 512)), "", object_pitch(id))
+
+## True for `!objects` entries that are flat pictures, not models.
+static func is_flat(id: String) -> bool:
+	return id.begins_with("Icon/") or id.begins_with("Portrait/")
+
+## The picture of a flat `!objects` entry (see is_flat); null when the game
+## has none.
+static func flat_picture(profile: ELProfile, id: String) -> Texture2D:
+	if object_row(profile, id).is_empty(): return null
+	if id.begins_with("Icon/"): return profile.card_icon(id.trim_prefix("Icon/"))
+	if id.begins_with("Portrait/"): return profile.portrait(int(id.trim_prefix("Portrait/")))
+	return null
+
+## The opening view of `!objects` entry `id`: from above for buildings and
+## terrain models, level with creatures and heroes.
+static func object_pitch(id: String) -> float:
+	var table_name := id.get_slice("/", 0)
+	if table_name in ["CombatCreatures", "HeroTemplates"]: return PITCH
+	if table_name == "Model": return OBJECT_PITCH if id.get_slice("/", 1).to_lower().begins_with("te") else PITCH
+	return OBJECT_PITCH
 
 func _show(profile: ELProfile, staged: SubViewport, sounds: String, pitch := PITCH) -> bool:
 	# Switching editions (or heroes) replaces the figure shown.
