@@ -30,7 +30,7 @@ CORE = [
     "duel/puzzle_mortality_recipes.gd",
     "duel/puzzle_spell_recipes.gd",
     "content/runes.gd", "content/hero_skills.gd", "content/hero_progression.gd",
-    "content/safe_file.gd",
+    "content/safe_file.gd", "content/second_balance.gd",
 ]
 CLASS_NAME = re.compile(r"^class_name\s+(\w+)", re.M)
 CLASS_USE = re.compile(r"\bEL[A-Z]\w*")
@@ -170,6 +170,7 @@ var title := ""
 var error := ""
 var tables: Dictionary = {}
 var texts: Dictionary = {}
+var second_cards: Dictionary = {}
 func mount(_edition: String, _path: String) -> bool:
     error = "Use the game project directly for --installed, not the isolated offline fixture."
     return false

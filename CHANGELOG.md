@@ -2,6 +2,50 @@
 
 Versions follow [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html) from 0.3.0 on.
 
+## 0.21.0
+
+### New
+
+- **Ether Expedition expansion (Etherlords II).** The Expedition is now a longer roguelike deck-building run. New runs use rules version 15: three acts of eight rooms on shuffled, seed-dependent routes, a starting relic choice, and **Standard** or **Veteran** difficulty. Runs from earlier versions resume under their own rules, and Retry keeps the finished run's rules, seed and difficulty.
+  - **Study paths.** Each faction has three themed paths (for example Ash Raiders, Living Swarm, Sky Patrol, Scrap Custodians), or take *The Open Road* for 10 extra starting gold. A path steers one reward slot and one merchant slot toward its theme; the Crossroads Archive lets you change it later.
+  - **Two-page reserve.** Keep situational spells outside the active book and swap them in for free at camp and in the Last Haven.
+  - **Opening rehearsal.** Prepare one spell so it is always among your five opening cards, at camp, at the Shrine of Knowledge or in the Last Haven. It can be set aside and prepared again for free.
+  - **Artifact projects.** The Artifact Constructor offers unfinished artifacts built from original Etherlords II spells. Assemble one at a camp or in the Last Haven and recharge it at camps and merchants. Elites can also reward a finished artifact.
+  - **Guardian rewards.** The first two guardians offer two faction combat powers (ten in all, such as Burnout, Ether Feeding, Hostile Ambience, Second Birth and Energy Barrier) and one keystone (Blood Crown, Living Heart, Prismatic Quill, Wayfarer's Compass). Powers can be prepared or set aside before a duel.
+  - **Elite profiles.** Before an elite fight, choose Standard, Overcharged (+1 level, less life) or, from Act II, Fortified (−1 level, more life). The last two pay 10 extra gold.
+  - **Twelve passive relics**, merchants with spells, relics, healing, removal, provisions and recharges, and **nineteen encounter types**, including the Lost Courier, Bounty Board, Runesmith's Forge, Resonant Anvil, Abandoned Library, Sealed Vault and Relic Broker. Each act shuffles its events so none repeats.
+  - **The Last Haven.** Every route ends at a final shop before White Lord, where you can see the guardian before you fight. If your book has no answer to enchantments, the Haven stocks your faction's.
+  - **Thirteen opponent plans**, such as bee swarms, venom, night hunters, spirit recursion and toxins, change a few cards in ordinary opponents' books. Scouting names the plan and suggests a counter. Guardians and scripted fights keep their original decks.
+  - **Fair checkpoints.** From rules version 10 an active duel can only be resumed or surrendered; restarting it to reroll draws is disabled. Saved duels keep their exact random state, and a failed save pauses the run with **Retry Save** instead of losing progress.
+  - Receipts after each decision show the exact gold, life, page and relic changes, and the route, camp and Spellbook panels have been reorganised so reachable rooms and free actions come first.
+- **Random puzzle challenges.** **Puzzles → Random challenge** generates and proves a fresh tactical puzzle in either game at Medium, Hard, Expert or Master difficulty. Each tier needs at least one to four of your spells or abilities to force the win, and Master always needs a second own turn. Share or replay a puzzle with its code (for example `ELP5:el1:5:12345`). Hints come in three steps, and **Tactical hint** checks your current position and suggests one proven next move. Generated attempts don't change your Collection progress. The built-in solver now also proves puzzles that discard a whole hand (Malison, Amnesia).
+- **Etherlords II card balance in the first game.** A new option under Options → Interface → Gameplay (off by default, needs Etherlords II installed) plays every Etherlords I card that Etherlords II also has with Etherlords II's 1.03 values, descriptions and card rules: 284 cards, including about 45 rule differences such as Healing, Firestorm, Ban and Ethereal Chain. The computer opponent plans with the same rules. Battles keep the balance they started with, puzzles always use the original balance, and online games only connect players with the same setting.
+- **Cut content in the wiki.** New pages describe what was cut from Etherlords and Etherlords II: unused creatures, buildings, heroes and objects with rendered pictures, the unfinished *Intrusion* campaign, and nine cut missions (Balance of Terror, Dragon Lake, Evil Dale, First Strike, Ice Trap, Savage Desert, Snowflake Maze, Synthets' Menace and Three Lakes Valley).
+- **Artifact and Rebirth counters.** In Etherlords II duels, the hero tooltip shows how many artifact uses are left beside Artificer or Expert Artificer, and whether Rebirth has been used.
+
+### Etherlords I random maps
+
+- **Version 13 maps reworked to look like the stock missions.** Cliffs, forests and rock cover about half the land in rounded blocks with a maze of two-to-four-tile lanes, long walls and dead ends. Roads follow the lanes as one-tile paths blended into the ground and break into 10–30 separate pieces linking nearby sites. Woods close in around castles except at the gate, and sites face their lane. A 0.20.0 setup code for a version 13 map now gives the reworked map.
+- Every map of every preset and size now generates; small islands that used to fail with "try a larger map" now fit their gem mine. Shops of the same kind stock different goods and skip basic cantrips, heroes from generic templates get a name and a specialty, the minimap shows water in blue, and battles at sea use the Etherlords II ship arena when Etherlords II is installed.
+
+### Battles
+
+- **Etherlords II battle flow.** Creatures finish lying down before the next phase, and a creature woken mid-animation gets up with its own clip. Space during a fight settles all remaining attacks at once with their hit and death sounds, as in the original. It never cuts spell, attack or death sounds or a falling hero's death, and it ends the winner's victory clip while the fanfare plays on. Hide movement drops the lie-down and get-up clips, and hiding casting animations also hides the caster's voice. [#237](https://github.com/TheWWWorm/Demiurges/issues/237) · [#244](https://github.com/TheWWWorm/Demiurges/issues/244)
+- **Etherlords I battle display.** A creature's tooltip shows its printed card, without live stats or enchantments, as in the original. With battle cast icons on, ether disturbance and specialization triggers also appear in the top-left icons, and those icons clear when the other side starts acting. The numbers over battle figures no longer sit on a dark square in either game. [#254](https://github.com/TheWWWorm/Demiurges/issues/254) · [#256](https://github.com/TheWWWorm/Demiurges/issues/256) · [#257](https://github.com/TheWWWorm/Demiurges/issues/257) · [#258](https://github.com/TheWWWorm/Demiurges/issues/258)
+- **Enfeeblement in Etherlords I** shows the curse landing when cast, as in the original, instead of the effect of its removal. [#265](https://github.com/TheWWWorm/Demiurges/issues/265)
+- **Fungi.** Fungus Immortality is announced only when it actually saves a fingus (all three of its rolls succeed). A fingus that spits dies as the spit leaves it, and its target is hit when the spit lands, as in the originals. [#260](https://github.com/TheWWWorm/Demiurges/issues/260) · [#261](https://github.com/TheWWWorm/Demiurges/issues/261)
+- **Try again** in campaign, mission and map battles of both games deals new opening hands and draws. [#263](https://github.com/TheWWWorm/Demiurges/issues/263)
+- **Smarter computer players.** They no longer put a buff meant for their own creatures on yours, or a curse on their own. They also stop sending a lone creature into ready blockers when the duel is already won without it, or lost whatever they do. In self-play these pointless attacks fell from 18 to 8 in Etherlords II and from 5 to 4 in Etherlords I, with no wins missed.
+
+### Interface, maps and graphics
+
+- **Etherlords I saves and castles.** Save and load lists mark the races playing on each saved map, as the original does. Each new start of a mission or campaign chapter recruits different castle heroes; a loaded save keeps its own. [#255](https://github.com/TheWWWorm/Demiurges/issues/255) · [#259](https://github.com/TheWWWorm/Demiurges/issues/259)
+- **Enter** (and keypad Enter) presses the visible check (OK) button in both games, as a click would, unless Enter already does something there. This includes the hero name field on the Etherlords I campaign selection. [#264](https://github.com/TheWWWorm/Demiurges/issues/264)
+- **Wiki models.** Creature and hero models are framed by their own meshes, so their sizes are consistent (no more tiny Orc Shaman or giant Gibberling) and they stay inside the frame at any zoom or angle. [#262](https://github.com/TheWWWorm/Demiurges/issues/262)
+- The ether plane gate under the columns nearest the camera hides with them instead of blocking the view.
+- The orc shaman is no longer overly bright, and his hood still shows no dark patch. Helmets, shoulder plates and other one-sided armour shine as metal again instead of looking matte. [#223](https://github.com/TheWWWorm/Demiurges/issues/223)
+- The world AI help and the Arena pause notice are translated into Russian.
+
 ## 0.20.0
 
 - **Etherlords I random maps.** Generator version 13 follows a survey of the 37 original missions: level ground, forests and rock masses covering about a third of the land with narrow walkable veins, roads that reuse earlier ones instead of looping, and creature strength rising with walking distance from the nearest castle. Roaming neutral creatures defend sites and passages, prizes on frontiers are guarded, climate borders follow natural lines, and sites sealed behind diagonal gaps in dense woods are opened. Naval seeds that took minutes now generate in seconds. Existing generated saves and setup codes keep their original rules.

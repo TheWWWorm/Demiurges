@@ -65,7 +65,7 @@ static func apply(first: ELProfile, second: ELProfile, enabled: bool) -> bool:
 			if other_creature.has(key): creature[key] = other_creature[key].duplicate() if other_creature[key] is Array else other_creature[key]
 			elif key == "Flags": creature.erase(key)
 		if same_language:
-			var description := second.card_description(card)
+			var description: String = second.card_description(card)
 			if not description.is_empty() and description != str(other.get("ToolTip", card)):
 				first.texts[TEXT_PREFIX + card] = description
 				row.ToolTip = TEXT_PREFIX + card
