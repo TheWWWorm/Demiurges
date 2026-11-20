@@ -3,17 +3,18 @@
 This survey measures the 37 original Etherlords I missions so that random maps
 can follow the same layout. It covers 20 campaign, 7 single and 10
 multiplayer missions. Generator version 13 (`EL1R13:`) is built from the
-rules below. The tables compare it with the stock missions and with version 12.
+rules below. The tables compare it with the stock missions.
 
 Run the survey with `tools/first_map_survey.gd`:
 
 ```
 godot --headless --path game --script ../tools/first_map_survey.gd -- --maps=stock --out=<dir>
-godot --headless --path game --script ../tools/first_map_survey.gd -- --maps=generated --presets=frontier,lakes --seeds=212,audit-7 --out=<dir>
+godot --headless --path game --script ../tools/first_map_survey.gd -- --maps=generated --presets=frontier,lakes --seeds=212,audit-7 --size=128 --out=<dir>
 ```
 
 The script writes one JSON file per map. `--png=<dir>` also saves a
-schematic of each map. All figures use the mission-start state at the middle
+schematic of each map, with walkable tiles of clearance 2 in yellow and 3 or
+more in orange. All figures use the mission-start state at the middle
 difficulty and count land tiles only, so sea on naval maps is excluded.
 Values are given as mean [minimum–maximum] over maps.
 
@@ -160,56 +161,79 @@ spurs. Then 34% of its road tiles are turns and 4% are junctions.
 
 ## Comparison with generated maps
 
-Generated figures come from 2 seeds (212 and audit-7) of each of the 11
-presets. They cover 22 maps per version, and each version was measured on
-the same set.
+Each figure is first measured per map, as a share of that map's land, and
+then summarised as the median [lowest–highest] over maps. That keeps a large
+map from outweighing a small one. Stock figures come from the 17 single and
+multiplayer missions; the story missions of the campaign are left out. The
+generated figures come from version 13 maps for all 11 presets at each of the
+four sizes (64, 96, 128 and 160 tiles), three seeds each: 132 maps, of which
+131 generate (a 64-tile archipelago for four players has no room for a full
+starting economy).
 
-| Measure | Stock | Version 12 | Version 13 |
-| --- | ---: | ---: | ---: |
-| Ground relief | flat | hills and valleys | flat |
-| Scenery props per 1000 land | 123 | 49 | 182 |
-| Scenery cover % of land | 41.5 | 14.4 | 50.0 |
-| Cover from props spanning 5+ tiles | 50% | — | 33% |
-| Mean prop footprint, tiles | 4.9 | 2.9 | 2.5 |
-| Mean scenery cluster, tiles | 44 | — | 48 |
-| Walkable tiles with clearance ≤ 1 | 72% | 51% | 74% |
-| Walkable tiles with clearance ≥ 4 | 6.8% | 4.2% | 0.1% |
-| Widest open spot (clearance) | 4.9 | 9.6 | 8.3 |
-| Narrow share of castle routes | 79% | 49% | 67% |
-| Castle route / straight line | 1.4 | 1.1 | 1.2 |
-| Road % of land | 4.4 | 4.9 | 5.6 |
-| Creatures per 1000 land | 10.2 | 8.6 | 10.2 |
-| Creatures in passages | 59% | 71% | 90% |
-| Creatures near a site | 49% | 36% | 69% |
-| Creatures on or beside a road | 26% | 16% | 23% |
-| Creature level, ≤ 10 steps (mean) | 2.8 | 2.3 | 3.8 |
-| Creature level, 11–20 steps | 3.7 | 2.5 | 4.1 |
-| Creature level, 21–30 steps | 4.5 | 2.8 | 4.5 |
-| Creature level, 31–45 steps | 5.1 | 3.2 | 4.9 |
-| Gap to nearest creature, tiles | 5.4 | 5.0 | 5.5 |
-| Gap to nearest site, tiles | 4.2 | 5.2 | 5.2 |
+| Measure, per map | Stock | Version 13 |
+| --- | ---: | ---: |
+| Scenery cover % of land | 47.8 [36–65] | 52.2 [30–68] |
+| Walkable tiles with clearance ≤ 1 | 80.7% [68–91] | 83.1% [76–87] |
+| Walkable tiles with clearance 2 | 18.8% [10–30] | 16.3% [12–21] |
+| Walkable tiles with clearance ≥ 3 | 0.8% [0–3.5] | 0.6% [0.1–2.8] |
+| Widest open spot (clearance) | 3 [2–5] | 3 [3–5] |
+| Narrow share of castle routes | 81% [67–91] | 85% [76–95] |
+| Mean scenery cluster, tiles | 32 [10–138] | 45 [12–149] |
+| Mean prop footprint, tiles | 5.1 [2.2–7.9] | 3.1 [2.1–4.0] |
 
-Scenery cover by ground in version 13 is Red 54%, Green 51%, Black 51% and
-Blue 48%, against 62%, 45%, 42% and 24% in the stock missions. Snow is
-deliberately closer to the other grounds than in the stock missions, so it
-keeps the maze of lanes instead of opening into wide fields. The share of
-creatures in passages was not measured again after the last change.
+Cover rises with map size: 37% at 64 tiles, 49% at 96, 54% at 128 and 56% at
+160. The water presets sit lower (37–49%) because harbors, quays and coasts
+keep their ground open.
 
-Scenery cover in rings around castles (tiles from the walls) is 41% at one
-to two tiles, 44% at three to four, 43% at five to six, 47% at seven to nine
-and 51% at ten to fourteen. The stock missions have 41%, 43%, 51%, 54% and
-55%.
+Further measures, pooled over the maps:
+
+| Measure | Stock | Version 13 |
+| --- | ---: | ---: |
+| Walkable tiles in a one-tile corridor | 9.7% | 10.8% |
+| Walkable tiles in one-tile runs of three or more | 0.4% | 0.9% |
+| Cover from single-tile props | 7.7% | 19% |
+| Cover from props spanning 5–8 tiles | 47% | 32% |
+| Creatures with one of their kind within ten tiles | 3.2% | 0.2% |
+| Walkable share of land 3–4 tiles from a castle | 57% | 49% |
+| Walkable share of land 10–14 tiles from a castle | 44% | 43% |
+
+### Ground under objects
+
+The stock missions paint the ground by what stands on it. On grass, 91% of
+the corners under trees are forest soil (kind 2), rocks stand on cobbles
+(kind 3) or grass, and the open ground is plain grass (kind 0, 73%). Red
+ground puts rocks on kind 11 and trees on kind 9; tan ground puts rocks and
+trees on the brown kinds 15 and 14; snow keeps rocks and pines on snow
+(kinds 4 and 5) or ice (18), and lays about a quarter of its pine stands on
+brown or dark earth. Forts stand on brick (kind 6). Version 13 follows the
+same shares, so forest masses read as dark ground with a lighter rim. The
+exception is snow: version 13 lays about 60% of its pine stands on brown or
+dark earth, against a quarter in the stock missions, because its snow is
+denser and the sparse pine models alone would make a blocked stand look like
+open snow.
+
+### Castle approaches
+
+Counted from each castle's walls, by the side the castle faces, the stock
+missions keep one side clear: the wall opposite the row where recruits
+appear. In 99 of the 114 stock castles, no site, resource pile or creature
+stands within eight rows of it, across the width of the walls, and 62 have no
+scenery there either. The other sides are busier: within eight rows, 59%
+of the castles have a site or creature before the stairs of the castle
+model, half behind the walls and four in five along the recruits' row.
+Version 13 keeps sites and creatures eight rows from both the clear side and
+the stairs, the side the camera shows as the front. They also stay five rows
+from the back wall, which the tall castle model overhangs from the camera,
+and three rows from the recruits' row. Of 336 castles on 88 sample maps, only a few on
+crowded 64-tile island maps have a starting mine or shop closer than that.
 
 Known differences in version 13:
 
-- Large cliffs make up less of the cover (33% against 50%). Mass edges are
-  irregular, so many gaps fit only single-tile props, which brings the mean
-  prop footprint down to 2.5 tiles against 4.9.
-- Scenery covers more land (50% against 42%), mostly on snow, and roads
-  take a little more of it (5.6% against 4.4%).
-- Starting areas and the centres of naval maps can still hold a clearing
-  wider than any in the stock single and multiplayer missions.
+- Large cliffs make up less of the cover (32% against 47%), and more of it
+  comes from single-tile props (19% against 8%). Mass edges are irregular, so
+  many gaps fit only small props.
+- Cover runs a few points higher on the larger land maps, mostly from the
+  masses between the narrow lanes.
 - Creatures within ten steps of a castle are about one level stronger than
   in the stock missions.
-- Roads now wind along the lanes, but the shortest walking route between
-  castles is still straighter than in the stock missions (1.2 against 1.4).
+- The back and sides of a castle are kept clearer than in the stock missions.

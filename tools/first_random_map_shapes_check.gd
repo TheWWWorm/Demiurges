@@ -262,6 +262,53 @@ func _geometry(map: ELAdventureMap, config: Dictionary) -> void:
 	check(starts.size() == config.players, "every homeland exposes its opening economy")
 	if config.version >= ELFirstRandomMapV2.STOCK_LAYOUT_VERSION:
 		check(map.relief.is_empty(), "stock-layout maps keep the level ground of the original missions")
+		# Stock woods stand on forest soil: green corners inside a tree's
+		# footprint take kind 2 when the tileset crosses it at the same cost.
+		var art := ELAdventureArt.new(map)
+		var wooded := {}
+		for item: Dictionary in map.objects:
+			if item.group != "terrain_objects" or not str(item.name).to_lower().contains("tree"): continue
+			for cell: Vector2i in ELAdventureGrid.footprint(art.resolve(item).get("row", {}), int(item.rotation)).cells: wooded[cell + Vector2i(item.x, item.y)] = true
+		var under := 0
+		var soil := 0
+		var same_cost: bool = int(map.profile.terrain_tiles.types.get(2, {}).get("movement", -2)) == int(map.profile.terrain_tiles.types.get(0, {}).get("movement", -3))
+		for cell: Vector2i in wooded:
+			if not (wooded.has(cell + Vector2i(1, 0)) and wooded.has(cell + Vector2i(0, 1)) and wooded.has(cell + Vector2i(1, 1))): continue
+			var corner := map.tile(cell.x + 1, cell.y + 1) & ~ELTileSet.GREY
+			if ELAdventureArt.terrain_color(corner) != "Green": continue
+			under += 1
+			if corner == 2: soil += 1
+		check(not same_cost or under == 0 or soil * 10 >= under * 9, "stock-layout woods stand on forest soil (%d of %d corners)" % [soil, under])
+		# Stock castles open onto a clear approach on the side opposite the
+		# recruits' row and before the model's stairs; only a crowded
+		# island's starting economy may use it.
+		var crowding: Array[String] = []
+		for castle: Dictionary in map.objects:
+			if not ELFirstScenario.is_castle(castle): continue
+			var walls := Vector2i(ELAdventureGrid.footprint(art.resolve(castle).get("row", {}), int(castle.rotation)).size)
+			for side in [2, 3]:
+				var gate := Vector2i(int(castle.x) - 1 + walls.x / 2, int(castle.y) - 1)
+				var along := Vector2i.RIGHT
+				var away := Vector2i.UP
+				match ((int(castle.rotation) >> 2) + side) & 3:
+					1:
+						gate = Vector2i(int(castle.x) - 1, int(castle.y) - 1 + walls.y / 2)
+						along = Vector2i.DOWN
+						away = Vector2i.LEFT
+					2:
+						gate = Vector2i(int(castle.x) - 1 + walls.x / 2, int(castle.y) + walls.y)
+						away = Vector2i.DOWN
+					3:
+						gate = Vector2i(int(castle.x) + walls.x, int(castle.y) - 1 + walls.y / 2)
+						along = Vector2i.DOWN
+						away = Vector2i.RIGHT
+				for item: Dictionary in map.objects:
+					if item.group not in ["np_heroes", "resource_cuts", "additional_buildings", "artefacts", "global_spells"]: continue
+					var site := Rect2i(Vector2i(item.x, item.y), Vector2i.ONE if item.group == "np_heroes" else Vector2i(ELAdventureGrid.footprint(art.resolve(item).get("row", {}), int(item.rotation)).size))
+					for depth in 8:
+						for across in range(-2, 4):
+							if site.has_point(gate + along * across + away * depth): crowding.append("%s %d" % [item.name, depth])
+		check(crowding.is_empty(), "stock-layout castles keep their approaches clear: " + ", ".join(crowding.slice(0, 4)))
 	elif config.version >= ELFirstRandomMapV2.RELIEF_VERSION:
 		check(map.relief.size() == map.terrain.size() and map.relief.count(0) < map.relief.size(), "new maps have a varied surface on the corner grid")
 		var level_water := true
