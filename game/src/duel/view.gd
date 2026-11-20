@@ -658,7 +658,13 @@ func _start(edition: String, options: Dictionary = {}, restored: ELDuel = null, 
 	arena = ELArena.new()
 	stage.add_child(arena)
 	_use_edition(edition)
-	if not arena.build(profile, String(match_options.get("arena", "Green.001"))):
+	var arena_profile := profile
+	var arena_id := String(match_options.get("arena", "Green.001"))
+	# First-game fights at sea borrow the second game's ship arena.
+	if edition == "el1" and bool(match_options.get("ship_battle", false)) and profiles.has("el2") and profiles["el2"].table("CombatSceneDB").has("Ship.001"):
+		arena_profile = profiles["el2"]
+		arena_id = "Ship.001"
+	if not arena.build(arena_profile, arena_id):
 		status.text = "Arena failed: " + "; ".join(arena.errors)
 		return
 	# The local defender uses the left battle seat. Keep both heroes on their
