@@ -36,6 +36,8 @@ const SCENERY_PATCH_SIZE := 12
 const OPENING_DISTANCE := 12
 const WILDERNESS_SPACING := 12
 const FRONTIER_SITE_GAP := 8
+## Rows before a version 13 castle's open sides kept free of sites and creatures.
+const CASTLE_APRON := 8
 const STARTER_ENCOUNTERS := ["Carnivorous Fingus", "Lesser Bee Hive", "Mech Worm", "River Halo", "Small Velos"]
 const JOURNEY_ENCOUNTERS := ["OrcShaman", "Sea Halo"]
 const WILDERNESS_ENCOUNTERS := ["Giant Fingus", "OrcGuard", "Small Bee Hive", "Mech Wyrm"]
@@ -54,6 +56,45 @@ const SCENERY_FAMILIES := {
 	"Red": [["red_bush", "red_tree"], ["redhill", "red_stone", "red_rock", "red_voulcan"]],
 	"Black": [["blacktree", "blackbush"], ["blackcrater", "blackhill", "blackstone", "rock_"]],
 }
+
+## Version 13 scenery mix: each prop's share (per mille) of the scenery
+## cover on each ground across the 37 stock missions (docs/first_map_survey.md).
+## Prop names follow the art sets, not the ground: the dark Chaot ground
+## carries the grey cliffs and black trees, the tan Synthet ground the red
+## rocks and bushes. Large cliffs make up half the cover outside the snow.
+const STOCK_SCENERY := {
+	"Green": {"GreenRock04": 101, "GreenForest04": 86, "GreenRock00": 83, "GreenForest05": 80, "GreenRock03": 71,
+		"GreenForest06": 71, "GreenRock01": 52, "GreenStone_9": 44, "GreenForest02": 43, "GreenForest03": 38,
+		"GreenBush07": 32, "GreenRock05": 29, "GreenStone_8": 26, "GreenRock02": 26, "GreenForest01": 22,
+		"GreenStone_1": 15, "GreenTree01": 15, "GreenStone_2": 13, "GreenTree02": 12, "GreenBush08": 11,
+		"GreenStone_10": 11, "GreenStone_5": 10, "GreenBush02": 8},
+	"Blue": {"BluePine1_4": 405, "BluePine1_2": 116, "BluePine1_3": 115, "BluePine1_5": 113, "Blue_rock1_6": 62,
+		"BluePine1_1": 33, "BlueIce_4": 33, "BlueIce_3": 16, "BlueIce_2": 16, "Blue_rock1_7": 8, "BlueIce_1": 8,
+		"BlueIce_10": 8},
+	"Red": {"rock_2": 186, "rock_1": 144, "rock_4": 135, "BlackTree_22": 53, "rock_3": 51, "BlackHill_1": 32,
+		"BlackTree_23": 31, "rock_5": 29, "BlackStone_1": 24, "Blue_rock1_5": 24, "rock_6": 23, "rock_7": 21,
+		"rock_8": 18, "Blue_rock1_6": 18, "BlackTree_21": 18, "BlackHill_2": 14, "Blue_rock1_1": 13,
+		"BlackStone_2": 8, "BlueStone_1": 8, "BlackStone_4": 8, "Blue_rock1_7": 8},
+	"Black": {"Red_rock_2": 130, "Red_Bush_1": 109, "Red_Stone_1": 85, "Red_rock_4": 82, "Red_rock_6": 66,
+		"Red_Stone_2": 59, "Red_Bush_4": 58, "Red_rock_1": 52, "Red_rock_3": 48, "Red_rock_5": 44, "Red_Stone_4": 35,
+		"Red_Bush_2": 28, "Red_Bush_3": 24, "Red_Stone_3": 20, "Red_rock_7": 18, "BluePine1_5": 10,
+		"Red_Voulcan_5": 10, "Red_Voulcan_6": 9, "BluePine1_3": 8},
+}
+
+## Single-tile stock props for each ground, used to close the last gaps
+## inside a mass so it does not hold sealed pockets.
+## Each blocks its tile visibly: flat slabs, stones and bushes a fifth of
+## a tile high and the thin dead trees read as open ground.
+const STOCK_FILLERS := {
+	"Green": ["GreenForest03", "GreenBush07", "GreenForest03", "GreenStone_10", "GreenStone_5"],
+	"Blue": ["BluePine1_1", "BluePine1_1", "BlueStone_4"],
+	"Red": ["BlackTree_13", "BlackTree_13", "BlackStone_5", "blackbush_5"],
+	"Black": ["Red_Voulcan_2", "Red_Voulcan_1", "Red_Tree_7", "Red_Tree_7"],
+}
+
+## Stock props a tenth of a tile high: they block a tile but look like
+## open ice, so version 13 leaves them out of its mix.
+const FLAT_PROPS := ["BlueIce_1", "BlueIce_2", "BlueIce_3", "BlueIce_4", "BlueIce_10"]
 
 var error := ""
 var config: Dictionary = {}
@@ -111,14 +152,38 @@ var _port_routes := {}
 var _unreached := Vector2i(-1, -1)
 ## Version 13 woods: a diagonal step between two blocking objects is no way in.
 var _strict_corners := false
+## Version 13: sites the ground reached before the woods went in. The woods
+## repair keeps every one of them reachable, not only the strategic targets.
+var _open_sites: Array[int] = []
+## 1 records _open_sites on the next access check, 2 requires them.
+var _site_mode := 0
+## Cells the last access check reached, kept for the woods repair.
+var _last_reached := PackedByteArray()
+## Id of the site the last failed access check could not reach.
+var _unreached_id := -1
 var _reward_guards := {}
 var _basins: Array[Transform2D] = []
 var _frontier_supplies: Array[Dictionary] = []
 var _site_clearance := PackedByteArray()
+## Version 13: cells before a castle, kept free of sites and creatures;
+## 2 marks the nearest rows, 1 the rest.
+var _gate_apron := PackedByteArray()
+## Placement skips apron cells marked above this level.
+var _apron_level := 0
+## Whether the starting economy keeps off the castle approaches, and whether
+## that left no room for it.
+var _economy_apron := true
+var _economy_crowded := false
+## Version 13: derived layout seeds tried when a seed's layout fails.
+const LAYOUT_VARIANTS := 5
+var _layout_variant := 0
 var _prize_scenery := {}
 var _gated_prizes := {}
 var _approach_clearings := PackedByteArray()
 var _uplands := PackedFloat32Array()
+## Version 13 lane network between the scenery masses, laid out before the
+## roads so they run along it.
+var _lane_mask := PackedByteArray()
 var _summits: Array[Vector2i] = []
 
 static func defaults(version := VERSION) -> Dictionary:
@@ -202,6 +267,40 @@ static func content_hash(map: ELAdventureMap) -> String:
 	return JSON.stringify(data, "", true).sha256_text()
 
 func generate(profile: ELProfile, options: Dictionary = {}) -> ELAdventureMap:
+	var map := _generate_layout(profile, options)
+	if map != null or config.is_empty() or int(config.version) < STOCK_LAYOUT_VERSION: return map
+	# Version 13: a seed whose layout leaves a site or economy without room
+	# is built again from a derived layout seed. The seed, title and map id
+	# stay the same, so the same settings always give the same map.
+	var first_error := error
+	for variant in range(1, LAYOUT_VARIANTS):
+		var retry := ELFirstRandomMapV2.new()
+		retry._layout_variant = variant
+		map = retry._generate_layout(profile, options)
+		if map == null: continue
+		error = retry.error
+		config = retry.config
+		report = retry.report
+		report.layout_variant = variant
+		return map
+	error = first_error
+	return null
+
+## One layout; when the castle approaches left no room for a starting
+## economy, the same layout again with the economy free to use them.
+func _generate_layout(profile: ELProfile, options: Dictionary) -> ELAdventureMap:
+	var map := _generate_map(profile, options)
+	if map != null or not _economy_crowded: return map
+	var retry := ELFirstRandomMapV2.new()
+	retry._economy_apron = false
+	retry._layout_variant = _layout_variant
+	map = retry._generate_map(profile, options)
+	error = retry.error
+	config = retry.config
+	report = retry.report
+	return map
+
+func _generate_map(profile: ELProfile, options: Dictionary) -> ELAdventureMap:
 	error = ""
 	report = {}
 	config = normalize(options)
@@ -209,6 +308,7 @@ func generate(profile: ELProfile, options: Dictionary = {}) -> ELAdventureMap:
 	if profile == null or profile.id != "el1": return _fail("Random maps require Etherlords I game files.")
 	_profile = profile
 	_rng = seed_for_config(config)
+	if _layout_variant > 0: _rng = hash([_rng, _layout_variant]) & 0x7fffffff
 	_terrain_seed = _rng
 	if not _read_catalog(): return null
 	_map = ELAdventureMap.new()
@@ -257,6 +357,8 @@ func generate(profile: ELProfile, options: Dictionary = {}) -> ELAdventureMap:
 	_port_routes.clear()
 	_reserved.resize(_map.roads.size())
 	_reserved.fill(0)
+	_gate_apron.resize(_map.roads.size())
+	_gate_apron.fill(0)
 	_corridor.resize(_map.roads.size())
 	_corridor.fill(0)
 	if config.version >= PLACEMENT_VERSION: _guard_safe.resize(_map.roads.size())
@@ -314,6 +416,15 @@ func generate(profile: ELProfile, options: Dictionary = {}) -> ELAdventureMap:
 	if config.version >= FRONTIERS_VERSION:
 		_place_frontier_supplies()
 	var first_decoration := _next_id
+	if config.version >= STOCK_LAYOUT_VERSION and config.scenery > 0:
+		# Under the woods' corner rule: a gap between two fixed objects
+		# cannot be reopened by clearing woods.
+		_site_mode = 1
+		_strict_corners = true
+		var recorded := _check_access()
+		_strict_corners = false
+		_site_mode = 0
+		if not recorded: return null
 	if config.scenery > 0:
 		if config.version == VERSION:
 			_make_legacy_scenery()
@@ -329,6 +440,7 @@ func generate(profile: ELProfile, options: Dictionary = {}) -> ELAdventureMap:
 		_guard_safe.fill(0)
 		var opened := false
 		_strict_corners = true
+		_site_mode = 2
 		for attempt in 8:
 			_unreached = Vector2i(-1, -1)
 			if _check_access(true):
@@ -338,6 +450,9 @@ func generate(profile: ELProfile, options: Dictionary = {}) -> ELAdventureMap:
 			# Clear the generated woods around a sealed-off site and join
 			# the freed ground again.
 			var site := _unreached
+			if attempt < 4 and _carve_woods(_unreached_id, first_decoration, cliff_ids):
+				if not _reconnect_landscape(first_decoration, cliff_ids): return null
+				continue
 			_map.objects = _map.objects.filter(func(item: Dictionary) -> bool:
 				return item.group != "terrain_objects" or int(item.permanent_id) < first_decoration or Vector2i(item.x, item.y).distance_squared_to(site) > (6 + attempt * 3) * (6 + attempt * 3))
 			if not _reconnect_landscape(first_decoration, cliff_ids): return null
@@ -345,10 +460,19 @@ func generate(profile: ELProfile, options: Dictionary = {}) -> ELAdventureMap:
 		# still crosses it.
 		_strict_corners = false
 		if not opened and not _check_access(true): return null
+		_site_mode = 0
 	if not _check_terrain(): return null
 	if config.version >= GUARD_POSTS_VERSION and config.guards != "none":
 		if not _post_field_guards(): return null
+	if config.version >= STOCK_LAYOUT_VERSION and config.scenery > 0:
+		# A creature posted in the only gap to a site closes it; it goes.
+		for attempt in 6:
+			_unreached_id = -1
+			if _check_access(false, config.version >= RELIEF_VERSION): break
+			if _unreached_id < 0 or not _carve_woods(_unreached_id, first_decoration, cliff_ids, true): return null
+		error = ""
 	if not _check_access(false, config.version >= RELIEF_VERSION): return null
+	if config.version >= STOCK_LAYOUT_VERSION: _paint_object_ground()
 	# Stock maps are flat; their hills are props and rock tiles. Version 13
 	# keeps the ground level instead of sculpting mesas and shelves.
 	if config.version >= WILDERNESS_VERSION and config.version < STOCK_LAYOUT_VERSION: _paint_wilderness_detail()
@@ -466,6 +590,9 @@ func _read_catalog() -> bool:
 		if color not in COLORS or not ELSpellInventory.is_spell(_profile, key) or row.get("IsArtifact", "False") in ["True", "Yes", true]: continue
 		var tier := ["Cantrip", "Common", "Rare", "Unique"].find(str(row.get("Rarity", "")))
 		if tier < 0: continue
+		# Version 13 shops sell no cantrips: those are the basic cards every
+		# lord already draws from.
+		if config.version >= STOCK_LAYOUT_VERSION and tier == 0: continue
 		tier = maxi(0, tier - 1)
 		var family := "Creature" if row.get("Class") == "Creature" else "Spell"
 		if row.get("Class") not in ["Creature", "Sorcery", "Enchantment"]: continue
@@ -1143,6 +1270,9 @@ func _weight_landscape_routes() -> void:
 	# Roads gravitate to clear valley floors and only use causeways when
 	# necessary. The weights shape placement, not the cost of hero movement.
 	var wet_weight := 14.0 if not _basins.is_empty() else 5.0
+	# Stock roads run along the lanes between the masses, so they wind
+	# around the blocks instead of cutting across them.
+	if config.version >= STOCK_LAYOUT_VERSION and config.scenery > 0 and not _stock_scenery_mix().is_empty(): _lane_mask = _cell_lanes()
 	for y in range(1, _map.height - 1):
 		for x in range(1, _map.width - 1):
 			var point := Vector2i(x, y)
@@ -1152,6 +1282,8 @@ func _weight_landscape_routes() -> void:
 			var wander := 0.21 * _noise(x, y, 15.0, 1091)
 			# Stock routes run about 1.4 times the straight distance.
 			if config.version >= STOCK_LAYOUT_VERSION: wander = 5.0 * pow(_noise(x, y, 11.0, 1093), 2.0) + 1.6 * _noise(x, y, 4.0, 1097)
+			# Off the lanes a road would cut through a mass.
+			if not _lane_mask.is_empty(): wander = 0.6 * _noise(x, y, 4.0, 1097) + (0.0 if _lane_mask[y * _map.width + x] != 0 else 20.0)
 			_route_grid.set_point_weight_scale(point, weight + wander)
 
 func _region_at(point: Vector2i) -> int:
@@ -1310,6 +1442,24 @@ func _make_players() -> bool:
 		var hero_name: String = heroes[_next(heroes.size())]
 		var hero := _place("heroes", hero_name, hero_at, _profile.table("HeroTemplates")[hero_name], player, color)
 		_paint_disk(hero_at, 4, false)
+		if config.version >= STOCK_LAYOUT_VERSION:
+			# Stock castles open onto a clear approach: in 99 of 114 stock
+			# castles no site or creature stands within eight rows of the
+			# wall opposite the recruits' row (side 2). The castle model's
+			# stairs face the next side (3), which the camera shows as the
+			# front, so both stay clear.
+			for side: int in [2, 3]:
+				for cell: Vector2i in _castle_front(castle, size, CASTLE_APRON, side):
+					if _inside(cell): _gate_apron[cell.y * _map.width + cell.x] = 1
+			# The four rows on those sides are the nearest, with three along
+			# the recruits' row and five behind the walls, which the tall
+			# castle model overhangs from the camera.
+			var near := _castle_front(castle, size, 4, 2)
+			near.append_array(_castle_front(castle, size, 4, 3))
+			near.append_array(_castle_front(castle, size, 3, 0))
+			near.append_array(_castle_front(castle, size, 5, 1))
+			for cell: Vector2i in near:
+				if _inside(cell): _gate_apron[cell.y * _map.width + cell.x] = 2
 		_starts.append({"player": player, "color": color, "x": hero_at.x, "y": hero_at.y, "hero": [hero_at.x, hero_at.y],
 			"castle": [castle_at.x, castle_at.y], "hero_id": int(hero.permanent_id) - 1, "castle_id": int(castle.permanent_id) - 1, "sites": []})
 	return true
@@ -1412,8 +1562,16 @@ func _make_homelands() -> bool:
 			var desired := Vector2i((origin + inward * float(entry.forward) + side * float(entry.side)).round())
 			desired = entry.get("desired", desired)
 			var size: Vector2i = ELAdventureGrid.footprint(entry.row, 0).size
+			_apron_level = 0 if _economy_apron else 2
 			var position := _find_spot(desired, size, 16, index, false, true)
+			if position == NO_SPOT and config.version >= STOCK_LAYOUT_VERSION and not _economy_apron:
+				# A crowded homeland: let the site touch a planned route, then
+				# look farther across the same homeland.
+				position = _find_spot(desired, size, 16, index, false, false)
+				if position == NO_SPOT: position = _find_spot(Vector2i(origin), size, 24, index, false, false)
+			_apron_level = 0
 			if position == NO_SPOT:
+				_economy_crowded = _economy_apron and config.version >= STOCK_LAYOUT_VERSION
 				error = "Could not fit a complete starting economy for player %d. Try a larger map." % int(start.player)
 				return false
 			var children: Array = [_node("level", {}, "0")]
@@ -1449,17 +1607,29 @@ func _habitat_anchor(desired: Vector2i, habitat: String) -> Vector2i:
 	return best
 
 func _shop_stock(type: String) -> Array:
-	if _shop_stocks.has(type): return _shop_stocks[type].duplicate(true)
+	if _shop_stocks.has(type) and config.version < STOCK_LAYOUT_VERSION: return _shop_stocks[type].duplicate(true)
 	var nodes: Array = []
 	var family := "Creature" if type == "CreatureShop" else "Spell"
+	# Version 13: every shop draws its own stock, the cards other shops of
+	# its kind sell least first, so no two shops on a map are alike.
+	var sold: Dictionary = _shop_stocks.get("sold", {})
 	for tier in 3:
 		var children: Array = []
 		for color: String in COLORS:
 			var choices: Array = _catalog.spells[color][family][tier].duplicate()
 			_shuffle(choices)
+			if config.version >= STOCK_LAYOUT_VERSION:
+				var order := {}
+				for index in choices.size(): order[choices[index]] = index
+				choices.sort_custom(func(a: String, b: String) -> bool:
+					var used_a := int(sold.get(a, 0))
+					var used_b := int(sold.get(b, 0))
+					return used_a < used_b if used_a != used_b else int(order[a]) < int(order[b]))
+				for code: String in choices.slice(0, 6): sold[code] = int(sold.get(code, 0)) + 1
 			for code: String in choices.slice(0, 6): children.append(_node("spell", {}, code))
 		if not children.is_empty(): nodes.append(_node("spells", {"level": str(tier + 1)}, "", children))
 	_shop_stocks[type] = nodes
+	if config.version >= STOCK_LAYOUT_VERSION: _shop_stocks.sold = sold
 	return nodes.duplicate(true)
 
 func _make_frontiers() -> bool:
@@ -1629,10 +1799,22 @@ func _clear_prize_approach(approach: int) -> void:
 		if offset < 0: break
 		var at := Vector2i(offset % _map.width, offset / _map.width)
 		if not _walkable(at): break
+		# Version 13 keeps a path two tiles wide: a three-tile strip runs
+		# straight across the masses and opens meadows where it meets lanes.
 		var margin := Rect2i(at - Vector2i.ONE, Vector2i(3, 3)).intersection(Rect2i(0, 0, _map.width, _map.height))
+		if config.version >= STOCK_LAYOUT_VERSION:
+			margin = Rect2i(at, Vector2i.ONE)
+			var ahead := _exploration_access[offset]
+			if ahead >= 0:
+				var stride := Vector2i(ahead % _map.width, ahead / _map.width) - at
+				# A diagonal step keeps its corner cell, so the woods cannot
+				# close the path; a straight one gets a cell beside it.
+				var side := at + (Vector2i(stride.x, 0) if stride.x != 0 and stride.y != 0 else Vector2i(stride.y, stride.x))
+				if _inside(side) and _walkable(side): _approach_clearings[_index(side)] = 1
 		for y in range(margin.position.y, margin.end.y):
 			for x in range(margin.position.x, margin.end.x): _approach_clearings[y * _map.width + x] = 1
-		if config.roads and _map.roads[offset] == 0: _map.roads[offset] = 7
+		# Stock prizes sit off the road; version 13 paints no stub to them.
+		if config.roads and _map.roads[offset] == 0 and config.version < STOCK_LAYOUT_VERSION: _map.roads[offset] = 7
 		offset = _exploration_access[offset]
 
 func _read_prize_scenery() -> void:
@@ -1884,7 +2066,7 @@ func _post_field_guards() -> bool:
 		var home := _owner(at)
 		var start: Dictionary = _starts[home]
 		var spot := placement.site_guard(site, Vector2i(start.x, start.y), spaced)
-		if spot.is_empty(): continue
+		if spot.is_empty() or _gate_apron[spot.guard.y * _map.width + spot.guard.x] != 0: continue
 		var level := maxi(2, int(ranks[site.group])) + (1 if config.guards == "strong" else 0)
 		if not travel.is_empty():
 			# Prizes near a castle get a gentler guard; distant ones a sterner one.
@@ -1949,7 +2131,7 @@ func _post_wilderness_creatures(placement: RefCounted, travel: PackedInt32Array)
 			var offset := y * _map.width + x
 			var steps := travel[offset]
 			if steps >= 0 and steps < 10: continue
-			if not placement.field_cell(at, spaced, 4): continue
+			if _gate_apron[offset] != 0 or not placement.field_cell(at, spaced, 4): continue
 			var field := y * (_map.width + 1) + x
 			var roadside := 0.0
 			for delta: Vector2i in ELInterception.DIRECTIONS:
@@ -1985,9 +2167,15 @@ func _post_wilderness_creatures(placement: RefCounted, travel: PackedInt32Array)
 	if config.version >= STOCK_LAYOUT_VERSION:
 		var watched: Array[int] = roaming.duplicate()
 		for id: int in report.get("passage_guards", {}): watched.append(id)
+		# A prize guard can stand in a pocket that another guard closes.
+		for site: int in _reward_guards: if not int(_reward_guards[site]) in watched: watched.append(int(_reward_guards[site]))
 		var dropped := _drop_sealed_creatures(placement.grid, watched)
 		roaming.assign(roaming.filter(func(id: int) -> bool: return not dropped.has(id)))
 		for id: int in dropped: report.passage_guards.erase(id)
+		for site: int in _reward_guards.keys():
+			if dropped.has(int(_reward_guards[site])):
+				_reward_guards.erase(site)
+				_gated_prizes.erase(site)
 	report.roaming_creatures = roaming
 
 ## In narrow woods one roaming creature can close the only way to another.
@@ -2057,7 +2245,7 @@ func _post_pass_guards(placement: RefCounted) -> void:
 			var at := Vector2i(x, y)
 			if not _walkable(at): continue
 			land += 1
-			if not _clears_sites(at, 4) or not placement.pass_candidate(at, spaced): continue
+			if _gate_apron[y * _map.width + x] != 0 or not _clears_sites(at, 4) or not placement.pass_candidate(at, spaced): continue
 			var field := y * (_map.width + 1) + x
 			var score := _rock[field] + (0.45 if _shore[field] <= 4 else 0.0) + _hash(x, y, 8069) * 0.3
 			candidates.append({"at": at, "score": score})
@@ -2191,7 +2379,7 @@ func _populate_regional_encounters() -> void:
 			var point := Vector2i(x, y)
 			if _exploration_access[offset] < -1 or not _walkable(point): continue
 			land += 1
-			if spaced[offset] or _reserved[offset] or _corridor[offset]: continue
+			if spaced[offset] or _reserved[offset] or _corridor[offset] or _gate_apron[offset]: continue
 			var field := y * (_map.width + 1) + x
 			var verge := 0.17 * verges[offset]
 			var clearing := 1.0 - smoothstep(0.45, 0.77, _canopy[field])
@@ -2271,7 +2459,7 @@ func _populate_roaming_creatures(journey: Array, wilderness: Array) -> void:
 			var point := Vector2i(x, y)
 			if _exploration_access[index] < -1 or not _walkable(point): continue
 			land += 1
-			if _reserved[index] == 0 and _corridor[index] == 0 and _hash(x, y, 1531) > 0.55: candidates.append(point)
+			if _reserved[index] == 0 and _corridor[index] == 0 and _gate_apron[index] == 0 and _hash(x, y, 1531) > 0.55: candidates.append(point)
 	_shuffle(candidates)
 	if _map.width >= 96:
 		for index in _starts.size():
@@ -2301,6 +2489,18 @@ func _regional_guard(pos: Vector2i, choices: Array, level: int) -> String:
 		var best := absi(int(_catalog.monsters[0].level) - level)
 		for row: Dictionary in _catalog.monsters: best = mini(best, absi(int(row.level) - level))
 		choices = _catalog.monsters.filter(func(row: Dictionary) -> bool: return absi(int(row.level) - level) == best)
+		if config.version >= STOCK_LAYOUT_VERSION:
+			# Stock maps rarely repeat a creature within ten tiles (3% of
+			# creatures). Take the next level band before a repeat.
+			var nearby := {}
+			for item: Dictionary in _map.objects:
+				if item.group == "np_heroes" and pos.distance_squared_to(Vector2i(item.x, item.y)) <= 100: nearby[str(item.name)] = true
+			for spread in [best, best + 1]:
+				var fresh: Array = _catalog.monsters.filter(func(row: Dictionary) -> bool: return absi(int(row.level) - level) <= spread and not nearby.has(str(row.name)))
+				if fresh.is_empty(): continue
+				var exact: Array = fresh.filter(func(row: Dictionary) -> bool: return absi(int(row.level) - level) == best)
+				choices = exact if not exact.is_empty() else fresh
+				break
 	var favored: Array[Dictionary] = []
 	var color := ELAdventureArt.terrain_color(_map.tile(pos.x, pos.y))
 	for row: Dictionary in choices:
@@ -2322,7 +2522,7 @@ func _encounter_cell(desired: Vector2i, radius: int, home := -1) -> Vector2i:
 		for x in range(maxi(2, desired.x - radius), mini(_map.width - 2, desired.x + radius + 1)):
 			var point := Vector2i(x, y)
 			var cost := desired.distance_squared_to(point)
-			if cost >= score or _exploration_access[y * _map.width + x] < -1: continue
+			if cost >= score or _exploration_access[y * _map.width + x] < -1 or _gate_apron[y * _map.width + x] != 0: continue
 			if home >= 0 and (_owner(point) != home or point.distance_squared_to(origin) > reach * reach or (config.naval and _region_at(point) != island)): continue
 			var safe := true
 			for start: Dictionary in _starts:
@@ -2420,7 +2620,7 @@ func _fill_wilderness() -> void:
 	for y in range(3, _map.height - 3):
 		for x in range(3, _map.width - 3):
 			var at := y * _map.width + x
-			if _exploration_access[at] >= -1 and _reserved[at] == 0 and dry[at] != 0:
+			if _exploration_access[at] >= -1 and _reserved[at] == 0 and _gate_apron[at] == 0 and dry[at] != 0:
 				candidates.append(Vector2i(x, y))
 	var paths_dirty := false
 	var spacing := 17 if config.version >= GUARDED_PRIZES_VERSION else WILDERNESS_SPACING
@@ -2712,17 +2912,18 @@ func _scenery_catalog() -> Dictionary:
 			"groves": groves, "landscape_rocks": rocks, "cliffs": cliffs, "undergrowth": undergrowth}
 	return pools
 
-func _scenery_land() -> PackedByteArray:
+func _scenery_land(rim := 2) -> PackedByteArray:
 	var land := PackedByteArray()
 	land.resize(_map.width * _map.height)
-	for y in range(2, _map.height - 2):
-		for x in range(2, _map.width - 2):
+	for y in range(rim, _map.height - rim):
+		for x in range(rim, _map.width - rim):
 			if _walkable(Vector2i(x, y)): land[y * _map.width + x] = 1
 	return land
 
 func _make_scenery() -> void:
 	var pools := _scenery_catalog()
-	var land := _scenery_land()
+	# Stock woods run to the edge of the map.
+	var land := _scenery_land(0 if config.version >= STOCK_LAYOUT_VERSION else 2)
 	if config.version >= STOCK_LAYOUT_VERSION:
 		_make_vein_scenery(land, pools)
 		return
@@ -2740,18 +2941,26 @@ func _make_scenery() -> void:
 			var area := Rect2i(left, top, SCENERY_PATCH_SIZE, SCENERY_PATCH_SIZE)
 			_make_scenery_patch(area, land, pools)
 
-## Version 13 follows the stock maps: about half the land is solid wood and
-## rock in large masses, and travel runs along veins two to four tiles wide.
-## Roads, site approaches and protected routes keep a three-tile vein; noise
-## adds winding side channels and small glades. Everything else is filled
-## with the biome's props, the largest first. The later reconnection pass
-## opens a short way through any mass that seals off free ground.
+## Version 13 follows the stock maps: about half the land is solid cliff and
+## wood in rounded masses, and travel runs along a maze of lanes two to four
+## tiles wide between them. Roads keep a three-tile lane, every site, creature
+## and enclosed yard gets a winding lane to the network, and the rest is
+## filled with the stock prop mix of its ground, the largest cliffs first.
+## Gaps left inside a mass get single-tile props so it holds no sealed pocket.
+## (Content without the stock props keeps the older noise veins.)
 func _make_vein_scenery(land: PackedByteArray, pools: Dictionary) -> void:
 	var w := _map.width
 	var h := _map.height
+	if config.roads:
+		_tidy_roads()
+		_paint_road_ground()
 	var art := ELAdventureArt.new(_map)
 	var open := PackedByteArray()
 	open.resize(w * h)
+	var mixes := _stock_scenery_mix()
+	var lanes := _lane_mask if not mixes.is_empty() else PackedByteArray()
+	var kept := PackedByteArray()
+	kept.resize(w * h)
 	for y in h:
 		for x in w:
 			var i := y * w + x
@@ -2759,6 +2968,11 @@ func _make_vein_scenery(land: PackedByteArray, pools: Dictionary) -> void:
 			# Site trails are straight search lines; the woods may close over
 			# them. Reconnection and the access checks run on the result.
 			var keep := _map.roads[i] != 0
+			if not lanes.is_empty():
+				# Stock layout: solid masses between a network of lanes.
+				if keep: _mark_radius(open, Vector2i(x, y), 1)
+				elif lanes[i] != 0: open[i] = 1
+				continue
 			# Stock cover by ground: Red about 62%, Green 45%, Black 42%,
 			# Blue 24%. Lighter ground gets more channels and glades.
 			var openness: float = {"Blue": 1.9, "Green": 1.0, "Black": 1.1, "Red": 0.55}.get(ELAdventureArt.terrain_color(_map.tile(x, y)), 1.0)
@@ -2768,14 +2982,48 @@ func _make_vein_scenery(land: PackedByteArray, pools: Dictionary) -> void:
 			if _noise(x, y, 5.0, 6329) > 1.0 - 0.14 * openness: keep = true
 			if keep: _mark_radius(open, Vector2i(x, y), 1)
 	# Sites keep a two-tile apron, castles a homeland yard, harbors a quay.
+	# Stock castles stand among their woods: scenery covers about two
+	# fifths of the two tiles around the walls, and only the gate side,
+	# where the hero starts, stays clear.
 	for item: Dictionary in _map.objects:
 		if item.group in ["terrain_objects", "np_heroes"]: continue
+		if not lanes.is_empty() and ELFirstScenario.is_castle(item):
+			# The castle's front row is where recruits appear
+			# (ELGlobalSpells.castle_spot); it and the row beyond stay open,
+			# and so do the three rows before the stairs.
+			var castle_size := Vector2i(ELAdventureGrid.footprint(art.resolve(item).get("row", {}), int(item.rotation)).size)
+			var clear := _castle_front(item, castle_size)
+			if config.version >= STOCK_LAYOUT_VERSION: clear.append_array(_castle_front(item, castle_size, 3, 3))
+			for cell: Vector2i in clear:
+				if _inside(cell):
+					open[cell.y * w + cell.x] = 1
+					kept[cell.y * w + cell.x] = 1
+			continue
 		var size := Vector2i.ONE if item.group == "heroes" else Vector2i(ELAdventureGrid.footprint(art.resolve(item).get("row", {}), int(item.rotation)).size)
-		var area := Rect2i(Vector2i(item.x, item.y), size).grow(1).intersection(Rect2i(0, 0, w, h))
+		var body := Rect2i(Vector2i(item.x, item.y), size)
+		var area := body.grow(2 if not lanes.is_empty() and item.group == "heroes" else 1).intersection(Rect2i(0, 0, w, h))
+		# Stock sites leave about half their rim open, on the side they are
+		# entered from; woods and rock close in behind them.
+		var facing := Vector2.ZERO
+		if not lanes.is_empty() and item.group != "heroes": facing = _toward_lane(lanes, body)
 		for y in range(area.position.y, area.end.y):
-			for x in range(area.position.x, area.end.x): open[y * w + x] = 1
-	for anchor: Vector2i in _anchors: _mark_radius(open, anchor, 4)
-	for port: Dictionary in _ports: _mark_radius(open, Vector2i(port.land[0], port.land[1]), 2)
+			for x in range(area.position.x, area.end.x):
+				if facing != Vector2.ZERO and not body.has_point(Vector2i(x, y)):
+					var out := (Vector2(x, y) + Vector2.ONE * 0.5 - (Vector2(body.position) + Vector2(body.size) * 0.5)).normalized()
+					if out.dot(facing) < -0.15: continue
+				open[y * w + x] = 1
+				kept[y * w + x] = 1
+	if lanes.is_empty():
+		for anchor: Vector2i in _anchors: _mark_radius(open, anchor, 4)
+	for port: Dictionary in _ports:
+		_mark_radius(open, Vector2i(port.land[0], port.land[1]), 2)
+		_mark_radius(kept, Vector2i(port.land[0], port.land[1]), 2)
+	if not lanes.is_empty():
+		for item: Dictionary in _map.objects:
+			if item.group == "np_heroes":
+				open[int(item.y) * w + int(item.x)] = 1
+				kept[int(item.y) * w + int(item.x)] = 1
+		_narrow_open_ground(open, land, kept)
 	var fill := PackedByteArray()
 	fill.resize(w * h)
 	var order: Array[Vector2i] = []
@@ -2814,29 +3062,531 @@ func _make_vein_scenery(land: PackedByteArray, pools: Dictionary) -> void:
 	_scenery_paths.resize(w * h)
 	for item: Dictionary in _map.objects:
 		var size := Vector2i.ONE if item.group in ["heroes", "np_heroes"] else Vector2i(ELAdventureGrid.footprint(art.resolve(item).get("row", {}), int(item.rotation)).size)
-		var margin := 0 if item.group == "terrain_objects" else 1
+		var margin := 0 if item.group == "terrain_objects" or (not mixes.is_empty() and item.group != "heroes") else 1
+		if not mixes.is_empty() and item.group == "terrain_objects":
+			# Only a prop's solid cells: the holes in a cliff's box get filled.
+			for cell: Vector2i in ELAdventureGrid.footprint(art.resolve(item).get("row", {}), int(item.rotation)).cells:
+				var at := Vector2i(item.x, item.y) + cell
+				if _inside(at): _reserved[at.y * w + at.x] = 1
+			continue
 		var area := Rect2i(Vector2i(item.x, item.y), size).grow(margin).intersection(Rect2i(0, 0, w, h))
 		for y in range(area.position.y, area.end.y):
 			for x in range(area.position.x, area.end.x): _reserved[y * w + x] = 1
-	# Stock props average about five cells: try the large band twice.
-	for band in [0, 0, 1, 2]:
+	if not mixes.is_empty():
+		# Stock mix, strictly largest first so the big cliffs find room.
+		# The cliffs start from the cores of the masses, farthest from any
+		# lane, so smaller props do not fragment a mass before its cliff.
+		# Rocky ground favours cliffs and stones, the rest favours trees,
+		# so each mass keeps one character.
+		var depth := PackedInt32Array()
+		depth.resize(w * h)
+		var rim: Array[Vector2i] = []
 		for point: Vector2i in order:
-			if _occupied[point.y * w + point.x] != 0: continue
-			var color := ELAdventureArt.terrain_color(_map.tile(point.x, point.y))
-			if not sized.has(color): color = _colors[_owner(point)]
-			var field := point.y * (w + 1) + point.x
-			# Stock green and snow land is mostly forest; dry land mixes rock.
-			var rocky := _rock[field] > 0.45 or _noise(point.x, point.y, 11.0, 6343) > (0.48 if color in ["Red", "Black"] else 0.78)
-			var bands: Dictionary = sized[color]
-			var pool: Array = bands.rocks[band] if rocky else bands.woods[band]
-			if pool.is_empty(): pool = bands.woods[band] if rocky else bands.rocks[band]
-			if band == 0:
-				# Big masses first: try every large prop before giving up.
-				for attempt in ceili(pool.size() / 5.0):
-					if _occupied[point.y * w + point.x] != 0 or _place_scenery(point, pool, fill, true): break
-			else: _place_scenery(point, pool, fill, true)
+			var edge := false
+			for step: Vector2i in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+				var next: Vector2i = point + step
+				if not _inside(next) or fill[next.y * w + next.x] == 0: edge = true
+			if edge:
+				depth[point.y * w + point.x] = 1
+				rim.append(point)
+		var head := 0
+		while head < rim.size():
+			var at := rim[head]
+			head += 1
+			for step: Vector2i in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+				var next: Vector2i = at + step
+				if not _inside(next) or fill[next.y * w + next.x] == 0 or depth[next.y * w + next.x] != 0: continue
+				depth[next.y * w + next.x] = depth[at.y * w + at.x] + 1
+				rim.append(next)
+		var cores := order.duplicate()
+		cores.sort_custom(func(a: Vector2i, b: Vector2i) -> bool:
+			var da := depth[a.y * w + a.x]
+			var db := depth[b.y * w + b.x]
+			return da > db if da != db else _hash(a.x, a.y, 6337) < _hash(b.x, b.y, 6337))
+		for tier in 5:
+			if tier == 3 and not lanes.is_empty():
+				# The large props stand on whole masses; the paths to the
+				# pockets then wind around them through the rest.
+				_join_open_ground(open, land)
+				order.clear()
+				for y in h:
+					for x in w:
+						var i := y * w + x
+						fill[i] = int(land[i] != 0 and open[i] == 0 and _occupied[i] == 0)
+						if fill[i] != 0: order.append(Vector2i(x, y))
+				order.sort_custom(func(a: Vector2i, b: Vector2i) -> bool: return _hash(a.x, a.y, 6337) < _hash(b.x, b.y, 6337))
+			for point: Vector2i in (cores if tier < 3 else order):
+				if _occupied[point.y * w + point.x] != 0: continue
+				var color := ELAdventureArt.terrain_color(_map.tile(point.x, point.y))
+				if not mixes.has(color): color = _colors[_owner(point)]
+				if not mixes.has(color): continue
+				var choices: Array = mixes[color][tier]
+				if choices.is_empty(): continue
+				var rocky := _rock[point.y * (w + 1) + point.x] > 0.45 or _noise(point.x, point.y, 11.0, 6343) > (0.48 if color in ["Red", "Black"] else 0.78)
+				if not _place_stock_prop(point, choices, rocky, fill, 6 if tier < 3 else 3) and (tier >= 3 or rocky):
+					# Stock masses are mostly three-tile clumps: before a gap
+					# falls to the single-tile fillers, try every clump that
+					# fits, largest first.
+					_place_largest_prop(point, choices, rocky, fill)
+		_fill_mass_gaps(land, open, fill)
+	else:
+		# Stock props average about five cells: try the large band twice.
+		for band in [0, 0, 1, 2]:
+			for point: Vector2i in order:
+				if _occupied[point.y * w + point.x] != 0: continue
+				var color := ELAdventureArt.terrain_color(_map.tile(point.x, point.y))
+				if not sized.has(color): color = _colors[_owner(point)]
+				var field := point.y * (w + 1) + point.x
+				# Stock green and snow land is mostly forest; dry land mixes rock.
+				var rocky := _rock[field] > 0.45 or _noise(point.x, point.y, 11.0, 6343) > (0.48 if color in ["Red", "Black"] else 0.78)
+				var bands: Dictionary = sized[color]
+				var pool: Array = bands.rocks[band] if rocky else bands.woods[band]
+				if pool.is_empty(): pool = bands.woods[band] if rocky else bands.rocks[band]
+				if band == 0:
+					# Big masses first: try every large prop before giving up.
+					for attempt in ceili(pool.size() / 5.0):
+						if _occupied[point.y * w + point.x] != 0 or _place_scenery(point, pool, fill, true): break
+				else: _place_scenery(point, pool, fill, true)
 	for i in w * h: _reserved[i] = maxi(_reserved[i], reserved[i])
 	_scenery_paths = trails
+
+## Stock masses are rounded blocks ten to twenty tiles across, parted by
+## lanes two to four tiles wide. Seeds on a jittered grid split the land
+## into cells; the border between two cells becomes a lane unless that
+## border is closed (about three in ten), which leaves long walls and dead
+## ends. Roads are planned along these lanes. Lanes widen
+## into small yards where three cells meet. Snow is the most open ground,
+## with open fields between its stands of pine, and the dark Chaot ground
+## the tightest.
+func _cell_lanes() -> PackedByteArray:
+	var w := _map.width
+	var h := _map.height
+	var spacing := 18
+	var columns := ceili(float(w) / spacing) + 1
+	var rows := ceili(float(h) / spacing) + 1
+	var seeds: Array[Vector2] = []
+	for gy in rows:
+		for gx in columns:
+			var jitter := Vector2(_hash(gx, gy, 6353), _hash(gx, gy, 6359)) * 0.8 + Vector2.ONE * 0.1
+			seeds.append((Vector2(gx, gy) - Vector2.ONE * 0.5 + jitter) * spacing)
+	var lanes := PackedByteArray()
+	lanes.resize(w * h)
+	for y in h:
+		for x in w:
+			var warp := Vector2(_noise(x, y, 9.0, 6367) - 0.5, _noise(x, y, 9.0, 6373) - 0.5) * 6.0
+			var at := Vector2(x, y) + warp
+			var gx := floori(at.x / spacing + 0.5)
+			var gy := floori(at.y / spacing + 0.5)
+			var near: Array = [[INF, -1], [INF, -1], [INF, -1]]
+			for oy in range(-2, 3):
+				for ox in range(-2, 3):
+					var cx := gx + ox
+					var cy := gy + oy
+					if cx < 0 or cy < 0 or cx >= columns or cy >= rows: continue
+					var index := cy * columns + cx
+					var d := at.distance_to(seeds[index])
+					if d < near[0][0]: near = [[d, index], near[0], near[1]]
+					elif d < near[1][0]: near = [near[0], [d, index], near[1]]
+					elif d < near[2][0]: near[2] = [d, index]
+			var ground := ELAdventureArt.terrain_color(_map.tile(x, y))
+			var width: float = {"Blue": 2.9, "Green": 2.6, "Black": 2.4, "Red": 2.1}.get(ground, 2.6)
+			# Snow keeps a few small open fields among its stands of pine.
+			if ground == "Blue" and _noise(x, y, 7.0, 6401) > 0.8:
+				lanes[y * w + x] = 1
+				continue
+			var a: int = mini(near[0][1], near[1][1])
+			var b: int = maxi(near[0][1], near[1][1])
+			var border: bool = near[1][0] - near[0][0] < width and _hash(a, b, 6379) >= 0.3
+			var yard: bool = near[2][0] - near[0][0] < width * 0.9
+			if border or yard: lanes[y * w + x] = 1
+	# Stock lanes are two to four tiles wide even where they meet. The
+	# middle of a wider patch becomes a small mass, so the patch turns
+	# into a loop of lane around it.
+	var depth := PackedInt32Array()
+	depth.resize(w * h)
+	var queue: Array[Vector2i] = []
+	for y in h:
+		for x in w:
+			if lanes[y * w + x] == 0: continue
+			var rim := false
+			for dy in range(-1, 2):
+				for dx in range(-1, 2):
+					var near := Vector2i(x + dx, y + dy)
+					if _inside(near) and lanes[near.y * w + near.x] == 0: rim = true
+			if rim:
+				depth[y * w + x] = 1
+				queue.append(Vector2i(x, y))
+	var head := 0
+	while head < queue.size():
+		var at := queue[head]
+		head += 1
+		for dy in range(-1, 2):
+			for dx in range(-1, 2):
+				var near := at + Vector2i(dx, dy)
+				if not _inside(near) or lanes[near.y * w + near.x] == 0 or depth[near.y * w + near.x] != 0: continue
+				depth[near.y * w + near.x] = depth[at.y * w + at.x] + 1
+				queue.append(near)
+	for i in w * h:
+		if depth[i] >= 3: lanes[i] = 0
+	return lanes
+
+## The cells in front of a castle's gate: the row ELGlobalSpells.castle_spot
+## searches for a recruit's place, and the rows beyond it up to depth. Each
+## further side turns a quarter: side 2 lies before the opposite wall and
+## side 3 before the castle model's stairs.
+func _castle_front(item: Dictionary, size: Vector2i, depth := 2, side := 0) -> Array[Vector2i]:
+	var x := int(item.x)
+	var y := int(item.y)
+	var first: Vector2i
+	var axis := Vector2i.RIGHT
+	var out := Vector2i.UP
+	match ((int(item.get("rotation", 0)) >> 2) + side) & 3:
+		0: first = Vector2i(x - 1 + size.x / 2, y - 1)
+		1:
+			first = Vector2i(x - 1, y - 1 + size.y / 2)
+			axis = Vector2i.DOWN
+			out = Vector2i.LEFT
+		2:
+			first = Vector2i(x - 1 + size.x / 2, y + size.y)
+			out = Vector2i.DOWN
+		3:
+			first = Vector2i(x + size.x, y - 1 + size.y / 2)
+			axis = Vector2i.DOWN
+			out = Vector2i.RIGHT
+	var cells: Array[Vector2i] = []
+	for row in depth:
+		# Past the first two rows the apron widens by a tile on each side.
+		var wide := 1 if row >= 2 else 0
+		for offset in range(-2 - wide, 4 + wide):
+			cells.append(first + axis * offset + out * row)
+	return cells
+
+## Direction from a site to the nearest lane cell within twelve tiles,
+## or zero when none is near.
+func _toward_lane(lanes: PackedByteArray, body: Rect2i) -> Vector2:
+	var middle := Vector2(body.position) + Vector2(body.size) * 0.5
+	var best := INF
+	var direction := Vector2.ZERO
+	var search := body.grow(12).intersection(Rect2i(0, 0, _map.width, _map.height))
+	for y in range(search.position.y, search.end.y):
+		for x in range(search.position.x, search.end.x):
+			if lanes[y * _map.width + x] == 0 and _map.roads[y * _map.width + x] == 0: continue
+			var offset := Vector2(x, y) + Vector2.ONE * 0.5 - middle
+			if offset.length_squared() < best:
+				best = offset.length_squared()
+				direction = offset.normalized()
+	return direction
+
+## Stock open ground is two to four tiles wide even where lanes, roads
+## and site aprons meet. The middle of a wider patch becomes woods, so
+## the patch turns into a loop around a small mass. Roads, castle gates,
+## site aprons and creatures stay open.
+func _narrow_open_ground(open: PackedByteArray, land: PackedByteArray, kept: PackedByteArray) -> void:
+	var w := _map.width
+	var h := _map.height
+	var depth := PackedInt32Array()
+	depth.resize(w * h)
+	var queue: Array[Vector2i] = []
+	for y in h:
+		for x in w:
+			if open[y * w + x] == 0 or land[y * w + x] == 0: continue
+			var rim := false
+			for dy in range(-1, 2):
+				for dx in range(-1, 2):
+					var near := Vector2i(x + dx, y + dy)
+					if _inside(near) and land[near.y * w + near.x] != 0 and open[near.y * w + near.x] == 0: rim = true
+			if rim:
+				depth[y * w + x] = 1
+				queue.append(Vector2i(x, y))
+	var head := 0
+	while head < queue.size():
+		var at := queue[head]
+		head += 1
+		for dy in range(-1, 2):
+			for dx in range(-1, 2):
+				var near := at + Vector2i(dx, dy)
+				if not _inside(near): continue
+				var i := near.y * w + near.x
+				if open[i] == 0 or land[i] == 0 or depth[i] != 0: continue
+				depth[i] = depth[at.y * w + at.x] + 1
+				queue.append(near)
+	for i in w * h:
+		if depth[i] >= 3 and kept[i] == 0 and _map.roads[i] == 0: open[i] = 0
+
+## Every pocket of open ground (a site apron, a creature, a yard behind
+## closed borders) gets a winding path two tiles wide to the nearest open
+## ground already joined to a castle or harbor on its island, before the
+## masses are filled. Pockets join nearest first, so later paths branch
+## off earlier ones instead of running side by side. An island with
+## neither joins its pockets to its largest open patch.
+func _join_open_ground(open: PackedByteArray, land: PackedByteArray) -> void:
+	var w := _map.width
+	var h := _map.height
+	var steps := [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]
+	var joined := PackedByteArray()
+	joined.resize(w * h)
+	var roots: Array[Vector2i] = []
+	for start: Dictionary in _starts: roots.append(Vector2i(start.x, start.y))
+	for port: Dictionary in _ports: roots.append(Vector2i(port.land[0], port.land[1]))
+	for root: Vector2i in roots:
+		if _inside(root) and open[_index(root)] != 0 and land[_index(root)] != 0: _flood_open(open, land, joined, root)
+	var cost := PackedInt32Array()
+	cost.resize(w * h)
+	var previous := PackedInt32Array()
+	previous.resize(w * h)
+	var distance := PackedInt32Array()
+	distance.resize(w * h)
+	for round in 64:
+		# Plain land distance from the joined ground orders the pockets.
+		distance.fill(-1)
+		var queue: Array[Vector2i] = []
+		for i in w * h:
+			if joined[i] != 0:
+				distance[i] = 0
+				queue.append(Vector2i(i % w, i / w))
+		var head := 0
+		while head < queue.size():
+			var at := queue[head]
+			head += 1
+			for step: Vector2i in steps:
+				var next: Vector2i = at + step
+				if not _inside(next): continue
+				var i := next.y * w + next.x
+				if land[i] == 0 or distance[i] >= 0: continue
+				distance[i] = distance[at.y * w + at.x] + 1
+				queue.append(next)
+		var pockets: Array = []
+		var stranded: Array = []
+		var seen := joined.duplicate()
+		for y in h:
+			for x in w:
+				var i := y * w + x
+				if open[i] == 0 or land[i] == 0 or seen[i] != 0: continue
+				var cells := _flood_open(open, land, seen, Vector2i(x, y))
+				var nearest := -1
+				for at: Vector2i in cells:
+					var d := distance[_index(at)]
+					if d > 0 and (nearest < 0 or d < nearest): nearest = d
+				if nearest > 0: pockets.append({"cells": cells, "distance": nearest})
+				else: stranded.append(cells)
+		if pockets.is_empty():
+			if stranded.is_empty(): break
+			# A new island: its largest open patch becomes its root.
+			stranded.sort_custom(func(a: Array, b: Array) -> bool: return a.size() > b.size() if a.size() != b.size() else _index(a[0]) < _index(b[0]))
+			for at: Vector2i in stranded[0]: joined[_index(at)] = 1
+			continue
+		pockets.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+			return int(a.distance) < int(b.distance) if a.distance != b.distance else _index(a.cells[0]) < _index(b.cells[0]))
+		for pocket: Dictionary in pockets:
+			var cells: Array = pocket.cells
+			if joined[_index(cells[0])] != 0: continue
+			# Noisy walking cost from the pocket until it meets joined ground.
+			var touched: Array[int] = []
+			var buckets: Array = [[]]
+			for at: Vector2i in cells:
+				var i := _index(at)
+				cost[i] = 1
+				previous[i] = -1
+				touched.append(i)
+				buckets[0].append(i)
+			var found := -1
+			var level := 0
+			while level < buckets.size() and found < 0:
+				var bucket: Array = buckets[level]
+				var k := 0
+				while k < bucket.size() and found < 0:
+					var offset: int = bucket[k]
+					k += 1
+					if cost[offset] != level + 1: continue
+					var at := Vector2i(offset % w, offset / w)
+					for step: Vector2i in steps:
+						var next: Vector2i = at + step
+						if not _inside(next): continue
+						var i := next.y * w + next.x
+						if land[i] == 0: continue
+						# Through a fixed object only when nothing else leads out;
+						# the reconnection pass then opens the shortest way.
+						var total := level + 1 + int(3.0 * _noise(next.x, next.y, 3.0, 6397)) + (40 if _occupied[i] != 0 and open[i] == 0 else 0)
+						if cost[i] != 0 and cost[i] <= total + 1: continue
+						if cost[i] == 0: touched.append(i)
+						cost[i] = total + 1
+						previous[i] = offset
+						if joined[i] != 0:
+							found = i
+							break
+						while buckets.size() <= total: buckets.append([])
+						buckets[total].append(i)
+				level += 1
+			if found >= 0:
+				# Two tiles wide: a one-tile path between tall models reads
+				# as a dead end (stock one-tile runs are rare).
+				var walk := previous[found]
+				var after := found
+				while walk >= 0:
+					open[walk] = 1
+					joined[walk] = 1
+					var along := Vector2i(after % w, after / w) - Vector2i(walk % w, walk / w)
+					var side := Vector2i(walk % w, walk / w) + Vector2i(along.y, along.x)
+					if _inside(side) and land[_index(side)] != 0 and _occupied[_index(side)] == 0:
+						open[_index(side)] = 1
+						joined[_index(side)] = 1
+					after = walk
+					walk = previous[walk]
+			for at: Vector2i in cells: joined[_index(at)] = 1
+			for i: int in touched: cost[i] = 0
+
+## The open land cells 4-connected to `from`, marked in `mask`.
+func _flood_open(open: PackedByteArray, land: PackedByteArray, mask: PackedByteArray, from: Vector2i) -> Array[Vector2i]:
+	var cells: Array[Vector2i] = [from]
+	mask[_index(from)] = 1
+	var k := 0
+	while k < cells.size():
+		var at := cells[k]
+		k += 1
+		for step: Vector2i in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+			var next: Vector2i = at + step
+			if not _inside(next): continue
+			var i := _index(next)
+			if mask[i] != 0 or open[i] == 0 or land[i] == 0: continue
+			mask[i] = 1
+			cells.append(next)
+	return cells
+
+## Mass ground no larger prop fitted, and free ground the masses closed off
+## from every lane, gets single-tile props: the masses stay solid, and the
+## reconnection pass does not break a cliff to reach a sealed pocket.
+func _fill_mass_gaps(land: PackedByteArray, open: PackedByteArray, fill: PackedByteArray) -> void:
+	var w := _map.width
+	var h := _map.height
+	var fillers := _single_fillers()
+	var reached := PackedByteArray()
+	reached.resize(w * h)
+	var queue: Array[Vector2i] = []
+	for y in h:
+		for x in w:
+			var i := y * w + x
+			if open[i] != 0 and land[i] != 0 and _occupied[i] == 0:
+				reached[i] = 1
+				queue.append(Vector2i(x, y))
+	var head := 0
+	while head < queue.size():
+		var at := queue[head]
+		head += 1
+		for step: Vector2i in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+			var next: Vector2i = at + step
+			if not _inside(next): continue
+			var i := next.y * w + next.x
+			if reached[i] != 0 or land[i] == 0 or _occupied[i] != 0: continue
+			reached[i] = 1
+			queue.append(next)
+	for y in h:
+		for x in w:
+			var i := y * w + x
+			if land[i] == 0 or _occupied[i] != 0 or (reached[i] != 0 and fill[i] == 0): continue
+			if reached[i] != 0 and (_reserved[i] != 0 or _map.roads[i] != 0): continue
+			if reached[i] != 0 and not _approach_clearings.is_empty() and _approach_clearings[i] != 0: continue
+			var color := ELAdventureArt.terrain_color(_map.tile(x, y))
+			var choices: Array = fillers.get(color, [])
+			if choices.is_empty(): choices = fillers.get(_colors[_owner(Vector2i(x, y))], [])
+			if choices.is_empty(): continue
+			var entry: Dictionary = choices[_next(choices.size())]
+			_place("terrain_objects", entry.name, Vector2i(x, y), entry.row, 0, "", [], {}, _next(4) * 4)
+
+## The single-tile props of STOCK_FILLERS that the content has, by ground.
+func _single_fillers() -> Dictionary:
+	var rows := _profile.table("TerrObj")
+	var lookup := {}
+	for key: String in rows: lookup[key.to_lower()] = key
+	var fillers := {}
+	for color: String in STOCK_FILLERS:
+		var found: Array[Dictionary] = []
+		for name: String in STOCK_FILLERS[color]:
+			var key: String = lookup.get(name.to_lower(), "")
+			if key.is_empty() or not _model(rows[key]): continue
+			var shape := ELAdventureGrid.footprint(rows[key], 0)
+			if shape.size == Vector2i.ONE and not shape.cells.is_empty(): found.append({"name": key, "row": rows[key]})
+		fillers[color] = found
+	return fillers
+
+## The stock scenery mix for each ground, split by span into tiers: 8 and
+## more, 6-7, 5, 3-4 and small props. Grounds whose props are missing
+## from the content fall back to the family pools.
+func _stock_scenery_mix() -> Dictionary:
+	var rows := _profile.table("TerrObj")
+	var lookup := {}
+	for key: String in rows: lookup[key.to_lower()] = key
+	var mixes := {}
+	for color: String in STOCK_SCENERY:
+		var bands: Array = [[], [], [], [], []]
+		var found := 0
+		for name: String in STOCK_SCENERY[color]:
+			var key: String = lookup.get(name.to_lower(), "")
+			if key.is_empty() or not _model(rows[key]) or name in FLAT_PROPS: continue
+			var shape := ELAdventureGrid.footprint(rows[key], 0)
+			if shape.cells.is_empty(): continue
+			var span := maxi(shape.size.x, shape.size.y)
+			var lower := key.to_lower()
+			var plant := ["tree", "forest", "bush", "pine"].any(func(word: String) -> bool: return lower.contains(word))
+			bands[0 if span >= 8 else (1 if span >= 6 else (2 if span >= 5 else (3 if span >= 3 else 4)))].append({"name": key, "row": rows[key], "weight": int(STOCK_SCENERY[color][name]), "plant": plant})
+			found += 1
+		if found * 2 >= STOCK_SCENERY[color].size(): mixes[color] = bands
+	return mixes
+
+func _place_stock_prop(point: Vector2i, choices: Array, rocky: bool, fill: PackedByteArray, attempts: int) -> bool:
+	var total := 0
+	for entry: Dictionary in choices: total += _stock_weight(entry, rocky)
+	if total <= 0: return false
+	for attempt in attempts:
+		var roll := _next(total)
+		var entry: Dictionary = choices[0]
+		for candidate: Dictionary in choices:
+			roll -= _stock_weight(candidate, rocky)
+			if roll < 0:
+				entry = candidate
+				break
+		var rotation := _next(4) * 4
+		var shape := ELAdventureGrid.footprint(entry.row, rotation)
+		var origin: Vector2i = point - shape.size / 2
+		if not _stock_prop_fits(origin, shape, fill): continue
+		_place("terrain_objects", entry.name, origin, entry.row, 0, "", [], {}, rotation)
+		return true
+	return false
+
+func _place_largest_prop(point: Vector2i, choices: Array, rocky: bool, fill: PackedByteArray) -> bool:
+	var ranked: Array = []
+	for entry: Dictionary in choices:
+		var cells: int = ELAdventureGrid.footprint(entry.row, 0).cells.size()
+		# The mass's own character first (trees in woods, stone on rock).
+		if cells > 1: ranked.append([int(bool(entry.plant) != rocky) * 1000 + cells, _stock_weight(entry, rocky), entry])
+	ranked.sort_custom(func(a: Array, b: Array) -> bool:
+		return int(a[0]) > int(b[0]) if a[0] != b[0] else (int(a[1]) > int(b[1]) if a[1] != b[1] else str(a[2].name) < str(b[2].name)))
+	for item: Array in ranked:
+		var entry: Dictionary = item[2]
+		var first := _next(4)
+		for turn in 4:
+			var rotation := ((first + turn) % 4) * 4
+			var shape := ELAdventureGrid.footprint(entry.row, rotation)
+			for nudge: Vector2i in [Vector2i.ZERO, Vector2i(-1, 0), Vector2i(0, -1), Vector2i(-1, -1)]:
+				var origin: Vector2i = point - shape.size / 2 + nudge
+				if not _stock_prop_fits(origin, shape, fill): continue
+				_place("terrain_objects", entry.name, origin, entry.row, 0, "", [], {}, rotation)
+				return true
+	return false
+
+func _stock_weight(entry: Dictionary, rocky: bool) -> int:
+	return int(entry.weight) * (1 if bool(entry.plant) == rocky else 4)
+
+## Only the solid cells of a stock prop need free ground, so cliffs and
+## trees interlock as they do in the original missions.
+func _stock_prop_fits(origin: Vector2i, shape: Dictionary, fill: PackedByteArray) -> bool:
+	var size: Vector2i = shape.size
+	if origin.x < 0 or origin.y < 0 or origin.x + size.x > _map.width or origin.y + size.y > _map.height: return false
+	for cell: Vector2i in shape.cells:
+		var offset := (origin.y + cell.y) * _map.width + origin.x + cell.x
+		if fill[offset] == 0 or _occupied[offset] != 0 or _reserved[offset] != 0: return false
+		if _scenery_paths[offset] != 0 or _map.roads[offset] != 0: return false
+		if not _approach_clearings.is_empty() and _approach_clearings[offset] != 0: return false
+	return true
 
 func _make_regional_scenery(land: PackedByteArray, pools: Dictionary) -> void:
 	for color: String in COLORS:
@@ -3229,6 +3979,18 @@ func _place(group: String, name: String, position: Vector2i, row: Dictionary, ow
 	# Original groves combine adjacent terrain props. Sites and legacy maps
 	# keep their one-cell placement margin.
 	var margin := 0 if group == "terrain_objects" and config.version >= SCENERY_VERSION else 1
+	if group == "terrain_objects" and config.version >= STOCK_LAYOUT_VERSION:
+		# Version 13 props hold only their solid cells, so they can interlock.
+		for cell: Vector2i in ELAdventureGrid.footprint(row, rotation).cells:
+			var at := position + cell
+			if not _inside(at): continue
+			_reserved[at.y * _map.width + at.x] = 1
+			_occupied[at.y * _map.width + at.x] = 1
+			_trail_stale = true
+			if _route_grid.region.has_point(at):
+				_route_grid.set_point_solid(at, true)
+				_port_routes.clear()
+		return item
 	for y in range(position.y - margin, position.y + size.y + margin):
 		for x in range(position.x - margin, position.x + size.x + margin):
 			if not _inside(Vector2i(x, y)): continue
@@ -3270,6 +4032,7 @@ func _fits(at: Vector2i, size: Vector2i, require_land: bool, avoid_roads: bool) 
 		for x in range(at.x, at.x + size.x):
 			var offset := y * _map.width + x
 			if _reserved[offset] != 0 or (avoid_roads and _corridor[offset] != 0): return false
+			if _gate_apron[offset] > _apron_level: return false
 			if (require_land or config.naval) and not _walkable(Vector2i(x, y)): return false
 	return not config.naval or _ports.is_empty() or not _port_route(at).is_empty()
 
@@ -3321,6 +4084,8 @@ func _paint_disk(center: Vector2i, radius: int, road: bool, trunk := false, trac
 	if road and _inside(center) and config.roads:
 		var index := center.y * _map.width + center.x
 		var grade := 6 if trunk and config.version >= WILDERNESS_VERSION else (7 if track else 5)
+		# The stock missions pave one road texture across the network.
+		if config.version >= STOCK_LAYOUT_VERSION and grade == 6: grade = 5
 		var current := _map.roads[index]
 		if current == 0 or grade == 6 or (grade == 5 and current == 7): _map.roads[index] = grade
 
@@ -3354,7 +4119,9 @@ func _connect(from: Vector2i, to: Vector2i, width: int, road: bool, trunk := fal
 				_scenery_paths[at.y * _map.width + previous.x] = 1
 				_scenery_paths[previous.y * _map.width + at.x] = 1
 			previous = at
-	var corners := _road_corners(path) if config.version >= LIVING_WILDS_VERSION else {}
+	var corners := _road_corners(path) if config.version >= LIVING_WILDS_VERSION and config.version < STOCK_LAYOUT_VERSION else {}
+	# Stock roads never step diagonally: they climb a staircase.
+	if config.version >= STOCK_LAYOUT_VERSION: path = _staircase(path)
 	for point: Vector2i in path:
 		var offset := point.y * _map.width + point.x
 		if guard_route and _network[offset] == 0:
@@ -3371,6 +4138,313 @@ func _connect(from: Vector2i, to: Vector2i, width: int, road: bool, trunk := fal
 				_corridor[cell] = 1
 				if guard_route and not _guard_safe.is_empty(): _guard_safe[cell] = 1
 	return not path.is_empty()
+
+## Stock roads have no drawn surface. Their tiles carry the climate's path
+## ground (green 0, snow 4, red 8, tan 12) on every corner, and the tile
+## blending turns that into a soft band. Corners whose transition the
+## installed tileset cannot draw keep their ground.
+func _paint_road_ground() -> void:
+	var stride := _map.width + 1
+	var changed := {}
+	for y in _map.height:
+		for x in _map.width:
+			var road := int(_map.roads[y * _map.width + x])
+			if road == 0 or road == 255: continue
+			for corner: Vector2i in [Vector2i(x, y), Vector2i(x + 1, y), Vector2i(x, y + 1), Vector2i(x + 1, y + 1)]:
+				var index := corner.y * stride + corner.x
+				if changed.has(index): continue
+				var kind := int(_map.terrain[index])
+				var path := _path_kind(kind & ~ELTileSet.GREY)
+				if path < 0 or path == kind & ~ELTileSet.GREY or _movement(path) != _movement(kind): continue
+				changed[index] = kind
+				_map.terrain[index] = path | (kind & ELTileSet.GREY)
+	for sweep in 4:
+		var reverted := false
+		for index: int in changed.keys():
+			var corner := Vector2i(index % stride, index / stride)
+			for cell: Vector2i in [corner - Vector2i.ONE, corner - Vector2i(0, 1), corner - Vector2i(1, 0), corner]:
+				if cell.x < 0 or cell.y < 0 or cell.x >= _map.width or cell.y >= _map.height: continue
+				var corners: Array[int] = [_map.tile(cell.x, cell.y), _map.tile(cell.x + 1, cell.y), _map.tile(cell.x + 1, cell.y + 1), _map.tile(cell.x, cell.y + 1)]
+				if not _profile.terrain_tiles.plan(corners, 0).is_empty(): continue
+				_map.terrain[index] = changed[index]
+				changed.erase(index)
+				reverted = true
+				break
+		if not reverted: break
+
+## Version 13 ground kinds, from the corners of the 37 stock missions
+## (docs/first_map_survey.md): what stands on a corner sets its ground.
+## Each entry lists kinds with their share; a smooth noise picks among
+## them so the variants form patches instead of speckle.
+const OBJECT_GROUND := {
+	"open": {"Green": [[0, 88], [2, 8], [1, 4]], "Blue": [[4, 74], [18, 26]], "Red": [[8, 56], [11, 26], [9, 12], [10, 6]], "Black": [[12, 64], [15, 15], [14, 15], [13, 6]]},
+	"tree": {"Green": [[2, 100]], "Blue": [[4, 28], [5, 12], [15, 34], [11, 26]], "Red": [[9, 55], [11, 25], [10, 20]], "Black": [[15, 65], [14, 27], [13, 8]]},
+	"bush": {"Green": [[2, 65], [3, 35]], "Blue": [[4, 100]], "Red": [[9, 45], [11, 30], [10, 25]], "Black": [[13, 65], [12, 25], [15, 10]]},
+	"rock": {"Green": [[3, 55], [0, 45]], "Blue": [[4, 70], [18, 30]], "Red": [[11, 100]], "Black": [[15, 86], [14, 14]]},
+	"site": {"Green": [[3, 45], [0, 30], [2, 25]], "Blue": [[4, 65], [18, 35]], "Red": [[11, 75], [8, 15], [10, 10]], "Black": [[15, 55], [14, 25], [12, 20]]},
+	"castle": {"Green": [[3, 60], [0, 40]], "Blue": [[18, 75], [4, 25]], "Red": [[8, 55], [11, 45]], "Black": [[12, 55], [15, 45]]},
+}
+
+static func _ground_class(item: Dictionary) -> String:
+	if item.group != "terrain_objects": return "castle" if ELFirstScenario.is_castle(item) else "site"
+	var name := str(item.name).to_lower()
+	if name.contains("tree") or name.contains("forest") or name.contains("pine") or name.contains("blueel"): return "tree"
+	if name.contains("bush"): return "bush"
+	return "rock"
+
+## Version 13: the stock maps lay forest soil under trees, cobbles under
+## rocks and sites, and plain ground in the open. Every land corner takes
+## the ground of the objects on the cells around it; corners whose
+## transition the tileset cannot draw, or whose new kind crosses at
+## another cost, keep their old ground, so access does not change.
+func _paint_object_ground() -> void:
+	var objects := _navigation_objects()
+	var grid := ELAdventureGrid.new()
+	if not grid.build(_map, objects): return
+	var w := _map.width
+	var stride := w + 1
+	var cell_class := PackedStringArray()
+	cell_class.resize(w * _map.height)
+	for uid: int in objects:
+		var item: Dictionary = objects[uid]
+		if item.group in ["heroes", "np_heroes"]: continue
+		var kind := _ground_class(item)
+		for cell: Vector2i in grid.footprints.get(uid, {}).get("cells", []):
+			var point := cell + Vector2i(item.x, item.y)
+			if grid.contains(point): cell_class[point.y * w + point.x] = kind
+	var order := ["tree", "castle", "site", "bush", "rock"]
+	var changed := {}
+	for y in _map.height + 1:
+		for x in stride:
+			var index := y * stride + x
+			var kind := int(_map.terrain[index])
+			if kind in ELTileSet.WATER_KINDS: continue
+			var color := ELAdventureArt.terrain_color(kind & ~ELTileSet.GREY)
+			if not color in ["Green", "Blue", "Red", "Black"]: continue
+			var counts := {}
+			for cell: Vector2i in [Vector2i(x - 1, y - 1), Vector2i(x, y - 1), Vector2i(x - 1, y), Vector2i(x, y)]:
+				if cell.x < 0 or cell.y < 0 or cell.x >= w or cell.y >= _map.height: continue
+				var c := cell_class[cell.y * w + cell.x]
+				if not c.is_empty(): counts[c] = int(counts.get(c, 0)) + 1
+			var chosen := "open"
+			for c: String in order:
+				if int(counts.get(c, 0)) > int(counts.get(chosen, 0)): chosen = c
+			var choices: Array = OBJECT_GROUND[chosen][color]
+			# Smooth noise bunches around the middle; stretch it so each
+			# kind gets about its stock share.
+			var roll := clampf(0.5 + (_noise(x, y, 4.0, 7717) - 0.5) * 2.6, 0.0, 0.999) * 100.0
+			var pick := int(choices[0][0])
+			for entry: Array in choices:
+				pick = int(entry[0])
+				roll -= float(entry[1])
+				if roll < 0.0: break
+			pick |= kind & ELTileSet.GREY
+			if pick == kind or _movement(pick) != _movement(kind): continue
+			changed[index] = kind
+			_map.terrain[index] = pick
+	for sweep in 6:
+		var reverted := false
+		for index: int in changed.keys():
+			var corner := Vector2i(index % stride, index / stride)
+			for cell: Vector2i in [corner - Vector2i.ONE, corner - Vector2i(0, 1), corner - Vector2i(1, 0), corner]:
+				if cell.x < 0 or cell.y < 0 or cell.x >= w or cell.y >= _map.height: continue
+				var corners: Array[int] = [_map.tile(cell.x, cell.y), _map.tile(cell.x + 1, cell.y), _map.tile(cell.x + 1, cell.y + 1), _map.tile(cell.x, cell.y + 1)]
+				if not _profile.terrain_tiles.plan(corners, 0).is_empty(): continue
+				_map.terrain[index] = changed[index]
+				changed.erase(index)
+				reverted = true
+				break
+		if not reverted: break
+	if config.roads: _paint_road_ground()
+
+## A terrain kind's movement class in the installed tileset.
+func _movement(kind: int) -> int:
+	var types: Dictionary = _profile.terrain_tiles.types if _profile.terrain_tiles != null else {}
+	return int(types.get(kind & ~ELTileSet.GREY, {}).get("movement", -2))
+
+func _path_kind(kind: int) -> int:
+	match ELAdventureArt.terrain_color(kind):
+		"Green": return 0
+		"Blue": return 4
+		"Red": return 8
+		"Black": return 12
+	return -1
+
+## Stock roads are one tile wide. Thin the blocks where merged routes
+## run side by side, without cutting the network, and drop fragments of
+## fewer than four road tiles.
+func _tidy_roads() -> void:
+	var w := _map.width
+	var h := _map.height
+	var road := func(x: int, y: int) -> bool: return x >= 0 and y >= 0 and x < w and y < h and _map.roads[y * w + x] != 0
+	for sweep in 3:
+		var changed := false
+		for y in range(h - 1):
+			for x in range(w - 1):
+				if not (road.call(x, y) and road.call(x + 1, y) and road.call(x, y + 1) and road.call(x + 1, y + 1)): continue
+				for cell: Vector2i in [Vector2i(x, y), Vector2i(x + 1, y + 1), Vector2i(x + 1, y), Vector2i(x, y + 1)]:
+					if _road_cell_removable(cell):
+						_map.roads[cell.y * w + cell.x] = 0
+						changed = true
+						break
+		if not changed: break
+	var seen := PackedByteArray()
+	seen.resize(w * h)
+	for y in h:
+		for x in w:
+			if seen[y * w + x] != 0 or _map.roads[y * w + x] == 0: continue
+			var piece: Array[Vector2i] = [Vector2i(x, y)]
+			seen[y * w + x] = 1
+			var head := 0
+			while head < piece.size():
+				var at := piece[head]
+				head += 1
+				for step: Vector2i in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1), Vector2i(1, 1), Vector2i(1, -1), Vector2i(-1, 1), Vector2i(-1, -1)]:
+					var next: Vector2i = at + step
+					if not road.call(next.x, next.y) or seen[next.y * w + next.x] != 0: continue
+					seen[next.y * w + next.x] = 1
+					piece.append(next)
+			if piece.size() < 4:
+				for at: Vector2i in piece: _map.roads[at.y * w + at.x] = 0
+	_split_roads()
+	_prune_road_spurs()
+
+## Stock roads are not one network: a map holds 20 to 40 pieces of about
+## 15 to 25 tiles, which link nearby sites and fade out in the wilds.
+## Measure each road tile's distance along the roads from the castles and
+## leave a three-tile gap about every 20 tiles, never beside a site, a
+## castle or a junction.
+func _split_roads() -> void:
+	var w := _map.width
+	var near := PackedByteArray()
+	near.resize(w * _map.height)
+	var queue: Array[Vector2i] = []
+	var steps := PackedInt32Array()
+	steps.resize(w * _map.height)
+	steps.fill(-1)
+	for item: Dictionary in _map.objects:
+		if item.group == "terrain_objects": continue
+		var castle := ELFirstScenario.is_castle(item)
+		_mark_radius(near, Vector2i(item.x, item.y), 7 if castle else 3)
+		if not castle: continue
+		for dy in range(-3, 7):
+			for dx in range(-3, 7):
+				var at := Vector2i(item.x + dx, item.y + dy)
+				if _inside(at) and _map.roads[at.y * w + at.x] != 0 and steps[at.y * w + at.x] < 0:
+					steps[at.y * w + at.x] = 0
+					queue.append(at)
+	var orthogonal: Array[Vector2i] = [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]
+	var head := 0
+	while head < queue.size():
+		var at := queue[head]
+		head += 1
+		for step: Vector2i in orthogonal:
+			var next := at + step
+			if not _inside(next) or _map.roads[next.y * w + next.x] == 0 or steps[next.y * w + next.x] >= 0: continue
+			steps[next.y * w + next.x] = steps[at.y * w + at.x] + 1
+			queue.append(next)
+	var cut: Array[int] = []
+	for offset in steps.size():
+		var d := steps[offset]
+		# Roads no castle reaches are pieces already.
+		if d < 0 or near[offset] != 0: continue
+		var at := Vector2i(offset % w, offset / w)
+		var links := 0
+		for step: Vector2i in orthogonal:
+			var next := at + step
+			if _inside(next) and _map.roads[next.y * w + next.x] != 0: links += 1
+		if links != 2: continue
+		# Each region keeps its own spacing, so the gaps do not line up.
+		var period := 17 + int(_hash(at.x / 16, at.y / 16, 6421) * 9.0)
+		if d % period < 3: cut.append(offset)
+	for offset: int in cut: _map.roads[offset] = 0
+
+## Stock roads branch rarely: about 3% of their tiles are junctions. Drop
+## spurs of up to three tiles that leave a road and end away from any site.
+func _prune_road_spurs() -> void:
+	var w := _map.width
+	var sites := PackedByteArray()
+	sites.resize(w * _map.height)
+	for item: Dictionary in _map.objects:
+		if item.group == "terrain_objects": continue
+		_mark_radius(sites, Vector2i(item.x, item.y), 3)
+	var orthogonal: Array[Vector2i] = [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]
+	var links := func(at: Vector2i) -> Array[Vector2i]:
+		var out: Array[Vector2i] = []
+		for step: Vector2i in orthogonal:
+			var next := at + step
+			if _inside(next) and _map.roads[next.y * w + next.x] != 0: out.append(next)
+		return out
+	for sweep in 2:
+		for y in _map.height:
+			for x in w:
+				var end := Vector2i(x, y)
+				if _map.roads[y * w + x] == 0 or sites[y * w + x] != 0: continue
+				var around: Array[Vector2i] = links.call(end)
+				if around.size() != 1: continue
+				var spur: Array[Vector2i] = [end]
+				var at: Vector2i = around[0]
+				var previous := end
+				var junction := false
+				while spur.size() <= 3:
+					var next: Array[Vector2i] = links.call(at)
+					if next.size() >= 3:
+						junction = true
+						break
+					if next.size() != 2: break
+					spur.append(at)
+					var forward: Vector2i = next[0] if next[1] == previous else next[1]
+					previous = at
+					at = forward
+				if not junction or spur.size() > 3: continue
+				for cell: Vector2i in spur: _map.roads[cell.y * w + cell.x] = 0
+
+## A road cell whose removal keeps its road neighbours joined through the
+## rest of its 3x3 block, and which is not the end of a road.
+func _road_cell_removable(cell: Vector2i) -> bool:
+	var w := _map.width
+	var around: Array[Vector2i] = []
+	var orthogonal := 0
+	for dy in range(-1, 2):
+		for dx in range(-1, 2):
+			if dx == 0 and dy == 0: continue
+			var at := cell + Vector2i(dx, dy)
+			if not _inside(at) or _map.roads[at.y * w + at.x] == 0: continue
+			around.append(at)
+			if dx == 0 or dy == 0: orthogonal += 1
+	if orthogonal < 2: return false
+	# The neighbours must stay one 4-connected group without the cell.
+	var group: Array[Vector2i] = [around[0]]
+	var head := 0
+	while head < group.size():
+		var at := group[head]
+		head += 1
+		for other: Vector2i in around:
+			if group.has(other): continue
+			if absi(other.x - at.x) + absi(other.y - at.y) == 1: group.append(other)
+	return group.size() == around.size()
+
+## The path with an orthogonal cell inserted at every diagonal step, on
+## the side that keeps the run straightest and stays on dry land.
+func _staircase(path: Array[Vector2i]) -> Array[Vector2i]:
+	if path.size() < 2: return path
+	var result: Array[Vector2i] = [path[0]]
+	var last_axis := 0
+	for index in range(1, path.size()):
+		var before := result[result.size() - 1]
+		var at := path[index]
+		if at.x != before.x and at.y != before.y:
+			var across := Vector2i(at.x, before.y)
+			var down := Vector2i(before.x, at.y)
+			# Keep the inserted side through a run so a long diagonal climbs
+			# in even one-tile steps, and keep to walkable ground.
+			var first := down if last_axis == 2 else across
+			var second := down if first == across else across
+			var pick := first if _walkable(first) or not _walkable(second) else second
+			result.append(pick)
+			last_axis = 1 if pick == across else 2
+		result.append(at)
+	return result
 
 ## Cells where a grid path turns through an L between two diagonal
 ## neighbors. Leaving them unpaved lets the road run diagonally instead of
@@ -3417,6 +4491,9 @@ func _connect_site(from: Vector2i, item: Dictionary, size: Vector2i, road := tru
 			if config.naval and _region_at(point) != _region_at(approach): continue
 			var offset := point.y * _map.width + point.x
 			if _occupied[offset] != 0 or _reserved[offset] != 0: continue
+			# A version 13 road joins the road, not an unpaved guard route,
+			# so it never ends in the middle of the woods.
+			if road and config.roads and config.version >= STOCK_LAYOUT_VERSION and _map.roads[offset] == 0: continue
 			var candidate := approach.distance_squared_to(point)
 			if candidate < distance:
 				distance = candidate
@@ -3486,6 +4563,97 @@ func _reconnect_landscape(first_decoration: int, cliff_ids: Vector2i) -> bool:
 	report.reopened_connections = reach.connections
 	return true
 
+## Version 13: remove the generated props on the shortest orthogonal way
+## from the reached ground to a sealed site. Creatures and fixed objects
+## stay; a site behind a guard the woods narrowed opens this way. With
+## `creatures`, remove the creatures on that way instead and keep every
+## prop. False when no such way exists.
+func _carve_woods(id: int, first_decoration: int, cliff_ids: Vector2i, creatures := false) -> bool:
+	if _last_reached.size() != _map.width * _map.height: return false
+	var objects := _navigation_objects()
+	var grid := ELAdventureGrid.new()
+	if not grid.build(_map, objects) or not objects.has(id): return false
+	var owner := {}
+	for uid: int in objects:
+		var item: Dictionary = objects[uid]
+		var permanent_id := int(item.permanent_id)
+		if creatures:
+			if item.group == "np_heroes" and uid != id and grid.contains(Vector2i(item.x, item.y)): owner[_index(Vector2i(item.x, item.y))] = uid
+			continue
+		if item.group != "terrain_objects" or not (permanent_id >= first_decoration or (permanent_id >= cliff_ids.x and permanent_id < cliff_ids.y)): continue
+		for cell: Vector2i in grid.footprints.get(uid, {}).get("cells", []):
+			var point := cell + Vector2i(item.x, item.y)
+			if grid.contains(point): owner[_index(point)] = uid
+	var site: Dictionary = objects[id]
+	var body := Rect2i(Vector2i(site.x, site.y), grid.footprints.get(id, {}).get("size", Vector2i.ONE))
+	var goal := {}
+	for y in range(body.position.y - 1, body.end.y + 1):
+		for x in range(body.position.x - 1, body.end.x + 1):
+			var cell := Vector2i(x, y)
+			if grid.contains(cell) and not body.has_point(cell) and not (config.naval and _sea_cell(cell)): goal[_index(cell)] = true
+	# 0-1 breadth-first search: a prop cell costs one, open ground nothing.
+	var cost := PackedInt32Array()
+	cost.resize(_map.width * _map.height)
+	cost.fill(1 << 30)
+	var previous := PackedInt32Array()
+	previous.resize(cost.size())
+	previous.fill(-1)
+	var deque: Array[int] = []
+	for offset in _last_reached.size():
+		if _last_reached[offset] != 0 and not (config.naval and _sea_cell(Vector2i(offset % _map.width, offset / _map.width))):
+			cost[offset] = 0
+			deque.append(offset)
+	var head := 0
+	var found := -1
+	# Two queues stand in for the deque: zero-cost steps first.
+	var later: Array[int] = []
+	var level := 0
+	while head < deque.size() or not later.is_empty():
+		if head >= deque.size():
+			deque = later
+			later = []
+			head = 0
+			level += 1
+		var offset := deque[head]
+		head += 1
+		if cost[offset] < level: continue
+		if goal.has(offset):
+			found = offset
+			break
+		var at := Vector2i(offset % _map.width, offset / _map.width)
+		for delta: Vector2i in [Vector2i.LEFT, Vector2i.RIGHT, Vector2i.UP, Vector2i.DOWN]:
+			var next := at + delta
+			if not grid.contains(next) or (config.naval and _sea_cell(next)): continue
+			var index := _index(next)
+			if body.has_point(next) or (grid.actor_blockers[index] != 0 and not owner.has(index)): continue
+			var step := 0
+			if owner.has(index): step = 1
+			elif grid.land.is_point_solid(next): continue
+			if cost[offset] + step >= cost[index]: continue
+			cost[index] = cost[offset] + step
+			previous[index] = offset
+			if step == 0: deque.append(index)
+			else: later.append(index)
+	if found < 0: return false
+	var removed := {}
+	var walk := found
+	while walk >= 0:
+		if owner.has(walk): removed[int(owner[walk])] = true
+		walk = previous[walk]
+	if removed.is_empty(): return false
+	_map.objects = _map.objects.filter(func(item: Dictionary) -> bool: return not removed.has(int(item.permanent_id) - 1))
+	if creatures:
+		for uid: int in removed:
+			_important.erase(uid)
+			if report.get("passage_guards") is Dictionary: report.passage_guards.erase(uid)
+		if report.get("roaming_creatures") is Array:
+			report.roaming_creatures = report.roaming_creatures.filter(func(uid: int) -> bool: return not removed.has(uid))
+		for prize: int in _reward_guards.keys():
+			if removed.has(int(_reward_guards[prize])):
+				_reward_guards.erase(prize)
+				_gated_prizes.erase(prize)
+	return true
+
 ## Version 13: a diagonal step between two cells blocked by objects or
 ## impassable ground. The game allows it, but among dense props it reads as
 ## walking through a wall, so the generator does not count it as a way in.
@@ -3553,10 +4721,136 @@ func _open_corner_gaps(first_decoration: int, cliff_ids: Vector2i) -> bool:
 		if removed.is_empty(): break
 		opened += removed.size()
 		_map.objects = _map.objects.filter(func(item: Dictionary) -> bool: return not removed.has(int(item.permanent_id)))
+	var sealed := _seal_corner_pockets(first_decoration, cliff_ids)
 	_strict_corners = false
 	report.opened_corner_gaps = opened
+	report.sealed_corner_pockets = sealed
 	# Recount the joined ground with the freed cells.
-	return opened == 0 or _reconnect_landscape(first_decoration, cliff_ids)
+	return (opened == 0 and sealed == 0) or _reconnect_landscape(first_decoration, cliff_ids)
+
+## Version 13: open ground whose only way in is a diagonal gap between two
+## fixed objects or impassable ground, such as a site beside a lake. It
+## reads as a sealed pocket. A small empty one is filled with single-tile
+## props; a larger one, or one holding anything, gets a visible way in
+## through the generated props nearest the reached ground. Returns the
+## number of cells filled or opened.
+func _seal_corner_pockets(first_decoration: int, cliff_ids: Vector2i) -> int:
+	var objects := _navigation_objects(false)
+	var grid := ELAdventureGrid.new()
+	if not grid.build(_map, objects): return 0
+	var actors := {}
+	var owner := {}
+	for id: int in objects:
+		var item: Dictionary = objects[id]
+		var permanent_id := int(item.permanent_id)
+		if item.group != "terrain_objects" or not (permanent_id >= first_decoration or (permanent_id >= cliff_ids.x and permanent_id < cliff_ids.y)): continue
+		for cell: Vector2i in grid.footprints.get(id, {}).get("cells", []):
+			var point := cell + Vector2i(item.x, item.y)
+			if grid.contains(point): owner[_index(point)] = permanent_id
+	for item: Dictionary in _map.objects:
+		if item.group in ["heroes", "np_heroes"]: actors[Vector2i(item.x, item.y)] = true
+	# Reached through visible ways, and through any step the game allows.
+	var strict := PackedByteArray()
+	var loose := PackedByteArray()
+	strict.resize(_map.width * _map.height)
+	loose.resize(strict.size())
+	for pass_index in 2:
+		var seen := strict if pass_index == 0 else loose
+		_strict_corners = pass_index == 0
+		var queue: Array[Vector2i] = []
+		for start: Dictionary in _starts:
+			var origin := Vector2i(start.x, start.y)
+			if seen[_index(origin)] == 0:
+				seen[_index(origin)] = 1
+				queue.append(origin)
+		var head := 0
+		while head < queue.size():
+			var at := queue[head]
+			head += 1
+			for delta: Vector2i in ELInterception.DIRECTIONS:
+				var next := at + delta
+				if not grid.contains(next) or seen[_index(next)] != 0 or grid.land.is_point_solid(next): continue
+				if config.naval and not ELFirstNaval.connected(grid, at, next, true, true): continue
+				if _corner_gap(grid, at, next): continue
+				seen[_index(next)] = 1
+				queue.append(next)
+	_strict_corners = true
+	var fillers := _single_fillers()
+	var grouped := PackedByteArray()
+	grouped.resize(strict.size())
+	var filled := 0
+	for index in strict.size():
+		if loose[index] == 0 or strict[index] != 0 or grouped[index] != 0: continue
+		var pocket: Array[Vector2i] = [Vector2i(index % _map.width, index / _map.width)]
+		grouped[index] = 1
+		var head := 0
+		var occupied := false
+		while head < pocket.size():
+			var at := pocket[head]
+			head += 1
+			occupied = occupied or actors.has(at) or _occupied[_index(at)] != 0
+			for delta: Vector2i in ELInterception.DIRECTIONS:
+				var next := at + delta
+				if not grid.contains(next): continue
+				var offset := _index(next)
+				if loose[offset] == 0 or strict[offset] != 0 or grouped[offset] != 0: continue
+				grouped[offset] = 1
+				pocket.append(next)
+		if occupied or pocket.size() > 12:
+			# Straight steps through the generated props to reached ground,
+			# fewest props first.
+			var cost := PackedInt32Array()
+			cost.resize(strict.size())
+			cost.fill(0x7fffffff)
+			var back := PackedInt32Array()
+			back.resize(strict.size())
+			back.fill(-1)
+			var frontier: Array[Vector2i] = []
+			for at: Vector2i in pocket:
+				cost[_index(at)] = 0
+				frontier.append(at)
+			var goal := -1
+			while not frontier.is_empty() and goal < 0:
+				var best := 0
+				for i in frontier.size():
+					if cost[_index(frontier[i])] < cost[_index(frontier[best])]: best = i
+				var at: Vector2i = frontier[best]
+				frontier[best] = frontier[-1]
+				frontier.pop_back()
+				for delta: Vector2i in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+					var next := at + delta
+					if not grid.contains(next): continue
+					var offset := _index(next)
+					var free: bool = not grid.land.is_point_solid(next) and not (config.naval and _sea_cell(next))
+					if not free and not owner.has(offset): continue
+					var step := cost[_index(at)] + (0 if free else 1)
+					if step >= cost[offset]: continue
+					cost[offset] = step
+					back[offset] = _index(at)
+					if free and strict[offset] != 0:
+						goal = offset
+						break
+					frontier.append(next)
+			if goal < 0: continue
+			var removed := {}
+			while goal >= 0:
+				if owner.has(goal): removed[owner[goal]] = true
+				goal = back[goal]
+			_map.objects = _map.objects.filter(func(item: Dictionary) -> bool: return not removed.has(int(item.permanent_id)))
+			for id: int in removed.keys():
+				for offset: int in owner.keys():
+					if owner[offset] == id: owner.erase(offset)
+			filled += removed.size()
+			continue
+		for at: Vector2i in pocket:
+			if (config.naval and _sea_cell(at)) or _map.roads[_index(at)] != 0: continue
+			var choices: Array = fillers.get(ELAdventureArt.terrain_color(_map.tile(at.x, at.y)), [])
+			if choices.is_empty(): choices = fillers.get(_colors[_owner(at)], [])
+			if choices.is_empty(): continue
+			var entry: Dictionary = choices[_next(choices.size())]
+			_place("terrain_objects", entry.name, at, entry.row, 0, "", [], {}, _next(4) * 4)
+			filled += 1
+	return filled
 
 func _widen_land_connection(at: Vector2i) -> void:
 	for y in range(at.y, at.y + 2):
@@ -3601,6 +4895,16 @@ func _check_access(protect_routes := false, enforce_daily := false) -> bool:
 				if protect_routes: previous[offset] = at.y * _map.width + at.x
 				queue.append(next)
 	var targets: Array[int] = _important.duplicate()
+	var optional := {}
+	if _site_mode == 1:
+		_open_sites.clear()
+		for id: int in objects:
+			if not objects[id].group in ["terrain_objects", "np_heroes", "heroes"] and not id in targets:
+				optional[id] = true
+				targets.append(id)
+	elif _site_mode == 2:
+		for id: int in _open_sites:
+			if objects.has(id) and not id in targets: targets.append(id)
 	var opening := {}
 	for start: Dictionary in _starts:
 		targets.append(int(start.castle_id))
@@ -3626,9 +4930,15 @@ func _check_access(protect_routes := false, enforce_daily := false) -> bool:
 				if cost < distance:
 					distance = cost
 					approach = offset
+		if _site_mode == 1:
+			# Recording only: the strategic targets are checked anyway.
+			if approach >= 0 and optional.has(id): _open_sites.append(id)
+			continue
 		if approach < 0:
 			error = "Generated map contains an unreachable %s (%d). Try a different seed." % [str(item.group), id]
 			_unreached = Vector2i(item.x, item.y)
+			_unreached_id = id
+			_last_reached = reached
 			return false
 		if protect_routes: _protect_route(approach, previous, safe)
 	if config.naval:

@@ -52,7 +52,11 @@ func _initialize() -> void:
 		roads.set_fog(PackedByteArray())
 		check(roads.surface.visible and roads.visibility_image.get_pixel(0, 0).is_equal_approx(Color.WHITE), "disabling fog restores the full road visibility mask")
 		check(roads.surface.material_override.albedo_texture == roads.visibility_texture, "the road material uses the maintained visibility texture")
-	var current := ELFirstRandomMap.normalize({"seed": "roads-check"})
+	var stock_layout := ELFirstRandomMap.normalize({"seed": "roads-check"})
+	map.set_meta("random_map", {"config": stock_layout})
+	check(not roads.build(map) and roads.surface == null, "version 13 roads are painted into the ground, not drawn as an overlay")
+	# Versions 5 to 12 draw trails over the ground.
+	var current := ELFirstRandomMap.normalize({"seed": "roads-check", "version": ELFirstRandomMapV2.LIVING_WILDS_VERSION})
 	map.set_meta("random_map", {"config": current})
 	map.roads[3 * 8 + 2] = 6
 	map.roads[3 * 8 + 3] = 6

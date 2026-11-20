@@ -84,7 +84,10 @@ captured; they are not automatically granted as owned income.
 Frontier and island content adds mines, resource caches, difficulty-aware
 guards, artifact rewards and global-spell scrolls. Higher recruitment ranks
 are discovered on the map. Shops use actual installed combat spells and the
-normal stock and purchase rules. Naval homelands have multiple harbor
+normal stock and purchase rules. From version 13 they skip the basic Cantrip
+cards, and each shop of a kind offers the goods the other shops of that kind
+offer least, so no two stock the same. Heroes from a generic template receive
+a name and a speciality of their faction. Naval homelands have multiple harbor
 approaches, giving opponents alternate routes and coastal objectives to contest.
 
 Main roads link markets, recruitment scrolls, and harbors. Neutral forts stand
@@ -309,21 +312,85 @@ connecting waterways bend with the terrain.
 
 Version 13 follows the measured layout of the 37 original missions, which
 are recorded in the [stock map survey](first_map_survey.md). The ground is
-level, as in the originals. Forests and rock masses cover about a third of the
-land, leaving walkable veins two to four tiles wide. Red ground is the densest
-and Blue the most open. Later roads reuse earlier ones, so routes merge
+level, as in the originals. Cliffs, forests and rock masses cover about half
+of the land in rounded blocks, parted by a maze of lanes two to four tiles
+wide. The lanes follow the borders between irregular cells about 18 tiles
+across. Close to a third of those borders stay closed, which leaves long
+walls and dead ends. Open ground never gets wider than about four tiles:
+where lanes, roads and site aprons meet in a wider patch, its middle becomes
+a small mass, so the patch turns into a loop of lane around it. Snow takes
+slightly wider lanes and a few small fields among its pines.
+Roads follow the lanes, so they wind around the blocks. They are one tile
+wide and climb diagonals as staircases. As in the stock missions, they have
+no drawn surface: their tiles take the path ground of their climate, which
+the terrain blends into a soft band. Short side spurs and stubs to guarded
+prizes are left out, so roads rarely branch. Roads are not one network
+either: they break every 17 to 25 tiles of open country, though never beside
+a castle, a site or a junction. That leaves 10 to 30 separate pieces that
+link nearby sites, as in the stock missions. Sites keep open ground only on the side facing
+their lane, and woods and rock close in around castles except at the gate,
+as in the stock missions. A castle opens onto clear ground before its
+stairs and on the side opposite its recruits' row, which in 99 of 114 stock
+castles has no site or creature within eight rows. No site, resource pile or
+creature stands within eight rows of those two sides, five rows of the back
+wall, which the tall castle model overhangs, or three rows of the recruits'
+row. The woods keep only the first three rows before the stairs open, and
+close in elsewhere.
+On a home island too small for a starting economy with that rule, the
+generator builds the same map again and lets only the starting mines and
+shops use the approach, then looks farther across the homeland if a mine
+still does not fit. If a seed's layout still leaves a site or economy
+without room, the generator builds it again from up to four derived layout
+seeds. The seed, title and map id stay the same, so the same settings
+always give the same map. All 440 maps of a sweep over every preset, four
+sizes and ten seeds generate this way. A site, creature or yard away from the lanes gets a
+winding path two tiles wide to the nearest open ground joined to a castle or
+harbor on its island. The nearest pockets join first, so later paths branch
+off earlier ones instead of running side by side. Paths to guarded prizes
+are two tiles wide as well, because a one-tile path between tall models looks
+like a dead end. The scenery runs to the edge of the map. Each ground
+takes its props in the proportions the original missions use, and the largest
+are placed first, deepest in each mass, before the paths to the pockets are
+laid, so the paths wind around the big cliffs instead of cutting through
+them. Where a weighted pick does not fit, the generator tries every clump of
+the mass's own kind, largest first, before a gap falls to single-tile
+fillers. Flat ice slabs, which block a tile but look like open ice, are left
+out, and the fillers are trees, stones and bushes that visibly block their
+tile. Large cliffs, such as grey stacks on dark
+ground, red rock on tan ground, green crags on grass and ice ridges on snow,
+make up about a third of the cover. Snow is the most open ground and dark
+ground the densest. Later roads reuse earlier ones, so routes merge
 instead of running in parallel or looping around a castle. Roadside services
 join the network along winding tracks. Mines and supplies are kept, and
 optional sites stand about five tiles apart. The generator places about ten
 creatures per thousand passable tiles across the whole map. Their levels follow
 the stock curve from walking distance: level one beside a castle, three
-after 11–20 steps, four after 21–30, five after 31–45 and six beyond. After
-the woods are placed, generation clears scenery around any site the travel
-check cannot reach. It also removes any creature that has been shut in.
+after 11–20 steps, four after 21–30, five after 31–45 and six beyond. A
+creature rarely shares its kind with another within ten tiles, as in the
+stock missions; the next level band is used before a repeat. After
+the woods are placed, every site that was reachable before them must still
+be reachable. Generation removes the props on the shortest way to a site the
+woods shut off, then clears scenery around it if that is not enough. It also
+removes any creature that has been shut in, including a prize guard behind
+another guard.
+The ground follows what stands on it, as in the stock missions: forest soil
+under trees, cobbles under rocks, sites and castles, and plain grass, snow,
+red earth or sand in the open, with the stock share of variants in patches.
+Pine stands on snow lie mostly on brown and dark earth, more than in the
+stock missions: snow is denser here, and the sparse pine models alone would
+make a blocked stand look like open snow. Each corner keeps
+its old ground when the tileset cannot draw the new transition or crosses
+the new kind at another cost.
 The game lets a hero step diagonally between two blocked corners. Among
 dense woods, though, that step looks like walking through a wall.
 Version 13 therefore removes the smaller generated prop at any such gap that
-is the only way into land. A diagonal road still counts as a way in.
+is the only way into land. A diagonal road still counts as a way in. Where
+the gap lies between two fixed things, such as a site and a lake, no prop
+can open it: a pocket of up to twelve empty tiles behind it is filled with
+small props, and a larger pocket, or one holding anything, gets a way in
+through the fewest generated props. Counting harbors as ways in and
+diagonal gaps as walls, every site and creature is reachable on all 329
+sample maps that generate out of 330 (11 presets, six seeds, five sizes).
 `tools/first_ai_sim.gd --random=<preset>` plays the world AI on a generated
 map, for example with `--fight-monsters=true`.
 

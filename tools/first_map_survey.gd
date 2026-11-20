@@ -11,7 +11,9 @@ extends SceneTree
 ## Generated maps (preset ids, optional older generator version):
 ##   godot --headless --path game --script ../tools/first_map_survey.gd --
 ##       --maps=generated --presets=frontier,lakes --seeds=212,audit-7
-##       [--version=12] --out=<dir> [--png=<dir>]
+##       [--version=12] [--size=128] --out=<dir> [--png=<dir>]
+## The picture marks walkable tiles with clearance 2 in yellow and 3 or more
+## in orange. Sea does not count as walkable ground.
 const SITE_GROUPS := ["mines", "mana_nodes", "laboratories", "factories", "artefacts", "global_spells", "forts", "resource_cuts", "additional_buildings"]
 const HOME := 15
 const FAR := 30
@@ -20,6 +22,8 @@ func _arg(name: String, fallback: String) -> String:
 	for arg: String in OS.get_cmdline_user_args():
 		if arg.begins_with("--" + name + "="): return arg.split("=", true, 1)[1]
 	return fallback
+
+var _png_name := ""
 
 func _initialize() -> void:
 	_run.call_deferred()
@@ -47,7 +51,9 @@ func _run() -> void:
 				var options: Dictionary = ELFirstRandomMap.defaults().merged(p.options, true)
 				options.seed = seed
 				if not _arg("version", "").is_empty(): options.version = int(_arg("version", ""))
-				jobs.append({"id": "gen_%s_%s_v%d" % [p.id, seed, int(options.version)], "options": options})
+				if not _arg("size", "").is_empty(): options.size = int(_arg("size", ""))
+				options = ELFirstRandomMap.normalize(options)
+				jobs.append({"id": "gen_%s_%s_v%d_%d" % [p.id, seed, int(options.version), int(options.size)], "options": options})
 	for job: Dictionary in jobs:
 		var map: ELAdventureMap
 		if job.has("options"):
@@ -59,6 +65,7 @@ func _run() -> void:
 			map = ELAdventureMap.new()
 			if not map.load_map(profile, job.id):
 				print("FAIL ", job.id, " ", map.error); continue
+		_png_name = str(job.id)
 		var result := _survey(map)
 		result.id = job.id
 		result.kind = _kind(job.id)
@@ -101,7 +108,7 @@ func _survey(map: ELAdventureMap) -> Dictionary:
 			var cost := ELAdventureGrid.strategic_cost(map.profile.terrain_tiles, corners, int(map.roads[i]), false) if not grid.naval else ELFirstNaval.terrain_cost(map, Vector2i(x, y), false, false)
 			var wet := corners.any(func(t: int) -> bool: return t in ELTileSet.WATER_KINDS)
 			terrain_ok[i] = int(cost > 0 and not (grid.naval and wet))
-			walk[i] = int(cost > 0 and grid.blockers[i] == 0)
+			walk[i] = int(cost > 0 and grid.blockers[i] == 0 and not wet)
 	var props := 0
 	var prop_area := 0
 	var prop_names := {}
@@ -231,12 +238,14 @@ func _survey(map: ELAdventureMap) -> Dictionary:
 				if terrain_ok[i] and map.roads[i] > 4 and map.roads[i] < 9: c = Color("8a6a44")
 				if scenery[i]: c = Color("2f4a22")
 				elif grid.blockers[i] > 0: c = Color("6b5b8f")
+				elif walk[i] and clearance[i] >= 3: c = Color("e0602a")
+				elif walk[i] and clearance[i] == 2: c = Color("e0d070")
 				img.fill_rect(Rect2i(x * 4, (h - 1 - y) * 4, 4, 4), c)
 		for cr: Dictionary in creatures:
 			img.fill_rect(Rect2i(cr.x * 4, (h - 1 - cr.y) * 4, 4, 4), Color("e02020"))
 		for c in castles:
 			img.fill_rect(Rect2i(c.x * 4 - 6, (h - 1 - c.y) * 4 - 6, 12, 12), Color.WHITE)
-		img.save_png(_arg("png", "").path_join(str(map.id).get_file() + ".png"))
+		img.save_png(_arg("png", "").path_join(_png_name + ".png"))
 	var max_open := 0
 	for i in w * h: if walk[i]: max_open = maxi(max_open, clearance[i])
 	return {"kind": _kind(map.id), "size": [w, h], "players": map.players.size(), "castles": castles.size(),

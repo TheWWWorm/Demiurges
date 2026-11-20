@@ -101,10 +101,11 @@ water do not bypass this rule. The ordinary diplomacy and interaction checks
 still decide which hero interactions are available.
 
 Combat uses the normal EL1 hero templates, spellbooks, runes, difficulty and
-duel engine. Open-water terrain selects the existing EL1 `Ether.001` arena;
-shore battles select the normal EL1 terrain arena. The optional EL2 boat
-appearance does not require EL2's `Ship.001` combat arena or change the hero's
-battle rules. The battle test prepares actual duels for open-water combat and
+duel engine. When Etherlords II is installed, a battle in which either side is
+at sea takes place in its `Ship.001` arena. Without it, open-water terrain
+selects the existing EL1 `Ether.001` arena and shore battles select the normal
+EL1 terrain arena. The arena does not change the hero's battle rules, and a
+hero at sea keeps their own portrait. The battle test prepares actual duels for open-water combat and
 both directions of a harbor assault, casts a spell, advances phases, restores
 a duel snapshot, and returns the result to the adventure map.
 

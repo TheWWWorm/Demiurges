@@ -164,6 +164,9 @@ func _prepare_duel(state: ELAdventureSession, defender: int, seed_value := -1, f
 		if owners[0] >= 1 and owners[1] >= 1 and state.players.has(owners[0]) and state.players.has(owners[1]):
 			for side in 2: options.players[side].global_effects = ELGlobalSpells.battle_effects(state, owners[side])
 		options.arena = FIRST_ARENAS[4] if ethereal_defender >= 0 else first_arena(state, hero_id, opponent_id, defender if defender >= 0 else opponent_id)
+		# A fight aboard a ship: the view shows the second game's ship arena
+		# when it is installed (the first game has none).
+		if ethereal_defender < 0 and (state.object(hero_id).get("ship", false) or state.object(opponent_id).get("ship", false)): options.ship_battle = true
 		var levels := first_levels(state, hero_id, opponent_id, not map_ai_duel)
 		for side in 2:
 			# The battle tooltip names the hero's own level, not the one the

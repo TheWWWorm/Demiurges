@@ -19,7 +19,16 @@ func resolve(object: Dictionary) -> Dictionary:
 		var ship_color := ""
 		for player: Dictionary in map.players:
 			if int(player.attrs.id) == int(object.owner): ship_color = ELXml.value(player, "color")
-		return {"model": "tebuad552" if corpse else "he551", "texture": "Heroes/Boat00", "secondary": "", "scale": 1.0, "row": {"TileSize": [1, 1]}, "unit": true, "first_ship": map.profile.id == "el1", "ship_owner": int(object.get("owner", 1)), "ship_color": ship_color}
+		# The boat keeps its crew's portrait: panels read Face or Icon from
+		# the row, and a bare row would show portrait 0 instead.
+		var ship_row := {"TileSize": [1, 1]}
+		if not corpse:
+			var crew := object.duplicate()
+			crew.ship = false
+			var own: Dictionary = resolve(crew).get("row", {})
+			for field: String in ["Face", "Icon"]:
+				if own.has(field): ship_row[field] = own[field]
+		return {"model": "tebuad552" if corpse else "he551", "texture": "Heroes/Boat00", "secondary": "", "scale": 1.0, "row": ship_row, "unit": true, "first_ship": map.profile.id == "el1", "ship_owner": int(object.get("owner", 1)), "ship_color": ship_color}
 	var color := ELXml.value(node, "color")
 	if color.is_empty():
 		for player: Dictionary in map.players:

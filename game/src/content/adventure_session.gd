@@ -218,6 +218,11 @@ func start(source: ELAdventureMap, level := 0, seed_number := 212, scenario_scri
 				object.health = int(template.get("BaseHealth", 7)) + object.level * growth
 				object.title = _hero_title(str(template.get("ELKName", "")), placed.name)
 				object.specialization = template.get("Specialization", "NONE")
+				# Random maps place generic templates, which carry no name or
+				# speciality; give them a lord's name and a speciality of their
+				# colour, as a recruited hero gets, fixed by the map and hero.
+				if map.profile.id == "el1" and map.id.begins_with(ELFirstRandomMap.PREFIX) and str(template.get("ELKName", "")).strip_edges().is_empty():
+					_name_generic_hero(object, template)
 				object.cards = ELCatalog.deck(map.profile, str(template.get("StartDeck", "")))
 				object.skills = ELHeroSkills.from_template(map.profile, template)
 				ELHeroProgression.initialize(map.profile, object, growth)
@@ -325,6 +330,23 @@ func object(id: Variant) -> Dictionary:
 
 func _mobs() -> Array[int]:
 	return _mob_ids
+
+func _name_generic_hero(object: Dictionary, template: Dictionary) -> void:
+	var colour := str(template.get("Color", ""))
+	var roll := absi(hash(map.id + ":" + str(object.uid)))
+	var names: Array[String] = []
+	for entry: Dictionary in map.profile.table("HeroNames").values():
+		if str(entry.get("Race", "")) == colour and str(entry.get("Gender", "")) == str(template.get("Gender", "")): names.append(str(entry.Name))
+	names.sort()
+	if not names.is_empty(): object.title = map.profile.text(names[roll % names.size()])
+	if str(object.specialization) in ["", "NONE"]:
+		var specs: Array[String] = []
+		var spec_rows: Dictionary = map.profile.table("HeroesSpecs")
+		for code: String in spec_rows:
+			var colours: Variant = spec_rows[code].get("MagicColor", [])
+			if (colours is Array and colours.has(colour)) or str(colours) == colour: specs.append(code)
+		specs.sort()
+		if not specs.is_empty(): object.specialization = specs[(roll / 7) % specs.size()]
 
 ## A hero's shown name: its name text, or (custom maps leave ElkName empty)
 ## the map creature's own name.
