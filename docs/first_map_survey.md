@@ -154,9 +154,9 @@ their tiles are turns. They branch rarely: 3% of road tiles are junctions,
 and a map holds 20 to 40 separate road pieces, the largest 60 to 180
 tiles long.
 
-Version 13 paints its roads the same way. After it drops short side spurs,
-36% of its road tiles are turns and 6% are junctions. Its roads still form
-one network between the castles rather than separate pieces.
+Version 13 paints its roads the same way. It breaks the network into 10 to
+30 pieces per map, the largest 55 to 105 tiles long, and drops short side
+spurs. Then 34% of its road tiles are turns and 4% are junctions.
 
 ## Comparison with generated maps
 

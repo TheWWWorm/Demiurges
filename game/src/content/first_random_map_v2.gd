@@ -3909,7 +3909,58 @@ func _tidy_roads() -> void:
 					piece.append(next)
 			if piece.size() < 4:
 				for at: Vector2i in piece: _map.roads[at.y * w + at.x] = 0
+	_split_roads()
 	_prune_road_spurs()
+
+## Stock roads are not one network: a map holds 20 to 40 pieces of about
+## 15 to 25 tiles, which link nearby sites and fade out in the wilds.
+## Measure each road tile's distance along the roads from the castles and
+## leave a three-tile gap about every 20 tiles, never beside a site, a
+## castle or a junction.
+func _split_roads() -> void:
+	var w := _map.width
+	var near := PackedByteArray()
+	near.resize(w * _map.height)
+	var queue: Array[Vector2i] = []
+	var steps := PackedInt32Array()
+	steps.resize(w * _map.height)
+	steps.fill(-1)
+	for item: Dictionary in _map.objects:
+		if item.group == "terrain_objects": continue
+		var castle := ELFirstScenario.is_castle(item)
+		_mark_radius(near, Vector2i(item.x, item.y), 7 if castle else 3)
+		if not castle: continue
+		for dy in range(-3, 7):
+			for dx in range(-3, 7):
+				var at := Vector2i(item.x + dx, item.y + dy)
+				if _inside(at) and _map.roads[at.y * w + at.x] != 0 and steps[at.y * w + at.x] < 0:
+					steps[at.y * w + at.x] = 0
+					queue.append(at)
+	var orthogonal: Array[Vector2i] = [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]
+	var head := 0
+	while head < queue.size():
+		var at := queue[head]
+		head += 1
+		for step: Vector2i in orthogonal:
+			var next := at + step
+			if not _inside(next) or _map.roads[next.y * w + next.x] == 0 or steps[next.y * w + next.x] >= 0: continue
+			steps[next.y * w + next.x] = steps[at.y * w + at.x] + 1
+			queue.append(next)
+	var cut: Array[int] = []
+	for offset in steps.size():
+		var d := steps[offset]
+		# Roads no castle reaches are pieces already.
+		if d < 0 or near[offset] != 0: continue
+		var at := Vector2i(offset % w, offset / w)
+		var links := 0
+		for step: Vector2i in orthogonal:
+			var next := at + step
+			if _inside(next) and _map.roads[next.y * w + next.x] != 0: links += 1
+		if links != 2: continue
+		# Each region keeps its own spacing, so the gaps do not line up.
+		var period := 17 + int(_hash(at.x / 16, at.y / 16, 6421) * 9.0)
+		if d % period < 3: cut.append(offset)
+	for offset: int in cut: _map.roads[offset] = 0
 
 ## Stock roads branch rarely: about 3% of their tiles are junctions. Drop
 ## spurs of up to three tiles that leave a road and end away from any site.

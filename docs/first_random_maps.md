@@ -322,7 +322,10 @@ Roads follow the lanes, so they wind around the blocks. They are one tile
 wide and climb diagonals as staircases. As in the stock missions, they have
 no drawn surface: their tiles take the path ground of their climate, which
 the terrain blends into a soft band. Short side spurs and stubs to guarded
-prizes are left out, so roads rarely branch. Sites keep open ground only on the side facing
+prizes are left out, so roads rarely branch. Roads are not one network
+either: they break every 17 to 25 tiles of open country, though never beside
+a castle, a site or a junction. That leaves 10 to 30 separate pieces that
+link nearby sites, as in the stock missions. Sites keep open ground only on the side facing
 their lane, and woods and rock close in around castles except at the gate,
 as in the stock missions. The scenery runs to the edge of the map. Each ground
 takes its props in the proportions the original missions use, and the largest
