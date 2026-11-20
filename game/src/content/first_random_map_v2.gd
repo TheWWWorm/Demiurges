@@ -2960,12 +2960,10 @@ func _make_vein_scenery(land: PackedByteArray, pools: Dictionary) -> void:
 		if not lanes.is_empty() and ELFirstScenario.is_castle(item):
 			# The castle's front row is where recruits appear
 			# (ELGlobalSpells.castle_spot); it and the row beyond stay open,
-			# and so do the four rows on the far side and before the stairs.
+			# and so do the three rows before the stairs.
 			var castle_size := Vector2i(ELAdventureGrid.footprint(art.resolve(item).get("row", {}), int(item.rotation)).size)
 			var clear := _castle_front(item, castle_size)
-			if config.version >= STOCK_LAYOUT_VERSION:
-				clear.append_array(_castle_front(item, castle_size, 4, 2))
-				clear.append_array(_castle_front(item, castle_size, 4, 3))
+			if config.version >= STOCK_LAYOUT_VERSION: clear.append_array(_castle_front(item, castle_size, 3, 3))
 			for cell: Vector2i in clear:
 				if _inside(cell):
 					open[cell.y * w + cell.x] = 1

@@ -166,23 +166,22 @@ then summarised as the median [lowest–highest] over maps. That keeps a large
 map from outweighing a small one. Stock figures come from the 17 single and
 multiplayer missions; the story missions of the campaign are left out. The
 generated figures come from version 13 maps for all 11 presets at each of the
-four sizes (64, 96, 128 and 160 tiles), three seeds each: 132 maps, of which
-131 generate (a 64-tile archipelago for four players has no room for a full
-starting economy).
+four sizes (64, 96, 128 and 160 tiles), three seeds each: 132 maps, all of
+which generate.
 
 | Measure, per map | Stock | Version 13 |
 | --- | ---: | ---: |
-| Scenery cover % of land | 47.8 [36–65] | 52.2 [30–68] |
-| Walkable tiles with clearance ≤ 1 | 80.7% [68–91] | 83.1% [76–87] |
-| Walkable tiles with clearance 2 | 18.8% [10–30] | 16.3% [12–21] |
-| Walkable tiles with clearance ≥ 3 | 0.8% [0–3.5] | 0.6% [0.1–2.8] |
-| Widest open spot (clearance) | 3 [2–5] | 3 [3–5] |
-| Narrow share of castle routes | 81% [67–91] | 85% [76–95] |
-| Mean scenery cluster, tiles | 32 [10–138] | 45 [12–149] |
-| Mean prop footprint, tiles | 5.1 [2.2–7.9] | 3.1 [2.1–4.0] |
+| Scenery cover % of land | 47.8 [36–65] | 51.2 [29–68] |
+| Walkable tiles with clearance ≤ 1 | 80.7% [68–91] | 82.6% [78–87] |
+| Walkable tiles with clearance 2 | 18.8% [10–30] | 16.8% [13–21] |
+| Walkable tiles with clearance ≥ 3 | 0.8% [0–3.5] | 0.6% [0.1–1.9] |
+| Widest open spot (clearance) | 3 [2–5] | 3 [3–4] |
+| Narrow share of castle routes | 81% [67–91] | 85% [74–97] |
+| Mean scenery cluster, tiles | 32 [10–138] | 45 [11–156] |
+| Mean prop footprint, tiles | 5.1 [2.2–7.9] | 3.1 [2.0–3.9] |
 
-Cover rises with map size: 37% at 64 tiles, 49% at 96, 54% at 128 and 56% at
-160. The water presets sit lower (37–49%) because harbors, quays and coasts
+Cover rises with map size: 37% at 64 tiles, 49% at 96, 53% at 128 and 57% at
+160. The water presets sit lower (39–47%) because harbors, quays and coasts
 keep their ground open.
 
 Further measures, pooled over the maps:
@@ -193,7 +192,7 @@ Further measures, pooled over the maps:
 | Walkable tiles in one-tile runs of three or more | 0.4% | 0.9% |
 | Cover from single-tile props | 7.7% | 19% |
 | Cover from props spanning 5–8 tiles | 47% | 32% |
-| Creatures with one of their kind within ten tiles | 3.2% | 0.2% |
+| Creatures with one of their kind within ten tiles | 3.2% | 0.3% |
 | Walkable share of land 3–4 tiles from a castle | 57% | 49% |
 | Walkable share of land 10–14 tiles from a castle | 44% | 43% |
 

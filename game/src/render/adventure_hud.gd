@@ -354,12 +354,18 @@ func _build_minimap() -> void:
 		minimap_clicked.emit(Vector2(at.x * map.width, (1.0 - at.y) * map.height)))
 
 ## Terrain-colour image of the map, north row first.
+## A clear blue, so water stands apart from the dark grass and snow shades.
+const MINIMAP_WATER := Color(0.12, 0.27, 0.48)
+
 static func terrain_image(data: ELProfile, map: ELAdventureMap) -> Image:
 	var image := Image.create(maxi(1, map.width), maxi(1, map.height), false, Image.FORMAT_RGB8)
 	var colors := terrain_colors(data)
 	for y in map.height:
 		for x in map.width:
 			var color: Color = colors.get(map.tile(x, y), Color(0.25, 0.25, 0.22))
+			# Water kinds' tiles show the bed under the water surface, a
+			# muddy brown; paint the water the terrain shader draws instead.
+			if (map.tile(x, y) & ~ELTileSet.GREY) in ELTileSet.WATER_KINDS: color = MINIMAP_WATER
 			if map.roads.size() > y * map.width + x and map.roads[y * map.width + x] != 0: color = color.lerp(Color("8a6a44"), 0.6)
 			image.set_pixel(x, map.height - 1 - y, color)
 	return image

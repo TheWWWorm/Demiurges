@@ -334,7 +334,8 @@ stairs and on the side opposite its recruits' row, which in 99 of 114 stock
 castles has no site or creature within eight rows. No site, resource pile or
 creature stands within eight rows of those two sides, five rows of the back
 wall, which the tall castle model overhangs, or three rows of the recruits'
-row, and the woods keep the first four rows on both sides open.
+row. The woods keep only the first three rows before the stairs open, and
+close in elsewhere.
 On a home island too small for a starting economy with that rule, the
 generator builds the same map again and lets only the starting mines and
 shops use the approach. A site, creature or yard away from the lanes gets a
