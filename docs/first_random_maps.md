@@ -378,7 +378,13 @@ the new kind at another cost.
 The game lets a hero step diagonally between two blocked corners. Among
 dense woods, though, that step looks like walking through a wall.
 Version 13 therefore removes the smaller generated prop at any such gap that
-is the only way into land. A diagonal road still counts as a way in.
+is the only way into land. A diagonal road still counts as a way in. Where
+the gap lies between two fixed things, such as a site and a lake, no prop
+can open it: a pocket of up to twelve empty tiles behind it is filled with
+small props, and a larger pocket, or one holding anything, gets a way in
+through the fewest generated props. Counting harbors as ways in and
+diagonal gaps as walls, every site and creature is reachable on all 329
+sample maps that generate out of 330 (11 presets, six seeds, five sizes).
 `tools/first_ai_sim.gd --random=<preset>` plays the world AI on a generated
 map, for example with `--fight-monsters=true`.
 

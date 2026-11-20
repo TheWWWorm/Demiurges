@@ -3430,18 +3430,7 @@ func _flood_open(open: PackedByteArray, land: PackedByteArray, mask: PackedByteA
 func _fill_mass_gaps(land: PackedByteArray, open: PackedByteArray, fill: PackedByteArray) -> void:
 	var w := _map.width
 	var h := _map.height
-	var rows := _profile.table("TerrObj")
-	var lookup := {}
-	for key: String in rows: lookup[key.to_lower()] = key
-	var fillers := {}
-	for color: String in STOCK_FILLERS:
-		var found: Array[Dictionary] = []
-		for name: String in STOCK_FILLERS[color]:
-			var key: String = lookup.get(name.to_lower(), "")
-			if key.is_empty() or not _model(rows[key]): continue
-			var shape := ELAdventureGrid.footprint(rows[key], 0)
-			if shape.size == Vector2i.ONE and not shape.cells.is_empty(): found.append({"name": key, "row": rows[key]})
-		fillers[color] = found
+	var fillers := _single_fillers()
 	var reached := PackedByteArray()
 	reached.resize(w * h)
 	var queue: Array[Vector2i] = []
@@ -3474,6 +3463,22 @@ func _fill_mass_gaps(land: PackedByteArray, open: PackedByteArray, fill: PackedB
 			if choices.is_empty(): continue
 			var entry: Dictionary = choices[_next(choices.size())]
 			_place("terrain_objects", entry.name, Vector2i(x, y), entry.row, 0, "", [], {}, _next(4) * 4)
+
+## The single-tile props of STOCK_FILLERS that the content has, by ground.
+func _single_fillers() -> Dictionary:
+	var rows := _profile.table("TerrObj")
+	var lookup := {}
+	for key: String in rows: lookup[key.to_lower()] = key
+	var fillers := {}
+	for color: String in STOCK_FILLERS:
+		var found: Array[Dictionary] = []
+		for name: String in STOCK_FILLERS[color]:
+			var key: String = lookup.get(name.to_lower(), "")
+			if key.is_empty() or not _model(rows[key]): continue
+			var shape := ELAdventureGrid.footprint(rows[key], 0)
+			if shape.size == Vector2i.ONE and not shape.cells.is_empty(): found.append({"name": key, "row": rows[key]})
+		fillers[color] = found
+	return fillers
 
 ## The stock scenery mix for each ground, split by span into tiers: 8 and
 ## more, 6-7, 5, 3-4 and small props. Grounds whose props are missing
@@ -4688,10 +4693,136 @@ func _open_corner_gaps(first_decoration: int, cliff_ids: Vector2i) -> bool:
 		if removed.is_empty(): break
 		opened += removed.size()
 		_map.objects = _map.objects.filter(func(item: Dictionary) -> bool: return not removed.has(int(item.permanent_id)))
+	var sealed := _seal_corner_pockets(first_decoration, cliff_ids)
 	_strict_corners = false
 	report.opened_corner_gaps = opened
+	report.sealed_corner_pockets = sealed
 	# Recount the joined ground with the freed cells.
-	return opened == 0 or _reconnect_landscape(first_decoration, cliff_ids)
+	return (opened == 0 and sealed == 0) or _reconnect_landscape(first_decoration, cliff_ids)
+
+## Version 13: open ground whose only way in is a diagonal gap between two
+## fixed objects or impassable ground, such as a site beside a lake. It
+## reads as a sealed pocket. A small empty one is filled with single-tile
+## props; a larger one, or one holding anything, gets a visible way in
+## through the generated props nearest the reached ground. Returns the
+## number of cells filled or opened.
+func _seal_corner_pockets(first_decoration: int, cliff_ids: Vector2i) -> int:
+	var objects := _navigation_objects(false)
+	var grid := ELAdventureGrid.new()
+	if not grid.build(_map, objects): return 0
+	var actors := {}
+	var owner := {}
+	for id: int in objects:
+		var item: Dictionary = objects[id]
+		var permanent_id := int(item.permanent_id)
+		if item.group != "terrain_objects" or not (permanent_id >= first_decoration or (permanent_id >= cliff_ids.x and permanent_id < cliff_ids.y)): continue
+		for cell: Vector2i in grid.footprints.get(id, {}).get("cells", []):
+			var point := cell + Vector2i(item.x, item.y)
+			if grid.contains(point): owner[_index(point)] = permanent_id
+	for item: Dictionary in _map.objects:
+		if item.group in ["heroes", "np_heroes"]: actors[Vector2i(item.x, item.y)] = true
+	# Reached through visible ways, and through any step the game allows.
+	var strict := PackedByteArray()
+	var loose := PackedByteArray()
+	strict.resize(_map.width * _map.height)
+	loose.resize(strict.size())
+	for pass_index in 2:
+		var seen := strict if pass_index == 0 else loose
+		_strict_corners = pass_index == 0
+		var queue: Array[Vector2i] = []
+		for start: Dictionary in _starts:
+			var origin := Vector2i(start.x, start.y)
+			if seen[_index(origin)] == 0:
+				seen[_index(origin)] = 1
+				queue.append(origin)
+		var head := 0
+		while head < queue.size():
+			var at := queue[head]
+			head += 1
+			for delta: Vector2i in ELInterception.DIRECTIONS:
+				var next := at + delta
+				if not grid.contains(next) or seen[_index(next)] != 0 or grid.land.is_point_solid(next): continue
+				if config.naval and not ELFirstNaval.connected(grid, at, next, true, true): continue
+				if _corner_gap(grid, at, next): continue
+				seen[_index(next)] = 1
+				queue.append(next)
+	_strict_corners = true
+	var fillers := _single_fillers()
+	var grouped := PackedByteArray()
+	grouped.resize(strict.size())
+	var filled := 0
+	for index in strict.size():
+		if loose[index] == 0 or strict[index] != 0 or grouped[index] != 0: continue
+		var pocket: Array[Vector2i] = [Vector2i(index % _map.width, index / _map.width)]
+		grouped[index] = 1
+		var head := 0
+		var occupied := false
+		while head < pocket.size():
+			var at := pocket[head]
+			head += 1
+			occupied = occupied or actors.has(at) or _occupied[_index(at)] != 0
+			for delta: Vector2i in ELInterception.DIRECTIONS:
+				var next := at + delta
+				if not grid.contains(next): continue
+				var offset := _index(next)
+				if loose[offset] == 0 or strict[offset] != 0 or grouped[offset] != 0: continue
+				grouped[offset] = 1
+				pocket.append(next)
+		if occupied or pocket.size() > 12:
+			# Straight steps through the generated props to reached ground,
+			# fewest props first.
+			var cost := PackedInt32Array()
+			cost.resize(strict.size())
+			cost.fill(0x7fffffff)
+			var back := PackedInt32Array()
+			back.resize(strict.size())
+			back.fill(-1)
+			var frontier: Array[Vector2i] = []
+			for at: Vector2i in pocket:
+				cost[_index(at)] = 0
+				frontier.append(at)
+			var goal := -1
+			while not frontier.is_empty() and goal < 0:
+				var best := 0
+				for i in frontier.size():
+					if cost[_index(frontier[i])] < cost[_index(frontier[best])]: best = i
+				var at: Vector2i = frontier[best]
+				frontier[best] = frontier[-1]
+				frontier.pop_back()
+				for delta: Vector2i in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+					var next := at + delta
+					if not grid.contains(next): continue
+					var offset := _index(next)
+					var free: bool = not grid.land.is_point_solid(next) and not (config.naval and _sea_cell(next))
+					if not free and not owner.has(offset): continue
+					var step := cost[_index(at)] + (0 if free else 1)
+					if step >= cost[offset]: continue
+					cost[offset] = step
+					back[offset] = _index(at)
+					if free and strict[offset] != 0:
+						goal = offset
+						break
+					frontier.append(next)
+			if goal < 0: continue
+			var removed := {}
+			while goal >= 0:
+				if owner.has(goal): removed[owner[goal]] = true
+				goal = back[goal]
+			_map.objects = _map.objects.filter(func(item: Dictionary) -> bool: return not removed.has(int(item.permanent_id)))
+			for id: int in removed.keys():
+				for offset: int in owner.keys():
+					if owner[offset] == id: owner.erase(offset)
+			filled += removed.size()
+			continue
+		for at: Vector2i in pocket:
+			if (config.naval and _sea_cell(at)) or _map.roads[_index(at)] != 0: continue
+			var choices: Array = fillers.get(ELAdventureArt.terrain_color(_map.tile(at.x, at.y)), [])
+			if choices.is_empty(): choices = fillers.get(_colors[_owner(at)], [])
+			if choices.is_empty(): continue
+			var entry: Dictionary = choices[_next(choices.size())]
+			_place("terrain_objects", entry.name, at, entry.row, 0, "", [], {}, _next(4) * 4)
+			filled += 1
+	return filled
 
 func _widen_land_connection(at: Vector2i) -> void:
 	for y in range(at.y, at.y + 2):
