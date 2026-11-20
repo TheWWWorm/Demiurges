@@ -149,38 +149,47 @@ the same set.
 | Measure | Stock | Version 12 | Version 13 |
 | --- | ---: | ---: | ---: |
 | Ground relief | flat | hills and valleys | flat |
-| Scenery props per 1000 land | 123 | 49 | 167 |
-| Scenery cover % of land | 41.5 | 14.4 | 40.7 |
-| Cover from props spanning 5+ tiles | 50% | — | 29% |
-| Mean prop footprint, tiles | 4.9 | 2.9 | 2.4 |
-| Mean scenery cluster, tiles | 44 | — | 39 |
-| Walkable tiles with clearance ≤ 1 | 72% | 51% | 75% |
-| Walkable tiles with clearance ≥ 4 | 6.8% | 4.2% | 0.8% |
-| Widest open spot (clearance) | 4.9 | 9.6 | 8.9 |
-| Narrow share of castle routes | 79% | 49% | 70% |
+| Scenery props per 1000 land | 123 | 49 | 182 |
+| Scenery cover % of land | 41.5 | 14.4 | 46.3 |
+| Cover from props spanning 5+ tiles | 50% | — | 33% |
+| Mean prop footprint, tiles | 4.9 | 2.9 | 2.5 |
+| Mean scenery cluster, tiles | 44 | — | 48 |
+| Walkable tiles with clearance ≤ 1 | 72% | 51% | 67% |
+| Walkable tiles with clearance ≥ 4 | 6.8% | 4.2% | 1.0% |
+| Widest open spot (clearance) | 4.9 | 9.6 | 8.8 |
+| Narrow share of castle routes | 79% | 49% | 64% |
 | Castle route / straight line | 1.4 | 1.1 | 1.1 |
-| Road % of land | 4.4 | 4.9 | 4.4 |
-| Creatures per 1000 land | 10.2 | 8.6 | 10.3 |
+| Road % of land | 4.4 | 4.9 | 5.9 |
+| Creatures per 1000 land | 10.2 | 8.6 | 10.2 |
 | Creatures in passages | 59% | 71% | 90% |
-| Creatures near a site | 49% | 36% | 77% |
-| Creatures on or beside a road | 26% | 16% | 31% |
-| Creature level, ≤ 10 steps (mean) | 2.8 | 2.3 | 3.4 |
-| Creature level, 11–20 steps | 3.7 | 2.5 | 3.9 |
+| Creatures near a site | 49% | 36% | 69% |
+| Creatures on or beside a road | 26% | 16% | 23% |
+| Creature level, ≤ 10 steps (mean) | 2.8 | 2.3 | 3.8 |
+| Creature level, 11–20 steps | 3.7 | 2.5 | 4.1 |
 | Creature level, 21–30 steps | 4.5 | 2.8 | 4.5 |
 | Creature level, 31–45 steps | 5.1 | 3.2 | 4.9 |
-| Gap to nearest creature, tiles | 5.4 | 5.0 | 5.7 |
+| Gap to nearest creature, tiles | 5.4 | 5.0 | 5.5 |
 | Gap to nearest site, tiles | 4.2 | 5.2 | 5.2 |
 
-Scenery cover by ground in version 13 is Red 49%, Green 46%, Black 46% and
-Blue 26%, against 62%, 45%, 42% and 24% in the stock missions.
+Scenery cover by ground in version 13 is Red 54%, Green 51%, Black 52% and
+Blue 31%, against 62%, 45%, 42% and 24% in the stock missions. The share of
+creatures in passages was not measured again after the last change.
+
+Scenery cover in rings around castles (tiles from the walls) is 41% at one
+to two tiles, 44% at three to four, 43% at five to six, 47% at seven to nine
+and 51% at ten to fourteen. The stock missions have 41%, 43%, 51%, 54% and
+55%.
 
 Known differences in version 13:
 
-- Large cliffs make up less of the cover (29% against 50%). Mass edges are
+- Large cliffs make up less of the cover (33% against 50%). Mass edges are
   irregular, so many gaps fit only single-tile props, which brings the mean
-  prop footprint down to 2.4 tiles against 4.9.
+  prop footprint down to 2.5 tiles against 4.9.
+- Scenery covers somewhat more land (46% against 42%), and roads take a
+  little more of it (5.9% against 4.4%).
 - Starting areas and the centres of naval maps can still hold a clearing
   wider than any in the stock single and multiplayer missions.
 - Creatures within ten steps of a castle are about one level stronger than
   in the stock missions.
-- Routes between castles are straighter than in the stock missions.
+- Roads now wind along the lanes, but the shortest walking route between
+  castles is still straighter than in the stock missions (1.1 against 1.4).

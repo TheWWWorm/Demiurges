@@ -84,7 +84,10 @@ captured; they are not automatically granted as owned income.
 Frontier and island content adds mines, resource caches, difficulty-aware
 guards, artifact rewards and global-spell scrolls. Higher recruitment ranks
 are discovered on the map. Shops use actual installed combat spells and the
-normal stock and purchase rules. Naval homelands have multiple harbor
+normal stock and purchase rules. From version 13 they skip the basic Cantrip
+cards, and each shop of a kind offers the goods the other shops of that kind
+offer least, so no two stock the same. Heroes from a generic template receive
+a name and a speciality of their faction. Naval homelands have multiple harbor
 approaches, giving opponents alternate routes and coastal objectives to contest.
 
 Main roads link markets, recruitment scrolls, and harbors. Neutral forts stand
@@ -309,15 +312,20 @@ connecting waterways bend with the terrain.
 
 Version 13 follows the measured layout of the 37 original missions, which
 are recorded in the [stock map survey](first_map_survey.md). The ground is
-level, as in the originals. Cliffs, forests and rock masses cover about two
-fifths of the land in rounded blocks, parted by a maze of lanes two to four
+level, as in the originals. Cliffs, forests and rock masses cover a little
+under half of the land in rounded blocks, parted by a maze of lanes two to four
 tiles wide. The lanes follow the borders between irregular cells about 24
-tiles across. About a fifth of those borders stay closed, which leaves long
+tiles across. Close to a third of those borders stay closed, which leaves long
 walls and dead ends, and the lanes widen into small yards where three cells
-meet. Each ground takes its props in the proportions the original missions use,
-and the largest are placed first. Large cliffs, such as grey stacks on dark
+meet. Roads follow the lanes, so they wind around the blocks. They are one
+tile wide and climb diagonals as staircases, use one road texture, and leave
+no stubs to guarded prizes. Sites keep open ground only on the side facing
+their lane, and woods and rock close in around castles except at the gate,
+as in the stock missions. The scenery runs to the edge of the map. Each ground
+takes its props in the proportions the original missions use, and the largest
+are placed first, deepest in each mass. Large cliffs, such as grey stacks on dark
 ground, red rock on tan ground, green crags on grass and ice ridges on snow,
-make up about two fifths of the cover. Snow is the most open ground and dark
+make up about a third of the cover. Snow is the most open ground and dark
 ground the densest. Later roads reuse earlier ones, so routes merge
 instead of running in parallel or looping around a castle. Roadside services
 join the network along winding tracks. Mines and supplies are kept, and
@@ -325,8 +333,11 @@ optional sites stand about five tiles apart. The generator places about ten
 creatures per thousand passable tiles across the whole map. Their levels follow
 the stock curve from walking distance: level one beside a castle, three
 after 11–20 steps, four after 21–30, five after 31–45 and six beyond. After
-the woods are placed, generation clears scenery around any site the travel
-check cannot reach. It also removes any creature that has been shut in.
+the woods are placed, every site that was reachable before them must still
+be reachable. Generation removes the props on the shortest way to a site the
+woods shut off, then clears scenery around it if that is not enough. It also
+removes any creature that has been shut in, including a prize guard behind
+another guard.
 The game lets a hero step diagonally between two blocked corners. Among
 dense woods, though, that step looks like walking through a wall.
 Version 13 therefore removes the smaller generated prop at any such gap that
