@@ -328,7 +328,7 @@ func _play(duel: ELDuel, expect: Dictionary) -> String:
 			if applied and kind == "spare" and command.get("kind", "") == "cast" and command.get("card", "") == expect.card: return "cast it: " + ", ".join(said)
 			if applied and kind == "use" and command.get("kind", "") == "ability" and command.get("key", "") == expect.ability: return ""
 			if applied and kind == "cast" and command.get("kind", "") == "cast" and command.get("card", "") == expect.card: return ""
-			if applied and kind == "aim" and not harm.is_empty(): return "aimed at its own side: " + harm + " (" + ", ".join(said) + ")"
+			if applied and kind == "aim" and not harm.is_empty(): return "aimed at the wrong side: " + harm + " (" + ", ".join(said) + ")"
 		if not applied: duel.end_phase()
 	var finished := duel.phase == ELDuel.Phase.FINISHED
 	var line := ", ".join(said)
@@ -354,10 +354,14 @@ static func own_harm(duel: ELDuel, side: int, command: Dictionary) -> String:
 	var target := int(command.get("target", -1))
 	if target < 0 or command.get("kind", "") not in ["cast", "ability"]: return ""
 	var own := target == side if target < 2 else duel.creatures.has(target) and int(duel.creatures[target].owner) == side
-	if not own: return ""
 	var flags := 0
 	if command.kind == "cast": flags = int(ELCombatSearch.SPELL_SIDES.get(duel.profile.id, {}).get(String(command.card), 0))
-	elif String(command.key).get_slice(":", 0) in ["fireball", "sting", "gaze", "hunt", "spores", "tap_target", "tap_race", "pale_devour"]: flags = 0xa
+	# A spell for its own creatures laid on one of the other side's (ether
+	# breeze and storm pay their caster wherever they lie).
+	if not own and target >= 2 and duel.creatures.has(target) and flags & 3 == 1 and String(command.get("card", "")) not in ELCombatSearch.ANY_SIDE_HOSTS:
+		return "%s on the other side's %s" % [command.card, String(duel.creatures[target].card)]
+	if not own: return ""
+	elif String(command.get("key", "")).get_slice(":", 0) in ["fireball", "sting", "gaze", "hunt", "spores", "tap_target", "tap_race", "pale_devour"]: flags = 0xa
 	if not (flags & (8 if target < 2 else 2)): return ""
 	return "%s at %s" % [command.get("card", command.get("key", "")), "its hero" if target < 2 else String(duel.creatures[target].card)]
 

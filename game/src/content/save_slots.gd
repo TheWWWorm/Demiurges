@@ -284,6 +284,7 @@ static func _write(path: String, entry: String, name: String, type: String, dire
 	var meta := {"format": META_FORMAT, "version": 1, "name": name, "type": type, "file": path.get_file(), "edition": profile.id, "kind": kind_of(state), "map": state.map.id,
 		"title": _state_map_title(state), "campaign": campaign_title(state), "day": state.day, "players": player_count(state), "created": int(Time.get_unix_time_from_system())}
 	if profile.id == "el2": meta.race = _current_race(state)
+	else: meta.races = map_races(state.players)
 	# Sorted checkpoint JSON puts this bounded string first. Listings can
 	# read it without loading the world, even when it supersedes a stale index.
 	document._slot = Marshalls.utf8_to_base64(JSON.stringify(meta))
@@ -343,6 +344,28 @@ static func player_count(state: ELAdventureSession) -> int:
 static func _current_race(state: ELAdventureSession) -> String:
 	var color := state.hero_color(state.object(state.main_hero))
 	return color if color in ELSecondCampaign.CAMPAIGNS else _campaign_race(state.scenario)
+
+## First game: the races of the map's players (not the neutral one), in the
+## original's race order. Its save list marks every race playing on the map,
+## not only the local player's.
+static func map_races(players: Variant) -> Array[String]:
+	var found: Array[String] = []
+	var colors: Array = []
+	if players is Dictionary:
+		for id: Variant in players:
+			if int(id) > 0 and players[id] is Dictionary: colors.append(players[id].get("color"))
+	elif players is Array:
+		for player: Variant in players:
+			if player is Dictionary and int(player.get("id", 0)) > 0: colors.append(player.get("color"))
+	for race: String in ELMissionLoadScreen.RACES:
+		if colors.has(race): found.append(race)
+	return found
+
+## Older first-game saves have no races in their list metadata. Recover them
+## from the checkpoint's players without restoring the map.
+static func _checkpoint_races(document: Dictionary) -> Array[String]:
+	if document.get("edition") != "el1": return []
+	return map_races(document.get("players"))
 
 static func _campaign_race(scenario: Variant) -> String:
 	if scenario is not Dictionary: return ""
@@ -416,6 +439,7 @@ static func _row_meta(text: String, profile: ELProfile, file: String, identity: 
 	if identity.type == SLOT and (clean_name(profile.id, meta.name).is_empty() or _stem(meta.name) + ".json" != file): return {}
 	if identity.type == AUTO and meta.kind != identity.kind: return {}
 	if meta.has("race") and meta.race != "" and meta.race not in ELSecondCampaign.CAMPAIGNS: meta.erase("race")
+	if meta.has("races") and (meta.races is not Array or meta.races.any(func(race: Variant) -> bool: return race not in ELMissionLoadScreen.RACES)): meta.erase("races")
 	meta.type = identity.type
 	return meta
 
@@ -436,6 +460,7 @@ static func _slot_row(profile: ELProfile, path: String, index: String, identity:
 		if not indexed.is_empty():
 			var known := embedded if not embedded.is_empty() else indexed
 			if profile.id == "el2" and not known.has("race"): known.race = _checkpoint_race(profile, _header(path))
+			if profile.id == "el1" and not known.has("races"): known.races = _checkpoint_races(_header(path))
 			return known
 	# The list must not present an unreadable payload merely because it has a
 	# recognizable filename. Validate orphaned checkpoints through normal Load.
@@ -498,6 +523,7 @@ static func legacy(profile: ELProfile, kind: String) -> Array[Dictionary]:
 		var row := {"type": LEGACY, "name": quick, "path": path, "kind": kind, "edition": profile.id, "map": str(header.get("map", "")), "title": title,
 			"campaign": "", "day": int(world.get("day", 0)) if world is Dictionary else 0, "players": -1, "modified": FileAccess.get_modified_time(path)}
 		if profile.id == "el2": row.race = _checkpoint_race(profile, header)
+		else: row.races = _checkpoint_races(header)
 		result.append(row)
 	if kind == KIND_CAMPAIGN and profile.id == "el2":
 		var progress := ELSecondCampaign.read(ELSecondCampaign.AUTOSAVE)
@@ -541,6 +567,7 @@ static func find(profile: ELProfile, name: String) -> Dictionary:
 static func current_row(state: ELAdventureSession) -> Dictionary:
 	var row := {"name": "", "kind": kind_of(state), "map": state.map.id, "title": _state_map_title(state), "campaign": campaign_title(state), "day": state.day, "players": player_count(state)}
 	if state.map.profile.id == "el2": row.race = _current_race(state)
+	else: row.races = map_races(state.players)
 	return row
 
 ## Information-box text of a row. First game: campaign title, name, map

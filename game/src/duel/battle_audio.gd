@@ -50,20 +50,34 @@ func hold(seconds: float) -> void:
 
 ## While set, no effect sound starts (the presentation being skipped).
 var silenced := false
-## Bumped by cut(): a held sound whose wait began before it is dropped.
-var _generation := 0
+## Sounds waiting for a gesture's release: {"path", "gain" (float or
+## Callable), "source"}. cut() drops them, release_held() starts them.
+var _held_sounds: Array[Dictionary] = []
 
 ## Drops the presentation's sounds when it is skipped (player report #141):
 ## the sounds still held for a gesture never start, the hurts waiting for
 ## the frame are forgotten and the effect voices playing now stop. Music,
 ## ambience and the arena's loops go on.
 func cut() -> void:
-	_generation += 1
 	_held_until = 0
+	_held_sounds.clear()
 	_hurts.clear()
+	_hurt_voices.clear()
 	for voice in voices:
 		if voice.playing: voice.stop()
 	_glides.clear()
+
+## Space skipped a gesture: the sounds held for its release start now
+## rather than after the skipped presentation, and nothing is cut.
+func release_held() -> void:
+	_held_until = 0
+	var pending := _held_sounds
+	_held_sounds = []
+	for held: Dictionary in pending:
+		_pan_source = held.source
+		var gain: Variant = held.gain
+		play(String(held.path), float(gain.call()) if gain is Callable else float(gain))
+
 var tracks: Array[String] = []
 var track_index := 0
 var ambient_sounds: Array[String] = []
@@ -1639,9 +1653,11 @@ func play(path: String, spatial_gain := 1.0, loop := false) -> bool:
 	var wait := (_held_until - Time.get_ticks_msec()) / 1000.0
 	if silenced and not loop: return false
 	if wait > 0.0 and not loop and is_inside_tree():
-		var generation := _generation
+		var held := {"path": path, "gain": spatial_gain, "source": source}
+		_held_sounds.append(held)
 		get_tree().create_timer(wait).timeout.connect(func() -> void:
-			if generation != _generation: return
+			if not _held_sounds.has(held): return
+			_held_sounds.erase(held)
 			_pan_source = source
 			play(path, spatial_gain))
 		return true
@@ -1669,15 +1685,38 @@ func play(path: String, spatial_gain := 1.0, loop := false) -> bool:
 			return true
 	return false
 
+## A sound that outlives the battle screen, as the victory fanfare does: it
+## plays to its end on its own player under the scene root, even once the
+## battle has closed. Returns its length in seconds (0 when it cannot play).
+func play_detached(path: String) -> float:
+	requested.append(path)
+	if requested.size() > 80: requested.pop_front()
+	if paused or silenced or not is_inside_tree(): return 0.0
+	var stream := ELAudio.sound(profile, path)
+	if stream == null: return 0.0
+	var player := AudioStreamPlayer.new()
+	player.name = "BattleFanfare"
+	get_tree().root.add_child(player)
+	player.stream = stream
+	player.volume_db = linear_to_db(maxf(0.0001, ELAudio.option_gain(float(settings.effects), edition) * ELAudio.placed_gain(1.0, edition))) - 3.0
+	player.finished.connect(player.queue_free)
+	player.play()
+	played.append(path)
+	if played.size() > 40: played.pop_front()
+	return stream.get_length()
+
 ## Like play(), but `gain` (which may set the pan source) is asked for when
 ## the sound actually starts, after any hold for the hero's gesture.
 func play_released(path: String, gain: Callable) -> void:
 	var wait := (_held_until - Time.get_ticks_msec()) / 1000.0
 	if silenced: return
 	if wait > 0.0 and is_inside_tree():
-		var generation := _generation
+		var held := {"path": path, "gain": gain, "source": null}
+		_held_sounds.append(held)
 		get_tree().create_timer(wait).timeout.connect(func() -> void:
-			if generation == _generation: play(path, float(gain.call())))
+			if not _held_sounds.has(held): return
+			_held_sounds.erase(held)
+			play(path, float(gain.call())))
 		return
 	play(path, float(gain.call()))
 
@@ -1915,6 +1954,11 @@ func unit(model: Node, action: String) -> void:
 ## clip, with its sound, per figure, so a lethal blow is heard as the death
 ## alone. The blow's material hit (HitTable) is the strike's and still plays.
 var _hurts: Array = []
+## Figure instance id -> [voice, stream] of its last hurt sound. A figure
+## struck again while that sound still plays is not heard again: several
+## creatures striking a hero in quick succession each sound their hit, the
+## hero's hurt is heard once (as the originals play it) instead of a pile-up.
+var _hurt_voices := {}
 
 func hurt(model: Node) -> void:
 	if not is_instance_valid(model) or _hurts.has(model): return
@@ -1925,7 +1969,12 @@ func _play_hurts() -> void:
 	var pending := _hurts
 	_hurts = []
 	for model: Variant in pending:
-		if is_instance_valid(model) and not model.get_meta("dying", false): unit(model, "hit")
+		if not is_instance_valid(model) or model.get_meta("dying", false): continue
+		var last: Array = _hurt_voices.get(model.get_instance_id(), [])
+		if not last.is_empty() and is_instance_valid(last[0]) and last[0].playing and last[0].stream == last[1]: continue
+		_last_voice = null
+		unit(model, "hit")
+		if is_instance_valid(_last_voice): _hurt_voices[model.get_instance_id()] = [_last_voice, _last_voice.stream]
 
 ## A moving figure's ground sounds: Creatures/<SndDir>/steps/<TerrainType>/.
 ## Original EL1 / EL2 play one numbered step at each event

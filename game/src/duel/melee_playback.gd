@@ -18,7 +18,10 @@ extends Node
 ## - A blocker walks home when its exchange is over and the next blocker sets
 ##   off at once; an attacker walks home after its last blow and the next
 ##   attacker sets off at the same moment. The battle goes on once everyone
-##   is home.
+##   is home and has lain down to rest (or got up).
+## - Space (skip_exchange) ends the remaining attacks at once: their blows
+##   land together, hits and deaths still heard, and everyone is home (and
+##   lying down to rest) at once; what follows the attacks plays as usual.
 ##
 ## Moves use the clip found by its original code (Run, else Walk) at twice the
 ## clip's recorded speed (2.0 without one), the clip at its native 30 fps; the
@@ -78,6 +81,20 @@ var _attacker_rest := {}
 ## The stance at the end of each exchange can be shown at home even when a
 ## timed effect still holds the full board stamp. Later stamps take over.
 var _resolved_rest := {}
+## Space asks to skip the rest of the attacks; once taken, every remaining
+## blow is shown at once (their hit sounds and deaths still play).
+var _skip_requested := false
+var _skipping := false
+## The blows are still being played (not yet the final walk home).
+var _in_blows := false
+## The figures are walking home after the last blow.
+var _homing := false
+## The timer a blow is waiting on (_wait).
+var _timer: SceneTreeTimer
+## Longest wait for figures lying down or getting up before the turn goes on.
+## Only a guard against a clip that never ends: the originals wait as long
+## as the clips take.
+const SETTLE_LIMIT := 10.0
 
 ## A side's slot position in remake axes (original x, -y).
 static func slot_position(side: int, index: int, line: Line) -> Vector3:
@@ -176,6 +193,31 @@ func moving(id: int) -> bool:
 func has_moves() -> bool:
 	return not _moves.is_empty()
 
+## Space during the attacks: every remaining attacker's blows land at once
+## (their hit sounds and deaths still play) and all figures are home at once,
+## resting ones already lying down. What follows the attacks (deaths after
+## them, the next phase) plays as usual. False once the figures are home (the
+## caller finishes the playback then).
+func skip_exchange() -> bool:
+	if not _capturing and not _in_blows and not _homing: return false
+	_skip_requested = true
+	if _timer != null: _timer.time_left = 0.0
+	return true
+
+## Takes a pending skip: from now on the blows land at once.
+func _take_skip() -> bool:
+	if _skip_requested:
+		_skip_requested = false
+		_skipping = true
+	return _skipping
+
+## Everyone out on the field is home at once; a resting figure is already
+## lying down (no tap clip).
+func _snap_home() -> void:
+	view._skipping_presentation = true
+	finish_moves()
+	view._skipping_presentation = false
+
 func finish_moves() -> void:
 	for id: int in _moves.keys(): _arrive(id)
 
@@ -231,6 +273,7 @@ func finish() -> void:
 	if not busy(): return
 	_serial += 1
 	_capturing = false
+	_reset_skip()
 	finish_moves()
 	var rest: Array[Dictionary] = []
 	for index in range(_next_blow, _blows.size()): rest.append_array(_blows[index].events)
@@ -247,6 +290,12 @@ func finish() -> void:
 	_capture_finished = false
 	view._refresh()
 
+func _reset_skip() -> void:
+	_skip_requested = false
+	_skipping = false
+	_in_blows = false
+	_homing = false
+
 func _place_home() -> void:
 	_attacker_rest.clear()
 	for id: int in view.homes:
@@ -262,6 +311,7 @@ func abort() -> void:
 	_capturing = false
 	_capture_finished = false
 	_running = false
+	_reset_skip()
 	for id: int in _moves:
 		if view.models.has(id):
 			view.models[id].speed = 1.0
@@ -307,13 +357,22 @@ func _play(serial: int) -> void:
 			if not blockers[pair.x].has(pair.y): blockers[pair.x].append(pair.y)
 	var engaged := {}
 	var fight_point := {}
+	# Material hits already heard in a skipped exchange: its blows land
+	# together, and each pair of figures is heard once.
+	var heard := {}
+	_in_blows = true
 	for index in blows.size():
 		var blow: Dictionary = blows[index]
 		var strike: Dictionary = blow.strike
 		var from := int(strike.from)
 		var to := int(strike.to)
 		var pair := _pair(strike)
-		if pair.y < 2:
+		if _take_skip():
+			# Skipped before it set off: no approach and no attack clip.
+			if engaged.get(pair.x, -1) != pair.y:
+				if engaged.has(pair.x) and engaged[pair.x] >= 2: _go_home(int(engaged[pair.x]), true, strike)
+				engaged[pair.x] = pair.y
+		elif pair.y < 2:
 			# Unblocked (or trampling on): run to the defending hero.
 			if engaged.has(pair.x) and engaged[pair.x] >= 2: _go_home(int(engaged[pair.x]), false, strike)
 			engaged[pair.x] = pair.y
@@ -335,30 +394,46 @@ func _play(serial: int) -> void:
 			if not await _moved([pair.x, pair.y], serial): return
 			_face(pair.x, pair.y)
 			_face(pair.y, pair.x)
-		# The blow: attack clip, then at impact the hit sound and its results.
-		_face(from, to)
-		_dispatch(strike)
-		# The fight close-up starts as the first blow is struck (the
-		# original's Camera(3)), framed on the two figures.
-		if not view.fight_shot and _has(from) and _has(to): view._auto_fight(from, to, (_position(from) + _position(to)) * 0.5)
-		if _has(from):
-			var model: ELModel = view.models[from]
-			view.battle_audio.unit(model, "attack")
-			model.play("uattack")
-			var length := maxf(model.clip_seconds("uattack"), 0.0)
-			var impact := float(model.timing.get("uattack", {}).get("impact", -1)) / 30.0
-			if impact < 0.0 or impact > length: impact = length * 0.5
-			if not await _wait(impact, serial): return
-			if _has(to): view.battle_audio.hit(model, view.models[to])
+		if _take_skip():
+			# A skipped blow lands at once. Its material hit (the attacker's
+			# own attack sound for a figure without one) is still heard once
+			# per pair, as are any deaths it causes.
+			_dispatch(strike)
+			var key := Vector2i(from, to)
+			if _has(from) and _has(to) and not heard.has(key):
+				heard[key] = true
+				if view.battle_audio.hit_path(view.models[from], view.models[to]).is_empty(): view.battle_audio.unit(view.models[from], "attack")
+				else: view.battle_audio.hit(view.models[from], view.models[to])
 			_next_blow = index + 1
 			_dispatch_all(blow.events)
-			var rest := length - impact
-			if _has(to) and blow.events.any(func(e: Dictionary) -> bool: return e.kind == "damage" and int(e.get("target", -1)) == to):
-				rest = maxf(rest, maxf(view.models[to].clip_seconds("uhit"), 0.0))
-			if not await _wait(rest, serial): return
 		else:
-			_next_blow = index + 1
-			_dispatch_all(blow.events)
+			# The blow: attack clip, then at impact the hit sound and its results.
+			_face(from, to)
+			_dispatch(strike)
+			# The fight close-up starts as the first blow is struck (the
+			# original's Camera(3)), framed on the two figures.
+			if not view.fight_shot and _has(from) and _has(to): view._auto_fight(from, to, (_position(from) + _position(to)) * 0.5)
+			if _has(from):
+				var model: ELModel = view.models[from]
+				view.battle_audio.unit(model, "attack")
+				model.play("uattack")
+				var length := maxf(model.clip_seconds("uattack"), 0.0)
+				var impact := float(model.timing.get("uattack", {}).get("impact", -1)) / 30.0
+				if impact < 0.0 or impact > length: impact = length * 0.5
+				# A skip during the swing lands this blow at once, with its sound.
+				if not await _wait(impact, serial): return
+				if _has(to):
+					heard[Vector2i(from, to)] = true
+					view.battle_audio.hit(model, view.models[to])
+				_next_blow = index + 1
+				_dispatch_all(blow.events)
+				var rest := length - impact
+				if _has(to) and blow.events.any(func(e: Dictionary) -> bool: return e.kind == "damage" and int(e.get("target", -1)) == to):
+					rest = maxf(rest, maxf(view.models[to].clip_seconds("uhit"), 0.0))
+				if not await _wait(rest, serial): return
+			else:
+				_next_blow = index + 1
+				_dispatch_all(blow.events)
 		# The exchange is over when the next blow is another pair.
 		var next := _pair(blows[index + 1].strike) if index + 1 < blows.size() else Vector2i(-1, -1)
 		if next.x != pair.x:
@@ -368,6 +443,7 @@ func _play(serial: int) -> void:
 		elif next.y != pair.y and pair.y >= 2 and engaged.get(pair.x, -1) == pair.y:
 			_go_home(pair.y, true, strike)
 			engaged[pair.x] = -1
+	_in_blows = false
 	# After the last blow (or a hero's death, which stops the combat) every
 	# living figure still out on the field goes home: unhurt ones run.
 	for id: int in view.models.keys():
@@ -375,7 +451,14 @@ func _play(serial: int) -> void:
 			var c := _returning_creature(id)
 			if c.is_empty(): continue
 			_move(id, _home_path(id, int(c.owner)), int(_wounds.get(id, 0)) == 0, _yaw_at(view.homes[id], int(c.owner)))
+	_homing = true
 	if not await _moved(_moves.keys(), serial): return
+	_homing = false
+	if _take_skip(): _snap_home()
+	_skipping = false
+	# A figure home again lies down (or gets up) before the turn goes on: the
+	# next phase never cuts its tap clip short.
+	if not await _settled(serial): return
 	_attacker_rest.clear()
 	view._auto_fight_over()
 	var rest := after.duplicate()
@@ -638,11 +721,26 @@ func _arrive(id: int) -> void:
 	if not away(id): _attacker_rest.erase(id)
 	view._animation_done("", id)
 
+## Waits for the figures' moves; a skip of the exchange ends the wait.
 func _moved(ids: Array, serial: int) -> bool:
-	while serial == _serial and is_inside_tree() and ids.any(func(id: Variant) -> bool: return _moves.has(int(id))):
+	while serial == _serial and is_inside_tree() and not ((_in_blows or _homing) and (_skip_requested or _skipping)) and ids.any(func(id: Variant) -> bool: return _moves.has(int(id))):
 		await get_tree().process_frame
 	return serial == _serial
 
+## Waits `seconds` of game time on a scene timer, so the blow's results land
+## at the same point of the frame as the timed effect cues they go with; a
+## skip of the exchange runs the timer out at once (skip_exchange).
 func _wait(seconds: float, serial: int) -> bool:
-	if seconds > 0.0 and is_inside_tree(): await get_tree().create_timer(seconds, false).timeout
+	if seconds > 0.0 and is_inside_tree() and not _skip_requested:
+		_timer = get_tree().create_timer(seconds, false)
+		await _timer.timeout
+		_timer = null
+	return serial == _serial
+
+## Waits while a figure plays its tap or untap clip (at most SETTLE_LIMIT).
+func _settled(serial: int) -> bool:
+	var left := SETTLE_LIMIT
+	while left > 0.0 and serial == _serial and is_inside_tree() and view.figures_turning():
+		await get_tree().process_frame
+		left -= get_process_delta_time()
 	return serial == _serial

@@ -323,6 +323,12 @@ static var smart_engine_reach := 8
 ## in ten are what the hardest of the kept puzzles need to be won in the
 ## fewest turns, and cost about an eighth more reading.
 static var smart_engine_prove := 4
+## A proved win that opens with an attack ends the phase instead when that
+## wins as soon (`_quiet_win`).
+static var smart_quiet_proof := true
+## A duel read as lost holds its attackers back when that loses no sooner
+## (`_hold_when_lost`).
+static var smart_hold_lost := true
 static var smart_engine_prove_share := 30
 ## No longer read: that search once gave a line up when the turns left
 ## could not bring the other hero down at this many hundredths of the damage
@@ -605,7 +611,7 @@ static func request(duel: ELDuel, restricted := false) -> Dictionary:
 	var asked := {"smart": smart, "engine": engine, "budget": engine_budget(), "ms": ms, "identity": duel.identity(), "restricted": restricted,
 		"follow": smart and smart_follow, "information": information, "cancel": Cancel.new()}
 	asked.policy = hash([smart, engine, asked.budget, ms, restricted, asked.follow, information, smart_engine_phases, smart_engine_steps, smart_engine_width,
-		smart_engine_prove, smart_engine_prove_share, smart_engine_guard, smart_engine_reach, smart_engine_beyond, smart_engine_likely, smart_budget, smart_phases])
+		smart_engine_prove, smart_engine_prove_share, smart_engine_guard, smart_engine_reach, smart_engine_beyond, smart_engine_likely, smart_budget, smart_phases, smart_quiet_proof, smart_hold_lost])
 	asked.deadline_usec = Time.get_ticks_usec() + ms * 1000 if ms > 0 else 0
 	asked.spent_usec = 0
 	return asked
@@ -707,6 +713,14 @@ static func _think(real: ELDuel, duel: ELDuel, stats: Dictionary, restricted: bo
 	ctx.revise = not bool(stats.get("keep_blocks", false))
 	if bool(asked.get("follow", false)) and not stats.get("fresh", false):
 		var planned := _recall(real, int(asked.get("policy", 0)))
+		# A won line's attack at ready blockers is passed over when ending the
+		# phase still wins within the proof's reach (see `_quiet_win`).
+		if smart_quiet_proof and String(planned.get("kind", "")) == "attack":
+			ctx.w = chosen_weights(ctx.second)
+			var now := ELCombatBrain.prove(ctx, duel, smart_engine_prove, _share(ctx, ctx.budget))
+			if String(now.get("status", "")) == "proven" and _quiet_win(ctx, duel, int(now.get("turns", 0))):
+				stats.engine = "plan_quiet"
+				return {"kind": "end_phase"}
 		if not planned.is_empty():
 			stats.positions = 0
 			stats.fights = 0
@@ -878,6 +892,13 @@ static func _engine(ctx: Context, duel: ELDuel, stats: Dictionary, asked: Dictio
 		stats.value = float(found.value)
 		stats.proven = int(found.proven)
 		stats.engine = "proof"
+		# A proof takes the first winning line it reads, and that can open
+		# with an attack thrown at ready blockers. When ending the phase wins
+		# as soon, the hero keeps its creatures.
+		if smart_quiet_proof and String(found.command.get("kind", "")) == "attack" and _quiet_win(ctx, duel, int(found.proven)):
+			stats.engine = "proof_quiet"
+			_engine_trace(ctx, duel, stats, {"kind": "end_phase"}, float(found.value))
+			return {"kind": "end_phase"}
 		var won: Array = found.get("line", [])
 		if follow and won.size() > 1: _remember(real, won, int(asked.get("policy", 0)))
 		_engine_trace(ctx, duel, stats, found.command, float(found.value))
@@ -886,6 +907,22 @@ static func _engine(ctx: Context, duel: ELDuel, stats: Dictionary, asked: Dictio
 	if smart_engine_likely and not smart_engine_rollouts and not found.is_empty() and _unlikely(ctx, duel, found.command):
 		found = _likely(ctx, duel, found, stats)
 		_stage(stats, "likely", stage_began)
+	# A spell for one side's creatures is never laid on the other's: the
+	# engine's model can value a buff on the other hero's creature or a curse
+	# on its own, but the original never casts one so (SPELL_SIDES).
+	stage_began = Time.get_ticks_usec()
+	if not found.is_empty() and _wrong_side(ctx, duel, found.command):
+		found = _right_side(ctx, duel, found, stats)
+		_stage(stats, "sides", stage_began)
+	# With the duel read as lost whatever it does, an attack is no better
+	# than holding back; the hero keeps its creatures as a player would.
+	stage_began = Time.get_ticks_usec()
+	if smart_hold_lost and not found.is_empty() and String(found.command.get("kind", "")) == "attack" and float(found.get("value", 0.0)) <= -LOST_VALUE:
+		var held := _hold_when_lost(ctx, duel, found)
+		if not held.is_empty():
+			stats.held = int(stats.get("held", 0)) + 1
+			found = held
+		_stage(stats, "held", stage_began)
 	stage_began = Time.get_ticks_usec()
 	# An ether spell that nothing in the line after it needs stays in the
 	# hand, and the line goes on without it.
@@ -895,6 +932,7 @@ static func _engine(ctx: Context, duel: ELDuel, stats: Dictionary, asked: Dictio
 		if not instead.is_empty(): _stage(stats, "idle", stage_began)
 	stage_began = Time.get_ticks_usec()
 	var beyond := _beyond(ctx, duel, found) if smart_engine_beyond > 0 and not smart_engine_rollouts and not _late(ctx) else {}
+	if not beyond.is_empty() and _wrong_side(ctx, duel, beyond.command): beyond = {}
 	_stage(stats, "beyond", stage_began)
 	# Measuring aid: a class of the engine's decisions is handed back to
 	# the search, to see how much of the difference between them it holds.
@@ -966,6 +1004,55 @@ static func _likely(ctx: Context, duel: ELDuel, found: Dictionary, stats: Dictio
 		return found
 	stats.likely = int(stats.get("likely", 0)) + 1
 	return {"command": better.command, "value": better.value, "positions": found.get("positions", 0), "status": "heuristic"}
+
+## Whether ending the attack phase now still wins within `turns` of the
+## hero's own turns (the proof after it counts from the other hero's move).
+static func _quiet_win(ctx: Context, duel: ELDuel, turns: int) -> bool:
+	if turns < 2 or duel.phase != ELDuel.Phase.ATTACK: return false
+	var copy := duel.search_copy(ctx.second)
+	if not copy.end_phase() or copy.phase == ELDuel.Phase.FINISHED: return copy.phase == ELDuel.Phase.FINISHED and copy.winner == ctx.ai
+	var quiet := ELCombatBrain.prove(ctx, copy, turns - 1, _share(ctx, ctx.budget))
+	if copy.scripts != null and copy.scripts.search_only: copy.scripts.close()
+	return String(quiet.get("status", "")) == "proven" and int(quiet.get("turns", 0)) <= turns - 1
+
+## The worth below which the engine reads its hero as beaten.
+const LOST_VALUE := 99000.0
+
+## Ending the phase in place of the engine's attack, when the engine weighs
+## it as lost no sooner; empty when it does not.
+static func _hold_when_lost(ctx: Context, duel: ELDuel, found: Dictionary) -> Dictionary:
+	if duel.phase != ELDuel.Phase.ATTACK: return {}
+	for item: Dictionary in ELCombatBrain.weigh(ctx, duel, smart_engine_phases, _share(ctx, ctx.budget), smart_engine_steps, smart_engine_width):
+		if String(item.command.get("kind", "")) != "end_phase" or not bool(item.get("complete", true)): continue
+		if float(item.value) >= float(found.value): return {"command": item.command, "value": item.value, "positions": found.get("positions", 0), "status": "heuristic"}
+	return {}
+
+## Enchantments that pay their caster whichever creature carries them.
+const ANY_SIDE_HOSTS := ["MNBR", "MNST"]
+
+## Whether `command` casts a spell meant for one side's creatures on a
+## creature of the other side (SPELL_SIDES); heroes are judged by the
+## spells' own priorities.
+static func _wrong_side(ctx: Context, duel: ELDuel, command: Dictionary) -> bool:
+	if String(command.get("kind", "")) != "cast": return false
+	var card := String(command.get("card", ""))
+	var target := int(command.get("target", -1))
+	if target < 2 or card in ANY_SIDE_HOSTS or not duel.creatures.has(target): return false
+	var flags := int(SPELL_SIDES[ctx.edition].get(card, 0)) & 3
+	return flags != 0 and not _sides_ok(duel, ctx.ai, flags, target, -1, ctx.second)
+
+## The best command the engine weighs that keeps to the spells' sides and
+## the original's reckoning; with none, the phase ends.
+static func _right_side(ctx: Context, duel: ELDuel, found: Dictionary, stats: Dictionary) -> Dictionary:
+	stats.wrong_side = int(stats.get("wrong_side", 0)) + 1
+	var better := {}
+	for item: Dictionary in ELCombatBrain.weigh(ctx, duel, smart_engine_phases, _share(ctx, ctx.budget), smart_engine_steps, smart_engine_width):
+		if item.command.is_empty() or not bool(item.get("complete", true)): continue
+		if _wrong_side(ctx, duel, item.command) or _unlikely(ctx, duel, item.command): continue
+		if better.is_empty() or float(item.value) > float(better.value): better = item
+	ctx.used += _share(ctx, ctx.budget) if ctx.budget > 0 else 0
+	var command: Dictionary = better.command if not better.is_empty() else {"kind": "end_phase"}
+	return {"command": command, "value": better.get("value", found.get("value", 0.0)), "positions": found.get("positions", 0), "status": "heuristic"}
 
 ## Whether `command` passes the engine's guard, as the engine's own choice
 ## must: once it is played, the other hero is not proved to win within

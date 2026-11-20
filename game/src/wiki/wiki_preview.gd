@@ -25,13 +25,27 @@ const OBJECT_TABLES := ["ResourceMine", "ResourceCut", "ManaNodes", "Buildings",
 ## a flat picture: "Icon/<code>", the spell icon of a card that has no page of
 ## its own, or "Portrait/<index>", a cell of the hero portrait sheets.
 const FIGURE_TABLES := ["CombatCreatures", "HeroTemplates", "Model", "Icon", "Portrait"]
-## The bounding-sphere framing leaves wide margins; the reader starts closer.
-const OPENING_ZOOM := 0.72
+## The opening view: the whole model in its frame (see frame).
+const OPENING_ZOOM := 1.0
+## Clip frames sampled for a model's envelope.
+const ENVELOPE_SAMPLES := 16
+## Room left around a model that just fits its view.
+const FIT_MARGIN := 1.03
+## The opening view stands this much farther than a tight fit.
+const OPENING_ROOM := 1.12
+## The envelope radius of a man-sized figure (an orc warrior, a shaman):
+## smaller models open smaller in their frame (opening_room).
+const REFERENCE_RADIUS := 1.5
+## The pitch the reader can turn the model to.
+const MIN_PITCH_DEGREES := -20.0
+const MAX_PITCH_DEGREES := 70.0
 const RENDER_SCALE := 2.0
 const MAX_RENDER_SIDE := 1536
 const ANIMATIONS := ["cidle", "uattack", "ushot", "uhit", "udeath", "usummon", "utap", "uuntap", "uinstant"]
 
 signal creature_changed
+## The directions _extreme_points looks along.
+static var _directions := PackedVector3Array()
 var viewport: SubViewport
 var pivot: Node3D
 var camera: Camera3D
@@ -212,20 +226,126 @@ static func bounds(figure: ELModel) -> AABB:
 			first = false
 	return box if not first else AABB(Vector3(-0.5, 0, -0.5), Vector3.ONE)
 
+## The outline of the model's meshes through its current clip (its idle when
+## staged): the outermost points of every part, posed at frames sampled
+## across the clip, in the stage's space. Particles do not count: their
+## instances carry billboard sizes and atlas cells in their axes, so their
+## boxes reached tens of metres above a shaman's torch and shrank him to a
+## speck (player report #262). Measured once per figure and kept.
+static func outline(figure: ELModel) -> PackedVector3Array:
+	if figure.has_meta("wiki_outline"): return figure.get_meta("wiki_outline")
+	var points := PackedVector3Array()
+	var extremes := {}
+	var frames := figure.clip_frames()
+	var at := figure.frame
+	var samples := mini(frames, ENVELOPE_SAMPLES)
+	for sample in samples:
+		if frames > 1: figure.apply_frame(float(sample) * float(frames - 1) / float(maxi(1, samples - 1)))
+		for name: String in figure.parts:
+			var part: MeshInstance3D = figure.parts[name]
+			if part.mesh == null or not part.visible: continue
+			var local := PackedVector3Array()
+			var posed := figure.posed_part_bounds(name)
+			if posed != part.get_aabb():
+				# A morphing part: the corners of its pose's box.
+				for corner in 8: local.append(posed.get_endpoint(corner))
+			else:
+				if not extremes.has(part.mesh): extremes[part.mesh] = _extremes(part.mesh)
+				local = extremes[part.mesh]
+			for point in local: points.append(part.transform * point)
+	if frames > 1: figure.apply_frame(at)
+	points = _extreme_points(points)
+	if points.is_empty():
+		for corner in 8: points.append(AABB(Vector3(-0.5, 0, -0.5), Vector3.ONE).get_endpoint(corner))
+	for i in points.size(): points[i] *= figure.scale
+	figure.set_meta("wiki_outline", points)
+	return points
+
+## The box around `figure`'s outline.
+static func envelope(figure: ELModel) -> AABB:
+	var points := outline(figure)
+	var box := AABB(points[0], Vector3.ZERO)
+	for point in points: box = box.expand(point)
+	return box
+
+## The outermost vertices of `mesh`.
+static func _extremes(mesh: Mesh) -> PackedVector3Array:
+	var vertices := PackedVector3Array()
+	for surface in mesh.get_surface_count():
+		vertices.append_array(mesh.surface_get_arrays(surface)[Mesh.ARRAY_VERTEX])
+	return _extreme_points(vertices)
+
+## The points of `points` farthest along each of a spread of directions: the
+## corners of their hull, enough to frame them from any side.
+static func _extreme_points(points: PackedVector3Array) -> PackedVector3Array:
+	if points.size() <= 32: return points
+	if _directions.is_empty():
+		for x in range(-2, 3):
+			for y in range(-2, 3):
+				for z in range(-2, 3):
+					var direction := Vector3(x, y, z).normalized()
+					if absi(x) + absi(y) + absi(z) in [1, 2, 3] and not direction in _directions: _directions.append(direction)
+	var directions := _directions
+	var best := PackedFloat32Array()
+	best.resize(directions.size())
+	best.fill(-INF)
+	var chosen := PackedInt32Array()
+	chosen.resize(directions.size())
+	for i in points.size():
+		var point := points[i]
+		for d in directions.size():
+			var reach := point.dot(directions[d])
+			if reach > best[d]:
+				best[d] = reach
+				chosen[d] = i
+	var result := PackedVector3Array()
+	var seen := {}
+	for i in chosen:
+		if seen.has(i): continue
+		seen[i] = true
+		result.append(points[i])
+	return result
+
+## The camera distance at which the whole outline of `view`'s model shows,
+## seen from `yaw`/`pitch` around its box's centre: every outline point
+## inside the frustum.
+static func fit_distance(view: SubViewport, yaw: float, pitch: float) -> float:
+	var figure: ELModel = view.get_node("Model")
+	var eye: Camera3D = view.get_node("Pivot/Camera")
+	var vertical := tan(deg_to_rad(eye.fov) * 0.5)
+	var aspect := float(view.size.x) / maxf(1.0, float(view.size.y))
+	var horizontal := vertical * maxf(0.01, aspect)
+	var facing := Basis.from_euler(Vector3(-pitch, yaw, 0)).inverse()
+	var centre := envelope(figure).get_center()
+	var distance := 0.0
+	for point in outline(figure):
+		var seen := facing * (point - centre)
+		distance = maxf(distance, maxf(absf(seen.x) / horizontal, absf(seen.y) / vertical) + seen.z)
+	return maxf(distance, 0.05) * FIT_MARGIN
+
+## How much farther than a tight fit the opening view stands: room to zoom in,
+## and a model smaller than a man framed as if it were between its size and a
+## man's, so a Gibberling stands smaller in its frame than an orc.
+static func opening_room(view: SubViewport) -> float:
+	var size := envelope(view.get_node("Model")).size.length() * 0.5
+	return OPENING_ROOM * sqrt(maxf(1.0, REFERENCE_RADIUS / maxf(0.05, size)))
+
+## The nearest zoom (see frame) that still shows the whole model of `view`.
+static func closest_zoom(view: SubViewport) -> float:
+	return 1.0 / opening_room(view)
+
 ## Points the camera of `view` at its model from `yaw`/`pitch`; returns the
-## framing distance.
+## framing distance. Zoom 1 is the opening view (opening_room); closest_zoom
+## fits the whole model to the view.
 static func frame(view: SubViewport, yaw: float, pitch: float, zoom := 1.0) -> float:
 	var figure: ELModel = view.get_node("Model")
 	var pivot_node: Node3D = view.get_node("Pivot")
 	var eye: Camera3D = pivot_node.get_node("Camera")
-	var box := bounds(figure)
+	var box := envelope(figure)
 	pivot_node.position = box.get_center()
-	var radius := maxf(box.size.length() * 0.5, 0.2)
-	var vertical := deg_to_rad(eye.fov) * 0.5
-	var aspect := float(view.size.x) / maxf(1.0, float(view.size.y))
-	var limiting := minf(vertical, atan(tan(vertical) * maxf(0.01, aspect)))
-	var distance := radius / sin(limiting) * 1.05 * zoom
 	pivot_node.rotation = Vector3(-pitch, yaw, 0)
+	var distance := fit_distance(view, yaw, pitch) * opening_room(view) * zoom
+	var radius := maxf(box.size.length() * 0.5, 0.2)
 	eye.position = Vector3(0, 0, distance)
 	eye.near = maxf(distance * 0.02, 0.01)
 	eye.far = distance * 4.0 + radius * 4.0
@@ -295,7 +415,7 @@ func _show(profile: ELProfile, staged: SubViewport, sounds: String, pitch := PIT
 	pivot = viewport.get_node("Pivot")
 	camera = pivot.get_node("Camera")
 	reset_view()
-	# Frame again once the particles have started (they start deferred).
+	# Frame again once the panel is laid out.
 	_settle.call_deferred()
 	creature_changed.emit()
 	return true
@@ -338,23 +458,21 @@ func _refit() -> void:
 		var scale := minf(RENDER_SCALE, MAX_RENDER_SIDE / longest)
 		var pixels := Vector2i((area * scale).round()).max(Vector2i(2, 2))
 		if viewport.size != pixels: viewport.size = pixels
-	var opening := 1.0 / OPENING_ZOOM if viewport.size.x < viewport.size.y else 1.0
-	_distance = frame(viewport, _yaw, _pitch, _zoom * opening)
-
-func _apply() -> void:
-	pivot.rotation = Vector3(-_pitch, _yaw, 0)
-	camera.position = Vector3(0, 0, _distance)
+	_distance = frame(viewport, _yaw, _pitch, _zoom)
 
 func zoom(factor: float) -> void:
-	var before := _zoom
-	_zoom = clampf(_zoom * factor, 0.35, 2.5)
-	_distance *= _zoom / before
-	_apply()
+	_zoom = clampf(_zoom * factor, closest_zoom(viewport), 2.5)
+	_keep_whole()
 
 func turn(by: Vector2) -> void:
 	_yaw -= by.x * 0.01
-	_pitch = clampf(_pitch + by.y * 0.01, deg_to_rad(-20), deg_to_rad(70))
-	_apply()
+	_pitch = clampf(_pitch + by.y * 0.01, deg_to_rad(MIN_PITCH_DEGREES), deg_to_rad(MAX_PITCH_DEGREES))
+	_keep_whole()
+
+## Keeps the zoom the reader chose, measured from the fit seen from this
+## side, so the model never leaves its frame (player report #262).
+func _keep_whole() -> void:
+	_distance = frame(viewport, _yaw, _pitch, _zoom)
 
 func _gui_input(event: InputEvent) -> void:
 	if viewport == null: return

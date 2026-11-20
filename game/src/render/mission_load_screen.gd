@@ -25,8 +25,9 @@ const COLUMNS := [Rect2(93, 58, 200, 24), Rect2(296, 58, 79, 24), Rect2(378, 58,
 const SORT_HEADERS := ["CtrlSMSortName", "CtrlSMSortDate", "CtrlSMSortTime"]
 const EN_HEADERS := ["Name", "Date", "Time"]
 const RU_HEADERS := ["Имя", "Дата", "Время"]
-## EL2 SaveMissionScreen draws a 2x2 grid of 15x11 cuts from SAVE_PANEL_6
-## beside a row (Etherlords2.exe 0x50f652). White uses all four marks.
+## SaveMissionScreen draws a 2x2 grid of 15x11 cuts from SAVE_PANEL_6 beside
+## a row. The second game marks the saved hero's race (White uses all four
+## marks); the first marks every race playing on the saved map.
 const RACES := ["Red", "Green", "Blue", "Black"]
 const RACE_CUTS := [Rect2(95, 12, 15, 11), Rect2(79, 0, 15, 11), Rect2(95, 0, 15, 11), Rect2(79, 12, 15, 11)]
 ## The scene capture rectangle, relative to SaveMissionScreen (the same
@@ -84,6 +85,17 @@ static func race_marks(race: String) -> Array[int]:
 	var index := RACES.find(race)
 	return [index] if index >= 0 else []
 
+## The marks of a list row: the first game's map races or the second game's race.
+static func row_marks(entry: Dictionary) -> Array[int]:
+	var races: Variant = entry.get("races")
+	if races is not Array: return race_marks(str(entry.get("race", "")))
+	var marks: Array[int] = []
+	for race: Variant in races:
+		var index := RACES.find(race)
+		if index >= 0 and not marks.has(index): marks.append(index)
+	marks.sort()
+	return marks
+
 func _rect(control: String) -> Rect2:
 	var found := menu.control_rect(control)
 	if found.size.x > 0 or not FALLBACK.has(control): return found
@@ -103,9 +115,9 @@ func build_screen() -> void:
 	list.screen = self
 	list.position = origin + GRID.position
 	list.size = GRID.size
-	if menu.edition == "el2":
+	if menu.edition in ["el1", "el2"]:
 		list.race_sheet = menu.texture_named("SAVE_PANEL_6")
-		_build_race_header(origin)
+	if menu.edition == "el2": _build_race_header(origin)
 	for index in COLUMNS.size():
 		var column: Rect2 = COLUMNS[index]
 		menu._label("column%d" % index, _column_caption(index), Rect2(origin + column.position, column.size), 17)
@@ -355,7 +367,7 @@ class SaveList extends Control:
 			var y := at * ELMissionLoadScreen.ROW
 			if index == screen.selected: draw_rect(Rect2(0, y, size.x, ELMissionLoadScreen.ROW), Color(0.85, 0.7, 0.4, 0.22))
 			if race_sheet != null:
-				for mark: int in ELMissionLoadScreen.race_marks(str(entry.get("race", ""))):
+				for mark: int in ELMissionLoadScreen.row_marks(entry):
 					var source: Rect2 = ELMissionLoadScreen.RACE_CUTS[mark]
 					var cell := Vector2(1 if mark < 2 else 17, y + 2 + (mark % 2) * 12)
 					draw_texture_rect_region(race_sheet, Rect2(cell, source.size), source)

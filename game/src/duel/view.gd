@@ -202,6 +202,8 @@ var _script_summon: Dictionary = {}
 ## opposing army, so the scope may hold several creature ids. The action's
 ## events remain synchronous; deferred hit timers retain their own data.
 var _ability_hit: Dictionary = {}
+## Fingi that spat in the current action: seconds until their action's impact.
+var _spat: Dictionary = {}
 ## The EL2 damage reducer starts BlueFeedback on the protected hero before
 ## the reflected hit lands on the opposite hero.
 ## Like ability hit cues, this scopes only synchronous presentation events.
@@ -755,7 +757,7 @@ func _start(edition: String, options: Dictionary = {}, restored: ELDuel = null, 
 	symbols.build(profile)
 	symbols.camera = camera
 	notices.build(profile)
-	if edition == "el2": notices.show_turn(duel.active_side(), duel.turn_serial)
+	notices.show_turn(duel.active_side(), duel.turn_serial)
 	_enemy_banner_shown = false
 	auto_button.build(profile, "CombatMenu3", Rect2(619, 542, 47, 49))
 	attack_button.build(profile, "CombatMenu1", Rect2(509, 542, 47, 49))
@@ -823,7 +825,7 @@ func _start(edition: String, options: Dictionary = {}, restored: ELDuel = null, 
 		if not preview:
 			duel.set_meta("start_sound", true)
 			battle_audio.play(BATTLE_START_SOUND)
-			if edition == "el2":
+			if _notice_icons():
 				# The opening turn settles before the view subscribes to its events.
 				for entry: Dictionary in duel.history:
 					if entry.kind == "disturbance": notices.add_disturbance(int(entry.side))
@@ -1067,7 +1069,7 @@ func _input(event: InputEvent) -> void:
 					if _human_turn() or ((_campaign_battle() != null or duel_match != null or combat_tutorial != null or network_duel != null or _expedition_battle != null or _arena_battle != null or _in_puzzle()) and duel.phase == ELDuel.Phase.FINISHED): _end_phase()
 				"attack_all": _attack_all()
 				"auto_combat": _toggle_auto()
-				"skip": _skip_battle_presentation()
+				"skip": _skip_battle_step()
 				"battle_save": _save_duel()
 				"battle_load": _load_duel()
 				"battle_remake_menu":
@@ -1119,7 +1121,9 @@ func _unhandled_input(event: InputEvent) -> void:
 	if power_dialog != null and power_dialog.visible:
 		# The X choice holds the battle: Enter takes the value, Esc cancels.
 		if event is InputEventKey and event.pressed and not event.echo:
-			if event.keycode in [KEY_ENTER, KEY_KP_ENTER]: _confirm_power()
+			if event.keycode in [KEY_ENTER, KEY_KP_ENTER]:
+				get_viewport().set_input_as_handled()
+				_confirm_power()
 			elif event.keycode == KEY_ESCAPE: _cancel_power()
 		return
 	if event is InputEventKey and event.pressed:
@@ -1885,7 +1889,10 @@ func _end_phase() -> void:
 		if ending_over(): _show_network_round()
 		return
 	if _campaign_battle() != null and duel.phase == ELDuel.Phase.FINISHED:
-		_return_from_encounter()
+		# A fallen hero's death is always shown; only the winner's victory
+		# clip may be cut (_skip_victory).
+		if ending_over(): _return_from_encounter()
+		else: _skip_victory()
 		return
 	if duel_match != null and duel.phase == ELDuel.Phase.FINISHED:
 		_continue_match()
@@ -1915,20 +1922,49 @@ func _end_phase() -> void:
 		declared_attackers = committing
 		own_attack_pending = own_attack_side
 
-## Space skips the presentation of the phase in the original combat controls.
-func _skip_battle_presentation() -> void:
+## Space in battle (held, it repeats): one step of the presentation at a
+## time. During a fight it ends all the remaining attacks at once: their
+## blows land together and everyone is home, resting figures lying down;
+## what follows the attacks (deaths after them, the next phase) plays as
+## usual. Otherwise the casts and walks being shown end. Sounds are never cut: attack hits,
+## deaths and spell sounds still play (a spell's held sounds start at once).
+## The death of a hero is never skipped; the winner's victory clip may be.
+func _skip_battle_step() -> void:
+	if not ending.is_empty() or not _ending_waiting.is_empty():
+		_skip_victory()
+		return
+	if _melee_busy():
+		if not melee.skip_exchange(): melee.finish()
+		return
+	_skip_battle_presentation(true)
+
+## The end of a won battle: Space or the end button end the winner's victory
+## clip at once and the battle is over (the fanfare plays on). A fallen
+## hero's death clip is never cut.
+func _skip_victory() -> void:
+	if ending.is_empty() or String(ending.stage) != "victory": return
+	ending.length = minf(float(ending.length), float(ending.clock))
+
+## Ends the presentation being shown at once (checks and loads use it for
+## the whole queue). With `keep_sounds` (Space) it stops at a fight, which
+## Space then takes one exchange at a time, and the skipped sounds still play.
+func _skip_battle_presentation(keep_sounds := false) -> void:
 	if (_melee_busy() or _cast_busy() or not _arrivals.is_empty() or not _effect_cast.is_empty()
 		or not _battle_cues.is_empty() or (auto_camera != null and auto_camera.active())
 		or (is_instance_valid(melee) and melee.has_moves())):
 		_skipping_presentation = true
-		# The skipped events' sounds are dropped, not left to play long after
-		# them (player report #141).
+		# Without `keep_sounds` the skipped events' sounds are dropped, not
+		# left to play long after them (player report #141); with it the
+		# sounds held for a gesture start now instead.
 		var audio_on := is_instance_valid(battle_audio)
 		if audio_on:
-			battle_audio.cut()
-			battle_audio.silenced = true
+			if keep_sounds: battle_audio.release_held()
+			else:
+				battle_audio.cut()
+				battle_audio.silenced = true
 		var remaining := _cast_queue.size() + 1
 		for _step in remaining:
+			if keep_sounds and _melee_busy(): break
 			if _melee_busy(): melee.finish()
 			if not _effect_cast.is_empty(): _start_cast_effects()
 			_step_arrivals(true)
@@ -1937,19 +1973,20 @@ func _skip_battle_presentation() -> void:
 			_step_cast_queue()
 		_finish_battle_cues()
 		_step_front_line()
-		if is_instance_valid(melee): melee.finish_moves()
+		if is_instance_valid(melee) and not _melee_busy(): melee.finish_moves()
 		if camera != null: _update_camera()
 		for id: int in models.keys():
 			var clip: String = models[id].clip
 			if clip in ["uattack", "uhit", "utap", "uuntap", "usummon", "uenchantment", "uinstant"]:
 				_animation_done(clip, id)
-		if audio_on:
+		if audio_on and not keep_sounds:
 			battle_audio.silenced = false
 			battle_audio.cut()
 		_skipping_presentation = false
 		_sync_shown()
 		_refresh()
-	if effects != null: effects.finish_transients()
+	# A fallen hero's death effect plays out.
+	if effects != null and ending.is_empty(): effects.finish_transients()
 
 ## The fight of the player's committed attack begins (its first blow is about
 ## to be shown): the declaration shot at the declared attackers still on the
@@ -2211,11 +2248,23 @@ var _ending_waiting: Dictionary = {}
 
 ## The previous action is still on screen: a cast's gesture and cue, a
 ## summon waiting for its effect, or a summoned creature's entrance clip.
-func _presenting() -> bool:
+func _presenting(kind := "") -> bool:
 	if _skipping_presentation: return false
 	if elapsed < _cast_until or not _arrivals.is_empty(): return true
 	for id: int in models:
 		if id >= 2 and is_instance_valid(models[id]) and models[id].visible and models[id].clip == "usummon": return true
+	# The next phase also waits for figures lying down or getting up (#237:
+	# a creature home from a fight fell asleep and woke in the same moment).
+	if kind == "phase" and figures_turning(): return true
+	return false
+
+## A creature is playing its tap or untap clip (lying down to rest or
+## getting up).
+func figures_turning() -> bool:
+	for id: int in models:
+		if id < 2 or not is_instance_valid(models[id]) or not models[id].visible: continue
+		var model: ELModel = models[id]
+		if model.playing and model.clip in ["utap", "uuntap"] and not model.get_meta("dying", false): return true
 	return false
 
 ## A cast is still being shown, or casts wait for their turn.
@@ -2292,7 +2341,7 @@ func _on_combat_finished() -> void:
 func _hold_cast(data: Dictionary) -> bool:
 	if _cast_dispatching or (is_instance_valid(melee) and melee.dispatching()): return false
 	var combat_closed := is_instance_valid(melee) and melee.blocks_cast_queue()
-	if not combat_closed and _cast_queue.is_empty() and (_melee_busy() or not data.get("kind") in SEQUENCED_KINDS or not _presenting()): return false
+	if not combat_closed and _cast_queue.is_empty() and (_melee_busy() or not data.get("kind") in SEQUENCED_KINDS or not _presenting(String(data.get("kind", "")))): return false
 	_cast_queue.append(data)
 	return true
 
@@ -2305,7 +2354,7 @@ func _step_cast_queue() -> void:
 		var next: Dictionary = _cast_queue[0]
 		# A summoned creature appears (and plays its entrance) before the
 		# next action is shown.
-		if next.get("kind") in SEQUENCED_KINDS and _presenting(): break
+		if next.get("kind") in SEQUENCED_KINDS and _presenting(String(next.get("kind", ""))): break
 		_cast_queue.pop_front()
 		_cast_dispatching = true
 		_event(next)
@@ -2482,7 +2531,7 @@ func _event(data: Dictionary) -> void:
 	if is_instance_valid(melee) and melee.capture(data): return
 	if data.get("kind") == "combat_start": return
 	_note_shown(data)
-	if profile.id == "el2" and data.has("shown") and is_instance_valid(notices):
+	if data.has("shown") and is_instance_valid(notices):
 		notices.show_turn(int(data.shown.active), int(data.shown.turn))
 	if data.get("kind") in ["attack_resolved", "turn_cleanup", "combat_end"]: return
 	_log_battle_outcome(data)
@@ -2569,10 +2618,12 @@ func _event(data: Dictionary) -> void:
 		"cast":
 			var summon := duel.is_summon(data.card)
 			var animation := _cast_clip(int(data.side), String(data.card))
-			# Options "Hide casting animations" skips the hero's gesture only.
-			if not bool(settings.values.get("hide_cast", false)) and not animation.is_empty(): models[data.side].play(animation)
-			# The caster's voice starts with its gesture.
-			battle_audio.unit(models[data.side], (animation if not animation.is_empty() else _cast_gesture(String(data.card))).trim_prefix("u"))
+			# Options "Hide casting animations" skips the hero's gesture and
+			# the voice that goes with it; the spell's own sounds remain.
+			if not bool(settings.values.get("hide_cast", false)):
+				if not animation.is_empty(): models[data.side].play(animation)
+				# The caster's voice starts with its gesture.
+				battle_audio.unit(models[data.side], (animation if not animation.is_empty() else _cast_gesture(String(data.card))).trim_prefix("u"))
 			# The spell's own sounds wait, like its effects, for the gesture's release.
 			battle_audio.hold(_cast_release(int(data.side), String(data.card)))
 			# Original EL1 Fury registers GreenDamage only after it counts at
@@ -2828,7 +2879,7 @@ func _event(data: Dictionary) -> void:
 			# EL1's turn entry plays RedLightning at the damaged hero only when
 			# the ether disturbance is positive (before hero damage);
 			# EL2 binds it the same way.
-			if profile.id == "el2" and is_instance_valid(notices): notices.add_disturbance(int(data.side))
+			if _notice_icons() and is_instance_valid(notices): notices.add_disturbance(int(data.side))
 			if profile.id in ["el1", "el2"] and int(data.amount) > 0 and models.has(int(data.side)):
 				battle_audio.effect("RedLightning")
 				_figure_effect("RedLightning", int(data.side))
@@ -3056,7 +3107,7 @@ func _event(data: Dictionary) -> void:
 				_figure_effect("Specialisation", side)
 				battle_audio.effect("Specialisation")
 			_float_text(side, name, Color("e8c66a"), true)
-			if profile.id == "el2": _specialisation_notice(side, String(data.spec))
+			if _notice_icons(): _specialisation_notice(side, String(data.spec))
 			_announce("T_SPEC_WORKED", [name, _hero_name(side)], side)
 		"global_spell":
 			var spell := profile.text(str(profile.table("GlobalSpells").get(data.spell, {}).get("Name", data.spell)))
@@ -3258,9 +3309,6 @@ func _phase_notice(side: int, attack: bool, round_number: int) -> void:
 	elif not _enemy_banner_shown:
 		band = 2
 		_enemy_banner_shown = true
-		# Cast icons clear at the opponent's first
-		# phase, which is usually its defence right after my attack.
-		if profile.id == "el1" and is_instance_valid(notices): notices.clear_icons()
 	if band >= 0 and bool(settings.values.get("combat_phases", true)) and is_instance_valid(notices): notices.show_banner(band)
 
 ## Whether `side` is played at this screen (both sides in a local two-player battle).
@@ -3279,6 +3327,12 @@ func _cast_notice(side: int, card: String) -> void:
 		if is_instance_valid(notices) and (profile.id == "el1" or _rival_notice(side)): notices.add_icon(profile.card_icon(card), card, side)
 		return
 	_announce("T_CASTING", [_hero_name(side), duel.card_name(card)], side)
+
+## Whether the battle shows the top-left notice icons: always in the second
+## game, with the "cast_icons" setting in the first. Both clear the list when
+## a new side acts or a turn starts (#227, first game #257).
+func _notice_icons() -> bool:
+	return profile.id == "el2" or (profile.id == "el1" and bool(settings.values.get("cast_icons", true)))
 
 func _specialisation_notice(side: int, code: String) -> void:
 	if not is_instance_valid(notices): return
@@ -3414,9 +3468,13 @@ func _pend_cast_effects(data: Dictionary, artifact: bool) -> void:
 func _hit_later(data: Dictionary) -> bool:
 	var delay := _hit_delay(data)
 	var id := int(data.get("target", -1))
-	# A creature that falls to its own ability (Fingus spores, Final Courtesy)
-	# finishes the action the original queues before its death.
-	if data.kind == "death" and models.has(id) and models[id].clip == "uinstant" and models[id].playing:
+	# A fingus that spat falls at its action's impact frame, as the spit
+	# leaves it (the original's death waits on that frame, not the clip's end).
+	if data.kind == "death" and _spat.has(id):
+		delay = maxf(delay, float(_spat[id]))
+	# A creature that falls to its own ability (Final Courtesy) finishes the
+	# action the original queues before its death.
+	elif data.kind == "death" and models.has(id) and models[id].clip == "uinstant" and models[id].playing:
 		var actor: ELModel = models[id]
 		delay = maxf(delay, (actor.clip_frames() - actor.frame) / (actor.fps * actor.speed))
 	if delay <= 0.0 or not models.has(id) or not is_inside_tree(): return false
@@ -4360,8 +4418,9 @@ func _step_ending(delta: float) -> void:
 		if winner >= 0 and models.has(winner):
 			var model: ELModel = models[winner]
 			# The fanfare of the winner's colour, for a hero figure (he*) only.
+			# It plays to its end even when the battle closes before it does.
 			if String(model.template).begins_with("he"):
-				battle_audio.play("buttons/%svictory.wav" % String(duel.heroes[winner].get("faction", "Red")))
+				ending.fanfare = battle_audio.play_detached("buttons/%svictory.wav" % String(duel.heroes[winner].get("faction", "Red")))
 			# The winner camera follows the player's own win only (both originals).
 			if _auto_camera_on() and _local_side(winner): auto_camera.victory(winner, model.position)
 			var clip := victory_clip(model)
@@ -4658,6 +4717,9 @@ func _ability_effects(data: Dictionary) -> void:
 	# selection (onwards). EL1 presentation stays unchanged.
 	var visual_target := int(data.get("target", -1))
 	if profile.id == "el2" and card == "BROT": visual_target = int(data.get("hit_target", visual_target))
+	if source >= 2 and card in ["SPFG", "CAFG"] and data.ability == "spores":
+		_spit(items, source, side, visual_target, card)
+		return
 	# RNST has no selected target: original RainOfStoneAbility strikes every
 	# opposing creature and its RedRainOfStones visual has Monsters Hit@35.
 	# Snapshot these ids before synchronous damage removes any of them.
@@ -4735,6 +4797,33 @@ func _ability_effects(data: Dictionary) -> void:
 
 func _clear_ability_hit() -> void:
 	_ability_hit.clear()
+
+## Fingus spores (both editions). The original turns the fingus to its target
+## and plays its action; at the action's impact frame it launches FingusSpit
+## and, unless the fingus mastery saves it, the fingus dies at that same
+## moment. The target takes the spit at the effect's MonstersHit cue.
+func _spit(items: Array, source: int, side: int, target: int, card: String) -> void:
+	var key := _action_key(models[source])
+	_spat[source] = key
+	call_deferred("_clear_spat")
+	# Naming itself deals nothing, so nothing waits for the spit's hit.
+	if target >= 0 and target != source:
+		_ability_hit = {"target": target, "hit": key + ELCombatEffects.ability_hit_delay(profile, card)}
+		call_deferred("_clear_ability_hit")
+	if key <= 0.0 or not is_inside_tree(): _play_ability(items, source, side, target, true)
+	else: _schedule_battle_cue(key, _play_ability.bind(items, source, side, target, true))
+
+## Seconds until the figure's action clip reaches its impact frame (the end
+## of the clip when it marks none); 0 when it plays no action.
+func _action_key(actor: ELModel) -> float:
+	if actor.clip != "uinstant" or not actor.playing: return 0.0
+	var at := actor.clip_frames()
+	var impact := int(actor.timing.get("uinstant", {}).get("impact", -1))
+	if impact >= 0 and impact < at: at = impact
+	return maxf(0.0, (at - actor.frame) / (actor.fps * actor.speed))
+
+func _clear_spat() -> void:
+	_spat.clear()
 
 ## A combat power's effects and sounds, drawn at (or towards) the figure it struck.
 func _combat_ability(data: Dictionary) -> void:
@@ -4828,11 +4917,25 @@ func _animation_done(clip: String, id: int) -> void:
 	var resting := _shown_resting(id, c)
 	# Home again after a fight (a move's end): the figure's own tap clip, then
 	# its resting idle (_turn_figure), rather than a jump into the pose.
-	if resting and clip.is_empty() and model.has_clip("utap") and model.has_clip("ctapidle") and model.base_clip() != "ctapidle":
+	if resting and clip.is_empty() and _tap_clips() and not _skipping_presentation and model.has_clip("utap") and model.has_clip("ctapidle") and model.base_clip() != "ctapidle":
 		if model.play("utap"):
 			battle_audio.unit(model, "tap")
 			return
+	# A figure that rose (or was put to rest) while it was lying down (or
+	# getting up) turns back with its own clip instead of jumping into the
+	# other idle (a skip settles it at once).
+	var asleep := resting or bool(c.get("sick", false))
+	if not _skipping_presentation and _tap_clips() and ((clip == "utap" and not asleep) or (clip == "uuntap" and asleep)):
+		var turn := "uuntap" if clip == "utap" else "utap"
+		if model.has_clip(turn) and model.play(turn):
+			battle_audio.unit(model, turn.trim_prefix("u"))
+			return
 	_play_figure_idle(model, c, resting)
+
+## Options "Hide movement" (the originals' fast combat mode) also drops the
+## tap and untap clips and their sounds: a figure changes idle at once.
+func _tap_clips() -> bool:
+	return not bool(settings.values.get("hide_motion", false))
 
 func _play_figure_idle(model: ELModel, creature: Dictionary, resting: bool) -> void:
 	var clip := "ctapidle" if resting or creature.get("sick", false) else "cidle"
@@ -5293,12 +5396,12 @@ func _attack_all() -> void:
 
 ## A creature put to rest by an action, or rising from rest, plays the figure's own tap
 ## or untap clip (with its sound and clip particles) before the idle it ends
-## in; figures without the clip change idle at once.
+## in; figures without the clip (or with Hide movement) change idle at once.
 func _turn_figure(model: ELModel, desired: String, resting: bool) -> void:
 	var from := model.base_clip()
 	# A newly summoned figure simply waits in its resting idle.
 	var clip := "utap" if desired == "ctapidle" and from == "cidle" and resting else ("uuntap" if desired == "cidle" and from == "ctapidle" else "")
-	if not clip.is_empty() and model.has_clip(desired) and model.play(clip):
+	if not clip.is_empty() and _tap_clips() and model.has_clip(desired) and model.play(clip):
 		battle_audio.unit(model, clip.trim_prefix("u"))
 		return
 	model.play(desired)
@@ -5616,26 +5719,20 @@ func _figure_tip(at: Vector2) -> Dictionary:
 func _creature_tip_text(id: int) -> String:
 	var creature := duel.entity(id)
 	var card := str(creature.card)
-	var stats := _shown_creature_stats(id, creature)
-	var damage := shown_damage(id)
-	var damage_facts := _creature_damage_facts(int(stats.toughness), damage)
+	# Both games show the printed card (the second game's variable X/X
+	# included): neither the live stats nor the creature's enchantments.
+	var printed := ELCombatTooltip.spell_text(profile, card, -1, duel.card_name(card))
+	# A generated puzzle's advice names exact pieces and their wounds.
 	var piece := _puzzle_piece_reference(id)
-	# The second game shows the printed card, including variable X/X stats.
-	if profile.id == "el2":
-		var printed := ELCombatTooltip.spell_text(profile, card, -1, duel.card_name(card))
-		var facts := PackedStringArray()
-		if not piece.is_empty(): facts.append(piece)
-		if not damage_facts.is_empty(): facts.append(damage_facts)
-		return printed + ("\n\n" + "\n".join(facts) if not facts.is_empty() else "")
-	var label := "%s %d/%d" % [duel.card_name(card), int(stats.power), maxi(0, int(stats.toughness) - damage)]
-	if not piece.is_empty(): label += "\n" + piece
-	label += "\n" + ELCombatTooltip.cost_line(profile, int(profile.table("CombatSpells").get(card, {}).get("Cost", 0)))
-	if not damage_facts.is_empty(): label += "\n" + damage_facts
-	var description := profile.card_description(card)
-	if not description.is_empty() and description != card: label += "\n" + description
-	var worn := _enchantment_lines(creature)
-	if not worn.is_empty(): label += "\n\n" + "\n".join(worn)
-	return label
+	if piece.is_empty(): return printed
+	var facts := PackedStringArray([piece])
+	var stats := _shown_creature_stats(id, creature)
+	var damage_facts := _creature_damage_facts(int(stats.toughness), shown_damage(id))
+	if not damage_facts.is_empty(): facts.append(damage_facts)
+	return printed + "
+
+" + "
+".join(facts)
 
 ## Remaining health alone hides how a wounded creature survives a change
 ## of toughness. These are visible state facts, using presentation timing
@@ -10537,10 +10634,12 @@ func _retry_battle() -> void:
 			_notice(codec.error)
 			return
 		var state: ELAdventureSession = restored.state
-		var rng: int = restored.director.encounter.battle.rng_state
+		# The map comes back as it was when the encounter began, but the
+		# battle is dealt anew from the same setup with a fresh seed, so the
+		# opening hands and later draws differ from the abandoned attempt.
+		_redeal_encounter(restored.director.encounter)
 		await _begin_campaign(state.map.profile.id, {"file_name": state.map.id, "script": state.script_name}, state.difficulty, restored)
 		if _campaign_battle() != null and campaign_view.state == state:
-			duel.rng_state = rng
 			_encounter_start = checkpoint
 	elif _expedition_battle != null:
 		_start_expedition_battle(true)
@@ -10555,6 +10654,36 @@ func _retry_battle() -> void:
 			match_recording.untrack()
 			match_recording.rounds.pop_back()
 		_play_match_round(battle_seed)
+
+## Restarts a restored map encounter's battle from its own setup with a new
+## seed, as a new battle takes a fresh random value. A few seeds are tried so
+## the opening hands differ from the checkpoint's whenever the books allow it.
+## The old battle stays if the setup cannot start again.
+static func _redeal_encounter(encounter: ELAdventureEncounter) -> void:
+	var old: ELDuel = encounter.battle if encounter != null else null
+	if old == null: return
+	var hands := old.heroes.map(func(hero: Dictionary) -> Array: return hero.hand)
+	# The checkpoint's mission variables already hold what the battle scripts'
+	# set-up wrote; running it again must not write them twice.
+	var variables: ELLuaVM.Table = encounter.state.variables if encounter.state != null else null
+	var kept: Dictionary = variables.values.duplicate() if variables != null else {}
+	var chosen: ELDuel = null
+	for attempt in 8:
+		var next := ELDuel.new()
+		next.attach_session(encounter.state)
+		var started := next.start(old.profile, randi() & 0x7fff, old.setup)
+		if variables != null and variables.values != kept:
+			variables.values.clear()
+			variables.values.merge(kept)
+		if not started:
+			if next.scripts != null: next.scripts.close()
+			break
+		if chosen != null and chosen.scripts != null: chosen.scripts.close()
+		chosen = next
+		if next.heroes.map(func(hero: Dictionary) -> Array: return hero.hand) != hands: break
+	if chosen == null: return
+	if old.scripts != null: old.scripts.close()
+	encounter.battle = chosen
 
 func _esc_surrender() -> void:
 	_close_esc_menu()

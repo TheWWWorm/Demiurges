@@ -11,12 +11,13 @@ extends Control
 ## - first game: the cast message list (option CastMessages, also ShowChat),
 ##   top left. Each line holds 3 s, then fades over 0.5 s while the list
 ##   slides up.
-## - first game: cast spells from both heroes as icons, marked by caster.
-##   The second game lists only the opponent's casts, abilities and artifact
-##   uses, plus ether disturbance and specialisation icons of both sides, and
-##   clears the list when a new side acts or a turn starts.
-##   There are 5 per row at a 53 px step. The first game's "cast_icons"
-##   setting enables this list with its own list border (ELListLook.HOVER).
+## - second game: the opponent's casts, abilities and artifact uses as icons,
+##   plus ether disturbance and specialisation icons of both sides. The
+##   first game's original has no such list; the remake's (setting
+##   "cast_icons", with its own list border ELListLook.HOVER) shows both
+##   heroes' casts and abilities marked by caster, and the same disturbance
+##   and specialisation notices. Both clear the list when a new side acts or
+##   a turn starts. There are 5 per row at a 53 px step.
 ## Approximations: list and icon origins, and the line font.
 
 const BAND := 85.0
@@ -41,6 +42,12 @@ const OWN_DISTURBANCE_ICON := 915
 const RIVAL_DISTURBANCE_ICON := 916
 const OWN_SPECIALISATION_ICON := 918
 const RIVAL_SPECIALISATION_ICON := 917
+## The first game has no notice icons of its own; its remake list borrows
+## the hero skill icons nearest in meaning: Channeling (the skill that moves
+## ether disturbance) and Luck (the specialisation chance). Its caster bars
+## tell the sides apart.
+const FIRST_DISTURBANCE_SKILL := "CNLG"
+const FIRST_SPECIALISATION_SKILL := "MSTR"
 
 var profile: ELProfile
 var halves: Array[Texture2D] = []
@@ -134,9 +141,16 @@ func add_icon(texture: Texture2D, card: String, side: int, tooltip := "") -> voi
 	_add_icon({"texture": texture, "card": card, "side": side, "tooltip": tooltip})
 
 func add_disturbance(side: int) -> void:
+	if profile.id == "el1":
+		_add_icon({"texture": ELBuildingMessageView.skill_icon(profile, FIRST_DISTURBANCE_SKILL, 0), "card": "", "side": side,
+			"tooltip": ELRemakeText.t("Your ether disturbance", profile), "rival_tooltip": ELRemakeText.t("The opponent's ether disturbance", profile)})
+		return
 	_add_sided_icon(OWN_DISTURBANCE_ICON, RIVAL_DISTURBANCE_ICON, side, profile.text("ETHER_DISTURBANCE_SELF_Tt"), profile.text("ETHER_DISTURBANCE_ENEMY_Tt"))
 
 func add_specialisation(side: int, tooltip: String) -> void:
+	if profile.id == "el1":
+		_add_icon({"texture": ELBuildingMessageView.skill_icon(profile, FIRST_SPECIALISATION_SKILL, 0), "card": "", "side": side, "tooltip": tooltip})
+		return
 	_add_sided_icon(OWN_SPECIALISATION_ICON, RIVAL_SPECIALISATION_ICON, side, tooltip, tooltip)
 
 func _add_sided_icon(own: int, rival: int, side: int, tooltip: String, rival_tooltip: String) -> void:

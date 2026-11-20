@@ -18,7 +18,9 @@ extends SceneTree
 ##   paralyses like any other: the price is paid and it rises;
 ## - first game, option "cast_icons": the opponent's casts show as framed
 ##   spell icons with their tooltip instead of red lines, and own casts show
-##   no line either;
+##   no line either; the icons clear when the other side starts acting
+##   (#257), and ether disturbance and specialisations add their notice
+##   icons (#256);
 ## - first game, with the second game installed: the pre-battle panel raises
 ##   the borrowed battle dome, and declining the battle ends it;
 ## - second game: a battle between two computer figures (chapter 11's Synth
@@ -83,6 +85,11 @@ func _run() -> void:
 		else: print("SKIP: %s files could not be mounted" % edition)
 	for edition: String in profiles: _cost_lines(profiles[edition])
 	for edition: String in profiles: _status_breaks(profiles[edition])
+	# Enfeeblement's cast curses the creature in both games; Disenchant is
+	# only its paid removal.
+	for edition: String in ["el1", "el2"]:
+		check(ELCombatEffects.Table.cast_effects(edition, "ENFL") == ["CantUntap", "NegRune"], "%s: Enfeeblement's cast shows the curse, not its removal" % edition)
+		check(ELCombatEffects.Table.ability_effects(edition, "ENFL") == [["Disenchant", "at"]], "%s: Enfeeblement's paid removal shows Disenchant" % edition)
 	if profiles.has("el2"): _pale_commands(profiles.el2)
 	for edition: String in profiles: await _battle_controls(edition)
 	if profiles.has("el2"):
@@ -887,8 +894,42 @@ func _cast_icons() -> void:
 	check(notices.icon_rect(5).position.y > notices.icon_rect(4).position.y, "el1: the icons wrap after five a row")
 	var tip: String = notices._get_tooltip(notices.icon_rect(0).get_center())
 	check(tip.contains(view.duel.card_name(cards[0])), "el1: an icon's tooltip describes its spell")
-	view._phase_notice(1, false, 2)
-	check(notices.icons.is_empty(), "el1: the icons clear when the opponent's next turn starts")
+	# #257: the list keeps only the icons of the side acting now.
+	var duel: ELDuel = view.duel
+	var acting := duel.active_side()
+	notices.show_turn(acting, duel.turn_serial)
+	duel.end_phase()
+	view._skip_battle_presentation()
+	check(duel.active_side() != acting and notices.icons.is_empty(), "el1 #257: the icons clear when the other side starts acting")
+	# #256: ether disturbance and specialisation notices, as in the second game.
+	var side := duel.active_side()
+	duel.heroes[side].turns = int(duel.heroes[side].level) + 11
+	for hero: Dictionary in duel.heroes: hero.skills.clear()
+	var health := int(duel.heroes[side].health)
+	var turn := duel.turn_serial
+	for i in 4:
+		if duel.turn_serial > turn and duel.active_side() == side: break
+		duel.end_phase()
+	view._skip_battle_presentation()
+	var mover := duel.active_side()
+	var disturbance := ELBuildingMessageView.skill_icon(profile, ELCombatNotices.FIRST_DISTURBANCE_SKILL, 0) as AtlasTexture
+	var shown := notices.icons.find_custom(func(icon: Dictionary) -> bool: return icon.card == "" and (icon.texture as AtlasTexture).region == disturbance.region)
+	notices.viewer_side = mover
+	check(mover == side and int(duel.heroes[mover].health) < health, "el1 #256: the ether disturbance strikes (%d -> %d)" % [health, int(duel.heroes[mover].health)])
+	check(shown >= 0 and notices.get_tooltip(notices.icon_rect(shown).get_center()) == ELRemakeText.t("Your ether disturbance", profile),
+		"el1 #256: the ether disturbance shows its notice icon and text")
+	notices.viewer_side = 1 - mover
+	check(shown >= 0 and notices.get_tooltip(notices.icon_rect(shown).get_center()) == ELRemakeText.t("The opponent's ether disturbance", profile),
+		"el1 #256: the opponent sees it as the opponent's disturbance")
+	var code: String = profile.table("HeroesSpecs").keys().filter(func(key: String) -> bool: return int(profile.table("HeroesSpecs")[key].get("Icon", 0)) > 0)[0]
+	duel.heroes[mover].spec = code
+	duel.heroes[mover].spec_level = 20
+	var before := notices.icons.size()
+	check(ELSpecs.roll(duel, mover, code, 100) > 0, "el1 #256: a specialisation (%s) triggers" % code)
+	var spec_icon := ELBuildingMessageView.skill_icon(profile, ELCombatNotices.FIRST_SPECIALISATION_SKILL, 0) as AtlasTexture
+	check(notices.icons.size() == before + 1 and (notices.icons[before].texture as AtlasTexture).region == spec_icon.region
+		and notices.get_tooltip(notices.icon_rect(before).get_center()) == view._spec_text(code, "Desc", view._spec_name(code)),
+		"el1 #256: the specialisation shows its notice icon with its description")
 	if kept == null: view.settings.values.erase("cast_icons")
 	else: view.settings.values.cast_icons = kept
 	view.queue_free()

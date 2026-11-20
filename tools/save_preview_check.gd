@@ -8,7 +8,8 @@ extends SceneTree
 ##   a picture show none;
 ## - the first game's Load Mission screen shows the chosen save's picture in
 ##   the box above its details, and nothing for a save without one.
-## - the second game's save lists show race marks for new and older saves.
+## - the second game's save lists show race marks for new and older saves;
+##   the first game's mark every race playing on the saved map (#255).
 ## - in a rendered run, capturing a thumbnail keeps the on-screen UI visible.
 ##
 ##   godot --headless --path game --script ../tools/save_preview_check.gd
@@ -115,7 +116,10 @@ func _screen() -> void:
 	menu.show_screen("load_mission")
 	await frames(1)
 	var ui := menu.mission_load_ui
-	check(ui.list.race_sheet == null, "EL1 does not use the second game's save race marks")
+	check(ui.list.race_sheet != null and ui.list.race_sheet == menu.texture_named("SAVE_PANEL_6"), "el1 #255: Load Mission draws race marks from the original sheet")
+	check(ELMissionLoadScreen.row_marks({"races": ["Black", "Red", "Blue"]}) == [0, 2, 3] and ELMissionLoadScreen.row_marks({"races": []}).is_empty(),
+		"el1 #255: a row marks each race on its map in the original's order")
+	await _first_races(profile)
 	var with := FOLDER.path_join("el1-slot.json")
 	var without := FOLDER.path_join("bare.json")
 	ui.entries.assign([{"name": "with", "path": with, "type": ELSaveSlots.SLOT, "modified": 0, "edition": "el1", "kind": ELSaveSlots.KIND_SINGLE},
@@ -129,6 +133,39 @@ func _screen() -> void:
 	check(box != null and box.texture == null, "a save without a picture leaves the box empty")
 	menu.queue_free()
 	await frames(2)
+
+## #255: the first game's rows list the races of the map's players, for new
+## saves and for older ones whose header has no races.
+func _first_races(profile: ELProfile) -> void:
+	var map := ELAdventureMap.new()
+	var state := ELAdventureSession.new()
+	var director := ELAdventureDirector.new()
+	var ready := map.load_map(profile, "pmission05") and state.start(map, 1, 212, "", 1, false) and director.build(state)
+	check(ready, "el1 #255: a two-race single mission loads")
+	if not ready:
+		state.close()
+		return
+	check(ELSaveSlots.current_row(state).get("races") == ["Green", "Blue"], "el1 #255: the running game's row lists the map's races (got %s)" % [ELSaveSlots.current_row(state).get("races")])
+	var name := "Race Check"
+	var file := ELSaveSlots.save_path("el1", name).get_file()
+	var path := FOLDER.path_join(file)
+	var index := path.get_basename() + ".meta.json"
+	check(ELSaveSlots._write(path, index, name, ELSaveSlots.SLOT, director, {}).is_empty(), "el1 #255: a save is written with a list header")
+	var identity := ELSaveSlots._slot_identity(profile, file)
+	var row := ELSaveSlots._slot_row(profile, path, index, identity)
+	check(row.get("races") == ["Green", "Blue"], "el1 #255: the save lists both races of the map, not only the player's (got %s)" % [row.get("races")])
+	var codec := ELAdventureSave.new()
+	var raw: Dictionary = codec.read_document(path)
+	var old_index := row.duplicate()
+	old_index.erase("races")
+	raw._slot = Marshalls.utf8_to_base64(JSON.stringify(old_index))
+	check(codec.write_document(path, raw) and codec.write_document(index, old_index), "el1 #255: an older header without races is written")
+	var old := ELSaveSlots._slot_row(profile, path, index, identity)
+	check(old.get("races") == ["Green", "Blue"], "el1 #255: the older save gets its marks from the checkpoint")
+	var bad := old_index.duplicate()
+	bad.races = ["Purple"]
+	check(not ELSaveSlots._row_meta(JSON.stringify(bad), profile, file, identity).has("races"), "el1 #255: an unknown race in a header is ignored")
+	state.close()
 
 func _race_screen() -> void:
 	var paths: Variant = JSON.parse_string(FileAccess.get_file_as_string("user://profiles.json")) if FileAccess.file_exists("user://profiles.json") else null

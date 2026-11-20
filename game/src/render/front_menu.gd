@@ -1088,7 +1088,8 @@ func _input(event: InputEvent) -> void:
 const DEFAULT_BUTTONS := ["SBOK", "SCBOK", "CTOK", "CIStart", "SMStart", "MOOK", "OptionsOK", "OP_OK", "EHOK", "DuStart", "GMA6Start"]
 
 ## Enter: the save list's Load or Save, or the screen's check button when it
-## is shown and enabled. False when the screen has none.
+## is shown and enabled (any other check plate on the menu too, see
+## ELCheckEnter). False when the screen has none.
 func press_default() -> bool:
 	if screen in SAVE_SCREENS and mission_load_ui != null:
 		mission_load_ui.confirm()
@@ -1098,7 +1099,10 @@ func press_default() -> bool:
 		if button == null or not is_instance_valid(button) or not button.is_visible_in_tree(): continue
 		if not button.disabled: button.pressed.emit()
 		return true
-	return false
+	var check := ELCheckEnter.target(get_viewport(), self)
+	if check == null: return false
+	ELCheckEnter.press(check)
+	return true
 
 # --- Shared panel helpers ----------------------------------------------------
 

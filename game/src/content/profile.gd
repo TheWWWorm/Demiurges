@@ -38,6 +38,8 @@ var _prefetch: Array = []
 var _prefetch_task := -1
 ## Interface button sounds by control name (ELUiSounds).
 var button_sounds: Dictionary = {}
+## The push buttons drawn with a check (OK) plate, by control name (ELCheckEnter).
+var check_buttons: Dictionary = {}
 ## Where figures' skins are painted as metal (worked out on worker threads).
 var metal_masks: ELMetalMasks
 ## Sharper icons and interface art (pictures prepared beforehand).
