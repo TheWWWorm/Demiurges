@@ -4,7 +4,7 @@ Versions follow [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html)
 
 ## Unreleased
 
-- **Smarter computer players.** They no longer lay a buff meant for their own creatures (the +1/+1 and +4 power enchantments and the like) on yours, or a curse on their own, even with nothing of their own to cast it on.
+- **Smarter computer players.** They no longer lay a buff meant for their own creatures (the +1/+1 and +4 power enchantments and the like) on yours, or a curse on their own, even with nothing of their own to cast it on. They also stop throwing a lone creature into ready blockers for nothing when the duel is already won without it, or already lost whatever they do.
 - **Enfeeblement in Etherlords I.** Casting it shows the curse landing, as in the original, instead of the effect of removing it.
 - **Ether plane gates.** The gate under the columns nearest the camera hides with them instead of standing across the view.
 - **Etherlords II battle flow.** Creatures finish lying down before the next phase starts, and a creature woken mid-animation gets up with its own clip. Space during a fight settles all remaining attacks at once, as in the original, with their hit and death sounds; it never cuts spell, attack or death sounds or a falling hero's death, and it ends the winner's victory clip at once while the fanfare plays on. Hide movement drops the lie-down and get-up clips, and hiding casting animations also hides the caster's voice. [#237](https://github.com/TheWWWorm/Demiurges/issues/237) · [#244](https://github.com/TheWWWorm/Demiurges/issues/244)
