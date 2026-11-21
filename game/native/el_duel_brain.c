@@ -1797,6 +1797,16 @@ static void take_back(State *s, int side, int kind) {
 	s->limit = 1;
 }
 
+/* A stolen creature that dissipates goes back to the hero it came from unless
+ * that army is full, its control enchantment left on it, inert in the plane
+ * (#267). */
+static void dissipate_home(State *s, int index) {
+	Unit *u = &s->u[index];
+	if (u->home <= 0 || u->home - 1 == u->owner || !worn_kind(s, index, EN_CONTROL)) return;
+	if (army_size(s, u->home - 1) >= ARMY) return;
+	change_sides((const Search *)s->rules, s, index, u->home - 1);
+}
+
 static void finish_unit(State *s, int index) {
 	Unit *t = &s->u[index];
 	/* A rat's or a fingus' mastery regenerates it for nothing, whether or
@@ -1832,6 +1842,7 @@ static void finish_unit(State *s, int index) {
 		unlend(s, index);
 		t->flags |= F_RESTING | F_GONE;
 		t->flags &= ~(uint32_t)F_ATTACKING;
+		dissipate_home(s, index);
 		banners(s);
 	} else {
 		t->flags |= F_DEAD;
@@ -1872,6 +1883,7 @@ static void perish_unit(State *s, int index) {
 		unlend(s, index);
 		t->flags |= F_GONE;
 		t->flags &= ~(uint32_t)F_ATTACKING;
+		dissipate_home(s, index);
 		banners(s);
 	} else kill_unit(s, index);
 }
@@ -2546,9 +2558,10 @@ static void strike_unit(State *s, int source, int target, int amount) {
 	 * bite of the second game's lake snake, which takes 1 of power and 1 of
 	 * health from whatever it hits (the first game's bites after the blow,
 	 * and kills on its own when it leaves too little health). A lifeguard
-	 * turns the blow itself away and nothing else of the strike: the burn,
-	 * the bite and a destroying strike's mark stay. */
-	int venom = (a->flags & F_VENOM) && !(t->flags & F_NO_AFFECT);
+	 * turns the blow away with its bite (the guarded creature keeps its power
+	 * and health in the second game, #269); the burn and a destroying
+	 * strike's mark stay. */
+	int venom = (a->flags & F_VENOM) && !(t->flags & F_NO_AFFECT) && t->guards <= 0;
 	int marks = (a->flags & F_DESTROY) || ((a->flags & F_DESTROY_UNWALLED) && !(t->flags & F_WALL))
 		|| ((a->flags & F_DESTROY_FLYER) && (t->flags & F_FLY));
 	if ((a->flags & F_BURN) && !(t->flags & F_NO_REGEN)) {
@@ -2567,19 +2580,6 @@ static void strike_unit(State *s, int source, int target, int amount) {
 		spend_guard(s, target);
 		t->flags |= F_HIT;
 		if (marks) t->flags |= F_POISONED;
-		if (venom && !s->second) {
-			Unit was = *t;
-			add_power(t, -1);
-			t->lethal++;
-			settle_health(t);
-			wears(t, &was, 1, 0);
-		}
-		/* A bite that leaves it no health kills where the blow did not: that
-		 * is a hit of its own, which another lifeguard turns away. */
-		if (venom && t->damage >= t->toughness) {
-			if (t->guards > 0) spend_guard(s, target);
-			else finish_unit(s, target);
-		}
 		if (strips && !(t->flags & F_DEAD)) strip_unit(s, target);
 		return;
 	}

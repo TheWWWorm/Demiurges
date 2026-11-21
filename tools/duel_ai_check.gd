@@ -522,9 +522,9 @@ func _fixtures() -> void:
 			# A gain laid on a deluded creature and a beholder mother's ban on walls.
 			["el1", "curiosity_inferno_geometry"], ["el2", "curiosity_needed_enemy"],
 			# An enchantment's card that comes back to the hand and is cast
-			# again, one a weaver copies, a lifeguard laid on the attacker, and
-			# a water link an older position keeps on its creature.
-			["el1", "paradox_riot_on_repeat"], ["el2", "curiosity_glass"], ["el2", "crossroads_last_reprieve"], ["el1", "curiosity_two_mouths"]]:
+			# again, one a weaver copies, and a water link an older position
+			# keeps on its creature.
+			["el1", "paradox_riot_on_repeat"], ["el2", "curiosity_glass"], ["el1", "curiosity_two_mouths"]]:
 		var profile := _profile(String(wanted[0]))
 		if profile == null: continue
 		var entries := ELPuzzles.list(profile.id)

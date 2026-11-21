@@ -125,7 +125,7 @@ static func spell_tiers(state: ELAdventureSession, item: Dictionary) -> Array:
 		if index < 0 or index > 2: continue
 		for spell: Dictionary in ELXml.children(tier, "spell"):
 			var code := str(spell.get("text", "")).strip_edges()
-			if ELSpellInventory.is_spell(profile, code) and profile.table("CombatSpells")[code].get("Color") == color: tiers[index].append(code)
+			if ELSpellInventory.is_spell(profile, code) and profile.table("CombatSpells")[code].get("Color") == color and ELFirstSpellShop.on_sale(profile, code): tiers[index].append(code)
 	return tiers
 
 ## Picture index on the building-icon sheets, or -1.

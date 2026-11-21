@@ -107,6 +107,9 @@ var _fader_shaders: Dictionary = {}
 var _fader_layer: CanvasLayer
 ## Figure (instance id) -> its running animation emitter.
 var _figure_emitters: Dictionary = {}
+## The effect model and light the last _spawn_object / _spawn_light started.
+var _last_object: Dictionary = {}
+var _last_light: Dictionary = {}
 ## Figure animation particle files that exist ("model/clip" -> path or "").
 var _animation_files: Dictionary = {}
 var _arena: ELArena
@@ -513,28 +516,40 @@ func play(effect: String, bindings: Dictionary) -> int:
 	if entry.is_empty(): return 0
 	var count := 0
 	var tracks: Dictionary = entry.tracks
+	var carried := carries(String(entry.name))
 	for particle: Dictionary in entry.particles:
 		var track: PackedFloat32Array = tracks.get(particle.track, PackedFloat32Array())
 		var particle_span := not String(particle.begin).is_empty() and not String(particle.end).is_empty()
-		for where: Transform3D in _copies(entry, particle, bindings, particle_span):
+		var bearers := _bearers(particle, bindings) if carried else []
+		var copies := _copies(entry, particle, bindings, particle_span)
+		for at in copies.size():
+			var where := copies[at]
 			var emitter := _spawn(String(particle.file), bool(particle.reverse), int(entry.frames), where, null, false, particle_span)
 			if emitter.is_empty(): continue
 			count += 1
+			if at < bearers.size(): _carry(emitter, bearers[at], where)
 			if not track.is_empty(): _track_emitter(emitter, track)
 	for object: Dictionary in entry.objects:
 		var track: PackedFloat32Array = tracks.get(object.track, PackedFloat32Array())
 		if track.is_empty(): continue
-		for where: Transform3D in _copies(entry, object, bindings):
-			if _spawn_object(object, track, where): count += 1
+		var bearers := _bearers(object, bindings) if carried else []
+		var copies := _copies(entry, object, bindings)
+		for at in copies.size():
+			if not _spawn_object(object, track, copies[at]): continue
+			count += 1
+			if at < bearers.size(): _carry(_last_object, bearers[at], copies[at])
 	if lights_enabled:
 		var lights_started := false
 		for light: Dictionary in entry.lights:
 			var track: PackedFloat32Array = tracks.get(light.track, PackedFloat32Array())
 			if track.is_empty(): continue
-			for where: Transform3D in _copies(entry, light, bindings, true):
-				if _spawn_light(track, where):
+			var bearers := _bearers(light, bindings) if carried else []
+			var copies := _copies(entry, light, bindings, true)
+			for at in copies.size():
+				if _spawn_light(track, copies[at]):
 					count += 1
 					lights_started = true
+					if at < bearers.size(): _carry(_last_light, bearers[at], copies[at])
 		if lights_started: _sync_arena_secondary()
 	if lights_enabled and is_instance_valid(sun):
 		for light: Dictionary in entry.scene_lights:
@@ -558,6 +573,59 @@ static func _copies(entry: Dictionary, part: Dictionary, bindings: Dictionary, n
 	for a: Variant in starts:
 		for b: Variant in ends: result.append(placement(entry, begin, a, finish, b, native_span))
 	return result
+
+## Effects that stay where they started even on a figure that moves: deaths,
+## summons and the plane crossings (the figure arrives or leaves there),
+## Exile, and the strikes that land on the ground or fill an area around
+## the target (explosions, falling stones, storms, forests, stone rings).
+const STAY_PUT := ["BlackExile", "OutPlaneEntry", "OutPlaneExit", "OutplanarSummon", "FireballExpl",
+	"ColosusLeg", "Tremor", "GreenStoneRing", "RedRainOfStones", "RedComet", "RedCatstrophe", "RedSuperNova",
+	"RedFireWave", "BlueIceStorm", "GreenHurricane", "GreenAncientForest", "GreenDarkForest", "GreenDenceForest",
+	"GreenForceNature", "OuterBlast", "OuterRipple", "PlanarSeal", "EtherArena"]
+
+## Whether an effect's parts bound to one figure move with it. The original
+## places every spell effect once, from where its figures stand when it
+## starts (each target's place and turn are copied once, and the matrices
+## are built from them only then), so an enchantment cast
+## on a creature just before it ran out stayed behind at its old spot. The
+## remake carries the effects that belong on the figure (enchantments,
+## buffs and curses, ability and status cues, hits on its body) along with
+## it; those that mark the place stay. Two-point effects (bolts, streams,
+## drains) and effects bound to no figure always stay.
+static func carries(effect: String) -> bool:
+	if effect.ends_with("Death") or effect.ends_with("Summon") or effect.begins_with("Global"): return false
+	return not STAY_PUT.has(effect)
+
+## The figure each copy of a part bound to a single point belongs to, in the
+## order _copies gives them; empty for two-point and unbound parts.
+static func _bearers(part: Dictionary, bindings: Dictionary) -> Array:
+	var begin := String(part.begin)
+	var finish := String(part.end)
+	if begin.is_empty() == finish.is_empty(): return []
+	return _figures(bindings, finish if begin.is_empty() else begin)
+
+## A figure's place and turn, the frame a carried effect keeps its place in.
+static func _bearer_frame(figure: Node3D) -> Transform3D:
+	return Transform3D(figure.global_transform.basis.orthonormalized(), figure.global_position)
+
+## Makes a started part (emitter, effect model or light) move and turn with
+## `figure` from where it was placed.
+func _carry(item: Dictionary, figure: Node3D, where: Transform3D) -> void:
+	if item.is_empty() or not is_instance_valid(figure): return
+	item.bearer = figure
+	item.carry = _bearer_frame(figure).affine_inverse() * where
+
+## Where a carried part stands now, or null when it no longer moves: its
+## figure was freed or is hidden (a dying, exiled or departed figure leaves
+## the effect where it last stood).
+static func _carried_place(item: Dictionary) -> Variant:
+	var figure: Variant = item.get("bearer")
+	if figure == null: return null
+	if not is_instance_valid(figure):
+		item.bearer = null
+		return null
+	if not (figure as Node3D).is_visible_in_tree(): return null
+	return _bearer_frame(figure) * (item.carry as Transform3D)
 
 ## Figures bound to a point; "Finish" and "Target" share the target binding.
 static func _figures(bindings: Dictionary, point: String) -> Array:
@@ -676,6 +744,7 @@ func _spawn(path: String, reverse: bool, effect_frames: int, where: Transform3D,
 	emitter.reverse = reverse
 	emitter.follow = follow
 	emitter.following = follow != null
+	emitter.bearer = null
 	emitter.visibility_link = null
 	emitter.loop = false
 	emitter.life = file.frames
@@ -706,7 +775,7 @@ func _free_emitter(ambient: bool) -> Dictionary:
 	node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	node.visible = false
 	add_child(node)
-	var emitter := {"node": node, "mesh": mesh, "entry": {}, "elapsed": 0.0, "frame": -1, "life": 0, "reverse": false, "active": false, "follow": null, "following": false,
+	var emitter := {"node": node, "mesh": mesh, "entry": {}, "elapsed": 0.0, "frame": -1, "life": 0, "reverse": false, "active": false, "follow": null, "following": false, "bearer": null, "carry": Transform3D.IDENTITY,
 		"track": PackedFloat32Array(), "opacity": 1.0, "own": null, "glow": [], "shadow": ELParticleFile.shadow_twin(node, true)}
 	pool.append(emitter)
 	return emitter
@@ -715,6 +784,7 @@ func _release(emitter: Dictionary) -> void:
 	emitter.active = false
 	emitter.entry = {}
 	emitter.follow = null
+	emitter.bearer = null
 	emitter.visibility_link = null
 	emitter.following = false
 	emitter.track = PackedFloat32Array()
@@ -783,6 +853,8 @@ func _step_emitter(emitter: Dictionary, delta: float) -> void:
 	if not emitter.loop and frame >= int(emitter.life):
 		_release(emitter)
 		return
+	var carried: Variant = _carried_place(emitter)
+	if carried != null: emitter.node.transform = carried
 	if emitter.loop and emitter.entry.file.loop_end == 0: frame %= int(emitter.life)
 	if frame != int(emitter.frame):
 		if not emitter.track.is_empty(): _apply_emitter_track(emitter, frame)
@@ -840,6 +912,7 @@ func _spawn_object(object: Dictionary, track: PackedFloat32Array, where: Transfo
 		if not ambient: dropped += 1
 		return false
 	item.where = where
+	item.bearer = null
 	item.track = track
 	item.elapsed = 0.0
 	item.frame = -1
@@ -852,6 +925,7 @@ func _spawn_object(object: Dictionary, track: PackedFloat32Array, where: Transfo
 	model.play("cidle")
 	_apply_object(item, 0)
 	if ether_vent: _set_vent_glow(item)
+	_last_object = item
 	return true
 
 ## Cache common models and reuse spare entries before growing to the burst limit.
@@ -923,6 +997,12 @@ func _step_object(item: Dictionary, delta: float) -> void:
 			_hide(item)
 			return
 		frame %= int(item.life)
+	var carried: Variant = _carried_place(item)
+	if carried != null:
+		item.where = carried
+		if frame == int(item.frame):
+			var track: PackedFloat32Array = item.track
+			(item.node as Node3D).transform = item.where * _key_transform(track, clampi(frame, 0, track.size() / KEY - 1) * KEY)
 	if frame != int(item.frame): _apply_object(item, frame)
 
 func _apply_object(item: Dictionary, frame: int) -> void:
@@ -968,11 +1048,13 @@ func _spawn_light(track: PackedFloat32Array, where: Transform3D) -> bool:
 		item = {"node": node, "active": false, "elapsed": 0.0, "frame": -1, "life": 0, "where": Transform3D.IDENTITY, "track": PackedFloat32Array()}
 		lights.append(item)
 	item.where = where
+	item.bearer = null
 	item.track = track
 	item.elapsed = 0.0
 	item.life = track.size() / KEY
 	item.active = true
 	_apply_light(item, 0, false)
+	_last_light = item
 	return true
 
 func _step_light(item: Dictionary, delta: float) -> bool:
@@ -981,6 +1063,15 @@ func _step_light(item: Dictionary, delta: float) -> bool:
 	if frame >= int(item.life) or not lights_enabled:
 		_hide(item, false)
 		return true
+	var carried: Variant = _carried_place(item)
+	if carried != null and carried != item.where:
+		item.where = carried
+		# A carried light moves between its keys too (and its vertex light).
+		if frame == int(item.frame):
+			var track: PackedFloat32Array = item.track
+			var k := clampi(frame, 0, track.size() / KEY - 1) * KEY
+			(item.node as OmniLight3D).position = item.where * ELFigure.vector(Vector3(track[k], track[k + 1], track[k + 2]))
+			return true
 	if frame == int(item.frame): return false
 	_apply_light(item, frame, false)
 	return true

@@ -1,25 +1,25 @@
 {
-  "version": "0.21.0",
+  "version": "0.22.0",
   "languages": {
     "en": {
       "pages": 484,
       "catalog_pages": 433,
-      "links": 1245
+      "links": 1251
     },
     "ru": {
       "pages": 484,
       "catalog_pages": 433,
-      "links": 1245
+      "links": 1251
     }
   },
   "requires_game_files": false,
   "requires_account": false,
   "images": 539,
-  "translation_keys": 16,
+  "translation_keys": 17,
   "files": {
     "data/en/index.json": {
-      "bytes": 363706,
-      "sha256": "31982f6cd8bc4249050bab0c1d24ae2ed4e14b85c88293c040cd507c80bff613"
+      "bytes": 370416,
+      "sha256": "cabc1c2daa0e5b83e3ee847a066381d933b3fdba21c9d8c8eb775b62624e5004"
     },
     "data/en/pages/abilities.json": {
       "bytes": 2238,
@@ -1530,8 +1530,8 @@
       "sha256": "6f8f745dbf571d0f217c7ac1489e1251b45f7c343eda19f213367726e18d8f73"
     },
     "data/en/pages/cut-content-el1.json": {
-      "bytes": 14029,
-      "sha256": "b24a421bebe32fa2eba85ab6458fa4f3db2deb9f3c3ebb21b3ad6c5b72324c47"
+      "bytes": 14399,
+      "sha256": "95c190175dbcecab18dafbd8816b95576257a3282d87550ba26fe67e2eb7cf19"
     },
     "data/en/pages/cut-content-el2.json": {
       "bytes": 11337,
@@ -1546,8 +1546,8 @@
       "sha256": "29d7f69f3729513c118ad1df9bb8e225b4479e5c4cb394c320814229a8f4128c"
     },
     "data/en/pages/cut-mission-evil-dale.json": {
-      "bytes": 8539,
-      "sha256": "9f9b371d4252d34a1dc1594cacefa153594882f32a7a16f0e913a4269593dc74"
+      "bytes": 11239,
+      "sha256": "951ea3307f034a4281b620aba814901ff265d71544a7e1b043d2c0ec8a39c7d7"
     },
     "data/en/pages/cut-mission-first-strike.json": {
       "bytes": 1759,
@@ -1558,12 +1558,12 @@
       "sha256": "f9e313642576472e25a42cdbbb40a709332ce54e129053bf0858624586a39109"
     },
     "data/en/pages/cut-mission-savage-desert.json": {
-      "bytes": 1998,
-      "sha256": "98c6f38ac4860b0889d19de2fdb231788f84b6b17deb1785dae708779e18947b"
+      "bytes": 4111,
+      "sha256": "da0200135579fd7b1e0a7c2f9a550df40289fdb4984e66de4690f34abe6dbbbd"
     },
     "data/en/pages/cut-mission-snowflake-maze.json": {
-      "bytes": 3833,
-      "sha256": "a23a7d9b32e7ec179c71846f0a266e95c99e988d1bdf4c9c11437bc80d917173"
+      "bytes": 5697,
+      "sha256": "c6c750dfe30b57a0b35c5d79d28ee783440d3509e33a813e8e29f141278c5bd7"
     },
     "data/en/pages/cut-mission-synthets-menace.json": {
       "bytes": 1824,
@@ -1610,8 +1610,8 @@
       "sha256": "fa27e9aeb44b3b713d18f49127731a9a0f00b6096fb584405fc57c39bbceeec6"
     },
     "data/en/pages/options.json": {
-      "bytes": 15681,
-      "sha256": "bb9b2b073f2d604332647202ef10fc72afcdc8da5652ae8b4f9a5a7be7afd7de"
+      "bytes": 15994,
+      "sha256": "0b04841b530b8f07cab6b1b048fef734e2d7d6f7da50e596223a54ab44897c37"
     },
     "data/en/pages/pale.json": {
       "bytes": 4811,
@@ -1958,8 +1958,8 @@
       "sha256": "d18c0bf1a09af1788f0ca5427f86b6ecbb3cc60bc9a08d9da6d1b068de46ddaa"
     },
     "data/ru/index.json": {
-      "bytes": 641131,
-      "sha256": "b0a7fb505a87738a341e08599614878fe3f162d64db705f656716204bebcb71f"
+      "bytes": 652549,
+      "sha256": "2e3c6ae04900b2ee0b180d7735fb1f39297ff046150d32997ae4139bb78d3051"
     },
     "data/ru/pages/abilities.json": {
       "bytes": 3685,
@@ -3470,8 +3470,8 @@
       "sha256": "25c0f933fab4fad7450684b6d2b47eb0291bde73369edb1d97b370e9bcd69337"
     },
     "data/ru/pages/cut-content-el1.json": {
-      "bytes": 20547,
-      "sha256": "104da7c2428ac37ef839931ac40b61c127fbc9cc58282b96e557bd48454514cb"
+      "bytes": 21144,
+      "sha256": "85cf5e5d1a8592672c991a79b555f8aa3fd7403193e54fb6d29660ff55b0bb1a"
     },
     "data/ru/pages/cut-content-el2.json": {
       "bytes": 17329,
@@ -3486,8 +3486,8 @@
       "sha256": "78078f948dde8630be4484b1ffffb8fbdd5ed94520c340a4f1890c6418efb34d"
     },
     "data/ru/pages/cut-mission-evil-dale.json": {
-      "bytes": 10970,
-      "sha256": "cd4e843604afe7aa8b0ad4bd15ec6083de8ffe61a84e290f78ec9968141ac016"
+      "bytes": 15357,
+      "sha256": "400d745262ec8a06c6322d69e55793aac9a4834df892da934adea0fde03f0f06"
     },
     "data/ru/pages/cut-mission-first-strike.json": {
       "bytes": 2636,
@@ -3498,12 +3498,12 @@
       "sha256": "90c6ef11b0021ab0090577ece55a241a45f52d68fee4371383fa86daac11c833"
     },
     "data/ru/pages/cut-mission-savage-desert.json": {
-      "bytes": 2992,
-      "sha256": "ae36320cc72879a726953a5e22d01ce36c9be557db9badf106950f2f88072256"
+      "bytes": 6426,
+      "sha256": "1c7216c25743e6cc7f41fc65bcbf2abf43312c8a864c76ba03ab10b966d3f385"
     },
     "data/ru/pages/cut-mission-snowflake-maze.json": {
-      "bytes": 5082,
-      "sha256": "a3e5a01e6471685a39d6f97190bfe6085288a40e0c3d93bbbe66201a7104dcb4"
+      "bytes": 8148,
+      "sha256": "9f49318f0d4293c0df345e283372c054a5a0460e0c2ccb2a4fc0f615f250f703"
     },
     "data/ru/pages/cut-mission-synthets-menace.json": {
       "bytes": 2690,
@@ -3550,8 +3550,8 @@
       "sha256": "abe40e35df83e438e776b5c6c2df184570cd9bd1ca83a50f0a43de3f35c8a76e"
     },
     "data/ru/pages/options.json": {
-      "bytes": 27025,
-      "sha256": "3365d97c7ccc55fbe4510e024c3650a1b622c97f266bf7e0617997f77906597c"
+      "bytes": 27609,
+      "sha256": "2abc1075db972ada4561b3930875cd111b12a3d3b25bb722afb62bc43e524866"
     },
     "data/ru/pages/pale.json": {
       "bytes": 7741,
@@ -3898,8 +3898,8 @@
       "sha256": "838d61a3a9f77583762672b49490d1ddd71bda24d0ee738023127e375400f687"
     },
     "i18n.json": {
-      "bytes": 1917,
-      "sha256": "e8ea1273d286143f7291cab5976bdd0b546e07ee1661138bbd47c083514fa7c6"
+      "bytes": 2006,
+      "sha256": "8a90ff6a71c6b0f23212fde492ed11b49b187b02bf9fd56fd7a8050244b189e4"
     },
     "images/el1/hero-diamanda.webp": {
       "bytes": 27950,
@@ -6058,17 +6058,17 @@
       "sha256": "a20e8238923d70e0d188200c41ebc83afcb1187f9f9bb1b4ed46c6014613a40d"
     },
     "index.html": {
-      "bytes": 2445,
-      "sha256": "2eea4a2f80afcc102691067a8d876b7ac524df646bc2ad08962f6f27acbecdeb"
+      "bytes": 2554,
+      "sha256": "c88ed6aa0e5e553ff82c47dcd6ccc3ce807842dbcb549e7141671b589bad6baa"
     },
     "wiki.css": {
-      "bytes": 7971,
-      "sha256": "e7cb1dd66721a42650740aa216f84615f37e274869a5b3da051e765c79f12353"
+      "bytes": 7988,
+      "sha256": "21092a92e825646100a27e99856cd60d7ef6f243bca9293d88b96807fe68b83a"
     },
     "wiki.js": {
       "bytes": 8424,
       "sha256": "aabab5bcfce15545227916db3d8f7e6c353fbf93c2b073e25dec7262d79874ed"
     }
   },
-  "bytes": 13983966
+  "bytes": 14021737
 }

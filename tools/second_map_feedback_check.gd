@@ -13,6 +13,8 @@ extends SceneTree
 ## - scripted camera moves fly: every 64 ms the look-at point covers
 ##   0.25 x AutoScrollAcceleration of the way left; the "Instant" commands
 ##   jump. Mouse edge panning can interrupt a flight.
+## - #270: a monster leaving remembered fog fades in from transparent at the
+##   remembered brightness rather than as a black figure.
 ##
 ##   godot --headless --path game --script ../tools/second_map_feedback_check.gd
 ##
@@ -83,6 +85,7 @@ func _map_part() -> void:
 		await _change_effect_message(view, profile)
 		await _camera(view)
 		_pickup_transition(view)
+		_fog_fade_in(view)
 		_fog_region(view.world)
 		_actor_facing(view)
 		await _new_map_reports(view)
@@ -481,6 +484,54 @@ func _pickup_transition(view: ELAdventureView) -> void:
 	for id: int in picked_ids:
 		check(not world._retiring_pickups.has(id) and not world._fading.has(id) and not world._fog_presence.get(id, true),
 			"#218: a collected pile stays hidden when a second pickup overlaps its animation")
+
+## #270: a monster coming out of remembered fog fades in from transparent at
+## the remembered 0.3 brightness, its opacity and brightness rising at the
+## original's 150/255 a second, instead of standing there as a black figure.
+func _fog_fade_in(view: ELAdventureView) -> void:
+	var state := view.state
+	var world := view.world
+	var player := world.fog_player
+	var bit := 1 << player
+	ELFog.reveal_for_console(state, player, false)
+	var monster := {}
+	for item: Dictionary in state.objects.values():
+		if item.get("type") == "monster" and item.get("alive", true) and world.object_models.has(int(item.uid)): monster = item
+	if monster.is_empty():
+		check(false, "#270: the chapter has a monster figure")
+		ELFog.reveal_for_console(state, player, true)
+		return
+	var uid := int(monster.uid)
+	var model: ELModel = world.object_models[uid]
+	var at := int(monster.y) * state.map.width + int(monster.x)
+	var seen: PackedByteArray = state.fog.visible
+	var was := seen[at]
+	var known := state.explored[at]
+	seen[at] = was & ~bit
+	state.fog.visible = seen
+	state.explored[at] = known | bit
+	world.fog_object(monster)
+	check(not model.visible and is_equal_approx(float(world._fog_level[uid]), ELAdventureScene.FOG_DIM) and float(world._fog_alpha[uid]) == 0.0,
+		"#270: a monster in remembered fog is hidden and keeps the remembered brightness")
+	seen[at] = was | bit
+	state.fog.visible = seen
+	world.fog_object(monster)
+	world._fade_objects(0.5)
+	var step := ELAdventureScene.FOG_RATE / 255.0 * 0.5
+	var material: StandardMaterial3D = null
+	for part: MeshInstance3D in model.parts.values():
+		if material == null and part.has_meta("look_base"): material = part.material_override as StandardMaterial3D
+	check(model.visible and is_equal_approx(float(world._fog_alpha[uid]), step) and is_equal_approx(float(world._fog_level[uid]), ELAdventureScene.FOG_DIM + step)
+		and material != null and material.transparency == BaseMaterial3D.TRANSPARENCY_ALPHA and absf(material.albedo_color.a - step) < 0.04,
+		"#270: half a second after it comes into sight the monster is %.2f opaque at %.2f brightness (%.2f, %.2f)" % [step, ELAdventureScene.FOG_DIM + step, float(world._fog_alpha[uid]), float(world._fog_level[uid])])
+	world._fade_objects(2.0)
+	check(float(world._fog_alpha[uid]) == 1.0 and float(world._fog_level[uid]) == 1.0 and not world._fading.has(uid) and model.get_meta("look_alpha", 1.0) == 1.0,
+		"#270: the monster then shows fully, its look materials restored")
+	seen[at] = was
+	state.fog.visible = seen
+	state.explored[at] = known
+	ELFog.reveal_for_console(state, player, true)
+	world.sync_fog()
 
 func _fog_region(world: ELAdventureScene) -> void:
 	var tiles := world.fog_tiles()

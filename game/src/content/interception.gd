@@ -52,8 +52,13 @@ func rebuild(state: ELAdventureSession, grid: ELAdventureGrid) -> void:
 		cells.clear()
 		return
 	var ids := zones.keys()
+	# Zones keep their registration order; new guards follow in object order.
 	for id: int in state.objects:
-		if not ids.has(id) and (guards(state.object(id)) or spell_fort(state.object(id)) or not ELForts.garrison_of(state, state.object(id)).is_empty()): ids.append(id)
+		if zones.has(id): continue
+		var actor: Dictionary = state.objects[id]
+		# Only creatures, heroes and garrisons guard (scenery is most objects).
+		if actor.get("type") not in ["monster", "hero"] and not actor.get("fortified", false): continue
+		if guards(actor) or spell_fort(actor) or not ELForts.garrison_of(state, actor).is_empty(): ids.append(id)
 	zones.clear()
 	cells.clear()
 	for id: int in ids:

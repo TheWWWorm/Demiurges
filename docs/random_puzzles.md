@@ -1,4 +1,4 @@
-# Random tactical challenges, version 5
+# Random tactical challenges, version 6
 
 Open **Puzzles → Random challenge**, choose a difficulty, and select
 **Generate & play**. Both Etherlords I and Etherlords II are supported. The
@@ -31,7 +31,7 @@ Master never silently falls back to a one-turn challenge.
 ## Playing, information and sharing
 
 - Leave the input blank for a fresh challenge. Enter a positive integer or
-  paste a complete code such as `ELP5:el1:5:12345` to reproduce a specific one.
+  paste a complete code such as `ELP6:el1:5:12345` to reproduce a specific one.
 - A code includes the generator version, edition, difficulty and seed. Pasting
   a code selects its installed edition. Copying it is available during play
   and on the result screen.
@@ -58,7 +58,7 @@ supplies. Natural recovery, summoning sickness, graveyard order, retained
 wounds, enchantment decay and death effects all follow the actual game rules.
 
 Codes reproduce the position with the **same generator version and combat
-rules/card tables**. Version 5 uses `ELP5`. Earlier `ELP1`–`ELP4` codes are
+rules/card tables**. Version 6 uses `ELP6`. Earlier `ELP1`–`ELP5` codes are
 rejected with an explicit version message instead of producing a different
 position under the old code. Keep the corresponding older build to replay
 those codes. Future construction or acceptance changes must bump the version;
@@ -113,15 +113,19 @@ second game's aspect-toll puzzles require selecting two opposing creatures and
 understanding whose ether and health pay for their transitions.
 
 These additions are one-turn puzzles at Medium, Hard or Expert; they do not
-add a needless turn to qualify for Master. The existing five Master families
-retain their certified two-turn requirements and opposing choices.
+add a needless turn to qualify for Master. Three Master families retain their
+certified two-turn requirements and opposing choices. Version 6 withdrew
+The One Still Loyal (`control_fork`) and A Second Wind (`restless_horizon`)
+from Master: in all 72 of their codes among 180 sampled version 5 Master codes,
+the plain first turn described under admission check 6 below already kept a
+forced win. Their recipes remain at lower tiers.
 
 | Tier | Etherlords I families | Etherlords II families |
 | --- | --- | --- |
 | Medium | 11 | 11 |
 | Hard | 18 | 20 |
 | Expert | 19 | 21 |
-| Master | 5 | 5 |
+| Master | 3 | 3 |
 
 There are 23 registered families overall: 21 in Etherlords I and 23 in Etherlords II in the expanded recipe catalogue. Three new families focus on variable-cost spells, two-target compensation and sacrificial spell effects. Each new candidate still has to pass the generator’s exact adversarial proof and runtime replay gates.
 
@@ -186,12 +190,19 @@ Every delivered entry passes these independent gates:
 5. **An opponent choice at Master.** The certified strategy must contain an
    opponent decision with multiple retained legal continuations. This is a
    structural check, not a claim that every such choice is equally hard.
-6. **A meaningful mistake.** A plausible wrong target, resource allocation or
+6. **No obvious first turn at Master.** The original opponent's quick reading
+   (its Easy setting, 40 positions per decision, no clock, so a code still
+   yields one entry) plays the player's first attack phase. If that already
+   wins, or a completed proof shows the win is still forced from where it
+   leaves the position, the candidate is rejected (`naive_first_turn`). Version
+   5 admitted such positions in about three Master codes of five. An unknown
+   proof result does not reject.
+7. **A meaningful mistake.** A plausible wrong target, resource allocation or
    ordering must be legal, and a completed continuation proof must show that
    it loses the player's guarantee. Mistakes can include committing an early
    attack; the verifier retains the original turn deadline and never dictates
    a cooperative enemy reply. A recipe's assertion is not sufficient.
-7. **Runtime replay.** Both the recipe reference behind the hints and the
+8. **Runtime replay.** Both the recipe reference behind the hints and the
    solver's principal line must finish as solved through `ELPuzzles.Run` and
    its normal settled-action observer, without changing authored progress.
    Their player abilities must also be available in the ordinary battle

@@ -32,6 +32,7 @@ func _run() -> void:
 	_missing_content(profile)
 	_matrix(profile)
 	_reproducibility(profile)
+	_shore_decor(profile)
 	_option_effects(profile)
 	_persistence(profile)
 	_strategy(profile)
@@ -419,6 +420,43 @@ func _reproducibility(profile: ELProfile) -> void:
 	check(randf() == expected, "generation does not consume the game's global RNG")
 	print("PASS: deterministic recipes, varied seeds, isolated RNG")
 	completed.append("reproducibility")
+
+## Version 16's shore pieces: a list beside an otherwise unchanged version 15
+## map, repeatable, on water, clear of the harbor cells, and drawn by nothing
+## without the second game.
+func _shore_decor(profile: ELProfile) -> void:
+	label = "shore pieces"
+	for naval: bool in [true, false]:
+		var options := {"seed": "shore-pieces", "size": 96, "players": 4, "layout": "archipelago" if naval else "frontier", "naval": naval}
+		var previous := _generate(ELFirstRandomMap.new(), profile, options.merged({"version": 15}))
+		var current := _generate(ELFirstRandomMap.new(), profile, options.merged({"version": 16}))
+		var again := _generate(ELFirstRandomMap.new(), profile, options.merged({"version": 16}))
+		if previous == null or current == null or again == null: continue
+		check(not previous.has_meta("first_decor") and ELFirstShoreDecor.items(previous).is_empty(), "version 15 maps list no shore pieces")
+		var items := ELFirstShoreDecor.items(current)
+		check(JSON.stringify(items) == JSON.stringify(ELFirstShoreDecor.items(again)), "the shore pieces repeat for the same recipe")
+		check(previous.terrain == current.terrain and previous.relief == current.relief and JSON.stringify(previous.objects) == JSON.stringify(current.objects)
+			and JSON.stringify(previous.get_meta("first_naval", {})) == JSON.stringify(current.get_meta("first_naval", {})), "version 16 keeps version 15's terrain, objects and harbors")
+		var harbor_cells := {}
+		for port: Dictionary in current.get_meta("first_naval", {}).get("ports", []):
+			harbor_cells[Vector2i(int(port.land[0]), int(port.land[1]))] = true
+			harbor_cells[Vector2i(int(port.water[0]), int(port.water[1]))] = true
+		var kinds := {}
+		var placed := true
+		for item: Dictionary in items:
+			kinds[item.kind] = int(kinds.get(item.kind, 0)) + 1
+			var cell := Vector2i(floori(float(item.x)), floori(float(item.y)))
+			if not ELFirstShoreDecor.ROWS.has(item.name) or harbor_cells.has(cell): placed = false
+			if item.kind != "dock" and not ELFirstNaval.is_water(current, cell): placed = false
+		check(placed, "every piece is a known second-game row, on water and off the harbor cells")
+		check(int(kinds.get("wreck", 0)) > 0, "wrecks lie in the water of %s maps" % ("naval" if naval else "overland"))
+		check(naval == (int(kinds.get("dock", 0)) > 0) and (naval or not kinds.has("ship")), "quays and moored ships only on naval maps")
+		var decor := ELFirstShoreDecor.new()
+		check(ELFirstShoreDecor.source(null) == null and ELFirstShoreDecor.source(profile) == null and decor.build(current, null) == 0 and decor.docked.is_empty(),
+			"without the second game no shore piece is drawn and every harbor keeps its pier")
+		decor.free()
+	print("PASS: version 16 shore pieces are an independent, repeatable list")
+	completed.append("shore pieces")
 
 func _option_effects(profile: ELProfile) -> void:
 	label = "configuration effects"

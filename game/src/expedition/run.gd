@@ -1048,14 +1048,16 @@ func build_battle(fresh := false) -> ELDuel:
 		_fail("The expedition encounter has no usable opponent.")
 		return null
 	var hero := hero_details()
+	# The room's seed picks who moves first in its battle; a fresh restart
+	# (Try again, older runs only) flips that coin again.
 	var options := {"adventure": true, "players": [hero, opponent],
-		"arena": str(opponent.get("arena", "Green.001")), "first_side": int(room.seed) & 1}
+		"arena": str(opponent.get("arena", "Green.001")), "first_side": (randi() & 1) if fresh else (int(room.seed) & 1)}
 	if practiced(): options.opening_slots = _opening_slots()
 	for key: String in ["scripts", "script_variables", "script_difficulty"]:
 		if opponent.has(key): options[key] = opponent[key]
 	var duel := ELDuel.new()
-	# The room's seed sets the opponent and who moves first; the cards are
-	# drawn afresh each time the room's battle starts.
+	# The room's seed sets the opponent (and who moves first, above); the cards
+	# are drawn afresh each time the room's battle starts.
 	if not duel.start(profile, randi() & 0x7fffffff, options):
 		_fail(duel.error)
 		return null

@@ -114,7 +114,7 @@ func build(session: ELAdventureSession) -> bool:
 	monster_forecasts.clear()
 	monster_losses.clear()
 	grid = ELAdventureGrid.new()
-	if not grid.build(state.map, state.objects): return _fail(grid.error)
+	if not grid.build(state.map, state.objects, true): return _fail(grid.error)
 	state.grid = grid
 	state.interception = interception
 	# ExIsDesktopModalChild; the adventure view adds its own windows.

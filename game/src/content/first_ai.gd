@@ -79,11 +79,11 @@ static func forecast_objective(director: ELAdventureDirector, hero: Dictionary, 
 			var closed := close_guards(director, hero, int(item.uid))
 			var route := director.grid.approach(from, item)
 			if route.is_empty() and not closed.is_empty():
-				for tile: Vector2i in closed: director.grid._update_cell(tile)
+				director.grid.reopen(closed)
 				closed.clear()
 				route = director.grid.approach(from, item)
 			route = ELStrategy.screen_monster_route(director, hero, route, item, at, closed, budget)
-			for tile: Vector2i in closed: director.grid._update_cell(tile)
+			director.grid.reopen(closed)
 			if route.is_empty(): return false
 			for tile: Vector2i in route.slice(1):
 				# A different guard can intercept earlier on the same route.
@@ -135,6 +135,8 @@ static func _last_active_hero(director: ELAdventureDirector, owner: int) -> bool
 static var _active_heroes: Variant = null
 
 static func can_attack_monster(director: ELAdventureDirector, hero: Dictionary, monster: Dictionary, guard_first: bool, at: Vector2i, budget: Dictionary = {}) -> bool:
+	# A restored mission's goal creature is the human players' to defeat.
+	if ELRestoredMissions.reserved(director.state, monster) and not director.is_strategy_human(int(hero.get("owner", 0))): return false
 	if not plays_monster_duel(director, hero, monster): return true
 	var state := director.state
 	var retry: Dictionary = state.players[int(hero.owner)].get("ai", {}).get("retry", {})
@@ -494,7 +496,7 @@ static func plan_player(director: ELAdventureDirector, player: int, daily := tru
 	_guard_cells = null
 	_active_heroes = null
 	lap = _lap(director, "command", lap)
-	for point: Vector2i in closed: director.grid._update_cell(point)
+	director.grid.reopen(closed)
 	ai.assigned = []
 	for id: int in assigned: ai.assigned.append([id, assigned[id]])
 	# The open objectives, for the next pass's checks and the simulator.
@@ -620,21 +622,26 @@ static func _close_unexplored(director: ELAdventureDirector, player: int) -> Arr
 	var size := state.map.width * state.map.height
 	if not ELFog.active(state, player) or state.explored.size() != size: return closed
 	var mask := ELFog.bit(player)
+	var explored := state.explored
+	var land := director.grid.land
+	var width := state.map.width
 	for index in size:
-		if state.explored[index] & mask != 0: continue
-		var point := Vector2i(index % state.map.width, index / state.map.width)
-		if director.grid.land.is_point_solid(point): continue
-		director.grid.land.set_point_solid(point, true)
+		if explored[index] & mask != 0: continue
+		var point := Vector2i(index % width, index / width)
+		if land.is_point_solid(point): continue
+		land.set_point_solid(point, true)
 		closed.append(point)
 	return closed
 
 static func heroes_of(state: ELAdventureSession, player: int) -> Array[Dictionary]:
-	var result: Array[Dictionary] = []
-	var ids: Array = state.objects.keys()
+	# In id order; the few matches are sorted rather than every object's id.
+	var ids: Array = []
+	for id: int in state.objects:
+		var item: Dictionary = state.objects[id]
+		if item.type == "hero" and int(item.owner) == player and item.alive and item.visible and item.get("placed", true): ids.append(id)
 	ids.sort()
-	for id: int in ids:
-		var item := state.object(id)
-		if item.type == "hero" and int(item.owner) == player and item.alive and item.visible and item.get("placed", true): result.append(item)
+	var result: Array[Dictionary] = []
+	for id: int in ids: result.append(state.objects[id])
 	return result
 
 ## The original's objective list: neutral creatures nearest the castle
@@ -645,25 +652,27 @@ static func candidates(state: ELAdventureSession, player: int) -> Array:
 	var ids: Array = state.objects.keys()
 	ids.sort()
 	var monsters: Array[Dictionary] = []
-	var tasks: Array = []
+	# One pass over the objects in id order, one list per kind, joined in the
+	# order above.
+	var sites := {"mines": [], "resource_cuts": [], "mana_nodes": []}
+	var towers: Array = []
+	var buildings: Array = []
 	for id: int in ids:
-		var item := state.object(id)
+		var item: Dictionary = state.objects[id]
 		if item.type == "monster" and int(item.owner) <= 0 and usable(item): monsters.append(item)
-	monsters.sort_custom(func(a: Dictionary, b: Dictionary): return _distance(home, a) < _distance(home, b))
-	for item: Dictionary in monsters: tasks.append({"kind": "monster", "target": item.uid})
-	for group: String in ["mines", "resource_cuts", "mana_nodes"]:
-		for id: int in ids:
-			var item := state.object(id)
-			if item.get("group") == group and usable(item): tasks.append({"kind": {"mines": "mine", "resource_cuts": "cut", "mana_nodes": "node"}[group], "target": id})
-	for id: int in ids:
-		var item := state.object(id)
-		if ELFirstScenario.is_castle(item) and int(item.owner) >= 1 and int(item.owner) != player and item.get("placed", true): tasks.append({"kind": "tower", "target": id})
-	for id: int in ids:
-		var item := state.object(id)
-		if item.get("group") == "additional_buildings" and usable(item) and not SKIPPED_BUILDINGS.has(item.get("name")) and ELAdditionalBuildings.supported(item):
+		var group: Variant = item.get("group")
+		if sites.has(group) and usable(item): sites[group].append({"kind": {"mines": "mine", "resource_cuts": "cut", "mana_nodes": "node"}[group], "target": id})
+		if ELFirstScenario.is_castle(item) and int(item.owner) >= 1 and int(item.owner) != player and item.get("placed", true): towers.append({"kind": "tower", "target": id})
+		if group == "additional_buildings" and usable(item) and not SKIPPED_BUILDINGS.has(item.get("name")) and ELAdditionalBuildings.supported(item):
 			var task := {"kind": "building", "target": id}
 			if ELAdditionalBuildings.VISITED.has(str(item.name)): task.personal = true
-			tasks.append(task)
+			buildings.append(task)
+	monsters.sort_custom(func(a: Dictionary, b: Dictionary): return _distance(home, a) < _distance(home, b))
+	var tasks: Array = []
+	for item: Dictionary in monsters: tasks.append({"kind": "monster", "target": item.uid})
+	for group: String in ["mines", "resource_cuts", "mana_nodes"]: tasks.append_array(sites[group])
+	tasks.append_array(towers)
+	tasks.append_array(buildings)
 	return tasks
 
 ## This pass's open objectives, rebuilt from the world each time so that
@@ -696,17 +705,20 @@ static func objectives(director: ELAdventureDirector, player: int) -> Array:
 		for tile: Vector2i in frontier(director, player): kept.append({"kind": "explore", "target": -1, "tile": [tile.x, tile.y]})
 	var ids: Array = state.objects.keys()
 	ids.sort()
+	# One pass over the objects: enemy heroes now, shops and pickups after
+	# the scouting and escort objectives.
+	var places: Array = []
 	for id: int in ids:
-		var item := state.object(id)
+		var item: Dictionary = state.objects[id]
 		if item.type == "hero" and int(item.owner) >= 1 and int(item.owner) != player and item.alive and observed(state, player, item): kept.append({"kind": "hero", "target": id})
+		if not smart: continue
+		if ELFirstAIEconomy.is_shop(item) and ELFog.explored(state, player, Vector2i(item.x, item.y)): places.append({"kind": "shop", "target": id})
+		# Artifacts and global-spell scrolls the player has seen.
+		elif ELMapPickups.is_pickup(item) and usable(item) and ELFog.explored(state, player, Vector2i(item.x, item.y)): places.append({"kind": "pickup", "target": id})
 	if smart:
 		kept.append_array(ELFirstAIPlanner.scouting(director, player))
 		if ELFirstAIPlanner.living(director): kept.append_array(ELFirstAIPlanner.escorts(director, player))
-		for id: int in ids:
-			var item := state.object(id)
-			if ELFirstAIEconomy.is_shop(item) and ELFog.explored(state, player, Vector2i(item.x, item.y)): kept.append({"kind": "shop", "target": id})
-			# Artifacts and global-spell scrolls the player has seen.
-			elif ELMapPickups.is_pickup(item) and usable(item) and ELFog.explored(state, player, Vector2i(item.x, item.y)): kept.append({"kind": "pickup", "target": id})
+		kept.append_array(places)
 	return kept
 
 ## An enemy hero is a target only while the player sees it: its authored
@@ -937,7 +949,7 @@ static func _route_cost(director: ELAdventureDirector, hero: Dictionary, item: D
 			path = grid.path(from, point)
 			if not path.is_empty(): break
 	if path.is_empty(): path = grid.approach(from, item)
-	for point: Vector2i in closed: grid._update_cell(point)
+	grid.reopen(closed)
 	last_path = path
 	return NONE if path.is_empty() else grid.path_cost(path)
 
@@ -945,7 +957,7 @@ static func _route_cost(director: ELAdventureDirector, hero: Dictionary, item: D
 static var last_path: Array[Vector2i] = []
 
 ## Close hostile guard cells other than the destination guard and the hero's
-## tile. Reopen the returned cells with grid._update_cell.
+## tile. Reopen the returned cells with grid.reopen.
 static func close_guards(director: ELAdventureDirector, hero: Dictionary, target: int) -> Array[Vector2i]:
 	var grid := director.grid
 	var from := Vector2i(hero.x, hero.y)
@@ -965,9 +977,19 @@ static func _hostile_cells(director: ELAdventureDirector, hero: Dictionary) -> A
 	var key := "%d:%d" % [int(hero.get("uid", -1)), int(hero.get("owner", -1))]
 	if _guard_cells is Dictionary and _guard_cells.has(key): return _guard_cells[key]
 	var result: Array = []
+	# ELInterception.enemies for every cell, each guard's hostility read once.
+	var state := director.state
+	var hostile := {}
 	for point: Vector2i in director.interception.cells:
 		if not director.grid.contains(point): continue
-		var guards := director.interception.enemies(director.state, hero, point)
+		var tile: Dictionary = director.interception.cells[point]
+		var primary := int(tile.primary)
+		if not hostile.has(primary): hostile[primary] = ELInterception.hostile(state, state.object(primary), hero)
+		if not hostile[primary]: continue
+		var guards: Array[int] = []
+		for id: int in tile.guards:
+			if not hostile.has(id): hostile[id] = ELInterception.hostile(state, state.object(id), hero)
+			if hostile[id]: guards.append(id)
 		if not guards.is_empty(): result.append([point, guards])
 	if _guard_cells is Dictionary: _guard_cells[key] = result
 	return result
@@ -1080,6 +1102,9 @@ const MISSION23_HUNTERS := ["Griselda", "Lienhart"]
 
 static func scripts(director: ELAdventureDirector) -> void:
 	var state := director.state
+	if ELRestoredMissions.is_dale(state):
+		_dale_scripts(director)
+		return
 	var id := state.map.id
 	if not id.contains("mission13") and not id.contains("mission23"): return
 	var ids: Array = state.objects.keys()
@@ -1121,6 +1146,35 @@ static func scripts(director: ELAdventureDirector) -> void:
 		# Gamma-400's route is cut to its first step: it creeps one tile a day.
 		if name.contains("Gamma-400"): _walk(director, hero, MISSION23_TARGETS["Gamma-400"], true)
 		if name.contains("Delta-500"): _walk(director, hero, MISSION23_TARGETS["Delta-500"])
+
+## Evil Dale, as the original program moves its two rivals. Glazzz attacks
+## the Chosen One within his sight less three tiles, and otherwise walks his
+## loop; Warp attacks him within sight and otherwise holds his place. The
+## other rivals and every creature stay where they are.
+static func _dale_scripts(director: ELAdventureDirector) -> void:
+	var state := director.state
+	var chosen := ELRestoredMissions.chosen_one(state)
+	var ids: Array = state.objects.keys()
+	ids.sort()
+	for uid: int in ids:
+		var hero := state.object(uid)
+		if hero.type != "hero" or int(hero.owner) > 0 or not hero.alive or not hero.visible or not hero.get("placed", true): continue
+		var name := str(hero.name)
+		if name not in [ELRestoredMissions.PATROLLER, ELRestoredMissions.WARDEN]: continue
+		hero.strategy_order = {}
+		var at := Vector2i(hero.x, hero.y)
+		if not chosen.is_empty():
+			var reach := float(ELFog.sight_radius(hero)) - (3.0 if name == ELRestoredMissions.PATROLLER else 0.0)
+			if Vector2(at).distance_to(Vector2(chosen.x, chosen.y)) < reach and _route_cost(director, hero, chosen, false) != NONE:
+				hero.strategy_order = {"destination": [int(chosen.x), int(chosen.y)], "use": int(chosen.uid)}
+				continue
+		if name != ELRestoredMissions.PATROLLER: continue
+		var loop := ELRestoredMissions.PATROL
+		var leg := int(state.scenario.get("patrol", 0))
+		for index in loop.size():
+			if absi(at.x - loop[index].x) < 2 and absi(at.y - loop[index].y) < 2: leg = index
+		state.scenario.patrol = leg
+		_walk(director, hero, loop[(leg + 1) % loop.size()])
 
 static func _walk(director: ELAdventureDirector, hero: Dictionary, point: Vector2i, one_step := false) -> void:
 	var path := director.grid.path(Vector2i(hero.x, hero.y), point)

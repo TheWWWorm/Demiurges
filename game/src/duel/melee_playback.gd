@@ -19,9 +19,11 @@ extends Node
 ##   off at once; an attacker walks home after its last blow and the next
 ##   attacker sets off at the same moment. The battle goes on once everyone
 ##   is home and has lain down to rest (or got up).
-## - Space (skip_exchange) ends the remaining attacks at once: their blows
-##   land together, hits and deaths still heard, and everyone is home (and
-##   lying down to rest) at once; what follows the attacks plays as usual.
+## - Space (skip_exchange) ends the current attacker's exchange at once: its
+##   remaining blows land together, hits and deaths still heard; it then walks
+##   home as usual while the next attacker sets off (both originals). Space
+##   during the last walk home puts everyone home (lying down to rest) at
+##   once; what follows the attacks plays as usual.
 ##
 ## Moves use the clip found by its original code (Run, else Walk) at twice the
 ## clip's recorded speed (2.0 without one), the clip at its native 30 fps; the
@@ -81,10 +83,14 @@ var _attacker_rest := {}
 ## The stance at the end of each exchange can be shown at home even when a
 ## timed effect still holds the full board stamp. Later stamps take over.
 var _resolved_rest := {}
-## Space asks to skip the rest of the attacks; once taken, every remaining
-## blow is shown at once (their hit sounds and deaths still play).
+## Space asks to skip an exchange: taken by the next blow's attacker (before
+## the first blow), or by everyone still walking home (after the last one).
 var _skip_requested := false
-var _skipping := false
+## The attacker whose exchange is skipped: its remaining blows land at once
+## (their hit sounds and deaths still play). -1 when none.
+var _skip_attacker := -1
+## The attacker whose blows are being played.
+var _current_attacker := -1
 ## The blows are still being played (not yet the final walk home).
 var _in_blows := false
 ## The figures are walking home after the last blow.
@@ -193,23 +199,30 @@ func moving(id: int) -> bool:
 func has_moves() -> bool:
 	return not _moves.is_empty()
 
-## Space during the attacks: every remaining attacker's blows land at once
-## (their hit sounds and deaths still play) and all figures are home at once,
-## resting ones already lying down. What follows the attacks (deaths after
-## them, the next phase) plays as usual. False once the figures are home (the
-## caller finishes the playback then).
+## Space during the attacks: the current attacker's remaining blows land at
+## once (their hit sounds and deaths still play); it walks home while the next
+## attacker sets off as usual, so each press skips one attacker. During the
+## final walk home all figures are home at once, resting ones already lying
+## down. What follows the attacks (deaths after them, the next phase) plays as
+## usual. False once the figures are home (the caller finishes the playback
+## then).
 func skip_exchange() -> bool:
 	if not _capturing and not _in_blows and not _homing: return false
-	_skip_requested = true
+	if _in_blows and _current_attacker >= 0: _skip_attacker = _current_attacker
+	else: _skip_requested = true
 	if _timer != null: _timer.time_left = 0.0
 	return true
 
-## Takes a pending skip: from now on the blows land at once.
-func _take_skip() -> bool:
+## Whether `attacker`'s blows land at once: a pending skip is taken by it.
+func _take_skip(attacker: int) -> bool:
 	if _skip_requested:
 		_skip_requested = false
-		_skipping = true
-	return _skipping
+		_skip_attacker = attacker
+	return _skip_attacker >= 0 and _skip_attacker == attacker
+
+## A skip is waiting to be taken or holds for the current attacker.
+func _skip_pending() -> bool:
+	return _skip_requested or (_skip_attacker >= 0 and _skip_attacker == _current_attacker)
 
 ## Everyone out on the field is home at once; a resting figure is already
 ## lying down (no tap clip).
@@ -292,7 +305,8 @@ func finish() -> void:
 
 func _reset_skip() -> void:
 	_skip_requested = false
-	_skipping = false
+	_skip_attacker = -1
+	_current_attacker = -1
 	_in_blows = false
 	_homing = false
 
@@ -367,7 +381,8 @@ func _play(serial: int) -> void:
 		var from := int(strike.from)
 		var to := int(strike.to)
 		var pair := _pair(strike)
-		if _take_skip():
+		_current_attacker = pair.x
+		if _take_skip(pair.x):
 			# Skipped before it set off: no approach and no attack clip.
 			if engaged.get(pair.x, -1) != pair.y:
 				if engaged.has(pair.x) and engaged[pair.x] >= 2: _go_home(int(engaged[pair.x]), true, strike)
@@ -394,7 +409,7 @@ func _play(serial: int) -> void:
 			if not await _moved([pair.x, pair.y], serial): return
 			_face(pair.x, pair.y)
 			_face(pair.y, pair.x)
-		if _take_skip():
+		if _take_skip(pair.x):
 			# A skipped blow lands at once. Its material hit (the attacker's
 			# own attack sound for a figure without one) is still heard once
 			# per pair, as are any deaths it causes.
@@ -444,6 +459,8 @@ func _play(serial: int) -> void:
 			_go_home(pair.y, true, strike)
 			engaged[pair.x] = -1
 	_in_blows = false
+	_current_attacker = -1
+	_skip_attacker = -1
 	# After the last blow (or a hero's death, which stops the combat) every
 	# living figure still out on the field goes home: unhurt ones run.
 	for id: int in view.models.keys():
@@ -454,8 +471,8 @@ func _play(serial: int) -> void:
 	_homing = true
 	if not await _moved(_moves.keys(), serial): return
 	_homing = false
-	if _take_skip(): _snap_home()
-	_skipping = false
+	if _skip_requested: _snap_home()
+	_skip_requested = false
 	# A figure home again lies down (or gets up) before the turn goes on: the
 	# next phase never cuts its tap clip short.
 	if not await _settled(serial): return
@@ -723,7 +740,7 @@ func _arrive(id: int) -> void:
 
 ## Waits for the figures' moves; a skip of the exchange ends the wait.
 func _moved(ids: Array, serial: int) -> bool:
-	while serial == _serial and is_inside_tree() and not ((_in_blows or _homing) and (_skip_requested or _skipping)) and ids.any(func(id: Variant) -> bool: return _moves.has(int(id))):
+	while serial == _serial and is_inside_tree() and not ((_in_blows or _homing) and _skip_pending()) and ids.any(func(id: Variant) -> bool: return _moves.has(int(id))):
 		await get_tree().process_frame
 	return serial == _serial
 
@@ -731,7 +748,7 @@ func _moved(ids: Array, serial: int) -> bool:
 ## at the same point of the frame as the timed effect cues they go with; a
 ## skip of the exchange runs the timer out at once (skip_exchange).
 func _wait(seconds: float, serial: int) -> bool:
-	if seconds > 0.0 and is_inside_tree() and not _skip_requested:
+	if seconds > 0.0 and is_inside_tree() and not _skip_pending():
 		_timer = get_tree().create_timer(seconds, false)
 		await _timer.timeout
 		_timer = null

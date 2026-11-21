@@ -827,7 +827,9 @@ func _ability_lethal(id: int) -> void:
 func _lethal(id: int) -> void:
 	if not creatures.has(id): return
 	if profile.id == "el2" and pale(id) and not in_plane(id) and creatures[id].toughness > 0 and plane_change(id, true, false, true):
-		if creatures.has(id): _emit({"kind": "dissipate", "target": id})
+		if creatures.has(id):
+			_emit({"kind": "dissipate", "target": id})
+			_return_dissipated(id)
 	else: _kill(id)
 
 func find_enchantment(enchantment_id: int) -> int:
@@ -3736,7 +3738,10 @@ func _resolve_strike(source: int, target: int, amount: int, poisoned: Array[int]
 	if card == "FREL" and creatures.has(target) and (not second_rules(card) or amount > 0): _mark(target, "FREL", 0, 0, {"fixed": true})
 	# Second-game snake venom lowers health before the lethal check, so a creature it reduces to
 	# nothing cannot regenerate.
-	var venom_first := card == "LASN" and second_rules(card) and creatures.has(target)
+	# A hit that Lifeguard negates leaves no venom either: the guarded creature keeps its stats
+	# (EL2, #269).
+	var guarded: bool = card == "LASN" and creatures.has(target) and creatures[target].enchantments.any(func(e: Dictionary) -> bool: return e.card == "LFGR")
+	var venom_first: bool = card == "LASN" and second_rules(card) and creatures.has(target) and not guarded
 	if venom_first:
 		_combat_effect("Venom", source, target)
 		_mark(target, "LASN", -1, -1, {"fixed": true, "lethal": true})
@@ -3754,7 +3759,7 @@ func _resolve_strike(source: int, target: int, amount: int, poisoned: Array[int]
 	if card in ELCatalog.MECHOS and creatures.has(target) and race(target) != "Wall" and not poisoned.has(target): poisoned.append(target)
 	# The hellfire wall's whirl destroys flyers it damages, like poison.
 	if card == "WLIF" and flyer and creatures.has(target) and not poisoned.has(target): poisoned.append(target)
-	if card == "LASN" and not venom_first and creatures.has(target):
+	if card == "LASN" and not venom_first and not guarded and creatures.has(target):
 		_mark(target, "LASN", -1, -1, {"fixed": true, "lethal": true})
 		if creatures[target].damage >= creatures[target].toughness: _ability_lethal(target)
 	var robbed := 0
@@ -3881,9 +3886,19 @@ func _damage(target: int, amount: int, combat := false, no_regeneration := false
 		if creatures.has(target):
 			victim.resting = true
 			_emit({"kind": "dissipate", "target": target})
+			_return_dissipated(target)
 	else:
 		_kill(target)
 	return amount
+
+## A stolen creature that dissipates goes back to its original owner unless that army is
+## full (as a dispelled control enchantment, `dispellable`). The control enchantment stays
+## attached, inert in the plane like other coloured ones (#267).
+func _return_dissipated(id: int) -> void:
+	if not creatures.has(id) or not creatures[id].has("origin") or army(origin(id)).size() >= 10: return
+	if not creatures[id].enchantments.any(func(e: Dictionary) -> bool: return e.card in ELCatalog.CONTROL): return
+	_move_army(creatures[id], origin(id))
+	_refresh_armies()
 
 ## Lifeguard negates one damage instance, then that enchantment goes.
 func _lifeguard(target: int) -> bool:

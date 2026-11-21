@@ -163,7 +163,9 @@ static func campaign_info(profile: ELProfile, campaign_id: String) -> Dictionary
 
 ## Title shown in the last column: the campaign name or the map title whose GUID matches.
 static func title(profile: ELProfile, kind: String, guid: String) -> String:
-	if profile.id == "el1" and kind == "scenario" and ELFirstRandomMap.is_random_id(guid): return ELRemakeText.t("Random map", profile)
+	if profile.id == "el1" and kind == "scenario" and ELFirstRandomMap.is_random_id(guid):
+		var restored := ELRestoredMissions.scenario_of_id(guid)
+		return ELRestoredMissions.title(profile, restored) if not restored.is_empty() else ELRemakeText.t("Random map", profile)
 	if kind == "duel":
 		if guid.is_empty(): return ELRemakeText.t("Random arena", profile)
 		return profile.text(str(profile.table("ScenesNames").get(guid, {}).get("ELKName", guid)))

@@ -107,7 +107,7 @@ static func order_path(director: ELAdventureDirector, actor: Dictionary, forecas
 	var path := director.grid.approach(from, target) if not target.is_empty() else director.grid.path(from, destination)
 	if not rules.is_empty() and ELFirstAIEconomy.applies(director) and not director.is_strategy_human(int(actor.owner)):
 		path = screen_monster_route(director, actor, path, target, destination, closed, {"remaining": 3} if forecast_budget.is_empty() else forecast_budget)
-	for point: Vector2i in closed: director.grid._update_cell(point)
+	director.grid.reopen(closed)
 	return path
 
 ## Eliminate the rejected terrain from a guard zone, then search the
@@ -150,9 +150,11 @@ static func _close_unknown(director: ELAdventureDirector, player: int) -> Array[
 	if player < 1 or not ELFog.active(state, player) or state.explored.size() != size: return closed
 	var mask := ELFog.bit(player)
 	var land := director.grid.land
+	var explored := state.explored
+	var width := state.map.width
 	for index in size:
-		if state.explored[index] & mask != 0: continue
-		var point := Vector2i(index % state.map.width, index / state.map.width)
+		if explored[index] & mask != 0: continue
+		var point := Vector2i(index % width, index / width)
 		if land.is_point_solid(point): continue
 		land.set_point_solid(point, true)
 		closed.append(point)

@@ -110,9 +110,9 @@ static func refresh(state: ELAdventureSession, reuse_sources := false) -> void:
 				if masks[player] & bit(owner): mask |= masks[player]
 			reach[owner] = mask
 		masks = reach
-	var sources: Array = state.objects.values() if not el2 else _second_sources(state, reuse_sources)
-	for id_or_item: Variant in sources:
-		var item: Dictionary = state.object(id_or_item) if el2 else id_or_item
+	var sources: Array = _first_sources(state, reuse_sources) if not el2 else _second_sources(state, reuse_sources)
+	for id: Variant in sources:
+		var item: Dictionary = state.object(id)
 		var mask: int = masks.get(int(item.get("owner", -1)), 0)
 		if mask == 0 or not item.get("alive", false): continue
 		if source(state, item):
@@ -151,6 +151,20 @@ static func refresh(state: ELAdventureSession, reuse_sources := false) -> void:
 	var changed: bool = previous != seen or before != state.explored
 	state.fog.visible = seen
 	state.fog.revision = int(state.fog.get("revision", 0)) + (1 if changed else 0)
+
+## First game: the objects that can give sight (heroes, castles, mines; an
+## object's kind never changes), in object order. A step reuses the list of
+## the last refresh while no object has been added; any other refresh lists
+## them again. Owners, places and states are read live in refresh. Ids are
+## kept: an object's dictionary can be replaced.
+static func _first_sources(state: ELAdventureSession, reuse_sources: bool) -> Array:
+	var cached: Variant = state.get_meta("fog_first_sources", [])
+	if reuse_sources and cached.size() == 2 and int(cached[0]) == state.objects.size(): return cached[1]
+	var sources: Array = []
+	for item: Dictionary in state.objects.values():
+		if source(state, item) or ELFirstScenario.is_castle(item) or item.get("group") == "mines": sources.append(item.uid)
+	state.set_meta("fog_first_sources", [state.objects.size(), sources])
+	return sources
 
 ## Movement and day rollover can reuse the candidate lists. Read each
 ## candidate's live owner, position and state when composing the masks.

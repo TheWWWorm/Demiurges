@@ -80,7 +80,8 @@ extends RefCounted
 ## "frame_generation" (the FSR version follows the GPU).
 ## Version 6: the upscaler and its quality are separate choices again
 ## ("upscaler", "upscale_quality"); version 5 kept them in one "upscaling".
-const SETTINGS_VERSION := 6
+## (ELRendererChoice reads the renderer choices of this format at start-up.)
+const SETTINGS_VERSION := ELRendererChoice.SETTINGS_VERSION
 ## The "duel_ai" and "world_ai" choices: caption, then what it does.
 const DUEL_AI_LEVELS := [
 	["Easy", "The original computer opponent, thinking less: it settles on its first idea for each move."],
@@ -90,7 +91,7 @@ const WORLD_AI_LEVELS := [
 	["Original", "Computer players on the map act as in the original game."],
 	["Smarter", "Computer heroes choose skills, buy spells and runes, and cast global spells."],
 	["Living world", "Smarter, and idle computer heroes patrol their lands, raid weakly held sites, escort a weaker hero to a siege and go back for runes; each computer player keeps its own temperament."]]
-const SHARED := {"ambience": 0.55, "shadows": true, "soft_shadows": false, "contact_shading": false, "weather": true, "helper_overlay": false, "antialiasing": -1, "sharpening": 0, "terrain_detail": false, "enhanced_water": false, "bloom": false, "soft_particles": false, "spell_light": true, "discord_activity": true, "renderer": 0, "path_tracing": false, "sky_light": 1.0, "light_bounces": 2, "show_fps": false, "hardware_check": 0, "free_movement": true, "duel_ai": 2, "world_ai": 1, "battle_estimate": false, "cast_icons": true, "first_battle_dome": true, "second_balance": false,
+const SHARED := {"ambience": 0.55, "shadows": true, "soft_shadows": false, "contact_shading": false, "weather": true, "helper_overlay": false, "antialiasing": -1, "sharpening": 0, "terrain_detail": false, "enhanced_water": false, "bloom": false, "soft_particles": false, "spell_light": true, "discord_activity": true, "renderer": 0, "path_tracing": false, "sky_light": 1.0, "light_bounces": 2, "show_fps": false, "hardware_check": 0, "free_movement": true, "duel_ai": 2, "world_ai": 1, "battle_estimate": false, "cast_icons": true, "first_battle_dome": true, "first_shore_objects": true, "second_balance": false,
 	"window_mode": 1, "window_width": 0, "window_height": 0, "frame_rate": 0,
 	"upscaler": 0, "upscale_quality": 1, "frame_generation": false, "ray_reconstruction": false, "battle_interface": 0, "battle_gap": 0, "battle_gap_2": 2, "battle_gap_3": 1, "battle_readouts": true, "camera_drag_lock": false,
 	"sharper_icons": true, "sharper_interface": true, "sharper_textures": false, "sharper_declined": "", "sharper_startup_all": false}

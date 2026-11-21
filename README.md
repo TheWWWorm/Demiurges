@@ -8,6 +8,17 @@ Play **Etherlords** («Демиурги», Nival, 2001) and **Etherlords II** (�
 
 Demiurges is a fan-made Godot engine for the two games. It loads their campaigns, maps, creatures, spells, art, music, and dialogue from your own game files. The GOG editions are tested. Install either game or both and switch between them from the main menu.
 
+## Screenshots
+
+Captured in the engine at 3840×2160 with path tracing, sharper icons, interface art and 3D textures, from the Russian editions of the games.
+
+![A Kinet hero on a unicorn by a snowy shrine on an Etherlords II adventure map](docs/screenshots/adventure-map-snow.jpg)
+![A winged Kinet hero faces Chaot warriors and a fire spell in the Chaot city](docs/screenshots/battle-kinet-vs-chaots.jpg)
+
+**Autochess**
+
+![A round of Autochess: two full armies clash in the desert](docs/screenshots/autochess.jpg)
+
 ## What's new in 0.19.0
 
 - **Random missions and naval travel in Etherlords I.** Choose **Single Mission → Random map…** for seeded worlds with eight layouts and eleven presets. Route heroes through harbors, sail to other islands, and save at sea. Fresh maps put a pickup, site, or encounter within a day's travel of each reachable land tile for the slowest starting hero. [Random maps](docs/first_random_maps.md) · [Naval travel](docs/first_naval_maps.md)

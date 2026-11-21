@@ -86,4 +86,4 @@ The hero table has about forty heroes that appear on no map: `TestHero1` to `Tes
 
 ## What Demiurges does with it
 
-Demiurges plays the shipped game: cut cards, demo presets and unplaced heroes stay out of play, and the inert global spells, skills and the Gnome Tinkerer stay as inert as in the original. Sea travel and random maps in Demiurges are new features; they use the boat of Etherlords II, not the cut ship above.
+Demiurges plays the shipped game: cut cards, demo presets and unplaced heroes stay out of play, and the inert global spells, skills and the Gnome Tinkerer stay as inert as in the original. Three cut missions are rebuilt as new single missions: [Savage Desert](cut-mission-savage-desert) and [Evil Dale](cut-mission-evil-dale), with the original program's rules for them, and the [Snowflake Maze](cut-mission-snowflake-maze), whose rival lords bring the unplaced heroes Santa Claus and Father Frost. Sea travel and random maps in Demiurges are new features; they use the boat of Etherlords II, not the cut ship above.

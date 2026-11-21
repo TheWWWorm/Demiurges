@@ -32,6 +32,8 @@ var _close: Button
 ## check can tell it stayed responsive.
 var worst_frame_usec := 0
 var _last_frame := 0
+## The prompt's estimate running in a thread (-1 for none).
+var _estimate_task := -1
 
 ## Opens the screen over `parent` for these editions' upscalers: a prompt
 ## first when `ask`, otherwise the preparation at once.
@@ -136,13 +138,23 @@ func _button(box: HBoxContainer, node_name: String, caption: String) -> Button:
 ## The prompt: what the step does, how long it takes and the disk it needs.
 func show_prompt(all_art := false) -> void:
 	if _title == null: await ready
-	var estimate := ELIconUpscale.estimate(upscalers, all_art)
 	_title.text = _t("Prepare sharper art?")
+	_later.visible = true
+	# The estimate reads the header of every kept picture (about a second):
+	# in a thread, with the prompt already shown.
+	var result := [{}]
+	var list := upscalers
+	var task := WorkerThreadPool.add_task(func(): result[0] = ELIconUpscale.estimate(list, all_art), false, "Sharper art estimate")
+	_estimate_task = task
+	while _estimate_task == task and not WorkerThreadPool.is_task_completed(task): await get_tree().process_frame
+	if _estimate_task == task:
+		WorkerThreadPool.wait_for_task_completion(task)
+		_estimate_task = -1
+	var estimate: Dictionary = result[0]
 	var description := "Real-ESRGAN prepares the selected art once on this computer. It uses Vulkan where available and falls back to the CPU. Allow about %s on the CPU and %s of disk space."
 	if all_art:
 		description = "Start enables and prepares sharper icons, interface art and 3D textures. Real-ESRGAN uses Vulkan where available and falls back to the CPU. Allow about %s on the CPU and %s of disk space."
 	_body.text = _t(description) % [duration(float(estimate.seconds)), size_text(int(estimate.bytes))]
-	_later.visible = true
 	_start.visible = true
 	_start.grab_focus.call_deferred()
 
@@ -211,6 +223,11 @@ func _done() -> void:
 		_body.text += "\n" + (_t("%d sheets kept their original art.") % preparation.unchanged)
 	_start.text = _t("Retry")
 	_start.visible = not preparation.cancelled and not preparation.complete()
+
+func _exit_tree() -> void:
+	if _estimate_task >= 0:
+		WorkerThreadPool.wait_for_task_completion(_estimate_task)
+		_estimate_task = -1
 
 func _end() -> void:
 	var complete := preparation != null and preparation.complete()

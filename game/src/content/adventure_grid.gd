@@ -17,10 +17,22 @@ var error := ""
 var naval := false
 var naval_water := PackedByteArray()
 var naval_links: Dictionary = {}
+## First game, the adventure's own grid (build with `keep_costs`): each
+## cell's movement cost with nothing on it, on foot and by ship, measured by
+## _update_cell. The terrain and roads of a map in play never change (checks
+## that edit them update those cells), and the computer players' route
+## searches close and reopen thousands of cells a turn. Empty: measured on
+## every call (the map generators edit terrain between their own builds).
+var _bare_land := PackedInt32Array()
+var _bare_ship := PackedInt32Array()
+## The same grid's object footprints from earlier rebuilds: id -> [the
+## object's fields its art row depends on (ELAdventureArt.resolve), footprint,
+## bridge, authored node]. A rebuild resolves again only objects whose fields changed.
+var _shapes: Dictionary = {}
 ## An actor's occupied tile changed (a step, placement or removal).
 signal actor_moved(actor: Dictionary)
 
-func build(source: ELAdventureMap, objects: Dictionary) -> bool:
+func build(source: ELAdventureMap, objects: Dictionary, keep_costs := false) -> bool:
 	map = source
 	if map.profile.terrain_tiles == null:
 		var tiles := ELTileSet.new()
@@ -40,6 +52,10 @@ func build(source: ELAdventureMap, objects: Dictionary) -> bool:
 		grid.default_compute_heuristic = AStarGrid2D.HEURISTIC_CHEBYSHEV
 		grid.default_estimate_heuristic = AStarGrid2D.HEURISTIC_CHEBYSHEV
 		grid.update()
+	_bare_land = PackedInt32Array()
+	_bare_ship = PackedInt32Array()
+	_shapes.clear()
+	if keep_costs and map.profile.id == "el1": _keep_bare_costs()
 	rebuild(objects)
 	if naval:
 		for id: int in naval_links:
@@ -58,6 +74,7 @@ func rebuild(objects: Dictionary) -> void:
 	actor_blockers.resize(blockers.size())
 	actor_blockers.fill(0)
 	var art := ELAdventureArt.new(map)
+	var keep := _bare_land.size() == map.width * map.height
 	for id: int in objects:
 		var item: Dictionary = objects[id]
 		if item.get("type") in ["hero", "monster", "corpse"]:
@@ -66,19 +83,29 @@ func rebuild(objects: Dictionary) -> void:
 				occupied[id] = position
 				actor_blockers[position.y * map.width + position.x] += 1
 			continue
-		var definition := art.resolve(item)
-		var row: Dictionary = definition.get("row", {})
-		var shape := footprint(row, int(item.rotation))
-		if ELAdventureMap.is_trail_cache(item): shape.cells.clear()
+		var shape: Dictionary
+		var bridge := false
+		var signature: Array = _shape_inputs(item) if keep else []
+		var known: Array = _shapes.get(id, []) if keep else []
+		if not known.is_empty() and known[0] == signature and is_same(known[3], item.get("node")):
+			shape = known[1]
+			bridge = known[2]
+		else:
+			var definition := art.resolve(item)
+			var row: Dictionary = definition.get("row", {})
+			shape = footprint(row, int(item.rotation))
+			if ELAdventureMap.is_trail_cache(item): shape.cells.clear()
+			bridge = bool(row.get("Bridge", 0))
+			if keep and item.get("group") not in ["heroes", "np_heroes"]: _shapes[id] = [signature, shape, bridge, item.get("node")]
 		footprints[id] = shape
 		# An opened runestone barrier no longer blocks its cells.
 		if not item.get("visible", true) or not item.get("placed", true) or item.get("opened", false): continue
-		if map.profile.id == "el2" and item.get("group") == "resource_cuts" and not row.get("Bridge", 0):
+		if map.profile.id == "el2" and item.get("group") == "resource_cuts" and not bridge:
 			shape.pickup_origin = Vector2i(item.x, item.y)
 		for cell: Vector2i in shape.cells:
 			var position := cell + Vector2i(item.x, item.y)
 			if contains(position): blockers[position.y * map.width + position.x] += 1
-		if row.get("Bridge", 0):
+		if bridge:
 			for y in shape.size.y:
 				for x in shape.size.x:
 					var position := Vector2i(item.x + x, item.y + y)
@@ -87,6 +114,15 @@ func rebuild(objects: Dictionary) -> void:
 		for x in map.width:
 			var pos := Vector2i(x, y)
 			_update_cell(pos)
+
+## Every field ELAdventureArt.resolve reads from a non-hero object (the rest
+## comes from its authored node and the map, which do not change), and the
+## footprint's rotation and trail-cache flag. The node itself is compared by
+## identity in rebuild.
+static func _shape_inputs(item: Dictionary) -> Array:
+	return [item.get("visible"), item.get("type"), item.get("alive"), item.get("shape"), item.get("group"), item.get("ship"), item.get("owner"),
+		item.get("x"), item.get("y"), item.get("fort_level"), item.get("level"), item.get("castle_stage"), item.get("monster_difficulty"),
+		item.get("name"), item.get("rotation")]
 
 ## Release just the cells this pile blocked, preserving overlapping blockers.
 ## Return false for other shapes so the caller handles them with a rebuild.
@@ -123,12 +159,21 @@ func update_actor(actor: Dictionary) -> bool:
 	return true
 
 func _update_cell(pos: Vector2i) -> void:
+	# Checks edit terrain and then update the cells they changed: the cell's
+	# own unobstructed cost is measured again (see _bare_land).
+	if _bare_land.size() == map.width * map.height and contains(pos): _measure_bare(pos)
 	var land_cost := passability(pos, false)
 	var water_cost := land_cost if map.profile.id == "el1" and not naval else passability(pos, true)
 	land.set_point_solid(pos, land_cost < 0)
 	water.set_point_solid(pos, water_cost < 0)
 	land.set_point_weight_scale(pos, maxi(1, land_cost))
 	water.set_point_weight_scale(pos, maxi(1, water_cost))
+
+## Reopens cells a route search closed in `land` alone (unexplored ground,
+## guard areas). Only their land flag can be stale: any change to a cell's
+## contents meanwhile went through _update_cell, which set the rest.
+func reopen(cells: Array[Vector2i]) -> void:
+	for pos: Vector2i in cells: land.set_point_solid(pos, passability(pos, false) < 0)
 
 func contains(pos: Vector2i) -> bool:
 	return pos.x >= 0 and pos.y >= 0 and pos.x < map.width and pos.y < map.height
@@ -138,11 +183,36 @@ func contains(pos: Vector2i) -> bool:
 func passability(pos: Vector2i, ship := false, actors := true) -> int:
 	if not contains(pos): return -1
 	var index := pos.y * map.width + pos.x
+	if _bare_land.size() == map.width * map.height:
+		# The same answer as below: a dry-land map counts actors always and
+		# has one cost for both kinds of travel.
+		if blockers[index] != 0 or ((actors or not naval) and actor_blockers[index] != 0): return -1
+		return _bare_ship[index] if ship else _bare_land[index]
 	if naval: return ELFirstNaval.terrain_cost(map, pos, blockers[index] != 0 or (actors and actor_blockers[index] != 0), ship)
 	var corners: Array[int] = [map.tile(pos.x, pos.y), map.tile(pos.x + 1, pos.y), map.tile(pos.x + 1, pos.y + 1), map.tile(pos.x, pos.y + 1)]
 	if map.profile.id == "el1": return strategic_cost(map.profile.terrain_tiles, corners, int(map.roads[index]), blockers[index] != 0 or actor_blockers[index] != 0)
 	# Both games count heroes and monsters on a cell as blocking it.
 	return terrain_passability(map.profile.terrain_tiles, corners, int(map.roads[index]), bridges[index] != 0, blockers[index] != 0 or (actors and actor_blockers[index] != 0), ship)
+
+## Room for every cell's unobstructed first-game cost (see _bare_land); the
+## rebuild that follows measures each cell through _update_cell.
+func _keep_bare_costs() -> void:
+	var size := map.width * map.height
+	_bare_land = PackedInt32Array()
+	_bare_land.resize(size)
+	_bare_ship = PackedInt32Array()
+	_bare_ship.resize(size)
+
+## A cell's first-game cost with nothing on it, on foot and by ship.
+func _measure_bare(pos: Vector2i) -> void:
+	var index := pos.y * map.width + pos.x
+	if naval:
+		_bare_land[index] = ELFirstNaval.terrain_cost(map, pos, false, false)
+		_bare_ship[index] = ELFirstNaval.terrain_cost(map, pos, false, true)
+		return
+	var corners: Array[int] = [map.tile(pos.x, pos.y), map.tile(pos.x + 1, pos.y), map.tile(pos.x + 1, pos.y + 1), map.tile(pos.x, pos.y + 1)]
+	_bare_land[index] = strategic_cost(map.profile.terrain_tiles, corners, int(map.roads[index]), false)
+	_bare_ship[index] = _bare_land[index]
 
 static func strategic_cost(tiles: ELTileSet, corners: Array[int], road: int, blocked: bool) -> int:
 	if blocked: return -1

@@ -34,8 +34,13 @@ static func authored_stock(profile: ELProfile, building: Dictionary, color: Stri
 		if int(tier.attrs.get("level", 1)) > int(building.level) + 1: continue
 		for spell: Dictionary in ELXml.children(tier, "spell"):
 			var code := str(spell.get("text", "")).strip_edges()
-			if ELSpellInventory.is_spell(profile, code) and profile.table("CombatSpells")[code].get("Color") == color: result.append(code)
+			if ELSpellInventory.is_spell(profile, code) and profile.table("CombatSpells")[code].get("Color") == color and on_sale(profile, code): result.append(code)
 	return result
+
+## Random maps before version 15 could stock the five cards switched off in
+## the card table (Use "-"); no stock mission sells them, so no shop does.
+static func on_sale(profile: ELProfile, code: String) -> bool:
+	return profile.id != "el1" or str(profile.table("CombatSpells").get(code, {}).get("Use", "+")) == "+"
 
 static func price(profile: ELProfile, hero: Dictionary, book: Array, card: String, slot: int, free_exchange := false) -> Dictionary:
 	var result := ELResources.empty("el1")

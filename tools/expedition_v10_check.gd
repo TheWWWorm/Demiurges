@@ -577,6 +577,13 @@ func _battle_commitment(source: ELProfile) -> void:
 		var fresh := run.build_battle(true)
 		if version < RULES:
 			check(fresh != null and int(fresh.heroes[0].health) == run.health, "Version 9 retains its original fresh-duel restart")
+			# The first battle's side comes from the room's seed; each restart flips a new coin.
+			var counts := [0, 0]
+			for attempt in 100:
+				var again := run.build_battle(true)
+				if again != null: counts[again.first_side()] += 1
+			check(duel.first_side() == int(run._nodes[run.current].seed) & 1 and counts[0] >= 25 and counts[1] >= 25,
+				"Version 9's restart decides who moves first afresh (%s of 100)" % [counts])
 		else:
 			check(fresh == null and run.snapshot() == before, "Version 10 rejects a fresh-duel restart without changing the checkpoint")
 			var resumed := _roundtrip(run)

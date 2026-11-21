@@ -4,7 +4,7 @@ extends RefCounted
 ## Recipe randomness proposes positions; only an adversarial proof admits one.
 ## Work is incremental and stays on the main thread, including web builds.
 
-const VERSION := 5
+const VERSION := 6
 const MAX_SEED := 2147483647
 const MAX_ATTEMPTS := 24
 ## Caps the whole request, not just one unsuccessful candidate. Difficult
@@ -20,9 +20,9 @@ static func code(edition: String, difficulty: int, seed_value: int) -> String:
 static func parse_code(value: String) -> Dictionary:
 	var parts := value.strip_edges().split(":")
 	if parts.size() != 4:
-		return {"ok": false, "error": "Use a challenge code such as ELP5:el1:3:12345."}
+		return {"ok": false, "error": "Use a challenge code such as ELP6:el1:3:12345."}
 	if parts[0].to_upper() != "ELP%d" % VERSION:
-		return {"ok": false, "error": "This challenge code belongs to another generator version. Use an ELP5 code."}
+		return {"ok": false, "error": "This challenge code belongs to another generator version. Use an ELP6 code."}
 	var edition := parts[1].to_lower()
 	if edition not in ["el1", "el2"] or not parts[2].is_valid_int() or not parts[3].is_valid_int():
 		return {"ok": false, "error": "Invalid challenge edition, difficulty or seed."}
@@ -36,9 +36,16 @@ static func parse_code(value: String) -> Dictionary:
 	return {"ok": true, "edition": edition, "difficulty": difficulty, "seed": seed_value,
 		"code": code(edition, difficulty, seed_value)}
 
+## Master families whose every recipe position a naive first turn still wins
+## (see Job._begin_naive): measured over 180 version 5 codes, the original
+## opponent's quick reading kept the forced win in all of them, so at Master
+## they could only fail. Their recipes stay for tools and for lower tiers.
+const MASTER_EXCLUDED := ["control_fork", "restless_horizon"]
+
 static func available_families(edition: String, difficulty: int) -> Array[String]:
 	var out: Array[String] = []
 	for family: String in ELPuzzleRecipes.families(edition):
+		if difficulty == 5 and family in MASTER_EXCLUDED: continue
 		if ELPuzzleRecipes.supports(family, difficulty): out.append(family)
 	return out
 
@@ -1030,6 +1037,9 @@ class Job:
 	var _horizon: Dictionary = {}
 	var _trap: Dictionary = {}
 	var _trap_index := 0
+	var _naive: ELPuzzles.Run
+	var _naive_line: Array = []
+	var _naive_check: Dictionary = {}
 	var _began := 0
 	var _total_nodes := 0
 	var _seen := {}
@@ -1069,9 +1079,13 @@ class Job:
 						_reject("no_enemy_decision")
 					else:
 						_win = answer
-						_stage = "difficulty"
-						progress_text = _text("Checking for easier solutions…", "Проверка более простых решений…")
-						if not _budget_finished(): _proof = ELPuzzleProof.start(_profile, _candidate, _limits(_difficulty - 2))
+						_begin_shortcut()
+				elif _stage == "naive":
+					# Unknown is no evidence that the plain first turn wins.
+					if answer.get("status") == "forced": _reject("naive_first_turn")
+					else:
+						_naive_check = {"status": answer.get("status"), "nodes": answer.get("nodes", 0), "commands": _naive_line.duplicate(true)}
+						_begin_win()
 				elif _stage == "difficulty":
 					if answer.get("status") != "refuted":
 						_reject("shortcut_" + str(answer.get("status", "invalid")))
@@ -1097,6 +1111,8 @@ class Job:
 						_accept(_shortcut)
 					else:
 						_start_trap()
+			elif _stage == "naive":
+				_naive_step()
 			else:
 				_candidate_step()
 			remaining -= 1
@@ -1142,6 +1158,13 @@ class Job:
 		if String(_candidate.generated.decision_signature).is_empty():
 			_reject("decision_reference_failed")
 			return
+		# Master's cheap rejection comes first: most candidates it turns away
+		# would otherwise cost a whole proof of the win.
+		if _difficulty == 5: _begin_naive()
+		else: _begin_win()
+
+	func _begin_win() -> void:
+		if _budget_finished(): return
 		_stage = "win"
 		progress_text = _text("Checking every legal defence… (%d/%d)", "Проверка всех вариантов защиты… (%d/%d)") % [attempts, ELPuzzleGenerator.MAX_ATTEMPTS]
 		_proof = ELPuzzleProof.start(_profile, _candidate, _limits())
@@ -1159,6 +1182,63 @@ class Job:
 			"За отведённый поиск задача не прошла проверку. Попробуйте другой код или сложность.")
 		return true
 
+	func _begin_shortcut() -> void:
+		_stage = "difficulty"
+		progress_text = _text("Checking for easier solutions…", "Проверка более простых решений…")
+		if not _budget_finished(): _proof = ELPuzzleProof.start(_profile, _candidate, _limits(_difficulty - 2))
+
+	## Master admits no position whose obvious first turn still wins. The
+	## original opponent's quick reading (the duel AI's Easy setting) plays the
+	## player's first attack phase; if the win is then still forced (or that
+	## plain play has already won), the decisive ideas were nothing a casual
+	## player would miss. It reads with no clock, so the same code always
+	## yields the same entry. One command per step keeps the UI responsive.
+	func _begin_naive() -> void:
+		_stage = "naive"
+		progress_text = _text("Checking that the obvious play fails…", "Проверка, что очевидный ход не работает…")
+		_naive_line = []
+		_naive = ELPuzzles.Run.new()
+		if not _naive.begin_entry(_profile, _candidate, false, false):
+			_naive = null
+			_begin_win()
+			return
+		_naive.duel.searching = true
+
+	func _naive_step() -> void:
+		if _budget_finished(): return
+		var duel := _naive.duel
+		if _naive.outcome.is_empty() and duel.phase != ELDuel.Phase.FINISHED and duel.attacker == 0 and duel.active_side() == 0 and _naive_line.size() < 32:
+			var asked := ELCombatSearch.request(duel)
+			asked.smart = false
+			asked.engine = false
+			asked.ms = 0
+			asked.deadline_usec = 0
+			asked.follow = false
+			asked.original_budget = ELCombatSearch.EASY_BUDGET
+			var command := ELCombatSearch.think(duel, {}, false, asked)
+			if command.is_empty() or not ELCombatSearch.apply(duel, command):
+				command = {"kind": "end_phase"}
+				if not ELCombatSearch.apply(duel, command):
+					_naive = null
+					_begin_win()
+					return
+			command = command.duplicate(true)
+			command.side = 0
+			_naive_line.append(command)
+			_naive.watch()
+			return
+		var solved := _naive.outcome == "solved"
+		_naive = null
+		if solved:
+			_reject("naive_first_turn")
+			return
+		var continuation := ELPuzzleGenerator.mistake_position(_profile, _candidate, _naive_line)
+		if not continuation.get("ok", false) or continuation.get("terminal_loss", false):
+			_naive_check = {"status": "terminal_loss" if continuation.get("terminal_loss", false) else "not_replayed", "nodes": 0, "commands": _naive_line.duplicate(true)}
+			_begin_win()
+			return
+		_proof = ELPuzzleProof.start(_profile, continuation.entry, _limits())
+
 	func _reject(reason: String) -> void:
 		rejections[reason] = int(rejections.get(reason, 0)) + 1
 		_stage = "candidate"
@@ -1169,6 +1249,9 @@ class Job:
 		_horizon = {}
 		_trap = {}
 		_trap_index = 0
+		_naive = null
+		_naive_line = []
+		_naive_check = {}
 
 	func _begin_traps() -> void:
 		_stage = "trap"
@@ -1218,6 +1301,7 @@ class Job:
 			"strategy": _win.get("strategy", {}).duplicate(true),
 			"win_nodes": _win.get("nodes", 0), "shortcut_nodes": shortcut.get("nodes", 0),
 			"shortcut_status": shortcut.get("status"), "meaningful_mistake": _trap.duplicate(true), "depth": _limits().depth,
+			"naive_first_turn": _naive_check.duplicate(true) if not _naive_check.is_empty() else {"status": "not_applicable"},
 			"position_hash": JSON.stringify({"state": _candidate.state, "turns": _candidate.turns,
 				"objective": _candidate.get("objective", {"type": "win"})}, "", false).sha256_text()}
 		result = {"entry": _candidate, "error": "", "code": _candidate.generated.code,

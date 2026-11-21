@@ -10,7 +10,9 @@ extends SceneTree
 ##   spell the script awaits blinks in the hand.
 ## - #212 ether disturbance, active abilities and specialisations add their
 ##   original icons to the same battle notice list as casts.
-## - #202/#230 figure tooltips show printed stats and omit enchantments;
+## - #202/#230 figure tooltips show printed stats and omit enchantments,
+##   the hero's too (#274); #271 a grass snake's growth shows its own mark
+##   icon and text on the strip, not the snake card;
 ##   #227 played-card icons clear as the side or turn changes.
 ## - #225: a scripted attacker keeps its side of the authored battlefield
 ##   when the local defender takes the left HUD seat.
@@ -200,8 +202,17 @@ func _casting_and_retry() -> void:
 		check(retry.size == ok.size and retry.size == cancel.size, "the three surrender buttons are the original size")
 		check(retry.position - cancel.position == cancel.position - ok.position, "the three surrender buttons are evenly spaced")
 		retry.pressed.emit()
-		check(view.duel != duel and view.duel.turn_serial == opening.turn_serial and view.duel.setup == opening.setup, "Try again restarts the same duel setup")
+		check(view.duel != duel and view.duel.turn_serial == opening.turn_serial and _without_first(view.duel.setup) == _without_first(opening.setup), "Try again restarts the same duel setup")
 		check(view.duel.rng_state != int(opening.rng), "Try again deals from a new random seed")
+		# Who attacks first is a new coin flip, as when the practice battle began.
+		var counts := [0, 0]
+		var same := true
+		for attempt in 200:
+			view._retry_battle()
+			counts[view.duel.first_side()] += 1
+			if view.duel.attacker != view.duel.first_side() or _without_first(view.duel.setup) != _without_first(opening.setup): same = false
+		print("practice Try again: side 0 first %d, side 1 first %d of 200" % counts)
+		check(same and counts[0] >= 60 and counts[1] >= 60, "Try again flips a new coin for who attacks first in a practice duel (%s)" % [counts])
 	_duel_match_retry(view)
 	_creature_ability_buttons(view)
 	_battle_notice_icons(view)
@@ -224,6 +235,8 @@ func _arena_orientation(view: Node) -> void:
 	check(prepared and encounter.swapped and encounter.attacker() == attacker and encounter.player_side() == 0,
 		"#225: the scripted Chaot remains the attacker and the player takes the left HUD seat")
 	if not prepared: return
+	var redealt: Array = [encounter.first_side_for(encounter.battle.setup, 0), encounter.first_side_for(encounter.battle.setup, 1)]
+	check(redealt.has(encounter.battle.first_side()), "#225: Try again's first-side rule gives the swapped battle's own first side for one of the coin's faces (%s vs %d)" % [redealt, encounter.battle.first_side()])
 	campaign.director.encounter = encounter
 	# Use an arena with a positional waterfall to check the scenery effect too.
 	encounter.battle.setup.arena = "Blue.001"
@@ -258,7 +271,7 @@ func _duel_match_retry(view: Node) -> void:
 	check(retry != null, "the second round can be retried")
 	if retry == null: return
 	retry.pressed.emit()
-	check(view.duel != duel and view.duel.setup == duel.setup and view.duel_match == started and started.played == 1 and started.wins == [0, 1],
+	check(view.duel != duel and _without_first(view.duel.setup) == _without_first(duel.setup) and view.duel_match == started and started.played == 1 and started.wins == [0, 1],
 		"retry keeps the same round setup and match score")
 	check(recording.rounds.size() == 2 and recording.rounds[0] == first_round and recording.rounds[1].seed != old_seed and recording.tracking(view.duel),
 		"the recording replaces the retried round with its new seed")
@@ -266,6 +279,23 @@ func _duel_match_retry(view: Node) -> void:
 	var replay := ELDuel.new()
 	check(replay.start(view.profile, int(recorded.seed), recorded.options) and replay.snapshot() == view.duel.snapshot(),
 		"the retried round's recording reconstructs the new opening")
+	# Each retry flips a new coin for the round's first attacker; the
+	# recording keeps the one the replayed round used.
+	var counts := [0, 0]
+	var same := true
+	for attempt in 200:
+		view._retry_battle()
+		counts[view.duel.first_side()] += 1
+		var round: Dictionary = recording.rounds.back()
+		if recording.rounds.size() != 2 or int(round.options.get("first_side", 0)) != view.duel.first_side() or view.duel.attacker != view.duel.first_side() \
+			or _without_first(view.duel.setup) != _without_first(duel.setup) or started.played != 1: same = false
+	print("Duel mode round Try again: side 0 first %d, side 1 first %d of 200" % counts)
+	check(same and counts[0] >= 60 and counts[1] >= 60, "Try again flips a new coin for the round's first attacker and records it (%s)" % [counts])
+
+static func _without_first(setup: Dictionary) -> Dictionary:
+	var copy := setup.duplicate(true)
+	copy.erase("first_side")
+	return copy
 
 func _creature_ability_buttons(view: Node) -> void:
 	view._start("el2", {"first_side": 0}, null, 212)
@@ -425,6 +455,23 @@ func _figure_tooltips(view: Node) -> void:
 	duel._mark(id, "STSK", 2, 2)
 	duel._damage(id, 1)
 	check(view._creature_tip_text(id) == printed, "#202/#230: a wounded, enchanted creature's tooltip reads like its printed card")
+	# #230/#274: nor does the second game's hero tooltip list enchantments.
+	duel._mark(0, "STSK", 0, 0)
+	var hero_tip := str(view._hero_tip(0)) + str(view._hero_tip(0, view.portraits[0]))
+	check(not hero_tip.contains(duel.card_name("STSK")), "#230/#274: the hero tooltip lists no enchantments")
+	# #271: a grass snake's growth shows its blood mark, not the snake card.
+	var snake := duel.next_id
+	duel._summon(0, "GRSN")
+	duel._mark(snake, "GRSN", 1, 1, {"fixed": true})
+	view.selected_creature = snake
+	view._fill_strip()
+	var marks: Array = view.rail.strip.items.filter(func(item: Dictionary) -> bool: return item.meta.get("card") == "GRSN")
+	var row: Dictionary = duel.profile.table("CombatSpells").GRSN
+	var want := duel.profile.icon_at(int(row.AbilityIcon)) as AtlasTexture
+	var shown: AtlasTexture = marks[0].icon as AtlasTexture if marks.size() == 1 else null
+	check(shown != null and shown.atlas == want.atlas and shown.region == want.region, "#271: the snake's growth shows the AbilityIcon (%d), not the snake's portrait" % int(row.AbilityIcon))
+	check(marks.size() == 1 and str(marks[0].tooltip) == duel.profile.text(str(row.AbilityText)), "#271: the growth's tooltip is its own text (%s)" % (str(marks[0].tooltip).left(60) if marks.size() == 1 else "-"))
+	view.selected_creature = -1
 
 func _notice_uses(notices: ELCombatNotices, index: int, expected: AtlasTexture) -> bool:
 	if index >= notices.icons.size(): return false

@@ -3,7 +3,8 @@ extends SceneTree
 ## with a dozen copies each of two enchantments made the tooltip fill the
 ## screen and the frame rate drop). For each game whose files are configured:
 ## - the hero tooltip (portrait and figure) lists each distinct enchantment
-##   once, with its count ("Name ×12: text"), in the order of first copy;
+##   once, with its count ("Name ×12: text"), in the order of first copy
+##   (first game; the second game's lists none, #230/#274);
 ## - the creature tooltip shows the printed card, without the enchantments
 ##   (#202/#230, first game #254);
 ## - the battle tooltip frame stays inside the viewport however many lines
@@ -116,8 +117,10 @@ func _edition(edition: String) -> void:
 			var name: String = duel.card_name(card)
 			var shown := 0
 			for text: String in texts:
-				if text.begins_with(name + " ×%d" % COPIES): shown += 1
-			check(shown == 1, "%s: the hero %s tooltip lists %s once with ×%d (%d)" % [edition, "portrait" if portrait else "figure", name, COPIES, shown])
+				if text.begins_with(name if edition == "el2" else name + " ×%d" % COPIES): shown += 1
+			# The second game's hero tooltip lists no enchantments (#230, #274).
+			if edition == "el2": check(shown == 0, "el2 #230/#274: the hero %s tooltip lists no enchantments (%s: %d)" % ["portrait" if portrait else "figure", name, shown])
+			else: check(shown == 1, "%s: the hero %s tooltip lists %s once with ×%d (%d)" % [edition, "portrait" if portrait else "figure", name, COPIES, shown])
 		check(texts.size() <= 16, "%s: the hero %s tooltip has %d lines" % [edition, "portrait" if portrait else "figure", texts.size()])
 		await _fits(view, tip, "%s hero %s" % [edition, "portrait" if portrait else "figure"])
 	if duel.creatures.has(creature) and creature_cards.size() == 2:

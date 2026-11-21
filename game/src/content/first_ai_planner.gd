@@ -415,7 +415,15 @@ static func siege_nights(director: ELAdventureDirector, hero: Dictionary, castle
 			if not other.get("alive", false): continue
 			var night := maxi(0, ceili(_arrival(director, other, castle) - own))
 			joins[night] = int(joins.get(night, 0)) + ELFirstScenario.hero_value(other)
-	var regen := ELFirstScenario.regeneration(ELGlobalSpells.free_ether(state, owner)) if state.players.has(owner) else 0
+	# The owner's ether does not change while a matching runs (each free_ether
+	# reads every object), so assign() keeps it for the pass.
+	var regen := 0
+	if state.players.has(owner):
+		var key := "regeneration:%d" % owner
+		if _living_cache is Dictionary and _living_cache.has(key): regen = _living_cache[key]
+		else:
+			regen = ELFirstScenario.regeneration(ELGlobalSpells.free_ether(state, owner))
+			if _living_cache is Dictionary: _living_cache[key] = regen
 	for night in SIEGE_NIGHTS:
 		damage += int(joins.get(night, 0))
 		energy = mini(top, energy + regen) - damage
@@ -620,7 +628,7 @@ static func utility(director: ELAdventureDirector, hero: Dictionary, role: int, 
 			else:
 				var closed := ELFirstAI.close_guards(director, hero, -1)
 				var path := director.grid.path(Vector2i(hero.x, hero.y), tile)
-				for point: Vector2i in closed: director.grid._update_cell(point)
+				director.grid.reopen(closed)
 				walk = -1.0 if path.is_empty() else float(director.grid.path_cost(path))
 				_path = path
 			# A hero ready for a siege looks for the way to an enemy castle it

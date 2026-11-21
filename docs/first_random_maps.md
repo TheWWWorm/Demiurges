@@ -86,7 +86,12 @@ guards, artifact rewards and global-spell scrolls. Higher recruitment ranks
 are discovered on the map. Shops use actual installed combat spells and the
 normal stock and purchase rules. From version 13 they skip the basic Cantrip
 cards, and each shop of a kind offers the goods the other shops of that kind
-offer least, so no two stock the same. Heroes from a generic template receive
+offer least, so no two stock the same. From version 15 they also skip the
+five cards switched off in the card table (`Use` "-": BSMG, GIFT, MNFL, RSET,
+SMGS), which no stock mission sells, prizes skip the four artifacts no stock
+map places (Rods of Defence, Fire, Insanity and Reflection), and guards skip
+the unplaced "<name> D" copies of creatures. Shops on older maps hide those
+five cards when opened, without changing the map. Heroes from a generic template receive
 a name and a speciality of their faction. Naval homelands have multiple harbor
 approaches, giving opponents alternate routes and coastal objectives to contest.
 
@@ -200,6 +205,45 @@ boundary figures use the ten runs from the five overland presets.
 | Median wet-edge coverage on overland presets | 100% | 15% |
 | Median scenery objects per 100 map cells | 8.5 | 21.7 |
 | Tree objects within three tiles of a road | 18% | 32% |
+
+### Etherlords II shore objects (version 16)
+
+Version 16 decorates the shores with pieces from your own Etherlords II
+installation, when there is one:
+
+- **Quays** (the second game's `Dock`, model `tebuad36`): beside a harbor,
+  reaching a cell onto the shore and three cells out to sea. The quay stands
+  one cell aside, so the hero still waits on the harbor's own cell and the ship
+  lies alongside; the harbor keeps its cyan banner pole on the other side.
+- **Moored ships** (`Ship_01`, the same `he551` boat heroes sail in): one off
+  the quay at each homeland harbor, bow to the sea.
+- **Wrecks** (`Ship_02`, `Ship_03`) in sheltered water near a shore, one per
+  2,048 map cells and at least 14 cells apart, each with up to two pieces of
+  **flotsam** (`WaterDust_01`–`04`, `Barrel`). Wrecks appear on every map with
+  water; quays and moored ships only on naval maps.
+
+They are decoration only. None is a map object: they block no cell, have no
+tooltip, cannot be visited and change no route; a sailing hero may pass
+through the water a wreck lies in. They keep to coves and the quay's side of
+a harbor, away from the harbor cells themselves. The
+generator stores only where each piece stands (the map's `first_decor` list);
+the models and textures are read from the installed second game when the map
+is drawn, as the second game's boat is. Without Etherlords II, or with
+**Options → Etherlords II shore objects in the first game** turned off, nothing
+is drawn and every harbor keeps its built-in pier. The option applies from the
+next map loaded.
+
+The list does not depend on the second game, the option or anything else
+installed: a version 16 map is exactly the version 15 map of the same settings
+(terrain, objects, harbors and routes) plus the list, and the same seed gives
+the same list on every computer. Saves therefore load the same with and without
+Etherlords II. Restored missions keep their pinned version and get no pieces.
+
+The Etherlords II pieces are the second game's own art at the second game's
+scale (one map cell is two world units in both games): the quay is 917
+triangles with a 256 × 256 texture and an animated water collar, replacing a
+built-in pier of six boxes; the wrecks are 518 and 525 triangles. The first
+game has no ships, quays or wrecks of its own.
 
 ### Creature placement and passability
 
@@ -444,12 +488,12 @@ monsters** option also keeps its normal rules.
 
 ## Share and remember a setup
 
-**Copy setup** creates an `EL1R13:` code for a new world in the code field and clipboard. Paste a
+**Copy setup** creates an `EL1R16:` code for a new world in the code field and clipboard. Paste a
 complete code and press **Load setup** to restore its seed and world settings.
 Choose difficulty and AI separately. The code is a prefix followed by Base64
 encoded UTF-8 JSON; it is a recipe, not a map archive.
 
-`EL1R1:` through `EL1R12:` codes reproduce their original worlds when loaded and played
+`EL1R1:` through `EL1R15:` codes reproduce their original worlds when loaded and played
 without editing. Changing a world setting or choosing a new preset switches to
 the current generator.
 

@@ -50,6 +50,8 @@ static func catalog(profile: ELProfile) -> Array[Dictionary]:
 	var result: Array[Dictionary] = []
 	for entry: Dictionary in maps(profile):
 		if not entry.campaign: result.append(entry)
+	# Cut missions of the first game, rebuilt by the remake.
+	result.append_array(ELRestoredMissions.entries(profile))
 	return result
 
 ## Every map the catalogue knows, campaign chapters included, in scan order.
@@ -221,7 +223,10 @@ static func title(profile: ELProfile, entry: Dictionary) -> String:
 ## Scenario row for the adventure view: no chapter number, so the session runs
 ## the non-campaign rules; the human takes player 1.
 static func scenario(entry: Dictionary, player := 1) -> Dictionary:
-	return {"file_name": str(entry.id), "player": str(player), "header": str(entry.get("title", "")), "single": true}
+	var row := {"file_name": str(entry.id), "player": str(player), "header": str(entry.get("title", "")), "single": true}
+	# A restored mission is generated from its recipe, as a random map.
+	if entry.get("random_map") is Dictionary: row.random_map = Dictionary(entry.random_map).duplicate(true)
+	return row
 
 ## A mission started from the single-mission choice. Second game: any map
 ## whose own header has no campaign node (only Select Mission starts one; the

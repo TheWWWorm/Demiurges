@@ -62,13 +62,15 @@ func _on_node_added(node: Node) -> void:
 # --- Marking ---------------------------------------------------------------------
 
 ## Marks `button` as a check button when its control is drawn with a check
-## plate (called for every original button, see ELUiSounds.bind).
-static func mark(button: BaseButton, profile: ELProfile, control: String) -> void:
+## plate (called for every original button, see ELUiSounds.bind). `profile`
+## is an ELProfile, untyped: naming the class compiled most of the game's
+## scripts with this autoload, before the first frame.
+static func mark(button: BaseButton, profile, control: String) -> void:
 	if button == null or profile == null or button.toggle_mode: return
 	if is_check(profile, control): button.add_to_group(GROUP)
 
 ## True for an original push button drawn with a check plate.
-static func is_check(profile: ELProfile, control: String) -> bool:
+static func is_check(profile, control: String) -> bool:
 	if profile.check_buttons.is_empty():
 		var push := {}
 		for row: Dictionary in profile.table("Controls").values():

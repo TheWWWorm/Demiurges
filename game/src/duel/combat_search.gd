@@ -329,6 +329,12 @@ static var smart_quiet_proof := true
 ## A duel read as lost holds its attackers back when that loses no sooner
 ## (`_hold_when_lost`).
 static var smart_hold_lost := true
+## The hero defending a puzzle kills the other hero whenever it can within
+## its own turn (`_puzzle_kill`). A puzzle failed is all its objective tells
+## the engine, and once the turns allowed are spent every line fails it: a
+## kill and an idle turn were worth the same, and the first line found was
+## played - often an attack too small to finish a hero left at a few points.
+static var smart_puzzle_kill := true
 static var smart_engine_prove_share := 30
 ## No longer read: that search once gave a line up when the turns left
 ## could not bring the other hero down at this many hundredths of the damage
@@ -611,7 +617,7 @@ static func request(duel: ELDuel, restricted := false) -> Dictionary:
 	var asked := {"smart": smart, "engine": engine, "budget": engine_budget(), "ms": ms, "identity": duel.identity(), "restricted": restricted,
 		"follow": smart and smart_follow, "information": information, "cancel": Cancel.new()}
 	asked.policy = hash([smart, engine, asked.budget, ms, restricted, asked.follow, information, smart_engine_phases, smart_engine_steps, smart_engine_width,
-		smart_engine_prove, smart_engine_prove_share, smart_engine_guard, smart_engine_reach, smart_engine_beyond, smart_engine_likely, smart_budget, smart_phases, smart_quiet_proof, smart_hold_lost])
+		smart_engine_prove, smart_engine_prove_share, smart_engine_guard, smart_engine_reach, smart_engine_beyond, smart_engine_likely, smart_budget, smart_phases, smart_quiet_proof, smart_hold_lost, smart_puzzle_kill])
 	asked.deadline_usec = Time.get_ticks_usec() + ms * 1000 if ms > 0 else 0
 	asked.spent_usec = 0
 	return asked
@@ -711,6 +717,17 @@ static func _think(real: ELDuel, duel: ELDuel, stats: Dictionary, restricted: bo
 	ctx.tracing = stats.has("trace")
 	# A "keep_blocks" entry leaves the blocks already set as they stand.
 	ctx.revise = not bool(stats.get("keep_blocks", false))
+	# Before any plan: a plan made while the puzzle could still be won may
+	# not be the kill there is now.
+	if smart and smart_puzzle_kill and bool(asked.get("engine", false)) and ELCombatBrain.available:
+		var kill := _puzzle_kill(ctx, duel, real, asked)
+		if not kill.is_empty():
+			stats.engine = "kill"
+			stats.positions = int(kill.get("positions", 0))
+			stats.fights = 0
+			stats.value = float(kill.get("value", 0.0))
+			stats.proven = int(kill.get("proven", 0))
+			return kill.command
 	if bool(asked.get("follow", false)) and not stats.get("fresh", false):
 		var planned := _recall(real, int(asked.get("policy", 0)))
 		# A won line's attack at ready blockers is passed over when ending the
@@ -735,7 +752,9 @@ static func _think(real: ELDuel, duel: ELDuel, stats: Dictionary, restricted: bo
 	ctx.w = chosen_weights(ctx.second) if smart and smart_steady else weights(duel.rng_state, ctx.second)
 	ctx.limit = (1 if duel.phase == ELDuel.Phase.ATTACK else 0) + (smart_phases if smart else 0)
 	var root := Line.new()
-	root.budget = smart_budget if smart else original_budget
+	# A caller may name the original's budget for its own decision (the puzzle
+	# generator's naive player) rather than share the duel opponent's setting.
+	root.budget = smart_budget if smart else int(asked.get("original_budget", original_budget))
 	ctx.replies = smart and smart_replies
 	ctx.width = smart_width if smart else 0
 	if smart:
@@ -1014,6 +1033,41 @@ static func _quiet_win(ctx: Context, duel: ELDuel, turns: int) -> bool:
 	var quiet := ELCombatBrain.prove(ctx, copy, turns - 1, _share(ctx, ctx.budget))
 	if copy.scripts != null and copy.scripts.search_only: copy.scripts.close()
 	return String(quiet.get("status", "")) == "proven" and int(quiet.get("turns", 0)) <= turns - 1
+
+## The kill a puzzle's defender has within its own turn (`smart_puzzle_kill`):
+## the engine's choice on the duel with the objective left out, where only
+## the other hero's death wins. Empty when the hero to move defends no puzzle,
+## it is not that hero's own attack phase, or no kill within the turn is
+## proved. A phase found to hold none is not read again: the commands of the
+## hero to move only narrow what it can do.
+static func _puzzle_kill(ctx: Context, duel: ELDuel, real: ELDuel, asked: Dictionary) -> Dictionary:
+	var goal: Variant = duel.setup.get("puzzle_goal")
+	if goal is not Dictionary or (goal as Dictionary).is_empty(): return {}
+	if int((goal as Dictionary).get("side", 0)) == ctx.ai or duel.attacker != ctx.ai or duel.phase != ELDuel.Phase.ATTACK: return {}
+	var key := hash([_proof_key(ctx, real, asked), "kill"])
+	_plans_lock.lock()
+	var settled := _proofs.has(key)
+	_plans_lock.unlock()
+	if settled: return {}
+	var plain := duel.search_copy(ctx.second)
+	plain.setup = plain.setup.duplicate(true)
+	plain.setup.erase("puzzle_goal")
+	if ctx.w.is_empty(): ctx.w = chosen_weights(ctx.second)
+	var budget := _share(ctx, maxi(2000, ctx.budget * smart_engine_prove_share / 100))
+	var proof := ELCombatBrain.prove(ctx, plain, 1, budget)
+	ctx.used += int(proof.get("positions", 0))
+	var found := {}
+	if String(proof.get("status", "")) == "proven" and int(proof.get("turns", 0)) == 1:
+		found = ELCombatBrain.choose(ctx, plain, smart_engine_phases, budget, smart_engine_steps, smart_engine_width)
+		ctx.used += int(found.get("positions", 0))
+		if found.has("error") or int(found.get("proven", 0)) != 1 or found.get("command", {}).is_empty(): found = {}
+	if plain.scripts != null and plain.scripts.search_only: plain.scripts.close()
+	if found.is_empty():
+		_plans_lock.lock()
+		if _proofs.size() > 256: _proofs.clear()
+		_proofs[key] = {"from": 0, "cut": false}
+		_plans_lock.unlock()
+	return found
 
 ## The worth below which the engine reads its hero as beaten.
 const LOST_VALUE := 99000.0

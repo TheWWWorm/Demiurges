@@ -89,8 +89,8 @@ func _invariants(profile: ELProfile, entry: Dictionary) -> void:
 	var meta: Dictionary = entry.generated
 	var decoded := ELPuzzleGenerator.parse_code(meta.code)
 	_expect(decoded.get("ok", false) and decoded.seed == meta.seed and decoded.difficulty == meta.difficulty and decoded.edition == profile.id, "code round trip")
-	_expect(ELPuzzleGenerator.parse_code("ELP5:%s:5:17" % profile.id).get("ok", false), "Master is a supported share-code tier")
-	for invalid: String in ["", "ELP1:el1:3:1", "ELP2:el1:3:1", "ELP3:el1:3:1", "ELP4:el1:3:1", "ELP5:el3:3:1", "ELP5:el1:1:1", "ELP5:el1:6:1", "ELP5:el1:3:0", "ELP5:el1:3:-1", "ELP5:el1:3:2147483648", "ELP5:el1:3:99999999999999999999", "ELP5:el1:3:1e3"]:
+	_expect(ELPuzzleGenerator.parse_code("ELP6:%s:5:17" % profile.id).get("ok", false), "Master is a supported share-code tier")
+	for invalid: String in ["", "ELP1:el1:3:1", "ELP2:el1:3:1", "ELP3:el1:3:1", "ELP4:el1:3:1", "ELP5:el1:3:1", "ELP6:el3:3:1", "ELP6:el1:1:1", "ELP6:el1:6:1", "ELP6:el1:3:0", "ELP6:el1:3:-1", "ELP6:el1:3:2147483648", "ELP6:el1:3:99999999999999999999", "ELP6:el1:3:1e3"]:
 		_expect(not ELPuzzleGenerator.parse_code(invalid).get("ok", false), "reject malformed code " + invalid)
 	var retry := _finish(ELPuzzleGenerator.start(profile, meta.seed, meta.difficulty), 1, 1)
 	_expect(not retry.get("entry", {}).is_empty(), "same seed with tiny slices succeeds")

@@ -23,6 +23,9 @@ extends SceneTree
 ##   sequence plays; clicks on figures are gated meanwhile;
 ## - skipping (Space) jumps to the rules' values at once.
 ##
+## - a fallen hero keeps its death pose to the end of the battle even while
+##   the shown state still lags the result (#266);
+##
 ##   godot --headless --path game --script ../tools/battle_display_check.gd
 ##
 ## Needs the original games' files (user://profiles.json); a game without them
@@ -75,6 +78,7 @@ func _edition(edition: String) -> void:
 		await _summon_then_end(view, "OUS1", true)
 		await _mastery_stance(view)
 	await _defence_selection(view, edition)
+	await _fallen_hero_pose(view, edition)
 	view.queue_free()
 	await process_frame
 	await process_frame
@@ -304,7 +308,8 @@ func _strike_enchantments(view: Node) -> void:
 		var dispel_fx: bool = view.effects.requested.has("Disenchant")
 		var icon: bool = view.rail.strip.items.any(func(item: Dictionary) -> bool: return item.meta.get("card") == "ETRS")
 		var tooltip := str(view._hero_tip(1)).contains(venom_title)
-		timed = timed and has_venom == (venom_fx and not dispel_fx) and (not icon or venom_fx) and tooltip == has_venom
+		# The second game's hero tooltip lists no enchantments (#230, #274).
+		timed = timed and has_venom == (venom_fx and not dispel_fx) and (not icon or venom_fx) and not tooltip
 		saw_venom = saw_venom or has_venom
 		saw_dispel = saw_dispel or dispel_fx
 		saw_icon = saw_icon or icon
@@ -616,3 +621,27 @@ func _gazed_blocker(view: Node, edition: String) -> void:
 		check(not view.models.has(blocker), "%s: the dead blocker's figure is gone (%s)" % [what, str(view.models[blocker].clip) if view.models.has(blocker) else "-"])
 		duel.heroes[side].spec = "NONE"
 		duel.heroes[side].luck = 0
+
+## The loser's death clip ends while an earlier presented change still waits
+## (a drain or effect cue): the shown phase is not yet the result, and the
+## fallen hero must not stand up into its idle (#266).
+func _fallen_hero_pose(view: Node, edition: String) -> void:
+	await _clear(view)
+	var duel: ELDuel = view.duel
+	view._wait_display(0)
+	duel.heroes[1].health = 1
+	duel._damage(1, 5)
+	duel._check_winner()
+	if not view.models.has(1) or duel.winner != 0:
+		check(false, "%s: #266 the lethal hit ends the duel" % edition)
+		view._unwait_display(0)
+		return
+	var model: ELModel = view.models[1]
+	var stood := false
+	for i in 900:
+		view.ai_clock = -1000.0
+		await process_frame
+		if model.clip != "udeath": stood = true
+		if view.ending.get("stage", "") == "over": break
+	check(not stood and view._shown_phase() != ELDuel.Phase.FINISHED, "%s: #266 the fallen hero keeps its death pose while the shown result lags" % edition)
+	view._unwait_display(0)

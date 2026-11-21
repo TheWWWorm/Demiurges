@@ -52,8 +52,23 @@ The player has a single level 1 Vital, the **Chosen One**. The other five heroes
 
 - The mission is won when the Chosen One comes within two tiles of the point (30, 123). The area from x 0 to 39 and y 104 to 159 is revealed first, and the victory follows at the next check.
 - It is lost when no Chosen One is left.
-- Glazzz and Warp, as computer heroes, walk a fixed route that turns at the points (55, 110), (55, 146), (64, 84) and (55, 104).
-- These points show that the map was large: at least 65 tiles wide and 160 tiles long.
+- Glazzz walks a fixed loop: from (55, 146) to (55, 110), then (64, 84), then (55, 104) and back to (55, 146). When the Chosen One comes within his sight, less three tiles, he attacks him instead.
+- Warp keeps no route: he attacks the Chosen One when he comes within sight, and otherwise visits the sites near him.
+- These points show that the map was large: at least 65 tiles wide and 160 tiles long. Every map of the game is square, so it was probably the largest size, 160 by 160.
+
+## In Demiurges
+
+Demiurges rebuilds Evil Dale as a single mission of its own, listed after [Savage Desert](cut-mission-savage-desert). The [random map](adventure-map) generator lays it out from a fixed recipe on a 160-tile map, and the mission keeps every rule the program still has:
+
+- The Chosen One is alone: no castle, no other hero, no summoning, and no scrolls of global spells, which he could not cast. He starts in a glade of the Vitals' woods in the south-east, with the shops and mines of a small homeland around him.
+- The dale is one long valley, walled by cliffs and woods, that winds through the four elements: the Chaots' dark rock, the Kinets' snow (with a second homeland of shops and mines), the Synthets' sand (with an outpost of their shops and a component portal where it begins), and the Vitals' woods again, where Glazzz walks his loop on the program's points, along an old track lined with groves. A pass in the west leads to the way out at (30, 123).
+- The rivals wait along the way, each in the ground of his race: Zarus in the rock, Valaddin in the snow, Tango in the sand, Glazzz in the last woods and Warp at the pass. Glazzz and Warp hunt the Chosen One as the program has them do; the other three hold their places.
+- The creatures grow with the journey, from the first level at the glade to the ninth near the exit, and belong to the ground they stand on.
+- Beyond the pass lie the ruins where the four elements meet: four quarters of ground around a monument, in a ring of broken walls. The program reveals them when the Chosen One reaches the way out, and the mission is won.
+- The Chosen One and the rivals speak on the way, in message boxes with their portraits: at the start, at the ground of each element, when he meets each rival and after Glazzz and Warp are beaten. Each rival is a hero of his race who came seeking the same power and is trapped in the dale too. The original has no lines for the mission beyond its briefing, so these are Demiurges' own, written after the dialogues of Etherlords II.
+- Both editions show their own texts.
+
+This is a reconstruction: only the points and the rules above come from the original. The dale's course between them, the places of Zarus, Valaddin and Tango, the elements along the way and the ruins are Demiurges' reading of the briefing.
 
 ## The Chosen One
 

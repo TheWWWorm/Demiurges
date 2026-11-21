@@ -209,7 +209,11 @@ same shares, so forest masses read as dark ground with a lighter rim. The
 exception is snow: version 13 lays about 60% of its pine stands on brown or
 dark earth, against a quarter in the stock missions, because its snow is
 denser and the sparse pine models alone would make a blocked stand look like
-open snow.
+open snow. Version 14 keeps every prop on the ground of its own art set: it
+drops the stock maps' strays from each ground's mix (snow pines among the tan
+ground's cacti, snowy rocks on red ground), lays deep snow and ice under its
+pine stands instead of earth, and lets a prop stand only where every corner
+under its solid cells has its climate.
 
 ### Castle approaches
 

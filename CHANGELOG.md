@@ -2,6 +2,59 @@
 
 Versions follow [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html) from 0.3.0 on.
 
+## 0.22.0
+
+### New
+
+- **Restored cut missions (Etherlords I).** Three missions cut from the first game are rebuilt as single missions, listed at the end of **Single Mission**. Each is laid out from a fixed recipe, so it is the same map every time, and keeps every rule of it the game files still hold. The original has no lines for them beyond their briefings, so the heroes speak in new message boxes with their portraits, in the style of Etherlords II's dialogues, in English and Russian.
+  - **Savage Desert.** The Chaots start alone in a desert the Synthets have just lost, with the Synthets' abandoned homeland of mines and shops to take. As in the original rule, the mission is won only when your hero defeats the renegade Cyclops in the north-eastern mountains, past an Orc Warrior, an ogre chief and a Rock Wall. The Russian edition, which has no texts for this mission, shows a new translation.
+  - **Evil Dale.** A single Vital, the Chosen One, walks a long valley through the grounds of all four elements on a 160-tile map, with no castle, no summoning and no other hero. Five rival heroes wait along the way; Glazzz patrols his loop and Glazzz and Warp hunt the Chosen One, as the original rules have them do. Creatures grow from level 1 to 9 on the way, and the mission is won at the way out of the dale and lost if the Chosen One falls.
+  - **Snowflake Maze.** Three Kinet lords meet in a tournament around a six-armed ice maze, the two rivals led by the unplaced heroes Santa Claus and Father Frost with their New Year 2002 decks. A Teacher waits at the heart of the maze, behind three guarded doors. Destroy the rival castles and keep your own.
+  - Save lists and the Hall of Fame show the mission's name, and the wiki's cut-mission pages describe what was rebuilt and what is new.
+- **Etherlords II shore objects on Etherlords I random maps.** Random map version 16 decorates the shores with Etherlords II's own quays beside the harbors, a moored ship at each homeland harbor, wrecks in sheltered coves and floating flotsam. Wrecks appear on every map with water; quays and moored ships only on naval maps. They are decoration only: they block nothing and change no route, and the map, its saves and its setup code are the same with or without Etherlords II. Turn them off with **Etherlords II shore objects in the first game** under Options → Interface → Gameplay (on by default, needs Etherlords II installed, applies from the next map loaded); without them every harbor keeps its built-in pier.
+- **Start-up screen.** The game now opens on its splash screen with a loading bar while it loads, instead of a frozen window that Windows could offer to close as not responding. A saved choice of the other renderer restarts the game right away, before loading. The sharper-art check at start-up and its prompt no longer hold up the first frames, and loading screens open faster.
+
+### Battles
+
+- **Space in an Etherlords II fight** skips only the current attacker's exchange, as in the original: its blows land at once with their sounds, it walks home and the next attacker sets off. Space during the final walk home still sends everyone home. The victory fanfare can no longer be cut: Space ends only the hero's victory animation, and the battle closes when the fanfare finishes instead of leaving it playing on the map. [#272](https://github.com/TheWWWorm/Demiurges/issues/272)
+- **Defeat theme.** The Etherlords II lost-battle screen (the synthet burning in the cave) plays the original's defeat theme. [#273](https://github.com/TheWWWorm/Demiurges/issues/273)
+- **Fallen heroes stay down.** An Etherlords I hero killed while earlier hits were still being shown no longer gets back up into its idle pose. [#266](https://github.com/TheWWWorm/Demiurges/issues/266)
+- **Subjugation on a Pale creature.** A charmed Pale creature that dissipates into the Colourless Plane goes back to its original owner, whatever killed it. The computer opponent plans with the same rule. [#267](https://github.com/TheWWWorm/Demiurges/issues/267)
+- **Ash Storm** can be dispelled in Etherlords II (Purify, Flicker and the cleansing spells remove it), as in the original. In Etherlords I it stays undispellable, as in that game, unless the Etherlords II card balance option is on. [#268](https://github.com/TheWWWorm/Demiurges/issues/268)
+- **Lake Snake and Lifeguard.** When Lifeguard cancels a Lake Snake's blow, the creature keeps its stats and gets no venom, as in the original. The Etherlords II puzzle *One Last Reprieve*, which relied on the old behaviour, has been withdrawn. [#269](https://github.com/TheWWWorm/Demiurges/issues/269)
+- **Grass Snake's growth** shows the original's blood-drinking enchantment icon and text instead of the snake's own portrait and creature text; Lake Snake and Etherlords I snake venom use their enchantment icons and texts too. [#271](https://github.com/TheWWWorm/Demiurges/issues/271)
+- **Etherlords II hero tooltip** no longer lists the hero's enchantments, as in the original; they are still shown on the strip. [#274](https://github.com/TheWWWorm/Demiurges/issues/274)
+
+### Etherlords II adventure
+
+- **Models coming into sight** fade in from transparent at the original's speed instead of slowly brightening from black, and objects you have seen stay dimmed in the fog rather than going fully dark. [#270](https://github.com/TheWWWorm/Demiurges/issues/270)
+
+### Etherlords I random maps
+
+- **Version 14: scenery on its own ground.** Every prop now stands on the ground of its own climate: no more snow pines among the cacti or snowy rocks on red ground, and pine stands on snow lie on deep snow and ice instead of bare earth.
+- **Version 15: stock like the stock missions.** Shops no longer sell the five cards the stock missions never sell, prizes skip the four artifacts no stock map places (Rods of Defence, Fire, Insanity and Reflection), and guards skip the unused copies of creatures. Shops on maps from earlier versions hide those five cards when opened, without changing the map.
+- New setup codes start with `EL1R16:`. Codes and saves from earlier versions keep their original maps.
+- Starting a map from its preview, restarting it or loading its saves no longer generates the same large map again within one session.
+
+### Etherlords I adventure
+
+- **Faster computer turns.** The computer players' turns on the map are about two to three times faster (a day of enemy turns took 3–4 seconds instead of 6–11 in our tests), with the same moves.
+- **Battle swords.** A hero of yours stopped by a hostile guard zone shows the original's blinking crossed swords above it until the day ends.
+- A player whose castle is destroyed loses the blazons on all of its buildings, as in the original.
+- **Try again** in a map battle decides again who moves first, as a new battle would: the home terrain when it favours one side, otherwise a fresh coin flip. The same goes for practice and Duel mode rounds, and for Try again in older Expedition runs.
+
+### Puzzles and battles
+
+- **Random puzzles version 6.** A Master challenge is now rejected when the obvious first turn, as the original opponent's Easy setting would play it, still wins. About three Master codes in five used to allow that. The One Still Loyal and A Second Wind no longer appear at Master, since the obvious play won all of them; they remain at lower tiers. Codes now start with `ELP6`; `ELP5` codes need the 0.21.0 build.
+- **Puzzle opponent.** When the opponent in a puzzle can kill your hero within its own turn, it now does, instead of playing the first line it found, often an attack too small to finish a hero left at a few points.
+- **Spell effects follow their creature.** Enchantments, buffs, curses, ability cues and hits on a creature's body now move with the figure, instead of staying at the spot where it stood when the spell was cast. Deaths, summons, plane crossings, Exile and effects that fill an area stay where they started.
+
+### Interface and graphics
+
+- **Path tracing on adventure maps** traces only the ground the camera sees and a margin around it, and skips re-reading figures that have not changed, so large or fully revealed maps run much faster with it.
+- The About page in Options credits the project with a clickable link to its GitHub page, and the web wiki's header links to the project page.
+- README screenshots of an Etherlords II adventure map, a battle and Autochess.
+
 ## 0.21.0
 
 ### New

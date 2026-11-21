@@ -312,7 +312,9 @@ static func preview_image(row: Dictionary) -> Image:
 	return Image.create_from_data(PREVIEW_SIZE.x, PREVIEW_SIZE.y, false, Image.FORMAT_RGB8, pixels)
 
 static func map_title(profile: ELProfile, map_id: String) -> String:
-	if profile.id == "el1" and ELFirstRandomMap.is_random_id(map_id): return ELRemakeText.t("Random map", profile)
+	if profile.id == "el1" and ELFirstRandomMap.is_random_id(map_id):
+		var restored := ELRestoredMissions.scenario_of_id(map_id)
+		return ELRestoredMissions.title(profile, restored) if not restored.is_empty() else ELRemakeText.t("Random map", profile)
 	var entry := ELSingleScenario.read_binary_header(profile, ELSingleScenario.map_path(map_id)) if profile.id == "el2" else ELSingleScenario.read_header(profile, map_id)
 	if entry.is_empty(): return map_id
 	return ELSingleScenario.title(profile, entry)

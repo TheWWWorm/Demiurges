@@ -26,7 +26,7 @@ header { display: flex; align-items: center; justify-content: space-between; gap
 .brand { display: flex; align-items: center; gap: 12px; color: var(--gold); text-decoration: none; font: 600 24px/1.1 var(--serif); }
 .brand small { display: block; font: 14px var(--sans); color: var(--muted); letter-spacing: .08em; text-transform: uppercase; }
 .crest { border-radius: 8px; }
-header nav { display: flex; align-items: center; gap: 12px; }
+header nav { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 select, input[type=search], button { font: inherit; color: var(--ink); background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; }
 .play { padding: 6px 14px; border: 1px solid var(--gold); border-radius: 6px; text-decoration: none; color: var(--gold); white-space: nowrap; }
 .play:hover { background: var(--panel-2); }

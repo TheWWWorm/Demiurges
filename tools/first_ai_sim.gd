@@ -133,6 +133,13 @@ func _play(profile: ELProfile, entry: Dictionary, days: int, need_shop: bool) ->
 		if map == null:
 			print("FAIL %s: %s" % [entry.id, generator.error])
 			return "fail"
+	elif entry.has("random_map"):
+		# A restored mission: generated from its fixed recipe.
+		var recipe := ELFirstRandomMap.new()
+		map = recipe.generate(profile, entry.random_map)
+		if map == null:
+			print("FAIL %s: %s" % [entry.id, recipe.error])
+			return "fail"
 	elif not map.load_map(profile, str(entry.id)):
 		print("SKIP %s: %s" % [entry.id, map.error])
 		return "skip"

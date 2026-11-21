@@ -77,8 +77,7 @@ static func _report_probe(tree: SceneTree, path: String) -> void:
 ## engine's Mobile renderer, its Vulkan renderer for those GPUs (Forward+
 ## is not made for them and can end the game at its first battlefield).
 static func renderer_args(vulkan: bool, mobile := OS.has_feature("mobile")) -> PackedStringArray:
-	if not vulkan: return PackedStringArray(["--rendering-method", "gl_compatibility"])
-	return PackedStringArray(["--rendering-method", "mobile" if mobile else "forward_plus", "--rendering-driver", "vulkan"])
+	return ELRendererChoice.renderer_args(vulkan, mobile)
 
 ## Whether the check still has work on this start.
 static func pending(preferences: ELSettings) -> bool:

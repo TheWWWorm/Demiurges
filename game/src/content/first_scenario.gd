@@ -25,6 +25,7 @@ static func initialize(state: ELAdventureSession, human: int, campaign: bool) ->
 		castles[int(player.attrs.id)] = {"health": energy, "max": energy, "pending": 0, "alive": true}
 	if castles.has(human): state.current_player = human
 	state.scenario = {"version": VERSION, "campaign": campaign, "castles": castles, "tomb_open": false, "opening": false}
+	if not campaign: ELRestoredMissions.start(state)
 	show_stages(state)
 
 static func restore(state: ELAdventureSession, raw: Variant) -> String:
@@ -44,6 +45,15 @@ static func restore(state: ELAdventureSession, raw: Variant) -> String:
 	var progress: Variant = raw.get("progress", {})
 	if not progress is Dictionary or (not progress.is_empty() and not valid_progress(progress)): return "Invalid saved campaign progress."
 	state.scenario = {"version": VERSION, "campaign": raw.campaign, "castles": castles, "tomb_open": raw.tomb_open, "opening": raw.get("opening", false)}
+	# Evil Dale: the leg of Glazzz's loop he last reached.
+	if raw.has("patrol"):
+		if not ELLuaSave._integer(raw.patrol, 0, ELRestoredMissions.PATROL.size() - 1): return "Invalid saved patrol."
+		state.scenario.patrol = int(raw.patrol)
+	# A restored mission: the story beats already told.
+	if raw.has("told"):
+		var known := ELRestoredStory.ids(ELRestoredMissions.scenario_of(state.map))
+		if not raw.told is Array or raw.told.size() > known.size() or raw.told.any(func(id: Variant) -> bool: return not id is String or not known.has(id)): return "Invalid saved story."
+		state.scenario.told = raw.told.duplicate()
 	if not progress.is_empty(): track(state, progress)
 	show_stages(state)
 	return ""
@@ -270,7 +280,27 @@ static func evaluate(director: ELAdventureDirector, battle: Dictionary = {}) -> 
 	var lose := not alive(state, human)
 	var win := false
 	var id := state.map.id
-	if not state.scenario.campaign:
+	if not state.scenario.campaign and ELRestoredMissions.is_dale(state) and director.strategy_commanders().is_empty():
+		# Evil Dale, as the original program rules it: lost when no Chosen
+		# One is left; won when he reaches the way out, after the ruins
+		# beyond it are revealed.
+		var chosen := ELRestoredMissions.chosen_one(state)
+		if chosen.is_empty(): return finish(director, "lose")
+		ELRestoredStory.tell(director, battle)
+		if not ELRestoredMissions.at_exit(chosen): return ""
+		_reveal(state, human, ELRestoredMissions.EXIT_REVEAL)
+		return finish(director, "win")
+	var goal := ELRestoredMissions.goal_monster(state)
+	if not lose: ELRestoredStory.tell(director, battle)
+	if not state.scenario.campaign and not goal.is_empty() and director.strategy_commanders().is_empty() and (not battle.is_empty() or ELRestoredMissions.goal_alive(state)):
+		# A restored mission won only by a human hero's victory over its
+		# creature, as the original program rules for Savage Desert. Should
+		# the creature fall to anyone else, the usual conquest decides.
+		if not lose and not battle.is_empty():
+			var opponent := _opponent_of_human(state, battle)
+			win = opponent.get("name") == goal and opponent.get("type") == "monster" and (int(battle.winner) < 0 or int(battle.winner) != int(opponent.uid))
+		if not win and not lose and not ELRestoredMissions.goal_alive(state): win = not _has_rival(state, human)
+	elif not state.scenario.campaign:
 		var commanders := director.strategy_commanders()
 		if commanders.is_empty(): win = not lose and not _has_rival(state, human)
 		else:
@@ -321,6 +351,16 @@ static func evaluate(director: ELAdventureDirector, battle: Dictionary = {}) -> 
 	if win: return finish(director, "win")
 	return ""
 
+## Marks an area explored for a player and lets the fog show it.
+static func _reveal(state: ELAdventureSession, player: int, area: Rect2i) -> void:
+	var size := state.map.width * state.map.height
+	if state.explored.size() != size: return
+	var cells := area.intersection(Rect2i(0, 0, state.map.width, state.map.height))
+	for y in range(cells.position.y, cells.end.y):
+		for x in range(cells.position.x, cells.end.x):
+			state.explored[y * state.map.width + x] |= ELFog.bit(player)
+	ELFog.refresh(state)
+
 static func _has_rival(state: ELAdventureSession, commander: int) -> bool:
 	for player: int in state.scenario.castles:
 		if player != commander and player >= 1 and alive(state, player) and state.hostile({"owner": commander}, {"owner": player}): return true
@@ -330,6 +370,8 @@ static func _has_rival(state: ELAdventureSession, commander: int) -> bool:
 ## free exchange, then the two White Lord battles follow in order.
 static func opening(director: ELAdventureDirector) -> bool:
 	var state := director.state
+	# A restored mission's first words.
+	if applies(state): ELRestoredStory.tell(director, {}, true)
 	if not applies(state) or not _last_step(state) or not state.scenario.campaign or state.scenario.opening: return false
 	var hero := state.object(state.main_hero)
 	var lords: Array[int] = []

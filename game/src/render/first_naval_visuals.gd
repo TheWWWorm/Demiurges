@@ -6,6 +6,9 @@ extends Node3D
 const FLAG_COLORS := [Color("dfc077"), Color("df755e"), Color("75b8d0"), Color("a5bf77")]
 var map: ELAdventureMap
 var harbors: Array[Dictionary] = []
+## Harbor id -> side of its second-game quay (ELFirstShoreDecor.docked):
+## those harbors keep only their banner pole, on the side away from it.
+var docked: Dictionary = {}
 
 static func ship_source(source: ELProfile) -> ELProfile:
 	if source == null or source.id != "el2": return null
@@ -95,11 +98,15 @@ func build(source: ELAdventureMap) -> void:
 		model.rotation.y = atan2(direction.x, direction.z)
 		# A narrow pier reaches from the land-cell center to the sea-cell
 		# center; it marks the connection without blocking the hero.
-		_part(model, "pier", _box(Vector3(0.82, 0.11, 2.16)), Color("9b784e"), Vector3(0, 0.11, 0.9))
-		for at: Vector3 in [Vector3(-0.5, 0.28, 0.15), Vector3(0.5, 0.28, 0.15), Vector3(-0.5, 0.28, 1.65), Vector3(0.5, 0.28, 1.65)]:
-			_part(model, "post_%d" % model.parts.size(), _box(Vector3(0.12, 0.65, 0.12)), Color("5e4930"), at)
-		_part(model, "beacon", _box(Vector3(0.10, 1.75, 0.10)), Color("5e4930"), Vector3(-0.62, 0.87, -0.24))
-		var flag := PackedVector3Array([Vector3(-0.62, 1.74, -0.24), Vector3(-0.62, 1.22, -0.24), Vector3(-0.03, 1.48, -0.24)])
+		var quay := int(docked.get(int(port.get("id", -1)), 0))
+		if quay == 0:
+			_part(model, "pier", _box(Vector3(0.82, 0.11, 2.16)), Color("9b784e"), Vector3(0, 0.11, 0.9))
+			for at: Vector3 in [Vector3(-0.5, 0.28, 0.15), Vector3(0.5, 0.28, 0.15), Vector3(-0.5, 0.28, 1.65), Vector3(0.5, 0.28, 1.65)]:
+				_part(model, "post_%d" % model.parts.size(), _box(Vector3(0.12, 0.65, 0.12)), Color("5e4930"), at)
+		# The quay lies on local +X for side 1 (-X for side -1).
+		var away := -1.0 if quay >= 0 else 1.0
+		_part(model, "beacon", _box(Vector3(0.10, 1.75, 0.10)), Color("5e4930"), Vector3(0.62 * away, 0.87, -0.24))
+		var flag := PackedVector3Array([Vector3(0.62 * away, 1.74, -0.24), Vector3(0.62 * away, 1.22, -0.24), Vector3(0.03 * away, 1.48, -0.24)])
 		_part(model, "banner", _triangles(flag), Color("65becb"))
 		model.hide()
 		harbors.append({"model": model, "land": land, "water": water, "level": -1})

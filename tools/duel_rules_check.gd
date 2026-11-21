@@ -1260,12 +1260,29 @@ func _parity() -> void:
 			[["attack", 0], ["end"], ["block", 1, 0], ["end"]], func(d: ELDuel) -> bool: return not d.creatures.has(3))
 	if game == "el2":
 		# A lifeguard laid on the other hero's creature in defence turns the
-		# first snake's blow away but not its bite: the treant neither
-		# regenerates nor leaves the fight, its own blow is lost on the stone
-		# skin, and the second bite leaves it no health to regenerate with.
-		_fixture("lifeguard on the attacker keeps it in the fight", {"puzzle": "el2_tactical_v2_crossroads_last_reprieve"},
+		# first snake's blow away and its bite with it (the original, #269):
+		# the second snake's bite and blow then leave the treant 1/1 to
+		# regenerate with its hero's one ether. The puzzle's line counted on
+		# the bite getting through the lifeguard, and no longer wins.
+		_fixture("lifeguard on the attacker turns the bite away", {"puzzle": "el2_tactical_v2_crossroads_last_reprieve"},
 			[["cast", 0, 4], ["block", 0, 2], ["block", 1, 2], ["end"]],
-			func(d: ELDuel) -> bool: return not d.creatures.has(4) and d.creatures.has(2) and d.creatures.has(3) and int(d.heroes[1].mana) == 1)
+			func(d: ELDuel) -> bool: return d.creatures.has(4) and int(d.heroes[1].mana) == 0 and d._enchantment_count(4, "LFGR") == 0)
+		# #269: a Lake Snake's blow that a lifeguard turns away leaves the
+		# blocker's power and health as they were, and no venom on it.
+		var guarded := {"heroes": [{"health": 20, "mana": 0}, {"health": 20, "mana": 0}],
+			"creatures": [{"card": "LASN", "owner": 0}, {"card": "GBAT", "owner": 1, "enchantments": ["LFGR"]}]}
+		var bare_bat: Dictionary = Fixtures.build(profile, {"creatures": [{"card": "GBAT", "owner": 1}]}).creatures[2]
+		_fixture("lake snake on a lifeguarded blocker", guarded, [["attack", 0], ["end"], ["block", 1, 0], ["end"]],
+			func(d: ELDuel) -> bool: return d.creatures.has(3) and d._enchantment_count(3, "LASN") == 0 and d._enchantment_count(3, "LFGR") == 0 \
+				and int(d.creatures[3].power) == int(bare_bat.power) and int(d.creatures[3].toughness) == int(bare_bat.toughness))
+		# #268: the second game's Ash Storm is removed by Purify like any hero enchantment.
+		_fixture("purify removes ash storm", {"heroes": [{"health": 20, "mana": 20, "hand": ["PRFY"], "enchantments": ["ASST"]}, {"health": 20, "mana": 0}], "creatures": []},
+			[["do", {"kind": "cast", "card": "PRFY", "target": 0, "grave": 1}]],
+			func(d: ELDuel) -> bool: return d.global_enchantment_count("ASST") == 0)
+	# #268: Cleanse removes the second game's Ash Storm; the first game's stays (the original).
+	_fixture("cleanse and ash storm", {"heroes": [{"health": 20, "mana": 20, "hand": ["ASST", "CLSN"]}, {"health": 20, "mana": 0}], "creatures": []},
+		[["cast", 0], ["cast", 1]], func(d: ELDuel) -> bool: return d.global_enchantment_count("ASST") == (1 if game == "el1" else 0))
+	if game == "el2":
 		# Weaving gives its hero the enchantment's card by name, to be laid
 		# again: the other creature's Energy Barrier on the weaver's own hero.
 		_fixture("weaving gives a card to cast", {"puzzle": "el2_tactical_v2_curiosity_glass"},
@@ -1733,12 +1750,18 @@ func _revised_block() -> void:
 	else: _missing("block taken back and moved: " + " | ".join(trouble))
 
 ## An authored puzzle's position, as its runner sets it up (objective and all).
+## A puzzle withdrawn from the packs keeps its position in tools/duel_rules_puzzles.
 func _puzzle_position(id: String) -> ELDuel:
 	var entries := ELPuzzles.list(profile.id)
 	for at in entries.size():
 		if String(entries[at].id) != id: continue
 		var run := ELPuzzles.Run.new()
 		if run.begin(profile, at): return run.duel
+	var path := ProjectSettings.globalize_path("res://").path_join("../tools/duel_rules_puzzles/%s.json" % id).simplify_path()
+	var kept: Variant = JSON.parse_string(FileAccess.get_file_as_string(path)) if FileAccess.file_exists(path) else null
+	if kept is Dictionary:
+		var run := ELPuzzles.Run.new()
+		if run.begin_entry(profile, kept): return run.duel
 	return null
 
 func _missing(what: String) -> void:

@@ -5,7 +5,8 @@ extends SceneTree
 ##   keeps the state, so a loaded game recruits the hero it would have;
 ## - #263: Try again in a map battle deals the same battle anew, with new
 ##   opening hands, in the first game too (the second game's retry runs in
-##   issue_reports_check).
+##   issue_reports_check); who moves first is decided afresh, by the home
+##   terrain or the new seed's coin flip, counted over 200 retries.
 ##
 ##   godot --headless --path game --script ../tools/issue_seeds_check.gd
 ##
@@ -117,10 +118,42 @@ func _retry_hands(profile: ELProfile) -> void:
 	check(again.battle.heroes.map(func(h: Dictionary) -> Array: return h.hand) == hands, "el1 #263: the checkpoint alone deals the old hands")
 	VIEW_SCRIPT._redeal_encounter(again)
 	var retried: ELDuel = again.battle
-	check(retried.setup == opening.setup and retried.phase == opening.phase and retried.attacker == opening.attacker
+	check(_without_first(retried.setup) == _without_first(opening.setup) and retried.phase == opening.phase and retried.attacker == retried.first_side()
 		and retried.heroes.map(func(h: Dictionary) -> int: return h.health) == opening.heroes.map(func(h: Dictionary) -> int: return h.health),
 		"el1 #263: Try again restarts the same battle")
 	check(retried.heroes.map(func(h: Dictionary) -> Array: return h.hand) != hands, "el1 #263: Try again deals new opening hands")
 	check(retried.adventure_session() == restored.state, "el1 #263: the new battle belongs to the restored map")
+	_retry_first_sides(again, opening)
 	restored.state.close()
 	state.close()
+
+static func _without_first(setup: Dictionary) -> Dictionary:
+	var copy := setup.duplicate(true)
+	copy.erase("first_side")
+	return copy
+
+## Who moves first after Try again is decided as for a new battle: the home
+## terrain when it favours one side (then always that side), otherwise the
+## new seed's coin flip (then both sides turn up over many retries).
+func _retry_first_sides(encounter: ELAdventureEncounter, opening: ELDuel) -> void:
+	var decided: int = encounter.first_side_for(opening.setup, 0)
+	var terrain := decided == encounter.first_side_for(opening.setup, 1)
+	var counts := [0, 0]
+	var consistent := true
+	for retry in 200:
+		VIEW_SCRIPT._redeal_encounter(encounter)
+		var battle: ELDuel = encounter.battle
+		counts[battle.first_side()] += 1
+		if battle.attacker != battle.first_side() or _without_first(battle.setup) != _without_first(opening.setup): consistent = false
+	print("el1 #263: first side over 200 retries: side 0 %d, side 1 %d (%s)" % [counts[0], counts[1], "home terrain decides" if terrain else "coin flip"])
+	if terrain: check(counts[decided] == 200 and consistent, "el1 #263: when the home terrain decides, every retry keeps that side first")
+	else: check(counts[0] >= 60 and counts[1] >= 60 and consistent, "el1 #263: Try again flips a new coin for who moves first (%s)" % [counts])
+	# The same map battle with the coin flip forced: no side's colour matches
+	# the battle tile, so only the seed's parity decides.
+	var setup := opening.setup.duplicate(true)
+	var coin := false
+	for faction: String in ["Red", "Green", "Blue", "Black"]:
+		setup.players[0].faction = faction
+		setup.players[1].faction = faction
+		if encounter.first_side_for(setup, 0) == 0 and encounter.first_side_for(setup, 1) == 1: coin = true
+	check(coin, "el1 #263: sides of one colour (the home terrain favours neither) take the new seed's coin flip")

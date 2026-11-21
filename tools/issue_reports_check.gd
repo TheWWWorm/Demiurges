@@ -318,7 +318,10 @@ func _battle_view(edition: String) -> void:
 	duel.heroes[side].enchantments.append(worn)
 	var hero_tip: Dictionary = view._hero_tip(side)
 	check(not view._creature_tip_text(shaman).contains(about), "%s #202/#254: a creature's tooltip is its printed card, without its enchantments" % edition)
-	check(hero_tip.labels.any(func(label: Dictionary) -> bool: return str(label.text).contains(duel.card_name("HEAL"))), "%s: a hero's tooltip lists its enchantments" % edition)
+	# The list is a first-game remake addition; the second game's hero
+	# tooltip has none (#230, #274).
+	var listed: bool = hero_tip.labels.any(func(label: Dictionary) -> bool: return str(label.text).contains(duel.card_name("HEAL")))
+	check(listed == (edition == "el1"), "%s: a hero's tooltip %s its enchantments" % [edition, "lists" if edition == "el1" else "#230/#274 omits"])
 	duel.creatures[shaman].enchantments.erase(worn)
 	duel.heroes[side].enchantments.erase(worn)
 	# #123 a spell
@@ -1132,10 +1135,15 @@ func _second_prompt() -> void:
 		var lose := map.lose_battle
 		var black: ColorRect = lose.get_child(0) if lose != null and lose.get_child_count() > 0 else null
 		check(lose != null and lose.modulate.a > 0.99 and black != null and black.modulate.a > 0.99, "el2 #139: the defeat picture's screen is black from its first frame, so the map does not show first")
+		# #273 the defeat theme plays with the picture and stops as it closes.
+		var theme: AudioStreamPlayer = lose._player if lose != null else null
+		check(ELSecondLoseBattleView.last_sound == "Buttons/GoodDefeat.wav" and (ELUiSounds.volume <= 0.0 or (theme != null and theme.playing)),
+			"el2 #273: the defeat picture plays its defeat theme (%s)" % ELSecondLoseBattleView.last_sound)
 		if lose != null:
 			lose._process(1.1)
 			lose.dismiss()
 			lose._process(1.1)
+			check(theme == null or not theme.playing, "el2 #273: the defeat theme stops when the picture closes")
 			check(map.lose_battle == null and is_instance_valid(lose) and black.modulate.a > 0.99, "el2 #139: after the click the picture fades to black and the map takes over")
 			lose._process(0.5)
 			check(black.modulate.a < 0.99 and black.modulate.a > 0.01, "el2 #139: the map fades in from the black")
@@ -1159,7 +1167,11 @@ func _second_prompt() -> void:
 				await view._retry_battle()
 				check(view.duel != opening and view.duel.heroes[side].health == starting_health and view.campaign_view.state.day == starting_day,
 					"Try again restores the campaign and duel to the start of the encounter")
-				check(view.duel.setup == opening.setup and view.duel.heroes.map(func(h: Dictionary) -> Array: return h.hand) != opening_hands,
+				var unflipped := func(setup: Dictionary) -> Dictionary:
+					var copy := setup.duplicate(true)
+					copy.erase("first_side")
+					return copy
+				check(unflipped.call(view.duel.setup) == unflipped.call(opening.setup) and view.duel.heroes.map(func(h: Dictionary) -> Array: return h.hand) != opening_hands,
 					"el2 #263: Try again deals the same battle new opening hands")
 				map = view.campaign_view
 				director = map.director

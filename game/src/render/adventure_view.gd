@@ -29,6 +29,8 @@ var hero_info: Label
 var notice: Label
 var _observer_battle_note := ""
 var dialogue_panel: Control
+## First game, restored missions: speaker lines in the second game's TextDialog.
+var story_box: ELFirstStoryBox
 ## Catches clicks while a script message box sits over a modal window.
 var dialogue_blocker: Control
 ## Second game: ExBlinkElement frames over the InventoryScreen.
@@ -263,7 +265,7 @@ func build(profile: ELProfile, scenario: Dictionary, preferences: ELSettings, di
 			if profile.id != "el1" or strategic_session != null or not scenario.random_map is Dictionary:
 				return _fail("Random maps require a local Etherlords I game.")
 			var generator := ELFirstRandomMap.new()
-			map = generator.generate(profile, scenario.random_map)
+			map = generator.generate_reused(profile, scenario.random_map)
 			if map == null: return _fail(generator.error)
 			map_seed = ELFirstRandomMap.seed_for_config(generator.config)
 		else:
@@ -308,6 +310,7 @@ func build(profile: ELProfile, scenario: Dictionary, preferences: ELSettings, di
 	_art = ELAdventureArt.new(map)
 	world = ELAdventureScene.new()
 	world.naval_source = naval_source
+	world.decor_source = decor_source
 	add_child(world)
 	if not world.build(map, state): return _fail("; ".join(world.errors))
 	_loading(0.75)
@@ -992,6 +995,9 @@ const BATTLE_DOME_SUMMON_CODE := 0x018c0000
 var dome_source: ELProfile
 ## Independent of the battle-dome preference: installed EL2 ship appearance.
 var naval_source: ELProfile
+## The "first_shore_objects" preference: installed EL2 shore pieces on
+## version 16 random maps (ELFirstShoreDecor), or null for none.
+var decor_source: ELProfile
 
 func _start_battle_dome(first: int, second: int) -> void:
 	_finish_battle_dome()
@@ -1880,6 +1886,9 @@ func _present(data: Dictionary) -> void:
 				if _mission_fade == null and not _reward_transition() and not _level_up_before_speech() and (int(speech.get("actor", -1)) < 0 or _speaker_in_place()): _show_second_dialogue(speech)
 				else: _pending_speech = speech
 				return
+			if _story_line(speech):
+				_show_story_line(speech)
+				return
 			dialogue_name.text = speech.title
 			dialogue_text.text = speech.text
 			for item: Dictionary in speech.get("items", []): dialogue_text.text += "\n" + str(item.get("name", ""))
@@ -1903,6 +1912,7 @@ func _present(data: Dictionary) -> void:
 				if absf(zoom - view_goal.x) < 0.01 and absf(pitch - view_goal.y) < 0.001: view_goal = Vector2(-1, -1)
 			dialogue_panel.hide()
 			if second_dialogue != null: second_dialogue.hide()
+			if story_box != null: story_box.hide()
 			_dock_dialogue()
 			audio.voice.stop()
 			audio.voice.stream = null
@@ -2581,6 +2591,22 @@ func _focus_object(id: int, instant := false) -> void:
 	var item := state.object(id)
 	if item.is_empty(): return
 	_scroll_to(ELAdventureScene.world_position(item.x, item.y), instant)
+
+## First game: a speaker line of a restored mission (ELRestoredStory).
+func _story_line(speech: Dictionary) -> bool:
+	return state.map.profile.id == "el1" and not ELRestoredMissions.scenario_of(state.map).is_empty() and str(speech.get("box", "text")) == "text" 		and bool(speech.get("speaker_box", false)) and not bool(speech.get("question", false)) and speech.get("items", []).is_empty()
+
+func _show_story_line(speech: Dictionary) -> void:
+	if story_box == null:
+		story_box = ELFirstStoryBox.new()
+		ui.add_child(story_box)
+		story_box.answered.connect(func(answer: String): director.acknowledge(answer))
+	var actor := state.object(int(speech.get("actor", -1)))
+	var art := _art.resolve(actor) if not actor.is_empty() else {}
+	var face := int(art.get("row", {}).get("Face", -1))
+	dialogue_panel.hide()
+	story_box.present(speech, state.map.profile.portrait(face) if face >= 0 else null)
+	audio.speak(str(speech.get("text_id", "")))
 
 func _speaker_in_place() -> bool:
 	var destination := camera_goal()

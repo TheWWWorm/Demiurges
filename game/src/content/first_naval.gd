@@ -136,6 +136,13 @@ static func path(grid: ELAdventureGrid, from: Vector2i, goals: Array[Vector2i], 
 	costs[start] = 0
 	var heap: Array[Vector3i] = []
 	_push(heap, Vector3i(_estimate(from, bounds), start, 0))
+	# The search runs over every tile it reaches: the grid's fields are read
+	# once, and connected(grid, here, next, true, true) is written out below.
+	var width := grid.map.width
+	var height := grid.map.height
+	var land := grid.land
+	var wet := grid.naval_water
+	var links := grid.naval_links
 	while not heap.is_empty():
 		var entry := _pop(heap)
 		var id := entry.y
@@ -143,18 +150,26 @@ static func path(grid: ELAdventureGrid, from: Vector2i, goals: Array[Vector2i], 
 		settled[id] = 1
 		if goal_ids.has(id):
 			while id >= 0:
-				result.append(Vector2i(id % grid.map.width, id / grid.map.width))
+				result.append(Vector2i(id % width, id / width))
 				id = parent[id]
 			result.reverse()
 			return result
-		var here := Vector2i(id % grid.map.width, id / grid.map.width)
+		var here := Vector2i(id % width, id / width)
+		var here_wet := wet[id]
 		for direction: Vector2i in DIRECTIONS:
 			var next := here + direction
-			if not grid.contains(next) or grid.land.is_point_solid(next): continue
-			var next_id := next.y * grid.map.width + next.x
-			if settled[next_id] != 0 or avoided.has(next_id) or not connected(grid, here, next, true, true): continue
-			var cost := costs[id] + int(grid.land.get_point_weight_scale(next))
-			if grid.naval_water[id] != grid.naval_water[next_id]: cost += TRANSFER_COST
+			if next.x < 0 or next.y < 0 or next.x >= width or next.y >= height: continue
+			var next_id := next.y * width + next.x
+			if settled[next_id] != 0 or land.is_point_solid(next) or avoided.has(next_id): continue
+			if wet[next_id] != here_wet:
+				# Between land and water only through a harbor.
+				if not links.get(id, {}).has(next_id): continue
+			elif direction.x != 0 and direction.y != 0:
+				# A diagonal cuts no coast and no closed corner.
+				if wet[id + direction.x] != here_wet or land.is_point_solid(Vector2i(here.x + direction.x, here.y)): continue
+				if wet[id + direction.y * width] != here_wet or land.is_point_solid(Vector2i(here.x, here.y + direction.y)): continue
+			var cost := costs[id] + int(land.get_point_weight_scale(next))
+			if here_wet != wet[next_id]: cost += TRANSFER_COST
 			if cost >= costs[next_id]: continue
 			costs[next_id] = cost
 			parent[next_id] = id
@@ -167,26 +182,35 @@ static func _estimate(point: Vector2i, area: Rect2i) -> int:
 static func _less(a: Vector3i, b: Vector3i) -> bool:
 	return a.x < b.x or (a.x == b.x and (a.z > b.z or (a.z == b.z and a.y < b.y)))
 
+## _push and _pop order entries as _less does (written out: they run for
+## every tile a route search reaches).
 static func _push(heap: Array[Vector3i], value: Vector3i) -> void:
 	var at := heap.size()
 	heap.append(value)
 	while at > 0:
 		var above := (at - 1) / 2
-		if not _less(value, heap[above]): break
-		heap[at] = heap[above]
+		var other := heap[above]
+		if not (value.x < other.x or (value.x == other.x and (value.z > other.z or (value.z == other.z and value.y < other.y)))): break
+		heap[at] = other
 		at = above
 	heap[at] = value
 
 static func _pop(heap: Array[Vector3i]) -> Vector3i:
 	var result := heap[0]
 	var last: Vector3i = heap.pop_back()
-	if heap.is_empty(): return result
+	var size := heap.size()
+	if size == 0: return result
 	var at := 0
-	while at * 2 + 1 < heap.size():
+	while at * 2 + 1 < size:
 		var child := at * 2 + 1
-		if child + 1 < heap.size() and _less(heap[child + 1], heap[child]): child += 1
-		if not _less(heap[child], last): break
-		heap[at] = heap[child]
+		var low := heap[child]
+		if child + 1 < size:
+			var right := heap[child + 1]
+			if right.x < low.x or (right.x == low.x and (right.z > low.z or (right.z == low.z and right.y < low.y))):
+				child += 1
+				low = right
+		if not (low.x < last.x or (low.x == last.x and (low.z > last.z or (low.z == last.z and low.y < last.y)))): break
+		heap[at] = low
 		at = child
 	heap[at] = last
 	return result

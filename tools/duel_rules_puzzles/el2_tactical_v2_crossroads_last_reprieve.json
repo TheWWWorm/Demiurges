@@ -1,0 +1,283 @@
+{
+  "authored": true,
+  "briefing": "Clear the enemy army and preserve both Lake Snakes. The 2/2 Treant is already attacking, and its hero has one ether for regeneration. Your first Snake wears Stone Skin; the other has no protection. Lake Snake venom lowers the creature it hits by one power and one toughness.",
+  "briefing_ru": "Уничтожьте армию врага и сохраните обеих Озерных змей. Древень 2/2 уже атакует, и у его героя есть один эфир для регенерации. На вашей первой змее есть Каменная Кожа; вторая не защищена. Яд Озерной змеи снижает силу и стойкость поражённого существа на единицу.",
+  "category": "Curiosities · Crossroads · Keep a regenerating attacker in combat",
+  "category_ru": "Курьёзы · Развилки · Удержите регенерирующего врага в бою",
+  "expansion": "curiosities-v3",
+  "explanation": "The armored Snake first reduces the Treant from 2/2 to 1/1. The enemy's Lifeguard then cancels the three-point strike, so the Treant does not regenerate or withdraw. Its original two-point attack is absorbed by Stone Skin. The second Snake applies another venom, reducing maximum toughness to zero and killing the Treant despite its reserved ether. Shielding your own Snake instead allows the first hit to trigger regeneration and end the exchange early. Assigning the unarmored Snake first exposes it to the two-point return hit and loses a protected ally.",
+  "explanation_ru": "Змея с бронёй сначала уменьшает характеристики древня с 2/2 до 1/1. Телохранитель врага поглощает удар на три, поэтому древень не регенерирует и не выходит из боя. Его исходные две единицы атаки поглощаются Каменной Кожей. Вторая змея накладывает ещё один яд, снижая максимальную стойкость до нуля и убивая древня вопреки запасённому эфиру. Защита собственной змеи вместо врага позволяет первому удару вызвать регенерацию и преждевременно завершить обмен. Если первой назначить незащищённую змею, она получит ответные две единицы урона и погибнет.",
+  "hero_names": [
+    "The Contrary Healer",
+    "The Regenerating Warden"
+  ],
+  "hero_names_ru": [
+    "Лекарь наперекор",
+    "Возрождающийся страж"
+  ],
+  "hints": [
+    "An ordinary lethal first strike lets the Treant regenerate and leave combat. Find a way to keep it present for a second bite.",
+    "Lake Snake venom lowers toughness before its strike deals damage. Lifeguard can cancel that first damage without cancelling the venom. Zero maximum toughness cannot be saved by regeneration.",
+    "Put Lifeguard on the enemy Treant. Block first with the armored Snake, then add the unarmored Snake to the same attack. The first venom leaves one toughness; the second lowers it to zero."
+  ],
+  "hints_ru": [
+    "Обычный смертельный первый удар позволяет древню регенерировать и выйти из боя. Найдите способ оставить его на месте для второго укуса.",
+    "Яд Озерной змеи уменьшает стойкость до нанесения урона её ударом. Телохранитель может поглотить первый урон, не отменяя яд. Нулевую максимальную стойкость регенерация не спасает.",
+    "Наложите Телохранителя на вражеского древня. Сначала назначьте блокировать змею с бронёй, затем добавьте незащищённую к той же атаке. Первый яд оставит одну стойкость, второй снизит её до нуля."
+  ],
+  "id": "el2_tactical_v2_crossroads_last_reprieve",
+  "level": 3.0,
+  "objective": {
+    "protect": [
+      2.0,
+      3.0
+    ],
+    "type": "clear"
+  },
+  "refutations": [
+    {
+      "commands": [
+        {
+          "card": "LFGR",
+          "kind": "cast",
+          "target": 2.0
+        }
+      ],
+      "failure_line": [
+        {
+          "card": "LFGR",
+          "kind": "cast",
+          "target": 2.0
+        },
+        {
+          "id": 2.0,
+          "kind": "block",
+          "target": 4.0
+        },
+        {
+          "id": 3.0,
+          "kind": "block",
+          "target": 4.0
+        },
+        {
+          "kind": "end_phase"
+        },
+        {
+          "kind": "end_phase"
+        },
+        {
+          "kind": "end_phase",
+          "side": 1.0
+        }
+      ],
+      "label": "Protect your first Snake instead of the enemy"
+    },
+    {
+      "commands": [
+        {
+          "card": "LFGR",
+          "kind": "cast",
+          "target": 4.0
+        },
+        {
+          "id": 3.0,
+          "kind": "block",
+          "target": 4.0
+        },
+        {
+          "id": 2.0,
+          "kind": "block",
+          "target": 4.0
+        },
+        {
+          "kind": "end_phase"
+        }
+      ],
+      "label": "Let the unarmored Snake take the first block"
+    }
+  ],
+  "solution": [
+    {
+      "card": "LFGR",
+      "kind": "cast",
+      "target": 4.0
+    },
+    {
+      "id": 2.0,
+      "kind": "block",
+      "target": 4.0
+    },
+    {
+      "id": 3.0,
+      "kind": "block",
+      "target": 4.0
+    },
+    {
+      "kind": "end_phase"
+    }
+  ],
+  "state": {
+    "attacker": 1,
+    "attacks": [
+      4
+    ],
+    "blocks": {},
+    "charge_version": 2,
+    "creatures": {
+      "2": {
+        "card": "LASN",
+        "damage": 0,
+        "enchantments": [
+          {
+            "born": 8,
+            "card": "STSK",
+            "id": 1,
+            "owner": 0,
+            "power": 0,
+            "toughness": 0,
+            "used": false
+          }
+        ],
+        "flags": [
+          "FS"
+        ],
+        "flying": false,
+        "id": 2,
+        "owner": 0,
+        "power": 3,
+        "regenerated": false,
+        "resting": false,
+        "sick": false,
+        "toughness": 2
+      },
+      "3": {
+        "card": "LASN",
+        "damage": 0,
+        "enchantments": [],
+        "flags": [
+          "FS"
+        ],
+        "flying": false,
+        "id": 3,
+        "owner": 0,
+        "power": 3,
+        "regenerated": false,
+        "resting": false,
+        "sick": false,
+        "toughness": 2
+      },
+      "4": {
+        "card": "TANT",
+        "damage": 0,
+        "enchantments": [],
+        "flags": [
+          "Regen(1)"
+        ],
+        "flying": false,
+        "id": 4,
+        "owner": 1,
+        "power": 2,
+        "regenerated": false,
+        "resting": false,
+        "sick": false,
+        "toughness": 2
+      }
+    },
+    "heroes": [
+      {
+        "artifact_uses": 0,
+        "artifacts": [],
+        "channels": 0,
+        "deck": [
+          "STRT"
+        ],
+        "drawn": [],
+        "enchantments": [],
+        "faction": "Green",
+        "grave": [],
+        "hand": [
+          "LFGR"
+        ],
+        "hand_slots": [
+          -1
+        ],
+        "hand_view": [
+          0
+        ],
+        "health": 1,
+        "id": 0,
+        "kind": "hero",
+        "level": 17,
+        "luck": 0,
+        "mana": 4,
+        "maximum": 20,
+        "skills": {},
+        "spec": "NONE",
+        "spec_level": 17,
+        "spell_uses": [
+          1
+        ],
+        "suppression": 0,
+        "template": "Diamanda4Green",
+        "turns": 4
+      },
+      {
+        "artifact_uses": 0,
+        "artifacts": [],
+        "channels": 1,
+        "deck": [
+          "STRT"
+        ],
+        "drawn": [],
+        "enchantments": [],
+        "faction": "Black",
+        "grave": [],
+        "hand": [],
+        "hand_slots": [],
+        "hand_view": [],
+        "health": 30,
+        "id": 1,
+        "kind": "hero",
+        "level": 18,
+        "luck": 0,
+        "mana": 1,
+        "maximum": 30,
+        "skills": {},
+        "spec": "NONE",
+        "spec_level": 18,
+        "spell_uses": [
+          1
+        ],
+        "suppression": 0,
+        "template": "BlackMale1",
+        "turns": 4
+      }
+    ],
+    "next_enchantment": 2,
+    "next_id": 5,
+    "payment_version": 1,
+    "phase": 1,
+    "profile": "el2",
+    "rng": 712367,
+    "round": 4,
+    "setup": {
+      "players": [
+        {
+          "faction": "Green",
+          "level": 17
+        },
+        {
+          "faction": "Black",
+          "level": 18
+        }
+      ],
+      "puzzle_fixed_channels": true,
+      "puzzle_fixed_hands": true
+    },
+    "turn_serial": 8,
+    "winner": -1
+  },
+  "title": "One Last Reprieve",
+  "title_ru": "Последняя отсрочка",
+  "turns": 1.0
+}

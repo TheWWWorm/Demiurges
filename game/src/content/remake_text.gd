@@ -158,6 +158,10 @@ const RU := {
 	"Abundant mines and rewards support longer wars between fortified castles.": "Богатые шахты и награды поддерживают долгие войны укреплённых замков.",
 	"Destroy every rival castle. Keep your own castle standing.": "Уничтожьте все замки соперников. Защитите свой замок.",
 	"Random map · %s · %s": "Случайная карта · %s · %s",
+	# Restored cut missions of the first game (the Russian edition has no texts for them).
+	"Savage Desert": "Дикая пустыня",
+	"Defeat the Cyclops": "Победить Циклопа",
+	"In these sands the warriors of Chaos have broken the Synthets' finest troops, and little is left in our way. Only a renegade Cyclops still defies us. He holds the north-eastern mountains with a strong guard around him, but no barrier can stop the warriors of Great Chaos. Destroy the renegade and the victory is ours.": "В этих песках воины Хаоса разбили лучшие войска Синтетов, и почти ничто больше не стоит у нас на пути. Лишь мятежный Циклоп всё ещё противится нам. Он засел в северо-восточных горах под защитой сильной стражи, но для воинов Великого Хаоса нет непреодолимых преград. Уничтожьте отступника, и победа будет за нами.",
 	# First-game random-world setup.
 	"Two castles, nearby mines and short overland approaches.": "Два замка, близкие шахты и короткие сухопутные пути.",
 	"A broad continent with organic bays and several routes between rivals.": "Обширный материк с извилистыми заливами и несколькими путями между соперниками.",
@@ -757,6 +761,8 @@ const RU := {
 	"Map tooltips on hover": "Подсказки на карте при наведении",
 	"Opponent's spells as icons": "Заклинания противника значками",
 	"Battle dome in the first game": "Купол боя в первой игре",
+	"Etherlords II shore objects in the first game": "Береговые объекты «Демиургов II» в первой игре",
+	"First game, random maps: the second game's quays beside the harbors, moored ships, wrecks and flotsam decorate the shores. Decoration only: the map and its routes are the same either way. Needs Etherlords II installed; applies from the next map loaded.": "Первая игра, случайные карты: причалы из второй игры у гаваней, корабли на якоре, обломки кораблей и плавающий мусор украшают берега. Только украшение: карта и её пути одни и те же в обоих случаях. Нужны установленные Демиурги II; действует со следующей загруженной карты.",
 	"Etherlords II card balance in the first game": "Баланс карт «Демиургов II» в первой игре",
 	"First game: every spell and creature the second game also has is played as in Etherlords II (update 1.03): its cost, power, toughness, abilities, description and rules, so both games share one balance. Heroes, artifacts, runes, global spells and the first game's own battle rules stay as they are; puzzles keep the original balance. Needs Etherlords II installed. Takes effect from the next battle; online, both players need the same choice.": "Первая игра: каждое заклинание и создание, которое есть и во второй игре, действует как в «Демиургах II» (обновление 1.03): его стоимость, сила, здоровье, способности, описание и правила, так что у обеих игр один баланс. Герои, артефакты, руны, глобальные заклинания и собственные правила боя первой игры остаются прежними; головоломки сохраняют исходный баланс. Нужны установленные Демиурги II. Действует со следующего боя; по сети у обоих игроков выбор должен совпадать.",
 	"Use the same Demiurges version and game edition, with the same Etherlords II card balance option.": "Используйте ту же версию Demiurges и то же издание игры, с одинаковой настройкой баланса карт «Демиургов II».",
@@ -1422,6 +1428,7 @@ const RU := {
 	"AMD FSR Upscaling and AMD FSR Frame Generation via the AMD FidelityFX SDK.": "Масштабирование AMD FSR и генерация кадров AMD FSR через AMD FidelityFX SDK.",
 	"AMD, the AMD Arrow logo, AMD FSR and combinations thereof are trademarks of Advanced Micro Devices, Inc.": "AMD, логотип AMD Arrow, AMD FSR и их сочетания — товарные знаки Advanced Micro Devices, Inc.",
 	"Full license and copyright notices are included in the licenses folder.": "Полные тексты лицензий и уведомления об авторских правах находятся в папке licenses.",
+	"Demiurges by TheWWWorm": "Demiurges — автор TheWWWorm",
 	# Battle puzzles (ELPuzzleMode, ELPuzzles).
 	"Puzzles": "Головоломки",
 	"Toughness: %d · Damage taken: %d": "Стойкость: %d · Полученный урон: %d",
@@ -1453,8 +1460,8 @@ const RU := {
 	"This challenge code belongs to another generator version. Use an ELP2 code.": "Этот код относится к другой версии генератора. Используйте код ELP2.",
 	"Use a challenge code such as ELP3:el1:3:12345.": "Введите код задачи, например ELP3:el1:3:12345.",
 	"This challenge code belongs to another generator version. Use an ELP3 code.": "Этот код относится к другой версии генератора. Используйте код ELP3.",
-	"Use a challenge code such as ELP5:el1:3:12345.": "Введите код задачи, например ELP5:el1:3:12345.",
-	"This challenge code belongs to another generator version. Use an ELP5 code.": "Этот код относится к другой версии генератора. Используйте код ELP5.",
+	"Use a challenge code such as ELP6:el1:3:12345.": "Введите код задачи, например ELP6:el1:3:12345.",
+	"This challenge code belongs to another generator version. Use an ELP6 code.": "Этот код относится к другой версии генератора. Используйте код ELP6.",
 	"Invalid challenge edition, difficulty or seed.": "Неверная игра, сложность или число генерации в коде.",
 	"The seed must be between 1 and 2147483647.": "Число генерации должно быть от 1 до 2147483647.",
 	"Choose difficulty 2, 3 or 4 and a seed from 1 to 2147483647.": "Укажите сложность 2, 3 или 4 и число генерации от 1 до 2147483647.",

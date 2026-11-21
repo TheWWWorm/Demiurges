@@ -490,6 +490,9 @@ func _exit_tree() -> void:
 	ELMoviePlayer.shutdown()
 	ELPracticeAI.finish()
 	advisor.finish()
+	if _sharper_check_task >= 0:
+		WorkerThreadPool.wait_for_task_completion(_sharper_check_task)
+		_sharper_check_task = -1
 
 ## The engine drops the window's close request while the window has an
 ## exclusive dialog, so the close button did nothing while one was open. A
@@ -1929,8 +1932,9 @@ func _end_phase() -> void:
 		own_attack_pending = own_attack_side
 
 ## Space in battle (held, it repeats): one step of the presentation at a
-## time. During a fight it ends all the remaining attacks at once: their
-## blows land together and everyone is home, resting figures lying down;
+## time. During a fight it ends the current attacker's exchange: its blows
+## land together and it walks home while the next attacker sets off (during
+## the last walk home everyone is home at once, resting figures lying down);
 ## what follows the attacks (deaths after them, the next phase) plays as
 ## usual. Otherwise the casts and walks being shown end. Sounds are never cut: attack hits,
 ## deaths and spell sounds still play (a spell's held sounds start at once).
@@ -1945,11 +1949,16 @@ func _skip_battle_step() -> void:
 	_skip_battle_presentation(true)
 
 ## The end of a won battle: Space or the end button end the winner's victory
-## clip at once and the battle is over (the fanfare plays on). A fallen
-## hero's death clip is never cut.
+## clip at once (the figure stands idle). The battle is over once the
+## winner's fanfare has played out, which is never cut; nor is a fallen
+## hero's death clip.
 func _skip_victory() -> void:
 	if ending.is_empty() or String(ending.stage) != "victory": return
-	ending.length = minf(float(ending.length), float(ending.clock))
+	var winner := int(ending.winner)
+	if ending.has("clip") and models.has(winner) and models[winner].clip == String(ending.clip) and models[winner].has_clip("cidle"):
+		models[winner].play("cidle")
+	ending.erase("clip")
+	ending.length = minf(float(ending.length), maxf(float(ending.clock), float(ending.get("fanfare", 0.0))))
 
 ## Ends the presentation being shown at once (checks and loads use it for
 ## the whole queue). With `keep_sounds` (Space) it stops at a fight, which
@@ -4424,7 +4433,8 @@ func _step_ending(delta: float) -> void:
 		if winner >= 0 and models.has(winner):
 			var model: ELModel = models[winner]
 			# The fanfare of the winner's colour, for a hero figure (he*) only.
-			# It plays to its end even when the battle closes before it does.
+			# The battle is not over before it has played to its end (both
+			# originals); only the victory clip can be cut (_skip_victory).
 			if String(model.template).begins_with("he"):
 				ending.fanfare = battle_audio.play_detached("buttons/%svictory.wav" % String(duel.heroes[winner].get("faction", "Red")))
 			# The winner camera follows the player's own win only (both originals).
@@ -4434,6 +4444,7 @@ func _step_ending(delta: float) -> void:
 				battle_audio.unit(model, "victory")
 				ending.clip = clip
 				ending.length = maxf(model.clip_seconds(clip), 0.0)
+			ending.length = maxf(float(ending.length), float(ending.get("fanfare", 0.0)))
 		return
 	ending.stage = "over"
 	# GameOver: a campaign battle closes and the map fades back in.
@@ -4919,6 +4930,10 @@ func _animation_done(clip: String, id: int) -> void:
 	# A battle settles before its blows are shown: only the heroes keep their
 	# end poses, creatures still finish their moves and lie down at home.
 	if _shown_phase() == ELDuel.Phase.FINISHED and id < 2:
+		return
+	# A fallen hero keeps its death pose once the ending has begun, even while
+	# the shown state still lags the result (a later hit or cue still waits) (#266).
+	if id < 2 and not ending.is_empty() and int(ending.winner) != id:
 		return
 	var resting := _shown_resting(id, c)
 	# Home again after a fight (a move's end): the figure's own tap clip, then
@@ -5680,7 +5695,9 @@ func _hero_tip(side: int, control: Control = null) -> Dictionary:
 		if not name.strip_edges().is_empty(): lines.append(name)
 		var description := _spec_text(code, "Desc", "")
 		if not description.is_empty(): lines.append(description)
-	lines.append_array(_enchantment_lines(shown_hero(side)))
+	# The enchantment list is a first-game remake addition only: the second
+	# game's hero tooltip ends with the specialization, as in the original
+	# (player reports #230, #274); its enchantments are read on the strip.
 	return ELCombatTooltip.hero_content(profile.id, portraits[side].texture, title, lines)
 
 ## " (N left)": the artifact activations the hero has left this battle,
@@ -5770,10 +5787,38 @@ func _enchantment_lines(entity: Dictionary) -> PackedStringArray:
 		counts[card] = int(counts.get(card, 0)) + 1
 	var lines := PackedStringArray()
 	for card: String in counts:
-		var about := profile.card_description(card)
 		var copies := int(counts[card])
+		var mark := _mark_text(card)
+		if not mark.is_empty():
+			lines.append(mark + (" ×%d" % copies if copies > 1 else ""))
+			continue
+		var about := profile.card_description(card)
 		lines.append(duel.card_name(card) + (" ×%d" % copies if copies > 1 else "") + (": " + about if not about.is_empty() and about != card else ""))
 	return lines
+
+## A mark a creature leaves in combat (a grass snake's growth, a lake
+## snake's weakening, a first-game snake's venom on a hero) is an
+## enchantment of the creature's own card. That card's AbilityIcon and
+## AbilityText describe the mark ("Blood drunk. The enchanted creature's
+## power and health rise by 1"), and both games show those for it, not the
+## creature's portrait and card text (player report #271). "" for any
+## other enchantment.
+## (Other creature cards' AbilityText is an activated ability's, not a mark's.)
+func _mark_text(card: String) -> String:
+	if card not in ["GRSN", "LASN", "TRSN", "SWSN"]: return ""
+	var row: Dictionary = profile.table("CombatSpells").get(card, {})
+	if int(row.get("AbilityIcon", 0)) <= 0: return ""
+	var text := str(row.get("AbilityText", ""))
+	return "" if text.is_empty() else profile.text(text)
+
+## An enchantment's icon: a creature mark's AbilityIcon, else the card's.
+func _enchantment_icon(card: String) -> Texture2D:
+	return profile.icon_at(int(profile.table("CombatSpells")[card].AbilityIcon)) if not _mark_text(card).is_empty() else profile.card_icon(card)
+
+## An enchantment's name and card text (a creature mark's own text alone).
+func _enchantment_tip(card: String) -> String:
+	var mark := _mark_text(card)
+	return mark if not mark.is_empty() else "%s\n%s" % [duel.card_name(card), profile.card_description(card)]
 
 ## An original control's tooltip text from the Controls table, else "".
 func _control_tip(control: String) -> String:
@@ -6711,16 +6756,35 @@ func _open_sharper_art(ask: bool, then := Callable(), all_art := false) -> void:
 	screen.closed.connect(func(_complete: bool):
 		if then.is_valid(): then.call())
 
+## The start's sharper art check running in a thread (-1 for none).
+var _sharper_check_task := -1
+
+## Whether the start offers to prepare the sharper art: some of it is not
+## prepared yet (`all_art`: the textures too, when the rest is). Runs in a
+## thread: reads the kept pictures, nothing of the scene.
+static func _sharper_art_wanted(upscalers: Array, all_art: bool) -> bool:
+	for upscaler: ELIconUpscale in upscalers:
+		if not upscaler.complete(): return true
+	if not all_art or ELIconUpscale.enabled(ELIconUpscale.KIND_TEXTURE): return false
+	if not ELIconUpscale.enabled(ELIconUpscale.KIND_ICON) or not ELIconUpscale.enabled(ELIconUpscale.KIND_INTERFACE): return false
+	return int(ELIconUpscale.estimate(upscalers, true).sheets) > 0
+
 ## Offer missing selected art or the 3D sheets skipped by the old startup
 ## prompt. After acceptance, use the player's chosen switches on later starts.
 func _offer_sharper_art() -> void:
 	if not ELIconUpscale.available() or ELIconUpscale.cache_factor() < 2 or not _campaign_probe.is_empty(): return
 	if String(settings.values.get("sharper_declined", "")) == "%d:%d" % [ELIconUpscale.VERSION, ELIconUpscale.cache_factor()]: return
 	var all_art := not bool(settings.values.sharper_startup_all)
-	if _sharper_art_complete():
-		if not all_art or ELIconUpscale.enabled(ELIconUpscale.KIND_TEXTURE): return
-		if not ELIconUpscale.enabled(ELIconUpscale.KIND_ICON) or not ELIconUpscale.enabled(ELIconUpscale.KIND_INTERFACE): return
-		if int(ELIconUpscale.estimate(_upscalers(), true).sheets) == 0: return
+	# The check reads the header of every kept picture (thousands of files,
+	# about two seconds): in a thread while the movies play, not in front of
+	# the first frames.
+	var wanted := [false]
+	var upscalers := _upscalers()
+	_sharper_check_task = WorkerThreadPool.add_task(func(): wanted[0] = _sharper_art_wanted(upscalers, all_art), false, "Sharper art check")
+	while not WorkerThreadPool.is_task_completed(_sharper_check_task): await get_tree().process_frame
+	WorkerThreadPool.wait_for_task_completion(_sharper_check_task)
+	_sharper_check_task = -1
+	if not wanted[0]: return
 	# Over the main menu, after the start-up movies.
 	for i in 1200:
 		if front_menu != null and front_menu.is_visible_in_tree() and (movie_layer == null or not is_instance_valid(movie_layer)): break
@@ -7023,6 +7087,12 @@ func _interface_page(page: VBoxContainer) -> void:
 	dome_toggle.disabled = not profiles.has("el2")
 	dome_toggle.toggled.connect(func(enabled: bool): settings.values.first_battle_dome = enabled)
 	_settings_row(gameplay, "Battle dome in the first game", "First game: when a battle is about to start on the map, the second game's ether dome rises over both sides, with its sound. Needs Etherlords II installed; applies from the next map loaded.", dome_toggle)
+	var shore_toggle := CheckButton.new()
+	shore_toggle.name = "FirstShoreObjects"
+	shore_toggle.button_pressed = bool(settings.values.get("first_shore_objects", true))
+	shore_toggle.disabled = not profiles.has("el2")
+	shore_toggle.toggled.connect(func(enabled: bool): settings.values.first_shore_objects = enabled)
+	_settings_row(gameplay, "Etherlords II shore objects in the first game", "First game, random maps: the second game's quays beside the harbors, moored ships, wrecks and flotsam decorate the shores. Decoration only: the map and its routes are the same either way. Needs Etherlords II installed; applies from the next map loaded.", shore_toggle)
 	var balance_toggle := CheckButton.new()
 	balance_toggle.name = "SecondBalance"
 	balance_toggle.button_pressed = bool(settings.values.get("second_balance", false))
@@ -7315,6 +7385,7 @@ func _about_page(page: VBoxContainer) -> void:
 	credits.custom_minimum_size.x = 0 if _settings_menu != null else 560
 	credits.add_theme_color_override("default_color", ELMenuKit.BODY_INK if _settings_kit != null else INK)
 	credits.text = ELGraphicsSDK.credits_bbcode(_t)
+	credits.meta_clicked.connect(func(meta: Variant) -> void: OS.shell_open(str(meta)))
 	box.add_child(credits)
 
 ## A titled group of settings; `featured` frames it in the accent colour.
@@ -7586,33 +7657,15 @@ func _restart_game() -> void:
 ## This game's command line with the chosen renderer in place of any named
 ## one; `marked` adds the note that stops a second automatic restart.
 func _relaunch_args(marked: bool) -> PackedStringArray:
-	var args := PackedStringArray()
-	# A game run from its project folder (not exported) names that folder.
-	if not OS.has_feature("template"): args.append_array(["--path", ProjectSettings.globalize_path("res://")])
-	var skip := false
-	for arg: String in OS.get_cmdline_args():
-		if skip:
-			skip = false
-		elif arg in ["--rendering-method", "--rendering-driver"]:
-			skip = true
-		elif arg.begins_with("--graphics-sdk="):
-			# The saved choice replaces any stale command-line owner.
-			pass
-		else:
-			args.append(arg)
-	args.append_array(ELHardwareCheck.renderer_args(int(settings.values.renderer) == 1 or ELGraphicsSDK.needs_forward_plus(settings.values)))
-	if ELGraphicsSDK.engine_has_sdk(): args.append("--graphics-sdk=" + ELGraphicsSDK.wanted_owner(settings.values))
-	var user := PackedStringArray(OS.get_cmdline_user_args())
-	if user.has("--renderer-restarted"): user.remove_at(user.find("--renderer-restarted"))
-	if marked: user.append("--renderer-restarted")
-	if not user.is_empty():
-		args.append("--")
-		args.append_array(user)
-	return args
+	var has_sdk := ELGraphicsSDK.engine_has_sdk()
+	return ELRendererChoice.relaunch_args(ELRendererChoice.wants_vulkan(settings.values, has_sdk),
+		ELGraphicsSDK.wanted_owner(settings.values) if has_sdk else null, marked)
 
 ## At start: when the chosen renderer is not the one running, the game
 ## starts again with it (once; a renderer that cannot start is not retried,
-## and a renderer named on the command line wins).
+## and a renderer named on the command line wins). The start-up screen
+## (ELRendererChoice.restart_early) already starts again for a saved
+## renderer choice it can read; this covers the rest.
 func _ensure_renderer() -> bool:
 	if get_tree().current_scene != self or OS.has_feature("web") or OS.has_feature("mobile"): return false
 	# The upscaler's vendor is set up when the engine starts: a changed
@@ -7620,7 +7673,7 @@ func _ensure_renderer() -> bool:
 	ELGraphicsSDK.write_owner_file(settings.values)
 	if OS.has_feature("editor"): return false
 	if OS.get_cmdline_user_args().has("--renderer-restarted") or OS.get_cmdline_args().has("--rendering-method"): return false
-	var forward := int(settings.values.renderer) == 1 or ELGraphicsSDK.needs_forward_plus(settings.values)
+	var forward := ELRendererChoice.wants_vulkan(settings.values, ELGraphicsSDK.engine_has_sdk())
 	var wanted := "forward_plus" if forward else "gl_compatibility"
 	if RenderingServer.get_current_rendering_method() == wanted and not ELGraphicsSDK.needs_restart(settings.values): return false
 	OS.create_process(OS.get_executable_path(), _relaunch_args(true))
@@ -7901,6 +7954,7 @@ func _begin_campaign(edition: String, scenario: Dictionary, difficulty: int, res
 	campaign_view.strategic_session = online
 	campaign_view.loading_progress = cover.panel.show_progress
 	if edition == "el1" and profiles.has("el2"): campaign_view.naval_source = profiles["el2"]
+	if edition == "el1" and profiles.has("el2") and bool(settings.values.get("first_shore_objects", true)): campaign_view.decor_source = profiles["el2"]
 	# First game: the second game's battle dome, borrowed when it is installed.
 	if edition == "el1" and profiles.has("el2") and bool(settings.values.get("first_battle_dome", true)): campaign_view.dome_source = profiles["el2"]
 	add_child(campaign_view)
@@ -8046,9 +8100,15 @@ class LoadingPanel extends Control:
 	## (the art is made for a black screen) fades out a few pixels from the
 	## ornament, so the menu picture behind shows around it; the dark bands
 	## between its rails stay.
-	var _cache := {}
+	## Kept across loading screens (by stage and the pieces' textures): the
+	## fade is worked out pixel by pixel, a noticeable part of every load.
+	static var _cache := {}
 	func _composed() -> Dictionary:
-		if _cache.has(stage): return _cache[stage]
+		var key := str(stage)
+		for piece: Dictionary in pieces:
+			if int(piece.step) > stage: break
+			key += "/%d" % piece.texture.get_instance_id()
+		if _cache.has(key): return _cache[key]
 		var area := Rect2()
 		for piece: Dictionary in pieces:
 			area = piece.bounds if area.size == Vector2.ZERO else area.merge(piece.bounds)
@@ -8068,7 +8128,9 @@ class LoadingPanel extends Control:
 				picture.blend_rect(part, Rect2i(Vector2i.ZERO, part.get_size()), Vector2i(bounds.position - area.position))
 			_fade_surround(picture)
 			result = {"texture": ImageTexture.create_from_image(picture), "area": area}
-		_cache[stage] = result
+		# Both editions' stages fit; replaced textures start a fresh set.
+		if _cache.size() > 64: _cache.clear()
+		_cache[key] = result
 		return result
 
 	## Opaque where the art is lit or near it, fading to clear over a few
@@ -8555,7 +8617,7 @@ func _refresh_inspector() -> void:
 			if enchantment.card == "STSI":
 				var next_turn := duel.turn_serial + (2 if enchantment.owner == duel.attacker else 1)
 				row.text += "\nNext upkeep: %d ether" % duel.stasis_upkeep(enchantment, next_turn)
-			row.tooltip_text = profile.card_description(enchantment.card)
+			row.tooltip_text = _enchantment_tip(enchantment.card) if not _mark_text(enchantment.card).is_empty() else profile.card_description(enchantment.card)
 			if not reference.is_empty(): row.tooltip_text = reference + "\n" + row.tooltip_text
 			row.disabled = not _removal_allowed(enchantment)
 			row.add_theme_color_override("font_disabled_color", INK)
@@ -8756,14 +8818,17 @@ func _fill_strip() -> void:
 			var tip := duel.card_name(enchantment.card)
 			if profile.id == "el2" and not ability.is_empty() and int(ability.get("cost", -1)) >= 0 and profile.text("T_ENCHANTMENT_COST_TT").count("%") == 2:
 				tip = profile.text("T_ENCHANTMENT_COST_TT") % [tip, int(ability.cost)]
+			# A creature's combat mark reads as its own text (#271).
+			var mark := _mark_text(enchantment.card)
+			if not mark.is_empty(): tip = mark
 			var reference := _puzzle_enchantment_reference(int(enchantment.id))
 			if not reference.is_empty(): tip += "\n" + reference
 			# The card's text too, so a spell on a character can be read.
-			var about := profile.card_description(enchantment.card)
+			var about := profile.card_description(enchantment.card) if mark.is_empty() else ""
 			if not about.is_empty() and about != enchantment.card: tip += "\n" + about
 			var own: bool = subject == duel.active_side() or (subject >= 2 and int(entity.get("owner", -1)) == duel.active_side())
 			var enabled: bool = _removal_allowed(enchantment) if pending else (not ability.is_empty() and own and _human_turn() and duel.can_use_ability(subject, ability.key, listed))
-			list.append({"icon": profile.card_icon(enchantment.card), "tooltip": tip, "enabled": enabled, "meta": {"enchantment": int(enchantment.id), "card": enchantment.card}})
+			list.append({"icon": _enchantment_icon(enchantment.card), "tooltip": tip, "enabled": enabled, "meta": {"enchantment": int(enchantment.id), "card": enchantment.card}})
 	var signature := "%d:%s:" % [shown, inspect_graveyard]
 	for item: Dictionary in list: signature += str(item.meta.get("card", "")) + ","
 	rail.strip.set_items(list, signature)
@@ -8807,7 +8872,7 @@ func _fill_gap(concealed: bool) -> void:
 		var worn: Array = []
 		for i in range(h.enchantments.size() - 1, -1, -1):
 			var card: String = h.enchantments[i].card
-			worn.append({"icon": profile.card_icon(card), "tooltip": "%s\n%s" % [duel.card_name(card), profile.card_description(card)], "count": -1, "dim": false})
+			worn.append({"icon": _enchantment_icon(card), "tooltip": _enchantment_tip(card), "count": -1, "dim": false})
 		var face: Texture2D = portraits[side].texture if side < portraits.size() else null
 		graves.append({"face": face, "name": _side_name(side), "cells": buried})
 		auras.append({"face": face, "name": _side_name(side), "cells": worn})
@@ -10089,8 +10154,9 @@ func _begin_duel_match(started: ELDuelMatch) -> void:
 
 ## Every round is a fresh battle from the same presets; its first attacker
 ## is the round's own coin flip (ELDuelMatch.round_first_side).
-## A retry can supply a new battle seed for the current round.
-func _play_match_round(battle_seed := -1) -> void:
+## A retry can supply a new battle seed and a new first attacker (0 or 1) for
+## the current round.
+func _play_match_round(battle_seed := -1, first_side := -1) -> void:
 	var edition := duel_match.edition
 	hot_side = -1
 	hot_pending = false
@@ -10101,7 +10167,9 @@ func _play_match_round(battle_seed := -1) -> void:
 	var previous := duel
 	_match_starting = true
 	if battle_seed < 0: battle_seed = (duel_match.seed_value + duel_match.played * 0x39) & 0x7fffffff
-	_start(edition, duel_match.round_options(profiles[edition]), null, battle_seed)
+	var options := duel_match.round_options(profiles[edition])
+	if first_side in [0, 1]: options.first_side = first_side
+	_start(edition, options, null, battle_seed)
 	_match_starting = false
 	if match_recording != null and duel != null and duel != previous:
 		match_recording.track(duel, battle_seed)
@@ -10650,13 +10718,18 @@ func _retry_battle() -> void:
 		var battle_seed := randi() & 0x7fffffff
 		while battle_seed == _practice_restart_seed:
 			battle_seed = randi() & 0x7fffffff
+		# A new coin flip for the first attacker, as a new practice battle
+		# (ELDuelSetup) or Duel mode round takes one.
+		var first := randi() & 1
 		if duel_match == null:
-			_start(profile.id, match_options, null, battle_seed)
+			var options := match_options.duplicate(true)
+			options.first_side = first
+			_start(profile.id, options, null, battle_seed)
 			return
 		if match_recording != null and match_recording.tracking(duel):
 			match_recording.untrack()
 			match_recording.rounds.pop_back()
-		_play_match_round(battle_seed)
+		_play_match_round(battle_seed, first)
 
 ## Restarts a restored map encounter's battle from its own setup with a new
 ## seed, as a new battle takes a fresh random value. A few seeds are tried so
@@ -10674,7 +10747,15 @@ static func _redeal_encounter(encounter: ELAdventureEncounter) -> void:
 	for attempt in 8:
 		var next := ELDuel.new()
 		next.attach_session(encounter.state)
-		var started := next.start(old.profile, randi() & 0x7fff, old.setup)
+		# Who moves first is decided again as for a new battle: the home
+		# terrain when it favours one side, otherwise the new seed's coin flip.
+		var battle_seed := randi() & 0x7fff
+		var options := old.setup
+		var first := encounter.first_side_for(old.setup, battle_seed)
+		if first != int(old.setup.get("first_side", 0)):
+			options = old.setup.duplicate(true)
+			options.first_side = first
+		var started := next.start(old.profile, battle_seed, options)
 		if variables != null and variables.values != kept:
 			variables.values.clear()
 			variables.values.merge(kept)

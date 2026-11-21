@@ -8,8 +8,11 @@ extends Node
 ## call fit() on their text labels.
 
 ## The widest a tooltip's text runs before it wraps, in the window's design
-## units (ELSecondMapTooltip.MAX_LABEL_WIDTH, the map tooltips' width).
-const MAX_WIDTH := ELSecondMapTooltip.MAX_LABEL_WIDTH
+## units (ELSecondMapTooltip.MAX_LABEL_WIDTH, the map tooltips' width). A
+## number here: naming that class compiled most of the game's scripts with
+## this autoload, before the first frame (scenes/boot.tscn loads them in a
+## thread).
+const MAX_WIDTH := 480.0
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS

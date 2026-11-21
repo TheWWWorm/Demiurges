@@ -302,6 +302,18 @@ static func first_side(state: ELAdventureSession, first: int, second: int, colou
 	var favoured := terrain_first_side(state.map.profile.id, terrain, colours, placed)
 	return coin_flip(battle_seed) if favoured < 0 else favoured
 
+## The battle side moving first when this encounter's battle (its `setup`) is
+## dealt again from `battle_seed`, decided as `_prepare_duel` decides it: the
+## home-terrain rule, else the new seed's coin flip. Try again uses it so a
+## coin-flip battle does not keep the abandoned attempt's first player.
+func first_side_for(setup: Dictionary, battle_seed: int) -> int:
+	var players: Variant = setup.get("players", [])
+	if state == null or players is not Array or players.size() != 2 or state.object(hero_id).is_empty() or state.object(opponent_id).is_empty():
+		return int(setup.get("first_side", 0))
+	var colours: Array[String] = [String(players[0].get("faction", "")), String(players[1].get("faction", ""))]
+	if swapped: colours.reverse()
+	return first_side(state, attacker(), target(), colours, battle_seed) ^ (1 if swapped else 0)
+
 static func terrain_first_side(edition: String, terrain: int, colours: Array[String], placed: Array[bool]) -> int:
 	if terrain < 0: return -1
 	var a := placed[0] and colour_index(edition, colours[0]) == terrain

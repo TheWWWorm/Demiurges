@@ -326,6 +326,9 @@ const SECOND_EFFECTS := {
 	"DWND": {"effect": "enchant", "target": "creature", "power": 0, "toughness": -4, "lethal": true},
 	"ENLH": {"effect": "redraw", "target": "none", "scope": "self", "reject": "", "retry": false},
 	"STSK": {"effect": "enchant", "target": "any"},
+	# The second game's cast Ash Storm is an ordinary hero enchantment: Purify, Flicker and the cleanses
+	# remove it (#268). The first game's has no card and cannot be removed, nor can the Scroll's (PCDU).
+	"ASST": {"effect": "enchant", "target": "none", "self": true},
 	# The Ether Amulet's spell as a script cast (DragonBoss): a creature gains Magic screen.
 	"ETAM": {"effect": "enchant", "target": "creature"},
 	# White (Pale) cards and the Colourless Plane.

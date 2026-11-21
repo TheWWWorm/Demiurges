@@ -229,7 +229,7 @@ static func _with(reason: String, detail: String) -> String:
 
 ## Whether a restart must use Forward+ on Vulkan for these choices.
 static func needs_forward_plus(values: Dictionary) -> bool:
-	return OS.get_name() == "Windows" and engine_has_sdk() and not wanted_owner(values).is_empty()
+	return ELRendererChoice.owner_needs_vulkan(values, engine_has_sdk())
 
 # --- Reasons a choice cannot be used ----------------------------------------
 
@@ -312,12 +312,9 @@ static func normalize(values: Dictionary) -> bool:
 # --- Presentation owner ------------------------------------------------------
 
 ## The vendor `values` need to own presentation ("" for none).
+## (ELRendererChoice decides it: the start-up screen needs it too.)
 static func wanted_owner(values: Dictionary) -> String:
-	var upscaler := upscaler_of(values)
-	var generation := generation_of(values)
-	if upscaler == NVIDIA or generation == NVIDIA: return "nvidia"
-	if upscaler == AMD or generation == AMD: return "amd"
-	return ""
+	return ELRendererChoice.owner_for(values)
 
 static func read_owner_file() -> String:
 	var config := ConfigFile.new()
@@ -591,6 +588,8 @@ const NVIDIA_MARKS := "NVIDIA, the NVIDIA logo, GeForce RTX and DLSS are tradema
 const AMD_CREDIT := "AMD FSR Upscaling and AMD FSR Frame Generation via the AMD FidelityFX SDK."
 const AMD_MARKS := "AMD, the AMD Arrow logo, AMD FSR and combinations thereof are trademarks of Advanced Micro Devices, Inc."
 const LICENSES := "Full license and copyright notices are included in the licenses folder."
+const PROJECT_CREDIT := "Demiurges by TheWWWorm"
+const PROJECT_URL := "https://github.com/TheWWWorm/Demiurges"
 const NVIDIA_LOGO := "res://assets/branding/vendors/nvidia-geforce-rtx.tres"
 const AMD_UPSCALING_LOGO := "res://assets/branding/vendors/amd-fsr-upscaling-white.png"
 const AMD_FRAME_GENERATION_LOGO := "res://assets/branding/vendors/amd-fsr-frame-generation-white.png"
@@ -616,5 +615,7 @@ static func credits_bbcode(translate := Callable()) -> String:
 		text += "[img width=173 height=94]" + AMD_FRAME_GENERATION_LOGO + "[/img]\n\n"
 		text += "[font_size=16]" + t.call(AMD_CREDIT) + "[/font_size]\n"
 		text += "[font_size=13]" + t.call(AMD_MARKS) + "[/font_size]\n\n"
-	text += "[font_size=13]" + t.call(LICENSES) + "[/font_size][/center]"
+	text += "[font_size=13]" + t.call(LICENSES) + "[/font_size]\n\n"
+	text += "[font_size=16]" + t.call(PROJECT_CREDIT) + "[/font_size]\n"
+	text += "[font_size=14][url=" + PROJECT_URL + "]" + PROJECT_URL.trim_prefix("https://") + "[/url][/font_size][/center]"
 	return text

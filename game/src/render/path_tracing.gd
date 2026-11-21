@@ -68,6 +68,16 @@ const GLOW_REACH := 9.0
 const ARENA_GLOW_REACH := 14.0
 ## Scene membership is re-read this often (seconds).
 const SCAN_INTERVAL := 0.5
+## The adventure map traces only the ground the camera sees and this much
+## round it (world units; a map cell is 2): sun rays from tall objects and
+## light bounced off their sides reach no further worth seeing. A revealed
+## map otherwise sends every object on it to the ray scene each frame.
+const TRACE_MARGIN := 40.0
+## The region moves in steps of this size, so a scrolling camera rarely
+## changes what is traced.
+const TRACE_STEP := 16.0
+## Where rays along the view's edges that miss the ground are cut short.
+const TRACE_FAR := 240.0
 
 var enabled := false
 var lighting_view := false
@@ -92,8 +102,30 @@ var _adventure_effects: ELAdventureEffects
 var _models: Array[ELModel] = []
 var _static_nodes: Array[GeometryInstance3D] = []
 var _static_entries := []
+## The scan's placements before the trace region is applied: the map's
+## ground (always traced) and the instanced map objects (cut to the region).
+var _static_ground := []
+var _static_objects := []
 var _static_cache := {}   # node id -> [global transform, instance count, entries]
 var _static_version := 0
+## The adventure map's traced region (x, z in world units); empty traces all.
+var _region := Rect2()
+## Map objects (figures on the adventure map) unchanged since they were last
+## read: model id -> [global transform, pose count, parts, part states, live
+## ids, group]. A fully revealed map holds hundreds of them, nearly all still
+## (off screen their poses wait), and reading every part each frame cost more
+## than the tracing. A held model is read again when it moves, changes pose,
+## swaps a part's mesh or material or shows or hides a part (HELD_PART_CHECK),
+## and one model a frame in turn regardless.
+var _held_models := {}
+## Held objects' parts are compared every this many frames (a quarter each
+## frame): a swapped material or a hidden part is traced a few frames late.
+const HELD_PART_CHECK := 4
+var _held_version := 0
+## The held objects' group versions last sent, and the count that names them.
+var _held_key := PackedInt64Array()
+var _held_list := 0
+var _verify_next := 0
 var _scan := 0.0
 ## The figures' own lights as last traced: [place, extent, colour, reach].
 var _figure_lights := []
@@ -200,6 +232,7 @@ func _switch(context: Dictionary) -> void:
 	_static_nodes.clear()
 	_static_entries.clear()
 	_static_cache.clear()
+	_held_models.clear()
 	_scan = 0.0
 	_reset()
 	if enabled: _activate()
@@ -360,30 +393,61 @@ func _snapshot(delta: float) -> void:
 		# The render thread's ranges are fragmented: every object is sent anew
 		# (the textures stay), packed, in this frame's batch.
 		_slots.clear()
+		_held_models.clear()
 		_effect.queue_reset(false)
 		_scan = 0.0
 	_scan -= delta
 	_pinned.clear()
 	var ops := []
+	var region := _trace_region()
+	var region_moved := region != _region
+	_region = region
 	if _scan <= 0.0:
 		_scan = SCAN_INTERVAL
 		_models.clear()
 		_static_nodes.clear()
 		_collect(_root)
 		_scan_statics(ops)
+	elif region_moved: _cut_statics()
 	var instances := []
+	var groups := []
+	var held_key := PackedInt64Array()
+	var held_now := {}
 	var live := {}
 	for node: GeometryInstance3D in _static_nodes:
-		if is_instance_valid(node): live[node.get_instance_id()] = true
+		if is_instance_valid(node) and _slots.has(node.get_instance_id()): live[node.get_instance_id()] = true
+	var verify := _verify_next % maxi(_models.size(), 1)
+	_verify_next += 1
+	var model_index := -1
 	for model: ELModel in _models:
+		model_index += 1
 		if not is_instance_valid(model) or not model.is_visible_in_tree(): continue
+		var map_object := model.get_parent() is ELAdventureScene
+		var model_id := model.get_instance_id()
+		if map_object and region.has_area() and not region.has_point(Vector2(model.global_position.x, model.global_position.z)):
+			# Beyond the region: kept (slots and all) but not traced.
+			var away: Array = _held_models.get(model_id, [])
+			if not away.is_empty():
+				live.merge(away[4])
+				held_now[model_id] = away
+			continue
+		if map_object and model_index != verify:
+			var held: Array = _held_models.get(model_id, [])
+			if not held.is_empty() and _still_held(model, held, (model_index + _verify_next) % HELD_PART_CHECK == 0):
+				live.merge(held[4])
+				groups.append(held[5])
+				held_key.append(held[5][1])
+				held_now[model_id] = held
+				continue
 		var morphs: Dictionary = model._previous_morphs
 		var effect := model.get_parent() is ELCombatEffects
 		var arena_floor := is_instance_valid(_arena) and _arena.is_surface(model)
 		var looks := {}
 		# A map object drawn entirely unlit is scenery (a figure's unlit parts
 		# are its magic glow, which shadows would dim).
-		var unlit_scenery := model.get_parent() is ELAdventureScene
+		var unlit_scenery := map_object
+		# Soft (blended) looks can fade in place, unseen by _still_held.
+		var holdable := map_object
 		for part_name: String in model.parts:
 			var node: MeshInstance3D = model.parts[part_name]
 			if node.mesh == null or not node.is_visible_in_tree(): continue
@@ -391,6 +455,9 @@ func _snapshot(delta: float) -> void:
 			if look.is_empty(): continue
 			looks[part_name] = look
 			if (int(look.flags) & SURFACE_FULLBRIGHT) == 0: unlit_scenery = false
+			if (int(look.flags) & SURFACE_SOFT_EMITTER) != 0: holdable = false
+		var entries := []
+		var entry_live := {}
 		for part_name: String in looks:
 			var node: MeshInstance3D = model.parts[part_name]
 			var look: Dictionary = looks[part_name]
@@ -412,12 +479,36 @@ func _snapshot(delta: float) -> void:
 					weight = node.get_blend_shape_value(next_frame)
 			var id := node.get_instance_id()
 			if not _update_slot(ops, id, mesh, frame, look, next_frame, weight): continue
-			live[id] = true
-			instances.append([id, node.global_transform])
-	for id: int in _slots.keys():
-		if not live.has(id):
-			ops.append(["free", id])
-			_slots.erase(id)
+			entry_live[id] = true
+			entries.append([id, node.global_transform])
+		live.merge(entry_live)
+		if holdable:
+			var nodes := []
+			var states := []
+			for node: MeshInstance3D in model.parts.values():
+				nodes.append(node)
+				states.append_array([node.mesh, node.material_override, node.visible])
+			var before: Array = _held_models.get(model_id, [])
+			if not before.is_empty() and before[5][2] == entries:
+				# Read again in turn (or re-dressed in place): placed as it was.
+				held_now[model_id] = [model.global_transform, model.sample_count, nodes, states, entry_live, before[5]]
+				groups.append(before[5])
+				held_key.append(before[5][1])
+				continue
+			_held_version += 1
+			held_now[model_id] = [model.global_transform, model.sample_count, nodes, states, entry_live, [model_id, _held_version, entries]]
+		# Read anew this frame (likely to change again): traced as moving.
+		instances.append_array(entries)
+	_held_models = held_now
+	if held_key != _held_key:
+		_held_key = held_key
+		_held_list += 1
+	# Everything live holds a slot, so equal counts mean nothing to free.
+	if live.size() != _slots.size():
+		for id: int in _slots.keys():
+			if not live.has(id):
+				ops.append(["free", id])
+				_slots.erase(id)
 	var sun_on := is_instance_valid(_sun) and _sun.is_visible_in_tree() and _sun.light_energy > 0.0
 	var sun := _sun.light_color.srgb_to_linear() * _sun.light_energy if sun_on else Color.BLACK
 	var ambient := _env.ambient_light_color.srgb_to_linear() * _env.ambient_light_energy if _env != null else Color.BLACK
@@ -425,6 +516,8 @@ func _snapshot(delta: float) -> void:
 	_effect.submit(ops, instances, {
 		"statics": _static_entries,
 		"static_version": _static_version,
+		"groups": groups,
+		"held_list": _held_list,
 		"lights": _effect_lights(delta),
 		"secondary_lights": _secondary_lights(),
 		"sun_direction": Vector4(toward.x, toward.y, toward.z, SUN_RADIUS),
@@ -440,6 +533,23 @@ func _snapshot(delta: float) -> void:
 	if _stats_clock <= 0.0:
 		_stats_clock = 2.0
 		_update_limits()
+
+## Whether a held map object still shows what was read: the same place and
+## pose and, when `parts`, part by part the same mesh, material and visibility
+## (every part hangs from the model itself, which the caller found visible).
+func _still_held(model: ELModel, held: Array, parts: bool) -> bool:
+	if held[1] != model.sample_count or held[0] != model.global_transform: return false
+	if not parts: return true
+	var nodes: Array = held[2]
+	if nodes.size() != model.parts.size(): return false
+	var states: Array = held[3]
+	var k := 0
+	for node: Variant in nodes:
+		if not is_instance_valid(node): return false
+		var part := node as MeshInstance3D
+		if part.mesh != states[k] or part.material_override != states[k + 1] or part.visible != states[k + 2]: return false
+		k += 3
+	return true
 
 ## Reads the budget (limits_report) and, with --path-tracing-stats, prints it.
 func _update_limits() -> void:
@@ -563,7 +673,8 @@ static func _material_record(look: Dictionary, layer: int, emission_layer: int, 
 ## Unmoving scenery (instanced map objects, the map's ground): its placements
 ## are gathered on each scan and sent only when they change.
 func _scan_statics(ops: Array) -> void:
-	var entries := []
+	var ground := []
+	var objects := []
 	for node: GeometryInstance3D in _static_nodes:
 		var look := _surface(node)
 		if not look.is_empty() and (int(look.flags) & SURFACE_FULLBRIGHT) != 0 and node.get_parent() is ELAdventureScene:
@@ -602,10 +713,43 @@ func _scan_statics(ops: Array) -> void:
 				placed.append([id, node.global_transform])
 			cached = [node.global_transform, count, placed, placement]
 			_static_cache[id] = cached
-		entries.append_array(cached[2])
+		if node is MultiMeshInstance3D and node.get_parent() is ELAdventureScene: objects.append_array(cached[2])
+		else: ground.append_array(cached[2])
+	_static_ground = ground
+	_static_objects = objects
+	_cut_statics()
+
+## The scanned placements within the trace region, sent when they change.
+func _cut_statics() -> void:
+	var entries := _static_ground.duplicate()
+	if not _region.has_area(): entries.append_array(_static_objects)
+	else:
+		for row: Array in _static_objects:
+			var at: Vector3 = (row[1] as Transform3D).origin
+			if _region.has_point(Vector2(at.x, at.z)): entries.append(row)
 	if entries != _static_entries:
 		_static_entries = entries
 		_static_version += 1
+
+## The adventure map's trace region: where the view's corners and centre meet
+## the ground, grown by TRACE_MARGIN and snapped out to TRACE_STEP. Empty in
+## battles, which trace everything.
+func _trace_region() -> Rect2:
+	if is_instance_valid(_arena) or not _root is ELAdventureScene or not is_instance_valid(_camera): return Rect2()
+	var size := _camera.get_viewport().get_visible_rect().size
+	var low := Vector2(INF, INF)
+	var high := Vector2(-INF, -INF)
+	for corner: Vector2 in [Vector2.ZERO, Vector2(size.x, 0), Vector2(0, size.y), size, size * 0.5]:
+		var origin := _camera.project_ray_origin(corner)
+		var direction := _camera.project_ray_normal(corner)
+		var reach := TRACE_FAR
+		if direction.y < -0.0001: reach = minf(reach, -origin.y / direction.y)
+		var at := origin + direction * maxf(reach, 0.0)
+		low = Vector2(minf(low.x, at.x), minf(low.y, at.z))
+		high = Vector2(maxf(high.x, at.x), maxf(high.y, at.z))
+	low = ((low - Vector2.ONE * TRACE_MARGIN) / TRACE_STEP).floor() * TRACE_STEP
+	high = ((high + Vector2.ONE * TRACE_MARGIN) / TRACE_STEP).ceil() * TRACE_STEP
+	return Rect2(low, high - low)
 
 func _effect_check(delta: float) -> void:
 	if not is_instance_valid(_effects) or not is_instance_valid(_root) or not is_instance_valid(_camera): return
@@ -1037,7 +1181,10 @@ func _reset() -> void:
 	for key: String in _layer_counts: _layer_counts[key] = 0
 	_mesh_data.clear()
 	_static_entries = []
+	_static_ground = []
+	_static_objects = []
 	_static_cache.clear()
+	_held_models.clear()
 	_static_version += 1
 	_effect.queue_reset()
 
@@ -1196,6 +1343,11 @@ class Effect extends CompositorEffect:
 	var _statics := []
 	var _static_version := -1
 	var _static_dirty := true
+	## Map object id -> [group version, its described instances].
+	var _group_lists := {}
+	## _static_list plus the held objects, for the held list numbered _steady_for.
+	var _steady_list: Array[RDAccelerationStructureInstance] = []
+	var _steady_for := -1
 	var _static_list: Array[RDAccelerationStructureInstance] = []
 	# DLSS Ray Reconstruction: the guide-writing composing program (compiled
 	# on first use), its four guides at the internal size, and counters.
@@ -1314,7 +1466,7 @@ class Effect extends CompositorEffect:
 	## Scene updates (morphs, acceleration structures), tracing and filtering.
 	func _run(instances: Array, buffers: RenderSceneBuffersRD, scene: RenderSceneData, frame: Dictionary, size: Vector2i) -> void:
 		_expand()
-		if not _build_scene(instances): return
+		if not _build_scene(instances, frame.get("groups", []), int(frame.get("held_list", -1))): return
 		_trace(buffers, scene, frame, size)
 
 	# -- setup --------------------------------------------------------------
@@ -1610,11 +1762,16 @@ class Effect extends CompositorEffect:
 				slot.posed = true
 		_dirty.clear()
 
-	func _build_scene(instances: Array) -> bool:
+	func _build_scene(instances: Array, groups: Array, held_list: int) -> bool:
 		if _static_dirty:
 			_static_dirty = false
 			_static_list = _describe(_statics)
-		var list := _static_list.duplicate()
+			_group_lists.clear()
+			_steady_for = -1
+		if held_list != _steady_for:
+			_steady_for = held_list
+			_steady_list = _held_instances(groups)
+		var list := _steady_list.duplicate()
 		list.append_array(_describe(instances))
 		if list.is_empty(): return false
 		if list.size() > _tlas_capacity:
@@ -1622,6 +1779,21 @@ class Effect extends CompositorEffect:
 			_tlas_capacity = maxi(1024, nearest_po2(list.size()))
 			_tlas = _rd.tlas_create(_tlas_capacity, RenderingDevice.ACCELERATION_STRUCTURE_PREFER_FAST_BUILD_BIT)
 		return _tlas.is_valid() and _rd.tlas_build(_tlas, list) == OK
+
+	## The unmoving scenery and the held map objects, each object's instances
+	## described again only when its group version changed.
+	func _held_instances(groups: Array) -> Array[RDAccelerationStructureInstance]:
+		var list := _static_list.duplicate()
+		# Held map objects keep their described instances while their
+		# version (and every slot) is unchanged.
+		var described := {}
+		for group: Array in groups:
+			var held: Array = _group_lists.get(group[0], [])
+			if held.is_empty() or held[0] != group[1]: held = [group[1], _describe(group[2])]
+			described[group[0]] = held
+			list.append_array(held[1])
+		_group_lists = described
+		return list
 
 	func _describe(entries: Array) -> Array[RDAccelerationStructureInstance]:
 		var list: Array[RDAccelerationStructureInstance] = []

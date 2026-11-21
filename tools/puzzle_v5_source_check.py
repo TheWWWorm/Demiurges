@@ -63,13 +63,13 @@ def checks() -> None:
         assert spells.count('"'+family+'"') >= 2, family
     assert '"duel/puzzle_spell_recipes.gd"' in lab
     assert 'ELPuzzleSpellRecipes.build' in recipes and 'ELPuzzleSpellRecipes.supports' in recipes
-    assert 'const VERSION := 5' in generator and 'const VERSION := 5' in recipes
+    assert 'const VERSION := 6' in generator and 'const VERSION := 5' in recipes  # v6: Master acceptance only
     assert 'spell_inventory' in generator and 'new_roles * 120' in generator
     assert 'entry.id = "spell_recipe_candidate"' in spells
     assert 'ELPuzzleProof.apply(duel, raw)' in spells
     assert 'ELPuzzleGenerator.replay_line(profile, entry, solution)' in spells
-    assert 'ELP5' in (ROOT/'tools/puzzle_generator_ui_check.gd').read_text()
-    assert 'ELP5' in (ROOT/'game/src/content/remake_text.gd').read_text()
+    assert 'ELP6' in (ROOT/'tools/puzzle_generator_ui_check.gd').read_text()
+    assert 'ELP6' in (ROOT/'game/src/content/remake_text.gd').read_text()
     assert 'ELP4:el1:3:1' in (ROOT/'tools/puzzle_generator_check.gd').read_text()  # old code explicitly rejected
     # Every proposed mechanic must be present in the earlier v4 logic or its
     # view event commentary; do not invent card identifiers.

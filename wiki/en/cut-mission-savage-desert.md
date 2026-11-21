@@ -26,6 +26,19 @@ The conditions, as the English edition words them:
 
 This is the only scenario of the series the program itself names: it knows the map `smission01` and gives it a rule of its own. The mission is won when a human player's hero defeats the [Cyclops](card-cclp), and the usual victory, defeating every enemy, does not count on it. Nothing else of the map is left.
 
+## In Demiurges
+
+Demiurges rebuilds Savage Desert as a single mission of its own, listed last among the first game's single missions. The map is laid out by the random map generator from a fixed recipe, so it is the same every time, and the mission adds what the texts and the program's rule describe:
+
+- The Chaots start alone in the south-west of a sandy desert. The Synthets' best troops have just been beaten, so they have no castle and no lord: their old homeland in the south-east keeps its mines, shops and mana node for the taking, and a remnant of their troops holds the ground where their castle stood: broken walls and a fallen gate, with the craters of the battle all round.
+- The Cyclops stands in a clear yard in the north-eastern mountains, a region of dark rock with ridges on two sides and smoking vents round the yard. An [Orc Warrior](card-orwr), an ogre chief and a [Rock Wall](card-rkwl) stand on the way in, the strongest nearest to him.
+- The other creatures belong to their ground: the Synthets' kind on the sand, the Chaots' kin in the mountains.
+- As in the original rule, the mission is won only when a human player's hero defeats the Cyclops. The rule also explains why the program needed it: with no rivals on the map, the usual victory over every enemy would come on the first day. As the briefing says, there is no defeat condition of its own.
+- The heroes speak on the way, in message boxes with their portraits: the Chaots' hero at the start, at the Synthets' fallen castle, in the mountains and after beating the ogre chief, and the Cyclops himself at his yard. Neither edition has lines for the mission beyond its briefing, so these are Demiurges' own, written after the dialogues of Etherlords II.
+- The English edition shows its own texts. The Russian edition, whose texts are empty, shows Demiurges' translation.
+
+This is a reconstruction: no map of the original survives, so the layout, the guards and the Synthets' abandoned homeland are Demiurges' reading of the briefing.
+
 ## The series
 
 The six scenarios: [Savage Desert](cut-mission-savage-desert) · [Balance of Terror](cut-mission-balance-of-terror) · [First Strike](cut-mission-first-strike) · [Ice Trap](cut-mission-ice-trap) · [Dragon Lake](cut-mission-dragon-lake) · [Synthets Menace](cut-mission-synthets-menace).

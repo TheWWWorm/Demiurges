@@ -129,7 +129,7 @@ func decode(raw: Variant, profiles: Dictionary) -> Dictionary:
 			_fail("The saved random-map recipe does not match its identity.")
 			return {}
 		var generator := ELFirstRandomMap.new()
-		map = generator.generate(profiles[raw.edition], generation.config)
+		map = generator.generate_reused(profiles[raw.edition], generation.config)
 		if map == null:
 			_fail("Could not regenerate the saved random map: " + generator.error)
 			return {}

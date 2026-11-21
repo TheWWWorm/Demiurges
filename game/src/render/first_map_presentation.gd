@@ -52,6 +52,21 @@ const BLAZON_CELL := 41.0
 ## with the camera like the map itself.
 const BLAZON_SIZE := 1.6
 const BLAZON_LIFT := 1.3
+## Battle swords. A hero of the local player stopped by a hostile guard zone
+## carries crossed swords until the day ends: the original sets a figure flag
+## when the hero steps into or is placed in the zone and clears it with the
+## day's movement; the map then draws a 32 px screen quad of
+## Interface/Big_states above the figure, the left cell, or the glowing right
+## cell with a pulsing alpha (127-255) while the HUD's blinker for that hero
+## runs (CBlinker, three bounces). Castles have no guard zone, so an assault
+## on a castle shows none.
+const SWORDS_CELL := 32.0
+## Lift: the original centres it at 1.5 x the figure height + 2.2 (the
+## blazon at height + 1.3).
+const SWORDS_LIFT := 2.2
+## The quad's 32 px in the original 600-line view, scaled to the window.
+const SWORDS_LINES := 600.0
+const SWORDS_BLINK := 0.75
 const SOUND_NEAR := 10.0
 const SOUND_FAR := 25.0
 const STEP := 0.064
@@ -96,6 +111,9 @@ var _art: ELAdventureArt
 var _blazon_layer: Node3D
 ## uid -> {back, fore, owner, top}
 var blazons: Dictionary = {}
+## uid -> {sprite, since (msec the swords appeared)}
+var swords: Dictionary = {}
+var _sword_heroes: Array[int] = []
 var _textures: Dictionary = {}
 var _dirty := true
 ## uid -> {folder, position, cycle (player or null)}
@@ -142,6 +160,7 @@ func build(data: ELProfile, preferences: ELSettings, session: ELAdventureSession
 		add_child(effects)
 		effects.build(profile, settings, state)
 		for name: String in ["color", "logo00", "logo01"]: _textures[name] = profile.texture("Interface/Blazon/" + name)
+		_textures["swords"] = profile.texture("Interface/Big_states")
 	for i in 4: _ambient_counts[i] = ambient_count(profile, AMBIENT_FOLDERS[i])
 	if not state.event.is_connected(_state_event): state.event.connect(_state_event)
 	apply(settings.values if settings != null else {})
@@ -204,6 +223,11 @@ static func blazon_owner(session: ELAdventureSession, item: Dictionary) -> int:
 	var owner := int(item.get("owner", -1))
 	if owner <= 0 or not session.players.has(owner): return -1
 	if item.get("type") == "hero": return -1 if item.get("fortified", false) else owner
+	# A player whose castle is destroyed loses every building blazon: the
+	# original's elimination calls SetBlazon(-1) on the castle's figure and on
+	# each building the player owns, and the map draws no blazon below 0.
+	# Owners stay as they are.
+	if not session.scenario.is_empty() and not bool(session.scenario.get("castles", {}).get(owner, {}).get("alive", true)): return -1
 	if item.get("type") in OWNED_KINDS or ELFirstScenario.is_castle(item): return owner
 	if item.get("group") == "additional_buildings" and str(item.get("name", "")) in ELAdditionalBuildings.OWNED: return owner
 	return -1
@@ -266,8 +290,10 @@ func _object_position(item: Dictionary, row: Dictionary) -> Vector3:
 func sync() -> void:
 	_dirty = false
 	var seen := {}
+	_sword_heroes.clear()
 	for item: Dictionary in (_second_objects() if second else state.objects.values()):
 		var uid := int(item.get("uid", -1))
+		if not second and item.get("type") == "hero": _sword_heroes.append(uid)
 		var definition := _definition(item)
 		if definition.is_empty() or definition.get("hidden", false): continue
 		var row: Dictionary = definition.get("row", {})
@@ -376,6 +402,59 @@ func _drop_blazon(uid: int) -> void:
 	for key: String in ["back", "fore"]:
 		if entry.has(key) and is_instance_valid(entry[key]): entry[key].queue_free()
 	blazons.erase(uid)
+
+func _update_swords() -> void:
+	for uid: int in _sword_heroes:
+		var item := state.object(uid)
+		var model: Node3D = world.actors.get(uid)
+		var wanted: bool = item.get("danger_pulse", false) and item.get("alive", false) and item.get("visible", true) and item.get("placed", true) \
+			and not item.get("fortified", false) and model != null and _textures.get("swords") != null
+		if not wanted:
+			_drop_swords(uid)
+			continue
+		var entry: Dictionary = swords.get(uid, {})
+		if entry.is_empty():
+			var sprite := Sprite3D.new()
+			sprite.texture = _textures.swords
+			sprite.region_enabled = true
+			sprite.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+			sprite.shaded = false
+			sprite.no_depth_test = true
+			sprite.alpha_cut = SpriteBase3D.ALPHA_CUT_DISABLED
+			sprite.render_priority = 22
+			sprite.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			# Not a blazon: "Show blazons" does not hide it.
+			add_child(sprite)
+			entry = {"sprite": sprite, "since": Time.get_ticks_msec()}
+			swords[uid] = entry
+		var sprite: Sprite3D = entry.sprite
+		var age := (Time.get_ticks_msec() - int(entry.since)) / 1000.0
+		var glowing := age < SWORDS_BLINK
+		sprite.region_rect = Rect2(SWORDS_CELL if glowing else 0.0, 0, SWORDS_CELL, SWORDS_CELL)
+		# Three bounces of the alpha between 255 and 127.
+		var phase := fmod(age / (SWORDS_BLINK / 3.0), 2.0)
+		sprite.modulate.a = (1.0 - 0.5 * (phase if phase < 1.0 else 2.0 - phase)) if glowing else 1.0
+		var top := maxf(world.object_top(uid), 0.0)
+		var at := model.position + Vector3(0, top * 1.5 + SWORDS_LIFT, 0)
+		sprite.position = at
+		sprite.visible = model.visible
+		sprite.pixel_size = _screen_units(at) / SWORDS_LINES
+	for uid: int in swords.keys():
+		if not _sword_heroes.has(uid): _drop_swords(uid)
+
+## World height that covers a full window height at `at` (map coordinates).
+func _screen_units(at: Vector3) -> float:
+	if camera == null: return BLAZON_SIZE * 10.0
+	var size := camera.get_viewport().get_visible_rect().size if camera.get_viewport() != null else Vector2(4, 3)
+	var aspect := size.y / maxf(1.0, size.x) if camera.keep_aspect == Camera3D.KEEP_WIDTH else 1.0
+	if camera.projection == Camera3D.PROJECTION_ORTHOGONAL: return camera.size * aspect
+	var distance := maxf(0.1, -(camera.global_transform.affine_inverse() * (global_transform * at)).z)
+	return 2.0 * distance * tan(deg_to_rad(camera.fov) * 0.5) * aspect
+
+func _drop_swords(uid: int) -> void:
+	var entry: Dictionary = swords.get(uid, {})
+	if entry.has("sprite") and is_instance_valid(entry.sprite): entry.sprite.queue_free()
+	swords.erase(uid)
 
 func _drop_sound(uid: int) -> void:
 	var entry: Dictionary = sounding.get(uid, {})
@@ -582,6 +661,7 @@ func _process(delta: float) -> void:
 	if _dirty: sync()
 	for uid: int in blazons:
 		_place_blazon(uid, state.object(uid))
+	if not second: _update_swords()
 	_update_cycles()
 	_spec_clock += delta
 	if _spec_clock >= 0.5:

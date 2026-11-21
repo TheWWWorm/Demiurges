@@ -16,6 +16,9 @@ func _initialize() -> void:
 	_colourless_enchantments(profile)
 	_transfer_aspects(profile)
 	_reflected_trade(profile)
+	_subjugated_pale(profile)
+	_ash_storm_dispels(profile)
+	_lake_snake_lifeguard(profile)
 	print("D2 COMBAT RULES: %d failure(s)" % failures)
 	quit(0 if failures == 0 else 1)
 
@@ -129,3 +132,119 @@ func _reflected_trade(profile: ELProfile) -> void:
 		if ELCombatBrain.available:
 			_check(prediction.get("played", 0) == 1 and prediction.health == [int(duel.heroes[0].health), int(duel.heroes[1].health)] \
 				and prediction.ether == [int(duel.heroes[0].mana), int(duel.heroes[1].mana)], "#217: native lookahead agrees with reported damage and ether")
+
+## A charmed Pale creature that dissipates for any reason goes back to its original owner, the
+## charm still attached but inert in the plane (#267; the original keeps a blocked attacker with
+## the charmer, which the port deliberately does not reproduce).
+func _subjugated_pale(profile: ELProfile) -> void:
+	for scenario: String in ["zap by the charmer", "zap by the owner", "zap while attacking", "dies blocking", "dies attacking"]:
+		var label := "#267 (%s): " % scenario
+		var duel := ELDuel.new()
+		if not _check(duel.start(profile, 11), label + "duel starts"): continue
+		if not _attack_phase(duel, 0, label): continue
+		duel.heroes[0].mana = 80
+		duel.heroes[1].mana = 80
+		var id := duel.next_id
+		duel._summon(1, "OUD1")
+		if not _check(duel.plane_change(id, false) and _cast(duel, "CHCM", id) and duel.entity(id).owner == 0, label + "side 0 charms side 1's manifested Pale creature"): continue
+		var stolen: Dictionary = duel.entity(id)
+		stolen.sick = false
+		stolen.resting = false
+		var foe := duel.next_id
+		duel._summon(1, "ORSH")
+		duel.entity(foe).sick = false
+		duel.entity(foe).resting = false
+		# Blocked fights are sequential: a blocker the attacker kills never strikes back, so the
+		# foe must outlast the Pale creature's blow.
+		duel.entity(foe).base = [2, 20]
+		duel._refresh_stats(duel.entity(foe))
+		stolen.damage = int(stolen.toughness) - 1
+		var prediction := {}
+		match scenario:
+			"zap by the charmer":
+				_check(_cast(duel, "ZAPP", id), label + "Zap is cast")
+			"zap by the owner":
+				_check(duel.cast_free(1, "ZAPP", [id], false), label + "Zap is cast")
+			"zap while attacking":
+				if not _check(duel.toggle_attack(id) and duel.end_phase() and duel.phase == ELDuel.Phase.DEFENCE, label + "the stolen creature attacks"): continue
+				_check(duel.cast_free(1, "ZAPP", [id], false), label + "Zap is cast in defence")
+			"dies blocking":
+				if not _attack_phase(duel, 1, label): continue
+				stolen.damage = int(stolen.toughness) - 1
+				if not _check(duel.toggle_attack(foe) and duel.end_phase() and duel.assign_block(id, foe), label + "the stolen creature blocks"): continue
+				prediction = ELCombatBrain.fight(Fixtures.context(profile, 0), duel, 2)
+				duel.end_phase()
+			"dies attacking":
+				if not _check(duel.toggle_attack(id) and duel.end_phase() and duel.assign_block(foe, id), label + "the stolen creature attacks and is blocked"): continue
+				prediction = ELCombatBrain.fight(Fixtures.context(profile, 0), duel, 2)
+				duel.end_phase()
+		if not _check(duel.creatures.has(id) and duel.in_plane(id), label + "it dissipates"): continue
+		var charmed: bool = stolen.enchantments.any(func(e: Dictionary) -> bool: return e.card == "CHCM")
+		_check(int(stolen.owner) == 1 and charmed, label + "it returns to its owner, the charm still attached")
+		_check(stolen.enchantments.size() == 1 and Vector2i(stolen.power, stolen.toughness) == duel.creature_stats(stolen), label + "the charm is inert in the plane")
+		if ELCombatBrain.available and not prediction.is_empty():
+			var armies := [duel.army(0).size(), duel.army(1).size()]
+			_check(prediction.get("counts", {}).get("armies", []) == armies, label + "the native rules send it home too %s vs %s" % [prediction.get("counts", {}).get("armies"), armies])
+
+## Ends phases until `side` attacks.
+func _attack_phase(duel: ELDuel, side: int, label: String) -> bool:
+	for i in 8:
+		if duel.attacker == side and duel.phase == ELDuel.Phase.ATTACK: return true
+		duel.end_phase()
+	return _check(false, label + "side %d's attack phase comes" % side)
+
+## The cast Ash Storm is an ordinary hero enchantment in the second game: the
+## single-target dispels and both cleanses remove it (the original, #268). The
+## Scroll of Ash Storm's storm (PCDU) keeps no card and none of them removes it.
+func _ash_storm_dispels(profile: ELProfile) -> void:
+	for dispel: String in ["PRFY", "FLIC", "CLNP", "CLSN", "DECN"]:
+		var label := "#268 (%s): " % dispel
+		var duel := ELDuel.new()
+		if not _check(duel.start(profile, 11), label + "duel starts"): continue
+		if not _attack_phase(duel, 0, label): continue
+		duel.heroes[0].mana = 80
+		if not _check(_cast(duel, "ASST") and duel.global_enchantment_count("ASST") == 1, label + "Ash Storm is cast"): continue
+		var storm: Dictionary = duel.heroes[0].enchantments.filter(func(e: Dictionary) -> bool: return e.card == "ASST")[0]
+		_check(duel.dispellable(0, storm), label + "Ash Storm can be removed")
+		duel._give_card(0, dispel)
+		var aimed: bool = ELCatalog.rule(profile, dispel).get("target") == "enchantment"
+		_check(duel.cast(duel.heroes[0].hand.size() - 1, 0 if aimed else -1, int(storm.id) if aimed else -1) \
+			and duel.global_enchantment_count("ASST") == 0, label + "it removes Ash Storm")
+	var scroll := ""
+	for key: String in profile.table("Artefacts"):
+		if profile.table("Artefacts")[key].get("SpellType") == "PCDU":
+			scroll = key
+			break
+	if not _check(not scroll.is_empty(), "#268: the Scroll of Ash Storm exists"): return
+	var duel := ELDuel.new()
+	var players := [{"faction": "Green", "cards": ["CHNL"], "health": 20, "skills": {},
+		"artifacts": [{"name": scroll, "charges": 1, "ready_round": 0}]},
+		{"faction": "Black", "cards": [], "health": 20, "skills": {}}]
+	if not _check(duel.start(profile, 12, {"players": players, "adventure": true}) and _attack_phase(duel, 0, "#268 (scroll): ") \
+		and duel.use_artifact(0, 0) and duel.global_enchantment_count("PCDU") == 1, "#268: the Scroll raises its storm"): return
+	duel.heroes[0].mana = 80
+	_check(_cast(duel, "CLSN") and duel.global_enchantment_count("PCDU") == 1, "#268: Cleanse leaves the Scroll's storm")
+
+## A Lake Snake's blow that a lifeguard turns away leaves no venom: the guarded
+## creature keeps its power and health (the original, #269).
+func _lake_snake_lifeguard(profile: ELProfile) -> void:
+	var duel := ELDuel.new()
+	if not _check(duel.start(profile, 11), "#269: duel starts"): return
+	if not _attack_phase(duel, 0, "#269: "): return
+	duel.heroes[1].mana = 80
+	var snake := duel.next_id
+	duel._summon(0, "LASN")
+	var bat := duel.next_id
+	duel._summon(1, "GBAT")
+	duel.entity(snake).sick = false
+	duel.entity(snake).resting = false
+	duel.entity(bat).resting = false
+	duel.entity(bat).sick = false
+	var printed := Vector2i(duel.entity(bat).power, duel.entity(bat).toughness)
+	if not _check(duel.cast_free(1, "LFGR", [bat], false) and duel._enchantment_count(bat, "LFGR") == 1, "#269: Lifeguard guards the blocker"): return
+	if not _check(duel.toggle_attack(snake) and duel.end_phase() and duel.assign_block(bat, snake), "#269: the snake attacks and is blocked " + duel.error): return
+	duel.end_phase()
+	var blocker: Dictionary = duel.entity(bat)
+	_check(not blocker.is_empty() and blocker.damage == 0 and Vector2i(blocker.power, blocker.toughness) == printed \
+		and not blocker.enchantments.any(func(e: Dictionary) -> bool: return e.card in ["LASN", "LFGR"]), "#269: the guarded blocker keeps its stats and takes no venom")
+	_check(not duel.creatures.has(snake), "#269: the blocker's return blow kills the snake")

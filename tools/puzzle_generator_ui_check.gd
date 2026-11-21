@@ -356,19 +356,19 @@ func _run() -> void:
 		mode._random_seed.text = "999999999999999999999"
 		mode._start_random()
 		check(mode._generator_job == null and not mode._random_status.text.is_empty(), language + ": oversized seed rejected before generation")
-		mode._random_seed.text = "ELP5:el1:1:12"
+		mode._random_seed.text = "ELP6:el1:1:12"
 		mode._start_random()
 		check(mode._generator_job == null, language + ": unsupported difficulty code rejected")
-		for old_version: int in [1, 2, 3, 4]:
+		for old_version: int in [1, 2, 3, 4, 5]:
 			mode._random_seed.text = "ELP%d:el1:3:12345" % old_version
 			mode._start_random()
-			check(mode._generator_job == null and mode._random_status.text.contains("ELP5"), language + ": older generator version %d clearly requests ELP5 without remapping its puzzle" % old_version)
+			check(mode._generator_job == null and mode._random_status.text.contains("ELP6"), language + ": older generator version %d clearly requests ELP6 without remapping its puzzle" % old_version)
 		mode.games.erase("el2")
-		mode._random_seed.text = "ELP5:el2:3:12"
+		mode._random_seed.text = "ELP6:el2:3:12"
 		mode._start_random()
 		check(mode._generator_job == null and mode.profile == first, language + ": uninstalled edition does not launch")
 		mode.games.el2 = second
-		mode._random_seed.text = " ELP5:EL2:5:12345 "
+		mode._random_seed.text = " ELP6:EL2:5:12345 "
 		mode._random_seed.text_changed.emit(mode._random_seed.text)
 		mode._start_random()
 		check(mode.profile == second and mode._generator_profile == second and mode._generator_seed == 12345, language + ": shared code selects exact edition and seed")
@@ -418,7 +418,7 @@ func _run() -> void:
 		check(session.recorded.size() == 1, language + ": Restart does not add duplicate session history")
 		generated[1].state.heroes[0].health = 1
 		check(run.entry.state.heroes[0].health == 20, language + ": retry request owns an independent snapshot")
-		check(mode._generated_copy.visible and mode._rules_text.text.contains("ELP5:el1:3:12345"), language + ": active challenge exposes reproducible code")
+		check(mode._generated_copy.visible and mode._rules_text.text.contains("ELP6:el1:3:12345"), language + ": active challenge exposes reproducible code")
 		mode.open_list(second)
 		mode._close_list()
 		check(mode.profile == first and mode.run == run and mode._bar.visible, language + ": Back from another edition restores active generated challenge")
@@ -428,7 +428,7 @@ func _run() -> void:
 		await frames()
 		check(mode._result.visible and mode._next.visible and not mode._next.disabled and mode._next_index == -1, language + ": failed generated puzzle offers a new challenge without an authored index")
 		check(root.get_visible_rect().encloses(mode._result.get_global_rect()), language + ": result fits minimum window")
-		check(mode._result_code_row.visible and mode._result_code.text == "ELP5:el1:3:12345", language + ": result keeps exact challenge code")
+		check(mode._result_code_row.visible and mode._result_code.text == "ELP6:el1:3:12345", language + ": result keeps exact challenge code")
 		await capture("random_puzzle_result_" + language)
 		session.next_job = ControlledJob.new()
 		mode._next.pressed.emit()
@@ -441,7 +441,7 @@ func _run() -> void:
 		check(not mode._result_text.text.contains("Solved:"), language + ": generated completion does not present authored collection totals")
 		var master := attempt(first, entry("el1", true, 5))
 		mode.begin(first, master)
-		check(mode._bar_text.text.contains(ELRemakeText.t("Turn %d of %d", first) % [1, 2]) and mode._rules_text.text.contains("ELP5:el1:5:12345"), language + ": Master battle shows its two-turn objective and exact code")
+		check(mode._bar_text.text.contains(ELRemakeText.t("Turn %d of %d", first) % [1, 2]) and mode._rules_text.text.contains("ELP6:el1:5:12345"), language + ": Master battle shows its two-turn objective and exact code")
 		master.outcome = "failed"
 		master.reason = "turns"
 		mode.show_result()

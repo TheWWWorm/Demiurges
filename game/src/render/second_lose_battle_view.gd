@@ -6,7 +6,9 @@ extends Control
 ## once it is up, any key or click fades it out to black over one second, and
 ## the map fades in from the black. The screen is black from its first frame,
 ## so the map never shows between the battle and the picture (player report
-## #139). Wider windows use the mission defeat picture's extensions.
+## #139). Wider windows use the mission defeat picture's extensions. The
+## screen plays the defeat theme (Buttons/GoodDefeat.wav, as the lost
+## mission's WinLose picture does) from its start until it closes.
 
 signal closed
 
@@ -15,6 +17,10 @@ const DESIGN := ELWinLoseScreen.DESIGN
 const FADE_IN := 1.0
 const FADE_OUT := 1.0
 const FADE_BACK := 1.0
+const SOUND := "Buttons/GoodDefeat.wav"
+
+## The sound requested by the last screen shown (checks read it).
+static var last_sound := ""
 
 var hud: ELSecondAdventureHud
 var canvas: Control
@@ -27,6 +33,7 @@ var black: ColorRect
 var _pieces: Array[Dictionary] = []
 var _wide_picture: Texture2D
 var _clock := 0.0
+var _player: AudioStreamPlayer
 
 func build(owner: ELSecondAdventureHud) -> void:
 	hud = owner
@@ -65,6 +72,19 @@ func build(owner: ELSecondAdventureHud) -> void:
 	resized.connect(_layout)
 	canvas.modulate.a = 0.0
 	_layout()
+	_play_sound(hud.profile)
+
+func _play_sound(profile: ELProfile) -> void:
+	last_sound = SOUND
+	if profile == null or ELUiSounds.volume <= 0.0: return
+	var stream := ELAudio.sound(profile, SOUND)
+	if stream == null: return
+	_player = AudioStreamPlayer.new()
+	_player.name = "DefeatSound"
+	add_child(_player)
+	_player.stream = stream
+	_player.volume_db = linear_to_db(ELUiSounds.volume)
+	_player.play()
 
 func _layout() -> void:
 	if size.x <= 0 or size.y <= 0: return
@@ -99,6 +119,7 @@ func _process(delta: float) -> void:
 				_clock = 0.0
 				# The map takes the keys and clicks again while it fades in.
 				mouse_filter = Control.MOUSE_FILTER_IGNORE
+				if _player != null: _player.stop()
 				closed.emit()
 		3:
 			black.modulate.a = clampf(1.0 - _clock / FADE_BACK, 0.0, 1.0)

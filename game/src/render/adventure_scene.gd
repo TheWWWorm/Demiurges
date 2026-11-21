@@ -10,6 +10,10 @@ var generated_roads: ELFirstRandomMapRoads
 var naval_source: ELProfile
 var naval_visuals: ELFirstNavalVisuals
 var _ship_profile: ELProfile
+## First game, version 16 random maps: the installed EL2 the shore pieces
+## come from (null draws none; ELFirstShoreDecor).
+var decor_source: ELProfile
+var shore_decor: ELFirstShoreDecor
 var units: Dictionary = {}
 var animated: Array[ELModel] = []
 ## Options "animated objects": false holds map objects still.
@@ -65,6 +69,8 @@ var animate_fog := true
 ## over the still fogged ground. Objects the fog hides go at once.
 ## {uid: brightness}; `_fading` holds {uid: target} until it is reached.
 var _fog_level: Dictionary = {}
+## Second game: {uid: opacity}, which fades in with the brightness (#270).
+var _fog_alpha: Dictionary = {}
 var _fading: Dictionary = {}
 const PICKUP_FADE := 0.18
 var _retiring_pickups: Dictionary = {}
@@ -113,9 +119,14 @@ func build(source: ELAdventureMap, session: ELAdventureSession = null) -> bool:
 		generated_roads = ELFirstRandomMapRoads.new()
 		add_child(generated_roads)
 		generated_roads.build(map)
+	if not ELFirstShoreDecor.items(map).is_empty() and ELFirstShoreDecor.source(decor_source) != null:
+		shore_decor = ELFirstShoreDecor.new()
+		add_child(shore_decor)
+		shore_decor.build(map, decor_source, _add_animated)
 	if ELFirstNaval.enabled(map):
 		_ship_profile = ELFirstNavalVisuals.ship_source(naval_source)
 		naval_visuals = ELFirstNavalVisuals.new()
+		if shore_decor != null: naval_visuals.docked = shore_decor.docked
 		add_child(naval_visuals)
 		naval_visuals.build(map)
 	_art = ELAdventureArt.new(map)
@@ -354,6 +365,7 @@ func enable_fog(session: ELAdventureSession) -> void:
 	if fog_session == null:
 		if generated_roads != null: generated_roads.set_fog(PackedByteArray())
 		if naval_visuals != null: naval_visuals.set_fog(PackedByteArray())
+		if shore_decor != null: shore_decor.set_fog(PackedByteArray(), _dim_model)
 		return
 	if mist == null:
 		mist = ELFogMist.new()
@@ -364,6 +376,7 @@ func enable_fog(session: ELAdventureSession) -> void:
 	_fog_tiles = fog_tiles()
 	if generated_roads != null: generated_roads.set_fog(_fog_tiles)
 	if naval_visuals != null: naval_visuals.set_fog(_fog_tiles)
+	if shore_decor != null: shore_decor.set_fog(_fog_tiles, _dim_model)
 	var masks := _fog_data()
 	_fog_known = masks[0].duplicate()
 	_fog_seen = masks[1].duplicate()
@@ -389,6 +402,7 @@ func enable_fog(session: ELAdventureSession) -> void:
 	_fog_revision = ELFog.revision(fog_session)
 	# The fog as loaded shows at once.
 	_fog_level.clear()
+	_fog_alpha.clear()
 	_fog_presence.clear()
 	_fading.clear()
 	_fog_cells.clear()
@@ -560,6 +574,7 @@ func sync_fog() -> void:
 	var changed := _update_fog_tiles(scenery)
 	if generated_roads != null and changed.has_area(): generated_roads.set_fog(_fog_tiles)
 	if naval_visuals != null and changed.has_area(): naval_visuals.set_fog(_fog_tiles)
+	if shore_decor != null and changed.has_area(): shore_decor.set_fog(_fog_tiles, _dim_model)
 	if not changed.has_area():
 		snap_fog = false
 		return
@@ -655,7 +670,26 @@ func fog_object(item: Dictionary, passing := Vector2i(-1, -1), instant := false)
 	var present := _game_visible(item) and (mode == ELFog.VISIBLE or (mode == ELFog.REMEMBERED and not ELFog.dynamic(item)))
 	var target := 0.0 if not present else (1.0 if mode == ELFog.VISIBLE else FOG_DIM)
 	var level: float = _fog_level.get(uid, 0.0)
-	if instant or not present or (map.profile.id == "el1" and target <= level): level = target
+	if map.profile.id == "el2":
+		# The second game fades each object's opacity along with its
+		# brightness (`_fog_alpha`), and an object hidden in remembered fog
+		# keeps the remembered brightness, so a hero or monster coming into
+		# sight fades in from transparent at 0.3 brightness, not as a black
+		# figure that slowly takes its colour (player report #270). The remake
+		# still hides an object at once.
+		var dim := 1.0 if mode == ELFog.VISIBLE else (FOG_DIM if mode == ELFog.REMEMBERED else 0.0)
+		target = dim if _game_visible(item) else 0.0
+		var alpha: float = _fog_alpha.get(uid, 0.0)
+		if instant or not present:
+			level = target
+			alpha = 1.0 if present else 0.0
+		_fog_level[uid] = level
+		_fog_alpha[uid] = alpha
+		if present and (level != target or alpha < 1.0): _fading[uid] = target
+		else: _fading.erase(uid)
+		_show_fogged(uid, present, level, alpha)
+		return
+	if instant or not present or target <= level: level = target
 	_fog_level[uid] = level
 	if level != target: _fading[uid] = target
 	else: _fading.erase(uid)
@@ -671,22 +705,30 @@ func _fade_objects(delta: float) -> void:
 		var target: float = _fading[uid]
 		var level := move_toward(float(_fog_level.get(uid, target)), target, step)
 		_fog_level[uid] = level
-		if level == target: _fading.erase(uid)
-		_show_fogged(uid, true, level)
+		# Opacity (second game) rises at the same rate as brightness.
+		var alpha := 1.0
+		if _fog_alpha.has(uid):
+			alpha = move_toward(float(_fog_alpha[uid]), 1.0, step)
+			_fog_alpha[uid] = alpha
+		if level == target and alpha >= 1.0: _fading.erase(uid)
+		_show_fogged(uid, true, level, alpha)
 
-func _show_fogged(uid: int, present: bool, level: float) -> void:
+func _show_fogged(uid: int, present: bool, level: float, alpha := 1.0) -> void:
 	var toggled: bool = _fog_presence.get(uid) != present
 	_fog_presence[uid] = present
 	if object_models.has(uid):
 		var model: ELModel = object_models[uid]
 		model.visible = present and not model.get_meta("portal_hidden", false)
 		_dim_model(model, level if present else 1.0)
-		if map.profile.id == "el2" and RenderingServer.get_current_rendering_method() == "forward_plus":
-			# Avoid a black silhouette popping in ahead of the terrain's mist.
-			var opacity := smoothstep(0.0, FOG_DIM, level) if present else 1.0
-			if model.get_meta("fog_opacity", 1.0) != opacity:
-				model.set_meta("fog_opacity", opacity)
-				for part: MeshInstance3D in model.parts.values(): part.transparency = 1.0 - opacity
+		if map.profile.id == "el2":
+			# The original's object opacity, linear like its brightness, in
+			# the look materials: the Compatibility renderer ignores
+			# GeometryInstance3D.transparency, and Forward+ cuts it at an
+			# alpha-scissor part's threshold.
+			var opacity := roundf(clampf(alpha, 0.0, 1.0) * 32.0) / 32.0 if present else 1.0
+			if float(model.get_meta("look_alpha", 1.0)) != opacity:
+				model.set_meta("look_alpha", opacity)
+				_model_look(model)
 	for entry: Dictionary in _instances.get(uid, []):
 		var multimesh: MultiMesh = entry.node.multimesh
 		if toggled: _place_instance(entry, entry.transform if present else Transform3D(Basis.from_scale(Vector3.ZERO), Vector3.ZERO))
@@ -759,22 +801,32 @@ func _dim_model(model: ELModel, level: float) -> void:
 func _model_look(model: ELModel) -> void:
 	var dim: float = model.get_meta("look_dim", 1.0)
 	var grey: bool = model.get_meta("look_grey", false)
+	# Fog opacity (second game; see _show_fogged).
+	var alpha: float = model.get_meta("look_alpha", 1.0)
+	var plain := dim >= 1.0 and not grey and alpha >= 1.0
 	for node: MeshInstance3D in model.parts.values():
 		if not node.has_meta("look_base"):
-			if (dim >= 1.0 and not grey) or not node.material_override is StandardMaterial3D: continue
+			if plain or not node.material_override is StandardMaterial3D: continue
 			node.set_meta("look_base", node.material_override)
 		var base: StandardMaterial3D = node.get_meta("look_base")
-		node.material_override = _look_material(base, dim, grey)
-		if dim >= 1.0 and not grey: node.remove_meta("look_base")
+		node.material_override = _look_material(base, dim, grey, alpha)
+		if plain: node.remove_meta("look_base")
 
-## A figure material at a fog brightness (1 undimmed), grey or not.
-func _look_material(base: Material, dim: float, grey: bool) -> Material:
+## A figure material at a fog brightness (1 undimmed) and opacity, grey or not.
+func _look_material(base: Material, dim: float, grey: bool, alpha := 1.0) -> Material:
 	var lit := base as StandardMaterial3D
-	if lit == null or (dim >= 1.0 and not grey): return base
-	var key := [lit, dim, grey]
+	if lit == null or (dim >= 1.0 and not grey and alpha >= 1.0): return base
+	var key := [lit, dim, grey, alpha]
 	if not _look_materials.has(key):
 		var copy: StandardMaterial3D = lit.duplicate()
 		if dim < 1.0: copy.albedo_color = Color(lit.albedo_color.r * dim, lit.albedo_color.g * dim, lit.albedo_color.b * dim, lit.albedo_color.a)
+		if alpha < 1.0:
+			copy.albedo_color.a = lit.albedo_color.a * alpha
+			# An opaque part keeps writing depth, so a fading figure does not
+			# show its own far side.
+			if copy.transparency == BaseMaterial3D.TRANSPARENCY_DISABLED: copy.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_ALWAYS
+			if copy.transparency in [BaseMaterial3D.TRANSPARENCY_DISABLED, BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR, BaseMaterial3D.TRANSPARENCY_ALPHA_HASH]:
+				copy.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 		if grey and lit.albedo_texture != null: copy.albedo_texture = _grey_texture(lit.albedo_texture)
 		_look_materials[key] = copy
 	return _look_materials[key]

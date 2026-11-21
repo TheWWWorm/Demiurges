@@ -4,12 +4,13 @@ extends SceneTree
 ##   turn goes on; when the rules have already moved to its owner's next turn
 ##   it then gets up with its untap clip, never jumping from one idle to the
 ##   other, and the shown phase changes only after it has lain down;
-## - #244: Space (the battle's skip key) ends all the remaining attacks at
-##   once: their blows land with their hit sounds, everyone is home and lying
-##   down to rest, and a creature killed in them still plays its death; the
-##   death of a hero is never skipped (its clip plays out and
-##   its sound is not cut); Space ends the winner's victory clip at once
-##   while the victory fanfare plays on;
+## - #244, #272: Space (the battle's skip key) ends the current attacker's
+##   exchange only: its blows land with their hit sounds and it walks home
+##   while the next attacker sets off; a creature killed in a skipped
+##   exchange still plays its death; the death of a hero is never skipped
+##   (its clip plays out and its sound is not cut); Space ends the winner's
+##   victory clip at once, but the battle lasts until the victory fanfare
+##   has played out;
 ## - Hide movement: the tap and untap clips are not played, the figure
 ##   changes idle at once.
 ##
@@ -113,7 +114,9 @@ func _rest_before_turn(view: Node, racing: bool) -> void:
 	await _idle(view)
 
 ## Two unblocked attackers and one whose blocker dies: one Space while the
-## first attacker is on its way ends all the attacks at once.
+## first attacker is on its way ends its exchange alone; the next attacker
+## then sets off (#272). Another Space during the blocked attacker's
+## exchange still shows its blocker's death.
 func _skip_attacks(view: Node) -> void:
 	var duel: ELDuel = view.duel
 	await _clear(view)
@@ -153,19 +156,33 @@ func _skip_attacks(view: Node) -> void:
 	view.battle_audio.requested.clear()
 	view.battle_audio.played.clear()
 	for id: int in clips: clips[id].clear()
+	var first: int = view.melee._current_attacker
+	var shown_before: int = int(view.melee._next_blow)
 	view._skip_battle_step()
 	await process_frame
 	await process_frame
-	check(not view.melee._in_blows, "#244: one Space lands every remaining blow (%d shown)" % int(view.melee._next_blow))
-	check(ids.all(func(id: int) -> bool: return not view.melee.away(id) and not view.melee.moving(id)), "#244: every attacker is home at once")
-	check(ids.all(func(id: int) -> bool: return view.models[id].base_clip() == "ctapidle" and not clips[id].has("utap")),
-		"#244: the attackers are lying down to rest without their tap clips (%s)" % str(ids.map(func(id: int) -> String: return view.models[id].clip)))
-	check(hit_path.is_empty() or view.battle_audio.requested.has(hit_path), "#244: the skipped blows' hits are still heard")
+	check(view.melee._in_blows and int(view.melee._next_blow) == shown_before + 1, "#272: one Space lands the current attacker's blow alone (%d -> %d shown)" % [shown_before, int(view.melee._next_blow)])
+	check(view.melee.moving(first) and view.melee.away(first), "#272: the skipped attacker walks home")
+	var second: int = view.melee._current_attacker
+	check(second >= 2 and second != first and view.melee.moving(second) and view.melee._skip_attacker != second, "#272: the next attacker sets off as usual")
+	check(hit_path.is_empty() or view.battle_audio.requested.has(hit_path) or view.battle_audio.requested.has(view.battle_audio.hit_path(view.models[first], view.models[1 - side])), "#244: the skipped blow's hit is still heard")
+	# The blocked attacker's exchange, skipped in its turn.
+	for i in 1200:
+		await process_frame
+		if not view.melee._in_blows or view.melee._current_attacker == ids[2]: break
+	check(view.melee._current_attacker == ids[2], "#272: the blocked attacker's exchange comes in its turn")
+	view.battle_audio.played.clear()
+	clips[blocker].clear()
+	view._skip_battle_step()
+	await process_frame
+	await process_frame
 	check(clips[blocker].has("udeath") and is_instance_valid(blocker_model) and blocker_model.clip == "udeath" and blocker_model.playing,
 		"#244: the blocker killed in a skipped exchange still plays its death (%s)" % str(clips[blocker]))
 	check(death_path.is_empty() or view.battle_audio.played.has(death_path), "#244: its death sound plays")
 	check(not duel.creatures.has(blocker), "#244: the rules killed the blocker")
 	await _idle(view)
+	check(ids.all(func(id: int) -> bool: return not view.melee.away(id) and view.models[id].base_clip() == "ctapidle"),
+		"#272: the attackers are home and lying down to rest (%s)" % str(ids.map(func(id: int) -> String: return view.models[id].clip)))
 	check(int(view.shown_health(1 - side)) == int(duel.heroes[1 - side].health), "#244: every blow is shown in the end")
 
 func _hidden_movement(view: Node) -> void:
@@ -246,6 +263,7 @@ func _hero_death(view: Node) -> void:
 	if duel.phase == ELDuel.Phase.DEFENCE: duel.end_phase()
 	var dying := 0.0
 	var victory := 0.0
+	var clip_cut := false
 	var start := Time.get_ticks_usec()
 	# Whether the death sound still plays a moment into the fall.
 	var sounding := false
@@ -262,19 +280,20 @@ func _hero_death(view: Node) -> void:
 				probed = true
 				for voice: AudioStreamPlayer in view.battle_audio.voices:
 					if voice.playing and death_sound != null and voice.stream == death_sound: sounding = true
-		if not view.ending.is_empty() and String(view.ending.stage) == "victory": victory += get_root().get_process_delta_time()
+		if not view.ending.is_empty() and String(view.ending.stage) == "victory":
+			victory += get_root().get_process_delta_time()
+			if victory > 0.1 and view.models[side].clip == "cidle": clip_cut = true
 		if not view.ending.is_empty() and view.ending_over(): break
 	var clip: float = maxf(view.models[loser].clip_seconds("udeath"), 0.0)
 	check(duel.phase == ELDuel.Phase.FINISHED and view.ending_over(), "#244: the battle ends")
 	check(dying >= clip - 0.1, "#244: Space never cuts the fallen hero's death clip (%.2f s of %.2f s)" % [dying, clip])
 	check(death_path.is_empty() or heard_death, "#244: the fallen hero's death sound plays")
 	check(death_sound == null or death_sound.get_length() < 0.4 or sounding, "#244: Space does not stop the death sound")
-	# Space ends the winner's victory clip at once; its fanfare plays on to
-	# its end on a player of its own, beyond the battle.
+	# Space ends the winner's victory clip at once, but the battle lasts
+	# until its fanfare has played out (#272).
 	var fanfare := float(view.ending.get("fanfare", 0.0))
-	check(victory < 0.2, "#244: Space ends the victory clip at once (%.2f s)" % victory)
-	var playing := root.get_children().any(func(node: Node) -> bool: return node is AudioStreamPlayer and node.name.begins_with("BattleFanfare") and node.playing)
-	check(fanfare <= 0.0 or playing, "#244: the victory fanfare (%.2f s) keeps playing after the battle is over" % fanfare)
+	check(clip_cut or view.victory_clip(view.models[side]).is_empty(), "#244: Space ends the victory clip at once (%s)" % view.models[side].clip)
+	check(victory >= fanfare - 0.1, "#272: the battle lasts until the victory fanfare (%.2f s) has played out (%.2f s)" % [fanfare, victory])
 	print("ending took %.2f s" % ((Time.get_ticks_usec() - start) / 1e6))
 
 func _card(view: Node, race: String) -> String:

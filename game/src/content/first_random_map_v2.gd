@@ -20,6 +20,31 @@ const REGIONAL_LANDSCAPES_VERSION := 10
 const GUARD_POSTS_VERSION := 11
 const LIVING_WILDS_VERSION := 12
 const STOCK_LAYOUT_VERSION := 13
+## Version 14 keeps every prop on the ground of its own art set: snow pines
+## and ice only on snow, cacti and red rock only on the tan ground, and so
+## on. Version 13 copied the stock maps' few strays (snow pines among the
+## cacti, snowy rocks on the dark ground), laid brown and dark earth under
+## its snow pines and let large props reach across a climate border.
+const CLIMATE_PROPS_VERSION := 14
+## Version 15 stocks only what the stock missions offer. Shops leave out
+## the five cards switched off in the card table (Use "-": BSMG, GIFT,
+## MNFL, RSET, SMGS, with no name and on no stock map; every other card a
+## version 14 shop could sell is sold by some stock shop), prizes leave
+## out the artifacts no stock map places (UNPLACED_ARTIFACTS) and guards
+## leave out the "<name> D" copies of creatures, which no stock map places.
+const STOCK_CONTENT_VERSION := 15
+## Version 16 lists where an installed Etherlords II's shore pieces stand
+## (ELFirstShoreDecor draws them): a quay beside each harbor, a moored ship
+## at each homeland harbor, and wrecks with drifting flotsam in sheltered
+## water. The list is metadata only: no map object, blocked cell or draw
+## from the layout's random stream, so a version 16 map plays exactly as
+## the version 15 map of the same settings, and the list is the same with
+## or without the second game installed.
+const SHORE_DECOR_VERSION := 16
+const LATEST_VERSION := SHORE_DECOR_VERSION
+## The Artefacts rows no stock map, campaign or script places: the program
+## gives RodOfDefence to fort garrisons; the other three are never handed out.
+const UNPLACED_ARTIFACTS := ["RodOfDefence", "RodOfFire", "RodOfInsanity", "RodOfReflection"]
 const DailyCoverage := preload("first_daily_coverage.gd")
 const Reachability := preload("first_map_reachability.gd")
 const EncounterPlacement := preload("first_encounter_placement.gd")
@@ -91,6 +116,11 @@ const STOCK_FILLERS := {
 	"Red": ["BlackTree_13", "BlackTree_13", "BlackStone_5", "blackbush_5"],
 	"Black": ["Red_Voulcan_2", "Red_Voulcan_1", "Red_Tree_7", "Red_Tree_7"],
 }
+
+## Version 14: the ground each art set belongs to, by name prefix (see
+## STOCK_SCENERY: the red art stands on tan ground, the black art and the
+## grey rock_ cliffs on the dark red ground).
+const ART_GROUND := [["green", "Green"], ["blue", "Blue"], ["red", "Black"], ["black", "Red"], ["rock_", "Red"]]
 
 ## Stock props a tenth of a tile high: they block a tile but look like
 ## open ice, so version 13 leaves them out of its mix.
@@ -185,6 +215,22 @@ var _uplands := PackedFloat32Array()
 ## roads so they run along it.
 var _lane_mask := PackedByteArray()
 var _summits: Array[Vector2i] = []
+## A restored mission's recipe (ELRestoredMissions), or "".
+var _scenario := ""
+## Savage Desert: the Cyclops's cell and his id.
+var _lair := NO_SPOT
+## Restored missions: the props placed by hand (permanent ids).
+var _authored := {}
+var _lair_id := -1
+## Evil Dale: the open dale (1 per cell), with a margin kept free of water,
+## and the ground colour of each terrain corner.
+var _dale := PackedByteArray()
+var _dale_margin := PackedByteArray()
+var _dale_colors := PackedStringArray()
+## Version 16 shore pieces: cells already given to a piece, and cells
+## under a map object.
+var _decor_claimed := PackedByteArray()
+var _decor_taken := PackedByteArray()
 
 static func defaults(version := VERSION) -> Dictionary:
 	return {"version": version, "seed": "212", "size": 96, "players": 4,
@@ -197,12 +243,12 @@ static func defaults(version := VERSION) -> Dictionary:
 static func normalize(options: Dictionary, version := VERSION) -> Dictionary:
 	var result := defaults(version)
 	for key: Variant in options:
-		if key is not String or not result.has(key): return {}
+		if key is not String or not (result.has(key) or key == "scenario"): return {}
 	for key: String in ["version", "size", "players", "scenery", "castle_health"]:
 		var value: Variant = options.get(key, result[key])
 		if typeof(value) not in [TYPE_INT, TYPE_FLOAT] or not is_finite(float(value)) or float(value) != floor(float(value)): return {}
 		result[key] = int(value)
-	if result.version < VERSION or result.version > STOCK_LAYOUT_VERSION or result.size not in SIZES or result.players < 2 or result.players > 4 or result.scenery < 0 or result.scenery > 2 or result.castle_health not in [20, 30, 60]: return {}
+	if result.version < VERSION or result.version > LATEST_VERSION or result.size not in SIZES or result.players < 2 or result.players > 4 or result.scenery < 0 or result.scenery > 2 or result.castle_health not in [20, 30, 60]: return {}
 	for key: String in ["seed", "layout", "biome", "resources", "starting_resources", "guards", "faction", "water", "coast"]:
 		var value: Variant = options.get(key, result[key])
 		if value is not String: return {}
@@ -217,6 +263,12 @@ static func normalize(options: Dictionary, version := VERSION) -> Dictionary:
 	var naval: Variant = options.get("naval", false)
 	if naval is not bool or result.water not in ["low", "normal", "high"] or result.coast not in ["smooth", "rugged"]: return {}
 	result.naval = naval
+	# A restored mission's recipe. Absent from plain random maps, so their
+	# ids and seeds stay as they were.
+	if options.has("scenario"):
+		var scenario: Variant = options.scenario
+		if scenario is not String or scenario not in ELRestoredMissions.SCENARIOS or result.version < CLIMATE_PROPS_VERSION: return {}
+		result["scenario"] = scenario
 	return result
 
 static func presets() -> Array[Dictionary]:
@@ -323,6 +375,19 @@ func _generate_map(profile: ELProfile, options: Dictionary) -> ELAdventureMap:
 		_node("win_condition", {}, "Destroy every rival castle."), _node("lose_condition", {}, "Your castle loses all of its energy."),
 		_node("description", {}, "Expand from your homeland, capture mines and shops, and discover the scrolls that summon stronger heroes."),
 		_node("random_map", {"version": str(config.version), "config": JSON.stringify(config, "", true), "catalog_hash": _catalog_hash()})])
+	_scenario = str(config.get("scenario", ""))
+	_lair = NO_SPOT
+	_authored.clear()
+	_lair_id = -1
+	if not _scenario.is_empty():
+		# The document keeps the recipe's own words (saves compare it); the
+		# shown title and objective follow the edition's language.
+		_map.title = ELRestoredMissions.title(profile, _scenario)
+		_map.objective = ELRestoredMissions.text(profile, _scenario, "objective")
+		for child: Dictionary in _map.document.children:
+			var field := str(child.get("tag", ""))
+			var pair: Array = Dictionary(ELRestoredMissions.TEXTS[_scenario]).get(field, [])
+			if not pair.is_empty(): child.text = str(pair[1])
 	_next_id = 1
 	_important.clear()
 	_starts.clear()
@@ -378,7 +443,9 @@ func _generate_map(profile: ELProfile, options: Dictionary) -> ELAdventureMap:
 	_route_grid.default_compute_heuristic = AStarGrid2D.HEURISTIC_OCTILE
 	_route_grid.default_estimate_heuristic = AStarGrid2D.HEURISTIC_OCTILE
 	_route_grid.update()
+	if _scenario == ELRestoredMissions.EVIL_DALE: _build_dale()
 	_start_points()
+	if _scenario == ELRestoredMissions.SNOWFLAKE_MAZE: _reserve_maze()
 	if config.version >= FRONTIERS_VERSION and not config.naval: _build_basins()
 	if config.version >= LANDSCAPE_VERSION:
 		_build_landscape()
@@ -394,6 +461,7 @@ func _generate_map(profile: ELProfile, options: Dictionary) -> ELAdventureMap:
 	if config.version >= PLACEMENT_VERSION: _trunk_points.assign(_network_points)
 	if not _make_homelands(): return null
 	if not _make_frontiers(): return null
+	if _scenario == ELRestoredMissions.SAVAGE_DESERT and not _make_cyclops_lair(): return null
 	if config.naval: _populate_islands()
 	var cliff_ids := Vector2i.ZERO
 	if config.version >= LANDSCAPE_VERSION:
@@ -472,11 +540,16 @@ func _generate_map(profile: ELProfile, options: Dictionary) -> ELAdventureMap:
 			if _unreached_id < 0 or not _carve_woods(_unreached_id, first_decoration, cliff_ids, true): return null
 		error = ""
 	if not _check_access(false, config.version >= RELIEF_VERSION): return null
+	if _scenario == ELRestoredMissions.SAVAGE_DESERT and not _post_lair_guards(): return null
+	if _scenario == ELRestoredMissions.SAVAGE_DESERT and not _clear_rival(): return null
+	if _scenario == ELRestoredMissions.EVIL_DALE and not _finish_dale(): return null
+	if _scenario == ELRestoredMissions.SNOWFLAKE_MAZE and not _build_maze(): return null
 	if config.version >= STOCK_LAYOUT_VERSION: _paint_object_ground()
 	# Stock maps are flat; their hills are props and rock tiles. Version 13
 	# keeps the ground level instead of sculpting mesas and shelves.
 	if config.version >= WILDERNESS_VERSION and config.version < STOCK_LAYOUT_VERSION: _paint_wilderness_detail()
 	if config.version >= RELIEF_VERSION and config.version < STOCK_LAYOUT_VERSION: _shape_relief()
+	if config.version >= SHORE_DECOR_VERSION and _scenario.is_empty(): _place_shore_decor()
 	_map.document.children.append(_node("support", {"last_permanent_id": str(_next_id)}))
 	report.starts = _starts.duplicate(true)
 	if config.version >= PLACEMENT_VERSION: report.reward_guards = _reward_guards.duplicate()
@@ -501,6 +574,640 @@ func _generate_map(profile: ELProfile, options: Dictionary) -> ELAdventureMap:
 	report.fingerprint = content_hash(_map)
 	_map.set_meta("random_map_report", report.duplicate(true))
 	return _map
+
+## Savage Desert: the Cyclops in a clear yard of the north-eastern
+## mountains, with a track to him from the nearest road. Placed before the
+## scenery, so the cliffs and woods grow around the yard.
+func _make_cyclops_lair() -> bool:
+	var goal := str(ELRestoredMissions.GOAL_MONSTERS[_scenario])
+	if ELFirstMonsters.definition(_profile, goal, 0).is_empty():
+		error = "The installed game has no %s creature for this mission." % goal
+		return false
+	var desired := Vector2i((Vector2(_map.width, _map.height) * ELRestoredMissions.LAIR).round())
+	var yard := _find_spot(desired - Vector2i(2, 2), Vector2i(5, 5), 12, -1, true, true)
+	if yard == NO_SPOT:
+		error = "Could not fit the Cyclops's lair in the north-eastern mountains."
+		return false
+	for y in range(yard.y, yard.y + 5):
+		for x in range(yard.x, yard.x + 5): _reserved[y * _map.width + x] = 1
+	_lair = yard + Vector2i(2, 2)
+	var nearest := NO_SPOT
+	for point: Vector2i in _network_points:
+		if nearest == NO_SPOT or point.distance_squared_to(_lair) < nearest.distance_squared_to(_lair): nearest = point
+	_lair_id = _place_guard(_lair, goal, 0, false)
+	if nearest != NO_SPOT:
+		var door := _lair + (nearest - _lair).sign() * 2
+		_connect(nearest, door, 1, config.roads, false, true)
+	return true
+
+## Savage Desert: the strong guards on the way into the yard, strongest
+## nearest the Cyclops. Each stands on the walk from the Chaots' castle, where
+## it cuts off nothing but the yard.
+func _post_lair_guards() -> bool:
+	var grid := ELAdventureGrid.new()
+	if not grid.build(_map, _navigation_objects()):
+		error = "The Cyclops's guards could not build the movement grid: " + grid.error
+		return false
+	var first := Vector2i(_starts[0].x, _starts[0].y)
+	var previous := PackedInt32Array()
+	previous.resize(_map.width * _map.height)
+	previous.fill(-2)
+	previous[first.y * _map.width + first.x] = -1
+	var queue: Array[Vector2i] = [first]
+	var head := 0
+	var door := -1
+	while head < queue.size() and door < 0:
+		var at := queue[head]
+		head += 1
+		for dy in range(-1, 2):
+			for dx in range(-1, 2):
+				var next := at + Vector2i(dx, dy)
+				if not grid.contains(next): continue
+				var offset := next.y * _map.width + next.x
+				if previous[offset] != -2 or grid.land.is_point_solid(next) or _corner_gap(grid, at, next): continue
+				previous[offset] = at.y * _map.width + at.x
+				queue.append(next)
+				if door < 0 and maxi(absi(next.x - _lair.x), absi(next.y - _lair.y)) == 1: door = offset
+	if door < 0:
+		error = "The Cyclops cannot be reached from the Chaots' castle."
+		return false
+	# The walk out from the yard, door first.
+	var path: Array[Vector2i] = []
+	var step := door
+	while step >= 0:
+		path.append(Vector2i(step % _map.width, step / _map.width))
+		step = previous[step]
+	var guards: Array = ELRestoredMissions.LAIR_GUARDS.duplicate()
+	guards.reverse()
+	var at_step := 2
+	for name: String in guards:
+		if ELFirstMonsters.definition(_profile, name, 0).is_empty(): continue
+		var placed := false
+		while not placed and at_step < mini(path.size() - 1, 20):
+			var cell := path[at_step]
+			at_step += 1
+			if _gate_apron[cell.y * _map.width + cell.x] != 0 or cell.distance_squared_to(first) < 12 * 12: continue
+			var count := _map.objects.size()
+			var id := _place_guard(cell, name, 0, false)
+			if _check_access(false):
+				placed = true
+				at_step += 2
+				continue
+			_map.objects.resize(count)
+			_important.erase(id)
+		error = ""
+	return _check_access(false)
+
+## Savage Desert: the Synthets are beaten and the Chaots play alone. The
+## second homeland is laid out as usual, then its castle and lord go; its
+## mines and shops stay as spoils, and a remnant of the Synthets' troops
+## holds the castle's ground.
+func _clear_rival() -> bool:
+	var start: Dictionary = _starts[1]
+	var gone := [int(start.castle_id), int(start.hero_id)]
+	var castle := {}
+	for item: Dictionary in _map.objects:
+		if int(item.permanent_id) - 1 == int(start.castle_id): castle = item
+	_map.objects = _map.objects.filter(func(item: Dictionary) -> bool: return not (int(item.permanent_id) - 1) in gone)
+	_map.players.resize(1)
+	var player: Dictionary = _map.players[0]
+	for child: Dictionary in player.children:
+		if child.tag == "diplomacy": child.children = child.children.filter(func(opponent: Dictionary) -> bool: return opponent.attrs.id == "1")
+	_starts.resize(1)
+	if castle.is_empty(): return _check_access(false)
+	var size: Vector2i = ELAdventureGrid.footprint(_catalog.castles[str(start.color)], 0).size
+	var at := Vector2i(castle.x, castle.y) + size / 2
+	var occupied := {}
+	for item: Dictionary in _map.objects: occupied[Vector2i(item.x, item.y)] = true
+	var remnant := _native_guard(at, [], ELRestoredMissions.REMNANT_LEVEL) if _walkable(at) else ""
+	if not remnant.is_empty() and not occupied.has(at):
+		var count := _map.objects.size()
+		var id := _place_guard(at, remnant, 1, false)
+		if not _check_access(false):
+			_map.objects.resize(count)
+			_important.erase(id)
+	_fallen_castle(at)
+	_dress_lair()
+	error = ""
+	return _check_access(false)
+
+## Evil Dale: the dale's course. Each cell is open within a wandering width
+## of the route or the pass, wider at its bends, glades and rivals; the ruins
+## at the end are a broad clearing. Every terrain corner takes the ground of
+## its stretch of the route; the ruins mix all four.
+func _build_dale() -> void:
+	var w := _map.width
+	var h := _map.height
+	var lines: Array = [[ELRestoredMissions.DALE_ROUTE, ELRestoredMissions.DALE_ZONES]]
+	var pass_zones: Array = []
+	for index in ELRestoredMissions.DALE_PASS.size() - 1: pass_zones.append(ELRestoredMissions.DALE_PASS_ZONE)
+	lines.append([ELRestoredMissions.DALE_PASS, pass_zones])
+	var glades: Array = [[ELRestoredMissions.DALE_ROUTE[0], 10.0], [ELRestoredMissions.DALE_HOMELAND, 10.0]]
+	for point: Vector2i in ELRestoredMissions.DALE_ROUTE: glades.append([point, 5.0])
+	for point: Vector2i in ELRestoredMissions.RIVALS.values(): glades.append([point, 5.0])
+	var ruins := Vector2(ELRestoredMissions.RUINS_HEART)
+	var plateau := ELRestoredMissions.EXIT_REVEAL.grow(-3)
+	_dale.resize(w * h)
+	_dale.fill(0)
+	_dale_margin.resize(w * h)
+	_dale_margin.fill(0)
+	_dale_colors.resize((w + 1) * (h + 1))
+	for y in h + 1:
+		for x in w + 1:
+			var at := Vector2(x, y)
+			var best := INF
+			var zone := "Green"
+			# The ground follows the nearest stretch from a wandering point, so
+			# the elements meet along winding borders rather than straight ones.
+			var probe := at + Vector2(_noise(x, y, 24.0, 6431) - 0.5, _noise(x, y, 24.0, 6437) - 0.5) * 30.0
+			var nearest := INF
+			for line: Array in lines:
+				var points: Array = line[0]
+				for index in points.size() - 1:
+					var near := Geometry2D.get_closest_point_to_segment(at, Vector2(points[index]), Vector2(points[index + 1]))
+					best = minf(best, at.distance_to(near))
+					var drift := probe.distance_to(Geometry2D.get_closest_point_to_segment(probe, Vector2(points[index]), Vector2(points[index + 1])))
+					if drift < nearest:
+						nearest = drift
+						zone = line[1][index]
+			var open := best < 3.2 + 2.6 * _noise(x, y, 13.0, 6401)
+			for glade: Array in glades:
+				if at.distance_to(Vector2(glade[0])) < float(glade[1]) + 2.0 * (_noise(x, y, 7.0, 6403) - 0.5): open = true
+			if plateau.has_point(Vector2i(x, y)) and at.distance_to(ruins) < 10.0 + 4.0 * (_noise(x, y, 9.0, 6409) - 0.5):
+				open = true
+				# Four quarters around the heart, one for each element.
+				var bend := (_noise(x, y, 8.0, 6421) - 0.5) * 2.2 + (_noise(x, y, 3.0, 6427) - 0.5) * 1.0
+				zone = COLORS[posmod(floori(((at - ruins).angle() + bend) / (TAU / 4.0)), 4)]
+			_dale_colors[y * (w + 1) + x] = zone
+			if x < 3 or y < 3 or x >= w - 3 or y >= h - 3: continue
+			if open: _dale[y * w + x] = 1
+	for y in h:
+		for x in w:
+			if _dale[y * w + x] == 0: continue
+			for dy in range(-3, 4):
+				for dx in range(-3, 4):
+					var cell := Vector2i(x + dx, y + dy)
+					if _inside(cell): _dale_margin[cell.y * w + cell.x] = 1
+
+## Evil Dale: the Chosen One alone. The generated castles and the second
+## homeland's lord go, the first hero becomes the Chosen One, and the five
+## rivals take their places, each where it leaves the way on open.
+func _finish_dale() -> bool:
+	var start: Dictionary = _starts[0]
+	var other: Dictionary = _starts[1]
+	var gone := [int(start.castle_id), int(other.castle_id), int(other.hero_id)]
+	# Without a castle the Chosen One casts no global spell: no scrolls of them.
+	for item: Dictionary in _map.objects:
+		if item.group == "global_spells": gone.append(int(item.permanent_id) - 1)
+	_important = _important.filter(func(id: int) -> bool: return not id in gone)
+	_forget_gated(gone)
+	_map.objects = _map.objects.filter(func(item: Dictionary) -> bool: return not (int(item.permanent_id) - 1) in gone)
+	for item: Dictionary in _map.objects:
+		if int(item.permanent_id) - 1 != int(start.hero_id): continue
+		item.name = ELRestoredMissions.CHOSEN
+		for child: Dictionary in item.node.children:
+			if child.tag == "template": child.text = ELRestoredMissions.CHOSEN
+	_map.players.resize(1)
+	for child: Dictionary in _map.players[0].children:
+		if child.tag == "diplomacy": child.children = child.children.filter(func(opponent: Dictionary) -> bool: return opponent.attrs.id == "1")
+		# No castle: no summoning or castle rituals.
+		if child.tag == "global_spells": child.children = []
+	start.castle_id = start.hero_id
+	_starts.resize(1)
+	_clear_patrol()
+	_settle_dale_creatures(Vector2i(start.x, start.y))
+	_dress_ruins()
+	_dress_beat()
+	if not _dale_outpost(): return false
+	var templates := _profile.table("HeroTemplates")
+	var art := ELAdventureArt.new(_map)
+	for name: String in ELRestoredMissions.RIVALS:
+		var row: Dictionary = templates.get(name, {})
+		if row.is_empty():
+			error = "The installed game has no %s hero for Evil Dale." % name
+			return false
+		var taken := {}
+		for item: Dictionary in _map.objects:
+			var size := Vector2i.ONE if item.group in ["heroes", "np_heroes"] else Vector2i(ELAdventureGrid.footprint(art.resolve(item).get("row", {}), int(item.rotation)).size)
+			for y in size.y:
+				for x in size.x: taken[Vector2i(item.x + x, item.y + y)] = true
+		var desired: Vector2i = ELRestoredMissions.RIVALS[name]
+		var placed := false
+		for radius in 8:
+			for y in range(desired.y - radius, desired.y + radius + 1):
+				for x in range(desired.x - radius, desired.x + radius + 1):
+					var at := Vector2i(x, y)
+					if placed or maxi(absi(x - desired.x), absi(y - desired.y)) != radius: continue
+					if not _inside(at) or _dale[y * _map.width + x] == 0 or taken.has(at) or not _walkable(at): continue
+					var count := _map.objects.size()
+					_place("np_heroes", name, at, row, 0, str(row.get("Color", "")))
+					if _check_access(false): placed = true
+					else: _map.objects.resize(count)
+			if placed: break
+		if not placed:
+			error = "Could not place %s in the dale." % name
+			return false
+	error = ""
+	var exit := ELRestoredMissions.EXIT
+	if _dale[exit.y * _map.width + exit.x] == 0 or not _walkable(exit):
+		error = "The exit of the dale is closed."
+		return false
+	return _check_access(false)
+
+## Gated prizes whose prize or guard the dale removed are no longer checked.
+func _forget_gated(gone: Array) -> void:
+	for id: int in _gated_prizes.keys():
+		if id in gone or int(_gated_prizes[id]) in gone: _gated_prizes.erase(id)
+
+## Evil Dale: Glazzz walks his loop on the program's points, so no scenery
+## stands within two tiles of it.
+func _clear_patrol() -> void:
+	var road := {}
+	var loop := ELRestoredMissions.PATROL
+	for index in loop.size():
+		var from := Vector2(loop[index])
+		var to := Vector2(loop[(index + 1) % loop.size()])
+		var count := maxi(1, ceili(from.distance_to(to)))
+		for step in count + 1:
+			var at := Vector2i(from.lerp(to, float(step) / count).round())
+			for dy in range(-2, 3):
+				for dx in range(-2, 3): road[at + Vector2i(dx, dy)] = true
+	var art := ELAdventureArt.new(_map)
+	_map.objects = _map.objects.filter(func(item: Dictionary) -> bool:
+		if item.group != "terrain_objects": return true
+		var size := Vector2i(ELAdventureGrid.footprint(art.resolve(item).get("row", {}), int(item.rotation)).size)
+		for y in size.y:
+			for x in size.x:
+				if road.has(Vector2i(item.x + x, item.y + y)): return false
+		return true)
+
+## Evil Dale: the Synthets' outpost where the sand begins, its shops each
+## where they leave the way open.
+func _dale_outpost() -> bool:
+	var shops: Dictionary = _catalog.shops.get(ELRestoredMissions.OUTPOST_COLOR, {})
+	var entries := [["factories", "IngredientShop", Vector2i(0, 0)], ["laboratories", "SpellShop", Vector2i(-6, 2)], ["laboratories", "CreatureShop", Vector2i(6, 2)]]
+	for entry: Array in entries:
+		var row: Dictionary = shops.get(entry[1], {})
+		if row.is_empty():
+			error = "The installed game has no %s for the dale's outpost." % entry[1]
+			return false
+		var size: Vector2i = ELAdventureGrid.footprint(row, 0).size
+		var placed := false
+		var tried := {}
+		for attempt in 12:
+			var at := _find_spot(ELRestoredMissions.OUTPOST + Vector2i(entry[2]), size, 14, -1, false, false)
+			if at == NO_SPOT or tried.has(at): break
+			tried[at] = true
+			var count := _map.objects.size()
+			var children: Array = [_node("level", {}, "0")]
+			if entry[0] == "laboratories": children.append_array(_shop_stock(row.Type))
+			var item := _place(entry[0], str(row.Name), at, row, 0, ELRestoredMissions.OUTPOST_COLOR, children)
+			if _check_access(false):
+				_important.append(int(item.permanent_id) - 1)
+				placed = true
+				break
+			_map.objects.resize(count)
+		if not placed:
+			error = "Could not place the dale's outpost."
+			return false
+	error = ""
+	return true
+
+## Evil Dale: one hero walks the whole dale, so its creatures follow his
+## progress rather than the distance from a castle. Fewer of them stand in
+## the open (prize guards stay), and each takes the level of its place along
+## the way, from the first level at the glade to the last near the exit.
+func _settle_dale_creatures(start: Vector2i) -> void:
+	var objects := {}
+	for item: Dictionary in _map.objects:
+		if item.group in ["heroes", "np_heroes"]: continue
+		var copy := item.duplicate()
+		copy.uid = int(item.permanent_id) - 1
+		copy.alive = true
+		copy.visible = true
+		copy.placed = true
+		copy.type = "object"
+		objects[copy.uid] = copy
+	var grid := ELAdventureGrid.new()
+	if not grid.build(_map, objects): return
+	var steps := PackedInt32Array()
+	steps.resize(_map.width * _map.height)
+	steps.fill(-1)
+	steps[start.y * _map.width + start.x] = 0
+	var queue: Array[Vector2i] = [start]
+	var head := 0
+	while head < queue.size():
+		var at := queue[head]
+		head += 1
+		for dy in range(-1, 2):
+			for dx in range(-1, 2):
+				var next := at + Vector2i(dx, dy)
+				if not grid.contains(next): continue
+				var offset := next.y * _map.width + next.x
+				if steps[offset] >= 0 or grid.land.is_point_solid(next) or _corner_gap(grid, at, next): continue
+				steps[offset] = steps[at.y * _map.width + at.x] + 1
+				queue.append(next)
+	var exit := ELRestoredMissions.EXIT
+	var total := maxi(1, steps[exit.y * _map.width + exit.x])
+	var guards := {}
+	for id: Variant in _reward_guards.values(): guards[int(id)] = true
+	var kept: Array[Vector2i] = []
+	var removed := {}
+	for item: Dictionary in _map.objects:
+		if item.group != "np_heroes" or ELXml.child(item.node, "monster").is_empty(): continue
+		var at := Vector2i(item.x, item.y)
+		var uid := int(item.permanent_id) - 1
+		if ELRestoredMissions.EXIT_REVEAL.has_point(at):
+			removed[uid] = true
+			continue
+		if not guards.has(uid) and kept.any(func(other: Vector2i) -> bool: return other.distance_squared_to(at) < ELRestoredMissions.DALE_CREATURE_GAP * ELRestoredMissions.DALE_CREATURE_GAP):
+			removed[uid] = true
+			continue
+		kept.append(at)
+	_map.objects = _map.objects.filter(func(item: Dictionary) -> bool: return not removed.has(int(item.permanent_id) - 1))
+	_important = _important.filter(func(id: int) -> bool: return not removed.has(id))
+	_forget_gated(removed.keys())
+	for item: Dictionary in _map.objects:
+		if item.group != "np_heroes" or ELXml.child(item.node, "monster").is_empty(): continue
+		var walked := steps[int(item.y) * _map.width + int(item.x)]
+		var progress := clampf(float(walked) / total, 0.0, 1.0) if walked >= 0 else 1.0
+		var level := 1 + roundi(progress * float(ELRestoredMissions.DALE_LAST_LEVEL - 1))
+		var name := _native_guard(Vector2i(item.x, item.y), [], level)
+		if name.is_empty(): continue
+		item.name = name
+		for child: Dictionary in item.node.children:
+			if child.tag == "template": child.text = name
+
+## Evil Dale: the ruins at the dale's end, where the four elements meet. A
+## monument stands at the heart, towers and broken walls around it; each
+## piece only where it shuts no way. Without the props nothing is placed.
+func _dress_ruins() -> void:
+	var heart := ELRestoredMissions.RUINS_HEART
+	var exit := ELRestoredMissions.EXIT
+	var allowed := func(cell: Vector2i) -> bool: return _dale[cell.y * _map.width + cell.x] != 0 and maxi(absi(cell.x - exit.x), absi(cell.y - exit.y)) >= 3
+	_set_pieces(ELRestoredMissions.RUINS.map(func(piece: Array) -> Array: return [piece[0], heart + Vector2i(piece[1]), piece[2]]), 1, allowed)
+
+## Restored missions: every tile an object stands on, and the object's id.
+func _taken_cells() -> Dictionary:
+	var taken := {}
+	var art := ELAdventureArt.new(_map)
+	for item: Dictionary in _map.objects:
+		var size := Vector2i.ONE if item.group in ["heroes", "np_heroes"] else Vector2i(ELAdventureGrid.footprint(art.resolve(item).get("row", {}), int(item.rotation)).size)
+		for y in size.y:
+			for x in size.x: taken[Vector2i(item.x + x, item.y + y)] = int(item.permanent_id)
+	return taken
+
+## Restored missions: authored props, each [name, middle, rotation], centred
+## on their middles. Each stands on open ground off the roads, `margin` tiles
+## clear of other objects, where `allowed` accepts every tile; loose scenery
+## gives way to it, sites, creatures and other pieces do not. The pieces go
+## down together when together they shut no way, otherwise one by one, each
+## only where it shuts none. Returns how many stand.
+func _set_pieces(pieces: Array, margin := 1, allowed := Callable()) -> int:
+	var catalog := _profile.table("TerrObj")
+	var taken := _taken_cells()
+	var scenery := {}
+	for item: Dictionary in _map.objects:
+		if item.group == "terrain_objects" and not _authored.has(int(item.permanent_id)): scenery[int(item.permanent_id)] = true
+	var plan: Array = []
+	var claimed := {}
+	var displaced := {}
+	for piece: Array in pieces:
+		var row: Dictionary = catalog.get(str(piece[0]), {})
+		if row.is_empty() or not _model(row): continue
+		var size := Vector2i(ELAdventureGrid.footprint(row, int(piece[2])).size)
+		var at := Vector2i(piece[1]) - size / 2
+		var moves := {}
+		var fits := true
+		for y in range(at.y - margin, at.y + size.y + margin):
+			for x in range(at.x - margin, at.x + size.x + margin):
+				var cell := Vector2i(x, y)
+				if not fits: break
+				if not _inside(cell) or not _walkable(cell) or _map.roads[y * _map.width + x] != 0 or claimed.has(cell): fits = false
+				elif allowed.is_valid() and not allowed.call(cell): fits = false
+				elif taken.has(cell):
+					if scenery.has(int(taken[cell])): moves[int(taken[cell])] = true
+					else: fits = false
+		if not fits: continue
+		for y in range(at.y - margin, at.y + size.y + margin):
+			for x in range(at.x - margin, at.x + size.x + margin): claimed[Vector2i(x, y)] = true
+		displaced.merge(moves)
+		plan.append([str(piece[0]), at, row, int(piece[2]), moves])
+	if plan.is_empty(): return 0
+	var before := _map.objects.duplicate()
+	_map.objects = _map.objects.filter(func(item: Dictionary) -> bool: return not displaced.has(int(item.permanent_id)))
+	var placed: Array = []
+	for entry: Array in plan: placed.append(_place("terrain_objects", entry[0], entry[1], entry[2], 0, "", [], {}, entry[3]))
+	if _check_access(false):
+		for item: Dictionary in placed: _authored[int(item.permanent_id)] = true
+		error = ""
+		return placed.size()
+	# Together they shut a way: one by one.
+	_map.objects = before
+	var count := 0
+	for entry: Array in plan:
+		var keep := _map.objects.duplicate()
+		var moves: Dictionary = entry[4]
+		_map.objects = _map.objects.filter(func(item: Dictionary) -> bool: return not moves.has(int(item.permanent_id)))
+		var item := _place("terrain_objects", entry[0], entry[1], entry[2], 0, "", [], {}, entry[3])
+		if _check_access(false):
+			_authored[int(item.permanent_id)] = true
+			count += 1
+		else: _map.objects = keep
+	error = ""
+	return count
+
+## Evil Dale: Glazzz's beat is an old track through his woods, on over the
+## pass to the way out, and groves line it.
+func _dress_beat() -> void:
+	var loop := ELRestoredMissions.PATROL
+	var lines: Array = []
+	for index in loop.size(): lines.append([Vector2(loop[index]), Vector2(loop[(index + 1) % loop.size()])])
+	var way := ELRestoredMissions.DALE_PASS
+	for index in way.size() - 1: lines.append([Vector2(way[index]), Vector2(way[index + 1])])
+	for line: Array in lines:
+		var count := maxi(1, ceili(Vector2(line[0]).distance_to(line[1])))
+		for step in count + 1:
+			var at := Vector2i(Vector2(line[0]).lerp(line[1], float(step) / count).round())
+			if _inside(at) and _walkable(at) and _map.roads[at.y * _map.width + at.x] == 0: _map.roads[at.y * _map.width + at.x] = 7
+	var reach := func(cell: Vector2i) -> float:
+		var best := INF
+		for line: Array in lines: best = minf(best, Vector2(cell).distance_to(Geometry2D.get_closest_point_to_segment(Vector2(cell), line[0], line[1])))
+		return best
+	var candidates: Array[Vector2i] = []
+	for y in range(100, 152):
+		for x in range(20, 72):
+			var cell := Vector2i(x, y)
+			if not _inside(cell) or _dale[y * _map.width + x] == 0 or ELRestoredMissions.EXIT_REVEAL.has_point(cell): continue
+			var d: float = reach.call(cell)
+			if d >= 3.0 and d <= 10.0 and _hash(x, y, 7331) < 0.55: candidates.append(cell)
+	candidates.sort_custom(func(a: Vector2i, b: Vector2i) -> bool: return _hash(a.x, a.y, 7333) < _hash(b.x, b.y, 7333))
+	var allowed := func(cell: Vector2i) -> bool: return _dale[cell.y * _map.width + cell.x] != 0 and reach.call(cell) >= 3.0
+	var chosen: Array[Vector2i] = []
+	var pieces: Array = []
+	var groves := ELRestoredMissions.BEAT_GROVES
+	for cell: Vector2i in candidates:
+		if chosen.size() >= 90: break
+		if chosen.any(func(other: Vector2i) -> bool: return other.distance_squared_to(cell) < 5): continue
+		chosen.append(cell)
+		pieces.append([groves[int(_hash(cell.x, cell.y, 7339) * groves.size()) % groves.size()], cell, 0])
+	_set_pieces(pieces, 0, allowed)
+
+## Savage Desert: the Synthets' castle, fallen: broken walls round its yard
+## (where the remnant stands), the siege's craters, and more of them over
+## the battlefield round it.
+func _fallen_castle(middle: Vector2i) -> void:
+	var clear := func(cell: Vector2i) -> bool: return Vector2(cell).distance_to(Vector2(middle)) >= 2.5
+	_set_pieces(ELRestoredMissions.FALLEN_CASTLE.map(func(piece: Array) -> Array: return [piece[0], middle + Vector2i(piece[1]), piece[2]]), 1, clear)
+	var craters := ELRestoredMissions.CRATERS
+	var pieces: Array = []
+	for attempt in 40:
+		var angle := _hash(attempt, 1, 7717) * TAU
+		var distance := 7.0 + _hash(attempt, 2, 7717) * float(ELRestoredMissions.BATTLEFIELD - 7)
+		pieces.append([craters[int(_hash(attempt, 3, 7717) * craters.size()) % craters.size()], middle + Vector2i((Vector2.from_angle(angle) * distance).round()), 0])
+	_set_pieces(pieces, 1, clear)
+
+## Savage Desert: vents of the mountain round the Cyclops's yard.
+func _dress_lair() -> void:
+	if _lair == NO_SPOT: return
+	var lair := _lair
+	var outside := func(cell: Vector2i) -> bool: return maxi(absi(cell.x - lair.x), absi(cell.y - lair.y)) > 3
+	var pieces: Array = ELRestoredMissions.LAIR_VENTS.map(func(vent: Array) -> Array: return [vent[0], lair + Vector2i(vent[1]), 0])
+	# More vents on a ring round the yard, where the mountain leaves room.
+	for index in 20:
+		var angle := TAU * index / 20.0
+		var name: String = ELRestoredMissions.LAIR_VENTS[index % ELRestoredMissions.LAIR_VENTS.size()][0]
+		pieces.append([name, lair + Vector2i((Vector2.from_angle(angle) * (5.0 + 2.0 * _hash(index, 5, 7741))).round()), 0])
+	_set_pieces(pieces, 1, outside)
+
+## Snowflake Maze: keep the maze's ground free of sites, creatures and
+## scenery while the world is laid out.
+func _reserve_maze() -> void:
+	var middle := ELRestoredMissions.maze_middle(_map.width)
+	var reach := ceili(ELRestoredMissions.MAZE_SPIKE) + 2
+	for y in range(middle.y - reach, middle.y + reach + 1):
+		for x in range(middle.x - reach, middle.x + reach + 1):
+			if _inside(Vector2i(x, y)) and Vector2(x, y).distance_to(Vector2(middle)) <= reach: _reserved[y * _map.width + x] = 1
+
+## Snowflake Maze: the angle of arm k (ELRestoredMissions.MAZE_RINGS).
+static func _maze_arm(k: int) -> float:
+	return deg_to_rad(-120.0 + 60.0 * k)
+
+## Snowflake Maze: the angle of a ring's opening, [sector, place across it].
+static func _maze_gap(gap: Array) -> float:
+	return _maze_arm(int(gap[0])) + float(gap[1]) * TAU / 6.0
+
+## Snowflake Maze: the tiles of the maze's walls.
+func _maze_walls() -> Dictionary:
+	var middle := Vector2(ELRestoredMissions.maze_middle(_map.width))
+	var rings: Array = ELRestoredMissions.MAZE_RINGS
+	var spike := ELRestoredMissions.MAZE_SPIKE
+	var walls := {}
+	var reach := ceili(spike) + 1
+	for y in range(int(middle.y) - reach, int(middle.y) + reach + 1):
+		for x in range(int(middle.x) - reach, int(middle.x) + reach + 1):
+			var offset := Vector2(x, y) - middle
+			var r := offset.length()
+			if r > spike + 0.5 or r < 1.0: continue
+			var angle := offset.angle()
+			var wall := false
+			for ring in rings.size():
+				if absf(r - float(rings[ring])) >= 0.6: continue
+				var open := false
+				for gap: Array in ELRestoredMissions.MAZE_GAPS[ring]:
+					if absf(angle_difference(angle, _maze_gap(gap))) * float(rings[ring]) < 1.6: open = true
+				if not open: wall = true
+			for k in 6:
+				var direction := Vector2.from_angle(_maze_arm(k))
+				var along := offset.dot(direction)
+				if along >= float(rings[0]) - 0.5 and absf(offset.cross(direction)) < 0.6:
+					# Outside the rings the arm is the spike; between two rings
+					# it stands where that band closes it.
+					var band := rings.size() - 1
+					for index in rings.size() - 1:
+						if along <= float(rings[index + 1]):
+							band = index
+							break
+					if band == rings.size() - 1 or k in ELRestoredMissions.MAZE_ARMS[band]: wall = true
+				# The spike's two branches.
+				var fork := direction * (float(rings[-1]) + 1.6)
+				for side: float in [-1.0, 1.0]:
+					var end := fork + direction.rotated(side * PI / 3.0) * 2.2
+					if offset.distance_to(Geometry2D.get_closest_point_to_segment(offset, fork, end)) < 0.6: wall = true
+			if wall: walls[Vector2i(x, y)] = true
+	# Close the diagonal chinks: two wall tiles touching only at a corner
+	# would let a hero step between them.
+	for cell: Vector2i in walls.keys():
+		for step: Vector2i in [Vector2i(1, 1), Vector2i(1, -1)]:
+			if walls.has(cell + step) and not walls.has(cell + Vector2i(step.x, 0)) and not walls.has(cell + Vector2i(0, step.y)):
+				walls[cell + Vector2i(step.x, 0)] = true
+	return walls
+
+## Snowflake Maze: the maze on cleared snow, the Teacher at its heart and a
+## guard in each opening of the inner ring.
+func _build_maze() -> bool:
+	var middle := ELRestoredMissions.maze_middle(_map.width)
+	var clear := ELRestoredMissions.MAZE_SPIKE + 1.5
+	var art := ELAdventureArt.new(_map)
+	var gone: Array = []
+	for item: Dictionary in _map.objects:
+		if item.group not in ["terrain_objects", "np_heroes"]: continue
+		var size := Vector2i.ONE if item.group == "np_heroes" else Vector2i(ELAdventureGrid.footprint(art.resolve(item).get("row", {}), int(item.rotation)).size)
+		var inside := false
+		for y in size.y:
+			for x in size.x:
+				if Vector2(item.x + x, item.y + y).distance_to(Vector2(middle)) <= clear: inside = true
+		if inside: gone.append(int(item.permanent_id) - 1)
+	_important = _important.filter(func(id: int) -> bool: return not id in gone)
+	_forget_gated(gone)
+	_map.objects = _map.objects.filter(func(item: Dictionary) -> bool: return not (int(item.permanent_id) - 1) in gone)
+	var snow: int = LAND_GROUND["Blue"][0]
+	var reach := ceili(clear) + 1
+	for y in range(middle.y - reach, middle.y + reach + 1):
+		for x in range(middle.x - reach, middle.x + reach + 1):
+			if not _inside(Vector2i(x, y)) or Vector2(x, y).distance_to(Vector2(middle)) > clear: continue
+			_map.roads[y * _map.width + x] = 0
+			for dy in 2:
+				for dx in 2:
+					var corner := (y + dy) * (_map.width + 1) + x + dx
+					var kind := int(_map.terrain[corner])
+					if kind in ELTileSet.WATER_KINDS or int(_profile.terrain_tiles.types.get(kind, {}).get("movement", -1)) < 0: _map.terrain[corner] = snow
+	var taken := _taken_cells()
+	var catalog := _profile.table("TerrObj")
+	var ice: Array = ELRestoredMissions.MAZE_ICE.filter(func(name: String) -> bool: return _model(catalog.get(name, {})))
+	if ice.is_empty():
+		error = "The installed game has no ice for the Snowflake Maze."
+		return false
+	var walls := _maze_walls()
+	var cells: Array = walls.keys()
+	cells.sort()
+	for cell: Vector2i in cells:
+		if taken.has(cell) or not _walkable(cell): continue
+		var name: String = ice[int(_hash(cell.x, cell.y, 9103) * ice.size()) % ice.size()]
+		var piece := _place("terrain_objects", name, cell, catalog[name], 0, "", [], {}, 0)
+		_authored[int(piece.permanent_id)] = true
+	var row: Dictionary = _profile.table("AdditionalBuildings").get(ELRestoredMissions.MAZE_HEART, {})
+	if not _model(row):
+		error = "The installed game has no %s for the heart of the maze." % ELRestoredMissions.MAZE_HEART
+		return false
+	var heart := _place("additional_buildings", ELRestoredMissions.MAZE_HEART, middle, row, 0, "")
+	_important.append(int(heart.permanent_id) - 1)
+	if not _check_access(false):
+		error = "The Snowflake Maze shuts a way: " + error
+		return false
+	var inner := float(ELRestoredMissions.MAZE_RINGS[0])
+	for gap: Array in ELRestoredMissions.MAZE_GAPS[0]:
+		var at := middle + Vector2i((Vector2.from_angle(_maze_gap(gap)) * inner).round())
+		# The same creature at every door, so no lord has an easier way in.
+		var name := ELRestoredMissions.MAZE_GUARD if _catalog.monsters.any(func(row: Dictionary) -> bool: return row.name == ELRestoredMissions.MAZE_GUARD) else _native_guard(at, [], ELRestoredMissions.MAZE_GUARD_LEVEL)
+		if name.is_empty() or not _walkable(at): continue
+		var count := _map.objects.size()
+		var id := _place_guard(at, name, 0, false)
+		if not _check_access(false):
+			_map.objects.resize(count)
+			_important.erase(id)
+	error = ""
+	return _check_access(false)
 
 func _fail(message: String) -> ELAdventureMap:
 	error = message
@@ -593,6 +1300,7 @@ func _read_catalog() -> bool:
 		# Version 13 shops sell no cantrips: those are the basic cards every
 		# lord already draws from.
 		if config.version >= STOCK_LAYOUT_VERSION and tier == 0: continue
+		if config.version >= STOCK_CONTENT_VERSION and str(row.get("Use", "+")) != "+": continue
 		tier = maxi(0, tier - 1)
 		var family := "Creature" if row.get("Class") == "Creature" else "Spell"
 		if row.get("Class") not in ["Creature", "Sorcery", "Enchantment"]: continue
@@ -633,6 +1341,7 @@ func _read_catalog() -> bool:
 		if not names.has(name): names[name] = {}
 		names[name][int(row.get("DifficultyLevel", -1))] = row
 	for name: String in _keys(names):
+		if config.version >= STOCK_CONTENT_VERSION and name.ends_with(" D") and names.has(name.trim_suffix(" D")): continue
 		var valid := true
 		for difficulty in 5:
 			var row: Dictionary = names[name].get(difficulty, {})
@@ -656,6 +1365,7 @@ func _read_catalog() -> bool:
 		var size: Vector2i = ELAdventureGrid.footprint(row, 0).size
 		if _model(row) and size.x <= 4 and size.y <= 4 and not row.get("Bridge", 0): _catalog.scenery.append({"name": key, "row": row})
 	for key: String in _keys(_profile.table("Artefacts")):
+		if config.version >= STOCK_CONTENT_VERSION and key in UNPLACED_ARTIFACTS: continue
 		if _model(_profile.table("Artefacts")[key]): _catalog.artifacts.append(key)
 	var globals := _profile.table("GlobalSpells")
 	for color: String in COLORS:
@@ -694,6 +1404,28 @@ func _start_points() -> void:
 	elif int(config.players) == 4: positions = [Vector2(0.225, 0.225), Vector2(0.775, 0.225), Vector2(0.775, 0.775), Vector2(0.225, 0.775)]
 	var quarter := _next(4)
 	var turn := float(_next(701) - 350) / 10000.0
+	if _scenario == ELRestoredMissions.EVIL_DALE:
+		# The Chosen One's glade at the start of the dale, and a second
+		# homeland in the Kinets' snow whose castle goes at the end.
+		_colors[1] = "Blue"
+		positions = [Vector2(ELRestoredMissions.DALE_ROUTE[0]) / _map.width, Vector2(ELRestoredMissions.DALE_HOMELAND) / _map.width]
+		quarter = 0
+		turn = 0.0
+	if _scenario == ELRestoredMissions.SAVAGE_DESERT:
+		# The Chaots in the south-west, the beaten Synthets' homeland in the
+		# south-east (its lord is removed at the end), the Cyclops's
+		# mountains in the north-east. North is the high rows
+		# (the minimap draws them at the top).
+		_colors[1] = "Black"
+		positions = [Vector2(0.22, 0.26), ELRestoredMissions.SYNTHET_HOME]
+		quarter = 0
+		turn = 0.0
+	if _scenario == ELRestoredMissions.SNOWFLAKE_MAZE:
+		# The tournament: three Kinet lords round the maze.
+		for index in _colors.size(): _colors[index] = "Blue"
+		positions = ELRestoredMissions.TOURNEY_HOMES.duplicate()
+		quarter = 0
+		turn = 0.0
 	for point: Vector2 in positions:
 		var relative := (point - Vector2(0.5, 0.5)).rotated(quarter * PI * 0.5 + turn)
 		_anchors.append(Vector2i(((relative + Vector2(0.5, 0.5)) * _map.width).round()))
@@ -842,6 +1574,14 @@ func _build_uplands() -> void:
 	candidates.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return float(a.prominence) > float(b.prominence))
 	var ranges := maxi(2, roundi(dry / 1100.0))
 	var separation := clampi(_map.width / 5, 17, 24)
+	if _scenario == ELRestoredMissions.SAVAGE_DESERT:
+		# Two ranges flank the Cyclops's yard, west and south of it.
+		var lair := Vector2(_map.width, _map.height) * ELRestoredMissions.LAIR
+		for offset: Vector2 in [Vector2(-0.12, 0.05), Vector2(0.03, -0.13)]:
+			var summit := Vector2i((lair + offset * _map.width).round())
+			_summits.append(summit)
+			_raise_ridge(summit)
+		ranges += _summits.size()
 	for candidate: Dictionary in candidates:
 		var point: Vector2i = candidate.point
 		if _summits.any(func(other: Vector2i) -> bool: return point.distance_squared_to(other) < separation * separation): continue
@@ -935,6 +1675,8 @@ func _ground(point: Vector2i, varied := false) -> int:
 		elif config.version >= LANDSCAPE_VERSION and varied:
 			sample += Vector2i((_noise(point.x, point.y, 23.0, 2081) - 0.5) * 12.0, (_noise(point.x, point.y, 23.0, 2347) - 0.5) * 12.0)
 		color = _colors[_owner(sample)]
+	if _scenario == ELRestoredMissions.SAVAGE_DESERT and _mountain(point): color = "Red"
+	if not _dale_colors.is_empty(): color = _dale_colors[point.y * (_map.width + 1) + point.x]
 	var choices: Array = _palette[color]
 	if config.version >= LANDSCAPE_VERSION:
 		var form := _landform(point)
@@ -950,6 +1692,13 @@ func _ground(point: Vector2i, varied := false) -> int:
 		return native if native in choices else int(choices[mini(form, choices.size() - 1)])
 	if varied and choices.size() > 1 and _noise(point.x, point.y, 8.0, 97) > 0.58: return int(choices[mini(1, choices.size() - 1)])
 	return int(choices[0])
+
+## Savage Desert: the dark rock of the Cyclops's mountains in the north-east,
+## with a ragged edge where it meets the sand.
+func _mountain(point: Vector2i) -> bool:
+	var center := Vector2(_map.width, _map.height) * ELRestoredMissions.LAIR
+	var edge := (_noise(point.x, point.y, 11.0, 6301) - 0.5) * 0.34 + (_noise(point.x, point.y, 4.0, 6311) - 0.5) * 0.12
+	return Vector2(point).distance_to(center) < _map.width * ELRestoredMissions.MOUNTAIN_RADIUS * (1.0 + edge)
 
 ## Version 12 climate lookup. Equal-distance borders between castles are
 ## straight lines, so the sample point is warped at three scales. The warp
@@ -1041,6 +1790,9 @@ func _basin_water(point: Vector2i) -> bool:
 	return false
 
 func _water_field(point: Vector2i) -> bool:
+	if not _dale.is_empty():
+		var cell := Vector2i(clampi(point.x, 0, _map.width - 1), clampi(point.y, 0, _map.height - 1))
+		if _dale_margin[cell.y * _map.width + cell.x] != 0: return false
 	if not _basins.is_empty(): return _basin_water(point)
 	var n := float(_map.width)
 	var center := Vector2(n, n) * 0.5
@@ -1273,6 +2025,8 @@ func _weight_landscape_routes() -> void:
 	# Stock roads run along the lanes between the masses, so they wind
 	# around the blocks instead of cutting across them.
 	if config.version >= STOCK_LAYOUT_VERSION and config.scenery > 0 and not _stock_scenery_mix().is_empty(): _lane_mask = _cell_lanes()
+	# Evil Dale: the dale is the only lane; everything else is cliff and wood.
+	if not _dale.is_empty(): _lane_mask = _dale.duplicate()
 	for y in range(1, _map.height - 1):
 		for x in range(1, _map.width - 1):
 			var point := Vector2i(x, y)
@@ -1363,6 +2117,124 @@ func _register_port(land: Vector2i, water: Vector2i, island: int, owner: int) ->
 				if _inside(at): _reserved[at.y * _map.width + at.x] = 1
 	_corridor[land.y * _map.width + land.x] = 1
 
+## Version 16: the shore pieces' list ("first_decor"). Each entry names the
+## second game's row, its centre in cell units and its turn in degrees
+## (0 faces map north; the quay's seaward end and a ship's bow point that
+## way). Every choice is a hash of the cell, never the layout's stream.
+func _place_shore_decor() -> void:
+	var w := _map.width
+	var items: Array[Dictionary] = []
+	_decor_claimed = PackedByteArray()
+	_decor_claimed.resize(w * _map.height)
+	_decor_taken = PackedByteArray()
+	_decor_taken.resize(w * _map.height)
+	var art := ELAdventureArt.new(_map)
+	for item: Dictionary in _map.objects:
+		var size := Vector2i.ONE if item.group in ["heroes", "np_heroes"] else Vector2i(ELAdventureGrid.footprint(art.resolve(item).get("row", {}), int(item.rotation)).size)
+		for y in size.y:
+			for x in size.x:
+				if _inside(Vector2i(item.x + x, item.y + y)): _decor_taken[(item.y + y) * w + item.x + x] = 1
+	# Quays stand beside the harbor, not on it: the hero waits on the
+	# harbor's own land cell and the ship lies alongside.
+	var ports: Array = _ports if config.naval else []
+	for port: Dictionary in ports:
+		_decor_claim(Vector2i(int(port.land[0]), int(port.land[1])), 0)
+		_decor_claim(Vector2i(int(port.water[0]), int(port.water[1])), 0)
+	for port: Dictionary in ports:
+		var land := Vector2i(int(port.land[0]), int(port.land[1]))
+		var water := Vector2i(int(port.water[0]), int(port.water[1]))
+		var out := water - land
+		var across := Vector2i(-out.y, out.x)
+		var sides := [1, -1] if _hash(land.x, land.y, 1601) < 0.5 else [-1, 1]
+		for side: int in sides:
+			var beside: Vector2i = across * side
+			# The quay reaches a cell onto the shore and three out to sea;
+			# its landward end needs ground (a harbor's own water cell is a
+			# shore cell), the rest water.
+			if not (_decor_dry(land + beside) and _decor_wet(water + beside) and _decor_wet(water + out + beside) and _decor_wet(water + out * 2 + beside)): continue
+			# Its deck is centred a cell out from the shoreline and 1.12
+			# cells aside, clear of the hero on the harbor cell.
+			items.append({"kind": "dock", "name": "Dock", "port": int(port.id), "side": side, "turn": _decor_turn(out),
+				"x": (land.x + water.x) * 0.5 + out.x + beside.x * 1.12 + 0.5, "y": (land.y + water.y) * 0.5 + out.y + beside.y * 1.12 + 0.5})
+			for cell: Vector2i in [land + beside, water + beside, water + out + beside, water + out * 2 + beside]: _decor_claim(cell, 0)
+			# A homeland harbor keeps a ship moored off the quay's far side.
+			if int(port.owner) > 0:
+				for mooring: Vector2i in [water + out * 2 - beside * 2, water + out * 3 - beside * 2, water + out * 2 - beside * 3, water + out * 4 + beside]:
+					if not _decor_open(mooring, 1): continue
+					items.append({"kind": "ship", "name": "Ship_01", "port": int(port.id), "x": mooring.x + 0.5, "y": mooring.y + 0.5, "turn": _decor_turn(out)})
+					_decor_claim(mooring, 1)
+					break
+			break
+	for port: Dictionary in ports: _decor_claim(Vector2i(int(port.water[0]), int(port.water[1])), 6)
+	# Wrecks lie in sheltered water near a shore, one per 2048 cells, at
+	# least 14 cells apart, each with a little flotsam drifting beside it.
+	var candidates: Array[Vector3] = []
+	for y in range(4, _map.height - 4):
+		for x in range(4, w - 4):
+			var at := Vector2i(x, y)
+			if not _decor_open(at, 1): continue
+			var shore := 0
+			for dy in range(-2, 3):
+				for dx in range(-2, 3):
+					if not _open_water(at + Vector2i(dx, dy)): shore += 1
+			if shore >= 3: candidates.append(Vector3(_hash(x, y, 1603), x, y))
+	candidates.sort()
+	var wrecks: Array[Vector2i] = []
+	var flotsam := ["WaterDust_01", "WaterDust_02", "WaterDust_03", "WaterDust_04", "Barrel"]
+	for candidate: Vector3 in candidates:
+		if wrecks.size() >= w * _map.height / 2048: break
+		var at := Vector2i(int(candidate.y), int(candidate.z))
+		if not _decor_open(at, 1) or wrecks.any(func(other: Vector2i) -> bool: return other.distance_squared_to(at) < 196): continue
+		wrecks.append(at)
+		items.append({"kind": "wreck", "name": "Ship_02" if _hash(at.x, at.y, 1605) < 0.5 else "Ship_03", "x": at.x + 0.5, "y": at.y + 0.5, "turn": int(_hash(at.x, at.y, 1607) * 360.0)})
+		_decor_claim(at, 1)
+		for index in 2:
+			var drift := at + Vector2i(int(_hash(at.x, at.y, 1609 + index) * 5.0) - 2, int(_hash(at.x, at.y, 1611 + index) * 5.0) - 2)
+			if not _decor_open(drift, 0): continue
+			items.append({"kind": "flotsam", "name": flotsam[int(_hash(drift.x, drift.y, 1613) * flotsam.size()) % flotsam.size()], "x": drift.x + 0.5, "y": drift.y + 0.5, "turn": int(_hash(drift.x, drift.y, 1615) * 360.0)})
+			_decor_claim(drift, 0)
+	var payload := {"version": 1, "items": items}
+	_map.set_meta("first_decor", payload)
+	_map.document.children.append(_node("first_decor", {"data": JSON.stringify(payload, "", true)}))
+	report.shore_decor = items.size()
+
+## Version 16 shore pieces: free land or shore for a quay's landward end.
+func _decor_dry(at: Vector2i) -> bool:
+	if not _inside(at) or _open_water(at): return false
+	var index := at.y * _map.width + at.x
+	return _decor_taken[index] == 0 and _map.roads[index] == 0 and _decor_claimed[index] == 0
+
+## Version 16 shore pieces: an unclaimed sea or shore cell.
+func _decor_wet(at: Vector2i) -> bool:
+	return _inside(at) and ELFirstNaval.is_water(_map, at) and _decor_claimed[at.y * _map.width + at.x] == 0
+
+## Version 16 shore pieces: open, unclaimed water `radius` cells round `at`.
+func _decor_open(at: Vector2i, radius: int) -> bool:
+	for dy in range(-radius, radius + 1):
+		for dx in range(-radius, radius + 1):
+			var cell := at + Vector2i(dx, dy)
+			if cell.x < 1 or cell.y < 1 or cell.x >= _map.width - 1 or cell.y >= _map.height - 1: return false
+			if not _open_water(cell) or _decor_claimed[cell.y * _map.width + cell.x] != 0: return false
+	return true
+
+func _decor_claim(at: Vector2i, radius: int) -> void:
+	for dy in range(-radius, radius + 1):
+		for dx in range(-radius, radius + 1):
+			var cell := at + Vector2i(dx, dy)
+			if _inside(cell): _decor_claimed[cell.y * _map.width + cell.x] = 1
+
+## A map direction as the shore list's turn: degrees clockwise from north.
+static func _decor_turn(direction: Vector2i) -> int:
+	return posmod(roundi(rad_to_deg(atan2(float(direction.x), float(direction.y)))), 360)
+
+## Every corner of the cell is water: a hull or a quay's seaward end lies
+## wholly in the sea there.
+func _open_water(at: Vector2i) -> bool:
+	if not _inside(at): return false
+	for corner: Vector2i in [at, at + Vector2i.RIGHT, at + Vector2i.ONE, at + Vector2i.DOWN]:
+		if _map.tile(corner.x, corner.y) != ELFirstNaval.WATER: return false
+	return true
+
 func _region_root(region: int) -> Vector2i:
 	if region < 0 or region >= _land_regions.size(): return NO_SPOT
 	var best := NO_SPOT
@@ -1415,6 +2287,7 @@ func _make_players() -> bool:
 		var color := _colors[index]
 		var player := index + 1
 		var treasury: int = {"scarce": 8, "normal": 20, "rich": 50}[config.starting_resources]
+		var health := int(config.castle_health)
 		var balances := {}
 		for kind: String in ELResources.ORIGINAL: balances[kind] = str(treasury if kind in ["Root", "Lotus"] else maxi(2, int(treasury) / 2))
 		var relations: Array = []
@@ -1424,7 +2297,7 @@ func _make_players() -> bool:
 			var row: Dictionary = _profile.table("GlobalSpells")[code]
 			if row.get("Color", "Colorless") in [color, "Colorless"] and (code == SUMMONS[color] or code in [ELGlobalSpells.DEFENDER, ELGlobalSpells.WARRIOR] or ELGlobalSpells.RITUALS.has(code)):
 				global.append(_node("spell", {"code": code}))
-		var node := _node("player", {"id": str(player), "health": str(config.castle_health), "blazon": str(index), "blazon_color": str(index)}, "", [
+		var node := _node("player", {"id": str(player), "health": str(health), "blazon": str(index), "blazon_color": str(index)}, "", [
 			_node("color", {}, color), _node("name", {}, "Commander %d" % player), _node("start_resources", balances),
 			_node("diplomacy", {}, "", relations), _node("global_spells", {}, "", global)])
 		_map.players.append(node)
@@ -1440,6 +2313,12 @@ func _make_players() -> bool:
 			return false
 		var heroes: Array = _catalog.heroes[color]
 		var hero_name: String = heroes[_next(heroes.size())]
+		# Snowflake Maze: the rival lords bring Santa Claus and Father Frost.
+		if _scenario == ELRestoredMissions.SNOWFLAKE_MAZE and index >= 1:
+			hero_name = ELRestoredMissions.TOURNEY_HEROES[index - 1]
+			if not _profile.table("HeroTemplates").has(hero_name):
+				error = "The installed game has no %s hero for the Snowflake Maze." % hero_name
+				return false
 		var hero := _place("heroes", hero_name, hero_at, _profile.table("HeroTemplates")[hero_name], player, color)
 		_paint_disk(hero_at, 4, false)
 		if config.version >= STOCK_LAYOUT_VERSION:
@@ -1830,7 +2709,7 @@ func _read_prize_scenery() -> void:
 		)
 
 func _prize_prop(point: Vector2i) -> Dictionary:
-	var color := ELAdventureArt.terrain_color(_map.tile(point.x, point.y))
+	var color := _cell_ground(point)
 	var choices: Array = _prize_scenery.get(color, [])
 	if choices.is_empty(): return {}
 	return choices[floori(_hash(point.x, point.y, 1627) * choices.size()) % choices.size()]
@@ -2485,6 +3364,9 @@ func _populate_roaming_creatures(journey: Array, wilderness: Array) -> void:
 		points.append(close)
 
 func _regional_guard(pos: Vector2i, choices: Array, level: int) -> String:
+	if _scenario in [ELRestoredMissions.SAVAGE_DESERT, ELRestoredMissions.EVIL_DALE, ELRestoredMissions.SNOWFLAKE_MAZE]:
+		var native := _native_guard(pos, choices, level)
+		if not native.is_empty(): return native
 	if choices.is_empty():
 		var best := absi(int(_catalog.monsters[0].level) - level)
 		for row: Dictionary in _catalog.monsters: best = mini(best, absi(int(row.level) - level))
@@ -2511,6 +3393,26 @@ func _regional_guard(pos: Vector2i, choices: Array, level: int) -> String:
 		var roll := _next(3)
 		if (roll == 0) if config.version >= STOCK_LAYOUT_VERSION else (roll != 0): choices = favored
 	return str(choices[_next(choices.size())].name)
+
+## Savage Desert: every creature belongs to its ground, the Synthets'
+## remnants on the sand and the Chaots' kin in the Cyclops's mountains. The
+## nearest level of that race, preferring one not met within ten tiles.
+func _native_guard(pos: Vector2i, choices: Array, level: int) -> String:
+	var color := ELAdventureArt.terrain_color(_map.tile(pos.x, pos.y))
+	var pool: Array = choices.filter(func(row: Dictionary) -> bool: return ELFirstMonsters.definition(_profile, row.name, 0).get("Color") == color)
+	if pool.is_empty():
+		pool = _catalog.monsters.filter(func(row: Dictionary) -> bool:
+			return ELFirstMonsters.definition(_profile, row.name, 0).get("Color") == color and absi(int(row.level) - level) <= 2 and row.name != ELRestoredMissions.GOAL_MONSTERS.get(_scenario, ""))
+	if pool.is_empty(): return ""
+	var nearby := {}
+	for item: Dictionary in _map.objects:
+		if item.group == "np_heroes" and pos.distance_squared_to(Vector2i(item.x, item.y)) <= 100: nearby[str(item.name)] = true
+	var fresh: Array = pool.filter(func(row: Dictionary) -> bool: return not nearby.has(str(row.name)))
+	if not fresh.is_empty(): pool = fresh
+	var best := 1000
+	for row: Dictionary in pool: best = mini(best, absi(int(row.level) - level))
+	pool = pool.filter(func(row: Dictionary) -> bool: return absi(int(row.level) - level) == best)
+	return str(pool[_next(pool.size())].name)
 
 func _encounter_cell(desired: Vector2i, radius: int, home := -1) -> Vector2i:
 	var best := NO_SPOT
@@ -2884,6 +3786,9 @@ func _scenery_catalog() -> Dictionary:
 		var cliffs: Array[Dictionary] = []
 		var undergrowth: Array[Dictionary] = []
 		var families: Array = SCENERY_FAMILIES[color]
+		# Version 14 takes each ground's props from its own art set.
+		if config.version >= CLIMATE_PROPS_VERSION and color in ["Red", "Black"]:
+			families = SCENERY_FAMILIES["Black" if color == "Red" else "Red"]
 		for key: String in keys:
 			var name := key.to_lower()
 			var plant: bool = families[0].any(func(prefix: String) -> bool: return name.begins_with(prefix))
@@ -3117,17 +4022,18 @@ func _make_vein_scenery(land: PackedByteArray, pools: Dictionary) -> void:
 				order.sort_custom(func(a: Vector2i, b: Vector2i) -> bool: return _hash(a.x, a.y, 6337) < _hash(b.x, b.y, 6337))
 			for point: Vector2i in (cores if tier < 3 else order):
 				if _occupied[point.y * w + point.x] != 0: continue
-				var color := ELAdventureArt.terrain_color(_map.tile(point.x, point.y))
+				var color := _cell_ground(point)
 				if not mixes.has(color): color = _colors[_owner(point)]
 				if not mixes.has(color): continue
 				var choices: Array = mixes[color][tier]
 				if choices.is_empty(): continue
 				var rocky := _rock[point.y * (w + 1) + point.x] > 0.45 or _noise(point.x, point.y, 11.0, 6343) > (0.48 if color in ["Red", "Black"] else 0.78)
-				if not _place_stock_prop(point, choices, rocky, fill, 6 if tier < 3 else 3) and (tier >= 3 or rocky):
+				var climate := color if config.version >= CLIMATE_PROPS_VERSION else ""
+				if not _place_stock_prop(point, choices, rocky, fill, 6 if tier < 3 else 3, climate) and (tier >= 3 or rocky):
 					# Stock masses are mostly three-tile clumps: before a gap
 					# falls to the single-tile fillers, try every clump that
 					# fits, largest first.
-					_place_largest_prop(point, choices, rocky, fill)
+					_place_largest_prop(point, choices, rocky, fill, climate)
 		_fill_mass_gaps(land, open, fill)
 	else:
 		# Stock props average about five cells: try the large band twice.
@@ -3310,8 +4216,12 @@ func _narrow_open_ground(open: PackedByteArray, land: PackedByteArray, kept: Pac
 				if open[i] == 0 or land[i] == 0 or depth[i] != 0: continue
 				depth[i] = depth[at.y * w + at.x] + 1
 				queue.append(near)
+	# Evil Dale stays one valley up to about eight tiles wide, and the ruins
+	# at its end one clearing.
+	var deepest := 5 if not _dale.is_empty() else 3
 	for i in w * h:
-		if depth[i] >= 3 and kept[i] == 0 and _map.roads[i] == 0: open[i] = 0
+		if not _dale.is_empty() and ELRestoredMissions.EXIT_REVEAL.has_point(Vector2i(i % w, i / w)): continue
+		if depth[i] >= deepest and kept[i] == 0 and _map.roads[i] == 0: open[i] = 0
 
 ## Every pocket of open ground (a site apron, a creature, a yard behind
 ## closed borders) gets a winding path two tiles wide to the nearest open
@@ -3485,7 +4395,7 @@ func _fill_mass_gaps(land: PackedByteArray, open: PackedByteArray, fill: PackedB
 			if land[i] == 0 or _occupied[i] != 0 or (reached[i] != 0 and fill[i] == 0): continue
 			if reached[i] != 0 and (_reserved[i] != 0 or _map.roads[i] != 0): continue
 			if reached[i] != 0 and not _approach_clearings.is_empty() and _approach_clearings[i] != 0: continue
-			var color := ELAdventureArt.terrain_color(_map.tile(x, y))
+			var color := _cell_ground(Vector2i(x, y))
 			var choices: Array = fillers.get(color, [])
 			if choices.is_empty(): choices = fillers.get(_colors[_owner(Vector2i(x, y))], [])
 			if choices.is_empty(): continue
@@ -3522,6 +4432,7 @@ func _stock_scenery_mix() -> Dictionary:
 		for name: String in STOCK_SCENERY[color]:
 			var key: String = lookup.get(name.to_lower(), "")
 			if key.is_empty() or not _model(rows[key]) or name in FLAT_PROPS: continue
+			if config.version >= CLIMATE_PROPS_VERSION and _art_ground(key) not in ["", color]: continue
 			var shape := ELAdventureGrid.footprint(rows[key], 0)
 			if shape.cells.is_empty(): continue
 			var span := maxi(shape.size.x, shape.size.y)
@@ -3532,7 +4443,7 @@ func _stock_scenery_mix() -> Dictionary:
 		if found * 2 >= STOCK_SCENERY[color].size(): mixes[color] = bands
 	return mixes
 
-func _place_stock_prop(point: Vector2i, choices: Array, rocky: bool, fill: PackedByteArray, attempts: int) -> bool:
+func _place_stock_prop(point: Vector2i, choices: Array, rocky: bool, fill: PackedByteArray, attempts: int, climate := "") -> bool:
 	var total := 0
 	for entry: Dictionary in choices: total += _stock_weight(entry, rocky)
 	if total <= 0: return false
@@ -3547,12 +4458,12 @@ func _place_stock_prop(point: Vector2i, choices: Array, rocky: bool, fill: Packe
 		var rotation := _next(4) * 4
 		var shape := ELAdventureGrid.footprint(entry.row, rotation)
 		var origin: Vector2i = point - shape.size / 2
-		if not _stock_prop_fits(origin, shape, fill): continue
+		if not _stock_prop_fits(origin, shape, fill, climate): continue
 		_place("terrain_objects", entry.name, origin, entry.row, 0, "", [], {}, rotation)
 		return true
 	return false
 
-func _place_largest_prop(point: Vector2i, choices: Array, rocky: bool, fill: PackedByteArray) -> bool:
+func _place_largest_prop(point: Vector2i, choices: Array, rocky: bool, fill: PackedByteArray, climate := "") -> bool:
 	var ranked: Array = []
 	for entry: Dictionary in choices:
 		var cells: int = ELAdventureGrid.footprint(entry.row, 0).cells.size()
@@ -3568,7 +4479,7 @@ func _place_largest_prop(point: Vector2i, choices: Array, rocky: bool, fill: Pac
 			var shape := ELAdventureGrid.footprint(entry.row, rotation)
 			for nudge: Vector2i in [Vector2i.ZERO, Vector2i(-1, 0), Vector2i(0, -1), Vector2i(-1, -1)]:
 				var origin: Vector2i = point - shape.size / 2 + nudge
-				if not _stock_prop_fits(origin, shape, fill): continue
+				if not _stock_prop_fits(origin, shape, fill, climate): continue
 				_place("terrain_objects", entry.name, origin, entry.row, 0, "", [], {}, rotation)
 				return true
 	return false
@@ -3577,8 +4488,9 @@ func _stock_weight(entry: Dictionary, rocky: bool) -> int:
 	return int(entry.weight) * (1 if bool(entry.plant) == rocky else 4)
 
 ## Only the solid cells of a stock prop need free ground, so cliffs and
-## trees interlock as they do in the original missions.
-func _stock_prop_fits(origin: Vector2i, shape: Dictionary, fill: PackedByteArray) -> bool:
+## trees interlock as they do in the original missions. With a climate
+## (version 14) every land corner under those cells must be of that ground.
+func _stock_prop_fits(origin: Vector2i, shape: Dictionary, fill: PackedByteArray, climate := "") -> bool:
 	var size: Vector2i = shape.size
 	if origin.x < 0 or origin.y < 0 or origin.x + size.x > _map.width or origin.y + size.y > _map.height: return false
 	for cell: Vector2i in shape.cells:
@@ -3586,6 +4498,40 @@ func _stock_prop_fits(origin: Vector2i, shape: Dictionary, fill: PackedByteArray
 		if fill[offset] == 0 or _occupied[offset] != 0 or _reserved[offset] != 0: return false
 		if _scenery_paths[offset] != 0 or _map.roads[offset] != 0: return false
 		if not _approach_clearings.is_empty() and _approach_clearings[offset] != 0: return false
+		if not climate.is_empty() and not _cell_of_ground(origin + cell, climate): return false
+	return true
+
+## The ground of a terrain object's art set, or "" for other art.
+static func _art_ground(name: String) -> String:
+	var lower := name.to_lower()
+	for pair: Array in ART_GROUND:
+		if lower.begins_with(pair[0]): return pair[1]
+	return ""
+
+## The ground a cell's props take. Version 14 reads all four corners and
+## takes the most common climate (ties go to the top-left corner); older
+## versions read the top-left corner alone.
+func _cell_ground(cell: Vector2i) -> String:
+	if config.version < CLIMATE_PROPS_VERSION: return ELAdventureArt.terrain_color(_map.tile(cell.x, cell.y))
+	var first := ELAdventureArt.terrain_color(_map.tile(cell.x, cell.y) & ~ELTileSet.GREY)
+	var counts := {}
+	for corner: Vector2i in [cell, cell + Vector2i(1, 0), cell + Vector2i(0, 1), cell + Vector2i(1, 1)]:
+		var kind := _map.tile(corner.x, corner.y)
+		if kind < 0: continue
+		var color := ELAdventureArt.terrain_color(kind & ~ELTileSet.GREY)
+		if color in COLORS: counts[color] = int(counts.get(color, 0)) + 1
+	var best := first if counts.has(first) else ""
+	for color: String in counts:
+		if best.is_empty() or int(counts[color]) > int(counts[best]): best = color
+	return best if not best.is_empty() else first
+
+## Whether every land corner of a cell has the given climate.
+func _cell_of_ground(cell: Vector2i, climate: String) -> bool:
+	for corner: Vector2i in [cell, cell + Vector2i(1, 0), cell + Vector2i(0, 1), cell + Vector2i(1, 1)]:
+		var kind := _map.tile(corner.x, corner.y)
+		if kind < 0: continue
+		var color := ELAdventureArt.terrain_color(kind & ~ELTileSet.GREY)
+		if color in COLORS and color != climate: return false
 	return true
 
 func _make_regional_scenery(land: PackedByteArray, pools: Dictionary) -> void:
@@ -3626,6 +4572,7 @@ func _place_regional_cliffs(land: PackedByteArray, pools: Dictionary) -> void:
 				var offset := y * _map.width + x
 				var crest := _uplands[y * (_map.width + 1) + x]
 				if crest < 0.24 or land[offset] == 0 or _reserved[offset] != 0: continue
+				if not _dale.is_empty() and _dale[offset] != 0: continue
 				var point := Vector2i(x, y)
 				if not _clears_sites(point, 4): continue
 				var score := crest + _hash(x, y, 7933) * 0.31
@@ -4027,6 +4974,11 @@ func _walkable(point: Vector2i) -> bool:
 
 func _fits(at: Vector2i, size: Vector2i, require_land: bool, avoid_roads: bool) -> bool:
 	if at.x < 2 or at.y < 2 or at.x + size.x >= _map.width - 2 or at.y + size.y >= _map.height - 2: return false
+	if not _dale.is_empty():
+		# Evil Dale: sites stand in the dale, none in the ruins at its end.
+		for y in range(at.y, at.y + size.y):
+			for x in range(at.x, at.x + size.x):
+				if _dale[y * _map.width + x] == 0 or ELRestoredMissions.EXIT_REVEAL.has_point(Vector2i(x, y)): return false
 	if config.naval and not _ports.is_empty() and not _served_island(_region_at(at)): return false
 	for y in range(at.y, at.y + size.y):
 		for x in range(at.x, at.x + size.x):
@@ -4185,6 +5137,8 @@ const OBJECT_GROUND := {
 	"castle": {"Green": [[3, 60], [0, 40]], "Blue": [[18, 75], [4, 25]], "Red": [[8, 55], [11, 45]], "Black": [[12, 55], [15, 45]]},
 }
 
+const SNOW_TREE_GROUND := [[5, 55], [4, 30], [18, 15]]
+
 static func _ground_class(item: Dictionary) -> String:
 	if item.group != "terrain_objects": return "castle" if ELFirstScenario.is_castle(item) else "site"
 	var name := str(item.name).to_lower()
@@ -4230,6 +5184,9 @@ func _paint_object_ground() -> void:
 			for c: String in order:
 				if int(counts.get(c, 0)) > int(counts.get(chosen, 0)): chosen = c
 			var choices: Array = OBJECT_GROUND[chosen][color]
+			# Version 14 keeps snow pines on snow: deep snow and ice under
+			# the stands, so a blocked stand still reads as a wood.
+			if chosen == "tree" and color == "Blue" and config.version >= CLIMATE_PROPS_VERSION: choices = SNOW_TREE_GROUND
 			# Smooth noise bunches around the middle; stretch it so each
 			# kind gets about its stock share.
 			var roll := clampf(0.5 + (_noise(x, y, 4.0, 7717) - 0.5) * 2.6, 0.0, 0.999) * 100.0
@@ -4844,7 +5801,7 @@ func _seal_corner_pockets(first_decoration: int, cliff_ids: Vector2i) -> int:
 			continue
 		for at: Vector2i in pocket:
 			if (config.naval and _sea_cell(at)) or _map.roads[_index(at)] != 0: continue
-			var choices: Array = fillers.get(ELAdventureArt.terrain_color(_map.tile(at.x, at.y)), [])
+			var choices: Array = fillers.get(_cell_ground(at), [])
 			if choices.is_empty(): choices = fillers.get(_colors[_owner(at)], [])
 			if choices.is_empty(): continue
 			var entry: Dictionary = choices[_next(choices.size())]
