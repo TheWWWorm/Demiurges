@@ -40,6 +40,11 @@ var body: RichTextLabel
 var close: Button
 var box := Rect2()
 var _factor := 1.0
+## When the line may be answered (Time.get_ticks_msec), or -1 until the box
+## has been drawn.
+var _armed_at := -1
+## How long a new line ignores clicks and keys once it is on screen.
+const GRACE_MS := 450
 var _font: Font
 
 func _init() -> void:
@@ -90,7 +95,7 @@ func _init() -> void:
 	close.draw.connect(_draw_close)
 	close.mouse_entered.connect(close.queue_redraw)
 	close.mouse_exited.connect(close.queue_redraw)
-	close.pressed.connect(func(): answered.emit("OK"))
+	close.pressed.connect(func(): if armed(): answered.emit("OK"))
 	canvas.add_child(close)
 	hide()
 
@@ -103,6 +108,8 @@ func _shade(control: Control, color_name: String) -> void:
 ## Shows a speaker line: {title, text}, with the speaker's portrait (null
 ## for none).
 func present(speech: Dictionary, face: Texture2D) -> void:
+	_armed_at = -1
+	set_process(true)
 	title.text = str(speech.get("title", ""))
 	if not title.text.is_empty() and not title.text.ends_with(":"): title.text += ":"
 	body.text = str(speech.get("text", ""))
@@ -114,16 +121,32 @@ func present(speech: Dictionary, face: Texture2D) -> void:
 func key_answer(keycode: int) -> String:
 	return "OK" if keycode in [KEY_ENTER, KEY_KP_ENTER, KEY_ESCAPE, KEY_SPACE] else ""
 
+## Whether the line has been on screen long enough to be answered. A map
+## that takes long to build holds the window still, and the clicks and keys
+## pressed meanwhile all arrive in the first frames after it: without this
+## they closed the opening line before it was ever seen.
+func armed() -> bool:
+	return _armed_at >= 0 and Time.get_ticks_msec() >= _armed_at
+
+func _process(_delta: float) -> void:
+	if not visible:
+		set_process(false)
+		return
+	# The grace starts once the box has been drawn, not when it was made.
+	if _armed_at < 0: _armed_at = Time.get_ticks_msec() + GRACE_MS
+	elif armed(): set_process(false)
+
 func _gui_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
 		accept_event()
-		answered.emit("OK")
+		if armed(): answered.emit("OK")
 
 func _unhandled_key_input(event: InputEvent) -> void:
 	if not visible or not event is InputEventKey or not event.pressed or event.echo: return
 	if not key_answer(event.keycode).is_empty():
+		# Taken either way, so the map does not answer it instead.
 		get_viewport().set_input_as_handled()
-		answered.emit("OK")
+		if armed(): answered.emit("OK")
 
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_RESIZED and visible: layout()

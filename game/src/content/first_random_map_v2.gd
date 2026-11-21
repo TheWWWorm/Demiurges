@@ -41,7 +41,13 @@ const STOCK_CONTENT_VERSION := 15
 ## the version 15 map of the same settings, and the list is the same with
 ## or without the second game installed.
 const SHORE_DECOR_VERSION := 16
-const LATEST_VERSION := SHORE_DECOR_VERSION
+## Version 17 spreads the creatures over their kinds. Each draw counts the
+## kinds already chosen (a creature's "<name> D" copy is the same kind) and
+## takes one of the least met among the equally fitting choices, and a
+## creature of a single race's ground passes over kinds met within twelve
+## tiles. Earlier versions came back to the same few kinds across a map.
+const VARIETY_VERSION := 17
+const LATEST_VERSION := VARIETY_VERSION
 ## The Artefacts rows no stock map, campaign or script places: the program
 ## gives RodOfDefence to fort garrisons; the other three are never handed out.
 const UNPLACED_ARTIFACTS := ["RodOfDefence", "RodOfFire", "RodOfInsanity", "RodOfReflection"]
@@ -217,6 +223,12 @@ var _lane_mask := PackedByteArray()
 var _summits: Array[Vector2i] = []
 ## A restored mission's recipe (ELRestoredMissions), or "".
 var _scenario := ""
+## The restored mission's revision (ELRestoredMissions.REVISION): saves keep
+## the revision they were started with, so their maps stay as they were.
+var _revision := 1
+## Creature kinds chosen so far, and how often (version 17, mission
+## revision 2).
+var _creature_uses := {}
 ## Savage Desert: the Cyclops's cell and his id.
 var _lair := NO_SPOT
 ## Restored missions: the props placed by hand (permanent ids).
@@ -243,7 +255,7 @@ static func defaults(version := VERSION) -> Dictionary:
 static func normalize(options: Dictionary, version := VERSION) -> Dictionary:
 	var result := defaults(version)
 	for key: Variant in options:
-		if key is not String or not (result.has(key) or key == "scenario"): return {}
+		if key is not String or not (result.has(key) or key in ["scenario", "revision"]): return {}
 	for key: String in ["version", "size", "players", "scenery", "castle_health"]:
 		var value: Variant = options.get(key, result[key])
 		if typeof(value) not in [TYPE_INT, TYPE_FLOAT] or not is_finite(float(value)) or float(value) != floor(float(value)): return {}
@@ -269,6 +281,12 @@ static func normalize(options: Dictionary, version := VERSION) -> Dictionary:
 		var scenario: Variant = options.scenario
 		if scenario is not String or scenario not in ELRestoredMissions.SCENARIOS or result.version < CLIMATE_PROPS_VERSION: return {}
 		result["scenario"] = scenario
+		# Later revisions of the mission's own ground; the first has no key.
+		if options.has("revision"):
+			var revision: Variant = options.revision
+			if typeof(revision) not in [TYPE_INT, TYPE_FLOAT] or float(revision) != floor(float(revision)) or int(revision) < 2 or int(revision) > ELRestoredMissions.REVISION: return {}
+			result["revision"] = int(revision)
+	elif options.has("revision"): return {}
 	return result
 
 static func presets() -> Array[Dictionary]:
@@ -376,6 +394,7 @@ func _generate_map(profile: ELProfile, options: Dictionary) -> ELAdventureMap:
 		_node("description", {}, "Expand from your homeland, capture mines and shops, and discover the scrolls that summon stronger heroes."),
 		_node("random_map", {"version": str(config.version), "config": JSON.stringify(config, "", true), "catalog_hash": _catalog_hash()})])
 	_scenario = str(config.get("scenario", ""))
+	_revision = int(config.get("revision", 1))
 	_lair = NO_SPOT
 	_authored.clear()
 	_lair_id = -1
@@ -544,6 +563,7 @@ func _generate_map(profile: ELProfile, options: Dictionary) -> ELAdventureMap:
 	if _scenario == ELRestoredMissions.SAVAGE_DESERT and not _clear_rival(): return null
 	if _scenario == ELRestoredMissions.EVIL_DALE and not _finish_dale(): return null
 	if _scenario == ELRestoredMissions.SNOWFLAKE_MAZE and not _build_maze(): return null
+	if not _scenario.is_empty() and _revision >= 2 and not _hand_edits(): return null
 	if config.version >= STOCK_LAYOUT_VERSION: _paint_object_ground()
 	# Stock maps are flat; their hills are props and rock tiles. Version 13
 	# keeps the ground level instead of sculpting mesas and shelves.
@@ -927,16 +947,222 @@ func _settle_dale_creatures(start: Vector2i) -> void:
 	_map.objects = _map.objects.filter(func(item: Dictionary) -> bool: return not removed.has(int(item.permanent_id) - 1))
 	_important = _important.filter(func(id: int) -> bool: return not removed.has(id))
 	_forget_gated(removed.keys())
+	if _revision < 2:
+		# The first revision: each creature named in the map's order.
+		for item: Dictionary in _map.objects:
+			if item.group != "np_heroes" or ELXml.child(item.node, "monster").is_empty(): continue
+			var walked := steps[int(item.y) * _map.width + int(item.x)]
+			var progress := clampf(float(walked) / total, 0.0, 1.0) if walked >= 0 else 1.0
+			var name := _native_guard(Vector2i(item.x, item.y), [], 1 + roundi(progress * float(ELRestoredMissions.DALE_LAST_LEVEL - 1)))
+			if name.is_empty(): continue
+			item.name = name
+			for child: Dictionary in item.node.children:
+				if child.tag == "template": child.text = name
+		return
+	# The creatures are named in the order the hero meets them, so the walk
+	# reads as a journey: none repeats the last few met, and the ground's
+	# rarer kinds come before a second meeting with a common one.
+	var met: Array = []
 	for item: Dictionary in _map.objects:
 		if item.group != "np_heroes" or ELXml.child(item.node, "monster").is_empty(): continue
 		var walked := steps[int(item.y) * _map.width + int(item.x)]
-		var progress := clampf(float(walked) / total, 0.0, 1.0) if walked >= 0 else 1.0
+		met.append([walked if walked >= 0 else total, item])
+	met.sort_custom(func(a: Array, b: Array) -> bool: return a[0] < b[0] or (a[0] == b[0] and int(a[1].permanent_id) < int(b[1].permanent_id)))
+	var recent: Array[String] = []
+	var used := {}
+	for entry: Array in met:
+		var item: Dictionary = entry[1]
+		var progress := clampf(float(entry[0]) / total, 0.0, 1.0)
 		var level := 1 + roundi(progress * float(ELRestoredMissions.DALE_LAST_LEVEL - 1))
-		var name := _native_guard(Vector2i(item.x, item.y), [], level)
+		var name := _dale_creature(Vector2i(item.x, item.y), level, recent, used)
 		if name.is_empty(): continue
+		var kind := _creature_kind(name)
+		used[kind] = int(used.get(kind, 0)) + 1
+		recent.append(kind)
+		if recent.size() > ELRestoredMissions.DALE_FRESH: recent.pop_front()
 		item.name = name
 		for child: Dictionary in item.node.children:
 			if child.tag == "template": child.text = name
+
+## The hand edits' roads: an ordinary road (5), drawn as plainly as the
+## generator's own; 7 is the faint track.
+const EDIT_ROAD := 5
+
+## Restored missions: the hand-made finish over the generated map
+## (ELRestoredMissions.EDITS), in order. The map of a recipe is always the
+## same, so each edit names its tiles. An edit that cannot be made, or that
+## shuts a way, fails the map: the list is checked against the map it was
+## written for.
+func _hand_edits() -> bool:
+	var art := ELAdventureArt.new(_map)
+	var catalog := _profile.table("TerrObj")
+	var covers := func(item: Dictionary, area: Rect2i) -> bool:
+		var size := Vector2i.ONE if item.group in ["heroes", "np_heroes"] else Vector2i(ELAdventureGrid.footprint(art.resolve(item).get("row", {}), int(item.rotation)).size)
+		return Rect2i(Vector2i(item.x, item.y), size).intersects(area)
+	for edit: Dictionary in ELRestoredMissions.EDITS.get(_scenario, []):
+		var label := JSON.stringify(edit)
+		if edit.has("clear") or edit.has("remove"):
+			# Scenery in the area goes, the generator's set pieces with it;
+			# "remove" also takes the creature on its tile.
+			var area: Rect2i = edit.clear if edit.has("clear") else Rect2i(edit.remove, Vector2i.ONE)
+			var gone: Array = []
+			for item: Dictionary in _map.objects:
+				if (item.group == "terrain_objects" or (edit.has("remove") and item.group == "np_heroes")) and covers.call(item, area): gone.append(int(item.permanent_id) - 1)
+			if edit.has("remove") and gone.is_empty(): return _edit_failed(label, "nothing stands there")
+			_important = _important.filter(func(id: int) -> bool: return not id in gone)
+			_forget_gated(gone)
+			_map.objects = _map.objects.filter(func(item: Dictionary) -> bool: return not (int(item.permanent_id) - 1) in gone)
+		elif edit.has("props"):
+			# [name, middle, rotation] each, set down as one piece of work.
+			var pieces: Array = edit.props.filter(func(piece: Array) -> bool: return _model(catalog.get(str(piece[0]), {})))
+			var misfits: Array[String] = []
+			# With "slack", a piece that does not fit where it is meant to
+			# takes the nearest middle that does, within that many tiles.
+			var slack := int(edit.get("slack", 0))
+			var nudges: Array[Vector2i] = []
+			for dy in range(-slack, slack + 1):
+				for dx in range(-slack, slack + 1): nudges.append(Vector2i(dx, dy))
+			nudges.sort_custom(func(a: Vector2i, b: Vector2i) -> bool: return a.length_squared() < b.length_squared() or (a.length_squared() == b.length_squared() and (a.y < b.y or (a.y == b.y and a.x < b.x))))
+			for piece: Array in pieces:
+				var placed := false
+				for nudge: Vector2i in nudges:
+					var middle := Vector2i(piece[1]) + nudge
+					if edit.has("ground") and (not _inside(middle) or ELAdventureArt.terrain_color(_map.tile(middle.x, middle.y)) != str(edit.ground)): continue
+					if _set_pieces([[piece[0], Vector2i(piece[1]) + nudge, piece[2]]], int(edit.get("margin", 0))) > 0:
+						placed = true
+						break
+				if not placed: misfits.append("%s at %s: %s" % [piece[0], piece[1], _piece_problem(piece, int(edit.get("margin", 0)))])
+			if not misfits.is_empty(): return _edit_failed(label, "; ".join(misfits))
+		elif edit.has("creature"):
+			var at: Vector2i = edit.at
+			var name := str(edit.creature)
+			if not _catalog.monsters.any(func(row: Dictionary) -> bool: return row.name == name): return _edit_failed(label, "no such creature")
+			var found := {}
+			for item: Dictionary in _map.objects:
+				if item.group == "np_heroes" and not ELXml.child(item.node, "monster").is_empty() and Vector2i(item.x, item.y) == at: found = item
+			if found.is_empty():
+				if not _walkable(at) or _taken_cells().has(at): return _edit_failed(label, "the tile is not free")
+				_place_guard(at, name, 0, false)
+			else:
+				found.name = name
+				for child: Dictionary in found.node.children:
+					if child.tag == "template": child.text = name
+		elif edit.has("swap"):
+			# Scenery of other grounds in the area (standing on `ground`, when
+			# given) becomes `to`'s: each piece takes one of the same
+			# footprint, so no wall opens.
+			var area: Rect2i = edit.swap
+			var keep: String = str(edit.get("keep", ""))
+			var options: Array = edit.to.filter(func(name: String) -> bool: return _model(catalog.get(name, {})))
+			for item: Dictionary in _map.objects:
+				if item.group != "terrain_objects" or str(item.name).begins_with(keep) or not covers.call(item, area): continue
+				if edit.has("ground") and ELAdventureArt.terrain_color(_map.tile(int(item.x), int(item.y))) != str(edit.ground): continue
+				var size := Vector2i(ELAdventureGrid.footprint(art.resolve(item).get("row", {}), int(item.rotation)).size)
+				var fitting: Array = options.filter(func(name: String) -> bool: return Vector2i(ELAdventureGrid.footprint(catalog[name], int(item.rotation)).size) == size)
+				if fitting.is_empty(): continue
+				var name: String = fitting[int(_hash(int(item.x), int(item.y), 9173) * fitting.size()) % fitting.size()]
+				item.name = name
+				for child: Dictionary in item.node.children:
+					if child.tag == "template": child.text = name
+		elif edit.has("move"):
+			var found := {}
+			for item: Dictionary in _map.objects:
+				if item.group == "np_heroes" and Vector2i(item.x, item.y) == Vector2i(edit.move): found = item
+			var to: Vector2i = edit.to
+			if found.is_empty(): return _edit_failed(label, "no creature stands there")
+			if not _walkable(to) or _taken_cells().has(to): return _edit_failed(label, "the tile is not free")
+			found.x = to.x
+			found.y = to.y
+		elif edit.has("trail"):
+			# A road along the walk from one tile to the other, as a hero
+			# would go round what stands between them.
+			var path := _edit_walk(Vector2i(edit.trail[0]), Vector2i(edit.trail[1]))
+			if path.is_empty(): return _edit_failed(label, "no way leads there")
+			for cell: Vector2i in path:
+				if _map.roads[cell.y * _map.width + cell.x] == 0: _map.roads[cell.y * _map.width + cell.x] = EDIT_ROAD
+		elif edit.has("road"):
+			var points: Array = edit.road
+			for index in points.size() - 1:
+				var a := Vector2(points[index])
+				var b := Vector2(points[index + 1])
+				var steps := maxi(1, ceili(a.distance_to(b) * 2.0))
+				for step in steps + 1:
+					var cell := Vector2i(a.lerp(b, float(step) / steps).round())
+					if _inside(cell) and _walkable(cell) and _map.roads[cell.y * _map.width + cell.x] == 0: _map.roads[cell.y * _map.width + cell.x] = EDIT_ROAD
+		else: return _edit_failed(label, "unknown edit")
+		if not _check_access(false): return _edit_failed(label, "it shuts a way: " + error)
+	# Roads are painted into the ground, as the generator's own are.
+	if config.roads and ELRestoredMissions.EDITS.get(_scenario, []).any(func(edit: Dictionary) -> bool: return edit.has("road") or edit.has("trail")): _paint_road_ground()
+	error = ""
+	return true
+
+## The tiles of a walk between two tiles over the map as it stands, or [].
+func _edit_walk(from: Vector2i, to: Vector2i) -> Array[Vector2i]:
+	var objects := {}
+	for item: Dictionary in _map.objects:
+		if item.group in ["heroes", "np_heroes"]: continue
+		var copy := item.duplicate()
+		copy.uid = int(item.permanent_id) - 1
+		copy.alive = true
+		copy.visible = true
+		copy.placed = true
+		copy.type = "object"
+		objects[copy.uid] = copy
+	var grid := ELAdventureGrid.new()
+	if not grid.build(_map, objects): return []
+	var walk: Array[Vector2i] = []
+	walk.assign(grid.path(from, to))
+	return walk
+
+## Why a set piece does not fit (_set_pieces' rules), for the hand edits.
+func _piece_problem(piece: Array, margin: int) -> String:
+	var row: Dictionary = _profile.table("TerrObj").get(str(piece[0]), {})
+	var size := Vector2i(ELAdventureGrid.footprint(row, int(piece[2])).size)
+	var at := Vector2i(piece[1]) - size / 2
+	var taken := _taken_cells()
+	var problems: Array[String] = []
+	for y in range(at.y - margin, at.y + size.y + margin):
+		for x in range(at.x - margin, at.x + size.x + margin):
+			var cell := Vector2i(x, y)
+			if not _inside(cell) or not _walkable(cell): problems.append("%s unwalkable" % cell)
+			elif _map.roads[y * _map.width + x] != 0: problems.append("%s road" % cell)
+			elif taken.has(cell):
+				for item: Dictionary in _map.objects:
+					if int(item.permanent_id) == int(taken[cell]): problems.append("%s %s" % [cell, item.name])
+	return ", ".join(problems.slice(0, 4)) if not problems.is_empty() else "it would shut a way"
+
+func _edit_failed(label: String, reason: String) -> bool:
+	error = "The hand edit %s failed: %s." % [label, reason]
+	return false
+
+## A creature's kind: its variants (the "D" rows) look and fight alike.
+static func _creature_kind(name: String) -> String:
+	return name.trim_suffix(" D")
+
+## Evil Dale: the creature of the ground at `pos` for a stretch of this
+## level. Kinds among `recent` are left out while others remain; then the
+## least met kind, then the nearest level, then the map's stable draw.
+func _dale_creature(pos: Vector2i, level: int, recent: Array[String], used: Dictionary) -> String:
+	var color := ELAdventureArt.terrain_color(_map.tile(pos.x, pos.y))
+	var goal := str(ELRestoredMissions.GOAL_MONSTERS.get(_scenario, ""))
+	var pool: Array = []
+	for spread in [1, 2, 3]:
+		pool = _catalog.monsters.filter(func(row: Dictionary) -> bool:
+			return row.name != goal and absi(int(row.level) - level) <= spread and ELFirstMonsters.definition(_profile, row.name, 0).get("Color") == color)
+		var fresh := pool.filter(func(row: Dictionary) -> bool: return not recent.has(_creature_kind(str(row.name))))
+		if not fresh.is_empty():
+			pool = fresh
+			break
+	if pool.is_empty(): return ""
+	var best := []
+	var score := Vector2i(1 << 30, 1 << 30)
+	for row: Dictionary in pool:
+		var mine := Vector2i(int(used.get(_creature_kind(str(row.name)), 0)), absi(int(row.level) - level))
+		if mine.x < score.x or (mine.x == score.x and mine.y < score.y):
+			score = mine
+			best = [row]
+		elif mine == score: best.append(row)
+	return str(best[_next(best.size())].name)
 
 ## Evil Dale: the ruins at the dale's end, where the four elements meet. A
 ## monument stands at the heart, towers and broken walls around it; each
@@ -3376,9 +3602,9 @@ func _regional_guard(pos: Vector2i, choices: Array, level: int) -> String:
 			# creatures). Take the next level band before a repeat.
 			var nearby := {}
 			for item: Dictionary in _map.objects:
-				if item.group == "np_heroes" and pos.distance_squared_to(Vector2i(item.x, item.y)) <= 100: nearby[str(item.name)] = true
+				if item.group == "np_heroes" and pos.distance_squared_to(Vector2i(item.x, item.y)) <= 100: nearby[_creature_kind(str(item.name)) if _varied_creatures() else str(item.name)] = true
 			for spread in [best, best + 1]:
-				var fresh: Array = _catalog.monsters.filter(func(row: Dictionary) -> bool: return absi(int(row.level) - level) <= spread and not nearby.has(str(row.name)))
+				var fresh: Array = _catalog.monsters.filter(func(row: Dictionary) -> bool: return absi(int(row.level) - level) <= spread and not nearby.has(_creature_kind(str(row.name)) if _varied_creatures() else str(row.name)))
 				if fresh.is_empty(): continue
 				var exact: Array = fresh.filter(func(row: Dictionary) -> bool: return absi(int(row.level) - level) == best)
 				choices = exact if not exact.is_empty() else fresh
@@ -3392,7 +3618,26 @@ func _regional_guard(pos: Vector2i, choices: Array, level: int) -> String:
 	if not favored.is_empty():
 		var roll := _next(3)
 		if (roll == 0) if config.version >= STOCK_LAYOUT_VERSION else (roll != 0): choices = favored
+	if _varied_creatures(): return _chosen_kind(_least_met(choices))
 	return str(choices[_next(choices.size())].name)
+
+## Version 17 (and the restored missions' second revision): creatures are
+## spread over their kinds.
+func _varied_creatures() -> bool:
+	return config.version >= VARIETY_VERSION or (not _scenario.is_empty() and _revision >= 2)
+
+## The rows among `choices` whose kind has been chosen least often.
+func _least_met(choices: Array) -> Array:
+	var fewest := 1 << 30
+	for row: Dictionary in choices: fewest = mini(fewest, int(_creature_uses.get(_creature_kind(str(row.name)), 0)))
+	return choices.filter(func(row: Dictionary) -> bool: return int(_creature_uses.get(_creature_kind(str(row.name)), 0)) == fewest)
+
+## Draws one of `choices` and counts its kind.
+func _chosen_kind(choices: Array) -> String:
+	var name := str(choices[_next(choices.size())].name)
+	var kind := _creature_kind(name)
+	_creature_uses[kind] = int(_creature_uses.get(kind, 0)) + 1
+	return name
 
 ## Savage Desert: every creature belongs to its ground, the Synthets'
 ## remnants on the sand and the Chaots' kin in the Cyclops's mountains. The
@@ -3404,6 +3649,18 @@ func _native_guard(pos: Vector2i, choices: Array, level: int) -> String:
 		pool = _catalog.monsters.filter(func(row: Dictionary) -> bool:
 			return ELFirstMonsters.definition(_profile, row.name, 0).get("Color") == color and absi(int(row.level) - level) <= 2 and row.name != ELRestoredMissions.GOAL_MONSTERS.get(_scenario, ""))
 	if pool.is_empty(): return ""
+	if _varied_creatures():
+		# Kinds met within twelve tiles wait while others fit; then the
+		# nearest level, a level's step outweighing two earlier meetings.
+		var close := {}
+		for item: Dictionary in _map.objects:
+			if item.group == "np_heroes" and pos.distance_squared_to(Vector2i(item.x, item.y)) <= 144: close[_creature_kind(str(item.name))] = true
+		var unmet: Array = pool.filter(func(row: Dictionary) -> bool: return not close.has(_creature_kind(str(row.name))))
+		if not unmet.is_empty(): pool = unmet
+		var score := func(row: Dictionary) -> int: return 2 * absi(int(row.level) - level) + int(_creature_uses.get(_creature_kind(str(row.name)), 0))
+		var low := 1 << 30
+		for row: Dictionary in pool: low = mini(low, score.call(row))
+		return _chosen_kind(pool.filter(func(row: Dictionary) -> bool: return score.call(row) == low))
 	var nearby := {}
 	for item: Dictionary in _map.objects:
 		if item.group == "np_heroes" and pos.distance_squared_to(Vector2i(item.x, item.y)) <= 100: nearby[str(item.name)] = true

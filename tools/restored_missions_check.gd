@@ -35,6 +35,8 @@ func _run() -> void:
 	if not entry.is_empty(): _savage_desert(profile, entry)
 	_evil_dale(profile)
 	_snowflake_maze(profile)
+	_revisions(profile)
+	await _story_box_grace()
 	print("RESTORED MISSIONS: %d checks, %d failure(s)" % [checks, failures.size()])
 	for failure: String in failures: printerr("  " + failure)
 	quit(0 if failures.is_empty() else 1)
@@ -100,6 +102,12 @@ func _savage_desert(profile: ELProfile, entry: Dictionary) -> void:
 	check(guards.size() >= ELRestoredMissions.LAIR_GUARDS.size(), "strong guards stand on the way to him")
 	var castle := Vector2i(int(generator.report.starts[0].x), int(generator.report.starts[0].y))
 	check(ELAdventureArt.terrain_color(map.tile(castle.x, castle.y)) == "Black", "the Chaots start on the desert sand")
+	# The hand-made finish (ELRestoredMissions.EDITS): every piece stands.
+	for edit: Dictionary in ELRestoredMissions.EDITS[ELRestoredMissions.SAVAGE_DESERT]:
+		for piece: Array in edit.get("props", []):
+			var size := Vector2i(ELAdventureGrid.footprint(profile.table("TerrObj")[piece[0]], int(piece[2])).size)
+			var at := Vector2i(piece[1]) - size / 2
+			check(map.objects.any(func(item: Dictionary) -> bool: return item.name == piece[0] and Vector2i(item.x, item.y) == at), "the hand-placed %s stands at %s" % [piece[0], piece[1]])
 
 	var state := ELAdventureSession.new()
 	check(state.start(map, 2, ELFirstRandomMap.seed_for_config(entry.random_map), "", 1, false, true), "the mission starts: " + state.error)
@@ -197,6 +205,19 @@ func _evil_dale(profile: ELProfile) -> void:
 	var path := grid.path(start, ELRestoredMissions.EXIT)
 	check(not path.is_empty(), "the way out can be walked from the Chosen One's glade")
 	check(path.size() > 300, "the way out is long (%d steps)" % path.size())
+	# Revision 2: met in order along the walk, no kind of creature comes
+	# back before DALE_FRESH others.
+	var met: Array = []
+	for item: Dictionary in map.objects:
+		if item.group != "np_heroes" or ELXml.child(item.node, "monster").is_empty(): continue
+		var walk := grid.path(start, Vector2i(item.x, item.y))
+		if not walk.is_empty(): met.append([walk.size(), str(item.name).trim_suffix(" D")])
+	met.sort_custom(func(a: Array, b: Array) -> bool: return a[0] < b[0])
+	var soon := 0
+	for index in met.size():
+		for back in range(1, ELRestoredMissions.DALE_FRESH + 1):
+			if index - back >= 0 and met[index - back][1] == met[index][1] and met[index][0] - met[index - back][0] > 2: soon += 1
+	check(soon <= 2, "the dale's creatures do not repeat along the walk (%d early repeats among %d)" % [soon, met.size()])
 	for point: Vector2i in ELRestoredMissions.PATROL:
 		check(not grid.path(start, point).is_empty(), "Glazzz's loop point %s is in the dale" % point)
 
@@ -300,6 +321,52 @@ func _steps(map: ELAdventureMap, from: Vector2i, to: Vector2i, skip := Callable(
 				steps[next] = int(steps[at]) + 1
 				queue.append(next)
 	return -1
+
+## A line just shown ignores the clicks and keys that arrive in its first
+## moments (those pressed while a long map build held the window), then
+## answers as usual.
+func _story_box_grace() -> void:
+	var holder := Control.new()
+	holder.size = Vector2(1280, 720)
+	root.add_child(holder)
+	var box := ELFirstStoryBox.new()
+	holder.add_child(box)
+	var answers: Array[String] = []
+	box.answered.connect(func(answer: String) -> void: answers.append(answer))
+	box.present({"title": "Hero", "text": "A line."}, null)
+	var space := InputEventKey.new()
+	space.keycode = KEY_SPACE
+	space.pressed = true
+	root.push_input(space)
+	await process_frame
+	root.push_input(space)
+	await process_frame
+	check(answers.is_empty() and box.visible, "keys pressed while the line appears do not close it")
+	await create_timer(float(ELFirstStoryBox.GRACE_MS) / 1000.0 + 0.2).timeout
+	root.push_input(space)
+	await process_frame
+	check(answers == ["OK"], "a key closes the line once it has been seen (%s)" % [answers])
+	holder.queue_free()
+
+## Revisions: saves keep the revision they began with, so the first
+## revision's recipe still builds and still names its mission.
+func _revisions(profile: ELProfile) -> void:
+	for scenario: String in ELRestoredMissions.SCENARIOS:
+		var first := ELRestoredMissions.recipe(scenario)
+		check(int(first.get("revision", 1)) == ELRestoredMissions.REVISION, "%s starts at the current revision" % scenario)
+		first.erase("revision")
+		check(ELFirstRandomMap.id_for_config(first) != ELRestoredMissions.map_id(scenario), "%s's revisions have their own map ids" % scenario)
+		check(ELRestoredMissions.scenario_of_id(ELFirstRandomMap.id_for_config(first)) == scenario, "a first-revision save of %s still names its mission" % scenario)
+	check(ELFirstRandomMap.normalize(ELRestoredMissions.recipe(ELRestoredMissions.EVIL_DALE).merged({"revision": ELRestoredMissions.REVISION + 1}, true)).is_empty(), "an unknown revision is refused")
+	var plain := ELFirstRandomMap.defaults()
+	plain.revision = 2
+	check(ELFirstRandomMap.normalize(plain).is_empty(), "plain random maps carry no revision")
+	var first := ELRestoredMissions.recipe(ELRestoredMissions.SAVAGE_DESERT)
+	first.erase("revision")
+	var generator := ELFirstRandomMap.new()
+	var old := generator.generate(profile, first)
+	check(old != null, "the first revision of Savage Desert still generates: " + generator.error)
+	if old != null: check(not old.objects.any(func(item: Dictionary) -> bool: return item.name == "Tower02"), "the first revision keeps its own fallen castle")
 
 func _snowflake_maze(profile: ELProfile) -> void:
 	var entry := {}

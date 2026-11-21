@@ -1192,9 +1192,17 @@ func ground_position(x: float, y: float) -> Vector3:
 	if map != null: at.y = map.surface_height(Vector2(x + 0.5, y + 0.5))
 	return at
 
+## The height step between neighbouring ice sheets (_placement).
+const ICE_LIFT := 0.015
+
 func _placement(item: Dictionary, row: Dictionary) -> Vector3:
 	var center := ELAdventureGrid.center(item, row)
 	var at := ground_position(center.x - 0.5, center.y - 0.5)
+	if item.group == "terrain_objects" and str(item.get("name", "")).begins_with("BlueIce_"):
+		# Ice sheets lie flat on the snow and reach over their tile, so two
+		# side by side shared one plane and flickered where they met. Each
+		# of a 2 x 2 block of tiles lifts its sheet by a different hair.
+		at.y += ICE_LIFT * float(1 + (int(item.x) & 1) + 2 * (int(item.y) & 1))
 	if map.relief.is_empty() or item.group != "terrain_objects": return at
 	var span := center - Vector2(item.x, item.y)
 	if maxf(span.x, span.y) < 1.5: return at

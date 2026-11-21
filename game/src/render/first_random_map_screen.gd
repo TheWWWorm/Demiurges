@@ -5,11 +5,11 @@ extends AcceptDialog
 signal requested(configuration: Dictionary, difficulty: int, ai: Dictionary)
 
 const SETTINGS_PATH := "user://el1_random_map_setup.json"
-const CODE_PREFIX := "EL1R16:"
+const CODE_PREFIX := "EL1R17:"
 const LEGACY_CODE_PREFIX := "EL1R1:"
 const CODE_VERSIONS := {
 	LEGACY_CODE_PREFIX: 1, "EL1R2:": 2, "EL1R3:": 3, "EL1R4:": 4, "EL1R5:": 5, "EL1R6:": 6,
-	"EL1R7:": 7, "EL1R8:": 8, "EL1R9:": 9, "EL1R10:": 10, "EL1R11:": 11, "EL1R12:": 12, "EL1R13:": 13, "EL1R14:": 14, "EL1R15:": 15, CODE_PREFIX: ELFirstRandomMap.VERSION,
+	"EL1R7:": 7, "EL1R8:": 8, "EL1R9:": 9, "EL1R10:": 10, "EL1R11:": 11, "EL1R12:": 12, "EL1R13:": 13, "EL1R14:": 14, "EL1R15:": 15, "EL1R16:": 16, CODE_PREFIX: ELFirstRandomMap.VERSION,
 }
 const MAX_CODE_LENGTH := 4096
 const FACTIONS := [["Green", "Vitals"], ["Blue", "Kinets"], ["Red", "Chaots"], ["Black", "Synthets"]]

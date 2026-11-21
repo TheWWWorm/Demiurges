@@ -18,8 +18,8 @@
   "translation_keys": 17,
   "files": {
     "data/en/index.json": {
-      "bytes": 370416,
-      "sha256": "cabc1c2daa0e5b83e3ee847a066381d933b3fdba21c9d8c8eb775b62624e5004"
+      "bytes": 371376,
+      "sha256": "4e9610ec41095238cefa2d5604f070517031584a1f3286ba2586d466fe0c5d4c"
     },
     "data/en/pages/abilities.json": {
       "bytes": 2238,
@@ -1546,8 +1546,8 @@
       "sha256": "29d7f69f3729513c118ad1df9bb8e225b4479e5c4cb394c320814229a8f4128c"
     },
     "data/en/pages/cut-mission-evil-dale.json": {
-      "bytes": 11239,
-      "sha256": "951ea3307f034a4281b620aba814901ff265d71544a7e1b043d2c0ec8a39c7d7"
+      "bytes": 11769,
+      "sha256": "18a65f972b1842bf07332f6d31a4707c21dcc9199854eac3eaf0b917db1eb481"
     },
     "data/en/pages/cut-mission-first-strike.json": {
       "bytes": 1759,
@@ -1558,12 +1558,12 @@
       "sha256": "f9e313642576472e25a42cdbbb40a709332ce54e129053bf0858624586a39109"
     },
     "data/en/pages/cut-mission-savage-desert.json": {
-      "bytes": 4111,
-      "sha256": "da0200135579fd7b1e0a7c2f9a550df40289fdb4984e66de4690f34abe6dbbbd"
+      "bytes": 4380,
+      "sha256": "0235b085a9dc6879ead6a03619d6c41f0af09819b339513d5dfff5320f00d748"
     },
     "data/en/pages/cut-mission-snowflake-maze.json": {
-      "bytes": 5697,
-      "sha256": "c6c750dfe30b57a0b35c5d79d28ee783440d3509e33a813e8e29f141278c5bd7"
+      "bytes": 5858,
+      "sha256": "141e4626cc4bb5c57f0bf0a0c40914d9e612ea261d128c6c43d3f3b1baa45f34"
     },
     "data/en/pages/cut-mission-synthets-menace.json": {
       "bytes": 1824,
@@ -1958,8 +1958,8 @@
       "sha256": "d18c0bf1a09af1788f0ca5427f86b6ecbb3cc60bc9a08d9da6d1b068de46ddaa"
     },
     "data/ru/index.json": {
-      "bytes": 652549,
-      "sha256": "2e3c6ae04900b2ee0b180d7735fb1f39297ff046150d32997ae4139bb78d3051"
+      "bytes": 654276,
+      "sha256": "8067c9fc516e2a37fdd555e4213a92fbfd2ac52ddcb47e29c3d180bbbb730ecf"
     },
     "data/ru/pages/abilities.json": {
       "bytes": 3685,
@@ -3486,8 +3486,8 @@
       "sha256": "78078f948dde8630be4484b1ffffb8fbdd5ed94520c340a4f1890c6418efb34d"
     },
     "data/ru/pages/cut-mission-evil-dale.json": {
-      "bytes": 15357,
-      "sha256": "400d745262ec8a06c6322d69e55793aac9a4834df892da934adea0fde03f0f06"
+      "bytes": 16298,
+      "sha256": "3738cd6691ab4b5e1eeab77e1259b3915ff58129daefd3240a06bc53aa1ac9d1"
     },
     "data/ru/pages/cut-mission-first-strike.json": {
       "bytes": 2636,
@@ -3498,12 +3498,12 @@
       "sha256": "90c6ef11b0021ab0090577ece55a241a45f52d68fee4371383fa86daac11c833"
     },
     "data/ru/pages/cut-mission-savage-desert.json": {
-      "bytes": 6426,
-      "sha256": "1c7216c25743e6cc7f41fc65bcbf2abf43312c8a864c76ba03ab10b966d3f385"
+      "bytes": 6925,
+      "sha256": "4dc7d43c0692ed7881a413ed515b45de326f35c56604ee88ca8889c64d8f19e3"
     },
     "data/ru/pages/cut-mission-snowflake-maze.json": {
-      "bytes": 8148,
-      "sha256": "9f49318f0d4293c0df345e283372c054a5a0460e0c2ccb2a4fc0f615f250f703"
+      "bytes": 8435,
+      "sha256": "7eeee7f45902211f4d43ae4c6cb884a1c43b794cec83345d146afd1edc850820"
     },
     "data/ru/pages/cut-mission-synthets-menace.json": {
       "bytes": 2690,
@@ -6070,5 +6070,5 @@
       "sha256": "aabab5bcfce15545227916db3d8f7e6c353fbf93c2b073e25dec7262d79874ed"
     }
   },
-  "bytes": 14021737
+  "bytes": 14027111
 }

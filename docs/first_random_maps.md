@@ -239,6 +239,17 @@ installed: a version 16 map is exactly the version 15 map of the same settings
 the same list on every computer. Saves therefore load the same with and without
 Etherlords II. Restored missions keep their pinned version and get no pieces.
 
+### Creature variety (version 17)
+
+Version 17 spreads the creatures over their kinds. Every draw counts the kinds
+already chosen on the map (a creature and its `<name> D` copy are one kind) and
+takes one of the least met among the equally fitting choices; where a race's
+own creatures are chosen for its ground, kinds met within twelve tiles wait
+while others fit, and a level's step outweighs two earlier meetings. Over eight
+frontier seeds a map holds 37 kinds on average instead of 33, and the three
+commonest make up 14% of its creatures instead of 19%. Version 16 and earlier
+maps are unchanged.
+
 The Etherlords II pieces are the second game's own art at the second game's
 scale (one map cell is two world units in both games): the quay is 917
 triangles with a 256 × 256 texture and an animated water collar, replacing a
@@ -488,7 +499,7 @@ monsters** option also keeps its normal rules.
 
 ## Share and remember a setup
 
-**Copy setup** creates an `EL1R16:` code for a new world in the code field and clipboard. Paste a
+**Copy setup** creates an `EL1R17:` code for a new world in the code field and clipboard. Paste a
 complete code and press **Load setup** to restore its seed and world settings.
 Choose difficulty and AI separately. The code is a prefix followed by Base64
 encoded UTF-8 JSON; it is a recipe, not a map archive.

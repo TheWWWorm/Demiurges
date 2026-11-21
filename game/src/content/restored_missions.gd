@@ -39,21 +39,105 @@ const SNOWFLAKE_MAZE := "snowflake_maze"
 const SCENARIOS := [SAVAGE_DESERT, EVIL_DALE, SNOWFLAKE_MAZE]
 ## The creature the mission's goal names (Monsters table, Name column).
 const GOAL_MONSTERS := {SAVAGE_DESERT: "Cyclope"}
+## The missions' own ground is revised apart from the generator: a recipe
+## carries its revision, and a save keeps the revision it began with.
+##   2  the dale's creatures follow the walk without repeats, creatures
+##      spread over their kinds, and the hand-made finish (EDITS).
+const REVISION := 2
+## The hand-made finish of each mission (revision 2 on), applied in order
+## over the generated map:
+##   {"clear": Rect2i}                 scenery and set pieces touching it go
+##   {"remove": Vector2i}              the scenery or creature on the tile goes
+##   {"props": [[name, middle, rot]], "margin": n, "slack": n, "ground": color}
+##                                     set pieces, all of which must fit
+##                                     (within `slack` tiles of their middle,
+##                                     on `ground` when given)
+##   {"creature": name, "at": tile}    that creature stands there
+##   {"move": tile, "to": tile}        the creature on the tile moves
+##   {"swap": Rect2i, "to": [names], "keep": prefix, "ground": color}
+##                                     scenery whose name does not begin
+##                                     with `keep` takes one of `to` of the
+##                                     same footprint (on `ground` only)
+##   {"road": [tile, tile, ...]}       a road along the points
+##   {"trail": [from, to]}             a road along the walk between them
+const EDITS := {
+	SAVAGE_DESERT: [
+		# The Chaots' castle: the rock pile on its north side, the vents
+		# along its south side and the stones on its west boxed it in.
+		{"clear": Rect2i(12, 29, 12, 9)}, {"clear": Rect2i(13, 14, 12, 7)}, {"clear": Rect2i(12, 21, 6, 8)},
+		# A forecourt: the road from the gate west to the old trail, vents
+		# of the Chaots' fire on either side of it, and the yard's corners
+		# marked with their trees and stones, clear of every way.
+		{"road": [Vector2i(24, 29), Vector2i(18, 30), Vector2i(12, 30)]},
+		{"props": [["Red_Voulcan_3", Vector2i(20, 33), 0], ["Red_Voulcan_4", Vector2i(16, 33), 0], ["Red_Voulcan_5", Vector2i(20, 19), 0],
+			["Red_Tree_7", Vector2i(16, 37), 0], ["Red_Tree_7", Vector2i(26, 25), 4], ["Red_Stone_2", Vector2i(14, 26), 8],
+			["Red_Tree_7", Vector2i(15, 18), 12], ["Red_Stone_4", Vector2i(22, 16), 4]], "margin": 1},
+		# The Synthets' fallen castle, laid out by hand: three towers (the
+		# fourth fell where the road now runs in), broken curtain walls,
+		# the gate facing the Chaots, the roof fallen into the yard and the
+		# remnant at its middle. The generator's scattered pieces go first.
+		{"clear": Rect2i(59, 11, 17, 20)},
+		{"move": Vector2i(71, 23), "to": Vector2i(67, 19)},
+		{"props": [["Tower04", Vector2i(73, 27), 0], ["Tower01", Vector2i(64, 16), 0], ["Tower02", Vector2i(72, 14), 0],
+			["Hwall03", Vector2i(67, 27), 0],
+			["Hwall01", Vector2i(65, 13), 0], ["Hwallentr01", Vector2i(68, 13), 0],
+			["Wall_02", Vector2i(61, 18), 0], ["Wall_dest1", Vector2i(61, 23), 0], ["Wall_03", Vector2i(73, 20), 0],
+			["Roof", Vector2i(65, 22), 0], ["Hwallfloor01", Vector2i(69, 24), 0],
+			["BlackCrater_3", Vector2i(69, 17), 0], ["BlackCrater_2", Vector2i(70, 21), 0]]},
+	],
+	EVIL_DALE: [
+		# The glade where the trees closed behind the Chosen One, and
+		# Glazzz's woods: the Vitals' forest only, where the generator's
+		# walls had mixed in snow pines and the dark lands' trees and stones.
+		{"swap": Rect2i(118, 0, 42, 34), "to": VITAL_WOODS, "keep": "Green", "ground": "Green"},
+		{"swap": Rect2i(44, 78, 34, 38), "to": VITAL_WOODS, "keep": "Green", "ground": "Green"},
+		{"swap": Rect2i(56, 116, 22, 34), "to": VITAL_WOODS, "keep": "Green", "ground": "Green"},
+		# Thresholds where the dale passes from one element's ground to the
+		# next, a pair on either side of the way: the Chaots' fire where the
+		# rock begins, spires of ice at the snow, the Synthets' monuments
+		# at the sand, and great trees where the Vitals' woods come back.
+		{"props": [["Red_Voulcan_3", Vector2i(87, 14), 0], ["Red_Voulcan_4", Vector2i(85, 20), 0]], "margin": 0, "slack": 5, "ground": "Red"},
+		{"props": [["Blue_rock2_2", Vector2i(129, 45), 0], ["Blue_rock2_4", Vector2i(125, 49), 0]], "margin": 0, "slack": 5, "ground": "Blue"},
+		{"props": [["Monument01", Vector2i(143, 137), 0], ["Monument02", Vector2i(136, 133), 0]], "margin": 0, "slack": 5, "ground": "Black"},
+		{"props": [["GreenTree02", Vector2i(98, 91), 0], ["GreenTree01", Vector2i(94, 95), 0]], "margin": 0, "slack": 5, "ground": "Green"},
+		# Where each rival waits, the marks of his race round him: Zarus's
+		# fires in the rock, Valaddin's ice, the ruins Tango keeps in the
+		# sand, and Warp's fires at the pass.
+		{"props": [["Red_Voulcan_1", Vector2i(76, 41), 0], ["Red_Voulcan_2", Vector2i(84, 41), 0], ["Red_Voulcan_6", Vector2i(80, 33), 0]], "margin": 0, "slack": 3, "ground": "Red"},
+		{"props": [["Blue_rock2_1", Vector2i(136, 89), 0], ["Blue_rock2_3", Vector2i(144, 89), 0], ["Blue_rock2_5", Vector2i(140, 81), 0]], "margin": 0, "slack": 3, "ground": "Blue"},
+		{"props": [["Wall_dest0", Vector2i(85, 135), 0], ["Wall_dest1", Vector2i(95, 135), 0], ["Monument01", Vector2i(90, 127), 0]], "margin": 0, "slack": 3, "ground": "Black"},
+		{"props": [["Red_Voulcan_3", Vector2i(42, 127), 0], ["Red_Voulcan_5", Vector2i(42, 119), 0]], "margin": 0, "slack": 3, "ground": "Red"},
+	],
+	SNOWFLAKE_MAZE: [
+		# The tournament ground. A spire of ice crowns each of the
+		# snowflake's six points, two more stand at each lord's door in the
+		# outer ring, and a road leads from each castle to its door.
+		{"props": [["Blue_rock2_1", Vector2i(39, 33), 0], ["Blue_rock2_2", Vector2i(57, 33), 0], ["Blue_rock2_3", Vector2i(66, 48), 0],
+			["Blue_rock2_4", Vector2i(57, 63), 0], ["Blue_rock2_5", Vector2i(39, 63), 0], ["Blue_rock2_1", Vector2i(31, 48), 0]]},
+		{"props": [["Blue_rock2_3", Vector2i(51, 34), 0], ["Blue_rock2_4", Vector2i(56, 33), 0], ["Blue_rock2_2", Vector2i(56, 58), 0],
+			["Blue_rock2_5", Vector2i(60, 58), 0], ["Blue_rock2_3", Vector2i(31, 51), 0], ["Blue_rock2_4", Vector2i(35, 51), 0]]},
+		{"trail": [Vector2i(48, 25), Vector2i(53, 34)]}, {"trail": [Vector2i(71, 67), Vector2i(58, 59)]}, {"trail": [Vector2i(25, 67), Vector2i(33, 51)]},
+	],
+}
+## The Vitals' woods for the dale's walls (EDITS "swap").
+const VITAL_WOODS := ["GreenForest03", "GreenBush01", "GreenBush07", "GreenBush08", "GreenStone_5", "GreenStone_6", "GreenTree01",
+	"GreenTree02", "GreenForest02", "GreenBush02", "GreenStone_1", "GreenForest01", "GreenForest04", "GreenForest05", "GreenRock05",
+	"GreenRock02", "GreenRock01"]
 ## Generator recipes. The version is pinned so later generator versions keep
 ## this map as it is.
 const RECIPES := {
 	SAVAGE_DESERT: {"version": 14, "seed": "smission01", "size": 96, "players": 2,
 		"layout": "frontier", "biome": "Black", "faction": "Red", "resources": "normal",
 		"starting_resources": "normal", "guards": "normal", "roads": true, "scenery": 1,
-		"castle_health": 30, "naval": false, "water": "low", "coast": "rugged", "scenario": SAVAGE_DESERT},
+		"castle_health": 30, "naval": false, "water": "low", "coast": "rugged", "scenario": SAVAGE_DESERT, "revision": REVISION},
 	EVIL_DALE: {"version": 14, "seed": "bmission01", "size": 160, "players": 2,
 		"layout": "frontier", "biome": "Green", "faction": "Green", "resources": "normal",
 		"starting_resources": "normal", "guards": "normal", "roads": true, "scenery": 1,
-		"castle_health": 30, "naval": false, "water": "low", "coast": "rugged", "scenario": EVIL_DALE},
+		"castle_health": 30, "naval": false, "water": "low", "coast": "rugged", "scenario": EVIL_DALE, "revision": REVISION},
 	SNOWFLAKE_MAZE: {"version": 14, "seed": "bmission02", "size": 96, "players": 3,
 		"layout": "frontier", "biome": "Blue", "faction": "Blue", "resources": "normal",
 		"starting_resources": "normal", "guards": "normal", "roads": true, "scenery": 1,
-		"castle_health": 30, "naval": false, "water": "low", "coast": "rugged", "scenario": SNOWFLAKE_MAZE},
+		"castle_health": 30, "naval": false, "water": "low", "coast": "rugged", "scenario": SNOWFLAKE_MAZE, "revision": REVISION},
 }
 ## Original text keys, and the remake's words where the edition left them
 ## empty (the Russian edition has no texts for the S series).
@@ -151,6 +235,8 @@ const RIVALS := {"BLevHero1": Vector2i(80, 38), "BLevHero3": Vector2i(140, 86), 
 ## them, near the exit, are of this level.
 const DALE_CREATURE_GAP := 7
 const DALE_LAST_LEVEL := 9
+## A kind of creature is not met again until this many others have been.
+const DALE_FRESH := 4
 const PATROLLER := "BLevHero2"
 const WARDEN := "BLevHero5"
 ## Glazzz's loop: on reaching a point (within one tile) he heads for the next.
@@ -197,6 +283,13 @@ static func scenario_of_id(id: String) -> String:
 	if not ELFirstRandomMap.is_random_id(id): return ""
 	for scenario: String in SCENARIOS:
 		if map_id(scenario) == id: return scenario
+		# Saves of earlier revisions keep their own ids.
+		var earlier := recipe(scenario)
+		earlier.erase("revision")
+		if ELFirstRandomMap.id_for_config(earlier) == id: return scenario
+		for revision in range(2, REVISION):
+			earlier.revision = revision
+			if ELFirstRandomMap.id_for_config(earlier) == id: return scenario
 	return ""
 
 static func scenario_of(map: ELAdventureMap) -> String:
