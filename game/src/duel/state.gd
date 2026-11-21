@@ -3037,6 +3037,9 @@ func _first_turn_end() -> void:
 	# here and the other hero killed by an enchantment is a draw).
 
 ## Enchantments with an end-of-turn effect (for the unused end-of-turn script hooks).
+## Heroes whose death the battle scripts were told of (_tell_hero_deaths);
+## a hero back above 0 health can die again.
+var _deaths_told: Array[bool] = [false, false]
 const END_OF_TURN_CARDS := ["MNBN", "WETX", "STTX", "WTX2", "OCRP", "ENVM", "SFGS", "TRSN", "SWSN", "ESWS", "ETRS", "IRRT", "MDNS", "RDIS", "OVRL", "TWEN"]
 
 func _turn_enchantments(at_start: bool) -> void:
@@ -3096,8 +3099,8 @@ func _turn_enchantments(at_start: bool) -> void:
 			if profile.id == "el1" and e.card == "SPTR" and not army(attacker).is_empty():
 				_emit({"kind": "sptr_upkeep_cue", "side": attacker, "amount": price})
 		else:
-			# No shipped script uses these two hooks; the holder ID stands in for the
-			# unidentified second argument.
+			# The artifact tracker's gas and venom recipes use these two hooks;
+			# the holder ID stands in for the unidentified second argument.
 			if scripts != null and e.card in END_OF_TURN_CARDS:
 				scripts.dispatch("CHook_OnVisualStartEnchantmentEndOfTurn", [e.card, float(target)])
 				ended_hooks = true
@@ -3186,7 +3189,13 @@ func _turn_enchantments(at_start: bool) -> void:
 					if profile.id in ["el1", "el2"]:
 						_emit({"kind": "twisted_decay", "target": target, "card": "TWEN"})
 					if victim.damage >= mini(int(victim.toughness), floor_toughness): _lethal(target)
-	if ended_hooks: scripts.dispatch("CHook_OnVisualFinishEnchantmentEndOfTurn", [])
+	if ended_hooks:
+		# A hero killed by an end-of-turn enchantment dies while it is still
+		# under way: the second game's artifact recipes for Suffocation Gas
+		# (Ring of Gases) and the venoms (Rod of Venom) read their "killed
+		# by" flag at the hero's death, and the finish hook clears it.
+		_tell_hero_deaths()
+		scripts.dispatch("CHook_OnVisualFinishEnchantmentEndOfTurn", [])
 	if not at_start:
 		# Expiring defence can expose damage retained by Fatal Disease. The original
 		# final state check kills these creatures without ordinary regeneration.
@@ -4176,11 +4185,18 @@ func _remove_creature(id: int, kind: String) -> void:
 			for other: Dictionary in creatures.values():
 				if creatures.has(other.id): _trigger_damage(card, other.id, 3)
 
+## Tells the battle scripts of each hero who has died, once per death.
+func _tell_hero_deaths() -> void:
+	if scripts == null: return
+	for side in 2:
+		if heroes[side].health > 0: _deaths_told[side] = false
+		elif not _deaths_told[side]:
+			_deaths_told[side] = true
+			scripts.dispatch("CHook_OnVisualHeroDeath", [float(side)])
+
 func _check_winner() -> void:
 	if phase == Phase.FINISHED: return
-	if scripts != null:
-		for side in 2:
-			if heroes[side].health <= 0: scripts.dispatch("CHook_OnVisualHeroDeath", [float(side)])
+	_tell_hero_deaths()
 	if heroes[0].health <= 0 and heroes[1].health <= 0:
 		winner = -1
 		phase = Phase.FINISHED
