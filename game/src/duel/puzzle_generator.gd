@@ -1195,7 +1195,7 @@ class Job:
 	## yields the same entry. One command per step keeps the UI responsive.
 	func _begin_naive() -> void:
 		_stage = "naive"
-		progress_text = _text("Checking that the obvious play fails…", "Проверка, что очевидный ход не работает…")
+		progress_text = _text("Checking that the obvious play fails… (%d/%d)", "Проверка, что очевидный ход не работает… (%d/%d)") % [attempts, ELPuzzleGenerator.MAX_ATTEMPTS]
 		_naive_line = []
 		_naive = ELPuzzles.Run.new()
 		if not _naive.begin_entry(_profile, _candidate, false, false):

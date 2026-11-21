@@ -147,6 +147,8 @@ func build_screen() -> void:
 	list.icons = _size_icons()
 	menu.canvas.add_child(list)
 	menu.labels["list"] = list
+	# Remake: a thumb in the arrows' empty track shows how long the list is.
+	ELListThumb.attach(menu.canvas, list, func() -> int: return rows().size(), up, down)
 	menu._label("mission_name", "", _rect("MissName"), 18)
 	var box := menu._text_box(_rect("MissDesc"), "")
 	# Its own dark backing with a margin: some editions' art only darkens the

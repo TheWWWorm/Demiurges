@@ -137,8 +137,10 @@ func build_screen() -> void:
 	var info := menu.control_rect("SMInfoBounds") if menu.control_rect("SMInfoBounds").size.x > 0 else menu.control_rect("SMInfo")
 	if info.size.x <= 0: info = _rect("SMInfoBounds")
 	menu._text_box(info.grow_individual(-6, -4, -4, -4), "", 16)
-	_button("SMScrollU", func(): list.scroll(-3))
-	_button("SMScrollD", func(): list.scroll(3))
+	var up := _button("SMScrollU", func(): list.scroll(-3))
+	var down := _button("SMScrollD", func(): list.scroll(3))
+	# Remake: a thumb in the arrows' empty track shows how long the list is.
+	ELListThumb.attach(menu.canvas, list, func() -> int: return entries.size(), up, down)
 	_button("SMInfoU", func(): menu.scroll_text(-3))
 	_button("SMInfoD", func(): menu.scroll_text(3))
 	if mode == "save":

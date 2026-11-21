@@ -65,6 +65,9 @@ var _random_difficulty := 3
 var _random_input := ""
 var _last_random_code := ""
 var _generator_job: RefCounted
+## Generation work per frame; a short menu frame leaves the rest for drawing.
+const GENERATOR_SLICE_USEC := 12000
+const GENERATOR_NODE_QUOTA := 100000
 var _generator_profile: ELProfile
 var _generator_seed := 0
 ## Accepted challenges guide automatic variety. Explicit codes keep using
@@ -534,7 +537,9 @@ func _process(_delta: float) -> void:
 	if not _list.visible or not _random_selected or profile != _generator_profile:
 		_cancel_generation()
 		return
-	_generator_job.call("step", 32, 6000)
+	# Time bounds the slice, not node count: generation is deterministic in
+	# its own limits however it is sliced, and Master needs most of a frame.
+	_generator_job.call("step", GENERATOR_NODE_QUOTA, GENERATOR_SLICE_USEC)
 	_random_status.text = ELRemakeText.t(String(_generator_job.get("progress_text")), profile)
 	if not bool(_generator_job.get("done")): return
 	var result: Dictionary = _generator_job.get("result")

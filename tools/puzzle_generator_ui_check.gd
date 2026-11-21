@@ -398,7 +398,7 @@ func _run() -> void:
 		mode._generator_profile = first
 		mode._set_random_busy(true)
 		mode._process(0.016)
-		check(controlled.calls == 1 and controlled.quota == 32 and controlled.time_slice == 6000 and generated.is_empty(), language + ": generation yields between bounded slices")
+		check(controlled.calls == 1 and controlled.quota == ELPuzzleMode.GENERATOR_NODE_QUOTA and controlled.time_slice == ELPuzzleMode.GENERATOR_SLICE_USEC and generated.is_empty(), language + ": generation yields between bounded slices")
 		mode._close_list()
 		mode._process(0.016)
 		check(controlled.calls == 1 and mode._generator_job == null and generated.is_empty() and session.recorded.is_empty(), language + ": Back cancels without a delayed launch or history entry")
