@@ -207,8 +207,10 @@ func _wheel(event: InputEvent) -> void:
 	match event.button_index:
 		MOUSE_BUTTON_WHEEL_DOWN, MOUSE_BUTTON_WHEEL_RIGHT: step = 1
 		MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_LEFT: step = -1
-	if step == 0 or items.size() <= visible_count(): return
-	scroll(step)
+	if step == 0: return
+	# A notch the strip cannot use (all icons fit) still stays out of the
+	# camera zoom.
+	if items.size() > visible_count(): scroll(step)
 	get_viewport().set_input_as_handled()
 
 func _press_arrow(direction: int) -> void:

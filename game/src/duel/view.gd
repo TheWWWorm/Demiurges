@@ -1048,11 +1048,19 @@ func _process(delta: float) -> void:
 func _input(event: InputEvent) -> void:
 	# ScrollContainer passes a wheel notch on at either end of its range.
 	# The hand owns these notches even there, so none can reach arena zoom.
-	if event is InputEventMouseButton and event.pressed and event.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN, MOUSE_BUTTON_WHEEL_LEFT, MOUSE_BUTTON_WHEEL_RIGHT] \
-			and not _overlay_open() and card_scroll != null and card_scroll.is_visible_in_tree() and card_scroll.get_global_rect().has_point(event.position):
-		rail._step_hand(1 if event.button_index in [MOUSE_BUTTON_WHEEL_DOWN, MOUSE_BUTTON_WHEEL_RIGHT] else -1)
-		get_viewport().set_input_as_handled()
-		return
+	if event is InputEventMouseButton and event.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN, MOUSE_BUTTON_WHEEL_LEFT, MOUSE_BUTTON_WHEEL_RIGHT] and not _overlay_open():
+		var forward: bool = event.button_index in [MOUSE_BUTTON_WHEEL_DOWN, MOUSE_BUTTON_WHEEL_RIGHT]
+		if _wheel_over(card_scroll, event.position):
+			if event.pressed: rail._step_hand(1 if forward else -1)
+			get_viewport().set_input_as_handled()
+			return
+		# The icon strip above it (graveyard, enchantments) takes the wheel
+		# over its whole width, gaps between icons included, and also when
+		# its icons all fit: neither may reach the camera zoom.
+		if rail != null and _wheel_over(rail.strip, event.position):
+			if event.pressed: rail.strip.scroll(1 if forward else -1)
+			get_viewport().set_input_as_handled()
+			return
 	if _network_battle_chat != null and _network_battle_chat.visible and event is InputEventKey:
 		if event.keycode == KEY_ESCAPE:
 			if event.pressed and not event.echo: _set_network_chat_open(false)
@@ -1078,7 +1086,7 @@ func _input(event: InputEvent) -> void:
 					if _human_turn() or ((_campaign_battle() != null or duel_match != null or combat_tutorial != null or network_duel != null or _expedition_battle != null or _arena_battle != null or _in_puzzle()) and duel.phase == ELDuel.Phase.FINISHED): _end_phase()
 				"attack_all": _attack_all()
 				"auto_combat": _toggle_auto()
-				"skip": _skip_battle_step()
+				"skip": _skip_battle_step(event.echo)
 				"battle_save": _save_duel()
 				"battle_load": _load_duel()
 				"battle_remake_menu":
@@ -1102,6 +1110,12 @@ func _input(event: InputEvent) -> void:
 	# A release over a panel still ends the preview and the turn.
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT and not event.pressed and right_down and duel != null:
 		_right_button(event)
+
+## True when the pointer at `at` (viewport) is over the shown `control`,
+## whatever scale the battle panel is drawn at.
+func _wheel_over(control: Control, at: Vector2) -> bool:
+	if control == null or not control.is_visible_in_tree(): return false
+	return (control.get_global_transform_with_canvas() * Rect2(Vector2.ZERO, control.size)).has_point(at)
 
 func _press_battle_slot(index: int) -> void:
 	if not _human_turn() or card_scroll == null: return
@@ -1938,10 +1952,12 @@ func _end_phase() -> void:
 ## what follows the attacks (deaths after them, the next phase) plays as
 ## usual. Otherwise the casts and walks being shown end. Sounds are never cut: attack hits,
 ## deaths and spell sounds still play (a spell's held sounds start at once).
-## The death of a hero is never skipped; the winner's victory clip may be.
-func _skip_battle_step() -> void:
+## The death of a hero is never skipped; the winner's victory clip may be, by
+## a fresh press: Space held on from skipping what came before (`repeat`, the
+## key's auto-repeat) leaves it to play.
+func _skip_battle_step(repeat := false) -> void:
 	if not ending.is_empty() or not _ending_waiting.is_empty():
-		_skip_victory()
+		if not repeat: _skip_victory()
 		return
 	if _melee_busy():
 		if not melee.skip_exchange(): melee.finish()
