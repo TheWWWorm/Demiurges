@@ -2,6 +2,39 @@
 
 Versions follow [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html) from 0.3.0 on.
 
+## 0.23.0
+
+### New
+
+- **Restored missions, second revision.** The three rebuilt cut missions get hand-made finishing touches over their generated maps. Savage Desert's Chaot castle stands in an open forecourt with a road to the old trail, and the Synthets' fallen castle is laid out piece by piece. In Evil Dale the creatures vary in the order you meet them, with no kind repeating before four others; the Vitals' woods match their climate, and markers show each element's border and each rival's race. In the Snowflake Maze ice spires crown the six points and flank each lord's door, each castle has a road, and overlapping ice sheets no longer flicker. Saves from the first revision keep their layout.
+- **Mission list scrollbar.** The single mission and saved game lists show a draggable scroll thumb between their arrows.
+- **Artifact recipes explained (Etherlords II).** All nine recipe texts, in English and Russian, now list exactly what the battle checks, name the spells and the created artifacts as the game shows them, and say that every recipe needs an Artefact Blank and a win by killing the enemy hero. The English Wand of Hunger recipe, which shipped as a copy of the Wand of Curses one, has its own text.
+
+### Etherlords II artifact recipes
+
+- **Ring of Gases** is created again: the death by Suffocating Gas is now noticed at the end of the turn, while the gas is still acting.
+- **Rod of Venom** is created even when another end-of-turn enchantment acts after the poison in the same turn end.
+- All nine recipes are covered by automatic checks that play them through the original recipe script.
+
+### Battles
+
+- **Victory dance after a skip.** Holding Space to skip a battle won by an end-of-turn effect (such as a gas) no longer cuts the hero's victory animation; a fresh press of Space still does.
+- **Scroll wheel over the hand or the icon strip** no longer zooms or moves the battle camera, even when there is nothing to scroll.
+
+### Etherlords II adventure
+
+- **Figures coming into sight** fade in within 0.35 seconds instead of popping in slowly.
+- **Long hero names** such as Alpha-100F "Steel" shrink to fit the side panel and the inventory screen instead of being cut off.
+
+### Etherlords I
+
+- **Random map version 17** spreads guard creatures over their kinds, least met first. New setup codes start with `EL1R17:`; earlier codes and saves keep their maps.
+- A hero's spoken line ignores clicks and keys for a moment after it appears, so input pressed while a large map was still being built no longer closes the opening line unseen.
+
+### Puzzles
+
+- **Master random puzzles** generate about three times faster again; the 0.22.0 checks had made generation look stuck. The progress text shows how many attempts have been made. Puzzle codes are unchanged.
+
 ## 0.22.0
 
 ### New
