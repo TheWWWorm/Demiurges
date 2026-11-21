@@ -64,13 +64,16 @@ var _fog_apron: MeshInstance3D
 var animate_fog := true
 ## Object brightness under the fog, as the original's object fade: each map
 ## object's brightness moves toward its fog target (visible 1, remembered
-## FOG_DIM) at FOG_RATE / 255 a second, with the ground's mist, so a revealed
+## FOG_DIM) at FOG_RATE / 255 a second (second game: SECOND_OBJECT_FADE), with the ground's mist, so a revealed
 ## object comes up out of the dark instead of appearing at full brightness
 ## over the still fogged ground. Objects the fog hides go at once.
 ## {uid: brightness}; `_fading` holds {uid: target} until it is reached.
 var _fog_level: Dictionary = {}
 ## Second game: {uid: opacity}, which fades in with the brightness (#270).
 var _fog_alpha: Dictionary = {}
+## Second game: seconds a figure takes from unseen to fully shown. At the
+## mist's rate a hero or monster coming into sight took 1.7 s to turn solid.
+const SECOND_OBJECT_FADE := 0.35
 var _fading: Dictionary = {}
 const PICKUP_FADE := 0.18
 var _retiring_pickups: Dictionary = {}
@@ -697,7 +700,7 @@ func fog_object(item: Dictionary, passing := Vector2i(-1, -1), instant := false)
 
 ## Steps the fading objects toward their fog brightness.
 func _fade_objects(delta: float) -> void:
-	var step := FOG_RATE / 255.0 * delta
+	var step := delta / SECOND_OBJECT_FADE if map != null and map.profile.id == "el2" else FOG_RATE / 255.0 * delta
 	for uid: int in _fading.keys():
 		if not object_models.has(uid) and not _instances.has(uid):
 			_fading.erase(uid)

@@ -486,8 +486,8 @@ func _pickup_transition(view: ELAdventureView) -> void:
 			"#218: a collected pile stays hidden when a second pickup overlaps its animation")
 
 ## #270: a monster coming out of remembered fog fades in from transparent at
-## the remembered 0.3 brightness, its opacity and brightness rising at the
-## original's 150/255 a second, instead of standing there as a black figure.
+## the remembered 0.3 brightness, its opacity and brightness rising over
+## SECOND_OBJECT_FADE seconds, instead of standing there as a black figure.
 func _fog_fade_in(view: ELAdventureView) -> void:
 	var state := view.state
 	var world := view.world
@@ -516,14 +516,14 @@ func _fog_fade_in(view: ELAdventureView) -> void:
 	seen[at] = was | bit
 	state.fog.visible = seen
 	world.fog_object(monster)
-	world._fade_objects(0.5)
-	var step := ELAdventureScene.FOG_RATE / 255.0 * 0.5
+	world._fade_objects(0.1)
+	var step := 0.1 / ELAdventureScene.SECOND_OBJECT_FADE
 	var material: StandardMaterial3D = null
 	for part: MeshInstance3D in model.parts.values():
 		if material == null and part.has_meta("look_base"): material = part.material_override as StandardMaterial3D
 	check(model.visible and is_equal_approx(float(world._fog_alpha[uid]), step) and is_equal_approx(float(world._fog_level[uid]), ELAdventureScene.FOG_DIM + step)
 		and material != null and material.transparency == BaseMaterial3D.TRANSPARENCY_ALPHA and absf(material.albedo_color.a - step) < 0.04,
-		"#270: half a second after it comes into sight the monster is %.2f opaque at %.2f brightness (%.2f, %.2f)" % [step, ELAdventureScene.FOG_DIM + step, float(world._fog_alpha[uid]), float(world._fog_level[uid])])
+		"#270: a tenth of a second after it comes into sight the monster is %.2f opaque at %.2f brightness (%.2f, %.2f)" % [step, ELAdventureScene.FOG_DIM + step, float(world._fog_alpha[uid]), float(world._fog_level[uid])])
 	world._fade_objects(2.0)
 	check(float(world._fog_alpha[uid]) == 1.0 and float(world._fog_level[uid]) == 1.0 and not world._fading.has(uid) and model.get_meta("look_alpha", 1.0) == 1.0,
 		"#270: the monster then shows fully, its look materials restored")
