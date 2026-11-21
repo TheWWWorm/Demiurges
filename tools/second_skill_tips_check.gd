@@ -97,7 +97,9 @@ func _inventory(session: Dictionary) -> void:
 	var row_at: Vector2 = view.design("InvScrSkill2").get_center()
 	check(_frame(view.root_control) and view.surface._get_tooltip(row_at) == view.tooltip_at(row_at), "inventory: the screen's tooltip frame (hover or right click) gets the skill's tooltip from the row")
 	# A carried card: the right press puts it back.
+	# A pick-up happens on the release, as a click.
 	view.surface_input(_left(view.cell_rect("deck", 0).get_center()))
+	view.surface_input(_left(view.cell_rect("deck", 0).get_center(), false))
 	var carried := not view.model.carried().is_empty()
 	view.surface_input(_right(row_at, true))
 	view.surface_input(_right(row_at, false))
@@ -113,10 +115,10 @@ static func _frame(screen: Control) -> bool:
 		if child is ELCombatTooltip: return screen.theme != null and screen.theme.get_color("font_color", "TooltipLabel") == Color.TRANSPARENT
 	return false
 
-static func _left(at: Vector2) -> InputEventMouseButton:
+static func _left(at: Vector2, pressed := true) -> InputEventMouseButton:
 	var event := InputEventMouseButton.new()
 	event.button_index = MOUSE_BUTTON_LEFT
-	event.pressed = true
+	event.pressed = pressed
 	event.position = at
 	event.global_position = at
 	return event
