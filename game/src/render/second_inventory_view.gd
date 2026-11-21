@@ -191,7 +191,7 @@ func _layout() -> void:
 func refresh() -> void:
 	if surface == null: return
 	var hero := state.object(hero_id)
-	labels.InvScrNameText.text = str(hero.get("title", hero.get("name", "")))
+	ELSecondAdventureHud.fit_text(labels.InvScrNameText, str(hero.get("title", hero.get("name", ""))), 18, design("InvScrNameText").size.x)
 	labels.InvScrLifeText.text = str(int(hero.get("health", 0)))
 	labels.InvScrLevelText.text = str(int(hero.get("level", 1)))
 	labels.InvScrLifeText.tooltip_text = hud.tooltip_of("InvScrLifeText")

@@ -422,6 +422,16 @@ func _label(control: String, font: Font, color: Color, align := HORIZONTAL_ALIGN
 	labels[control] = label
 	return label
 
+## Sets `label` to `value`, its font `size` lowered (to `smallest` at least)
+## until the text fits `width`: long hero titles such as
+## Альфа-100Ф "Сталь" outgrow the name cells.
+static func fit_text(label: Label, value: String, size: int, width: float, smallest := 9) -> void:
+	label.text = value
+	var font: Font = label.get_theme_font("font")
+	while size > smallest and width > 0.0 and font != null and font.get_string_size(value, HORIZONTAL_ALIGNMENT_LEFT, -1, size).x > width:
+		size -= 1
+	label.add_theme_font_size_override("font_size", size)
+
 ## Tooltip-only areas (the heart, level and resource icons).
 func _hint(control: String) -> void:
 	var hint := Control.new()
@@ -511,7 +521,8 @@ func refresh(hero_uid: int, can_act: bool) -> void:
 	var level := int(hero.get("level", 1))
 	labels.AdvPanelLifeDig.text = str(int(hero.get("health", 0)))
 	labels.AdvPanelLevelDig.text = str(level)
-	labels.AdvPanelHeroNameText.text = str(hero.get("title", hero.get("name", "")))
+	var name_row: Dictionary = _controls.get("AdvPanelHeroNameText", {})
+	fit_text(labels.AdvPanelHeroNameText, str(hero.get("title", hero.get("name", ""))), maxi(10, int(name_row.get("FontSize", 16)) - 3), float(name_row.get("Width", 0)), 8)
 	var wallet: Dictionary = state.players.get(state.current_player, {}).get("resources", {})
 	var kinds := ELResources.types(profile.id)
 	for index in 3: labels["AdvPanelRes%dText" % (index + 1)].text = str(int(wallet.get(kinds[index], 0))) if index < kinds.size() else ""
