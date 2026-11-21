@@ -130,30 +130,232 @@ const EDITIONS := {
 		"Ab337": [["Rest, pay 2+X ether: gain copy", "Rest, pay 1+X ether: gain copy"], ["Отдых, 2 + X квантов эфира: герой получает копию", "Отдых, 1 + X квантов эфира: герой получает копию"]],
 		"OUE3Tt": [["Rest, pay 1+X ether: destroy target", "Rest, pay 2+X ether: destroy target"], ["Отдых, 1+X квантов эфира: уничтожает", "Отдых, 2+X квантов эфира: уничтожает"]],
 		"Ab338": [["Rest, pay 1+X ether: destroy target", "Rest, pay 2+X ether: destroy target"], ["Отдых, 1+X квантов эфира: уничтожает", "Отдых, 2+X квантов эфира: уничтожает"]],
-		# Recipe texts name the artifacts the battle tracker really creates
-		# (T_CUSTOM_ARTEFACT_* names).
-		"MT_E2_ARTEFACT_RECIPE_5": [["Амулет Голода", "Кольцо Голода"]],
-		"MT_E2_ARTEFACT_RECIPE_8": [["Ring of Venom", "Rod of Venom"], ["Кольцо Ядов", "Скипетр Отравления"]],
 	},
 }
 
-## Texts replaced whole when they contain the first string. The English
-## Wand of Hunger recipe repeats the Wand of Curses one; the replacement
-## follows the tracker's conditions: at most one creature summoned, which must
-## not die, exactly one Hunger spell, and five or more creatures in the enemy's
-## graveyard at the end (more make a stronger wand).
+## The second game's artifact recipe texts, replaced whole: they now say
+## what the battle tracker really checks, name the artifacts it creates
+## (T_CUSTOM_ARTEFACT_* names) and the spells by their card names, and add
+## the blank and the winning kill it needs. The English Wand of Hunger text
+## shipped as a copy of the Wand of Curses one.
+const EN_RECIPE := "During a combat"
+const RU_RECIPE := "В течение боя"
+
+## Texts replaced whole when they contain the first string.
 const WHOLE := {
 	"el2": {
-		"MT_E2_ARTEFACT_RECIPE_5": [["Wand of Malisons", "During a combat the hero must do the following:\n" +
-			"\n" +
-			"1. Summon no more than one creature. A creature that was summoned must survive until the end of the combat.\n" +
-			"2. Cast one (and only one) of the spells Hunger, Ravaging Hunger, or Curse of Hunger.\n" +
-			"3. By the end of the combat, the enemy's graveyard must hold at least 5 creatures.\n" +
-			"\n" +
-			"Result:\n" +
-			"\n" +
-			"1. The artifact Wand of Hunger is created, containing charges of the Hunger spell that was cast.\n" +
-			"2. The more creatures in the enemy's graveyard at the end of the combat, the more powerful the artifact created."]],
+		"MT_E2_ARTEFACT_RECIPE_1": [[EN_RECIPE, "During a combat the hero must do the following:\n" +
+				"\n" +
+				"1. Summon one Pteros or Reinforced Pteros, and no second one of either kind.\n" +
+				"2. Remove at least one enchantment from it with the Purify spell (whoever cast the enchantments or the Purify).\n" +
+				"\n" +
+				"Result:\n" +
+				"\n" +
+				"1. If the Pteros is alive at the end of the combat, the Rod of Pteroses is created; if it died, the Wand of Purify is created.\n" +
+				"2. The more enchantments removed from the Pteros, the more powerful the artifact.\n" +
+				"\n" +
+				"The artifact is made only if the hero carries an Artefact Blank and wins the combat by killing the enemy hero; the blank is used up. Only one recipe can be completed in a combat."],
+			[RU_RECIPE, "В течение боя герой должен:\n" +
+				"\n" +
+				"1. Вызвать одного птероса или Армированного птероса, и ни одного второго.\n" +
+				"2. Снять с него хотя бы одну чару заклинанием «Очистка» (неважно, кто наколдовал чары или «Очистку»).\n" +
+				"\n" +
+				"Результат:\n" +
+				"\n" +
+				"1. Если птерос жив к концу боя, создается Жезл Птеросов; если он погиб, создается Кольцо Очищения.\n" +
+				"2. Чем больше чар снято с птероса, тем мощнее артефакт.\n" +
+				"\n" +
+				"Артефакт создается, только если у героя есть Заготовка артефакта и бой выигран убийством героя противника; заготовка расходуется. За один бой можно выполнить только один рецепт."]],
+		"MT_E2_ARTEFACT_RECIPE_2": [[EN_RECIPE, "During a combat the hero must do the following:\n" +
+				"\n" +
+				"1. Cast all four gas spells: Drowsy Gas, Depressing Gas, Frenzy Gas and Suffocating Gas.\n" +
+				"2. Cast Pain Link on at least two creatures the hero summoned; both links must still be active when the enemy hero dies.\n" +
+				"3. The enemy hero must die from Suffocating Gas damage at the end of a turn.\n" +
+				"\n" +
+				"Result:\n" +
+				"\n" +
+				"1. The Ring of Gases is created, charged with the gas spell cast most often (the Ring of Suffocation if that is Suffocating Gas).\n" +
+				"2. The more gas spells cast and active Pain Links, the more powerful the artifact; the Ring of Suffocation also grows with the hero's remaining health.\n" +
+				"\n" +
+				"The artifact is made only if the hero carries an Artefact Blank and wins the combat by killing the enemy hero; the blank is used up. Only one recipe can be completed in a combat."],
+			[RU_RECIPE, "В течение боя герой должен:\n" +
+				"\n" +
+				"1. Сколдовать все 4 газа: «Ослабляющий Газ», «Подавляющий Газ», «Веселящий Газ» и «Удушающий Газ».\n" +
+				"2. Наложить «Болевую Связь» как минимум на 2 вызванных героем создания; обе чары должны быть активны в момент смерти героя противника.\n" +
+				"3. Герой противника должен умереть от урона «Удушающего Газа» в конце хода.\n" +
+				"\n" +
+				"Результат:\n" +
+				"\n" +
+				"1. Создается Скипетр Газов с зарядами газа, сколдованного чаще всего (Скипетр Удушения, если это «Удушающий Газ»).\n" +
+				"2. Чем больше сколдовано газов и активно «Болевых Связей», тем мощнее артефакт; Скипетр Удушения тем мощнее, чем больше здоровья осталось у героя.\n" +
+				"\n" +
+				"Артефакт создается, только если у героя есть Заготовка артефакта и бой выигран убийством героя противника; заготовка расходуется. За один бой можно выполнить только один рецепт."]],
+		"MT_E2_ARTEFACT_RECIPE_3": [[EN_RECIPE, "During a combat the hero must do the following:\n" +
+				"\n" +
+				"1. Destroy at least one enemy creature with a Mechos' Destroy ability (a creature damaged by a Mechos dies at the end of the combat phase).\n" +
+				"2. At the end of the combat, control at least one of each Mechos: Bronze Mechos, Iron Mechos and Steel Mechos.\n" +
+				"\n" +
+				"Result:\n" +
+				"\n" +
+				"1. The Rod of Mechoses is created, charged with the Mechos type the hero controls the most at the end of the combat.\n" +
+				"2. The more enemy creatures destroyed this way, the more powerful the artifact.\n" +
+				"\n" +
+				"The artifact is made only if the hero carries an Artefact Blank and wins the combat by killing the enemy hero; the blank is used up. Only one recipe can be completed in a combat."],
+			[RU_RECIPE, "В течение боя герой должен:\n" +
+				"\n" +
+				"1. Уничтожить хотя бы одно создание противника способностью мехоса «Токсичный» (создание, раненное мехосом, погибает в конце фазы боя).\n" +
+				"2. К концу боя иметь под контролем хотя бы по одному мехосу каждого типа: Бронзовый, Железный и Стальной мехос.\n" +
+				"\n" +
+				"Результат:\n" +
+				"\n" +
+				"1. Создается Жезл Мехосов с зарядами мехосов того типа, которых под контролем героя больше всего к концу боя.\n" +
+				"2. Чем больше созданий противника уничтожено «Токсичным», тем мощнее артефакт.\n" +
+				"\n" +
+				"Артефакт создается, только если у героя есть Заготовка артефакта и бой выигран убийством героя противника; заготовка расходуется. За один бой можно выполнить только один рецепт."]],
+		"MT_E2_ARTEFACT_RECIPE_4": [[EN_RECIPE, "During a combat the hero must do the following:\n" +
+				"\n" +
+				"1. Cast either only creature summoning spells, or no summoning spells at all.\n" +
+				"2. Without summons, cast no spell that adds or removes spells from a hand: Amnesia, Fresh Wind, Sclerosis, Enforcements or Renewal (Curse and Malison are allowed).\n" +
+				"3. End at least three turns with no spells left in the hero's hand.\n" +
+				"4. When the enemy hero dies, neither hero may have any spells in hand.\n" +
+				"\n" +
+				"Result:\n" +
+				"\n" +
+				"1. With summons only, the Wand of Curses is created (Curse charges); without summons, the Wand of Malisons (Malison charges).\n" +
+				"2. The more turns the hero ended with an empty hand, the more powerful the artifact.\n" +
+				"\n" +
+				"The artifact is made only if the hero carries an Artefact Blank and wins the combat by killing the enemy hero; the blank is used up. Only one recipe can be completed in a combat."],
+			[RU_RECIPE, "В течение боя герой должен:\n" +
+				"\n" +
+				"1. Колдовать либо только заклинания вызова созданий, либо ни одного такого заклинания.\n" +
+				"2. Без вызовов нельзя колдовать заклинания, дающие или сбрасывающие заклинания с руки: «Амнезия», «Свежий Ветер», «Склероз», «Форсирование», «Обновление» («Напасть» и «Проклятие» можно).\n" +
+				"3. Как минимум 3 хода закончить без единого заклинания в руке.\n" +
+				"4. В момент смерти героя противника ни у одного героя не должно быть заклинаний в руке.\n" +
+				"\n" +
+				"Результат:\n" +
+				"\n" +
+				"1. Если колдовались только вызовы, создается Кольцо Напасти (заряды «Напасти»), иначе - Кольцо Проклятья (заряды «Проклятия»).\n" +
+				"2. Чем больше ходов герой закончил с пустой рукой, тем мощнее артефакт.\n" +
+				"\n" +
+				"Артефакт создается, только если у героя есть Заготовка артефакта и бой выигран убийством героя противника; заготовка расходуется. За один бой можно выполнить только один рецепт."]],
+		"MT_E2_ARTEFACT_RECIPE_5": [[EN_RECIPE, "During a combat the hero must do the following:\n" +
+				"\n" +
+				"1. Summon no more than one creature. A creature that was summoned must survive until the end of the combat.\n" +
+				"2. Cast one (and only one) of the spells Hunger, Ravaging Hunger or Curse of Hunger.\n" +
+				"3. When the enemy hero dies, the enemy's graveyard must hold at least 5 creatures.\n" +
+				"\n" +
+				"Result:\n" +
+				"\n" +
+				"1. The Wand of Hunger is created, charged with the Hunger spell that was cast.\n" +
+				"2. The more creatures in the enemy's graveyard, the more powerful the artifact.\n" +
+				"\n" +
+				"The artifact is made only if the hero carries an Artefact Blank and wins the combat by killing the enemy hero; the blank is used up. Only one recipe can be completed in a combat."],
+			[RU_RECIPE, "В течение боя герой должен:\n" +
+				"\n" +
+				"1. Вызвать не более одного создания. Если создание было вызвано, к концу боя оно должно уцелеть.\n" +
+				"2. Сколдовать одно и только одно из заклинаний «Голод», «Опустошающий Голод» или «Проклятие Голода».\n" +
+				"3. В момент смерти героя противника в его могильнике должно быть не менее 5 созданий.\n" +
+				"\n" +
+				"Результат:\n" +
+				"\n" +
+				"1. Создается Кольцо Голода с зарядами сколдованного заклинания Голода.\n" +
+				"2. Чем больше созданий в могильнике противника, тем мощнее артефакт.\n" +
+				"\n" +
+				"Артефакт создается, только если у героя есть Заготовка артефакта и бой выигран убийством героя противника; заготовка расходуется. За один бой можно выполнить только один рецепт."]],
+		"MT_E2_ARTEFACT_RECIPE_6": [[EN_RECIPE, "During a combat the hero must do the following:\n" +
+				"\n" +
+				"1. Have Ether Thorns active from the start of one of the hero's turns.\n" +
+				"2. During that turn, cast Ether Drop, Ether Tap or Ether Draw (any number).\n" +
+				"3. End that turn with no ether left.\n" +
+				"4. Cast no healing spell that turn (Cannibalism, Tap Life, Healing, Greater Healing, Symbiosis), and no Lesser Healing at all in the combat.\n" +
+				"\n" +
+				"Result:\n" +
+				"\n" +
+				"1. The Wand of Ether Harvest is created, charged with the ether spell cast most often that turn.\n" +
+				"2. The more such spells cast and Ether Thorns active (the enemy's count too), the more powerful the artifact.\n" +
+				"\n" +
+				"The artifact is made only if the hero carries an Artefact Blank and wins the combat by killing the enemy hero; the blank is used up. Only one recipe can be completed in a combat."],
+			[RU_RECIPE, "В течение боя герой должен:\n" +
+				"\n" +
+				"1. С начала одного из ходов героя иметь активную чару «Колючий Эфир».\n" +
+				"2. В течение этого хода сколдовать «Каплю Эфира», «Эфирный Родник» или «Эфирный Фонтан» (сколько угодно).\n" +
+				"3. Закончить этот ход, израсходовав весь эфир.\n" +
+				"4. Не колдовать в этот ход лечащих заклинаний («Каннибализм», «Откачка Жизни», «Лечение», «Исцеление», «Симбиоз»), а «Оздоровление» - за весь бой.\n" +
+				"\n" +
+				"Результат:\n" +
+				"\n" +
+				"1. Создается Кольцо Эфира с зарядами эфирного заклинания, сколдованного в тот ход чаще всего.\n" +
+				"2. Чем больше таких заклинаний и активных чар «Колючий Эфир» (в том числе у противника), тем мощнее артефакт.\n" +
+				"\n" +
+				"Артефакт создается, только если у героя есть Заготовка артефакта и бой выигран убийством героя противника; заготовка расходуется. За один бой можно выполнить только один рецепт."]],
+		"MT_E2_ARTEFACT_RECIPE_7": [[EN_RECIPE, "During a combat the hero must do the following:\n" +
+				"\n" +
+				"1. Steal ether from the enemy hero with the Halos' Ethereal Thief ability.\n" +
+				"2. At the end of the combat, have at least one River Halo, Sea Halo and Swamp Halo, and no other creatures the hero summoned.\n" +
+				"\n" +
+				"Result:\n" +
+				"\n" +
+				"1. The Rod of Halos is created, charged with the Halo type the hero has the most at the end of the combat.\n" +
+				"2. The more ether stolen and Halos of that type remaining, the more powerful the artifact.\n" +
+				"\n" +
+				"The artifact is made only if the hero carries an Artefact Blank and wins the combat by killing the enemy hero; the blank is used up. Only one recipe can be completed in a combat."],
+			[RU_RECIPE, "В течение боя герой должен:\n" +
+				"\n" +
+				"1. Украсть эфир у героя противника способностью нимбов «Эфирный вор».\n" +
+				"2. К концу боя иметь хотя бы по одному Речному, Морскому и Болотному нимбу и ни одного другого вызванного героем создания.\n" +
+				"\n" +
+				"Результат:\n" +
+				"\n" +
+				"1. Создается Жезл Нимбов с зарядами нимбов того типа, которых больше всего к концу боя.\n" +
+				"2. Чем больше украдено эфира и чем больше нимбов этого типа осталось, тем мощнее артефакт.\n" +
+				"\n" +
+				"Артефакт создается, только если у героя есть Заготовка артефакта и бой выигран убийством героя противника; заготовка расходуется. За один бой можно выполнить только один рецепт."]],
+		"MT_E2_ARTEFACT_RECIPE_8": [[EN_RECIPE, "During a combat the hero must do the following:\n" +
+				"\n" +
+				"1. Poison the enemy hero with Weak Toxin, Strong Toxin, Envenoming or Snake's Venom.\n" +
+				"2. Poisons must take more than half of the health the enemy hero had at the start of the combat.\n" +
+				"3. The enemy hero must die from poison damage.\n" +
+				"\n" +
+				"Result:\n" +
+				"\n" +
+				"1. The Rod of Venom is created, charged with the poison spell that did the most damage.\n" +
+				"2. The fewer turns it took to kill the enemy, the more powerful the artifact.\n" +
+				"\n" +
+				"The artifact is made only if the hero carries an Artefact Blank and wins the combat by killing the enemy hero; the blank is used up. Only one recipe can be completed in a combat."],
+			[RU_RECIPE, "В течение боя герой должен:\n" +
+				"\n" +
+				"1. Травить героя противника чарами «Слабый Токсин», «Сильный Токсин», «Отравление» или «Змеиный Яд».\n" +
+				"2. Яды должны отнять больше половины здоровья, которое было у героя противника в начале боя.\n" +
+				"3. Герой противника должен умереть от урона яда.\n" +
+				"\n" +
+				"Результат:\n" +
+				"\n" +
+				"1. Создается Скипетр Отравления с зарядами яда, нанесшего больше всего урона.\n" +
+				"2. Чем меньше ходов понадобилось, чтобы убить противника, тем мощнее артефакт.\n" +
+				"\n" +
+				"Артефакт создается, только если у героя есть Заготовка артефакта и бой выигран убийством героя противника; заготовка расходуется. За один бой можно выполнить только один рецепт."]],
+		"MT_E2_ARTEFACT_RECIPE_9": [[EN_RECIPE, "During a combat the hero must do the following:\n" +
+				"\n" +
+				"1. Cast no spells other than cantrips: Aviak Scout, Timidity, Twisted Enhancement, Enfeeblement and Lesser Unsummoning.\n" +
+				"2. Remove at least 4 enchantments in total with Lesser Unsummoning (a creature returned to the hand loses its enchantments).\n" +
+				"\n" +
+				"Result:\n" +
+				"\n" +
+				"1. The Rod of Cantrips is created, charged with the cantrip cast most often.\n" +
+				"2. The more enchantments removed with Lesser Unsummoning, and the more with a single spell, the more powerful the artifact.\n" +
+				"\n" +
+				"The artifact is made only if the hero carries an Artefact Blank and wins the combat by killing the enemy hero; the blank is used up. Only one recipe can be completed in a combat."],
+			[RU_RECIPE, "В течение боя герой должен:\n" +
+				"\n" +
+				"1. Не колдовать ничего, кроме примитивов: «Авиак-разведчик», «Нерешительность», «Искаженное Улучшение», «Бессилие» и «Малое Развоплощение».\n" +
+				"2. Снять «Малым Развоплощением» в сумме не менее 4 чар (с возвращенного в руку создания снимаются все его чары).\n" +
+				"\n" +
+				"Результат:\n" +
+				"\n" +
+				"1. Создается Жезл Примитивов с зарядами примитива, сколдованного чаще всего.\n" +
+				"2. Чем больше чар снято «Малым Развоплощением» и чем больше одним заклинанием, тем мощнее артефакт.\n" +
+				"\n" +
+				"Артефакт создается, только если у героя есть Заготовка артефакта и бой выигран убийством героя противника; заготовка расходуется. За один бой можно выполнить только один рецепт."]],
 	},
 }
 

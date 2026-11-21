@@ -168,9 +168,17 @@ func _recipes(second: ELProfile) -> void:
 	var rod := second.text("T_CUSTOM_ARTEFACT_ROD_OF_VENOM")
 	check(venom.contains(rod) and not venom.contains("Ring of Venom") and not venom.contains("Кольцо Ядов"), "el2 recipe 8 names the %s" % rod)
 	# The English text as shipped, through the same correction.
-	var english := ELTextFixes.apply("el2", "MT_E2_ARTEFACT_RECIPE_5", "Result:\n\n1. If only summon spells were used, the artifact Wand of Curses is created; otherwise, the Wand of Malisons is created.")
+	var english := ELTextFixes.apply("el2", "MT_E2_ARTEFACT_RECIPE_5", "During a combat the hero must do the following:\n\nResult:\n\n1. If only summon spells were used, the artifact Wand of Curses is created; otherwise, the Wand of Malisons is created.")
 	check(english.contains("Wand of Hunger") and english.contains("Ravaging Hunger") and english.contains("at least 5 creatures"), "el2 recipe 5, English: the copied Wand of Curses text is replaced")
-	check(ELTextFixes.apply("el2", "MT_E2_ARTEFACT_RECIPE_8", "1. The artifact Ring of Venom is created") == "1. The artifact Rod of Venom is created", "el2 recipe 8, English: Ring of Venom becomes Rod of Venom")
+	check(ELTextFixes.apply("el2", "MT_E2_ARTEFACT_RECIPE_8", "During a combat the hero must do the following:\n\n1. The artifact Ring of Venom is created").contains("Rod of Venom"), "el2 recipe 8, English: the Rod of Venom is named")
+	# Every recipe, in both languages, names its artifacts and the blank.
+	var names := {1: ["ROD_OF_PTEROSES", "WAND_OF_PURIFY"], 2: ["RING_OF_GASES", "RING_OF_SUFFOCATION"], 3: ["ROD_OF_MECHOSES"], 4: ["WAND_OF_CURSES", "WAND_OF_MALISONS"], 5: ["WAND_OF_HUNGER"],
+		6: ["WAND_OF_ETHER_HARVEST"], 7: ["ROD_OF_HALOS"], 8: ["ROD_OF_VENOM"], 9: ["ROD_OF_CANTRIPS"]}
+	var blank := second.text("ArtBlank")
+	for number: int in names:
+		var shown := second.text("MT_E2_ARTEFACT_RECIPE_%d" % number)
+		var missing: Array = names[number].filter(func(item: String) -> bool: return not shown.contains(second.text("T_CUSTOM_ARTEFACT_" + item)))
+		check(missing.is_empty() and shown.contains(blank), "el2 recipe %d names its artifacts %s and the %s" % [number, str(missing), blank])
 
 # --- Castle damage -----------------------------------------------------------
 
