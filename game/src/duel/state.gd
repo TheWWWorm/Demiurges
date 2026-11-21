@@ -3051,8 +3051,14 @@ func _turn_enchantments(at_start: bool) -> void:
 		for e: Dictionary in entity(target).get("temporary", []):
 			pending.append({"target": target, "effect": e, "temporary": true})
 	pending.sort_custom(func(a: Dictionary, b: Dictionary): return a.effect.id < b.effect.id)
-	var ended_hooks := false
+	# Each end-of-turn enchantment runs inside its own start and finish hooks
+	# (both originals: start, its callback, finish, one enchantment at a
+	# time). The window of the previous one closes before the next begins.
+	var hook_open := false
 	for entry: Dictionary in pending:
+		if hook_open:
+			_finish_end_of_turn_hook()
+			hook_open = false
 		var target: int = entry.target
 		var victim := entity(target)
 		var e: Dictionary = entry.effect
@@ -3103,7 +3109,7 @@ func _turn_enchantments(at_start: bool) -> void:
 			# the holder ID stands in for the unidentified second argument.
 			if scripts != null and e.card in END_OF_TURN_CARDS:
 				scripts.dispatch("CHook_OnVisualStartEnchantmentEndOfTurn", [e.card, float(target)])
-				ended_hooks = true
+				hook_open = true
 			match e.card:
 				"MNBN":
 					# Burn resistance spares ether here too.
@@ -3189,13 +3195,7 @@ func _turn_enchantments(at_start: bool) -> void:
 					if profile.id in ["el1", "el2"]:
 						_emit({"kind": "twisted_decay", "target": target, "card": "TWEN"})
 					if victim.damage >= mini(int(victim.toughness), floor_toughness): _lethal(target)
-	if ended_hooks:
-		# A hero killed by an end-of-turn enchantment dies while it is still
-		# under way: the second game's artifact recipes for Suffocation Gas
-		# (Ring of Gases) and the venoms (Rod of Venom) read their "killed
-		# by" flag at the hero's death, and the finish hook clears it.
-		_tell_hero_deaths()
-		scripts.dispatch("CHook_OnVisualFinishEnchantmentEndOfTurn", [])
+	if hook_open: _finish_end_of_turn_hook()
 	if not at_start:
 		# Expiring defence can expose damage retained by Fatal Disease. The original
 		# final state check kills these creatures without ordinary regeneration.
@@ -4184,6 +4184,14 @@ func _remove_creature(id: int, kind: String) -> void:
 		if card == "WKHR":
 			for other: Dictionary in creatures.values():
 				if creatures.has(other.id): _trigger_damage(card, other.id, 3)
+
+## Closes an end-of-turn enchantment's hook window. A hero it killed dies
+## while it is still under way: the second game's artifact recipes for
+## Suffocation Gas (Ring of Gases) and the venoms (Rod of Venom) read what
+## their start hook recorded at the hero's death, and the finish hook clears it.
+func _finish_end_of_turn_hook() -> void:
+	_tell_hero_deaths()
+	scripts.dispatch("CHook_OnVisualFinishEnchantmentEndOfTurn", [])
 
 ## Tells the battle scripts of each hero who has died, once per death.
 func _tell_hero_deaths() -> void:
