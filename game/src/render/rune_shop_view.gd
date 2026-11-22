@@ -31,7 +31,6 @@ const PRICE_BOX := Vector2(32, 18)
 const BOOK_COLUMNS := 5
 const RED := Color(1, 0, 0)
 const WHITE := Color(1, 1, 1)
-const GREEN := Color(0, 1, 0)
 const PICK := Color("e8e0cc")
 const TIPS := {"CompTt1": Rect2(414, 128, 33, 33), "CompTt2": Rect2(465, 134, 30, 30), "CompTt3": Rect2(517, 128, 30, 30)}
 const COMMANDS := ["CompBuy1", "CompBuy2", "CompBuy3", "CompBack1", "CompBack2", "CompBack3", "CompOK", "CompCancel"]
@@ -345,7 +344,7 @@ func _draw_sheet() -> void:
 			var width := font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, 14).x
 			var at := Vector2(box.get_center().x - width * 0.5, box.position.y + 14)
 			sheet.draw_string(font, at + Vector2(1, 1), text, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color(0, 0, 0, 0.9))
-			sheet.draw_string(font, at, text, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, WHITE if values.is_empty() else (RED if price_red(column, kinds[row]) else GREEN))
+			sheet.draw_string(font, at, text, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, price_ink(values, kinds[row], not values.is_empty() and price_red(column, kinds[row])))
 	# Book spells with runes bought carry a gold frame; the carried rune
 	# follows the cursor.
 	for index in mini(15, trade.pending.size()):

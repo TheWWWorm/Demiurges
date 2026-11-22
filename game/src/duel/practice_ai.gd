@@ -502,6 +502,7 @@ static func _score(d: ELDuel, card: String, target: int, side: int, allies: Arra
 			var score := 0.0
 			for c: Dictionary in enemies:
 				var exempt: bool = d.race(c.id) == "Wall" if rule.get("scope") == "not_walls" else d.has_flag(c.id, "Restless")
+				if d.profile.id == "el2" and (d.has_flag(c.id, "NoAffect") or d.in_plane(int(c.id))): exempt = true
 				if not c.resting and not exempt: score += 1.0 + float(c.power)
 			return score
 		"draw":
@@ -521,6 +522,7 @@ static func _score(d: ELDuel, card: String, target: int, side: int, allies: Arra
 		"rally_all":
 			var score := 0.0
 			for c: Dictionary in allies:
+				if d.profile.id == "el2" and (d.has_flag(c.id, "NoAffect") or d.in_plane(int(c.id))): continue
 				if c.resting and not c.sick and not d.attacks.has(c.id) and not d.blocks.has(c.id): score += 1.0 + float(c.power) * (0.5 if d.phase == ELDuel.Phase.DEFENCE else 0.2)
 			return score - 2.0
 		"discard_all": return float(e.hand.size()) * 2.0 - 4.0 if not friendly else 0.0

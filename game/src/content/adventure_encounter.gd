@@ -43,6 +43,12 @@ const SECOND_TERRAIN_ARENAS := ["Black", "Green", "Blue", "Red", "Ether"]
 var swapped := false
 ## A duel between a computer hero and a neutral monster on the map.
 var map_ai_duel := false
+## Second game: a remote attack (a script's ExRemoteUseObjectCmd aimed at a
+## hero, as the portal to the White Lord in chapter 54). The original's remote
+## attack action marks the battle ethereal and passes no script arena, so it
+## is fought on the Ether arena whatever the tiles, ships or forts, and
+## Hook_OnGetArena is not asked.
+var remote := false
 
 ## The attacking actor (the first of the queued battle pair).
 func attacker() -> int:
@@ -192,12 +198,16 @@ func _prepare_duel(state: ELAdventureSession, defender: int, seed_value := -1, f
 		var scripts := ELBattleScripts.select(state, [hero_id, opponent_id])
 		if not scripts.is_empty(): options.scripts = scripts
 	var scripted_arena := ""
-	if state.vm != null and not map_ai_duel:
+	var remote_attack := remote and profile.id == "el2"
+	if state.vm != null and not map_ai_duel and not remote_attack:
 		var chosen := state.vm.invoke("Hook_OnGetArena", [float(attacker()), float(target())])
 		if not state.vm.error.is_empty(): return _fail(state.vm.error)
 		if not chosen.is_empty() and chosen[0] is String: scripted_arena = chosen[0]
 	if not scripted_arena.is_empty(): options.arena = scripted_arena
-	elif profile.id == "el2": options.arena = second_arena(state, attacker(), target(), randi())
+	elif profile.id == "el2":
+		# The automatic selector draws its variant roll for every battle.
+		var roll := randi()
+		options.arena = "Ether.001" if remote_attack else second_arena(state, attacker(), target(), roll)
 	# Both original battle constructors take a fresh rand() value. Reloading
 	# a map before combat creates a new battle, while an active battle restores its state.
 	var battle_seed := (randi() & 0x7fff) if seed_value < 0 else seed_value

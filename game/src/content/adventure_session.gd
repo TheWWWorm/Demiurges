@@ -248,6 +248,8 @@ func start(source: ELAdventureMap, level := 0, seed_number := 212, scenario_scri
 		objects[id] = object
 		_next_object = maxi(_next_object, id + 1)
 	if map.profile.id == "el1":
+		# Heroes authored on a fort's origin start as its garrison.
+		ELForts.occupy_placed(self)
 		ELFirstScenario.initialize(self, current_player, campaign)
 		# The first day-start runs at mission start and counts as a weekly reset.
 		ELAdditionalBuildings.new_day(self, 0)

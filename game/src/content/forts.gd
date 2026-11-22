@@ -104,13 +104,17 @@ static func occupy(state: ELAdventureSession, hero: Dictionary, fort: Dictionary
 	state.event.emit({"kind": "fort_entered", "id": fort_id, "hero": hero_id})
 	state.event.emit({"kind": "object_changed", "id": hero_id})
 
-## Second game, at map start: every alive hero or creature standing on an
-## empty fort's tile becomes its garrison (any owner, monsters included).
+## At map start, every alive hero (second game: or creature) standing on an
+## empty fort's tile becomes its garrison, whatever its owner. First game: a
+## hero a player gets is put on the map and, when it stands on a fort's
+## origin, enters that fort at once, so the neutral and player heroes the
+## shipped chapters author on forts start inside them, the fort theirs.
 static func occupy_placed(state: ELAdventureSession) -> void:
+	var kinds := ["hero"] if state.map.profile.id == "el1" else ["hero", "monster"]
 	for fort: Dictionary in state.objects.values():
 		if fort.get("type") != "fort" or int(fort.garrison) >= 0: continue
 		for item: Dictionary in state.objects.values():
-			if item.get("type") in ["hero", "monster"] and item.get("alive", false) and item.get("placed", true) and not item.get("fortified", false) and Vector2i(int(item.x), int(item.y)) == Vector2i(int(fort.x), int(fort.y)):
+			if item.get("type") in kinds and item.get("alive", false) and item.get("placed", true) and not item.get("fortified", false) and Vector2i(int(item.x), int(item.y)) == Vector2i(int(fort.x), int(fort.y)):
 				occupy(state, item, fort)
 				break
 

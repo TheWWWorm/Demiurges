@@ -1078,6 +1078,7 @@ func use_object(hero_id: int, target_id: int, defender := -1) -> void:
 
 func _begin_encounter(actor: Dictionary, target: Dictionary, defender := -1, assault_fort := -1, remote_use := false) -> void:
 	var next := ELAdventureEncounter.new()
+	next.remote = remote_use
 	if not next.prepare(state, int(actor.uid), int(target.uid), defender):
 		_refuse_battle(next.error)
 		return

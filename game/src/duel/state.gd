@@ -704,6 +704,8 @@ func _book_colour(colour: String, faction: String) -> bool:
 	return colour == faction or (profile.id == "el2" and colour == "White")
 
 func card_name(card: String) -> String:
+	# A specialisation's combat mark goes by the specialisation's name.
+	if profile.specialisation_mark(card): return profile.text(str(profile.table("HeroesSpecs")[card].get("Name", card)))
 	var row: Dictionary = profile.table("CombatSpells").get(card, {})
 	var key := String(row.get("Name", card))
 	var text := profile.text(key)
@@ -1301,9 +1303,10 @@ func _apply_spell_effect(side: int, card: String, rule: Dictionary, target: int,
 			var hurt := int(profile.table("CombatCreatures")[repaired].Power) if second_rules(card) else 1
 			if hurt > 0: _damage(1 - side, hurt)
 		"rally_all":
-			# Untap every own resting creature that is not in combat; sickness stays.
+			# Untap every own resting creature that is not in combat; sickness stays. The second game passes
+			# over unaffected creatures and those in the Colourless Plane.
 			for c: Dictionary in army(side):
-				if c.resting and not attacks.has(c.id) and not blocks.has(c.id) and not (profile.id == "el2" and has_flag(c.id, "NoAffect")): c.resting = false
+				if c.resting and not attacks.has(c.id) and not blocks.has(c.id) and not (profile.id == "el2" and (has_flag(c.id, "NoAffect") or in_plane(int(c.id)))): c.resting = false
 		"discard_all":
 			var wiped := 0
 			while not heroes[target].hand.is_empty():
@@ -1424,8 +1427,9 @@ func _apply_spell_effect(side: int, card: String, rule: Dictionary, target: int,
 			for c: Dictionary in army(1 - side):
 				# Ice storm taps every non-Wall, restless or not.
 				var exempt: bool = race(c.id) == "Wall" if rule.get("scope") == "not_walls" else has_flag(c.id, "Restless")
-				# The second game also spares unaffected creatures, and Glade one in the Colourless Plane.
-				if profile.id == "el2" and (has_flag(c.id, "NoAffect") or (rule.get("scope") != "not_walls" and in_plane(int(c.id)))): exempt = true
+				# The second game also spares unaffected creatures and those in the Colourless Plane (Glade and
+				# Ice Storm alike: a pale creature that has not manifested stays ready, issue #281).
+				if profile.id == "el2" and (has_flag(c.id, "NoAffect") or in_plane(int(c.id))): exempt = true
 				if not c.resting and not exempt:
 					c.resting = true
 					# Glade withdraws a declared attacker in the second game; Ice Storm and the first game leave it

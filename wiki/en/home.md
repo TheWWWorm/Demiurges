@@ -11,7 +11,8 @@ An encyclopedia of **Etherlords** (2001) and **Etherlords II** (2003): every cre
 | Section | Contents |
 |---|---|
 | [Creatures](all-creatures) | Every creature by race: ether cost, power, toughness and abilities |
-| [Sorceries and enchantments](all-spells) | Every spell by race: type, rarity and ether cost |
+| [Sorceries](all-sorceries) | Every sorcery by race: rarity and ether cost |
+| [Enchantments](all-enchantments) | Every enchantment by race: rarity and ether cost |
 | [Artifacts](all-artifacts) | Artifacts, including those that summon a creature |
 | [Hero skills](all-skills) | Skills and the effect of each rank |
 | [Specializations](all-specializations) | Chance-based talents of heroes |

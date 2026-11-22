@@ -308,6 +308,12 @@ var _hint_control: Control
 ## banners and cast messages.
 var symbols: ELCombatSymbols
 var notices: ELCombatNotices
+## The battle's plays along the right edge (setting "battle_history").
+var battle_history: ELBattleHistory
+## What the history knows of each character id it may name after the rules
+## removed it: {id: {card, owner}}, noted as the rules report them.
+var _history_seen := {}
+var _shown_duel_of_history: ELDuel
 ## Second-game map battles: the map hero's affect icons, top right.
 var affect_strip: ELAffectStrip
 ## The opponent-turn banner shows once per opponent turn.
@@ -763,6 +769,15 @@ func _start(edition: String, options: Dictionary = {}, restored: ELDuel = null, 
 		_add_label(side)
 		portraits[side].texture = _monster_portrait(combatant) if combatant.has("monster_name") else profile.portrait(int(hero.Face))
 	hud.build(profile)
+	if battle_history != null:
+		# The column's frame: the panel's phase caption oval (ELHudFrame).
+		var oval := {}
+		for piece: Dictionary in hud.pieces:
+			if is_equal_approx(piece.destination.position.x, ELHudFrame.CAPTION_LEFT) and is_equal_approx(piece.destination.end.x, ELHudFrame.CAPTION_RIGHT): oval = piece
+		battle_history.set_frame(oval)
+		battle_history.set_symbols(profile.texture("Interface/combatsymbols"))
+		var attack_cursor := ELCursors.cursor(profile, "attack")
+		battle_history.set_cursor(attack_cursor.images[0] if not attack_cursor.get("images", []).is_empty() else null)
 	symbols.build(profile)
 	symbols.camera = camera
 	notices.build(profile)
@@ -819,6 +834,10 @@ func _start(edition: String, options: Dictionary = {}, restored: ELDuel = null, 
 	stage.add_child(melee)
 	duel.changed.connect(_refresh)
 	duel.event.connect(_on_duel_event)
+	if battle_history != null and restored != _shown_duel_of_history:
+		battle_history.clear()
+		_history_seen.clear()
+	_shown_duel_of_history = restored if restored != null else duel
 	duel.combat_started.connect(_on_combat_started)
 	duel.attack_resolved.connect(_on_attack_resolved)
 	duel.turn_cleanup.connect(_on_turn_cleanup)
@@ -1377,7 +1396,8 @@ func _target(id: int) -> void:
 		# on the upper strip (so an enemy hero's «Дым» can be read).
 		if duel != null and not demo and (id < 2 or duel.creatures.has(id)):
 			selected_creature = id
-			inspect_graveyard = false
+			# A graveyard shown stays shown from one hero to the other (#280).
+			inspect_graveyard = inspect_graveyard and id < 2
 			_refresh()
 		return
 	if not _target_ready(id): return
@@ -1486,7 +1506,7 @@ func _target(id: int) -> void:
 	else:
 		selected_creature = id
 		selection_phase = _phase_mark()
-		inspect_graveyard = false
+		inspect_graveyard = inspect_graveyard and id < 2
 	_refresh()
 
 ## The cursor and clicks share the same readiness checks.
@@ -2345,6 +2365,7 @@ func _on_duel_event(data: Dictionary) -> void:
 		if data.get("kind") == "heal" and _drain_started: data.drain = true
 		_drain_started = (data.get("kind") == "combat_ability" and data.get("key") == "Lifetap") or data.get("kind") == "bat_drain_cue" \
 			or (_drain_started and not data.get("kind") in ["heal", "strike", "phase", "cast", "artifact", "ability"])
+	if duel != null: _history_remember(data)
 	# An ability may be shown after the rules have already removed its user
 	# (a creature that dies of its own ability while an earlier action, such as
 	# its summon, is still on screen): note who used it as it happens.
@@ -2564,6 +2585,7 @@ func _event(data: Dictionary) -> void:
 	_note_shown(data)
 	if data.has("shown") and is_instance_valid(notices):
 		notices.show_turn(int(data.shown.active), int(data.shown.turn))
+	_note_history(data)
 	if data.get("kind") in ["attack_resolved", "turn_cleanup", "combat_end"]: return
 	_log_battle_outcome(data)
 	if data.get("kind") in CAST_KINDS: _cast_until = elapsed + _cast_seconds(data)
@@ -5205,6 +5227,7 @@ func _refresh() -> void:
 	var active := _shown_active_side()
 	var displayed := _displayed_side()
 	notices.viewer_side = displayed
+	if battle_history != null: battle_history.viewer_side = _history_side()
 	# Hot seat: the confirmed player's side; nothing while a hand-over waits.
 	var concealed := (_hot_seat() and hot_pending) or (_strategic_battle() and strategic_session.relay.local_side < 0)
 	var peek := game_console != null and game_console.enemy_hand(duel)
@@ -5639,6 +5662,11 @@ func _original_text(key: String, fallback: String) -> String:
 func card_tooltip(card: String) -> String:
 	return ELCombatTooltip.spell_text(profile, card, duel.cost(card), duel.card_name(card))
 
+## A graveyard card's tooltip: as in the hand (type, name, strength and
+## health, cost) with the printed cost, as the original shows it (#279).
+func _grave_tooltip(card: String) -> String:
+	return ELCombatTooltip.spell_text(profile, card, -1, duel.card_name(card))
+
 ## The original tooltip for a battle control, or {} for its plain text: a
 ## hand card's type, name, strength and cost lines (EL2 layout as
 ## seen in the original), a portrait's hero card, a value box's own line.
@@ -5650,6 +5678,16 @@ func _displayed_side() -> int:
 	var side := local if mode_select.selected == 0 and not demo else _shown_active_side()
 	if _hot_seat() and hot_side >= 0: side = hot_side
 	return side
+
+## Whose plays the history rims blue: the player's own side, fixed for the
+## battle. Hot seat, a watched battle and a demo have no one side, so the
+## first hero (side 0) keeps blue and the colours do not swap each turn.
+func _history_side() -> int:
+	if _strategic_battle(): return maxi(0, strategic_session.relay.local_side)
+	if network_duel != null and network_duel.live: return network_duel.local_side
+	if replay_player != null and replay_player.duel == duel: return replay_player.local_side()
+	if _hot_seat() or demo or mode_select.selected != 0: return 0
+	return game_console.player_side(duel) if game_console != null else _battle_player_side(duel)
 
 func _tip_content(control: Control, at: Vector2) -> Dictionary:
 	if duel == null or profile == null: return {}
@@ -5981,6 +6019,106 @@ func _log_battle_outcome(data: Dictionary) -> void:
 		line = _t("%s (during %s)") % [line, duel.card_name(source)]
 	_log(line)
 
+## Notes the card and owner of every character an event names, while the
+## rules still hold it, for the play history shown later.
+func _history_remember(data: Dictionary) -> void:
+	for field: String in ["source", "target", "from", "to", "id"]:
+		var id := int(data.get(field, -1)) if data.get(field) is int or data.get(field) is float else -1
+		if id >= 2 and duel.creatures.has(id):
+			_history_seen[id] = {"card": String(duel.creatures[id].card), "owner": int(duel.creatures[id].owner)}
+	if data.get("kind") == "summon" and data.get("creature") is Dictionary:
+		var c: Dictionary = data.creature
+		_history_seen[int(c.id)] = {"card": String(c.get("card", "")), "owner": int(c.get("owner", -1))}
+	if data.get("kind") == "ability" and int(data.get("source", -1)) >= 0 and not data.has("history_card"):
+		data.history_card = _ability_card_of(int(data.source), String(data.get("ability", "")))
+
+## A character's picture and name for the play history.
+func _history_face(id: int, fallback_card := "") -> Array:
+	if id in [0, 1]: return [portraits[id].texture if id < portraits.size() else null, _hero_name(id)]
+	var card := String(_history_seen.get(id, {}).get("card", fallback_card))
+	if card.is_empty(): card = String(duel.entity(id).get("card", ""))
+	if card.is_empty(): return [null, _t("Creature")]
+	return [profile.card_icon(card), duel.card_name(card)]
+
+func _history_owner(id: int) -> int:
+	if id in [0, 1]: return id
+	if duel.creatures.has(id): return int(duel.creatures[id].owner)
+	return int(_history_seen.get(id, {}).get("owner", -1))
+
+## Feeds the play history (ELBattleHistory) with an event as it is shown:
+## casts, abilities, artifacts and attacks open a play, and what they do to
+## characters until the next play or phase goes on it.
+func _note_history(data: Dictionary) -> void:
+	if battle_history == null or duel == null or profile == null: return
+	var kind := String(data.get("kind", ""))
+	match kind:
+		"cast":
+			if data.get("script", false) and int(data.get("side", -1)) < 0: return
+			var card := String(data.get("card", ""))
+			battle_history.begin(int(data.get("side", -1)), "cast", -1, profile.card_icon(card), duel.card_name(card), _history_text(card))
+			battle_history.current_entry().card = card
+			if not duel.is_summon(card): _history_target(int(data.get("target", -1)), card)
+		"artifact":
+			var card := String(data.get("card", ""))
+			var title := String(data.get("title", data.get("artifact", duel.card_name(card))))
+			battle_history.begin(int(data.get("side", -1)), "artifact", int(data.get("side", -1)), profile.card_icon(card), title, _history_text(card))
+			_history_target(int(data.get("target", -1)), card)
+		"ability":
+			var source := int(data.get("source", -1))
+			if source < 0: return
+			var card := String(data.get("history_card", data.get("notice_card", data.get("user_card", ""))))
+			var row: Dictionary = profile.table("CombatSpells").get(card, {})
+			var icon_index := int(row.get("AbilityIcon", 0))
+			var icon: Texture2D = profile.icon_at(icon_index) if icon_index > 0 else (profile.card_icon(card) if not card.is_empty() else _history_face(source)[0])
+			var title := _t(String(data.get("name", ""))) if not String(data.get("name", "")).is_empty() else duel.card_name(card)
+			var about := profile.text(str(row.get("AbilityText", "")))
+			var user: String = _history_face(source, String(data.get("user_card", "")))[1]
+			battle_history.begin(_history_owner(source), "ability", source, icon, title, user + ("
+" + about if not about.is_empty() and about != title else ""))
+			var target := int(data.get("target", -1))
+			if target != source: _history_target(target, "")
+		"strike":
+			var from := int(data.get("from", -1))
+			var to := int(data.get("to", -1))
+			if from < 0 or to < 0 or battle_history.current_attack(from, to) >= 0: return
+			var face := _history_face(from)
+			var card := String(_history_seen.get(from, {}).get("card", duel.entity(from).get("card", "")))
+			battle_history.begin(_history_owner(from), "attack", from, face[0], face[1], profile.card_description(card) if not card.is_empty() else "")
+			_history_target(to, "")
+		"damage":
+			_history_change(int(data.get("target", -1)), {"delta": -int(data.get("amount", 0))}, String(data.get("target_card", "")))
+		"heal":
+			if int(data.get("amount", 0)) != 0: _history_change(int(data.get("target", -1)), {"delta": int(data.amount)}, String(data.get("target_card", "")))
+		"death", "exile":
+			_history_change(int(data.get("target", -1)), {"died": true}, String(data.get("target_card", "")))
+		"summon":
+			if data.get("creature") is Dictionary:
+				var c: Dictionary = data.creature
+				# A creature card's own summon is the play itself, not its target.
+				var play := battle_history.current_entry()
+				if play.get("kind") == "cast" and play.get("card") == String(c.get("card", "")):
+					battle_history.forget_target(int(c.id))
+				else: _history_change(int(c.id), {"summoned": true}, String(c.get("card", "")))
+		"enchant":
+			_history_change(int(data.get("target", -1)), {"enchanted": true}, "")
+		"phase", "turn_cleanup", "combat_end", "upkeep":
+			battle_history.close()
+
+## A card's text for the play history: its description, unless that only
+## repeats the name.
+func _history_text(card: String) -> String:
+	var about := profile.card_description(card)
+	return "" if about.is_empty() or about == card or about == duel.card_name(card) else about
+
+func _history_target(target: int, card: String) -> void:
+	if target < 0 or (target >= 2 and _history_face(target)[0] == null): return
+	_history_change(target, {}, "")
+
+func _history_change(id: int, change: Dictionary, card: String) -> void:
+	if id < 0 or not battle_history.has_current(): return
+	var face := _history_face(id, card)
+	battle_history.touch(id, face[0], face[1], change)
+
 ## The battle log (L) keeps the whole battle, up to LOG_LINES lines, and
 ## scrolls with the wheel or its bar; it follows the newest line unless the
 ## player has scrolled up to read.
@@ -6056,6 +6194,10 @@ func _build_ui() -> void:
 	affect_strip.battle_tooltips = true
 	affect_strip.theme = ELCombatTooltip.hidden_theme()
 	ui.add_child(affect_strip)
+	battle_history = ELBattleHistory.new()
+	battle_history.visible = bool(settings.values.get("battle_history", true))
+	notices.icons_hidden = battle_history.visible
+	ui.add_child(battle_history)
 	status = _label("Choose your original game content from Menu.", 14, Color("e9e4d4"))
 	status.position = Vector2(20, 16)
 	status.add_theme_color_override("font_shadow_color", Color.BLACK)
@@ -7129,6 +7271,8 @@ func _interface_page(page: VBoxContainer) -> void:
 		if is_instance_valid(discord): discord.enabled = enabled)
 	_settings_row(sharing, "Discord activity", "Shows the game and whether you are in the menus, on a map or in a battle in the Discord desktop app. Nothing else is shared; off clears it.", discord_toggle)
 
+const HISTORY_HELP := "In battle, a column at the left edge lists every play of the battle, the newest on top: spells, abilities, artifacts and attacks, framed blue for yours and red for the opponent's. Point at one (or tap it) to see the card and what it did to each character; the mouse wheel or a drag scrolls back. It replaces the icons of the turn's spells at the top left. Off: those icons, as in the original."
+
 ## The battle panel's size (setting "battle_interface", ELHudFrame.SIZES),
 ## applied at once; sizes too big for the screen are offered disabled.
 func _battle_interface_row(box: Control) -> void:
@@ -7154,6 +7298,14 @@ func _battle_interface_row(box: Control) -> void:
 		# Without readouts a narrow gap may take the phase caption.
 		_layout_hud()
 		if duel != null: _refresh())
+	var history_toggle := CheckButton.new()
+	history_toggle.name = "BattleHistory"
+	history_toggle.button_pressed = bool(settings.values.get("battle_history", true))
+	history_toggle.toggled.connect(func(enabled: bool):
+		settings.values.battle_history = enabled
+		if battle_history != null: battle_history.visible = enabled
+		if notices != null: notices.icons_hidden = enabled)
+	_settings_row(box, "Play history", HISTORY_HELP, history_toggle)
 	_settings_row(box, "Battle panel readouts", "On a wide screen, the free width of the battle panel beside the spells shows readouts switched with its arrows: the spellbook, the battle adviser with the chances to win, both heroes' graveyards and enchantments, and the battle camera. Off: that width stays an empty strip.", readouts_toggle)
 	var lock_toggle := CheckButton.new()
 	lock_toggle.name = "CameraDragLock"
@@ -8622,7 +8774,7 @@ func _refresh_inspector() -> void:
 			if not choice.is_empty():
 				row.set_meta("grave_index", index)
 				(row as Button).disabled = not choice.enabled
-			row.tooltip_text = profile.card_description(card)
+			row.tooltip_text = _grave_tooltip(card)
 			rows.add_child(row)
 	else:
 		for enchantment: Dictionary in _shown_enchantments(selected_creature):
@@ -8808,7 +8960,7 @@ func _fill_strip() -> void:
 		for index in entity.grave.size():
 			var card: String = entity.grave[index]
 			var choice := _grave_choice(index)
-			list.append({"icon": profile.card_icon(card), "tooltip": "%s\n%s" % [duel.card_name(card), profile.card_description(card)],
+			list.append({"icon": profile.card_icon(card), "tooltip": _grave_tooltip(card),
 				"enabled": choice.get("enabled", false), "meta": {"grave_index": index, "card": card}})
 	elif shown >= 0:
 		var pending := selection >= 0 or not ability_selection.is_empty()
@@ -8884,7 +9036,7 @@ func _fill_gap(concealed: bool) -> void:
 		var buried: Array = []
 		for i in range(h.grave.size() - 1, -1, -1):
 			var card: String = h.grave[i]
-			buried.append({"icon": profile.card_icon(card), "tooltip": "%s\n%s" % [duel.card_name(card), profile.card_description(card)], "count": -1, "dim": false})
+			buried.append({"icon": profile.card_icon(card), "tooltip": _grave_tooltip(card), "count": -1, "dim": false})
 		var worn: Array = []
 		for i in range(h.enchantments.size() - 1, -1, -1):
 			var card: String = h.enchantments[i].card
@@ -9122,6 +9274,7 @@ func _layout_hud() -> void:
 		log_text.position = Vector2(notices.icon_column_right() + 12.0, 56.0)
 		log_text.size = Vector2(minf(470.0, maxf(0.0, ui.size.x - log_text.position.x - 16.0)), 145.0)
 	if affect_strip != null: affect_strip.ui_scale = factor
+	if battle_history != null: battle_history.ui_scale = factor
 	hud_root.size = (screen / pixels - Vector2.ONE * 0.001).ceil()
 	hud_root.position = Vector2(0.0, (screen.y - hud_root.size.y * pixels) / unit)
 	hud.size = hud_root.size

@@ -1,7 +1,8 @@
 [
   {"id": "wiki", "en": "Demiurges wiki", "ru": "Вики Demiurges"},
   {"id": "all-creatures", "en": "Creatures", "ru": "Создания", "catalog": true},
-  {"id": "all-spells", "en": "Sorceries and enchantments", "ru": "Колдовство и чары", "catalog": true},
+  {"id": "all-sorceries", "en": "Sorceries", "ru": "Колдовство", "catalog": true},
+  {"id": "all-enchantments", "en": "Enchantments", "ru": "Чары", "catalog": true},
   {"id": "all-artifacts", "en": "Artifacts", "ru": "Артефакты", "catalog": true},
   {"id": "all-skills", "en": "Hero skills", "ru": "Навыки героев", "catalog": true},
   {"id": "all-specializations", "en": "Specializations", "ru": "Специализации", "catalog": true},

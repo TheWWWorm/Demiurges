@@ -305,6 +305,13 @@ func resource_tip(point: Vector2, first: Vector2, step: float) -> String:
 			return profile.text("T_RESOURCE_NAME_%d" % (index + 1)).strip_edges()
 	return ""
 
+## Ink of one price-table entry in the shops: white for "-" and for a zero
+## (nothing of that resource is spent), red when it cannot be paid, green
+## otherwise.
+static func price_ink(values: Dictionary, kind: String, red: bool) -> Color:
+	if values.is_empty() or int(values.get(kind, 0)) == 0: return Color(1, 1, 1)
+	return Color(1, 0, 0) if red else Color(0, 1, 0)
+
 ## The tooltip text of the artifact or global spell piece in the items row
 ## under `point`, or "".
 func item_tip_at(point: Vector2) -> String:

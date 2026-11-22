@@ -71,6 +71,8 @@ var tooltip_title: Label
 var tooltip_picture: TextureRect
 var tooltip_body: Label
 var tooltip_subject := -1
+## A hero slot whose map tooltip the held right button shows (#286), or null.
+var _slot_tip: PortraitSlot
 var precombat: Control
 var begin_button: CutButton
 var cancel_button: CutButton
@@ -145,6 +147,36 @@ var view_yaw := 0.0
 ## Empty hero-column slot: ADV_PANEL1 (149,60) 74x49 one pixel left of the
 ## slot (matched against an original capture).
 var _empty_slot: Dictionary = {}
+## Hero state marks on the portraits: HERO_STATES 14x14 cells at the
+## portrait's lower left (0, 37), drawn in this order: the crossed swords of
+## an attack order (an enemy hero or creature, or an enemy castle), the same
+## swords for a hero stopped on its way (interception), the shield of a hero
+## inside a fort or a training camp, and the lock of an order to capture or
+## use a mine, an ether node, an additional building or a fort.
+var _states_sheet: Texture2D
+const STATE_SWORDS := Rect2(0, 0, 14, 14)
+const STATE_LOCK := Rect2(14, 0, 14, 14)
+const STATE_SHIELD := Rect2(28, 0, 14, 14)
+const STATE_AT := Vector2(0, 37)
+const STATE_ORDER_GROUPS := ["mines", "mana_nodes", "additional_buildings", "forts"]
+
+## The HERO_STATES cells shown on `hero`'s portrait, in drawing order.
+static func hero_states(source: ELAdventureSession, hero: Dictionary) -> Array[Rect2]:
+	var marks: Array[Rect2] = []
+	if hero.is_empty() or hero.get("type") != "hero" or not hero.get("alive", false): return marks
+	var order: Dictionary = hero.get("strategy_order", {})
+	var target := source.object(int(order.get("use", -1))) if not order.is_empty() and int(order.get("use", -1)) >= 0 else {}
+	var attack := false
+	var use := false
+	if not target.is_empty() and target.get("alive", true):
+		if ELFirstScenario.is_castle(target): attack = int(target.get("owner", 0)) != int(hero.get("owner", 0))
+		elif target.get("type") in ["hero", "monster"]: attack = target.get("type") == "monster" or source.hostile(hero, target)
+		else: use = target.get("group") in STATE_ORDER_GROUPS
+	if attack: marks.append(STATE_SWORDS)
+	if hero.get("intercepted", false): marks.append(STATE_SWORDS)
+	if hero.get("fortified", false) or int(hero.get("camp", -1)) >= 0: marks.append(STATE_SHIELD)
+	if use: marks.append(STATE_LOCK)
+	return marks
 
 ## Composes the panel and returns false when this edition has no matching art.
 func build(source: ELAdventureSession) -> bool:
@@ -200,6 +232,7 @@ func build(source: ELAdventureSession) -> bool:
 	_view_sheet = profile.texture(_paths.get("ADV_SCREEN_2", ""))
 	var panel_sheet := profile.texture(_paths.get("ADV_PANEL1", ""))
 	if panel_sheet != null: _empty_slot = {"texture": panel_sheet, "source": Rect2(149, 60, 74, 49)}
+	_states_sheet = profile.texture(_paths.get("HERO_STATES", ""))
 	_build_minimap()
 	_refresh_overview(state.current_player)
 	_build_slots()
@@ -519,7 +552,14 @@ func _build_slots() -> void:
 		slot.gui_input.connect(func(event: InputEvent):
 			if event is InputEventMouseButton and event.double_click and event.pressed and event.button_index == MOUSE_BUTTON_LEFT and slot.hero >= 0 and not slot.disabled:
 				if mode == "buildings": building_opened.emit(slot.hero)
-				elif mode != "spells": hero_opened.emit(slot.hero))
+				elif mode != "spells": hero_opened.emit(slot.hero)
+			_column_wheel(event)
+			# The held right button shows a listed hero's map tooltip, as it does
+			# over the hero on the map (remake convenience, #286).
+			if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT:
+				if event.pressed and mode == "heroes" and slot.hero >= 0: _show_slot_tip(slot)
+				elif not event.pressed and _slot_tip != null: _hide_slot_tip())
+		slot.mouse_exited.connect(func(): if _slot_tip == slot: _hide_slot_tip())
 		slots.append(slot)
 
 func _build_buttons() -> void:
@@ -541,6 +581,7 @@ func _build_buttons() -> void:
 		canvas.add_child(arrow)
 		buttons[name] = arrow
 		arrow.pressed.connect(scroll.bind(-1 if name == "ScrollUp" else 1))
+		arrow.gui_input.connect(_column_wheel)
 	for list: Array in COLUMN.values():
 		for name: String in list:
 			var button := CutButton.from_rows(self, name, Vector2(PANEL_SHIFT, 9))
@@ -976,10 +1017,38 @@ func lower_precombat() -> void:
 
 ## The map tooltip belongs to the world: leaving the map area hides it.
 func _input(event: InputEvent) -> void:
-	if event is InputEventMouseMotion and tooltip.visible:
+	if event is InputEventMouseMotion and tooltip.visible and _slot_tip == null:
 		var local: Vector2 = event.position / scale_factor
 		var strip := Rect2(remake_strip.position, remake_strip.size)
 		if not map_rect().has_point(event.position) or strip.has_point(local) or (precombat.visible and Rect2(precombat.position, precombat.size).has_point(local)): show_tooltip(-1, {}, event.position)
+
+## The mouse wheel over the column's slots or arrows scrolls it an entry a
+## notch, as its arrows do (remake convenience, #278): heroes, buildings by
+## kind (mines, shops and the rest) and global spells alike.
+func _column_wheel(event: InputEvent) -> void:
+	if not (event is InputEventMouseButton and event.pressed and event.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN]): return
+	get_viewport().set_input_as_handled()
+	if _slot_tip != null: _hide_slot_tip()
+	scroll(-1 if event.button_index == MOUSE_BUTTON_WHEEL_UP else 1)
+
+func _show_slot_tip(slot: PortraitSlot) -> void:
+	var item := state.object(slot.hero)
+	if item.is_empty(): return
+	_slot_tip = slot
+	show_tooltip(slot.hero, describe(item, _art.resolve(item).get("row", {})), get_viewport().get_mouse_position())
+	_place_slot_tip.call_deferred(slot)
+
+## The column's tooltip opens to the left of the slot, level with it (the
+## map's placement would run off the screen's right edge); placed once the
+## panel has its laid-out size.
+func _place_slot_tip(slot: PortraitSlot) -> void:
+	if _slot_tip != slot or not tooltip.visible: return
+	var extent := tooltip.size
+	tooltip.position = Vector2(maxf(0.0, slot.position.x - extent.x - 6.0), clampf(slot.position.y, 0.0, maxf(0.0, 740.0 - extent.y)))
+
+func _hide_slot_tip() -> void:
+	_slot_tip = null
+	show_tooltip(-1, {}, Vector2.ZERO)
 
 ## Moves the column by one entry (-1 up, +1 down) within the listed entries.
 func scroll(step: int) -> void:
@@ -1080,6 +1149,7 @@ func refresh(selected_hero: int, budget: Dictionary, can_act: bool) -> void:
 		slots[slot_index].set_hero(id, profile.portrait(int(_art.resolve(state.object(id)).get("row", {}).get("Face", 0))) if id >= 0 and slots[slot_index].hero != id else null, id == selected)
 		var walker := state.object(id) if id >= 0 else {}
 		slots[slot_index].set_steps("%d/%d" % [int(walker.get("ap", 0)), int(walker.get("strategy_capacity", walker.get("base_ap", 0)))] if free_steps and not walker.is_empty() else "")
+		slots[slot_index].set_states(_states_sheet, hero_states(state, walker))
 	_sync_minimap_fog()
 	if tooltip.visible and tooltip_subject >= 0 and not state.object(tooltip_subject).get("alive", false): tooltip.hide()
 
@@ -1234,11 +1304,22 @@ class PortraitSlot extends BaseButton:
 		steps = text
 		queue_redraw()
 
+	## Hero state marks: HERO_STATES cells drawn at the lower left.
+	var states: Array[Rect2] = []
+	var state_sheet: Texture2D
+
+	func set_states(sheet: Texture2D, marks: Array[Rect2]) -> void:
+		if sheet == state_sheet and marks == states: return
+		state_sheet = sheet
+		states = marks
+		queue_redraw()
+
 	func set_hero(id: int, texture: Texture2D, is_selected: bool) -> void:
 		if id != hero:
 			hero = id
 			picture = texture
 			tooltip_text = ""
+			states = []
 			queue_redraw()
 		if is_selected != current:
 			current = is_selected
@@ -1253,6 +1334,11 @@ class PortraitSlot extends BaseButton:
 		if current:
 			for edge: Rect2 in [Rect2(0, 0, size.x, 3), Rect2(0, size.y - 3, size.x, 3), Rect2(0, 3, 3, size.y - 6), Rect2(size.x - 3, 3, 3, size.y - 6)]: draw_rect(edge, FRAME)
 		elif get_draw_mode() == DRAW_HOVER: draw_rect(Rect2(Vector2(0.5, 0.5), size - Vector2.ONE), Color("a09880"), false, 1.0)
+		if state_sheet != null:
+			for cell: Rect2 in states:
+				# Clipped to the slot (49 px high: the top 12 rows of the cell).
+				var shown := Vector2(cell.size.x, minf(cell.size.y, size.y - ELAdventureHud.STATE_AT.y))
+				draw_texture_rect_region(state_sheet, Rect2(ELAdventureHud.STATE_AT, shown), Rect2(cell.position, shown))
 		if not steps.is_empty():
 			var font := get_theme_default_font()
 			var width := font.get_string_size(steps, HORIZONTAL_ALIGNMENT_LEFT, -1, 12).x

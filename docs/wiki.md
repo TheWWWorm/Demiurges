@@ -17,7 +17,7 @@ In the in-game reader, choose an action below the creature model and press **Pla
 
 | Path | Contents |
 |---|---|
-| `wiki/categories.json` | Categories in their order, with English and Russian names; `"catalog": true` marks the encyclopedia's (their ids are the list pages `all-creatures`, `all-spells`, `all-artifacts`, `all-skills`, `all-specializations`) |
+| `wiki/categories.json` | Categories in their order, with English and Russian names; `"catalog": true` marks the encyclopedia's (their ids are the list pages `all-creatures`, `all-sorceries`, `all-enchantments`, `all-artifacts`, `all-skills`, `all-specializations`; the website sends the old address `all-spells` to the guide `spells`, which links both spell lists) |
 | `wiki/en/<page>.md`, `wiki/ru/<page>.md` | One article per language; the file name is the page name |
 | `web/wiki/` | The website: `index.html`, `wiki.js`, `wiki.css` and the interface texts `i18n.json` |
 | `tools/build_wiki.py` | Validates the sources and writes both outputs |

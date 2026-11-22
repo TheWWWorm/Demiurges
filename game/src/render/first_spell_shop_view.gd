@@ -27,7 +27,6 @@ const PRICE_STEP := 35.0
 const PRICE_BOX := Vector2(30, 18)
 const RED := Color(1, 0, 0)
 const WHITE := Color(1, 1, 1)
-const GREEN := Color(0, 1, 0)
 const PICK := Color("e8e0cc")
 const TIPS := {"SpellTt1": Rect2(346, 132, 26, 24), "SpellTt2": Rect2(397, 132, 30, 24), "SpellTt3": Rect2(450, 134, 30, 22), "SpellTt4": Rect2(447, 135, 30, 23)}
 
@@ -357,7 +356,7 @@ func _draw_sheet() -> void:
 			var width := font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, 14).x
 			var at := Vector2(box.get_center().x - width * 0.5, box.position.y + 14)
 			sheet.draw_string(font, at + Vector2(1, 1), text, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color(0, 0, 0, 0.9))
-			sheet.draw_string(font, at, text, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, WHITE if values.is_empty() else (RED if price_red(column, kinds[row]) else GREEN))
+			sheet.draw_string(font, at, text, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, price_ink(values, kinds[row], not values.is_empty() and price_red(column, kinds[row])))
 	# Bought slots carry a gold frame; the carried spell follows the cursor.
 	for index in mini(15, trade.pending.size()):
 		if not trade.pending[index].is_empty(): sheet.draw_rect(book_rect(shop_book_order.find(index)).grow(-1), Color(0.95, 0.8, 0.35, 0.8), false, 1.5)

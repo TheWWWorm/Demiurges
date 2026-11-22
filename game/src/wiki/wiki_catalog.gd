@@ -2,7 +2,8 @@ class_name ELWikiCatalog
 extends RefCounted
 ## Encyclopedia pages built from the loaded games (as the EI remake's
 ## WikiCatalog): one page for every creature, sorcery, enchantment, artifact,
-## skill and specialisation, and one list page per kind. Both games share one
+## skill and specialisation, and one list page per kind (sorceries and
+## enchantments have a list each). Both games share one
 ## pool: a card both games have (the same code) gets one page showing both
 ## editions side by side, with the values Etherlords II changed highlighted; a
 ## card only one game has says so. Names, descriptions and statistics come from
@@ -20,9 +21,10 @@ extends RefCounted
 ## Highlighted cells are `<td class="changed">`.
 
 const EDITIONS := ["el1", "el2"]
-const KINDS := ["creatures", "spells", "artifacts", "skills", "specializations"]
-## The list page of each kind; it is also the kind's category id.
-const LISTS := {"creatures": "all-creatures", "spells": "all-spells", "artifacts": "all-artifacts",
+const KINDS := ["creatures", "sorceries", "enchantments", "artifacts", "skills", "specializations"]
+## The list page of each kind; it is also the kind's category id. A spell is
+## listed by its newest edition's class (Etherlords II changed a few).
+const LISTS := {"creatures": "all-creatures", "sorceries": "all-sorceries", "enchantments": "all-enchantments", "artifacts": "all-artifacts",
 	"skills": "all-skills", "specializations": "all-specializations"}
 const COLORS := ["Red", "Green", "Blue", "Black", "White"]
 const RACE_KEYS := {"Red": "T_VL_CHAOTS", "Green": "T_VL_VITALS", "Blue": "T_VL_KINETS", "Black": "T_VL_SYNTHETS", "White": "T_RACE_NAME_0"}
@@ -53,8 +55,8 @@ const FLAG_KEYS := {"NoAttack": "T_CREATURE_ICON_03C", "Fly": "T_CREATURE_ICON_0
 	"Elusive": "T_CREATURE_ICON_18C", "Outerplanar": "T_CREATURE_ICON_19C", "NoTarget": "ETAMNm"}
 const LABELS := {
 	"en": {"el1": "Etherlords", "el2": "Etherlords II", "el1_short": "I", "el2_short": "II",
-		"creatures": "creatures", "spells": "spells", "artifacts": "artifacts", "skills": "skills", "specializations": "specializations",
-		"creatures_title": "All creatures", "spells_title": "All sorceries and enchantments", "artifacts_title": "All artifacts",
+		"creatures": "creatures", "sorceries": "sorceries", "enchantments": "enchantments", "artifacts": "artifacts", "skills": "skills", "specializations": "specializations",
+		"creatures_title": "All creatures", "sorceries_title": "All sorceries", "enchantments_title": "All enchantments", "artifacts_title": "All artifacts",
 		"skills_title": "All hero skills", "specializations_title": "All specializations",
 		"games": "Games", "type": "Type", "race": "Race", "faction": "Faction", "code": "Code", "artifact_code": "Artifact code",
 		"rarity": "Rarity", "cost": "Ether cost", "power": "Power", "toughness": "Toughness",
@@ -69,15 +71,16 @@ const LABELS := {
 		"count": "%d entries. Select a name for its page.", "back": "All %s",
 		"legend": "Games: I is Etherlords, II is Etherlords II. A highlighted value changed in Etherlords II (Etherlords → Etherlords II).",
 		"intro_creatures": "Every creature of both games with its ether cost, power, toughness and abilities, grouped by faction.",
-		"intro_spells": "Every sorcery and enchantment of both games with its type, rarity and ether cost, grouped by faction.",
+		"intro_sorceries": "Every sorcery of both games with its type, rarity and ether cost, grouped by faction. A spell is listed by its type in Etherlords II; the Type column marks the few that Etherlords II changed.",
+		"intro_enchantments": "Every enchantment of both games with its type, rarity and ether cost, grouped by faction. A spell is listed by its type in Etherlords II; the Type column marks the few that Etherlords II changed.",
 		"intro_artifacts": "Every artifact of both games. Artifacts are used during battle a limited number of times; some of them summon a creature.",
 		"intro_skills": "Hero skills of both games. A hero learns at most five, each up to rank 3.",
 		"intro_specializations": "Hero specializations of both games: chance-based talents in battle.",
 		"source": "Names, descriptions and values come from the games' own data.",
 		"data_note": "Your installed games are in Russian, so the encyclopedia pages are in Russian too: names, descriptions and values come from the games' own texts. The English encyclopedia is online at demiurges.wwworm.com/wiki."},
 	"ru": {"el1": "Демиурги", "el2": "Демиурги II", "el1_short": "I", "el2_short": "II",
-		"creatures": "создания", "spells": "заклинания", "artifacts": "артефакты", "skills": "навыки", "specializations": "специализации",
-		"creatures_title": "Все создания", "spells_title": "Всё колдовство и чары", "artifacts_title": "Все артефакты",
+		"creatures": "создания", "sorceries": "колдовство", "enchantments": "чары", "artifacts": "артефакты", "skills": "навыки", "specializations": "специализации",
+		"creatures_title": "Все создания", "sorceries_title": "Всё колдовство", "enchantments_title": "Все чары", "artifacts_title": "Все артефакты",
 		"skills_title": "Все навыки героев", "specializations_title": "Все специализации",
 		"games": "Игры", "type": "Вид", "race": "Раса", "faction": "Фракция", "code": "Код", "artifact_code": "Код артефакта",
 		"rarity": "Редкость", "cost": "Стоимость в эфире", "power": "Сила", "toughness": "Стойкость",
@@ -89,10 +92,11 @@ const LABELS := {
 		"both": "Есть в «Демиургах» и «Демиургах II»", "only": "Только в игре «%s»",
 		"changes": "Изменения в «Демиургах II»", "changed_from": "%s: %s → %s", "old_text": "%s в «Демиургах»:",
 		"same": "В «Демиургах II» эта карта не изменилась.",
-		"count": "Записей: %d. Выберите название, чтобы открыть страницу.", "back": "Все %s",
+		"count": "Записей: %d. Выберите название, чтобы открыть страницу.", "back": "Все %s", "back_sorceries": "Всё колдовство",
 		"legend": "Игры: I — «Демиурги», II — «Демиурги II». Выделенное значение изменилось в «Демиургах II» («Демиурги» → «Демиурги II»).",
 		"intro_creatures": "Все создания обеих игр по фракциям: стоимость в эфире, сила, стойкость и способности.",
-		"intro_spells": "Всё колдовство и все чары обеих игр по фракциям: вид, редкость и стоимость в эфире.",
+		"intro_sorceries": "Всё колдовство обеих игр по фракциям: вид, редкость и стоимость в эфире. Заклинание указано по виду в «Демиургах II»; столбец «Вид» отмечает те немногие, у которых «Демиурги II» его изменили.",
+		"intro_enchantments": "Все чары обеих игр по фракциям: вид, редкость и стоимость в эфире. Заклинание указано по виду в «Демиургах II»; столбец «Вид» отмечает те немногие, у которых «Демиурги II» его изменили.",
 		"intro_artifacts": "Все артефакты обеих игр. Артефакты применяются в бою ограниченное число раз; некоторые призывают создание.",
 		"intro_skills": "Навыки героев обеих игр. Герой знает не больше пяти навыков, каждый до 3-й ступени.",
 		"intro_specializations": "Специализации героев обеих игр — случайные таланты в бою.",
@@ -311,7 +315,8 @@ func _build() -> void:
 				"artifact_codes": artifacts.get(code, []),
 				"description": _clean(_t(edition, str(row.get("ToolTip", "")))),
 				"ability": _clean(_t(edition, str(row.get("AbilityText", "")))),
-				"kind": "artifacts" if artifact else ("creatures" if not creature.is_empty() else "spells")}
+				"kind": "artifacts" if artifact else ("creatures" if not creature.is_empty()
+				else ("enchantments" if str(row.get("Class", "")) == "Enchantment" else "sorceries"))}
 	var lists := {}
 	for kind: String in KINDS: lists[kind] = []
 	for code: String in cards:
@@ -405,7 +410,7 @@ func _card_page(code: String, records: Dictionary) -> Dictionary:
 			for price: Array in part[0]: rows.append(_row(price))
 			price_html += _table(rows, 2)
 	if not price_html.is_empty(): html += "<h2>%s</h2>%s" % [_l("price"), price_html]
-	html += "<p>%s</p>" % _link(LISTS[kind], _l("back") % _l(kind))
+	html += "<p>%s</p>" % _link(LISTS[kind], _back(kind))
 	var summary := " · ".join([_type(latest, main.row), _race(latest, str(main.row.get("Color", ""))), str(main.row.get("Cost", 0))])
 	if creature: summary += " · %s/%s" % [main.creature.get("Power", 0), main.creature.get("Toughness", 0)]
 	summary += " · " + _games_short(games)
@@ -420,6 +425,10 @@ func _card_page(code: String, records: Dictionary) -> Dictionary:
 	return {"key": card_key(code), "title": main.title, "category": LISTS[kind], "summary": summary, "html": html,
 		"search": words.strip_edges().to_lower(), "games": games, "card": code, "models": shown,
 		"kind": "creature" if creature else "card", "list": kind}
+
+## The caption of the link back to the list of `kind`.
+func _back(kind: String) -> String:
+	return _l("back_" + kind) if LABELS[language].has("back_" + kind) else _l("back") % _l(kind)
 
 func _skills(lists: Dictionary) -> void:
 	var skills := {}
@@ -549,7 +558,7 @@ func _list_page(kind: String, entries: Array) -> Dictionary:
 	var name_cell := func(entry: Dictionary) -> String: return _link(entry.page.key, entry.page.title)
 	var cost := func(edition: String, record: Dictionary) -> String: return str(record.row.get("Cost", 0))
 	match kind:
-		"creatures", "spells":
+		"creatures", "sorceries", "enchantments":
 			# Grouped by faction (the newest edition's), as the games' spellbooks.
 			var groups := {}
 			for entry: Dictionary in entries:

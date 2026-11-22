@@ -1,6 +1,6 @@
 ---
 title: About spells
-category: all-spells
+category: all-sorceries
 order: -2
 summary: Creatures, enchantments and sorceries
 ---
@@ -26,4 +26,4 @@ Some spells are artifacts: battle items with a limited number of uses. See [Rune
 
 The games' own spellbook and Encyclopedia (Etherlords II) screens describe every spell.
 
-All sorceries and enchantments of both games: [the list of spells](all-spells).
+All spells of both games: [the list of sorceries](all-sorceries) and [the list of enchantments](all-enchantments).

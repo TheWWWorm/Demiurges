@@ -12,6 +12,10 @@ extends SceneTree
 ## - A battle script's summons (chapter 13's Musician calls four dragons on its
 ##   first turn) rise in their summon effect like cast creatures, both when the
 ##   script runs before the battle opens and during it.
+## - Chapter 54's White Lord waits offstage at sea, so he counts as aboard a
+##   ship. The portal's remote attack is still fought on the Ether arena (the
+##   original's remote attack is an ethereal battle with no script arena); an
+##   ordinary attack on the same actor keeps the ship arena.
 ##
 ##   godot --headless --path game --script ../tools/el2_encounter_check.gd -- [--el2=DIR] [--verbose]
 
@@ -49,6 +53,7 @@ func _run() -> void:
 		quit(0)
 		return
 	_declines(profile)
+	_remote_arena(profile)
 	await _script_summons()
 	if profile.metal_masks != null: profile.metal_masks.stop()
 	print("EL2 encounter check: %d passed, %d failed" % [passes, failures.size()])
@@ -205,6 +210,33 @@ func _declines(profile: ELProfile) -> void:
 		if director.encounter != null: _decline_frees(state, director, hero, "el2 ch11 a fort garrison's battle")
 		break
 	state.close()
+
+# --- Remote attack arena -----------------------------------------------------
+
+func _remote_arena(profile: ELProfile) -> void:
+	for remote: bool in [false, true]:
+		var map := ELAdventureMap.new()
+		var state := ELAdventureSession.new()
+		if not map.load_map(profile, "Maps/e2mission34_44_54") or not state.start(map, 1, 212, "Maps/e2mission54", 1, true):
+			check(false, "el2 ch54 loads")
+			return
+		var director := ELAdventureDirector.new()
+		if not director.build(state):
+			check(false, "el2 ch54 director builds")
+			return
+		var lord := {}
+		for id: int in state.objects:
+			if str(state.objects[id].get("name", "")) == "m54 - White Lord": lord = state.objects[id]
+		var hero := state.object(state.main_hero)
+		if lord.is_empty() or hero.is_empty():
+			check(false, "el2 ch54 has the White Lord and the main hero")
+			return
+		if not remote: check(bool(lord.get("ship", false)), "el2 ch54 the offstage White Lord counts as aboard a ship")
+		director._begin_encounter(hero, lord, int(lord.uid), -1, remote)
+		var arena := str(director.encounter.battle.setup.get("arena", "")) if director.encounter != null and director.encounter.battle != null else ""
+		if remote: check(arena == "Ether.001", "el2 ch54 the portal's remote attack on the White Lord uses the Ether arena (got %s)" % arena)
+		else: check(arena == "Ship.001", "el2 ch54 an ordinary attack on an actor at sea uses the ship arena (got %s)" % arena)
+		state.close()
 
 # --- Battle script summons ---------------------------------------------------
 

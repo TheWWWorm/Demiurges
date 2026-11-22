@@ -338,8 +338,26 @@ func text(key: String) -> String:
 func card_icon(card: String) -> Texture2D:
 	if _icons.has(card):
 		return _icons[card]
-	_icons[card] = icon_at(int(table("CombatSpells").get(card, {}).get("Icon", 0)))
+	_icons[card] = specialisation_icon() if specialisation_mark(card) else icon_at(int(table("CombatSpells").get(card, {}).get("Icon", 0)))
 	return _icons[card]
+
+## A specialisation's own combat mark (the first game's Blinding Illusion
+## hold, Storm mastery's blessing) carries the specialisation's code, not a
+## spell card's: no CombatSpells row gives it an icon, a name or a text.
+func specialisation_mark(card: String) -> bool:
+	return not table("CombatSpells").has(card) and table("HeroesSpecs").has(card)
+
+## The icon the battle shows for a specialisation (ELCombatNotices): the
+## second game's own specialisation cell, the first game's Mastery skill icon.
+func specialisation_icon() -> Texture2D:
+	if id != "el1": return icon_at(ELCombatNotices.OWN_SPECIALISATION_ICON)
+	var index := int(ELHeroSkills.definition(self, ELCombatNotices.FIRST_SPECIALISATION_SKILL, 0).get("Icon", -1))
+	if index < 0: return icon_at(0)
+	var icon := AtlasTexture.new()
+	icon.atlas = texture("Interface/Skills/icon_1")
+	icon.region = Rect2((index / 5) * 50, (index % 5) * 50, 50, 50)
+	icon.filter_clip = true
+	return icon
 
 ## A cell of the original spell icon sheets by its global icon index.
 func icon_at(index: int) -> Texture2D:
@@ -351,6 +369,7 @@ func icon_at(index: int) -> Texture2D:
 	return atlas
 
 func card_description(card: String) -> String:
+	if specialisation_mark(card): return text(String(table("HeroesSpecs")[card].get("Desc", card)))
 	var row: Dictionary = table("CombatSpells").get(card, {})
 	return text(String(row.get("ToolTip", card)))
 

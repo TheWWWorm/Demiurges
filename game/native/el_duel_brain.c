@@ -4622,7 +4622,7 @@ static int cast_card(const Search *x, State *s, int side, int slot, int target, 
 			Unit *u = &s->u[i];
 			if (u->owner == side || (u->flags & (F_DEAD | F_GONE | F_RESTING))) continue;
 			if ((c->amount & 1) ? (u->flags & F_WALL) != 0 : (u->flags & F_RESTLESS) != 0) continue;
-			if (s->second && ((u->flags & F_NO_AFFECT) || (!(c->amount & 1) && (u->flags & F_PLANE)))) continue;
+			if (s->second && (u->flags & (F_NO_AFFECT | F_PLANE))) continue;
 			u->flags |= F_RESTING;
 			if (c->amount & 2) u->flags &= ~(uint32_t)F_ATTACKING;
 		}
@@ -4631,7 +4631,7 @@ static int cast_card(const Search *x, State *s, int side, int slot, int target, 
 		for (int i = 0; i < s->n; i++) {
 			Unit *u = &s->u[i];
 			if (u->owner != side || (u->flags & (F_DEAD | F_GONE)) || !(u->flags & F_RESTING)) continue;
-			if ((u->flags & F_ATTACKING) || u->blocks >= 0 || (s->second && (u->flags & F_NO_AFFECT))) continue;
+			if ((u->flags & F_ATTACKING) || u->blocks >= 0 || (s->second && (u->flags & (F_NO_AFFECT | F_PLANE)))) continue;
 			u->flags &= ~(uint32_t)F_RESTING;
 		}
 		break;

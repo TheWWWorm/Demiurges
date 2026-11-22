@@ -1283,6 +1283,19 @@ func _parity() -> void:
 	_fixture("cleanse and ash storm", {"heroes": [{"health": 20, "mana": 20, "hand": ["ASST", "CLSN"]}, {"health": 20, "mana": 0}], "creatures": []},
 		[["cast", 0], ["cast", 1]], func(d: ELDuel) -> bool: return d.global_enchantment_count("ASST") == (1 if game == "el1" else 0))
 	if game == "el2":
+		# #281: the second game's sweeping rest and rally pass over a creature in the Colourless Plane (a
+		# pale creature that has not manifested), Ice Storm as well as Glade; a manifested one is reached.
+		var planar := func(d: ELDuel) -> void: d.creatures[3].plane = true
+		for pair: Array in [["ICST", "ice storm"], ["GLDT", "glade"]]:
+			_fixture("%s spares the plane" % pair[1], {"heroes": [{"health": 20, "mana": 20, "hand": [pair[0]]}, {"health": 20, "mana": 0}], "after": planar,
+				"creatures": [{"card": "TIWR", "owner": 1}, {"card": "OUD3", "owner": 1}]}, [["cast", 0]],
+				func(d: ELDuel) -> bool: return bool(d.creatures[2].resting) and not bool(d.creatures[3].resting) and d.in_plane(3))
+			_fixture("%s reaches a manifested pale creature" % pair[1], {"heroes": [{"health": 20, "mana": 20, "hand": [pair[0]]}, {"health": 20, "mana": 0}],
+				"creatures": [{"card": "TIWR", "owner": 1}, {"card": "OUD3", "owner": 1}]}, [["cast", 0]],
+				func(d: ELDuel) -> bool: return bool(d.creatures[2].resting) and bool(d.creatures[3].resting))
+		_fixture("rally passes over the plane", {"heroes": [{"health": 20, "mana": 20, "hand": ["ENAL"]}, {"health": 20, "mana": 0}], "after": planar,
+			"creatures": [{"card": "TIWR", "owner": 0, "resting": true}, {"card": "OUD3", "owner": 0, "resting": true}]}, [["cast", 0]],
+			func(d: ELDuel) -> bool: return not bool(d.creatures[2].resting) and bool(d.creatures[3].resting))
 		# Weaving gives its hero the enchantment's card by name, to be laid
 		# again: the other creature's Energy Barrier on the weaver's own hero.
 		_fixture("weaving gives a card to cast", {"puzzle": "el2_tactical_v2_curiosity_glass"},

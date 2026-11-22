@@ -72,6 +72,13 @@ var frame: Texture2D
 var _frame_region := Rect2(140, 0, 50, 50)
 ## Tooltip text for a cast card (the hand's card tooltip).
 var describe_card: Callable
+## The icon list is kept but not drawn while the play history
+## (ELBattleHistory, setting "battle_history") shows the battle's plays.
+var icons_hidden := false:
+	set(value):
+		if icons_hidden == value: return
+		icons_hidden = value
+		queue_redraw()
 var _font: SystemFont
 ## The combat panel's scale (the HUD's 800x600 layout factor); lines and icons follow it.
 var ui_scale := 1.0:
@@ -219,7 +226,7 @@ func _draw() -> void:
 	if banner >= 0 and halves.size() >= 2: _draw_banner()
 	var k := maxf(ui_scale, 0.5)
 	var y := ORIGIN.y * k
-	if not icons.is_empty(): y = icon_rect(icons.size() - 1).end.y + (ICON_STEP - ICON) * k
+	if not icons.is_empty() and not icons_hidden: y = icon_rect(icons.size() - 1).end.y + (ICON_STEP - ICON) * k
 	for line: Dictionary in lines:
 		var age := float(line.age)
 		var fade := clampf((age - HOLD_LINE) / FADE_LINE, 0.0, 1.0)
@@ -232,7 +239,7 @@ func _draw() -> void:
 		y += LINE_HEIGHT * k * (1.0 - fade)
 	# Older rows scroll above the view. Keep their history for tooltips and
 	# ordering, but submit only the rows which can touch the viewport.
-	var visible_icons := visible_icon_range()
+	var visible_icons := visible_icon_range() if not icons_hidden else Vector2i.ZERO
 	for index in range(visible_icons.x, visible_icons.y):
 		var icon: Dictionary = icons[index]
 		var cell := icon_rect(index)
@@ -277,7 +284,7 @@ func visible_icon_range() -> Vector2i:
 	return Vector2i(maxi(0, over - 1) * ICON_ROW, mini(icons.size(), (over + rows) * ICON_ROW))
 
 func _has_point(point: Vector2) -> bool:
-	return _icon_at(point) >= 0
+	return not icons_hidden and _icon_at(point) >= 0
 
 func _get_tooltip(at: Vector2) -> String:
 	var index := _icon_at(at)
