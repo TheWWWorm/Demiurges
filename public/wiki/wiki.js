@@ -159,10 +159,13 @@ async function load({focus = false} = {}) {
     index = await catalogue(lang);
     $('#version').textContent = text('version', {v: index.version});
     let key = page;
-    // Addresses of the first encyclopedia, which had a page per game.
+    // Addresses of the first encyclopedia, which had a page per game, and of
+    // the one spell list, now a list of sorceries and one of enchantments
+    // (the guide "spells" links both).
     if (!index.entries.some(entry => entry.key === key)) {
-      const old = /^el[12]-(.+)$/.exec(key)?.[1];
-      const moved = !old ? '' : ['creatures', 'spells', 'artifacts', 'skills', 'specializations'].includes(old) ? 'all-' + old
+      const old = key === 'all-spells' ? 'spells' : /^el[12]-(.+)$/.exec(key)?.[1];
+      const moved = !old ? '' : old === 'spells' ? 'spells'
+        : ['creatures', 'artifacts', 'skills', 'specializations'].includes(old) ? 'all-' + old
         : /^(skill|spec)-/.test(old) ? old : 'card-' + old;
       if (moved && index.entries.some(entry => entry.key === moved)) {
         history.replaceState(null, '', href(moved, lang));

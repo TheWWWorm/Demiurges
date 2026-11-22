@@ -2,6 +2,32 @@
 
 Versions follow [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html) from 0.3.0 on.
 
+## 0.24.0
+
+### New
+
+- **Play history in battles.** A column on the left of the battle screen lists the spells, abilities, artifacts and attacks of both sides, newest on top, in a frame like the bottom panel's; it takes the place of the cast icons that used to show at the top left. Your plays have blue frames and your rival's red, attacks show as shorter tiles with a sword, and a new play slides in at the top, pushing the older ones down. Hover or tap a tile to see the card, its targets and what happened to them: damage and healing, deaths, summons and enchantments. The mouse wheel or a finger drag scrolls back through older plays. It can be turned off with "Play history" in the battle interface settings (on by default).
+- **Wheel scrolling in the side lists (Etherlords I).** The mouse wheel scrolls the map's side column (heroes, mines, shops and other buildings, global spells) one entry at a time, over the slots and their arrows.
+- **Hero info from the side list (Etherlords I).** Holding the right mouse button on a hero's portrait in the side column shows the same tooltip as on the map, beside the column.
+- **Sorceries and enchantments in the wiki.** The spells section is split into a Sorceries list and an Enchantments list in both languages; old links to the full spell list lead to the spells guide.
+
+### Battles
+
+- **Graveyards** show each card's cost and description in their tooltips, as the original does.
+- **Switching graveyards.** Looking at the other side's graveyard while one is open switches the view straight to it, without cancelling first.
+- **Blinding Illusion** specialisation shows its own icon, name and description. It still cannot be removed, as in the original.
+- **Snowstorm (Etherlords II)** no longer puts creatures in the colourless plane to sleep; Glade spares them too, and Rally passes them over.
+
+### Etherlords II adventure
+
+- **The White Lord** is fought on the ether battlefield again instead of on a ship.
+
+### Etherlords I
+
+- **Forts** work again: a fort intercepts heroes inside its area, and the area is shown on the map.
+- **Attacking a castle** shows the crossed swords on the hero's portrait.
+- **Shops** colour only the resources a spell or rune costs; the ones it doesn't use stay white.
+
 ## 0.23.0
 
 ### New
