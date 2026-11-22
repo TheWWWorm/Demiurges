@@ -2,6 +2,20 @@
 
 Versions follow [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html) from 0.3.0 on.
 
+## 0.26.0
+
+### New
+
+- **The smarter AI plans the whole turn.** It now follows its plan through card casts too, instead of thinking again after every card, so its pauses between moves are about a third as long. Self-play over about 580 duels showed it just as strong as before.
+- **The play history slides in.** As a battle's first play arrives, the history column slides in from the screen's left edge.
+
+### Fixed
+
+- **Falling leaves no longer light the arena.** In the Green arenas (and Vitals City in Etherlords II) the falling leaves were taken for flames and gave off a flickering light, with and without path tracing, so the whole arena blinked.
+- **Play history cards on high-resolution screens.** The chevron arrow is drawn whole, long spell and creature names fit instead of being cut off, the card's background no longer shows seams, and the card has a little more room on the right.
+- **A play with a single target shows it full size.** The touched character's picture is as large as the played card; plays that touched several keep the smaller pictures.
+- **Less stall at the battle's first play.** The history column readies its drawing as the battle opens instead of at the first cast.
+
 ## 0.25.0
 
 ### New

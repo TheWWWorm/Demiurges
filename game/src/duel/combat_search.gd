@@ -85,6 +85,10 @@ static var smart_family := 0.8
 ## after each one, the computer would at times change its mind half way, send
 ## one of the two attackers a win needed or pile its blockers on one attacker.
 static var smart_follow := true
+## The engine's line is followed past the cards it casts too
+## (ELCombatBrain.choose): the whole turn as it was read, instead of a new
+## think after every card. Off, each card cast is thought over afresh.
+static var smart_line_casts := true
 ## A spell or ability that would change nothing (every creature raised when
 ## none rests, ether taken from a hero that has none) is not played, nor a
 ## spell that only gives ether when the plays after it need no more ether than
@@ -1406,7 +1410,13 @@ static func _remember(duel: ELDuel, steps: Array, policy := 0) -> void:
 	for i in steps.size():
 		if copy.phase == ELDuel.Phase.FINISHED or copy.active_side() != side: break
 		var from := _place(copy).duplicate(true)
-		if not apply(copy, steps[i]): break
+		# A card is kept only where the hand still holds it at its place.
+		var step: Dictionary = steps[i]
+		if String(step.get("kind", "")) == "cast" and step.has("card"):
+			var hand: Array = copy.heroes[side].hand
+			var index := int(step.get("index", -1))
+			if index < 0 or index >= hand.size() or String(hand[index]) != String(step.card): break
+		if not apply(copy, step): break
 		if i > 0: _plans[hash(from)] = {"at": from, "command": steps[i], "policy": policy}
 	_plans_lock.unlock()
 	if copy.scripts != null and copy.scripts.search_only: copy.scripts.close()

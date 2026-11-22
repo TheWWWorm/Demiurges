@@ -78,10 +78,15 @@ const FADE_IN := 0.25
 ## Seconds a new play takes to open its place at the top, pushing the
 ## older ones down.
 const PUSH_TIME := 0.32
+## Seconds the column takes to slide in from the screen's left edge when
+## its first play arrives.
+const ENTER_TIME := 0.55
 ## The open card: the played card's picture, its text width, a touched
 ## character's picture.
 const CARD := 64.0
 const TEXT_WIDTH := 160.0
+## Extra room inside the open card's right edge (design pixels).
+const RIGHT_PAD := 8.0
 const TARGET := 40.0
 const MAX_TARGETS := 6
 ## Space between touched characters across and down, and between each
@@ -116,9 +121,12 @@ var ui_scale := 1.0:
 	set(value):
 		if ui_scale == value: return
 		ui_scale = value
+		_primed = false
 		queue_redraw()
 var _open := -1
 var _current := -1
+## Seconds since the column slid in (its first play of the battle).
+var _entered := ENTER_TIME
 ## Plays scrolled past at the top (the wheel), 0 shows the newest.
 var _scroll := 0
 ## A drag along the column: where it started, the drag not yet turned into
@@ -150,6 +158,8 @@ var _bold: SystemFont
 ## ELSecondMapTooltip.pieces), or null for a plain dark panel.
 var _tip_frame: Texture2D
 var _tip_pieces: Dictionary = {}
+## The frame's tiled pieces (ELSecondMapTooltip.tile_piece).
+var _tip_tiles := {}
 ## Interface/black/tooltip1, for the arrow's button, or null.
 var _arrow: Texture2D
 
@@ -171,6 +181,7 @@ func set_frame(piece: Dictionary) -> void:
 func set_tooltip_frame(texture: Texture2D, pieces: Dictionary) -> void:
 	_tip_frame = texture
 	_tip_pieces = pieces
+	_tip_tiles.clear()
 	queue_redraw()
 
 ## Interface/black/tooltip1: its round "next" button is the card's arrow.
@@ -179,7 +190,9 @@ func set_arrow_sheet(sheet: Texture2D) -> void:
 	var image := sheet.get_image() if sheet != null else null
 	if image != null:
 		if image.is_compressed(): image.decompress()
-		var cut := image.get_region(CHEVRONS)
+		# Sharper art gives the sheet more pixels than its size tells
+		# (ELIconUpscale): the chevrons' place is in the sheet's own pixels.
+		var cut := image.get_region(_scaled_region(CHEVRONS, image, sheet))
 		cut.convert(Image.FORMAT_RGBA8)
 		for y in cut.get_height():
 			for x in cut.get_width():
@@ -192,6 +205,12 @@ func set_arrow_sheet(sheet: Texture2D) -> void:
 				cut.set_pixel(x, y, Color(pixel, alpha))
 		_arrow = ImageTexture.create_from_image(cut)
 	queue_redraw()
+
+## `region` of a sheet in its original pixels, in those of `image` (the
+## sheet's picture, larger with sharper art).
+static func _scaled_region(region: Rect2i, image: Image, sheet: Texture2D) -> Rect2i:
+	var scale := Vector2(image.get_size()) / Vector2(sheet.get_size()).max(Vector2.ONE)
+	return Rect2i(Vector2i((Vector2(region.position) * scale).round()), Vector2i((Vector2(region.size) * scale).round()))
 
 ## The arrow between the played card and what it touched, centred on
 ## `centre`: the button's chevrons, ARROW_SIZE wide, or a drawn arrow.
@@ -253,7 +272,7 @@ func set_symbols(sheet: Texture2D) -> void:
 		if image != null:
 			if image.is_compressed(): image.decompress()
 			var at := Vector2i(SWORD_ICON.position) + SWORD_INSIDE.position
-			var cut := image.get_region(Rect2i(at, SWORD_INSIDE.size))
+			var cut := image.get_region(_scaled_region(Rect2i(at, SWORD_INSIDE.size), image, sheet))
 			cut.convert(Image.FORMAT_RGBA8)
 			# The sword is the reddish pixels; the ground is dark blue.
 			for y in cut.get_height():
@@ -273,6 +292,7 @@ func clear() -> void:
 ## A new play as it is shown. `source` is the character that played or
 ## attacked (-1 for none); the play's own result goes on it.
 func begin(side: int, kind: String, source: int, icon: Texture2D, title: String, text: String) -> void:
+	if entries.is_empty(): _entered = 0.0
 	entries.append({"side": side, "kind": kind, "source": source, "icon": icon, "title": title, "text": text, "targets": [], "source_delta": 0, "source_died": false, "age": 0.0})
 	while entries.size() > KEEP:
 		entries.pop_front()
@@ -334,6 +354,9 @@ func close() -> void:
 
 func _process(delta: float) -> void:
 	var moving := false
+	if _entered < ENTER_TIME:
+		_entered += delta
+		moving = true
 	for entry: Dictionary in entries:
 		if entry.age < maxf(FADE_IN, PUSH_TIME):
 			entry.age += delta
@@ -476,10 +499,19 @@ func _notification(what: int) -> void:
 		_open = -1
 		queue_redraw()
 
+## Whether the column's ways of drawing have been used once (see `_prime`).
+var _primed := false
+
 func _draw() -> void:
-	if entries.is_empty(): return
+	if entries.is_empty():
+		_prime()
+		return
 	var k := _k()
 	var slots := _slots()
+	# The column slides in from the left edge as the battle's first play
+	# arrives, easing out with a slight overshoot before it settles.
+	_shift = Vector2(_enter_shift(), 0.0)
+	draw_set_transform(_shift)
 	_draw_rail(slots)
 	for slot: Array in slots:
 		var index := int(slot[0])
@@ -515,6 +547,46 @@ func _draw() -> void:
 		elif entry.kind in ["ability", "artifact"]: _draw_star(rect.end - Vector2(4.0, 4.0) * k, 3.5 * k, alpha)
 	for slot: Array in slots:
 		if int(slot[0]) == _open: _draw_card(entries[_open], slot[1])
+	_shift = Vector2.ZERO
+	draw_set_transform(Vector2.ZERO)
+
+## The slide-in offset for this frame's drawing; every transform the
+## column sets starts from it.
+var _shift := Vector2.ZERO
+
+## How far left of its place the column is drawn while it slides in.
+func _enter_shift() -> float:
+	if _entered >= ENTER_TIME: return 0.0
+	var t := clampf(_entered / ENTER_TIME, 0.0, 1.0)
+	# Ease-out-back: fast at first, a touch past its place, then back.
+	var c := 1.4
+	var eased := 1.0 + (c + 1.0) * pow(t - 1.0, 3.0) + c * pow(t - 1.0, 2.0)
+	var away := _rail_rect().end.x + 8.0 * _k()
+	return -away * (1.0 - eased)
+
+## Draws, once and all but invisibly, what the first play and its open
+## card draw: a textured gradient polygon, an antialiased outline, the
+## frame pieces and the card's lettering. The first play otherwise paid
+## for all of it in the frame it appeared (the renderer readying those
+## kinds of drawing, the face's glyphs at the card's sizes), a small
+## stall at the first cast of every battle.
+func _prime() -> void:
+	# Once the battle's art is in (the view hands it over as the battle opens).
+	if _primed or not is_visible_in_tree() or size.x <= 0.0 or _frame.is_empty(): return
+	_primed = true
+	var k := _k()
+	var faint := 0.004
+	var spot := Rect2(Vector2(-200, -200) * k, Vector2(TILE, TILE) * k)
+	var texture: Texture2D = _frame.get("texture")
+	_draw_round(spot, CORNER * k, OWN_FRAME, faint)
+	if texture != null: _draw_round(spot, CORNER * k, [Color.WHITE, Color.WHITE], faint, texture, Rect2(Vector2.ZERO, texture.get_size()))
+	_outline_round(spot, CORNER * k, Color(0, 0, 0, faint), 0.6 * k)
+	if _tip_frame != null and not _tip_pieces.is_empty(): _tile(spot, _tip_pieces.fill)
+	if _arrow != null: draw_texture_rect(_arrow, spot, false, Color(1, 1, 1, faint))
+	var letters := "AaBbCcDdEeFfGgHhIiJjKkLlMmNnOoPpQqRrSsTtUuVvWwXxYyZz0123456789 .,:;!?()-+/%«»АаБбВвГгДдЕеЁёЖжЗзИиЙйКкЛлМмНнОоПпРрСсТтУуФфХхЦцЧчШшЩщЪъЫыЬьЭэЮюЯя"
+	for font_size: int in [int(round(13.0 * k)), int(round(11.0 * k)), int(round(10.0 * k))]:
+		draw_string_outline(_font, spot.position, letters, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, maxi(1, int(round(2.0 * k))), Color(0, 0, 0, faint))
+		draw_string(_font, spot.position, letters, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, Color(1, 1, 1, faint))
 
 ## The middle square of a picture (a hero's photo is wider than tall).
 func _square(texture: Texture2D) -> Rect2:
@@ -558,7 +630,7 @@ func _draw_tip_frame(rect: Rect2) -> void:
 	var border: float = _tip_pieces.border
 	var inner := Rect2(Vector2(border, border), rect.size / k - Vector2(border, border) * 2.0)
 	if inner.size.x <= 0 or inner.size.y <= 0: return
-	draw_set_transform(rect.position, 0.0, Vector2(k, k))
+	draw_set_transform(_shift + rect.position, 0.0, Vector2(k, k))
 	_tile(inner, _tip_pieces.fill)
 	_tile(Rect2(inner.position.x, 0, inner.size.x, border), _tip_pieces.top)
 	_tile(Rect2(inner.position.x, inner.end.y, inner.size.x, border), _tip_pieces.bottom)
@@ -569,10 +641,11 @@ func _draw_tip_frame(rect: Rect2) -> void:
 	draw_texture_rect_region(_tip_frame, Rect2(Vector2(inner.end.x, 0), corner), _tip_pieces.top_right)
 	draw_texture_rect_region(_tip_frame, Rect2(Vector2(0, inner.end.y), corner), _tip_pieces.bottom_left)
 	draw_texture_rect_region(_tip_frame, Rect2(inner.end, corner), _tip_pieces.bottom_right)
-	draw_set_transform(Vector2.ZERO)
+	draw_set_transform(_shift)
 
 ## Repeats a piece of the tooltip texture over `target` from its top left.
 func _tile(target: Rect2, piece: Rect2) -> void:
+	if ELSecondMapTooltip.tile_piece(self, _tip_frame, piece, target, _tip_tiles): return
 	var y := target.position.y
 	while y < target.end.y:
 		var h := minf(piece.size.y, target.end.y - y)
@@ -648,12 +721,12 @@ func _draw_rail(slots: Array) -> void:
 		var right := (destination.size.x - FRAME_MIDDLE) * shrink
 		var stretch := maxf(0.0, length - left - right)
 		# Turned a quarter clockwise: the oval's length runs down the screen.
-		draw_set_transform(Vector2(rail.end.x, rail.position.y), PI / 2, Vector2(k, k))
+		draw_set_transform(_shift + Vector2(rail.end.x, rail.position.y), PI / 2, Vector2(k, k))
 		draw_texture_rect_region(texture, Rect2(Vector2.ZERO, Vector2(left, DEPTH)), Rect2(source.position, Vector2(FRAME_MIDDLE * scale_x, source.size.y)))
 		var slice := Rect2(source.position + Vector2((FRAME_MIDDLE - FRAME_SLICE * 0.5) * scale_x, 0), Vector2(FRAME_SLICE * scale_x, source.size.y))
 		draw_texture_rect_region(texture, Rect2(Vector2(left, 0), Vector2(stretch, DEPTH)), slice)
 		draw_texture_rect_region(texture, Rect2(Vector2(left + stretch, 0), Vector2(right, DEPTH)), Rect2(source.position + Vector2(FRAME_MIDDLE * scale_x, 0), Vector2(source.size.x - FRAME_MIDDLE * scale_x, source.size.y)))
-		draw_set_transform(Vector2.ZERO)
+		draw_set_transform(_shift)
 	else:
 		draw_rect(rail, Color(0.06, 0.05, 0.04, 0.9))
 		draw_rect(rail.grow(1.0 * k), RIM, false, 2.0 * k)
@@ -679,12 +752,12 @@ func _draw_sword(corner: Vector2, extent: float, alpha: float) -> void:
 		var length := extent * 1.41
 		var drawn := Vector2(picture.x * length / picture.y, length)
 		var outline := maxf(1.0, 0.7 * k)
-		draw_set_transform(rect.get_center(), PI / 4, Vector2.ONE)
+		draw_set_transform(_shift + rect.get_center(), PI / 4, Vector2.ONE)
 		var placed := Rect2(-drawn * 0.5, drawn)
 		for offset: Vector2 in [Vector2(-1, 0), Vector2(1, 0), Vector2(0, -1), Vector2(0, 1)]:
 			draw_texture_rect(_cursor_sword, Rect2(placed.position + offset * outline, placed.size), false, Color(0, 0, 0, 0.9 * alpha))
 		draw_texture_rect(_cursor_sword, placed, false, Color(1.15, 1.15, 1.15, alpha))
-		draw_set_transform(Vector2.ZERO)
+		draw_set_transform(_shift)
 		return
 	if _sword != null:
 		var step := maxf(1.0, 0.75 * k)
@@ -734,25 +807,38 @@ func _draw_card(entry: Dictionary, tile: Rect2) -> void:
 	var text := String(entry.text)
 	var picture_size := _shaped(entry.icon, CARD) * k
 	# The text column is as wide as its widest line, up to TEXT_WIDTH.
-	var widest := _font.get_string_size(title, HORIZONTAL_ALIGNMENT_LEFT, -1, title_size).x
+	var widest := 0.0
 	for line in text.split("\n"): widest = maxf(widest, _font.get_string_size(line, HORIZONTAL_ALIGNMENT_LEFT, -1, text_size).x)
-	var card_width := maxf(picture_size.x, minf(TEXT_WIDTH * k, widest + 2.0 * k))
+	# The name is never cut: a longer one widens the column past TEXT_WIDTH
+	# (the outline needs a little room on each side too).
+	var title_width := _font.get_string_size(title, HORIZONTAL_ALIGNMENT_LEFT, -1, title_size).x + 6.0 * k
+	var card_width := maxf(maxf(picture_size.x, title_width), minf(TEXT_WIDTH * k, widest + 2.0 * k))
 	var text_height := 0.0
 	if not text.is_empty(): text_height = _font.get_multiline_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, card_width, text_size, 9).y
 	var targets: Array = entry.targets.slice(0, MAX_TARGETS)
 	var columns := mini(targets.size(), 3)
 	var rows := ceili(targets.size() / 3.0)
 	# Every touched character's cell is as wide as the widest picture.
-	var cell_width := TARGET * k
-	for target: Dictionary in targets: cell_width = maxf(cell_width, _shaped(target.icon, TARGET).x * k)
-	var row_height := TARGET * k + name_size * 1.9
+	# A play that touched one character shows it as large as the played
+	# card, and its name in the text's size; several are drawn smaller.
+	var face_height := CARD if targets.size() == 1 else TARGET
+	if targets.size() == 1: name_size = text_size
+	var cell_width := face_height * k
+	for target: Dictionary in targets: cell_width = maxf(cell_width, _shaped(target.icon, face_height).x * k)
+	# And as wide as the longest name, so a name is shown whole (only one
+	# past the text column's width is shortened).
+	for target: Dictionary in targets:
+		cell_width = maxf(cell_width, minf(TEXT_WIDTH * k, _font.get_string_size(String(target.name), HORIZONTAL_ALIGNMENT_LEFT, -1, name_size).x + 4.0 * k))
+	var row_height := face_height * k + name_size * 1.9
 	var target_block := Vector2.ZERO
 	if not targets.is_empty():
 		target_block = Vector2(columns * cell_width + (columns - 1) * TARGET_GAP * k, rows * row_height + (rows - 1) * (TARGET_ROW_GAP * k - name_size * 1.9))
 	var arrow := (ARROW_GAP * 2.0 + ARROW_SIZE) * k if not targets.is_empty() else 0.0
 	var card_height := picture_size.y + title_size * 1.6 + text_height + 4.0 * k
 	var inner := Vector2(card_width + arrow + target_block.x, maxf(card_height, target_block.y))
-	var panel_size := inner + Vector2(pad, pad) * 2.0
+	# A little more room on the right than the left: the last name or
+	# picture otherwise sat against the frame's edge.
+	var panel_size := inner + Vector2(pad, pad) * 2.0 + Vector2(RIGHT_PAD * k, 0)
 	var at := Vector2(_rail_rect().end.x + 8.0 * k, tile.position.y + tile.size.y * 0.5 - panel_size.y * 0.5)
 	at.y = clampf(at.y, 4.0 * k, maxf(4.0 * k, size.y - BOTTOM * k * 0.5 - panel_size.y))
 	var panel := Rect2(at, panel_size)
@@ -773,23 +859,22 @@ func _draw_card(entry: Dictionary, tile: Rect2) -> void:
 	# where the panel allows; more rows are centred in the panel. The arrow
 	# runs halfway between the picture and them, and halfway in height.
 	var block_y := origin.y + (inner.y - target_block.y) * 0.5
-	if rows == 1: block_y = clampf(picture.get_center().y - TARGET * k * 0.5, origin.y, origin.y + inner.y - target_block.y)
+	if rows == 1: block_y = clampf(picture.get_center().y - face_height * k * 0.5, origin.y, origin.y + inner.y - target_block.y)
 	var block_at := Vector2(origin.x + card_width + arrow, block_y)
-	var arrow_y := (picture.get_center().y + block_y + TARGET * k * 0.5) * 0.5 if rows == 1 else origin.y + inner.y * 0.5
+	var arrow_y := (picture.get_center().y + block_y + face_height * k * 0.5) * 0.5 if rows == 1 else origin.y + inner.y * 0.5
 	_draw_arrow(Vector2((picture.end.x + block_at.x) * 0.5, arrow_y))
 	for i in targets.size():
 		var target: Dictionary = targets[i]
-		var cell := block_at + Vector2((i % 3) * (cell_width + TARGET_GAP * k), (i / 3) * (TARGET + TARGET_ROW_GAP) * k)
-		var face_size := _shaped(target.icon, TARGET) * k
+		var cell := block_at + Vector2((i % 3) * (cell_width + TARGET_GAP * k), (i / 3) * (face_height + TARGET_ROW_GAP) * k)
+		var face_size := _shaped(target.icon, face_height) * k
 		var face := Rect2(cell + Vector2((cell_width - face_size.x) * 0.5, 0), face_size)
 		_framed_picture(face, target.icon, _side_frame(int(target.get("side", -1))))
 		if target.summoned: _draw_star(face.position + Vector2(7, 7) * k, 6.0 * k, 1.0)
 		elif target.enchanted: draw_circle(face.position + Vector2(7, 7) * k, 5.0 * k, Color("8c6cd9"))
 		_draw_result(face, int(target.delta), bool(target.died))
-		# A name keeps to its cell and a little of the gap on each side.
-		var name_width := cell_width + TARGET_GAP * k * 0.7
-		var name := _fitted(_font, String(target.name), name_width, name_size)
-		draw_string(_font, Vector2(cell.x - TARGET_GAP * k * 0.35, face.end.y + name_size * 1.8), name, HORIZONTAL_ALIGNMENT_CENTER, name_width, name_size, TIP_INK)
+		# A name keeps to its cell, which is sized to hold it.
+		var name := _fitted(_font, String(target.name), cell_width, name_size)
+		draw_string(_font, Vector2(cell.x, face.end.y + name_size * 1.8), name, HORIZONTAL_ALIGNMENT_CENTER, cell_width, name_size, TIP_INK)
 	if entry.targets.size() > MAX_TARGETS:
 		var more := "+%d" % (entry.targets.size() - MAX_TARGETS)
 		draw_string(_bold, panel.end - Vector2(pad + 30.0 * k, pad * 0.5), more, HORIZONTAL_ALIGNMENT_RIGHT, 30.0 * k, title_size, TIP_INK)

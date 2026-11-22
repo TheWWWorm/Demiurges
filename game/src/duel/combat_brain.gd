@@ -2018,16 +2018,44 @@ static func choose(ctx: ELCombatSearch.Context, s: ELDuel, phases: int, budget: 
 		whole.merge(result)
 		if String(whole.status) != "proven": whole.proven = 0
 		return whole
-	# The rest of the line it means to play. A later card would name a place
-	# in a hand that the first command has already changed, so the line stops
-	# at the first one.
+	# The rest of the line it means to play, so that the turn is carried out
+	# as it was read, without thinking again between its commands. The
+	# engine keeps a played card's place in the hand, the game closes the
+	# gap: a later card's place is moved down past the cards cast before it
+	# (`smart_line_casts`; off, the line stops at its first card). A card
+	# that came into the hand during the line, a second thing carried
+	# (one used up leaves the list), or a creature that came into play
+	# during the line ends it. ELCombatSearch._remember checks each card
+	# against the hand before keeping the step.
 	var line: Array = [command]
 	var count := int(raw[8]) if raw.size() > 8 else 0
+	var cast_slots: Array[int] = []
+	var carried_used := false
+	if int(raw[1]) == 3:
+		if int(raw[2]) >= ART_BASE: carried_used = true
+		else: cast_slots.append(int(raw[2]))
 	for i in range(1, count):
 		var at := 9 + i * 4
-		if at + 3 >= raw.size() or int(raw[at]) == 3: break
-		var step := _command_of(s, ids, int(raw[at]), int(raw[at + 1]), int(raw[at + 2]), int(raw[at + 3]))
+		if at + 3 >= raw.size(): break
+		var kind := int(raw[at])
+		var a := int(raw[at + 1])
+		if kind == 3:
+			if not ELCombatSearch.smart_line_casts: break
+			if a >= ART_BASE:
+				if carried_used: break
+			elif a >= HAND or cast_slots.has(a): break
+		# A place past the creatures told names one that came into play
+		# during the line.
+		if _names_newcomer(kind, a, int(raw[at + 2]), int(raw[at + 3]), ids.size()): break
+		var step := _command_of(s, ids, kind, a, int(raw[at + 2]), int(raw[at + 3]))
 		if String(step.kind) == "end_phase": break
+		if kind == 3:
+			if a >= ART_BASE: carried_used = true
+			else:
+				var shifted := a
+				for gone: int in cast_slots: if gone < a: shifted -= 1
+				cast_slots.append(a)
+				if String(step.kind) == "cast": step.index = shifted
 		line.append(step)
 	var chosen := {"command": command, "line": line, "value": float(raw[0]) * 0.001, "positions": int(raw[5]), "raw": raw, "proven": (int(raw[7]) >> 16) & 15 if raw.size() > 7 else 0,
 		"settled": (int(raw[7]) >> 20) & 15 if raw.size() > 7 else 0, "cut": (int(raw[7]) >> 24) & 1 if raw.size() > 7 else 0, "guarded": (int(raw[7]) >> 25) & 15 if raw.size() > 7 else 0,
@@ -2058,6 +2086,16 @@ static func _result(raw: PackedInt32Array) -> Dictionary:
 		"crowding": last_crowding.duplicate()}
 
 ## One command of the engine's own kind, as the game names them.
+## Whether an engine command names a creature place at or past `told`, one
+## that came into play during the line (see `choose`).
+static func _names_newcomer(kind: int, a: int, b: int, c: int, told: int) -> bool:
+	match kind:
+		1, 4: return a >= told
+		2, 7, 11: return a >= told or b >= told
+		3: return b >= told
+		8: return b >= told or c >= told
+	return false
+
 static func _command_of(s: ELDuel, ids: Array, kind: int, a: int, b: int, c: int) -> Dictionary:
 	match kind:
 		1:

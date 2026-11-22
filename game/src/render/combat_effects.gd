@@ -495,7 +495,10 @@ func _step_arena_weather(delta: float) -> void:
 		_arena_tick -= ARENA_TICK
 		for cue in _arena_random:
 			if _arena_chance.randf() >= float(cue.chance): continue
-			if _spawn(cue.path, false, 0, cue.where, null, true).is_empty(): continue
+			var drift := _spawn(cue.path, false, 0, cue.where, null, true)
+			if drift.is_empty(): continue
+			# Passing weather gives no light (see glow_sources).
+			drift.weather = true
 			if _arena_sound.is_valid() and not String(cue.sound).is_empty(): _arena_sound.call(cue.sound)
 
 ## Starts the effects a cast of `card` names (summons: the colour's effect).
@@ -747,6 +750,7 @@ func _spawn(path: String, reverse: bool, effect_frames: int, where: Transform3D,
 	emitter.bearer = null
 	emitter.visibility_link = null
 	emitter.loop = false
+	emitter.weather = false
 	emitter.life = file.frames
 	if file.loop_end > 0 and follow == null: emitter.life = maxi(effect_frames, 1)
 	emitter.active = true
@@ -776,7 +780,7 @@ func _free_emitter(ambient: bool) -> Dictionary:
 	node.visible = false
 	add_child(node)
 	var emitter := {"node": node, "mesh": mesh, "entry": {}, "elapsed": 0.0, "frame": -1, "life": 0, "reverse": false, "active": false, "follow": null, "following": false, "bearer": null, "carry": Transform3D.IDENTITY,
-		"track": PackedFloat32Array(), "opacity": 1.0, "own": null, "glow": [], "shadow": ELParticleFile.shadow_twin(node, true)}
+		"track": PackedFloat32Array(), "opacity": 1.0, "own": null, "glow": [], "weather": false, "shadow": ELParticleFile.shadow_twin(node, true)}
 	pool.append(emitter)
 	return emitter
 
@@ -1360,6 +1364,12 @@ func glow_sources() -> Array:
 	for at in all.size():
 		var emitter: Dictionary = all[at]
 		if not emitter.active or not emitter.node.is_visible_in_tree(): continue
+		# The arena's passing weather (falling leaves, drifting sparks) is
+		# scenery, not a fire: the leaf sheets of the life arenas are bright
+		# and coloured enough to pass for flames, and each fall lit a lamp
+		# (traced light with path tracing) that flared over the whole
+		# battlefield and went out again.
+		if emitter.get("weather", false): continue
 		var glow: Array = emitter.glow
 		if glow.is_empty(): continue
 		var node: MultiMeshInstance3D = emitter.node

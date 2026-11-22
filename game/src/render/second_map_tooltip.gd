@@ -39,6 +39,8 @@ func setup(source: ELProfile, serif: Font) -> void:
 	_picture.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_picture.stretch_mode = TextureRect.STRETCH_SCALE
 	_picture.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	# The frame repeats its pieces (tile_piece); the picture keeps to its own.
+	_picture.texture_repeat = CanvasItem.TEXTURE_REPEAT_DISABLED
 	add_child(_picture)
 	hide()
 
@@ -64,6 +66,7 @@ func set_content(id: int, content: Dictionary) -> void:
 		label.add_theme_font_size_override("font_size", font_size)
 		label.add_theme_color_override("font_color", ink)
 		label.add_theme_constant_override("line_spacing", LINE_SPACING)
+		label.texture_repeat = CanvasItem.TEXTURE_REPEAT_DISABLED
 		add_child(label)
 		label.size = label.get_minimum_size()
 		var at := Vector2(entry.at) + Vector2(0.0, wrap_offset)
@@ -149,6 +152,40 @@ static func square_pieces(source: Rect2, border: float) -> Dictionary:
 		"top_left": Rect2(source.position, corner), "top_right": Rect2(Vector2(middle.end.x, source.position.y), corner),
 		"bottom_left": Rect2(Vector2(source.position.x, middle.end.y), corner), "bottom_right": Rect2(middle.end, corner)}
 
+## The frame's tiled pieces as textures of their own (see `tile_piece`).
+var _tiles := {}
+
+## Repeats `piece` of `sheet` over `target` on `item` as one rectangle of a
+## texture holding only that piece, repeated by the renderer. Drawn as
+## piece-sized quads instead, every quad's edge shows as a faint line once
+## the frame is scaled by a fraction (a large screen). The pieces are made once per sheet and kept in `cache`;
+## `item` repeats textures from then on. False when the sheet cannot be
+## read, for the quads to be drawn.
+static func tile_piece(item: CanvasItem, sheet: Texture2D, piece: Rect2, target: Rect2, cache: Dictionary) -> bool:
+	if sheet == null or target.size.x <= 0.0 or target.size.y <= 0.0: return false
+	var key := [sheet.get_rid(), piece]
+	if not cache.has(key):
+		cache[key] = null
+		# The original pixels: the upscaled sheet's pieces carry shading
+		# from what bordered them in the sheet, a grid once repeated, and a
+		# fill or edge of plain texture gains nothing from more pixels.
+		var image := ELIconUpscale.image_of(sheet)
+		if image != null:
+			image = image.duplicate() as Image
+			if image.is_compressed(): image.decompress()
+			var scale := Vector2(image.get_size()) / Vector2(sheet.get_size()).max(Vector2.ONE)
+			var region := Rect2i(Vector2i((piece.position * scale).round()), Vector2i((piece.size * scale).round()))
+			region = region.intersection(Rect2i(Vector2i.ZERO, image.get_size()))
+			if region.size.x > 0 and region.size.y > 0:
+				var texture := ImageTexture.create_from_image(image.get_region(region))
+				texture.set_size_override(Vector2i(piece.size))
+				cache[key] = texture
+	var made: Variant = cache[key]
+	if made == null: return false
+	item.texture_repeat = CanvasItem.TEXTURE_REPEAT_ENABLED
+	item.draw_texture_rect(made, target, true)
+	return true
+
 ## Nine-slice: corners, edges tiled along their length, the centre tiled.
 func _draw() -> void:
 	if _frame == null:
@@ -170,6 +207,7 @@ func _draw() -> void:
 
 ## Repeats a piece of the texture over `target` from its top-left corner.
 func _tile(target: Rect2, piece: Rect2) -> void:
+	if tile_piece(self, _frame, piece, target, _tiles): return
 	var y := target.position.y
 	while y < target.end.y:
 		var h := minf(piece.size.y, target.end.y - y)
