@@ -1797,14 +1797,71 @@ static void take_back(State *s, int side, int kind) {
 	s->limit = 1;
 }
 
-/* A stolen creature that dissipates goes back to the hero it came from unless
- * that army is full, its control enchantment left on it, inert in the plane
- * (#267). */
-static void dissipate_home(State *s, int index) {
+/* The hero a creature's control enchantments give it to: the caster of the
+ * newest one (older ones count for nothing), or the hero it came from when
+ * none is left or it is in the second game's Colourless Plane, where control
+ * sleeps. `skip`: an enchantment row to leave out, as if already gone. */
+static int control_side(const State *s, int index, int skip) {
+	const Unit *u = &s->u[index];
+	int side = u->home > 0 ? u->home - 1 : u->owner;
+	if (s->second && (u->flags & (F_PLANE | F_GONE))) return side;
+	for (int r = 0; r < s->enchs; r++)
+		if (r != skip && s->ench[r].unit == index && s->ench[r].kind == EN_CONTROL) side = s->ench[r].caster;
+	return side;
+}
+
+/* Whether a control enchantment may be dispelled: the second game will not
+ * send the creature into a full army; the first will not take it off while
+ * its caster's army is full without the creature. */
+static int control_dispels(const State *s, int r) {
+	const Ench *e = &s->ench[r];
+	const Unit *u = &s->u[e->unit];
+	if (e->kind != EN_CONTROL) return 1;
+	if (s->second) {
+		int after = control_side(s, e->unit, r);
+		return after == u->owner || army_size(s, after) < ARMY;
+	}
+	return e->caster == u->owner || army_size(s, e->caster) < ARMY;
+}
+
+/* The creature goes to the hero its control enchantments name, as one is
+ * laid or taken off or it enters or leaves the plane: out of the fight, to
+ * wait a turn (unless it needs no rest in the second game). Where that army
+ * is full it stays. It forgets where it came from once home with no control
+ * enchantment left. */
+static void settle_control(State *s, int index) {
 	Unit *u = &s->u[index];
-	if (u->home <= 0 || u->home - 1 == u->owner || !worn_kind(s, index, EN_CONTROL)) return;
-	if (army_size(s, u->home - 1) >= ARMY) return;
-	change_sides((const Search *)s->rules, s, index, u->home - 1);
+	if (u->home <= 0 || (u->flags & F_DEAD)) return;
+	int side = control_side(s, index, -1);
+	if (side != u->owner && army_size(s, side) < ARMY) {
+		change_sides((const Search *)s->rules, s, index, side);
+		if (u->fate & FATE_READY) u->flags &= ~(uint32_t)F_SICK;
+		else u->flags |= F_SICK;
+		u->flags &= ~(uint32_t)F_ATTACKING;
+		u->blocks = -1;
+	}
+	if (u->home - 1 == u->owner && !worn_kind(s, index, EN_CONTROL)) u->home = 0;
+}
+
+/* A stolen creature that dissipates goes back to the hero it came from unless
+ * that army is full, its control enchantment left on it, asleep in the plane. */
+static void dissipate_home(State *s, int index) {
+	settle_control(s, index);
+}
+
+/* Its hero pays the regeneration and the creature stands whole again. */
+static void regenerate_unit(State *s, Unit *t, int regeneration) {
+	/* A complicity heals its hero by five whenever anything regenerates. */
+	for (int side = 0; side < 2; side++) s->health[side] += 5 * s->he[side][HE_COPL];
+	pay(s, t->owner, regeneration);
+	t->damage = 0;
+	t->flags |= F_REGENERATED;
+	/* The second game takes a creature that regenerates outside a fight
+	 * out of the attack or the block it stood in. */
+	if (s->second && !s->in_fight) {
+		t->flags &= ~(uint32_t)F_ATTACKING;
+		t->blocks = -1;
+	}
 }
 
 static void finish_unit(State *s, int index) {
@@ -1824,17 +1881,7 @@ static void finish_unit(State *s, int index) {
 		return;
 	}
 	if ((saved || regeneration > 0) && !diseased(s, t->owner) && s->ether[t->owner] >= regeneration) {
-		/* A complicity heals its hero by five whenever anything regenerates. */
-		for (int side = 0; side < 2; side++) s->health[side] += 5 * s->he[side][HE_COPL];
-		pay(s, t->owner, regeneration);
-		t->damage = 0;
-		t->flags |= F_REGENERATED;
-		/* The second game takes a creature that regenerates outside a fight
-		 * out of the attack or the block it stood in. */
-		if (s->second && !s->in_fight) {
-			t->flags &= ~(uint32_t)F_ATTACKING;
-			t->blocks = -1;
-		}
+		regenerate_unit(s, t, regeneration);
 	} else if ((t->flags & F_DISSIPATES) && may_shift(s, t) && !worn_kind(s, (int)(t - s->u), EN_LOCK)) {
 		shift_toll(s, t->owner);
 		t->damage = 0;
@@ -2011,6 +2058,8 @@ static int manifest(const Search *x, State *s, int i) {
 		for (int holder = 0; holder < 2; holder++) copies += under_charm(x, s, i, holder, k);
 		if (copies > 0) lend_unit(x, s, u, k, copies);
 	}
+	/* Control wakes with it: it goes to the caster of the newest. */
+	settle_control(s, i);
 	banners(s);
 	if (!(u->flags & (F_DEAD | F_GONE)) && u->damage >= u->toughness) perish_unit(s, i);
 	/* A beacon on it brings the rest of its race in its army along, each of
@@ -2037,6 +2086,8 @@ static int banish(const Search *x, State *s, int i) {
 	u->flags |= F_PLANE;
 	u->flags &= ~(uint32_t)F_ATTACKING;
 	u->blocks = -1;
+	/* Control sleeps in the plane: it goes back to the hero it came from. */
+	settle_control(s, i);
 	banners(s);
 	return 1;
 }
@@ -2130,11 +2181,10 @@ static void unwear(State *s, int r) {
 	/* A water link is its caster's, and changes nothing in the creature. */
 	if ((u->flags & F_DEAD) || e.kind == EN_WATER) return;
 	uint32_t others = 0;
-	int controls = 0, shields = 0, mutes = 0, holds = 0;
+	int shields = 0, mutes = 0, holds = 0;
 	for (int j = 0; j < s->enchs; j++)
 		if (s->ench[j].unit == e.unit) {
 			others |= s->ench[j].flags;
-			controls += s->ench[j].kind == EN_CONTROL;
 			holds += s->ench[j].kind == EN_HOLD;
 			shields += s->ench[j].shields;
 			mutes += s->ench[j].mutes;
@@ -2216,18 +2266,9 @@ static void unwear(State *s, int r) {
 		if (u->barriers > 0) u->barriers--;
 		break;
 	case EN_CONTROL:
-		/* It goes home as it stands, out of the fight, to wait a turn. */
-		if (!controls && u->home > 0) {
-			int home = u->home - 1, away = home != u->owner;
-			u->home = 0;
-			change_sides((const Search *)s->rules, s, e.unit, home);
-			if (away) {
-				if (u->fate & FATE_READY) u->flags &= ~(uint32_t)F_SICK;
-				else u->flags |= F_SICK;
-				u->flags &= ~(uint32_t)F_ATTACKING;
-				u->blocks = -1;
-			}
-		}
+		/* It falls to the newest control enchantment left, or goes home;
+		 * taking off an older one changes nothing. */
+		settle_control(s, e.unit);
 		break;
 	case EN_ALPHA:
 		/* An alpha strike always costs the creature its life. */
@@ -2254,7 +2295,7 @@ static void strip_unit(State *s, int index) {
 	for (int r = s->enchs - 1; r >= 0; r--)
 		if (s->ench[r].unit == index && s->ench[r].kind != EN_WATER) forget_ench(s, r);
 	if (!u->worn || (u->flags & F_DEAD)) return;
-	int health = u->toughness - u->worn_health, fate = u->fate, home = u->home;
+	int health = u->toughness - u->worn_health, fate = u->fate;
 	add_power(u, -u->worn_power);
 	u->discards = (int8_t)imax(0, u->discards - u->worn_discards);
 	u->worn_discards = 0;
@@ -2276,16 +2317,11 @@ static void strip_unit(State *s, int index) {
 	u->worn_power = u->worn_health = u->worn_lethal = 0;
 	u->worn_flags = 0;
 	u->worn_ready = u->worn_resting = 0;
-	u->home = 0;
-	int away = home > 0 && home - 1 != u->owner;
-	if (home > 0) change_sides((const Search *)s->rules, s, index, home - 1);
-	if (away) {
-		/* It goes back as it stands, out of the fight, to wait a turn. */
-		if (fate & FATE_READY) u->flags &= ~(uint32_t)F_SICK;
-		else u->flags |= F_SICK;
-		u->flags &= ~(uint32_t)F_ATTACKING;
-		u->blocks = -1;
-	}
+	/* With no control enchantment left it goes back as it stands, out of the
+	 * fight, to wait a turn, unless its own army is full. */
+	u->fate = fate & FATE_READY;
+	settle_control(s, index);
+	u->fate = 0;
 	if (fate & (FATE_DIES | FATE_DESTROYED)) kill_unit(s, index);
 	else if (u->damage >= u->toughness) perish_unit(s, index);
 }
@@ -2685,7 +2721,7 @@ static void resolve(State *s, const int8_t *target) {
 		if (!s->second && (before >> i & 1)) continue;
 		if (!(a->flags & F_RESTLESS)) a->flags |= F_RESTING;
 		int remaining = fight_damage(s, a);
-		int blocked = 0, meets = 0, walled = 0, gazed = 0, faced = 0;
+		int blocked = 0, meets = 0, gazed = 0, faced = 0;
 		for (int j = 0; j < s->n; j++) {
 			if (target[j] != i) continue;
 			int key = s->u[j].rank && s->u[j].blocks == i ? s->u[j].rank : 256 + j, at = meets++;
@@ -2716,9 +2752,14 @@ static void resolve(State *s, const int8_t *target) {
 				break;
 			}
 			/* The walls' masteries: a wall of stone dooms an attacker on the
-			 * ground, a wall of air one that flies. */
-			if (b->mastery == SPEC_RWSW && !(a->flags & F_FLY) && spec_roll(s, b->owner, SPEC_RWSW, 1)) walled = 1;
-			else if (b->mastery == SPEC_UWAW && (a->flags & F_FLY) && spec_roll(s, b->owner, SPEC_UWAW, 1)) walled = 1;
+			 * ground, a wall of air one that flies. Both games only mark it
+			 * for destruction before the blows: it dies after the fight with
+			 * what a destroying strike marked. */
+			if ((b->mastery == SPEC_RWSW && !(a->flags & F_FLY) && spec_roll(s, b->owner, SPEC_RWSW, 1))
+				|| (b->mastery == SPEC_UWAW && (a->flags & F_FLY) && spec_roll(s, b->owner, SPEC_UWAW, 1))) {
+				a->flags |= F_POISONED;
+				note_poisoned(s, &marked, poisoned, &poisons);
+			}
 			/* A blocker that strikes first strikes once. A hornet's mastery
 			 * may take that from it, or give it to a hornet that blocks:
 			 * the blocker's hero rolls before the attacker's. */
@@ -2752,7 +2793,6 @@ static void resolve(State *s, const int8_t *target) {
 		 * hero with its whole blow; so does what tramples, with what is left. */
 		else if (!(a->flags & (F_DEAD | F_REGENERATED | F_GONE)) && remaining > 0 && ((gazed > 0 && gazed == faced) || (a->flags & F_TRAMPLE)))
 			hurt_hero(s, defender, remaining, i);
-		if (walled && !(a->flags & F_DEAD)) spell_damage(s, i, 20000);
 		note_poisoned(s, &marked, poisoned, &poisons);
 		/* What kept it from resting may have died in this very fight. */
 		if (!(a->flags & (F_DEAD | F_GONE | F_RESTLESS))) a->flags |= F_RESTING;
@@ -2765,13 +2805,16 @@ static void resolve(State *s, const int8_t *target) {
 	/* A destroying strike kills what it marked, unless that creature already
 	 * regenerated in this fight; regeneration and dissipation still answer.
 	 * The kill is not combat damage, so a creature nothing may affect keeps
-	 * only the damage of the blow itself, as in the game. */
+	 * only the damage of the blow itself, as in the game; a pain link passes
+	 * the health it took on to its hero. */
 	note_poisoned(s, &marked, poisoned, &poisons);
 	for (int k = 0; k < poisons; k++) {
 		int i = poisoned[k];
 		Unit *u = &s->u[i];
 		if (!(u->flags & F_POISONED) || (u->flags & (F_DEAD | F_GONE | F_NO_AFFECT))) continue;
 		if ((u->flags & F_REGENERATED) && !(before >> i & 1)) continue;
+		int left = imax(1, u->toughness - u->damage);
+		for (int p = 0; p < u->linked; p++) pain_hero(s, u->owner, left);
 		u->damage = (int16_t)imax(u->damage, u->toughness);
 		finish_unit(s, i);
 	}
@@ -4191,8 +4234,8 @@ static int ench_price(const Search *x, const State *s, int holder, int what, int
 		if (e->unit != holder || e->code != what || e->kind == EN_WATER) continue;
 		if (aimed == 2) return e->price;
 		if (e->fixed) continue;
-		/* One brought over stays while its own army has no room for it. */
-		if (aimed != 3 && e->kind == EN_CONTROL && u->home > 0 && u->home - 1 != u->owner && army_size(s, u->home - 1) >= ARMY) continue;
+		/* A control enchantment stays where taking it off breaks the army limit. */
+		if (aimed != 3 && !control_dispels(s, r)) continue;
 		return e->price;
 	}
 	return -1;
@@ -4370,10 +4413,11 @@ static int cast_card(const Search *x, State *s, int side, int slot, int target, 
 	}
 	/* An enchantment to take off must be one that comes off; the one that
 	 * pays what it cost pays that on top. */
+	int owed_after = 0;
 	if (c->effect == EFF_DISPEL) {
 		int owed = ench_price(x, s, target, choice, 1);
 		if (owed < 0) return 0;
-		if (c->amount & 1) price += owed;
+		if (c->amount & 1) price += owed_after = owed;
 		if (price > s->ether[side]) return 0;
 	}
 	/* One that takes only walls, only what flies, or only what attacks. */
@@ -4501,7 +4545,9 @@ static int cast_card(const Search *x, State *s, int side, int slot, int target, 
 	int8_t set[2][3];
 	for (int owner = 0; owner < 2; owner++)
 		for (int j = 0; j < 3; j++) set[owner][j] = (int8_t)(s->second && c->klass == 2 && c->free != 1 ? s->he[owner][HE_OST1 + j] : 0);
-	if (!c->free) pay(s, side, price);
+	/* What the enchantment cost is paid only once it is gone, so ether
+	 * thorns it takes off do not prick that part. */
+	if (!c->free) pay(s, side, price - owed_after);
 	switch (c->effect) {
 	case EFF_SUMMON:
 		summon(x, s, side, c);
@@ -4848,6 +4894,7 @@ static int cast_card(const Search *x, State *s, int side, int slot, int target, 
 	}
 	case EFF_DISPEL:
 		dispel(x, s, target, choice, 0);
+		if (!c->free) pay(s, side, owed_after);
 		/* The purification's mastery takes everything else that may be
 		 * dispelled off the same holder. */
 		if (c->code == x->purify && x->purify > 0 && spec_roll(s, side, SPEC_BPRC, 1)) {
@@ -4899,7 +4946,7 @@ static int cast_card(const Search *x, State *s, int side, int slot, int target, 
 			for (int r = s->enchs - 1; r >= 0; r--) {
 				const Ench *e = &s->ench[r];
 				if (e->unit != target || e->kind == EN_WATER || e->fixed) continue;
-				if (e->kind == EN_CONTROL && t->home > 0 && t->home - 1 != t->owner && army_size(s, t->home - 1) >= ARMY) continue;
+				if (!control_dispels(s, r)) continue;
 				unwear(s, r);
 				break;
 			}
@@ -4928,8 +4975,10 @@ static int cast_card(const Search *x, State *s, int side, int slot, int target, 
 		break;
 	}
 	case EFF_PALE_REVIVAL: {
-		/* Destroyed in the plane past regenerating, though a lifeguard still
-		 * turns that; then the card comes out of its graveyard for the caster. */
+		/* Destroyed in the plane, though a lifeguard still turns that; a
+		 * creature's own printed regeneration still saves it, while what
+		 * enchantments and army auras lend lies dormant in the plane. Then
+		 * the card comes out of its graveyard for the caster. */
 		Unit *t = &s->u[target];
 		int whose = choice / 64, kind = s->graves[whose][choice % 64];
 		if (!(t->flags & F_NO_AFFECT)) {
@@ -4937,7 +4986,15 @@ static int cast_card(const Search *x, State *s, int side, int slot, int target, 
 			else {
 				int left = imax(1, t->toughness - t->damage);
 				for (int k = 0; k < t->linked; k++) pain_hero(s, t->owner, left);
-				kill_unit(s, target);
+				int own = t->kind > 0 ? x->pool[t->kind - 1].regeneration : (t->worn ? t->bare_regeneration : t->regeneration), saved = 0;
+				if (t->flags & F_NO_REGEN) own = 0;
+				else if ((t->mastery == SPEC_RRTR || t->mastery == SPEC_GFNR) && spec_roll(s, t->owner, t->mastery, 1)) {
+					saved = 1;
+					own = 0;
+				}
+				if ((saved || own > 0) && t->toughness > 0 && !diseased(s, t->owner) && s->ether[t->owner] >= own) {
+					regenerate_unit(s, t, own);
+				} else kill_unit(s, target);
 			}
 		}
 		if (army_size(s, side) < ARMY && s->n < MAX_UNITS) {
@@ -5612,7 +5669,10 @@ static int use_ability(State *s, int i, int target, int extra) {
 	Unit *u = &s->u[i];
 	int side = u->owner, amount = u->ability_amount;
 	if (u->ability_traits & AT_TAPS) u->flags |= F_RESTING;
-	pay(s, side, price);
+	/* The pteroses pay what the enchantment cost only once it is gone, so
+	 * ether thorns they take off do not prick that payment. */
+	int after = u->ability == AB_DISPEL || u->ability == AB_DISENCHANT;
+	if (!after) pay(s, side, price);
 	switch (u->ability) {
 	case AB_ORC_RITE:
 		/* The channel is the price of the rite: no stasis spares it. */
@@ -5621,6 +5681,7 @@ static int use_ability(State *s, int i, int target, int extra) {
 		break;
 	case AB_DISPEL:
 		dispel(x, s, target, extra, 0);
+		pay(s, side, price);
 		break;
 	case AB_DISENCHANT:
 		/* It leaves the fight it was in, and whoever blocked it stands free. */
@@ -5631,6 +5692,7 @@ static int use_ability(State *s, int i, int target, int extra) {
 		}
 		u->blocks = -1;
 		dispel(x, s, target, extra, 1);
+		pay(s, side, price);
 		break;
 	case AB_SPORES:
 	case AB_SPORES_POWER:
@@ -6068,7 +6130,7 @@ static int own_ench(const State *s, int holder, int what, int caster) {
 	for (int r = 0; r < s->enchs; r++) {
 		const Ench *e = &s->ench[r];
 		if (e->unit != holder || e->code != what || e->kind == EN_WATER || e->fixed || e->caster != caster) continue;
-		if (e->kind == EN_CONTROL && u->home > 0 && u->home - 1 != u->owner && army_size(s, u->home - 1) >= ARMY) continue;
+		if (!control_dispels(s, r)) continue;
 		return r;
 	}
 	return -1;
@@ -6589,7 +6651,9 @@ static int ability_moves(const State *s, Move *out, int count, int light) {
 				break;
 			case AB_POWER_X:
 			case AB_HEALTH_X:
-				for (int amount = 1; amount <= s->ether[side]; amount++)
+				/* The most first, so that of uses worth the same the one paying
+				 * everything is chosen, not a string of single points. */
+				for (int amount = s->ether[side]; amount >= 1; amount--)
 					if (ability_fits(s, i, NO_TARGET, amount, &price)) count = add_ability(out, count, i, NO_TARGET, amount);
 				break;
 			case AB_SPORES:
@@ -6722,7 +6786,12 @@ static int ability_moves(const State *s, Move *out, int count, int light) {
 			if (u->ability == AB_PHANTASM) {
 				/* Each use gives two more, as often as there is ether for it. */
 				if (ability_fits(s, i, NO_TARGET, 0, &price)) count = add_ability(out, count, i, NO_TARGET, 0);
-			} else if (ability_fits(s, i, NO_TARGET, need, &price)) count = add_ability(out, count, i, NO_TARGET, need);
+			} else if (need <= s->ether[side] && ability_fits(s, i, NO_TARGET, s->ether[side], &price)) {
+				/* All the ether there is, as the originals' own reckoning pays
+				 * it: what the defender keeps is gone when its turn begins, and
+				 * spells it still wants come first in the line. */
+				count = add_ability(out, count, i, NO_TARGET, s->ether[side]);
+			}
 			break;
 		}
 		case AB_DISTORTION:

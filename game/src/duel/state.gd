@@ -814,6 +814,10 @@ func plane_change(id: int, enter: bool, guard := false, recover := false) -> boo
 	if global_enchantment_count("WRBN") > 0 or c.enchantments.any(func(e: Dictionary) -> bool: return e.card == "ERBN"):
 		for other: Dictionary in creatures.values(): _refresh_stats(other)
 	_emit({"kind": "plane", "target": id, "enter": enter})
+	# Control sleeps in the plane: the creature goes back to its original owner on entering and to
+	# its controller on leaving. A dissipation (`recover`) settles after its own cue.
+	if not recover: _settle_control(id)
+	if not creatures.has(id): return true
 	if c.damage >= c.toughness: _lethal(id)
 	if not enter and not in_plane(id) and _enchantment_count(id, "PRGD") > 0:
 		for other: Dictionary in army(int(c.owner)):
@@ -821,9 +825,10 @@ func plane_change(id: int, enter: bool, guard := false, recover := false) -> boo
 	return true
 
 ## A combat ability's kill (Destroy, mechos, snake venom) is lethal damage: NoAffect ignores it,
-## regeneration saves it, and a second-game Pale creature dissipates. No pain link.
-func _ability_lethal(id: int) -> void:
-	if creatures.has(id): _damage(id, maxi(1, int(creatures[id].toughness) - int(creatures[id].damage)), false, false, false, false, true)
+## regeneration saves it, and a second-game Pale creature dissipates. `linked`: a pain link passes
+## it to the hero, as the destroy flag's kill after a fight does in both games.
+func _ability_lethal(id: int, linked := false) -> void:
+	if creatures.has(id): _damage(id, maxi(1, int(creatures[id].toughness) - int(creatures[id].damage)), false, false, linked, false, true)
 
 ## State check death: a bright Pale creature dissipates instead of dying.
 func _lethal(id: int) -> void:
@@ -840,14 +845,57 @@ func find_enchantment(enchantment_id: int) -> int:
 			if int(e.id) == enchantment_id: return id
 	return -1
 
-## Card-cast enchantments (and snake venom) can be removed; creature-made ones cannot. A stolen
-## creature stays while its original owner's army is full. `untargeted`: a spell that names no
-## target (Cleanse, Decontamination) also clears a creature screened by a magic screen.
+## Card-cast enchantments (and snake venom) can be removed; creature-made ones cannot. A control
+## enchantment cannot be removed where the creature would have to join a full army (second game),
+## or, in the first game, while its caster's army is full without the creature. `untargeted`: a
+## spell that names no target (Cleanse, Decontamination) also clears a creature screened by a
+## magic screen.
 func dispellable(holder: int, e: Dictionary, untargeted := false) -> bool:
 	if e.get("fixed", false) or e.card in TRAPS: return false
 	if not targetable(holder) and not (untargeted and not in_plane(holder)): return false
-	if e.card in ELCatalog.CONTROL and holder >= 2 and army(origin(holder)).size() >= 10: return false
+	if e.card in ELCatalog.CONTROL and holder >= 2 and creatures.has(holder):
+		if profile.id == "el2":
+			var after := control_side(holder, int(e.id))
+			if after != int(creatures[holder].owner) and army(after).size() >= 10: return false
+		elif int(e.owner) != int(creatures[holder].owner) and army(int(e.owner)).size() >= 10: return false
 	return true
+
+## Control enchantments rule a creature only outside the Colourless Plane.
+func _control_in_force(id: int) -> bool:
+	return not (profile.id == "el2" and in_plane(id))
+
+## The hero a creature's control enchantments give it to: the caster of the latest one cast
+## (only the newest counts, whoever cast the earlier ones), or its original owner when none is
+## in force. `without`: an enchantment id to leave out, as if already removed.
+func control_side(id: int, without := -1) -> int:
+	var side := origin(id)
+	if not creatures.has(id) or not _control_in_force(id): return side
+	for e: Dictionary in creatures[id].enchantments:
+		if e.card in ELCatalog.CONTROL and int(e.id) != without: side = int(e.owner)
+	return side
+
+## Moves a creature to the hero its control enchantments name, after one is cast or removed or
+## the creature enters or leaves the Colourless Plane. Changing hands takes it out of any fight
+## and it must wait a turn to act (a second-game creature that needs no rest acts at once, as do
+## the sacrificing men coming home since update 1.03). Where that army is full it stays. The
+## original owner is forgotten once the creature is home with no control enchantment left.
+func _settle_control(id: int) -> void:
+	if not creatures.has(id) or not creatures[id].has("origin"): return
+	var c: Dictionary = creatures[id]
+	var side := control_side(id)
+	if side != int(c.owner) and army(side).size() < 10:
+		var card := ""
+		for e: Dictionary in c.enchantments:
+			if e.card in ELCatalog.CONTROL: card = e.card
+		_move_army(c, side)
+		if side == origin(id):
+			c.sick = not (profile.id == "el2" and (has_flag(id, "NSS") or c.card in ["RZMN", "CTMN", "SWMN"]))
+		else:
+			c.sick = not (second_rules(card) and has_flag(id, "NSS"))
+		_unassign(id)
+		_refresh_armies()
+	if int(c.owner) == origin(id) and not c.enchantments.any(func(e: Dictionary) -> bool: return e.card in ELCatalog.CONTROL):
+		c.erase("origin")
 
 ## Second-game extra prices: cleansing pays 1 per removable enchantment in
 ## play; annihilation pays 1 per creature it can affect.
@@ -1036,10 +1084,17 @@ func _hand_cast_error(side: int, card: String) -> String:
 
 func _cast_surcharge(card: String, rule: Dictionary, target: int, choice: int) -> int:
 	var surcharge := second_surcharge(card)
-	if rule.get("priced", false): surcharge += enchantment_price(_enchantment_by_id(find_enchantment(choice), choice))
+	surcharge += _removal_price(rule, choice)
 	# Disintegration also pays the target creature's printed cost.
 	if rule.get("priced_target", false): surcharge += int(profile.table("CombatSpells")[creatures[target].card].Cost)
 	return surcharge
+
+## Flicker's extra price, the removed enchantment's own cost. Both originals
+## charge it only after the enchantment is gone (see the "dispel" effect), so
+## the cast pays it apart from the rest.
+func _removal_price(rule: Dictionary, choice: int) -> int:
+	if not rule.get("priced", false): return 0
+	return enchantment_price(_enchantment_by_id(find_enchantment(choice), choice))
 
 func _cast_now(hand_index: int, target := -1, grave_index := -1, extra_ether := 0) -> bool:
 	error = ""
@@ -1076,7 +1131,7 @@ func _cast_now(hand_index: int, target := -1, grave_index := -1, extra_ether := 
 		var copies: int = hero.hand_slots.count(slot) if slot >= 0 else 0
 		if slot < 0 or hero.spell_uses[slot] < 0 or copies < int(hero.spell_uses[slot]): stays = ELSpecs.roll(self, side, "STHN") > 0
 	var free: bool = ELSpecs.roll(self, side, "MNCH") > 0
-	_spend_ether(side, (0 if free else cost(card)) + surcharge)
+	_spend_ether(side, (0 if free else cost(card)) + surcharge - _removal_price(rule, grave_index))
 	if not stays: _take_card(side, hand_index)
 	var cast_event := {"kind": "cast", "side": side, "card": card, "target": target, "cost": cost(card) + power_price(card, extra_ether), "power": extra_ether}
 	# Both originals' Trade has two separately targeted damage effects, then
@@ -1140,8 +1195,8 @@ func cast_free(side: int, card: String, args: Array, presented: bool) -> bool:
 		return _fail(invalid)
 	var traps := _sorcery_traps()
 	if presented:
+		# Flicker's removal price is paid by its effect, after the removal.
 		var surcharge := second_surcharge(card)
-		if rule.get("priced", false): surcharge += enchantment_price(_enchantment_by_id(find_enchantment(grave_index), grave_index))
 		if rule.get("priced_target", false): surcharge += int(profile.table("CombatSpells")[creatures[target].card].Cost)
 		heroes[side].mana += cost(card)
 		var free: bool = ELSpecs.roll(self, side, "MNCH") > 0
@@ -1441,7 +1496,11 @@ func _apply_spell_effect(side: int, card: String, rule: Dictionary, target: int,
 			if creatures[target].power > 0: _damage(target, int(creatures[target].power), false, ELSpecs.roll(self, side, "UHGW") > 0)
 		"dispel":
 			var holder := find_enchantment(grave_index)
+			# Flicker pays the enchantment's cost only once it is gone: ether thorns
+			# it removes do not prick that payment, the rest of the cast was pricked.
+			var owed := _removal_price(rule, grave_index) if specs else 0
 			_dispel(holder, grave_index)
+			_spend_ether(side, owed)
 			# Purification mastery: every other removable enchantment on the holder goes too.
 			if card == "PRFY" and holder >= 0 and not entity(holder).is_empty() and ELSpecs.roll(self, side, "BPRC") > 0:
 				for e: Dictionary in entity(holder).enchantments.duplicate():
@@ -1606,9 +1665,10 @@ func _apply_spell_effect(side: int, card: String, rule: Dictionary, target: int,
 			var grave_slot := grave_index % GRAVE_SIDE
 			var revived: String = heroes[grave_side].grave[grave_slot]
 			# The original 1e6 bypass hit; the remaining toughness gives the same result
-			# without an inflated damage figure. Since update 1.03 regeneration no
-			# longer saves the creature.
-			_damage(target, maxi(1, int(creatures[target].toughness) - int(creatures[target].damage)), false, second_rules(card), true, true, true)
+			# without an inflated damage figure. A creature's own regeneration still
+			# saves it (its owner pays as usual); regeneration lent by coloured
+			# enchantments or army auras is dormant in the plane, so those die.
+			_damage(target, maxi(1, int(creatures[target].toughness) - int(creatures[target].damage)), false, false, true, true, true)
 			if army(side).size() < 10:
 				if grave_slot >= heroes[grave_side].grave.size() or heroes[grave_side].grave[grave_slot] != revived: grave_slot = heroes[grave_side].grave.rfind(revived)
 				if grave_slot >= 0:
@@ -2402,12 +2462,13 @@ func _use_ability(id: int, ability: String, target := -1, enchantment_id := -1, 
 			var chosen := _enchantment_by_id(target, enchantment_id)
 			var problem := _dispel_ability_error(side, ability, target, chosen)
 			if not problem.is_empty(): return _fail(problem)
-			# The removal price, not a warded casting cost.
+			# The removal price, not a warded casting cost, paid once the enchantment is
+			# gone: ether thorns it removes do not prick that payment.
 			var price := enchantment_price(chosen)
-			_spend_ether(side, price)
 			c.resting = true
 			_unassign(id)
 			_remove_enchantment(target, enchantment_id)
+			_spend_ether(side, price)
 			_emit({"kind": "ability", "source": id, "side": side, "ability": ability, "target": target})
 	_finish_action()
 	return true
@@ -2501,7 +2562,9 @@ func _first_ability(id: int, definition: Dictionary, target: int, grave_index: i
 	if definition.get("ready", true):
 		c.resting = true
 		_unassign(id)
-	_spend_ether(side, price)
+	# The pteros pays the enchantment's cost once it is gone (below), so ether
+	# thorns it removes do not prick that payment.
+	if definition.key != "dispel": _spend_ether(side, price)
 	_emit({"kind": "ability", "source": id, "side": side, "ability": definition.key, "name": definition.name, "target": target})
 	match definition.key:
 		"sting": _damage(target, int(definition.get("amount", 1)))
@@ -2572,7 +2635,9 @@ func _first_ability(id: int, definition: Dictionary, target: int, grave_index: i
 			heroes[side].grave.remove_at(grave_index)
 			_give_card(side, rat)
 			_emit({"kind": "return_card", "side": side, "card": rat})
-		"dispel": _dispel(target, grave_index)
+		"dispel":
+			_dispel(target, grave_index)
+			_spend_ether(side, price)
 		"orc_rite":
 			# The sacrificed channel is the rite's price, so Stasis does not spare it.
 			heroes[side].channels = int(heroes[side].channels) - 1
@@ -2665,13 +2730,9 @@ func _enchant(card: String, side: int, target: int, rule: Dictionary) -> void:
 			if second_rules(card): attacks.erase(target)
 		elif card == "SPWR": creatures[target].resting = false
 		elif card in ELCatalog.CONTROL:
-			# Control passes to the caster; the creature must wait a turn to act.
-			var stolen: Dictionary = creatures[target]
-			stolen.origin = origin(target)
-			_move_army(stolen, side)
-			stolen.sick = not (second_rules(card) and has_flag(target, "NSS"))
-			_unassign(target)
-			_refresh_armies()
+			# Control passes to the caster, the newest control enchantment overruling older ones.
+			creatures[target].origin = origin(target)
+			_settle_control(target)
 	elif _changes_armies(card):
 		for c: Dictionary in creatures.values(): _refresh_stats(c)
 	if target < 2 and card in ["FOGG", "ASST", "PCDU"]:
@@ -2929,14 +2990,10 @@ func _remove_enchantment(target: int, enchantment_id: int) -> void:
 	for e: Dictionary in victim.get("enchantments", []).duplicate():
 		if int(e.id) != enchantment_id: continue
 		victim.enchantments.erase(e)
-		if target >= 2 and e.card in ELCatalog.CONTROL and victim.has("origin"):
-			_move_army(victim, int(victim.origin))
-			victim.erase("origin")
-			# Returned control also waits a turn, as on the steal. Since update 1.03
-			# the second game's sacrificing men come back ready to use their rite.
-			victim.sick = not (profile.id == "el2" and (has_flag(target, "NSS") or victim.card in ["RZMN", "CTMN", "SWMN"]))
-			_unassign(target)
-			_refresh_armies()
+		if target >= 2 and e.card in ELCatalog.CONTROL:
+			# Control falls to the newest control enchantment left, or the original owner; removing
+			# an older one changes nothing.
+			_settle_control(target)
 		if e.card == "ERBN":
 			for c: Dictionary in creatures.values(): _refresh_stats(c)
 		elif target >= 2:
@@ -3624,7 +3681,6 @@ func _resolve_attacks() -> void:
 			if blocks[blocker] == id and creatures.has(blocker): defenders.append(blocker)
 		# Kobold and aviak masteries double an attacker's whole damage pool.
 		var remaining: int = maxi(0, attack.power) * (2 if _doubles(id) else 1)
-		var walled := false
 		var gazed := 0
 		if defenders.is_empty():
 			_strike(id, 1 - attacker, remaining, poisoned)
@@ -3643,9 +3699,12 @@ func _resolve_attacks() -> void:
 					_destroy(id)
 					remaining = 0
 					break
-				# Wall masteries: stone walls doom ground attackers, air walls flyers.
+				# Wall masteries: stone walls doom ground attackers, air walls flyers. Both games only
+				# set the attacker's destroy flag here (before the blows), so it dies after the
+				# fight like a poisoned creature: lethal damage equal to its remaining health.
 				var wall: String = creatures[blocker].card
-				if (wall in ["WLBR", "SLWL", "RKWL"] and not has_flag(id, "Fly") and ELSpecs.roll(self, int(creatures[blocker].owner), "RWSW") > 0) or (wall in ["WLAR", "WLWD", "WLBZ"] and has_flag(id, "Fly") and ELSpecs.roll(self, int(creatures[blocker].owner), "UWAW") > 0): walled = true
+				if (wall in ["WLBR", "SLWL", "RKWL"] and not has_flag(id, "Fly") and ELSpecs.roll(self, int(creatures[blocker].owner), "RWSW") > 0) or (wall in ["WLAR", "WLWD", "WLBZ"] and has_flag(id, "Fly") and ELSpecs.roll(self, int(creatures[blocker].owner), "UWAW") > 0):
+					if not poisoned.has(id): poisoned.append(id)
 				# A first-striking blocker gives no counter-strike.
 				var defender_first := has_flag(blocker, "FS") and not has_flag(id, "FS")
 				var pre := defender_first
@@ -3675,7 +3734,6 @@ func _resolve_attacks() -> void:
 				_strike(id, 1 - attacker, remaining, poisoned)
 			elif creatures.has(id) and not attack.regenerated and has_flag(id, "Trample") and remaining > 0:
 				_strike(id, 1 - attacker, remaining, poisoned)
-		if walled and creatures.has(id): _damage(id, 1000000)
 		# Rest is settled after the attacker's own fight: a creature aura's Restless (OREL, MOTI) lost
 		# because the attacker killed its source in that fight, even in the ordinary exchange, leaves the
 		# attacker resting.
@@ -3687,8 +3745,9 @@ func _resolve_attacks() -> void:
 		if phase == Phase.FINISHED: break
 	if scripts != null and not poisoned.is_empty(): scripts.dispatch("CHook_OnVisualStartMeleeDestroyFlag", [])
 	for id: int in poisoned:
-		# A creature that regenerated during this combat is already saved.
-		if creatures.has(id) and not (creatures[id].regenerated and not regenerated_before.has(id)): _ability_lethal(id)
+		# A creature that regenerated during this combat is already saved. The destroy flag's
+		# lethal damage reaches a pain link's hero like any other damage.
+		if creatures.has(id) and not (creatures[id].regenerated and not regenerated_before.has(id)): _ability_lethal(id, true)
 	if scripts != null and not poisoned.is_empty(): scripts.dispatch("CHook_OnVisualFinishMeleeDestroyFlag", [])
 
 ## Presentation of a combat strike's creature power, drawn from source to target.
@@ -3905,13 +3964,10 @@ func _damage(target: int, amount: int, combat := false, no_regeneration := false
 	return amount
 
 ## A stolen creature that dissipates goes back to its original owner unless that army is
-## full (as a dispelled control enchantment, `dispellable`). The control enchantment stays
-## attached, inert in the plane like other coloured ones (#267).
+## full. The control enchantment stays attached, asleep in the plane, and takes the creature
+## back when it manifests.
 func _return_dissipated(id: int) -> void:
-	if not creatures.has(id) or not creatures[id].has("origin") or army(origin(id)).size() >= 10: return
-	if not creatures[id].enchantments.any(func(e: Dictionary) -> bool: return e.card in ELCatalog.CONTROL): return
-	_move_army(creatures[id], origin(id))
-	_refresh_armies()
+	_settle_control(id)
 
 ## Lifeguard negates one damage instance, then that enchantment goes.
 func _lifeguard(target: int) -> bool:

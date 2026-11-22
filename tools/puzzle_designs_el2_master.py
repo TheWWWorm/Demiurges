@@ -6,25 +6,6 @@ def puzzles():
     game = "el2"
     out = []
 
-    out.append(puzzle(game, "shared_escape", "A Shared Escape", "Capture and a counterspell window", 3, 1,
-        state(game,
-            hero("Blue", ["CLNP", "CHCM"], mana=8, health=2, enchantments=[enchant("PRWR", id=1, owner=1), enchant("ENBR", id=2), enchant("OEXC", id=3)]),
-            hero("Green", ["PLMR"], mana=1, channels=1, health=30),
-            [unit("OUE1", 2, plane=True), unit("IRMZ", 3), unit("SMWB", 4, 1), unit("GROG", 5, 1)]),
-        "Control the enemy Pale Knight after one complete enemy turn. Keep your Spelleater alive. Transfer Aspects and an enemy Aspect Ward are already on your hero; the opponent holds Polymorph.",
-        ["Both your new captive and your protected helper must survive an enemy spell window.",
-         "Removing Aspect Ward must leave the Spelleater ready. A manifestation through Transfer Aspects does not rest it.",
-         "Use Lesser Disenchant on Aspect Ward, capture the Knight, and exchange its aspect with the Spelleater. Dissipate the still-ready Spelleater. Keep the Iron Mechozaurus to stop the Ogre."],
-        "Lesser Disenchant removes the ward for two ether. Change of Command costs five, and Transfer Aspects uses the last ether to manifest your Spelleater while sheltering the sick captive in the Colourless Plane. The Spelleater must then dissipate itself. Absorbing the ward would refund its cost but rest the only helper that still needs to escape Polymorph. Energy Barrier reduces the Mechozaurus's four upkeep damage to one, leaving your hero alive. The untargetable Mechozaurus can stop the Ogre while both Pale creatures remain safe through the enemy turn.",
-        [cast("CLNP", 0, grave=1), cast("CHCM", 4), ability(0, "recycle:3", 2, choice=4), ability(2, "dissipate"),
-         end(), attack(5, side=1), end(side=1), block(3, 5), end()],
-        objective={"type": "control", "targets": [4], "enemy_turns": 1, "protect": [2]},
-        refutations=[
-            {"label": "Absorb the ward for its refund", "commands": [ability(2, "absorb", 0, choice=1)]},
-            {"label": "Exchange aspects before capturing the Knight", "commands": [ability(0, "recycle:3", 2, choice=4)]},
-            {"label": "Capture the Ogre instead of the Knight", "commands": [cast("CHCM", 5)]},
-        ]))
-
     out.append(puzzle(game, "sealed_response", "Seal the Response", "Manifestation order and resource denial", 4, 1,
         state(game,
             hero("White", ["PLSL", "ALNS"], mana=3, health=9, grave=["STRT"]),
@@ -128,17 +109,6 @@ def puzzles():
 
 
 _LOCALIZED = {
-    "shared_escape": {
-        "title_ru": "Путь для двоих",
-        "category_ru": "Захват и ответное заклинание",
-        "briefing_ru": "После завершения одного вражеского хода управляйте Бесцветным Рыцарем противника. Сохраните своего Чароеда. На вашем герое уже действуют Обмен Планами и вражеский Планарный Барьер; противник держит Превращение.",
-        "hints_ru": [
-            "Ответное заклинание должны пережить и новый пленник, и защищаемый помощник.",
-            "После снятия Планарного Барьера Чароед должен остаться готовым к действию. Обмен Планами сам по себе не отправляет его отдыхать.",
-            "Снятием Чар уберите Планарный Барьер, переподчините Рыцаря и обменяйте его план с Чароедом. Затем готовым Чароедом уйдите обратно в Бесцветный План. Железного мехозавра оставьте для блока людоеда.",
-        ],
-        "explanation_ru": "Снятие Чар убирает барьер за два эфира. Переподчинение стоит пять, а последний эфир оплачивает Обмен Планами: Чароед выходит в Эфирный План, а ещё не готовый к действиям пленник скрывается в Бесцветном. Чароед должен сразу уйти следом. Если поглотить барьер, его стоимость вернётся, но Чароед начнёт отдыхать и уже не сможет спастись от Превращения. Энергетический Барьер уменьшает четыре урона от содержания мехозавра до одного, сохраняя жизнь герою. Сам мехозавр недоступен для направленных заклинаний и может остановить людоеда, пока оба бесцветных пережидают вражеский ход.",
-    },
     "sealed_response": {
         "title_ru": "Запечатать ответ",
         "category_ru": "Переход между планами и лишение эфира",

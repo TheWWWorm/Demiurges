@@ -340,6 +340,12 @@ func _drag_input(control: Control, source: String, pick: Callable, event: InputE
 		if not bool(carry.moving) and carry.at.distance_to(carry.press) > DRAG_SLOP:
 			carry.moving = true
 			if not held.is_empty(): _drop_held()
+			# The press already picked a second-game available spell up on the cursor (the
+			# original's click rule); the drag carries it alone, or two pictures would follow
+			# the pointer.
+			if source == "choice" and _el2_spells() and not _carried_spell().is_empty():
+				_drop_choice()
+				update_editor()
 		if bool(carry.moving): _show_ghost()
 
 func _show_ghost() -> void:

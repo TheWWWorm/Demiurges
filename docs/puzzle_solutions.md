@@ -4287,111 +4287,7 @@ ID: `el2_tactical_v2_third_funeral`. Creature targets are snapshot IDs; heroes a
 
 </details>
 
-### 18. A Shared Escape
-
-**Hard · Control · Capture and a counterspell window**
-
-**Matchup:** Kinet adept (Lv 4) / Vital warrior (Lv 4).
-
-Control the enemy Pale Knight after one complete enemy turn. Keep your Spelleater alive. Transfer Aspects and an enemy Aspect Ward are already on your hero; the opponent holds Polymorph.
-
-| Side | Template | Level | Starting health / maximum | Own-turn counter | Skills |
-| --- | --- | ---: | ---: | ---: | --- |
-| You | `BlueWingedMale1` | 4 | 2 / 20 | 4 | None |
-| Opponent | `GreenMale1` | 4 | 30 / 30 | 3 | None |
-
-Own-turn budget: **1**. Objective metadata: `{"enemy_turns": 1, "protect": [2], "targets": [4], "type": "control"}`.
-
-**Hint progression**
-
-1. Both your new captive and your protected helper must survive an enemy spell window.
-2. Removing Aspect Ward must leave the Spelleater ready. A manifestation through Transfer Aspects does not rest it.
-3. Use Lesser Disenchant on Aspect Ward, capture the Knight, and exchange its aspect with the Spelleater. Dissipate the still-ready Spelleater. Keep the Iron Mechozaurus to stop the Ogre.
-
-**Solution and reason**
-
-Lesser Disenchant removes the ward for two ether. Change of Command costs five, and Transfer Aspects uses the last ether to manifest your Spelleater while sheltering the sick captive in the Colourless Plane. The Spelleater must then dissipate itself. Absorbing the ward would refund its cost but rest the only helper that still needs to escape Polymorph. Energy Barrier reduces the Mechozaurus's four upkeep damage to one, leaving your hero alive. The untargetable Mechozaurus can stop the Ogre while both Pale creatures remain safe through the enemy turn.
-
-**Tempting alternatives checked**
-
-- Absorb the ward for its refund
-- Exchange aspects before capturing the Knight
-- Capture the Ogre instead of the Knight
-
-<details>
-<summary>Russian matchup, briefing, hints, and explanation</summary>
-
-**Путь для двоих — Захват и ответное заклинание**
-
-Адепт кинетов (Lv 4) / Воин виталов (Lv 4)
-
-После завершения одного вражеского хода управляйте Бесцветным Рыцарем противника. Сохраните своего Чароеда. На вашем герое уже действуют Обмен Планами и вражеский Планарный Барьер; противник держит Превращение.
-
-1. Ответное заклинание должны пережить и новый пленник, и защищаемый помощник.
-2. После снятия Планарного Барьера Чароед должен остаться готовым к действию. Обмен Планами сам по себе не отправляет его отдыхать.
-3. Снятием Чар уберите Планарный Барьер, переподчините Рыцаря и обменяйте его план с Чароедом. Затем готовым Чароедом уйдите обратно в Бесцветный План. Железного мехозавра оставьте для блока людоеда.
-
-Снятие Чар убирает барьер за два эфира. Переподчинение стоит пять, а последний эфир оплачивает Обмен Планами: Чароед выходит в Эфирный План, а ещё не готовый к действиям пленник скрывается в Бесцветном. Чароед должен сразу уйти следом. Если поглотить барьер, его стоимость вернётся, но Чароед начнёт отдыхать и уже не сможет спастись от Превращения. Энергетический Барьер уменьшает четыре урона от содержания мехозавра до одного, сохраняя жизнь герою. Сам мехозавр недоступен для направленных заклинаний и может остановить людоеда, пока оба бесцветных пережидают вражеский ход.
-
-</details>
-
-<details>
-<summary>Machine-readable reference line</summary>
-
-ID: `el2_tactical_v2_shared_escape`. Creature targets are snapshot IDs; heroes are 0 (player) and 1 (opponent). `side: 1` identifies an opponent action. See `tools/PUZZLE_LAB.md` for command fields.
-
-```json
-[
-  {
-    "card": "CLNP",
-    "grave": 1,
-    "kind": "cast",
-    "target": 0
-  },
-  {
-    "card": "CHCM",
-    "kind": "cast",
-    "target": 4
-  },
-  {
-    "choice": 4,
-    "id": 0,
-    "key": "recycle:3",
-    "kind": "ability",
-    "target": 2
-  },
-  {
-    "id": 2,
-    "key": "dissipate",
-    "kind": "ability",
-    "target": -1
-  },
-  {
-    "kind": "end_phase"
-  },
-  {
-    "id": 5,
-    "kind": "attack",
-    "side": 1
-  },
-  {
-    "kind": "end_phase",
-    "side": 1
-  },
-  {
-    "id": 3,
-    "kind": "block",
-    "target": 5
-  },
-  {
-    "kind": "end_phase"
-  }
-]
-```
-
-</details>
-
-### 19. The Surviving Investment
+### 18. The Surviving Investment
 
 **Hard · Clear · Channel conversion and delayed income**
 
@@ -4484,7 +4380,7 @@ ID: `el2_tactical_v2_surviving_investment`. Creature targets are snapshot IDs; h
 
 </details>
 
-### 20. Airlock Census
+### 19. Airlock Census
 
 **Hard · Clear · Beacon, dispel access and a body count**
 
@@ -4561,7 +4457,7 @@ ID: `el2_tactical_v2_airlock_census`. Creature targets are snapshot IDs; heroes 
 
 </details>
 
-### 21. The Last Breath
+### 20. The Last Breath
 
 **Hard · Win · Healing order and the final body count**
 
@@ -4640,7 +4536,7 @@ ID: `el2_tactical_v2_last_breath`. Creature targets are snapshot IDs; heroes are
 
 </details>
 
-### 22. Midnight Census
+### 21. Midnight Census
 
 **Hard · Survive · Bat drain before disturbance**
 
@@ -4736,7 +4632,7 @@ ID: `el2_tactical_v2_midnight_census`. Creature targets are snapshot IDs; heroes
 
 </details>
 
-### 23. Bank the Discount
+### 22. Bank the Discount
 
 **Hard · Win · A foreign Warlord and a recovery investment**
 
@@ -4871,7 +4767,7 @@ ID: `el2_tactical_v2_bank_discount`. Creature targets are snapshot IDs; heroes a
 
 </details>
 
-### 24. The Queen's Shadow
+### 23. The Queen's Shadow
 
 **Hard · Win · A shared Bee aura and a one-sided rally**
 
@@ -4963,7 +4859,7 @@ ID: `el2_tactical_v2_queens_shadow`. Creature targets are snapshot IDs; heroes a
 
 </details>
 
-### 25. Behind the Magic Screen
+### 24. Behind the Magic Screen
 
 **Hard · Clear · Global magic and a regeneration reserve**
 
@@ -5048,7 +4944,7 @@ ID: `el2_tactical_v2_behind_magic_screen`. Creature targets are snapshot IDs; he
 
 </details>
 
-### 26. Seal the Response
+### 25. Seal the Response
 
 **Expert · Win · Manifestation order and resource denial**
 
@@ -5138,7 +5034,7 @@ ID: `el2_tactical_v2_sealed_response`. Creature targets are snapshot IDs; heroes
 
 </details>
 
-### 27. Two Delayed Verdicts
+### 26. Two Delayed Verdicts
 
 **Expert · Win · A delayed clock and remaining toughness**
 
@@ -5236,7 +5132,7 @@ ID: `el2_tactical_v2_delayed_verdicts`. Creature targets are snapshot IDs; heroe
 
 </details>
 
-### 28. Keep the Gift Alive
+### 27. Keep the Gift Alive
 
 **Expert · Win · A hostile gift between veterans**
 

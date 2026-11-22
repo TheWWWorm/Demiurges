@@ -155,7 +155,6 @@ The previous 45 studies remain available. **New** marks this revision's addition
 | `el2_tactical_v2_every_road_hurts` | Every Road Hurts | Hard | win | Synthet adept (Lv 4) / Kinet adept (Lv 4) |
 | `el2_tactical_v2_three_turn_lock` | A Three-Turn Lock | Hard | win | Kinet adept (Lv 4) / Chaot warrior (Lv 4) |
 | `el2_tactical_v2_third_funeral` | The Third Funeral | Hard | win | Synthet adept (Lv 4) / Vital warrior (Lv 4) |
-| `el2_tactical_v2_shared_escape` | A Shared Escape | Hard | control | Kinet adept (Lv 4) / Vital warrior (Lv 4) |
 | `el2_tactical_v2_surviving_investment` | The Surviving Investment | Hard | clear | White Lord (Lv 4) / Vital warrior (Lv 4) |
 | `el2_tactical_v2_airlock_census` | Airlock Census | Hard | clear | White Lord (Lv 4) / White Lord (Lv 4) |
 | `el2_tactical_v2_last_breath` | The Last Breath | Hard | win | Vital warrior (Lv 4) / Kinet adept (Lv 4) |

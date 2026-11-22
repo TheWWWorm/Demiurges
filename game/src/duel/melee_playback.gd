@@ -95,6 +95,10 @@ var _current_attacker := -1
 var _in_blows := false
 ## The figures are walking home after the last blow.
 var _homing := false
+## Figures whose exchange ends with the blow being played. A clip that ends
+## before the walk home keeps its last frame (holds_pose) instead of dropping
+## into the idle for the few frames until the figure sets off.
+var _homeward := {}
 ## The timer a blow is waiting on (_wait).
 var _timer: SceneTreeTimer
 ## Longest wait for figures lying down or getting up before the turn goes on.
@@ -179,6 +183,16 @@ func _yaw_at(at: Vector3, side: int) -> float:
 
 static func flat_distance(a: Vector3, b: Vector3) -> float:
 	return Vector2(a.x - b.x, a.z - b.z).length()
+
+## Whether a figure about to walk home keeps the last frame of its clip.
+func holds_pose(id: int) -> bool:
+	return _homeward.has(id)
+
+## Figures that held their attack pose but are not setting off after all take
+## up their idle as usual.
+func _release(held: Array) -> void:
+	for id: int in held:
+		if _has(id) and not _moves.has(id) and not view.models[id].playing: view._animation_done(view.models[id].clip, id)
 
 func busy() -> bool:
 	return _running or _capturing
@@ -287,6 +301,8 @@ func finish() -> void:
 	_serial += 1
 	_capturing = false
 	_reset_skip()
+	var held := _homeward.keys()
+	_homeward.clear()
 	finish_moves()
 	var rest: Array[Dictionary] = []
 	for index in range(_next_blow, _blows.size()): rest.append_array(_blows[index].events)
@@ -299,6 +315,7 @@ func finish() -> void:
 		if data.kind == "turn_cleanup": _place_home()
 		_dispatch(data)
 	_place_home()
+	_release(held)
 	_running = false
 	_capture_finished = false
 	view._refresh()
@@ -326,6 +343,7 @@ func abort() -> void:
 	_capture_finished = false
 	_running = false
 	_reset_skip()
+	_homeward.clear()
 	for id: int in _moves:
 		if view.models.has(id):
 			view.models[id].speed = 1.0
@@ -381,6 +399,8 @@ func _play(serial: int) -> void:
 		var from := int(strike.from)
 		var to := int(strike.to)
 		var pair := _pair(strike)
+		# The exchange is over when the next blow is another pair.
+		var next := _pair(blows[index + 1].strike) if index + 1 < blows.size() else Vector2i(-1, -1)
 		_current_attacker = pair.x
 		if _take_skip(pair.x):
 			# Skipped before it set off: no approach and no attack clip.
@@ -445,12 +465,17 @@ func _play(serial: int) -> void:
 				var rest := length - impact
 				if _has(to) and blow.events.any(func(e: Dictionary) -> bool: return e.kind == "damage" and int(e.get("target", -1)) == to):
 					rest = maxf(rest, maxf(view.models[to].clip_seconds("uhit"), 0.0))
+				# The wait runs to the end of the victim's hit clip, often past
+				# the striker's own clip: a figure this blow sends home keeps the
+				# last frame of its clip and sets off from it.
+				if next.x != pair.x: _homeward[pair.x] = true
+				if pair.y >= 2 and (next.x != pair.x or next.y != pair.y): _homeward[pair.y] = true
 				if not await _wait(rest, serial): return
 			else:
 				_next_blow = index + 1
 				_dispatch_all(blow.events)
-		# The exchange is over when the next blow is another pair.
-		var next := _pair(blows[index + 1].strike) if index + 1 < blows.size() else Vector2i(-1, -1)
+		var held := _homeward.keys()
+		_homeward.clear()
 		if next.x != pair.x:
 			if pair.y >= 2: _go_home(pair.y, true, strike)
 			_go_home(pair.x, false, strike)
@@ -458,6 +483,7 @@ func _play(serial: int) -> void:
 		elif next.y != pair.y and pair.y >= 2 and engaged.get(pair.x, -1) == pair.y:
 			_go_home(pair.y, true, strike)
 			engaged[pair.x] = -1
+		_release(held)
 	_in_blows = false
 	_current_attacker = -1
 	_skip_attacker = -1

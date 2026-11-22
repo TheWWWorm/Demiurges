@@ -1,18 +1,22 @@
 class_name ELDiscordPresence
 extends Node
-## Optional Discord activity: shows which game is played and whether the
-## player is in the menus, on a campaign map or in a battle, through the
-## locally running Discord desktop app (its local IPC pipe or socket, opened
-## by the native ELDiscordIpc). No account, token or network access is used,
-## and no names or save details are published. Desktop builds only; without
-## the native library or Discord the node does nothing.
+## Optional Discord activity: shows which game is played and what the player
+## does in it (the words come from ELDiscordStatus), through the locally
+## running Discord desktop app (its local IPC pipe or socket, opened by the
+## native ELDiscordIpc). No account, token or network access is used, and no
+## player or save names are published. Desktop builds only; without the
+## native library or Discord the node does nothing.
 ##
 ## The application ID comes from the project setting discord/application_id;
 ## DEMIURGES_DISCORD_APP_ID overrides it for testing another application.
 
 const MAX_FRAME := 65528
-## Discord accepts activity updates at most every few seconds.
+## Discord accepts about five activity updates in 20 seconds. A new scene
+## (another screen, map or battle) is sent after SCENE_SECONDS; changes within
+## a scene (a new turn, life lost) wait UPDATE_SECONDS, so a battle never sends
+## more than one update in that time.
 const UPDATE_SECONDS := 15.0
+const SCENE_SECONDS := 5.0
 const RETRY_SECONDS := 15.0
 ## Opcodes of Discord's IPC framing.
 const HANDSHAKE := 0
@@ -32,6 +36,12 @@ var incoming := PackedByteArray()
 var outgoing := PackedByteArray()
 var desired: Dictionary = {}
 var sent: Dictionary = {}
+## The scene of the activity wanted and of the one sent.
+var desired_scene := ""
+var sent_scene := ""
+## When each current scene began (Unix seconds): the activity's scene and its
+## parent, which keeps its time while the scene inside it lasts.
+var scene_starts: Dictionary = {}
 var next_connect := 0.0
 var connected_at := 0.0
 var last_send := -INF
@@ -56,10 +66,27 @@ static func activity_text(value: String) -> String:
 	while text.to_utf8_buffer().size() > 128: text = text.left(text.length() - 1)
 	return text
 
+## `parts` joined with " · ", leaving out the last ones that do not fit
+## Discord's 128 bytes (a single part is cut short instead).
+static func fitting(parts: Array) -> String:
+	var kept: Array[String] = []
+	for part: Variant in parts:
+		if not str(part).strip_edges().is_empty(): kept.append(str(part).strip_edges())
+	while kept.size() > 1 and " · ".join(kept).to_utf8_buffer().size() > 128: kept.pop_back()
+	return activity_text(" · ".join(kept))
+
 ## An activity: what is played (`details`) and what is happening (`state`),
-## timed from the start of the game.
-func activity(details: String, state := "") -> Dictionary:
-	var result := {"details": activity_text(details), "timestamps": {"start": started}, "instance": false}
+## timed from the start of its `scene` (or of the game without one). A scene
+## inside another (a battle on a map) names it as `parent`: the parent keeps
+## its start while the inner scene lasts.
+func activity(details: String, state := "", scene := "", parent := "") -> Dictionary:
+	var now := int(Time.get_unix_time_from_system())
+	var starts := {}
+	for key: String in [parent, scene]:
+		if not key.is_empty(): starts[key] = scene_starts.get(key, now)
+	scene_starts = starts
+	desired_scene = scene
+	var result := {"details": activity_text(details), "timestamps": {"start": scene_starts.get(scene, started)}, "instance": false}
 	if not state.is_empty(): result.state = activity_text(state)
 	return result
 
@@ -74,6 +101,7 @@ func _process(_delta: float) -> void:
 		return
 	if now >= sample_at:
 		sample_at = now + 2.0
+		desired_scene = ""
 		desired = source.call() if source.is_valid() else {}
 	if not _open():
 		if now < next_connect: return
@@ -117,9 +145,11 @@ func _process(_delta: float) -> void:
 	if not ready_to_send and now - connected_at > 10.0:
 		_disconnect(now)
 		return
-	if ready_to_send and desired != sent and now - last_send >= UPDATE_SECONDS:
+	var wait := SCENE_SECONDS if desired_scene != sent_scene else UPDATE_SECONDS
+	if ready_to_send and desired != sent and now - last_send >= wait:
 		_set_activity(desired)
 		sent = desired.duplicate(true)
+		sent_scene = desired_scene
 		last_send = now
 	_flush()
 

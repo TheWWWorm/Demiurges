@@ -288,7 +288,7 @@ func tooltip_at(point: Vector2) -> String:
 				var title := profile.text(str(profile.table("CombatSpells").get(str(cards[index]), {}).get("Name", cards[index])))
 				var under := book_under(side)
 				if index < under.size() and not under[index].is_empty():
-					title += "\n" + ELRemakeText.t("Under it: %s (returns when its runes are spent in battle).", profile) % profile.text(str(profile.table("CombatSpells").get(under[index], {}).get("Name", under[index])))
+					title += "\n" + ELRemakeText.t("Under it: %s (drawn in its place in battle once its runes are spent; returns to the slot when it is stored).", profile) % profile.text(str(profile.table("CombatSpells").get(under[index], {}).get("Name", under[index])))
 				return title
 	if not exchange:
 		var spells := attached(heroes[0])

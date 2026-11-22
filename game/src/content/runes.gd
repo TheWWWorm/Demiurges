@@ -54,8 +54,10 @@ static func restore(profile: ELProfile, hero: Dictionary) -> bool:
 	return true
 
 ## The cantrip waiting under each book slot ("" for none), one per slot.
-## Bought over a cantrip, a laboratory spell keeps it underneath; when that
-## spell's runes are spent in a battle, the cantrip takes the slot back.
+## Bought over a cantrip, a laboratory spell keeps it underneath. A spell that
+## spends its last rune stays in the book with none, as in the original; in a
+## battle the cantrip under it is drawn in its place (ELSpellCharges), and it
+## takes the slot back only when the spell is stored in the reserve.
 static func under(hero: Dictionary) -> Array[String]:
 	var result: Array[String] = []
 	var kept: Variant = hero.get("rune_under", [])
@@ -134,8 +136,9 @@ static func basic_book(profile: ELProfile, colour: String) -> Array[String]:
 
 ## A hero freed from a prison begins with a book of the chapter's spells and
 ## no cantrip of its own (Thaereid, Mauleen). Its colour's basic spells go
-## under that book, slot by slot, so a spell stored or spent leaves the slot
-## to a basic spell as for any hero (#167). The book itself is unchanged.
+## under that book, slot by slot, so a stored spell leaves the slot to a
+## basic spell and a spent one draws it in battle, as for any hero (#167).
+## The book itself is unchanged.
 static func give_basic_under(profile: ELProfile, hero: Dictionary) -> void:
 	# Once: a later load does not give them again.
 	if hero.get("basic_under", false): return
@@ -148,18 +151,6 @@ static func give_basic_under(profile: ELProfile, hero: Dictionary) -> void:
 	var codes := under(hero)
 	for slot in mini(codes.size(), basic.size()):
 		if codes[slot].is_empty(): codes[slot] = basic[slot]
-	set_under(hero, codes)
-
-## After a battle (`before`: the book's runes when it began): a slot whose
-## spell spent its last rune gives the slot back to the cantrip under it.
-static func return_cantrips(hero: Dictionary, before: Array) -> void:
-	if not hero.has("rune_under"): return
-	var codes := under(hero)
-	for slot in mini(codes.size(), hero.get("rune_uses", []).size()):
-		if codes[slot].is_empty() or slot >= before.size() or int(before[slot]) <= 0 or int(hero.rune_uses[slot]) != 0: continue
-		hero.cards[slot] = codes[slot]
-		hero.rune_uses[slot] = -1
-		codes[slot] = ""
 	set_under(hero, codes)
 
 static func valid_count(profile: ELProfile, hero: Dictionary, card: String, value: Variant) -> bool:

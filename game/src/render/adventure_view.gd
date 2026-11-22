@@ -1312,7 +1312,7 @@ func _unhandled_input(event: InputEvent) -> void:
 				var body := state.object(corpse)
 				# First game: the click uses what the cursor shows, also a
 				# castle tower or figure drawn over the ground behind it.
-				var shown := _object_at(Vector2(hit.x, -hit.z) / ELAdventureTerrain.CELL, event.position) if hud != null else -1
+				var shown := _object_at(Vector2(hit.x, -hit.z) / ELAdventureTerrain.CELL, event.position, event.device == InputEvent.DEVICE_ID_EMULATION) if hud != null else -1
 				# Second game: the click uses the figure the cursor shows (its
 				# reach around the figure, ELSecondMapTooltips.object_at), not
 				# the ground tile under the pointer: a click off a creature's
@@ -1611,8 +1611,11 @@ const FIRST_SITE_GROUPS := ["mines", "mana_nodes", "forts", "laboratories", "fac
 ## Standing figures extend above their tile, so actors accept points slightly
 ## behind them; buildings use their footprint. With the pointer's screen
 ## position, the camera ray also picks the visible body of a figure or a tall
-## building (a castle tower drawn over the ground behind it).
-func _object_at(point: Vector2, screen := Vector2(-1, -1)) -> int:
+## building (a castle tower drawn over the ground behind it). A mouse pointer
+## then picks a figure only on its own cell or its drawn body, so the cells
+## around a creature (its guarded ground) stay easy to click; a tap (`touch`)
+## keeps the wider reach for a finger.
+func _object_at(point: Vector2, screen := Vector2(-1, -1), touch := false) -> int:
 	var best := -1
 	var distance := INF
 	var building := -1
@@ -1647,11 +1650,12 @@ func _object_at(point: Vector2, screen := Vector2(-1, -1)) -> int:
 			if near >= distance: continue
 			var along := offset.dot(behind)
 			var hit := absf(offset.cross(behind)) < 0.9 and along > -0.9 and along < 2.2
+			if normal != Vector3.ZERO and not touch: hit = Rect2(item.x, item.y, 1, 1).has_point(point)
 			# The drawn body, with some slack, so a figure takes a click
 			# anywhere on it, not only near its middle.
 			var depth := INF
 			if normal != Vector3.ZERO and near < 16.0:
-				var crossing: Variant = _pick_box(id, Rect2(float(item.x) + 0.15, float(item.y) + 0.15, 0.7, 0.7), 1.6).grow(FIGURE_SLACK).intersects_ray(origin, normal)
+				var crossing: Variant = _pick_box(id, Rect2(float(item.x) + 0.15, float(item.y) + 0.15, 0.7, 0.7), 1.6).grow(TOUCH_FIGURE_SLACK if touch else FIGURE_SLACK).intersects_ray(origin, normal)
 				if crossing != null: depth = origin.distance_to(crossing)
 			if (hit or depth < INF) and not _fogged(item):
 				best = id
@@ -1693,11 +1697,15 @@ func second_click_figure(point: Vector2) -> int:
 	var figure := ELSecondMapTooltips.object_at(state, point, true)
 	return figure if state.object(figure).get("type") in ["hero", "monster"] and figure != _hero_id() else -1
 
-## Slack (world units) around a figure's drawn body for picking it.
-const FIGURE_SLACK := 0.35
+## Slack (world units) around a figure's drawn body for picking it with the
+## mouse, and the wider slack a tap gets.
+const FIGURE_SLACK := 0.2
+const TOUCH_FIGURE_SLACK := 0.35
 
 ## Box the camera ray tests for an object: its footprint `cells` (map
-## cells), `fallback` cells tall, merged with its drawn figure. Buildings keep
+## cells), `fallback` cells tall, merged with its drawn figure. A figure (with
+## a `fallback` height) that is drawn uses its drawn body alone: a box taller
+## or wider than the body would catch the ground around it. Buildings keep
 ## theirs; moving figures are measured where they stand.
 var _pick_boxes: Dictionary = {}
 func _pick_box(id: int, cells: Rect2, fallback: float) -> AABB:
@@ -1706,7 +1714,7 @@ func _pick_box(id: int, cells: Rect2, fallback: float) -> AABB:
 	var ground := state.map.surface_height(cells.get_center())
 	var box := AABB(Vector3(cells.position.x * cell, ground, -cells.end.y * cell), Vector3(cells.size.x * cell, fallback * cell, cells.size.y * cell))
 	var drawn := world.object_bounds(id)
-	if drawn.has_volume(): box = box.merge(drawn)
+	if drawn.has_volume(): box = drawn if fallback > 0.0 else box.merge(drawn)
 	_pick_boxes[id] = box
 	return box
 
@@ -2162,6 +2170,8 @@ func _state_event(data: Dictionary) -> void:
 			if spellbook != null and int(data.id) == int(spellbook.get("hero_id")): spellbook.call("refresh")
 		"global_spell_ready":
 			if int(data.player) == state.current_player: _offer_global_spell()
+		"global_spell_cast":
+			_report_castle_spell(data)
 		"hero_placed":
 			if data.get("recruited", false): focus_recruit(int(data.id))
 		"summon_cast":
@@ -2446,6 +2456,25 @@ func _remark(text: String) -> void:
 	remark = text
 	# Without the original HUD art the status line is the only readout.
 	if notice != null and _observer_battle_note.is_empty() and (strategic_session != null or helper_overlay() or (hud == null and second_hud == null)): notice.text = text
+
+## A rival's spell cast on the local player's castle (Decay, Erosion, Shock
+## Resonance and the rest of ELGlobalSpells.HOSTILE_CASTLE) is reported in a
+## message box with the spell's own description, as the remake's spells act
+## where the original's did nothing: without it a castle that stops
+## regenerating or takes more from attacks gives no reason. The castle's
+## tooltip keeps listing the spells while they last.
+func _report_castle_spell(data: Dictionary) -> void:
+	if state.map.profile.id != "el1" or not ELGlobalSpells.HOSTILE_CASTLE.has(str(data.spell)): return
+	var caster := int(data.player)
+	if int(data.get("castle", -1)) != state.current_player or caster == state.current_player: return
+	var profile := state.map.profile
+	var code := str(data.spell)
+	var text := ELRemakeText.t("%s cast %s on your castle.", profile) % [ELFirstScenario.player_name(state, caster), ELGlobalSpells.title(profile, code)]
+	var about := profile.text(str(ELGlobalSpells.row(profile, code).get("Description", "")))
+	if not about.is_empty(): text += "
+
+" + about
+	_queue_building_message({"kind": "building_message", "hero": -1, "building": -1, "title": ELGlobalSpells.title(profile, code), "text": text, "resources": [], "skill": "", "key": ""})
 
 ## Scripted loot awarded during a battle joins the experience report on return.
 func _second_battle_loot_box(data: Dictionary) -> void:

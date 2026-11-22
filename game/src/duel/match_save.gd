@@ -129,7 +129,10 @@ static func decode(profile: ELProfile, raw: Dictionary) -> Dictionary:
 			for ability: Variant in c.ability_used:
 				var pale_rest: bool = profile.id == "el2" and c.card in ELCatalog.PALE_SUMMONS and (ability == "dissipate" or ELCatalog.PALE_ABILITIES.get(c.card, {}).get("key") == ability)
 				if not ({"illusion": "WLIL", "rouse": "SHSP", "phantasm": "PHWL"}.get(ability) == c.card or pale_rest) or c.ability_used[ability] is not bool: return _bad("Invalid creature ability state.")
-		if c.has("origin") and (c.origin not in [0, 1] or c.origin == c.owner): return _bad("Invalid creature control.")
+		# A creature back with its original owner keeps the mark only while control enchantments
+		# remain on it (an older one overruled, or one asleep in the Colourless Plane).
+		if c.has("origin") and (c.origin not in [0, 1] or (c.origin == c.owner and not (c.get("enchantments") is Array and c.enchantments.any(func(e: Variant) -> bool: return e is Dictionary and e.get("card") in ELCatalog.CONTROL)))):
+			return _bad("Invalid creature control.")
 		if c.has("auras") and (c.auras is not Array or c.auras.any(func(v: Variant) -> bool: return (v is not int and v is not float) or v < 0)): return _bad("Invalid creature control.")
 		if c.has("hit") and (c.hit is not bool): return _bad("Invalid creature combat mark.")
 		# Colourless Plane aspect and trap-made spell-jammer base stats (second game).

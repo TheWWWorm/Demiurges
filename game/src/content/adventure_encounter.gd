@@ -434,14 +434,12 @@ func finish() -> bool:
 	return true
 
 ## Spells cast during a duel use their map charges even if both sides retreat.
+## A spell whose last rune is spent stays in the book with none.
 func write_back_runes() -> void:
 	for side in 2:
 		var actor := state.object(hero_id if side == 0 else opponent_id)
 		if actor.type != "hero": continue
 		actor.rune_uses = battle.heroes[side].spell_uses.duplicate()
-		var players: Variant = battle.setup.get("players", [])
-		var before: Variant = players[side].get("rune_uses", []) if players is Array and players.size() == 2 and players[side] is Dictionary else []
-		ELRunes.return_cantrips(actor, before if before is Array else [])
 
 ## Whether this prepared battle may be declined: in the second game every
 ## local battle (PreCombatCancel); in the first game, a remake addition, a

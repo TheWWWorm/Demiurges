@@ -30,7 +30,7 @@ extends SceneTree
 ##   with no winner both sides take the defeat and die;
 ## - battle controls (reports #81 #90 #95 #96 #101 #103 #104 #108 #110):
 ##   Pale Revival is castable with a plane creature and a graveyard creature,
-##   Mystic manifestation needs an enchantment its hero cast, second-game
+##   Mystic manifestation needs an enchantment its hero cast, either game's
 ##   Attack all passes over 0-power creatures, a creature's own ability sits
 ##   left of its enchantments (a free one's tooltip is its text alone), the X
 ##   choice names what it counts and repeats while + or − is held, Fresh Wind
@@ -287,7 +287,7 @@ func _editor_artifact_charges(profile: ELProfile) -> void:
 	menu.free()
 
 ## First game laboratory (#69): bought over a cantrip, the cantrip waits
-## under the spell and comes back when its runes are spent in battle; bought
+## under the spell and is drawn in its place once its runes are spent; bought
 ## over another spell, that spell goes to the reserve with its runes.
 func _first_shop_reserve(profile: ELProfile) -> void:
 	var ids := ELCampaign.available(profile)
@@ -350,10 +350,9 @@ func _first_shop_reserve(profile: ELProfile) -> void:
 			var fighter := {"deck": [bought], "spell_uses": [0], "hand_slots": [], "drawn": [], "rune_under": [cantrip], "kind": "hero"}
 			var drawn := ELSpellCharges.choose_el1(fighter, profile.table("CombatSpells"), func(n: int): return 0)
 			check(drawn.get("card") == cantrip and int(drawn.get("slot", 0)) == -1, "el1 battle: a spent bought spell draws its cantrip")
-			# After the battle: spent runes give the slot back; unspent ones keep it.
-			hero.rune_uses.assign([0, 0])
-			ELRunes.return_cantrips(hero, [2, 0])
-			check(hero.cards == [cantrip, bought] and hero.rune_uses[0] == -1 and not hero.has("rune_under"), "el1: once its runes are spent in battle, the cantrip takes its slot back")
+			# After the battle the spent spell stays in the book with no runes
+			# (#289); the cantrip still waits under it.
+			check(hero.cards == [bought, bought] and ELRunes.under(hero) == [cantrip, ""], "el1: a spell whose runes are spent keeps its slot and the cantrip under it")
 			break
 		hero = {}
 	if trade.stock.is_empty(): print("NOTE: no early first-game mission has a usable laboratory; the purchase rules are not checked")
@@ -1258,8 +1257,8 @@ func _battle_controls(edition: String) -> void:
 	if edition == "el2" and not items.is_empty():
 		var about := profile.text(str(profile.table("CombatSpells").ORSH.AbilityText))
 		check(str(items[0].tooltip) == about, "el2: a free ability's tooltip is its text alone")
-	# Player suggestion: on the strip, an enchantment whose ability was used
-	# this round moves to the right end; unused ones come first.
+	# Player suggestion: on the player's own hero's strip, an enchantment whose
+	# ability was used this round moves to the right end; unused ones come first.
 	duel._enchant("LSHE", side, side, ELCatalog.rule(profile, "LSHE"))
 	duel._enchant("FRBL", side, side, ELCatalog.rule(profile, "FRBL"))
 	for e: Dictionary in duel.heroes[side].enchantments:
@@ -1273,8 +1272,19 @@ func _battle_controls(edition: String) -> void:
 	view._fill_strip()
 	cards = view.rail.strip.items.map(func(item: Dictionary) -> String: return str(item.meta.get("card", "")))
 	check(cards.find("LSHE") >= 0 and cards.find("LSHE") < cards.find("FRBL"), "%s: unused, the strip keeps the oldest first" % edition)
-	duel.heroes[side].enchantments = duel.heroes[side].enchantments.filter(func(e: Dictionary) -> bool: return not e.card in ["LSHE", "FRBL"])
-	# #101: second-game Attack all leaves a 0-power creature home.
+	# The opponent's hero keeps cast order: its used abilities do not move.
+	duel._enchant("LSHE", 1 - side, 1 - side, ELCatalog.rule(profile, "LSHE"))
+	duel._enchant("FRBL", 1 - side, 1 - side, ELCatalog.rule(profile, "FRBL"))
+	for e: Dictionary in duel.heroes[1 - side].enchantments:
+		if e.card == "LSHE": e.used = true
+	view.selected_creature = 1 - side
+	view._fill_strip()
+	cards = view.rail.strip.items.map(func(item: Dictionary) -> String: return str(item.meta.get("card", "")))
+	check(cards.find("LSHE") >= 0 and cards.find("LSHE") < cards.find("FRBL"), "%s: the opponent's hero strip keeps cast order, used abilities included (%s)" % [edition, cards])
+	duel.heroes[1 - side].enchantments = duel.heroes[1 - side].enchantments.filter(func(e: Dictionary) -> bool: return not e.card in ["LSHE", "FRBL"])
+	view.selected_creature = side
+	duel.heroes[side].enchantments =duel.heroes[side].enchantments.filter(func(e: Dictionary) -> bool: return not e.card in ["LSHE", "FRBL"])
+	# #101, #292: Attack all leaves a 0-power creature home in both games.
 	var strong := _summoned(duel, side, "ORSH")
 	var weak := _summoned(duel, side, "ORSH")
 	for id: int in [strong, weak]:
@@ -1282,7 +1292,7 @@ func _battle_controls(edition: String) -> void:
 		duel.creatures[id].resting = false
 	duel.creatures[weak].power = 0
 	view._attack_all()
-	check(duel.attacks.has(strong) and duel.attacks.has(weak) == (edition == "el1"), "%s: Attack all %s a 0-power creature" % [edition, "sends" if edition == "el1" else "leaves out"])
+	check(duel.attacks.has(strong) and not duel.attacks.has(weak), "%s: Attack all leaves out a 0-power creature" % edition)
 	view.queue_free()
 	await frames(2)
 

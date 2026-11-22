@@ -17,8 +17,9 @@ extends SceneTree
 ## - a new book (ELRunes.initialize) drops what waited under the old one;
 ## - #167: a hero freed from a prison (Thaereid, Chaot chapter 1) keeps the
 ##   chapter's book and gets his colour's basic spells under it, slot by
-##   slot; storing a spell or spending its runes gives the slot to the basic
-##   spell; a save and load keep them, and a save made before they were given
+##   slot; storing a spell gives the slot to the basic spell, and a spell with
+##   no runes left keeps its slot and draws the basic spell in battle (#289);
+##   a save and load keep them, and a save made before they were given
 ##   gets them once.
 ##
 ##   godot --headless --path game --script ../tools/spellbook_reserve_check.gd
@@ -325,10 +326,10 @@ func _prisoner(profile: ELProfile) -> void:
 	check(ELRunes.under(freed) == basic, "prisoner: a basic spell waits under each of his 15 spells")
 	var basics_given := ELRunes.under(freed).duplicate()
 	check(ELSpellInventory.unequip(profile, freed, 0).is_empty() and freed.cards.size() == 15 and freed.cards[0] == basic[0] and int(freed.rune_uses[0]) == -1 and freed.rune_stock.get(book[0], []).has(5), "prisoner: storing a spell gives its slot to the basic spell; the book keeps 15 slots and the spell its runes")
-	var before: Array = freed.rune_uses.duplicate()
 	freed.rune_uses[3] = 0
-	ELRunes.return_cantrips(freed, before)
-	check(freed.cards[3] == basic[3] and freed.cards.size() == 15, "prisoner: a spell that spends its last rune in a battle leaves the slot to the basic spell")
+	var fighter := {"deck": freed.cards.slice(3, 4), "spell_uses": [0], "hand_slots": [], "drawn": [], "rune_under": [basic[3]], "kind": "hero"}
+	var drawn := ELSpellCharges.choose_el1(fighter, profile.table("CombatSpells"), func(n: int): return 0)
+	check(freed.cards[3] == book[3] and drawn.get("card") == basic[3] and freed.cards.size() == 15, "prisoner: a spell with no runes left keeps its slot and draws the basic spell in battle")
 	var loaded := _reload(session, true)
 	var again: Dictionary = loaded.get("state", ELAdventureSession.new()).object(int(freed.uid)) if not loaded.is_empty() else {}
 	check(not again.is_empty() and again.cards == freed.cards and ELRunes.under(again) == ELRunes.under(freed), "prisoner: a save and load keep his book and the basic spells under it")

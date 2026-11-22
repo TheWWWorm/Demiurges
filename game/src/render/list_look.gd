@@ -70,6 +70,18 @@ class Face extends Control:
 		var mode := button.get_draw_mode()
 		if not button.disabled and (mode == BaseButton.DRAW_PRESSED or mode == BaseButton.DRAW_HOVER_PRESSED) and button.is_hovered():
 			rect = rect.grow(-2)
+		# A remake mark (meta "rim": three colours, top, middle and bottom): the icon sits inside
+		# a thin side-coloured gradient frame, as the battle history frames its tiles.
+		var rim: Variant = button.get_meta("rim") if button.has_meta("rim") else null
+		if rim is Array and (rim as Array).size() >= 3:
+			draw_rect(rect, Color(0.05, 0.03, 0.03))
+			var band := rect.grow(-1)
+			var middle := band.position.y + band.size.y * 0.5
+			draw_polygon(PackedVector2Array([band.position, Vector2(band.end.x, band.position.y), Vector2(band.end.x, middle), Vector2(band.position.x, middle)]),
+				PackedColorArray([rim[0], rim[0], rim[1], rim[1]]))
+			draw_polygon(PackedVector2Array([Vector2(band.position.x, middle), Vector2(band.end.x, middle), band.end, Vector2(band.position.x, band.end.y)]),
+				PackedColorArray([rim[1], rim[1], rim[2], rim[2]]))
+			rect = rect.grow(-4)
 		if button.texture_normal != null: draw_texture_rect(button.texture_normal, rect, false)
 		if button.disabled:
 			if look.veil != null: draw_texture_rect(look.veil, rect, false, ELListLook.VEIL_TINT)

@@ -264,6 +264,10 @@ var melee: ELMeleePlayback
 var front_line: Array[int] = []
 ## Blockers on the front line: blocker -> the attacker it faces.
 var front_faces: Dictionary = {}
+## First game: declared attackers that regenerated before combat. The rules keep
+## them declared but they no longer fight, so their figures walk back to the rear
+## line (as the second game shows them) until the attack is over.
+var regenerated_home: Dictionary = {}
 ## The Duel mode match's report (option VisualLog), or null.
 var duel_report: ELDuelReport
 var match_round_recorded := false
@@ -776,6 +780,10 @@ func _start(edition: String, options: Dictionary = {}, restored: ELDuel = null, 
 			if is_equal_approx(piece.destination.position.x, ELHudFrame.CAPTION_LEFT) and is_equal_approx(piece.destination.end.x, ELHudFrame.CAPTION_RIGHT): oval = piece
 		battle_history.set_frame(oval)
 		battle_history.set_symbols(profile.texture("Interface/combatsymbols"))
+		# The open card wears the battle tooltips' frame (ELCombatTooltip).
+		var tip_pieces := ELCombatTooltip.FIRST_FRAME if profile.id == "el1" else ELSecondMapTooltip.square_pieces(ELSecondMapTooltips.PANEL_SOURCE, ELSecondMapTooltips.PANEL_BORDER)
+		battle_history.set_tooltip_frame(profile.texture(ELSecondMapTooltips.PANEL_TEXTURE), tip_pieces)
+		battle_history.set_arrow_sheet(profile.texture("Interface/black/tooltip1"))
 		var attack_cursor := ELCursors.cursor(profile, "attack")
 		battle_history.set_cursor(attack_cursor.images[0] if not attack_cursor.get("images", []).is_empty() else null)
 	symbols.build(profile)
@@ -829,6 +837,7 @@ func _start(edition: String, options: Dictionary = {}, restored: ELDuel = null, 
 	selection_ring.hide()
 	front_line = []
 	front_faces = {}
+	regenerated_home = {}
 	melee = ELMeleePlayback.new()
 	melee.view = self
 	stage.add_child(melee)
@@ -2240,7 +2249,9 @@ func _step_front_line() -> void:
 	if not melee.busy() and _shown_phase() != ELDuel.Phase.FINISHED:
 		var attacks: Array = _shown.attacks if _display_active() else duel.attacks
 		var blocks: Dictionary = _shown.blocks if _display_active() else duel.blocks
-		declared.assign(attacks)
+		for id: int in regenerated_home.keys():
+			if not attacks.has(id): regenerated_home.erase(id)
+		declared.assign(attacks.filter(func(id: int) -> bool: return not regenerated_home.has(id)))
 		for id: int in blocks:
 			if attacks.has(int(blocks[id])) and not declared.has(id):
 				declared.append(id)
@@ -2361,6 +2372,9 @@ func _on_duel_event(data: Dictionary) -> void:
 		if not (kind.ends_with("_cue") or kind in ["combat_ability", "camera_cue", "combat_event", "attack_tax_effect"]):
 			data.shown = _display_stamp()
 		if kind == "strike" and is_instance_valid(melee): melee.stamp_strike(data)
+		# Blast's OuterBlast shows only on a Pale target; note it before the
+		# spell resolves, as its 3 damage can remove the creature.
+		if kind == "cast" and profile.id == "el2" and data.get("card") == "OBLS": data.pale_target = duel.pale(int(data.get("target", -1)))
 		# A life drain heals when its DrainLife effect reaches the hero.
 		if data.get("kind") == "heal" and _drain_started: data.drain = true
 		_drain_started = (data.get("kind") == "combat_ability" and data.get("key") == "Lifetap") or data.get("kind") == "bat_drain_cue" \
@@ -2777,6 +2791,10 @@ func _event(data: Dictionary) -> void:
 			elif profile.id in ["el1", "el2"] and data.card in ["DECN", "CLSN"]:
 				# Disenchant sounds come with each holder's effect at release.
 				pass
+			elif profile.id == "el2" and data.card == "OBLS":
+				# Blast's (OBLS) two effects are each conditional; their sounds
+				# come with them at release.
+				pass
 			elif profile.id == "el2" and data.card in WARD_CARDS:
 				for name: String in _ward_effects(String(data.card), int(data.get("target", -1))):
 					battle_audio.effect(name)
@@ -2852,12 +2870,17 @@ func _event(data: Dictionary) -> void:
 			# bind BlackExile to their selected Target. Their shipped
 			# Monsters Hit callback is frame 90 (30 fps): keep the original
 			# creature model as the effect anchor until then, although the
-			# creature has already left gameplay state. Other exiles clean up
-			# just after the deferred cast effects receive their target.
+			# creature has already left gameplay state. Both original
+			# Disintegrations chain the creature's removal after their
+			# RedFireStream from the caster (Start) to it (Finish): it stays
+			# until the stream ends. Other exiles clean up just after the
+			# deferred cast effects receive their target.
 			var id := int(data.target)
 			var delay := 0.0
 			if profile.id in ["el1", "el2"] and _effect_cast.get("card", "") == "EXIL" and int(_effect_cast.get("target", -1)) == id:
 				delay = float(_effect_cast.get("hit", 0.0))
+			elif profile.id in ["el1", "el2"] and _effect_cast.get("card", "") == "DSIG" and int(_effect_cast.get("target", -1)) == id:
+				delay = float(_effect_cast.get("release", 0.0)) + float(ELCombatEffects.fx_frames(profile, "RedFireStream")) / ELParticleFile.FPS
 			if delay > 0.0 and models.has(id) and is_inside_tree():
 				_hits_waiting[id] = int(_hits_waiting.get(id, 0)) + 1
 				_schedule_battle_cue(delay, _finish_exile.bind(id))
@@ -3176,6 +3199,9 @@ func _event(data: Dictionary) -> void:
 			battle_audio.effect("RegenEffect")
 			_figure_effect("RegenEffect", data.target)
 			_float_text(data.target, "Regeneration", Color("91dcc2"), true)
+			if profile.id == "el1" and front_line.has(int(data.target)) and not _melee_busy() \
+					and (_shown.attacks if _display_active() else duel.attacks).has(int(data.target)):
+				regenerated_home[int(data.target)] = true
 		"disenchant":
 			_float_text(data.target, "Disenchanted", Color("91dcc2"), true)
 		"artifact":
@@ -3494,6 +3520,9 @@ func _pend_cast_effects(data: Dictionary, artifact: bool) -> void:
 		_effect_cast.hunger_sites = []
 	if profile.id in ["el1", "el2"] and card in ["DECN", "CLSN"]:
 		_effect_cast.cleanse_holders = []
+	if profile.id == "el2" and card == "OBLS":
+		_effect_cast.cleanse_holders = []
+		_effect_cast.pale_target = bool(data.get("pale_target", false))
 	if profile.id == "el1" and card == "FRNT":
 		_effect_cast.fury_attempts = 0
 		_effect_cast.fury_attacker = int(duel.attacker)
@@ -3876,6 +3905,19 @@ func _start_cast_effects() -> void:
 			if not models.has(id): continue
 			effects.play("Disenchant", {"Target": [models[id]]})
 			battle_audio.effect("Disenchant", models[id])
+		return
+	# The original Blast (OBLS) plays Disenchant at its target only when the
+	# latest enchantment there can be removed, and OuterBlast only when the
+	# target is Pale; a plain creature without enchantments gets neither.
+	if profile.id == "el2" and pending.card == "OBLS":
+		var id := int(pending.target)
+		if not models.has(id): return
+		if pending.get("cleanse_holders", []).has(id):
+			effects.play("Disenchant", {"Target": [models[id]]})
+			battle_audio.effect("Disenchant", models[id])
+		if pending.get("pale_target", false):
+			effects.play("OuterBlast", {"Target": [models[id]]})
+			battle_audio.effect("OuterBlast", models[id])
 		return
 	if profile.id in ["el1", "el2"] and pending.card in ["CRHG", "RVHG"]:
 		for id: int in pending.get("hunger_sites", []):
@@ -4965,6 +5007,9 @@ func _animation_done(clip: String, id: int) -> void:
 	if id >= 2 and c.is_empty():
 		if not _shown_held() and not duel.creatures.has(id): _remove_model(id)
 		return
+	# A figure about to walk home after its exchange keeps its last frame
+	# until it sets off, rather than a flash of its idle.
+	if is_instance_valid(melee) and melee.holds_pose(id): return
 	# A battle settles before its blows are shown: only the heroes keep their
 	# end poses, creatures still finish their moves and lie down at home.
 	if _shown_phase() == ELDuel.Phase.FINISHED and id < 2:
@@ -5065,9 +5110,13 @@ func _ability_marks(id: int, c: Dictionary) -> Array:
 	var owned: Array = []
 	owned.append_array(c.get("flags", []))
 	owned.append_array(c.get("granted", []))
+	# Robbery comes from the creature's own Discard(n) or from an enchantment
+	# that grants it (Thief), as the rules count it on a hit.
+	var robber: bool = owned.any(func(flag: Variant) -> bool: return String(flag).begins_with("Discard(")) \
+		or c.get("enchantments", []).any(func(e: Variant) -> bool: return ELCatalog.granted_discard(profile, String(e.get("card", ""))) > 0)
 	var marks: Array = [owned.has("NoAttack"), owned.has("Fly"), owned.has("FS"),
 		owned.has("Trample"), owned.has("Restless"), owned.has("Lifetap"), duel.regeneration_cost(id) > 0,
-		owned.any(func(flag: Variant) -> bool: return String(flag).begins_with("Discard(")), owned.has("Disenchant"), owned.has("Destroy"),
+		robber, owned.has("Disenchant"), owned.has("Destroy"),
 		duel.cannot_rise(id), owned.has("UB"), owned.has("NSS"), owned.has("Berserk"), owned.has("TeamAttack"), owned.has("Elusive")]
 	# The second game's spell-silencing icon has a text but no mechanic: no
 	# released creature silences spells (Pale spell-jammers included), so it never shows.
@@ -5445,13 +5494,13 @@ func _refresh_hand_buttons() -> void:
 func _attack_all() -> void:
 	if not _human_turn() or duel.phase != ELDuel.Phase.ATTACK: return
 	var army := duel.army(duel.active_side())
-	# The second game's Attack all passes over creatures whose
-	# current power is 0 or less; they can still be sent alone.
-	var powerless: bool = profile.id == "el2"
+	# Attack all passes over creatures whose current power is 0 or less, as
+	# the second game's does (the first game's sent them too); they can
+	# still be sent alone.
 	# Declare ordinary attackers first so their guards can follow.
 	for guards: bool in [false, true]:
 		for c: Dictionary in army:
-			if powerless and int(c.power) <= 0: continue
+			if int(c.power) <= 0: continue
 			if duel.has_flag(c.id, "TeamAttack") == guards and duel.can_declare_attack(c.id): duel.toggle_attack(c.id)
 
 ## A creature put to rest by an action, or rising from rest, plays the figure's own tap
@@ -5865,6 +5914,21 @@ func _mark_text(card: String) -> String:
 	var text := str(row.get("AbilityText", ""))
 	return "" if text.is_empty() else profile.text(text)
 
+## A control enchantment's tooltip lines (a remake addition): whose hero cast it, and why it has
+## no effect when an older one is overruled by the latest or it sleeps in the Colourless Plane.
+## Its strip icon also sits in the battle history's side frame: blue for the viewer's, red for
+## the opponent's.
+func _control_note(subject: int, enchantment: Dictionary) -> String:
+	var note := ELRemakeText.t("Cast by your hero." if int(enchantment.owner) == _history_side() else "Cast by the opposing hero.", profile)
+	if profile.id == "el2" and duel.in_plane(subject):
+		note += "\n" + ELRemakeText.t("Asleep: control has no effect in the Colourless Plane.", profile)
+	else:
+		var latest := -1
+		for e: Dictionary in duel.creatures[subject].enchantments:
+			if e.card in ELCatalog.CONTROL: latest = int(e.id)
+		if latest != int(enchantment.id): note += "\n" + ELRemakeText.t("Overruled: only the latest control enchantment has effect.", profile)
+	return note
+
 ## An enchantment's icon: a creature mark's AbilityIcon, else the card's.
 func _enchantment_icon(card: String) -> Texture2D:
 	return profile.icon_at(int(profile.table("CombatSpells")[card].AbilityIcon)) if not _mark_text(card).is_empty() else profile.card_icon(card)
@@ -6117,7 +6181,7 @@ func _history_target(target: int, card: String) -> void:
 func _history_change(id: int, change: Dictionary, card: String) -> void:
 	if id < 0 or not battle_history.has_current(): return
 	var face := _history_face(id, card)
-	battle_history.touch(id, face[0], face[1], change)
+	battle_history.touch(id, face[0], face[1], change, _history_owner(id))
 
 ## The battle log (L) keeps the whole battle, up to LOG_LINES lines, and
 ## scrolls with the wheel or its bar; it follows the newest line unless the
@@ -7269,7 +7333,7 @@ func _interface_page(page: VBoxContainer) -> void:
 	discord_toggle.toggled.connect(func(enabled: bool):
 		settings.values.discord_activity = enabled
 		if is_instance_valid(discord): discord.enabled = enabled)
-	_settings_row(sharing, "Discord activity", "Shows the game and whether you are in the menus, on a map or in a battle in the Discord desktop app. Nothing else is shared; off clears it.", discord_toggle)
+	_settings_row(sharing, "Discord activity", "Shows in the Discord desktop app which game you play and what you are doing: the menu screen, the mission, day and hero on a map, the kind of battle with its opponent, turn and both heroes' life, or the remake mode and its progress. Player and save names are never shared; off clears it.", discord_toggle)
 
 const HISTORY_HELP := "In battle, a column at the left edge lists every play of the battle, the newest on top: spells, abilities, artifacts and attacks, framed blue for yours and red for the opponent's. Point at one (or tap it) to see the card and what it did to each character; the mouse wheel or a drag scrolls back. It replaces the icons of the turn's spells at the top left. Off: those icons, as in the original."
 
@@ -7881,22 +7945,11 @@ func _apply_settings() -> void:
 	if is_instance_valid(_autochess_screen): _autochess_screen.apply_settings(settings.values)
 	_refresh()
 
-## What Discord shows: the game, and the menus, a campaign map or a battle.
-## No hero, player or save names.
+## What Discord shows: the game, the screen or mode, and what is happening in
+## it (ELDiscordStatus). No player or save names.
 func _discord_activity() -> Dictionary:
 	discord.enabled = bool(settings.values.get("discord_activity", true))
-	var russian := ELRemakeText.language(_shown_profile()) == "ru"
-	var game := ELContentLibrary.title(profile.id) if profile != null else "Demiurges"
-	if russian and profile != null: game = "Демиурги" if profile.id == "el1" else "Демиурги II"
-	var state := "Main menu"
-	if front_menu != null and front_menu.is_visible_in_tree(): state = "Main menu"
-	elif campaign_view != null and campaign_view.visible: state = "Campaign map"
-	elif duel != null and duel.phase != ELDuel.Phase.FINISHED:
-		if campaign_view != null: state = "Campaign battle"
-		elif demo: state = "Watching a battle"
-		elif _hot_seat(): state = "Duel (hot seat)"
-		else: state = "Duel"
-	return discord.activity(game, _t(state))
+	return ELDiscordStatus.describe(self)
 
 func _preview_volumes(values: Dictionary) -> void:
 	if is_instance_valid(_arena_screen): _arena_screen.apply_volumes(values)
@@ -8827,25 +8880,31 @@ func _enchantment_ability(enchantment: Dictionary, subject := -2, listed: Varian
 		if subject >= 2 and ability.key == ENCHANTMENT_ABILITIES.get(enchantment.card, ""): return ability
 	return {}
 
-## A character's enchantments in strip order (remake convenience, a player's
-## suggestion): those still to act on come first, an ability not yet used
-## this round or an enemy's enchantment to be dispelled; then the rest; the
-## abilities already used this round go to the right end. Within each group
-## the oldest stays first.
+## A character's enchantments in strip order. Both originals list them in
+## cast order for every character; the remake (players' suggestions) sorts
+## only the characters of the side at this screen: enchantments whose ability
+## can still be used this round first, then the harmful ones (cast by the
+## other side: poisons, curses), then the rest, and abilities already used
+## this round at the right end. The other side's characters keep cast order,
+## so the strip does not tell which of their abilities were used. Within each
+## group the oldest stays first.
 func _strip_enchantments(subject: int) -> Array[Dictionary]:
 	var entity := duel.entity(subject) if subject >= 0 else {}
 	var result: Array[Dictionary] = []
 	if entity.is_empty(): return result
 	var holder := subject if subject < 2 else int(entity.get("owner", -1))
 	var ranked: Array = []
-	var listed := duel.abilities(subject)
 	var enchantments := _shown_enchantments(subject)
+	var sorted := holder == _displayed_side()
+	var listed: Array = duel.abilities(subject) if sorted else []
 	for index in enchantments.size():
 		var enchantment: Dictionary = enchantments[index]
-		var ability := _enchantment_ability(enchantment, subject, listed)
-		var used: bool = not ability.is_empty() and bool(ability.get("used", false))
-		var hostile := int(enchantment.get("owner", holder)) != holder
-		var rank := 2 if used else (0 if hostile or not ability.is_empty() else 1)
+		var rank := 0
+		if sorted:
+			var ability := _enchantment_ability(enchantment, subject, listed)
+			var harmful := int(enchantment.get("owner", holder)) != holder
+			if ability.is_empty(): rank = 1 if harmful else 2
+			else: rank = 3 if bool(ability.get("used", false)) else 0
 		ranked.append([rank, index, enchantment])
 	ranked.sort_custom(func(a: Array, b: Array) -> bool: return a[0] < b[0] or (a[0] == b[0] and a[1] < b[1]))
 	for entry: Array in ranked: result.append(entry[2])
@@ -8996,7 +9055,11 @@ func _fill_strip() -> void:
 			if not about.is_empty() and about != enchantment.card: tip += "\n" + about
 			var own: bool = subject == duel.active_side() or (subject >= 2 and int(entity.get("owner", -1)) == duel.active_side())
 			var enabled: bool = _removal_allowed(enchantment) if pending else (not ability.is_empty() and own and _human_turn() and duel.can_use_ability(subject, ability.key, listed))
-			list.append({"icon": _enchantment_icon(enchantment.card), "tooltip": tip, "enabled": enabled, "meta": {"enchantment": int(enchantment.id), "card": enchantment.card}})
+			var rim: Variant = null
+			if subject >= 2 and enchantment.card in ELCatalog.CONTROL:
+				rim = ELBattleHistory.OWN_FRAME if int(enchantment.owner) == _history_side() else ELBattleHistory.RIVAL_FRAME
+				tip += "\n" + _control_note(subject, enchantment)
+			list.append({"icon": _enchantment_icon(enchantment.card), "tooltip": tip, "enabled": enabled, "meta": {"enchantment": int(enchantment.id), "card": enchantment.card, "rim": rim}})
 	var signature := "%d:%s:" % [shown, inspect_graveyard]
 	for item: Dictionary in list: signature += str(item.meta.get("card", "")) + ","
 	rail.strip.set_items(list, signature)

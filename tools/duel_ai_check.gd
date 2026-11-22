@@ -518,7 +518,7 @@ func _fixtures() -> void:
 	# power sent beside the guards, and objectives other than a kill.
 	ELPuzzles.remember = false
 	for wanted: Array in [["el1", "count_the_ashes"], ["el1", "room_for_two"], ["el1", "empty_handed_standard"], ["el1", "dangerous_promotion"],
-			["el1", "wings_outlive_wizard"], ["el1", "borrowed_armour"], ["el2", "exact_price"], ["el2", "last_line_of_defence"], ["el2", "shared_escape"],
+			["el1", "wings_outlive_wizard"], ["el1", "borrowed_armour"], ["el2", "exact_price"], ["el2", "last_line_of_defence"],
 			# A gain laid on a deluded creature and a beholder mother's ban on walls.
 			["el1", "curiosity_inferno_geometry"], ["el2", "curiosity_needed_enemy"],
 			# An enchantment's card that comes back to the hand and is cast

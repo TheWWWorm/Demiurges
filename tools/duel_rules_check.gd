@@ -1124,6 +1124,7 @@ func _parity() -> void:
 	_won_in_the_fight()
 	_wounded_blockers()
 	_revised_block()
+	_control_stacks()
 	# A lamia warlord in play makes every lamia two cheaper, to no less than 1.
 	_fixture("lamia discount", {"heroes": [{"health": 20, "mana": 50, "hand": ["LMWD", "LMMN"]}, {"health": 20, "mana": 0}], "creatures": []},
 		[["cast", 0], ["cast", 1]], func(d: ELDuel) -> bool: return int(d.heroes[0].mana) == 38)
@@ -1301,6 +1302,27 @@ func _parity() -> void:
 		_fixture("weaving gives a card to cast", {"puzzle": "el2_tactical_v2_curiosity_glass"},
 			[["do", {"choice": 2, "id": 2, "key": "weave", "kind": "ability", "target": 3}], ["back", 0, 2, 0]],
 			func(d: ELDuel) -> bool: return d._enchantment_count(0, "ENBR") == 1 and d.heroes[0].hand.size() == 2)
+		# #298: Colourless Revival is answered by a creature's own regeneration (its hero pays the
+		# treant's one ether); what Self-restoration or Vitality lends is dormant in the plane.
+		var in_plane := func(d: ELDuel) -> void: d.creatures[2].plane = true
+		for entry: Array in [["own regeneration", "TANT", [], [], true], ["self-restoration", "TIWR", ["SLRP"], [], false], ["vitality", "TIWR", [], ["VTLY"], false]]:
+			_fixture("colourless revival against %s" % entry[0], {"heroes": [{"health": 20, "mana": 10, "hand": ["ORFT"]}, {"health": 20, "mana": 5, "grave": ["GBAT"], "enchantments": entry[3]}],
+				"after": in_plane, "creatures": [{"card": entry[1], "owner": 1, "enchantments": entry[2]}]},
+				[["do", {"kind": "cast", "card": "ORFT", "target": 2, "grave": ELDuel.GRAVE_SIDE}]],
+				func(d: ELDuel) -> bool: return d.creatures.has(2) == entry[4] and int(d.heroes[1].mana) == (4 if entry[4] else 5) and d.army(0).size() == 1)
+	# #300: a pteros pays the enchantment's cost after taking it off, and Flicker pays that part
+	# after the removal too, so a Prickly Ether removed does not prick its own payment.
+	for pair: Array in [["PTRS", "dispel"], ["RFPT", "disenchant"]]:
+		_fixture("%s takes off the only prickly ether" % pair[1], {"heroes": [{"health": 20, "mana": 10}, {"health": 20, "mana": 0, "enchantments": ["MNTH"]}],
+			"creatures": [{"card": pair[0], "owner": 0}]}, [["do", {"choice": 1, "id": 2, "key": pair[1], "kind": "ability", "target": 1}]],
+			func(d: ELDuel) -> bool: return int(d.heroes[0].health) == 20 and int(d.heroes[0].mana) == 7)
+		_fixture("%s takes off one of two prickly ethers" % pair[1], {"heroes": [{"health": 20, "mana": 10, "enchantments": ["MNTH"]}, {"health": 20, "mana": 0, "enchantments": ["MNTH"]}],
+			"creatures": [{"card": pair[0], "owner": 0}]}, [["do", {"choice": 2, "id": 2, "key": pair[1], "kind": "ability", "target": 1}]],
+			func(d: ELDuel) -> bool: return int(d.heroes[0].health) == 17 and int(d.heroes[0].mana) == 7)
+	_fixture("flicker on the only prickly ether", {"heroes": [{"health": 20, "mana": 10, "hand": ["FLIC"]}, {"health": 20, "mana": 0, "enchantments": ["MNTH"]}], "creatures": []},
+		[["do", {"kind": "cast", "card": "FLIC", "target": 1, "grave": 1}]], func(d: ELDuel) -> bool: return int(d.heroes[0].health) == 18 and int(d.heroes[0].mana) == 5)
+	_fixture("flicker on one of two prickly ethers", {"heroes": [{"health": 20, "mana": 10, "hand": ["FLIC"], "enchantments": ["MNTH"]}, {"health": 20, "mana": 0, "enchantments": ["MNTH"]}], "creatures": []},
+		[["do", {"kind": "cast", "card": "FLIC", "target": 1, "grave": 2}]], func(d: ELDuel) -> bool: return int(d.heroes[0].health) == 13 and int(d.heroes[0].mana) == 5)
 	_specs()
 	_specs_cast()
 	_swapped()
@@ -1733,6 +1755,50 @@ func _wounded_blockers() -> void:
 ## moving the block onto the 5/5. The engine once never went back on a block.
 ## The rules side too: setting a blocker against the attacker it blocks takes
 ## the block back, against another moves it, in both sets of rules.
+## Several control enchantments on one creature: only the latest cast has
+## effect. Taking it off hands the creature to the caster of the newest one
+## left (it waits a turn); taking off an older one changes nothing. In the
+## second game control sleeps in the Colourless Plane: a controlled creature
+## entering it goes back to its original owner, and back to the controller
+## when it manifests. Side 1's wall (#3) or devourer is the creature; the
+## ring (RDCM) and the spell (CHCM) are told apart by the engine's dispels.
+func _control_stacks() -> void:
+	var game := profile.id
+	var lay := func(order: Array, victim: int) -> Callable:
+		return func(d: ELDuel) -> void:
+			for pair: Array in order:
+				var card: String = pair[0]
+				var rule: Dictionary = ELCatalog.rule(profile, card)
+				if rule.is_empty(): rule = ELCatalog.ARTIFACT_EFFECTS[card]
+				d._enchant(card, int(pair[1]), victim, rule)
+			d.creatures[victim].sick = false
+	var walls := [{"card": "TIWR", "owner": 0}, {"card": "TIWR", "owner": 1}]
+	var dispeller := [{"health": 20, "mana": 20, "hand": ["PRFY"]}, {"health": 20, "mana": 20}]
+	_fixture("control stack, the latest dispelled", {"heroes": dispeller, "creatures": walls, "after": lay.call([["RDCM", 0], ["CHCM", 1]], 3)},
+		[["do", {"kind": "cast", "card": "PRFY", "target": 3, "grave": 2}]],
+		func(d: ELDuel) -> bool: return int(d.creatures[3].owner) == 0 and d.creatures[3].sick and _controls_on(d, 3) == ["RDCM"])
+	_fixture("control stack, the older dispelled", {"heroes": dispeller, "creatures": walls, "after": lay.call([["CHCM", 0], ["RDCM", 1]], 3)},
+		[["do", {"kind": "cast", "card": "PRFY", "target": 3, "grave": 1}]],
+		func(d: ELDuel) -> bool: return int(d.creatures[3].owner) == 1 and not d.creatures[3].sick and _controls_on(d, 3) == ["RDCM"])
+	if game != "el2": return
+	var pale := [{"card": "TIWR", "owner": 0}, {"card": "OUD1", "owner": 1}]
+	var heroes := [{"health": 20, "mana": 20, "channels": 3, "hand": ["BNSH"]}, {"health": 20, "mana": 20, "channels": 3}]
+	_fixture("control asleep after dissipating", {"heroes": heroes, "creatures": pale, "after": lay.call([["CHCM", 0]], 3)},
+		[["do", {"kind": "ability", "id": 3, "key": "dissipate"}]],
+		func(d: ELDuel) -> bool: return int(d.creatures[3].owner) == 1 and d.in_plane(3) and d.creatures[3].sick and _controls_on(d, 3) == ["CHCM"])
+	_fixture("control asleep after banishment", {"heroes": heroes, "creatures": pale, "after": lay.call([["CHCM", 0]], 3)},
+		[["do", {"kind": "cast", "card": "BNSH", "target": 3}]],
+		func(d: ELDuel) -> bool: return int(d.creatures[3].owner) == 1 and d.in_plane(3))
+	_fixture("control wakes as it manifests", {"heroes": heroes, "creatures": pale, "after": lay.call([["CHCM", 0]], 3)},
+		[["do", {"kind": "ability", "id": 3, "key": "dissipate"}], ["end"], ["do", {"kind": "ability", "id": 3, "key": "fiendish"}]],
+		func(d: ELDuel) -> bool: return int(d.creatures[3].owner) == 0 and not d.in_plane(3) and d.creatures[3].sick)
+
+func _controls_on(d: ELDuel, id: int) -> Array:
+	var out: Array = []
+	for e: Dictionary in d.creatures[id].enchantments:
+		if e.card in ELCatalog.CONTROL: out.append(e.card)
+	return out
+
 func _revised_block() -> void:
 	var spec := {"phase": "defence", "attacks": [2, 3], "heroes": [{"health": 20, "mana": 0}, {"health": 5, "mana": 0}],
 		"creatures": [{"card": "GROG", "owner": 0, "power": 1, "toughness": 1, "flags": []},

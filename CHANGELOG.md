@@ -2,6 +2,40 @@
 
 Versions follow [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html) from 0.3.0 on.
 
+## 0.25.0
+
+### New
+
+- **Play history cards.** Hovering a tile opens its card in the battle tooltips' own frame and lettering. Hero photos and other wide pictures keep their shape, every picture has the same blue or red gradient frame as the tiles, and the original's bronze chevrons point from the play to the characters it touched, with more room between them. Scrolling stops at the battle's first play instead of running on into an empty column.
+- **Discord status for every screen.** The status names the game and mode and adds details: the mission and day, the battle's opponent, turn and both heroes' life, victory or defeat, puzzles, the Arena, the Expedition, autochess, lobbies, the wiki and loading. Only names from the games themselves are shown, never names players typed.
+- **Spells on your castle (Etherlords I).** A message box says when a rival casts Decay, Erosion, Shock Resonance or another spell on your castle, with the spell's description, and a castle's tooltip lists the spells acting on it and says when Decay keeps it from regenerating ([#284](https://github.com/TheWWWorm/Demiurges/issues/284)).
+
+### Battles
+
+- **Disintegration** shows its fire stream from the caster to the creature, which vanishes after it, as in the originals.
+- **Attackers walk home** straight from the end of their blow, without a moment in their idle pose.
+- **Wrath of Stones and Wrath of Winds** mark the attacker to die instead of dealing a million damage, so Pain Link passes on only its remaining health ([#288](https://github.com/TheWWWorm/Demiurges/issues/288)).
+- **Attack all (Etherlords I)** leaves creatures with no power at home, as in Etherlords II ([#292](https://github.com/TheWWWorm/Demiurges/issues/292)).
+- **Regenerating attackers (Etherlords I)** that recover in the defence phase walk back to the rear line, where the rules keep them ([#291](https://github.com/TheWWWorm/Demiurges/issues/291)).
+- **Thief** shows its robber mark over the enchanted creature ([#294](https://github.com/TheWWWorm/Demiurges/issues/294)).
+- **The enchantment strip** puts your own abilities you can still use first, then the rival's enchantments, then the rest, with the ones used this round at the end; the rival's side keeps the order they were cast in, so it no longer shows which of your abilities you have used ([#297](https://github.com/TheWWWorm/Demiurges/issues/297)).
+- **Lava Wall, Hellfire Wall and Wall of Wind:** the Smarter computer opponent pays all its spare ether into the wall at once, as the original computer does, instead of one point at a time ([#296](https://github.com/TheWWWorm/Demiurges/issues/296)).
+- **Pteros and Flicker** pay for a removed enchantment after removing it, as in the originals: taking away the last Prickly Ether no longer pricks ([#300](https://github.com/TheWWWorm/Demiurges/issues/300)).
+- **Change of Command and Ring of Subjugation:** only the latest one cast counts. Dispelling it hands the creature to the caster of the newest one left, or home, without putting it to rest; dispelling an older one changes nothing. In the Colourless Plane (Etherlords II) control sleeps and the creature returns to its owner until it manifests again. Your own control enchantments and the rival's have blue and red frames in the strip, and their tooltips say who cast them ([#301](https://github.com/TheWWWorm/Demiurges/issues/301)).
+
+### Etherlords II
+
+- **Colourless Revival** lets creatures with their own regeneration, such as Ancients, regenerate in the Colourless Plane; regeneration given by enchantments still sleeps there ([#298](https://github.com/TheWWWorm/Demiurges/issues/298)).
+- **Colourless Strike** shows its dispel only when it removes an enchantment, and its blast only on Pale creatures, as the original does ([#299](https://github.com/TheWWWorm/Demiurges/issues/299)).
+- **Deck editing:** dragging a spell from the available list no longer shows two copies of it ([#287](https://github.com/TheWWWorm/Demiurges/issues/287)).
+- **Puzzles:** "A Shared Escape" is removed; it relied on control lasting in the Colourless Plane.
+
+### Etherlords I
+
+- **Spent spells stay in the spellbook** with no runes left, and a cantrip of their colour takes their place in battle, as in the original; they no longer vanish and need buying again ([#289](https://github.com/TheWWWorm/Demiurges/issues/289)).
+- **Clicking on the map** picks a hero or monster only on its own cell or its figure, so the cells around a neutral monster can be clicked; taps keep the wider reach ([#290](https://github.com/TheWWWorm/Demiurges/issues/290)).
+- **Laboratory prices** count the copies in the reserve as well as in the book ([#293](https://github.com/TheWWWorm/Demiurges/issues/293)).
+
 ## 0.24.0
 
 ### New

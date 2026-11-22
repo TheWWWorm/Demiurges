@@ -326,7 +326,7 @@ static func cast(state: ELAdventureSession, player: int, chosen: Array = []) -> 
 	record.production = {}
 	if persistent(code): record.active.append(spell)
 	sync(state)
-	state.event.emit({"kind": "global_spell_cast", "player": player, "spell": code, "serial": spell.serial})
+	state.event.emit({"kind": "global_spell_cast", "player": player, "spell": code, "serial": spell.serial, "castle": int(spell.get("castle", -1))})
 	state.event.emit({"kind": "global_spells_changed", "player": player})
 	return true
 
@@ -496,13 +496,11 @@ static func battle_bonus(hero: Dictionary, report: Dictionary) -> int:
 	return bonus
 
 ## Retaliation: every spell of the hero's book that is not a cantrip loses
-## `amount` runes; a spent spell gives its slot back to a cantrip under it.
+## `amount` runes; a spent spell stays in the book with none.
 static func drain_runes(state: ELAdventureSession, hero: Dictionary, amount: int) -> void:
 	if hero.get("type") != "hero" or not hero.has("cards") or not ELRunes.restore(state.map.profile, hero): return
-	var before: Array = hero.rune_uses.duplicate()
 	for index in hero.cards.size():
 		if int(hero.rune_uses[index]) > 0: hero.rune_uses[index] = maxi(0, int(hero.rune_uses[index]) - amount)
-	ELRunes.return_cantrips(hero, before)
 	state.event.emit({"kind": "inventory_changed", "id": int(hero.uid)})
 
 ## Daily settlement after hero upkeep: spell upkeep in cast order, daily effects,

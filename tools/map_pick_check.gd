@@ -1,7 +1,8 @@
 extends SceneTree
 ## First-game map picking check: for each visible figure and building on the
 ## first mission, samples its drawn body on screen and reports the share of
-## points that pick it (hover and click use the same pick).
+## points that pick it (hover and click use the same pick). Points around a
+## figure but off its drawn box need not pick it (the margin ring is shown).
 
 func frames(count: int) -> void:
 	for i in count: await process_frame
@@ -70,6 +71,10 @@ func _run() -> void:
 						var chosen := map._object_at(Vector2(hit.x, -hit.z) / ELAdventureTerrain.CELL, at)
 						var picked := chosen == id
 						var body := f.x >= 0.0 and f.x <= 1.0 and f.y >= 0.0 and f.y <= 1.0
+						# A figure's body is where the ray meets its drawn box: with
+						# a turned view the corners of the box's screen rectangle
+						# show the ground around it, which picks the ground.
+						if body and kind in ["hero", "monster"] and box.intersects_ray(map.world.to_local(map.camera.project_ray_origin(at)), map.world.global_basis.inverse() * map.camera.project_ray_normal(at)) == null: continue
 						if body:
 							got.y += 1
 							if picked: got.x += 1

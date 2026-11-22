@@ -704,7 +704,19 @@ func describe(item: Dictionary, art_row: Dictionary) -> Dictionary:
 		var body := profile.text("T_CASTLE_TT_2")
 		if body == "T_CASTLE_TT_2": body = "Owner: %s\nEnergy: %d\nMaximum energy: %d\nEther income: %d"
 		var icon := int(art_row.get("Icon", -1))
-		return {"title": profile.text("T_CASTLE_TT_1").replace("%s", race), "text": body % [ELFirstScenario.player_name(state, int(item.owner)), int(castle.get("health", 0)), int(castle.get("max", 0)), income],
+		var text := body % [ELFirstScenario.player_name(state, int(item.owner)), int(castle.get("health", 0)), int(castle.get("max", 0)), income]
+		# The global spells acting on the castle, which the remake makes work
+		# (Decay stops its regeneration, the shields absorb attacks...).
+		var acting: Array[String] = []
+		for entry: Dictionary in ELGlobalSpells.acting_on(state, int(item.owner)):
+			var name := ELGlobalSpells.title(profile, str(entry.spell.code))
+			if not acting.has(name): acting.append(name)
+		if not acting.is_empty(): text += "
+" + ELRemakeText.t("Spells on the castle: %s", profile) % ", ".join(acting)
+		if ELGlobalSpells.on_castle(state, int(item.owner), ELGlobalSpells.DECAY):
+			text += "
+" + ELRemakeText.t("Does not regenerate energy (%s)", profile) % ELGlobalSpells.title(profile, ELGlobalSpells.DECAY)
+		return {"title": profile.text("T_CASTLE_TT_1").replace("%s", race), "text": text,
 			"picture": building_icon(icon) if icon >= 0 else null, "picture_size": Vector2(70, 50)}
 	if item.get("type") == "hero":
 		lines.append("%s: %s" % [profile.text("T_OWNER"), ELFirstScenario.player_name(state, int(item.owner))])

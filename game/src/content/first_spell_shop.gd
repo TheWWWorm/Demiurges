@@ -42,10 +42,15 @@ static func authored_stock(profile: ELProfile, building: Dictionary, color: Stri
 static func on_sale(profile: ELProfile, code: String) -> bool:
 	return profile.id != "el1" or str(profile.table("CombatSpells").get(code, {}).get("Use", "+")) == "+"
 
-static func price(profile: ELProfile, hero: Dictionary, book: Array, card: String, slot: int, free_exchange := false) -> Dictionary:
+## The price rises with every other copy the hero keeps. The original counts
+## the book's copies except the replaced slot, which its purchase overwrites;
+## here the reserve keeps copies too, so its copies count as well, and
+## `displaced` adds the copies this purchase draft sends from the book to the
+## reserve (the replaced slot's own copy among them).
+static func price(profile: ELProfile, hero: Dictionary, book: Array, card: String, slot: int, free_exchange := false, displaced := 0) -> Dictionary:
 	var result := ELResources.empty("el1")
 	if free_exchange: return result
-	var copies := 0
+	var copies := int(hero.get("spell_stock", {}).get(card, 0)) + displaced
 	for index in book.size():
 		if index != slot and book[index] == card: copies += 1
 	var multiplier: int = COPY_MULTIPLIERS[mini(copies, COPY_MULTIPLIERS.size() - 1)]
@@ -98,7 +103,16 @@ func free_exchange() -> bool:
 	return state.map.id.begins_with("mission17") or state.map.id.begins_with("mission27")
 
 func quote(card: String, slot: int) -> Dictionary:
-	return price(state.map.profile, state.object(hero_id), cards, card, slot, free_exchange())
+	return price(state.map.profile, state.object(hero_id), cards, card, slot, free_exchange(), _displaced(card, slot))
+
+## Copies of `card` the draft sends to the reserve from other slots, plus the
+## copy in `slot` before the draft when buying over it sends it there.
+func _displaced(card: String, slot: int) -> int:
+	var count := 0
+	for entry: Dictionary in to_reserve:
+		if entry.card == card and int(entry.slot) != slot: count += 1
+	if slot >= 0 and slot < _before.cards.size() and _before.cards[slot] == card and not ELRunes.unlimited(state.map.profile, state.object(hero_id), card): count += 1
+	return count
 
 func replace(slot: int, card: String) -> bool:
 	error = _stale_problem()
@@ -128,12 +142,12 @@ func _rebuild() -> void:
 	for slot in pending.size():
 		var card := pending[slot]
 		if card.is_empty(): continue
-		var cost := price(state.map.profile, hero, cards, card, slot, free_exchange())
+		var cost := price(state.map.profile, hero, cards, card, slot, free_exchange(), _displaced(card, slot))
 		for kind: String in _bill: _bill[kind] += int(cost[kind])
 		var old := cards[slot]
 		if ELRunes.unlimited(state.map.profile, hero, old):
 			if not ELRunes.unlimited(state.map.profile, hero, card): unders[slot] = old
-		else: to_reserve.append({"card": old, "uses": uses[slot]})
+		else: to_reserve.append({"card": old, "uses": uses[slot], "slot": slot})
 		# A cantrip bought over a spell takes the slot itself.
 		if ELRunes.unlimited(state.map.profile, hero, card): unders[slot] = ""
 		cards[slot] = card
