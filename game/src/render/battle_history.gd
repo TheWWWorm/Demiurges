@@ -345,7 +345,10 @@ func has_current() -> bool:
 func touch(id: int, icon: Texture2D, title: String, change: Dictionary, side := -1) -> void:
 	if _current < 0 or _current >= entries.size(): return
 	var entry: Dictionary = entries[_current]
-	if id == int(entry.source) and id >= 0:
+	# An attacker's own wounds (the blow it takes back) go on its picture;
+	# what an ability does to its user (a hero healing itself) is shown on
+	# the user, after the arrow, as for any other character it touched.
+	if id == int(entry.source) and id >= 0 and entry.kind == "attack":
 		entry.source_delta += int(change.get("delta", 0))
 		if change.get("died", false): entry.source_died = true
 		queue_redraw()
@@ -827,7 +830,12 @@ func _draw_card(entry: Dictionary, tile: Rect2) -> void:
 	var title_width := _font.get_string_size(title, HORIZONTAL_ALIGNMENT_LEFT, -1, title_size).x + 6.0 * k
 	var card_width := maxf(maxf(picture_size.x, title_width), minf(TEXT_WIDTH * k, widest + 2.0 * k))
 	var text_height := 0.0
-	if not text.is_empty(): text_height = _font.get_multiline_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, card_width, text_size, 9).y
+	if not text.is_empty():
+		var wrapped := _font.get_multiline_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, card_width, text_size, 9)
+		text_height = wrapped.y
+		# Wrapped lines end short of the column: narrow it to the longest of
+		# them, so the text has as much room on its right as on its left.
+		card_width = maxf(maxf(picture_size.x, title_width), minf(card_width, wrapped.x + 2.0 * k))
 	var targets: Array = entry.targets
 	var columns := mini(targets.size(), TARGET_COLUMNS)
 	var rows := ceili(targets.size() / float(TARGET_COLUMNS))
@@ -849,9 +857,10 @@ func _draw_card(entry: Dictionary, tile: Rect2) -> void:
 	var arrow := (ARROW_GAP * 2.0 + ARROW_SIZE) * k if not targets.is_empty() else 0.0
 	var card_height := picture_size.y + title_size * 1.6 + text_height + 4.0 * k
 	var inner := Vector2(card_width + arrow + target_block.x, maxf(card_height, target_block.y))
-	# A little more room on the right than the left: the last name or
-	# picture otherwise sat against the frame's edge.
-	var panel_size := inner + Vector2(pad, pad) * 2.0 + Vector2(RIGHT_PAD * k, 0)
+	# A little more room on the right than the left after touched
+	# characters: the last name or picture otherwise sat against the frame's
+	# edge. A card alone keeps equal sides.
+	var panel_size := inner + Vector2(pad, pad) * 2.0 + Vector2(RIGHT_PAD * k if not targets.is_empty() else 0.0, 0)
 	var at := Vector2(_rail_rect().end.x + 8.0 * k, tile.position.y + tile.size.y * 0.5 - panel_size.y * 0.5)
 	at.y = clampf(at.y, 4.0 * k, maxf(4.0 * k, size.y - BOTTOM * k * 0.5 - panel_size.y))
 	var panel := Rect2(at, panel_size)

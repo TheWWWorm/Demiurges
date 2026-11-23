@@ -14,10 +14,16 @@ extends RefCounted
 ##   Storm feed their caster from a creature, Healing raises health to half,
 ##   Firestorm and Supernova cost channels, and so on.
 ##
-## What belongs to the first game itself stays as it is: its battle rules
-## outside the cards (no Colourless Plane, its hand and ether rules), its
-## heroes, artifacts, runes and global spells, and its maps. Puzzles keep the
-## first game's own balance, which they were made for.
+## The battle rules outside the cards follow the second game as well
+## (ELDuel.second_battle), as both games' duels are one game apart from their
+## balance: the second hero's extra ether on its first turn, the ether
+## disturbance's growth, the order of a hit's discards, lifeguards and
+## disenchanting strikes, a regenerated creature leaving its fight, the ten
+## creature armies and so on. What belongs to the first game itself stays as
+## it is: its heroes and their specialisations, its spellbook with runes and
+## cantrips, its artifacts, global spells and combat events, and its maps.
+## Puzzles keep the first game's own balance and rules, which they were made
+## for.
 ##
 ## Applied to the mounted first-game profile in place and undone the same
 ## way, so the profile stays one object; a battle records which balance it

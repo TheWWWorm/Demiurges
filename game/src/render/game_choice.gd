@@ -12,11 +12,13 @@ signal autochess_requested
 signal puzzles_requested
 
 const INK := Color("d6bb88")
+## The chosen game's caption.
+const CHOSEN_INK := Color("ffc95c")
 var current := ""
 ## Editions that can be played now: {edition: true}.
 var available: Dictionary = {}
 var buttons: Dictionary = {}
-var font_size := 16
+var font_size := 18
 ## Opens the wiki (ELWikiScreen).
 var wiki_button: Button
 var expedition_available := false
@@ -39,17 +41,9 @@ func _ready() -> void:
 		button.name = edition
 		button.toggle_mode = true
 		button.focus_mode = Control.FOCUS_NONE
-		button.custom_minimum_size = Vector2(176, 46)
+		button.custom_minimum_size = Vector2(190, 52)
 		button.add_theme_font_size_override("font_size", font_size)
-		for state: String in ["font_color", "font_hover_color", "font_focus_color"]:
-			button.add_theme_color_override(state, Color(INK, 0.85))
-		for state: String in ["font_pressed_color", "font_hover_pressed_color"]:
-			button.add_theme_color_override(state, INK.lightened(0.25))
-		button.add_theme_stylebox_override("normal", _plate(0.72, Color(INK, 0.3)))
-		button.add_theme_stylebox_override("hover", _plate(0.8, Color(INK, 0.6)))
-		button.add_theme_stylebox_override("pressed", _plate(0.88, INK))
-		button.add_theme_stylebox_override("hover_pressed", _plate(0.88, INK))
-		button.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
+		plain(button)
 		button.pressed.connect(_chosen.bind(edition))
 		add_child(button)
 		buttons[edition] = button
@@ -57,7 +51,7 @@ func _ready() -> void:
 	wiki_button = Button.new()
 	wiki_button.name = "Wiki"
 	wiki_button.focus_mode = Control.FOCUS_NONE
-	wiki_button.custom_minimum_size = Vector2(96, 46)
+	wiki_button.custom_minimum_size = Vector2(104, 52)
 	wiki_button.add_theme_font_size_override("font_size", font_size)
 	_plain(wiki_button)
 	wiki_button.pressed.connect(func():
@@ -67,7 +61,7 @@ func _ready() -> void:
 	if puzzles_available:
 		_puzzles_button = Button.new()
 		_puzzles_button.name = "Puzzles"
-		_puzzles_button.custom_minimum_size = Vector2(124, 46)
+		_puzzles_button.custom_minimum_size = Vector2(140, 52)
 		_puzzles_button.add_theme_font_size_override("font_size", font_size)
 		_plain(_puzzles_button)
 		_puzzles_button.pressed.connect(func(): puzzles_requested.emit())
@@ -75,21 +69,21 @@ func _ready() -> void:
 	if expedition_available:
 		_expedition_button = Button.new()
 		_expedition_button.name = "Expedition"
-		_expedition_button.custom_minimum_size = Vector2(138, 46)
+		_expedition_button.custom_minimum_size = Vector2(152, 52)
 		_expedition_button.add_theme_font_size_override("font_size", font_size)
 		_plain(_expedition_button)
 		_expedition_button.pressed.connect(func(): expedition_requested.emit())
 		add_child(_expedition_button)
 		_arena_button = Button.new()
 		_arena_button.name = "DraftArena"
-		_arena_button.custom_minimum_size = Vector2(126, 46)
+		_arena_button.custom_minimum_size = Vector2(136, 52)
 		_arena_button.add_theme_font_size_override("font_size", font_size)
 		_plain(_arena_button)
 		_arena_button.pressed.connect(func(): arena_requested.emit())
 		add_child(_arena_button)
 		_autochess_button = Button.new()
 		_autochess_button.name = "Autochess"
-		_autochess_button.custom_minimum_size = Vector2(138, 46)
+		_autochess_button.custom_minimum_size = Vector2(152, 52)
 		_autochess_button.add_theme_font_size_override("font_size", font_size)
 		_plain(_autochess_button)
 		_autochess_button.pressed.connect(func(): autochess_requested.emit())
@@ -102,20 +96,59 @@ func _ready() -> void:
 func _plain(button: Button) -> void:
 	plain(button)
 
+## The main menu buttons' own art, smaller (ELFrontMenu.small_plates): looks
+## "normal", "hover", "pressed", "hover_pressed" and "disabled" as StyleBoxes
+## and the captions' "font". Empty: the plain dark plates below.
+static var _looks: Dictionary = {}
+## Every button given the look, so a game change redresses them all.
+static var _dressed: Array[WeakRef] = []
+
+## Dresses every button with the shared look in `looks` (from now on too).
+static func use_looks(looks: Dictionary) -> void:
+	if looks == _looks: return
+	_looks = looks
+	var kept: Array[WeakRef] = []
+	for ref: WeakRef in _dressed:
+		var button: Button = ref.get_ref()
+		if button == null or button.is_queued_for_deletion(): continue
+		kept.append(ref)
+		_dress(button)
+	_dressed = kept
+
 ## That look for any button (the AI dropdowns under the campaign dialogs use
 ## it too, ELFrontMenu.add_ai_choices).
 static func plain(button: Button) -> void:
 	button.focus_mode = Control.FOCUS_NONE
-	for state: String in ["font_color", "font_focus_color", "font_pressed_color"]:
-		button.add_theme_color_override(state, Color(INK, 0.85))
+	_dressed.append(weakref(button))
+	_dress(button)
+
+static func _dress(button: Button) -> void:
+	var art := not _looks.is_empty()
+	# A chosen game (a toggle held down) shows the pushed plate with a gold
+	# caption; captions brighten on hover.
+	for state: String in ["font_color", "font_focus_color"]:
+		button.add_theme_color_override(state, Color(INK, 0.92 if art else 0.85))
 	button.add_theme_color_override("font_hover_color", INK.lightened(0.25))
-	button.add_theme_stylebox_override("normal", _plate(0.72, Color(INK, 0.3)))
-	button.add_theme_stylebox_override("hover", _plate(0.8, Color(INK, 0.6)))
-	button.add_theme_stylebox_override("pressed", _plate(0.88, INK))
+	var chosen := CHOSEN_INK if button.toggle_mode else Color(INK, 0.85)
+	button.add_theme_color_override("font_pressed_color", chosen)
+	button.add_theme_color_override("font_hover_pressed_color", CHOSEN_INK.lightened(0.15) if button.toggle_mode else INK.lightened(0.25))
+	button.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.85))
+	button.add_theme_constant_override("outline_size", 3 if art else 0)
+	if art:
+		for state: String in ["normal", "hover", "pressed", "hover_pressed", "disabled"]:
+			button.add_theme_stylebox_override(state, _looks[state])
+		button.add_theme_font_override("font", _looks.font)
+	else:
+		button.add_theme_stylebox_override("normal", _plate(0.72, Color(INK, 0.3)))
+		button.add_theme_stylebox_override("hover", _plate(0.8, Color(INK, 0.6)))
+		button.add_theme_stylebox_override("pressed", _plate(0.88, INK))
+		button.add_theme_stylebox_override("hover_pressed", _plate(0.88, INK))
+		button.remove_theme_stylebox_override("disabled")
+		button.remove_theme_font_override("font")
 	button.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
 	# A dropdown's arrow keeps the plate's own inner margin from the border.
 	if button is OptionButton:
-		button.add_theme_constant_override("arrow_margin", 14)
+		button.add_theme_constant_override("arrow_margin", 22 if art else 14)
 		button.add_theme_color_override("font_disabled_color", INK.darkened(0.30))
 
 static func _plate(alpha: float, border: Color) -> StyleBoxFlat:

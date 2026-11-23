@@ -9,12 +9,13 @@ extends Node
 ##   W A S D       walk (arrows too), Shift runs
 ##   Space / Ctrl  raise / lower the eye (also the wheel)
 ##   Esc or the hotkey again   back to the battle view
+## A small line at the screen's foot (`hint`) recalls these keys.
 
 signal left
 
 ## The eye without a hero to measure; with one, at this share of its height.
 const EYE := 1.6
-const EYE_OF_HEIGHT := 0.93
+const EYE_OF_HEIGHT := 0.86
 const EYE_LIMITS := Vector2(0.25, 12.0)
 const WALK := 4.0
 const RUN := 11.0
@@ -33,6 +34,9 @@ var _pitch := 0.0
 var _saved_transform := Transform3D()
 var _saved_fov := 0.0
 var _saved_mouse := Input.MOUSE_MODE_VISIBLE
+## The controls line shown while the view is on (set before `enter`).
+var hint := ""
+var _hint_layer: CanvasLayer
 
 func _ready() -> void:
 	set_process(false)
@@ -63,11 +67,13 @@ func enter(view_camera: Camera3D, ground_height: Callable, eye_height := EYE) ->
 	active = true
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 	set_process(true)
+	_show_hint()
 
 func leave() -> void:
 	if not active: return
 	active = false
 	set_process(false)
+	if is_instance_valid(_hint_layer): _hint_layer.visible = false
 	Input.mouse_mode = _saved_mouse
 	if is_instance_valid(camera):
 		camera.global_transform = _saved_transform
@@ -114,6 +120,30 @@ func _process(delta: float) -> void:
 	# The eye keeps its height over the ground as the field rises and falls.
 	at.y = lerpf(at.y, _height(at.x, at.z) + eye, minf(1.0, delta * 12.0))
 	camera.global_position = at
+
+## The controls line, centred a little above the screen's lower edge.
+func _show_hint() -> void:
+	if hint.is_empty(): return
+	if not is_instance_valid(_hint_layer):
+		_hint_layer = CanvasLayer.new()
+		_hint_layer.layer = 50
+		add_child(_hint_layer)
+		var label := Label.new()
+		label.name = "Hint"
+		label.set_anchors_and_offsets_preset(Control.PRESET_CENTER_BOTTOM, Control.PRESET_MODE_MINSIZE, 18)
+		label.grow_horizontal = Control.GROW_DIRECTION_BOTH
+		label.grow_vertical = Control.GROW_DIRECTION_BEGIN
+		label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		label.add_theme_font_override("font", ELCombatTooltip.face())
+		label.add_theme_color_override("font_color", Color(0.9, 0.86, 0.76, 0.85))
+		label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.8))
+		label.add_theme_constant_override("outline_size", 4)
+		_hint_layer.add_child(label)
+	var shown: Label = _hint_layer.get_node("Hint")
+	shown.text = hint
+	shown.add_theme_font_size_override("font_size", maxi(12, int(round(get_viewport().get_visible_rect().size.y / 52.0))))
+	_hint_layer.visible = true
 
 func _orient() -> void:
 	camera.global_transform.basis = Basis.from_euler(Vector3(_pitch, _yaw, 0), EULER_ORDER_YXZ)

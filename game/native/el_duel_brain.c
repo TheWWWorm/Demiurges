@@ -24,7 +24,8 @@
  *      2 play out the declared fight alone and give back the board it leaves,
  *      3 the same for ending the turn
  *    4 turns to look ahead     5 fights it may play (budget)
- *    6 edition (0 first game, 1 second)
+ *    6 edition (0 first game, 1 second): the weights it reads by, and what
+ *      belongs to that game alone (its book, artifacts and specialisations)
  *    7 worth of a health point, in thousandths
  *    8 ether an attacker costs to send (attack tax)
  *    9 1 when nothing can attack in the current turn
@@ -49,6 +50,8 @@
  *      hero attack before it is weighed
  *   27 how much of a line's worth is the position where it stops, as it
  *      stands, in hundredths; the rest is what the fighting to come brings
+ *   29 the battle rules: 1 the second game's, which the first game also
+ *      plays on the second's card balance; 0 the first game's
  * then, per hero, 17 integers (health, ether, channels, stone skins,
  * lifeguards, damage reflections, damage mirrors, unknown cards in hand,
  * chance in thousandths that an unknown card is a creature, the same chance
@@ -676,7 +679,7 @@ typedef struct {
 	 * army may have and still be held at home (-1 for none), and what that
 	 * forest counts for in `aura_worth`. */
 	int forest[2], forest_worth[2];
-	int second; /* the second game, whose venom bites before the lethal check */
+	int second; /* the second game's battle rules (header 29), whose venom bites before the lethal check */
 	/* Card play: known cards already summoned (bits), unknown cards held, the
 	 * saved-up chance of a creature among them, own turns begun. */
 	int played[2], unknown[2], chance[2], turns[2];
@@ -1430,7 +1433,7 @@ static void drop_charm(const Search *x, State *s, int holder, int k, int copies)
  * already - but one given up may be dealt again. */
 static int book_room(const Search *x, const State *s, int side) {
 	if (x->no_draws) return 0;
-	if (!s->second) return x->dry[side] ? 0 : 100;
+	if (!x->edition) return x->dry[side] ? 0 : 100;
 	return imax(0, x->deals[side][0] + x->deals[side][1] + x->loose[side] - s->cast[side] - cards_held(s, side));
 }
 
@@ -1516,7 +1519,7 @@ static void hurt_hero_by(State *s, int side, int amount, int source, int passed)
 			 * health it may have and leaves it with all of that (once only
 			 * in the second game). */
 			if (s->health[side] <= 0 && x->spec[side] == SPEC_RVVE && hero_max(x, s, side) > 1
-				&& !(s->second && (s->revived[side] || x->revived[side])) && spec_roll(s, side, SPEC_RVVE, 1)) {
+				&& !(x->edition && (s->revived[side] || x->revived[side])) && spec_roll(s, side, SPEC_RVVE, 1)) {
 				s->health[side] = hero_max(x, s, side) / 2;
 				if (s->revived[side] < 30) s->revived[side]++;
 			}
@@ -2389,7 +2392,7 @@ static void draw_cards(State *s, int side, int count) {
 			s->drawn[side]++;
 			/* The second game's book may by now have a card to give after
 			 * all: one that was given up since. Which, nobody knows. */
-			if (none && s->second && book_room(x, s, side) > 0) {
+			if (none && x->edition && book_room(x, s, side) > 0) {
 				s->more[side]++;
 				s->limit = 1;
 			}
@@ -2664,7 +2667,7 @@ static int witch_wall(State *s, int blocker, int attacker) {
 	Unit *b = &s->u[blocker], *a = &s->u[attacker];
 	if (b->mastery != SPEC_BWIT || (b->flags & F_DEAD) || (a->flags & F_DEAD)) return 0;
 	if (!spec_roll(s, b->owner, SPEC_BWIT, 1)) return 0;
-	if (s->second) {
+	if (x->edition) {
 		if (x->enfeeble > 0) enchant_unit(x, s, b->owner, &x->pool[x->enfeeble - 1], attacker, 0);
 		else s->limit = 1;
 		return 1;
@@ -4246,19 +4249,19 @@ static int ench_price(const Search *x, const State *s, int holder, int what, int
  * comes back into its caster's hand as a card once it is off. `code` is the
  * caller's number for the card, -1 for one the engine cannot name, and 0
  * for what is no card at all. */
-static int sentinel(State *s, int caster) {
-	return !s->second && caster >= 0 && caster < 2 && spec_roll(s, caster, SPEC_MSEN, 1);
+static int sentinel(const Search *x, State *s, int caster) {
+	return !x->edition && caster >= 0 && caster < 2 && spec_roll(s, caster, SPEC_MSEN, 1);
 }
 
 static void eternal(const Search *x, State *s, int caster, int code) {
-	if (s->second || caster < 0 || caster > 1 || code == 0 || !spec_roll(s, caster, SPEC_ETEN, 1)) return;
+	if (x->edition || caster < 0 || caster > 1 || code == 0 || !spec_roll(s, caster, SPEC_ETEN, 1)) return;
 	take_back(s, caster, kind_of_code(x, code));
 }
 
 /* One enchantment on a creature is dispelled. */
 static void dispel_ench(const Search *x, State *s, int r) {
 	Ench e = s->ench[r];
-	if (sentinel(s, e.caster)) return;
+	if (sentinel(x, s, e.caster)) return;
 	unwear(s, r);
 	/* A mark that is no card (it costs what no card costs) is not one to hold. */
 	eternal(x, s, e.caster, e.price >= 999 ? 0 : e.code);
@@ -4280,7 +4283,7 @@ static void dispel(const Search *x, State *s, int holder, int what, int any) {
 			: what >= 0 && what < HE_COUNT && s->he[side][what] > 0;
 		if (!there) return;
 		int caster = what >= 0 && what < HE_COUNT ? charm_caster(what, side) : side;
-		if (sentinel(s, caster)) return;
+		if (sentinel(x, s, caster)) return;
 		eternal(x, s, caster, what >= 0 && what < HE_COUNT ? (x->charm[what].price >= 999 ? 0 : x->charm[what].code) : -1);
 		if (what == HE_TAX) {
 			if (s->taxes[side] > 0) {
@@ -8575,7 +8578,7 @@ static void read_card(const int32_t *r, Card *c) {
 }
 
 static int read_state(const int32_t *in, int64_t length, Search *x, State *s, int *phase, int *turns, int *develop_now) {
-	if (length < FIXED || in[0] != 11) return 0;
+	if (length < FIXED || in[0] != 12) return 0;
 	int n = in[11];
 	if (n < 0 || n > MAX_UNITS || length < FIXED + (int64_t)n * UNIT_FIELDS) return 0;
 	memset(s, 0, sizeof(*s));
@@ -8597,7 +8600,7 @@ static int read_state(const int32_t *in, int64_t length, Search *x, State *s, in
 	*turns = imax(1, imin(in[4], MAX_TURNS));
 	x->budget = imax(1, in[5]);
 	x->edition = in[6];
-	s->second = in[6] != 0;
+	s->second = in[29] != 0;
 	x->health_worth = in[7];
 	x->foe_worth = in[14] > 0 ? in[14] : 100;
 	x->width = imax(4, imin(in[10] > 1 ? in[10] : 16, MAX_MOVES));
@@ -8758,7 +8761,7 @@ static int read_state(const int32_t *in, int64_t length, Search *x, State *s, in
 	}
 	/* What the heroes carry. */
 	x->serial = imax(0, imin(at[0], 100000));
-	x->later = s->second ? imax(0, imin(at[1], 100000)) : 0;
+	x->later = x->edition ? imax(0, imin(at[1], 100000)) : 0;
 	at += 2;
 	for (int side = 0; side < 2; side++) {
 		x->art_limit[side] = imax(0, imin(at[0], 100));

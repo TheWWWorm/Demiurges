@@ -481,6 +481,11 @@ static func flags(row: Dictionary) -> Array[String]:
 static func second_rules(profile: ELProfile, card: String) -> bool:
 	return profile.id == "el2" or profile.second_cards.has(card)
 
+## Whether the battle rules outside the cards are the second game's: in the
+## second game, and in the first on the second game's card balance.
+static func second_battle(profile: ELProfile) -> bool:
+	return profile.id == "el2" or ELSecondBalance.active(profile)
+
 static func rule(profile: ELProfile, card: String) -> Dictionary:
 	var result := _rule(profile, card)
 	# A first-game card on the second game's balance takes its second-game amount.

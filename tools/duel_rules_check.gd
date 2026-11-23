@@ -9,6 +9,10 @@ extends SceneTree
 ##   godot --headless --path game --script ../tools/duel_rules_check.gd -- \
 ##       [--game=el1|el2] [--cases=N] [--seed=N] [--shard=I/N] [--army=N]
 ##       [--cards=<code>,...] [--turn] [--play] [--verbose] [--quiet]
+##       [--balance=1]
+##
+## --balance=1 plays the first game on the second game's card balance, and so
+## by the second game's battle rules (needs the second game's files too).
 ##
 ## With --turn the turn's end is held up instead of a fight, and with
 ## --play a short run of commands (cards cast, creatures sent, phases
@@ -90,6 +94,18 @@ func _initialize() -> void:
 		printerr("Game files are required: pass --%s=<folder>" % game)
 		quit(1)
 		return
+	# --balance=1 (first game): the second game's card balance, and with it
+	# the second game's battle rules (ELSecondBalance, ELDuel.second_battle).
+	if game == "el1" and _arg("balance", "") == "1":
+		var second_folder := _arg("el2", "")
+		if second_folder.is_empty() and FileAccess.file_exists("user://profiles.json"):
+			var stored: Variant = JSON.parse_string(FileAccess.get_file_as_string("user://profiles.json"))
+			if stored is Dictionary: second_folder = String(stored.get("el2", ""))
+		var second := ELProfile.new()
+		if second_folder.is_empty() or not second.mount("el2", second_folder) or not ELSecondBalance.apply(profile, second, true):
+			printerr("The second game's card balance needs its files: pass --el2=<folder>")
+			quit(1)
+			return
 	if not ELCombatBrain.available:
 		printerr("The compiled lookahead is not loaded.")
 		quit(1)

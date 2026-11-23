@@ -358,7 +358,9 @@ func build(available: Dictionary, initial: String) -> bool:
 	add_child(_audio)
 	briefing = ELBriefingVoice.new()
 	add_child(briefing)
-	return use_edition(initial)
+	if not use_edition(initial): return false
+	_warm_other_games()
+	return true
 
 static func supports(source: ELProfile) -> bool:
 	var group: String = SCREENS.get(source.id, {}).get("main", {}).get("art", "")
@@ -367,29 +369,31 @@ static func supports(source: ELProfile) -> bool:
 		if row.get("Ctrl", "") == group: return true
 	return false
 
+## Per mounted game: whether it has the menu art, and its texture paths, art
+## rows and controls (_paths, _rows, _controls), worked out once so switching
+## games in the menu does not redo them.
+var _supported: Dictionary = {}
+var _indexed: Dictionary = {}
+
+func _supports_cached(source: ELProfile) -> bool:
+	if not _supported.has(source): _supported[source] = supports(source)
+	return _supported[source]
+
 func use_edition(id: String) -> bool:
-	if not profiles.has(id) or not supports(profiles[id]): return false
+	if not profiles.has(id) or not _supports_cached(profiles[id]): return false
 	edition = id
 	profile = profiles[id]
-	_paths.clear()
-	_rows.clear()
-	_controls.clear()
-	for definition: Dictionary in profile.table("InterfaceTextures").values():
-		_paths[definition.get("Name", "")] = "Interface/" + str(definition.get("Path", "")).replace("\\", "/")
-	for row: Dictionary in profile.table("CutParts").values():
-		var masks: Variant = row.get("Msk", [])
-		var copy := row.duplicate()
-		copy.masks = masks if masks is Array else [masks]
-		if not _rows.has(row.get("Ctrl", "")): _rows[row.get("Ctrl", "")] = []
-		_rows[row.get("Ctrl", "")].append(copy)
-	for row: Dictionary in profile.table("Controls").values():
-		_controls[str(row.get("Name", ""))] = row
+	if not _indexed.has(profile): _indexed[profile] = _index(profile)
+	_paths = _indexed[profile].paths
+	_rows = _indexed[profile].rows
+	_controls = _indexed[profile].controls
 	var playable := {}
 	for each: String in profiles:
-		if supports(profiles[each]): playable[each] = true
+		if _supports_cached(profiles[each]): playable[each] = true
 	var main_buttons: Array = SCREENS.get(edition, {}).get("main", {}).get("buttons", [])
 	_choice.wiki_hint = _caption(main_buttons[0]) if not main_buttons.is_empty() else ""
 	_choice.show_state(id, playable)
+	ELGameChoice.use_looks(small_plates())
 	_layout.call_deferred()
 	selected_campaign = ""
 	ELSingleScenario.SAVE = ELSingleScenario.save_file(id)
@@ -401,6 +405,144 @@ func use_edition(id: String) -> bool:
 	if hall_ui != null: hall_ui.tables = {}
 	show_screen("main")
 	return true
+
+static func _index(source: ELProfile) -> Dictionary:
+	return _index_tables(source.table("InterfaceTextures"), source.table("CutParts"), source.table("Controls"))
+
+## Reads the tables only, so a worker thread may run it on published tables.
+static func _index_tables(textures: Dictionary, cut_parts: Dictionary, control_rows: Dictionary) -> Dictionary:
+	var paths := {}
+	var rows := {}
+	var controls := {}
+	for definition: Dictionary in textures.values():
+		paths[definition.get("Name", "")] = "Interface/" + str(definition.get("Path", "")).replace("\\", "/")
+	for row: Dictionary in cut_parts.values():
+		var masks: Variant = row.get("Msk", [])
+		var copy := row.duplicate()
+		copy.masks = masks if masks is Array else [masks]
+		if not rows.has(row.get("Ctrl", "")): rows[row.get("Ctrl", "")] = []
+		rows[row.get("Ctrl", "")].append(copy)
+	for row: Dictionary in control_rows.values():
+		controls[str(row.get("Name", ""))] = row
+	return {"paths": paths, "rows": rows, "controls": controls}
+
+# Warm-up of the other games' menus -------------------------------------------
+
+## The menu of every other mounted game is made ready in the background, the
+## way ELBattleWarmup readies a battle (archive reads here, parsing and
+## decoding on worker threads, publishing here), so the first switch to it
+## does not parse its tables, decode its main-menu art and music, or load its
+## widescreen frame on the click.
+var _warm_jobs: Array[Dictionary] = []
+## Main-thread steps still to take, one per frame (archive reads, the
+## buttons' sound and check-plate lookups).
+var _warm_steps: Array[Callable] = []
+var _music_streams: Dictionary = {}
+var _wide_textures: Dictionary = {}
+var _wide_requests: Dictionary = {}
+
+func _warm_other_games() -> void:
+	for each: String in profiles:
+		var source: ELProfile = profiles[each]
+		if source == profile or not _supports_cached(source): continue
+		_warm_tables(source)
+		var music := source.file("Resources/Music/interface.mp3")
+		if not music.is_empty() and not _music_streams.has(music):
+			_warm_run("music " + music, func(result: Dictionary): result.stream = _music_stream(music),
+				func(result: Dictionary): if not _music_streams.has(music): _music_streams[music] = result.stream)
+		if WIDE_FRAMES.has(each) and not _wide_textures.has(each) and ResourceLoader.exists(WIDE_FRAMES[each]):
+			if ResourceLoader.load_threaded_request(WIDE_FRAMES[each]) == OK: _wide_requests[each] = WIDE_FRAMES[each]
+	set_process(not _warm_jobs.is_empty() or not _wide_requests.is_empty())
+
+## Parses the game's menu tables on a worker, then indexes them on another.
+func _warm_tables(source: ELProfile) -> void:
+	var missing: Array[String] = []
+	for name: String in ["InterfaceTextures", "CutParts", "Controls"]:
+		if not source.tables.has(name): missing.append(name)
+	if missing.is_empty():
+		_warm_index(source)
+		return
+	var bytes := {}
+	for name: String in missing: bytes[name] = source.read("regs", name + ".reg")
+	_warm_run("tables " + source.id, func(result: Dictionary):
+			for name: String in bytes: result[name] = ELRegistry.parse(bytes[name]),
+		func(result: Dictionary):
+			for name: String in result: source.adopt_table(name, result[name])
+			_warm_index(source))
+
+func _warm_index(source: ELProfile) -> void:
+	if _indexed.has(source):
+		_warm_art(source)
+		return
+	var textures := source.table("InterfaceTextures")
+	var cut_parts := source.table("CutParts")
+	var controls := source.table("Controls")
+	_warm_run("index " + source.id, func(result: Dictionary): result.index = _index_tables(textures, cut_parts, controls),
+		func(result: Dictionary):
+			if not _indexed.has(source): _indexed[source] = result.index
+			_warm_art(source))
+
+## Queues the main-menu art of the game (its pieces, buttons and frame corners).
+func _warm_art(source: ELProfile) -> void:
+	var index: Dictionary = _indexed[source]
+	var wanted := {}
+	for control: String in [SCREENS[source.id].main.art] + Array(SCREENS[source.id].main.get("buttons", [])):
+		for row: Dictionary in index.rows.get(control, []):
+			var path: String = index.paths.get(str(row.get("Txt", "")), "")
+			if not path.is_empty(): wanted[path] = true
+	if source.id == "el2":
+		for name: String in ["_MAIN_PANEL_17", "_MAIN_PANEL_20"]:
+			if index.paths.has(name): wanted[index.paths[name]] = true
+	for path: String in wanted: _warm_steps.append(_warm_texture.bind(source, path))
+	_warm_steps.append(func(): ELUiSounds.sound_of(source, ""))
+	_warm_steps.append(func(): ELCheckEnter.is_check(source, ""))
+	set_process(true)
+
+func _warm_texture(source: ELProfile, path: String) -> void:
+	var key := ELArchive.key(path)
+	if source._textures.has(key): return
+	var found := source._texture_source(key)
+	if PackedByteArray(found.bytes).is_empty(): return
+	_warm_run("texture " + key, func(result: Dictionary): result.decoded = ELProfile._texture_decode(found),
+		func(result: Dictionary):
+			if not source._textures.has(key) and not result.decoded.is_empty(): source._texture_store(key, result.decoded))
+
+func _warm_run(what: String, work: Callable, done: Callable) -> void:
+	var result := {}
+	_warm_jobs.append({"task": WorkerThreadPool.add_task(work.bind(result), false, "Menu " + what), "done": done, "result": result, "what": what})
+	set_process(true)
+
+## A job the menu needs now: waits for it and publishes it at once.
+func _finish_warm_job(what: String) -> void:
+	for job: Dictionary in _warm_jobs:
+		if job.what != what: continue
+		WorkerThreadPool.wait_for_task_completion(job.task)
+		_warm_jobs.erase(job)
+		job.done.call(job.result)
+		return
+
+func _process(_delta: float) -> void:
+	# One finished job and one archive read a frame keep each frame short.
+	for job: Dictionary in _warm_jobs:
+		if not WorkerThreadPool.is_task_completed(job.task): continue
+		WorkerThreadPool.wait_for_task_completion(job.task)
+		_warm_jobs.erase(job)
+		job.done.call(job.result)
+		break
+	if not _warm_steps.is_empty(): _warm_steps.pop_front().call()
+	for each: String in _wide_requests.keys():
+		var path: String = _wide_requests[each]
+		if ResourceLoader.load_threaded_get_status(path) == ResourceLoader.THREAD_LOAD_IN_PROGRESS: continue
+		_wide_requests.erase(each)
+		var loaded := ResourceLoader.load_threaded_get(path)
+		if loaded is Texture2D and not _wide_textures.has(each): _wide_textures[each] = loaded
+	if _warm_jobs.is_empty() and _warm_steps.is_empty() and _wide_requests.is_empty(): set_process(false)
+
+func _exit_tree() -> void:
+	for job: Dictionary in _warm_jobs: WorkerThreadPool.wait_for_task_completion(job.task)
+	_warm_jobs.clear()
+	# The small plates and their font belong to this menu.
+	if _small_plates.values().has(ELGameChoice._looks): ELGameChoice.use_looks({})
 
 ## Texture-backed piece in 1024-layout coordinates.
 func cut(row: Dictionary, offset := Vector2.ZERO) -> Dictionary:
@@ -646,7 +788,8 @@ func _add_wide_frame(target: String, under_panel := false) -> void:
 	_frame_in_art = false
 	if overlay() or hosted or not WIDE_FRAMES.has(edition) or not target in WIDE_SCREENS.get(edition, []): return
 	if not ResourceLoader.exists(WIDE_FRAMES[edition]): return
-	_wide_texture = load(WIDE_FRAMES[edition])
+	if not _wide_textures.has(edition): _wide_textures[edition] = load(WIDE_FRAMES[edition])
+	_wide_texture = _wide_textures[edition]
 	_wide_corners = _menu_corners(profile)
 	if under_panel:
 		_frame_in_art = true
@@ -793,6 +936,10 @@ class Backdrop extends Control:
 			draw_texture_rect_region(piece.texture, piece.rect, piece.source)
 		if ELFrontMenu.use_wide_texture(size, wide): ELFrontMenu._draw_menu_frame(self, wide, corners)
 
+## The width (1024 layout) the game choice row keeps clear at each side for
+## the frame's lower corner pieces.
+const CHOICE_CORNERS := 92.0
+
 func _layout() -> void:
 	if canvas == null or size.x <= 0 or size.y <= 0: return
 	scale_factor = artwork_scale(size, _wide_texture if _frame_in_art or is_instance_valid(_wide_frame) else null)
@@ -803,8 +950,10 @@ func _layout() -> void:
 	_place_version()
 	if _choice != null:
 		_choice.size = _choice.get_combined_minimum_size()
-		# Extra standalone modes still fit on a narrow window and in translation.
-		var choice_scale := minf(scale_factor, maxf(1.0, size.x - 24.0) / maxf(1.0, _choice.size.x))
+		# Extra standalone modes still fit on a narrow window and in translation,
+		# between the frame's lower corner pieces.
+		var room := size.x - CHOICE_CORNERS * 2.0 * scale_factor
+		var choice_scale := minf(scale_factor, maxf(1.0, room) / maxf(1.0, _choice.size.x))
 		_choice.scale = Vector2(choice_scale, choice_scale)
 		_choice.position = Vector2((size.x - _choice.size.x * choice_scale) * 0.5, canvas.position.y + CHOICE_TOP * scale_factor).floor()
 
@@ -1242,12 +1391,17 @@ func scroll_text(lines: int) -> void:
 func play_music(name: String) -> bool:
 	var path := profile.file("Resources/Music/" + name + ".mp3")
 	if path.is_empty() or _audio == null: return false
+	_finish_warm_job("music " + path)
+	if not _music_streams.has(path): _music_streams[path] = _music_stream(path)
+	_play(_music_streams[path], "music")
+	_music_path = path
+	return true
+
+static func _music_stream(path: String) -> AudioStreamMP3:
 	var stream := AudioStreamMP3.new()
 	stream.data = FileAccess.get_file_as_bytes(path)
 	stream.loop = true
-	_play(stream, "music")
-	_music_path = path
-	return true
+	return stream
 
 ## Music from a file outside the archives (a custom map's own track).
 func play_music_file(path: String, stream: AudioStream) -> void:
@@ -1860,6 +2014,76 @@ func _open_briefing() -> void:
 
 ## Original multi-part text button: left cap, stretched middle, right cap,
 ## pressed variant and lit overlay, with the caption from the text tables.
+## Remake: the main menu buttons' art at SMALL_PLATE of their size, for the
+## remake's own buttons under the menus (ELGameChoice.plain): the resting,
+## lit and pushed looks of the page's first button, composed at their
+## narrowest (both caps and one middle piece) into nine-patch plates whose
+## caps keep their size and whose middle repeats. Made once per game.
+const SMALL_PLATE := 0.9
+var _small_plates: Dictionary = {}
+
+func small_plates() -> Dictionary:
+	if _small_plates.has(profile): return _small_plates[profile]
+	var looks := {}
+	var main: Array = SCREENS.get(edition, {}).get("main", {}).get("buttons", [])
+	var button: TextButton = TextButton.make(self, main[0], 140.0, 16) if not main.is_empty() else null
+	if button != null:
+		var layers := {"normal": ["normal"], "hover": ["normal", "hover"], "pressed": ["pressed"], "hover_pressed": ["pressed", "hover_pressed"]}
+		var caps := Vector2.ZERO
+		for part: Dictionary in button.states.get("normal", []):
+			if part.type == "Type5": caps.x = part.rect.size.x
+			if part.type == "Type7": caps.y = part.rect.size.x
+		for look: String in layers:
+			var picture := Image.create(140, 57, false, Image.FORMAT_RGBA8)
+			for layer: String in layers[look]: _paint_parts(picture, button, button.states.get(layer, []), look.contains("pressed"))
+			if picture.is_invisible(): continue
+			picture.resize(roundi(140 * SMALL_PLATE), roundi(57 * SMALL_PLATE), Image.INTERPOLATE_LANCZOS)
+			var style := StyleBoxTexture.new()
+			style.texture = ImageTexture.create_from_image(picture)
+			style.texture_margin_left = ceilf(caps.x * SMALL_PLATE)
+			style.texture_margin_right = ceilf(caps.y * SMALL_PLATE)
+			style.axis_stretch_horizontal = StyleBoxTexture.AXIS_STRETCH_MODE_TILE_FIT
+			style.content_margin_left = maxf(16.0, caps.x * SMALL_PLATE * 0.6)
+			style.content_margin_right = maxf(16.0, caps.y * SMALL_PLATE * 0.6)
+			style.content_margin_top = 3
+			style.content_margin_bottom = 3
+			looks[look] = style
+		button.free()
+		if looks.has("normal") and looks.has("hover") and looks.has("pressed"):
+			if not looks.has("hover_pressed"): looks.hover_pressed = looks.pressed
+			var dim: StyleBoxTexture = looks.normal.duplicate()
+			dim.modulate_color = Color(0.6, 0.6, 0.6)
+			looks.disabled = dim
+			looks.font = face_for(main[0])
+		else: looks = {}
+	_small_plates[profile] = looks
+	return looks
+
+## Paints a TextButton state's pieces into `picture` as the button draws
+## them at its narrowest (TextButton._draw_parts).
+func _paint_parts(picture: Image, button: TextButton, parts: Array, pushed: bool) -> void:
+	for part: Dictionary in parts:
+		var texture: Texture2D = part.texture
+		var image := texture.get_image()
+		if image == null: continue
+		if image.is_compressed(): image.decompress()
+		image.convert(Image.FORMAT_RGBA8)
+		var inset := TextButton.SHARP_PRESSED_INSET if pushed and texture.has_meta(ELIconUpscale.ORIGINAL) else 0.0
+		var source: Rect2 = part.source
+		source = source.grow_individual(-inset, 0, -inset, 0)
+		var scale := Vector2(image.get_size()) / Vector2(texture.get_size()).max(Vector2.ONE)
+		var region := Rect2i(Vector2i((source.position * scale).round()), Vector2i((source.size * scale).round()))
+		if region.size.x <= 0 or region.size.y <= 0: continue
+		var piece := image.get_region(region)
+		var rect: Rect2 = part.rect
+		var drawn := Vector2i(roundi(rect.size.x - inset * 2.0), roundi(rect.size.y))
+		if drawn.x <= 0 or drawn.y <= 0: continue
+		piece.resize(drawn.x, drawn.y, Image.INTERPOLATE_BILINEAR)
+		var x := rect.position.x - button.design_left + inset
+		if part.type == "Type7": x = 140.0 - (button.design_left + 140.0 - rect.position.x) + inset
+		var y := rect.position.y - button.position.y + button._top_shift()
+		picture.blend_rect(piece, Rect2i(Vector2i.ZERO, piece.get_size()), Vector2i(roundi(x), roundi(y)))
+
 class TextButton extends BaseButton:
 	# The pressed atlas separates its pieces with blank columns. Sharpening
 	# bleeds those edges into the face, so trim the joins before repeating it.

@@ -469,7 +469,7 @@ static func _score(d: ELDuel, card: String, target: int, side: int, allies: Arra
 	var e := d.entity(target)
 	var friendly: bool = target == side if target < 2 else e.get("owner", -1) == side
 	if d.heroes[side].health <= d.global_enchantment_count("MNTH") * (d.cost(card) + power): return 0.0
-	if d.profile.id == "el2" and d.global_enchantment_count("STSI") > 0 and rule.effect in ["mana", "channels"]: return 0.0
+	if d.second_rules("STSI") and d.global_enchantment_count("STSI") > 0 and rule.effect in ["mana", "channels"]: return 0.0
 	match rule.get("effect"):
 		"summon":
 			if allies.size() >= 10: return 0
@@ -502,7 +502,7 @@ static func _score(d: ELDuel, card: String, target: int, side: int, allies: Arra
 			var score := 0.0
 			for c: Dictionary in enemies:
 				var exempt: bool = d.race(c.id) == "Wall" if rule.get("scope") == "not_walls" else d.has_flag(c.id, "Restless")
-				if d.profile.id == "el2" and (d.has_flag(c.id, "NoAffect") or d.in_plane(int(c.id))): exempt = true
+				if d.second_battle() and (d.has_flag(c.id, "NoAffect") or d.in_plane(int(c.id))): exempt = true
 				if not c.resting and not exempt: score += 1.0 + float(c.power)
 			return score
 		"draw":
@@ -517,12 +517,12 @@ static func _score(d: ELDuel, card: String, target: int, side: int, allies: Arra
 		"repair":
 			if grave < 0: return 0.0
 			var repaired: Dictionary = d.profile.table("CombatCreatures")[d.heroes[side].grave[grave]]
-			var hurt := int(repaired.Power) if d.profile.id == "el2" else 1
+			var hurt := int(repaired.Power) if d.second_rules(card) else 1
 			return 2.0 + float(repaired.Power) * 0.3 + (_damage_score(d.heroes[1 - side], 1 - side, hurt) if d._enchantment_count(1 - side, "FDBK") == 0 else 0.0)
 		"rally_all":
 			var score := 0.0
 			for c: Dictionary in allies:
-				if d.profile.id == "el2" and (d.has_flag(c.id, "NoAffect") or d.in_plane(int(c.id))): continue
+				if d.second_battle() and (d.has_flag(c.id, "NoAffect") or d.in_plane(int(c.id))): continue
 				if c.resting and not c.sick and not d.attacks.has(c.id) and not d.blocks.has(c.id): score += 1.0 + float(c.power) * (0.5 if d.phase == ELDuel.Phase.DEFENCE else 0.2)
 			return score - 2.0
 		"discard_all": return float(e.hand.size()) * 2.0 - 4.0 if not friendly else 0.0
@@ -588,7 +588,7 @@ static func _score(d: ELDuel, card: String, target: int, side: int, allies: Arra
 		"symbiosis": return float(2 * d.creatures.size()) * 0.6 - 1.0
 		"sacrifice_heal": return float(e.toughness) * 0.5 - float(e.power) - 2.0 if friendly else 0.0
 		"polymorph":
-			var value := int(e.toughness) + (maxi(0, int(e.power)) if d.profile.id == "el2" else 0)
+			var value := int(e.toughness) + (maxi(0, int(e.power)) if d.second_rules(card) else 0)
 			var removal := (12.0 + float(e.power)) if not friendly else -float(e.power + e.toughness)
 			return removal + float(value - int(d.heroes[side].health)) * 0.5 if value > 0 else 0.0
 		"twister":
@@ -601,7 +601,7 @@ static func _score(d: ELDuel, card: String, target: int, side: int, allies: Arra
 			var score := 0.0
 			for c: Dictionary in enemies: score += float(c.power) + float(c.toughness) * 0.5 + 2.0
 			for c: Dictionary in allies: score -= float(c.power) + float(c.toughness) * 0.5 + 2.0
-			if d.profile.id == "el2": score -= float(allies.size() + enemies.size()) * 1.0
+			if d.second_rules(card): score -= float(allies.size() + enemies.size()) * 1.0
 			elif d.attacker == side: score -= float(allies.size() + enemies.size())
 			return score - 4.0
 		"clone":
@@ -615,7 +615,7 @@ static func _score(d: ELDuel, card: String, target: int, side: int, allies: Arra
 			return score - 3.0
 		"amnesia": return float(d.heroes[1 - side].hand.size() - (d.heroes[side].hand.size() - 1)) * 2.0 - 2.0
 		"mind_blast":
-			var per_card := 3 if d.profile.id == "el2" else 2
+			var per_card := 3 if d.second_rules(card) else 2
 			var theirs: int = per_card * (d.heroes[1 - side].hand.size() - 5)
 			var own: int = per_card * (d.heroes[side].hand.size() - 6)
 			if own >= d.heroes[side].health: return 0.0
@@ -629,7 +629,7 @@ static func _score(d: ELDuel, card: String, target: int, side: int, allies: Arra
 			return score
 		"redraw": return 0.0
 		"ban":
-			if d.profile.id == "el2": return float(d.heroes[1 - side].hand.size() - (d.heroes[side].hand.size() - 1)) * 2.0 - 1.0
+			if d.second_rules(card): return float(d.heroes[1 - side].hand.size() - (d.heroes[side].hand.size() - 1)) * 2.0 - 1.0
 			return float(mini(2, d.heroes[1 - side].hand.size()) - mini(2, d.heroes[side].hand.size() - 1)) * 2.0
 		"full_heal": return float(d.heroes[side].maximum - d.heroes[side].health) * 0.5 - 2.0
 		"heal": return float(power) * 0.6 if d.heroes[side].health < d.heroes[side].maximum else 0.0
@@ -662,7 +662,7 @@ static func _score(d: ELDuel, card: String, target: int, side: int, allies: Arra
 			return score + _damage_score(d.heroes[1 - side], 1 - side, own_power) - float(their_power) * 0.5
 		"hunger": return _damage_score(e, target, int(e.power)) if not friendly and e.power > 0 else 0.0
 		"grave_fire":
-			var per_creature := 3 if d.profile.id == "el2" else 2
+			var per_creature := 3 if d.second_rules(card) else 2
 			var own: int = per_creature * d.heroes[side].grave.size()
 			var theirs: int = per_creature * d.heroes[1 - side].grave.size()
 			if d.heroes[side].health <= own: return 0.0
@@ -720,7 +720,7 @@ static func _score(d: ELDuel, card: String, target: int, side: int, allies: Arra
 			if card == "ANFR":
 				var weak := 0.0
 				for c: Dictionary in enemies:
-					if c.power <= (5 if d.profile.id == "el2" else 3): weak += 2.0
+					if c.power <= (5 if d.second_rules(card) else 3): weak += 2.0
 				return weak if d._enchantment_count(side, card) == 0 else 0.0
 			if card == "SPWB": return 3.0 if d._enchantment_count(side, card) == 0 and d.creatures.size() >= 2 else 0.0
 			if card == "ETCH":
@@ -750,7 +750,7 @@ static func _score(d: ELDuel, card: String, target: int, side: int, allies: Arra
 			if card in ["OST1", "OST2", "OST3"]: return 2.0 if d._enchantment_count(side, card) == 0 and allies.size() < 9 else 0.0
 			if card in ["RIOT", "DWND", "PALN"]:
 				if friendly or d._enchantment_count(target, card) > 0: return 0.0
-				if card == "DWND": return (12.0 + float(e.power)) if e.toughness - e.damage <= 4 and d.profile.id == "el2" else minf(4.0, float(e.toughness - 1)) * 0.8
+				if card == "DWND": return (12.0 + float(e.power)) if e.toughness - e.damage <= 4 and d.second_rules(card) else minf(4.0, float(e.toughness - 1)) * 0.8
 				if card == "PALN": return 2.0 + float(e.toughness) * 0.2
 				return 2.0 if d.regeneration_cost(target) > 0 else 0.0
 			if card == "REDR": return 3.0 + float(e.toughness) * 0.3 if friendly and d._enchantment_count(side, card) == 0 and not d.attacks.is_empty() and d.phase == ELDuel.Phase.DEFENCE else 0.0
@@ -831,7 +831,7 @@ static func _score(d: ELDuel, card: String, target: int, side: int, allies: Arra
 			if card == "FTDS":
 				var score := 0.0
 				for c: Dictionary in enemies: score += 2.0 if c.flags.any(func(f: String): return f.begins_with("Regen(")) else 0.5
-				if d.profile.id == "el2":
+				if d.second_rules(card):
 					for c: Dictionary in allies: score -= 2.0 if c.flags.any(func(f: String): return f.begins_with("Regen(")) else 0.5
 				return score if d.global_enchantment_count(card) == 0 else 0.0
 			if card == "SFGS":
@@ -1071,7 +1071,7 @@ static func _first_ability(d: ELDuel, side: int, ally: Dictionary, ability: Dict
 		"tap_race":
 			var counts := {}
 			for c: Dictionary in enemies:
-				if not c.resting and (d.profile.id != "el2" or not d.in_plane(c.id)): counts[d.race(c.id)] = counts.get(d.race(c.id), []) + [c.id]
+				if not c.resting and (not d.second_battle() or not d.in_plane(c.id)): counts[d.race(c.id)] = counts.get(d.race(c.id), []) + [c.id]
 			for kind: String in counts:
 				if counts[kind].size() >= 2 and counts[kind].size() <= d.available_mana(side) and d.targetable(counts[kind][0]): return d.use_ability(ally.id, ability.key, counts[kind][0])
 		"distortion":

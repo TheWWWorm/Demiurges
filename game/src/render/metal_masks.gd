@@ -307,11 +307,12 @@ static func _work(job: Dictionary) -> void:
 				var pixels: PackedByteArray = figure_inputs[role].pixels
 				for entry: Array in areas:
 					var area: Rect2 = entry[0]
+					var most := float(entry[2]) if entry.size() > 2 else 1.0
 					for y in range(int(area.position.y * SIDE), mini(SIDE, ceili(area.end.y * SIDE))):
 						for x in range(int(area.position.x * SIDE), mini(SIDE, ceili(area.end.x * SIDE))):
 							var i := y * SIDE + x
 							var c := Color(pixels[i * 4] / 255.0, pixels[i * 4 + 1] / 255.0, pixels[i * 4 + 2] / 255.0)
-							if pixels[i * 4 + 3] >= 128 and c.s >= float(entry[1]): solid[i] = 255
+							if pixels[i * 4 + 3] >= 128 and c.s >= float(entry[1]) and c.s <= most: solid[i] = 255
 				levels[role] = solid
 		stats.compute_usec = Time.get_ticks_usec() - classified
 		_store(job.path, digest, levels)

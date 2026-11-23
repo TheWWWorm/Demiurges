@@ -2,6 +2,28 @@
 
 Versions follow [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html) from 0.3.0 on.
 
+## 0.28.0
+
+### New
+
+- **Shorter computer pauses.** The smarter AI carries its plan through to the end of the phase and through every attacker it sends, instead of stopping to think again before ending the phase or between attackers (pauses after a planned move fell from about a second on average to a fraction of one; self-play showed it as strong as before).
+- **One battle rulebook (Etherlords I).** With the Etherlords II card balance option on, the first game now plays the whole duel by Etherlords II's battle rules, not only its cards: the hero moving second gets its extra ether on the first turn, ether disturbance grows as in Etherlords II, necromancy and siphon refuse with a full army or an empty opponent, lifeguards, disenchanting strikes and a hit's discards come in Etherlords II's order, regenerated creatures leave their fight, and creatures nothing can affect are spared. Heroes, specialisations, the spellbook with its runes, artifacts and combat events stay the first game's own; puzzles keep the original balance and rules, and the computer opponent's lookahead follows the same choice.
+- **Menu buttons in the menu's own art.** The row under the main menu (the two games, Wiki, Puzzles, Expedition, Arena, Autochess) and the computer-level pickers and other buttons under the menus use the main menu buttons' plates, smaller, with their lettering.
+- **First-person view: a controls line** at the foot of the screen names the keys (WASD, Shift to run, Space and Ctrl to rise and sink, F or Esc to leave), and the eye starts a little lower, nearer the hero's eyes.
+
+### Fixed
+
+- **Play history:**
+  - What a hero's or creature's ability does to its own user (a hero healing itself) shows on the user after the arrow, with the health gained, instead of on the ability's picture.
+  - "My hero" and "Opposing hero" follow the player's side, so in battles where the player sits second the target of a spell such as Broken Reality is no longer named as the caster.
+  - A card with no targets has equal room on both sides of its text.
+- **Battle zoom** stops a little closer than the original's nearest view, instead of going in among the figures.
+- **Creature abilities light up only when they can be used, in both games** (the first game lit them regardless): the Aviak Marksman's shot needs an attacking enemy, a recall a card in a graveyard, a dispel an enchantment it may remove.
+- **Skipping a fight with Space** no longer sends life-draining attackers such as the Mantises back out to the front line and home again while their heal is still on its way.
+- **Kinet heroes' breastplates shine as metal** in every skin of the winged heroes and both lamia heroes, bronze, gold and blued steel included, while bare skin, leather straps and cloth stay matte.
+- **Switching between Etherlords I and II in the main menu** no longer freezes the screen for up to a third of a second, and the main menu no longer keeps a hidden battle behind it: starting the game, switching games and leaving a campaign map skip building one, the menu uses about a third less memory, and the other game's menu is made ready in the background.
+- **Vampire Treants** (and the Fighter and Bat healing masteries) show the life-drain effect when they heal their hero, as creatures with Vampirism do.
+
 ## 0.27.0
 
 ### New

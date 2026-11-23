@@ -89,6 +89,12 @@ static var smart_follow := true
 ## (ELCombatBrain.choose): the whole turn as it was read, instead of a new
 ## think after every card. Off, each card cast is thought over afresh.
 static var smart_line_casts := true
+## The engine's line is followed to its end of the phase too, and past a
+## whole attack (ELCombatBrain._line_rest): the hero ends its phase, or goes
+## on after sending its attackers, as the turn was read, instead of thinking
+## the position over again once the last planned command is taken. Off, the
+## end of the phase and what follows a whole attack are thought over afresh.
+static var smart_line_end := true
 ## A spell or ability that would change nothing (every creature raised when
 ## none rests, ether taken from a hero that has none) is not played, nor a
 ## spell that only gives ether when the plays after it need no more ether than
@@ -330,6 +336,11 @@ static var smart_engine_prove := 4
 ## A proved win that opens with an attack ends the phase instead when that
 ## wins as soon (`_quiet_win`).
 static var smart_quiet_proof := true
+## Whether that is asked again before every planned attack, not only the
+## attacks of a proved win's line: off, an attack the engine's line holds
+## is sent without a proof of its own, which can take the whole think limit
+## between two attackers and next to never finds a quieter win.
+static var smart_quiet_plans := false
 ## A duel read as lost holds its attackers back when that loses no sooner
 ## (`_hold_when_lost`).
 static var smart_hold_lost := true
@@ -621,7 +632,7 @@ static func request(duel: ELDuel, restricted := false) -> Dictionary:
 	var asked := {"smart": smart, "engine": engine, "budget": engine_budget(), "ms": ms, "identity": duel.identity(), "restricted": restricted,
 		"follow": smart and smart_follow, "information": information, "cancel": Cancel.new()}
 	asked.policy = hash([smart, engine, asked.budget, ms, restricted, asked.follow, information, smart_engine_phases, smart_engine_steps, smart_engine_width,
-		smart_engine_prove, smart_engine_prove_share, smart_engine_guard, smart_engine_reach, smart_engine_beyond, smart_engine_likely, smart_budget, smart_phases, smart_quiet_proof, smart_hold_lost, smart_puzzle_kill])
+		smart_engine_prove, smart_engine_prove_share, smart_engine_guard, smart_engine_reach, smart_engine_beyond, smart_engine_likely, smart_budget, smart_phases, smart_quiet_proof, smart_hold_lost, smart_puzzle_kill, smart_line_end, smart_quiet_plans])
 	asked.deadline_usec = Time.get_ticks_usec() + ms * 1000 if ms > 0 else 0
 	asked.spent_usec = 0
 	return asked
@@ -733,10 +744,14 @@ static func _think(real: ELDuel, duel: ELDuel, stats: Dictionary, restricted: bo
 			stats.proven = int(kill.get("proven", 0))
 			return kill.command
 	if bool(asked.get("follow", false)) and not stats.get("fresh", false):
-		var planned := _recall(real, int(asked.get("policy", 0)))
+		var recalled := {}
+		var planned := _recall(real, int(asked.get("policy", 0)), recalled)
 		# A won line's attack at ready blockers is passed over when ending the
-		# phase still wins within the proof's reach (see `_quiet_win`).
-		if smart_quiet_proof and String(planned.get("kind", "")) == "attack":
+		# phase still wins within the proof's reach (see `_quiet_win`). The
+		# proof is asked again only for the steps of a won line
+		# (`smart_quiet_plans`): for any other plan it costs up to the whole
+		# think limit between two attackers, and next to never finds a win.
+		if smart_quiet_proof and String(planned.get("kind", "")) == "attack" and (smart_quiet_plans or bool(recalled.get("won", false))):
 			ctx.w = chosen_weights(ctx.second)
 			var now := ELCombatBrain.prove(ctx, duel, smart_engine_prove, _share(ctx, ctx.budget))
 			if String(now.get("status", "")) == "proven" and _quiet_win(ctx, duel, int(now.get("turns", 0))):
@@ -923,7 +938,7 @@ static func _engine(ctx: Context, duel: ELDuel, stats: Dictionary, asked: Dictio
 			_engine_trace(ctx, duel, stats, {"kind": "end_phase"}, float(found.value))
 			return {"kind": "end_phase"}
 		var won: Array = found.get("line", [])
-		if follow and won.size() > 1: _remember(real, won, int(asked.get("policy", 0)))
+		if follow and won.size() > 1: _remember(real, won, int(asked.get("policy", 0)), true)
 		_engine_trace(ctx, duel, stats, found.command, float(found.value))
 		return found.command
 	var stage_began := Time.get_ticks_usec()
@@ -1395,8 +1410,8 @@ static func _place(d: ELDuel) -> Array:
 
 ## Remembers the steps of a chosen plan after its first, for the opponent
 ## with the settings `policy` (the request's): another opponent's plan is not
-## followed.
-static func _remember(duel: ELDuel, steps: Array, policy := 0) -> void:
+## followed. `won`: the plan is a proved win's line.
+static func _remember(duel: ELDuel, steps: Array, policy := 0, won := false) -> void:
 	var copy := duel.search_copy()
 	_plans_lock.lock()
 	if _plans.size() > 256: _plans.clear()
@@ -1417,13 +1432,14 @@ static func _remember(duel: ELDuel, steps: Array, policy := 0) -> void:
 			var index := int(step.get("index", -1))
 			if index < 0 or index >= hand.size() or String(hand[index]) != String(step.card): break
 		if not apply(copy, step): break
-		if i > 0: _plans[hash(from)] = {"at": from, "command": steps[i], "policy": policy}
+		if i > 0: _plans[hash(from)] = {"at": from, "command": steps[i], "policy": policy, "won": won}
 	_plans_lock.unlock()
 	if copy.scripts != null and copy.scripts.search_only: copy.scripts.close()
 
 ## The remembered step for the duel's position, once the rules take it there
-## and only for the opponent that chose it (null: any).
-static func _recall(duel: ELDuel, policy: Variant = null) -> Dictionary:
+## and only for the opponent that chose it (null: any). `kept` receives
+## whether the plan is a proved win's line ("won").
+static func _recall(duel: ELDuel, policy: Variant = null, kept: Dictionary = {}) -> Dictionary:
 	var place := _place(duel)
 	var key := hash(place)
 	_plans_lock.lock()
@@ -1440,6 +1456,7 @@ static func _recall(duel: ELDuel, policy: Variant = null) -> Dictionary:
 	if not taken:
 		forget(duel)
 		return {}
+	kept.won = bool(planned.get("won", false))
 	return planned.command
 
 ## Drops the remembered step for the duel's position (one the duel refused).

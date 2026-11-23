@@ -11,12 +11,15 @@ static func regenerates(hero: Dictionary) -> bool:
 	if rank == 2: return true
 	return rank in [0, 1] and (int(hero.turns) - 1) % (3 - rank) == 1
 
-## `extra` brings it earlier (second-game Gift: two turns per gifted creature).
-static func disturbance(edition: String, hero: Dictionary, opponent: Dictionary, extra := 0) -> int:
+## The ether disturbance a turn's start takes from the hero: one more each
+## turn under the first game's battle rules; under the second's (`second`,
+## ELDuel.second_battle) half as much again as the turn before. `extra` brings it earlier
+## (second-game Gift: two turns per gifted creature).
+static func disturbance(second: bool, hero: Dictionary, opponent: Dictionary, extra := 0) -> int:
 	var own_delay := int(hero.get("skills", {}).get("CNLG", -1)) + 1
 	var enemy_delay := int(opponent.get("skills", {}).get("CNLG", -1)) + 1
 	var elapsed := int(hero.turns) - 1 - int(hero.level) - 10 - own_delay + enemy_delay + extra
 	if elapsed <= 0: return 0
-	if edition == "el1": return elapsed
+	if not second: return elapsed
 	# Saturate once the result exceeds every legal hero health value.
 	return int(minf(pow(1.5, mini(elapsed, 53)), 2147483647.0))

@@ -945,14 +945,32 @@ const MACHINE_WINGS := ["he103", "he104", "he105", "he106", "he913", "he915", "h
 const METAL_HUE_BANDS := {"he716": [0.078, 0.105, 0.32, 1.0], "he717": [0.078, 0.105, 0.32, 1.0],
 	"cr711": [0.075, 0.13, 0.62, 1.0], "ad711": [0.075, 0.13, 0.62, 1.0]}
 ## Areas of a figure's skin (UV rectangles, each with the least saturation
-## that counts there) that are metal all over: the Ogre
+## that counts there, and optionally the most) that are metal all over: the Ogre
 ## King's bronze scale mail above and below his belt, painted in the brown of
 ## the belt and his skin; the third Egyptian's studded gold collar, shaded
 ## down to near black (not the grey hide beside it).
+## The Kinets' heroes wear their breastplates on their bodies, beside bare
+## arms and bellies, in steel, gold, bronze or blackened iron by skin: the
+## classifier found the steel ones but left bronze and gold plates (and blue
+## tinted steel) in matte patches. Their plates are the same texels in every
+## skin of a figure: the winged heroine's cups, the winged hero's breast and
+## back plate, the lamia heroine's cuirass and cups (the most saturation
+## leaves out the leather strap two of her skins draw across a cup; the
+## sides under her arms, bare in her first skin, are left to the classifier)
+## and the lamia hero's breastplate.
 const METAL_UV_RECTS := {"cr204": [[Rect2(0.01, 0.01, 0.68, 0.08), 0.0], [Rect2(0.01, 0.19, 0.68, 0.1), 0.0]],
 	"ad204": [[Rect2(0.01, 0.01, 0.68, 0.08), 0.0], [Rect2(0.01, 0.19, 0.68, 0.1), 0.0]],
 	"cr711": [[Rect2(0.0, 0.79, 0.115, 0.19), 0.45], [Rect2(0.215, 0.84, 0.098, 0.14), 0.45]],
-	"ad711": [[Rect2(0.0, 0.79, 0.115, 0.19), 0.45], [Rect2(0.215, 0.84, 0.098, 0.14), 0.45]]}
+	"ad711": [[Rect2(0.0, 0.79, 0.115, 0.19), 0.45], [Rect2(0.215, 0.84, 0.098, 0.14), 0.45]],
+	"he301": [[Rect2(0.6796875, 0.5234375, 0.1875, 0.09375), 0.0], [Rect2(0.6953125, 0.8515625, 0.03125, 0.0703125), 0.0]],
+	"he303": [[Rect2(0.671875, 0.28125, 0.15625, 0.125), 0.0], [Rect2(0.828125, 0.28125, 0.15625, 0.1640625), 0.0],
+		[Rect2(0.6953125, 0.40625, 0.125, 0.0390625), 0.0]],
+	"he305": [[Rect2(0.6875, 0.34375, 0.28125, 0.1875), 0.0], [Rect2(0.6875, 0.53125, 0.28125, 0.015625), 0.0, 0.5],
+		[Rect2(0.6875, 0.546875, 0.0859375, 0.078125), 0.0, 0.5],
+		[Rect2(0.9140625, 0.546875, 0.0546875, 0.078125), 0.0, 0.5]],
+	"he307": [[Rect2(0.671875, 0.3125, 0.3125, 0.09375), 0.0], [Rect2(0.6953125, 0.40625, 0.2890625, 0.0390625), 0.0],
+		[Rect2(0.875, 0.4453125, 0.109375, 0.0078125), 0.0], [Rect2(0.7109375, 0.4453125, 0.1015625, 0.0703125), 0.0],
+		[Rect2(0.9140625, 0.453125, 0.0625, 0.0625), 0.0]]}
 ## Areas of a figure's skin (UV rectangles) that are never metal, where one
 ## part is both armour and cloth: the first Red main hero's body is his
 ## gauntlets and his sackcloth robe, which is woven in his helmet's grey.

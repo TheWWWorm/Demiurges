@@ -101,6 +101,13 @@ var _homing := false
 var _homeward := {}
 ## The timer a blow is waiting on (_wait).
 var _timer: SceneTreeTimer
+## The attackers and blockers of the combat being shown (id -> true). The
+## shown board can still list them as declared after the playback has brought
+## them home (a life drain's heal holds it until its effect arrives, which a
+## skipped exchange leaves still in flight): they stay home rather than step
+## out to the front line again. Each is forgotten once the shown board no
+## longer declares it.
+var _fought := {}
 ## Longest wait for figures lying down or getting up before the turn goes on.
 ## Only a guard against a clip that never ends: the originals wait as long
 ## as the clips take.
@@ -138,6 +145,16 @@ func step_out(id: int, facing := -1) -> void:
 	var yaw := _yaw_at(front, int(c.owner))
 	if facing >= 0: yaw = _yaw_to(front, _front_of(facing))
 	_move(id, [front], true, yaw, randf() * 0.1)
+
+## The figures the shown board declares (`declared`) less those that already
+## fought in the combat just shown; those it no longer lists are forgotten.
+func not_fought(declared: Array[int]) -> Array[int]:
+	for known: int in _fought.keys():
+		if not declared.has(known): _fought.erase(known)
+	var rest: Array[int] = []
+	for id: int in declared:
+		if not _fought.has(id): rest.append(id)
+	return rest
 
 ## A blocker already out turns to the attacker it now blocks.
 func face_block(id: int, attacker: int) -> void:
@@ -266,6 +283,11 @@ func capture(data: Dictionary) -> bool:
 	if data.kind == "strike" and not data.has("attacking"): stamp_strike(data)
 	if data.kind != "combat_start": queue.append(data)
 	if data.kind == "combat_end": _capture_finished = true
+	if data.kind == "combat_start":
+		_fought.clear()
+		var shown: Dictionary = data.get("shown", {})
+		for id: int in shown.get("attacks", []): _fought[id] = true
+		for id: int in shown.get("blocks", {}): _fought[id] = true
 	if not busy():
 		_resolved_rest.clear()
 		if data.kind == "combat_start":
@@ -354,6 +376,7 @@ func abort() -> void:
 	queue.clear()
 	_attacker_rest.clear()
 	_resolved_rest.clear()
+	_fought.clear()
 
 func _dispatch(data: Dictionary) -> void:
 	if data.kind == "damage": _wounds[int(data.target)] = int(_wounds.get(int(data.target), 0)) + int(data.amount)

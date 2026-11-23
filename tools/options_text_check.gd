@@ -113,6 +113,8 @@ func _strings(code: String, where: String) -> void:
 		if text.is_empty() or text.contains("://"): continue
 		var line_start := code.rfind("\n", found.get_start()) + 1
 		var before := code.substr(line_start, found.get_start() - line_start)
+		# A worker thread's task name is never shown.
+		if before.contains("add_task("): continue
 		var first := text.left(1)
 		var sentence := text.contains(" ") and (first == "%" or first != first.to_lower())
 		if sentence or caption_place.search(before) != null: _note(text, where)

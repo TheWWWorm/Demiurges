@@ -98,6 +98,9 @@ const SAME_FRAME_EFFECTS := 3
 var _figure_effect_frame := -1
 var _figure_effects_now := {}
 var launch_profile := "el1"
+## Starts as the launched game does (front end, start-up offers) though the
+## scene is not the main one: for checks that drive the real start.
+var launch_as_game := false
 var capture_path := ""
 var capture_after := 3.0
 ## Debug: "--open-options=WHERE:PAGE" opens the merged Options screen at start
@@ -146,9 +149,10 @@ var camera_shake := {}
 ## The orbit's centre; the original's default view sets it with the angles.
 var camera_target := Vector3(0, 0.6, -0.5)
 const PITCH_LIMITS := Vector2(0.3, 1.05)
-## The wheel's zoom range. The near end lets the camera come up to the
-## figures (it was 15, from where a creature filled a tenth of the screen).
-const DISTANCE_LIMITS := Vector2(4, 40)
+## The wheel's zoom range. The near end comes a little closer to the
+## figures than the original's 15 (from where a creature filled a tenth of
+## the screen), without going in among them.
+const DISTANCE_LIMITS := Vector2(11, 40)
 ## First-person view (the "first_person" hotkey), made on first use.
 var free_look: ELFreeLook
 var orbiting := false
@@ -422,9 +426,14 @@ func _ready() -> void:
 		status.text = "Choose a game folder to begin. Original content is required."
 		if get_tree().current_scene == self and not demo and capture_path.is_empty(): _content_menu.call_deferred()
 		return
-	var launched := get_tree().current_scene == self
-	var preview := launched and not demo and capture_path.is_empty()
-	_start(launch_profile if profiles.has(launch_profile) else String(profiles.keys()[0]), {}, null, -1, preview)
+	var launched := get_tree().current_scene == self or launch_as_game
+	var first := launch_profile if profiles.has(launch_profile) else String(profiles.keys()[0])
+	# The launched game opens on its own front end, which covers the whole
+	# window: no battle is built until one is played. Scripted checks, captures
+	# and the debug openers start on a battle as before.
+	var menu_first := launched and not demo and capture_path.is_empty() and _debug_options.is_empty() and _debug_puzzle.is_empty() and _campaign_probe.is_empty() and ELFrontMenu.supports(profiles[first])
+	if menu_first: _choose_game(first)
+	else: _start(first, {}, null, -1, launched and not demo and capture_path.is_empty())
 	if not _debug_options.is_empty(): _open_debug_options.call_deferred()
 	if not _debug_puzzle.is_empty(): _open_debug_puzzle.call_deferred()
 	if not _campaign_probe.is_empty():
@@ -629,6 +638,64 @@ func _load_profiles() -> void:
 
 var _practice_restart_seed := -1
 var _encounter_start: Dictionary = {}
+## The game in use with no battle built for it (the front end's choice): the
+## battle of another game, if one stands, is put away.
+func _choose_game(edition: String) -> void:
+	if profile != null and profile.id == edition and duel != null:
+		return
+	_drop_battle()
+	profile = profiles[edition]
+	_use_edition(edition)
+
+## Puts the battle away: its scene, figures and state, and the modes that
+## played it (a match, the tutorial, a puzzle, a replay). Nothing is shown in
+## its place; the screen that follows (the front end) covers the window.
+func _drop_battle() -> void:
+	if not _match_starting:
+		duel_match = null
+		_drop_duel_report()
+	if combat_tutorial != null: _close_combat_tutorial()
+	if puzzle_mode != null: puzzle_mode.close()
+	if replay_player != null: _close_replay()
+	if esc_menu != null: esc_menu.hide()
+	if is_instance_valid(melee): melee.abort()
+	melee = null
+	if power_dialog != null: _hide_power_panel()
+	if stage != null:
+		remove_child(stage)
+		stage.queue_free()
+	stage = null
+	arena = null
+	camera = null
+	effects = null
+	blood = null
+	battle_audio = null
+	battle_warmup = null
+	selection_ring = null
+	duel = null
+	models.clear()
+	labels.clear()
+	homes.clear()
+	logs.clear()
+	_log_stale = true
+	selection = -1
+	ability_selection.clear()
+	auto_combat = false
+	# Its panel, cards and portraits are neither drawn nor run.
+	if hud_root != null:
+		hud_root.hide()
+		hud_root.process_mode = Node.PROCESS_MODE_DISABLED
+
+## The battle stays (a map encounter's, to come back to) but stops while the
+## map shows.
+func _park_battle() -> void:
+	if stage == null: return
+	stage.hide()
+	stage.process_mode = Node.PROCESS_MODE_DISABLED
+	if is_instance_valid(battle_audio):
+		for player: Node in battle_audio.get_children():
+			if player is AudioStreamPlayer or player is AudioStreamPlayer3D: player.stream_paused = true
+		battle_audio.paused = true
 
 ## `battle_seed` < 0: a new seed each battle, except in --demo (and the
 ## checks that run it), which keep the fixed one so a battle can be repeated.
@@ -778,6 +845,8 @@ func _start(edition: String, options: Dictionary = {}, restored: ELDuel = null, 
 		_add_label(side)
 		portraits[side].texture = _monster_portrait(combatant) if combatant.has("monster_name") else profile.portrait(int(hero.Face))
 	hud.build(profile)
+	hud_root.show()
+	hud_root.process_mode = Node.PROCESS_MODE_INHERIT
 	if battle_history != null:
 		# The column's frame: the panel's phase caption oval (ELHudFrame).
 		var oval := {}
@@ -1406,8 +1475,18 @@ func _toggle_free_look() -> void:
 	# head), so the field is seen as the hero would see it.
 	var hero: ELModel = models.get(_history_side()) if duel != null else null
 	var eye := _figure_height(hero) * ELFreeLook.EYE_OF_HEIGHT if is_instance_valid(hero) else ELFreeLook.EYE
+	free_look.hint = _free_look_hint()
 	free_look.enter(camera, arena.ground_height, eye)
 	if is_instance_valid(ui): ui.visible = false
+
+## The first-person view's controls line, naming the hotkey as bound.
+func _free_look_hint() -> String:
+	var key := "F"
+	if profile != null:
+		var overrides := settings.hotkey_overrides(profile.id)
+		var code := int(overrides["first_person"]) if overrides.has("first_person") else int(ELSettings.hotkey_defaults(profile.id, "first_person").front())
+		if code != KEY_NONE: key = OS.get_keycode_string(code)
+	return "  ·  ".join(PackedStringArray([_t("WASD: walk"), _t("Shift: run"), _t("Space: up"), _t("Ctrl: down"), _t("%s or Esc: leave") % key]))
 
 ## The player's own view; any manual camera change ends an automatic close-up.
 func _update_camera() -> void:
@@ -1833,7 +1912,7 @@ func _preview_power(_value := 0.0) -> void:
 	if rule.get("x_source") == "health":
 		# Channel pays X in health: X damage to the caster, X (+4 in the first game) ether, the opponent heals X.
 		var side := duel.active_side()
-		var gain := amount + (4 if profile.id == "el1" else 0)
+		var gain := amount + (0 if duel.second_rules(card) else 4)
 		power_preview.text = "You take %d damage · opponent heals %d\n+%d ether · %d ether total\nAfter casting: %d health · %d ether" % [amount, amount, gain, duel.cost(card), duel.heroes[side].health - amount, duel.heroes[side].mana - duel.cost(card) + gain]
 		return
 	power_preview.text = "%s\n%s · %d ether total\nAfter casting: %d ether · %d channels" % [target_text, result, duel.cost(card) + amount, duel.heroes[duel.active_side()].mana - duel.cost(card) - amount, duel.heroes[duel.active_side()].channels - channel_loss]
@@ -2329,6 +2408,9 @@ func _step_front_line() -> void:
 		# (one still waiting for its summon is not on the field yet).
 		declared.assign(declared.filter(func(id: int) -> bool:
 			return models.has(id) and not models[id].get_meta("arriving", false) and models[id].clip != "usummon"))
+		# Figures home from the combat just shown stay there while the shown
+		# board still lists them (a life drain's heal holds it).
+		declared.assign(melee.not_fought(declared))
 	if not melee.busy():
 		for id: int in declared:
 			if not front_line.has(id): melee.step_out(id, int(faces.get(id, -1)))
@@ -3524,7 +3606,9 @@ func _hero_name(side: int) -> String:
 	if duel != null and duel.heroes[side].has("title"): return str(duel.heroes[side].title)
 	if _hot_seat() and not String(duel_match.names[side]).is_empty(): return String(duel_match.names[side])
 	var keys := ["CtrlDUMyHero", "CtrlDUEnemyHero"] if profile.id == "el1" else ["CtrlDuMyHero", "CtrlDuEnemyHero"]
-	var caption := _original_text(keys[0] if side == 0 else keys[1], "")
+	# "My hero" is the viewer's, who is not always side 0 (a campaign battle
+	# may seat the player second).
+	var caption := _original_text(keys[0] if side == _history_side() else keys[1], "")
 	return caption if not caption.is_empty() else _side_name(side)
 
 ## An original message text with its %s / %d fields filled in order.
@@ -8181,6 +8265,8 @@ func _open_setup() -> void:
 	if profiles.is_empty():
 		_content_menu()
 		return
+	# The setup panel stands over a battle of the chosen game.
+	if duel == null: _start(profile.id if profile != null else (launch_profile if profiles.has(launch_profile) else String(profiles.keys()[0])), {}, null, -1, true)
 	menu.hide()
 	if setup_panel != null:
 		ui.remove_child(setup_panel)
@@ -8247,8 +8333,8 @@ func _begin_campaign(edition: String, scenario: Dictionary, difficulty: int, res
 	# The original goes straight from the briefing to the map: no battle
 	# scene or earlier map stays on screen while the chapter builds.
 	var cover := _loading_cover(profiles[edition])
-	var stage_was_visible := stage.visible
-	stage.hide()
+	var stage_was_visible := stage != null and stage.visible
+	if stage != null: stage.hide()
 	set_process(false)
 	set_process_unhandled_input(false)
 	# A second-game chapter chosen from the chapter list joins the campaign
@@ -8281,7 +8367,7 @@ func _begin_campaign(edition: String, scenario: Dictionary, difficulty: int, res
 	if not campaign_view.build(profiles[edition], scenario, settings, difficulty, restored):
 		cover.queue_free()
 		_release_menu_music()
-		stage.visible = stage_was_visible
+		if stage != null: stage.visible = stage_was_visible
 		_notice(campaign_view.error)
 		campaign_view.queue_free()
 		campaign_view = previous
@@ -8298,11 +8384,10 @@ func _begin_campaign(edition: String, scenario: Dictionary, difficulty: int, res
 		path_tracing.register(campaign_view.camera, campaign_view.world, campaign_view.world.sun, campaign_view.world.environment)
 	cover.queue_free()
 	_release_menu_music()
-	stage.hide()
-	stage.process_mode = Node.PROCESS_MODE_DISABLED
-	for player: Node in battle_audio.get_children():
-		if player is AudioStreamPlayer or player is AudioStreamPlayer3D: player.stream_paused = true
-	battle_audio.paused = true
+	# A battle behind the front end (one left from before the menu) is not
+	# coming back; the map's encounters build their own.
+	if front_menu != null and _campaign_battle() == null: _drop_battle()
+	_park_battle()
 	ui.hide()
 	campaign_view.leave_requested.connect(_leave_campaign)
 	campaign_view.campaigns_requested.connect(_open_campaigns.bind(true))
@@ -8496,12 +8581,12 @@ class LoadingPanel extends Control:
 
 ## True while a campaign battle is on screen.
 func director_battle_open() -> bool:
-	return _campaign_battle() != null and stage.visible
+	return _campaign_battle() != null and stage != null and stage.visible
 
 func _campaign_battle() -> ELDuel:
 	return campaign_view.director.encounter.battle if campaign_view != null and campaign_view.director != null and campaign_view.director.encounter != null else null
 
-const SECOND_BALANCE_HELP := "First game: every spell and creature the second game also has is played as in Etherlords II (update 1.03): its cost, power, toughness, abilities, description and rules, so both games share one balance. Heroes, artifacts, runes, global spells and the first game's own battle rules stay as they are; puzzles keep the original balance. Needs Etherlords II installed. Takes effect from the next battle; online, both players need the same choice."
+const SECOND_BALANCE_HELP := "First game: every spell and creature the second game also has is played as in Etherlords II (update 1.03): its cost, power, toughness, abilities, description and rules, so both games share one balance, and the battle rules outside the cards follow Etherlords II too. Heroes, artifacts, runes and global spells stay as they are; puzzles keep the original balance and rules. Needs Etherlords II installed. Takes effect from the next battle; online, both players need the same choice."
 
 ## Whether the first game's card balance must stay as it is for now: during
 ## a battle in progress, which keeps the balance it began with, and an online
@@ -8587,11 +8672,7 @@ func _return_from_encounter() -> void:
 	# The map's next battles take the balance chosen in Options again.
 	if strategic_session == null: _use_second_balance()
 	menu.hide()
-	stage.hide()
-	stage.process_mode = Node.PROCESS_MODE_DISABLED
-	for player: Node in battle_audio.get_children():
-		if player is AudioStreamPlayer or player is AudioStreamPlayer3D: player.stream_paused = true
-	battle_audio.paused = true
+	_park_battle()
 	ui.hide()
 	affect_strip.clear()
 	mode_select.disabled = false
@@ -8717,17 +8798,21 @@ func _leave_campaign() -> void:
 	remove_child(campaign_view)
 	campaign_view.queue_free()
 	campaign_view = null
-	stage.show()
-	stage.process_mode = Node.PROCESS_MODE_INHERIT
-	camera.current = true
-	for player: Node in battle_audio.get_children():
-		if player is AudioStreamPlayer or player is AudioStreamPlayer3D: player.stream_paused = false
-	battle_audio.paused = false
+	# The map's last encounter is over; the front end follows with no battle
+	# behind it. Without the front end the duel setup needs one.
+	if front_menu != null: _drop_battle()
+	if stage != null:
+		stage.show()
+		stage.process_mode = Node.PROCESS_MODE_INHERIT
+		camera.current = true
+		for player: Node in battle_audio.get_children():
+			if player is AudioStreamPlayer or player is AudioStreamPlayer3D: player.stream_paused = false
+		battle_audio.paused = false
 	ui.show()
 	set_process(true)
 	set_process_unhandled_input(true)
 	_refresh()
-	if front_menu != null: _show_front_menu()
+	if front_menu != null and not _show_front_menu(): _open_setup()
 
 func _save_duel() -> void:
 	if _arena_battle != null:
@@ -9684,7 +9769,7 @@ func _show_front_menu() -> bool:
 		front_menu.quit_requested.connect(_quit_after_expedition_save)
 		front_menu.edition_requested.connect(func(chosen: String):
 			demo = false
-			_start(chosen, {}, null, -1, true)
+			_choose_game(chosen)
 			_remember_edition())
 		front_menu.content_requested.connect(func(chosen: String): _open_content_setup(chosen))
 	elif front_menu.edition != edition: front_menu.use_edition(edition)
@@ -10042,7 +10127,7 @@ func _strategic_closed(reason: String) -> void:
 		return
 	if campaign_view != null: _leave_campaign()
 	else:
-		stage.show()
+		if stage != null: stage.show()
 		set_process(true)
 		set_process_unhandled_input(true)
 	if _show_front_menu():
@@ -10096,7 +10181,7 @@ func _open_autochess() -> void:
 		_autochess_lobby.begin.connect(_begin_autochess)
 		_autochess_lobby.hero_changed.connect(func(id: String):
 			if _autochess_screen != null and _autochess_lobby.visible: _autochess_screen.show_backdrop(id))
-	stage.hide()
+	if stage != null: stage.hide()
 	_pause_battle_audio(true)
 	_autochess_layer.show()
 	for child: Node in get_children():
@@ -10144,9 +10229,10 @@ func _close_autochess(to_menu := true) -> void:
 	for layer: CanvasLayer in _autochess_hidden:
 		if is_instance_valid(layer): layer.show()
 	_autochess_hidden.clear()
-	stage.show()
-	camera.current = true
-	if path_tracing != null and is_instance_valid(arena): path_tracing.attach(stage, arena, camera, effects)
+	if stage != null:
+		stage.show()
+		camera.current = true
+		if path_tracing != null and is_instance_valid(arena): path_tracing.attach(stage, arena, camera, effects)
 	_pause_battle_audio(false)
 	if to_menu: _show_front_menu()
 

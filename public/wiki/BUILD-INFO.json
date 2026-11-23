@@ -1,5 +1,5 @@
 {
-  "version": "0.27.0",
+  "version": "0.28.0",
   "languages": {
     "en": {
       "pages": 485,
@@ -18,8 +18,8 @@
   "translation_keys": 17,
   "files": {
     "data/en/index.json": {
-      "bytes": 372779,
-      "sha256": "d38b2ecdf5e476b0389f95776013f8c413dee4c66ea1a4bce51d06d75c0621be"
+      "bytes": 372966,
+      "sha256": "fb2071358b7b3c6abc622416ee0260d19d10b06e32d5f8a488ecb6b36c081c26"
     },
     "data/en/pages/abilities.json": {
       "bytes": 2238,
@@ -1614,8 +1614,8 @@
       "sha256": "fa27e9aeb44b3b713d18f49127731a9a0f00b6096fb584405fc57c39bbceeec6"
     },
     "data/en/pages/options.json": {
-      "bytes": 16187,
-      "sha256": "7cbe3d0c6700008fcd0eda299d2a221728cc5a710296f0811b9810fcae19731d"
+      "bytes": 16374,
+      "sha256": "07a5a3b7554c9aff46e2d2c67fdb8d945f91096572863644e844e915e85b0123"
     },
     "data/en/pages/pale.json": {
       "bytes": 4811,
@@ -1962,8 +1962,8 @@
       "sha256": "d18c0bf1a09af1788f0ca5427f86b6ecbb3cc60bc9a08d9da6d1b068de46ddaa"
     },
     "data/ru/index.json": {
-      "bytes": 655889,
-      "sha256": "8fbd7c250ef3de423003376506c2f127de86f0d27449b6c695cdaf15f62150dd"
+      "bytes": 656194,
+      "sha256": "5b21bd29a2388b401bbbb008be7a9fc656ea7d49ef266989f243f8ebaa105fd9"
     },
     "data/ru/pages/abilities.json": {
       "bytes": 3685,
@@ -3558,8 +3558,8 @@
       "sha256": "abe40e35df83e438e776b5c6c2df184570cd9bd1ca83a50f0a43de3f35c8a76e"
     },
     "data/ru/pages/options.json": {
-      "bytes": 27911,
-      "sha256": "ddfde4bf7a8416b787d61b6b8a19a7b6aa6d0f5b52a8b2b121fbb4f9238c26cc"
+      "bytes": 28216,
+      "sha256": "99cf587b6c3b5e7f9ae496008bb443e26095fc1be7ff69c7735893fb98020dd2"
     },
     "data/ru/pages/pale.json": {
       "bytes": 7741,
@@ -6078,5 +6078,5 @@
       "sha256": "d1643e0b6d8246fbc915580e40d63d6e586c44fe3d26239bd3dfb4f37b19512d"
     }
   },
-  "bytes": 14038128
+  "bytes": 14039112
 }

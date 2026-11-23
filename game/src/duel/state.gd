@@ -594,6 +594,14 @@ func variable_power(card: String) -> bool:
 func second_rules(card: String) -> bool:
 	return profile.id == "el2" or profile.second_cards.has(card)
 
+## Whether the battle's general rules (outside any one card) are the second
+## game's: always in the second game, and in the first on its card balance,
+## which the battle keeps from its start (setup "second_balance"). The first
+## game's own content (its specialisations, artifacts, runes, spellbook and
+## combat events) keeps its rules either way.
+func second_battle() -> bool:
+	return ELCatalog.second_battle(profile)
+
 func channel_cost(card: String) -> int:
 	return int(ELCatalog.rule(profile, card).get("channels_el2", 0)) if second_rules(card) else 0
 
@@ -854,7 +862,7 @@ func dispellable(holder: int, e: Dictionary, untargeted := false) -> bool:
 	if e.get("fixed", false) or e.card in TRAPS: return false
 	if not targetable(holder) and not (untargeted and not in_plane(holder)): return false
 	if e.card in ELCatalog.CONTROL and holder >= 2 and creatures.has(holder):
-		if profile.id == "el2":
+		if second_battle():
 			var after := control_side(holder, int(e.id))
 			if after != int(creatures[holder].owner) and army(after).size() >= 10: return false
 		elif int(e.owner) != int(creatures[holder].owner) and army(int(e.owner)).size() >= 10: return false
@@ -889,7 +897,7 @@ func _settle_control(id: int) -> void:
 			if e.card in ELCatalog.CONTROL: card = e.card
 		_move_army(c, side)
 		if side == origin(id):
-			c.sick = not (profile.id == "el2" and (has_flag(id, "NSS") or c.card in ["RZMN", "CTMN", "SWMN"]))
+			c.sick = not (second_battle() and (has_flag(id, "NSS") or c.card in ["RZMN", "CTMN", "SWMN"]))
 		else:
 			c.sick = not (second_rules(card) and has_flag(id, "NSS"))
 		_unassign(id)
@@ -900,7 +908,7 @@ func _settle_control(id: int) -> void:
 ## Second-game extra prices: cleansing pays 1 per removable enchantment in
 ## play; annihilation pays 1 per creature it can affect.
 func second_surcharge(card: String) -> int:
-	if profile.id != "el2": return 0
+	if not second_rules(card): return 0
 	var count := 0
 	if card == "CLSN":
 		for id: int in [0, 1] + creatures.keys():
@@ -1361,7 +1369,7 @@ func _apply_spell_effect(side: int, card: String, rule: Dictionary, target: int,
 			# Untap every own resting creature that is not in combat; sickness stays. The second game passes
 			# over unaffected creatures and those in the Colourless Plane.
 			for c: Dictionary in army(side):
-				if c.resting and not attacks.has(c.id) and not blocks.has(c.id) and not (profile.id == "el2" and (has_flag(c.id, "NoAffect") or in_plane(int(c.id)))): c.resting = false
+				if c.resting and not attacks.has(c.id) and not blocks.has(c.id) and not (second_battle() and (has_flag(c.id, "NoAffect") or in_plane(int(c.id)))): c.resting = false
 		"discard_all":
 			var wiped := 0
 			while not heroes[target].hand.is_empty():
@@ -1469,7 +1477,7 @@ func _apply_spell_effect(side: int, card: String, rule: Dictionary, target: int,
 		"revive":
 			var revived: String = hero.grave.pop_back()
 			# The first game puts it at the front of the hand like a draw, the second at the back.
-			_give_card(side, revived, -1, profile.id == "el1")
+			_give_card(side, revived, -1, not second_battle())
 			_emit({"kind": "return_card", "side": side, "card": revived})
 			_damage(1 - side, 1)
 		"exchange":
@@ -1484,7 +1492,7 @@ func _apply_spell_effect(side: int, card: String, rule: Dictionary, target: int,
 				var exempt: bool = race(c.id) == "Wall" if rule.get("scope") == "not_walls" else has_flag(c.id, "Restless")
 				# The second game also spares unaffected creatures and those in the Colourless Plane (Glade and
 				# Ice Storm alike: a pale creature that has not manifested stays ready, issue #281).
-				if profile.id == "el2" and (has_flag(c.id, "NoAffect") or in_plane(int(c.id))): exempt = true
+				if second_battle() and (has_flag(c.id, "NoAffect") or in_plane(int(c.id))): exempt = true
 				if not c.resting and not exempt:
 					c.resting = true
 					# Glade withdraws a declared attacker in the second game; Ice Storm and the first game leave it
@@ -2206,19 +2214,21 @@ func can_use_ability(id: int, key: String, listed: Variant = null) -> bool:
 	for ability: Dictionary in (listed if listed is Array else abilities(id)):
 		if ability.key != key: continue
 		if id >= 2 and in_plane(id) and not ability.get("pale", false): return false
-		if ability.get("pale", false): return _pale_error(id, ability).is_empty() and _second_creature_ability_available(id, ability)
+		if ability.get("pale", false): return _pale_error(id, ability).is_empty() and _creature_ability_available(id, ability)
 		if ability.get("used", false) or available_mana(active_side()) < maxi(int(ability.get("minimum", 0)), int(ability.cost)): return false
 		if id >= 2 and ability.get("ready", true) and not ready(id): return false
 		if id >= 2 and ability.get("ready", true) and _in_combat(id): return false
 		if ability.get("resting", false) and not c.resting: return false
 		if ability.get("tapped", false) and (not c.resting or c.sick): return false
 		if ability.get("phase") == "attack" and phase != Phase.ATTACK: return false
-		return profile.id != "el2" or id < 2 or _second_creature_ability_available(id, ability)
+		return id < 2 or _creature_ability_available(id, ability)
 	return false
 
-## Second-game creature commands light up only while their conditions can be met.
+## Creature commands light up only while their conditions can be met (both
+## games: a marksman's shot needs an attacking enemy, a recall a card in a
+## graveyard, a dispel an enchantment it may remove).
 ## Use the same target rules as execution, without spending ether or taking a turn.
-func _second_creature_ability_available(id: int, ability: Dictionary) -> bool:
+func _creature_ability_available(id: int, ability: Dictionary) -> bool:
 	var side: int = creatures[id].owner
 	var key: String = ability.key
 	if key in ["brood", "recall_spirit", "necromancy"] and army(side).size() >= 10: return false
@@ -2510,7 +2520,7 @@ func _first_creature_target_error(id: int, definition: Dictionary, target: int) 
 			if not creatures.has(target) or int(creatures[target].power) < 4: return "Select a creature with power 4 or more."
 		"tap_race":
 			if not creatures.has(target) or creatures[target].owner == side: return "Select an enemy creature."
-			if profile.id == "el2":
+			if second_battle():
 				if in_plane(target): return "This creature is in the Colourless Plane."
 				if not targetable(target): return "This creature is protected by a magic screen."
 	return ""
@@ -2519,7 +2529,7 @@ func _tap_race_price(side: int, target: int) -> int:
 	var price := 0
 	var kind := race(target)
 	for enemy: Dictionary in army(side):
-		if not enemy.resting and race(enemy.id) == kind and (profile.id != "el2" or not in_plane(enemy.id)): price += 1
+		if not enemy.resting and race(enemy.id) == kind and (not second_battle() or not in_plane(enemy.id)): price += 1
 	return price
 
 func _first_ability(id: int, definition: Dictionary, target: int, grave_index: int, amount := -1) -> bool:
@@ -2553,9 +2563,9 @@ func _first_ability(id: int, definition: Dictionary, target: int, grave_index: i
 		"necromancy":
 			if not grave_ability_targets(id, definition.key, target).has(grave_index): return _fail("Choose a cheap enough creature in a graveyard.")
 			# The second game refuses when the necromancer's army is already full.
-			if profile.id == "el2" and army(side).size() >= 10: return _fail("A hero can control at most ten creatures.")
+			if second_battle() and army(side).size() >= 10: return _fail("A hero can control at most ten creatures.")
 		"siphon":
-			if profile.id == "el2" and int(heroes[1 - side].mana) <= 0: return _fail("The opponent has no ether to draw.")
+			if second_battle() and int(heroes[1 - side].mana) <= 0: return _fail("The opponent has no ether to draw.")
 		"tap_race":
 			price = _tap_race_price(1 - side, target)
 			if available_mana(side) < price: return _fail("This costs %d ether." % price)
@@ -2584,7 +2594,7 @@ func _first_ability(id: int, definition: Dictionary, target: int, grave_index: i
 		"tap_race":
 			var kind := race(target)
 			for enemy: Dictionary in army(1 - side):
-				if not enemy.resting and race(enemy.id) == kind and (profile.id != "el2" or not in_plane(enemy.id)):
+				if not enemy.resting and race(enemy.id) == kind and (not second_battle() or not in_plane(enemy.id)):
 					enemy.resting = true
 					_unassign(enemy.id)
 		"distortion":
@@ -2593,8 +2603,10 @@ func _first_ability(id: int, definition: Dictionary, target: int, grave_index: i
 			_remove_creature(id, "death")
 			attacks.clear()
 			blocks.clear()
-			# The second game's fog is its own support card, Distortion.
-			_mark(side, "EWLD" if profile.id == "el2" else "WLDT", 0, 0, {"price": 10 if profile.id == "el2" else 0})
+			# The second game's fog is its own support card, Distortion; the first
+			# game has none, and its fog costs what the second game's does to remove
+			# under the second game's rules.
+			_mark(side, "EWLD" if profile.id == "el2" else "WLDT", 0, 0, {"price": 10 if second_battle() else 0})
 		"breath":
 			for victim: Dictionary in army(1 - side):
 				if creatures.has(victim.id) and has_flag(victim.id, "Fly") == (definition.scope == "flying"): _damage(victim.id, int(definition.amount))
@@ -2851,7 +2863,7 @@ func _refresh_armies() -> void:
 ## First-game Wall of Illusion delays its ability's lethal health change.
 ## Attack declarations and other creature abilities do not settle that change.
 func _settle_illusion_health() -> void:
-	if profile.id != "el1": return
+	if second_battle(): return
 	for c: Dictionary in creatures.values():
 		if creatures.has(c.id) and c.card == "WLIL" and c.get("ability_used", {}).get("illusion", false) and c.damage >= c.toughness:
 			_lethal(c.id)
@@ -3335,7 +3347,7 @@ func _begin_attack(draw_card: bool) -> void:
 	turn_serial += 1
 	var hero: Dictionary = heroes[attacker]
 	hero.turns += 1
-	var disturbance := ELHeroEffects.disturbance(profile.id, hero, heroes[1 - attacker], gift_turns(attacker))
+	var disturbance := ELHeroEffects.disturbance(second_battle(), hero, heroes[1 - attacker], gift_turns(attacker))
 	if disturbance > 0:
 		_emit({"kind": "disturbance", "side": attacker, "amount": disturbance})
 		_raw_hero_damage = true
@@ -3383,7 +3395,7 @@ func _begin_attack(draw_card: bool) -> void:
 			positive = positive or not water_links(int(c.id)).is_empty()
 			if positive: _emit({"kind": "turn_creature_pos_rune", "target": int(c.id)})
 			if negative: _emit({"kind": "turn_creature_neg_rune", "target": int(c.id)})
-	if profile.id == "el1":
+	if not second_battle():
 		# The four original immortal dragons return before ETTI and the draw.
 		# The original loop compares concrete card IDs, not the Race text field.
 		var index := 0
@@ -3467,7 +3479,7 @@ func _begin_attack(draw_card: bool) -> void:
 	if not stasis:
 		# Update 1.03: the hero moving second gets one more ether on its first
 		# turn (not in the combat tutorial); each orc shaman in its army gives one.
-		if profile.id == "el2" and int(hero.turns) == 1 and attacker != first_side() and not setup.get("combat_tutorial", false): hero.mana += 1
+		if second_battle() and int(hero.turns) == 1 and attacker != first_side() and not setup.get("combat_tutorial", false): hero.mana += 1
 		if second_rules("MNBR"): hero.mana += 3 * _caster_enchantments(attacker, "MNBR")
 		if second_rules("ORSH"):
 			for c: Dictionary in army(attacker):
@@ -3601,7 +3613,7 @@ func _summon(side: int, card: String) -> void:
 	var data: Dictionary = profile.table("CombatCreatures")[card]
 	var flags := ELCatalog.flags(data)
 	var creature := {"id": next_id, "owner": side, "card": card, "power": int(data.Power),
-		"toughness": int(data.Toughness), "damage": 0, "resting": _enchantment_count(1 - side, "HOAM") > 0 and not (profile.id == "el2" and flags.has("NoAffect")), "sick": not flags.has("NSS"),
+		"toughness": int(data.Toughness), "damage": 0, "resting": _enchantment_count(1 - side, "HOAM") > 0 and not (second_battle() and flags.has("NoAffect")), "sick": not flags.has("NSS"),
 		"flying": flags.has("Fly"), "flags": flags, "enchantments": [], "regenerated": false}
 	if profile.id == "el2":
 		# Pale creatures arrive in pale aspect (the first spell-jammer does not);
@@ -3634,7 +3646,7 @@ func _summon(side: int, card: String) -> void:
 
 func _return_buried_creatures(side: int) -> void:
 	var grave: Array = heroes[side].grave
-	var first := profile.id == "el1"
+	var first := not second_battle()
 	var rising: Array = ELCatalog.FIRST_RISING if first else ELCatalog.FIRST_RISING.filter(func(card: String) -> bool: return card in ELCatalog.RISING or ELCatalog.shared(profile, card))
 	var index := 0
 	while index < grave.size() and (first or army(side).size() < 10):
@@ -3673,7 +3685,7 @@ func _resolve_attacks() -> void:
 		var attack: Dictionary = creatures[id]
 		# First game: an attacker that regenerated in the defence phase stays declared (it can still be
 		# blocked) but neither fights nor rests.
-		if profile.id == "el1" and attack.regenerated: continue
+		if not second_battle() and attack.regenerated: continue
 		attack.resting = not has_flag(id, "Restless")
 		var defenders: Array[int] = []
 		# A declared blocker rested afterwards still blocks.
@@ -3689,12 +3701,12 @@ func _resolve_attacks() -> void:
 				if not creatures.has(id) or attack.regenerated: break
 				if not creatures.has(blocker): continue
 				# Evil eye mastery: a beholder destroys its combat opponent before damage.
-				if race(id) == "Beholder" and not (profile.id == "el2" and has_flag(blocker, "NoAffect")) and ELSpecs.roll(self, int(attack.owner), "GBHD") > 0:
+				if race(id) == "Beholder" and not (second_battle() and has_flag(blocker, "NoAffect")) and ELSpecs.roll(self, int(attack.owner), "GBHD") > 0:
 					_combat_effect("GBHD", id, blocker)
 					_destroy(blocker)
 					gazed += 1
 					continue
-				if race(blocker) == "Beholder" and not (profile.id == "el2" and has_flag(id, "NoAffect")) and ELSpecs.roll(self, int(creatures[blocker].owner), "GBHD") > 0:
+				if race(blocker) == "Beholder" and not (second_battle() and has_flag(id, "NoAffect")) and ELSpecs.roll(self, int(creatures[blocker].owner), "GBHD") > 0:
 					_combat_effect("GBHD", blocker, id)
 					_destroy(id)
 					remaining = 0
@@ -3819,7 +3831,7 @@ func _resolve_strike(source: int, target: int, amount: int, poisoned: Array[int]
 		_mark(target, "LASN", -1, -1, {"fixed": true, "lethal": true})
 	# First game: a disenchanting strike strips a creature before its (already allotted) damage is
 	# checked. The second game strips after.
-	var stripped_first: bool = profile.id == "el1" and disenchants and creatures.has(target) and not creatures[target].enchantments.is_empty()
+	var stripped_first: bool = not second_battle() and disenchants and creatures.has(target) and not creatures[target].enchantments.is_empty()
 	if stripped_first:
 		_combat_effect("Disenchant", source, target)
 		for e: Dictionary in creatures[target].enchantments.duplicate(): _remove_enchantment(target, e.id)
@@ -3841,7 +3853,7 @@ func _resolve_strike(source: int, target: int, amount: int, poisoned: Array[int]
 		# venom is its own support card.
 		if card in ["TRSN", "SWSN"]:
 			if profile.id == "el2": _combat_effect("Venom", source, target)
-			_mark(target, ({"TRSN": "ETRS", "SWSN": "ESWS"}[card] if profile.id == "el2" else card), 0, 0, {"owner": owner, "price": 1 if profile.id == "el2" else 0})
+			_mark(target, ({"TRSN": "ETRS", "SWSN": "ESWS"}[card] if profile.id == "el2" else card), 0, 0, {"owner": owner, "price": 1 if second_battle() else 0})
 		for flag: String in creatures[source].flags:
 			if flag.begins_with("Discard("): robbed += int(flag.trim_prefix("Discard(").trim_suffix(")"))
 		for e: Dictionary in creatures[source].enchantments: robbed += ELCatalog.granted_discard(profile, e.card)
@@ -3856,7 +3868,7 @@ func _resolve_strike(source: int, target: int, amount: int, poisoned: Array[int]
 		# EL1 - queues DrainLife before +
 		# processes the discard and Target/Discard. Keep EL2's prior order
 		# until its own combat callback is confirmed independently.
-		if profile.id != "el1": _discard_on_hit(source, target, robbed)
+		if second_battle(): _discard_on_hit(source, target, robbed)
 		# Update 1.03: the giant bat's hit on the enemy hero draws its owner a spell.
 		if second_rules(card) and card == "GBAT" and dealt > 0: _draw(owner)
 	if target in [0, 1]:
@@ -3866,11 +3878,13 @@ func _resolve_strike(source: int, target: int, amount: int, poisoned: Array[int]
 			heroes[owner].health += gained
 			_combat_effect("Lifetap", target, owner)
 			_emit({"kind": "heal", "target": owner, "amount": gained, "source": source})
-		if profile.id == "el1": _discard_on_hit(source, target, robbed)
+		if not second_battle(): _discard_on_hit(source, target, robbed)
 		# Fighter, treant and bat masteries: an attacker's hit on the hero heals its controller.
 		var healer := {"Fighter": "BFGL", "Treant": "GTRL", "Bat": "RBTD"}
 		if not drains and owner >= 0 and dealt > 0 and attacks.has(source) and healer.has(race(source)) and ELSpecs.roll(self, owner, healer[race(source)]) > 0:
 			heroes[owner].health += dealt
+			# The mastery drains like printed Vampirism, so it shows the same DrainLife.
+			_combat_effect("Lifetap", target, owner)
 			_emit({"kind": "heal", "target": owner, "amount": dealt, "source": source})
 		if card in ELCatalog.STINGERS and creatures.has(source) and not poisoned.has(source): poisoned.append(source)
 	# Pteros mastery: a strike strips the enchantments the target's own hero cast.
@@ -3918,9 +3932,9 @@ func _damage(target: int, amount: int, combat := false, no_regeneration := false
 		if softened: _emit({"kind": "barrier", "target": target, "amount": amount})
 	# EL2's creature-damage routine checks Lifeguard after Energy Barrier,
 	# even when the barrier absorbs the full hit (before).
-	if profile.id == "el2" and _lifeguard(target): return 0
+	if second_battle() and _lifeguard(target): return 0
 	if amount <= 0: return 0
-	if profile.id != "el2" and _lifeguard(target): return 0
+	if not second_battle() and _lifeguard(target): return 0
 	# Pain link: the controller takes the same damage once per copy (never redirected); combat damage
 	# only up to the creature's remaining toughness.
 	var pain := amount if not combat else mini(amount, maxi(0, int(creatures[target].toughness) - int(creatures[target].damage)))
@@ -3951,7 +3965,7 @@ func _damage(target: int, amount: int, combat := false, no_regeneration := false
 		_spend_ether(victim.owner, regeneration)
 		victim.damage = 0
 		victim.regenerated = true
-		if profile.id == "el2": _unassign(target)
+		if second_battle(): _unassign(target)
 		_emit({"kind": "regenerate", "target": target, "cost": regeneration})
 	elif dissipates and plane_change(target, true, false, true):
 		# A bright Pale creature dissipates instead of dying: healed and tapped.

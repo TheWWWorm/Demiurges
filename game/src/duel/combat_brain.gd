@@ -18,7 +18,7 @@ static var available := ClassDB.class_exists(&"ELNativeDuelBrain")
 
 const HEADER := 40
 ## The layout of the state the library is handed: it answers no other.
-const VERSION := 11
+const VERSION := 12
 ## Enchantments a hero lays on itself that the engine has a rule for, in the
 ## engine's own order.
 const CHARMS := ["LSHE", "FRBL", "RNST", "ENRG", "RPST", "CMBN", "RBRT", "SCBR", "SPLK", "BROT", "SACR", "OEXC",
@@ -261,7 +261,12 @@ static func ask(ctx: ELCombatSearch.Context, s: ELDuel, turns: int, budget: int,
 	state[3] = mode if mode >= 0 else (0 if s.phase == ELDuel.Phase.ATTACK else 1)
 	state[4] = turns
 	state[5] = budget
+	# The edition (what the original's weights read), and apart from it the
+	# battle rules: the second game's also in the first on its card balance
+	# (ELDuel.second_battle).
 	state[6] = 1 if ctx.second else 0
+	var rules := s.second_battle()
+	state[29] = 1 if rules else 0
 	state[7] = int(ctx.w[2] * 1000.0)
 	state[8] = s.global_enchantment_count("LSDS")
 	# What a copy of the attack tax costs to remove.
@@ -400,7 +405,7 @@ static func ask(ctx: ELCombatSearch.Context, s: ELDuel, turns: int, budget: int,
 		state[at + 77] = 1 if hero.get("revived", false) else 0
 		state[at + 4] = guards
 		state[at + 5] = reflects
-		state[at + 6] = mini(mirrors, 1) if ctx.second else mirrors
+		state[at + 6] = mini(mirrors, 1) if rules else mirrors
 		state[at + 17] = hero.hand.size()
 		# The most cards a hand given up and dealt again can come to, of
 		# creatures and of the rest: the first game deals without end, the
@@ -418,7 +423,7 @@ static func ask(ctx: ELCombatSearch.Context, s: ELDuel, turns: int, budget: int,
 		for e: Dictionary in hero.enchantments:
 			# The second game's vortices laid in the turn now being had, which
 			# outlast it; and the turns of its own the oldest stasis has seen.
-			if String(e.card) == "MNVR" and ctx.second and int(s.attacker) == side and int(e.get("born", -1)) == int(s.turn_serial): state[at + 34] += 1
+			if String(e.card) == "MNVR" and rules and int(s.attacker) == side and int(e.get("born", -1)) == int(s.turn_serial): state[at + 34] += 1
 			if String(e.card) == "STSI":
 				# One more than the turns of its hero's it has seen begin, less
 				# one for a stasis whose price has an odd turn still to wait.
@@ -460,8 +465,8 @@ static func ask(ctx: ELCombatSearch.Context, s: ELDuel, turns: int, budget: int,
 		# The second game: the hero moving second opens its first turn with
 		# one ether more; and only a hero's own vortex multiplies its ether,
 		# where the first game counts every vortex in play.
-		if ctx.second and int(hero.turns) == 0 and side != s.first_side() and not s.setup.get("combat_tutorial", false): state[at + 21] = 1
-		state[at + 22] = s._enchantment_count(side, "MNVR") if ctx.second else s.global_enchantment_count("MNVR")
+		if rules and int(hero.turns) == 0 and side != s.first_side() and not s.setup.get("combat_tutorial", false): state[at + 21] = 1
+		state[at + 22] = s._enchantment_count(side, "MNVR") if rules else s.global_enchantment_count("MNVR")
 		# Second-game ether beyond the channels: an ether breeze on a creature
 		# gives three each turn. (An orc shaman's one is told with the shaman.)
 		# The ether disturbance: what each coming turn of this hero's takes
@@ -471,7 +476,7 @@ static func ask(ctx: ELCombatSearch.Context, s: ELDuel, turns: int, budget: int,
 		# whether its Concentration draws it a card more then (bit 21).
 		for turn in INCOME_TURNS:
 			var then := {"turns": int(hero.turns) + 1 + turn, "level": hero.level, "skills": hero.get("skills", {})}
-			state[at + 56 + turn] = mini(ELHeroEffects.disturbance(s.profile.id, then, s.heroes[1 - side], 0), 100000) \
+			state[at + 56 + turn] = mini(ELHeroEffects.disturbance(rules, then, s.heroes[1 - side], 0), 100000) \
 				| ((1 << 20) if ELHeroEffects.regenerates(then) else 0) | ((1 << 21) if ELHeroEffects.extra_draw(then) else 0)
 		# The second game: each ether storm this hero cast on a creature
 		# still in play is one more channel every turn.
@@ -633,7 +638,7 @@ static func ask(ctx: ELCombatSearch.Context, s: ELDuel, turns: int, budget: int,
 		state[at + 18] = 1 if not s.enfeebled(int(c.id)) else 0
 		state[at + 19] = s.cost(String(c.card))
 		state[at + 20] = s._enchantment_count(int(c.id), "TWEN")
-		state[at + 21] = (1 if c.card == "WKHR" else 0) | ((2 if c.card == "BATT" else 0) | (4 if c.card == "GBAT" else 0) if ctx.second else 0) \
+		state[at + 21] = (1 if c.card == "WKHR" else 0) | ((2 if c.card == "BATT" else 0) | (4 if c.card == "GBAT" else 0) if rules else 0) \
 			| (8 if c.card in ENVENOMS else 0) | (16 if c.card == "BHMO" else 0) | (32 if s.race(int(c.id)) == "Beholder" else 0)
 		state[at + 62] = s._enchantment_count(int(c.id), "ENBR")
 		# Alpha strikes on it, and the health it would have without their cap.
@@ -781,7 +786,7 @@ static func ask(ctx: ELCombatSearch.Context, s: ELDuel, turns: int, budget: int,
 		# A ripple leaves its enchantment for good.
 		if card == "ORPL": state[slot + 12] = 1
 		if MARK_PRICES.has(card):
-			state[slot + 11] = int(MARK_PRICES[card][1 if ctx.second else 0])
+			state[slot + 11] = int(MARK_PRICES[card][1 if rules else 0])
 			state[slot + 12] = 0
 		if stands.has(card) and int(state[slot + 12]) != 2:
 			state[slot + 11] = int(stands[card][0])
@@ -1186,7 +1191,7 @@ static func _card_extras(s: ELDuel, card: String, record: Array, kinds: Array, s
 	if card in JAMMERS: state[slot + 22] |= (JAMMERS.find(card) + 1) << 11
 	# Laid on a creature: whether it is there for good, and whether it comes
 	# back to its caster's hand as the creature leaves play.
-	if rule.get("fixed", false) or (card == "ENFL" and s.profile.id == "el1"): state[slot + 22] |= 1 << 13
+	if rule.get("fixed", false) or (card == "ENFL" and not ELCatalog.second_rules(s.profile, card)): state[slot + 22] |= 1 << 13
 	state[slot + 22] |= _comes_back(s.profile, card) << 14
 	if String(rule.get("effect", "")) == "enchant": state[slot + 22] |= int(SPECIALS.get(card, 0)) << 16
 	# The only creatures it may be aimed at: walls, those that fly, those sent
@@ -1305,7 +1310,7 @@ static func _returning(s: ELDuel, holdings: Array, coming: Array) -> Array:
 ## Whether an enchantment's card goes back to its caster's hand as its
 ## creature leaves play (1), or only as it dies or is exiled (2).
 static func _comes_back(profile: ELProfile, card: String) -> int:
-	if card == "RIOT" or (profile.id == "el2" and card in ["DELS", "PRBN", "ALNS"]): return 1
+	if card == "RIOT" or (card in ["DELS", "PRBN", "ALNS"] and ELCatalog.second_rules(profile, card)): return 1
 	return 2 if card == "QKFX" else 0
 
 ## Whether nothing but earth bonds on a creature of its race keeps `c` down.
@@ -1383,7 +1388,7 @@ static func _worn(ctx: ELCombatSearch.Context, s: ELDuel, c: Dictionary, unit: A
 	var granted: Variant = c.get("granted")
 	var under := _under(s, c)
 	var shielded := s.has_flag(id, "NoTarget")
-	var holds: Dictionary = HOLDS_SECOND if ctx.second else HOLDS
+	var holds: Dictionary = HOLDS_SECOND if s.second_battle() else HOLDS
 	var gave := {}
 	for e: Dictionary in worn:
 		var card := String(e.card)
@@ -1538,7 +1543,7 @@ static func ability_of(profile: ELProfile, card: String) -> Array:
 	var rule := ELCatalog.first_ability(profile, card)
 	var kind := int(ABILITIES.get(String(rule.get("key", "")), 0))
 	# The second game's orc shaman gives its hero an ether each turn (bit 3).
-	if kind == 0: return [0, 0, 0, 8 if card == "ORSH" and profile.id == "el2" else 0]
+	if kind == 0: return [0, 0, 0, 8 if card == "ORSH" and ELCatalog.second_rules(profile, card) else 0]
 	var amount := int(rule.get("amount", 1))
 	match String(rule.key):
 		"gaze":
@@ -1557,7 +1562,7 @@ static func ability_of(profile: ELProfile, card: String) -> Array:
 	# Bit 0: it must be ready and rests for it; bit 1: only while its hero
 	# attacks; bit 2: only while it rests.
 	var traits := (1 if rule.get("ready", true) else 0) | (2 if String(rule.get("phase", "")) == "attack" else 0) | (4 if rule.get("tapped", false) else 0)
-	if card == "ORSH" and profile.id == "el2": traits |= 8
+	if card == "ORSH" and ELCatalog.second_rules(profile, card): traits |= 8
 	return [kind, maxi(0, int(rule.get("cost", 0))), clampi(amount, 0, 127), traits]
 
 ## [flags, regeneration cost, stone skins, lifeguards, worth ready, worth
@@ -1591,7 +1596,7 @@ static func _unit(ctx: ELCombatSearch.Context, s: ELDuel, c: Dictionary) -> Arra
 	if wake == 0:
 		for held: String in ["WNPZ", "IMMB"]:
 			if s._enchantment_count(id, held) > 0:
-				wake = int((HOLDS_SECOND if ctx.second else HOLDS)[held])
+				wake = int((HOLDS_SECOND if s.second_battle() else HOLDS)[held])
 				break
 	# The search's own worth of the creature, ready and resting.
 	var probe := c.duplicate()
@@ -1684,7 +1689,7 @@ static func _bare(ctx: ELCombatSearch.Context, s: ELDuel, c: Dictionary, unit: A
 	if c.has("origin"):
 		record[6] = int(c.origin) + 1
 		# The second game's creatures that need no rest, and its men, come back ready.
-		if ctx.second and (c.flags.has("NSS") or String(c.card) in ["RZMN", "CTMN", "SWMN"]): record[5] = int(record[5]) | 8
+		if s.second_battle() and (c.flags.has("NSS") or String(c.card) in ["RZMN", "CTMN", "SWMN"]): record[5] = int(record[5]) | 8
 	return record
 
 ## [power, toughness, flags, regeneration cost, worth ready, worth resting,
@@ -1773,7 +1778,7 @@ static func _card(ctx: ELCombatSearch.Context, s: ELDuel, card: String, ruled: D
 			tail[9] = int(tail[9]) | 1
 		# Bit 0: walls are spared rather than the restless; bit 1: the
 		# second game's glade also calls back a creature sent to attack.
-		"rest_enemies": tail[2] = (1 if rule.get("scope", "") == "not_walls" else 0) | (2 if ctx.second and card == "GLDT" else 0)
+		"rest_enemies": tail[2] = (1 if rule.get("scope", "") == "not_walls" else 0) | (2 if s.second_battle() and card == "GLDT" else 0)
 		# Only cards that are no creatures go, unless the card takes any.
 		"random_discard": tail[1] = int(SCOPES.all) if rule.get("any", false) else 0
 	if effect == EFFECTS.enchant:
@@ -1786,12 +1791,12 @@ static func _card(ctx: ELCombatSearch.Context, s: ELDuel, card: String, ruled: D
 		# health change places, are rules of their own in the engine.
 		if card in ELCatalog.CONTROL: return [0, 0, 0, 0, 0, 0, 0, EFFECT_CONTROL] + tail.slice(1)
 		if card == "DELS": return [0, 0, 0, 0, 0, 0, 0, EFFECT_DELUSION] + tail.slice(1)
-		var holds: Dictionary = HOLDS_SECOND if ctx.second else HOLDS
+		var holds: Dictionary = HOLDS_SECOND if s.second_battle() else HOLDS
 		# What it does beyond its points, where the engine has a rule for it.
 		var regrows := int(ELCatalog.GRANTED_REGENERATION.get(card, 0))
 		var known := SPECIALS.has(card) or TICKS.has(card) or regrows > 0 or card == "ETAM"
 		# The first game's redirection also keeps its creature from regenerating.
-		if card == "REDR" and not ctx.second: lends |= int(FLAGS.NoRegen)
+		if card == "REDR" and not s.second_battle(): lends |= int(FLAGS.NoRegen)
 		# One with a rule of its own is left to the duel's rules, except the
 		# twisted enhancement, whose wearing off the model follows.
 		if not holds.has(card) and not card in ["TWEN", "OVRL", "PALN"] and not known:
@@ -1851,7 +1856,7 @@ static func _card(ctx: ELCombatSearch.Context, s: ELDuel, card: String, ruled: D
 	tail[2] = int(ELCatalog.PARASITES.get(card, 0))
 	var able := ability_of(s.profile, card)
 	tail[6] = (1 if names.has("NoTarget") else 0) | (2 if card == "WKHR" else 0) \
-		| (((1 << 23) if card == "BATT" else 0) | ((1 << 24) if card == "GBAT" else 0) if ctx.second else 0) \
+		| (((1 << 23) if card == "BATT" else 0) | ((1 << 24) if card == "GBAT" else 0) if s.second_battle() else 0) \
 		| ((1 << 25) if card in ENVENOMS else 0) | ((1 << 26) if card == "MOBE" else 0) 		| ((1 << 27) if card == "BHMO" else 0) | ((1 << 28) if str(row.get("Race", "")) == "Beholder" else 0) \
 		| (int(able[0]) << 2) | (mini(int(able[1]), 15) << 8) | (int(able[2]) << 12) | (int(able[3]) << 19)
 	# The plain worth of the creature it would put on the board: the engine
@@ -1864,7 +1869,7 @@ static func _card(ctx: ELCombatSearch.Context, s: ELDuel, card: String, ruled: D
 	tail[4] = int(aura.get("power", 0))
 	tail[5] = int(aura.get("toughness", 0))
 	return [power, toughness, flags, regeneration, int(worth * 1000.0), int((worth - 0.5) * 1000.0), _race_word(s.profile, race, card)] + tail \
-		+ [given, _reach(s.profile, aura) | (512 if card == "WRSP" else 0) | (2048 if pale else 0) | (mini(robs, 7) << 12) | (32768 if _rises(s.profile, card) else 0) | (65536 if s.profile.id == "el1" and card in ELDuel.EL1_IMMORTAL_DRAGONS else 0)]
+		+ [given, _reach(s.profile, aura) | (512 if card == "WRSP" else 0) | (2048 if pale else 0) | (mini(robs, 7) << 12) | (32768 if _rises(s.profile, card) else 0) | (65536 if not s.second_battle() and card in ELDuel.EL1_IMMORTAL_DRAGONS else 0)]
 
 ## Whether `card`, buried under three cards or more, comes back into play
 ## when its hero's turn ends.
@@ -2012,6 +2017,9 @@ static func choose(ctx: ELCombatSearch.Context, s: ELDuel, phases: int, budget: 
 		var guards := sending.filter(func(step: Dictionary) -> bool: return s.has_flag(int(step.id), "TeamAttack"))
 		sending = sending.filter(func(step: Dictionary) -> bool: return not s.has_flag(int(step.id), "TeamAttack")) + guards
 		if sending.is_empty(): return {"error": "an attack of creatures that cannot be sent", "status": "unknown", "positions": int(raw[5])}
+		# What the line goes on with after the attack is played as it was
+		# read too (`smart_line_end`), instead of being thought over again.
+		if ELCombatSearch.smart_line_end: _line_rest(s, ids, raw, sending, [] as Array[int], false)
 		var whole := {"command": sending[0], "line": sending, "value": float(raw[0]) * 0.001, "raw": raw, "proven": (int(raw[7]) >> 16) & 15,
 			"settled": (int(raw[7]) >> 20) & 15, "cut": (int(raw[7]) >> 24) & 1, "guarded": (int(raw[7]) >> 25) & 15, "unknown": (int(raw[7]) >> 29) & 1,
 			"positions": int(raw[5]), "aborted": raw[6] != 0, "depth": int(raw[7]) & 255, "far": (int(raw[7]) >> 8) & 255}
@@ -2028,17 +2036,38 @@ static func choose(ctx: ELCombatSearch.Context, s: ELDuel, phases: int, budget: 
 	# during the line ends it. ELCombatSearch._remember checks each card
 	# against the hand before keeping the step.
 	var line: Array = [command]
-	var count := int(raw[8]) if raw.size() > 8 else 0
 	var cast_slots: Array[int] = []
 	var carried_used := false
 	if int(raw[1]) == 3:
 		if int(raw[2]) >= ART_BASE: carried_used = true
 		else: cast_slots.append(int(raw[2]))
+	_line_rest(s, ids, raw, line, cast_slots, carried_used)
+	var chosen := {"command": command, "line": line, "value": float(raw[0]) * 0.001, "positions": int(raw[5]), "raw": raw, "proven": (int(raw[7]) >> 16) & 15 if raw.size() > 7 else 0,
+		"settled": (int(raw[7]) >> 20) & 15 if raw.size() > 7 else 0, "cut": (int(raw[7]) >> 24) & 1 if raw.size() > 7 else 0, "guarded": (int(raw[7]) >> 25) & 15 if raw.size() > 7 else 0,
+		"unknown": (int(raw[7]) >> 29) & 1 if raw.size() > 7 else 0,
+		"aborted": raw[6] != 0, "depth": (int(raw[7]) & 255) if raw.size() > 7 else 0, "far": ((int(raw[7]) >> 8) & 255) if raw.size() > 7 else 0}
+	chosen.merge(result)
+	# Proven only where every reply was read on a model that held it all.
+	if String(chosen.status) != "proven": chosen.proven = 0
+	return chosen
+
+## Appends to `line` the engine's commands after its first (`raw`, see
+## `choose`), up to where the line stops being one the game can follow:
+## `cast_slots` the hand places cast so far, `carried_used` whether a thing
+## carried has been used. The hero's own end of the phase closes the line
+## and is kept in it (`smart_line_end`), so that the turn is ended as it was
+## read, not after a think of its own; the other hero's commands after it
+## are no part of it.
+static func _line_rest(s: ELDuel, ids: Array, raw: PackedInt32Array, line: Array, cast_slots: Array[int], carried_used: bool) -> void:
+	var count := int(raw[8]) if raw.size() > 8 else 0
 	for i in range(1, count):
 		var at := 9 + i * 4
 		if at + 3 >= raw.size(): break
 		var kind := int(raw[at])
 		var a := int(raw[at + 1])
+		if kind == 0:
+			if ELCombatSearch.smart_line_end: line.append({"kind": "end_phase"})
+			break
 		if kind == 3:
 			if not ELCombatSearch.smart_line_casts: break
 			if a >= ART_BASE:
@@ -2048,6 +2077,8 @@ static func choose(ctx: ELCombatSearch.Context, s: ELDuel, phases: int, budget: 
 		# during the line.
 		if _names_newcomer(kind, a, int(raw[at + 2]), int(raw[at + 3]), ids.size()): break
 		var step := _command_of(s, ids, kind, a, int(raw[at + 2]), int(raw[at + 3]))
+		# A command the game has no single command for (a whole attack or
+		# defence ended with the phase) ends the line.
 		if String(step.kind) == "end_phase": break
 		if kind == 3:
 			if a >= ART_BASE: carried_used = true
@@ -2057,14 +2088,6 @@ static func choose(ctx: ELCombatSearch.Context, s: ELDuel, phases: int, budget: 
 				cast_slots.append(a)
 				if String(step.kind) == "cast": step.index = shifted
 		line.append(step)
-	var chosen := {"command": command, "line": line, "value": float(raw[0]) * 0.001, "positions": int(raw[5]), "raw": raw, "proven": (int(raw[7]) >> 16) & 15 if raw.size() > 7 else 0,
-		"settled": (int(raw[7]) >> 20) & 15 if raw.size() > 7 else 0, "cut": (int(raw[7]) >> 24) & 1 if raw.size() > 7 else 0, "guarded": (int(raw[7]) >> 25) & 15 if raw.size() > 7 else 0,
-		"unknown": (int(raw[7]) >> 29) & 1 if raw.size() > 7 else 0,
-		"aborted": raw[6] != 0, "depth": (int(raw[7]) & 255) if raw.size() > 7 else 0, "far": ((int(raw[7]) >> 8) & 255) if raw.size() > 7 else 0}
-	chosen.merge(result)
-	# Proven only where every reply was read on a model that held it all.
-	if String(chosen.status) != "proven": chosen.proven = 0
-	return chosen
 
 ## What the engine says of its choice (`choose`), after its line: {status
 ## ("proven" a forced win, every reply read; "no_forced_win" none within the
