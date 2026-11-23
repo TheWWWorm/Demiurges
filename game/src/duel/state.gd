@@ -797,6 +797,29 @@ func can_change_aspect(id: int, enter: bool, guard := false) -> bool:
 	if enter and (guard or _enchantment_count(id, "PRBN") > 0): return false
 	return available_mana(int(creatures[id].owner)) >= _enchantment_count(int(creatures[id].owner), "PRWR")
 
+## Why Transfer Aspects (OEXC) can't make this exchange ("" when it can):
+## the first creature must be in the Colourless Plane and the second in the
+## Ether. As in the original, the whole use is refused unless its cost and
+## every moved creature's Aspect Ward ether can be paid, each ward by that
+## creature's owner; health is never checked, so the ward's damage may kill
+## the hero. `second` < 0 asks whether any second choice would do.
+func recycle_error(side: int, first: int, second := -1, cost := 1) -> String:
+	if not creatures.has(first) or not in_plane(first) or has_flag(first, "NoTarget"): return "Choose a creature in the Colourless Plane."
+	if global_enchantment_count("PLSL") > 0: return "A planar seal blocks every change of aspect."
+	if second < 0:
+		for other: int in creatures:
+			if recycle_error(side, first, other, cost).is_empty(): return ""
+		return "No creature in the Ether can take its place."
+	if not creatures.has(second) or in_plane(second) or not targetable(second): return "Then choose a creature in the Ether."
+	if _enchantment_count(second, "PRBN") > 0: return "This creature cannot enter the Colourless Plane."
+	var need := {side: cost}
+	for id: int in [first, second]:
+		var payer := int(creatures[id].owner)
+		need[payer] = int(need.get(payer, 0)) + _enchantment_count(payer, "PRWR")
+	for payer: int in need:
+		if available_mana(payer) < int(need[payer]): return "Not enough ether for the Aspect Ward."
+	return ""
+
 ## Moves a creature between aspects (see `can_change_aspect`). Aspect Ward
 ## charges the controller 1 ether and 1 damage per copy, in either direction.
 ## Leaving with a beacon brings the same race along.
@@ -1668,7 +1691,10 @@ func _apply_spell_effect(side: int, card: String, rule: Dictionary, target: int,
 				if creatures.has(c.id) and pale(c.id) and not in_plane(c.id): plane_change(c.id, true)
 		"pale_revival":
 			# Destroyed from the plane (regeneration still applies), then a graveyard
-			# creature returns under the caster while the army has room.
+			# creature returns under the caster while the army has room, but only
+			# if the target died: update 1.03 checks its dying flag after the hit,
+			# so a target saved by Lifeguard or its regeneration
+			# brings nothing back (#306; the first release revived regardless).
 			var grave_side := grave_index / GRAVE_SIDE
 			var grave_slot := grave_index % GRAVE_SIDE
 			var revived: String = heroes[grave_side].grave[grave_slot]
@@ -1677,7 +1703,7 @@ func _apply_spell_effect(side: int, card: String, rule: Dictionary, target: int,
 			# saves it (its owner pays as usual); regeneration lent by coloured
 			# enchantments or army auras is dormant in the plane, so those die.
 			_damage(target, maxi(1, int(creatures[target].toughness) - int(creatures[target].damage)), false, false, true, true, true)
-			if army(side).size() < 10:
+			if not creatures.has(target) and army(side).size() < 10:
 				if grave_slot >= heroes[grave_side].grave.size() or heroes[grave_side].grave[grave_slot] != revived: grave_slot = heroes[grave_side].grave.rfind(revived)
 				if grave_slot >= 0:
 					heroes[grave_side].grave.remove_at(grave_slot)
@@ -1967,7 +1993,7 @@ func abilities(id: int) -> Array[Dictionary]:
 		if ability.key == "tap_walls": ability.cost = _resting_walls(1 - int(creatures[id].owner)).size()
 		# The Wall of Unreality's suggestion may be bought again and again while
 		# there is ether (player report #130); only Rouse is once a round.
-		if ability.key == "rouse": ability.used = creatures[id].get("ability_used", {}).get(ability.key, false)
+		if ability.key in ["rouse", "orc_rite"]: ability.used = creatures[id].get("ability_used", {}).get(ability.key, false)
 		result.append(ability)
 	if profile.id == "el2" and pale(id): result.append_array(_pale_abilities(id))
 	# Spores need neither a ready nor a settled fingus.
@@ -2221,6 +2247,9 @@ func can_use_ability(id: int, key: String, listed: Variant = null) -> bool:
 		if ability.get("resting", false) and not c.resting: return false
 		if ability.get("tapped", false) and (not c.resting or c.sick): return false
 		if ability.get("phase") == "attack" and phase != Phase.ATTACK: return false
+		# Transfer Aspects lights up only while some exchange can be paid for.
+		if id < 2 and ability.get("effect") == "recycle":
+			return creatures.keys().any(func(first: int) -> bool: return recycle_error(id, first, -1, int(ability.cost)).is_empty())
 		return id < 2 or _creature_ability_available(id, ability)
 	return false
 
@@ -2329,9 +2358,8 @@ func _use_ability(id: int, ability: String, target := -1, enchantment_id := -1, 
 			if enchantment_id == target or entity(enchantment_id).is_empty() or not targetable(enchantment_id): return _fail("Select another creature or a hero to burn.")
 			sacrificed = Vector2i(maxi(0, int(creatures[target].power)), 0)
 		if definition.effect == "recycle":
-			if not in_plane(target) or has_flag(target, "NoTarget"): return _fail("Choose a creature in the Colourless Plane.")
-			if not creatures.has(enchantment_id) or in_plane(enchantment_id) or not targetable(enchantment_id): return _fail("Then choose a creature in the Ether.")
-			if global_enchantment_count("PLSL") > 0: return _fail("A planar seal blocks every change of aspect.")
+			var problem := recycle_error(side, target, enchantment_id, int(definition.cost))
+			if not problem.is_empty(): return _fail(problem)
 		if definition.effect in ["spirit_lock", "sacrifice"] and (not creatures.has(target) or creatures[target].owner != side or not targetable(target)):
 			return _fail("Select one of your creatures to sacrifice.")
 		if definition.effect == "energize":
@@ -2381,9 +2409,9 @@ func _use_ability(id: int, ability: String, target := -1, enchantment_id := -1, 
 				if not spared: _kill(target)
 				if sacrificed.x > 0: _damage(enchantment_id, sacrificed.x)
 			"recycle":
-				# Plane exchange: one creature manifests, the other dissipates.
-				plane_change(target, false)
-				plane_change(enchantment_id, true)
+				# Plane exchange: one creature manifests, then the other
+				# dissipates, only if the first did, as in the original.
+				if plane_change(target, false): plane_change(enchantment_id, true)
 			"sacrifice":
 				# First game: ether + power + toughness - 1 in one direct change (no
 				# spending, so no mana thorns). Second game: the owner draws two instead.
@@ -2651,6 +2679,10 @@ func _first_ability(id: int, definition: Dictionary, target: int, grave_index: i
 			_dispel(target, grave_index)
 			_spend_ether(side, price)
 		"orc_rite":
+			# Once a turn, however often the shaman is readied again (1.03:
+			# the rite's own used flag, cleared at its owner's turn start).
+			if not c.has("ability_used"): c.ability_used = {}
+			c.ability_used.orc_rite = true
 			# The sacrificed channel is the rite's price, so Stasis does not spare it.
 			heroes[side].channels = int(heroes[side].channels) - 1
 			_emit({"kind": "channels", "side": side, "amount": -1})

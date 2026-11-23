@@ -15,6 +15,9 @@ func _initialize() -> void:
 		return
 	_colourless_enchantments(profile)
 	_transfer_aspects(profile)
+	_aspect_ward_exchange(profile)
+	_orc_rite_once(profile)
+	_pale_revival_lifeguard(profile)
 	_reflected_trade(profile)
 	_subjugated_pale(profile)
 	_ash_storm_dispels(profile)
@@ -102,6 +105,93 @@ func _transfer_aspects(profile: ELProfile) -> void:
 	var ability: Dictionary = duel.abilities(0).back()
 	_check(duel.use_ability(0, ability.key, pale, regular) and duel.in_plane(regular) and duel.entity(regular).power == printed,
 		"#232: aspect exchange suspends effects on a regular creature too")
+
+## #307, as the original Transfer Aspects: the use
+## is refused whole unless the user can also pay its own Aspect Ward for its
+## creature that moves; a pair of enemy creatures needs no ward ether.
+func _aspect_ward_exchange(profile: ELProfile) -> void:
+	for mana: int in [0, 1, 2]:
+		var duel := ELDuel.new()
+		if not _check(duel.start(profile, 11), "#307: duel starts"): return
+		duel.heroes[0].mana = 20
+		var own_pale := duel.next_id
+		duel._summon(0, "OUD1")
+		var own := duel.next_id
+		duel._summon(0, "ORSH")
+		var enemy_pale := duel.next_id
+		duel._summon(1, "OUD1")
+		var enemy := duel.next_id
+		duel._summon(1, "ORSH")
+		if not _check(_cast(duel, "PRWR", 0) and duel._enchantment_count(0, "PRWR") == 1, "#307: Aspect Ward on the user"): return
+		if not _check(_cast(duel, "OEXC"), "#307: Transfer Aspects is cast"): return
+		var ability: Dictionary = duel.abilities(0).back()
+		duel.heroes[0].mana = mana
+		var health := int(duel.heroes[0].health)
+		# #309: the first choice only in the Colourless Plane, the second only in the Ether.
+		if mana == 2:
+			var pending := {"ability": ability, "source": 0, "first": -1}
+			_check(ELCursors._valid_target(duel, own_pale, pending) and not ELCursors._valid_target(duel, own, pending), "#309: first choice in the Colourless Plane only")
+			pending.first = own_pale
+			_check(ELCursors._valid_target(duel, enemy, pending) and not ELCursors._valid_target(duel, enemy_pale, pending), "#309: second choice in the Ether only")
+		match mana:
+			0: _check(not duel.can_use_ability(0, ability.key), "#307: no ether, Transfer Aspects is inactive")
+			1:
+				_check(duel.can_use_ability(0, ability.key), "#307: 1 ether still pays an exchange of enemy creatures")
+				_check(not duel.use_ability(0, ability.key, own_pale, enemy) and duel.in_plane(own_pale) and not duel.in_plane(enemy) \
+					and duel.heroes[0].mana == 1, "#307: an own creature's unaffordable ward refuses the whole exchange")
+				_check(duel.use_ability(0, ability.key, enemy_pale, enemy) and not duel.in_plane(enemy_pale) and duel.in_plane(enemy) \
+					and duel.heroes[0].mana == 0, "#307: enemy creatures exchange for the cost alone")
+			2:
+				_check(not duel.use_ability(0, ability.key, own_pale, own), "#307: two own creatures need 3 ether")
+				_check(duel.use_ability(0, ability.key, own_pale, enemy) and not duel.in_plane(own_pale) and duel.in_plane(enemy) \
+					and duel.heroes[0].mana == 0 and duel.heroes[0].health == health - 1, "#307: the ward costs 1 ether and 1 life")
+
+## #308, as update 1.03: the Orc Shaman's rite marks itself used, so a
+## shaman readied again in the same turn cannot dispel a second time.
+func _orc_rite_once(profile: ELProfile) -> void:
+	var duel := ELDuel.new()
+	if not _check(duel.start(profile, 11), "#308: duel starts"): return
+	duel.heroes[0].mana = 20
+	duel.heroes[0].channels = 5
+	var shaman := duel.next_id
+	duel._summon(0, "ORSH")
+	var other := duel.next_id
+	duel._summon(0, "ORSH")
+	duel.creatures[shaman].sick = false
+	if not _check(_cast(duel, "MGHT", other) and _cast(duel, "MGHT", other), "#308: two enchantments to remove"): return
+	var key := "orc_rite"
+	if not _check(duel.can_use_ability(shaman, key), "#308: the rite is offered"): return
+	var first_enchantment: int = int(duel.creatures[other].enchantments[0].id)
+	_check(duel.use_ability(shaman, key, other, first_enchantment) and duel.creatures[other].enchantments.size() == 1, "#308: the rite removes one enchantment")
+	duel.creatures[shaman].resting = false
+	_check(not duel.can_use_ability(shaman, key), "#308: a readied shaman's rite stays used this turn")
+	_check(not duel.use_ability(shaman, key, other, int(duel.creatures[other].enchantments[0].id)), "#308: a second rite is refused")
+
+## #306, as update 1.03: Pale Revival brings a creature back only
+## when its target dies; a Lifeguard saves the target and nothing returns.
+func _pale_revival_lifeguard(profile: ELProfile) -> void:
+	for guarded: bool in [false, true]:
+		var label := "#306 (%s)" % ("Lifeguard" if guarded else "unguarded")
+		var duel := ELDuel.new()
+		if not _check(duel.start(profile, 11), label + ": duel starts"): return
+		duel.heroes[0].mana = 30
+		var pale := duel.next_id
+		duel._summon(1, "OUD1")
+		if guarded:
+			duel.plane_change(pale, false)
+			if not _check(_cast(duel, "LFGR", pale) and duel._enchantment_count(pale, "LFGR") == 1, label + ": Lifeguard on the manifested creature"): return
+			duel.plane_change(pale, true)
+		duel.heroes[1].grave.append("TIWR")
+		var grave_index: int = 1 * ELDuel.GRAVE_SIDE + duel.heroes[1].grave.size() - 1
+		var army_before := duel.army(0).size()
+		duel._give_card(0, "ORFT")
+		if not _check(duel.in_plane(pale) and duel.cast(duel.heroes[0].hand.size() - 1, pale, grave_index), label + ": Pale Revival is cast"): return
+		if guarded:
+			_check(duel.creatures.has(pale) and duel._enchantment_count(pale, "LFGR") == 0 and duel.army(0).size() == army_before \
+				and duel.heroes[1].grave.has("TIWR"), label + ": the target survives and nothing returns")
+		else:
+			_check(not duel.creatures.has(pale) and duel.army(0).size() == army_before + 1 and not duel.heroes[1].grave.has("TIWR"),
+				label + ": the target dies and the creature returns")
 
 func _reflected_trade(profile: ELProfile) -> void:
 	var rod := ""

@@ -579,6 +579,8 @@ static func _score(d: ELDuel, card: String, target: int, side: int, allies: Arra
 			# Destroys a creature in the plane: never an own one.
 			if friendly or grave < 0: return 0.0
 			var score := 12.0 + float(e.power) + float(e.toughness) * 0.5
+			# A lifeguard saves the target, and then nothing returns (#306).
+			if d._enchantment_count(int(e.id), "LFGR") > 0: return 1.0
 			if allies.size() < 10:
 				var row: Dictionary = d.profile.table("CombatCreatures")[d.heroes[grave / ELDuel.GRAVE_SIDE].grave[grave % ELDuel.GRAVE_SIDE]]
 				score += maxf(0.0, float(row.Power) + float(row.Toughness) * 0.5 - 1.0)

@@ -238,7 +238,7 @@ static func combat_pending(duel: ELDuel, selection: int, ability_selection: Dict
 	var definition: Dictionary = {"target": ability_selection.get("target", "")}
 	for item: Dictionary in duel.abilities(int(ability_selection.get("source", 0))):
 		if item.get("key") == ability_selection.get("key"): definition = item
-	return {"ability": definition, "source": int(ability_selection.get("source", 0))}
+	return {"ability": definition, "source": int(ability_selection.get("source", 0)), "first": int(ability_selection.get("first", -1))}
 
 static func _valid_target(duel: ELDuel, hovered: int, pending: Dictionary) -> bool:
 	if pending.has("card"):
@@ -252,6 +252,13 @@ static func _valid_target(duel: ELDuel, hovered: int, pending: Dictionary) -> bo
 	var ability: Dictionary = pending.get("ability", {})
 	if ability.get("effect") == "artifact":
 		return duel.artifact_target_error(int(pending.get("source", 0)), str(ability.get("card", "")), hovered).is_empty()
+	# Transfer Aspects: first a creature in the Colourless Plane, then one in
+	# the Ether; others are no target, as in the original.
+	if ability.get("effect") == "recycle":
+		var first := int(pending.get("first", -1))
+		var side := int(pending.get("source", 0))
+		var cost := int(ability.get("cost", 1))
+		return duel.recycle_error(side, hovered, -1, cost).is_empty() if first < 0 else duel.recycle_error(side, first, hovered, cost).is_empty()
 	match str(ability.get("target", "")):
 		"creature": return duel.creatures.has(hovered)
 		"hero": return hovered < 2

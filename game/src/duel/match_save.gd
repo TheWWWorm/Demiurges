@@ -128,7 +128,7 @@ static func decode(profile: ELProfile, raw: Dictionary) -> Dictionary:
 			if c.ability_used is not Dictionary: return _bad("Invalid creature ability state.")
 			for ability: Variant in c.ability_used:
 				var pale_rest: bool = profile.id == "el2" and c.card in ELCatalog.PALE_SUMMONS and (ability == "dissipate" or ELCatalog.PALE_ABILITIES.get(c.card, {}).get("key") == ability)
-				if not ({"illusion": "WLIL", "rouse": "SHSP", "phantasm": "PHWL"}.get(ability) == c.card or pale_rest) or c.ability_used[ability] is not bool: return _bad("Invalid creature ability state.")
+				if not ({"illusion": "WLIL", "rouse": "SHSP", "phantasm": "PHWL", "orc_rite": "ORSH"}.get(ability) == c.card or pale_rest) or c.ability_used[ability] is not bool: return _bad("Invalid creature ability state.")
 		# A creature back with its original owner keeps the mark only while control enchantments
 		# remain on it (an older one overruled, or one asleep in the Colourless Plane).
 		if c.has("origin") and (c.origin not in [0, 1] or (c.origin == c.owner and not (c.get("enchantments") is Array and c.enchantments.any(func(e: Variant) -> bool: return e is Dictionary and e.get("card") in ELCatalog.CONTROL)))):

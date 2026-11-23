@@ -724,7 +724,7 @@ static func ask(ctx: ELCombatSearch.Context, s: ELDuel, turns: int, budget: int,
 			if String(effect.get("kind", "")) == "frenzy" and not c.flags.has("Berserk"): state[at + 25] |= 32
 		# An ability that may be used once a round, and has been.
 		var done: Dictionary = c.get("ability_used", {})
-		if done.get("rouse", false) or done.get("illusion", false): state[at + 61] = 1
+		if done.get("rouse", false) or done.get("illusion", false) or done.get("orc_rite", false): state[at + 61] = 1
 		# What a pale creature may do, and has done this round.
 		var shade := _pale_bits(s.profile, String(c.card))
 		if shade != 0 and s.pale(int(c.id)):

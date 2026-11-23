@@ -34,6 +34,7 @@ const SPELL_KEYS := ["Cost", "OriginalCost", "Class"]
 const CREATURE_KEYS := ["Power", "Toughness", "Flags"]
 ## Description keys added to the first game's texts.
 const TEXT_PREFIX := "ELSecondBalance:"
+const ABILITY_PREFIX := "ability:"
 
 ## Whether `first` (a first-game profile) plays the second game's balance.
 static func active(first: ELProfile) -> bool:
@@ -75,6 +76,15 @@ static func apply(first: ELProfile, second: ELProfile, enabled: bool) -> bool:
 			if not description.is_empty() and description != str(other.get("ToolTip", card)):
 				first.texts[TEXT_PREFIX + card] = description
 				row.ToolTip = TEXT_PREFIX + card
+			# The ability's own line too: both games name it by the same key
+			# (the Orc Shaman's Ab179), with each game's own text, so the first
+			# game's would still offer its old ability (rest: gain 1 ether).
+			var ability_key := str(other.get("AbilityText", ""))
+			var ability: String = str(second.texts.get(ability_key, ""))
+			if not ability.is_empty() and ability != str(first.texts.get(str(row.get("AbilityText", "")), "")):
+				first.texts[TEXT_PREFIX + ABILITY_PREFIX + card] = ability
+				row.AbilityText = TEXT_PREFIX + ABILITY_PREFIX + card
+				if other.has("AbilityIcon"): row.AbilityIcon = other.AbilityIcon
 		cards[card] = true
 	first.second_cards = cards
 	first.second_restore = saved
@@ -96,6 +106,7 @@ static func _restore_card(first: ELProfile, card: String) -> void:
 	first.second_cards.erase(card)
 	first.second_restore.erase(card)
 	first.texts.erase(TEXT_PREFIX + card)
+	first.texts.erase(TEXT_PREFIX + ABILITY_PREFIX + card)
 	if saved.is_empty(): return
 	_replace(first.table("CombatSpells").get(card, {}), saved[0])
 	_replace(first.table("CombatCreatures").get(card, {}), saved[1])

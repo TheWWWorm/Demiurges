@@ -2,6 +2,27 @@
 
 Versions follow [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html) from 0.3.0 on.
 
+## 0.28.1
+
+### Changed
+
+- **Battle zoom** goes in toward the middle of the battlefield, wherever the pointer is, instead of toward the figure or ground under it.
+
+### Fixed
+
+- **Main menu buttons:** the chosen game's button no longer shows gaps across its middle when the pointer is over it.
+- **First-person view** starts at the hero's own eye height and looks level: the Kinet heroes' wings no longer lift the eye far above their heads, and a hero raising its staff no longer lifts it either.
+- **Transfer Aspects (Etherlords II):**
+  - With Aspect Ward and too little ether to move your own creature, the exchange is refused whole, as in the original, instead of moving only the other creature; the ability is greyed out when no exchange can be paid for. Missing health does not stop it (#307).
+  - The cursor marks only creatures in the Colourless Plane as the first choice and only creatures in the Ether as the second (#309).
+  - Its sound, stream and plane changes follow the original's timing: the exchange starts when the hero's gesture releases it, after the spoken line, the first creature manifests then, and the second enters the Colourless Plane with its sound when the stream reaches it (#310). Other hero abilities, such as a hero's Fireball, likewise start their effects at the gesture's release, and what they do waits for the effect to land.
+- **Orc Shaman (Etherlords II)** removes an enchantment once a turn, as in update 1.03, even when readied again by Energize; the computer opponent plans with the same limit (#308).
+- **Pale Revival (Etherlords II)** returns a creature from the graveyard only when its target dies, as in update 1.03: a target saved by a Lifeguard or its own regeneration brings nothing back (#306).
+- **Etherlords I on the Etherlords II card balance:** creature and enchantment abilities describe what they now do (the Orc Shaman's rite instead of the old "rest: gain 1 ether", and about seventy others), and the shaman's rite shows the disenchantment rather than the ether gain.
+- **Attack with all** stays shut in Etherlords I too when the only creatures that could attack have no power, as it already passed over them.
+- **Specialisations** that come into play no longer also show as a line of text over the battle while the play history column lists them.
+- **A creature walks home as soon as its last swing ends**, instead of standing frozen in its last frame until its victim's hit reaction finished, which looked like a stutter before the walk back.
+
 ## 0.28.0
 
 ### New

@@ -2069,18 +2069,32 @@ func _paint_parts(picture: Image, button: TextButton, parts: Array, pushed: bool
 		if image.is_compressed(): image.decompress()
 		image.convert(Image.FORMAT_RGBA8)
 		var inset := TextButton.SHARP_PRESSED_INSET if pushed and texture.has_meta(ELIconUpscale.ORIGINAL) else 0.0
+		# Trimmed as TextButton._draw_parts trims them: the caps lose only their
+		# inner join, and the middle piece widens over both joins, so the
+		# repeated middle of the plate carries no blank columns.
 		var source: Rect2 = part.source
-		source = source.grow_individual(-inset, 0, -inset, 0)
+		var rect: Rect2 = part.rect
+		var x := rect.position.x - button.design_left
+		var width := rect.size.x
+		match part.type:
+			"Type6":
+				source = source.grow_individual(-inset, 0, -inset, 0)
+				x -= inset
+				width += inset * 2.0
+			"Type7":
+				source = source.grow_individual(-inset, 0, 0, 0)
+				x += inset
+				width -= inset
+			_:
+				source = source.grow_individual(0, 0, -inset, 0)
+				width -= inset
 		var scale := Vector2(image.get_size()) / Vector2(texture.get_size()).max(Vector2.ONE)
 		var region := Rect2i(Vector2i((source.position * scale).round()), Vector2i((source.size * scale).round()))
 		if region.size.x <= 0 or region.size.y <= 0: continue
 		var piece := image.get_region(region)
-		var rect: Rect2 = part.rect
-		var drawn := Vector2i(roundi(rect.size.x - inset * 2.0), roundi(rect.size.y))
+		var drawn := Vector2i(roundi(width), roundi(rect.size.y))
 		if drawn.x <= 0 or drawn.y <= 0: continue
 		piece.resize(drawn.x, drawn.y, Image.INTERPOLATE_BILINEAR)
-		var x := rect.position.x - button.design_left + inset
-		if part.type == "Type7": x = 140.0 - (button.design_left + 140.0 - rect.position.x) + inset
 		var y := rect.position.y - button.position.y + button._top_shift()
 		picture.blend_rect(piece, Rect2i(Vector2i.ZERO, piece.get_size()), Vector2i(roundi(x), roundi(y)))
 

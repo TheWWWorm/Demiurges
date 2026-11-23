@@ -1431,27 +1431,17 @@ func _step_keyboard_camera(delta: float) -> void:
 ## The view's own centre (_default_view), where zooming out takes it back.
 var _home_target := Vector3(0, 0.6, -0.5)
 
-## A wheel notch: in, toward the ground under the pointer, so the near end
-## of the zoom comes up to the figure looked at; out, back toward the view's
-## own centre, which it reaches by the default distance.
-func _wheel_zoom(closer: bool, at: Vector2) -> void:
+## A wheel notch: in, toward the middle of the battlefield (the view's own
+## centre), wherever the pointer is; out, back toward that centre too,
+## which it reaches by the default distance.
+func _wheel_zoom(closer: bool, _at: Vector2) -> void:
 	var before := camera_distance
 	camera_distance = clampf(camera_distance + (-1.3 if closer else 1.3), DISTANCE_LIMITS.x, DISTANCE_LIMITS.y)
 	if camera_distance != before and camera != null:
 		if closer:
-			var origin := camera.project_ray_origin(at)
-			var ray := camera.project_ray_normal(at)
-			var looked := _character_at(at)
-			if looked >= 0 and models.has(looked) and is_instance_valid(models[looked]):
-				# A figure under the pointer: toward its middle, not the ground
-				# behind it, so it stays in view all the way in.
-				var figure: Vector3 = models[looked].global_position + Vector3(0, FRAMED_HEIGHT * float(models[looked].scale.y), 0)
-				camera_target = camera_target.lerp(figure, (before - camera_distance) / before)
-			elif ray.y < -0.01:
-				var hit := origin + ray * ((camera_target.y - origin.y) / ray.y)
-				# The share of the way the notch closes in moves the centre the
-				# same share toward the pointer (the point under it stays put).
-				camera_target = camera_target.lerp(hit, (before - camera_distance) / before)
+			# The share of the way the notch closes in brings a panned view
+			# the same share back over the middle.
+			camera_target = camera_target.lerp(_home_target, (before - camera_distance) / before)
 		else:
 			var home := clampf((camera_distance - before) / maxf(24.0 - before, 0.01), 0.0, 1.0)
 			camera_target = camera_target.lerp(_home_target, home)
@@ -1471,10 +1461,10 @@ func _toggle_free_look() -> void:
 		free_look.leave()
 		return
 	if auto_camera != null: auto_camera.stop()
-	# The eye at the player's hero's own height (just under the top of its
-	# head), so the field is seen as the hero would see it.
+	# The eye at the player's hero's own eyes, so the field is seen as the
+	# hero would see it.
 	var hero: ELModel = models.get(_history_side()) if duel != null else null
-	var eye := _figure_height(hero) * ELFreeLook.EYE_OF_HEIGHT if is_instance_valid(hero) else ELFreeLook.EYE
+	var eye := _eye_height(hero) if is_instance_valid(hero) else ELFreeLook.EYE
 	free_look.hint = _free_look_hint()
 	free_look.enter(camera, arena.ground_height, eye)
 	if is_instance_valid(ui): ui.visible = false
@@ -1564,7 +1554,8 @@ func _target(id: int) -> void:
 			_hint("Choose the enchantment to remove on the upper strip.")
 		elif (ability_selection.get("key", "").begins_with("combine") or not str(ability_selection.get("second", "")).is_empty()) and not ability_selection.has("first"):
 			var recycling: bool = str(ability_selection.get("key", "")).begins_with("recycle")
-			if recycling and not duel.in_plane(id): _hint("Choose a creature in the Colourless Plane.")
+			var refused := duel.recycle_error(int(ability_selection.source), id, -1, int(ability_selection.get("cost", 1))) if recycling else ""
+			if not refused.is_empty(): _hint(refused)
 			elif not recycling and (not duel.creatures.has(id) or duel.creatures[id].owner != duel.active_side()): _hint("Choose one of your creatures to sacrifice.")
 			else:
 				ability_selection.first = id
@@ -2695,9 +2686,7 @@ func _display_delay(data: Dictionary) -> float:
 ## Seconds the DrainLife effect takes to reach the healed hero: its hit cue,
 ## else its length (at most 2 s).
 func _drain_seconds() -> float:
-	var cue := ELCombatEffects.effect_hit_delay(profile, "DrainLife")
-	if cue > 0.0: return cue
-	return minf(float(ELCombatEffects.fx_frames(profile, "DrainLife")) / ELParticleFile.FPS, 2.0)
+	return _effect_travel("DrainLife", 2.0)
 
 func _wait_display(serial: int) -> void:
 	_display_waits[serial] = int(_display_waits.get(serial, 0)) + 1
@@ -3321,10 +3310,12 @@ func _event(data: Dictionary) -> void:
 				_remove_model(creature_id)
 			if models.has(creature_id): models[creature_id].set_meta("returning", true)
 		"plane":
-			battle_audio.effect("OutPlaneEntry" if data.enter else "OutPlaneExit")
-			_figure_effect("OutPlaneEntry" if data.enter else "OutPlaneExit", data.target)
-			_float_text(data.target, "Pale aspect" if data.enter else "Manifests", Color("c9d4dd"), true)
 			_log("%s %s the Colourless Plane." % [duel.card_name(duel.entity(data.target).get("card", "")), "enters" if data.enter else "leaves"])
+			# The change shows when the effect making it reaches the figure,
+			# as its fade does (_note_shown waits for the same cue).
+			var delay := _hit_delay(data)
+			if delay > 0.0 and is_inside_tree() and not _skipping_presentation: _schedule_battle_cue(delay, _show_plane_change.bind(data))
+			else: _show_plane_change(data)
 		"spec":
 			var side := int(data.side)
 			var name := _spec_name(data.spec)
@@ -3334,7 +3325,10 @@ func _event(data: Dictionary) -> void:
 				battle_audio.effect("Specialisation")
 			_float_text(side, name, Color("e8c66a"), true)
 			if _notice_icons(): _specialisation_notice(side, String(data.spec))
-			_announce("T_SPEC_WORKED", [name, _hero_name(side)], side)
+			# The play history column lists the specialisation with its icon:
+			# no line of text over the battle as well (it still goes to the log).
+			if is_instance_valid(battle_history) and battle_history.visible: _log(_format_text("T_SPEC_WORKED", [name, _hero_name(side)]))
+			else: _announce("T_SPEC_WORKED", [name, _hero_name(side)], side)
 		"global_spell":
 			var spell := profile.text(str(profile.table("GlobalSpells").get(data.spell, {}).get("Name", data.spell)))
 			_float_text(data.side, spell, Color("9fc4ff"), true)
@@ -3393,12 +3387,21 @@ func _event(data: Dictionary) -> void:
 			# Both originals' hero ability command (both games)
 			# queues the hero's PlayAnimation 7, its instant gesture, ahead of
 			# the ability's own effects (Healing's GainLife, Fireball...).
+			var release := 0.0
 			if source < 2 and models.has(source) and not String(data.ability).begins_with("artifact:") and not bool(settings.values.get("hide_cast", false)):
 				var hero: ELModel = models[source]
 				if hero.has_clip("uinstant") and hero.play("uinstant"):
 					battle_audio.unit(hero, "instant")
 					_cast_until = maxf(_cast_until, elapsed + clampf(hero.clip_seconds("uinstant"), 0.0, 4.0))
-			_ability_effects(data)
+					release = _gesture_release(hero, "uinstant")
+			# As a cast's: the ability's effects and their sounds start at the
+			# gesture's release frame, and what they do to a figure (a plane
+			# change, a hit) waits for the effect to reach it (_hit_delay).
+			# Started at once, they ran under the hero's voice and changed the
+			# figures before the effect got there (#310).
+			if source < 2: _time_hero_ability(data, release)
+			if release > 0.0 and is_inside_tree() and not _skipping_presentation: _schedule_battle_cue(release, _ability_effects.bind(data))
+			else: _ability_effects(data)
 			_auto_ability(data)
 			# The next action waits for the creature's own action clip.
 			var user := int(data.get("source", -1))
@@ -3738,6 +3741,7 @@ func _hit_delay(data: Dictionary) -> float:
 		delay = 0.0
 	if int(_ability_hit.get("target", -1)) == id or _ability_hit.get("targets", []).has(id):
 		delay = float(_ability_hit.get("hit", 0.0))
+	if _ability_hit.get("hits", {}).has(id): delay = float(_ability_hit.hits[id])
 	if int(_feedback_hit.get("target", -1)) == id:
 		delay = float(_feedback_hit.get("hit", 0.0))
 	if _redirect_hit.get("targets", []).has(id):
@@ -3861,11 +3865,51 @@ func _cast_clip(side: int, card: String) -> String:
 
 func _cast_release(side: int, card: String) -> float:
 	if duel.is_summon(card) or not models.has(side) or bool(settings.values.get("hide_cast", false)): return 0.0
-	var model: ELModel = models[side]
-	var clip: Dictionary = model.timing.get(_cast_clip(side, card), {})
+	return _gesture_release(models[side], _cast_clip(side, card))
+
+## A creature's entry into or exit from the Colourless Plane: its effect,
+## sound and caption.
+func _show_plane_change(data: Dictionary) -> void:
+	battle_audio.effect("OutPlaneEntry" if data.enter else "OutPlaneExit")
+	_figure_effect("OutPlaneEntry" if data.enter else "OutPlaneExit", int(data.target))
+	_float_text(int(data.target), "Pale aspect" if data.enter else "Manifests", Color("c9d4dd"), true)
+
+## Seconds from the start of a figure's gesture clip to its release mark.
+func _gesture_release(model: ELModel, clip_name: String) -> float:
+	var clip: Dictionary = model.timing.get(clip_name, {})
 	var mark := int(clip.get("mark", -1))
 	if mark <= 0 or mark >= int(clip.get("frames", 0)): return 0.0
 	return mark / (model.fps * maxf(model.speed, 0.01))
+
+## When a hero ability's effect reaches each figure it acts on, from the
+## gesture's `release`: its target as the effect's hit cue lands, and for
+## Transfer Aspects the first choice as the stream leaves it and the second
+## as it arrives there (the stream has no hit cue: its length). Measured on
+## a recording of the original: the voice, then the exchange's sound and
+## the manifestation 1.5 s later, the entry 4.4 s after that.
+func _time_hero_ability(data: Dictionary, release: float) -> void:
+	var target := int(data.get("target", -1))
+	var hits := {}
+	var card := _shown_ability_card(data)
+	if profile.id == "el2" and card == "OEXC":
+		hits[target] = release
+		var entering := int(data.get("hit_target", -1))
+		if entering >= 0: hits[entering] = release + _effect_travel("OuterExchange")
+	else:
+		var items := EffectTable.ability_effects(profile.id, card)
+		var cue := ELCombatEffects.effect_hit_delay(profile, String(items[0][0])) if not items.is_empty() and not items[0].is_empty() else 0.0
+		if target >= 0: hits[target] = release + cue
+	if hits.values().all(func(seconds: float) -> bool: return seconds <= 0.0): return
+	if _ability_hit.is_empty(): call_deferred("_clear_ability_hit")
+	_ability_hit = {"hits": hits}
+
+## Seconds an effect takes to reach its Finish figure: its hit cue, else
+## its length (at most `longest`). The original's Transfer Aspects stream
+## runs its whole length (4.4 s) before the second creature enters the plane.
+func _effect_travel(effect: String, longest := INF) -> float:
+	var cue := ELCombatEffects.effect_hit_delay(profile, effect)
+	if cue > 0.0: return cue
+	return minf(float(ELCombatEffects.fx_frames(profile, effect)) / ELParticleFile.FPS, longest)
 
 ## Once the cast's events are in: the camera's spell shots start with the
 ## gesture, the effects at its release frame.
@@ -4841,7 +4885,7 @@ func _ability_effects(data: Dictionary) -> void:
 		or (profile.id == "el1" and card == "MTSC" and data.ability == "tap_walls")
 		or (profile.id == "el2" and card == "MTSC" and data.ability == "tap_walls")
 		or (profile.id in ["el1", "el2"] and card == "MTPT" and data.ability == "tap_race")
-		or (profile.id == "el1" and card == "ORSH" and data.ability == "ether")
+		or (profile.id == "el1" and card == "ORSH" and data.ability in ["ether", "orc_rite"])
 		# Update 1.03 OrcShamanAbility also queues the
 		# shaman's PlayAnimation 7 before its dispel.
 		or (profile.id == "el2" and card == "ORSH" and data.ability in ["ether", "orc_rite"])
@@ -4965,6 +5009,10 @@ func _ability_effects(data: Dictionary) -> void:
 	# Vampire Bat's DrainLife follows the damage (bat_drain_cue).
 	if card == "VBAT" and data.ability == "bat_drain": return
 	var items := EffectTable.ability_effects(profile.id, card)
+	# The first game on the second game's balance: the shaman's rite takes
+	# the enchantment off (the second game's Disenchant; the first game has
+	# no LoseMana for the channel), not the old rest's GainMana.
+	if profile.id == "el1" and card == "ORSH" and data.ability == "orc_rite": items = [["Disenchant", "at"]]
 	if card == EffectTable.ILLUSION_CARD and data.has("grave"): items = EffectTable.illusion_effects(int(data.grave))
 	# EL2 Burnout's first selection is the creature being sacrificed;
 	# original - starts RedDamage there. The later
@@ -5252,6 +5300,22 @@ func figure_rows(id: int) -> Dictionary:
 
 ## Height of a figure's top above its feet: its posed parts' bounds, as the
 ## original measures the figure each frame.
+## Where a hero's eyes are, above its feet: a little way up its head piece
+## where the figure has one (the Kinet hero's wings and the staffs reach far
+## above the head, so the whole figure's top put the eye over the wing tips),
+## else a share of its body piece's height (staffs raised in a cast pose
+## reach far above it), else of the whole figure's.
+func _eye_height(model: ELModel) -> float:
+	if not model.is_inside_tree(): return ELFreeLook.EYE
+	for piece: String in ["head", "body"]:
+		var part: MeshInstance3D = model.parts.get(piece)
+		if part == null or part.mesh == null or not part.is_visible_in_tree(): continue
+		var box: AABB = part.global_transform * part.mesh.get_aabb()
+		var foot := model.global_position.y
+		var eye := box.position.y + box.size.y * ELFreeLook.EYE_IN_HEAD - foot if piece == "head" else (box.end.y - foot) * ELFreeLook.EYE_OF_HEIGHT
+		if eye > 0.1: return eye
+	return _figure_height(model) * ELFreeLook.EYE_OF_HEIGHT
+
 func _figure_height(model: ELModel) -> float:
 	if not is_instance_valid(model) or not model.is_inside_tree(): return 1.7
 	var top := model.global_position.y
@@ -5628,10 +5692,9 @@ func _show_hero_stats() -> void:
 func _refresh_buttons() -> void:
 	if duel == null or attack_button == null: return
 	end_button.disabled = not (_human_turn() or (network_duel != null and network_duel.live and duel.phase == ELDuel.Phase.FINISHED and ending_over() and not _overlay_open()))
-	# The second game's Attack all passes over creatures with no power, so
-	# those alone leave it shut (player report #128).
-	var powerless_skipped: bool = profile.id == "el2"
-	var available := duel.phase == ELDuel.Phase.ATTACK and duel.army(duel.active_side()).any(func(c: Dictionary) -> bool: return duel.can_declare_attack(c.id) and not (powerless_skipped and int(c.power) <= 0))
+	# Attack all passes over creatures with no power (in both games, see
+	# _attack_all), so those alone leave it shut (player report #128).
+	var available := duel.phase == ELDuel.Phase.ATTACK and duel.army(duel.active_side()).any(func(c: Dictionary) -> bool: return duel.can_declare_attack(c.id) and int(c.power) > 0)
 	attack_button.disabled = not _human_turn() or not available
 	# Keep the original shutter where available. Without its art, hide the
 	# inactive control rather than leaving the swords exposed.

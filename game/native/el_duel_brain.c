@@ -4981,9 +4981,10 @@ static int cast_card(const Search *x, State *s, int side, int slot, int target, 
 		/* Destroyed in the plane, though a lifeguard still turns that; a
 		 * creature's own printed regeneration still saves it, while what
 		 * enchantments and army auras lend lies dormant in the plane. Then
-		 * the card comes out of its graveyard for the caster. */
+		 * the card comes out of its graveyard for the caster, only if the
+		 * target died (update 1.03's dying check after the hit). */
 		Unit *t = &s->u[target];
-		int whose = choice / 64, kind = s->graves[whose][choice % 64];
+		int whose = choice / 64, kind = s->graves[whose][choice % 64], died = 0;
 		if (!(t->flags & F_NO_AFFECT)) {
 			if (t->guards > 0) spend_guard(s, target);
 			else {
@@ -4997,10 +4998,13 @@ static int cast_card(const Search *x, State *s, int side, int slot, int target, 
 				}
 				if ((saved || own > 0) && t->toughness > 0 && !diseased(s, t->owner) && s->ether[t->owner] >= own) {
 					regenerate_unit(s, t, own);
-				} else kill_unit(s, target);
+				} else {
+					kill_unit(s, target);
+					died = 1;
+				}
 			}
 		}
-		if (army_size(s, side) < ARMY && s->n < MAX_UNITS) {
+		if (died && army_size(s, side) < ARMY && s->n < MAX_UNITS) {
 			int place = -1;
 			for (int p = 0; p < s->known[whose]; p++)
 				if (s->graves[whose][p] == kind) place = p;
@@ -5477,7 +5481,7 @@ static int ability_fits(const State *s, int i, int target, int extra, int *price
 		int owed = ench_price(x, s, target, extra, u->ability == AB_DISENCHANT ? 2 : 1);
 		if (owed < 0) return 0;
 		if (u->ability != AB_ORC_RITE) *price = owed;
-		else if (s->channels[side] < 1) return 0;
+		else if (s->channels[side] < 1 || u->spent) return 0;
 		break;
 	}
 	case AB_SPORES:
@@ -5678,7 +5682,9 @@ static int use_ability(State *s, int i, int target, int extra) {
 	if (!after) pay(s, side, price);
 	switch (u->ability) {
 	case AB_ORC_RITE:
-		/* The channel is the price of the rite: no stasis spares it. */
+		/* The channel is the price of the rite: no stasis spares it. Once
+		 * a round, however often the shaman is readied again. */
+		u->spent = 1;
 		s->channels[side] = (int8_t)imax(0, s->channels[side] - 1);
 		dispel(x, s, target, extra, 0);
 		break;
