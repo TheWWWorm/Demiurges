@@ -12,7 +12,9 @@ extends Node
 
 signal left
 
+## The eye without a hero to measure; with one, at this share of its height.
 const EYE := 1.6
+const EYE_OF_HEIGHT := 0.93
 const EYE_LIMITS := Vector2(0.25, 12.0)
 const WALK := 4.0
 const RUN := 11.0
@@ -37,7 +39,7 @@ func _ready() -> void:
 
 ## Takes the camera, standing on the ground under the point the camera
 ## looks at, a little way back toward it, facing the same way.
-func enter(view_camera: Camera3D, ground_height: Callable) -> void:
+func enter(view_camera: Camera3D, ground_height: Callable, eye_height := EYE) -> void:
 	if active or view_camera == null: return
 	camera = view_camera
 	ground = ground_height
@@ -54,7 +56,7 @@ func enter(view_camera: Camera3D, ground_height: Callable) -> void:
 	start -= flat * 8.0
 	_yaw = atan2(-flat.x, -flat.z)
 	_pitch = -0.1
-	eye = EYE
+	eye = clampf(eye_height, EYE_LIMITS.x, EYE_LIMITS.y)
 	camera.global_position = Vector3(start.x, _height(start.x, start.z) + eye, start.z)
 	camera.fov = FOV
 	_orient()

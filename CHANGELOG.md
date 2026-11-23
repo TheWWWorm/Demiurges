@@ -6,7 +6,7 @@ Versions follow [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html)
 
 ### New
 
-- **First-person view.** Press F in a battle to walk the field at eye level (WASD to walk, mouse to look, Esc or F to return); the key can be changed in the controls.
+- **First-person view.** Press F in a battle to walk the field at your hero's eye height (WASD to walk, mouse to look, Esc or F to return); the key can be changed in the controls.
 - **Closer zoom.** The mouse wheel zooms in much further in battles, towards the figure under the pointer; numbers over figures stop growing past a readable size.
 - **Metal shines on many more figures.** The Synthet machines, the Chaot ogre and warrior heroes, the Etherlords II Red and Green main heroes, the Synthet lord's arm and staff, the Ogre King's chainmail, the grey ogre's mace, the Huntress's knives, the kobolds, the Aviak Warlock and others now have metal highlights, while flesh, grey skin, coats and robes stay matte.
 - **Autochess: undo in the Esc menu.** "Undo the last action (Ctrl+Z)" is in the Esc menu, as in the original.

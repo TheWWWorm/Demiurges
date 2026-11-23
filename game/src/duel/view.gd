@@ -1402,7 +1402,11 @@ func _toggle_free_look() -> void:
 		free_look.leave()
 		return
 	if auto_camera != null: auto_camera.stop()
-	free_look.enter(camera, arena.ground_height)
+	# The eye at the player's hero's own height (just under the top of its
+	# head), so the field is seen as the hero would see it.
+	var hero: ELModel = models.get(_history_side()) if duel != null else null
+	var eye := _figure_height(hero) * ELFreeLook.EYE_OF_HEIGHT if is_instance_valid(hero) else ELFreeLook.EYE
+	free_look.enter(camera, arena.ground_height, eye)
 	if is_instance_valid(ui): ui.visible = false
 
 ## The player's own view; any manual camera change ends an automatic close-up.
