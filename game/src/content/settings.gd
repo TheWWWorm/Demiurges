@@ -125,8 +125,7 @@ const HOTKEYS := {
 	"battle_save": ["Battle", "Quick save", [KEY_F5], [KEY_F5]],
 	"battle_load": ["Battle", "Quick load", [KEY_F9], [KEY_F9]],
 	"reset_camera": ["Battle", "Reset camera", [KEY_R], [KEY_R]],
-	# Unassigned until the player picks a key (KEY_NONE).
-	"first_person": ["Battle", "First-person view (walk the field)", [KEY_NONE], [KEY_NONE]],
+	"first_person": ["Battle", "First-person view (walk the field)", [KEY_F], [KEY_F]],
 	"combat_log": ["Battle", "Combat log", [KEY_L], [KEY_L]],
 	"artifacts": ["Battle", "Show artifacts", [], [KEY_A]],
 	"hand": ["Battle", "Show spells in hand", [], [KEY_H]],

@@ -1,6 +1,6 @@
 class_name ELFreeLook
 extends Node
-## First-person view of a battle (the "first_person" hotkey, unassigned by
+## First-person view of a battle (the "first_person" hotkey, F by
 ## default): the battle camera is handed to a walker on the arena's ground,
 ## to run around the field and look at the figures up close. The battle
 ## itself goes on; its camera, panels and clicks wait until the view is left.
