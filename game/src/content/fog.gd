@@ -195,8 +195,12 @@ static func sight_radius(hero: Dictionary) -> int:
 	return int(hero.get("strategy_capacity", hero.get("base_ap", 0))) + 1
 
 ## Heroes in a fort keep their sight; a training-camp guest keeps its tile.
+## Second game: ExHideHero only sinks the figure out of sight (its model drops
+## to z = -100); the hero stays in its player's list on its tile, and the
+## group refresh draws every listed hero's disc, so it keeps its sight (the
+## main hero entering the White Lord's portal in chapter 54, #305).
 static func hero_sees(state: ELAdventureSession, hero: Dictionary) -> bool:
-	if not (hero.get("visible", true) or int(hero.get("camp", -1)) >= 0): return false
+	if not (hero.get("visible", true) or int(hero.get("camp", -1)) >= 0 or (second(state) and hero.get("hidden_by_script", false))): return false
 	# ExHideExploration clears a stationary actor's sight too. Scripted
 	# observations must not reveal its whole sight disc again.
 	if second(state) and hero.get("sight_hidden_at") == [int(hero.x), int(hero.y)]: return false

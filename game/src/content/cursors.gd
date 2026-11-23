@@ -162,7 +162,13 @@ static func _second_object(state: ELAdventureSession, hero: Dictionary, item: Di
 			# battles in their reach (CombatRange, such as the life-protecting
 			# statue of the Vitals' first chapter).
 			if item.get("type") == "teleportreceiver": return "cancel"
-			if str(state.map.profile.table("AdditionalBuildings").get(str(item.get("name", "")), {}).get("Class", "")) == "CombatRange": return "cancel"
+			var building_class := str(state.map.profile.table("AdditionalBuildings").get(str(item.get("name", "")), {}).get("Class", ""))
+			if building_class == "CombatRange": return "cancel"
+			# A "Simple" building (CCustomBuilding: journals, scrolls, the
+			# White Lord's portals) can be used only while its script has
+			# allowed it with ExSetUsability(id, 1); the collapsed and the
+			# closed portal never are (#305).
+			if building_class == "Simple": return "use" if item.get("script_usable", false) else "cancel"
 			return "use"
 	if item.get("type") in ["teleport", "dock"]: return "use" if item.get("enabled", true) else "cancel"
 	return "cancel"

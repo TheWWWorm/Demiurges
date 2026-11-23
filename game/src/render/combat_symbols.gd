@@ -28,6 +28,9 @@ const CELL := 16.0
 const FIGURE_HALF := 0.12
 const FLOAT_HALF := 0.1
 const MIN_SIZE := 7.0
+## Nor grow past MAX_SIZE window pixels: the remake's close zoom (down to 4
+## units) would draw a figure's numbers larger than the figure itself.
+const MAX_SIZE := 30.0
 const SWORD := 11
 const SHIELD := 33
 ## Glyph colours: white, red (damage), green (healing).
@@ -197,7 +200,7 @@ func glyph_size(point: Vector3, half := FIGURE_HALF) -> float:
 	if camera == null or not is_instance_valid(camera) or not camera.is_inside_tree(): return CELL
 	var right := camera.global_transform.basis.x.normalized() * half
 	var width := camera.unproject_position(point + right).distance_to(camera.unproject_position(point - right))
-	return maxf(width, MIN_SIZE / _window_scale())
+	return clampf(width, MIN_SIZE / _window_scale(), MAX_SIZE / _window_scale())
 
 ## Window pixels per canvas unit (the stretched canvas is larger than small windows).
 func _window_scale() -> float:

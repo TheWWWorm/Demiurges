@@ -1013,7 +1013,9 @@ func _shaded_colourless(profile: ELProfile) -> void:
 		var back := _unlit(reaper)
 		check(back[0] == 0, "el2: materialised again it is shaded again (%d/%d unlit)" % back)
 		var lit := _unlit(hero)
-		check(not hero.colourless and lit[0] > 0, "el2: a hero's glowing parts still glow (%d/%d unlit)" % lit)
+		# The Red and Green main heroes' Magic armour is shaded so it can shine
+		# (ELFigure.SHADED_MAGIC_HEROES).
+		check(not hero.colourless and lit[1] > 0 and lit[0] == 0, "el2: a Red main hero's Magic armour takes light and shadow (%d/%d unlit)" % lit)
 	reaper.free()
 	hero.free()
 

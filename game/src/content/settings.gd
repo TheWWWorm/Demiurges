@@ -114,7 +114,8 @@ const RANGES := {"music": [0.0, 1.0], "effects": [0.0, 1.0], "ambience": [0.0, 1
 	"window_mode": [0, 2], "window_width": [0, 16384], "window_height": [0, 16384], "frame_rate": [-1, 1000], "upscale_quality": [0, 3],
 	"battle_interface": [0, 4], "battle_gap": [0, 4], "battle_gap_2": [0, 4], "battle_gap_3": [0, 4], "duel_ai": [0, 2], "world_ai": [0, 2]}
 
-## Context, caption, then the default keys for each edition. Empty means the
+## Context, caption, then the default keys for each edition ([KEY_NONE]: the
+## action has no key until the player gives it one). Empty means the
 ## action is unavailable in that edition.
 const HOTKEYS := {
 	"end_phase": ["Battle", "End phase", [KEY_MASK_CTRL | KEY_E], [KEY_TAB]],
@@ -124,6 +125,8 @@ const HOTKEYS := {
 	"battle_save": ["Battle", "Quick save", [KEY_F5], [KEY_F5]],
 	"battle_load": ["Battle", "Quick load", [KEY_F9], [KEY_F9]],
 	"reset_camera": ["Battle", "Reset camera", [KEY_R], [KEY_R]],
+	# Unassigned until the player picks a key (KEY_NONE).
+	"first_person": ["Battle", "First-person view (walk the field)", [KEY_NONE], [KEY_NONE]],
 	"combat_log": ["Battle", "Combat log", [KEY_L], [KEY_L]],
 	"artifacts": ["Battle", "Show artifacts", [], [KEY_A]],
 	"hand": ["Battle", "Show spells in hand", [], [KEY_H]],
@@ -303,6 +306,8 @@ static func hotkey_action(preferences: ELSettings, id: String, group: String, ev
 		var defaults := hotkey_defaults(id, action)
 		if HOTKEYS[action][0] != group or defaults.is_empty(): continue
 		var keys: Array = [overrides[action]] if overrides.has(action) else defaults
+		# KEY_NONE marks an action without a key: nothing presses it.
+		if keys.has(KEY_NONE) and keys.size() == 1: continue
 		if logical in keys or physical in keys: return action
 	return ""
 

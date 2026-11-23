@@ -1013,7 +1013,9 @@ func _arrays(mesh: Mesh) -> Dictionary:
 	if _mesh_data.has(mesh): return _mesh_data[mesh]
 	var result := {}
 	if mesh.get_surface_count() > 0:
-		var arrays := mesh.surface_get_arrays(0)
+		# Figure meshes keep the arrays they were built from; reading a
+		# surface back waits on the GPU.
+		var arrays: Array = mesh.get_meta("source_arrays") if mesh.has_meta("source_arrays") else mesh.surface_get_arrays(0)
 		var vertex: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
 		var index: PackedInt32Array = arrays[Mesh.ARRAY_INDEX] if arrays[Mesh.ARRAY_INDEX] != null else PackedInt32Array()
 		if index.is_empty():

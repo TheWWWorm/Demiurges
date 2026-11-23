@@ -14,7 +14,7 @@ extends RefCounted
 signal finished(key: String)
 
 ## Bump when the classifier changes: masks kept on disk are then rebuilt.
-const VERSION := 4
+const VERSION := 8
 const SIDE := 128
 const FOLDER := "user://metal_masks"
 const MAGIC := 0x4d4d4c45
@@ -285,7 +285,7 @@ static func _work(job: Dictionary) -> void:
 	if mod.is_empty() or main.is_empty(): return
 	var hashing := HashingContext.new()
 	hashing.start(HashingContext.HASH_MD5)
-	hashing.update(var_to_bytes([VERSION, SIDE, ELFigure.METAL_PARTS, ELFigure.METAL_NAMES, ELFigure.SOFT_PARTS, ELFigure.MACHINE_WINGS, ELFigure.CLOTH_PARTS, job.has_second, job.second.is_empty()]))
+	hashing.update(var_to_bytes([VERSION, SIDE, ELFigure.METAL_PARTS, ELFigure.METAL_NAMES, ELFigure.METAL_WEAPONS, ELFigure.METAL_FIGURE_PARTS, ELFigure.SHADED_MAGIC_HEROES, ELFigure.SOFT_PARTS, ELFigure.MACHINE_WINGS, ELFigure.SOLID_METAL_PARTS, ELFigure.MATTE_UV_RECTS, ELFigure.METAL_HUE_BANDS, ELFigure.METAL_UV_RECTS, ELFigure.CLOTH_PARTS, job.has_second, job.second.is_empty()]))
 	for bytes: PackedByteArray in [mod, main, second]:
 		hashing.update(var_to_bytes(bytes.size()))
 		if not bytes.is_empty(): hashing.update(bytes)
@@ -299,6 +299,20 @@ static func _work(job: Dictionary) -> void:
 		levels = {}
 		for role: String in figure_inputs:
 			levels[role] = classify(figure_inputs[role].pixels, figure_inputs[role].parts, SIDE)
+			var band: Array = ELFigure.METAL_HUE_BANDS.get(job.template, [])
+			if not band.is_empty(): levels[role] = hue_band(levels[role], figure_inputs[role].pixels, band)
+			var areas: Array = ELFigure.METAL_UV_RECTS.get(job.template, []) if role == "main" else []
+			if not areas.is_empty():
+				var solid: PackedByteArray = levels[role]
+				var pixels: PackedByteArray = figure_inputs[role].pixels
+				for entry: Array in areas:
+					var area: Rect2 = entry[0]
+					for y in range(int(area.position.y * SIDE), mini(SIDE, ceili(area.end.y * SIDE))):
+						for x in range(int(area.position.x * SIDE), mini(SIDE, ceili(area.end.x * SIDE))):
+							var i := y * SIDE + x
+							var c := Color(pixels[i * 4] / 255.0, pixels[i * 4 + 1] / 255.0, pixels[i * 4 + 2] / 255.0)
+							if pixels[i * 4 + 3] >= 128 and c.s >= float(entry[1]): solid[i] = 255
+				levels[role] = solid
 		stats.compute_usec = Time.get_ticks_usec() - classified
 		_store(job.path, digest, levels)
 	else:
@@ -311,6 +325,27 @@ static func _work(job: Dictionary) -> void:
 		image.generate_mipmaps()
 		textures[role] = ImageTexture.create_from_image(image)
 	job.result = textures
+
+## `levels` with every texel painted in `band` (a hue range, ELFigure.
+## METAL_HUE_BANDS) at a metal's saturation and value made metal too.
+## Only broad runs of it count: skin shaded toward that hue (round the eyes)
+## matches in scattered texels.
+static func hue_band(levels: PackedByteArray, pixels: PackedByteArray, band: Array) -> PackedByteArray:
+	var out := levels.duplicate()
+	var count := mini(out.size(), pixels.size() / 4)
+	var matched := PackedFloat32Array()
+	matched.resize(count)
+	for i in count:
+		if pixels[i * 4 + 3] < 128: continue
+		var c := Color(pixels[i * 4] / 255.0, pixels[i * 4 + 1] / 255.0, pixels[i * 4 + 2] / 255.0)
+		var inside := smoothstep(band[0] - 0.01, band[0], c.h) * (1.0 - smoothstep(band[1], band[1] + 0.015, c.h))
+		matched[i] = inside * smoothstep(band[2], band[2] + 0.1, c.s) * smoothstep(0.18, 0.28, c.v) * (1.0 - smoothstep(band[3], band[3] + 0.06, c.v))
+	if count != SIDE * SIDE: return out
+	var around := _box(matched, SIDE, 2)
+	for i in count:
+		var value := maxf(matched[i], around[i]) * smoothstep(0.45, 0.7, around[i])
+		out[i] = maxi(out[i], int(value * 255.0 + 0.5))
+	return out
 
 ## Where `location` ([path, offset, size]) points, read with its own file.
 static func read_location(location: Array) -> PackedByteArray:
@@ -351,13 +386,24 @@ static func inputs(job: Dictionary, mod: PackedByteArray, main: PackedByteArray,
 	if not package.error.is_empty(): return {}
 	var parts := {"main": [], "second": []}
 	var metal := {"main": [], "second": []}
+	# The figure's parts, and whether it is a colourless creature made wholly
+	# of Magic (ELModel.build dresses its Magic parts in metal too).
+	var figures: Array = []
+	var colourless := ELModel.is_creature_template(job.template)
 	for link: Array in ELFigure.hierarchy(package.read(job.template)):
 		var name: String = link[0]
 		if name in ELModel.EFFECT_ANCHORS: continue
 		var figure := ELFigure.parse(package.read(name))
 		if figure.is_empty(): continue
+		figures.append([name, figure])
+		if int(figure.material_id) != ELFigure.MATERIAL_MAGIC: colourless = false
+	if figures.is_empty(): colourless = false
+	var shade_magic: bool = colourless or job.template in ELFigure.SHADED_MAGIC_HEROES
+	for entry: Array in figures:
+		var name: String = entry[0]
+		var figure: Dictionary = entry[1]
 		var slot := int(figure.texture_slot)
-		if slot == 14 or int(figure.material_id) == ELFigure.MATERIAL_MAGIC or ELFigure.is_cloth(job.template, name): continue
+		if slot == 14 or (int(figure.material_id) == ELFigure.MATERIAL_MAGIC and not shade_magic) or ELFigure.is_cloth(job.template, name): continue
 		var role := "main"
 		if slot == 2 and job.has_second and not job.second.is_empty(): role = "second"
 		elif slot == 2 and job.has_second: continue
@@ -365,8 +411,8 @@ static func inputs(job: Dictionary, mod: PackedByteArray, main: PackedByteArray,
 		var uvs: PackedVector2Array = arrays[Mesh.ARRAY_TEX_UV]
 		var indices: PackedInt32Array = arrays[Mesh.ARRAY_INDEX]
 		parts[role].append(part_bytes(MARK_PART, uvs, indices))
-		if ELFigure.is_machine_wing(job.template, name): metal[role].append(part_bytes(MARK_SOLID, uvs, indices))
-		elif ELFigure.is_metal_part(name): metal[role].append(part_bytes(MARK_METAL, uvs, indices))
+		if ELFigure.is_solid_metal(job.template, name): metal[role].append(part_bytes(MARK_SOLID, uvs, indices))
+		elif ELFigure.is_metal_part(name, job.template): metal[role].append(part_bytes(MARK_METAL, uvs, indices))
 	var inputs := {}
 	for role: String in metal:
 		if metal[role].is_empty(): continue
@@ -374,7 +420,13 @@ static func inputs(job: Dictionary, mod: PackedByteArray, main: PackedByteArray,
 		if image == null: continue
 		var blob := PackedByteArray()
 		for bytes: PackedByteArray in parts[role] + metal[role]: blob.append_array(bytes)
-		inputs[role] = {"pixels": skin_pixels(image), "parts": blob}
+		var pixels := skin_pixels(image)
+		# Texels the classifier skips (clear) are never metal.
+		for area: Rect2 in ELFigure.MATTE_UV_RECTS.get(job.template, []) if role == "main" else []:
+			for y in range(int(area.position.y * SIDE), mini(SIDE, ceili(area.end.y * SIDE))):
+				for x in range(int(area.position.x * SIDE), mini(SIDE, ceili(area.end.x * SIDE))):
+					pixels[(y * SIDE + x) * 4 + 3] = 0
+		inputs[role] = {"pixels": pixels, "parts": blob}
 	return inputs
 
 ## A skin as the classifier reads it: SIDE x SIDE RGBA8.

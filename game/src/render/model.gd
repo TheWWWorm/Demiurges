@@ -173,6 +173,9 @@ func build(data: ELProfile, model: String, texture_name: String, secondary_textu
 				break
 			colourless = true
 	var figure_metal := has_metal(template)
+	# Magic parts shaded (and so able to shine): the colourless creatures'
+	# and the main heroes' in ELFigure.SHADED_MAGIC_HEROES.
+	var shade_magic := colourless or ELArchive.key(template) in ELFigure.SHADED_MAGIC_HEROES
 	for link: Array in links:
 		var name: String = link[0]
 		var node := MeshInstance3D.new()
@@ -190,7 +193,7 @@ func build(data: ELProfile, model: String, texture_name: String, secondary_textu
 				continue
 			if slot != 2 and animated != null: part_material = animated
 			var material_id := int(figures[name].material_id)
-			var fullbright := material_id == ELFigure.MATERIAL_MAGIC and not colourless
+			var fullbright := material_id == ELFigure.MATERIAL_MAGIC and not shade_magic
 			var diffuse := profile.figure_diffuse(material_id)
 			if fullbright or diffuse != Color.WHITE:
 				var key := [part_material, material_id]
@@ -204,8 +207,12 @@ func build(data: ELProfile, model: String, texture_name: String, secondary_textu
 				part_material = authored_materials[key]
 			# Armour and weapons, which the originals light as matte as cloth.
 			# Figures only: map objects' "plate" and "chain" parts are rock slabs
-			# and shop signs, which turned to shiny metal.
-			if figure_metal and material_id != ELFigure.MATERIAL_MAGIC and part_material.albedo_texture != null and not ELFigure.is_cloth(template, name):
+			# and shop signs, which turned to shiny metal. Magic parts glow and
+			# stay as they are, except on the colourless creatures, made wholly
+			# of Magic and shaded once materialised, and the main heroes whose
+			# Magic parts are shaded: their armour, swords and shields are metal
+			# too.
+			if figure_metal and (material_id != ELFigure.MATERIAL_MAGIC or shade_magic) and part_material.albedo_texture != null and not ELFigure.is_cloth(template, name):
 				_metal_parts[name] = [part_material, "second" if slot == 2 and separate_second else "main"]
 			node.material_override = part_material
 		# Anchors may parent real geometry (the illusion wall uses "dust" as its

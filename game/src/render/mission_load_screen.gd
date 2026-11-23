@@ -140,7 +140,7 @@ func build_screen() -> void:
 	var up := _button("SMScrollU", func(): list.scroll(-3))
 	var down := _button("SMScrollD", func(): list.scroll(3))
 	# Remake: a thumb in the arrows' empty track shows how long the list is.
-	ELListThumb.attach(menu.canvas, list, func() -> int: return entries.size(), up, down)
+	ELListThumb.attach(menu.canvas, list, func() -> int: return entries.size(), up, down, ELArtDropList.thumb_art(menu.profile))
 	_button("SMInfoU", func(): menu.scroll_text(-3))
 	_button("SMInfoD", func(): menu.scroll_text(3))
 	if mode == "save":

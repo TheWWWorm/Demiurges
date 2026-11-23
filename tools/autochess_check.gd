@@ -40,6 +40,7 @@ func _run() -> void:
 	check(ELAutochessRules.available(profile), "every recruit form exists in this installation")
 	_check_forms(profile)
 	_check_shop_tooltip(profile)
+	_check_controls(profile)
 	_check_ability_protection(profile)
 	_check_ally_support(profile)
 	_check_mantis_fright(profile)
@@ -90,6 +91,25 @@ func _place(index: int, rank: int, count: int, team: int, item := "") -> Array:
 		rows.append({"code": ELAutochessRules.form(index, rank), "family": index, "rank": rank, "tier": ELAutochessRules.tier(index),
 			"point": [point.x, point.y], "uid": 100 * team + i + 1, "item": item})
 	return rows
+
+## Player reports: the level button was 8 pixels tall (a dark bar, hard to
+## press); S sold the selected creature while it also pans the camera; the
+## deployment fire stood mirrored after a battle watched from the far side.
+func _check_controls(profile: ELProfile) -> void:
+	var level := ELAutochessHud.LevelButton.new()
+	check(level.custom_minimum_size == Vector2(80, 78), "the level button is as large as the refresh button")
+	level.free()
+	var source := FileAccess.get_file_as_string("res://src/autochess/screen.gd")
+	check(not source.contains("KEY_S:") and source.contains("KEY_DELETE:"), "selling is on Delete, not on the camera's S")
+	check(source.contains("_t(\"Undo the last action\")"), "the Esc menu offers Undo")
+	var board := ELAutochessBoardView.new()
+	board.profile = profile
+	board._build_fire()
+	board.flip = true
+	board.flip = false
+	var flames: Node3D = board.fire.get_child(0)
+	check(is_equal_approx(flames.position.x, ELAutochessRules.DEPLOY.end.x), "the deployment fire returns to the near edge when the view stops being flipped")
+	board.free()
 
 func _check_shop_tooltip(profile: ELProfile) -> void:
 	var button := ELAutochessHud.LevelButton.new()

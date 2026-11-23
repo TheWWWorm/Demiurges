@@ -2,6 +2,34 @@
 
 Versions follow [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html) from 0.3.0 on.
 
+## 0.27.0
+
+### New
+
+- **First-person view.** A new battle action walks the field at eye level. It has no key until you assign one in the controls.
+- **Closer zoom.** The mouse wheel zooms in much further in battles, towards the figure under the pointer; numbers over figures stop growing past a readable size.
+- **Metal shines on many more figures.** The Synthet machines, the Chaot ogre and warrior heroes, the Etherlords II Red and Green main heroes, the Synthet lord's arm and staff, the Ogre King's chainmail, the grey ogre's mace, the Huntress's knives, the kobolds, the Aviak Warlock and others now have metal highlights, while flesh, grey skin, coats and robes stay matte.
+- **Autochess: undo in the Esc menu.** "Undo the last action (Ctrl+Z)" is in the Esc menu, as in the original.
+- **Crash reports carry the battle in progress**, so an odd computer move can be replayed.
+
+### Fixed
+
+- **Autochess: selling moved to Delete.** S no longer sells the selected unit (it only pans), so units are not sold by accident.
+- **Autochess:** the level-up button is full size and easy to press again, without the extra line above it, and the deploy line no longer jumps forward after a battle on the far side.
+- **Battle stutters** when blockers step out and when the camera closes in after an attack.
+- **The target popup** shows five targets per row and every target.
+- **Specialisation** shows in the hero tooltip and side column.
+- **Wing Flap** kills land when the blow lands.
+- **Battle panel (Etherlords II):** scroll arrows that cannot scroll look inactive, the knot joining the ability strip to the caption is back in the wide layout, and the strip's top edge is solid ([#303](https://github.com/TheWWWorm/Demiurges/issues/303)).
+- **Deck editor (Etherlords II):** the list arrows light only when their list can scroll that way ([#304](https://github.com/TheWWWorm/Demiurges/issues/304)).
+- **Scroll sliders:** the journal now has its sliders, and the save and mission lists use the original slider, as the encyclopedia does ([#302](https://github.com/TheWWWorm/Demiurges/issues/302)).
+- **Final island (Etherlords II)** ([#305](https://github.com/TheWWWorm/Demiurges/issues/305)):
+  - The fight against the White Lord is offered before it starts.
+  - The island stays in view after entering the portal.
+  - The teleport effect is centred on the portal.
+  - The portal's closing effect plays once instead of after every move.
+  - The cursor no longer offers to use the portals.
+
 ## 0.26.0
 
 ### New

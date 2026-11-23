@@ -88,7 +88,9 @@ const TEXT_WIDTH := 160.0
 ## Extra room inside the open card's right edge (design pixels).
 const RIGHT_PAD := 8.0
 const TARGET := 40.0
-const MAX_TARGETS := 6
+## Touched characters per row: the grid grows across to this many, then
+## adds rows; every touched character is shown.
+const TARGET_COLUMNS := 5
 ## Space between touched characters across and down, and between each
 ## picture and the arrow between them, and the arrow's width (design
 ## pixels).
@@ -301,6 +303,18 @@ func begin(side: int, kind: String, source: int, icon: Texture2D, title: String,
 	if _scroll > 0: _scroll += 1
 	queue_redraw()
 
+## A play that happens inside another (a specialisation working during a
+## cast or a blow): listed as its own play, while what follows still goes on
+## the play under way. With none under way it opens like any play.
+func insert(side: int, kind: String, source: int, icon: Texture2D, title: String, text: String) -> void:
+	var keep := _current
+	var before := entries.size()
+	begin(side, kind, source, icon, title, text)
+	if keep < 0: return
+	# Plays dropped from the front move the one under way up.
+	keep -= before + 1 - entries.size()
+	_current = keep if keep >= 0 else -1
+
 ## The open play, for an attack's return blow: the index of the attack
 ## between `a` and `b` in either direction, or -1.
 func current_attack(a: int, b: int) -> int:
@@ -340,7 +354,6 @@ func touch(id: int, icon: Texture2D, title: String, change: Dictionary, side := 
 	for target: Dictionary in entry.targets:
 		if int(target.id) == id: found = target
 	if found.is_empty():
-		if entry.targets.size() >= MAX_TARGETS * 4: return
 		found = {"id": id, "side": side, "icon": icon, "name": title, "delta": 0, "died": false, "summoned": false, "enchanted": false}
 		entry.targets.append(found)
 	found.delta += int(change.get("delta", 0))
@@ -544,7 +557,7 @@ func _draw() -> void:
 		if index == _open: _outline_round(rect.grow(1.5 * k), radius + 1.5 * k, Color(ACCENT, alpha), 1.5 * k)
 		if part < 1.0: continue
 		if attack: _draw_sword(Vector2(rect.end.x - 1.0 * k, rect.end.y + 1.0 * k), 11.0 * k, alpha)
-		elif entry.kind in ["ability", "artifact"]: _draw_star(rect.end - Vector2(4.0, 4.0) * k, 3.5 * k, alpha)
+		elif entry.kind in ["ability", "artifact", "spec"]: _draw_star(rect.end - Vector2(4.0, 4.0) * k, 3.5 * k, alpha)
 	for slot: Array in slots:
 		if int(slot[0]) == _open: _draw_card(entries[_open], slot[1])
 	_shift = Vector2.ZERO
@@ -815,9 +828,9 @@ func _draw_card(entry: Dictionary, tile: Rect2) -> void:
 	var card_width := maxf(maxf(picture_size.x, title_width), minf(TEXT_WIDTH * k, widest + 2.0 * k))
 	var text_height := 0.0
 	if not text.is_empty(): text_height = _font.get_multiline_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, card_width, text_size, 9).y
-	var targets: Array = entry.targets.slice(0, MAX_TARGETS)
-	var columns := mini(targets.size(), 3)
-	var rows := ceili(targets.size() / 3.0)
+	var targets: Array = entry.targets
+	var columns := mini(targets.size(), TARGET_COLUMNS)
+	var rows := ceili(targets.size() / float(TARGET_COLUMNS))
 	# Every touched character's cell is as wide as the widest picture.
 	# A play that touched one character shows it as large as the played
 	# card, and its name in the text's size; several are drawn smaller.
@@ -865,7 +878,7 @@ func _draw_card(entry: Dictionary, tile: Rect2) -> void:
 	_draw_arrow(Vector2((picture.end.x + block_at.x) * 0.5, arrow_y))
 	for i in targets.size():
 		var target: Dictionary = targets[i]
-		var cell := block_at + Vector2((i % 3) * (cell_width + TARGET_GAP * k), (i / 3) * (face_height + TARGET_ROW_GAP) * k)
+		var cell := block_at + Vector2((i % TARGET_COLUMNS) * (cell_width + TARGET_GAP * k), (i / TARGET_COLUMNS) * (face_height + TARGET_ROW_GAP) * k)
 		var face_size := _shaped(target.icon, face_height) * k
 		var face := Rect2(cell + Vector2((cell_width - face_size.x) * 0.5, 0), face_size)
 		_framed_picture(face, target.icon, _side_frame(int(target.get("side", -1))))
@@ -875,6 +888,3 @@ func _draw_card(entry: Dictionary, tile: Rect2) -> void:
 		# A name keeps to its cell, which is sized to hold it.
 		var name := _fitted(_font, String(target.name), cell_width, name_size)
 		draw_string(_font, Vector2(cell.x, face.end.y + name_size * 1.8), name, HORIZONTAL_ALIGNMENT_CENTER, cell_width, name_size, TIP_INK)
-	if entry.targets.size() > MAX_TARGETS:
-		var more := "+%d" % (entry.targets.size() - MAX_TARGETS)
-		draw_string(_bold, panel.end - Vector2(pad + 30.0 * k, pad * 0.5), more, HORIZONTAL_ALIGNMENT_RIGHT, 30.0 * k, title_size, TIP_INK)

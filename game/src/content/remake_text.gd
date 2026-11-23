@@ -273,6 +273,8 @@ const RU := {
 	"Quick save": "Быстрое сохранение",
 	"Quick load": "Быстрая загрузка",
 	"Reset camera": "Сбросить камеру",
+	"First-person view (walk the field)": "Вид от первого лица (прогулка по полю)",
+	"Unassigned": "Не назначена",
 	"Combat log": "Журнал боя",
 	"Show artifacts": "Показать артефакты",
 	"Show spells in hand": "Показать заклинания в руке",

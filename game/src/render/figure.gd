@@ -4,6 +4,12 @@ extends RefCounted
 ## Both original material loaders give Magic full emission (RGB 1).
 const MATERIAL_MAGIC := 23
 const AUTHORED_FULLBRIGHT := &"authored_fullbright"
+## The second game's Red and Green main heroes are made mostly (the Green
+## ones wholly) of Magic: their armour, helmets, chains, crowns and staffs.
+## Drawn at full brightness they stood flat and could not shine; the remake
+## shades their Magic parts like the colourless creatures' and dresses them
+## in metal (shaded, their shapes stay smooth).
+const SHADED_MAGIC_HEROES := ["he701", "he702", "he703", "he704", "he705", "he706"]
 const MorphNormals := preload("res://src/render/morph_normals.gd")
 ## The compiled readers (native/el_assets.c), where the platform has them.
 static var native := ClassDB.class_exists(&"ELNativeAssets")
@@ -227,6 +233,10 @@ static func mesh(figure: Dictionary, track: Dictionary = {}) -> ArrayMesh:
 			for index in shapes.size():
 				shapes[index][Mesh.ARRAY_NORMAL] = MorphNormals.for_pose(normal_rest, positions[index])
 	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays, shapes)
+	# The surface as built (shared by every clip's mesh of the part), so the
+	# path tracer never reads it back from the GPU (a stall in the frame a
+	# figure first shows a clip: stepping out to block, an attack).
+	mesh.set_meta("source_arrays", arrays)
 	# Each frame's whole vertex positions, for traced lighting.
 	if not positions.is_empty():
 		mesh.set_meta("morph_positions", positions)
@@ -422,6 +432,61 @@ const METAL_PARTS := ["sword", "blade", "axe", "knife", "pike", "shield", "helm"
 	"shouldershell", "legshell", "footshell", "kolenka", "l_shell", "r_shell", "armplane",
 	"kabluk", "spinepart", "igles", "box25", "jetpak"]
 const METAL_NAMES := ["kogot1", "kogot2", "kogot3", "r_kogot"]
+## Weapons named in neither game's armour words: the grey ogre's mace, the
+## kobold warrior's katana and the kobold shaman's spear (only the painted
+## steel of a spear shines, never its wooden shaft).
+const METAL_WEAPONS := ["mace", "katana", "spear"]
+## Figures whose parts carry plain names (body, legs, hands, polySurface...)
+## though they are plated: the parts named here show the classifier what
+## their metal looks like, and it finds the matching paint elsewhere on the
+## figure (flesh, bone and fur stay matte). A trailing "*" names every part
+## that begins so. The map figure of the same number (adNNN for crNNN) wears
+## the same list.
+## - The Synthets' machines: the Mechanical Worms, Mechoses, Rippers, Sawers
+##   and Cutters, Mechozauri, Abominations and Velos (their claws, saws,
+##   wheels, legs and arm plates; the worm's segmented body).
+## - The Huntress: the knives on her bandolier, her spiked glove, her crossbow.
+## - The Spirit Priest: the spiked head of his flail.
+## - Second-game heroes: the Chaots' ogre heroes (pauldrons, helmet and
+##   spiked staff, the ogress's steel breastplate on her body) and the
+##   Synthet lord's machine arm and gun-staff; the Chaot warriors' spear and
+##   mace heads.
+## - The Aviak Warlock's hammer and gun.
+## - The second game's colourless creatures, whose parts kept Maya's names:
+##   the Samurai's gold helmets and pauldrons and their swords, the Hindu
+##   warriors' blades and the gold of one's greaves, the Egyptians' blades,
+##   shields and gold caps, and the Tribesmen's spear points.
+##   Their pale skin is painted in steel's grey, so their heads and bodies,
+##   crowns and all, are left to the classifier, which keeps skin matte.
+## - The Green main heroes' gold belts, jewellery and staffs, and the Red
+##   ones' helmets, pauldrons, rings and chains (SHADED_MAGIC_HEROES).
+const METAL_FIGURE_PARTS := {
+	"cr101": ["body", "l_back_claw", "r_back_claw"],
+	"cr102": ["head", "l_leg*", "r_leg*", "polysurface*", "l_finger*", "r_finger*"],
+	"cr103": ["l_circular", "r_circular", "l_leg*", "r_leg*", "l_hand*", "r_hand*", "l_fingers", "r_fingers"],
+	"cr104": ["l_arm*", "r_arm*", "l_leg*", "r_leg*"],
+	"cr105": ["l_claw", "r_claw", "l_finger*", "r_finger*", "l_leg2", "r_leg2"],
+	"cr109": ["wheel", "l_claws", "r_claws", "l_leg*", "r_leg*", "l_hand*", "r_hand*"],
+	"cr502": ["poas", "glove", "arbalet*"],
+	"cr422": ["star"],
+	"he201": ["l_hand1", "r_hand1", "head", "stick", "body"],
+	"he203": ["staff"], "he207": ["staff"],
+	"cr404": ["gun", "hammer"],
+	"he205": ["l_hand1", "r_hand1", "head", "stick"],
+	"he722": ["*hand*", "*arm*", "stuff*", "staff*"], "he723": ["*hand*", "*arm*", "stuff*", "staff*"], "he724": ["*hand*", "*arm*", "stuff*", "staff*"],
+	"cr701": ["muzzle", "polysurface1"],
+	"cr702": ["polysurface20", "polysurface21", "polysurface29251", "polysurface29252", "polysurface29253"],
+	"cr703": ["muzzle", "staff", "shoulder_strap*"],
+	"cr707": ["polysurface1", "qw_polysurface29251"],
+	"cr708": ["polysurface21", "qw1_polysurface3"],
+	"cr709": ["polysurface1", "polysurface21", "qw_polysurface29251", "qw1_polysurface3", "polysurface29318"],
+	"cr710": ["polysurface21", "polysurface29360"],
+	"cr712": ["cap", "baton"],
+	"cr705": ["polysurface1"],
+	"cr704": ["polysurface29292"],
+	"he701": ["belt", "acsessories", "stuff1"], "he702": ["belt", "acsessories", "stuff1"], "he703": ["belt", "acsessories", "stuff1"],
+	"he704": ["head", "sh_r*", "ring", "chain*"], "he705": ["head", "sh_r*", "ring", "chain*"], "he706": ["head", "sh_r*", "ring", "chain*"],
+}
 ## Parts that are feathers, hair, fur, tails or cloth: never metal, whatever
 ## colour they are painted.
 const SOFT_PARTS := ["wing", "l_w_", "r_w_", "feather", "pero", "hair", "fur", "xvost", "tail",
@@ -431,8 +496,28 @@ const SOFT_PARTS := ["wing", "l_w_", "r_w_", "feather", "pero", "hair", "fur", "
 ## robe and hat are painted in the very steel of his sword and shield. The
 ## orc shaman's hood is named "helm" and his wraps are the slate blue of
 ## steel, but both are cloth (issue #223: the hood turned black).
+## The grey ogre's skin is the grey of his mace, and the Huntress's coat
+## the pale steel of her knives: only their weapons shine.
+## The Abominations' upper arms and thighs are flesh, which the Bronze and
+## Iron ones paint in their metal's own brown.
+## The kobold shaman is old and grey, the grey of his knife and spear.
+## The first Tribesman's feather headdress is named "head" and painted in
+## his spear's grey, and the second one's hide shield in its pale steel.
+## The Hindu warriors' pale bodies and arms and the first Egyptian's
+## grey-violet hide are painted in their blades' steel.
+## The elementals are fire, air, earth and water painted in steel's grey and
+## gold's orange: only their swords are metal.
 const CLOTH_PARTS := {"he401": ["body"], "he500": ["body", "hat"], "he501": ["body", "hat"],
-	"cr214": ["body", "helm"], "ad214": ["body", "helm"]}
+	"cr214": ["body", "helm"], "ad214": ["body", "helm"], "cr205": ["body", "legs", "l_hand", "r_hand", "bag"], "ad205": ["body", "legs", "l_hand", "r_hand", "bag"],
+	"cr502": ["body"], "ad502": ["body"],
+	"cr105": ["l_hand1", "r_hand1", "l_leg1", "r_leg1"], "ad105": ["l_hand1", "r_hand1", "l_leg1", "r_leg1"],
+	"cr206": ["hip", "body", "head", "l_hand1", "r_hand1", "l_hand3", "r_hand3", "l_leg1", "r_leg1", "l_leg2", "r_leg2"], "ad206": ["hip", "body", "head", "l_hand1", "r_hand1", "l_hand3", "r_hand3", "l_leg1", "r_leg1", "l_leg2", "r_leg2"],
+	"cr705": ["head"], "ad705": ["head"], "cr704": ["pcylinder7"], "ad704": ["pcylinder7"],
+	"cr707": ["polysurface29344"], "ad707": ["polysurface29344"],
+	"cr708": ["polysurface29344", "polysurface29333", "polysurface29341"], "ad708": ["polysurface29344", "polysurface29333", "polysurface29341"],
+	"cr709": ["polysurface29261", "polysurface29319", "polysurface29333"], "ad709": ["polysurface29261", "polysurface29319", "polysurface29333"],
+	"cr710": ["polysurface29367"], "ad710": ["polysurface29367"], 
+	"cr417": ["body", "horns", "head"], "ad417": ["body", "horns", "head"], "cr418": ["body", "horns", "head"], "ad418": ["body", "horns", "head"], "cr419": ["body", "horns", "head"], "ad419": ["body", "horns", "head"], "cr420": ["body", "horns", "head"], "ad420": ["body", "horns", "head"]}
 ## Parts built as closed shells or back-to-back layers, which the originals
 ## draw one-sided. Drawn two-sided here, the inside of the shell showed through
 ## lit from the wrong side or painted black: the orc shaman's hood lining
@@ -835,14 +920,60 @@ const METAL_METALLIC := 0.6
 const METAL_SPECULAR := 0.0
 const METAL_ROUGHNESS := 0.28
 
-static func is_metal_part(part: String) -> bool:
-	return _named(part, METAL_PARTS) or part.to_lower() in METAL_NAMES
+static func is_metal_part(part: String, template := "") -> bool:
+	var name := part.to_lower()
+	if _named(name, METAL_PARTS) or name in METAL_NAMES or _named(name, METAL_WEAPONS): return true
+	var key := template.to_lower()
+	if key.begins_with("ad"): key = "cr" + key.substr(2)
+	for pattern: String in METAL_FIGURE_PARTS.get(key, []):
+		if name.match(pattern): return true
+	return false
 
 ## Parts never metal: soft ones and the figure's named cloth.
 ## Figures whose wings are machines, not feathers or skin: blade wings of
 ## riveted plate (the Synthets' warriors and their winged machine, and the
 ## plated hero he512). Their wings are metal all over, whatever the paint.
 const MACHINE_WINGS := ["he103", "he104", "he105", "he106", "he913", "he915", "he512", "cr111", "ad111"]
+## Hues (from, to, the least saturation, the most value) a figure's metal is
+## painted in where its paint is too dark
+## a bronze for the classifier's gold: Diamanda's bronze armour (the second
+## game's main heroine in her third and fourth skins) is metal wherever it is
+## painted so, rather than in scattered patches that showed as dark spots.
+## Her skin is a redder hue. The third Egyptian's gold collar and anklets,
+## beside a hide painted in his blades' steel grey (his loincloth is a paler,
+## less saturated gold).
+const METAL_HUE_BANDS := {"he716": [0.078, 0.105, 0.32, 1.0], "he717": [0.078, 0.105, 0.32, 1.0],
+	"cr711": [0.075, 0.13, 0.62, 1.0], "ad711": [0.075, 0.13, 0.62, 1.0]}
+## Areas of a figure's skin (UV rectangles, each with the least saturation
+## that counts there) that are metal all over: the Ogre
+## King's bronze scale mail above and below his belt, painted in the brown of
+## the belt and his skin; the third Egyptian's studded gold collar, shaded
+## down to near black (not the grey hide beside it).
+const METAL_UV_RECTS := {"cr204": [[Rect2(0.01, 0.01, 0.68, 0.08), 0.0], [Rect2(0.01, 0.19, 0.68, 0.1), 0.0]],
+	"ad204": [[Rect2(0.01, 0.01, 0.68, 0.08), 0.0], [Rect2(0.01, 0.19, 0.68, 0.1), 0.0]],
+	"cr711": [[Rect2(0.0, 0.79, 0.115, 0.19), 0.45], [Rect2(0.215, 0.84, 0.098, 0.14), 0.45]],
+	"ad711": [[Rect2(0.0, 0.79, 0.115, 0.19), 0.45], [Rect2(0.215, 0.84, 0.098, 0.14), 0.45]]}
+## Areas of a figure's skin (UV rectangles) that are never metal, where one
+## part is both armour and cloth: the first Red main hero's body is his
+## gauntlets and his sackcloth robe, which is woven in his helmet's grey.
+const MATTE_UV_RECTS := {"he704": [Rect2(0.0, 0.0, 0.74, 0.345)]}
+## Parts that are plate all over, painted in the very brown of their wearer's
+## skin or dulled to olive, so no colour tells their metal apart: the Chaots'
+## ogre hero's helmet, pauldrons, brass greaves and knee plates, and the
+## Chaot warriors' breastplates, pauldrons, vambraces and greaves, and the
+## kobold guard's and warrior's bronze shields. The third Egyptian's blades
+## are whole steel parts too, so his grey-violet hide learns nothing from
+## them, and his gold collar and anklets are found by their hue
+## (METAL_HUE_BANDS).
+const SOLID_METAL_PARTS := {"he205": ["head", "l_hand1", "r_hand1", "l_leg1", "r_leg1", "l_leg2", "r_leg2"],
+	"he203": ["breast", "l_koleno", "r_koleno", "l_naplechnik1", "r_naplechnik1", "l_noplechnik2", "r_naplechnik2"],
+	"he207": ["breast", "l_koleno", "r_koleno", "l_naplechnik1", "r_naplechnik1", "l_noplechnik2", "r_naplechnik2"],
+	"cr207": ["shield"], "ad207": ["shield"], "cr208": ["shield"], "ad208": ["shield"],
+	"cr711": ["baton", "polysurface29386"], "ad711": ["baton", "polysurface29386"]}
+
+## A part metal all over: a machine wing, or one in SOLID_METAL_PARTS.
+static func is_solid_metal(template: String, part: String) -> bool:
+	return is_machine_wing(template, part) or part.to_lower() in SOLID_METAL_PARTS.get(template.to_lower(), [])
 
 static func is_cloth(template: String, part: String) -> bool:
 	if is_machine_wing(template, part): return false
@@ -854,8 +985,11 @@ static func is_machine_wing(template: String, part: String) -> bool:
 	var name := part.to_lower()
 	return "wing" in name or name.begins_with("l_w_") or name.begins_with("r_w_")
 
+## Maya's unnamed "polySurface" parts are not faces: matched as one, the
+## armour, shields and jewellery of the figures whose parts kept Maya's names
+## (the colourless creatures, many heroes) never turned to metal.
 static func is_soft_part(part: String) -> bool:
-	return _named(part, SOFT_PARTS)
+	return _named(part.to_lower().replace("surface", "surf"), SOFT_PARTS)
 
 static func _named(part: String, words: Array) -> bool:
 	var name := part.to_lower()

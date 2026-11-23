@@ -132,6 +132,13 @@ var panel_texture: Texture2D
 var has_wide := false
 ## Set by the view: the caption is in the gap (see `caption_in_gap`).
 var caption_moved := false
+## Set by the view while the Abilities strip shows icons: the original then
+## draws its "Type2" pieces in place of the "Type1" ones at the same spot.
+var strip_shown := false:
+	set(value):
+		if strip_shown == value: return
+		strip_shown = value
+		queue_redraw()
 var _profile: ELProfile
 
 func build(profile: ELProfile) -> void:
@@ -145,14 +152,16 @@ func build(profile: ELProfile) -> void:
 		if definition.get("Ctrl", "") != "CombatScreen":
 			continue
 		var masks: String = str(definition.get("Msk", ""))
-		if "Res3" in masks or "Type2" in masks:
+		if "Res3" in masks:
 			continue
 		var texture := profile.texture(paths.get(definition.Txt, ""))
 		if texture == null:
 			continue
 		var layout := 2 if "Res2" in masks else (1 if "Res1" in masks else 0)
 		has_wide = has_wide or layout == 2
-		pieces.append({"texture": texture, "layout": layout,
+		# "Type2" pieces belong to the panel while the Abilities strip is up:
+		# the knot joining the strip's end to the caption (issue #303).
+		pieces.append({"texture": texture, "layout": layout, "strip": "Type2" in masks,
 			"source": Rect2(definition.TxtL, definition.TxtT, definition.TxtW, definition.TxtH),
 			"destination": Rect2(definition.ScrL, definition.ScrT - 600, definition.get("ScrW", definition.TxtW), definition.get("ScrH", definition.TxtH))})
 	panel_texture = profile.texture("Interface/black/combat_panel_1")
@@ -192,10 +201,21 @@ func _draw() -> void:
 	# bay, and the leftover is ELCombatGapPanel's.
 	var trim := rail_trim(_profile, size.x) if _profile != null else 0.0
 	var stretch := caption_stretch(_profile, size.x) if _profile != null and wide else 0.0
+	var replaced: Array[Rect2] = []
+	if strip_shown:
+		for piece: Dictionary in pieces:
+			if piece.strip and piece.layout != (1 if wide else 2): replaced.append(piece.destination)
 	for piece: Dictionary in pieces:
 		if piece.layout == (1 if wide else 2):
 			continue
+		if piece.strip != strip_shown and (piece.strip or piece.destination in replaced):
+			continue
 		var destination: Rect2 = piece.destination
+		if piece.strip:
+			# The strip's end follows the rail's closed end, as the strip does.
+			destination.position += Vector2(extra - trim, size.y)
+			draw_texture_rect_region(piece.texture, destination, piece.source)
+			continue
 		destination.position.y += size.y
 		var source: Rect2 = piece.source
 		if stretch > 0.0 and is_equal_approx(piece.destination.position.x, CAPTION_LEFT) and is_equal_approx(piece.destination.end.x, CAPTION_RIGHT):

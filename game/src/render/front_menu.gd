@@ -1984,9 +1984,15 @@ class CutButton extends BaseButton:
 			head.extra = extra
 			return head
 		button.parts = {"normal": pick.call(["Free"], ["Light"]), "pressed": pick.call(["Push"], ["Light"]),
-			"hover": pick.call(["Light", "Free"], []), "hover_pressed": pick.call(["Light", "Push"], [])}
+			"hover": pick.call(["Light", "Free"], []), "hover_pressed": pick.call(["Light", "Push"], []),
+			"disabled": pick.call(["Disabled"], [])}
 		if button.parts.hover.is_empty(): button.parts.hover = pick.call(["Light"], [])
 		if button.parts.hover_pressed.is_empty(): button.parts.hover_pressed = button.parts.hover
+		# The second game's long scroll bars (the deck editor's EPScroll*) list
+		# their resting look only as Free+Light, beside Push and Disabled: that
+		# is the resting look. The first row alone was half of one state, so
+		# the bar showed its active and inactive halves side by side (#304).
+		if button.parts.normal.is_empty() and not button.parts.disabled.is_empty(): button.parts.normal = pick.call(["Free"], [])
 		if free.is_empty() and button.parts.normal.is_empty(): button.parts.normal = owner.cut(all[0], offset)
 		var bounds := Rect2()
 		var first := true
@@ -2004,6 +2010,10 @@ class CutButton extends BaseButton:
 		var mode := get_draw_mode()
 		var pushed := mode == DRAW_PRESSED or mode == DRAW_HOVER_PRESSED or active
 		var base: Dictionary = parts.get("pressed", {}) if pushed and not parts.get("pressed", {}).is_empty() else parts.get("normal", {})
+		# The original's own inactive art where the control has one.
+		if disabled and not parts.get("disabled", {}).is_empty():
+			_piece(parts.disabled, Color.WHITE)
+			return
 		var tint := Color(0.5, 0.5, 0.5) if disabled else Color.WHITE
 		_piece(base, tint)
 		if not disabled and (mode == DRAW_HOVER or mode == DRAW_HOVER_PRESSED):

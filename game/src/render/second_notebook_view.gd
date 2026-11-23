@@ -41,6 +41,9 @@ var speech_offset := 0.0
 var buttons: Dictionary = {}
 var labels: Dictionary = {}
 var checkbox: ArtButton
+## The original scroller thumbs in the list's and the phrase's bars (#302).
+var list_thumb: ELListThumb
+var speech_thumb: ELListThumb
 var _pieces: Array[Dictionary] = []
 var _offset := Vector2.ZERO
 
@@ -113,6 +116,19 @@ func build(source_hud: ELSecondAdventureHud) -> bool:
 	buttons.NotebookScrollDown1.pressed.connect(scroll_list.bind(ROWS))
 	buttons.NotebookU1.pressed.connect(scroll_speech.bind(-1))
 	buttons.NotebookD1.pressed.connect(scroll_speech.bind(1))
+	var thumb_art := ELArtDropList.thumb_art(profile)
+	list_thumb = ELListThumb.new()
+	list_thumb.offset = func() -> int: return top
+	list_thumb.last = func() -> int: return maxi(0, entries.size() - ROWS)
+	list_thumb.page = func() -> int: return ROWS
+	list_thumb.scroll_to = func(value: int) -> void: scroll_list(value - top)
+	list_thumb.place(canvas, Rect2(), thumb_art)
+	speech_thumb = ELListThumb.new()
+	speech_thumb.offset = func() -> int: return ceili(speech_offset / SPEECH_STEP - 0.01)
+	speech_thumb.last = func() -> int: return ceili(_speech_limit() / SPEECH_STEP - 0.01)
+	speech_thumb.page = func() -> int: return maxi(1, floori(speech.size.y / SPEECH_STEP))
+	speech_thumb.scroll_to = func(value: int) -> void: scroll_speech(value - ceili(speech_offset / SPEECH_STEP - 0.01))
+	speech_thumb.place(canvas, Rect2(), thumb_art)
 	checkbox = ArtButton.make(hud, "NotebookCurMis", true)
 	checkbox.toggle_mode = true
 	checkbox.button_pressed = current_only
@@ -249,6 +265,12 @@ func _layout() -> void:
 	speech_name.position = Vector2(0, -speech_offset)
 	speech_name.size = Vector2(speech.size.x, 22)
 	for control: String in buttons: buttons[control].place(_offset)
+	# Each thumb travels its bar between the bar's arrows.
+	for pair: Array in [[list_thumb, "NotebookU2", "NotebookD2"], [speech_thumb, "NotebookU1", "NotebookD1"]]:
+		var up := design(pair[1])
+		var down := design(pair[2])
+		pair[0].position = Vector2(up.position.x, up.end.y)
+		pair[0].size = Vector2(up.size.x, maxf(0.0, down.position.y - up.end.y))
 	var popup := design("NotebookFilter") if hud._controls.has("NotebookFilter") else Rect2(Vector2(22, 65) + _offset, Vector2(200, 10))
 	filter_popup.position = popup.position
 	filter_popup.size = Vector2(popup.size.x, 0)
@@ -316,9 +338,13 @@ func scroll_list(delta: int) -> void:
 	_refresh_kind()
 	list.queue_redraw()
 
+const SPEECH_STEP := 20.0
+
+func _speech_limit() -> float:
+	return maxf(0.0, speech_text.get_combined_minimum_size().y + 31 - speech.size.y)
+
 func scroll_speech(delta: int) -> void:
-	var limit := maxf(0.0, speech_text.get_combined_minimum_size().y + 31 - speech.size.y)
-	speech_offset = clampf(speech_offset + delta * 20.0, 0.0, limit)
+	speech_offset = clampf(speech_offset + delta * SPEECH_STEP, 0.0, _speech_limit())
 	speech_text.position.y = 31 - speech_offset
 	speech_name.position.y = -speech_offset
 
@@ -347,6 +373,7 @@ func _refresh_kind() -> void:
 	speech.visible = phrase
 	for control: String in ["NotebookU1", "NotebookD1"]:
 		if buttons.has(control): buttons[control].visible = phrase
+	if speech_thumb != null: speech_thumb.visible = phrase
 	speech_text.text = profile.text(str(entry.get("text", ""))) if phrase else ""
 	# The speaker's name heads the text when the phrase has a face.
 	speech_name.text = str(entry.speaker) + ":" if phrase and int(entry.get("face", -1)) >= 0 and not str(entry.get("speaker", "")).is_empty() else ""

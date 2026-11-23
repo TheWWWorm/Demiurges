@@ -302,9 +302,20 @@ func _sync_garrisons() -> void:
 		if not wanted.has(name): finish(name)
 	_garrisons = wanted
 
+## A building effect that does not loop (the White Lord's portals: the closed
+## one's WhiteLordPortalOff.pfx, the collapsing one's WhiteLordPortalIn.pfx)
+## plays once when the building is set down; it is not started again by later
+## fog refreshes, which come with every step (#305). Taking the building away
+## and placing it again plays it anew. uid -> the cell it played on.
+var _shrine_once: Dictionary = {}
+
 func _sync_shrine(item: Dictionary) -> void:
 	var name := "shrine:%d" % int(item.uid)
-	if (item.get("used", false) and item.get("name") == ELSecondBuildings.SHRINE) or not item.get("alive", true) or not item.get("visible", true) or not item.get("placed", true) or not ELFog.shown(_shrine_session, 1, item):
+	if (item.get("used", false) and item.get("name") == ELSecondBuildings.SHRINE) or not item.get("alive", true) or not item.get("visible", true) or not item.get("placed", true):
+		finish(name)
+		_shrine_once.erase(int(item.uid))
+		return
+	if not ELFog.shown(_shrine_session, 1, item):
 		finish(name)
 		return
 	var row := ELSecondBuildings.definition(profile, item)
@@ -314,7 +325,12 @@ func _sync_shrine(item: Dictionary) -> void:
 	if effects.has(name):
 		effects[name].node.position = Vector3(center.x, 0.0, -center.y)
 	else:
+		var cell := Vector2i(int(item.x), int(item.y))
+		var particles := particle_file(profile, file)
+		var once := particles != null and particles.error.is_empty() and particles.loop_end <= 0
+		if once and _shrine_once.get(int(item.uid)) == cell: return
 		start(name, {"file": file, "x": center.x, "y": center.y, "z": 0.0, "story": true}, 0.0)
+		if once: _shrine_once[int(item.uid)] = cell
 	orient(name, -float((int(item.rotation) >> 2) & 3) * PI / 2.0)
 
 ## Turns a running effect about the vertical axis (the object's facing).

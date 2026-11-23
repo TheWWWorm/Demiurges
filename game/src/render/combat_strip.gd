@@ -17,7 +17,9 @@ const CLIP := Rect2(130, 480, 360, 60)
 const FIRST := Vector2(ELHudFrame.RAIL_LEFT, 489)
 const PITCH := ELListLook.PITCH
 const ICON := ELListLook.ITEM_SIZE
-const RAIL_TILE := Rect2(22, 152, PITCH, 58)
+## A middle bay: the first one (x 22) starts under the left end's corner
+## ornament, whose tail showed as a notch in the top rim at every seam (#303).
+const RAIL_TILE := Rect2(75, 152, PITCH, 58)
 ## 11 px per frame of the original's 60 Hz update.
 const SLIDE := 660.0
 const REPEAT := 0.3
@@ -103,6 +105,7 @@ func _arrow(control: String, direction: int) -> ELCutPartButton:
 	button.focus_mode = Control.FOCUS_NONE
 	button.action_mode = BaseButton.ACTION_MODE_BUTTON_PRESS
 	button.dim_disabled = false
+	button.push_when_disabled = true
 	button.set_meta("strip_arrow", direction)
 	button.set_meta("origin", bounds.position)
 	button.pressed.connect(_press_arrow.bind(direction))

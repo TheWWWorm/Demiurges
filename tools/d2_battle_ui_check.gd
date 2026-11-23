@@ -218,6 +218,7 @@ func _casting_and_retry() -> void:
 	_battle_notice_icons(view)
 	_jammer_marks(view)
 	_figure_tooltips(view)
+	_panel_art(view)
 	await _arena_orientation(view)
 	view.queue_free()
 	await frames(2)
@@ -472,6 +473,38 @@ func _figure_tooltips(view: Node) -> void:
 	check(shown != null and shown.atlas == want.atlas and shown.region == want.region, "#271: the snake's growth shows the AbilityIcon (%d), not the snake's portrait" % int(row.AbilityIcon))
 	check(marks.size() == 1 and str(marks[0].tooltip) == duel.profile.text(str(row.AbilityText)), "#271: the growth's tooltip is its own text (%s)" % (str(marks[0].tooltip).left(60) if marks.size() == 1 else "-"))
 	view.selected_creature = -1
+
+# --- #302 / #303 -------------------------------------------------------------
+
+func _panel_art(view: Node) -> void:
+	var list: Array[Dictionary] = []
+	for i in 12: list.append({"icon": null, "tooltip": "", "enabled": true, "meta": {"card": str(i)}})
+	view.rail.strip.set_items(list, "panel-art")
+	view.hud.strip_shown = true
+	var strip: ELCombatStrip = view.rail.strip
+	# #303: an arrow that cannot scroll sinks to its dark "Push" plate.
+	check(strip.left.disabled and strip.left.push_when_disabled and not strip.left.pieces.push.is_empty(), "#303: the strip's left arrow at the first icon is disabled and draws its Push plate")
+	check(not strip.right.disabled, "#303: the strip's right arrow with more icons is enabled")
+	check(view.rail.spell_arrows.all(func(arrow: ELCutPartButton) -> bool: return arrow.push_when_disabled), "#303: the card rail's arrows draw their Push plate when they cannot scroll")
+	# #303: the bay tile starts past the left end's ornament (no notches in the rim).
+	check(ELCombatStrip.RAIL_TILE.position.x > 22.0, "#303: the strip tiles a middle bay, not the one under the corner ornament")
+	# #303: the 1024 layout's Type2 knot joins the strip's end to the caption.
+	var knots: Array = view.hud.pieces.filter(func(piece: Dictionary) -> bool: return piece.strip)
+	check(not knots.is_empty(), "#303: the panel keeps the original's Type2 pieces for the Abilities strip")
+	view.hud.strip_shown = false
+	# #302: the original scroller thumb keeps its size, travels the track and is centred while nothing scrolls.
+	var thumb := ELListThumb.new()
+	var at := [0]
+	thumb.offset = func() -> int: return at[0]
+	thumb.last = func() -> int: return 10
+	thumb.texture = PlaceholderTexture2D.new()
+	thumb.size = Vector2(15, 112)
+	check(thumb.thumb_rect().size == ELArtDropList.THUMB_SOURCE.size and thumb.thumb_rect().position.y == 0.0, "#302: the thumb starts at the top with the original art's size")
+	at[0] = 10
+	check(thumb.thumb_rect().end.y == 112.0, "#302: the thumb ends at the bottom of its track")
+	thumb.last = func() -> int: return 0
+	check(thumb.thumb_rect().position.y == 50.0, "#302: the thumb is centred while nothing scrolls")
+	thumb.free()
 
 func _notice_uses(notices: ELCombatNotices, index: int, expected: AtlasTexture) -> bool:
 	if index >= notices.icons.size(): return false

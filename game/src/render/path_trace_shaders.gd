@@ -464,11 +464,22 @@ float unlit_shadow(vec3 point, float lift, inout uint state) {
 }
 
 // Metal (ELFigure.metal_material): how metallic its grey and gold texels
-// are, its GGX width (roughness 0.4, squared twice) and the metallic share
-// the raster already darkened its diffuse colour by (ELFigure.METAL_METALLIC).
+// are and its GGX width (roughness 0.4, squared twice). The raster colour
+// the composite relights is not darker for being metallic: what the raster
+// takes from metal's diffuse (ELFigure.METAL_METALLIC) its sky reflection
+// gives back, so a metal texel comes out about as bright as matte paint.
+// Undoing a darkening that is not there made masked texels two to three
+// times too bright under the tracer (blown highlights, a gold cast), and the
+// matte texels of the same plate (its painted shading) read as dark blotches.
 const float METALNESS = 0.85;
 const float METAL_A2 = 0.0256;
-const float RASTER_METALLIC = 0.6;
+// The darkest metal's reflection may make a texel, as a share of the light
+// its paint gets as a matte surface. Armour faces the camera, so its mirror
+// direction runs low, into the arena's backdrop colour; in a dark arena
+// (Black.001's misty swamp) that left the masked texels of a plate nearly
+// black beside their matte neighbours: dark blotches on helmets and
+// breastplates. The paint already carries the plate's shading.
+const float METAL_SHADE_FLOOR = 0.75;
 
 // Where a texel is painted as metal: low saturation at a mid to high value,
 // or a bright gold (as ELFigure._painted_metal judges it).
@@ -724,11 +735,9 @@ void main() {
 			float raster_mask = metal_texels(primary_look, primary.uv);
 			float metal = raster_mask * METALNESS;
 			if (metal > 0.0) {
-				vec3 shine = metal_shine(origin, normal, geometric_normal, view_direction, sun_visible, state, specular_distance);
+				vec3 shine = max(metal_shine(origin, normal, geometric_normal, view_direction, sun_visible, state, specular_distance), lighting * METAL_SHADE_FLOOR);
 				specular_share = metal;
-				// The raster drew this texel's diffuse partly metallic, so darker:
-				// undo that before the composite multiplies by its colour.
-				lighting = mix(lighting, shine, metal) / max(1.0 - RASTER_METALLIC * raster_mask, 0.25);
+				lighting = mix(lighting, shine, metal);
 			}
 		}
 	}
@@ -819,7 +828,8 @@ layout(push_constant, std430) uniform Push {
 // one composing pass of the unsmoothed light, which also writes the guides.
 // The composed colour is albedo times light plus emission, so the raster
 // colour before relighting is the albedo guide. On metal, the ray program's
-// shine takes `metal` of that light (with the raster's darkening undone):
+// shine takes `metal` of that light (the raster colour is not darker for
+// being metallic, see METALNESS):
 // that share of the albedo is specular, weighted by the GGX lobe's
 // directional albedo. The shine uses the colour as a constant reflectance
 // (no Fresnel), so the environment term is taken at F0 = 1 and scaled by the
@@ -831,10 +841,9 @@ layout(set = 1, binding = 9, r16f) uniform writeonly image2D rr_hit_distance;
 layout(set = 1, binding = 10) uniform sampler2D rr_depth;
 layout(set = 1, binding = 11) uniform sampler2D rr_raster_normal;
 
-// As the ray program's metal: METALNESS, RASTER_METALLIC and the roughness
+// As the ray program's metal: METALNESS and the roughness
 // of its GGX width.
 const float RR_METALNESS = 0.85;
-const float RR_RASTER_METALLIC = 0.6;
 const float RR_METAL_ROUGHNESS = 0.4;
 
 // The split-sum environment term (an analytic fit): scale and bias of F0.
@@ -867,8 +876,7 @@ void store_guides(ivec2 pixel, vec3 albedo, vec3 normal, float metal, float hit_
 			vec3 world = (frame.camera * vec4(view.xyz / view.w, 1.0)).xyz;
 			float n_dot_v = max(dot(normal, normalize(frame.camera_position.xyz - world)), 1e-3);
 			float mask = metal / RR_METALNESS;
-			// The colour before the raster darkened it for being metallic.
-			vec3 base = albedo / max(1.0 - RR_RASTER_METALLIC * mask, 0.25);
+			vec3 base = albedo;
 			vec2 lobe = environment_brdf(n_dot_v, RR_METAL_ROUGHNESS);
 			specular = base * metal * (lobe.x + lobe.y);
 			albedo = base * (1.0 - metal);

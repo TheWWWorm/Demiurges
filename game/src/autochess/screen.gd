@@ -1358,7 +1358,7 @@ func _refresh_bench() -> void:
 	var chosen := own.unit(int(_selected.get("uid", 0))) if kind in ["field", "reserve"] and watched == me else {}
 	_sell_target.visible = not chosen.is_empty() and own.can_shop() and (game.stage == "prepare" or not bool(chosen.deployed))
 	if _sell_target.visible:
-		_sell_target.text = _t("Sell +◈ %d") % own.sale_value(chosen) + "  (S)"
+		_sell_target.text = _t("Sell +◈ %d") % own.sale_value(chosen) + "  (Del)"
 		_sell_target.tooltip_text = ELAutochessRules.title(profile, String(chosen.code))
 	_reserve_label.text = _t("Reserves %d/%d") % [own.bench_count(), own.bench_limit()]
 
@@ -1664,6 +1664,16 @@ func _toggle_menu() -> void:
 	if _modal.visible: return
 	_open_modal(_t("Menu"), "menu", 300.0)
 	H.button(_modal_box, _t("Resume"), _close_modal)
+	# As in the Cursed Lands autochess: the last preparation step (a purchase,
+	# a sale, a move) taken back, also Ctrl+Z.
+	var undo := H.button(_modal_box, _t("Undo the last action") + "  (Ctrl+Z)", func():
+		_close_modal()
+		_act("undo", [])
+		_selected.clear()
+		_hide_rail()
+		_refresh())
+	undo.disabled = watched != me or not company().can_undo()
+	undo.tooltip_text = _t("Take back the last purchase, sale or move of this preparation. Shop refreshes are not refunded.")
 	# The game stays paused under the settings; the menu returns after them.
 	H.button(_modal_box, ELRemakeText.t("Options…", profile), func(): options_requested.emit())
 	H.button(_modal_box, _t("Leave (the game is saved)") if online == null else _t("Leave the online game"), _leave)
@@ -1805,7 +1815,9 @@ func _unhandled_input(event: InputEvent) -> void:
 			KEY_SPACE: _start_pressed()
 			KEY_Z:
 				if event.ctrl_pressed: _act("undo", [])
-			KEY_S:
+			# Not on S: S pans the camera, and a player panning back with a
+			# creature selected sold it.
+			KEY_DELETE:
 				if not _selected.is_empty(): _sell_selected()
 			KEY_ESCAPE:
 				if _modal.visible and not _modal.has_meta("locked"): _close_modal()
@@ -2051,7 +2063,7 @@ func _step_camera(delta: float) -> void:
 	var focus := get_viewport().gui_get_focus_owner()
 	if not (focus is LineEdit or focus is TextEdit) and not _modal.visible:
 		if Input.is_key_pressed(KEY_W): pan += forward
-		if Input.is_key_pressed(KEY_S) and _selected.is_empty(): pan -= forward
+		if Input.is_key_pressed(KEY_S): pan -= forward
 		if Input.is_key_pressed(KEY_A): pan -= right
 		if Input.is_key_pressed(KEY_D): pan += right
 		if Input.is_key_pressed(KEY_E): _camera_yaw += delta * 1.4

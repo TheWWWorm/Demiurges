@@ -146,7 +146,11 @@ var camera_shake := {}
 ## The orbit's centre; the original's default view sets it with the angles.
 var camera_target := Vector3(0, 0.6, -0.5)
 const PITCH_LIMITS := Vector2(0.3, 1.05)
-const DISTANCE_LIMITS := Vector2(15, 40)
+## The wheel's zoom range. The near end lets the camera come up to the
+## figures (it was 15, from where a creature filled a tenth of the screen).
+const DISTANCE_LIMITS := Vector2(4, 40)
+## First-person view (the "first_person" hotkey), made on first use.
+var free_look: ELFreeLook
 var orbiting := false
 ## Options AutoCamera: authored close-ups of casts, fights and the winner.
 var auto_camera: ELAutoCamera
@@ -346,6 +350,7 @@ func _ready() -> void:
 		report.options_summary = _options_summary
 		report.graphics_diagnostics = func() -> Dictionary:
 			return graphics_sdk.diagnostic_report() if is_instance_valid(graphics_sdk) and ELGraphicsSDK.engine_has_sdk() else {}
+		report.battle_diagnostics = _battle_diagnostics
 		get_tree().root.add_child.call_deferred(report)
 	settings.load_file()
 	if get_tree().current_scene == self:
@@ -997,8 +1002,9 @@ func _process(delta: float) -> void:
 			ELCombatSearch.original_budget = ELCombatSearch.EASY_BUDGET if level == 0 and not demo and not _human_side() and not _in_puzzle() else ELCombatSearch.BUDGET
 			duel.smart_sides = smart
 			ELPracticeAI.step(duel, auto and not bool(settings.values.get("use_spells", true)))
-		_step_auto_camera(delta)
-		_step_keyboard_camera(delta)
+		if free_look == null or not free_look.active:
+			_step_auto_camera(delta)
+			_step_keyboard_camera(delta)
 		_step_ending(delta)
 		if not _arrivals.is_empty(): _step_arrivals()
 		_step_shake(delta)
@@ -1074,6 +1080,15 @@ func _process(delta: float) -> void:
 		ELAudio.quiet_quit(get_tree())
 
 func _input(event: InputEvent) -> void:
+	# The first-person view takes every event while it is on: the hotkey
+	# again or Esc leaves it.
+	if free_look != null and free_look.active:
+		get_viewport().set_input_as_handled()
+		if event is InputEventKey and event.pressed and not event.echo and profile != null and ELSettings.hotkey_action(settings, profile.id, "Battle", event) == "first_person":
+			free_look.leave()
+			return
+		free_look.handle(event)
+		return
 	# ScrollContainer passes a wheel notch on at either end of its range.
 	# The hand owns these notches even there, so none can reach arena zoom.
 	if event is InputEventMouseButton and event.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN, MOUSE_BUTTON_WHEEL_LEFT, MOUSE_BUTTON_WHEEL_RIGHT] and not _overlay_open():
@@ -1123,6 +1138,7 @@ func _input(event: InputEvent) -> void:
 						menu.show()
 						_refresh()
 				"reset_camera": _default_view()
+				"first_person": _toggle_free_look()
 				"combat_log": log_text.visible = not log_text.visible
 				"artifacts", "hand":
 					if rail != null: rail._select(action == "artifacts")
@@ -1214,8 +1230,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		if event.button_index == MOUSE_BUTTON_RIGHT:
 			_right_button(event)
 		elif event.pressed and event.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN]:
-			camera_distance = clampf(camera_distance + (-1.3 if event.button_index == MOUSE_BUTTON_WHEEL_UP else 1.3), DISTANCE_LIMITS.x, DISTANCE_LIMITS.y)
-			_update_camera()
+			_wheel_zoom(event.button_index == MOUSE_BUTTON_WHEEL_UP, event.position)
 	if event is InputEventMouseMotion and right_down: _right_button(event)
 	if event is InputEventMouseMotion and orbiting:
 		camera_yaw -= event.relative.x * 0.006
@@ -1344,6 +1359,52 @@ func _step_keyboard_camera(delta: float) -> void:
 	camera_distance = clampf(camera_distance + zoom * 12.0 * delta, DISTANCE_LIMITS.x, DISTANCE_LIMITS.y)
 	_update_camera()
 
+## The view's own centre (_default_view), where zooming out takes it back.
+var _home_target := Vector3(0, 0.6, -0.5)
+
+## A wheel notch: in, toward the ground under the pointer, so the near end
+## of the zoom comes up to the figure looked at; out, back toward the view's
+## own centre, which it reaches by the default distance.
+func _wheel_zoom(closer: bool, at: Vector2) -> void:
+	var before := camera_distance
+	camera_distance = clampf(camera_distance + (-1.3 if closer else 1.3), DISTANCE_LIMITS.x, DISTANCE_LIMITS.y)
+	if camera_distance != before and camera != null:
+		if closer:
+			var origin := camera.project_ray_origin(at)
+			var ray := camera.project_ray_normal(at)
+			var looked := _character_at(at)
+			if looked >= 0 and models.has(looked) and is_instance_valid(models[looked]):
+				# A figure under the pointer: toward its middle, not the ground
+				# behind it, so it stays in view all the way in.
+				var figure: Vector3 = models[looked].global_position + Vector3(0, FRAMED_HEIGHT * float(models[looked].scale.y), 0)
+				camera_target = camera_target.lerp(figure, (before - camera_distance) / before)
+			elif ray.y < -0.01:
+				var hit := origin + ray * ((camera_target.y - origin.y) / ray.y)
+				# The share of the way the notch closes in moves the centre the
+				# same share toward the pointer (the point under it stays put).
+				camera_target = camera_target.lerp(hit, (before - camera_distance) / before)
+		else:
+			var home := clampf((camera_distance - before) / maxf(24.0 - before, 0.01), 0.0, 1.0)
+			camera_target = camera_target.lerp(_home_target, home)
+	_update_camera()
+
+## Enters or leaves the first-person view: the battle panels hide while
+## the walker has the camera, and the player's own view comes back after.
+func _toggle_free_look() -> void:
+	if camera == null or arena == null: return
+	if free_look == null:
+		free_look = ELFreeLook.new()
+		add_child(free_look)
+		free_look.left.connect(func() -> void:
+			if is_instance_valid(ui): ui.visible = true
+			if camera != null: _update_camera())
+	if free_look.active:
+		free_look.leave()
+		return
+	if auto_camera != null: auto_camera.stop()
+	free_look.enter(camera, arena.ground_height)
+	if is_instance_valid(ui): ui.visible = false
+
 ## The player's own view; any manual camera change ends an automatic close-up.
 func _update_camera() -> void:
 	if auto_camera != null: auto_camera.stop()
@@ -1359,6 +1420,7 @@ func _default_view() -> void:
 	var original: Dictionary = auto_camera.standing_view() if auto_camera != null else {}
 	if original.is_empty(): original = {"target": Vector3(0, 0.6, -0.5), "yaw": -0.38, "pitch": 0.7, "distance": 24.0}
 	camera_target = original.target
+	_home_target = camera_target
 	camera_yaw = original.yaw
 	# Hot seat, second player: the same view from the other end (the first
 	# game's combat yaw is 80 or 260 degrees by side).
@@ -1378,6 +1440,8 @@ func _restore_orbit(saved: Array) -> void:
 	_update_camera()
 
 func _place_orbit() -> void:
+	# The first-person view holds the camera until it is left.
+	if free_look != null and free_look.active: return
 	var target := camera_target
 	var offset := Vector3(sin(camera_yaw) * cos(camera_pitch), sin(camera_pitch), cos(camera_yaw) * cos(camera_pitch)) * camera_distance
 	camera.position = target + offset
@@ -3417,6 +3481,12 @@ func _specialisation_notice(side: int, code: String) -> void:
 	if not is_instance_valid(notices): return
 	notices.add_specialisation(side, _spec_text(code, "Desc", _spec_name(code)))
 
+## The specialisation's icon, as the notice icons show it: the first
+## game's Mastery skill icon, the second game's own or rival specialisation.
+func _specialisation_icon(side: int) -> Texture2D:
+	if profile.id == "el1": return ELBuildingMessageView.skill_icon(profile, ELCombatNotices.FIRST_SPECIALISATION_SKILL, 0)
+	return profile.icon_at(ELCombatNotices.OWN_SPECIALISATION_ICON if side == _displayed_side() else ELCombatNotices.RIVAL_SPECIALISATION_ICON)
+
 ## The second game's notice icons show only the opponent's casts, abilities
 ## and artifact uses (not those of the side at this screen); ether
 ## disturbance and specialisations show for both sides.
@@ -4566,7 +4636,7 @@ func _start_shake(track := "Tremor1.cmf") -> void:
 	camera_shake = {"track": source, "time": 0.0, "base": camera.global_transform, "applied": camera.global_transform}
 
 func _step_shake(delta: float) -> void:
-	if camera_shake.is_empty() or camera == null: return
+	if camera_shake.is_empty() or camera == null or (free_look != null and free_look.active): return
 	# A view placed since the last frame is the new base; otherwise undo the offset.
 	var base: Transform3D = camera_shake.base if camera.global_transform.is_equal_approx(camera_shake.applied) else camera.global_transform
 	camera_shake.time += delta
@@ -4838,6 +4908,14 @@ func _ability_effects(data: Dictionary) -> void:
 		if hit > 0.0:
 			_ability_hit = {"target": visual_target, "hit": hit}
 			call_deferred("_clear_ability_hit")
+	# A creature acting on another (the Aviak Archer's Wing Flap) strikes at
+	# its action clip's impact frame: the target's damage and death wait for
+	# it, not only for the effect's own hit cue (they showed at the click).
+	if source >= 2 and visual_target >= 0 and visual_target != source and models.has(source) and card != "BROT":
+		var action := _action_key(models[source])
+		if action > 0.0 and (_ability_hit.is_empty() or int(_ability_hit.get("target", -1)) == visual_target) and action > float(_ability_hit.get("hit", 0.0)):
+			if _ability_hit.is_empty(): call_deferred("_clear_ability_hit")
+			_ability_hit = {"target": visual_target, "hit": action}
 	if profile.id == "el1" and card == "BROT":
 		# The first game's Burnout: RedDamage on the sacrifice (skipped when
 		# mastery spares it), then the Fireball flies from the sacrifice to
@@ -5772,6 +5850,14 @@ func _hero_tip(side: int, control: Control = null) -> Dictionary:
 	# not listed).
 	if profile.id == "el1":
 		var first_lines: Array = [level, health]
+		# The remake adds the player's own specialisation, which the first
+		# game showed nowhere in battle (both sides' when a match is watched).
+		var first_spec := str(hero.get("spec", "NONE"))
+		if first_spec != "NONE" and (own or demo or replay_player != null):
+			var spec_name := _spec_text(first_spec, "Name", "")
+			if not spec_name.strip_edges().is_empty(): first_lines.append(spec_name)
+			var spec_about := _spec_text(first_spec, "Desc", "")
+			if not spec_about.is_empty(): first_lines.append(spec_about)
 		if control != null and helper_overlay(): first_lines.append_array(control.atr(control.tooltip_text).split("\n"))
 		first_lines.append_array(_enchantment_lines(hero))
 		return ELCombatTooltip.hero_content(profile.id, portraits[side].texture, title, first_lines)
@@ -6165,6 +6251,11 @@ func _note_history(data: Dictionary) -> void:
 				else: _history_change(int(c.id), {"summoned": true}, String(c.get("card", "")))
 		"enchant":
 			_history_change(int(data.get("target", -1)), {"enchanted": true}, "")
+		"spec":
+			var side := int(data.get("side", -1))
+			if side not in [0, 1]: return
+			var code := String(data.get("spec", ""))
+			battle_history.insert(side, "spec", side, _specialisation_icon(side), _spec_name(code), _spec_text(code, "Desc", ""))
 		"phase", "turn_cleanup", "combat_end", "upkeep":
 			battle_history.close()
 
@@ -6808,6 +6899,7 @@ func _show_hotkeys(rows: VBoxContainer, status: Label, id: String) -> void:
 			field.name = action
 			field.custom_minimum_size.x = 172
 			field.prompt = _t("Press a key…")
+			field.unassigned = _t("Unassigned")
 			field.show_keys(settings.hotkey_overrides(id).get(action), defaults)
 			field.chosen.connect(func(code: int):
 				var problem := settings.set_hotkey(id, action, code)
@@ -6818,6 +6910,8 @@ func _show_hotkeys(rows: VBoxContainer, status: Label, id: String) -> void:
 class HotkeyField extends Button:
 	signal chosen(code: int)
 	var prompt := ""
+	## Shown for an action without a key (KEY_NONE).
+	var unassigned := "Unassigned"
 	var _caption := ""
 	var _waiting := false
 
@@ -6835,7 +6929,7 @@ class HotkeyField extends Button:
 	func show_keys(custom: Variant, defaults: Array) -> void:
 		var keys: Array = [custom] if custom != null else defaults
 		var names: PackedStringArray = []
-		for key: int in keys: names.append(OS.get_keycode_string(key))
+		for key: int in keys: names.append(unassigned if key == KEY_NONE else OS.get_keycode_string(key))
 		_caption = " / ".join(names)
 		_finish()
 
@@ -9063,6 +9157,7 @@ func _fill_strip() -> void:
 	var signature := "%d:%s:" % [shown, inspect_graveyard]
 	for item: Dictionary in list: signature += str(item.meta.get("card", "")) + ","
 	rail.strip.set_items(list, signature)
+	if hud != null: hud.strip_shown = not list.is_empty()
 
 ## A readout panel's slide chosen with its arrows: kept for the next battle.
 func _gap_slide_chosen(index: int, key: String) -> void:
@@ -10709,6 +10804,16 @@ func _close_combat_tutorial() -> void:
 	if tutorial_quit != null: tutorial_quit.hide()
 
 ## Names and portraits the replay list shows: my hero, the enemy hero.
+## The battle on screen for the report (ELCrashReport.battle_diagnostics).
+func _battle_diagnostics() -> Dictionary:
+	if duel == null or duel.phase == ELDuel.Phase.FINISHED: return {}
+	var result := {"duel_ai": int(settings.values.get("duel_ai", 2)), "state": duel.snapshot()}
+	if match_recording != null and match_recording.tracking(duel) and not match_recording.rounds.is_empty():
+		var round: Dictionary = match_recording.rounds[-1]
+		result.recording = {"edition": match_recording.edition, "local_side": match_recording.local_side, "seed": round.get("seed", 0),
+			"options": round.get("options", {}), "actions": round.get("actions", [])}
+	return result
+
 func _label_recording() -> void:
 	match_recording.label_heroes(duel, _match_names())
 

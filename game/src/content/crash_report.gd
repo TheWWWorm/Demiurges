@@ -59,6 +59,10 @@ var info := {}
 ## Returns a short summary of the player's options for the report.
 var options_summary: Callable
 var graphics_diagnostics: Callable
+## The battle on screen ({} = none): its state and, where the battle is
+## recorded, its seed, options and every action so far, so a reported play
+## (a computer opponent's odd move) can be restored and played again.
+var battle_diagnostics: Callable
 var _marker := ""
 var _done := false
 
@@ -493,6 +497,13 @@ func report_text(prev: Dictionary, lines: int) -> String:
 	if graphics_diagnostics.is_valid():
 		var graphics: Dictionary = graphics_diagnostics.call()
 		if not graphics.is_empty(): text += "\n== Graphics SDK status ==\n" + JSON.stringify(graphics, "\t") + "\n"
+	# The file only: the clipboard copy stays short enough to paste.
+	if battle_diagnostics.is_valid() and lines >= FILE_LINES:
+		var battle: Dictionary = battle_diagnostics.call()
+		if not battle.is_empty(): text += "
+== Battle in progress ==
+" + JSON.stringify(JSON.from_native(battle)) + "
+"
 	if prev.is_empty():
 		var older := older_logs()
 		if not older.is_empty():

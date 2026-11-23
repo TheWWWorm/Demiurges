@@ -25,7 +25,14 @@ var audio: ELBattleAudio
 var settings: Dictionary = {}
 var arena_id := ""
 var battle: ELAutochessBattle
-var flip := false
+## Shown from the far side (team 1). The deployment fire follows it: the
+## preparation turned it on before the view returned from a battle watched
+## from the far side, and it stood mirrored, five paces into the field.
+var flip := false:
+	set(value):
+		if flip == value: return
+		flip = value
+		_place_fire()
 ## Fighter id (or "p<uid>" in preparation) -> ELModel.
 var models: Dictionary = {}
 var _codes: Dictionary = {}

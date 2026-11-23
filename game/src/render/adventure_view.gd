@@ -898,7 +898,12 @@ func _close_second_precombat() -> void:
 	second_precombat.close()
 	if second_hud != null: second_hud.show()
 
-func _open_second_precombat(first: int, second: int) -> void:
+## `remote`: a script's remote attack (ExRemoteUseObjectCmd, the White Lord's
+## portal in chapter 54). The original offers it like any other battle of the
+## local side (the remote action creates its battle through the same routine,
+## which opens PrecombatScreen); the sides stand apart, so the view stays
+## where the script put it and no dome rises between them.
+func _open_second_precombat(first: int, second: int, remote := false) -> void:
 	# The local side is on the left, its opponent on the right.
 	var local := first if int(state.object(first).get("owner", -1)) == 1 else second
 	var other := second if local == first else first
@@ -920,7 +925,7 @@ func _open_second_precombat(first: int, second: int) -> void:
 		following = -1
 		scroll_gliding = false
 		target = _tunnel_mouth_position(mouth)
-	else:
+	elif not remote:
 		# The camera centres between the two sides while the panel is up.
 		var spots: Array[Vector3] = []
 		for id: int in [first, second]:
@@ -934,7 +939,7 @@ func _open_second_precombat(first: int, second: int) -> void:
 			target = spots[0] if spots.size() == 1 else (spots[0] + spots[1]) * 0.5
 	second_hud.hide()
 	second_precombat.open(state, local, other, faces)
-	_start_battle_dome(first, second)
+	if not remote: _start_battle_dome(first, second)
 
 ## The tunnel mouth whose guard one of the two sides is, or {}.
 func _tunnel_mouth(first: int, second: int) -> Dictionary:
@@ -1988,7 +1993,7 @@ func _present(data: Dictionary) -> void:
 					# The dome rises at the centre of the view; the panel moves
 					# down out of its way.
 					if effects != null and effects.effects.has(BATTLE_DOME): hud.lower_precombat()
-			elif second_precombat != null and precombat_preview and not data.get("remote_use", false): _open_second_precombat(data.hero, data.opponent)
+			elif second_precombat != null and precombat_preview: _open_second_precombat(data.hero, data.opponent, bool(data.get("remote_use", false)))
 			else: encounter_requested.emit(data.hero, data.opponent)
 		"lose_battle": _open_lose_battle()
 		"auto_fight": _show_auto_fight(int(data.hero), int(data.opponent))

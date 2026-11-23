@@ -24,8 +24,11 @@ var origin := Vector2.ZERO
 ## A control with no "Free" art of its own (the combat strip's scroll arrows)
 ## shows its plain "Push" piece at rest, as the front-end menus do.
 var push_at_rest := false
-## Controls without "Disabled" art (scroll arrows) look the same when disabled.
+## Controls without "Disabled" art look the same when disabled.
 var dim_disabled := true
+## The battle panel's scroll arrows sink to their dark "Push" plate while they
+## cannot scroll, as the original shows them (issue #303).
+var push_when_disabled := false
 
 func build(profile: ELProfile, control: String, rect: Rect2, type := "") -> void:
 	for state: String in pieces: pieces[state].clear()
@@ -114,6 +117,7 @@ func _draw() -> void:
 	match mode:
 		DRAW_HOVER: states.assign(["push", "hover"] if push_on_hover else ["normal", "hover"])
 		DRAW_PRESSED, DRAW_HOVER_PRESSED: states = ["pressed"]
+		DRAW_DISABLED: if push_when_disabled: states = ["push"]
 	if push_at_rest and pieces.normal.is_empty() and states[0] == "normal": states[0] = "push"
 	for state in states:
 		for piece: Dictionary in pieces[state]:

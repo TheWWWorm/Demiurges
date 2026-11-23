@@ -7,7 +7,9 @@ extends SceneTree
 ## - a hero (or monster opponent) killed by Zap (ZAPP) keeps its shown health
 ##   and does not fall, nor does the duel's ending begin, before that time;
 ## - a spell with an authored hit cue (Comet) waits for that cue too;
-## - all of it is shown once the hit time has passed.
+## - all of it is shown once the hit time has passed;
+## - a creature killed by another's ability (the Aviak Archer's Wing Flap)
+##   does not fall before the archer's shot reaches its impact frame.
 ## Runs for each game whose files are configured.
 ##
 ##   godot --headless --path game --script ../tools/spell_hit_timing_check.gd
@@ -16,6 +18,7 @@ extends SceneTree
 ## game); without them a game is skipped. Settings are never written.
 
 const DuelView := preload("res://src/duel/view.gd")
+const Fixtures := preload("res://../tools/duel_fixtures.gd")
 
 var failures: Array[String] = []
 
@@ -33,6 +36,7 @@ func _run() -> void:
 			print("SKIP: no %s files configured (user://profiles.json)" % edition)
 			continue
 		await _edition(edition)
+		await _wing_flap(edition)
 	print("SPELL HIT TIMING: %d failure(s)" % failures.size())
 	quit(0 if failures.is_empty() else 1)
 
@@ -149,3 +153,43 @@ func _lethal_cast(view: Node, caster: int, card: String, target: int, what: Stri
 		check(not view.ending.is_empty() and view.shown_health(target) == int(duel.heroes[target].health), "%s: the hero has fallen and its health is shown after the hit" % what)
 	else:
 		check(not is_instance_valid(model) or bool(model.get_meta("dying", false)), "%s: the creature dies after the hit" % what)
+
+## The Aviak Archer rests to shoot an attacker: the attacker's death waits for
+## the archer's action clip to reach its impact frame.
+func _wing_flap(edition: String) -> void:
+	var view: Node = load("res://scenes/duel.tscn").instantiate()
+	view.demo = true
+	root.add_child(view)
+	await process_frame
+	if not view.profiles.has(edition):
+		view.queue_free()
+		await process_frame
+		return
+	var what := "%s Wing Flap on an attacker" % edition
+	var position := Fixtures.build(view.profiles[edition], {"attacker": 1, "phase": "defence", "fixed": true,
+		"heroes": [{"health": 15, "mana": 0, "hand": []}, {"health": 15, "mana": 0, "hand": []}],
+		"creatures": [{"card": "AVMK", "owner": 0}, {"card": "STRT", "owner": 1}]})
+	position.attacks = [3]
+	view.demo = false
+	view._start(edition, {}, position)
+	await _idle(view)
+	var archer: ELModel = view.models.get(2)
+	var model: ELModel = view.models.get(3)
+	if archer == null or model == null:
+		check(false, "%s: both figures stand" % what)
+	else:
+		var start: float = view.elapsed
+		check(view.duel.use_ability(2, "shoot", 3), "%s: the ability is legal (%s)" % [what, view.duel.error])
+		var impact: float = view._action_key(archer)
+		check(impact > 0.1, "%s: the archer's shot strikes after the click (%.2f s)" % [what, impact])
+		var shown_at := -1.0
+		for i in 2000:
+			view.ai_clock = -1000.0
+			await process_frame
+			var seconds: float = view.elapsed - start
+			if shown_at < 0.0 and (not is_instance_valid(model) or bool(model.get_meta("dying", false)) or model.clip == "udeath"): shown_at = seconds
+			if seconds > impact + 0.5: break
+		check(shown_at >= impact - 0.02, "%s: the attacker falls at the shot's impact (%.2f s), not before (fell at %.3f s)" % [what, impact, shown_at])
+	view.queue_free()
+	await process_frame
+	await process_frame

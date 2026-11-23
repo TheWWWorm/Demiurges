@@ -70,6 +70,19 @@ func _run() -> void:
 		if profile.metal_masks != null: profile.metal_masks.stop()
 	check(tested > 0, "at least one edition's folder is given")
 	check(not ELModel.has_metal("tebuad26") and not ELModel.has_metal("telabkhi1") and ELModel.has_metal("he105") and ELModel.has_metal("cr501"), "only hero and creature figures turn to metal")
+	# Plated figures with plain part names learn their metal from the parts
+	# listed for them (ELFigure.METAL_FIGURE_PARTS), their map figure too;
+	# flesh, fur and coats painted in their metal's colour stay matte.
+	check(ELFigure.is_metal_part("l_circular", "cr103") and ELFigure.is_metal_part("wheel", "cr109") and ELFigure.is_metal_part("l_leg3", "ad104"), "the Synthets' machines name their metal (saws, wheels, legs; battle and map figures)")
+	check(ELFigure.is_metal_part("l_hand1", "he205") and ELFigure.is_metal_part("mace") and ELFigure.is_metal_part("poas", "cr502"), "the ogre heroes' pauldrons, the mace and the Huntress's knives are metal")
+	check(not ELFigure.is_metal_part("body", "cr109") and not ELFigure.is_metal_part("l_hand1", "cr103x"), "the listed parts belong only to their own figures")
+	check(ELFigure.is_cloth("cr205", "body") and ELFigure.is_cloth("cr502", "body") and ELFigure.is_cloth("ad105", "l_leg1") and not ELFigure.is_cloth("cr105", "l_leg2"), "grey ogre skin, the Huntress's coat and the Abominations' flesh stay matte")
+	check(not ELFigure.is_soft_part("polySurface29253") and ELFigure.is_soft_part("face") and ELFigure.is_metal_part("polysurface29253", "cr702") and ELFigure.is_cloth("cr707", "polysurface29344"), "Maya's polySurface parts are not faces: the colourless creatures' armour is metal, their pale skin matte")
+	check(ELFigure.is_solid_metal("he207", "breast") and not ELFigure.is_solid_metal("he207", "body") and "he701" in ELFigure.SHADED_MAGIC_HEROES and ELFigure.is_metal_part("belt", "he702"), "the Chaot warriors' plates and the Red and Green main heroes' armour and gold can shine")
+	check(ELFigure.is_solid_metal("ad207", "shield") and ELFigure.is_metal_part("katana", "cr208") and ELFigure.is_metal_part("hammer", "cr404") and ELFigure.is_cloth("cr206", "head") and ELFigure.MATTE_UV_RECTS.has("he704"), "kobold shields and blades and the Aviak Warlock's hammer shine; the old shaman's grey skin and the Red hero's sackcloth stay matte")
+	var bronze := PackedByteArray([150, 100, 40, 255, 230, 170, 150, 255])
+	var banded := ELMetalMasks.hue_band(PackedByteArray([0, 0]), bronze, ELFigure.METAL_HUE_BANDS["he716"])
+	check(banded[0] == 0 and banded[1] == 0 and ELFigure.METAL_UV_RECTS.has("cr204") and ELFigure.METAL_UV_RECTS.has("ad711"), "Diamanda's bronze, the Ogre King's scale mail and the Egyptian's collar have their metal set out; a lone bronze texel is not plate")
 	print("Model texture check: %d failures" % failures.size())
 	quit(1 if not failures.is_empty() else 0)
 

@@ -16,6 +16,16 @@ extends SceneTree
 ##   ship. The portal's remote attack is still fought on the Ether arena (the
 ##   original's remote attack is an ethereal battle with no script arena); an
 ##   ordinary attack on the same actor keeps the ship arena.
+## - #305, the final island (chapters 44 and 54, map e2mission34_44_54):
+##   entering the White Lord's portal offers the remote battle in the
+##   pre-battle panel (the original's remote action creates its battle
+##   through the routine that opens PrecombatScreen) and declining it returns
+##   the hero; the hidden hero keeps its sight (ExHideHero only sinks the
+##   model); the teleport effect stands on the portal's footprint centre
+##   (ExGetObjectPoint is the figure's point); the closed and collapsed
+##   portals show the cancel cursor (a "Simple" building is usable only while
+##   its script allows it); the closed portal's one-shot effect plays once
+##   when it is placed and not again on later fog refreshes.
 ##
 ##   godot --headless --path game --script ../tools/el2_encounter_check.gd -- [--el2=DIR] [--verbose]
 
@@ -54,6 +64,7 @@ func _run() -> void:
 		return
 	_declines(profile)
 	_remote_arena(profile)
+	await _final_island(profile)
 	await _script_summons()
 	if profile.metal_masks != null: profile.metal_masks.stop()
 	print("EL2 encounter check: %d passed, %d failed" % [passes, failures.size()])
@@ -237,6 +248,140 @@ func _remote_arena(profile: ELProfile) -> void:
 		if remote: check(arena == "Ether.001", "el2 ch54 the portal's remote attack on the White Lord uses the Ether arena (got %s)" % arena)
 		else: check(arena == "Ship.001", "el2 ch54 an ordinary attack on an actor at sea uses the ship arena (got %s)" % arena)
 		state.close()
+
+# --- #305: the final island ----------------------------------------------------
+
+const PORTAL_ACTIVE := 50846
+const PORTAL_CLOSED := 50847
+const PORTAL_COLLAPSE := 50848
+
+func _chapter_row(profile: ELProfile, campaign_id: String, script: String) -> Dictionary:
+	var campaign := ELCampaign.new()
+	if not campaign.load_campaign(profile, campaign_id): return {}
+	for scenario: Dictionary in campaign.scenarios:
+		if not str(scenario.script).to_lower().ends_with(script): continue
+		var row := scenario.duplicate()
+		row.campaign = campaign_id
+		var progress := ELSecondCampaign.for_chapter(profile, campaign_id, row, campaign.scenarios.find(scenario) + 1)
+		if not progress.is_empty(): row[ELSecondCampaign.KEY] = progress
+		return row
+	return {}
+
+func _chapter_view(profile: ELProfile, campaign_id: String, script: String) -> ELAdventureView:
+	var row := _chapter_row(profile, campaign_id, script)
+	if row.is_empty():
+		check(false, "#305 %s chapter %s found" % [campaign_id, script])
+		return null
+	var settings := ELSettings.new()
+	settings.use_edition("el2")
+	var view := ELAdventureView.new()
+	root.add_child(view)
+	if not view.build(profile, row, settings, 1):
+		check(false, "#305 %s builds: %s" % [script, view.error])
+		view.queue_free()
+		return null
+	if view._mission_fade != null: await view._mission_fade.tree_exited
+	for i in 240:
+		if not view.director.dialogue.is_empty(): view.director.acknowledge("OK")
+		await process_frame
+	return view
+
+func _final_island(profile: ELProfile) -> void:
+	var saves := _backup(ELSaveSlots.folder("el2"))
+	await _final_portal(profile)
+	await _closed_portal(profile)
+	_restore(ELSaveSlots.folder("el2"), saves)
+
+## Chapter 54 (Diamanda): the active portal and the remote battle it starts.
+func _final_portal(profile: ELProfile) -> void:
+	var view := await _chapter_view(profile, "White", "e2mission54")
+	if view == null: return
+	var state := view.state
+	var hero := state.object(state.main_hero)
+	var portal := state.object(PORTAL_ACTIVE)
+	var centre := ELAdventureGrid.center(portal, ELAdventureArt.new(state.map).resolve(portal).get("row", {})) * 2.0
+	var point: Array = state._native([float(PORTAL_ACTIVE)], "ExGetObjectPoint")
+	check(point.size() == 3 and Vector2(point[0], point[1]) == centre, "#305 ch54 ExGetObjectPoint of the 2 x 2 portal is its figure's footprint centre %s (got %s)" % [centre, point])
+	check(ELCursors._second_object(state, hero, portal) == "use", "#305 ch54 the portal the script made usable shows the use cursor")
+	# Into the portal: hidden, the teleport effect, then the remote battle.
+	hero.x = int(portal.x) - 1
+	hero.y = int(portal.y) + 3
+	ELFog.refresh(state)
+	view.director.use_object(state.main_hero, PORTAL_ACTIVE)
+	var hidden_sight := true
+	var hidden_seen := false
+	var effect_at := Vector3.INF
+	var t := 0.0
+	while t < 20.0 and not (view.second_precombat != null and view.second_precombat.visible):
+		if not view.director.dialogue.is_empty(): view.director.acknowledge("OK")
+		if not hero.visible:
+			hidden_seen = true
+			if not ELFog.visible(state, 1, Vector2i(hero.x, hero.y)) or not ELFog.visible(state, 1, Vector2i(portal.x, portal.y)): hidden_sight = false
+		if view.effects.effects.has("TeleportToWhiteLord"): effect_at = view.effects.effects["TeleportToWhiteLord"].node.position
+		await process_frame
+		t += 1.0 / 60.0
+	check(hidden_seen and hidden_sight, "#305 ch54 the hero hidden in the portal keeps its sight of the island (hidden: %s)" % hidden_seen)
+	check(effect_at == Vector3(centre.x, 0.0, -centre.y), "#305 ch54 the teleport effect stands on the portal's centre %s (got %s)" % [centre, effect_at])
+	var offered := view.second_precombat != null and view.second_precombat.visible and view.director.encounter != null and view.director.encounter.remote
+	check(offered, "#305 ch54 the portal's remote battle with the White Lord is offered in the pre-battle panel, not started at once")
+	if offered:
+		view.decline_encounter()
+		await process_frame
+		check(view.director.encounter == null and not view.second_precombat.visible and hero.visible, "#305 ch54 declining the portal's battle returns the hero to the island")
+	view.queue_free()
+	await process_frame
+
+## Chapter 44 (Synthets): the collapsed and the closed portal.
+func _closed_portal(profile: ELProfile) -> void:
+	var view := await _chapter_view(profile, "Black", "e2mission44")
+	if view == null: return
+	var state := view.state
+	ELFog.reveal_for_console(state, 1, true)
+	for i in 3: await process_frame
+	var hero := state.object(state.main_hero)
+	var collapse := state.object(PORTAL_COLLAPSE)
+	var closed := state.object(PORTAL_CLOSED)
+	check(ELCursors._second_object(state, hero, collapse) == "cancel", "#305 ch44 the collapsing portal shows the cancel cursor")
+	# The script's swap after Diamanda's death.
+	var at := Vector2i(collapse.x, collapse.y)
+	var away := Vector2i(closed.x, closed.y)
+	for call: Array in [[[PORTAL_COLLAPSE], "ExTakeObject"], [[PORTAL_CLOSED], "ExTakeObject"], [[PORTAL_COLLAPSE, away.x, away.y], "ExPlaceObject"], [[PORTAL_CLOSED, at.x, at.y], "ExPlaceObject"]]:
+		state._native(call[0].map(func(v: int) -> float: return float(v)), call[1])
+	await process_frame
+	check(ELCursors._second_object(state, hero, closed) == "cancel", "#305 ch44 the closed portal shows the cancel cursor")
+	var name := "shrine:%d" % PORTAL_CLOSED
+	check(view.effects.effects.has(name), "#305 ch44 the closed portal plays its closing effect when it is set down")
+	var t := 0.0
+	while view.effects.effects.has(name) and t < 30.0:
+		await process_frame
+		t += 1.0 / 60.0
+	var replayed := false
+	for step in 3:
+		state.fog.revision = ELFog.revision(state) + 1
+		for i in 3: await process_frame
+		replayed = replayed or view.effects.effects.has(name)
+	check(t < 30.0 and not replayed, "#305 ch44 the closing effect plays once and not again with later fog refreshes (moves)")
+	state._native([float(PORTAL_CLOSED)], "ExTakeObject")
+	state._native([float(PORTAL_CLOSED), float(at.x), float(at.y)], "ExPlaceObject")
+	await process_frame
+	check(view.effects.effects.has(name), "#305 ch44 a portal placed again plays its effect anew")
+	view.queue_free()
+	await process_frame
+
+func _backup(folder: String) -> Dictionary:
+	var kept := {}
+	if not DirAccess.dir_exists_absolute(folder): return kept
+	for file in DirAccess.get_files_at(folder): kept[file] = FileAccess.get_file_as_bytes(folder.path_join(file))
+	return kept
+
+func _restore(folder: String, kept: Dictionary) -> void:
+	if not DirAccess.dir_exists_absolute(folder): return
+	for file in DirAccess.get_files_at(folder):
+		if kept.has(file):
+			if FileAccess.get_file_as_bytes(folder.path_join(file)) != kept[file]:
+				var out := FileAccess.open(folder.path_join(file), FileAccess.WRITE)
+				out.store_buffer(kept[file])
+		else: DirAccess.remove_absolute(folder.path_join(file))
 
 # --- Battle script summons ---------------------------------------------------
 

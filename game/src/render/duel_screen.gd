@@ -280,6 +280,21 @@ func _transparent(item_list: ItemList) -> void:
 	item_list.get_v_scroll_bar().modulate = Color(1, 1, 1, 0)
 	item_list.focus_mode = Control.FOCUS_NONE
 
+## Keeps a pair of original scroll arrows inactive where their list cannot
+## move further, as the original draws them (#304): `can_up` and `can_down`
+## are checked every frame while the screen shows.
+func _arrow_states(up: ELFrontMenu.CutButton, down: ELFrontMenu.CutButton, can_up: Callable, can_down: Callable) -> void:
+	if up == null and down == null: return
+	var watch := ArrowWatch.new()
+	watch.pairs = [[up, can_up], [down, can_down]]
+	(up if up != null else down).add_child(watch)
+
+static func _list_can(item_list: ItemList, direction: int) -> bool:
+	if item_list == null: return false
+	var bar := item_list.get_v_scroll_bar()
+	if bar.max_value - bar.page <= bar.min_value + 0.5: return false
+	return bar.value > bar.min_value + 0.5 if direction < 0 else bar.value < bar.max_value - bar.page - 0.5
+
 func _scroll(item_list: ItemList, rows: int) -> void:
 	if item_list == null: return
 	var bar := item_list.get_v_scroll_bar()
@@ -2195,10 +2210,10 @@ func _build_el2_spells() -> void:
 	right_list.item_activated.connect(func(index: int):
 		edit.item = index
 		buy())
-	_button("EPScrollUp2", func(): _scroll(right_list, -1))
-	_button("EPScrollDown2", func(): _scroll(right_list, 1))
-	_button("EPScrollUp1", func(): reserve.scroll(-1))
-	_button("EPScrollDown1", func(): reserve.scroll(1))
+	_arrow_states(_button("EPScrollUp2", func(): _scroll(right_list, -1)), _button("EPScrollDown2", func(): _scroll(right_list, 1)),
+		func(): return _list_can(right_list, -1), func(): return _list_can(right_list, 1))
+	_arrow_states(_button("EPScrollUp1", func(): reserve.scroll(-1)), _button("EPScrollDown1", func(): reserve.scroll(1)),
+		func(): return reserve.can_scroll(-1), func(): return reserve.can_scroll(1))
 	_refresh_el2_lists()
 
 func _build_el2_misc() -> void:
@@ -2256,8 +2271,8 @@ func _build_el2_misc() -> void:
 	artifacts.gui_input.connect(func(event: InputEvent):
 		if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT and artifacts.get_item_at_position(event.position, true) < 0 and int(edit.owned) >= 0:
 			return_artifact())
-	_button("EPScrollUp3", func(): _scroll(artifacts, -1))
-	_button("EPScrollDown3", func(): _scroll(artifacts, 1))
+	_arrow_states(_button("EPScrollUp3", func(): _scroll(artifacts, -1)), _button("EPScrollDown3", func(): _scroll(artifacts, 1)),
+		func(): return _list_can(artifacts, -1), func(): return _list_can(artifacts, 1))
 	var strip := _artifact_strip(_rect("EPArtifactsBounds"))
 	_drag_source(right_list, "choice", func(local: Vector2): return _list_item(right_list, local))
 	_drop_zone(right_list, "choice")
@@ -2653,10 +2668,15 @@ class BookView extends Control:
 		return cells
 
 	func scroll(step: int) -> void:
-		var rows := ceili(float(entries().size()) / columns)
-		var shown := int(size.y / cell().y)
-		offset = clampi(offset + step, 0, maxi(0, rows - shown))
+		offset = clampi(offset + step, 0, last_offset())
 		queue_redraw()
+
+	func last_offset() -> int:
+		var rows := ceili(float(entries().size()) / columns)
+		return maxi(0, rows - int(size.y / cell().y))
+
+	func can_scroll(direction: int) -> bool:
+		return offset > 0 if direction < 0 else offset < last_offset()
 
 	func slot_at(point: Vector2) -> int:
 		if not Rect2(Vector2.ZERO, size).has_point(point): return -1
@@ -3006,6 +3026,18 @@ class ChoiceView extends Control:
 
 ## The carried item's picture (or its name) under the pointer while it is
 ## dragged between the editor's panels.
+## Sets its scroll arrows' disabled state from their checks each frame.
+class ArrowWatch extends Node:
+	var pairs: Array = []
+	func _process(_delta: float) -> void:
+		for pair: Array in pairs:
+			var button: BaseButton = pair[0]
+			if button == null or not is_instance_valid(button): continue
+			var blocked := not bool((pair[1] as Callable).call())
+			if button.disabled != blocked:
+				button.disabled = blocked
+				button.queue_redraw()
+
 class DragGhost extends Control:
 	var screen: ELDuelScreen
 	const SIDE := 44.0

@@ -264,7 +264,10 @@ class LevelButton extends RoundButton:
 			if is_instance_valid(_odds_box): _fill_odds_tooltip()
 	var _odds_box: VBoxContainer
 
+	# The round button's own _init sizes it: without it the level button was
+	# 8 pixels tall (a dark bar over the badge, and hard to press).
 	func _init() -> void:
+		super()
 		kind = "level"
 
 	func _make_custom_tooltip(_text: String) -> Object:

@@ -123,6 +123,15 @@ func _editor(menu: ELFrontMenu) -> void:
 	await frames(3)
 	duel.select_tab(0)
 	await frames(3)
+	# #304: the list arrows light only when their list can scroll that way.
+	var up: BaseButton = menu.buttons.get("EPScrollUp2")
+	var down: BaseButton = menu.buttons.get("EPScrollDown2")
+	check(up != null and up.disabled and down != null and not down.disabled, "#304: at the top of the spells only the down arrow is active")
+	duel._scroll(duel.right_list, 3)
+	await frames(3)
+	check(up != null and not up.disabled, "#304: scrolled down, the up arrow is active too")
+	duel._scroll(duel.right_list, -3)
+	await frames(2)
 	for i in 8: duel.act("spell_to_reserve", duel.right_items[10 + i].value)
 	duel.name_edit.text = String(preset.name) + "2"
 	duel.name_edit.grab_focus()

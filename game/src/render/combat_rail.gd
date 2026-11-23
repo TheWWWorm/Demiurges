@@ -131,6 +131,7 @@ func build(profile: ELProfile) -> void:
 		arrow.focus_mode = Control.FOCUS_NONE
 		arrow.action_mode = BaseButton.ACTION_MODE_BUTTON_PRESS
 		arrow.dim_disabled = false
+		arrow.push_when_disabled = true
 		var direction := -1 if control.ends_with("Left") else 1
 		arrow.set_meta("spell_arrow", direction)
 		arrow.set_meta("rect", rect)

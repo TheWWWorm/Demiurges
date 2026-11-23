@@ -104,6 +104,8 @@ const RU := {
 	"Menu": "Меню", "Shop": "Лавка", "Players · %d": "Игроки · %d", "All boards": "Все поля",
 	"Damage": "Урон", "Alliances": "Союзы", "Artifacts and spells": "Артефакты и заклинания",
 	"Choose a spell or artifact": "Выберите заклинание или артефакт", "Resume": "Продолжить",
+	"Undo the last action": "Отменить последнее действие",
+	"Take back the last purchase, sale or move of this preparation. Shop refreshes are not refunded.": "Отменить последнюю покупку, продажу или перестановку в этой подготовке. Обновления лавки не возвращаются.",
 	"Leave (the game is saved)": "Выйти (игра сохранится)", "Concede and end the game": "Сдаться и закончить игру",
 	"Watch the other boards": "Смотреть другие поля", "Return to the main menu": "Вернуться в главное меню",
 	"Evolution!": "Эволюция!", "Preparing": "Подготовка", "Battle in %ds": "Бой через %d с", "Battle": "Бой",

@@ -478,6 +478,17 @@ func collect_resources(hero_id: int, resource_id: int) -> bool:
 	event.emit({"kind": "resources_collected", "id": resource_id, "hero": hero_id, "player": actor.owner, "amounts": amounts})
 	return true
 
+## ExGetObjectPoint: the original returns the object's figure position (its
+## scene node's x, y, z), not its anchor tile. A building's figure stands at
+## the middle of its footprint, so the second game's 2 x 2 portals and
+## teleports centre their scripted effects there (#305); a figure stands on
+## its tile. Two units per cell; shipped second-game maps are flat.
+func _object_point(item: Dictionary) -> Array:
+	var at := Vector2(float(item.get("x", -1)) + 0.5, float(item.get("y", -1)) + 0.5)
+	if map != null and map.profile != null and map.profile.id == "el2" and not item.is_empty() and item.get("type") not in ["hero", "monster", "corpse"]:
+		at = ELAdventureGrid.center(item, ELAdventureArt.new(map).resolve(item).get("row", {}))
+	return [at.x * 2.0, at.y * 2.0, 0.0]
+
 func _bindings() -> Array[String]:
 	return ["date", "ExGetRandomSeed", "ExSetVariable", "ExGetVariable", "ExClearVariables", "ExGetMainHeroID", "ExGetCurrentPlayer", "ExGetDay", "ExSetDay", "ExGetPos", "ExGetTilePoint", "ExGetObjectPoint", "ExGetMapSize", "ExGetObjectType", "ExIsAlive", "ExIsHostile", "ExGetMobCount", "ExGetMobByIndex", "ExGetResources", "ExAddResources",
 		"ExCreateHero", "ExCreateHeroForPlayer", "ExKillHero", "ExHideHero", "ExCreateCorpse", "ExGetCorpseHero", "ExSetHeroShape", "ExSetHeroName", "ExSetHostility", "ExWinLoseMission",
@@ -608,7 +619,7 @@ func _native(args: Array, name: String) -> Array:
 			if map.profile.id == "el2" and not object(main_hero).is_empty(): object(main_hero).travel_day = day
 		"ExGetPos": return [float(item.get("x", -1)), float(item.get("y", -1))]
 		"ExGetTilePoint": return [(float(args[0]) + 0.5) * 2.0, (float(args[1]) + 0.5) * 2.0, 0.0] if args.size() > 1 else []
-		"ExGetObjectPoint": return [(float(item.get("x", -1)) + 0.5) * 2.0, (float(item.get("y", -1)) + 0.5) * 2.0, 0.0]
+		"ExGetObjectPoint": return _object_point(item)
 		"ExGetMapSize": return [float(map.width), float(map.height)]
 		"ExGetObjectType":
 			if ELSecondBuildings.is_tunnel(item): return ["mob_building"]
@@ -843,7 +854,14 @@ func _native(args: Array, name: String) -> Array:
 		"ExSetExclusiveFlag": exclusive = first != null and first != 0
 		"ExGetTextByID": return [map.profile.text(str(first))]
 		"ExSetUsability":
-			if not item.is_empty() and args.size() > 1: item.enabled = args[1] != null and args[1] != 0
+			if not item.is_empty() and args.size() > 1:
+				item.enabled = args[1] != null and args[1] != 0
+				# The original keeps three states: 0 forbids use, 1 allows it
+				# and anything else returns to the object's own rule. A
+				# "Simple" map building (CCustomBuilding) has no rule of its own
+				# and can be used only while a script allows it (ELCursors).
+				if typeof(args[1]) in [TYPE_INT, TYPE_FLOAT] and float(args[1]) == 1.0: item.script_usable = true
+				else: item.erase("script_usable")
 		"ExGetUsability": return [1.0 if item.get("enabled", false) else null]
 		"ExClearHand":
 			if not item.is_empty():
