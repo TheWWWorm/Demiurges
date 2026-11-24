@@ -10,7 +10,7 @@ const NAME_LIMIT := 21
 ## The Single player panel's slot edits (12 + 1).
 const SLOT_NAME_LIMIT := 13
 const STARTER_LOGO_FIRST := 72
-const LOGOS := STARTER_LOGO_FIRST + 12
+const LOGOS := 150
 const COLOURS := 16
 
 ## Session profile: the name persists while the game runs. Each new setup

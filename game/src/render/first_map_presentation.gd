@@ -46,7 +46,7 @@ extends Node3D
 ## again while the file is missing; the map's ground always answers "sand".
 ## A figure with steps/sand/walk.wav (run.wav), such as a flying dragon,
 ## loops it while it walks (runs). Footsteps use the effects volume.
-const BLAZON_CELL := 41.0
+const BLAZON_CELL := ELBlazonArt.CELL
 ## World size of the blazon quad: the original projects it with half-size
 ## 0.8, centred 0.8 + 0.5 above the object's top, so it scales
 ## with the camera like the map itself.
@@ -167,8 +167,7 @@ func build(data: ELProfile, preferences: ELSettings, session: ELAdventureSession
 		effects = ELAdventureEffects.new()
 		add_child(effects)
 		effects.build(profile, settings, state)
-		for name: String in ["color", "logo00", "logo01"]: _textures[name] = profile.texture("Interface/Blazon/" + name)
-		_textures["logo02"] = ELBlazonArt.STARTER_ATLAS
+		_textures["color"] = profile.texture("Interface/Blazon/color")
 		_textures["swords"] = profile.texture("Interface/Big_states")
 	for i in 4: _ambient_counts[i] = ambient_count(profile, AMBIENT_FOLDERS[i])
 	if not state.event.is_connected(_state_event): state.event.connect(_state_event)
@@ -372,17 +371,19 @@ func _sync_blazon(item: Dictionary, row: Dictionary) -> void:
 	var entry: Dictionary = blazons.get(uid, {})
 	if entry.get("picture", Vector2i(-2, -2)) != picture:
 		_drop_blazon(uid)
-		entry = {"back": _sprite("color", picture.y, 0), "fore": _sprite("logo%02d" % (picture.x / 36), picture.x % 36, 1), "picture": picture, "owner": owner}
+		entry = {"back": _sprite(_textures.get("color"), ELBlazonArt.cell_rect(picture.y), 0),
+			"fore": _sprite(ELBlazonArt.logo_texture(profile, picture.x), ELBlazonArt.logo_region(picture.x), 1),
+			"picture": picture, "owner": owner}
 		blazons[uid] = entry
 	entry.top = maxf(world.object_top(uid), 0.0)
 	entry.row = row
 	_place_blazon(uid, item)
 
-func _sprite(sheet: String, cell: int, layer: int) -> Sprite3D:
+func _sprite(sheet: Texture2D, region: Rect2, layer: int) -> Sprite3D:
 	var sprite := Sprite3D.new()
-	sprite.texture = _textures.get(sheet)
+	sprite.texture = sheet
 	sprite.region_enabled = true
-	sprite.region_rect = Rect2(BLAZON_CELL * (cell % 6), BLAZON_CELL * (cell / 6), BLAZON_CELL, BLAZON_CELL)
+	sprite.region_rect = region
 	sprite.pixel_size = BLAZON_SIZE / BLAZON_CELL
 	sprite.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 	sprite.shaded = false

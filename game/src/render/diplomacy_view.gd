@@ -95,9 +95,8 @@ func build(session: ELAdventureSession, owner: int) -> void:
 	profile = state.map.profile
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
-	for name: String in ["DIPLOMACY_PANEL_7", "DIPLOMACY_PANEL_18", "MISSION_PANEL_7", "MISSION_PANEL_9", "SYMBOLS", "BLAZON_BACK", "BLAZON_FORE_00", "BLAZON_FORE_01"]:
+	for name: String in ["DIPLOMACY_PANEL_7", "DIPLOMACY_PANEL_18", "MISSION_PANEL_7", "MISSION_PANEL_9", "SYMBOLS", "BLAZON_BACK"]:
 		_textures[name] = profile.texture(str(hud._paths.get(name, "")))
-	_textures["BLAZON_FORE_02"] = ELBlazonArt.STARTER_ATLAS
 	sheet = Canvas.new()
 	sheet.draw_call = _draw_sheet
 	sheet.press_call = func(_point: Vector2): pass
@@ -233,13 +232,9 @@ func _draw_sheet() -> void:
 func _draw_blazon(canvas: Control, id: int, at: Vector2) -> void:
 	var picture := blazon(id)
 	var back: int = picture.y
-	var fore: int = picture.x
 	if back >= 0 and _textures.BLAZON_BACK != null:
 		canvas.draw_texture_rect_region(_textures.BLAZON_BACK, Rect2(at, Vector2(BLAZON, BLAZON)), Rect2(BLAZON * (back % 6), BLAZON * (back / 6), BLAZON, BLAZON))
-	if fore >= 0:
-		var sheet_texture: Texture2D = _textures.get("BLAZON_FORE_%02d" % (fore / 36))
-		var cell := fore % 36
-		if sheet_texture != null: canvas.draw_texture_rect_region(sheet_texture, Rect2(at, Vector2(BLAZON, BLAZON)), Rect2(BLAZON * (cell % 6), BLAZON * (cell / 6), BLAZON, BLAZON))
+	ELBlazonArt.draw_logo(canvas, profile, picture.x, at)
 
 ## The map's blazon (logo) and blazon colour for a player, or -1.
 func blazon(id: int) -> Vector2i:

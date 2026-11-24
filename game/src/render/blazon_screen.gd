@@ -9,14 +9,14 @@ extends RefCounted
 
 ## Panel shift of the 1024 layout.
 const PANEL := Vector2(112, 84)
-const BLAZON := 41.0
+const BLAZON := ELBlazonArt.CELL
 ## Name frame (CAMPAIGN_SCREEN_1 0,0 206×93) and blazon box, Good side; the
 ## Evil side is 271 px to the right.
 const FRAME_AT := Vector2(161, 459)
 const BOX_AT := Vector2(243, 467)
 const SIDE_STEP := 271.0
 const BOX_HOVER := Rect2(206, 192, 41, 39)
-## Logo grid: 15 columns from (57,40), 46 px pitch.
+## Full logo grid: 15 columns by 10 rows, 46 px pitch.
 const LOGO_AT := Vector2(57, 40)
 const LOGO_PITCH := 46.0
 const LOGO_COLUMNS := 15
@@ -59,10 +59,7 @@ func draw_blazon(canvas: CanvasItem, picture: Vector2i, at: Vector2) -> void:
 	var back := texture("BLAZON_BACK")
 	if picture.y >= 0 and back != null:
 		canvas.draw_texture_rect_region(back, Rect2(at, Vector2(BLAZON, BLAZON)), Rect2(BLAZON * (picture.y % 6), BLAZON * (picture.y / 6), BLAZON, BLAZON))
-	if picture.x < 0: return
-	var fore := ELBlazonArt.STARTER_ATLAS if picture.x >= ELPlayerProfile.STARTER_LOGO_FIRST else texture("BLAZON_FORE_%02d" % (picture.x / 36))
-	var cell := picture.x % 36
-	if fore != null: canvas.draw_texture_rect_region(fore, Rect2(at, Vector2(BLAZON, BLAZON)), Rect2(BLAZON * (cell % 6), BLAZON * (cell / 6), BLAZON, BLAZON))
+	ELBlazonArt.draw_logo(canvas, profile(), picture.x, at)
 
 # --- Campaign screen --------------------------------------------------------------
 
