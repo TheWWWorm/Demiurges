@@ -158,11 +158,11 @@ func _defence_selection(view: Node, edition: String) -> void:
 	view._target(blocker)
 	check(view.selected_creature == blocker, "%s: select the blocker during the opponent's attack" % edition)
 	# Keep the phase announcement queued behind the end of a cast gesture.
-	view._cast_until = view.elapsed + 0.25
+	view.presentation.cast_until = view.elapsed + 0.25
 	if not duel.end_phase():
 		check(false, "%s: the opponent's attack advances to defence" % edition)
 		return
-	check(view._cast_queue.any(func(event: Dictionary) -> bool: return event.get("phase") == "defence"), "%s: the defence banner is still queued" % edition)
+	check(view.presentation.events.any(func(event: Dictionary) -> bool: return event.get("phase") == "defence"), "%s: the defence banner is still queued" % edition)
 	view.combat_hover = attacker
 	view._update_cursor()
 	check(view.cursor_name == "attack", "%s: the sword shows over a legal attacker at the start of defence" % edition)
@@ -217,7 +217,7 @@ func _watch(view: Node, ids: Array, start: float) -> Array:
 		samples.append({"t": view.elapsed - start, "blows": int(view.melee._next_blow) if view._melee_busy() else 999,
 			"shown": _shown(view, ids), "standing": ids.filter(func(id: int) -> bool:
 				return view.models.has(id) and not bool(view.models[id].get_meta("dying", false)) and (not is_instance_valid(view.symbols) or not view.figure_rows(id).is_empty()))})
-		if not view._shown_held() and not view._melee_busy() and view._cast_queue.is_empty() and view._hits_waiting.is_empty(): break
+		if not view._shown_held() and not view._melee_busy() and view.presentation.events.is_empty() and view._hits_waiting.is_empty(): break
 	await _idle(view)
 	return samples
 
@@ -452,7 +452,7 @@ func _summon_then_end(view: Node, card: String, after_queued_combat := false) ->
 			return
 		# The same player can submit their next action while their defence cast
 		# still holds the previous combat's presentation.
-		view._cast_until = view.elapsed + 0.3
+		view.presentation.cast_until = view.elapsed + 0.3
 		duel.end_phase()
 	else: await _attack_turn(view, 0)
 	duel.heroes[0].mana = 40
@@ -628,13 +628,13 @@ func _gazed_blocker(view: Node, edition: String) -> void:
 func _fallen_hero_pose(view: Node, edition: String) -> void:
 	await _clear(view)
 	var duel: ELDuel = view.duel
-	view._wait_display(0)
+	view.presentation.wait_for(0)
 	duel.heroes[1].health = 1
 	duel._damage(1, 5)
 	duel._check_winner()
 	if not view.models.has(1) or duel.winner != 0:
 		check(false, "%s: #266 the lethal hit ends the duel" % edition)
-		view._unwait_display(0)
+		view.presentation.resolve_wait(0)
 		return
 	var model: ELModel = view.models[1]
 	var stood := false
@@ -644,4 +644,4 @@ func _fallen_hero_pose(view: Node, edition: String) -> void:
 		if model.clip != "udeath": stood = true
 		if view.ending.get("stage", "") == "over": break
 	check(not stood and view._shown_phase() != ELDuel.Phase.FINISHED, "%s: #266 the fallen hero keeps its death pose while the shown result lags" % edition)
-	view._unwait_display(0)
+	view.presentation.resolve_wait(0)

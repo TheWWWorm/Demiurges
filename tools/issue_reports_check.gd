@@ -848,7 +848,7 @@ func _battle_reports(edition: String) -> void:
 		audio.played.clear()
 		audio.hold(0.6)
 		audio.play(sound)
-		view._cast_until = view.elapsed + 5.0
+		view.presentation.cast_until = view.elapsed + 5.0
 		view._skip_battle_presentation()
 		var start := Time.get_ticks_msec()
 		while Time.get_ticks_msec() - start < 1200: await process_frame

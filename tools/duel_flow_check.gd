@@ -92,20 +92,20 @@ func _rest_before_turn(view: Node, racing: bool) -> void:
 		check(duel.attacker == side and not bool(duel.creatures[attacker].resting), "%s: the rules already woke the treant for its next turn" % what)
 	# Clips seen when the first phase after the fight is shown.
 	var at_phase := -1
-	var shown_phase: Variant = view._shown.get("phase")
-	var shown_active: Variant = view._shown.get("active")
+	var shown_phase: Variant = view.presentation.snapshot.get("phase")
+	var shown_active: Variant = view.presentation.snapshot.get("active")
 	var clock := 0.0
 	for i in 2000:
 		view.ai_clock = -1000.0
 		await process_frame
 		if view._melee_busy(): continue
-		if at_phase < 0 and (view._shown.get("phase") != shown_phase or view._shown.get("active") != shown_active): at_phase = clips.size()
+		if at_phase < 0 and (view.presentation.snapshot.get("phase") != shown_phase or view.presentation.snapshot.get("active") != shown_active): at_phase = clips.size()
 		if not racing and not (duel.attacker == side and duel.phase == ELDuel.Phase.ATTACK):
 			clock += get_root().get_process_delta_time()
 			if clock >= 0.85:
 				clock = 0.0
 				duel.end_phase()
-		if duel.attacker == side and duel.phase == ELDuel.Phase.ATTACK and view._cast_queue.is_empty() and not view.figures_turning() and model.clip == "cidle": break
+		if duel.attacker == side and duel.phase == ELDuel.Phase.ATTACK and view.presentation.events.is_empty() and not view.figures_turning() and model.clip == "cidle": break
 	var tap := clips.find("utap")
 	check(tap >= 0, "%s: the treant lies down at home (%s)" % [what, ", ".join(clips)])
 	if not racing:

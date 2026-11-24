@@ -16,12 +16,41 @@ func _initialize() -> void:
 	_run.call_deferred()
 
 func _run() -> void:
+	_event_queue_and_snapshots()
 	_numbers()
 	_blood()
 	await _captions()
 	if OS.get_cmdline_user_args().has("--render"): await _preview()
 	print("Combat presentation: %d failure(s)" % failures.size())
 	quit(1 if not failures.is_empty() else 0)
+
+func _event_queue_and_snapshots() -> void:
+	var playback := ELDuelPresentation.new()
+	var waiting := {"cast": true}
+	var presenting := func(_kind: String) -> bool: return waiting.cast
+	var played: Array[String] = []
+	var dispatch := func(event: Dictionary) -> void:
+		check(not playback.hold_event(event, null, presenting), "an event dispatched by the queue bypasses its own gate")
+		played.append(event.kind)
+	check(playback.hold_event({"kind": "phase"}, null, presenting) and playback.hold_event({"kind": "damage"}, null, presenting),
+		"a pending cast holds the phase and later events")
+	check(not playback.drain_events(null, presenting, dispatch), "draining waits while the cast is still shown")
+	waiting.cast = false
+	check(playback.drain_events(null, presenting, dispatch) and played == ["phase", "damage"], "the queue drains in event order")
+	var watching := func() -> Array: return []
+	var hero := {"maximum": 20, "hand": [], "hand_view": [], "hand_slots": [], "spell_uses": [], "deck": [], "grave": [], "enchantments": [], "artifacts": []}
+	var earlier := {"serial": 1, "phase": 0, "active": 0, "heroes": [hero, hero], "creatures": {}}
+	var later := {"serial": 2, "phase": 1, "active": 1, "heroes": [hero, hero], "creatures": {}}
+	playback.wait_for(1)
+	playback.wait_for(1)
+	playback.present(later, watching)
+	check(playback.snapshot.is_empty() and playback.display_lagging(), "a later stamp waits for earlier cues")
+	playback.release(earlier, watching)
+	check(playback.snapshot == earlier and playback.display_lagging(), "one landed cue shows the earlier stamp and keeps the second wait")
+	playback.release(earlier, watching)
+	check(playback.snapshot == later and playback.dirty and not playback.display_lagging(), "the last cue releases the new phase")
+	playback.present(earlier, watching)
+	check(playback.snapshot == later, "a late callback cannot roll the display back")
 
 func _numbers() -> void:
 	var symbols := ELCombatSymbols.new()

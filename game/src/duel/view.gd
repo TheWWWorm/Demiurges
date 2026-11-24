@@ -788,13 +788,7 @@ func _start(edition: String, options: Dictionary = {}, restored: ELDuel = null, 
 	_redirect_hit.clear()
 	_hits_waiting.clear()
 	_battle_cues.clear()
-	_cast_queue.clear()
-	_cast_until = 0.0
-	_shown = {}
-	_display_dirty = false
-	_display_was_held = false
-	_display_queue.clear()
-	_display_waits.clear()
+	presentation.reset()
 	_drain_started = false
 	_ending_waiting = {}
 	battle_audio = ELBattleAudio.new()
@@ -1013,10 +1007,10 @@ func _process(delta: float) -> void:
 		return
 	if duel != null:
 		ai_clock += delta
-		if not _cast_queue.is_empty(): _step_cast_queue()
+		if not presentation.events.is_empty(): _step_cast_queue()
 		# Figures that have just appeared join the front line they were declared to.
 		_step_front_line()
-		if _display_dirty or (_display_was_held and not _shown_held()): _refresh()
+		if presentation.dirty or (presentation.was_held and not _shown_held()): _refresh()
 		_show_hero_stats()
 		# The computer, a replay and the tutorial's recorded side act only once
 		# the previous action has been shown (fight and cast alike).
@@ -1080,8 +1074,8 @@ func _process(delta: float) -> void:
 		var figures: Array = []
 		# NumbersOnCamera off hides the figure marks while a close-up plays.
 		var numbers := bool(settings.values.get("creature_numbers", true)) and not (auto_camera != null and auto_camera.active() and not bool(settings.values.get("numbers_on_camera", true)))
-		var attacks: Array = _shown.attacks if _display_active() else duel.attacks
-		var blocks: Dictionary = _shown.blocks if _display_active() else duel.blocks
+		var attacks: Array = presentation.snapshot.attacks if _display_active() else duel.attacks
+		var blocks: Dictionary = presentation.snapshot.blocks if _display_active() else duel.blocks
 		for id: int in labels:
 			if not models.has(id) or not is_instance_valid(models[id]):
 				continue
@@ -2158,14 +2152,14 @@ func _skip_battle_presentation(keep_sounds := false) -> void:
 			else:
 				battle_audio.cut()
 				battle_audio.silenced = true
-		var remaining := _cast_queue.size() + 1
+		var remaining := presentation.events.size() + 1
 		for _step in remaining:
 			if keep_sounds and _melee_busy(): break
 			if _melee_busy(): melee.finish()
 			if not _effect_cast.is_empty(): _start_cast_effects()
 			_step_arrivals(true)
-			_cast_until = elapsed
-			if _cast_queue.is_empty(): break
+			presentation.cast_until = elapsed
+			if presentation.events.is_empty(): break
 			_step_cast_queue()
 		_finish_battle_cues()
 		_step_front_line()
@@ -2328,7 +2322,7 @@ func _step_arrivals(instant := false) -> void:
 				if is_instance_valid(effects): effects.cast(String(arrival.card), {"Start": [caster], "Target": targets})
 				# The next action (a cast, an ability, the end of the phase) waits
 				# for the summon's own effect, not only for its creature to appear.
-				if not instant: _cast_until = maxf(_cast_until, elapsed + _summon_effect_seconds(String(arrival.card)))
+				if not instant: presentation.cast_until = maxf(presentation.cast_until, elapsed + _summon_effect_seconds(String(arrival.card)))
 			# The creature's close-up starts with its summoning effect, just
 			# before it appears (the original queues it at the figure's creation).
 			if not instant and _auto_camera_on() and auto_camera != null: auto_camera.summoned(_camera_targets(arrival.ids, int(arrival.side)))
@@ -2360,7 +2354,7 @@ func _summon_effect_seconds(card: String) -> float:
 func _shown_creature_stats(id: int, creature: Dictionary) -> Dictionary:
 	for arrival: Dictionary in _arrivals:
 		if arrival.stats.has(id): return arrival.stats[id]
-	return _shown.creatures.get(id, creature) if _display_active() else creature
+	return presentation.snapshot.creatures.get(id, creature) if _display_active() else creature
 
 func _show_aura_cue(cue: Dictionary) -> void:
 	var target := int(cue.target)
@@ -2383,8 +2377,8 @@ func _step_front_line() -> void:
 	var declared: Array[int] = []
 	var faces := {}
 	if not melee.busy() and _shown_phase() != ELDuel.Phase.FINISHED:
-		var attacks: Array = _shown.attacks if _display_active() else duel.attacks
-		var blocks: Dictionary = _shown.blocks if _display_active() else duel.blocks
+		var attacks: Array = presentation.snapshot.attacks if _display_active() else duel.attacks
+		var blocks: Dictionary = presentation.snapshot.blocks if _display_active() else duel.blocks
 		for id: int in regenerated_home.keys():
 			if not attacks.has(id): regenerated_home.erase(id)
 		declared.assign(attacks.filter(func(id: int) -> bool: return not regenerated_home.has(id)))
@@ -2413,35 +2407,9 @@ func _step_front_line() -> void:
 func _melee_busy() -> bool:
 	return is_instance_valid(melee) and melee.busy()
 
-## Casts are shown one after another. The original's battle tick takes no
-## further command while visual events are pending (the gate
-## live players and the replay player share); the rules here settle a cast at
-## once, so a quick second cast's presentation (gesture, voice, effects and
-## everything it touches) waits in this queue until the previous cast's
-## gesture and hit have played, instead of starting over it.
-const CAST_KINDS := ["cast", "artifact"]
-## Events that start a new action (a cast, a creature's ability, the end of a
-## phase): like the original's input gate, each waits until the previous
-## action has been shown, its summoned creatures included.
-const SEQUENCED_KINDS := ["cast", "artifact", "ability", "phase", "script_cast", "combat_start"]
 ## Set while Space skips the presentation: nothing waits then.
 var _skipping_presentation := false
-var _cast_queue: Array[Dictionary] = []
-## `elapsed` when the cast being shown has played.
-var _cast_until := 0.0
-var _cast_dispatching := false
-## The duel settles actions immediately. Each event carries the screen's
-## readouts as of that event. Playback publishes them in order once their
-## animations and earlier hit cues have reached the screen.
-var _shown: Dictionary = {}
-var _display_dirty := false
-var _display_was_held := false
-## Serial of the last stamp handed out (stamps only move the display forward).
-var _stamp_serial := 0
-## Presented stamps waiting for an earlier hit or cue.
-var _display_queue: Array[Dictionary] = []
-## Stamp serial -> hits and effect cues of that event still to land.
-var _display_waits: Dictionary = {}
+var presentation := ELDuelPresentation.new()
 ## A life drain's effect has just started: the next heal shows when it arrives.
 var _drain_started := false
 ## The duel's result event while a loser's hit still waits for its cue.
@@ -2451,7 +2419,7 @@ var _ending_waiting: Dictionary = {}
 ## summon waiting for its effect, or a summoned creature's entrance clip.
 func _presenting(kind := "") -> bool:
 	if _skipping_presentation: return false
-	if elapsed < _cast_until or not _arrivals.is_empty(): return true
+	if elapsed < presentation.cast_until or not _arrivals.is_empty(): return true
 	for id: int in models:
 		if id >= 2 and is_instance_valid(models[id]) and models[id].visible and models[id].clip == "usummon": return true
 	# The next phase also waits for figures lying down or getting up (#237:
@@ -2470,11 +2438,11 @@ func figures_turning() -> bool:
 
 ## A cast is still being shown, or casts wait for their turn.
 func _cast_busy() -> bool:
-	return not _cast_queue.is_empty() or elapsed < _cast_until
+	return presentation.cast_busy(elapsed)
 
 ## Events the rules have settled but the screen has not shown yet.
 func _presentation_held() -> bool:
-	return _melee_busy() or not _cast_queue.is_empty()
+	return _melee_busy() or not presentation.events.is_empty()
 
 ## The shown health and wounds lag the rules: as above, or a figure's hit
 ## still waits for the cue frame of the effect that deals it.
@@ -2483,7 +2451,7 @@ func _shown_held() -> bool:
 
 ## A presented change still waits for its hit or effect cue.
 func _display_lagging() -> bool:
-	return not _display_waits.is_empty() or not _display_queue.is_empty()
+	return presentation.display_lagging()
 
 ## Stamp the rules' event before the rest of the action can change its values.
 func _on_duel_event(data: Dictionary) -> void:
@@ -2509,7 +2477,7 @@ func _on_duel_event(data: Dictionary) -> void:
 			var source := " from " + str(data.source_card) if data.has("source_card") else ""
 			ELCrashReport.trace("battle %s: side %s, card %s%s, turn %d" % [kind, data.get("side", "?"), data.get("card", "?"), source, duel.turn_serial])
 		if not (kind.ends_with("_cue") or kind in ["combat_ability", "camera_cue", "combat_event", "attack_tax_effect"]):
-			data.shown = _display_stamp()
+			data.shown = presentation.stamp(duel, _ability_marks)
 		if kind == "strike" and is_instance_valid(melee): melee.stamp_strike(data)
 		# Blast's OuterBlast shows only on a Pale target; note it before the
 		# spell resolves, as its 3 damage can remove the creature.
@@ -2541,31 +2509,8 @@ func _on_turn_cleanup() -> void:
 func _on_combat_finished() -> void:
 	_on_duel_event({"kind": "combat_end"})
 
-## Holds an event behind the cast being shown. Events the combat playback
-## sequences itself pass, as does everything once the queue is drained.
-func _hold_cast(data: Dictionary) -> bool:
-	if _cast_dispatching or (is_instance_valid(melee) and melee.dispatching()): return false
-	var combat_closed := is_instance_valid(melee) and melee.blocks_cast_queue()
-	if not combat_closed and _cast_queue.is_empty() and (_melee_busy() or not data.get("kind") in SEQUENCED_KINDS or not _presenting(String(data.get("kind", "")))): return false
-	_cast_queue.append(data)
-	return true
-
-## Shows queued events in order; a queued cast waits for the previous one.
-## A fight waits until its playback has collected all its blows.
 func _step_cast_queue() -> void:
-	var shown := false
-	while not _cast_queue.is_empty():
-		if is_instance_valid(melee) and melee.blocks_cast_queue(): break
-		var next: Dictionary = _cast_queue[0]
-		# A summoned creature appears (and plays its entrance) before the
-		# next action is shown.
-		if next.get("kind") in SEQUENCED_KINDS and _presenting(String(next.get("kind", ""))): break
-		_cast_queue.pop_front()
-		_cast_dispatching = true
-		_event(next)
-		_cast_dispatching = false
-		shown = true
-	if shown: _refresh()
+	if presentation.drain_events(melee, _presenting, _event): _refresh()
 
 ## Seconds a cast's presentation holds the next one: the hero's gesture, and
 ## the card effect's hit or summon cue.
@@ -2578,50 +2523,24 @@ func _cast_seconds(data: Dictionary) -> float:
 	var cue := ELCombatEffects.summon_delay(profile, card) if duel.is_summon(card) else (_cast_release(side, card) if data.kind == "cast" else 0.0) + ELCombatEffects.hit_delay(profile, card)
 	return clampf(maxf(seconds, cue + 0.3), 0.8, 6.0)
 
-## The rules' values now, as a display stamp. `advance` hands out a new serial
-## (a rules event); without it the stamp keeps the last one (a resync).
-func _display_stamp(advance := true) -> Dictionary:
-	if advance: _stamp_serial += 1
-	var heroes: Array = []
-	for hero: Dictionary in duel.heroes:
-		heroes.append({"health": hero.health, "maximum": hero.get("maximum", hero.health), "mana": hero.mana, "channels": hero.channels,
-			"hand": hero.hand.duplicate(), "hand_view": ELDuel._hand_view(hero).duplicate(),
-			"hand_slots": hero.hand_slots.duplicate(), "spell_uses": hero.spell_uses.duplicate(),
-			"deck": hero.deck.duplicate(), "grave": hero.grave.duplicate(),
-			"enchantments": hero.enchantments.duplicate(), "artifacts": hero.get("artifacts", []).duplicate(true)})
-	var creatures := {}
-	for id: int in duel.creatures:
-		var c: Dictionary = duel.creatures[id]
-		creatures[id] = {"power": int(c.power), "toughness": int(c.toughness), "damage": int(c.damage),
-			"owner": c.owner, "plane": duel.in_plane(id), "resting": c.resting, "sick": c.sick,
-			"enchantments": c.enchantments.duplicate(), "marks": _ability_marks(id, c)}
-	return {"serial": _stamp_serial, "heroes": heroes, "creatures": creatures,
-		"phase": duel.phase, "active": duel.active_side(), "turn": duel.turn_serial,
-		"attacks": duel.attacks.duplicate(), "blocks": duel.blocks.duplicate()}
-
-## Keeps the shown values equal to the rules' while nothing waits, and jumps
-## to them when the presentation is skipped.
 func _sync_shown() -> void:
-	if duel == null: return
-	_display_queue.clear()
-	_display_waits.clear()
-	_shown = _display_stamp(false)
+	if duel != null: presentation.sync(duel, _ability_marks)
 
 ## Whether the screen shows the displayed state rather than the rules'.
 func _display_active() -> bool:
-	return not _shown.is_empty() and _shown_held()
+	return not presentation.snapshot.is_empty() and _shown_held()
 
 func _shown_phase() -> ELDuel.Phase:
-	return _shown.phase if _display_active() else duel.phase
+	return presentation.snapshot.phase if _display_active() else duel.phase
 
 func _shown_active_side() -> int:
-	return int(_shown.active) if _display_active() else duel.active_side()
+	return int(presentation.snapshot.active) if _display_active() else duel.active_side()
 
 func shown_hero(side: int) -> Dictionary:
-	return _shown.heroes[side] if _display_active() else duel.heroes[side]
+	return presentation.snapshot.heroes[side] if _display_active() else duel.heroes[side]
 
 func shown_creature(id: int) -> Dictionary:
-	return _shown.creatures.get(id, {}) if _display_active() else duel.creatures.get(id, {})
+	return presentation.snapshot.creatures.get(id, {}) if _display_active() else duel.creatures.get(id, {})
 
 func _shown_enchantments(id: int) -> Array:
 	if profile.id != "el2": return duel.entity(id).get("enchantments", [])
@@ -2630,7 +2549,7 @@ func _shown_enchantments(id: int) -> Array:
 
 func _shown_resting(id: int, creature: Dictionary) -> bool:
 	var resting := bool(creature.get("resting", false))
-	var serial := int(_shown.serial) if _display_active() else _stamp_serial
+	var serial := int(presentation.snapshot.serial) if _display_active() else presentation.serial
 	return melee.shown_resting(id, resting, serial) if is_instance_valid(melee) else resting
 
 func shown_health(side: int) -> int:
@@ -2664,11 +2583,10 @@ func _note_shown(data: Dictionary, landed := false) -> void:
 	if not landed:
 		var delay := _display_delay(data)
 		if delay > 0.0 and is_inside_tree() and not _skipping_presentation:
-			_wait_display(int(stamp.serial))
+			presentation.wait_for(int(stamp.serial))
 			_schedule_battle_cue(delay, _release_display.bind(stamp))
 			return
-	_display_queue.append(stamp)
-	_flush_display()
+	presentation.present(stamp, _watched_enchantments)
 
 ## Seconds until a presented non-damage change shows: the cue of the cast or
 ## ability effect that makes it, or a life drain's arrival at its hero.
@@ -2686,47 +2604,14 @@ func _display_delay(data: Dictionary) -> float:
 func _drain_seconds() -> float:
 	return _effect_travel("DrainLife", 2.0)
 
-func _wait_display(serial: int) -> void:
-	_display_waits[serial] = int(_display_waits.get(serial, 0)) + 1
-
-func _unwait_display(serial: int) -> void:
-	if not _display_waits.has(serial): return
-	_display_waits[serial] = int(_display_waits[serial]) - 1
-	if int(_display_waits[serial]) <= 0: _display_waits.erase(serial)
-
-## A waiting change's cue has come.
 func _release_display(stamp: Dictionary) -> void:
-	_unwait_display(int(stamp.serial))
-	_display_queue.append(stamp)
-	_flush_display()
+	presentation.release(stamp, _watched_enchantments)
 
-## Shows the newest presented stamp that no earlier waiting hit or cue holds back.
-func _flush_display() -> void:
-	var bar := -1
-	for serial: int in _display_waits: bar = serial if bar < 0 else mini(bar, serial)
-	var best := {}
-	var kept: Array[Dictionary] = []
-	for stamp: Dictionary in _display_queue:
-		if bar >= 0 and int(stamp.serial) > bar: kept.append(stamp)
-		elif best.is_empty() or int(stamp.serial) > int(best.serial): best = stamp
-	_display_queue = kept
-	if best.is_empty() or (not _shown.is_empty() and int(best.serial) <= int(_shown.serial)): return
-	# Wounds and ether are read every frame. Lists are rebuilt only when their
-	# contents change, and the phase caption follows the presented boundary.
-	if _shown.is_empty() or _shown.phase != best.phase or _shown.active != best.active:
-		_display_dirty = true
-	else:
-		for side in 2:
-			for field: String in ["maximum", "hand", "hand_view", "hand_slots", "spell_uses", "deck", "grave", "enchantments", "artifacts"]:
-				if _shown.heroes[side][field] != best.heroes[side][field]: _display_dirty = true
-		if profile.id == "el2":
-			for id: int in [selected_creature, _strip_subject()]:
-				if id >= 2 and _shown.creatures.get(id, {}).get("enchantments", []) != best.creatures.get(id, {}).get("enchantments", []):
-					_display_dirty = true
-	_shown = best
+func _watched_enchantments() -> Array[int]:
+	return [selected_creature, _strip_subject()] if profile.id == "el2" else []
 
 func _event(data: Dictionary) -> void:
-	if _hold_cast(data): return
+	if presentation.hold_event(data, melee, _presenting): return
 	if own_attack_pending >= 0 and data.get("kind") in ["combat_start", "strike"] and not _melee_busy():
 		_auto_attack_own(int(data.get("attacking", duel.attacker)), data.get("shown", {}).get("creatures", duel.creatures))
 	# Blows and what follows them wait for the combat playback.
@@ -2739,7 +2624,7 @@ func _event(data: Dictionary) -> void:
 	_note_history(data)
 	if data.get("kind") in ["attack_resolved", "turn_cleanup", "combat_end"]: return
 	_log_battle_outcome(data)
-	if data.get("kind") in CAST_KINDS: _cast_until = elapsed + _cast_seconds(data)
+	if data.get("kind") in ELDuelPresentation.CAST_KINDS: presentation.cast_until = elapsed + _cast_seconds(data)
 	if not _effect_cast.is_empty():
 		if profile.id == "el1" and _effect_cast.card == "FRNT" and data.kind == "fury_result":
 			_effect_cast.fury_attempts = int(data.get("attempts", 0))
@@ -3342,7 +3227,7 @@ func _event(data: Dictionary) -> void:
 			_figure_effect("RegenEffect", data.target)
 			_float_text(data.target, "Regeneration", Color("91dcc2"), true)
 			if profile.id == "el1" and front_line.has(int(data.target)) and not _melee_busy() \
-					and (_shown.attacks if _display_active() else duel.attacks).has(int(data.target)):
+					and (presentation.snapshot.attacks if _display_active() else duel.attacks).has(int(data.target)):
 				regenerated_home[int(data.target)] = true
 		"disenchant":
 			_float_text(data.target, "Disenchanted", Color("91dcc2"), true)
@@ -3390,7 +3275,7 @@ func _event(data: Dictionary) -> void:
 				var hero: ELModel = models[source]
 				if hero.has_clip("uinstant") and hero.play("uinstant"):
 					battle_audio.unit(hero, "instant")
-					_cast_until = maxf(_cast_until, elapsed + clampf(hero.clip_seconds("uinstant"), 0.0, 4.0))
+					presentation.cast_until = maxf(presentation.cast_until, elapsed + clampf(hero.clip_seconds("uinstant"), 0.0, 4.0))
 					release = _gesture_release(hero, "uinstant")
 			# As a cast's: the ability's effects and their sounds start at the
 			# gesture's release frame, and what they do to a figure (a plane
@@ -3404,7 +3289,7 @@ func _event(data: Dictionary) -> void:
 			# The next action waits for the creature's own action clip.
 			var user := int(data.get("source", -1))
 			if user >= 2 and models.has(user) and models[user].clip.begins_with("u") and models[user].clip != "usummon":
-				_cast_until = maxf(_cast_until, elapsed + clampf(models[user].clip_seconds(models[user].clip), 0.0, 4.0))
+				presentation.cast_until = maxf(presentation.cast_until, elapsed + clampf(models[user].clip_seconds(models[user].clip), 0.0, 4.0))
 		"trigger_cue":
 			# A trigger's original effect without damage (Outer Cripple's draw).
 			battle_audio.trigger(data.card)
@@ -3720,7 +3605,7 @@ func _hit_later(data: Dictionary) -> bool:
 		delay = maxf(delay, (actor.clip_frames() - actor.frame) / (actor.fps * actor.speed))
 	if delay <= 0.0 or not models.has(id) or not is_inside_tree(): return false
 	_hits_waiting[id] = int(_hits_waiting.get(id, 0)) + 1
-	if data.has("shown"): _wait_display(int(data.shown.serial))
+	if data.has("shown"): presentation.wait_for(int(data.shown.serial))
 	_schedule_battle_cue(delay, _late_hit.bind(data))
 	return true
 
@@ -3791,7 +3676,7 @@ func _late_hit(data: Dictionary) -> void:
 	var id := int(data.target)
 	_hits_waiting[id] = int(_hits_waiting.get(id, 0)) - 1
 	if int(_hits_waiting[id]) <= 0: _hits_waiting.erase(id)
-	if data.has("shown"): _unwait_display(int(data.shown.serial))
+	if data.has("shown"): presentation.resolve_wait(int(data.shown.serial))
 	_show_hit(data)
 	if _hits_waiting.has(id): return
 	_show_waiting_ending()
@@ -5468,9 +5353,9 @@ func _rail_leave(card: Dictionary) -> void:
 func _refresh() -> void:
 	if duel == null or updating:
 		return
-	_display_dirty = false
-	_display_was_held = _shown_held()
-	if not _display_was_held: _sync_shown()
+	presentation.dirty = false
+	presentation.was_held = _shown_held()
+	if not presentation.was_held: _sync_shown()
 	refresh_count += 1
 	# A selected creature that left play is no longer selected.
 	if selected_creature >= 2 and not duel.creatures.has(selected_creature): selected_creature = -1
