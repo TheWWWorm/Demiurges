@@ -7,7 +7,16 @@ import re
 import struct
 import subprocess
 
-ALLOWED = re.compile(r"^(?:res://)?(?:src/[^\n]+\.(?:gd|gdc|gd\.remap|gdshader|gdshader\.remap|gdshaderinc)|scenes/[^\n]+\.(?:tscn|tscn\.remap)|\.godot/[^\n]+|project\.binary|icon\.(?:svg|png)(?:\.import)?|assets/branding/(?:(?:splash|splash-graphics|expedition-highland|expedition-citadel|expedition-reliquary|expedition-warden)\.png(?:\.import)?|icon\.ico|vendors/[a-z-]+\.png\.import|vendors/nvidia-geforce-rtx\.tres\.remap)|assets/arena/draft-arena\.webp(?:\.import)?|assets/widescreen/etherlords(?:(?:-ii)?-main-menu-frame|-ii-(?:victory|defeat)|-(?:good|evil)-result)-overlay\.png(?:\.import)?|native/el_(?:lzma|discord|assets|lua|duel_brain)\.gdextension|native/models/realesr-general-x4v3\.bin|puzzles/el[12]\.json)$")
+ALLOWED = re.compile(
+    r"^(?:res://)?(?:"
+    r"src/[^\n]+\.(?:gd|gdc|gd\.remap|gdshader|gdshader\.remap|gdshaderinc)|"
+    r"scenes/[^\n]+\.(?:tscn|tscn\.remap)|\.godot/[^\n]+|project\.binary|icon\.(?:svg|png)(?:\.import)?|"
+    r"assets/branding/(?:(?:splash|splash-graphics|expedition-highland|expedition-citadel|expedition-reliquary|"
+    r"expedition-warden)\.png(?:\.import)?|icon\.ico|vendors/[a-z-]+\.png\.import|vendors/nvidia-geforce-rtx\.tres\.remap)|"
+    r"assets/arena/draft-arena\.webp(?:\.import)?|assets/blazon/el1_(?:extra|starter)_logos\.png(?:\.import)?|"
+    r"assets/widescreen/etherlords(?:(?:-ii)?-main-menu-frame|-ii-(?:victory|defeat)|-(?:good|evil)-result)-overlay\.png(?:\.import)?|"
+    r"native/el_(?:lzma|discord|assets|lua|duel_brain)\.gdextension|native/models/realesr-general-x4v3\.bin|puzzles/el[12]\.json)$"
+)
 GAME_DATA = re.compile(r"\.(res|mmp|fig|mod|anm|bon|reg|cpg|sobj|bik|wav|ogg|mp3|exe|dll|etherpack|eipack|elpack)$", re.I)
 # Godot's own binary copies of text resources (.tres) in an export.
 GODOT_EXPORTED = re.compile(r"^\.godot/exported/\d+/export-[0-9a-f]{32}-[\w-]+\.(?:res|scn)$")
