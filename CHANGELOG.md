@@ -4,9 +4,13 @@ Versions follow [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html)
 
 ## Unreleased
 
+## 0.29.0
+
 ### New
 
 - **First-person view on the adventure maps (Etherlords I and II).** Press F on a map to walk it at your selected hero's eye height, starting just behind the hero (WASD to walk, Shift to run, mouse to look, Space and Ctrl to rise and sink, F or Esc to return). The map's panels hide while you walk, sounds are heard from where you stand, and any window, message or battle brings the map view back. The key can be changed in the controls under the map's keys.
+- **Battle history** marks each round with an hourglass the same height as a creature attack. Hover over it to see the round number.
+- **Etherlords I banners.** New games pick a player banner at random, and the banner picker offers more emblems (#276).
 
 ### Fixed
 
@@ -14,6 +18,10 @@ Versions follow [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html)
 - **Restored missions (Etherlords I):** a hero's words at a place or on meeting a figure are no longer missed when the hero only passes through on the way: every tile of the move counts, not just the tile where it stops.
 - **Path tracing: spell fire lights the battle as it moves.** A Fire Wave (and any spell's large fire) now gives light by how much fire it holds instead of a torch's worth, and falls off with distance as real fire does: close to the wall it outshines the sun, filling in the sun's shadows, and a hero it sweeps past throws their shadow away from it. The traced light and those shadows follow the fire instead of trailing a glow behind it, and low fires no longer burn white spots into the ground.
 - **Empty tooltips** no longer open anywhere: a tooltip whose text is empty or only spaces (including no-break and other Unicode spaces) shows nothing, in menus, battles and on both games' maps.
+- **Spell and battle effects** supply missing light from their visible glow, fire and lightning.
+- **Skipping melee** returns blockers to their home positions (#295).
+- **Menu buttons** have centered captions, and the AI difficulty controls fit inside their mission setup frame.
+- **Crossed swords on the Etherlords I map** clear when the night ends, when a hero retreats, or when the hero can resume free movement. Older saves drop warnings that outlasted the stop.
 
 ## 0.28.1
 
