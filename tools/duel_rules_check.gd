@@ -40,7 +40,8 @@ extends SceneTree
 ##
 ## Exits 1 when any case differed, and when no case was compared at all.
 ##
-## Needs the player's game files (user://profiles.json or --el1=/--el2=).
+## Uses installed game files (user://profiles.json or --el1=/--el2=).
+## --checked-in-cards uses wiki-derived card tables for the random-board CI check.
 
 const Fixtures := preload("res://../tools/duel_fixtures.gd")
 
@@ -48,6 +49,7 @@ const ARMY := 4
 const MAX_UNITS := 32
 
 var profile: ELProfile
+var offline_cards := false
 var verbose := false
 var quiet := false
 var blamed := {}
@@ -85,15 +87,21 @@ func _arg(name: String, fallback: String) -> String:
 
 func _initialize() -> void:
 	var game := _arg("game", "el1")
-	var folder := _arg(game, "")
-	if folder.is_empty() and FileAccess.file_exists("user://profiles.json"):
-		var stored: Variant = JSON.parse_string(FileAccess.get_file_as_string("user://profiles.json"))
-		if stored is Dictionary: folder = String(stored.get(game, ""))
+	var checked_in := _arg("checked-in-cards", "")
 	profile = ELProfile.new()
-	if folder.is_empty() or not profile.mount(game, folder):
-		printerr("Game files are required: pass --%s=<folder>" % game)
-		quit(1)
-		return
+	if not checked_in.is_empty():
+		if not _load_checked_in_cards(game, checked_in):
+			quit(1)
+			return
+	else:
+		var folder := _arg(game, "")
+		if folder.is_empty() and FileAccess.file_exists("user://profiles.json"):
+			var stored: Variant = JSON.parse_string(FileAccess.get_file_as_string("user://profiles.json"))
+			if stored is Dictionary: folder = String(stored.get(game, ""))
+		if folder.is_empty() or not profile.mount(game, folder):
+			printerr("Game files are required: pass --%s=<folder>" % game)
+			quit(1)
+			return
 	# --balance=1 (first game): the second game's card balance, and with it
 	# the second game's battle rules (ELSecondBalance, ELDuel.second_battle).
 	if game == "el1" and _arg("balance", "") == "1":
@@ -197,6 +205,24 @@ func _initialize() -> void:
 	print("TOTAL cases=%d fights=%d differed=%d" % [cases, fights, differed])
 	_finish(fights)
 
+func _load_checked_in_cards(game: String, path: String) -> bool:
+	var data: Variant = JSON.parse_string(FileAccess.get_file_as_string(path))
+	if game not in ["el1", "el2"] or data is not Dictionary or not data.get(game) is Dictionary:
+		printerr("Invalid checked-in card fixture for " + game)
+		return false
+	for mode: String in ["parity", "puzzles", "real", "line", "coverage", "balance", "spells", "artifacts"]:
+		if not _arg(mode, "").is_empty():
+			printerr("--%s requires installed game data." % mode)
+			return false
+	offline_cards = true
+	profile.id = game
+	profile.tables = data[game]
+	profile.texts = profile.tables.get("texts", {})
+	profile.tables.CombatSceneDB = {"Green.001": {}}
+	profile.tables.HeroTemplates = {ELCatalog.default_hero(profile, "Red"): {"BaseHealth": 20, "HealthIncrease": 0}}
+	profile.tables.CombatManaIncome = {"1": {"Level6": 0}}
+	return true
+
 ## Exits 1 when any case differed, or when nothing was compared at all (a run
 ## that held nothing against anything shows nothing).
 func _finish(compared: int) -> void:
@@ -235,7 +261,10 @@ func _real(random: RandomNumberGenerator, duels: int, shard: String) -> void:
 func _case(index: int, random: RandomNumberGenerator, pool: Array[String], army: int) -> void:
 	var duel := ELDuel.new()
 	var player := {"faction": "Red", "deck": ELCatalog.STARTERS.Red, "level": 6}
-	if not duel.start(profile, int(random.randi() & 0x7fffffff), {"players": [player, player]}): return
+	if offline_cards: player.cards = ["KBWR", "GROG"]
+	if not duel.start(profile, int(random.randi() & 0x7fffffff), {"players": [player, player]}):
+		if not quiet or index == 0: printerr("Case %d did not start: %s" % [index, duel.error])
+		return
 	# No skills: no mastery of a hero's can roll inside the fight.
 	for side in 2:
 		duel.heroes[side].skills = {}
@@ -1318,14 +1347,17 @@ func _parity() -> void:
 		_fixture("weaving gives a card to cast", {"puzzle": "el2_tactical_v2_curiosity_glass"},
 			[["do", {"choice": 2, "id": 2, "key": "weave", "kind": "ability", "target": 3}], ["back", 0, 2, 0]],
 			func(d: ELDuel) -> bool: return d._enchantment_count(0, "ENBR") == 1 and d.heroes[0].hand.size() == 2)
-		# #298: Colourless Revival is answered by a creature's own regeneration (its hero pays the
-		# treant's one ether); what Self-restoration or Vitality lends is dormant in the plane.
+		# #298 and #306: Printed regeneration can save a creature in the plane.
+		# If it survives, Colourless Revival leaves the graveyard card there.
 		var in_plane := func(d: ELDuel) -> void: d.creatures[2].plane = true
 		for entry: Array in [["own regeneration", "TANT", [], [], true], ["self-restoration", "TIWR", ["SLRP"], [], false], ["vitality", "TIWR", [], ["VTLY"], false]]:
 			_fixture("colourless revival against %s" % entry[0], {"heroes": [{"health": 20, "mana": 10, "hand": ["ORFT"]}, {"health": 20, "mana": 5, "grave": ["GBAT"], "enchantments": entry[3]}],
 				"after": in_plane, "creatures": [{"card": entry[1], "owner": 1, "enchantments": entry[2]}]},
 				[["do", {"kind": "cast", "card": "ORFT", "target": 2, "grave": ELDuel.GRAVE_SIDE}]],
-				func(d: ELDuel) -> bool: return d.creatures.has(2) == entry[4] and int(d.heroes[1].mana) == (4 if entry[4] else 5) and d.army(0).size() == 1)
+				func(d: ELDuel) -> bool:
+					if entry[4]:
+						return d.creatures.has(2) and int(d.heroes[1].mana) == 5 - d.regeneration_cost(2) and d.army(0).is_empty() and d.heroes[1].grave == ["GBAT"]
+					return not d.creatures.has(2) and int(d.heroes[1].mana) == 5 and d.army(0).size() == 1)
 	# #300: a pteros pays the enchantment's cost after taking it off, and Flicker pays that part
 	# after the removal too, so a Prickly Ether removed does not prick its own payment.
 	for pair: Array in [["PTRS", "dispel"], ["RFPT", "disenchant"]]:

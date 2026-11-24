@@ -101,7 +101,10 @@ func _revival_case(profile: ELProfile, label: String, card: String, worn: String
 	check(ok, "el2 %s: Colourless Revival is cast (%s)" % [label, duel.error])
 	check(duel.creatures.has(victim) == survives, "el2 %s: the creature %s" % [label, "regenerates" if survives else "is destroyed"])
 	check(int(duel.heroes[1].mana) == 5 - cost, "el2 %s: its hero pays %d ether (%d left)" % [label, cost, int(duel.heroes[1].mana)])
-	check(duel.army(0).size() == before + 1 and duel.heroes[1].grave == ([] if survives else [card]), "el2 %s: the bat comes back for the caster" % label)
+	if survives:
+		check(duel.army(0).size() == before and duel.heroes[1].grave == ["GBAT"], "el2 %s: the bat stays in the grave when the target survives" % label)
+	else:
+		check(duel.army(0).size() == before + 1 and duel.heroes[1].grave == [card], "el2 %s: the caster revives the bat when the target dies" % label)
 
 func _revival(profile: ELProfile) -> void:
 	var own := int(ELCatalog.flags(profile.table("CombatCreatures").get("TANT", {})).filter(func(f: String) -> bool: return f.begins_with("Regen(")).map(func(f: String) -> int: return int(f.trim_prefix("Regen(").trim_suffix(")"))).front())

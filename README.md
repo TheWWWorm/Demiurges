@@ -186,6 +186,8 @@ In **Remake settings**, **Terrain detail** adds subtle texture contrast and surf
 
 The engine source is in [`game`](game). Open it in [Godot 4.7](https://godotengine.org/) and press Play, or export it with the included presets.
 
+GitHub Actions runs the headless smoke suite and compares the live duel rules with a fresh native combat build in both editions. Run the same suites locally with `python3 tools/check_project.py smoke --godot /path/to/godot` and `python3 tools/check_project.py combat --godot /path/to/godot`. They use repository fixtures and need no original game installation. For the full combat parity cases, add `--installed` to the combat command and register both games in Demiurges, or pass their folders with `--el1` and `--el2`.
+
 - **Windows, Linux, macOS:** `godot-4 --headless --path game --export-release "Windows Desktop" ../build/windows/Demiurges.exe`, with `Linux` and `../build/linux/Demiurges.x86_64`, or `macOS` and `../build/macos/Demiurges.zip`. The output path is relative to `game`; create the folder first.
 - **Browser:** `python3 tools/export_mobile.py web --output build/web`, then `python3 tools/serve_web.py build/web` and open `http://localhost:8060/`. The Web template's export alone is not enough: this tool also adds the page's local-file support, icons, offline cache and headers.
 - **Android:** `python3 tools/export_mobile.py android --output build/android --sdk /path/to/android-sdk --java /path/to/jdk` (needs the Android SDK, a JDK 17 or newer and Godot's Android export templates).

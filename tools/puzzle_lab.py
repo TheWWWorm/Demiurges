@@ -62,7 +62,7 @@ def hero_template_sources() -> dict:
         known[edition].setdefault(name, []).append(source)
 
     path = "game/src/duel/catalog.gd"
-    source = (ROOT / path).read_text()
+    source = (ROOT / path).read_text(encoding="utf-8")
     defaults = json.loads(re.search(r"const HEROES := (\{[^\n]+\})", source).group(1))
     for edition in known:
         for faction, name in defaults.items():
@@ -72,13 +72,13 @@ def hero_template_sources() -> dict:
     if white:
         add("el2", white.group(1), path)
     path = "game/src/duel/duel_presets.gd"
-    source = (ROOT / path).read_text()
+    source = (ROOT / path).read_text(encoding="utf-8")
     defaults = json.loads(re.search(r"const DEFAULT_HEROES := (\{[^\n]+\})", source).group(1))
     for edition in known:
         for name in defaults.values():
             add(edition, name, path)
     for page in sorted((ROOT / "wiki/en").glob("*.md")):
-        match = re.search(r"^heroes: (.+)$", page.read_text(), re.M)
+        match = re.search(r"^heroes: (.+)$", page.read_text(encoding="utf-8"), re.M)
         if not match:
             continue
         for item in match.group(1).split(" | "):
@@ -92,7 +92,7 @@ def hero_template_sources() -> dict:
 def card_tables() -> dict:
     result = {edition: {"CombatSpells": {}, "CombatCreatures": {}, "HeroesSkills": {}, "texts": {}}
               for edition in ("el1", "el2")}
-    catalog = json.loads((ROOT / "wiki/catalog/en.json").read_text())
+    catalog = json.loads((ROOT / "wiki/catalog/en.json").read_text(encoding="utf-8"))
     known_heroes = hero_template_sources()
     for edition in result:
         result[edition]["HeroTemplateSources"] = known_heroes[edition]

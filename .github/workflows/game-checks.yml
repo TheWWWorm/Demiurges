@@ -1,0 +1,50 @@
+name: Game checks
+
+on:
+  push:
+    paths:
+      - 'game/**'
+      - 'tools/**'
+      - 'wiki/**'
+      - '.github/workflows/game-checks.yml'
+  pull_request:
+    paths:
+      - 'game/**'
+      - 'tools/**'
+      - 'wiki/**'
+      - '.github/workflows/game-checks.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: ${{ matrix.suite }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [smoke, combat]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Godot 4.7.2
+        working-directory: ${{ runner.temp }}
+        run: |
+          release=4.7.2-stable
+          binary="Godot_v${release}_linux.x86_64"
+          curl --fail --show-error --silent --location --retry 3 \
+            "https://github.com/godotengine/godot-builds/releases/download/${release}/${binary}.zip" -o godot.zip
+          echo 'cadd3204e728a35d3f13adb7fd0d7902636b79f6b95c40c265eb73b6c35329e4  godot.zip' | sha256sum -c -
+          python3 -m zipfile -e godot.zip .
+          mv "$binary" godot
+          chmod +x godot
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+      - name: Build the native combat model under test
+        if: matrix.suite == 'combat'
+        run: |
+          cc -std=c11 -O2 -fPIC -fvisibility=hidden -shared \
+            game/native/el_duel_brain.c -o game/native/bin/libel_duel_brain.linux.x86_64.so -lm
+      - name: Run headless checks
+        run: python3 tools/check_project.py '${{ matrix.suite }}'
