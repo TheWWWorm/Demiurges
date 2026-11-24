@@ -186,7 +186,9 @@ func _menu_screens(profile: ELProfile) -> void:
 		carried.ai = _levels(2, 0)
 		check(menu.show_chapter_info(carried, 0), "campaign info screen opens for a chapter")
 		check(shown.call() == [2, 0], "campaign info screen: a chapter's carried levels are shown at the lowest difficulty: %s" % [shown.call()])
-		for pick: OptionButton in menu.labels.ai_choices.find_children("*", "OptionButton", true, false):
+		var strip: Control = menu.labels.ai_choices
+		check(strip.size.x * strip.scale.x <= ELFrontMenu.AI_CHOICES_WIDTH + 1.0, "campaign info screen: the AI strip fits between the decorative frames")
+		for pick: OptionButton in strip.find_children("*", "OptionButton", true, false):
 			var arrow_space := pick.get_theme_icon("arrow").get_width() + maxi(0, pick.get_theme_constant("h_separation"))
 			var centered := pick.alignment == HORIZONTAL_ALIGNMENT_CENTER
 			for state: String in ["normal", "hover", "pressed", "hover_pressed", "disabled"]:

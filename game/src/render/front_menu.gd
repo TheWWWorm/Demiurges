@@ -238,6 +238,8 @@ const TUTORIAL_ADVENTURE := "Tutorial/Adventure/e2tutorial"
 var _choice: ELGameChoice
 ## The choice's place on the 1024x768 menu: centred under the last button.
 const CHOICE_TOP := 676.0
+## Space between the decorative side frames at the difficulty strip's height.
+const AI_CHOICES_WIDTH := 800.0
 ## Second-game campaign progress shown on the global map (ELSecondCampaign).
 var second: Dictionary = {}
 ## Duel screen, preset editor and round results (ELDuelScreen).
@@ -1343,15 +1345,22 @@ func add_ai_choices(top := CHOICE_TOP) -> Control:
 		var help := Button.new()
 		help.name = "NeutralMonsterHelp"
 		help.text = "?"
-		help.tooltip_text = ELRemakeText.t(ELAIChoice.MONSTER_HELP, profile)
-		help.pressed.connect(func(): duel_ui.show_message(help.tooltip_text, Callable(), false, 380.0))
+		help.tooltip_text = ELRemakeText.t("Help", profile)
+		var help_text := ELRemakeText.t(ELAIChoice.MONSTER_HELP, profile)
+		help.pressed.connect(func(): duel_ui.show_message(help_text, Callable(), false, 380.0))
 		ELGameChoice.plain(help)
+		var plate := help.get_theme_stylebox("normal") as StyleBoxTexture
+		if plate != null:
+			help.custom_minimum_size.x = plate.texture_margin_left + plate.texture_margin_right + 16.0
 		monsters.add_child(help)
 	_show_ai()
 	canvas.add_child(strip)
 	var size := strip.get_combined_minimum_size()
 	strip.size = size
-	strip.position = Vector2(roundf(DESIGN.x * 0.5 - size.x * 0.5), top)
+	var scale_to_fit := minf(1.0, AI_CHOICES_WIDTH / maxf(size.x, 1.0))
+	strip.scale = Vector2.ONE * scale_to_fit
+	var drawn_size := size * scale_to_fit
+	strip.position = Vector2(roundf((DESIGN.x - drawn_size.x) * 0.5), top + (size.y - drawn_size.y) * 0.5)
 	labels["ai_choices"] = strip
 	return strip
 
