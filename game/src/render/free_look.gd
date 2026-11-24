@@ -1,9 +1,10 @@
 class_name ELFreeLook
 extends Node
-## First-person view of a battle (the "first_person" hotkey, F by
-## default): the battle camera is handed to a walker on the arena's ground,
-## to run around the field and look at the figures up close. The battle
-## itself goes on; its camera, panels and clicks wait until the view is left.
+## First-person view of a battle or an adventure map (the "first_person"
+## and "map_first_person" hotkeys, F by default): the view's camera is handed
+## to a walker on the ground, to run around the field or the map and look at
+## the figures up close. The battle or map itself goes on; its camera, panels
+## and clicks wait until the view is left.
 ##
 ##   mouse         look around (the pointer is captured)
 ##   W A S D       walk (arrows too), Shift runs
@@ -25,7 +26,15 @@ const LOOK := 0.0025
 const FOV := 70.0
 ## How far from the arena's middle the walker may go.
 const REACH := 60.0
+## The camera's near plane while walking: figures are seen from up close.
+const NEAR := 0.05
 
+## Walking and running speeds (units a second; a map sets its own).
+var walk := WALK
+var run := RUN
+## Where the walker may go, as (x, z) bounds; empty: within REACH of the
+## middle (a battle).
+var area := Rect2()
 var active := false
 var camera: Camera3D
 ## (x, z) -> the ground's height there.
@@ -35,6 +44,7 @@ var _yaw := 0.0
 var _pitch := 0.0
 var _saved_transform := Transform3D()
 var _saved_fov := 0.0
+var _saved_near := 0.0
 var _saved_mouse := Input.MOUSE_MODE_VISIBLE
 ## The controls line shown while the view is on (set before `enter`).
 var hint := ""
@@ -44,28 +54,32 @@ func _ready() -> void:
 	set_process(false)
 
 ## Takes the camera, standing on the ground under the point the camera
-## looks at, a little way back toward it, facing the same way.
-func enter(view_camera: Camera3D, ground_height: Callable, eye_height := EYE) -> void:
+## looks at (or `from`, when given), a little way back toward it, facing the
+## same way.
+func enter(view_camera: Camera3D, ground_height: Callable, eye_height := EYE, from := Vector3.INF, back := 8.0) -> void:
 	if active or view_camera == null: return
 	camera = view_camera
 	ground = ground_height
 	_saved_transform = camera.global_transform
 	_saved_fov = camera.fov
+	_saved_near = camera.near
 	_saved_mouse = Input.mouse_mode
 	var forward := -camera.global_transform.basis.z
 	var flat := Vector3(forward.x, 0, forward.z)
 	if flat.length() < 0.01: flat = Vector3(0, 0, -1)
 	flat = flat.normalized()
-	# Where the view's line of sight meets the ground, then 8 units back.
+	# Where the view's line of sight meets the ground, then a few units back.
 	var start := camera.global_position
-	if forward.y < -0.05: start += forward * ((start.y - _height(start.x, start.z)) / -forward.y)
-	start -= flat * 8.0
+	if from.is_finite(): start = from
+	elif forward.y < -0.05: start += forward * ((start.y - _height(start.x, start.z)) / -forward.y)
+	start = _bounded(start - flat * back)
 	_yaw = atan2(-flat.x, -flat.z)
 	# Level: the middle of the view at eye height.
 	_pitch = 0.0
 	eye = clampf(eye_height, EYE_LIMITS.x, EYE_LIMITS.y)
 	camera.global_position = Vector3(start.x, _height(start.x, start.z) + eye, start.z)
 	camera.fov = FOV
+	camera.near = NEAR
 	_orient()
 	active = true
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
@@ -81,6 +95,7 @@ func leave() -> void:
 	if is_instance_valid(camera):
 		camera.global_transform = _saved_transform
 		camera.fov = _saved_fov
+		camera.near = _saved_near
 	left.emit()
 
 ## Mouse looks and the wheel lifts the eye; true when the event was taken.
@@ -111,15 +126,11 @@ func _process(delta: float) -> void:
 	if lift != 0.0: eye = clampf(eye + lift * 2.5 * delta, EYE_LIMITS.x, EYE_LIMITS.y)
 	var at := camera.global_position
 	if move != Vector2.ZERO:
-		var speed := RUN if _pressed(KEY_SHIFT) else WALK
+		var speed := run if _pressed(KEY_SHIFT) else walk
 		var step := move.normalized().rotated(-_yaw) * speed * delta
 		at.x += step.x
 		at.z += step.y
-		var flat := Vector2(at.x, at.z)
-		if flat.length() > REACH:
-			flat = flat.normalized() * REACH
-			at.x = flat.x
-			at.z = flat.y
+		at = _bounded(at)
 	# The eye keeps its height over the ground as the field rises and falls.
 	at.y = lerpf(at.y, _height(at.x, at.z) + eye, minf(1.0, delta * 12.0))
 	camera.global_position = at
@@ -147,6 +158,51 @@ func _show_hint() -> void:
 	shown.text = hint
 	shown.add_theme_font_size_override("font_size", maxi(12, int(round(get_viewport().get_visible_rect().size.y / 52.0))))
 	_hint_layer.visible = true
+
+## The controls line, naming `action`'s key as bound (F without one).
+static func hint_for(preferences: ELSettings, edition: ELProfile, action: String, language: ELProfile) -> String:
+	var key := "F"
+	if edition != null and preferences != null:
+		var overrides := preferences.hotkey_overrides(edition.id)
+		var code := int(overrides[action]) if overrides.has(action) else int(ELSettings.hotkey_defaults(edition.id, action).front())
+		if code != KEY_NONE: key = OS.get_keycode_string(code)
+	var t := func(text: String) -> String: return ELRemakeText.t(text, language)
+	return "  ·  ".join(PackedStringArray([t.call("WASD: walk"), t.call("Shift: run"), t.call("Space: up"), t.call("Ctrl: down"), t.call("%s or Esc: leave") % key]))
+
+## `at` brought within the walker's bounds.
+func _bounded(at: Vector3) -> Vector3:
+	if area.has_area():
+		at.x = clampf(at.x, area.position.x, area.end.x)
+		at.z = clampf(at.z, area.position.y, area.end.y)
+		return at
+	var flat := Vector2(at.x, at.z)
+	if flat.length() > REACH:
+		flat = flat.normalized() * REACH
+		at.x = flat.x
+		at.z = flat.y
+	return at
+
+## A figure's eye height over its feet: this far up its head piece, or near
+## the top of its body or whole figure when it has no head.
+static func eye_height(model: ELModel) -> float:
+	if not is_instance_valid(model) or not model.is_inside_tree(): return EYE
+	for piece: String in ["head", "body"]:
+		var part: MeshInstance3D = model.parts.get(piece)
+		if part == null or part.mesh == null or not part.is_visible_in_tree(): continue
+		var box: AABB = part.global_transform * part.mesh.get_aabb()
+		var foot := model.global_position.y
+		var eye := box.position.y + box.size.y * EYE_IN_HEAD - foot if piece == "head" else (box.end.y - foot) * EYE_OF_HEIGHT
+		if eye > 0.1: return eye
+	return figure_height(model) * EYE_OF_HEIGHT
+
+## A figure's height over its feet (1.7 without one to measure).
+static func figure_height(model: ELModel) -> float:
+	if not is_instance_valid(model) or not model.is_inside_tree(): return 1.7
+	var top := model.global_position.y
+	for part: Variant in model.parts.values():
+		if part is MeshInstance3D and part.mesh != null and part.is_visible_in_tree(): top = maxf(top, (part.global_transform * part.mesh.get_aabb()).end.y)
+	var height := top - model.global_position.y
+	return height if height > 0.1 else 1.7
 
 func _orient() -> void:
 	camera.global_transform.basis = Basis.from_euler(Vector3(_pitch, _yaw, 0), EULER_ORDER_YXZ)

@@ -274,6 +274,7 @@ const RU := {
 	"Quick load": "Быстрая загрузка",
 	"Reset camera": "Сбросить камеру",
 	"First-person view (walk the field)": "Вид от первого лица (прогулка по полю)",
+	"First-person view (walk the map)": "Вид от первого лица (прогулка по карте)",
 	"WASD: walk": "WASD: ходьба",
 	"Shift: run": "Shift: бег",
 	"Space: up": "Пробел: выше",

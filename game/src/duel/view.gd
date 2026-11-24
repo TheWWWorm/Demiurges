@@ -1467,16 +1467,14 @@ func _toggle_free_look() -> void:
 	var eye := _eye_height(hero) if is_instance_valid(hero) else ELFreeLook.EYE
 	free_look.hint = _free_look_hint()
 	free_look.enter(camera, arena.ground_height, eye)
+	# What the battle camera hid as standing in its way is part of the field
+	# the walker sees; leaving the view hides it again (_update_camera).
+	arena.show_all_scenery()
 	if is_instance_valid(ui): ui.visible = false
 
 ## The first-person view's controls line, naming the hotkey as bound.
 func _free_look_hint() -> String:
-	var key := "F"
-	if profile != null:
-		var overrides := settings.hotkey_overrides(profile.id)
-		var code := int(overrides["first_person"]) if overrides.has("first_person") else int(ELSettings.hotkey_defaults(profile.id, "first_person").front())
-		if code != KEY_NONE: key = OS.get_keycode_string(code)
-	return "  ·  ".join(PackedStringArray([_t("WASD: walk"), _t("Shift: run"), _t("Space: up"), _t("Ctrl: down"), _t("%s or Esc: leave") % key]))
+	return ELFreeLook.hint_for(settings, profile, "first_person", _shown_profile())
 
 ## The player's own view; any manual camera change ends an automatic close-up.
 func _update_camera() -> void:
@@ -5306,23 +5304,10 @@ func figure_rows(id: int) -> Dictionary:
 ## else a share of its body piece's height (staffs raised in a cast pose
 ## reach far above it), else of the whole figure's.
 func _eye_height(model: ELModel) -> float:
-	if not model.is_inside_tree(): return ELFreeLook.EYE
-	for piece: String in ["head", "body"]:
-		var part: MeshInstance3D = model.parts.get(piece)
-		if part == null or part.mesh == null or not part.is_visible_in_tree(): continue
-		var box: AABB = part.global_transform * part.mesh.get_aabb()
-		var foot := model.global_position.y
-		var eye := box.position.y + box.size.y * ELFreeLook.EYE_IN_HEAD - foot if piece == "head" else (box.end.y - foot) * ELFreeLook.EYE_OF_HEIGHT
-		if eye > 0.1: return eye
-	return _figure_height(model) * ELFreeLook.EYE_OF_HEIGHT
+	return ELFreeLook.eye_height(model)
 
 func _figure_height(model: ELModel) -> float:
-	if not is_instance_valid(model) or not model.is_inside_tree(): return 1.7
-	var top := model.global_position.y
-	for part: Variant in model.parts.values():
-		if part is MeshInstance3D and part.mesh != null and part.is_visible_in_tree(): top = maxf(top, (part.global_transform * part.mesh.get_aabb()).end.y)
-	var height := top - model.global_position.y
-	return height if height > 0.1 else 1.7
+	return ELFreeLook.figure_height(model)
 
 ## The creature's state and ability icons in the original order (icon bits
 ## T_CREATURE_ICON_01..21); the second game adds the last three.

@@ -150,6 +150,7 @@ const HOTKEYS := {
 	"map_save": ["Map", "Quick save", [KEY_F5], [KEY_F5]],
 	"map_load": ["Map", "Quick load", [KEY_F8, KEY_F9], [KEY_F8, KEY_F9]],
 	"center_hero": ["Map", "Center on hero", [KEY_HOME], [KEY_HOME, KEY_H]],
+	"map_first_person": ["Map", "First-person view (walk the map)", [KEY_F], [KEY_F]],
 	"map_remake_menu": ["Map", "Remake menu…", [KEY_F11], [KEY_F11]],
 	"shop_confirm": ["Shops", "Confirm trade", [KEY_ENTER, KEY_KP_ENTER], [KEY_ENTER, KEY_KP_ENTER]],
 	"shop_buy": ["Shops", "Stage a purchase", [KEY_B], []],

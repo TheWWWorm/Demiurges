@@ -224,11 +224,12 @@ func _process(delta: float) -> void:
 		content = describe.call(hovered, at)
 	if content.is_empty():
 		var text := hovered.atr(hovered.get_tooltip(at)).strip_edges()
-		if text.is_empty():
-			if panel.visible: panel.hide()
-			_shown_key = ""
-			return
-		content = text_content(text)
+		if not ELTooltipWidth.blank(text): content = text_content(text)
+	# Nothing to read (no text or only spaces, and no picture): no frame.
+	if ELSecondMapTooltip.blank(content):
+		if panel.visible: panel.hide()
+		_shown_key = ""
+		return
 	var key := str(content.hash())
 	if key != _shown_key:
 		_shown_key = key

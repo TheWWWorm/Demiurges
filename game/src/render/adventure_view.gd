@@ -20,6 +20,12 @@ var world: ELAdventureScene
 ## Ground rings under the hovered object and the selected hero.
 var rings: ELSelectionRing
 var camera: Camera3D
+## First-person walk over the map (the "map_first_person" hotkey), made on
+## first use.
+var free_look: ELFreeLook
+## The walker's speeds on the map, whose tiles are CELL units across.
+const MAP_WALK := 4.0
+const MAP_RUN := 16.0
 var ui: Control
 var remake_overlay: Control
 var _remake_menu: PanelContainer
@@ -469,6 +475,9 @@ var _hud_clock := 0.0
 var _hud_key := Vector2i(-2, -2)
 
 func _process(delta: float) -> void:
+	# A window, message, battle or the mission's end takes the view back from
+	# the first-person walk.
+	if _free_looking() and (not visible or director == null or _cursor_modal() or director.encounter != null or not state.outcome.is_empty()): free_look.leave()
 	if strategic_session != null and notice != null:
 		var battle_note := strategic_session.observer_battle_note()
 		if battle_note != _observer_battle_note:
@@ -525,7 +534,7 @@ func _process(delta: float) -> void:
 	if not director.error.is_empty():
 		error = director.error
 		notice.text = error
-	_update_edge(delta)
+	if not _free_looking(): _update_edge(delta)
 	if yaw_goal != INF:
 		var remaining := wrapf(yaw_goal - yaw, -PI, PI)
 		if absf(remaining) * TURN_RATE < 0.001:
@@ -552,7 +561,7 @@ func _process(delta: float) -> void:
 	if following >= 0 and world.actors.has(following):
 		scroll_gliding = false
 		target = target.lerp(world.actors[following].position, minf(1, delta * 6.0))
-	elif not state.camera_locked:
+	elif not state.camera_locked and not _free_looking():
 		var direction := Vector2(float(Input.is_physical_key_pressed(KEY_D)) - float(Input.is_physical_key_pressed(KEY_A)), float(Input.is_physical_key_pressed(KEY_S)) - float(Input.is_physical_key_pressed(KEY_W)))
 		if direction != Vector2.ZERO: scroll_gliding = false
 		var flat := Vector3(direction.x, 0, direction.y).rotated(Vector3.UP, yaw)
@@ -565,11 +574,13 @@ func _process(delta: float) -> void:
 		_pending_speech = {}
 		_show_second_dialogue(speech)
 	_update_rings(delta)
+	# The walker hears from where it stands.
+	var listener := camera.global_position if _free_looking() else target
 	if audio != null:
-		audio.listener = target
+		audio.listener = listener
 		audio.listener_forward = -camera.global_basis.z
 	if presentation != null:
-		presentation.listener = target
+		presentation.listener = listener
 		presentation.listener_forward = -camera.global_basis.z
 	# First game: the HUD rescans every map object, so the frame loop
 	# refreshes it ten times a second, or at once when the selection or turn
@@ -1261,6 +1272,8 @@ func _unhandled_input(event: InputEvent) -> void:
 				"map_save": quick_save()
 				"map_load": ask_quick_load()
 				"center_hero": _centre_hero()
+				"map_first_person":
+					if not _cursor_modal(): _toggle_free_look()
 		elif event.keycode == KEY_ESCAPE and second_hud != null and director.dialogue.is_empty():
 			open_options()
 			get_viewport().set_input_as_handled()
@@ -1397,6 +1410,13 @@ func _input(event: InputEvent) -> void:
 			get_viewport().set_input_as_handled()
 			return
 	if blocked:
+		get_viewport().set_input_as_handled()
+		return
+	# The first-person walk takes every key and the mouse; its hotkey or Esc
+	# ends it.
+	if _free_looking():
+		if key != null and key.pressed and not key.echo and ELSettings.hotkey_action(settings, state.map.profile.id, "Map", key) == "map_first_person": free_look.leave()
+		else: free_look.handle(event)
 		get_viewport().set_input_as_handled()
 		return
 	# A map notice owns its confirmation keys before focused controls or a
@@ -1804,6 +1824,44 @@ func touch_pan(from: Vector2, to: Vector2) -> void:
 	_update_camera()
 
 ## The view's centre stays over the map (scrolling stops at its edges).
+func _free_looking() -> bool:
+	return free_look != null and free_look.active
+
+## Enters or leaves the first-person walk: the map's panels hide while the
+## walker has the camera, standing a little behind the selected hero at its
+## eye height (or where the view looks, without one in sight), and the
+## map's own view comes back after.
+func _toggle_free_look() -> void:
+	if camera == null or world == null or state == null or state.map == null: return
+	if free_look == null:
+		free_look = ELFreeLook.new()
+		free_look.walk = MAP_WALK
+		free_look.run = MAP_RUN
+		add_child(free_look)
+		free_look.left.connect(func() -> void:
+			if is_instance_valid(ui): ui.visible = true
+			if presentation != null: presentation.walking = false
+			_update_camera())
+	if free_look.active:
+		free_look.leave()
+		return
+	var map := state.map
+	free_look.area = Rect2(0, -map.height * ELAdventureTerrain.CELL, map.width * ELAdventureTerrain.CELL, map.height * ELAdventureTerrain.CELL)
+	var from := target
+	var eye := ELFreeLook.EYE
+	var back := 3.0
+	var hero: Variant = world.actors.get(_hero_id())
+	if hero is ELModel and is_instance_valid(hero) and (hero as ELModel).is_visible_in_tree():
+		from = (hero as ELModel).global_position
+		eye = ELFreeLook.eye_height(hero)
+		# Far enough back to see a mounted hero whole.
+		back = maxf(back, ELFreeLook.figure_height(hero) * 1.6)
+	free_look.hint = ELFreeLook.hint_for(settings, map.profile, "map_first_person", map.profile)
+	var ground := func(x: float, z: float) -> float: return map.surface_height(Vector2(x, -z) / ELAdventureTerrain.CELL)
+	free_look.enter(camera, ground, eye, from, back)
+	if is_instance_valid(ui): ui.visible = false
+	if presentation != null: presentation.walking = true
+
 func _clamp_target() -> void:
 	var low := ELAdventureScene.world_position(-0.5, float(state.map.height) - 0.5)
 	var high := ELAdventureScene.world_position(float(state.map.width) - 0.5, -0.5)
@@ -1837,7 +1895,8 @@ func _hide_touch_tip() -> void:
 	elif hud != null: hud.show_tooltip(-1, {}, Vector2.ZERO)
 
 func _update_camera() -> void:
-	if camera == null: return
+	# The first-person walk holds the camera until it is left.
+	if camera == null or _free_looking(): return
 	# Kept within one turn: endless turning must not grow the saved angle.
 	yaw = fposmod(yaw, TAU)
 	camera.size = zoom

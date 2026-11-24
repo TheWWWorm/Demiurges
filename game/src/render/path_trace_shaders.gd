@@ -209,6 +209,13 @@ layout(set = 1, binding = 9, rgba16f) uniform writeonly image2D sun_out;
 #define SUN_HISTORY 8.0
 #define SUN_CHANGE 0.7
 #define SUN_CHANGE_HISTORY 1.0
+// The same for effect light, by its unshadowed level here: the share it may
+// change by from one frame to the next before the history is cut, the
+// history kept then, and the level below which a change does not count
+// (a far, faint glow).
+#define EFFECT_CHANGE 0.15
+#define EFFECT_CHANGE_HISTORY 3.0
+#define EFFECT_FLOOR 0.2
 const float SCENERY_HEADROOM = 1.1;
 // The flat raster ambient becomes a sky: blue overhead and brightest low
 // around the horizon, as hazy daylight is, so upright figures and walls
@@ -409,17 +416,30 @@ void basis(vec3 n, out vec3 t, out vec3 b) {
 }
 
 // Point-light falloff as Godot's: a smooth window to the reach, over distance.
+// A negative reach (a spell's fire) falls off with the distance squared
+// instead, matching the other at SPELL_FALLOFF_DISTANCE: the stretch of a
+// wall of fire nearest a figure outshines the rest of it, and the sun beside
+// it, so the figure's shadow falls straight away from that stretch.
+const float SPELL_FALLOFF_DISTANCE = 4.0;
+// Nearer than this it gives no more: a low fire (a stream along the ground,
+// an explosion's sparks) burned white spots into the ground beneath it.
+const float SPELL_NEAREST = 1.2;
 float light_falloff(float d, float reach, float radius) {
+	bool square = reach < 0.0;
+	reach = abs(reach);
 	float x = d / reach;
 	x *= x;
 	x = clamp(1.0 - x * x, 0.0, 1.0);
-	return x * x / max(d, radius);
+	float r = max(d, square ? max(radius, SPELL_NEAREST) : radius);
+	return x * x * (square ? SPELL_FALLOFF_DISTANCE / (r * r) : 1.0 / r);
 }
 
 // Light from the effects (fire, glows, spell lights) at a point: one light
 // chosen in proportion to what it would give here, then a ray towards a
 // random point of it (when shadowed), weighted back to the whole sum.
-vec3 effect_light(vec3 p, vec3 n, bool shadowed, inout uint state) {
+// `level` is that sum: what the effects give here unshadowed, without noise.
+vec3 effect_light(vec3 p, vec3 n, bool shadowed, inout uint state, inout float level) {
+	level = 0.0;
 	uint count = frame.counts.x;
 	if (count == 0u) return vec3(0.0);
 	float total = 0.0, chosen_weight = 0.0;
@@ -434,6 +454,7 @@ vec3 effect_light(vec3 p, vec3 n, bool shadowed, inout uint state) {
 		total += w;
 		if (random(state) * total < w) { chosen = i; chosen_weight = w; }
 	}
+	level = total;
 	if (total <= 0.0) return vec3(0.0);
 	vec4 place = lights[chosen * 2u], colour = lights[chosen * 2u + 1u];
 	vec3 jitter = vec3(random(state), random(state), random(state)) * 2.0 - 1.0;
@@ -662,6 +683,8 @@ void main() {
 	// This frame's sun sample (0 shadowed, 1 lit; below 0 where the sun does
 	// not reach the surface anyway).
 	float sun_now = -1.0;
+	// What the effects give this pixel unshadowed (effect_light's level).
+	float effect_now = 0.0;
 	if (unlit) {
 		lighting = vec3(unlit_shadow(eye + view_direction * primary.distance, 0.02 + distance_to_eye * 0.001, state));
 		if (frame.sun_color.w > 0.5) sun_now = lighting.r >= 0.999 ? 1.0 : 0.0;
@@ -692,7 +715,7 @@ void main() {
 			lighting += sunlight(n_dot_l, scenery) * sun_seen;
 		}
 
-		effects = effect_light(origin, normal, true, state);
+		effects = effect_light(origin, normal, true, state, effect_now);
 
 		// A cosine-weighted diffuse path. Each hit passes on its albedo's colour
 		// and adds the sun and effect light reaching it; an escaping ray sees the
@@ -726,7 +749,8 @@ void main() {
 				float hit_n_dot_l = dot(n, sun);
 				if (hit_n_dot_l > 0.0 && frame.sun_color.w > 0.5 && !occluded(p, sun, 200.0))
 					incoming += sunlight(hit_n_dot_l, hit_scenery);
-				incoming += effect_light(p, n, false, state);
+				float bounce_level;
+				incoming += effect_light(p, n, false, state, bounce_level);
 				if (i == BOUNCES - 1) incoming += frame.ambient.rgb * SKY_SHARE * 0.6;
 				lighting += throughput * incoming;
 			}
@@ -787,11 +811,17 @@ void main() {
 		history = min(history, SUN_CHANGE_HISTORY);
 		sun_frames = min(sun_frames, 1.0);
 	}
+	// An effect's light moved on (a wall of fire sweeping past, a fireball
+	// flying by): the old light no longer holds here either, nor the shadows
+	// its figures threw, and held over the history they trailed behind it.
+	float effect_before = sun_sum.b;
+	float effect_change = abs(effect_now - effect_before) / max(max(effect_now, effect_before), EFFECT_FLOOR);
+	if (sun_sum.a > 0.5 && effect_change > EFFECT_CHANGE) history = min(history, effect_change > 2.0 * EFFECT_CHANGE ? 1.0 : EFFECT_CHANGE_HISTORY);
 	if (sun_now >= 0.0) {
 		sun_frames = min(sun_frames + 1.0, SUN_HISTORY);
-		imageStore(sun_out, pixel, vec4(mix(sun_seen_before, sun_now, 1.0 / sun_frames), sun_frames, 0.0, 0.0));
+		imageStore(sun_out, pixel, vec4(mix(sun_seen_before, sun_now, 1.0 / sun_frames), sun_frames, effect_now, 1.0));
 	} else {
-		imageStore(sun_out, pixel, vec4(0.0));
+		imageStore(sun_out, pixel, vec4(0.0, 0.0, effect_now, 1.0));
 	}
 	history = min(history + 1.0, float(frame.counts.y));
 	vec3 result = mix(previous, lighting, 1.0 / history);

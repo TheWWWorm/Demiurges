@@ -823,7 +823,7 @@ func building_icon(index: int) -> Texture2D:
 
 ## Shows the tooltip near a window position; an empty description hides it.
 func show_tooltip(id: int, content: Dictionary, at: Vector2) -> void:
-	if content.is_empty():
+	if content.is_empty() or (content.get("picture") == null and ELTooltipWidth.blank(str(content.get("title", ""))) and ELTooltipWidth.blank(str(content.get("text", "")))):
 		tooltip.hide()
 		tooltip_subject = -1
 		return

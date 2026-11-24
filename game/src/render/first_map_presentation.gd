@@ -105,6 +105,12 @@ var listener := Vector3.ZERO
 var listener_forward := Vector3.FORWARD
 var effects: ELAdventureEffects
 var show_blazons := true
+## The first-person walk hides the blazons: drawn for the map's view from
+## above, they hang across the sky from the ground.
+var walking := false:
+	set(value):
+		walking = value
+		if _blazon_layer != null: _blazon_layer.visible = show_blazons and not walking
 var ambient_on := true
 var _volumes := {}
 var _art: ELAdventureArt
@@ -172,7 +178,7 @@ func apply(values: Dictionary) -> void:
 	show_blazons = bool(values.get("show_blazons", true))
 	ambient_on = bool(values.get("ambient_sounds", true))
 	_volumes = values
-	if _blazon_layer != null: _blazon_layer.visible = show_blazons
+	if _blazon_layer != null: _blazon_layer.visible = show_blazons and not walking
 	if not ambient_on: _stop_ambience()
 	ELAudio.positional_bus(bool(values.get("audio_reverse", false)))
 

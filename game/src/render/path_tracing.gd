@@ -59,6 +59,16 @@ const GLOW_STRENGTH := 1.0
 ## to a very bright source (a hero's glowing weapon passes 8), which bleached
 ## the ground around it; capped, it still lights its surroundings.
 const GLOW_LIMIT := 2.5
+## The same for a spell's passing fire (not the arena's own fires, not a
+## figure's glow): a wall of fire sweeping over a hero outshines the sun
+## beside it, and the hero's shadow swings away from it as it passes.
+const SPELL_GLOW_LIMIT := 8.0
+## A spell's patches closer than this are one light (ELGlowLights.merged):
+## a wall of fire stays a row of lights a patch apart, so the stretch nearest
+## a figure lights it and the figure's shadow falls straight away from it.
+## Joined at the raster lamps' distance it was four lights a few metres
+## apart, none of them behind the figure, and its shadow was a faint streak.
+const SPELL_MERGE := 1.0
 ## How far an effect's light carries, before its own size: two units are a
 ## metre, and a wall of fire lights the ground several metres around it, so
 ## a figure beside one stands in its light and throws a shadow from it.
@@ -826,29 +836,32 @@ func _benchmark(window_size: String) -> void:
 func _effect_lights(delta := 0.0) -> PackedFloat32Array:
 	var found := []
 	var figure := []
-	var glows := _effects.glow_sources() if is_instance_valid(_effects) else []
+	var glows := _effects.glow_sources(ELCombatEffects.TRACED_SPELL_GLOW) if is_instance_valid(_effects) else []
 	if is_instance_valid(_adventure_effects): glows.append_array(_adventure_effects.glow_sources())
 	# One effect splits into patches; close ones are one source of light, as
 	# the raster lamps already see them. Fewer, stronger lights make the one
 	# shadow ray a pixel spends on them land on the light that matters.
-	glows = ELGlowLights.merged(glows)
+	glows = ELGlowLights.merged(glows, SPELL_MERGE)
 	for glow: Array in glows:
 		var colour: Vector3 = glow[2] * GLOW_STRENGTH
 		var peak := maxf(colour.x, maxf(colour.y, colour.z))
-		if peak > GLOW_LIMIT: colour *= GLOW_LIMIT / peak
-		var extent := clampf(glow[1], 0.1, 3.0)
 		var steady: bool = glow.size() > 3 and glow[3]
+		var kind := int(glow[4]) if glow.size() > 4 else 0
+		var limit := SPELL_GLOW_LIMIT if not steady and kind == 0 else GLOW_LIMIT
+		if peak > limit: colour *= limit / peak
+		var extent := clampf(glow[1], 0.1, 3.0)
 		var reach := (ARENA_GLOW_REACH if steady else GLOW_REACH) + extent * 3.0
 		# A figure's own glow (a Kinet hero's blade and wings) lights at the
 		# raster lamps' share and reach: at a spell's strength it lifted the
 		# snow of the Kinet arenas into a white haze around the hero.
-		var kind := int(glow[4]) if glow.size() > 4 else 0
 		if kind > 0:
 			colour *= ELGlowLights.AURA_SHARE if kind == 2 else ELGlowLights.ATTACHED_SHARE
 			reach *= ELGlowLights.ATTACHED_REACH
 			figure.append([glow[0], extent, colour, reach])
 			continue
-		found.append([glow[0], extent, colour, reach])
+		# A spell's fire falls off with the distance squared (the tracer reads
+		# a negative reach so): see SPELL_FALLOFF_DISTANCE in the ray program.
+		found.append([glow[0], extent, colour, reach if steady else -reach])
 	found.append_array(_steady_figure_lights(figure, delta))
 	var authored := []
 	if is_instance_valid(_effects):

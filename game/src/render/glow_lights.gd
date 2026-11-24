@@ -207,7 +207,10 @@ static func _attached(source: Array) -> bool:
 ## priorities and shadow policies even when their patches overlap.
 ## A source may carry further entries (such as whether it is one of the
 ## arena's own standing lights); the joined source keeps the brightest one's.
-static func merged(sources: Array) -> Array:
+## `spell_merge` is the distance a spell's own patches join at (path tracing
+## keeps a wall of fire as many lights along its length, so a figure beside it
+## stands in front of one and throws its shadow).
+static func merged(sources: Array, spell_merge := MERGE) -> Array:
 	var ordered := sources.duplicate()
 	ordered.sort_custom(func(a: Array, b: Array) -> bool: return a[2].length_squared() > b[2].length_squared())
 	var result := []
@@ -217,9 +220,10 @@ static func merged(sources: Array) -> Array:
 		var weight := colour.x + colour.y + colour.z
 		if weight <= 0.0 or maxf(colour.x, maxf(colour.y, colour.z)) <= 0.001: continue
 		var joined := false
+		var reach := MERGE if _steady(source) else spell_merge
 		for i in result.size():
 			var lamp: Array = result[i]
-			if lamp[0].distance_squared_to(source[0]) > MERGE * MERGE: continue
+			if lamp[0].distance_squared_to(source[0]) > reach * reach: continue
 			# A figure's lights stand where they are (its weapon, its wings).
 			if _attached(lamp) or _attached(source) or _steady(lamp) != _steady(source): continue
 			lamp[0] = (lamp[0] * weights[i] + source[0] * weight) / (weights[i] + weight)

@@ -128,10 +128,16 @@ func _savage_desert(profile: ELProfile, entry: Dictionary) -> void:
 	check(said.size() == 1 and said[0][0] == int(hero.uid) and said[0][1] == ELRestoredStory.STORY[ELRestoredMissions.SAVAGE_DESERT][0].lines[0][2 if russian else 1], "the mission opens with the hero's words, in the edition's language")
 	var home := Vector2i((ELRestoredMissions.SYNTHET_HOME * Vector2(map.width, map.height)).round())
 	var start_at := Vector2i(hero.x, hero.y)
+	# Walked through on the way, the move ending well beyond it: the beat is
+	# not missed for want of stopping on its spot.
 	hero.x = home.x
 	hero.y = home.y
+	ELRestoredStory.stepped(state, hero)
+	hero.x = start_at.x
+	hero.y = start_at.y
 	ELFirstScenario.evaluate(director)
-	check(_spoken(director).size() == 1 and state.scenario.told.has("fallen"), "the hero speaks at the Synthets' fallen castle")
+	check(_spoken(director).size() == 1 and state.scenario.told.has("fallen"), "the hero speaks at the Synthets' fallen castle, passed on the way")
+	check(not state.scenario.has("due"), "the beats passed on the way are cleared once told")
 	ELFirstScenario.evaluate(director)
 	check(_spoken(director).is_empty(), "a beat is told only once")
 	hero.x = int(goal.x) - 4

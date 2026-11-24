@@ -650,6 +650,19 @@ func clear_camera_view(camera_position: Vector3, target: Vector3, framed: Array 
 	for part: MeshInstance3D in hidden: part.hide()
 	_closeup_hidden = hidden
 
+## Brings back everything clear_camera_view hid for the battle camera (the
+## hall's shell, the gates, tall scenery and close-up pieces): the
+## first-person walker stands among them and should see them all. The next
+## clear_camera_view hides them again for the battle view.
+func show_all_scenery() -> void:
+	for shell: ELModel in _hall_shell_models(): shell.visible = true
+	for gate: Dictionary in _edge_scenery_models(): (gate.model as ELModel).visible = true
+	for child: ELModel in _camera_obstacles:
+		if is_instance_valid(child): child.visible = true
+	for part: MeshInstance3D in _closeup_hidden:
+		if is_instance_valid(part): part.show()
+	_closeup_hidden.clear()
+
 ## The boxes of banks and trees can cover much of the arena. Test their
 ## triangles so a shot through an opening doesn't hide the whole piece.
 func _camera_ray_hits(part: MeshInstance3D, eye: Vector3, focus: Vector3) -> bool:

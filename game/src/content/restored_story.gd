@@ -6,7 +6,8 @@ class_name ELRestoredStory
 ##
 ## Each beat is told once, when its trigger is met after an act, at a new
 ## day or at the start, as a speaker's message box (the hero's portrait and
-## name). Triggers:
+## name). A place or figure a hero only walks past on the way counts too:
+## every tile of the move is checked (`stepped`). Triggers:
 ##   start           the mission begins;
 ##   near  at, r     a hero of the player comes within r tiles of a place;
 ##   meet  who, r    a hero of the player comes within r tiles of `who`;
@@ -124,9 +125,15 @@ static func tell(director: ELAdventureDirector, battle: Dictionary = {}, start :
 		if item.get("type") == "hero" and item.get("alive", false) and int(item.get("owner", -1)) == state.current_player and item.get("placed", true): heroes.append(item)
 	if heroes.is_empty(): return
 	var russian := ELRemakeText.language(state.map.profile) == "ru"
+	var due: Dictionary = state.scenario.get("due", {})
+	state.scenario.erase("due")
 	for beat: Dictionary in STORY.get(scenario, []):
 		if told.has(beat.id): continue
 		var hero := _met(state, beat.trigger, heroes, battle, start)
+		# Passed on the way, by a hero still on the map.
+		if hero.is_empty() and due.has(beat.id):
+			for item: Dictionary in heroes:
+				if int(item.uid) == int(due[beat.id]): hero = item
 		if hero.is_empty(): continue
 		told.append(beat.id)
 		for line: Array in beat.lines:
@@ -134,6 +141,22 @@ static func tell(director: ELAdventureDirector, battle: Dictionary = {}, start :
 			if speaker.is_empty(): continue
 			state.event.emit({"kind": "message_box", "speaker": int(speaker.uid), "text": str(line[2] if russian else line[1]),
 				"question": false, "hook": false, "box": "text", "speaker_box": true})
+
+## A hero of the player entered a tile while moving: the place and meeting
+## beats it meets there wait for the act's end, so walking through a place
+## (or past a figure) without stopping in it still tells them.
+static func stepped(state: ELAdventureSession, actor: Dictionary) -> void:
+	if state.scenario.is_empty() or state.scenario.get("campaign", false) or not state.outcome.is_empty(): return
+	if actor.get("type") != "hero" or int(actor.get("owner", -1)) != state.current_player: return
+	var scenario := ELRestoredMissions.scenario_of(state.map)
+	if scenario.is_empty(): return
+	var told: Array = state.scenario.get("told", [])
+	var hero: Array[Dictionary] = [actor]
+	for beat: Dictionary in STORY.get(scenario, []):
+		if told.has(beat.id) or not str(beat.trigger.kind) in ["near", "meet"]: continue
+		var due: Dictionary = state.scenario.get("due", {})
+		if due.has(beat.id): continue
+		if not _met(state, beat.trigger, hero, {}, false).is_empty(): state.scenario.get_or_add("due", {})[beat.id] = int(actor.uid)
 
 ## The hero of the player that meets `trigger`, or {}.
 static func _met(state: ELAdventureSession, trigger: Dictionary, heroes: Array[Dictionary], battle: Dictionary, start: bool) -> Dictionary:

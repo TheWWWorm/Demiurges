@@ -44,6 +44,13 @@ func setup(source: ELProfile, serif: Font) -> void:
 	add_child(_picture)
 	hide()
 
+## True when `content` has no picture and no label with anything to read.
+static func blank(content: Dictionary) -> bool:
+	if not Dictionary(content.get("picture", {})).is_empty(): return false
+	for entry: Dictionary in content.get("labels", []):
+		if not ELTooltipWidth.blank(str(entry.get("text", ""))): return false
+	return true
+
 ## Builds the panel for one object's description.
 func set_content(id: int, content: Dictionary) -> void:
 	subject = id

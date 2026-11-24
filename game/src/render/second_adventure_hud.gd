@@ -773,7 +773,7 @@ func show_menu(value: bool) -> void:
 
 ## Shows the map tooltip for a cursor position in window pixels.
 func show_map_tooltip(id: int, content: Dictionary, at: Vector2) -> void:
-	if content.is_empty():
+	if ELSecondMapTooltip.blank(content):
 		hide_map_tooltip()
 		return
 	if id != map_tooltip.subject or not map_tooltip.visible or content != _tooltip_content:

@@ -1291,9 +1291,14 @@ func _draw(emitter: Dictionary, frame: int) -> void:
 
 ## Patch size and most patches a glowing frame is split into for lighting.
 const GLOW_PATCH := 1.5
-const GLOW_PATCHES := 6
+const GLOW_PATCHES := 24
 ## Most light (brightest channel) one glowing system or effect model gives.
 const EMITTER_GLOW := 12.0
+## The same for a spell's own systems under path tracing (glow_sources'
+## `spell_budget`), where a spell's fire is the light: a Fire Wave is a few
+## hundred flames, and held to EMITTER_GLOW it lit a hero it swept over no
+## more than a torch would, so the sun's shadow stayed where it was.
+const TRACED_SPELL_GLOW := 48.0
 
 ## The light a glowing (additive) frame gives off, for traced lighting: a
 ## soft source per patch of its particles, so a wall of fire lights along
@@ -1327,18 +1332,20 @@ static func _glow(cached: Dictionary, key: String, buffer: PackedFloat32Array, c
 		w *= area
 		var p := Vector3(buffer[o + 3], buffer[o + 7], buffer[o + 11])
 		var cell := Vector3i((p / GLOW_PATCH).floor())
-		var patch: Array = patches.get(cell, [Vector3.ZERO, Vector3.ZERO, 0.0, 0.0])
+		var patch: Array = patches.get(cell, [Vector3.ZERO, Vector3.ZERO, 0.0, 0.0, INF, -INF])
 		patch[0] += p * w
 		patch[1] += rgb
 		patch[2] += w
 		patch[3] += p.length_squared() * w
+		patch[4] = minf(patch[4], p.y - buffer[o + 10] * 0.5)
+		patch[5] = maxf(patch[5], p.y + buffer[o + 10] * 0.5)
 		patches[cell] = patch
 	var result := []
 	var back := plain / weighted if weighted > 0.0 else 0.0
 	for patch: Array in patches.values():
 		var centre: Vector3 = patch[0] / patch[2]
 		var spread := sqrt(maxf(patch[3] / patch[2] - centre.length_squared(), 0.0))
-		result.append([centre, spread, patch[1] * back])
+		result.append([centre, spread, patch[1] * back, Vector2(patch[4], patch[5])])
 	result.sort_custom(func(a, b): return a[2].length_squared() > b[2].length_squared())
 	if result.size() > GLOW_PATCHES:
 		# Light of the patches left out goes to the ones kept, nearest first.
@@ -1347,6 +1354,7 @@ static func _glow(cached: Dictionary, key: String, buffer: PackedFloat32Array, c
 			for i in GLOW_PATCHES:
 				if result[i][0].distance_squared_to(extra[0]) < result[best][0].distance_squared_to(extra[0]): best = i
 			result[best][2] += extra[2]
+			result[best][3] = Vector2(minf(result[best][3].x, extra[3].x), maxf(result[best][3].y, extra[3].y))
 		result.resize(GLOW_PATCHES)
 	glows[key] = result
 	return result
@@ -1357,7 +1365,10 @@ static func _glow(cached: Dictionary, key: String, buffer: PackedFloat32Array, c
 ## there for the whole battle, not a spell passing by. `figure` marks a
 ## figure's own glow (1 its weapon, 2 the glow spread over it, 0 neither),
 ## which ELGlowLights lights faintly and never lets cast a shadow.
-func glow_sources() -> Array:
+## `spell_budget` is the most one of a spell's own systems gives
+## (TRACED_SPELL_GLOW for path tracing); figures' and the arena's stay at
+## EMITTER_GLOW.
+func glow_sources(spell_budget := EMITTER_GLOW) -> Array:
 	var result := []
 	var spells := emitters.size()
 	var all := emitters + arena_emitters
@@ -1392,7 +1403,13 @@ func glow_sources() -> Array:
 		for patch: Array in glow:
 			var colour := _saturate(patch[2] * tint) * opacity
 			total += maxf(colour.x, maxf(colour.y, colour.z))
-			lit.append([placement * patch[0], patch[1] * size, colour, at >= spells, 0])
+			var centre: Vector3 = patch[0]
+			# A spell's fire lights from the middle of its flames' height: the
+			# sprites' centres sit low in a wall of fire, and a lamp down there
+			# let a hero beside it cast only a thin sliver of shadow.
+			if at < spells and not emitter.following and patch.size() > 3:
+				centre.y = maxf(centre.y, (patch[3].x + patch[3].y) * 0.5)
+			lit.append([placement * centre, patch[1] * size, colour, at >= spells, 0])
 		# A figure's own glow is a light at its brightest patch (a hero's
 		# glowing blade or axe) and, for glow spread over the figure (the
 		# sparkles on a Kinet hero's wings), a gentler one where that stands:
@@ -1405,7 +1422,8 @@ func glow_sources() -> Array:
 			lit = _figure_lights(lit)
 			if lit.is_empty(): continue
 			total = EMITTER_GLOW
-		var share := minf(1.0, EMITTER_GLOW / maxf(total, 0.0001))
+		var budget := spell_budget if at < spells and not emitter.following else EMITTER_GLOW
+		var share := minf(1.0, budget / maxf(total, 0.0001))
 		for light: Array in lit:
 			light[2] *= share
 			result.append(light)

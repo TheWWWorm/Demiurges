@@ -925,6 +925,7 @@ func _advance_movement(delta: float) -> void:
 		elif movement.get("strategic", false):
 			actor.ap -= cost
 			ELStrategy.entered(self, actor)
+		if not second: ELRestoredStory.stepped(state, actor)
 		if changed_ship:
 			state.event.emit({"kind": "object_changed", "id": actor.uid})
 			presentation.emit({"kind": "dock", "hero": actor.uid, "ship": bool(actor.ship)})

@@ -759,7 +759,7 @@ func _fort_zone(profile: ELProfile) -> void:
 
 class GlowStub extends ELCombatEffects:
 	var sources: Array = []
-	func glow_sources() -> Array: return sources
+	func glow_sources(_spell_budget := EMITTER_GLOW) -> Array: return sources
 
 func _figure_glow_light() -> void:
 	var tracer := ELPathTracing.new()
@@ -772,7 +772,9 @@ func _figure_glow_light() -> void:
 	var spell := {}
 	var figure := {}
 	for at in range(0, data.size(), 8):
-		var light := {"x": data[at], "colour": Vector3(data[at + 4], data[at + 5], data[at + 6]), "reach": data[at + 7]}
+		# A spell's reach comes negative (its fire falls off with the distance
+		# squared); the size is what counts here.
+		var light := {"x": data[at], "colour": Vector3(data[at + 4], data[at + 5], data[at + 6]), "reach": absf(data[at + 7])}
 		if absf(light.x) < 1.0: spell = light
 		elif absf(light.x - 100.0) < 1.0: figure = light
 	check(not spell.is_empty() and not figure.is_empty()
