@@ -4,6 +4,8 @@ extends SceneTree
 ##   hero states sheet while the hero's order attacks an enemy castle (as for an
 ##   enemy hero or creature, or a hero stopped by a guard zone), the lock for an
 ##   order to capture a site and the shield inside a fort;
+## - the world-view guard warning clears when the hero can move again in
+##   free movement, when the night ends and when a stale warning is loaded;
 ## - #283: a hero the chapter places on a fort's origin starts as its garrison
 ##   (the fort its owner's), guards the fort's zone and stops an enemy hero
 ##   walking into it; the fort's zone is ringed by the Intercept5x5 pieces;
@@ -133,6 +135,7 @@ func _forts(profile: ELProfile) -> void:
 		other.state = state
 		check(other.ring_cells(empty).is_empty(), "#283: an empty fort has no ring")
 		other.free()
+	if not walker.is_empty() and inside.x >= 0: _guard_warning(director, walker, inside)
 	state.close()
 	# Neutral creatures do not garrison: only heroes enter a first-game fort.
 	var monsters := _session(profile, "mission14", true)
@@ -142,6 +145,36 @@ func _forts(profile: ELProfile) -> void:
 			if item.get("type") == "monster" and item.get("fortified", false): garrisoned += 1
 		check(garrisoned == 0, "#283: creatures beside first-game forts stay outside")
 		monsters[0].close()
+
+func _guard_warning(director: ELAdventureDirector, hero: Dictionary, inside: Vector2i) -> void:
+	var original := Vector2i(hero.x, hero.y)
+	var map := director.state.map
+	hero.x = inside.x
+	hero.y = inside.y
+	director.strategy = {"phase": "movement", "actors": [hero.uid], "index": 0, "combats": [], "legacy_orders": false}
+	ELStrategy.entered(director, hero)
+	check(hero.intercepted and hero.get("danger_pulse", false), "a hostile guard zone raises the world warning")
+	var checkpoint := hero.duplicate(true)
+	check(ELStrategy.restore(map.profile, checkpoint, map) and checkpoint.get("danger_pulse", false), "a save made during an interception keeps the active warning")
+
+	ELStrategy._finish_act(director, {"actors": [hero.uid]})
+	check(hero.intercepted and hero.get("danger_pulse", false), "the free-movement warning stays while the hero is stopped")
+	hero.x = original.x
+	hero.y = original.y
+	ELStrategy._finish_act(director, {"actors": [hero.uid]})
+	check(not hero.intercepted and not hero.has("danger_pulse"), "the free-movement warning clears once the hero is free")
+
+	hero.x = inside.x
+	hero.y = inside.y
+	director.strategy = {"phase": "movement", "actors": [hero.uid], "index": 0, "combats": [], "legacy_orders": false}
+	ELStrategy.entered(director, hero)
+	director.strategy.phase = "use"
+	director.strategy.index = 1
+	ELStrategy.advance(director)
+	check(director.strategy.is_empty() and not hero.intercepted and not hero.has("danger_pulse"), "the world warning clears when the night ends")
+
+	checkpoint.intercepted = false
+	check(ELStrategy.restore(map.profile, checkpoint, map) and not checkpoint.has("danger_pulse"), "a stale world warning is removed from older saves")
 
 # --- #277 --------------------------------------------------------------------
 

@@ -1352,10 +1352,12 @@ func _first_map_reports() -> void:
 		while director.encounter == null and Time.get_ticks_msec() - t < 8000: await process_frame
 		check(director.encounter != null and Vector2i(int(hero.x), int(hero.y)) == enter, "el1: stepping into a creature's zone opens its battle")
 		if director.encounter != null:
+			check(hero.get("danger_pulse", false), "el1: a creature interception shows the world warning")
 			map.decline_encounter()
 			await frames(3)
 			var back := Vector2i(int(hero.x), int(hero.y))
 			check(back == enter - Vector2i(1, 0) and not hero.intercepted and director.interception.enemies(state, hero, back).is_empty(), "el1: declining puts the hero back where it entered the zone (%s)" % back)
+			check(not hero.has("danger_pulse"), "el1: retreating from a creature clears the world warning")
 			director.request_move(int(hero.uid), start)
 			director.request_move(int(hero.uid), start)
 			t = Time.get_ticks_msec()

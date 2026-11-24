@@ -1369,6 +1369,7 @@ func decline_encounter() -> bool:
 			# fought and steps out from there.
 			if _misplaced(hero) and grid.contains(stood[id]): _place_back(hero, stood[id])
 			_step_out_of_zone(hero)
+			if state.map.profile.id == "el1" and not hero.get("intercepted", false): hero.erase("danger_pulse")
 	return true
 
 ## Off the map, or on a tile another living figure holds.

@@ -69,6 +69,8 @@ static func restore(profile: ELProfile, actor: Dictionary, map: ELAdventureMap) 
 	if not ELLuaSave._integer(actor.strategy_version, 1, 1) or not ELLuaSave._integer(actor.base_ap, 0, 100000) or not ELLuaSave._integer(actor.ap, 0, 100000) or not ELLuaSave._integer(actor.get("strategy_capacity"), 0, 100000) or not actor.get("upkeep_paid") is bool: return false
 	if not actor.has("intercepted"): actor.intercepted = false
 	if not actor.intercepted is bool or not actor.get("fortified", false) is bool: return false
+	# Older saves could keep the warning after the movement stop had cleared.
+	if not actor.intercepted: actor.erase("danger_pulse")
 	var order: Variant = actor.get("strategy_order")
 	if not order is Dictionary: return false
 	if not order.is_empty():
@@ -299,7 +301,9 @@ static func advance(director: ELAdventureDirector) -> void:
 				# number of nights begun (state day 1 is the mission's first day).
 				ELAdditionalBuildings.end_night(state, state.day - 1)
 				for actor: Dictionary in state.objects.values():
-					if actor.type in ["hero", "monster"]: actor.intercepted = false
+					if actor.type in ["hero", "monster"]:
+						actor.intercepted = false
+						actor.erase("danger_pulse")
 					if actor.type == "hero" and actor.alive: actor.ap = int(actor.strategy_capacity)
 				ELFirstScenario.end_night(director)
 				ELAdditionalBuildings.new_day(state, state.day - 1)
@@ -455,7 +459,9 @@ static func _finish_act(director: ELAdventureDirector, turn: Dictionary) -> void
 	director.strategy = {}
 	for id: int in turn.actors:
 		var actor := state.object(id)
-		if actor.get("alive", false) and actor.get("intercepted", false) and not director.guarded_tile(actor): actor.intercepted = false
+		if actor.get("alive", false) and actor.get("intercepted", false) and not director.guarded_tile(actor):
+			actor.intercepted = false
+			actor.erase("danger_pulse")
 	ELFirstScenario.evaluate(director)
 	if not director.free_queue.is_empty():
 		free_next(director)

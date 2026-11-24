@@ -55,7 +55,8 @@ const BLAZON_LIFT := 1.3
 ## Battle swords. A hero of the local player stopped by a hostile guard zone
 ## carries crossed swords until the day ends: the original sets a figure flag
 ## when the hero steps into or is placed in the zone and clears it with the
-## day's movement; the map then draws a 32 px screen quad of
+## day's movement. With free movement the warning also clears when the hero
+## is free to move again. The map draws a 32 px screen quad of
 ## Interface/Big_states above the figure, the left cell, or the glowing right
 ## cell with a pulsing alpha (127-255) while the HUD's blinker for that hero
 ## runs (CBlinker, three bounces). Castles have no guard zone, so an assault
