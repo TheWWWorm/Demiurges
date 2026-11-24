@@ -186,6 +186,13 @@ func _menu_screens(profile: ELProfile) -> void:
 		carried.ai = _levels(2, 0)
 		check(menu.show_chapter_info(carried, 0), "campaign info screen opens for a chapter")
 		check(shown.call() == [2, 0], "campaign info screen: a chapter's carried levels are shown at the lowest difficulty: %s" % [shown.call()])
+		for pick: OptionButton in menu.labels.ai_choices.find_children("*", "OptionButton", true, false):
+			var arrow_space := pick.get_theme_icon("arrow").get_width() + maxi(0, pick.get_theme_constant("h_separation"))
+			var centered := pick.alignment == HORIZONTAL_ALIGNMENT_CENTER
+			for state: String in ["normal", "hover", "pressed", "hover_pressed", "disabled"]:
+				var plate := pick.get_theme_stylebox(state)
+				centered = centered and is_equal_approx(plate.get_margin(SIDE_LEFT), plate.get_margin(SIDE_RIGHT) + arrow_space)
+			check(centered, "campaign info screen: %s caption is centred in every button state" % pick.name)
 		var begun := []
 		menu.campaign_requested.connect(func(_edition: String, scenario: Dictionary, difficulty: int): begun.append([scenario.get("ai"), difficulty]))
 		menu.start_campaign()

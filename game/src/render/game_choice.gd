@@ -124,6 +124,7 @@ static func plain(button: Button) -> void:
 
 static func _dress(button: Button) -> void:
 	var art := not _looks.is_empty()
+	button.alignment = HORIZONTAL_ALIGNMENT_CENTER
 	# A chosen game (a toggle held down) shows the pushed plate with a gold
 	# caption; captions brighten on hover.
 	for state: String in ["font_color", "font_focus_color"]:
@@ -150,6 +151,23 @@ static func _dress(button: Button) -> void:
 	if button is OptionButton:
 		button.add_theme_constant_override("arrow_margin", 22 if art else 14)
 		button.add_theme_color_override("font_disabled_color", INK.darkened(0.30))
+		_center_dropdown(button)
+
+## Godot reserves the arrow's width and separation on the trailing side.
+## Match that space on the leading side so the caption centres on the plate.
+static func _center_dropdown(button: OptionButton) -> void:
+	var arrow := button.get_theme_icon("arrow")
+	if arrow == null: return
+	var leading := SIDE_RIGHT if button.is_layout_rtl() else SIDE_LEFT
+	var trailing := SIDE_LEFT if button.is_layout_rtl() else SIDE_RIGHT
+	var arrow_space := arrow.get_width() + maxi(0, button.get_theme_constant("h_separation"))
+	var inset := button.get_theme_constant("arrow_margin")
+	for state: String in ["normal", "hover", "pressed", "hover_pressed", "disabled"]:
+		var style: StyleBox = button.get_theme_stylebox(state).duplicate()
+		var padding := maxf(inset, maxf(style.get_margin(leading), style.get_margin(trailing)))
+		style.set_content_margin(leading, padding + arrow_space)
+		style.set_content_margin(trailing, padding)
+		button.add_theme_stylebox_override(state, style)
 
 static func _plate(alpha: float, border: Color) -> StyleBoxFlat:
 	var style := StyleBoxFlat.new()

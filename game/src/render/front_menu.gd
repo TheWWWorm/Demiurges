@@ -2044,8 +2044,9 @@ func small_plates() -> Dictionary:
 			style.texture_margin_left = ceilf(caps.x * SMALL_PLATE)
 			style.texture_margin_right = ceilf(caps.y * SMALL_PLATE)
 			style.axis_stretch_horizontal = StyleBoxTexture.AXIS_STRETCH_MODE_TILE_FIT
-			style.content_margin_left = maxf(16.0, caps.x * SMALL_PLATE * 0.6)
-			style.content_margin_right = maxf(16.0, caps.y * SMALL_PLATE * 0.6)
+			var padding := maxf(16.0, maxf(caps.x, caps.y) * SMALL_PLATE * 0.6)
+			style.content_margin_left = padding
+			style.content_margin_right = padding
 			style.content_margin_top = 3
 			style.content_margin_bottom = 3
 			looks[look] = style
