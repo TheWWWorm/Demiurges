@@ -17,6 +17,7 @@ func _run() -> void:
 	_atlas_limits()
 	_bounds()
 	_cache_and_fades()
+	_blended_glow()
 	if "--render" in OS.get_cmdline_user_args(): await _render()
 	print("EFFECTS PRESENTATION: %d checks, %d failure(s)" % [checks, failures.size()])
 	quit(0 if failures.is_empty() else 1)
@@ -106,6 +107,57 @@ func _cache_and_fades() -> void:
 	effects._track_emitter(emitter, keys)
 	check(emitter.own != null and emitter.own.get_shader_parameter("atlas_max_lod") == first.get_shader_parameter("atlas_max_lod"), "fading spells retain the atlas limit when using private materials")
 	check(is_equal_approx(emitter.opacity, 0.5), "the authored opacity track stays unchanged")
+	effects.free()
+	ELCombatEffects._forget_edition(profile.id)
+
+func _blended_glow() -> void:
+	var profile := ELProfile.new()
+	profile.id = "blended_glow_fixture"
+	var image := Image.create(64, 64, false, Image.FORMAT_RGBA8)
+	image.fill(Color.GRAY)
+	image.fill_rect(Rect2i(32, 48, 16, 16), Color.CYAN)
+	profile._textures["effects/outplanarcast02"] = ImageTexture.create_from_image(image)
+	var file := _particle(1.0)
+	file.texture = "OutplanarCast02.bmp"
+	file.columns = 4
+	file.rows = 4
+	file.frames = 2
+	file.starts = PackedInt32Array([0, 1, 2])
+	file.positions.append_array(PackedFloat32Array([0, 0, 0]))
+	file.sizes.append(1.0)
+	file.cells.append_array(PackedByteArray([2, 0]))
+	file.rgb.append_array(PackedByteArray([255, 255, 255]))
+	file.alpha.append(255)
+	var frames := {0: ELCombatEffects._frame_buffer(file, 0), 1: ELCombatEffects._frame_buffer(file, 1)}
+	var cached := ELCombatEffects.store_file(profile, "mixed.pfx", {"file": file, "frames": frames, "bytes": 0})
+	var mask := ELCombatEffects.particle_glow_mask(file)
+	var tints := ELCombatEffects.cell_tints(image, Vector2i(4, 4))
+	var selected := ELCombatEffects.mask_glow_tints(tints, mask)
+	var baked := ELCombatEffects.bake_glows(file, frames, selected)
+	ELCombatEffects.ready_file(profile, cached, tints, baked)
+	check(tints[0] != Vector3.ZERO and selected[0] == Vector3.ZERO and selected[2].is_equal_approx(Vector3(0, 1, 1)), "warm-up masks smoke cells without changing the shared atlas tints")
+	var effects := ELCombatEffects.new()
+	effects.profile = profile
+	root.add_child(effects)
+	var emitter := effects._spawn("mixed.pfx", false, 2, Transform3D.IDENTITY)
+	check(effects.glow_sources().is_empty(), "the smoke-only frame casts no spell light")
+	effects._draw(emitter, 1)
+	var sources := effects.glow_sources(ELCombatEffects.TRACED_SPELL_GLOW)
+	check(sources.size() == 1 and (sources[0][2] as Vector3).is_equal_approx(Vector3(0, 1, 1)) and effects.glow_sources() == sources,
+		"the same blended emitter supplies its cyan spark to traced and raster lighting")
+	cached.erase("glow_tints")
+	cached.erase("glows")
+	effects._release(emitter)
+	emitter = effects._spawn("mixed.pfx", false, 2, Transform3D.IDENTITY)
+	effects._draw(emitter, 1)
+	check(effects.glow_sources(ELCombatEffects.TRACED_SPELL_GLOW) == sources, "a cold cast produces the same spark as a warmed cast")
+	var keys := PackedFloat32Array([0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0.5])
+	effects._track_emitter(emitter, keys)
+	effects.set_glow(ELEffectLook.EFFECT_HDR)
+	check(emitter.own.get_shader_parameter("glow_cells") == mask and is_equal_approx(emitter.own.get_shader_parameter("glow"), ELEffectLook.EFFECT_HDR), "a fading effect keeps the bloom mask when the preference changes")
+	var faded := effects.glow_sources()
+	check(faded.size() == 1 and (faded[0][2] as Vector3).is_equal_approx(Vector3(0, 0.5, 0.5)), "the spark's light follows authored opacity")
+	effects.set_glow(1.0)
 	effects.free()
 	ELCombatEffects._forget_edition(profile.id)
 

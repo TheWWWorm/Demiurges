@@ -66,7 +66,7 @@ static var _generations: Dictionary = {}
 ## The two particle shaders (blended, additive) every particle material
 ## shares: one compile each, instead of one per sprite sheet.
 static var _shaders: Dictionary = {}
-## Brightness of glowing (additive) particles: above 1 they reach past white,
+## Brightness of glowing particles: above 1 they reach past white,
 ## for bloom to pick up (ELEffectLook: the bloom preference and path-traced
 ## lighting turn this on).
 static var glow_level := 1.0
@@ -77,6 +77,31 @@ const ARENA_HDR_LIMIT := 1.4
 ## spell's brightness the wing sparkles haloed the wings whenever a clip
 ## brought them out.
 const FIGURE_HDR_LIMIT := 1.3
+## Luminous cells in the original 4×4 blended sheets, numbered from the
+## bottom left like the particle files. Mixed sheets also contain smoke or
+## leaves, which should neither cast light nor receive the bloom boost.
+const BLENDED_GLOW_CELLS := {
+	"blackstaffwm": 0xffff,
+	"explosionice": 0x80ff,
+	"magmaglow": 0xfbfe, # Skip the puff in cell 0 and the leaves in cell 10.
+	"manablue": 0xffff,
+	"outplanarcast01": 0xffff,
+	"outplanarcast02": 0x063c,
+	"posenchantment": 0xffff,
+	"posmana": 0xffff,
+}
+## Lit additive effect meshes can still depict a light source. These
+## dedicated aura, shield and energy-column textures are luminous.
+const ADDITIVE_GLOW_TEXTURES := [
+	"effectsobjects/berserk.mmp",
+	"effectsobjects/blackdeath.mmp",
+	"effectsobjects/bluesummon.mmp",
+	"effectsobjects/greendeath.mmp",
+	"effectsobjects/ice.mmp",
+	"effectsobjects/posdefence.mmp",
+	"effectsobjects/reddeath.mmp",
+	"effectsobjects/whitedeath.mmp",
+]
 
 var profile: ELProfile
 var edition := ""
@@ -716,9 +741,10 @@ func _spawn(path: String, reverse: bool, effect_frames: int, where: Transform3D,
 	var file: ELParticleFile = cached.file
 	var material := _material(profile, file, ambient, follow != null)
 	if material == null: return {}
-	if file.additive and not cached.has("glow_tints"):
+	var glow_mask := particle_glow_mask(file)
+	if glow_mask != 0 and not cached.has("glow_tints"):
 		var atlas := material.get_shader_parameter("atlas") as Texture2D
-		cached.glow_tints = _atlas_cell_tints(atlas, Vector2i(file.columns, file.rows))
+		cached.glow_tints = mask_glow_tints(_atlas_cell_tints(atlas, Vector2i(file.columns, file.rows)), glow_mask)
 	var emitter := _free_emitter(ambient)
 	if emitter.is_empty():
 		if not ambient: dropped += 1
@@ -886,6 +912,7 @@ func _track_emitter(emitter: Dictionary, track: PackedFloat32Array) -> void:
 		own.set_shader_parameter("grid", shared.get_shader_parameter("grid"))
 		own.set_shader_parameter("atlas_max_lod", shared.get_shader_parameter("atlas_max_lod"))
 		own.set_shader_parameter("glow", shared.get_shader_parameter("glow"))
+		own.set_shader_parameter("glow_cells", shared.get_shader_parameter("glow_cells"))
 		emitter.node.material_override = own
 	emitter.opacity = -1.0
 	_apply_emitter_track(emitter, 0)
@@ -955,11 +982,13 @@ func _free_object(object: Dictionary, pool: Array[Dictionary], limit: int) -> Di
 func _build_object(object: Dictionary, key: String) -> Dictionary:
 	var model := ELModel.new()
 	model.idle_specials = false
-	if not model.build(profile, String(object.model), String(object.texture)):
+	var texture_name := String(object.texture)
+	if not model.build(profile, String(object.model), texture_name):
 		model.free()
 		return {}
-	var texture := profile.texture(String(object.texture))
+	var texture := profile.texture(texture_name)
 	var add := bool(object.add)
+	var additive_glow := add and texture != null and ELArchive.key(texture_name) in ADDITIVE_GLOW_TEXTURES
 	var faded := StandardMaterial3D.new()
 	faded.albedo_texture = texture
 	faded.cull_mode = BaseMaterial3D.CULL_DISABLED
@@ -989,7 +1018,7 @@ func _build_object(object: Dictionary, key: String) -> Dictionary:
 			magic_materials[node] = [material, blend]
 	model.visible = false
 	add_child(model)
-	return {"node": model, "key": key, "add": add, "opaque": ELFigure.material(texture), "faded": faded, "shown": null,
+	return {"node": model, "key": key, "add": add, "additive_glow": additive_glow, "opaque": ELFigure.material(texture), "faded": faded, "shown": null,
 		"magic_materials": magic_materials, "additive_materials": additive_materials.values(),
 		"active": false, "elapsed": 0.0, "frame": -1, "life": 0, "where": Transform3D.IDENTITY, "track": PackedFloat32Array(), "opacity": 1.0}
 
@@ -1294,6 +1323,9 @@ const GLOW_PATCH := 1.5
 const GLOW_PATCHES := 24
 ## Most light (brightest channel) one glowing system or effect model gives.
 const EMITTER_GLOW := 12.0
+## Small blended sparks supplement any authored flash, even under path
+## tracing, without taking the light budget of a wall of fire.
+const BLENDED_SPARK_GLOW := 3.0
 ## The same for a spell's own systems under path tracing (glow_sources'
 ## `spell_budget`), where a spell's fire is the light: a Fire Wave is a few
 ## hundred flames, and held to EMITTER_GLOW it lit a hero it swept over no
@@ -1359,7 +1391,7 @@ static func _glow(cached: Dictionary, key: String, buffer: PackedFloat32Array, c
 	glows[key] = result
 	return result
 
-## Glowing particle systems now showing, for traced lighting:
+## Glowing particles and effect models now showing:
 ## [world centre, extent, summed colour times opacity, steady, figure] per
 ## patch. `steady` marks the arena's own fires and glows: lamps that stand
 ## there for the whole battle, not a spell passing by. `figure` marks a
@@ -1367,8 +1399,8 @@ static func _glow(cached: Dictionary, key: String, buffer: PackedFloat32Array, c
 ## which ELGlowLights lights faintly and never lets cast a shadow.
 ## `spell_budget` is the most one of a spell's own systems gives
 ## (TRACED_SPELL_GLOW for path tracing); figures' and the arena's stay at
-## EMITTER_GLOW.
-func glow_sources(spell_budget := EMITTER_GLOW) -> Array:
+## EMITTER_GLOW. The Ether vents need proxy lights only in raster.
+func glow_sources(spell_budget := EMITTER_GLOW, include_ether_vent := true) -> Array:
 	var result := []
 	var spells := emitters.size()
 	var all := emitters + arena_emitters
@@ -1390,8 +1422,9 @@ func glow_sources(spell_budget := EMITTER_GLOW) -> Array:
 		var basis := placement.basis
 		var size := (basis.x.length() + basis.y.length() + basis.z.length()) / 3.0
 		var tint := Vector3.ONE
-		if not emitter.entry.file.additive:
-			# Only bright, strongly coloured alpha-blended sheets act as flames.
+		var blended_sparks: bool = not emitter.entry.file.additive and emitter.entry.has("glow_tints")
+		if not emitter.entry.file.additive and not blended_sparks:
+			# Warm flames on other blended sheets keep their usual light.
 			var atlas := (node.material_override as ShaderMaterial).get_shader_parameter("atlas") as Texture2D
 			tint = _flame_colour(atlas)
 			if tint == Vector3.ZERO: continue
@@ -1423,21 +1456,26 @@ func glow_sources(spell_budget := EMITTER_GLOW) -> Array:
 			if lit.is_empty(): continue
 			total = EMITTER_GLOW
 		var budget := spell_budget if at < spells and not emitter.following else EMITTER_GLOW
+		if blended_sparks: budget = minf(budget, BLENDED_SPARK_GLOW)
 		var share := minf(1.0, budget / maxf(total, 0.0001))
 		for light: Array in lit:
 			light[2] *= share
 			result.append(light)
-	# Transparent additive emitters stay outside the traced mesh pass. Use
-	# their bounds only when the active material actually emits light.
+	# Additive emitters stay outside the traced mesh pass. The full-bright
+	# Ether vents are already bounce geometry there, so only raster needs
+	# its own lamp for those.
 	var models := objects + arena_objects
 	for at in models.size():
 		var item: Dictionary = models[at]
-		if not item.active or not item.add: continue
+		var vent: bool = include_ether_vent and item.get("ether_vent", false)
+		if not item.active or (not item.add and not vent): continue
 		var model: ELModel = item.node
 		if not model.is_visible_in_tree(): continue
+		var additive_glow: bool = item.get("additive_glow", false)
+		var budget := ADDITIVE_MESH_GLOW * float(item.opacity) if additive_glow else EMITTER_GLOW
 		for part: MeshInstance3D in model.parts.values():
 			if part.mesh == null or not part.visible: continue
-			var colour := _additive_model_glow(part.material_override as StandardMaterial3D)
+			var colour := _model_glow(part.material_override as StandardMaterial3D, vent, additive_glow)
 			if colour.length_squared() < 1e-6: continue
 			var box := part.global_transform * part.get_aabb()
 			var s := box.size
@@ -1451,7 +1489,7 @@ func glow_sources(spell_budget := EMITTER_GLOW) -> Array:
 			var extent := other.length() * 0.35
 			var piece := colour * area
 			var peak := maxf(piece.x, maxf(piece.y, piece.z)) * pieces
-			if peak > EMITTER_GLOW: piece *= EMITTER_GLOW / peak
+			if peak > budget: piece *= budget / peak
 			for i in pieces:
 				result.append([box.position + step * (i + 0.5) + Vector3(s.x if axis != 0 else 0.0, s.y if axis != 1 else 0.0, s.z if axis != 2 else 0.0) * 0.5, extent, piece, at >= objects.size(), 0])
 	return result
@@ -1483,15 +1521,16 @@ static func _figure_lights(lit: Array) -> Array:
 		result.append([aura_at[0], aura_at[1], aura * (EMITTER_GLOW * AURA_GLOW / peak), aura_at[3], 2])
 	return result
 
-static func _additive_model_glow(material: StandardMaterial3D) -> Vector3:
-	if material == null or material.blend_mode != BaseMaterial3D.BLEND_MODE_ADD or material.transparency != BaseMaterial3D.TRANSPARENCY_ALPHA:
+static func _model_glow(material: StandardMaterial3D, ether_vent: bool, additive_glow := false) -> Vector3:
+	if material == null: return Vector3.ZERO
+	if not ether_vent and (material.blend_mode != BaseMaterial3D.BLEND_MODE_ADD or material.transparency != BaseMaterial3D.TRANSPARENCY_ALPHA):
 		return Vector3.ZERO
 	var fullbright := material.has_meta(ELFigure.AUTHORED_FULLBRIGHT)
 	var emissive := material.emission_enabled and material.emission_energy_multiplier > 0.0
-	if not fullbright and not emissive: return Vector3.ZERO
+	if not fullbright and not emissive and not additive_glow: return Vector3.ZERO
 	var albedo := _texture_glow(material.albedo_texture) if material.albedo_texture != null else Vector4.ONE
 	var colour := Vector3.ZERO
-	if fullbright:
+	if fullbright or additive_glow:
 		var tint := material.albedo_color.srgb_to_linear()
 		colour = Vector3(albedo.x * tint.r, albedo.y * tint.g, albedo.z * tint.b)
 	if emissive:
@@ -1541,6 +1580,8 @@ static func _flame_colour(atlas: Texture2D) -> Vector3:
 ## Light per square metre of a glowing effect model's surface, before the
 ## texture's average colour.
 const OBJECT_GLOW := 2.0
+## Mesh cues can overlap authored point lights and particle flashes.
+const ADDITIVE_MESH_GLOW := 2.0
 static var _texture_glows: Dictionary = {}
 
 ## Approximate average linear colour and coverage for a model's light proxy.
@@ -1751,6 +1792,19 @@ static func cached_file(data: ELProfile, path: String) -> Dictionary:
 static func sheet_name(file: ELParticleFile) -> String:
 	return "Effects/" + (file.texture.get_basename() if file.texture.to_lower().ends_with(".bmp") else file.texture)
 
+## -1 lights every cell, 0 leaves a blended sheet to the flame fallback.
+static func particle_glow_mask(file: ELParticleFile) -> int:
+	if file.additive: return -1
+	if file.columns != 4 or file.rows != 4: return 0
+	return BLENDED_GLOW_CELLS.get(file.texture.get_file().get_basename().to_lower(), 0)
+
+static func mask_glow_tints(tints: PackedVector3Array, mask: int) -> PackedVector3Array:
+	if mask < 0: return tints
+	var selected := tints.duplicate()
+	for cell in selected.size():
+		if (mask & (1 << cell)) == 0: selected[cell] = Vector3.ZERO
+	return selected
+
 ## Readies a cached particle file to draw: its material, and for a glowing
 ## file its sheet's cell colours (`tints`, worked out by a warm-up) and the
 ## glow patches baked with them.
@@ -1758,12 +1812,13 @@ static func ready_file(data: ELProfile, cached: Dictionary, tints: Variant, glow
 	var file: ELParticleFile = cached.file
 	var material := _material(data, file, ambient)
 	if material == null: return
-	if file.additive and not cached.has("glow_tints") and tints is PackedVector3Array:
+	var mask := particle_glow_mask(file)
+	if mask != 0 and not cached.has("glow_tints") and tints is PackedVector3Array:
 		var atlas := material.get_shader_parameter("atlas") as Texture2D
 		var key := [atlas, Vector2i(file.columns, file.rows)]
 		if not _atlas_tints.has(key): _atlas_tints[key] = tints
-		cached.glow_tints = _atlas_tints[key]
-	if not glows.is_empty() and (not file.additive or cached.has("glow_tints")):
+		cached.glow_tints = mask_glow_tints(_atlas_tints[key], mask)
+	if not glows.is_empty() and (mask == 0 or cached.has("glow_tints")):
 		var kept: Dictionary = cached.get("glows", {})
 		for key: String in glows:
 			if not kept.has(key): kept[key] = glows[key]
@@ -1818,12 +1873,12 @@ static func cached_files(data: ELProfile) -> int:
 	return count
 
 static func _material(data: ELProfile, file: ELParticleFile, ambient: bool, figure := false) -> ShaderMaterial:
-	var capped := ambient and file.additive
-	var held := figure and file.additive and not capped
+	var mask := particle_glow_mask(file)
+	var capped := ambient and mask != 0
+	var held := figure and mask != 0 and not capped
 	var key := "%s|%s|%d|%d|%s|%s" % [cache_space(data), file.texture.to_lower(), file.columns, file.rows, "arena" if capped else ("figure" if held else "effect"), file.additive]
 	if _materials.has(key): return _materials[key]
-	var name := file.texture.get_basename() if file.texture.to_lower().ends_with(".bmp") else file.texture
-	var texture := data.texture("Effects/" + name)
+	var texture := data.texture(sheet_name(file))
 	if texture == null:
 		if not stale(data): _materials[key] = null
 		return null
@@ -1832,7 +1887,8 @@ static func _material(data: ELProfile, file: ELParticleFile, ambient: bool, figu
 	ELParticleFile.set_atlas(material, texture, Vector2(file.columns, file.rows))
 	material.render_priority = 10
 	var glow := minf(glow_level, ARENA_HDR_LIMIT) if capped else (minf(glow_level, FIGURE_HDR_LIMIT) if held else glow_level)
-	material.set_shader_parameter("glow", glow if file.additive else 1.0)
+	material.set_shader_parameter("glow_cells", mask)
+	material.set_shader_parameter("glow", glow if mask != 0 else 1.0)
 	if not stale(data): _materials[key] = material
 	return material
 
@@ -1846,7 +1902,8 @@ func set_glow(value: float) -> void:
 	set_glow_level(value)
 	for emitter in emitters:
 		var own: ShaderMaterial = emitter.own
-		if own != null and not emitter.entry.is_empty() and emitter.entry.file.additive: own.set_shader_parameter("glow", minf(value, FIGURE_HDR_LIMIT) if emitter.following else value)
+		if own != null and not emitter.entry.is_empty() and is_same(emitter.node.material_override, own) and int(own.get_shader_parameter("glow_cells")) != 0:
+			own.set_shader_parameter("glow", minf(value, FIGURE_HDR_LIMIT) if emitter.following else value)
 	for item: Dictionary in arena_objects:
 		if item.active and item.ether_vent: _set_vent_glow(item)
 
@@ -1856,8 +1913,9 @@ static func set_glow_level(value: float) -> void:
 	glow_level = value
 	for key: String in _materials:
 		var material: ShaderMaterial = _materials[key]
-		if material != null and key.ends_with("|true"):
-			var limit := ARENA_HDR_LIMIT if key.ends_with("|arena|true") else (FIGURE_HDR_LIMIT if key.ends_with("|figure|true") else INF)
+		if material != null and int(material.get_shader_parameter("glow_cells")) != 0:
+			var mode := key.get_slice("|", 4)
+			var limit := ARENA_HDR_LIMIT if mode == "arena" else (FIGURE_HDR_LIMIT if mode == "figure" else INF)
 			material.set_shader_parameter("glow", minf(value, limit))
 
 ## Only the hottest part of the flame crosses the bloom threshold.
@@ -1877,9 +1935,11 @@ uniform sampler2D atlas : source_color, filter_linear_mipmap, repeat_disable;
 uniform vec2 grid = vec2(1.0);
 uniform float opacity = 1.0;
 uniform float glow = 1.0;
+uniform int glow_cells = -1;
 varying vec4 tint;
 varying float sprite_extent;
 varying flat vec2 atlas_slot;
+varying flat float sprite_glow;
 SPRITE_SIZE_FUNCTION
 SOFT_FUNCTION
 ADD_FUNCTION
@@ -1887,6 +1947,10 @@ ATLAS_FUNCTION
 void vertex() {
 	float stretch = max(length(MODEL_MATRIX[0].xyz), 0.0001);
 	float cell = floor(length(MODEL_MATRIX[1].xyz) / stretch - 0.5);
+	sprite_glow = 1.0;
+	if (glow_cells < 0 || (glow_cells > 0 && cell >= 0.0 && cell < 16.0 && (glow_cells & (1 << int(cell))) != 0)) {
+		sprite_glow = glow;
+	}
 	float size = sprite_half_extent(length(MODEL_MATRIX[2].xyz), PROJECTION_MATRIX);
 	sprite_extent = size;
 	MODELVIEW_MATRIX = VIEW_MATRIX * mat4(INV_VIEW_MATRIX[0], INV_VIEW_MATRIX[1], INV_VIEW_MATRIX[2], MODEL_MATRIX[3]);
@@ -1899,7 +1963,7 @@ void vertex() {
 }
 void fragment() {
 	vec4 texel = sprite_atlas(atlas, UV, atlas_slot, grid);
-	ALBEDO = texel.rgb * tint.rgb * glow;
+	ALBEDO = texel.rgb * tint.rgb * sprite_glow;
 	ALPHA = SPRITE_ADD(texel.a * tint.a * opacity * sprite_soft(SCREEN_UV, VERTEX.z, INV_PROJECTION_MATRIX, sprite_extent));
 }
 """

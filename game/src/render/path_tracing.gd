@@ -836,7 +836,7 @@ func _benchmark(window_size: String) -> void:
 func _effect_lights(delta := 0.0) -> PackedFloat32Array:
 	var found := []
 	var figure := []
-	var glows := _effects.glow_sources(ELCombatEffects.TRACED_SPELL_GLOW) if is_instance_valid(_effects) else []
+	var glows := _effects.glow_sources(ELCombatEffects.TRACED_SPELL_GLOW, false) if is_instance_valid(_effects) else []
 	if is_instance_valid(_adventure_effects): glows.append_array(_adventure_effects.glow_sources())
 	# One effect splits into patches; close ones are one source of light, as
 	# the raster lamps already see them. Fewer, stronger lights make the one

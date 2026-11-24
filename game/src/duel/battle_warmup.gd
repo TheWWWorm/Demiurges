@@ -436,7 +436,7 @@ func _ready_particles(cached: Dictionary, ambient: bool) -> void:
 	var file: ELParticleFile = cached.file
 	var sheet := ELCombatEffects.sheet_name(file)
 	var grid := Vector2i(file.columns, file.rows)
-	var wants_tints := file.additive and not cached.has("glow_tints")
+	var wants_tints := ELCombatEffects.particle_glow_mask(file) != 0 and not cached.has("glow_tints")
 	_queue_texture(sheet, grid if wants_tints else Vector2i.ZERO, func(tints: Variant):
 		if wants_tints and not tints is PackedVector3Array:
 			var texture := profile.texture(sheet)
@@ -453,9 +453,11 @@ func _ready_particles(cached: Dictionary, ambient: bool) -> void:
 func _bake_glows(cached: Dictionary, tints: Variant, ambient: bool) -> void:
 	var file: ELParticleFile = cached.file
 	var frames: Dictionary = cached.frames.duplicate()
-	var colours := PackedVector3Array()
-	if file.additive: colours = cached.get("glow_tints", tints if tints is PackedVector3Array else PackedVector3Array())
-	if frames.is_empty() or (file.additive and colours.is_empty()):
+	var mask := ELCombatEffects.particle_glow_mask(file)
+	var colours: PackedVector3Array = cached.get("glow_tints", PackedVector3Array())
+	if colours.is_empty() and mask != 0 and tints is PackedVector3Array:
+		colours = ELCombatEffects.mask_glow_tints(tints, mask)
+	if frames.is_empty() or (mask != 0 and colours.is_empty()):
 		ELCombatEffects.ready_file(profile, cached, tints, {}, ambient)
 		return
 	_run(func(result: Dictionary): result.glows = ELCombatEffects.bake_glows(file, frames, colours),

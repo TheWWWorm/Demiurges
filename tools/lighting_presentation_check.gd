@@ -57,6 +57,7 @@ func _run() -> void:
 	check(figure_lamp.get_meta(&"figure", false) and figure_lamp.light_energy > figure_energy * 0.9, "a spell at a hero's feet does not steal or recolour the hero's continuing aura")
 	lights.free()
 	_shadow_checks()
+	_effect_mesh_lights()
 	if "--render" in OS.get_cmdline_user_args(): await _render()
 	print("LIGHTING PRESENTATION: %d checks, %d failure(s)" % [checks, failures.size()])
 	quit(0 if failures.is_empty() else 1)
@@ -89,6 +90,36 @@ func _shadow_checks() -> void:
 		if lamp.shadow_enabled: shadows += 1
 	check(shadows == 0, "standing fires and character glows never inherit a recycled spell's shadow")
 	lights.free()
+
+func _effect_mesh_lights() -> void:
+	var effects := ELCombatEffects.new()
+	root.add_child(effects)
+	var model := ELModel.new()
+	effects.add_child(model)
+	var part := MeshInstance3D.new()
+	part.mesh = BoxMesh.new()
+	model.add_child(part)
+	model.parts["effect"] = part
+	var material := StandardMaterial3D.new()
+	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	material.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	material.albedo_color = Color.CYAN
+	part.material_override = material
+	var item := {"node": model, "active": true, "add": true, "additive_glow": false, "opacity": 1.0}
+	effects.objects.append(item)
+	check(effects.glow_sources().is_empty(), "additive blending alone does not turn a mesh into a lamp")
+	item.additive_glow = true
+	var sources := effects.glow_sources()
+	check(sources.size() == 1 and (sources[0][2] as Vector3).is_equal_approx(Vector3(0, 2, 2)), "an energy mesh casts a bounded light in its own colour")
+	item.opacity = 0.5
+	material.albedo_color.a = 0.5
+	model.position.x = 3.0
+	var faded := effects.glow_sources()
+	check(faded.size() == 1 and faded[0][0].is_equal_approx(model.position) and faded[0][2].is_equal_approx(Vector3(0, 1, 1)),
+		"the mesh light follows the source and its fade")
+	model.hide()
+	check(effects.glow_sources().is_empty(), "a hidden mesh effect supplies no light")
+	effects.free()
 
 func _mesh(parent: Node3D, geometry: Mesh, at: Vector3, colour: Color) -> MeshInstance3D:
 	var node := MeshInstance3D.new()
