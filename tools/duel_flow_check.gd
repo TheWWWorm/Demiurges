@@ -1,5 +1,5 @@
 extends SceneTree
-## Headless check of the second game's battle flow around a fight:
+## Headless checks of battle flow around a fight:
 ## - #237: a creature home from its attack lies down (tap clip) before the
 ##   turn goes on; when the rules have already moved to its owner's next turn
 ##   it then gets up with its untap clip, never jumping from one idle to the
@@ -13,11 +13,13 @@ extends SceneTree
 ##   has played out;
 ## - Hide movement: the tap and untap clips are not played, the figure
 ##   changes idle at once.
+## - #295: the first game's blocker with no blow comes home even if the
+##   exchange ends while it is still heading for the front line.
 ##
 ##   godot --headless --path game --script ../tools/duel_flow_check.gd
 ##
-## Needs the second game's files (user://profiles.json); without them the
-## check is skipped. Settings are never written.
+## Uses installed game files from user://profiles.json. Checks for an edition
+## are skipped if it cannot be mounted. Settings are never written.
 
 var failures: Array[String] = []
 
@@ -30,29 +32,30 @@ func _initialize() -> void:
 
 func _run() -> void:
 	var paths: Variant = JSON.parse_string(FileAccess.get_file_as_string("user://profiles.json")) if FileAccess.file_exists("user://profiles.json") else null
-	if paths is not Dictionary or not paths.has("el2"):
-		print("SKIP: no el2 files configured (user://profiles.json)")
+	if paths is not Dictionary or not (paths.has("el1") or paths.has("el2")):
+		print("SKIP: no game files configured (user://profiles.json)")
 		quit(0)
 		return
 	var view: Node = load("res://scenes/duel.tscn").instantiate()
 	view.demo = true
 	root.add_child(view)
 	await process_frame
-	if not view.profiles.has("el2"):
-		print("SKIP: el2 files could not be mounted")
-		view.queue_free()
-		quit(0)
-		return
 	view.settings.values.hide_cast = false
 	view.settings.values.hide_motion = false
-	view._start("el2")
-	await _idle(view)
-	await _rest_before_turn(view, false)
-	await _rest_before_turn(view, true)
-	await _skip_attacks(view)
-	await _hidden_movement(view)
-	await _cast_sounds(view)
-	await _hero_death(view)
+	if view.profiles.has("el2"):
+		view._start("el2")
+		await _idle(view)
+		await _rest_before_turn(view, false)
+		await _rest_before_turn(view, true)
+		await _skip_attacks(view)
+		await _hidden_movement(view)
+		await _cast_sounds(view)
+		await _hero_death(view)
+	else: print("SKIP: el2 files could not be mounted")
+	if view.profiles.has("el1"):
+		view._start("el1")
+		await _blocker_without_a_blow(view)
+	else: print("SKIP: el1 files could not be mounted")
 	view.queue_free()
 	await process_frame
 	print("DUEL FLOW: %d failure(s)" % failures.size())
@@ -184,6 +187,38 @@ func _skip_attacks(view: Node) -> void:
 	check(ids.all(func(id: int) -> bool: return not view.melee.away(id) and view.models[id].base_clip() == "ctapidle"),
 		"#272: the attackers are home and lying down to rest (%s)" % str(ids.map(func(id: int) -> String: return view.models[id].clip)))
 	check(int(view.shown_health(1 - side)) == int(duel.heroes[1 - side].health), "#244: every blow is shown in the end")
+
+func _blocker_without_a_blow(view: Node) -> void:
+	var duel: ELDuel = view.duel
+	await _clear(view)
+	var side := duel.attacker
+	var ogre := await _creature(view, side, "GROG", 6, 5)
+	var first := await _creature(view, 1 - side, "KBWR", 2, 10)
+	var last := await _creature(view, 1 - side, "KBSH", 0, 10)
+	if ogre < 2 or first < 2 or last < 2 or not duel.toggle_attack(ogre):
+		check(false, "#295: the ogre declares an attack")
+		return
+	await _idle(view)
+	duel.end_phase()
+	await _idle(view)
+	if not duel.assign_block(first, ogre) or not duel.assign_block(last, ogre):
+		check(false, "#295: both kobolds block in order")
+		return
+	duel.creatures[last].power = 0
+	check(view.melee.moving(last), "#295: the last blocker has a pending move to the front")
+	duel.end_phase()
+	check(view.melee.busy(), "#295: the exchange is queued for playback")
+	check(not view.melee.queue.any(func(event: Dictionary) -> bool:
+		return event.kind == "strike" and last in [event.from, event.to]), "#295: the last blocker has no blow to play")
+	view._skip_battle_step()
+	var furthest := 0.0
+	for i in 900:
+		view.ai_clock = -1000.0
+		await process_frame
+		furthest = maxf(furthest, ELMeleePlayback.flat_distance(view.models[last].position, view.homes[last]))
+		if not view._melee_busy() and not view.melee.moving(last): break
+	check(duel.creatures.has(last) and not view.melee.away(last) and not view.melee.moving(last), "#295: the surviving zero-power blocker ends the exchange at home")
+	check(furthest < 0.05, "#295: after skipping the exchange, the blocker at home never moves out (%.2f units)" % furthest)
 
 func _hidden_movement(view: Node) -> void:
 	var duel: ELDuel = view.duel

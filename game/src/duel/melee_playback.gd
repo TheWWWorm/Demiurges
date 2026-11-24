@@ -523,12 +523,25 @@ func _play(serial: int) -> void:
 	_current_attacker = -1
 	_skip_attacker = -1
 	# After the last blow (or a hero's death, which stops the combat) every
-	# living figure still out on the field goes home: unhurt ones run.
+	# living figure goes home. A blocker with no blow of its own can still
+	# be on its way out when the exchange is skipped.
 	for id: int in view.models.keys():
-		if id >= 2 and not _moves.has(id) and away(id):
-			var c := _returning_creature(id)
-			if c.is_empty(): continue
-			_move(id, _home_path(id, int(c.owner)), int(_wounds.get(id, 0)) == 0, _yaw_at(view.homes[id], int(c.owner)))
+		if id < 2 or not view.homes.has(id): continue
+		var home: Vector3 = view.homes[id]
+		var move: Dictionary = _moves.get(id, {})
+		if not move.is_empty() and flat_distance(move.points[-1], home) <= 0.05: continue
+		var out := away(id)
+		if not out and move.is_empty(): continue
+		var c := _returning_creature(id)
+		if c.is_empty(): continue
+		var yaw := _yaw_at(home, int(c.owner))
+		if out:
+			_move(id, _home_path(id, int(c.owner)), int(_wounds.get(id, 0)) == 0, yaw)
+		else:
+			# It hasn't left home yet. Settle its stance without starting a walk.
+			move.points.clear()
+			move.finish = yaw
+			_arrive(id)
 	_homing = true
 	if not await _moved(_moves.keys(), serial): return
 	_homing = false
