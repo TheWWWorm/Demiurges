@@ -9,14 +9,12 @@ extends RefCounted
 const NAME_LIMIT := 21
 ## The Single player panel's slot edits (12 + 1).
 const SLOT_NAME_LIMIT := 13
-const LOGOS := 72
+const STARTER_LOGO_FIRST := 72
+const LOGOS := STARTER_LOGO_FIRST + 12
 const COLOURS := 16
-## Side defaults on the campaign screen: Vital (Good) logo 8 colour 13,
-## Chaos (Evil) logo 31 colour 7.
-const SIDE_BLAZON := {"Good": Vector2i(8, 13), "Evil": Vector2i(31, 7)}
 
-## Session profile: the name persists while the game runs; the blazon starts
-## at logo 0, colour 0 (neither is saved in the settings).
+## Session profile: the name persists while the game runs. Each new setup
+## picks a starter blazon, which the player can replace in the picker.
 static var chosen_name := ""
 static var _named := false
 static var blazon := Vector2i(0, 0)
@@ -36,6 +34,9 @@ static func reset() -> void:
 	chosen_name = ""
 	_named = false
 	blazon = Vector2i(0, 0)
+
+static func choose_starter_blazon() -> void:
+	blazon = Vector2i(randi_range(STARTER_LOGO_FIRST, LOGOS - 1), randi_range(0, COLOURS - 1))
 
 ## Characters the edit refuses (Backspace, Tab, Escape, Enter) are dropped.
 static func clip(value: String, limit: int) -> String:

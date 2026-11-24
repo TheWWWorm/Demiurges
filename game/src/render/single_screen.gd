@@ -183,7 +183,9 @@ func build_screen() -> void:
 	# the second game chooses none (selects -1). Back from the
 	# blazon choice keeps the chosen map and the human's slot.
 	var keep := menu.previous_screen == "blazon_single"
-	if not keep: selected = ""
+	if not keep:
+		selected = ""
+		if not second(): ELPlayerProfile.choose_starter_blazon()
 	if slots != null and keep: slots.human = kept_slot
 	if slots != null and keep: slots.entry = chosen()
 	refresh()

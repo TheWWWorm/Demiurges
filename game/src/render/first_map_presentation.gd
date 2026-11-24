@@ -11,7 +11,7 @@ extends Node3D
 ## Ownership blazons. Every owned castle, hero, mine, mana node, fort, shop
 ## and captured shrine or citadel carries its owner's blazon: a 41 px cell of
 ## Interface/Blazon/color (the blazon colour, a 6 x 6 grid) under a cell of
-## Interface/Blazon/logo00/logo01 (the blazon, 36 per sheet), as a
+## the owner's logo from a mounted sheet or the starter atlas, as a
 ## camera-facing quad 1.3 units above the figure's top. A capture changes it
 ## at once. Options "Show blazons" switches them all off.
 ##
@@ -168,6 +168,7 @@ func build(data: ELProfile, preferences: ELSettings, session: ELAdventureSession
 		add_child(effects)
 		effects.build(profile, settings, state)
 		for name: String in ["color", "logo00", "logo01"]: _textures[name] = profile.texture("Interface/Blazon/" + name)
+		_textures["logo02"] = ELBlazonArt.STARTER_ATLAS
 		_textures["swords"] = profile.texture("Interface/Big_states")
 	for i in 4: _ambient_counts[i] = ambient_count(profile, AMBIENT_FOLDERS[i])
 	if not state.event.is_connected(_state_event): state.event.connect(_state_event)

@@ -3,8 +3,8 @@ extends RefCounted
 ## First game: the player's name and blazon on the front end.
 ## Campaign screen (SelectCampaign): after a side is clicked, a name frame with
 ## the SCName edit and a blazon box appear under that side's portrait; the
-## blazon box opens the blazon choice. Blazon choice (CISelectBlazon): 72
-## logos (15 × 5) and 16 colours (8 × 2) with a preview; clicks and arrow keys
+## blazon box opens the blazon choice. Blazon choice (CISelectBlazon): a
+## 15-column logo grid and 16 colours (8 × 2) with a preview; clicks and arrow keys
 ## choose, Tab switches grids, OK keeps the choice and Cancel drops it.
 
 ## Panel shift of the 1024 layout.
@@ -16,7 +16,7 @@ const FRAME_AT := Vector2(161, 459)
 const BOX_AT := Vector2(243, 467)
 const SIDE_STEP := 271.0
 const BOX_HOVER := Rect2(206, 192, 41, 39)
-## Logo grid: 15 columns × 5 rows from (57,40), 46 px pitch.
+## Logo grid: 15 columns from (57,40), 46 px pitch.
 const LOGO_AT := Vector2(57, 40)
 const LOGO_PITCH := 46.0
 const LOGO_COLUMNS := 15
@@ -60,7 +60,7 @@ func draw_blazon(canvas: CanvasItem, picture: Vector2i, at: Vector2) -> void:
 	if picture.y >= 0 and back != null:
 		canvas.draw_texture_rect_region(back, Rect2(at, Vector2(BLAZON, BLAZON)), Rect2(BLAZON * (picture.y % 6), BLAZON * (picture.y / 6), BLAZON, BLAZON))
 	if picture.x < 0: return
-	var fore := texture("BLAZON_FORE_%02d" % (picture.x / 36))
+	var fore := ELBlazonArt.STARTER_ATLAS if picture.x >= ELPlayerProfile.STARTER_LOGO_FIRST else texture("BLAZON_FORE_%02d" % (picture.x / 36))
 	var cell := picture.x % 36
 	if fore != null: canvas.draw_texture_rect_region(fore, Rect2(at, Vector2(BLAZON, BLAZON)), Rect2(BLAZON * (cell % 6), BLAZON * (cell / 6), BLAZON, BLAZON))
 
@@ -110,12 +110,8 @@ func build_campaign() -> void:
 	menu.canvas.add_child(frame)
 	menu.canvas.move_child(frame, name_edit.get_index())
 
-## A side was chosen (or cleared): the name frame, edit and blazon box follow
-## it; the side's default blazon replaces one still at the other default.
-func side_chosen(previous: String, side: String) -> void:
-	if side != previous and ELPlayerProfile.SIDE_BLAZON.has(side):
-		if previous.is_empty() or ELPlayerProfile.blazon == ELPlayerProfile.SIDE_BLAZON.get(previous, Vector2i(-1, -1)):
-			ELPlayerProfile.blazon = ELPlayerProfile.SIDE_BLAZON[side]
+## The name frame, edit and blazon box follow the selected side.
+func side_chosen(side: String) -> void:
 	if name_edit == null or not is_instance_valid(name_edit): return
 	var shown := not side.is_empty()
 	var offset := side_offset()

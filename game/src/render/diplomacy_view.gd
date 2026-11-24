@@ -97,6 +97,7 @@ func build(session: ELAdventureSession, owner: int) -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	for name: String in ["DIPLOMACY_PANEL_7", "DIPLOMACY_PANEL_18", "MISSION_PANEL_7", "MISSION_PANEL_9", "SYMBOLS", "BLAZON_BACK", "BLAZON_FORE_00", "BLAZON_FORE_01"]:
 		_textures[name] = profile.texture(str(hud._paths.get(name, "")))
+	_textures["BLAZON_FORE_02"] = ELBlazonArt.STARTER_ATLAS
 	sheet = Canvas.new()
 	sheet.draw_call = _draw_sheet
 	sheet.press_call = func(_point: Vector2): pass
@@ -228,7 +229,7 @@ func _draw_sheet() -> void:
 		for aspect in ELDiplomacy.ASPECTS:
 			if ELDiplomacy.agreed(value, aspect) and frames != null: sheet.draw_texture_rect_region(frames, aspect_rect(index, aspect), ASPECT_SOURCES[aspect])
 
-## Blazon: a BLAZON_BACK cell under a BLAZON_FORE_00/01 cell, 41 px each.
+## Blazon: a BLAZON_BACK cell under a foreground cell, 41 px each.
 func _draw_blazon(canvas: Control, id: int, at: Vector2) -> void:
 	var picture := blazon(id)
 	var back: int = picture.y

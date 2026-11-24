@@ -1568,8 +1568,10 @@ func _build_campaigns() -> void:
 	if edition == "el1":
 		# Every visit starts with no side chosen and Start disabled; coming
 		# back from the blazon choice keeps the side.
+		if previous_screen != "blazon":
+			selected_campaign = ""
+			ELPlayerProfile.choose_starter_blazon()
 		blazon_ui.build_campaign()
-		if previous_screen != "blazon": selected_campaign = ""
 		select_campaign(selected_campaign, true)
 	else:
 		# The original opens with no campaign chosen (Info and Start dimmed);
@@ -1580,9 +1582,8 @@ func _build_campaigns() -> void:
 ## Chooses a campaign card (id "" for none): the chosen card fades up, the
 ## others back down (`at_once` skips the fade, when the screen opens).
 func select_campaign(id: String, at_once := false) -> void:
-	var previous := selected_campaign
 	selected_campaign = id
-	if edition == "el1" and blazon_ui != null: blazon_ui.side_chosen(previous, id)
+	if edition == "el1" and blazon_ui != null: blazon_ui.side_chosen(id)
 	for card: CardButton in cards:
 		card.chosen = card.campaign == id
 		card.fade.choose(card.chosen, at_once)
