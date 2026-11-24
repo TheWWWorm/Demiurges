@@ -23,6 +23,8 @@ extends Control
 ## turned to point up and to the right, with a thin dark outline. Without
 ## the cursor, the CombatSymbols sheet's sword state icon stands in. The last tile that only partly fits is cut off at the
 ## frame's lower end and fades out there.
+## Each round starts with a neutral hourglass tile as low as an attack.
+## Its tooltip shows only the round number.
 ##
 ## Pointing at a tile opens its card to the right of the column, in the
 ## battle tooltips' own frame (Interface/black/ToolTip, as ELCombatTooltip
@@ -41,7 +43,7 @@ extends Control
 ## belong to no play). Coordinates are design pixels times `ui_scale`.
 
 const TILE := 22.0
-## An attack's tile height (its width is TILE's), and the gap between tiles.
+## The height of attack and round tiles, and the gap between tiles.
 const ATTACK_HEIGHT := 14.0
 const GAP := 3.0
 ## The shortest part of a last tile still shown at the lower end.
@@ -111,7 +113,7 @@ const NEUTRAL_FRAME := [Color("d8c08e"), Color("8f6f42"), Color("3e2c16")]
 const TIP_INK := Color("d6bb88")
 
 ## Plays, oldest first: {side, kind ("cast", "ability", "artifact",
-## "attack"), source (character id or -1), icon, title, text, targets:
+## "attack", "round"), source (character id or -1), icon, title, text, targets:
 ## [{id, icon, name, delta, died, summoned, enchanted}], age}.
 var entries: Array = []
 var viewer_side := 0:
@@ -384,7 +386,7 @@ func _k() -> float:
 
 ## A play's tile height.
 func _tile_height(entry: Dictionary) -> float:
-	return ATTACK_HEIGHT if entry.kind == "attack" else TILE
+	return ATTACK_HEIGHT if entry.kind in ["attack", "round"] else TILE
 
 ## The column's rectangle, centred above the panel.
 func _rail_rect() -> Rect2:
@@ -519,9 +521,8 @@ func _notification(what: int) -> void:
 var _primed := false
 
 func _draw() -> void:
-	if entries.is_empty():
-		_prime()
-		return
+	_prime()
+	if entries.is_empty(): return
 	var k := _k()
 	var slots := _slots()
 	# The column slides in from the left edge as the battle's first play
@@ -540,7 +541,9 @@ func _draw() -> void:
 		# A tile cut off at the lower end fades into the frame.
 		if part < 1.0: alpha *= 0.35 + 0.4 * part
 		var attack: bool = entry.kind == "attack"
+		var round_marker: bool = entry.kind == "round"
 		var frame_colours: Array = OWN_FRAME if int(entry.side) == viewer_side else RIVAL_FRAME
+		if round_marker: frame_colours = NEUTRAL_FRAME
 		var radius := minf(CORNER, rect.size.y / (2.0 * k)) * k
 		# The dark line around the frame, the frame's gradient, then the picture.
 		_draw_round(rect.grow(0.6 * k), radius + 0.6 * k, [FRAME_LINE, FRAME_LINE], alpha * 0.85)
@@ -560,6 +563,7 @@ func _draw() -> void:
 		if index == _open: _outline_round(rect.grow(1.5 * k), radius + 1.5 * k, Color(ACCENT, alpha), 1.5 * k)
 		if part < 1.0: continue
 		if attack: _draw_sword(Vector2(rect.end.x - 1.0 * k, rect.end.y + 1.0 * k), 11.0 * k, alpha)
+		elif round_marker and inside.size.y >= 10.0 * k: _draw_round_icon(rect.get_center(), alpha)
 		elif entry.kind in ["ability", "artifact", "spec"]: _draw_star(rect.end - Vector2(4.0, 4.0) * k, 3.5 * k, alpha)
 	for slot: Array in slots:
 		if int(slot[0]) == _open: _draw_card(entries[_open], slot[1])
@@ -756,6 +760,17 @@ func _draw_chevron(at: Vector2, direction: int) -> void:
 	var points := PackedVector2Array([at + Vector2(-4, 0) * k, at + Vector2(4, 0) * k, at + Vector2(0, 4 * direction) * k])
 	draw_colored_polygon(points, ACCENT)
 
+func _draw_round_icon(at: Vector2, alpha: float) -> void:
+	var k := _k()
+	var metal := Color(TIP_INK, alpha)
+	var width := maxf(1.0, 1.1 * k)
+	for y: float in [-4.1, 4.1]:
+		draw_line(at + Vector2(-4.0, y) * k, at + Vector2(4.0, y) * k, metal, width, true)
+	for side: float in [-1.0, 1.0]:
+		draw_polyline(PackedVector2Array([at + Vector2(side * 3.0, -4.1) * k, at + Vector2(side * 2.4, -2.1) * k,
+			at + Vector2(side * 0.6, 0) * k, at + Vector2(side * 2.4, 2.1) * k, at + Vector2(side * 3.0, 4.1) * k]), metal, width, true)
+	draw_colored_polygon(PackedVector2Array([at + Vector2(-2, 3.4) * k, at + Vector2(0, 1.4) * k, at + Vector2(2, 3.4) * k]), Color(ACCENT, alpha))
+
 ## The attack sign, `extent` square, its lower right corner at `corner`:
 ## the CombatSymbols sword with a thin dark outline (or a plain blade).
 func _draw_sword(corner: Vector2, extent: float, alpha: float) -> void:
@@ -812,8 +827,26 @@ func _draw_result(rect: Rect2, delta: int, died: bool) -> void:
 	draw_string_outline(_bold, base, text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, 3, Color.BLACK)
 	draw_string(_bold, base, text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, Color.WHITE)
 
+func _tip_rect(tile: Rect2, panel_size: Vector2) -> Rect2:
+	var k := _k()
+	var at := Vector2(_rail_rect().end.x + 8.0 * k, tile.get_center().y - panel_size.y * 0.5)
+	at.y = clampf(at.y, 4.0 * k, maxf(4.0 * k, size.y - BOTTOM * k * 0.5 - panel_size.y))
+	return Rect2(at, panel_size)
+
+func _draw_round_tip(title: String, tile: Rect2) -> void:
+	var k := _k()
+	var font_size := int(round(13.0 * k))
+	var text_size := _font.get_string_size(title, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).ceil()
+	var pad := Vector2(9, 6) * k
+	var panel := _tip_rect(tile, text_size + pad * 2.0)
+	_draw_tip_frame(panel)
+	draw_string(_font, panel.position + pad + Vector2(0, _font.get_ascent(font_size)), title, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, TIP_INK)
+
 ## The open card beside `tile`.
 func _draw_card(entry: Dictionary, tile: Rect2) -> void:
+	if entry.kind == "round":
+		_draw_round_tip(String(entry.title), tile)
+		return
 	var k := _k()
 	var pad := 12.0 * k
 	var title_size := int(round(13.0 * k))
@@ -861,9 +894,7 @@ func _draw_card(entry: Dictionary, tile: Rect2) -> void:
 	# characters: the last name or picture otherwise sat against the frame's
 	# edge. A card alone keeps equal sides.
 	var panel_size := inner + Vector2(pad, pad) * 2.0 + Vector2(RIGHT_PAD * k if not targets.is_empty() else 0.0, 0)
-	var at := Vector2(_rail_rect().end.x + 8.0 * k, tile.position.y + tile.size.y * 0.5 - panel_size.y * 0.5)
-	at.y = clampf(at.y, 4.0 * k, maxf(4.0 * k, size.y - BOTTOM * k * 0.5 - panel_size.y))
-	var panel := Rect2(at, panel_size)
+	var panel := _tip_rect(tile, panel_size)
 	_draw_tip_frame(panel)
 	# The played card or the attacker, its name and text.
 	var origin := panel.position + Vector2(pad, pad)

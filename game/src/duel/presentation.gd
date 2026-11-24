@@ -84,7 +84,7 @@ func stamp(duel: ELDuel, ability_marks: Callable, advance := true) -> Dictionary
 			"owner": c.owner, "plane": duel.in_plane(id), "resting": c.resting, "sick": c.sick,
 			"enchantments": c.enchantments.duplicate(), "marks": ability_marks.call(id, c)}
 	return {"serial": serial, "heroes": heroes, "creatures": creatures,
-		"phase": duel.phase, "active": duel.active_side(), "turn": duel.turn_serial,
+		"phase": duel.phase, "active": duel.active_side(), "turn": duel.turn_serial, "round": duel.round_number,
 		"attacks": duel.attacks.duplicate(), "blocks": duel.blocks.duplicate()}
 
 func wait_for(serial: int) -> void:

@@ -320,8 +320,9 @@ var _hint_control: Control
 ## banners and cast messages.
 var symbols: ELCombatSymbols
 var notices: ELCombatNotices
-## The battle's plays along the right edge (setting "battle_history").
+## The battle's plays along the left edge (setting "battle_history").
 var battle_history: ELBattleHistory
+var _history_round := 0
 ## What the history knows of each character id it may name after the rules
 ## removed it: {id: {card, owner}}, noted as the rules report them.
 var _history_seen := {}
@@ -911,10 +912,12 @@ func _start(edition: String, options: Dictionary = {}, restored: ELDuel = null, 
 	stage.add_child(melee)
 	duel.changed.connect(_refresh)
 	duel.event.connect(_on_duel_event)
-	if battle_history != null and restored != _shown_duel_of_history:
+	if battle_history != null and duel != _shown_duel_of_history:
 		battle_history.clear()
 		_history_seen.clear()
-	_shown_duel_of_history = restored if restored != null else duel
+		_history_round = 0
+		_note_history_round(duel.round_number)
+		_shown_duel_of_history = duel
 	duel.combat_started.connect(_on_combat_started)
 	duel.attack_resolved.connect(_on_attack_resolved)
 	duel.turn_cleanup.connect(_on_turn_cleanup)
@@ -6216,11 +6219,20 @@ func _history_owner(id: int) -> int:
 	if duel.creatures.has(id): return int(duel.creatures[id].owner)
 	return int(_history_seen.get(id, {}).get("owner", -1))
 
+func _note_history_round(number: int) -> void:
+	if number <= _history_round: return
+	_history_round = number
+	battle_history.begin(-1, "round", -1, null, _t("Round %d") % number, "")
+	battle_history.close()
+
 ## Feeds the play history (ELBattleHistory) with an event as it is shown:
 ## casts, abilities, artifacts and attacks open a play, and what they do to
 ## characters until the next play or phase goes on it.
 func _note_history(data: Dictionary) -> void:
 	if battle_history == null or duel == null or profile == null: return
+	# Start-of-round effects can arrive before the attack phase notice. Use
+	# the event's stamp so queued plays stay on the right side of the marker.
+	_note_history_round(int(data.get("shown", {}).get("round", data.get("round", 0))))
 	var kind := String(data.get("kind", ""))
 	match kind:
 		"cast":

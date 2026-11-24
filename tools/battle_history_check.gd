@@ -6,6 +6,7 @@ extends SceneTree
 ## with the rules' own damage, heal and death events for that play. The
 ## chosen target of a targeted spell must be listed, the caster's own hero
 ## only when the play touched it.
+## Round markers follow the battle's round number and use attack-height tiles.
 ##
 ##   godot --headless --path game --script ../tools/battle_history_check.gd [-- --edition=el2] [-- --only=CARD]
 ##
@@ -52,6 +53,10 @@ func _edition(edition: String) -> void:
 	view.settings.values.battle_history = true
 	view._start(edition)
 	await _idle(view)
+	_round_markers(view, edition)
+	view._start(edition)
+	await _idle(view)
+	check(_round_titles(view.battle_history) == [view._t("Round %d") % 1], "%s: a new duel resets the round markers" % edition)
 	var duel: ELDuel = view.duel
 	var cards: Array = view.profile.table("CombatSpells").keys()
 	cards.sort()
@@ -65,6 +70,30 @@ func _edition(edition: String) -> void:
 	await _hero_abilities(view, edition)
 	view.queue_free()
 	await process_frame
+
+func _round_markers(view: Node, edition: String) -> void:
+	var duel: ELDuel = view.duel
+	var history: ELBattleHistory = view.battle_history
+	var label: String = view._t("Round %d")
+	check(_round_titles(history) == [label % 1], "%s: the battle opens on round one" % edition)
+	check(history._tile_height({"kind": "round"}) == history._tile_height({"kind": "attack"}), "%s: round markers keep the slim attack height" % edition)
+	check(not history.has_current(), "%s: a round marker does not collect outcomes" % edition)
+	check(duel.end_phase(), "%s: the opening side can pass" % edition)
+	view._skip_battle_presentation()
+	check(duel.round_number == 1 and _round_titles(history) == [label % 1], "%s: the opposing turn does not add a round marker" % edition)
+	check(duel.end_phase(), "%s: the opposing side can pass" % edition)
+	view._skip_battle_presentation()
+	check(duel.round_number == 2 and _round_titles(history) == [label % 1, label % 2], "%s: the next round adds exactly one marker" % edition)
+	var loaded := ELDuel.new()
+	var document := {"format": "etherlords-duel", "version": 1, "state": duel.snapshot()}
+	var restored := loaded.restore(duel.profile, document)
+	check(restored, "%s: the second-round checkpoint loads (%s)" % [edition, loaded.error])
+	if restored:
+		view._start(edition, loaded.setup, loaded)
+		check(_round_titles(history) == [label % 2], "%s: a freshly loaded duel opens at its saved round" % edition)
+
+func _round_titles(history: ELBattleHistory) -> Array:
+	return history.entries.filter(func(entry: Dictionary) -> bool: return entry.kind == "round").map(func(entry: Dictionary) -> String: return entry.title)
 
 func _idle(view: Node) -> void:
 	for i in 900:
