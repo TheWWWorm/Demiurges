@@ -66,8 +66,11 @@ const uint SLOT_ARENA_SCENERY = 1024u;
 const uint SLOT_UNLIT_SHADOWED = 8192u;
 const uint SLOT_METAL = 16384u;
 const uint SLOT_THIN = 32768u;
-const uint RAY_SOLID = 1u;
+// Instance masks (ELPathTracing._update_material): solid geometry that casts
+// the sun's shadow, soft emitters, and solid scenery that casts none.
+const uint RAY_SUN_BLOCKER = 1u;
 const uint RAY_SOFT_EMITTER = 2u;
+const uint RAY_SOLID = 5u;
 const uint NO_TEXTURE = 0xffffffffu;
 
 struct Payload {
@@ -367,6 +370,11 @@ bool occluded(vec3 origin, vec3 direction, float max_distance) {
 	return closest(origin, direction, max_distance, RAY_SOLID, 0u, false, gl_RayFlagsNoneEXT, true).found != 0u;
 }
 
+// The sun's shadow ray, which some scenery does not stop (RAY_SUN_BLOCKER).
+bool sun_occluded(vec3 origin, vec3 direction, float max_distance) {
+	return closest(origin, direction, max_distance, RAY_SUN_BLOCKER, 0u, false, gl_RayFlagsNoneEXT, true).found != 0u;
+}
+
 // How much of the sun reaches a point along `direction`. Feather and hair
 // cards (SLOT_THIN) let light through by their coverage at a coarse mip, not
 // by the cut at single texels: overlapping feather cards cast that cut on each
@@ -382,7 +390,7 @@ float sun_transmission(vec3 origin, vec3 direction, float max_distance) {
 		payload.alpha_seed = 0u;
 		payload.include_secondary = false;
 		payload.shadow_ray = true;
-		traceRayEXT(scene, gl_RayFlagsNoneEXT, RAY_SOLID, 0, 0, 0, origin, start, direction, max_distance, 0);
+		traceRayEXT(scene, gl_RayFlagsNoneEXT, RAY_SUN_BLOCKER, 0, 0, 0, origin, start, direction, max_distance, 0);
 		if (payload.found == 0u) return light;
 		resolve_hit(payload, direction);
 		Slot look = slots[instance_slot(payload.instance)];
@@ -486,7 +494,7 @@ float unlit_shadow(vec3 point, float lift, inout uint state) {
 	basis(sun, t, b);
 	float r = sqrt(random(state)) * frame.sun_direction.w, phi = 6.2831853 * random(state);
 	vec3 towards = normalize(sun + (t * cos(phi) + b * sin(phi)) * r);
-	if (!occluded(point + towards * lift, towards, 200.0)) return 1.0;
+	if (!sun_occluded(point + towards * lift, towards, 200.0)) return 1.0;
 	float shade = dot(frame.ambient.rgb, LUMINANCE) * SKY_SHARE;
 	float open = dot(sunlight(max(sun.y, 0.0), false), LUMINANCE) + shade;
 	return clamp(shade / max(open, 1e-4), 0.0, 1.0);
@@ -586,7 +594,7 @@ vec3 metal_shine(vec3 origin, vec3 normal, vec3 geometric_normal, vec3 view_dire
 	vec3 p = origin + r * seen.distance + seen_normal * 0.03;
 	vec3 incoming = frame.ambient.rgb * SKY_SHARE * 0.6;
 	float seen_n_dot_l = dot(seen_normal, sun);
-	if (seen_n_dot_l > 0.0 && frame.sun_color.w > 0.5 && !occluded(p, sun, 200.0))
+	if (seen_n_dot_l > 0.0 && frame.sun_color.w > 0.5 && !sun_occluded(p, sun, 200.0))
 		incoming += sunlight(seen_n_dot_l, (look.geometry.z & SLOT_SCENERY) != 0u);
 	return shine + (colour * incoming + surface_emission(look, seen.uv, 2.0)) * weight;
 }
@@ -755,7 +763,7 @@ void main() {
 				n = hit_normal;
 				vec3 incoming = vec3(0.0);
 				float hit_n_dot_l = dot(n, sun);
-				if (hit_n_dot_l > 0.0 && frame.sun_color.w > 0.5 && !occluded(p, sun, 200.0))
+				if (hit_n_dot_l > 0.0 && frame.sun_color.w > 0.5 && !sun_occluded(p, sun, 200.0))
 					incoming += sunlight(hit_n_dot_l, hit_scenery);
 				float bounce_level;
 				incoming += effect_light(p, n, false, state, bounce_level);

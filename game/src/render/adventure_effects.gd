@@ -441,6 +441,7 @@ func _process(delta: float) -> void:
 		_cull_all()
 	for name: String in effects.keys():
 		_advance(name, delta)
+	_step_glow_lights(delta)
 
 func _advance(name: String, delta: float) -> void:
 	var effect: Dictionary = effects[name]
@@ -501,11 +502,18 @@ func _frame_data(file: ELParticleFile, frames: PackedInt32Array) -> Dictionary:
 
 ## Additive story sprites can light the traced map. Terrain effects use the
 ## same blend for weather such as rain, so it does not make them light sources.
-func glow_sources() -> Array:
+## A figure's own glow (an effect anchored to it: a Chaot hero's glowing
+## sword) lights as a figure's glow does in battle (ELCombatEffects'
+## _figure_lights: a weapon light and an aura light, kinds 1 and 2). Taken
+## patch by patch, its light jumped about the mount as the sprites regrouped
+## from frame to frame. `figures_only` leaves out the rest.
+func glow_sources(figures_only := false) -> Array:
 	var result := []
 	for effect: Dictionary in effects.values():
 		var file: ELParticleFile = effect.file
 		var node: MultiMeshInstance3D = effect.node
+		var figure := effect.has("anchor")
+		if figures_only and not figure: continue
 		if effect.frame < 0 or not file.additive or ELSecondAmbience.is_terrain_effect(str(effect.entry.file)) or not node.is_visible_in_tree(): continue
 		if effect.get("glow_frame", -1) != effect.frame:
 			effect.glow_frame = effect.frame
@@ -525,9 +533,27 @@ func glow_sources() -> Array:
 			var share := minf(1.0, ELCombatEffects.EMITTER_GLOW / maxf(total, 0.0001))
 			for glow: Array in glows: glow[2] *= share
 			effect.glows = glows
+		var lit := []
 		for glow: Array in effect.get("glows", []):
-			result.append([node.global_transform * glow[0], glow[1], glow[2]])
+			lit.append([node.global_transform * glow[0], glow[1], glow[2], false, 0])
+		if figure and not lit.is_empty(): lit = ELCombatEffects._figure_lights(lit)
+		result.append_array(lit)
 	return result
+
+## Lamps for figures' glows in the ordinary picture (the "spell_light"
+## preference, as in battle): a Chaot hero's sword glowed on the map and lit
+## nothing round it. Story effects keep to their painted look; path tracing
+## lights them all itself.
+var _glow_lights: ELGlowLights
+func _step_glow_lights(delta: float) -> void:
+	var world := get_parent()
+	var environment: Environment = world.get("environment") if world != null else null
+	var on := ELEffectLook.lights(environment) and is_visible_in_tree()
+	if _glow_lights == null:
+		if not on: return
+		_glow_lights = ELGlowLights.new()
+		add_child(_glow_lights)
+	if on or _glow_lights.lit() > 0: _glow_lights.show_sources(glow_sources(true) if on else [], delta)
 
 func _material(file: ELParticleFile, data: ELProfile = null, atlas := "") -> ShaderMaterial:
 	if data == null: data = profile

@@ -48,6 +48,9 @@ const SURFACE_METAL := 16384
 ## A figure's feather, hair or cloth card (ELFigure.is_soft_part, cut out):
 ## thin, so it passes some sun to its far side and some through its cuts.
 const SURFACE_THIN := 32768
+## Scenery kept out of the sun's shadow rays (ELArena.shades_from_sun); every
+## other ray still meets it.
+const SURFACE_NO_SUN_SHADOW := 65536
 const SURFACE_CLAMP_UV := 32
 ## Angular radius of the sun's disc (tangent), which sets shadow softness.
 const SUN_RADIUS := 0.02
@@ -480,6 +483,7 @@ func _snapshot(delta: float) -> void:
 				look.flags |= SURFACE_ARENA_FLOOR
 			elif is_instance_valid(_arena) and _arena.is_normal_secondary_receiver(model, node):
 				look.flags |= SURFACE_ARENA_SCENERY
+			if is_instance_valid(_arena) and not _arena.shades_from_sun(model): look.flags |= SURFACE_NO_SUN_SHADOW
 			var mesh: Mesh = node.mesh
 			var frame := -1
 			var next_frame := -1
@@ -864,8 +868,8 @@ func _effect_lights(delta := 0.0) -> PackedFloat32Array:
 		# raster lamps' share and reach: at a spell's strength it lifted the
 		# snow of the Kinet arenas into a white haze around the hero.
 		if kind > 0:
-			colour *= ELGlowLights.AURA_SHARE if kind == 2 else ELGlowLights.ATTACHED_SHARE
-			reach *= ELGlowLights.ATTACHED_REACH
+			colour *= ELGlowLights.figure_share(kind)
+			reach *= ELGlowLights.figure_reach(kind)
 			figure.append([glow[0], extent, colour, reach])
 			continue
 		# A spell's fire falls off with the distance squared (the tracer reads
@@ -1733,7 +1737,8 @@ class Effect extends CompositorEffect:
 		var slot: Dictionary = _slots.get(id, {})
 		if slot.is_empty(): return
 		var flags := record.decode_u32(8)
-		var mask := 2 if (flags & ELPathTracing.SURFACE_SOFT_EMITTER) != 0 else 1
+		# Instance masks: 1 solid, 2 soft emitter, 4 solid but no sun shadow.
+		var mask := 2 if (flags & ELPathTracing.SURFACE_SOFT_EMITTER) != 0 else (4 if (flags & ELPathTracing.SURFACE_NO_SUN_SHADOW) != 0 else 1)
 		var facing := DOUBLE_SIDED
 		# Vulkan's ray-facing test sees Godot's raster fronts with reversed winding.
 		if (flags & ELPathTracing.SURFACE_PRIMARY_CULL_BACK) != 0:

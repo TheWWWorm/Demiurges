@@ -30,6 +30,12 @@ var _secondary_scenery: Array[ELModel] = []
 var _camera_obstacles: Array[ELModel] = []
 var _closeup_parts: Array[MeshInstance3D] = []
 var _closeup_hidden: Array[MeshInstance3D] = []
+## Tall scenery on the camera's side of the fight (within NEAR_SIDE_ANGLE of
+## its bearing), set by clear_camera_view. Raster scenery casts no shadows;
+## path tracing lets these cast none either, because they stand behind or
+## beside the lens, mostly out of the picture, and from the standing views a
+## pillar's traced sun shadow covered the near hero and floor in black.
+var _near_side: Dictionary = {}
 var _closeup_faces: Dictionary = {}
 ## Padding for near-plane intersections and shots that graze scenery.
 const CAMERA_CLEARANCE := 0.25
@@ -245,6 +251,10 @@ func set_water(enabled: bool) -> void:
 
 func is_surface(model: ELModel) -> bool:
 	return model == _ground
+
+## Whether this scenery casts a traced sun shadow (see _near_side).
+func shades_from_sun(model: ELModel) -> bool:
+	return not _near_side.has(model)
 
 func is_normal_secondary_receiver(model: ELModel, part: MeshInstance3D) -> bool:
 	var material := part.material_override as ShaderMaterial
@@ -609,18 +619,20 @@ func clear_camera_view(camera_position: Vector3, target: Vector3, framed: Array 
 	for gate: Dictionary in _edge_scenery_models():
 		var bearing: Vector2 = gate.bearing
 		(gate.model as ELModel).visible = not (outside.length() > bearing.length() and absf(bearing.angle_to(outside)) < EDGE_SCENERY_ANGLE)
+	_near_side.clear()
 	for child: ELModel in _camera_obstacles:
 		var obscures := false
-		if beyond:
-			var bearing := Vector2(child.global_position.x, child.global_position.z)
-			var centre := Vector3.ZERO
-			var pieces := 0
-			for part: MeshInstance3D in child.parts.values():
-				if part.mesh == null: continue
-				centre += (part.global_transform * part.mesh.get_aabb()).get_center()
-				pieces += 1
-			if pieces > 0: bearing = Vector2(centre.x, centre.z) / pieces
-			if bearing.length() > 0.01 and absf(bearing.angle_to(outside)) < NEAR_SIDE_ANGLE: obscures = true
+		var bearing := Vector2(child.global_position.x, child.global_position.z)
+		var centre := Vector3.ZERO
+		var pieces := 0
+		for part: MeshInstance3D in child.parts.values():
+			if part.mesh == null: continue
+			centre += (part.global_transform * part.mesh.get_aabb()).get_center()
+			pieces += 1
+		if pieces > 0: bearing = Vector2(centre.x, centre.z) / pieces
+		if bearing.length() > 0.01 and absf(bearing.angle_to(outside)) < NEAR_SIDE_ANGLE:
+			_near_side[child] = true
+			if beyond: obscures = true
 		for part: MeshInstance3D in child.parts.values():
 			if part.mesh == null:
 				continue
@@ -659,6 +671,7 @@ func show_all_scenery() -> void:
 	for gate: Dictionary in _edge_scenery_models(): (gate.model as ELModel).visible = true
 	for child: ELModel in _camera_obstacles:
 		if is_instance_valid(child): child.visible = true
+	_near_side.clear()
 	for part: MeshInstance3D in _closeup_hidden:
 		if is_instance_valid(part): part.show()
 	_closeup_hidden.clear()

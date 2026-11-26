@@ -1484,7 +1484,7 @@ func glow_sources(spell_budget := EMITTER_GLOW, include_ether_vent := true) -> A
 		# them. Every glowing weapon lights alike, whatever its particle
 		# count: a Chaot's axe is four large sprites, a Kinet's glaive a
 		# hundred, and counted by their colour the axe gave no light at all.
-		# ELGlowLights lights them at ATTACHED_SHARE and AURA_SHARE.
+		# ELGlowLights lights them at its figure_share for each kind.
 		if attached and not lit.is_empty():
 			lit = _figure_lights(lit)
 			if lit.is_empty(): continue
