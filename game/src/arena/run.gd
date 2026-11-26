@@ -11,6 +11,10 @@ const MAX_SAVE_BYTES := 4 * 1024 * 1024
 const FACTIONS: Array[String] = ["Red", "Blue", "Green", "Black"]
 const STYLES: Array[String] = ["balanced", "aggressive", "control", "synergy"]
 const NAMES: Array[String] = ["Ash", "Vesper", "Flint", "Morrow", "Briar", "Rook", "Cinder", "Vale", "Thorn", "Echo", "Sable", "Wren"]
+## 0: every hero is its race's heroes.def figure without a specialization or
+## artifact (runs saved before 1). 1: each offered hero and each opponent has
+## its own figure, specialization and artifact, fixed by the run seed.
+const HERO_VERSION := 1
 
 var profile: ELProfile
 var seed_value := 0
@@ -19,6 +23,7 @@ var hero_levels := ELArenaRules.DEFAULT_LEVELS
 var run_id := ""
 var phase := "hero"
 var hero_choices: Array[String] = []
+var hero_version := HERO_VERSION
 var faction := ""
 var draft: ELArenaDraft
 var wins := 0
@@ -58,6 +63,7 @@ func create(source: ELProfile, run_seed: int, rules := ELArenaRules.OPEN_RULES, 
 	# creates a different run, so an old battle cannot finish the new one.
 	run_id = ("%d:%d:%d" % [seed_value, Time.get_unix_time_from_system(), Time.get_ticks_usec()]).sha256_text().left(24)
 	hero_choices = _heroes(seed_value)
+	hero_version = HERO_VERSION
 	_pool_signatures = signatures
 	phase = "hero"
 	faction = ""
@@ -86,6 +92,16 @@ static func _heroes(seed: int) -> Array[String]:
 
 func _seed(salt: int, index := 0) -> int:
 	return ELDuelMatch._mix(seed_value ^ salt ^ ELDuelMatch._mix(index + 1)) & 0x7fffffff
+
+## The offered hero of a race: figure template, specialization, artifacts.
+func hero_loadout(magic: String) -> Dictionary:
+	if hero_version < 1 or profile == null: return ELArenaRules.NO_LOADOUT
+	return ELArenaRules.loadout(profile, magic, _seed(0x5d1f3a27, FACTIONS.find(magic)))
+
+func _opponent_loadout(index: int, magic: String) -> Dictionary:
+	if hero_version < 1: return ELArenaRules.NO_LOADOUT
+	# Never the player's own figure, so the two sides always look different.
+	return ELArenaRules.loadout(profile, magic, _seed(0x6b3c2e19, index), String(hero_loadout(faction).template))
 
 func choose_hero(magic: String) -> bool:
 	error = ""
@@ -142,7 +158,9 @@ func _make_opponent(index: int) -> Dictionary:
 		return {}
 	result.cards = chosen.cards.duplicate()
 	result.draft = chosen.snapshot()
-	result.preset = ELArenaRules.hero_preset(profile, result.faction, result.cards, rules_version, hero_levels.y)
+	var loadout := _opponent_loadout(index, result.faction)
+	if hero_version >= 1: result.loadout = loadout.duplicate(true)
+	result.preset = ELArenaRules.hero_preset(profile, result.faction, result.cards, rules_version, hero_levels.y, loadout)
 	if result.preset.is_empty():
 		_fail("The computer drafted an invalid spellbook.")
 		return {}
@@ -151,9 +169,11 @@ func _make_opponent(index: int) -> Dictionary:
 	return result
 
 func _options(foe: Dictionary) -> Dictionary:
-	var player := ELArenaRules.hero_preset(profile, faction, draft.cards, rules_version, hero_levels.x)
+	var mine := hero_loadout(faction)
+	var player := ELArenaRules.hero_preset(profile, faction, draft.cards, rules_version, hero_levels.x, mine)
 	if player.is_empty(): return {}
-	var options := ELDuelPresets.options(profile, [player, foe.preset], str(foe.arena))
+	var theirs: Dictionary = foe.get("loadout", ELArenaRules.NO_LOADOUT)
+	var options := ELDuelPresets.options(profile, [player, foe.preset], str(foe.arena), [String(mine.template), String(theirs.get("template", ""))])
 	options.first_side = int(foe.first_side)
 	options.arena_run_id = run_id
 	options.arena_match_id = str(foe.encounter_id)
@@ -203,8 +223,10 @@ func _restore_battle(saved: Dictionary) -> ELDuel:
 		return null
 	for side in 2:
 		var hero: Dictionary = duel.heroes[side]
+		var loadout: Dictionary = hero_loadout(faction) if side == 0 else opponent.get("loadout", ELArenaRules.NO_LOADOUT)
 		if int(hero.level) != hero_levels[side] or hero.skills != ELArenaRules.SKILLS \
-			or hero.get("spec", "NONE") != "NONE" or not Array(hero.get("artifacts", [])).is_empty():
+			or hero.get("spec", "NONE") != String(loadout.get("specialization", "NONE")) \
+			or Array(hero.get("artifacts", [])).size() != Array(loadout.get("artifacts", [])).size():
 			_fail("This battle does not match the Arena hero rules.")
 			return null
 	return duel
@@ -271,7 +293,7 @@ func snapshot() -> Dictionary:
 	return {"format": SAVE_FORMAT, "version": SAVE_VERSION, "rules_version": rules_version,
 		"edition": "el2", "seed": seed_value, "run_id": run_id, "phase": phase,
 		"hero_levels": [hero_levels.x, hero_levels.y],
-		"hero_choices": hero_choices.duplicate(), "faction": faction,
+		"hero_choices": hero_choices.duplicate(), "hero_version": hero_version, "faction": faction,
 		"draft": draft.snapshot() if draft != null else {}, "pool_signatures": _pool_signatures.duplicate(),
 		"wins": wins, "losses": losses, "draws": draws, "outcome": outcome,
 		"opponent": opponent.duplicate(true), "matches": matches.duplicate(true),
@@ -311,6 +333,7 @@ func _adopt(source: ELProfile, data: Dictionary) -> void:
 	run_id = str(data.run_id)
 	phase = str(data.phase)
 	hero_choices.assign(data.hero_choices)
+	hero_version = int(data.get("hero_version", 0))
 	faction = str(data.faction)
 	draft = null
 	if not Dictionary(data.draft).is_empty():
@@ -340,6 +363,9 @@ func restore_snapshot(source: ELProfile, raw: Variant) -> bool:
 		or not ELLuaSave._integer(levels[1], allowed.x, allowed.y):
 		return _fail("The Arena checkpoint has invalid hero levels.")
 	data.hero_levels = [int(levels[0]), int(levels[1])]
+	if not ELLuaSave._integer(raw.get("hero_version", 0), 0, HERO_VERSION):
+		return _fail("The Arena checkpoint uses an unknown hero format.")
+	data.hero_version = int(raw.get("hero_version", 0))
 	for key: String in ["run_id", "phase", "faction", "outcome", "current_match_id"]:
 		if data.get(key) is not String: return _fail("The Arena checkpoint has invalid run settings.")
 	if not ELLuaSave._integer(data.get("seed"), 0, 0x7fffffff) or not _valid_id(data.run_id):
@@ -364,6 +390,7 @@ func restore_snapshot(source: ELProfile, raw: Variant) -> bool:
 	candidate.profile = source
 	candidate.seed_value = int(data.seed)
 	candidate.run_id = str(data.run_id)
+	candidate.hero_version = int(data.hero_version)
 	if not data.draft.is_empty():
 		var check_draft := ELArenaDraft.new()
 		if not check_draft.restore(source, data.draft) or check_draft.rules_version != int(data.rules_version) or check_draft.faction != data.faction \
@@ -392,7 +419,10 @@ func _valid_opponent(foe: Dictionary, index: int) -> bool:
 	if not check_draft.restore(profile, foe.draft) or check_draft.rules_version != rules_version or not check_draft.finished() \
 		or check_draft.faction != foe.faction or check_draft.seed_value != int(foe.draft_seed) or check_draft.cards != foe.cards:
 		return _fail("The Arena opponent's draft transcript is invalid.")
-	var preset := ELArenaRules.hero_preset(profile, foe.faction, foe.cards, rules_version, hero_levels.y)
+	var loadout := _opponent_loadout(index, foe.faction)
+	if (hero_version >= 1 and foe.get("loadout") != loadout) or (hero_version < 1 and foe.has("loadout")):
+		return _fail("The Arena opponent's hero does not match the run seed.")
+	var preset := ELArenaRules.hero_preset(profile, foe.faction, foe.cards, rules_version, hero_levels.y, loadout)
 	if preset.is_empty(): return _fail("The Arena opponent's spellbook is invalid.")
 	preset.id = foe.id
 	preset.name = foe.name

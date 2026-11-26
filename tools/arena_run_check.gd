@@ -52,7 +52,75 @@ func _run() -> void:
 	_retirement(source)
 	_pool_modes(source)
 	_hero_levels(source)
+	_hero_loadouts(source)
 	_finish()
+
+
+func _drafted(source: ELProfile, seed: int, legacy := false) -> ELArenaRun:
+	var run := ELArenaRun.new()
+	run.auto_save = false
+	if not run.create(source, seed): return null
+	if legacy: run.hero_version = 0
+	if not _draft(run): return null
+	return run
+
+## Each offered hero and opponent has its own figure, specialization and
+## artifact; runs saved before that keep the plain heroes.def heroes.
+func _hero_loadouts(source: ELProfile) -> void:
+	var installed := not ELArenaRules.hero_templates(source, "Red").is_empty()
+	var seen := {}
+	for seed: int in [11, 12, 13, 14, 15, 16]:
+		var run := ELArenaRun.new()
+		run.auto_save = false
+		if not run.create(source, seed): continue
+		for magic: String in run.hero_choices:
+			var loadout := run.hero_loadout(magic)
+			check(loadout == run.hero_loadout(magic), "A hero's loadout is fixed by the run seed")
+			if not installed: continue
+			check(String(loadout.template) in ELArenaRules.hero_templates(source, magic), "%s: the offered figure is one of the race's duel heroes" % magic)
+			check(ELDuelCosts.spec_allowed(source, String(loadout.specialization), magic) and loadout.specialization != "NONE", "%s: the offered specialization belongs to the race" % magic)
+			check(loadout.artifacts.size() == 1 and String(loadout.artifacts[0]) in ELDuelCosts.duel_artifacts(source), "%s: the offered hero carries one duel artifact" % magic)
+			seen[loadout.template] = true
+	if installed: check(seen.size() >= 8, "Different runs offer different heroes (%d figures in six runs)" % seen.size())
+	var run := _drafted(source, 4242)
+	if run == null:
+		check(false, "A loadout run drafts")
+		return
+	var mine := run.hero_loadout(run.faction)
+	for index in 4:
+		var duel := run.build_battle()
+		if duel == null:
+			check(false, "Loadout battle %d starts: %s" % [index, run.error])
+			return
+		var theirs: Dictionary = run.opponent.get("loadout", {})
+		check(duel.heroes[0].spec == mine.specialization and duel.heroes[0].artifacts.size() == mine.artifacts.size(), "Battle %d: the player's hero has its specialization and artifact" % index)
+		check(duel.heroes[1].spec == theirs.get("specialization") and duel.heroes[1].artifacts.size() == Array(theirs.get("artifacts", [])).size(), "Battle %d: the opponent has its own specialization and artifact" % index)
+		if installed:
+			var heroes: Array = duel.setup.players.map(func(player: Dictionary) -> String: return String(player.hero))
+			check(heroes[0] == mine.template and heroes[1] == theirs.template and heroes[0] != heroes[1], "Battle %d: the two sides are different heroes (%s, %s)" % [index, heroes[0], heroes[1]])
+		var saved := run.snapshot()
+		var restored := ELArenaRun.new()
+		check(restored.restore_snapshot(source, JSON.parse_string(JSON.stringify(saved))), "Battle %d: the loadout battle resumes" % index)
+		if index == 0:
+			var forged: Dictionary = JSON.parse_string(JSON.stringify(saved))
+			forged.opponent.loadout.specialization = "RVVE" if theirs.get("specialization") != "RVVE" else "GBLP"
+			check(not ELArenaRun.new().restore_snapshot(source, forged), "A changed opponent specialization is refused")
+		_end(duel, 0)
+		if not run.resolve_battle(duel) or not run.continue_run():
+			check(false, "Loadout battle %d resolves: %s" % [index, run.error])
+			return
+	var legacy := _drafted(source, 4242, true)
+	if legacy == null:
+		check(false, "A legacy run drafts")
+		return
+	var duel := legacy.build_battle()
+	check(duel != null and duel.heroes.all(func(hero: Dictionary) -> bool: return hero.spec == "NONE" and hero.artifacts.is_empty()), "A legacy run keeps heroes without specialization or artifacts")
+	if duel != null:
+		check(duel.setup.players.all(func(player: Dictionary) -> bool: return player.hero == ELDuelPresets.default_template(source, String(player.faction))), "A legacy run keeps the heroes.def figures")
+	var old: Dictionary = JSON.parse_string(JSON.stringify(legacy.snapshot()))
+	old.erase("hero_version")
+	var resumed := ELArenaRun.new()
+	check(resumed.restore_snapshot(source, old) and resumed.hero_version == 0 and resumed.phase == "battle", "A battle saved before loadouts resumes unchanged")
 
 
 func _pool_modes(source: ELProfile) -> void:

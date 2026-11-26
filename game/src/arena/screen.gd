@@ -312,8 +312,12 @@ func _hero_choices() -> void:
 	_offer_grid.add_theme_constant_override("h_separation", 16)
 	_offer_grid.add_theme_constant_override("v_separation", 16)
 	_content.add_child(_offer_grid)
+	# One scale for all three figures, so a squat Chaot stands beside a
+	# winged Kinet as in battle instead of each filling its own card.
+	var scale_group := {"count": 0}
 	for faction: String in run.hero_choices:
 		var color := _faction_color(faction)
+		var loadout := run.hero_loadout(faction)
 		var panel := _panel(LINE)
 		var rows := _rows(panel, 10)
 		var title := _heading(_faction_name(faction), 25)
@@ -324,19 +328,83 @@ func _hero_choices() -> void:
 		stage.add_theme_stylebox_override("panel", _plate(Color("141413"), color.darkened(0.55), 6))
 		stage.size_flags_vertical = Control.SIZE_EXPAND_FILL
 		rows.add_child(stage)
-		var template := ELDuelPresets.default_template(profile, faction)
+		var template := _template(faction, loadout)
 		var figure := ELAutochessFigure.new()
 		figure.name = "ArenaHeroPreview"
 		figure.relative = false
 		figure.zoom = 0.92
+		figure.scale_group = scale_group
 		if DisplayServer.get_name() != "headless": figure.show_hero(profile, template)
-		if is_instance_valid(figure.view): stage.add_child(figure)
+		if is_instance_valid(figure.view):
+			stage.add_child(figure)
+			scale_group.count += 1
 		else:
 			figure.free()
 			var face := int(profile.table("HeroTemplates").get(template, {}).get("Face", -1))
 			if face >= 0: stage.add_child(_image(profile.portrait(face), Vector2.ZERO))
+		if _has_loadout(loadout): rows.add_child(_loadout_row(loadout))
 		var pick := _choice_button("ArenaHero_" + faction, _faction_name(faction), panel, func(): hero_chosen.emit(faction))
 		_offer_grid.add_child(pick)
+
+
+func _template(faction: String, loadout: Dictionary) -> String:
+	var template := String(loadout.get("template", ""))
+	return template if not template.is_empty() else ELDuelPresets.default_template(profile, faction)
+
+
+func _has_loadout(loadout: Dictionary) -> bool:
+	return String(loadout.get("specialization", "NONE")) != "NONE" or not Array(loadout.get("artifacts", [])).is_empty()
+
+
+## The hero's specialization and artifacts as pictures with their names;
+## hovering one shows its full description.
+func _loadout_row(loadout: Dictionary) -> HFlowContainer:
+	var row := HFlowContainer.new()
+	row.name = "ArenaLoadout"
+	row.alignment = FlowContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("h_separation", 8)
+	row.add_theme_constant_override("v_separation", 6)
+	var code := String(loadout.get("specialization", "NONE"))
+	var spec: Dictionary = profile.table("HeroesSpecs").get(code, {})
+	if code != "NONE" and not spec.is_empty():
+		var title := profile.text(str(spec.get("Name", code))).strip_edges()
+		var detail := profile.text(str(spec.get("Desc", ""))).strip_edges()
+		var badge := _loadout_badge(profile.specialisation_icon(), title, _text("Specialization", "Специализация"), TEAL)
+		badge.name = "ArenaSpec_" + code
+		badge.tooltip_text = "%s\n%s" % [title, detail]
+		row.add_child(badge)
+	for item: Variant in loadout.get("artifacts", []):
+		var artifact := String(item)
+		var badge := _loadout_badge(profile.card_icon(artifact), ELEncyclopaedia.name(profile, artifact), _text("Artifact", "Артефакт"), GOLD)
+		badge.name = "ArenaArtifact_" + artifact
+		badge.tooltip_text = ELCombatRail.preset_artifact_tooltip(profile, artifact)
+		row.add_child(badge)
+	return row
+
+
+func _loadout_badge(icon: Texture2D, title: String, caption: String, ink: Color) -> PanelContainer:
+	var panel := PanelContainer.new()
+	panel.mouse_filter = Control.MOUSE_FILTER_PASS
+	panel.add_theme_stylebox_override("panel", _plate(Color("1d1d1bf5"), ink.darkened(0.5), 5))
+	var line := HBoxContainer.new()
+	line.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	line.add_theme_constant_override("separation", 8)
+	panel.add_child(line)
+	line.add_child(_image(icon, Vector2(44, 44)))
+	var words := VBoxContainer.new()
+	words.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	words.add_theme_constant_override("separation", 0)
+	words.alignment = BoxContainer.ALIGNMENT_CENTER
+	line.add_child(words)
+	var kind := _label(caption, 13, MUTED)
+	kind.autowrap_mode = TextServer.AUTOWRAP_OFF
+	kind.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	words.add_child(kind)
+	var name := _label(title, 16, ink)
+	name.autowrap_mode = TextServer.AUTOWRAP_OFF
+	name.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	words.add_child(name)
+	return panel
 
 
 func _draft() -> void:
@@ -416,6 +484,7 @@ func _hub() -> void:
 	heading_label.add_theme_color_override("font_color", accent)
 	rows.add_child(heading_label)
 	if not note.is_empty(): rows.add_child(_label(note, 18, MUTED))
+	if run.draft != null and _has_loadout(run.hero_loadout(run.faction)): rows.add_child(_loadout_row(run.hero_loadout(run.faction)))
 	if run.phase == "ready":
 		var next := _action(_text("Enter the Arena", "Выйти на арену"), func(): _dispatch(battle_requested.emit), GOLD)
 		next.name = "ArenaBattle"
@@ -427,7 +496,8 @@ func _hub() -> void:
 		resume.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 		rows.add_child(resume)
 	elif run.phase == "result":
-		var next := _action(_text("Continue run", "Продолжить заход"), func(): _dispatch(continued.emit), GOLD)
+		# Straight into the next duel: no separate lobby step after a result.
+		var next := _action(_text("Next battle", "Следующий бой"), func(): _dispatch(continued.emit), GOLD)
 		next.name = "ArenaContinue"
 		next.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 		rows.add_child(next)
@@ -807,6 +877,8 @@ func _show_opponent(result: Dictionary) -> void:
 	_open_modal(_opponent_name(opponent), 535, 500)
 	_modal_rows.add_child(_label(_text("Drafted by the same rules: 16 picks, one card from each offer.", "Те же правила драфта: 16 выборов, по одной карте из каждого предложения."), 18, MUTED))
 	var cards: Array = opponent.get("cards", [])
+	var loadout: Dictionary = opponent.get("loadout", {})
+	if _has_loadout(loadout): _modal_rows.add_child(_loadout_row(loadout))
 	_cost_curve(_modal_rows, cards)
 	var history: Array = Dictionary(opponent.get("draft", {})).get("history", [])
 	var log := _button(_text("Draft history", "История драфта"), GOLD)
@@ -987,7 +1059,8 @@ func _relayout() -> void:
 		_offer_grid.columns = 3 if size.x >= 780 else 1
 		var compact := short and _offer_grid.columns == 3
 		for stage: PanelContainer in _offer_grid.find_children("ArenaHeroStage", "PanelContainer", true, false):
-			stage.custom_minimum_size.y = clampf(size.y - 300, 245, 720) if _offer_grid.columns == 3 else clampf(size.y * 0.5, 260, 460)
+			var badges := 80 if stage.get_parent().find_child("ArenaLoadout", false, false) != null else 0
+			stage.custom_minimum_size.y = clampf(size.y - 300 - badges, 245, 720) if _offer_grid.columns == 3 else clampf(size.y * 0.5, 260, 460)
 		for rows: VBoxContainer in _offer_grid.find_children("ArenaCardRows", "VBoxContainer", true, false):
 			rows.add_theme_constant_override("separation", 6 if compact else 10)
 		for stage: PanelContainer in _offer_grid.find_children("ArenaCardStage", "PanelContainer", true, false):

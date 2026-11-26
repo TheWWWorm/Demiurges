@@ -115,7 +115,18 @@ func _run() -> void:
 	check(heroes.size() == 3, "Exactly three hero choices are displayed")
 	if not installation.is_empty() and DisplayServer.get_name() != "headless":
 		var previews := screen.find_children("ArenaHeroPreview", "Control", true, false)
-		check(previews.size() == 3 and previews.all(func(figure: ELAutochessFigure) -> bool: return figure.model != null and figure.size.y > 400.0), "All three hero cards have tall live models")
+		check(previews.size() == 3 and previews.all(func(figure: ELAutochessFigure) -> bool: return figure.model != null and figure.size.y > 380.0), "All three hero cards have tall live models")
+		var group: Dictionary = previews[0].scale_group
+		check(previews.all(func(figure: ELAutochessFigure) -> bool: return figure.scale_group == group) and int(group.get("count", 0)) == 3 and Dictionary(group.get("heights", {})).size() == 3, "The three heroes are drawn at one shared scale")
+		var codes := previews.map(func(figure: ELAutochessFigure) -> String: return figure.code)
+		check(codes.all(func(template: String) -> bool: return codes.count(template) == 1), "Each card shows a different hero figure")
+		check(screen.find_children("ArenaSpec_*", "PanelContainer", true, false).size() == 3 and screen.find_children("ArenaArtifact_*", "PanelContainer", true, false).size() == 3, "Each hero card pictures its specialization and artifact")
+		for viewport: Vector2i in [Vector2i(1024, 768), Vector2i(800, 600), Vector2i(390, 844)]:
+			root.size = viewport
+			await frames(28 if not _arg("capture").is_empty() else 6)
+			await _capture("hero-%d" % viewport.x)
+		root.size = Vector2i(1440, 900)
+		await frames(28)
 	await _click_offer(heroes[0], "Hero")
 	await frames()
 	check(active.phase == "draft", "Hero selection opens drafting")
