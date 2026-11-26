@@ -1667,6 +1667,7 @@ func play(path: String, spatial_gain := 1.0, loop := false) -> bool:
 	sound_requested.emit(path)
 	if requested.size() > 80: requested.pop_front()
 	if paused or silenced or voices.is_empty(): return false
+	if not loop and _join_same_moment(path, spatial_gain, source): return true
 	var stream := ELAudio.sound(profile, path)
 	if stream == null: return false
 	if loop:
@@ -1676,6 +1677,8 @@ func play(path: String, spatial_gain := 1.0, loop := false) -> bool:
 		if not voice.playing:
 			_last_voice = voice
 			voice.stream = stream
+			voice.set_meta("path", path)
+			if not loop: _started_together[path] = {"voice": voice, "msec": Time.get_ticks_msec()}
 			spatial_gain = ELAudio.placed_gain(spatial_gain, edition)
 			voice.set_meta("spatial_gain", spatial_gain)
 			voice.volume_db = linear_to_db(maxf(0.0001, ELAudio.option_gain(float(settings.effects), edition) * spatial_gain)) - 3.0
@@ -1687,6 +1690,35 @@ func play(path: String, spatial_gain := 1.0, loop := false) -> bool:
 			if played.size() > 40: played.pop_front()
 			return true
 	return false
+
+## Sounds started within this many milliseconds of each other count as
+## started together.
+const SAME_MOMENT_MSEC := 40
+## Sound path -> {"voice", "msec"} of the last start of that file.
+var _started_together: Dictionary = {}
+
+## The same sound started again at the same moment joins the voice already
+## playing it rather than taking another (#312): a mass effect (the gases,
+## Blood Bonds, the Orc Chieftain's tirelessness) applied to every creature
+## is heard once, as the originals play it, not once per creature on top of
+## each other. The voice takes the nearest instance's level and placement.
+func _join_same_moment(path: String, spatial_gain: float, source: Variant) -> bool:
+	var last: Dictionary = _started_together.get(path, {})
+	if last.is_empty(): return false
+	var voice: AudioStreamPlayer = last.voice
+	if Time.get_ticks_msec() - int(last.msec) > SAME_MOMENT_MSEC or not is_instance_valid(voice) or not voice.playing \
+			or String(voice.get_meta("path", "")) != path:
+		_started_together.erase(path)
+		return false
+	_last_voice = voice
+	var placed := ELAudio.placed_gain(spatial_gain, edition)
+	if placed > float(voice.get_meta("spatial_gain", 0.0)):
+		voice.set_meta("spatial_gain", placed)
+		voice.volume_db = linear_to_db(maxf(0.0001, ELAudio.option_gain(float(settings.effects), edition) * placed)) - 3.0
+		var pan := stereo_pan(source) if source is Vector3 else 0.0
+		voice.set_meta("pan", pan)
+		ELAudio.set_pan(voice.bus, pan, edition)
+	return true
 
 ## A sound that outlives the battle screen, as the victory fanfare does: it
 ## plays to its end on its own player under the scene root, even once the
