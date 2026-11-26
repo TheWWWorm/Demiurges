@@ -3899,8 +3899,17 @@ func _show_hit(data: Dictionary) -> void:
 ## where a (non-summon) spell's effects start. Zero for summons (their
 ## arrival waits for the gesture itself) and when gestures are hidden.
 ## The gesture a cast of `card` asks of its caster: the summoning,
-## enchantment or instant clip.
+## enchantment or instant clip. Both originals pick it by the spell's own
+## class in CombatSpells (Creature, Enchantment, Sorcery), not by what the
+## spell does: a sorcery that leaves a lasting effect (Rage, Fog, Mirror,
+## Planar Seal and the like) still plays the sorcery gesture (#325, #326),
+## and an enchantment with a one-off effect (Quick Fix) the enchantment one.
+## A card without a class falls back to its rule's effect.
 func _cast_gesture(card: String) -> String:
+	match str(profile.table("CombatSpells").get(card, {}).get("Class", "")):
+		"Creature": return "usummon"
+		"Enchantment": return "uenchantment"
+		"Sorcery": return "uinstant"
 	if duel.is_summon(card): return "usummon"
 	return "uenchantment" if ELCatalog.rule(profile, card).get("effect") == "enchant" else "uinstant"
 
