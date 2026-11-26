@@ -4,6 +4,46 @@ Versions follow [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html)
 
 ## Unreleased
 
+## 0.30.0
+
+### New
+
+- **Draft Arena picks.** After choosing a hero you pick one of three specialisations of its race, one of three duel artifacts and one of three hero skills (Artistry, Control, Meditation, Vitality, Luck, Regeneration, Evil Eye), each skill offered at a random rank from 1 to 3; all three apply in the Arena's battles. Opponents get a seeded specialisation, artifact and skill of their own. Runs saved earlier resume as they were.
+- **Arena heroes** are drawn from each race's different figures, an opponent never wears yours, and the three offered figures stand at one scale. Opening the Arena with a saved run goes straight into it, and the result screen's single button starts the next battle.
+- **Smarter AI** searches its combat moves further and weighs a turn's options in parallel.
+
+### Changed
+
+- **Evil Dale (restored mission, Etherlords I):** the rival heroes Zarus, Valaddin and Tango guard the ground around them, and every rival attacks the Chosen One within its sight, as in the original. The dale's creatures keep pace with the rivals near them (on average level 7 instead of 5); games begun earlier keep their creatures. "AI fights neutral monsters" no longer weakens the guards of a map without another player (Evil Dale, Savage Desert). Glazzz speaks as a man in the mission's lines.
+- **A won battle closes when the victory clip ends**, as in the original; the fanfare plays on.
+
+### Fixed
+
+- **Pale samurai (Etherlords II):**
+  - A Pale creature in the Ether carrying Redirection dies, instead of dissipating, when its hero takes a lethal blow for it (#313).
+  - The Avenger, Punisher and Redeemer return as their enchantment on the hero when revived (Water Bond, Pale Revival, Synthet repairs, necromancy, rebirth, artifacts) and as their enchantment card when returned to the hand (#314).
+  - "Breaks enchantments" strikes no longer remove them (#316).
+  - The Redeemer's stats count all the ether paid for the spell, including what spells such as Cleanse, Annihilation and Greater Unsummon take when cast (#317).
+- **Hero abilities and artifacts** are lit only when they have a legal target: Self-Sacrifice, Repair Workshop, Recharge, Second Birth, Dissipation, Rebirth, Ether Feeding and Burning; the Rings of Subjugation, Paralysis and Destruction, the Amulets of Ether Protection and Cleansing, the Rod of Resurrection and the Scroll of Blessing (#320, #321).
+- **Plague Rat:** Insatiable Scavenger asks for the hero first and then the number of creatures, and can be used with empty graveyards (#311).
+- **Pale Reaper, Destroyer and Slayer** show the hero's heal or channel only when their prey dies (#315).
+- **Pale Hammer** on a creature in the Ether plays the recall, with its sound, instead of the Pale death (#323).
+- **Pale Ripple** plays once over the field, shows the stat gains only on the caster's creatures in the Ether, and the spell-jammers it springs arrive one after another with their summon effect once the spell has been shown (#324).
+- **Artifacts:** the hero plays the casting gesture of the artifact spell's kind, with its voice (#322).
+- **Walls of Lava, Hellfire and Wind** play their action and its sound with their abilities (#318). With "Hide casting animations" on, creatures' ability gestures are hidden too, as in the original.
+- **Mass blessings and curses** (gases, Blood Bonds, the Orc Chieftain's call) play their sound once instead of once per creature (#312).
+- **Regeneration** after a spell's hit (Rat Immortality against a Lightning Bolt) shows when the hit lands, not before.
+- **Phase banner sound** plays on its own voice, so a click no longer cuts it, and the opponent's turn banner comes back after your defence as in the original. The end-of-phase button clicks.
+- **The corner game menu** hides while a spell is shown, so its tooltip no longer covers global spells.
+- **Lighting:**
+  - Spell fire lights farther and more gently.
+  - A hero's own casting effect gives light.
+  - Path tracing no longer overlights small buffs such as Battle Spirit.
+  - Weapon glows (the Chaot heroes' blue maces and blades, Konnar's sword on the map) light their bearer and the ground, steadily.
+  - On the maps, figure glows no longer flare and flicker under path tracing.
+  - Tall scenery on the camera's side no longer throws a path-traced sun shadow over the near hero.
+- **The White Lord's hall:** the hanging banners and chains that stood between the battle camera and the field are hidden while they are in the way.
+
 ## 0.29.0
 
 ### New

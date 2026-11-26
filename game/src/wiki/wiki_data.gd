@@ -6,7 +6,7 @@ extends RefCounted
 ## language. Each page: key, title, category, html (escaped subset), search
 ## and, when it has them, heroes and map objects ([game, id, caption]).
 
-const VERSION := "0.29.0"
+const VERSION := "0.30.0"
 const LANGUAGES: Array[String] = ["en", "ru"]
 const CATEGORIES := [
 	{"id": "wiki", "en": "Demiurges wiki", "ru": "Вики Demiurges"},
