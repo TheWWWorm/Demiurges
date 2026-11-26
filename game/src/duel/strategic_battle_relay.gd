@@ -150,12 +150,12 @@ func surrender() -> bool:
 	gate_done(duel, action, ok)
 	return ok
 
-func step_neutral_ai() -> void:
+func step_neutral_ai(frame_worker_limit := 0) -> void:
 	if not is_host or duel == null or _departure_winner >= 0 or not error.is_empty() or duel.phase == ELDuel.Phase.FINISHED: return
 	var side := duel.active_side()
 	if side in [local_side, remote_side]: return
 	_ai_side = side
-	ELPracticeAI.step(duel)
+	ELPracticeAI.step(duel, false, frame_worker_limit)
 	_ai_side = -1
 
 func _receive(packet: Array) -> void:

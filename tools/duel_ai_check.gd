@@ -9,9 +9,9 @@ extends SceneTree
 ##   where the opponent once played plainly badly. Each names the side to
 ##   move and what must come of its play:
 ##     win      it wins the duel before the turn passes on
-##     survive  its hero is alive when the fight under way is over
-##     attack   it sends at least one creature to attack this turn
-##     spare    it does not cast the named card this phase
+##     survive  its hero lives through the fight, with min_health if specified
+##     attack   it attacks and retains min_ether if specified
+##     spare    it keeps the named card this phase and attacks if requested
 ##     keep     it does not lose a creature in a fight that hurts nobody
 ##     use      it uses the named ability this phase
 ##     cast     it casts the named card this phase
@@ -67,10 +67,106 @@ func _initialize() -> void:
 	if only.is_empty() or "lookahead".contains(only): _lookahead()
 	if only.is_empty() or "fixtures".contains(only): _fixtures()
 	if only.is_empty() or "passing".contains(only): _passing()
+	if only.is_empty() or "forecast".contains(only): _forecast()
+	if only.is_empty() or "leaf_cache".contains(only): _leaf_cache()
 	if only.is_empty() or "aftershock".contains(only): _aftershock()
 	_positions(only)
 	print("%d failures" % failures.size())
 	quit(1 if not failures.is_empty() else 0)
+
+func _leaf_cache() -> void:
+	for game: String in ["el1", "el2"]:
+		var profile := _profile(game)
+		if profile == null: continue
+		var duel := Fixtures.build(profile, {"heroes": [{"health": 20}, {"health": 20}]})
+		if duel == null:
+			check(false, game + ": leaf evaluation fixture loads")
+			continue
+		var ctx := ELCombatSearch.Context.new()
+		ctx.smart = true
+		ctx.edition = game
+		ctx.second = game == "el2"
+		ctx.w = ELCombatSearch.steady_weights(ctx.second)
+		duel.fair_specs = true
+		var line := ELCombatSearch.Line.new()
+		var value := ELCombatSearch._leaf(ctx, line, duel.search_copy())
+		var copy := duel.search_copy()
+		check(ELCombatSearch._leaf(ctx, line, copy) == value and ctx.leaf_hits == 1, game + ": identical leaves share their evaluation")
+		copy.rng_state += 1
+		ELCombatSearch._leaf(ctx, line, copy)
+		copy.rng_state = duel.rng_state
+		copy.spec_credit = {"0:STHN": 0.75}
+		ELCombatSearch._leaf(ctx, line, copy)
+		line.depth += 1
+		ELCombatSearch._leaf(ctx, line, duel.search_copy())
+		check(ctx.leaf_scores.size() == 4 and ctx.leaf_hits == 1, game + ": draw state, specialisation credit and line depth have separate evaluations")
+		copy.scripts_began = true
+		ELCombatSearch._leaf(ctx, line, copy)
+		ELCombatSearch._leaf(ctx, line, copy)
+		check(ctx.leaf_scores.size() == 4 and ctx.leaf_hits == 1, game + ": scripted leaves are read individually")
+
+## A duplicate rune can draw from a different slot than the first copy.
+## Compare the engine input to actual draws, including EL1's free cantrips.
+func _forecast() -> void:
+	if not ELCombatBrain.available: return
+	for game: String in ["el1", "el2"]:
+		var profile := _profile(game)
+		if profile == null: continue
+		var hero_setup := {"skills": {}, "health": 100, "spec": "NONE"}
+		var duel := Fixtures.build(profile, {"fixed": false, "heroes": [hero_setup, hero_setup]})
+		if duel == null:
+			check(false, game + ": forecast fixture loads")
+			continue
+		for hero: Dictionary in duel.heroes:
+			hero.deck = ["WTEL", "WTEL", "SPFG"]
+			hero.spell_uses = [1, 3, -1 if game == "el1" else 2]
+			hero.drawn = []
+		var ctx := Fixtures.context(profile, 0)
+		for restricted: bool in [false, true]:
+			ctx.restricted = restricted
+			ELCombatBrain.ask(ctx, duel, 1, 1000, true, 5)
+			var words := ELCombatBrain.last_packed.to_int32_array()
+			var copy := duel.search_copy()
+			var matched := true
+			var second_copy := false
+			var free_cantrip := false
+			for draw in ELCombatBrain.DRAWS:
+				for side: int in [1, 0]:
+					var before: int = copy.heroes[side].hand.size()
+					if not copy.end_phase() or copy.active_side() != side:
+						matched = false
+						break
+					var dealt: bool = copy.heroes[side].hand.size() > before
+					var page := int(copy.heroes[side].hand_slots.back()) if dealt else -1
+					var slot := HEADER + 2 * HERO + 2 * TYPICAL + side * HAND + (ELCombatBrain.HAND + draw) * CARD
+					if not dealt:
+						matched = matched and words[slot] == -2
+						continue
+					var card := String(copy.heroes[side].hand.back())
+					if card not in ["WTEL", "SPFG"]: continue
+					second_copy = second_copy or page == 1
+					free_cantrip = free_cantrip or (side == 0 and card == "SPFG" and page < 0)
+					if restricted and side == 0 and page >= 0:
+						matched = matched and words[slot] == -1
+					else:
+						var uses := int(copy.heroes[side].spell_uses[page]) + 1 if page >= 0 else 0
+						matched = matched and words[slot] == copy.cost(card) and ((words[slot + 23] >> 16) & 63) == page + 1 and ((words[slot + 23] >> 22) & 127) == uses
+			check(matched and second_copy and (game != "el1" or free_cantrip),
+				"%s: forecast matches dealt rune slots, charges and free cards (restricted=%s)" % [game, restricted])
+		# Two identical hidden cards from different pages must look alike
+		# under fair information, including the charges sent to the engine.
+		var previous := ELCombatSearch.smart_engine_info
+		for policy: String in ["full", "fair"]:
+			ELCombatSearch.smart_engine_info = policy
+			var packed := []
+			for page in 2:
+				var hidden := duel.search_copy()
+				hidden._give_card(1, "WTEL", page)
+				ELCombatBrain.ask(ctx, hidden, 1, 1000, true, 5)
+				packed.append(ELCombatBrain.last_packed)
+			check((packed[0] == packed[1]) == (policy == "fair"),
+				"%s: hidden duplicate rune follows %s information" % [game, policy])
+		ELCombatSearch.smart_engine_info = previous
 
 # --- The compiled lookahead ------------------------------------------------------
 
@@ -211,7 +307,33 @@ func _passing() -> void:
 		check(command.get("card") == "ERQA" and command.get("power") == 1 and ELCombatSearch.apply(duel, command) and duel.army(1).is_empty(),
 			game + ": smart AI casts Earthquake to remove the blocker for lethal damage")
 		_discard_targets(profile, ctx)
+		_defensive_ether(profile)
 	ELCombatSearch.smart_engine = previous
+
+func _defensive_ether(profile: ELProfile) -> void:
+	var duel := Fixtures.build(profile, {
+		"heroes": [{"health": 12, "mana": 1, "hand": ["MNTP", "FOGG"]}, {"health": 20, "mana": 0}],
+		"creatures": [{"owner": 1, "card": "GROG", "power": 3, "toughness": 4},
+			{"owner": 0, "card": "KBWR", "power": 2, "toughness": 2, "resting": true}],
+	})
+	if duel == null:
+		check(false, profile.id + ": defensive ether fixture loads")
+		return
+	duel.smart_sides = [0]
+	ELPracticeAI.step(duel)
+	check(duel.heroes[0].hand == ["FOGG"] and duel.available_mana(0) >= duel.cost("FOGG"),
+		profile.id + ": Ether Tap funds Fog on the opponent's turn")
+	for i in 4:
+		if duel.active_side() != 0: break
+		ELPracticeAI.step(duel)
+	if not duel.toggle_attack(2) or not duel.end_phase():
+		check(false, profile.id + ": the ogre can attack")
+		return
+	for i in 4:
+		if duel.phase != ELDuel.Phase.DEFENCE: break
+		ELPracticeAI.step(duel)
+	check(duel.phase == ELDuel.Phase.ATTACK and duel.heroes[0].hand.is_empty() and duel.heroes[0].health == 12,
+		profile.id + ": the AI casts Fog in defence and prevents the ogre's damage")
 
 func _aftershock() -> void:
 	if not ELCombatSearch.smart_engine or not ELCombatBrain.available: return
@@ -282,7 +404,14 @@ func _positions(only: String) -> void:
 		if not duel.restore(profile, document):
 			check(false, "%s: restores (%s)" % [name, duel.error])
 			continue
+		var budget := ELCombatSearch.smart_engine_budget
+		var time_cap := ELCombatSearch.smart_engine_ms
+		if document.expect.has("engine_budget"):
+			ELCombatSearch.smart_engine_budget = int(document.expect.engine_budget)
+			ELCombatSearch.smart_engine_ms = 0
 		var result := _play(duel, document.expect)
+		ELCombatSearch.smart_engine_budget = budget
+		ELCombatSearch.smart_engine_ms = time_cap
 		check(result.is_empty(), "%s: %s%s" % [name.get_basename(), document.get("about", ""), "" if result.is_empty() else " -- " + result])
 
 ## Plays the position until the expectation is settled; "" when it is met.
@@ -296,7 +425,7 @@ func _play(duel: ELDuel, expect: Dictionary) -> String:
 	var foes := duel.army(1 - side).size()
 	var health := int(duel.heroes[1 - side].health)
 	var said: Array[String] = []
-	# An ability may be given turns of its hero to be used in (`within`): one
+	# An ability or spell may be given turns of its hero to be used in (`within`): one
 	# that costs health is as well used a turn later as at once.
 	var within := int(expect.get("within", 1))
 	var own_turns := 1
@@ -310,8 +439,8 @@ func _play(duel: ELDuel, expect: Dictionary) -> String:
 		match kind:
 			"win", "keep", "aim": if over: break
 			"survive": if over or duel.phase != ELDuel.Phase.DEFENCE: break
-			"attack", "spare", "cast": if over or duel.phase != phase: break
-			"use":
+			"attack", "spare", "develop": if over or duel.phase != phase: break
+			"use", "cast":
 				if within > 1:
 					if own_turns > within: break
 				elif over or duel.phase != phase: break
@@ -326,6 +455,7 @@ func _play(duel: ELDuel, expect: Dictionary) -> String:
 			said.append(_describe(command) + ("" if applied or command.is_empty() else " (refused)"))
 			if applied and command.get("kind", "") == "attack": attacked = true
 			if applied and kind == "spare" and command.get("kind", "") == "cast" and command.get("card", "") == expect.card: return "cast it: " + ", ".join(said)
+			if applied and kind == "use" and attacked and expect.get("before_attack", false): return "attacked first: " + ", ".join(said)
 			if applied and kind == "use" and command.get("kind", "") == "ability" and command.get("key", "") == expect.ability: return ""
 			if applied and kind == "cast" and command.get("kind", "") == "cast" and command.get("card", "") == expect.card: return ""
 			if applied and kind == "aim" and not harm.is_empty(): return "aimed at the wrong side: " + harm + " (" + ", ".join(said) + ")"
@@ -334,8 +464,27 @@ func _play(duel: ELDuel, expect: Dictionary) -> String:
 	var line := ", ".join(said)
 	match kind:
 		"win": return "" if finished and duel.winner == side else "no win: " + line
-		"survive": return "" if not finished or duel.winner == side else "the hero died: " + line
-		"attack": return "" if attacked or (finished and duel.winner == side) else "no attack: " + line
+		"survive":
+			if duel.phase == ELDuel.Phase.DEFENCE and [duel.round_number, duel.attacker] == turn:
+				return "defence never ended: " + line
+			if finished and duel.winner != side: return "the hero died: " + line
+			if expect.has("army_card") and not duel.army(side).any(func(unit: Dictionary) -> bool: return unit.card == expect.army_card):
+				return "missing %s after defending: %s" % [expect.army_card, line]
+			if expect.has("min_health") and int(duel.heroes[side].health) < int(expect.min_health):
+				return "defended with %d health: %s" % [int(duel.heroes[side].health), line]
+			return ""
+		"develop":
+			if duel.creatures.has(int(expect.remove)): return "left the opposing creature alive: " + line
+			if not duel.army(side).any(func(unit: Dictionary) -> bool: return unit.card == expect.army_card):
+				return "missing %s after development: %s" % [expect.army_card, line]
+			return ""
+		"attack":
+			if finished and duel.winner == side: return ""
+			if not attacked: return "no attack: " + line
+			if int(duel.heroes[side].mana) < int(expect.get("min_ether", 0)):
+				return "only %d ether left after declaring attackers: %s" % [duel.heroes[side].mana, line]
+			return ""
+		"spare": return "no attack: " + line if expect.get("attack", false) and not attacked else ""
 		"use": return "not used: " + line
 		"cast": return "not cast: " + line
 		"aim": return "" if not expect.get("win", false) or (finished and duel.winner == side) else "no win: " + line

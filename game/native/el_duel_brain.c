@@ -46,8 +46,10 @@
  *   23 worth of a point of power on a creature that attacks, in thousandths
  *   24 the same on one that cannot attack
  *   25 worth of a point of a creature's health, in thousandths
- *   26 whether a line that stops where a hero could still attack has that
- *      hero attack before it is weighed
+ *   26 bit 0 makes the hero attack at a leaf; bit 1 follows the display's
+ *      live worker allowance; bit 2 enables a separate longer reply search.
+ *      Bits 8..15 give the worker
+ *      limit for timed mode 5 (zero and one both select serial search)
  *   27 how much of a line's worth is the position where it stops, as it
  *      stands, in hundredths; the rest is what the fighting to come brings
  *   29 the battle rules: 1 the second game's, which the first game also
@@ -110,6 +112,7 @@
  * positions played, whether the budget ran out, how deep it reached, and
  * then the whole line it means to play: a count and four integers each. Field 16 is then the
  * longest line in commands, field 4 the phase changes to look through.
+ * The line is followed by the result flags and the peak assigned workers.
  *
  * A phase-4 state is followed by its commands, four integers each: the kind
  * (0 end the phase, 1 attack, 2 block, 3 play a card, 4 free a creature an
@@ -124,10 +127,25 @@
  * into the duel (ART_BASE on), played the same way. Creatures are named by
  * their place in the state, heroes by -1 and -2, and nothing by -99.
  */
+#if defined(__linux__) && !defined(_GNU_SOURCE)
+#define _GNU_SOURCE
+#endif
+#if defined(__APPLE__) && !defined(_DARWIN_C_SOURCE)
+#define _DARWIN_C_SOURCE
+#endif
 #if !defined(_WIN32) && !defined(_POSIX_C_SOURCE)
 #define _POSIX_C_SOURCE 200809L
 #endif
 #include <stdint.h>
+#include <stdatomic.h>
+#if defined(_WIN32)
+#include <process.h>
+__declspec(dllimport) int __stdcall SetThreadPriority(void *, int);
+__declspec(dllimport) int __stdcall GetProcessAffinityMask(void *, uintptr_t *, uintptr_t *);
+__declspec(dllimport) int __stdcall GetProcessGroupAffinity(void *, uint16_t *, uint16_t *);
+__declspec(dllimport) unsigned long __stdcall WaitForSingleObject(void *, unsigned long);
+__declspec(dllimport) int __stdcall CloseHandle(void *);
+#endif
 #include <stddef.h>
 #include <time.h>
 #include <string.h>
@@ -136,6 +154,12 @@
 #include "include/gdextension_interface.h"
 #if !defined(_WIN32)
 #include <pthread.h>
+#if defined(__linux__)
+#include <sys/resource.h>
+#include <sched.h>
+#elif defined(__APPLE__)
+#include <pthread/qos.h>
+#endif
 #endif
 
 #if defined(_WIN32)
@@ -146,6 +170,7 @@
 
 /* --------------------------------------------------------------------- model */
 
+#define SEARCH_STACK ((size_t)16 << 20)
 #define HEADER 40
 /* Enchantments a hero lays on itself, by the game's own names for them. Each
  * is a rule of its own further down; what one lends the hero's army, what it
@@ -724,6 +749,21 @@ typedef struct {
 	uint8_t casts[2][SLOTS];
 } State;
 
+/* Units, enchantments and carried armies are initialized on insertion.
+ * Copy their active entries and every field between the arrays. */
+static inline void copy_position(State *to, const State *from) {
+	memcpy(to->u, from->u, (size_t)from->n * sizeof(Unit));
+	unsigned char *dest = (unsigned char *)to;
+	const unsigned char *src = (const unsigned char *)from;
+	const size_t scalars = offsetof(State, n);
+	memcpy(dest + scalars, src + scalars, offsetof(State, ench) - scalars + (size_t)from->enchs * sizeof(Ench));
+	const size_t after_ench = offsetof(State, ench) + sizeof(from->ench);
+	memcpy(dest + after_ench, src + after_ench, offsetof(State, carry) - after_ench + (size_t)from->carries * sizeof(Carry));
+	const size_t after_carry = offsetof(State, carry) + sizeof(from->carry);
+	memcpy(dest + after_carry, src + after_carry, sizeof(State) - after_carry);
+}
+
+
 /* One position the search has already read: what it was worth with so many
  * phases and commands still allowed, whether that is the worth itself or
  * only a bound on it, and the command that was best there. Commands given
@@ -731,15 +771,41 @@ typedef struct {
 typedef struct {
 	uint64_t key;
 	int32_t value;
-	int32_t kind, a, b, c;
+	int32_t kind;
+	/* A leaf has no move. Its evaluation cost fits in the same slot. */
+	union { int32_t a, leaf_cost; };
+	int32_t b, c;
 	int8_t phases, steps, bound, filled;
 } Entry;
 enum { BOUND_EXACT, BOUND_LOWER, BOUND_UPPER };
+
+typedef struct { atomic_int active, peak; } SearchActivity;
+#define REPLY_TEAM_MIN 12
+#define PRIMARY_WORKERS 5
+static atomic_int frame_worker_limit = 255;
+typedef struct {
+	SearchActivity *activity;
+	atomic_int *stop_reply;
+	int workers, total, extra;
+	double start;
+} SearchGroup;
+enum { PROOF_RUNNING, PROOF_FINISHED, PROOF_WON };
 
 typedef struct {
 	int ai, edition, health_worth, foe_worth, wide, width, leaf_turns, margin, fight_well;
 	int power_worth, guard_worth, tough_worth, leaf_attack, blend;
 	int64_t nodes, budget;
+	_Atomic int64_t *unassigned;
+	const atomic_int *proof_status;
+	SearchActivity *activity;
+	int worker_limit, root_workers, follow_frame_limit;
+	/* Steps left at the next node reached by a sequence of forced commands. */
+	int forced_steps;
+	const SearchGroup *group;
+	/* Work saved by reusing phase-end evaluations on deeper command passes. */
+	int64_t reused_leaf_nodes;
+	/* Ready defenders that could block now and threaten an unopposed return hit. */
+	uint32_t counterattackers;
 	int aborted;
 	int cards;
 	int card_worth, channel_worth;
@@ -754,15 +820,18 @@ typedef struct {
 	int wear_base[2], wear_told[2];
 	/* Whether the table of channels has no row left past those told. */
 	int income_over[2];
-	/* Whether any of those turns costs either hero anything: only then is
-	 * the race against the disturbance weighed where a line stops. */
-	int wears;
+	/* First damaging turn on the ungifted schedule, indexed from the root. */
+	int wear_from[2];
 	int chance_step[2], income[2][AHEAD];
 	Charm charm[HE_COUNT];
 	Card hand[2][SLOTS], typical[2][COSTS], pool[POOL];
+	uint32_t earlier_copies[2][HAND];
+	uint8_t scaling_count[2], scaling_slots[2][SLOTS];
+	uint32_t prior_page[2][DRAWS], forecast_charges[2];
 	/* Positions already read (none when the search runs without them), and
 	 * how many were met again. */
 	Entry *table;
+	atomic_uchar *cache_locks;
 	uint64_t mask;
 	int64_t met;
 	/* When the reading in hand must stop, by the clock (0 for never), and
@@ -791,8 +860,8 @@ typedef struct {
 	 * of its block plans; 0 leaves them to be built a creature at a time. */
 	int sets, plans;
 	/* The order in which each hero's hand as it stands is given up when it
-	 * holds too many: a place for every four bits, the first to go lowest. */
-	uint64_t trim[2];
+	 * holds too many, from the first slot to discard to the last. */
+	uint8_t trim[2][HAND];
 	/* A hero whose book is spent: no draw brings it a card any more. */
 	int dry[2];
 	/* The most cards a hand given up and dealt again can come to, by what
@@ -938,10 +1007,35 @@ static double now_ms(void) {
  * of it. Out of time, the budget is taken to be spent, which every reading
  * already heeds, and `timed` has the commands still waiting at each level
  * of the line left unread. */
+/* Parallel workers claim small pieces of the remaining pass budget. An
+ * expensive branch can use what its finished or retiring siblings leave. */
+static int node_limit(Search *x) {
+	if (x->nodes < x->budget) return 0;
+	if (!x->unassigned || x->timed) return 1;
+	int64_t remaining = atomic_load_explicit(x->unassigned, memory_order_relaxed);
+	while (remaining > 0) {
+		int64_t grant = remaining < 512 ? remaining : 512;
+		if (atomic_compare_exchange_weak_explicit(x->unassigned, &remaining, remaining - grant,
+				memory_order_relaxed, memory_order_relaxed)) {
+			x->budget += grant;
+			if (x->nodes < x->budget) return 0;
+			remaining = atomic_load_explicit(x->unassigned, memory_order_relaxed);
+		}
+	}
+	return 1;
+}
+
 static inline int on_clock(Search *x) {
 	if (x->timed) return 1;
-	if (x->deadline <= 0 || (++x->ticks & 7) != 0) return 0;
-	if (now_ms() <= x->deadline) return 0;
+	if ((!x->proof_status && x->deadline <= 0) || (++x->ticks & 7) != 0) return 0;
+	int retire_reply = 0;
+	if (x->group && x->group->extra) {
+		if (x->follow_frame_limit && atomic_load_explicit(&frame_worker_limit, memory_order_relaxed) < REPLY_TEAM_MIN)
+			atomic_store_explicit(x->group->stop_reply, 1, memory_order_relaxed);
+		retire_reply = atomic_load_explicit(x->group->stop_reply, memory_order_relaxed);
+	}
+	if (!retire_reply && (!x->proof_status || atomic_load_explicit(x->proof_status, memory_order_acquire) != PROOF_WON)
+		&& (x->deadline <= 0 || now_ms() <= x->deadline)) return 0;
 	x->timed = 1;
 	x->budget = x->nodes;
 	return 1;
@@ -1167,6 +1261,12 @@ static void group_alike(const State *s, int *list, int count) {
 
 /* A creature's health as it shows: what only weakens leaves it a point,
  * what kills takes its points after that. */
+/* Keep enchantment changes in points before the display floor; two spells
+ * taken off in a different order must recover the same underlying health. */
+static inline int unfloored_health(const Unit *u) {
+	return u->raw - u->lethal;
+}
+
 static inline void settle_health(Unit *u) {
 	u->toughness = (int16_t)(imax(1, u->raw) - u->lethal);
 	if (u->alpha && u->toughness > 1) u->toughness = 1;
@@ -1292,13 +1392,25 @@ static int wear_ahead(const Search *x, const State *s, int side, int k) {
  * clock's, for the computer. */
 #define CLOCK_TURNS 6
 static int clock_worth(const Search *x, const State *s, int *mine, int *theirs) {
+	/* Most early positions cannot reach disturbance even if every creature
+	 * enchantment were a Gift. Check the actual owners only near its onset. */
+	int until = imin(x->wear_from[0] - s->turns[0], x->wear_from[1] - s->turns[1]);
+	if (until >= CLOCK_TURNS + 2 * s->enchs) return 0;
+	int first[2] = { s->turns[0] + 2 * gifts_on(s, 0), s->turns[1] + 2 * gifts_on(s, 1) };
+	if (first[0] + CLOCK_TURNS <= x->wear_from[0] && first[1] + CLOCK_TURNS <= x->wear_from[1]) return 0;
 	int next = 1 - s->attacker, end[2] = { 0, 0 }, soon[2] = { 0, 0 };
 	for (int side = 0; side < 2; side++) {
 		int left = s->health[side];
+		int turn = s->turns[side];
+		int barrier = 3 * s->he[side][HE_ENBR], guards = s->he[side][HE_LFGR];
 		for (int j = 0; j < CLOCK_TURNS; j++) {
-			int wear = wear_ahead(x, s, side, s->turns[side] + 2 * gifts_on(s, side) + j);
-			if (j < 2) soon[side] += wear;
-			left -= wear;
+			int hit = imax(0, wear_ahead(x, s, side, first[side] + j) - barrier);
+			/* A Lifeguard is spent only on damage left after Energy Barrier.
+			 * Regeneration follows a surviving tick and stops at the hero's maximum. */
+			if (hit > 0 && guards > 0) { hit = 0; guards--; }
+			left -= hit;
+			if (left > 0 && x->regen[side][(turn + j) % CYCLE] && left < hero_max(x, s, side)) left++;
+			if (j < 2) soon[side] = s->health[side] - left;
 			if (left <= 0) {
 				/* The moment its turn begins, counted in turns of either hero. */
 				end[side] = 2 * j + (side == next ? 1 : 2);
@@ -1315,16 +1427,84 @@ static int clock_worth(const Search *x, const State *s, int *mine, int *theirs) 
 	return -(LETHAL * 3 / (2 + me));
 }
 
+/* A defender that survives can attack on its own turn. Value one hit
+ * from an evasive creature if even untapping the opposing army would
+ * leave it without a legal blocker. */
+static int evasive_pressure(const State *s, const Unit *u) {
+	if (!(u->flags & (F_FLY | F_ELUSIVE | F_UNBLOCKABLE))
+		|| (u->flags & (F_NO_ATTACK | F_DEAD | F_GONE | F_PLANE | F_TEAM))
+		|| ((u->flags & F_RESTING) && ((u->flags & F_NO_UNTAP) || (s->enchs && bound(s, u))))) return 0;
+	int foe = 1 - u->owner;
+	if (u->power <= s->forest[foe] || fogged(s) || s->he[foe][HE_FDBK] || s->he[foe][HE_LNRD]) return 0;
+	int damage = imin(s->health[foe], u->power - 2 * s->he[foe][HE_STSK]);
+	if (damage <= 0 || (u->flags & F_UNBLOCKABLE)) return imax(0, damage);
+	for (int i = 0; i < s->n; i++) {
+		const Unit *blocker = &s->u[i];
+		if (blocker->owner == foe && !(blocker->flags & (F_DEAD | F_GONE | F_PLANE))
+			&& can_block(s, u, blocker)) return 0;
+	}
+	return damage;
+}
+
+/* Only price this opportunity when comparing defences in which the creature
+ * can actually block. Keep its slot through the search so that a later summon
+ * gets its usual material value. */
+static uint32_t evasive_blockers(const State *s, int defender) {
+	uint32_t blockers = 0;
+	for (int i = 0; i < s->n; i++) {
+		const Unit *u = &s->u[i];
+		if (u->owner != defender || !ready(u) || !evasive_pressure(s, u)) continue;
+		for (int j = 0; j < s->n; j++) {
+			const Unit *foe = &s->u[j];
+			if ((foe->flags & F_ATTACKING) && !(foe->flags & (F_DEAD | F_GONE))
+				&& foe->owner == s->attacker && can_block(s, foe, u)) {
+				blockers |= 1u << i;
+				break;
+			}
+		}
+	}
+	return blockers;
+}
+
+/* A held damage spell can turn a later refill into damage. The charge
+ * is spent only once. Value affordable damage beyond the ordinary card
+ * allowance, discounted because the hero must survive to use it. */
+static int held_burn(const Search *x, const State *s, int side) {
+	int foe = 1-side;
+	if (!x->scaling_count[side] || s->he[foe][HE_LFGR]) return 0;
+	int channels = s->channels[side];
+	int ether = s->ether[side];
+	if (!stasis(s)) {
+		for (int k = s->turns[side]; k < AHEAD && k < s->turns[side]+2; k++)
+			channels += x->income[side][k];
+		ether = channels * (1 + vortices(s, side)) + s->extra[side];
+	}
+	int remaining = s->health[foe], worth = 0;
+	for (int k = 0; k < x->scaling_count[side] && remaining > 0; k++) {
+		int slot = x->scaling_slots[side][k];
+		if ((s->played[side] >> slot & 1) || (slot >= HAND && slot - HAND >= s->drawn[side])) continue;
+		const Card *card = &x->hand[side][slot];
+		if (channels < card->channels) continue;
+		int damage = imin(remaining, imax(0, ether - card_cost(x,s,card) - 3*s->he[foe][HE_ENBR]));
+		remaining -= damage;
+		int point = side == x->ai ? x->health_worth * x->foe_worth/100 : x->health_worth;
+		worth += imax(0, (int)imin64((int64_t)damage * point * 4 / 5, WIN/8) - x->card_worth);
+	}
+	return worth;
+}
+
 /* The position's worth for the computer; `turns` left makes a sooner end count more. */
 static int evaluate(const Search *x, const State *s, int turns) {
 	int mine = s->health[x->ai], theirs = s->health[1 - x->ai];
 	if (mine <= 0) return theirs <= 0 ? 0 : -(WIN + turns * 1000);
 	if (theirs <= 0) return WIN + turns * 1000;
-	int clock = x->wears ? clock_worth(x, s, &mine, &theirs) : 0;
+	int clock = clock_worth(x, s, &mine, &theirs);
 	int v = clock + health_worth(x, mine) - health_worth(x, theirs) / 100 * x->foe_worth;
 	/* A card in hand, an ether channel and the hero's own enchantments count
 	 * as they do in the search this engine stands in for. */
 	v += (cards_held(s, x->ai) - cards_held(s, 1 - x->ai)) * x->card_worth;
+	if (x->scaling_count[0] || x->scaling_count[1])
+		v += held_burn(x, s, x->ai) - held_burn(x, s, 1-x->ai);
 	v += (uses_left(x, s, x->ai) - uses_left(x, s, 1 - x->ai)) * x->card_worth;
 	v += channel_worth(x, s->channels[x->ai]) - channel_worth(x, s->channels[1 - x->ai]);
 	v += s->aura_worth[x->ai] - s->aura_worth[1 - x->ai];
@@ -1341,45 +1521,238 @@ static int evaluate(const Search *x, const State *s, int turns) {
 		const Unit *u = &s->u[i];
 		if (u->flags & F_DEAD) continue;
 		int w = (u->flags & F_RESTING) ? u->resting_worth : u->ready_worth;
+		if ((x->counterattackers >> i & 1) && u->owner == x->ai) w += evasive_pressure(s, u) * x->health_worth;
 		if (!(u->flags & F_RESTING) && (u->flags & F_SICK) && !(u->flags & F_NO_ATTACK)) w -= 300;
 		v += u->owner == x->ai ? w : -w;
 	}
 	return v;
 }
 
-/* Damage the defending hero would take from an attack by everything the side
- * to move can send, after the defender's ready creatures each stop one. */
-static int incoming(const Search *x, const State *s) {
-	int attackers[MAX_UNITS], count = 0;
-	for (int i = 0; i < s->n; i++)
-		if (can_attack(s, &s->u[i])) attackers[count++] = i;
+/* Pick an affordable set in power order. A fresh guard needs a non-guard
+ * of the same race to go first. Attackers already declared have paid. */
+static int forecast_formation(const State *s, int *attackers, int count) {
+	uint32_t selected = 0;
+	int room = s->tax > 0 ? s->ether[s->attacker] / s->tax : count;
+	for (int k = 0; k < count; k++) {
+		int i = attackers[k];
+		if (s->u[i].flags & F_ATTACKING) selected |= 1u << i;
+	}
+	for (int k = 0; k < count && room > 0; k++) {
+		int i = attackers[k];
+		const Unit *u = &s->u[i];
+		if (selected >> i & 1) continue;
+		if ((u->flags & F_TEAM) && !team_partner(s, i)) {
+			int partner = -1;
+			for (int j = 0; j < count; j++) {
+				int other = attackers[j];
+				if ((s->u[other].flags & F_TEAM) || s->u[other].race != u->race) continue;
+				if (selected >> other & 1) {
+					partner = other;
+					break;
+				}
+				if (partner < 0) partner = other;
+			}
+			if (partner < 0) continue;
+			if (!(selected >> partner & 1)) {
+				if (room < 2) continue;
+				selected |= 1u << partner;
+				room--;
+			}
+		}
+		selected |= 1u << i;
+		room--;
+	}
+	int sent = 0;
+	for (int k = 0; k < count; k++)
+		if (selected >> attackers[k] & 1) attackers[sent++] = attackers[k];
+	return sent;
+}
+
+/* Combat assigns enough damage to cover the blocker's remaining health and
+ * its Stone Skins before any trample damage can go to the hero. */
+static inline int block_capacity(const Unit *blocker) {
+	return imax(0, blocker->toughness - blocker->damage) + 2 * blocker->skins;
+}
+
+/* Estimate a defence without branching the search. Pick the legal block
+ * that saves the most hero damage, keeping versatile blockers for later
+ * on ties. Other blockers may still absorb damage from the same trampler. */
+static int forecast_blocks(const State *s, const int *attackers, int count, int8_t *blocks) {
+	int left[MAX_UNITS];
+	uint32_t used = 0;
+	for (int k = 0; k < count; k++) left[k] = imax(0, s->u[attackers[k]].power);
+	for (;;) {
+		int best = 0, choice = -1, target = -1, flexibility = 4;
+		for (int i = 0; i < s->n; i++) {
+			const Unit *b = &s->u[i];
+			if (b->owner == s->attacker || !ready(b) || (b->flags & F_GONE) || (used >> i & 1)) continue;
+			int reach = !!(b->flags & F_WALL) + !!(b->flags & F_FLY);
+			for (int k = 0; k < count; k++) {
+				const Unit *a = &s->u[attackers[k]];
+				if (!left[k] || !can_block(s, a, b)) continue;
+				int save = left[k];
+				if (a->flags & F_TRAMPLE) save = imin(save, block_capacity(b));
+				if (save > best || (save == best && save > 0 && reach < flexibility)) {
+					best = save;
+					choice = i;
+					target = k;
+					flexibility = reach;
+				}
+			}
+		}
+		if (choice < 0) break;
+		used |= 1u << choice;
+		if (blocks) blocks[choice] = (int8_t)attackers[target];
+		left[target] -= best;
+	}
+	int damage = 0;
+	for (int k = 0; k < count; k++) damage += left[k];
+	return damage;
+}
+
+/* Without trample, one legal blocker stops the whole attack. If a blocker
+ * is already needed by a stronger attacker, try moving that assignment to
+ * another legal blocker. Only commit the moves when all remain covered. */
+static int cover_attacker(const uint32_t *eligible, int attack, int8_t *covered, uint32_t *seen, int units) {
+	for (int i = 0; i < units; i++) {
+		uint32_t bit = 1u << i;
+		if (!(eligible[attack] & bit) || (*seen & bit)) continue;
+		*seen |= bit;
+		if (covered[i] < 0 || cover_attacker(eligible, covered[i], covered, seen, units)) {
+			covered[i] = (int8_t)attack;
+			return 1;
+		}
+	}
+	return 0;
+}
+
+/* Attackers are in descending power order. Keeping every attack that can
+ * still be covered maximizes the total power blocked. */
+static int unblocked_power(const State *s, const int *attackers, int count, int8_t *blocks) {
+	uint32_t eligible[MAX_UNITS] = {0};
+	int8_t covered[MAX_UNITS];
+	memset(covered, -1, sizeof(covered));
+	int damage = 0;
+	for (int k = 0; k < count; k++) {
+		const Unit *a = &s->u[attackers[k]];
+		if (a->power <= 0) continue;
+		for (int i = 0; i < s->n; i++) {
+			const Unit *b = &s->u[i];
+			if (b->owner != s->attacker && ready(b) && !(b->flags & F_GONE) && can_block(s, a, b))
+				eligible[k] |= 1u << i;
+		}
+		uint32_t seen = 0;
+		if (!cover_attacker(eligible, k, covered, &seen, s->n)) damage += a->power;
+	}
+	if (blocks)
+		for (int i = 0; i < s->n; i++)
+			if (covered[i] >= 0) blocks[i] = (int8_t)attackers[covered[i]];
+	return damage;
+}
+
+static void resolve(State *s, const int8_t *target);
+static void declare(const Search *x, State *s, uint32_t mask);
+
+static int has_redirecting_creature(const State *s, int side) {
+	for (int i = 0; i < s->enchs; i++) {
+		const Ench *e = &s->ench[i];
+		if (e->kind == EN_REDIRECT && s->u[e->unit].owner == side && !(s->u[e->unit].flags & F_DEAD)) return 1;
+	}
+	return 0;
+}
+
+/* Protections apply to individual blows. Reflected damage can also end
+ * the attacker's duel before the next creature strikes. */
+static int has_combat_protection(const State *s, int side) {
+	return s->he[side][HE_STSK] || s->he[side][HE_FDBK] || s->he[side][HE_LNRD]
+		|| s->he[side][HE_ETCH] || s->he[side][HE_LFGR] || has_redirecting_creature(s, side);
+}
+
+static int damage_after_blocks(const State *s, uint32_t mask, const int8_t *blocks) {
+	State t;
+	copy_position(&t, s);
+	declare((const Search *)s->rules, &t, mask);
+	t.phase = 1;
+	if (t.health[0] > 0 && t.health[1] > 0) resolve(&t, blocks);
+	int foe = 1 - s->attacker;
+	return t.health[s->attacker] > 0 ? imax(0, s->health[foe] - t.health[foe]) : 0;
+}
+
+static int protected_attack(const State *s, const int *attackers, int count, int trample) {
+	int8_t blocks[MAX_UNITS];
+	memset(blocks, -1, sizeof(blocks));
+	int through = trample ? forecast_blocks(s, attackers, count, blocks) : unblocked_power(s, attackers, count, blocks);
+	if (through == 0) return 0;
+	uint32_t mask = 0;
+	for (int i = 0; i < count; i++) mask |= 1u << attackers[i];
+	int best = damage_after_blocks(s, mask, blocks);
+	/* A Lifeguard absorbs the first hit that gets through. Moving a blocker
+	 * can leave a larger, earlier hit to the guard and prevent a later one. */
+	if (best > 0 && s->he[1 - s->attacker][HE_LFGR]) {
+		for (int i = 0; i < s->n && best > 0; i++) {
+			int prior = blocks[i];
+			if (prior < 0) continue;
+			for (int k = 0; k < count && best > 0; k++) {
+				int target = attackers[k];
+				if (target == prior || !can_block(s, &s->u[target], &s->u[i])) continue;
+				blocks[i] = (int8_t)target;
+				best = imin(best, damage_after_blocks(s, mask, blocks));
+			}
+			blocks[i] = (int8_t)prior;
+		}
+	}
+	return best;
+}
+
+/* Hero damage threatened by the strongest affordable attackers. For ordinary
+ * combat only the number of ground and flying blockers matters. */
+static int incoming(const State *s) {
+	int attackers[MAX_UNITS], count = 0, team = 0, special = 0, trample = 0;
+	for (int i = 0; i < s->n; i++) {
+		const Unit *u = &s->u[i];
+		if (u->owner != s->attacker || (u->flags & (F_DEAD | F_GONE))) continue;
+		if (!(u->flags & F_ATTACKING) && (s->phase != 0 || !can_attack(s, u))) continue;
+		attackers[count++] = i;
+		team |= (u->flags & F_TEAM) != 0;
+		trample |= (u->flags & F_TRAMPLE) != 0;
+		special |= (u->flags & F_ELUSIVE) != 0 || u->beholder;
+	}
 	if (count == 0) return 0;
 	for (int i = 1; i < count; i++) {
 		int k = attackers[i], j = i - 1;
 		while (j >= 0 && s->u[attackers[j]].power < s->u[k].power) { attackers[j + 1] = attackers[j]; j--; }
 		attackers[j + 1] = k;
 	}
-	if (s->tax > 0) count = imin(count, s->ether[s->attacker] / s->tax);
-	int ground = 0, flying = 0, walls = 0;
+	/* A creature with no damage of its own can still enable a guard. Keep
+	 * these partners after the positive-power attackers in spending order. */
+	if (team && s->phase == 0) {
+		for (int i = 0; i < s->n; i++) {
+			const Unit *u = &s->u[i];
+			if (u->power <= 0 && !(u->flags & (F_ATTACKING | F_TEAM | F_GONE)) && can_declare(s, u))
+				attackers[count++] = i;
+		}
+	}
+	if (team || s->tax > 0) count = forecast_formation(s, attackers, count);
+	if (has_combat_protection(s, 1 - s->attacker)) return protected_attack(s, attackers, count, trample);
+	int ground = 0, flying = 0;
 	for (int i = 0; i < s->n; i++) {
 		const Unit *u = &s->u[i];
-		if (u->owner == s->attacker || !ready(u)) continue;
-		if (u->flags & F_WALL) walls++;
-		else if (u->flags & F_FLY) flying++;
+		if (u->owner == s->attacker || !ready(u) || (u->flags & F_GONE)) continue;
+		if (u->flags & F_FLY) flying++;
 		else ground++;
+	}
+	if (ground || flying) {
+		if (trample) return forecast_blocks(s, attackers, count, NULL);
+		if (special) return unblocked_power(s, attackers, count, NULL);
 	}
 	int through = 0;
 	for (int i = 0; i < count; i++) {
 		const Unit *a = &s->u[attackers[i]];
-		int stopped = 0;
-		if (a->flags & F_UNBLOCKABLE) stopped = 0;
-		else if (a->flags & F_ELUSIVE) { if (walls) { walls--; stopped = 1; } }
-		else if (a->flags & F_FLY) { if (flying) { flying--; stopped = 1; } }
-		else if (ground) { ground--; stopped = 1; }
-		else if (walls) { walls--; stopped = 1; }
-		else if (flying) { flying--; stopped = 1; }
-		if (!stopped) through += a->power;
-		else if (a->flags & F_TRAMPLE) through += a->power / 2;
+		if (!(a->flags & F_UNBLOCKABLE)) {
+			if (!(a->flags & F_FLY) && ground > 0) { ground--; continue; }
+			if (flying > 0) { flying--; continue; }
+		}
+		through += imax(0, a->power);
 	}
 	return through;
 }
@@ -1389,7 +1762,7 @@ static int incoming(const Search *x, const State *s) {
 static int evaluate_leaf(const Search *x, const State *s, int turns) {
 	int v = evaluate(x, s, turns);
 	if (v >= WIN || v <= -WIN) return v;
-	int through = incoming(x, s);
+	int through = incoming(s);
 	if (through > 0) {
 		int cost = through * x->health_worth / 2;
 		if (s->attacker == x->ai) cost = cost / 100 * x->foe_worth;
@@ -1592,6 +1965,7 @@ static void finish_unit(State *s, int index);
 static void perish_unit(State *s, int index);
 static void spell_damage(State *s, int who, int amount);
 static void lost_leader(State *s, int dead);
+static void unled(const Search *x, const State *s, Unit *u, int j);
 static void unlend(State *s, int i);
 
 /* What a creature's leaving play sets off, whichever way it left. */
@@ -1730,14 +2104,7 @@ static void lost_leader(State *s, int dead) {
 	for (int i = 0; i < s->n; i++) {
 		Unit *u = &s->u[i];
 		if (!(u->leaders >> dead & 1)) continue;
-		u->leaders &= ~(1u << dead);
-		/* What it had from this aura alone goes with it. */
-		uint32_t gone = l->gives_flags & u->aura_flags;
-		for (int j = 0; j < s->n && gone; j++)
-			if ((u->leaders >> j & 1) && !(s->u[j].flags & F_DEAD)) gone &= ~s->u[j].gives_flags;
-		u->flags &= ~gone;
-		u->aura_flags &= ~gone;
-		shift_stats(s, u, -l->gives_power, -l->gives_toughness, 0);
+		unled((const Search *)s->rules, s, u, dead);
 		/* Wounds that this leaves fatal kill outright: nothing regenerates. */
 		if (!(u->flags & (F_DEAD | F_GONE)) && u->damage >= u->toughness) perish_unit(s, i);
 	}
@@ -1888,7 +2255,6 @@ static void finish_unit(State *s, int index) {
 	} else if ((t->flags & F_DISSIPATES) && may_shift(s, t) && !worn_kind(s, (int)(t - s->u), EN_LOCK)) {
 		shift_toll(s, t->owner);
 		t->damage = 0;
-		t->pale_used = (int8_t)((t->pale_used & ~4) | ((t->flags & F_RESTING) ? 4 : 0));
 		unlend(s, index);
 		t->flags |= F_RESTING | F_GONE;
 		t->flags &= ~(uint32_t)F_ATTACKING;
@@ -2051,8 +2417,8 @@ static int manifest(const Search *x, State *s, int i) {
 	if (!may_shift(s, u)) return 0;
 	shift_toll(s, u->owner);
 	int plane = (u->flags & (F_PLANE | F_GONE)) != 0;
-	/* One that dissipated comes back as it was when it did. */
-	if ((u->flags & F_GONE) && !(u->pale_used & 4)) u->flags &= ~(uint32_t)F_RESTING;
+	/* Rest survives manifestation. Lethal damage rests a creature until its
+	 * next turn; a stat change that sends it into the plane preserves rest. */
 	u->flags &= ~(uint32_t)(F_PLANE | F_GONE);
 	/* A pale creature out of the plane goes back into it rather than die. */
 	if (s->second && u->pale) u->flags |= F_DISSIPATES;
@@ -2117,7 +2483,7 @@ static void wears(Unit *t, const Unit *before, int fresh, uint32_t flags) {
 		if (t->worn < 100) t->worn++;
 	}
 	t->worn_power = (int16_t)(t->worn_power + (t->power - t->under) - (before->power - before->under));
-	t->worn_health = (int16_t)(t->worn_health + t->toughness - before->toughness);
+	t->worn_health = (int16_t)(t->worn_health + unfloored_health(t) - unfloored_health(before));
 	t->worn_lethal = (int16_t)(t->worn_lethal + t->lethal - before->lethal);
 	t->worn_flags |= flags & ~before->flags;
 	t->worn_ready += t->ready_worth - before->ready_worth;
@@ -2145,7 +2511,7 @@ static Ench *note_ench(State *s, int unit, const Unit *was, int caster, int kind
 	}
 	e->price = (int16_t)price;
 	e->power = (int16_t)((t->power - t->under) - (was->power - was->under));
-	e->health = (int16_t)(t->toughness - was->toughness);
+	e->health = (int16_t)(unfloored_health(t) - unfloored_health(was));
 	e->lethal = (int16_t)(t->lethal - was->lethal);
 	e->flags = t->worn_flags & ~was->worn_flags;
 	e->ready = t->ready_worth - was->ready_worth;
@@ -2207,7 +2573,7 @@ static void unwear(State *s, int r) {
 		u->lethal = (int16_t)(u->raw - power);
 		u->toughness = (int16_t)power;
 	} else {
-		int health = u->toughness - e.health;
+		int health = unfloored_health(u) - e.health;
 		add_power(u, -e.power);
 		if (worn_kind(s, e.unit, EN_DELUSION) & 1) {
 			/* Health that was power a moment ago has no floor of one. */
@@ -2298,7 +2664,7 @@ static void strip_unit(State *s, int index) {
 	for (int r = s->enchs - 1; r >= 0; r--)
 		if (s->ench[r].unit == index && s->ench[r].kind != EN_WATER) forget_ench(s, r);
 	if (!u->worn || (u->flags & F_DEAD)) return;
-	int health = u->toughness - u->worn_health, fate = u->fate;
+	int health = unfloored_health(u) - u->worn_health, fate = u->fate;
 	add_power(u, -u->worn_power);
 	u->discards = (int8_t)imax(0, u->discards - u->worn_discards);
 	u->worn_discards = 0;
@@ -2366,6 +2732,19 @@ static void strip_hero(State *s, int side) {
 
 /* A hero draws: the cards it is known to draw next, and past those a card
  * the engine cannot name. */
+/* The forecast assumes the heroes pass. A cast can spend a charge that
+ * the forecast would have released by discarding the card at turn end. */
+static int page_reserved(const Search *x, const State *s, int side, int draw) {
+	uint32_t prior = x->prior_page[side][draw];
+	int left = x->hand[side][HAND + draw].uses;
+	for (int slot = 0; prior; slot++, prior >>= 1) {
+		if (!(prior & 1u)) continue;
+		left -= s->casts[side][slot] + ((s->played[side] & (1u << slot)) == 0);
+		if (left <= 0) return 1;
+	}
+	return 0;
+}
+
 static void draw_cards(State *s, int side, int count) {
 	const Search *x = (const Search *)s->rules;
 	if (x->no_draws) return;
@@ -2385,13 +2764,12 @@ static void draw_cards(State *s, int side, int count) {
 	}
 	for (int i = 0; i < count; i++) {
 		if (!s->blind && s->drawn[side] < DRAWS) {
-			/* A draw the engine was told will fail brings nothing: its place
-			 * is taken up, and counts as a card already gone. */
-			int none = x->hand[side][HAND + s->drawn[side]].none;
+			/* A missing or unavailable card takes up its forecast slot only. */
+			int draw = s->drawn[side];
+			int none = x->hand[side][HAND + draw].none || page_reserved(x, s, side, draw);
 			if (none) s->played[side] |= 1u << (HAND + s->drawn[side]);
 			s->drawn[side]++;
-			/* The second game's book may by now have a card to give after
-			 * all: one that was given up since. Which, nobody knows. */
+			/* Another page can still deal a card, but its identity is unknown. */
 			if (none && x->edition && book_room(x, s, side) > 0) {
 				s->more[side]++;
 				s->limit = 1;
@@ -2777,7 +3155,7 @@ static void resolve(State *s, const int8_t *target) {
 					break;
 				}
 			}
-			int dealt = imin(remaining, imax(0, b->toughness - b->damage) + 2 * b->skins);
+			int dealt = imin(remaining, block_capacity(b));
 			remaining -= dealt;
 			hurt_unit(s, i, j, dealt);
 			note_poisoned(s, &marked, poisoned, &poisons);
@@ -3096,8 +3474,8 @@ static void end_turn(const Search *x, State *s) {
 			s->back[a][returned] = 0;
 			continue;
 		}
-		for (int k = 0; k < 12 && gone < 0; k++) {
-			int place = (int)(x->trim[a] >> (5 * k)) & 31;
+		for (int k = 0; k < HAND && gone < 0; k++) {
+			int place = x->trim[a][k];
 			if (place < HAND && !(s->played[a] >> place & 1)) gone = place;
 		}
 		for (int i = HAND; gone < 0 && i < imin(SLOTS, HAND + s->drawn[a]); i++)
@@ -3155,7 +3533,7 @@ static void end_turn(const Search *x, State *s) {
 			u->flags &= ~(uint32_t)F_SICK;
 			/* What it may do once a round, it may do again. */
 			u->spent = 0;
-			u->pale_used &= 4;
+			u->pale_used = 0;
 			/* The smoke's mastery lets a creature at rest recover through it. */
 			int smoked = !apart && s->he[0][HE_SMOK] + s->he[1][HE_SMOK] > 0;
 			if (smoked && (u->flags & F_RESTING) && spec_roll(s, u->owner, SPEC_RSMP, 1)) smoked = 0;
@@ -3286,7 +3664,7 @@ static void end_turn(const Search *x, State *s) {
 				continue;
 			}
 		}
-		int health = u->toughness - u->brief_health;
+		int health = unfloored_health(u) - u->brief_health;
 		add_power(u, -u->brief_power);
 		if (s->enchs > 0 && (worn_kind(s, i, EN_DELUSION) & 1)) {
 			/* Health that was power a moment ago has no floor of one. */
@@ -3505,7 +3883,8 @@ static void fight_and_pass(const Search *x, State *s, const int8_t *target) {
 }
 
 static int score_plan(Search *x, const State *declared, const int8_t *target, int turns) {
-	State t = *declared;
+	State t;
+	copy_position(&t, declared);
 	on_clock(x);
 	fight_and_pass(x, &t, target);
 	x->nodes++;
@@ -3738,7 +4117,8 @@ static int legal_set(const Search *x, const State *s, uint32_t mask) {
 /* A set's worth after the defender's quick answers (no block, every attacker
  * chumped, the best single blocks). */
 static int score_set(Search *x, const State *s, uint32_t mask, int turns) {
-	State d = *s;
+	State d;
+	copy_position(&d, s);
 	declare(x, &d, mask);
 	int8_t base[MAX_UNITS];
 	memset(base, -1, sizeof(base));
@@ -3802,24 +4182,31 @@ static int attack_sets(Search *x, const State *s, Set *sets, int limit, int turn
 	int count = 0;
 	/* Like creatures side by side: of a group only its first k attack. */
 	group_alike(s, free_units, free_count);
-	double total = 1.0;
-	for (int i = 0; i < free_count; ) {
+	int group_end[MAX_UNITS], groups = 0, total = 1;
+	for (int i = 0; i < free_count && total <= limit; ) {
 		int j = i + 1;
 		while (j < free_count && same_kind(s, free_units[i], free_units[j])) j++;
+		group_end[groups++] = j;
 		total *= j - i + 1;
 		i = j;
 	}
-	if (total <= (double)limit && free_count <= 16) {
-		for (uint32_t bits = 0; bits < (1u << free_count) && count < MAX_SETS; bits++) {
-			int canonical = 1;
-			for (int i = 1; i < free_count && canonical; i++)
-				if ((bits >> i & 1) && !(bits >> (i - 1) & 1) && same_kind(s, free_units[i], free_units[i - 1])) canonical = 0;
-			if (!canonical) continue;
-			uint32_t mask = forced;
-			for (int i = 0; i < free_count; i++)
-				if (bits >> i & 1) mask |= 1u << free_units[i];
-			if (legal_set(x, s, mask)) count = add_set(sets, count, mask);
+	if (total <= imin(limit, MAX_SETS)) {
+		/* Choose how many creatures to send from each group. Build only the
+		 * distinct formations, in the same order as their subset masks. */
+		uint32_t masks[MAX_SETS];
+		masks[0] = forced;
+		int made = 1, first = 0;
+		for (int g = 0; g < groups; g++) {
+			int previous = made;
+			uint32_t sent = 0;
+			for (int i = first; i < group_end[g]; i++) {
+				sent |= 1u << free_units[i];
+				for (int k = 0; k < previous; k++) masks[made++] = masks[k] | sent;
+			}
+			first = group_end[g];
 		}
+		for (int i = 0; i < made; i++)
+			if (legal_set(x, s, masks[i])) sets[count++].mask = masks[i];
 	} else {
 		/* Nobody, everybody, each alone, everybody but one, the strongest k,
 		 * and those the defender cannot block at all. */
@@ -3893,11 +4280,12 @@ static int search_blocks(Search *x, const State *d, const int8_t *base, int turn
 	for (int i = 0; i < count; i++) {
 		int v;
 		/* Out of time, the plans not yet read further stay as scored. */
-		if (turns <= 1 || x->nodes >= x->budget || on_clock(x)) {
+		if (turns <= 1 || node_limit(x) || on_clock(x)) {
 			if (turns > 1) x->aborted = 1;
 			v = plans[i].score;
 		} else {
-			State t = *d;
+			State t;
+			copy_position(&t, d);
 			resolve(&t, plans[i].target);
 			x->nodes++;
 			if (t.health[0] <= 0 || t.health[1] <= 0) {
@@ -3923,7 +4311,7 @@ static int search_blocks(Search *x, const State *d, const int8_t *base, int turn
 static int search_turn(Search *x, const State *s, int turns, int level, int alpha, int beta, uint32_t *best_set) {
 	if (s->health[0] <= 0 || s->health[1] <= 0) return evaluate(x, s, turns);
 	if (turns <= 0) return evaluate_leaf(x, s, turns);
-	if (on_clock(x) || x->nodes >= x->budget) {
+	if (on_clock(x) || node_limit(x)) {
 		x->aborted = 1;
 		return evaluate_leaf(x, s, turns);
 	}
@@ -3941,7 +4329,8 @@ static int search_turn(Search *x, const State *s, int turns, int level, int alph
 			x->aborted = 1;
 			break;
 		}
-		State d = *s;
+		State d;
+		copy_position(&d, s);
 		declare(x, &d, sets[i].mask);
 		if (sets[i].mask == 0) {
 			if (turns <= 1) v = sets[i].score;
@@ -4165,7 +4554,7 @@ static void enchant_unit(const Search *x, State *s, int side, const Card *c, int
 	if (c->amount & 16) {
 		if (t->brief < 100) t->brief++;
 		t->brief_power = (int16_t)(t->brief_power + (t->power - t->under) - (was.power - was.under));
-		t->brief_health = (int16_t)(t->brief_health + t->toughness - was.toughness);
+		t->brief_health = (int16_t)(t->brief_health + unfloored_health(t) - unfloored_health(&was));
 		t->brief_flags |= c->lends & ~was.flags;
 		t->brief_ready += t->ready_worth - was.ready_worth;
 		t->brief_resting += t->resting_worth - was.resting_worth;
@@ -4534,8 +4923,9 @@ static int cast_card(const Search *x, State *s, int side, int slot, int target, 
 				covered = copies < left;
 			}
 			if (covered) stays = spec_roll(s, side, SPEC_STHN, 1);
-			if (book && s->casts[side][slot] < 250) s->casts[side][slot]++;
 		}
+		if (book && !spared && (x->spec[side] == SPEC_STHN || (x->forecast_charges[side] & (1u << slot)))
+			&& s->casts[side][slot] < 250) s->casts[side][slot]++;
 		if (spec_roll(s, side, SPEC_MNCH, 1)) price -= card_cost(x, s, c);
 		if (slot >= SLOTS) {
 			if (!stays) s->back[side][slot - SLOTS] = 0;
@@ -5067,17 +5457,20 @@ static int cast_card(const Search *x, State *s, int side, int slot, int target, 
 		int hero = -target - 1, left = amount, order[SLOTS], n = 0;
 		uint32_t placed = 0;
 		for (int i = imin(SLOTS, HAND + s->drawn[hero]) - 1; i >= HAND; i--) order[n++] = i;
-		for (int k = 0; k < 12; k++) {
-			int place = (int)(x->trim[hero] >> (5 * k)) & 31;
+		for (int k = 0; k < HAND; k++) {
+			int place = x->trim[hero][k];
 			if (place < HAND) placed |= 1u << place;
 		}
 		/* (A row longer than the engine was told the order of begins with
 		 * the cards it was not.) */
 		for (int i = 0; i < HAND; i++)
 			if (!(placed >> i & 1)) order[n++] = i;
-		for (int k = 11; k >= 0; k--) {
-			int place = (int)(x->trim[hero] >> (5 * k)) & 31;
-			if (place < HAND) order[n++] = place;
+		for (int k = HAND - 1; k >= 0; k--) {
+			int place = x->trim[hero][k];
+			if (place < HAND && (placed & (1u << place))) {
+				order[n++] = place;
+				placed &= ~(1u << place);
+			}
 		}
 		for (int at = 0; at < n && left > 0; at++) {
 			int i = order[at];
@@ -5941,7 +6334,7 @@ static void bless_as(const Search *x, State *s, int target, int power, int healt
 	note_ench(s, target, &was, t->owner, EN_PLAIN, code, price, 1, 0, 0);
 	if (t->brief < 100) t->brief++;
 	t->brief_power = (int16_t)(t->brief_power + (t->power - t->under) - (was.power - was.under));
-	t->brief_health = (int16_t)(t->brief_health + t->toughness - was.toughness);
+	t->brief_health = (int16_t)(t->brief_health + unfloored_health(t) - unfloored_health(&was));
 	t->brief_flags |= flags & ~was.flags;
 	t->brief_ready += t->ready_worth - was.ready_worth;
 	t->brief_resting += t->resting_worth - was.resting_worth;
@@ -6706,8 +7099,7 @@ static int ability_moves(const State *s, Move *out, int count, int light) {
 			for (int j = 0; j < s->n; j++) {
 				const Unit *t = &s->u[j];
 				if (t->owner == side || (t->flags & F_NO_AFFECT)) continue;
-				/* A fingus dies of its spores: only for a creature they finish. */
-				if (u->ability != AB_STING && t->toughness - t->damage > amount) continue;
+				/* A nonlethal hit can set up another shot or combat damage. */
 				if (ability_fits(s, i, j, 0, &price)) count = add_ability(out, count, i, j, 0);
 			}
 			break;
@@ -6729,17 +7121,19 @@ static int ability_moves(const State *s, Move *out, int count, int light) {
 				}
 			}
 			break;
-		case AB_TAP_RACE:
+		case AB_TAP_RACE: {
+			int start = count;
 			for (int j = 0; j < s->n; j++) {
 				const Unit *t = &s->u[j];
-				if (t->owner == side || (t->flags & (F_DEAD | F_GONE | F_RESTING))) continue;
-				/* One of a race stands for them all. */
+				if (t->owner == side || (t->flags & (F_DEAD | F_GONE))) continue;
+				/* Only a legal target represents its race. A resting member
+				 * can still name the race of a shielded, ready blocker. */
 				int seen = 0;
-				for (int k = 0; k < j && !seen; k++)
-					seen = s->u[k].owner != side && !(s->u[k].flags & (F_DEAD | F_GONE | F_RESTING)) && s->u[k].race == t->race;
-				if (!seen && ability_fits(s, i, j, 0, &price)) count = add_ability(out, count, i, j, 0);
+				for (int k = start; k < count && !seen; k++) seen = s->u[out[k].b].race == t->race;
+				if (!seen && ability_fits(s, i, j, 0, &price) && price > 0) count = add_ability(out, count, i, j, 0);
 			}
 			break;
+		}
 		case AB_SACRIFICE: {
 			/* Only the creature its hero would miss least. */
 			int least = -1;
@@ -6854,6 +7248,16 @@ static int ability_moves(const State *s, Move *out, int count, int light) {
 	return count;
 }
 
+static int damage_threshold(const State *s, int target) {
+	if (target < 0) {
+		int owner = -1 - target;
+		return 3 * s->he[owner][HE_ENBR] + (s->he[owner][HE_LFGR] ? 1 : s->health[owner]);
+	}
+	const Unit *u = &s->u[target];
+	if (u->guards && s->second) return 1;
+	return 3 * u->barriers + (u->guards ? 1 : u->toughness - u->damage);
+}
+
 /* Every command the rules allow the side to move, ordered so that the ones
  * worth most come first: the search cuts off sooner that way. */
 /* What a command looks worth before it is played: enough to order by. */
@@ -6862,8 +7266,17 @@ static int move_score(const Search *x, const State *s, const Move *m) {
 	case 1: return 2000 + s->u[m->a].power * 10 + s->u[m->a].toughness;
 	case 2: return 1000 + s->u[m->a].power * 10;
 	case 3: {
-		const Card *card = card_at(x, s, s->phase == 0 ? s->attacker : 1 - s->attacker, m->a);
-		return 500 + (card ? (card->free ? card->printed : card->cost) : 0) * 10 + m->c;
+		int side = s->phase == 0 ? s->attacker : 1 - s->attacker;
+		const Card *card = card_at(x, s, side, m->a);
+		int price = card ? (card->free ? card->printed : card->cost) : 0;
+		int power = m->c;
+		/* Try the exact payment before a larger blast at the same enemy.
+		 * Combat and spell resolution still decide what actually survives. */
+		if (card && card->effect == EFF_DAMAGE && card->variable && m->b != NO_TARGET && power > 0) {
+			int owner = m->b < 0 ? -1 - m->b : s->u[m->b].owner;
+			if (owner != side && power == damage_threshold(s, m->b)) power = s->ether[side] + 1;
+		}
+		return 500 + price * 10 + power;
 	}
 	case 4: return 1500 + s->u[m->a].power * 10;
 	/* Whole attacks and whole defences first, as they were ranked. */
@@ -7037,6 +7450,36 @@ static int choice_moves(const Search *x, const State *s, int side, const Card *c
 	return count;
 }
 
+static int has_payment(const int *powers, int count, int power) {
+	for (int i = 0; i < count; i++)
+		if (powers[i] == power) return 1;
+	return 0;
+}
+
+/* Spend just enough to remove a target or its ward, or one point less on
+ * an ally so it survives the wave. The ordinary power choices remain. */
+static int wave_powers(const State *s, int side, const Card *c, int most, int *powers, int count) {
+	int targets[MAX_UNITS + 2];
+	int n = spell_targets(s, side, c, NO_TARGET, targets);
+	for (int i = 0; i < n && count < MAX_MOVES; i++) {
+		int t = targets[i];
+		if (t >= 0 && (s->u[t].flags & (F_NO_AFFECT | F_PLANE))) continue;
+		int owner = t < 0 ? -1 - t : s->u[t].owner;
+		int power = damage_threshold(s, t) - (owner == side);
+		if (power > 0 && power < most && !has_payment(powers, count, power)) powers[count++] = power;
+	}
+	return count;
+}
+
+/* One more payment for this target alone: a point less leaves it alive
+ * or its ward intact, and spending more can cost the next spell. */
+static int add_exact_hit(const State *s, Move *out, int count, int h, int target, const int *powers, int wide) {
+	int needed = damage_threshold(s, target);
+	if (needed > 0 && needed < powers[0] && !has_payment(powers, wide, needed) && count < MAX_MOVES - 2)
+		out[count++] = (Move){ 3, h, target, needed };
+	return count;
+}
+
 /* The cards the hero to move may play from its hand: any of them while it
  * attacks, only those that may be cast in defence while it defends. */
 static int card_moves(const Search *x, const State *s, int side, Move *out, int count, int light) {
@@ -7044,6 +7487,9 @@ static int card_moves(const Search *x, const State *s, int side, Move *out, int 
 		const Card *c = card_at(x, s, side, h);
 		if (!c || c->cost < 0 || c->effect == EFF_NONE) continue;
 		if (s->phase != 0 && !c->defence && h < ART_BASE) continue;
+		/* In selective search one held copy offers every target and power.
+		 * Once spent, the next copy can still be played on the same line. */
+		if (!light && h < HAND && (x->earlier_copies[side][h] & ~(uint32_t)s->played[side]) && !lists_all(x)) continue;
 		int price = card_cost(x, s, c);
 		if (price > s->ether[side] || c->channels > s->channels[side]) continue;
 		if (c->choice) {
@@ -7083,7 +7529,7 @@ static int card_moves(const Search *x, const State *s, int side, Move *out, int 
 					const Card *o = &x->hand[side][k];
 					if (o == c || o->cost < 0 || (s->played[side] >> k & 1) || o->effect == EFF_NONE) continue;
 					int need = card_cost(x, s, o) - (s->ether[side] - card_cost(x, s, c));
-					if (need > 0 && need <= s->health[side] - 1 && need != imin(most, 3) && need != most) powers[wide++] = need;
+					if (need > 0 && need <= s->health[side] - 1 && !has_payment(powers, wide, need)) powers[wide++] = need;
 				}
 			}
 		} else if (c->variable) {
@@ -7092,7 +7538,7 @@ static int card_moves(const Search *x, const State *s, int side, Move *out, int 
 				for (int p = most; p >= 0 && wide < MAX_MOVES; p--) powers[wide++] = p;
 			} else {
 				powers[wide++] = most;
-				if (!light && most / 2 > 0 && most / 2 != most) powers[wide++] = most / 2;
+				if (!light && most / 2 > 1) powers[wide++] = most / 2;
 				if (!light && most > 1) powers[wide++] = 1;
 				/* The other hero's whole health, and what leaves room for the
 				 * cheapest other card of the hand. */
@@ -7105,8 +7551,10 @@ static int card_moves(const Search *x, const State *s, int side, Move *out, int 
 					if (left > 0 && left > room) room = left;
 				}
 				if (room > 1 && room != most / 2 && room != most && room != foe) powers[wide++] = room;
+				if (!light && c->effect == EFF_WAVE) wide = wave_powers(s, side, c, most, powers, wide);
 			}
 		} else powers[wide++] = 0;
+		int exact = c->effect == EFF_DAMAGE && c->variable && !light && !lists_all(x);
 		for (int p = 0; p < wide && count < MAX_MOVES - 2; p++) {
 			/* Proofs still consider zero-X responses. */
 			if (!x->proof && c->variable && powers[p] == 0 && (c->effect == EFF_DAMAGE || c->effect == EFF_WAVE)
@@ -7131,6 +7579,7 @@ static int card_moves(const Search *x, const State *s, int side, Move *out, int 
 					out[count].b = -1 - side_at;
 					out[count].c = powers[p];
 					count++;
+					if (exact && p == 0) count = add_exact_hit(s, out, count, h, -1 - side_at, powers, wide);
 				}
 			if (c->aim != AIM_HERO)
 				for (int i = 0; i < s->n && count < MAX_MOVES - 2; i++) {
@@ -7141,6 +7590,7 @@ static int card_moves(const Search *x, const State *s, int side, Move *out, int 
 					out[count].b = i;
 					out[count].c = powers[p];
 					count++;
+					if (exact && p == 0) count = add_exact_hit(s, out, count, h, i, powers, wide);
 					/* A play-out tries one creature, not every one. */
 					if (light) break;
 				}
@@ -7154,8 +7604,8 @@ static int card_moves(const Search *x, const State *s, int side, Move *out, int 
  * stinging strike, a blow that heals, robs, feeds or poisons a hero, a
  * lifeguard or a feedback on the defender, a creature whose death or
  * regeneration does more than bury it, and anything that reads the order of
- * a graveyard all break that. A proof may then send attackers in one order
- * only; otherwise it must read every order. */
+ * a graveyard all break that. Only interchangeable attacks may be sent
+ * in one canonical order when looking for a proof. */
 static int attacks_commute(const Search *x, const State *s) {
 	int defender = 1 - s->attacker;
 	if (s->he[defender][HE_LFGR] || s->he[defender][HE_FDBK] || s->he[defender][HE_LNRD] || s->he[defender][HE_ETCH]) return 0;
@@ -7188,24 +7638,30 @@ static int generate_list(const Search *x, const State *s, Move *out, int sorted,
 	 * set, in another order are one choice: each creature is taken up only
 	 * after the last one that was, so a set is tried once and not once for
 	 * every order it can be named in. */
-	int after = -1;
+	int after = -1, declared = 0;
 	if (x->ordered && !whole && !light && !grouped) {
 		int newest = 0;
 		for (int i = 0; i < s->n; i++) {
 			const Unit *u = &s->u[i];
 			if (u->flags & (F_DEAD | F_GONE)) continue;
 			if (s->phase == 0 ? !(u->flags & F_ATTACKING) : u->blocks < 0) continue;
+			declared++;
 			if (u->rank >= newest) {
 				newest = u->rank;
 				after = i;
 			}
 		}
 	}
-	/* A proof sends attackers in one order only where the order cannot
-	 * matter. Blocks it sets in one order of the attackers they stand
-	 * against, and against one attacker in every order: the fight takes each
-	 * attacker's blockers in the order they were set, and nothing else of it. */
-	int one_order = !x->proof || (s->phase == 0 && attacks_commute(x, s));
+	/* Try a different group of attackers before and after the hits that
+	 * spend Lifeguard or take down a redirecting creature. Keep index order
+	 * within each group so adding more attackers does not try every permutation. */
+	int one_order = after >= 0 && s->phase == 0;
+	if (one_order) {
+		int defender = 1 - s->attacker;
+		int guards = s->he[defender][HE_LFGR];
+		if (x->proof || x->narrow) one_order = attacks_commute(x, s);
+		else if (declared == guards || (declared == guards + 1 && has_redirecting_creature(s, defender))) one_order = 0;
+	}
 	int last_attacker = after >= 0 && s->phase != 0 ? s->u[after].blocks : -1;
 	if (s->phase == 0) {
 		int side = s->attacker;
@@ -7754,7 +8210,8 @@ static void pick_command(const Search *x, const State *s, uint32_t *seed, Move *
 }
 
 static int play_out(Search *x, const State *start, uint32_t *seed, int rounds) {
-	State s = *start;
+	State s;
+	copy_position(&s, start);
 	int ends = 0;
 	/* Every game counts against the budget, even one that is over before it
 	 * starts: otherwise a decided position spins here for ever. */
@@ -7813,7 +8270,8 @@ static int settle(Search *x, const State *s, int phases) {
 }
 
 static int settle_whole(Search *x, const State *s, int phases) {
-	State d = *s;
+	State d;
+	copy_position(&d, s);
 	int any = 0;
 	for (int i = 0; i < d.n; i++)
 		if ((d.u[i].flags & F_ATTACKING) && !(d.u[i].flags & (F_DEAD | F_GONE))) any = 1;
@@ -7870,37 +8328,38 @@ static int settle_whole(Search *x, const State *s, int phases) {
 	return base + delta;
 }
 
-/* A number that stands for a position: every creature in play and all the
- * rest of the state, so that two lines arriving at one position are known
- * for the same. */
-static uint64_t state_key(const State *s) {
-	uint64_t h = 0x9E3779B97F4A7C15ull ^ (uint64_t)s->n;
-	/* All of it but the word that says whose reading the position is in:
-	 * where that lies in memory is no part of the position, and a number
-	 * that changed from one run to the next would make each run fill its
-	 * table differently. */
-	const unsigned char *after = (const unsigned char *)&s->rules + sizeof(s->rules);
-	const unsigned char *parts[3] = { (const unsigned char *)s->u, (const unsigned char *)&s->n, after };
-	size_t sizes[3] = { sizeof(Unit) * (size_t)s->n, offsetof(State, rules) - offsetof(State, n),
-		sizeof(State) - offsetof(State, rules) - sizeof(s->rules) };
-	for (int part = 0; part < 3; part++) {
-		const unsigned char *p = parts[part];
-		size_t left = sizes[part];
-		while (left >= 8) {
-			uint64_t w;
-			memcpy(&w, p, 8);
-			h = (h ^ w) * 0xD6E8FEB86659FD93ull;
-			h ^= h >> 32;
-			p += 8;
-			left -= 8;
-		}
-		if (left) {
-			uint64_t w = 0;
-			memcpy(&w, p, left);
-			h = (h ^ w) * 0xD6E8FEB86659FD93ull;
-			h ^= h >> 32;
-		}
+static uint64_t hash_part(uint64_t h, const unsigned char *p, size_t left) {
+	while (left >= 8) {
+		uint64_t w;
+		memcpy(&w, p, 8);
+		h = (h ^ w) * 0xD6E8FEB86659FD93ull;
+		h ^= h >> 32;
+		p += 8;
+		left -= 8;
 	}
+	if (left) {
+		uint64_t w = 0;
+		memcpy(&w, p, left);
+		h = (h ^ w) * 0xD6E8FEB86659FD93ull;
+		h ^= h >> 32;
+	}
+	return h;
+}
+
+/* Hash the live entries of each variable-length array and all the fields
+ * between arrays, including their counts. Unused capacity cannot affect a
+ * move. Keep the search pointer out of the key so that runs are repeatable. */
+static uint64_t state_key(const State *s) {
+	const unsigned char *bytes = (const unsigned char *)s;
+	const size_t after_rules = offsetof(State, rules) + sizeof(s->rules);
+	const size_t after_ench = offsetof(State, ench) + sizeof(s->ench);
+	const size_t after_carry = offsetof(State, carry) + sizeof(s->carry);
+	uint64_t h = 0x9E3779B97F4A7C15ull ^ (uint64_t)s->n;
+	h = hash_part(h, bytes, sizeof(Unit) * (size_t)s->n);
+	h = hash_part(h, bytes + offsetof(State, n), offsetof(State, rules) - offsetof(State, n));
+	h = hash_part(h, bytes + after_rules, offsetof(State, ench) - after_rules + sizeof(Ench) * (size_t)s->enchs);
+	h = hash_part(h, bytes + after_ench, offsetof(State, carry) - after_ench + sizeof(Carry) * (size_t)s->carries);
+	h = hash_part(h, bytes + after_carry, sizeof(State) - after_carry);
 	return h ? h : 1;
 }
 
@@ -7995,6 +8454,21 @@ static int move_function(const Search *x, const State *s, const Move *m, int sid
 	return m->kind;
 }
 
+/* Test a spell or ability against the actual resulting board before it is pruned. */
+static int keep_tactical_move(const Search *x, const State *s, const Move *move, int side, int incoming, int keep_saves) {
+	int k = move->kind;
+	if (k != 3 && k != 4 && k != 7 && k != 8 && k != 11) return 0;
+	State t;
+	copy_position(&t, s);
+	if (!apply_command(x, &t, (const int32_t *)move)) return 0;
+	int decisive;
+	if (x->goal.active) {
+		int g = goal_status(x, &t);
+		decisive = g != 0 && (g > 0) == (side == x->goal.side);
+	} else decisive = t.health[1 - side] <= 0 && t.health[side] > 0;
+	return decisive || (keep_saves && (t.health[side] > s->health[side] || (incoming > 0 && incoming_power(&t) < incoming)));
+}
+
 /* The commands of a crowded position that are read, at most about `width` of
  * them, in the order given. The ranking keeps the strongest, but nothing
  * decides a position that a ranking may drop: ending the phase, the command
@@ -8018,17 +8492,7 @@ static int keep_width(const Search *x, const State *s, Move *moves, int count, c
 			}
 	int incoming = s->phase == 1 && side != s->attacker ? incoming_power(s) : -1;
 	for (int i = width - 1; i < count - 1; i++) {
-		int k = moves[i].kind;
-		if (keep[i] || (k != 3 && k != 4 && k != 7 && k != 8 && k != 11)) continue;
-		State t = *s;
-		if (!apply_command(x, &t, (const int32_t *)&moves[i])) continue;
-		int decisive;
-		if (x->goal.active) {
-			int g = goal_status(x, &t);
-			decisive = g != 0 && (g > 0) == (side == x->goal.side);
-		} else decisive = t.health[1 - side] <= 0 && t.health[side] > 0;
-		int saves = t.health[side] > s->health[side] || (incoming > 0 && incoming_power(&t) < incoming);
-		if (decisive || saves) {
+		if (!keep[i] && keep_tactical_move(x, s, &moves[i], side, incoming, 1)) {
 			keep[i] = 1;
 			reserved++;
 		}
@@ -8048,8 +8512,13 @@ static int keep_width(const Search *x, const State *s, Move *moves, int count, c
 	int left = imax(0, width - reserved), n = 0;
 	for (int i = 0; i < count; i++) {
 		if (!keep[i]) {
-			if (left <= 0) continue;
-			left--;
+			if (left > 0) left--;
+			else {
+				/* A reserved reply near the tail can displace a move that
+				 * used to fit in the prefix. Check its tactical outcome too. */
+				if (i >= width - 1) continue;
+				if (!keep_tactical_move(x, s, &moves[i], side, incoming, 0)) continue;
+			}
 		}
 		moves[n++] = moves[i];
 	}
@@ -8089,7 +8558,7 @@ static int search_chance(Search *x, const State *s, State *t, const Move *m, con
 		if (k < 0) break;
 		want[k]++;
 		for (int j = k + 1; j < ROLLS; j++) want[j] = 0;
-		*t = *s;
+		copy_position(t, s);
 		memcpy(t->want, want, ROLLS);
 		if (!(m->kind == 10 ? block_whole(x, t, &plans[m->a]) : apply_command(x, t, (const int32_t *)m))) {
 			x->unknown = 1;
@@ -8142,9 +8611,316 @@ static inline int harm_margin(const Search *x) {
 static int health_after_defence(const Search *x, const State *s, int side) {
 	if (s->phase != 1 || s->health[side] <= 0 || s->health[1 - side] <= 0) return s->health[side];
 	static const int32_t end_phase[4] = { 0, 0, 0, 0 };
-	State finished = *s;
+	State finished;
+	copy_position(&finished, s);
 	apply_command(x, &finished, end_phase);
 	return finished.health[side];
+}
+
+/* A duel normally has one caller. Bound the extra threads across simultaneous
+ * native reads as well, leaving the caller available when a launch fails. */
+static atomic_int active_helpers;
+/* Only displayed, automatically sized searches opt in. The main thread
+ * publishes the tightest allowance among the currently displayed jobs. */
+static int allowed_workers(const Search *x) {
+	int limit = x->worker_limit;
+	if (x->follow_frame_limit) {
+		/* A display-pressure cancellation retires the entire reply group.
+		 * The primary can use those workers again if the display recovers. */
+		if (x->group && !x->group->extra && atomic_load_explicit(x->group->stop_reply, memory_order_relaxed))
+			limit = x->group->total;
+		int display = atomic_load_explicit(&frame_worker_limit, memory_order_relaxed);
+		if (x->group && x->group->extra) display = imax(1, display - PRIMARY_WORKERS);
+		limit = imin(limit, display);
+	}
+	return limit;
+}
+/* The OS may assign the game fewer CPUs than are installed. A zero result
+ * leaves hardware discovery to the engine, including multi-group Windows. */
+static int affinity_processors(void) {
+#if defined(_WIN32)
+	uintptr_t mask = 0, system = 0;
+	void *process = (void *)(intptr_t)-1;
+	uint16_t groups = 1, group;
+	/* On modern Windows the primary group's mask can cover only a
+	 * fraction of a multi-group process. In that case use the engine's count. */
+	if (!GetProcessGroupAffinity(process, &groups, &group) && groups > 1) return 0;
+	if (!GetProcessAffinityMask(process, &mask, &system)) return 0;
+	int count = 0;
+	while (mask) {
+		mask &= mask - 1;
+		count++;
+	}
+	return count;
+#elif defined(__linux__)
+	cpu_set_t mask;
+	return sched_getaffinity(0, sizeof(mask), &mask) == 0 ? CPU_COUNT(&mask) : 0;
+#else
+	return 0;
+#endif
+}
+typedef struct {
+#if defined(_WIN32)
+	void *handle;
+#else
+	pthread_t handle;
+#endif
+	void (*run)(void *);
+	void *arg;
+	SearchActivity *activity;
+	int extra;
+} SearchThread;
+
+#if defined(_WIN32)
+static unsigned __stdcall search_helper(void *data) {
+	SetThreadPriority((void *)(intptr_t)-2, ((SearchThread *)data)->extra ? -2 : -1);
+#else
+static void *search_helper(void *data) {
+#if defined(__linux__)
+	setpriority(PRIO_PROCESS, 0, ((SearchThread *)data)->extra ? 10 : 5); /* Linux schedules nice values per thread. */
+#elif defined(__APPLE__)
+	pthread_set_qos_class_self_np(((SearchThread *)data)->extra ? QOS_CLASS_BACKGROUND : QOS_CLASS_UTILITY, 0);
+#endif
+#endif
+	SearchThread *thread = (SearchThread *)data;
+	int active = atomic_fetch_add(&thread->activity->active, 1) + 1;
+	int peak = atomic_load(&thread->activity->peak);
+	while (active > peak && !atomic_compare_exchange_weak(&thread->activity->peak, &peak, active)) {}
+	thread->run(thread->arg);
+	atomic_fetch_sub(&thread->activity->active, 1);
+	atomic_fetch_sub(&active_helpers, 1);
+	return 0;
+}
+
+static int start_helper(SearchThread *thread, SearchActivity *activity, int limit, int follow_frame_limit, int extra, void (*run)(void *), void *arg) {
+	int active = atomic_load(&active_helpers);
+	do {
+		int available = limit;
+		if (follow_frame_limit) available = imin(available, atomic_load_explicit(&frame_worker_limit, memory_order_relaxed));
+		if (active >= available - 1) return 0;
+	} while (!atomic_compare_exchange_weak(&active_helpers, &active, active + 1));
+	thread->run = run;
+	thread->arg = arg;
+	thread->activity = activity;
+	thread->extra = extra;
+#if defined(_WIN32)
+	thread->handle = (void *)_beginthreadex(NULL, SEARCH_STACK, search_helper, thread, 0x10000u, NULL);
+	if (thread->handle) return 1;
+#else
+	pthread_attr_t attr;
+	if (pthread_attr_init(&attr) == 0) {
+		int started = pthread_attr_setstacksize(&attr, SEARCH_STACK) == 0
+			&& pthread_create(&thread->handle, &attr, search_helper, thread) == 0;
+		pthread_attr_destroy(&attr);
+		if (started) return 1;
+	}
+#endif
+	atomic_fetch_sub(&active_helpers, 1);
+	return 0;
+}
+
+static int launch_helper(SearchThread *thread, const Search *x, void (*run)(void *), void *arg) {
+	int limit = x->group ? x->group->total : x->worker_limit;
+	return start_helper(thread, x->activity, limit, x->follow_frame_limit, x->group && x->group->extra, run, arg);
+}
+
+static void join_helper(SearchThread *thread) {
+#if defined(_WIN32)
+	WaitForSingleObject(thread->handle, 0xfffffffful);
+	CloseHandle(thread->handle);
+#else
+	pthread_join(thread->handle, NULL);
+#endif
+}
+
+/* During a parallel pass each cache hit reads a whole entry, and a
+ * finished node publishes a whole entry. A busy stripe is simply a miss:
+ * no worker waits for a cache line another worker is replacing. */
+#define CACHE_STRIPES 2048
+static int copy_cache_entry(Search *x, uint64_t key, Entry *local, int store) {
+	atomic_uchar *lock = &x->cache_locks[key & (CACHE_STRIPES - 1)];
+	if (atomic_exchange_explicit(lock, 1, memory_order_acquire)) return 0;
+	Entry *slot = &x->table[key & x->mask];
+	if (store) *slot = *local;
+	else *local = *slot;
+	atomic_store_explicit(lock, 0, memory_order_release);
+	return 1;
+}
+
+typedef struct {
+	Move line[MAX_LINE];
+	int length, value, health;
+} RootChoice;
+
+typedef struct {
+	const State *board;
+	const Move *moves;
+	Plan *plans;
+	int count, phases, steps, side, maximise, compare_health;
+	atomic_int next, bound, stopped;
+	RootChoice choices[MAX_MOVES];
+	atomic_uchar cache_locks[CACHE_STRIPES];
+} RootBatch;
+
+typedef struct {
+	Search search;
+	SearchThread thread;
+	RootBatch *batch;
+	int rank;
+} RootWorker;
+
+static void read_root_choices(void *data) {
+	RootWorker *worker = (RootWorker *)data;
+	Search *x = &worker->search;
+	RootBatch *batch = worker->batch;
+	while (!atomic_load(&batch->stopped)) {
+		/* Finish an assigned branch before yielding it. Rank zero always
+		 * drains the queue, including when the display asks for one worker. */
+		if (worker->rank && x->follow_frame_limit) {
+			int proving = x->proof_status && atomic_load(x->proof_status) == PROOF_RUNNING;
+			if (worker->rank + proving >= allowed_workers(x)) break;
+		}
+		int i = atomic_fetch_add(&batch->next, 1);
+		if (i >= batch->count) break;
+		State child;
+		copy_position(&child, batch->board);
+		child.rules = x;
+		const Move *m = &batch->moves[i];
+		if (m->kind == 10) {
+			if (!block_whole(x, &child, &batch->plans[m->a])) continue;
+		} else if (!apply_command(x, &child, (const int32_t *)m)) continue;
+		x->nodes++;
+		int remaining = imax(0, batch->phases - phases_spent(x, batch->board, &child, m->kind));
+		int penalty = batch->maximise && harms_own(x, batch->board, batch->side, m) ? harm_margin(x) : 0;
+		/* Leave a point around the incumbent. A tie must be exact even if
+		 * this earlier move happened to finish on a later worker. */
+		int bound = atomic_load(&batch->bound);
+		int low = batch->maximise ? bound - 1 : -2 * WIN;
+		int high = batch->maximise ? 2 * WIN : bound + 1;
+		Move below[MAX_LINE];
+		int length = 0;
+		int value = search_moves(x, &child, remaining, batch->steps - 1, low + penalty,
+			high + penalty, NULL, NULL, below, &length) - penalty;
+		if (x->aborted || x->timed) {
+			atomic_store(&batch->stopped, 1);
+			break;
+		}
+		RootChoice *choice = &batch->choices[i];
+		choice->value = value;
+		if (batch->compare_health && value <= -WIN)
+			choice->health = health_after_defence(x, &child, batch->side);
+		choice->line[0] = *m;
+		choice->length = 1 + imin(length, MAX_LINE - 1);
+		memcpy(choice->line + 1, below, (choice->length - 1) * sizeof(Move));
+		while (batch->maximise ? value > bound : value < bound) {
+			if (atomic_compare_exchange_weak(&batch->bound, &bound, value)) break;
+		}
+	}
+	if (x->budget > x->nodes)
+		atomic_fetch_add_explicit(x->unassigned, x->budget - x->nodes, memory_order_relaxed);
+}
+
+/* Distribute the already ordered and pruned legal candidates for this depth.
+ * The caller consumes the same queue. Workers share the existing cache, the
+ * incumbent score and the next move index. */
+static int parallel_root(Search *x, const State *s, Move *moves, Plan *plans, int count,
+		int phases, int steps, int side, int maximise, int compare_health, Move *best, Move *line, int *length, int *value) {
+	int proof_running = x->proof_status && atomic_load(x->proof_status) == PROOF_RUNNING;
+	int limit = imin(imin(x->root_workers, allowed_workers(x)) - proof_running, count);
+	if (limit < 2 || count < 3 || steps < 3 || x->nodes < 512 || x->bans || x->goal.active
+			|| x->deadline - now_ms() < 3 || x->budget - x->nodes < limit * 128) return 0;
+	RootWorker *workers = (RootWorker *)calloc((size_t)limit, sizeof(*workers));
+	RootBatch *batch = (RootBatch *)calloc(1, sizeof(*batch));
+	if (!workers || !batch) {
+		free(workers);
+		free(batch);
+		return 0;
+	}
+	batch->board = s;
+	batch->moves = moves;
+	batch->plans = plans;
+	batch->count = count;
+	batch->phases = phases;
+	batch->steps = steps;
+	batch->side = side;
+	batch->maximise = maximise;
+	batch->compare_health = compare_health;
+	atomic_init(&batch->next, 0);
+	atomic_init(&batch->stopped, 0);
+	atomic_init(&batch->bound, maximise ? -2 * WIN : 2 * WIN);
+	for (int stripe = 0; stripe < CACHE_STRIPES; stripe++) atomic_init(&batch->cache_locks[stripe], 0);
+	_Atomic int64_t unassigned;
+	atomic_init(&unassigned, x->budget - x->nodes);
+	int started = 0;
+	for (int k = 0; k < limit; k++) {
+		RootWorker *w = &workers[k];
+		w->batch = batch;
+		w->rank = k;
+		w->search = *x;
+		w->search.root_workers = 0;
+		w->search.nodes = w->search.met = w->search.reused_leaf_nodes = 0;
+		w->search.budget = 0;
+		w->search.unassigned = &unassigned;
+		w->search.cache_locks = batch->cache_locks;
+		if (k > 0) {
+			if (atomic_load(&batch->next) >= count || !launch_helper(&w->thread, x, read_root_choices, w)) break;
+			started++;
+		}
+	}
+	if (started) {
+		read_root_choices(&workers[0]);
+		for (int k = 1; k <= started; k++) join_helper(&workers[k].thread);
+		for (int k = 0; k <= started; k++) {
+			x->nodes += workers[k].search.nodes;
+			x->reused_leaf_nodes += workers[k].search.reused_leaf_nodes;
+			x->met += workers[k].search.met;
+			x->timed |= workers[k].search.timed;
+		}
+		x->aborted |= atomic_load(&batch->stopped);
+		int winner = -1;
+		for (int i = 0; i < count; i++) {
+			RootChoice *a = &batch->choices[i];
+			if (!a->length) continue;
+			if (winner < 0) { winner = i; continue; }
+			RootChoice *b = &batch->choices[winner];
+			if ((maximise ? a->value > b->value : a->value < b->value)
+					|| (a->value == b->value && a->health > b->health)) winner = i;
+		}
+		if (winner >= 0) {
+			RootChoice *choice = &batch->choices[winner];
+			*best = choice->line[0];
+			*value = choice->value;
+			*length = choice->length;
+			memcpy(line, choice->line, *length * sizeof(Move));
+		} else x->aborted = 1;
+	}
+	free(batch);
+	free(workers);
+	return started != 0;
+}
+
+static int gives_up_block(const Search *x, const State *s, const Move *previous, const Move *next) {
+	if (s->phase != 1 || s->attacker == x->ai || next->kind != 0 || (previous->kind != 2 && previous->kind != 10)) return 0;
+	State blocked;
+	copy_position(&blocked, s);
+	return apply_command(x, &blocked, (const int32_t *)previous)
+		&& health_after_defence(x, &blocked, x->ai) > health_after_defence(x, s, x->ai);
+}
+
+static void remember_search_choice(Search *x, Entry *entry, uint64_t key, const Move *move,
+		int phases, int steps, int value, int low, int high) {
+	if (!entry || x->aborted) return;
+	entry->key = key;
+	entry->value = value;
+	entry->kind = move ? move->kind : -1;
+	entry->a = move ? move->a : 0;
+	entry->b = move ? move->b : 0;
+	entry->c = move ? move->c : 0;
+	entry->phases = (int8_t)phases;
+	entry->steps = (int8_t)steps;
+	entry->bound = (int8_t)(value <= low ? BOUND_UPPER : value >= high ? BOUND_LOWER : BOUND_EXACT);
+	entry->filled = 1;
+	if (x->cache_locks) copy_cache_entry(x, key, entry, 1);
 }
 
 static int search_moves(Search *x, State *s, int phases, int steps, int alpha, int beta, Move *best, const Move *first, Move *line, int *line_length) {
@@ -8167,13 +8943,26 @@ static int search_moves(Search *x, State *s, int phases, int steps, int alpha, i
 	/* A position read before, to at least this depth, is not read again;
 	 * one read less deeply still says which command to try first. */
 	Entry *entry = NULL;
+	Entry cached;
 	uint64_t key = 0;
 	int low = alpha, high = beta;
 	Move remembered;
 	if (x->table && best == NULL) {
 		key = state_key(s);
 		entry = &x->table[key & x->mask];
+		if (x->cache_locks) {
+			entry = &cached;
+			if (!copy_cache_entry(x, key, entry, 0)) memset(entry, 0, sizeof(*entry));
+		}
 		if (entry->filled && entry->key == key) {
+			/* The phase horizon ends the line even if a later pass allows more
+			 * commands. Remember the work that pass would otherwise repeat. */
+			if (phases == 0 && entry->phases == 0 && entry->steps < steps
+				&& !x->proof && entry->kind == -1 && entry->leaf_cost >= 0) {
+				x->reused_leaf_nodes += entry->leaf_cost;
+				entry->steps = (int8_t)steps;
+				if (x->cache_locks) copy_cache_entry(x, key, entry, 1);
+			}
 			if (entry->phases == phases && entry->steps >= steps) {
 				if (entry->bound == BOUND_EXACT || (entry->bound == BOUND_LOWER && entry->value >= beta)
 					|| (entry->bound == BOUND_UPPER && entry->value <= alpha)) {
@@ -8194,20 +8983,23 @@ static int search_moves(Search *x, State *s, int phases, int steps, int alpha, i
 		/* A line cut short by its count of commands, with turns still to
 		 * read, is not one read to its end. */
 		if (x->proof && phases > 0) x->unknown = 1;
+		int64_t before = x->nodes;
 		int v = x->proof ? 0 : on_clock(x) ? evaluate(x, s, phases) : settle(x, s, phases);
 		if (x->timed) x->aborted = 1;
 		if (entry && !x->aborted) {
 			entry->key = key;
 			entry->value = v;
 			entry->kind = -1;
+			entry->leaf_cost = phases == 0 && !x->proof && x->nodes < x->budget ? (int32_t)(x->nodes - before) : -1;
 			entry->phases = (int8_t)phases;
 			entry->steps = (int8_t)steps;
 			entry->bound = BOUND_EXACT;
 			entry->filled = 1;
+			if (x->cache_locks) copy_cache_entry(x, key, entry, 1);
 		}
 		return v;
 	}
-	if (on_clock(x) || x->nodes >= x->budget) {
+	if (on_clock(x) || node_limit(x)) {
 		x->aborted = 1;
 		/* Out of time the position is weighed as it stands: what the
 		 * fighting to come would add is a reading of its own. */
@@ -8297,7 +9089,8 @@ static int search_moves(Search *x, State *s, int phases, int steps, int alpha, i
 	if (x->margin > 0 && steps >= 3 && count > 4) {
 		int scores[MAX_MOVES], top = -2 * WIN;
 		for (int i = 0; i < count; i++) {
-			State t = *s;
+			State t;
+			copy_position(&t, s);
 			if (!apply_command(x, &t, (const int32_t *)&moves[i])) {
 				scores[i] = -2 * WIN;
 				continue;
@@ -8315,8 +9108,19 @@ static int search_moves(Search *x, State *s, int phases, int steps, int alpha, i
 		if (kept > 0) count = kept;
 	}
 	int value = maximise ? -2 * WIN : 2 * WIN;
-	int played = 0, chosen = -1;
+	/* A forced pass has no siblings to share. Split the first branching
+	 * reply after it, keeping the usual non-root move ordering and width. */
+	int forced_reply = !best && steps == x->forced_steps && line && line_length && !x->proof
+			&& low == -2 * WIN && high == 2 * WIN;
 	int compare_health = best != NULL && maximise && !x->proof && s->phase == 1;
+	Move reply = { 0 };
+	if (x->root_workers > 1 && (best || forced_reply) && parallel_root(x, s, moves, plans, count, phases, steps,
+			side, maximise, compare_health, best ? best : &reply, line, line_length, &value)) {
+		if (forced_reply) remember_search_choice(x, entry, key, &reply, phases, steps, value, low, high);
+		return value;
+	}
+	int played = 0, chosen = -1;
+	int preferred_first = 0;
 	int chosen_health = 0;
 	for (int i = 0; i < count; i++) {
 		/* Out of time, the commands not yet read stay unread, at every
@@ -8325,7 +9129,8 @@ static int search_moves(Search *x, State *s, int phases, int steps, int alpha, i
 			x->aborted = 1;
 			break;
 		}
-		State t = *s;
+		State t;
+		copy_position(&t, s);
 		if (best && x->bans) {
 			int set_aside = 0;
 			for (int k = 0; k < x->bans && !set_aside; k++) set_aside = same_move(&moves[i], (const Move *)x->banned[k]);
@@ -8335,6 +9140,7 @@ static int search_moves(Search *x, State *s, int phases, int steps, int alpha, i
 			if (!block_whole(x, &t, &plans[moves[i].a])) continue;
 		} else if (!apply_command(x, &t, (const int32_t *)&moves[i])) continue;
 		x->nodes++;
+		if (!played && first && !x->proof && steps >= 3) preferred_first = same_move(first, &moves[i]);
 		played++;
 		/* A turn ended with nobody sent has no defence to it, and counts for
 		 * both of its phases: every line is read the same number of turns
@@ -8349,9 +9155,21 @@ static int search_moves(Search *x, State *s, int phases, int steps, int alpha, i
 		int health = compare_loss ? health_after_defence(x, &t, side) : 0;
 		int prefer_health = compare_loss && health > chosen_health && alpha == value;
 		int floor = alpha + penalty - prefer_health;
+		/* When the previous reading's preferred move was played first, test
+		 * its alternatives against the best score so far. An alternative
+		 * that can improve it inside the caller's window gets a full search. */
+		int scout = preferred_first && chosen >= 0 && !prefer_health && beta > alpha + 1;
+		int ceiling = beta + penalty;
+		int next_phases = imax(0, phases - spent);
+		int extend_forced = count == 1 && x->root_workers > 1 && (best || forced_reply) && !penalty && !x->proof;
+		if (extend_forced) x->forced_steps = steps - 1;
 		int v = x->proof && (t.rolled || t.luck)
-			? search_chance(x, s, &t, &moves[i], plans, phases, steps, floor, beta + penalty, line ? below : NULL, line ? &below_length : NULL)
-			: search_moves(x, &t, imax(0, phases - spent), steps - 1, floor, beta + penalty, NULL, NULL, line ? below : NULL, line ? &below_length : NULL);
+			? search_chance(x, s, &t, &moves[i], plans, phases, steps, floor, ceiling, line ? below : NULL, line ? &below_length : NULL)
+			: search_moves(x, &t, next_phases, steps - 1, scout && !maximise ? ceiling - 1 : floor,
+				scout && maximise ? floor + 1 : ceiling, NULL, NULL, line ? below : NULL, line ? &below_length : NULL);
+		if (scout && !x->aborted && v > floor && v < ceiling)
+			v = search_moves(x, &t, next_phases, steps - 1, floor, ceiling, NULL, NULL, line ? below : NULL, line ? &below_length : NULL);
+		if (extend_forced) x->forced_steps = best ? 0 : steps;
 		v -= penalty;
 		/* A command whose reading the clock cut short is not held against
 		 * those read whole, unless it is the only one read at all. */
@@ -8378,18 +9196,7 @@ static int search_moves(Search *x, State *s, int phases, int steps, int alpha, i
 		if (alpha >= beta) break;
 	}
 	if (!played) return x->proof ? 0 : settle(x, s, phases);
-	if (entry && !x->aborted) {
-		entry->key = key;
-		entry->value = value;
-		entry->kind = chosen >= 0 ? moves[chosen].kind : -1;
-		entry->a = chosen >= 0 ? moves[chosen].a : 0;
-		entry->b = chosen >= 0 ? moves[chosen].b : 0;
-		entry->c = chosen >= 0 ? moves[chosen].c : 0;
-		entry->phases = (int8_t)phases;
-		entry->steps = (int8_t)steps;
-		entry->bound = (int8_t)(value <= low ? BOUND_UPPER : value >= high ? BOUND_LOWER : BOUND_EXACT);
-		entry->filled = 1;
-	}
+	remember_search_choice(x, entry, key, chosen >= 0 ? &moves[chosen] : NULL, phases, steps, value, low, high);
 	return value;
 }
 
@@ -8452,7 +9259,8 @@ static int prove_win(const Search *x, const State *s, int from, int turns, int64
 		 * hero's turn after the last: its objective may be met there, and it
 		 * is judged as the next turn begins. */
 		int phases = (s->attacker == x->ai ? 4 * n - 2 : 4 * n) - (s->phase != 0 ? 1 : 0) + (x->goal.active ? 2 : 0);
-		State t = *s;
+		State t;
+		copy_position(&t, s);
 		t.rules = &p;
 		if (p.nodes >= nodes || (deadline > 0 && now_ms() > deadline)) {
 			*cut = 1;
@@ -8583,6 +9391,48 @@ static void read_card(const int32_t *r, Card *c) {
 	c->uses = (int8_t)(((r[23] >> 22) & 127) - 1);
 }
 
+/* Earlier cards which can reserve or spend the same finite book charge. */
+static void find_forecast_pages(Search *x) {
+	if (!x->edition || x->no_draws) return;
+	for (int side = 0; side < 2; side++) {
+		for (int draw = 0; draw < DRAWS; draw++) {
+			const Card *card = &x->hand[side][HAND + draw];
+			if (card->page <= 0 || card->uses < 0 || card->cost < 0) continue;
+			uint32_t prior = 0;
+			for (int i = 0; i < HAND + draw; i++)
+				if (x->hand[side][i].page == card->page && x->hand[side][i].cost >= 0) prior |= 1u << i;
+			x->prior_page[side][draw] = prior;
+			x->forecast_charges[side] |= prior;
+		}
+	}
+}
+
+/* Compare neighbours in both storage and display order so playing either
+ * copy preserves the order of the remaining hand. Distinct book pages are interchangeable here only when each
+ * has its final charge in hand and no specialisation can spare or retain it. */
+static void find_adjacent_copies(Search *x, const State *s) {
+	for (int side = 0; side < 2; side++) {
+		int ranks[HAND];
+		for (int i = 0; i < HAND; i++) ranks[i] = -1;
+		for (int k = 0; k < HAND; k++) {
+			int slot = x->trim[side][k];
+			if (slot < HAND) ranks[slot] = k;
+		}
+		for (int i = 1; i < imin(HAND, s->held[side]); i++) {
+			const Card *card = &x->hand[side][i];
+			if (card->code <= 0 || card->effect == EFF_NONE || card->cost < 0) continue;
+			if (ranks[i] < 0 || ranks[i - 1] < 0 || abs(ranks[i] - ranks[i - 1]) != 1) continue;
+			if (veiled(x, side, i) != veiled(x, side, i - 1)) continue;
+			Card previous = x->hand[side][i - 1];
+			if (!(x->forecast_charges[side] & (3u << (i - 1)))
+				&& previous.page && card->page && previous.uses == 1 && card->uses == 1
+				&& x->spec[side] != SPEC_STHN && x->spec[side] != SPEC_RSFN) previous.page = card->page;
+			if (memcmp(&previous, card, sizeof(Card)) == 0)
+				x->earlier_copies[side][i] = x->earlier_copies[side][i - 1] | (1u << (i - 1));
+		}
+	}
+}
+
 static int read_state(const int32_t *in, int64_t length, Search *x, State *s, int *phase, int *turns, int *develop_now) {
 	if (length < FIXED || in[0] != 12) return 0;
 	int n = in[11];
@@ -8654,11 +9504,14 @@ static int read_state(const int32_t *in, int64_t length, Search *x, State *s, in
 	x->power_worth = in[23];
 	x->guard_worth = in[24];
 	x->tough_worth = in[25];
-	x->leaf_attack = in[26] != 0;
+	x->leaf_attack = in[26] & 1;
 	x->blend = imax(0, imin(in[27], 100));
-	/* Twelve places of each hand, five bits a place, six to a field. */
+	/* The first twelve positions from the back of the displayed hand are
+	 * in the header. Longer hands carry the remaining ranks on their cards. */
+	memset(x->trim, 0xff, sizeof(x->trim));
 	for (int side = 0; side < 2; side++)
-		x->trim[side] = (uint64_t)((uint32_t)in[32 + 2 * side] & 0x3fffffffu) | ((uint64_t)((uint32_t)in[33 + 2 * side] & 0x3fffffffu) << 30);
+		for (int k = 0; k < 12; k++)
+			x->trim[side][k] = (uint32_t)in[32 + 2 * side + k / 6] >> (5 * (k % 6)) & 31;
 	x->card_worth = in[18];
 	x->channel_worth = in[19];
 	s->phase = in[17] != 0;
@@ -8689,14 +9542,15 @@ static int read_state(const int32_t *in, int64_t length, Search *x, State *s, in
 		for (int i = 0; i < s->known[side]; i++)
 			s->graves[side][i] = (int8_t)imax(0, imin(at[HERO_SCALARS + HE_COUNT + HERO_ABILITIES + 1 + i], POOL));
 		x->opening[side] = imax(0, at[21]);
+		x->wear_told[side] = (at[72] >> 30) & 1;
+		x->wear_base[side] = (at[72] & 0xfffff) - 100000;
+		x->wear_from[side] = x->wear_told[side] ? imax(AHEAD, 1 - x->wear_base[side]) : INT32_MAX;
 		for (int i = 0; i < AHEAD; i++) {
 			x->disturbance[side][i] = imax(0, at[56 + i] & 0xfffff);
-			if (x->disturbance[side][i] > 0 && i < MAX_TURNS) x->wears = 1;
+			if (x->disturbance[side][i] > 0) x->wear_from[side] = imin(x->wear_from[side], i);
 			x->regen[side][i] = (int8_t)((at[56 + i] >> 20) & 1);
 			x->extra_draw[side][i] = (int8_t)((at[56 + i] >> 21) & 1);
 		}
-		x->wear_told[side] = (at[72] >> 30) & 1;
-		x->wear_base[side] = (at[72] & 0xfffff) - 100000;
 		/* Its specialisation, by number (0 for none, or one that cannot
 		 * work); the chance a trial of it succeeds, a double in two words;
 		 * and whether the hero has been revived already. */
@@ -8739,7 +9593,11 @@ static int read_state(const int32_t *in, int64_t length, Search *x, State *s, in
 	/* The hand, then the cards that hero will draw, in the order it draws
 	 * them: the engine plays with both heroes' cards open. */
 	for (int side = 0; side < 2; side++) {
-		for (int i = 0; i < SLOTS; i++, at += CARD_FIELDS) read_card(at, &x->hand[side][i]);
+		for (int i = 0; i < SLOTS; i++, at += CARD_FIELDS) {
+			read_card(at, &x->hand[side][i]);
+			int rank = (uint32_t)at[7] >> 16;
+			if (i < HAND && rank > 12 && rank <= HAND) x->trim[side][rank - 1] = (uint8_t)i;
+		}
 		x->dry[side] = x->hand[side][SLOTS - 1].none;
 	}
 	for (int k = 0; k < HE_COUNT; k++, at += HE_FIELDS) {
@@ -8901,6 +9759,8 @@ static int read_state(const int32_t *in, int64_t length, Search *x, State *s, in
 			for (int side = 0; side < 2; side++)
 				for (int k = 0; k < ARMY_KINDS; k++) c->held[side][k] = (uint8_t)((uint32_t)r[67 + side * 4 + k / 4] >> (8 * (k % 4)));
 		} else if (r[66] & 1) s->limit = 1;
+		/* The displayed toughness already includes permanent Overload decay. */
+		u->lethal = (int16_t)(2 * imin((uint32_t)r[43] >> 8, 10000));
 		/* What stands on its hero has already taken its points past the floor. */
 		if (!(u->flags & (F_NO_AFFECT | F_PLANE)))
 			for (int k = 0; k < HE_COUNT; k++) {
@@ -8936,6 +9796,12 @@ static int read_state(const int32_t *in, int64_t length, Search *x, State *s, in
 		e->power = (int16_t)r[5];
 		e->health = (int16_t)r[6];
 		e->lethal = (int16_t)r[7];
+		/* This penalty is applied after the floor of one. Include it in raw
+		 * toughness on entry, and release it when its enchantment comes off. */
+		Unit *holder = &s->u[e->unit];
+		holder->lethal += e->lethal;
+		holder->raw += e->lethal;
+		holder->worn_lethal += e->lethal;
 		e->flags = (uint32_t)r[8] & 0x0fffffffu & ~(uint32_t)(F_RESTING | F_SICK | F_PLANE | F_ATTACKING | F_HIT | F_DISSIPATES);
 		e->ready = r[9];
 		e->resting = r[10];
@@ -8949,11 +9815,96 @@ static int read_state(const int32_t *in, int64_t length, Search *x, State *s, in
 		e->kept = (int8_t)((r[11] >> 11) & 1);
 		e->regen = (int8_t)imax(0, imin(r[12], 101));
 	}
+	if (!x->goal.active) {
+		for (int side = 0; side < 2; side++)
+			for (int slot = 0; slot < SLOTS; slot++) {
+				const Card *c = &x->hand[side][slot];
+				if (slot < HAND && slot >= s->held[side]) continue;
+				if (c->effect == EFF_DAMAGE && c->cost >= 0 && c->variable && !c->own
+						&& (c->aim == AIM_ANY || c->aim == AIM_HERO))
+					x->scaling_slots[side][x->scaling_count[side]++] = (uint8_t)slot;
+			}
+	}
+	find_forecast_pages(x);
+	if (*phase == 5 || *phase == 7 || *phase == 9) find_adjacent_copies(x, s);
+	if ((*phase == 5 || *phase == 7) && s->phase == 1 && s->attacker != x->ai)
+		x->counterattackers = evasive_blockers(s, x->ai);
 	return 1;
 }
 
 /* Fills `out` (room for 8 + 3 * MAX_UNITS integers); returns its length. */
-static int run_search(const int32_t *in, int64_t length, int32_t *out) {
+/* The forced-win proof and the ordinary move search can start from the same
+ * position. The proof owns its result and the search that writes it. The
+ * ordinary reader may stop as soon as an exact winning line is available. */
+typedef struct {
+	Move move, line[MAX_LINE];
+	int length, won, settled, cut, unknown;
+	int64_t nodes;
+} FirstProof;
+
+typedef struct {
+	Search search;
+	State board;
+	FirstProof result;
+	double deadline;
+	atomic_int status;
+	SearchThread thread;
+} ProofWorker;
+
+static void read_first_proof(const Search *x, const State *s, double deadline, FirstProof *result) {
+	int share = x->prove_share > 0 ? x->prove_share : 50;
+	result->won = prove_first(x, s, x->prove_from, x->prove, x->budget * share / 100, deadline,
+		&result->move, result->line, &result->length, &result->nodes, &result->settled, &result->cut, &result->unknown);
+}
+
+static void read_proof_on_worker(void *arg) {
+	ProofWorker *worker = (ProofWorker *)arg;
+	read_first_proof(&worker->search, &worker->board, worker->deadline, &worker->result);
+	atomic_store_explicit(&worker->status, worker->result.won ? PROOF_WON : PROOF_FINISHED, memory_order_release);
+}
+
+static ProofWorker *start_proof_worker(const Search *x, const State *s, double deadline) {
+	ProofWorker *worker = (ProofWorker *)calloc(1, sizeof(*worker));
+	if (!worker) return NULL;
+	worker->search = *x;
+	worker->board = *s;
+	worker->board.rules = &worker->search;
+	worker->deadline = deadline;
+	atomic_init(&worker->status, PROOF_RUNNING);
+	if (launch_helper(&worker->thread, x, read_proof_on_worker, worker)) return worker;
+	free(worker);
+	return NULL;
+}
+
+static void finish_proof_worker(ProofWorker *worker, FirstProof *result) {
+	join_helper(&worker->thread);
+	*result = worker->result;
+	free(worker);
+}
+
+static int write_first_proof(const Search *x, const State *s, const FirstProof *p, int steps, int64_t ordinary, int32_t *out) {
+	out[0] = WIN / 1000 * 1000 + (MAX_TURNS - imin(p->won, MAX_TURNS)) * 1000;
+	out[1] = p->move.kind;
+	out[2] = p->move.a;
+	out[3] = p->move.b;
+	out[4] = p->move.c;
+	out[5] = (int32_t)imin64(p->nodes + ordinary, 2000000000);
+	out[6] = 0;
+	out[7] = steps + (((s->attacker == x->ai ? 4 * p->won - 2 : 4 * p->won) - (s->phase != 0 ? 1 : 0)) << 8)
+		+ (p->won << 16) + (imin(p->settled, 15) << 20);
+	out[8] = p->length;
+	for (int k = 0; k < p->length; k++) {
+		out[9 + k * 4] = p->line[k].kind;
+		out[10 + k * 4] = p->line[k].a;
+		out[11 + k * 4] = p->line[k].b;
+		out[12 + k * 4] = p->line[k].c;
+	}
+	out[9 + p->length * 4] = RESULT_PROVEN | RESULT_TERMINAL | RESULT_COVERED | RESULT_EXACT;
+	out[10 + p->length * 4] = atomic_load(&x->activity->peak);
+	return 11 + p->length * 4;
+}
+
+static int run_search_group(const int32_t *in, int64_t length, int32_t *out, const SearchGroup *group) {
 	Search x;
 	State s;
 	int phase, turns, develop_now;
@@ -9193,6 +10144,7 @@ static int run_search(const int32_t *in, int64_t length, int32_t *out) {
 		return 2;
 	}
 	if (phase == 5) {
+		if (group && group->extra) turns = imin(12, in[4]);
 		/* The command the rules themselves say is best, searched here. */
 		Move best, kept[MAX_LINE];
 		int kept_length = 0;
@@ -9202,40 +10154,35 @@ static int run_search(const int32_t *in, int64_t length, int32_t *out) {
 		best.b = 0;
 		best.c = 0;
 		int steps = imax(2, imin(in[16], MAX_COMMANDS));
-		double began = in[28] > 0 ? now_ms() : 0;
+		double began = group ? group->start : (in[28] > 0 ? now_ms() : 0);
 		/* The moment the whole call ends, whatever it is reading by then:
 		 * the proof, the choice, the readings that check it and the guard's
 		 * each have a part of the time up to it and none runs past it. */
 		double until = in[28] > 0 ? began + (double)in[28] : 0;
 		/* A win that cannot be stopped is looked for first, and taken. */
-		int settled = 0, cut = 0, unknown = 0;
+		x.group = group;
+		x.worker_limit = group ? group->workers : imax(1, (in[26] >> 8) & 255);
+		x.follow_frame_limit = (in[26] & 2) != 0;
+		if (x.worker_limit > 1) {
+			int available = affinity_processors();
+			if (available > 0) x.worker_limit = imin(x.worker_limit, available);
+		}
+		SearchActivity activity;
+		atomic_init(&activity.active, 1);
+		atomic_init(&activity.peak, 1);
+		x.activity = group ? group->activity : &activity;
+		FirstProof proof = {0};
+		ProofWorker *worker = NULL;
 		if (x.prove > 0 && x.prove_from <= x.prove) {
-			Move line[MAX_LINE];
-			int line_length = 0;
-			int64_t read = 0;
 			int share = x.prove_share > 0 ? x.prove_share : 50;
-			double part_end = in[28] > 0 ? began + (double)in[28] * share / 100.0 : 0;
-			int won = prove_first(&x, &s, x.prove_from, x.prove, x.budget * share / 100, part_end, &best, line, &line_length, &read, &settled, &cut, &unknown);
-			if (won) {
-				out[0] = WIN / 1000 * 1000 + (MAX_TURNS - imin(won, MAX_TURNS)) * 1000;
-				out[1] = best.kind;
-				out[2] = best.a;
-				out[3] = best.b;
-				out[4] = best.c;
-				out[5] = (int32_t)imin64(read, 2000000000);
-				out[6] = 0;
-				out[7] = steps + (((s.attacker == x.ai ? 4 * won - 2 : 4 * won) - (s.phase != 0 ? 1 : 0)) << 8) + (won << 16);
-				out[8] = line_length;
-				for (int k = 0; k < line_length; k++) {
-					out[9 + k * 4] = line[k].kind;
-					out[9 + k * 4 + 1] = line[k].a;
-					out[9 + k * 4 + 2] = line[k].b;
-					out[9 + k * 4 + 3] = line[k].c;
-				}
-				out[9 + line_length * 4] = RESULT_PROVEN | RESULT_TERMINAL | RESULT_COVERED | RESULT_EXACT;
-				return 10 + line_length * 4;
+			double proof_deadline = in[28] > 0 ? began + (double)in[28] * share / 100.0 : 0;
+			if (in[28] > 0 && x.worker_limit > 1 && x.budget >= 30000)
+				worker = start_proof_worker(&x, &s, proof_deadline);
+			if (worker) x.proof_status = &worker->status;
+			else {
+				read_first_proof(&x, &s, proof_deadline, &proof);
+				if (proof.won) return write_first_proof(&x, &s, &proof, steps, 0, out);
 			}
-			proved = read;
 		}
 		/* Positions already read are kept through the whole search, a table
 		 * about as large as the search is allowed to grow. The time allowed
@@ -9251,6 +10198,10 @@ static int run_search(const int32_t *in, int64_t length, int32_t *out) {
 		/* A command deeper each pass while the budget holds, keeping the last
 		 * whole answer rather than half of a deeper one. */
 		int value = 0, reached = 0;
+		/* A fixed-node replay stays deterministic. A timed decision can spend
+		 * spare cores comparing alternative commands at the same depth. */
+		x.root_workers = in[28] > 0 ? x.worker_limit : 1;
+		if (group && !group->extra && x.follow_frame_limit) x.root_workers = group->total;
 		for (int depth = 1; depth <= steps; depth++) {
 			Move found = best;
 			x.aborted = 0;
@@ -9265,6 +10216,17 @@ static int run_search(const int32_t *in, int64_t length, int32_t *out) {
 			for (int k = 0; k < kept_length; k++) kept[k] = line[k];
 			if (x.nodes >= x.budget) break;
 		}
+		x.root_workers = 0;
+		if (worker) {
+			x.proof_status = NULL;
+			finish_proof_worker(worker, &proof);
+			if (proof.won) {
+				free(x.table);
+				return write_first_proof(&x, &s, &proof, steps, x.nodes, out);
+			}
+		}
+		int settled = proof.settled, cut = proof.cut, unknown = proof.unknown;
+		proved = proof.nodes;
 		/* With most of the budget still unspent the position is a small one,
 		 * and it is read again a whole turn of each hero further, and again:
 		 * a win or a loss that lies past the usual reach is found this way.
@@ -9273,9 +10235,28 @@ static int run_search(const int32_t *in, int64_t length, int32_t *out) {
 		/* A further reading may find a win the usual reading cannot prove;
 		 * that win, shown to be none, leaves room for one more pass. */
 		int verdict = 0, exact = 0;
+		int max_phases = imin(in[31] & 255, 12);
+		/* When one enemy can kill our hero on its next attack, an extension
+		 * ending after our own turn can reward spending the last blocker.
+		 * Compare the positions after both heroes have had their turn. */
+		int extension = 2;
+		if (!x.goal.active && turns == 4 && s.phase == 0 && s.attacker == x.ai) {
+			for (int i = 0; i < s.n; i++) {
+				const Unit *foe = &s.u[i];
+				if (foe->owner != x.ai && !(foe->flags & (F_DEAD | F_GONE | F_PLANE | F_NO_ATTACK))
+				    && foe->power >= s.health[x.ai]) {
+					extension = 4;
+					break;
+				}
+			}
+		}
 		for (int pass = 0; pass < 2; pass++) {
-			for (int phases = imax(imax(1, turns), x.far) + 2; phases <= imin(in[31] & 255, 12); phases += 2) {
-				if (reached < steps || x.aborted || x.nodes * spare >= x.budget || value >= WIN || value <= -WIN) break;
+			int confirm_pass = 0;
+			for (int phases = imax(imax(1, turns), x.far) + extension; phases <= max_phases; phases += extension) {
+				/* Include work saved at repeated leaves when deciding whether the
+				 * original tree is small enough for another extension. */
+				if (reached < steps || x.aborted || value >= WIN || value <= -WIN) break;
+				if (!confirm_pass && (x.nodes + x.reused_leaf_nodes) * spare >= x.budget) break;
 				Move found = best;
 				Move line[MAX_LINE];
 				int line_length = 0;
@@ -9289,6 +10270,12 @@ static int run_search(const int32_t *in, int64_t length, int32_t *out) {
 					x.aborted = 0;
 					break;
 				}
+				/* Two extra phases see one more hero's turn. If passing now
+				 * outranks a block that saved health, keep the block and its
+				 * line until a reading that includes the reply finishes. */
+				confirm_pass = !x.goal.active && (phases - turns) % 4 == 2 && phases + 2 <= max_phases
+					&& v > -WIN && v < WIN && gives_up_block(&x, &s, &best, &found);
+				if (confirm_pass) continue;
 				best = found;
 				value = v;
 				kept_length = imin(line_length, MAX_LINE);
@@ -9524,7 +10511,8 @@ static int run_search(const int32_t *in, int64_t length, int32_t *out) {
 		if (value >= WIN || value <= -WIN) result |= RESULT_TERMINAL;
 		if (x.aborted) result |= RESULT_ABORTED;
 		out[9 + kept_length * 4] = result | verdict;
-		return 10 + kept_length * 4;
+		out[10 + kept_length * 4] = atomic_load(&x.activity->peak);
+		return 11 + kept_length * 4;
 	}
 	if (phase == 2 || phase == 3 || phase == 4) {
 		/* The fight, the turn's end, or a list of commands played out: all
@@ -9663,6 +10651,80 @@ static int run_search(const int32_t *in, int64_t length, int32_t *out) {
 	return 5 + count;
 }
 
+/* On wide machines keep an ordinary comparison progressing while the
+ * remaining workers try a reply one full turn of each hero further out.
+ * Both groups must finish before their results are inspected. */
+typedef struct {
+	SearchGroup group;
+	int32_t *input;
+	int64_t length;
+	int count;
+	int32_t result[11 + 4 * MAX_LINE];
+} ReplyRead;
+
+static void read_long_reply(void *data) {
+	ReplyRead *reply = (ReplyRead *)data;
+	reply->count = run_search_group(reply->input, reply->length, reply->result, &reply->group);
+}
+
+static int run_search(const int32_t *in, int64_t length, int32_t *out) {
+	int total = length >= FIXED ? (in[26] >> 8) & 255 : 0;
+	if (total < REPLY_TEAM_MIN || in[3] != 5 || !(in[26] & 4) || in[28] < 500 || in[5] < 1000000
+			|| in[4] < 1 || in[4] > MAX_TURNS || in[16] < 2 || in[16] > MAX_COMMANDS
+			|| (in[31] & (1 << 27)) || (in[31] & 255) < in[4] + 4)
+		return run_search_group(in, length, out, NULL);
+	int available = affinity_processors();
+	if (available > 0) total = imin(total, available);
+	if (in[26] & 2) total = imin(total, atomic_load_explicit(&frame_worker_limit, memory_order_relaxed));
+	if (total < REPLY_TEAM_MIN) return run_search_group(in, length, out, NULL);
+
+	SearchActivity activity;
+	atomic_init(&activity.active, 1);
+	atomic_init(&activity.peak, 1);
+	atomic_int stop_reply;
+	atomic_init(&stop_reply, 0);
+	SearchGroup primary = { &activity, &stop_reply, PRIMARY_WORKERS, total, 0, now_ms() };
+	ReplyRead reply = {0};
+	reply.group = primary;
+	reply.group.workers = total - PRIMARY_WORKERS;
+	reply.group.extra = 1;
+	reply.length = length;
+	reply.input = (int32_t *)malloc((size_t)length * sizeof(*in));
+	if (!reply.input) return run_search_group(in, length, out, NULL);
+	memcpy(reply.input, in, (size_t)length * sizeof(*in));
+	reply.input[4] += 4;
+	reply.input[16] = imin(MAX_COMMANDS, in[16] * reply.input[4] / in[4]);
+	/* The primary already checks the current position for a forced win. */
+	reply.input[22] &= ~(15 << 16);
+	SearchThread thread;
+	if (!start_helper(&thread, &activity, total, (in[26] & 2) != 0, 1, read_long_reply, &reply)) {
+		free(reply.input);
+		return run_search_group(in, length, out, NULL);
+	}
+
+	int count = run_search_group(in, length, out, &primary);
+	int proven = count > 10 && (out[9 + 4 * out[8]] & 7) == RESULT_PROVEN;
+	if (proven) atomic_store_explicit(&stop_reply, 1, memory_order_relaxed);
+	join_helper(&thread);
+	if (count > 10 && reply.count > 10) {
+		int32_t *other = reply.result;
+		int deep_proof = (other[9 + 4 * other[8]] & 7) == RESULT_PROVEN;
+		int complete = !other[6] && (other[7] & 255) >= reply.input[16];
+		int normal = imax(in[4], (out[7] >> 8) & 255);
+		int deep = imax(reply.input[4], (other[7] >> 8) & 255);
+		int positions = (int)imin64((int64_t)out[5] + other[5], 2000000000);
+		if (!proven && (deep_proof || (complete && deep >= normal + 4))) {
+			count = reply.count;
+			memcpy(out, other, (size_t)count * sizeof(*out));
+			if (!deep_proof) out[7] = (out[7] & ~(255 << 8)) | (deep << 8);
+		}
+		out[5] = positions;
+		out[10 + 4 * out[8]] = atomic_load(&activity.peak);
+	}
+	free(reply.input);
+	return count;
+}
+
 /* ------------------------------------------------------------ Godot binding */
 
 static GDExtensionInterfaceGetProcAddress get_proc;
@@ -9679,8 +10741,8 @@ static GDExtensionInterfaceClassdbUnregisterExtensionClass unregister_class;
 static GDExtensionPtrConstructor pba_new;
 static GDExtensionPtrDestructor pba_free, string_name_free, string_free;
 static GDExtensionPtrBuiltInMethod pba_size, pba_resize;
-static GDExtensionTypeFromVariantConstructorFunc pba_from_variant;
-static GDExtensionVariantFromTypeConstructorFunc variant_from_pba;
+static GDExtensionTypeFromVariantConstructorFunc pba_from_variant, int_from_variant;
+static GDExtensionVariantFromTypeConstructorFunc variant_from_pba, variant_from_int;
 
 /* Opaque storage for builtin types (64-bit builds: PackedByteArray 16 bytes,
  * StringName and String 8). */
@@ -9696,7 +10758,7 @@ typedef struct { _Alignas(8) uint8_t data[8]; } Text;
  * game crashed as the computer began to think (#156). Elsewhere than on
  * Windows it reads on a thread of its own with room enough; should that
  * thread not start, on the caller's. */
-#define SEARCH_STACK ((size_t)16 << 20)
+
 #if !defined(_WIN32)
 typedef struct { const int32_t *in; int64_t length; int32_t *out; int count; } SearchCall;
 
@@ -9780,6 +10842,47 @@ static void call(void *method, GDExtensionClassInstancePtr instance, const GDExt
 	pba_free(&out);
 }
 
+static void affinity_ptrcall(void *method, GDExtensionClassInstancePtr instance, const GDExtensionConstTypePtr *args, GDExtensionTypePtr ret) {
+	(void)method; (void)instance; (void)args;
+	*(int64_t *)ret = affinity_processors();
+}
+
+static void affinity_call(void *method, GDExtensionClassInstancePtr instance, const GDExtensionConstVariantPtr *args, GDExtensionInt count,
+		GDExtensionVariantPtr ret, GDExtensionCallError *error) {
+	(void)method; (void)instance; (void)args;
+	error->error = count ? GDEXTENSION_CALL_ERROR_TOO_MANY_ARGUMENTS : GDEXTENSION_CALL_OK;
+	error->expected = 0;
+	int64_t available = affinity_processors();
+	variant_from_int(ret, &available);
+}
+
+static void frame_limit_ptrcall(void *method, GDExtensionClassInstancePtr instance,
+		const GDExtensionConstTypePtr *args, GDExtensionTypePtr ret) {
+	(void)method; (void)instance; (void)ret;
+	int64_t limit = *(const int64_t *)args[0];
+	atomic_store_explicit(&frame_worker_limit, limit < 1 ? 1 : limit > 255 ? 255 : (int)limit, memory_order_relaxed);
+}
+
+static void frame_limit_call(void *method, GDExtensionClassInstancePtr instance, const GDExtensionConstVariantPtr *args,
+		GDExtensionInt count, GDExtensionVariantPtr ret, GDExtensionCallError *error) {
+	if (count != 1) {
+		error->error = count < 1 ? GDEXTENSION_CALL_ERROR_TOO_FEW_ARGUMENTS : GDEXTENSION_CALL_ERROR_TOO_MANY_ARGUMENTS;
+		error->expected = 1;
+		return;
+	}
+	if (variant_get_type(args[0]) != GDEXTENSION_VARIANT_TYPE_INT) {
+		error->error = GDEXTENSION_CALL_ERROR_INVALID_ARGUMENT;
+		error->argument = 0;
+		error->expected = GDEXTENSION_VARIANT_TYPE_INT;
+		return;
+	}
+	int64_t limit;
+	int_from_variant(&limit, (GDExtensionVariantPtr)args[0]);
+	const GDExtensionConstTypePtr values[] = { &limit };
+	frame_limit_ptrcall(method, instance, values, ret);
+	error->error = GDEXTENSION_CALL_OK;
+}
+
 static Name class_name, parent_name, empty_name;
 static Text empty_text;
 
@@ -9833,6 +10936,28 @@ static void initialize(void *userdata, GDExtensionInitializationLevel level) {
 	register_method(library, &class_name, &mi);
 	string_name_free(&method);
 	string_name_free(&argument);
+	string_name_new(&method, "affinity_processors", 0);
+	ret_info = info(GDEXTENSION_VARIANT_TYPE_INT, &empty_name);
+	mi.call_func = affinity_call;
+	mi.ptrcall_func = affinity_ptrcall;
+	mi.argument_count = 0;
+	mi.arguments_info = NULL;
+	mi.arguments_metadata = NULL;
+	register_method(library, &class_name, &mi);
+	string_name_free(&method);
+	string_name_new(&method, "set_frame_worker_limit", 0);
+	string_name_new(&argument, "workers", 0);
+	args[0] = info(GDEXTENSION_VARIANT_TYPE_INT, &argument);
+	mi.call_func = frame_limit_call;
+	mi.ptrcall_func = frame_limit_ptrcall;
+	mi.has_return_value = 0;
+	mi.return_value_info = NULL;
+	mi.argument_count = 1;
+	mi.arguments_info = args;
+	mi.arguments_metadata = meta;
+	register_method(library, &class_name, &mi);
+	string_name_free(&argument);
+	string_name_free(&method);
 }
 
 static void deinitialize(void *userdata, GDExtensionInitializationLevel level) {
@@ -9880,8 +11005,10 @@ EL_EXPORT GDExtensionBool el_duel_brain_init(GDExtensionInterfaceGetProcAddress 
 	string_name_free(&size_name);
 	string_name_free(&resize_name);
 	pba_from_variant = get_to_type(GDEXTENSION_VARIANT_TYPE_PACKED_BYTE_ARRAY);
+	int_from_variant = get_to_type(GDEXTENSION_VARIANT_TYPE_INT);
 	variant_from_pba = get_from_type(GDEXTENSION_VARIANT_TYPE_PACKED_BYTE_ARRAY);
-	if (!pba_new || !pba_free || !string_name_free || !string_free || !pba_size || !pba_resize || !pba_from_variant || !variant_from_pba)
+	variant_from_int = get_from_type(GDEXTENSION_VARIANT_TYPE_INT);
+	if (!pba_new || !pba_free || !string_name_free || !string_free || !pba_size || !pba_resize || !pba_from_variant || !variant_from_pba || !int_from_variant || !variant_from_int)
 		return 0;
 	r_initialization->minimum_initialization_level = GDEXTENSION_INITIALIZATION_SCENE;
 	r_initialization->userdata = NULL;
