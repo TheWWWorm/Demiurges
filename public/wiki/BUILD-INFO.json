@@ -18,8 +18,8 @@
   "translation_keys": 17,
   "files": {
     "data/en/index.json": {
-      "bytes": 372966,
-      "sha256": "3af5cbce3f71b2c2bc2cc7bacb8648b261c3eda98a32be1b48941e65e4f3b464"
+      "bytes": 373295,
+      "sha256": "50865aa7ffd1ce9e1a4125e886e8bc5fced6ab27915b0fa7a0e337f628b083fe"
     },
     "data/en/pages/abilities.json": {
       "bytes": 2238,
@@ -1550,8 +1550,8 @@
       "sha256": "29d7f69f3729513c118ad1df9bb8e225b4479e5c4cb394c320814229a8f4128c"
     },
     "data/en/pages/cut-mission-evil-dale.json": {
-      "bytes": 11769,
-      "sha256": "18a65f972b1842bf07332f6d31a4707c21dcc9199854eac3eaf0b917db1eb481"
+      "bytes": 12114,
+      "sha256": "73f40d9def744dcc281b37d63a9680eaa4fefeefc5c09e1a05ea61ba86036202"
     },
     "data/en/pages/cut-mission-first-strike.json": {
       "bytes": 1759,
@@ -1962,8 +1962,8 @@
       "sha256": "d18c0bf1a09af1788f0ca5427f86b6ecbb3cc60bc9a08d9da6d1b068de46ddaa"
     },
     "data/ru/index.json": {
-      "bytes": 656194,
-      "sha256": "bef69f9937803c3311a173bbe2c82260a49ee3e471f34acf9b852ec76fa5b444"
+      "bytes": 656842,
+      "sha256": "4d4702c8e0bde05decf10ad80e09010e64cad439136e3f57144896ed74714385"
     },
     "data/ru/pages/abilities.json": {
       "bytes": 3685,
@@ -3494,8 +3494,8 @@
       "sha256": "78078f948dde8630be4484b1ffffb8fbdd5ed94520c340a4f1890c6418efb34d"
     },
     "data/ru/pages/cut-mission-evil-dale.json": {
-      "bytes": 16298,
-      "sha256": "3738cd6691ab4b5e1eeab77e1259b3915ff58129daefd3240a06bc53aa1ac9d1"
+      "bytes": 16962,
+      "sha256": "553e4efd4f915db64f8aa70b52e7bda4b292dcb895c1375b69d1f55b2b41ef20"
     },
     "data/ru/pages/cut-mission-first-strike.json": {
       "bytes": 2636,
@@ -6078,5 +6078,5 @@
       "sha256": "d1643e0b6d8246fbc915580e40d63d6e586c44fe3d26239bd3dfb4f37b19512d"
     }
   },
-  "bytes": 14039112
+  "bytes": 14041098
 }

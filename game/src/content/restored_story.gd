@@ -63,12 +63,12 @@ const STORY := {
 				"Снова Лес! Но листва здесь шепчет тревожно. Кто-то ходит по этим тропам изо дня в день – одним и тем же кругом, как часовой, позабывший, что охраняет."]]},
 		{"id": "glazzz", "trigger": {"kind": "meet", "who": "BLevHero2", "r": 11}, "lines": [
 			["BLevHero2", "Brother? No... You smell of the Forest, but you are not of our clan. Many moons ago I came here by the same Way and found no way out. Now this path is mine, and no one shall walk it. So wills the Power of the Forest!",
-				"Брат? Нет... Ты пахнешь Лесом, но ты не из нашего клана. Много лун назад я пришла сюда тем же Путем и не нашла выхода. Теперь эта тропа – моя, и никто не пройдет по ней. Так велит Сила Леса!"],
-			["hero", "Sister, come to your senses! The dale has taken your mind. I do not want this battle – but there is no way back for me.",
-				"Сестра, опомнись! Долина отняла у тебя разум. Я не хочу этой битвы – но и назад мне дороги нет."]]},
+				"Брат? Нет... Ты пахнешь Лесом, но ты не из нашего клана. Много лун назад я пришел сюда тем же Путем и не нашла выхода. Теперь эта тропа – моя, и никто не пройдет по ней. Так велит Сила Леса!"],
+			["hero", "Brother, come to your senses! The dale has taken your mind. I do not want this battle – but there is no way back for me.",
+				"Брат, опомнись! Долина отняла у тебя разум. Я не хочу этой битвы – но и назад мне дороги нет."]]},
 		{"id": "glazzz_beaten", "trigger": {"kind": "beaten", "who": "BLevHero2"}, "lines": [
-			["hero", "Forgive me, sister. May the Forest take you back and give you the peace the dale took away.",
-				"Прости, сестра. Пусть Лес примет тебя и вернет тебе покой, которого лишила тебя долина."]]},
+			["hero", "Forgive me, brother. May the Forest take you back and give you the peace the dale took away.",
+				"Прости, брат. Пусть Лес примет тебя и вернет тебе покой, которого лишила тебя долина."]]},
 		{"id": "warp", "trigger": {"kind": "meet", "who": "BLevHero5", "r": 13}, "lines": [
 			["BLevHero5", "So here is the Chosen One! I have long waited for you at the pass. All who walked this dale have perished, but I live – for the flame of Chaos is stronger than any ancient magic. The secret of the ruins will be mine, and no forest upstart will carry it out of here!",
 				"Вот и Избранный! Давно я жду тебя у перевала. Все, кто шел по этой долине, сгинули, а я жив – потому что пламя Хаоса сильнее любой древней магии. Тайна руин достанется мне, и ни один лесной выскочка не вынесет ее отсюда!"]]},

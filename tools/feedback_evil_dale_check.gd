@@ -1,0 +1,178 @@
+extends SceneTree
+## Player feedback on Evil Dale: "the mission seems too easy" and "Glazzz
+## talks like a woman".
+##
+## - The original program gives every BLevHero hero on the mission's map the
+##   guard area of a neutral creature (the ring around it), so no rival can be
+##   walked past; elsewhere neutral heroes still guard nothing.
+## - Every rival but Glazzz attacks the Chosen One within its sight (Glazzz
+##   within his sight less three tiles, and otherwise walks his loop); none
+##   is within reach of the Chosen One's glade at the start.
+## - Glazzz is a man: his figure, textures, portrait and voice are those of
+##   GreenEggMale4 (only the template's unused Gender column says F), his
+##   battle voice is the male Vital set, and his lines in the remake's story
+##   speak of him as a man in both languages.
+##
+##   godot --headless --path game --script ../tools/feedback_evil_dale_check.gd
+##
+## Needs the first game's files (user://profiles.json); skipped without them.
+## Saves and settings are not touched.
+
+var failures := 0
+
+func check(ok: bool, what: String) -> void:
+	print(("PASS: " if ok else "FAIL: ") + what)
+	if not ok: failures += 1
+
+func _initialize() -> void:
+	_run.call_deferred()
+
+func _run() -> void:
+	var paths: Variant = JSON.parse_string(FileAccess.get_file_as_string("user://profiles.json")) if FileAccess.file_exists("user://profiles.json") else null
+	if paths is not Dictionary or not paths.has("el1"):
+		print("SKIP: no el1 files configured (user://profiles.json)")
+		quit(0)
+		return
+	var profile := ELProfile.new()
+	if not profile.mount("el1", str(paths["el1"])):
+		print("SKIP: el1 files could not be mounted")
+		quit(0)
+		return
+	_glazzz_is_male(profile)
+	_rivals(profile)
+	_elsewhere(profile)
+	print("FEEDBACK EVIL DALE: %d failure(s)" % failures)
+	quit(int(failures > 0))
+
+func _glazzz_is_male(profile: ELProfile) -> void:
+	var templates := profile.table("HeroTemplates")
+	var glazzz: Dictionary = templates.get(ELRestoredMissions.PATROLLER, {})
+	var model: Dictionary = templates.get("GreenEggMale4", {})
+	check(not glazzz.is_empty() and not model.is_empty(), "the files have Glazzz and GreenEggMale4")
+	if glazzz.is_empty() or model.is_empty(): return
+	var same := true
+	for column: String in ["Model", "Texture", "Face", "SndDir", "AdvMod", "AdvTex1"]:
+		if str(glazzz.get(column, "")) != str(model.get(column, "")): same = false
+	check(same, "Glazzz wears GreenEggMale4's figure, textures, portrait and voice")
+	check(str(glazzz.SndDir) == "GreenHeroEggMale" and str(model.get("Gender", "")) == "M", "his voice set is the male one (%s)" % glazzz.SndDir)
+	check(not ELAudio.sound(profile, "Creatures/%s/voice/hit01.wav" % glazzz.SndDir) == null, "the voice set is in the files")
+	var lines: Array = []
+	for scenario: String in ELRestoredStory.STORY:
+		for beat: Dictionary in ELRestoredStory.STORY[scenario]:
+			if not str(beat.id).begins_with("glazzz"): continue
+			for line: Array in beat.lines: lines.append(" ".join(line.slice(1)))
+	check(lines.size() == 3, "Glazzz's meeting and defeat have their lines (%d)" % lines.size())
+	var feminine := RegEx.create_from_string("(?i)\\b(sister|she|her|herself)\\b|сестр|пришла|сама\\b")
+	var found := lines.filter(func(text: String) -> bool: return feminine.search(text) != null)
+	check(found.is_empty(), "the lines speak of Glazzz as a man in both languages")
+	check(lines.any(func(text: String) -> bool: return text.contains("пришел")) and lines.any(func(text: String) -> bool: return text.contains("Brother")), "he says he came (masculine) and is called brother")
+
+func _dale_session(profile: ELProfile) -> Array:
+	var entry := {}
+	for found: Dictionary in ELSingleScenario.catalog(profile):
+		if found.get("restored", "") == ELRestoredMissions.EVIL_DALE: entry = found
+	if entry.is_empty(): return []
+	var map := ELFirstRandomMap.new().generate(profile, entry.random_map)
+	if map == null: return []
+	var state := ELAdventureSession.new()
+	if not state.start(map, 2, ELFirstRandomMap.seed_for_config(entry.random_map), "", 1, false, true): return []
+	var director := ELAdventureDirector.new()
+	if not director.build(state): return []
+	return [state, director]
+
+func _rivals(profile: ELProfile) -> void:
+	var made := _dale_session(profile)
+	check(not made.is_empty(), "the dale starts")
+	if made.is_empty(): return
+	var state: ELAdventureSession = made[0]
+	var director: ELAdventureDirector = made[1]
+	var chosen := ELRestoredMissions.chosen_one(state)
+	var rivals := {}
+	for item: Dictionary in state.objects.values():
+		if item.get("type") == "hero" and ELRestoredMissions.RIVALS.has(str(item.name)): rivals[str(item.name)] = item
+	check(rivals.size() == 5 and not chosen.is_empty(), "the Chosen One and the five rivals are on the map")
+	if rivals.size() != 5 or chosen.is_empty(): return
+	var start := Vector2i(chosen.x, chosen.y)
+	# Template strength, as the files give it.
+	var templates := profile.table("HeroTemplates")
+	for name: String in rivals:
+		var rival: Dictionary = rivals[name]
+		var row: Dictionary = templates[name]
+		check(int(rival.level) == int(row.Level) and rival.cards == ELCatalog.deck(profile, str(row.StartDeck)) and str(rival.specialization) == str(row.Specialization) and rival.skills == ELHeroSkills.from_template(profile, row),
+			"%s has his template's level %d, deck %s, specialisation and skills" % [name, int(row.Level), row.StartDeck])
+	# Guard areas.
+	for name: String in rivals:
+		var rival: Dictionary = rivals[name]
+		var zone: Dictionary = director.interception.zones.get(int(rival.uid), {})
+		var ring: Array = Array(zone.get("cells", [])).filter(func(cell: Vector2i) -> bool: return cell != Vector2i(rival.x, rival.y))
+		check(not zone.is_empty() and zone.origin == Vector2i(rival.x, rival.y) and ring.size() >= 3 and ring.size() <= 8, "%s guards the ring around him (%d tiles)" % [name, ring.size()])
+		var beside: Vector2i = ring[0] if not ring.is_empty() else Vector2i(-1, -1)
+		check(director.interception.enemies(state, chosen, beside).has(int(rival.uid)), "the Chosen One beside %s is stopped by him" % name)
+	var snapshot := director.interception.snapshot()
+	check(director.interception.restore(snapshot, state, director.grid) and director.interception.zones.size() == snapshot.size(), "a save keeps the rivals' guard areas")
+	# No rival is within reach of the glade at the start.
+	for name: String in rivals:
+		var rival: Dictionary = rivals[name]
+		var reach := float(ELFog.sight_radius(rival)) - (3.0 if name == ELRestoredMissions.PATROLLER else 0.0)
+		check(Vector2(start).distance_to(Vector2(rival.x, rival.y)) >= reach, "%s cannot see the Chosen One's glade (%.0f tiles, sight %d)" % [name, Vector2(start).distance_to(Vector2(rival.x, rival.y)), ELFog.sight_radius(rival)])
+	ELFirstAI.scripts(director)
+	for name: String in rivals:
+		if name == ELRestoredMissions.PATROLLER: continue
+		check(rivals[name].get("strategy_order", {}).is_empty(), "%s holds his place while the Chosen One is far" % name)
+	# The Chosen One comes into each rival's sight in turn.
+	for name: String in ["BLevHero1", "BLevHero3", "BLevHero4", "BLevHero5"]:
+		var rival: Dictionary = rivals[name]
+		var spot := _spot_near(director, rival, 6)
+		check(spot.x >= 0, "there is open ground six tiles from %s" % name)
+		if spot.x < 0: continue
+		chosen.x = spot.x
+		chosen.y = spot.y
+		director.grid.update_actor(chosen)
+		ELFirstAI.scripts(director)
+		check(int(rival.get("strategy_order", {}).get("use", -1)) == int(chosen.uid), "%s attacks the Chosen One in his sight" % name)
+	# Glazzz waits until the Chosen One is three tiles inside his sight.
+	var glazzz: Dictionary = rivals[ELRestoredMissions.PATROLLER]
+	var sight := ELFog.sight_radius(glazzz)
+	var far := _spot_near(director, glazzz, sight - 1)
+	if far.x >= 0:
+		chosen.x = far.x
+		chosen.y = far.y
+		director.grid.update_actor(chosen)
+		ELFirstAI.scripts(director)
+		check(int(glazzz.get("strategy_order", {}).get("use", -1)) != int(chosen.uid), "Glazzz keeps to his loop with the Chosen One %d tiles off" % (sight - 1))
+	var near := _spot_near(director, glazzz, 6)
+	if near.x >= 0:
+		chosen.x = near.x
+		chosen.y = near.y
+		director.grid.update_actor(chosen)
+		ELFirstAI.scripts(director)
+		check(int(glazzz.get("strategy_order", {}).get("use", -1)) == int(chosen.uid), "Glazzz attacks the Chosen One six tiles off")
+	# His battle figure speaks with the male voice set.
+	var row := ELAdventureEncounter.combat_definition(state, glazzz, ELHeroLooks.worn(profile, glazzz))
+	check(str(row.get("SndDir", "")) == "GreenHeroEggMale", "Glazzz fights with the GreenHeroEggMale voice (%s)" % row.get("SndDir", ""))
+	state.close()
+
+## An open tile about `distance` tiles from the actor (straight-line), with a
+## way to it from the actor; (-1, -1) when there is none.
+func _spot_near(director: ELAdventureDirector, actor: Dictionary, distance: int) -> Vector2i:
+	var at := Vector2i(actor.x, actor.y)
+	for turn in 32:
+		var angle := TAU * turn / 32.0
+		var spot := at + Vector2i(Vector2(cos(angle), sin(angle)) * distance)
+		if not director.grid.contains(spot) or director.grid.passability(spot) < 0 or director.grid.land.is_point_solid(spot): continue
+		if Vector2(spot).distance_to(Vector2(at)) >= distance + 0.5 or Vector2(spot).distance_to(Vector2(at)) < distance - 1.0: continue
+		if director.grid.path(spot, at).is_empty() and director.grid.approach(spot, actor).is_empty(): continue
+		return spot
+	return Vector2i(-1, -1)
+
+## A neutral hero named like a rival guards nothing outside the dale.
+func _elsewhere(profile: ELProfile) -> void:
+	var map := ELFirstRandomMap.new().generate(profile, ELRestoredMissions.recipe(ELRestoredMissions.SAVAGE_DESERT))
+	if map == null:
+		check(false, "Savage Desert generates")
+		return
+	var state := ELAdventureSession.new()
+	state.start(map, 2, 1, "", 1, false, true)
+	var stranger := {"type": "hero", "owner": 0, "alive": true, "visible": true, "placed": true, "name": "BLevHero1"}
+	check(not ELInterception.dale_rival(state, stranger) and not ELInterception.guards_in(state, stranger), "outside the dale a BLevHero hero guards nothing")
+	state.close()

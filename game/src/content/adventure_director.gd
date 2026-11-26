@@ -196,7 +196,7 @@ func _world_changed(data: Dictionary) -> void:
 		# A hero lost inside a training camp frees it.
 		if data.kind == "object_killed" and int(actor.get("camp", -1)) >= 0: ELAdditionalBuildings.release_camp(state, actor)
 		grid.update_actor(actor)
-		if interception.zones.has(int(data.id)) or ELInterception.guards(actor) or actor.get("fortified", false) or ELInterception.spell_fort(actor) or state.map.profile.id == "el2" and ELInterception.second_guard(actor): interception.rebuild(state, grid)
+		if interception.zones.has(int(data.id)) or ELInterception.guards_in(state, actor) or actor.get("fortified", false) or ELInterception.spell_fort(actor) or state.map.profile.id == "el2" and ELInterception.second_guard(actor): interception.rebuild(state, grid)
 	else:
 		grid.rebuild(state.objects)
 		interception.rebuild(state, grid)

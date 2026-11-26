@@ -19,8 +19,10 @@ extends RefCounted
 ## won when the Chosen One comes within two tiles of (30, 123), after the
 ## area x 0-39, y 104-159 is revealed, and lost when no Chosen One is left.
 ## Glazzz (BLevHero2) walks a fixed loop through (55, 146), (55, 110),
-## (64, 84) and (55, 104), and both he and Warp (BLevHero5) attack the
-## Chosen One when he comes in sight. These points fix a 160-tile map. The
+## (64, 84) and (55, 104) and attacks the Chosen One within his sight less
+## three tiles; every other rival attacks him within its sight. Each rival
+## (any BLevHero) guards the ring around it as a creature does, so none can
+## be walked past. These points fix a 160-tile map. The
 ## dale's course between them, the other three rivals' places and the four
 ## elements' grounds along the way are the remake's reading of the briefing.
 ##
