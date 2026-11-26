@@ -51,6 +51,9 @@ var decline: BaseButton
 var second_dialogue: ELSecondDialogueBox
 var _pending_speech: Dictionary = {}
 const MISSION_FADE_SECONDS := 2.0
+## Second game: after a battle the map fades in from black over 1000 ms
+## (#329), once the battle has faded out (ELDuelView.BATTLE_FADE_OUT_SECONDS).
+const BATTLE_FADE_IN_SECONDS := 1.0
 ## These shared maps and the interlude choose their opening scene in the
 ## first step hook. Their story commands still run on the mission clock.
 const SCRIPTED_OPENING_SCENES := {"maps/e2mission32": "e2mission24_32", "maps/e2mission34": "e2mission34_44_54", "maps/e2mission50": "e2mission50"}
@@ -495,7 +498,11 @@ func _process(delta: float) -> void:
 	if hud != null and paused and hud.tooltip.visible: hud.tooltip.hide()
 	_tick_cursor(delta)
 	if second_hud != null: _tick_map_tooltip(delta)
-	if director == null or not visible or not error.is_empty() or _mission_fade != null or paused or console_open or extras_open():
+	# The black curtain over a mission's start or a battle's return is drawn
+	# over the map only: the mission clock runs on under it, as in the
+	# original (#327). Messages, windows and the player's input wait for it.
+	var fading := _mission_fade != null
+	if director == null or not visible or not error.is_empty() or paused or console_open or extras_open():
 		# Second game: the hero readouts follow the state under a message box or
 		# window too (a building use pays its points before its message opens).
 		if second_hud != null and director != null: _refresh_hero_info()
@@ -510,7 +517,7 @@ func _process(delta: float) -> void:
 	if global_spell_waiting and _can_act():
 		_offer_global_spell()
 		if global_spells != null: return
-	if strategic_session != null:
+	if strategic_session != null and not fading:
 		var visit := strategic_session.local_shop_visit()
 		if not visit.is_empty():
 			if not _open_strategy_shop(visit[0], visit[1], true, strategic_session.remote_shop_open(state.current_player)):
@@ -541,7 +548,7 @@ func _process(delta: float) -> void:
 	if not director.error.is_empty():
 		error = director.error
 		notice.text = error
-	if not _free_looking(): _update_edge(delta)
+	if not _free_looking() and not fading: _update_edge(delta)
 	if yaw_goal != INF:
 		var remaining := wrapf(yaw_goal - yaw, -PI, PI)
 		if absf(remaining) * TURN_RATE < 0.001:
@@ -568,7 +575,7 @@ func _process(delta: float) -> void:
 	if following >= 0 and world.actors.has(following):
 		scroll_gliding = false
 		target = target.lerp(world.actors[following].position, minf(1, delta * 6.0))
-	elif not state.camera_locked and not _free_looking():
+	elif not state.camera_locked and not _free_looking() and not fading:
 		var direction := Vector2(float(Input.is_physical_key_pressed(KEY_D)) - float(Input.is_physical_key_pressed(KEY_A)), float(Input.is_physical_key_pressed(KEY_S)) - float(Input.is_physical_key_pressed(KEY_W)))
 		if direction != Vector2.ZERO: scroll_gliding = false
 		var flat := Vector3(direction.x, 0, direction.y).rotated(Vector3.UP, yaw)
@@ -576,7 +583,7 @@ func _process(delta: float) -> void:
 	if scroll_gliding: _glide(delta)
 	if view_moved and following < 0: _clamp_target()
 	_update_camera()
-	if not _pending_speech.is_empty() and not _level_up_before_speech() and (int(_pending_speech.get("actor", -1)) < 0 or _speaker_in_place()):
+	if not fading and not _pending_speech.is_empty() and not _level_up_before_speech() and (int(_pending_speech.get("actor", -1)) < 0 or _speaker_in_place()):
 		var speech := _pending_speech
 		_pending_speech = {}
 		_show_second_dialogue(speech)
@@ -598,6 +605,7 @@ func _process(delta: float) -> void:
 		_hud_clock = 0.0
 		_hud_key = hud_key
 		_refresh_hero_info()
+	if fading: return
 	_auto_level_up()
 	_first_level_up()
 
@@ -2722,7 +2730,10 @@ func _show_second_dialogue(speech: Dictionary) -> void:
 	if not speech.get("direct", false): world.speak_actor(int(speech.get("actor", -1)))
 	audio.speak(speech.text_id)
 
-func _fade_in_mission() -> void:
+## Second game: the map shows from black, at a mission's start and after a
+## battle.
+func _fade_in_mission(seconds := MISSION_FADE_SECONDS) -> void:
+	if _mission_fade != null: _mission_fade.queue_free()
 	var curtain := ColorRect.new()
 	_mission_fade = curtain
 	curtain.name = "MissionFade"
@@ -2732,11 +2743,16 @@ func _fade_in_mission() -> void:
 	ui.add_child(curtain)
 	curtain.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	var fade := curtain.create_tween()
-	fade.tween_property(curtain, "color:a", 0.0, MISSION_FADE_SECONDS)
+	fade.tween_property(curtain, "color:a", 0.0, seconds)
 	fade.tween_callback(func() -> void:
 		curtain.hide()
 		curtain.queue_free()
-		_mission_fade = null)
+		if _mission_fade == curtain: _mission_fade = null)
+
+## Second game: the map comes back from a battle under the black the battle
+## faded to, and fades in (#329).
+func fade_in_after_battle() -> void:
+	if state.map.profile.id == "el2": _fade_in_mission(BATTLE_FADE_IN_SECONDS)
 
 ## Second game: the camera's look-at point flies to a new point. Every 64 ms
 ## it covers SCROLL_RATE x AutoScrollAcceleration (settings.ini, shipped 0.5)

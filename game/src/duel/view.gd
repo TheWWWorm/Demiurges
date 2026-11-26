@@ -4854,7 +4854,45 @@ func _step_ending(delta: float) -> void:
 		return
 	ending.stage = "over"
 	# GameOver: a campaign battle closes and the map fades back in.
-	if _campaign_battle() != null and duel.phase == ELDuel.Phase.FINISHED: _return_from_encounter()
+	if _campaign_battle() != null and duel.phase == ELDuel.Phase.FINISHED:
+		if _battle_fades_out(): _fade_out_battle()
+		else: _return_from_encounter()
+
+## Second game: a map battle that is over fades to black, and the map then
+## fades in from the black (#329). The original's after-battle step darkens
+## the whole screen by 17 of 255 each mission tick (15 a second), so in 1 s;
+## at full black it applies the battle's results (experience, trophies, the
+## loser's removal) and fades the map in over 1000 ms. Online map battles
+## keep their shared return.
+const BATTLE_FADE_OUT_SECONDS := 1.0
+var _battle_fade: ColorRect
+
+func _battle_fades_out() -> bool:
+	return campaign_view != null and campaign_view.state.map.profile.id == "el2" and not _strategic_battle()
+
+func _fade_out_battle() -> void:
+	_clear_battle_fade()
+	var layer := CanvasLayer.new()
+	layer.name = "BattleFade"
+	layer.layer = 100
+	add_child(layer)
+	var curtain := ColorRect.new()
+	curtain.color = Color(0, 0, 0, 0)
+	curtain.mouse_filter = Control.MOUSE_FILTER_STOP
+	layer.add_child(curtain)
+	curtain.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_battle_fade = curtain
+	var fade := curtain.create_tween()
+	fade.tween_property(curtain, "color:a", 1.0, BATTLE_FADE_OUT_SECONDS)
+	fade.tween_callback(func() -> void:
+		if _battle_fade != curtain: return
+		_return_from_encounter()
+		_clear_battle_fade())
+
+func _clear_battle_fade() -> void:
+	if _battle_fade == null: return
+	_battle_fade.get_parent().queue_free()
+	_battle_fade = null
 
 ## The first blow of a fight: the close-up the player's own attack
 ## declaration shot left for it, if any.
@@ -8880,6 +8918,9 @@ func _return_from_encounter() -> void:
 		_notice(campaign_view.director.error)
 		return
 	_encounter_start.clear()
+	# A battle that faded to black hands the black to the map, which fades in.
+	if _battle_fade != null: campaign_view.fade_in_after_battle()
+	_clear_battle_fade()
 	# The map's next battles take the balance chosen in Options again.
 	if strategic_session == null: _use_second_balance()
 	menu.hide()
