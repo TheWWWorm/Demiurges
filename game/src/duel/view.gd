@@ -89,6 +89,7 @@ var selected_creature := -1
 ## The phase the selection was clicked in (_phase_mark); see _target.
 var selection_phase := ""
 var ai_clock := 0.0
+var ai_frame_budget := ELPracticeAI.FrameBudget.new()
 var demo := false
 var updating := false
 ## Full panel rebuilds (_refresh) and strip rebuilds (_fill_strip) so far,
@@ -755,6 +756,7 @@ func _start(edition: String, options: Dictionary = {}, restored: ELDuel = null, 
 	ai_clock = 0
 	auto_combat = false
 	profile = profiles[edition]
+	if duel != next_duel: ai_frame_budget = ELPracticeAI.FrameBudget.new()
 	duel = next_duel
 	_practice_restart_seed = battle_seed if restored == null else -1
 	match_options = duel.setup.duplicate(true)
@@ -983,6 +985,12 @@ var _tutorial_end_clock := 0.0
 
 func _process(delta: float) -> void:
 	elapsed += delta
+	if duel != null:
+		var now := Time.get_ticks_usec()
+		var previous_limit := ai_frame_budget.limit
+		ai_frame_budget.observe(now, ELPracticeAI.thinking(duel), ai_frame_budget.target_usec(now))
+		if previous_limit != ai_frame_budget.limit:
+			ELPracticeAI.update_frame_workers(duel, ai_frame_budget.limit)
 	_expire_hint()
 	_show_log()
 	if gap_panel != null and advisor.tick(): _show_advice()
@@ -1060,7 +1068,7 @@ func _process(delta: float) -> void:
 		elif _strategic_battle():
 			if strategic_session.battle_started and _strategic_presentation_idle() and ai_clock >= 0.85:
 				ai_clock = 0.0
-				strategic_session.relay.step_neutral_ai()
+				strategic_session.relay.step_neutral_ai(ai_frame_budget.limit)
 		elif network_duel == null and duel.phase != ELDuel.Phase.FINISHED and not _overlay_open() and not _melee_busy() and ai_clock >= 0.85 and (demo or (mode_select.selected == 0 and not _human_side()) or (auto_combat and _human_side())):
 			ai_clock = 0.0
 			# Without "use spells", auto combat uses no artifacts or spell charges (hero abilities stay).
@@ -1077,7 +1085,7 @@ func _process(delta: float) -> void:
 			if not demo and ((not _human_side() and (level >= 2 or _in_puzzle())) or (auto and level >= 2)): smart.append(duel.active_side())
 			ELCombatSearch.original_budget = ELCombatSearch.EASY_BUDGET if level == 0 and not demo and not _human_side() and not _in_puzzle() else ELCombatSearch.BUDGET
 			duel.smart_sides = smart
-			ELPracticeAI.step(duel, auto and not bool(settings.values.get("use_spells", true)))
+			ELPracticeAI.step(duel, auto and not bool(settings.values.get("use_spells", true)), ai_frame_budget.limit)
 		if free_look == null or not free_look.active:
 			_step_auto_camera(delta)
 			_step_keyboard_camera(delta)

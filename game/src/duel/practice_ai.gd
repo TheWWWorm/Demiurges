@@ -18,12 +18,13 @@ extends RefCounted
 ## think and whatever second thought the command needs before it is sent
 ## (`send`) share it, so that a step answers within the think limit and a
 ## little more (ELCombatSearch.AGAIN_OVER_MS).
-static func step(duel: ELDuel, restricted := false) -> void:
+static func step(duel: ELDuel, restricted := false, frame_worker_limit := 0) -> void:
 	if duel.phase == ELDuel.Phase.FINISHED:
 		var job: Job = _jobs.get(duel.get_instance_id())
 		if job != null:
 			_jobs.erase(duel.get_instance_id())
 			_drop(job)
+			_publish_workers()
 		_collect(true)
 		return
 	var command := {}
@@ -31,18 +32,25 @@ static func step(duel: ELDuel, restricted := false) -> void:
 	var asked := {}
 	var worker := _displayed(duel)
 	if worker:
-		var ready: Variant = _background(duel, restricted)
+		var ready: Variant = _background(duel, restricted, frame_worker_limit)
 		if ready == null: return
 		command = ready.command
 		stats = ready.stats
 		asked = ready.asked
+		asked.frame_worker_limit = frame_worker_limit
 	else:
 		asked = ELCombatSearch.request(duel, restricted)
 		command = ELCombatSearch.think(duel, stats, restricted, asked)
 	var side := duel.active_side()
 	last_decision = {"command": command, "engine": String(stats.get("engine", "")), "worker": worker, "positions": int(stats.get("positions", 0))}
-	send(duel, command, restricted, asked)
-	if _displayed(duel) and duel.phase != ELDuel.Phase.FINISHED and duel.active_side() == side: _background(duel, restricted)
+	if asked.has("retry_command"):
+		_finish_retry(duel, asked.retry_command, command, restricted)
+	elif asked.get("retry_blocks", false):
+		_send_after_blocks(duel, command, restricted, asked, worker)
+	else:
+		_send(duel, command, restricted, asked, worker)
+	if worker and duel.phase != ELDuel.Phase.FINISHED and duel.active_side() == side and not _jobs.has(duel.get_instance_id()):
+		_background(duel, restricted, frame_worker_limit)
 
 ## Takes back what the side to act has chosen so far in the phase, as the
 ## player could, before the computer plays the phase for it (auto combat
@@ -97,6 +105,9 @@ static var _stood := {}
 ## think limit. Without it the first thought is taken to have used most of
 ## the time.
 static func send(duel: ELDuel, command: Dictionary, restricted := false, asked: Dictionary = {}) -> bool:
+	return _send(duel, command, restricted, asked, false)
+
+static func _send(duel: ELDuel, command: Dictionary, restricted: bool, asked: Dictionary, background: bool) -> bool:
 	# Going back on a block is a command like any other, but one that only
 	# leads back to where the hero has stood in this phase gets nowhere, and
 	# the same thinking would send it round again (two positions it holds
@@ -108,8 +119,20 @@ static func send(duel: ELDuel, command: Dictionary, restricted := false, asked: 
 		ELCombatSearch.forget(duel)
 		# The second thought has what the first left of the decision's time.
 		asked = ELCombatSearch.again(duel, asked, restricted)
-		command = ELCombatSearch.think(duel, {"fresh": true, "keep_blocks": true}, restricted, asked)
-		if command.is_empty() or _leads_back(duel, command): command = {"kind": "end_phase"}
+		asked.retry_blocks = true
+		var stats := {"fresh": true, "keep_blocks": true}
+		if background:
+			_start_job(duel, restricted, asked, stats)
+			return false
+		command = ELCombatSearch.think(duel, stats, restricted, asked)
+		return _send_after_blocks(duel, command, restricted, asked, background)
+	return _apply_or_retry(duel, command, restricted, asked, background)
+
+static func _send_after_blocks(duel: ELDuel, command: Dictionary, restricted: bool, asked: Dictionary, background: bool) -> bool:
+	if command.is_empty() or _leads_back(duel, command): command = {"kind": "end_phase"}
+	return _apply_or_retry(duel, command, restricted, asked, background)
+
+static func _apply_or_retry(duel: ELDuel, command: Dictionary, restricted: bool, asked: Dictionary, background: bool) -> bool:
 	if not command.is_empty() and ELCombatSearch.apply(duel, command): return true
 	if duel.phase == ELDuel.Phase.FINISHED: return false
 	# No command at all is an error of the opponent's of its own kind, told
@@ -132,7 +155,15 @@ static func send(duel: ELDuel, command: Dictionary, restricted := false, asked: 
 			return false
 	ELCombatSearch.forget(duel)
 	# Thought over in what is left of the decision's time.
-	var again := ELCombatSearch.think(duel, {"fresh": true}, restricted, ELCombatSearch.again(duel, asked, restricted))
+	asked = ELCombatSearch.again(duel, asked, restricted)
+	if background:
+		asked.retry_command = command
+		_start_job(duel, restricted, asked, {"fresh": true})
+		return false
+	var again := ELCombatSearch.think(duel, {"fresh": true}, restricted, asked)
+	return _finish_retry(duel, command, again, restricted)
+
+static func _finish_retry(duel: ELDuel, command: Dictionary, again: Dictionary, restricted: bool) -> bool:
 	if not again.is_empty() and again != command and ELCombatSearch.apply(duel, again):
 		recovered += 1
 		return true
@@ -170,6 +201,7 @@ static func _leads_back(duel: ELDuel, command: Dictionary) -> bool:
 
 class Job:
 	var task := -1
+	var frame_workers := 0
 	var key := 0
 	var result := {}
 	var duel: WeakRef
@@ -178,6 +210,131 @@ class Job:
 ## Background thinks per duel instance, and superseded ones still running.
 static var _jobs := {}
 static var _stale: Array[Job] = []
+static var _published_workers := 255
+
+static func _publish_workers() -> void:
+	if not ELCombatBrain.supports_frame_limit: return
+	var workers := 255
+	for job: Job in _jobs.values():
+		if job.frame_workers > 0 and (job.task < 0 or not WorkerThreadPool.is_task_completed(job.task)):
+			workers = mini(workers, job.frame_workers)
+	if workers != _published_workers:
+		ClassDB.class_call_static(&"ELNativeDuelBrain", &"set_frame_worker_limit", workers)
+		_published_workers = workers
+
+static func update_frame_workers(duel: ELDuel, workers: int) -> void:
+	var job: Job = _jobs.get(duel.get_instance_id())
+	if job != null and job.frame_workers > 0 and job.frame_workers != workers:
+		job.frame_workers = workers
+		_publish_workers()
+
+static func thinking(duel: ELDuel) -> bool:
+	var job: Job = _jobs.get(duel.get_instance_id())
+	return job != null and not WorkerThreadPool.is_task_completed(job.task)
+
+## The display owns the samples and can release helpers during a decision.
+## Count wall time only while a background decision is actually running.
+class FrameBudget:
+	var capacity := ELCombatSearch.available_processors()
+	var limit := capacity
+	var previous_usec := 0
+	var smooth_usec := 0
+	var late_frames := 0
+	var slow_usec := 0
+	var idle_frames := PackedInt64Array()
+	var idle_period_usec := 0
+	var loaded_frames := PackedInt64Array()
+	var one_worker_frames := PackedInt64Array()
+	var one_worker_period_usec := 0
+	var previous_target := 0
+	var was_active := false
+	var refresh_check_usec := 0
+	var refresh_hz := 60.0
+
+	func target_usec(now: int) -> int:
+		if Engine.max_fps > 0: return maxi(1, roundi(1000000.0 / Engine.max_fps))
+		if now >= refresh_check_usec:
+			var hz := DisplayServer.screen_get_refresh_rate(DisplayServer.window_get_current_screen())
+			refresh_hz = hz if hz > 0.0 else 60.0
+			refresh_check_usec = now + 2000000
+		return maxi(1, roundi(1000000.0 / refresh_hz))
+
+	func observe(now: int, active: bool, target_usec: int) -> void:
+		var interval := now - previous_usec
+		var sampled := previous_usec > 0 and was_active == active and target_usec == previous_target
+		if target_usec != previous_target:
+			idle_period_usec = 0
+			one_worker_period_usec = 0
+			smooth_usec = 0
+			idle_frames.clear()
+			loaded_frames.clear()
+			one_worker_frames.clear()
+		previous_usec = now
+		previous_target = target_usec
+		was_active = active
+		if not sampled:
+			slow_usec = 0
+			late_frames = 0
+			return
+		if not active:
+			# Use the scene's usual drawn cadence if it already runs below
+			# the requested rate. A single loading frame cannot set it.
+			if interval > 0 and interval <= target_usec * 4:
+				idle_frames.append(interval)
+				if idle_frames.size() == (5 if idle_period_usec == 0 else 15):
+					idle_frames.sort()
+					idle_period_usec = idle_frames[idle_frames.size() / 2]
+					idle_frames.clear()
+					loaded_frames.clear()
+					one_worker_frames.clear()
+			return
+		if idle_period_usec == 0 and one_worker_period_usec == 0 and capacity > 1:
+			if _check_one_worker(interval, target_usec): return
+		var period := maxi(target_usec, idle_period_usec if idle_period_usec > 0 else one_worker_period_usec)
+		if interval > period * 1.15:
+			smooth_usec = 0
+			slow_usec += interval
+			late_frames = late_frames + 1 if interval > period * 1.5 else 0
+			if late_frames >= 2 or interval > period * 2.5 or slow_usec >= 200000:
+				limit = maxi(1, limit - ceili(limit / 4.0))
+				late_frames = 0
+				slow_usec = 0
+		else:
+			late_frames = 0
+			slow_usec = 0
+			smooth_usec += interval
+			if smooth_usec >= 2000000:
+				limit = mini(capacity, limit + 1)
+				smooth_usec = 0
+
+	# Auto-combat can begin before the scene supplies an idle sample. If
+	# retiring every helper leaves the same steady frame time, try the full
+	# allowance again. Subsequent idle frames replace this estimate.
+	func _check_one_worker(interval: int, target: int) -> bool:
+		if interval <= 0 or interval > 4 * target: return false
+		if limit > 1:
+			one_worker_frames.clear()
+			if interval > target * 1.15:
+				loaded_frames.append(interval)
+				if loaded_frames.size() > 15: loaded_frames.remove_at(0)
+			return false
+		one_worker_frames.append(interval)
+		if one_worker_frames.size() < 15: return false
+		one_worker_frames.sort()
+		var middle := one_worker_frames[7]
+		var stable := one_worker_frames[12] - one_worker_frames[2] <= middle / 8
+		one_worker_frames.clear()
+		if not stable or middle <= target * 1.15 or loaded_frames.size() < 5: return false
+		var loaded := loaded_frames.duplicate()
+		loaded.sort()
+		if loaded[loaded.size() / 2] > middle * 1.10: return false
+		one_worker_period_usec = middle
+		loaded_frames.clear()
+		limit = capacity
+		late_frames = 0
+		slow_usec = 0
+		smooth_usec = 0
+		return true
 
 static func _displayed(duel: ELDuel) -> bool:
 	return _display(duel) != null
@@ -200,6 +357,7 @@ static func _release(id: int) -> void:
 	if job != null:
 		_jobs.erase(id)
 		_drop(job)
+		_publish_workers()
 	_collect(true)
 
 ## The finished think for the duel's current position, or null while it runs.
@@ -211,6 +369,7 @@ static func _collect(all := false) -> void:
 		if job.duel.get_ref() == null:
 			_jobs.erase(id)
 			_drop(job)
+			_publish_workers()
 	for old: Job in _stale.duplicate():
 		if all or WorkerThreadPool.is_task_completed(old.task):
 			WorkerThreadPool.wait_for_task_completion(old.task)
@@ -222,12 +381,13 @@ static func _collect(all := false) -> void:
 static func finish() -> void:
 	for id: int in _jobs.keys(): _drop(_jobs[id])
 	_jobs.clear()
+	_publish_workers()
 	_collect(true)
 
 ## {command, stats, asked} of the finished think for the duel's position
 ## (`asked` the request it was thought out with), or null while it runs. The think is keyed on the position, the restriction and the
 ## opponent's whole policy, so a change of settings starts a new one.
-static func _background(duel: ELDuel, restricted := false) -> Variant:
+static func _background(duel: ELDuel, restricted := false, frame_worker_limit := 0) -> Variant:
 	_collect()
 	var asked := ELCombatSearch.request(duel, restricted)
 	var key := [duel._snapshot(), restricted, asked.policy, asked.identity].hash()
@@ -237,30 +397,38 @@ static func _background(duel: ELDuel, restricted := false) -> Variant:
 		if not WorkerThreadPool.is_task_completed(job.task): return null
 		WorkerThreadPool.wait_for_task_completion(job.task)
 		_jobs.erase(id)
+		_publish_workers()
 		return job.result
 	if job != null:
 		_jobs.erase(id)
 		if WorkerThreadPool.is_task_completed(job.task): WorkerThreadPool.wait_for_task_completion(job.task)
 		else: _drop(job)
+	asked.frame_worker_limit = frame_worker_limit
+	_start_job(duel, restricted, asked, {}, key)
+	return null
+
+static func _start_job(duel: ELDuel, restricted: bool, asked: Dictionary, stats: Dictionary, key: Variant = null) -> void:
+	var id := duel.get_instance_id()
 	# Rule tables load on first use; load them here so the worker only reads.
 	for table: String in ["CombatSpells", "CombatCreatures", "HeroTemplates", "Artefacts", "HeroesSpecs", "HeroesStats", "CombatManaIncome", "CombatDecks", "GlobalSpells"]:
 		duel.profile.table(table)
 	ELCombatBrain.prepare(duel)
-	job = Job.new()
-	job.key = key
+	var job := Job.new()
+	asked.live_frame_workers = int(asked.get("frame_worker_limit", 0)) > 0
+	job.key = key if key != null else [duel._snapshot(), restricted, asked.policy, asked.identity].hash()
 	job.duel = weakref(duel)
 	job.request = asked
 	var position := duel.search_copy()
 	var think := func() -> void:
-		var stats := {}
 		var command := ELCombatSearch.think(position, stats, restricted, asked)
 		job.result = {"command": command, "stats": stats, "asked": asked}
-	job.task = WorkerThreadPool.add_task(think, false, "Combat opponent")
+	job.frame_workers = int(asked.get("frame_worker_limit", 0)) if asked.engine and ELCombatSearch.smart_engine_workers == 0 else 0
 	_jobs[id] = job
+	_publish_workers()
+	job.task = WorkerThreadPool.add_task(think, false, "Combat opponent")
 	var display := _display(duel)
 	var release := _release.bind(id)
 	if display != null and not display.tree_exiting.is_connected(release): display.tree_exiting.connect(release, CONNECT_ONE_SHOT)
-	return null
 
 ## The earlier hand-written opponent: fixed per-card scores in a fixed order
 ## (hero abilities, creature abilities, best cast, attacks or blocks, end).

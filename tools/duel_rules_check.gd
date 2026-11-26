@@ -484,7 +484,7 @@ func _line_case(index: int, duel: ELDuel, raw: PackedInt32Array) -> void:
 			0:
 				what = "end the phase"
 				ok = copy.end_phase()
-			5:
+			5, 9:
 				var mask := (int(cmd[1]) & 0xffff) | (int(cmd[2]) << 16)
 				what = "attack with"
 				# The guards last, as the engine sends them.
@@ -493,6 +493,9 @@ func _line_case(index: int, duel: ELDuel, raw: PackedInt32Array) -> void:
 						if not (mask & (1 << k)) or copy.attacks.has(int(ids[k])) or copy.has_flag(int(ids[k]), "TeamAttack") != (late == 1): continue
 						what += " #%d" % int(ids[k])
 						if not ELCombatSearch.apply(copy, {"kind": "attack", "id": int(ids[k])}): ok = false
+				if int(cmd[0]) == 9 and ok:
+					what += " and end the phase"
+					ok = copy.end_phase()
 			6:
 				what = "block as advised"
 				var part := ELCombatBrain.fight(ctx, start, 4, commands + [cmd], 200000)
@@ -718,7 +721,7 @@ func _compare_rest(duel: ELDuel, model: Dictionary, before: Dictionary, whole_tu
 			said.append("#%d %s: the game makes it %d/%d, the model %d/%d" % [id, card, int(c.power), int(c.toughness), int(told.power), int(told.toughness)])
 			blamed[card] = int(blamed.get(card, 0)) + 1
 		var done: Dictionary = c.get("ability_used", {})
-		var spent: bool = done.get("rouse", false) or done.get("illusion", false)
+		var spent: bool = done.get("rouse", false) or done.get("illusion", false) or done.get("orc_rite", false)
 		if spent != bool(told.spent):
 			said.append("#%d %s: the game has its ability %s, the model %s" % [id, card, "spent" if spent else "ready", "spent" if told.spent else "ready"])
 			blamed[card] = int(blamed.get(card, 0)) + 1

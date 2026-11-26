@@ -19,6 +19,8 @@ var history: Array[Dictionary] = []
 ## A lookahead copy: what happens is neither recorded nor announced, since
 ## nothing watches it and the search plays many thousands of commands.
 var searching := false
+## Viewer whose hidden information has already been sampled on this search line.
+var search_viewer := -1
 var phase := Phase.ATTACK
 var attacker := 0
 var round_number := 1
@@ -1099,12 +1101,12 @@ func _cast_gated(hand_index: int, target: int, grave_index: int, extra_ether: in
 ## states ("Это заклинание может использоваться в фазу защиты").
 const DEFENCE_SPELLS := {"el1": ["PLMR", "FOGG", "ENAL"], "el2": ["PLMR", "FOGG", "ENAL", "CMBN", "LFGR", "RDDF", "SPRG"]}
 
-## Whether `card` may be cast from the hand in the current phase.
-func phase_allows(card: String) -> bool:
+## Whether `card` may be cast from the hand in the given phase.
+func phase_allows(card: String, during: Phase = phase) -> bool:
 	var use_in := String(profile.table("CombatSpells").get(card, {}).get("UseIn", "Both"))
-	if use_in == "Attack" and phase != Phase.ATTACK: return false
-	if use_in in ["Defence", "Defense"] and phase != Phase.DEFENCE: return false
-	if phase == Phase.DEFENCE and not use_in in ["Defence", "Defense"]: return card in DEFENCE_SPELLS.get(profile.id, [])
+	if use_in == "Attack" and during != Phase.ATTACK: return false
+	if use_in in ["Defence", "Defense"] and during != Phase.DEFENCE: return false
+	if during == Phase.DEFENCE and not use_in in ["Defence", "Defense"]: return card in DEFENCE_SPELLS.get(profile.id, [])
 	return true
 
 ## Does this card have at least one legal, affordable cast right now?
@@ -3082,6 +3084,9 @@ func _enchantment_count(id: int, card: String) -> int:
 		if e.card == card: count += 1
 	return count
 
+func barrier_reduction(target: int) -> int:
+	return 3 * _enchantment_count(target, "ENBR")
+
 ## A dispel by a spell, ability or artifact. First-game specialisations of the
 ## enchantment's caster: sentinel keeps it (the dispel still counts as done),
 ## eternal enchantment returns the card to the caster's hand.
@@ -3171,10 +3176,7 @@ func _finish_defence() -> void:
 	_drain_scripts()
 	if phase == Phase.FINISHED: return
 	turn_cleanup.emit()
-	# The last card of the hand goes first.
-	while heroes[attacker].hand.size() > 5:
-		var card := _take_card(attacker, hand_display(attacker).back())
-		_emit({"kind": "discard", "side": attacker, "card": card, "hand_limit": true})
+	_trim_hand(attacker)
 	for c: Dictionary in creatures.values():
 		# Second-game bloodlessness keeps the creature's damage.
 		if not recovery_blocked(c.owner) and not (second_rules("RIOT") and _enchantment_count(c.id, "RIOT") > 0): c.damage = 0
@@ -3662,6 +3664,12 @@ func _give_card(side: int, card: String, slot := -1, front := false) -> void:
 	keys.append(key)
 	hero.hand_view = keys
 
+## Enforce the end-of-turn limit in the order shown on the hand rail.
+func _trim_hand(side: int) -> void:
+	while heroes[side].hand.size() > 5:
+		var card := _take_card(side, hand_display(side).back())
+		_emit({"kind": "discard", "side": side, "card": card, "hand_limit": true})
+
 func _take_card(side: int, index: int) -> String:
 	var hero: Dictionary = heroes[side]
 	var keys := _hand_view(hero)
@@ -4053,9 +4061,10 @@ func _damage(target: int, amount: int, combat := false, no_regeneration := false
 	if not combat and has_flag(target, "NoAffect"): return 0
 	if in_plane(target) and not bypass: return 0
 	# Energy barrier: 3 less non-combat damage per copy; lifeguard negates one hit.
-	if not combat and not destroying and _enchantment_count(target, "ENBR") > 0:
+	var reduction := barrier_reduction(target) if not combat and not destroying else 0
+	if reduction > 0:
 		var softened := amount > 0
-		amount -= 3 * _enchantment_count(target, "ENBR")
+		amount -= reduction
 		if softened: _emit({"kind": "barrier", "target": target, "amount": amount})
 	# EL2's creature-damage routine checks Lifeguard after Energy Barrier,
 	# even when the barrier absorbs the full hit (before).
@@ -4145,8 +4154,9 @@ func _hurt_hero(target: int, amount: int, redirected := false, combat := false) 
 	if kind >= 1: redirected = true
 	if amount > 0 and kind < 2:
 		# Second-game protections apply before redirection.
-		if not combat and _enchantment_count(target, "ENBR") > 0:
-			amount -= 3 * _enchantment_count(target, "ENBR")
+		var reduction := barrier_reduction(target) if not combat else 0
+		if reduction > 0:
+			amount -= reduction
 			_emit({"kind": "barrier", "target": target, "amount": amount})
 		if amount <= 0 or _lifeguard(target): return 0
 		if not _raw_hero_damage:
@@ -4591,6 +4601,7 @@ func search_copy(expected_specs_on := false) -> ELDuel:
 	d.setup = setup
 	d.next_card = next_card
 	d.searching = true
+	d.search_viewer = search_viewer
 	d.expected_specs = expected_specs_on or self.expected_specs
 	d.spec_expect = spec_expect
 	if fair_specs:

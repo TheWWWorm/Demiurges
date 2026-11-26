@@ -177,6 +177,10 @@ func _check_worker(game: String) -> void:
 		if not matched: differ += 1
 		if engine != worker_engine: problems.append("round %d: direct engine %s, worker %s%s" % [int(snapshot.round), engine, worker_engine, "" if matched else ", different command"])
 		elif not matched: problems.append("round %d: different command (direct %s)" % [int(snapshot.round), str(command)])
+		elif engine == "forced_pass":
+			var legal := ELPuzzleProof.legal_moves(direct)
+			if command.get("kind") != "end_phase" or legal.size() != 1 or legal[0].kind != "end_phase":
+				problems.append("round %d: defence had another legal command" % int(snapshot.round))
 		elif engine in ["native", "proof", "beyond", "plan"]: same += 1
 		else: problems.append("round %d: engine %s, not the compiled one" % [int(snapshot.round), engine])
 	if problems.is_empty() and same > 0: _pass(game, "worker", "%d positions, same engine and command on the worker thread" % same)
@@ -199,6 +203,8 @@ func _check_refused(game: String) -> void:
 		_reset()
 		var d := _restore(snapshot)
 		_smart(d)
+		_check_displayed_retry(game, snapshot, expected)
+		_reset()
 		var before := int((ELPracticeAI as Script).get("refused"))
 		(ELPracticeAI as Script).call("send", d, {"kind": "attack", "id": 9999})
 		if int((ELPracticeAI as Script).get("refused")) != before + 1: _fail(game, "refused", "the refusal was not counted")
@@ -215,6 +221,29 @@ func _check_refused(game: String) -> void:
 			else: _pass(game, "refused", "a refused command was counted and thought over (%s)" % str(command))
 		return
 	_fail(game, "refused", "no position where the opponent plays something other than the end of the phase")
+
+func _check_displayed_retry(game: String, snapshot: Dictionary, expected: Dictionary) -> void:
+	var duel := _restore(snapshot)
+	_smart(duel)
+	var display := Display.new()
+	root.add_child(display)
+	duel.changed.connect(display.seen)
+	ELPracticeAI.step(duel)
+	while ELPracticeAI.thinking(duel): OS.delay_msec(1)
+	var job: ELPracticeAI.Job = ELPracticeAI._jobs[duel.get_instance_id()]
+	job.result.command = {"kind": "attack", "id": 9999}
+	var initial := duel._snapshot()
+	ELPracticeAI.step(duel)
+	job = ELPracticeAI._jobs.get(duel.get_instance_id())
+	if job == null or not job.request.has("retry_command") or duel._snapshot() != initial:
+		_fail(game, "refused", "the displayed refusal did not leave a retry on the background worker")
+	else:
+		while ELPracticeAI.thinking(duel): OS.delay_msec(1)
+		ELPracticeAI.step(duel)
+		if duel._snapshot() != expected: _fail(game, "refused", "the displayed retry chose a different recovery")
+		else: _pass(game, "refused", "a displayed refusal returned before recovery and applied the worker's command")
+	ELPracticeAI.finish()
+	display.free()
 
 # --- 3: what the proofs settled belongs to one duel ----------------------------
 
@@ -298,6 +327,21 @@ func _check_plans(game: String) -> void:
 	d.rng_state -= 1
 	if not changed.is_empty(): _fail(game, "plans", "a plan was followed after the state of chance changed")
 	else: _pass(game, "plans", "a plan is followed only in its own duel and state of chance")
+	var defence := preload("res://../tools/duel_fixtures.gd").build(profile, {
+		"phase": "defence", "attacks": [2], "heroes": [{"health": 3}, {"health": 10}],
+		"creatures": [{"owner": 0, "card": "KBWR", "power": 1, "toughness": 1},
+			{"owner": 1, "card": "GROG", "power": 4, "toughness": 4}],
+	})
+	if defence == null:
+		_fail(game, "plans", "could not build the defence-to-attack position")
+		return
+	var end := {"kind": "end_phase"}
+	ELCombatSearch._remember(defence, [end, end])
+	if not defence.end_phase() or defence.attacker != 1 or defence.phase != ELDuel.Phase.ATTACK:
+		_fail(game, "plans", "defender did not reach its attack phase")
+	elif not ELCombatSearch._recall(defence).is_empty():
+		_fail(game, "plans", "the defender carried a pass into its own attack turn")
+	else: _pass(game, "plans", "the former defender chooses a fresh plan on its attack turn")
 
 # --- 4: lines read ahead keep their own battle-script state ----------------------
 

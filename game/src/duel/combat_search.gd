@@ -152,7 +152,7 @@ static var smart_open_hand := false
 ## many cards the other hero holds and those of them that came into its hand
 ## in the open (a card returned from the board or a graveyard, never one
 ## drawn). The other hero's drawn cards are then sampled out of that hero's
-## book (ELCombatBrain.sampled), every card either hero has still to draw is
+## book, every card either hero has still to draw is
 ## unknown, the duel's own run of chance is never read, and no proof stands
 ## on a sampled card. It holds for the compiled engine and for the search
 ## written here alike (`fair_view`).
@@ -175,6 +175,9 @@ static var smart_engine_phases := 4
 static var smart_engine_steps := 16
 ## Commands it plays through at a node below the first.
 static var smart_engine_width := 16
+## Simultaneous search workers per decision, including the caller. Zero adapts
+## to the displayed battle's frame times. One reproduces the serial search.
+static var smart_engine_workers := 0
 ## Turns of fighting played out where a line stops (0 guesses instead).
 static var smart_engine_leaf := 1
 ## Remake option: instead of weighing positions, the engine plays every
@@ -275,6 +278,21 @@ static var smart_engine_ms := 5000
 ## the device or holds up the page: half of it, and the engine reads fewer
 ## positions there besides (`smart_engine_mobile`).
 static var smart_engine_ms_handheld := 2500
+
+static func available_processors() -> int:
+	var cpus := clampi(OS.get_processor_count(), 1, 255)
+	if ELCombatBrain.supports_workers:
+		var assigned := int(ClassDB.class_call_static(&"ELNativeDuelBrain", &"affinity_processors"))
+		if assigned > 0: cpus = mini(cpus, assigned)
+	return cpus
+
+## A displayed duel can lower its allowance as frames are drawn. Without a
+## display, all processors assigned to the process are available for search.
+static func worker_limit(frame_limit := 0) -> int:
+	var cpus := available_processors()
+	if smart_engine_workers > 0: return mini(cpus, smart_engine_workers)
+	if frame_limit > 0: return mini(cpus, frame_limit)
+	return cpus
 
 ## The longest one thought of the engine may take on this device (0: no limit).
 static func engine_ms() -> int:
@@ -388,6 +406,9 @@ static var smart_engine_rounds := 20
 ## itself, the engine with this budget beat the one with a quarter of it in
 ## 55 duels of 100 in the first game and 52 in the second, at about three
 ## times the reading; `smart_engine_ms` still ends any one thought.
+## On desktop systems with at least twelve available workers, a normal timed
+## choice may give a second group this allowance to compare a longer reply.
+## Both groups use the same deadline and report their combined work.
 static var smart_engine_budget := 8000000
 ## A phone or a tablet reads a fraction of that, so that the computer's turn
 ## does not drag or warm the device: a quarter takes a recent handheld a
@@ -492,11 +513,17 @@ class Line:
 	var children: Array[Line] = []
 	## Remake option: spells and abilities already tried here, by kind.
 	var families := {}
+	## Complete block assignments already searched among this position's children.
+	var block_orders: Array[Array] = []
 	## Remake option: for a first move that only gains ether, the ether the
 	## hero held before it (see `smart_idle`).
 	var without := -1
 
 class Context:
+	## Scores for identical positions within this decision. Script state is
+	## external to a board snapshot, so scripted positions are evaluated individually.
+	var leaf_scores := {}
+	var leaf_hits := 0
 	var ai := 0
 	var w := PackedFloat64Array()
 	var limit := 0
@@ -510,6 +537,8 @@ class Context:
 	## Auto-combat without "use spells": no artifacts and no spellbook copies
 	## that spend charges (the hero's enchantment abilities stay).
 	var restricted := false
+	var frame_worker_limit := 0
+	var live_frame_workers := false
 	## Remake option: see `smart_threat` and `smart_lethal`.
 	var threat := 0.0
 	var lethal := 0.0
@@ -609,6 +638,20 @@ static func fair_view(duel: ELDuel, viewer: int) -> ELDuel:
 	var seen := duel.search_copy()
 	var other := 1 - viewer
 	var hero: Dictionary = seen.heroes[other]
+	seen.rng_state = hash([int(duel.turn_serial), int(duel.round_number), viewer, duel.profile.id, "fair"]) & 0xffffffff
+	if duel.profile.id == "el2":
+		# Reconstruct the opponent's held pages without reading its private
+		# draw cycle. Each sampled card reserves a charge for the next draw.
+		seen.search_viewer = viewer
+		hero.drawn.clear()
+		hero.hand_slots.fill(-1)
+		for i in hero.hand.size():
+			if int(duel.heroes[other].hand_slots[i]) < 0: continue
+			var page := ELSpellCharges.choose(hero, seen.random_index)
+			if page >= 0:
+				hero.hand[i] = hero.deck[page]
+				hero.hand_slots[i] = page
+		return seen
 	var places := ELCombatBrain.sampled_places(duel, other, hero.hand.size(), 0)
 	for i in hero.hand.size():
 		if i < hero.hand_slots.size() and int(hero.hand_slots[i]) < 0: continue
@@ -619,7 +662,6 @@ static func fair_view(duel: ELDuel, viewer: int) -> ELDuel:
 		if place < 0: continue
 		hero.hand[i] = String(hero.deck[place])
 		if i < hero.hand_slots.size(): hero.hand_slots[i] = place
-	seen.rng_state = hash([int(duel.turn_serial), int(duel.round_number), viewer, duel.profile.id, "fair"]) & 0xffffffff
 	return seen
 
 static func request(duel: ELDuel, restricted := false) -> Dictionary:
@@ -631,7 +673,7 @@ static func request(duel: ELDuel, restricted := false) -> Dictionary:
 	var information := [smart_open_hand, smart_engine_draws, smart_engine_blind, info_policy(duel)]
 	var asked := {"smart": smart, "engine": engine, "budget": engine_budget(), "ms": ms, "identity": duel.identity(), "restricted": restricted,
 		"follow": smart and smart_follow, "information": information, "cancel": Cancel.new()}
-	asked.policy = hash([smart, engine, asked.budget, ms, restricted, asked.follow, information, smart_engine_phases, smart_engine_steps, smart_engine_width,
+	asked.policy = hash([smart, engine, asked.budget, ms, restricted, asked.follow, information, smart_engine_phases, smart_engine_steps, smart_engine_width, smart_engine_workers,
 		smart_engine_prove, smart_engine_prove_share, smart_engine_guard, smart_engine_reach, smart_engine_beyond, smart_engine_likely, smart_budget, smart_phases, smart_quiet_proof, smart_hold_lost, smart_puzzle_kill, smart_line_end, smart_quiet_plans])
 	asked.deadline_usec = Time.get_ticks_usec() + ms * 1000 if ms > 0 else 0
 	asked.spent_usec = 0
@@ -644,6 +686,7 @@ static func request(duel: ELDuel, restricted := false) -> Dictionary:
 ## have used three fifths of the time.
 static func again(duel: ELDuel, asked: Dictionary = {}, restricted := false) -> Dictionary:
 	var next := request(duel, restricted)
+	next.frame_worker_limit = asked.get("frame_worker_limit", 0)
 	var ms := int(next.get("ms", 0))
 	if ms <= 0: return next
 	var spent := int(asked.get("spent_usec", ms * 600)) if not asked.is_empty() else ms * 600
@@ -689,7 +732,7 @@ static func _share(ctx: Context, budget: int) -> int:
 ## The opponent's next command for the acting side, as a command dictionary
 ## (see `apply`). `asked` is the decision's `request`, made from `duel` when
 ## not given. `stats`, when given, receives the number of positions and the
-## way the command was found ("engine": plan, proof, native, beyond, search
+## way the command was found ("engine": plan, defence_plan, proof, native, survival, combat_reserve, summon_defence, beyond, search
 ## or original); with a "trace" entry it also receives every first move
 ## tried, as {command, prior, value, positions}, the number of first moves
 ## there were ("offered") and the commands of those the budget did not reach
@@ -721,6 +764,8 @@ static func think(duel: ELDuel, stats: Dictionary = {}, restricted := false, ask
 static func _think(real: ELDuel, duel: ELDuel, stats: Dictionary, restricted: bool, asked: Dictionary) -> Dictionary:
 	var ctx := Context.new()
 	ctx.restricted = bool(asked.get("restricted", restricted))
+	ctx.frame_worker_limit = int(asked.get("frame_worker_limit", 0))
+	ctx.live_frame_workers = bool(asked.get("live_frame_workers", false))
 	ctx.ai = duel.active_side()
 	ctx.edition = duel.profile.id
 	ctx.second = ctx.edition == "el2"
@@ -757,17 +802,36 @@ static func _think(real: ELDuel, duel: ELDuel, stats: Dictionary, restricted: bo
 			if String(now.get("status", "")) == "proven" and _quiet_win(ctx, duel, int(now.get("turns", 0))):
 				stats.engine = "plan_quiet"
 				return {"kind": "end_phase"}
-		if not planned.is_empty():
-			stats.positions = 0
+		var extra_blocker := {}
+		if planned.get("kind") == "end_phase" and duel.phase == ELDuel.Phase.ATTACK and not recalled.get("won", false):
+			if not ctx.restricted and bool(asked.get("engine", false)) and smart_engine_guard > 0:
+				extra_blocker = _summon_before_loss(ctx, duel, planned)
+		# A partial search can leave a legal block out of its cached pass.
+		# Keep the blocks already set and spend a fraction of a normal decision on the rest.
+		if recalled.get("keep_blocks", false):
+			ctx.revise = false
+		elif recalled.get("recheck_blocks", false):
+			ctx.revise = false
+			ctx.budget = maxi(1, ctx.budget / 8) if ctx.budget > 0 else 1000000
+		elif not planned.is_empty():
+			if not extra_blocker.is_empty(): planned = extra_blocker
+			stats.positions = ctx.used
 			stats.fights = 0
-			stats.engine = "plan"
-			stats.followed = true
-			# A step of a plan already chosen is no decision of its own.
+			stats.engine = "defence_plan" if recalled.get("from_defence", false) else "plan"
+			if not extra_blocker.is_empty(): stats.engine = "summon_defence"
+			stats.followed = extra_blocker.is_empty()
 			if ctx.tracing:
-				stats.trace = [{"command": planned, "plan": planned, "prior": 1.0, "value": 0.0, "positions": 0}]
+				stats.trace = [{"command": planned, "plan": planned, "prior": 1.0, "value": 0.0, "positions": ctx.used}]
 				stats.offered = 1
 				stats.untried = []
 			return planned
+	# Read the attack from the actual next hand when ending defence is forced.
+	if smart and asked.get("follow", false) and not ctx.tracing and not duel.setup.get("puzzle_fixed_hands", false) and not duel.setup.has("puzzle_goal"):
+		if _must_end_defence(duel, ctx.ai):
+			stats.engine = "forced_pass"
+			stats.positions = 0
+			stats.fights = 0
+			return {"kind": "end_phase"}
 	ctx.w = chosen_weights(ctx.second) if smart and smart_steady else weights(duel.rng_state, ctx.second)
 	ctx.limit = (1 if duel.phase == ELDuel.Phase.ATTACK else 0) + (smart_phases if smart else 0)
 	var root := Line.new()
@@ -815,6 +879,7 @@ static func _think(real: ELDuel, duel: ELDuel, stats: Dictionary, restricted: bo
 	# The lookahead script layer lives for one think.
 	if start.scripts != null and start.scripts.search_only: start.scripts.close()
 	stats.positions = ctx.positions
+	stats.leaf_hits = ctx.leaf_hits
 	stats.fights = ctx.fights
 	stats.engine = "search" if smart else "original"
 	var best: Line = null
@@ -856,7 +921,49 @@ static func _think(real: ELDuel, duel: ELDuel, stats: Dictionary, restricted: bo
 ## forced win within stay settled while the board changes under them.
 static func _proof_key(ctx: Context, duel: ELDuel, asked: Dictionary) -> int:
 	return hash([duel.identity(), duel.profile.id, duel.turn_serial, duel.phase, duel.attacker, ctx.ai, duel.rng_state, duel.round_number,
-		hash(duel.setup), ctx.budget, ctx.restricted, smart_engine_prove, smart_engine_prove_share, int(asked.get("policy", 0))])
+		hash(duel.setup), ctx.budget, ctx.restricted, ctx.revise, smart_engine_prove, smart_engine_prove_share, int(asked.get("policy", 0))])
+
+## A graveyard summon competes with spells in hand for the same ether.
+## Compare that formation through damage before reading another turn.
+static func _can_revive_in_combat(duel: ELDuel, side: int) -> bool:
+	var hero: Dictionary = duel.heroes[side]
+	if hero.grave.is_empty() or hero.enchantments.is_empty() or duel.army(side).size() >= 10: return false
+	var mana := duel.available_mana(side)
+	for ability: Dictionary in duel.abilities(side):
+		var effect: String = ability.get("effect", "")
+		if effect not in ["rebirth", "second_birth"] or ability.get("used", false): continue
+		for index in duel.grave_ability_targets(side, ability.key, side):
+			var cost := int(ability.cost)
+			if effect == "second_birth": cost = int(duel.profile.table("CombatSpells")[hero.grave[index]].Cost)
+			if mana >= cost: return true
+	return false
+
+## An aspect change can add or remove a fighter before damage. If both
+## armies can change aspect, include the opposing response in the first pass.
+static func _can_change_aspect_unopposed(duel: ELDuel, side: int) -> bool:
+	if duel.profile.id != "el2": return false
+	if not duel.heroes[0].enchantments.is_empty() or not duel.heroes[1].enchantments.is_empty(): return false
+	var own_change := false
+	for id: int in duel.creatures:
+		if not duel.pale(id) or not duel.can_change_aspect(id, not duel.in_plane(id)): continue
+		if duel.creatures[id].owner != side: return false
+		own_change = true
+	return own_change
+
+static func _temporary_ether_unlocks_card(duel: ELDuel, side: int) -> bool:
+	var hand: Array = duel.heroes[side].hand
+	var extra := 0
+	for i in hand.size():
+		var card := String(hand[i])
+		var rule := ELCatalog.rule(duel.profile, card)
+		if rule.get("effect", "") == "mana" and duel.can_cast_from_hand(i):
+			extra = maxi(extra, int(rule.amount) - duel.cost(card))
+	if extra <= 0: return false
+	var available := duel.available_mana(side)
+	for card: String in hand:
+		var shortfall := duel.cost(card) - available
+		if shortfall > 0 and shortfall <= extra: return true
+	return false
 
 ## The compiled engine's command (see `think`), or {} when it has none and the
 ## search is to decide.
@@ -883,8 +990,34 @@ static func _engine(ctx: Context, duel: ELDuel, stats: Dictionary, asked: Dictio
 		ctx.prove_from = int(settled.from)
 		if settled.cut: ctx.prove_share = maxi(1, smart_engine_prove_share / 4)
 	var began := Time.get_ticks_usec()
+	var phases := smart_engine_phases
+	# From attack, three phases include our combat and the opponent's attack.
+	# The leaf search resolves blocks and damage. Spend the first pass
+	# comparing spells and formations at that horizon before extending it.
+	if phases == 4 and duel.phase == ELDuel.Phase.ATTACK and not duel.setup.get("puzzle_fixed_hands", false):
+		# Before the first army develops, compare summons through the
+		# opponent's full combat reply, including blocks and damage.
+		var developing := duel.creatures.size() <= 1 and duel.army(ctx.ai).is_empty()
+		if not developing:
+			phases = 3
+			# If a single enemy can kill this hero on its next attack, include the
+			# full defensive reply when comparing attacks with new blockers.
+			for foe: Dictionary in duel.army(1 - ctx.ai):
+				if foe.power >= duel.heroes[ctx.ai].health and not duel.has_flag(foe.id, "NoAttack") and not duel.in_plane(foe.id):
+					phases = 4
+					break
+			# Spending a temporary ether spell now can leave a better summon
+			# out of reach next turn. Compare both plays through the full reply.
+			if phases == 3 and _temporary_ether_unlocks_card(duel, ctx.ai):
+				phases = 4
+			elif phases == 3 and (duel.available_mana(ctx.ai) == 0 or _can_change_aspect_unopposed(duel, ctx.ai) or _can_revive_in_combat(duel, ctx.ai)):
+				# Resolve the remaining attacks and free abilities through damage
+				# before extending to the next hero's completed combat.
+				phases = 2
+	# Compare spending the area damage now with developing an attacker through this combat.
+	if phases == 3 and ELCombatBrain.consider_sweep_in_combat(duel, ctx.restricted): phases = 2
 	var found := ELCombatBrain.gamble(ctx, duel, smart_engine_rounds, ctx.budget) if smart_engine_rollouts \
-		else ELCombatBrain.choose(ctx, duel, smart_engine_phases, ctx.budget, smart_engine_steps, smart_engine_width)
+		else ELCombatBrain.choose(ctx, duel, phases, ctx.budget, smart_engine_steps, smart_engine_width)
 	ctx.rate = float(found.get("positions", 0)) / maxf(1.0, float(Time.get_ticks_usec() - began))
 	_stage(stats, "choose", began)
 	ctx.used += int(found.get("positions", found.get("games", 0)))
@@ -918,6 +1051,7 @@ static func _engine(ctx: Context, duel: ELDuel, stats: Dictionary, asked: Dictio
 	# Measuring aid: how far the engine read, and whether its budget ran out.
 	stats.far = int(found.get("far", 0))
 	stats.depth = int(found.get("depth", 0))
+	stats.workers = int(found.get("workers", 1))
 	stats.guarded = int(found.get("guarded", 0))
 	stats.cut = bool(found.get("aborted", false))
 	# Measuring aid: the engine's whole line as it gave it, for a caller
@@ -965,7 +1099,7 @@ static func _engine(ctx: Context, duel: ELDuel, stats: Dictionary, asked: Dictio
 	# An ether spell that nothing in the line after it needs stays in the
 	# hand, and the line goes on without it.
 	if smart_idle and not smart_engine_rollouts and not found.is_empty():
-		var instead := _unneeded(duel, found)
+		var instead := _unneeded(duel, found, ctx.restricted)
 		if not instead.is_empty() and _holds(ctx, duel, instead.command): found = instead
 		if not instead.is_empty(): _stage(stats, "idle", stage_began)
 	stage_began = Time.get_ticks_usec()
@@ -992,10 +1126,138 @@ static func _engine(ctx: Context, duel: ELDuel, stats: Dictionary, asked: Dictio
 		stats.value = float(found.get("value", found.get("share", 0.0)))
 		stats.engine = "native"
 		var line: Array = found.get("line", [])
-		if follow and line.size() > 1: _remember(real, line, int(asked.get("policy", 0)))
+		if duel.phase == ELDuel.Phase.DEFENCE:
+			var refuted: bool = found.get("selective_win", "") == "refuted" and not duel.setup.get("puzzle_goal", {})
+			var rescue := _surviving_defence(ctx, duel, line if not line.is_empty() else [found.command], refuted)
+			if not rescue.is_empty():
+				line = rescue.line
+				found.command = line[0]
+				stats.engine = "survival"
+				stats.value = rescue.value
+		elif not ctx.restricted and not found.get("terminal", false) and not duel.setup.get("puzzle_goal", {}) and not _late(ctx):
+			var spend: Dictionary = found.command
+			# A cached attack line can spend the spell on its second command.
+			if spend.get("kind") == "attack" and line.size() > 1 and line[1].get("kind") == "cast":
+				spend = line[1]
+			var combat := _save_removal(ctx, duel, spend)
+			if not combat.is_empty() and not _late(ctx) and _holds(ctx, duel, combat.line[0], combat.line):
+				line = combat.line
+				found.command = line[0]
+				stats.engine = "combat_reserve"
+				stats.value = combat.value
+		if follow and stats.engine == "native" and found.has("next_turn_cast") and found.command.get("kind") == "end_phase":
+			if not stats.cut and not ctx.restricted and not duel.setup.get("puzzle_goal", {}):
+				_remember_next_cast(ctx, real, found.next_turn_cast, int(asked.get("policy", 0)))
+		if follow and line.size() > 1:
+			var recheck_first_attack: bool = (duel.phase == ELDuel.Phase.ATTACK and line[0].get("kind") == "cast"
+				and stats.cut and line.size() >= int(stats.depth))
+			var recheck_blocks: bool = (duel.phase == ELDuel.Phase.DEFENCE and stats.cut
+				and ctx.revise and not found.get("terminal", false))
+			_remember(real, line, int(asked.get("policy", 0)), false, recheck_first_attack, recheck_blocks)
+		elif follow and duel.phase == ELDuel.Phase.DEFENCE and line.size() == 1 and line[0].get("kind") == "block":
+			# The guard found an alternative on one of its three attempts,
+			# or returned the escape directly (14).
+			if int(found.get("guarded", 0)) in [1, 2, 3, 14]:
+				_remember_guarded_block(real, line[0], int(asked.get("policy", 0)))
 		_engine_trace(ctx, duel, stats, found.command, float(stats.value))
 		return found.command
 	return {}
+
+## Before spending a removal spell on the lone enemy, play out the attack
+## without it. Its blocker may lose the exchange on either hero's turn.
+static func _save_removal(ctx: Context, duel: ELDuel, command: Dictionary) -> Dictionary:
+	if command.get("kind") != "cast": return {}
+	var target := int(command.get("target", -1))
+	var foe := 1 - duel.attacker
+	if not duel.ready(target) or duel.creatures[target].owner != foe or duel.army(foe).size() != 1: return {}
+	var fighter := -1
+	for creature: Dictionary in duel.army(duel.attacker):
+		var id := int(creature.id)
+		if not duel.attacks.has(id) and (creature.power <= 0 or not duel.can_declare_attack(id)): continue
+		if fighter >= 0: return {}
+		fighter = id
+	if fighter < 0: return {}
+
+	var cast := duel.search_copy()
+	var removed := apply(cast, command) and not cast.creatures.has(target) and cast.phase == duel.phase
+	removed = removed and cast.heroes[foe].health == duel.heroes[foe].health and cast.creatures.has(fighter)
+	if cast.scripts != null and cast.scripts.search_only: cast.scripts.close()
+	if not removed: return {}
+	var trial := duel.search_copy()
+	var combat := _removal_exchange(ctx, trial, fighter, target)
+	if trial.scripts != null and trial.scripts.search_only: trial.scripts.close()
+	return combat
+
+static func _removal_exchange(ctx: Context, trial: ELDuel, fighter: int, target: int) -> Dictionary:
+	var side := trial.attacker
+	var foe := 1 - side
+	var health := int(trial.heroes[side].health)
+	var foe_health := int(trial.heroes[foe].health)
+	var line: Array = []
+	if not trial.attacks.has(fighter):
+		if not trial.toggle_attack(fighter): return {}
+		line.append({"kind": "attack", "id": fighter})
+	if not trial.end_phase() or trial.phase != ELDuel.Phase.DEFENCE or not trial.block_problem(target, fighter).is_empty(): return {}
+	line.append({"kind": "end_phase"})
+	# A spell, artifact or ability may change the fight before damage.
+	for i in trial.heroes[foe].hand.size():
+		if trial.can_cast_from_hand(i): return {}
+	for id: int in [foe, target]:
+		var abilities := trial.abilities(id)
+		for ability: Dictionary in abilities:
+			if trial.can_use_ability(id, ability.key, abilities): return {}
+
+	var blocked := trial.search_copy()
+	var wins_block := blocked.assign_block(target, fighter) and blocked.end_phase() and blocked.phase != ELDuel.Phase.FINISHED
+	wins_block = wins_block and blocked.creatures.has(fighter) and not blocked.creatures.has(target) and blocked.heroes[side].health >= health
+	var value := side_value(ctx, blocked, side) - side_value(ctx, blocked, foe) if wins_block else 0.0
+	if blocked.scripts != null and blocked.scripts.search_only: blocked.scripts.close()
+	if not wins_block: return {}
+	# Declining the block must cost the defender health. Keep a line that
+	# clears the blocker for lethal damage, even if the attacker would live.
+	if not trial.end_phase() or trial.phase != ELDuel.Phase.ATTACK or trial.attacker != foe: return {}
+	if trial.heroes[side].health < health or trial.heroes[foe].health >= foe_health or not trial.ready(fighter): return {}
+	value = minf(value, side_value(ctx, trial, side) - side_value(ctx, trial, foe))
+	# With the defender still alive, the same fighter must be ready to
+	# meet its counterattack and survive under the duel's combat rules.
+	if not trial.toggle_attack(target) or not trial.end_phase() or trial.phase != ELDuel.Phase.DEFENCE: return {}
+	if not trial.assign_block(fighter, target) or not trial.end_phase(): return {}
+	if trial.winner == foe or trial.heroes[side].health < health or trial.creatures.has(target) or not trial.creatures.has(fighter): return {}
+	return {"line": line, "value": value}
+
+## A budgeted line can stop assigning blockers too early. If its completed
+## defence loses this fight under the duel rules, try the whole-army plans.
+static func _surviving_defence(ctx: Context, duel: ELDuel, line: Array, refuted := false) -> Dictionary:
+	if line.back().get("kind") != "end_phase" or duel.army(ctx.ai).is_empty(): return {}
+	var trial := duel.search_copy()
+	for step: Dictionary in line:
+		if trial.phase != ELDuel.Phase.DEFENCE or not apply(trial, step): break
+	var lost := trial.phase == ELDuel.Phase.FINISHED and trial.winner == 1 - ctx.ai
+	# When the predicted win was disproved, compare the actual combat
+	# outcomes of alternative assignments before caching the remaining blocks.
+	var compare := refuted and trial.phase == ELDuel.Phase.ATTACK and line.all(func(m: Dictionary) -> bool: return m.kind in ["block", "end_phase"])
+	var health := int(trial.heroes[ctx.ai].health)
+	var own := side_value(ctx, trial, ctx.ai) if compare else 0.0
+	var foe := side_value(ctx, trial, 1 - ctx.ai) if compare else 0.0
+	if trial.scripts != null and trial.scripts.search_only: trial.scripts.close()
+	if not lost and not compare: return {}
+	var best := {}
+	for plan: Array in BLOCK_PLANS:
+		trial = duel.search_copy()
+		var blocks := Line.new()
+		blocks.command = {"plan": plan[0], "replan": ctx.revise and not duel.blocks.is_empty()}
+		var saved := _block_plan(ctx, blocks, trial) and trial.end_phase() and trial.winner != 1 - ctx.ai
+		if saved:
+			var allied := side_value(ctx, trial, ctx.ai)
+			var enemy := side_value(ctx, trial, 1 - ctx.ai)
+			var value := allied - enemy
+			var safer := int(trial.heroes[ctx.ai].health) > health and allied >= own and enemy <= foe
+			if lost or (safer and (best.is_empty() or value > float(best.value))):
+				blocks.steps.append({"kind": "end_phase"})
+				best = {"line": blocks.steps, "value": value}
+		if trial.scripts != null and trial.scripts.search_only: trial.scripts.close()
+		if lost and not best.is_empty(): break
+	return best
 
 ## Measuring aid: for a caller that asks for a trace, the commands the engine
 ## weighs at the root with their worth, the chosen one first. The engine
@@ -1007,9 +1269,13 @@ static func _engine_trace(ctx: Context, duel: ELDuel, stats: Dictionary, command
 	for item: Dictionary in ELCombatBrain.weigh(ctx, duel, smart_engine_phases, ctx.budget, smart_engine_steps):
 		if item.command.is_empty(): continue
 		if item.command == command:
-			chosen.value = float(item.value)
+			# The single declaration and a whole attack can start with the
+			# same creature. Show the best continuation for that first step.
+			if not chosen.has("line") or float(item.value) > float(chosen.value):
+				chosen.value = float(item.value)
+				chosen.line = item.line
 			continue
-		trace.append({"command": item.command, "plan": item.command, "prior": 1.0, "value": float(item.value), "positions": 0})
+		trace.append({"command": item.command, "plan": item.command, "line": item.line, "prior": 1.0, "value": float(item.value), "positions": 0})
 	stats.trace = trace
 	stats.offered = trace.size()
 	stats.untried = []
@@ -1037,11 +1303,11 @@ static func _likely(ctx: Context, duel: ELDuel, found: Dictionary, stats: Dictio
 		if better.is_empty() or float(item.value) > float(better.value): better = item
 	ctx.used += budget if ctx.budget > 0 else 0
 	if better.is_empty() or own <= -1e17 or float(better.value) < own - smart_engine_likely_tie: return found
-	if not _holds(ctx, duel, better.command):
+	if not _holds(ctx, duel, better.command, better.line):
 		stats.likely_refused = int(stats.get("likely_refused", 0)) + 1
 		return found
 	stats.likely = int(stats.get("likely", 0)) + 1
-	return {"command": better.command, "value": better.value, "positions": found.get("positions", 0), "status": "heuristic"}
+	return {"command": better.command, "line": better.line, "value": better.value, "positions": found.get("positions", 0), "status": "heuristic"}
 
 ## Whether ending the attack phase now still wins within `turns` of the
 ## hero's own turns (the proof after it counts from the other hero's move).
@@ -1125,16 +1391,39 @@ static func _right_side(ctx: Context, duel: ELDuel, found: Dictionary, stats: Di
 		if better.is_empty() or float(item.value) > float(better.value): better = item
 	ctx.used += _share(ctx, ctx.budget) if ctx.budget > 0 else 0
 	var command: Dictionary = better.command if not better.is_empty() else {"kind": "end_phase"}
-	return {"command": command, "value": better.get("value", found.get("value", 0.0)), "positions": found.get("positions", 0), "status": "heuristic"}
+	return {"command": command, "line": better.get("line", []), "value": better.get("value", found.get("value", 0.0)), "positions": found.get("positions", 0), "status": "heuristic"}
+
+## A cached pass can expose a forced loss on the opponent's next turn. Keep
+## the pass unless the opponent's proof succeeds against it and no longer
+## succeeds when a creature joins the defence.
+static func _summon_before_loss(ctx: Context, duel: ELDuel, pass_step: Dictionary) -> Dictionary:
+	var hand: Array = duel.heroes[ctx.ai].hand
+	var summons := {}
+	for slot in hand.size():
+		var card := String(hand[slot])
+		if not summons.has(card) and ELCatalog.rule(duel.profile, card).get("effect") == "summon" and duel.can_cast_from_hand(slot):
+			summons[card] = {"kind": "cast", "index": slot, "card": card, "target": -1, "grave": -1, "power": 0}
+	if summons.is_empty() or _late(ctx): return {}
+	ctx.w = chosen_weights(ctx.second)
+	ctx.budget = maxi(1, ctx.budget / 8) if ctx.budget > 0 else 1000000
+	if ctx.budget < 1000: return {}
+	if _holds(ctx, duel, pass_step, [], 1, true): return {}
+	for cast: Dictionary in summons.values():
+		if _late(ctx) or ctx.budget - ctx.used < 1000: break
+		if _holds(ctx, duel, cast, [cast, pass_step], 1, true): return cast
+	return {}
 
 ## Whether `command` passes the engine's guard, as the engine's own choice
 ## must: once it is played, the other hero is not proved to win within
 ## `smart_engine_guard` of its turns whatever this one does (a proof reads
 ## every command of both).
-static func _holds(ctx: Context, duel: ELDuel, command: Dictionary) -> bool:
+static func _holds(ctx: Context, duel: ELDuel, command: Dictionary, line: Array = [], turns := -1, accept_draw := false) -> bool:
 	var copy := duel.search_copy(ctx.second)
 	var ok := apply(copy, command)
-	if ok and copy.phase == ELDuel.Phase.FINISHED: ok = copy.winner == ctx.ai
+	for i in range(1, line.size()):
+		if not ok: break
+		ok = apply(copy, line[i])
+	if ok and copy.phase == ELDuel.Phase.FINISHED: ok = copy.winner == ctx.ai or (accept_draw and copy.winner < 0)
 	elif ok and smart_engine_guard > 0:
 		var foe := Context.new()
 		foe.ai = 1 - ctx.ai
@@ -1150,7 +1439,8 @@ static func _holds(ctx: Context, duel: ELDuel, command: Dictionary) -> bool:
 		foe.viewer = ctx.viewer if ctx.viewer >= 0 else ctx.ai
 		foe.deadline_usec = ctx.deadline_usec
 		var budget := _share(ctx, maxi(2000, ctx.budget * maxi(1, smart_engine_guard_share) / 100))
-		var proof := ELCombatBrain.prove(foe, copy, smart_engine_guard, maxi(1000, budget))
+		var reach := smart_engine_guard if turns < 0 else mini(turns, smart_engine_guard)
+		var proof := ELCombatBrain.prove(foe, copy, reach, maxi(1000, budget))
 		ctx.used += int(proof.get("positions", 0))
 		ok = String(proof.get("status", "")) != "proven"
 	if copy.scripts != null and copy.scripts.search_only: copy.scripts.close()
@@ -1242,10 +1532,12 @@ static func _unlikely(ctx: Context, duel: ELDuel, command: Dictionary) -> bool:
 ## end of the phase, or when ether left over has a use: an army that can
 ## regenerate spends it through the other hero's turn, and the price of an
 ## ability is not known here.
-static func _unneeded(duel: ELDuel, found: Dictionary) -> Dictionary:
+static func _unneeded(duel: ELDuel, found: Dictionary, restricted: bool) -> Dictionary:
 	var command: Dictionary = found.get("command", {})
 	if String(command.get("kind", "")) != "cast": return {}
-	if String(ELCatalog.rule(duel.profile, String(command.get("card", ""))).get("effect", "")) != "mana": return {}
+	var mana_card := String(command.get("card", ""))
+	var mana_rule := ELCatalog.rule(duel.profile, mana_card)
+	if mana_rule.get("effect", "") != "mana": return {}
 	var side := duel.active_side()
 	for c: Dictionary in duel.army(side):
 		if duel.regeneration_cost(c.id) > 0: return {}
@@ -1256,13 +1548,22 @@ static func _unneeded(duel: ELDuel, found: Dictionary) -> Dictionary:
 	var tax := duel.global_enchantment_count("LSDS")
 	var ids: Array = duel.creatures.keys()
 	var next := {}
+	var spent := {}
 	for i in range(1, count):
 		var at := 9 + i * 4
 		if at + 3 >= raw.size(): return {}
 		var kind := int(raw[at])
 		var price := 0
 		if kind == 0:
-			# The phase ends with everything paid for.
+			# Ether also pays for defence before the hero's next refresh.
+			# Keep the engine's play when it makes a held response affordable.
+			if duel.phase == ELDuel.Phase.ATTACK:
+				var funded := left + int(mana_rule.amount) - duel.cost(mana_card)
+				for slot in hand.size():
+					if spent.has(slot) or not duel.phase_allows(hand[slot], ELDuel.Phase.DEFENCE): continue
+					if restricted and int(duel.heroes[side].hand_slots[slot]) >= 0: continue
+					var cost := duel.cost(hand[slot])
+					if left < cost and cost <= funded: return {}
 			if next.is_empty(): next = {"kind": "end_phase"}
 			return {"command": next, "line": [next], "value": found.get("value", 0.0), "positions": found.get("positions", 0), "raw": raw}
 		elif kind == 1: price = tax
@@ -1273,6 +1574,7 @@ static func _unneeded(duel: ELDuel, found: Dictionary) -> Dictionary:
 		elif kind == 3:
 			var slot := int(raw[at + 1])
 			if slot < 0 or slot >= mini(hand.size(), ELCombatBrain.HAND): return {}
+			spent[slot] = true
 			var rule := ELCatalog.rule(duel.profile, String(hand[slot]))
 			# A second ether spell changes what the rest can cost.
 			if String(rule.get("effect", "")) == "mana": return {}
@@ -1303,8 +1605,63 @@ static func _decision_class(duel: ELDuel, side: int, command: Dictionary) -> int
 		"ability": return 64
 	return 16
 
+## A defence with no command to choose can finish immediately. Leave any
+## available spell or ability to the normal search, including scripted uses.
+static func _must_end_defence(duel: ELDuel, side: int) -> bool:
+	if duel.phase != ELDuel.Phase.DEFENCE or not duel.blocks.is_empty() or duel.scripts != null: return false
+	for card: String in duel.heroes[side].hand:
+		if duel.phase_allows(card): return false
+	if not duel.abilities(side).is_empty(): return false
+	for creature: Dictionary in duel.army(side):
+		for ability: Dictionary in duel.abilities(creature.id):
+			if ability.get("pale", false): return false
+			if ability.get("used", false) or ability.get("phase") == "attack": continue
+			if ability.get("ready", true) and not duel.ready(creature.id): continue
+			if ability.get("tapped", false) and (not creature.resting or creature.sick): continue
+			if ability.get("target") == "enchantment":
+				var holders: Array = [0, 1] + duel.creatures.keys()
+				if not holders.any(func(id: int) -> bool: return not duel.entity(id).get("enchantments", []).is_empty()): continue
+			return false
+		for target: int in duel.attacks:
+			if duel.block_problem(creature.id, target).is_empty(): return false
+	return true
+
+
+## Compare the best remaining plays through this combat, with the same
+## allowance for each hand. A partial reading cannot veto a longer line.
+static func _immediate_combat_value(ctx: Context, duel: ELDuel, budget: int) -> float:
+	if _late(ctx): return NAN
+	var choices := ELCombatBrain.weigh(ctx, duel, 2, budget, 8, smart_engine_width)
+	ctx.used += budget
+	# The native move list stops at forty. A full buffer might omit a play.
+	if choices.is_empty() or choices.size() >= 40 or _late(ctx): return NAN
+	var best := -INF
+	for choice: Dictionary in choices:
+		if not choice.complete: return NAN
+		best = maxf(best, float(choice.value))
+	return best
+
+## A spell that replaces both hands can hand the other hero a stronger army.
+## Before it displaces a competing cast, compare the two concrete successors.
+static func _redraw_loses_combat(ctx: Context, duel: ELDuel, redrawn: ELDuel, move: Dictionary, planned: Dictionary) -> bool:
+	if move.get("kind") != "cast" or planned.get("kind") != "cast" or move == planned: return false
+	var rule := ELCatalog.rule(duel.profile, move.card)
+	if rule.get("effect") != "redraw" or rule.get("scope") != "both": return false
+	if redrawn.phase == ELDuel.Phase.FINISHED or redrawn.active_side() != ctx.ai: return false
+	var budget := _share(ctx, ctx.budget / 10) / 2
+	if budget < 2000 or _late(ctx): return false
+	var kept := duel.search_copy(ctx.second)
+	var loses := false
+	if apply(kept, planned) and kept.phase == redrawn.phase and kept.active_side() == ctx.ai:
+		var retained_value := _immediate_combat_value(ctx, kept, budget)
+		if is_finite(retained_value) and _share(ctx, budget) >= budget:
+			var redrawn_value := _immediate_combat_value(ctx, redrawn, budget)
+			loses = is_finite(redrawn_value) and redrawn_value < retained_value
+	if kept.scripts != null and kept.scripts.search_only: kept.scripts.close()
+	return loses
+
 ## Remake option (`smart_engine_beyond`): the spells and abilities the
-## compiled engine holds no rule for - reviving, unsummoning, enchanting a hero
+## compiled engine cannot fully resolve - redrawing a hand, reviving, enchanting a hero
 ## or an army, a creature's own ability - tried here by the duel's own rules.
 ## The engine then reads the position each one leaves, and the best of them is
 ## played when that beats the best command the engine found by itself. Without
@@ -1336,7 +1693,9 @@ static func _beyond(ctx: Context, duel: ELDuel, found: Dictionary) -> Dictionary
 			if record == null:
 				record = ELCombatBrain._card(ctx, duel, card)
 				ctx.cards[card] = record
-			if not record.is_empty(): continue
+			# For a redraw the native search may know only the replacement card count.
+			# Resolve the new hand on the same information view and search its replies.
+			if not record.is_empty() and int(record[7]) != int(ELCombatBrain.EFFECTS.redraw): continue
 		elif kind == "ability":
 			# What the engine plays itself it has already weighed.
 			if ELCombatBrain.plays_ability(duel, child.command, ctx): continue
@@ -1377,8 +1736,13 @@ static func _beyond(ctx: Context, duel: ELDuel, found: Dictionary) -> Dictionary
 				if not after.is_empty():
 					value = float(after.value)
 					positions += int(after.get("positions", 0))
+		var worse: bool = value > best_value and not found.get("terminal", false) and _redraw_loses_combat(ctx, duel, copy, extra[i].command, found.get("command", {}))
 		if copy.scripts != null and copy.scripts.search_only: copy.scripts.close()
-		if spent == 2 and value <= strict: continue
+		if worse or (spent == 2 and value <= strict): continue
+		# The pass allowance accounts for effects the engine cannot value.
+		# Once it has read the replacement hand, the redraw must at least tie passing.
+		if value < float(found.get("value", -1e9)) and extra[i].command.kind == "cast":
+			if ELCatalog.rule(duel.profile, extra[i].command.card).get("effect") == "redraw": continue
 		if value > best_value:
 			best_value = value
 			best = {"command": extra[i].command, "value": value}
@@ -1411,34 +1775,110 @@ static func _place(d: ELDuel) -> Array:
 ## Remembers the steps of a chosen plan after its first, for the opponent
 ## with the settings `policy` (the request's): another opponent's plan is not
 ## followed. `won`: the plan is a proved win's line.
-static func _remember(duel: ELDuel, steps: Array, policy := 0, won := false) -> void:
+static func _remember(duel: ELDuel, steps: Array, policy := 0, won := false, recheck_first_attack := false, recheck_blocks := false) -> void:
 	var copy := duel.search_copy()
 	_plans_lock.lock()
 	if _plans.size() > 256: _plans.clear()
 	# A step is kept only once the rules have taken it from the position it
 	# is to be sent from: a line read ahead can name a command the duel will
 	# refuse by then, such as sending a creature that had to attack anyway.
-	# And only this hero's own steps are kept: a line that begins by ending
-	# the phase runs on into the other hero's commands, which are not a plan
-	# for that hero to follow.
-	var side := duel.active_side()
+	# Ending defence starts the same hero's attack turn.
+	# Only remember commands from the phase where this plan was chosen.
 	for i in steps.size():
-		if copy.phase == ELDuel.Phase.FINISHED or copy.active_side() != side: break
+		if copy.phase != duel.phase or copy.turn_serial != duel.turn_serial: break
+		var step: Dictionary = steps[i]
+		# The spell and our own moves used the search's entire completed
+		# depth. Read the opposing blocks afresh before sending the first attacker.
+		if recheck_first_attack and step.get("kind") == "attack" and copy.attacks.is_empty():
+			if copy.army(1 - copy.attacker).any(func(c: Dictionary) -> bool: return copy.ready(c.id)):
+				var key := hash(_place(copy))
+				if not _plans.get(key, {}).get("won", false): _plans.erase(key)
+				break
 		var from := _place(copy).duplicate(true)
 		# A card is kept only where the hand still holds it at its place.
-		var step: Dictionary = steps[i]
 		if String(step.get("kind", "")) == "cast" and step.has("card"):
-			var hand: Array = copy.heroes[side].hand
+			var hand: Array = copy.heroes[copy.active_side()].hand
 			var index := int(step.get("index", -1))
 			if index < 0 or index >= hand.size() or String(hand[index]) != String(step.card): break
+		var look_again: bool = i > 0 and recheck_blocks and step.get("kind") == "end_phase" and _spare_block(copy)
 		if not apply(copy, step): break
-		if i > 0: _plans[hash(from)] = {"at": from, "command": steps[i], "policy": policy, "won": won}
+		if i > 0: _plans[hash(from)] = {"at": from, "command": steps[i], "policy": policy, "won": won, "recheck_blocks": look_again}
 	_plans_lock.unlock()
 	if copy.scripts != null and copy.scripts.search_only: copy.scripts.close()
 
+## A completed defence search may already have chosen the opening spell of
+## the same hero's attack. Keep only that cast, keyed to the resulting duel.
+static func _remember_next_cast(ctx: Context, duel: ELDuel, cast: Dictionary, policy: int) -> void:
+	var after := duel.search_copy()
+	if after.end_phase() and after.phase == ELDuel.Phase.ATTACK and after.active_side() == ctx.ai:
+		var reserve := _ether_for_draw(duel, after, ctx.ai, cast.card)
+		if reserve >= 0 and not _wrong_side(ctx, after, cast):
+			var place := _place(after).duplicate(true)
+			if apply(after, cast) and after.winner != 1 - ctx.ai and (after.winner == ctx.ai or after.available_mana(ctx.ai) >= reserve):
+				var key := hash(place)
+				_plans_lock.lock()
+				if _plans.size() > 256: _plans.clear()
+				if not _plans.has(key):
+					_plans[key] = {"at": place, "command": cast, "policy": policy, "won": false, "from_defence": true}
+				_plans_lock.unlock()
+	if after.scripts != null and after.scripts.search_only: after.scripts.close()
+
+## A changed page or an immediately payable extra copy calls for a fresh
+## search (-1). Otherwise keep enough ether to start a spell that can pay
+## for the new draw. Check the reserve against the actual result of the cast.
+static func _ether_for_draw(before: ELDuel, after: ELDuel, side: int, planned_card: String) -> int:
+	var held: Dictionary = before.heroes[side]
+	var now: Dictionary = after.heroes[side]
+	var count: int = held.hand.size()
+	if now.hand.slice(0, count) != held.hand or now.hand_slots.slice(0, count) != held.hand_slots: return -1
+	var ether := after.available_mana(side)
+	var reserve := 0
+	for i in range(count, now.hand.size()):
+		var card: String = now.hand[i]
+		var needed: int = (held.hand.count(card) + 1) * after.cost(card)
+		if needed <= ether: return -1
+		if card == planned_card: continue
+		var cheapest := -1
+		for slot in now.hand.size():
+			var source: String = now.hand[slot]
+			var rule := ELCatalog.rule(after.profile, source)
+			if rule.get("effect") not in ["mana", "drain_mana"] or source == card: continue
+			var gain := after.effect_amount(rule)
+			if rule.effect == "drain_mana": gain = mini(gain, int(after.heroes[1 - side].mana))
+			var price := after.cost(source)
+			if ether - price + gain >= needed and after.can_cast_from_hand(slot):
+				if cheapest < 0 or price < cheapest: cheapest = price
+		reserve = maxi(reserve, cheapest)
+	return reserve
+
+## The guard verifies its escape with the resulting blocks fixed. When its
+## continuation is missing, search the rest of that defence on the same terms.
+static func _remember_guarded_block(duel: ELDuel, block: Dictionary, policy: int) -> void:
+	var after := duel.search_copy()
+	if apply(after, block) and after.blocks.has(block.id):
+		var place := _place(after).duplicate(true)
+		var key := hash(place)
+		_plans_lock.lock()
+		if _plans.size() > 256: _plans.clear()
+		if not _plans.get(key, {}).get("won", false):
+			_plans[key] = {"at": place, "policy": policy, "keep_blocks": true}
+		_plans_lock.unlock()
+	if after.scripts != null and after.scripts.search_only: after.scripts.close()
+
+static func _spare_block(d: ELDuel) -> bool:
+	if d.blocks.is_empty(): return false
+	var covered := d.blocks.values()
+	var defenders := d.army(1 - d.attacker)
+	for attacker: int in d.attacks:
+		if attacker in covered or not d.creatures.has(attacker) or int(d.creatures[attacker].power) <= 0: continue
+		for unit: Dictionary in defenders:
+			if not d.blocks.has(unit.id) and d.block_problem(unit.id, attacker).is_empty(): return true
+	return false
+
 ## The remembered step for the duel's position, once the rules take it there
 ## and only for the opponent that chose it (null: any). `kept` receives
-## whether the plan is a proved win's line ("won").
+## whether the line is a proved win, a cached pass needs a final block check,
+## or a guarded block needs a fresh search with the current assignments fixed.
 static func _recall(duel: ELDuel, policy: Variant = null, kept: Dictionary = {}) -> Dictionary:
 	var place := _place(duel)
 	var key := hash(place)
@@ -1450,6 +1890,10 @@ static func _recall(duel: ELDuel, policy: Variant = null, kept: Dictionary = {})
 	if policy != null and planned.has("policy") and int(planned.policy) != int(policy):
 		forget(duel)
 		return {}
+	if planned.get("from_defence", false): kept.from_defence = true
+	if planned.get("keep_blocks", false):
+		kept.keep_blocks = true
+		return {}
 	var trial := duel.search_copy()
 	var taken := apply(trial, planned.command)
 	if trial.scripts != null and trial.scripts.search_only: trial.scripts.close()
@@ -1457,6 +1901,7 @@ static func _recall(duel: ELDuel, policy: Variant = null, kept: Dictionary = {})
 		forget(duel)
 		return {}
 	kept.won = bool(planned.get("won", false))
+	kept.recheck_blocks = bool(planned.get("recheck_blocks", false))
 	return planned.command
 
 ## Drops the remembered step for the duel's position (one the duel refused).
@@ -1537,6 +1982,12 @@ static func _search(ctx: Context, line: Line, before: ELDuel) -> bool:
 	if line.parent != null:
 		s = before.search_copy()
 		if not _execute(ctx, line, s): return false
+		if ctx.smart and line.move & MOVE_BLOCK_PLANS:
+			# Block assignments change only this ordered map. Different plans
+			# can choose the same blockers in the same combat order.
+			var order := [s.blocks.keys(), s.blocks.values()]
+			if line.parent.block_orders.has(order): return false
+			line.parent.block_orders.append(order)
 		if ctx.orderly and smart_idle and line.depth == 1 and line.move & (MOVE_CAST | MOVE_ABILITY):
 			var spent := _spent(before, s, line)
 			if spent == 1: return _fail(line)
@@ -1590,14 +2041,18 @@ static func _execute(ctx: Context, line: Line, s: ELDuel) -> bool:
 		if line.flags & LINE_ATTACKED: return _fail(line)
 		line.flags |= LINE_ATTACKED
 		if line.move & MOVE_ATTACK_PLAN:
-			if line.command.kind == "attack_set": return _attack_set(line, s) or _fail(line)
+			if line.command.kind == "attack_set": return _send_attackers(line, s, line.command.ids, ctx.smart) or _fail(line)
 			return _attack_plan(ctx, line, s) or _fail(line)
 	elif line.move & MOVE_BLOCK_PLANS:
 		if line.flags & LINE_ONLY_NEXT: return _fail(line)
 		line.flags |= LINE_ONLY_NEXT
 		if line.move & MOVE_BRAIN_BLOCKS: return _block_set(line, s) or _fail(line)
 		return _block_plan(ctx, line, s) or _fail(line)
-	if line.move & MOVE_NEXT and s.phase == ELDuel.Phase.ATTACK and s.attacks.is_empty(): line.phases += 1
+	if line.move & MOVE_NEXT:
+		if s.phase == ELDuel.Phase.ATTACK and s.attacks.is_empty(): line.phases += 1
+		# The next phase has its own attack or block decisions. Carrying a
+		# block plan forward makes the next attacker pass every move.
+		if ctx.smart: line.flags &= ~(LINE_ATTACKED | LINE_ONLY_NEXT)
 	line.used += 1
 	return apply(s, line.command) or _fail(line)
 
@@ -1731,6 +2186,7 @@ static func _add(line: Line, command: Dictionary, prior: float, move: int) -> Li
 static func _generate(ctx: Context, line: Line, s: ELDuel) -> void:
 	var side := s.active_side()
 	_add(line, {"kind": "end_phase"}, 1.1, MOVE_NEXT)
+	if line.flags & LINE_ONLY_NEXT: return
 	var restricted := ctx.restricted and side == ctx.ai
 	if side == ctx.ai or ctx.replies:
 		_casts(ctx, line, s, side)
@@ -1795,13 +2251,34 @@ static func _brain_moves(ctx: Context, line: Line, s: ELDuel) -> Dictionary:
 		if not chosen.has(id): chosen.append(id)
 	return {"set": chosen}
 
-static func _attack_set(line: Line, s: ELDuel) -> bool:
-	for id: int in line.command.ids:
+## Send the chosen creatures in legal order. A guard may precede its escort
+## in the army or in the engine's set. The all-out plan may also use an
+## otherwise idle creature as an escort. A selected set stays within its ids.
+static func _send_attackers(line: Line, s: ELDuel, order: Array, smart: bool, idle: Array = []) -> bool:
+	for id: int in order:
 		line.used += 1
-		if s.creatures.has(id) and not s.attacks.has(id) and s.toggle_attack(id):
-			line.steps.append({"kind": "attack", "id": id})
-			if line.sent.is_empty(): line.sent = line.steps[0]
+		if not s.creatures.has(id) or s.attacks.has(id): continue
+		if smart and s.has_flag(id, "TeamAttack") and not s.can_declare_attack(id):
+			if not s.can_attack(id) or 2 * s.attack_cost(id) > s.available_mana(s.attacker): continue
+			var partner := _guard_escort(s, id, order)
+			if partner < 0:
+				partner = _guard_escort(s, id, idle)
+				if partner < 0: continue
+				line.used += 1
+			_send_attacker(line, s, partner)
+		_send_attacker(line, s, id)
 	return not line.sent.is_empty()
+
+static func _guard_escort(s: ELDuel, guard: int, candidates: Array) -> int:
+	var race := s.race(guard)
+	for id: int in candidates:
+		if s.race(id) == race and not s.has_flag(id, "TeamAttack") and s.can_declare_attack(id): return id
+	return -1
+
+static func _send_attacker(line: Line, s: ELDuel, id: int) -> void:
+	if s.toggle_attack(id):
+		line.steps.append({"kind": "attack", "id": id})
+		if line.sent.is_empty(): line.sent = line.steps[0]
 
 static func _block_set(line: Line, s: ELDuel) -> bool:
 	var pairs: Array = line.command.pairs
@@ -1846,10 +2323,12 @@ static func _casts(ctx: Context, line: Line, s: ELDuel, side: int) -> void:
 				for x in range(s.maximum_power(card), -1, -1): powers.append(x)
 		var targets: Array[int] = [-1]
 		if s.target_kind(card) != "none": targets = _ordered(s, s.valid_targets(card))
+		var wave_powers := _wave_powers(s, card, side) if ctx.smart and effect == "wave" and powers.size() > 1 else {}
 		for power: int in powers:
 			for target: int in targets:
 				for grave: int in _spell_choices(s, card, effect, target):
 					var prior := _spell_prior(ctx, s, side, card, target, grave, power)
+					if wave_powers.has(power): prior = maxf(prior, 0.75)
 					_add(line, {"kind": "cast", "index": i, "card": card, "target": target, "grave": grave, "power": power}, prior, MOVE_CAST)
 
 static func _spell_choices(s: ELDuel, card: String, effect: String, target: int) -> Array:
@@ -1884,6 +2363,16 @@ static func _artifacts(ctx: Context, line: Line, s: ELDuel, side: int) -> void:
 # --- Abilities -----------------------------------------------------------------
 
 static func _ability_moves(ctx: Context, line: Line, s: ELDuel, side: int, id: int, ability: Dictionary) -> void:
+	if ctx.smart and ability.key == "tap_race":
+		var races := {}
+		for enemy: Dictionary in s.army(1 - side):
+			var race := s.race(enemy.id)
+			if races.has(race) or not s._first_creature_target_error(id, ability, enemy.id).is_empty(): continue
+			var price := s._tap_race_price(1 - side, enemy.id)
+			if price <= 0 or price > s.available_mana(side): continue
+			races[race] = true
+			_add(line, {"kind": "ability", "id": id, "key": ability.key, "target": enemy.id, "choice": -1, "amount": -1}, 0.75, MOVE_ABILITY)
+		return
 	var card := String(ability.get("card", s.creatures[id].card if s.creatures.has(id) else ""))
 	if id < 2:
 		for e: Dictionary in s.heroes[id].enchantments:
@@ -2072,11 +2561,38 @@ static func _spell_prior(ctx: Context, s: ELDuel, side: int, card: String, targe
 static func _printed_cost(s: ELDuel, card: String) -> int:
 	return int(s.profile.table("CombatSpells").get(card, {}).get("Cost", 0))
 
-## Exactly lethal damage first, then overkill; a creature only for an exact kill.
+## Damage needed to reach the target's remaining health, or consume one
+## Lifeguard. Other effects such as regeneration still resolve in the duel.
+static func _damage_threshold(s: ELDuel, target: int) -> int:
+	var barrier := s.barrier_reduction(target)
+	if s._enchantment_count(target, "LFGR") > 0:
+		return 1 if target >= 2 and s.second_battle() else barrier + 1
+	if target < 2: return barrier + int(s.heroes[target].health)
+	var unit: Dictionary = s.creatures[target]
+	return barrier + int(unit.toughness) - int(unit.damage)
+
+## Prioritise exact hits on enemies that also preserve every ally the wave reaches.
+static func _wave_powers(s: ELDuel, card: String, side: int) -> Dictionary:
+	var powers := {}
+	var ally_limit := 0x7fffffff
+	for target in s.damage_targets(card, side):
+		if target >= 2 and (s.has_flag(target, "NoAffect") or s.in_plane(target)): continue
+		var needed := _damage_threshold(s, target)
+		var owner := target if target < 2 else int(s.creatures[target].owner)
+		if owner == side: ally_limit = mini(ally_limit, needed)
+		else: powers[needed] = true
+	for power: int in powers.keys():
+		if power >= ally_limit: powers.erase(power)
+	return powers
+
+## Value exact damage to creatures, including the ether needed to strip a ward.
 static func _comet_prior(ctx: Context, s: ELDuel, side: int, target: int, x: int) -> float:
 	if target < 0: return 0.0
 	if target < 2:
 		if target == side: return 0.0
+		if ctx.smart and s._enchantment_count(target, "LFGR") > 0:
+			return 0.75 if x == _damage_threshold(s, target) else 0.0
+		if ctx.smart: x -= s.barrier_reduction(target)
 		var health := int(s.heroes[target].health)
 		if health == x: return 1.0
 		if ctx.second:
@@ -2087,7 +2603,8 @@ static func _comet_prior(ctx: Context, s: ELDuel, side: int, target: int, x: int
 		return minf(0.9, float(x) * 0.025 + (0.3 if x < 5 else 0.4))
 	if not s.creatures.has(target) or int(s.creatures[target].owner) == side: return 0.0
 	var c: Dictionary = s.creatures[target]
-	if x != int(c.toughness) - int(c.damage): return 0.0
+	var needed := _damage_threshold(s, target) if ctx.smart else int(c.toughness) - int(c.damage)
+	if x != needed: return 0.0
 	return minf(0.95, float(_worth(s, c.card)) * 0.05 + 0.4)
 
 ## Printed cost, plus one for a rare card and two for a unique one.
@@ -2163,10 +2680,13 @@ static func _elusive(s: ELDuel, c: Dictionary) -> bool:
 ## (EL1 walks the army list without scoring).
 static func _attack_plan(ctx: Context, line: Line, s: ELDuel) -> bool:
 	var order: Array[int] = []
+	var idle: Array[int] = []
 	var top := 0.0
 	for c: Dictionary in s.army(s.active_side()):
-		if not _free(s, c) or int(c.power) <= 0: continue
-		line.used += 1
+		if not _free(s, c): continue
+		if int(c.power) <= 0:
+			if ctx.smart: idle.append(int(c.id))
+			continue
 		if not ctx.second:
 			order.append(int(c.id))
 			continue
@@ -2175,11 +2695,7 @@ static func _attack_plan(ctx: Context, line: Line, s: ELDuel) -> bool:
 			top = score
 			order.push_front(int(c.id))
 		else: order.append(int(c.id))
-	for id: int in order:
-		if s.creatures.has(id) and not s.attacks.has(id) and s.toggle_attack(id):
-			line.steps.append({"kind": "attack", "id": id})
-			if line.sent.is_empty(): line.sent = line.steps[0]
-	return not line.sent.is_empty()
+	return _send_attackers(line, s, order, ctx.smart, idle)
 
 static func _block_plan(ctx: Context, line: Line, s: ELDuel) -> bool:
 	if s.attacks.is_empty(): return false
@@ -2331,6 +2847,14 @@ static func _block_scored(line: Line, s: ELDuel, plan: int) -> void:
 ## A finished line counts its length against it; otherwise the position is
 ## blended with the one after the side to act passes its phase.
 static func _leaf(ctx: Context, line: Line, s: ELDuel) -> float:
+	var key := PackedByteArray()
+	if ctx.smart and s.phase != ELDuel.Phase.FINISHED and s.scripts == null and not s.scripts_in_combat():
+		# Preserve move and creature order, rune origins, the RNG and any
+		# fractional specialisation credit that can affect the next phase.
+		key = var_to_bytes([_place(s), line.depth, s.expected_specs, s.fair_specs, s.spec_expect, s.spec_credit])
+		if ctx.leaf_scores.has(key):
+			ctx.leaf_hits += 1
+			return float(ctx.leaf_scores[key])
 	var now := side_value(ctx, s, ctx.ai) - side_value(ctx, s, 1 - ctx.ai) + float(line.depth) * ctx.w[1]
 	if s.phase == ELDuel.Phase.FINISHED: return now - float(line.depth)
 	var after := s.search_copy()
@@ -2346,6 +2870,7 @@ static func _leaf(ctx: Context, line: Line, s: ELDuel) -> float:
 			if answer.status != 0: value += float(answer.status) * maxf(smart_forced - smart_forced_step * float(int(answer.turns) - 1), smart_forced * 0.5)
 			elif answer.value > 0.0: value += float(answer.value) * smart_later
 			else: value += float(answer.value)
+	if not key.is_empty() and not _late(ctx): ctx.leaf_scores[key] = value
 	return value
 
 ## Remake option: what the opponent's attack would cost when the computer has
