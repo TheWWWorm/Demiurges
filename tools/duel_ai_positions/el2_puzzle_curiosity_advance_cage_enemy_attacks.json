@@ -1,0 +1,220 @@
+{
+	"about": "puzzle el2_tactical_v2_curiosity_advance_cage: the enemy attacks the solver's prepared defence, though the solution answers it",
+	"expect": {
+		"kind": "attack",
+		"side": 1
+	},
+	"format": "etherlords-duel",
+	"state": {
+		"attacker": 1,
+		"attacks": [],
+		"blocks": {},
+		"charge_version": 2,
+		"creatures": {
+			"2": {
+				"card": "WLFC",
+				"damage": 0,
+				"enchantments": [],
+				"flags": [
+					"NoAttack",
+					"Fly"
+				],
+				"flying": true,
+				"id": 2,
+				"owner": 0,
+				"power": 0,
+				"regenerated": false,
+				"resting": false,
+				"sick": false,
+				"toughness": 12
+			},
+			"3": {
+				"card": "BUDG",
+				"damage": 0,
+				"enchantments": [],
+				"flags": [
+					"Fly"
+				],
+				"flying": true,
+				"id": 3,
+				"owner": 1,
+				"power": 8,
+				"regenerated": false,
+				"resting": false,
+				"sick": false,
+				"toughness": 8
+			},
+			"4": {
+				"card": "PTRS",
+				"damage": 0,
+				"enchantments": [
+					{
+						"born": 7,
+						"card": "IRRT",
+						"id": 1,
+						"owner": 0,
+						"power": 0,
+						"toughness": 0
+					}
+				],
+				"flags": [
+					"Fly"
+				],
+				"flying": true,
+				"id": 4,
+				"owner": 1,
+				"power": 2,
+				"regenerated": false,
+				"resting": false,
+				"sick": false,
+				"toughness": 4
+			},
+			"5": {
+				"card": "PTRS",
+				"damage": 0,
+				"enchantments": [
+					{
+						"born": 7,
+						"card": "IRRT",
+						"id": 2,
+						"owner": 0,
+						"power": 0,
+						"toughness": 0
+					}
+				],
+				"flags": [
+					"Fly"
+				],
+				"flying": true,
+				"id": 5,
+				"owner": 1,
+				"power": 2,
+				"regenerated": false,
+				"resting": false,
+				"sick": false,
+				"toughness": 4
+			}
+		},
+		"heroes": [
+			{
+				"artifact_uses": 0,
+				"artifacts": [],
+				"channels": 8,
+				"deck": [
+					"STRT"
+				],
+				"drawn": [],
+				"enchantments": [],
+				"faction": "Blue",
+				"grave": [],
+				"hand": [
+					"CHCM",
+					"ENAL",
+					"SHSK"
+				],
+				"hand_slots": [
+					-1,
+					-1,
+					-1
+				],
+				"hand_view": [
+					2,
+					3,
+					4
+				],
+				"health": 5,
+				"id": 0,
+				"kind": "hero",
+				"level": 12,
+				"luck": 0,
+				"mana": 0,
+				"maximum": 20,
+				"skills": {},
+				"spec": "NONE",
+				"spec_level": 12,
+				"spell_uses": [
+					1
+				],
+				"suppression": 0,
+				"template": "BlueWingedFemale1",
+				"turns": 4
+			},
+			{
+				"artifact_uses": 0,
+				"artifacts": [],
+				"channels": 5,
+				"deck": [
+					"STRT"
+				],
+				"drawn": [],
+				"enchantments": [],
+				"faction": "Blue",
+				"grave": [],
+				"hand": [],
+				"hand_slots": [],
+				"hand_view": [],
+				"health": 40,
+				"id": 1,
+				"kind": "hero",
+				"level": 19,
+				"luck": 0,
+				"mana": 5,
+				"maximum": 40,
+				"skills": {},
+				"spec": "NONE",
+				"spec_level": 19,
+				"spell_uses": [
+					1
+				],
+				"suppression": 0,
+				"template": "BlueWingedMale1",
+				"turns": 4
+			}
+		],
+		"next_enchantment": 3,
+		"next_id": 6,
+		"payment_version": 1,
+		"phase": 0,
+		"profile": "el2",
+		"rng": 712367,
+		"round": 4,
+		"setup": {
+			"arena": "Black.002",
+			"players": [
+				{
+					"faction": "Blue",
+					"level": 12
+				},
+				{
+					"faction": "Blue",
+					"level": 19
+				}
+			],
+			"puzzle_fixed_channels": true,
+			"puzzle_fixed_hands": true,
+			"puzzle_goal": {
+				"allowed": 2,
+				"begun": 4,
+				"enemy_begun": 3,
+				"enemy_first": 0,
+				"enemy_turns": 2,
+				"finish_health": 1,
+				"finish_mana": 0,
+				"first": 1,
+				"min_allies": 0,
+				"min_health": 1,
+				"protect": [
+					2
+				],
+				"side": 0,
+				"targets": [
+					3
+				],
+				"type": "control"
+			}
+		},
+		"turn_serial": 8,
+		"winner": -1
+	},
+	"version": 1
+}
