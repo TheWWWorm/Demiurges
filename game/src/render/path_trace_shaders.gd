@@ -424,6 +424,10 @@ const float SPELL_FALLOFF_DISTANCE = 4.0;
 // Nearer than this it gives no more: a low fire (a stream along the ground,
 // an explosion's sparks) burned white spots into the ground beneath it.
 const float SPELL_NEAREST = 1.2;
+// Past this the fire falls off with the distance alone again: squared all
+// the way out, a bolt lit the creature it struck and left the ring around it
+// as dark as before.
+const float SPELL_TAIL_DISTANCE = 6.0;
 float light_falloff(float d, float reach, float radius) {
 	bool square = reach < 0.0;
 	reach = abs(reach);
@@ -431,13 +435,14 @@ float light_falloff(float d, float reach, float radius) {
 	x *= x;
 	x = clamp(1.0 - x * x, 0.0, 1.0);
 	float r = max(d, square ? max(radius, SPELL_NEAREST) : radius);
-	return x * x * (square ? SPELL_FALLOFF_DISTANCE / (r * r) : 1.0 / r);
+	return x * x * (square ? SPELL_FALLOFF_DISTANCE / (r * min(r, SPELL_TAIL_DISTANCE)) : 1.0 / r);
 }
 
 // Light from the effects (fire, glows, spell lights) at a point: one light
 // chosen in proportion to what it would give here, then a ray towards a
 // random point of it (when shadowed), weighted back to the whole sum.
-// `level` is that sum: what the effects give here unshadowed, without noise.
+// `level` is what the spells' fires among them give here unshadowed, without
+// noise.
 vec3 effect_light(vec3 p, vec3 n, bool shadowed, inout uint state, inout float level) {
 	level = 0.0;
 	uint count = frame.counts.x;
@@ -452,9 +457,12 @@ vec3 effect_light(vec3 p, vec3 n, bool shadowed, inout uint state, inout float l
 		float w = dot(colour.rgb, vec3(0.3, 0.6, 0.1)) * light_falloff(d, colour.w, place.w) * max(facing + place.w / max(d, place.w), 0.0);
 		if (w <= 0.0) continue;
 		total += w;
+		// Only a spell's fire moves on (see EFFECT_CHANGE): the arena's torches
+		// and a figure's glow flicker in place, and counted, they cut the
+		// history short wherever they shone, so their light shimmered.
+		if (colour.w < 0.0) level += w;
 		if (random(state) * total < w) { chosen = i; chosen_weight = w; }
 	}
-	level = total;
 	if (total <= 0.0) return vec3(0.0);
 	vec4 place = lights[chosen * 2u], colour = lights[chosen * 2u + 1u];
 	vec3 jitter = vec3(random(state), random(state), random(state)) * 2.0 - 1.0;
