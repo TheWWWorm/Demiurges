@@ -245,7 +245,7 @@ func show_run(active: ELArenaRun, save_error := "") -> void:
 	else:
 		match run.phase:
 			"hero": _hero_choices()
-			"spec", "artifact": _loadout_choices()
+			"spec", "artifact", "skill": _loadout_choices()
 			"draft": _draft()
 			_: _hub()
 	_relayout.call_deferred()
@@ -355,7 +355,8 @@ func _template(faction: String, loadout: Dictionary) -> String:
 
 
 func _has_loadout(loadout: Dictionary) -> bool:
-	return String(loadout.get("specialization", "NONE")) != "NONE" or not Array(loadout.get("artifacts", [])).is_empty()
+	return String(loadout.get("specialization", "NONE")) != "NONE" or not Array(loadout.get("artifacts", [])).is_empty() \
+		or not Dictionary(loadout.get("skills", {})).is_empty()
 
 
 ## The hero's specialization and artifacts as pictures with their names;
@@ -380,6 +381,13 @@ func _loadout_row(loadout: Dictionary) -> HFlowContainer:
 		var badge := _loadout_badge(profile.card_icon(artifact), ELEncyclopaedia.name(profile, artifact), _text("Artifact", "Артефакт"), GOLD)
 		badge.name = "ArenaArtifact_" + artifact
 		badge.tooltip_text = ELCombatRail.preset_artifact_tooltip(profile, artifact)
+		row.add_child(badge)
+	var learned: Dictionary = loadout.get("skills", {})
+	for skill_code: Variant in learned:
+		var parts := _skill_parts(String(skill_code), int(learned[skill_code]))
+		var badge := _loadout_badge(parts[3], parts[0], parts[1], INK)
+		badge.name = "ArenaSkill_" + String(skill_code)
+		badge.tooltip_text = "%s\n%s\n%s" % parts.slice(0, 3)
 		row.add_child(badge)
 	return row
 
@@ -409,11 +417,24 @@ func _loadout_badge(icon: Texture2D, title: String, caption: String, ink: Color)
 	return panel
 
 
-## After the hero: one specialization of three for its race, then one duel
-## artifact of three, each shown with its picture and full description.
+## A hero skill at a rank: [name, rank title, description] as the skill
+## tooltip has them, and its original icon.
+func _skill_parts(code: String, rank: int) -> Array:
+	var lines := ELHeroSkills.tooltip(profile, code, rank).split("\n")
+	var title := lines[0].strip_edges() if lines.size() > 0 else code
+	var tier := _text("Tier %d of 3", "Ступень %d из 3") % (rank + 1)
+	if lines.size() > 2: tier = "%s · %s" % [lines[1].strip_edges(), tier]
+	var detail := "\n".join(lines.slice(2 if lines.size() > 2 else 1)).strip_edges()
+	return [title, tier, detail, ELBuildingMessageView.skill_icon(profile, code, rank)]
+
+
+## After the hero: one specialization of three for its race, one duel
+## artifact of three, then one hero skill of three at random ranks, each
+## shown with its picture and full description.
 func _loadout_choices() -> void:
-	var spec_step := run.phase == "spec"
-	_content.add_child(_draft_heading(_text("Choose a specialization", "Выберите специализацию") if spec_step else _text("Choose an artifact", "Выберите артефакт")))
+	var step := run.phase
+	var headings := {"spec": _text("Choose a specialization", "Выберите специализацию"), "artifact": _text("Choose an artifact", "Выберите артефакт"), "skill": _text("Choose a hero skill", "Выберите навык героя")}
+	_content.add_child(_draft_heading(headings[step]))
 	_content.add_child(_label(_text("Your hero keeps it for the whole run. Then you draft sixteen cards.", "Герой сохранит выбор на весь заход. Затем вы выберете шестнадцать карт."), 15, MUTED))
 	var chosen := run.hero_loadout(run.faction)
 	if _has_loadout(chosen): _content.add_child(_loadout_row(chosen))
@@ -421,24 +442,37 @@ func _loadout_choices() -> void:
 	_offer_grid.add_theme_constant_override("h_separation", 16)
 	_offer_grid.add_theme_constant_override("v_separation", 16)
 	_content.add_child(_offer_grid)
-	var offered := run.spec_offer() if spec_step else run.artifact_offer()
+	var offered: Array = run.spec_offer() if step == "spec" else (run.artifact_offer() if step == "artifact" else run.skill_offer())
+	var names := {"spec": "ArenaSpecPick%d", "artifact": "ArenaArtifactPick%d", "skill": "ArenaSkillPick%d"}
 	for index in offered.size():
-		var code := offered[index]
 		var title := ""
+		var kind_text := ""
 		var detail := ""
 		var icon: Texture2D
-		var ink := TEAL if spec_step else GOLD
-		if spec_step:
-			var row: Dictionary = profile.table("HeroesSpecs").get(code, {})
-			title = profile.text(str(row.get("Name", code))).strip_edges()
-			detail = profile.text(str(row.get("Desc", ""))).strip_edges()
-			icon = profile.specialisation_icon()
-		else:
-			title = ELEncyclopaedia.name(profile, code)
-			detail = ELCombatRail.preset_artifact_tooltip(profile, code).strip_edges()
-			# The tooltip opens with the artifact's name, already the card's title.
-			if detail.begins_with(title): detail = detail.substr(title.length()).strip_edges()
-			icon = profile.card_icon(code)
+		var ink := {"spec": TEAL, "artifact": GOLD, "skill": INK}[step] as Color
+		match step:
+			"spec":
+				var code := String(offered[index])
+				var row: Dictionary = profile.table("HeroesSpecs").get(code, {})
+				title = profile.text(str(row.get("Name", code))).strip_edges()
+				detail = profile.text(str(row.get("Desc", ""))).strip_edges()
+				icon = profile.specialisation_icon()
+				kind_text = _text("Specialization", "Специализация")
+			"artifact":
+				var code := String(offered[index])
+				title = ELEncyclopaedia.name(profile, code)
+				detail = ELCombatRail.preset_artifact_tooltip(profile, code).strip_edges()
+				# The tooltip opens with the artifact's name, already the card's title.
+				if detail.begins_with(title): detail = detail.substr(title.length()).strip_edges()
+				icon = profile.card_icon(code)
+				kind_text = _text("Artifact", "Артефакт")
+			"skill":
+				var entry: Dictionary = offered[index]
+				var parts := _skill_parts(String(entry.code), int(entry.rank))
+				title = parts[0]
+				kind_text = parts[1]
+				detail = parts[2]
+				icon = parts[3]
 		var panel := _panel(ink.darkened(0.2))
 		panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		var rows := _rows(panel, 10)
@@ -452,16 +486,28 @@ func _loadout_choices() -> void:
 		stage.name = "ArenaLoadoutStage"
 		stage.add_theme_stylebox_override("panel", _plate(Color("141413"), ink.darkened(0.6), 12))
 		rows.add_child(stage)
-		var picture := _image(icon, Vector2(112, 112))
-		stage.add_child(picture)
-		var kind := _label(_text("Specialization", "Специализация") if spec_step else _text("Artifact", "Артефакт"), 14, ink)
+		stage.add_child(_image(icon, Vector2(112, 112)))
+		if step == "skill":
+			var tier := _tier_marks(int(offered[index].rank))
+			stage.add_child(tier)
+		var kind := _label(kind_text, 15 if step == "skill" else 14, GOLD if step == "skill" else ink)
 		kind.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		rows.add_child(kind)
 		var body := _label(detail, 17, INK)
 		body.size_flags_vertical = Control.SIZE_EXPAND_FILL
 		rows.add_child(body)
-		var pick := _choice_button(("ArenaSpecPick%d" if spec_step else "ArenaArtifactPick%d") % index, title, panel, func(): loadout_picked.emit(index))
+		var pick := _choice_button(names[step] % index, title, panel, func(): loadout_picked.emit(index))
 		_offer_grid.add_child(pick)
+
+
+## Three pips in the stage's corner, filled up to the skill's rank.
+func _tier_marks(rank: int) -> Label:
+	var marks := _heading("●".repeat(rank + 1) + "○".repeat(ELHeroSkills.MAX_RANK - rank), 18)
+	marks.name = "ArenaSkillTier"
+	marks.size_flags_horizontal = Control.SIZE_SHRINK_END
+	marks.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	marks.autowrap_mode = TextServer.AUTOWRAP_OFF
+	return marks
 
 
 func _draft() -> void:

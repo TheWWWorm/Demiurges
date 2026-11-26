@@ -56,11 +56,11 @@ func _run() -> void:
 	_finish()
 
 
-func _drafted(source: ELProfile, seed: int, legacy := false) -> ELArenaRun:
+func _drafted(source: ELProfile, seed: int, version := ELArenaRun.HERO_VERSION) -> ELArenaRun:
 	var run := ELArenaRun.new()
 	run.auto_save = false
 	if not run.create(source, seed): return null
-	if legacy: run.hero_version = 0
+	run.hero_version = version
 	if not _draft(run): return null
 	return run
 
@@ -98,7 +98,29 @@ func _hero_loadouts(source: ELProfile) -> void:
 		var forged: Dictionary = JSON.parse_string(JSON.stringify(picking.snapshot()))
 		forged.artifacts = [items[0]]
 		check(not ELArenaRun.new().restore_snapshot(source, forged), "An artifact cannot be saved before its step")
-		check(picking.choose_loadout(1) and picking.artifacts == [items[1]] and picking.phase == "draft" and picking.draft.cards.is_empty(), "The chosen artifact is kept and the card draft begins")
+		check(picking.choose_loadout(1) and picking.artifacts == [items[1]] and picking.phase == "skill", "The chosen artifact is kept and the skill step follows")
+		var skills := picking.skill_offer()
+		var codes := skills.map(func(entry: Dictionary) -> String: return String(entry.code))
+		check(skills.size() == 3 and codes.all(func(code: String) -> bool: return codes.count(code) == 1 and code in ELArenaRules.skills(source) and code != "PRVD") \
+			and skills.all(func(entry: Dictionary) -> bool: return int(entry.rank) >= 0 and int(entry.rank) <= ELHeroSkills.MAX_RANK), "Three different hero skills are offered, each at a rank")
+		var ranks := {}
+		for seed: int in range(300, 340):
+			var sample := ELArenaRun.new()
+			sample.auto_save = false
+			sample.create(source, seed)
+			sample.choose_hero(sample.hero_choices[0])
+			while sample.phase in ["spec", "artifact"]: sample.choose_loadout(0)
+			for entry: Dictionary in sample.skill_offer(): ranks[int(entry.rank)] = true
+		check(ranks.size() == 3, "Offered skills come at every rank across runs")
+		var resumed_skill := ELArenaRun.new()
+		check(resumed_skill.restore_snapshot(source, JSON.parse_string(JSON.stringify(picking.snapshot()))) and resumed_skill.skill_offer() == skills, "The skill step resumes with the same skills and ranks")
+		forged = JSON.parse_string(JSON.stringify(picking.snapshot()))
+		forged.skill = {String(skills[0].code): (int(skills[0].rank) + 1) % 3}
+		check(not ELArenaRun.new().restore_snapshot(source, forged), "A skill cannot be saved before its step")
+		check(picking.choose_loadout(0) and picking.skill == {String(skills[0].code): int(skills[0].rank)} and picking.phase == "draft" and picking.draft.cards.is_empty(), "The chosen skill is kept at its rank and the card draft begins")
+		forged = JSON.parse_string(JSON.stringify(picking.snapshot()))
+		forged.skill = {String(skills[0].code): (int(skills[0].rank) + 1) % 3}
+		check(not ELArenaRun.new().restore_snapshot(source, forged), "A skill at a rank that was not offered is refused")
 		forged = JSON.parse_string(JSON.stringify(picking.snapshot()))
 		forged.specialization = "NONE" if picking.specialization != "NONE" else specs[0]
 		check(not ELArenaRun.new().restore_snapshot(source, forged), "A draft without its chosen specialization is refused")
@@ -111,7 +133,9 @@ func _hero_loadouts(source: ELProfile) -> void:
 		check(false, "A loadout run drafts")
 		return
 	var mine := run.hero_loadout(run.faction)
-	if installed: check(mine.specialization == run.spec_offer()[0] and mine.artifacts == [run.artifact_offer()[0]], "The player's hero carries the picked specialization and artifact")
+	if installed:
+		check(mine.specialization == run.spec_offer()[0] and mine.artifacts == [run.artifact_offer()[0]], "The player's hero carries the picked specialization and artifact")
+		check(mine.skills == {String(run.skill_offer()[0].code): int(run.skill_offer()[0].rank)}, "The player's hero carries the picked skill")
 	for index in 4:
 		var duel := run.build_battle()
 		if duel == null:
@@ -120,6 +144,13 @@ func _hero_loadouts(source: ELProfile) -> void:
 		var theirs: Dictionary = run.opponent.get("loadout", {})
 		check(duel.heroes[0].spec == mine.specialization and duel.heroes[0].artifacts.size() == mine.artifacts.size(), "Battle %d: the player's hero has its specialization and artifact" % index)
 		check(duel.heroes[1].spec == theirs.get("specialization") and duel.heroes[1].artifacts.size() == Array(theirs.get("artifacts", [])).size(), "Battle %d: the opponent has its own specialization and artifact" % index)
+		check(duel.heroes[0].skills == ELArenaRules.hero_skills(mine) and duel.heroes[1].skills == ELArenaRules.hero_skills(theirs), "Battle %d: both heroes fight with Providence and their skill (%s, %s)" % [index, duel.heroes[0].skills, duel.heroes[1].skills])
+		if installed: check(Dictionary(theirs.get("skills", {})).size() == 1, "Battle %d: the opponent has a seeded skill" % index)
+		for side in 2:
+			var learned: Dictionary = duel.heroes[side].skills
+			if learned.has("HEAL"):
+				var plain := ELDuelPresets.health(source, {"faction": duel.heroes[side].faction, "level": duel.heroes[side].level, "skills": {}}, String(duel.setup.players[side].hero))
+				check(int(duel.heroes[side].health) > plain, "Battle %d: Vitality raises the hero's life in battle" % index)
 		if installed:
 			var heroes: Array = duel.setup.players.map(func(player: Dictionary) -> String: return String(player.hero))
 			check(heroes[0] == mine.template and heroes[1] == theirs.template and heroes[0] != heroes[1], "Battle %d: the two sides are different heroes (%s, %s)" % [index, heroes[0], heroes[1]])
@@ -134,7 +165,7 @@ func _hero_loadouts(source: ELProfile) -> void:
 		if not run.resolve_battle(duel) or not run.continue_run():
 			check(false, "Loadout battle %d resolves: %s" % [index, run.error])
 			return
-	var legacy := _drafted(source, 4242, true)
+	var legacy := _drafted(source, 4242, 0)
 	if legacy == null:
 		check(false, "A legacy run drafts")
 		return
@@ -144,8 +175,32 @@ func _hero_loadouts(source: ELProfile) -> void:
 		check(duel.setup.players.all(func(player: Dictionary) -> bool: return player.hero == ELDuelPresets.default_template(source, String(player.faction))), "A legacy run keeps the heroes.def figures")
 	var old: Dictionary = JSON.parse_string(JSON.stringify(legacy.snapshot()))
 	old.erase("hero_version")
+	old.erase("skill")
 	var resumed := ELArenaRun.new()
 	check(resumed.restore_snapshot(source, old) and resumed.hero_version == 0 and resumed.phase == "battle", "A battle saved before loadouts resumes unchanged")
+	# Runs saved with a specialization and artifact but before hero skills.
+	var earlier := _drafted(source, 4244, 1)
+	if earlier == null:
+		check(false, "A run without hero skills drafts")
+		return
+	var earlier_duel := earlier.build_battle()
+	check(earlier_duel != null and earlier_duel.heroes.all(func(hero: Dictionary) -> bool: return hero.skills == ELArenaRules.SKILLS), "A run from before hero skills fights with Providence only")
+	check(earlier.skill.is_empty() and not earlier.opponent.get("loadout", {}).has("skills"), "A run from before hero skills gives neither side a skill")
+	var saved_earlier: Dictionary = JSON.parse_string(JSON.stringify(earlier.snapshot()))
+	saved_earlier.erase("skill")
+	var resumed_earlier := ELArenaRun.new()
+	check(resumed_earlier.restore_snapshot(source, saved_earlier) and resumed_earlier.hero_version == 1 and resumed_earlier.phase == "battle", "A battle saved before hero skills resumes unchanged")
+	if installed:
+		var midway := ELArenaRun.new()
+		midway.auto_save = false
+		midway.create(source, 4245)
+		midway.hero_version = 1
+		midway.choose_hero(midway.hero_choices[0])
+		while midway.phase in ["spec", "artifact"]: midway.choose_loadout(0)
+		var saved_midway: Dictionary = JSON.parse_string(JSON.stringify(midway.snapshot()))
+		saved_midway.erase("skill")
+		var resumed_midway := ELArenaRun.new()
+		check(midway.phase == "draft" and resumed_midway.restore_snapshot(source, saved_midway) and resumed_midway.phase == "draft" and resumed_midway.skill_offer().is_empty(), "A draft saved before hero skills resumes without a skill step")
 
 
 func _pool_modes(source: ELProfile) -> void:
@@ -230,7 +285,7 @@ func _draft(run: ELArenaRun, hero_index := 0) -> bool:
 
 ## Takes the first specialization and artifact offers, when there are any.
 func _loadout(run: ELArenaRun, choice := 0) -> void:
-	while run.phase in ["spec", "artifact"]:
+	while run.phase in ["spec", "artifact", "skill"]:
 		if not run.choose_loadout(choice):
 			check(false, "Choose the hero's %s: %s" % [run.phase, run.error])
 			return
@@ -346,8 +401,8 @@ func _lifecycle(source: ELProfile) -> void:
 	check(run.opponent.cards.size() == 16 and run.opponent.draft.history.size() == 16, "The opponent has sixteen real three-card picks")
 	check(battle.heroes[0].deck == run.draft.cards and battle.heroes[1].deck == run.opponent.cards, "The duel receives the exact two drafted spellbooks")
 	check(not battle.setup.get("adventure", false) and battle.setup.get("arena_run_id") == run.run_id, "Arena uses normal duel rules and identifies the run")
-	check(battle.heroes[0].level == battle.heroes[1].level and battle.heroes[0].skills == battle.heroes[1].skills,
-		"Both sides use the same hero level and skills")
+	check(battle.heroes[0].level == battle.heroes[1].level and battle.heroes.all(func(hero: Dictionary) -> bool: return hero.skills.get("PRVD") == 0 and hero.skills.size() <= ELArenaRules.SKILLS.size() + 1),
+		"Both sides use the same hero level, Providence and at most one picked skill")
 	var before := run.snapshot()
 	check(not run.save_battle(other_battle) and run.snapshot() == before, "A different run's battle cannot replace the checkpoint")
 	var repeated := run.build_battle()
