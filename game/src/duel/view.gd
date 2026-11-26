@@ -62,6 +62,8 @@ var auto_button: ELCutPartButton
 ## (DisconnectButton art) or the second game's Esc-menu button. Right-click
 ## opens the remake menu. Without original art the text button stands in.
 var game_menu_button: ELCutPartButton
+## Whether this edition's corner menu control has its original art.
+var _game_menu_art := false
 var menu_button: Button
 const GAME_MENU_ART := {"el1": ["DisconnectButton", Rect2(740, 279, 52, 49)], "el2": ["AdvPanelOptionsBtn", Rect2(595, 549, 56, 40)]}
 var auto_off_button: ELCutPartButton
@@ -225,6 +227,11 @@ var _trigger_hit: Dictionary = {}
 ## Hit reactions waiting for their effect's cue frame, per figure id; the
 ## serial drops reactions of an earlier battle.
 var _hits_waiting: Dictionary = {}
+## When each waiting hit lands (Time ticks, usec) per figure id, and the
+## latest one scheduled with its process frame: what the hit sets off (a
+## regeneration, the specialisation behind it) shows after the hit, not before.
+var _hit_due: Dictionary = {}
+var _latest_hit := {"frame": -1, "due": 0}
 var _battle_cues: Dictionary[int, Dictionary] = {}
 var _next_battle_cue := 0
 ## Live floating captions per figure, stacked so they never overlap.
@@ -788,6 +795,7 @@ func _start(edition: String, options: Dictionary = {}, restored: ELDuel = null, 
 	_feedback_hit.clear()
 	_redirect_hit.clear()
 	_hits_waiting.clear()
+	_hit_due.clear()
 	_battle_cues.clear()
 	presentation.reset()
 	_drain_started = false
@@ -869,8 +877,9 @@ func _start(edition: String, options: Dictionary = {}, restored: ELDuel = null, 
 	auto_off_button.visible = false
 	var art: Array = GAME_MENU_ART.get(profile.id, [])
 	if not art.is_empty(): game_menu_button.build(profile, art[0], art[1])
-	game_menu_button.visible = not art.is_empty() and game_menu_button.has_art()
-	menu_button.visible = not game_menu_button.visible
+	_game_menu_art = not art.is_empty() and game_menu_button.has_art()
+	game_menu_button.visible = _game_menu_art
+	menu_button.visible = not _game_menu_art
 	rail.build(profile)
 	advisor.reset()
 	for i in gap_panels.size():
@@ -1011,6 +1020,7 @@ func _process(delta: float) -> void:
 	if duel != null:
 		ai_clock += delta
 		if not presentation.events.is_empty(): _step_cast_queue()
+		_step_corner_menu()
 		# Figures that have just appeared join the front line they were declared to.
 		_step_front_line()
 		if presentation.dirty or (presentation.was_held and not _shown_held()): _refresh()
@@ -2450,6 +2460,19 @@ func figures_turning() -> bool:
 func _cast_busy() -> bool:
 	return presentation.cast_busy(elapsed)
 
+## The corner menu control (and its hover tooltip) steps aside while a
+## cast is being shown, so nothing of the HUD's hints covers a spell's
+## full-screen effect; Esc still opens the menu.
+func _step_corner_menu() -> void:
+	if game_menu_button == null or menu_button == null: return
+	var casting := not _effect_cast.is_empty() or _cast_busy()
+	var shown := _game_menu_art and not casting
+	if game_menu_button.visible != shown:
+		game_menu_button.visible = shown
+		if not shown: game_menu_button.modulate.a = 0.0
+	var plain := not _game_menu_art and not casting
+	if menu_button.visible != plain: menu_button.visible = plain
+
 ## Events the rules have settled but the screen has not shown yet.
 func _presentation_held() -> bool:
 	return _melee_busy() or not presentation.events.is_empty()
@@ -2928,10 +2951,10 @@ func _event(data: Dictionary) -> void:
 				else: show_heal.call()
 			else: _float_number(data.target, -int(data.amount))
 			# Complicity's regeneration hook (EL1, EL2)
-			# plays GainLife once at each healed holder's hero.
+			# plays GainLife once at each healed holder's hero, with the
+			# regeneration (after the hit behind it).
 			if data.get("card") == "COPL" and profile.id in ["el1", "el2"] and models.has(int(data.target)):
-				battle_audio.effect("GainLife")
-				_figure_effect("GainLife", int(data.target))
+				_after_hit(_reaction_delay(), _show_complicity.bind(int(data.target)))
 		"aura_cue", "war_banner_shift":
 			var arrival := int(data.get("arrival", -1))
 			if _effect_cast.has("arrival_buffs") and models.has(arrival) and models[arrival].get_meta("arriving", false):
@@ -3212,11 +3235,9 @@ func _event(data: Dictionary) -> void:
 		"spec":
 			var side := int(data.side)
 			var name := _spec_name(data.spec)
-			# Both originals bind the Specialisation cue to the activating hero.
-			if models.has(side):
-				_figure_effect("Specialisation", side)
-				battle_audio.effect("Specialisation")
-			_float_text(side, name, Color("e8c66a"), true)
+			# A specialisation set off by a hit still on its way (Rat
+			# Immortality on a bolt's victim) shows when that hit lands.
+			_after_hit(_reaction_delay(), _show_spec_cue.bind(side, name))
 			if _notice_icons(): _specialisation_notice(side, String(data.spec))
 			# The play history column lists the specialisation with its icon:
 			# no line of text over the battle as well (it still goes to the log).
@@ -3233,9 +3254,8 @@ func _event(data: Dictionary) -> void:
 			_figure_effect("LifeguardAbility", data.target)
 			_float_text(data.target, "Protected", Color("91dcc2"), true)
 		"regenerate":
-			battle_audio.effect("RegenEffect")
-			_figure_effect("RegenEffect", data.target)
-			_float_text(data.target, "Regeneration", Color("91dcc2"), true)
+			# The regeneration follows the hit that brought it on.
+			_after_hit(_reaction_delay(int(data.target)), _show_regeneration.bind(int(data.target)))
 			if profile.id == "el1" and front_line.has(int(data.target)) and not _melee_busy() \
 					and (presentation.snapshot.attacks if _display_active() else duel.attacks).has(int(data.target)):
 				regenerated_home[int(data.target)] = true
@@ -3399,6 +3419,25 @@ func _show_ending(data: Dictionary) -> void:
 	selection_power = 0
 	_hint("Both heroes have fallen. The duel is a draw.")
 	_log("The duel ends in a draw.")
+
+## A specialisation's cue and name over its hero (both originals bind the
+## Specialisation cue to the activating hero).
+func _show_spec_cue(side: int, name: String) -> void:
+	if models.has(side):
+		_figure_effect("Specialisation", side)
+		battle_audio.effect("Specialisation")
+	_float_text(side, name, Color("e8c66a"), true)
+
+func _show_regeneration(id: int) -> void:
+	if not models.has(id): return
+	battle_audio.effect("RegenEffect")
+	_figure_effect("RegenEffect", id)
+	_float_text(id, "Regeneration", Color("91dcc2"), true)
+
+func _show_complicity(side: int) -> void:
+	if not models.has(side): return
+	battle_audio.effect("GainLife")
+	_figure_effect("GainLife", side)
 
 ## Only a campaign's main hero has the lord's ether burst. Other heroes and
 ## neutral creatures keep their death animation without a summoning effect.
@@ -3615,9 +3654,27 @@ func _hit_later(data: Dictionary) -> bool:
 		delay = maxf(delay, (actor.clip_frames() - actor.frame) / (actor.fps * actor.speed))
 	if delay <= 0.0 or not models.has(id) or not is_inside_tree(): return false
 	_hits_waiting[id] = int(_hits_waiting.get(id, 0)) + 1
+	var due := Time.get_ticks_usec() + roundi(delay * 1000000.0)
+	_hit_due[id] = maxi(int(_hit_due.get(id, 0)), due)
+	_latest_hit = {"frame": Engine.get_process_frames(), "due": due}
 	if data.has("shown"): presentation.wait_for(int(data.shown.serial))
 	_schedule_battle_cue(delay, _late_hit.bind(data))
 	return true
+
+## Seconds until the waiting hit on figure `id` lands; for -1, until the
+## latest hit set waiting by the action being shown (this frame's events).
+## 0 when nothing waits.
+func _reaction_delay(id := -1) -> float:
+	var due := 0
+	if id >= 0: due = int(_hit_due.get(id, 0)) if _hits_waiting.has(id) else 0
+	elif int(_latest_hit.frame) == Engine.get_process_frames(): due = int(_latest_hit.due)
+	return maxf(0.0, float(due - Time.get_ticks_usec()) / 1000000.0)
+
+## Runs a hit's consequence once the hit has landed (at once when no hit
+## waits, or while presentation is skipped).
+func _after_hit(delay: float, action: Callable) -> void:
+	if delay > 0.0 and is_inside_tree() and not _skipping_presentation: _schedule_battle_cue(delay, action)
+	else: action.call()
 
 ## Seconds from now until the effect that reaches `data`'s target hits it:
 ## the pending cast's cue, or the ability, feedback, redirect or trigger
@@ -4610,8 +4667,12 @@ func _step_ending(delta: float) -> void:
 			# The fanfare of the winner's colour, for a hero figure (he*) only.
 			# The battle is not over before it has played to its end (both
 			# originals); only the victory clip can be cut (_skip_victory).
+			# Its recording's closing silence is not waited for: the battle
+			# ends as the fanfare falls quiet.
 			if String(model.template).begins_with("he"):
-				ending.fanfare = battle_audio.play_detached("buttons/%svictory.wav" % String(duel.heroes[winner].get("faction", "Red")))
+				var fanfare := "buttons/%svictory.wav" % String(duel.heroes[winner].get("faction", "Red"))
+				ending.fanfare = battle_audio.play_detached(fanfare)
+				if float(ending.fanfare) > 0.0: ending.fanfare = minf(float(ending.fanfare), ELAudio.audible_length(ELAudio.sound(profile, fanfare)))
 			# The winner camera follows the player's own win only (both originals).
 			if _auto_camera_on() and _local_side(winner): auto_camera.victory(winner, model.position)
 			var clip := victory_clip(model)
@@ -6610,6 +6671,9 @@ func _build_ui() -> void:
 	attack_button.disabled = true
 	end_button.disabled = true
 	end_face.mirror = end_button
+	# The click lands on end_button, not on the socket art that carries the
+	# original control (CombatMenu2) and its sound: play that sound here.
+	end_button.pressed.connect(func(): if is_instance_valid(end_face) and profile != null: ELUiSounds.play(profile, str(end_face.get_meta("ui_sound", ""))))
 	for button: ELCutPartButton in [attack_button, auto_button, end_face]:
 		button.shutter = true
 		button.push_on_hover = true
