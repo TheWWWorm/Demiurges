@@ -10,7 +10,7 @@ extends SceneTree
 ##   exchange still plays its death; the death of a hero is never skipped
 ##   (its clip plays out and its sound is not cut); Space ends the winner's
 ##   victory clip at once, but the battle lasts until the victory fanfare
-##   has played out;
+##   has played out or the clip would have ended;
 ## - Hide movement: the tap and untap clips are not played, the figure
 ##   changes idle at once.
 ## - #295: the first game's blocker with no blow comes home even if the
@@ -325,10 +325,13 @@ func _hero_death(view: Node) -> void:
 	check(death_path.is_empty() or heard_death, "#244: the fallen hero's death sound plays")
 	check(death_sound == null or death_sound.get_length() < 0.4 or sounding, "#244: Space does not stop the death sound")
 	# Space ends the winner's victory clip at once, but the battle lasts
-	# until its fanfare has played out (#272).
+	# until its fanfare has played out (#272), or the clip's own end if
+	# that comes first (the originals close the battle when the clip ends).
 	var fanfare := float(view.ending.get("fanfare", 0.0))
-	check(clip_cut or view.victory_clip(view.models[side]).is_empty(), "#244: Space ends the victory clip at once (%s)" % view.models[side].clip)
-	check(victory >= fanfare - 0.1, "#272: the battle lasts until the victory fanfare (%.2f s) has played out (%.2f s)" % [fanfare, victory])
+	var victory_name: String = view.victory_clip(view.models[side])
+	var natural: float = maxf(view.models[side].clip_seconds(victory_name), 0.0) if not victory_name.is_empty() else 0.0
+	check(clip_cut or victory_name.is_empty(), "#244: Space ends the victory clip at once (%s)" % view.models[side].clip)
+	check(victory >= minf(fanfare, natural) - 0.1, "#272: the battle lasts until the victory fanfare (%.2f s) has played out or the clip (%.2f s) would have ended (%.2f s)" % [fanfare, natural, victory])
 	print("ending took %.2f s" % ((Time.get_ticks_usec() - start) / 1e6))
 
 func _card(view: Node, race: String) -> String:

@@ -4,9 +4,8 @@ extends SceneTree
 ## - A creature that regenerates from a spell's hit (a rat under Rat
 ##   Immortality struck by Chain Lightning) shows its regeneration, and the
 ##   specialisation behind it, when the spell's hit lands, not before it.
-## - The battle is over once the winner's victory clip and fanfare have
-##   played (the fanfare is never cut, #272); the silence its recording
-##   ends with adds no wait.
+## - The battle is over once the winner's victory clip has played, as in
+##   both originals; the fanfare is not waited for and plays on.
 ## - The phase banner plays its sound (Buttons/Begin_Combat.wav) at each
 ##   phase change, in quick duels and in both games' campaign battles, and
 ##   the end-of-phase button plays its control's sound (CombatMenu2) when
@@ -191,8 +190,7 @@ func _banner_latch(edition: String) -> void:
 	check(shown.call(local, true) == 0, "%s: the local attack shows the attack banner" % edition)
 	await _close(view)
 
-## A won duel: the battle is over when the victory clip and the audible
-## fanfare end.
+## A won duel: the battle is over when the victory clip ends.
 func _ending(edition: String) -> void:
 	var view: Node = await _view(edition)
 	if view == null: return
@@ -226,11 +224,17 @@ func _ending(edition: String) -> void:
 	var recording := 0.0
 	var stream: AudioStream = ELAudio.sound(view.profile, "buttons/%svictory.wav" % String(duel.heroes[caster].get("faction", "Red")))
 	if stream != null: recording = stream.get_length()
+	var fanfare_on := false
+	for node: Node in root.get_children():
+		if node is AudioStreamPlayer and String(node.name).begins_with("BattleFanfare") and node.playing and node.stream == stream: fanfare_on = true
 	print("  %s: victory clip %.2f s, fanfare %.2f s audible of %.2f s, over %.2f s after the victory began" % [edition, clip_length, fanfare, recording, wait])
 	check(victory_at >= 0.0 and over_at > victory_at, "%s: the winner celebrates and the battle ends" % edition)
-	check(fanfare > 0.0 and fanfare < recording, "%s: the fanfare's closing silence is not waited for (%.2f of %.2f s)" % [edition, fanfare, recording])
-	check(wait >= maxf(clip_length, fanfare) - 0.05, "%s: the battle does not end before the clip and fanfare (%.2f s)" % [edition, wait])
-	check(wait <= maxf(clip_length, fanfare) + 0.1, "%s: no wait after the celebration and fanfare (%.2f s for %.2f s)" % [edition, wait, maxf(clip_length, fanfare)])
+	check(fanfare > 0.0 and fanfare < recording, "%s: the fanfare's closing silence is measured (%.2f of %.2f s)" % [edition, fanfare, recording])
+	# Both originals close the battle (GameOver) when the victory clip ends;
+	# the fanfare is not waited for and plays on.
+	check(wait >= clip_length - 0.05, "%s: the battle does not end before the victory clip (%.2f s)" % [edition, wait])
+	check(wait <= clip_length + 0.1, "%s: the battle ends with the victory clip, not the fanfare (%.2f s for a %.2f s clip)" % [edition, wait, clip_length])
+	check(fanfare <= clip_length or fanfare_on, "%s: the fanfare is still playing as the battle closes" % edition)
 	await _close(view)
 
 ## A human player's click on the end-of-phase button plays CombatMenu2's sound.

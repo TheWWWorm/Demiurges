@@ -2144,9 +2144,10 @@ func _skip_battle_step(repeat := false) -> void:
 	_skip_battle_presentation(true)
 
 ## The end of a won battle: Space or the end button end the winner's victory
-## clip at once (the figure stands idle). The battle is over once the
-## winner's fanfare has played out, which is never cut; nor is a fallen
-## hero's death clip.
+## clip at once (the figure stands idle). The battle closes no later than
+## the clip would have ended, and not before the winner's fanfare has
+## played out (#272); the fanfare is never cut, nor is a fallen hero's
+## death clip.
 func _skip_victory() -> void:
 	if ending.is_empty() or String(ending.stage) != "victory": return
 	var winner := int(ending.winner)
@@ -4811,10 +4812,9 @@ func _step_ending(delta: float) -> void:
 		if winner >= 0 and models.has(winner):
 			var model: ELModel = models[winner]
 			# The fanfare of the winner's colour, for a hero figure (he*) only.
-			# The battle is not over before it has played to its end (both
-			# originals); only the victory clip can be cut (_skip_victory).
-			# Its recording's closing silence is not waited for: the battle
-			# ends as the fanfare falls quiet.
+			# Both originals end the battle (GameOver) when the winner's
+			# victory clip ends, whatever the fanfare: it plays on, never cut,
+			# past the battle's close.
 			if String(model.template).begins_with("he"):
 				var fanfare := "buttons/%svictory.wav" % String(duel.heroes[winner].get("faction", "Red"))
 				ending.fanfare = battle_audio.play_detached(fanfare)
@@ -4826,7 +4826,6 @@ func _step_ending(delta: float) -> void:
 				battle_audio.unit(model, "victory")
 				ending.clip = clip
 				ending.length = maxf(model.clip_seconds(clip), 0.0)
-			ending.length = maxf(float(ending.length), float(ending.get("fanfare", 0.0)))
 		return
 	ending.stage = "over"
 	# GameOver: a campaign battle closes and the map fades back in.
