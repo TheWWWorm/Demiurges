@@ -76,6 +76,9 @@ const EL2_NEG_RUNE_SOURCES := ["ASST", "CNAR", "DPGS", "DRGS", "ENVM", "FLOD", "
 const EL1_IMMORTAL_DRAGONS := ["BUDG", "BLDG", "GRDG", "RDDG"]
 ## Set while cleaving: a Pale creature then dies instead of dissipating.
 var _plane_guard := false
+## The ether the hero pays for the spell being resolved (cost, surcharges and X), which
+## the Pale Redeemer's trap goes by; -1 for a cast that pays no cost.
+var _spell_paid := -1
 ## Ether-disturbance and backlash damage skip the hero's protective specialisations.
 var _raw_hero_damage := false
 ## Second-game battle scripts (ELBattleScripts), or null.
@@ -510,7 +513,7 @@ func _use_artifact_now(side: int, index: int, target := -1, choice := -1) -> boo
 		"reanimate":
 			var revived: String = heroes[side].grave[choice]
 			heroes[side].grave.remove_at(choice)
-			_summon(side, revived)
+			_revive(side, revived)
 		"bless":
 			_bless(target, rule)
 	_finish_action()
@@ -1186,7 +1189,9 @@ func _cast_now(hand_index: int, target := -1, grave_index := -1, extra_ether := 
 	if profile.id in ["el1", "el2"] and card == "BRRL":
 		cast_event.broken_reality_ether = int(heroes[target].mana)
 	_emit(cast_event)
+	_spell_paid = (0 if free else cost(card)) + surcharge + power_price(card, extra_ether)
 	_resolve_spell(side, card, rule, target, grave_index, extra_ether, traps, true)
+	_spell_paid = -1
 	if scripts != null: scripts.dispatch("CHook_OnVisualPostSpellCast", _post_cast_arguments(side, card, null, target, extra_ether))
 	_finish_action()
 	return true
@@ -1232,6 +1237,7 @@ func cast_free(side: int, card: String, args: Array, presented: bool) -> bool:
 		heroes[side].mana += cost(card)
 		var free: bool = ELSpecs.roll(self, side, "MNCH") > 0
 		_spend_ether(side, (0 if free else cost(card)) + surcharge)
+		_spell_paid = (0 if free else cost(card)) + surcharge + _removal_price(rule, grave_index) + power_price(card, extra_ether)
 		var shown := {"kind": "cast", "side": side, "card": card, "target": target, "cost": cost(card) + power_price(card, extra_ether), "power": extra_ether, "script": true}
 		if profile.id == "el2" and card == "CANV" and creatures.has(target):
 			shown.devour_power = maxi(0, int(creatures[target].power))
@@ -1243,6 +1249,7 @@ func cast_free(side: int, card: String, args: Array, presented: bool) -> bool:
 	else:
 		_emit({"kind": "script_cast", "side": side, "card": card, "target": target, "power": extra_ether})
 	_resolve_spell(side, card, rule, target, grave_index, extra_ether, traps, presented)
+	_spell_paid = -1
 	_acting = -1
 	if scripts != null: scripts.dispatch("CHook_OnVisualPostSpellCast", _post_cast_arguments(side, card, null if presented else 1.0, target, extra_ether))
 	_finish_action()
@@ -1306,6 +1313,7 @@ func _apply_spell_effect(side: int, card: String, rule: Dictionary, target: int,
 	# Second game: data attraction copies in play when the spell is cast react even if the spell
 	# removes them. The first game counts the copies left after the spell.
 	var attractions := _enchantment_count(side, "TRLB") if second_rules("TRLB") else -1
+	var paid := _spell_paid
 	var previous_cause := _discard_cause
 	_discard_cause = side
 	match rule.effect:
@@ -1385,7 +1393,7 @@ func _apply_spell_effect(side: int, card: String, rule: Dictionary, target: int,
 			var repaired: String = heroes[target].grave[grave_index]
 			heroes[target].grave.remove_at(grave_index)
 			_give_card(side, repaired)
-			_emit({"kind": "return_card", "side": side, "card": repaired})
+			_emit({"kind": "return_card", "side": side, "card": hand_card(repaired)})
 			var hurt := int(profile.table("CombatCreatures")[repaired].Power) if second_rules(card) else 1
 			if hurt > 0: _damage(1 - side, hurt)
 		"rally_all":
@@ -1404,9 +1412,10 @@ func _apply_spell_effect(side: int, card: String, rule: Dictionary, target: int,
 		"reanimate":
 			var revived: String = heroes[target].grave[grave_index]
 			heroes[target].grave.remove_at(grave_index)
-			_summon(side, revived)
+			var newest := next_id
+			_revive(side, revived)
 			var returned := next_id - 1
-			if creatures.has(returned) and creatures[returned].card == revived and not rule.get("plain", false):
+			if returned >= newest and creatures.has(returned) and creatures[returned].card == revived and not rule.get("plain", false):
 				_enchant(card, side, returned, {"power": -1, "toughness": -1})
 		"drain_life":
 			_spend_ether(side, extra_ether)
@@ -1508,7 +1517,7 @@ func _apply_spell_effect(side: int, card: String, rule: Dictionary, target: int,
 			var revived: String = hero.grave[grave_index]
 			hero.grave.remove_at(grave_index)
 			_kill(target)
-			_summon(side, revived)
+			_revive(side, revived)
 		"rest_enemies":
 			for c: Dictionary in army(1 - side):
 				# Ice storm taps every non-Wall, restless or not.
@@ -1652,9 +1661,8 @@ func _apply_spell_effect(side: int, card: String, rule: Dictionary, target: int,
 				_damage(target, maxi(1, int(creatures[target].toughness) - int(creatures[target].damage)), false, false, true, true, true)
 				_plane_guard = false
 			else:
-				var returned: String = creatures[target].card
-				if returned.begins_with("OSJ"): returned = "OST" + returned.substr(3)
-				_give_card(origin(target), returned)
+				# A spell-jammer goes back as its trap card (see hand_card).
+				_give_card(origin(target), creatures[target].card)
 				_remove_creature(target, "unsummon")
 		"ripple":
 			for c: Dictionary in creatures.values():
@@ -1707,7 +1715,7 @@ func _apply_spell_effect(side: int, card: String, rule: Dictionary, target: int,
 				if grave_slot >= heroes[grave_side].grave.size() or heroes[grave_side].grave[grave_slot] != revived: grave_slot = heroes[grave_side].grave.rfind(revived)
 				if grave_slot >= 0:
 					heroes[grave_side].grave.remove_at(grave_slot)
-					_summon(side, revived)
+					_revive(side, revived)
 		"gift":
 			# A permanent change of controller and owner; an undispellable mark
 			# that speeds the receiver's ether disturbance (see `gift_turns`).
@@ -1824,7 +1832,7 @@ func _apply_spell_effect(side: int, card: String, rule: Dictionary, target: int,
 			if second_rules("TRLB"): _hero_damage_kind = 2
 			_trigger_damage("TRLB", side, 2 if second_rules("TRLB") else 3)
 			_hero_damage_kind = 0
-		if profile.table("CombatSpells")[card].get("Class") == "Sorcery" and not traps.is_empty(): _spell_traps(side, card, extra_ether, traps)
+		if profile.table("CombatSpells")[card].get("Class") == "Sorcery" and not traps.is_empty(): _spell_traps(side, card, extra_ether, traps, paid)
 	_settle_illusion_health()
 	_discard_cause = previous_cause
 	if not specs: return
@@ -2437,12 +2445,12 @@ func _use_ability(id: int, ability: String, target := -1, enchantment_id := -1, 
 				if creatures.has(enchantment_id): _enchant("CMBN", side, enchantment_id, {"power": sacrificed.x, "toughness": sacrificed.y})
 			"rebirth", "second_birth":
 				heroes[side].grave.remove_at(enchantment_id)
-				_summon(side, revived)
+				_revive(side, revived)
 			"repair":
 				var repaired: String = heroes[side].grave[enchantment_id]
 				heroes[side].grave.remove_at(enchantment_id)
 				_give_card(side, repaired)
-				_emit({"kind": "return_card", "side": side, "card": repaired})
+				_emit({"kind": "return_card", "side": side, "card": hand_card(repaired)})
 				_damage(1 - side, 1)
 		# Energy and repair masteries leave the hero ability unused this turn.
 		if (definition.effect == "energize" and ELSpecs.roll(self, side, "BENG") > 0) or (definition.effect == "repair" and ELSpecs.roll(self, side, "BRST") > 0):
@@ -2617,7 +2625,7 @@ func _first_ability(id: int, definition: Dictionary, target: int, grave_index: i
 			# The card leaves the graveyard even when a full army leaves it nowhere to go.
 			var raised: String = heroes[target].grave[grave_index]
 			heroes[target].grave.remove_at(grave_index)
-			if army(side).size() < 10: _summon(side, raised)
+			if army(side).size() < 10: _revive(side, raised)
 			else: _emit({"kind": "grave_removed", "side": target, "card": raised})
 		"tap_race":
 			var kind := race(target)
@@ -3326,7 +3334,8 @@ func _pale_warp() -> void:
 
 ## Spell-jammer traps: after any sorcery each qualifying trap summons its
 ## jammer for its owner and leaves play.
-func _spell_traps(side: int, card: String, extra_ether: int, traps: Array[Dictionary]) -> void:
+## `paid`: the ether paid for the spell, or -1 when it paid no cost.
+func _spell_traps(side: int, card: String, extra_ether: int, traps: Array[Dictionary], paid := -1) -> void:
 	var printed := int(profile.table("CombatSpells")[card].Cost)
 	for entry: Dictionary in traps:
 		var owner: int = entry.owner
@@ -3339,7 +3348,10 @@ func _spell_traps(side: int, card: String, extra_ether: int, traps: Array[Dictio
 		var id := next_id - 1
 		if not creatures.has(id) or creatures[id].card != jammer: continue
 		if e.card != "OST1":
-			var x := printed if e.card == "OST2" else maxi(printed, 0) + extra_ether
+			# The Punisher takes the spell's printed cost; the Redeemer all the ether
+			# paid for it: its cost with any surcharge (Cleanse's per enchantment,
+			# Annihilation's per creature, Flicker's removal price) and its X (#317).
+			var x := printed if e.card == "OST2" else (paid if paid >= 0 else maxi(printed, 0) + extra_ether)
 			creatures[id].base = [x, x]
 			_refresh_stats(creatures[id])
 			if creatures[id].toughness <= 0 or x <= 0: _kill(id)
@@ -3565,11 +3577,18 @@ func _draw(side: int, reject := "", source_card := "") -> bool:
 	_emit(drawn)
 	return true
 
+## The card a creature goes back to the hand as: a second-game Pale spell-jammer
+## returns as its trap card, the way it entered play (#314).
+func hand_card(card: String) -> String:
+	if profile.id == "el2" and card.begins_with("OSJ") and profile.table("CombatSpells").has("OST" + card.substr(3)): return "OST" + card.substr(3)
+	return card
+
 ## `front`: the card shows at the left of the hand rail. Drawn cards arrive at the front;
 ## returned cards normally arrive at the back. First-game ETTI and JRRG returns also go
 ## to the front. The array keeps arrival order; positional rules such as random discards,
 ## Curse and the turn-end trim use the rail order.
 func _give_card(side: int, card: String, slot := -1, front := false) -> void:
+	card = hand_card(card)
 	var hero: Dictionary = heroes[side]
 	var keys := _hand_view(hero)
 	hero.hand.append(card)
@@ -3675,6 +3694,16 @@ func _summon(side: int, card: String) -> void:
 			if other.id != creature.id and creatures.has(other.id):
 				if profile.id in ["el1", "el2"]: _emit({"kind": "walking_horror_hit", "target": int(other.id)})
 				_trigger_damage(card, other.id, 3)
+
+## A creature card brought back from a graveyard into play. A second-game Pale
+## spell-jammer enters play as an enchantment: its trap goes to `side`'s hero
+## instead of the creature coming back (#314).
+func _revive(side: int, card: String) -> void:
+	var trap := hand_card(card)
+	if trap != card:
+		_enchant(trap, side, side, ELCatalog.rule(profile, trap))
+		return
+	_summon(side, card)
 
 func _return_buried_creatures(side: int) -> void:
 	var grave: Array = heroes[side].grave
@@ -3923,14 +3952,19 @@ func _resolve_strike(source: int, target: int, amount: int, poisoned: Array[int]
 	var stripped := false
 	if card in ["PTRS", "RFPT"] and not entity(target).is_empty() and ELSpecs.roll(self, owner, "BPTD") > 0:
 		var controller := target if target < 2 else int(creatures[target].owner)
-		var owned: Array = entity(target).enchantments.filter(func(e: Dictionary) -> bool: return int(e.owner) == controller)
+		# The Pale spell-jammer traps stay: nothing removes them (#316).
+		var owned: Array = entity(target).enchantments.filter(func(e: Dictionary) -> bool: return int(e.owner) == controller and not e.card in TRAPS)
 		stripped = profile.id == "el1" or not owned.is_empty()
 		if stripped: _combat_effect("BPTD", source, target)
 		for e: Dictionary in owned:
 			if not entity(target).is_empty(): _remove_enchantment(target, e.id)
 	if disenchants and not entity(target).is_empty() and not stripped_first:
-		if not stripped and not entity(target).enchantments.is_empty(): _combat_effect("Disenchant", source, target)
-		for e: Dictionary in entity(target).enchantments.duplicate(): _remove_enchantment(target, e.id)
+		# A disenchanting strike breaks every enchantment but the Pale spell-jammer traps,
+		# which nothing removes (#316).
+		var broken: Array = entity(target).enchantments.filter(func(e: Dictionary) -> bool: return not e.card in TRAPS)
+		if not stripped and not broken.is_empty(): _combat_effect("Disenchant", source, target)
+		for e: Dictionary in broken:
+			if not entity(target).is_empty(): _remove_enchantment(target, e.id)
 
 ## Original EL1 places the successful life-drain cue before the discard
 ## callback. No change to discard amount, selection RNG or authored effects.
@@ -4068,8 +4102,12 @@ func _hurt_hero(target: int, amount: int, redirected := false, combat := false) 
 			if _enchantment_count(c.id, "REDR") > 0: shields.append(int(c.id))
 		if not shields.is_empty():
 			_emit({"kind": "redirect", "target": target, "amount": amount, "creatures": shields})
+			# A Pale creature that a redirected hit kills dies; it does not dissipate (#313).
+			var guarded := _plane_guard
+			_plane_guard = true
 			for id: int in shields:
 				if creatures.has(id): _damage(id, amount * _enchantment_count(id, "REDR"), false, false, false)
+			_plane_guard = guarded
 			_camera_cue("REDR", target, "sorcery", shields.filter(func(id: int) -> bool: return creatures.has(id)))
 			return 0
 	var copies := _enchantment_count(target, "FDBK") + _enchantment_count(target, "LNRD") if not redirected and amount > 0 else 0
@@ -4205,7 +4243,7 @@ func _kill(id: int) -> void:
 			# The first game takes the graveyard's first card, whichever it is;
 			# since update 1.03 the second takes the creature's own card.
 			heroes[owner].grave.remove_at(index if second_rules("WTLK") else 0)
-			_summon(caster, dead.card)
+			_revive(caster, dead.card)
 	# Update 1.03: a dying bat makes its controller's opponent discard a spell.
 	if second_rules(dead.card) and dead.card == "BATT":
 		var previous_cause := _discard_cause
