@@ -57,6 +57,7 @@ func _run() -> void:
 	run.create(view.profiles.el2, 20261126)
 	run.auto_save = false
 	run.choose_hero(run.hero_choices[0])
+	while run.phase in ["spec", "artifact"]: run.choose_loadout(0)
 	while run.phase == "draft": run.pick(ELArenaDraftBot.choose(run.draft))
 	var duel := run.build_battle()
 	duel.heroes[1].health = 0

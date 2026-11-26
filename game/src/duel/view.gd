@@ -10201,6 +10201,7 @@ func _open_arena() -> void:
 		_arena_screen.resumed.connect(_resume_arena)
 		_arena_screen.hero_chosen.connect(_arena_hero)
 		_arena_screen.card_picked.connect(_arena_pick)
+		_arena_screen.loadout_picked.connect(_arena_loadout)
 		_arena_screen.battle_requested.connect(_start_arena_battle)
 		_arena_screen.continued.connect(_arena_continue)
 		_arena_screen.retired.connect(_arena_retire)
@@ -10253,6 +10254,13 @@ func _arena_hero(faction: String) -> void:
 func _arena_pick(index: int) -> void:
 	if arena_run == null or not _arena_save_error.is_empty(): return
 	var ok := arena_run.pick(index)
+	var failure := arena_run.error
+	_show_arena()
+	if not ok: _arena_screen.message(failure)
+
+func _arena_loadout(index: int) -> void:
+	if arena_run == null or not _arena_save_error.is_empty(): return
+	var ok := arena_run.choose_loadout(index)
 	var failure := arena_run.error
 	_show_arena()
 	if not ok: _arena_screen.message(failure)

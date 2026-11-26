@@ -5,6 +5,8 @@ extends Control
 signal started(seed: int, rules: int, level: int)
 signal hero_chosen(faction: String)
 signal card_picked(index: int)
+## The specialization or artifact step: the index of the chosen offer.
+signal loadout_picked(index: int)
 signal battle_requested
 signal continued
 signal retired
@@ -243,6 +245,7 @@ func show_run(active: ELArenaRun, save_error := "") -> void:
 	else:
 		match run.phase:
 			"hero": _hero_choices()
+			"spec", "artifact": _loadout_choices()
 			"draft": _draft()
 			_: _hub()
 	_relayout.call_deferred()
@@ -342,7 +345,6 @@ func _hero_choices() -> void:
 			figure.free()
 			var face := int(profile.table("HeroTemplates").get(template, {}).get("Face", -1))
 			if face >= 0: stage.add_child(_image(profile.portrait(face), Vector2.ZERO))
-		if _has_loadout(loadout): rows.add_child(_loadout_row(loadout))
 		var pick := _choice_button("ArenaHero_" + faction, _faction_name(faction), panel, func(): hero_chosen.emit(faction))
 		_offer_grid.add_child(pick)
 
@@ -405,6 +407,61 @@ func _loadout_badge(icon: Texture2D, title: String, caption: String, ink: Color)
 	name.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	words.add_child(name)
 	return panel
+
+
+## After the hero: one specialization of three for its race, then one duel
+## artifact of three, each shown with its picture and full description.
+func _loadout_choices() -> void:
+	var spec_step := run.phase == "spec"
+	_content.add_child(_draft_heading(_text("Choose a specialization", "Выберите специализацию") if spec_step else _text("Choose an artifact", "Выберите артефакт")))
+	_content.add_child(_label(_text("Your hero keeps it for the whole run. Then you draft sixteen cards.", "Герой сохранит выбор на весь заход. Затем вы выберете шестнадцать карт."), 15, MUTED))
+	var chosen := run.hero_loadout(run.faction)
+	if _has_loadout(chosen): _content.add_child(_loadout_row(chosen))
+	_offer_grid = GridContainer.new()
+	_offer_grid.add_theme_constant_override("h_separation", 16)
+	_offer_grid.add_theme_constant_override("v_separation", 16)
+	_content.add_child(_offer_grid)
+	var offered := run.spec_offer() if spec_step else run.artifact_offer()
+	for index in offered.size():
+		var code := offered[index]
+		var title := ""
+		var detail := ""
+		var icon: Texture2D
+		var ink := TEAL if spec_step else GOLD
+		if spec_step:
+			var row: Dictionary = profile.table("HeroesSpecs").get(code, {})
+			title = profile.text(str(row.get("Name", code))).strip_edges()
+			detail = profile.text(str(row.get("Desc", ""))).strip_edges()
+			icon = profile.specialisation_icon()
+		else:
+			title = ELEncyclopaedia.name(profile, code)
+			detail = ELCombatRail.preset_artifact_tooltip(profile, code).strip_edges()
+			# The tooltip opens with the artifact's name, already the card's title.
+			if detail.begins_with(title): detail = detail.substr(title.length()).strip_edges()
+			icon = profile.card_icon(code)
+		var panel := _panel(ink.darkened(0.2))
+		panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		var rows := _rows(panel, 10)
+		var nameplate := PanelContainer.new()
+		nameplate.add_theme_stylebox_override("panel", _nameplate if _nameplate != null else _plate(Color("32291e"), LINE, 6))
+		rows.add_child(nameplate)
+		var heading := _label(title, 19, GOLD)
+		heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		nameplate.add_child(heading)
+		var stage := PanelContainer.new()
+		stage.name = "ArenaLoadoutStage"
+		stage.add_theme_stylebox_override("panel", _plate(Color("141413"), ink.darkened(0.6), 12))
+		rows.add_child(stage)
+		var picture := _image(icon, Vector2(112, 112))
+		stage.add_child(picture)
+		var kind := _label(_text("Specialization", "Специализация") if spec_step else _text("Artifact", "Артефакт"), 14, ink)
+		kind.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		rows.add_child(kind)
+		var body := _label(detail, 17, INK)
+		body.size_flags_vertical = Control.SIZE_EXPAND_FILL
+		rows.add_child(body)
+		var pick := _choice_button(("ArenaSpecPick%d" if spec_step else "ArenaArtifactPick%d") % index, title, panel, func(): loadout_picked.emit(index))
+		_offer_grid.add_child(pick)
 
 
 func _draft() -> void:
@@ -1059,8 +1116,7 @@ func _relayout() -> void:
 		_offer_grid.columns = 3 if size.x >= 780 else 1
 		var compact := short and _offer_grid.columns == 3
 		for stage: PanelContainer in _offer_grid.find_children("ArenaHeroStage", "PanelContainer", true, false):
-			var badges := 80 if stage.get_parent().find_child("ArenaLoadout", false, false) != null else 0
-			stage.custom_minimum_size.y = clampf(size.y - 300 - badges, 245, 720) if _offer_grid.columns == 3 else clampf(size.y * 0.5, 260, 460)
+			stage.custom_minimum_size.y = clampf(size.y - 300, 245, 720) if _offer_grid.columns == 3 else clampf(size.y * 0.5, 260, 460)
 		for rows: VBoxContainer in _offer_grid.find_children("ArenaCardRows", "VBoxContainer", true, false):
 			rows.add_theme_constant_override("separation", 6 if compact else 10)
 		for stage: PanelContainer in _offer_grid.find_children("ArenaCardStage", "PanelContainer", true, false):

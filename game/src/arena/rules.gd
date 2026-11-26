@@ -300,6 +300,22 @@ static func specializations(source: ELProfile, faction: String) -> Array[String]
 	result.sort()
 	return result
 
+## Up to `count` distinct entries of `choices`, fixed by `seed`, in list order.
+static func offer(choices: Array[String], seed: int, count: int) -> Array[String]:
+	var shuffled := choices.duplicate()
+	var random := RandomNumberGenerator.new()
+	random.seed = ELDuelMatch._mix(seed ^ 0x7a19c35b)
+	for i in range(shuffled.size() - 1, 0, -1):
+		var j := random.randi_range(0, i)
+		var held: String = shuffled[i]
+		shuffled[i] = shuffled[j]
+		shuffled[j] = held
+	shuffled.resize(mini(count, shuffled.size()))
+	var result: Array[String] = []
+	for code: String in choices:
+		if code in shuffled: result.append(code)
+	return result
+
 ## A hero for one Arena seat: a figure of the race (not `avoid`'s), one of its
 ## specializations and one duel artifact, all fixed by `seed`.
 static func loadout(source: ELProfile, faction: String, seed: int, avoid := "") -> Dictionary:

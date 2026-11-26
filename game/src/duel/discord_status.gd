@@ -231,7 +231,7 @@ static func _arena(view: Node, t: Callable, game: String) -> Dictionary:
 	var parts: Array = []
 	if run != null:
 		match run.phase:
-			"hero": parts.append(t.call("Choosing a hero"))
+			"hero", "spec", "artifact": parts.append(t.call("Choosing a hero"))
 			"draft": parts.append(t.call("Drafting a deck"))
 			_: parts.append(t.call("Wins %d · Losses %d") % [run.wins, run.losses])
 	return {"details": [game, t.call("Draft Arena")], "state": parts, "scene": "arena"}
