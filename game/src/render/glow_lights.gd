@@ -43,8 +43,22 @@ const SHADOW_LAMPS := 1
 ## it threw the wings' shadow across the hero's own body and the ground,
 ## jumping as the clip changed, and it lifted the snow of the Kinet arenas
 ## past the bloom threshold, so the hero stood in a white haze.
+## Held to a quarter at half the reach, a Chaot hero's glowing axe lit
+## nothing round it, and the hero stood black in a dark arena with a bright
+## blue blade: the weapon's own light (kind 1) gives WEAPON_SHARE at
+## WEAPON_REACH, still without a shadow, and the spread glow keeps the rest.
 const ATTACHED_SHARE := 0.25
 const ATTACHED_REACH := 0.5
+const WEAPON_SHARE := 1.0
+const WEAPON_REACH := 1.0
+
+## The share and reach factor of a figure's light of `kind` (1 its weapon,
+## 2 the glow spread over it).
+static func figure_share(kind: int) -> float:
+	return WEAPON_SHARE if kind == 1 else (AURA_SHARE if kind == 2 else ATTACHED_SHARE)
+
+static func figure_reach(kind: int) -> float:
+	return WEAPON_REACH if kind == 1 else ATTACHED_REACH
 ## The glow spread over a figure (the sparkles on a Kinet hero's wings): a
 ## soft light that keeps the wings lit from within, as the old lamp at the
 ## chest did, without its shadows or its hopping.
@@ -151,8 +165,8 @@ func show_sources(sources: Array, delta: float) -> void:
 		var energy := (ENERGY_LIMIT if _steady(source) else SPELL_ENERGY_LIMIT) * (1.0 - exp(-peak * ENERGY_RISE))
 		var reach := (REACH if _steady(source) else SPELL_REACH) + clampf(float(source[1]), 0.1, 3.0) * 3.0
 		if attached:
-			energy *= AURA_SHARE if int(source[4]) == 2 else ATTACHED_SHARE
-			reach *= ATTACHED_REACH
+			energy *= figure_share(int(source[4]))
+			reach *= figure_reach(int(source[4]))
 		lamp.set_meta(&"figure", attached)
 		lamp.set_meta(&"source_rank", _rank(source))
 		if fresh:

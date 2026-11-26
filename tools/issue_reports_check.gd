@@ -759,7 +759,7 @@ func _fort_zone(profile: ELProfile) -> void:
 
 class GlowStub extends ELCombatEffects:
 	var sources: Array = []
-	func glow_sources(_spell_budget := EMITTER_GLOW) -> Array: return sources
+	func glow_sources(_spell_budget := EMITTER_GLOW, _ether_vent := true) -> Array: return sources
 
 func _figure_glow_light() -> void:
 	var tracer := ELPathTracing.new()
@@ -778,8 +778,8 @@ func _figure_glow_light() -> void:
 		if absf(light.x) < 1.0: spell = light
 		elif absf(light.x - 100.0) < 1.0: figure = light
 	check(not spell.is_empty() and not figure.is_empty()
-		and figure.colour.length() <= spell.colour.length() * ELGlowLights.ATTACHED_SHARE + 0.001
-		and figure.reach <= spell.reach * ELGlowLights.ATTACHED_REACH + 0.001,
+		and figure.colour.length() <= spell.colour.length() * ELGlowLights.figure_share(1) + 0.001
+		and figure.reach <= spell.reach * ELGlowLights.figure_reach(1) + 0.001,
 		"#131 path tracing: a figure's own glow lights at the raster lamps' share (%s against a spell's %s)" % [figure.get("colour", "-"), spell.get("colour", "-")])
 	stub.free()
 	tracer.free()

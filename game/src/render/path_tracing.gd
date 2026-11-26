@@ -864,8 +864,8 @@ func _effect_lights(delta := 0.0) -> PackedFloat32Array:
 		# raster lamps' share and reach: at a spell's strength it lifted the
 		# snow of the Kinet arenas into a white haze around the hero.
 		if kind > 0:
-			colour *= ELGlowLights.AURA_SHARE if kind == 2 else ELGlowLights.ATTACHED_SHARE
-			reach *= ELGlowLights.ATTACHED_REACH
+			colour *= ELGlowLights.figure_share(kind)
+			reach *= ELGlowLights.figure_reach(kind)
 			figure.append([glow[0], extent, colour, reach])
 			continue
 		# A spell's fire falls off with the distance squared (the tracer reads

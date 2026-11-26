@@ -149,7 +149,7 @@ void fragment() { ALPHA = sprite_add(1.0); }
 		if lamp.visible and (brightest == null or lamp.light_energy > brightest.light_energy): brightest = lamp
 		strongest = maxf(strongest, lamp.light_energy)
 		if lamp.shadow_enabled: shadows += 1
-	check(lights.lit() == ELGlowLights.LIMIT and strongest <= ELGlowLights.ENERGY_LIMIT + 0.001 and strongest > 0.5, "at most %d lamps are lit, none past its limit" % ELGlowLights.LIMIT)
+	check(lights.lit() == ELGlowLights.LIMIT and strongest <= ELGlowLights.SPELL_ENERGY_LIMIT + 0.001 and strongest > 0.5, "at most %d lamps are lit, none past its limit" % ELGlowLights.LIMIT)
 	var wanted := ELGlowLights.SHADOW_LAMPS if ELGlowLights.shadows_available() else 0
 	check(shadows == wanted and (wanted == 0 or (brightest != null and brightest.shadow_enabled)), "only the brightest lamp casts a shadow, and none where the renderer cannot")
 	# Patches regroup from frame to frame; lamps on their way out never push
@@ -184,7 +184,7 @@ void fragment() { ALPHA = sprite_add(1.0); }
 	var full := 0.0
 	for lamp: OmniLight3D in lights.get_children():
 		if lamp.visible: full = lamp.light_energy
-	check(faint < full * (ELGlowLights.ATTACHED_SHARE + 0.01), "a figure's own glow lights at a share of a spell's (%.2f of %.2f)" % [faint, full])
+	check(faint < full * (ELGlowLights.figure_share(1) + 0.01), "a figure's own glow lights at a share of a spell's (%.2f of %.2f)" % [faint, full])
 	lights.queue_free()
 	# Path tracing steadies a figure's own lights as the lamps are: one that
 	# moves eases there, and one whose glow leaves a gap of a few frames
