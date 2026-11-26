@@ -747,6 +747,11 @@ typedef struct {
 	/* How often each card of a hand has been cast, for a hero whose
 	 * specialisation may keep a card in the hand it was cast from. */
 	uint8_t casts[2][SLOTS];
+	/* The power of the attackers each hero sent into fights in the line read,
+	 * counted only where the engine's hero defends a puzzle (`pressing`).
+	 * Last, and outside the position's key (state_key): elsewhere they stay
+	 * nothing and every position keeps the key it had without them. */
+	int sent[2], pressing;
 } State;
 
 /* Units, enchantments and carried armies are initialized on insertion.
@@ -973,6 +978,10 @@ typedef struct {
 	struct {
 		int active, type, side, allowed, turn, enemy_turns, completed, min_health, finish_health, finish_mana, min_allies;
 		int targets, target[4], protects, protect[4];
+		/* What the solving hero held where the reading began: its health
+		 * and its creatures, one bit a place (see goal_pressure). */
+		int base_health;
+		uint32_t base_units;
 	} goal;
 } Search;
 
@@ -3091,6 +3100,7 @@ static void resolve(State *s, const int8_t *target) {
 	int sent = 0;
 	for (int i = 0; i < s->n; i++) {
 		if ((s->u[i].flags & (F_DEAD | F_GONE)) || !(s->u[i].flags & F_ATTACKING)) continue;
+		if (s->pressing) s->sent[s->attacker] += imax(0, s->u[i].power);
 		int key = s->u[i].rank ? s->u[i].rank : 256 + i, at = sent++;
 		while (at > 0 && (s->u[order[at - 1]].rank ? s->u[order[at - 1]].rank : 256 + order[at - 1]) > key) {
 			order[at] = order[at - 1];
@@ -8256,6 +8266,34 @@ static int play_out(Search *x, const State *start, uint32_t *seed, int rounds) {
 static int settle_whole(Search *x, const State *s, int phases);
 static int goal_status(const Search *x, const State *s);
 
+/* What meeting a puzzle's objective cost the solving hero since the reading
+ * began, 0 to 999: the health it lost, the creatures it had then and has no
+ * more, and the attack it had to answer (each attacker another chance to
+ * answer it wrongly). */
+static int goal_pressure(const Search *x, const State *s) {
+	const int side = x->goal.side;
+	int p = 30 * imax(0, x->goal.base_health - s->health[side]) + 5 * imin(s->sent[1 - side], 60);
+	for (int i = 0; i < s->n && i < 32; i++)
+		if ((x->goal.base_units >> i & 1) && ((s->u[i].flags & F_DEAD) || s->u[i].owner != side)) p += 150;
+	return imin(p, 999);
+}
+
+/* The worth of a puzzle decided where a line stops (status 1 met, -1 failed).
+ * The hero defending it reads the solver's best reply, so where the objective
+ * can be met every line of its own reads as the same failure, and the first
+ * one, the phase's end, was played: the enemy of a survival puzzle stood
+ * idle. A failure is therefore worth more the more meeting the objective cost
+ * the solver, and the defender sends the attack that leaves it the narrowest
+ * way through. Every failure stays below -WIN, and one later still above any
+ * failure sooner. */
+static int goal_worth(const Search *x, const State *s, int status, int phases) {
+	if ((status > 0) != (x->ai == x->goal.side)) {
+		if (x->ai == x->goal.side) return -(WIN + phases * 1000);
+		return -(WIN + phases * 1000 + 999) + goal_pressure(x, s);
+	}
+	return WIN + phases * 1000;
+}
+
 /* A puzzle's objective met or failed where a line stops: worth that and
  * nothing else, as at any position read (see search_moves); 0 while it is
  * still to play for, or with no puzzle. No material outweighs a failure. */
@@ -8263,7 +8301,7 @@ static int goal_value(const Search *x, const State *s, int phases) {
 	if (!x->goal.active) return 0;
 	int status = goal_status(x, s);
 	if (!status) return 0;
-	return (status > 0) == (x->ai == x->goal.side) ? WIN + phases * 1000 : -(WIN + phases * 1000);
+	return goal_worth(x, s, status, phases);
 }
 
 /* The worth of a line where it stops. What the fighting still to come is
@@ -8367,7 +8405,9 @@ static uint64_t state_key(const State *s) {
 	h = hash_part(h, bytes + offsetof(State, n), offsetof(State, rules) - offsetof(State, n));
 	h = hash_part(h, bytes + after_rules, offsetof(State, ench) - after_rules + sizeof(Ench) * (size_t)s->enchs);
 	h = hash_part(h, bytes + after_ench, offsetof(State, carry) - after_ench + sizeof(Carry) * (size_t)s->carries);
-	h = hash_part(h, bytes + after_carry, sizeof(State) - after_carry);
+	/* To the end of the casts, with the padding that once followed them. */
+	const size_t hashed_end = (offsetof(State, sent) + _Alignof(State) - 1) / _Alignof(State) * _Alignof(State);
+	h = hash_part(h, bytes + after_carry, hashed_end - after_carry);
 	return h ? h : 1;
 }
 
@@ -8938,7 +8978,7 @@ static int search_moves(Search *x, State *s, int phases, int steps, int alpha, i
 	if (x->goal.active) {
 		/* A puzzle ends where its objective is met or failed, and nowhere else. */
 		int status = goal_status(x, s);
-		if (status) return (status > 0) == (x->ai == x->goal.side) ? WIN + phases * 1000 : -(WIN + phases * 1000);
+		if (status) return goal_worth(x, s, status, phases);
 	} else if (s->health[0] <= 0 || s->health[1] <= 0) return evaluate(x, s, phases);
 	/* Nothing is proved past a card that chance took or dealt, nor past what
 	 * the model has no room for. (Where the reading ends anyway, a card
@@ -9822,6 +9862,13 @@ static int read_state(const int32_t *in, int64_t length, Search *x, State *s, in
 		e->tick = (int8_t)((r[11] >> 9) & 3);
 		e->kept = (int8_t)((r[11] >> 11) & 1);
 		e->regen = (int8_t)imax(0, imin(r[12], 101));
+	}
+	if (x->goal.active) {
+		s->pressing = x->ai != x->goal.side;
+		x->goal.base_health = s->health[x->goal.side];
+		x->goal.base_units = 0;
+		for (int i = 0; i < s->n && i < 32; i++)
+			if (s->u[i].owner == x->goal.side && !(s->u[i].flags & F_DEAD)) x->goal.base_units |= 1u << i;
 	}
 	if (!x->goal.active) {
 		for (int side = 0; side < 2; side++)

@@ -1,0 +1,201 @@
+{
+	"about": "puzzle el1_tactical_v2_gift_too_generous: the enemy attacks the solver's prepared defence, though the solution answers it",
+	"expect": {
+		"kind": "attack",
+		"side": 1
+	},
+	"format": "etherlords-duel",
+	"state": {
+		"attacker": 1,
+		"attacks": [],
+		"blocks": {},
+		"charge_version": 2,
+		"creatures": {
+			"2": {
+				"card": "RKWL",
+				"damage": 0,
+				"enchantments": [],
+				"flags": [
+					"NoAttack"
+				],
+				"flying": false,
+				"id": 2,
+				"owner": 0,
+				"power": 0,
+				"regenerated": false,
+				"resting": false,
+				"sick": false,
+				"toughness": 10
+			},
+			"3": {
+				"card": "TNSA",
+				"damage": 0,
+				"enchantments": [],
+				"flags": [
+					"Regen(1)"
+				],
+				"flying": false,
+				"id": 3,
+				"owner": 0,
+				"power": 1,
+				"regenerated": false,
+				"resting": false,
+				"sick": false,
+				"toughness": 1
+			},
+			"4": {
+				"card": "GROG",
+				"damage": 0,
+				"enchantments": [],
+				"flags": [
+					"Restless"
+				],
+				"flying": false,
+				"id": 4,
+				"owner": 1,
+				"power": 6,
+				"regenerated": false,
+				"resting": false,
+				"sick": false,
+				"toughness": 5
+			},
+			"5": {
+				"card": "TIWR",
+				"damage": 0,
+				"enchantments": [],
+				"flags": [],
+				"flying": false,
+				"id": 5,
+				"owner": 1,
+				"power": 2,
+				"regenerated": false,
+				"resting": false,
+				"sick": false,
+				"toughness": 2
+			}
+		},
+		"heroes": [
+			{
+				"artifact_uses": 0,
+				"artifacts": [],
+				"channels": 5,
+				"deck": [
+					"STRT"
+				],
+				"drawn": [],
+				"enchantments": [],
+				"faction": "Red",
+				"grave": [],
+				"hand": [
+					"MNST",
+					"SNRG"
+				],
+				"hand_slots": [
+					-1,
+					-1
+				],
+				"hand_view": [
+					3,
+					4
+				],
+				"health": 1,
+				"id": 0,
+				"kind": "hero",
+				"level": 4,
+				"luck": 0,
+				"mana": 1,
+				"maximum": 20,
+				"skills": {},
+				"spec": "NONE",
+				"spec_level": 4,
+				"spell_uses": [
+					-1
+				],
+				"suppression": 0,
+				"template": "RedMaleWarrior2",
+				"turns": 4
+			},
+			{
+				"artifact_uses": 0,
+				"artifacts": [],
+				"channels": 1,
+				"deck": [
+					"STRT"
+				],
+				"drawn": [],
+				"enchantments": [],
+				"faction": "Red",
+				"grave": [],
+				"hand": [
+					"RIFT"
+				],
+				"hand_slots": [
+					-1
+				],
+				"hand_view": [
+					0
+				],
+				"health": 30,
+				"id": 1,
+				"kind": "hero",
+				"level": 4,
+				"luck": 0,
+				"mana": 1,
+				"maximum": 30,
+				"skills": {},
+				"spec": "NONE",
+				"spec_level": 4,
+				"spell_uses": [
+					-1
+				],
+				"suppression": 0,
+				"template": "RedMaleWarrior2",
+				"turns": 4
+			}
+		],
+		"next_enchantment": 1,
+		"next_id": 6,
+		"payment_version": 1,
+		"phase": 0,
+		"profile": "el1",
+		"rng": 712367,
+		"round": 4,
+		"setup": {
+			"arena": "Blue.001",
+			"players": [
+				{
+					"faction": "Red",
+					"level": 4
+				},
+				{
+					"faction": "Red",
+					"level": 4
+				}
+			],
+			"puzzle_fixed_channels": true,
+			"puzzle_fixed_hands": true,
+			"puzzle_goal": {
+				"allowed": 2,
+				"begun": 4,
+				"enemy_begun": 3,
+				"enemy_first": 0,
+				"enemy_turns": 2,
+				"finish_health": 1,
+				"finish_mana": 5,
+				"first": 1,
+				"min_allies": 0,
+				"min_health": 1,
+				"protect": [
+					2,
+					3
+				],
+				"side": 0,
+				"targets": [],
+				"type": "survive"
+			}
+		},
+		"turn_serial": 8,
+		"winner": -1
+	},
+	"version": 1
+}

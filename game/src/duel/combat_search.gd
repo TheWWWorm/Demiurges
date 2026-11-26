@@ -1357,10 +1357,20 @@ static func _puzzle_kill(ctx: Context, duel: ELDuel, real: ELDuel, asked: Dictio
 ## The worth below which the engine reads its hero as beaten.
 const LOST_VALUE := 99000.0
 
+## Whether the hero `side` is the one defending a puzzle (the computer
+## player of a puzzle's other side).
+static func defends_puzzle(duel: ELDuel, side: int) -> bool:
+	var goal: Variant = duel.setup.get("puzzle_goal")
+	return goal is Dictionary and not (goal as Dictionary).is_empty() and int((goal as Dictionary).get("side", 0)) != side
+
 ## Ending the phase in place of the engine's attack, when the engine weighs
 ## it as lost no sooner; empty when it does not.
+## Not for the hero defending a puzzle: its creatures are worth nothing once
+## the puzzle is decided, and a puzzle it reads as lost is lost only to the
+## solver's best answer, which its attack is there to make the player find.
 static func _hold_when_lost(ctx: Context, duel: ELDuel, found: Dictionary) -> Dictionary:
 	if duel.phase != ELDuel.Phase.ATTACK: return {}
+	if defends_puzzle(duel, ctx.ai): return {}
 	for item: Dictionary in ELCombatBrain.weigh(ctx, duel, smart_engine_phases, _share(ctx, ctx.budget), smart_engine_steps, smart_engine_width):
 		if String(item.command.get("kind", "")) != "end_phase" or not bool(item.get("complete", true)): continue
 		if float(item.value) >= float(found.value): return {"command": item.command, "value": item.value, "positions": found.get("positions", 0), "status": "heuristic"}
