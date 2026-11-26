@@ -1982,6 +1982,9 @@ static func _ability_prior(ctx: Context, s: ELDuel, side: int, id: int, card: St
 			if key == "second_birth" and mana < _printed_cost(s, grave[index]): return 0.0
 			var price := s.cost(grave[index])
 			return minf(0.9, (0.71 if key == "repair" and mana < price else 0.75) + 0.1 * float(price))
+		"plague":
+			# Usable on an empty graveyard too, but that only wastes the ether.
+			if target in [0, 1] and s.heroes[target].grave.is_empty(): return 0.0
 	if not ctx.second: return 0.75
 	match key:
 		"slay", "breath", "wall_break": return 0.5

@@ -541,12 +541,10 @@ static func _complete_ability_choices(profile: ELProfile, report: Dictionary) ->
 		elif profile.id == "el2":
 			var attempt := ELPuzzles.Run.new()
 			attempt.begin_entry(profile, entry, false, false)
-			_check(report, not attempt.duel.can_use_ability(2, "plague"), "EL2 controls disable Plague on empty graveyards")
-			_check(report, not ELPuzzleGenerator.replay_line(profile, entry, forced.witness).get("ok", false),
-				"generator admission rejects an execution-only principal line unavailable in the controls")
-			var advice := _advice(attempt, report)
-			_check(report, advice.get("status") == "error" and not advice.has("command"),
-				"advice never recommends an execution-only ability unavailable in the controls")
+			# Both originals offer Plague on empty graveyards (player report #311).
+			_check(report, attempt.duel.can_use_ability(2, "plague"), "EL2 controls offer Plague on empty graveyards")
+			_check(report, ELPuzzleGenerator.replay_line(profile, entry, forced.witness).get("ok", false),
+				"generator admission accepts the Plague line the controls offer")
 
 		# Reverse the role: a ground defender cannot block the screened flyer,
 		# but this same command can kill our hero before combat resolves. Every

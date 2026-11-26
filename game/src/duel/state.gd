@@ -451,6 +451,36 @@ func artifact_error(side: int, index: int) -> String:
 	if rule.get("phase", "attack") == "attack" and phase != Phase.ATTACK: return "This artifact can be used only while attacking."
 	return ""
 
+## Whether the artifact has something to be used on: artifacts with no legal
+## target stay unlit, as in both originals (player report #321).
+func artifact_has_target(side: int, index: int) -> bool:
+	var list: Array = heroes[side].get("artifacts", [])
+	if index < 0 or index >= list.size(): return false
+	var item: Dictionary = list[index]
+	if item.has("custom"):
+		var spell_rule := ELCatalog.rule(profile, item.spell)
+		var acting := _acting
+		_acting = side
+		var found := channel_error(item.spell, side).is_empty() and _spell_has_option(side, item.spell, spell_rule,
+			func(target: int, choice: int) -> bool: return _cast_error(side, item.spell, spell_rule, target, choice).is_empty())
+		_acting = acting
+		return found
+	if not ELCatalog.ARTIFACT_EFFECTS.has(item.spell): return false
+	var rule: Dictionary = ELCatalog.ARTIFACT_EFFECTS[item.spell]
+	var options: Array[Vector2i] = []
+	match String(rule.target):
+		"creature":
+			for target: int in creatures: options.append(Vector2i(target, -1))
+		"any":
+			for target: int in [0, 1] + creatures.keys(): options.append(Vector2i(target, -1))
+		"enchantment":
+			for holder: int in [0, 1] + creatures.keys():
+				for enchantment: Dictionary in entity(holder).enchantments: options.append(Vector2i(holder, int(enchantment.id)))
+		"grave":
+			for choice in heroes[side].grave.size(): options.append(Vector2i(side, choice))
+		_: options.append(Vector2i(side if rule.get("self", false) else -1, -1))
+	return options.any(func(option: Vector2i) -> bool: return artifact_target_error(side, item.spell, option.x, option.y).is_empty())
+
 ## Why `target` (and `choice`: enchantment ID or graveyard index) cannot receive this artifact.
 func artifact_target_error(side: int, spell: String, target: int, choice := -1) -> String:
 	if not ELCatalog.ARTIFACT_EFFECTS.has(spell): return "This artifact cannot be used in combat."
@@ -1084,10 +1114,14 @@ func can_cast_from_hand(index: int) -> bool:
 	var card: String = hero.hand[index]
 	var rule := ELCatalog.rule(profile, card)
 	if rule.is_empty() or not _hand_cast_error(side, card).is_empty(): return false
+	return _spell_has_option(side, card, rule, func(target: int, choice: int) -> bool: return _legal_cast_option(side, card, rule, target, choice))
+
+## Whether some target and choice of `card` passes `legal(target, choice)`.
+func _spell_has_option(side: int, card: String, rule: Dictionary, legal: Callable) -> bool:
 	var kind := target_kind(card)
 	if kind == "none":
 		var target := side if rule.get("self", false) else (1 - side if rule.get("opponent", false) else -1)
-		return _legal_cast_option(side, card, rule, target, -1)
+		return legal.call(target, -1)
 	var targets: Array = [0, 1]
 	if kind not in ["hero", "grave"]: targets += creatures.keys()
 	for target: int in targets:
@@ -1099,7 +1133,7 @@ func can_cast_from_hand(index: int) -> bool:
 		elif rule.effect == "swap": choices = swap_targets(card, target)
 		elif rule.effect in ["dispel", "trade"]: choices = valid_enchantment_targets(card, target)
 		for choice: int in choices:
-			if _legal_cast_option(side, card, rule, target, choice): return true
+			if legal.call(target, choice): return true
 	return false
 
 func _legal_cast_option(side: int, card: String, rule: Dictionary, target: int, choice: int) -> bool:
@@ -2236,7 +2270,7 @@ func can_use_ability(id: int, key: String, listed: Variant = null) -> bool:
 	var c := entity(id)
 	if phase == Phase.FINISHED or c.is_empty() or int(c.get("owner", id)) != active_side(): return false
 	if id >= 2 and _enchantment_count(id, "IRRT") + _enchantment_count(id, "MDNS") + _enchantment_count(id, "RDIS") > 0: return false
-	if id < 2 and key.begins_with("artifact:"): return artifact_error(id, int(key.get_slice(":", 1))).is_empty()
+	if id < 2 and key.begins_with("artifact:"): return artifact_error(id, int(key.get_slice(":", 1))).is_empty() and artifact_has_target(id, int(key.get_slice(":", 1)))
 	for ability: Dictionary in (listed if listed is Array else abilities(id)):
 		if ability.key != key: continue
 		if id >= 2 and in_plane(id) and not ability.get("pale", false): return false
@@ -2247,11 +2281,34 @@ func can_use_ability(id: int, key: String, listed: Variant = null) -> bool:
 		if ability.get("resting", false) and not c.resting: return false
 		if ability.get("tapped", false) and (not c.resting or c.sick): return false
 		if ability.get("phase") == "attack" and phase != Phase.ATTACK: return false
-		# Transfer Aspects lights up only while some exchange can be paid for.
-		if id < 2 and ability.get("effect") == "recycle":
-			return creatures.keys().any(func(first: int) -> bool: return recycle_error(id, first, -1, int(ability.cost)).is_empty())
-		return id < 2 or _creature_ability_available(id, ability)
+		if id < 2: return _hero_ability_available(id, ability)
+		return _creature_ability_available(id, ability)
 	return false
+
+## Hero enchantment abilities light up only while they have a legal target,
+## as in both originals (player report #320): a sacrifice needs a creature of
+## one's own, a revival a creature card in the own graveyard, Recharge a
+## resting creature out of combat. Same target rules as _use_ability.
+func _hero_ability_available(side: int, ability: Dictionary) -> bool:
+	var own := func(target: int) -> bool: return creatures[target].owner == side and targetable(target)
+	match String(ability.effect):
+		# Transfer Aspects lights up only while some exchange can be paid for.
+		"recycle":
+			return creatures.keys().any(func(first: int) -> bool: return recycle_error(side, first, -1, int(ability.cost)).is_empty())
+		"combine", "burnout", "spirit_lock", "sacrifice":
+			return creatures.keys().any(own)
+		"energize":
+			return creatures.keys().any(func(target: int) -> bool: return creatures[target].resting and not in_plane(target) and not attacks.has(target) and not blocks.has(target))
+		"repair":
+			return not grave_ability_targets(side, "repair", side).is_empty()
+		"rebirth":
+			return army(side).size() < 10 and not grave_ability_targets(side, "rebirth", side).is_empty()
+		"second_birth":
+			if army(side).size() >= 10: return false
+			for index: int in grave_ability_targets(side, "second_birth", side):
+				if int(profile.table("CombatSpells")[heroes[side].grave[index]].Cost) <= available_mana(side): return true
+			return false
+	return true
 
 ## Creature commands light up only while their conditions can be met (both
 ## games: a marksman's shot needs an attacking enemy, a recall a card in a
@@ -2263,7 +2320,8 @@ func _creature_ability_available(id: int, ability: Dictionary) -> bool:
 	if key in ["brood", "recall_spirit", "necromancy"] and army(side).size() >= 10: return false
 	match key:
 		"plague":
-			return available_mana(side) > 0 and (not heroes[0].grave.is_empty() or not heroes[1].grave.is_empty())
+			# Both originals offer it whatever the graveyards hold (player report #311).
+			return available_mana(side) > 0
 		"siphon": return int(heroes[1 - side].mana) > 0
 	match String(ability.target):
 		"grave":

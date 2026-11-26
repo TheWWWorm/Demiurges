@@ -324,8 +324,9 @@ func _creature_ability_buttons(view: Node) -> void:
 	check(_ability_buttons(view, sources.RFPT, "disenchant", false), "#204: Piercing Gaze stays disabled if removal is unaffordable")
 	duel.heroes[0].mana = 10
 	check(_ability_buttons(view, sources.RFPT, "disenchant", true), "#204: Piercing Gaze lights up for an affordable enchantment")
-	check(_ability_buttons(view, sources.DRAT, "gnaw", false) and _ability_buttons(view, sources.PRAT, "plague", false),
-		"#204: graveyard abilities stay disabled while both graveyards are empty")
+	# The Plague Rat's ability is offered whatever the graveyards hold (#311).
+	check(_ability_buttons(view, sources.DRAT, "gnaw", false) and _ability_buttons(view, sources.PRAT, "plague", true),
+		"#204: graveyard abilities stay disabled while both graveyards are empty (#311: Plague excepted)")
 	duel.heroes[1].grave.append("WRSP")
 	check(_ability_buttons(view, sources.DRAT, "gnaw", true) and _ability_buttons(view, sources.PRAT, "plague", true) and _ability_buttons(view, sources.CLSP, "recall_spirit", false),
 		"#204: an enemy graveyard enables Gnaw and Plague but not a friendly-only revival")

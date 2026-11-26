@@ -1564,6 +1564,12 @@ func _target(id: int) -> void:
 				inspect_graveyard = true
 				_hint("Choose a creature in this graveyard. Esc cancels.")
 			else: _hint("Click a hero portrait to open that graveyard.")
+		elif ability_selection.has("power_after"):
+			if (ability_selection.target == "hero") != (id < 2): _hint("Select a %s." % str(ability_selection.target))
+			else:
+				var chosen: Dictionary = ability_selection
+				ability_selection = {}
+				_open_ability_power(int(chosen.source), chosen.power_after, id)
 		elif duel.use_ability(ability_selection.source, ability_selection.key, id, -1, int(ability_selection.get("amount", -1))):
 			ability_selection.clear()
 		else: _hint(duel.error)
@@ -1905,8 +1911,9 @@ func _preview_power(_value := 0.0) -> void:
 	if duel.channel_cost(card) > 0: power_preview.text += "\nRequires %d channels; sacrifices them when X is greater than zero." % duel.channel_cost(card)
 
 ## Pay-X creature abilities reuse the spell power dialog.
-func _open_ability_power(source: int, ability: Dictionary) -> void:
-	pending_power = {"duel": duel, "side": duel.active_side(), "turn": duel.turn_serial, "source": source, "ability": ability}
+## `target` >= 0: the target was chosen already, confirming X uses the ability.
+func _open_ability_power(source: int, ability: Dictionary, target := -1) -> void:
+	pending_power = {"duel": duel, "side": duel.active_side(), "turn": duel.turn_serial, "source": source, "ability": ability, "target": target}
 	power_heading.text = str(ability.name) + " · ether to pay (X)"
 	var available := duel.available_mana(duel.active_side())
 	power_dialog.open(int(ability.get("minimum", 0)), available, available, param_prompt(5, " "))
@@ -1933,8 +1940,8 @@ func _confirm_power() -> void:
 	if choice.has("ability"):
 		if choice.duel != duel or choice.side != duel.active_side() or choice.turn != duel.turn_serial or not _human_turn(): return
 		var amount := int(power_amount.value)
-		if choice.ability.target == "none":
-			if not duel.use_ability(choice.source, choice.ability.key, -1, -1, amount): _hint(duel.error)
+		if choice.ability.target == "none" or int(choice.get("target", -1)) >= 0:
+			if not duel.use_ability(choice.source, choice.ability.key, int(choice.get("target", -1)), -1, amount): _hint(duel.error)
 		else:
 			ability_selection = {"source": choice.source, "key": choice.ability.key, "target": choice.ability.target, "amount": amount}
 			_hint("%s · %d ether: choose a %s. Esc cancels." % [choice.ability.name, amount, "hero" if choice.ability.target == "hero" else str(choice.ability.target)])
@@ -9339,6 +9346,14 @@ func _select_ability(source: int, ability: Dictionary) -> void:
 	selection_power = 0
 	exchange_target = -1
 	ability_selection.clear()
+	# A pay-X ability with a hero or creature target names it before X, as
+	# pay-X spells do: the Plague Rat asks for the graveyard's hero first
+	# (player report #311).
+	if ability.get("variable", false) and String(ability.target) in ["creature", "hero"]:
+		ability_selection = {"source": source, "key": ability.key, "target": ability.target, "power_after": ability}
+		_hint("%s: choose a %s. Esc cancels." % [ability.name, str(ability.target)])
+		_refresh()
+		return
 	if ability.get("variable", false):
 		_open_ability_power(source, ability)
 		return
