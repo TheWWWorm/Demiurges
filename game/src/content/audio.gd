@@ -131,6 +131,32 @@ static func loop_whole(stream: AudioStreamWAV) -> void:
 	stream.loop_begin = 0
 	stream.loop_end = maxi(0, stream.data.size() / frame - 1)
 
+## Seconds until the last audible sample (above -42 dB): the length without
+## the silence some recordings end with (the victory fanfares carry up to a
+## second of it). The whole length for a sound that is not PCM.
+static func audible_length(stream: AudioStream) -> float:
+	if stream == null: return 0.0
+	var wav := stream as AudioStreamWAV
+	if wav == null or wav.format not in [AudioStreamWAV.FORMAT_8_BITS, AudioStreamWAV.FORMAT_16_BITS] or wav.mix_rate <= 0: return stream.get_length()
+	if wav.has_meta("audible_length"): return float(wav.get_meta("audible_length"))
+	var wide := wav.format == AudioStreamWAV.FORMAT_16_BITS
+	var sample := 2 if wide else 1
+	var data := wav.data
+	var count := data.size() / sample
+	var floor_level := 256 if wide else 1
+	var last := -1
+	var i := count - 1
+	while i >= 0:
+		var value := data.decode_s16(i * 2) if wide else data.decode_s8(i)
+		if absi(value) > floor_level:
+			last = i
+			break
+		i -= 1
+	var channels := 2 if wav.stereo else 1
+	var seconds := minf(stream.get_length(), float(last / channels + 1) / wav.mix_rate)
+	wav.set_meta("audible_length", seconds)
+	return seconds
+
 static func sound(profile: ELProfile, path: String) -> AudioStreamWAV:
 	var key := ELArchive.key(path)
 	if profile.sound_cache.has(key): return profile.sound_cache[key]

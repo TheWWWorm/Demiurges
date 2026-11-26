@@ -759,7 +759,7 @@ func _fort_zone(profile: ELProfile) -> void:
 
 class GlowStub extends ELCombatEffects:
 	var sources: Array = []
-	func glow_sources(_spell_budget := EMITTER_GLOW) -> Array: return sources
+	func glow_sources(_spell_budget := EMITTER_GLOW, _include_ether_vent := true) -> Array: return sources
 
 func _figure_glow_light() -> void:
 	var tracer := ELPathTracing.new()
