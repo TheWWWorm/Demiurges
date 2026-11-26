@@ -2256,7 +2256,8 @@ func _hold_arrival(pending: Dictionary) -> bool:
 	var side := int(pending.side)
 	var second := profile.id == "el2"
 	var gesture := 0.0
-	if models.has(side) and not pending.artifact and not bool(settings.values.get("hide_cast", false)):
+	if pending.artifact: gesture = float(pending.get("gesture", 0.0))
+	elif models.has(side) and not bool(settings.values.get("hide_cast", false)):
 		gesture = maxf(0.0, models[side].clip_seconds(_cast_clip(side, String(pending.card)))) if second else _summon_mark(side, String(pending.card))
 	var buffs: Array = pending.get("arrival_buffs", [])
 	var previous: Dictionary = pending.get("arrival_stats", {})
@@ -2521,9 +2522,16 @@ func _cast_seconds(data: Dictionary) -> float:
 	var seconds := 0.0
 	var side := int(data.get("side", -1))
 	var card := String(data.get("card", ""))
-	if data.kind == "cast" and models.has(side) and not bool(settings.values.get("hide_cast", false)):
+	var hidden := bool(settings.values.get("hide_cast", false))
+	if data.kind == "cast" and models.has(side) and not hidden:
 		seconds = maxf(models[side].clip_seconds(_cast_clip(side, card)), 0.0)
-	var cue := ELCombatEffects.summon_delay(profile, card) if duel.is_summon(card) else (_cast_release(side, card) if data.kind == "cast" else 0.0) + ELCombatEffects.hit_delay(profile, card)
+	var release := _cast_release(side, card) if data.kind == "cast" else 0.0
+	if data.kind == "artifact" and not hidden:
+		var clip := _artifact_clip(side)
+		if not clip.is_empty():
+			seconds = maxf(models[side].clip_seconds(clip), 0.0)
+			release = _gesture_release(models[side], clip)
+	var cue := ELCombatEffects.summon_delay(profile, card) if duel.is_summon(card) else release + ELCombatEffects.hit_delay(profile, card)
 	return clampf(maxf(seconds, cue + 0.3), 0.8, 6.0)
 
 func _sync_shown() -> void:
@@ -3237,7 +3245,12 @@ func _event(data: Dictionary) -> void:
 		"artifact":
 			_announce("T_USE_ARTIFACT", [_hero_name(data.side), str(data.get("title", duel.card_name(data.card)))], int(data.side))
 			if profile.id == "el2" and is_instance_valid(notices): _artifact_notice(data)
-			# The artifact's own effects (its spell's cast visual), without the hero's cast gesture.
+			# Using an artifact is the hero's ability command (#322): the hero
+			# plays its instant gesture with its voice, as for an enchantment's
+			# ability, and the artifact's effects (its spell's cast visual) and
+			# their sounds start at the gesture's release.
+			var gesture := _artifact_gesture(int(data.side))
+			battle_audio.hold(gesture)
 			# Both originals register WRBN hero PosEnchantment once; original
 			# per-creature PosAttack/PosDefence effects and WAV belong to each
 			# positive-kin non-exempt target, not the general spell sound list.
@@ -3249,7 +3262,7 @@ func _event(data: Dictionary) -> void:
 				battle_audio.spell(data.card, models.get(int(data.side)), models.get(1 - int(data.side)))
 			elif data.card != "FURY" and not duel.is_summon(data.card):
 				battle_audio.spell(data.card)
-			_pend_cast_effects(data, true)
+			_pend_cast_effects(data, true, gesture)
 		"ability":
 			# A hero's ability comes from an enchantment on it (T_USE_ENCHANTMENT);
 			# a creature's is its own (T_USE_ABILITY).
@@ -3526,17 +3539,19 @@ func _announce(key: String, args: Array, side: int) -> void:
 ## Starts the previous pending cast's effects and makes `data` (a cast or an
 ## artifact use) the pending one. Hits of a non-summon wait for the cue frame
 ## of the card's effect.
-func _pend_cast_effects(data: Dictionary, artifact: bool) -> void:
+## `gesture`: for an artifact's use, the seconds to its hero's gesture release.
+func _pend_cast_effects(data: Dictionary, artifact: bool, gesture := 0.0) -> void:
 	if _effect_cast.is_empty(): call_deferred("_present_cast")
 	else: _start_cast_effects()
 	var card := String(data.card)
 	# A spell leaves the hero's hand at its gesture's release frame: its
-	# effects start there and its hits count from there.
-	var release := 0.0 if artifact else _cast_release(int(data.side), card)
+	# effects start there and its hits count from there. A summon's arrival
+	# waits for the gesture instead (_hold_arrival).
+	var release := (0.0 if duel.is_summon(card) else gesture) if artifact else _cast_release(int(data.side), card)
 	var hit := 0.0 if duel.is_summon(card) else release + ELCombatEffects.hit_delay(profile, card)
 	# Incursion has an automatic target for LoseMana and its camera shot.
 	var target := 1 - int(data.side) if card == "INCR" else int(data.get("target", -1))
-	_effect_cast = {"card": card, "side": data.side, "target": target, "affected": [], "hit": hit, "release": release, "artifact": artifact, "power": int(data.get("power", 0)), "tap_life_landed": false}
+	_effect_cast = {"card": card, "side": data.side, "target": target, "affected": [], "hit": hit, "release": release, "artifact": artifact, "gesture": gesture, "power": int(data.get("power", 0)), "tap_life_landed": false}
 	if card == "FURY": _effect_cast.fury_buffs = []
 	if duel.is_summon(card):
 		_effect_cast.arrival_buffs = []
@@ -3752,6 +3767,24 @@ func _cast_clip(side: int, card: String) -> String:
 func _cast_release(side: int, card: String) -> float:
 	if duel.is_summon(card) or not models.has(side) or bool(settings.values.get("hide_cast", false)): return 0.0
 	return _gesture_release(models[side], _cast_clip(side, card))
+
+## The clip the figure in hero slot `side` plays to use an artifact: its
+## instant gesture (the hero ability command's), else its attack clip; ""
+## when it has neither.
+func _artifact_clip(side: int) -> String:
+	if not models.has(side): return ""
+	for name: String in ["uinstant", "uattack"]:
+		if models[side].has_clip(name): return name
+	return ""
+
+## Starts the artifact-use gesture of the hero in slot `side` with its
+## voice; the seconds to its release frame (0 with casting animations hidden).
+func _artifact_gesture(side: int) -> float:
+	if bool(settings.values.get("hide_cast", false)): return 0.0
+	var clip := _artifact_clip(side)
+	if clip.is_empty() or not models[side].play(clip): return 0.0
+	battle_audio.unit(models[side], clip.trim_prefix("u"))
+	return _gesture_release(models[side], clip)
 
 ## A creature's entry into or exit from the Colourless Plane: its effect,
 ## sound and caption.
@@ -4847,6 +4880,17 @@ func _ability_effects(data: Dictionary) -> void:
 		var actor: ELModel = models[source]
 		if actor.has_clip("uinstant") and actor.play("uinstant"):
 			battle_audio.unit(actor, "instant")
+	# Wall of Lava, Wall of Hellfire and Wall of Wind (#318): both originals
+	# queue the wall's action animation (PlayAnimation 7) ahead of its
+	# PosAttack or PosDefence. Their figures have no instant clip, and the
+	# originals' clip lookup falls back by code to the attack clip (as the
+	# winner's celebration does, victory_clip), heard with its own sound.
+	elif source >= 2 and card in ["WLLV", "WLIF", "WLWD"] and data.ability in ["lava_power", "hellfire_health"]:
+		var wall: ELModel = models[source]
+		for clip: String in ["uinstant", "uattack"]:
+			if wall.has_clip(clip):
+				if wall.play(clip): battle_audio.unit(wall, clip.trim_prefix("u"))
+				break
 	# Original EL1 SeaHaloAbility - registers DrainMana
 	# only when ether moves: Start on the opposing donor hero,
 	# Finish on the recipient hero. The zero-ether ability still
