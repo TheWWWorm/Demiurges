@@ -258,11 +258,75 @@ static func validate_deck(source: ELProfile, faction: String, cards: Array, rule
 		if int(counts[card]) > COPY_LIMIT: errors.append("Too many copies of %s." % card)
 	return errors
 
-static func hero_preset(source: ELProfile, faction: String, cards: Array, rules_version := OPEN_RULES, level := DEFAULT_LEVEL) -> Dictionary:
+static func hero_preset(source: ELProfile, faction: String, cards: Array, rules_version := OPEN_RULES, level := DEFAULT_LEVEL, loadout: Dictionary = NO_LOADOUT) -> Dictionary:
 	if not validate_deck(source, faction, cards, rules_version).is_empty(): return {}
 	var preset := ELDuelPresets.blank(faction, resource_level(rules_version))
 	preset.level = level
 	preset.skills = SKILLS.duplicate()
 	preset.cards = cards.duplicate()
 	preset.name = "Arena " + ELCatalog.faction_name(faction)
+	preset.specialization = String(loadout.get("specialization", "NONE"))
+	preset.artifacts = Array(loadout.get("artifacts", [])).duplicate()
 	return preset
+
+# --- Heroes ---------------------------------------------------------------------
+
+## Runs saved before heroes were varied: the heroes.def figure, no
+## specialization and no artifact.
+const NO_LOADOUT := {"template": "", "specialization": "NONE", "artifacts": []}
+
+## The race's duel portraits (non-quest templates of its colour), one per
+## figure, in name order: every entry is a different-looking hero.
+static func hero_templates(source: ELProfile, faction: String) -> Array[String]:
+	var rows := source.table("HeroTemplates")
+	var names: Array = rows.keys()
+	names.sort()
+	var models := {}
+	var result: Array[String] = []
+	for key: String in names:
+		var row: Dictionary = rows[key]
+		if String(row.get("Color", "")) != faction or String(row.get("Quest", "")) == "Yes": continue
+		var model := String(row.get("Model", ""))
+		if model.is_empty() or models.has(model): continue
+		models[model] = true
+		result.append(key)
+	return result
+
+## Specializations the race may hold, by code.
+static func specializations(source: ELProfile, faction: String) -> Array[String]:
+	var result: Array[String] = []
+	for code: String in source.table("HeroesSpecs"):
+		if code != "NONE" and ELDuelCosts.spec_allowed(source, code, faction) and ELSpecs.valid(source, code): result.append(code)
+	result.sort()
+	return result
+
+## Up to `count` distinct entries of `choices`, fixed by `seed`, in list order.
+static func offer(choices: Array[String], seed: int, count: int) -> Array[String]:
+	var shuffled := choices.duplicate()
+	var random := RandomNumberGenerator.new()
+	random.seed = ELDuelMatch._mix(seed ^ 0x7a19c35b)
+	for i in range(shuffled.size() - 1, 0, -1):
+		var j := random.randi_range(0, i)
+		var held: String = shuffled[i]
+		shuffled[i] = shuffled[j]
+		shuffled[j] = held
+	shuffled.resize(mini(count, shuffled.size()))
+	var result: Array[String] = []
+	for code: String in choices:
+		if code in shuffled: result.append(code)
+	return result
+
+## A hero for one Arena seat: a figure of the race (not `avoid`'s), one of its
+## specializations and one duel artifact, all fixed by `seed`.
+static func loadout(source: ELProfile, faction: String, seed: int, avoid := "") -> Dictionary:
+	var random := RandomNumberGenerator.new()
+	random.seed = ELDuelMatch._mix(seed ^ 0x3e5a71c9)
+	var templates := hero_templates(source, faction)
+	templates.erase(avoid)
+	var specs := specializations(source, faction)
+	var artifacts := ELDuelCosts.duel_artifacts(source)
+	var template := templates[random.randi_range(0, templates.size() - 1)] if not templates.is_empty() else ""
+	var spec := specs[random.randi_range(0, specs.size() - 1)] if not specs.is_empty() else "NONE"
+	var items: Array = []
+	if not artifacts.is_empty(): items.append(artifacts[random.randi_range(0, artifacts.size() - 1)])
+	return {"template": template, "specialization": spec, "artifacts": items}

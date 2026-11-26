@@ -10398,11 +10398,24 @@ func _open_arena() -> void:
 		_arena_screen.resumed.connect(_resume_arena)
 		_arena_screen.hero_chosen.connect(_arena_hero)
 		_arena_screen.card_picked.connect(_arena_pick)
+		_arena_screen.loadout_picked.connect(_arena_loadout)
 		_arena_screen.battle_requested.connect(_start_arena_battle)
 		_arena_screen.continued.connect(_arena_continue)
 		_arena_screen.retired.connect(_arena_retire)
 		_arena_screen.save_retried.connect(_retry_arena_save)
 		_arena_screen.left.connect(func(): _show_front_menu())
+	# A saved run opens directly, as its Resume button did; the landing page
+	# is only for starting a run (or when the save cannot be read).
+	if arena_run == null and _arena_save_error.is_empty() and ELArenaRun.has_save():
+		var saved := ELArenaRun.new()
+		if saved.restore(profiles.el2):
+			arena_run = saved
+			_show_arena()
+			if arena_run.phase == "battle": _start_arena_battle()
+			return
+		_show_arena()
+		_arena_screen.message(saved.error)
+		return
 	_show_arena()
 
 func _new_arena(run_seed: int, rules: int, level: int) -> void:
@@ -10442,12 +10455,21 @@ func _arena_pick(index: int) -> void:
 	_show_arena()
 	if not ok: _arena_screen.message(failure)
 
+func _arena_loadout(index: int) -> void:
+	if arena_run == null or not _arena_save_error.is_empty(): return
+	var ok := arena_run.choose_loadout(index)
+	var failure := arena_run.error
+	_show_arena()
+	if not ok: _arena_screen.message(failure)
+
 func _arena_continue() -> void:
 	if arena_run == null or not _arena_save_error.is_empty(): return
 	var ok := arena_run.continue_run()
 	var failure := arena_run.error
 	_show_arena()
 	if not ok: _arena_screen.message(failure)
+	# The result's one button also enters the next duel.
+	else: _start_arena_battle()
 
 func _arena_retire() -> void:
 	if arena_run == null or not _arena_save_error.is_empty(): return

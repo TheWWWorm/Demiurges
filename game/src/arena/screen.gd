@@ -5,6 +5,8 @@ extends Control
 signal started(seed: int, rules: int, level: int)
 signal hero_chosen(faction: String)
 signal card_picked(index: int)
+## The specialization or artifact step: the index of the chosen offer.
+signal loadout_picked(index: int)
 signal battle_requested
 signal continued
 signal retired
@@ -243,6 +245,7 @@ func show_run(active: ELArenaRun, save_error := "") -> void:
 	else:
 		match run.phase:
 			"hero": _hero_choices()
+			"spec", "artifact": _loadout_choices()
 			"draft": _draft()
 			_: _hub()
 	_relayout.call_deferred()
@@ -312,8 +315,12 @@ func _hero_choices() -> void:
 	_offer_grid.add_theme_constant_override("h_separation", 16)
 	_offer_grid.add_theme_constant_override("v_separation", 16)
 	_content.add_child(_offer_grid)
+	# One scale for all three figures, so a squat Chaot stands beside a
+	# winged Kinet as in battle instead of each filling its own card.
+	var scale_group := {"count": 0}
 	for faction: String in run.hero_choices:
 		var color := _faction_color(faction)
+		var loadout := run.hero_loadout(faction)
 		var panel := _panel(LINE)
 		var rows := _rows(panel, 10)
 		var title := _heading(_faction_name(faction), 25)
@@ -324,18 +331,136 @@ func _hero_choices() -> void:
 		stage.add_theme_stylebox_override("panel", _plate(Color("141413"), color.darkened(0.55), 6))
 		stage.size_flags_vertical = Control.SIZE_EXPAND_FILL
 		rows.add_child(stage)
-		var template := ELDuelPresets.default_template(profile, faction)
+		var template := _template(faction, loadout)
 		var figure := ELAutochessFigure.new()
 		figure.name = "ArenaHeroPreview"
 		figure.relative = false
 		figure.zoom = 0.92
+		figure.scale_group = scale_group
 		if DisplayServer.get_name() != "headless": figure.show_hero(profile, template)
-		if is_instance_valid(figure.view): stage.add_child(figure)
+		if is_instance_valid(figure.view):
+			stage.add_child(figure)
+			scale_group.count += 1
 		else:
 			figure.free()
 			var face := int(profile.table("HeroTemplates").get(template, {}).get("Face", -1))
 			if face >= 0: stage.add_child(_image(profile.portrait(face), Vector2.ZERO))
 		var pick := _choice_button("ArenaHero_" + faction, _faction_name(faction), panel, func(): hero_chosen.emit(faction))
+		_offer_grid.add_child(pick)
+
+
+func _template(faction: String, loadout: Dictionary) -> String:
+	var template := String(loadout.get("template", ""))
+	return template if not template.is_empty() else ELDuelPresets.default_template(profile, faction)
+
+
+func _has_loadout(loadout: Dictionary) -> bool:
+	return String(loadout.get("specialization", "NONE")) != "NONE" or not Array(loadout.get("artifacts", [])).is_empty()
+
+
+## The hero's specialization and artifacts as pictures with their names;
+## hovering one shows its full description.
+func _loadout_row(loadout: Dictionary) -> HFlowContainer:
+	var row := HFlowContainer.new()
+	row.name = "ArenaLoadout"
+	row.alignment = FlowContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("h_separation", 8)
+	row.add_theme_constant_override("v_separation", 6)
+	var code := String(loadout.get("specialization", "NONE"))
+	var spec: Dictionary = profile.table("HeroesSpecs").get(code, {})
+	if code != "NONE" and not spec.is_empty():
+		var title := profile.text(str(spec.get("Name", code))).strip_edges()
+		var detail := profile.text(str(spec.get("Desc", ""))).strip_edges()
+		var badge := _loadout_badge(profile.specialisation_icon(), title, _text("Specialization", "Специализация"), TEAL)
+		badge.name = "ArenaSpec_" + code
+		badge.tooltip_text = "%s\n%s" % [title, detail]
+		row.add_child(badge)
+	for item: Variant in loadout.get("artifacts", []):
+		var artifact := String(item)
+		var badge := _loadout_badge(profile.card_icon(artifact), ELEncyclopaedia.name(profile, artifact), _text("Artifact", "Артефакт"), GOLD)
+		badge.name = "ArenaArtifact_" + artifact
+		badge.tooltip_text = ELCombatRail.preset_artifact_tooltip(profile, artifact)
+		row.add_child(badge)
+	return row
+
+
+func _loadout_badge(icon: Texture2D, title: String, caption: String, ink: Color) -> PanelContainer:
+	var panel := PanelContainer.new()
+	panel.mouse_filter = Control.MOUSE_FILTER_PASS
+	panel.add_theme_stylebox_override("panel", _plate(Color("1d1d1bf5"), ink.darkened(0.5), 5))
+	var line := HBoxContainer.new()
+	line.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	line.add_theme_constant_override("separation", 8)
+	panel.add_child(line)
+	line.add_child(_image(icon, Vector2(44, 44)))
+	var words := VBoxContainer.new()
+	words.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	words.add_theme_constant_override("separation", 0)
+	words.alignment = BoxContainer.ALIGNMENT_CENTER
+	line.add_child(words)
+	var kind := _label(caption, 13, MUTED)
+	kind.autowrap_mode = TextServer.AUTOWRAP_OFF
+	kind.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	words.add_child(kind)
+	var name := _label(title, 16, ink)
+	name.autowrap_mode = TextServer.AUTOWRAP_OFF
+	name.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	words.add_child(name)
+	return panel
+
+
+## After the hero: one specialization of three for its race, then one duel
+## artifact of three, each shown with its picture and full description.
+func _loadout_choices() -> void:
+	var spec_step := run.phase == "spec"
+	_content.add_child(_draft_heading(_text("Choose a specialization", "Выберите специализацию") if spec_step else _text("Choose an artifact", "Выберите артефакт")))
+	_content.add_child(_label(_text("Your hero keeps it for the whole run. Then you draft sixteen cards.", "Герой сохранит выбор на весь заход. Затем вы выберете шестнадцать карт."), 15, MUTED))
+	var chosen := run.hero_loadout(run.faction)
+	if _has_loadout(chosen): _content.add_child(_loadout_row(chosen))
+	_offer_grid = GridContainer.new()
+	_offer_grid.add_theme_constant_override("h_separation", 16)
+	_offer_grid.add_theme_constant_override("v_separation", 16)
+	_content.add_child(_offer_grid)
+	var offered := run.spec_offer() if spec_step else run.artifact_offer()
+	for index in offered.size():
+		var code := offered[index]
+		var title := ""
+		var detail := ""
+		var icon: Texture2D
+		var ink := TEAL if spec_step else GOLD
+		if spec_step:
+			var row: Dictionary = profile.table("HeroesSpecs").get(code, {})
+			title = profile.text(str(row.get("Name", code))).strip_edges()
+			detail = profile.text(str(row.get("Desc", ""))).strip_edges()
+			icon = profile.specialisation_icon()
+		else:
+			title = ELEncyclopaedia.name(profile, code)
+			detail = ELCombatRail.preset_artifact_tooltip(profile, code).strip_edges()
+			# The tooltip opens with the artifact's name, already the card's title.
+			if detail.begins_with(title): detail = detail.substr(title.length()).strip_edges()
+			icon = profile.card_icon(code)
+		var panel := _panel(ink.darkened(0.2))
+		panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		var rows := _rows(panel, 10)
+		var nameplate := PanelContainer.new()
+		nameplate.add_theme_stylebox_override("panel", _nameplate if _nameplate != null else _plate(Color("32291e"), LINE, 6))
+		rows.add_child(nameplate)
+		var heading := _label(title, 19, GOLD)
+		heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		nameplate.add_child(heading)
+		var stage := PanelContainer.new()
+		stage.name = "ArenaLoadoutStage"
+		stage.add_theme_stylebox_override("panel", _plate(Color("141413"), ink.darkened(0.6), 12))
+		rows.add_child(stage)
+		var picture := _image(icon, Vector2(112, 112))
+		stage.add_child(picture)
+		var kind := _label(_text("Specialization", "Специализация") if spec_step else _text("Artifact", "Артефакт"), 14, ink)
+		kind.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		rows.add_child(kind)
+		var body := _label(detail, 17, INK)
+		body.size_flags_vertical = Control.SIZE_EXPAND_FILL
+		rows.add_child(body)
+		var pick := _choice_button(("ArenaSpecPick%d" if spec_step else "ArenaArtifactPick%d") % index, title, panel, func(): loadout_picked.emit(index))
 		_offer_grid.add_child(pick)
 
 
@@ -416,6 +541,7 @@ func _hub() -> void:
 	heading_label.add_theme_color_override("font_color", accent)
 	rows.add_child(heading_label)
 	if not note.is_empty(): rows.add_child(_label(note, 18, MUTED))
+	if run.draft != null and _has_loadout(run.hero_loadout(run.faction)): rows.add_child(_loadout_row(run.hero_loadout(run.faction)))
 	if run.phase == "ready":
 		var next := _action(_text("Enter the Arena", "Выйти на арену"), func(): _dispatch(battle_requested.emit), GOLD)
 		next.name = "ArenaBattle"
@@ -427,7 +553,8 @@ func _hub() -> void:
 		resume.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 		rows.add_child(resume)
 	elif run.phase == "result":
-		var next := _action(_text("Continue run", "Продолжить заход"), func(): _dispatch(continued.emit), GOLD)
+		# Straight into the next duel: no separate lobby step after a result.
+		var next := _action(_text("Next battle", "Следующий бой"), func(): _dispatch(continued.emit), GOLD)
 		next.name = "ArenaContinue"
 		next.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 		rows.add_child(next)
@@ -807,6 +934,8 @@ func _show_opponent(result: Dictionary) -> void:
 	_open_modal(_opponent_name(opponent), 535, 500)
 	_modal_rows.add_child(_label(_text("Drafted by the same rules: 16 picks, one card from each offer.", "Те же правила драфта: 16 выборов, по одной карте из каждого предложения."), 18, MUTED))
 	var cards: Array = opponent.get("cards", [])
+	var loadout: Dictionary = opponent.get("loadout", {})
+	if _has_loadout(loadout): _modal_rows.add_child(_loadout_row(loadout))
 	_cost_curve(_modal_rows, cards)
 	var history: Array = Dictionary(opponent.get("draft", {})).get("history", [])
 	var log := _button(_text("Draft history", "История драфта"), GOLD)

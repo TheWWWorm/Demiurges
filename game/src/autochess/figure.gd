@@ -18,6 +18,13 @@ var pitch := deg_to_rad(10.0)
 var zoom := 0.88
 ## Keep the creatures' relative sizes (shop, reserves, notices).
 var relative := true
+## Figures given the same dictionary are drawn at one common scale, standing
+## on one baseline: the view height is what the tallest member needs. Each
+## member is shown once all `count` members are framed.
+var scale_group: Dictionary = {}
+var _scale_base := Vector3.ZERO
+var _scale_extent := Vector2.ZERO
+var _scale_height := 0.0
 var view: SubViewport
 var model: ELModel
 var _framed := 0
@@ -93,7 +100,8 @@ func _pixels() -> Vector2i:
 
 func _draw() -> void:
 	# Shown once framed, so the creature does not jump into place.
-	if is_instance_valid(view) and _framed >= 24: draw_texture_rect(view.get_texture(), Rect2(Vector2.ZERO, size), false)
+	if is_instance_valid(view) and _framed >= 24 and (scale_group.is_empty() or _scale_height > 0.0):
+		draw_texture_rect(view.get_texture(), Rect2(Vector2.ZERO, size), false)
 
 ## Frames the figure's meshes (not its particles) so the creature fills
 ## `fill` of the view's height or width, whichever limits first.
@@ -320,4 +328,31 @@ func _process(_delta: float) -> void:
 					framings[_framing_key()] = {"pivot": pivot_node.transform, "center": Vector2(eye.position.x, eye.position.y),
 						"extent": view.get_meta("extent"), "fill": float(view.get_meta("fill"))}
 					_framings[_framing_key()] = true
+		_scale_height = 0.0
+		if not scale_group.is_empty(): Dictionary(scale_group.get("heights", {})).erase(get_instance_id())
 		if _framed >= 24: _sync_activity()
+	if _framed >= 24 and not scale_group.is_empty(): _share_scale()
+
+func _share_scale() -> void:
+	var eye: Camera3D = view.get_node("Pivot/Camera")
+	var reach := 2.0 * tan(deg_to_rad(eye.fov) * 0.5)
+	var aspect := float(view.size.x) / maxf(1.0, float(view.size.y))
+	var heights: Dictionary = scale_group.get_or_add("heights", {})
+	if _scale_height <= 0.0 and not heights.has(get_instance_id()):
+		# The camera as this figure's own framing left it, centred on it.
+		_scale_base = eye.position
+		_scale_extent = view.get_meta("extent", Vector2.ZERO)
+		heights[get_instance_id()] = maxf(_scale_extent.y, _scale_extent.x / maxf(0.01, aspect)) / maxf(0.05, zoom)
+	if heights.size() < int(scale_group.get("count", 1)): return
+	var height: float = heights.values().max()
+	# A member far wider than the rest still fits its own view.
+	height = maxf(height, _scale_extent.x / maxf(0.01, aspect) / maxf(0.05, zoom))
+	if is_equal_approx(height, _scale_height): return
+	_scale_height = height
+	eye.position.z = height / reach
+	# Feet on a shared line: the figure's lowest point a margin above the bottom.
+	var margin := height * (1.0 - zoom) * 0.5
+	eye.position.y = _scale_base.y - _scale_extent.y * 0.5 + height * 0.5 - margin
+	eye.near = maxf(eye.position.z * 0.02, 0.01)
+	eye.far = eye.position.z * 4.0 + height * 8.0
+	queue_redraw()

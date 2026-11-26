@@ -62,6 +62,7 @@ func _play(source: ELProfile, index: int, native_available: bool, rules: int) ->
 		seed += 1
 		created = run.create(source, seed, rules)
 	check(created and run.choose_hero(magic), "%s: a legal hero is selected" % magic)
+	while created and run.phase in ["spec", "artifact"]: run.choose_loadout(0)
 	if not created or run.phase != "draft": return
 	while run.phase == "draft":
 		if not run.pick(ELArenaDraftBot.choose(run.draft)):
