@@ -8,7 +8,8 @@ extends SceneTree
 ##   casting animations" drops gesture and voice.
 ## - #318: Wall of Lava, Wall of Hellfire and Wall of Wind play an action
 ##   clip (their figures have no instant clip: the attack clip) with its
-##   sound when their ether ability is used, besides PosAttack/PosDefence.
+##   sound when their ether ability is used, besides PosAttack/PosDefence;
+##   with "Hide casting animations" the clip and its sound are skipped.
 ## - #312: the same sound started for many creatures at once (a gas, an
 ##   Orc Chieftain's tirelessness) is heard once, at the nearest creature's
 ##   level, not once per creature; the same sound a moment later plays again.
@@ -201,6 +202,24 @@ func _wall_abilities(view: Node, edition: String) -> void:
 		check(view.battle_audio.requested.has(own), "%s: with its own sound %s" % [what, own])
 		var magic: String = view.battle_audio.effect_sound(effect)
 		check(view.battle_audio.requested.has(magic) and view.effects.started.has(effect), "%s: %s is shown and heard" % [what, effect])
+		await _idle(view)
+		# Both originals skip the action clip (and its sound) with Hide
+		# casting animations; the ability's own effect remains.
+		view.settings.values.hide_cast = true
+		duel.creatures[wall].resting = false
+		clips.clear()
+		model.animation_started.connect(listen)
+		view.battle_audio.requested.clear()
+		view.effects.started.clear()
+		duel.heroes[side].mana = 40
+		var used := duel.use_ability(wall, String(ability.key), -1, -1, 2)
+		await _frames(3)
+		model.animation_started.disconnect(listen)
+		view.settings.values.hide_cast = false
+		if used:
+			check(not clips.has(action) and not view.battle_audio.requested.has(own), "%s (casting animations hidden): no action clip and no clip sound (%s)" % [what, ", ".join(clips)])
+			check(view.effects.started.has(effect), "%s (casting animations hidden): %s is still shown" % [what, effect])
+		else: print("SKIP: %s: the ability cannot be used twice in a turn (%s)" % [what, duel.error])
 		await _idle(view)
 
 func _mass_sounds(view: Node, edition: String) -> void:

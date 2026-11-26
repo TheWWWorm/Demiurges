@@ -4943,6 +4943,13 @@ func _shown_ability_card(data: Dictionary) -> String:
 	if data.has("owner_card"): return String(data.owner_card)
 	return _ability_owner_card(int(data.get("source", data.side)), String(data.ability))
 
+## Whether figures play the summoning, instant and enchantment action clips
+## (PlayAnimation 6, 7 and 8) a cast, an artifact or a creature ability asks
+## for: both originals skip them all, for heroes and creatures alike, with
+## the option Hide casting animations, and the clip's own sound with them.
+func _action_clips_shown() -> bool:
+	return not bool(settings.values.get("hide_cast", false))
+
 ## Abilities every pale creature shares, by remake key.
 const PALE_COMMON_ABILITIES := ["dissipate", "sinister", "cruel", "fiendish", "mystic", "cryptic", "courtesy"]
 ## The hero effect each Pale devourer's kill adds (EffectTable.ABILITY).
@@ -4958,7 +4965,7 @@ func _ability_effects(data: Dictionary) -> void:
 	#  and Final Courtesy.
 	if profile.id == "el2" and source >= 2 and data.ability in PALE_COMMON_ABILITIES and models.has(source):
 		var user: ELModel = models[source]
-		if user.has_clip("uinstant") and user.play("uinstant"):
+		if _action_clips_shown() and user.has_clip("uinstant") and user.play("uinstant"):
 			battle_audio.unit(user, "instant")
 	# Common pale abilities have no owner card but three bind effects: Cruel
 	#  streams PaleDrainLife from the Shifter (Start) to the creature
@@ -5062,14 +5069,15 @@ func _ability_effects(data: Dictionary) -> void:
 		or (card in ["SPFG", "CAFG"] and data.ability == "spores")
 		or (card == "RFPT" and data.ability == "disenchant")):
 		var actor: ELModel = models[source]
-		if actor.has_clip("uinstant") and actor.play("uinstant"):
+		if _action_clips_shown() and actor.has_clip("uinstant") and actor.play("uinstant"):
 			battle_audio.unit(actor, "instant")
 	# Wall of Lava, Wall of Hellfire and Wall of Wind (#318): both originals
 	# queue the wall's action animation (PlayAnimation 7) ahead of its
 	# PosAttack or PosDefence. Their figures have no instant clip, and the
 	# originals' clip lookup falls back by code to the attack clip (as the
-	# winner's celebration does, victory_clip), heard with its own sound.
-	elif source >= 2 and card in ["WLLV", "WLIF", "WLWD"] and data.ability in ["lava_power", "hellfire_health"]:
+	# winner's celebration does, victory_clip), heard with its own sound; a
+	# figure without either plays nothing.
+	elif source >= 2 and card in ["WLLV", "WLIF", "WLWD"] and data.ability in ["lava_power", "hellfire_health"] and _action_clips_shown():
 		var wall: ELModel = models[source]
 		for clip: String in ["uinstant", "uattack"]:
 			if wall.has_clip(clip):
@@ -5221,7 +5229,7 @@ func _ability_effects(data: Dictionary) -> void:
 	# first, then animate the source without inventing an extra sound.
 	if profile.id in ["el1", "el2"] and source >= 2 and card == "KBSH" and data.ability == "sting":
 		var shaman: ELModel = models[source]
-		if shaman.has_clip("uinstant"):
+		if _action_clips_shown() and shaman.has_clip("uinstant"):
 			shaman.play("uinstant")
 
 func _clear_ability_hit() -> void:
