@@ -363,9 +363,11 @@ func _revisions(profile: ELProfile) -> void:
 		first.erase("revision")
 		check(ELFirstRandomMap.id_for_config(first) != ELRestoredMissions.map_id(scenario), "%s's revisions have their own map ids" % scenario)
 		check(ELRestoredMissions.scenario_of_id(ELFirstRandomMap.id_for_config(first)) == scenario, "a first-revision save of %s still names its mission" % scenario)
+		first["revision"] = 2
+		check(ELRestoredMissions.scenario_of_id(ELFirstRandomMap.id_for_config(first)) == scenario, "a second-revision save of %s still names its mission" % scenario)
 	check(ELFirstRandomMap.normalize(ELRestoredMissions.recipe(ELRestoredMissions.EVIL_DALE).merged({"revision": ELRestoredMissions.REVISION + 1}, true)).is_empty(), "an unknown revision is refused")
 	var plain := ELFirstRandomMap.defaults()
-	plain.revision = 2
+	plain["revision"] = 2
 	check(ELFirstRandomMap.normalize(plain).is_empty(), "plain random maps carry no revision")
 	var first := ELRestoredMissions.recipe(ELRestoredMissions.SAVAGE_DESERT)
 	first.erase("revision")

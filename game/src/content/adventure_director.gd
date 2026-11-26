@@ -102,7 +102,9 @@ var _running: Variant = null
 
 func _sync_guard_balance() -> void:
 	if state == null: return
-	var enabled := fight_neutral_monsters and ELFirstAIEconomy.applies(self)
+	# The guard relief is for computer heroes' way to their mines: a map
+	# without another player (Evil Dale, Savage Desert) keeps its guards.
+	var enabled := fight_neutral_monsters and ELFirstAIEconomy.applies(self) and state.players.keys().any(func(player: Variant) -> bool: return int(player) > 0 and int(player) != state.current_player)
 	if enabled == state.balance_map_guards: return
 	state.balance_map_guards = enabled
 	if enabled: state.map.index_first_guard_sites()

@@ -8,6 +8,11 @@ extends SceneTree
 ## - Every rival but Glazzz attacks the Chosen One within its sight (Glazzz
 ##   within his sight less three tiles, and otherwise walks his loop); none
 ##   is within reach of the Chosen One's glade at the start.
+## - A creature fights with its own Monsters row for the difficulty (level,
+##   health, deck) and the difficulty's level change, as in the original.
+## - The guard relief of "AI fights neutral monsters" (lower level and health
+##   by mines) is for computer heroes; a map with no other player keeps its
+##   guards, so the option no longer weakens the dale's creatures.
 ## - Glazzz is a man: his figure, textures, portrait and voice are those of
 ##   GreenEggMale4 (only the template's unused Gender column says F), his
 ##   battle voice is the male Vital set, and his lines in the remake's story
@@ -40,6 +45,7 @@ func _run() -> void:
 		return
 	_glazzz_is_male(profile)
 	_rivals(profile)
+	_creatures(profile)
 	_elsewhere(profile)
 	print("FEEDBACK EVIL DALE: %d failure(s)" % failures)
 	quit(int(failures > 0))
@@ -164,6 +170,49 @@ func _spot_near(director: ELAdventureDirector, actor: Dictionary, distance: int)
 		if director.grid.path(spot, at).is_empty() and director.grid.approach(spot, actor).is_empty(): continue
 		return spot
 	return Vector2i(-1, -1)
+
+## The dale's creatures in the order of the walk from the glade:
+## [[steps, creature], ...] (creatures with no way to them left out).
+func _walk_order(state: ELAdventureSession, director: ELAdventureDirector) -> Array:
+	var chosen := ELRestoredMissions.chosen_one(state)
+	var start := Vector2i(chosen.x, chosen.y)
+	var met: Array = []
+	for item: Dictionary in state.objects.values():
+		if item.get("type") != "monster" or not item.get("placed", true): continue
+		var walk := director.grid.approach(start, item)
+		if not walk.is_empty(): met.append([walk.size(), item])
+	met.sort_custom(func(a: Array, b: Array) -> bool: return a[0] < b[0])
+	return met
+
+func _creatures(profile: ELProfile) -> void:
+	var made := _dale_session(profile)
+	if made.is_empty(): return
+	var state: ELAdventureSession = made[0]
+	var director: ELAdventureDirector = made[1]
+	var chosen := ELRestoredMissions.chosen_one(state)
+	var met := _walk_order(state, director)
+	# The guard relief stays off with the option on: no other player.
+	director.smart_ai = true
+	director.fight_neutral_monsters = true
+	check(not state.balance_map_guards, "AI fights neutral monsters leaves the dale's guards as they are")
+	var weakened := met.filter(func(entry: Array) -> bool: return state.combat_level(entry[1]) < int(entry[1].level) or state.combat_health(entry[1]) < int(entry[1].health))
+	check(weakened.is_empty(), "no creature of the dale fights below its own level or health (%d)" % weakened.size())
+	# The battle against a creature: its Monsters row of the difficulty, and
+	# the difficulty's level change for the local side (Normal: none).
+	var first: Dictionary = met[0][1]
+	var row := ELFirstMonsters.definition(profile, str(first.name), state.difficulty)
+	var levels := ELAdventureEncounter.first_levels(state, int(chosen.uid), int(first.uid))
+	check(int(first.level) == int(row.Level) and int(first.health) == int(row.Health) and first.cards == ELFirstMonsters.book(row).cards and levels == [int(chosen.level), int(first.level)],
+		"a creature fights with its Monsters row (level, health, deck) and no level change on Normal")
+	var mismatched := met.filter(func(entry: Array) -> bool:
+		var own := ELFirstMonsters.definition(profile, str(entry[1].name), state.difficulty)
+		return own.is_empty() or int(entry[1].level) != int(own.Level) or int(entry[1].health) != int(own.Health) or entry[1].cards != ELFirstMonsters.book(own).cards)
+	check(met.size() >= 60 and mismatched.is_empty(), "all %d creatures of the dale carry their Monsters rows (%d differ)" % [met.size(), mismatched.size()])
+	state.difficulty = 0
+	check(ELAdventureEncounter.first_levels(state, int(chosen.uid), int(first.uid)) == [int(chosen.level) + 2, maxi(1, int(first.level) - 1)], "on the easiest difficulty the hero fights two levels up and the creature one down")
+	state.difficulty = 4
+	check(ELAdventureEncounter.first_levels(state, int(chosen.uid), int(first.uid)) == [int(chosen.level), int(first.level) + 2], "on the hardest difficulty the creature fights two levels up")
+	state.close()
 
 ## A neutral hero named like a rival guards nothing outside the dale.
 func _elsewhere(profile: ELProfile) -> void:
