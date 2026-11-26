@@ -57,7 +57,7 @@ func _run() -> void:
 	run.create(view.profiles.el2, 20261126)
 	run.auto_save = false
 	run.choose_hero(run.hero_choices[0])
-	while run.phase in ["spec", "artifact"]: run.choose_loadout(0)
+	while run.phase in ["spec", "artifact", "skill"]: run.choose_loadout(0)
 	while run.phase == "draft": run.pick(ELArenaDraftBot.choose(run.draft))
 	var duel := run.build_battle()
 	duel.heroes[1].health = 0
@@ -87,7 +87,7 @@ func _run() -> void:
 	if arena_battle != null:
 		for side in 2:
 			var hero: Dictionary = arena_battle.heroes[side]
-			print("side %d: %s, specialization %s, %d artifact(s)" % [side, arena_battle.setup.players[side].hero, hero.get("spec", "NONE"), Array(hero.get("artifacts", [])).size()])
+			print("side %d: %s, specialization %s, %d artifact(s), skills %s" % [side, arena_battle.setup.players[side].hero, hero.get("spec", "NONE"), Array(hero.get("artifacts", [])).size(), hero.get("skills", {})])
 	view.set("_arena_battle", null)
 	view.set("arena_run", null)
 	if kept.is_empty(): DirAccess.remove_absolute(ProjectSettings.globalize_path(ELArenaRun.SAVE_PATH))

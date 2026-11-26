@@ -262,7 +262,7 @@ static func hero_preset(source: ELProfile, faction: String, cards: Array, rules_
 	if not validate_deck(source, faction, cards, rules_version).is_empty(): return {}
 	var preset := ELDuelPresets.blank(faction, resource_level(rules_version))
 	preset.level = level
-	preset.skills = SKILLS.duplicate()
+	preset.skills = hero_skills(loadout)
 	preset.cards = cards.duplicate()
 	preset.name = "Arena " + ELCatalog.faction_name(faction)
 	preset.specialization = String(loadout.get("specialization", "NONE"))
@@ -329,4 +329,23 @@ static func loadout(source: ELProfile, faction: String, seed: int, avoid := "") 
 	var spec := specs[random.randi_range(0, specs.size() - 1)] if not specs.is_empty() else "NONE"
 	var items: Array = []
 	if not artifacts.is_empty(): items.append(artifacts[random.randi_range(0, artifacts.size() - 1)])
-	return {"template": template, "specialization": spec, "artifacts": items}
+	# Drawn after the older choices, so their seeded values stay the same.
+	var known := skills(source)
+	var learned := {}
+	if not known.is_empty(): learned[known[random.randi_range(0, known.size() - 1)]] = random.randi_range(0, ELHeroSkills.MAX_RANK)
+	return {"template": template, "specialization": spec, "artifacts": items, "skills": learned}
+
+## Hero skills the Arena offers: the duel editor's skills except Providence,
+## which every Arena hero holds at its first rank (it sets each card's uses).
+static func skills(source: ELProfile) -> Array[String]:
+	var result := ELDuelCosts.duel_skills(source)
+	for code: String in SKILLS: result.erase(code)
+	return result
+
+## The battle hero's skills: Providence plus the loadout's picked skill.
+static func hero_skills(loadout: Dictionary) -> Dictionary:
+	var result := SKILLS.duplicate()
+	var learned: Dictionary = loadout.get("skills", {})
+	for code: String in learned:
+		if not result.has(code): result[code] = int(learned[code])
+	return result
