@@ -3537,14 +3537,15 @@ func _hero_death_effect(side: int) -> void:
 ## The original phase notices (EL1, EL2): the local side's
 ## attack shows the attack banner and announces the turn number; its defence
 ## shows the defence banner; the opponent's phases show «ХОД ПРОТИВНИКА» once
-## until the local side attacks again. Option CombatPhases gates the banners.
+## until the local side attacks or defends again. Option CombatPhases gates
+## the banners, and each banner sounds as it settles.
 func _phase_notice(side: int, attack: bool, round_number: int) -> void:
 	var local := _local_side(side)
 	var band := -1
 	if local:
 		band = 0 if attack else 1
+		_enemy_banner_shown = false
 		if attack:
-			_enemy_banner_shown = false
 			_announce("T_TURN_NUMBER", [round_number], -1)
 	elif not _enemy_banner_shown:
 		band = 2

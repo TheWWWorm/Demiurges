@@ -54,7 +54,10 @@ static func bind_path(button: BaseButton, profile: ELProfile, path: String) -> v
 	bind(button, profile)
 	button.set_meta("ui_sound", path)
 
-static func play(profile: ELProfile, path: String) -> bool:
+## `channel` names a voice of its own for a sound the originals start on
+## their general sample pool rather than as a button's click (the combat
+## phase banner's): it neither cuts nor is cut by the interface channel.
+static func play(profile: ELProfile, path: String, channel := "") -> bool:
 	if path.is_empty() or profile == null: return false
 	history.append(path)
 	if history.size() > HISTORY: history = history.slice(history.size() - HISTORY)
@@ -63,14 +66,29 @@ static func play(profile: ELProfile, path: String) -> bool:
 	if stream == null: return false
 	var tree := Engine.get_main_loop() as SceneTree
 	if tree == null or tree.root == null: return false
-	if _player == null or not is_instance_valid(_player):
-		_player = AudioStreamPlayer.new()
-		_player.name = "InterfaceSounds"
-		tree.root.add_child(_player)
-	_player.stream = stream
-	_player.volume_db = linear_to_db(maxf(0.0001, ELAudio.option_gain(volume, profile.id)))
-	_player.play()
+	var player := _channel_player(tree, channel)
+	player.stream = stream
+	player.volume_db = linear_to_db(maxf(0.0001, ELAudio.option_gain(volume, profile.id)))
+	player.play()
 	return true
+
+static var _channels: Dictionary = {}
+
+## The voice that plays `channel` ("" for the interface channel).
+static func player_of(channel := "") -> AudioStreamPlayer:
+	if channel.is_empty(): return _player if _player != null and is_instance_valid(_player) else null
+	var player: Variant = _channels.get(channel)
+	return player if player != null and is_instance_valid(player) else null
+
+static func _channel_player(tree: SceneTree, channel: String) -> AudioStreamPlayer:
+	var player := player_of(channel)
+	if player != null: return player
+	player = AudioStreamPlayer.new()
+	player.name = "InterfaceSounds" if channel.is_empty() else "InterfaceSounds_" + channel
+	tree.root.add_child(player)
+	if channel.is_empty(): _player = player
+	else: _channels[channel] = player
+	return player
 
 ## The effects volume from a settings or volume dictionary.
 static func use_volumes(values: Dictionary) -> void:

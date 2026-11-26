@@ -10,7 +10,8 @@ extends SceneTree
 ## - The phase banner plays its sound (Buttons/Begin_Combat.wav) at each
 ##   phase change, in quick duels and in both games' campaign battles, and
 ##   the end-of-phase button plays its control's sound (CombatMenu2) when
-##   clicked.
+##   clicked. A click does not cut the banner sound, and the opponent's
+##   banner shows again after the local side's defence.
 ## - While a cast is shown, the corner menu control (and so its hover
 ##   tooltip) is hidden, so it never covers a spell's full-screen effect.
 ## Runs for each game whose files are configured.
@@ -150,6 +151,44 @@ func _phase_sound(edition: String) -> void:
 		if ELUiSounds.history.has("Buttons/Begin_Combat.wav"): heard += 1
 	print("  %s: banner sound heard at %d of %d phase changes" % [edition, heard, phases])
 	check(heard >= phases - 1 and heard > 0, "%s: phase changes play the banner sound (%d of %d)" % [edition, heard, phases])
+	# Both originals start the banner sound on their general sample pool, so
+	# a button's click right after it does not cut it off.
+	view.notices.show_banner(0)
+	for i in 60:
+		await process_frame
+		if ELUiSounds.player_of("phase") != null and ELUiSounds.player_of("phase").playing: break
+	var phase_voice := ELUiSounds.player_of("phase")
+	ELUiSounds.play(view.profile, ELUiSounds.DEFAULT)
+	check(phase_voice != null and phase_voice.playing and phase_voice != ELUiSounds.player_of(), "%s: a click after the banner sound does not cut it" % edition)
+	await _close(view)
+	await _banner_latch(edition)
+
+## The opponent's banner shows once per opposing turn: the local side's
+## attack or defence banner opens it again (both originals clear the latch
+## on either banner).
+func _banner_latch(edition: String) -> void:
+	var profile := ELProfile.new()
+	var paths: Dictionary = JSON.parse_string(FileAccess.get_file_as_string("user://profiles.json"))
+	if not profile.mount(edition, str(paths[edition])): return
+	var position := Fixtures.build(profile, {"attacker": 0, "phase": "attack", "fixed": true,
+		"heroes": [{"health": 20, "mana": 20, "hand": []}, {"health": 20, "mana": 20, "hand": []}], "creatures": []})
+	var view: Node = await _view(edition, position)
+	if view == null: return
+	view.settings.values.combat_phases = true
+	var local := 0 if view._local_side(0) and not view._local_side(1) else (1 if view._local_side(1) and not view._local_side(0) else -1)
+	if local < 0:
+		print("SKIP: %s: no single local side in this battle" % edition)
+		await _close(view)
+		return
+	var shown := func(side: int, attack: bool) -> int:
+		view.notices.banner = -1
+		view._phase_notice(side, attack, 1)
+		return view.notices.banner
+	shown.call(1 - local, true)
+	check(shown.call(1 - local, false) == -1, "%s: the opponent's banner shows once per opposing turn" % edition)
+	check(shown.call(local, false) == 1, "%s: the local defence shows the defence banner" % edition)
+	check(shown.call(1 - local, true) == 2, "%s: after the local defence the opponent's banner shows again" % edition)
+	check(shown.call(local, true) == 0, "%s: the local attack shows the attack banner" % edition)
 	await _close(view)
 
 ## A won duel: the battle is over when the victory clip and the audible

@@ -4,8 +4,8 @@ extends Control
 ## - the phase banner (option CombatPhases): «АТАКА», «ЗАЩИТА» or
 ##   «ХОД ПРОТИВНИКА» from Interface/combat_text_1 (left half) and _2 (right
 ##   half), three 85 px bands. It grows in from 300% over 250 ms, holds for
-##   1 s (Buttons/Begin_Combat.wav plays as it settles) and shrinks to 90% over
-##   250 ms. The banner is half the screen wide, centred 50 px above the middle.
+##   1 s (Buttons/Begin_Combat.wav plays as it settles, on a voice of its own
+##   that a button click does not cut) and shrinks to 90% over 250 ms. The banner is half the screen wide, centred 50 px above the middle.
 ##   The first game tints its white art (a dark outline, then a pale fill) and
 ##   fades it in and out. The second game's art is coloured and has no fade.
 ## - first game: the cast message list (option CastMessages, also ShowChat),
@@ -20,6 +20,7 @@ extends Control
 ##   a turn starts. There are 5 per row at a 53 px step.
 ## Approximations: list and icon origins, and the line font.
 
+const BANNER_SOUND := "Buttons/Begin_Combat.wav"
 const BAND := 85.0
 const GROW := 0.25
 const HOLD := 1.0
@@ -188,7 +189,7 @@ func _process(delta: float) -> void:
 		changed = previous < GROW or banner_age >= GROW + HOLD
 		if not _sounded and banner_age >= GROW:
 			_sounded = true
-			if profile != null: ELUiSounds.play(profile, "Buttons/Begin_Combat.wav")
+			if profile != null: ELUiSounds.play(profile, BANNER_SOUND, "phase")
 		if banner_age >= GROW + HOLD + SHRINK: banner = -1
 	# Retain the array and compact survivors in place. Most frames are in
 	# the unchanged hold period; only a fade or banner transition redraws.
