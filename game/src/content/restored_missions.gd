@@ -290,7 +290,9 @@ static func scenario_of_id(id: String) -> String:
 		earlier.erase("revision")
 		if ELFirstRandomMap.id_for_config(earlier) == id: return scenario
 		for revision in range(2, REVISION):
-			earlier.revision = revision
+			# A String key: `earlier.revision =` would add a StringName one,
+			# which the recipe check refuses.
+			earlier["revision"] = revision
 			if ELFirstRandomMap.id_for_config(earlier) == id: return scenario
 	return ""
 
