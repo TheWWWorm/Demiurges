@@ -2299,6 +2299,33 @@ func _script_arrival(id: int, wait: float) -> void:
 	_arrivals.append({"card": String(c.card), "side": int(c.owner), "ids": [id], "since": elapsed, "camera": false,
 		"gesture": wait, "buffs": [], "stats": {}, "shown_at": -1.0})
 
+## A second-game spell-jammer a sorcery springs from its trap (only traps
+## put them into play).
+func _trap_jammer(c: Dictionary) -> bool:
+	return profile.id == "el2" and String(c.get("card", "")).begins_with("OSJ") and String(_effect_cast.get("card", "")) != String(c.card)
+
+## The spell-jammers a sorcery sprang: hidden until the hero's cast and the
+## spell's effects have run their course, then each in its summon effect.
+func _hold_trap_jammers(pending: Dictionary) -> void:
+	var cast_left := maxf(0.0, presentation.cast_until - elapsed)
+	var wait := maxf(cast_left, _summon_effect_seconds(String(pending.card)))
+	for id: int in pending.trap_jammers:
+		_script_arrival(id, wait)
+
+## The Pale Ripple's +1/+1 recipients when it lands: the caster's creatures
+## outside the Colourless Plane, as the event's displayed stamp lists them.
+func _ripple_recipients(data: Dictionary, side: int) -> Array[int]:
+	var out: Array[int] = []
+	var listed: Dictionary = data.get("shown", {}).get("creatures", {})
+	if listed.is_empty():
+		for c: Dictionary in duel.army(side):
+			if not duel.in_plane(int(c.id)): out.append(int(c.id))
+		return out
+	for id: int in listed:
+		var c: Dictionary = listed[id]
+		if id >= 2 and int(c.owner) == side and not bool(c.plane): out.append(id)
+	return out
+
 ## Seconds from the start of a hero's summoning gesture to its mark frame,
 ## where the first game starts the summoned creature's effect.
 func _summon_mark(side: int, card: String) -> float:
@@ -2485,6 +2512,8 @@ func _on_duel_event(data: Dictionary) -> void:
 		# Blast's OuterBlast shows only on a Pale target; note it before the
 		# spell resolves, as its 3 damage can remove the creature.
 		if kind == "cast" and profile.id == "el2" and data.get("card") == "OBLS": data.pale_target = duel.pale(int(data.get("target", -1)))
+		# The Pale Hammer destroys a Pale creature but sends any other home.
+		if kind == "cast" and profile.id == "el2" and data.get("card") == "OCLV": data.pale_target = duel.pale(int(data.get("target", -1)))
 		# A life drain heals when its DrainLife effect reaches the hero.
 		if data.get("kind") == "heal" and _drain_started: data.drain = true
 		_drain_started = (data.get("kind") == "combat_ability" and data.get("key") == "Lifetap") or data.get("kind") == "bat_drain_cue" \
@@ -2671,7 +2700,16 @@ func _event(data: Dictionary) -> void:
 			if profile.id in ["el1", "el2"] and models.has(int(_effect_cast.side)) and models.has(1 - int(_effect_cast.side)):
 				battle_audio.spell("TPLF", models[int(_effect_cast.side)],
 					models[1 - int(_effect_cast.side)])
+		if _effect_cast.has("ripple_victims"):
+			if data.kind == "damage" and not _effect_cast.ripple_victims.has(int(data.target)):
+				_effect_cast.ripple_victims.append(int(data.target))
+			# Its +1/+1 lands on the caster's creatures in the Ether; those in
+			# the Colourless Plane (either side's) gain nothing.
+			elif data.kind == "enchant" and String(data.get("card", "")) == "ORPL":
+				_effect_cast.ripple_buffed = _ripple_recipients(data, int(_effect_cast.side))
 		var touched := int(data.creature.id) if data.kind == "summon" else int(data.get("target", -1))
+		# A spell-jammer that the spell springs from a trap arrives after it.
+		if data.kind == "summon" and _trap_jammer(data.creature): touched = -1
 		if data.kind in ["summon", "damage", "heal", "enchant", "disenchant", "death", "plane"] and touched >= 0 and not _effect_cast.affected.has(touched):
 			_effect_cast.affected.append(touched)
 		# A later action in the same frame no longer waits for the cast's cue.
@@ -2698,6 +2736,16 @@ func _event(data: Dictionary) -> void:
 				models[c.id].visible = false
 				models[c.id].set_meta("arriving", true)
 				labels[c.id].hide()
+			elif models.has(c.id) and _trap_jammer(c):
+				# A spell-jammer trap answers the sorcery once the hero's gesture
+				# and the spell's own effects are over, in its summon effect.
+				if _effect_cast.is_empty(): _script_arrival(int(c.id), 0.0)
+				else:
+					models[c.id].visible = false
+					models[c.id].set_meta("arriving", true)
+					if labels.has(c.id): labels[c.id].hide()
+					if not _effect_cast.has("trap_jammers"): _effect_cast.trap_jammers = []
+					_effect_cast.trap_jammers.append(int(c.id))
 			elif models.has(c.id) and String(_script_summon.get("card", "")) == String(c.card) and int(_script_summon.side) == int(c.owner):
 				_script_summon = {}
 				_script_arrival(int(c.id), 0.0)
@@ -2819,6 +2867,10 @@ func _event(data: Dictionary) -> void:
 			elif profile.id == "el2" and data.card == "OBLS":
 				# Blast's (OBLS) two effects are each conditional; their sounds
 				# come with them at release.
+				pass
+			elif profile.id == "el2" and data.card in ["OCLV", "ORPL"]:
+				# The Pale Hammer's death or recall and the Pale Ripple's hits
+				# and gains each sound with their own effect at release.
 				pass
 			elif profile.id == "el2" and data.card in WARD_CARDS:
 				for name: String in _ward_effects(String(data.card), int(data.get("target", -1))):
@@ -3033,6 +3085,13 @@ func _event(data: Dictionary) -> void:
 				for name: String in ["NegAttack", "NegDefence", "NegRune"]:
 					battle_audio.effect(name)
 					_figure_effect(name, int(data.target))
+		"devour_gain_cue":
+			# The devourer's prey died: its hero's gain shows at that hero.
+			var gain_side := int(data.side)
+			if profile.id == "el2" and DEVOUR_GAINS.has(String(data.card)) and models.has(gain_side):
+				var gain_effect := String(DEVOUR_GAINS[String(data.card)])
+				battle_audio.effect(gain_effect)
+				_figure_effect(gain_effect, gain_side)
 		"devour_growth":
 			# EL2 Devourer1/2Enchantment attach binds
 			# Target to the Devourer that killed its prey.
@@ -3182,7 +3241,9 @@ func _event(data: Dictionary) -> void:
 			# creature and Draw to its owner. The model stays until the queued
 			# cast effects start at the hero's release frame.
 			var creature_id := int(data.target)
-			var unsummon_fx: bool = profile.id in ["el1", "el2"] and _effect_cast.get("card", "") in ["UNSM", "LSUS"]
+			# The Pale Hammer's recall of an ordinary creature shows the same way.
+			var unsummon_fx: bool = (profile.id in ["el1", "el2"] and _effect_cast.get("card", "") in ["UNSM", "LSUS"]) \
+				or (profile.id == "el2" and _effect_cast.get("card", "") == "OCLV")
 			if profile.id in ["el1", "el2"] and _effect_cast.get("card", "") == "GRUN":
 				# The original mass callback queues each creature's own BlueDeath
 				# and its ORIGINAL owner's Draw before removing the model.
@@ -3191,7 +3252,9 @@ func _event(data: Dictionary) -> void:
 				_effect_cast.grun_sites.append({"creature": creature_id,
 					"owner": int(original_owners.get(creature_id, data.get("owner", -1)))})
 			elif unsummon_fx and int(_effect_cast.get("target", -1)) == creature_id:
-				_effect_cast.return_owner = int(data.get("owner", -1))
+				# The Hammer hands the card to the creature's original owner.
+				var receiver: Variant = data.get("original_owner", data.get("owner", -1)) if _effect_cast.card == "OCLV" else data.get("owner", -1)
+				_effect_cast.return_owner = int(receiver)
 			else:
 				_remove_model(creature_id)
 			if models.has(creature_id): models[creature_id].set_meta("returning", true)
@@ -3570,6 +3633,13 @@ func _pend_cast_effects(data: Dictionary, artifact: bool) -> void:
 	if profile.id == "el2" and card == "OBLS":
 		_effect_cast.cleanse_holders = []
 		_effect_cast.pale_target = bool(data.get("pale_target", false))
+	if profile.id == "el2" and card == "OCLV":
+		_effect_cast.pale_target = bool(data.get("pale_target", false))
+		# Its Pale victim's figure may already be falling at the release.
+		_effect_cast.hammer_figure = models.get(target)
+	if profile.id == "el2" and card == "ORPL":
+		_effect_cast.ripple_victims = []
+		_effect_cast.ripple_buffed = []
 	if profile.id == "el1" and card == "FRNT":
 		_effect_cast.fury_attempts = 0
 		_effect_cast.fury_attacker = int(duel.attacker)
@@ -3820,6 +3890,7 @@ func _start_cast_effects() -> void:
 	# current view, with or without the automatic camera.
 	if profile.id in ["el1", "el2"] and pending.get("card", "") in ["TREM", "ERQA"]: _start_shake()
 	if not pending.get("camera_shown", false): _auto_cast(pending)
+	if pending.has("trap_jammers"): _hold_trap_jammers(pending)
 	if not pending.is_empty() and _hold_arrival(pending): return
 	if pending.is_empty() or not is_instance_valid(effects): return
 	if pending.card == "FURY":
@@ -4006,6 +4077,47 @@ func _start_cast_effects() -> void:
 		if pending.get("pale_target", false):
 			effects.play("OuterBlast", {"Target": [models[id]]})
 			battle_audio.effect("OuterBlast", models[id])
+		return
+	# The Pale Hammer (OCLV): OutplaneSpellDeath at a Pale creature it
+	# destroys; an ordinary creature is recalled as Unsummon recalls it,
+	# BlueDeath as it leaves and Draw at the hero its card goes back to.
+	if profile.id == "el2" and pending.card == "OCLV":
+		var id := int(pending.target)
+		if pending.get("pale_target", false):
+			var victim: Variant = models.get(id, pending.get("hammer_figure"))
+			if is_instance_valid(victim):
+				effects.play("OutplaneSpellDeath", {"Target": [victim]})
+				battle_audio.effect("OutplaneSpellDeath", victim)
+			return
+		if not pending.has("return_owner"): return
+		var owner := int(pending.return_owner)
+		if models.has(id):
+			effects.play("BlueDeath", {"Target": [models[id]]})
+			battle_audio.effect("BlueDeath", models[id])
+		if models.has(owner):
+			effects.play("Draw", {"Target": [models[owner]]})
+			battle_audio.effect("Draw", models[owner])
+		_remove_model(id)
+		return
+	# The Pale Ripple (ORPL): OuterRipple at each creature of the Colourless
+	# Plane it hits (the caster when there is none), then the +1/+1's
+	# PosAttack, PosDefence and PosRune at each of the caster's creatures
+	# in the Ether, which alone gain it.
+	if profile.id == "el2" and pending.card == "ORPL":
+		var hit: Array = []
+		for id: int in pending.get("ripple_victims", []):
+			if models.has(id): hit.append(models[id])
+		if hit.is_empty() and pending.get("ripple_victims", []).is_empty() and models.has(int(pending.side)): hit.append(models[int(pending.side)])
+		if not hit.is_empty():
+			effects.play("OuterRipple", {"Start": [models.get(int(pending.side))], "Target": hit})
+			battle_audio.effect("OuterRipple", hit[0])
+		var buffed: Array = []
+		for id: int in pending.get("ripple_buffed", []):
+			if models.has(id): buffed.append(id)
+		for name: String in ["PosAttack", "PosDefence", "PosRune"]:
+			if buffed.is_empty(): break
+			battle_audio.effect(name, models[buffed[0]])
+			for id: int in buffed: _figure_effect(name, id)
 		return
 	if profile.id in ["el1", "el2"] and pending.card in ["CRHG", "RVHG"]:
 		for id: int in pending.get("hunger_sites", []):
@@ -4730,6 +4842,8 @@ func _shown_ability_card(data: Dictionary) -> String:
 
 ## Abilities every pale creature shares, by remake key.
 const PALE_COMMON_ABILITIES := ["dissipate", "sinister", "cruel", "fiendish", "mystic", "cryptic", "courtesy"]
+## The hero effect each Pale devourer's kill adds (EffectTable.ABILITY).
+const DEVOUR_GAINS := {"OUD1": "GainLife", "OUD2": "GainLife", "OUD3": "GainMana"}
 
 ## Effects and sounds of a used ability, drawn between the user and its target.
 func _ability_effects(data: Dictionary) -> void:
@@ -4899,6 +5013,10 @@ func _ability_effects(data: Dictionary) -> void:
 	# the enchantment off (the second game's Disenchant; the first game has
 	# no LoseMana for the channel), not the old rest's GainMana.
 	if profile.id == "el1" and card == "ORSH" and data.ability == "orc_rite": items = [["Disenchant", "at"]]
+	# The Pale Reaper, Destroyer and Slayer stream PaleDrainLife to their prey;
+	# their hero's GainLife or GainMana waits for the kill (devour_gain_cue).
+	if profile.id == "el2" and card in DEVOUR_GAINS and data.ability == "pale_devour":
+		items = items.filter(func(item: Array) -> bool: return String(item[0]) != String(DEVOUR_GAINS[card]))
 	if card == EffectTable.ILLUSION_CARD and data.has("grave"): items = EffectTable.illusion_effects(int(data.grave))
 	# EL2 Burnout's first selection is the creature being sacrificed;
 	# original - starts RedDamage there. The later

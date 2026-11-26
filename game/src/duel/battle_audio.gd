@@ -87,6 +87,8 @@ var loops: Array[AudioStreamPlayer3D] = []
 ## Started sound paths (latest 40) and every requested path, started or not.
 var played: Array[String] = []
 var requested: Array[String] = []
+## Every requested path as it is asked for, for checks that follow a whole action.
+signal sound_requested(path: String)
 var settings := {"music": 0.55, "ambience": 0.55, "effects": 0.8, "heroes_voices": true, "ambient_sounds": true}
 ## Effect name (lower case) -> Effects.xml sound path; "" when it has none.
 var effect_files := {}
@@ -1662,6 +1664,7 @@ func play(path: String, spatial_gain := 1.0, loop := false) -> bool:
 			play(path, spatial_gain))
 		return true
 	requested.append(path)
+	sound_requested.emit(path)
 	if requested.size() > 80: requested.pop_front()
 	if paused or silenced or voices.is_empty(): return false
 	var stream := ELAudio.sound(profile, path)
@@ -1690,6 +1693,7 @@ func play(path: String, spatial_gain := 1.0, loop := false) -> bool:
 ## battle has closed. Returns its length in seconds (0 when it cannot play).
 func play_detached(path: String) -> float:
 	requested.append(path)
+	sound_requested.emit(path)
 	if requested.size() > 80: requested.pop_front()
 	if paused or silenced or not is_inside_tree(): return 0.0
 	var stream := ELAudio.sound(profile, path)

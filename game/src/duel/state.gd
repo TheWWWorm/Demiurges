@@ -2162,6 +2162,9 @@ func _pale_ability(id: int, d: Dictionary, target: int, choice: int) -> bool:
 			var prey_power := int(prey.power)
 			_damage(target, maxi(1, remaining), false, false, true, true, true)
 			if not creatures.has(target) and creatures.has(id):
+				# The hero's GainLife (Reaper, Destroyer) or GainMana (Slayer)
+				# belongs to the kill: a prey that survives shows neither.
+				_emit({"kind": "devour_gain_cue", "source": id, "side": side, "card": c.card})
 				match c.card:
 					"OUD1", "OUD2":
 						_mark(id, c.card, 1, 1, {"fixed": true})
