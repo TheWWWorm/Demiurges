@@ -2645,10 +2645,13 @@ static void unwear(State *s, int r) {
 		return;
 	case EN_QUICK:
 		/* A quick fix undone destroys what it raised, past regenerating and
-		 * past the plane. */
+		 * past the plane. The second game's kills it outright, so even an
+		 * unaffected creature dies; the first game's is damage, which one
+		 * ignores (#330). */
 		u->flags &= ~(uint32_t)F_DISSIPATES;
 		u->guards = 0;
-		destroy_unit(s, e.unit, 1);
+		if (s->second && (u->flags & F_NO_AFFECT)) kill_unit(s, e.unit);
+		else destroy_unit(s, e.unit, 1);
 		return;
 	default:
 		break;
@@ -2691,7 +2694,9 @@ static void strip_unit(State *s, int index) {
 	u->fate = fate & FATE_READY;
 	settle_control(s, index);
 	u->fate = 0;
-	if (fate & (FATE_DIES | FATE_DESTROYED)) kill_unit(s, index);
+	/* A quick fix stripped off an unaffected creature destroys it only in
+	 * the second game (#330). */
+	if ((fate & FATE_DIES) || ((fate & FATE_DESTROYED) && (s->second || !(u->flags & F_NO_AFFECT)))) kill_unit(s, index);
 	else if (u->damage >= u->toughness) perish_unit(s, index);
 }
 
@@ -5209,14 +5214,17 @@ static int cast_card(const Search *x, State *s, int side, int slot, int target, 
 		summon(x, s, side, &x->pool[kind - 1]);
 		if ((c->amount & 2) && s->n > first) {
 			/* A quick fix stays on what it raised, a point off its power and
-			 * its health: taken off, it destroys the creature for good. */
+			 * its health (none off an unaffected creature, #330): taken off,
+			 * it destroys the creature for good. */
 			Unit *t = &s->u[first];
 			Unit was = *t;
-			add_power(t, -1);
-			t->raw--;
-			settle_health(t);
-			t->ready_worth -= x->power_worth + x->tough_worth;
-			t->resting_worth -= x->power_worth + x->tough_worth;
+			if (!(t->flags & F_NO_AFFECT)) {
+				add_power(t, -1);
+				t->raw--;
+				settle_health(t);
+				t->ready_worth -= x->power_worth + x->tough_worth;
+				t->resting_worth -= x->power_worth + x->tough_worth;
+			}
 			t->fate |= FATE_DESTROYED;
 			wears(t, &was, 1, 0);
 			note_ench(s, first, &was, side, EN_QUICK, c->code, c->printed, 0, 2, 0);
