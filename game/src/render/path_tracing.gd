@@ -73,6 +73,9 @@ const SPELL_MERGE := 1.0
 ## metre, and a wall of fire lights the ground several metres around it, so
 ## a figure beside one stands in its light and throws a shadow from it.
 const GLOW_REACH := 9.0
+## A spell's large fire carries further: a bolt or a wall of fire lights the
+## ring around it, not only the figure it strikes.
+const SPELL_GLOW_REACH := 20.0
 ## The arena's own fires and glows (steady sources) are its lamps, hung high
 ## and far apart: their light carries across the ring.
 const ARENA_GLOW_REACH := 14.0
@@ -847,10 +850,16 @@ func _effect_lights(delta := 0.0) -> PackedFloat32Array:
 		var peak := maxf(colour.x, maxf(colour.y, colour.z))
 		var steady: bool = glow.size() > 3 and glow[3]
 		var kind := int(glow[4]) if glow.size() > 4 else 0
-		var limit := SPELL_GLOW_LIMIT if not steady and kind == 0 else GLOW_LIMIT
+		# Only a spell's large fire (ELCombatEffects.FIRE_PATCHES) takes the
+		# fire's strength and falloff. The map's glows and a spell wrapped
+		# round one figure light as lamps do: given a wall of fire's strength
+		# that close, they bleached the figure and, flickering as their
+		# sprites regrouped, flashed on a mount's shell.
+		var fire: bool = not steady and kind == 0 and glow.size() > 5 and glow[5]
+		var limit := SPELL_GLOW_LIMIT if fire else GLOW_LIMIT
 		if peak > limit: colour *= limit / peak
 		var extent := clampf(glow[1], 0.1, 3.0)
-		var reach := (ARENA_GLOW_REACH if steady else GLOW_REACH) + extent * 3.0
+		var reach := (ARENA_GLOW_REACH if steady else (SPELL_GLOW_REACH if fire else GLOW_REACH)) + extent * 3.0
 		# A figure's own glow (a Kinet hero's blade and wings) lights at the
 		# raster lamps' share and reach: at a spell's strength it lifted the
 		# snow of the Kinet arenas into a white haze around the hero.
@@ -861,7 +870,7 @@ func _effect_lights(delta := 0.0) -> PackedFloat32Array:
 			continue
 		# A spell's fire falls off with the distance squared (the tracer reads
 		# a negative reach so): see SPELL_FALLOFF_DISTANCE in the ray program.
-		found.append([glow[0], extent, colour, reach if steady else -reach])
+		found.append([glow[0], extent, colour, -reach if fire else reach])
 	found.append_array(_steady_figure_lights(figure, delta))
 	var authored := []
 	if is_instance_valid(_effects):

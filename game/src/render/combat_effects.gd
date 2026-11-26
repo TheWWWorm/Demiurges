@@ -77,7 +77,7 @@ const ARENA_HDR_LIMIT := 1.4
 ## spell's brightness the wing sparkles haloed the wings whenever a clip
 ## brought them out.
 const FIGURE_HDR_LIMIT := 1.3
-## Luminous cells in the original 4×4 blended sheets, numbered from the
+## Luminous cells in the original 4Ã—4 blended sheets, numbered from the
 ## bottom left like the particle files. Mixed sheets also contain smoke or
 ## leaves, which should neither cast light nor receive the bloom boost.
 const BLENDED_GLOW_CELLS := {
@@ -404,6 +404,7 @@ func _figure_animation(clip: String, model: ELModel) -> void:
 	if requested.size() > 80: requested.pop_front()
 	var emitter := _spawn(path, false, 0, _figure_transform(model), model)
 	if emitter.is_empty(): return
+	emitter.cast = path.get_file().get_basename().to_lower() in CAST_CLIPS
 	_figure_emitters[id] = emitter
 
 ## The figure's place, facing and scale.
@@ -776,6 +777,7 @@ func _spawn(path: String, reverse: bool, effect_frames: int, where: Transform3D,
 	emitter.reverse = reverse
 	emitter.follow = follow
 	emitter.following = follow != null
+	emitter.cast = false
 	emitter.bearer = null
 	emitter.visibility_link = null
 	emitter.loop = false
@@ -1079,6 +1081,7 @@ func _spawn_light(track: PackedFloat32Array, where: Transform3D) -> bool:
 			return false
 		var node := OmniLight3D.new()
 		node.shadow_enabled = false
+		node.omni_attenuation = AUTHORED_FALLOFF
 		node.visible = false
 		add_child(node)
 		item = {"node": node, "active": false, "elapsed": 0.0, "frame": -1, "life": 0, "where": Transform3D.IDENTITY, "track": PackedFloat32Array()}
@@ -1112,6 +1115,15 @@ func _step_light(item: Dictionary, delta: float) -> bool:
 	_apply_light(item, frame, false)
 	return true
 
+## How much further than its key's radius an effect's point light reaches.
+## Godot's lamp fades smoothly to nothing at its range, so held to the
+## radius a lightning bolt lit only a small pool round the creature it hit.
+## The original's own vertex light (`secondary`) keeps the key's radius.
+const AUTHORED_REACH := 1.6
+## And it falls off more gently than Godot's inverse distance, which spent
+## its light on the few units round the creature.
+const AUTHORED_FALLOFF := 0.5
+
 ## The spell matrix moves the light center. The key's radius stays in world units.
 func _apply_light(item: Dictionary, frame: int, sync_secondary := true) -> void:
 	item.frame = frame
@@ -1121,7 +1133,7 @@ func _apply_light(item: Dictionary, frame: int, sync_secondary := true) -> void:
 	var node: OmniLight3D = item.node
 	node.position = where * ELFigure.vector(Vector3(track[k], track[k + 1], track[k + 2]))
 	var reach := track[k + 3]
-	node.omni_range = maxf(reach, 0.01)
+	node.omni_range = maxf(reach * AUTHORED_REACH, 0.01)
 	# Native secondary vertex light stays independent of the diffuse OmniLight.
 	item.secondary = Vector4(track[k + 7], track[k + 8], track[k + 9], reach) if track[k + 10] > 0.5 and reach > 0.0 else Vector4.ZERO
 	node.light_color = Color(track[k + 4], track[k + 5], track[k + 6])
@@ -1334,6 +1346,13 @@ const BLENDED_SPARK_GLOW := 3.0
 ## hundred flames, and held to EMITTER_GLOW it lit a hero it swept over no
 ## more than a torch would, so the sun's shadow stayed where it was.
 const TRACED_SPELL_GLOW := 48.0
+## Patches a spell's system must spread over to count as a large fire
+## (glow_sources' `fire`).
+const FIRE_PATCHES := 6
+## A figure's clips whose particles are a spell leaving it (the hero's
+## casting gestures and a summoning), lit as spells rather than as the glow
+## the figure carries.
+const CAST_CLIPS := ["instant", "enchantment", "summon"]
 
 ## The light a glowing (additive) frame gives off, for traced lighting: a
 ## soft source per patch of its particles, so a wall of fire lights along
@@ -1399,10 +1418,11 @@ static func _glow(cached: Dictionary, key: String, buffer: PackedFloat32Array, c
 ## patch. `steady` marks the arena's own fires and glows: lamps that stand
 ## there for the whole battle, not a spell passing by. `figure` marks a
 ## figure's own glow (1 its weapon, 2 the glow spread over it, 0 neither),
-## which ELGlowLights lights faintly and never lets cast a shadow.
-## `spell_budget` is the most one of a spell's own systems gives
-## (TRACED_SPELL_GLOW for path tracing); figures' and the arena's stay at
-## EMITTER_GLOW. The Ether vents need proxy lights only in raster.
+## which ELGlowLights lights faintly and never lets cast a shadow. A sixth
+## entry, when true, marks a large spell fire (see FIRE_PATCHES).
+## `spell_budget` is the most one of a spell's large fires gives
+## (TRACED_SPELL_GLOW for path tracing); other systems, figures' and the
+## arena's stay at EMITTER_GLOW. The Ether vents need proxy lights only in raster.
 func glow_sources(spell_budget := EMITTER_GLOW, include_ether_vent := true) -> Array:
 	var result := []
 	var spells := emitters.size()
@@ -1432,6 +1452,17 @@ func glow_sources(spell_budget := EMITTER_GLOW, include_ether_vent := true) -> A
 			tint = _flame_colour(atlas)
 			if tint == Vector3.ZERO: continue
 		var opacity := clampf(float(emitter.opacity), 0.0, 1.0)
+		# A hero's casting clip (its instant, enchantment and summon glow) is
+		# a spell going out of its hands, not the weapon glow a figure wears
+		# all battle: it lights as a spell does.
+		var attached: bool = emitter.following and not emitter.get("cast", false)
+		# Only a large fire (a wall of flame, a bolt from the sky) is the
+		# traced light of a spell: spread over many patches, it takes the
+		# traced budget and falls off as fire does (`fire`, the sixth entry).
+		# A spell that wraps one figure (Battle Spirit's sparks and shield
+		# round the creature) stays at EMITTER_GLOW: at a wall of fire's
+		# strength, and that close, it bleached the figure it stood on.
+		var fire: bool = at < spells and not attached and glow.size() >= FIRE_PATCHES and not blended_sparks
 		# However many patches it splits into, one system gives at most
 		# EMITTER_GLOW in all.
 		var lit := []
@@ -1445,7 +1476,7 @@ func glow_sources(spell_budget := EMITTER_GLOW, include_ether_vent := true) -> A
 			# let a hero beside it cast only a thin sliver of shadow.
 			if at < spells and not emitter.following and patch.size() > 3:
 				centre.y = maxf(centre.y, (patch[3].x + patch[3].y) * 0.5)
-			lit.append([placement * centre, patch[1] * size, colour, at >= spells, 0])
+			lit.append([placement * centre, patch[1] * size, colour, at >= spells, 0, fire])
 		# A figure's own glow is a light at its brightest patch (a hero's
 		# glowing blade or axe) and, for glow spread over the figure (the
 		# sparkles on a Kinet hero's wings), a gentler one where that stands:
@@ -1454,11 +1485,11 @@ func glow_sources(spell_budget := EMITTER_GLOW, include_ether_vent := true) -> A
 		# count: a Chaot's axe is four large sprites, a Kinet's glaive a
 		# hundred, and counted by their colour the axe gave no light at all.
 		# ELGlowLights lights them at ATTACHED_SHARE and AURA_SHARE.
-		if emitter.following and not lit.is_empty():
+		if attached and not lit.is_empty():
 			lit = _figure_lights(lit)
 			if lit.is_empty(): continue
 			total = EMITTER_GLOW
-		var budget := spell_budget if at < spells and not emitter.following else EMITTER_GLOW
+		var budget := spell_budget if fire else EMITTER_GLOW
 		if blended_sparks: budget = minf(budget, BLENDED_SPARK_GLOW)
 		var share := minf(1.0, budget / maxf(total, 0.0001))
 		for light: Array in lit:

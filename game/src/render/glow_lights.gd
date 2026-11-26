@@ -19,10 +19,16 @@ const MERGE := 2.5
 ## aura gives a little light, a fireball most of the limit, and no effect
 ## bleaches the ground however dense it is.
 const ENERGY_LIMIT := 0.9
+## A passing spell (and a hero's cast) may give more: held to the standing
+## fires' limit, a bolt or a cast hardly showed on the ground beside it.
+const SPELL_ENERGY_LIMIT := 1.5
 const ENERGY_RISE := 0.2
 ## A lamp's reach: this, plus three times the patch's own extent. Two units
 ## are a metre, so a fire lights the ground a few metres around it.
 const REACH := 8.0
+## A spell's own lamp reaches further: at REACH a lightning bolt lit the
+## creature it struck and hardly the hero beside it.
+const SPELL_REACH := 14.0
 ## The brightest lamp casts a shadow, so a figure standing in front of a wall
 ## of fire throws one. The rest do not: a dozen shadow maps a frame would
 ## cost more than the picture gains, and the light of a dense effect comes
@@ -142,8 +148,8 @@ func show_sources(sources: Array, delta: float) -> void:
 			free.erase(lamp)
 		var tint := colour / peak
 		var wanted := Color(tint.x, tint.y, tint.z).linear_to_srgb()
-		var energy := ENERGY_LIMIT * (1.0 - exp(-peak * ENERGY_RISE))
-		var reach := REACH + clampf(float(source[1]), 0.1, 3.0) * 3.0
+		var energy := (ENERGY_LIMIT if _steady(source) else SPELL_ENERGY_LIMIT) * (1.0 - exp(-peak * ENERGY_RISE))
+		var reach := (REACH if _steady(source) else SPELL_REACH) + clampf(float(source[1]), 0.1, 3.0) * 3.0
 		if attached:
 			energy *= AURA_SHARE if int(source[4]) == 2 else ATTACHED_SHARE
 			reach *= ATTACHED_REACH
