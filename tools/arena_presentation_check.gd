@@ -37,6 +37,7 @@ func _run() -> void:
 	arena.set_detail(true)
 	check(ground.material_override == detail and arena._detail_materials.size() == 1, "repeated toggles reuse one detail material")
 	check(arena._lit_materials.count(detail) == 1, "repeated toggles register detail lighting once")
+	_sun_shadow_checks(arena)
 
 	var fog := ELArena.GroundFog.new()
 	fog.build(Color(0.67, 0.70, 0.69, 0.39), 0.0)
@@ -242,3 +243,24 @@ func _difference(a: Image, b: Image) -> float:
 			sum += absf(first.r - second.r) + absf(first.g - second.g) + absf(first.b - second.b)
 			count += 3
 	return sum / maxf(1.0, count)
+
+## Tall scenery on the camera's side casts no traced sun shadow; the far side
+## keeps its shadow, and the split follows the camera round.
+func _sun_shadow_checks(arena: ELArena) -> void:
+	var near := ELModel.new()
+	var far := ELModel.new()
+	for pair: Array in [[near, Vector3(-14, 0, 10)], [far, Vector3(14, 0, -10)]]:
+		var model: ELModel = pair[0]
+		arena.add_child(model)
+		model.position = pair[1]
+		arena._camera_obstacles.append(model)
+	arena.clear_camera_view(Vector3(-28, 12, -2.5), Vector3.ZERO)
+	check(not arena.shades_from_sun(near) and arena.shades_from_sun(far), "standing view: near-side tall scenery casts no traced sun shadow, the far side does")
+	check(near.visible and far.visible, "the traced sun rule hides nothing from the raster view")
+	arena.clear_camera_view(Vector3(28, 12, 2.5), Vector3.ZERO)
+	check(arena.shades_from_sun(near) and not arena.shades_from_sun(far), "the near side follows the camera to the other end")
+	arena.show_all_scenery()
+	check(arena.shades_from_sun(near) and arena.shades_from_sun(far), "the walker's view lets all scenery shade from the sun")
+	for model: ELModel in [near, far]:
+		arena._camera_obstacles.erase(model)
+		model.free()
