@@ -1147,10 +1147,11 @@ static func scripts(director: ELAdventureDirector) -> void:
 		if name.contains("Gamma-400"): _walk(director, hero, MISSION23_TARGETS["Gamma-400"], true)
 		if name.contains("Delta-500"): _walk(director, hero, MISSION23_TARGETS["Delta-500"])
 
-## Evil Dale, as the original program moves its two rivals. Glazzz attacks
-## the Chosen One within his sight less three tiles, and otherwise walks his
-## loop; Warp attacks him within sight and otherwise holds his place. The
-## other rivals and every creature stay where they are.
+## Evil Dale, as the original program moves its rivals. Glazzz attacks the
+## Chosen One within his sight less three tiles, and otherwise walks his
+## loop. Every other rival (Zarus, Valaddin, Tango and Warp) attacks him
+## within its sight and otherwise holds its place. Creatures stay where they
+## are.
 static func _dale_scripts(director: ELAdventureDirector) -> void:
 	var state := director.state
 	var chosen := ELRestoredMissions.chosen_one(state)
@@ -1160,7 +1161,7 @@ static func _dale_scripts(director: ELAdventureDirector) -> void:
 		var hero := state.object(uid)
 		if hero.type != "hero" or int(hero.owner) > 0 or not hero.alive or not hero.visible or not hero.get("placed", true): continue
 		var name := str(hero.name)
-		if name not in [ELRestoredMissions.PATROLLER, ELRestoredMissions.WARDEN]: continue
+		if not name in ELRestoredMissions.RIVALS: continue
 		hero.strategy_order = {}
 		var at := Vector2i(hero.x, hero.y)
 		if not chosen.is_empty():

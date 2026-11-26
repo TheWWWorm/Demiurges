@@ -236,17 +236,17 @@ func _evil_dale(profile: ELProfile) -> void:
 	check(ELFirstScenario.evaluate(director) == "", "the dale is not decided at the start")
 	ELFirstScenario.opening(director)
 	check(_spoken(director).size() == 1, "the Chosen One speaks as the dale begins")
-	var sister := {}
+	var patroller := {}
 	var warden := {}
 	for item: Dictionary in state.objects.values():
-		if item.get("type") == "hero" and item.name == ELRestoredMissions.PATROLLER: sister = item
+		if item.get("type") == "hero" and item.name == ELRestoredMissions.PATROLLER: patroller = item
 		if item.get("type") == "hero" and item.name == ELRestoredMissions.WARDEN: warden = item
 	var walked_from := Vector2i(hero.x, hero.y)
-	hero.x = int(sister.x)
-	hero.y = int(sister.y) - 4
+	hero.x = int(patroller.x)
+	hero.y = int(patroller.y) - 4
 	ELFirstScenario.evaluate(director)
 	var words := _spoken(director)
-	check(words.size() == 2 and words[0][0] == int(sister.uid) and words[1][0] == int(hero.uid), "Glazzz and the Chosen One have words when they meet")
+	check(words.size() == 2 and words[0][0] == int(patroller.uid) and words[1][0] == int(hero.uid), "Glazzz and the Chosen One have words when they meet")
 	warden.alive = false
 	ELFirstScenario.evaluate(director, {"hero": hero.uid, "opponent": warden.uid, "winner": hero.uid})
 	words = _spoken(director)

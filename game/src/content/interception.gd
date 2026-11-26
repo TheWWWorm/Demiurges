@@ -2,7 +2,8 @@
 class_name ELInterception
 extends RefCounted
 ## EL1 registered guard areas. Ordinary moving heroes do not create zones.
-## Neutral creatures guard radius two (the ring around them); a fort garrison
+## Neutral creatures guard radius two (the ring around them), and so do the
+## rival heroes of Evil Dale (dale_rival); a fort garrison
 ## guards radius four (three tiles out, FIRST_FORT_RADIUS) around the fort,
 ## which stays inside its own area although blocked.
 ## Covered cells persist across movement; recomputing on each step would erase
@@ -20,6 +21,15 @@ var cells: Dictionary = {}
 
 static func guards(actor: Dictionary) -> bool:
 	return actor.get("type") == "monster" and actor.get("owner", -1) <= 0 and actor.get("alive", false) and actor.get("visible", false) and actor.get("placed", true) and not actor.get("fortified", false)
+
+## Evil Dale: the original program gives every BLevHero hero on the mission's
+## map a creature's guard area, so a rival cannot be walked past.
+static func dale_rival(state: ELAdventureSession, actor: Dictionary) -> bool:
+	return actor.get("type") == "hero" and int(actor.get("owner", -1)) <= 0 and actor.get("alive", false) and actor.get("visible", false) and actor.get("placed", true) and not actor.get("fortified", false) and str(actor.get("name", "")).contains("BLevHero") and ELRestoredMissions.is_dale(state)
+
+## Whether the actor guards an area of its own (creature or dale rival).
+static func guards_in(state: ELAdventureSession, actor: Dictionary) -> bool:
+	return guards(actor) or dale_rival(state, actor)
 
 static func spell_fort(actor: Dictionary) -> bool:
 	return actor.get("type") == "hero" and actor.get("alive", false) and int(actor.get("spell_fort", 0)) > 0
@@ -58,7 +68,7 @@ func rebuild(state: ELAdventureSession, grid: ELAdventureGrid) -> void:
 		var actor: Dictionary = state.objects[id]
 		# Only creatures, heroes and garrisons guard (scenery is most objects).
 		if actor.get("type") not in ["monster", "hero"] and not actor.get("fortified", false): continue
-		if guards(actor) or spell_fort(actor) or not ELForts.garrison_of(state, actor).is_empty(): ids.append(id)
+		if guards_in(state, actor) or spell_fort(actor) or not ELForts.garrison_of(state, actor).is_empty(): ids.append(id)
 	zones.clear()
 	cells.clear()
 	for id: int in ids:
@@ -75,7 +85,7 @@ func rebuild(state: ELAdventureSession, grid: ELAdventureGrid) -> void:
 			var at := Vector2i(actor.x, actor.y)
 			if grid.contains(at): register(actor.uid, at, flood(grid, at, FIRST_FORT_RADIUS, {at: true}))
 			continue
-		if not guards(actor): continue
+		if not guards_in(state, actor): continue
 		var origin := Vector2i(actor.x, actor.y)
 		if grid.contains(origin): register(actor.uid, origin, flood(grid, origin, state.field_guard_radius(actor)))
 
