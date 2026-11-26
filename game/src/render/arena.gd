@@ -88,6 +88,22 @@ const CAMERA_RADIUS := {"Dungeon.001": 18.0}
 ## Beyond the ring, an arch is hidden while its bearing from the hall's centre
 ## lies within this angle of the camera's (radians).
 const NEAR_SIDE_ANGLE := deg_to_rad(75.0)
+## Slender tall scenery (no wider than HANGING_WIDTH) whose lowest point
+## hangs at least HANGING_CLEARANCE above the ground, such as the banners
+## and chains of the White Lord's hall, hangs over the fight: it is hidden
+## while it covers any place a hero or creature stands. The originals keep
+## it in view; from the standing battle views a banner hung across the
+## enemy's creatures (player report). Tree crowns and wide drapes, broader
+## than this, keep the older test.
+const HANGING_CLEARANCE := 2.0
+const HANGING_WIDTH := 1.5
+## Heights above the ground at which the places of the fight are checked.
+const FIELD_HEIGHTS := [0.5, 1.5]
+## Hanging tall scenery (model -> true), and the places of the fight in
+## arena space; made on first use.
+var _hanging: Dictionary = {}
+var _hanging_found := false
+var _field_points: Array[Vector3] = []
 var _lit: Dictionary = {}
 var _unlit: Dictionary = {}
 var _ground_fog: GroundFog
@@ -639,6 +655,7 @@ func clear_camera_view(camera_position: Vector3, target: Vector3, framed: Array 
 			var box: AABB = part.global_transform * part.mesh.get_aabb()
 			if box.size.y > 2.0 and box.intersects_segment(camera_position, target + Vector3(0, 1.5, 0)) != null:
 				obscures = true
+		if not obscures and _hanging_models().has(child): obscures = _covers_field(child, camera_position)
 		child.visible = not obscures
 
 	# Close-ups can put the lens inside a bank or decoration too low to
@@ -675,6 +692,44 @@ func show_all_scenery() -> void:
 	for part: MeshInstance3D in _closeup_hidden:
 		if is_instance_valid(part): part.show()
 	_closeup_hidden.clear()
+
+## Slender tall scenery hanging clear of the ground (HANGING_CLEARANCE).
+func _hanging_models() -> Dictionary:
+	if _hanging_found: return _hanging
+	_hanging_found = true
+	for model: ELModel in _camera_obstacles:
+		if not is_instance_valid(model): continue
+		var bounds := AABB()
+		var found := false
+		for part: MeshInstance3D in model.parts.values():
+			if part.mesh == null: continue
+			var box: AABB = part.global_transform * part.mesh.get_aabb()
+			bounds = bounds.merge(box) if found else box
+			found = true
+		if not found or maxf(bounds.size.x, bounds.size.z) > HANGING_WIDTH: continue
+		var centre := bounds.get_center()
+		if bounds.position.y - ground_height(centre.x, centre.z) >= HANGING_CLEARANCE: _hanging[model] = true
+	return _hanging
+
+## Whether a model's triangles stand between the camera and a place of the
+## fight: either hero's, or a creature's at home or on the front line.
+func _covers_field(model: ELModel, camera_position: Vector3) -> bool:
+	if _field_points.is_empty():
+		var places: Array[Vector3] = [ELMeleePlayback.hero_position(0), ELMeleePlayback.hero_position(1)]
+		for side in 2:
+			for slot in ELMeleePlayback.SLOTS * 2:
+				for line: ELMeleePlayback.Line in [ELMeleePlayback.Line.HOME, ELMeleePlayback.Line.FRONT]:
+					places.append(ELMeleePlayback.slot_position(side, slot, line))
+		for place: Vector3 in places:
+			for height: float in FIELD_HEIGHTS:
+				_field_points.append(Vector3(place.x, ground_height(place.x, place.z) + height, place.z))
+	for part: MeshInstance3D in model.parts.values():
+		if part.mesh == null: continue
+		var to_local := part.global_transform.affine_inverse()
+		var eye := to_local * camera_position
+		for point: Vector3 in _field_points:
+			if _camera_ray_hits(part, eye, to_local * point): return true
+	return false
 
 ## The boxes of banks and trees can cover much of the arena. Test their
 ## triangles so a shot through an opening doesn't hide the whole piece.

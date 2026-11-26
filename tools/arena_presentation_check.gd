@@ -109,6 +109,7 @@ func _run() -> void:
 	check(deck.mesh == authored and not sea.visible, "water off restores the complete original surface")
 	deck.free()
 	arena.free()
+	_hanging_scenery_checks()
 	if OS.get_cmdline_user_args().has("--render"):
 		if DisplayServer.get_name() == "headless":
 			check(false, "shader probes require a real renderer; do not use --headless with --render")
@@ -116,6 +117,45 @@ func _run() -> void:
 			await _render_probes()
 	print("ARENA PRESENTATION: %d checks, %d failures" % [checks, failures.size()])
 	quit(0 if failures.is_empty() else 1)
+
+## A tall piece of scenery: one box part spanning `low` to `high` (arena space).
+func _scenery(arena: ELArena, low: Vector3, high: Vector3) -> ELModel:
+	var model := ELModel.new()
+	arena.add_child(model)
+	var part := MeshInstance3D.new()
+	var box := BoxMesh.new()
+	box.size = high - low
+	part.mesh = box
+	part.position = (low + high) * 0.5
+	model.add_child(part)
+	model.parts.body = part
+	arena._camera_obstacles.append(model)
+	return model
+
+## Banners hanging over the fight (the White Lord's hall) give way to the
+## battle camera wherever they cover a hero's or a creature's place (player
+## report: a banner across the enemy's creatures); a tree crown or a pillar
+## standing on the ground keeps the older corridor test.
+func _hanging_scenery_checks() -> void:
+	var arena := ELArena.new()
+	root.add_child(arena)
+	var hero: Vector3 = ELMeleePlayback.hero_position(1)
+	var camera := Vector3(-20, 12, 0)
+	# On the line from the camera to the far hero's chest, short of the target line.
+	var across := camera.lerp(hero + Vector3(0, 1.5, 0), 0.75)
+	var covering := _scenery(arena, across - Vector3(0.3, 1.0, 0.6), across + Vector3(0.3, 5.0, 0.6))
+	var aside := _scenery(arena, Vector3(0, 3, 20), Vector3(0.6, 10, 21.2))
+	var crown := _scenery(arena, across - Vector3(4, 0, 4) + Vector3(0, 0.2, 0), across + Vector3(4, 6, 4))
+	var pillar := _scenery(arena, Vector3(-8, 0, 6), Vector3(-7.4, 10, 6.6))
+	var hanging := arena._hanging_models()
+	check(hanging.has(covering) and hanging.has(aside), "slender scenery hung clear of the ground counts as hanging over the fight")
+	check(not hanging.has(crown) and not hanging.has(pillar), "wide crowns and pillars standing on the ground do not")
+	arena.clear_camera_view(camera, Vector3(0, 0, 8))
+	check(not covering.visible, "a hanging banner between the camera and a hero's place is hidden")
+	check(aside.visible and pillar.visible, "hanging scenery clear of every place stays in view")
+	arena.clear_camera_view(Vector3(20, 12, 0), Vector3(0, 0, 8))
+	check(covering.visible, "the banner returns once the camera no longer looks through it")
+	arena.free()
 
 func _texture(colour: Color, grain := false) -> ImageTexture:
 	var image := Image.create_empty(64, 64, true, Image.FORMAT_RGBA8)
