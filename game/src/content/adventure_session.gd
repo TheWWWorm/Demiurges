@@ -27,7 +27,7 @@ var fight_neutral_monsters := false
 var balance_map_guards := false
 var script_name := ""
 var seed_value := 212
-## The solo first-game view enables fresh skill rolls, independently of the
+## The solo view enables fresh skill rolls in both games, independently of the
 ## map/script RNG. Strategic sessions and checkpoint decoding stay deterministic.
 var random_skill_offers := false
 var camera_zoom := 40.0
@@ -152,7 +152,7 @@ func start(source: ELAdventureMap, level := 0, seed_number := 212, scenario_scri
 	duel_ai = -1
 	world_ai = -1
 	seed_value = seed_number
-	random_skill_offers = solo and map.profile.id == "el1"
+	random_skill_offers = solo
 	script_name = scenario_script if not scenario_script.is_empty() else ELSingleScenario.map_path(map.id)
 	error = ""
 	day = 0 if map.profile.id == "el2" else 1
@@ -422,6 +422,13 @@ func add_experience(hero_id: int, amount: int) -> int:
 	# A campaign lord reaching a new level step changes its look on the map.
 	if changed_look: event.emit({"kind": "shape_changed", "id": hero_id})
 	return granted
+
+## Second game, a loaded solo save: the map's and the scripts' generators
+## start from a fresh random state (the original's save does not keep the C
+## library's generator they both draw from). Offers already shown are kept.
+func fresh_random_state() -> void:
+	seed_value = randi() & 0x7fffffff
+	if vm != null: vm.rng_state = randi() & 0xffffffff
 
 ## Loading a solo Etherlords save can reroll any choice still pending.
 func reroll_pending_skill_offers() -> void:

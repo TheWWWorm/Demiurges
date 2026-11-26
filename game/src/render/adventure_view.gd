@@ -251,7 +251,7 @@ var lose_battle: ELSecondLoseBattleView
 func _enter_tree() -> void:
 	add_to_group("touch_camera")
 
-## A fresh map random state for a new local first-game start (never the
+## A fresh map random state for a new local start of either game (never the
 ## fixed default 212, which earlier builds used for every start).
 static func new_map_seed() -> int:
 	var value := randi() & 0x7fffffff
@@ -260,7 +260,8 @@ static func new_map_seed() -> int:
 
 func build(profile: ELProfile, scenario: Dictionary, preferences: ELSettings, difficulty := 0, restored: Dictionary = {}) -> bool:
 	settings = preferences
-	var solo_first := profile.id == "el1" and strategic_session == null
+	var solo := strategic_session == null
+	var solo_first := profile.id == "el1" and solo
 	# Building or restoring a map shows the wait cursor until the map picks again.
 	wait_cursor(profile)
 	var map := ELAdventureMap.new()
@@ -276,10 +277,12 @@ func build(profile: ELProfile, scenario: Dictionary, preferences: ELSettings, di
 			map_seed = ELFirstRandomMap.seed_for_config(generator.config)
 		else:
 			if not map.load_map(profile, str(scenario.file_name)): return _fail(map.error)
-			# The first game seeds its random generator from the clock, so every
-			# new start of a mission or chapter draws its own castle recruits.
-			# A save keeps the generator's state; the tutorial stays scripted.
-			if solo_first and not scenario.get("tutorial", false): map_seed = new_map_seed()
+			# Both games seed their random generator from the clock, so every
+			# new start of a mission or chapter draws its own castle recruits,
+			# loot, skill offers and specialisation rolls (#259, #328). The
+			# second game's scripts seed their own generator from it too
+			# (ExGetRandomSeed). The tutorials stay scripted.
+			if solo and not scenario.get("tutorial", false): map_seed = new_map_seed()
 		_loading(0.15)
 		state = ELAdventureSession.new()
 		# The scene initialization hooks can emit a direct box or wait before
@@ -287,7 +290,7 @@ func build(profile: ELProfile, scenario: Dictionary, preferences: ELSettings, di
 		var capture := func(data: Dictionary) -> void:
 			if data.kind in ["message_box", "loot", "script_wait"]: opening_events.append(data)
 		if profile.id == "el2": state.event.connect(capture)
-		if not state.start(map, difficulty, map_seed, str(scenario.get("script", "")), int(str(scenario.get("player", "1"))), scenario.has("number"), solo_first): return _fail(state.error)
+		if not state.start(map, difficulty, map_seed, str(scenario.get("script", "")), int(str(scenario.get("player", "1"))), scenario.has("number"), solo): return _fail(state.error)
 		if profile.id == "el2": state.event.disconnect(capture)
 		_loading(0.25)
 		state.tutorial = bool(scenario.get("tutorial", false))
@@ -296,7 +299,11 @@ func build(profile: ELProfile, scenario: Dictionary, preferences: ELSettings, di
 		_loading(0.4)
 	else:
 		state = restored.state
-		state.random_skill_offers = solo_first
+		state.random_skill_offers = solo
+		# The second game draws its map and script rolls from the C library's
+		# generator, which a save does not keep: a loaded solo game rolls
+		# afresh from there on (#328). The first game's save keeps its state.
+		if solo and profile.id == "el2": state.fresh_random_state()
 		director = restored.director
 		map = state.map
 	# The game's computer players' strength: kept by a save, brought by the
