@@ -1452,7 +1452,10 @@ func _apply_spell_effect(side: int, card: String, rule: Dictionary, target: int,
 			_revive(side, revived)
 			var returned := next_id - 1
 			if returned >= newest and creatures.has(returned) and creatures[returned].card == revived and not rule.get("plain", false):
-				_enchant(card, side, returned, {"power": -1, "toughness": -1})
+				# An unaffected creature (the mechozauruses) keeps its stats under the
+				# enchantment in both games (#330).
+				var penalty := 0 if has_flag(returned, "NoAffect") else -1
+				_enchant(card, side, returned, {"power": penalty, "toughness": penalty})
 		"drain_life":
 			_spend_ether(side, extra_ether)
 			var before := int(heroes[1 - side].health)
@@ -3129,6 +3132,12 @@ func _remove_enchantment(target: int, enchantment_id: int) -> void:
 			if profile.id in ["el1", "el2"]: _emit({"kind": "alpha_strike_death", "target": target})
 			_kill(target)
 		elif target >= 2 and e.card == "QKFX":
+			# Since update 1.03 the second game's quick fix kills what it raised outright, so an
+			# unaffected creature (the mechozauruses) dies too; the first game's destruction is
+			# damage, which an unaffected creature ignores (#330).
+			if second_rules("QKFX") and has_flag(target, "NoAffect"):
+				_kill(target)
+				return
 			# Since update 1.03 a Pale creature dies too instead of dissipating.
 			_plane_guard = profile.id == "el2"
 			_destroy(target, true)
