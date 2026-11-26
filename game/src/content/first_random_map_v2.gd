@@ -962,6 +962,7 @@ func _settle_dale_creatures(start: Vector2i) -> void:
 	# The creatures are named in the order the hero meets them, so the walk
 	# reads as a journey: none repeats the last few met, and the ground's
 	# rarer kinds come before a second meeting with a common one.
+	var pace := _dale_pace(steps, total)
 	var met: Array = []
 	for item: Dictionary in _map.objects:
 		if item.group != "np_heroes" or ELXml.child(item.node, "monster").is_empty(): continue
@@ -974,6 +975,7 @@ func _settle_dale_creatures(start: Vector2i) -> void:
 		var item: Dictionary = entry[1]
 		var progress := clampf(float(entry[0]) / total, 0.0, 1.0)
 		var level := 1 + roundi(progress * float(ELRestoredMissions.DALE_LAST_LEVEL - 1))
+		if _revision >= 3: level = _paced_level(pace, int(entry[0]))
 		var name := _dale_creature(Vector2i(item.x, item.y), level, recent, used)
 		if name.is_empty(): continue
 		var kind := _creature_kind(name)
@@ -983,6 +985,45 @@ func _settle_dale_creatures(start: Vector2i) -> void:
 		item.name = name
 		for child: Dictionary in item.node.children:
 			if child.tag == "template": child.text = name
+
+## Evil Dale (revision 3): the pace of the walk as [steps, level] points,
+## from the glade (level 1) through each pacing rival's place
+## (ELRestoredMissions.DALE_PACE, at its template level) to the exit, at the
+## last rival's level.
+func _dale_pace(steps: PackedInt32Array, total: int) -> Array:
+	var points: Array = [[0, 1]]
+	var templates := _profile.table("HeroTemplates")
+	var last := 1
+	for name: String in ELRestoredMissions.DALE_PACE:
+		var at: Vector2i = ELRestoredMissions.RIVALS[name]
+		# The rival's place, or the nearest walked tile around it.
+		var walked := -1
+		for radius in 9:
+			for y in range(at.y - radius, at.y + radius + 1):
+				for x in range(at.x - radius, at.x + radius + 1):
+					if walked >= 0 or not _inside(Vector2i(x, y)): continue
+					walked = steps[y * _map.width + x]
+			if walked >= 0: break
+		if walked >= 0: points.append([walked, int(templates.get(name, {}).get("Level", 1))])
+	points.sort_custom(func(a: Array, b: Array) -> bool: return a[0] < b[0])
+	# The pace never falls back.
+	for point: Array in points:
+		last = maxi(last, int(point[1]))
+		point[1] = last
+	points.append([maxi(total, int(points[-1][0]) + 1), last])
+	return points
+
+## The level a creature `walked` steps along the dale takes on that pace.
+static func _paced_level(points: Array, walked: int) -> int:
+	for index in range(1, points.size()):
+		var from: Array = points[index - 1]
+		var to: Array = points[index]
+		if walked > int(to[0]) and index < points.size() - 1: continue
+		var span := maxi(1, int(to[0]) - int(from[0]))
+		var t := clampf(float(walked - int(from[0])) / span, 0.0, 1.0)
+		# Never above the rival ahead: the first creatures are of the first level.
+		return floori(lerpf(float(from[1]), float(to[1]), t) + 0.0001)
+	return int(points[-1][1])
 
 ## The hand edits' roads: an ordinary road (5), drawn as plainly as the
 ## generator's own; 7 is the faint track.

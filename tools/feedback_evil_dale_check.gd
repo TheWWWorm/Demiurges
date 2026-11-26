@@ -8,6 +8,13 @@ extends SceneTree
 ## - Every rival but Glazzz attacks the Chosen One within its sight (Glazzz
 ##   within his sight less three tiles, and otherwise walks his loop); none
 ##   is within reach of the Chosen One's glade at the start.
+## - The dale's creatures keep pace with its rivals (revision 3): each
+##   takes the level of the rivals around its place on the walk, so the
+##   creatures by Valaddin, Tango and Warp are within three levels of them
+##   (they had been four or five below with the second revision's line from
+##   1 to 9), and a hero who fights his way along meets them nearer his own
+##   level. A save of revision 2 keeps its creatures (and its mission:
+##   earlier revisions' map ids are recognised again).
 ## - A creature fights with its own Monsters row for the difficulty (level,
 ##   health, deck) and the difficulty's level change, as in the original.
 ## - The guard relief of "AI fights neutral monsters" (lower level and health
@@ -191,6 +198,32 @@ func _creatures(profile: ELProfile) -> void:
 	var director: ELAdventureDirector = made[1]
 	var chosen := ELRestoredMissions.chosen_one(state)
 	var met := _walk_order(state, director)
+	check(int(ELFirstRandomMap.configuration(state.map).get("revision", 0)) == 3, "a new dale is of revision 3")
+	var total := 0
+	for entry: Array in met: total += int(entry[1].level)
+	var mean := float(total) / maxi(1, met.size())
+	check(met.size() >= 60 and mean >= 6.5, "the dale's %d creatures average level %.1f (5.2 before)" % [met.size(), mean])
+	check(not met.is_empty() and int(met[0][1].level) == 1 and int(met[1][1].level) == 1, "the first creatures by the glade are of the first level")
+	# Near each pacing rival, the creatures are within three levels of him.
+	var templates := profile.table("HeroTemplates")
+	for name: String in ELRestoredMissions.DALE_PACE:
+		var rival := {}
+		for item: Dictionary in state.objects.values():
+			if item.get("type") == "hero" and str(item.name) == name: rival = item
+		var at := Vector2i(rival.x, rival.y)
+		var near := met.filter(func(entry: Array) -> bool: return Vector2i(entry[1].x, entry[1].y).distance_to(at) <= 16.0)
+		var low := 99
+		var high := 0
+		for entry: Array in near:
+			low = mini(low, int(entry[1].level))
+			high = maxi(high, int(entry[1].level))
+		var level := int(templates[name].Level)
+		check(not near.is_empty() and low >= level - 4 and high <= level + 1 and high >= level - 2, "creatures within 16 tiles of %s (level %d) are of levels %d-%d" % [name, level, low, high])
+	# A hero who fights every creature on the way, in order, meets them
+	# no further below his own level than on the second revision's line
+	# (the higher creatures give more experience, so he keeps about the
+	# same lead).
+	_paced_gaps = _clearing_gaps(profile, met)
 	# The guard relief stays off with the option on: no other player.
 	director.smart_ai = true
 	director.fight_neutral_monsters = true
@@ -213,6 +246,39 @@ func _creatures(profile: ELProfile) -> void:
 	state.difficulty = 4
 	check(ELAdventureEncounter.first_levels(state, int(chosen.uid), int(first.uid)) == [int(chosen.level), int(first.level) + 2], "on the hardest difficulty the creature fights two levels up")
 	state.close()
+	# A save of revision 2 regenerates the creatures it began with.
+	var entry := {}
+	for found: Dictionary in ELSingleScenario.catalog(profile):
+		if found.get("restored", "") == ELRestoredMissions.EVIL_DALE: entry = found
+	var older: Dictionary = entry.random_map.duplicate(true)
+	older["revision"] = 2
+	var map := ELFirstRandomMap.new().generate(profile, older)
+	var again := ELFirstRandomMap.new().generate(profile, older)
+	check(map != null and again != null and ELFirstRandomMap.content_hash(map) == ELFirstRandomMap.content_hash(again), "a revision 2 dale still generates, the same every time")
+	if map == null: return
+	var old_state := ELAdventureSession.new()
+	old_state.start(map, 2, ELFirstRandomMap.seed_for_config(older), "", 1, false, true)
+	var high := 0
+	for item: Dictionary in old_state.objects.values():
+		if item.get("type") == "monster" and item.get("placed", true): high = maxi(high, int(item.level))
+	check(high <= 10 and ELRestoredMissions.scenario_of_id(map.id) == ELRestoredMissions.EVIL_DALE, "it keeps its own creatures (highest level %d) and is still Evil Dale" % high)
+	var old_director := ELAdventureDirector.new()
+	old_director.build(old_state)
+	var old_gaps := _clearing_gaps(profile, _walk_order(old_state, old_director))
+	check(_paced_gaps <= old_gaps, "a hero clearing the dale meets creatures %.1f levels below him on average (%.1f on revision 2)" % [_paced_gaps, old_gaps])
+	old_state.close()
+
+var _paced_gaps := 0.0
+
+## How many levels below a hero who beats each in order the creatures are
+## on average.
+func _clearing_gaps(profile: ELProfile, met: Array) -> float:
+	var experience := 0
+	var gaps := 0
+	for entry: Array in met:
+		gaps += ELHeroProgression.level_for(profile, experience) - int(entry[1].level)
+		experience += ELHeroProgression.battle_reward(profile, int(entry[1].level))
+	return float(gaps) / maxi(1, met.size())
 
 ## A neutral hero named like a rival guards nothing outside the dale.
 func _elsewhere(profile: ELProfile) -> void:

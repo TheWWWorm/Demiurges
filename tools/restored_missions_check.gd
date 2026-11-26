@@ -223,7 +223,9 @@ func _evil_dale(profile: ELProfile) -> void:
 	for index in met.size():
 		for back in range(1, ELRestoredMissions.DALE_FRESH + 1):
 			if index - back >= 0 and met[index - back][1] == met[index][1] and met[index][0] - met[index - back][0] > 2: soon += 1
-	check(soon <= 2, "the dale's creatures do not repeat along the walk (%d early repeats among %d)" % [soon, met.size()])
+	# Revision 3 keeps the creatures near the rivals' levels, where each
+	# ground has fewer kinds: a few more meet again early.
+	check(soon <= 3, "the dale's creatures do not repeat along the walk (%d early repeats among %d)" % [soon, met.size()])
 	for point: Vector2i in ELRestoredMissions.PATROL:
 		check(not grid.path(start, point).is_empty(), "Glazzz's loop point %s is in the dale" % point)
 
