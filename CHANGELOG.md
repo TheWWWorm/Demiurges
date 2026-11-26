@@ -4,6 +4,17 @@ Versions follow [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html)
 
 ## Unreleased
 
+## 0.30.1
+
+### Fixed
+
+- **Random outcomes (Etherlords II):** every new game and every load rolls its own loot, level-up skills and specialisations, instead of the same results on every start and every PC. The specialisation after a battle comes at the original's 50%, not on every first battle (#328).
+- **Leaving a battle (Etherlords II):** a won battle fades to black as soon as the victory clip ends, and the map fades in over a second, as in the original, instead of freezing on the last battle frame and then cutting to the map (#329).
+- **Vital campaign, first mission:** its opening words follow the fade at once; the mission's script runs under the fade, as in the original, while its dialogue and your input still wait for it (#327).
+- **Casting gestures:** a hero casts every sorcery with the sorcery gesture and every enchantment with the enchantment gesture, by the spell's own class, so Rage, Fog, Blessing, Mirror, Ether Resonance, Alpha Strike, Ether Vortex, Ash Storm, Assault, Planar Seal and others no longer look like enchantments; artifacts follow the same rule (#325, #326).
+- **Quick Repair on the Mechanozaurus:** the repaired creature comes back at full strength, as nothing can lower its stats. In Etherlords II (and Etherlords I on its card balance) removing the Repair, by a disenchanting strike or a mass dispel, now destroys it, as in update 1.03 (#330).
+- **Puzzles:** where the enemy has turns to play, it attacks instead of passing when the solution answers its attack anyway.
+
 ## 0.30.0
 
 ### New
