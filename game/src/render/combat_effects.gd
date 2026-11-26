@@ -145,6 +145,8 @@ var _arena_random: Array[Dictionary] = []
 ## Started effect names (latest 40) and every request (latest 80), for checks.
 var started: Array[String] = []
 var requested: Array[String] = []
+## Every request with the figures bound to its points, for checks.
+signal effect_requested(effect: String, bindings: Dictionary)
 var spawned := 0
 var dropped := 0
 ## Cost of the last _process call and the largest one seen (microseconds).
@@ -538,6 +540,7 @@ func trigger(card: String, bindings: Dictionary) -> void:
 ## copies, effect models, lights and faders).
 func play(effect: String, bindings: Dictionary) -> int:
 	requested.append(effect)
+	effect_requested.emit(effect, bindings)
 	if requested.size() > 80: requested.pop_front()
 	if not enabled: return 0
 	var entry := definition(effect)
