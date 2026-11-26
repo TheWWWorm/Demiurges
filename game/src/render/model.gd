@@ -217,6 +217,10 @@ func build(data: ELProfile, model: String, texture_name: String, secondary_textu
 			node.material_override = part_material
 		# Anchors may parent real geometry (the illusion wall uses "dust" as its
 		# root). Omit only their helper mesh; hiding the node hides descendants too.
+	for name: String in parts:
+		var soft := parts[name].material_override as BaseMaterial3D
+		if soft != null and soft.transparency == BaseMaterial3D.TRANSPARENCY_ALPHA_DEPTH_PRE_PASS:
+			if _opaque_first(resources, name, soft.albedo_texture): parts[name].mesh = _mesh_cache["base/" + name]
 	var culled := {}
 	for name: String in parts:
 		var node: MeshInstance3D = parts[name]
@@ -240,6 +244,112 @@ func build(data: ELProfile, model: String, texture_name: String, secondary_textu
 	if _animations != null and _animations.has("cidle"):
 		play("cidle")
 	return not parts.is_empty()
+
+## A soft-alpha (Alpha32) part is one mesh, drawn in its triangles' order.
+## The depth pre-pass takes only its opaque texels, so a translucent
+## triangle writes no depth, and an opaque one behind it but later in the
+## order painted over it. The air walls' forearms and hands fade from about
+## nine tenths to six (their torso and dress are opaque), and from behind
+## or the side a forearm in front of the dress vanished in patches, coming
+## and going with the pose (owner report, the Kinet air wall cr407). Opaque
+## triangles are drawn first, then the translucent ones, so a translucent
+## one blends over whatever opaque surface lies behind it.
+##
+## The spirits' parts are drawn one-sided (ELFigure.SHEET_FACES), as their
+## back faces showed through the front ones. That holds only where the
+## skin is translucent: an opaque back face lies behind the front's depth
+## and cannot show. Culled there, a sleeve seen past its open end showed
+## nothing inside it, and the cleric's and wizard's arms (cr422, cr424) had
+## holes at the elbow from the side. Opaque single triangles get back their
+## reversed copies; translucent ones (the spirits' fading tails) stay
+## one-sided, and twins and linings stay as they are.
+## Done once per part of a template; true when the mesh changed.
+const PREPASS_OPAQUE := 0.99
+func _opaque_first(resources: Dictionary, part: String, skin: Texture2D) -> bool:
+	if skin == null or not figures.has(part): return false
+	var done: Dictionary = resources.get_or_add("opaque_first", {})
+	if done.has(part): return false
+	done[part] = true
+	var image := skin.get_image()
+	if image == null: return false
+	if image.is_compressed(): image.decompress()
+	var size := Vector2(image.get_size())
+	var figure: Dictionary = figures[part]
+	var arrays: Array = figure.arrays
+	var uvs: PackedVector2Array = arrays[Mesh.ARRAY_TEX_UV]
+	var indices: PackedInt32Array = arrays[Mesh.ARRAY_INDEX]
+	var solid := PackedByteArray()
+	solid.resize(indices.size() / 3)
+	for t in solid.size():
+		var a := uvs[indices[t * 3]]
+		var b := uvs[indices[t * 3 + 1]]
+		var c := uvs[indices[t * 3 + 2]]
+		solid[t] = 1
+		for point: Vector2 in [a, b, c, (a + b) * 0.5, (b + c) * 0.5, (c + a) * 0.5, (a + b + c) / 3.0]:
+			var at := Vector2i((point - point.floor()) * size).clamp(Vector2i.ZERO, Vector2i(size) - Vector2i.ONE)
+			if image.get_pixelv(at).a < PREPASS_OPAQUE:
+				solid[t] = 0
+				break
+	var backs := _restore_opaque_backs(figure, part, solid)
+	for i in backs: solid.append(1)
+	var changed := backs > 0
+	indices = arrays[Mesh.ARRAY_INDEX]
+	var opaque := PackedInt32Array()
+	var soft := PackedInt32Array()
+	for t in solid.size():
+		(opaque if solid[t] == 1 else soft).append_array(indices.slice(t * 3, t * 3 + 3))
+	# The translucent ones keep the original order among themselves: sorted
+	# by strength, the faint lower dress broke into pale hard triangles.
+	opaque.append_array(soft)
+	if opaque != indices:
+		arrays[Mesh.ARRAY_INDEX] = opaque
+		changed = true
+	if not changed: return false
+	_mesh_cache["base/" + part] = ELFigure.mesh(figure)
+	# Clip meshes made before now keep the old order.
+	for key: String in _mesh_cache.keys():
+		if key.ends_with("/" + part) and not key.begins_with("base/"): _mesh_cache.erase(key)
+	return true
+
+## Reversed copies of a one-sided part's opaque single triangles that
+## ELFigure.one_sided_faces left without one (`solid`: 1 per opaque
+## triangle). Returns how many were added, all opaque, at the end.
+func _restore_opaque_backs(figure: Dictionary, part: String, solid: PackedByteArray) -> int:
+	if not figure.get("one_sided", false) or ELFigure.is_back_culled(template, part): return 0
+	var key := template.to_lower() + "/" + part.to_lower()
+	var sheet_list: Variant = ELFigure.SHEET_FACES.get(key, {}).get(profile.id)
+	# Without a sheet list every single triangle already has its copy.
+	if sheet_list == null: return 0
+	var skip := {}
+	for t: int in sheet_list: skip[t] = true
+	var lining_list: Variant = ELFigure.ONE_SIDED_FACES.get(key, {}).get(profile.id)
+	for t: int in (lining_list if lining_list != null else []): skip[t] = true
+	var twinned: PackedByteArray = figure.get("twinned", PackedByteArray())
+	var arrays: Array = figure.arrays
+	var vertices: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+	var normals: PackedVector3Array = arrays[Mesh.ARRAY_NORMAL]
+	var uvs: PackedVector2Array = arrays[Mesh.ARRAY_TEX_UV]
+	var indices: PackedInt32Array = arrays[Mesh.ARRAY_INDEX]
+	var source_indices: PackedInt32Array = figure.source_indices
+	var added := 0
+	for t in mini(int(figure.get("triangles", 0)), solid.size()):
+		if solid[t] == 0 or skip.has(t) or (t < twinned.size() and twinned[t] == 1): continue
+		var first := vertices.size()
+		for k in [0, 2, 1]:
+			var corner := indices[t * 3 + k]
+			vertices.append(vertices[corner])
+			normals.append(-normals[corner])
+			uvs.append(uvs[corner])
+			source_indices.append(source_indices[corner])
+		indices.append_array([first, first + 1, first + 2])
+		added += 1
+	if added == 0: return 0
+	arrays[Mesh.ARRAY_VERTEX] = vertices
+	arrays[Mesh.ARRAY_NORMAL] = normals
+	arrays[Mesh.ARRAY_TEX_UV] = uvs
+	arrays[Mesh.ARRAY_INDEX] = indices
+	figure.source_indices = source_indices
+	return added
 
 ## A creature figure: a battle (cr) or map (ad) model.
 static func is_creature_template(name: String) -> bool:

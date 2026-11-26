@@ -7498,6 +7498,33 @@ static int add_exact_hit(const State *s, Move *out, int count, int h, int target
 	return count;
 }
 
+/* Whether a wave poured with `power` would wound the caster's own side and
+ * nothing of the other's: an earthquake against an army that flies kills
+ * only the caster's own creatures. Outside a proof it is not offered at all
+ * (`card_moves`): in a position read as lost whatever is done, it tied with
+ * every other command, and how a line that loses is counted in phases (a
+ * turn ended with nobody sent counts for two) outweighs any margin set
+ * against it. */
+static int own_wave(const Search *x, const State *s, int side, const Card *c, int power) {
+	if (c->effect != EFF_WAVE || (c->variable ? power : c->amount) <= 0) return 0;
+	/* The storm's mastery turns its blows on the caster's own into blessings. */
+	if (c->code == x->storm && x->storm > 0) return 0;
+	int who[MAX_UNITS + 2], mine = 0;
+	int count = spell_targets(s, side, c, NO_TARGET, who);
+	for (int i = 0; i < count; i++) {
+		if (who[i] < 0) {
+			if (-who[i] - 1 != side) return 0;
+			mine++;
+			continue;
+		}
+		const Unit *u = &s->u[who[i]];
+		if (u->flags & (F_DEAD | F_GONE | F_NO_AFFECT | F_PLANE)) continue;
+		if (u->owner != side) return 0;
+		mine++;
+	}
+	return mine > 0;
+}
+
 /* The cards the hero to move may play from its hand: any of them while it
  * attacks, only those that may be cast in defence while it defends. */
 static int card_moves(const Search *x, const State *s, int side, Move *out, int count, int light) {
@@ -7579,6 +7606,7 @@ static int card_moves(const Search *x, const State *s, int side, Move *out, int 
 				&& !c->splash && !cast_reacts(s, side, c)) continue;
 			if (c->aim == AIM_NONE) {
 				if (!x->proof && idle_cast(x, s, side, c, NO_TARGET)) continue;
+				if (!x->proof && own_wave(x, s, side, c, powers[p])) continue;
 				out[count].kind = 3;
 				out[count].a = h;
 				out[count].b = NO_TARGET;
@@ -8627,6 +8655,11 @@ static int search_chance(Search *x, const State *s, State *t, const Move *m, con
  * would play them as filler. */
 static int harms_own(const Search *x, const State *s, int side, const Move *m) {
 	int target = m->b, own;
+	/* A wave is aimed at nobody (see `own_wave`). */
+	if (m->kind == 3 && target == NO_TARGET) {
+		const Card *c = card_at(x, s, side, m->a);
+		return c && own_wave(x, s, side, c, m->c);
+	}
 	if (target >= 0 && target < s->n) own = s->u[target].owner == side;
 	else if (target == -1 - side) own = 2;
 	else return 0;

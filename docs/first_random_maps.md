@@ -229,7 +229,7 @@ a harbor, away from the harbor cells themselves. The
 generator stores only where each piece stands (the map's `first_decor` list);
 the models and textures are read from the installed second game when the map
 is drawn, as the second game's boat is. Without Etherlords II, or with
-**Options → Etherlords II shore objects in the first game** turned off, nothing
+**Options → Gameplay → Etherlords II shore objects** turned off, nothing
 is drawn and every harbor keeps its built-in pier. The option applies from the
 next map loaded.
 

@@ -4,6 +4,18 @@ Versions follow [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html)
 
 ## Unreleased
 
+## 0.30.2
+
+### Fixed
+
+- **Snowy arenas with path tracing:** spell light no longer turns snow and ice into a flat white haze that swallows the figures standing on it. Lit ground rolls off below the bloom threshold, so the Kinets' snow arenas look like the others, and the glowing effects themselves still bloom; metal keeps its traced highlights.
+- **Ghostly creatures' arms:** the Kinet air walls no longer lose patches of their forearms and hands when seen from behind or from the side, and the Kinet spirits (warrior, cleric, shaman, wizard) no longer show holes at the elbows of their sleeves.
+- **Computer players (Etherlords II):** the duel AI no longer casts Earthquake when it would only wound its own creatures, as it did against an army that flies.
+
+### Changed
+
+- **Options:** the remake's settings are regrouped. A new Sound and movies page holds the ambience volume and the movies, a new Gameplay page holds the computer players' levels, the Etherlords I rules options (free movement, Etherlords II card balance, battle dome and shore objects) and Discord, and the Interface page keeps the overlays and the battle screen. Saved settings carry over unchanged.
+
 ## 0.30.1
 
 ### Fixed

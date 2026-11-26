@@ -7108,7 +7108,9 @@ func remake_pages(_menu: ELFrontMenu) -> Array:
 	pages.append(["display", _t("Display"), ""])
 	pages.append(["graphics", _t("Graphics"), ""])
 	pages.append(["path_tracing", _t("Path tracing"), "graphics"])
+	pages.append(["sound", _t("Sound and movies"), ""])
 	pages.append(["interface", _t("Interface"), ""])
+	pages.append(["gameplay", _t("Gameplay"), ""])
 	pages.append(["hotkeys", _t("Hotkeys"), ""])
 	if not ELGraphicsSDK.credits_bbcode().is_empty(): pages.append(["about", _t("About"), ""])
 	return pages
@@ -7123,7 +7125,9 @@ func build_remake_page(owner: ELFrontMenu, id: String, column: Control, kit: ELM
 		"display": _display_page(column)
 		"graphics": _graphics_page(column)
 		"path_tracing": _path_tracing_page(column)
+		"sound": _sound_page(column)
 		"interface": _interface_page(column)
+		"gameplay": _gameplay_page(column)
 		"hotkeys": _hotkeys_page(column)
 		"about": _about_page(column)
 		"tools": _settings_tools(column)
@@ -7663,20 +7667,11 @@ func _path_tracing_page(page: VBoxContainer) -> void:
 	light_view.toggled.connect(func(on: bool):
 		if is_instance_valid(path_tracing): path_tracing.lighting_view = on and path_tracing.enabled)
 
-## The remake's own interface, sound and gameplay settings (with music,
-## effects, blood and map tooltips in the dialog, which has no original pages).
+## The remake's own interface settings: its overlays and the battle screen
+## (with map tooltips in the dialog, which has no original pages).
 func _interface_page(page: VBoxContainer) -> void:
 	var merged := _settings_menu != null
 	var screens := _settings_box(page, "Screens")
-	# The originals' Video key: no movies, own size, or fitted (shipped).
-	var movie_mode := OptionButton.new()
-	movie_mode.name = "MovieMode"
-	for caption: String in ["Off", "Original size", "Fit to screen"]: movie_mode.add_item(_t(caption))
-	movie_mode.select(int(settings.values.movies))
-	movie_mode.item_selected.connect(func(index: int):
-		settings.values.movies = index
-		ELMoviePlayer.mode = index)
-	_settings_row(screens, "Movies", "The games' intro and story movies.", movie_mode)
 	if not merged:
 		var tooltip_toggle := CheckButton.new()
 		tooltip_toggle.name = "MapTooltips"
@@ -7690,8 +7685,13 @@ func _interface_page(page: VBoxContainer) -> void:
 		settings.values.helper_overlay = enabled
 		_apply_settings())
 	_settings_row(screens, "Remake helper overlay", "Remake-only readouts, hints and shortcut buttons over the original screens.", helper_toggle)
-	_battle_interface_row(screens)
-	# Music and effects are on the original General page.
+	var battle := _settings_box(page, "Battle")
+	_battle_interface_rows(battle)
+
+## The ambience volume (with music and effects in the dialog; in the merged
+## screen they are on the original General page) and the movies.
+func _sound_page(page: VBoxContainer) -> void:
+	var merged := _settings_menu != null
 	var volumes := _settings_box(page, "Sound")
 	var captions := {"music": ["Music", "The menu, map and battle music."], "ambience": ["Ambience", "Remake-only background sounds of maps and battles."], "effects": ["Effects", "Spells, blows, voices and the interface."]}
 	for key: String in (["ambience"] if merged else ["music", "ambience", "effects"]):
@@ -7711,41 +7711,39 @@ func _interface_page(page: VBoxContainer) -> void:
 			if is_instance_valid(_autochess_screen): _autochess_screen.apply_volumes(settings.values)
 			if front_menu != null: front_menu.apply_volumes(settings.values))
 		_settings_row(volumes, captions[key][0], captions[key][1], slider, number)
-	var gameplay := _settings_box(page, "Gameplay")
-	var free_toggle := CheckButton.new()
-	free_toggle.name = "FreeMovement"
-	free_toggle.button_pressed = bool(settings.values.get("free_movement", true))
-	free_toggle.toggled.connect(func(enabled: bool):
-		settings.values.free_movement = enabled)
+	var video := _settings_box(page, "Video")
+	# The originals' Video key: no movies, own size, or fitted (shipped).
+	var movie_mode := OptionButton.new()
+	movie_mode.name = "MovieMode"
+	for caption: String in ["Off", "Original size", "Fit to screen"]: movie_mode.add_item(_t(caption))
+	movie_mode.select(int(settings.values.movies))
+	movie_mode.item_selected.connect(func(index: int):
+		settings.values.movies = index
+		ELMoviePlayer.mode = index)
+	_settings_row(video, "Movies", "The games' intro and story movies.", movie_mode)
+
+## The computer players and the rules of the first game; Discord.
+func _gameplay_page(page: VBoxContainer) -> void:
+	var opponents := _settings_box(page, "Computer players")
 	# A campaign or single scenario keeps its own levels: during one these
 	# change that game's (ELAIChoice), otherwise the Options choice.
 	var ai_game := _ai_game()
 	var ai_values: Dictionary = ELAIChoice.of(ai_game) if ai_game != null else settings.values
 	var ai_changed := func(_index: int):
 		if ai_game != null: ELAIChoice.store(ai_game, ai_values)
-	_settings_row(gameplay, "Duel AI", DUEL_AI_HELP, ELAIChoice.values_picker(ai_values, "duel_ai", profile, ai_changed))
+	_settings_row(opponents, "Duel AI", DUEL_AI_HELP, ELAIChoice.values_picker(ai_values, "duel_ai", profile, ai_changed))
 	var world_pick := ELAIChoice.values_picker(ai_values, "world_ai", profile, ai_changed)
-	_settings_row(gameplay, "World AI", WORLD_AI_HELP, world_pick)
+	_settings_row(opponents, "World AI", WORLD_AI_HELP, world_pick)
 	if ai_game != null and ai_game.fight_neutral_monsters:
 		world_pick.disabled = true
 		_set_row_note(world_pick, world_pick.get_meta("row_note"), WORLD_AI_HELP, PackedStringArray([_t(ELAIChoice.MONSTER_LOCK)]))
-	var icons_toggle := CheckButton.new()
-	icons_toggle.name = "CastIcons"
-	icons_toggle.button_pressed = bool(settings.values.get("cast_icons", true))
-	icons_toggle.toggled.connect(func(enabled: bool): settings.values.cast_icons = enabled)
-	_settings_row(gameplay, "Opponent's spells as icons", "First game, in battle: the opponent's spells show as icons at the top left, as in the second game, instead of red messages, and your own spells are not listed. Point at an icon for the spell's description. Off: the original messages.", icons_toggle)
-	var dome_toggle := CheckButton.new()
-	dome_toggle.name = "FirstBattleDome"
-	dome_toggle.button_pressed = bool(settings.values.get("first_battle_dome", true))
-	dome_toggle.disabled = not profiles.has("el2")
-	dome_toggle.toggled.connect(func(enabled: bool): settings.values.first_battle_dome = enabled)
-	_settings_row(gameplay, "Battle dome in the first game", "First game: when a battle is about to start on the map, the second game's ether dome rises over both sides, with its sound. Needs Etherlords II installed; applies from the next map loaded.", dome_toggle)
-	var shore_toggle := CheckButton.new()
-	shore_toggle.name = "FirstShoreObjects"
-	shore_toggle.button_pressed = bool(settings.values.get("first_shore_objects", true))
-	shore_toggle.disabled = not profiles.has("el2")
-	shore_toggle.toggled.connect(func(enabled: bool): settings.values.first_shore_objects = enabled)
-	_settings_row(gameplay, "Etherlords II shore objects in the first game", "First game, random maps: the second game's quays beside the harbors, moored ships, wrecks and flotsam decorate the shores. Decoration only: the map and its routes are the same either way. Needs Etherlords II installed; applies from the next map loaded.", shore_toggle)
+	var first := _settings_box(page, "Etherlords I")
+	var free_toggle := CheckButton.new()
+	free_toggle.name = "FreeMovement"
+	free_toggle.button_pressed = bool(settings.values.get("free_movement", true))
+	free_toggle.toggled.connect(func(enabled: bool):
+		settings.values.free_movement = enabled)
+	_settings_row(first, "Free movement", "First game, single player: heroes move as soon as you confirm a route and may move several times a day until their movement points run out; computer players move their heroes the same way when you end the day. Off: the original orders, carried out together at night.", free_toggle)
 	var balance_toggle := CheckButton.new()
 	balance_toggle.name = "SecondBalance"
 	balance_toggle.button_pressed = bool(settings.values.get("second_balance", false))
@@ -7754,8 +7752,19 @@ func _interface_page(page: VBoxContainer) -> void:
 	balance_toggle.toggled.connect(func(enabled: bool):
 		settings.values.second_balance = enabled
 		if not _second_balance_locked(): _use_second_balance())
-	_settings_row(gameplay, "Etherlords II card balance in the first game", SECOND_BALANCE_HELP, balance_toggle)
-	_settings_row(gameplay, "Free movement", "First game, single player: heroes move as soon as you confirm a route and may move several times a day until their movement points run out; computer players move their heroes the same way when you end the day. Off: the original orders, carried out together at night.", free_toggle)
+	_settings_row(first, "Etherlords II card balance", SECOND_BALANCE_HELP, balance_toggle)
+	var dome_toggle := CheckButton.new()
+	dome_toggle.name = "FirstBattleDome"
+	dome_toggle.button_pressed = bool(settings.values.get("first_battle_dome", true))
+	dome_toggle.disabled = not profiles.has("el2")
+	dome_toggle.toggled.connect(func(enabled: bool): settings.values.first_battle_dome = enabled)
+	_settings_row(first, "Etherlords II battle dome", "First game: when a battle is about to start on the map, the second game's ether dome rises over both sides, with its sound. Needs Etherlords II installed; applies from the next map loaded.", dome_toggle)
+	var shore_toggle := CheckButton.new()
+	shore_toggle.name = "FirstShoreObjects"
+	shore_toggle.button_pressed = bool(settings.values.get("first_shore_objects", true))
+	shore_toggle.disabled = not profiles.has("el2")
+	shore_toggle.toggled.connect(func(enabled: bool): settings.values.first_shore_objects = enabled)
+	_settings_row(first, "Etherlords II shore objects", "First game, random maps: the second game's quays beside the harbors, moored ships, wrecks and flotsam decorate the shores. Decoration only: the map and its routes are the same either way. Needs Etherlords II installed; applies from the next map loaded.", shore_toggle)
 	var sharing := _settings_box(page, "Sharing")
 	var discord_toggle := CheckButton.new()
 	discord_toggle.name = "DiscordActivity"
@@ -7768,9 +7777,11 @@ func _interface_page(page: VBoxContainer) -> void:
 
 const HISTORY_HELP := "In battle, a column at the left edge lists every play of the battle, the newest on top: spells, abilities, artifacts and attacks, framed blue for yours and red for the opponent's. Point at one (or tap it) to see the card and what it did to each character; the mouse wheel or a drag scrolls back. It replaces the icons of the turn's spells at the top left. Off: those icons, as in the original."
 
-## The battle panel's size (setting "battle_interface", ELHudFrame.SIZES),
-## applied at once; sizes too big for the screen are offered disabled.
-func _battle_interface_row(box: Control) -> void:
+## The battle screen's rows: the battle panel's size (setting
+## "battle_interface", ELHudFrame.SIZES), applied at once, with sizes too big
+## for the screen offered disabled; play history, the panel's readouts, the
+## opponent's spells as icons and the automatic camera's lock.
+func _battle_interface_rows(box: Control) -> void:
 	var size_pick := OptionButton.new()
 	size_pick.name = "BattleInterface"
 	for caption: String in ["Automatic", "Small (1×)", "Medium (1.5×)", "Large (2×)", "Largest (3×)"]: size_pick.add_item(_t(caption))
@@ -7802,6 +7813,11 @@ func _battle_interface_row(box: Control) -> void:
 		if notices != null: notices.icons_hidden = enabled)
 	_settings_row(box, "Play history", HISTORY_HELP, history_toggle)
 	_settings_row(box, "Battle panel readouts", "On a wide screen, the free width of the battle panel beside the spells shows readouts switched with its arrows: the spellbook, the battle adviser with the chances to win, both heroes' graveyards and enchantments, and the battle camera. Off: that width stays an empty strip.", readouts_toggle)
+	var icons_toggle := CheckButton.new()
+	icons_toggle.name = "CastIcons"
+	icons_toggle.button_pressed = bool(settings.values.get("cast_icons", true))
+	icons_toggle.toggled.connect(func(enabled: bool): settings.values.cast_icons = enabled)
+	_settings_row(box, "Opponent's spells as icons", "First game, in battle: the opponent's spells show as icons at the top left, as in the second game, instead of red messages, and your own spells are not listed. Point at an icon for the spell's description. Off: the original messages.", icons_toggle)
 	var lock_toggle := CheckButton.new()
 	lock_toggle.name = "CameraDragLock"
 	lock_toggle.button_pressed = bool(settings.values.get("camera_drag_lock", false))
@@ -8417,6 +8433,11 @@ func _open_debug_options() -> void:
 		return
 	# Hidden pages are kept too: the shown page is searched.
 	var shown: Node = host.options_ui.remake_panel if is_instance_valid(host.options_ui.remake_panel) else host.canvas
+	# "end": the page scrolled to its last rows.
+	if then == "end":
+		for scroll: Node in shown.find_children("*", "ScrollContainer", true, false):
+			if scroll.is_visible_in_tree(): scroll.scroll_vertical = int(scroll.get_v_scroll_bar().max_value)
+		return
 	if then in ["help", "hover"]:
 		var help := shown.find_child("Help", true, false)
 		if not help is Button: return

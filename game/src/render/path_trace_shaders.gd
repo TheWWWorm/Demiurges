@@ -958,6 +958,27 @@ vec3 exposed(vec3 ratio) {
 	return ratio * (1.0 + SHADE_LIFT * (1.0 - q) * (1.0 - q));
 }
 
+// A lit surface brightened past its raster colour rolls off above
+// SURFACE_KNEE towards SURFACE_CEILING, keeping its hue. Spell light is
+// uncapped and several times daylight, which suits grass and stone: a ground
+// at a third of white takes it and stays below white. The snow and ice of
+// the second game's Blue arena already stand near white in the raster, so
+// that light clipped them flat white and past the bloom threshold
+// (ELEffectLook.BLOOM_THRESHOLD), and the bloom hazed the field and the
+// figures on it: through a wall of fire, a quarter of the frame was pure
+// white there against none on the Green arena. The ceiling stays below the
+// threshold, so lit scenery never blooms; the effects themselves still do.
+// Nothing at or below its raster brightness changes, nor does metal.
+const float SURFACE_KNEE = 0.75;
+const float SURFACE_CEILING = 1.1;
+vec3 shouldered(vec3 lit, vec3 painted) {
+	float y = dot(lit, vec3(0.2126, 0.7152, 0.0722));
+	float knee = max(dot(painted, vec3(0.2126, 0.7152, 0.0722)), SURFACE_KNEE);
+	if (y <= knee) return lit;
+	float room = max(SURFACE_CEILING - knee, 0.05);
+	return lit * ((knee + room * (1.0 - exp(-(y - knee) / room))) / y);
+}
+
 void main() {
 	ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
 	ivec2 size = ivec2(frame.info.yz);
@@ -1015,7 +1036,10 @@ void main() {
 #ifdef RAY_RECONSTRUCTION
 		store_guides(pixel, c.rgb - emission, g.xyz, max(-surface.a, 0.0), imageLoad(secondary_light, pixel).a);
 #endif
-		c.rgb = (c.rgb - emission) * exposed(filtered / max(raster, vec3(0.02))) + emission;
+		vec3 painted = c.rgb - emission;
+		vec3 lit = painted * exposed(filtered / max(raster, vec3(0.02)));
+		// Metal keeps its traced highlights (surface.a is minus its share).
+		c.rgb = (surface.a < 0.0 ? lit : shouldered(lit, painted)) + emission;
 		if (frame.counts.z > 0u && (frame.info.w & 4u) == 0u) {
 			vec3 secondary = imageLoad(secondary_light, pixel).rgb;
 			if (any(greaterThan(secondary, vec3(0.0)))) {

@@ -73,21 +73,31 @@ At the bottom of the Path tracing page.
 |---|---|
 | Show light only | A debugging view: shows the traced light without textures, to see what the path tracer does (**Shift+F7**). Not kept after a restart. |
 
+## Sound and movies
+
+| Setting | What it does |
+|---|---|
+| Ambience | The volume of the remake's own background sounds of maps and battles. |
+| Movies | Off, original size or fit to the screen. |
+
 ## Interface
 
 | Setting | What it does |
 |---|---|
-| Movies | Off, original size or fit to the screen. |
 | Remake helper overlay | The remake's readouts, hints and shortcut buttons over the original screens. Off at first. |
 | Battle interface size | The size of the battle panel at the bottom of the screen: **Automatic**, **Small (1×)**, **Medium (1.5×)**, **Large (2×)** or **Largest (3×)**. Smaller sizes show more spell slots across the screen; 1×, 2× and 3× keep the original art sharp. |
-| Ambience | The volume of the remake's own background sounds of maps and battles. |
+| Opponent's spells as icons | Etherlords battles: the opponent's spells show as icons at the top left, as in Etherlords II, instead of red messages, and your own spells are not listed. Point at an icon for the spell's description. On at first. |
+
+## Gameplay
+
+| Setting | What it does |
+|---|---|
 | Duel AI | How strong the computer opponent is in the battles of both games: **Easy** (the original opponent thinking less), **Original** or **Smarter** (the default). Puzzles are always defended by the smarter opponent. |
 | World AI | Etherlords single player: how the computer players act on the map: **Original**, **Smarter** (the default: computer heroes also learn skills, shop for spells and runes, and computer players cast global spells) or **Living world** (smarter, and idle heroes also patrol, raid, escort and go back for runes). |
 | Free movement | Etherlords single player: heroes move as soon as you confirm a route and may move several times a day; computer players move the same way when you end the day. Off: the original orders, carried out together at night. On at first. |
-| Opponent's spells as icons | Etherlords battles: the opponent's spells show as icons at the top left, as in Etherlords II, instead of red messages, and your own spells are not listed. Point at an icon for the spell's description. On at first. |
-| Battle dome in the first game | Etherlords: when a battle is about to start on the map, Etherlords II's ether dome rises over both sides, with its sound. Needs Etherlords II installed. On at first. |
-| Etherlords II shore objects in the first game | Etherlords random maps (version 16): Etherlords II's quays beside the harbors, moored ships, wrecks and flotsam decorate the shores. Decoration only: the map and its routes are the same either way. Needs Etherlords II installed. On at first. |
-| Etherlords II card balance in the first game | Etherlords: every spell and creature Etherlords II also has (all of the first game's cards) is played as in Etherlords II with update 1.03: its cost, power, toughness, flags, description and rules, so both games share one balance. For example Ether Breeze and Ether Storm become creature enchantments that feed their caster every turn, [Firestorm](card-frst) costs two ether channels and the [Ogre King](card-ogkn) is 7/8. The battle rules outside the cards follow Etherlords II too: for example the hero moving second gets one more ether on its first turn, and the ether disturbance grows by half each turn. Heroes and their specialisations, artifacts, runes and global spells stay as they are, and puzzles keep the original balance and rules. Needs Etherlords II installed. Off at first; a battle keeps the balance it began with, and online both players need the same choice. |
+| Etherlords II card balance | Etherlords: every spell and creature Etherlords II also has (all of the first game's cards) is played as in Etherlords II with update 1.03: its cost, power, toughness, flags, description and rules, so both games share one balance. For example Ether Breeze and Ether Storm become creature enchantments that feed their caster every turn, [Firestorm](card-frst) costs two ether channels and the [Ogre King](card-ogkn) is 7/8. The battle rules outside the cards follow Etherlords II too: for example the hero moving second gets one more ether on its first turn, and the ether disturbance grows by half each turn. Heroes and their specialisations, artifacts, runes and global spells stay as they are, and puzzles keep the original balance and rules. Needs Etherlords II installed. Off at first; a battle keeps the balance it began with, and online both players need the same choice. |
+| Etherlords II battle dome | Etherlords: when a battle is about to start on the map, Etherlords II's ether dome rises over both sides, with its sound. Needs Etherlords II installed. On at first. |
+| Etherlords II shore objects | Etherlords random maps (version 16): Etherlords II's quays beside the harbors, moored ships, wrecks and flotsam decorate the shores. Decoration only: the map and its routes are the same either way. Needs Etherlords II installed. On at first. |
 | Discord activity | Shows in the Discord desktop app which game you play and what you are doing: the menu screen, the mission, day and hero on a map, the kind of battle with its opponent, turn and both heroes' life, or the remake mode (puzzles, Expedition, Draft Arena, autochess, the wiki) and its progress. Player and save names are never shared. On at first. |
 
 Each campaign and single scenario keeps its own **Duel AI** and **World AI**, saved with it and carried to the next chapter. The same two choices are shown beside the difficulty when you begin one: on the lowest difficulty (**Easy**) they start at **Original**, on the others at the choices made here outside a game, and changing the difficulty puts that difficulty's back; you can still change them before you begin. During a game, these Options change that game's choices. A save from before games kept them gets **Original** at the lowest difficulty and the choices here at the others. Standalone duels, puzzles and network games use the choices here.
