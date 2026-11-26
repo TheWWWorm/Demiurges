@@ -51,6 +51,9 @@ const ATTACHED_SHARE := 0.25
 const ATTACHED_REACH := 0.5
 const WEAPON_SHARE := 1.0
 const WEAPON_REACH := 1.0
+## The highlight a weapon's lamp leaves on metal, and the energy it may reach
+## (a spell's limit: at the standing fires' it still hardly showed on plate).
+const WEAPON_SPECULAR := 0.5
 
 ## The share and reach factor of a figure's light of `kind` (1 its weapon,
 ## 2 the glow spread over it).
@@ -162,11 +165,16 @@ func show_sources(sources: Array, delta: float) -> void:
 			free.erase(lamp)
 		var tint := colour / peak
 		var wanted := Color(tint.x, tint.y, tint.z).linear_to_srgb()
-		var energy := (ENERGY_LIMIT if _steady(source) else SPELL_ENERGY_LIMIT) * (1.0 - exp(-peak * ENERGY_RISE))
+		var weapon := attached and int(source[4]) == 1
+		var energy := (ENERGY_LIMIT if _steady(source) and not weapon else SPELL_ENERGY_LIMIT) * (1.0 - exp(-peak * ENERGY_RISE))
 		var reach := (REACH if _steady(source) else SPELL_REACH) + clampf(float(source[1]), 0.1, 3.0) * 3.0
 		if attached:
 			energy *= figure_share(int(source[4]))
 			reach *= figure_reach(int(source[4]))
+		# A weapon's light glints on the armour beside it. Armour is painted
+		# as metal, which takes little diffuse light: lit without a highlight,
+		# a Chaot warrior in plate stayed black beside her glowing mace.
+		lamp.light_specular = WEAPON_SPECULAR if weapon else 0.0
 		lamp.set_meta(&"figure", attached)
 		lamp.set_meta(&"source_rank", _rank(source))
 		if fresh:
