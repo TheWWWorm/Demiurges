@@ -2325,11 +2325,21 @@ func _trap_jammer(c: Dictionary) -> bool:
 
 ## The spell-jammers a sorcery sprang: hidden until the hero's cast and the
 ## spell's effects have run their course, then each in its summon effect.
+## Both originals queue each trap's summon behind everything shown before
+## it, so a second jammer follows the first one's summon effect.
 func _hold_trap_jammers(pending: Dictionary) -> void:
 	var cast_left := maxf(0.0, presentation.cast_until - elapsed)
-	var wait := maxf(cast_left, _summon_effect_seconds(String(pending.card)))
+	var wait := maxf(cast_left, _card_effect_seconds(String(pending.card)))
 	for id: int in pending.trap_jammers:
 		_script_arrival(id, wait)
+		if duel.creatures.has(id): wait += _summon_effect_seconds(String(duel.creatures[id].card))
+
+## Seconds the longest effect a cast of `card` names plays.
+func _card_effect_seconds(card: String) -> float:
+	var frames := 0
+	for effect: Variant in ELCombatEffects.Table.card_effects(profile, card):
+		frames = maxi(frames, ELCombatEffects.fx_frames(profile, String(effect)))
+	return float(frames) / ELParticleFile.FPS
 
 ## The Pale Ripple's +1/+1 recipients when it lands: the caster's creatures
 ## outside the Colourless Plane, as the event's displayed stamp lists them.
@@ -4200,18 +4210,14 @@ func _start_cast_effects() -> void:
 			battle_audio.effect("Draw", models[owner])
 		_remove_model(id)
 		return
-	# The Pale Ripple (ORPL): OuterRipple at each creature of the Colourless
-	# Plane it hits (the caster when there is none), then the +1/+1's
-	# PosAttack, PosDefence and PosRune at each of the caster's creatures
-	# in the Ether, which alone gain it.
+	# The Pale Ripple (ORPL): both originals play OuterRipple once, bound to
+	# no figure (a whole-field effect), whether or not any creature is in
+	# the Colourless Plane; then the 3 damage at each creature there, and
+	# the +1/+1's PosAttack, PosDefence and PosRune at each of the
+	# caster's creatures in the Ether, which alone gain it.
 	if profile.id == "el2" and pending.card == "ORPL":
-		var hit: Array = []
-		for id: int in pending.get("ripple_victims", []):
-			if models.has(id): hit.append(models[id])
-		if hit.is_empty() and pending.get("ripple_victims", []).is_empty() and models.has(int(pending.side)): hit.append(models[int(pending.side)])
-		if not hit.is_empty():
-			effects.play("OuterRipple", {"Start": [models.get(int(pending.side))], "Target": hit})
-			battle_audio.effect("OuterRipple", hit[0])
+		effects.play("OuterRipple", {})
+		battle_audio.effect("OuterRipple")
 		var buffed: Array = []
 		for id: int in pending.get("ripple_buffed", []):
 			if models.has(id): buffed.append(id)

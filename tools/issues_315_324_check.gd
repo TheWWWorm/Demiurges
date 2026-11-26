@@ -9,11 +9,13 @@ extends SceneTree
 ##   Unsummon does: BlueDeath at the creature and Draw at the hero its card
 ##   goes back to, with their sounds, and no OutplaneSpellDeath. On a Pale
 ##   creature it shows OutplaneSpellDeath alone.
-## - #324: the Pale Ripple (ORPL) shows its stat gains (PosAttack, PosDefence,
-##   PosRune) only at the caster's creatures in the Ether, none at creatures
-##   of the Colourless Plane; a spell-jammer that the Ripple springs from a
-##   trap stays hidden until the hero's cast and the spell's effects are over,
-##   then appears in its own summon effect (OutplanarSummon).
+## - #324: the Pale Ripple (ORPL) plays OuterRipple once, bound to no figure,
+##   and shows its stat gains (PosAttack, PosDefence, PosRune) only at the
+##   caster's creatures in the Ether, none at creatures of the Colourless
+##   Plane; a spell-jammer that the Ripple springs from a trap stays hidden
+##   until the hero's cast and the spell's effects are over, then appears in
+##   its own summon effect (OutplanarSummon); a second sprung jammer follows
+##   the first one's summon effect.
 ##
 ##   godot --headless --path game --script ../tools/issues_315_324_check.gd
 ##
@@ -256,14 +258,19 @@ func _ripple_view(view: Node, side: int) -> void:
 	duel.heroes[1 - side].mana = 30
 	duel.cast_free(1 - side, "OST1", [], true)
 	await _idle(view)
+	duel.heroes[1 - side].mana = 30
+	duel.cast_free(1 - side, "OST2", [], true)
+	await _idle(view)
 	check(duel.heroes[1 - side].enchantments.any(func(e: Dictionary) -> bool: return e.card == "OST1"), "#324 the opponent holds a Pale Avenger trap")
 	var before: Array = duel.creatures.keys()
 	var from: int = fx.size()
 	var begin := Time.get_ticks_usec()
 	var cast := _cast(view, side, "ORPL", -1)
 	var jammer := -1
+	var second := -1
 	for id: int in duel.creatures:
 		if not before.has(id) and String(duel.creatures[id].card) == "OSJ1": jammer = id
+		if not before.has(id) and String(duel.creatures[id].card) == "OSJ2": second = id
 	check(cast and jammer >= 2 and view.models.has(jammer), "#324 the Ripple springs the trap: a Pale Avenger comes into play")
 	if jammer < 2 or not view.models.has(jammer): return
 	var jammer_model: Node = view.models[jammer]
@@ -272,19 +279,26 @@ func _ripple_view(view: Node, side: int) -> void:
 	var shown_at := -1.0
 	var effect_at := -1.0
 	var ripple_at := -1.0
-	for i in 1500:
+	var second_at := -1.0
+	for i in 2500:
 		view.ai_clock = -1000.0
 		await process_frame
 		var seconds := (Time.get_ticks_usec() - begin) / 1000000.0
 		if ripple_at < 0.0 and not _bound(view, from, "OuterRipple").is_empty(): ripple_at = seconds
 		if effect_at < 0.0 and _bound_to(view, from, "OutplanarSummon", jammer): effect_at = seconds
+		if second_at < 0.0 and second >= 2 and _bound_to(view, from, "OutplanarSummon", second): second_at = seconds
 		if shown_at < 0.0 and is_instance_valid(jammer_model) and jammer_model.visible: shown_at = seconds
-		if shown_at >= 0.0 and effect_at >= 0.0 and not view._cast_busy() and view._arrivals.is_empty(): break
+		if shown_at >= 0.0 and effect_at >= 0.0 and (second < 2 or second_at >= 0.0) and not view._cast_busy() and view._arrivals.is_empty(): break
 	await _idle(view)
 	print("  cast gesture %.2f s, OuterRipple at %.2f s, Avenger's summon effect at %.2f s, shown at %.2f s" % [gesture, ripple_at, effect_at, shown_at])
 	check(ripple_at >= 0.0 and effect_at > ripple_at and effect_at >= gesture - 0.05,
 		"#324 the Avenger's summon effect starts after the hero's cast and the Ripple's own effect")
 	check(effect_at >= 0.0 and shown_at >= effect_at, "#324 the Avenger appears in its summon effect, not before it")
+	if second >= 2:
+		var length: float = view._summon_effect_seconds("OSJ1")
+		print("  second jammer's summon effect at %.2f s (first's lasts %.2f s)" % [second_at, length])
+		check(second_at >= effect_at + length - 0.1, "#324 a second sprung jammer follows the first one's summon effect")
+	else: print("SKIP: #324 the second trap sprang no jammer")
 	var buffs: Array = _bound(view, from, "PosAttack") + _bound(view, from, "PosDefence") + _bound(view, from, "PosRune")
 	var on := func(id: int) -> bool:
 		for figures: Array in buffs:
@@ -294,7 +308,7 @@ func _ripple_view(view: Node, side: int) -> void:
 	check(not on.call(enemy_plane) and not on.call(enemy_ether), "#324 no stat gain shows at the opponent's creatures")
 	check(not on.call(friend_plane), "#324 no stat gain shows at the caster's creatures in the Colourless Plane")
 	check(not on.call(jammer), "#324 the sprung Avenger takes no part in the Ripple's effects")
-	var hit := false
-	for figures: Array in _bound(view, from, "OuterRipple"):
-		if figures.has(view.models.get(enemy_plane)) or figures.has(view.models.get(friend_plane)): hit = true
-	check(hit, "#324 OuterRipple strikes the creatures in the Colourless Plane")
+	# Both originals play OuterRipple once with no figure bound to it.
+	var ripples := _bound(view, from, "OuterRipple")
+	check(ripples.size() == 1 and fx.slice(from).filter(func(e: Dictionary) -> bool: return String(e.effect) == "OuterRipple").all(func(e: Dictionary) -> bool: return e.bindings.is_empty()),
+		"#324 OuterRipple plays once, bound to no figure (%d requests)" % ripples.size())
