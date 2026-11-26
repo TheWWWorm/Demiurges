@@ -45,7 +45,8 @@ const GOAL_MONSTERS := {SAVAGE_DESERT: "Cyclope"}
 ## carries its revision, and a save keeps the revision it began with.
 ##   2  the dale's creatures follow the walk without repeats, creatures
 ##      spread over their kinds, and the hand-made finish (EDITS).
-const REVISION := 2
+##   3  the dale's creatures keep pace with its rivals (DALE_PACE).
+const REVISION := 3
 ## The hand-made finish of each mission (revision 2 on), applied in order
 ## over the generated map:
 ##   {"clear": Rect2i}                 scenery and set pieces touching it go
@@ -233,10 +234,19 @@ const OUTPOST_COLOR := "Black"
 ## The rivals, weakest first, at their places along the dale.
 const RIVALS := {"BLevHero1": Vector2i(80, 38), "BLevHero3": Vector2i(140, 86), "BLevHero4": Vector2i(90, 132),
 	"BLevHero2": Vector2i(55, 146), "BLevHero5": Vector2i(42, 123)}
-## Creatures in the open stand at least this far apart, and the last of
-## them, near the exit, are of this level.
+## Creatures in the open stand at least this far apart, and (revision 2)
+## the last of them, near the exit, are of this level.
 const DALE_CREATURE_GAP := 7
 const DALE_LAST_LEVEL := 9
+## Revision 3: a creature takes the level of the rivals around its place on
+## the walk, from the first level at the glade through each waiting rival's
+## own level (Zarus 4, Valaddin 8, Tango 10, Warp 12) to Warp's level at the
+## exit. Glazzz walks the last woods on the program's loop, out of the
+## dale's order, so his level sets no pace. With the second revision's line
+## from 1 to 9 a hero who fought his way along stood two or three levels
+## above every creature from the snow on, and the creatures by Valaddin,
+## Tango and Warp were four or five levels below them.
+const DALE_PACE := ["BLevHero1", "BLevHero3", "BLevHero4", "BLevHero5"]
 ## A kind of creature is not met again until this many others have been.
 const DALE_FRESH := 4
 const PATROLLER := "BLevHero2"
