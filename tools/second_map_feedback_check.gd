@@ -149,8 +149,10 @@ func _opening_and_rewards(profile: ELProfile, settings: ELSettings) -> void:
 		_space()
 		await create_timer(0.3).timeout
 		_space(true, true)
-		check(view._mission_fade != null and calls.steps == 0 and view.director._clock == 0.0
-			and not view.second_dialogue.visible, "#206: the mission clock and opening script wait throughout the fade")
+		# #327: the mission clock runs under the fade, as in the original; the
+		# box the opening script opened waits for the fade to end (#206).
+		check(view._mission_fade != null and calls.steps == 1 and not view.director.dialogue.is_empty()
+			and not view.second_dialogue.visible, "#206/#327: the opening script runs under the fade and its box waits for the fade's end")
 		await _wait_for_fade(view)
 		await create_timer(view.director.script_tick() * 2.0).timeout
 		_space(true, true)
