@@ -2587,7 +2587,7 @@ func _cast_seconds(data: Dictionary) -> float:
 		seconds = maxf(models[side].clip_seconds(_cast_clip(side, card)), 0.0)
 	var release := _cast_release(side, card) if data.kind == "cast" else 0.0
 	if data.kind == "artifact" and not hidden:
-		var clip := _artifact_clip(side)
+		var clip := _artifact_clip(side, card)
 		if not clip.is_empty():
 			seconds = maxf(models[side].clip_seconds(clip), 0.0)
 			release = _gesture_release(models[side], clip)
@@ -3336,12 +3336,12 @@ func _event(data: Dictionary) -> void:
 		"artifact":
 			_announce("T_USE_ARTIFACT", [_hero_name(data.side), str(data.get("title", duel.card_name(data.card)))], int(data.side))
 			if profile.id == "el2" and is_instance_valid(notices): _artifact_notice(data)
-			# Using an artifact is the hero's ability command (#322): the hero
-			# plays its instant gesture with its voice, as for an enchantment's
-			# ability, and the artifact's effects (its spell's cast visual) and
-			# their sounds start at the gesture's release.
-			var gesture := _artifact_gesture(int(data.side))
-			battle_audio.hold(gesture)
+			# Using an artifact (#322): the hero plays the gesture of its
+			# spell's kind with its voice, as for a cast, and the artifact's
+			# effects (its spell's cast visual) and their sounds start at the
+			# gesture's release; a summoning one's arrival waits for the gesture.
+			var gesture := _artifact_gesture(int(data.side), String(data.card))
+			battle_audio.hold(0.0 if duel.is_summon(String(data.card)) else gesture)
 			# Both originals register WRBN hero PosEnchantment once; original
 			# per-creature PosAttack/PosDefence effects and WAV belong to each
 			# positive-kin non-exempt target, not the general spell sound list.
@@ -3904,22 +3904,24 @@ func _cast_release(side: int, card: String) -> float:
 	if duel.is_summon(card) or not models.has(side) or bool(settings.values.get("hide_cast", false)): return 0.0
 	return _gesture_release(models[side], _cast_clip(side, card))
 
-## The clip the figure in hero slot `side` plays to use an artifact: its
-## instant gesture (the hero ability command's), else its attack clip; ""
-## when it has neither.
-func _artifact_clip(side: int) -> String:
-	if not models.has(side): return ""
-	for name: String in ["uinstant", "uattack"]:
-		if models[side].has_clip(name): return name
-	return ""
+## The clip the figure in hero slot `side` plays to use an artifact whose
+## spell is `card`: both originals pick it as for casting that spell (its
+## summoning, instant or enchantment gesture, by the spell's kind), with the
+## same fallback to the instant and then the attack clip; "" when it has
+## none of them.
+func _artifact_clip(side: int, card: String) -> String:
+	return _cast_clip(side, card)
 
 ## Starts the artifact-use gesture of the hero in slot `side` with its
-## voice; the seconds to its release frame (0 with casting animations hidden).
-func _artifact_gesture(side: int) -> float:
+## voice. Returns the seconds to its release frame, where the spell's
+## effects start, or for a summoning artifact the seconds its arrival waits
+## for, as a cast's (0 with casting animations hidden).
+func _artifact_gesture(side: int, card: String) -> float:
 	if bool(settings.values.get("hide_cast", false)): return 0.0
-	var clip := _artifact_clip(side)
+	var clip := _artifact_clip(side, card)
 	if clip.is_empty() or not models[side].play(clip): return 0.0
 	battle_audio.unit(models[side], clip.trim_prefix("u"))
+	if duel.is_summon(card): return maxf(0.0, models[side].clip_seconds(clip)) if profile.id == "el2" else _summon_mark(side, card)
 	return _gesture_release(models[side], clip)
 
 ## A creature's entry into or exit from the Colourless Plane: its effect,

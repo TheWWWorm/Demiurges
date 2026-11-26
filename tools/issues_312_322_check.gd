@@ -1,9 +1,11 @@
 extends SceneTree
 ## Presentation checks for three player reports, in both games:
 ##
-## - #322: a hero using an artifact plays its instant gesture with its voice,
-##   as for an enchantment's ability; the artifact's own sound waits for the
-##   gesture's release. "Hide casting animations" drops gesture and voice.
+## - #322: a hero using an artifact plays the gesture its spell's kind asks
+##   for, as a cast of that spell does (instant, enchantment or summoning,
+##   falling back to the instant and the attack clip), with that gesture's
+##   voice; the artifact's own sound waits for the gesture's release. "Hide
+##   casting animations" drops gesture and voice.
 ## - #318: Wall of Lava, Wall of Hellfire and Wall of Wind play an action
 ##   clip (their figures have no instant clip: the attack clip) with its
 ##   sound when their ether ability is used, besides PosAttack/PosDefence.
@@ -104,14 +106,17 @@ func _creature(view: Node, side: int, card: String) -> int:
 	return -1
 
 ## An untargeted artifact `side` may use now: the Rod of Healing if the
-## edition has one, else the first such artifact.
-func _ready_artifact(duel: ELDuel, side: int) -> Dictionary:
+## edition has one, else the first such artifact; with `gesture`, the first
+## whose spell asks for that casting gesture.
+func _ready_artifact(view: Node, duel: ELDuel, side: int, gesture := "") -> Dictionary:
 	var names: Array = duel.profile.table("Artefacts").keys()
+	names.sort()
 	names.sort_custom(func(a: String, b: String) -> bool:
 		return String(duel.profile.table("Artefacts")[a].get("SpellType", "")) == "RDHL" and String(duel.profile.table("Artefacts")[b].get("SpellType", "")) != "RDHL")
 	for name: String in names:
 		var entry := ELDuel.artifact_entry(duel.profile, {"name": name})
 		if entry.is_empty() or entry.has("custom") or duel.is_summon(String(entry.spell)): continue
+		if not gesture.is_empty() and view._cast_gesture(String(entry.spell)) != gesture: continue
 		if String(duel.artifact_rule(entry).get("target", "none")) != "none": continue
 		entry.charges = 1
 		entry.ready_round = 0
@@ -126,14 +131,21 @@ func _artifact_gesture(view: Node, edition: String) -> void:
 	await _attack_turn(view, duel.attacker)
 	var side: int = duel.attacker
 	var hero: ELModel = view.models[side]
-	var voice := "Creatures/%s/voice/instant" % String(hero.get_meta("sound_directory", ""))
-	for hidden: bool in [false, true]:
-		var what := "%s #322%s" % [edition, " (casting animations hidden)" if hidden else ""]
+	for run: Array in [[false, ""], [true, ""], [false, "uenchantment"]]:
+		var hidden: bool = run[0]
+		var what := "%s #322%s%s" % [edition, " (casting animations hidden)" if hidden else "", (" " + String(run[1])) if not String(run[1]).is_empty() else ""]
 		view.settings.values.hide_cast = hidden
-		var item := _ready_artifact(duel, side)
+		var item := _ready_artifact(view, duel, side, String(run[1]))
 		if item.is_empty():
+			if not String(run[1]).is_empty():
+				print("SKIP: %s: no untargeted artifact of that kind" % what)
+				continue
 			check(false, "%s: an untargeted artifact can be used" % what)
 			continue
+		var gesture: String = view._artifact_clip(side, String(item.spell))
+		check(gesture == view._cast_clip(side, String(item.spell)) and not gesture.is_empty(),
+			"%s: %s asks for its spell's casting gesture (%s for %s)" % [what, item.name, gesture, view._cast_gesture(String(item.spell))])
+		var voice := "Creatures/%s/voice/%s" % [String(hero.get_meta("sound_directory", "")), gesture.trim_prefix("u")]
 		var sounds: Array[String] = view.battle_audio.spell_paths(String(item.spell))
 		var clips: Array[String] = []
 		var listen := func(clip: String) -> void: clips.append(clip)
@@ -147,10 +159,10 @@ func _artifact_gesture(view: Node, edition: String) -> void:
 		hero.animation_started.disconnect(listen)
 		var spoke: bool = view.battle_audio.requested.any(func(path: String) -> bool: return path.begins_with(voice))
 		if hidden:
-			check(not clips.has("uinstant") and not spoke, "%s: no gesture and no voice (%s)" % [what, ", ".join(clips)])
+			check(not clips.has(gesture) and not spoke, "%s: no gesture and no voice (%s)" % [what, ", ".join(clips)])
 		else:
-			check(clips.has("uinstant"), "%s: the hero plays its instant gesture (%s)" % [what, ", ".join(clips)])
-			check(spoke, "%s: the hero's instant voice is heard (%s*)" % [what, voice])
+			check(clips.has(gesture), "%s: the hero plays its %s gesture (%s)" % [what, gesture, ", ".join(clips)])
+			check(spoke, "%s: the hero's %s voice is heard (%s*)" % [what, gesture.trim_prefix("u"), voice])
 			check(sounds.is_empty() or not sounds.any(func(path: String) -> bool: return early.has(path)),
 				"%s: the artifact's sound waits for the gesture's release (%s)" % [what, str(sounds)])
 		check(sounds.all(func(path: String) -> bool: return view.battle_audio.requested.has(path)),
