@@ -25,7 +25,7 @@ const SPELL_ENERGY_LIMIT := 1.5
 ## A spell's own lamp goes further still. At SPELL_ENERGY_LIMIT it matched a
 ## glowing weapon's: two staffs beside the cast filled its shadow in, and the
 ## figures threw none from it.
-const CAST_ENERGY_LIMIT := 7.0
+const CAST_ENERGY_LIMIT := 3.5
 const ENERGY_RISE := 0.2
 ## A lamp's reach: this, plus three times the patch's own extent. Two units
 ## are a metre, so a fire lights the ground a few metres around it.

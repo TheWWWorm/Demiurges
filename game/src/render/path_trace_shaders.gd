@@ -423,15 +423,21 @@ void basis(vec3 n, out vec3 t, out vec3 b) {
 	b = vec3(c, s + n.y * n.y * a, -n.y);
 }
 
-// A spell's lamp (a negative extent) falls off as the raster lamp it stands
-// for (ELGlowLights.FALLOFF, Godot's omni attenuation): a window to its
-// reach over the distance to that power.
-const float SPELL_LAMP_DECAY = 0.35;
+// A spell's light (a negative extent) falls off with the distance squared,
+// as light from a small source does, giving its full colour at
+// SPELL_LAMP_REFERENCE (a little under a metre), inside a window to its
+// reach. Closer than its own size it gives no more. Fallen off as the raster
+// lamp is (Godot's omni attenuation, the distance to the power 0.35), it lit
+// the ground several metres off nearly as much as beside it: no pool around
+// a spell, and the shadow a figure threw from it, filled by its light all
+// around, hardly showed.
+const float SPELL_LAMP_REFERENCE = 1.8;
 float lamp_falloff(float d, float reach, float radius) {
 	float x = d / abs(reach);
 	x *= x;
 	x = clamp(1.0 - x * x, 0.0, 1.0);
-	return x * x * pow(max(d, radius), -SPELL_LAMP_DECAY);
+	float near = SPELL_LAMP_REFERENCE / max(d, radius);
+	return x * x * near * near;
 }
 
 // Any other effect light falls off as Godot's point lights: a smooth window
@@ -445,20 +451,23 @@ float light_falloff(float d, float reach, float radius, bool lamp) {
 	return x * x / max(d, radius);
 }
 
-// A spell's lamp (a negative extent, see ELPathTracing._effect_lights) hangs
-// over its glow as the raster lamp does, and is nearly a point as that lamp is
-// (SPELL_SHADOW_SIZE across, not the glow's extent): spread over a glow a
-// metre or more across, or even over a cube a metre wide, the shadow of a
-// figure beside it blurred to a faint smudge where the raster one is a clear
-// streak.
+// A spell's light (a negative extent, see ELPathTracing._effect_lights) is
+// nearly a point (SPELL_SHADOW_SIZE across, not the glow's extent): spread
+// over a glow a metre or more across, or even over a cube a metre wide, the
+// shadow of a figure beside it blurred to a faint smudge. A spell plays on a
+// figure, its glow centred in the figure's body: a shadow ray stops
+// SPELL_BODY_CLEARANCE short of the light (or its extent, if wider), outside
+// that body, which otherwise shadowed the whole ground around it from its
+// own spell.
 const float SPELL_SHADOW_SIZE = 0.15;
+const float SPELL_BODY_CLEARANCE = 0.8;
 // The effects' light is rolled off before its shadows take it away: past
 // EFFECT_LIGHT_KNEE (one spell lamp at full strength) towards EFFECT_LIGHT_ROOM
 // more. Lamps crowding one place (a wall of fire, several spells at once)
 // summed past what the composite can show, which then brought the light and
 // a figure's shadow in it to the same brightness: the shadow was gone.
 const float EFFECT_LIGHT_KNEE = 1.5;
-const float EFFECT_LIGHT_ROOM = 3.0;
+const float EFFECT_LIGHT_ROOM = 1.0;
 
 // Light from the effects (fire, glows, spell lights) at a point: one light
 // chosen in proportion to what it would give here, then a ray towards a
@@ -504,7 +513,7 @@ vec3 effect_light(vec3 p, vec3 n, bool shadowed, inout uint state, inout float l
 	vec3 direction = to / max(d, 1e-4);
 	float n_dot_l = dot(n, direction);
 	if (n_dot_l <= 0.0) return vec3(0.0);
-	if (shadowed && occluded(p, direction, max(d - (lamp ? spread : extent), 0.01))) return vec3(0.0);
+	if (shadowed && occluded(p, direction, max(d - (lamp ? max(extent, SPELL_BODY_CLEARANCE) : extent), 0.01))) return vec3(0.0);
 	float kept = expected > EFFECT_LIGHT_KNEE ? (EFFECT_LIGHT_KNEE + EFFECT_LIGHT_ROOM * (1.0 - exp(-(expected - EFFECT_LIGHT_KNEE) / EFFECT_LIGHT_ROOM))) / expected : 1.0;
 	return colour.rgb * light_falloff(d, colour.w, extent, lamp) * n_dot_l * total / chosen_weight * kept;
 }

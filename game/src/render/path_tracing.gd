@@ -67,8 +67,6 @@ const GLOW_LIMIT := 2.5
 ## metre, and a wall of fire lights the ground several metres around it, so
 ## a figure beside one stands in its light and throws a shadow from it.
 const GLOW_REACH := 9.0
-## The battle ground's height (ELCombatEffects sets the raster lamps' floor so).
-const BATTLE_FLOOR := 0.0
 ## The arena's own fires and glows (steady sources) are its lamps, hung high
 ## and far apart: their light carries across the ring.
 const ARENA_GLOW_REACH := 14.0
@@ -854,23 +852,26 @@ func _effect_lights(delta := 0.0) -> PackedFloat32Array:
 		var extent := clampf(glow[1], 0.1, 3.0)
 		var fire: bool = not steady and kind == 0 and glow.size() > 5 and glow[5]
 		if not steady and kind == 0 and index < battle:
-			# A spell lights as its raster lamp does (ELGlowLights): the same
-			# energy for the same glow, the same reach and gentle falloff, hung
-			# as high over the battle ground, traced. Lit by its own rules
-			# (several times daylight at the glow, falling off with the
-			# distance squared, from a figure's waist or lower), a spell flooded
-			# the snow it stood on, threw no shadow from a figure standing in
-			# it, and grazed the ground a few metres off, where a figure beside
-			# it throws its shadow, so faintly that the shadow hardly showed.
-			# The ray program reads a spell lamp from a negative extent (see
-			# SPELL_LAMP_DECAY there); a spell's fire keeps a negative reach,
+			# A spell is a light where its glow is, falling off with the
+			# distance squared, as a lamp or a torch held beside a figure is:
+			# far brighter than daylight next to it, so it outshines the sun's
+			# shadows there and throws the figures' own shadows away from it,
+			# and faint a few metres off. It takes its raster lamp's energy
+			# for the same glow (ELGlowLights.CAST_ENERGY_LIMIT), given at
+			# SPELL_LAMP_REFERENCE in the ray program, and its reach. Hung over
+			# the battle ground as the raster lamp is and falling off as gently,
+			# it lit the ground metres away as much as beside it and put each
+			# figure's shadow under its feet, so neither showed. Lit at several
+			# times daylight with no roll-off, a spell flooded the snow it stood
+			# on; the composite now rolls added light off by the surface's own
+			# brightness (shouldered). The ray program reads a spell's light
+			# from a negative extent; a spell's fire keeps a negative reach,
 			# which only marks it as light that moves on (EFFECT_CHANGE).
 			var energy := ELGlowLights.CAST_ENERGY_LIMIT * (1.0 - exp(-peak * ELGlowLights.ENERGY_RISE))
 			var lamp := colour / maxf(peak, 1e-4) * energy
 			var lamp_reach := ELGlowLights.SPELL_REACH + extent * 3.0
-			var hung: Vector3 = glow[0]
-			hung.y = maxf(hung.y, BATTLE_FLOOR + ELGlowLights.SPELL_LAMP_HEIGHT)
-			spells.append([hung, -extent, lamp, -lamp_reach if fire else lamp_reach])
+			var at: Vector3 = glow[0]
+			spells.append([at, -extent, lamp, -lamp_reach if fire else lamp_reach])
 			continue
 		if peak > GLOW_LIMIT: colour *= GLOW_LIMIT / peak
 		var reach := (ARENA_GLOW_REACH if steady else GLOW_REACH) + extent * 3.0
