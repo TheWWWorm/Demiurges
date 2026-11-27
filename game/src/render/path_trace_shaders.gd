@@ -1011,6 +1011,7 @@ vec3 exposed(vec3 ratio) {
 // unchanged.
 const float LIT_CEILING = 0.8;
 const float LIT_HEADROOM = 0.15;
+const float LIT_KNEE = 0.5;
 const float CHANNEL_KNEE = 0.85;
 vec3 shouldered(vec3 painted, vec3 ratio) {
 	vec3 excess = max(ratio - 1.0, vec3(0.0));
@@ -1020,7 +1021,12 @@ vec3 shouldered(vec3 painted, vec3 ratio) {
 	if (e <= 0.0) return base;
 	float y = dot(painted, vec3(0.2126, 0.7152, 0.0722));
 	float room = max(LIT_CEILING - y, LIT_HEADROOM * y);
-	vec3 lit = base + added * (room * (1.0 - exp(-e / max(room, 1e-4))) / e);
+	// The first LIT_KNEE share of the room passes whole: rolled off from the
+	// first light on, a summoning flash beside a dark-armoured figure lost a
+	// third of what it gave, and the figure's side hardly lit.
+	float knee = room * LIT_KNEE, rest = max(room - knee, 1e-4);
+	float kept = e <= knee ? e : knee + rest * (1.0 - exp(-(e - knee) / rest));
+	vec3 lit = base + added * (kept / e);
 	vec3 over = max(lit - CHANNEL_KNEE, vec3(0.0));
 	float span = 1.0 - CHANNEL_KNEE;
 	return max(min(lit, vec3(CHANNEL_KNEE)) + span * (1.0 - exp(-over / span)), base);
