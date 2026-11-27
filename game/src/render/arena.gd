@@ -65,6 +65,7 @@ var _solids: Array = []
 ## Scenery materials whose ambient plus sun light is limited to full brightness.
 var _lit_materials: Array[ShaderMaterial] = []
 var _ambient_seen := Color(-1, -1, -1)
+var _daylight_seen := Vector3(-1, -1, -1)
 ## Upper bound of ambient plus sun on scenery (1 = the originals' full brightness).
 var light_limit := 1.0
 ## The painted backdrop's average (linear) colour, its cloud and overlay
@@ -350,8 +351,12 @@ func _sync_light() -> void:
 	# Only the Compatibility renderer adds a shadowed sun in a display-encoded pass.
 	var encoded := light != null and light.visible and light.shadow_enabled and ELEffectLook.encoded_sun_pass(environment_settings)
 	ambient.a = light_limit + (1000.0 if encoded else 0.0)
-	if ambient == _ambient_seen: return
+	# Daylight on level ground (spell lamps roll off by what it already gives
+	# a surface; a scene-light effect dims the sun with it).
+	var daylight := _surface_light()
+	if ambient == _ambient_seen and daylight == _daylight_seen: return
 	_ambient_seen = ambient
+	_daylight_seen = daylight
 	# The colour is given in display encoding; shaders light in linear terms.
 	var linear := environment_settings.ambient_light_color.srgb_to_linear() * environment_settings.ambient_light_energy
 	var level := Vector3(linear.r, linear.g, linear.b)
@@ -359,6 +364,7 @@ func _sync_light() -> void:
 		material.set_shader_parameter("ambient_light", level)
 		material.set_shader_parameter("light_limit", light_limit)
 		material.set_shader_parameter("encoded_sun_pass", encoded)
+		material.set_shader_parameter("daylight", daylight)
 
 ## Light falling onto a level patch of ground, in linear colour. This is
 ## only a palette multiplier for the unlit atmosphere, not another light

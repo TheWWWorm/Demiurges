@@ -425,18 +425,20 @@ void basis(vec3 n, out vec3 t, out vec3 b) {
 
 // A spell's light (a negative extent) falls off with the distance squared,
 // as light from a small source does, giving its full colour at
-// SPELL_LAMP_REFERENCE (a little under a metre), inside a window to its
-// reach. Closer than its own size it gives no more. Fallen off as the raster
+// SPELL_LAMP_REFERENCE (over a metre), inside a window to its reach. Closer than
+// its own size or SPELL_NEAREST it gives no more: a low glow burned white
+// spots into the ground beneath it. Fallen off as the raster
 // lamp is (Godot's omni attenuation, the distance to the power 0.35), it lit
 // the ground several metres off nearly as much as beside it: no pool around
 // a spell, and the shadow a figure threw from it, filled by its light all
 // around, hardly showed.
-const float SPELL_LAMP_REFERENCE = 1.8;
+const float SPELL_LAMP_REFERENCE = 2.5;
+const float SPELL_NEAREST = 1.2;
 float lamp_falloff(float d, float reach, float radius) {
 	float x = d / abs(reach);
 	x *= x;
 	x = clamp(1.0 - x * x, 0.0, 1.0);
-	float near = SPELL_LAMP_REFERENCE / max(d, radius);
+	float near = SPELL_LAMP_REFERENCE / max(d, max(radius, SPELL_NEAREST));
 	return x * x * near * near;
 }
 
@@ -462,12 +464,14 @@ float light_falloff(float d, float reach, float radius, bool lamp) {
 const float SPELL_SHADOW_SIZE = 0.15;
 const float SPELL_BODY_CLEARANCE = 0.8;
 // The effects' light is rolled off before its shadows take it away: past
-// EFFECT_LIGHT_KNEE (one spell lamp at full strength) towards EFFECT_LIGHT_ROOM
-// more. Lamps crowding one place (a wall of fire, several spells at once)
-// summed past what the composite can show, which then brought the light and
-// a figure's shadow in it to the same brightness: the shadow was gone.
-const float EFFECT_LIGHT_KNEE = 1.5;
-const float EFFECT_LIGHT_ROOM = 1.0;
+// EFFECT_LIGHT_KNEE (a spell's light a little over a metre away) towards
+// EFFECT_LIGHT_ROOM more. Lamps crowding one place (a wall of fire, several
+// spells at once) summed past what the composite can show, which then
+// brought the light and a figure's shadow in it to the same brightness: the
+// shadow was gone. The composite's own roll-off (shouldered) keeps them
+// apart now, so this only tames the crowds.
+const float EFFECT_LIGHT_KNEE = 3.0;
+const float EFFECT_LIGHT_ROOM = 3.0;
 
 // Light from the effects (fire, glows, spell lights) at a point: one light
 // chosen in proportion to what it would give here, then a ray towards a

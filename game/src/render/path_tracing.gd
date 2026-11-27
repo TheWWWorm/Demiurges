@@ -63,6 +63,18 @@ const GLOW_STRENGTH := 1.0
 ## to a very bright source (a hero's glowing weapon passes 8), which bleached
 ## the ground around it; capped, it still lights its surroundings.
 const GLOW_LIMIT := 2.5
+## A spell's patches closer than this are one light (ELGlowLights.merged,
+## whose own distance suits the raster's few lamps). Merged that far, a
+## summoning flash wrapped round a figure became one light inside the
+## figure's body, which lit neither that figure nor much past it; its patches
+## around the figure light it from every side, as in Demiurges 0.30.2.
+const SPELL_MERGE := 1.0
+## Brightest colour component one spell light may reach: a glow's own
+## colour up to this, as in Demiurges 0.30.2 (the raster lamps' energy for
+## the same glow is a good deal less, for want of a roll-off on bright
+## ground). The composite rolls the added light off by the surface's own
+## brightness (shouldered), so it no longer floods the snow.
+const SPELL_LIGHT_LIMIT := 2.5
 ## How far an effect's light carries, before its own size: two units are a
 ## metre, and a wall of fire lights the ground several metres around it, so
 ## a figure beside one stands in its light and throws a shadow from it.
@@ -837,7 +849,7 @@ func _effect_lights(delta := 0.0) -> PackedFloat32Array:
 	# One effect splits into patches; close ones are one source of light, as
 	# the raster lamps already see them. Fewer, stronger lights make the one
 	# shadow ray a pixel spends on them land on the light that matters.
-	glows = ELGlowLights.merged(glows)
+	glows = ELGlowLights.merged(glows, SPELL_MERGE)
 	var battle := glows.size()
 	# The map's glows light as lamps do, where they are (no battle ground to
 	# hang them over).
@@ -856,9 +868,9 @@ func _effect_lights(delta := 0.0) -> PackedFloat32Array:
 			# distance squared, as a lamp or a torch held beside a figure is:
 			# far brighter than daylight next to it, so it outshines the sun's
 			# shadows there and throws the figures' own shadows away from it,
-			# and faint a few metres off. It takes its raster lamp's energy
-			# for the same glow (ELGlowLights.CAST_ENERGY_LIMIT), given at
-			# SPELL_LAMP_REFERENCE in the ray program, and its reach. Hung over
+			# and fainter a few metres off. It gives its glow's colour (up to
+			# SPELL_LIGHT_LIMIT) at SPELL_LAMP_REFERENCE in the ray program,
+			# with its raster lamp's reach. Hung over
 			# the battle ground as the raster lamp is and falling off as gently,
 			# it lit the ground metres away as much as beside it and put each
 			# figure's shadow under its feet, so neither showed. Lit at several
@@ -867,8 +879,7 @@ func _effect_lights(delta := 0.0) -> PackedFloat32Array:
 			# brightness (shouldered). The ray program reads a spell's light
 			# from a negative extent; a spell's fire keeps a negative reach,
 			# which only marks it as light that moves on (EFFECT_CHANGE).
-			var energy := ELGlowLights.CAST_ENERGY_LIMIT * (1.0 - exp(-peak * ELGlowLights.ENERGY_RISE))
-			var lamp := colour / maxf(peak, 1e-4) * energy
+			var lamp := colour * minf(1.0, SPELL_LIGHT_LIMIT / maxf(peak, 1e-4))
 			var lamp_reach := ELGlowLights.SPELL_REACH + extent * 3.0
 			var at: Vector3 = glow[0]
 			spells.append([at, -extent, lamp, -lamp_reach if fire else lamp_reach])
