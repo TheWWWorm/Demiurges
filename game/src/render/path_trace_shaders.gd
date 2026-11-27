@@ -996,40 +996,37 @@ vec3 exposed(vec3 ratio) {
 	return ratio * (1.0 + SHADE_LIFT * (1.0 - q) * (1.0 - q));
 }
 
-// What light past the raster's (spell light, mostly) may add to a surface
-// depends on how bright its paint already is. Spell light is several times
-// daylight, which suits grass and stone: a ground at a fifth of white takes
-// it and stays well below white. Snow and ice stand near white in the raster,
-// and the same light drove them flat white, or flat in the spell's own colour
-// once only the brightness was rolled off: any shine strong enough flooded a
-// bright floor with its hue. The added light now rolls off as it nears
-// LIT_CEILING (in linear light, below the bloom threshold, so lit scenery
-// never blooms), and a surface already past it may still gain a
-// LIT_HEADROOM share, so a spell tints the snow it lights without burning it
-// out. The light keeps its hue; each channel then eases off below white, so
-// what is left of the texture stays. Shade (a ratio below 1) and metal pass
-// unchanged.
-const float LIT_CEILING = 0.8;
-const float LIT_HEADROOM = 0.15;
-const float LIT_KNEE = 0.5;
-const float CHANNEL_KNEE = 0.85;
+// A surface lit past its raster colour (spell light, mostly) rolls off above
+// SURFACE_KNEE (or its own painted brightness, if higher) towards
+// SURFACE_CEILING, as in Demiurges 0.30.2: grass, sand, stone and a figure's
+// skin take a spell's light nearly whole, and a figure beside a summoning
+// flash lights up on that side. Only the light added past the raster colour
+// is scaled down, so the texture and its colours stay under it (scaling the
+// whole colour, or easing each channel off below white, dulled the sunlit
+// sand of the desert arenas). Snow and ice stand near white in the raster:
+// with that room the same light burned them white and past the bloom
+// threshold, so paint brighter than BRIGHT_PAINT keeps only BRIGHT_ROOM over
+// its own brightness, and a spell tints it instead. Shade (a ratio below 1)
+// and metal pass unchanged.
+const float SURFACE_KNEE = 0.75;
+const float SURFACE_CEILING = 1.1;
+const vec2 BRIGHT_PAINT = vec2(0.5, 0.8);
+const float BRIGHT_ROOM = 0.06;
 vec3 shouldered(vec3 painted, vec3 ratio) {
-	vec3 excess = max(ratio - 1.0, vec3(0.0));
+	vec3 lit = painted * ratio;
 	vec3 base = painted * min(ratio, vec3(1.0));
-	vec3 added = painted * excess;
-	float e = dot(added, vec3(0.2126, 0.7152, 0.0722));
-	if (e <= 0.0) return base;
-	float y = dot(painted, vec3(0.2126, 0.7152, 0.0722));
-	float room = max(LIT_CEILING - y, LIT_HEADROOM * y);
-	// The first LIT_KNEE share of the room passes whole: rolled off from the
-	// first light on, a summoning flash beside a dark-armoured figure lost a
-	// third of what it gave, and the figure's side hardly lit.
-	float knee = room * LIT_KNEE, rest = max(room - knee, 1e-4);
-	float kept = e <= knee ? e : knee + rest * (1.0 - exp(-(e - knee) / rest));
-	vec3 lit = base + added * (kept / e);
-	vec3 over = max(lit - CHANNEL_KNEE, vec3(0.0));
-	float span = 1.0 - CHANNEL_KNEE;
-	return max(min(lit, vec3(CHANNEL_KNEE)) + span * (1.0 - exp(-over / span)), base);
+	const vec3 LUMA = vec3(0.2126, 0.7152, 0.0722);
+	float y = dot(lit, LUMA);
+	float paint = dot(painted, LUMA);
+	float knee = max(paint, SURFACE_KNEE);
+	float room = mix(max(SURFACE_CEILING - knee, 0.05), BRIGHT_ROOM, smoothstep(BRIGHT_PAINT.x, BRIGHT_PAINT.y, paint));
+	if (y <= knee) return lit;
+	float goal = knee + room * (1.0 - exp(-(y - knee) / room));
+	float floor_y = dot(base, LUMA);
+	float added = y - floor_y;
+	if (added <= 1e-5) return lit;
+	float kept = clamp((goal - floor_y) / added, 0.0, 1.0);
+	return base + (lit - base) * kept;
 }
 
 void main() {
