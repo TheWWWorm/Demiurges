@@ -4,6 +4,16 @@ Versions follow [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html)
 
 ## Unreleased
 
+## 0.30.3
+
+### Fixed
+
+- **Spell light with path tracing:** a spell now shines from where it glows and fades with distance as a real light does. Figures beside a spell throw a second shadow away from it, and close by it outshines the sun's shadows. A summoning flash lights the hero who cast it and the figures near it, as strongly as in 0.30.1, instead of leaving them dark.
+- **Colours under spell light with path tracing:** sand, grass, stone and the figures keep their colours under a spell's light instead of fading into a pale haze, and snow and ice take a tint instead of burning white.
+- **Spell light without path tracing:** spell lamps no longer burn the snow and ice arenas white; bright ground takes a tint, and the figures keep the spell's full light. The lamps hang above the figures and move smoothly as a spell's sparks regroup, so their light and the shadows they cast no longer jump.
+- **Hidden scenery:** with the camera zoomed out past the Dungeon hall's ring, only the stretch of its outer wall on the camera's side hides, and the far wall with its niches of graves stays in the picture. Wide scenery such as a city quarter or a ship's rigging hides only where it actually stands in front of the fight, so the far side's buildings no longer vanish.
+- **Options:** switching tabs right after the first start of a new version no longer freezes the game for a moment while it counts the prepared sharper art.
+
 ## 0.30.2
 
 ### Fixed
