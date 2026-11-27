@@ -75,6 +75,12 @@ const SPELL_MERGE := 1.0
 ## ground). The composite rolls the added light off by the surface's own
 ## brightness (shouldered), so it no longer floods the snow.
 const SPELL_LIGHT_LIMIT := 2.5
+## The same for a spell's large fire (ELCombatEffects.FIRE_PATCHES: a bolt, a
+## wall of fire, a summoning flash): as bright as Demiurges 0.30.2 gave it, a
+## colour up to 8 falling off as 4 / d squared, which is this at
+## SPELL_LAMP_REFERENCE (2.5) in the ray program. Capped as a lamp is, the flash
+## of a creature summoned a few metres off left its summoner's side unlit.
+const SPELL_FIRE_LIGHT_LIMIT := 5.12
 ## How far an effect's light carries, before its own size: two units are a
 ## metre, and a wall of fire lights the ground several metres around it, so
 ## a figure beside one stands in its light and throws a shadow from it.
@@ -879,7 +885,7 @@ func _effect_lights(delta := 0.0) -> PackedFloat32Array:
 			# brightness (shouldered). The ray program reads a spell's light
 			# from a negative extent; a spell's fire keeps a negative reach,
 			# which only marks it as light that moves on (EFFECT_CHANGE).
-			var lamp := colour * minf(1.0, SPELL_LIGHT_LIMIT / maxf(peak, 1e-4))
+			var lamp := colour * minf(1.0, (SPELL_FIRE_LIGHT_LIMIT if fire else SPELL_LIGHT_LIMIT) / maxf(peak, 1e-4))
 			var lamp_reach := ELGlowLights.SPELL_REACH + extent * 3.0
 			var at: Vector3 = glow[0]
 			spells.append([at, -extent, lamp, -lamp_reach if fire else lamp_reach])
