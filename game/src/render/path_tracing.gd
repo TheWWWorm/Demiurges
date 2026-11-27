@@ -58,27 +58,17 @@ const SUN_RADIUS := 0.02
 const LIGHT_LIMIT := 64
 ## Light given off per unit of summed particle colour, and its reach.
 const GLOW_STRENGTH := 1.0
-## Brightest colour component one effect light may reach. A dense aura sums
+## Brightest colour component one effect light may reach (not a spell's,
+## which lights as its raster lamp: see _effect_lights). A dense aura sums
 ## to a very bright source (a hero's glowing weapon passes 8), which bleached
 ## the ground around it; capped, it still lights its surroundings.
 const GLOW_LIMIT := 2.5
-## The same for a spell's passing fire (not the arena's own fires, not a
-## figure's glow): a wall of fire sweeping over a hero outshines the sun
-## beside it, and the hero's shadow swings away from it as it passes.
-const SPELL_GLOW_LIMIT := 8.0
-## A spell's patches closer than this are one light (ELGlowLights.merged):
-## a wall of fire stays a row of lights a patch apart, so the stretch nearest
-## a figure lights it and the figure's shadow falls straight away from it.
-## Joined at the raster lamps' distance it was four lights a few metres
-## apart, none of them behind the figure, and its shadow was a faint streak.
-const SPELL_MERGE := 1.0
 ## How far an effect's light carries, before its own size: two units are a
 ## metre, and a wall of fire lights the ground several metres around it, so
 ## a figure beside one stands in its light and throws a shadow from it.
 const GLOW_REACH := 9.0
-## A spell's large fire carries further: a bolt or a wall of fire lights the
-## ring around it, not only the figure it strikes.
-const SPELL_GLOW_REACH := 20.0
+## The battle ground's height (ELCombatEffects sets the raster lamps' floor so).
+const BATTLE_FLOOR := 0.0
 ## The arena's own fires and glows (steady sources) are its lamps, hung high
 ## and far apart: their light carries across the ring.
 const ARENA_GLOW_REACH := 14.0
@@ -145,6 +135,8 @@ var _verify_next := 0
 var _scan := 0.0
 ## The figures' own lights as last traced: [place, extent, colour, reach].
 var _figure_lights := []
+## A spell's lights as last traced, the same way (see _steady_lights).
+var _spell_lights := []
 var _label: Label
 var _label_time := 0.0
 # Main-thread snapshot state, cleared together with the GPU side on a reset.
@@ -844,37 +836,58 @@ func _effect_lights(delta := 0.0) -> PackedFloat32Array:
 	var found := []
 	var figure := []
 	var glows := _effects.glow_sources(ELCombatEffects.TRACED_SPELL_GLOW, false) if is_instance_valid(_effects) else []
-	if is_instance_valid(_adventure_effects): glows.append_array(_adventure_effects.glow_sources())
 	# One effect splits into patches; close ones are one source of light, as
 	# the raster lamps already see them. Fewer, stronger lights make the one
 	# shadow ray a pixel spends on them land on the light that matters.
-	glows = ELGlowLights.merged(glows, SPELL_MERGE)
-	for glow: Array in glows:
+	glows = ELGlowLights.merged(glows)
+	var battle := glows.size()
+	# The map's glows light as lamps do, where they are (no battle ground to
+	# hang them over).
+	if is_instance_valid(_adventure_effects): glows.append_array(ELGlowLights.merged(_adventure_effects.glow_sources()))
+	var spells := []
+	for index in glows.size():
+		var glow: Array = glows[index]
 		var colour: Vector3 = glow[2] * GLOW_STRENGTH
 		var peak := maxf(colour.x, maxf(colour.y, colour.z))
 		var steady: bool = glow.size() > 3 and glow[3]
 		var kind := int(glow[4]) if glow.size() > 4 else 0
-		# Only a spell's large fire (ELCombatEffects.FIRE_PATCHES) takes the
-		# fire's strength and falloff. The map's glows and a spell wrapped
-		# round one figure light as lamps do: given a wall of fire's strength
-		# that close, they bleached the figure and, flickering as their
-		# sprites regrouped, flashed on a mount's shell.
-		var fire: bool = not steady and kind == 0 and glow.size() > 5 and glow[5]
-		var limit := SPELL_GLOW_LIMIT if fire else GLOW_LIMIT
-		if peak > limit: colour *= limit / peak
 		var extent := clampf(glow[1], 0.1, 3.0)
-		var reach := (ARENA_GLOW_REACH if steady else (SPELL_GLOW_REACH if fire else GLOW_REACH)) + extent * 3.0
+		var fire: bool = not steady and kind == 0 and glow.size() > 5 and glow[5]
+		if not steady and kind == 0 and index < battle:
+			# A spell lights as its raster lamp does (ELGlowLights): the same
+			# energy for the same glow, the same reach and gentle falloff, hung
+			# as high over the battle ground, traced. Lit by its own rules
+			# (several times daylight at the glow, falling off with the
+			# distance squared, from a figure's waist or lower), a spell flooded
+			# the snow it stood on, threw no shadow from a figure standing in
+			# it, and grazed the ground a few metres off, where a figure beside
+			# it throws its shadow, so faintly that the shadow hardly showed.
+			# The ray program reads a spell lamp from a negative extent (see
+			# SPELL_LAMP_DECAY there); a spell's fire keeps a negative reach,
+			# which only marks it as light that moves on (EFFECT_CHANGE).
+			var energy := ELGlowLights.CAST_ENERGY_LIMIT * (1.0 - exp(-peak * ELGlowLights.ENERGY_RISE))
+			var lamp := colour / maxf(peak, 1e-4) * energy
+			var lamp_reach := ELGlowLights.SPELL_REACH + extent * 3.0
+			var hung: Vector3 = glow[0]
+			hung.y = maxf(hung.y, BATTLE_FLOOR + ELGlowLights.SPELL_LAMP_HEIGHT)
+			spells.append([hung, -extent, lamp, -lamp_reach if fire else lamp_reach])
+			continue
+		if peak > GLOW_LIMIT: colour *= GLOW_LIMIT / peak
+		var reach := (ARENA_GLOW_REACH if steady else GLOW_REACH) + extent * 3.0
 		# A figure's own glow (a Kinet hero's blade and wings) lights at the
 		# raster lamps' share and reach: at a spell's strength it lifted the
 		# snow of the Kinet arenas into a white haze around the hero.
 		if kind > 0:
-			colour *= ELGlowLights.figure_share(kind)
+			# The same energy as the figure's raster lamp (ELGlowLights): its
+			# share of a spell's lamp, never more than a spell of its colour.
+			var weapon := kind == 1
+			var energy := (ELGlowLights.SPELL_ENERGY_LIMIT if weapon else ELGlowLights.ENERGY_LIMIT) * (1.0 - exp(-maxf(peak, 0.0) * ELGlowLights.ENERGY_RISE))
+			colour = glow[2] / maxf(peak, 1e-4) * energy * ELGlowLights.figure_share(kind)
 			reach *= ELGlowLights.figure_reach(kind)
 			figure.append([glow[0], extent, colour, reach])
 			continue
-		# A spell's fire falls off with the distance squared (the tracer reads
-		# a negative reach so): see SPELL_FALLOFF_DISTANCE in the ray program.
-		found.append([glow[0], extent, colour, -reach if fire else reach])
+		found.append([glow[0], extent, colour, reach])
+	found.append_array(_steady_lights(spells, _spell_lights, delta, SPELL_SETTLING, SPELL_FADE))
 	found.append_array(_steady_figure_lights(figure, delta))
 	var authored := []
 	if is_instance_valid(_effects):
@@ -899,31 +912,43 @@ func _effect_lights(delta := 0.0) -> PackedFloat32Array:
 		data.append_array([p.x, p.y, p.z, light[1], c.x, c.y, c.z, light[3]])
 	return data
 
-## A figure's own lights, steadied as the raster lamps are (ELGlowLights): a
-## Kinet hero's wing sparkles regroup from frame to frame and leave a gap of a
-## few frames each time the idle clip starts over, and traced as they came,
-## the wings' light hopped about and blinked out. Each light eases towards
-## where its glow now stands, and fades over FIGURE_FADE when it is gone.
+## Effect lights, steadied as the raster lamps are (ELGlowLights): a Kinet
+## hero's wing sparkles regroup from frame to frame and leave a gap of a few
+## frames each time the idle clip starts over, and a spell's glowing patches
+## regroup as its sparks come and go. Traced as they came, the light hopped
+## about and blinked out, and the shadows it threw swung about with it. Each
+## light eases towards where its glow now stands over `smoothing` seconds and
+## fades over `fade` when it is gone. `held` is the list as last traced,
+## updated in place.
 const FIGURE_MATCH := 1.5
+## A spell's lights ease and fade as its raster lamp does
+## (ELGlowLights.SPELL_SETTLING).
+const SPELL_SETTLING := ELGlowLights.SPELL_SETTLING
+const SPELL_FADE := 0.25
 func _steady_figure_lights(lights: Array, delta: float) -> Array:
-	var blend := 1.0 - exp(-delta / ELGlowLights.SMOOTHING) if delta > 0.0 else 1.0
-	var slow := 1.0 - exp(-delta / ELGlowLights.FIGURE_FADE) if delta > 0.0 else 1.0
-	var left := _figure_lights.duplicate()
+	return _steady_lights(lights, _figure_lights, delta, ELGlowLights.SMOOTHING, ELGlowLights.FIGURE_FADE)
+
+func _steady_lights(lights: Array, held: Array, delta: float, smoothing: float, fade: float) -> Array:
+	var blend := 1.0 - exp(-delta / smoothing) if delta > 0.0 else 1.0
+	var slow := 1.0 - exp(-delta / fade) if delta > 0.0 else 1.0
+	var left := held.duplicate()
 	var result := []
 	for light: Array in lights:
 		var nearest := -1
 		for i in left.size():
+			# A spell's fire (negative reach) only follows a fire.
+			if (left[i][3] < 0.0) != (light[3] < 0.0): continue
 			var d: float = left[i][0].distance_to(light[0])
 			if d < FIGURE_MATCH and (nearest < 0 or d < left[nearest][0].distance_to(light[0])): nearest = i
 		if nearest >= 0:
-			var held: Array = left[nearest]
+			var last: Array = left[nearest]
 			left.remove_at(nearest)
-			light = [held[0].lerp(light[0], blend), lerpf(held[1], light[1], blend), held[2].lerp(light[2], blend), lerpf(held[3], light[3], blend)]
+			light = [last[0].lerp(light[0], blend), lerpf(last[1], light[1], blend), last[2].lerp(light[2], blend), lerpf(last[3], light[3], blend)]
 		result.append(light)
-	for held: Array in left:
-		var colour: Vector3 = held[2].lerp(Vector3.ZERO, slow)
-		if maxf(colour.x, maxf(colour.y, colour.z)) > 0.01: result.append([held[0], held[1], colour, held[3]])
-	_figure_lights = result
+	for last: Array in left:
+		var colour: Vector3 = last[2].lerp(Vector3.ZERO, slow)
+		if maxf(colour.x, maxf(colour.y, colour.z)) > 0.01: result.append([last[0], last[1], colour, last[3]])
+	held.assign(result)
 	return result
 
 func _secondary_lights() -> PackedFloat32Array:
@@ -1198,6 +1223,7 @@ static func _authored_layer(texture: Texture2D, image: Image) -> Image:
 func _reset() -> void:
 	_texture_revision = ELIconUpscale.texture_revision
 	_figure_lights.clear()
+	_spell_lights.clear()
 	_slots.clear()
 	_layers.clear()
 	_next_layer = 0

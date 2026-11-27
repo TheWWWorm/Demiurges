@@ -22,6 +22,10 @@ const ENERGY_LIMIT := 0.9
 ## A passing spell (and a hero's cast) may give more: held to the standing
 ## fires' limit, a bolt or a cast hardly showed on the ground beside it.
 const SPELL_ENERGY_LIMIT := 1.5
+## A spell's own lamp goes further still. At SPELL_ENERGY_LIMIT it matched a
+## glowing weapon's: two staffs beside the cast filled its shadow in, and the
+## figures threw none from it.
+const CAST_ENERGY_LIMIT := 7.0
 const ENERGY_RISE := 0.2
 ## A lamp's reach: this, plus three times the patch's own extent. Two units
 ## are a metre, so a fire lights the ground a few metres around it.
@@ -86,11 +90,36 @@ const SMOOTHING := 0.08
 const FIGURE_FADE := 0.5
 
 ## A continuing spell keeps its shadow unless another lamp is substantially
-## brighter. Small particle flickers must not trade the shadow every frame.
-const SHADOW_SWITCH_RATIO := 1.25
+## brighter, and only after holding it SHADOW_HOLD seconds. Small particle
+## flickers must not trade the shadow every frame: at a quarter brighter
+## and no hold, a battle's shadow hopped from lamp to lamp a few dozen
+## times, each time swinging every figure's shadow round at once.
+const SHADOW_SWITCH_RATIO := 1.6
+const SHADOW_HOLD := 0.75
+## A shadow handed on fades out over this long (seconds) and the next fades
+## in, rather than the figures' shadows snapping to a new direction.
+const SHADOW_FADE := 0.2
+## Spell lamps hang at least this high over `floor_height` (two units are a
+## metre). A spell's glowing patches sit at a figure's waist or lower, often
+## inside it: a lamp there, below the top of the figure beside it, threw that
+## figure's shadow out to the end of its reach, across half the ring. Just
+## over a figure's head, a figure beside the spell throws a shadow about as
+## long as it is tall. Hung higher (6), the shadow fell under the figure and
+## hid from the overhead camera.
+const SPELL_LAMP_HEIGHT := 4.5
+## A spell lamp eases to where its glow now stands over this long (seconds):
+## its patches regroup as the sparks come and go, and the lamp followed them
+## up to a metre in one frame, dragging the shadow with it.
+const SPELL_SETTLING := 0.3
 
+## The ground the spell lamps hang over (the battle arena's, set by
+## ELCombatEffects); NAN leaves them where their glow is.
+var floor_height := NAN
 var _pool: Array[OmniLight3D] = []
 var _shadow_lamp: OmniLight3D
+## The lamp that should cast next, while _shadow_lamp's shadow fades out.
+var _shadow_next: OmniLight3D
+var _shadow_held := 0.0
 
 ## Shows `sources` ([[world centre, extent, summed linear colour, steady,
 ## attached], ...], as the effects' glow_sources give them), merged into
@@ -120,6 +149,7 @@ func show_sources(sources: Array, delta: float) -> void:
 	if sources.size() > LIMIT - reserved: sources.resize(LIMIT - reserved)
 	var blend := 1.0 - exp(-delta / SMOOTHING) if delta > 0.0 else 1.0
 	var slow := 1.0 - exp(-delta / FIGURE_FADE) if delta > 0.0 else 1.0
+	var settle := 1.0 - exp(-delta / SPELL_SETTLING) if delta > 0.0 else 1.0
 	var free: Array[OmniLight3D] = _pool.duplicate()
 	# Match every continuing source before recycling a slot. Otherwise a new,
 	# bright spell could steal the lamp still needed by another nearby source.
@@ -129,7 +159,7 @@ func show_sources(sources: Array, delta: float) -> void:
 		var distance := 4.0
 		for candidate: OmniLight3D in free:
 			if not candidate.visible or int(candidate.get_meta(&"source_rank", -1)) != _rank(source): continue
-			var gap := candidate.global_position.distance_squared_to(source[0])
+			var gap := candidate.global_position.distance_squared_to(_hung(source))
 			if gap <= distance:
 				nearest = candidate
 				distance = gap
@@ -141,7 +171,8 @@ func show_sources(sources: Array, delta: float) -> void:
 		var attached := _attached(source)
 		var colour: Vector3 = source[2]
 		var peak := maxf(colour.x, maxf(colour.y, colour.z))
-		var centre: Vector3 = source[0]
+		var centre := _hung(source)
+		var spell := not _steady(source)
 		var lamp: OmniLight3D = matches[index]
 		var fresh := lamp == null
 		if fresh:
@@ -166,7 +197,7 @@ func show_sources(sources: Array, delta: float) -> void:
 		var tint := colour / peak
 		var wanted := Color(tint.x, tint.y, tint.z).linear_to_srgb()
 		var weapon := attached and int(source[4]) == 1
-		var energy := (ENERGY_LIMIT if _steady(source) and not weapon else SPELL_ENERGY_LIMIT) * (1.0 - exp(-peak * ENERGY_RISE))
+		var energy := energy_limit(source) * (1.0 - exp(-peak * ENERGY_RISE))
 		var reach := (REACH if _steady(source) else SPELL_REACH) + clampf(float(source[1]), 0.1, 3.0) * 3.0
 		if attached:
 			energy *= figure_share(int(source[4]))
@@ -180,18 +211,21 @@ func show_sources(sources: Array, delta: float) -> void:
 		if fresh:
 			# A recycled lamp belongs to a new source. Do not drag its old
 			# colour/position or shadow across the intervening ground.
-			if lamp == _shadow_lamp: _shadow_lamp = null
+			if lamp == _shadow_lamp or lamp == _shadow_next:
+				lamp.shadow_enabled = false
+				if lamp == _shadow_lamp: _shadow_lamp = null
+				if lamp == _shadow_next: _shadow_next = null
 			lamp.global_position = centre
 			lamp.light_color = wanted
 			lamp.light_energy = energy * blend
 			lamp.omni_range = reach
 			lamp.visible = true
 		else:
-			lamp.global_position = lamp.global_position.lerp(centre, blend)
+			lamp.global_position = lamp.global_position.lerp(centre, settle if spell else blend)
 			lamp.light_color = lamp.light_color.lerp(wanted, blend)
 			lamp.light_energy = lerpf(lamp.light_energy, energy, blend)
 			lamp.omni_range = lerpf(lamp.omni_range, reach, blend)
-		if not _steady(source): shadow_candidates.append(lamp)
+		if spell: shadow_candidates.append(lamp)
 	for lamp: OmniLight3D in free:
 		if not lamp.visible: continue
 		var figure: bool = lamp.get_meta(&"figure", false)
@@ -199,7 +233,20 @@ func show_sources(sources: Array, delta: float) -> void:
 		if lamp.light_energy < 0.01:
 			lamp.visible = false
 			lamp.set_meta(&"figure", false)
-	_sync_shadows(shadow_candidates)
+	_sync_shadows(shadow_candidates, delta)
+
+## The most a source's lamp gives: a spell CAST_ENERGY_LIMIT, a glowing
+## weapon SPELL_ENERGY_LIMIT, anything else standing ENERGY_LIMIT.
+static func energy_limit(source: Array) -> float:
+	if not _steady(source): return CAST_ENERGY_LIMIT
+	return SPELL_ENERGY_LIMIT if _attached(source) and int(source[4]) == 1 else ENERGY_LIMIT
+
+
+## Where a source's lamp hangs: a spell's no lower than SPELL_LAMP_HEIGHT.
+func _hung(source: Array) -> Vector3:
+	var centre: Vector3 = source[0]
+	if not _steady(source) and not is_nan(floor_height): centre.y = maxf(centre.y, floor_height + SPELL_LAMP_HEIGHT)
+	return centre
 
 static func _retire_before(a: OmniLight3D, b: OmniLight3D) -> bool:
 	var a_figure: bool = a.get_meta(&"figure", false)
@@ -207,17 +254,40 @@ static func _retire_before(a: OmniLight3D, b: OmniLight3D) -> bool:
 	if a_figure != b_figure: return not a_figure
 	return a.light_energy < b.light_energy
 
-func _sync_shadows(candidates: Array[OmniLight3D]) -> void:
+## One lamp casts (SHADOW_LAMPS). A delta of 0 hands the shadow on at once.
+func _sync_shadows(candidates: Array[OmniLight3D], delta := 0.0) -> void:
 	var best: OmniLight3D = null
 	if shadows_available() and SHADOW_LAMPS > 0:
 		for lamp: OmniLight3D in candidates:
 			if best == null or lamp.light_energy > best.light_energy: best = lamp
-		if best != null and _shadow_lamp != null and candidates.has(_shadow_lamp):
-			if best.light_energy <= _shadow_lamp.light_energy * SHADOW_SWITCH_RATIO: best = _shadow_lamp
-	_shadow_lamp = best
+		var holding := _shadow_lamp if _shadow_next == null else _shadow_next
+		if best != null and holding != null and candidates.has(holding):
+			var settled := delta <= 0.0 or _shadow_held >= SHADOW_HOLD
+			if not settled or best.light_energy <= holding.light_energy * SHADOW_SWITCH_RATIO: best = holding
+	_shadow_held += delta
+	if best != (_shadow_lamp if _shadow_next == null else _shadow_next): _shadow_held = 0.0
+	var step := 1.0 if delta <= 0.0 else delta / SHADOW_FADE
+	if best != _shadow_lamp and _shadow_lamp != null and _shadow_lamp.visible and _shadow_lamp.shadow_enabled:
+		# Fade the current shadow out first; the next one waits.
+		_shadow_next = best
+		_shadow_lamp.shadow_opacity = maxf(_shadow_lamp.shadow_opacity - step, 0.0)
+		if _shadow_lamp.shadow_opacity <= 0.0:
+			_shadow_lamp.shadow_enabled = false
+			_shadow_lamp = best
+			_shadow_next = null
+			if best != null:
+				best.shadow_opacity = 0.0 if delta > 0.0 else 1.0
+				best.shadow_enabled = true
+	else:
+		if best != _shadow_lamp and best != null:
+			best.shadow_opacity = 0.0 if delta > 0.0 else 1.0
+		_shadow_lamp = best
+		_shadow_next = null
+		if best != null:
+			best.shadow_enabled = true
+			best.shadow_opacity = minf(best.shadow_opacity + step, 1.0)
 	for lamp: OmniLight3D in _pool:
-		var wants_shadow := lamp == best
-		if lamp.shadow_enabled != wants_shadow: lamp.shadow_enabled = wants_shadow
+		if lamp != _shadow_lamp and lamp.shadow_enabled: lamp.shadow_enabled = false
 
 static func _rank(source: Array) -> int:
 	if _attached(source): return 1

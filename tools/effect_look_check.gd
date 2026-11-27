@@ -149,7 +149,7 @@ void fragment() { ALPHA = sprite_add(1.0); }
 		if lamp.visible and (brightest == null or lamp.light_energy > brightest.light_energy): brightest = lamp
 		strongest = maxf(strongest, lamp.light_energy)
 		if lamp.shadow_enabled: shadows += 1
-	check(lights.lit() == ELGlowLights.LIMIT and strongest <= ELGlowLights.SPELL_ENERGY_LIMIT + 0.001 and strongest > 0.5, "at most %d lamps are lit, none past its limit" % ELGlowLights.LIMIT)
+	check(lights.lit() == ELGlowLights.LIMIT and strongest <= ELGlowLights.CAST_ENERGY_LIMIT + 0.001 and strongest > 0.5, "at most %d lamps are lit, none past its limit" % ELGlowLights.LIMIT)
 	var wanted := ELGlowLights.SHADOW_LAMPS if ELGlowLights.shadows_available() else 0
 	check(shadows == wanted and (wanted == 0 or (brightest != null and brightest.shadow_enabled)), "only the brightest lamp casts a shadow, and none where the renderer cannot")
 	# Patches regroup from frame to frame; lamps on their way out never push
@@ -251,7 +251,8 @@ func _particle_shadows() -> void:
 		ELAdventureEffects._kept[ELAdventureEffects.cache_space(profile) + ":" + path] = file
 		var material := ShaderMaterial.new()
 		material.set_shader_parameter("atlas", atlas)
-		map._materials["%s#%d|%s|%d|%d|%s" % [profile.id, profile.generation, file.texture, file.columns, file.rows, file.additive]] = material
+		# The map's own material key (ELAdventureEffects._material).
+		map._materials["%d|%d|%s|%d|%d|%s" % [profile.get_instance_id(), profile.generation, file.texture.get_basename(), file.columns, file.rows, file.additive]] = material
 		map.start(path, {"file": path, "x": 0.0, "y": 0.0, "z": 0.0}, 0.0, true)
 	var smoke := _twin(map.effects.get("smoke.pfx", {}))
 	check(smoke != null and ELParticleFile.twin_casts(smoke) and smoke.visible and smoke.cast_shadow == GeometryInstance3D.SHADOW_CASTING_SETTING_SHADOWS_ONLY, "map smoke gets a shadow-only twin")

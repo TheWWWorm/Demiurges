@@ -40,9 +40,15 @@ var _closeup_faces: Dictionary = {}
 ## Padding for near-plane intersections and shots that graze scenery.
 const CAMERA_CLEARANCE := 0.25
 ## An enclosed hall's tall shell (the Dungeon's outer wall and its pillars),
-## hidden while the camera stands beyond the ring; made on first use.
-var _hall_shell: Array[ELModel] = []
-var _hall_shell_found := false
+## cut into sectors around the hall's centre when the arena is built. While
+## the camera stands beyond the ring only the sectors on its side hide, like
+## the arches; the far wall, with its niches of graves, stays in the picture.
+var _hall_shell: Array[MeshInstance3D] = []
+## Sectors the outer wall is cut into (twice the Dungeon's twelve arches).
+const HALL_SHELL_SECTORS := 24
+## A sector's middle in arena space (its mesh keeps the whole wall's
+## vertices, so its bounds are the whole wall's).
+const SECTOR_MIDDLE := &"hall_sector_middle"
 ## Secondary scenery at the ring's edge, found on first use.
 var _edge_scenery: Array[Dictionary] = []
 var _edge_scenery_found := false
@@ -156,6 +162,7 @@ func build(profile: ELProfile, arena_id := "Green.001") -> bool:
 		if i < types.size():
 			if types[i] == "H": _camera_obstacles.append(model)
 			if types[i] == "S": _secondary_scenery.append(model)
+	_build_hall_shell()
 	_build_background(profile)
 	var environment := WorldEnvironment.new()
 	var env := Environment.new()
@@ -629,7 +636,9 @@ func clear_camera_view(camera_position: Vector3, target: Vector3, framed: Array 
 	var ring := camera_radius()
 	var outside := Vector2(camera_position.x, camera_position.z)
 	var beyond := is_finite(ring) and outside.length() > ring
-	for shell: ELModel in _hall_shell_models(): shell.visible = not beyond
+	for sector: MeshInstance3D in _hall_shell:
+		var middle: Vector3 = global_transform * (sector.get_meta(SECTOR_MIDDLE) as Vector3)
+		sector.visible = not (beyond and absf(Vector2(middle.x, middle.z).angle_to(outside)) < NEAR_SIDE_ANGLE)
 	# A gate at the ring's edge hides whenever the camera stands beyond it on
 	# its side: the view passes over its top but it still covers the fight.
 	for gate: Dictionary in _edge_scenery_models():
@@ -649,12 +658,19 @@ func clear_camera_view(camera_position: Vector3, target: Vector3, framed: Array 
 		if bearing.length() > 0.01 and absf(bearing.angle_to(outside)) < NEAR_SIDE_ANGLE:
 			_near_side[child] = true
 			if beyond: obscures = true
+		# A box crossing the line of sight is only a hint: a city quarter or a
+		# ship's rigging is one wide mesh whose box can take in the middle of
+		# the arena from every side. It hides only if its triangles stand
+		# across that line or in front of a place of the fight; otherwise the
+		# far side's buildings vanished whenever the camera looked at them.
+		var focus := target + Vector3(0, 1.5, 0)
 		for part: MeshInstance3D in child.parts.values():
-			if part.mesh == null:
+			if obscures or part.mesh == null:
 				continue
 			var box: AABB = part.global_transform * part.mesh.get_aabb()
-			if box.size.y > 2.0 and box.intersects_segment(camera_position, target + Vector3(0, 1.5, 0)) != null:
-				obscures = true
+			if box.size.y <= 2.0 or box.intersects_segment(camera_position, focus) == null: continue
+			var to_local := part.global_transform.affine_inverse()
+			obscures = _camera_ray_hits(part, to_local * camera_position, to_local * focus) or _part_covers_field(part, camera_position)
 		if not obscures and _hanging_models().has(child): obscures = _covers_field(child, camera_position)
 		child.visible = not obscures
 
@@ -684,7 +700,7 @@ func clear_camera_view(camera_position: Vector3, target: Vector3, framed: Array 
 ## first-person walker stands among them and should see them all. The next
 ## clear_camera_view hides them again for the battle view.
 func show_all_scenery() -> void:
-	for shell: ELModel in _hall_shell_models(): shell.visible = true
+	for sector: MeshInstance3D in _hall_shell: sector.visible = true
 	for gate: Dictionary in _edge_scenery_models(): (gate.model as ELModel).visible = true
 	for child: ELModel in _camera_obstacles:
 		if is_instance_valid(child): child.visible = true
@@ -714,6 +730,12 @@ func _hanging_models() -> Dictionary:
 ## Whether a model's triangles stand between the camera and a place of the
 ## fight: either hero's, or a creature's at home or on the front line.
 func _covers_field(model: ELModel, camera_position: Vector3) -> bool:
+	for part: MeshInstance3D in model.parts.values():
+		if part.mesh != null and _part_covers_field(part, camera_position): return true
+	return false
+
+## Whether one part's triangles stand between the camera and a place of the fight.
+func _part_covers_field(part: MeshInstance3D, camera_position: Vector3) -> bool:
 	if _field_points.is_empty():
 		var places: Array[Vector3] = [ELMeleePlayback.hero_position(0), ELMeleePlayback.hero_position(1)]
 		for side in 2:
@@ -723,12 +745,10 @@ func _covers_field(model: ELModel, camera_position: Vector3) -> bool:
 		for place: Vector3 in places:
 			for height: float in FIELD_HEIGHTS:
 				_field_points.append(Vector3(place.x, ground_height(place.x, place.z) + height, place.z))
-	for part: MeshInstance3D in model.parts.values():
-		if part.mesh == null: continue
-		var to_local := part.global_transform.affine_inverse()
-		var eye := to_local * camera_position
-		for point: Vector3 in _field_points:
-			if _camera_ray_hits(part, eye, to_local * point): return true
+	var to_local := part.global_transform.affine_inverse()
+	var eye := to_local * camera_position
+	for point: Vector3 in _field_points:
+		if _camera_ray_hits(part, eye, to_local * point): return true
 	return false
 
 ## The boxes of banks and trees can cover much of the arena. Test their
@@ -778,18 +798,75 @@ func _edge_scenery_models() -> Array[Dictionary]:
 	return _edge_scenery
 
 ## The tall pieces of an enclosed hall that are not its arches: from beyond
-## the ring their pillars stand across the picture.
-func _hall_shell_models() -> Array[ELModel]:
-	if _hall_shell_found: return _hall_shell
-	_hall_shell_found = true
-	if not is_finite(camera_radius()): return _hall_shell
+## the ring their pillars stand across the picture. The outer wall is one
+## mesh all the way round, so each tall part is cut into sectors by the
+## bearing of its triangles from the centre; hiding the whole wall took the
+## far side's niches with it whenever the camera zoomed out past the ring.
+func _build_hall_shell() -> void:
+	if not is_finite(camera_radius()): return
 	for model: ELModel in _solid_models:
 		if model in _camera_obstacles or model == _ground or not is_instance_valid(model): continue
-		for part: MeshInstance3D in model.parts.values():
-			if part.mesh != null and (part.global_transform * part.mesh.get_aabb()).size.y > 2.0:
-				_hall_shell.append(model)
-				break
-	return _hall_shell
+		for part_name: String in model.parts.keys():
+			var part: MeshInstance3D = model.parts[part_name]
+			var to_arena := model.transform * part.transform
+			if part.mesh == null or (to_arena * part.mesh.get_aabb()).size.y <= 2.0: continue
+			var sectors := _shell_sectors(part, to_arena)
+			if sectors.is_empty(): continue
+			var at := _closeup_parts.find(part)
+			if at >= 0: _closeup_parts.remove_at(at)
+			model.parts.erase(part_name)
+			for k in sectors.size():
+				var piece := sectors[k]
+				var piece_name := "%s_%d" % [part_name, k]
+				piece.name = piece_name
+				part.add_sibling(piece)
+				model.parts[piece_name] = piece
+				_closeup_parts.append(piece)
+				_hall_shell.append(piece)
+			part.get_parent().remove_child(part)
+			part.queue_free()
+
+## A tall shell part as MeshInstance3D sectors sharing its vertices and look.
+func _shell_sectors(part: MeshInstance3D, to_arena: Transform3D) -> Array[MeshInstance3D]:
+	var built: Array[MeshInstance3D] = []
+	var source := part.mesh
+	if not source is ArrayMesh: return built
+	var mesh_sectors: Array[ArrayMesh] = []
+	var sums: Array[Vector3] = []
+	var counts := PackedInt32Array()
+	counts.resize(HALL_SHELL_SECTORS)
+	for k in HALL_SHELL_SECTORS:
+		mesh_sectors.append(ArrayMesh.new())
+		sums.append(Vector3.ZERO)
+	for surface in source.get_surface_count():
+		if source.surface_get_primitive_type(surface) != Mesh.PRIMITIVE_TRIANGLES: return []
+		var arrays := source.surface_get_arrays(surface)
+		var vertices: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+		var indices: PackedInt32Array = arrays[Mesh.ARRAY_INDEX] if arrays[Mesh.ARRAY_INDEX] != null else PackedInt32Array()
+		if indices.is_empty():
+			indices.resize(vertices.size())
+			for v in vertices.size(): indices[v] = v
+		var split: Array[PackedInt32Array] = []
+		split.resize(HALL_SHELL_SECTORS)
+		for t in range(0, indices.size() - 2, 3):
+			var centre := to_arena * ((vertices[indices[t]] + vertices[indices[t + 1]] + vertices[indices[t + 2]]) / 3.0)
+			var k := int(fposmod(atan2(centre.z, centre.x) / TAU, 1.0) * HALL_SHELL_SECTORS) % HALL_SHELL_SECTORS
+			split[k].append_array([indices[t], indices[t + 1], indices[t + 2]])
+			sums[k] += centre
+			counts[k] += 1
+		for k in HALL_SHELL_SECTORS:
+			if split[k].is_empty(): continue
+			var piece := arrays.duplicate()
+			piece[Mesh.ARRAY_INDEX] = split[k]
+			mesh_sectors[k].add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, piece)
+			mesh_sectors[k].surface_set_material(mesh_sectors[k].get_surface_count() - 1, source.surface_get_material(surface))
+	for k in HALL_SHELL_SECTORS:
+		if mesh_sectors[k].get_surface_count() == 0: continue
+		var piece := part.duplicate() as MeshInstance3D
+		piece.mesh = mesh_sectors[k]
+		piece.set_meta(SECTOR_MIDDLE, sums[k] / counts[k])
+		built.append(piece)
+	return built
 
 func _add_model(profile: ELProfile, model_name: String, texture_name: String, backdrop := false) -> ELModel:
 	var model := ELModel.new()

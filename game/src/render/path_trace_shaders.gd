@@ -423,28 +423,42 @@ void basis(vec3 n, out vec3 t, out vec3 b) {
 	b = vec3(c, s + n.y * n.y * a, -n.y);
 }
 
-// Point-light falloff as Godot's: a smooth window to the reach, over distance.
-// A negative reach (a spell's fire) falls off with the distance squared
-// instead, matching the other at SPELL_FALLOFF_DISTANCE: the stretch of a
-// wall of fire nearest a figure outshines the rest of it, and the sun beside
-// it, so the figure's shadow falls straight away from that stretch.
-const float SPELL_FALLOFF_DISTANCE = 4.0;
-// Nearer than this it gives no more: a low fire (a stream along the ground,
-// an explosion's sparks) burned white spots into the ground beneath it.
-const float SPELL_NEAREST = 1.2;
-// Past this the fire falls off with the distance alone again: squared all
-// the way out, a bolt lit the creature it struck and left the ring around it
-// as dark as before.
-const float SPELL_TAIL_DISTANCE = 6.0;
-float light_falloff(float d, float reach, float radius) {
-	bool square = reach < 0.0;
-	reach = abs(reach);
-	float x = d / reach;
+// A spell's lamp (a negative extent) falls off as the raster lamp it stands
+// for (ELGlowLights.FALLOFF, Godot's omni attenuation): a window to its
+// reach over the distance to that power.
+const float SPELL_LAMP_DECAY = 0.35;
+float lamp_falloff(float d, float reach, float radius) {
+	float x = d / abs(reach);
 	x *= x;
 	x = clamp(1.0 - x * x, 0.0, 1.0);
-	float r = max(d, square ? max(radius, SPELL_NEAREST) : radius);
-	return x * x * (square ? SPELL_FALLOFF_DISTANCE / (r * min(r, SPELL_TAIL_DISTANCE)) : 1.0 / r);
+	return x * x * pow(max(d, radius), -SPELL_LAMP_DECAY);
 }
+
+// Any other effect light falls off as Godot's point lights: a smooth window
+// to the reach, over distance. (A negative reach only marks a spell's fire as
+// light that moves on, see EFFECT_CHANGE.)
+float light_falloff(float d, float reach, float radius, bool lamp) {
+	if (lamp) return lamp_falloff(d, reach, radius);
+	float x = d / abs(reach);
+	x *= x;
+	x = clamp(1.0 - x * x, 0.0, 1.0);
+	return x * x / max(d, radius);
+}
+
+// A spell's lamp (a negative extent, see ELPathTracing._effect_lights) hangs
+// over its glow as the raster lamp does, and is nearly a point as that lamp is
+// (SPELL_SHADOW_SIZE across, not the glow's extent): spread over a glow a
+// metre or more across, or even over a cube a metre wide, the shadow of a
+// figure beside it blurred to a faint smudge where the raster one is a clear
+// streak.
+const float SPELL_SHADOW_SIZE = 0.15;
+// The effects' light is rolled off before its shadows take it away: past
+// EFFECT_LIGHT_KNEE (one spell lamp at full strength) towards EFFECT_LIGHT_ROOM
+// more. Lamps crowding one place (a wall of fire, several spells at once)
+// summed past what the composite can show, which then brought the light and
+// a figure's shadow in it to the same brightness: the shadow was gone.
+const float EFFECT_LIGHT_KNEE = 1.5;
+const float EFFECT_LIGHT_ROOM = 3.0;
 
 // Light from the effects (fire, glows, spell lights) at a point: one light
 // chosen in proportion to what it would give here, then a ray towards a
@@ -456,14 +470,21 @@ vec3 effect_light(vec3 p, vec3 n, bool shadowed, inout uint state, inout float l
 	uint count = frame.counts.x;
 	if (count == 0u) return vec3(0.0);
 	float total = 0.0, chosen_weight = 0.0;
+	// What the lights give here unshadowed (their brightness by the cosine
+	// at their centres), for the roll-off. The choosing weight leans towards
+	// a light the point faces only edgewise, so it runs well past this.
+	float expected = 0.0;
 	uint chosen = 0u;
 	for (uint i = 0u; i < count; i++) {
 		vec4 place = lights[i * 2u], colour = lights[i * 2u + 1u];
+		float extent = abs(place.w);
 		vec3 to = place.xyz - p;
 		float d = length(to);
 		float facing = dot(n, to) / max(d, 1e-4);
-		float w = dot(colour.rgb, vec3(0.3, 0.6, 0.1)) * light_falloff(d, colour.w, place.w) * max(facing + place.w / max(d, place.w), 0.0);
+		float bright = dot(colour.rgb, vec3(0.3, 0.6, 0.1)) * light_falloff(d, colour.w, extent, place.w < 0.0);
+		float w = bright * max(facing + extent / max(d, extent), 0.0);
 		if (w <= 0.0) continue;
+		expected += bright * max(facing, 0.0);
 		total += w;
 		// Only a spell's fire moves on (see EFFECT_CHANGE): the arena's torches
 		// and a figure's glow flicker in place, and counted, they cut the
@@ -473,15 +494,19 @@ vec3 effect_light(vec3 p, vec3 n, bool shadowed, inout uint state, inout float l
 	}
 	if (total <= 0.0) return vec3(0.0);
 	vec4 place = lights[chosen * 2u], colour = lights[chosen * 2u + 1u];
+	float extent = abs(place.w);
+	bool lamp = place.w < 0.0;
 	vec3 jitter = vec3(random(state), random(state), random(state)) * 2.0 - 1.0;
-	vec3 target = place.xyz + jitter * place.w * 0.7;
+	float spread = lamp ? SPELL_SHADOW_SIZE : extent * 0.7;
+	vec3 target = place.xyz + jitter * spread;
 	vec3 to = target - p;
 	float d = length(to);
 	vec3 direction = to / max(d, 1e-4);
 	float n_dot_l = dot(n, direction);
 	if (n_dot_l <= 0.0) return vec3(0.0);
-	if (shadowed && occluded(p, direction, max(d - place.w, 0.01))) return vec3(0.0);
-	return colour.rgb * light_falloff(d, colour.w, place.w) * n_dot_l * total / chosen_weight;
+	if (shadowed && occluded(p, direction, max(d - (lamp ? spread : extent), 0.01))) return vec3(0.0);
+	float kept = expected > EFFECT_LIGHT_KNEE ? (EFFECT_LIGHT_KNEE + EFFECT_LIGHT_ROOM * (1.0 - exp(-(expected - EFFECT_LIGHT_KNEE) / EFFECT_LIGHT_ROOM))) / expected : 1.0;
+	return colour.rgb * light_falloff(d, colour.w, extent, lamp) * n_dot_l * total / chosen_weight * kept;
 }
 
 // Unlit map scenery keeps its authored colour in the sun. Where the traced
@@ -958,25 +983,34 @@ vec3 exposed(vec3 ratio) {
 	return ratio * (1.0 + SHADE_LIFT * (1.0 - q) * (1.0 - q));
 }
 
-// A lit surface brightened past its raster colour rolls off above
-// SURFACE_KNEE towards SURFACE_CEILING, keeping its hue. Spell light is
-// uncapped and several times daylight, which suits grass and stone: a ground
-// at a third of white takes it and stays below white. The snow and ice of
-// the second game's Blue arena already stand near white in the raster, so
-// that light clipped them flat white and past the bloom threshold
-// (ELEffectLook.BLOOM_THRESHOLD), and the bloom hazed the field and the
-// figures on it: through a wall of fire, a quarter of the frame was pure
-// white there against none on the Green arena. The ceiling stays below the
-// threshold, so lit scenery never blooms; the effects themselves still do.
-// Nothing at or below its raster brightness changes, nor does metal.
-const float SURFACE_KNEE = 0.75;
-const float SURFACE_CEILING = 1.1;
-vec3 shouldered(vec3 lit, vec3 painted) {
-	float y = dot(lit, vec3(0.2126, 0.7152, 0.0722));
-	float knee = max(dot(painted, vec3(0.2126, 0.7152, 0.0722)), SURFACE_KNEE);
-	if (y <= knee) return lit;
-	float room = max(SURFACE_CEILING - knee, 0.05);
-	return lit * ((knee + room * (1.0 - exp(-(y - knee) / room))) / y);
+// What light past the raster's (spell light, mostly) may add to a surface
+// depends on how bright its paint already is. Spell light is several times
+// daylight, which suits grass and stone: a ground at a fifth of white takes
+// it and stays well below white. Snow and ice stand near white in the raster,
+// and the same light drove them flat white, or flat in the spell's own colour
+// once only the brightness was rolled off: any shine strong enough flooded a
+// bright floor with its hue. The added light now rolls off as it nears
+// LIT_CEILING (in linear light, below the bloom threshold, so lit scenery
+// never blooms), and a surface already past it may still gain a
+// LIT_HEADROOM share, so a spell tints the snow it lights without burning it
+// out. The light keeps its hue; each channel then eases off below white, so
+// what is left of the texture stays. Shade (a ratio below 1) and metal pass
+// unchanged.
+const float LIT_CEILING = 0.8;
+const float LIT_HEADROOM = 0.15;
+const float CHANNEL_KNEE = 0.85;
+vec3 shouldered(vec3 painted, vec3 ratio) {
+	vec3 excess = max(ratio - 1.0, vec3(0.0));
+	vec3 base = painted * min(ratio, vec3(1.0));
+	vec3 added = painted * excess;
+	float e = dot(added, vec3(0.2126, 0.7152, 0.0722));
+	if (e <= 0.0) return base;
+	float y = dot(painted, vec3(0.2126, 0.7152, 0.0722));
+	float room = max(LIT_CEILING - y, LIT_HEADROOM * y);
+	vec3 lit = base + added * (room * (1.0 - exp(-e / max(room, 1e-4))) / e);
+	vec3 over = max(lit - CHANNEL_KNEE, vec3(0.0));
+	float span = 1.0 - CHANNEL_KNEE;
+	return max(min(lit, vec3(CHANNEL_KNEE)) + span * (1.0 - exp(-over / span)), base);
 }
 
 void main() {
@@ -1037,9 +1071,9 @@ void main() {
 		store_guides(pixel, c.rgb - emission, g.xyz, max(-surface.a, 0.0), imageLoad(secondary_light, pixel).a);
 #endif
 		vec3 painted = c.rgb - emission;
-		vec3 lit = painted * exposed(filtered / max(raster, vec3(0.02)));
+		vec3 ratio = exposed(filtered / max(raster, vec3(0.02)));
 		// Metal keeps its traced highlights (surface.a is minus its share).
-		c.rgb = (surface.a < 0.0 ? lit : shouldered(lit, painted)) + emission;
+		c.rgb = (surface.a < 0.0 ? painted * ratio : shouldered(painted, ratio)) + emission;
 		if (frame.counts.z > 0u && (frame.info.w & 4u) == 0u) {
 			vec3 secondary = imageLoad(secondary_light, pixel).rgb;
 			if (any(greaterThan(secondary, vec3(0.0)))) {

@@ -230,10 +230,10 @@ static func _kept_picture(path: String) -> bool:
 	return header.size() == 16 and header.slice(0, 4).get_string_from_ascii() == "RIFF" \
 		and header.decode_u32(4) + 8 == file.get_length() and header.slice(8).get_string_from_ascii() == "WEBPVP8L"
 
-func _kept_sheet(record: Variant) -> bool:
+static func _kept_sheet(record: Variant, path: String) -> bool:
 	if not record is Array or record.size() != 2 or not record[1] is String: return false
 	var name: String = record[1]
-	return name.is_empty() or (name == name.get_file() and _kept_picture(folder().path_join(name)))
+	return name.is_empty() or (name == name.get_file() and _kept_picture(path.path_join(name)))
 
 ## The sheets of the edition the switches ask for: archive entries, sorted
 ## (icons first).
@@ -252,15 +252,28 @@ func eligible(all_art := false) -> Array[String]:
 ## How far the kept pictures are: {done, total, stale (the game's files
 ## changed since), factor, bytes (on disk, every factor)}.
 func status() -> Dictionary:
+	return count_status(status_job())
+
+## What status() needs, read here (on the main thread, quickly): the sheets
+## wanted and the manifest's record of each. count_status() then checks the
+## kept pictures, which opens every one of them (more than a second with a
+## few thousand) and can run in a thread.
+func status_job() -> Dictionary:
 	var factor := cache_factor()
 	var current := manifest if int(manifest.get("factor", 0)) == factor else read_manifest(factor)
 	var sheets: Dictionary = current.get("sheets", {})
-	var done := 0
 	var wanted := eligible()
-	for entry: String in wanted:
-		if _kept_sheet(sheets.get(entry)): done += 1
-	return {"done": done, "total": wanted.size(), "stale": String(current.get("identity", "")) != _identity and not sheets.is_empty(),
-		"factor": factor, "bytes": disk_bytes(folder())}
+	var records := []
+	records.resize(wanted.size())
+	for i in wanted.size(): records[i] = sheets.get(wanted[i])
+	return {"factor": factor, "folder": folder(), "records": records.duplicate(true),
+		"stale": String(current.get("identity", "")) != _identity and not sheets.is_empty()}
+
+static func count_status(job: Dictionary) -> Dictionary:
+	var done := 0
+	for record: Variant in job.records:
+		if _kept_sheet(record, job.folder): done += 1
+	return {"done": done, "total": job.records.size(), "stale": job.stale, "factor": job.factor, "bytes": disk_bytes(job.folder)}
 
 ## Whether the kept pictures cover every sheet the switches ask for.
 func complete() -> bool:
@@ -429,7 +442,7 @@ static func estimate(upscalers: Array, all_art := false) -> Dictionary:
 			if location.size() == 3 and int(location[2]) > 76: size = maxi(1, (int(location[2]) - 76) / 3)
 			var scale := sheet_factor(entry, target_factor())
 			output_pixels += size * scale * scale
-			if upscaler._kept_sheet(kept.get(entry)): continue
+			if upscaler._kept_sheet(kept.get(entry), upscaler.folder()): continue
 			sheets += 1
 			pixels += size
 	var per_megapixel := SECONDS_PER_MEGAPIXEL_ARM if OS.has_feature("arm64") or OS.has_feature("arm32") else SECONDS_PER_MEGAPIXEL
@@ -560,7 +573,7 @@ class Preparation:
 			if limit > 0: wanted = wanted.slice(0, limit)
 			for entry: String in wanted:
 				total += 1
-				if upscaler._kept_sheet(sheets.get(entry)):
+				if upscaler._kept_sheet(sheets.get(entry), upscaler.folder()):
 					done += 1
 					skipped += 1
 					if String(sheets[entry][1]).is_empty(): unchanged += 1

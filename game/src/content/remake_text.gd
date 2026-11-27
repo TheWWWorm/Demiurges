@@ -716,6 +716,7 @@ const RU := {
 	"Not needed at this screen size": "Не нужна при таком размере экрана",
 	"The games' files changed: prepare again": "Файлы игр изменились: подготовьте заново",
 	"No art selected": "Графика не выбрана",
+	"Checking the prepared art…": "Проверка подготовленной графики…",
 	"Ready (%d×)": "Готово (%d×)",
 	"%d of %d sheets ready": "Готово листов: %d из %d",
 	"Prepare sharper art?": "Подготовить чёткую графику?",

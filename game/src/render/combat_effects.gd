@@ -444,6 +444,8 @@ func _step_glow_lights(delta: float) -> void:
 	if _glow_lights == null:
 		if not on: return
 		_glow_lights = ELGlowLights.new()
+		# The figures stand on the battle ground at height 0.
+		_glow_lights.floor_height = 0.0
 		add_child(_glow_lights)
 	if on or _glow_lights.lit() > 0: _glow_lights.show_sources(glow_sources() if on else [], delta)
 

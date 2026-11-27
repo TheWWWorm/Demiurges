@@ -526,6 +526,8 @@ func _exit_tree() -> void:
 	if _sharper_check_task >= 0:
 		WorkerThreadPool.wait_for_task_completion(_sharper_check_task)
 		_sharper_check_task = -1
+	for task: int in _sharper_status_tasks: WorkerThreadPool.wait_for_task_completion(task)
+	_sharper_status_tasks.clear()
 
 ## The engine drops the window's close request while the window has an
 ## exclusive dialog, so the close button did nothing while one was open. A
@@ -7327,10 +7329,7 @@ func _display_page(page: VBoxContainer) -> void:
 func _sharper_art_rows(box: VBoxContainer) -> void:
 	var buttons := HBoxContainer.new()
 	buttons.add_theme_constant_override("separation", 8)
-	var refresh := func():
-		var status := _row_note(buttons)
-		status.text = _sharper_art_status()
-		status.show()
+	var refresh := func(): _show_sharper_art_status(_row_note(buttons))
 	for key: String in ELIconUpscale.SETTINGS:
 		var toggle := CheckButton.new()
 		toggle.name = key.to_pascal_case()
@@ -7377,15 +7376,40 @@ func _sharper_art_complete() -> bool:
 		if not upscaler.complete(): return false
 	return true
 
-## The status line of the prepared art: ready at a factor, or the sheets
-## done of the total, with the disk space taken.
-func _sharper_art_status() -> String:
+## Status line reads running in threads (waited for when the game closes).
+var _sharper_status_tasks: Array[int] = []
+
+## Fills `note` with the prepared art's status line. Counting the kept
+## pictures opens every one of them (more than a second with a few thousand,
+## longer on a start whose files are not cached yet), so it runs in a thread
+## and the line says it is checking meanwhile: done in the frame the Display
+## page was built, it froze the Options screen just after it opened. Only the
+## latest read fills the line.
+func _show_sharper_art_status(note: Label) -> void:
+	note.text = _t("Checking the prepared art…")
+	note.show()
+	var jobs := []
+	for upscaler: ELIconUpscale in _upscalers(): jobs.append(upscaler.status_job())
+	var states := []
+	var task := WorkerThreadPool.add_task(func():
+		for job: Dictionary in jobs: states.append(ELIconUpscale.count_status(job)), false, "Sharper art status")
+	_sharper_status_tasks.append(task)
+	note.set_meta("status_task", task)
+	while not WorkerThreadPool.is_task_completed(task) and is_inside_tree(): await get_tree().process_frame
+	if not _sharper_status_tasks.has(task): return
+	WorkerThreadPool.wait_for_task_completion(task)
+	_sharper_status_tasks.erase(task)
+	if is_instance_valid(note) and int(note.get_meta("status_task", -1)) == task: note.text = _sharper_art_status(states)
+
+## The status line of the prepared art from each game's count_status():
+## ready at a factor, or the sheets done of the total, with the disk space
+## taken.
+func _sharper_art_status(states: Array) -> String:
 	var done := 0
 	var total := 0
 	var bytes := 0
 	var stale := false
-	for upscaler: ELIconUpscale in _upscalers():
-		var state := upscaler.status()
+	for state: Dictionary in states:
 		done += int(state.done)
 		total += int(state.total)
 		bytes += int(state.bytes)
