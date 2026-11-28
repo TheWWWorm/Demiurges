@@ -23,4 +23,4 @@ func _input(event: InputEvent) -> void:
 	if wiki == null or wiki.is_open(): return
 	if event.ctrl_pressed or event.alt_pressed or event.meta_pressed or event.shift_pressed: return
 	get_viewport().set_input_as_handled()
-	wiki.open(self)
+	wiki.reopen(self)

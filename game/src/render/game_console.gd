@@ -49,9 +49,9 @@ const COMBAT := [
 	["view_hand", "", "Show the opponent's hand in the card rail."],
 	["hide_hand", "", "Return to your hand."],
 	["swap", "", "Switch which side you control."],
-	["add spell", " CODE", "Add a card to your hand."],
-	["add creature", " CODE", "Summon a creature."],
-	["add enemy", " CODE", "Summon a creature for the opposing hero."],
+	["add spell", " NAME|CODE [xN], …", "Add cards to your hand by name (English or Russian, or part of one) or code; xN adds N copies, commas separate cards."],
+	["add creature", " NAME|CODE [xN], …", "Summon creatures by name or code; xN summons N of them, commas separate creatures."],
+	["add enemy", " NAME|CODE [xN], …", "Summon creatures for the opposing hero by name or code; xN and commas as for add creature."],
 	["change health", " VALUE", "Set your hero's health."],
 	["change mana", " VALUE", "Set your hero's ether."],
 	["change links", " VALUE", "Set your hero's ether channels."],
@@ -443,7 +443,7 @@ func _complete(force := false) -> void:
 		_show_suggestions()
 		return
 	if battle and kind in ["spell", "creature", "enemy"] and input.begins_with(card_command):
-		_complete_card(card_command, input.trim_prefix(card_command))
+		_complete_card(card_command)
 	else:
 		for row: Array in _rows():
 			if not prefix.is_empty() and not row[0].to_lower().begins_with(prefix): continue
@@ -486,15 +486,19 @@ func _complete_spell_filter() -> bool:
 			_add_text_completion(filter, start, end, filter)
 	return true
 
-func _complete_card(verb: String, input: String) -> void:
-	var prefix := input.strip_edges().to_upper()
-	var duel: ELDuel = game.duel
-	var codes := duel.profile.table("CombatSpells" if verb == "add spell " else "CombatCreatures").keys()
-	codes.sort()
-	for code: String in codes:
-		if not prefix.is_empty() and not code.begins_with(prefix): continue
-		_add_suggestion(verb + code, code + "  —  " + duel.card_name(code))
-		if _suggestions.item_count >= COMPLETION_LIMIT: break
+## Cards for the item being typed (after the last comma), by code or by name
+## in either language; choosing one puts its code in place of the item's
+## name and keeps the cards and count typed before it.
+func _complete_card(verb: String) -> void:
+	var source := entry.text
+	var at := source.to_lower().find(verb)
+	if at < 0: return
+	var arguments := source.substr(at + verb.length())
+	var typed := ELConsoleCards.typing(arguments)
+	var lead := source.left(at + verb.length() + int(typed.name_at))
+	var rows := ELConsoleCards.catalog(game.duel, "CombatSpells" if verb == "add spell " else "CombatCreatures")
+	for row: Dictionary in ELConsoleCards.suggest(str(typed.query), rows, COMPLETION_LIMIT):
+		_add_suggestion(lead + row.code, ELConsoleCards.caption(row))
 
 func _history_choices() -> void:
 	entry.grab_focus()
@@ -518,6 +522,8 @@ func _add_text_completion(insert: String, start: int, end: int, caption: String)
 
 func _show_suggestions() -> void:
 	_suggestions.visible = _suggestions.item_count > 0
+	# Up to six rows show at once (card names are found by part of a name).
+	_suggestions.custom_minimum_size.y = _font_size * maxf(4.0, 1.75 * mini(_suggestions.item_count, 6))
 	if _suggestions.visible: _suggestions.select(0)
 
 func _suggestion_index() -> int:
@@ -762,9 +768,8 @@ func _combat(duel: ELDuel, verb: String, words: PackedStringArray) -> String:
 			game._console_refresh()
 			return ""
 		"add":
-			if words.size() != 3 or words[1] not in ["spell", "creature", "enemy"]: return UNKNOWN
-			var enemy := words[1] == "enemy"
-			return _apply(duel, {"side": 1 - side if enemy else side, "op": "creature" if enemy else words[1], "card": words[2].to_upper()})
+			if words.size() < 3 or words[1].to_lower() not in ["spell", "creature", "enemy"]: return UNKNOWN
+			return _add_cards(duel, side, words[1].to_lower(), " ".join(words.slice(2)))
 		"change":
 			var enemy := words.size() > 1 and words[1] == "enemy"
 			var index := 2 if enemy else 1
@@ -779,6 +784,31 @@ func _combat(duel: ELDuel, verb: String, words: PackedStringArray) -> String:
 			if reply.is_empty(): close()
 			return reply
 	return UNKNOWN
+
+## add spell / creature / enemy: every card the arguments name, in order,
+## until one is refused (ELConsoleCards).
+func _add_cards(duel: ELDuel, side: int, kind: String, arguments: String) -> String:
+	var enemy := kind == "enemy"
+	var rows := ELConsoleCards.catalog(duel, "CombatSpells" if kind == "spell" else "CombatCreatures")
+	var parsed := ELConsoleCards.parse(arguments, rows)
+	if not str(parsed.error).is_empty(): return tr(parsed.error)
+	var added := {}
+	var order: Array[String] = []
+	for code: String in parsed.cards:
+		var reply := _apply(duel, {"side": 1 - side if enemy else side, "op": "creature" if enemy else kind, "card": code})
+		if not reply.is_empty():
+			var done := _added(duel, added, order)
+			return tr(reply) if done.is_empty() else "%s\n%s" % [done, tr(reply)]
+		if not added.has(code): order.append(code)
+		added[code] = int(added.get(code, 0)) + 1
+	return _added(duel, added, order)
+
+func _added(duel: ELDuel, added: Dictionary, order: Array[String]) -> String:
+	if order.is_empty(): return ""
+	var parts := PackedStringArray()
+	for code: String in order:
+		parts.append("%s %s%s" % [code, duel.card_name(code), " ×%d" % added[code] if added[code] > 1 else ""])
+	return tr("Added: %s") % ", ".join(parts)
 
 func _list_combat_spells(duel: ELDuel, filters: String) -> String:
 	var color := ""

@@ -46,7 +46,7 @@ A small bar at the top of the screen gives **Back** (Esc) everywhere, **Camera**
 
 ## In the wiki
 
-**Alt+Left** and **Alt+Right** go back and forward, **Ctrl+F** searches, and **Esc** or **F6** closes the wiki. The game waits while the wiki is open.
+**Alt+Left** and **Alt+Right** go back and forward, **Ctrl+F** searches, and **Esc** or **F6** closes the wiki. The game waits while the wiki is open. Until you quit the game, the wiki opens again on the page you last read.
 
 On a [creature page](creatures), choose an action under the 3D model and press **Play** to preview it with its original sound when available.
 
@@ -60,6 +60,6 @@ On the adventure map, `player` lists the commanders. `view resources` shows your
 
 In Etherlords I, `open_tomb` reveals the Ancient Tomb on the campaign map that contains it.
 
-In battle, `view creature` lists both armies and their creature IDs. Use `view creature ID` for state and damage, or `view creature stats ID`, `view creature basestats ID`, and `view creature modifiers ID` to inspect stats and enchantments. `add enemy CODE` summons a creature for the opposing hero. Gameplay commands require a local game.
+In battle, `view creature` lists both armies and their creature IDs. Use `view creature ID` for state and damage, or `view creature stats ID`, `view creature basestats ID`, and `view creature modifiers ID` to inspect stats and enchantments. `add spell`, `add creature` and `add enemy` (a creature for the opposing hero) take a card's code or its name in English or Russian, in any case, or a part of the name that only one card has; **Tab** completes the name. Add a count such as `x3` to add several copies, and separate several cards with commas: `add spell fireball x2, orc shaman`. Gameplay commands require a local game.
 
 Use `view spells` to look up spell codes. Add a color, a spell class, or both to narrow the list. For example, `view spells blue enchantment` lists blue enchantments. Press **Tab** with the cursor in a filter to complete it.

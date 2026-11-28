@@ -6,7 +6,7 @@ summary: Opening the wiki in the game and on the web
 ---
 The wiki is available in two places with the same articles:
 
-- **in the game**: the **Wiki** button on the main menu and on the game files screen, the **Wiki** button under the Etherlords II Esc menus in battle and on the map, or **F6** on any screen. The game waits while you read. **Esc**, **F6** or **Close** returns to it.
+- **in the game**: the **Wiki** button on the main menu and on the game files screen, the **Wiki** button under the Etherlords II Esc menus in battle and on the map, or **F6** on any screen. The game waits while you read. **Esc**, **F6** or **Close** returns to it, and until you quit the game the wiki opens again on the page you last read.
 - **on the web** at [demiurges.wwworm.com/wiki](https://demiurges.wwworm.com/wiki/), free to read without game files, an account or the engine. The browser version's start page links to it.
 
 ## Languages

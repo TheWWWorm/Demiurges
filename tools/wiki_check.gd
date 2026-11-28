@@ -2,7 +2,8 @@ extends SceneTree
 ## Checks the in-game wiki (ELWikiScreen) with the generated articles:
 ## every page in every language converts to BBCode without stray tags, every
 ## internal link opens its page, history and the language switch work, and
-## the game is paused only while the wiki is open. Rendered runs (without
+## the game is paused only while the wiki is open, and it reopens on the
+## page last read until the game quits. Rendered runs (without
 ## --headless) also save screenshots: pass `-- --wiki-shots=<folder>`.
 ##
 ##   godot --headless --path game --script /path/to/tools/wiki_check.gd
@@ -126,6 +127,40 @@ func _run() -> void:
 	await process_frame
 	check(not ELWikiScreen.is_open(), "Esc closes the wiki")
 	check(not paused, "closing the wiki resumes the game")
+	# Until the game quits, the wiki reopens on the page last read (#335).
+	screen = ELWikiScreen.reopen(root, "combat", "")
+	await process_frame
+	check(screen.page == "combat-phases", "the wiki reopens on the page last read")
+	check(not screen._back.disabled, "the reopened wiki keeps its history")
+	await _shot(shots, "ru-reopened")
+	screen.go_back()
+	check(screen.page != "combat-phases", "Back works after reopening")
+	screen.close()
+	await process_frame
+	screen = ELWikiScreen.open(root, "controls", "")
+	await process_frame
+	check(screen.page == "controls", "a link into the wiki still opens its page")
+	screen.close()
+	await process_frame
+	screen = ELWikiScreen.reopen(root, "combat", "")
+	check(screen.page == "controls", "the page a link opened is remembered too")
+	screen.close()
+	await process_frame
+	ELWikiScreen._session = {}
+	screen = ELWikiScreen.reopen(root, "combat", "")
+	check(screen.page == "combat", "the first opening of a session shows the menu's own page")
+	screen.close()
+	await process_frame
+	check(not paused, "the reopened wiki resumes the game on closing")
+	# Closed and opened again in one frame, the wiki still resumes the game.
+	screen = ELWikiScreen.reopen(root, "combat", "")
+	screen.close()
+	screen = ELWikiScreen.reopen(root, "combat", "")
+	check(screen.page == "combat" and paused, "a wiki opened as the last one closes")
+	screen.close()
+	await process_frame
+	await process_frame
+	check(not paused, "a wiki opened as the last one closed resumes the game")
 	DirAccess.remove_absolute(ELWikiScreen.SETTINGS)
 	if not saved.is_empty():
 		var file := FileAccess.open(ELWikiScreen.SETTINGS, FileAccess.WRITE)

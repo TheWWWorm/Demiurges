@@ -758,7 +758,7 @@ func _build_menu() -> void:
 	wiki.focus_mode = Control.FOCUS_NONE
 	wiki.add_theme_font_size_override("font_size", 15)
 	wiki.custom_minimum_size = Vector2(140, 30)
-	wiki.pressed.connect(func(): ELWikiScreen.open(self, "adventure-map", header.text))
+	wiki.pressed.connect(func(): ELWikiScreen.reopen(self, "adventure-map", header.text))
 	_menu_footer.add_child(wiki)
 	menu.hide()
 

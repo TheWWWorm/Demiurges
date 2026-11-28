@@ -7,7 +7,9 @@ extends Control
 ## from the main menu, the battle and map Esc menus or F6 (ELWikiHotkey).
 ## The game is paused while the wiki is open and resumes as it was on Close
 ## (Esc or F6). It reads no game files and never changes saves or settings
-## other than its own remembered language (user://wiki.cfg).
+## other than its own remembered language (user://wiki.cfg). Until the game
+## quits it also keeps the page last read, with its history, search and
+## scroll, in memory: `reopen` goes back to it.
 
 signal closed
 
@@ -40,12 +42,16 @@ const CLIP_LABELS := {
 ## The installed games ({edition: ELProfile}), set by the main menu. Their
 ## encyclopedia pages (ELWikiCatalog) are built from the player's own copy.
 static var profiles: Dictionary = {}
+## The page last read this session ({page, scroll, search, history, future,
+## list}), in memory only.
+static var _session: Dictionary = {}
 
 var language := "en"
 var page := "home"
 var _history: Array[Dictionary] = []
 var _future: Array[Dictionary] = []
 var _was_paused := false
+var _closed := false
 var _layer: CanvasLayer
 var _frame: PanelContainer
 var _title: Label
@@ -92,6 +98,14 @@ static func open(from: Node, target := "", hint := "") -> ELWikiScreen:
 	screen.navigate(target if not target.is_empty() else "home", false)
 	return screen
 
+## Opens the wiki on the page last read this session, or on `first` (the
+## contents when empty) the first time.
+static func reopen(from: Node, first := "", hint := "") -> ELWikiScreen:
+	if is_open() or _session.is_empty(): return open(from, first, hint)
+	var screen := open(from, "", hint)
+	screen._resume(_session)
+	return screen
+
 static func is_open() -> bool:
 	return instance != null and is_instance_valid(instance)
 
@@ -127,11 +141,20 @@ func _enter_tree() -> void:
 		get_tree().paused = true
 
 func _exit_tree() -> void:
-	if instance == self: instance = null
-	get_tree().paused = _was_paused
+	if instance == self:
+		_remember()
+		instance = null
+	if not _closed: get_tree().paused = _was_paused
 
 func close() -> void:
 	if _layer == null or _layer.is_queued_for_deletion(): return
+	# The game resumes now, so a wiki opened again before this one has
+	# left the tree finds the game as it was.
+	if instance == self:
+		_remember()
+		instance = null
+	_closed = true
+	get_tree().paused = _was_paused
 	closed.emit()
 	_layer.queue_free()
 
@@ -361,6 +384,20 @@ func go_forward() -> void:
 	var entry: Dictionary = _future.pop_back()
 	page = entry.page
 	_show(entry.scroll)
+
+func _remember() -> void:
+	if _article == null: return
+	_session = {"page": page, "scroll": _article.get_v_scroll_bar().value, "search": _search.text,
+		"history": _history.duplicate(true), "future": _future.duplicate(true), "list": _list_toggle.button_pressed}
+
+func _resume(state: Dictionary) -> void:
+	_history.assign(state.get("history", []))
+	_future.assign(state.get("future", []))
+	_search.text = str(state.get("search", ""))
+	_list_toggle.button_pressed = bool(state.get("list", true))
+	var key := str(state.get("page", "home"))
+	page = key if not _entry(key).is_empty() else "home"
+	_show(float(state.get("scroll", 0.0)))
 
 func set_language(lang: String) -> void:
 	if not lang in ELWikiData.LANGUAGES: return

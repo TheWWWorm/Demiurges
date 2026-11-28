@@ -55,7 +55,7 @@ func _ready() -> void:
 	wiki_button.add_theme_font_size_override("font_size", font_size)
 	_plain(wiki_button)
 	wiki_button.pressed.connect(func():
-		var wiki := ELWikiScreen.open(self, "", wiki_hint)
+		var wiki := ELWikiScreen.reopen(self, "", wiki_hint)
 		if not wiki.closed.is_connected(_refresh): wiki.closed.connect(_refresh))
 	add_child(wiki_button)
 	if puzzles_available:
