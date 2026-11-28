@@ -142,6 +142,7 @@ static func decode(profile: ELProfile, raw: Dictionary) -> Dictionary:
 		if c.has("base") and ((c.card not in ["OSJ2", "OSJ3"] and not c.get("script_base", false)) or c.base is not Array or c.base.size() != 2 or c.base.any(func(v: Variant) -> bool: return v is not int)): return _bad("Invalid creature base stats.")
 		if c.has("enfeebled") and (c.enfeebled is not bool or profile.id != "el1"): return _bad("Invalid creature status.")
 		if c.has("decay") and (c.decay is not int or c.decay < 1): return _bad("Invalid creature decay.")
+		if c.has("twisted") and (c.twisted is not int or c.twisted < 1): return _bad("Invalid creature decay.")
 		if c.has("granted") and (c.granted is not Array or c.granted.any(func(f: Variant) -> bool: return f is not String)): return _bad("Invalid creature flag.")
 		var pending_illusion := false
 		if c.has("temporary"):

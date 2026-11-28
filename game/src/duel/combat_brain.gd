@@ -706,6 +706,8 @@ static func ask(ctx: ELCombatSearch.Context, s: ELDuel, turns: int, budget: int,
 		state[at + 43] = (1 if s.pale(int(c.id)) else 0) | (2 if c.get("regenerated", false) else 0)
 		# Decay stays on the creature after Overload is removed.
 		state[at + 43] |= clampi(int(c.get("decay", 0)), 0, 10000) << 8
+		# So does what a twisted enhancement has worn off.
+		state[at + 43] |= clampi(int(c.get("twisted", 0)), 0, 127) << 24
 		# How far its power and health stand below the least they show.
 		var under := _under(s, c)
 		state[at + 59] = kinds.find(c.card) + 1

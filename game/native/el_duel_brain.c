@@ -3572,29 +3572,21 @@ static void end_turn(const Search *x, State *s) {
 		if (s->n > before) s->u[before].flags &= ~(uint32_t)F_SICK;
 		i = 0;
 	}
-	/* A twisted enhancement wears off a point at a time and then goes on
-	 * taking: the creature dies once only the floor of one keeps it alive. */
+	/* A twisted enhancement takes a point of power and of health a turn
+	 * from the creature itself, below the floor of one: taking the
+	 * enchantment off later gives back only its +2/+2 (#336). */
 	for (int i = 0; i < s->n; i++) {
 		Unit *u = &s->u[i];
 		if (u->owner != s->attacker || (u->flags & (F_DEAD | F_GONE))) continue;
 		for (int k = 0; k < u->twisted && !(u->flags & F_DEAD); k++) {
-			int under = u->toughness - 1;
-			Unit was = *u;
+			int had = u->power, before = u->toughness;
 			add_power(u, -1);
-			u->raw--;
+			u->lethal = (int16_t)(u->lethal + 1);
 			settle_health(u);
-			u->ready_worth -= x->power_worth + x->tough_worth;
-			u->resting_worth -= x->power_worth + x->tough_worth;
-			wears(u, &was, 0, 0);
-			for (int r = 0, left = k; r < s->enchs; r++)
-				if (s->ench[r].unit == i && s->ench[r].kind == EN_TWIST && left-- == 0) {
-					s->ench[r].power--;
-					s->ench[r].health--;
-					s->ench[r].ready -= x->power_worth + x->tough_worth;
-					s->ench[r].resting -= x->power_worth + x->tough_worth;
-					break;
-				}
-			if (u->damage >= imin(u->toughness, under)) kill_unit(s, i);
+			int loss = (had - u->power) * x->power_worth + (before - u->toughness) * x->tough_worth;
+			u->ready_worth -= loss;
+			u->resting_worth -= loss;
+			if (u->damage >= u->toughness) kill_unit(s, i);
 		}
 	}
 	/* An overload burns its creature out. */
@@ -9840,8 +9832,9 @@ static int read_state(const int32_t *in, int64_t length, Search *x, State *s, in
 			for (int side = 0; side < 2; side++)
 				for (int k = 0; k < ARMY_KINDS; k++) c->held[side][k] = (uint8_t)((uint32_t)r[67 + side * 4 + k / 4] >> (8 * (k % 4)));
 		} else if (r[66] & 1) s->limit = 1;
-		/* The displayed toughness already includes permanent Overload decay. */
-		u->lethal = (int16_t)(2 * imin((uint32_t)r[43] >> 8, 10000));
+		/* The displayed toughness already includes permanent Overload and
+		 * twisted enhancement decay. */
+		u->lethal = (int16_t)(2 * imin(((uint32_t)r[43] >> 8) & 0xffff, 10000) + (((uint32_t)r[43] >> 24) & 127));
 		/* What stands on its hero has already taken its points past the floor. */
 		if (!(u->flags & (F_NO_AFFECT | F_PLANE)))
 			for (int k = 0; k < HE_COUNT; k++) {
