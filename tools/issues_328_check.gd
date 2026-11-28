@@ -13,7 +13,8 @@ extends SceneTree
 ##   from the C library's generator, which its save does not keep); offers
 ##   already shown are kept;
 ## - first game: new campaign starts give different offers and creature loot;
-##   a save keeps the map's random state, as before (#259).
+##   a save records the map's random state, as before (#259); a game opened
+##   from it rolls afresh (issues_328_loot_check).
 ##
 ##   godot --headless --path game --script ../tools/issues_328_check.gd
 ##

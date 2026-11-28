@@ -303,10 +303,13 @@ func build(profile: ELProfile, scenario: Dictionary, preferences: ELSettings, di
 	else:
 		state = restored.state
 		state.random_skill_offers = solo
-		# The second game draws its map and script rolls from the C library's
-		# generator, which a save does not keep: a loaded solo game rolls
-		# afresh from there on (#328). The first game's save keeps its state.
-		if solo and profile.id == "el2": state.fresh_random_state()
+		# Neither game's save keeps the generators its map rolls draw from (the
+		# second game's C library generator, the first game's per-player
+		# ones), so a loaded solo game, or a battle retried from its start,
+		# rolls afresh from there on: a neutral's loot, recruits and offers
+		# differ from the last time the save was played (#328). The save
+		# itself still records the state, for network and strategic play.
+		if solo and not state.tutorial: state.fresh_random_state()
 		director = restored.director
 		map = state.map
 	# The game's computer players' strength: kept by a save, brought by the
