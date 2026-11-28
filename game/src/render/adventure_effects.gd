@@ -446,10 +446,12 @@ func _process(delta: float) -> void:
 func _advance(name: String, delta: float) -> void:
 	var effect: Dictionary = effects[name]
 	if effect.has("anchor"):
-		var anchor: Node3D = effect.anchor
-		if not is_instance_valid(anchor) or anchor.is_queued_for_deletion():
+		# A figure replaced under its effect (a hero boarding a ship) is
+		# already freed: test it before typing it.
+		if not is_instance_valid(effect.anchor) or (effect.anchor as Node3D).is_queued_for_deletion():
 			finish(name)
 			return
+		var anchor: Node3D = effect.anchor
 		effect.node.global_transform = anchor.global_transform
 		effect.node.visible = anchor.is_visible_in_tree()
 	effect.elapsed += delta

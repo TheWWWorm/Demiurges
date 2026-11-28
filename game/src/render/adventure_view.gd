@@ -97,6 +97,8 @@ const SECOND_TEXT_PITCH := 0.70
 var text_view: Dictionary = {}
 var view_goal := Vector2(-1, -1)
 var _script_lens := false
+## uid -> seconds the figure out of a dock has been fading in.
+var _dock_arrivals: Dictionary = {}
 ## Scripted camera turns ease as in the original: each 64 ms tick moves the
 ## view a sixth of the remaining angle, the shorter way round, and it settles
 ## once that step is under 0.001 rad. INF when no turn is pending.
@@ -549,6 +551,7 @@ func _process(delta: float) -> void:
 			_end_day_queued = false
 			_end_day()
 	_travel_pose()
+	_step_dock_arrivals(delta)
 	if not director.error.is_empty():
 		error = director.error
 		notice.text = error
@@ -2093,7 +2096,7 @@ func _present(data: Dictionary) -> void:
 			var model: ELModel = world.actors.get(int(data.hero))
 			if model != null:
 				if model.has_meta("portal_hidden"): model.remove_meta("portal_hidden")
-				model.set_opacity(1.0)
+				if not _dock_arrivals.has(int(data.hero)): model.set_opacity(1.0)
 				world.fog_object(state.object(data.hero))
 		"teleport", "tunnel", "dock":
 			if ELFirstNaval.enabled(state.map) and data.kind == "dock":
@@ -2102,6 +2105,9 @@ func _present(data: Dictionary) -> void:
 				if int(data.hero) == _hero_id(): _draw_route(ELStrategy.order_path(director, state.object(_hero_id())))
 			else:
 				if not director.travel.is_empty(): _face_travel_exit()
+				if data.kind == "dock" and state.map.profile.id == "el2":
+					_dock_arrivals[int(data.hero)] = 0.0
+					_step_dock_arrivals(0.0)
 				if data.hero == state.main_hero and world.actors.has(state.main_hero):
 					following = _hero_id()
 					target = world.actors[state.main_hero].position
@@ -2134,6 +2140,20 @@ func _travel_pose() -> void:
 		model.set_meta("portal_hidden", true)
 		model.hide()
 	elif not travel.arrived: model.set_opacity(clampf(float(travel.remaining) / ELAdventureDirector.DOCK_FADE_SECONDS, 0.0, 1.0))
+
+## Second game: the figure that comes out of a dock (the boat, or the hero
+## back on land) fades in over the same 15 action ticks as the one that went
+## in faded out (#340), whoever owns it.
+func _step_dock_arrivals(delta: float) -> void:
+	for uid: int in _dock_arrivals.keys():
+		var shown: float = _dock_arrivals[uid] + delta
+		var model: ELModel = world.actors.get(uid)
+		if model == null or not state.object(uid).get("alive", false) or shown >= ELAdventureDirector.DOCK_FADE_SECONDS:
+			_dock_arrivals.erase(uid)
+			if model != null: model.set_opacity(1.0)
+			continue
+		_dock_arrivals[uid] = shown
+		model.set_opacity(shown / ELAdventureDirector.DOCK_FADE_SECONDS)
 
 func _travel_phase(play_sound := true) -> void:
 	var travel := director.travel
