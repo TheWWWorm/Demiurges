@@ -3733,6 +3733,10 @@ func _pend_cast_effects(data: Dictionary, artifact: bool, gesture := 0.0) -> voi
 		_effect_cast.fog_targets = []
 	if card in ["DNFR", "DRFR", "ANFR"]:
 		_effect_cast.forest_targets = []
+	# The caster's creatures as the spell is cast: Immolation can kill some
+	# of them before their cues start, and the cues still belong to them.
+	if ARMY_AURA_CUES.get(profile.id, []).has(card):
+		_effect_cast.aura_army = _army_at(data, int(data.side))
 	if profile.id == "el2" and card == "CANV":
 		_effect_cast.devour_power = int(data.get("devour_power", 0))
 	if profile.id == "el2" and card == "ENLH":
@@ -4363,6 +4367,20 @@ func _start_cast_effects() -> void:
 			for name: String in ["PosAttack", "PosRune"]:
 				effects.play(name, {"Target": [models[id]]})
 		return
+	# The second game's army enchantments (#332) work the same way: the
+	# attach callback plays PosEnchantment on the caster's hero (Assault, a
+	# sorcery, its PosSorcery), and the per-creature modifier callback, which
+	# only passes creatures under that hero's control, plays the stat cues on
+	# each of them. Played as a generic cast, they all piled up on the hero.
+	if _effect_cast_is_army_aura(pending):
+		var names: Array = EffectTable.cast_effects(profile.id, pending.card)
+		var hero := int(pending.side)
+		if models.has(hero) and not names.is_empty(): effects.play(names[0], {"Target": [models[hero]]})
+		for id: int in pending.get("aura_army", []):
+			if not models.has(id): continue
+			for name: String in names.slice(1):
+				effects.play(name, {"Target": [models[id]]})
+		return
 	# DominantRodEnchantment: the hero takes PosEnchantment (EL1,
 	# EL2), and its ally-only modifier callback (EL1,
 	# EL2) binds the three stat cues to each creature under that
@@ -4679,6 +4697,27 @@ func _start_cast_effects() -> void:
 	# its point unbound, so its effect cannot jump to another figure.
 	if recipients.is_empty() and models.has(pending.side): targets.append(models[pending.side])
 	effects.cast(String(pending.card), {"Start": [models.get(pending.side)], "Target": targets})
+
+## Army enchantments whose cast effects split between the caster's hero (the
+## first) and each creature it controls (the rest): Endurance of the Woods,
+## Jyhad, Haste, Vitality, Dominancy, Assault, Immolation, Blockade and
+## Crystal Ball. Strength of the Woods has its own branch in both games.
+const ARMY_AURA_CUES := {"el2": ["ENWO", "JYHD", "HAST", "VTLY", "DOMN", "ASLT", "IMML", "BLKD", "CRBL"]}
+
+func _effect_cast_is_army_aura(pending: Dictionary) -> bool:
+	return not pending.get("artifact", false) and pending.has("aura_army") and ARMY_AURA_CUES.get(profile.id, []).has(String(pending.card))
+
+## Creatures controlled by `side` as the event `data` was stamped (the live
+## army when it carries no stamp).
+func _army_at(data: Dictionary, side: int) -> Array[int]:
+	var out: Array[int] = []
+	var listed: Dictionary = data.get("shown", {}).get("creatures", {})
+	if listed.is_empty():
+		for c: Dictionary in duel.army(side): out.append(int(c.id))
+		return out
+	for id: int in listed:
+		if id >= 2 and int(listed[id].owner) == side: out.append(id)
+	return out
 
 ## EL2 enchantments with a creature and a hero form (Stone Skin, Energy
 ## Barrier, Lifeguard) and the effects each form starts on its holder.
@@ -5146,6 +5185,12 @@ func _ability_effects(data: Dictionary) -> void:
 			if wall.has_clip(clip):
 				if wall.play(clip): battle_audio.unit(wall, clip.trim_prefix("u"))
 				break
+	# Both editions' Kobold Shaman (cr206) has a 58-frame uinstant but no
+	# figure instant.wav: it swings its staff without a sound of its own, and
+	# its RedZap leaves the staff at the swing's impact frame (KEYED_SHOTS).
+	if source >= 2 and card == "KBSH" and data.ability == "sting" and _action_clips_shown():
+		var shaman: ELModel = models[source]
+		if shaman.has_clip("uinstant"): shaman.play("uinstant")
 	# Original EL1 SeaHaloAbility - registers DrainMana
 	# only when ether moves: Start on the opposing donor hero,
 	# Finish on the recipient hero. The zero-ether ability still
@@ -5233,6 +5278,11 @@ func _ability_effects(data: Dictionary) -> void:
 		if hit > 0.0:
 			_ability_hit = {"target": visual_target, "hit": hit}
 			call_deferred("_clear_ability_hit")
+	# A keyed shot strikes once it has left its user and reached the target.
+	var launch := _keyed_launch(card, String(data.ability), source)
+	if launch > 0.0 and visual_target >= 0 and visual_target != source:
+		if _ability_hit.is_empty(): call_deferred("_clear_ability_hit")
+		_ability_hit = {"target": visual_target, "hit": launch + _keyed_landing(card)}
 	# A creature acting on another (the Aviak Archer's Wing Flap) strikes at
 	# its action clip's impact frame: the target's damage and death wait for
 	# it, not only for the effect's own hit cue (they showed at the click).
@@ -5283,17 +5333,45 @@ func _ability_effects(data: Dictionary) -> void:
 		# separate Fireball projectile unpositioned. EL2's two later original-index
 		# effect-name references have not been proven to request additional
 		# simultaneous audio at ability start.
-		_play_ability(items, source, side, visual_target, true,
+		var play := _play_ability.bind(items, source, side, visual_target, true,
 			profile.id in ["el1", "el2"] and card == "FRBL",
 			profile.id == "el2" and ((card == "ORSH" and data.ability == "ether")
 				or (card == "OUS1" and data.ability == "channel_ether")))
-	# Both editions' KBSH cr206 have a 58-frame uinstant but no figure instant.wav.
-	# Bind original RedZap Start/Finish particles to the standing cast joint
-	# first, then animate the source without inventing an extra sound.
-	if profile.id in ["el1", "el2"] and source >= 2 and card == "KBSH" and data.ability == "sting":
-		var shaman: ELModel = models[source]
-		if _action_clips_shown() and shaman.has_clip("uinstant"):
-			shaman.play("uinstant")
+		# A shot leaves its shooter at the action's impact frame (see KEYED_SHOTS).
+		if launch > 0.0 and is_inside_tree(): _schedule_battle_cue(launch, play)
+		else: play.call()
+
+## Creature abilities whose effect the originals start at the impact frame
+## of the user's action clip: the ability queues the action, then a sync
+## event released at that clip's key moment, and the effect waits on it.
+## Started with the clip, the Kobold Shaman's lightning and the damage
+## came before its staff swing (#339). The second value is when the target
+## takes the blow: "launch" with the effect itself, "cue" at the effect's
+## own hit marker, "finish" once the effect has played out.
+const KEYED_SHOTS := {
+	"el1": {"KBSH": ["sting", "launch"]},
+	"el2": {"KBSH": ["sting", "launch"], "CCLP": ["sting", "finish"], "GIFG": ["sting", "cue"],
+		"GRFG": ["sting", "cue"], "BLDG": ["slay", "launch"], "GRDG": ["wall_break", "launch"],
+		"WNHR": ["hunt", "finish"]},
+}
+
+## Seconds until a keyed shot leaves its user (the user's action clip
+## reaching its impact frame); 0 for other abilities or without the clip.
+func _keyed_launch(card: String, ability: String, source: int) -> float:
+	var shot: Array = KEYED_SHOTS.get(profile.id, {}).get(card, [])
+	if shot.is_empty() or String(shot[0]) != ability or source < 2 or not models.has(source): return 0.0
+	return _action_key(models[source])
+
+## Seconds from a keyed shot's launch until it strikes its target.
+func _keyed_landing(card: String) -> float:
+	var shot: Array = KEYED_SHOTS.get(profile.id, {}).get(card, [])
+	if shot.is_empty(): return 0.0
+	match String(shot[1]):
+		"cue": return ELCombatEffects.ability_hit_delay(profile, card)
+		"finish":
+			var items := EffectTable.ability_effects(profile.id, card)
+			return ELCombatEffects.fx_frames(profile, String(items[0][0])) / ELParticleFile.FPS if not items.is_empty() else 0.0
+	return 0.0
 
 func _clear_ability_hit() -> void:
 	_ability_hit.clear()
