@@ -45,7 +45,9 @@ extends Node3D
 ## Creatures/<SndAdvDir>/steps/sand/<n>.wav, n a random number up to 7, lower
 ## again while the file is missing; the map's ground always answers "sand".
 ## A figure with steps/sand/walk.wav (run.wav), such as a flying dragon,
-## loops it while it walks (runs). Footsteps use the effects volume.
+## loops it while it walks (runs). Footsteps use the effects volume. The
+## original builds a hero's boat figure without a sound folder, so a ship
+## sails without steps, to the water's ambience alone.
 const BLAZON_CELL := ELBlazonArt.CELL
 ## World size of the blazon quad: the original projects it with half-size
 ## 0.8, centred 0.8 + 0.5 above the object's top, so it scales
@@ -490,10 +492,10 @@ func _second_objects() -> Array:
 	return result
 
 ## The object's art; the second game keeps it per object while the fields
-## that choose it stay the same.
+## that choose it stay the same, boarding or leaving a ship included (#340).
 func _definition(item: Dictionary) -> Dictionary:
 	if not second: return _art.resolve(item)
-	var signature := [item.get("owner"), item.get("shape"), item.get("level"), item.get("type"), item.get("visible", true), item.get("name")]
+	var signature := [item.get("owner"), item.get("shape"), item.get("level"), item.get("type"), item.get("visible", true), item.get("name"), item.get("ship", false), item.get("alive", true)]
 	var cached: Array = _second_rows.get(item.get("uid"), [])
 	if not cached.is_empty() and cached[0] == signature: return cached[1]
 	var definition := _art.resolve(item)
