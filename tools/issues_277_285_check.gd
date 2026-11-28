@@ -8,7 +8,8 @@ extends SceneTree
 ##   free movement, when the night ends and when a stale warning is loaded;
 ## - #283: a hero the chapter places on a fort's origin starts as its garrison
 ##   (the fort its owner's), guards the fort's zone and stops an enemy hero
-##   walking into it; the fort's zone is ringed by the Intercept5x5 pieces;
+##   walking into it; the fort's zone is ringed by the Intercept5x5 pieces,
+##   each on the side of the fort it faces (#333);
 ## - #284: the castle regains floor(sqrt(unused ether / 6)) energy at the end
 ##   of the day on single missions and random maps as in the chapters;
 ## - #285: in the spell shop and the component portal a zero price stays
@@ -125,6 +126,17 @@ func _forts(profile: ELProfile) -> void:
 	var all_out := true
 	for cell: Vector2i in ring: all_out = all_out and maxi(absi(cell.x - int(fort.x)), absi(cell.y - int(fort.y))) == 2
 	check(all_out, "#283: every ring piece sits two tiles off the fort's origin")
+	# #333: each piece traces the side of its cell facing away from the fort
+	# (00 north, 03 east, 06 south, 09 west; map y grows northwards), so the
+	# square's top row of pieces belongs on the garrison's row + 2.
+	var facing := {0: Vector2i(0, 1), 3: Vector2i(1, 0), 6: Vector2i(0, -1), 9: Vector2i(-1, 0)}
+	var outward := true
+	var straight := 0
+	for cell: Vector2i in ring:
+		if not facing.has(ring[cell]): continue
+		straight += 1
+		outward = outward and cell - Vector2i(int(fort.x), int(fort.y)) == facing[ring[cell]] * 2
+	check(straight > 0 and outward, "#333: the ring's %d straight pieces sit on the side of the fort they face" % straight)
 	presentation.free()
 	# A fort nobody holds keeps no ring.
 	var empty := {}
