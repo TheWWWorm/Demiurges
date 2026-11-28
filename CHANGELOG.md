@@ -2,11 +2,27 @@
 
 Versions follow [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html) from 0.3.0 on.
 
-## Unreleased
+## 0.30.4
+
+### Changed
+
+- **Edge scrolling** is off by default: the map camera no longer moves when the pointer touches a screen edge, so clicking near the edge doesn't pull the camera away from a walking hero. Turn it on under Options → Gameplay → Map (#342).
+- **Console:** `add spell`, `add creature` and `add enemy` take a card's English or Russian name (or part of it) as well as its code, several cards at once with counts (`add spell fireball x2, zap, орк-шаман`), and Tab completes card names (#334).
+- **Wiki:** it reopens on the page you last read, with its history, until the game is closed (#335).
 
 ### Fixed
 
-- **Scroll sliders:** the duel's deck list and the replay list have the original slider too, and a click on a slider's track moves it up to five rows towards the click, as in the original, in these lists and in the save, mission and journal lists ([#331](https://github.com/TheWWWorm/Demiurges/issues/331)).
+- **Neutral loot (Etherlords I):** beating a neutral rolls its resources afresh each time, also after loading a save or retrying the battle, instead of repeating the same payout (#328).
+- **Camera after tunnel battles (Etherlords II):** the view returns to the hero after a battle at a tunnel is won or cancelled (#338).
+- **Battle offer (Etherlords II):** the side panels stay on screen behind the "accept battle" panel, and map tooltips work on hover and right press (#341).
+- **Docks (Etherlords II):** the ship or hero coming out of a dock fades in as the other fades out, and a sailing ship no longer plays the hero's footsteps (#340).
+- **Ranged attacks (Etherlords II):** the Kobold Shaman's bolt and its damage come when the staff swing strikes, not at once; the Cyclope, the Giant and Gargantuan Fingus, the Black and Green Dragons and the Huntress wait for their swing the same way (#339).
+- **Army enchantments (Etherlords II):** Endurance of the Woods, Jyhad, Haste, Immolation, Assault, Dominancy, Vitality, Blockade and Crystal Ball show their effects on each of the caster's creatures, with the cast effect on the hero (#332).
+- **Twisted Enhancement:** a dispel removes only its bonus; the points it lost each turn stay lost, as in the original (#336).
+- **Effect icons:** the snakes' marks and the Reaper and Destroyer growth no longer show icons, which were miscounted as enchantments; their effects stay (#337).
+- **Scroll sliders:** the duel's deck list and the replay list have the original slider too, and a click on a slider's track moves it up to five rows towards the click, as in the original, in these lists and in the save, mission and journal lists (#331).
+- **Fort guard ring (Etherlords I):** the extended capture area around a fort is drawn as one closed ring, as in the original, instead of scattered pieces inside it (#333).
+- **Hall of Fame after a won mission:** it fills a widescreen window with the main menu's widened frame instead of a 4:3 picture.
 
 ## 0.30.3
 

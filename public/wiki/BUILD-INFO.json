@@ -1,5 +1,5 @@
 {
-  "version": "0.30.3",
+  "version": "0.30.4",
   "languages": {
     "en": {
       "pages": 485,
@@ -19,7 +19,7 @@
   "files": {
     "data/en/index.json": {
       "bytes": 373852,
-      "sha256": "4c786a33e54bd7a27d8024d251e5985f8a75229aa79e1c442183abb7dbbafc7b"
+      "sha256": "50137cfbc4cb13a78127702646c11dee2c222f72213d2e983b14000840b64433"
     },
     "data/en/pages/abilities.json": {
       "bytes": 2238,
@@ -1963,7 +1963,7 @@
     },
     "data/ru/index.json": {
       "bytes": 657904,
-      "sha256": "6717f1a3f44a6c0f4c08bdef21f69ddc04fa32d5e25d41c7e366fc3683df8c13"
+      "sha256": "289fcdcd2fa6540e6eed48cf1d35d6935252b9d408cf8bebee7ee9c72a755f66"
     },
     "data/ru/pages/abilities.json": {
       "bytes": 3685,
@@ -3906,8 +3906,8 @@
       "sha256": "838d61a3a9f77583762672b49490d1ddd71bda24d0ee738023127e375400f687"
     },
     "i18n.json": {
-      "bytes": 2046,
-      "sha256": "497324de83bccddd369ac9358515bb1baa966191b4ad1fc152f4c06436a37510"
+      "bytes": 2006,
+      "sha256": "8a90ff6a71c6b0f23212fde492ed11b49b187b02bf9fd56fd7a8050244b189e4"
     },
     "images/el1/hero-diamanda.webp": {
       "bytes": 27950,
@@ -6066,17 +6066,17 @@
       "sha256": "a20e8238923d70e0d188200c41ebc83afcb1187f9f9bb1b4ed46c6014613a40d"
     },
     "index.html": {
-      "bytes": 2598,
-      "sha256": "5a1a2dcd70cb414d946fad8e7ae807f399bf1ed0ff4ae76bf4b3de13290cf814"
+      "bytes": 2554,
+      "sha256": "c88ed6aa0e5e553ff82c47dcd6ccc3ce807842dbcb549e7141671b589bad6baa"
     },
     "wiki.css": {
-      "bytes": 8105,
-      "sha256": "ba641cf3d870549a285fe000866e26216b15169d8ec8e0e0614513bd21440243"
+      "bytes": 7988,
+      "sha256": "21092a92e825646100a27e99856cd60d7ef6f243bca9293d88b96807fe68b83a"
     },
     "wiki.js": {
       "bytes": 8827,
       "sha256": "d1643e0b6d8246fbc915580e40d63d6e586c44fe3d26239bd3dfb4f37b19512d"
     }
   },
-  "bytes": 14045063
+  "bytes": 14044862
 }
