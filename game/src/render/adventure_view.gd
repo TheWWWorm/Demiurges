@@ -216,8 +216,9 @@ var _right_origin := Vector2.ZERO
 ## the map, re-pick throttle and how long a script has held the map.
 var _pointer := Vector2(-1, -1)
 var _pointer_on_map := false
-## Edge camera (setting "edge_scroll", off by default): the pointer pans at a
-## screen edge. Ctrl turns and tilts.
+## Edge camera: the pointer pans at a screen edge. Ctrl turns and tilts. In
+## the second game the setting "edge_rotate" (off by default) makes the left
+## and right edges turn the view instead, as in the original (#342).
 ## The velocities ease towards their targets on the original 64 ms camera
 ## step and stop at once when the pointer leaves the edge.
 const EDGE_TICK := 0.064
@@ -631,7 +632,6 @@ func _notification(what: int) -> void:
 func edge_direction() -> Vector2i:
 	# A finger resting near an edge must not scroll the map.
 	if ELTouchInput.enabled: return Vector2i.ZERO
-	if settings == null or not bool(settings.values.get("edge_scroll", false)): return Vector2i.ZERO
 	if not edge_enabled or not _mouse_inside or _pointer.x < 0 or state == null or state.camera_locked or dragging: return Vector2i.ZERO
 	if not visible or paused or _cursor_modal(): return Vector2i.ZERO
 	var size := get_viewport().get_visible_rect().size
@@ -639,10 +639,17 @@ func edge_direction() -> Vector2i:
 		if not _pointer_on_map or Input.get_mouse_button_mask() != 0 or state.exclusive or not state.commands.is_empty(): return Vector2i.ZERO
 		var x := -1 if _pointer.x < 4 else (1 if _pointer.x > size.x - 4 else 0)
 		var y := -1 if _pointer.y < 4 else (1 if _pointer.y > size.y - 4 else 0)
+		# The original's edges only turn the view: the top and bottom do nothing.
+		if edge_rotates(): y = 0
 		return Vector2i(x, y)
 	var x := -1 if _pointer.x <= 0 else (1 if _pointer.x >= size.x - 2 else 0)
 	var y := -1 if _pointer.y <= 0 else (1 if _pointer.y >= size.y - 2 else 0)
 	return Vector2i(x, y)
+
+## Second game with the original edge camera on: the left and right edges turn
+## the view (and keep following the hero) instead of panning.
+func edge_rotates() -> bool:
+	return settings != null and state != null and state.map.profile.id == "el2" and bool(settings.values.get("edge_rotate", false))
 
 const EDGE_CURSORS := {Vector2i(0, -1): "scroll_u", Vector2i(1, -1): "scroll_ur", Vector2i(1, 0): "scroll_r", Vector2i(1, 1): "scroll_dr",
 	Vector2i(0, 1): "scroll_d", Vector2i(-1, 1): "scroll_dl", Vector2i(-1, 0): "scroll_l", Vector2i(-1, -1): "scroll_ul"}
@@ -672,7 +679,7 @@ func _update_edge(delta: float) -> void:
 		pan_target = keys.get("pan", Vector2.ZERO)
 		turn_target = float(keys.get("turn", 0.0))
 		tilt_target = float(keys.get("tilt", 0.0))
-	elif Input.is_key_pressed(KEY_CTRL):
+	elif Input.is_key_pressed(KEY_CTRL) or edge_rotates():
 		if state.map.profile.id == "el2" and bool(values.get("invert_rotation", false)): rotation_speed = -rotation_speed
 		turn_target = direction.x * EDGE_TURN * rotation_speed
 		tilt_target = direction.y * EDGE_TILT

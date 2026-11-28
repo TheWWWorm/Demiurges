@@ -703,11 +703,10 @@ func _camera(view: ELAdventureView) -> void:
 	var size := root.get_visible_rect().size
 	view._pointer_on_map = true
 	view._pointer = Vector2(size.x - 1.0, 0.0)
-	# #342: the screen edges move the camera only when the player turns it on.
-	var edge_before: Variant = view.settings.values.get("edge_scroll", false)
-	view.settings.values.edge_scroll = false
-	check(view.edge_direction() == Vector2i.ZERO and ELSettings.SHARED.edge_scroll == false, "mouse edges are off by default")
-	view.settings.values.edge_scroll = true
+	# #342: by default the edges pan; the original's edge turn is an option.
+	var edge_before: Variant = view.settings.values.get("edge_rotate", false)
+	check(ELSettings.SHARED.edge_rotate == false, "the original edge turn is off by default")
+	view.settings.values.edge_rotate = false
 	view.open_options()
 	check(view.second_hud.menu.visible and view.edge_direction() == Vector2i.ZERO, "the open Escape menu blocks mouse panning")
 	view.close_options()
@@ -732,8 +731,23 @@ func _camera(view: ELAdventureView) -> void:
 	state.camera_locked = true
 	check(view.edge_direction() == Vector2i.ZERO, "a locked camera ignores mouse edges")
 	state.camera_locked = false
+	# With the option on, the side edges turn the view and keep following the
+	# hero; the top and bottom edges do nothing.
+	view.settings.values.edge_rotate = true
+	view._pointer_on_map = true
+	view._pointer = Vector2(size.x * 0.5, 0.0)
+	check(view.edge_direction() == Vector2i.ZERO, "#342: with the edge turn on, the top edge does nothing")
+	view._pointer = Vector2(size.x - 1.0, size.y * 0.5)
+	check(view.edge_direction() == Vector2i(1, 0), "#342: with the edge turn on, the right edge is live")
+	view._edge_pan = Vector2.ZERO
+	view._edge_turn = 0.0
+	view.following = 0
+	start = view.target
+	yaw = view.yaw
+	for i in 4: view._update_edge(ELAdventureView.EDGE_TICK)
+	check(view.yaw != yaw and view.target == start and view.following == 0, "#342: the right edge turns the view without panning or dropping the hero")
 	view._pointer_on_map = false
-	view.settings.values.edge_scroll = edge_before
+	view.settings.values.edge_rotate = edge_before
 
 func _new_map_reports(view: ELAdventureView) -> void:
 	var state := view.state

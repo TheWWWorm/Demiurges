@@ -53,9 +53,9 @@ extends RefCounted
 ## "camera_drag_lock": on, the automatic battle camera (its F1-F4 views)
 ## keeps the view and the right button does not turn it; off (default) the
 ## right button always turns the camera.
-## "edge_scroll": on, the map camera moves while the pointer rests at a
-## screen edge (both games); off (default) it never does, so a click near an
-## edge does not take the camera away from the hero.
+## "edge_rotate": second game's map, on: the left and right screen edges turn
+## the camera, as in the original, and the top and bottom ones do nothing;
+## off (default) every edge pans it.
 ## "sharper_icons" and "sharper_interface": icons, and the rest of the
 ## interface art, enlarged on this device by a small super-resolution
 ## network and drawn with more pixels at the same size (ELIconUpscale; on
@@ -98,7 +98,7 @@ const WORLD_AI_LEVELS := [
 	["Living world", "Smarter, and idle computer heroes patrol their lands, raid weakly held sites, escort a weaker hero to a siege and go back for runes; each computer player keeps its own temperament."]]
 const SHARED := {"ambience": 0.55, "shadows": true, "soft_shadows": false, "contact_shading": false, "weather": true, "helper_overlay": false, "antialiasing": -1, "sharpening": 0, "terrain_detail": false, "enhanced_water": false, "bloom": false, "soft_particles": false, "spell_light": true, "discord_activity": true, "renderer": 0, "path_tracing": false, "sky_light": 1.0, "light_bounces": 2, "show_fps": false, "hardware_check": 0, "free_movement": true, "duel_ai": 2, "world_ai": 1, "battle_estimate": false, "cast_icons": true, "first_battle_dome": true, "first_shore_objects": true, "second_balance": false,
 	"window_mode": 1, "window_width": 0, "window_height": 0, "frame_rate": 0,
-	"upscaler": 0, "upscale_quality": 1, "frame_generation": false, "ray_reconstruction": false, "battle_interface": 0, "battle_gap": 0, "battle_gap_2": 2, "battle_gap_3": 1, "battle_readouts": true, "battle_history": true, "camera_drag_lock": false, "edge_scroll": false,
+	"upscaler": 0, "upscale_quality": 1, "frame_generation": false, "ray_reconstruction": false, "battle_interface": 0, "battle_gap": 0, "battle_gap_2": 2, "battle_gap_3": 1, "battle_readouts": true, "battle_history": true, "camera_drag_lock": false, "edge_rotate": false,
 	"sharper_icons": true, "sharper_interface": true, "sharper_textures": false, "sharper_declined": "", "sharper_startup_all": false}
 const EDITION := {"music": 0.55, "effects": 0.8, "movies": 2, "blood": true, "map_tooltips": true, "autosave": true,
 	"heroes_voices": true, "ambient_sounds": true, "adventure_fast": false, "animated_objects": true,

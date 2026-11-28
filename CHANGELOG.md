@@ -6,7 +6,7 @@ Versions follow [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html)
 
 ### Changed
 
-- **Edge scrolling** is off by default: the map camera no longer moves when the pointer touches a screen edge, so clicking near the edge doesn't pull the camera away from a walking hero. Turn it on under Options → Gameplay → Map (#342).
+- **Original edge camera (Etherlords II):** a new option under Options → Gameplay → Map makes the left and right screen edges turn the camera, as in the original, while the top and bottom edges do nothing, so the camera keeps following a walking hero. It is off by default; the edges pan the camera as before (#342).
 - **Console:** `add spell`, `add creature` and `add enemy` take a card's English or Russian name (or part of it) as well as its code, several cards at once with counts (`add spell fireball x2, zap, орк-шаман`), and Tab completes card names (#334).
 - **Wiki:** it reopens on the page you last read, with its history, until the game is closed (#335).
 

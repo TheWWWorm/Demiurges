@@ -7831,7 +7831,7 @@ func _sound_page(page: VBoxContainer) -> void:
 		ELMoviePlayer.mode = index)
 	_settings_row(video, "Movies", "The games' intro and story movies.", movie_mode)
 
-const EDGE_SCROLL_HELP := "On the adventure map, in both games: the camera moves while the mouse pointer rests at an edge of the screen, and turns with Ctrl held. Off: the screen edges never move it, so a click near an edge never takes the camera away from your hero."
+const EDGE_ROTATE_HELP := "Etherlords II adventure map: the mouse pointer at the left or right edge of the screen turns the camera, as in the original, and the top and bottom edges do nothing, so the camera keeps following your hero. Off: every screen edge moves the camera."
 
 ## The computer players, the map camera and the rules of the first game;
 ## Discord.
@@ -7851,10 +7851,10 @@ func _gameplay_page(page: VBoxContainer) -> void:
 		_set_row_note(world_pick, world_pick.get_meta("row_note"), WORLD_AI_HELP, PackedStringArray([_t(ELAIChoice.MONSTER_LOCK)]))
 	var map_box := _settings_box(page, "Map")
 	var edge_toggle := CheckButton.new()
-	edge_toggle.name = "EdgeScroll"
-	edge_toggle.button_pressed = bool(settings.values.get("edge_scroll", false))
-	edge_toggle.toggled.connect(func(enabled: bool): settings.values.edge_scroll = enabled)
-	_settings_row(map_box, "Move the camera at screen edges", EDGE_SCROLL_HELP, edge_toggle)
+	edge_toggle.name = "EdgeRotate"
+	edge_toggle.button_pressed = bool(settings.values.get("edge_rotate", false))
+	edge_toggle.toggled.connect(func(enabled: bool): settings.values.edge_rotate = enabled)
+	_settings_row(map_box, "Screen edges turn the camera (Etherlords II)", EDGE_ROTATE_HELP, edge_toggle)
 	var first := _settings_box(page, "Etherlords I")
 	var free_toggle := CheckButton.new()
 	free_toggle.name = "FreeMovement"
