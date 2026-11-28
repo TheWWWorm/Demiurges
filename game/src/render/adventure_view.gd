@@ -214,7 +214,8 @@ var _right_origin := Vector2.ZERO
 ## the map, re-pick throttle and how long a script has held the map.
 var _pointer := Vector2(-1, -1)
 var _pointer_on_map := false
-## Edge camera: the pointer pans at a screen edge. Ctrl turns and tilts.
+## Edge camera (setting "edge_scroll", off by default): the pointer pans at a
+## screen edge. Ctrl turns and tilts.
 ## The velocities ease towards their targets on the original 64 ms camera
 ## step and stop at once when the pointer leaves the edge.
 const EDGE_TICK := 0.064
@@ -624,6 +625,7 @@ func _notification(what: int) -> void:
 func edge_direction() -> Vector2i:
 	# A finger resting near an edge must not scroll the map.
 	if ELTouchInput.enabled: return Vector2i.ZERO
+	if settings == null or not bool(settings.values.get("edge_scroll", false)): return Vector2i.ZERO
 	if not edge_enabled or not _mouse_inside or _pointer.x < 0 or state == null or state.camera_locked or dragging: return Vector2i.ZERO
 	if not visible or paused or _cursor_modal(): return Vector2i.ZERO
 	var size := get_viewport().get_visible_rect().size
