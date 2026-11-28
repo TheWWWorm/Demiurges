@@ -2,7 +2,8 @@ extends SceneTree
 ## Headless check of new-start and retry randomness:
 ## - #259: every new local start of a first-game mission seeds the map's
 ##   random state afresh, so castle recruits differ between starts; a save
-##   keeps the state, so a loaded game recruits the hero it would have;
+##   records the state, so its decoded state recruits the hero the saved one
+##   would (a game opened from it rolls afresh, #328: issues_328_loot_check);
 ## - #263: Try again in a map battle deals the same battle anew, with new
 ##   opening hands, in the first game too (the second game's retry runs in
 ##   issue_reports_check); who moves first is decided afresh, by the home
@@ -65,7 +66,7 @@ func _new_starts(profile: ELProfile) -> void:
 		var state := view.state
 		seeds.append(state.seed_value)
 		if start == 0:
-			# A save keeps the random state: the loaded game recruits the same hero.
+			# A save records the random state: decoded, it recruits the same hero.
 			var codec := ELAdventureSave.new()
 			var restored := codec.decode(codec.encode(view.director, {}), {"el1": profile})
 			check(not restored.is_empty() and restored.state.seed_value == state.seed_value, "el1 #259: a save keeps the map's random state")

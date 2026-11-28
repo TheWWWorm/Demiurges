@@ -423,9 +423,9 @@ func add_experience(hero_id: int, amount: int) -> int:
 	if changed_look: event.emit({"kind": "shape_changed", "id": hero_id})
 	return granted
 
-## Second game, a loaded solo save: the map's and the scripts' generators
-## start from a fresh random state (the original's save does not keep the C
-## library's generator they both draw from). Offers already shown are kept.
+## A loaded solo save: the map's and (second game) the scripts' generators
+## start from a fresh random state, as the original's save keeps neither the
+## C library's generator nor the players' own. Offers already shown are kept.
 func fresh_random_state() -> void:
 	seed_value = randi() & 0x7fffffff
 	if vm != null: vm.rng_state = randi() & 0xffffffff
