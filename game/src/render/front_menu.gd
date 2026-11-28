@@ -788,7 +788,10 @@ var _frame_in_art := false
 func _add_wide_frame(target: String, under_panel := false) -> void:
 	_wide_frame = null
 	_frame_in_art = false
-	if overlay() or hosted or not WIDE_FRAMES.has(edition) or not target in WIDE_SCREENS.get(edition, []): return
+	# A hosted screen over the running game (overlay) keeps its 4:3 sheet; one
+	# opened after the game, such as the Hall of Fame of a won mission, takes
+	# the widescreen frame as it does from the main menu.
+	if overlay() or not WIDE_FRAMES.has(edition) or not target in WIDE_SCREENS.get(edition, []): return
 	if not ResourceLoader.exists(WIDE_FRAMES[edition]): return
 	if not _wide_textures.has(edition): _wide_textures[edition] = load(WIDE_FRAMES[edition])
 	_wide_texture = _wide_textures[edition]
