@@ -743,8 +743,11 @@ func _update_spec_effects() -> void:
 ## Intercept5x5_NN.pfx, as in the second game: the original walks the map
 ## cells its fort zones mark and gives each cell of the 5 x 5 square around
 ## the garrison (on the fort's origin) the piece ELAdventureEffects.RING_PIECES
-## names for it, rows read from the garrison's row - 2. Only cells the zone
-## covers get one, and only for a fort the local player sees.
+## names for it, rows read north to south from the garrison's row + 2 (map y
+## grows northwards here too, and each piece's flames trace the side of its
+## cell that faces away from the fort, so read the other way round the pieces
+## fell inside the square in loose bits, #333). Only cells the zone covers get
+## one, and only for a fort the local player sees.
 func ring_cells(fort: Dictionary) -> Dictionary:
 	var result := {}
 	var garrison := state.object(int(fort.get("garrison", -1)))
@@ -755,7 +758,7 @@ func ring_cells(fort: Dictionary) -> Dictionary:
 	var origin := Vector2i(int(fort.x), int(fort.y))
 	for index in ELAdventureEffects.RING_PIECES.size():
 		var piece: int = ELAdventureEffects.RING_PIECES[index]
-		var cell := origin + Vector2i(index % 5 - 2, index / 5 - 2)
+		var cell := origin + Vector2i(index % 5 - 2, 2 - index / 5)
 		if piece >= 0 and covered.has(cell): result[cell] = piece
 	return result
 
