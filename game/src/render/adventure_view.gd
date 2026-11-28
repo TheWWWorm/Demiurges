@@ -214,7 +214,8 @@ var _right_origin := Vector2.ZERO
 ## the map, re-pick throttle and how long a script has held the map.
 var _pointer := Vector2(-1, -1)
 var _pointer_on_map := false
-## Edge camera: the pointer pans at a screen edge. Ctrl turns and tilts.
+## Edge camera (setting "edge_scroll", off by default): the pointer pans at a
+## screen edge. Ctrl turns and tilts.
 ## The velocities ease towards their targets on the original 64 ms camera
 ## step and stop at once when the pointer leaves the edge.
 const EDGE_TICK := 0.064
@@ -627,6 +628,7 @@ func _notification(what: int) -> void:
 func edge_direction() -> Vector2i:
 	# A finger resting near an edge must not scroll the map.
 	if ELTouchInput.enabled: return Vector2i.ZERO
+	if settings == null or not bool(settings.values.get("edge_scroll", false)): return Vector2i.ZERO
 	if not edge_enabled or not _mouse_inside or _pointer.x < 0 or state == null or state.camera_locked or dragging: return Vector2i.ZERO
 	if not visible or paused or _cursor_modal(): return Vector2i.ZERO
 	var size := get_viewport().get_visible_rect().size
@@ -914,10 +916,14 @@ func begin_encounter() -> void:
 func decline_encounter() -> void:
 	if pending_encounter.is_empty(): return
 	if director.encounter == null or not director.encounter.declinable(): return
+	# A tunnel battle's offer looks at the tunnel mouth: declined, the view
+	# goes back to the hero (#338).
+	var tunnel := not _tunnel_mouth(int(pending_encounter[0]), int(pending_encounter[1])).is_empty()
 	pending_encounter = []
 	if hud != null: hud.hide_precombat()
 	_close_second_precombat()
 	if not director.decline_encounter(): notice.text = director.error
+	elif tunnel and not state.camera_locked: _centre_hero()
 	_refresh_hero_info()
 
 func _close_second_precombat() -> void:
@@ -2100,6 +2106,10 @@ func _present(data: Dictionary) -> void:
 					following = _hero_id()
 					target = world.actors[state.main_hero].position
 					_draw_route([])
+					# After a won tunnel battle the victory message opens as the
+					# map comes back and holds the map's camera update: the view
+					# goes to the exit now (#338).
+					_update_camera()
 		"use_object":
 			var item := state.object(data.target)
 			_remark(item.get("title", state.map.profile.text(str(_art.resolve(item).get("row", {}).get("ELKName", item.name)))))

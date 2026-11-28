@@ -7746,7 +7746,10 @@ func _sound_page(page: VBoxContainer) -> void:
 		ELMoviePlayer.mode = index)
 	_settings_row(video, "Movies", "The games' intro and story movies.", movie_mode)
 
-## The computer players and the rules of the first game; Discord.
+const EDGE_SCROLL_HELP := "On the adventure map, in both games: the camera moves while the mouse pointer rests at an edge of the screen, and turns with Ctrl held. Off: the screen edges never move it, so a click near an edge never takes the camera away from your hero."
+
+## The computer players, the map camera and the rules of the first game;
+## Discord.
 func _gameplay_page(page: VBoxContainer) -> void:
 	var opponents := _settings_box(page, "Computer players")
 	# A campaign or single scenario keeps its own levels: during one these
@@ -7761,6 +7764,12 @@ func _gameplay_page(page: VBoxContainer) -> void:
 	if ai_game != null and ai_game.fight_neutral_monsters:
 		world_pick.disabled = true
 		_set_row_note(world_pick, world_pick.get_meta("row_note"), WORLD_AI_HELP, PackedStringArray([_t(ELAIChoice.MONSTER_LOCK)]))
+	var map_box := _settings_box(page, "Map")
+	var edge_toggle := CheckButton.new()
+	edge_toggle.name = "EdgeScroll"
+	edge_toggle.button_pressed = bool(settings.values.get("edge_scroll", false))
+	edge_toggle.toggled.connect(func(enabled: bool): settings.values.edge_scroll = enabled)
+	_settings_row(map_box, "Move the camera at screen edges", EDGE_SCROLL_HELP, edge_toggle)
 	var first := _settings_box(page, "Etherlords I")
 	var free_toggle := CheckButton.new()
 	free_toggle.name = "FreeMovement"

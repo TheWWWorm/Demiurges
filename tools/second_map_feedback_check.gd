@@ -703,6 +703,11 @@ func _camera(view: ELAdventureView) -> void:
 	var size := root.get_visible_rect().size
 	view._pointer_on_map = true
 	view._pointer = Vector2(size.x - 1.0, 0.0)
+	# #342: the screen edges move the camera only when the player turns it on.
+	var edge_before: Variant = view.settings.values.get("edge_scroll", false)
+	view.settings.values.edge_scroll = false
+	check(view.edge_direction() == Vector2i.ZERO and ELSettings.SHARED.edge_scroll == false, "mouse edges are off by default")
+	view.settings.values.edge_scroll = true
 	view.open_options()
 	check(view.second_hud.menu.visible and view.edge_direction() == Vector2i.ZERO, "the open Escape menu blocks mouse panning")
 	view.close_options()
@@ -728,6 +733,7 @@ func _camera(view: ELAdventureView) -> void:
 	check(view.edge_direction() == Vector2i.ZERO, "a locked camera ignores mouse edges")
 	state.camera_locked = false
 	view._pointer_on_map = false
+	view.settings.values.edge_scroll = edge_before
 
 func _new_map_reports(view: ELAdventureView) -> void:
 	var state := view.state
