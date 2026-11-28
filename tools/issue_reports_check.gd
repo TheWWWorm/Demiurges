@@ -41,7 +41,8 @@ extends SceneTree
 ##   skip drops the skipped gestures' held sounds; #140 second game: a fallen
 ##   hero goes up in its colour's death effect; #137 the pre-battle panel:
 ##   first game, the wide strip alone with the original orders, the check
-##   mark and the cross with free movement; second game, no wide strip;
+##   mark and the cross with free movement; second game, no wide strip,
+##   and (#341) the side panels and map tooltips stay behind it;
 ##   #163 chapter 11's fighting figures all have a battle-dome clip;
 ##   #155 a click off a creature's tile acts on the creature the cursor
 ##   shows, and a one-way teleport's exit shows the cancel cursor;
@@ -1132,6 +1133,14 @@ func _second_prompt() -> void:
 		var panel := map.second_precombat
 		check(panel != null and panel.visible and panel.begin_button.visible and panel.cancel_button.visible and not panel.decoration.visible,
 			"el2 #137: the pre-battle panel shows the check mark and the cross, without the first game's wide strip")
+		# #341: the side panels stay on screen behind the panel, and the map
+		# around it keeps its object tooltips.
+		check(map.second_hud.visible, "el2 #341: the side panels stay visible while the pre-battle panel is open")
+		map._tip_on_map = false
+		var motion := InputEventMouseMotion.new()
+		motion.position = Vector2(1, 1)
+		map._unhandled_input(motion)
+		check(map._tip_on_map, "el2 #341: the pointer over the map beside the pre-battle panel can show a map tooltip")
 		# #139 the defeat picture covers the map from its first frame.
 		map._open_lose_battle()
 		var lose := map.lose_battle

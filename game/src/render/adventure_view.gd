@@ -922,7 +922,6 @@ func _close_second_precombat() -> void:
 	_leave_tunnel()
 	if second_precombat == null or not second_precombat.visible: return
 	second_precombat.close()
-	if second_hud != null: second_hud.show()
 
 ## `remote`: a script's remote attack (ExRemoteUseObjectCmd, the White Lord's
 ## portal in chapter 54). The original offers it like any other battle of the
@@ -963,7 +962,9 @@ func _open_second_precombat(first: int, second: int, remote := false) -> void:
 			following = -1
 			scroll_gliding = false
 			target = spots[0] if spots.size() == 1 else (spots[0] + spots[1]) * 0.5
-	second_hud.hide()
+	# The side panels stay on screen behind the panel, as in the original
+	# (#31, #341); their buttons wait for the answer (_second_panel_command).
+	_box_opened_hides_map_tip()
 	second_precombat.open(state, local, other, faces)
 	if not remote: _start_battle_dome(first, second)
 
@@ -1254,6 +1255,9 @@ func _unhandled_input(event: InputEvent) -> void:
 		elif event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE:
 			decline_encounter()
 			get_viewport().set_input_as_handled()
+		# The map around the panel keeps its object tooltips, on a rest of
+		# the pointer or a right press, as around a script box (#341).
+		else: _dialogue_map_tip_input(event)
 		return
 	if hud != null and hud.precombat.visible:
 		if event is InputEventKey and event.pressed and event.keycode in [KEY_ENTER, KEY_KP_ENTER, KEY_SPACE]:
@@ -3867,9 +3871,9 @@ func _fit_first_layout() -> void:
 ## original's AdvPanelEndTurnBtn is never created) and the skills window keep a
 ## compact remake strip at the top-left of the map.
 func _build_second_controls() -> void:
-	second_hud.inventory_requested.connect(_open_spellbook.bind(-1))
-	second_hud.notebook_requested.connect(open_notebook)
-	second_hud.options_requested.connect(open_options)
+	second_hud.inventory_requested.connect(_second_panel_command.bind(_open_spellbook.bind(-1)))
+	second_hud.notebook_requested.connect(_second_panel_command.bind(open_notebook))
+	second_hud.options_requested.connect(_second_panel_command.bind(open_options))
 	second_hud.centre_requested.connect(_centre_hero)
 	second_hud.minimap_clicked.connect(func(cell: Vector2):
 		if state.camera_locked: return
@@ -3945,6 +3949,12 @@ func _refresh_second_hud(hero: Dictionary) -> void:
 	day_button.disabled = not acting
 	second_hud.buttons.AdvPanelOptionsBtn.disabled = paused and not second_hud.menu.visible
 	second_hud.refresh(_hero_id(), acting)
+
+## A side-panel button's window waits while the pre-battle panel asks for
+## its answer: the panels stay visible behind it, but the battle comes first.
+func _second_panel_command(command: Callable) -> void:
+	if second_precombat != null and second_precombat.visible: return
+	command.call()
 
 ## The Notebook (AdvPanelNotesBtn, N) pauses the map like other windows.
 func open_notebook() -> void:
