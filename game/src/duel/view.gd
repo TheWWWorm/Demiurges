@@ -2634,9 +2634,17 @@ func shown_creature(id: int) -> Dictionary:
 	return presentation.snapshot.creatures.get(id, {}) if _display_active() else duel.creatures.get(id, {})
 
 func _shown_enchantments(id: int) -> Array:
-	if profile.id != "el2": return duel.entity(id).get("enchantments", [])
-	var shown := shown_hero(id) if id < 2 else shown_creature(id)
-	return shown.get("enchantments", [])
+	var worn: Array = duel.entity(id).get("enchantments", []) if profile.id != "el2" else (shown_hero(id) if id < 2 else shown_creature(id)).get("enchantments", [])
+	return worn.filter(func(e: Dictionary) -> bool: return not _unlisted_mark(e))
+
+## A mark a creature leaves by its strike or its ability (a grass snake's
+## growth, a lake snake's -1/-1, a fire elemental's burn, a Colourless
+## Devourer's growth from its prey). Both games keep these as nameless
+## enchantments that nothing can remove, and neither shows an icon for them
+## on the enchantment strip: only the stats change (player report #337).
+## Venom, which a dispel can take off, stays listed.
+func _unlisted_mark(e: Dictionary) -> bool:
+	return bool(e.get("fixed", false)) and String(e.card) in ["GRSN", "LASN", "FREL", "OUD1", "OUD2"]
 
 func _shown_resting(id: int, creature: Dictionary) -> bool:
 	var resting := bool(creature.get("resting", false))
@@ -6390,16 +6398,15 @@ func _enchantment_lines(entity: Dictionary) -> PackedStringArray:
 		lines.append(duel.card_name(card) + (" ×%d" % copies if copies > 1 else "") + (": " + about if not about.is_empty() and about != card else ""))
 	return lines
 
-## A mark a creature leaves in combat (a grass snake's growth, a lake
-## snake's weakening, a first-game snake's venom on a hero) is an
-## enchantment of the creature's own card. That card's AbilityIcon and
-## AbilityText describe the mark ("Blood drunk. The enchanted creature's
-## power and health rise by 1"), and both games show those for it, not the
-## creature's portrait and card text (player report #271). "" for any
-## other enchantment.
-## (Other creature cards' AbilityText is an activated ability's, not a mark's.)
+## A first-game snake's venom on a hero is an enchantment of the snake's
+## own card. That card's AbilityIcon and AbilityText describe the venom,
+## and they are shown for it, not the snake's portrait and card text
+## (player report #271). "" for any other enchantment. (A grass snake's
+## growth and a lake snake's weakening are not listed at all, see
+## _unlisted_mark; other creature cards' AbilityText is an activated
+## ability's, not a mark's.)
 func _mark_text(card: String) -> String:
-	if card not in ["GRSN", "LASN", "TRSN", "SWSN"]: return ""
+	if card not in ["TRSN", "SWSN"]: return ""
 	var row: Dictionary = profile.table("CombatSpells").get(card, {})
 	if int(row.get("AbilityIcon", 0)) <= 0: return ""
 	var text := str(row.get("AbilityText", ""))

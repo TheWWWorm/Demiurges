@@ -461,18 +461,15 @@ func _figure_tooltips(view: Node) -> void:
 	duel._mark(0, "STSK", 0, 0)
 	var hero_tip := str(view._hero_tip(0)) + str(view._hero_tip(0, view.portraits[0]))
 	check(not hero_tip.contains(duel.card_name("STSK")), "#230/#274: the hero tooltip lists no enchantments")
-	# #271: a grass snake's growth shows its blood mark, not the snake card.
+	# #271/#337: a grass snake's growth shows no strip icon at all, neither
+	# the snake card nor its blood mark; only its stats change.
 	var snake := duel.next_id
 	duel._summon(0, "GRSN")
 	duel._mark(snake, "GRSN", 1, 1, {"fixed": true})
 	view.selected_creature = snake
 	view._fill_strip()
 	var marks: Array = view.rail.strip.items.filter(func(item: Dictionary) -> bool: return item.meta.get("card") == "GRSN")
-	var row: Dictionary = duel.profile.table("CombatSpells").GRSN
-	var want := duel.profile.icon_at(int(row.AbilityIcon)) as AtlasTexture
-	var shown: AtlasTexture = marks[0].icon as AtlasTexture if marks.size() == 1 else null
-	check(shown != null and shown.atlas == want.atlas and shown.region == want.region, "#271: the snake's growth shows the AbilityIcon (%d), not the snake's portrait" % int(row.AbilityIcon))
-	check(marks.size() == 1 and str(marks[0].tooltip) == duel.profile.text(str(row.AbilityText)), "#271: the growth's tooltip is its own text (%s)" % (str(marks[0].tooltip).left(60) if marks.size() == 1 else "-"))
+	check(marks.is_empty() and int(duel.creatures[snake].power) == 2, "#271/#337: the snake's growth raises it to 2/2 and shows no strip icon (%d)" % marks.size())
 	view.selected_creature = -1
 
 # --- #302 / #303 -------------------------------------------------------------

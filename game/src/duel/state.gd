@@ -3022,6 +3022,10 @@ func creature_stats(c: Dictionary, additional_gas := 0) -> Vector2i:
 	var decay := int(c.get("decay", 0))
 	power -= 2 * decay
 	lethal += 2 * decay
+	# So does what a twisted enhancement wore off, a point a turn.
+	var twisted := int(c.get("twisted", 0))
+	power -= twisted
+	lethal += twisted
 	# Delusion swaps power and toughness last (an even number cancels); a
 	# swapped toughness has no minimum of one, so a 0-power creature dies.
 	# Ordinary creature stats clamp after all modifiers, not after each one.
@@ -3369,17 +3373,19 @@ func _turn_enchantments(at_start: bool) -> void:
 						if victim.damage >= victim.toughness: _kill(target)
 				"TWEN":
 					if target < 2 or victim.owner != attacker: continue
-					# Decay reduces current stats: a creature held at toughness 1 only by the floor dies.
-					var floor_toughness := int(victim.toughness) - 1
-					e.power -= 1
-					e.toughness -= 1
+					# The decay is taken from the creature itself, not from the
+					# enchantment's +2/+2: a dispel later removes only the +2/+2 and
+					# the points lost so far stay lost (player report #336). It
+					# counts below the floor of one, so a creature held at toughness 1
+					# only by the floor dies.
+					victim.twisted = int(victim.get("twisted", 0)) + 1
 					_refresh_stats(victim)
 					# Both original TwistedEnhancement end-of-turn callbacks
 					# (EL1, EL2) queue NegAttack,
 					# NegDefence and NegRune on the enchanted creature.
 					if profile.id in ["el1", "el2"]:
 						_emit({"kind": "twisted_decay", "target": target, "card": "TWEN"})
-					if victim.damage >= mini(int(victim.toughness), floor_toughness): _lethal(target)
+					if victim.damage >= victim.toughness: _lethal(target)
 	if hook_open: _finish_end_of_turn_hook()
 	if not at_start:
 		# Expiring defence can expose damage retained by Fatal Disease. The original
