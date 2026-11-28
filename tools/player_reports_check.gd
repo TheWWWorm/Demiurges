@@ -1519,7 +1519,20 @@ func _second_map_reports() -> void:
 			check(not model.visible, "el2: the hero waits inside the tunnel under the battle offer (#247)")
 			map.decline_encounter()
 			check(director.encounter == null and model.visible, "el2: declining the tunnel battle brings the hero back out (#247)")
+			check(map.following == int(hero.uid), "el2: declining the tunnel battle brings the view back to the hero (#338)")
 		guard.erase("tunnel_source")
+		# #338: after a won tunnel battle the victory message holds the map;
+		# the view still goes to the hero at the exit at once.
+		map.following = -1
+		map.target = model.position + Vector3(60, 0, 60) if model != null else map.target
+		map._update_camera()
+		check(model == null or not map.camera.is_position_in_frustum(model.global_position), "el2: the view looks away from the hero first")
+		var held := map.paused
+		map.paused = true
+		map._present({"kind": "tunnel", "hero": int(hero.uid), "source": int(mouth.uid), "target": int(mouth.uid)})
+		check(model != null and map.camera.is_position_in_frustum(model.global_position) and map.following == int(hero.uid),
+			"el2: a tunnel crossing under a message box shows the hero at once (#338)")
+		map.paused = held
 		hero.x = stood.x
 		hero.y = stood.y
 	var shrine := {}

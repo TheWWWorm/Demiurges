@@ -913,10 +913,14 @@ func begin_encounter() -> void:
 func decline_encounter() -> void:
 	if pending_encounter.is_empty(): return
 	if director.encounter == null or not director.encounter.declinable(): return
+	# A tunnel battle's offer looks at the tunnel mouth: declined, the view
+	# goes back to the hero (#338).
+	var tunnel := not _tunnel_mouth(int(pending_encounter[0]), int(pending_encounter[1])).is_empty()
 	pending_encounter = []
 	if hud != null: hud.hide_precombat()
 	_close_second_precombat()
 	if not director.decline_encounter(): notice.text = director.error
+	elif tunnel and not state.camera_locked: _centre_hero()
 	_refresh_hero_info()
 
 func _close_second_precombat() -> void:
@@ -2095,6 +2099,10 @@ func _present(data: Dictionary) -> void:
 					following = _hero_id()
 					target = world.actors[state.main_hero].position
 					_draw_route([])
+					# After a won tunnel battle the victory message opens as the
+					# map comes back and holds the map's camera update: the view
+					# goes to the exit now (#338).
+					_update_camera()
 		"use_object":
 			var item := state.object(data.target)
 			_remark(item.get("title", state.map.profile.text(str(_art.resolve(item).get("row", {}).get("ELKName", item.name)))))
