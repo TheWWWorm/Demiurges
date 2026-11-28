@@ -5,7 +5,9 @@ extends Control
 ## thumb ELArtDropList uses, as the encyclopedia shows it) the thumb keeps its
 ## size and travels the track, centred while nothing scrolls (issue #302);
 ## without it a plain grip shows how much of the list is in view. A drag
-## moves it, a click on the track pages.
+## moves it. A click on the track moves the original thumb at most five
+## steps towards the pointer, never past it, as the original scroller does
+## (issue #331); the plain grip pages.
 ##
 ## The list is read through callables: `offset` (the first shown step),
 ## `last` (the last offset), `scroll_to` (sets the offset) and `page` (steps
@@ -85,6 +87,13 @@ func thumb_rect(at := -1) -> Rect2:
 	var where := clampf(float(index) / float(span), 0.0, 1.0) * (track - length)
 	return Rect2(inset, inset + where, size.x - inset * 2.0, length)
 
+## The offset whose thumb top is nearest `y`.
+func _nearest(y: float) -> int:
+	var best := 0
+	for index in _last() + 1:
+		if absf(thumb_rect(index).position.y - y) < absf(thumb_rect(best).position.y - y): best = index
+	return best
+
 func _set_offset(value: int) -> void:
 	var clamped := clampi(value, 0, _last())
 	if clamped == _offset() or not scroll_to.is_valid(): return
@@ -104,6 +113,10 @@ func _gui_input(event: InputEvent) -> void:
 			elif grip.has_point(event.position):
 				_drag_from = event.position.y
 				_drag_offset = _offset()
+			elif texture != null:
+				var aim := _nearest(event.position.y - ELArtDropList.THUMB_SOURCE.size.y * 0.5)
+				if event.position.y >= grip.end.y: _set_offset(mini(_offset() + ELArtDropList.PAGE, maxi(aim, _offset())))
+				elif event.position.y < grip.position.y: _set_offset(maxi(_offset() - ELArtDropList.PAGE, mini(aim, _offset())))
 			else:
 				_set_offset(_offset() + (_page() if event.position.y > grip.end.y else -_page()))
 		accept_event()

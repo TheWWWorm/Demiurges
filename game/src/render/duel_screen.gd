@@ -722,6 +722,8 @@ func build_screen() -> void:
 	if by_level != null: list.splits = [by_level.position.x - 2.0 - left_x, by_level.position.x + by_level.size.x + 1.0 - left_x]
 	menu.canvas.add_child(list)
 	menu.labels["list"] = list
+	# The original scroller thumb in the arrows' track, as both games show it.
+	menu.labels["list_thumb"] = ELListThumb.attach(menu.canvas, list, func() -> int: return rows().size(), up, down, ELArtDropList.thumb_art(profile()))
 	var filter := _button("DuFilterLevel", toggle_filter)
 	if filter != null:
 		var label_rect := Rect2(filter.position + Vector2(filter.size.x + 6, 0), Vector2(250, filter.size.y))

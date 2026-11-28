@@ -505,6 +505,21 @@ func _panel_art(view: Node) -> void:
 	check(thumb.thumb_rect().end.y == 112.0, "#302: the thumb ends at the bottom of its track")
 	thumb.last = func() -> int: return 0
 	check(thumb.thumb_rect().position.y == 50.0, "#302: the thumb is centred while nothing scrolls")
+	# #331: a track click moves the thumb at most five steps towards the pointer, never past it.
+	thumb.last = func() -> int: return 10
+	thumb.scroll_to = func(value: int) -> void: at[0] = value
+	at[0] = 0
+	var click := InputEventMouseButton.new()
+	click.button_index = MOUSE_BUTTON_LEFT
+	click.pressed = true
+	click.position = Vector2(7, 110)
+	thumb._gui_input(click)
+	check(at[0] == 5, "#331: a click at the track's end moves five steps (at %d)" % at[0])
+	thumb._gui_input(click)
+	check(at[0] == 10, "#331: the next click reaches the end (at %d)" % at[0])
+	click.position = Vector2(7, thumb.thumb_rect(8).position.y + 6)
+	thumb._gui_input(click)
+	check(at[0] == 8, "#331: a click just above the thumb stops at the clicked step (at %d)" % at[0])
 	thumb.free()
 
 func _notice_uses(notices: ELCombatNotices, index: int, expected: AtlasTexture) -> bool:

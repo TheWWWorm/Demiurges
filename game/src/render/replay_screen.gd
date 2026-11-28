@@ -76,8 +76,10 @@ func build_screen() -> void:
 	list.size = Vector2(bounds.size.x, floorf(bounds.size.y / ROW) * ROW)
 	menu.canvas.add_child(list)
 	menu.labels["list"] = list
-	_button("ReplayScrScrollU", func(): list.scroll(-3))
-	_button("ReplayScrScrollD", func(): list.scroll(3))
+	var up := _button("ReplayScrScrollU", func(): list.scroll(-3))
+	var down := _button("ReplayScrScrollD", func(): list.scroll(3))
+	# The original scroller thumb in the arrows' track, as the save list has.
+	ELListThumb.attach(menu.canvas, list, func() -> int: return entries.size(), up, down, ELArtDropList.thumb_art(menu.profile))
 	_button("ReplayScrDelete", ask_delete)
 	_button("ReplayScrBack", close)
 	if mode == "save":

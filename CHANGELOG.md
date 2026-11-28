@@ -4,6 +4,10 @@ Versions follow [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html)
 
 ## Unreleased
 
+### Fixed
+
+- **Scroll sliders:** the duel's deck list and the replay list have the original slider too, and a click on a slider's track moves it up to five rows towards the click, as in the original, in these lists and in the save, mission and journal lists ([#331](https://github.com/TheWWWorm/Demiurges/issues/331)).
+
 ## 0.30.3
 
 ### Fixed
