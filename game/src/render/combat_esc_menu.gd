@@ -130,7 +130,7 @@ func build(source: ELProfile) -> bool:
 	wiki.focus_mode = Control.FOCUS_NONE
 	wiki.add_theme_font_size_override("font_size", 15)
 	wiki.custom_minimum_size = Vector2(140, 30)
-	wiki.pressed.connect(func(): ELWikiScreen.open(self, "combat", header.text))
+	wiki.pressed.connect(func(): ELWikiScreen.reopen(self, "combat", header.text))
 	_footer.add_child(wiki)
 	_footer.minimum_size_changed.connect(_layout, CONNECT_DEFERRED)
 	resized.connect(_layout)
